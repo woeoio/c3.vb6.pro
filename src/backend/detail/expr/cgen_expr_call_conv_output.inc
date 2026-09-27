@@ -27,6 +27,18 @@
             } else if (!node.positional.empty() && inferExprType(*node.positional[0]) == Vb6Type::Variant) {
                 // Variant类型变量/表达式: MsgBox v → vb6_VariantToString(v)
                 firstArg = "vb6_VariantToString(" + firstArg + ")";
+            } else if (!node.positional.empty()) {
+                // Fix 161e: 上面那串只认领了 **COM 读 / Variant** 两类形态,
+                // **纯数值**一条都没包 ⇒ `MsgBox Len("你好hello")` / `MsgBox 7` /
+                // `MsgBox (n + 1)` / `MsgBox 3.5` / `MsgBox True` 全都把 int32_t
+                // (double / int16_t) **直接当 BSTR 指针**传给 vb6_MsgBox1 ——
+                // 弹窗是空的: 地址 7、123 之类根本不可读, 真读得到时显示的也是
+                // 垃圾而不是数字。VB6 会隐式把数值转成字符串再显示。
+                // 这里对上面没认领的形态统一过 wrapToBSTR
+                // (cgen_expr_binary_util.cpp:81) —— 它按 inferExprType 分流
+                // (Long/Integer/Boolean/Byte/Double/Single/Date/LongLong…),
+                // 且 String 分支原样返回, 所以不会把已正确的字符串实参再包一层。
+                firstArg = wrapToBSTR(firstArg, *node.positional[0]);
             }
         }
     }
