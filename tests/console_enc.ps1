@@ -65,6 +65,8 @@ function Test-CnConsoleOutput {
         [string[]]$Needles,          # 四语种各一段（读的是**屏幕缓冲**, 与代码页无关）
         [string]$Arch = ""
     )
+    # vbp 分片: 本片不跑这例 (闸门在 run_tests.ps1 里定义)。
+    if (-not (Enter-VbpShard)) { return }
     $script:total++
     Write-Host -NoNewline "  [ENC] $Name ... "
 
@@ -113,6 +115,8 @@ function Test-CnRedirectOutput {
         [int]$ConsoleCp,             # 先 chcp 到这个代码页, 再让程序把 stdout 落文件
         [string]$Arch = ""
     )
+    # vbp 分片: 本片不跑这例 (闸门在 run_tests.ps1 里定义)。
+    if (-not (Enter-VbpShard)) { return }
     $script:total++
     Write-Host -NoNewline "  [ENC] $Name ... "
 

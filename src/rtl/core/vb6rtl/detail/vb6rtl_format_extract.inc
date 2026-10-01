@@ -47,6 +47,11 @@
         case vb6_vtDate: {
             // Fix 118: 带日期/时间格式串时走日期格式化 (此前落进数值分支 →
             // Format(DateSerial(2020,1,1),"mmm") 输出 "43831")
+            // Fix 162b-extlist: 命名日期/时间格式 ("short date"/"medium date"/
+            // "long time"/...) 先于 IsDateFormat 判别 —— IsDateFormat 对命名
+            // 格式返回 0 (排除语义), 原先会漏到这里落数值分支输出 "45331"。
+            if (fmt && vb6_BSTR_Len(fmt) > 0 && vb6_fmtNamedDateTimeKind(fmt))
+                return vb6_fmtNamedDateTime(expr.dblVal, fmt);
             if (fmt && vb6_BSTR_Len(fmt) > 0 && vb6_fmtIsDateFormat(fmt))
                 return vb6_fmtDateSerial(expr.dblVal, fmt);
             if (!fmt) {

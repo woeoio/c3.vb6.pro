@@ -303,7 +303,10 @@ void vb6_Clipboard_Clear(void) {
 }
 
 // Fix 056: Clipboard.SetData — copy IPicture bitmap to clipboard
-void vb6_Clipboard_SetData(void* pPicture) {
+// <vbeclipse> 补 format: VB6 有 `Clipboard.SetData data, [format]` 二形；
+// format 走 vbCF* 常量 (2=vbCFBitmap, 3=vbCFMetafile, 14=vbCFEMetafile, 8=vbCFDIB)。
+// 0/未指定按 vbCFBitmap 处理 (历史行为)。
+void vb6_Clipboard_SetData(void* pPicture, int32_t format) {
     if (!pPicture) return;
     if (!OpenClipboard(NULL)) return;
     EmptyClipboard();
@@ -315,7 +318,11 @@ void vb6_Clipboard_SetData(void* pPicture) {
     pPic->lpVtbl->get_Handle(pPic, &hOleHandle);
     hBmp = (HBITMAP)(uintptr_t)hOleHandle;
     if (hBmp) {
-        SetClipboardData(CF_BITMAP, hBmp);
+        UINT cf = CF_BITMAP;
+        if (format == 14) cf = CF_ENHMETAFILE;
+        else if (format == 3) cf = CF_METAFILEPICT;
+        else if (format == 8) cf = CF_DIB;
+        SetClipboardData(cf, hBmp);
     }
     CloseClipboard();
 }
@@ -400,6 +407,33 @@ int32_t vb6_Screen_TwipsPerPixelY(void) {
     return dpi > 0 ? (int32_t)((double)VB6_TWIPS_PER_INCH / dpi + 0.5) : 15;
 }
 
+// Fix 161f: Screen.MousePointer 全局读/写。与控件级 vb6_Get/SetMousePointer
+// (窗口 prop, vb6forms_style.c) 不同, Screen 的是 **VB6 全局**鼠标指针:
+// CWaitCursor 这类类的用法 = Class_Initialize 存旧值 → ShowCursor(vbHourglass)
+// → Class_Terminate 恢复。这里保存全局值并立即 SetCursor 生效。
+static int32_t g_screenMousePointer = 0;
+
+int32_t vb6_Screen_MousePointer(void) {
+    return g_screenMousePointer;
+}
+
+void vb6_Screen_SetMousePointer(int32_t pointer) {
+    g_screenMousePointer = pointer;
+    // 99 = Custom ( vbCustom) 不动; 其余按 VB6 值映射系统光标。
+    if (pointer == 99) return;
+    LPCWSTR name = IDC_ARROW;
+    switch (pointer) {
+        case 2:  name = IDC_CROSS;   break;
+        case 3:  name = IDC_IBEAM;   break;
+        case 5:  case 6: case 7: case 8: case 9:
+                 name = IDC_SIZEALL; break;
+        case 10: name = IDC_UPARROW; break;
+        case 11: name = IDC_WAIT;    break;
+        case 0:  case 1: default:    break;   // Default/Arrow
+    }
+    SetCursor(LoadCursorW(NULL, name));
+}
+
 // ============================================================
 // P18-C: Printer 对象
 // ============================================================
@@ -482,6 +516,10 @@ void vb6_Printer_SetCurrentY(int32_t y) { g_printerCurrentY = y; }
 void* vb6_Printer_Object(void) {
     vb6_Printer_EnsureDC();
     return (void*)g_printerDC;
+}
+
+void* vb6_Screen_Object(void) {
+    return (void*)0;  /* Screen 对象哨兵: 未建模成员落 NULL 槽, 无害 */
 }
 
 void* vb6_Printer_hDC(void) {

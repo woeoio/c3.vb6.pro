@@ -46,6 +46,8 @@ function Test-DispatchInvoke {
         [string]$ExtraIid = "",       # 非空 = 再问一次这枚 IID，看服务器答的是哪份指针
         [string]$Arch = ""            # "" = 默认(x64) | x86 —— B16 起同一批断言在 x86 上也真跑一遍
     )
+    # vbp 分片: 本片不跑这例 (闸门在 run_tests.ps1 里定义)。
+    if (-not (Enter-VbpShard)) { return }
     $script:total++
     Write-Host -NoNewline "  [DISPATCH] $Name ... "
 

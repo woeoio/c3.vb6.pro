@@ -23,8 +23,27 @@ Begin VB.Form CtrlProp
       Top             =   2160
       Width           =   2000
    End
+   Begin VB.TextBox txtH 
+      MultiLine       =   -1  'True
+      ScrollBars      =   1  'Horizontal
+      Height          =   600
+      Left            =   240
+      TabIndex        =   6
+      Top             =   2880
+      Width           =   2000
+   End
+   Begin VB.TextBox txtV 
+      MultiLine       =   -1  'True
+      ScrollBars      =   2  'Vertical
+      Height          =   600
+      Left            =   240
+      TabIndex        =   7
+      Top             =   3600
+      Width           =   2000
+   End
    Begin VB.TextBox txtOne 
       Height          =   300
+      ToolTipText     =   "dtxt"
       Left            =   240
       TabIndex        =   2
       Text            =   "T"
@@ -51,6 +70,7 @@ Begin VB.Form CtrlProp
    End
    Begin VB.Label lblSingle 
       Caption         =   "S"
+      Tag             =   "dtagL"
       Height          =   300
       Left            =   240
       TabIndex        =   5
@@ -98,6 +118,36 @@ Private Sub Form_Load()
     txtOne.Text = List1.ListCount
     Debug.Print "CP4=" & lblSingle.Caption
     Debug.Print "CP5=" & txtOne.Text
+    Debug.Print "CP6=" & txtH.ScrollBars
+    Debug.Print "CP7=" & txtV.ScrollBars
+    Debug.Print "CP8=" & txtOne.ScrollBars
+    ' 账 #108/#107 两条一起钉：ScrollBars 的往返 + BorderStyle=None 设得上去
+    ' （List1 是 ListBox，走的正是 vb6forms_style.c 那个"存窗口属性"兜底分支）
+    List1.BorderStyle = 0
+    Debug.Print "CP9=" & List1.BorderStyle
+    List1.BorderStyle = 1
+    Debug.Print "CP10=" & List1.BorderStyle
+    List1.BorderStyle = 0
+    Debug.Print "CP11=" & List1.BorderStyle
+    ' 账 #142(C29-SL-e): 通用字符串属性 ToolTipText / Tag 的档位在**通用段**登记，
+    ' 所以证人不能只有 Slider 一枚 —— 这里各来一枚 Label 与 TextBox（改之前这两条 CStr
+    ' 打空、TypeName 答 "Object"，因为 RTL getter 是 `void*` 而装箱表把"其他指针"送对象）。
+    lblSingle.ToolTipText = "ltt"
+    txtOne.Tag = "xtt"
+    Debug.Print "CP12=" & CStr(lblSingle.ToolTipText) & "/" & TypeName(lblSingle.ToolTipText)
+    Debug.Print "CP13=" & CStr(txtOne.Tag) & "/" & TypeName(txtOne.Tag)
+    If txtOne.Tag = "xtt" Then
+        Debug.Print "CP14=yes"
+    Else
+        Debug.Print "CP14=no"
+    End If
+    Debug.Print "CP15=" & CStr(List1.ToolTipText) & "/end"
+    ' 账 #142: 设计期那两条字符串属性的证人（通用段被**两条创建路**共用，非 Slider 的控件也得证一次）
+    Debug.Print "CP16=" & CStr(lblSingle.Tag) & "/" & CStr(lblSingle.ToolTipText)
+    Debug.Print "CP17=" & CStr(txtOne.ToolTipText) & "/" & CStr(txtOne.Tag)
+    txtOne.ToolTipText = ""
+    Debug.Print "CP18=" & CStr(txtOne.ToolTipText) & "/" & CStr(txtOne.Text)
+
     Debug.Print "CTRLPROP-DONE"
     Unload Me
 End Sub

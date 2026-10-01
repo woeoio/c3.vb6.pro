@@ -165,6 +165,11 @@ extern vb6_ComIface_Font g_vb6_UserControl_FontObj;
 void vb6_uc_trace(const char* phase, const char* type, void* me);
 vb6_UCRec* vb6_uc_findByHwnd(const void* hwnd);
 vb6_UCRec* vb6_uc_findByInstance(const void* inst);
+
+// Fix <vbeclipse> rev18: UserControl 自有 Property 的按名桥 (晚绑定访问)。
+// obj 收 UC 实例指针或宿主 HWND; 命中返回 1。见 vb6forms_controls.h 的 vb6_UcPropDesc。
+int32_t vb6_UC_OwnPropGet(void* obj, const wchar_t* name, void* outV);
+int32_t vb6_UC_OwnPropSet(void* obj, const wchar_t* name, const void* inV);
 void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved);
 void vb6_uc_pop(const vb6_UCSaved* saved);
 
@@ -190,6 +195,14 @@ int32_t vb6_uc_isColl(const void* p);
 // --- 查表 / 构造辅助 ---
 vb6_ComIface_Font* vb6_uc_fontOf(void* p);       // uc_controls.c
 vb6_UCControls* vb6_uc_newControls(void* formHwnd);  // uc_controls.c
+// --- Fix <vbeclipse> rev14: Controls 集合 (Add/Item/Remove/Count) ---
+// 单例 + 归属窗口 + 对象形态查找 + 动态增删, 定义见 uc_controls.c
+void* vb6_UC_Controls(void);
+void* vb6_UC_ControlsOwnHwnd(void* coll);
+void* vb6_UC_ControlsItemObj(void* coll, int32_t index);
+void* vb6_UC_ControlsItemObjByName(void* coll, const wchar_t* name);
+void* vb6_UC_ControlsAdd(void* coll, const wchar_t* progId, const wchar_t* name);
+int32_t vb6_UC_ControlsRemove(void* coll, void* obj, const wchar_t* name);
 
 // --- 变体工具（uc_hostmodel.c 定义，uc_collection.c 依赖 setVariantEmpty）---
 void vb6_ho_setVariantEmpty(vb6_VARIANT* out);
@@ -197,6 +210,8 @@ void vb6_ho_setVariantLong(vb6_VARIANT* out, int32_t v);
 void vb6_ho_setVariantBstr(vb6_VARIANT* out, BSTR s);
 void vb6_ho_setVariantDouble(vb6_VARIANT* out, double v);
 void vb6_ho_setVariantDispatch(vb6_VARIANT* out, void* p);
+// Fix <vbeclipse> rev14: 真 VT_DISPATCH 版本 (Controls.Item/Add 返回工程内 UC 用)
+void vb6_ho_setVariantObject(vb6_VARIANT* out, void* p);
 int32_t vb6_ho_variantToLong(const vb6_VARIANT* v);
 double vb6_ho_variantToDouble(const vb6_VARIANT* v);
 BSTR vb6_ho_variantToBstr(const vb6_VARIANT* v);

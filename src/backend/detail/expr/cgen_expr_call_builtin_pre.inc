@@ -454,13 +454,23 @@
             // intptr_t / ComIface / vb6_VARIANT), inferExprType 对它们返回 Unknown,
             // 上面拦不住 → `Dim b As Byte: b = 200: Len(b)` 生成 vb6_Len(uint8_t),
             // 把 200 当 BSTR 指针解引用 → 0xC0000005 (LEN-BYTE 实测, 既有 bug)。
-            // 对"确认不是字符串/Variant/对象"的裸标识符兜底 sizeof:
-            // 字符串侧 knownBstrVars_ 在声明处必登记 (mapTypeRef→"BSTR"), 不会误伤。
+            // 对"确认不是字符串/Variant/对象"的裸标识符兜底 sizeof。
+            // 2026-09-28 订正：上面那句"字符串侧 knownBstrVars_ 在声明处必登记"**只对局部成立** ——
+            // 那张表在每过程入口 clear (cgen_decl_func.cpp:43 / cgen_decl_proc.cpp:51)，
+            // 模块级 `Dim gS As String` 压根不进表 ⇒ 兜底桶把模块级 String 也吞了，
+            // `Len(gS)` 发成 (int32_t)sizeof(gS) = 指针宽度（x64 读 8、x86 读 4，实测）。
+            // 改判两把尺，都不动数值那一半的既有口径：
+            //   · knownFixedStringLen_ —— 定长串在**模块级声明处也登记**(cgen_decl_var.cpp:199)，
+            //     它的 C 型不是 BSTR，Len 要的就是存储宽度，继续走 sizeof；
+            //   · tLen44 == String —— 符号表认得的字符串（模块级变量、vbCrLf 这类常量）走
+            //     通用 vb6_Len 路，那才是字符数。
             if (node.positional[0]->kind == ASTNodeKind::IdentifierExpr) {
                 std::string low44 = Symbol::toLower(
                     static_cast<IdentifierExpr&>(*node.positional[0]).name);
                 if (!knownBstrVars_.count(low44) && !knownVariantVars_.count(low44)
-                    && !knownObjectVars_.count(low44)) {
+                    && !knownObjectVars_.count(low44)
+                    && !knownFixedStringLen_.count(low44)
+                    && tLen44 != Vb6Type::String) {
                     emitExpr(*node.positional[0]);
                     lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
                     return;

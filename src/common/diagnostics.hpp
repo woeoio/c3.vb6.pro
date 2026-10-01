@@ -123,6 +123,11 @@ enum class DiagnosticID : uint16_t {
     SemAsmMixedRefLimit = 3041,         // 混排 (项3, x64): 单个片段引用的 VB 变量超过 4 个 (Win64 只有 4 个整型参数寄存器)
     SemAsmAccumAliasClobber = 3042,     // 项1: Asm 块里某条指令的隐含累加器寄存器 (cmpxchg/div/mul 等) 被同块
                                         //      前面的指令写坏, 且写坏前的值已无从恢复 (静态可达性启发式, 见 asm_proc.hpp)
+    // 数组槽实参形态 (<vbeclipse>, 覆盖 UBound/LBound/Join 的首参): VB6 要求它是数组表达式。传字面量或
+    // 非数组常量 (`UBound(vbNull)`, vbNull=1) 在 VB6 是编译期错误, 而 C3 此前把常量
+    // 折成整数直接塞进 vb6_UBound 的指针形参 → 运行期解引用地址 1 → 0xC0000005。
+    // 文案 ASCII (D12)。
+    SemArrayArgExpected = 3043,
 
     // 代码生成 (4xxx)
     CodeGenUnsupportedFeature = 4001,

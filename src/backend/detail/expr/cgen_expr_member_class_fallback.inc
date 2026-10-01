@@ -2,6 +2,20 @@
 // 由 src/backend/expr/cgen_expr_member.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 1255~1493 行，逐行未改。
 
+    // Fix <vbeclipse> rev8: 局部判据 —— `node` 是"取某个类成员的属性", 且该成员
+    // 的返回类型是 `As Object` (C 侧 void*)。定义在此处是因为要用到 node.object
+    // 的 MemberAccessExpr 形态拆解, 而调用点在下方 class_fallback 的通用兜底。
+    // `View.View.hWnd` 的 node.object = MemberAccessExpr(View, `View`) ⇒ 宿主类
+    // 走 inferClassTypeOfExpr(它的 object) = "View", 成员名 = "View"。
+    // ⚠ node.object 是 ExprPtr (智能指针), 不是裸指针 —— lambda 形参用 ExprPtr。
+    auto objIsAsObjectMemberV8 = [this](const ExprPtr& objAst) -> bool {
+        if (!objAst || objAst->kind != ASTNodeKind::MemberAccessExpr) return false;
+        const auto& maV8 = static_cast<const MemberAccessExpr&>(*objAst);
+        if (!maV8.object) return false;
+        return classMemberReturnsAsObject(inferClassTypeOfExpr(*maV8.object),
+                                         maV8.memberName);
+    };
+
     // Fix 010r-10: 类实例变量的成员访问 fallback
     // 需要区分: 数据字段(obj->member) vs 方法/属性(vb6_ClassName_MethodName(obj))
     // Fix 011r-1: 用 resolveClassMemberCall 精确解析 (避免原 vb6_cls_ 前缀bug
@@ -30,8 +44,14 @@
         // 例: obj = "me->m_oSocket" → trailingLower = "m_osocket"
         //     obj = "vb6_x()->y"     → trailingLower = "y"
         //     obj = "(*p).field"     → trailingLower = "field"
+        // Fix <vbeclipse>: 对象表达式是**函数调用结果** (vb6_List_Item(me->m_Tabs, ...))
+        // → 禁止尾部标识符回退 (把 m_tabs 误当类实例 → .ViewId 发成 `->ViewId`
+        // 且调用实参被丢 → C2039 + C2198). 调用结果整体交给 Variant/COM 通道
+        // (P24-04/voidptr_com) 按 rvalue 处理. 仅 `.field` 形态 (结尾是字段名)
+        // 才允许 Fix 014 启发式.
+        bool objIsCallExpr090 = (!objLower.empty() && objLower.back() == ')');
         std::string trailingLower;
-        if (itClassVar == knownClassVars_.end()) {
+        if (!objIsCallExpr090 && itClassVar == knownClassVars_.end()) {
             size_t lastArrow = objLower.rfind("->");
             size_t lastDot = objLower.rfind('.');
             size_t start = std::string::npos;
@@ -255,6 +275,24 @@
             std::string udtChainType = inferUdtTypeOfExpr(*node.object);
             if (!udtChainType.empty()) {
                 lastExpr_ = appendUdtObjFieldMarker(obj, udtChainType, node.memberName);
+            // Fix <vbeclipse> rev8: 接收者是**类成员且其返回类型是 As Object** ——
+            // `View.View.hWnd` / `l_View.View.Caption` 里中段是
+            // `Property Get View() As Object` (View.cls:66), C 侧 vb6_View_prop_get_View()
+            // 返回 void*。此前列在这里走 `obj + "." + member` → C2224
+            // "左侧必须具有结构/联合类型" ×63 (ucPerspective.c 36 .hWnd /
+            // ucFolder.c 11 .Caption / 6 .Icon / modSubClass.c 6 .hWnd)。
+            // 语义 = IDispatch 上的属性读, 必须晚绑定。
+            } else if (objIsAsObjectMemberV8(node.object)) {
+                lastExpr_ = "vb6_ComGetProp(" + obj + ", L\"" + node.memberName + "\")";
+            } else if (cExprIsVariant(obj)
+                       || obj.rfind("vb6_List_", 0) == 0) {
+                // Fix <vbeclipse>: Variant 表达式 (vb6_List_Item(...) 返回 vb6_VARIANT)
+                // 上的 COM 属性读取 → 取回对象后用 ComGetProp 晚绑定, 避免
+                // `.ViewId`/`->ViewId` → C2039 (ucTabStrip.c:260 / ucPerspective.c:331).
+                // List.* 属函数返回对象型Variant, rfind 兜底 variantPrefixes 表缺失项.
+                std::string memLit = std::string("L\"") + node.memberName + "\"";
+                lastExpr_ = std::string("vb6_VariantFromComResult(vb6_ComGetProp(vb6_VariantToObjectVal(")
+                          + obj + "), " + memLit + "))";
             } else {
                 lastExpr_ = obj + "." + cIdent(node.memberName);
             }

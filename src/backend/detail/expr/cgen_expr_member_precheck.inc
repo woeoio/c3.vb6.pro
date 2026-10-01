@@ -2,6 +2,23 @@
 // 由 src/backend/expr/cgen_expr_member.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 13~131 行，逐行未改。
 
+    // Fix <vbeclipse>: UserControl.Controls 集合 (裸 `Controls.Item(k)` / `.Add(...)`
+    // / For Each 形态的 `.Count`) —— 必须在一切类感知解析之前拦截, 否则工程里
+    // 恰好有同名方法的类 (List.Item / List.Remove / List.Add) 会把成员抢挂过去,
+    // 接收者被首参顶掉 (ucPerspective 实测: Controls.Item(p) → vb6_List_Item((*p)))。
+    // rev14: RTL 侧 vb6_UC_Controls() 已返回真实的控件集合单例 (按当前 UC 实例回落),
+    // 不再用恒 NULL 的 vb6_UserControl_Controls —— 后者使 `Set x = Controls.Item(...)`
+    // 恒为 NULL, ucFolder_AddView(NULL) 解引用即 0xC0000005。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "controls") {
+        comObjExpr_ = "(void*)vb6_UC_Controls()";
+        comMemberName_ = node.memberName;
+        isComMarker_ = true;
+        isEarlyBoundCom_ = false;
+        earlyBoundSym_ = nullptr;
+        lastExpr_ = "(void*)vb6_UC_Controls()";
+        return;
+    }
     // Fix 086: AddressOf 模块限定函数 (AddressOf ToolsTlsThunks.pvCallCollectionItem)
     // — 解析器将 `ToolsTlsThunks.pvCallCollectionItem` 交给 AddressOfExpr(仅取
     // object名) + 外层MemberAccessExpr(成员名). 此前生成非法的
@@ -86,7 +103,7 @@
             if (_memLower == "lastdllerror") { lastExpr_ = "GetLastError()";       return; }
             if (_memLower == "helpfile")    { lastExpr_ = "(BSTR)0";              return; }
             if (_memLower == "helpcontext") { lastExpr_ = "0";                    return; }
-            if (_memLower == "clear")       { lastExpr_ = "vb6_ErrClear";         return; }
+            if (_memLower == "clear")       { lastExpr_ = "vb6_ErrClear()";       return; }
             if (_memLower == "raise")       { lastExpr_ = "vb6_ErrRaise";         return; }
         }
 

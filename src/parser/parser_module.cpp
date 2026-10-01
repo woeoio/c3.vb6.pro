@@ -365,6 +365,15 @@ std::unique_ptr<AttributeStmt> Parser::parseAttribute() {
            "expected '=' in attribute");
 
     auto value = parseExpression();
+    // Fix <vbeclipse>: Attribute 取值可带逗号分隔的多个字面量
+    // (ucPerspective.ctl: Attribute VB_Ext_KEY = "PropPageWizardRun" ,"Yes")。
+    // 这些附加值无语义消费方, 解析后丢弃, 不让逗号漏成 "expected end of statement"。
+    while (cur_.kind == TokenKind::Comma) {
+        advance();
+        if (!check(TokenKind::NewLine) && !check(TokenKind::EndOfFile)) {
+            parseExpression();
+        }
+    }
     return std::make_unique<AttributeStmt>(loc, attrName, std::move(value));
 }
 

@@ -1,6 +1,7 @@
 #include "backend/cgen.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <iostream>
 #include <functional>
 #include <cstdio>
@@ -60,7 +61,14 @@ void CCodeGen::visit(LiteralExpr& node) {
             lastExpr_ = std::to_string(static_cast<int>(node.intValue));
             break;
         case LiteralKind::Long:
-            lastExpr_ = std::to_string(node.longValue) + "L";
+            // 装不进 32 位的 Long 字面量必须补 LL: MSVC 的 long 是 32 位,
+            // `2147483648L` 装不下会退成 unsigned long, 一元负号作用于无符号类型
+            // (C4146), 值也就跟着错。lexer 对超 32 位无后缀字面量走的就是这条路
+            // (`-2147483648` 的正数字面量 2147483648)。其余 Long 一律仍发 L, 不动。
+            if (node.longValue < INT32_MIN || node.longValue > INT32_MAX)
+                lastExpr_ = std::to_string(node.longValue) + "LL";
+            else
+                lastExpr_ = std::to_string(node.longValue) + "L";
             break;
         case LiteralKind::LongPtr:
             // Fix 082: VBA7 ^ 后缀. LongPtr 是平台相关宽度 (32 位机 4 字节, 64 位机 8 字节),
@@ -351,8 +359,51 @@ void CCodeGen::visit(NewExpr& node) {
             lastExpr_ = "(void*)vb6_NewObject(L\"" + progId + "\")";
         }
     } else {
-        // 外部/COM对象: 回退到运行时
-        lastExpr_ = "vb6_NewObject(L\"" + node.className + "\")";
+        // Fix <vbeclipse>: 名字在本模块符号表里既不是 Class 也不是 ComClass —— 最常见的
+        // 是类型名被**同名形参/局部变量遮蔽**, 或跨模块注入没覆盖到: ucPerspective.ctl
+        //   Public Sub AddView(ByVal ViewId As String, ByRef View As Object)
+        //       Dim l_View As View           ' ← "View" 是类 (Fix <vbeclipse>-3 已按类处理)
+        //       Set l_View = New View        ' ← 这里的 "View" 命中的是形参符号
+        //   End Sub
+        // 工程级类名表不受遮蔽 → 有同名类模块就发它的类工厂.
+        //
+        // Fix <vbeclipse>-4: **发原生实例, 不再自己包 IDispatch**。
+        // 原先这里发 vb6_ComPackVB6InstanceRaw(<类>, <类>_New()) —— 那是 VARIANT*
+        // (只适合当 COM 实参), 理由写的是"落到本分支说明语境是 void*/Object/Variant"。
+        // 该前提不成立: 类型名查不到也可能只是遮蔽/未注入, 此时变量本身已被
+        // Fix <vbeclipse>-3 声明成 vb6_cls_<C>*, 于是
+        //   l_View = vb6_ComPackVB6InstanceRaw("View", vb6_cls_View_New());
+        // 把 VARIANT* 塞进 vb6_cls_View* → 之后按类结构体解引用 (%p=0 实测 l_View=NULL,
+        // 因为类未登记 coclass 时该包装返回 NULL) → vb6_List_Add 内 vb6_List_Contains(NULL)
+        // 读 0xc 崩。包装是**消费方**的职责, 各消费点已有专门机制:
+        //   - Set <void*/Object 目标>   → set_rhs.inc Fix 179a 包成 IDispatch
+        //   - Set <Variant 目标>       → vb6_VariantFromValue _Generic 包装
+        //   - Set <typed 工程类目标>    → 裸指针直赋
+        // 与上方 Class 分支同形 (原生实例) 即处处正确。
+        const std::string projClsNew = projectClassNameOf(node.className);
+        if (!projClsNew.empty()) {
+            std::string clsStructNew = "vb6_cls_" + cIdent(projClsNew);
+            std::string innerNew;
+            if (!node.args.empty()) {
+                std::vector<std::string> emittedNew;
+                for (auto& a : node.args) {
+                    emitExpr(*a);
+                    emittedNew.push_back(std::move(lastExpr_));
+                }
+                std::string joinedNew;
+                for (auto& e : emittedNew) {
+                    if (!joinedNew.empty()) joinedNew += ", ";
+                    joinedNew += e;
+                }
+                innerNew = clsStructNew + "_NewParams(" + joinedNew + ")";
+            } else {
+                innerNew = clsStructNew + "_New()";
+            }
+            lastExpr_ = "(" + innerNew + ")";
+        } else {
+            // 外部/COM对象: 回退到运行时
+            lastExpr_ = "vb6_NewObject(L\"" + node.className + "\")";
+        }
     }
 }
 

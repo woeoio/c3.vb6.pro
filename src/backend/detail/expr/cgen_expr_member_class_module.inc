@@ -276,7 +276,24 @@
                         sourceMod = objIdent.name;  // 假设object名就是模块名
                     }
                 }
-                std::string funcName = cProcName(node.memberName, memSym->access, sourceMod);
+                // Fix <vbeclipse> rev7: 模块限定路径必须按 **memSym->kind** 决定
+                // prop_get_/prop_let_/prop_set_ 前缀, 不能一律用裸成员名。
+                //
+                // 为什么: 这条路径的前提是"obj 查不到局部变量 ⇒ 它是模块名"。但
+                // **过程级局部类变量**恰好两边都查不到 (symTab_ 只有模块作用域,
+                // knownClassVars_ 登记在 emit 声明处, 但本行在它之前判过一轮) ——
+                // 于是 `l_View.View.hWnd` (l_View 是 `Dim l_View As View`) 里的
+                // `.View` 段被当成"View 模块的 View 成员", memSym 命中 View.cls 的
+                // `Property Get View() As Object`(kind=PropertyGet), 却不加前缀, 发出
+                // `vb6_View_View` → C2065 "未声明的标识符" + C2224 ".hWnd 左侧必须是
+                // 结构/联合" (实测 SubClass.c / ucPerspective.c / modSubClass 全线, 200+ 错误)。
+                // 属性访问函数在 C 侧一律叫 `vb6_<Cls>_prop_get_<Name>` (见
+                // cgen_expr_with.cpp ClassInstance 分支同款判定), 少前缀必不匹配。
+                std::string memberProcName = node.memberName;
+                if (memSym->kind == SymbolKind::PropertyGet)      memberProcName = "prop_get_" + node.memberName;
+                else if (memSym->kind == SymbolKind::PropertyLet) memberProcName = "prop_let_" + node.memberName;
+                else if (memSym->kind == SymbolKind::PropertySet) memberProcName = "prop_set_" + node.memberName;
+                std::string funcName = cProcName(memberProcName, memSym->access, sourceMod);
                 lastExpr_ = funcName;  // 仅输出函数名, 参数由IndexOrCallExpr添加
                 return;
             }

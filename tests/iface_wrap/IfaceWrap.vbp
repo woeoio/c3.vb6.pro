@@ -1,0 +1,6 @@
+Type=Exe
+Name="IfaceWrapApp"
+Module=mdlMain; mdlMain.bas
+Class=IFoo; IFoo.cls
+Class=Impl; Impl.cls
+Startup="Sub Main"

@@ -145,7 +145,7 @@ static HWND vb6_GetToolTipCtrl(void) {
     return s_hwndTT;
 }
 
-void* vb6_GetToolTipText(void* hwnd) {
+wchar_t* vb6_GetToolTipText(void* hwnd) {
     if (!hwnd) return SysAllocString(L"");
     HANDLE hProp = GetPropW((HWND)hwnd, L"VB6_ToolTipText");
     if (!hProp) return SysAllocString(L"");
@@ -185,11 +185,35 @@ void vb6_SetToolTipText(void* hwnd, void* bstrText) {
     }
 }
 
+// C29-SL-j 判据证人（账 #148）：**这枚控件的 ToolTipText 到底进没进 tooltip 宿主**。
+// 上面那条 vb6_SetToolTipText 走的是"存一份拷贝 + 往共享宿主登记工具"两步；存的那一步
+// 一直有判据读（SE/CP 那几组读的就是 GetPropW 回来的串），**登记那一步以前没人验过**。
+// 这里改问宿主：TTM_GETTEXT 能把工具文本读回来 = 登记成立。
+// 为什么要在产物里验而不是探针：裸编的 C 探针不嵌 Common-Controls 6.0 的 manifest ⇒ 走 v5，
+// 而 v5 里 TTM_ADDTOOLW 直接返回失败（实测 .build/slprobe/slmeasure15.c），拿它定罪会冤枉产品。
+int vb6_ToolTipRegistered(void* hwnd) {
+    HWND host;
+    TOOLINFOW ti;
+    wchar_t buf[128];
+    LRESULT rc;
+    if (!hwnd) return 0;
+    host = vb6_GetToolTipCtrl();
+    if (!host) return 0;
+    memset(&ti, 0, sizeof(ti));
+    ti.cbSize = sizeof(ti);
+    ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    ti.hwnd = GetParent((HWND)hwnd);
+    ti.uId = (UINT_PTR)hwnd;
+    ti.lpszText = buf;
+    buf[0] = 0;
+    rc = SendMessageW(host, TTM_GETTEXTW, 0, (LPARAM)&ti);
+    return (rc > 0 || buf[0]) ? -1 : 0;   // VB6: True = -1
+}
+
 // ============================================================
 // P13.9: Tag
 // ============================================================
-
-void* vb6_GetControlTag(void* hwnd) {
+wchar_t* vb6_GetControlTag(void* hwnd) {
     if (!hwnd) return SysAllocString(L"");
     HANDLE hProp = GetPropW((HWND)hwnd, L"VB6_Tag");
     if (!hProp) return SysAllocString(L"");
@@ -299,8 +323,14 @@ int vb6_GetBorderStyle(void* hwnd) {
         return (style & WS_EX_CLIENTEDGE) ? 1 : 0;
     }
     // Form/ComboBox/ListBox: store as property
+    // 账 #107: 这里存的是 val+1，不是 val —— SetPropW(hw, name, (HANDLE)0) 等于把属性**删掉**
+    //（RemoveProp 的语义），于是 BorderStyle = 0 (None) 对所有非 Edit / 非 Static 控件都设不上：
+    // 写进去当场消失，GetPropW 回 NULL ⇒ 读回来是下面那段"按类名/样式猜默认值"的结果
+    //（ListBox 实测读回 2 —— LISTBOX 的 WS_BORDER 被那把 WS_OVERLAPPEDWINDOW 尺当成了 CAPTION）。
+    // 同一族在 Fix 187（BackColor 的黑色，用独立哨兵）与 CommonDialog（"整数一律存 val+1"）里
+    // 各修过一次，这里取后者。
     HANDLE hProp = GetPropW(hw, L"VB6_BorderStyle");
-    if (hProp) return (int)(INT_PTR)hProp;
+    if (hProp) return (int)(INT_PTR)hProp - 1;
     // Form default is 2 (Sizable)
     if (wcsicmp(className, L"VB6_Form") == 0 || 
         GetWindowLongW(hw, GWL_STYLE) & WS_OVERLAPPEDWINDOW) {
@@ -337,10 +367,10 @@ void vb6_SetBorderStyle(void* hwnd, int style) {
         SetWindowLongW(hw, GWL_STYLE, gstyle);
         SetWindowPos(hw, NULL, 0, 0, 0, 0,
             SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
-        SetPropW(hw, L"VB6_BorderStyle", (HANDLE)(INT_PTR)style);
+        SetPropW(hw, L"VB6_BorderStyle", (HANDLE)(INT_PTR)(style + 1));
         InvalidateRect(hw, NULL, TRUE);
     } else {
         // Store as property for other controls
-        SetPropW(hw, L"VB6_BorderStyle", (HANDLE)(INT_PTR)style);
+        SetPropW(hw, L"VB6_BorderStyle", (HANDLE)(INT_PTR)(style + 1));
     }
 }

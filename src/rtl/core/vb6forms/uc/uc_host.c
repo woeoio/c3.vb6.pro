@@ -162,8 +162,19 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     saved->displayName = (void*)vb6_Ambient_DisplayName;
 
     vb6_uc_defaultFont();
-    vb6_UserControl_ScaleWidth = r->scaleWidth;
-    vb6_UserControl_ScaleHeight = r->scaleHeight;
+    // Fix <vbeclipse> rev18: UserControl.ScaleWidth/ScaleHeight 按**缇**交出去。
+    // r->scaleWidth/height 一路存的是**像素** (uc_host_create.inc 的
+    // `vb6_TwipToX(width)` / `rc.right`、uc_host_window.c WM_SIZE 的 LOWORD(lParam)),
+    // 而 desc->scaleMode 声明的是 1 (缇), 而且全链路的坐标都按缇:
+    //   · `vb6_ControlMove` (所有 `子控件.Move 20,20,ScaleWidth-30,…` 都经它) 收缇;
+    //   · `vb6_UC_CreateDesignEdit` 的 .ctl 设计期 Left/Top/Width/Height 是缇;
+    //   · ucPerspective 的 `LeftPos = UserControl.ScaleWidth` 之后要
+    //     `LeftPos / Screen.TwipsPerPixelX` 才是像素 (见 CalculateFolderPositionByRef)。
+    // 只有这两处是像素 ⇒ `ViewCaption.Move 20, 20, ScaleWidth - 30, …` 会得到 35px 宽的
+    // 子控件, 停靠区 7 个文件夹宿主也只算出 27x27/42x8 那一批 (实测 play78 r24)。
+    // (对照: 宿主对象路径的 `obj.ScaleWidth` 走 vb6_ho_clientTwips, 本来就是缇。)
+    vb6_UserControl_ScaleWidth = vb6_XToTwipX(r->scaleWidth);
+    vb6_UserControl_ScaleHeight = vb6_YToTwipY(r->scaleHeight);
     vb6_UserControl_ScaleMode = r->desc ? r->desc->scaleMode : 1;
     vb6_UserControl_hDC = r->hdc;
     vb6_UserControl_ContainerHwnd = (int32_t)(intptr_t)r->parent;
@@ -318,6 +329,41 @@ void* vb6_UC_HwndOf(void* instance) {
 
 int32_t vb6_UC_IsHostHwnd(void* hwnd) {
     return vb6_uc_findByHwnd(hwnd) != NULL;
+}
+
+// Fix <vbeclipse> rev18: UserControl **自有 Property 的按名桥** (晚绑定访问用)。
+// 见 vb6forms_controls.h 里 vb6_UcPropDesc 的说明。obj 可以是 UC 实例指针, 也可以是
+// 宿主 HWND (两种形态的调用点都有); thunk 一律拿**实例**调用 (desc->props[i].get/set 的
+// 第一个形参是 `vb6_cls_X*`)。
+static const vb6_UcPropDesc* vb6_uc_ownPropLookup(void* obj, const wchar_t* name, void** outInst) {
+    vb6_UCRec* r;
+    if (!obj || !name) return NULL;
+    r = vb6_uc_findByInstance(obj);
+    if (!r) r = vb6_uc_findByHwnd(obj);
+    if (!r || !r->desc || !r->desc->props || r->desc->propCount <= 0) return NULL;
+    for (int32_t i = 0; i < r->desc->propCount; i++) {
+        const vb6_UcPropDesc* pd = &r->desc->props[i];
+        if (pd->name && _wcsicmp(pd->name, name) == 0) {
+            if (outInst) *outInst = r->me;
+            return pd;
+        }
+    }
+    return NULL;
+}
+
+int32_t vb6_UC_OwnPropGet(void* obj, const wchar_t* name, void* outV) {
+    void* inst = NULL;
+    const vb6_UcPropDesc* pd = vb6_uc_ownPropLookup(obj, name, &inst);
+    if (!pd || !pd->get || !inst) return 0;
+    pd->get(inst, outV);
+    return 1;
+}
+
+int32_t vb6_UC_OwnPropSet(void* obj, const wchar_t* name, const void* inV) {
+    void* inst = NULL;
+    const vb6_UcPropDesc* pd = vb6_uc_ownPropLookup(obj, name, &inst);
+    if (!pd || !pd->set || !inst) return 0;
+    return pd->set(inst, inV) ? 1 : 0;
 }
 
 // ---- 设计器子控件: .ctl 设计面上的 TextBox → 每实例一个真实 EDIT 子窗口 ----

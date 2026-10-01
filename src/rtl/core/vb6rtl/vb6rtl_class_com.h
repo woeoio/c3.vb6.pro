@@ -174,6 +174,14 @@ void* vb6_ComPackVariant(vb6_VARIANT v);     /* P24-04: Pack vb6_VARIANT (by val
 // Windows VARIANT. 用于 comPackExpr 无法准确判定 (inferExprType 回退 Variant) 的场景.
 #define vb6_ComPackValue(x) vb6_ComPackVariant(vb6_VariantFromValue((x)))
 
+// Fix <vbeclipse>: UDT 结构体实参的 COM 打包 (cgen_util_com.cpp comPackExpr 在
+// inferUdtTypeOfExpr 认出 UDT 时返回本名)。宏而非函数, 因为 sizeof(x) 与 &x
+// 都要在**实参表达式**上求值 —— 形参化会多一次拷贝且拿不到类型。
+// 落到 vb6_VariantFromUdtBytes (vb6rtl_array.h, 伞头里 array.h 排在 variant.h
+// 之后才看得见 SafeArray 家族): SAFEARRAY(VT_UI1) 字节快照 = VB6 的 UDT 值编组。
+#define vb6_ComPackUdt(x) \
+    vb6_ComPackVariant(vb6_VariantFromUdtBytes(&(x), (int32_t)sizeof(x)))
+
 
 // P14.3.5: CallByName - 按名称动态调用方法/属性
 // calltype: 1=VbLet, 2=VbMethod, 3=VbGet

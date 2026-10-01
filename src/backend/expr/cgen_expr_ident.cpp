@@ -17,6 +17,10 @@ namespace vb6c3 {
 // 三个 .inc 是「函数体片段」，在 visit() 函数体内被 #include（C++ 允许），故不用 .cpp/.hpp 后缀 ——
 // 它们不是独立编译单元，单独 include 会编译不过。片段局部变量/静态表原样留在片段内，逐行未改 → 零行为改动。
 
+// 内置函数表 (builtinFuncs) + 派生的键集合 (kBuiltinFuncNames): 提到命名空间作用域,
+// 供本 TU 的 visit(IdentifierExpr&) 与 cgen_expr_call.cpp 的 visit(IndexOrCallExpr&) 共用。
+#include "backend/detail/expr/cgen_expr_ident_builtin_table.inc"
+
 void CCodeGen::visit(IdentifierExpr& node) {
 #include "backend/detail/expr/cgen_expr_ident_dispatch.inc"
 #include "backend/detail/expr/cgen_expr_ident_symbol.inc"

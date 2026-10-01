@@ -190,8 +190,17 @@ int vb6_StrCmp(const wchar_t* a, const wchar_t* b) {
     // (GetTextDisplay 里 Format 从未赋值的列 → .Format==NULL)。
     if (!a) a = L"";
     if (!b) b = L"";
-    if (g_vb6_optionCompareText) return _wcsicmp(a, b);
+    if (g_vb6_optionCompareText) return vb6_TextCmp(a, b);
     return wcscmp(a, b);
+}
+
+// <vbeclipse>: 文本模式的**显式**比较入口。VB6 的 Option Compare 是**按模块**的编译期
+// 属性, 而 g_vb6_optionCompareText 是进程唯一的全局 —— 一个 Text 模块会把同进程里
+// Binary 模块的 `=`/`<>`/Select Case 语义一起带跑。因此 codegen 按"当前模块的
+// Option Compare"直接选函数名 (Text 模块发 vb6_StrCmpT), 这个全局保留给
+// 旧的运行期路径, 不再是判定入口。
+int vb6_StrCmpT(const wchar_t* a, const wchar_t* b) {
+    return vb6_TextCmp(a, b);
 }
 
 // ============================================================
@@ -215,6 +224,7 @@ int32_t vb6_VariantToLong(vb6_VARIANT v) {
         case vb6_vtLong:    return v.lVal;
         case VT_I8:         return (int32_t)v.llVal;  /* Task #44: VT_I8 进 Long 按 C 截断语义 */
         case vb6_vtSingle:  return (int32_t)round(v.fltVal);
+        case vb6_vtDate:    return (int32_t)round(v.dblVal);  /* <vbeclipse>: VT_DATE 的数值面就是序列号 */
         case vb6_vtDouble:  return (int32_t)round(v.dblVal);
         case vb6_vtCurrency:return (int32_t)(v.cyVal / 10000);
         case vb6_vtBSTR:    return (int32_t)vb6_Val(v.bstrVal);
@@ -231,6 +241,7 @@ intptr_t vb6_VariantToLongPtr(vb6_VARIANT v) {
         case vb6_vtInteger: return (intptr_t)v.iVal;
         case vb6_vtLong:    return (intptr_t)v.lVal;
         case vb6_vtSingle:  return (intptr_t)round(v.fltVal);
+        case vb6_vtDate:    return (intptr_t)round(v.dblVal);  /* <vbeclipse>: 同上 */
         case vb6_vtDouble:  return (intptr_t)round(v.dblVal);
         case vb6_vtCurrency:return (intptr_t)(v.cyVal / 10000);
         case vb6_vtBSTR:    return (intptr_t)vb6_Val(v.bstrVal);
@@ -254,6 +265,7 @@ int16_t vb6_VariantToBool(vb6_VARIANT v) {
         case vb6_vtLong:     return v.lVal ? -1 : 0;
         case VT_I8:          return v.llVal ? -1 : 0;  /* Task #44: LongLong/LongPtr 64 位 */
         case vb6_vtSingle:   return v.fltVal != 0.0f ? -1 : 0;
+        case vb6_vtDate:     return v.dblVal != 0.0 ? -1 : 0;  /* <vbeclipse>: 同上 */
         case vb6_vtDouble:   return v.dblVal != 0.0 ? -1 : 0;
         case vb6_vtCurrency: return v.cyVal ? -1 : 0;
         case vb6_vtDispatch: return v.pdispVal ? -1 : 0;
@@ -274,6 +286,7 @@ double vb6_VariantToDouble(vb6_VARIANT v) {
         case vb6_vtLong:    return (double)v.lVal;
         case VT_I8:         return (double)v.llVal;  /* Task #44: LongLong/LongPtr 64 位 */
         case vb6_vtSingle:  return (double)v.fltVal;
+        case vb6_vtDate:    return v.dblVal;  /* <vbeclipse>: 同上 */
         case vb6_vtDouble:  return v.dblVal;
         case vb6_vtCurrency:return (double)v.cyVal / 10000.0;
         case vb6_vtBSTR:    return vb6_Val(v.bstrVal);
@@ -299,6 +312,10 @@ struct vb6_SafeArray1D* vb6_VariantToSafeArray1D(vb6_VARIANT v) {
 // vb6_VariantToObject 接受 vb6_VARIANT* (要求实参左值), 而调用点包装的实参
 // 经常是函数返回值 (vb6_VariantArrayGet(...) 等) 无法取址. 这里提供按值版本.
 void* vb6_VariantToObjectVal(vb6_VARIANT v) {
+    if (getenv("C3_IV_TRACE")) {
+        fprintf(stderr, "[V2O] vt=%d pdisp=%p\n", (int)v.vt, v.pdispVal);
+        fflush(stderr);
+    }
     if (v.vt == vb6_vtDispatch) return v.pdispVal;
     return NULL;
 }
@@ -316,6 +333,13 @@ void vb6_VariantClear(vb6_VARIANT* v) {
         vb6_ReleaseObject(&v->pdispVal);
         v->pdispVal = NULL;
     }
+#ifndef _WIN64
+    // Fix <vbeclipse> rev11: x86 的 DECIMAL 由 pdecVal 指向外部缓冲, 需释放
+    if (v->vt == vb6_vtDecimal && v->pdecVal) {
+        CoTaskMemFree(v->pdecVal);
+        v->pdecVal = NULL;
+    }
+#endif
     v->vt = vb6_vtEmpty;
 }
 
@@ -329,9 +353,43 @@ void vb6_VariantCopy(vb6_VARIANT* dst, const vb6_VARIANT* src) {
     }
     // Dispatch需要AddRef
     if (src->vt == vb6_vtDispatch && src->pdispVal) {
-        // COM AddRef would go here; simplified: just copy pointer
+        // Fix <vbeclipse>: 原先注释自认 "COM AddRef would go here; just copy pointer" ——
+        // 但 vb6_VariantClear 会对 vb6_vtDispatch 调 vb6_ReleaseObject, 所以浅拷贝 + 双方各
+        // Clear 一次 = 过度释放 (0xC0000374)。与 vb6_VariantObject 同口径补 AddRef,
+        // 使「每个持有 Variant 的槽位各自持有一份引用」成立。
         dst->pdispVal = src->pdispVal;
+        vb6_ComAddRefDispatch(dst->pdispVal);
     }
+}
+
+// Fix <vbeclipse> rev16: Variant **槽位赋值**("接管"语义) —— 先释放 dst 旧内容, 再把
+// src 的值深拷贝进去。与 vb6_VariantCopy 的唯一区别就是那句 Clear; BSTR 另分配 /
+// Dispatch AddRef / x86 DECIMAL 另分配全部复用同一口径, 保证"每个槽各自持有一份
+// 所有权"成立。
+//
+// 为什么必须深拷贝: 原先 Variant 数组元素赋值发的是
+//   `slot = vb6_VariantFromValue((*Item))`
+// 而 vb6_VariantFromValue 对 vb6_VARIANT 走 _Generic 的 vb6_VariantIdentity ——
+// 纯结构体浅拷贝, 槽与调用方实参**共用同一只 BSTR / 同一个 Dispatch**。调用方
+// (ByRef Variant 形参的宿主) 下一次 vb6_VariantClear(&v) 就把它 free 掉, 随后
+// 同尺寸分配又复用那个地址 ⇒ 每个槽都读出"最后一次写入的值"。
+// 实测 tests/ve_list (工程内 List.cls 形态): idx=0/1/2 全答 "Gamma", 按 key 也全答
+// "Gamma"; 真工程 play78: Folder.Views.Item(0) 取回 1 字符垃圾 →
+// m_Views.Item(<垃圾>) 落空 → NULL 解引用 (av read 0x4 @ vb6_View_prop_get_ViewId)。
+// 对照: 同一份代码里的 m_Keys (String 数组) 走 vb6_BSTR_Assign 深拷贝, 所以它一直是对的。
+void vb6_VariantAssign(vb6_VARIANT* dst, vb6_VARIANT src) {
+    if (!dst) return;
+    vb6_VariantClear(dst);        /* 释放旧值 (BSTR / Dispatch / x86 DECIMAL) */
+    vb6_VariantCopy(dst, &src);   /* *dst = src + BSTR 另分配 / Dispatch AddRef */
+#ifndef _WIN64
+    /* x86 的 DECIMAL 由 pdecVal 指向外部缓冲: 上面 Copy 只搬了指针, 这里必须另分配
+       一只, 否则 src 的宿主释放时会把 dst 手里的同一块 free 掉 (二次 free)。 */
+    if (src.vt == vb6_vtDecimal && src.pdecVal) {
+        DECIMAL* p = (DECIMAL*)CoTaskMemAlloc(sizeof(DECIMAL));
+        if (p) { *p = *src.pdecVal; dst->pdecVal = p; }
+        else   { dst->vt = vb6_vtEmpty; dst->pdecVal = NULL; }
+    }
+#endif
 }
 
 // ============================================================

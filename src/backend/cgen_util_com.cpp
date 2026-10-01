@@ -79,11 +79,11 @@ std::string CCodeGen::resolveComValue(const std::string& unpackType) {
     {
         std::string lvLower = Symbol::toLower(memberName);
         if (lvLower == "listitems" || lvLower == "columnheaders") {
-            std::string lvBare = listViewNameOfExpr(objExpr);
-            if (!lvBare.empty()) {
+            std::string lvHwnd = listViewHwndExprOf(objExpr);
+            if (!lvHwnd.empty()) {
                 lastExpr_ = (lvLower == "listitems")
-                    ? ("vb6_ListView_ListItems((void*)vb6_hwnd_" + lvBare + ")")
-                    : ("vb6_ListView_ColumnHeaders((void*)vb6_hwnd_" + lvBare + ")");
+                    ? ("vb6_ListView_ListItems((void*)" + lvHwnd + ")")
+                    : ("vb6_ListView_ColumnHeaders((void*)" + lvHwnd + ")");
                 isComMarker_ = false;
                 return lastExpr_;
             }
@@ -97,6 +97,14 @@ std::string CCodeGen::resolveComValue(const std::string& unpackType) {
         std::string tvBare = treeViewNameOfExpr(objExpr);
         if (!tvBare.empty()) {
             lastExpr_ = "vb6_TreeView_Nodes((void*)vb6_hwnd_" + tvBare + ")";
+            isComMarker_ = false;
+            return lastExpr_;
+        }
+        // Fix <vbeclipse>: 跨窗体 TreeView (`frmViewViews.tvwViews.Nodes`) ——
+        // objExpr 是控件句柄访问器文本, 在 externalTreeViewAccs_ 里登记过。
+        auto itExtTv = externalTreeViewAccs_.find(objExpr);
+        if (itExtTv != externalTreeViewAccs_.end()) {
+            lastExpr_ = "vb6_TreeView_Nodes((void*)" + itExtTv->second + ")";
             isComMarker_ = false;
             return lastExpr_;
         }
@@ -414,6 +422,26 @@ std::string CCodeGen::canonicalClassFieldName(const std::string& className,
 }
 
 
+// Fix <vbeclipse>: 宿主伪对象成员名规范化 (见 cgen_helpers.inc 声明注释).
+std::string CCodeGen::canonicalHostPseudoMember(const std::string& pseudoObj,
+                                                const std::string& memberName) const {
+    if (memberName.empty()) return memberName;
+    static const std::pair<const char*, const char*> kUserControlCanon[] = {
+        {"hdc", "hDC"},
+    };
+    const std::string pj = Symbol::toLower(pseudoObj);
+    if (pj != "usercontrol" && pj != "ambient"
+        && pj != "extender" && pj != "propertypage") {
+        return memberName;
+    }
+    const std::string want = Symbol::toLower(memberName);
+    for (const auto& kv : kUserControlCanon) {
+        if (want == kv.first) return kv.second;
+    }
+    return memberName;
+}
+
+
 // Fix 093a: 当前类是否声明了同名成员字段 — 裸标识符赋值 (`field = value`) 时,
 // 本类字段优先于从全局符号表捡到的外部同名 Property Let/Set (VB6 里同一类中
 // 字段与属性不可能同名). 典型: cClientCallback.cls 的 `recvBuffer = data`
@@ -458,6 +486,20 @@ std::string CCodeGen::canonicalClassMemberName(const std::string& className,
 
 
 std::string CCodeGen::comPackExpr(Expr& expr) {
+    // Fix <vbeclipse>: **UDT (Type ... End Type) 实参**必须走字节数组编组。
+    // `m_Rect As RECT` 传给 COM 方法时, inferExprType 推不出标量类型 → 落
+    // default 分支 → vb6_ComPackInt(me->m_Rect) → C2440 "无法从 vb6_type_RECT
+    // 转换为 int32_t" (ucSplitBar.ctl:149 `.SplitterMouseDown UserControl.hWnd,
+    // m_Rect, x, y`)。
+    //
+    // 判据用 inferUdtTypeOfExpr (而非 inferExprType): 它查 knownUdtVars_ 与 UDT
+    // 成员表, 能认出 "这是一个 UDT 结构体值"。
+    //
+    // ⚠ 这里只返回**函数名** (本函数的契约), 实参由各调用点自己拼 —— 所以走
+    // 宏: vb6_ComPackUdt(x) 内部自己做 &x 与 sizeof(x)。先前试图在返回串里嵌
+    // 实参 (lastExprOrSelf_) 是错的方向: 那样 10+ 个调用点会各拼一次实参。
+    if (inferUdtTypeOfExpr(expr).rfind("vb6_type_", 0) == 0) return "vb6_ComPackUdt";
+
     // Fix 110p: 标识符的 C 层跟踪集合优先于 inferExprType. 声明为 Collection/Object
     // 的变量 (C 类型 void*) 会被 inferExprType 误判为 Double → 生成
     // vb6_ComPackDouble(void*) → C2440. 实测 Charts 2020 Form2.frm 524:
@@ -555,7 +597,18 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 // 生成的 vb6_ComPack_<类>(vb6_cls_<类>_New()) 返回 void* (堆上 VARIANT*,
 // VT_DISPATCH), 与 vb6_NewObject 的返回表示一致, 下游晚绑定路径零改动.
 std::string CCodeGen::comNewExprFor(const Symbol* comSym) {
-    if (!comSym || comSym->comProjectImplClass.empty()) return "";
+    if (!comSym) return "";
+    // Fix <vbeclipse>-2: 本工程有同名类模块 ⇒ New 出来的必须是**原生**
+    // vb6_cls_<工程类>_New(), 与 mapTypeRef 现在对该类型名返回的 vb6_cls_* 变量
+    // 类型一致. 判据与 mapTypeRef 同源 (projectClassNameOf, 不是 isExternal:
+    // 类型库自动加载注进来的内建 coclass isExternal=false).
+    // 例: 工程类 Folder 撞 Shell32 的 coclass Folder → `New Folder` 必须是原生
+    // 实例, 否则把原生指针当 VARIANT*/IDispatch 解 → vt=0 → 分发全 "not found".
+    const std::string projCls = projectClassNameOf(comSym->name);
+    if (!projCls.empty()) {
+        return "vb6_cls_" + cIdent(projCls) + "_New()";
+    }
+    if (comSym->comProjectImplClass.empty()) return "";
     std::string impl = cIdent(comSym->comProjectImplClass);
     return "vb6_ComPack_" + impl + "(vb6_cls_" + impl + "_New())";
 }
@@ -601,11 +654,11 @@ std::string CCodeGen::resolveComMarkerForPack(const std::string& packFnHint) {
     {
         std::string lvLower = Symbol::toLower(memName);
         if (lvLower == "listitems" || lvLower == "columnheaders") {
-            std::string lvBare = listViewNameOfExpr(objExpr);
-            if (!lvBare.empty())
+            std::string lvHwnd = listViewHwndExprOf(objExpr);
+            if (!lvHwnd.empty())
                 return (lvLower == "listitems")
-                    ? ("vb6_ListView_ListItems((void*)vb6_hwnd_" + lvBare + ")")
-                    : ("vb6_ListView_ColumnHeaders((void*)vb6_hwnd_" + lvBare + ")");
+                    ? ("vb6_ListView_ListItems((void*)" + lvHwnd + ")")
+                    : ("vb6_ListView_ColumnHeaders((void*)" + lvHwnd + ")");
         }
     }
 
@@ -615,6 +668,9 @@ std::string CCodeGen::resolveComMarkerForPack(const std::string& packFnHint) {
         std::string tvBare = treeViewNameOfExpr(objExpr);
         if (!tvBare.empty())
             return "vb6_TreeView_Nodes((void*)vb6_hwnd_" + tvBare + ")";
+        auto itExtTv = externalTreeViewAccs_.find(objExpr);
+        if (itExtTv != externalTreeViewAccs_.end())
+            return "vb6_TreeView_Nodes((void*)" + itExtTv->second + ")";
     }
 
     // C29-5b: `Toolbar1.Buttons` → 真集合对象 (同 resolveComValue 那条)。

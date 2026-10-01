@@ -76,6 +76,9 @@ struct VbpProject {
     };
     std::vector<ObjectRef> objects;
 
+    // Fix <vbeclipse>: Object=*\A<路径>.vbp 私有控件工程引用 (相对本 vbp 目录)
+    std::vector<std::string> projectRefs;
+
     // C3 扩展 (Fix 160): 免注册 COM 组件 DLL。
     // 格式: ComLib=<相对 exe 的 DLL 路径>  (可多行, 一行一个组件 DLL)
     // VB6 标准 VBP 不含此字段。用途: 运行期 CreateObject("ProgID") 在目标机未注册

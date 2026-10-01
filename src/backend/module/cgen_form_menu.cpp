@@ -81,6 +81,15 @@ void CCodeGen::emitMenuItem(const std::string& parentVar, const FrmControl& menu
 
 // P7.8: 递归生成菜单点击事件派发 (WM_COMMAND中)
 void CCodeGen::emitMenuClickDispatch(const FrmControl& menuCtrl, int& menuId) {
+    // Fix <vbeclipse>: 菜单项在 .frm 里存在但源文件**没有**对应 Click 过程
+    // (frmToolWin.frm 的 mnuMaximize/mnuClose 只有 Begin VB.Menu, 无
+    // `Private Sub mnuMaximize_Click`) — VB6 语义是"点了没反应"。此前无条件发
+    // `{ extern void vb6_<f>_<mnu>_Click(); ... }` → 该过程无定义 → LNK2001
+    // "无法解析的外部符号". 只有真实存在过程时才派发 (菜单本身仍创建, 保留 ID).
+    auto hasClickHandler = [&](const std::string& ctrlName) -> bool {
+        Symbol* sym = symTab_.lookupModule(ctrlName + "_Click");
+        return sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function);
+    };
     // M22-Issue3: 如果顶层Menu控件没有children, 它自身就是叶菜单项, 需要生成Click处理
     if (menuCtrl.children.empty()) {
         std::string caption = menuCtrl.controlName;
@@ -103,7 +112,7 @@ void CCodeGen::emitMenuClickDispatch(const FrmControl& menuCtrl, int& menuId) {
                     visible = false;
                 }
             }
-            if (visible) {
+            if (visible && hasClickHandler(menuCtrl.controlName)) {
                 std::string clickFn = cProcName(menuCtrl.controlName + "_Click", AccessLevel::Private);
                 c_.emitLine("if (id == " + std::to_string(menuId) + ") {");
                 c_.indent();
@@ -149,7 +158,7 @@ void CCodeGen::emitMenuClickDispatch(const FrmControl& menuCtrl, int& menuId) {
             emitMenuClickDispatch(child, menuId);
         } else {
             // 叶子菜单项
-            if (visible) {
+            if (visible && hasClickHandler(child.controlName)) {
                 std::string clickFn = cProcName(child.controlName + "_Click", AccessLevel::Private);
                 c_.emitLine("if (id == " + std::to_string(menuId) + ") {");
                 c_.indent();

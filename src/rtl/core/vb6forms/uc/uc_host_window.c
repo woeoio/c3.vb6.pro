@@ -4,6 +4,7 @@
 // 跨族共享符号见 vb6forms_uc_internal.h
 
 #include "vb6forms_uc_internal.h"
+#include <stdio.h>  /* rev10: C3_UC_TRACE 的 fprintf */
 
 #ifdef __cplusplus
 extern "C" {
@@ -173,6 +174,16 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             return (LRESULT)br;
         }
         case WM_DESTROY:
+            // Fix <vbeclipse> rev10 (C3_UC_TRACE): 临时 —— 定位
+            // "ShowPerspective 报 No perspective id found" 是否因为本控件的
+            // WM_DESTROY 提前跑过 UserControl_Terminate (源码里它会
+            // `Set m_Perspectives = Nothing`)。
+            if (getenv("C3_UC_TRACE")) {
+                fprintf(stderr, "[UC] WM_DESTROY hwnd=%p me=%p hasTerminate=%d\n",
+                        (void*)hwnd, r ? r->me : NULL,
+                        (r && r->desc && r->desc->terminate) ? 1 : 0);
+                fflush(stderr);
+            }
             if (r && r->desc && r->desc->terminate) {
                 vb6_UCSaved saved;
                 vb6_uc_push(r, &saved);

@@ -252,7 +252,11 @@ bool MsvcDriver::compileAndLinkIncremental(const MsvcDriverOptions& options) {
         // Fix 196: UTF-16LE+BOM (cl/link 按系统 ANSI 代码页读 @rsp, 见 msvc_driver.hpp)
         writeMsvcResponseFile(rspPath, compileCmd.str().substr(cl.length()));
         std::string vcvarsPrefix = buildVcvarsPrefix(arch);
-        std::string fullCmd = vcvarsPrefix + cl + " @\"" + rspPath + "\" > \"" + tmpLogPath + "\" 2>&1";
+        // Fix <vbeclipse> D8050: 同 msvc_driver.cpp —— 每次 cl 走独立 TMP/TEMP
+        // (objDir = 本次 session 目录), 断掉同 runner 并行 GUI worker 的
+        // c1.exe 在共享 %TEMP% 上互踩 _CL_*.tmp 那条路。
+        std::string tmpIso1 = "set \"TMP=" + objDir + "\" && set \"TEMP=" + objDir + "\" && ";
+        std::string fullCmd = vcvarsPrefix + tmpIso1 + cl + " @\"" + rspPath + "\" > \"" + tmpLogPath + "\" 2>&1";
         int ret = executeCommand(fullCmd);
         std::filesystem::remove(rspPath, std::error_code());
         if (ret != 0) {
@@ -364,7 +368,9 @@ bool MsvcDriver::compileAndLinkIncremental(const MsvcDriverOptions& options) {
     // Fix 196: UTF-16LE+BOM (link.exe 直调 @rsp 同样按 ANSI 代码页读, 实测 UTF-8 → LNK1117)
     writeMsvcResponseFile(linkRsp, linkCmd.str().substr(linkExe.length()));
     std::string vcvarsPrefix2 = buildVcvarsPrefix(arch);
-    std::string fullLinkCmd = vcvarsPrefix2 + linkExe + " @\"" + linkRsp + "\" > \"" + tmpLogPath + "\" 2>&1";
+    // Fix <vbeclipse> D8050: 链接同样按 session objDir 隔离 TMP/TEMP, 与 cl 一致。
+    std::string tmpIso2 = "set \"TMP=" + objDir + "\" && set \"TEMP=" + objDir + "\" && ";
+    std::string fullLinkCmd = vcvarsPrefix2 + tmpIso2 + linkExe + " @\"" + linkRsp + "\" > \"" + tmpLogPath + "\" 2>&1";
 
     if (options.verbose) {
         std::cout << "C3: 执行: " << fullLinkCmd << std::endl;

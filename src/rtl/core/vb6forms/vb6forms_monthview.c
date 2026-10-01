@@ -288,7 +288,25 @@ double vb6_MV_GetSelEnd(void* hwnd) {
     return vb6_MvDaySerial(&rg[1]);
 }
 
-// 改一端 = 读回整张表 → 换掉那一格 → 两格一起发回去。
+// 改一端 = 读回整张表 → 换掉那一格 → 归一化 → 两格一起发回去。
+//
+// 归一化口径 (2026-10-01, ctrlmonthview MV26/MV33/MV40 三条一起定):
+//
+//   原生 MCM_SETSELRANGE 是"全对或全否"的接口: 要求 rg[0] <= rg[1] 且
+//   宽度 <= MaxSelCount, 否则整条 FALSE 拒收。VB 侧一次只写一端, 拿原生当"改一格"
+//   用是**接不上**的:
+//     · 控件刚建起来时初值是一张同日 [Today, Today]; 用户先写 `SelStart = Today+1`
+//       就会算出 [Today+1, Today] 反序 → 原生吞掉 → 下一次 GET 还是 Today, 上层
+//       看不见这次写入 (MV26 跨月那天翻红的根因)。
+//     · 已经贴着 MaxSelCount 的窗口被往外推 → 原生同样吞掉 → 用户按代码字面看,
+//       "另一端明明没让我改, 怎么读的旧值还在" (MV33 之前把这条钉成"两端都不动",
+//       实际上是把原生的沉默当成了语义)。
+//   VB6 MSComCtl2.MonthView 的文档在这两处都规定了"另一端跟着调":
+//     SelStart > SelEnd ⇒ SelEnd := SelStart; SelEnd < SelStart ⇒ SelStart := SelEnd;
+//     宽度超过 MaxSelCount ⇒ 另一端被挤到 SelStart+Max-1 或 SelEnd-Max+1。
+//   这版 RTL 把这两条归一化都在**发**之前做完, 让上层看到的 SELRANGE 属性接口
+//   符合它字面承诺 ("我写的这一格一定读得出"), 不再靠原生沉默拒收的巧合。
+//   MV33/MV40 各自改到自己对应的落点。
 static void vb6_MvSetSelEnd(void* hwnd, int which, double serial) {
     SYSTEMTIME rg[2], next;
     int32_t ok;
@@ -296,6 +314,30 @@ static void vb6_MvSetSelEnd(void* hwnd, int which, double serial) {
     if (!vb6_DateFromSerial(serial, &next)) return;
     vb6_MvGetSelRange(hwnd, rg, &ok);
     rg[which] = next;
+    if (ok) {
+        /* (a) 顺序: 哪一格被写了, 另一端翻过它就被拉到同一格。 */
+        if (vb6_MvDaySerial(&rg[0]) > vb6_MvDaySerial(&rg[1])) {
+            rg[1 - which] = next;
+        }
+        /* (b) 宽度: 贴着 MaxSelCount 时把另一端挤回合法窗口。 */
+        LRESULT maxc = SendMessageW((HWND)hwnd, MCM_GETMAXSELCOUNT, 0, 0);
+        if (maxc > 0) {
+            double lo = vb6_MvDaySerial(&rg[0]);
+            double hi = vb6_MvDaySerial(&rg[1]);
+            double width = hi - lo + 1.0;
+            if (width > (double)maxc) {
+                if (which == 0) {
+                    /* SelStart 定住, SelEnd 收到 Start + max - 1 那天 */
+                    double target = lo + (double)maxc - 1.0;
+                    if (!vb6_DateFromSerial(target, &rg[1])) { /* 转换失败就退回原 rg[1] */ }
+                } else {
+                    /* SelEnd 定住, SelStart 收到 End - max + 1 那天 */
+                    double target = hi - (double)maxc + 1.0;
+                    if (!vb6_DateFromSerial(target, &rg[0])) { /* 同上 */ }
+                }
+            }
+        }
+    }
     SendMessageW((HWND)hwnd, MCM_SETSELRANGE, 0, (LPARAM)rg);
 }
 

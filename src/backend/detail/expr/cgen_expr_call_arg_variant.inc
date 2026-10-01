@@ -20,8 +20,22 @@
         // _Generic 在编译期按实类型选择 ctor: 标量->VariantLong/Int/Double, BSTR->String,
         // SafeArray1D*->Array, void*/class ptr->Object, vb6_VARIANT->Identity(no-op).
         // 仅对 ByVal Variant 生效 (ByRef Variant 走上面复合字面量路径, 取地址需左值).
+        // <vbeclipse>: 但 "p.type == Variant" 里有第二种槽 —— 工程类形参 (`ByVal h As
+        // DemoShape`): 类名只留在 typeRefName, C 侧形参是 vb6_cls_X*, 装箱喂进去就是
+        // C2440。这一种先按**槽**交付, 不参与下面的装箱。判据与 dll 入口 extern 共用
+        // cParamClassPtrType 一处, 原型和调用点不再各说一套。
+        if (!isByRef && i < calleeParams.size() && calleeParams[i].isByVal) {
+            const std::string cp091t = cParamClassPtrType(calleeParams[i]);
+            if (!cp091t.empty()) argVal = deliverToClassSlot(cp091t, argVal);
+        }
         if (!isByRef && i < calleeParams.size() && calleeParams[i].isByVal
-            && calleeParams[i].type == Vb6Type::Variant) {
+            && calleeParams[i].type == Vb6Type::Variant
+            && cParamClassPtrType(calleeParams[i]).empty()
+            // <vbeclipse> <VBFlexGridDemo> 同 arg_emit / Fix 086: 判据是 mapTypeRef
+            // 出的 C 类型 (不是"名字是否非空")。"As Variant" 会得 vb6_VARIANT, 装箱
+            // 照旧; "As IOleControl"/接口 等得 void*/vb6_ComIface_X*, 不装。
+            && (calleeParams[i].typeRefName.empty()
+                || cTypeForDeclaredTypeName(calleeParams[i].typeRefName) == "vb6_VARIANT")) {
             // Fix 084d: 实参若是类对象表达式 (如 me->Database, 类方法返回类对象),
             // 保持对象指针直传, 不要套 vb6_VariantFromValue — 符号表可能把类类型
             // 参数误记为 Variant, 若包装成 vb6_VARIANT 传给 vb6_cls_cXxx* 参数
@@ -52,7 +66,8 @@
                 std::string on091s2 = Symbol::toLower(
                     static_cast<IdentifierExpr&>(*node.positional[i]).name);
                 if (knownObjectVars_.count(on091s2) || knownTypedComVars_.count(on091s2)) {
-                    argVal = "vb6_VariantFromValue(" + argVal + ")";
+                    // 同 arg_emit 那一处: 装箱只走 boxToVariant 这一权威 (见该处注释)
+                    argVal = boxToVariant(node.positional[i].get(), argVal);
                 }
             }
         }
@@ -129,8 +144,11 @@
                 // 不能再按 Variant 数组提取 (提取函数形参是 vb6_VARIANT) → C2440:
                 //   cPLI 56: Cmd = Join(Array(a, b, c), " ")
                 //     → vb6_Join(vb6_VariantToSafeArray1D(_arr_0), ...).
-                bool argIsLiteralArr092g = (argVal.compare(0, 5, "_arr_") == 0);
-                if (paramIsArray && !argIsPA091k && !argIsLiteralArr092g
+                // <vbeclipse>: 同一条边界扩到"内置函数调用已经返回载体"那一形
+                // (Split/Filter/ArrayCreate...), 判定收进 cExprIsSafeArrayCarrier:
+                //   Join(Split(s, ","), "|") → C2440 (实测三条全中, 含 UBound(Split(...)))
+                bool argIsCarrier092g = cExprIsSafeArrayCarrier(argVal);
+                if (paramIsArray && !argIsPA091k && !argIsCarrier092g
                     && (paramBase == Vb6Type::Variant || paramBase == Vb6Type::Byte
                     || paramBase == Vb6Type::String || paramBase == Vb6Type::Long)) {
                     // 数组参数: 从 Variant 提取 SafeArray1D*
@@ -194,7 +212,11 @@
         // vb6_VARIANT 方向的 C2440.
         if (!isByRef && i < calleeParams.size() && calleeParams[i].isByVal
             && (calleeParams[i].type == Vb6Type::Variant
-                || calleeParams[i].type == Vb6Type::Empty)) {
+                || calleeParams[i].type == Vb6Type::Empty)
+            // <vbeclipse> <VBFlexGridDemo> 同族 guard (arg_emit / 091s): 判据
+            // 看 mapTypeRef 那份 C 类型是不是 vb6_VARIANT, 不是才不装。
+            && (calleeParams[i].typeRefName.empty()
+                || cTypeForDeclaredTypeName(calleeParams[i].typeRefName) == "vb6_VARIANT")) {
             bool alreadyVariant = cExprIsVariant(argVal);
             if (!alreadyVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
                 auto& idArg86 = static_cast<IdentifierExpr&>(*node.positional[i]);
@@ -428,6 +450,23 @@
                 argVal = "(&(vb6_VARIANT){.vt=VT_R8, .dblVal=(double)(" + inner113j + ")})";
             } else if (argT113j == Vb6Type::Boolean) {
                 argVal = "(&(vb6_VARIANT){.vt=VT_BOOL, .boolVal=(int16_t)(" + inner113j + ")})";
+            }
+        }
+        // Fix <vbeclipse> <VBFlexGridDemo>: 形参 C 类型是 `vb6_ComIface_X*` (VB
+        // `As SomeInterface`, 从 TLB 或工程接口来)，而实参是 void* (VB `As Object`
+        // 后期绑定值) 时，显式补一层 (T*) —— cl 19.29 静默隐式转 void*→typed*,
+        // cl 19.51 直接 C2172 "actual parameter is not a pointer" (VTableHandle.bas
+        // `Call ReplaceIOleControl(This)` 六处一次爆红)。VB6 语义本就是 Object →
+        // Interface 的 QI 转换，这里做的是**类型层的显式化**，不改运行期行为。
+        // 判据走 cParamTypedComIfaceCType (全局 symTab_.lookup)，与 wrap guard
+        // 那三条同源 —— cTypeForDeclaredTypeName 走 mapTypeRef 只看当前模块，
+        // CI 上 TLB 接口挂全局那一份查不到, 会兜底成 void* (dbg210 实测)。
+        if (i < calleeParams.size() && !isByRef) {
+            const std::string ifaceCT = cParamTypedComIfaceCType(calleeParams[i]);
+            if (!ifaceCT.empty()) {
+                if (argVal.rfind("(" + ifaceCT + ")", 0) != 0) {
+                    argVal = "(" + ifaceCT + ")" + argVal;
+                }
             }
         }
         args.push_back(std::move(argVal));

@@ -138,6 +138,14 @@
     // 生成Property签名 (不含函数体)
     std::string makePropertySignature(PropertyDecl& node);
 
+    // Fix <vbeclipse>: 接口类成员的**默认实现** (VB6 `Public x As New <Interface>`
+    // 实例化接口本身 → 接口成员声明即默认实现, 非抽象). 有返回值的发 `return 零值;`,
+    // 其余发空操作体. 实现见 cgen_decl_prop.cpp.
+    void emitIfaceMemberStub(const SubDecl& node, const std::string& sig, bool returnsValue);
+    void emitIfaceMemberStub(const FunctionDecl& node, const std::string& sig, bool returnsValue);
+    void emitIfaceMemberStub(const PropertyDecl& node, const std::string& sig, bool returnsValue);
+    void emitIfaceStubBody(const std::string& sig, const std::string& retType);
+
     // 生成类工厂函数 (New/Destroy)
     void emitClassFactory(Module& module);
     // Fix 099: 生成 Public 字段的 COM 读写访问器 (ActiveX DLL 专用, 见 cgen_com.cpp)
@@ -240,15 +248,104 @@
     std::string getControlPropWriteFn(FrmControlType ctrlType, const std::string& propName) const;
     // P20-36: 生成控件属性访问的HWND参数 (Menu控件用GetMenu+menuId)
     std::string makeCtrlHwndArg(const std::string& ctrlNameLower, FrmControlType ctrlType) const;
+    // Fix <vbeclipse>: 控件数组属性写的 callee 实参串。普通控件 = CtrlArr_GetAt(...);
+    // 菜单 (vb6_SetMenu* 三参: HMENU, menuId, 值) = "(GetMenu((HWND)窗体), 基址+下标)"。
+    std::string ctrlArrWriteCalleeArgs(const std::string& writeFn,
+                                       const std::string& arrOrigName,
+                                       const std::string& idxArg) const;
+    // Fix <vbeclipse>: 在其他窗体的设计器描述里找控件 (frmViewViews.tvwViews)。
+    // 命中返回该控件描述, 否则 nullptr。designerFiles_ 未设 / 非窗体名都返回 nullptr。
+    const FrmControl* findExternalFormControl(const std::string& formName,
+                                              const std::string& ctrlName) const;
 
     // 应用 .frm 设计期样式属性 (BorderStyle / Alignment)。顶层控件与容器子控件共用，
     // hwndExpr 为控件句柄表达式 (如 "vb6_hwnd_Foo")。
     void emitDesignerStyleProps(const FrmControl& ctrl, const std::string& hwndExpr);
 
+    // 账 #125: 应用 .frm 设计期的**状态**三件 (Enabled / Visible / CheckBox·OptionButton 的 Value)。
+    // 顶层控件与容器子控件两条创建路共用; hwndExpr 同 emitDesignerStyleProps。
+    void emitDesignerStateProps(const FrmControl& ctrl, const std::string& hwndExpr);
+    // 账 #142: 设计期那两条**字符串**属性（ToolTipText / Tag）的发码。与上面那条一样被
+    // 顶层控件与容器子控件两条创建路共用；只在 .frm 写了非空值时发。
+    void emitDesignerStringProps(const FrmControl& ctrl, const std::string& hwndExpr);
+
+    // 账 #154（C29-SL-q）: 设计期 `FontName` / `FontSize` 打到窗口上。
+    // 与 #125 / #142 同一形状 —— **两条创建路都要调**（顶层那趟与容器子控件那趟），只接一头就是本线踩过几次的那声不响。
+    void emitDesignerFontProps(const FrmControl& ctrl, const std::string& hwndExpr);
+
+    // 账 #160: 设计期 `TabIndex` 下发到窗口（存窗口属性 `VB6_TabIndex`）。
+    // `.frm` 写了照发的，没写用 `declarationIndex`（同一父窗内的声明序号）兜底 ——
+    // 兜成 0 会让多枚控件同时声称 TabIndex=0。两条创建路都要调。
+    void emitDesignerTabIndexProp(const FrmControl& ctrl, const std::string& hwndExpr,
+                                  long declarationIndex);
+
     // 返回控件类型相关的 Win32 样式位 (BS_*/SS_*/ES_*/CBS_*/LBS_*/WS_BORDER...)。
     // 顶层控件与容器(Frame/PictureBox)子控件必须使用同一套逻辑，否则子控件缺
     // SS_NOTIFY/BS_GROUPBOX 等样式会导致外观/交互 (含 tooltip) 异常。
     long controlTypeStyleBits(const FrmControl& ctrl) const;
+
+    // 账 #83(a)（C29-SL-r，读数见 029 的 `C29-SL-r-0`）: 创建时要不要立 `WS_TABSTOP`。
+    // VB6 的 `TabStop` 默认是 True，而这个位在**两条创建路上以前都没立过**（backend 里这个常量
+    // 一次都没出现过）⇒ 所有控件读回 False、模态窗体里 Tab 不走。两处调用（顶层 + 容器子控件），
+    // 拿不到焦点的那几类不立，`.frm` 显式写了 `TabStop` 的按写的来。
+    long controlTabStopStyleBit(const FrmControl& ctrl) const;
+
+    // 账 #83(b2): 容器（Frame / PictureBox / SSTab）要不要挂 `WS_EX_CONTROLPARENT`。
+    // `IsDialogMessage`（账 #83(b1) 刚给主泵接上）默认只看**活动窗口的直接子窗口**，
+    // 不走进没挂这一位的容器 ⇒ 容器里的控件压根进不了 tab 序（实测站点序列
+    // `cmdIn1 → cmdTop2 → cmdTop1`，Frame 里的 cmdIn2/cmdDeep 一步都不到）。
+    // 容器清单与 `cgen_form_frame_menu.inc` 里那条递归清单同一族 —— **两条创建路都要挂**
+    // （容器自己也可以是子控件：嵌在 Frame 里的 Frame 走第二条路）。
+    // 账 #167：这类型算不算**容器**（会发子控件、要挂 CONTROLPARENT、子控件要吃派发）。
+    // 创建侧与两趟派发侧共用这一处 —— 派发侧以前少认 SSTab ⇒ 子控件 id 整体错位。
+    bool controlIsContainerType(const FrmControl& ctrl) const;
+
+    long controlContainerExStyleBit(const FrmControl& ctrl) const;
+
+    // 账 #158（按钮那一半）: BUTTON 类的焦点通知（`BN_SETFOCUS=6` / `BN_KILLFOCUS=7`）只有创建时
+    // 挂了 `BS_NOTIFY` 才会往父窗发（裸码实测 `.build/bnnotify/bnnotify.c`，两枚按钮只差这一位）。
+    // 两条创建路共用这一处判断（顶层 + 容器子控件）。`BN_CLICKED` 不需要这一位，
+    // 所以按钮的 `_Click` 一直是通的——但挂上这一位之后，通知里多了 6/7，
+    // 所以 Click 那条 arm 必须开始按 `code == 0` 过滤（见 create 那一趟）。
+    long controlButtonNotifyStyleBit(const FrmControl& ctrl) const;
+
+    // 账 #157: VB6 把窗体显示出来时，焦点交给**这枚窗体里 TabIndex 最小的那枚拿得到焦点的控件**
+    // （不是创建顺序 —— `.frm` 里控件的书写顺序与 TabIndex 常常相反，实测探针里 cmdB 先创建、
+    //  cmdA 才是 TabIndex=0）。这一份**留在发码期算**（账 #160 之后运行期已经有了 `VB6_TabIndex`，
+    //  可选改运行时；挪过去要连带把排除表与"每父窗自己编号"的口径一起搬，不值当为省一行发码去冒这个险）。
+    // 算出来的目标一次性存到窗体句柄上，由 RTL 的 `vb6_ShowForm` 在激活之后应用。
+    void emitFormInitialFocus(const FrmControl& formNode);
+
+    // C29-SL-h: Slider 的创建样式位（TBS_AUTOTICKS / TBS_VERT / TickStyle 那三位）。
+    // 顶层与容器子控件两条创建路各自都要它，所以单独一处折算、两处调用（账 #83）。
+    long sliderStyleBits(const FrmControl& ctrl) const;
+
+    // C29-SL-l（账 #143）: 控件的**零实参方法**（`SetFocus` / Slider 的 `ClearSel` 这一族）。
+    // 一形带括号（走表达式路）、一形不带（走语句路），两条码头都调这两个函数，
+    // 免得又只接一头、留下编得过而运行期一声不响的那条静默空转。
+    // objExpr 两种形态都认：`vb6_hwnd_List1`（表达式路）与裸小写名 `list1`（语句路）。
+    bool formCtrlSlot(const std::string& objExpr, FrmControlType& outType,
+                      std::string& outHwndExpr) const;
+    std::string controlZeroArgMethod(FrmControlType ctrlType,
+                                     const std::string& memberLower) const;
+
+    // C29-SL-n（账 #141）: 「这枚控件要不要子类化」的**唯一一份**判据。
+    // 这一趟原本被抄成三份：发 arm 的 `cgen_form_wndproc_subclass.inc`（按 info.hasXxx 汇总）、
+    // 装的 `cgen_form_frame_menu.inc`、拆的 `cgen_form_wndproc_dispatch.inc` —— 后两份各写一遍，
+    // 实测两份都**少了 `_DblClick` 与 `_Paint`**：只挂 `xxx_DblClick` 的控件，子类过程与
+    // `WM_LBUTTONDBLCLK` 那一条 arm 在产物里生成得好好的，却**一次都没被 install**
+    // ⇒ 处理器编得过、永不触发（`Slider` 首当其冲，本页 §3 就写着 DblClick）。
+    // ⚠ 内容与发 arm 那一趟的 info.hasXxx 逐条对应，**两边一起改**才有意义；
+    //   焦点与 Click 那两条必须带排除表，否则同一次操作会从两条路各发一次（C29-SL-g / SL-d）。
+    bool controlNeedsSubclass(const FrmControl& ctrl) const;
+
+    // C29-SL-o（账 #83 的 Slider 半边）: Slider 的**设计期值面**下发。
+    // 这段原本内联在 cgen_form_ctrl_style_apply.inc（只有顶层控件走得到），容器
+    // （Frame / PictureBox / SSTab）里的子滑杆拿不到 ⇒ `.frm` 写的 Min/Max/Value/
+    // Small·LargeChange/TickFrequency/Sel* 整条丢（实测顶层读回 10/100/42/2/9/5、
+    // Frame 内读回 0/100/0/1/20/0 = 原生默认档）。抽出来两条创建路共用，hwndExpr 由调用方给
+    // （顶层那趟自己算槽、子控件那趟用 childHwndRead）。
+    void emitSliderDesignTimeInit(const FrmControl& ctrl, const std::string& hwndExpr);
 
     // VB6 PictureBox/Image 的 STATIC 控件不显示 Caption (标题在创建时应清空)。
     bool controlTypeClearsCaption(const FrmControl& ctrl) const;
@@ -264,6 +361,18 @@
     // 控件初始化时的句柄表达式: 控件数组走 CtrlArr_GetAt, 其余走 vb6_hwnd_<名>。
     // (Shape/Line 的设计期初始化以前硬写 vb6_hwnd_*, 控件数组那条路会打到空句柄上)
     std::string ctrlHwndExprForInit(const FrmControl& ctrl) const;
+
+    // C29-SL-d: 该控件的 Click 是否已由原生通知（BN_CLICKED / *_SELCHANGE /
+    // TCN_SELCHANGE …）送出。子类化那一路补 Click 档时必须按它排除，否则双发。
+    // 定义与逐条来源清单在 cgen_util_ctrl.cpp；两个使用点分别是
+    // cgen_form_wndproc_subclass.inc（发不发这条 arm）与 cgen_form_frame_menu.inc
+    // （要不要装子类化）。
+    static bool controlClickFromNativeNotify(FrmControlType ctrlType);
+    // C29-SL-g: 同理，但排除的是**焦点**通知（TextBox/ComboBox/ListBox/命令按钮那六类的
+    // GotFocus/LostFocus 由父窗的 WM_COMMAND 码供，见 cgen_form_wndproc_dispatch.inc 开头）。
+    // 三处使用点：发 arm（subclass）、装子类化（frame_menu）、拆子类化（dispatch）——
+    // 这一句判据在仓里本来就被抄成三份，任何一处不同步都会留下"装了不拆"或"发了不装"。
+    static bool controlFocusFromNativeNotify(FrmControlType ctrlType);
 
     // P11.7: 返回控件类型的默认属性名 (如 TextBox->"Text", Label->"Caption")
     // 空字符串表示该控件类型无默认属性
@@ -282,6 +391,14 @@
     // ---- 表达式类型推断 ----
     // 推断表达式的Vb6Type（简化版，用于Select Case等需要类型判断的场景）
     Vb6Type inferExprType(Expr& expr) const;
+
+    // ai/009 §5.10 (P3): 给**窄整型目标**的赋值右值套上溢出检查 (vb6_ChkByte/
+    // ChkInt/ChkLong), 越界即 run-time error 6。原先这类赋值是裸 `t = v;`, 由 C
+    // 静默截断 (`a As Byte: a = -1` ⇒ a=255)。
+    // 只在右值类型**可能**超出目标范围时套; 同宽/更窄的右值套上去是恒真的噪声。
+    // 目标限 IdentifierExpr —— 成员访问/数组下标的目标类型另有一整套解析, 不在
+    // 这里猜 (返回原值 = 不套检查, 与改动前的行为一致)。
+    std::string narrowCheckAssign(Expr* target, Expr* value, const std::string& cValue) const;
 
     // P20-42: 窗体控件的**属性返回类型**。见 cgen_util_type.cpp 的 MemberAccessExpr
     // 分支: 那里对 `对象.成员` 的兜底是 lookupModule(memberName), 只按成员**裸名**
@@ -302,6 +419,54 @@
     // (如 vb6_VariantArrayGet, vb6_VariantFromComResult 等) 时, 判定为 Variant.
     // 仅检查顶层表达式 (去除前导括号后), 避免对子表达式误判.
     bool cExprIsVariant(const std::string& cExpr) const;
+
+    // <vbeclipse>: 与 cExprIsVariant 相对的一侧 —— C 表达式是否**已经是
+    // vb6_SafeArray1D\* 载体** (Split/Filter/Array 等内置函数的 C 返回, 以及 _arr_N
+    // 匿名临时量)。数组槽实参的 vb6_VariantToSafeArray1D 提取对这类表达式必须跳过,
+    // 否则 C2440 (载体指针 → vb6_VARIANT)。见 cgen_util_type.cpp 的定义。
+    bool cExprIsSafeArrayCarrier(const std::string& cExpr) const;
+
+    // <vbeclipse>: 装箱权威用它判断"这个 C 表达式顶层已经是 vb6_VARIANT 了"。
+    // 必须结构化判 (顶层 vb6_Variant* 且不是 vb6_VariantTo*), 不能靠 ctor 名字清单 ——
+    // 清单漏一枚 (vb6_VariantByte / 新增的 VariantSingle / VariantDate) 就会把
+    // 已是 VARIANT 的表达式再按 VB 类型装一层, 换来 C2440 + C2198。
+    bool cExprIsVariantCarrier(const std::string& cExpr) const;
+
+    // <vbeclipse>: 只有声明名（没有 AST 类型引用）时的 C 类型入口 —— 合成一次
+    // SimpleTypeRef 走 mapTypeRef, 不复制那份映射。dll/COM 入口的 extern 原型用它，
+    // 以便工程类形参与类模块的定义给出同一个类型。详见 cgen_base_type.cpp 定义处注释。
+    std::string cTypeForDeclaredTypeName(const std::string& name);
+    // <vbeclipse> <VBFlexGridDemo>: 与 cTypeForDeclaredTypeName 平行的一条判据 ——
+    // 专问"这个形参槽是不是类型化 COM 接口 (vb6_ComIface_X*)"，走全局 symTab_.lookup
+    // 绕开当前模块作用域 (mapTypeRef 的截短名只看当前模块，TLB 注入的接口挂在
+    // 全局，caller 侧就查不到 → 兜底 void*)。空串 = 不是接口槽。
+    std::string cParamTypedComIfaceCType(const ParameterInfo& p);
+
+    // <vbeclipse>: 该形参槽在 **C 侧**是否收工程类/接口的**实例指针**。是 → 返回那个
+    // 指针类型 (mapTypeRef 的原样结果, 不含 ByRef 的再取址)；否 → 空串。
+    // 为什么单独立一条：`Sub Wire(ByVal h As DemoShape)` 这种形参在符号表里 p.type 就是
+    // Vb6Type::Variant（类名只留在 p.typeRefName），于是全代码库那句
+    // `calleeParams[i].type == Vb6Type::Variant` 会把它当 Variant 槽 —— 调用点装箱成
+    // vb6_VARIANT、类模块的定义却是 vb6_cls_DemoShape* ⇒ C2440。所有"这个槽要不要装箱"
+    // 的判断都必须再过这一道，否则原型和调用点各按各的理解写（本条就是那次分叉的收口）。
+    // 只认 vb6_cls_ / vb6_ivref_ 两档：legacy 接口的 vb6_iface_<I>（非指针）和 COM 的
+    // vb6_ComIface_X* 一律返回空串 = 维持本改动之前的行为，不在这里顺手扩大。
+    std::string cParamClassPtrType(const ParameterInfo& p);
+
+    // <vbeclipse>: 该名字是否为本工程的某个类/窗体模块 (它的 prop_let_/成员函数真会被发出)。
+    // 与 cParamClassPtrType 同一口径, 见 cgen_base_type.cpp 定义处注释。凡是要"按类实例
+    // 发码"的地方都该先过这一道 —— RTL/typelib 里同名的"类"没有那份定义。
+    bool isProjectClassName(const std::string& name);
+
+    // <vbeclipse>: 配套 cParamClassPtrType 的**交付**侧：实参要放进那个类槽时该怎么发。
+    // clsPtr 为空 (= 不是类槽) 时原样返回，所以调用点写成 argVal = deliverToClassSlot(...)
+    // 是不分支的一句，不必每个站点各写一遍"是类槽就跳过装箱"。
+    std::string deliverToClassSlot(const std::string& clsPtr, const std::string& argVal) const;
+
+    // <vbeclipse> rev7: 配套 deliverToClassSlot 的**落临时**侧名生成器。ByRef 类形参
+    // 收到右值实参时必须先落局部再取址 (&(右值) = C2102)。名里只保留标识符字符
+    // (`vb6_ivref_IScheme*` 截断会带 '*'), 详见 cgen_base_type.cpp 定义处。
+    std::string classSlotTempName(const std::string& clsPtr, int idx) const;
 
     // Fix 038b: 运行时函数参数 C 类型查找表 — 当 calleeParams 为空 (运行时/内置函数)
     // 时, 通过函数名和参数索引查找期望的 C 类型. 返回空字符串表示未知.
@@ -410,6 +575,14 @@
     // Property Let/Set).
     bool isOwnClassField(const std::string& memberName) const;
 
+    // Fix <vbeclipse>: 宿主伪对象 (UserControl/Ambient/Extender/PropertyPage) 成员名
+    // 规范化 — RTL 的符号名是手写约定 (vb6_UserControl_hDC), VB6 源码拼写可以不
+    // 同 (`UserControl.hDc`), C 符号大小写敏感 → C2065 未声明的标识符.
+    // 例: ucButton.ctl:64 / ucCaption.ctl:119 / ucTab.ctl:92 写 hDc, RTL 只有 hDC.
+    // 非宿主伪对象 / 表中无此项时原样返回.
+    std::string canonicalHostPseudoMember(const std::string& pseudoObj,
+                                           const std::string& memberName) const;
+
     // Fix 010r-16: COM/Property-Get 左值重写辅助
     // 当赋值语句(Let/Set/Assignment fallback)的 LHS 是非常量 C 表达式(非左值)时,
     // 尝试重写为 COM SetProp/SetPropArg 或 Property Let/Set 调用.
@@ -500,6 +673,18 @@
     // 用于链式调用 db.Sql(s).Exec(...) 中 .Exec 的对象表达式 (db.Sql(s)) 类型推断
     std::string inferClassTypeOfExpr(const ASTNode& expr) const;
 
+    // Fix <vbeclipse> rev8: 该类成员的返回类型是不是 `As Object` (即 C 侧 void*)。
+    // `Property Get View() As Object` (View.cls:66) 就是这一类。
+    // 用途: 链式成员访问的**接收者是这种成员**时, 后面那一段必须走 COM 晚绑定
+    // (`vb6_ComGetProp(obj, L"Member")`), 不能拼 `obj.Member` / `obj->Member` ——
+    // obj 实际是 void*, 拼出来必是 C2223 "左侧必须具有结构/联合类型" (实测
+    // ucPerspective.c 36 处 .hWnd / ucFolder.c 11 处 .Caption / modSubClass.c 6 处)。
+    // 判据 = 类符号的 memberReturnTypes[member] 归一化后是 Object/Variant/Empty,
+    // 或该成员的 PropertyGet/Function 符号 type==Object 且 variableTypeName 不是
+    // 某个 Class 符号 (与 getClassMethodReturnType 的收紧口径同源)。
+    bool classMemberReturnsAsObject(const std::string& className,
+                                    const std::string& memberName) const;
+
     // ---- Fix 037: UDT 类型推断辅助 ----
     // 给定一个表达式 AST 节点, 递归推断其 UDT C 类型标识符 (如 "vb6_type_UcsBuffer").
     //  - IdentifierExpr: 查 knownUdtVars_ 得到 UDT C 类型
@@ -545,6 +730,9 @@
     // (`vb6_cls_X*` / `void*` / "" = 不是对象字段或推不出)。判"这个左值到底是不是 Variant
     // 容器"用它 —— `mi.type` 那条口径对跨模块的 `As <项目类>` 会说是 Variant。
     std::string udtFieldCTypeOfTarget(const ASTNode* target) const;
+    // <vbeclipse> <VBFlexGridDemo>: UDT 左值字段的**声明类型名** (`mi.typeRefName`),
+    // 空 = 真 Variant 槽, 非空 = 声明过具体类型 (Object/接口/类/UDT)。
+    std::string udtFieldTypeRefNameOfTarget(const ASTNode* target) const;
 
     // Fix 084o: 若 C 表达式为 Variant (字符串级检测或已知 Variant 变量), 返回
     // vb6_VariantToLong(...) 包装, 否则原样返回. 用于需要 int32_t 的上下文:

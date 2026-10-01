@@ -76,11 +76,20 @@ int vb6_GetCausesValidation(void* hwnd);
 void vb6_SetCausesValidation(void* hwnd, int causes);
 
 // P13.8: ToolTipText (returns BSTR)
-void* vb6_GetToolTipText(void* hwnd);
+// C29-SL-d/e: 返回型写 **wchar_t\*** 而不是 `void*` —— 装箱那一步是 C11 `_Generic`
+// （`vb6rtl_variant.h` 那张表把"其他指针 void*/class*/type*"送到 `vb6_VariantObject`），
+// 写 `void*` 就把一条字符串属性装成了对象：实测 `CStr(Slider1.ToolTipText)` 打空、
+// `TypeName(...)` 答 "Object"。`wchar_t*` 命中表里的 BSTR 那一条 ⇒ VT_BSTR(8)。
+// 与已经对的 `vb6_GetControlText` 同型。（`vb6_GetMouseIcon` / `vb6_GetControlHwnd`
+// 刻意继续写 `void*` —— 那两条本来就是对象，装成对象是对的。）
+wchar_t* vb6_GetToolTipText(void* hwnd);
 void vb6_SetToolTipText(void* hwnd, void* bstrText);
+// C29-SL-j 判据证人（账 #148，**不是 VB6 属性**）：问共享 tooltip 宿主 TTM_GETTEXT，
+// 能把这枚控件的工具文本读回来 = 登记成立（存一份拷贝那一步 SE/CP 早有判据，登记那一步没有）。
+int32_t vb6_ToolTipRegistered(void* hwnd);
 
-// P13.9: Tag (returns BSTR, stored as window property)
-void* vb6_GetControlTag(void* hwnd);
+// P13.9: Tag (returns BSTR, stored as window property) —— 返回型同上一条的理由。
+wchar_t* vb6_GetControlTag(void* hwnd);
 void vb6_SetControlTag(void* hwnd, void* bstrTag);
 
 // P13.7: MousePointer/MouseIcon (all visible controls)
@@ -482,6 +491,7 @@ int vb6_CdGetMin(void* hwnd);              void vb6_CdSetMin(void* hwnd, int v);
 int vb6_CdGetMax(void* hwnd);              void vb6_CdSetMax(void* hwnd, int v);
 int vb6_CdGetCopies(void* hwnd);           void vb6_CdSetCopies(void* hwnd, int v);
 int vb6_CdGetFontSize(void* hwnd);         void vb6_CdSetFontSize(void* hwnd, int v);
+int vb6_CdGetFilterIndex(void* hwnd);      void vb6_CdSetFilterIndex(void* hwnd, int v);
 
 // 六个 Show*：1 = 用户确认并已写回读数；0 = 取消（CancelError=True 时顺带报 32755）
 int vb6_CdShowOpen(void* hwnd);
@@ -814,6 +824,98 @@ void    vb6_Ws_SendData(void* hwnd, const void* data /* BSTR */);
 int32_t vb6_Ws_GetData(void* hwnd, void* outBstr /* BSTR* */, int32_t type, int32_t maxLen);
 int32_t vb6_Ws_PeekData(void* hwnd, void* outBstr, int32_t type, int32_t maxLen);
 void    vb6_Ws_Close(void* hwnd);
+
+
+// ===================== Slider (ai/029 C29-SL-a) =====================
+//   VB6 Slider 的窗口 + 创建样式 + 标量属性面，原生 msctls_trackbar32（不加载 MSCOMCTL.OCX）。
+//   四条实测口径写在 vb6forms_slider.c 的文件头（探针 .build/slprobe/），最要紧的两条：
+//     * Orientation 事后写样式位**不生效**（channel 矩形长短边纹丝不动）⇒ 只能创建时给；
+//       GetOrientation 答的是自存那一档，判据必须**另问** ChannelIsVert 那条控件侧证人。
+//     * TickFrequency 原生**没有回读**（GETTIC 答不出、GETTICPOS 与频率无关）⇒ 自存读回，
+//       写侧真下发 TBM_SETTICFREQ；"有没有刻度"用 TickPresent（GETTICPOS(0) != -1）证。
+//   值面 (Min/Max/Value/Small·LargeChange/Sel*) 与事件面 (Change / Scroll) 分别在下面 SL-b / SL-c 两段。
+void    vb6_Slider_Init(void* hwnd, long min, long max, long value,
+                        long smallChange, long largeChange, long tickFrequency,
+                        long selStart, long selEnd, long selectRange);
+int32_t vb6_Slider_GetOrientation(void* hwnd);
+void    vb6_Slider_SetOrientation(void* hwnd, int32_t orientation);
+int32_t vb6_Slider_GetTickFrequency(void* hwnd);
+void    vb6_Slider_SetTickFrequency(void* hwnd, int32_t freq);
+// C29-SL-b：值面。**全部直问直发控件**（只有 TickFrequency 因原生问不出而自存，见上）。
+// Min/Max 下发前钳到 16 位（原生这条消息的 lParam 是两个 16 位半字，实测超界会截断），
+// 读回就是那一个钳过的值 ⇒ "答出去的"与"控件真走得动的"始终同一个数。
+int32_t vb6_Slider_GetMin(void* hwnd);
+int32_t vb6_Slider_GetMax(void* hwnd);
+void    vb6_Slider_SetMin(void* hwnd, int32_t v);
+void    vb6_Slider_SetMax(void* hwnd, int32_t v);
+int32_t vb6_Slider_GetValue(void* hwnd);
+void    vb6_Slider_SetValue(void* hwnd, int32_t v);       // 越界由控件钳位（实测 150→100、-5→10）
+int32_t vb6_Slider_GetSmallChange(void* hwnd);            // TBM_GET/SETLINESIZE
+void    vb6_Slider_SetSmallChange(void* hwnd, int32_t v);
+int32_t vb6_Slider_GetLargeChange(void* hwnd);             // TBM_GET/SETPAGESIZE
+void    vb6_Slider_SetLargeChange(void* hwnd, int32_t v);
+int32_t vb6_Slider_GetSelectRange(void* hwnd);             // 样式位 TBS_ENABLESELRANGE（运行期可改，实测）
+void    vb6_Slider_SetSelectRange(void* hwnd, int32_t on);
+int32_t vb6_Slider_GetSelStart(void* hwnd);                // 原生答 (UINT)-1（没设过）时折成 0
+int32_t vb6_Slider_GetSelEnd(void* hwnd);
+void    vb6_Slider_SetSelStart(void* hwnd, int32_t v);
+void    vb6_Slider_SetSelEnd(void* hwnd, int32_t v);
+// C3 扩展（不是 VB6 属性）：两条控件侧证人，判据用它把"样式位写进去了"升级成
+// "控件真按那一档在走"。**别用 TBM_GETCHANNELRECT 判方向** —— 实测它的 rect 永远把行程
+// 长度放在 x 分量，水平杆与竖直杆答同一组数（第一发探针就这么误判过一次）。
+// TravelIsVert 的正解是把滑块推到量程两端各读一次 TBM_GETTHUMBRECT，看位移落在哪根轴。
+int32_t vb6_Slider_TravelIsVert(void* hwnd);
+int32_t vb6_Slider_TickPresent(void* hwnd);
+// C29-SL-h：TickStyle 四档。VB6 那一张枚举的真值是从 OCX 自带的类型库读出来的
+// （0=sldBottomRight 1=sldTopLeft 2=sldBoth 3=sldNoTicks，探针 .build/slprobe/sltlb.cpp），
+// 与原生样式位 1:1（TBS_TOP==TBS_LEFT==0x4、TBS_BOTH==0x8、TBS_NOTICKS==0x10）。
+// 读侧读窗口当前的样式位 ⇒ 答出去的数就是窗口真在走的那一档（与 Orientation 同口径）。
+// GetNumTicks 是 VB6 那一面（dispid 0x000f，只读）；ChannelTop 是 C3 扩展的判据证人
+// —— ts=3 只能用 GetNumTicks 证（TickPresent 在那一档照旧答"有"，实测），
+// 0/1/2 三档靠 chan.top 的相对高低分。四条读数实测于 .build/slprobe/slmeasure12.c。
+int32_t vb6_Slider_GetTickStyle(void* hwnd);
+void    vb6_Slider_SetTickStyle(void* hwnd, int32_t tickStyle);
+int32_t vb6_Slider_GetNumTicks(void* hwnd);
+int32_t vb6_Slider_ChannelTop(void* hwnd);
+// C29-SL-i：类型库读出来的 VB6 选区面 —— **SelStart + SelLength**（dispid 0x0007/0x0008，两条 VT_I4）
+// 与方法 ClearSel（0x000e，文档原话"Sets the SelLength to 0"）。VB6 那一面**没有 SelEnd 这个名字**，
+// 上面那条 SelEnd 是 SL-b 按原生 TBM_SETSELEND 自己加的口，留着是因为存量夹具在用。
+// 实测（.build/slprobe/slmeasure13.c）：默认态 GETSELSTART 答的是**量程下限**而 GETSELEND 答 0
+// ⇒ 终点比起点小，所以 SelLength 一律折成 0；远端超量程由控件夹住；CLEARSEL 之后两端都答 -1。
+int32_t vb6_Slider_GetSelLength(void* hwnd);
+void    vb6_Slider_SetSelLength(void* hwnd, int32_t len);
+void    vb6_Slider_ClearSel(void* hwnd);
+// C29-SL-k：VB6 的 `Text`（0x0010，BSTR —— 文档原话"滑块位置变化时那颗 ToolTip 里显示的串"）与
+// `TextPosition`（0x0011，枚举 sldAboveLeft=0 / sldBelowRight=1）。走的是我们自己持的一枚
+// TRACK 型 tooltip（轨道条自带那枚 TBS_TOOLTIPS 服务不了自定义串，而且只在创建时才建 ——
+// 实测 .build/slprobe/slmeasure17.c 的 v5/v6 两份）。派发那边一条 BubbleNotify 管摆出/收回。
+// 三条判据证人都是 C3 扩展（不是 VB6 属性）：摆没摆出来、气泡上边、宿主里此刻那句文本。
+wchar_t* vb6_Slider_GetText(void* hwnd);
+void     vb6_Slider_SetText(void* hwnd, void* bstrText);
+int32_t  vb6_Slider_GetTextPosition(void* hwnd);
+void     vb6_Slider_SetTextPosition(void* hwnd, int32_t pos);
+void     vb6_Slider_BubbleNotify(void* hwnd, int32_t code, int32_t value);
+int32_t  vb6_Slider_BubbleVisible(void* hwnd);
+int32_t  vb6_Slider_BubbleTop(void* hwnd);
+wchar_t* vb6_Slider_BubbleText(void* hwnd);
+// C29-SL-c：事件面。Slider 与 ScrollBar 共用同一条通道 —— 控件给**父窗**发 WM_HSCROLL（横杆）
+// / WM_VSCROLL（竖杆），wParam 低字是 TB_* 码、高字带当前值，lParam 就是控件句柄
+// （实测 .build/slprobe/slmeasure7/8.c：真拖一次收到 5×N → 4 → 8；方向键收到 0 → 8；
+//  而程序化 TBM_SETPOS / TBM_SETRANGE 一条都不发）。
+// FireChange：VB6 口径是"Value 改变即触发 Change，拖拽过程中连续触发"⇒ 以"自上次派发以来
+// 控件的值真的动了"为判据，返回 -1 表示变了并已把基准推进。
+int32_t vb6_Slider_FireChange(void* hwnd);
+// 判据专用助手（与 DTPicker.SimChange / TreeView.SimNodeClick 同先例，不对应 VB6 语义）：
+// 先把控件的值推到 pos（真拖与真键鼠都是"控件先动、再发通知"），再按原生那一档发一条
+// 真通知进父窗 —— 直接调 handler 会绕开整条派发链，验不到分发那三段。
+void    vb6_Slider_SimNotify(void* hwnd, int32_t code, int32_t pos);
+// C29-SL-d 判据专用：把一条常规事件的原生消息放进控件自己的队列
+// （kind 0=WM_LBUTTONUP 1=WM_LBUTTONDBLCLK 2=WM_KEYDOWN 3=WM_KEYUP，wParam 只对按键两档
+//  有意义）。实测 slmeasure10/11.c：真手势的下/抬都会过控件的子类过程，而裸的一条
+// LBUTTONUP / DBLCLK 不会惊动父窗那条通道（不牵连 Change/Scroll），按键那条会真的动值。
+// C29-SL-g 加一档 kind=4：**不是发消息**，是真 `SetFocus(控件)` —— 焦点事件的原生来源就是
+// 窗口管理器自己发的 `WM_SETFOCUS` / `WM_KILLFOCUS`，伪造那两条反而验不到真链路。
+void    vb6_Slider_SimStdEvent(void* hwnd, int32_t kind, int32_t wParam);
 
 
 #ifdef __cplusplus

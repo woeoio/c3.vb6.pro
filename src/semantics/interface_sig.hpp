@@ -173,4 +173,39 @@ inline std::string ifaceClauseSlotKey(const Decl& implDecl, const std::string& m
     return ifaceSlotPrefix(implDecl) + ifaceLower(memberName);
 }
 
+// ============================================================
+// VB6 风格接口的 `<接口名>_<成员名>` 命名约定
+// ============================================================
+//
+// VB6 没有 `Interface ... End Interface` 语法 (那是 tB 扩展), 它的接口就是一个
+// `VB_Creatable = False`、成员全是**无体签名**的普通 .cls (如 VbEclipse 的 IScheme)。
+// 实现方写 `Implements IScheme` 之后, 每个实现成员**必须**命名为 `IScheme_<成员名>` ——
+// 这是 VB6 编译器强制的, 本仓库的 legacy 实路径 (semantic_analyzer.cpp 里
+// `required = ifaceName + "_" + m`) 也正是这么比对的。
+//
+// 于是槽键不能直接拿实现成员的 slotKey 去比: `IScheme_ActiveCaptionForeColor` 算出来是
+// `get_ischeme_activecaptionforecolor`, 而接口槽是 `get_activecaptionforecolor`, 永远
+// 对不上, 结果是"一个槽都没实现"。所以给 clsHost 接口补一条摘前缀的回退匹配。
+//
+// 只对 clsHost (VB6 .cls) 接口生效: tB Interface 块的成员名本身就是契约, 不带这层前缀。
+// 返回空串 = 该成员名没有这层前缀。
+inline std::string ifaceVb6StrippedMember(const std::string& memberName,
+                                          const std::string& ifaceName) {
+    const std::string pre = ifaceLower(ifaceName) + "_";
+    const std::string low = ifaceLower(memberName);
+    if (low.size() > pre.size() && low.compare(0, pre.size(), pre) == 0) {
+        return memberName.substr(pre.size());
+    }
+    return std::string();
+}
+
+// 实现成员 → 槽键候选 (按顺序试)。普通键第一; clsHost 接口再试摘掉 `<接口名>_` 的键。
+inline std::string ifaceImplSlotKeyVb6(const Decl& implDecl, const std::string& memberName,
+                                       const std::string& ifaceName, bool clsHost) {
+    const std::string plain = ifaceClauseSlotKey(implDecl, memberName);
+    if (!clsHost) return plain;
+    const std::string bare = ifaceVb6StrippedMember(memberName, ifaceName);
+    return bare.empty() ? plain : ifaceSlotPrefix(implDecl) + ifaceLower(bare);
+}
+
 } // namespace vb6c3

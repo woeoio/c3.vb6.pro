@@ -87,6 +87,18 @@ static void fixupAmbientFontMemberAccess(std::string& line) {
 //    .Move(        → vb6_UC_ParentMove(
 //    其余裸符号   → vb6_UC_ParentObject()  (With 绑定 / 对象引用)
 // 顺序: 先长匹配 (.Icon.Handle) 再短 (.hWnd), 最后剩余裸引用.
+// Fix <vbeclipse>: Screen.MouseIcon 读写 — Screen 是内置全局哨兵 (vb6_Screen_Object()),
+// 成员写侧落 `.MouseIcon` 字段访问必 C2224。改写为 RTL 全局槽 vb6_Screen_MouseIcon
+// (IPicture 指针槽; VbEclipse ucPerspective 设鼠标光标用)。
+static void fixupScreenMouseIcon(std::string& line) {
+    static const char kPat[] = "vb6_Screen_Object().MouseIcon";
+    size_t pos = 0;
+    while ((pos = line.find(kPat, pos)) != std::string::npos) {
+        line.replace(pos, sizeof(kPat) - 1, "vb6_Screen_MouseIcon");
+        pos += 19;
+    }
+}
+
 static void fixupUserControlParentChain(std::string& line) {
     static const char kBase[] = "vb6_UserControl_Parent";
     const size_t kLen = sizeof(kBase) - 1;
@@ -128,6 +140,10 @@ void CodeEmitter::emitLine(const std::string& line) {
         // Fix 109: 仅在该标识符出现时做一次修正 (见上).
         std::string fixed = line;
         fixupAmbientFontMemberAccess(fixed);
+        oss_ << fixed << "\n";
+    } else if (line.find("vb6_Screen_Object().") != std::string::npos) {
+        std::string fixed = line;
+        fixupScreenMouseIcon(fixed);
         oss_ << fixed << "\n";
     } else if (line.find("vb6_UserControl_Parent") != std::string::npos) {
         // Fix 133u: UserControl.Parent 链改写 (见上).

@@ -98,21 +98,88 @@ BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
     return result;
 }
 
-#ifdef vb6_InStr
-#undef vb6_InStr   // vb6rtl_builtin.h 的 _Generic 宏在定义处必须关闭, 否则本函数定义被改写
-#endif
-int32_t vb6_InStr(int32_t start, BSTR haystack, BSTR needle) {
+// ============================================================
+// <vbeclipse>: vbTextCompare 共用核 —— InStr/InStrRev/Replace/Split/Filter/StrComp 共用
+// ============================================================
+// VB6 的 compare 形参此前在 6 个入口被静默丢掉: RTL 里 5 处 (void)compare, 加上
+// InStr 的第 4 参被 codegen 截成 3 参 (Fix 041)。查找类按"大小写折叠后逐字符相等"
+// 实现 (与 RTL 自身的 LCase/UCase 同为 towlower); StrComp 走 CompareStringW 的区域
+// 语言序 (那才是 VB6 的 vbTextCompare)。compare: 0 = vbBinaryCompare, 非 0 = 文本。
+// 判据载荷保持纯 ASCII 时结果与码页/区域无关 (ai/029 那条 ASCII 载荷纪律)。
+
+// 在 haystack 的 [from0, len-nlen] 区间找 needle, 命中返回 0 基下标, 否则 -1。
+int32_t vb6_TextFind(BSTR haystack, BSTR needle, int32_t from0, int32_t compare) {
+    if (!haystack || !needle) return -1;
+    int32_t hlen = vb6_BSTR_Len(haystack);
+    int32_t nlen = vb6_BSTR_Len(needle);
+    if (nlen == 0) return (from0 >= 0 && from0 <= hlen) ? from0 : -1;
+    if (from0 < 0) from0 = 0;
+    if (compare == 0) {
+        for (int32_t i = from0; i <= hlen - nlen; i++) {
+            if (memcmp(haystack + i, needle, (size_t)nlen * sizeof(wchar_t)) == 0) return i;
+        }
+        return -1;
+    }
+    for (int32_t i = from0; i <= hlen - nlen; i++) {
+        int32_t k = 0;
+        while (k < nlen && towlower(haystack[i + k]) == towlower(needle[k])) k++;
+        if (k == nlen) return i;
+    }
+    return -1;
+}
+
+// 判定 needle 是否**正好**出现在 haystack 的 at0 处 (Split 的分隔符扫描那一形)。
+int32_t vb6_TextMatchAt(BSTR haystack, int32_t at0, BSTR needle, int32_t compare) {
     if (!haystack || !needle) return 0;
     int32_t hlen = vb6_BSTR_Len(haystack);
     int32_t nlen = vb6_BSTR_Len(needle);
-    if (nlen == 0) return start;
-    if (start < 1) start = 1;
-    for (int32_t i = start - 1; i <= hlen - nlen; i++) {
-        if (memcmp(haystack + i, needle, nlen * sizeof(wchar_t)) == 0) {
-            return i + 1;  // 1-based
+    if (nlen == 0 || at0 < 0 || at0 + nlen > hlen) return 0;
+    if (compare == 0)
+        return memcmp(haystack + at0, needle, (size_t)nlen * sizeof(wchar_t)) == 0;
+    for (int32_t k = 0; k < nlen; k++)
+        if (towlower(haystack[at0 + k]) != towlower(needle[k])) return 0;
+    return 1;
+}
+
+// 同 vb6_TextFind, 但返回 <= from0 的**最大**命中下标 (InStrRev 那一形)。
+int32_t vb6_TextFindRev(BSTR haystack, BSTR needle, int32_t from0, int32_t compare) {
+    if (!haystack || !needle) return -1;
+    int32_t hlen = vb6_BSTR_Len(haystack);
+    int32_t nlen = vb6_BSTR_Len(needle);
+    if (from0 > hlen - nlen) from0 = hlen - nlen;
+    if (nlen == 0) return (from0 >= 0) ? from0 : -1;
+    if (from0 < 0) return -1;
+    for (int32_t i = from0; i >= 0; i--) {
+        if (compare == 0) {
+            if (memcmp(haystack + i, needle, (size_t)nlen * sizeof(wchar_t)) == 0) return i;
+        } else {
+            int32_t k = 0;
+            while (k < nlen && towlower(haystack[i + k]) == towlower(needle[k])) k++;
+            if (k == nlen) return i;
         }
     }
-    return 0;
+    return -1;
+}
+
+#ifdef vb6_InStr
+#undef vb6_InStr   // vb6rtl_builtin.h 的 _Generic 宏在定义处必须关闭, 否则本函数定义被改写
+#endif
+#ifdef vb6_InStrC
+#undef vb6_InStrC  // 同上 (<vbeclipse>: 4 参形的 _Generic 分派宏)
+#endif
+
+// compare 版实现 (vbBinaryCompare = 0 走原 memcmp 路, 行为逐字不变)。
+int32_t vb6_InStrC(int32_t start, BSTR haystack, BSTR needle, int32_t compare) {
+    if (!haystack || !needle) return 0;
+    int32_t nlen = vb6_BSTR_Len(needle);
+    if (nlen == 0) return start;
+    if (start < 1) start = 1;
+    int32_t i = vb6_TextFind(haystack, needle, start - 1, compare);
+    return (i < 0) ? 0 : i + 1;   // VB6 的 InStr 返回 1 基
+}
+
+int32_t vb6_InStr(int32_t start, BSTR haystack, BSTR needle) {
+    return vb6_InStrC(start, haystack, needle, 0);
 }
 
 // Fix 158s: InStr 的 needle 实参是 vb6_VARIANT 时 (For 循环里拿 Variant 判定包含
@@ -124,10 +191,19 @@ int32_t vb6_InStr(int32_t start, BSTR haystack, BSTR needle) {
 // int32_t 却被用作 BSTR, 语义不成立, 已弃用并在 codegen 侧另修)。
 int32_t vb6_InStrVar(int32_t start, BSTR haystack, vb6_VARIANT needle) {
     BSTR s = vb6_VariantToString(needle);
-    int32_t r = vb6_InStr(start, haystack, s);
+    int32_t r = vb6_InStrC(start, haystack, s, 0);
     vb6_BSTR_Free(s);
     return r;
 }
+
+// <vbeclipse>: 4 参形的同款 Variant 解包 (InStr 的字符串优先三参形与四参形都走这里)。
+int32_t vb6_InStrVarC(int32_t start, BSTR haystack, vb6_VARIANT needle, int32_t compare) {
+    BSTR s = vb6_VariantToString(needle);
+    int32_t r = vb6_InStrC(start, haystack, s, compare);
+    vb6_BSTR_Free(s);
+    return r;
+}
+
 
 // Fix 093a: InStrB — VB6 字节版 InStr, 支持两种实参形态:
 //  · Byte() 一维数组 (vb6_SafeArray1D*) — VB6 允许 InStrB(ByteArray1, ByteArray2)
@@ -325,7 +401,6 @@ BSTR vb6_Str(int32_t n) {
 // ============================================================
 
 BSTR vb6_Replace(BSTR expr, BSTR find, BSTR rep, int32_t start, int32_t count, int32_t compare) {
-    (void)compare;  // 简化: 仅支持二进制比较
     if (!expr || !find) return expr ? vb6_BSTR_FromStr(expr) : vb6_BSTR_Empty();
     int32_t exprLen = vb6_BSTR_Len(expr);
     int32_t findLen = vb6_BSTR_Len(find);
@@ -337,13 +412,15 @@ BSTR vb6_Replace(BSTR expr, BSTR find, BSTR rep, int32_t start, int32_t count, i
     int32_t maxCount = (count == -1) ? INT32_MAX : count;
 
     // 计算结果长度
+    // <vbeclipse>: 原用 wcsstr ⇒ compare 形参被丢掉 (vbTextCompare 静默按二进制比)。
+    // 改走 vb6_TextFind, 它按 compare 分流且二进制形与 wcsstr 同结果。
     int32_t matches = 0;
     int32_t pos = start - 1;
     while (matches < maxCount) {
-        wchar_t* found = wcsstr(expr + pos, find);
-        if (!found) break;
+        int32_t found = vb6_TextFind(expr, find, pos, compare);
+        if (found < 0) break;
         matches++;
-        pos = (int32_t)(found - expr) + findLen;
+        pos = found + findLen;
     }
     if (matches == 0) return vb6_BSTR_FromStr(expr);
 
@@ -378,9 +455,11 @@ BSTR vb6_Replace(BSTR expr, BSTR find, BSTR rep, int32_t start, int32_t count, i
     pos = start - 1;
     int32_t done = 0;
     while (done < matches) {
-        wchar_t* found = wcsstr(expr + pos, find);
-        if (!found) break;
-        int32_t beforeLen = (int32_t)(found - expr) - pos;
+        // <vbeclipse>: 构造段必须与上面的计数段用**同一个**查找核, 否则
+        // vbTextCompare 下两处命中位置不一致 → 结果长度与实际写入错位。
+        int32_t foundIdx = vb6_TextFind(expr, find, pos, compare);
+        if (foundIdx < 0) break;
+        int32_t beforeLen = foundIdx - pos;
         if (beforeLen > 0) {
             memcpy(result + outPos, expr + pos, beforeLen * sizeof(wchar_t));
             outPos += beforeLen;
@@ -389,7 +468,7 @@ BSTR vb6_Replace(BSTR expr, BSTR find, BSTR rep, int32_t start, int32_t count, i
             memcpy(result + outPos, rep, repLen * sizeof(wchar_t));
             outPos += repLen;
         }
-        pos = (int32_t)(found - expr) + findLen;
+        pos = foundIdx + findLen;
         done++;
     }
     // 剩余部分
@@ -458,14 +537,45 @@ BSTR vb6_Tab(int32_t column) {
     return vb6_Space(column - 1);
 }
 
+// <vbeclipse>: 文本比较的**唯一**实现口径 —— VB6 的 vbTextCompare 与
+// `Option Compare Text` 是同一种比较, 必须走同一条路 (否则 `a = b` 与
+// `StrComp(a,b,vbTextCompare)=0` 会给出不同答案)。CompareStringW 才是 VB6 用的
+// 区域性语言序; 非 Windows / API 失败退到逐字符大小写折叠 (不引 _wcsicmp,
+// 那是不带 C 标准的 MSVC 扩展, 会让非 Win 目标编不过)。
+int vb6_TextCmp(const wchar_t* a, const wchar_t* b) {
+    if (!a) a = L"";
+    if (!b) b = L"";
+#ifdef _WIN32
+    int r = CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE,
+                           (LPCWCH)a, -1, (LPCWCH)b, -1);
+    if (r == 1) return -1;
+    if (r >= 2) return (int)r - 2;   // 2=相等 3=大于 → 0/1
+#endif
+    for (;;) {
+        wchar_t ca = (wchar_t)towlower(*a), cb = (wchar_t)towlower(*b);
+        if (ca != cb) return (ca < cb) ? -1 : 1;
+        if (ca == L'\0') return 0;
+        a++; b++;
+    }
+}
+
 int32_t vb6_StrComp(BSTR s1, BSTR s2, int32_t compare) {
-    (void)compare;  // 简化: 仅二进制比较
     // Fix 173: NULL BSTR (vbNullString / 未赋值的 String) 与 L"" 等价 —— 原来对
     // 单边 NULL 直接返回 ±1, 于是 `StrComp("", vbNullString)` 报"不等"。
+    if (getenv("C3_STRCMP_TRACE")) {
+        int32_t tl1 = s1 ? vb6_BSTR_Len(s1) : -1;
+        int32_t tl2 = s2 ? vb6_BSTR_Len(s2) : -1;
+        fprintf(stderr, "[SC] s1=%p len=%d <%ls> | s2=%p len=%d <%ls> cmp=%d\n",
+                (void*)s1, tl1, s1 ? s1 : L"(null)",
+                (void*)s2, tl2, s2 ? s2 : L"(null)", (int)compare);
+    }
     if (!s1) s1 = L"";
     if (!s2) s2 = L"";
     int32_t len1 = vb6_BSTR_Len(s1);
     int32_t len2 = vb6_BSTR_Len(s2);
+    // <vbeclipse>: vbTextCompare 此前被 (void)compare 丢掉 ⇒
+    //   StrComp("a","B",vbTextCompare) 答"大于"(ASCII 97>66), 而 VB6 答"小于"。
+    if (compare != 0) return vb6_TextCmp(s1, s2);
     int32_t minLen = (len1 < len2) ? len1 : len2;
     int cmp = memcmp(s1, s2, minLen * sizeof(wchar_t));
     if (cmp != 0) return (cmp < 0) ? -1 : 1;
@@ -486,19 +596,15 @@ BSTR vb6_StrReverse(BSTR s) {
 }
 
 int32_t vb6_InStrRev(BSTR haystack, BSTR needle, int32_t start, int32_t compare) {
-    (void)compare;
     if (!haystack || !needle) return 0;
     int32_t hLen = vb6_BSTR_Len(haystack);
     int32_t nLen = vb6_BSTR_Len(needle);
     if (nLen == 0) return hLen;
     if (nLen > hLen) return 0;
     if (start <= 0 || start > hLen) start = hLen;
-    for (int32_t i = start - nLen; i >= 0; i--) {
-        if (memcmp(haystack + i, needle, nLen * sizeof(wchar_t)) == 0) {
-            return i + 1;  // 1-based
-        }
-    }
-    return 0;
+    // <vbeclipse>: compare 形参此前被 (void) 丢掉; 改走共用查找核 (二进制形逐字不变)。
+    int32_t i = vb6_TextFindRev(haystack, needle, start - nLen, compare);
+    return (i < 0) ? 0 : i + 1;   // VB6 的 1 基
 }
 
 BSTR vb6_LCase_str(BSTR s) { return vb6_LCase(s); }  // 别名
@@ -510,16 +616,20 @@ BSTR vb6_UCase_str(BSTR s) { return vb6_UCase(s); }
 //       [charlist] (字符列表), [!charlist] (排除字符列表)
 // ============================================================
 
-static int likeMatch(const wchar_t* src, const wchar_t* pat) {
+// <vbeclipse>: mode != 0 ⇒ 文本形 (Option Compare Text / vbTextCompare 同口径):
+// 逐字符比较与字符区间都按大小写折叠取。旧实现只有二进制一形, 于是
+// "abc" Like "[A-Z]*" 在 Option Compare Text 模块里 VB6 答 True 而 C3 答 False。
+static int likeMatch(const wchar_t* src, const wchar_t* pat, int mode) {
+    wchar_t sc;
     while (*pat) {
         if (*pat == L'*') {
             while (*pat == L'*') pat++;
             if (*pat == L'\0') return 1;
             while (*src) {
-                if (likeMatch(src, pat)) return 1;
+                if (likeMatch(src, pat, mode)) return 1;
                 src++;
             }
-            return likeMatch(src, pat);
+            return likeMatch(src, pat, mode);
         }
         else if (*pat == L'?') {
             if (*src == L'\0') return 0;
@@ -536,13 +646,16 @@ static int likeMatch(const wchar_t* src, const wchar_t* pat) {
             if (*pat == L'!') { negate = 1; pat++; }
             int match = 0;
             if (*src == L'\0') return 0;
+            sc = mode ? (wchar_t)towlower(*src) : *src;
             while (*pat && *pat != L']') {
                 if (pat[1] == L'-' && pat[2] && pat[2] != L']') {
                     wchar_t lo = *pat, hi = pat[2];
-                    if (*src >= lo && *src <= hi) match = 1;
+                    if (mode) { lo = (wchar_t)towlower(lo); hi = (wchar_t)towlower(hi); }
+                    if (sc >= lo && sc <= hi) match = 1;
                     pat += 3;
                 } else {
-                    if (*src == *pat) match = 1;
+                    wchar_t pc = mode ? (wchar_t)towlower(*pat) : *pat;
+                    if (sc == pc) match = 1;
                     pat++;
                 }
             }
@@ -552,17 +665,23 @@ static int likeMatch(const wchar_t* src, const wchar_t* pat) {
             src++;
         }
         else {
-            if (*src != *pat) return 0;
+            wchar_t pc = mode ? (wchar_t)towlower(*pat) : *pat;
+            wchar_t cc = mode ? (wchar_t)towlower(*src) : *src;
+            if (cc != pc) return 0;
             src++; pat++;
         }
     }
     return (*src == L'\0');
 }
 
-int16_t vb6_Like(BSTR source, BSTR pattern) {
+int16_t vb6_LikeC(BSTR source, BSTR pattern, int32_t mode) {
     const wchar_t* s = source ? source : L"";
     const wchar_t* p = pattern ? pattern : L"";
-    return likeMatch(s, p) ? -1 : 0;
+    return likeMatch(s, p, mode ? 1 : 0) ? -1 : 0;
+}
+
+int16_t vb6_Like(BSTR source, BSTR pattern) {
+    return vb6_LikeC(source, pattern, 0);
 }
 
 // ============================================================

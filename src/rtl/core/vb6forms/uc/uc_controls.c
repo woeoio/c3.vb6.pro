@@ -13,12 +13,41 @@ extern "C" {
 // Controls 集合
 // ============================================================
 
+// Fix <vbeclipse> rev14: UserControl.Controls 的**进程级单例**。
+//
+// 背景: 生成代码里 .ctl 内的裸 `Controls` 是宿主集合, 由后端发射为
+// `vb6_UC_Controls()`。单例的 formHwnd 留 0, 由 vb6_uc_controlsForm() 在
+// 取用时回落到"当前" UC 实例宿主窗口 —— 于是同一个单例在 ucPerspective /
+// ucFolder / ucTabStrip 等嵌套实例里各自指向**发起调用**的那个控件,
+// 而不是绑定到创建时的那一个窗体。原先后端发射的是全局
+// `vb6_UserControl_Controls`(恒 NULL) → Controls.Add/Item 全落空 → NULL 解引用。
+static vb6_UCControls g_uc_controlsSingleton = { VB6_UC_CONTROLS_TAG, NULL };
+
+void* vb6_UC_Controls(void) { return (void*)&g_uc_controlsSingleton; }
+
 static void* vb6_uc_controlsForm(const void* coll) {
-    return ((const vb6_UCControls*)coll)->formHwnd;
+    if (!coll) return NULL;
+    void* f = ((const vb6_UCControls*)coll)->formHwnd;
+    // formHwnd==0 = 单例 (UserControl.Controls): 回落到当前 UC 实例宿主窗口。
+    // g_uc_current 由 vb6_uc_push 维护 (最近进入的实例), 在 .ctl 方法执行期间
+    // 恒指向发起调用的那个控件实例, 与 VB6 "UserControl.Controls" 语义一致。
+    if (!f && g_uc_current) f = (void*)g_uc_current->hwnd;
+    return f;
+}
+
+// 取本集合的归属宿主窗口; 单例回落再兜底到进程级 vb6_UserControl_hWnd。
+// 供 Add/Remove 等需要"父窗口"的操作使用 (必须拿到非 NULL 才能建子窗口)。
+void* vb6_UC_ControlsOwnHwnd(void* coll) {
+    void* f = vb6_uc_controlsForm(coll);
+    if (!f) f = vb6_UserControl_hWnd;
+    return f;
 }
 
 // 收集某窗体上的全部子控件 HWND (含 UserControl 宿主窗口)
 static int32_t vb6_uc_collectChildren(void* formHwnd, void** out, int32_t max) {
+    // 宿主窗口未知时直接返回 0 —— 不能让 GetWindow((HWND)0, GW_CHILD) 去枚举桌面
+    // 顶层窗口 (那会返回与本集合无关的窗口)。
+    if (!formHwnd) return 0;
     int32_t n = 0;
     for (int32_t i = 0; i < g_hoCount && n < max; i++) {
         if (!g_ho[i].isForm && g_ho[i].hwnd &&
@@ -94,6 +123,89 @@ void* vb6_UC_ControlsItemByName(void* coll, const wchar_t* name, int32_t tabIdx)
         return r->hwnd;
     }
     return NULL;
+}
+
+// ---- Fix <vbeclipse> rev14: Controls 的"对象"形态 (工程内 UserControl) ----
+//
+// 生成代码对 `Set x = Controls.Item(...)` / `Controls.Add(...)` 有两种消费方式:
+//   1) 早绑定直调 (x 声明为 ucFolder 等项目类): `vb6_ucFolder_AddView(x, ...)`
+//      —— 需要的是**实例指针** vb6_cls_ucFolder*;
+//   2) 晚绑定宿主分派 (x 声明为 Object/Variant)
+//      —— 需要的是**宿主 HWND** (vb6_Host_Call/GetProp 才能应答)。
+// 工程里同一变量两处混用 (CreateFolder 的 l_ucFolder 既直调 AddView 又走
+// vb6_ComSetProp), 而 AddView 一类直调是**写死形参类型**的硬路径, 一旦收到
+// HWND 即按结构体解引用 → AV。故 Add/Item 统一返回**实例指针** (找不到实例的
+// 标准控件才回落 HWND); 晚绑定路径对实例是安全的 (vb6_ComIsDispatchable 判否
+// → "属性/方法未找到" 静默返回, 不崩)。
+void* vb6_UC_ControlsItemObj(void* coll, int32_t index) {
+    void* hw = vb6_UC_ControlsItem(coll, index);
+    void* inst = hw ? vb6_UC_InstanceOf(hw) : NULL;
+    return inst ? inst : hw;
+}
+
+void* vb6_UC_ControlsItemObjByName(void* coll, const wchar_t* name) {
+    void* hw = vb6_UC_ControlsItemByName(coll, name, -1);
+    void* inst = hw ? vb6_UC_InstanceOf(hw) : NULL;
+    return inst ? inst : hw;
+}
+
+// 把宿主窗口从 g_ho / g_uc_recs 摘除 (Remove 时调用)。
+// 采用"末位填补"压缩数组; g_uc_current 若正好是被摘除项, 置 NULL (调用方
+// Remove 的必然是别的控件, 不会摘到自身, 故正常情况下不发生)。
+static void vb6_uc_releaseHost(void* hwnd) {
+    if (!hwnd) return;
+    for (int32_t i = 0; i < g_hoCount; i++) {
+        if (g_ho[i].hwnd == hwnd) { g_ho[i] = g_ho[--g_hoCount]; break; }
+    }
+    for (int32_t i = 0; i < g_uc_recCount; i++) {
+        if ((void*)g_uc_recs[i].hwnd == hwnd) {
+            if (g_uc_current == &g_uc_recs[i]) g_uc_current = NULL;
+            g_uc_recs[i] = g_uc_recs[--g_uc_recCount];
+            break;
+        }
+    }
+}
+
+// Controls.Add(progId, name): 在当前 UC 宿主窗口下创建一个该类型的 UserControl
+// 宿主 (VB6 `Controls.Add "VbEclipse.ucFolder", FolderId` 语义)。返回**实例指针**。
+// 几何用父窗口客户区尺寸兜底 (工程随后用 Move/LeftPos 等定位), 避免 0×0 退化窗口。
+void* vb6_UC_ControlsAdd(void* coll, const wchar_t* progId, const wchar_t* name) {
+    if (!progId || !*progId) return NULL;
+    HWND parent = (HWND)vb6_UC_ControlsOwnHwnd(coll);
+    if (!parent) return NULL;
+    char progU8[256];
+    char nameU8[VB6_UC_NAME_LEN * 4];
+    vb6_wideToU8Buf(progId, progU8, (int)sizeof(progU8));
+    vb6_wideToU8Buf(name ? name : L"", nameU8, (int)sizeof(nameU8));
+    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(parent, GWLP_HINSTANCE);
+    RECT rc; GetClientRect(parent, &rc);
+    int32_t w = vb6_XToTwipX(rc.right > 0 ? rc.right : 120);
+    int32_t h = vb6_YToTwipY(rc.bottom > 0 ? rc.bottom : 120);
+    void* hw = vb6_UC_HostCreate(progU8, 0, 0, w, h, parent, hInst, nameU8, -1);
+    void* inst = hw ? vb6_UC_InstanceOf(hw) : NULL;
+    return inst ? inst : hw;
+}
+
+// Controls.Remove(obj) / Controls.Remove(name): 销毁对应子控件。
+// obj 可以是实例指针 (晚绑定 Set 对象) 或 HWND; name 为 VB6 控件名。
+int32_t vb6_UC_ControlsRemove(void* coll, void* obj, const wchar_t* name) {
+    void* hw = NULL;
+    if (obj) {
+        hw = vb6_UC_HwndOf(obj);                    // 工程类实例 → 宿主窗口
+        if (!hw && IsWindow((HWND)obj)) hw = obj;   // 直接给的 HWND
+        if (!hw) {
+            /* 可能是本语境的宿主实例: 用 vb6_uc_findByInstance 的逆 →
+               实例若即 g_uc_recs[i].me, 取其 hwnd */
+            vb6_UCRec* r = vb6_uc_findByInstance(obj);
+            if (r) hw = (void*)r->hwnd;
+        }
+    } else if (name && *name) {
+        hw = vb6_UC_ControlsItemByName(coll, name, -1);
+    }
+    if (!hw) return 0;
+    vb6_uc_releaseHost(hw);
+    DestroyWindow((HWND)hw);
+    return 1;
 }
 
 // 句柄首元素存指针, 必须用 intptr_t —— x64 下按 int32_t 存会截断高 32 位 (同 Collection 枚举器)

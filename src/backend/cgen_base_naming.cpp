@@ -276,6 +276,41 @@ std::string CCodeGen::wrapConstArgForByRef(const std::string& argVal, Vb6Type pa
 std::string CCodeGen::wrapByRefVariantParamArg(const std::string& paramName,
                                                Vb6Type curParamType) const {
     const std::string src = "(*" + paramName + ")";
+
+    // Fix <vbeclipse> rev17: 当前形参声明 `As <工程类>` —— C 侧是 `vb6_cls_X*`, ByRef 传进来
+    // 就是 `vb6_cls_X**`。把它交给被调方的 `ByRef As Variant` 槽时必须**装箱成真 IDispatch**:
+    // 原样交出去等于把 `vb6_cls_X**` 当 `vb6_VARIANT*` 解 (两者都是指针, MSVC 只给 C4133
+    // 警告不报错) ⇒ 被调方读到 vt/pdispVal 全是垃圾 ⇒ 槽位取回 Nothing。
+    // 实证 play78: ucFolder.AddView 的 `m_FolderViews.Add View.ViewId, View` 生成
+    //   vb6_List_Add(me->m_FolderViews, ..., View, -1, 0);
+    // m_FolderViews 里存进垃圾 Variant ⇒ ShowView 里 `Set l_View = .Item(i)` 得到 NULL
+    // ⇒ `l_View.ViewId` av read 0x4 (崩在 _vb6_ucFolder_ShowView+0xFC)。
+    // 判据只用 cParamClassPtrType —— 它是"这个槽收不收类实例指针"的唯一口径
+    // (走 cTypeForDeclaredTypeName → mapTypeRef, 与类模块发定义那一份同一映射);
+    // 这里自查形参而不让 4 个调用点多传一个参数, 免得同名逻辑各写一份。
+    // 裸结构体指针也不能直接充 VT_DISPATCH —— VariantClear 会把首字段 (`__comObj`) 当
+    // vtable 解引用 (与 cgen_setlet Fix 179a / 下面 default 档同口径), 所以先
+    // vb6_ComObject_FromInstance 包成真 IDispatch (它的 1 个引用直接转移给 VARIANT)。
+    // 接口槽 (`vb6_ivref_*`) 不走这条: 那不是 vb6_ComObject 包装, 保持原行为。
+    if (currentProc_) {
+        for (const auto& p : currentProc_->params) {
+            if (Symbol::toLower(p.name) != Symbol::toLower(paramName)) continue;
+            if (p.isByVal || p.isParamArray) break;
+            // cParamClassPtrType 非 const (它与 mapTypeRef 同族), 本函数是 const —— 只读调用.
+            const std::string clsPtr = const_cast<CCodeGen*>(this)->cParamClassPtrType(p);
+            if (clsPtr.rfind("vb6_cls_", 0) == 0) {
+                std::string cls = clsPtr.substr(8);
+                if (!cls.empty() && cls.back() == '*') cls.pop_back();
+                if (!cls.empty()) {
+                    return "(&(vb6_VARIANT){.vt=VT_DISPATCH, .pdispVal=(IDispatch*)"
+                           "vb6_ComObject_FromInstance(vb6_FindCoClassDesc(\"" + cls
+                           + "\"), (void*)" + src + ")})";
+                }
+            }
+            break;
+        }
+    }
+
     switch (curParamType) {
         case Vb6Type::String:
             return "(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=" + src + "})";

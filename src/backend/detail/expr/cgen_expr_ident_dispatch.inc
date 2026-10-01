@@ -69,11 +69,53 @@
         return;
     }
 
+    // Fix <vbeclipse>: 裸 Screen 内置全局对象 — 类模块内 (ucPerspective.ctl
+    // `Screen.MouseIcon = ...`) 不能被 me->Screen 类字段回退吃掉 (C2039)。
+    // 成员访问 (.Width/.MouseIcon/...) 由 MemberAccessExpr 的 Screen 分支处理,
+    // 这里只给全局哨兵; Screen.MouseIcon 等未登记成员给可写全局槽语义
+    // (RTL vb6_Screen_* 全局, 未建模成员赋值无害)。
+    if (lower == "screen") {
+        lastExpr_ = "vb6_Screen_Object()";
+        return;
+    }
+
+    // Fix <vbeclipse>: 裸 Parent 内建对象 (UserControl 的宿主, VB6 声明 As Object)。
+    // 与 Screen/Printer/Err 同口径放在内建对象段 (必须在符号解析之前), 否则
+    // ucButton.ctl:74 `Set ParentObject = Parent` 落到未解析兜底 → 裸 `Parent`
+    // C2065。成员访问不在这里处理, 各走各自通道:
+    //   带括号调用 Parent.EventRaise(a, b) → cgen_expr_call_callee_member.inc
+    //     的后期绑定分支 (vb6_ComCall(vb6_UC_ParentObject(), ...));
+    //   无括号语句 Parent.Refresh          → 同一分支的零实参形态;
+    //   属性写 Parent.Active = True        → cgen_assign_host_pseudo.inc
+    //     (vb6_ComSetProp(vb6_UC_ParentObject(), ...));
+    //   .hWnd/.Icon.Handle/.Move 链         → cgen_base.cpp 的 fixupUserControlParentChain。
+    if (lower == "parent" && isDesignerModule_ && !knownLocalVars_.count(lower)) {
+        lastExpr_ = "vb6_UC_ParentObject()";
+        return;
+    }
+
     // M22: 检查是否是当前函数名 — VB6语义歧义
     // - 作为IndexOrCallExpr的callee(函数调用) → 返回函数过程名
     // - 作为普通表达式(返回值引用) → 返回返回值变量
     // P6.7: Property Get也使用返回值赋值语义
-    if (currentProc_ && lower == Symbol::toLower(currentProc_->name)
+    //
+    // Fix <VBFlexGridDemo/GA 36766856082>: 两边都剥类型后缀再比。
+    // Task #40 (40960eb) 给 parseIdentifierOrCall 加了"使用点剥类型后缀"
+    // (`Command$` → `Command`), 但过程**声明**侧走的是 parseProcedureDecl, 不在
+    // parseVariableDecl 的剥后缀范围内 ⇒ `Public Function Command$()` 的符号名仍带 $。
+    // 两侧不一致 ⇒ 本判定失配 (`command` vs `command$`) ⇒ 函数体内对自身函数名的
+    // 引用掉过本分支, 落到末尾内置函数表命中 VB6 内置的 Command$ ⇒ 生成 vb6_Command():
+    //   · `VarPtr(Command$)` → `&(void*){vb6_Command()}`          → C2102
+    //   · `Command$ = LTrim$(Command$)` → `vb6_BSTR_AssignMove(&vb6_Command(), ...)`
+    //   · vb6_ret_Command_ 声明了却从未被赋值 ⇒ Command$() 永远返回空 (静默语义错)
+    // 剥后缀后两边同为 `command`, 回到"引用函数名=引用返回值槽"的 VB6 语义。
+    auto stripSuffixForProcMatch = [](const std::string& s) -> std::string {
+        if (!s.empty() && std::string("$&%!#@").find(s.back()) != std::string::npos) {
+            return s.substr(0, s.size() - 1);
+        }
+        return s;
+    };
+    if (currentProc_ && stripSuffixForProcMatch(lower) == stripSuffixForProcMatch(Symbol::toLower(currentProc_->name))
         && (currentProc_->kind == SymbolKind::Function || currentProc_->kind == SymbolKind::PropertyGet)) {
         if (asCallCallee_) {
             // 在IndexOrCallExpr的callee上下文中, 返回函数名供调用

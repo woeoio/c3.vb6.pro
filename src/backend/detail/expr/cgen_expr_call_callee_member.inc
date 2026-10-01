@@ -108,6 +108,96 @@
         }
     }
 
+    // ============================================================
+    // Fix 162a: X.Move l[, t[, w[, h]]] —— VB6 语言级方法 (Form/控件通用)。
+    // 之前落 vb6_ComGetObjectProp(hwnd, L"Move") → 在 HWND 上取属性必失败,
+    // Form_Load/Form_Resize 的布局全部静默失效 (extlist 实测: ListView 停在
+    // 设计宽 5835 twips 只 5 列可见; 基准 VB6 里被 Move 拉到全宽 10 列全见)。
+    // 生成 vb6_ControlMove(hwnd, L,T,W,H, mask); mask 位 1=L 2=T 4=W 8=H,
+    // RTL 侧缺失位保持当前值, 单位 twips 与 Left/Top/Width/Height 一致。
+    // ============================================================
+    if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maMV = static_cast<MemberAccessExpr&>(*node.callee);
+        if (Symbol::toLower(maMV.memberName) == "move" && node.named.empty()
+            && node.positional.size() <= 4 && maMV.object) {
+            std::string hwndMV;
+            if (maMV.object->kind == ASTNodeKind::IdentifierExpr) {
+                auto& objIdMV = static_cast<IdentifierExpr&>(*maMV.object);
+                std::string objLowerMV = Symbol::toLower(objIdMV.name);
+                auto itCtlMV = knownFormControls_.find(objLowerMV);
+                if (itCtlMV != knownFormControls_.end()) {
+                    hwndMV = makeCtrlHwndArg(objLowerMV, itCtlMV->second);
+                } else if (listViewSlotVars_.count(objLowerMV)) {
+                    hwndMV = objLowerMV;   // Fix 161f: 槽变量本身就是 HWND
+                } else if (objLowerMV == "me") {   // 保险: Me 被归为 IdentifierExpr 的解析器
+                    auto itOrigMV = knownFormControlOriginalNames_.find(knownFormName_);
+                    hwndMV = "vb6_hwnd_" + (itOrigMV != knownFormControlOriginalNames_.end()
+                                            ? cIdent(itOrigMV->second) : moduleName_);
+                }
+            } else if (maMV.object->kind == ASTNodeKind::MeExpr
+                       && isFormModule_ && !knownFormName_.empty()) {
+                auto itOrigMV = knownFormControlOriginalNames_.find(knownFormName_);
+                hwndMV = "vb6_hwnd_" + (itOrigMV != knownFormControlOriginalNames_.end()
+                                        ? cIdent(itOrigMV->second) : moduleName_);
+            }
+            if (!hwndMV.empty()) {
+                std::string aMV[4] = {"0", "0", "0", "0"};
+                for (size_t i = 0; i < node.positional.size(); i++) {
+                    emitExpr(*node.positional[i]);
+                    aMV[i] = std::move(lastExpr_);
+                }
+                int maskMV = (1 << (int)node.positional.size()) - 1;
+                lastExpr_ = "{ vb6_ControlMove(" + hwndMV + ", " + aMV[0] + ", "
+                          + aMV[1] + ", " + aMV[2] + ", " + aMV[3] + ", "
+                          + std::to_string(maskMV) + "); (void)0; }";
+                return;
+            }
+        }
+    }
+
+    // Fix <vbeclipse>: UserControl 的隐式 `Parent` 伪对象 (VB6 声明 As Object) 上的
+    // 成员调用必须走**后期绑定**, 不能按"模块名.成员"做全工程按名查找 ——
+    //   ucFolder.ctl:338  Parent.EventRaise "RemoveFolder", FolderId, ViewId
+    //   ucTab.ctl:298    Parent.EventRaise "DblClick", Me.ViewId
+    //   ucSplitBar.ctl:138  Parent.Refresh          (无括号语句式)
+    //   ucTabStrip.ctl:199  Parent.Active = True    (属性写 → cgen_assign_host_pseudo.inc)
+    // `Parent` 不是已知变量 → 落到 class_module.inc 优先级3, 用 lookupModule 命中
+    // 工程内**别的**类的同名方法 (ucTabStrip.EventRaise), 发出裸函数名
+    // vb6_ucTabStrip_EventRaise: ① 丢接收者 (原型首参 me) ② 形参表按被误选的 2 参
+    // 签名裁剪, 3 实参被 Fix 041c 截成 2 个 → C2198 ×18; 无括号形态则发
+    // vb6_Parent_Refresh (C2065, ucSplitBar.c:205).
+    // VB6 里 Parent As Object 的成员调用本就是 IDispatch 后期绑定, 这里同构发
+    // vb6_ComCall(vb6_UC_ParentObject(), L"<成员>", 实参包, argc).
+    if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr
+        && node.named.empty() && isDesignerModule_) {
+        auto& maPar = static_cast<MemberAccessExpr&>(*node.callee);
+        if (maPar.object && maPar.object->kind == ASTNodeKind::IdentifierExpr
+            && Symbol::toLower(static_cast<IdentifierExpr&>(*maPar.object).name) == "parent") {
+            std::vector<std::string> packedPar;
+            for (size_t i = 0; i < node.positional.size(); i++) {
+                std::string packFnPar = comPackExpr(*node.positional[i]);
+                emitExpr(*node.positional[i]);
+                { std::string resolvedPar = resolveComMarkerForPack(packFnPar);
+                  if (!resolvedPar.empty()) lastExpr_ = resolvedPar; }
+                packedPar.push_back(packFnPar + "(" + lastExpr_ + ")");
+            }
+            int32_t argcPar = (int32_t)packedPar.size();
+            std::string argsArrayPar = "NULL";
+            if (argcPar > 0) {
+                argsArrayPar = "(void*[]){";
+                for (int i = 0; i < argcPar; i++) {
+                    if (i > 0) argsArrayPar += ", ";
+                    argsArrayPar += packedPar[i];
+                }
+                argsArrayPar += "}";
+            }
+            lastExpr_ = "vb6_ComCall(vb6_UC_ParentObject(), L\""
+                      + escapeWideCString(maPar.memberName) + "\", "
+                      + argsArrayPar + ", " + std::to_string(argcPar) + ")";
+            return;
+        }
+    }
+
     if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr
         && !node.positional.empty() && node.named.empty()) {
         auto& maExpr = static_cast<MemberAccessExpr&>(*node.callee);

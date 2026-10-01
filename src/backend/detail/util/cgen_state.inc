@@ -6,6 +6,13 @@
     const TypeSystem& typeSys_;
     bool verbose_;
 
+    // 枚举成员值求值时的**同枚举兄弟成员表** (VbEclipse 批次): 小写成员名 → 常量值。
+    // 语义层 visit(EnumDecl) 把兄弟成员定成 SymbolKind::EnumMember, 但那是**按模块**建的表,
+    // 而 cgen 这一层拿到的是当前模块的 symTab_ —— 私有枚举的兄弟名在这里查不到,
+    // tryEvalConstInt 于是走"回退 emitExpr", 吐出裸 `MSG_AFTER` (C2065/C2057 满屏)。
+    // 这里按枚举自己的成员表就地折叠, 不依赖符号表可见性; 非空时优先于 symTab_ 查找。
+    std::map<std::string, int64_t> enumSiblingConsts_;
+
     // Fix 056b: 清理过程内局部数组注册, 保留模块级/类成员数组 (跨过程需要)
     // 过程开始时清空knownArrays_会丢失模块级UDT数组的arrayUdtElemTypes_注册,
     // 导致访问时元素类型回退vb6_VARIANT (MSVC C2440).
@@ -21,6 +28,11 @@
 
     // 状态
     Module* currentModule_ = nullptr;
+    // <vbeclipse>: 当前模块的 `Option Compare Text` (VB6 是**按模块**的编译期属性)。
+    // 由 generate 序言从 module.options 读出; 决定字符串比较发 vb6_StrCmp 还是
+    // vb6_StrCmpT、Like 发 vb6_Like 还是 vb6_LikeC, 以及 InStr/StrComp/Replace/
+    // Split/Filter/InStrRev 省略 compare 时的缺省值。
+    bool optionCompareText_ = false;
     Symbol* currentProc_ = nullptr;  // 当前过程符号
     std::string currentReturnVar_;   // Function返回值变量名 (如 "vb6_ret_CalculateSum")
     std::string currentReturnCType_; // Fix 054: 当前函数返回值的C类型名 (如 "vb6_type_QRCodegenSegment")
@@ -132,7 +144,18 @@
     // String 形参收 Boolean 实参都走 vb6_CStrLong → 打出 -1 而 VB6 打 "True"。
     // 与 knownLongVars_ **并存**登记 (口径同 Fix 117c 的 Single / Fix 175 的 Date),
     // 消费点一律先判 Boolean, 以免既有整数路径失去变量。
+    // 账 #123: 局部/形参 As Byte 的专属登记表 (口径同上 knownBoolVars_ 那条 ai/022 W1)。
+    // As Byte 的 C 型是 uint8_t, 不匹配既有的 int32_t|int16_t|VBABOOL 那一支, 所以以前
+    // 它进不了任何 knownXxxVars_ ⇒ inferExprType 答 Unknown、isDefinitelyVariantExpr 又回退
+    // 去查符号表 ⇒ 比较被当 VARIANT 取地址 (实测 `(bt = 65)` 今天返回 False)。
+    std::unordered_set<std::string> knownByteVars_;
     std::unordered_set<std::string> knownBoolVars_;
+
+    // Integer 与 Long 共用 knownLongVars_ (C 侧都是整数, 见下面那一份), 收窄检查
+    // 却要分出 16 位的 Integer 范围, 否则 `i As Integer: i = 40000` 会被当成 Long
+    // 放行 (实测不报错)。口径同上面 knownBoolVars_ 的并存登记: 与 knownLongVars_
+    // **并存**, 消费点先判它, 以免既有整数路径失去变量。
+    std::unordered_set<std::string> knownIntVars_;
 
     // 已知Long/Integer/Boolean变量名集合 (小写) - 用于COM值解封类型推断
     std::unordered_set<std::string> knownLongVars_;
@@ -154,6 +177,14 @@
     // 因而在过程体内不可见 → 赋值时漏包装 (091l 的 Variant 目标判定失效).
     // 模块级声明时登记, 过程开始时回灌.
     std::unordered_set<std::string> moduleVariantVars_;
+
+    // Fix 161f: 无 As Type 但**整数可折叠**的 Const (小写名 → 折叠值)。
+    // 这类 Const 在符号表里 type = Variant (未指定类型)，而 C 侧已 emit 成
+    // `#define NAME (4127)` —— 过程入口 known*Vars_ 被 clear 后重新按符号表
+    // 判定会得到 Variant，于是调用实参被包成 vb6_VariantToLong(LVM_GETHEADER)
+    // → C2440 "无法从 int 转换为 vb6_VARIANT" (extlist MListView SendMessage)。
+    // 登记后标识符直接内联数值，与已有 `As Long` Const 的内联口径一致。
+    std::unordered_map<std::string, int64_t> moduleIntConstValues_;
 
     // Fix 091p: 类模块/窗体字段中的 Variant 名字集合 (小写). 类字段同样在过程
     // 开始时不可见 (knownVariantVars_ 被 clear), 但字段访问形如 me->field,
@@ -273,6 +304,8 @@
     // M22: ANSI临时变量待释放列表 (变量名) + 计数器
     // 在Declare ANSI函数调用前声明临时char*变量, 调用后立即FreeANSI
     std::vector<std::string> ansiTempsToFree_;
+    // Fix <vbeclipse>: 本过程被 push_macro/#undef 隔离的隐式变量名 (出过程 pop 复原)
+    std::vector<std::string> implicitMacroNames_;
     // Fix 161b-decl-out: Declare A 版 ByVal String **出参回写**登记表。
     // VB6 语义: ByVal String 当缓冲时, 被调用方写入的字节必须按 NUL 截断回写成
     // 新 String (GetUserName/GetModuleFileName 正是靠这条工作)。C3 原先只生成
@@ -400,6 +433,14 @@
     std::vector<int> dispatchPoints_;   // 已生成的resume点索引列表
     std::string currentErrorHandlerLabel_; // 当前On Error GoTo的错误处理器标签名
 
+    // Fix <vbeclipse>: 过程统一出口 (vb6_proc_exit) 是否被引用。
+    // VB6 语义: 过程退出时错误处理状态**自动恢复**。原先 Exit Sub/Function/Property
+    // 发裸 `return;`, 直接越过过程尾部的 vb6_RestoreErrState() —— vb6_err_stack_top
+    // 不弹栈且 vb6_error_jmp_ptr 仍指向**已失效的栈帧**; 之后任何 VB 错误
+    // (vb6_ErrRaise) 都会 longjmp 进死帧 → 野读崩。
+    // 现在 Exit* 改为 `goto vb6_proc_exit;`, 尾部统一做 restore/release/return。
+    bool procExitLabelUsed_ = false;
+
     // P6.5: WithEvents变量 (小写变量名 → 源类名)
     // Dim WithEvents obj As ClassName → knownWithEventsVars_["obj"] = "ClassName"
     std::unordered_map<std::string, std::string> knownWithEventsVars_;
@@ -419,6 +460,8 @@
     // P20-36: 菜单项ID映射 (小写菜单名 → menuId, 与emitMenuItem/emitMenuClickDispatch一致)
     std::unordered_map<std::string, int> knownMenuIds_;
     std::string knownMenuFormHwnd_;  // 当前窗体HWND变量名 (如 "vb6_hwnd_Form1")
+    // Fix <vbeclipse>: 菜单控件数组基址 (小写菜单名 → 首元素 menuId)
+    std::unordered_map<std::string, int> knownMenuArrayBaseIds_;
 
     // P7.5: 窗体名 (小写)，用于识别 Form.Caption 等窗体自身属性
     std::string knownFormName_;
@@ -447,12 +490,22 @@
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。
     // ⚠ ListView 是**真窗口**, 所以 RTL 各函数第一参要的是 **HWND 槽 vb6_hwnd_X** ——
     // 与 ImageList 那族的 vb6_com_X (无窗口, 槽里是复刻实例指针) 不同, 别照抄。
-    std::unordered_set<std::string> listViewVars_;
-    // objExpr 是否落在一个已登记的 ListView 上 (返回裸控件名, 否则空串)。
+    std::unordered_set<std::string> listViewVars_;    // objExpr 是否落在一个已登记的 ListView 上 (返回裸控件名, 否则空串)。
     // 形态: ① 裸槽 vb6_hwnd_X
     //       ② 集合对象 vb6_ListView_ListItems((void*)vb6_hwnd_X) / ...ColumnHeaders(...)
     //       ③ Item 结果 vb6_ComCallObject(②, L"Item", …) —— ③ 靠 ② 的子串命中
-    std::string listViewNameOfExpr(const std::string& objExpr) const {
+    // Fix 161f: 形参/局部变量持有 ListView 的名集合 (`Sub RefillList(lv As ListView)`)。
+    // 这类槽在 C 侧**本身就是 HWND** (调用点传的实参就是 vb6_hwnd_ListView1),
+    // 与控件名集合 listViewVars_ (那是窗体设计期控件, 要拼 vb6_hwnd_<名>) 分开存,
+    // 因为拼法不同 —— 形参直接就是槽变量名, 不能再加 vb6_hwnd_ 前缀。
+    std::unordered_set<std::string> listViewSlotVars_;
+
+    // 返回该 objExpr 对应的 **ListView HWND 表达式** (可直接当 (void*) 实参用)。
+    // 形态: ① 裸槽 vb6_hwnd_X (设计期控件)
+    //       ② 集合对象 vb6_ListView_ListItems((void*)vb6_hwnd_X) / ...ColumnHeaders(...)
+    //       ③ Item 结果 vb6_ComCallObject(②, L"Item", …) —— ③ 靠 ② 的子串命中
+    //       ④ Fix 161f: 裸形参/局部变量名 (lv / (*lv)) —— 本身就是 HWND
+    std::string listViewHwndExprOf(const std::string& objExpr) const {
         static const char* kHeads[] = {
             "vb6_ListView_ListItems((void*)vb6_hwnd_",
             "vb6_ListView_ColumnHeaders((void*)vb6_hwnd_" };
@@ -464,17 +517,31 @@
             while (e < objExpr.size()
                    && (isalnum((unsigned char)objExpr[e]) || objExpr[e] == '_')) e++;
             std::string n = objExpr.substr(s, e - s);
-            if (listViewVars_.count(n)) return n;
+            if (listViewVars_.count(n)) return "vb6_hwnd_" + n;
+            if (listViewSlotVars_.count(n)) return n;   // 形参本身就是 HWND
         }
         if (objExpr.size() > 9 && objExpr.compare(0, 9, "vb6_hwnd_") == 0) {
             std::string n = objExpr.substr(9);
-            if (listViewVars_.count(n)) return n;
+            if (listViewVars_.count(n)) return "vb6_hwnd_" + n;
+        }
+        // Fix 161f: 裸形参/局部名 (lv) 或 ByRef 解引用 ((*lv)) —— C 侧已是 HWND。
+        {
+            std::string b = objExpr;
+            if (b.size() > 4 && b[0] == '(' && b[1] == '*' && b.back() == ')')
+                b = b.substr(2, b.size() - 3);
+            size_t sp = b.find_first_of(" \t");
+            if (sp != std::string::npos) b = b.substr(0, sp);
+            if (!b.empty() && listViewSlotVars_.count(b)) return b;
         }
         return "";
     }
+    // 兼容旧调用点: 只要一个"是 ListView 宿主"的真假判据。
+    bool isListViewHostExpr(const std::string& objExpr) const {
+        return !listViewHwndExprOf(objExpr).empty();
+    }
+    // Fix 161f: 保留旧名做别名, 老调用点 (frmLVStyles 系列的 C29-7 路径) 语义不变。
     std::string listViewHwndVarOfExpr(const std::string& objExpr) const {
-        std::string n = listViewNameOfExpr(objExpr);
-        return n.empty() ? "" : "vb6_hwnd_" + n;
+        return listViewHwndExprOf(objExpr);
     }
     // C29-Data: Data 控件 (不可见类 VB6_DATA 属性宿主, 登记裸控件名如 "Data1")。
     // Recordset 链 (Data1.Recordset.Fields("x").Value / .MoveNext / .BOF) 全直译 RTL。
@@ -607,6 +674,30 @@
             }
         }
         if (statusBarVars_.count(objExpr)) return objExpr;
+        // 2026-09-30 (门 #233 / c29sbevt): **宿主槽本身**也是这个函数的输入之一。
+        // 集合形态 (`Panels.Add` / `Panels.Count`) 一直走上面那两段; 而 `StatusBar1.SimClick`
+        // 这类**直接落在宿主槽上**的成员调用送进来的是 `vb6_hwnd_StatusBar1` —— 以前这里只有
+        // `statusBarVars_.count(objExpr)`(拿带前缀的槽名去比裸控件名, 恒假) ⇒ 函数答空
+        // ⇒ 宿主被当成"不是 StatusBar", 成员被当 COM 占位属性读 (`SimClick` 于是编成
+        // `ComCallObject(ComGetObjectProp(hwnd, L"SimClick"), L"Item", …)`: 编得过、跑起来
+        // 一条事件都不发)。姊妹函数 `treeViewNameOfExpr` / `toolbarNameOfExpr` 是拿
+        // `vb6_hwnd_<裸名>` 扫子串的, 所以它们认得这一形 —— 只有 StatusBar 这一路漏了。
+        // 这里补的正是"裸槽"那一形, 判据仍是登记表 (不是按前缀猜): 剥掉 hwnd_/com_/arr_
+        // 前缀后必须真的在 `statusBarVars_` 里。
+        {
+            static const char* kSlotPrefixes[] = { "vb6_hwnd_", "vb6_com_", "vb6_arr_" };
+            for (const char* pf : kSlotPrefixes) {
+                size_t pl = strlen(pf);
+                if (objExpr.size() > pl && objExpr.compare(0, pl, pf) == 0) {
+                    std::string bare = objExpr.substr(pl);
+                    // 只有"整串就是那个槽"才算宿主 (带成员/下标的走集合那两段)
+                    if (bare.find_first_of("[(. ") == std::string::npos
+                        && statusBarVars_.count(bare)) {
+                        return bare;
+                    }
+                }
+            }
+        }
         return "";
     }
     // C29-5a: Toolbar 的裸名登记 (设计期发射那侧 insert)。认法比 StatusBar 那套窄得多 ——
@@ -646,6 +737,31 @@
         if (treeViewVars_.count(objExpr)) return objExpr;
         return "";
     }
+    // Fix <vbeclipse>: 跨窗体 TreeView。`frmViewViews.tvwViews` 解析成控件句柄
+    // 访问器 `vb6_form_ctrl_<Form>_<Ctrl>()` 时在这里登记 (键=值=访问器文本),
+    // 供 Nodes 集合两条路 (resolveComMember / resolveComValue) 认领。
+    mutable std::unordered_map<std::string, std::string> externalTreeViewAccs_;
+    // <vbeclipse>: 控件的**集合对象表达式** —— 它的值已经是那个集合本身了 (真 IDispatch
+    // 或原生复刻的集合)，对它点成员是**方法调用** (`Nodes.Add(…)` 调的就是 Add)，不是
+    // "再取一次集合属性 + Item 下标"。
+    // 判据一律按**开头**认，绝不按子串：集合表达式里嵌着宿主槽 `vb6_hwnd_tv1`，而
+    // treeViewNameOfExpr / toolbarNameOfExpr / isListViewHostExpr 都是子串扫的 —— 按子串
+    // 判"这是不是宿主槽"会把集合对象也算成宿主槽，于是 `Nodes.Add(…)` 编成
+    // vb6_ComCallObject(vb6_ComGetObjectProp(vb6_TreeView_Nodes(…), L"Add"), L"Item", …)：
+    // 节点根本没被加进去，Index 全部读空。实测 12 条控件回读红
+    // (ctrltreeview / ctrltoolbar / c29listview / c29sbevt 各 x64+x86)。
+    // dev 那边是靠 `comObjExpr_.find("vb6_hwnd_") == 0` 这个**前缀锚**挡住的；本条把
+    // 这件事写成一处有名字的话，免得下一个控件再加一路子串判据时又把它冲掉。
+    bool isControlCollectionExpr(const std::string& expr) const {
+        static const std::vector<std::string> heads = {
+            "vb6_TreeView_Nodes(", "vb6_Toolbar_Buttons(", "vb6_ImageList_ListImages(",
+            "vb6_ListView_ListItems(", "vb6_ListView_ColumnHeaders(",
+        };
+        for (const auto& h : heads) {
+            if (expr.size() >= h.size() && expr.compare(0, h.size(), h) == 0) return true;
+        }
+        return false;
+    }
     // C29-DT-c: DTPicker 的裸名登记。认法照 treeViewNameOfExpr —— 它也是真窗口，
     // 判据方法 (SimChange/SimDropDown/SimCloseUp) 的宿主槽只会是 `vb6_hwnd_<裸名>`，
     // 名字比对同样要过标识符边界 (dt1 不能命中 dt10)。
@@ -678,6 +794,22 @@
             }
         }
         if (monthviewVars_.count(objExpr)) return objExpr;
+        return "";
+    }
+    // C29-SL-c: Slider 的裸名登记（判据方法 SimNotify 靠它认宿主是真窗口槽，同 DT/MV 那两格）。
+    std::unordered_set<std::string> sliderVars_;
+    std::string sliderNameOfExpr(const std::string& objExpr) const {
+        for (const auto& n : sliderVars_) {
+            const std::string hwnd = "vb6_hwnd_" + n;
+            size_t p0 = objExpr.find(hwnd);
+            while (p0 != std::string::npos) {
+                size_t e = p0 + hwnd.size();
+                if (e >= objExpr.size() || !(isalnum((unsigned char)objExpr[e]) || objExpr[e] == '_'))
+                    return n;
+                p0 = objExpr.find(hwnd, e);
+            }
+        }
+        if (sliderVars_.count(objExpr)) return objExpr;
         return "";
     }
     std::string statusBarHwndVarOfExpr(const std::string& objExpr) const {
@@ -759,6 +891,10 @@
     // 继承字段与前缀布局、转发桩都由 view 的 inhFields/inhProcs 驱动 (stage 3.4 回填).
     const ClassChainRegistry* clsreg_ = nullptr;
 
+    // 工程级类名表 (小写类名 → 原大小写类名, driver 注入). 本模块符号表会被同名成员
+    // 遮蔽, 判"某类型名是不是工程类"只能问这张表 (详见 setProjectClassNames 注释).
+    const std::unordered_map<std::string, std::string>* projClassNames_ = nullptr;
+
     // CoClass 身份 (tB, ai/022 B13b): stage 2.7 Pass E 求出的唯一出口 (coclassIds_)。
     // 只有 generateDllEntry 读它 —— 产品里的 CLSID / 默认接口 IID / 组名 ProgID 一律
     // 从这里取，prelude 里那两枚 lambda 退成"读不到块的类"的兜底路径。
@@ -775,6 +911,23 @@
     // Fix 112: in-project UserControl (.ctl) designer spec table (lowercase module -> FrmFile)
     // czUI fix: UC 事件 attach 行 (文件作用域 thunk/sink 在 prelude 生成)
     std::map<std::string, std::vector<std::string>> ucEventAttach_;
+
+    // Fix <vbeclipse> rev17: 本窗体里**充当 WithEvents 事件处理器**的过程名 (小写)。
+    // 由 cgen_form_prelude 在扫 <ctrl>_<Event> 命中时登记。用途: 事件处理器是"跨对象
+    // 边界"的回调, 形参一律按**事件 ABI = ByVal** 发 (与 emitEventSink 的
+    // `pi.isByVal = true` 同一条规矩), 否则处理器声明出 `void**` 而回调 typedef /
+    // RaiseEvent 发送侧给的是 `void*` —— 处理器多解一层引用 → 拿到 NULL。
+    // 实证 play78: `Private Sub ucPerspective1_OpenEditor(Editor As Object)` 发成
+    // `void** Editor` 且体里 `(*Editor)`, 而 typedef 是 `void* Editor`、
+    // 发送侧是 `onOpenEditor(handler, (*Editor))` ⇒ Editor.Caption 取到 NULL
+    // ⇒ av read 0x0 (_vb6_frmMain_ucPerspective1_OpenEditor+0x19)。
+    std::set<std::string> ucEventHandlers_;
+
+    // Fix <vbeclipse> rev18: 本模块发出去的 UserControl 自有属性桥条数。
+    // emitFormFramework 末尾 (cgen_form_uc_props.inc) 算表时写入, emitDesignerControlDecls
+    // 填 vb6_UserControlDesc.props/propCount 时读 (同一次 decl-pass 内, 前者先跑 ——
+    // 见 cgen_base_generate_decl_pass.inc:40 与 :46)。
+    int32_t ucHostPropCount_ = 0;
     const std::map<std::string, FrmFile>* designerFiles_ = nullptr;
 
     // Fix 143: vbp Object= 的 OCX 文件表 (CLSID 小写去花括号 → ocx 绝对路径)

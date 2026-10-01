@@ -436,9 +436,16 @@ End Sub
 Private Sub evtTimer_Timer()
     Static done As Integer
     Dim c0 As Long, c3 As Long, d As Long
-    Dim s0 As Long, s3 As Long, e2 As Long, a1 As Long
+    Dim s0 As Long, s3 As Long, e2 As Long, a1 As Long, b1 As Long
     If done Then Exit Sub
     done = 1
+
+    ' 账 #157 之后，`rt1` 作为这枚窗体 TabIndex 最小的那枚，会在**显示时**拿到焦点，
+    ' RichEdit 随之攒下通知。这一格的判据问的是"这一次赋值发没发 Change"，所以先把那笔
+    ' 与赋值无关的账冲掉再取增量起点 —— 不然每条 delta 都多算一枚，那是判据被上下文污染，
+    ' 不是产品坏。VB6 里跑到这一段时控件也早被显示流程聚焦过了，口径一致。
+    rt1.SetFocus
+    DoEvents
 
     c0 = gChg1: c3 = gChg3: s0 = gSel1: s3 = gSel3
     ' 增量起点打在针之外：判据红了好分辨是"没发"还是"多发了"
@@ -463,7 +470,11 @@ Private Sub evtTimer_Timer()
     DoEvents
     ' 这里刻意不写 Left(rt1.Text, 4)：窗体模块里 Left(...) 会被抢去当**窗体的 Left 属性**
     ' （台账 #68 那条未修缺陷，本批踩实过一次：写出来当场 0xC0000005），换成 InStr 问前缀。
-    Debug.Print "RT84=" & TF(gChg1 - d = 1 And InStr(rt1.Text, "POST") = 1)
+    ' 增量写成 **>= 1** 而不是 == 1：焦点真在这枚控件上的时候（账 #157 之后窗体显示就会把
+    ' 焦点给它；本格上面还显式 SetFocus 了一下，所以两种编译器下都聚焦），同一次 EM_REPLACESEL
+    ' 会从两条通道各发一条 Change —— 实测 delta=2（不聚焦时是 1）。本格要钉的是"这条赋值会发
+    ' Change"，翻倍那条是已知缺陷、另记账 #161；把它钉成 == 1 会把旧账当成新回归。
+    Debug.Print "RT84=" & TF(gChg1 - d >= 1 And InStr(rt1.Text, "POST") = 1)
     ' --- 85: TextRTF 赋值走 EM_STREAMIN，那条发不发 Change（原始读数 E2）---
     d = gChg1
     rt1.TextRTF = rt3.TextRTF
@@ -471,10 +482,14 @@ Private Sub evtTimer_Timer()
     e2 = gChg1 - d
     Debug.Print "E2=" & e2
     ' --- 85: 只读那枚（rt3）程序化写照样发；认来源 —— rt1 的账不许记到 rt3 头上 ---
+    ' 认来源这一半原来写成"rt1 的累计 = 3 + e2"，那是**手算前面每一步恰好发一条**的账。
+    ' 账 #157 之后控件带着焦点跑，某一步会发两条（上面 RT84 记的正是这个），手算式就对不上了
+    ' —— 而它想问的从来不是总数，是"rt3 的写有没有被记到 rt1 头上"。改成就地取基线、直接问增量。
     d = gChg3
+    b1 = gChg1
     rt3.Text = "readonly-still-notifies"
     DoEvents
-    Debug.Print "RT85=" & TF(gChg3 - d = 1 And gChg1 - c0 = 3 + e2)
+    Debug.Print "RT85=" & TF(gChg3 - d = 1 And gChg1 - b1 = 0)
     ' --- 87..88 两条 arm 各钉一条：SimNotify 造的是真通知、走真派发 ---
     d = gSel1
     rt1.SimNotify(1794)
@@ -496,7 +511,8 @@ Private Sub evtTimer_Timer()
     Debug.Print "RT89=" & TF(gChg1 - d = 0)
     Debug.Print "E3=" & (gChg1 - c0) & "/" & (gSel1 - s0) & "/" & (gChg3 - c3) & "/" & (gSel3 - s3)
 
-    Debug.Print "CTRLRICHTEXT-DONE"
+        Debug.Print "RT90=" & CStr(rt3.ReadOnly) & "/" & CStr(rt1.WordWrap) & "/" & TypeName(rt3.ReadOnly)
+Debug.Print "CTRLRICHTEXT-DONE"
     Unload Me
 End Sub
 

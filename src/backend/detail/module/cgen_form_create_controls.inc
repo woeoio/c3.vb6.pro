@@ -210,7 +210,11 @@
             }
     };
 
+    // 账 #160: 声明序号 —— 设计期没写 `TabIndex` 时的回落值（见 emitDesignerTabIndexProp）。
+    // 自增放在循环体第一句：这条循环里有多处 `continue`，放末尾会让后面的控件集体少一号。
+    int tabIndexFallback = -1;
     for (const auto& ctrl : frmDesc.formControl.children) {
+        tabIndexFallback++;
         // Fix 112: 工程内 UserControl (.ctl) 子控件 — 实例化到宿主子窗口.
         // 此前这类 controlTypeToWin32Class()==nullptr 的非 ActiveX 类型直接 continue,
         // Form2 上的 ucChartBar1 等从未创建 → vb6_ComCall(NULL,...) 被丢弃 → 白板窗体.
@@ -871,7 +875,11 @@
 
         // 提取控件属性
         int left = 0, top = 0, width = 1000, height = 300;
-        std::string ctrlCaption = ctrl.controlName;  // 默认Caption=控件名
+        // Fix 162c-extlist: Caption 缺省 = "" 而不是控件名 —— VB6 的 .frm 只在
+        // Caption 非默认值时才写盘, Frame/Label/按钮 的持久化默认值都是空串
+        // (控件名只是 IDE 插入时的初始值)。此前回落控件名, extlist 的 Frame2
+        // 没写 Caption, 运行时标题栏凭空多出 "Frame2" 字样, 与 VB6 参考图不符。
+        std::string ctrlCaption;  // 默认 Caption="" (Fix 162c)
         std::string ctrlText;  // TextBox的Text属性
 
         auto propIt = ctrl.properties.find("Left");

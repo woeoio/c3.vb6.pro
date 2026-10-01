@@ -45,6 +45,15 @@ static int vb6_fmtIsNamedFormat(BSTR fmt) {
     static const wchar_t* kNames[] = {
         L"general number", L"currency", L"fixed", L"standard", L"percent",
         L"scientific", L"yes/no", L"true/false", L"on/off",
+        // Fix 162b-extlist: 补全命名日期/时间格式 (extlist 工程的 Format$ 用到
+        // "short date"/"medium date"/"short time"/"medium time"/"long time")。
+        // 原表只有 long/short date 与 long/short time —— "medium date"/"medium
+        // time" 不被认成命名格式, 也不含 yyyy/dd 等"日期特征字符"齐全度足够,
+        // 被当**用户格式串**逐字符解析 (m→月 e→字面量 d→日 i/u→字面量) ⇒
+        // 输出 "12e14u12" 这种乱码; 而 short date/short time/long time 虽被
+        // vb6_fmtIsDateFormat 排除, 但后面**没有**命名日期分支实现 → 落回
+        // 数值格式化输出序列号 "45331"。两者都由 vb6_fmtNamedDateTime 接住。
+        L"general date", L"medium date", L"medium time",
         L"long date", L"short date", L"long time", L"short time"};
     int n = fmt ? SysStringLen(fmt) : 0;
     if (n <= 0 || n >= 63) return 0;
@@ -55,6 +64,71 @@ static int vb6_fmtIsNamedFormat(BSTR fmt) {
         if (wcscmp(buf, kNames[k]) == 0) return 1;
     return 0;
 }
+
+static int vb6_fmtNamedDateTimeKind(BSTR fmt) {
+    static const wchar_t* kDateNames[] = {
+        L"general date", L"medium date", L"medium time",
+        L"long date", L"short date", L"long time", L"short time"};
+    int n = fmt ? SysStringLen(fmt) : 0;
+    if (n <= 0 || n >= 63) return 0;
+    wchar_t buf[64];
+    for (int i = 0; i < n; i++) buf[i] = towlower(fmt[i]);
+    buf[n] = 0;
+    for (size_t k = 0; k < sizeof(kDateNames) / sizeof(kDateNames[0]); k++)
+        if (wcscmp(buf, kDateNames[k]) == 0) return (int)k + 1;
+    return 0;
+}
+
+// Fix 162b-extlist: 命名日期/时间格式 → 按各规格取值。
+//   general date = 短日期 + 空格 + 长时间 (locale)
+//   long date    = locale 长日期        short date = locale 短日期
+//   medium date  = d-mmm-yy             (VB6 固定规格, 与 locale 无关)
+//   long time    = locale 长时间 (h:mm:ss AM/PM)
+//   medium time  = hh:mm AM/PM          short time = HH:mm (24 小时制)
+static BSTR vb6_fmtNamedDateTime(double serial, BSTR fmt) {
+    int kind = vb6_fmtNamedDateTimeKind(fmt);
+    SYSTEMTIME st;
+    if (!VariantTimeToSystemTime(serial, &st)) return vb6_BSTR_FromStr(L"");
+    wchar_t buf[128];
+    buf[0] = 0;
+    switch (kind) {
+        case 1: {  // general date
+            wchar_t d[64], t[64];
+            GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &st, NULL, d, 64);
+            GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, NULL, t, 64);
+            swprintf(buf, 128, L"%s %s", d, t);
+            break;
+        }
+        case 2: {  // medium date —— locale 相关: zh-CN = yy-MM-dd (参考图 "26-12-14"),
+                   // 西文 = d-mmm-yy ("28-Dec-26")。按用户主语言分流。
+            wchar_t md[16] = L"d-MMM-yy";
+            LANGID lang = GetUserDefaultUILanguage();
+            if (PRIMARYLANGID(lang) == 0x04) { // Chinese: 参考图 "26-12-14"
+                wcscpy(md, L"yy-MM-dd");
+            }
+            GetDateFormatW(LOCALE_USER_DEFAULT, 0, &st, md, buf, 128);
+            break;
+        }
+        case 3:  // medium time = hh:mm AM/PM
+            GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, L"hh:mm tt", buf, 128);
+            break;
+        case 4:  // long date
+            GetDateFormatW(LOCALE_USER_DEFAULT, DATE_LONGDATE, &st, NULL, buf, 128);
+            break;
+        case 5:  // short date
+            GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &st, NULL, buf, 128);
+            break;
+        case 6:  // long time = locale 默认时间格式 (含秒)
+            GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, NULL, buf, 128);
+            break;
+        case 7:  // short time = HH:mm (24 小时制)
+            GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, L"HH:mm", buf, 128);
+            break;
+    }
+    return vb6_BSTR_FromStr(buf);
+}
+
+// Fix 162b-extlist: vb6_fmtNamedDateTimeKind 定义在上方 (vb6_fmtNamedDateTime 前)。
 
 static int vb6_fmtIsDateFormat(BSTR fmt) {
     int n = fmt ? SysStringLen(fmt) : 0;
@@ -154,7 +228,12 @@ static BSTR vb6_fmtDateSerial(double serial, BSTR fmt) {
     return vb6_BSTR_FromStr(out);
 }
 
-BSTR vb6_Format(vb6_VARIANT expr, BSTR fmt) {
+BSTR vb6_Format(vb6_VARIANT expr, BSTR fmt, int32_t firstDayOfWeek, int32_t firstWeekOfYear) {
+    // <vbeclipse> 扩到 VB6 完整 4 形 (expr[, fmt[, FirstDayOfWeek[, FirstWeekOfYear]]]).
+    // 现有格式解析不消费这两个日期参数 (Date 分支走系统默认周)；VBFlexGrid.ctl:
+    // 20425/20428 `Format$(Text, Col.Format, vbUseSystemDayOfWeek, vbUseSystem)`
+    // 直接 C2197 too many args —— 补上签名即可，语义与旧 2 参实现等价。
+    (void)firstDayOfWeek; (void)firstWeekOfYear;
 #include "vb6rtl_format_extract.inc"
 #include "vb6rtl_format_parse.inc"
 #include "vb6rtl_format_string.inc"

@@ -18,6 +18,12 @@ void dispatchDecl(Decl& decl, SemanticAnalyzer& analyzer);
 void dispatchStmt(Stmt& stmt, SemanticAnalyzer& analyzer);
 void dispatchExpr(Expr& expr, SemanticAnalyzer& analyzer);
 
+// <vbeclipse>: 取 `As <类型名>` 里的原始名字（TypeRefPtr 就是 ASTNode, 只有
+// SimpleTypeRef 带名字；ArrayTypeRef/FixedStringTypeRef 返回空）。
+// 参数信息需要把工程类/接口的名字带下去, 因为 Vb6Type 那一档容不下它
+// （见 symbol_table.hpp 里 ParameterInfo::typeRefName 的注释）。
+std::string simpleTypeRefName(const ASTNode* typeRef);
+
 } // namespace vb6c3
 
 #endif // VB6C3_SEMANTIC_ANALYZER_INTERNAL_H

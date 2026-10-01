@@ -88,6 +88,87 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
         }
     }
 
+    // --- Pass A2: VB6 风格接口 (.cls 宿主) 登记 ---
+    //
+    // VB6 没有 `Interface ... End Interface` (那是 tB 扩展): 它的接口就是一个
+    // `VB_Creatable = False`、成员全是**无体签名**的普通 .cls, 实现方写 `Implements I`
+    // 再把每个实现成员命名为 `I_<成员>` (IScheme 就是这么写的)。这批接口过去完全不在
+    // 登记表里, 连锁后果有三处:
+    //   - 语义层退到 legacy 路径 (只 warn, 不逐槽校验);
+    //   - 发码层 `ivLookupIface` 返回 nullptr, tB 那条路整条跳过, 退到 legacy
+    //     `emitInterfaceVtable` **按实现类自己 harvest 槽** —— 各实现类槽数/槽序/`me` 类型
+    //     并不一致 (实测 25/26/27), 于是每个类各发一份同名 `vb6_vtbl_I`, C2011 撞 290 次;
+    //   - `As I` 引用类型没有 `vb6_ivref_I` 可落。
+    // 登记之后 tB 那套 (canonical 槽表 + `vb6_ivtbl_I` + `vb6_ivref_I`) 自然接管,
+    // 一个接口只发一份表, 槽序由接口自己说了算, 与实现类怎么排无关。
+    //
+    // 判据收紧到"只有真接口进表": 误把普通类认成接口, 会让 Implements 校验变严、动态派发
+    // 行为变掉, 比不管更糟。四条都要过:
+    //   1) 被某个模块 `Implements` 按名字指到 (VB6 里只有接口会被 Implements);
+    //   2) 是 .cls 类模块, 且自己**没有** tB Interface 块 (有的话 Pass A 已登记);
+    //   3) 显式写了 `Attribute VB_Creatable` 就必须为 False; 没写不拦, 靠第 4 条兜;
+    //   4) 全部 Sub/Function/Property 成员都是**无体**签名 —— 这是 VB6 接口类的定义性特征,
+    //      只要有一个带实现体就说明它是普通类, 不认。
+    {
+        std::set<std::string> wanted;
+        for (const auto& mod : modules_) {
+            for (const auto& impl : mod->implements) {
+                if (impl) wanted.insert(ifaceLower(impl->interfaceName));
+            }
+        }
+        std::unordered_map<std::string, Module*> byName;
+        for (auto& mod : modules_) byName.emplace(ifaceLower(mod->moduleName), mod.get());
+
+        // `Attribute X = False/0` 读法与本文件 Pass E 的 boolLiteral 同一口径
+        auto attrLiteral = [](const Module& m, const char* want, std::string& out) -> bool {
+            for (const auto& a : m.attributes) {
+                if (!a || ifaceLower(a->attrName) != want) continue;
+                if (!a->value || a->value->kind != ASTNodeKind::LiteralExpr) return false;
+                out = static_cast<const LiteralExpr&>(*a->value).rawText;
+                return true;
+            }
+            return false;
+        };
+        // 全部成员都是无体签名 => 是接口类
+        auto allMembersBodyless = [](const Module& m) {
+            for (const auto& d : m.declarations) {
+                if (!d) continue;
+                const StmtList* body = nullptr;
+                if (d->kind == ASTNodeKind::SubDecl) {
+                    body = &static_cast<const SubDecl&>(*d).body;
+                } else if (d->kind == ASTNodeKind::FunctionDecl) {
+                    body = &static_cast<const FunctionDecl&>(*d).body;
+                } else if (d->kind == ASTNodeKind::PropertyDecl) {
+                    body = &static_cast<const PropertyDecl&>(*d).body;
+                } else {
+                    continue;  // Type/Enum/Declare 之类不是可实现成员
+                }
+                if (!body->empty()) return false;
+            }
+            return true;
+        };
+
+        for (const std::string& want : wanted) {
+            if (ifaces_.count(want)) continue;   // Pass A 已登记 (tB Interface 块)
+            auto it = byName.find(want);
+            if (it == byName.end()) continue;    // 工程里没有同名模块
+            Module* host = it->second;
+            if (!host->isClassModule || !host->interfaces.empty()) continue;
+            std::string creatable;
+            if (attrLiteral(*host, "vb_creatable", creatable)) {
+                // 显式写了 VB_Creatable 就必须为 False
+                if (creatable != "False" && creatable != "false" && creatable != "0") continue;
+            }
+            if (!allMembersBodyless(*host)) continue;
+            auto res = ifaces_.emplace(want, IfaceView{});
+            if (!res.second) continue;
+            IfaceView& v = res.first->second;
+            v.name = host->moduleName;
+            v.clsHost = host;                    // 槽成员取自宿主自己的 declarations
+            ifaceOrder_.push_back(want);
+        }
+    }
+
     // --- Pass B: Extends 链求解 (未知父 / 环) ---
     for (const std::string& key : ifaceOrder_) {
         IfaceView& v = ifaces_[key];
@@ -137,13 +218,26 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
         std::set<std::string> ownNames;  // 本接口内的成员名 (禁重载)
         for (const IfaceView* iv : chain) {
             const bool own = (iv == &v);
-            for (const auto& m : iv->decl->members) {
-                if (!m.decl) continue;
+            // 槽成员来源有两种, 统一摊平成"声明序的一串 Decl"再往下走:
+            //   - tB Interface 块 -> InterfaceDecl::members;
+            //   - VB6 .cls 宿主  -> 该宿主模块自己的 declarations (Pass A2 登记进来的)。
+            // 两者都只取签名 (ifaceSigFromDecl 拒带体的成员), 槽序都是声明序。
+            std::vector<const Decl*> memberDecls;
+            if (iv->clsHost) {
+                for (const auto& md : iv->clsHost->declarations) {
+                    if (md) memberDecls.push_back(md.get());
+                }
+            } else if (iv->decl) {
+                for (const auto& m : iv->decl->members) {
+                    if (m.decl) memberDecls.push_back(m.decl.get());
+                }
+            }
+            for (const Decl* md : memberDecls) {
                 IfaceProcSig sig;
-                if (!ifaceSigFromDecl(*m.decl, sig)) continue;
+                if (!ifaceSigFromDecl(*md, sig)) continue;
                 if (own) {
                     if (!ownNames.insert(sig.slotKey).second) {
-                        diag_->error(DiagnosticID::SemInterfaceSlotConflict, m.decl->loc,
+                        diag_->error(DiagnosticID::SemInterfaceSlotConflict, md->loc,
                             "Interface '" + v.name + "' declares member '" + sig.memberName +
                             "' more than once (interface members cannot be overloaded)");
                         continue;
@@ -154,7 +248,7 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
                     for (const auto& s : v.slots) {
                         if (s.key == sig.slotKey) { holder = s.ownerIface; break; }
                     }
-                    diag_->error(DiagnosticID::SemInterfaceSlotConflict, m.decl->loc,
+                    diag_->error(DiagnosticID::SemInterfaceSlotConflict, md->loc,
                         "Interface '" + iv->name + "' slot '" + sig.slotKey +
                         "' conflicts with the inherited slot from '" + holder +
                         "' (COM vtables have no shadowing)");
@@ -164,7 +258,7 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
                 slot.key = sig.slotKey;
                 slot.memberName = sig.memberName;
                 slot.ownerIface = iv->name;
-                slot.sig = m.decl.get();
+                slot.sig = md;
                 slot.index = static_cast<int32_t>(v.slots.size());
                 v.slots.push_back(std::move(slot));
             }

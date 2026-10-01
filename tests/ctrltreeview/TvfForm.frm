@@ -119,15 +119,21 @@ Private Sub Form_Load()
     Debug.Print "TV14=" & TF(ndA.Index = 1 And ndB.Index = 2 And ndC.Index = 3)
 
     ' --- 9. 下标取与按 Key 取 (同一条 Item 两种实参形态) ---
-    '     字符串成员先取进对象变量再读: 链式 `Nodes(2).Text` 这种"比较左值是链上
-    '     字符串成员"的形态, cgen 现在会按数值解包 (vb6_ComGetIntProp) —— 那是
-    '     029 台账 #85 同族的独立缺陷, 不在本批范围, 别在判据里踩它。
+    '     账 #88 收线后这里**直接**比字符串成员。以前 cgen 在比较上下文里把链上的字符串成员
+    '     按数值解包 (发 vb6_CStrLong(vb6_ComGetIntProp(o, L"Text"))) ⇒ 拿 BSTR 指针当数字
+    '     去和字面量比 ⇒ 恒 False，判据只能先把值取进局部变量绕过去 (TV34 仍留那条路径)。
+    '     TV37 钉的是选择性: 同一条链上的**数值**成员 (Index/Children) 必须照旧走 int 档，
+    '     两档一起改是错的；TV36 钉的是"上面那些 Y 不是恒真"。
     Dim ndIx As Object, ndKy As Object
     Set ndIx = tv1.Nodes(2)
     Set ndKy = tv1.Nodes("b")
+    Debug.Print "TV15=" & TF(ndIx.Text = "子乙" And ndKy.Index = 2)
+    Debug.Print "TV35=" & TF(tv1.Nodes(2).Text = "子乙" And tv1.Nodes("b").Key = "b")
+    Debug.Print "TV36=" & TF(tv1.Nodes(2).Text = "根甲")
+    Debug.Print "TV37=" & TF(tv1.Nodes(2).Index = 2 And tv1.Nodes(1).Children = 1)
     Dim sIx As String
     sIx = ndIx.Text
-    Debug.Print "TV15=" & TF(sIx = "子乙" And ndKy.Index = 2)
+    Debug.Print "TV34=" & TF(sIx = "子乙")
 
     ' --- 10. 导航读数全问原生树 ---
     Debug.Print "TV16=" & TF(ndA.Child = 2 And ndA.Children = 1)
@@ -223,7 +229,8 @@ Private Sub evtTimer_Timer()
     Debug.Print "TV31=" & TF(gExpands - baseExp = 1 And gCollapses - baseCol = 1)
     Debug.Print "TV32=" & TF(gExpText = "根甲")
 
-    Debug.Print "TREEVIEW-DONE"
+        Debug.Print "TV38=" & CStr(tv1.CheckBoxes) & "/" & CStr(tv1.HideSelection) & "/" & TypeName(tv1.HotTracking)
+Debug.Print "TREEVIEW-DONE"
     Unload Me
 End Sub
 

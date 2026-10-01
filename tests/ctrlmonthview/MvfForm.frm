@@ -197,9 +197,13 @@ Private Sub Form_Load()
     mv1.SelEnd = d0 + 7
     k = CLng(mv1.SelEnd) - CLng(mv1.SelStart) + 1
     Debug.Print "MV32=" & TF(k = 3)
-    ' 量出来的夹取方向：窗口已经贴着上限时，**往里扩**的那一端会被原样顶回去（这一格两端
-    ' 都不动），而不是把另一头挤掉 —— 所以钉的是"上限管得住，且不会悄悄挪走已经选好的那头"。
-    Debug.Print "MV33=" & TF(CLng(mv1.SelEnd) = d0 + 5 And CLng(mv1.SelStart) = d0 + 3)
+    ' 归一化方向（RTL vb6_MvSetSelEnd 在发 MCM_SETSELRANGE 之前把宽度挤到 MaxSelCount）：
+    '   写 SelStart 定住 Start、把 SelEnd 挤到 Start+Max-1；写 SelEnd 定住 End、把 SelStart
+    '   挤到 End-Max+1。这条按 [d0+5, d0+7] 落点钉 —— 前一版把这条钉成"顶回去, 两端都不动",
+    '   那是把原生沉默拒收当成了语义，跟 VB6 文档里"另一端跟着调"的口径不一致；跨月那天
+    '   (10-01) MV26 的初值退化 range 一起把这个内部矛盾暴露了出来 —— 三条判据现在按同
+    '   一种"写完读得到"归一化模型钉在一起。
+    Debug.Print "MV33=" & TF(CLng(mv1.SelEnd) = d0 + 7 And CLng(mv1.SelStart) = d0 + 5)
     Debug.Print "S=" & k & "/" & CLng(mv1.SelEnd) & "/" & CLng(mv2.SelStart) & "/" & d0
 
     ' DONE 与 Unload 在 evtTimer_Timer —— 事件判据得等窗体载入完再跑 (照 C29-DT-c 的先例)。
@@ -255,7 +259,8 @@ Private Sub evtTimer_Timer()
     Debug.Print "D=" & CDbl(mv2.Value) & "/" & CDbl(mv1.SelStart) & "/" & CDbl(mv1.SelEnd)
 
     Debug.Print "E=" & (gClick1 - b1) & "/" & (gClick2 - b2) & "/" & CLng(gGot1)
-    Debug.Print "CTRLMONTHVIEW-DONE"
+        Debug.Print "MV41=" & CStr(mv1.MultiSelect) & "/" & CStr(mv4.ShowToday) & "/" & TypeName(mv1.MultiSelect)
+Debug.Print "CTRLMONTHVIEW-DONE"
     Unload Me
 End Sub
 

@@ -136,6 +136,23 @@
                 lastExpr_ = extReadFn + "(" + extFormHwnd + ")  /* external form prop */";
                 return;
             }
+            // Fix <vbeclipse>: 外部窗体的**控件成员** (`frmViewViews.tvwViews`) →
+            // 控件句柄访问器 `vb6_form_ctrl_<Form>_<Ctrl>()` (控件 HWND 是另某 .c
+            // 里的 static, 直接发裸名必 C2065)。TreeView 控件再登记进
+            // externalTreeViewAccs_, 让后续 `.Nodes` 链 (cgen_util_com) 认领。
+            // 不打 COM 标记: 该访问器返回的是 HWND 不是 IDispatch; 后续成员链由
+            // cgen_expr_member_generic_access 的 `vb6_form_ctrl_` 前缀识别接管。
+            {
+                const FrmControl* extCtrl = findExternalFormControl(objIdent.name, node.memberName);
+                if (extCtrl) {
+                    std::string acc = "vb6_form_ctrl_" + cIdent(objIdent.name)
+                                    + "_" + cIdent(node.memberName) + "()";
+                    if (extCtrl->controlType == FrmControlType::TreeView)
+                        externalTreeViewAccs_[acc] = acc;
+                    lastExpr_ = acc;
+                    return;
+                }
+            }
         }
 
         // P18-C: Clipboard 对象
@@ -158,6 +175,12 @@
             if (memLower == "twipsperpixely") { lastExpr_ = "vb6_Screen_TwipsPerPixelY()"; return; }
             if (memLower == "activecontrol") { lastExpr_ = "(int32_t)(intptr_t)vb6_Screen_ActiveControl()"; return; }
             if (memLower == "activeform") { lastExpr_ = "(int32_t)(intptr_t)vb6_Screen_ActiveForm()"; return; }
+            // Fix 161f: Screen.MousePointer 读 (CWaitCursor 等类里用;
+            // 早先落进类成员 fallback → me->Screen → C2039)。
+            if (memLower == "mousepointer") { lastExpr_ = "vb6_Screen_MousePointer()"; return; }
+            // Fix <vbeclipse>: Screen.MouseIcon (读/写) — RTL 全局槽 (IPicture 指针)。
+            // 写侧 cgen_util_comwrite 同名分支消费 "vb6_Screen_MouseIcon" 文本。
+            if (memLower == "mouseicon") { lastExpr_ = "vb6_Screen_MouseIcon"; return; }
         }
 
         // P18-C: Printer 对象
@@ -208,6 +231,20 @@
                     auto itOrig = knownWithEventsCtrlOrigNames_.find(objLower);
                     std::string weVarName = (itOrig != knownWithEventsCtrlOrigNames_.end()) ? itOrig->second : objLower;
                     lastExpr_ = readFn + "(" + weVarName + ")  /* WithEvents ctrl */";
+                    return;
+                }
+            }
+            // Fix 161f-extlist: `lv.hWnd` / `lv.View` —— lv 是**形参/局部持有的
+            // ListView** (`Sub RefillList(lv As ListView)`)。C 侧槽变量本身就是 HWND,
+            // 与设计期控件名 (knownFormControls_ + vb6_hwnd_<名>) 拼法不同:
+            // 这里直接用裸槽名当 hwnd 实参, 不发 vb6_hwnd_ 前缀。
+            // 不认这条就落 COM 晚绑定 `vb6_ComGetProp((*lv), L"hWnd")` —— 拿
+            // vb6_ComIface_IListView* 当 IDispatch 用 (extlist CStopWatch/LVSortK 实测:
+            // hWnd 读到 Empty ⇒ 后续 SendMessage 全打 0)。
+            if (listViewSlotVars_.count(objLower)) {
+                std::string readFnLv = getControlPropReadFn(FrmControlType::ListView, node.memberName);
+                if (!readFnLv.empty()) {
+                    lastExpr_ = readFnLv + "((void*)" + objLower + ")  /* ListView slot param */";
                     return;
                 }
             }

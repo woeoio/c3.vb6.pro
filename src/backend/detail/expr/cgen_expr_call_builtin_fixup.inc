@@ -72,8 +72,10 @@
             // UDT 的 As Variant 字段如 vb6_ret_X.BufferArray), 需提取 SafeArray1D*:
             // RTL 签名 vb6_UBound(vb6_SafeArray1D*, ...), 直接传 VARIANT → C2440
             // (cZipArchive pvVfsCreate: UBound(pvVfsCreate.BufferArray, 1)).
+            // <vbeclipse>: 同一条边界 —— 首参若是"已经返回载体"的内置调用
+            // (`UBound(Split(s, ","))`) 再包一层就是 C2440, 用 carrier 判定跳过。
             if (!args.empty() && node.positional.size() >= 1
-                && args[0].find("vb6_VariantToSafeArray1D") != 0) {
+                && !cExprIsSafeArrayCarrier(args[0])) {
                 bool arrFlag090n = false;
                 bool vFlag090n = isDefinitelyVariantExpr(*node.positional[0], &arrFlag090n);
                 if (vFlag090n) {
@@ -216,6 +218,17 @@
         }
     }
 
+    // Fix <vbeclipse>: LoadPicture() — VB6 允许**无参**调用 (取回"空图片", 常用于
+    // `Screen.MouseIcon = LoadPicture()` 复位鼠标指针; ucPerspective.ctl:596/600)。
+    // RTL 签名是 vb6_LoadPictureEx(BSTR pathname) (1 参), 0 参调用 → C2198 参数太少
+    // (ucPerspective.c:467/472)。补 NULL: vb6_LoadPictureEx 遇 NULL 直接返回 NULL,
+    // 正是"空图片"的语义。
+    if (callee == "vb6_LoadPictureEx") {
+        if (args.empty()) {
+            argList = "NULL";
+        }
+    }
+
     // P14.2.2: Dir - VB6 allows 1-arg Dir(pattern) → vb6_Dir(pattern, 0)
     if (callee == "vb6_Dir") {
         if (args.size() == 1) {
@@ -227,6 +240,12 @@
         }
     }
 
+    // <vbeclipse>: VB6 里 InStr/InStrRev/StrComp/Replace/Split/Filter 的 compare 形
+    // **缺省值不是常量 0, 而是本模块的 Option Compare**。下面各 padding 段统一用这个
+    // 串填 compare 槽 (旧写法一律硬编码 0 ⇒ Option Compare Text 模块里省略 compare 的
+    // 内置函数仍按二进制比, 与同模块的 `=` 判定互相矛盾)。
+    const std::string cmpDefault = optionCompareText_ ? "1" : "0";
+
     // P14.2.3: Split - VB6 Split(expr[, delim[, limit[, compare]]])
     // RTL: vb6_Split(expr, delim, limit, compare)
     if (callee == "vb6_Split") {
@@ -237,7 +256,7 @@
             argList += ", -1";          // limit = -1 (unlimited)
         }
         if (args.size() <= 3) {
-            argList += ", 0";           // compare = binary
+            argList += ", " + cmpDefault;
         }
     }
 
@@ -248,6 +267,9 @@
             argList += ", NULL";        // default delimiter = space
         }
     }
+
+    // <vbeclipse>: Format(expression[, format]) 的缺省 format 补在 conv_output 段
+    // (那里 args[0] 装箱后会重建 argList, 在这补会被抹掉), 见 cgen_expr_call_conv_output.inc。
 
     // P14.2.4: DateDiff - VB6 DateDiff(interval, date1, date2[, firstDayOfWeek[, firstWeekOfYear]])
     // RTL: vb6_DateDiff(interval, date1, date2, firstDayOfWeek, firstWeekOfYear)
@@ -273,11 +295,11 @@
     // RTL: Replace(string, find, replacement, start, count, compare)
     if (callee == "vb6_Replace") {
         if (args.size() == 3) {
-            argList += ", 1, -1, 0";
+            argList += ", 1, -1, " + cmpDefault;
         } else if (args.size() == 4) {
-            argList += ", -1, 0";
+            argList += ", -1, " + cmpDefault;
         } else if (args.size() == 5) {
-            argList += ", 0";
+            argList += ", " + cmpDefault;
         }
     }
 
@@ -373,6 +395,16 @@
             argList += "-1";
         }
     }
+    // Fix <vbeclipse> <VBFlexGridDemo>: Clipboard.SetData 二形 data / data, format
+    //   VB 语义 `[format]` 可省, 但 RTL 已扩成 2 参 (format=vbCF* 常量, 0=Bitmap)。
+    //   1 参调用直接补 format=0，与 `vb6_Clipboard_SetData(void*, int32_t)` 对齐。
+    if (callee == "vb6_Clipboard_SetData" && args.size() < 2) {
+        while (args.size() < 2) {
+            args.push_back("0");
+            if (!argList.empty()) argList += ", ";
+            argList += "0";
+        }
+    }
     // Fix 092w: StrConv(Byte数组, vbUnicode) → vb6_StrConvFromByteArray
     // 反向转换: Byte() -> String. 第一实参为已知 Byte 数组变量 (vb6_SafeArray1D*)
     // 时, RTL vb6_StrConv 期望 BSTR 会类型不匹配; 改用返回 BSTR 的 helper.
@@ -409,21 +441,21 @@
     // Fix 034: Builtin RTL functions with Optional params — pad to required C RTL arg count.
     // calleeParams 已对 builtin 标 isOptional, 但 general padding (line 3291+) 被 !calleeIsBuiltin
     // 跳过 (RTL C 函数不接受 _has_ 尾叜). 各函数硬编码补默认值, 默认值取自 VB6 语义.
-    // InStrRev(string1, string2[, start[, compare]]) — start=-1 (从末尾), compare=0 (Binary)
+    // InStrRev(string1, string2[, start[, compare]]) — start=-1 (从末尾), compare=本模块默认
     if (callee == "vb6_InStrRev") {
         if (args.size() == 2) {
-            argList += ", -1, 0";
+            argList += ", -1, " + cmpDefault;
         } else if (args.size() == 3) {
-            argList += ", 0";
+            argList += ", " + cmpDefault;
         }
     }
     // Round(x[, decimals]) — decimals default = 0
     if (callee == "vb6_Round" && args.size() == 1) {
         argList += ", 0";
     }
-    // StrComp(s1, s2[, compare]) — compare default = 0 (Binary)
+    // StrComp(s1, s2[, compare]) — compare 缺省 = 本模块 Option Compare
     if (callee == "vb6_StrComp" && args.size() == 2) {
-        argList += ", 0";
+        argList += ", " + cmpDefault;
     }
     // Shell(pathname[, windowstyle]) — windowstyle default = 2 (vbMinimizedFocus)
     if (callee == "vb6_Shell" && args.size() == 1) {
@@ -444,10 +476,41 @@
     if (callee == "vb6_Randomize" && args.empty()) {
         argList = "0.0";
     }
-    // Fix 041: InStr(start, string1, string2, compare) — C function vb6_InStr takes 3 args
-    // (no compare parameter). Truncate the 4th arg (compare) when present.
-    if (callee == "vb6_InStr" && args.size() > 3) {
-        argList = args[0] + ", " + args[1] + ", " + args[2];
+    // InStr 的 compare 形 (<vbeclipse>, 替换 Fix 041 的"截掉第 4 参"):
+    //   InStr(s1, s2[, compare])            首参是字符串 ⇒ (s1, s2, compare)
+    //   InStr(start, s1, s2[, compare])     首参是数值   ⇒ (start, s1, s2[, compare])
+    // 旧写法把 4 参截成 3 参 ⇒ vbTextCompare 被静默丢掉; 而"字符串优先的三参形"三个实参
+    // 错接到 (start, haystack, needle) 三个槽 ⇒ needle 收到整数 1 → 解引用地址 1 崩溃
+    // (实测 InStr(s, "world", vbTextCompare) 段错误)。带 compare 的一律改发 vb6_InStrC。
+    if (callee == "vb6_InStr") {
+        bool firstIsString = false;
+        if (!node.positional.empty()) {
+            firstIsString = (inferExprType(*node.positional[0]) == Vb6Type::String);
+        }
+        if (args.size() == 4) {
+            callee = "vb6_InStrC";
+            argList = args[0] + ", " + args[1] + ", " + args[2] + ", " + args[3];
+        } else if (args.size() == 3 && firstIsString) {
+            callee = "vb6_InStrC";
+            argList = "1, " + args[0] + ", " + args[1] + ", " + args[2];
+        } else if (optionCompareText_ && (args.size() == 2 || args.size() == 3)) {
+            // 省略 compare ⇒ 缺省取本模块的 Option Compare (上面那段 2 参补 "1, "
+            // 只动 argList 不动 args, 所以这里按 args 重建)。
+            callee = "vb6_InStrC";
+            argList = (args.size() == 2 ? "1, " : "") + args[0] + ", " + args[1]
+                      + (args.size() == 2 ? "" : ", " + args[2]) + ", 1";
+        }
+    }
+    // <vbeclipse>: Filter(array, string[, include[, compare]]) — RTL 签名 4 参, 此前完全没有
+    // padding ⇒ `Filter(a, "x")` 这一 VB6 合法形根本编不过 (C2198; 首参登记成 Variant|Array
+    // 之前 Variant 实参还 C2440)。include 缺省 True (VB6 的 True = -1, RTL 侧按 !=0 归一),
+    // compare 缺省 0 = vbBinaryCompare。
+    if (callee == "vb6_Filter") {
+        if (args.size() == 2) {
+            argList += ", -1, " + cmpDefault;
+        } else if (args.size() == 3) {
+            argList += ", " + cmpDefault;
+        }
     }
 
     // P14.1.4: General Optional parameter padding for user-defined functions

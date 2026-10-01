@@ -1,0 +1,5 @@
+Type=Exe
+Name=OptCmp
+Module=OCMain; oc_main.bas
+Module=OCBinary; oc_binary.bas
+Startup="Sub Main"

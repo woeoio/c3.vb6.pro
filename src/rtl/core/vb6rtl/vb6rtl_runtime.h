@@ -41,6 +41,9 @@ void vb6_Beep(void);
 // P18-C: Option Compare (Text/Binary)
 extern int g_vb6_optionCompareText;  // 0=Binary(default), 1=Text
 int vb6_StrCmp(const wchar_t* a, const wchar_t* b);  // respects Option Compare
+// <vbeclipse>: Option Compare 是**按模块**的编译期属性, 所以 codegen 在 Text 模块里
+// 直接把字符串比较改发到这条恒文本入口 (而不是靠进程唯一的全局去切语义)。
+int vb6_StrCmpT(const wchar_t* a, const wchar_t* b);  // 恒 vbTextCompare 口径
 
 // Fix 048: Missing runtime functions that were generating C4013 warnings
 
@@ -62,6 +65,9 @@ static inline void vb6_DebugPrint(BSTR s) {
 
 // vb6_LoadResData — LoadResData (returns empty Variant, resource loading not supported)
 vb6_VARIANT vb6_LoadResData(int32_t resourceId, int32_t resourceType);
+// Fix <vbeclipse>: LoadResPicture / LoadResString (stub, empty Variant)
+vb6_VARIANT vb6_LoadResPicture(int32_t resourceId, int32_t resourceType);
+vb6_VARIANT vb6_LoadResString(int32_t resourceId);
 
 #ifdef __cplusplus
 }

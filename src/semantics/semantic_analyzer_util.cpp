@@ -720,4 +720,11 @@ bool SemanticAnalyzer::checkProtectedVisibility(const Expr& obj, const std::stri
     return true;
 }
 
+bool SemanticAnalyzer::namesProjectLevel(const std::string& name) const {
+    if (name.empty()) return false;
+    const std::string lk = ifaceLower(name);
+    if (projPublicProcs_.count(lk)) return true;
+    return memberObjCtx_ && projModuleNames_.count(lk);
+}
+
 } // namespace vb6c3

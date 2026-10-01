@@ -25,6 +25,7 @@
 #include "project/frm_parser.hpp"
 #include "backend/asm_proc.hpp"  // ai/vb-asm-extension-spec: Asm 过程降级元数据
 #include <array>
+#include <map>
 #include <string>
 #include <vector>
 #include <sstream>

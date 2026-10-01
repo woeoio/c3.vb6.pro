@@ -14,8 +14,23 @@ Function MakeCircle() As Circle
     Set MakeCircle = t
 End Function
 
+' CC2 的槽: **ByRef 组名形参**。参数表把工程类名折成 Vb6Type::Variant (类名只留在
+' typeRefName), 而定义侧发的是 `vb6_cls_ShapeAct** c` —— 调用点必须传**类指针的地址**。
+' <vbeclipse> 回归: 修 cc_act 时曾把这个槽误当 Variant 槽装箱成 vb6_VARIANT*, ABI 不符,
+' 被调方 c.Move 1 拿 Variant 当类指针解引用 → 段错误 (CC1 之后 rc=139)。
 Sub UseCircle(c As Circle)
     c.Move 1
+End Sub
+
+' CC10 的槽: **真 ByRef Variant 形参** (typeRefName 为空)。同一个类实参走这里**必须**
+' 仍然装箱 —— VB6 语义是非 Variant 实参拷进临时 Variant 再传址; 若也被"修"成直传裸
+' 类指针, 被调方按 vb6_VARIANT 解析它 → 读垃圾。CC9/CC10 这一对是防"过度修复"的夹子。
+Sub UseVariant(ByRef v As Variant)
+    If v Is Nothing Then
+        Debug.Print "CC10:FAIL nothing"
+    Else
+        Debug.Print "CC10:OK type=" & TypeName(v)
+    End If
 End Sub
 
 Sub Main()
@@ -94,6 +109,8 @@ Sub Main()
     Else
         Debug.Print "CC9:FAIL area=" & s.Area() & " side=" & s.Side()
     End If
+
+    UseVariant c
 
     Debug.Print "CC-DONE"
 End Sub

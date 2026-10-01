@@ -430,8 +430,11 @@ double vb6_TimeValue(BSTR timeStr) {
 vb6_SafeArray1D* vb6_ArrayCreate(int32_t count) {
     /* VB6 Array(arglist) helper: creates a Variant SafeArray with count elements.
        Caller (cgen) sets each element directly via VB6_SA_AT. */
-    if (count <= 0) count = 0;
-    vb6_SafeArray1D* arr = vb6_SafeArrayCreate1D(vb6_sa_variant, 0, count > 0 ? count - 1 : 0);
+    // Fix <vbeclipse>: `Array()` 零实参在真 VB6 里是**空数组**（用户实测）：
+    // UBound = -1、LBound = 0 ⇒ `UBound-LBound+1` 读出 0、For Each 零次。
+    // 旧写法把 uBound 夹到 0，于是空数组被当成 1 个元素（多出一个幻影空槽）。
+    if (count < 0) count = 0;
+    vb6_SafeArray1D* arr = vb6_SafeArrayCreate1D(vb6_sa_variant, 0, count - 1);
     return arr;
 }
 

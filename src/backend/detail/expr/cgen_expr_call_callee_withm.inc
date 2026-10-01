@@ -368,23 +368,30 @@
 
     // D6 / C29-9: CommonDialog.Show* → 原生 comdlg32 入口（成员侧打的是小写控件名）。
     // 必须在这里消费掉标记，否则下面的通用 COM 绑定会编成运行期 no-op 的 vb6_ComCall。
+    // Fix <vbeclipse>: With <CommonDialog> 块内 .ShowOpen —— 成员侧打的是 With
+    // 临时变量 (_vb6_with_N，值就是 CD 属性袋 HWND)，不在 knownFormControls_ 里；
+    // 直接以该临时变量为 hwnd 实参收口。
     if (isComMarker_) {
+        bool withTempCd = comObjExpr_.rfind("_vb6_with_", 0) == 0;
         auto itCtrlCd = knownFormControls_.find(comObjExpr_);
-        if (itCtrlCd != knownFormControls_.end() &&
-            itCtrlCd->second == FrmControlType::CommonDialog) {
-            std::string mCd = comMemberName_;
+        if (withTempCd
+            || (itCtrlCd != knownFormControls_.end() &&
+                itCtrlCd->second == FrmControlType::CommonDialog)) {
+            std::string mCd = Symbol::toLower(comMemberName_);
             if (mCd == "showopen" || mCd == "showsave" || mCd == "showcolor"
                 || mCd == "showfont" || mCd == "showprinter" || mCd == "showabout") {
                 isComMarker_ = false;
                 isEarlyBoundCom_ = false;
                 earlyBoundSym_ = nullptr;
-                std::string hwndCd = cIdent(knownFormControlOriginalNames_.count(comObjExpr_)
-                    ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
+                std::string hwndCd = withTempCd
+                    ? comObjExpr_
+                    : cIdent(knownFormControlOriginalNames_.count(comObjExpr_)
+                        ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
                 comObjExpr_.clear();
                 comMemberName_.clear();
                 std::string fnCd = "vb6_CdShow"
                     + std::string(1, (char)::toupper((unsigned char)mCd[4])) + mCd.substr(5);
-                c_.emitLine("{" + fnCd + "((void*)vb6_hwnd_" + hwndCd + ");}"
+                c_.emitLine("{" + fnCd + "((void*)" + hwndCd + ");}"
                             "  /* CommonDialog." + mCd + " (原生 comdlg32) */");
                 lastExpr_ = "0";
                 return;

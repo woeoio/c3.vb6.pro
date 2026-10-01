@@ -251,8 +251,20 @@ std::unique_ptr<SubDecl> Parser::parseSubDecl(AccessLevel access, bool isStatic)
 
     expect(TokenKind::End, DiagnosticID::ParseMismatchedBlock,
            "expected 'End Sub'");
-    expect(TokenKind::Sub, DiagnosticID::ParseMismatchedBlock,
-           "expected 'End Sub'");
+    // Fix <vbeclipse>: 真实世界工程存在块终结符不匹配 (VbEclipse SchemeWinXP.cls:
+    // Property Get 用 End Function 收尾)。宽容消费: 只要 End 后是名字型 token
+    // 就当终结符吃掉并告警, 不让整个类模块解析脱轨。
+    if (!match(TokenKind::Sub)) {
+        if (cur_.kind == TokenKind::Sub || cur_.kind == TokenKind::Function
+            || cur_.kind == TokenKind::Property) {
+            diag_.warn(DiagnosticID::CodeGenUnsupportedFeature, currentLoc(),
+                std::string("块终结符不匹配: 'End ") + cur_.text + "' (期望 'End Sub')");
+            advance();
+        } else {
+            diag_.error(DiagnosticID::ParseMismatchedBlock, currentLoc(),
+                "expected 'End Sub'");
+        }
+    }
 
     auto d = std::make_unique<SubDecl>(loc, access, nameTok.text,
         std::move(params), std::move(body), isStatic);
@@ -288,8 +300,20 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(AccessLevel access, bool
 
     expect(TokenKind::End, DiagnosticID::ParseMismatchedBlock,
            "expected 'End Function'");
-    expect(TokenKind::Function, DiagnosticID::ParseMismatchedBlock,
-           "expected 'End Function'");
+    // Fix <vbeclipse>: 真实世界工程存在块终结符不匹配 (VbEclipse SchemeWinXP.cls:
+    // Property Get 用 End Function 收尾)。宽容消费: 只要 End 后是名字型 token
+    // 就当终结符吃掉并告警, 不让整个类模块解析脱轨。
+    if (!match(TokenKind::Function)) {
+        if (cur_.kind == TokenKind::Sub || cur_.kind == TokenKind::Function
+            || cur_.kind == TokenKind::Property) {
+            diag_.warn(DiagnosticID::CodeGenUnsupportedFeature, currentLoc(),
+                std::string("块终结符不匹配: 'End ") + cur_.text + "' (期望 'End Function')");
+            advance();
+        } else {
+            diag_.error(DiagnosticID::ParseMismatchedBlock, currentLoc(),
+                "expected 'End Function'");
+        }
+    }
 
     auto d = std::make_unique<FunctionDecl>(loc, access, nameTok.text,
         std::move(params), std::move(returnType), std::move(body), isStatic);
@@ -338,8 +362,20 @@ std::unique_ptr<PropertyDecl> Parser::parsePropertyDecl(AccessLevel access) {
 
     expect(TokenKind::End, DiagnosticID::ParseMismatchedBlock,
            "expected 'End Property'");
-    expect(TokenKind::Property, DiagnosticID::ParseMismatchedBlock,
-           "expected 'End Property'");
+    // Fix <vbeclipse>: 真实世界工程存在块终结符不匹配 (VbEclipse SchemeWinXP.cls:
+    // Property Get 用 End Function 收尾)。宽容消费: 只要 End 后是名字型 token
+    // 就当终结符吃掉并告警, 不让整个类模块解析脱轨。
+    if (!match(TokenKind::Property)) {
+        if (cur_.kind == TokenKind::Sub || cur_.kind == TokenKind::Function
+            || cur_.kind == TokenKind::Property) {
+            diag_.warn(DiagnosticID::CodeGenUnsupportedFeature, currentLoc(),
+                std::string("块终结符不匹配: 'End ") + cur_.text + "' (期望 'End Property')");
+            advance();
+        } else {
+            diag_.error(DiagnosticID::ParseMismatchedBlock, currentLoc(),
+                "expected 'End Property'");
+        }
+    }
 
     auto d = std::make_unique<PropertyDecl>(loc, access, propKind,
         nameTok.text, std::move(params), std::move(returnType), std::move(body));

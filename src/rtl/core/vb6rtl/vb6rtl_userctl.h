@@ -42,6 +42,10 @@ extern int32_t vb6_UserControl_ScaleWidth;   // 用户坐标宽度
 extern int32_t vb6_UserControl_ScaleHeight;  // 用户坐标高度
 extern int32_t vb6_UserControl_ScaleMode;    // 1=Twip 3=Pixel
 extern void*   vb6_UserControl_hDC;          // 绘制 DC (Windowless: 容器客户区 DC)
+// Fix <vbeclipse>: UserControl.HasDC (ucTab.ctl:89 `HasDC = UserControl.HasDC`).
+// VB6 语义 = 当前是否有可用绘制 DC; 生成代码按**变量**读 (vb6_ret_HasDC = ...),
+// 故用宏而不是函数, 与 hDC 的赋值点天然同步 (无需在 uc_host.c 各赋值处维护).
+#define vb6_UserControl_HasDC (vb6_UserControl_hDC ? 1 : 0)
 extern int32_t vb6_UserControl_ContainerHwnd;// 容器 HWND
 extern int16_t vb6_UserControl_Enabled;
 extern int32_t vb6_UserControl_MousePointer;
@@ -56,6 +60,7 @@ extern int32_t vb6_UserControl_BackColor;      // OLE_COLOR
 extern int32_t vb6_UserControl_ForeColor;      // OLE_COLOR
 extern int16_t vb6_UserControl_RightToLeft;    // TriState: 0/1/-1
 extern void*   vb6_UserControl_ParentControls; // Controls 集合 (For Each)
+extern void*   vb6_UserControl_Controls;       // Fix <vbeclipse>: UserControl.Controls (未建模, NULL)
 // Fix 109: Font 是**对象指针** (生成代码把它作为 vb6_ComIface_Font* 实参传递,
 // 同时对它做 `.成员` 访问 —— 成员访问由生成端改写为 '->', 见 CodeEmitter::emitLine).
 extern vb6_ComIface_Font* vb6_UserControl_Font;
@@ -63,6 +68,11 @@ struct vb6_UserControl_Ambient_Type { vb6_ComIface_Font* Font; };
 extern struct vb6_UserControl_Ambient_Type vb6_UserControl_Ambient;
 
 void vb6_UserControl_Refresh(void);
+// Fix <vbeclipse>: `UserControl.Line (x1,y1)-(x2,y2), [color], [mode]`
+// (ucTab.ctl:231-241). 生成端把 `-` 连写的坐标对拍平为 5 个固定实参, 末参
+// `, B` / `, BF` 模式常量按 Fix 102 口径原样追加 → 需变参承接 (5 参与 6 参
+// 两种形态在源码里都存在). 定义见 vb6rtl_com.c (no-op, 重绘路径负责最终成像).
+void vb6_UserControl_Line(double x1, double y1, double x2, double y2, int32_t color, ...);
 // Fix 110z: UserControl.Size width, height — 设置控件尺寸 (单位同 ScaleMode).
 // Charts 2020 LabelPlus.ctl:1371 `UserControl.Size (lWidth + 1) * ..., ...`
 // 生成 vb6_UserControl_Size(w, h), 此前无声明 → C2065/C2064.

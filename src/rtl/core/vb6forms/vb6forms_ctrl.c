@@ -61,6 +61,21 @@ void vb6_SetCheckValue(void* hwnd, int value) {
     SendMessageW((HWND)hwnd, BM_SETCHECK, (WPARAM)value, 0);
 }
 
+// 账 #128-b: OptionButton 的 Value 在 VB6 是 **Boolean**，而 CheckBox 的是 **三态 Integer**
+// (0/1/2) —— 两边原先共用上面那一对。共用不能翻类型：把 getter 改成答 -1 会把 CheckBox 的
+// 2(灰) 那档吃掉，把 setter 改成"非 0 就 -1"更糟 —— **BM_SETCHECK 只认 0/1/2**，
+// 递 -1 进去按钮状态直接坏掉。所以这里单开一对：读把 BST_CHECKED 映射成 VB6 的 True(-1)，
+// 写把任意非 0 折回 BST_CHECKED(1)。
+int vb6_GetOptionValue(void* hwnd) {
+    if (!hwnd) return 0;
+    return (SendMessageW((HWND)hwnd, BM_GETCHECK, 0, 0) == BST_CHECKED) ? -1 : 0;
+}
+
+void vb6_SetOptionValue(void* hwnd, int value) {
+    if (!hwnd) return;
+    SendMessageW((HWND)hwnd, BM_SETCHECK, (WPARAM)(value ? BST_CHECKED : BST_UNCHECKED), 0);
+}
+
 int vb6_GetControlVisible(void* hwnd) {
     if (!hwnd) return 0;
     return IsWindowVisible((HWND)hwnd) ? -1 : 0;  // VB6: True=-1
@@ -79,6 +94,25 @@ int vb6_GetControlEnabled(void* hwnd) {
 void vb6_SetControlEnabled(void* hwnd, int enabled) {
     if (!hwnd) return;
     EnableWindow((HWND)hwnd, enabled ? TRUE : FALSE);
+}
+
+// C29-SL-l（账 #143）：VB6 的 `控件.SetFocus`。原生就一句 SetFocus(hwnd) —— 它动的是**本线程
+// 输入队列里的焦点**，与窗口可见/激活无关，所以无头跑里照样有效（C29-SL-g 的 SimStdEvent
+// kind=4 走的就是这一句，实测会发出 WM_SETFOCUS 并点亮控件自己的 _GotFocus）。
+// 拿不到焦点的那几种（控件被禁用、窗口不属于本线程）原生就是回 NULL 什么都不做，
+// 本项目**不伪造、不重试** —— 真 VB6 在那里是 raise 一个错误号，而我们还没有运行期错误面。
+void vb6_SetControlFocus(void* hwnd) {
+    if (!hwnd) return;
+    SetFocus((HWND)hwnd);
+}
+
+/* 账 #171（C29-FS-h）：单选钮的 `Click` 只在「这一枚真被选中」时才算数。见 vb6forms_prop.h 的注释。
+   非单选钮一律放行 —— 这一处是那条口径的**唯一**落点，发码侧只对 OptionButton 的 arm 调它。 */
+int vb6_RadioClickCounts(void* hwndFrom) {
+    HWND h = (HWND)hwndFrom;
+    if (!h || !IsWindow(h)) return 1;
+    if ((GetWindowLongW(h, GWL_STYLE) & BS_TYPEMASK) != BS_AUTORADIOBUTTON) return 1;
+    return (SendMessageW(h, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
 }
 // Position/size properties use twips on both reads and writes.
 // Codegen calls these getters directly without pixel-to-twip conversion.
@@ -149,6 +183,31 @@ void vb6_SetControlHeight(void* hwnd, int height) {
     SetWindowPos((HWND)hwnd, NULL, 0, 0, rc.right - rc.left, vb6_TwipToY(height), SWP_NOMOVE | SWP_NOZORDER);
 }
 
+// Fix 162a-extlist: VB6 `obj.Move Left[, Top[, Width[, Height]]]` —— 语言级方法
+// (Form/控件通用), 之前落 vb6_ComGetObjectProp(hwnd, L"Move") 必失败, 导致
+// Form_Resize 布局全废 (extlist 的 ListView 停在设计宽, 只有 5 列可见)。
+// 单位 twips (与 Left/Top/Width/Height 属性一致); mask 位 1=Left 2=Top
+// 4=Width 8=Height, 未给的参数保持当前值。子控件用父客户区坐标,
+// 顶层窗口 (Form) 用屏幕坐标 —— 与对应属性 setter 的坐标空间一致。
+void vb6_ControlMove(void* hwnd, double L, double T, double W, double H, int mask) {
+    HWND hW = (HWND)hwnd;
+    if (!hW || !IsWindow(hW)) return;
+    BOOL child = (GetWindowLongW(hW, GWL_STYLE) & WS_CHILD) != 0;
+    RECT rc;
+    GetWindowRect(hW, &rc);
+    if (child) {
+        POINT p0 = { rc.left, rc.top }, p1 = { rc.right, rc.bottom };
+        ScreenToClient(GetParent(hW), &p0);
+        ScreenToClient(GetParent(hW), &p1);
+        rc.left = p0.x; rc.top = p0.y; rc.right = p1.x; rc.bottom = p1.y;
+    }
+    int x = (mask & 1) ? vb6_TwipToX((int)(L + (L >= 0 ? 0.5 : -0.5))) : rc.left;
+    int y = (mask & 2) ? vb6_TwipToY((int)(T + (T >= 0 ? 0.5 : -0.5))) : rc.top;
+    int w = (mask & 4) ? vb6_TwipToX((int)(W + (W >= 0 ? 0.5 : -0.5))) : rc.right - rc.left;
+    int h = (mask & 8) ? vb6_TwipToY((int)(H + (H >= 0 ? 0.5 : -0.5))) : rc.bottom - rc.top;
+    SetWindowPos(hW, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 // P11.8: hWnd attribute (read-only)
 void* vb6_GetControlHwnd(void* hwnd) {
     return hwnd;  // Already the HWND
@@ -214,8 +273,48 @@ void vb6_SetControlFontName(void* hwnd, void* bstrName) {
     vb6_SetControlFontFromLogFont(hwnd, &lf);
 }
 
+// C29-SL-q（账 #154）: 设计期那一条走这一支 —— `.frm` 里的字体名在生成码里是一枚 C 宽字符字面量，
+// 不是一枚 BSTR，而上面那支要 `SysStringLen` 量长度，喂字面量会把串尾之后的内存算进去。
+// （不改用 `vb6_BSTR_FromStr` 现造一枚：那要么在发码里漏一枚串 —— 本仓刚为同类临时串开过 #119。）
+void vb6_SetControlFontNameW(void* hwnd, const wchar_t* name) {
+    LOGFONTW lf;
+    int len;
+    if (!hwnd || !name || !name[0]) return;
+    if (!vb6_GetControlLogFont(hwnd, &lf)) {
+        memset(&lf, 0, sizeof(lf));
+        lf.lfHeight = -13;  // Default ~10pt
+        lf.lfCharSet = DEFAULT_CHARSET;
+        lf.lfOutPrecision = OUT_DEFAULT_PRECIS;
+        lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
+        lf.lfQuality = DEFAULT_QUALITY;
+        lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
+    }
+    len = lstrlenW(name);
+    if (len > LF_FACESIZE - 1) len = LF_FACESIZE - 1;
+    memcpy(lf.lfFaceName, name, len * sizeof(WCHAR));
+    lf.lfFaceName[len] = L'\0';
+    vb6_SetControlFontFromLogFont(hwnd, &lf);
+}
+
+// C29-SL-p（`ai/内置控件/Slider 控件（滑杆）.md` §4 那条例子量出来的，探针 .build/slfont）:
+// 点号 → 像素是**有损**的一步（96 DPI 下 1pt = 1.3333px，字体高度只能取整），所以旧写法
+// 从窗口反算会把请求值量化掉：写 8 读回 8.25、写 10 读回 9.75、写 14 读回 14.25。
+// 窗口表示不了的那一半按**请求值自存**（与 Slider 的 TickFrequency / TextPosition 同一族口径）。
+// Set 旗标不能省：`SetPropW(hwnd, name, 0)` 等于删属性（账 #107 踩过），而 0.0f 的位就是 0 ——
+// 少了这一枚，写 0 那一档会静默变回"没设过"。
+static const wchar_t kFontPtProp[]    = L"VB6_FontPt";
+static const wchar_t kFontPtSetProp[] = L"VB6_FontPtSet";
+
 float vb6_GetControlFontSize(void* hwnd) {
     LOGFONTW lf;
+    float pt;
+    DWORD bits;
+    if (!hwnd) return 0.0f;
+    if (GetPropW((HWND)hwnd, kFontPtSetProp)) {
+        bits = (DWORD)(DWORD_PTR)GetPropW((HWND)hwnd, kFontPtProp);
+        memcpy(&pt, &bits, sizeof(pt));
+        return pt;
+    }
     if (!vb6_GetControlLogFont(hwnd, &lf)) return 0.0f;
     HDC hdc = GetDC(NULL);
     int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
@@ -223,6 +322,15 @@ float vb6_GetControlFontSize(void* hwnd) {
     if (dpi <= 0) dpi = 96;
     int heightPx = lf.lfHeight < 0 ? -lf.lfHeight : lf.lfHeight;
     return (float)heightPx * 72.0f / (float)dpi;
+}
+
+// C29-SL-p 的判据证人（**不是 VB6 属性**，与 TickPresent / TravelIsVert / ToolTipRegistered 同族）:
+// 窗口现在真在用的字体像素高度。有了它，字号那条判据才是两头的 —— 自存的数读回来当然还是自存的数，
+// 只有问窗口才知道这次 WM_SETFONT 到底发没发出去。
+int vb6_ControlFontPixelHeight(void* hwnd) {
+    LOGFONTW lf;
+    if (!vb6_GetControlLogFont(hwnd, &lf)) return 0;
+    return lf.lfHeight < 0 ? -lf.lfHeight : lf.lfHeight;
 }
 
 void vb6_SetControlFontSize(void* hwnd, float sizePt) {
@@ -243,6 +351,12 @@ void vb6_SetControlFontSize(void* hwnd, float sizePt) {
     // Convert points to pixel height (negative for character height)
     lf.lfHeight = -(int)(sizePt * (float)dpi / 72.0f + 0.5f);
     vb6_SetControlFontFromLogFont(hwnd, &lf);
+    {
+        DWORD bits;
+        memcpy(&bits, &sizePt, sizeof(bits));
+        SetPropW((HWND)hwnd, kFontPtProp, (HANDLE)(DWORD_PTR)bits);
+        SetPropW((HWND)hwnd, kFontPtSetProp, (HANDLE)1);
+    }
 }
 
 int vb6_GetControlFontBold(void* hwnd) {
@@ -414,6 +528,45 @@ LRESULT vb6_ApplyCtlColorStatic(HDC hdc, HWND child) {
 }
 
 // ============================================================
+// Fix 162f-extlist: WM_CTLCOLORBTN 统一答复 (按钮类子控件的背景刷)
+// ------------------------------------------------------------
+// Button 类 (BUTTON 窗口类) 通过 WM_CTLCOLORBTN 向**父窗**要绘制用刷子。分两种:
+//   (1) CheckBox / OptionButton: VB6 语义 = **透明**。之前返回 HOLLOW_BRUSH 即可,
+//       因为它们的文字直接坐在父窗底色上, 用空刷 → 不画背景 → 透出父窗灰底。
+//   (2) Frame (BS_GROUPBOX): 经典 (关主题后) groupbox 的**标题**由 BUTTON 绘制器
+//       先 `FillRect(标题矩形, 该刷子)` 再 `DrawText` —— 返回 HOLLOW_BRUSH 会让
+//       这块矩形**什么都不填**, 于是露出 groupbox 自身窗口的底色 (经典 BUTTON 是
+//       白), 表现为标题后面一条**白色填充块** (用户实测)。VB6 里 Frame 标题是坐在
+//       父窗 BackColor 上的 ⇒ 这里必须返回**父窗底色的实心刷** (通常 240 灰)。
+// 判据: 子控件的 GWL_STYLE & 0xF == BS_GROUPBOX(0x7)。其余 Button 类仍走空刷。
+// 实心刷缓存在子控件窗口属性上 (按控件一份, 值变了由 vb6_SetControlBackColor 失效)。
+// ============================================================
+LRESULT vb6_CtlColorBtnBrush(HWND child, HWND parent) {
+    LONG_PTR st = child ? GetWindowLongPtrW(child, GWL_STYLE) : 0;
+    if ((st & 0x0000000FL) != 0x7L) {
+        // 非 groupbox: CheckBox/OptionButton/命令按钮 → 透明语义 (空刷)。
+        return (LRESULT)GetStockObject(HOLLOW_BRUSH);
+    }
+    // groupbox: 标题底 = 父窗 BackColor (未显式设色时回落 BTNFACE = 240 灰)。
+    COLORREF bg = parent ? (COLORREF)vb6_GetControlBackColor((void*)parent)
+                         : GetSysColor(COLOR_BTNFACE);
+    if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
+    HBRUSH br = (HBRUSH)GetPropW(child, L"VB6_GbCapBrush");
+    if (br) {
+        // 缓存命中: 若父窗底色已变, 需要重建 (色值存在 VB6_GbCapColor 上)。
+        COLORREF cached = (COLORREF)(INT_PTR)GetPropW(child, L"VB6_GbCapColor");
+        if (cached == bg) return (LRESULT)br;
+        DeleteObject(br);
+        RemovePropW(child, L"VB6_GbCapBrush");
+    }
+    br = CreateSolidBrush(bg);
+    if (!br) return (LRESULT)GetStockObject(HOLLOW_BRUSH);
+    SetPropW(child, L"VB6_GbCapBrush", (HANDLE)br);
+    SetPropW(child, L"VB6_GbCapColor", (HANDLE)(INT_PTR)bg);
+    return (LRESULT)br;
+}
+
+// ============================================================
 // Fix 185: 控件级绘制入口 PictureBox.Print / PictureBox.Cls
 // ============================================================
 //
@@ -574,6 +727,8 @@ VB6_CD_INT(Min,         L"VB6_Cd_Min",         0)
 VB6_CD_INT(Max,         L"VB6_Cd_Max",         0)
 VB6_CD_INT(Copies,      L"VB6_Cd_Copies",      1)
 VB6_CD_INT(FontSize,    L"VB6_Cd_FontSize",    0)
+// Fix <vbeclipse>: FilterIndex (1 基, 默认 1) —— OPENFILENAME.nFilterIndex 直通
+VB6_CD_INT(FilterIndex, L"VB6_Cd_FilterIndex", 1)
 
 #undef VB6_CD_STR
 #undef VB6_CD_INT
@@ -744,6 +899,7 @@ int vb6_CdShowFile(void* hwnd, int saveAs) {
     ofn.lpstrTitle      = title[0] ? title : (saveAs ? L"Save As" : L"Open");
     ofn.Flags = (DWORD)vb6_CdGetFlags(hwnd) | OFN_EXPLORER | OFN_HIDEREADONLY;
     if (saveAs) ofn.Flags |= OFN_OVERWRITEPROMPT;
+    ofn.nFilterIndex = (DWORD)vb6_CdGetFilterIndex(hwnd);
 
     HANDLE probe = vb6_CdProbeArm();
     int shown = pFn(&ofn);

@@ -37,6 +37,20 @@
         const std::string udtFldC = udtFieldCTypeOfTarget(node.target.get());
         if (udtFldC.rfind("vb6_cls_", 0) != 0) {
             targetIsVariant = (inferUdtFieldVb6Type(node.target.get()) == Vb6Type::Variant);
+            // <vbeclipse> <VBFlexGridDemo>: 判据看 mapTypeRef 那份**具体 C 类型**,
+            // 与 arg_emit / arg_variant 三条 wrap guard 同一份权威 —— VTableHandle.bas
+            // `Set VTableIPAOData.OriginalIOleIPAO = This` 一条, 字段声明
+            // `As OLEGuids.IOleInPlaceActiveObject`, TLB 命中让 inferUdtFieldVb6Type
+            // 兜底成 Variant → 装箱 → 字段 typed ptr 收 VARIANT → C2440。
+            // 但"As Variant"字段本身 resolveTypeName 也给 vb6_VARIANT, 装箱是必须的,
+            // 不能一并挡掉。所以判据不能只看 typeRefName 是否非空, 要问那份 C 类型。
+            if (targetIsVariant) {
+                const std::string fldTRN = udtFieldTypeRefNameOfTarget(node.target.get());
+                if (!fldTRN.empty()
+                    && cTypeForDeclaredTypeName(fldTRN) != "vb6_VARIANT") {
+                    targetIsVariant = false;
+                }
+            }
         }
     }
 
@@ -58,7 +72,40 @@
         }
         if (valueIsVariant && !targetIsVariant
             && value.find("vb6_VariantToObjectVal") == std::string::npos) {
-            value = "vb6_VariantToObjectVal(" + value + ")";
+            // Fix <vbeclipse> rev5: LHS 是**工程类**变量 (vb6_cls_X*) 时, 光取
+            // pdispVal 不够 —— Variant 里装的是 vb6_ComObject 包装器, 必须再经
+            // vb6_ComObject_GetInstance 剥出裸实例, 否则把包装器当类指针用。
+            // 实测 play78.exe: `Set l_Perspective = m_Perspectives.Item(PerspectiveId)`
+            // (ucPerspective.ctl ShowPerspective) 生成 `l_Perspective =
+            // vb6_VariantToObjectVal(vb6_List_Item(...))`, 随后
+            // `l_Perspective.Folders.Contains(...)` 崩在 vb6_List_Contains+0xB6,
+            // vb6_UBound 打出 `sig=0x640045 et=7602281` —— 那是 BSTR "Ed..." 的
+            // 字节, 因为 m_Folders 槽其实读到的是前一个成员 (m_PerspectiveId) 的 BSTR。
+            // 判据 = "LHS 这个槽收不收工程类实例指针", 两个来源:
+            //   ① knownClassVars_ —— 局部/模块级/形参的工程类变量 (含 `Dim x As C`)
+            //   ② currentReturnCType_ —— `Property Get Foo() As C` 里的 `Set Foo = ...`,
+            //      LHS 是 vb6_ret_Foo, **不在**任何变量表里 (实测 ucPerspective.ctl
+            //      `Property Get ActivePerspective() As Perspective` 的
+            //      `Set ActivePerspective = Perspectives.Item(...)` 就是这一型:
+            //      未剥壳 → ActivePerspective 返回包装器 → ShowPerspective 里
+            //      `l_Perspective.Folders` 读垃圾 → "No active perspective!" 模态框)
+            // 与 cgen_base_type.cpp 的 deliverToClassSlot 同一口径 (那边已经在剥)。
+            // void* (Object) 目标维持原样: 那是真 IDispatch 语义, 不该剥。
+            std::string setLhs = target;
+            if (setLhs.rfind("me->", 0) == 0) setLhs = setLhs.substr(4);
+            std::string setLhsLower = setLhs;
+            std::transform(setLhsLower.begin(), setLhsLower.end(), setLhsLower.begin(), ::tolower);
+            auto itCls = knownClassVars_.find(setLhsLower);
+            if (itCls != knownClassVars_.end() && !itCls->second.empty()) {
+                value = "(vb6_cls_" + cIdent(itCls->second) + "*)vb6_ComObject_GetInstance("
+                        "vb6_VariantToObjectVal(" + value + "))";
+            } else if (!currentReturnVar_.empty() && target == currentReturnVar_
+                       && currentReturnCType_.compare(0, 8, "vb6_cls_") == 0) {
+                value = "(" + currentReturnCType_ + ")vb6_ComObject_GetInstance("
+                        "vb6_VariantToObjectVal(" + value + "))";
+            } else {
+                value = "vb6_VariantToObjectVal(" + value + ")";
+            }
         }
     }
 
@@ -72,8 +119,10 @@
     // Fix 090af: targetIsVariant 判定上移共用 (含 Variant 数组元素 LHS).
     if (targetIsVariant
         && value.find("vb6_VariantFromValue(") != 0
-        && value.find("vb6_VariantFromComResult(") != 0) {
-        value = "vb6_VariantFromValue(" + value + ")";
+        && value.find("vb6_VariantFromComResult(") != 0
+        && value.find("vb6_VariantBool(") != 0) {
+        // 装箱走 boxToVariant 这一权威 (按 VB 类型选档; 未知才让 _Generic 猜)
+        value = boxToVariant(node.value.get(), value);
     }
 
     // Fix 098: Set 左值是函数调用表达式 → 非左值 (C2106), 且多半缺参 (C2198).
@@ -195,7 +244,21 @@
     }
 
     if (!fix179bUnwrapped) {
-        c_.emitLine(target + " = " + value + ";  /* Set */");
+        // Fix <vbeclipse> rev16: `Set <Variant 数组元素> = x` 走"接管"语义。
+        // 原先只发裸 `slot = value` —— 既不释放槽里旧值 (漏), 又是 identity 浅拷贝
+        // (与借用方共用同一只 BSTR / 同一个 Dispatch, 借用方一 Clear 槽即悬垂)。
+        // 对照同一函数的非 Set 路径: 它至少发了 vb6_VariantClear + 浅拷贝;
+        // 本条把两条路径并到 vb6_VariantAssign (Clear + 深拷贝 / AddRef)。
+        // 实测 List.cls: `Set m_Items(i) = m_Items(i - 1)` 之后
+        // `Set m_Items(i - 1) = Nothing` 会把两只槽共用的那只 BSTR 放掉。
+        bool targetIsVariantArraySlot =
+            (target.compare(0, 7, "VB6_SA_") == 0
+             && target.find("(vb6_VARIANT,") != std::string::npos);
+        if (targetIsVariantArraySlot) {
+            c_.emitLine("vb6_VariantAssign(&" + target + ", " + value + ");  /* Set */");
+        } else {
+            c_.emitLine(target + " = " + value + ";  /* Set */");
+        }
     }
 
     // P6.5: WithEvents变量事件连接

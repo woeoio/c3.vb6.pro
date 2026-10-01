@@ -52,6 +52,11 @@ void vb6_ReleaseObject(void** objPtr);
 // "对象不支持此属性或方法" —— 后期绑定与 Release 路径都先用它把这类挡掉。
 int32_t vb6_ComIsDispatchable(const void* disp);
 
+// Fix <vbeclipse>: vb6_ReleaseObject 的反向操作 (AddRef), 判据相同 (vb6_ComIsDispatchable)。
+// 供 vb6rtl_variant.h 的 vb6_VariantObject / vb6rtl.c 的 vb6_VariantCopy 使用 ——
+// Variant 既然在 Clear 时 Release, 构造/拷贝时就必须自己持有一份引用。
+void vb6_ComAddRefDispatch(void* p);
+
 // COM后期绑定 (P6.2)
 // 返回VARIANT* (Windows VARIANT), 调用方需vb6_ComVarClear释放
 void* vb6_ComCall(void* disp, const wchar_t* methodName,

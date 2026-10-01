@@ -11,6 +11,7 @@
 #include <windows.h>
 #include <shellapi.h>  // CommandLineToArgvW
 #include <dbghelp.h>
+#include <crtdbg.h>
 #include <cstdio>
 #include <cstdlib>
 
@@ -71,6 +72,20 @@ void installCrashTraceIfRequested() {
     char buf[8] = {0};
     if (GetEnvironmentVariableA("C3_CRASH_TRACE", buf, sizeof(buf)) > 0 && buf[0] != '0') {
         SetUnhandledExceptionFilter(c3CrashHandler);
+    }
+}
+
+// C3 是**控制台**编译器: 它出错的方式只能是一条诊断 + 退出码, 不能是一个等着人点的前台模态框。
+// 调试版 CRT 的默认行为恰好相反 —— assert/invalid-parameter/abort 先弹
+// 「Microsoft Visual C++ Runtime Library / Debug Error!」再退出, 会把调用方(测试夹具、IDE、
+// 自动化代理)的整个会话卡住, 而诊断信息一条也拿不到 (账 #116 的现场就是这样卡住的)。
+// 这里把三类报告全部改道 stderr, 并去掉 abort() 的那条消息框。Release 构建里没有这些符号,
+// 故整块包在 _DEBUG 下。
+void silenceDebugCrtDialogs() {
+    const int types[] = {_CRT_ASSERT, _CRT_ERROR, _CRT_WARN};
+    for (int t : types) {
+        _CrtSetReportMode(t, _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(t, _CRTDBG_FILE_STDERR);
     }
 }
 
@@ -257,6 +272,17 @@ int runCompile(vb6c3::Driver& driver, int argc, char* argv[]) {
         std::cerr << "C3: 这通常意味着某个路径没有经 utf8ToPath() 转换就交给了 std::filesystem。"
                   << std::endl;
         return 1;
+    } catch (const std::exception& e) {
+        // Fix 196 的同一族, 只是抛点是别的 std::exception (账 #116 现场量到: 模块级
+        // `Dim gT As String * 8` 触发 std::terminate -> abort() -> 模态「Debug Error」框)。
+        // 编译器**任何**未接住的异常都必须落成一条能看懂的诊断 + 退出码 1: 静默崩或弹窗
+        // 都会把调用方(测试夹具 / IDE / 自动化代理)的会话卡住。
+        std::cerr << "C3: 编译器内部异常: " << e.what() << std::endl;
+        std::cerr << "C3: 这是编译器缺陷 (ICE), 请把触发它的源码与这一行一起报上来。" << std::endl;
+        return 1;
+    } catch (...) {
+        std::cerr << "C3: 编译器内部异常: (非 std::exception)" << std::endl;
+        return 1;
     }
 }
 
@@ -265,6 +291,9 @@ int runCompile(vb6c3::Driver& driver, int argc, char* argv[]) {
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
     installCrashTraceIfRequested();
+#ifdef _DEBUG
+    silenceDebugCrtDialogs();
+#endif
     installConsoleUtf8(std::cout, STD_OUTPUT_HANDLE);
     installConsoleUtf8(std::cerr, STD_ERROR_HANDLE);
     static ConsoleFlushAtExit consoleFlushAtExit;   // 与进程同寿

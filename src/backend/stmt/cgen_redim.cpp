@@ -145,12 +145,21 @@ void CCodeGen::visit(ReDimStmt& node) {
             std::string assignVal;
             if (isVariantArrayVar(cName)) {
                 callArg = "vb6_VariantToSafeArray1D(" + cName + ")";
-                assignVal = "vb6_VariantFromValue(vb6_SafeArrayReDimPreserve1D(" + callArg + ", " + lBound + ", " + uBound + "))";
+                // 显式传 vb6_sa_variant (Fix rev3): 这是本分支的**权威**类型 ——
+                // 不传就得靠运行时猜, 而猜错的后果是槽位步长错位(见 else 支注释)。
+                assignVal = "vb6_VariantFromValue(vb6_SafeArrayReDimPreserve1D_T(vb6_sa_variant, " + callArg + ", " + lBound + ", " + uBound + "))";
             } else if (isUdtArray) {
                 // Bug4-Fix Udt Preserve: 传入 UDT 元素尺寸, 避免 NULL 初值回落 4 字节导致越界
                 assignVal = "vb6_SafeArrayReDimPreserve1D_Udt((int32_t)sizeof(" + udtCType + "), " + callArg + ", " + lBound + ", " + uBound + ")";
             } else {
-                assignVal = "vb6_SafeArrayReDimPreserve1D(" + callArg + ", " + lBound + ", " + uBound + ")";
+                // Fix <vbeclipse> rev3: **必须把 saElemType 传下去**。旧的
+                // 三参入口拿不到元素类型, 只能按 variant 兜底 —— 于是
+                // `Dim m_Keys() As String` 首次 ReDim 按 16/24 字节步长分配,
+                // 而 VB6_SA_AT(BSTR,…) 按 4 字节步进, 槽里压着别的 BSTR,
+                // 销毁时再被当 bstrVal 二次 free (实测 play78.exe 的 List.Contains)。
+                // saElemType 来自 mapSaElemType(elemType), 与非 preserve 分支
+                // (下方 vb6_SafeArrayReDim1D(saElemType, …)) 同一口径。
+                assignVal = "vb6_SafeArrayReDimPreserve1D_T(" + saElemType + ", " + callArg + ", " + lBound + ", " + uBound + ")";
             }
             c_.emitLine(cName + " = " + assignVal + ";");
         } else {
@@ -314,7 +323,11 @@ void CCodeGen::emitReDimComplexTarget(ReDimStmt& node) {
                 c_.emitLine(cName + " = vb6_SafeArrayReDimPreserve1D_Udt((int32_t)sizeof(" + udtCType + "), " + cName + ", "
                           + lBound + ", " + uBound + ");");
             } else {
-                c_.emitLine(cName + " = vb6_SafeArrayReDimPreserve1D(" + cName + ", "
+                // Fix <vbeclipse> rev3: 与下方非 preserve 分支 / visit(ReDimStmt&) 的
+                // 1D 路径**同一口径** —— 元素类型由 codegen 权威给出 (mapSaElemType),
+                // 不让运行时回落 vb6_sa_variant 猜 (猜错 = 槽步长错位 + BSTR 二次 free,
+                // 见 vb6rtl_array.c 里 ReDimPreserve1D_T 的注释)。
+                c_.emitLine(cName + " = vb6_SafeArrayReDimPreserve1D_T(" + saElemType + ", " + cName + ", "
                           + lBound + ", " + uBound + ");");
             }
         } else {

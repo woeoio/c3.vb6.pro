@@ -19,7 +19,17 @@
             // 否则 consuming 侧 knownObjectVars_ 为空 → 生成 void* 上的 .member → C2224.
             else if (sym->type == Vb6Type::Object) {
                 if (clsSym && clsSym->kind == SymbolKind::ComClass) {
-                    knownTypedComVars_[varLower] = clsSym;
+                    // Fix <vbeclipse>-2: 本工程有同名类模块 ⇒ 该外部变量其实是工程类实例
+                    // (VB6: 工程内定义优先; 类型库自动加载注进来的内建 coclass
+                    // isExternal=false). 走原生 knownClassVars_, 否则把原生
+                    // vb6_cls_<Name>* 当 IDispatch 解 vtable → 0xC0000005.
+                    const std::string projClsXm = projectClassNameOf(sym->variableTypeName);
+                    if (!projClsXm.empty()) {
+                        knownClassVars_[varLower] = projClsXm;
+                        if (sym->isNewVar) moduleNewVars_[varLower] = cIdent(projClsXm);
+                    } else {
+                        knownTypedComVars_[varLower] = clsSym;
+                    }
                 } else if (clsSym && clsSym->kind == SymbolKind::Class && clsSym->isInterface) {
                     knownIfaceVars_[varLower] = clsSym->name;
                 } else {

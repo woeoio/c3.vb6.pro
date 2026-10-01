@@ -38,8 +38,44 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
     buildMemberAccessTable();
 
     analyzers_.clear();
+    // <vbeclipse>: 先把"工程级已有的名字"收齐，随各分析器下发。两份都必须从**已解析的
+    // AST** 取，不能取符号表那份 getExternalModuleNames()：跨模块注入跑在逐模块分析之后，
+    // 而隐式变量声明发生在分析当刻 —— 晚了就把 Module1.ShowForm2 这种名字挤成局部变量
+    // (实测 ext_show_test C2063、test_modulemethod 恒返 0)。见 namesProjectLevel 注释。
+    std::unordered_set<std::string> projModNames;
+    std::unordered_set<std::string> projPubProcs;
+    for (auto& module : modules_) {
+        if (!module) continue;
+        projModNames.insert(Symbol::toLower(module->moduleName));
+        // 只有标准模块的 Public 过程能被别处按**裸名**点到 (类/窗体的公开成员必须经
+        // 实例名), 所以第二份只收 .bas 模块。
+        if (module->isClassModule || module->isFormModule) continue;
+        for (auto& d : module->declarations) {
+            if (!d) continue;
+            std::string nm;
+            AccessLevel acc = AccessLevel::Private;
+            switch (d->kind) {
+                case ASTNodeKind::SubDecl: {
+                    auto& s = static_cast<SubDecl&>(*d); nm = s.name; acc = s.access; break;
+                }
+                case ASTNodeKind::FunctionDecl: {
+                    auto& s = static_cast<FunctionDecl&>(*d); nm = s.name; acc = s.access; break;
+                }
+                case ASTNodeKind::PropertyDecl: {
+                    auto& s = static_cast<PropertyDecl&>(*d); nm = s.name; acc = s.access; break;
+                }
+                default: continue;
+            }
+            if (acc == AccessLevel::Public && !nm.empty()) {
+                projPubProcs.insert(Symbol::toLower(nm));
+            }
+        }
+    }
     for (auto& module : modules_) {
         auto analyzer = std::make_unique<SemanticAnalyzer>(*diag_, options.verbose);
+        // <vbeclipse>: 工程级名字表 (见上面两份的注释)
+        analyzer->setProjectModuleNames(projModNames);
+        analyzer->setProjectPublicProcNames(projPubProcs);
         // 泛型 (tB, G3): 调用点推断需要模板只读视图 (runGenericsPrepass 已构建)
         analyzer->setGenericRegistry(&genView_);
         // Interface 契约 (tB, B02): stage 2.7 建好的只读登记表

@@ -20,9 +20,25 @@
         }
     }
 
-    // Fix 053: 去重 — 同一类可能因符号表合并而在 moduleScope 中出现多次
+    // Fix <vbeclipse> rev17: coclass 收集必须遍历**全部模块**的符号表, 不能只看
+    // `symTab_` (= 最后一个模块) 的那一张。原先只看单表的理由是"类符号会经跨模块
+    // 注入把副本铺进每个模块" —— 但那条路有两处会漏 (实测 tests/ve_list, 4 个类只
+    // 收进 2 个):
+    //   ① 类名与成员同名时 (View.cls `Property Get View` / PopupMenu.cls
+    //      `Sub PopupMenu`), 成员的 storageKey 与类符号的裸键相同或经名字级回落被
+    //      命中 → driver_crossmod 的注入守卫判"本地已定义"直接 SKIP;
+    //   ② 注入是"先到先得"的单键存放, 一个名字只能活一个符号。
+    // 而**类在自己模块的表里一定是权威副本** (semantic_analyzer 预先 define, 且那里
+    // 带完整 memberNames/publicFieldNames/comClsidStr…)。改成遍历 allSymTabs 后,
+    // 收集与注入彻底解耦, 上面两条漏路都不再影响 coclass 表。
+    // 实测 play78: 修前表里 14 项, 缺 View/PopupMenu (恰是全工程唯一两个有同名成员的
+    // 类) → 运行期 vb6_FindCoClassDesc("View")=NULL → 装箱出 vt=9/pdisp=NULL 空壳
+    // Variant → `Is Nothing` 恒真 → ucFolder.AddView 收到 NULL → av read 0x4。
+    // Fix 053: 去重 — 同一类会在多个模块的表里各出现一次 (自身副本 + 注入副本)
     std::set<std::string> seenCoClassNames;
-    for (auto& [key, sym] : symTab_.moduleScope()->symbols()) {
+    for (auto* st : allSymTabs) {
+    if (!st->moduleScope()) continue;
+    for (auto& [key, sym] : st->moduleScope()->symbols()) {
         if (sym->kind == SymbolKind::Class && !sym->isInterface) {
             // BUG-4 fix: PublicNotCreatable(2) is visible but NOT externally creatable
             // Only MultiUse(5)/SingleUse(3) should have ClassFactory entries
@@ -30,9 +46,33 @@
                 std::string lowerName = Symbol::toLower(sym->name);
                 if (seenCoClassNames.count(lowerName)) continue;  // 已处理, 跳过
                 seenCoClassNames.insert(lowerName);
+                // Fix <vbeclipse> rev17c: rev17 让本收集锚定 allSymTabs 的**首个**命中 ——
+                // 对被消费的类, 首个命中可能是别的模块里的**注入副本** (isExternal)。
+                // 成员面 (memberNames/instancing/implementsNames) 注入时逐字段拷贝过,
+                // 副本读来无碍; 但 driver 的回写三样 (P6.6.6 typelib 的 comDefaultIfaceIid/
+                // comSourceIfaceIid、P6.8 的 comClsidStr) 只落**宿主表**的本地符号
+                // (typelib 扫描跳过 isExternal), dll_sync 又只灌最后一张表 —— 副本上
+                // 永远是空。实测 CoDll: IProbe.cls 排在 CImpl.cls 之前, collect 在
+                // IProbe 的表里先撞见 CImpl 的注入副本 ⇒ defaultIfaceIid=NULL ⇒
+                // dll_entry.c 不发 IID_vb6def_<类> ⇒ cc_dll_identity_single_source 的
+                // 0x7CA8CD81 针与 cc_dll_tlb_matches_table 同时红 (GA vbp#3/#4)。
+                // 口径与上面 rev17 注释一致 ("类在自己模块的表里一定是权威副本"):
+                // 回写类字段一律锚定宿主符号 authCls, 副本只供成员面; 查不到宿主时
+                // 原样回落 sym (单模块工程两者本就是同一只)。
+                SymbolTable* ownTab = nullptr;
+                {
+                    auto itOwnH = classOwningSymTab.find(lowerName);
+                    if (itOwnH != classOwningSymTab.end()) ownTab = itOwnH->second;
+                }
+                Symbol* hostClsSym = nullptr;
+                if (ownTab) {
+                    Symbol* hs = ownTab->lookupModule(sym->name);
+                    if (hs && hs->kind == SymbolKind::Class && !hs->isExternal) hostClsSym = hs;
+                }
+                Symbol& authCls = hostClsSym ? *hostClsSym : *sym;
                 CoClassInfo info;
                 info.moduleName = sym->name;
-                info.clsidStr = sym->comClsidStr.empty() ? generateClsid(progId + "." + sym->name) : sym->comClsidStr;  // P6.8: 优先使用VBP指定的CLSID
+                info.clsidStr = authCls.comClsidStr.empty() ? generateClsid(progId + "." + sym->name) : authCls.comClsidStr;  // P6.8: 优先使用VBP指定的CLSID
                 info.progId = progId + "." + sym->name;
 
                 // ai/022 B13b: 身份从唯一出口 coclassIds_ 取（026 三节"不可让步" + D47"不许
@@ -68,10 +108,8 @@
                 // 使用类的memberNames查找Public方法符号
                 // (不能按前缀"ClassName_"搜索, 因为单模块工程中方法名是"SetValue"而非"Calc_SetValue")
                 // Fix 016b: 优先搜索该类自身的符号表 (classOwningSymTab), 避免跨类同名碰撞.
-                std::string classNameLower = Symbol::toLower(sym->name);
-                SymbolTable* ownTab = nullptr;
-                auto itOwn = classOwningSymTab.find(classNameLower);
-                if (itOwn != classOwningSymTab.end()) ownTab = itOwn->second;
+                // rev17c: ownTab/hostClsSym 已在上面随 authCls 一起锚定, 这里直接复用.
+                std::string classNameLower = lowerName;
 
                 // Fix 053: 去重 memberNames — Event 和 Sub/Function 可能同名,
                 // memberNames 中会有重复条目, 导致 dispatch 函数被生成两次 (C2084)
@@ -81,8 +119,8 @@
                 // lookupModule 命中内置符号) 会生成 vb6_disp_<cls>_<ev>_invoke 并
                 // extern 引用不存在的 vb6_<cls>_<ev> → LNK2019. 事件不进方法表.
                 std::set<std::string> eventNamesLower;
-                for (const auto& en : sym->eventNames) eventNamesLower.insert(Symbol::toLower(en));
-                for (auto& memberName : sym->memberNames) {
+                for (const auto& en : authCls.eventNames) eventNamesLower.insert(Symbol::toLower(en));
+                for (auto& memberName : authCls.memberNames) {
                     if (!seenMemberNames.insert(Symbol::toLower(memberName)).second) continue;
                     if (eventNamesLower.count(Symbol::toLower(memberName))) continue;
                     // Try Sub/Function: 优先在类自身符号表搜索 (本类方法, 无碰撞)
@@ -139,7 +177,7 @@
                     }
                 }
                 // P12.1: 收集 Implements 接口列表
-                info.implementsNames = sym->implementsNames;
+                info.implementsNames = authCls.implementsNames;
                 // ai/022 B16: 本类是否实现**新式接口** —— 判据与 cgen_iface_vtbl 发码
                 // 时用的那条逐字相同（ivLookupIface 命中：登记表里有、链没断、有槽），
                 // 因为这一位决定 dll_entry.c 要不要引用 vb6_iv_thin_<类> /
@@ -159,28 +197,30 @@
                 // 那份副本的 memberFieldDispids 永远是空的 (实测 cHttpServer 等落到
                 // 防御段 9000+), 而 TypeLib 里是真的连续 dispid, 两边错位会让早绑定
                 // 客户端按 TypeLib 的 dispid 调 Invoke 命中错误表项.
-                Symbol* hostClsSym = ownTab ? ownTab->lookupModule(sym->name) : nullptr;
+                // rev17c: hostClsSym 已随 authCls 在上面锚定 (同一判据: 宿主表 + 本地
+                // Class 符号), dispid 与 IID/CLSID 同源同锚.
                 const Symbol* dispidSym = (hostClsSym && hostClsSym->kind == SymbolKind::Class)
                     ? hostClsSym : sym.get();
-                for (auto& fname : sym->publicFieldNames) {
+                for (auto& fname : authCls.publicFieldNames) {
                     info.publicFields.push_back(fname);
                     auto itFd = dispidSym->memberFieldDispids.find(Symbol::toLower(fname));
                     info.publicFieldDispids.push_back(
                         (itFd != dispidSym->memberFieldDispids.end()) ? itFd->second : 0);
                 }
                 // P6.6.4: 收集事件信息
-                if (!sym->eventNames.empty()) {
-                    info.eventNames = sym->eventNames;
+                if (!authCls.eventNames.empty()) {
+                    info.eventNames = authCls.eventNames;
                     // P6.6.6: 优先使用TypeLib builder回写的IID, 保证与TypeLib中一致
-                    info.sourceIfaceIid = sym->comSourceIfaceIid.empty()
+                    info.sourceIfaceIid = authCls.comSourceIfaceIid.empty()
                         ? generateIid("source:" + progId + "." + sym->name + "Events")
-                        : sym->comSourceIfaceIid;
+                        : authCls.comSourceIfaceIid;
                 }
                 // P6.6.6: 默认接口IID (由driver TypeLib builder回写)
-                if (info.defaultIfaceIid.empty()) info.defaultIfaceIid = sym->comDefaultIfaceIid;
+                if (info.defaultIfaceIid.empty()) info.defaultIfaceIid = authCls.comDefaultIfaceIid;
                 coClasses.push_back(std::move(info));
             }
         }
+    }
     }
 
     if (coClasses.empty()) {
@@ -279,6 +319,18 @@
                 std::string params = "struct " + clsStruct + "*";
                 for (auto& p : methodSym->params) {
                     std::string pType = mapType(p.type);
+                    // <vbeclipse>: 上面 Fix 184 只把**返回类型**的工程类补对了, 形参是
+                    // 同一处毛病: `Sub Wire(ByVal h As DemoShape)` 的 p.type 是 Variant
+                    // (类名在符号表里就丢了), mapType 只能给 vb6_VARIANT, 于是本文件的
+                    // extern 与类模块发的定义 (vb6_cls_DemoShape*) ABI 不符; 调用点照着
+                    // extern 那份把类指针装箱成 VARIANT → C2440 (实测 cc_demo/itf_via/
+                    // cls_inh/modulemethod 一系)。判定和调用点共用 cParamClassPtrType
+                    // 这一处权威（它内部就是 mapTypeRef，不是第二份表），并同 Fix 184
+                    // 带 `struct` 关键字免声明顺序依赖 —— 原型与实参打包不会再次分叉。
+                    const std::string pClsPtr = cParamClassPtrType(p);
+                    if (pType == "vb6_VARIANT" && !pClsPtr.empty()) {
+                        pType = "struct " + pClsPtr;
+                    }
                     if (!p.isByVal) {
                         // ByRef → C指针 (与 cgen_decl.cpp 函数定义一致)
                         pType += "*";
@@ -341,7 +393,17 @@
                 std::string missing;
                 if (prm.isByVal) {
                     // 从VARIANT中提取ByVal值
-                    if (pType == Vb6Type::Long || pType == Vb6Type::Integer ||
+                    // <vbeclipse>: 工程类形参的槽 —— 与上面 extern 那处同一个权威
+                    // (cParamClassPtrType)。DISPPARAMS 送来的是 VT_DISPATCH, 旧代码按
+                    // "Variant 槽"整份 VARIANT 结构透传, 而定义侧形参是 vb6_cls_X* ⇒
+                    // C2440 (实测 com_entry.c 的 vb6_DemoHolder_Wire)。这里剥出实例指针
+                    // 再交出去, 与**调用点**那条直传路径同一个口径。
+                    const std::string cpCls = cParamClassPtrType(prm);
+                    if (!cpCls.empty() && cpCls.compare(0, 8, "vb6_cls_") == 0) {
+                        provided = "(" + cpCls + ")vb6_ComObject_GetInstance("
+                                   "((VARIANT*)args[" + idx + "])->pdispVal)";
+                        missing = "NULL";
+                    } else if (pType == Vb6Type::Long || pType == Vb6Type::Integer ||
                         pType == Vb6Type::Byte) {
                         provided = "((VARIANT*)args[" + idx + "])->lVal";
                         missing = "0";

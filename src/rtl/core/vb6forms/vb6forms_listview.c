@@ -7,8 +7,10 @@
 // 设计要点: **自己那张表才是唯一真相**, SysListView32 只是显示。
 //   理由: LVM_GETITEMTEXT 在 x64 跨进程/不同 comctl 版本下取文本有坑, 而设计期灌进去的
 //   文本按 VB6 语义要能**原样读回**(Debug.Print ListView1.ListItems(1).Text)。所以
-//   写入时同时改表 + 刷 UI; 读取一律读表。改动后 lvSyncAll() 重建列与行 (数据量小,
-//   重建最省心), 再按表的 selected/checked 恢复状态。
+//   写入时同时改表 + 刷 UI; 读取一律读表。改动后 lvSyncAll() 按 syncedCols/syncedRows
+//   做**增量**同步 (Fix 161f-extlist(3): 原先每次全量 LVM_DELETEALLITEMS 重建,
+//   RefillList(500 行 x 10 列) 逐格灌数据触发 O(n^2) 千万次 SendMessage, 消息循环被拖死,
+//   表现为"exe 打不开"), 再按表的 selected/checked 恢复状态。
 //
 // 下标口径 (VB6):
 //   - ColumnHeaders(i) / ListItems(i)  **1 基**
@@ -19,6 +21,7 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#include <stdbool.h>
 #include "vb6forms.h"
 #include "vb6forms_internal.h"
 #include "vb6rtl_bstr.h"
@@ -35,7 +38,23 @@ typedef struct {
     wchar_t* text;
     int      width;
     int      align;      // 0=左 1=右 2=居中 (lvwColumnLeft/Right/Center)
+    // Fix 161f-extlist(4): 这列的宽度是否来自"省略 width 的 Add"。
+    // 留着它是因为 lvSyncAll 被 AddColumn 调多次 (每加一列一次), 需要知道
+    // 哪些列该套默认宽 —— 显式给宽的列 (含 Adjust Widths 改过的) 不能被动。
+    bool     defaultWidth;
 } Vb6LVCol;
+
+// Fix 161f-extlist(4): VB6 ListView ColumnHeader 省略 Width 时的**默认列宽**。
+// 定标依据: 基准截图 (VB6 原版运行, 1536px 物理宽 = 0.8×1920 屏) 里表头分隔线
+// 依次为 151,295,439,...,1445 —— 相邻差恒为 144px, 十列等宽。参照同一图里
+// Option1 圆点在物理 x=365 (= 4 + 292 逻辑 × 1.25) 标定 **参考机是 125% DPI**,
+// 故逻辑列宽 = 144 / 1.25 = 115.2 ⇒ 115px。
+// (此前按"2x DPI"误标成 72px —— 同一张图里单选钮位置与 125% DPI 严丝合缝,
+//  2x 假设下 Option 会落在 442px, 与实测矛盾。)
+// 即: VB6 这里既不是 0、也不是"按表头文本自适应"(那是 LVSCW_AUTOSIZE_USEHEADER
+// 的语义, 上一版照它实现, col0 被"单列铺满控件"规则污染成 389px), 而是一个
+// **固定默认值** ≈ 1728 缇。
+#define VB6_LV_DEFAULT_COL_W 115
 
 // ---------------- 行 ----------------
 typedef struct {
@@ -67,6 +86,12 @@ typedef struct {
     Vb6LVCol*  cols;  int colCount,  colCap;
     Vb6LVItem* items; int itemCount, itemCap;
     void* cb[2];            // 0=ItemClick 1=ColumnClick (WM_NOTIFY 分发用)
+    // Fix 161f-extlist(3): 已同步到 UI 的列数/行数 —— lvSyncAll 由"每次全删重建"
+    // 改为**增量同步**。原实现下 RefillList(500 行 × 10 列) 每格 SetItemSub 都触发
+    // 一次全量 DELETEALLITEMS + 重插全部行 ⇒ O(n²) ≈ 千万次 LVM_* ⇒ 窗口起来后
+    // 消息循环被拖死 (表现为"打不开/无响应")。
+    int syncedCols;
+    int syncedRows;
 } Vb6ListView;
 
 static Vb6ListView g_lvs[VB6_LV_MAX];
@@ -108,48 +133,97 @@ static void lvSetW(wchar_t** dst, const wchar_t* src) {
 
 // ---------------- UI 同步 ----------------
 // 列: LVM_INSERTCOLUMNW; 行: LVM_INSERTITEMW + LVM_SETITEMW(iSubItem=1..)
-static void lvSyncAll(Vb6ListView* v) {
-    if (!v || !v->hwnd || !IsWindow(v->hwnd)) return;
+//
+// Fix 161f-extlist(3): **增量同步**。原实现每次调用都 LVM_DELETEALLITEMS + 重建全部
+// 列与行 —— 在"逐格灌数据"的常规写法下 (RefillList: 500 行 × 每行 1 次 Add +
+// 9 次 SubItems(i)=...) 总代价是 O(行数²) (= ~1250 万次 SendMessage), 窗口消息循环
+// 被拖到几十秒不响应 (实测表现为"打不开")。改为:
+//   ① 列/行数未减少 → 只补插**新增**的列与行 (已插过的不动);
+//   ② 行数/列数**减少** (Clear / 重建) → 才走 DELETEALLITEMS 全量重建。
+// 文本单格更新 (SetItemSub / SetItemText) 另走 lvSyncCell, 不碰整表。
+static void lvSyncFull(Vb6ListView* v) {
     SendMessageW(v->hwnd, LVM_DELETEALLITEMS, 0, 0);
-    // 列 (仅报表视图有意义, 但先建; 切视图时 ListView 自己会用)
+    // ⚠ 这里必须**同时清列**: lvSyncAll 之后会从 syncedCols(=0) 重插到 colCount,
+    // 若控件里旧列还在, LVM_INSERTCOLUMN 是**追加**语义 → 列翻倍。
+    // ClearColumns/ClearItems 各自会把 syncedCols/syncedRows 归零, 但"数量变少"
+    // 这条路径 (直接 RemoveColumn / 删行) 只会走到这里, 不补会重复。
+    HWND hdr = (HWND)SendMessageW(v->hwnd, LVM_GETHEADER, 0, 0);
+    int curCols = hdr ? (int)SendMessageW(hdr, HDM_GETITEMCOUNT, 0, 0) : 0;
+    for (int i = curCols - 1; i >= 0; i--)
+        SendMessageW(v->hwnd, LVM_DELETECOLUMN, (WPARAM)i, 0);
+    v->syncedCols = 0;
+    v->syncedRows = 0;
+}
+static void lvInsertColUI(Vb6ListView* v, int i) {
     LVCOLUMNW col;
-    for (int i = 0; i < v->colCount; i++) {
-        ZeroMemory(&col, sizeof(col));
-        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
-        col.pszText = v->cols[i].text ? v->cols[i].text : (wchar_t*)L"";
-        col.cx = v->cols[i].width;
-        col.iSubItem = i;
-        col.fmt = (v->cols[i].align == 1) ? LVCFMT_RIGHT
-                : (v->cols[i].align == 2) ? LVCFMT_CENTER : LVCFMT_LEFT;
-        // 覆盖同位置已有列 (重建时按序插入即可)
-        SendMessageW(v->hwnd, LVM_INSERTCOLUMNW, (WPARAM)i, (LPARAM)&col);
+    ZeroMemory(&col, sizeof(col));
+    col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM | LVCF_FMT;
+    col.pszText = v->cols[i].text ? v->cols[i].text : (wchar_t*)L"";
+    /* Fix 161f-extlist(4): 省略 width 的列在 AddColumn 里已填好固定默认宽
+     * (VB6_LV_DEFAULT_COL_W), 这里直接下发即可。
+     * ⚠ 不能改成下发 LVSCW_AUTOSIZE_USEHEADER: LVM_INSERTCOLUMNW 不认该常量
+     * (传 -2 被当负宽 → 0), 且它的语义 (按表头文本算 / 单列时铺满控件) 与
+     * VB6 实际表现的"固定 72px 等宽"不符 (两者都实测过)。 */
+    col.cx = v->cols[i].width;
+    col.iSubItem = i;
+    col.fmt = (v->cols[i].align == 1) ? LVCFMT_RIGHT
+            : (v->cols[i].align == 2) ? LVCFMT_CENTER : LVCFMT_LEFT;
+    SendMessageW(v->hwnd, LVM_INSERTCOLUMNW, (WPARAM)i, (LPARAM)&col);
+}
+static void lvInsertRowUI(Vb6ListView* v, int r) {
+    Vb6LVItem* it = &v->items[r];
+    LVITEMW li;
+    ZeroMemory(&li, sizeof(li));
+    li.mask = LVIF_TEXT;
+    li.iItem = r;
+    li.iSubItem = 0;
+    li.pszText = it->text ? it->text : (wchar_t*)L"";
+    SendMessageW(v->hwnd, LVM_INSERTITEMW, 0, (LPARAM)&li);
+    for (int s = 0; s < it->subCount; s++) {
+        LVITEMW si;
+        ZeroMemory(&si, sizeof(si));
+        si.mask = LVIF_TEXT;
+        si.iItem = r;
+        si.iSubItem = s + 1;                 // SubItems(1) = 第 2 列
+        si.pszText = it->subs[s] ? it->subs[s] : (wchar_t*)L"";
+        SendMessageW(v->hwnd, LVM_SETITEMW, 0, (LPARAM)&si);
     }
-    // 行
-    for (int r = 0; r < v->itemCount; r++) {
-        Vb6LVItem* it = &v->items[r];
-        LVITEMW li;
-        ZeroMemory(&li, sizeof(li));
-        li.mask = LVIF_TEXT;
-        li.iItem = r;
-        li.iSubItem = 0;
-        li.pszText = it->text ? it->text : (wchar_t*)L"";
-        SendMessageW(v->hwnd, LVM_INSERTITEMW, 0, (LPARAM)&li);
-        for (int s = 0; s < it->subCount; s++) {
-            LVITEMW si;
-            ZeroMemory(&si, sizeof(si));
-            si.mask = LVIF_TEXT;
-            si.iItem = r;
-            si.iSubItem = s + 1;                 // SubItems(1) = 第 2 列
-            si.pszText = it->subs[s] ? it->subs[s] : (wchar_t*)L"";
-            SendMessageW(v->hwnd, LVM_SETITEMW, 0, (LPARAM)&si);
-        }
-        if (it->selected || it->checked) {
-            SendMessageW(v->hwnd, LVM_SETITEMSTATE, (WPARAM)r, (LPARAM)&(LVITEMW){
-                .mask = LVIF_STATE,
-                .state = (UINT)((it->selected ? LVIS_SELECTED : 0) | (it->checked ? LVIS_STATEIMAGEMASK : 0)),
-                .stateMask = LVIS_SELECTED | LVIS_STATEIMAGEMASK });
-        }
+    if (it->selected || it->checked) {
+        SendMessageW(v->hwnd, LVM_SETITEMSTATE, (WPARAM)r, (LPARAM)&(LVITEMW){
+            .mask = LVIF_STATE,
+            .state = (UINT)((it->selected ? LVIS_SELECTED : 0) | (it->checked ? LVIS_STATEIMAGEMASK : 0)),
+            .stateMask = LVIS_SELECTED | LVIS_STATEIMAGEMASK });
     }
+}
+static void lvSyncAll(Vb6ListView* v) {
+    if (!v) return;
+    if (!v || !v->hwnd || !IsWindow(v->hwnd)) return;
+    // 减少 (Clear / 大幅重建) → 全量重建
+    if (v->colCount < v->syncedCols || v->itemCount < v->syncedRows) {
+        lvSyncFull(v);
+    }
+    // 补插新列
+    for (int i = v->syncedCols; i < v->colCount; i++) lvInsertColUI(v, i);
+    v->syncedCols = v->colCount;
+    // 补插新行
+    for (int r = v->syncedRows; r < v->itemCount; r++) lvInsertRowUI(v, r);
+    v->syncedRows = v->itemCount;
+}
+// 单格文本更新 (不改行列数) — 避免 SetItemSub 走整表同步。
+static void lvSyncCell(Vb6ListView* v, int r, int sub) {
+    if (!v || !v->hwnd || !IsWindow(v->hwnd)) return;
+    if (r < 0 || r >= v->itemCount || sub < 0 || sub > v->syncedCols) return;
+    Vb6LVItem* it = &v->items[r];
+    LVITEMW si;
+    ZeroMemory(&si, sizeof(si));
+    si.mask = LVIF_TEXT;
+    si.iItem = r;
+    si.iSubItem = sub;                       // sub=0 → 第 1 列 (Text)
+    si.pszText = (sub == 0)
+        ? (it->text ? it->text : (wchar_t*)L"")
+        : ((sub - 1 < it->subCount && it->subs[sub - 1]) ? it->subs[sub - 1] : (wchar_t*)L"");
+    if (sub == 0) SendMessageW(v->hwnd, LVM_SETITEMTEXTW, (WPARAM)r, (LPARAM)&si);
+    else          SendMessageW(v->hwnd, LVM_SETITEMW, 0, (LPARAM)&si);
 }
 
 // 把标量属性刷到窗口 (GWL_STYLE 位 + LVM_SETEXTENDEDLISTVIEWSTYLE)
@@ -185,12 +259,15 @@ void vb6_ListView_Init(void* hwnd, int32_t view, int32_t gridLines, int32_t full
     Vb6ListView* v = lvEnsure((HWND)hwnd);
     if (!v) return;
     v->view = (int)view;
-    v->gridLines = (int)gridLines;
-    v->fullRowSelect = (int)fullRowSelect;
-    v->multiSelect = (int)multiSelect;
-    v->checkBoxes = (int)checkBoxes;
-    v->hideHeaders = (int)hideHeaders;
-    v->allowColReorder = (int)allowColReorder;
+    // 账 #128-b: 这六位是布尔 ⇒ **存进去就先归化成 VB6 的 -1/0**。以前是"写什么存什么"，
+    // 于是设计期发的 1 会原样读回 1 —— 类型面一旦说自己是 Boolean，`X = True` 这条比较
+    // 就恒假（1 ≠ -1）。归一化放在存这一头，getter 仍是直答控件里的那个数，不多折一层。
+    v->gridLines = gridLines ? -1 : 0;
+    v->fullRowSelect = fullRowSelect ? -1 : 0;
+    v->multiSelect = multiSelect ? -1 : 0;
+    v->checkBoxes = checkBoxes ? -1 : 0;
+    v->hideHeaders = hideHeaders ? -1 : 0;
+    v->allowColReorder = allowColReorder ? -1 : 0;
     v->labelEdit = (int)labelEdit;
     lvApplyStyle(v);
 }
@@ -213,12 +290,12 @@ void vb6_ListView_SetView(void* hwnd, int32_t val) {
     Vb6ListView* v = lvFind((HWND)hwnd); if (!v) return;
     v->view = (int)val; lvApplyStyle(v);
 }
-void vb6_ListView_SetGridLines(void* hwnd, int32_t val)         { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->gridLines = (int)val; lvApplyStyle(v); } }
-void vb6_ListView_SetFullRowSelect(void* hwnd, int32_t val)     { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->fullRowSelect = (int)val; lvApplyStyle(v); } }
-void vb6_ListView_SetMultiSelect(void* hwnd, int32_t val)       { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->multiSelect = (int)val; lvApplyStyle(v); } }
-void vb6_ListView_SetCheckBoxes(void* hwnd, int32_t val)        { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->checkBoxes = (int)val; lvApplyStyle(v); lvSyncAll(v); } }
-void vb6_ListView_SetHideColumnHeaders(void* hwnd, int32_t val) { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->hideHeaders = (int)val; lvApplyStyle(v); } }
-void vb6_ListView_SetAllowColumnReorder(void* hwnd, int32_t val) { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->allowColReorder = (int)val; lvApplyStyle(v); } }
+void vb6_ListView_SetGridLines(void* hwnd, int32_t val)         { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->gridLines = val ? -1 : 0; lvApplyStyle(v); } }
+void vb6_ListView_SetFullRowSelect(void* hwnd, int32_t val)     { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->fullRowSelect = val ? -1 : 0; lvApplyStyle(v); } }
+void vb6_ListView_SetMultiSelect(void* hwnd, int32_t val)       { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->multiSelect = val ? -1 : 0; lvApplyStyle(v); } }
+void vb6_ListView_SetCheckBoxes(void* hwnd, int32_t val)        { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->checkBoxes = val ? -1 : 0; lvApplyStyle(v); lvSyncAll(v); } }
+void vb6_ListView_SetHideColumnHeaders(void* hwnd, int32_t val) { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->hideHeaders = val ? -1 : 0; lvApplyStyle(v); } }
+void vb6_ListView_SetAllowColumnReorder(void* hwnd, int32_t val) { Vb6ListView* v = lvFind((HWND)hwnd); if (v) { v->allowColReorder = val ? -1 : 0; lvApplyStyle(v); } }
 void vb6_ListView_SetLabelEdit(void* hwnd, int32_t val)         { Vb6ListView* v = lvFind((HWND)hwnd); if (v) v->labelEdit = (int)val; }
 void vb6_ListView_SetSorted(void* hwnd, int32_t val) {
     Vb6ListView* v = lvFind((HWND)hwnd); if (!v) return;
@@ -277,7 +354,14 @@ int32_t vb6_ListView_AddColumn(void* hwnd, int32_t idx, void* keyBstr, void* tex
     ZeroMemory(&v->cols[at], sizeof(Vb6LVCol));
     lvSetW(&v->cols[at].key, (const wchar_t*)keyBstr);
     lvSetW(&v->cols[at].text, (const wchar_t*)textBstr);
-    v->cols[at].width = (int)width;
+    // Fix 161f-extlist(4): `ColumnHeaders.Add(, , "text")` 省略 width (Missing) 时,
+    // VB6 用**固定默认列宽 115px** (见 VB6_LV_DEFAULT_COL_W 的定标说明),
+    // 既不是原先折成的 0、也不是"表头文本自适应"。
+    // (0 ⇒ 10 列全 0 像素宽、500 行不可见; 表头自适应 ⇒ 各列宽参差且第 0 列被
+    //  "单列铺满控件"规则污染成 389px —— 两种都试过且都实测不符。)
+    int w0 = (int)width;
+    v->cols[at].defaultWidth = (w0 <= 0);
+    v->cols[at].width = (w0 > 0) ? w0 : VB6_LV_DEFAULT_COL_W;
     v->cols[at].align = (int)align;
     v->colCount++;
     lvSyncAll(v);
@@ -304,8 +388,23 @@ int32_t vb6_ListView_GetColumnWidth(void* hwnd, int32_t idx) {
 void vb6_ListView_SetColumnWidth(void* hwnd, int32_t idx, int32_t w) {
     Vb6ListView* v = lvFind((HWND)hwnd);
     if (!v || idx < 1 || idx > v->colCount) return;
-    v->cols[idx - 1].width = (int)w;
-    lvSyncAll(v);
+    // Fix 161f-extlist(4): 列已建好时改宽必须发 LVM_SETCOLUMNWIDTH ——
+    // lvSyncAll 只在**新增**列时 LVM_INSERTCOLUMN, 已同步的列不会被重发,
+    // 只改结构体等于改了个寂寞 (Flip Columns / Adjust Widths 按钮点击无效)。
+    int i0 = (int)idx - 1;
+    // 显式给宽 = 放弃"默认宽"身份 (Adjust Widths 传 LVSCW_AUTOSIZE_USEHEADER
+    // 进来的除外 —— 那是显式要求按表头自适应, 由 comctl32 算)。
+    bool wantAuto = ((int)w == LVSCW_AUTOSIZE_USEHEADER || (int)w == LVSCW_AUTOSIZE);
+    v->cols[i0].defaultWidth = false;
+    v->cols[i0].width = wantAuto ? VB6_LV_DEFAULT_COL_W : (int)w;
+    if (!v->hwnd || !IsWindow(v->hwnd)) return;
+    if (i0 < v->syncedCols) {
+        SendMessageW(v->hwnd, LVM_SETCOLUMNWIDTH, (WPARAM)i0, (LPARAM)(int)w);
+        if (wantAuto)
+            v->cols[i0].width = (int)SendMessageW(v->hwnd, LVM_GETCOLUMNWIDTH, (WPARAM)i0, 0);
+    } else {
+        lvSyncAll(v);
+    }
 }
 // 列对齐 (0=左 1=右 2=居中 —— VB6 的 lvwColumnLeft/Right/Center)
 void vb6_ListView_SetColumnAlign(void* hwnd, int32_t idx, int32_t val) {
@@ -356,6 +455,9 @@ void vb6_ListView_ClearColumns(void* hwnd) {
     for (int i = 0; i < v->colCount; i++) { lvFreeW(v->cols[i].key); lvFreeW(v->cols[i].text); }
     v->colCount = 0;
     SendMessageW(v->hwnd, LVM_DELETEALLITEMS, 0, 0);
+    // Fix 161f-extlist(3): UI 已清空 → 同步计数归零, 否则后续增量同步会以为还在。
+    v->syncedCols = 0;
+    v->syncedRows = 0;
 }
 // ---------------- ListItems (行) ----------------
 int32_t vb6_ListView_GetItemCount(void* hwnd) {
@@ -423,7 +525,7 @@ void vb6_ListView_SetItemText(void* hwnd, int32_t idx, void* bstr) {
     Vb6ListView* v = lvFind((HWND)hwnd);
     if (!v || idx < 1 || idx > v->itemCount) return;
     lvSetW(&v->items[idx - 1].text, (const wchar_t*)bstr);
-    lvSyncAll(v);
+    lvSyncCell(v, (int)idx - 1, 0);   // Fix 161f-extlist(3): 单格更新
 }
 void* vb6_ListView_GetItemKey(void* hwnd, int32_t idx) {
     Vb6ListView* v = lvFind((HWND)hwnd);
@@ -461,7 +563,8 @@ void vb6_ListView_SetItemSub(void* hwnd, int32_t idx, int32_t sub, void* bstr) {
     if (!lvItemEnsureSub(it, sub)) return;
     lvSetW(&it->subs[sub - 1], (const wchar_t*)bstr);
     if (sub > it->subCount) it->subCount = sub;
-    lvSyncAll(v);
+    // Fix 161f-extlist(3): 单格更新, 不走整表同步 (见 lvSyncCell 注释)。
+    lvSyncCell(v, (int)idx - 1, (int)sub);
 }
 int32_t vb6_ListView_GetItemSubCount(void* hwnd, int32_t idx) {
     Vb6ListView* v = lvFind((HWND)hwnd);
@@ -533,6 +636,8 @@ void vb6_ListView_ClearItems(void* hwnd) {
     }
     v->itemCount = 0;
     SendMessageW(v->hwnd, LVM_DELETEALLITEMS, 0, 0);
+    // Fix 161f-extlist(3): UI 已清空 → 同步计数归零 (增量同步前提)。
+    v->syncedRows = 0;
 }
 
 // ImageList 关联 (把 #9 ImageList 的真 HIMAGELIST 喂给控件)

@@ -205,6 +205,37 @@ void CCodeGen::visit(VariableDecl& node) {
         knownFixedStringLen_[fsLower] = lastExpr_;
     }
 
+    // vbeclipse: 声明类型名是**工程类**但被本模块同名成员遮蔽时的补注册.
+    //
+    // 上面那段 Class 分支用 lookupModuleDotted(simple.name) 判工程类, 而每模块一张
+    // SymbolTable —— 同名成员会遮蔽跨模块类名. vbeclipse 实测两种形态:
+    //   ucSplitBar.ctl `Private WithEvents SplitBar As SplitBar`
+    //     → 类型名被字段自身 (SymbolKind::Variable) 占位;
+    //   ucCaption.ctl `Private WithEvents m_PopupMenu As PopupMenu`
+    //     → 类型名被同名 Sub 占位 (SymbolKind::Sub).
+    // Class 分支判不中 → mapTypeRef 回落 void* → 下面注册进 knownObjectVars_ →
+    // `With SplitBar` 走 COM 后期绑定, .SplitterMouseDown 的 RECT 结构体实参被
+    // vb6_ComPackInt 打包 (C2440), 运行期还会拿 C 结构体当 IDispatch 解 vtable.
+    // 工程级类名表不受遮蔽, 是这类判定的唯一正确来源 (与 driver 侧
+    // projectClassNames 同源, 见 setProjectClassNames 注释).
+    if (node.asType && node.asType->kind == ASTNodeKind::SimpleTypeRef && cType == "void*") {
+        auto& shadowed = static_cast<SimpleTypeRef&>(*node.asType);
+        std::string projCls = projectClassNameOf(shadowed.name);
+        if (!projCls.empty() &&
+            knownClassVars_.find(Symbol::toLower(node.name)) == knownClassVars_.end() &&
+            knownIfaceVars_.find(Symbol::toLower(node.name)) == knownIfaceVars_.end()) {
+            std::string lower = node.name;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            knownClassVars_[lower] = projCls;
+            knownObjectVars_.erase(lower);
+            if (node.isWithEvents) knownWithEventsVars_[lower] = projCls;
+            if (node.isNew) {
+                knownNewVars_[lower] = cIdent(projCls);
+                moduleNewVars_[lower] = cIdent(projCls);
+            }
+        }
+    }
+
     // 检查是否是Object类型变量 → 注册到 knownObjectVars_ (COM后期绑定)
     if (cType == "void*") {  // Object类型映射为void*
         std::string lower = node.name;
@@ -233,6 +264,21 @@ void CCodeGen::visit(VariableDecl& node) {
         if (comSym && (comSym->kind == SymbolKind::ComClass || comSym->kind == SymbolKind::ComInterface)) {
             std::string lower = node.name;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            // Fix <vbeclipse>-2: 本工程有同名类模块 ⇒ 该类型名指工程类, 走**原生**
+            // (VB6: 工程内定义优先于引用库). 类型库自动加载把 Shell32 的 coclass
+            // Folder / ScrRun 的 Dictionary 注进每个模块, 且 isExternal=false ——
+            // 若登记进 knownTypedComVars_ 就会把原生 vb6_cls_<Name>* 当 IDispatch
+            // 解 vtable (ucPerspective CreateFolder 的 `With Folder.Views` → 0xC0000005).
+            const std::string projClsVar = projectClassNameOf(simple.name);
+            if (!projClsVar.empty()) {
+                knownClassVars_[lower] = projClsVar;
+                knownObjectVars_.erase(lower);
+                if (node.isNew) {
+                    knownNewVars_[lower] = cIdent(projClsVar);   // Dim As New 工程类
+                    moduleNewVars_[lower] = cIdent(projClsVar);
+                }
+                if (node.isWithEvents) knownWithEventsVars_[lower] = projClsVar;
+            } else {
             knownTypedComVars_[lower] = comSym;
             knownTypedComVarCType_[lower] = cType;  // Fix 090v-com: 供 As New 守卫转型
             knownObjectVars_.erase(lower);  // 优先前期绑定
@@ -244,6 +290,7 @@ void CCodeGen::visit(VariableDecl& node) {
             // P13.23: ComClass WithEvents -> knownWithEventsVars_
             if (node.isWithEvents && comSym->kind == SymbolKind::ComClass && comSym->comHasSourceIface) {
                 knownWithEventsVars_[lower] = comSym->name;
+            }
             }
         }
     }
@@ -311,6 +358,11 @@ void CCodeGen::visit(VariableDecl& node) {
         std::string lower = node.name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         knownBstrVars_.insert(lower);
+    } else if (cType == "uint8_t") {
+        // ai/009 §5.10: 模块级 Byte 走独立集合 (口径同 cgen_localdecl.cpp 的 Dim 分支)
+        std::string lower = node.name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        knownByteVars_.insert(lower);
     } else if (cType == "int32_t" || cType == "int16_t" || cType == "VBABOOL") {
         std::string lower = node.name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
@@ -318,6 +370,9 @@ void CCodeGen::visit(VariableDecl& node) {
         // ai/022 W1: 模块级 As Boolean 同型, 需另登记 (口径同上处 Dim 分支)
         if (resolveArrayElemType(node.asType.get()) == Vb6Type::Boolean)
             knownBoolVars_.insert(lower);
+        // ai/009 5.10: 模块级 As Integer 同型, 收窄检查需分出 16 位范围
+        if (resolveArrayElemType(node.asType.get()) == Vb6Type::Integer)
+            knownIntVars_.insert(lower);
     } else if (cType == "vb6_VARIANT") {
         // P8.4: 记录Variant类型局部变量
         std::string lower = node.name;
@@ -392,9 +447,26 @@ void CCodeGen::visit(VariableDecl& node) {
         } else if (isEnumType) {  // Fix 010q
             initVal = "0";
         } else {
-            initVal = defaultValue(
-                node.asType ? typeSys_.resolveTypeName(static_cast<SimpleTypeRef*>(node.asType.get())->name) : Vb6Type::Variant
-            );
+            // 账 #116: 这一句原先无条件 `static_cast<SimpleTypeRef*>(node.asType.get())->name`,
+            // 而定长串 `As String * N` 的 typeRef 是 **FixedStringTypeRef** —— 把它的
+            // `ExprPtr length` 当成 `std::string` 读, 那个"长度"其实是一个堆指针, 于是拷贝
+            // 字符串时张口就要几十 GB: operator new 失败 → std::bad_alloc → 无人接住 →
+            // abort() (退出码 3, 零诊断, 调试版 CRT 还弹模态框)。
+            // 只有 kinds 判过才转。**非 SimpleTypeRef 一律回 Unknown 而不是 Variant**:
+            // 修好之前那条瞎读路径的"实际效果"就是 Unknown (`resolveTypeName` 查不到那个乱码名),
+            // 而它印出来是 `0` —— 数组那类 `vb6_SafeArray1D*` 要的正是这个空指针; 改成 Variant
+            // 会发 `vb6_VariantEmpty()`, 两个 GUI 存量工程立刻 C2440 (VARIANT ↔ SafeArray1D*)。
+            Vb6Type asType = Vb6Type::Variant;   // 无 As 子句
+            if (node.asType) {
+                asType = Vb6Type::Unknown;
+                if (node.asType->kind == ASTNodeKind::SimpleTypeRef) {
+                    asType = typeSys_.resolveTypeName(
+                        static_cast<SimpleTypeRef*>(node.asType.get())->name);
+                } else if (node.asType->kind == ASTNodeKind::FixedStringTypeRef) {
+                    asType = Vb6Type::String;
+                }
+            }
+            initVal = defaultValue(asType);
         }
         // M22: 文件作用域BSTR初始化不能用函数调用(vb6_BSTR_Empty), 用NULL替代
         if (initVal == "vb6_BSTR_Empty()") initVal = "NULL";

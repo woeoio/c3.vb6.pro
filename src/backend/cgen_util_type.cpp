@@ -6,6 +6,55 @@
 
 namespace vb6c3 {
 
+// Fix <VBFlexGridDemo/GA 36766856082>: 内置函数与"控件自己声明的同名 Property"撞名时的
+// 类型裁决。
+//
+// 背景: Task #40 (40960eb) 给 parseIdentifierOrCall 加了"使用点剥类型后缀",
+// `Left$(Value, 1)` 到 cgen 时名字已是 `Left`; VBFlexGrid.ctl 自己声明了
+// `Public Property Get Left() As Single`, 于是 inferExprType 的符号表支路命中这个
+// **属性**符号 ⇒ 答 Single ⇒ `float _vb6_select_81 = vb6_Left(Temp, 1)` 把 BSTR
+// 强转 float → C2440 (27 处)。剥后缀前名字是 `Left$`, 查不到该属性符号, 天然不撞。
+//
+// 口径 (刻意收窄): 只有"符号 kind 是 Property* **且** 该名字在内置函数表里"才启用,
+// 其余一切照旧 —— 用户 Function 同名、普通变量、真·属性访问都不受影响。
+// 返回类型按 VB6 内置函数语义给: 字符串类答 String, 整数类答 Long, 其余答 Variant
+// (Variant 是既有兜底, 不会引入新的硬错)。
+#include "backend/detail/expr/cgen_expr_ident_builtin_table.inc"
+
+static Vb6Type builtinFuncReturnTypeForShadowedProp(const std::string& nameLower) {
+    static const std::unordered_set<std::string> kStrFuncs = {
+        "left", "mid", "right", "trim", "ltrim", "rtrim", "lcase", "ucase",
+        "space", "string", "str", "chr", "hex", "oct", "format", "strconv",
+        "input", "command", "curdir", "environ", "dir", "date", "time", "monthname",
+        "weekdayname", "error"
+    };
+    if (kStrFuncs.count(nameLower)) return Vb6Type::String;
+    static const std::unordered_set<std::string> kLongFuncs = {
+        "len", "lenb", "instr", "instrb", "asc", "cint", "clng", "cbyte",
+        "freefile", "erl", "hour", "minute", "second", "weekday", "day",
+        "month", "year", "abs", "sgn", "int", "fix"
+    };
+    if (kLongFuncs.count(nameLower)) return Vb6Type::Long;
+    return Vb6Type::Variant;
+}
+
+// 判据: 符号是 Property* **且** 该名字在内置函数表里 ⇒ 这是"属性遮蔽了内置函数",
+// 类型要按内置函数答 (见上注释)。剥 $ 后缀后比, 与 ident_builtin 的 lookupName 同口径。
+static bool isPropShadowingBuiltinFunc(const Symbol* sym, const std::string& idName) {
+    if (!sym) return false;
+    if (sym->kind != SymbolKind::PropertyGet && sym->kind != SymbolKind::PropertyLet
+        && sym->kind != SymbolKind::PropertySet) return false;
+    std::string n = Symbol::toLower(idName);
+    if (!n.empty() && n.back() == '$') n.pop_back();
+    return kBuiltinFuncNames.count(n) != 0;
+}
+
+static Vb6Type cgenTypeForShadowedBuiltin(const std::string& idName) {
+    std::string n = Symbol::toLower(idName);
+    if (!n.empty() && n.back() == '$') n.pop_back();
+    return builtinFuncReturnTypeForShadowedProp(n);
+}
+
 // --- cgen_util_type.cpp: 表达式类型推断 + Variant 判定 + 运行时参数 C 类型 ---
 
 
@@ -31,6 +80,12 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
             // 优先检查已知的变量类型集合 (局部变量在符号表中作用域可能不可达)
             std::string lower = id.name;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            // Fix 161f: 无 As Type 但整数可折叠的 Const (符号表里 type=Variant)。
+            // C 侧已 emit 成 `#define NAME (4127)`, 标识符也内联为数值; 若这里
+            // 仍答 Variant, Declare 调用的实参会被包成
+            // vb6_VariantToLong(LVM_GETHEADER) → C2440 "无法从 int 转换为
+            // vb6_VARIANT" (extlist MListView SendMessage 实测)。按 Long 答。
+            if (moduleIntConstValues_.count(lower)) return Vb6Type::Long;
             if (knownBstrVars_.count(lower)) return Vb6Type::String;
             if (knownSingleVars_.count(lower)) return Vb6Type::Single;
             // Fix 175: Date 必须先于 Double 判 (Date 变量同时登记在 knownDoubleVars_
@@ -40,12 +95,33 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
             // ai/022 W1: 必须先于 knownLongVars_ 判 (口径同 Fix 175 的 Date) ——
             // As Boolean 的 C 型与 Integer 同串, 只按 C 类型登记就永远看不见布尔。
             if (knownBoolVars_.count(lower)) return Vb6Type::Boolean;
+            // 账 #123: 口径同 Fix 175 的 Date / W1 的 Boolean —— 登记过就必须由这张表答 Byte,
+            // 让局部/形参 Byte 与模块级 Byte (走符号表那条支路) 给出同一份答案。
+            if (knownByteVars_.count(lower)) return Vb6Type::Byte;
             if (knownLongVars_.count(lower)) return Vb6Type::Long;
             if (knownLongPtrVars_.count(lower)) return Vb6Type::LongPtr;
             if (knownVariantVars_.count(lower)) return Vb6Type::Variant;
             // 检查符号表
             auto* sym = symTab_.lookup(id.name);
             if (!sym) sym = symTab_.lookupModule(id.name);
+            // Fix <VBFlexGridDemo>: 属性遮蔽内置函数时按内置函数的类型答 (见文件头注释)。
+            // 但**函数体内 `Name = expr` 引用返回槽**这一支例外 —— VB6 里 `Left = Extender.Left`
+            // 在 `Public Property Get Left() As Single` 内部指的是 vb6_ret_Left (float),
+            // 不是内置 Left$()。判据同 cgen_assign_value_sem.inc:5-12 —— currentProc_ 是
+            // Function/PropertyGet 且名字等于本标识符时, 走返回槽 (sym->type)。
+            // 修前: inferExprType 答 String ⇒ vb6_BSTR_AssignMove(&vb6_ret_Left, vb6_CStrDbl(...))
+            //       ⇒ BSTR_Free 把 float 位当指针 ⇒ MainForm Form_Resize 一调 VBFlexGrid1.Left
+            //       即 0xC0000005, 启动看不到界面。
+            // 只改 IdentifierExpr 分支; IndexOrCallExpr 那一支 (本文件 178 行附近) 不动 ——
+            // 那里 Left(Temp, 1) 就是真·内置函数调用。
+            if (sym && isPropShadowingBuiltinFunc(sym, id.name)) {
+                const bool isRetSlotSelfRef =
+                    currentProc_
+                    && (currentProc_->kind == SymbolKind::Function
+                        || currentProc_->kind == SymbolKind::PropertyGet)
+                    && Symbol::toLower(currentProc_->name) == Symbol::toLower(id.name);
+                if (!isRetSlotSelfRef) return cgenTypeForShadowedBuiltin(id.name);
+            }
             if (sym) return sym->type;
             break;
         }
@@ -57,6 +133,13 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
                 return Vb6Type::Double;
             if (lit.literalKind == LiteralKind::Boolean) return Vb6Type::Boolean;
             if (lit.literalKind == LiteralKind::Date) return Vb6Type::Date;
+            // 装不进 32 位的 Long 字面量, cgen 实际发的是 64 位 (LL 后缀), 这里
+            // 必须跟着答 LongLong。原先一律答 Long, 于是收窄检查把它当成"装得下"
+            // 跳过 —— `l As Long: l = -9223372036854775807` 就从 Error 6 变成
+            // 静默截成 1。类型口径要和实际发出的位宽一致, 否则检查等于没做。
+            if (lit.literalKind == LiteralKind::Long
+                && (lit.longValue < INT32_MIN || lit.longValue > INT32_MAX))
+                return Vb6Type::LongLong;
             return Vb6Type::Long;
         }
         case ASTNodeKind::BinaryExpr: {
@@ -104,6 +187,11 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
                 auto& id = static_cast<IdentifierExpr&>(*call.callee);
                 auto* sym = symTab_.lookup(id.name);
                 if (!sym) sym = symTab_.lookupModule(id.name);
+                // Fix <VBFlexGridDemo>: 同上 —— 属性遮蔽内置函数时按内置函数的类型答,
+                // 否则 `float _vb6_select_81 = vb6_Left(Temp, 1)` 把 BSTR 强转 float (C2440)。
+                if (sym && isPropShadowingBuiltinFunc(sym, id.name)) {
+                    return cgenTypeForShadowedBuiltin(id.name);
+                }
                 if (sym) return sym->type;
             }
             // P26: 类实例方法调用 a.Method(args) → callee是MemberAccessExpr
@@ -388,10 +476,18 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                 // 无法区分 Variant 与 Variant(), 视作普通 Variant
                 return true;
             }
+            // Fix 161f: 无 As Type 但整数可折叠的 Const — 符号表里 type=Variant,
+            // 走下面的回退会被当成 Variant 表达式。C 侧是数值 (见 inferExprType
+            // 同 Fix), 不是 Variant (extlist MListView SendMessage 实参 C2440)。
+            if (moduleIntConstValues_.count(lower)) return false;
             // Fix 049b: 如果已知为非 Variant 具体类型 (BSTR/Long/Double),
             // 不应回退到符号表查找 (可能命中其他模块的同名 Variant 符号)
+            // 账 #123: 补 Byte 那一档。缺它时局部 `Dim bt As Byte` 掉到下面的符号表回退 ⇒
+            // 被判成 Variant ⇒ 比较发成 vb6_VarCmpLongEq(&bt, …) (拿 1 字节对象的地址当
+            // vb6_VARIANT* 传) ⇒ 实测 `(bt = 65)` 返回 False。
             if (knownBstrVars_.count(lower) || knownLongVars_.count(lower)
-                || knownDoubleVars_.count(lower) || knownSingleVars_.count(lower)) {
+                || knownDoubleVars_.count(lower) || knownSingleVars_.count(lower)
+                || knownByteVars_.count(lower)) {
                 return false;
             }
             // 符号表查询
@@ -500,6 +596,14 @@ bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
         "vb6_LoadResData(",       // Fix 090bz: VBA LoadResData → vb6_VARIANT;
                                  //   Dim D() As Byte: D = LoadResData(...) 赋值
                                  //   需 VariantToSafeArray1D 提取 (cLang LoadData/LoadInfo C2440).
+        // vbeclipse: LoadResPicture 与 LoadResData 同族, RTL 签名都是
+        //   vb6_VARIANT vb6_LoadResPicture(int32_t, int32_t) (vb6rtl_runtime.h:66 /
+        //   vb6rtl_com.c:526). 不登记会让
+        //   `Function getResourceIcon(...) As IPictureDisp` 的
+        //   `Set getResourceIcon = LoadResPicture(...)` 直接 `vb6_ret_X =
+        //   vb6_LoadResPicture(...)` → C2440 (modResources.c 22/24/33). 登记后走
+        //   Set 的 Fix 038b-6 分支包 vb6_VariantToObjectVal 提取对象指针.
+        "vb6_LoadResPicture(",
         "vb6_DispCallByVtbl(",  // Fix 068: DispCallByVtbl returns Variant
         // Fix 110w: VB6 CallByName 返回 vb6_VARIANT (见 vb6rtl_class_com.h) —
         // 参与算术/关系运算或需 BSTR 时必须按 Variant 处理, 否则 C2088
@@ -531,6 +635,51 @@ bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
     return false;
 }
 
+// ============================================================
+// <vbeclipse>: C 表达式是否**已经是 SafeArray1D\* 载体**
+// ============================================================
+// Split/Filter/Array 这些内置函数在 VB6 侧的类型是 Variant, 但 codegen 发的是
+// 直接返回 vb6_SafeArray1D\* 的 RTL 调用。数组槽实参 (Join 首参 / UBound/LBound
+// 首参) 的按 Variant 提取 (vb6_VariantToSafeArray1D) 若套在它们外面就是
+// C2440 (vb6_SafeArray1D\* → vb6_VARIANT) —— 实测这三条形全中:
+//   Join(Split(s, ","), "|") / UBound(Split(s, ",")) / Join(Filter(a, "x"), "|")
+// 与 Fix 092g 的 _arr_N 特例同源、同解法, 区别只是这里包的是内置函数调用。
+bool CCodeGen::cExprIsSafeArrayCarrier(const std::string& cExpr) const {
+    size_t start = 0;
+    while (start < cExpr.size()) {
+        char c = cExpr[start];
+        if (c == '(' || c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '*') {
+            start++;
+        } else {
+            break;
+        }
+    }
+    // 匿名数组临时量 (`Array(...)` → _arr_N, Fix 092g) 本身就是载体。
+    if (cExpr.compare(start, 5, "_arr_") == 0) return true;
+
+    static const std::vector<std::string> carrierPrefixes = {
+        "vb6_Split(",                  // vb6_SafeArray1D* vb6_Split(...)
+        "vb6_Filter(",
+        "vb6_ArrayCreate(",
+        "vb6_ArrayAssign1D(",          // 整体数组赋值的深拷贝 (Fix 170)
+        "vb6_SafeArrayCreate1D(",
+        "vb6_SafeArrayReDim1D(",
+        "vb6_SafeArrayReDimPreserve1D(",
+        // Fix <vbeclipse> rev3: 带 elemType 的新入口。注意**不能**指望上一行前缀
+        // 命中 —— `vb6_SafeArrayReDimPreserve1D(` 与 `...1D_T(` 在第 25 个字符处分叉。
+        "vb6_SafeArrayReDimPreserve1D_T(",
+        "vb6_VariantToSafeArray1D(",   // 已提取过, 再包一层就是双重解引用
+        "vb6_VariantToByteArray(",
+        "vb6_StringToByteArray(",
+        "vb6_StrConvToByteArray(",
+        "vb6_ComCallByteArray(",
+    };
+    for (const auto& prefix : carrierPrefixes) {
+        if (cExpr.compare(start, prefix.size(), prefix) == 0) return true;
+    }
+    return false;
+}
+
 
 // ============================================================
 // Fix 038b-5: 运行时函数参数 C 类型查找表
@@ -548,6 +697,10 @@ std::string CCodeGen::getRuntimeParamCType(const std::string& funcName, size_t p
         {"vb6_ArrayGetLong",    {"vb6_SafeArray1D*", "int32_t"}},
         {"vb6_ArrayGetBSTR",    {"vb6_SafeArray1D*", "int32_t"}},
         {"vb6_ArrayGetDouble",  {"vb6_SafeArray1D*", "int32_t"}},
+        // Fix <vbeclipse>: Unload / LoadPicture — 形参是对象指针 (HWND / IDispatch);
+        // 实参是 COM 后期绑定读数 (VARIANT) 时按此表解包 (vb6_UnloadForm(l_View.View))。
+        {"vb6_UnloadForm",      {"void*"}},
+        {"vb6_LoadPictureEx",   {"BSTR"}},
         {"vb6_ArrayGetVariant", {"vb6_SafeArray1D*", "int32_t"}},
         // BSTR 操作
         {"vb6_BSTR_Assign",     {"BSTR*", "BSTR"}},
@@ -819,6 +972,62 @@ std::string CCodeGen::wrapWholeArrayAssign(const std::string& target,
              + elemUdt.substr(9) + "_v)";
     }
     return "vb6_ArrayAssign1D(" + target + ", " + rhs + ")";
+}
+
+// ============================================================
+// ai/009 §5.10 (P3) 溢出检查
+// ============================================================
+// 判"右值类型是否可能越出目标范围"。用**比特宽**比, 而不是逐类型列白名单:
+// 目标宽度以外的整型、以及一切浮点 (Single/Double/Currency/Date), 都能越界;
+// 目标宽度以内的 (含 Boolean —— 值域只有 -1/0), 永远不可能, 套检查纯属噪声。
+// Unknown/Variant 一律按"可能越界"算 —— 宁可多查, 不可漏查, 因为漏查就是静默错编。
+static int cgenIntBits(Vb6Type t) {
+    switch (t) {
+    case Vb6Type::Byte: case Vb6Type::Boolean: return 8;
+    case Vb6Type::Integer: return 16;
+    case Vb6Type::Long: case Vb6Type::ULong:
+    case Vb6Type::Single: case Vb6Type::LongPtr: return 32;
+    // Currency/Date 在 C 侧是 double, LongLong/LongPtr 是 64 位整数, 都可能越界
+    case Vb6Type::Double: case Vb6Type::Currency: case Vb6Type::Date:
+    case Vb6Type::LongLong: return 64;
+    default: return 0;   // Unknown / Variant / String / Object ... 由调用点决定
+    }
+}
+
+std::string CCodeGen::narrowCheckAssign(Expr* target, Expr* value,
+                                        const std::string& cValue) const {
+    if (!target || cValue.empty()) return cValue;
+    // 目标只认裸标量标识符。成员/数组/属性写入各自另有类型解析链, 猜错会把
+    // 合法赋值判成越界 (那比不检查更糟), 保持改动前的行为。
+    if (target->kind != ASTNodeKind::IdentifierExpr) return cValue;
+
+    // 这里**故意不复用** inferExprType 来定目标类型: 它把 Integer 答成 Long、
+    // 把 Byte 答成 Variant/Unknown, 那是几十个消费点共同依赖的既有口径, 动它
+    // 等于给 Debug.Print / Variant 装箱等一整条链换答案。这里只为溢出检查
+    // 单独查一遍精确的窄整型, 顺带靠这个局部性把影响面关在收窄赋值里。
+    Vb6Type tt;
+    auto& id = static_cast<IdentifierExpr&>(*target);
+    std::string lower = id.name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (knownByteVars_.count(lower))        tt = Vb6Type::Byte;
+    else if (knownIntVars_.count(lower))    tt = Vb6Type::Integer;
+    else if (knownBoolVars_.count(lower))   return cValue;   // 值域只有 -1/0
+    else if (knownLongVars_.count(lower))   tt = Vb6Type::Long;
+    else                                    tt = inferExprType(*target);
+
+    const char* fn = nullptr;
+    int tgtBits = 0;
+    switch (tt) {
+    case Vb6Type::Byte:    fn = "vb6_ChkByte"; tgtBits = 8;  break;
+    case Vb6Type::Integer: fn = "vb6_ChkInt";  tgtBits = 16; break;
+    case Vb6Type::Long:    fn = "vb6_ChkLong"; tgtBits = 32; break;
+    default: return cValue;
+    }
+
+    int srcBits = value ? cgenIntBits(inferExprType(*value)) : 0;
+    if (srcBits != 0 && srcBits <= tgtBits) return cValue;   // 装得下, 不套
+
+    return std::string(fn) + "(" + cValue + ")";
 }
 
 } // namespace vb6c3

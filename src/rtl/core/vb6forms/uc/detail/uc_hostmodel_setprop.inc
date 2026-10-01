@@ -9,6 +9,9 @@
     if (vb6_uc_isControls(obj)) return 1;
     if (vb6_uc_isColl(obj)) return 1;   // Fix 112c: Collection 只读容器
 
+    // Fix <vbeclipse> rev18: UC 实例指针 → 宿主 HWND (与 getprop / call 同口径)
+    { void* h18 = vb6_UC_HwndOf(obj); if (h18) obj = h18; }
+
     if (!vb6_ho_find(obj) && !vb6_uc_findByHwnd(obj) && !IsWindow((HWND)obj)) return 0;
 
     if (_wcsicmp(name, L"Caption") == 0 || _wcsicmp(name, L"Text") == 0) {
@@ -30,4 +33,9 @@
         MoveWindow((HWND)obj, vb6_TwipToX(l), vb6_TwipToY(t), vb6_TwipToX(w), vb6_TwipToY(hh), TRUE);
         return 1;
     }
+    // Fix <vbeclipse> rev18: 内建成员都没命中 → 写**本 UserControl 的自有 Property**
+    // (ucFolder.LeftPos = … 这类)。注意必须放在内建档之后: `Visible`/`Caption` 等同名
+    // 内建属性仍是窗口层语义。
+    if (vb6_UC_OwnPropSet(obj, name, v)) return 1;
+
     return 1;   // 宿主对象: 未知属性写入一律忽略

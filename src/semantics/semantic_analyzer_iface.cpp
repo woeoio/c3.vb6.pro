@@ -114,6 +114,9 @@ void SemanticAnalyzer::checkNewStyleInterface(const Module& module, const IfaceV
     };
 
     // --- 显式绑定 (B02b): 写了子句的成员**只**按子句入座, 不再参与同名隐式匹配 ---
+    // VB6 风格接口 (.cls 宿主) 的实现成员带 `<接口名>_` 前缀, 槽键要摘掉前缀再比
+    // (见 interface_sig.hpp 的 ifaceImplSlotKeyVb6)。
+    const bool vb6Names = view.clsHost != nullptr;
     std::set<const Decl*> explicitDecls;
     for (const auto& d : module.declarations) {
         if (!d) continue;
@@ -137,6 +140,11 @@ void SemanticAnalyzer::checkNewStyleInterface(const Module& module, const IfaceV
         IfaceProcSig sig;
         if (!ifaceSigFromDecl(*d, sig)) continue;
         bindSlot(sig.slotKey, sig, d->loc);
+        if (vb6Names) {
+            // `IScheme_ActiveCaptionForeColor` -> 槽 `get_activecaptionforecolor`
+            const std::string vb6Key = ifaceImplSlotKeyVb6(*d, sig.memberName, view.name, true);
+            if (vb6Key != sig.slotKey) bindSlot(vb6Key, sig, d->loc);
+        }
     }
 
     for (const auto& slot : view.slots) {

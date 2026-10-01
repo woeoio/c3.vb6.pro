@@ -198,6 +198,10 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // C29-WS: Winsock (MSWinsockLib.Winsock / Winsock. 各种写法都收)。"winsock" 与上面任何一条
     // 互不为子串，排在 Unknown 前即可。VB6 侧另有 ProgID 写法 MSWinsockLib.Winsock.1，同样命中。
     if (lower.find("winsock") != std::string::npos) return FrmControlType::Winsock;
+    // C29-SL: Slider (MSComctlLib.Slider)。"slider" 与上面任何一条互不为子串
+    // （没有 "sstab"/"listview"/"treeview"/"progressbar" 之类的重叠），排在 Unknown 前即可。
+    // VB6 侧另有 ProgID 写法 MSComctlLib.Slider.1，同样命中这条。
+    if (lower.find("slider") != std::string::npos) return FrmControlType::Slider;
 
     return FrmControlType::Unknown;
 }
@@ -254,6 +258,11 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // 里早就请求过)。以前这格缺着 + 被"ImageList || Toolbar 走 CoCreateInstance"那一组
         // 扣住 => 控件根本没窗口，读一个 tb1.Visible 就是 C2065: vb6_hwnd_tb1 未声明。
         case FrmControlType::Toolbar:      return "ToolbarWindow32";
+        // C29-SL-a: Slider —— comctl32 注册的 msctls_trackbar32 (头里 TRACKBAR_CLASSW)，
+        // 与 ProgressBar/Toolbar 同一族：类由 vb6forms.c 那次 InitCommonControlsEx 的
+        // ICC_BAR_CLASSES 请求过 ⇒ 不需要 RTL 自注册兜底（探针 .build/slprobe 实测
+        // CreateWindowEx 直接拿到句柄、类名读回就是 msctls_trackbar32）。
+        case FrmControlType::Slider:       return "msctls_trackbar32";
         // C29-1b: 文件系统三控件在 VB6 里本来就是公共控件的薄封装 —— Drive 是
         // CBS_DROPDOWNLIST 的组合框、Dir / File 是列表框。以前这三格缺映射, 创建流程
         // 把它们当"不可见控件"跳过, 于是 RTL 里那套 P20-37 填充 helper 从来没被喂过

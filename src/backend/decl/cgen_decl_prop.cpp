@@ -51,6 +51,8 @@ void CCodeGen::visit(PropertyDecl& node) {
     knownSingleVars_.clear();
     knownDateVars_.clear();   // Fix 175
     knownBoolVars_.clear();     // ai/022 W1
+    knownByteVars_.clear();     // 账 #123
+    knownIntVars_.clear();       // ai/009 5.10
     knownLongVars_.clear();
     knownLongPtrVars_.clear();  // Bug #2 fix: 也清空LongPtr集合
     knownVariantVars_.clear();
@@ -108,18 +110,41 @@ void CCodeGen::visit(PropertyDecl& node) {
             auto& simpleP = static_cast<SimpleTypeRef&>(*p->asType);
             std::string pLower = p->name;
             std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
-            auto* pSym = symTab_.lookupModule(simpleP.name);
+            // Fix 161f: 同 cgen_decl_func.cpp — 限定名 (ComctlLib.ColumnHeader) 用
+            // lookupTypeSymbol 按全名→末段查, 与 mapTypeRef 同口径。
+            auto* pSym = lookupTypeSymbol(simpleP.name);
+            if (!pSym) {
+                size_t pDot161f = simpleP.name.find('.');
+                if (pDot161f != std::string::npos)
+                    pSym = lookupTypeSymbol(simpleP.name.substr(pDot161f + 1));
+            }
+            // Fix <vbeclipse> rev7: 工程类名表兜底 —— 同 cgen_decl_proc.cpp 同款。
+            if (!pSym || pSym->kind != SymbolKind::Class) {
+                const std::string projClsP092r = projectClassNameOf(simpleP.name);
+                if (!projClsP092r.empty()) knownClassVars_[pLower] = projClsP092r;
+            }
             if (pSym && pSym->kind == SymbolKind::UserDefinedType) {
                 knownUdtVars_[pLower] = "vb6_type_" + cIdent(simpleP.name);
             } else if (pSym && pSym->kind == SymbolKind::Class) {
                 knownClassVars_[pLower] = pSym->name;
             } else if (pSym && (pSym->kind == SymbolKind::ComClass || pSym->kind == SymbolKind::ComInterface)) {
-                knownTypedComVars_[pLower] = pSym;
+                // Fix <vbeclipse>-2: 同 cgen_decl_func.cpp —— 本工程有同名类模块时走原生
+                // (判据 projectClassNameOf, 不是 isExternal; 类型库自动加载注进来的
+                // 内建 coclass isExternal=false).
+                const std::string projCls2 = projectClassNameOf(simpleP.name);
+                if (!projCls2.empty()) {
+                    knownClassVars_[pLower] = projCls2;
+                } else {
+                    knownTypedComVars_[pLower] = pSym;
+                }
             }
             auto* pSym2 = symTab_.lookup(simpleP.name);
             if (pSym2 && pSym2->kind == SymbolKind::Class && pSym2->isInterface) {
                 knownIfaceVars_[pLower] = pSym2->name;
             }
+            // Fix 161f: `lv As ListView` 形参槽就是 HWND —— 同 cgen_decl_func.cpp。
+            if (Symbol::toLower(simpleP.name).find("listview") != std::string::npos)
+                listViewSlotVars_.insert(pLower);
             // 注册BSTR/Double/Long类型参数到类型跟踪集合
             Vb6Type paramType = typeSys_.resolveTypeName(simpleP.name);
             if (paramType == Vb6Type::String) knownBstrVars_.insert(pLower);
@@ -136,10 +161,15 @@ void CCodeGen::visit(PropertyDecl& node) {
                 // C 类型串分派会让 inferExprType 看不见 Date (打出序列号)。
                 if (paramType == Vb6Type::Date) knownDateVars_.insert(pLower);
             }
-            else if (paramType == Vb6Type::Long || paramType == Vb6Type::Integer || paramType == Vb6Type::Boolean) {
+            else if (paramType == Vb6Type::Long || paramType == Vb6Type::Integer || paramType == Vb6Type::Boolean
+                     || paramType == Vb6Type::Byte) {
                 knownLongVars_.insert(pLower);
                 // ai/022 W1: 布尔形参另登记一份 (口径同 Fix 175 的 Date 形参)
                 if (paramType == Vb6Type::Boolean) knownBoolVars_.insert(pLower);
+                // 账 #123: Byte 形参一并进这一支 (口径同 ai/022 W1 的 Boolean —— C 型不同串
+                // 就永远看不见 ⇒ 比较被当 Variant 取地址)。另登记一份到 knownByteVars_,
+                // inferExprType 先判 Byte 那张表, 所以这里进 knownLongVars_ 不会把它读成 Long。
+                if (paramType == Vb6Type::Byte) knownByteVars_.insert(pLower);
             }
             // Bug #2 fix: LongPtr 参数注册到独立集合
             else if (paramType == Vb6Type::LongPtr || paramType == Vb6Type::LongLong) knownLongPtrVars_.insert(pLower);   // Fix 084m
@@ -154,6 +184,26 @@ void CCodeGen::visit(PropertyDecl& node) {
             // 仅当参数未被前面分支精确注册为 Class / ComClass / Interface / UDT 时
             // 才查 C 类型, 避免对 vb6_cls_* / vb6_ComIface_* 等 C 类型参数的错误
             // 注册. 与 visit(VariableDecl) line 651-656 行为一致 (局部 void* 同样注册).
+            // Fix <VBFlexGridDemo>: UDT 形参**优先**登记 (口径同 cgen_decl_func.cpp 那处)。
+            // knownClassVars_ 全程不清空, 别的模块 `Dim This As <工程类>` 会把同名条目
+            // 泄漏过来 ⇒ UDT 形参被当类实例 ⇒ 成员访问回落 COM 后期绑定
+            // vb6_ComGetObjectProp((*This), …) C2172。UDT 与类互斥, 故擦掉残留类条目。
+            {
+                std::string udtCTypeF = mapTypeRef(p->asType.get());
+                while (!udtCTypeF.empty() && (udtCTypeF.back() == '*' || udtCTypeF.back() == ' '))
+                    udtCTypeF.pop_back();
+                if (udtCTypeF.compare(0, 9, "vb6_type_") == 0) {
+                    knownUdtVars_[pLower] = udtCTypeF;
+                    // 同 cgen_decl_func.cpp: 擦掉互斥表里的同名残留 (它们都全程不清空,
+                    // 且判定分支排在 obj_dispatch 的 UDT 字段分支之前)。
+                    knownClassVars_.erase(pLower);
+                    knownTypedComVars_.erase(pLower);
+                    knownIfaceVars_.erase(pLower);
+                    knownIvrefVars_.erase(pLower);
+                    knownObjectVars_.erase(pLower);
+                    knownVariantVars_.erase(pLower);
+                }
+            }
             if (!knownClassVars_.count(pLower) && !knownTypedComVars_.count(pLower)
                 && !knownIfaceVars_.count(pLower) && !knownUdtVars_.count(pLower)) {
                 std::string paramCType = mapTypeRef(p->asType.get());
@@ -206,8 +256,15 @@ void CCodeGen::visit(PropertyDecl& node) {
             //     vb6_ret_CellFontSize = vb6_VariantFromComResult(vb6_ComCall(...))
             //   → VBFlexGrid.c 32210/32212 两条 C2440 (vb6_VARIANT→float)。
             currentReturnCType_ = retType;
-            Vb6Type retVb6Type = typeSys_.resolveTypeName(
-                static_cast<SimpleTypeRef*>(node.returnType.get())->name);
+            // 账 #116 同族 (与 cgen_decl_func.cpp 那处一字一样): 定长串返回类型的节点是
+            // FixedStringTypeRef, 按 SimpleTypeRef 读 name 就是把指针当字符串 ⇒ 天文数字的分配。
+            Vb6Type retVb6Type = Vb6Type::Unknown;   // 数组等复合形: '0' 就是它的空值
+            if (node.returnType->kind == ASTNodeKind::SimpleTypeRef) {
+                retVb6Type = typeSys_.resolveTypeName(
+                    static_cast<SimpleTypeRef*>(node.returnType.get())->name);
+            } else if (node.returnType->kind == ASTNodeKind::FixedStringTypeRef) {
+                retVb6Type = Vb6Type::String;
+            }
             // Fix 038/054: UDT 返回值不能用 = 0 初始化 (C2440), 改用 {0}
             // 修复: 仅检查 C 类型名前缀即可 (typeSys 可能将 UDT 解析为 Unknown/Variant)
             std::string initVal = defaultValue(retVb6Type);
@@ -234,13 +291,42 @@ void CCodeGen::visit(PropertyDecl& node) {
     c_.indent();
     // P12.3: 检测On Error并声明局部错误处理
     hasOnError_ = hasOnErrorInStmts(node.body);
+    procExitLabelUsed_ = false;
     if (hasOnError_) {
         c_.emitLine("jmp_buf vb6_local_err_jmp;");
         c_.emitLine("vb6_SaveErrState();");
     }
     // Fix 086: 先将块内 Dim/Const 提升到过程顶部 (VB6 局部声明是过程级作用域)
     hoistLocalDecls(node.body);
+    // Fix <vbeclipse>: VB6 隐式变量 (无 Option Explicit 时未声明即使用) ——
+    // 语义层登记的名字在此预声明为 Variant C 局部并注册 knownVariantVars_。
+    if (currentProc_) {
+        auto* impl = symTab_.implicitVarsFor(Symbol::toLower(moduleName_),
+                                             Symbol::toLower(currentProc_->name));
+        if (impl) {
+            for (const auto& n : *impl) {
+                std::string nLower = Symbol::toLower(n);
+                if (!knownLocalVars_.count(nLower)) {
+                    knownLocalVars_.insert(nLower);
+                    knownVariantVars_.insert(nLower);
+                    c_.emitLine("vb6_VARIANT " + cIdent(n) + " = vb6_VariantEmpty();  /* 隐式变量 */");
+                }
+            }
+        }
+    }
     emitStmtList(node.body);
+
+    // Fix <vbeclipse>: Property 的统一出口 + **缺失的错误状态恢复**。
+    // 原先 Property 只在中段发 vb6_SaveErrState() 而**从不** RestoreErrState,
+    // 于是每次调用都泄漏一层错误状态, 且 vb6_error_jmp_ptr 停留在本 Property
+    // 已失效的 vb6_local_err_jmp 上; 之后任何 vb6_ErrRaise 都会 longjmp 进死帧
+    // (野读崩)。Exit Property 现在发 `goto vb6_proc_exit;` 落到这里。
+    if (procExitLabelUsed_) {
+        c_.emitLine("vb6_proc_exit:;");
+    }
+    if (hasOnError_) {
+        c_.emitLine("vb6_RestoreErrState();");
+    }
 
     // M22: 释放ANSI临时变量
     for (auto& ansiVar : ansiTempsToFree_) {
@@ -249,21 +335,30 @@ void CCodeGen::visit(PropertyDecl& node) {
     ansiTempsToFree_.clear();
     ansiOutParams_.clear();
 
-    // tB Interface B05: 接口变量持有引用, 正常出口处经槽 Release (Exit Sub 例外, 同 ANSI 临时变量)
+    // tB Interface B05: 接口变量持有引用, 正常出口处经槽 Release
     emitIvrefScopeRelease();
 
     // Property Get: 隐式返回 vb6_ret_<propName>
     if (node.propKind == ProcKind::PropertyGet && node.returnType) {
         c_.emitLine("return " + currentReturnVar_ + ";");
+    } else if (procExitLabelUsed_) {
+        // Property Let/Set: 无返回值。给 vb6_proc_exit 一个后继语句 (标签后必须有语句)。
+        c_.emitLine("return;");
     }
     c_.dedent();
 
+    // Fix <vbeclipse>: 复原过程内被 #undef 的 Win32 宏 (隐式变量名隔离)
+    for (const auto& n : implicitMacroNames_) {
+        c_.emitLine("#pragma pop_macro(\"" + n + "\")");
+    }
+    implicitMacroNames_.clear();
     // 清理返回值变量和currentProc_
     if (node.propKind == ProcKind::PropertyGet) {
         currentReturnVar_ = "";
     }
     currentProc_ = nullptr;
     hasOnError_ = false;
+    procExitLabelUsed_ = false;
 
     c_.emitLine("}");
     c_.emitBlank();
@@ -323,6 +418,67 @@ std::string CCodeGen::makePropertySignature(PropertyDecl& node) {
         default:
             return "void " + propName + "(" + params + ")";
     }
+}
+
+// ============================================================
+// 接口类成员的默认实现 (Fix <vbeclipse>)
+// ============================================================
+
+// Fix <vbeclipse>: VB6 接口 (`Attribute VB_Exposed = True`) 的成员声明没有实现体,
+// 但 `Public m_Scheme As New IScheme` (modPublic.bas:12) 会**实例化接口本身** ——
+// VB6 语义下, 接口的 `Public Property Get X()` 就是它的默认实现. 生成端此前按
+// "接口成员是抽象的" 跳过 (P6.4), 前提是接口不可实例化; `As New` 打破该前提:
+// 调用方 (ucTab/ucButton/ucPerspective) 生成的 `vb6_IScheme_prop_get_BackColor(m_Scheme)`
+// 既无原型也无实体 → 链接期 LNK2001 "无法解析的外部符号" ×26.
+//
+// 这里补默认实现: Getter/Function 返回类型零值, Sub/Property Let/Set 空操作.
+// 真实实现由实现类 (SchemeWinXP 等, 经 vb6_ivtbl_IScheme_for_<C> 槽表) 提供, 两者
+// 名字不同 (vb6_SchemeWinXP_prop_get_BackColor vs vb6_IScheme_prop_get_BackColor),
+// 不冲突 —— 走的是"接口自带默认实现"这条独立通道, 与实现类无关.
+// 与 vb6rtl_userctl.h:56 既有口径一致: 无容器/无实现时返回空值即可满足编译链接.
+void CCodeGen::emitIfaceMemberStub(const SubDecl&, const std::string& sig, bool /*returnsValue*/) {
+    c_.emitLine(sig + " {");
+    c_.emitLine("    (void)me;");
+    c_.emitLine("}");
+    c_.emitBlank();
+}
+
+void CCodeGen::emitIfaceMemberStub(const FunctionDecl& fn, const std::string& sig, bool) {
+    const std::string ret = fn.returnType ? mapTypeRef(fn.returnType.get()) : "vb6_VARIANT";
+    emitIfaceStubBody(sig, ret);
+}
+
+void CCodeGen::emitIfaceMemberStub(const PropertyDecl& pn, const std::string& sig, bool) {
+    if (pn.propKind != ProcKind::PropertyGet) {  // Let/Set 无返回值 → 空操作
+        c_.emitLine(sig + " {");
+        c_.emitLine("    (void)me;");
+        c_.emitLine("}");
+        c_.emitBlank();
+        return;
+    }
+    const std::string ret = pn.returnType ? mapTypeRef(pn.returnType.get()) : "vb6_VARIANT";
+    emitIfaceStubBody(sig, ret);
+}
+
+// 返回类型零值: 标量/指针统一 `return 0;` (C 里 0 是合法空指针常量);
+// 结构体 (Variant 等) 不能用 0 → 零初始化复合字面量.
+void CCodeGen::emitIfaceStubBody(const std::string& sig, const std::string& retType) {
+    const bool isVoid = (retType == "void");
+    const bool isStruct = (retType == "vb6_VARIANT" || retType.compare(0, 7, "struct ") == 0);
+    c_.emitLine(sig + " {");
+    if (!isVoid) {
+        c_.emitLine(std::string("    (void)me;"));
+        if (isStruct) {
+            c_.emitLine("    " + retType + " vb6_iface_stub_z_ = {0};");
+            c_.emitLine("    return vb6_iface_stub_z_;");
+        } else {
+            c_.emitLine("    return 0;");
+        }
+    } else {
+        c_.emitLine("    (void)me;");
+    }
+    c_.emitLine("}");
+    c_.emitBlank();
 }
 
 // ============================================================

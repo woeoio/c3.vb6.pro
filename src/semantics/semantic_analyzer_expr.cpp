@@ -145,9 +145,13 @@ void SemanticAnalyzer::visit(IdentifierExpr& node) {
         lastExprType_ = sym->type;
     } else {
         // 未找到标识符
-        // 类继承 (tB, B07b): 命中祖先声明的成员 → 升格为错误。裸名这条路会静默少一段
-        // 代码 (发码侧认不出这个名字), 比报错糟得多; v1 要求写成 Me.<名字>。
-        if (pass_ == 2 && declaredByAncestor(node.name)) {
+        // <vbeclipse>: 但"工程级已经有这个名字"不算未找到 —— 标准模块的 Public 过程
+        // (裸名位) 与模块名 (`Mod.成员` 的限定符位) 都不能落成下面的隐式 Variant 声明，
+        // 判据与两种后果都写在 SemanticAnalyzer::namesProjectLevel 的声明处。
+        // 放在最前面：Option Explicit 那条 3001 警告同样不该为这两个位出。
+        if (pass_ == 2 && namesProjectLevel(node.name)) {
+            // 什么都不做 —— 不是变量，也不是未声明标识符；名字的含义由发码层按工程解析。
+        } else if (pass_ == 2 && declaredByAncestor(node.name)) {
             diag_.error(DiagnosticID::SemInheritsNotSupported, node.loc,
                 "Inherited member '" + node.name + "' cannot be called unqualified in this build"
                 " (write Me." + node.name + "; v1 merges inherited members onto the class symbol only)");
@@ -159,13 +163,30 @@ void SemanticAnalyzer::visit(IdentifierExpr& node) {
         } else if (optionExplicit_ && pass_ == 2) {
             diag_.warn(DiagnosticID::SemUndeclaredIdentifier, node.loc,
                 "未声明的标识符: '" + node.name + "' (可能来自其他模块)");
+        } else if (pass_ == 2 && !optionExplicit_ && currentProc_ && currentModule_) {
+            // Fix <vbeclipse>: VB6 隐式变量声明 — 工程未写 Option Explicit 时,
+            // 首次使用的裸标识符按 Variant 局部变量成立 (PopupMenu.cls 的
+            // Key/Text/msf_hilite 即真实案例)。登记进本过程作用域与隐式表
+            // (供发码侧在过程序言预声明 C 局部), 不再留成未定义裸名。
+            auto v = std::make_unique<Symbol>(SymbolKind::Variable, node.name,
+                Vb6Type::Variant, node.loc, AccessLevel::Private);
+            v->isReferenced = true;
+            symTab_.define(std::move(v));
+            symTab_.addImplicitVar(Symbol::toLower(currentModule_->moduleName),
+                                   Symbol::toLower(currentProc_->name), node.name);
         }
         lastExprType_ = Vb6Type::Variant;  // 宽松模式: 推导为Variant
     }
 }
 
 void SemanticAnalyzer::visit(MemberAccessExpr& node) {
+    // <vbeclipse>: 接收者子表达式站在"限定符位"上 (见 visit(IdentifierExpr) 的豁免条)。
+    // 嵌套 A.B.C 由本处的 save/restore 自然传递: 外层先把 ctx 置真, 内层 MemberAccess
+    // 再自己覆盖一次并复原，最左的那个裸标识符最终看到的正是"我在限定符位上"。
+    const bool savedMemberObjCtx = memberObjCtx_;
+    memberObjCtx_ = true;
     Vb6Type objType = analyzeExpr(*node.object);
+    memberObjCtx_ = savedMemberObjCtx;
     // ai/084a M1/M2: 成员访问级别守卫 —— obj 为 Me / 类类型变量时解析接收者类,
     // Private 成员越界报 3028 (家族内放行; 解析不出接收者 → 静默, 维持旧行为)。
     checkMemberAccessGuard(*node.object, node.memberName, node.loc);
@@ -307,6 +328,38 @@ void SemanticAnalyzer::visit(DictionaryAccessExpr& node) {
 }
 
 void SemanticAnalyzer::visit(IndexOrCallExpr& node) {
+    // VB3043 (<vbeclipse>, 用户在真 VB6 里实测确认): 数组槽实参必须是**数组表达式**。
+    // `UBound(vbNull)` 在 VB6 是编译期错误 (提示缺少数组), 不是某个返回值。C3 此前把常量
+    // 折成整数塞进 vb6_UBound/vb6_Join 的 SafeArray1D* 形参 —— 编译绿、运行期解引用地址 1
+    // → 0xC0000005 (实测 UBound(vbNull) 与 Join(vbNull, ",") 两条)。
+    // 只拦"字面量 / 常量"这一形 (VB6 里数组不可能是常量), 变量与属性实参一律放过,
+    // 避免误伤既有工程。数组槽 = 注册为 Variant|Array 的那三个首参 (builtin_funcs.inc)。
+    if (pass_ == 2 && node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr &&
+        !node.positional.empty()) {
+        std::string fnName = static_cast<IdentifierExpr&>(*node.callee).name;
+        std::string fnLower = Symbol::toLower(fnName);
+        if (fnLower == "ubound" || fnLower == "lbound" || fnLower == "join") {
+            Expr* a0 = node.positional[0].get();
+            bool constNotArray = (a0->kind == ASTNodeKind::LiteralExpr);
+            std::string a0Name;
+            if (!constNotArray && a0->kind == ASTNodeKind::IdentifierExpr) {
+                auto& id = static_cast<IdentifierExpr&>(*a0);
+                Symbol* s = symTab_.lookup(id.name);
+                if (s && !s->isArray &&
+                    (s->kind == SymbolKind::Constant || s->kind == SymbolKind::EnumMember)) {
+                    constNotArray = true;
+                    a0Name = id.name;
+                }
+            }
+            if (constNotArray) {
+                diag_.error(DiagnosticID::SemArrayArgExpected, node.loc,
+                    fnName + " needs an array expression; got " +
+                    (a0Name.empty() ? std::string("a literal") : "constant '" + a0Name + "'") +
+                    " (VB6 rejects this at compile time)");
+            }
+        }
+    }
+
     // 分析被调用者
     Vb6Type calleeType = Vb6Type::Unknown;
     bool argsAnalyzed = false;

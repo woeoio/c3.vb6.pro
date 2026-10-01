@@ -105,6 +105,14 @@ Private Sub Form_Load()
     ListView1.ListItems.Clear
     Debug.Print "LV20-AFTERCLEAR=" & ListView1.ListItems.Count
 
+    ' ---- 账 #128-b: 这六位是布尔属性, 三个面各钉一面 ----
+    ' VB6 的答案是 True / Boolean / VT_BOOL(11); 归 Boolean 之前它们**根本没登记进**
+    '类型表, 于是 `CStr(ListView1.GridLines)` 打的是 1。LV24 是**比较面**的鉴别针:
+    '值必须是 -1 才与 True 相等 —— RTL 以前"写什么存什么", 设计期发的是 1, 这条就恒假。
+    Debug.Print "LV23=" & CStr(ListView1.GridLines) & "/" & TypeName(ListView1.GridLines) & "/" & CStr(ListView1.MultiSelect)
+    ListView1.CheckBoxes = True
+    If ListView1.CheckBoxes = True Then Debug.Print "LV24=EQ" Else Debug.Print "LV24=NE"
+    Debug.Print "LV25=" & CStr(ListView1.AllowColumnReorder) & "/" & CStr(ListView1.HideColumnHeaders)
     Unload Me
 End Sub
 

@@ -98,6 +98,10 @@ void vb6_KillTimer(int timerId);
 // P24-Timer: WndProc dispatch for WM_TIMER (generated WndProc calls this)
 void vb6_DispatchTimer(int timerId);
 
+// 账 #157: 窗体显示时该把焦点交给谁（VB6 = TabIndex 最小那枚拿得到焦点的控件）。
+// 发码期算好、WM_CREATE 里存一次，vb6_ShowForm 在激活之后应用并销掉。
+void vb6_Form_SetInitialFocus(void* hwnd, void* target);
+
 // ============================================================
 // 消息循环
 // ============================================================

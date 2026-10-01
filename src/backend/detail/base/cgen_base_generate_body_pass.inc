@@ -8,13 +8,18 @@
     c_.emitBlank();
 
     for (auto& decl : module.declarations) {
-        if (currentClassIsInterface) continue;  // P6.4: 接口类不生成方法实现体 (由实现类提供)
         if (decl->kind == ASTNodeKind::SubDecl) {
-            visit(static_cast<SubDecl&>(*decl));
+            auto& sub = static_cast<SubDecl&>(*decl);
+            if (currentClassIsInterface) { emitIfaceMemberStub(sub, makeProcSignature(sub), false); continue; }
+            visit(sub);
         } else if (decl->kind == ASTNodeKind::FunctionDecl) {
-            visit(static_cast<FunctionDecl&>(*decl));
+            auto& func = static_cast<FunctionDecl&>(*decl);
+            if (currentClassIsInterface) { emitIfaceMemberStub(func, makeProcSignature(func), true); continue; }
+            visit(func);
         } else if (decl->kind == ASTNodeKind::PropertyDecl) {
-            visit(static_cast<PropertyDecl&>(*decl));
+            auto& prop = static_cast<PropertyDecl&>(*decl);
+            if (currentClassIsInterface) { emitIfaceMemberStub(prop, makePropertySignature(prop), prop.propKind == ProcKind::PropertyGet); continue; }
+            visit(prop);
         }
     }
 

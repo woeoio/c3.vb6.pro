@@ -1,12 +1,12 @@
 VERSION 5.00
 Begin VB.Form CtrlSSTab
    Caption         =   "CtrlSSTab"
-   ClientHeight    =   3300
+   ClientHeight    =   4095
    ClientLeft      =   120
    ClientTop       =   465
    ClientWidth     =   6000
    LinkTopic       =   "Form1"
-   ScaleHeight     =   3300
+   ScaleHeight     =   4095
    ScaleWidth      =   6000
    StartUpPosition =   3  '窗口缺省
    Begin VB.Timer tmrCheck
@@ -72,10 +72,37 @@ Begin VB.Form CtrlSSTab
          Top             =   600
          Width           =   1215
       End
+      Begin VB.CommandButton cmdInTab 
+         Caption         =   "IT"
+         Height          =   375
+         Left            =   1680
+         TabIndex        =   1
+         Top             =   600
+         Width           =   735
+      End
+   End
+   Begin VB.Frame Frame1 
+      Caption         =   "f1"
+      Height          =   1215
+      Left            =   3960
+      TabIndex        =   1
+      Top             =   2160
+      Width           =   1815
+      Begin VB.CommandButton cmdInFrame 
+         Caption         =   "IF"
+         Height          =   375
+         Left            =   240
+         TabIndex        =   0
+         Top             =   600
+         Width           =   735
+      End
    End
 End
 Attribute VB_Name = "CtrlSSTab"
 Option Explicit
+
+Private gTabGot As Long
+Private gFrameGot As Long
 
 ' P20-42: SSTab 复刻 (SysTabControl32, 不加载 TABCTL32.OCX)。
 ' 探针口径: ①设计期 Tabs/Tab/TabOrientation/TabStyle/TabsPerRow/WordWrap 原样进 RTL
@@ -166,10 +193,39 @@ Private Sub tmrCheck_Timer()
     Debug.Print "TS29-SETTAB2=" & SSTab1.Tab
     SSTab1.Tab = 0
     Debug.Print "TS29B-SETTAB0=" & SSTab1.Tab
-    Debug.Print "CTRLSSTAB-CLICKDONE"
+    Debug.Print "TS34=" & CStr(SSTab1.WordWrap) & "/" & TypeName(SSTab1.WordWrap) & "/" & VarType(SSTab1.WordWrap)
+Debug.Print "CTRLSSTAB-CLICKDONE"
+
+    ' ---- 账 #167 的两步证人（活动页=0，cmdInTab 在这一页上）----
+    Dim d1t As Long, d1f As Long
+    cmdInFrame.SetFocus        ' 先把焦点安在一个已知落点：#157 的初始焦点可能正好就是 cmdInTab
+    DoEvents
+    d1t = gTabGot: d1f = gFrameGot
+    cmdInTab.SetFocus
+    DoEvents
+    Debug.Print "TS35-ARM-TAB=" & CStr(gTabGot - d1t) & "/" & CStr(gFrameGot - d1f)
+    d1t = gTabGot: d1f = gFrameGot
+    cmdInFrame.SetFocus
+    DoEvents
+    Debug.Print "TS36-ARM-FRAME=" & CStr(gTabGot - d1t) & "/" & CStr(gFrameGot - d1f)
     Unload Me
 End Sub
 
 Private Sub SSTab1_Click(PreviousTab As Integer)
     Debug.Print "TS30-CLICK-PREV=" & PreviousTab & " NOW=" & SSTab1.Tab
+End Sub
+
+' 账 #167 的证人：**容器清单只许有一处权威**。收成单一 `controlIsContainerType` 之前，创建侧
+' 认 SSTab 而派发侧只认 Frame/PictureBox ⇒ 同一枚子控件在两侧数到不同的 id，
+' `cmdInTab` 的 BN_SETFOCUS 带着创建侧那个号，去派发侧找不到自己的 arm。
+' 这里 BASE 实测两步都是 `0/0`（号整体错开，谁也没接上）；在容器嵌得少一格的探针工程里同一
+' 条缺陷读出来是 `0/1` —— 号正好撞上**别人的** arm，跑的是别人的 `_GotFocus`。两种都算这一族。
+' 两步都钉：第二步反向给 `cmdInFrame` 焦点 —— 若两边全指到 cmdInTab 也一样红。
+' 读数只报增量：账 #157 那条初始焦点会自己发一次 GotFocus，先手落点不是这条要问的东西。
+Private Sub cmdInTab_GotFocus()
+    gTabGot = gTabGot + 1
+End Sub
+
+Private Sub cmdInFrame_GotFocus()
+    gFrameGot = gFrameGot + 1
 End Sub

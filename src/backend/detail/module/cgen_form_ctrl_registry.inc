@@ -88,6 +88,24 @@
     // Form2 上的 vb6_hwnd_ucPieChart1 等未声明 (C2065).
     emitControlHandleDecls(frmDesc);
 
+    // Fix <vbeclipse>: 控件跨模块访问器 — 其他模块 `frmViewViews.tvwViews` 引用
+    // 控件 HWND (控件句柄变量是本 .c 的 static, 外部直接发裸名必 C2065)。
+    // 只给非数组、非 Menu/ImageList 的控件发 (数组/ImageList 的槽形态不同, 有需要再扩)。
+    {
+        std::function<void(const FrmControl&)> accRec = [&](const FrmControl& ctrl) {
+            if (!ctrl.controlName.empty() && ctrl.index < 0
+                && ctrl.controlType != FrmControlType::Menu
+                && ctrl.controlType != FrmControlType::ImageList) {
+                std::string acc = "vb6_form_ctrl_" + cIdent(formName) + "_" + cIdent(ctrl.controlName);
+                h_.emitLine("void* " + acc + "(void);");
+                c_.emitLine("void* " + acc + "(void) { return vb6_hwnd_" + cIdent(ctrl.controlName) + "; }");
+            }
+            for (const auto& child : ctrl.children) accRec(child);
+        };
+        for (const auto& ctrl : frmDesc.formControl.children) accRec(ctrl);
+        h_.emitBlank();
+    }
+
     c_.emitLine("static int vb6_formLoading_" + cIdent(formName) + " = 0;");
     // Fix 112: Form_Load 是否已执行 (首次 Form_Resize 必须晚于 Form_Load)
     c_.emitLine("static int vb6_formLoaded_" + cIdent(formName) + " = 0;");

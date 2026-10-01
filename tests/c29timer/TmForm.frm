@@ -42,6 +42,7 @@ Declare Function GetTickCount Lib "kernel32" () As Long
 
 Private mOn As Long
 Private mOff As Long
+Private mDlg As Long
 
 Private Function TF(ByVal ok As Boolean) As String
     If ok Then TF = "Y" Else TF = "N"
@@ -57,6 +58,11 @@ End Sub
 
 Private Sub tOff_Timer()
     mOff = mOff + 1
+End Sub
+
+' 账 #156: 第二枚窗体的 Timer 自己数，只有它自己的事件过程会调这里。
+Public Sub SetDlg(ByVal n As Long)
+    mDlg = n
 End Sub
 
 Private Function Spin(ByVal ms As Long) As Long
@@ -122,6 +128,22 @@ Private Sub Form_Load()
     mOff = 0
     spent = Spin(600)
     Debug.Print "T10=" & TF(mOn >= 20 And mOff >= 20)
+
+    ' --- 11/12: 账 #156 第二枚窗体的 Timer 自己跳、且不串进第一枚的事件过程 ---
+    ' 改之前的实测读数：vb6_TimerAttach 的 id 取自控件 id 那个计数器，而每建一枚窗体
+    ' 编译器都发一次 vb6_ResetControlId() ⇒ 第二枚窗体的 Timer 与第一枚的第一枚 Timer
+    ' 同号；派发按 id 查进程内那张表、先建的那格先命中，于是 TmForm2 的到期全打在
+    ' tOn_Timer 上：mDlg 恒 0（T11 红）、mOn 的速率翻倍（T12 红）。
+    ' 两枚故意差 5 倍周期，翻红时差的是量级、不是抖动。
+    tOff.Enabled = False
+    tOn.Interval = 100
+    mOn = 0
+    mDlg = 0
+    TmForm2.Show vbModeless
+    spent = Spin(1000)
+    Debug.Print "T11=" & TF(mDlg >= 25) & "/" & mDlg
+    Debug.Print "T12=" & TF(mOn <= 20) & "/" & mOn
+    Unload TmForm2
 
     Debug.Print "TIMERPROG-DONE"
     Unload Me

@@ -251,6 +251,14 @@ bool SemanticAnalyzer::analyze(Module& module) {
                 if (ifaceReg_) {
                     auto found = ifaceReg_->find(Symbol::toLower(ifaceName));
                     if (found != ifaceReg_->end()) {
+                        // VB6 风格接口 (.cls 宿主, Pass A2 登记进来的): 宿主模块自己就是那个
+                        // 接口类, 所以还得照 legacy 路径那样给它打 isInterface 标记 —— 打码层
+                        // 靠这个标记跳过接口类的方法体生成 (接口成员本来就是无体的)。
+                        if (found->second.clsHost) {
+                            if (auto* hostSym = symTab_.lookupModule(found->second.name)) {
+                                hostSym->isInterface = true;
+                            }
+                        }
                         checkNewStyleInterface(module, found->second, ifaceName, impl->loc,
                                                boundClauses);
                         continue;

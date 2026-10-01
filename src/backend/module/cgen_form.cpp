@@ -88,6 +88,8 @@ void CCodeGen::emitFormFramework(const FrmFormDesc& frmDesc, Module& module) {
             if (c.controlType == FrmControlType::DTPicker) dtpickerVars_.insert(c.controlName);
             // C29-MV-c: MonthView 同批登记（判据方法 SimDateClick 的宿主槽是真窗口）。
             if (c.controlType == FrmControlType::MonthView) monthviewVars_.insert(c.controlName);
+            // C29-SL-c: Slider 同批登记（判据方法 SimNotify 的宿主槽是真窗口）。
+            if (c.controlType == FrmControlType::Slider) sliderVars_.insert(c.controlName);
             // C29-8b: TreeView 同批登记 —— `tv1.Nodes` 那条链靠 treeViewVars_ 认出宿主,
             // 才能改道到 vb6_TreeView_Nodes( 的真 IDispatch 集合 (不认就发
             // vb6_ComGetObjectProp(vb6_hwnd_tv1, L"Nodes") = 拿 HWND 当 IDispatch 用)。
@@ -314,15 +316,33 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc) {
             c_.emitLine("static void vb6_" + ctl + "_ucHostDblClick(void* me) { (void)me; }");
         }
 
+        // Fix <vbeclipse> rev18: 自有属性按名桥 (表 + thunk) —— 必须在本 desc 之前发。
+        // (.ctl 不走 emitFormFramework, 所以只能落在这个函数里; 见该 .inc 头部说明。)
+#include "backend/detail/module/cgen_form_uc_props.inc"
+
         c_.emitLine("static const vb6_UserControlDesc vb6_" + ctl + "_ucHostDesc = {");
         c_.emitLine("    \"" + moduleName_ + "\", " + std::to_string(ucScaleMode) + ",");
         c_.emitLine("    (void* (*)(void))vb6_cls_" + ctl + "_New,");
         c_.emitLine("    vb6_" + ctl + "_ucHostInit, vb6_" + ctl + "_ucHostPaint,");
         c_.emitLine("    vb6_" + ctl + "_ucHostResize, vb6_" + ctl + "_ucHostShow, vb6_" + ctl + "_ucHostTerminate,");
         c_.emitLine("    vb6_" + ctl + "_ucHostMouseDown, vb6_" + ctl + "_ucHostMouseUp,");
-        c_.emitLine("    vb6_" + ctl + "_ucHostMouseMove, vb6_" + ctl + "_ucHostDblClick");
+        // Fix <vbeclipse> rev18: 自有属性按名桥 —— 表与 thunk 由 emitFormFramework 的尾部
+        // (cgen_form_uc_props.inc) 先发; 那里把条数记进 ucHostPropCount_, 这里只引用.
+        c_.emitLine("    vb6_" + ctl + "_ucHostMouseMove, vb6_" + ctl + "_ucHostDblClick,"
+                    + (ucHostPropCount_ <= 0
+                           ? std::string(" NULL, 0")
+                           : (" vb6_" + ctl + "_ucProps, "
+                              + std::to_string(ucHostPropCount_)))
+                    + "  /* Fix <vbeclipse> rev18: 自有属性按名桥 */");
         c_.emitLine("};");
         c_.emitLine("void vb6_" + ctl + "_RegisterHost(void) { vb6_UC_Register(&vb6_" + ctl + "_ucHostDesc); }");
+        // Fix <vbeclipse> rev14: 让每个 .ctl 在**本模块的 init 函数**里自注册宿主描述。
+        // 此前只有"窗体设计面上直接摆了该 UC"的实例才会在窗体 create-controls 里
+        // 调用 RegisterHost; 而运行期 `Controls.Add("VbEclipse.ucFolder", ...)` 动态
+        // 创建的类型 (ucFolder/ucSplitBar/ucTab) 从未注册 → vb6_uc_findDesc 返回 NULL
+        // → Add 返回 NULL。驱动在 WinMain 里逐个调用各模块 vb6_mod_<X>_init(),
+        // 故把注册放进这里就保证了任何 Add 之前描述表已就绪。
+        moduleInitStmts_.push_back("vb6_" + ctl + "_RegisterHost();");
         // czUI fix: 暴露 UserControl_ReadProperties — 窗体侧在设计期属性直赋后
         // 以 PropertyBag 重放一次读取, 复现 .ctl 内部"读取后同步"逻辑
         if (hasProc("UserControl_ReadProperties")) {

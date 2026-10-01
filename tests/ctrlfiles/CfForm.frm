@@ -121,6 +121,12 @@ Private Sub Form_Load()
     auxList.AddItem "one"
     Debug.Print "CF14=" & TF(auxList.ListCount = 3 And Mid(auxList.List(0), 1, 4) = "dbl:")
 
+    ' --- 9. 账 #68: 窗体模块里裸 Left(...) 必须是**内置函数** (窗体的 Left 属性要写 Me.Left) ---
+    ' 修复前这一句被属性抢走: 发成 vb6_GetControlLeft(hwnd) 再拼实参, 编得过而读数不是字符串。
+    Debug.Print "CF15=" & TF(Left(auxList.List(0), 4) = "dbl:")
+    Debug.Print "CF16=" & TF(Right("dbl:xyz", 3) = "xyz" And Left("dbl:xyz", 4) = "dbl:")
+
+
     Debug.Print "CTRLFILES-DONE"
     Unload Me
 End Sub

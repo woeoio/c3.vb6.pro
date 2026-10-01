@@ -25,6 +25,15 @@ BSTR vb6_Left(BSTR s, int32_t n);
 BSTR vb6_Right(BSTR s, int32_t n);
 BSTR vb6_Mid(BSTR s, int32_t start, int32_t len);
 int32_t vb6_InStr(int32_t start, BSTR haystack, BSTR needle);
+// <vbeclipse>: vbTextCompare 共用核 (定义在 vb6rtl_string.c, InStr/InStrRev/Replace/
+// Split/Filter/StrComp 共用)。compare: 0 = vbBinaryCompare, 非 0 = vbTextCompare。
+// 位置都是 0 基; 找不到返回 -1 (InStr 系列在外面换算 1 基与 0)。
+int32_t vb6_TextFind(BSTR haystack, BSTR needle, int32_t from0, int32_t compare);
+int32_t vb6_TextFindRev(BSTR haystack, BSTR needle, int32_t from0, int32_t compare);
+int32_t vb6_TextMatchAt(BSTR haystack, int32_t at0, BSTR needle, int32_t compare);
+// <vbeclipse>: 带 compare 的 InStr (codegen 在实参是 4 个、或 3 个而首参是字符串时用它)
+int32_t vb6_InStrC(int32_t start, BSTR haystack, BSTR needle, int32_t compare);
+int32_t vb6_InStrVarC(int32_t start, BSTR haystack, vb6_VARIANT needle, int32_t compare);
 // Fix 093a: InStrB — 字节版 InStr. 实参可为 Byte() 一维数组 (vb6_SafeArray1D*)
 // 或 BSTR; 返回 1 基字节位置 (0=未找到). 此前 RTL 无此符号 → LNK2019.
 int32_t vb6_InStrB(int32_t start, void* haystack, void* needle);
@@ -44,7 +53,7 @@ double vb6_Val(BSTR s);
 // Fix 090d: VB6 类型转换函数的字符串解析 (支持 &H/&O 前缀, 见 vb6rtl.c)
 double vb6_NumVal(BSTR s);
 BSTR vb6_Str(int32_t n);
-BSTR vb6_Format(vb6_VARIANT expr, BSTR fmt);
+BSTR vb6_Format(vb6_VARIANT expr, BSTR fmt, int32_t firstDayOfWeek, int32_t firstWeekOfYear);
 #ifndef __cplusplus
 #define vb6_LTrim(x) _Generic((x), \
     vb6_VARIANT: vb6_LTrimVar, \
@@ -79,6 +88,8 @@ BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 V
 // Fix 084m: LongLong → String (64 位, 不截断; vb6_Format 不认 VT_I8, 故独立实现)
 BSTR vb6_CStrLongLong(int64_t x);
 BSTR vb6_CStrDbl(double x);
+BSTR vb6_CStrDblFromBSTR(BSTR s);      // vbeclipse: BSTR 实参 (后期绑定 COM 数值属性读) → vb6_Val 解析
+BSTR vb6_CStrDblFromVariant(vb6_VARIANT v);  // Fix 158q 同款: _Generic 的 Variant 解包入口
 // Fix 117c: Single 专用 (VT_R4, 7 位有效数字 + 最短往返)
 BSTR vb6_CStrSingle(float x);
 BSTR vb6_CStrBool(int16_t x);
@@ -175,6 +186,12 @@ int32_t vb6_InStrRev(BSTR haystack, BSTR needle, int32_t start, int32_t compare)
 BSTR vb6_LCase_str(BSTR s);  // LCase$别名
 BSTR vb6_UCase_str(BSTR s);
 int16_t vb6_Like(BSTR source, BSTR pattern);  // Like运算符
+// <vbeclipse>: 带比较模式的 Like (mode: 0=vbBinaryCompare, 非0=文本)。
+// `Option Compare Text` 模块里 codegen 发改写调用点到这里。
+int16_t vb6_LikeC(BSTR source, BSTR pattern, int32_t mode);
+// <vbeclipse>: 文本比较的唯一口径 (CompareStringW 区域语言序, 见 vb6rtl_string.c);
+// vb6_StrComp 的 vbTextCompare 形与 Option Compare Text 模块的运算符共用它。
+int vb6_TextCmp(const wchar_t* a, const wchar_t* b);
 
 // ============================================================
 // P14.2.2: 系统函数
@@ -242,7 +259,7 @@ BSTR vb6_App_HelpFile(void); // App.HelpFile - 帮助文件名(无App COM对象,
 void   vb6_Clipboard_SetText(BSTR text);
 BSTR   vb6_Clipboard_GetText(void);
 void   vb6_Clipboard_Clear(void);
-void   vb6_Clipboard_SetData(void* pPicture);
+void   vb6_Clipboard_SetData(void* pPicture, int32_t format);  // format: 0=auto, 2=vbCFBitmap, 14=vbCFEMetafile
 int32_t vb6_Clipboard_GetFormat(int32_t format);  // 1=vbCFText, 2=vbCFBitmap, etc.
 
 // P18-C: Screen 对象
@@ -254,6 +271,9 @@ void*  vb6_Screen_ActiveControl(void);  // Active control HWND
 void*  vb6_Screen_ActiveForm(void);     // Active form HWND
 int32_t vb6_Screen_TwipsPerPixelX(void);
 int32_t vb6_Screen_TwipsPerPixelY(void);
+// Fix 161f: Screen.MousePointer 全局读/写 (非控件级)
+int32_t vb6_Screen_MousePointer(void);
+void    vb6_Screen_SetMousePointer(int32_t pointer);
 
 // P18-C: Printer 对象
 void   vb6_Printer_Print(BSTR text);
@@ -272,6 +292,12 @@ void   vb6_Printer_SetCurrentY(int32_t y);
 // vb6_Printers_Collection: 空 RTL Collection (vb6_ForEach_Init 原生支持,
 //   For Each 循环零次; 真实 EnumPrinters 枚举属后续增强)。
 void*  vb6_Printer_Object(void);
+
+// Fix <vbeclipse>: vb6_Screen_Object — Screen 全局对象哨兵 (NULL)。
+// .Width/.MouseX 等已登记成员在 MemberAccess 分支直接发 vb6_Screen_Xxx();
+// 未登记成员赋值落 NULL 槽语义, 无害。
+void*  vb6_Screen_Object(void);
+extern void* vb6_Screen_MouseIcon;         // Fix <vbeclipse>: Screen.MouseIcon 读写槽
 void*  vb6_Printer_hDC(void);
 void*  vb6_Printers_Collection(void);
 
@@ -293,6 +319,11 @@ BSTR vb6_InputBox(BSTR prompt, BSTR title, BSTR defaultstr, int32_t xpos, int32_
 // 类型转换 (补充)
 int16_t vb6_CBool(double v);
 uint8_t vb6_CByte(double v);
+// 溢出检查收窄 (VB6 Error 6): 值越界时 vb6_RaiseError(6, "Overflow"),
+// 可被 On Error 捕获; 范围内原样窄化。ai/009 §5.10 P3。
+uint8_t vb6_ChkByte(int32_t v);
+int16_t vb6_ChkInt(int32_t v);
+int32_t vb6_ChkLong(int64_t v);
 float vb6_CSng(double v);
 double vb6_CDate(vb6_VARIANT v);
 BSTR vb6_Hex(int32_t n);
@@ -305,6 +336,10 @@ long vb6_RGB(int32_t r, int32_t g, int32_t b);  // RGB: OLE color
 long vb6_QBColor(int32_t n);        // QBColor: 16-color lookup
 double vb6_FileDateTime(BSTR pathname); // FileDateTime: 文件修改时间→VB6 date serial
 int32_t vb6_FileLen(BSTR pathname);    // FileLen: 文件大小(字节)
+// <vbeclipse>: GetAttr/SetAttr 只有定义没有声明 (vb6rtl_misc.c:99/107) ⇒ 生成的 C 走
+// 隐式 int 声明, 每个用到它们的工程都吃一条 cl C4013; 补上原型消除该族警告。
+int32_t vb6_GetAttr(BSTR pathname);    // GetAttr: 文件属性 (GetFileAttributesW)
+void    vb6_SetAttr(BSTR pathname, int32_t attributes); // SetAttr: 设置文件属性
 void   vb6_SendKeys(BSTR keys, int32_t wait);    // SendKeys: 发送按键
 void   vb6_AppActivate(BSTR title, int32_t wait); // AppActivate: 激活窗口(标题或数字PID)
 void   vb6_AppActivateByPid(int32_t pid, int32_t wait); // AppActivate: 按进程ID激活窗口
@@ -384,6 +419,14 @@ static inline int32_t vb6_CLngPtr(void* p) { return (int32_t)(intptr_t)p; }
 #define vb6_CStrLong(x) _Generic((x), \
     vb6_VARIANT: vb6_CStrLongFromVariant, \
     default: vb6_CStrLong)((x))
+// vbeclipse: CStrDbl 补 BSTR/Variant 分派 (默认分支不变, 老调用点行为一致).
+// 背景: 后期绑定 COM 数值属性在拼接语境下被 codegen 读成 vb6_ComGetStringProp
+// (BSTR), 而 vb6_CStrDbl 原签名只收 double → C2440 (ucPerspective.c 3333/3384/
+// 3453/3504).
+#define vb6_CStrDbl(x) _Generic((x), \
+    BSTR: vb6_CStrDblFromBSTR, \
+    vb6_VARIANT: vb6_CStrDblFromVariant, \
+    default: vb6_CStrDbl)((x))
 #define vb6_CLng(x) _Generic((x), \
     vb6_VARIANT: vb6_CLngV, \
     BSTR: vb6_CLngBSTR, \
@@ -414,6 +457,14 @@ int32_t vb6_InStrVar(int32_t start, BSTR haystack, vb6_VARIANT needle);
 #define vb6_InStr(start, haystack, needle) _Generic((needle), \
     vb6_VARIANT: vb6_InStrVar, \
     default: vb6_InStr)((start), (haystack), (needle))
+#endif
+
+// <vbeclipse>: 4 参形的同款分派 (Fix 158s 的机制, 只是多一个 compare 实参) ——
+// InStr 的"字符串优先三参形"与四参形都发到这里, needle 是 Variant 时先解包。
+#ifndef __cplusplus
+#define vb6_InStrC(start, haystack, needle, compare) _Generic((needle), \
+    vb6_VARIANT: vb6_InStrVarC, \
+    default: vb6_InStrC)((start), (haystack), (needle), (compare))
 #endif
 
 #ifdef __cplusplus

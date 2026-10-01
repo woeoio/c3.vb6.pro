@@ -4,9 +4,12 @@
 # 触发方式: 打 tag github-test-* 推送到 GitHub, 例如:
 #   git tag github-test-001
 #   git push <github 远端> github-test-001
-# 内容: t0 job 构建 C3.exe + run_t0.ps1 门禁; t1 job 复用产物跑 run_t1.ps1 最小回归
-#   (bas 33 用例 x64+x86 双架构 64 任务 + compile 10); t2 job 复用产物跑 run_t2.ps1
-#   全量回归 (vbp 8 执行断言 + GUI 4 只编译)。用例均 cp 自 tests/, tests_github 自包含。
+# 内容: t0 job = build-once: 构建 C3.exe + 上传 c3-exe artifact + 跑完整 run_t0.ps1
+#   门禁 (语法全量 + smoke e2e, 不分片, 保证 build/syntax/smoke 三段一次到位)。
+#   tests job = 矩阵 fan-out (tier × shard): 复用 c3-exe artifact, 把 run_t1.ps1 (bas 64 任务
+#   + compile) 与 run_t2.ps1 (vbp 8 + GUI 5) 按 -Shard/-ShardTotal 切给多 runner, 每 runner 内
+#   再 -Jobs 20 并行 (每 worker 独立输出目录) —— 关键路径从 t0→t1→t2 串行压到 t0 + max(shard)。
+#   用例均 cp 自 tests/, tests_github 自包含。shard 数是可调旋钮 (参照 ci.yml 的实测注释)。
 # 触发: tag github-test-* / 夜间 cron / 手动 dispatch, 见 on: 块。
 
 name: GitHub Tests T0+T1+T2
@@ -99,14 +102,50 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  t1:
-    name: T1 最小回归（编译 + 运行 + 输出断言）
+  tests:
+    name: "Tests (${{ matrix.tier }} shard ${{ matrix.shard }}/${{ matrix.shardTotal }})"
     needs: t0
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
       run:
         shell: pwsh
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # tier = 跑哪个脚本 (run_t1.ps1 / run_t2.ps1); shard/shardTotal 经 -Shard/-ShardTotal
+          # 传给脚本, 各 runner 只执行完整清单的第 shard 片 (清单守卫仍对完整 33/64/8/5 校验)。
+          # shardArgs 逐条显式写出 (参照 ci.yml), 不用表达式拼 —— 拼错时 GitHub 不报错、静默少传参。
+          #
+          # t1: bas 64 任务 (每 runner 内再 -Jobs 20 并行) 是 T0+T1+T2 的主要墙钟 → 切 4 片。
+          #     compile 10 + smoke e2e 在 run_t1.ps1 里已锁 shard 1, 其余片自动跳过 (不减检查)。
+          # t2: vbp 8 + GUI 5 = 13 工程编译 → 切 2 片 (每片约 7 例), 再加 -Jobs 并行。
+          # 分片数按调用次序连续切片, 加用例不必改这里 (总数写不进代码)。
+          - tier: t1
+            shard: 1
+            shardTotal: 4
+            shardArgs: "-Shard 1 -ShardTotal 4"
+          - tier: t1
+            shard: 2
+            shardTotal: 4
+            shardArgs: "-Shard 2 -ShardTotal 4"
+          - tier: t1
+            shard: 3
+            shardTotal: 4
+            shardArgs: "-Shard 3 -ShardTotal 4"
+          - tier: t1
+            shard: 4
+            shardTotal: 4
+            shardArgs: "-Shard 4 -ShardTotal 4"
+          - tier: t2
+            shard: 1
+            shardTotal: 2
+            shardArgs: "-Shard 1 -ShardTotal 2"
+          - tier: t2
+            shard: 2
+            shardTotal: 2
+            shardArgs: "-Shard 2 -ShardTotal 2"
     env:
       # 交给脚本的 vswhere 自动发现 vcvarsall (无需显式设置)
       C3_VCVARSALL: ""
@@ -125,65 +164,21 @@ jobs:
           & .build\C3.exe --version
           if ($LASTEXITCODE -ne 0) { throw "downloaded C3.exe broken" }
 
-      # T1 自包含 (2026-09-20): 用例 cp 自 tests\ 至 tests_github\t1_cases\, 驱动为
-      # tests_github/run_t1.ps1 (自带清单与引擎) —— 方向是 tests_github 独立、后续废弃 tests\。
-      #   bas 类 = 33 用例 x64+x86 双跑 = 64 任务 (-Jobs 20 并行)
-      #   compile 类 = 10 个 (comprehensive x2 + 8 个 frm, 只编译)
-      # vbp/GUI 用例不进 T1 (窗口校验依赖本机环境, 留给后续夜间全量层)
-      - name: 运行 T1 门禁（run_t1.ps1：bas 33 用例 x64+x86=64 并行 + compile 10）
+      # 每 runner 内 -Jobs 20 并行 (每 worker 独立输出目录 output/vbprun*、output/guicompile*、
+      # output/job* — 从不依赖"最新临时目录"), 跨 runner 用 -Shard 切片。
+      - name: "Run ${{ matrix.tier }} (shard ${{ matrix.shard }}/${{ matrix.shardTotal }})"
         shell: pwsh
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests_github/run_t1.ps1 -Jobs 20 -Verbose
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests_github/run_${{ matrix.tier }}.ps1 -Jobs 20 ${{ matrix.shardArgs }} -Verbose
 
-      - name: 上传 T1 日志
+      - name: "上传 ${{ matrix.tier }} shard ${{ matrix.shard }} 日志"
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: t1-logs
+          name: "${{ matrix.tier }}-${{ matrix.shard }}-logs"
           path: |
             output/**/*.out
             output/**/*.err
             output/**/*.txt
             output/**/scores.txt
-          if-no-files-found: warn
-          retention-days: 14
-
-  t2:
-    name: T2 全量回归（vbp 执行断言 + GUI 只编译）
-    needs: t1
-    runs-on: windows-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: pwsh
-    env:
-      # 交给脚本的 vswhere 自动发现 vcvarsall (无需显式设置)
-      C3_VCVARSALL: ""
-    steps:
-      - name: 检出代码
-        uses: actions/checkout@v5
-
-      - name: 下载 C3.exe 产物（来自 T0）
-        uses: actions/download-artifact@v8
-        with:
-          name: c3-exe
-          path: .build/
-
-      - name: 校验下载的 C3.exe
-        run: |
-          & .build\C3.exe --version
-          if ($LASTEXITCODE -ne 0) { throw "downloaded C3.exe broken" }
-
-      - name: 运行 T2 门禁（run_t2.ps1：vbp 8 执行断言 + GUI 4 只编译）
-        shell: pwsh
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests_github/run_t2.ps1 -Verbose
-
-      - name: 上传 T2 日志
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: t2-logs
-          path: |
-            output/**/*.out
-            output/**/*.err
           if-no-files-found: warn
           retention-days: 14

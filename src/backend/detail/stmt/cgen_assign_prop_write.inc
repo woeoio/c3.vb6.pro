@@ -416,6 +416,17 @@
             break;
         }
         case WithObjKind::COMObject: {
+            // Fix 161f-extlist: With 目标是 ListView 槽 (形参/局部) —— 走控件属性写表,
+            // 不发 vb6_ComSetProp (那是拿 HWND 当 IDispatch 用, 静默无效)。
+            if (info.ctrlType == FrmControlType::ListView) {
+                std::string writeFnLv = getControlPropWriteFn(FrmControlType::ListView, wmExpr.memberName);
+                if (!writeFnLv.empty()) {
+                    emitExpr(*node.value);
+                    std::string valExprLv = controlPropValueExpr(writeFnLv, lastExpr_, *node.value);
+                    c_.emitLine(writeFnLv + "((void*)" + tempVar + ", " + valExprLv + ");  /* With ListView slot prop write */");
+                    return;
+                }
+            }
             emitExpr(*node.value);
             std::string valExpr = std::move(lastExpr_);
             std::string packFn = comPackExpr(*node.value);
@@ -472,7 +483,56 @@
                         lastExpr_ = packLetValueArg(letPropSym->params.back(),
                                                     node.value.get(), lastExpr_);
                     }
-                    c_.emitLine(letFn + "(" + tempVar + ", " + lastExpr_ + ");  /* With class prop_let_ */");
+                    // Fix <VBFlexGridDemo>: With 块这条 prop_let_ 与上面 Fix 158h 那条
+                    // (非 With 的 MemberAccess 写) 同病 —— 属性带**前置入口参数**
+                    // (Optional ByRef After) 时只发 (obj, value):
+                    //   VBFlexGrid.ctl:9212 Property Let InsertMark(Optional ByRef After
+                    //   As Boolean, ByVal Value As Long) ⇒ C 声明
+                    //   (me, int16_t* After, int32_t Value, int _has_After)
+                    //   MainForm.frm:746/751 `.InsertMark = .FixedRows` / `.InsertMark = -1`
+                    //   ⇒ prop_let_InsertMark(_vb6_with_22, …) 只有 2 实参 ⇒ C2198×2。
+                    // 复用 Fix 158h 的 padding 模板 (默认值 + Optional 的 _has_ 0)。
+                    std::string padArgsWithLet;
+                    {
+                        std::vector<ParameterInfo> wpWith;
+                        if (!canonicalClassName.empty()
+                            && findClassMemberWriteParams(canonicalClassName, wmExpr.memberName,
+                                                          false, wpWith)
+                            && wpWith.size() > 1) {
+                            padArgsWithLet = tempVar;
+                            size_t npW = wpWith.size() - 1;
+                            for (size_t j = 0; j < npW; j++) {
+                                const ParameterInfo& ppW = wpWith[j];
+                                std::string defW =
+                                    (ppW.hasDefaultValue && !ppW.defaultValueExpr.empty())
+                                    ? ppW.defaultValueExpr : defaultValue(ppW.type);
+                                padArgsWithLet += ", ";
+                                if (ppW.isByVal) {
+                                    padArgsWithLet += defW;
+                                } else {
+                                    std::string ctW = mapType(ppW.type);
+                                    if (ppW.type == Vb6Type::Variant
+                                        || ppW.type == Vb6Type::Empty
+                                        || ppW.type == Vb6Type::Null
+                                        || ppW.type == Vb6Type::Object) {
+                                        padArgsWithLet += "&(" + ctW + "){0}";
+                                    } else {
+                                        padArgsWithLet += "&(" + ctW + "){" + defW + "}";
+                                    }
+                                }
+                            }
+                            padArgsWithLet += ", " + lastExpr_;
+                            for (size_t j = 0; j < npW; j++) {
+                                if (wpWith[j].isOptional) padArgsWithLet += ", 0";
+                            }
+                        }
+                    }
+                    if (!padArgsWithLet.empty()) {
+                        c_.emitLine(letFn + "(" + padArgsWithLet
+                                    + ");  /* With class prop_let_ (Fix <VBFlexGridDemo>) */");
+                    } else {
+                        c_.emitLine(letFn + "(" + tempVar + ", " + lastExpr_ + ");  /* With class prop_let_ */");
+                    }
                     return;
                 }
                 if (!setFn.empty()) {
@@ -513,6 +573,67 @@
                         c_.emitLine("vb6_" + cIdent(canonCls090h) + "_prop_let_"
                                     + cIdent(wmExpr.memberName) + "(" + tempVar + ", "
                                     + val090h + ");  /* With class prop_let_ (Fix 090h) */");
+                        return;
+                    }
+                    // Fix <vbeclipse>: findClassMemberCallParams 也会漏 (SplitBar.cls
+                    // 的 `Property Let Orientation` 生成 vb6_SplitBar_prop_let_Orientation,
+                    // 但语义层 Class 符号的 memberParams/memberProcKinds 未记录该属性 →
+                    // 090h 走不到 → 字段写 `_vb6_with_1->Orientation` → C2039
+                    // "Orientation 不是 vb6_cls_SplitBar 的成员" (ucSplitBar.ctl:148
+                    // `With SplitBar: .Orientation = m_Orientation`). 用
+                    // resolveClassMemberCall 兜底 (它查运行期类成员解析, 与属性函数名
+                    // 生成一源, 能找到 prop_let_).
+                    {
+                        std::string rc090h = resolveClassMemberCall(canonCls090h,
+                                                                    wmExpr.memberName);
+                        if (!rc090h.empty()
+                            && rc090h.find("_prop_let_") != std::string::npos) {
+                            emitExpr(*node.value);
+                            std::vector<ParameterInfo> p090h;
+                            bool b090h = false;
+                            if (findClassMemberCallParams(canonCls090h, wmExpr.memberName,
+                                                          p090h, b090h)
+                                && !p090h.empty()
+                                && (p090h.back().type == Vb6Type::Variant
+                                    || !p090h.back().isByVal)) {
+                                lastExpr_ = packLetValueArg(p090h.back(),
+                                                            node.value.get(), lastExpr_);
+                            }
+                            c_.emitLine(rc090h + "(" + tempVar + ", " + lastExpr_
+                                        + ");  /* With class prop_let_ (vbeclipse) */");
+                            return;
+                        }
+                    }
+                }
+                // Fix <vbeclipse>: SplitBar.cls 类符号被 ucSplitBar.ctl 同名控件
+                // 字段遮蔽 (ucSplitBar.h:140 `void* SplitBar;`) → resolveClassMemberCall/
+                // findClassMemberCallParams 均失效 → 上面 090h/FnRet 兜底落空 → 字段写
+                // `_vb6_with_1->Orientation` C2039. 成员不是该类的数据字段
+                // (classTypedFieldMap_ 无此项) → 按 090h 同一命名约定直发
+                // vb6_<Cls>_prop_let_<Member>(With, value) (SplitBar.h 已生成
+                // vb6_SplitBar_prop_let_Orientation(vb6_cls_SplitBar*, int32_t)).
+                {
+                    bool isDataField090c = false;
+                    if (classTypedFieldMap_) {
+                        auto itCf090c = classTypedFieldMap_->find(info.className);
+                        if (itCf090c != classTypedFieldMap_->end()
+                            && itCf090c->second.count(
+                                Symbol::toLower(wmExpr.memberName)))
+                            isDataField090c = true;
+                    }
+                    if (!isDataField090c && !info.className.empty()) {
+                        std::string canonCls090c = info.className;
+                        if (symTab_.moduleScope()) {
+                            auto clsIt090c = symTab_.moduleScope()->symbols().find(
+                                Symbol::toLower(info.className));
+                            if (clsIt090c != symTab_.moduleScope()->symbols().end()
+                                && clsIt090c->second->kind == SymbolKind::Class)
+                                canonCls090c = clsIt090c->second->name;
+                        }
+                        emitExpr(*node.value);
+                        c_.emitLine("vb6_" + cIdent(canonCls090c) + "_prop_let_"
+                                    + cIdent(wmExpr.memberName) + "(" + tempVar + ", "
+                                    + lastExpr_ + ");  /* With class prop_let_ direct (vbeclipse) */");
                         return;
                     }
                 }

@@ -36,6 +36,22 @@ void CCodeGen::visit(WithMemberExpr& node) {
             lastExpr_ = tempVar + "  /* With COM ." + node.memberName + " */";
             return;
         }
+        // Fix <vbeclipse>: With <CommonDialog> 块内的 .ShowOpen / .ShowSave / …
+        // 与成员侧 cgen_expr_member 的 CD 那一刀同构：打 com 标记（这里存的是
+        // With 临时变量名，消费侧见 cgen_expr_call_callee_withm.inc）。不接的
+        // 话落到 warn 兜底 → `tempVar.ShowOpen()` → C2039 "不是 HWND__ 的成员"。
+        if (info.ctrlType == FrmControlType::CommonDialog) {
+            if (memLower == "showopen" || memLower == "showsave" || memLower == "showcolor"
+                || memLower == "showfont" || memLower == "showprinter" || memLower == "showabout") {
+                comObjExpr_ = tempVar;
+                comMemberName_ = node.memberName;
+                isComMarker_ = true;
+                isEarlyBoundCom_ = false;
+                earlyBoundSym_ = nullptr;
+                lastExpr_ = tempVar + "  /* With CD ." + node.memberName + " */";
+                return;
+            }
+        }
         // .Property → vb6_GetControlXxx(tempVar) or Menu prop
         std::string readFn = getControlPropReadFn(info.ctrlType, node.memberName);
         if (!readFn.empty()) {
@@ -45,6 +61,25 @@ void CCodeGen::visit(WithMemberExpr& node) {
                 lastExpr_ = readFn + "(" + makeCtrlHwndArg(mnuLower, info.ctrlType) + ")  /* With menu .Property */";
             } else {
                 lastExpr_ = readFn + "(" + tempVar + ")  /* With ctrl .Property */";
+            }
+            return;
+        }
+        // C29-SL-m（账 #150）: With 块里的控件**零实参方法** —— `With sldA : .ClearSel : End With`。
+        // 以前成员名不分属性还是方法，方法也落到下面那条"未知属性"兜底，发成
+        // `tempVar.方法名()` —— HWND 是 struct 指针，那是**编译错**（实测构建失败 exit 2，
+        // 伴 VB4001），不是运行期静默空转。表与两条码头共用（controlZeroArgMethod），
+        // 控件类型直接用 With 入口那一帧记着的 ctrlType，不再回头查名字。
+        std::string zaFnW = controlZeroArgMethod(info.ctrlType, memLower);
+        if (!zaFnW.empty()) {
+            // 两形都要照顾：带括号的 `.SetFocus()` 走到这里时 asCallCallee_=true，
+            // 直接交付完整调用文本会被调用点再补一对括号 ⇒ `f(hwnd)()`（实测过，非法 C）。
+            // 所以照 ClassInstance 那条 Fix 090s 的协议：交付裸函数名 + pendingChainObj_，
+            // 由调用点把 this（就是 With 入口那枚 HWND）拼进实参表。
+            if (asCallCallee_) {
+                pendingChainObj_ = "(void*)" + tempVar;
+                lastExpr_ = zaFnW;
+            } else {
+                lastExpr_ = zaFnW + "(" + tempVar + ")  /* With ctrl .Method */";
             }
             return;
         }
@@ -64,6 +99,19 @@ void CCodeGen::visit(WithMemberExpr& node) {
         return;
     }
     case WithObjKind::COMObject: {
+        // Fix 161f-extlist: With 目标是 ListView 槽 (形参/局部) —— `.View` / `.hWnd`
+        // / `.Sorted` 等标量属性走控件读表, 不让它落 COM 晚绑定
+        // (vb6_ComGetStringProp(_vb6_with_N, L"hWnd") = 拿 HWND 当 IDispatch →
+        //  hWnd 读回 Empty ⇒ 下游 SendMessage 全打 0; extlist MListViewEx 实测)。
+        // 集合成员 (.ListItems/.ColumnHeaders) 不在这张表, 保持 COM 标记链
+        // (下游 cgen_expr_call_com_bind.inc 的 listViewHwndExprOf 会认这枚 temp)。
+        if (info.ctrlType == FrmControlType::ListView) {
+            std::string readFnLv = getControlPropReadFn(FrmControlType::ListView, node.memberName);
+            if (!readFnLv.empty()) {
+                lastExpr_ = readFnLv + "((void*)" + tempVar + ")  /* With ListView slot .Property */";
+                return;
+            }
+        }
         // .Property → 设置COM标记，让下游(IndexOrCallExpr/AssignmentStmt)处理
         comObjExpr_ = tempVar;
         comMemberName_ = node.memberName;
@@ -212,7 +260,7 @@ void CCodeGen::visit(WithMemberExpr& node) {
             if (memLower == "lastdllerror") { lastExpr_ = "GetLastError()";       return; }
             if (memLower == "helpfile")    { lastExpr_ = "(BSTR)0";              return; }
             if (memLower == "helpcontext") { lastExpr_ = "0";                    return; }
-            if (memLower == "clear")       { lastExpr_ = "vb6_ErrClear";         return; }
+            if (memLower == "clear")       { lastExpr_ = "vb6_ErrClear()";       return; }
             if (memLower == "raise")       { lastExpr_ = "vb6_ErrRaise";         return; }
         }
         // Fallback: unknown builtin member

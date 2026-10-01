@@ -155,9 +155,18 @@
                 //     C2440 int16_t→vb6_VARIANT (cWinsock.c 1604).
                 // 类对象实参保持指针直传 (同 4824 Fix 084d).
                 bool argIsClassObj091o = !inferClassTypeOfExpr(*named.value).empty();
+                // <vbeclipse>: 实参是类对象 ≠ 槽收类对象。工程类形参 (p.type 是 Variant、
+                // C 侧却是 vb6_cls_X*) 在本路径同样要按**槽**交付, 与 arg_emit/arg_variant
+                // 同一判据 (cParamClassPtrType)。
+                if (pi < calleeParams.size()) {
+                    const std::string cpNo = cParamClassPtrType(calleeParams[pi]);
+                    if (!cpNo.empty()) { argVal = deliverToClassSlot(cpNo, argVal); }
+                }
                 if (pi < calleeParams.size() && calleeParams[pi].isByVal
-                    && calleeParams[pi].type == Vb6Type::Variant && !argIsClassObj091o) {
-                    argVal = "vb6_VariantFromValue(" + argVal + ")";
+                    && calleeParams[pi].type == Vb6Type::Variant && !argIsClassObj091o
+                    && cParamClassPtrType(calleeParams[pi]).empty()) {
+                    // 同 arg_emit 那一处: 装箱只走 boxToVariant 这一权威 (见该处注释)
+                    argVal = boxToVariant(named.value.get(), argVal);
                 }
                 if (pi < orderedArgs.size()) {
                     orderedArgs[pi] = std::move(argVal);

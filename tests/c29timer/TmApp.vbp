@@ -1,5 +1,6 @@
 Type=Exe
 Form=TmForm.frm
+Form=TmForm2.frm
 Startup="TmForm"
 Command32=""
 Name="TmApp"

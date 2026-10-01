@@ -97,7 +97,8 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                     std::string rightVal = std::move(lastExpr_);
                     if (isStringSelect) {
                         // 字符串比较: vb6_StrCmp(tempVar, rightVal) op 0
-                        cond = "vb6_StrCmp(" + tempVar + ", " + rightVal + ") " + mapBinaryOp(binExpr.op) + " 0";
+                        // <vbeclipse>: 本模块 Option Compare Text → 恒文本入口
+                        cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + rightVal + ") " + mapBinaryOp(binExpr.op) + " 0";
                     } else if (isFloatSelect) {
                         // Fix 136: Single 语义 — Case 侧也按 float 求值
                         cond = "(float)" + tempVar + " " + mapBinaryOp(binExpr.op) + " (float)(" + rightVal + ")";
@@ -120,7 +121,8 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                 std::string hi = std::move(lastExpr_);
                 if (isStringSelect) {
                     // 字符串范围比较: wcscmp >= lo && wcscmp <= hi
-                    cond = "vb6_StrCmp(" + tempVar + ", " + lo + ") >= 0 && vb6_StrCmp(" + tempVar + ", " + hi + ") <= 0";
+                    cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + lo + ") >= 0 && "
+                           + (optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + hi + ") <= 0";
                 } else if (isFloatSelect) {
                     // Fix 136: Single 语义范围比较
                     cond = "(float)" + tempVar + " >= (float)(" + lo + ") && (float)" + tempVar + " <= (float)(" + hi + ")";
@@ -131,7 +133,7 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                 // 精确匹配
                 emitExpr(*cv.value);
                 if (isStringSelect) {
-                    cond = "vb6_StrCmp(" + tempVar + ", " + lastExpr_ + ") == 0";
+                    cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + lastExpr_ + ") == 0";
                 } else if (isFloatSelect) {
                     // Fix 136: Single 语义精确匹配
                     cond = "(float)" + tempVar + " == (float)(" + lastExpr_ + ")";

@@ -402,9 +402,21 @@ void CCodeGen::visit(EnumDecl& node) {
     h_.emitLine("typedef enum vb6_enum_" + enumName + " {");
     h_.indent();
 
+    // 逐成员推进: 每定下一枚就把 (小写名 → 值) 记进兄弟表, 下一个成员的值表达式里就能
+    // 折叠到它。VB6 里 `A = 1 : B = A Or 2` 的 A 必须是**已声明**的兄弟, 顺序推进与语义一致。
+    // 声明序之外的引用 (含前置引用) 仍按原有回退处理, 不静默改语义。
+    //
+    // 键必须走 `cIdent` 而不是原名: VB6 里枚举成员常写成方括号转义 (`[MSG_AFTER]`),
+    // AST 里保留着括号, 而值表达式里引用它时是**裸名** (`MSG_AFTER`) —— 用原名做键
+    // 查不到, 这正是本修复最初不生效的原因 (sib 表有 2 项仍 NOT-FOLDED)。
+    std::map<std::string, int64_t> siblings;
+    enumSiblingConsts_ = siblings;
+
     int64_t nextVal = 0;
     for (auto& member : node.members) {
         std::string memName = enumName + "_" + cIdent(member->name);
+        int64_t settled = 0;
+        bool haveSettled = false;
         if (member->value) {
             // Fix 010b: 尝试常量折叠enum成员值 (如2^0 → 1, 2^1|2^2 → 6)
             // C语言enum值必须是编译期常量, 不能用vb6_Pow()等函数调用
@@ -412,6 +424,8 @@ void CCodeGen::visit(EnumDecl& node) {
             if (tryEvalConstInt(member->value.get(), constVal)) {
                 h_.emitLine("vb6_enum_" + memName + " = " + std::to_string(constVal) + ",");
                 nextVal = constVal;
+                settled = constVal;
+                haveSettled = true;
             } else {
                 // 回退: 使用表达式 (可能在C中编译失败)
                 emitExpr(*member->value);
@@ -433,9 +447,20 @@ void CCodeGen::visit(EnumDecl& node) {
             }
         } else {
             h_.emitLine("vb6_enum_" + memName + " = " + std::to_string(nextVal) + ",");
+            settled = nextVal;
+            haveSettled = true;
+        }
+        // 定下来的值进兄弟表, 供后续成员折叠。回退路径没算出确定值时不登记 ——
+        // 拿 nextVal(=0) 冒充真实值会让后续成员静默算错。
+        if (haveSettled) {
+            std::string low = cIdent(member->name);  // 去方括号转义, 与引用侧同形
+            for (auto& c : low) c = (char)tolower(c);
+            siblings[low] = settled;
+            enumSiblingConsts_ = siblings;
         }
         nextVal++;
     }
+    enumSiblingConsts_.clear();  // 离开枚举作用域, 后续表达式不再拿兄弟表
 
     h_.dedent();
     h_.emitLine("} vb6_enum_" + enumName + ";");
@@ -515,7 +540,21 @@ void CCodeGen::visit(ConstDecl& node) {
         } else if (cType == "double") {
             knownDoubleVars_.insert(lower);
         } else if (cType == "vb6_VARIANT") {
-            knownVariantVars_.insert(lower);
+            // Fix 161f: 无 As Type 的 Const (Private Const LVM_GETHEADER = ...) 的
+            // cType 是 mapTypeRef(nullptr) = "vb6_VARIANT"。但 VB6 语义上无类型
+            // **整型** Const 在数值上下文就是数值 — 落 knownVariantVars_ 会让
+            // Declare 调用的实参发射包 vb6_VariantToLong(<int 宏>) → C2440
+            // "无法从 int 转换为 vb6_VARIANT" (extlist MListView SendMessage 实测)。
+            // 整数可折叠的登记 knownLongVars_; 字符串/浮点仍按 Variant (旧路径)。
+            int64_t cv161f = 0;
+            if (node.value && tryEvalConstInt(node.value.get(), cv161f)) {
+                knownLongVars_.insert(lower);
+                // Fix 161f (续): 过程级集合会被 clear, 必须另存一份模块级表,
+                // 供标识符内联数值使用。
+                moduleIntConstValues_[lower] = cv161f;
+            } else {
+                knownVariantVars_.insert(lower);
+            }
         }
     }
 

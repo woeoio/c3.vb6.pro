@@ -273,14 +273,21 @@ vb6_VARIANT vb6_CDec(vb6_VARIANT v) {
     vb6_VARIANT result;
     memset(&result, 0, sizeof(result));
     result.vt = vb6_vtDecimal;
+#ifndef _WIN64
+    /* Fix <vbeclipse> rev11: x86 的 union 只 8 字节 (对齐 OLE VARIANT), DECIMAL
+     * 以指针形式存放; 释放由 vb6_VariantClear 负责。 */
+    result.pdecVal = (DECIMAL*)CoTaskMemAlloc(sizeof(DECIMAL));
+    if (!result.pdecVal) return vb6_VariantEmpty();
+    memset(result.pdecVal, 0, sizeof(DECIMAL));
+#endif
     switch (v.vt) {
         case vb6_vtInteger: case vb6_vtLong: case vb6_vtByte: {
             int32_t ival = (v.vt == vb6_vtInteger) ? v.iVal : (v.vt == vb6_vtByte) ? (int32_t)v.bVal : v.lVal;
-            result.decVal.Lo32 = (uint32_t)(ival < 0 ? -ival : ival);
-            result.decVal.Mid32 = 0;
-            result.decVal.Hi32 = 0;
-            result.decVal.scale = 0;
-            result.decVal.sign = (ival < 0) ? 0x80 : 0;
+            vb6_VARIANT_DECVAL(result).Lo32 = (uint32_t)(ival < 0 ? -ival : ival);
+            vb6_VARIANT_DECVAL(result).Mid32 = 0;
+            vb6_VARIANT_DECVAL(result).Hi32 = 0;
+            vb6_VARIANT_DECVAL(result).scale = 0;
+            vb6_VARIANT_DECVAL(result).sign = (ival < 0) ? 0x80 : 0;
             break;
         }
         case vb6_vtSingle: case vb6_vtDouble: case vb6_vtCurrency: {
@@ -288,29 +295,37 @@ vb6_VARIANT vb6_CDec(vb6_VARIANT v) {
                           (v.vt == vb6_vtCurrency) ? (double)v.cyVal / 10000.0 : v.dblVal;
             DECIMAL winDec;
             if (VarDecFromR8(dval, &winDec) == S_OK) {
-                memcpy(&result.decVal, &winDec, sizeof(winDec));
+                memcpy(&vb6_VARIANT_DECVAL(result), &winDec, sizeof(winDec));
             } else {
                 int64_t i64 = (int64_t)dval;
-                result.decVal.Lo32 = (uint32_t)(i64 & 0xFFFFFFFF);
-                result.decVal.Mid32 = (uint32_t)((i64 >> 32) & 0xFFFFFFFF);
-                result.decVal.Hi32 = 0;
-                result.decVal.scale = 0;
-                result.decVal.sign = (dval < 0) ? 0x80 : 0;
+                vb6_VARIANT_DECVAL(result).Lo32 = (uint32_t)(i64 & 0xFFFFFFFF);
+                vb6_VARIANT_DECVAL(result).Mid32 = (uint32_t)((i64 >> 32) & 0xFFFFFFFF);
+                vb6_VARIANT_DECVAL(result).Hi32 = 0;
+                vb6_VARIANT_DECVAL(result).scale = 0;
+                vb6_VARIANT_DECVAL(result).sign = (dval < 0) ? 0x80 : 0;
             }
             break;
         }
         case vb6_vtBSTR: {
             DECIMAL winDec;
             if (v.bstrVal && VarDecFromStr(v.bstrVal, LOCALE_USER_DEFAULT, 0, &winDec) == S_OK) {
-                memcpy(&result.decVal, &winDec, sizeof(winDec));
+                memcpy(&vb6_VARIANT_DECVAL(result), &winDec, sizeof(winDec));
             }
             break;
         }
         case vb6_vtDecimal: {
+#ifndef _WIN64
+            if (result.pdecVal) { CoTaskMemFree(result.pdecVal); result.pdecVal = NULL; }
+#endif
             result = v;
             break;
         }
-        default: break;
+        default: {
+#ifndef _WIN64
+            if (result.pdecVal) { CoTaskMemFree(result.pdecVal); result.pdecVal = NULL; }
+#endif
+            break;
+        }
     }
     return result;
 }

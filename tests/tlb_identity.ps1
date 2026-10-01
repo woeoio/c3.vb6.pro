@@ -65,6 +65,8 @@ function Test-TlbIdentitySingleSource {
         [string]$IfaceName,     # 块里 [Default] 指的那个新式接口名
         [string]$ExpectedClsid  # 期望的 CLSID（带花括号、大写）
     )
+    # vbp 分片: 本片不跑这例 (闸门在 run_tests.ps1 里定义)。
+    if (-not (Enter-VbpShard)) { return }
     $script:total++
     Write-Host -NoNewline "  [TLB-ID] $Name ... "
 

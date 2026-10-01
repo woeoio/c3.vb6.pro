@@ -34,6 +34,7 @@ void SemanticAnalyzer::visit(SubDecl& node) {
             ParameterInfo pi;
             pi.name = param->name;
             pi.type = resolveTypeOrDefault(param->name, param->asType.get());
+            pi.typeRefName = simpleTypeRefName(param->asType.get());  // <vbeclipse>: 类名别丢
             pi.isByVal = param->isByVal;
             pi.isOptional = param->isOptional;
             pi.isParamArray = param->isParamArray;
@@ -151,6 +152,7 @@ void SemanticAnalyzer::visit(FunctionDecl& node) {
             ParameterInfo pi;
             pi.name = param->name;
             pi.type = resolveTypeOrDefault(param->name, param->asType.get());
+            pi.typeRefName = simpleTypeRefName(param->asType.get());  // <vbeclipse>: 类名别丢
             pi.isByVal = param->isByVal;
             pi.isOptional = param->isOptional;
             pi.isParamArray = param->isParamArray;
@@ -270,6 +272,7 @@ void SemanticAnalyzer::visit(PropertyDecl& node) {
             ParameterInfo pi;
             pi.name = param->name;
             pi.type = resolveTypeOrDefault(param->name, param->asType.get());
+            pi.typeRefName = simpleTypeRefName(param->asType.get());  // <vbeclipse>: 类名别丢
             pi.isByVal = param->isByVal;
             pi.isOptional = param->isOptional;
             pi.isParamArray = param->isParamArray;

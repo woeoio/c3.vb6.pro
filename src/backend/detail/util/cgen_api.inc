@@ -232,6 +232,23 @@
     void setViaRegistry(const ViaRegistry* reg) { ivviareg_ = reg; }
     // 类继承 (tB, ai/022 B07b): stage 2.8 链登记表, 发码期取继承字段与转发桩清单.
     void setClassChainRegistry(const ClassChainRegistry* reg) { clsreg_ = reg; }
+    // 工程级类名表 (小写类名 → 原大小写类名), driver 侧 runCodeGeneration 建.
+    //
+    // 为什么不能只靠本模块符号表判"X 是工程类": 每模块一张 SymbolTable, 同名成员
+    // (字段自身 Variable / 同名 Sub / 同名 PropertyGet) 会遮蔽跨模块类名. vbeclipse:
+    //   ucSplitBar.ctl `Private WithEvents SplitBar As SplitBar` → 类型名被字段自身占位;
+    //   ucCaption.ctl `Private WithEvents m_PopupMenu As PopupMenu` → 被同名 Sub 占位.
+    // (也不能用 ClassChainRegistry: 工程无 Inherits 时 driver_classchain.cpp:355 的
+    //  D24 护栏让整表早退为空.)
+    void setProjectClassNames(const std::unordered_map<std::string, std::string>* m) {
+        projClassNames_ = m;
+    }
+    // 该名字是不是工程类 (空串 = 不是)
+    std::string projectClassNameOf(const std::string& name) const {
+        if (!projClassNames_ || name.empty()) return std::string();
+        auto it = projClassNames_->find(Symbol::toLower(name));
+        return it == projClassNames_->end() ? std::string() : it->second;
+    }
     // CoClass 身份出口 (tB, ai/022 B13b): 只喂 generateDllEntry。EXE 的 com_entry.c 本批
     // **不接线** —— 它今天整个跑在 legacy mint 上，接上就是把改码前编得过的存量工程换掉。
     void setCoClassIdentityRegistry(const std::unordered_map<std::string, CoClassIdentity>* reg) {

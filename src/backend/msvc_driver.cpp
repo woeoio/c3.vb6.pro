@@ -15,6 +15,79 @@
 
 namespace vb6c3 {
 
+// Fix 210b: 保证 cl.exe/link.exe 子进程拿到一个有效的 Windows 临时目录。
+// Git Bash / MSYS 会把 TEMP/TMP 导出成 POSIX 路径 (如 /tmp), cl 的 c1.dll
+// 用 GetTempPath 解析后会报 fatal error D8050/D8040 ("内存不能为read" 同类)。
+//
+// 2026-10-01 收紧: 只在 TEMP 真是 POSIX 风格时才构造覆盖块。原来无论好坏都覆写
+// 一份新块传给 CreateProcessW, 一旦块里有什么错位 (比如漏了 CREATE_UNICODE_ENVIRONMENT,
+// 或者 GetEnvironmentStringsW 回来的块里带 `=C:` 那类只在父 PEB 里有意义的条目),
+// 就会污染 cl/c1 的 env, 让它们**在合法 Windows Temp 目录里创建 _CL_*.tmp 都失败**
+// (本地实测 C1083 Permission denied)。不覆写时子进程直接从父 PEB 继承环境, 与
+// 未上 Fix 210b 之前一致, 也就不引入新风险。
+namespace {
+    // 判当前 TEMP 是不是 POSIX 风格 (以 '/' 开头, 无盘符)。是的话才要修。
+    bool tempLooksPosix() {
+        wchar_t buf[MAX_PATH + 2] = { 0 };
+        DWORD n = GetEnvironmentVariableW(L"TEMP", buf, MAX_PATH + 1);
+        if (n == 0 || n > MAX_PATH) {
+            n = GetEnvironmentVariableW(L"TMP", buf, MAX_PATH + 1);
+            if (n == 0 || n > MAX_PATH) return false;
+        }
+        if (n == 0) return false;
+        // Windows 路径: 有 "X:" 前缀 (X 是任意字母)。POSIX 路径: '/' 开头。
+        if (buf[0] == L'\\') return true;                 // \\server\share 少见但非 POSIX
+        if (n >= 2 && buf[1] == L':') return false;       // 盘符: 合法 Windows
+        return true;                                       // 兜底当作需要修
+    }
+
+    // 取一个合法的 Windows 临时目录: 优先 GetTempPathW, 回退到用户本地 Temp。
+    std::wstring windowsTempPath() {
+        wchar_t buf[MAX_PATH + 2] = { 0 };
+        DWORD n = GetTempPathW(MAX_PATH + 1, buf);
+        if (n > 0 && n <= MAX_PATH + 1) {
+            std::wstring s = buf;
+            // 必须是含盘符的 Windows 路径 (绝不可能是 POSIX /tmp 之类)
+            if (s.size() >= 3 && s[1] == L':' && s[2] == L'\\') {
+                return s;
+            }
+        }
+        return std::wstring(L"C:\\Users\\Administrator\\AppData\\Local\\Temp\\");
+    }
+
+    // 构造环境块: 复制当前 env, 剔除旧 TEMP/TMP, 追加修正后的 TEMP/TMP。
+    // 返回以双 \0 结尾的宽字符块 —— CreateProcessW 侧要一起带
+    // CREATE_UNICODE_ENVIRONMENT 标志 (见 executeCommand 里的调用)。
+    std::wstring buildEnvBlockWithWindowsTemp() {
+        std::wstring block;
+        std::wstring tmp = windowsTempPath();
+        wchar_t* env = GetEnvironmentStringsW();
+        if (env) {
+            for (wchar_t* p = env; *p; ) {
+                size_t len = wcslen(p);
+                // 剔除现有 TEMP=/TMP= 以便覆盖
+                if (_wcsnicmp(p, L"TEMP=", 5) != 0 &&
+                    _wcsnicmp(p, L"TMP=", 4) != 0) {
+                    block.append(p, len);
+                    block.push_back(L'\0');
+                }
+                p += len + 1;
+            }
+            FreeEnvironmentStringsW(env);
+        }
+        block += L"TEMP="; block += tmp; block += L'\0';
+        block += L"TMP=";  block += tmp; block += L'\0';
+        block += L'\0'; // 块结束符
+        return block;
+    }
+
+    // 只在需要时才建块; 否则返回空串, 调用方 lpEnv 传 nullptr 让子进程直接继承父 env。
+    std::wstring maybeEnvBlockWithWindowsTemp() {
+        if (!tempLooksPosix()) return std::wstring();
+        return buildEnvBlockWithWindowsTemp();
+    }
+}
+
 MsvcDriver::MsvcDriver() {}
 MsvcDriver::~MsvcDriver() = default;
 
@@ -23,6 +96,11 @@ MsvcDriver::~MsvcDriver() = default;
 // 这种父进程下 cmd.exe 子进程会被分配一个新的可见控制台 -> 屏幕上连闪黑框。
 int MsvcDriver::executeCommand(const std::string& cmd) {
 #ifdef _WIN32
+    // Fix 210b: 只在 TEMP 是 POSIX 风格时才覆写环境块, 否则 nullptr 让子进程继承
+    std::wstring envBlock = maybeEnvBlockWithWindowsTemp();
+    void* lpEnv = envBlock.empty() ? nullptr : (void*)(envBlock.c_str());
+    DWORD creationFlags = CREATE_NO_WINDOW;
+    if (lpEnv) creationFlags |= CREATE_UNICODE_ENVIRONMENT;
     // M22-IssueB: Use CreateProcessW to pass UTF-16 command line to cmd.exe
     // This preserves Chinese/Unicode characters in file paths (e.g. /Fe"工程1.exe")
     // std::system() converts char* via CRT codepage, which corrupts UTF-8 paths
@@ -52,8 +130,12 @@ int MsvcDriver::executeCommand(const std::string& cmd) {
         nullptr,                // process security
         nullptr,                // thread security
         FALSE,                  // inherit handles
-        CREATE_NO_WINDOW,       // 不分配控制台窗口 (见函数头注释)
-        nullptr,                // environment
+        // Fix 210b: lpEnvironment 传的是 UTF-16 块, MSDN 明确要求
+        // CREATE_UNICODE_ENVIRONMENT 一起给 —— 不给时 Windows 按 ANSI 逐字节切,
+        // 子进程拿到的 env 变成一堆单字母条目 (T/E/M/P/=... 各一枚), cl→c1 落
+        // _CL_*.tmp 时就是 Permission denied。
+        creationFlags,
+        lpEnv,                  // environment (Fix 210b: 只在 POSIX TEMP 下非空)
         nullptr,                // current directory
         &si,                    // startup info
         &pi                     // process info
@@ -81,6 +163,10 @@ int MsvcDriver::executeCommand(const std::string& cmd) {
 int MsvcDriver::executeCommandCapture(const std::string& cmd, std::string& out) {
     out.clear();
 #ifdef _WIN32
+    std::wstring envBlock = maybeEnvBlockWithWindowsTemp();
+    void* lpEnv = envBlock.empty() ? nullptr : (void*)(envBlock.c_str());
+    DWORD creationFlags = CREATE_NO_WINDOW;
+    if (lpEnv) creationFlags |= CREATE_UNICODE_ENVIRONMENT;
     int wlen = MultiByteToWideChar(CP_UTF8, 0, cmd.c_str(), -1, nullptr, 0);
     if (wlen <= 0) return -1;
     std::wstring wcmd(wlen, L'\0');
@@ -103,7 +189,8 @@ int MsvcDriver::executeCommandCapture(const std::string& cmd, std::string& out) 
     PROCESS_INFORMATION pi = {};
     std::wstring mutableCmd = L"cmd.exe /c " + wcmd;
     BOOL ok = CreateProcessW(nullptr, &mutableCmd[0], nullptr, nullptr, TRUE,
-                             CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+                             creationFlags, lpEnv,
+                             nullptr, &si, &pi);
     // 父进程必须关掉写端, 否则子进程退出后 ReadFile 也等不到 EOF
     CloseHandle(hWrite);
     if (!ok) { CloseHandle(hRead); return -1; }
@@ -308,7 +395,14 @@ bool MsvcDriver::compileAndLink(const MsvcDriverOptions& options) {
 
     // P11.4: Prepend vcvarsall.bat setup if cl.exe not in PATH
     std::string vcvarsPrefix = buildVcvarsPrefix(options.arch);
-    std::string fullCmd = vcvarsPrefix + cl + " @\"" + rspPath + "\" > \"" + tmpLogPath + "\" 2>&1";
+    // Fix <vbeclipse> D8050: 每次 cl 调用带独立 TMP/TEMP (= 本次编译的 objDir,
+    // 由 session 目录保证唯一)。GA t2 的两个 GUI worker (Charts2020 x86 +
+    // VBFlexGridDemo x64) 同 runner 上并行跑 /MP 时, 两批 c1.exe 会往同一个
+    // 系统 %TEMP% 落 _CL_*.tmp 互相踩 (D8050 unable to write temporary file /
+    // 亦表现为 C1083 Permission denied)。给每次编译一份隔离目录, 从根上断掉
+    // 跨进程冲突; session 结束时目录连带被清理, 不留残留。
+    std::string tmpIsolation = "set \"TMP=" + tmpLogDir + "\" && set \"TEMP=" + tmpLogDir + "\" && ";
+    std::string fullCmd = vcvarsPrefix + tmpIsolation + cl + " @\"" + rspPath + "\" > \"" + tmpLogPath + "\" 2>&1";
 
     int ret = executeCommand(fullCmd);
     if (ret != 0) {

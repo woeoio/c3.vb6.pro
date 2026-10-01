@@ -40,19 +40,37 @@ static bool isLiteralZeroDivisor44(const Expr* e) {
 
 // M22: 将非BSTR表达式包装为BSTR (用于字符串连接 & 运算符)
 void CCodeGen::visit(BinaryExpr& node) {
+    // 账 #88: 非 & 的那一路以前一律按 "Long" 解封 COM 读 —— 字符串成员因此在**比较**里
+    // 被发成 vb6_ComGetIntProp + vb6_CStrLong (拿 BSTR 指针当数字去和字面量比) ⇒ 恒 False。
+    // 实测 `tv1.Nodes(2).Text = "子乙"` 读回 N，而把同一个值先存进局部 String 变量再比是 Y。
+    // 口径只看**对侧**: 等值/大小比较且对侧是字符串 (字面量或推得出 String) ⇒ 这一侧按 BSTR
+    // 解封; 算术 (+ - * / 等) 与其余情形维持 "Long" 不动 —— 那些形状今天都是好的。
+    auto isCmp88 = [](BinaryOp op) {
+        return op == BinaryOp::Eq || op == BinaryOp::Neq || op == BinaryOp::Lt
+            || op == BinaryOp::Gt || op == BinaryOp::Le || op == BinaryOp::Ge;
+    };
+    auto hint88 = [&](const ExprPtr& sib) -> const char* {
+        if (!sib || !isCmp88(node.op)) return "Long";
+        if (sib->kind == ASTNodeKind::LiteralExpr
+            && static_cast<const LiteralExpr&>(*sib).literalKind == LiteralKind::String) {
+            return "BSTR";
+        }
+        if (inferExprType(*sib) == Vb6Type::String) return "BSTR";
+        return "Long";
+    };
     emitExpr(*node.left);
     // COM标记解析: 如果左操作数是COM属性, 解析为值
     // P24-02: 算术运算默认Long解包
     if (isComMarker_) {
         if (node.op == BinaryOp::Concat) resolveComValue();
-        else resolveComValue("Long");
+        else resolveComValue(hint88(node.right));
     }
     std::string left = std::move(lastExpr_);
     emitExpr(*node.right);
     // COM标记解析: 如果右操作数是COM属性, 解析为值
     if (isComMarker_) {
         if (node.op == BinaryOp::Concat) resolveComValue();
-        else resolveComValue("Long");
+        else resolveComValue(hint88(node.left));
     }
     std::string right = std::move(lastExpr_);
 
@@ -217,7 +235,9 @@ void CCodeGen::visit(BinaryExpr& node) {
 
     // Like运算: VB6 Like → vb6_Like
     if (node.op == BinaryOp::Like) {
-        lastExpr_ = "vb6_Like(" + left + ", " + right + ")";
+        // <vbeclipse>: Option Compare Text 模块里 Like 的大小写与字符区间都按文本形
+        lastExpr_ = std::string("vb6_Like") + (optionCompareText_ ? "C" : "")
+                    + "(" + left + ", " + right + (optionCompareText_ ? ", 1" : "") + ")";
         return;
     }
 
@@ -241,7 +261,10 @@ void CCodeGen::visit(BinaryExpr& node) {
                 case BinaryOp::Ge:cmpOp = ">= 0"; break;
                 default: cmpOp = "== 0"; break;
             }
-            lastExpr_ = "(-(vb6_StrCmp(" + left + ", " + right + ") " + cmpOp + "))";
+            // <vbeclipse>: 本模块 Option Compare Text ⇒ 走恒文本入口 vb6_StrCmpT
+            // (VB6 的比较模式是按模块的编译期属性, 不能靠进程唯一的全局)
+            lastExpr_ = "(-(vb6_StrCmp" + std::string(optionCompareText_ ? "T" : "")
+                        + "(" + left + ", " + right + ") " + cmpOp + "))";
             return;
         }
     }
@@ -256,6 +279,23 @@ void CCodeGen::visit(BinaryExpr& node) {
     // 普通对象/指针 Is (void* <=> NULL) 不满足 varLike, 保持原样, 不受影响.
     if (node.op == BinaryOp::Is) {
         auto varLike158n = [&](const std::string& c, Expr* ast) -> bool {
+            // Fix <vbeclipse> rev6: `Property Get Foo() As <工程类>` 的返回变量
+            // (**vb6_cls_X\* 类型**) 不是 Variant, 尽管 cExprIsVariant /
+            // isDefinitelyVariantExpr 都会说它是 —— 因为 resolveTypeOrDefault 把
+            // `As <类名>` 折成了 Variant (类名只留在 typeRefName, 见 MEMORY)。
+            // 后果: `If ActivePerspective Is Nothing` 生成
+            //   vb6_IsNothing(vb6_VariantToObject(&vb6_ret_ActivePerspective))
+            // 把裸类指针当 vb6_VARIANT* 读 → vt 字段是指针低 2 字节 (非 0) →
+            // 返回 NULL → IsNothing 判**真** → 抛 "No active perspective!"
+            // (实测 play78.exe: ucPerspective.ctl 的 Property Get ActivePerspective)。
+            // currentReturnCType_ 是权威 (发定义那侧用它)。
+            std::string ct158n = c;
+            while (ct158n.size() >= 2 && ct158n.front() == '(' && ct158n.back() == ')')
+                ct158n = ct158n.substr(1, ct158n.size() - 2);
+            if (!currentReturnVar_.empty() && ct158n == currentReturnVar_
+                && currentReturnCType_.compare(0, 8, "vb6_cls_") == 0) {
+                return false;
+            }
             if (cExprIsVariant(c)) return true;
             if (!ast) return false;
             if (ast->kind == ASTNodeKind::IdentifierExpr) {
@@ -310,6 +350,18 @@ void CCodeGen::visit(BinaryExpr& node) {
             std::string t = s;
             while (t.size() >= 2 && t.front() == '(' && t.back() == ')')
                 t = t.substr(1, t.size() - 2);
+            // Fix <vbeclipse>: 枚举常量 (vb6_enum_eMsgWhen_MSG_BEFORE) 被当作
+            // Variant 比较左值取址 → C2101 "常量上的&" (MagneticWnd.ctl
+            // `eMsgWhen.MSG_BEFORE = When`, 枚举成员无 constIntValue 时以
+            // vb6_enum_<Mod>_<Member> 裸名发出)。isConstIdent 只认 #define 宏,
+            // 认不出 vb6_enum_*. 枚举成员不可取址, 也不能当 vb6_VARIANT* 传
+            // (vb6_VarCmpLongEq(vb6_VARIANT*, int32_t)), 构造可寻址的
+            // vb6_VARIANT 临时变量 (同下方 rvalue 通道的 _vcmp_N 模式).
+            if (t.rfind("vb6_enum_", 0) == 0) {
+                std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++);
+                c_.emitLine("vb6_VARIANT " + tmp + " = vb6_VariantLong(" + s + ");");
+                return "&" + tmp;
+            }
             if (simpIdent158n(t) && !isConstIdent(t)) return "&" + s;
             if (t.rfind("VB6_SA_AT(", 0) == 0) return "&" + s;
             // Fix 158u: Variant 比较左值语义落在 COM 对象指针成员 (me->VBFlexGrid
@@ -457,7 +509,10 @@ void CCodeGen::visit(BinaryExpr& node) {
                 if (rActual == Vb6Type::Long || rActual == Vb6Type::Integer || rActual == Vb6Type::Boolean || rActual == Vb6Type::LongPtr) {
                     // P25: left可能是VARIANT rvalue(vb6_VariantFromComResult), 需要临时变量
                     // Fix 084aa: 常量宏 (#define) 不可取址 → 视为非左值走临时变量
-                    bool leftIsLvalue = !left.empty() && (std::isalpha(static_cast<unsigned char>(left[0])) || left[0] == '_') && !isConstIdent(left);
+                    // Fix <vbeclipse>: 枚举常量 (vb6_enum_*) 也是裸标识符但不可取址 —
+                    // isConstIdent 只认 #define 宏, 认不出 vb6_enum_MsgWhen_MSG_BEFORE →
+                    // `&vb6_enum_...` C2101 (MagneticWnd.ctl `eMsgWhen.MSG_BEFORE = When`)
+                    bool leftIsLvalue = !left.empty() && (std::isalpha(static_cast<unsigned char>(left[0])) || left[0] == '_') && !isConstIdent(left) && left.rfind("vb6_enum_", 0) != 0;
                     if (leftIsLvalue) { for (char c : left) { if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') { leftIsLvalue = false; break; } } }
                     if (leftIsLvalue) {
                         lastExpr_ = "(vb6_VarCmpLong" + cmpFn + "(&" + left + ", " + scalarArg158m(right) + "))";
@@ -488,7 +543,8 @@ void CCodeGen::visit(BinaryExpr& node) {
                         default: revCmpFn = cmpFn; break;  // Eq/Ne是对称的
                     }
                     // Fix 084aa: 常量宏不可取址 → 视为非左值
-                    bool rightIsLvalue = !right.empty() && (std::isalpha(static_cast<unsigned char>(right[0])) || right[0] == '_') && !isConstIdent(right);
+                    // Fix <vbeclipse>: 枚举常量 (vb6_enum_*) 同样不可取址 (对称于 493 行)
+                    bool rightIsLvalue = !right.empty() && (std::isalpha(static_cast<unsigned char>(right[0])) || right[0] == '_') && !isConstIdent(right) && right.rfind("vb6_enum_", 0) != 0;
                     if (rightIsLvalue) { for (char c : right) { if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') { rightIsLvalue = false; break; } } }
                     if (rightIsLvalue) {
                         lastExpr_ = "(vb6_VarCmpLong" + revCmpFn + "(&" + right + ", " + scalarArg158m(left) + "))";

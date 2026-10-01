@@ -63,6 +63,8 @@ function Test-ComActivate {
         [string[]]$Absent = @(),
         [string]$Arch = ""            # "" = 默认(x64) | x86
     )
+    # vbp 分片: 本片不跑这例 (闸门在 run_tests.ps1 里定义)。
+    if (-not (Enter-VbpShard)) { return }
     $script:total++
     Write-Host -NoNewline "  [COMACT] $Name ... "
 
@@ -108,6 +110,8 @@ function Test-ComActivateClient {
         [string[]]$Needles,
         [string]$Arch = ""
     )
+    # vbp 分片: 本片不跑这例 (闸门在 run_tests.ps1 里定义)。
+    if (-not (Enter-VbpShard)) { return }
     $script:total++
     Write-Host -NoNewline "  [COMACT] $Name ... "
 

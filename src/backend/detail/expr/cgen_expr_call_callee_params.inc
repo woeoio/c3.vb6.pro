@@ -20,6 +20,17 @@
     //          导致 ByRef UDT/SafeArray/标量 全部按值传递 (例如 SOCKADDR_IN → SOCKADDR_IN* 错误).
     if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr) {
         auto& idExpr = static_cast<IdentifierExpr&>(*node.callee);
+        // Fix <VBFlexGridDemo/GA 36766856082>: 内置函数优先于同名类成员属性 (剥 $ 后撞名)。
+        // Task #40 (40960eb) 给使用点剥掉类型后缀 ⇒ `Left$(Value, 1)` 到 cgen 时名字是
+        // `Left`, 而控件自己声明了 `Public Property Get Left() As Single` ⇒ 下面
+        // lookupModule 命中这个**形参表为空**的属性符号 ⇒ calleeParams 空 ⇒ 实参被清空,
+        // 生成 `vb6_Left()` (C2198 参数太少 / C2440 BSTR→double)。
+        // VB6 语义: 属性 Left 无形参, `Left(x, y)` 带实参 ⇒ 只能是内置函数。
+        // 剥后缀前 (BASE) 名字是 `Left$`, 查不到该属性符号, 天然走内置; 这里把那条
+        // 隐式约定写成显式判据。用户 Function 同名不受影响 (只让位给 Property*)。
+        std::string idLower40 = Symbol::toLower(idExpr.name);
+        if (!idLower40.empty() && idLower40.back() == '$') idLower40.pop_back();
+        const bool calleeIsBuiltinFuncName40 = (kBuiltinFuncNames.count(idLower40) != 0);
         // 尝试多种查找方式: 先lookupModule(过程符号), 再lookup(嵌套作用域)
         Symbol* funcSym = symTab_.lookupModule(idExpr.name);
         if (!funcSym || (funcSym->kind != SymbolKind::Sub && funcSym->kind != SymbolKind::Function
@@ -31,7 +42,12 @@
         if (funcSym && (funcSym->kind == SymbolKind::Sub || funcSym->kind == SymbolKind::Function
             || funcSym->kind == SymbolKind::PropertyGet || funcSym->kind == SymbolKind::PropertyLet
             || funcSym->kind == SymbolKind::PropertySet
-            || funcSym->kind == SymbolKind::DeclareSub || funcSym->kind == SymbolKind::DeclareFunc)) {
+            || funcSym->kind == SymbolKind::DeclareSub || funcSym->kind == SymbolKind::DeclareFunc)
+            // 见上 Fix <VBFlexGridDemo>: 内置函数名 + 符号是属性 ⇒ 让位给内置函数,
+            // 不采用属性的 (空) 形参表, 免得实参被清空。
+            && !(calleeIsBuiltinFuncName40 && (funcSym->kind == SymbolKind::PropertyGet
+                 || funcSym->kind == SymbolKind::PropertyLet
+                 || funcSym->kind == SymbolKind::PropertySet))) {
             // 重载变体 (O2): 语义层选定变体时, 形参表/返回类型以变体符号为准
             if (!node.calleeOvlSuffix.empty()) {
                 if (auto* ovSym = symTab_.lookupModuleOverloadBySuffix(
@@ -156,6 +172,10 @@
         if (maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
             static const std::unordered_set<std::string> builtinGlobalObjs092z = {
                 "clipboard", "screen", "printer", "forms", "debug", "err", "app",
+                // Fix <vbeclipse>: UserControl.Controls 集合 — 禁止 lookupModule 兜底
+                // 把 .Item/.Add/.Remove 抢挂到工程里恰好有同名方法的类 (List) 上
+                // (实测: Controls.Item(p) → vb6_List_Item((*p)), 接收者被首参顶掉)。
+                "controls",
                 "console"};  // Fix 161: Console 对象 (对齐 twinBASIC)
             builtinGlobalObj092z = builtinGlobalObjs092z.count(
                 Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name)) > 0;
@@ -211,6 +231,26 @@
                 if (findClassMemberCallParams(info.className, wmExpr.memberName, params, isBuiltin)) {
                     calleeParams = std::move(params);
                     calleeIsBuiltin = isBuiltin;
+                    calleeParamsFound = true;
+                }
+            }
+            // Fix 210b: With 目标是 void* / className 未知的 ClassInstance (如
+            // `With l_Perspective.Folders` / `With Folder.Views`, With 临时变量落在
+            // void*) 时, WithMemberExpr 实际由 cgen_expr_with.cpp:191-209 按名字
+            // lookupModule 解析成熟知成员函数 (实测 .Item → vb6_List_Item, 形参
+            // ByVal Variant Index). calleeParams 不填 → Fix 210 装箱不生效 →
+            // 4x int32_t/int → vb6_VARIANT C2440 (ucPerspective.c 1807 等).
+            // 与发射侧同源取符号 (name-match), 让装箱/缺省参数补齐对齐.
+            if (!calleeParamsFound && info.kind == WithObjKind::ClassInstance) {
+                Symbol* wmSym210b = symTab_.lookupModule(wmExpr.memberName);
+                if (!wmSym210b) wmSym210b = symTab_.lookup(wmExpr.memberName);
+                if (wmSym210b && (wmSym210b->kind == SymbolKind::Sub
+                    || wmSym210b->kind == SymbolKind::Function
+                    || wmSym210b->kind == SymbolKind::PropertyGet
+                    || wmSym210b->kind == SymbolKind::PropertyLet
+                    || wmSym210b->kind == SymbolKind::PropertySet)) {
+                    calleeParams = wmSym210b->params;
+                    calleeIsBuiltin = wmSym210b->isBuiltin;
                     calleeParamsFound = true;
                 }
             }

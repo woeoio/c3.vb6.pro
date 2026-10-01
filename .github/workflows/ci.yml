@@ -88,15 +88,49 @@ jobs:
           # smoke 是 run_tests.ps1 的 5 个 section 之一 (--syntax-only / compile / run / syntax
           # 四段各自有属, smoke 段只跑 tests_github/t0_cases/smoke.bas 的端到端编译+运行+断言).
           # 之前矩阵漏了它 → CI 里的"全量"其实差这一段.
+          #
+          # 分片数目按**实测单 job 墙钟**定的 (2026-09-28, run 36418025626):
+          #   vbp 745s / 123 例 (最慢一例 41s, 分布很平) → 4 片 ≈ 4.6 min
+          #   bas **保持 2 片** (见下)
+          #   其余四类本来就 ≤1.3 min, 不分。
+          # 关键路径 = build 3.5 min + max(bas#1, vbp  slowest shard) ≈ 8 min,
+          # 原先 = build 3.3 + vbp 12.8 = 16.1 min (vbp 一类占 79%)。
+          #
+          # bas 试过 4 片, **实测没有收益**: 315s+258s (2 片) → 4.4/5.1/5.4/5.1 min (4 片),
+          # 关键路径 5.5 → 5.4 min。原因是每个 shard 都要自己编那 65 个 RTL .c (~2.3 min),
+          # 用例本身只占剩下的三分之一 —— 再切细, 摊到的用例还不够付第二次 RTL 编译。
+          # 所以 bas 留在 2 片, 要提速得改成跨 runner 共享 obj store (artifact), 不是分片能解决的。
+          #
+          # 加用例时不必动这里: 两个分片都是按调用次序取模, 总数写不进代码。
+          #
+          # shardArgs 逐条显式写出, 不用 matrix.category 三元表达式拼 —— 拼出来的式子要同时
+          # 照顾 bas/vbp 两套开关, 再加一个分类时很容易拼错 (GitHub 表达式不报错, 只会静默少传参)。
           - category: smoke
+            shardArgs: ""
           - category: bas
             shard: 1
+            shardArgs: "-BasShard 1 -BasShardTotal 2"
           - category: bas
             shard: 2
+            shardArgs: "-BasShard 2 -BasShardTotal 2"
           - category: vbp
+            shard: 1
+            shardArgs: "-VbpShard 1 -VbpShardTotal 4"
+          - category: vbp
+            shard: 2
+            shardArgs: "-VbpShard 2 -VbpShardTotal 4"
+          - category: vbp
+            shard: 3
+            shardArgs: "-VbpShard 3 -VbpShardTotal 4"
+          - category: vbp
+            shard: 4
+            shardArgs: "-VbpShard 4 -VbpShardTotal 4"
           - category: compile
+            shardArgs: ""
           - category: syntax
+            shardArgs: ""
           - category: asm
+            shardArgs: ""
     env:
       C3_VCVARSALL: ""
     steps:
@@ -114,15 +148,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "downloaded C3.exe broken" }
 
       # run_tests.ps1 内: 纯 .bas 用例支持 -Jobs 并行 (每个 worker 独立输出目录) 与
-      # -BasShard 分片 (CI 用多 runner 并行跑 bas 用例); VBP/GUI 用例始终串行
-      # (GUI 窗口效果无法通过自动校验并行确认).
+      # -BasShard 分片 (CI 用多 runner 并行跑 bas 用例); VBP/GUI 用例始终**在本 runner 内**串行
+      # (GUI 窗口效果无法通过自动校验在同一台机器上并行确认), 但**跨 runner 分片**是另一回事:
+      # 分到不同 runner = 不同虚拟机, 隔离性比同机并行更强, 所以 -VbpShard 不违反上面这条。
       # ai/030 §六/§十: 加 -Incremental ⇒ 每个 job 里只有第一例真编那 65 个 RTL .c，其余吃
       # 内容寻址的 obj store（本机实测：单工程 22.0 s → 2.8 s，15 例 bas 282 s → 36 s）。
       # store 是 runner 本地的、跑完即弃 ⇒ 产 obj 的机器与用 obj 的机器同一台，不跨机错配。
       # 编译器自己的默认路径仍是关的；要退回今天这条老路，删掉这个开关即可。
       - name: "Run regression (${{ matrix.category }}${{ matrix.shard && format(' #{0}', matrix.shard) || '' }})"
         shell: pwsh
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/run_tests.ps1 -Category ${{ matrix.category }} -Jobs 20 ${{ matrix.category == 'bas' && format('-BasShard {0} -BasShardTotal 2', matrix.shard) || '' }} -Incremental -Verbose
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/run_tests.ps1 -Category ${{ matrix.category }} -Jobs 20 ${{ matrix.shardArgs }} -Incremental -Verbose
 
       - name: Upload test logs
         if: always()

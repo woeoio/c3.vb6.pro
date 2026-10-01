@@ -62,6 +62,24 @@
             isComMarker_ = false;
             std::string objExpr = std::move(comObjExpr_);
             std::string memName = std::move(comMemberName_);
+            // Fix <vbeclipse>: COM 成员访问的接收者是 Variant 时先提取对象指针。
+            //   obj_dispatch 只在 knownVariantVars_ 分支 (P24-04) 包了
+            //   vb6_VariantToObject(&var); 落到 typed/object 分支的 Variant 局部
+            //   变量 (如 ucTabStrip.ctl For-Each 推断对象名?? l_Tab As Variant
+            //   保存 Tab 对象, .Left/.Width 读) 会裸交给 vb6_ComGet*Prop → C2172
+            //   "实参不是指针" (ucTabStrip.c 312/314/387). 函数调用结果也是
+            //   Variant (vb6_List_Item(...)) 时用 vb6_VariantToObjectVal 提取.
+            {
+                std::string ojTrim = objExpr;
+                while (ojTrim.size() >= 2 && ojTrim.front() == '(' && ojTrim.back() == ')')
+                    ojTrim = ojTrim.substr(1, ojTrim.size() - 2);
+                std::string ojLower = Symbol::toLower(ojTrim);
+                if (knownVariantVars_.count(ojLower)) {
+                    objExpr = "vb6_VariantToObject(&" + objExpr + ")";
+                } else if (cExprIsVariant(objExpr)) {
+                    objExpr = "vb6_VariantToObjectVal(" + objExpr + ")";
+                }
+            }
             if (isEarlyBoundCom_ && earlyBoundSym_) {
                 isEarlyBoundCom_ = false;
                 const Symbol* comSym = earlyBoundSym_;
@@ -222,6 +240,42 @@
                 || at175 == Vb6Type::Boolean || at175 == Vb6Type::LongPtr) {
                 argVal = wrapToBSTR(argVal, *node.positional[i]);
             }
+        }
+
+        // Fix 210: 用户 Sub/Function/Property 的 **ByVal Variant 形参**收到标量实参
+        // (`List.Item(i)` / `List.Item(sKey)`, 形参是 `ByVal Index As Variant`)。
+        // C 侧形参是 vb6_VARIANT (按值), 裸传 int32_t → C2440 "无法从 int32_t
+        // 转换为 vb6_VARIANT" (VbEclipse ucPerspective 实测 14 处:
+        // `With l_Perspective.Folders` / `.Item(i)`)。VB6 这里要把实参装箱进 Variant。
+        // 用 RTL 的 vb6_VariantFromValue: 它是 _Generic, 按实参 C 类型选构造器,
+        // 且实参**已经是** vb6_VARIANT 时走 vb6_VariantIdentity (原样透传), 所以
+        // 不必先判 cExprIsVariant —— 装了也无害, 还能顺带修掉推断成 Variant 的
+        // 标量 (CStrDbl/LenB 那类), 与 Fix 024 的用法一致。
+        if (!isDeclareAnsiCall && i < calleeParams.size() && calleeParams[i].isByVal
+            && (calleeParams[i].type == Vb6Type::Variant
+                || calleeParams[i].type == Vb6Type::Empty)
+            // <vbeclipse>: 工程类形参的槽 p.type 也是 Variant (见 arg_variant 同一处注释),
+            // 这里不能装箱 —— 判据共用 cParamClassPtrType, 与 dll 入口的 extern 同源。
+            && cParamClassPtrType(calleeParams[i]).empty()
+            // Fix <vbeclipse> <VBFlexGridDemo>: 只要 callee 形参**声明了具体类型名**
+            // 且 mapTypeRef 那份权威不认它是 `vb6_VARIANT`, 这条槽**就不是 Variant
+            // 容器** —— 装 vb6_VARIANT 会与 callee 侧 typed 槽错位 (VTableHandle.bas
+            // 六处 `Call Replace*(This)` → cl 19.51 C2172; VBFlexGrid.c(3032) 与
+            // MainForm.c(1044) 的 `As Variant` 形参如果被一起挡 → 反向 C2440)。
+            // 关键: 判据必须是 **mapTypeRef 的 C 类型结果** 而不是"typeRefName 是否
+            // 非空" —— `As Variant` 的形参 typeRefName 也是非空 ("Variant"), 前者
+            // 会误伤。mapTypeRef 认 "Variant" → "vb6_VARIANT", 认 "IOleControl" (未
+            // 命中) → "void*", 认工程类 → "vb6_cls_X*" —— 只有前者才是 Variant 槽。
+            && (calleeParams[i].typeRefName.empty()
+                || cTypeForDeclaredTypeName(calleeParams[i].typeRefName) == "vb6_VARIANT")
+            && !cExprIsVariant(argVal)) {
+            // 装箱一律走 boxToVariant 这一处权威 (按 VB 声明类型选 ctor)。
+            // 直接手写 vb6_VariantFromValue 是让 C 的 _Generic 猜类型: VB 的 Boolean
+            // 在 C 侧是 int32_t/int16_t, 于是 VarType(True) 报 3(Long) 而不是 11
+            // (实测 DT43 / MV41 / test_bool_display 三条同时红)。
+            argVal = boxToVariant(i < node.positional.size() ? node.positional[i].get()
+                                                             : nullptr,
+                                  argVal);
         }
 
         // ByVal String: 传 ANSI 缓冲的**地址**, 被调用方写入后按 NUL 截断回写。
@@ -645,8 +699,28 @@
                             // 用 vb6_VariantToLongPtr 取整型载荷再按值压回指针形参.
                             argVal = "(void*)(intptr_t)vb6_VariantToLongPtr(" + argVal + ")";
                         } else {
-                            // 非左值: 0 或复杂表达式 — 直接强转为 void*
-                            argVal = "(void*)(intptr_t)(" + argVal + ")";
+                            // Fix <vbeclipse>: **复杂右值表达式** 作为 ByRef(As Any/UDT)
+                            // 实参 —— VB6 对 ByRef 形参一律传"一个存储的地址", 右值先求值
+                            // 落临时再传址. 原先裸强转 `(void*)(intptr_t)(expr)` 是把
+                            // **值**当指针, 被调方沿该"地址"读写 → 越界访问.
+                            // 实测根因: MagneticWnd.cls
+                            //   Private Sub zPatchRel(ByVal nAddr As Long, ...)
+                            //       Call RtlMoveMemory(ByVal nAddr + nOffset, _
+                            //                          nTargetAddr - nAddr - nOffset - 4, 4)
+                            // 第 2 形参是 ByRef As Any, 拿到 (void*)(intptr_t)(rel) 后
+                            // RtlMoveMemory 从地址 =rel 读 4 字节 (rel 常是负数/小值)
+                            // → 0xC0000005 av read target=0xFEE3A55A; 补丁没写进机器码桩,
+                            // 桩里跳 0 → 后续崩溃/堆损坏 (VbEclipse play78.exe 实测).
+                            // 与 Fix 090q / Fix 160-H 同一套路: 声明行挂 pending, 保证先于引用.
+                            // 例外: "0" 仍是 (void*)0 —— Fix 069b 场景要 NULL 指针语义.
+                            if (argVal == "0" || litBody == "0") {
+                                argVal = "(void*)(intptr_t)(" + argVal + ")";
+                            } else {
+                                std::string tmpAnyRel = "_vb6_anytmp" + std::to_string(tempCounter_++);
+                                c_.addPending("intptr_t " + tmpAnyRel
+                                              + " = (intptr_t)(" + argVal + ");");
+                                argVal = "(void*)&" + tmpAnyRel;
+                            }
                         }
                     }
                 } else {
@@ -720,6 +794,33 @@
                         argVal = "(&(" + ct092l + "){0})";
                     } else if (i < calleeParams.size()
                                && !calleeParams[i].isByVal && !calleeParams[i].isParamArray
+                               && calleeParams[i].type == Vb6Type::Variant
+                               && !cParamClassPtrType(calleeParams[i]).empty()) {                        // Fix <vbeclipse> (回归修复): `p.type == Variant` 有**两种**槽 ——
+                        // 真 Variant 槽, 和**工程类槽** (`Sub UseCircle(c As Circle)`:
+                        // resolveTypeOrDefault 把类名折成 Variant, 类名只留在 typeRefName,
+                        // 而类模块发的是 `vb6_cls_ShapeAct** c`)。后者不是 Variant 槽:
+                        // 落进下面的 092y default 分支会被装箱成 vb6_VARIANT*, 与形参
+                        // 声明的 vb6_cls_ShapeAct** ABI 不符 → 被调方 `c.Move 1` 拿
+                        // Variant 当类指针解引用 → 段错误 (实测 cc_act: 打印完 CC1:OK
+                        // 即 rc=139, 门 #112/#116 两条红)。
+                        // 判据用 cParamClassPtrType —— 它是"这个槽收不收类实例指针"的
+                        // **唯一**口径 (走 cTypeForDeclaredTypeName → mapTypeRef, 与类模块
+                        // 发定义那一份同一映射), ByVal 侧 Fix 091t 已在用; 这里补齐 ByRef 侧。
+                        //
+                        // Fix <vbeclipse> rev7: 交付方式与下游复合字面量路径的同名守卫**统一**
+                        // —— 都先落临时再取址。原来这里直接 `"&" + deliverToClassSlot(...)`,
+                        // 而 deliverToClassSlot 在实参是 Variant 值时会返回
+                        // `(vb6_cls_X*)vb6_ComObject_GetInstance(vb6_VariantToObjectVal(v))`
+                        // —— 那是**右值**, &(右值) = C2102。走落临时后两侧生成码同形。
+                        {
+                            const std::string clsSlot092r = cParamClassPtrType(calleeParams[i]);
+                            const std::string tmpCls092r = classSlotTempName(clsSlot092r, tempCounter_++);
+                            c_.addPending(clsSlot092r + " " + tmpCls092r + " = "
+                                          + deliverToClassSlot(clsSlot092r, argVal) + ";");
+                            argVal = "&" + tmpCls092r;
+                        }
+                    } else if (i < calleeParams.size()
+                               && !calleeParams[i].isByVal && !calleeParams[i].isParamArray
                                && calleeParams[i].type == Vb6Type::Variant) {
                         // Fix 092y: ByRef Variant 形参 + 简单标识符实参.
                         // C 签名为 vb6_VARIANT*, 直接 &(BSTR) 会把字符串当 Variant
@@ -747,11 +848,97 @@
                             case Vb6Type::Date:
                                 argVal = "(&(vb6_VARIANT){.vt=VT_DATE, .dblVal=(double)(" + argVal + ")})";
                                 break;
-                            default:
-                                // Variant 变量 / UDT 字段 / 未知类型: 保持原样取址,
-                                // 值已是 vb6_VARIANT 且可寻址 &x 语义正确.
-                                argVal = "&" + argVal;
+                            default: {
+                                // Fix <vbeclipse>: 实参是**晚绑定对象** (C 类型 void* =
+                                // IDispatch*) 时, `&argVal` 交出去的是 `void**` —— 只有 4
+                                // 字节, 而被调方按 `vb6_VARIANT*` 解析: x86 上 vb6_VARIANT
+                                // 是 16 字节, 于是 `vb6_VariantFromValue((*Item))` 读到
+                                // **越界的栈字节**; 若这些字节恰好凑出 vt=VT_BSTR/VT_DISPATCH,
+                                // 随后的 vb6_VariantClear 会 free 一个垃圾指针 → 堆损坏
+                                // (实测 play78.exe: 0xC0000374, 之前是 NULL 数组的 0xC0000005)。
+                                // VB6 语义: 非 Variant 实参传给 ByRef Variant 形参要**拷进
+                                // 临时 Variant** 再传址。用 vb6_VariantFromValue 装箱 ——
+                                // 它是 _Generic, 且对 void* 选 vb6_VariantObject (VT_DISPATCH),
+                                // 正是 knownObjectVars_ 那一族在 C 侧的表示。
+                                // 实证: ucPerspective.AddView 的 `m_Views.Add ViewId, l_View`
+                                // (List.Add(ByVal Key, ByRef Item As Variant, …)),
+                                // l_View 由 Fix 179a 装成 IDispatch 后落进 knownObjectVars_。
+                                std::string argLs92y = argVal;
+                                std::transform(argLs92y.begin(), argLs92y.end(),
+                                               argLs92y.begin(), ::tolower);
+                                // 两条不同的装箱路径, 顺序不能反:
+                                // (1) knownObjectVars_ = 晚绑定对象, C 侧就是 IDispatch* (void*)
+                                //     → 直接 vb6_VariantFromValue。
+                                // (2) 工程类实例: C 侧是**裸结构体指针** vb6_cls_<C>*, 不是
+                                //     IDispatch。直接装箱成 VT_DISPATCH 的话, List/Variant 里
+                                //     存的是裸结构体地址, 后续 vb6_VariantClear/Release 会把
+                                //     它的首字段 (__comObj) 当 vtable 解引用 → **堆损坏**
+                                //     (实测 Perspective.AddFolder 的
+                                //      `m_Folders.Add FolderId, AddFolder`, 返回变量是
+                                //      `vb6_cls_Folder*`)。必须先经 vb6_ComObject_FromInstance
+                                //      包成真 IDispatch —— 与 cgen_setlet Fix 179a 同口径。
+                                //     FromInstance 的 1 个引用按头文件说明直接转移给 VARIANT。
+                                //     判据 inferClassTypeOfExpr (与 Fix 101 同源)。
+                                const bool isObjVar92y = knownObjectVars_.count(argLs92y) > 0;
+                                std::string argCls92y =
+                                    isObjVar92y ? std::string()
+                                                : inferClassTypeOfExpr(*node.positional[i]);
+                                // Fix <vbeclipse>: **本函数的返回值变量** (实参 C 名正是
+                                // currentReturnVar_, 如 vb6_ret_AddPerspective)。它的 C 类型是
+                                // 原生 `vb6_cls_<C>*`, 不是 IDispatch, 而上面两条判据都够不着它:
+                                //   - knownObjectVars_ 里没有 (它不是 void*, 是 vb6_cls_*)
+                                //   - inferClassTypeOfExpr 按**裸 VB 名**查类, 返回值变量在符号表
+                                //     里叫 vb6_ret_<N>, 名字对不上 → 返回空
+                                // 于是回落 `&argVal` —— 把 4 字节槽当 16 字节 vb6_VARIANT*
+                                // (x64 是 8 vs 24) 交出去, 数组里存进**越界读来的垃圾 Variant**。
+                                // 实证: Perspective.AddPerspective 的
+                                //   `m_Perspectives.Add PerspectiveId, AddPerspective`
+                                // → ShowPerspective 里 `Contains(id)` 为真但 `Item(id)` 返回
+                                //   Nothing ⇒ 项目自己 Err.Raise 1 "No perspective found!"
+                                //   ⇒ 未处理 ⇒ ExitProcess(1)。
+                                // 用 currentReturnCType_ (Fix 054 保存的返回类型 C 名) 判类,
+                                // 与 cgen_with.cpp 的 With-返回值变量修复同口径 —— 天然只在本
+                                // 过程内成立。
+                                if (!isObjVar92y && argCls92y.empty()
+                                    && !currentReturnVar_.empty() && argVal == currentReturnVar_
+                                    && currentReturnCType_.rfind("vb6_cls_", 0) == 0) {
+                                    argCls92y = currentReturnCType_.substr(8);
+                                    if (!argCls92y.empty() && argCls92y.back() == '*') argCls92y.pop_back();
+                                }
+                                // Fix <VBFlexGridDemo>: 已知 **Variant 变量**不能走这两条
+                                // 装箱。cExprIsVariant 只认函数表达式 (vb6_VariantXxx( 前缀),
+                                // 裸变量名一律 false; 而 knownObjectVars_ 全程不清空, 别的
+                                // 模块 `Dim Value As Object` 会把 "value" 留在里面 ⇒
+                                // isObjVar92y 为真 ⇒ 把 vb6_VARIANT 强转 (void*) 装箱
+                                // ⇒ C2440 "无法从 vb6_VARIANT 转换为 void *"
+                                // (VBFlexGrid.c prop_set_CellTag / prop_let_CellText 等 6 处)。
+                                // BASE(8c3e981) 发的是 `&Value` (形参本身可寻址), 这里补上
+                                // knownVariantVars_ 判据后正好回到那条 else 分支。
+                                if ((isObjVar92y || !argCls92y.empty())
+                                    && !cExprIsVariant(argVal)
+                                    && !knownVariantVars_.count(argLs92y)) {
+                                    // 落一个**具名** Variant 临时再传址 ——
+                                    // 不能用复合字面量 `(vb6_VARIANT){vb6_VariantFromValue(x)}`:
+                                    // 那是聚合初始化, 第一个初始化式会去初始化首成员 `vt`
+                                    // (类型 vb6_vartype) → C2440 "无法从 vb6_VARIANT 转换为
+                                    // vb6_vartype" (实测 Perspective.c:115 等 7 处)。
+                                    // 具名临时也正是 VB6 语义 (非 Variant 实参拷进临时 Variant)。
+                                    std::string tmp92y = "_vb6_vararg_" +
+                                        std::to_string(ansiCounter_++);
+                                    std::string boxed92y = isObjVar92y
+                                        ? ("(void*)(" + argVal + ")")
+                                        : ("(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc(\""
+                                           + argCls92y + "\"), (void*)(" + argVal + "))");
+                                    c_.emitLine("vb6_VARIANT " + tmp92y
+                                        + " = vb6_VariantFromValue(" + boxed92y
+                                        + ");  /* Fix <vbeclipse>: ByRef Variant 实参装箱 */");
+                                    argVal = "&" + tmp92y;
+                                } else {
+                                    // Variant 变量 / UDT 字段: 值已是 vb6_VARIANT 且可寻址。
+                                    argVal = "&" + argVal;
+                                }
                                 break;
+                            }
                         }
                     } else if (calleeIsDeclare && i < calleeParams.size()
                                && !calleeParams[i].isByVal && !calleeParams[i].isParamArray
@@ -875,6 +1062,9 @@
                     // 字面量或复杂表达式: 使用C11复合字面量
                     // &(int32_t){10} 或 &(double){3.14}
                     std::string cType = "int32_t";
+                    // Fix <vbeclipse> rev7: 命中 ByRef 工程类槽 = 本实参已按"类指针的地址"
+                    // 交付完毕 (下面已落临时并 &temp), 后续所有装箱/复合字面量加工都必须跳过。
+                    bool isClassSlot092r = false;
                     if (i < calleeParams.size()) {
                         cType = mapType(calleeParams[i].type);
                         // Fix 092e: ByRef 数组形参 (如 cToolsUtf8.Decode(ByRef
@@ -888,6 +1078,48 @@
                         if (isArrP092e && !calleeParams[i].isByVal
                             && !calleeParams[i].isParamArray) {
                             cType = "vb6_SafeArray1D**";
+                        }
+                        // Fix <vbeclipse> rev7: **ByRef 工程类形参 + 非左值实参** ——
+                        // 092e 数组守卫的对称 counterpart, 判据同一个口径
+                        // (cParamClassPtrType = "这个槽收不收类实例指针")。
+                        //
+                        // 为什么必须在这里再判一次: 上游 787 那个类槽分支只在
+                        // **isSimpleIdent**(实参是裸标识符) 时才有机会命中; 实参一旦是
+                        // 函数调用/属性读, 就落到本复合字面量路径, 而 mapType(Variant)
+                        // 给出的 "vb6_VARIANT" 会把它装成
+                        //   (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(...)})
+                        // 送进本该收 vb6_cls_View** 的槽 → 被调方把 vb6_VARIANT* 当
+                        // 类指针解引用 → 堆损坏 (实测 vbeclipse ucPerspective.CreateFolder
+                        // → ucFolder.AddView: 触发 vb6_heapCorruptVEH, 崩点漂到
+                        // vb6_List_Item+0x23A, av read target=0x3c4000)。
+                        //
+                        // 口径对称性就是本条的判据纪律: 一个"ByRef + 类槽"的形参,
+                        // 无论实参是标识符还是表达式, 都不该走进 M22 装箱 switch。
+                        const std::string clsSlotP092r =
+                            (i < calleeParams.size() && !calleeParams[i].isByVal
+                             && !calleeParams[i].isParamArray)
+                                ? cParamClassPtrType(calleeParams[i]) : std::string();
+                        if (!clsSlotP092r.empty()) {
+                            // ByRef 类形参 = 传**类指针的地址**。实参是右值(函数调用等),
+                            // 不能直接 & —— 必须先落一个临时再取址, 否则 &(右值) C2102。
+                            // 落临时这一层与 Fix 161d 的 ByRef(As Any/UDT) 复杂右值同源。
+                            const std::string tmpCls092r = classSlotTempName(clsSlotP092r, tempCounter_++);
+                            c_.addPending(clsSlotP092r + " " + tmpCls092r + " = "
+                                          + deliverToClassSlot(clsSlotP092r, argVal) + ";");
+                            argVal = "&" + tmpCls092r;
+                            // ⚠ argVal 就位后必须让**下面整段** (Fix 120 → M22/090d → 收尾
+                            // `&(cType){argVal}`) 全部跳过, 否则它们会再包一层:
+                            //   (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=&vb6_argtmp_...})
+                            // 或 (&(vb6_cls_View*){&vb6_argtmp_...}) —— 类指针的地址被当
+                            // BSTR 塞进 Variant, 或者把"地址"再取址一次。实测第一版只改
+                            // argVal 时就是 (&(vb6_VARIANT){...bstrVal=&vb6_argtmp_...})。
+                            //
+                            // 做法 = 把这一整段包进 if (!isClassSlot092r) —— 与数组槽 092e
+                            // 的处理方式同构 (它靠 cType 改成 vb6_SafeArray1D** 让所有
+                            // 分支自然落空; 这里类槽类型不含 "**" 后缀, 与任何既有
+                            // cType 都不重合, 所以只能显式短路)。
+                            isClassSlot092r = true;
+                            cType = clsSlotP092r;   // 供下方 090d 的 void* 判定等留个一致的读数
                         }
                     }
                     // Fix 120: ByRef 具体数值形参 ← 裸 COM 结果 (void* 承载 COM VARIANT*)
@@ -913,7 +1145,11 @@
                         }
                     }
                     // M22: VARIANT类型需要指定字段初始化 (.vt=VT_xxx, .field=value)
-                    if (cType == "vb6_VARIANT") {
+                    // Fix <vbeclipse> rev7: `!isClassSlot092r` 是显式护栏 —— 理论上命中类槽时
+                    // cType 已被改成 vb6_cls_X*, 本 if 自然不成立; 但这里是"绝不能装箱"的
+                    // 语义关口, 不该只依赖 cType 的取值巧合 (类槽类型与任何既有 cType 都不
+                    // 重合, 可一旦将来新增某档 cType 恰好撞上, 就会静默回归成装 Variant)。
+                    if (cType == "vb6_VARIANT" && !isClassSlot092r) {
                         // 推断实参的VB6类型来决定VARIANT字段
                         Vb6Type argVbType = inferExprType(*node.positional[i]);
                         switch (argVbType) {
@@ -985,7 +1221,10 @@
                         //     ...) (COM 属性 → vb6_VariantFromComResult(...) vb6_VARIANT).
                         bool argIsVariant090d = isDefinitelyVariantExpr(*node.positional[i]);
                         if (!argIsVariant090d) argIsVariant090d = cExprIsVariant(argVal);
-                        if (argIsVariant090d) {
+                        // Fix <vbeclipse> rev7: 类槽已交付 (&temp) —— 整段 Variant 提取
+                        // 跳过。cType 此时是 vb6_cls_X* / vb6_ivref_X*, 上面的 case 都不
+                        // 匹配, 但留显式护栏: 将来若给类指针加 case 也不会静默吃掉它。
+                        if (argIsVariant090d && !isClassSlot092r) {
                             if (cType == "double" || cType == "float") {
                                 argVal = "vb6_VariantToDouble(" + argVal + ")";
                             } else if (cType == "BSTR") {
@@ -1002,7 +1241,11 @@
                             }
                         }
                         // Fix 027b: 同样加外层括号防止预处理器把复合字面量 `{a, b}` 内的逗号算成宏实参分隔符.
-                        argVal = "(&(" + cType + "){" + argVal + "})";
+                        // Fix <vbeclipse> rev7: 类槽已交付 (&temp, 见上) —— 绝不能再包一层
+                        // (&(vb6_cls_View*){&temp}) : 那是"把地址的地址"当类指针传。
+                        if (!isClassSlot092r) {
+                            argVal = "(&(" + cType + "){" + argVal + "})";
+                        }
                     }
                     }
                 }

@@ -1,0 +1,8 @@
+Type=Exe
+Name="VeListApp"
+Module=VeListMain; VeListMain.bas
+Class=VbList; VbList.cls
+Class=VbView; VbView.cls
+Class=VbSelf; VbSelf.cls
+Class=VbPop; VbPop.cls
+Startup="Sub Main"

@@ -69,6 +69,34 @@ CompileResult Driver::compile(const CompileOptions& options) {
 
             // 展开源文件列表 (将相对路径转为绝对路径)
             effectiveOpts.sourceFiles.clear();
+            // Fix <vbeclipse>: Object=*\A<工程>.vbp 私有控件工程引用 ——
+            // 被引工程的全部源码 (.bas/.cls/.frm/.ctl) 并入本次编译, 其公开
+            // 枚举/类/模块符号随之可见 (VB6 私有控件工程引用的语义)。
+            // 相对路径以【被引 vbp 所在目录】为基准, 与 VB6 一致。
+            for (const auto& refPath : project.projectRefs) {
+                auto refAbs = project.resolvePath(refPath);
+                if (!std::filesystem::exists(refAbs)) {
+                    diag_->warn(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
+                                "Project reference not found: " + pathToUtf8(refAbs));
+                    continue;
+                }
+                VbpProject refProject = VbpParser::parse(pathToUtf8(refAbs));
+                for (const auto& entry : refProject.sources) {
+                    effectiveOpts.sourceFiles.push_back(
+                        pathToUtf8(refProject.resolvePath(entry.filePath)));
+                }
+                for (const auto& entry : refProject.sources) {
+                    if (!entry.clsidStr.empty()) {
+                        std::string lowerName = entry.moduleName;
+                        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+                        classClsidMap_[lowerName] = entry.clsidStr;
+                    }
+                }
+                if (options.verbose) {
+                    std::cout << "C3: project reference " << refPath
+                              << " (" << refProject.sources.size() << " 个源文件)" << std::endl;
+                }
+            }
             for (const auto& entry : project.sources) {
                 auto absPath = project.resolvePath(entry.filePath);
                 effectiveOpts.sourceFiles.push_back(pathToUtf8(absPath));
@@ -282,10 +310,21 @@ CompileResult Driver::compile(const CompileOptions& options) {
             }
 
             // P6.6: 从VBP工程类型推断是否为ActiveX DLL
-            if (!effectiveOpts.isDll && project.projectType == VbpProjectType::ActiveXDLL) {
+            // Fix <vbeclipse>: `Type=Control` (ActiveX 控件, .ocx) **也是** DLL —— VB6 里
+            // 控件工程产出的是 COM 服务器 DLL, 只是扩展名与 Type=DLL 不同. 此前只认
+            // ActiveXDLL, 控件工程因此走 isGui 分支 → 链接命令发 `/SUBSYSTEM:WINDOWS`
+            // 且不带 /DLL → CRT 去找 WinMain, 而生成端发的是 ActiveX DLL 入口
+            // (com_entry.c: DllGetClassObject/DllRegisterServer/...) → LNK2019 WinMain
+            // 无法解析. ActiveXControl 与 ActiveXDLL 同样置 isDll, 扩展名由 outputExt 决定.
+            if (!effectiveOpts.isDll &&
+                (project.projectType == VbpProjectType::ActiveXDLL ||
+                 project.projectType == VbpProjectType::ActiveXControl)) {
                 effectiveOpts.isDll = true;
                 if (effectiveOpts.verbose) {
-                    std::cout << "C3: 检测到ActiveX DLL工程 (Type=DLL)" << std::endl;
+                    std::cout << "C3: 检测到ActiveX DLL工程 (Type="
+                              << (project.projectType == VbpProjectType::ActiveXControl
+                                      ? "Control" : "DLL")
+                              << ")" << std::endl;
                 }
             }
             // ProgID前缀: 优先CLI指定, 否则用工程名

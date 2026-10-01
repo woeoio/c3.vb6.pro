@@ -47,7 +47,11 @@
                     tabMember44[v44] = pg44;
                 }
             }
+            // 账 #160: 容器里的 TabIndex 是**这套号自己从 0 编**（VB6 就是这样编号 —— 框架里的
+            // 控件不占窗体那一串的号）。没写的那几枚用同一父窗内的声明序号兜底。
+            long childTi = -1;
             for (const auto& child : container.children) {
+                childTi++;
                 if (child.controlType == FrmControlType::Menu) continue;
                 const char* childClass = FrmParser::controlTypeToWin32Class(child.controlType);
                 if (!childClass) continue;
@@ -92,7 +96,12 @@
                 }
                 long childStyle = 0x40000000L | 0x10000000L;  // WS_CHILD | WS_VISIBLE
                 childStyle |= controlTypeStyleBits(child);  // 类型样式与顶层控件一致 (SS_NOTIFY/BS_GROUPBOX 等)
-                std::string childCaption = child.controlName;
+                childStyle |= controlTabStopStyleBit(child);  // 账 #83(a): TabStop 默认位与顶层同一处判断
+                // 账 #158: 按钮族的焦点通知同样要这一位（两条创建路共用一个出口）
+                childStyle |= controlButtonNotifyStyleBit(child);
+                // Fix 162d-extlist: Caption 缺省 = "" 与顶层路径 (create_controls.inc
+                // Fix 162c) 同口径 —— VB6 只在 Caption 非默认时写盘, 缺省回落空串。
+                std::string childCaption;
                 auto ccIt = child.properties.find("Caption");
                 if (ccIt != child.properties.end() && ccIt->second.type == FrmValueType::String) {
                     std::string raw = ccIt->second.rawText;
@@ -106,9 +115,12 @@
                 if (controlTypeClearsCaption(child)) childCaption = "";
                 {
                     std::string childLower41 = Symbol::toLower(child.controlName);
+                    // 账 #83(b2): 扩展样式与顶层同出口 —— 容器嵌在容器里时，**这一条路**也得给它
+                    // WS_EX_CONTROLPARENT，否则嵌在 Frame 里的 Frame 仍然走不进 tab 序。
                     std::string createArgs =
                         "\"" + std::string(childClass) + "\", \"" + childCaption + "\","
-                        + std::to_string(childStyle) + "L, 0L,"
+                        + std::to_string(childStyle) + "L, "
+                        + std::to_string(controlContainerExStyleBit(child)) + "L,"
                         + std::to_string(cLeft) + ", " + std::to_string(cTop) + ", "
                         + std::to_string(cWidth) + ", " + std::to_string(cHeight) + ","
                         + std::to_string(childCtrlId) + ", " + containerHwnd + ", hInstance";
@@ -133,7 +145,35 @@
                 emitShapeLineProps(child, ctrlHwndExprForInit(child));
                 // 设计期 BorderStyle / Alignment (容器子控件)
                 emitDesignerStyleProps(child, childHwndRead(child));
+
+                emitDesignerStateProps(child, childHwndRead(child));  // 账 #125: 与顶层同口径
+                emitDesignerStringProps(child, childHwndRead(child));  // 账 #142: 同上（第二条创建路）
+                // Fix 162d-extlist (VbEclipse 批次): 容器子控件此前**从不**走 style_apply
+                // 那条路 —— Label2-4.AutoSize=-1 全部落空 (顶层路径 Fix 162c 只覆盖顶层控件)。
+                // 这里按同一口径补发 Label 的 AutoSize: 度量文本宽度并 SetWindowPos。
+                // 注: Enabled/Visible/Value 由上面那条 emitDesignerStateProps 发 (它认
+                // CheckBox 的 Grayed(2), 并且先判 properties 的 type 是不是 Integer);
+                // 合并 github/dev 时删掉了本批次原先重复发的那一次同参调用。
+                {
+                    auto asIt162d = child.properties.find("AutoSize");
+                    if (asIt162d != child.properties.end() &&
+                        asIt162d->second.type == FrmValueType::Integer &&
+                        asIt162d->second.intValue != 0 &&
+                        child.controlType == FrmControlType::Label) {
+                        c_.emitLine("vb6_SetLabelAutoSize((void*)" + childHwndRead(child)
+                                  + ", -1);  /* design AutoSize */");
+                    }
+                }
+
+                emitDesignerFontProps(child, childHwndRead(child));    // 账 #154: 同上（字体两条也两路都发）
+                emitDesignerTabIndexProp(child, childHwndRead(child), childTi);  // 账 #160: 第二条创建路同样要发这一句
                 emitControlFrxProps(child);  // Fix 182: 容器子控件同样加载 .frx 设计期图片/文本/列表
+                // C29-SL-o（账 #83 的 Slider 半边）: 设计期值面以前只在顶层那条路发 ——
+                // Frame 里的 Slider 光有窗口，Min/Max/Value 那一批整条丢掉。共用同一个出口，
+                // 参数序与哨兵口径不写第二份。
+                if (child.controlType == FrmControlType::Slider) {
+                    emitSliderDesignTimeInit(child, childHwndRead(child));
+                }
                 // 注册控件名到knownFormControls_(供属性访问)
                 {
                     std::string childNameLower = child.controlName;
@@ -143,19 +183,14 @@
                 }
                 childCtrlId++;
                 // 递归处理多层容器(Frame/PictureBox 内再嵌容器)
-                if (!child.children.empty() &&
-                    (child.controlType == FrmControlType::Frame ||
-                     child.controlType == FrmControlType::PictureBox ||
-                     child.controlType == FrmControlType::SSTab)) {
-                    self(self, child, childHwndRead(child));
+                if (!child.children.empty() && controlIsContainerType(child)) {
+                    self(self, child, childHwndRead(child));   // 账 #167：容器清单收成一处
                 }
             }
         };
         for (const auto& ctrl : frmDesc.formControl.children) {
             if (ctrl.children.empty()) continue;
-            if (ctrl.controlType != FrmControlType::Frame &&
-                ctrl.controlType != FrmControlType::PictureBox &&
-                ctrl.controlType != FrmControlType::SSTab) continue;
+            if (!controlIsContainerType(ctrl)) continue;   // 账 #167
             emitChildControls(emitChildControls, ctrl, childHwndRead(ctrl));
         }
     }
@@ -164,22 +199,10 @@
     {
         // 收集需要子类化的控件名(去重)
         auto needsSubclass = [&](const FrmControl& ctrl) -> bool {
-            return (ctrl.controlType == FrmControlType::PictureBox ||
-                    ctrl.controlType == FrmControlType::Frame ||
-                    ctrl.controlType == FrmControlType::Label ||
-                    ctrl.controlType == FrmControlType::Image)
-                   && (symTab_.lookup(ctrl.controlName + "_GotFocus") ||
-                       symTab_.lookup(ctrl.controlName + "_LostFocus"))
-                || symTab_.lookup(ctrl.controlName + "_MouseEnter")
-                || symTab_.lookup(ctrl.controlName + "_MouseLeave")
-                || symTab_.lookup(ctrl.controlName + "_MouseDown")
-                || symTab_.lookup(ctrl.controlName + "_MouseUp")
-                || symTab_.lookup(ctrl.controlName + "_MouseMove")
-                || symTab_.lookup(ctrl.controlName + "_KeyPress")
-                || symTab_.lookup(ctrl.controlName + "_KeyDown")
-                || symTab_.lookup(ctrl.controlName + "_KeyUp")
-              || symTab_.lookup(ctrl.controlName + "_Validate")
-                || symTab_.lookup(ctrl.controlName + "_MouseHover");
+            // C29-SL-n（账 #141）: 这一趟以前自己抄了一份判据，且比发 arm 那一趟少了
+            // `_DblClick` 与 `_Paint` ⇒ 只挂这两条之一的控件生成了子类过程却从不被 install。
+            // 现在三份（发 arm / 装 / 拆）共用 controlNeedsSubclass 这一处。
+            return controlNeedsSubclass(ctrl);
         };
         std::unordered_set<std::string> subEmitted;
         // 顶层控件
@@ -213,19 +236,13 @@
                             c_.emitLine("vb6_InstallControlSubclass((void*)" + childHwndRead(child) + ", (void*)" + subProcName + ");");
                         }
                     }
-                    if (!child.children.empty() &&
-                        (child.controlType == FrmControlType::Frame ||
-                         child.controlType == FrmControlType::PictureBox ||
-                         child.controlType == FrmControlType::SSTab)) {
+                    if (!child.children.empty() && controlIsContainerType(child)) {   // 账 #167
                         self(self, child);
                     }
                 }
             };
             for (const auto& ctrl : frmDesc.formControl.children) {
-                if (!ctrl.children.empty() &&
-                    (ctrl.controlType == FrmControlType::Frame ||
-                     ctrl.controlType == FrmControlType::PictureBox ||
-                     ctrl.controlType == FrmControlType::SSTab)) {
+                if (!ctrl.children.empty() && controlIsContainerType(ctrl)) {   // 账 #167
                     subclassContainerChildren(subclassContainerChildren, ctrl);
                 }
             }
@@ -236,9 +253,7 @@
     // 顶层与嵌套 Frame/PictureBox 均安装 (含仅作为容器的控件).
     {
         auto emitForward142 = [&](auto&& self, const FrmControl& ctrl) -> void {
-            if ((ctrl.controlType == FrmControlType::Frame ||
-                 ctrl.controlType == FrmControlType::PictureBox ||
-                 ctrl.controlType == FrmControlType::SSTab) && !ctrl.children.empty()) {
+            if (controlIsContainerType(ctrl) && !ctrl.children.empty()) {   // 账 #167
                 std::string nmLower = ctrl.controlName;
                 std::transform(nmLower.begin(), nmLower.end(), nmLower.begin(), ::tolower);
                 if (!knownControlArrays_.count(nmLower)) {

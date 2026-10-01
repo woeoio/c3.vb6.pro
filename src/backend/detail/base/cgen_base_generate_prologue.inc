@@ -19,6 +19,15 @@
     labelCounter_ = 0;
     tempCounter_ = 0;
 
+    // <vbeclipse>: 读本模块的 Option Compare (此前 module.options 只有语义层在看,
+    // 代码生成层从不读 ⇒ `Option Compare Text` 编出来的比较仍是二进制, 且
+    // cgen_localdecl.cpp 里那条 g_vb6_optionCompareText 赋值从来没机会发出)。
+    optionCompareText_ = false;
+    for (auto& opt : module.options) {
+        if (opt->optionKind == OptionKind::CompareText) optionCompareText_ = true;
+        else if (opt->optionKind == OptionKind::CompareBinary) optionCompareText_ = false;
+    }
+
     // Fix 090q: 预扫模块内返回 UDT 的函数/方法 (小写名 → C 返回类型), 供
     // Declare As Any ByRef 打包识别「实参是返回 UDT 的函数调用」→ 生成临时
     // UDT 复合字面量取址 (void*)&(vb6_type_X){...}, 避免强转 struct 值 → C2440.

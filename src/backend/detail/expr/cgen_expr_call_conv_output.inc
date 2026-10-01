@@ -80,12 +80,24 @@
         // Fix 036: Format fallback — 未匹配类型 (Currency/Unknown 等, 非 Variant) 用
         // vb6_VariantFromValue 包装. Variant 类型无需包装 (已是 vb6_VARIANT).
         else if (argType != Vb6Type::Variant) {
-            args[0] = "vb6_VariantFromValue(" + args[0] + ")";
+            // 装箱走 boxToVariant 权威 (上面 Boolean 档已经是它)
+            args[0] = boxToVariant(node.positional[0].get(), args[0]);
         }
         argList.clear();
         for (size_t i = 0; i < args.size(); i++) {
             if (i > 0) argList += ", ";
             argList += args[i];
+        }
+        // <vbeclipse>: Format(expression[, format[, FirstDayOfWeek[, FirstWeekOfYear]]])
+        // RTL 签名 vb6_Format(vb6_VARIANT, BSTR, int32_t, int32_t) 与 VB6 完整 4 形对齐
+        // (VBFlexGrid.ctl:20425/20428 直接 `Format$(Text, Col.Format, vbUseSystemDayOfWeek, vbUseSystem)`,
+        // 2 参签会 C2197 too many args)。缺省 FirstDayOfWeek=vbSunday(1), FirstWeekOfYear=vbFirstJan1(1)。
+        // 省略 format 那一形补 NULL ("无格式串"，RTL 内部各处也传 NULL, vb6rtl_conv.c:181+)。
+        while (args.size() < 4) {
+            if (args.size() == 1) { args.push_back("NULL"); }
+            else                 { args.push_back("1"); }
+            if (!argList.empty()) argList += ", ";
+            argList += args.back();
         }
     }
     // Fix 036: CStr fallback — 当特殊分支未匹配 (Boolean/Byte/Date/Currency/常量/

@@ -130,6 +130,32 @@ public:
     // 虚方法 (tB, B08b): 本类体内对这个名字的调用必须走虚槽 (有后代 Overrides 了它)
     bool virtualCallNeedsDispatch(const std::string& name) const;
 
+    // <vbeclipse>: 这个名字是不是**工程级**已有的名字 —— 是就不是"未声明的标识符"，
+    // 也就不该走 VB6 的隐式 Variant 声明。两种事实、两种位置，缺一不可：
+    //   1) 标准模块的 Public 过程名，**裸名**位即算。跨模块注入 (runCrossModuleResolution)
+    //      跑在逐模块分析之后，所以分析当刻符号表里还没有它；而那条注入又是"先到先得"，
+    //      于是这里抢先登记的隐式 Variable 会把真正的 `Module1.ShowForm2` 挤掉，调用发成
+    //      一个被局部变量遮蔽的裸名 → C2063 (实测 ext_show_test Form1.c 104)。
+    //   2) 模块名，只算 `Mod.成员` 的**限定符**位 (memberObjCtx_)。VB6 里模块名不是可
+    //      挪用的变量名；登记成 Variant 变量后 `obj.成员` 先命中"Variant 持有 COM 对象"
+    //      那一档，整条模块限定路被跳过，调用静默退化成晚绑定并恒返 0
+    //      (实测 test_modulemethod: 期望 30/21，实得 0/0)。
+    // 数据由 driver 在逐模块分析前从**已解析的 AST** 算好下发 (下面两个 setter)。
+    bool namesProjectLevel(const std::string& name) const;
+    // 上条的两份数据源。driver 在逐模块分析开始前从**已解析的 AST** 算好，各分析器
+    // 各持一份 (名字表很小，复制比lifetime 推理便宜)。分开两条而不是一条: 两个位
+    // 要的事实不同 (裸名位 / 限定符位)，合成一条就把"模块名"和"过程名"混成一锅。
+    void setProjectModuleNames(std::unordered_set<std::string> s) {
+        projModuleNames_ = std::move(s);
+    }
+    void setProjectPublicProcNames(std::unordered_set<std::string> s) {
+        projPublicProcs_ = std::move(s);
+    }
+    // 当前正在分析的标识符是否站在 `Mod.成员` 的限定符位上 (visit(MemberAccessExpr) 置位)。
+    bool memberObjCtx_ = false;
+    std::unordered_set<std::string> projModuleNames_;
+    std::unordered_set<std::string> projPublicProcs_;
+
     // 类继承 (tB, B08c): `obj.<成员>` 的 Protected 越权判定, 命中即报错并返回 true。
     // 只在"接收者解析得出工程类 + 链上最近的声明者把它声明成 Protected + 当前模块不在那条
     // 家族链上"三者同时成立时报错; 任一不成立 (含解析不出接收者) 一律放过 —— 漏报可以补,

@@ -19,6 +19,34 @@ void CCodeGen::visit(SubDecl& node) {
     // ai/vb-asm-extension-spec: Asm 块过程 → x64 独立 MASM 过程 / x86 内联 __asm 块
     if (tryEmitAsmProc(node.name, node.access, node.params, nullptr, node.body, node.loc,
                        node.isNaked)) return;
+
+    // Fix <vbeclipse> rev17: WithEvents 事件处理器 (<控件>_<事件名>) 的形参一律按**事件
+    // ABI = ByVal** 发。事件是"跨对象边界"的回调, emitEventSink 早就立了这条规矩
+    // (`pi.isByVal = true` + typedef 用 mapTypeRef 的单指针), RaiseEvent 发送侧也照它发
+    // (`onXxx(handler, (*Editor))`) —— 唯独处理器的**定义**是从它自己的 VB 签名来的:
+    // `Sub ucPerspective1_OpenEditor(Editor As Object)` 里没写 ByVal ⇒ VB6 默认 ByRef
+    // ⇒ C 侧 `void** Editor`, 体里 `(*Editor)`。于是处理器把"对象指针"再解一层引用:
+    //   实证 play78: Editor.Caption 取到 NULL (av read 0x0)
+    //   @ _vb6_frmMain_ucPerspective1_OpenEditor+0x19。
+    // 这里直接把 AST 形参的 isByVal 置真, 签名与函数体**一起**跟着变 (两处都读它),
+    // 不改符号表也不动事件侧, 与 prelude 只发一次前向声明互相自洽。
+    if (ucEventHandlers_.count(Symbol::toLower(node.name)) > 0) {
+        for (auto& prm : node.params) {
+            if (prm && !prm->isParamArray) prm->isByVal = true;
+        }
+        // 体里的 `(*x)` 不是 AST 说了算: cgen_expr_ident_dispatch.inc 是读
+        // `currentProc_->params[i].isByVal` 来决定要不要解一层引用的。只翻 AST 会
+        // 得到"签名 void* Editor + 体里 (*Editor)" ⇒ C2100 非法的间接寻址
+        // (实测 frmMain.c:938/943/948 三条)。所以 proc 符号的形参表同翻。
+        // 该符号是模块作用域的; 事件处理器恒为 Private ⇒ 不进 getPublicSymbols /
+        // 不被跨模块注入, 改动只影响本模块。
+        if (auto* evtSym = symTab_.lookupModuleOverloadByLoc(node.name, node.loc)) {
+            for (auto& pi : evtSym->params) {
+                if (!pi.isParamArray) pi.isByVal = true;
+            }
+        }
+    }
+
     std::string sig = makeProcSignature(node);
 
     // Fix 055: Form事件处理函数不能为static, 因为wndproc用extern引用它们
@@ -53,6 +81,8 @@ void CCodeGen::visit(SubDecl& node) {
     knownSingleVars_.clear();
     knownDateVars_.clear();   // Fix 175
     knownBoolVars_.clear();     // ai/022 W1
+    knownByteVars_.clear();     // 账 #123
+    knownIntVars_.clear();       // ai/009 5.10
     knownLongVars_.clear();
     knownLongPtrVars_.clear();  // Bug #2 fix: 也清空LongPtr集合
     knownVariantVars_.clear();
@@ -113,19 +143,48 @@ void CCodeGen::visit(SubDecl& node) {
             // 窗体事件处理器走的是本文件不是 func.cpp, 漏这里就收不到)。
             if (Symbol::toLower(simpleP.name) == "dataobject")
                 dataObjectParams_.insert(pLower);
-            auto* pSym = symTab_.lookupModule(simpleP.name);
+            // Fix 161f: 同 cgen_decl_func.cpp — 限定名 (ComctlLib.ColumnHeader) 用
+            // lookupTypeSymbol 按全名→末段查, 与 mapTypeRef 同口径。
+            auto* pSym = lookupTypeSymbol(simpleP.name);
+            if (!pSym) {
+                size_t pDot161f = simpleP.name.find('.');
+                if (pDot161f != std::string::npos)
+                    pSym = lookupTypeSymbol(simpleP.name.substr(pDot161f + 1));
+            }
+            // Fix <vbeclipse> rev7: **工程类名表兜底** —— 与 mapTypeRef 的上移同根因。
+            // `ByRef View As View` (ucFolder.AddView) / `ByRef Folder As Folder`
+            // 这类**跨模块** .cls 形参在过程作用域查不到 (lookupTypeSymbol 只按本
+            // 模块+类型库), 下面的 if 链全落空 ⇒ 形参不进 knownClassVars_ ⇒
+            // 过程体内 `View.View` / `l_View.hWnd` 被当"模块限定符"或裸标识符
+            // ⇒ 生成 `vb6_View_prop_get_View.hWnd` (丢实参, C2224)。
+            // 三分支自带 pSym 守卫, 这里置的 knownClassVars_ 不会被后面覆盖。
+            if (!pSym || pSym->kind != SymbolKind::Class) {
+                const std::string projClsP092r = projectClassNameOf(simpleP.name);
+                if (!projClsP092r.empty()) knownClassVars_[pLower] = projClsP092r;
+            }
             if (pSym && pSym->kind == SymbolKind::UserDefinedType) {
                 knownUdtVars_[pLower] = "vb6_type_" + cIdent(simpleP.name);
             } else if (pSym && pSym->kind == SymbolKind::Class) {
                 knownClassVars_[pLower] = pSym->name;
             } else if (pSym && (pSym->kind == SymbolKind::ComClass || pSym->kind == SymbolKind::ComInterface)) {
-                knownTypedComVars_[pLower] = pSym;
+                // Fix <vbeclipse>-2: 同 cgen_decl_func.cpp —— 本工程有同名类模块时走原生
+                // (判据 projectClassNameOf, 不是 isExternal; 类型库自动加载注进来的
+                // 内建 coclass isExternal=false).
+                const std::string projCls2 = projectClassNameOf(simpleP.name);
+                if (!projCls2.empty()) {
+                    knownClassVars_[pLower] = projCls2;
+                } else {
+                    knownTypedComVars_[pLower] = pSym;
+                }
             }
             // 接口类型的参数
             auto* pSym2 = symTab_.lookup(simpleP.name);
             if (pSym2 && pSym2->kind == SymbolKind::Class && pSym2->isInterface) {
                 knownIfaceVars_[pLower] = pSym2->name;
             }
+            // Fix 161f: `lv As ListView` 形参槽就是 HWND —— 同 cgen_decl_func.cpp。
+            if (Symbol::toLower(simpleP.name).find("listview") != std::string::npos)
+                listViewSlotVars_.insert(pLower);
             // 注册BSTR/Double/Long类型参数到类型跟踪集合
             Vb6Type paramType = typeSys_.resolveTypeName(simpleP.name);
             if (paramType == Vb6Type::String) knownBstrVars_.insert(pLower);
@@ -141,10 +200,15 @@ void CCodeGen::visit(SubDecl& node) {
                 // C 类型串分派会让 inferExprType 看不见 Date (打出序列号)。
                 if (paramType == Vb6Type::Date) knownDateVars_.insert(pLower);
             }
-            else if (paramType == Vb6Type::Long || paramType == Vb6Type::Integer || paramType == Vb6Type::Boolean) {
+            else if (paramType == Vb6Type::Long || paramType == Vb6Type::Integer || paramType == Vb6Type::Boolean
+                     || paramType == Vb6Type::Byte) {
                 knownLongVars_.insert(pLower);
                 // ai/022 W1: 布尔形参另登记一份 (口径同 Fix 175 的 Date 形参)
                 if (paramType == Vb6Type::Boolean) knownBoolVars_.insert(pLower);
+                // 账 #123: Byte 形参一并进这一支 (口径同 ai/022 W1 的 Boolean —— C 型不同串
+                // 就永远看不见 ⇒ 比较被当 Variant 取地址)。另登记一份到 knownByteVars_,
+                // inferExprType 先判 Byte 那张表, 所以这里进 knownLongVars_ 不会把它读成 Long。
+                if (paramType == Vb6Type::Byte) knownByteVars_.insert(pLower);
             }
             // Bug #2 fix: LongPtr 参数注册到独立集合
             else if (paramType == Vb6Type::LongPtr || paramType == Vb6Type::LongLong) knownLongPtrVars_.insert(pLower);   // Fix 084m
@@ -159,6 +223,26 @@ void CCodeGen::visit(SubDecl& node) {
             // 仅当参数未被前面分支精确注册为 Class / ComClass / Interface / UDT 时
             // 才查 C 类型, 避免对 vb6_cls_* / vb6_ComIface_* 等 C 类型参数的错误
             // 注册. 与 visit(VariableDecl) line 651-656 行为一致 (局部 void* 同样注册).
+            // Fix <VBFlexGridDemo>: UDT 形参**优先**登记 (口径同 cgen_decl_func.cpp 那处)。
+            // knownClassVars_ 全程不清空, 别的模块 `Dim This As <工程类>` 会把同名条目
+            // 泄漏过来 ⇒ UDT 形参被当类实例 ⇒ 成员访问回落 COM 后期绑定
+            // vb6_ComGetObjectProp((*This), …) C2172。UDT 与类互斥, 故擦掉残留类条目。
+            {
+                std::string udtCTypeF = mapTypeRef(p->asType.get());
+                while (!udtCTypeF.empty() && (udtCTypeF.back() == '*' || udtCTypeF.back() == ' '))
+                    udtCTypeF.pop_back();
+                if (udtCTypeF.compare(0, 9, "vb6_type_") == 0) {
+                    knownUdtVars_[pLower] = udtCTypeF;
+                    // 同 cgen_decl_func.cpp: 擦掉互斥表里的同名残留 (它们都全程不清空,
+                    // 且判定分支排在 obj_dispatch 的 UDT 字段分支之前)。
+                    knownClassVars_.erase(pLower);
+                    knownTypedComVars_.erase(pLower);
+                    knownIfaceVars_.erase(pLower);
+                    knownIvrefVars_.erase(pLower);
+                    knownObjectVars_.erase(pLower);
+                    knownVariantVars_.erase(pLower);
+                }
+            }
             if (!knownClassVars_.count(pLower) && !knownTypedComVars_.count(pLower)
                 && !knownIfaceVars_.count(pLower) && !knownUdtVars_.count(pLower)) {
                 std::string paramCType = mapTypeRef(p->asType.get());
@@ -242,6 +326,7 @@ void CCodeGen::visit(SubDecl& node) {
     resumePointCounter_ = 0;
     dispatchPoints_.clear();
     currentErrorHandlerLabel_.clear();
+    procExitLabelUsed_ = false;
     if (hasOnError_) {
         c_.emitLine("jmp_buf vb6_local_err_jmp;");
         if (hasResume_) {
@@ -254,7 +339,36 @@ void CCodeGen::visit(SubDecl& node) {
     // 生成过程体 (P14.1.2: 传入hasResume_以启用resume点生成)
     // Fix 086: 先将块内 Dim/Const 提升到过程顶部 (VB6 局部声明是过程级作用域)
     hoistLocalDecls(node.body);
+    // Fix <vbeclipse>: VB6 隐式变量 (无 Option Explicit 时未声明即使用) ——
+    // 语义层登记的名字在此预声明为 Variant C 局部并注册 knownVariantVars_。
+    implicitMacroNames_.clear();
+    if (currentProc_) {
+        auto* impl = symTab_.implicitVarsFor(Symbol::toLower(moduleName_),
+                                             Symbol::toLower(currentProc_->name));
+        if (impl) {
+            for (const auto& n : *impl) {
+                std::string nLower = Symbol::toLower(n);
+                if (!knownLocalVars_.count(nLower)) {
+                    knownLocalVars_.insert(nLower);
+                    knownVariantVars_.insert(nLower);
+                    // Fix <vbeclipse>: 隐式变量名可能撞 Win32 宏 (PopupMenu.cls 的
+                    // MF_BYPOSITION)。过程内 push_macro/undef 隔离, 出过程 pop 复原。
+                    c_.emitLine("#pragma push_macro(\"" + n + "\")");
+                    c_.emitLine("#undef " + n);
+                    implicitMacroNames_.push_back(n);
+                    c_.emitLine("vb6_VARIANT " + cIdent(n) + " = vb6_VariantEmpty();  /* 隐式变量 */");
+                }
+            }
+        }
+    }
     emitStmtList(node.body, hasResume_);
+
+    // Fix <vbeclipse>: 过程统一出口。Exit Sub 发的 `goto vb6_proc_exit;` 落在这里,
+    // 保证 vb6_RestoreErrState() 与 ivref Release 在所有退出路径上都会执行
+    // (VB6: 过程退出自动恢复错误处理状态)。见 cgen_state.inc procExitLabelUsed_ 注释。
+    if (procExitLabelUsed_) {
+        c_.emitLine("vb6_proc_exit:;");
+    }
 
         // P12.3: 恢复调用者的错误处理状态
     if (hasOnError_) {
@@ -286,6 +400,12 @@ void CCodeGen::visit(SubDecl& node) {
         c_.emitLine("}");
     }
 
+    // Fix <vbeclipse>: 复原过程内被 #undef 的 Win32 宏 (隐式变量名隔离)
+    for (const auto& n : implicitMacroNames_) {
+        c_.emitLine("#pragma pop_macro(\"" + n + "\")");
+    }
+    implicitMacroNames_.clear();
+    currentProc_ = nullptr;
     currentProc_ = nullptr;
     inStaticProc_ = false;
     hasGoSub_ = false;
@@ -294,6 +414,7 @@ void CCodeGen::visit(SubDecl& node) {
     inProtectedBlock_ = false;
     dispatchPoints_.clear();
     currentErrorHandlerLabel_.clear();
+    procExitLabelUsed_ = false;
     c_.dedent();
     c_.emitLine("}");
     c_.emitBlank();

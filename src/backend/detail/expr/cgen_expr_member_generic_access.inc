@@ -19,6 +19,10 @@
         if (objExpr.find("vb6_ComCallObject(") == 0 ||
             objExpr.find("vb6_ComGetObjectProp(") == 0 ||
             objExpr.find("vb6_CreateObject(") == 0 ||
+            // Fix <vbeclipse>: 外部窗体控件句柄访问器 vb6_form_ctrl_<Form>_<Ctrl>() —
+            // 返回 HWND, 其上的集合成员 (.Nodes 等) 由 resolveComValue 的
+            // externalTreeViewAccs_ 分支认领; 其余成员走晚绑定 (运行期受限)。
+            objExpr.find("vb6_form_ctrl_") == 0 ||
             // C29-3: 原生复刻的控件成员集合 (ImageList.ListImages 那一族) 返回的也是
             // 真 IDispatch —— 必须当 COM 对象继续访问, 否则拼出 `X.Count` (X 是 void*
             // 表达式) → 直接是 C 语法错。
@@ -92,6 +96,8 @@
         obj.find("vb6_ComGetObjectProp(") == 0 ||
         obj.find("vb6_ComCall(") == 0 ||
         obj.find("vb6_ComGetProp(") == 0 ||
+        // Fix <vbeclipse>: 同上 — 外部窗体控件句柄访问器前缀。
+        obj.find("vb6_form_ctrl_") == 0 ||
         obj.find("vb6_Common_PtrToObj(") == 0 ||
         obj.find("vb6_CreateObject(") == 0 ||
         // C29-3: 同上 —— 原生复刻的成员集合 (ImageList.ListImages) 也是 COM 对象。
@@ -148,11 +154,18 @@
     //   VBFlexGrid.ctl: If UserControl.ParentControls.Count = 0 Then (2370/2486)
     //   → vb6_ComGetIntProp((void*)vb6_UserControl_ParentControls, L"Count")
     //   与 Fix 153 (SelectedControls) / Fix 085 (void* UDT 字段) 走同一 marker 通道.
-    if (obj == "vb6_UserControl_ParentControls") {
-        comObjExpr_ = "(void*)" + obj;
+    if (obj == "vb6_UserControl_ParentControls" || obj == "vb6_UserControl_Controls") {
+        // Fix <vbeclipse>: UserControl.Controls 同 Fix 158d 通道 (裸 `Controls.Item(k)`
+        // / `Controls.Add(progid, name)` — VbEclipse ucPerspective 28 处)。
+        // rev14: `vb6_UserControl_Controls` 是恒 NULL 的"编译先行"空桩, 改用 RTL 真实
+        // 集合单例 vb6_UC_Controls() (按当前 UC 实例回落 formHwnd); 否则 Controls.Item/Add
+        // 恒返回 NULL → ucFolder_AddView(NULL) 崩溃。
+        std::string ctlObjExpr = (obj == "vb6_UserControl_Controls")
+                                     ? "vb6_UC_Controls()" : obj;
+        comObjExpr_ = "(void*)" + ctlObjExpr;
         comMemberName_ = node.memberName;
         isComMarker_ = true;
-        lastExpr_ = "(void*)" + obj;
+        lastExpr_ = "(void*)" + ctlObjExpr;
         return;
     }
 

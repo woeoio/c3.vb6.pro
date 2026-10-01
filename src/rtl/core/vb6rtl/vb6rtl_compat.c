@@ -285,43 +285,62 @@ BSTR vb6_StrConvFromByteArray(struct vb6_SafeArray1D* arr, int32_t conversion, i
 }
 
 
+// <vbeclipse>: 按 elemType 读"字符串数组"的一个槽位。VB6 里 Join/Filter 的源数组必须是
+// 字符串数组 —— 可以是 `Dim s() As String` (槽 = BSTR), 也可以是 `Array("a","b")` 这种
+// Variant 数组 (槽 = 16 字节 vb6_VARIANT)。此前两处都无条件 `VB6_SA_AT(BSTR, …)` 取槽,
+// 对 Variant 数组就把 VARIANT 的头 8 字节当 BSTR 指针用 → 解引用垃圾 → 0xC0000005
+// (实测 `Join(Array("abc","xyz"), "|")` 直接段错误)。
+// 元素不是字符串 ⇒ 与 VB6 一致抛 13 (Type mismatch): 有 On Error 走它的处理器,
+// 没有则 vb6_ErrRaise 的未处理路径报错退出 (同 vb6_UBound 的 rev2 约定)。
+static BSTR vb6_SA_ReadStrAt(struct vb6_SafeArray1D* arr, int32_t index) {
+    void* slot = (char*)arr->data + (size_t)(index - arr->lBound) * (size_t)arr->elemSize;
+    if (arr->elemType == vb6_sa_bstr) return *(BSTR*)slot;
+    if (arr->elemType == vb6_sa_variant) {
+        vb6_VARIANT* v = (vb6_VARIANT*)slot;
+        if (v->vt == vb6_vtEmpty) return vb6_BSTR_Empty();
+        if (v->vt == vb6_vtBSTR) return v->bstrVal;
+    }
+    vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                 vb6_BSTR_FromStr(L"Type mismatch"));
+    return NULL;  /* 不可达: vb6_ErrRaise 必 longjmp 或 ExitProcess */
+}
+
 struct vb6_SafeArray1D* vb6_Filter(struct vb6_SafeArray1D* source, BSTR match, int32_t include, int32_t compare) {
-    (void)compare;
     if (!source) return NULL;
-    int32_t count = source->count;
+    // <vbeclipse>: VB6 的 Filter 只吃**字符串数组** —— String() 数组 (vb6_sa_bstr) 或
+    // Array("a","b") 这种 Variant 数组 (槽是 16 字节 vb6_VARIANT)。旧代码无条件按
+    // BSTR* 取槽, 对 Variant 数组就把 VARIANT 的前 8 字节当指针用 → 垃圾 → 崩溃。
+    // 命中判定走共用查找核 vb6_TextFind ⇒ vbTextCompare 时大小写不敏感。
+    int32_t wantInclude = (include != 0) ? 1 : 0;  // VB6 的 True = -1, 按非零归一
     /* First pass: count matching elements */
     int32_t matchCount = 0;
-    for (int32_t i = 0; i < count; i++) {
-        BSTR elem = VB6_SA_AT(BSTR, source, i);
+    for (int32_t i = source->lBound; i <= source->uBound; i++) {
+        BSTR elem = vb6_SA_ReadStrAt(source, i);
         int32_t found = 0;
         if (elem && match) {
-            int32_t elemLen = vb6_BSTR_Len(elem);
             int32_t matchLen = vb6_BSTR_Len(match);
             if (matchLen == 0) { found = 1; }
-            else for (int32_t j = 0; j <= elemLen - matchLen; j++) {
-                if (memcmp(elem + j, match, matchLen * sizeof(wchar_t)) == 0) { found = 1; break; }
-            }
+            else if (vb6_TextFind(elem, match, 0, compare) >= 0) { found = 1; }
         }
-        if (found == include) matchCount++;
+        if (found == wantInclude) matchCount++;
     }
     /* Create result array */
-    struct vb6_SafeArray1D* result = vb6_SafeArrayCreate1D(vb6_sa_bstr, 0, matchCount > 0 ? matchCount - 1 : 0);
+    // 零命中 ⇒ VB6 的空数组: uBound = -1 (与 vb6_ArrayCreate(0)/Split 同形),
+    // 旧写法夹到 0 ⇒ 凭空多出一个幻影元素, `UBound(x)+1` 读出 1。
+    struct vb6_SafeArray1D* result = vb6_SafeArrayCreate1D(vb6_sa_bstr, 0, matchCount - 1);
     if (!result) return NULL;
-    /* Second pass: copy matching elements */
+    /* Second pass: copy matching elements — 判定必须与计数段同一个谓词 */
     int32_t idx = 0;
-    for (int32_t i = 0; i < count; i++) {
-        BSTR elem = VB6_SA_AT(BSTR, source, i);
+    for (int32_t i = source->lBound; i <= source->uBound; i++) {
+        BSTR elem = vb6_SA_ReadStrAt(source, i);
         int32_t found = 0;
         if (elem && match) {
-            int32_t elemLen = vb6_BSTR_Len(elem);
             int32_t matchLen = vb6_BSTR_Len(match);
             if (matchLen == 0) { found = 1; }
-            else for (int32_t j = 0; j <= elemLen - matchLen; j++) {
-                if (memcmp(elem + j, match, matchLen * sizeof(wchar_t)) == 0) { found = 1; break; }
-            }
+            else if (vb6_TextFind(elem, match, 0, compare) >= 0) { found = 1; }
         }
-        if (found == include) {
-            VB6_SA_AT(BSTR, result, idx) = elem ? SysAllocString(elem) : vb6_BSTR_Empty();
+        if (found == wantInclude) {
+            VB6_SA_AT(BSTR, result, idx + result->lBound) = elem ? SysAllocString(elem) : vb6_BSTR_Empty();
             idx++;
         }
     }
@@ -455,7 +474,8 @@ BSTR vb6_FormatPercent(double value, int32_t numDigits, int32_t incLeading, int3
 // ============================================================
 
 vb6_SafeArray1D* vb6_Split(BSTR expr, BSTR delimiter, int32_t limit, int32_t compare) {
-    (void)compare;  // simplified: binary compare only
+    // <vbeclipse>: compare 此前被 (void) 丢掉 ⇒ Split(s, "x", -1, vbTextCompare)
+    // 只按二进制切。分隔符扫描改走 vb6_TextMatchAt (二进制形逐字不变)。
     if (!expr) expr = vb6_BSTR_Empty();
     // Default delimiter is space " " when NULL is passed
     BSTR defaultDelim = NULL;
@@ -479,7 +499,7 @@ vb6_SafeArray1D* vb6_Split(BSTR expr, BSTR delimiter, int32_t limit, int32_t com
     int32_t count = 1;
     if (delimLen > 0) {
         for (int32_t i = 0; i <= exprLen - delimLen; ) {
-            if (memcmp(expr + i, delimiter, delimLen * sizeof(wchar_t)) == 0) {
+            if (vb6_TextMatchAt(expr, i, delimiter, compare)) {
                 count++;
                 i += delimLen;
                 if (limit > 0 && count >= limit) break;
@@ -501,7 +521,7 @@ vb6_SafeArray1D* vb6_Split(BSTR expr, BSTR delimiter, int32_t limit, int32_t com
     int32_t idx = 0, start = 0;
     if (delimLen > 0) {
         for (int32_t i = 0; i <= exprLen - delimLen && idx < count - 1; ) {
-            if (memcmp(expr + i, delimiter, delimLen * sizeof(wchar_t)) == 0) {
+            if (vb6_TextMatchAt(expr, i, delimiter, compare)) {
                 int32_t len = i - start;
                 VB6_SA_AT(BSTR, arr, idx) = SysAllocStringLen(expr + start, len);
                 idx++;
@@ -532,9 +552,11 @@ BSTR vb6_Join(vb6_SafeArray1D* arr, BSTR delimiter) {
     int32_t delimLen = vb6_BSTR_Len(delimiter);
     
     // Calculate total length
+    // <vbeclipse>: 槽位改走 vb6_SA_ReadStrAt (按 elemType 读) —— 旧写法对 Array("a","b")
+    // 的 Variant 槽按 BSTR* 取指针, 实测 `Join(Array("abc","xyz"), "|")` 直接段错误。
     int32_t totalLen = 0;
     for (int32_t i = 0; i < arr->count; i++) {
-        BSTR elem = VB6_SA_AT(BSTR, arr, i + arr->lBound);
+        BSTR elem = vb6_SA_ReadStrAt(arr, i + arr->lBound);
         totalLen += elem ? vb6_BSTR_Len(elem) : 0;
         if (i < arr->count - 1) totalLen += delimLen;
     }
@@ -544,7 +566,7 @@ BSTR vb6_Join(vb6_SafeArray1D* arr, BSTR delimiter) {
     if (!buf) { if (defaultDelim) vb6_BSTR_Free(defaultDelim); return vb6_BSTR_Empty(); }
     int32_t pos = 0;
     for (int32_t i = 0; i < arr->count; i++) {
-        BSTR elem = VB6_SA_AT(BSTR, arr, i + arr->lBound);
+        BSTR elem = vb6_SA_ReadStrAt(arr, i + arr->lBound);
         if (elem) {
             int32_t elemLen = vb6_BSTR_Len(elem);
             memcpy(buf + pos, elem, elemLen * sizeof(wchar_t));

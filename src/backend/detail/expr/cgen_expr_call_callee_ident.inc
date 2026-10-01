@@ -58,8 +58,18 @@
         // ---- Pattern G: 隐式 Me.field (类模块上下文) ----
         // isClassModule_ && name 不是局部变量 && 不是参数 → 类数据字段.
         // emitExpr(*node.callee) 会 emit "me->field" (+ Dim As New 自动实例化守卫).
+        // Fix <VBFlexGridDemo/GA 36766856082>: 带实参调用时**内置函数优先于同名类成员属性**。
+        // Task #40 (40960eb) 给 parseIdentifierOrCall 加了"使用点剥类型后缀",
+        // `Left$(Value, 1)` 到 cgen 时 name 已是 `left` (无 $)。本段 Pattern G 的判据
+        // 是"类模块内 + 非局部变量", 不看符号 kind ⇒ 控件自己的 `Public Property Get
+        // Left() As Single` 把内置 Left 劫走, 走属性索引路径 ⇒ 实参被当索引吃掉,
+        // 生成 `vb6_Left()` (C2198 参数太少 / C2440 BSTR→double)。
+        // VB6 语义: 属性 Left 无参数, `Left(x, y)` 带实参 ⇒ 只能是内置函数。
+        // 剥后缀前 (BASE) 名字是 `left$`, Pattern G 查不到, 天然走内置; 这里把那条
+        // 隐式约定写成显式判据。无实参的形态 (`Left` 裸引用) 仍走属性, 不受影响。
         if (!handled && isClassModule_ && currentProc_
-            && !knownLocalVars_.count(nameLower)) {
+            && !knownLocalVars_.count(nameLower)
+            && !(kBuiltinFuncNames.count(nameLower) && !node.positional.empty())) {
             // 确认 name 不是当前过程的参数 (Pattern F 已处理)
             bool isParam = false;
             for (auto& p : currentProc_->params) {

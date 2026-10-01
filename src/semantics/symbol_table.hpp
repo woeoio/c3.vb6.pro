@@ -83,6 +83,13 @@ inline bool isPropertyKind(SymbolKind k) {
 struct ParameterInfo {
     std::string name;
     Vb6Type type = Vb6Type::Variant;
+    // <vbeclipse>: `As <类型名>` 里的那个**名字**（工程类/接口/CoClass 才有值，内建类型为空）。
+    // resolveTypeOrDefault 把工程类形参折成 Vb6Type::Variant —— 类名就在这一步丢了, 于是任何
+    // 只拿 Vb6Type 说话的发射器（dll 入口的 extern 原型就是）只能把它写成 vb6_VARIANT,
+    // 与类模块自己发的 vb6_cls_X* 定义 ABI 不符：调用点照着 vb6_VARIANT 那份原型去装箱,
+    // 直接 C2440（实测 cc_demo/itf_via/cls_inh/modulemethod 一系全在这一条上）。
+    // 与 MemberInfo::typeRefName 同思路：类型名要跟着符号走, 不要在下游客串里再造一遍。
+    std::string typeRefName;
     bool isByVal = false;
     bool isOptional = false;
     bool isParamArray = false;
@@ -504,7 +511,9 @@ public:
 
     // 注入一个跨模块外部符号（由Driver在跨模块解析pass中调用）
     // 在模块级作用域定义一个isExternal=true的符号
-    void defineExternal(std::unique_ptr<Symbol> sym);
+    // replaceBuiltinCom: 仅当同名占用者是**类型库内建** coclass/接口、且待注入的是
+    // 工程 Class 时替换之 (VB6: 工程类遮蔽引用库同名 coclass; Fix <vbeclipse>)
+    void defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom = false);
 
     // 获取所有模块级Public符号（供其他模块链接用）
     // 返回 name → Symbol* 的映射（仅Sub/Function/Variable/Constant, Public访问级别）
@@ -514,11 +523,25 @@ public:
     // 遍历模块级符号, 返回所有 isExternal=true 的 sourceModule
     std::unordered_set<std::string> getExternalModuleNames() const;
 
+    // Fix <vbeclipse>: VB6 隐式变量声明 (工程未写 Option Explicit 时, 首次使用的
+    // 裸标识符自动成为 Variant 局部变量)。语义层登记 "<module>$<proc>" → 名字集,
+    // 发码层在过程序言按此预声明 C 局部。
+    void addImplicitVar(const std::string& moduleLower, const std::string& procLower,
+                        const std::string& varName) {
+        implicitVars_["<mod>" + moduleLower + "$" + procLower].insert(varName);
+    }
+    const std::unordered_set<std::string>* implicitVarsFor(const std::string& moduleLower,
+                                                           const std::string& procLower) const {
+        auto it = implicitVars_.find("<mod>" + moduleLower + "$" + procLower);
+        return it == implicitVars_.end() ? nullptr : &it->second;
+    }
+
 private:
     Diagnostics& diag_;
     Scope* moduleScope_;
     Scope* current_;
     std::vector<std::unique_ptr<Scope>> scopes_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> implicitVars_;
 };
 
 } // namespace vb6c3

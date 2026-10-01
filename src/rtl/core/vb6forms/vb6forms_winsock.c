@@ -24,6 +24,8 @@
 
 #include "vb6forms.h"
 #include "vb6forms_internal.h"
+#include "vb6rtl_variant.h"   /* vb6rtl_array.h 里要 vb6_VARIANT，先后顺序不能反 */
+#include "vb6rtl_array.h"   /* vb6_SafeArray1D / Create1D / Destroy1D（ GetData 的 Byte 那一形要） */
 #include <oleauto.h>   /* SysAllocString / SysFreeString / SysReAllocStringLen */
 #include <string.h>
 #include <wchar.h>
@@ -40,9 +42,13 @@
 
 #define VB6_WS_MAX           64     // 一个工程里的 Winsock 控件上限（含数组展开后的下标）
 #define VB6_WS_RX_MAX        (1u << 20)   // 单枚控件接收缓冲的天花板（1 MB），超了就丢新的
+#define VB6_WS_TX_MAX        (8u << 20)   // 发送队列的上限（8 MB）：装不下就报 WSAENOBUFS，不静默丢
+#define VB6_WS_TX_CHUNK      (1u << 16)   // 一次 send 最多交 64 KB —— SendProgress 因此有"进度"的意义
+#define VB6_WS_T_BYTEARRAY 8209  // vbByteArray = VT_ARRAY|VT_UI1(8192+17)：GetData/PeekData 的 Byte 数组那一形
 
 typedef void (*vb6_WsCbVoid)(void);
 typedef void (*vb6_WsCbLong)(int32_t);          // DataArrival / ConnectionRequest（ByVal As Long）
+typedef void (*vb6_WsCbLongLong)(int32_t);   // SendProgress（ByVal bytesSent As Long）
 typedef void (*vb6_WsCbInt)(int16_t);           // StateChanged（ByVal As Integer）
 
 // 已 accept、还等用户 Accept(requestID) 来领的那条连接。监听面一次 FD_ACCEPT 挂一节。
@@ -72,6 +78,13 @@ struct vb6_WsInstance {
     char*    rx;
     uint32_t rxHead, rxLen;
     uint32_t rxCap;
+    // 发送缓冲：SendData 交进来而内核一时装不下的那一截。有它挂着 = 监听/数据面的掩码里
+    // 多一位 FD_WRITE（发完就摘掉，否则 Windows 会不停投 FD_WRITE）。
+    char*    tx;
+    uint32_t txHead, txLen;
+    uint32_t txCap;
+    int32_t  txTotal;              // 本轮 SendData 已交出去的累计（SendProgress 的增量按它算）
+    int      txActive;             // 有一笔 SendData 还没发完（决定什么时候发 SendComplete）
     int32_t  bytesReceived;        // 本次事件新到的字节数（VB6 的 bytesTotal 与 BytesReceived）
     int32_t  byteTransferred;
     void*    cb[VB6_WS_EV_COUNT];
@@ -352,6 +365,74 @@ static int vb6_WsUdpTarget(struct vb6_WsInstance* e, struct sockaddr_storage* ss
     }
 }
 
+static void vb6_WsFreeTx(struct vb6_WsInstance* e) {
+    free(e->tx);
+    e->tx = NULL; e->txCap = e->txHead = e->txLen = 0;
+}
+
+// 存进发送队列；容量与接收缓冲同一把尺（超了就返回 0，让调用方自己兜着）
+static int vb6_WsTxAppend(struct vb6_WsInstance* e, const char* p, uint32_t n) {
+    uint32_t cap;
+    char* grown;
+    if (!n) return 1;
+    if (e->txLen + n > VB6_WS_TX_MAX) { e->lastErr = WSAENOBUFS; return 0; }
+    if (e->txHead + e->txLen > e->txCap) {            // 尾部留白不够就整体前移
+        memmove(e->tx, e->tx + e->txHead, e->txLen);
+        e->txHead = 0;
+    }
+    if (e->txHead + e->txLen + n > e->txCap) {
+        cap = e->txCap ? e->txCap : 4096u;
+        while (cap < e->txLen + n) cap *= 2u;
+        grown = (char*)realloc(e->tx, cap);
+        if (!grown) { e->lastErr = WSAENOBUFS; return 0; }
+        e->tx = grown; e->txCap = cap;
+    }
+    memcpy(e->tx + e->txHead + e->txLen, p, n);
+    e->txLen += n;
+    return 1;
+}
+
+static void vb6_WsTxDone(struct vb6_WsInstance* e);
+
+// 把队列里的尽量交出去：一次最多 VB6_WS_TX_CHUNK，每交成一截就报一次 SendProgress。
+// 交完 => 摘 FD_WRITE + 发 SendComplete；交不动（WSAEWOULDBLOCK）=> 留着等下一次 FD_WRITE。
+// 分块不是为了快，是为了让 SendProgress 真有"进度"可报：一次 send 把 1 MB 全吞下去的机器上，
+// 不分块就永远只有一条 SendProgress，"发出去多少"这件事对用户就只剩一个总数了。
+static void vb6_WsTxDrain(struct vb6_WsInstance* e) {
+    for (;;) {
+        int want, n;
+        if (!e->txLen) { vb6_WsTxDone(e); return; }
+        if (e->sock == INVALID_SOCKET) { vb6_WsFreeTx(e); e->txActive = 0; return; }
+        want = (int)(e->txLen > VB6_WS_TX_CHUNK ? VB6_WS_TX_CHUNK : e->txLen);
+        n = send(e->sock, e->tx + e->txHead, want, 0);
+        if (n > 0) {
+            e->txHead += (uint32_t)n;
+            e->txLen  -= (uint32_t)n;
+            e->byteTransferred += n;
+            if (e->cb[VB6_WS_EV_SENDPROGRESS]) ((vb6_WsCbLongLong)e->cb[VB6_WS_EV_SENDPROGRESS])(n);
+            continue;
+        }
+        if (n == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK) return;   // 等下一次 FD_WRITE
+        if (n == SOCKET_ERROR) {                                                // 真错了：报出来并丢掉队列
+            int err = WSAGetLastError();          // 同一条纪律：先抓号（closesocket 会清）
+            vb6_WsFreeTx(e);
+            e->txActive = 0;
+            vb6_WsFail(e, err);
+            return;
+        }
+        return;                                  // n == 0：TCP 上不该有，防御性收尾
+    }
+}
+
+static void vb6_WsTxDone(struct vb6_WsInstance* e) {
+    if (!e->txActive) return;
+    e->txActive = 0;
+    vb6_WsFreeTx(e);
+    if (e->sock != INVALID_SOCKET)
+        WSAAsyncSelect(e->sock, e->hwnd, WM_WS_NOTIFY, FD_READ | FD_CLOSE);   // 摘掉 FD_WRITE
+    if (e->cb[VB6_WS_EV_SENDCOMPLETE]) ((vb6_WsCbVoid)e->cb[VB6_WS_EV_SENDCOMPLETE])();
+}
+
 static LRESULT CALLBACK vb6_WsWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     struct vb6_WsInstance* e;
     if (m == WM_WS_NOTIFY) {
@@ -371,6 +452,10 @@ static LRESULT CALLBACK vb6_WsWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 if (e->bytesReceived > 0) vb6_WsRaiseData(e);
                 if (e->sock != INVALID_SOCKET) { closesocket(e->sock); e->sock = INVALID_SOCKET; }
                 vb6_WsRaiseClose(e);
+                break;
+            case FD_WRITE:
+                // 只有挂着发送队列时才会收到（掩码平时不带 FD_WRITE）
+                if (s == e->sock) vb6_WsTxDrain(e);
                 break;
             case FD_ACCEPT: {
                 // 监听面来客：先把这条连接收进兜里（accept 是 Winsock 要求的，不做连接就丢了），
@@ -427,6 +512,7 @@ void vb6_Ws_Destroy(void* hwnd) {
     vb6_WsFreePending(e);
     if (e->listenSock != INVALID_SOCKET) { closesocket(e->listenSock); e->listenSock = INVALID_SOCKET; }
     if (e->sock != INVALID_SOCKET) { closesocket(e->sock); e->sock = INVALID_SOCKET; }
+    vb6_WsFreeTx(e);
     free(e->rx);
     e->rx = NULL; e->rxCap = e->rxLen = e->rxHead = 0;
     e->hwnd = NULL;                       // 槽位回收
@@ -753,6 +839,10 @@ void vb6_Ws_Connect(void* hwnd) {
     vb6_WsRaiseConnect(e);
 }
 
+// 把 tx 里剩下的尽量交出去。全交完了才摘 FD_WRITE 并发 SendComplete。
+// Windows 的口径：FD_WRITE 只在"发不动了、缓冲又空出来"的时刻投，且刚挂上时会先投一次
+// （所以 SendData 里那一步"挂 FD_WRITE"不会漏掉一个永远不来的通知）。
+
 void vb6_Ws_SendData(void* hwnd, const void* data) {
     struct vb6_WsInstance* e = vb6_WsOf((HWND)hwnd);
     const wchar_t* s = (const wchar_t*)data;
@@ -767,21 +857,32 @@ void vb6_Ws_SendData(void* hwnd, const void* data) {
     if (!bytes) return;
     n = WideCharToMultiByte(CP_ACP, 0, s, -1, bytes, need, NULL, NULL);
     if (n > 0) n -= 1;                       // 去掉结尾 NUL：线格式里不带它
-    if (n > 0) {
-        if (e->protocol == VB6_WS_UDP) {
-            if (vb6_WsUdpTarget(e, &ss, &slen)) {
-                n = sendto(e->sock, bytes, n, 0, (struct sockaddr*)&ss, slen);
-            } else {
-                free(bytes);
-                return;
-            }
-        } else {
-            n = send(e->sock, bytes, n, 0);
+    if (n <= 0) { free(bytes); return; }        // n 此刻是转换后的字节数（含结尾 NUL，已减掉）
+    if (e->protocol == VB6_WS_UDP) {
+        // UDP 不分块：报文边界本来就在这一侧，拆头发出去就是拆成好几封
+        if (!vb6_WsUdpTarget(e, &ss, &slen)) { free(bytes); return; }
+        n = sendto(e->sock, bytes, n, 0, (struct sockaddr*)&ss, slen);
+        if (n > 0) {
+            e->byteTransferred = n;
+            if (e->cb[VB6_WS_EV_SENDPROGRESS]) ((vb6_WsCbLongLong)e->cb[VB6_WS_EV_SENDPROGRESS])(n);
+            if (e->cb[VB6_WS_EV_SENDCOMPLETE]) ((vb6_WsCbVoid)e->cb[VB6_WS_EV_SENDCOMPLETE])();
+        } else if (n == SOCKET_ERROR) {
+            int err = WSAGetLastError();
+            if (err == WSAENOBUFS) err = WSAENOBUFS;      // 装不下/发不动：一律报出来，不静默丢
+            vb6_WsFail(e, err);
         }
-        e->byteTransferred = (n > 0) ? n : 0;
-        if (n == SOCKET_ERROR) e->lastErr = WSAGetLastError();
+        free(bytes);
+        return;
     }
+    /* TCP：先挂上 FD_WRITE 再入队，然后就地尽量交出去 —— 一截都交不出去时才真的留在队列里。
+       老控件在这一格的两条形态（卡在阻塞 send 上 / 剩下的静默丢）就是这么填掉的：SendData
+       从不等内核，交不下的部分由 FD_WRITE 继续，全交完才 SendComplete。 */
+    e->byteTransferred = 0;
+    e->txActive = 1;
+    if (!vb6_WsTxAppend(e, bytes, (uint32_t)n)) { free(bytes); return; }   // 队列满：已在里面报过
     free(bytes);
+    WSAAsyncSelect(e->sock, e->hwnd, WM_WS_NOTIFY, FD_READ | FD_CLOSE | FD_WRITE);
+    vb6_WsTxDrain(e);
 }
 
 // 从缓冲里取：maxLen<=0 = VB6 的"全给我"（默认那条）
@@ -802,30 +903,55 @@ static BSTR vb6_WsTake(struct vb6_WsInstance* e, int32_t maxLen) {
     return (BSTR)SysAllocStringLen(NULL, 0);   /* 空串：与 vb6_BSTR_Empty 同物，这枚 TU 没引那个头 */
 }
 
-int32_t vb6_Ws_GetData(void* hwnd, void* outBstr, int32_t type, int32_t maxLen) {
+// Byte 那一形的取数：把 [rxHead, rxHead+take) 这段**原始字节**装成一枚新的 vb6_sa_byte 数组交给调用方。
+// VB6 的形态就是"控件把那个变量的数组描述符换掉"，所以旧的那枚由我们销毁（不销就是每取一次漏一块）；
+// 只销 signature 对得上的 1D 把手（Fix 082g 那枚魔数就是为这种场合准备的）。
+// take = 0 给的是 count=0 的空数组（UBound=-1、LBound=0 ⇒ `UBound-LBound+1` 读出 0，
+// 与 VB6"没数据就是空数组"同形）。consume = 0 是 PeekData 那一半：形状照做，但缓冲的头不动。
+static int32_t vb6_WsTakeBytes(struct vb6_WsInstance* e, void* out, int32_t maxLen, int consume) {
+    vb6_SafeArray1D** dst = (vb6_SafeArray1D**)out;
+    vb6_SafeArray1D* arr;
+    uint32_t take = e->rxLen;
+    if (maxLen > 0 && (uint32_t)maxLen < take) take = (uint32_t)maxLen;
+    arr = vb6_SafeArrayCreate1D(vb6_sa_byte, 0, (int32_t)take - 1);
+    if (!arr) return 0;
+    if (take) memcpy(arr->data, e->rx + e->rxHead, take);
+    if (consume) {
+        e->rxHead += take;
+        e->rxLen -= take;
+        if (!e->rxLen) e->rxHead = 0;
+    }
+    if (*dst && (*dst)->signature == 0x5A1D) vb6_SafeArrayDestroy1D(*dst);
+    *dst = arr;
+    return (int32_t)take;
+}
+
+int32_t vb6_Ws_GetData(void* hwnd, void* out, int32_t type, int32_t maxLen) {
     struct vb6_WsInstance* e = vb6_WsOf((HWND)hwnd);
     BSTR got;
-    (void)type;                              // Byte 数组那一形在 WS-c；现在只有 String
-    if (!e || !outBstr) return 0;
+    if (!e || !out) return 0;
+    // vbByteArray(8209 = VT_ARRAY|VT_UI1) 那一形：交出去的是**线上那串字节本身**，
+    // 不过码页翻译 —— 这正是它与 String 那一形的全部区别（String 那形在 vb6_WsTake 里过 ACP）。
+    if (type == VB6_WS_T_BYTEARRAY) return vb6_WsTakeBytes(e, out, maxLen, 1);
     got = vb6_WsTake(e, maxLen);
-    *(BSTR*)outBstr = got;
+    *(BSTR*)out = got;
     return (int32_t)SysStringLen(got);
 }
 
-int32_t vb6_Ws_PeekData(void* hwnd, void* outBstr, int32_t type, int32_t maxLen) {
+int32_t vb6_Ws_PeekData(void* hwnd, void* out, int32_t type, int32_t maxLen) {
     struct vb6_WsInstance* e = vb6_WsOf((HWND)hwnd);
     uint32_t head, len;
-    BSTR out;
-    (void)type;
-    if (!e || !outBstr) return 0;
+    BSTR res;
+    if (!e || !out) return 0;
+    if (type == VB6_WS_T_BYTEARRAY) return vb6_WsTakeBytes(e, out, maxLen, 0);
     head = e->rxHead; len = e->rxLen;
     if (maxLen > 0 && (uint32_t)maxLen < len) len = (uint32_t)maxLen;
     {
         int wn = MultiByteToWideChar(CP_ACP, 0, e->rx + head, (int)len, NULL, 0);
-        out = SysAllocStringLen(NULL, wn > 0 ? wn : 0);
-        if (out && wn > 0) MultiByteToWideChar(CP_ACP, 0, e->rx + head, (int)len, out, wn);
+        res = SysAllocStringLen(NULL, wn > 0 ? wn : 0);
+        if (res && wn > 0) MultiByteToWideChar(CP_ACP, 0, e->rx + head, (int)len, res, wn);
     }
-    *(BSTR*)outBstr = out;                   // **不消费**：这是 PeekData 与 GetData 唯一的差别
+    *(BSTR*)out = res;                       // **不消费**：这是 PeekData 与 GetData 唯一的差别
     return (int32_t)len;
 }
 
@@ -833,6 +959,7 @@ void vb6_Ws_Close(void* hwnd) {
     struct vb6_WsInstance* e = vb6_WsOf((HWND)hwnd);
     if (!e) return;
     vb6_WsFreePending(e);
+    vb6_WsFreeTx(e); e->txActive = 0;
     if (e->listenSock != INVALID_SOCKET) { closesocket(e->listenSock); e->listenSock = INVALID_SOCKET; }
     if (e->sock != INVALID_SOCKET) { closesocket(e->sock); e->sock = INVALID_SOCKET; }
     e->rxLen = e->rxHead = 0;

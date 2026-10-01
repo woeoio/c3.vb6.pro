@@ -121,21 +121,21 @@ void CCodeGen::visit(ExitStmt& node) {
             break;
         }
         case ExitKind::Sub:
-            c_.emitLine("return;");
+            // Fix <vbeclipse>: 不能发裸 `return;` —— 那会越过过程尾部的
+            // vb6_RestoreErrState()/ivref Release (错误处理状态泄漏 → 之后
+            // vb6_ErrRaise 的 longjmp 打进已失效栈帧 → 野读崩)。统一走过程出口标签。
+            c_.emitLine("goto vb6_proc_exit;");
+            procExitLabelUsed_ = true;
             break;
         case ExitKind::Function:
-            c_.emitLine("return " + currentReturnVar_ + ";");
+            c_.emitLine("goto vb6_proc_exit;");
+            procExitLabelUsed_ = true;
             break;
         case ExitKind::Property:
-            // Fix 181: Property Get 有返回值, Exit Property 必须装回 vb6_ret_<name>,
-            // 否则正常路径把返回寄存器的残留值返回 (x86 下 cTlsReMaster.pvSocket
-            // 把 me 当实例返回, cTlsSocket_Bind 解引用崩溃实证);
-            // Property Let/Set 无返回值 (currentReturnVar_ 为空), 保持裸 return。
-            if (!currentReturnVar_.empty()) {
-                c_.emitLine("return " + currentReturnVar_ + ";");
-            } else {
-                c_.emitLine("return;");
-            }
+            // Fix 181: Property Get 有返回值, 出口处装回 vb6_ret_<name>;
+            // Property Let/Set 无返回值。两者都在统一出口发 return (见 decl_proc/func/prop 尾部)。
+            c_.emitLine("goto vb6_proc_exit;");
+            procExitLabelUsed_ = true;
             break;
     }
 }
@@ -156,7 +156,8 @@ void CCodeGen::visit(GoSubStmt& node) {
     hasGoSub_ = true;
     // GoSub label: 压入返回地址 → goto label
     int retId = gosubReturnCounter_++;
-    c_.emitLine("if (vb6_gosub_sp >= 32) { /* P17.4: GoSub stack overflow */ return; }");
+    c_.emitLine("if (vb6_gosub_sp >= 32) { /* P17.4: GoSub stack overflow */ goto vb6_proc_exit; }");
+    procExitLabelUsed_ = true;
 c_.emitLine("vb6_gosub_stack[vb6_gosub_sp++] = " + std::to_string(retId) + ";");
     c_.emitLine("goto vb6_label_" + cIdent(node.labelName) + ";");
     c_.emitLine("vb6_gosub_ret_" + std::to_string(retId) + ":;");
@@ -167,7 +168,8 @@ void CCodeGen::visit(OnGoSubStmt& node) {
     // P17.4: On x GoSub label1, label2, ... - computed GoSub
     int retId = gosubReturnCounter_++;
     // Stack overflow guard
-    c_.emitLine("if (vb6_gosub_sp >= 32) { /* P17.4: GoSub stack overflow */ return; }");
+    c_.emitLine("if (vb6_gosub_sp >= 32) { /* P17.4: GoSub stack overflow */ goto vb6_proc_exit; }");
+    procExitLabelUsed_ = true;
     // Push return address
     c_.emitLine("vb6_gosub_stack[vb6_gosub_sp++] = " + std::to_string(retId) + ";");
     // Evaluate index and dispatch to selected label

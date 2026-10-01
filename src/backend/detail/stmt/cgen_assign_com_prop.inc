@@ -46,14 +46,32 @@
                     // 打包值参数并生成调用
                     emitExpr(*node.value);
                     // Fix 160w: RHS 为 WithMemberExpr/COM 成员时解封 (裸对象实参
-                    // 送 vb6_ComPack* → C2440) 且避免 marker 泄漏. COM SetPropArg
-                    // 载荷按 Variant 解 (VB6 把 Variant 结果原样传给属性 Set).
-                    if (isComMarker_) resolveComValue("Variant");
+                    // 送 vb6_ComPack* → C2440) 且避免 marker 泄漏.
+                    //
+                    // Fix <vbeclipse>: 解封类型必须**由 packer 反推**, 不能恒用
+                    // "Variant"。此前固定 resolveComValue("Variant") 得到
+                    // vb6_VariantFromComResult(vb6_ComCall(...)) (vb6_VARIANT 结构体),
+                    // 紧接着 comPackExpr 又按 inferExprType 选出 BSTR/Double — 载荷与
+                    // packer 期望类型不匹配, frmViewSnapshot.frm:106-107
+                    //   li.SubItems(1) = .RefId / li.SubItems(2) = .Ratio
+                    // → vb6_ComPackBSTR(vb6_VariantFromComResult(...)) C2440
+                    //   (无法从 vb6_VARIANT 转换为 const wchar_t* / double, 4 处).
+                    // 口径与下方 SetProp 分支的 Fix 110i 一致: packer 决定解封类型。
+                    // comPackExpr 必须在 emitExpr 之前求 (它会消费/依赖部分状态),
+                    // 故先算 packer 再解封。
+                    const std::string packFnVal = comPackExpr(*node.value);
+                    if (isComMarker_) {
+                        std::string hintVal = "BSTR";
+                        if (packFnVal == "vb6_ComPackDouble") hintVal = "Double";
+                        else if (packFnVal == "vb6_ComPackInt") hintVal = "Long";
+                        else if (packFnVal == "vb6_ComPackObject") hintVal = "Object";
+                        else if (packFnVal == "vb6_ComPackValue") hintVal = "Variant";
+                        resolveComValue(hintVal);
+                    }
                     std::string valExpr = std::move(lastExpr_);
-                    std::string packFn = comPackExpr(*node.value);
                     c_.emitLine("vb6_ComSetPropArg(" + objExpr + ", L\"" + memberName + "\", " +
                                  idxArgsArray + ", " + std::to_string(idxArgc) + ", " +
-                                 packFn + "(" + valExpr + "));  /* COM SetPropArg */");
+                                 packFnVal + "(" + valExpr + "));  /* COM SetPropArg */");
                     return;
                 }
             }
@@ -157,7 +175,8 @@
                         std::string one092u;
                         if (pi.type == Vb6Type::Variant) {
                             if (pi.isByVal) {
-                                one092u = "vb6_VariantFromValue(" + argExpr + ")";
+                                // 装箱走 boxToVariant 这一权威 (按 VB 类型选档)
+                                one092u = boxToVariant(argNode, argExpr);
                             } else {
                                 // ByRef Variant 需可寻址: 先落到栈变量再取址
                                 // (复合字面量 {Variant值} 触发 C2440)
@@ -299,11 +318,12 @@
                             std::string oneDef;
                             if (pi.type == Vb6Type::Variant) {
                                 if (pi.isByVal) {
-                                    oneDef = "vb6_VariantFromValue(" + argExpr + ")";
+                                    // 同上: 装箱走 boxToVariant 权威
+                                    oneDef = boxToVariant(argNode, argExpr);
                                 } else {
                                     std::string tv = tmpDef + std::to_string(slotDef++);
-                                    c_.emitLine("vb6_VARIANT " + tv + " = vb6_VariantFromValue("
-                                                + argExpr + ");");
+                                    c_.emitLine("vb6_VARIANT " + tv + " = "
+                                                + boxToVariant(argNode, argExpr) + ";");
                                     oneDef = "&" + tv;
                                 }
                             } else if (pi.type == Vb6Type::String && cExprIsVariant(argExpr)) {

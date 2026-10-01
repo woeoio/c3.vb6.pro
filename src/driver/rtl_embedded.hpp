@@ -189,6 +189,9 @@ enum RtlResourceID {
     // ai/029 C29-RT-a: VB6 RichTextBox 控件 (原生 RICHEDIT50W, 不加载 RICHTX32.OCX)
     RTL_VB6FORMS_RICHTEXTBOX_C             = 219,
     RTL_VB6FORMS_WINSOCK_C                 = 220,
+
+    // ai/029 C29-SL-a: VB6 Slider 控件 (原生 msctls_trackbar32, 不加载 MSCOMCTL.OCX)
+    RTL_VB6FORMS_SLIDER_C                  = 221,
 };
 
 // Session directory manager

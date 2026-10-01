@@ -55,7 +55,18 @@ vb6_SafeArray1D* vb6_SafeArrayReDim1D(vb6_safearray_elemtype elemType,
 vb6_SafeArray1D* vb6_SafeArrayReDim1D_Udt(int32_t elemSize,
     int32_t lBound, int32_t uBound);
 
-// ReDim Preserve: 保留原有数据, 调整大小
+// ReDim Preserve: 保留原有数据, 调整大小。
+// ⚠ elemType 形参不是冗余 —— 它决定**元素步长**, 而步长是运行期唯一的真相来源。
+// 历史坑（三处同源，MEMORY §15/§16）: 早期签名没有 elemType, arr==NULL 时只能回落
+// vb6_sa_variant(x86 16 字节)。于是 `Dim m_Keys() As String` 首次 ReDim 按 16 字节/元素
+// 分配, 而 `VB6_SA_AT(BSTR, arr, i)` 按 4 字节步进读写 → 第 i 个槽里其实躺着别的元素的
+// BSTR; 销毁时 vb6_SafeArrayDestroy1D 又按 elemType==variant 走 Variant 分支, 把那些
+// BSTR 当 bstrVal **二次 free** → 堆损坏, 且崩点漂移到"后面某次 free" (实测 play78.exe
+// 的 List.cls: `For i = 0 To UBound(m_Keys)` 读出垃圾 BSTR 后 StrComp 崩在 mov eax,[edx+ecx*4])。
+// 现在 elemType 由 codegen 权威给出 (mapSaElemType), 运行时不再猜。
+// 保留三参旧入口: 仍有走不到的调用点, 且 elemType 未知时它按 variant 兜底 (=旧行为)。
+vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D_T(vb6_safearray_elemtype elemType,
+    vb6_SafeArray1D* arr, int32_t newLBound, int32_t newUBound);
 vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D(vb6_SafeArray1D* arr,
     int32_t newLBound, int32_t newUBound);
 
@@ -136,6 +147,30 @@ void* vb6_SafeArrayND_GetPtr(vb6_SafeArrayND* arr, ...);
 
 int32_t vb6_UBoundND(vb6_SafeArrayND* arr, int32_t dimension);
 int32_t vb6_LBoundND(vb6_SafeArrayND* arr, int32_t dimension);
+
+// Fix <vbeclipse>: UDT (Type ... End Type) 作为**值**传给 COM 方法时的编组。
+// VB6 把 UDT 打成 SAFEARRAY(VT_UI1) —— 对端收到一串字节, 长度 = UDT 字节数。
+// 缺这个入口时 C3 落 vb6_ComPackInt(<struct>) → C2440 "无法从 vb6_type_RECT 转换为
+// int32_t" (ucSplitBar.ctl:149 `.SplitterMouseDown UserControl.hWnd, m_Rect, x, y`
+// —— m_Rect As RECT, 4×int32_t)。
+//
+// ⚠ 深拷贝而非存指针: 传址会让调用方后续改 UDT 时对端看到变化, 而 VB6 的
+// ByVal UDT 传参是值语义 (对端拿到调用瞬间的快照)。内存由 VARIANT clear 路径
+// 按 vb6_sa_byte 逐元素释放, 不需要额外钩子。
+//
+// ⚠ 这个 inline 放在本文件而不是 vb6rtl_variant.h: 伞头里 array.h 排在
+// variant.h **之后**, 只有这里才看得见 vb6_SafeArrayCreate1D / vb6_SafeArray1D。
+// 放进 variant.h 会 C2021/C4018 (类型未声明)。
+static inline vb6_VARIANT vb6_VariantFromUdtBytes(const void* src, int32_t nBytes) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    if (!src || nBytes <= 0) { v.vt = vb6_vtEmpty; return v; }
+    vb6_SafeArray1D* arr = vb6_SafeArrayCreate1D(vb6_sa_byte, 0, nBytes - 1);
+    if (!arr) { v.vt = vb6_vtEmpty; return v; }
+    memcpy(arr->data, src, (size_t)nBytes);
+    v.vt = vb6_vtArray | vb6_vtByte;    // VT_ARRAY | VT_UI1
+    v.parray = arr;
+    return v;
+}
 
 // Fix 106: 同 VB6_SA_AT, 多维下标也显式转 int32_t (VB6 隐式 CLng).
 #define VB6_SA_ND_AT1(elemType, arr, i) \

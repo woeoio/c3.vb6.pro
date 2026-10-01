@@ -17,6 +17,11 @@
     }
     if (vb6_uc_isFont(obj)) return vb6_ho_getFontMember(obj, name, out);
 
+    // Fix <vbeclipse> rev18: UC **实例指针**归一成宿主 HWND —— 晚绑定属性读
+    // (`Dim x As Variant: Set x = Controls.Item(id)` 之后 `x.LeftPos`) 传进来的是
+    // `vb6_cls_X*`, 而下面整条内建链只认 HWND, 以前一律落到末尾返回 Empty。
+    { void* h18 = vb6_UC_HwndOf(obj); if (h18) obj = h18; }
+
     vb6_UCRec* r = vb6_uc_findByHwnd(obj);
     vb6_HostObjRec* h = vb6_ho_find(obj);
     if (!r && !h && !IsWindow((HWND)obj)) return 0;
@@ -88,4 +93,10 @@
             vb6_ho_setVariantDispatch(out, fr); return 1;
         }
     }
+    // Fix <vbeclipse> rev18: 内建成员都没命中 → 试**本 UserControl 的自有 Property**
+    // (ucFolder.LeftPos/TopPos/RightPos/BottomPos 这类)。cgen 为每个 .ctl 发的
+    // vb6_UcPropDesc 表就是为这一档准备的 —— 没有它, ucPerspective.Refresh 的
+    // `l_ucFolder.Move .LeftPos, .TopPos, …` 会读到 0, 停靠区就摆不出来。
+    if (vb6_UC_OwnPropGet(obj, name, out)) return 1;
+
     return 1;   // 宿主对象: 未知属性一律返回 Empty (不崩)

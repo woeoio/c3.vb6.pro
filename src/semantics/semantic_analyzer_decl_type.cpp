@@ -10,6 +10,13 @@ namespace vb6c3 {
 // --- semantic_analyzer_decl_type.cpp: 类型/枚举/Declare/事件/常量/变量 声明 Visitor ---
 // 由 src/semantics/semantic_analyzer_decl.cpp 拆出（2026-09-17），纯搬移、零行为改动。
 
+// <vbeclipse>: 见 semantic_analyzer_internal.h 的声明处注释。类型引用的载体就是
+// ASTNode（没有 TypeRef 基类）, 只有 SimpleTypeRef 带名字, 其余形态返回空串。
+std::string simpleTypeRefName(const ASTNode* typeRef) {
+    if (!typeRef || typeRef->kind != ASTNodeKind::SimpleTypeRef) return std::string();
+    return static_cast<const SimpleTypeRef*>(typeRef)->name;
+}
+
 
 // Fix 191: 枚举成员值的整数常量求值.
 // 原实现只处理「字面量」与「-字面量」两种形态, 其余表达式一律静默忽略, 成员值
@@ -192,6 +199,7 @@ void SemanticAnalyzer::visit(DeclareDecl& node) {
             ParameterInfo pi;
             pi.name = param->name;
             pi.type = resolveTypeOrDefault(param->name, param->asType.get());
+            pi.typeRefName = simpleTypeRefName(param->asType.get());  // <vbeclipse>: 类名别丢
             pi.isByVal = param->isByVal;
             pi.isOptional = param->isOptional;
             pi.isParamArray = param->isParamArray;
@@ -218,6 +226,7 @@ void SemanticAnalyzer::visit(EventDecl& node) {
             ParameterInfo pi;
             pi.name = param->name;
             pi.type = resolveTypeOrDefault(param->name, param->asType.get());
+            pi.typeRefName = simpleTypeRefName(param->asType.get());  // <vbeclipse>: 类名别丢
             pi.isByVal = param->isByVal;
             pi.isOptional = param->isOptional;
             pi.isParamArray = param->isParamArray;
@@ -249,6 +258,7 @@ void SemanticAnalyzer::visit(DelegateDecl& node) {
             ParameterInfo pi;
             pi.name = param->name;
             pi.type = resolveTypeOrDefault(param->name, param->asType.get());
+            pi.typeRefName = simpleTypeRefName(param->asType.get());  // <vbeclipse>: 类名别丢
             pi.isByVal = param->isByVal;
             pi.isOptional = param->isOptional;
             pi.isParamArray = param->isParamArray;

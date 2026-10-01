@@ -60,6 +60,34 @@
                 return;
             }
 
+            // vbeclipse: Variant 容器左值 `Set x = Nothing` → 清空容器, 不释放对象.
+            // Set m_Items(Idx) = Nothing (m_Items() As Variant) 的 target 文本是
+            // `VB6_SA_AT(vb6_VARIANT, me->m_Items, (i-1))`, 下方 isCallTarget 判定
+            // 成立 → 包装成 `vb6_ReleaseObject((void**)(&(void*){...}))` →
+            // C2440 (`(void*){vb6_VARIANT}` 复合字面量不能用结构体初始化, List.c
+            // 36/50). 语义上清空 Variant 即 VB6 的 Set Nothing, 与同循环里
+            // 非对象元素的清空口径一致 (List.c 32/46: vb6_VariantClear(&VB6_SA_AT(...))).
+            // 裸 Variant 局部 / me->Variant 字段同样走这里, 不再对 VARIANT 取址
+            // 当 IDispatch* 释放 (此前 vb6_ReleaseObject(&v) 编译得过但运行期
+            // 会把 Variant 首 8 字节当 vtable).
+            {
+                std::string vcLower = target;
+                if (vcLower.rfind("me->", 0) == 0) vcLower = vcLower.substr(4);
+                if (vcLower.size() > 4 && vcLower[0] == '(' && vcLower[1] == '*'
+                    && vcLower.back() == ')') {
+                    vcLower = vcLower.substr(2, vcLower.size() - 3);
+                }
+                std::transform(vcLower.begin(), vcLower.end(), vcLower.begin(), ::tolower);
+                const bool vcArr = (target.find("VB6_SA_AT(vb6_VARIANT,") == 0);
+                const bool vcVar = (!vcArr && knownVariantVars_.count(vcLower) > 0);
+                const bool vcFld = (!vcArr && !vcVar && target.rfind("me->", 0) == 0
+                    && classVariantFields_.count(vcLower) > 0);
+                if (vcArr || vcVar || vcFld) {
+                    c_.emitLine("vb6_VariantClear(&" + target + ");  /* Set Nothing (Variant 容器) */");
+                    return;
+                }
+            }
+
             // P6.3: 早期绑定COM变量 → vb6_ComReleaseTyped
             std::string targetLower = target;
             std::transform(targetLower.begin(), targetLower.end(), targetLower.begin(), ::tolower);
@@ -343,6 +371,21 @@
     // COM属性值: 如果右侧是COM属性, 解析为值
     if (isComMarker_) resolveComValue();
     std::string value = std::move(lastExpr_);
+    // Fix <vbeclipse>: SetRef 的第3参是 void* (对象指针), 右侧若是 Variant 表达式
+    // (如 .Item(i) — vb6_List_Item 返回 vb6_VARIANT 结构体, SubClass.cls:56
+    //   `Set l_View = .Item(i)` → `vb6_ComSetRef(l_View, L"ViewId", vb6_List_Item(...))`
+    //   → C2172 "实参不是指针"), 需先提取其中的 IDispatch (VB6: 对象 As Object
+    //   由 Variant 槽持有). 裸 Variant 变量取 & 后经 VariantToObject.
+    {
+        std::string vTrim = value;
+        while (vTrim.size() >= 2 && vTrim.front() == '(' && vTrim.back() == ')')
+            vTrim = vTrim.substr(1, vTrim.size() - 2);
+        if (knownVariantVars_.count(Symbol::toLower(vTrim))) {
+            value = "vb6_VariantToObject(&" + value + ")";
+        } else if (cExprIsVariant(value)) {
+            value = "vb6_VariantToObjectVal(" + value + ")";
+        }
+    }
         c_.emitLine("vb6_ComSetRef(" + objExpr + ", L\"" + memberName + "\", " + value + ");  /* COM SetRef */");
         return;
     }

@@ -42,6 +42,13 @@
                 } else {
                     std::string cLower = child.controlName;
                     std::transform(cLower.begin(), cLower.end(), cLower.begin(), ::tolower);
+                    // Fix <vbeclipse>: 菜单控件数组 (同名多个 Index=N 项) —— 首元素
+                    // 的 id 是数组基址, 语句级 `mnuX(i).Caption = ...` 发
+                    // SetMenu*(GetMenu(hwnd), 基址+i, 值) 时要用。
+                    auto prevId = knownMenuIds_.find(cLower);
+                    if (prevId != knownMenuIds_.end()) {
+                        knownMenuArrayBaseIds_.emplace(cLower, prevId->second);
+                    }
                     knownMenuIds_[cLower] = mid;
                     mid++;
                 }
@@ -108,9 +115,14 @@
             {
                 std::string lowCode = Symbol::toLower(ucSpecEvt->codeSection);
                 static const char* kTypeMapPre[][2] = {
+                    // Fix <vbeclipse> rev17: 补 `object` —— 缺它时命中 default "int32_t",
+                    // 于是 `Public Event X(ByRef Editor As Object)` 的前向声明/thunk 写成
+                    // `int32_t arg0`, 而回调 typedef (emitEventSink 走 mapTypeRef) 与
+                    // RaiseEvent 发送侧都是 `void*`。x86 上同宽侥幸能跑, x64 直接截断指针。
                     {"boolean", "int16_t"}, {"string", "BSTR"},
                     {"integer", "int32_t"}, {"long", "int32_t"},
-                    {"single", "float"}, {"double", "double"}, {nullptr, nullptr} };
+                    {"single", "float"}, {"double", "double"},
+                    {"object", "void*"}, {nullptr, nullptr} };
                 size_t pos = 0;
                 while (true) {
                     size_t e = lowCode.find("public event ", pos);
@@ -168,6 +180,10 @@
                 if (frmLowCode.find("sub " + handlerLower + "(") == std::string::npos
                     && frmLowCode.find("sub " + handlerLower + " (") == std::string::npos) continue;
                 anyHandler = true;
+                // Fix <vbeclipse> rev17: 登记"这条过程是事件处理器" —— visit(SubDecl&)
+                // 据此把形参按事件 ABI (ByVal) 发, 与下面 thunk 的 arg 类型、
+                // emitEventSink 的 typedef、RaiseEvent 发送侧三处对齐 (见状态区注释)。
+                ucEventHandlers_.insert(handlerLower);
                 std::string fnOrig = cIdent(child.controlName) + "_" + cIdent(ev.name);
                 std::string frmPrefix = "vb6_" + cIdent(formName) + "_";
                 std::string thunkName = frmPrefix + "evtThunk_" + fnOrig;
@@ -193,11 +209,17 @@
     }
 
     // P24: Form.Icon from .frx
+    // Fix 161f: 数据是否可用要在 prelude 这里判一次并记入标志; 早先 create 片段
+    // 只看"Icon 属性存在 + frxLoaded"就 emit vb6_frx_icon_* 引用, 遇到 .frx 里
+    // 没有真图标数据的工程 (如 extlist FLVStyles.frx 只有 12 字节属性袋) ⇒
+    // readPicture 返回空 ⇒ 数组不生成而引用照发 ⇒ C2065 未声明的标识符。
+    bool formIconHasData_ = false;
     {
         auto iconIt = frmDesc.formControl.properties.find("Icon");
         if (iconIt != frmDesc.formControl.properties.end() && iconIt->second.type == FrmValueType::FrxReference && frxLoaded) {
             auto pic = FrxReader::readPicture(iconIt->second.frxOffset, false);
             if (!pic.data.empty()) {
+                formIconHasData_ = true;
                 std::string varName = "vb6_frx_icon_" + cIdent(formName);
                 h_.emitLine(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
                 // Will be used in WM_CREATE to set window icon
@@ -206,11 +228,13 @@
         }
     }
     // P24: Form.Picture from .frx
+    bool formPicHasData_ = false;
     {
         auto picIt2 = frmDesc.formControl.properties.find("Picture");
         if (picIt2 != frmDesc.formControl.properties.end() && picIt2->second.type == FrmValueType::FrxReference && frxLoaded) {
             auto pic = FrxReader::readPicture(picIt2->second.frxOffset, false);
             if (!pic.data.empty()) {
+                formPicHasData_ = true;
                 std::string varName = "vb6_frx_bgpic_" + cIdent(formName);
                 h_.emitLine(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
             }

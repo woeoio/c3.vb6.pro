@@ -55,11 +55,21 @@
                 if (dotSym) lookupName = shortName;
             }
             auto* clsSym = analyzers_[i]->symbolTable().lookupModule(lookupName);
-            if (!clsSym) continue;
             std::string oLower = var.name;
-            std::transform(oLower.begin(), oLower.end(), oLower.begin(),
-                           [](unsigned char c) { return (char)std::tolower(c); });
+            std::transform(oLower.begin(), oLower.end(), oLower.begin(), [](unsigned char c) { return (char)std::tolower(c); });
             std::string mLower = "m_" + oLower;
+            // vbeclipse: 类型名被本模块同名成员遮蔽时 (字段自身 Variable / 同名 Sub /
+            // 同名 PropertyGet) lookupModule 拿到的不是 Class, 或干脆查不到 → 该字段
+            // 既不进 typedFields 也不被正确分类, With 退回 Unknown/COM 后期绑定.
+            // 工程级类名表是唯一不受遮蔽的判据 (说明见
+            // driver_codegen_voidfield_scan.inc 的 projectClassNames 注释).
+            if ((!clsSym || clsSym->kind != SymbolKind::Class) &&
+                isProjectClassName(lookupName)) {
+                typedFields[oLower] = projectClassNameOf(lookupName);
+                typedFields[mLower] = projectClassNameOf(lookupName);
+                continue;
+            }
+            if (!clsSym) continue;
             if (clsSym->kind == SymbolKind::Class) {
                 // Fix 090a: As New 项目类字段 (C 存储 void*) 也入 typed 表, 供
                 // inferClassTypeOfExpr 推断 (me.FileStream → cToolsStream). 此前被

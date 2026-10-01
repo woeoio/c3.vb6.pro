@@ -5,6 +5,30 @@
     // --- COM后期绑定检测 (P6.2) + 前期绑定检测 (P6.3) + P6.4接口调用 ---
     // MemberAccessExpr为COM对象设置isComMarker_标志 + comObjExpr_/comMemberName_
     if (isComMarker_) {
+        // 2026-09-30 (门 #233 c29sbevt): **控件的判据专用方法先落地**。
+        // 位置: 必须在下面**所有**分支 (Sim 汇总那一块 / axSlotObj / Data / OLE) **之前** ——
+        // 这些分支的顺序改过好几轮, 而 `StatusBar1.SimClick 1, 0` 一旦落进 axSlotObj 那条
+        // "裸控件槽 + 取属性 + Item" 的路, 就编成
+        //   vb6_ComCallObject(vb6_ComGetObjectProp(hwnd, L"SimClick"), L"Item", …)
+        // 编得过、跑起来一条事件都不发 (CI 上 `c29sbevt` / `_x86` 的 `Got:` 只有 SB1-COUNT=3)。
+        // 判据只用**登记表** (`statusBarNameOfExpr`, 它认宿主槽本身与两种集合形), 不靠前缀猜。
+        {
+            std::string sbHost = statusBarNameOfExpr(comObjExpr_);
+            if (!sbHost.empty() && Symbol::toLower(comMemberName_) == "simclick") {
+                isComMarker_ = false;
+                std::vector<std::string> sa;
+                for (size_t i = 0; i < node.positional.size(); i++) {
+                    emitExpr(*node.positional[i]);
+                    sa.push_back(lastExpr_);
+                }
+                lastExpr_ = "vb6_StatusBar_SimClick((void*)vb6_hwnd_" + sbHost + ", "
+                          + (sa.size() > 0 ? sa[0] : std::string("0")) + ", "
+                          + (sa.size() > 1 ? sa[1] : std::string("0")) + ")";
+                comObjExpr_.clear();
+                comMemberName_.clear();
+                return;
+            }
+        }
         // ActiveX控件COM属性: 先获取属性对象, 再用Item(idx)索引
         // comObjExpr_以"vb6_com_"开头 = ActiveX控件变量
         // C29-7: ListView 是**真窗口** (`vb6_hwnd_X`), 而 ImageList 是 `vb6_com_X` ——
@@ -37,7 +61,25 @@
             // C29-MV-c: MonthView 的判据方法同形 (SimDateClick d → MCN_SELCHANGE 发给父窗)。
             // 它**带一个 Date 参数**（DT-c 那三条无参，所以那里 a0 用不上）。
             bool mvSim = monthviewVars_.count(tvBare) > 0 && tvMem == "simdateclick";
-            if (tvSim || tbSim || dtSim || mvSim) {
+            // C29-SL-c: Slider 的判据方法同形 (SimNotify code, pos → 原生那一档的
+            // WM_HSCROLL/WM_VSCROLL 发给父窗)，**带两个整型参数**。
+            // C29-SL-d: SimStdEvent kind, wParam 同形（把一条常规事件的消息放进控件自己的
+            // 队列），形参表与 SimNotify 一样是两个整型，所以共用这一支。
+            bool slSim = !sliderNameOfExpr(comObjExpr_).empty()
+                && (tvMem == "simnotify" || tvMem == "simstdevent");
+            bool slStd = slSim && tvMem == "simstdevent";
+            // C29-SL-i: ClearSel 是 **VB6 真方法**（类型库 ISlider dispid 0x000e，无参），
+            // 不是判据助手。走同一支改道是因为它同样会被 axSlotObj 那支先吃掉 —— 落回兜底就编成
+            // 「取 clearsel 属性 + 丢掉结果」，跑起来一声不响（账 #143 记的就是这一族的语句形）。
+            // C29-SL-l: 这一族扩成一张表（`controlZeroArgMethod`）—— **带括号**在这一形收尾、
+            // **不带括号**在 cgen_call.cpp 的语句路收尾，两条码头共用同一张表。只接一头就是
+            // 账 #143 那条"编得过、跑了、什么都没发生"（本线踩过三次的那同一条）。
+            std::string zaHwnd;
+            FrmControlType zaType = FrmControlType::Unknown;
+            std::string zaFn = formCtrlSlot(comObjExpr_, zaType, zaHwnd)
+                ? controlZeroArgMethod(zaType, tvMem) : std::string();
+            bool slClear = !zaFn.empty();
+            if (tvSim || tbSim || dtSim || mvSim || slSim || slClear) {
                 isComMarker_ = false;
                 std::vector<std::string> sa;
                 for (size_t i = 0; i < node.positional.size(); i++) {
@@ -46,7 +88,13 @@
                 }
                 std::string a0 = sa.size() > 0 ? sa[0] : std::string("0");
                 std::string a1 = sa.size() > 1 ? sa[1] : std::string("0");
-                lastExpr_ = mvSim
+                lastExpr_ = slClear
+                    ? (zaFn + "((void*)" + zaHwnd + ")")
+                    : slStd
+                    ? ("vb6_Slider_SimStdEvent((void*)" + comObjExpr_ + ", " + a0 + ", " + a1 + ")")
+                    : slSim
+                    ? ("vb6_Slider_SimNotify((void*)" + comObjExpr_ + ", " + a0 + ", " + a1 + ")")
+                    : mvSim
                     ? ("vb6_MV_SimDateClick((void*)" + comObjExpr_ + ", " + a0 + ")")
                     : dtSim
                     ? (std::string(tvMem == "simchange"   ? "vb6_DTP_SimChange"
@@ -66,19 +114,38 @@
             }
         }
 
-        bool axSlotObj = comObjExpr_.find("vb6_com_") == 0
-                      || (comObjExpr_.find("vb6_hwnd_") == 0
-                          && (!listViewNameOfExpr(comObjExpr_).empty()
-                              // C29-8b: `TreeView1.Nodes(1)` 的宿主槽同理 —— 只有**裸控件**
-                              // 槽才进这条"取集合属性 + Item"的路; 集合对象本身
-                              // (vb6_TreeView_Nodes(…) 开头) 不能进, 否则 `Nodes.Add(…)`
-                              // 会被当成"Add 属性 + Item 下标", 编成删不改的错形状。
-                              // C29-5b: Toolbar 的裸槽同理 (真窗口)。
-                              || !treeViewNameOfExpr(comObjExpr_).empty()
-                              || !toolbarNameOfExpr(comObjExpr_).empty()))
-                      // C29-Data: Data1.Recordset 的透传形态 (Fields/Item 走 Step1+Item 路)。
-                      || comObjExpr_.find("vb6_Data_Self(") == 0;
-        if (axSlotObj && !node.positional.empty()) {
+        // C29-8b/C29-5b: TreeView / Toolbar 的**裸控件**槽也进这条"取集合属性 + Item"
+        // 的路; 集合对象本身 (vb6_TreeView_Nodes(…) 开头) 不能进, 否则
+        // `Nodes.Add(…)` 会被当成"Add 属性 + Item 下标", 编成删不改的错形状。
+        // Fix 161f: `lv.ListItems(1)` —— 形参/局部槽 (lv As ListView) 本身就是
+        // HWND, 不是 vb6_hwnd_ 前缀形态, 必须单独认, 否则落
+        // vb6_ComGetObjectProp(lv, L"ListItems") = 拿 HWND 当 IDispatch 用
+        // (extlist RefillList 实测: 窗口起来但 0 行)。
+        // <vbeclipse>: 上面那句"集合对象本身不能进"过去由 `vb6_hwnd_` 那个**前缀锚**兜住
+        // (dev 的写法是 `find("vb6_hwnd_")==0 && (listView||treeView||toolbar 命中)`)。
+        // 这一支持改成 isListViewHostExpr / *NameOfExpr 这些**子串**判据后，锚就失效了：
+        // vb6_TreeView_Nodes((void*)vb6_hwnd_tv1) 里嵌着 vb6_hwnd_tv1，子串一命中就被当成
+        // 宿主槽，`Nodes.Add(…)` 于是编成"取 Add 属性 + Item 下标"——节点根本没加进去，
+        // Index 全读空 (实测 12 条控件回读红: ctrltreeview / ctrltoolbar / c29listview /
+        // c29sbevt 各 x64+x86)。现在由 isControlCollectionExpr 显式挡 (一处有名字的话)。
+        bool axSlotObj = !isControlCollectionExpr(comObjExpr_)
+                      && (comObjExpr_.find("vb6_com_") == 0
+                          || comObjExpr_.find("vb6_hwnd_") == 0
+                          || isListViewHostExpr(comObjExpr_)
+                          || !treeViewNameOfExpr(comObjExpr_).empty()
+                          || !toolbarNameOfExpr(comObjExpr_).empty()
+                          // C29-Data: Data1.Recordset 的透传形态 (Fields/Item 走 Step1+Item 路)。
+                          || comObjExpr_.find("vb6_Data_Self(") == 0);
+        // Fix <VBFlexGridDemo>: 窗体 (Me) 的 ScaleX/ScaleY(x, fromScale, toScale) 是
+        // **方法**, 不是"集合属性 + Item 下标"。axSlotObj 只按 vb6_hwnd_ 前缀认宿主槽,
+        // 窗体 hwnd 同样命中 ⇒ Me.ScaleX(8, 3, Me.ScaleMode) 被编成
+        //   vb6_ComCallObject(vb6_ComGetObjectProp(vb6_hwnd_MainForm, L"ScaleX"), L"Item", …)
+        // 返回 void* ⇒ 与 float 相减 ⇒ C2113×2 (MainForm.c 640/641)。
+        // 让它们落到下面的通用 COM 方法调用 (BASE 8c3e981 正是
+        // vb6_ComCall(vb6_hwnd_MainForm, L"ScaleX", …))。ScaleX/ScaleY 不可能是集合。
+        const std::string axMemLower = Symbol::toLower(comMemberName_);
+        const bool axIsScaleMethod = (axMemLower == "scalex" || axMemLower == "scaley");
+        if (axSlotObj && !node.positional.empty() && !axIsScaleMethod) {
             std::string axObjExpr = std::move(comObjExpr_);
             std::string axMember = std::move(comMemberName_);
             isComMarker_ = false;
@@ -102,16 +169,23 @@
                     std::string bareTV = treeViewNameOfExpr(axObjExpr);
                     if (!bareTV.empty())
                         collectionExpr = "vb6_TreeView_Nodes((void*)vb6_hwnd_" + bareTV + ")";
+                    // Fix <vbeclipse>: 跨窗体 TreeView (`frmViewViews.tvwViews.Nodes`) —
+                    // 宿主槽是控件句柄访问器文本。
+                    if (collectionExpr.empty()) {
+                        auto itExtTv = externalTreeViewAccs_.find(axObjExpr);
+                        if (itExtTv != externalTreeViewAccs_.end())
+                            collectionExpr = "vb6_TreeView_Nodes((void*)" + itExtTv->second + ")";
+                    }
                 } else {
                     // C29-7: ListView 的 ListItems / ColumnHeaders 同一口径。
                     // ⚠ 宿主槽是 **vb6_hwnd_X** (ListView 是真窗口), 不是 vb6_com_X。
                     std::string memLV = Symbol::toLower(axMember);
                     if (memLV == "listitems" || memLV == "columnheaders") {
-                        std::string bareLV = listViewNameOfExpr(axObjExpr);
-                        if (!bareLV.empty())
+                        std::string lvHwnd = listViewHwndExprOf(axObjExpr);
+                        if (!lvHwnd.empty())
                             collectionExpr = (memLV == "listitems")
-                                ? ("vb6_ListView_ListItems((void*)vb6_hwnd_" + bareLV + ")")
-                                : ("vb6_ListView_ColumnHeaders((void*)vb6_hwnd_" + bareLV + ")");
+                                ? ("vb6_ListView_ListItems((void*)" + lvHwnd + ")")
+                                : ("vb6_ListView_ColumnHeaders((void*)" + lvHwnd + ")");
                     }
                 }
                 if (collectionExpr.empty())

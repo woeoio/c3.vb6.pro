@@ -97,6 +97,26 @@ void vb6_OcxHost_PaintAll(void* hwndForm, void* hdc);
 // ============================================================
 
 // UserControl host descriptor — generated code emits one per .ctl module and calls vb6_UC_Register
+// Fix <vbeclipse> rev18: UserControl **自有 Property 的按名桥** (晚绑定访问用)。
+// 为什么需要: 工程里常见的 `Dim x As Variant: Set x = Controls.Item(id)` 之后
+// `x.LeftPos = v` / `x.RightPos` 是**晚绑定**, cgen 发的是
+//   vb6_ComSetProp(实例, L"LeftPos", ...) / vb6_ComGetIntProp(实例, L"LeftPos")
+// 而 x 是原生 `vb6_cls_X*` 结构体 (不是 IDispatch), 宿主模型只认内建成员
+// (Caption/Visible/Left/Top/Width/Height/hWnd/Refresh/Move/…), 没有名字表就只能
+// 返回 Empty / 丢弃写入。实证 play78 (--arch x86): ucPerspective.Refresh 里
+// `l_ucFolder.Move .LeftPos, .TopPos, …` 的四个位置读回 0 → 7 个 ucFolder 宿主全停在
+// 设计期尺寸 569x441 重叠在左上角 → 停靠区完全不成形。
+// cgen 为每个 .ctl 发一张本表 (名字 + 生成期写死的取值/存值 thunk), 宿主模型在
+// **内建成员都没命中**时查它。
+// ABI 用 void* 而不是 vb6_VARIANT*: 本头只 include <stdint.h>, 不想把 vb6rtl 拖进来;
+// thunk 自己把它当 vb6_VARIANT* 用。
+// get 返回非 NULL 表示命中; set 返回非 0 表示命中。
+typedef struct vb6_UcPropDesc {
+    const wchar_t* name;                                    // 属性名 (VB6 原名)
+    void* (*get)(void* inst, void* outV);                   // NULL = 只写
+    int32_t (*set)(void* inst, const void* inV);            // NULL = 只读
+} vb6_UcPropDesc;
+
 typedef struct vb6_UserControlDesc {
     const char* typeName;             // VB6 control type name, e.g. "ucChartBar"
     int32_t     scaleMode;            // .ctl design-time ScaleMode (1=Twip 3=Pixel)
@@ -113,6 +133,10 @@ typedef struct vb6_UserControlDesc {
     void      (*mouseUp)(void* me, int32_t button, int32_t shift, float x, float y);
     void      (*mouseMove)(void* me, int32_t button, int32_t shift, float x, float y);
     void      (*dblClick)(void* me);
+    // ---- Fix <vbeclipse> rev18: 自有 Property 按名桥 (可为 NULL; 旧 cgen 不发这两项,
+    // C 的"初始化式少于成员数"会把它们补 0 ⇒ 行为与改动前逐字节一致) ----
+    const vb6_UcPropDesc* props;
+    int32_t               propCount;
 } vb6_UserControlDesc;
 
 // .ctl module self-registration (type name case-insensitive, duplicate ignored)
@@ -182,6 +206,11 @@ void* vb6_Collection_EnumInit(void* coll);
 int32_t vb6_Collection_EnumNext(void* enumPtr, void* outVariant);
 int32_t vb6_UC_ControlsCount(void* coll);
 void* vb6_UC_ControlsItem(void* coll, int32_t index);
+// Fix <vbeclipse> rev14: 裸 `UserControl.Controls` 的进程级单例 (后端发射点)。
+// 必须在此声明 —— 生成代码经 vb6forms.h 伞头看到它; 缺声明会走 C4013 隐式
+// 声明, 返回值按 int 截断, x64 下集合指针高 32 位丢失 → 0xC0000005。
+// formHwnd 留 0, 由 vb6_uc_controlsForm() 回落到"当前" UC 实例宿主窗口。
+void* vb6_UC_Controls(void);
 void* vb6_UC_ControlsEnumInit(void* coll);
 int32_t vb6_UC_ControlsEnumNext(void* enumPtr, void* outVariant);
 // Windows VARIANT <-> vb6_VARIANT conversion + cleanup (used inside vb6com_* hooks)

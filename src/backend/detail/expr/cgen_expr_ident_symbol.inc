@@ -13,7 +13,21 @@
             formHwnd = "vb6_hwnd_" + moduleName_;
         }
         std::string readFn = getControlPropReadFn(FrmControlType::Form, node.name);
-        if (!readFn.empty()) {
+        // 账 #68: VB6 里裸 `Left(s, n)` 是**内置函数**（窗体的 Left 属性必须写 Me.Left）。
+        // 这条分支对"与窗体属性同名的裸标识符"一律按属性读，而 Left 恰好两头都占 ⇒
+        // `Left(x, 1)` 发成 vb6_GetControlLeft(hwnd) 再被调用方拼上实参：编得过、运行期
+        // 读的是窗体坐标（C29-1b 那轮还踩成 0xC0000005）。**函数调用上下文里让内置函数赢**：
+        // 符号表把 VB6 内置函数登记成 isBuiltin 的 Function（实测 Left ⇒ kind=Function
+        // builtin=1），所以这是一条"问表"的规则，不是硬编码名单。值上下文（`x = Left`）
+        // 照旧是窗体属性。
+        bool builtinCallWins68 = false;
+        if (asCallCallee_ && !readFn.empty()) {
+            Symbol* bs68 = symTab_.lookup(node.name);
+            if (!bs68) bs68 = symTab_.lookupModule(node.name);
+            builtinCallWins68 = (bs68 && bs68->isBuiltin
+                                 && bs68->kind == SymbolKind::Function);
+        }
+        if (!readFn.empty() && !builtinCallWins68) {
             lastExpr_ = readFn + "(" + formHwnd + ")";
             return;
         }
@@ -56,6 +70,21 @@
         // Fix 081d: 仅对整型/浮点/布尔常量内联数值; 字符串常量(hasConstValue=true
         // 但 constType==String) 必须走正常标识符路径, 引用 #define 宏名, 否则
         // constIntValue==0 被错误输出为 "0".
+        // Fix 161f: 未写 As Type 的 Const 在符号表里 constType=Variant (且实测
+        // hasConstValue=0), 走不到下面的 constType 分支; 但它的值已在
+        // visit(ConstDecl) 折叠成功 (C 侧 emit 成 `#define NAME (4127)`), 登记在
+        // moduleIntConstValues_. 若发裸宏名, 下游按符号表判型会得到 Variant →
+        // 实参被包成 vb6_VariantToLong(LVM_GETHEADER) → C2440 "无法从 int 转换为
+        // vb6_VARIANT" (extlist MListView SendMessage 实测)。故**先查这张表**,
+        // 按已折叠整数值内联, 与 `As Long` Const 同口径。字符串 Const 不会进这张
+        // 表 (tryEvalConstInt 对字符串失败), 故无 081d 误伤。
+        {
+            auto itCV161f = moduleIntConstValues_.find(lower);
+            if (itCV161f != moduleIntConstValues_.end()) {
+                lastExpr_ = std::to_string(itCV161f->second);
+                return;
+            }
+        }
         if (foundSym->kind == SymbolKind::Constant && foundSym->hasConstValue) {
             if (foundSym->constType == Vb6Type::Long || foundSym->constType == Vb6Type::Integer
                 || foundSym->constType == Vb6Type::Boolean || foundSym->constType == Vb6Type::Byte

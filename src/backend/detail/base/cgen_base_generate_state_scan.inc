@@ -66,16 +66,58 @@
                         // (C2172 实参不是指针 / C2440), 应走 void* COM 字段路径
                         // → vb6_ComCall(me->m_Col, L"Item", {ComPackInt(i)}, 1).
                         // 仅内置 Variant/无符号简单名中的真正 Variant 才注册.
+                        // vbeclipse: Fix 090bx 的漏网之鱼 — `As <项目类>`
+                        // (Private WithEvents m_PopupMenu As PopupMenu /
+                        // WithEvents SplitBar As SplitBar) 的 resolveArrayElemType
+                        // 同样回落 Variant, 但 C 层字段是 `void*` 类指针, 误入
+                        // classVariantMembers_ 后 With/Set 会按 Variant 语义解包 →
+                        // C2440 (ucCaption.c 269 / ucSplitBar.c 172:
+                        // void* _vb6_with_N = vb6_VariantToObjectVal(me->m_PopupMenu)).
+                        // 名字能解析到**工程类** (工程级登记表, 不受同名成员遮蔽) 或
+                        // Com* 对象类型时一律不注册.
                         bool realVariantField = true;
                         if (var.asType->kind == ASTNodeKind::SimpleTypeRef) {
                             auto& simpleV = static_cast<SimpleTypeRef&>(*var.asType);
                             std::string nm = simpleV.name;
                             std::transform(nm.begin(), nm.end(), nm.begin(), ::tolower);
-                            if (nm != "variant" && nm != "var" &&
-                                !symTab_.lookup(simpleV.name) &&
-                                !lookupTypeSymbol(simpleV.name) &&
-                                !lookupDotted(simpleV.name)) {
-                                realVariantField = false;
+                            if (nm != "variant" && nm != "var") {
+                                // 工程类判定走**工程级**类名表 (driver 注入, 不受遮蔽).
+                                // 模块内符号表在这里不可用: vbeclipse 实测同名成员遮蔽 ——
+                                //   ucCaption `Private WithEvents m_PopupMenu As PopupMenu`
+                                //     类型名 "PopupMenu" 被同名 Sub 占位 (SymbolKind::Sub);
+                                //   ucSplitBar `Private WithEvents SplitBar As SplitBar`
+                                //     类型名 "SplitBar" 被字段自身占位 (SymbolKind::Variable);
+                                // 四种模块内查找 (lookup/lookupModule/lookupTypeSymbol/
+                                // lookupDotted) 都拿不到 Class → 旧守卫放行 → void* 字段
+                                // 误按 Variant 解包 (C2440 ucCaption.c 269 / ucSplitBar.c 172).
+                                // classViewByName()/clsreg_ 同样不可用: 工程无任何 Inherits
+                                // 时 driver_classchain.cpp:355 的 D24 护栏让整表早退为空.
+                                if (!projectClassNameOf(simpleV.name).empty()) {
+                                    realVariantField = false;
+                                } else {
+                                    const Symbol* s1 = symTab_.lookup(simpleV.name);
+                                    const Symbol* s2 = symTab_.lookupModule(simpleV.name);
+                                    const Symbol* s3 = lookupTypeSymbol(simpleV.name);
+                                    const Symbol* s4 = lookupDotted(simpleV.name);
+                                    auto isObjKind = [](SymbolKind k) {
+                                        return k == SymbolKind::Class ||
+                                               k == SymbolKind::ComClass ||
+                                               k == SymbolKind::ComInterface ||
+                                               k == SymbolKind::ComModule ||
+                                               k == SymbolKind::ComGlobalNs;
+                                    };
+                                    // 四种查找**逐一**判, 不取首个非空: 同名 Sub/Variable
+                                    // 会遮蔽后面的 Class 命中 (Fix 103/107 同款陷阱).
+                                    if (isObjKind(s1 ? s1->kind : SymbolKind::Variable) ||
+                                        isObjKind(s2 ? s2->kind : SymbolKind::Variable) ||
+                                        isObjKind(s3 ? s3->kind : SymbolKind::Variable) ||
+                                        isObjKind(s4 ? s4->kind : SymbolKind::Variable)) {
+                                        realVariantField = false;
+                                    } else if (!s1 && !s2 && !s3 && !s4) {
+                                        // 090bx 原口径: 四种查找都无条目 → 未知对象类型名
+                                        realVariantField = false;
+                                    }
+                                }
                             }
                         }
                         if (realVariantField) {

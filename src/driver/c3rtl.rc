@@ -1,8 +1,137 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// Fix <vbeclipse> <VBFlexGridDemo>: vb6_Clipboard_SetData 加 int32_t format 形参
+//   (VB6 允许 `Clipboard.SetData data, [format]` 二形; format=vbCF* 常量,
+//    2=vbCFBitmap, 3=vbCFMetafile, 8=vbCFDIB, 14=vbCFEMetafile; 0/未指定=Bitmap)。
+//   此前 RTL 只接 (void*) 一参, VBFlexGridDemo.MainForm Command7_Click 里的
+//   `Clipboard.SetData VBFlexGrid1.Picture, IIf(...)` 直接 C2197 too many args。
+//   此文件改动即触发 RTL 重嵌入, 见 memory [[rtl-reembed-c3rtl-rc-landmine]]。
+// Fix <vbeclipse> <VBFlexGridDemo>: vb6_Format 扩到 VB6 完整 4 形
+//   (expr[, fmt[, FirstDayOfWeek[, FirstWeekOfYear]]])。VBFlexGrid.ctl:20425/20428
+//   `Format$(Text, Col.Format, vbUseSystemDayOfWeek, vbUseSystem)` 直接 C2197。
+//   新两参 (fdow / fwoy) 走签名但不消费 (现有日期分支用系统默认周);
+//   conv.c 内部 7 处 2 参调用同步补 `, 1, 1` (=vbSunday / vbFirstJan1)。
+// Fix <vbeclipse> rev18: 宿主模型认 **UserControl 实例指针** + 自有属性按名桥 + 真 Move。
+//   ① 三处分派入口 (uc_hostmodel_{call,getprop,setprop}.inc) 加
+//      `void* h=vb6_UC_HwndOf(obj); if(h) obj=h;` 归一 —— 晚绑定调用点
+//      (`Dim x As Variant: Set x = Controls.Item(id)`) 传的是原生 vb6_cls_X*,
+//      而整条内建成员链与"三条都不匹配就 return 0"的闸门只认 HWND ⇒ 以前对 UC 实例的
+//      **每一个** 晚绑定成员调用/属性读写都被静默丢弃。
+//   ② vb6_UserControlDesc 追加 props/propCount; cgen 为每个 .ctl 发一张
+//      {名字, get, set} 表 (vb6_UcPropDesc) 覆盖可安全装箱的标量属性, 宿主模型在
+//      内建成员未命中时查它 (ucFolder.LeftPos/TopPos/RightPos/BottomPos 这一档)。
+//   ③ `Move` 原先与 ZOrder/Print/Line 一起被当空实现丢掉 —— 而停靠布局完全靠它:
+//      ucPerspective.Refresh 的 `l_ucFolder.Move .LeftPos, .TopPos, …`。现走
+//      vb6_ControlMove (缇→像素 + 子窗坐标), 并补 Show/Hide。
+//   修前 play78: 7 个 ucFolder 宿主全停在设计期 569x441、重叠在左上角。
+// Fix <vbeclipse> rev16: Variant **槽位赋值**改"接管"语义 —— 新增
+// vb6_VariantAssign(dst, src) = vb6_VariantClear(dst) + vb6_VariantCopy(dst,&src)
+// (BSTR 另分配 / Dispatch AddRef / x86 DECIMAL 另分配)。
+// 修前: Variant 数组元素赋值发的是 `slot = vb6_VariantFromValue((*Item))`,
+// 而 vb6_VariantFromValue 对 vb6_VARIANT 走 _Generic 的 vb6_VariantIdentity
+// —— 纯结构体**浅拷贝** ⇒ 槽与调用方实参共用同一只 BSTR。调用方下次
+// vb6_VariantClear(&v) 就把它 free 掉, 同尺寸分配再复用该地址 ⇒ 每个槽都读出
+// "最后一次写入的值"。后端三处改发 vb6_VariantAssign:
+//   cgen_assign_value_sem.inc  (targetIsVariant 且目标是 VB6_SA_*(vb6_VARIANT,…))
+//   cgen_setlet_set_rhs.inc    (Set <Variant 数组元素> = x, 原先连 Clear 都没有)
+//   RTL vb6_VariantArraySet    (vb6_VariantArrayGet(&arr,i) = x 路径)
+// 实测 tests/ve_list: 修前 idx=0/1/2 全答 "Gamma"; 修后 Alpha/Beta/Gamma。
+// 真工程 play78: 修前 Folder.Views.Item(0) 取回 1 字符垃圾 → NULL 解引用,
+// 崩在 _vb6_ucFolder_AddView+0x46 (me=NULL, av read 0x4)。
+// Fix <vbeclipse> rev14: 实现 UserControl.Controls 集合 —— 新增进程级单例
+// vb6_UC_Controls() (uc_controls.c) 并让 ucForm 回落到当前 UC 实例宿主窗口;
+// Host_Call 补 Add/Item(BSTR|序号)/Remove/Count; Host_ToWinVariant 补 vtDispatch
+// 分支 (缺它则 Item 取回的对象变体落 VT_EMPTY); vb6_ComObject_GetInstance 对
+// UC 宿主 HWND 回落 vb6_UC_InstanceOf。后端把手写死的 vb6_UserControl_Controls
+// (恒 NULL 空桩) 改发 vb6_UC_Controls(); 并在各 .ctl 模块 init 里自注册宿主描述
+// (否则运行期 Controls.Add 的动态类型从未注册 → 建不出实例 → NULL 解引用)。
+// 修前 play78 崩在 _vb6_ucFolder_AddView+0x46 (me=NULL, av read 0x4)。
+// Fix <vbeclipse> rev12: vb6_VariantToObjectVal / vb6_ComObject_GetInstance 加
+// C3_IV_TRACE=1 门控追踪 —— 定位 List.Item 返回的包装器指针真伪。
+// Fix <vbeclipse> rev11: vb6_VARIANT 与 Windows VARIANT 逐平台对齐 —— vt 改 2 字节
+// (VARTYPE) + wReserved1/2/3, decVal 仅 x64 内联 (x86 改用 DECIMAL* pdecVal),
+// 使 sizeof 在 x86=16 / x64=24, 与 OLE VARIANT 一致 (原先 x86 膨胀到 24, 与 COM
+// 互传 VARIANT* 即越界写堆 → 堆损坏)。(vb6rtl_variant.h)
+// Fix <vbeclipse> rev10: uc_host_window.c 的 WM_DESTROY 加 C3_UC_TRACE 门控的
+// hwnd/me 打印 —— 定位 UserControl_Terminate 是否提前跑 (它会清 m_Perspectives)。
+// vb6_StrComp 加 C3_STRCMP_TRACE=1 门控的双串内容/长度打印 (vb6rtl_string.c)。
+// Fix <vbeclipse> rev8: 新增 vb6_VariantFromUdtBytes(src, nBytes) (vb6rtl_array.h
+// inline) + vb6_ComPackUdt(x) 宏 (vb6rtl_class_com.h) —— UDT 结构体实参传给晚绑定
+// COM 方法的编组: SAFEARRAY(VT_UI1) 字节**深拷贝**快照 (VB6 的 ByVal UDT 值语义)。
+// 缺它时 comPackExpr 落 vb6_ComPackInt(<struct>) → C2440 "无法从 vb6_type_RECT 转换
+// 为 int32_t" (ucSplitBar.ctl:149 `.SplitterMouseDown hWnd, m_Rect, x, y`)。
+// 函数刻意放 array.h 而非 variant.h: 伞头里 array.h 排在 variant.h 之后, 只有那里
+// 才看得见 vb6_SafeArrayCreate1D / vb6_SafeArray1D。
+// Fix <vbeclipse> rev4: vb6_UBound 加 C3_SA_TRACE=1 门控的数组状态打印 (sig/elemType/
+// elemSize/lBound/uBound/count/data) —— 定位"arr 非 NULL 但 data==NULL"这类坏状态。
+// Fix <vbeclipse> rev3: 新增 vb6_SafeArrayReDimPreserve1D_T(elemType, arr, lo, hi) ——
+// 元素**步长**与 elemType 由 codegen 权威给出 (mapSaElemType), 运行时不再猜。
+// 旧三参入口在 arr==NULL 时只能按 vb6_sa_variant 兜底 ⇒ `Dim m_Keys() As String`
+// 首次 ReDim 按 16/24 字节步长分配, 而 codegen 发的 VB6_SA_AT(BSTR,…) 按 4 字节
+// 步进, 槽里压着别的 BSTR; 销毁时 vb6_SafeArrayDestroy1D 又按 elemType==variant
+// 走 Variant 分支二次 free → 堆损坏、崩点漂移。实测 play78.exe 崩在
+// List.Contains 的 `For i = 0 To UBound(m_Keys)` (vb6rtl_array.c/.h,
+// cgen_redim.cpp 全部 1D ReDim Preserve 发点)。
+// Fix <vbeclipse>: vb6_SafeArrayReDimPreserve1D 的 arr==NULL 分支不再回落
+// vb6_sa_empty(=elemType 0 → 4 字节), 改用 vb6_sa_variant (元素最大) —— 否则
+// "首次 ReDim 一个 Variant 数组" 会按 4 字节/元素分配, 存 16 字节 Variant 时
+// 越界 12 字节/元素 → 堆损坏 0xC0000374 (vb6rtl_array.c)。
+// Fix <vbeclipse>: Variant 对象引用计数补齐 —— 新增 vb6_ComAddRefDispatch (vb6com.c,
+// 与 vb6_ReleaseObject 共用 vb6_ComIsDispatchable 判据), 并在构造侧补 AddRef:
+// vb6rtl_variant.h 的 vb6_VariantObject + vb6rtl.c 的 vb6_VariantCopy。
+// 原先「构造不 AddRef、Clear 却 Release」= 过度释放 → 对象被原主 Set Nothing 释放后
+// 容器仍指向它 → 0xC0000374 堆损坏。
+// Fix <vbeclipse>: vb6rtl_array.c 的 vb6_UBound(NULL) 由 0 改 -1 —— 未初始化的
+// 动态数组 (List.cls 的 `Dim m_Keys() As String`) 上 `For i = 0 To UBound(x)` 必须
+// 零次迭代, 返回 0 会跑一次并解引用 NULL 数组 (VB6_SA_AT 读 NULL+0xc → AV)。
 // P10 (restored): RTL is embedded as .c/.h SOURCE and compiled by MSVC
 // at user-program build time. The P11.3 pre-compiled .lib scheme was
 // reverted: c3 is open source, no source protection needed.
 // 26 .h headers + 67 .c sources + 13 .inc fragments (all arch-neutral) = 106 resources.
+// Fix 162f-extlist: WM_CTLCOLORBTN 改走 RTL vb6_CtlColorBtnBrush —— Frame(BS_GROUPBOX)
+// 标题的 FillRect 底需要**父窗底色的实心刷** (此前空刷 → 标题后露白块); 复选/单选仍空刷。
+// 窗体 WndProc (cgen_form_wndproc_create.inc) + Frame 子类化 (vb6forms.c) 同口径。
+// vb6forms_ctrl.c + vb6forms_prop.h。
+// Fix 163-extlist: 所有 BUTTON 类控件关 comctl6 视觉样式 (vb6_DisableControlTheme) ——
+// 带样式的命令按钮/单选钮由主题绘制器渲染文字 (主题字体 + ClearType), 比窗体标题/
+// 复选框的 MS Sans Serif 8.25pt 点阵明显模糊; 关样式后统一走经典 GDI 文本渲染。
+// vb6forms.c。
+// Fix 162e-extlist: WM_CTLCOLORBTN 统一返回 HOLLOW_BRUSH (VB6 透明语义) ——
+// (1) 生成窗体 WndProc (cgen_form_wndproc_create.inc): CheckBox/OptionButton/
+//     Frame 标题的文字背景不再实色填充, 透出父窗灰底, 不遮相邻控件框线;
+// (2) vb6_GroupBoxSubclassProc 同口径分支 (Frame 内 checkbox 的直接父窗是 Frame)。
+// 命令按钮忽略该刷子, 不受影响。
+// Fix 162d-extlist: (1) groupbox 关主题后补子类化 WM_ERASEBKGND 填父窗体底色 ——
+// 窗体 WS_CLIPCHILDREN (Fix 124) + 经典 groupbox 不填内部 → Frame 内部是
+// "从未画过"的白; VB6 观感 = 内部透出 BackColor (vb6_GroupBoxSubclassProc)。
+// (2) cgen_form_frame_menu.inc 容器子控件路径补发设计期 Value/AutoSize
+// (Fix 162c 只覆盖顶层路径, Frame 里的 Option1/Label 仍落空), Caption 缺省
+// 同口径改 ""。vb6forms.c + cgen_form_frame_menu.inc。
+// Fix 162c-extlist: 对照 VB6 参考图补四处观感 —— (1) Frame(BS_GROUPBOX) 关主题,
+// 修主题版 groupbox 白底把 240 灰 label 衬成色块; (2) ColumnHeaders.Add 省略
+// width 的固定默认宽 72→115 (参考图 144px 物理 = 125% DPI, 修正 DPI 标定);
+// (3) medium date 中文环境走 yy-MM-dd; (4) 设计期 Option/Check Value=True 与
+// Label AutoSize 落地, Caption 缺省改 "" (Frame2 不再显示控件名)。
+// vb6forms.c / vb6forms_listview.c / vb6rtl_format.c + cgen 两处 .inc。
+// Fix 162b-extlist: Format 命名日期/时间格式补全 —— "medium date"/"medium time"/
+// "general date" 加入命名表 (原先被当用户格式串逐字符解析 → "12e14u12" 乱码);
+// 新增 vb6_fmtNamedDateTime 走 locale API/VB6 规格 (short date→DATE_SHORTDATE、
+// medium date→d-MMM-yy、medium time→hh:mm tt、short time→HH:mm...), 并在
+// VT_DATE 与数值两条入口接入 (原先 short date/short time/long time 落数值
+// 分支输出序列号 "45331")。vb6rtl_format.c + format_parse/format_extract.inc。
+// Fix 161f-extlist: Screen.MousePointer 全局读/写 (vb6_Screen_MousePointer/
+// vb6_Screen_SetMousePointer, vb6rtl_system.c/builtin.h) —— 类模块 (CWaitCursor)
+// 里的 Screen 全局对象早先落 me->Screen → C2039。
+// Fix 162a-extlist: `obj.Move l[,t[,w[,h]]]` 语言级方法 (vb6_ControlMove,
+// vb6forms_ctrl.c/prop.h) —— 之前落 vb6_ComGetObjectProp(hwnd,L"Move") 必失败,
+// Form_Load/Form_Resize 布局全静默失效 (ListView 停在设计宽、只 5 列可见)。
+// Fix 161f-extlist(3): ListView lvSyncAll 全量重建 → **增量同步** (syncedCols/
+// syncedRows + lvSyncCell), 修 RefillList(500行×10列) O(n²) 卡死窗口 (打不开)。
+// Fix 161f-extlist(4): ColumnHeaders.Add 省略 width (Missing) 时用 **固定默认列宽
+// 72px** (VB6 行为, 定标自基准截图 10 列等宽 144px@2x) —— 原先折成 0 导致 10 列
+// 全 0 像素宽、500 行不可见。同时补 SetColumnWidth 的真下发 (LVM_SETCOLUMNWIDTH),
+// 否则 Flip/Adjust 改宽无效; lvSyncFull 补 LVM_DELETECOLUMN, 否则重同步列翻倍。
+// Fix 161f-extlist(2): di/win32 桩补 vb6_di_timeGetDevCaps (winmm) —— Declare
+// Lib "winmm.dll" 的 timeGetDevCaps 无转发桩 ⇒ LNK2019 (CStopWatch.cls:23)。
 // Fix 161-console: Console 对象 (twinBASIC 口径) + stdin 双路径 (控制台 ReadConsoleW /
 // 管道 ReadFile+代码页); vb6_InputBox 弃 fgetws 改走 vb6_ConReadLine。
 // Fix 161b-decl-out: Declare A 版 ByVal String 出参回写 —— 新增 vb6_BSTR_FromANSIBuf
@@ -84,6 +213,8 @@
 219 RCDATA "../rtl/core/vb6forms/vb6forms_richtextbox.c"
 // ai/029 C29-WS-a: Winsock (Winsock2 原生，不加载 MSWINSCK.OCX)
 220 RCDATA "../rtl/core/vb6forms/vb6forms_winsock.c"
+// ai/029 C29-SL-a: Slider (原生 msctls_trackbar32，不加载 MSCOMCTL.OCX)
+221 RCDATA "../rtl/core/vb6forms/vb6forms_slider.c"
 131 RCDATA "../rtl/core/vb6forms/vb6forms_axsite.c"
 198 RCDATA "../rtl/core/vb6forms/vb6forms_axcontainer.c"
 // vb6forms_axsite.c 按功能家族拆分 (2026-09-20): 内部头 + 5 个族编译单元

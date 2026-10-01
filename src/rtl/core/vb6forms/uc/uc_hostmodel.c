@@ -77,6 +77,14 @@ int32_t vb6_Host_IsHostObject(void* obj) {
     if (vb6_uc_isFont(obj)) return 1;
     if (vb6_uc_isColl(obj)) return 1;   // Fix 112c: RTL 内建 Collection
     if (vb6_uc_findByHwnd(obj)) return 1;
+    // Fix <vbeclipse> rev18: UserControl 的**实例指针**也算宿主对象。
+    // 晚绑定调用点 (`Dim x As Variant: Set x = Controls.Item(id)` 之后 `x.Move` /
+    // `x.LeftPos`) 传进来的是原生 `vb6_cls_X*`, 不是 HWND 也不是包装器; 少了这一条
+    // vb6_ComCall/ComGetProp 会落进 IDispatch 路径 (把实例首字段 `__comObj` 当 lpVtbl,
+    // 经包装器再问一次名字) ⇒ 宿主模型永远接不到, Move / LeftPos 全部落空 ——
+    // 正是 7 个 ucFolder 宿主停在设计期 569x441 重叠的原因。
+    // 判据用 vb6_uc_findByInstance: 只比指针, 对任意指针安全。
+    if (vb6_uc_findByInstance(obj)) return 1;
     return vb6_ho_find(obj) != NULL;
 }
 
@@ -136,6 +144,20 @@ void vb6_ho_setVariantDispatch(vb6_VARIANT* out, void* p) {
     (void)p;
     memset(out, 0, sizeof(*out));
     out->vt = vb6_vtEmpty;
+}
+
+// Fix <vbeclipse> rev14: 与上面 setVariantDispatch 相反 —— **真的**产出
+// VT_DISPATCH, 供 Controls.Item / Controls.Add 返回工程内 UserControl 对象。
+// 为什么可以: vb6_ReleaseObject / vb6_ComAddRefDispatch 都用 vb6_ComIsDispatchable
+// 判据 (首字段是否是可执行的 vtable), 裸实例/HWND 一律跳过, 不会越权调用 Release;
+// 而 vb6_ComCallObject 走 vb6_ComVarFree (只 free 结构体, 不 Release)。
+// 单列一个函数是为了不动 setVariantDispatch 的既有 Empty 语义 (Font 代理等
+// 依赖它继续走 Nothing 分支, 避免回归)。
+void vb6_ho_setVariantObject(vb6_VARIANT* out, void* p) {
+    memset(out, 0, sizeof(*out));
+    if (!p) { out->vt = vb6_vtEmpty; return; }
+    out->vt = vb6_vtDispatch;
+    out->pdispVal = p;
 }
 
 void vb6_ho_setVariantEmpty(vb6_VARIANT* out) {
@@ -250,6 +272,13 @@ void vb6_Host_ToWinVariant(const void* inV, void* outV) {
         case vb6_vtSingle:   V_VT(out) = VT_R4; V_R4(out) = in->fltVal; break;
         case vb6_vtDouble:   V_VT(out) = VT_R8; V_R8(out) = in->dblVal; break;
         case vb6_vtBSTR:     V_VT(out) = VT_BSTR; V_BSTR(out) = SysAllocString(in->bstrVal); break;
+        // Fix <vbeclipse> rev14: 缺这一条时 `.Item(...)` 返回的对象变体落 default →
+        // VT_EMPTY, vb6_ComCallObject 取不到 pdispVal → `Set x = Controls.Item(...)`
+        // 恒为 NULL。宿主对象 (UC 实例/HWND/集合) 不是真 IDispatch, 这里只透传指针;
+        // 释放侧由 vb6_ComIsDispatchable 守卫, 不会对裸指针调 Release。
+        case vb6_vtDispatch: V_VT(out) = VT_DISPATCH; V_DISPATCH(out) = (IDispatch*)in->pdispVal; break;
+        case vb6_vtEmpty:    V_VT(out) = VT_EMPTY; break;
+        case vb6_vtNull:     V_VT(out) = VT_NULL; break;
         default:             V_VT(out) = VT_EMPTY; break;
     }
 }

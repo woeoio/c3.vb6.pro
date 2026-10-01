@@ -38,6 +38,15 @@ void CCodeGen::visit(LetStmt& node) {
                 if (memName == "currentx") { c_.emitLine("vb6_Printer_SetCurrentX((int32_t)(" + lastExpr_ + "));"); return; }
                 if (memName == "currenty") { c_.emitLine("vb6_Printer_SetCurrentY((int32_t)(" + lastExpr_ + "));"); return; }
             }
+            // Fix 161f: Screen.MousePointer 全局写入 (CWaitCursor 等类里用;
+            // 早先落进类成员 fallback → me->Screen.MousePointer = ... → C2039)。
+            if (objName == "screen") {
+                if (memName == "mousepointer") {
+                    emitExpr(*node.value);
+                    c_.emitLine("vb6_Screen_SetMousePointer((int32_t)(" + lastExpr_ + "));");
+                    return;
+                }
+            }
         }
         // P7.6: 控件数组属性写入 ctrlArr(idx).Property = value
         if (maExpr.object && maExpr.object->kind == ASTNodeKind::IndexOrCallExpr) {
@@ -67,7 +76,7 @@ void CCodeGen::visit(LetStmt& node) {
                                 if (isComMarker_) resolveComValue();
                                 valExpr = std::move(lastExpr_);
                             }
-                            c_.emitLine(writeFn + "(vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(arrId.name) + ", " + idxArg + "), " + valExpr + ");  /* Let Control Array Property */");
+                            c_.emitLine(writeFn + "(" + ctrlArrWriteCalleeArgs(writeFn, arrId.name, idxArg) + ", " + valExpr + ");  /* Let Control Array Property */");
                             return;
                         }
                     }

@@ -265,7 +265,13 @@ addBuiltinFunc("CallByName", Vb6Type::Variant);
     addBuiltinFuncWithParams("StrConv", Vb6Type::String,
         {{"text", Vb6Type::String, true, false}, {"conversion", Vb6Type::Long, true, false},
          {"localeID", Vb6Type::Long, true, true}});
-    addBuiltinFunc("Filter", Vb6Type::Variant);
+    // <vbeclipse>: Filter 此前用 addBuiltinFunc (零参数签名) 注册 ⇒ 数组槽拿不到
+    // Fix 029 的反向提取, `Filter(v, "x")` 里 v 是 Variant 时直接发 vb6_VARIANT 给
+    // SafeArray1D* 形参 → cl C2440 (实测), 而 Variant 装数组正是 Filter 的常态。
+    // 与 Join/UBound/LBound 同形: 首参标 Variant|Array, 尾两参 VB6 Optional。
+    addBuiltinFuncWithParams("Filter", Vb6Type::Variant,
+        {{"sourcearray", kVariantArray, true, false}, {"match", Vb6Type::String, true, false},
+         {"include", Vb6Type::Long, true, true}, {"compare", Vb6Type::Long, true, true}});
     addBuiltinFunc("VarPtr", Vb6Type::Long);
     addBuiltinFunc("StrPtr", Vb6Type::Long);
     addBuiltinFunc("ObjPtr", Vb6Type::Long);

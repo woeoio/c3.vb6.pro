@@ -55,6 +55,8 @@ static void addFormsSources(MsvcDriverOptions& opts, const std::string& rtlDir) 
     // ai/029 C29-RT-a: RichTextBox —— 第四处登记，少这行就是全线 LNK2019 找不到 vb6_RTB_*
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_richtextbox.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_winsock.c");
+    // ai/029 C29-SL-a: Slider —— 第四处登记，少这行就是全线 LNK2019 找不到 vb6_Slider_*
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_slider.c");
     // vb6forms_axsite.c 按功能家族拆 5 个编译单元 (2026-09-20): 伞文件本身不参与编译
     // 注意: axsite/ 下的 .c 解包后是平铺目录, 故这里写 basename 而非带子目录路径
     opts.sourceFiles.push_back(rtlDir + "/ax_site.c");

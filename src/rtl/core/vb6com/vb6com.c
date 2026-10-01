@@ -765,3 +765,28 @@ void vb6_ReleaseObject(void** objPtr) {
     }
     *objPtr = NULL;
 }
+
+/* Fix <vbeclipse>: vb6_ReleaseObject 的反向操作 —— 与它**成对**维护, 判据必须是同一个。
+ *
+ * 起因: vb6_VariantClear() 对 vb6_vtDispatch 调 vb6_ReleaseObject (认为 Variant 持有引用),
+ * 但 Variant 的构造侧 (vb6rtl_variant.h 的 vb6_VariantObject) 原先**不 AddRef** ——
+ * 构造不取引用、析构却释放, 于是任何「对象既被原主 `Set x = Nothing` 释放、又被放进
+ * Variant 容器 (List/Collection/数组)」的路径都是**过度释放**。实测 ucPerspective.AddView:
+ *     l_View = vb6_ComObject_FromInstance(...);          // 1 个引用
+ *     vb6_VARIANT t = vb6_VariantFromValue((void*)l_View); // 原先不 AddRef
+ *     vb6_List_Add(m_Views, ViewId, &t, -1, 0);            // 容器存了裸引用
+ *     vb6_ReleaseObject(&l_View);                          // refcount→0, 对象销毁
+ * → 容器里留下指向已释放对象的 Variant, 之后取出当 IDispatch 用 / 容器清理时再 Release
+ *   一次 → **0xC0000374 堆损坏**(检测点随堆布局漂移, 总在后面某次分配/释放才爆)。
+ * VB6 对照: `coll.Add key, obj` 会 AddRef, 所以随后的 `Set obj = Nothing` 不销毁对象。
+ *
+ * 判据与 vb6_ReleaseObject 完全一致: 只对**真 COM 接收者** AddRef。裸结构体/UDT 地址
+ * (vb6_cls_* 直传、Set .OriginalIOleIPAO = Me 那类) 一律跳过 —— 否则解引用 lpVtbl 即 AV。
+ * 定义放这里而非 header: vb6_VariantObject 是 static inline, 需要一个外部符号,
+ * 前向声明在 vb6rtl_variant.h (避免头文件反向依赖 vb6com.h)。 */
+void vb6_ComAddRefDispatch(void* p) {
+    if (!p) return;
+    if (!vb6_ComIsDispatchable(p)) return;
+    IUnknown* pUnk = (IUnknown*)p;
+    pUnk->lpVtbl->AddRef(pUnk);
+}

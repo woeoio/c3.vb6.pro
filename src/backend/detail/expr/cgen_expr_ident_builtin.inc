@@ -3,187 +3,6 @@
 // 内容 = 原文件第 421~740 行，逐行未改。
 
     // 内置函数映射 (名称 → RTL函数名) - 仅当符号表中没有用户定义的函数时使用
-    static const std::unordered_map<std::string, std::string> builtinFuncs = {
-        {"len",      "vb6_Len"},
-        {"lenb",     "vb6_LenB"},  // Fix 048: LenB built-in
-        {"msgbox",   "vb6_MsgBox"},
-        {"unload",   "vb6_UnloadForm"},
-        {"inputbox", "vb6_InputBox"},
-        {"input",    "vb6_InputString"},  // Task #40: parseIdentifierOrCall 剥 $ 后
-                                          // Input$ 到达此处的键名是 input (双键兜底)
-        {"input$",  "vb6_InputString"},  // P15.4: Input function
-        {"format",   "vb6_Format"},
-        {"cstr",     "vb6_CStr"},
-        {"cint",     "vb6_CInt"},
-        {"clng",     "vb6_CLng"},
-        {"cdbl",     "vb6_CDbl"},
-        {"csng",     "vb6_CSng"},
-        {"cbool",    "vb6_CBool"},
-        {"cdate",    "vb6_CDate"},
-        {"cbyt",     "vb6_CByte"},
-        {"instr",    "vb6_InStr"},
-        {"instrb",   "vb6_InStrB"},
-        {"left",     "vb6_Left"},
-        {"right",    "vb6_Right"},
-        {"mid",      "vb6_Mid"},
-        {"trim",     "vb6_Trim"},
-        {"ltrim",    "vb6_LTrim"},
-        {"rtrim",    "vb6_RTrim"},
-        {"ucase",    "vb6_UCase"},
-        {"lcase",    "vb6_LCase"},
-        {"chr",      "vb6_Chr"},
-        {"asc",      "vb6_Asc"},
-        {"abs",      "vb6_Abs"},
-        {"int",      "vb6_Int"},
-        {"fix",      "vb6_Fix"},
-        {"sgn",      "vb6_Sgn"},
-        {"sqr",      "vb6_Sqr"},
-        {"ubound",   "vb6_UBound"},
-        {"lbound",   "vb6_LBound"},
-        {"isarray",  "vb6_IsArray"},
-        {"isnumeric","vb6_IsNumeric"},
-        {"isnothing","vb6_IsNothing"},
-        {"typeof",   "vb6_TypeOf"},
-        {"typename", "vb6_TypeName"},
-        {"createobject","vb6_CreateObject"},
-        {"getobject","vb6_GetObject"},
-        {"loadpicture","vb6_LoadPictureEx"},
-        // 字符串函数 (P4新增)
-        {"replace",  "vb6_Replace"},
-        {"space",    "vb6_Space"},
-        {"string",   "vb6_String"},   // String$函数
-        {"strcomp",  "vb6_StrComp"},
-        {"strreverse","vb6_StrReverse"},
-        {"instrrev", "vb6_InStrRev"},
-        {"val",      "vb6_Val"},
-        {"str",      "vb6_Str"},
-        // 数学函数 (P4新增)
-        {"sin",      "vb6_Sin"},
-        {"cos",      "vb6_Cos"},
-        {"tan",      "vb6_Tan"},
-        {"atn",      "vb6_Atn"},
-        {"log",      "vb6_Log"},
-        {"exp",      "vb6_Exp"},
-        {"round",    "vb6_Round"},
-        {"rnd",      "vb6_Rnd"},
-        {"randomize","vb6_Randomize"},
-        // 日期时间 (P4新增)
-        {"now",      "vb6_Now"},
-        {"date",     "vb6_Date"},
-        {"time",     "vb6_Time"},
-        {"year",     "vb6_Year"},
-        {"month",    "vb6_Month"},
-        {"day",      "vb6_Day"},
-        {"hour",     "vb6_Hour"},
-        {"minute",   "vb6_Minute"},
-        {"second",   "vb6_Second"},
-        // 日期函数 P14.2.4
-        {"dateadd",  "vb6_DateAdd"},
-        {"datediff", "vb6_DateDiff"},
-        {"datepart", "vb6_DatePart"},
-        {"dateserial", "vb6_DateSerial"},
-        // P21-B: 日期/数组函数
-        {"weekday",  "vb6_Weekday"},
-        {"datevalue","vb6_DateValue"},
-        {"timeserial","vb6_TimeSerial"},
-        {"timevalue","vb6_TimeValue"},
-        // 类型转换 (P4新增)
-        {"cbyte",    "vb6_CByte"},
-        {"cvar",     "vb6_CVar"},
-        {"hex",      "vb6_Hex"},
-        {"oct",      "vb6_Oct"},
-        // 类型检查 (P4新增)
-        {"isnull",   "vb6_IsNull"},
-        {"isempty",  "vb6_IsEmpty"},
-        {"isobject", "vb6_IsObject"},
-        {"isdate",   "vb6_IsDate"},
-        {"iserror",  "vb6_IsError"},
-        {"vartype",  "vb6_VarType"},
-        // 文件I/O (P4新增)
-        {"freefile", "vb6_FreeFile"},
-        {"eof",      "vb6_EOF"},
-        {"lof",      "vb6_LOF"},
-        {"loc",      "vb6_Loc"},
-        {"kill",     "vb6_Kill"},
-        // 系统函数 (P14.2.2新增)
-        
-        {"shell",    "vb6_Shell"},
-        {"environ",  "vb6_Environ"},
-        {"dir",      "vb6_Dir"},
-        {"curdir",   "vb6_CurDir"},
-        {"command",  "vb6_Command"},
-        {"command$", "vb6_Command"},  // P14.2.2: Command$ alias
-        {"split",    "vb6_Split"},
-        {"join",     "vb6_Join"},
-
-        // ParamArray (P14.1.5)
-
-        {"ismissing", "vb6_IsMissing"},
-        // P14.3.5: CallByName
-        {"callbyname", "vb6_CallByName"},
-        // P18-A: 兼容性填平新增内置函数
-        {"ccur",       "vb6_CCur"},
-        {"cdec",       "vb6_CDec"},
-        {"rgb",        "vb6_RGB"},
-        {"qbcolor",    "vb6_QBColor"},
-        {"filedatetime", "vb6_FileDateTime"},
-        {"filelen",    "vb6_FileLen"},
-        {"sendkeys",   "vb6_SendKeys"},
-        {"appactivate", "vb6_AppActivate"},
-        // P18-D: 兼容性填平新增内置函数
-        {"ascw",       "vb6_AscW"},
-        {"chrw",       "vb6_ChrW"},
-        {"ascb",       "vb6_AscB"},
-        {"chrb",       "vb6_ChrB"},
-        {"timer",      "vb6_Timer"},
-        {"strconv",    "vb6_StrConv"},
-        {"filter",     "vb6_Filter"},
-        {"strptr",     "vb6_StrPtr"},
-        {"objptr",     "vb6_ObjPtr"},
-        {"lset",       "vb6_LSet"},
-        {"rset",       "vb6_RSet"},
-        {"weekdayname", "vb6_WeekdayName"},
-        {"monthname",  "vb6_MonthName"},
-        {"formatcurrency", "vb6_FormatCurrency"},
-        {"formatnumber",  "vb6_FormatNumber"},
-        {"formatpercent",  "vb6_FormatPercent"},
-        // P18-E: 
-        {"sln",       "vb6_SLN"},
-        {"syd",       "vb6_SYD"},
-        {"ddb",       "vb6_DDB"},
-        {"fv",        "vb6_FV"},
-        {"pv",        "vb6_PV"},
-        {"pmt",       "vb6_Pmt"},
-        {"ipmt",      "vb6_IPmt"},
-        {"ppmt",      "vb6_PPmt"},
-        {"rate",      "vb6_RATE"},
-        {"npv",       "vb6_NPV"},
-        {"partition", "vb6_Partition"},
-        // P21-C: new functions
-        {"cverr",          "vb6_CVErr"},
-        {"formatdatetime", "vb6_FormatDateTime"},
-        {"getattr",        "vb6_GetAttr"},
-        {"setattr",        "vb6_SetAttr"},
-        {"seek",           "vb6_SeekFunc"},
-        {"doevents",       "vb6_DoEvents"},
-        {"savepicture",    "vb6_SavePicture"},
-        {"load",           "vb6_LoadForm"},
-        {"nper",           "vb6_NPer"},
-        {"fileattr",       "vb6_FileAttr"},
-        {"erl",            "vb6_Erl"},
-        {"tab",            "vb6_Tab"},
-        {"spc",            "vb6_Spc"},
-        {"irr",            "vb6_IRR"},
-        {"mirr",           "vb6_MIRR"},
-        // Fix 048: LoadResData
-        {"loadresdata", "vb6_LoadResData"},
-        // P20-37: Registry functions
-        {"savesetting",    "vb6_SaveSetting"},
-        {"getsetting",     "vb6_GetSetting"},
-        {"deletesetting",  "vb6_DeleteSetting"},
-        {"getallsettings", "vb6_GetAllSettings"},
-
-    };
 
     // Task #39: 裸 Printer / Printers 拦截已上移到 ident_dispatch (符号解析之前,
     // 类模块 me-> 字段规则会先吃掉裸名 — 见 dispatch 段 Task #39 注释)。
@@ -211,6 +30,11 @@
             // (无括号引用 / 0 参) 不经过该 fixup，需在此处补。
             } else if (lower == "curdir") {
                 lastExpr_ = "vb6_CurDir(NULL)";
+            // Fix <vbeclipse>: LoadPicture() 无参 (Screen.MouseIcon = LoadPicture())
+            // → vb6_LoadPictureEx(BSTR) 需 1 参, 补 NULL (=空图片). 与 call 路径
+            // fixup (cgen_expr_call_builtin_fixup.inc) 同口径.
+            } else if (lower == "loadpicture") {
+                lastExpr_ = "vb6_LoadPictureEx(NULL)";
             } else {
                 lastExpr_ = it->second + "()";
             }
@@ -376,7 +200,17 @@
     // vb6_PropertyPage_*). 只在 sym == nullptr (模块作用域无同名符号) 且不是已知
     // 过程局部变量时生效, 因此 `Dim hDC As Long` 的真实局部用法 (DrawText /
     // GetWindowsDPI) 不受影响; 表外的名字维持原样 (仍留 C2065, 不引入新错误).
-    if (isDesignerModule_ && !sym && !knownLocalVars_.count(lower)) {
+    // Fix <vbeclipse>: `Controls` 在 .ctl/.pag 里无条件是宿主集合, 优先于任何同名符号。
+    // 与本表其余条目 (hDC/ScaleWidth/...) 不同, 那些必须靠 `!sym` 保住
+    // `Dim hDC As Long` 之类的真实局部用法; 而 `Controls` 是 VB6 保留的宿主成员名,
+    // 用户不可能在本模块声明同名局部, driver 的跨模块 CoClass 登记却会在本模块
+    // 作用域留下一个 ComClass(17) 符号 (ucTabStrip 实测) → `!sym` 被否 → 发射裸
+    // `Controls` → C2065 (ucTabStrip.c For Each l_Ctrl In Controls)。
+    // 成员访问形态 (Controls.Item/Add/Remove) 由 cgen_expr_member_precheck.inc 在
+    // 符号解析前拦截, 不受影响。
+    const bool reservedHostObj = (lower == "controls");
+    if (isDesignerModule_ && !knownLocalVars_.count(lower)
+        && (!sym || reservedHostObj)) {
         static const std::unordered_map<std::string, std::string> kUserControlHostMembers = {
             {"hdc", "hDC"},
             {"scalewidth", "ScaleWidth"},
@@ -391,6 +225,7 @@
             //   PropertyChanged "PictureColorize"
             // 此前落到未解析兜底 → 裸符号 ScaleX/AsyncRead/PropertyChanged
             // → LNK2019 (Charts 2020 LabelPlus/ucChartArea/... ).
+            {"controls", "Controls"},  // Fix <vbeclipse>: UserControl.Controls 集合
             {"scalex", "ScaleX"},
             {"scaley", "ScaleY"},
             {"asyncread", "AsyncRead"},
@@ -404,6 +239,15 @@
         };
         const auto& hostMembers = isPropertyPageDesigner_ ? kPropertyPageHostMembers
                                                           : kUserControlHostMembers;
+        // Fix <vbeclipse> rev14: 裸 `Controls` 是 UserControl.Controls 集合, 必须发射
+        // 真实的集合单例 vb6_UC_Controls() (RTL 已按当前 UC 实例回落 formHwnd), 而不是
+        // 宿主伪对象前缀 vb6_UserControl_Controls (恒 NULL 的空桩)。ucTabStrip.ctl 的
+        // `For Each l_Ctrl In Controls` 走的正是这条裸标识符通路 —— 用 NULL 会让枚举
+        // 得到空集, 而 Add/Item 返回 NULL → 后续解引用崩溃。
+        if (lower == "controls") {
+            lastExpr_ = "vb6_UC_Controls()";
+            return;
+        }
         auto itHost = hostMembers.find(lower);
         if (itHost != hostMembers.end()) {
             lastExpr_ = (isPropertyPageDesigner_ ? "vb6_PropertyPage_" : "vb6_UserControl_")

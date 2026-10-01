@@ -27,6 +27,12 @@
     fmtLower[fmtLen < 127 ? fmtLen : 127] = '\0';
 
     if (isNumeric) {
+        // Fix 162b-extlist: 数值 + 命名日期/时间格式 → 按日期序列号走 locale/
+        // VB6 规格输出 ("short date" 原先落空 → 数值分支输出 "45331")。
+        if (vb6_fmtNamedDateTimeKind(fmt)) {
+            free(fmtStr);
+            return vb6_fmtNamedDateTime(numVal, fmt);
+        }
         // Fix 118b: 数值 + 日期/时间格式串 → 按日期序列号格式化。
         // (VB6 把数值当日期序列号; 且本 RTL 的 DateSerial 返回 VT_R8, 故不能只靠
         //  extract.inc 里的 VT_DATE 分支。Charts 2020 的 X 轴月份标签即此场景:)

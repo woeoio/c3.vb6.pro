@@ -3,7 +3,7 @@
 # 触发: .github/workflows/ci_t0.yml 的 t1 job (needs: t0, 复用 T0 构建的 C3.exe artifact)
 # 内容两段:
 #   1. bas 类 33 个: 编译 + 运行 + 输出断言; x64/x86 双架构 (31 个双跑 + 2 个原生 x86
-#      专用项 = 64 任务; -Jobs 并行, PS7 ForEach-Object -Parallel, 5s 超时)
+#      专用项 = 64 任务; -Jobs 并行, PS7 ForEach-Object -Parallel, -RunTimeoutSec 超时)
 #   2. compile 类 10 个: 只编译不运行 (comprehensive x2 + 8 个窗体 .frm)
 # 与 tests\run_tests.ps1 的关系: 用例 2026-09-20 cp 自 tests\ (复制而非引用) ——
 #   方向是 tests_github 自包含、后续废弃 tests\; 因此本脚本自带清单与引擎,
@@ -11,14 +11,27 @@
 # 环境: 环境变量 C3_VCVARSALL 优先 (vcvarsall.bat 完整路径), 缺省 vswhere 自动发现,
 #       用法见 scripts\README.md。仅限 Windows + PowerShell 7 (并行需要)。
 # 用法: pwsh -File tests_github\run_t1.ps1 [-C3Path .build\C3.exe] [-Jobs 20] [-Verbose]
+#       [-Shard K -ShardTotal M]
+#   -Jobs 1 (默认) = 今天的执行路径 (输出不变); >1 时 bas 用例在**本 runner 内**并行 (每 worker
+#   独立输出目录)。-Shard/-ShardTotal (默认 0/1 = 不分片) 供 CI 把 bas 切给**多 runner** 并行,
+#   compile 段与冒烟一样只由 shard 1 跑。清单守卫始终对完整 33/64 校验, 再切执行集。
 
 param(
     [string]$C3Path = "",
     [switch]$Verbose,
-    [int]$Jobs = 1
+    [int]$Jobs = 1,        # >1 时 bas 用例并行 (每 worker 独立输出目录); 默认 1 走今天的路径
+    [int]$Shard = 0,       # 分片当前编号 (1..ShardTotal); 0 = 不分片整队跑 (供 CI 多 runner 并行)
+    [int]$ShardTotal = 1,  # 分片总数
+    [int]$RunTimeoutSec = 60   # 单条用例跑 exe 的墙钟预算。默认 60 与 tests\run_tests.ps1
+                               # 的 -RunTimeoutSec 同值 (那里从 5s 提到 60s 就是为这个原因)。
+                               # 实测: -Jobs 8 下 test_rtl_x86 空闲 0.03s 跑完, 却在 5s 预算
+                               # 下被判 run timeout —— 预算是给并行负载留余量的, 不是给空闲机
+                               # 定的; 5s 会把**负载**造成的慢误判成**代码**造成的挂。
 )
 
 $ErrorActionPreference = "SilentlyContinue"
+# <shared-shard>: 分片算法在 shard.ps1 (三个门禁脚本共用, 不要在这里再抄一遍)
+. (Join-Path $PSScriptRoot "shard.ps1")
 
 $Root = Split-Path -Parent $PSScriptRoot
 if (-not $C3Path) { $C3Path = Join-Path $Root ".build\C3.exe" }
@@ -171,11 +184,15 @@ function Invoke-BasSetParallel {
     }
     if ($shards.Count -eq 0) { return }
 
+    # ⚠ -Parallel 的 runspace 够不到脚本变量 ⇒ 超时预算用 $using: 传进去 (同 run_tests.ps1)
+    $runTimeoutMs = $RunTimeoutSec * 1000
+
     $results = $shards | ForEach-Object -Parallel {
         $shardItems = $_[0]
         $workDir    = $_[1]
         New-Item -ItemType Directory -Path $workDir -Force | Out-Null
         $c3 = $using:C3Path
+        $runTimeoutMs = $using:runTimeoutMs
         $p = 0; $f = 0; $details = @()
         foreach ($it in $shardItems) {
             if ($it.Arch) {
@@ -215,10 +232,26 @@ function Invoke-BasSetParallel {
                 $proc = [System.Diagnostics.Process]::Start($psi)
                 $soTask = $proc.StandardOutput.ReadToEndAsync()
                 $seTask = $proc.StandardError.ReadToEndAsync()
-                if (-not $proc.WaitForExit(5000)) {
+                if (-not $proc.WaitForExit($runTimeoutMs)) {
+                    # 读数: CPU 时间 + 进程状态 + 顶层窗口 + 最后一行输出 (内联 —— -Parallel 的
+                    # runspace 够不到脚本函数)。顺序不能倒: 必须 Kill + WaitForExit **之后**
+                    # 管道才关闭 ⇒ ReadToEndAsync 才完成 ⇒ 才拿得到被杀前已写出的输出。
+                    $cpu = -1; $st = '?'; $win = ''
+                    try { $cpu = [int]$proc.TotalProcessorTime.TotalMilliseconds } catch { }
+                    try { if ($proc.HasExited) { $st = "exited=$($proc.ExitCode)" } else { $st = 'alive' } } catch { }
+                    try { $proc.Refresh(); $win = [string]$proc.MainWindowTitle } catch { }
+                    if ($win) { $win = ", win='$win'" }
                     try { $proc.Kill() } catch { }
                     $proc.WaitForExit()
-                    $f++; $details += "$($it.Name): run timeout 5s"; continue
+                    $last = ''
+                    foreach ($t in @($soTask, $seTask)) {
+                        if ($t -and $t.Wait(3000)) {
+                            $txt = ''
+                            try { $txt = [string]$t.Result } catch { }
+                            if ($txt) { $line = @($txt.TrimEnd() -split "`r?`n" | Where-Object { $_ }); if ($line.Count -gt 0) { $last = $line[-1] } }
+                        }
+                    }
+                    $f++; $details += "$($it.Name): run timeout $($runTimeoutMs)ms (cpu=${cpu}ms, ${st}$win, last='$last')"; continue
                 }
                 [IO.File]::WriteAllText($stdoutFile, [string]$soTask.Result, [Text.Encoding]::Default)
                 [IO.File]::WriteAllText($stderrFile, [string]$seTask.Result, [Text.Encoding]::Default)
@@ -231,7 +264,12 @@ function Invoke-BasSetParallel {
                 $runOut = @(Get-Content $stdoutFile -ErrorAction SilentlyContinue)
                 $allMatch = $true
                 foreach ($exp in $it.Expected) {
-                    $found = $runOut | Where-Object { $_ -like "*$exp*" }
+                    # ⚠ 这段跑在 -Parallel 的 runspace 里, 调不到脚本函数 ⇒ 字面判定必须内联。
+                    # 用字面子串 (忽略大小写) 而非 -like: needle 里的 [ ] * ? 会被当通配符 (见 run_tests.ps1 Test-NeedleHit)
+                    $found = $false
+                    foreach ($l in @($runOut)) {
+                        if ($null -ne $l -and ([string]$l).IndexOf($exp, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $found = $true; break }
+                    }
                     if (-not $found) { $allMatch = $false; break }
                 }
                 if ($allMatch) { $p++ } else {
@@ -255,8 +293,14 @@ function Invoke-BasSetParallel {
     }
     $sumPass = ($results | Measure-Object -Property Pass -Sum).Sum
     $sumFail = ($results | Measure-Object -Property Fail -Sum).Sum
+    Assert-ParallelRan -Items $Items -Results $results -Label "bas"
     Write-Host "  (parallel: $($results.Count) worker(s), pass=$sumPass fail=$sumFail)"
 }
+
+# === 分片 (CI 多 runner 并行): 各 runner 只执行 fullQueue 的第 Shard 片 (按调用次序连续切片) ===
+# 33/64 清单守卫在上面已对**完整**清单跑过, 这里只切"执行集", 每个 runner 仍会先校验清单完整。
+# 分片算法见 shard.ps1 (三个脚本共用): ShardTotal<=1 原样返回, >1 按清单次序连续切片
+$fullQueue = @(Select-ShardSlice -Items $fullQueue -Shard $Shard -ShardTotal $ShardTotal -Label "bas")
 
 Invoke-BasSetParallel -Items $fullQueue -Jobs $Jobs
 Write-Host ""
@@ -264,8 +308,6 @@ Write-Host ""
 # ============================================================
 # 段 2: compile 类 10 个 (只编译不运行: comprehensive x2 + 窗体 .frm x8)
 # ============================================================
-Write-Host "--- Compile Tests (bas x2 + form x8) ---" -ForegroundColor Yellow
-
 function Test-Compile {
     param([string]$Name, [string]$Source)
     Write-Host -NoNewline "  [COMPILE] $Name ... "
@@ -283,21 +325,28 @@ function Test-Compile {
     }
 }
 
-Test-Compile "test_comprehensive" (Join-Path $CasesDir "test_comprehensive.bas")
-Test-Compile "test_comprehensive2" (Join-Path $CasesDir "test_comprehensive2.bas")
+# compile 段 (10 个, 只编译) 是固定小项: 分片时只由 shard 1 负责, 其余片跳过 (不减检查)
+if (($ShardTotal -gt 1) -and ($Shard -ne 1)) {
+    Write-Host "--- Compile Tests: 由 shard 1 负责, 本片跳过 ---" -ForegroundColor DarkGray
+} else {
+    Write-Host "--- Compile Tests (bas x2 + form x8) ---" -ForegroundColor Yellow
 
-$formTests = @(
-    "empty_form.frm",
-    "form_test_p74.frm",
-    "form_test_p75.frm",
-    "form_test_p76.frm",
-    "form_test_p78.frm",
-    "form_test_p79.frm",
-    "form_test_m8.frm",
-    "form_mdi_parent.frm"
-)
-foreach ($t in $formTests) {
-    Test-Compile ([IO.Path]::GetFileNameWithoutExtension($t)) (Join-Path $CasesDir $t)
+    Test-Compile "test_comprehensive" (Join-Path $CasesDir "test_comprehensive.bas")
+    Test-Compile "test_comprehensive2" (Join-Path $CasesDir "test_comprehensive2.bas")
+
+    $formTests = @(
+        "empty_form.frm",
+        "form_test_p74.frm",
+        "form_test_p75.frm",
+        "form_test_p76.frm",
+        "form_test_p78.frm",
+        "form_test_p79.frm",
+        "form_test_m8.frm",
+        "form_mdi_parent.frm"
+    )
+    foreach ($t in $formTests) {
+        Test-Compile ([IO.Path]::GetFileNameWithoutExtension($t)) (Join-Path $CasesDir $t)
+    }
 }
 Write-Host ""
 

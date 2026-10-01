@@ -79,7 +79,12 @@
     if (isClassModule_ && !currentClassIsInterface) emitInheritedProcDecls(module);
     if (!currentClassIsInterface) emitChainInitDecl(module);  // tB Inherits B09: 构造链入口
     for (auto& decl : module.declarations) {
-        if (currentClassIsInterface) continue;  // 接口类: 跳过方法声明
+        // Fix <vbeclipse>: 接口类**要**发方法声明. VB6 里 `Public m_Scheme As New IScheme`
+        // (modPublic.bas:12) 会实例化接口本身 —— 接口的 `Public Property Get X()` 声明
+        // (IScheme.cls, 无实现体) 就是它的**默认实现**, 调用方 (ucTab/ucButton) 生成的
+        // `vb6_IScheme_prop_get_BackColor(m_Scheme)` 需要看得见原型. P6.4 当年"接口抽象
+        // 不发声明"的前提是接口**不可实例化**; `As New` 打破该前提 → 之前无声明(靠隐式
+        // 声明蒙混过 C 编译) 且 .c 里也无定义 → 链接期 LNK2001 ×26.
         // 泛型模板 (tB): 本体不发前向声明 (特化副本各自以扁名发; 模板名从不被调用)
         if ((decl->kind == ASTNodeKind::SubDecl &&
              !static_cast<SubDecl&>(*decl).typeParams.empty()) ||

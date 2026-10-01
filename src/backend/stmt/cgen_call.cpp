@@ -10,6 +10,26 @@ namespace vb6c3 {
 
 void CCodeGen::visit(CallStmt& node) {
     if (node.callee) {
+        // Fix <vbeclipse>: 无括号语句式 `Parent.<方法>` (ucSplitBar.ctl:138
+        // `Parent.Refresh`) 的 callee 是**裸 MemberAccessExpr** (无实参的 paren-less
+        // 调用不进 IndexOrCallExpr, 见下方 Fix 090g 注释), 走到 emitExpr 时
+        // asCallCallee_=true 只能交出函数名 → 落到 class_module.inc 优先级3 的
+        // "模块名.成员" 回退 → `vb6_Parent_Refresh();` C2065 (ucSplitBar.c:205)。
+        // `Parent` 是 VB6 内建的 As Object 宿主对象, 成员调用本就是 IDispatch
+        // 后期绑定, 这里直接发 vb6_ComCall(vb6_UC_ParentObject(), L"<成员>", NULL, 0)。
+        // (带实参的形态走 cgen_expr_call_callee_member.inc 的 IndexOrCallExpr 分支。)
+        if (node.callee->kind == ASTNodeKind::MemberAccessExpr && isDesignerModule_) {
+            auto& maParCs = static_cast<MemberAccessExpr&>(*node.callee);
+            if (maParCs.object && maParCs.object->kind == ASTNodeKind::IdentifierExpr
+                && Symbol::toLower(
+                       static_cast<IdentifierExpr&>(*maParCs.object).name) == "parent"
+                && !knownLocalVars_.count("parent")) {
+                c_.emitLine("vb6_ComCall(vb6_UC_ParentObject(), L\""
+                            + escapeWideCString(maParCs.memberName)
+                            + "\", NULL, 0);  /* Parent.<method> */");
+                return;
+            }
+        }
         // 检测 Debug.Print 调用: 特殊处理多参数输出
         if (node.callee->kind == ASTNodeKind::IndexOrCallExpr) {
             auto& call = static_cast<IndexOrCallExpr&>(*node.callee);
@@ -21,6 +41,22 @@ void CCodeGen::visit(CallStmt& node) {
                     std::transform(objLower.begin(), objLower.end(), objLower.begin(), ::tolower);
                     std::string memLower = member.memberName;
                     std::transform(memLower.begin(), memLower.end(), memLower.begin(), ::tolower);
+
+                    // Fix <vbeclipse>: 语句式 `Debug.Assert <expr>` —— VB6 **编译版**语义是
+                    // 整句被移除且**条件不求值** (只有 IDE 里才求值). 这正是"用一个带 ByRef
+                    // 出参的函数把函数自身返回值置 True"的经典写法所依赖的:
+                    //   Private Function Subclass_InIDE() As Boolean
+                    //       Debug.Assert zSetTrue(Subclass_InIDE)   ' zSetTrue 置 True, 返回 True
+                    //   End Function
+                    // 编译版必须返回 False (MagneticWnd 据此选择 SetWindowLongA 子类化路径);
+                    // 若照常求值 → 返回 True → 走 IDE 分支用 vba6!EbMode 的地址(NULL, 因为
+                    // 独立 EXE 没加载 vba6)去 patch 机器码桩 → 桩内 call 0 → 运行期
+                    // 0xC0000005(实测读 0x784000) + 堆损坏 (VbEclipse play78.exe).
+                    // 故此处只落一条注释, 实参一个都不 emit (求值即产生副作用).
+                    if (objLower == "debug" && memLower == "assert") {
+                        c_.emitLine("/* Debug.Assert <expr> removed (compiled-mode semantics) */");
+                        return;
+                    }
 
                     // Fix 161: Console.WriteLine/.Write 复用 Debug.Print 的"逐参转 BSTR
                     // 后输出"路径 (两者都是语句式输出调用, 参数需按 BSTR 转换; 区别仅在
@@ -46,9 +82,21 @@ void CCodeGen::visit(CallStmt& node) {
                                 "vb6_ComCallBSTR",  // Fix 160-com-byref: 早期绑定COM方法返回BSTR (StringOf/StringAt 等) — 按BSTR打印
                                 "vb6_Console_ReadLine", "vb6_Console_ReadKey"  // Fix 161: Console 输入返回 BSTR
                             };
+                            // <vbeclipse>: 名字前缀匹配必须紧跟 `(` 才算命中。
+                            // 旧写法 expr.compare(0, size, prefix)==0 让短名字吞掉长名字:
+                            //   "vb6_Str" 命中 "vb6_StrComp(" ⇒ Debug.Print StrComp(a,b)
+                            //   被发成 vb6_DebugWriteBSTR(返回 1) → 把 1 当 BSTR 指针
+                            //   → 段错误 (实测, 改动前后两版都崩; Len/InStr/Asc 因无短前缀
+                            //   而正常, 所以整族只崩 StrComp 这一条)。
+                            // 同一形状也保护 doubleFuncs ("vb6_Int" vs "vb6_Integer…")。
+                            auto callNameHit = [](const std::string& expr,
+                                                  const std::string& name) -> bool {
+                                if (expr.compare(0, name.size(), name) != 0) return false;
+                                return expr.size() > name.size() && expr[name.size()] == '(';
+                            };
                             auto isBstrExpr = [&](const std::string& expr) -> bool {
                                 for (auto& prefix : bstrFuncs) {
-                                    if (expr.compare(0, prefix.size(), prefix) == 0) return true;
+                                    if (callNameHit(expr, prefix)) return true;
                                 }
                                 // vb6_BSTR_ 开头的都是 BSTR
                                 if (expr.compare(0, 8, "vb6_BSTR") == 0) return true;
@@ -71,7 +119,7 @@ void CCodeGen::visit(CallStmt& node) {
                             };
                             auto isDoubleExpr = [&](const std::string& expr) -> bool {
                                 for (auto& prefix : doubleFuncs) {
-                                    if (expr.compare(0, prefix.size(), prefix) == 0) return true;
+                                    if (callNameHit(expr, prefix)) return true;
                                 }
                                 // 已知double变量名 (小写匹配)
                                 std::string lower = expr;
@@ -150,8 +198,15 @@ void CCodeGen::visit(CallStmt& node) {
                                     // 登记在 knownDoubleVars_, isDoubleExpr 会抢先命中并
                                     // 打成序列号 46023; 按 VB6 应是短日期串。
                                     c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrDate((double)(" + val + ")));");
-                                } else if (isDoubleExpr(val)) {
+                                } else if (isDoubleExpr(val)
+                                    || inferExprType(*call.positional[j]) == Vb6Type::Double
+                                    || inferExprType(*call.positional[j]) == Vb6Type::Single) {
                                     // 浮点数, 用DebugWriteDouble输出
+                                    // <vbeclipse>: isDoubleExpr 是一张**函数名前缀清单**, 清单外的
+                                    // 浮点表达式以前一律落到 DebugWriteLong((int32_t)(x)) ——
+                                    // 实测 `Debug.Print CDbl(v)` (发的是 vb6_CDblV) 把 1.5 打成 1,
+                                    // VB6 打 1.5。判定改按 AST 类型走 (同上面 BSTR/Date/Boolean
+                                    // 三档已有的口径), 名字清单只当补充。
                                     c_.emitLine("vb6_DebugWriteDouble((double)(" + val + "));");
                                 } else if (isVariantVal091r(val)) {
                                     // Fix 090x: Debug.Print x (x As Variant 变量 /
@@ -332,6 +387,25 @@ void CCodeGen::visit(CallStmt& node) {
                     return;
                 }
             }
+            // C29-SL-l（账 #143）: **不带括号**的控件零实参方法 —— `Text1.SetFocus` /
+            // `Slider1.ClearSel` 这一形由 parser 直接交付 CallStmt(callee=MemberAccessExpr)，
+            // 到不了上面那条表达式路，所以在这里用同一张表再拦一次（`controlZeroArgMethod`）。
+            // 不接这头的形状是 `vb6_ComCall(裸 HWND, L"SetFocus", NULL, 0)`：对假 IDispatch 发
+            // Invoke ⇒ 编得过、链接过、跑起来一声不响，零诊断。
+            {
+                std::string zaHwnd;
+                FrmControlType zaType = FrmControlType::Unknown;
+                std::string zaMem = Symbol::toLower(comMemberName_);
+                if (formCtrlSlot(comObjExpr_, zaType, zaHwnd)) {
+                    std::string zaFn = controlZeroArgMethod(zaType, zaMem);
+                    if (!zaFn.empty()) {
+                        comObjExpr_.clear();
+                        comMemberName_.clear();
+                        c_.emitLine(zaFn + "((void*)" + zaHwnd + ");  /* " + zaMem + " */");
+                        return;
+                    }
+                }
+            }
             // 无括号的COM方法调用: obj.Method → vb6_ComCall(obj, L"Method", NULL, 0)
             callExpr = "vb6_ComCall(" + comObjExpr_ + ", L\"" + comMemberName_ + "\", NULL, 0)";
             comObjExpr_.clear();
@@ -368,6 +442,22 @@ void CCodeGen::visit(CallStmt& node) {
             // 才能正确填充 Optional 默认参数.
             else if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr) {
                 auto& maExpr = static_cast<MemberAccessExpr&>(*node.callee);
+                // Fix 092z 姊妹路 (见 cgen_expr_call_callee_params.inc 同名清单) ——
+                // VB6 内置全局对象的成员调用不来自当前模块，若拿 lookupModule(memberName)
+                // 要形参表会命中同名模块符号 (VBFlexGrid.Public Sub Clear(Optional Where,
+                // Optional What))，把 bare `vb6_Clipboard_Clear` 补成 `(0,0,0,0)` → C2197。
+                // 两条 padding 路径共用同一张表；改动请同步另一侧的 builtinGlobalObjs092z。
+                bool builtinGlobalObjCS = false;
+                if (maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
+                    static const std::unordered_set<std::string> builtinGlobalObjsCS = {
+                        "clipboard", "screen", "printer", "forms", "debug", "err",
+                        "app", "controls", "console"};
+                    builtinGlobalObjCS = builtinGlobalObjsCS.count(
+                        Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name)) > 0;
+                }
+                if (builtinGlobalObjCS) {
+                    calleeIsBuiltin = true;
+                } else {
                 Symbol* sym = symTab_.lookupModule(maExpr.memberName);
                 if (sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
@@ -392,6 +482,7 @@ void CCodeGen::visit(CallStmt& node) {
                             calleeIsBuiltin = clsBuiltin;
                         }
                     }
+                }
                 }
             }
             // Fix 090s: With 块内无括号类方法调用 (.Start — callee=WithMemberExpr,
@@ -496,6 +587,21 @@ void CCodeGen::visit(CallStmt& node) {
             std::string cls090g = inferClassTypeOfExpr(*maExpr090g.object);
             std::vector<ParameterInfo> params090g;
             bool builtin090g = false;
+            // Fix <vbeclipse>: 类实例上不存在该方法 (ucPerspective.ctl:1837
+            //   `l_ucFolder.ZOrder` — l_ucFolder As ucFolder, UserControl 类的
+            //   struct 实例), 成员路径发成 `l_ucFolder->ZOrder /* class var ...
+            //   field */` + 调用括号 → C2223 "-> 左侧必须指向结构/联合". 类里没有
+            //   该成员函数就根本没有正确 C 形态 (没有 HWND, ZOrder 于容器 z-序不可
+            //   建模), 发安全空操作并保留引用, 避免静默丢引用/未用告警.
+            if (!cls090g.empty()
+                && params090g.empty() && !builtin090g
+                && resolveClassMemberCall(cls090g, maExpr090g.memberName).empty()) {
+                emitExpr(*maExpr090g.object);
+                c_.emitLine("(void)" + lastExpr_ + ";  /* vbeclipse: "
+                            + maExpr090g.memberName
+                            + " 未建模于 " + cls090g + ", 空操作 */");
+                return;
+            }
             if (!cls090g.empty()
                 && findClassMemberCallParams(cls090g, maExpr090g.memberName,
                                              params090g, builtin090g)

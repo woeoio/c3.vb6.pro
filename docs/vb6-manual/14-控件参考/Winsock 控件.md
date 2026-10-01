@@ -24,7 +24,7 @@
 
 ---
 
-## C3 的实现面（C29-WS-a / WS-b 已做：身份窗 + 状态机 + 属性面 + UDP 一整轮 + TCP 一整轮）
+## C3 的实现面（C29-WS-a 到 WS-f 已做：身份窗 + 状态机 + 属性面 + UDP 一整轮 + TCP 一整轮 + Error + 发送面两条事件 + 取数两个形 + 多连接的排队与串行受理）
 
 C3 里 **Winsock 不走 `MSWINSCK.OCX`**（本页没写、但 VB6 工程发布清单里那条"把 ocx 装进 System32"
 的要求在 C3 不存在）：那颗 OCX 是 32 位 inproc 服务器，64 位进程里 `CoCreateInstance` 直接失败。
@@ -39,13 +39,13 @@ C3 把它复刻成**原生 Winsock2**（`ws2_32.dll`，`winsock2.h` / `ws2tcpip.
 | `W.RemoteHost` / `W.RemotePort` | 可读可写（UDP 的目标就靠这两位） |
 | `W.State` | 那十个 `sck*` 值里，UDP 绑完 = 1（sckOpen）、TCP 监听 = 2、连上/受理完 = 7、关掉 = 0 |
 | `W.BytesReceived` | 缓冲里**还没取走**的字节数（`GetData` 取完就归零） |
-| `W.ByteTransferred` | 最近一次 `SendData` 交出去的字节数 |
+| `W.ByteTransferred` | 本次 `SendData` **已经交给内核**的累计字节数：一笔大数据边发边长，发完就停在总长度上（不是 VB6 那句文档里模糊的"最后一次"，取数口径见下面第 8 条） |
 | `W.Bind port[, ip]` | `socket` + `bind` + `getsockname` + `WSAAsyncSelect`；**`port` 写 0 就是让系统挑**，挑中了从 `LocalPort` 读回 |
 | `W.Listen` | `listen` + 把这条 socket 搬进"监听面"，只挂 `FD_ACCEPT`。没 `Bind` 过时**什么都不做**（VB6 靠 `LocalPort` 属性定端口，这里那位是只读的） |
 | `W.Accept requestID` | 从兜里（`FD_ACCEPT` 时已 `accept` 好的队列）领出那条连接，挂上读写通知 |
 | `W.Connect` | 解析 `RemoteHost` → **逐条候选地址试到通为止**（见下面第 3 条） |
-| `W.SendData s` | `send`（TCP）/ `sendto`（UDP，目标 = `RemoteHost:RemotePort`）；线格式 = 本机 ANSI 码页 |
-| `W.GetData v[, type][, maxlen]` | 从缓冲取；缺省 = 全取走。`type` 那一形的 Byte 数组**还没做** |
+| `W.SendData s` | UDP：一次 `sendto` 发完即走；TCP：**进队列就走**，内核装不下的那些留在控件自己的发送队列里，随 `FD_WRITE` 分块泵出去，边交边报 `SendProgress`、交完报 `SendComplete`（见下面第 8 条）。线格式 = 本机 ANSI 码页 |
+| `W.GetData v[, type][, maxlen]` | 从缓冲取；缺省 = 全取走。`v` 是字符串时过一道本机码页；`v()` 是 Byte 数组、`type` 写 `vbByteArray`(8209) 时给的是**线上那串字节本身**，不过码页，而且控件**重建那枚数组**（LBound 回 0，没数据就是空数组） |
 | `W.PeekData v` | 同一把尺，但**不消费** —— 这是它与 `GetData` 唯一的差别 |
 | `W.Close` | 关掉这条控件的两张面（监听 + 数据），兜里排队的连接一起撤 |
 | `W_Bind` 撞口 / `W_Connect` 连不上 | `Error(Number, Description, Scode, Source, HelpFile, HelpContext, CancelDisplay)` + `State` 落 `sckError`(9) |
@@ -67,9 +67,9 @@ C3 把它复刻成**原生 Winsock2**（`ws2_32.dll`，`winsock2.h` / `ws2tcpip.
    socket，`Accept` 之后就听不见了，只能开控件数组绕）。受理时顺手把握手期间已到的数据读干净
    ⇒ 可能立刻多发一次 `DataArrival`。而 `State` 只有一格，按 VB6 的口径给数据面那一半
    ⇒ **"还在不在听"问 `State` 问不出**。
-   **但这条设计还只跑到"设计成立"**：实测在同一枚控件受理过一条连接之后，第二条连接的
-   `FD_ACCEPT` 在 C3 的产物里送不到（同一套顺序的独立 C 探针能收到两条），所以
-   **多客户端现在不可用**，见下面"还没做的一格"。
+   **而这条设计已经被实测确认**（C29-WS-f，判据 WS55..WS65）：受理过一条连接之后监听面
+   照旧投递新连接的 `FD_ACCEPT`，`ConnectionRequest` 带着新的号到达；当前这条收完之后受理
+   同一个新号就成功 ⇒ 一枚控件上是**排队 + 串行受理**，要**同时**服务多条才需要控件数组。
 
 5. **`Error` 事件的 `Number` 就是 Winsock 错误码本身**（`10048` 撞口、`11001` 查不到名字、
    `10061` 被拒…），`Description` 是系统给的那句本地化文本（`FormatMessage`），`Source` 恒为
@@ -82,10 +82,22 @@ C3 把它复刻成**原生 Winsock2**（`ws2_32.dll`，`winsock2.h` / `ws2tcpip.
    **裸指针拷贝**（不复制、不加引用），而 RTL 在处理器返回后就释放原串 ⇒ 存下来的那一格是悬垂指针。
    要留就用 `gDesc = Description & ""`（拼接才是真拷贝）。这条已另立缺陷，见 `ai/029`。
 
+8. **发送不阻塞界面，而且不接受"发一半"这件事**：TCP 上 `SendData` 把字节丢进控件自己的
+   发送队列就返回，之后每次内核腾出空位（`FD_WRITE`）交一块，**每交一块报一次 `SendProgress`**（参数 =
+   这一块的长度，不是累计），**队列排空时报一次 `SendComplete`**，然后把通知恢复成只听读写。
+   这里有两条工程事实：一枚已经挂了异步通知的 socket 上 `send` **允许只发一部分**
+   （VB6 那个 8000 字节的内部分片所以也得有 `SendProgress`）；而 `FD_WRITE` **只在"写阻塞转
+   为可写"那一下投一次**，不是池化的"现在能写"，所以队列非空期间不得摸那一位，否则剩下的内容永远敲在队里。
+   队列上限 8 MiB，超了报 `Error 10055`（`WSAENOBUFS`），**不静默丢字节**。
+9. **多客户端 = 一枚控件"排队 + 串行受理"**（C29-WS-f 实测）：`Accept` 一条连接不会拆掉监听面，
+   新连接的 `ConnectionRequest` 照样到达（号是新的、不复用）；而**数据面只有一格** ⇒ 占着的时候
+   `Accept(新号)` **被拒且不搅动状态**（`State` 照旧 7，正在服务的那条不会被玩坏），当前这条收完之后
+   受理**同一个号**就成功。要同时服务多条仍按 VB6 的办法：控件数组、`Index 0` 专职 `Listen`。
+   （这一条之前写的是"第二条 `FD_ACCEPT` 送不到、多客户端不可用"，那是**夹具错**不是产品错，
+   三个坑叠在一起制造了假阴性：判据钉在固定拍号上、监听面被上一轮 `Close` 关掉、以及拿了撞口
+   那一轮的端口去连新监听。复盘见 `ai/029` §九 C29-WS-f —— 看似"产品收不到消息"的结论，先怀疑自己的夹具。）
+
 ### 还没做的一格
 
-`SendComplete` / `SendProgress` 两条事件（槽位与序号已在 RTL 表里留着，要接 `FD_WRITE`，
-顺带才能解决异步 socket 上 `send` 的部分发送）；`GetData` 的
-Byte 数组那一形；**多客户端**（控件数组那条路）—— 这一条卡在实测上：同一枚控件受理过一条连接
-之后，第二条连接的 `FD_ACCEPT` 在 C3 的产物里送不到（同一套顺序的独立 C 探针能收到两条），
-原因未定位，见 `ai/029` §九 C29-WS-b。
+`GetData` 的 Byte 数组那一形**已做**（C29-WS-e）；多客户端的排队与串行受理**已做**（C29-WS-f）。
+剩：UDP 广播（`sckBroadcast`），以及**同一时刻**服务多条连接（那要控件数组，见第 9 条）。

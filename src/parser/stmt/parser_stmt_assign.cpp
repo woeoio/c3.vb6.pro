@@ -484,10 +484,57 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
             }
         }
     }
+    // Fix <vbeclipse>: 语句级 `obj.Method -30, -30, w, h` —— 无括号调用的首参是
+    // 负数时, 表达式层把 `Method -30` 绑成中缀减法 Bin(Sub, MA, 30), 随后无括号
+    // 调用路径把整个二元表达式当 callee → `(vb6_ComGetObjectProp(...) - 30)(...)`
+    // 畸形 C (frmEditorBrowser `webBrowser.Move -30, ...` 实测 C2064 "347 个参数")。
+    // VB6 语句级规则: 裸成员访问后跟 `-数字` 只能是调用语句的负数首参 ——
+    // 减法结果无法被调用, 语句级不存在二义 (赋值/函数内不经过本路径)。
+    // 折叠: callee = MemberAccess, 首参 = -(数字), 其余实参交还逗号列表。
+    // 与 Fix 110y 同位但形状不同: 110y 的最左叶是带括号调用 IndexOrCallExpr,
+    // 本条的最左叶是**不带括号**的 MemberAccessExpr。
+    bool negFirstArgCollapse = false;
+    // 注意: Fix 110y 折叠命中后 expr 已被 move 走 (leadingArg110y), 这里必须判空。
+    if (expr && expr->kind == ASTNodeKind::BinaryExpr) {
+        ExprPtr* leafSlot = &expr;
+        ExprPtr* aboveMA = nullptr;  // 直接挂着 MemberAccessExpr 叶的二元节点
+        while ((*leafSlot)->kind == ASTNodeKind::BinaryExpr) {
+            aboveMA = leafSlot;
+            leafSlot = &static_cast<BinaryExpr&>(**leafSlot).left;
+        }
+        if (aboveMA && (*leafSlot)->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& binNeg = static_cast<BinaryExpr&>(**aboveMA);
+            if (binNeg.op == BinaryOp::Sub && binNeg.right
+                && binNeg.right->kind == ASTNodeKind::LiteralExpr) {
+                auto& litNeg = static_cast<LiteralExpr&>(*binNeg.right);
+                if (litNeg.literalKind != LiteralKind::String
+                    && litNeg.literalKind != LiteralKind::Date) {
+                    auto negArg = std::make_unique<UnaryExpr>(binNeg.right->loc,
+                        UnaryOp::Negate, std::move(binNeg.right));
+                    calleeOverride110y = std::move(*leafSlot);  // MemberAccess 作 callee
+                    *aboveMA = std::move(negArg);
+                    leadingArg110y = std::move(expr);
+                    negFirstArgCollapse = true;
+                }
+            }
+        }
+    }
+
     // Fix 110y2: Debug.Print 尾随中缀 (非逗号) 的折叠 — 直接构造无括号调用,
     // 折叠结果作为其唯一参数, 不会落入下方 isDebugPrint 判定 (此时 expr 已是
     // BinaryExpr, 而 isDebugPrint 要求 expr 是 MemberAccessExpr).
     if (debugPrintCollapse110y) {
+        auto call = std::make_unique<IndexOrCallExpr>(loc, std::move(calleeOverride110y));
+        call->positional.push_back(std::move(leadingArg110y));
+        return std::make_unique<CallStmt>(loc, std::move(call));
+    }
+
+    // Fix <vbeclipse>: 负数首参折叠后, 行内没有逗号续参 (`obj.Method -30` 单独成句)
+    // 就直接收口成 CallStmt; 有逗号则交给下方无括号调用参数列表 (它会把
+    // leadingArg110y 作为首参再继续吃 `, arg...`)。
+    if (negFirstArgCollapse
+        && (cur_.kind == TokenKind::NewLine || cur_.kind == TokenKind::Colon
+            || cur_.kind == TokenKind::EndOfFile)) {
         auto call = std::make_unique<IndexOrCallExpr>(loc, std::move(calleeOverride110y));
         call->positional.push_back(std::move(leadingArg110y));
         return std::make_unique<CallStmt>(loc, std::move(call));

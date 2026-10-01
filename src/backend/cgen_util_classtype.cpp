@@ -47,6 +47,49 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
                     return sym->variableTypeName;
                 }
             }
+            // Fix <vbeclipse>: 上面符号表路径全落空时, 该标识符的名字**本身就是一个
+            // 工程类** → 按该工程类推断 (VB6 语义: 工程内定义优先于宿主同名符号)。
+            // 用 projectClassNameOf (driver 注入的工程类名表) 判, 而不是顺着符号表
+            // 逐级查 Class/ComClass: 名字被同名符号占满时符号表根本查不到类。
+            // ucPerspective.ctl `CreateFolder(ByRef Folder As Folder, ...)` 实测
+            // symTab_.lookup("Folder") 两次都返回宿主同名 PropertyGet(kind=4) 而非
+            // coclass (消费作用域里 "folder" 键是 ComClass, 名字被占满), 于是
+            // Folder.Views / Folder.FolderId 整条跨模块属性链推不出类, With 块
+            // className 留空 → 块内 .IsEmpty 套当前模块前缀 → vb6_ucPerspective_IsEmpty。
+            // 放在最后: 局部变量/参数/属性各自的判定优先, 不会把与类同名的**局部
+            // 变量**误当类 (已知局部走 knownClassVars_ 与 Variable/Parameter 分支)。
+            // 表里没有的名字行为完全不变。
+            //
+            // ⚠ Fix <vbeclipse> rev7: 但**必须先排除"同名成员访问"**。
+            // View.cls 里 `Property Get View() As Object` (返回窗体对象) 与类名 `View`
+            // 同名 ⇒ 消费点 `l_View.View` 的 `.View` 段名字撞工程类表 ⇒ 整条链被推成
+            // "vb6_cls_View 实例" ⇒ `With View.View` 把 tempType 定成 vb6_cls_View*,
+            // 于是 `_vb6_with_2->hWnd` 按类字段发, 而 vb6_View_prop_get_View() 实际
+            // 返回 void* (As Object) ⇒ 编译期 C2039 "hWnd 不是 vb6_cls_View 的成员"
+            // ×216 (ucFolder.c/SubClass.c/modSubClass.bas 全线)。
+            // 判据: 该标识符在**本模块**是个成员 (PropertyGet/PropertyLet/PropertySet/
+            // 变量/参数) 时, 它的类型由**声明**决定, 与同名工程类无关 —— 名字撞车
+            // 不是类型依据。已知局部在上面几条分支已处理, 到这里的是"跨模块成员 +
+            // 名字撞类"这一种。
+            {
+                const Symbol* s2 = symTab_.lookup(id.name);
+                if (s2 && (s2->kind == SymbolKind::PropertyGet
+                           || s2->kind == SymbolKind::PropertyLet
+                           || s2->kind == SymbolKind::PropertySet
+                           || s2->kind == SymbolKind::Variable
+                           || s2->kind == SymbolKind::Parameter)) {
+                    // 有声明就看声明: 声明类型确实解析为项目类才返回类名, 否则返回空
+                    // (交下游走 COM 晚绑定 —— As Object 的成员就该那样走)。
+                    if (!s2->variableTypeName.empty()) {
+                        const std::string projHit =
+                            projectClassNameOf(s2->variableTypeName);
+                        if (!projHit.empty()) return projHit;
+                    }
+                    return "";
+                }
+            }
+            const std::string projClsVbe = projectClassNameOf(id.name);
+            if (!projClsVbe.empty()) return projClsVbe;
             return "";
         }
         case ASTNodeKind::IndexOrCallExpr: {
@@ -160,6 +203,18 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
                             return itF->second;
                         }
                     }
+                }
+                // Fix <vbeclipse>: .X 是 With 目标类的属性(返回项目类)而非字段/
+                // 标量 (ucPerspective.ctl `With l_ucFolder` 内 `.Views.IsEmpty`,
+                // Views 是 Property Get 返回 List 类) → 用返回类推断, 否则外层
+                // .IsEmpty/.Count/.Item 落到类兜底 `->` 字段 → C2039 / Item 乱绑
+                // (vb6_ucFolder_prop_get_Views->Item(...)). getClassMethodReturnType
+                // 仅对真实项目 Class 返回类名 (String/Long 属性返回 ""), 对纯字段
+                // /标量属性维持 info.className 原行为 (Fix 085b 语义不变).
+                {
+                    std::string retClsFromProp =
+                        getClassMethodReturnType(info.className, wmRef.memberName);
+                    if (!retClsFromProp.empty()) return retClsFromProp;
                 }
                 // .X 非数据字段 (方法/属性等) → 维持原行为: With 目标类自身
                 // (Fix 085b 在调用链推断处对 callee=WithMemberExpr 已按方法返回类
@@ -345,6 +400,46 @@ Vb6Type CCodeGen::inferUdtFieldVb6Type(const ASTNode* target) const {
     return Vb6Type::Unknown;
 }
 
+// <vbeclipse> <VBFlexGridDemo>: 返回左值 UDT 字段的**声明类型名** (`mi.typeRefName`)。
+// 空串 = 无声明类型 (真 Variant 槽), 非空 = 声明了具体类型 (Object/接口/类/UDT)。
+// 与 Set-RHS 装箱 guard 配套 —— VTableHandle.bas `Set VTableIPAOData.OriginalIOleIPAO = This`
+// 一条, 字段声明 `As OLEGuids.IOleInPlaceActiveObject`, TLB 命中的 caller 侧
+// resolveTypeRef 把 mi.type 兜底成 Variant (同 arg_emit Fix 210 那条同源问题), 若
+// 装箱就发出 `field = vb6_VariantFromValue(This)` → 字段是 typed ptr 收 VARIANT →
+// C2440。用**声明名**做判据: 只要非空, 这条槽就不是 Variant 容器。
+std::string CCodeGen::udtFieldTypeRefNameOfTarget(const ASTNode* target) const {
+    if (!target) return std::string();
+    std::string udtCType, memName;
+    if (target->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& ma = static_cast<const MemberAccessExpr&>(*target);
+        if (!ma.object) return std::string();
+        udtCType = inferUdtTypeOfExpr(*ma.object);
+        memName = ma.memberName;
+    } else if (target->kind == ASTNodeKind::WithMemberExpr) {
+        if (withObjectInfoStack_.empty() || withObjectVars_.empty()) return std::string();
+        const auto& info = withObjectInfoStack_.back();
+        if (info.kind != WithObjKind::Unknown) return std::string();
+        memName = static_cast<const WithMemberExpr&>(*target).memberName;
+        auto it = knownUdtVars_.find(Symbol::toLower(withObjectVars_.back()));
+        if (it == knownUdtVars_.end()) return std::string();
+        udtCType = it->second;
+    } else {
+        return std::string();
+    }
+    const std::string prefix = "vb6_type_";
+    if (memName.empty() || udtCType.size() <= prefix.size()
+        || udtCType.compare(0, prefix.size(), prefix) != 0)
+        return std::string();
+    std::string udtName = udtCType.substr(prefix.size());
+    Symbol* udtSym = symTab_.lookupModule(udtName);
+    if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return std::string();
+    std::string memLower = Symbol::toLower(memName);
+    for (auto& mi : udtSym->udtMembers) {
+        if (Symbol::toLower(mi.name) == memLower) return mi.typeRefName;
+    }
+    return std::string();
+}
+
 
 // ai/022 B08f-1 (D37): 与上一条走同一条 UDT 解析路, 但返回字段在 **C 里的对象类型**
 // (`vb6_cls_X*` / `void*` / "" = 不是对象字段或推不出)。为什么不直接改 inferUdtFieldVb6Type
@@ -433,6 +528,34 @@ std::string CCodeGen::udtFieldObjCType(const std::string& udtCType,
                                            : moduleName_;
                 return "vb6_cls_" + cIdent(clsCanon) + "*";
             }
+            // Fix <VBFlexGridDemo>: 与 struct **字段声明侧同源**的一条判据 —— 拿
+            // mapTypeRef (定义侧权威, 见 cgen_base_type.cpp:340 ComInterface 分支,
+            // 未识别类型 line 478 兜底 return "void*") 会**发**出的那份 C 类型决定
+            // marker 归属. 只要字段 C 类型是**指针**, 语义 = 对象槽, 返回 "void*"
+            // 让 appendUdtObjFieldMarker 追加 `/* udt objfield void* */` 标记 →
+            // 外层 MemberAccessExpr 消费走 vb6_ComCall 晚绑定
+            // (cgen_expr_member_generic_access.inc:222 那一支)。
+            // CI 现场 (diag212b 的 VTableHandle.h + c3-error.log 双 dump 实证):
+            // GA windows-latest runner **没有** SysWOW64\OLEGuids.tlb, 且注册表
+            // {5A2B9220-...} 也没登记 (VB4001 warning ×2 直证), 于是 driver
+            // 层 typelibRefs 双 miss (loadByClsid + loadByPath) → TLB 里的
+            // `IOleInPlaceActiveObject` 从未进符号表 → semantic_analyzer_typeref.cpp:99/116
+            // 两处 lookupModule 也 miss → resolveTypeRef 落 line 134 Variant 兜底,
+            // typeRefName 存 "OLEGuids.IOleInPlaceActiveObject"。同份字段 mapTypeRef
+            // 也 miss → line 478 兜底 → 结构里的字段 C 类型就是 **void***。旧
+            // udtFieldObjCType 这条 Variant 分支返回 "" (无 marker) → 外层 MAE
+            // fallback (class_fallback.inc:297/300) 发裸 `(*This).OriginalIOleIPAO
+            // .QueryInterface(...)` → C2224 ×13 + 级联 C2197/C2198 (VTableHandle.c
+            // 459/462/470/476/482/488/510/512/516/524/530/536/542, GA t2 2/2).
+            // local 同一份代码走的是**不同**的 TLB 载入结果 (SysWOW64 文件在、
+            // 注册表 GUID 在): TLB load → ComInterface 进模块符号表 → pass 1
+            // 认得 → mi.type = Object → line 494 分支返回 "void*" → marker 生效
+            // → 49ed1b22 那条 lookupTypeSymbol(短名) 兜底本地也不 fire (它已经
+            // 从 Object 分支出); 而 CI 上 lookupTypeSymbol 也 miss (TLB 没 load
+            // 就没这个符号) —— 所以判据**不能靠符号命中**, 得回到"限定名 (含 '.')
+            // 在 VB6 语境里就是 COM 引用库的类型"这条**语法**事实: 无论符号表有
+            // 没有, 只要 mapTypeRef 会兜底 "void*", 字段 C 类型就是 void*。
+            if (tn.find('.') != std::string::npos) return "void*";
             return "";
         }
         // Fix 177: String 字段 → "BSTR"。调用方 appendUdtObjFieldMarker 只对

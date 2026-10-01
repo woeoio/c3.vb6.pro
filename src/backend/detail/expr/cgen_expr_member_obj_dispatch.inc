@@ -51,8 +51,13 @@
         // void*, 可能被误注册进 knownObjectVars_, 但它不是 IDispatch — 类实例是纯 C
         // 结构体 (vb6_cls_Button*), 用 vb6_ComCall 会解引用 vtable 崩溃 (0xC0000005).
         // 已知是类实例时跳过 COM 晚绑定, 交给下面的"优先级2"做直接分发.
+        // Fix <vbeclipse>: knownObjectVars_ 按**过程**不清空 (模块内不同过程同名
+        // `Dim l_Tab As Object` 与 `Dim l_Tab As Variant` 并存), 先判 Object 会把
+        // Variant 槽位的接收者裸发出 → vb6_ComGetIntProp(l_Tab, ...) C2172
+        // (ucTabStrip.c 312/314/387). 同过程内 Variant 声明优先走 P24-04 分支
+        // vb6_VariantToObject(&l_Tab) 提取对象指针.
         if (knownObjectVars_.count(objLower) && !knownClassVars_.count(objLower)
-            && !knownUdtVars_.count(objLower)) {
+            && !knownUdtVars_.count(objLower) && !knownVariantVars_.count(objLower)) {
             emitExpr(*node.object);
             comObjExpr_ = lastExpr_;       // 保存对象表达式
             comMemberName_ = node.memberName;  // 保存成员名

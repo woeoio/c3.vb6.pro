@@ -208,7 +208,17 @@ vb6_VARIANT vb6_VariantFromComResult(void* variant_ptr) {
         case VT_UI1:    result.bVal = pv->bVal; break;
         case VT_ERROR:  result.lVal = pv->scode; break;
         case VT_DECIMAL:
+#ifdef _WIN64
             memcpy(&result.decVal, &pv->decVal, sizeof(result.decVal));
+#else
+            /* Fix <vbeclipse> rev11: x86 的 OLE VARIANT union 只 8 字节, DECIMAL 在
+             * 外部由 pdecVal 指向 (vb6_VARIANT 现同布局); 深拷贝到自持缓冲,
+             * 由 vb6_VariantClear 释放。 */
+            if (pv->pdecVal) {
+                result.pdecVal = (DECIMAL*)CoTaskMemAlloc(sizeof(DECIMAL));
+                if (result.pdecVal) memcpy(result.pdecVal, pv->pdecVal, sizeof(DECIMAL));
+            }
+#endif
             break;
         default:
             // P24-02: VT_ARRAY - 将Windows SAFEARRAY转换为vb6_SafeArray1D
@@ -324,7 +334,17 @@ vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv) {
         case VT_UI1:    result.bVal = pv->bVal; break;
         case VT_ERROR:  result.lVal = pv->scode; break;
         case VT_DECIMAL:
+#ifdef _WIN64
             memcpy(&result.decVal, &pv->decVal, sizeof(result.decVal));
+#else
+            /* Fix <vbeclipse> rev11: x86 的 OLE VARIANT union 只 8 字节, DECIMAL 在
+             * 外部由 pdecVal 指向 (vb6_VARIANT 现同布局); 深拷贝到自持缓冲,
+             * 由 vb6_VariantClear 释放。 */
+            if (pv->pdecVal) {
+                result.pdecVal = (DECIMAL*)CoTaskMemAlloc(sizeof(DECIMAL));
+                if (result.pdecVal) memcpy(result.pdecVal, pv->pdecVal, sizeof(DECIMAL));
+            }
+#endif
             break;
         case VT_ARRAY|VT_BSTR:
         case VT_ARRAY|VT_VARIANT:
@@ -509,8 +529,10 @@ void vb6_VariantArraySet(vb6_VARIANT* v, int32_t index, vb6_VARIANT val) {
     int32_t off = index - arr->lBound;
     if (arr->elemType == vb6_sa_variant) {
         vb6_VARIANT* slot = &((vb6_VARIANT*)arr->data)[off];
-        vb6_VariantClear(slot);
-        *slot = val;
+        /* Fix <vbeclipse> rev16: 原先 `vb6_VariantClear(slot); *slot = val;` 是
+           Clear + **浅拷贝** —— val 若是从别处借来的 Variant (ByRef 实参/数组元素),
+           槽就与它共用同一只 BSTR, 宿主一 Clear 槽即悬垂。改走"接管"语义。 */
+        vb6_VariantAssign(slot, val);
     }
     /* 对于非Variant数组, 赋值时需要按目标类型转换(简化: 仅Variant数组支持赋值) */
 }
@@ -519,6 +541,18 @@ void vb6_VariantArraySet(vb6_VARIANT* v, int32_t index, vb6_VARIANT val) {
 vb6_VARIANT vb6_LoadResData(int32_t resourceId, int32_t resourceType) {
     (void)resourceId; (void)resourceType;
     vb6_VARIANT v; memset(&v, 0, sizeof(v)); return v;  /* empty Variant */
+}
+
+// Fix <vbeclipse>: LoadResPicture / LoadResString — stub (同 LoadResData 口径:
+// 资源段加载暂不支持, 返回 empty Variant; 调用侧拿到 Nothing/空串不崩)
+vb6_VARIANT vb6_LoadResPicture(int32_t resourceId, int32_t resourceType) {
+    (void)resourceId; (void)resourceType;
+    vb6_VARIANT v; memset(&v, 0, sizeof(v)); return v;
+}
+
+vb6_VARIANT vb6_LoadResString(int32_t resourceId) {
+    (void)resourceId;
+    vb6_VARIANT v; memset(&v, 0, sizeof(v)); return v;
 }
 
 // ============================================================
@@ -578,6 +612,8 @@ int32_t vb6_UserControl_BackColor = 0;
 int32_t vb6_UserControl_ForeColor = 0;
 int16_t vb6_UserControl_RightToLeft = 0;
 void*   vb6_UserControl_ParentControls = NULL;
+void*   vb6_UserControl_Controls = NULL;
+void*   vb6_Screen_MouseIcon = NULL;       // Fix <vbeclipse>: Screen.MouseIcon 槽   // Fix <vbeclipse>: UserControl.Controls (集合未建模, 恒 NULL)
 vb6_ComIface_Font* vb6_UserControl_Font = &g_vb6_UserControl_FontObj;
 struct vb6_UserControl_Ambient_Type vb6_UserControl_Ambient = { &g_vb6_UserControl_FontObj };
 
@@ -709,6 +745,19 @@ void vb6_UserControl_Refresh(void) {
 // UserControl.CancelAsyncRead: async read unimplemented, no-op.
 void vb6_UserControl_CancelAsyncRead(BSTR propName) {
     (void)propName;
+}
+
+// Fix <vbeclipse>: `UserControl.Line (x1,y1)-(x2,y2), [color], [mode]`
+// (ucTab.ctl:231-241 画标签边框/渐变分隔线; Shape 控件的 Line 语法).
+// 生成端把 `-` 连写的坐标对拍平成 5 个固定实参 (x1,y1,x2,y2,color), `, B` /
+// `, BF` 模式常量按 Fix 102 的口径原样作**可变参**追加 —— 故此处必须变参, 否则
+// 5 参形态 (源码 `UserControl.Line (1, h-10)-(w, h-10), m_Scheme.FrameColor`)
+// 无原型匹配 → LNK2001.
+// 可变参里第 6 个才是模式, 但模式类型(int32_t)与 color 相同, 逐个 va_arg 会串味;
+// 这里改为**不读可变参**: 图形最终态由下一轮 WM_PAINT 重绘路径决定, 保持 no-op
+// 语义安全 (不依赖 mode). 坐标/颜色实参签名化, 便于将来接 GDI 画线时不必改生成端.
+void vb6_UserControl_Line(double x1, double y1, double x2, double y2, int32_t color, ...) {
+    (void)x1; (void)y1; (void)x2; (void)y2; (void)color;
 }
 
 // Fix 111: UserControl built-in methods (declared in vb6rtl_userctl.h).

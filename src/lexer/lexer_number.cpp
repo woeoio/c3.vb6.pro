@@ -160,9 +160,34 @@ Token Lexer::scanNumber() {
         return tok;
     }
 
-    Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
-    try { tok.intValue = static_cast<int32_t>(std::stoll(text)); } catch (...) {}
-    return tok;
+    // 无后缀十进制整数字面量: 按**数值大小**定类型, 不再一律当 Integer。
+    //
+    // 原先这里恒发 IntegerLiteral 并 `static_cast<int32_t>` 截断, 装不进 32 位的
+    // 数值会被**回绕**而不是报错, 而负号是**另一个 token** (一元 Negate), 于是
+    //   l = -2147483648         ->  l = (--2147483648)   C2105, 整工程编不过
+    //   l = -9223372036854775807->  l = (--1)            值被静默改成 -1
+    // 两处都是**静默错编**: 前者让合法程序编不过, 后者算出完全不同的数。
+    //
+    // 装得进 32 位的**保持原样**仍走 IntegerLiteral —— 那条路本来就是对的, 不动它,
+    // 免得给满仓库的字面量平白加一圈文本变动。超出的走 LongLiteral (int64 存),
+    // 由 cgen 视宽度补 LL 后缀。
+    //
+    // 再大 (超过 64 位) 直接报词法错, 不提升为 Double: Double 只有 53 位尾数,
+    // 提升等于**主动**把值改错, 报出来更诚实。
+    {
+        int64_t v = 0;
+        if (!parseIntLit(radixDigits(text), 10, v)) {
+            return errorToken("十进制数字超出 64 位整数表示范围", startLine, startCol);
+        }
+        if (v >= INT32_MIN && v <= INT32_MAX) {
+            Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
+            tok.intValue = static_cast<int32_t>(v);
+            return tok;
+        }
+        Token tok = makeToken(TokenKind::LongLiteral, text, startLine, startCol);
+        tok.longValue = v;
+        return tok;
+    }
 }
 
 Token Lexer::scanHexNumber() {

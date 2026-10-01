@@ -173,6 +173,20 @@ VbpProject VbpParser::parseString(const std::string& content, const std::string&
 
         // Object={GUID}#major#minor; filename.ocx
         if (key == "Object") {
+            // Fix <vbeclipse>: Object=*\A<相对路径>.vbp —— 私有控件工程引用。
+            // VB6 里被引工程的 UserControl/类/模块全部公开符号对本工程可见,
+            // 控件实例也随 EXE 一起编译。这里只登记路径, 源码展开在 driver_compile。
+            if (value.size() > 3 && value[0] == '*' && value[1] == '\\' && value[2] == 'A') {
+                std::string refPath = value.substr(3);
+                size_t s2 = refPath.find_first_not_of(" \t");
+                if (s2 != std::string::npos) refPath = refPath.substr(s2);
+                while (!refPath.empty() &&
+                       (refPath.back() == ' ' || refPath.back() == '\t')) {
+                    refPath.pop_back();
+                }
+                project.projectRefs.push_back(refPath);
+                continue;
+            }
             VbpProject::ObjectRef obj;
             // 格式: {GUID}#major#minor; filename.ocx
             // 用 ; 分割最后部分

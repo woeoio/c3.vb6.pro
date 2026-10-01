@@ -185,6 +185,13 @@ Decl* CCodeGen::ivFindImplMember(Module& module, const IfaceView& v, const Iface
         IfaceProcSig sig;
         if (!ifaceSigFromDecl(*d, sig)) continue;
         if (sig.slotKey == slot.key) return d.get();
+        // VB6 风格接口 (.cls 宿主): 实现成员按 VB6 强制约定命名为 `<接口名>_<成员名>`,
+        // 槽键得摘掉前缀再比。与语义层 checkNewStyleInterface 的隐式匹配同一口径
+        // (两边必须挑中**同一个**成员, 否则语义说实现了、发码却把槽留成 NULL)。
+        if (v.clsHost) {
+            const std::string vb6Key = ifaceImplSlotKeyVb6(*d, sig.memberName, v.name, true);
+            if (vb6Key == slot.key) return d.get();
+        }
     }
     return nullptr;
 }

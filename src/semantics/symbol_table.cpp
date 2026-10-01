@@ -247,6 +247,50 @@ bool SymbolTable::define(std::unique_ptr<Symbol> sym) {
         }
     }
 
+    // 类模块允许与类同名的成员 (View.cls 的 `Public Property Get View()` /
+    // PopupMenu.cls 的 `Public Sub PopupMenu(...)`) —— VB6 合法。类自符号
+    // (SymbolKind::Class, semantic_analyzer 预先 define 进模块作用域) 让位给成员:
+    // 裸键换成成员符号。
+    //
+    // Fix <vbeclipse> rev17: 让位实现从 `erase` 改为**换键到 <name>$ty** (与下面
+    // 上面 Fix 103 的 Type/Enum 让位同款)。原先直接 erase 的注释写着"类本身仍可经
+    // lookupModule/全局作用域解析", 但那两个出口都建立在"符号还在 moduleScope 里"
+    // 这个前提上 —— 而真正消费它的两条路是**直接遍历 moduleScope()->symbols()**:
+    //   · getPublicSymbols()  → 跨模块导出 (driver_crossmod 的 globalPublicSyms)
+    //   · cgen_util_dllentry_collect.inc 的 coclass 收集
+    // 类符号一删, 这个类就再也进不了 coclass 表, 运行期连锁:
+    //   vb6_FindCoClassDesc("<类名>") 返 NULL
+    //   → vb6_ComObject_FromInstance(NULL, inst) 返 NULL
+    //   → vb6_VariantObject(NULL) 产出 vt=VT_DISPATCH / pdispVal=NULL 的**空壳
+    //     Variant** (该函数无条件写 vt=dispatch)
+    //   → 槽位读回 `xxx Is Nothing` 恒真 / 取回对象即 Nothing
+    //   → ucFolder.AddView(ByRef View As View) 收到 NULL
+    //   → `View.ViewId` 对 NULL 解引用 (av read 0x4) —— play78 崩点。
+    // 实测 play78: coclass 表 14 项, 缺的正是**全工程唯一两个有同名成员的类**
+    // View / PopupMenu; Folder/List/Perspective 等另外 14 个类都在表里。
+    // 换键后: 裸键仍让给成员 (lookupLocal 的语义不变), 类符号留在
+    // <name>$ty, 由既有 $ty 回退 (Scope::lookupLocal / lookupLocalByKind) 找到。
+    {
+        auto itSelf = current_->symbols_.find(lowerName);
+        if (itSelf != current_->symbols_.end() && itSelf->second
+            && itSelf->second->kind == SymbolKind::Class
+            && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
+                || isPropertyKind(sym->kind))) {
+            diag_.warn(DiagnosticID::SemDuplicateDeclaration, loc,
+                "类成员与类同名: '" + lowerName + "' (VB6 允许, 成员让类符号让位)");
+            // 让位 = 把类符号挪到类型槽 <name>$ty (不删除), 裸键空出来给成员。
+            // 槽已被占 (同名 Type/Enum) 时退回旧行为 (删), 属极端罕见组合。
+            const std::string clsKey = lowerName + "$ty";
+            if (current_->symbols_.find(clsKey) == current_->symbols_.end()) {
+                auto moved = std::move(itSelf->second);
+                current_->symbols_.erase(itSelf);
+                current_->symbols_[clsKey] = std::move(moved);
+            } else {
+                current_->symbols_.erase(itSelf);
+            }
+        }
+    }
+
     if (!current_->define(std::move(sym), keyOverride)) {
         diag_.error(DiagnosticID::SemDuplicateDeclaration, loc,
             "重复声明: \x27" + lowerName + "\x27");
@@ -352,7 +396,7 @@ bool SymbolTable::inProcedure() const {
 
 // --- 跨模块符号操作 ---
 
-void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym) {
+void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom) {
     // 在模块级作用域定义外部符号
     // 如果已存在同名符号（本地已有定义），跳过不覆盖
     if (!moduleScope_) return;
@@ -367,6 +411,19 @@ void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym) {
     }
     auto it = moduleScope_->symbols_.find(key);
     if (it != moduleScope_->symbols_.end()) {
+        // Fix <vbeclipse>: 工程类与**类型库内建 coclass/接口**同名时, 工程内定义优先
+        // (VB6: 工程类遮蔽引用库同名 coclass). 消费模块里这个名字原本被类型库符号
+        // 占着 (如 ScrRun 的 Folder), 其成员表是外部库的 → 工程类的 AddView/
+        // ActiveViewId 等成员解析不到, 退回"数据字段"访问 (C2039/C2198).
+        // 只有调用方显式请求 (driver_crossmod 的同名冲突分支) 才替换, 其余保持
+        // "本地已有定义不注入" 的老语义.
+        if (replaceBuiltinCom && sym->kind == SymbolKind::Class
+            && !sym->isInterface && it->second && it->second->isBuiltin
+            && (it->second->kind == SymbolKind::ComClass
+                || it->second->kind == SymbolKind::ComInterface)) {
+            it->second = std::move(sym);
+            return;
+        }
         // 本地已有定义，不注入外部符号
         return;
     }

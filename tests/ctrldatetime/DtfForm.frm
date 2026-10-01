@@ -233,7 +233,8 @@ Private Sub evtTimer_Timer()
     Debug.Print "DT42=" & TF(gChg2 - b4 = n41)
 
     Debug.Print "E2=" & n41
-    Debug.Print "CTRLDATETIME-DONE"
+        Debug.Print "DT43=" & CStr(dt1.CheckBox) & "/" & TypeName(dt1.CheckBox) & "/" & VarType(dt1.CheckBox)
+Debug.Print "CTRLDATETIME-DONE"
     Unload Me
 End Sub
 

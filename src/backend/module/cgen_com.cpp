@@ -446,6 +446,11 @@ void CCodeGen::emitInterfaceVtable(Module& module) {
 
     for (auto& impl : module.implements) {
         const std::string& ifaceName = impl->interfaceName;
+        // 登记在册的接口 (tB `Interface` 块, 或 Pass A2 认进来的 VB6 .cls 宿主) 由
+        // `emitIfaceImplTables` 那条 canonical 路径发: 槽序由接口自己定, `me` 是统一的
+        // `vb6_ivref_I*`, 表结构带 guard 只发一份。这里按实现类 harvest 再发一遍就是同名
+        // 结构 C2011 撞车 (实测 290 次), 所以只发登记表里查不到的接口。
+        if (ivLookupIface(ifaceName)) continue;
         std::string ifaceId = cIdent(ifaceName);
 
         // 收集接口方法信息: 从实现类中查找 IFoo_MethodName 方法

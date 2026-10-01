@@ -100,6 +100,10 @@
                 std::transform(extLower.begin(), extLower.end(), extLower.begin(), ::tolower);
                 if (extLower == modLower2) { isIncluded2 = true; break; }
             }
+            // Fix <vbeclipse>: 宿主伪对象 (UserControl/Ambient/...) 的成员名按 RTL 约定
+            // 规范化 (源码 `UserControl.hDc` → RTL 只有 vb6_UserControl_hDC), 否则
+            // 生成未声明的 vb6_UserControl_hDc (C2065 ×3: ucButton/ucCaption/ucTab).
+            varName2 = cIdent(canonicalHostPseudoMember(modName2, varName2));
             lastExpr_ = isIncluded2 ? varName2 : ("vb6_" + cIdent(modName2) + "_" + varName2);
             return;
         }

@@ -34,6 +34,10 @@ namespace vb6c3 {
 // 2026-09-19：原 pad_conv.inc（545 行）按函数体内既有的顶层分节注释再切 6 段（全部自身花括号平衡），
 // 切分脚本对「片段按序拼回 == 拆分前原文件对应区间」做逐字节断言。
 
+// 内置函数表 (builtinFuncs) + 键集合 (kBuiltinFuncNames): 与 cgen_expr_ident.cpp 同一份
+// (内部链接, 各 TU 一份副本), 供下面 Pattern G 判定"内置函数优先于类成员属性"时复用。
+#include "backend/detail/expr/cgen_expr_ident_builtin_table.inc"
+
 void CCodeGen::visit(IndexOrCallExpr& node) {
     // Delegate 直调 (tB 扩展): op(a,b) → ((vb6_del_t_op)(op))(a,b), 独立短路径
     if (node.isDelegateCall) { emitDelegateCall(node); return; }

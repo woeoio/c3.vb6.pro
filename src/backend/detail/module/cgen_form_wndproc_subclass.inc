@@ -39,6 +39,7 @@
             bool hasKeyDown = false;
             bool hasKeyUp = false;
             bool hasDblClick = false;
+            bool hasClick = false;     // C29-SL-d: 子类化那一条路补上的常规 Click
             bool hasMouseHover = false;
             bool hasValidate = false;
             bool hasPaint = false;   // Fix 185: 控件级 _Paint (PictureBox.Print/Cls 的落点)
@@ -67,12 +68,14 @@
                 info.hwndVar = "vb6_hwnd_" + cIdent(ctrl.controlName);
             }
 
-            // PictureBox/Frame/Label 的 GotFocus/LostFocus 需要子类化
-            // (STATIC/BUTTON类控件不通过WM_COMMAND发送焦点通知)
-            if (ctrl.controlType == FrmControlType::PictureBox ||
-                ctrl.controlType == FrmControlType::Frame ||
-                ctrl.controlType == FrmControlType::Label ||
-                ctrl.controlType == FrmControlType::Image) {
+            // C29-SL-g: 这一档以前是**四类白名单**（PictureBox/Frame/Label/Image），与
+            // "装不装"、"拆不拆"那两份一起把剩下的所有窗口态控件 —— Slider 首当其冲，还有
+            // ListView / TreeView / DTPicker / MonthView / RichTextBox / 两个滚动条 /
+            // 文件系统三件套 —— 的 `_GotFocus` / `_LostFocus` 留在"编得过、永不触发"那一侧。
+            // 改成按"有没有另一条原生来源"排除：那六类的焦点通知由父窗的 `WM_COMMAND` 码供
+            // （EN_/CBN_/LBN_/BN_，见 controlFocusFromNativeNotify 的定义处），其余一律走
+            // 控件自己的 `WM_SETFOCUS` / `WM_KILLFOCUS` —— 同一次焦点变化只会有一处发。
+            if (!controlFocusFromNativeNotify(ctrl.controlType)) {
                 info.hasGotFocus = symTab_.lookup(ctrl.controlName + "_GotFocus") != nullptr;
                 info.hasLostFocus = symTab_.lookup(ctrl.controlName + "_LostFocus") != nullptr;
             }
@@ -94,6 +97,10 @@
             info.hasKeyDown = symTab_.lookup(ctrl.controlName + "_KeyDown") != nullptr;
             info.hasKeyUp = symTab_.lookup(ctrl.controlName + "_KeyUp") != nullptr;
             info.hasDblClick = symTab_.lookup(ctrl.controlName + "_DblClick") != nullptr;
+            // C29-SL-d: 只有**没有原生 Click 来源**的类型才由这一档补上（排除表与逐条来源
+            // 见 controlClickFromNativeNotify 的定义处），否则同一次点击会双发。
+            info.hasClick = !controlClickFromNativeNotify(ctrl.controlType) &&
+                            symTab_.lookup(ctrl.controlName + "_Click") != nullptr;
             info.hasMouseHover = symTab_.lookup(ctrl.controlName + "_MouseHover") != nullptr;
             // Fix 185: 控件级 _Paint。原先整个控件家族都没有 WM_PAINT 转发，
             // MainForm.c 里的 vb6_MainForm_Picture2_Paint 是死代码。只接 PictureBox
@@ -102,17 +109,18 @@
                             (symTab_.lookup(ctrl.controlName + "_Paint") != nullptr);
 
             // 只要有任一子类化事件需求就加入列表
-            if (info.hasGotFocus || info.hasLostFocus || info.hasMouseEnter || info.hasMouseLeave ||
-                info.hasMouseDown || info.hasMouseUp || info.hasMouseMove ||
-                info.hasKeyPress || info.hasKeyDown || info.hasKeyUp || info.hasDblClick || info.hasValidate || info.hasMouseHover || info.hasPaint) {
+            // C29-SL-n（账 #141）: 这一趟原本自己按 info.hasXxx 汇一遍，与"装/拆"那两份各抄一遍
+            // ⇒ 抄漏的那形（`_DblClick`、`_Paint`）就变成"arm 发了、没人 install"。三份共用
+            // controlNeedsSubclass 之后，info.hasXxx 只管"发哪几条 arm"，"装不装"只有一处。
+            if (controlNeedsSubclass(ctrl)) {
                 subclassCtrls.push_back(std::move(info));
             }
         }
 
-        // P0-5修复: 扫描Frame容器内的子控件
+        // P0-5修复: 扫描容器内的子控件（账 #167: 这份「谁是容器」原本在这里手抄，
+        // 抄的是 Frame + PictureBox 两型 ⇒ SSTab 的孩子没人发子类化定义；换成唯一出口）
         for (const auto& ctrl : frmDesc.formControl.children) {
-            if (ctrl.controlType != FrmControlType::Frame &&
-                ctrl.controlType != FrmControlType::PictureBox) continue;
+            if (!controlIsContainerType(ctrl)) continue;
             // Fix 160w: PictureBox 也可作为容器 (MainForm.frm Picture2 容器内
             // 有设置了 GotFocus/MouseDown 的子控件; 原来只扫 Frame → 子控件已
             // 在 cgen_form_frame_menu.inc 注册 install 但这里未生成子类化定义/
@@ -130,10 +138,8 @@
                 info.ctrlName = child.controlName;
                 info.ctrlType = child.controlType;
                 info.hwndVar = "vb6_hwnd_" + cIdent(child.controlName);
-                if (child.controlType == FrmControlType::PictureBox ||
-                    child.controlType == FrmControlType::Frame ||
-                    child.controlType == FrmControlType::Label ||
-                    child.controlType == FrmControlType::Image) {
+                // C29-SL-g: 与顶层那一趟同一口径（按"有没有另一条原生来源"排除）
+                if (!controlFocusFromNativeNotify(child.controlType)) {
                     info.hasGotFocus = symTab_.lookup(child.controlName + "_GotFocus") != nullptr;
                     info.hasLostFocus = symTab_.lookup(child.controlName + "_LostFocus") != nullptr;
                 }
@@ -148,12 +154,14 @@
                 info.hasKeyDown = symTab_.lookup(child.controlName + "_KeyDown") != nullptr;
                 info.hasKeyUp = symTab_.lookup(child.controlName + "_KeyUp") != nullptr;
                 info.hasDblClick = symTab_.lookup(child.controlName + "_DblClick") != nullptr;
+                // C29-SL-d: 同顶层那一趟的口径（排除表见 controlClickFromNativeNotify）。
+                info.hasClick = !controlClickFromNativeNotify(child.controlType) &&
+                                symTab_.lookup(child.controlName + "_Click") != nullptr;
                 info.hasMouseHover = symTab_.lookup(child.controlName + "_MouseHover") != nullptr;
                 info.hasPaint = (child.controlType == FrmControlType::PictureBox) &&
                                 (symTab_.lookup(child.controlName + "_Paint") != nullptr);  // Fix 185
-                if (info.hasGotFocus || info.hasLostFocus || info.hasMouseEnter || info.hasMouseLeave ||
-                    info.hasMouseDown || info.hasMouseUp || info.hasMouseMove ||
-                    info.hasKeyPress || info.hasKeyDown || info.hasKeyUp || info.hasDblClick || info.hasValidate || info.hasMouseHover || info.hasPaint) {
+                // C29-SL-n: 容器子控件这一趟与上面顶层那趟共用同一份判据（原来是第二次抄写）。
+                if (controlNeedsSubclass(child)) {
                     subclassCtrls.push_back(std::move(info));
                 }
             }
@@ -327,7 +335,29 @@
             // P1-13修复: DblClick (WM_LBUTTONDBLCLK)
             if (info.hasDblClick) {
                 std::string fn = cProcName(info.ctrlName + "_DblClick", AccessLevel::Private);
-                c_.emitLine("if (msg == WM_LBUTTONDBLCLK) { extern void " + fn + "(); " + fn + "(); }");
+                // C29-SL-n（账 #141）: VB6 的签名是 `Sub X_DblClick(Cancel As Integer)`，
+                // 而这一条 arm 以前**写死无参** ⇒ 按标准签名写的处理器在产物里撞
+                // `C2198: 用于调用的参数太多`（实测：声明是 `static void vb6_sldM6_DblClick(int16_t* Cancel)`，
+                // arm 里却 `extern void vb6_sldM6_DblClick(); …`）。存量工程两种都见过
+                // （本仓夹具就写着无参的 `sld6_DblClick()`），所以按**处理器自己声明的形参数**发。
+                const Symbol* symDc = symTab_.lookup(info.ctrlName + "_DblClick");
+                if (symDc && !symDc->params.empty()) {
+                    c_.emitLine("if (msg == WM_LBUTTONDBLCLK) { int16_t vb6_dblcancel = 0;"
+                                " extern void " + fn + "(int16_t*); " + fn + "(&vb6_dblcancel); }");
+                } else {
+                    c_.emitLine("if (msg == WM_LBUTTONDBLCLK) { extern void " + fn + "(); " + fn + "(); }");
+                }
+            }
+            // C29-SL-d: 常规 Click (WM_LBUTTONUP)。VB6 的 Click 是"按下并抬起"之后发的，
+            // 抬起这一条就是它的原生落点（探针 .build/slprobe/slmeasure10.c 实测：真手势的
+            // WM_LBUTTONDOWN / WM_LBUTTONUP 都会经过控件自己的子类过程 —— 子类化换的是
+            // WNDPROC，那条 hwnd 的每条消息都先过我们这一段；而原生轨道条自己在
+            // button-down 里就把焦点抢过去了，所以按键那两条 arm 不需要 WS_TABSTOP 也到得了）。
+            // 只发给**没有原生 Click 来源**的控件（那批由 BN_CLICKED / *_SELCHANGE /
+            // TCN_SELCHANGE 供，见 controlClickFromNativeNotify），否则一次点击双发。
+            if (info.hasClick) {
+                std::string fn = cProcName(info.ctrlName + "_Click", AccessLevel::Private);
+                c_.emitLine("if (msg == WM_LBUTTONUP) { extern void " + fn + "(); " + fn + "(); }");
             }
 
             // P20-12: WM_VB6_RESTOREFOCUS - restore focus after Validate cancel

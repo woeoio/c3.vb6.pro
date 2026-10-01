@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
+# cache-bust 2026-10-01-19 (VBFlexGridDemo / a280e00f emit-shape 排疑, 一次票)
 
 # Version single source of truth: VERSION file at the repo root (stripped).
 file(READ "${CMAKE_CURRENT_LIST_DIR}/VERSION" VB6C3_VERSION_RAW)
@@ -320,6 +321,7 @@ set(C3RTL_EMBEDDED_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_monthview.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_richtextbox.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_winsock.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_slider.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_axsite.c
 ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_axcontainer.c   # Fix 148/160 补登记 (遗漏, 改它不会触发 .rc 重编)
     # vb6forms_axsite 按族细分 (2026-09-20): 内部头 + axsite/ 下 5 个族编译单元

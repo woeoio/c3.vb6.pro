@@ -382,7 +382,16 @@ void CCodeGen::visit(ForEachStmt& node) {
         {
             std::string lower = node.varName;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-            if (knownObjectVars_.count(lower) || knownTypedComVars_.count(lower)) {
+            // vbeclipse: knownVariantVars_ 必须**先判**. knownObjectVars_ 跨过程不清空
+            // (Fix 157f), 而同名变量在不同过程里可以声明成不同类型 — ucTabStrip.ctl
+            // 前两个过程 `Dim l_Tab As Object` (243/274) 把 l_tab 记进 knownObjectVars_,
+            // 后面 `Dim l_Tab As Variant` (322/373) 的 For Each 于是走 Object 分支发
+            // `l_Tab = vb6_ComUnpackObject(&fe_var)` (void*) → 赋给 vb6_VARIANT → C2440
+            // (ucTabStrip.c 301/353/394). 本过程的 Dim 已把名字登记进 knownVariantVars_,
+            // C 侧声明就是 vb6_VARIANT, 故先判它.
+            if (knownVariantVars_.count(lower)) {
+                c_.emitLine(varAcc + " = vb6_VariantFromStackVARIANT(&" + feVar + ");  /* P24-05: For Each Variant: VARIANT→vb6_VARIANT */");
+            } else if (knownObjectVars_.count(lower) || knownTypedComVars_.count(lower)) {
                 c_.emitLine(varAcc + " = vb6_ComUnpackObject(&" + feVar + ");  /* P24-05: For Each Object: VARIANT→IDispatch* */");
             } else if (knownClassVars_.count(lower)) {
                 // Fix 090aa: 项目类变量 (vb6_cls_X*) 作 For Each 元素 — 元素是

@@ -87,9 +87,34 @@ vb6_SafeArray1D* vb6_SafeArrayReDim1D_Udt(int32_t elemSize,
     return arr;
 }
 
-vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D(vb6_SafeArray1D* arr,
-    int32_t newLBound, int32_t newUBound) {
-    if (!arr) return vb6_SafeArrayReDim1D(vb6_sa_empty, newLBound, newUBound);
+// Fix <vbeclipse> rev3 (2026-09-30): 本函数**收 elemType**。
+// 此前签名没有它, arr==NULL 时只能回落 vb6_sa_variant 做兜底, 于是**任何非 Variant
+// 数组的首次 ReDim Preserve 都按 variant 步长分配**：
+//   `Dim m_Keys() As String` + `ReDim Preserve m_Keys(Idx)`
+//     → 按 16 字节(x86) / 24 字节(x64) 每元素分配, 但 codegen 发的
+//       `VB6_SA_AT(BSTR, arr, i) = ...` 按 **4 字节**步进 —— 第 i 个"槽"里其实
+//       压着别的元素的 BSTR; 且 elemType 被记成 variant, 于是
+//       vb6_SafeArrayDestroy1D 走 Variant 分支, 把那些 BSTR 当 bstrVal **二次 free**。
+// 实测 play78.exe: 崩在 `List.Contains` 的 `For i = 0 To UBound(m_Keys)` 里,
+// 反汇编 = `mov eax,[edx+ecx*4]` + `call StrComp` (rva 0x18f6), 读出垃圾 BSTR。
+// codegen 本来就知道元素类型 (mapSaElemType), 现在把它传下来, 运行时不再猜。
+vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D_T(vb6_safearray_elemtype elemType,
+    vb6_SafeArray1D* arr, int32_t newLBound, int32_t newUBound) {
+    // UDT 不能走这里 (元素尺寸由 sizeof 给, 见 _Udt 入口)。若真传进来 udt,
+    // vb6_sa_elem_size 会返回 0 → calloc(n, 0) 拿到一个**非空但零长**的指针,
+    // 后续按 VB6_SA_AT(UDT,…) 写入就是纯堆越界。回落 variant (只多分配不少分配)。
+    if (elemType == vb6_sa_udt) elemType = vb6_sa_variant;
+
+    // 首次 ReDim (arr == NULL): 按**调用方给的**元素类型建, 不再猜。
+    if (!arr) return vb6_SafeArrayReDim1D(elemType, newLBound, newUBound);
+
+    // 已有数组但元素类型与本次声明不符 (历史按错误尺寸分配过): 数据不可保留,
+    // 按正确尺寸重建。这条让"改过的编译器重编旧工程"也能自愈。
+    if (elemType != vb6_sa_udt && arr->elemType != vb6_sa_udt
+        && arr->elemType != elemType) {
+        vb6_SafeArrayDestroy1D(arr);
+        return vb6_SafeArrayReDim1D(elemType, newLBound, newUBound);
+    }
 
     int32_t newCount = newUBound - newLBound + 1;
     if (newCount <= 0) {
@@ -130,6 +155,13 @@ vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D(vb6_SafeArray1D* arr,
     arr->uBound = newUBound;
     arr->count = newCount;
     return arr;
+}
+
+// 兼容入口: 元素类型未知 (无 elemType 形参的老调用点)。按 variant 兜底 ——
+// 元素尺寸取最大, 只可能多分配不少分配。**新代码别用这个**。
+vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D(vb6_SafeArray1D* arr,
+    int32_t newLBound, int32_t newUBound) {
+    return vb6_SafeArrayReDimPreserve1D_T(vb6_sa_variant, arr, newLBound, newUBound);
 }
 
 // UDT版ReDim Preserve: 元素尺寸由调用方提供 (sizeof(UDT))。
@@ -276,7 +308,38 @@ void vb6_SafeArrayPutElem(vb6_SafeArray1D* arr, int32_t index, void* value) {
 }
 
 int32_t vb6_UBound(vb6_SafeArray1D* safeArray, int32_t dimension) {
-    if (!safeArray) return 0;
+    // Fix <vbeclipse> rev4 (2026-09-30): 数组状态追踪, 由 C3_SA_TRACE=1 门控。
+    // 崩溃现场 `[edx+ecx*4]` 里 edx(=arr->data)是 NULL 而 uBound>=0 —— 只有把
+    // signature/elemType/elemSize/lBound/uBound/count/data 全打出来才能判是
+    // "结构本身是垃圾"还是"结构对但 data 没分配"。纯 ASCII 输出 (窄流+C locale)。
+    if (getenv("C3_SA_TRACE")) {
+        fprintf(stderr, "[SA] UBound arr=%p sig=0x%X et=%d es=%d lb=%d ub=%d cnt=%d data=%p\n",
+                (void*)safeArray,
+                safeArray ? (unsigned)safeArray->signature : 0u,
+                safeArray ? (int)safeArray->elemType : -1,
+                safeArray ? (int)safeArray->elemSize : -1,
+                safeArray ? (int)safeArray->lBound : -999,
+                safeArray ? (int)safeArray->uBound : -999,
+                safeArray ? (int)safeArray->count : -999,
+                safeArray ? safeArray->data : NULL);
+        fflush(stderr);
+    }
+    // Fix <vbeclipse> rev2 (2026-09-29, 用户在真 VB6 里实测确认):
+    // `UBound(<未分配的动态数组>)` 在 VB6 是**运行时错误 9 (下标越界)**,
+    // 不是返回某个数。工程正是靠 `On Error GoTo ErrorHandle` 接住它实现
+    // "空表"语义 (List.cls: Contains=False / Count=-1 都写在错误处理器里)。
+    // 本函数此前两个版本都是**猜的**:
+    //   v1: return 0  → `For i = 0 To UBound(x)` 跑一次, VB6_SA_AT 读 NULL+0xc
+    //                    → 0xC0000005 (实测 List.cls Contains);
+    //   v2: return -1 → 常见 For 循环零迭代, 看似没事, 但**没有 On Error 的
+    //                    调用点被静默放过** —— 真 VB6 会报错, 这里却吞掉。
+    // 现按 VB6 语义抛 9: 有 On Error 的过程 longjmp 到它的处理器 (与 VB6 一致),
+    // 没有的走 vb6_ErrRaise 的未处理路径 (报错退出, 也与 VB6 编译版一致)。
+    if (!safeArray) {
+        vb6_ErrRaise(9, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Subscript out of range"));
+        return -1;  /* 不可达: vb6_ErrRaise 必 longjmp 或 ExitProcess */
+    }
     // Fix 082g: use signature field to distinguish 1D vs ND arrays
     // SafeArray1D has signature=0x5A1D, SafeArrayND has dimCount (2-16)
     if (safeArray->signature == 0x5A1D) {
@@ -299,7 +362,13 @@ int32_t vb6_UBound(vb6_SafeArray1D* safeArray, int32_t dimension) {
 }
 
 int32_t vb6_LBound(vb6_SafeArray1D* safeArray, int32_t dimension) {
-    if (!safeArray) return 0;
+    // 与 vb6_UBound 同族: 未分配的动态数组在 VB6 里 LBound 也是错误 9
+    // (不是返回 0) —— 见 vb6_UBound rev2 的说明。
+    if (!safeArray) {
+        vb6_ErrRaise(9, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Subscript out of range"));
+        return 0;  /* 不可达 */
+    }
     // Fix 082g: use signature field to distinguish 1D vs ND arrays
     if (safeArray->signature == 0x5A1D) {
         return safeArray->lBound;
