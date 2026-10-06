@@ -1222,7 +1222,7 @@ S9.4 打标记那一路的 PictureBox 判据必须问表、且不许把成员名
 **开工顺序**：(1) 立 `canvas_drawing.hpp`，先把 `cls` / `print` 两档搬过去 —— 预期 A/B `changed=0`；(2) 把 `pset` / `circle` / `point` / `line` 的 Form 档搬进同一张表，withm 的 Form/Printer 段改成按表里的形状 packing —— 仍应 `changed=0`；(3) 语义层的折叠器上线（这一步才是 ① 真正修好的时刻：`Cls` / `PSet` / `Circle` 三形从 C2065 变成通），判据两头钉 = `tests/fdraw` 加一形真跑像素证人 + 一条发码针（"三形都不许再出现未声明裸调用，也不许出现 `vb6_ComCall`"）+ 负控用改前那台数 C2065 的条数。**③ 那一格必须另开**（裸 `Line (0,0)-(10,10)` 在 token 层就报错：`TokenKind::Line` 在 `parser_stmt.cpp:136` 只认 `Line Input`，而坐标对续画的吸收住在 `parser_expr_postfix.cpp:183-189` 且**只认 callee 是 MemberAccessExpr 且成员名是 line** ⇒ 语义层折叠救不了它，得动 parser；动 parser 时按 ①-c 那同一张表放行，不要再列第四份动词名单）。
 
 **两件别顺手做**：(a) 别把裸形折进 `cgen_file_io.cpp` 的 `isFormPrint` 那条 —— 那是 parser 认 `Print` 是**关键字**才有的路，`Cls` / `PSet` 不是关键字，照抄就要动词法 ⇒ 白多一份形状；(b) 折叠判据里"名字查不到符号"这一问必须留着 —— 用户自己写 `Sub PSet(x, y)` 时那枚过程**该**赢（VB6 的模块内作用域），无条件折就是"修一处静默、造一处调错函数"。
-### B71 门 #369/370 那两条红只有 runner 上现形 —— 本机那台 cl 压根不诊断「实参过多」（账 #240，**已出：门待回填**）
+### B71 门 #369/370 那两条红只有 runner 上现形 —— 本机那台 cl 压根不诊断「实参过多」（账 #240，**已出：门 #371（run 37471108271、head `bb252705`、branch dev、attempt 1）= 11 job 全 completed/success、非绿 0；红过的 olecon / olecon_x86 两片转绿，新的 [STATIC] rtl_proto_arity 跟着 Tests (compile) 一起跑绿；dev 已镜像到 gitcode（origin/dev 由 `39d9b119` 快进到 `bb252705`）**）
 
 **读数**：门 #369（run 37456420314、head `39d9b119`、branch dev）11 job 里两片红，各红一条且是同一枚夹具的两个架构 —— `Tests (vbp #2)` = `[VBP-BUILD] olecon ... FAIL rc=1 exe=False`（该片 PASS=54 FAIL=1 SKIP=1）、`Tests (vbp #3)` = `olecon_x86`（PASS=53 FAIL=1 SKIP=0）；其余九片全绿。**引入方式不是改了产品**：`39d9b119` 那轮新增 [STATIC] vbp_fixture_census 把五份"跟踪着却没登记"的 .vbp 逼出册登记成编译面用例，olecon 是其中一份（提交说明里写着本地 x64+x86 rc=0 且出 exe）。同批登记的 dbgdlg（就是那枚缺 `vb6_di_PageSetupDlgA` 桩、为它才补的夹具）在两片上都 PASS ⇒ 桩表与 RTL 内嵌在 CI 上是对上的，红只跟着 olecon 走。
 
@@ -1232,7 +1232,9 @@ S9.4 打标记那一路的 PictureBox 判据必须问表、且不许把成员名
 
 **本刀（一）**（`tests/run_tests.ps1`，+23/-0，纯测试面）：`Show-BuildErrorLog` 接进 `Test-VbpBuild` 的失败分支，挑 `error C####` / `: error ` / `fatal error` / `LNK####` / `unresolved external` / `=== C3 Diagnostics` 那几行（最多 25），一条都不匹配时退回尾巴 15 行。判据形状来自本地实物：一枚刻意失败的工程（b475）日志 264 行，262 行是 RTL 的 C4819/C5105/C4028 警告，直接摊 40 行尾巴会把唯一的 `error C2063` 挤出去。
 
-**归因（门 #370 的 [diag] 读数，两片各 4 行，一模一样）**：`Form1.c(100): error C2197: 'void vb6_OleCon_Init(void *,const wchar_t *,int,int,int,int)': too many arguments for call` —— **4 行 = 10 个实参减 6 个形参**，一枚多余实参报一行。对着源码量：定义 `src/rtl/core/vb6forms/vb6forms_olecon.c:920` 是 10 参（`... autoActivate, autoVerbMenu, borderStyle, sourceDoc, sourceItem`），发码 `src/backend/detail/module/cgen_form_ctrl_style_apply.inc:970` 也发 10 个，只有 `vb6forms_prop_ctrl.h:334` 那份原型还停在 6 参 —— 体 grew 上去、头没跟。**为什么只有 runner 红**：VS2019 的 cl 在 C 模式下对「实参多于原型」根本不诊断（本机用 6 参原型 + 10 实参的最小夹具 `b481/t10.c` 实测 rc=0，只在类型对不上那一枚上给 warning C4024），新 cl 把它按 C 标准的约束报成 error ⇒ 本机真编两遍都编不出这个病，判据必须换形状。
+**归因（门 #370 的 [diag] 读数，两片各 4 行，一模一样）**：`Form1.c(100): error C2197: 'void vb6_OleCon_Init(void *,const wchar_t *,int,int,int,int)': too many arguments for call` —— **4 行 = 10 个实参减 6 个形参**，一枚多余实参报一行。对着源码量：定义 `src/rtl/core/vb6forms/vb6forms_olecon.c:920` 是 10 参（`... autoActivate, autoVerbMenu, borderStyle, sourceDoc, sourceItem`），发码 `src/backend/detail/module/cgen_form_ctrl_style_apply.inc:970` 也发 10 个，只有 `vb6forms_prop_ctrl.h:334` 那份原型还停在 6 参 —— 体 grew 上去、头没跟。**为什么只有 runner 红**：VS2019 的 cl 在 C 模式下对「实参多于原型」根本不诊断（本机用 6 参原型 + 10 实参的最小夹具 `b481/t10.c` 实测 rc=0，只给一句 `warning C4020:太多实际参数`，连错误都不升），新 cl 把它按 C 标准的约束报成 error ⇒ 本机真编两遍都编不出这个病，判据必须换形状。
+
+**这条"本机看不见"后来量准了，而且两个方向不对称**（b494/arity.c，同一台 14.29、同一套 `/std:c11 /W3`）：6 参原型 + 10 实参 ⇒ 只有 `warning C4020`，编译照过（订正：本段先前写的 C4024 是凭印象，C4024 是"形参与实参类型不一致"，不是这一形）；反过来 10 参原型 + 6 实参 ⇒ `error C2198:太少实际参数`，本机就红。不对称有两层用：① 它解释了为什么"多递实参"只能靠对源码比来防（真编防不住）；② 它也划出了 §B72 的范围 —— 只需盯"多递"那一侧，"少递"已经被今天任何一次真编兜住。
 
 **修法（本刀二）**：`vb6forms_prop_ctrl.h` 的原型补齐成 10 参（+3/-1，只动头；`src/rtl/**` 改了要 touch `src/driver/c3rtl.rc` 再重编 C3.exe，否则内嵌的还是旧字节 —— 账 #156 那条）。运行面零改动：10 个实参本来就一直发着，本机那台把多余 4 枚照 cdecl 传过去了，所以旧产物行为不变；这一刀只是让**下一台编译器**也认。本地验：新 C3.exe 真编 olecon `=== x64 rc=0 OleCon.exe 465920 字节 / === x86 rc=0 OleCon.exe 414720 字节`（这两个数与登记那轮记录逐字对上）。
 
@@ -1242,6 +1244,13 @@ S9.4 打标记那一路的 PictureBox 判据必须问表、且不许把成员名
 ① 发码实物 = 10 个实参（本地 keep-for-debug 的 `Form1.c:100` 逐字读过）；② 定义 = 10 参；③ 头补齐后 = 10 参 —— 三头同值，再加两架构真编 rc=0 出 exe。**这一族的边界（记下别越界）**：哨兵管"头追不上体"，管不到"发码递的实参个数 ≠ 体"。真要钉那一头得让**每个控件方法的发码形状**与 RTL 原型对账，那是把 `controlOneArgMethod` / `controlZeroArgMethod` 那几张表的签名也拖进对账面的一件大活（且只有新 cl 才看得见后果）—— 已另立 §B72 记着，本轮不顺手做。
 
 
+
+
+### B72 控件方法的"发码实参个数"与 RTL 原型之间没有对账 —— 头/体那一半已钉住，这半只欠"多递"那一侧（账 #240 记下，**未开工**）
+
+账 #240 那一刀把"头追不上体"钉死了（`check_rtl_proto_arity.ps1`：RTL 里两头都有的名字，声明侧参数个数集合必须等于定义侧）。**没钉住的是第三头**：cgen 递出去的实参个数。本轮三者恰好同源（体 10 = 发码 10 = 补完的头 10），所以新 cl 的诊断只落在头那一份上。反过来的形状照样要命：若有人给某枚 `vb6_Ctrl_*` 加形参、只改头与体，而**发码仍递旧的个数**，那么多递这一侧在本机只是 `warning C4020`（见 §B71 那条不对称测量），到新 cl 才升成 `error C2197` —— 也就是说它会以**"门红、本地全绿"的形状再来一次，而这次红在别人刚登记的用例上**。
+
+要收的形状（照 §B70 的 ①-c 那张表的做法，别再单开第四份名单）：控件方法的"名字 → RTL 出口 + 实参形状"本来就该只有一处答案。现在 `controlZeroArgMethod` / `controlOneArgMethod` / `controlCanvasMethod` 三张表里**没有"这一档递几枚实参"这一格** —— 那个信息住在调用点（各码头自己拼参数串）。所以第一步是把实参个数写成表里的一个取值，第二步才是同一条针两面都问：拿表里的出口名去 RTL 头里查参数个数，与表里的形状对。第一步与 §B70 工单的第 (1) 步是同一件活（画布动词那张 `src/common/canvas_drawing.hpp`），所以这一格**排在 ① 之后做**，不要为它先立一张只有旗标没有形状的表。
 
 ## C. 仍在生效的口径与工具事实（与本文档等长的一半价值在这里；完整版见记忆库）
 
