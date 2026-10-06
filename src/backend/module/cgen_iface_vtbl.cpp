@@ -581,9 +581,34 @@ void CCodeGen::emitIfaceImplTables(Module& module) {
     // 只能在这里判，不能在使用点写裸强转）。
     const std::string fromIv = "vb6_iv_from_iv_" + clsId;
     const std::string testIid = "vb6_iv_test_iid_" + clsId;
+    // Fix <vbeclipse>: 实例 → 薄指针 的反查 (与 fromIv 的方向相反)。
+    // fromIv 收的是**薄指针** (&me->__iv_<I>), 拿首字��当槽表比对; 而接口成员桩
+    // (`vb6_I_<M>(me)`) 收到的是**实例指针**, 首字段是 __comObj 不是 vt, 直接喂
+    // fromIv 永远比不中 => 桩恒返回零值 (m_Scheme.BackColor 读成纯黑, 停靠面板
+    // 整片黑底)。这个助手从实例出发走 me->__iv_<I>.vt, 才是桩该用的判据。
+    const std::string thinOf = "vb6_iv_thin_of_" + clsId;
     h_.emitBlank();
     h_.emitLine("void* " + fromIv + "(void* self);  /* tB Interface B06b: iface ptr -> instance */");
     h_.emitLine("int32_t " + testIid + "(void* self, const void* riid);  /* tB Interface B06b: TypeOf <cls> Is <iface> */");
+    h_.emitLine("void* " + thinOf + "(void* instance);  /* Fix <vbeclipse>: instance -> iface ptr (本类没实现 = NULL) */");
+
+    c_.emitBlank();
+    c_.emitLine("void* " + thinOf + "(void* instance) {");
+    c_.indent();
+    c_.emitLine(clsStruct + "* me = (" + clsStruct + "*)instance;");
+    c_.emitLine("if (!me) return NULL;");
+    c_.emitLine("/* 按槽表地址认类, 不读 vt 字段 —— 这样对「实例被 COM 包装器握着」和「裸实例」");
+    c_.emitLine("   两种形态都成立, 也就不用关心 __comObj 清没清。 */");
+    for (const IfaceView* v : ifaces) {
+        const std::string id = cIdent(v->name);
+        c_.emitLine("if (me->__iv_" + id + ".vt == (const void*)&vb6_ivtbl_" + id + "_for_" + clsId + ")");
+        c_.indent();
+        c_.emitLine("return &me->__iv_" + id + ";");
+        c_.dedent();
+    }
+    c_.emitLine("return NULL;  /* 不是本类实例 */");
+    c_.dedent();
+    c_.emitLine("}");
 
     c_.emitBlank();
     c_.emitLine("void* " + fromIv + "(void* self) {");

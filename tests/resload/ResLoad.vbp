@@ -1,0 +1,3 @@
+Type=Exe
+Module=ResLoad; ResLoad.bas
+ResFile32="test.res"

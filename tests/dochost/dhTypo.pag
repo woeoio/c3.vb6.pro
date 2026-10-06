@@ -1,0 +1,18 @@
+VERSION 5.00
+Begin VB.PropertyPage dhTypo 
+   Caption         =   "B"
+   ClientHeight    =   3000
+   ClientLeft      =   0
+   ClientTop       =   0
+   ClientWidth     =   4000
+   ScaleHeight     =   3000
+   ScaleWidth      =   4000
+End
+Attribute VB_Name = "dhTypo"
+Option Explicit
+' 账 #219 的负控: 放行只针对那张表里登记过的名字。打错的 Changd 表里没人,
+' 必须继续报 VB3001 —— 否则这一格就成了「文档里写什么都行」。
+
+Public Sub WrongName()
+    Changd = True
+End Sub

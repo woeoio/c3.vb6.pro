@@ -24,7 +24,11 @@
 // P18-F: 控件子类化基础设施
 // ============================================================
 
-// 通用控件子类化安装 (复用VB6_OrigProc属性模式)
+// 通用控件子类化安装 (属性名 = 本层自己的槽位)
+// 账 #185 的口径: **每一层子类用自己的属性名**存它的原始窗口过程 (本层 = VB6_OrigProc,
+// RTL 自绘的 PictureBox/Image = VB6_ImageOrigProc, Frame = VB6_GBox_OrigProc,
+// 图形按钮 = VB6_GfxBtn_OrigProc, SSTab = VB6_SSTab_OrigProc)。两层同名 ⇒ 后装的那层
+// 看见"只装一次"那一问就直接返回, 于是它的事件臂一条也不响 (实测 PictureBox/Image 全灭)。
 void vb6_InstallControlSubclass(void* hwnd, void* subclassProc) {
     if (!hwnd) return;
     HWND hw = (HWND)hwnd;
@@ -155,10 +159,11 @@ int32_t vb6_GetScaleWidth(void* hwnd) {
     if (!hwnd) return 0;
     RECT rc;
     if (GetClientRect((HWND)hwnd, &rc)) {
-        /* VB6 ScaleWidth: client width in twips (1 twip = 1/1440 inch) */
-        /* Fix 184: 与 vb6_TwipToX 同一 DPI 源 (此前此处按真实 DPI、setter 按写死
-           的 15，Form_Resize 把两者混算后控件被缩小 20%)。 */
-        return vb6_XToTwipX(rc.right - rc.left);
+        /* VB6 ScaleWidth: 客户区宽度, 单位 = 该窗口自己的 ScaleMode (账 #175)。
+           Fix 184: 缇那一档仍走同一个 DPI 源 (vb6_ScalePxToUser 的 mode==1 分支
+           就是 vb6_XToTwipX), 所以窗体 (缺省 1=缇) 的读数与改动前逐字节相同。 */
+        return (int32_t)vb6_ScalePxToUser((double)(rc.right - rc.left),
+                                          vb6_WindowScaleModeSelf(hwnd), 0);
     }
     return 0;
 }
@@ -167,8 +172,9 @@ int32_t vb6_GetScaleHeight(void* hwnd) {
     if (!hwnd) return 0;
     RECT rc;
     if (GetClientRect((HWND)hwnd, &rc)) {
-        /* VB6 ScaleHeight: client height in twips */
-        return vb6_YToTwipY(rc.bottom - rc.top);
+        /* VB6 ScaleHeight: 客户区高度, 单位同上 (账 #175)。 */
+        return (int32_t)vb6_ScalePxToUser((double)(rc.bottom - rc.top),
+                                          vb6_WindowScaleModeSelf(hwnd), 1);
     }
     return 0;
 }
@@ -237,7 +243,7 @@ void vb6_SetLabelAutoSize(void* hwnd, int32_t val) {
         // 再按单字节量宽, 中文标签的 AutoSize 宽度会算错 (截字/留白)。
         wchar_t text[1024] = {0};
         GetWindowTextW((HWND)hwnd, text, 1024);
-        HFONT hFont = (HFONT)SendMessageW((HWND)hwnd, WM_GETFONT, 0, 0);
+        HFONT hFont = vb6_ControlFont((HWND)hwnd);   // 账 #204: 同一处问法 —— STATIC 自己不应这一问，裸问恒 NULL 就等于按 DC 默认字体算宽度
         HFONT hOld = (HFONT)SelectObject(hdc, hFont);
         SIZE sz;
         GetTextExtentPoint32W(hdc, text, (int)wcslen(text), &sz);

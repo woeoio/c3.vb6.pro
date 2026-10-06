@@ -8,6 +8,18 @@
     // 实现类的场景报错而非静默误编). 供 Set 接口引用赋值类型转换与 ByVal
     // 接口形参回调重建 (SUBCLASSPROC ABI) 使用.
     std::map<std::string, std::string> ifaceImplementersMap;
+    // Fix <vbeclipse>: 接口 → **全部**实现类名 (同名去重, 保持首见序)。
+    // 与上面那张"唯一实现类"表并存, 两者用途不同、不能互相替代:
+    //   · ifaceImplementersMap 用于**推断类型** (Set 接口引用赋值 / ByVal 接口形参
+    //     回调重建)。多实现类时置空, 让 cgen 报错而不是猜。
+    //   · 本表用于**接口成员桩的运行期分派**: 桩必须挨个试"me 是不是这些实现类
+    //     之一的实例", 命中就经它的槽表转调。IScheme 在 VbEclipse 里有 7 个实现类
+    //     (SchemeWinXP / SchemeEclipse3 / SchemeLonghorn / SchemeOffice2003 /
+    //     SchemeVS2005 / SchemeCustom / ...), 上面那张表对它是空的 —— 桩若因此
+    //     退成"恒返回零值", `m_Scheme.BackColor` 之类一律读到 0 (纯黑), 左侧停靠
+    //     面板整片黑底 (实测 24 次 SetBackColor 里 17 次 color=000000, 而
+    //     SchemeWinXP 定义的配色里根本没有黑色)。
+    std::map<std::string, std::vector<std::string>> ifaceAllImplementersMap;
     for (size_t i = 0; i < modules_.size(); i++) {
         if (!modules_[i]->isClassModule) continue;
         Symbol* clsSym = analyzers_[i]->symbolTable().lookupModule(modules_[i]->moduleName);
@@ -21,6 +33,12 @@
                 ifaceImplementersMap[ifLower] = clsSym->name;
             } else if (it->second != clsSym->name) {
                 it->second.clear();  // 多实现类 → 不可推断
+            }
+            // 同一实现类对同一接口只登记一次 (implementsNames 自身已去重, 但两个
+            // 大小写不同的接口名会归一到同一个 key, 这里再挡一次)。
+            std::vector<std::string>& all = ifaceAllImplementersMap[ifLower];
+            if (std::find(all.begin(), all.end(), clsSym->name) == all.end()) {
+                all.push_back(clsSym->name);
             }
         }
     }

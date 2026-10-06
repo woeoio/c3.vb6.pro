@@ -53,7 +53,11 @@ public:
 
     LiteralExpr(SourceLocation loc, LiteralKind k, std::string raw)
         : Expr(ASTNodeKind::LiteralExpr, loc),
-          literalKind(k), rawText(std::move(raw)), intValue(0) {}
+          // 账 #172: 联合体**整体**清零。原来只写 intValue(0) —— 那清了 4 个字节，
+          // 而 Date/Double 走的是 8 字节的 doubleValue，高 4 字节从没人写过
+          // ⇒ Debug 下恰好读到 0、Release/带 /RTCu 的构建读到垃圾（#1/1/1900# 发成
+          // -6.277e+66）。清零不等于「算对了」，值要由 parser 折进来。
+          literalKind(k), rawText(std::move(raw)), doubleValue(0) {}
 };
 
 // 标识符: x, MyVar, [带空格的名称]

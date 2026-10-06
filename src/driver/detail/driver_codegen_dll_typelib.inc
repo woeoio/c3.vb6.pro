@@ -17,6 +17,7 @@
         dllCgen.setDesignerFiles(&frmFiles_);  // Fix 112
         dllCgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static
         dllCgen.setInterfaceImplementers(&ifaceImplementersMap);  // P6.4+: 接口唯一实现类映射
+        dllCgen.setInterfaceAllImplementers(&ifaceAllImplementersMap);  // Fix <vbeclipse>: 接口全部实现类 (桩分派用)
         dllCgen.setDefaultInstanceClasses(&defaultInstanceClasses);  // P6.4+: 类模块默认实例
         // ai/022 B13b: dll_entry 的身份一律取 stage 2.7 的唯一出口 coclassIds_。
         // 只接 DLL 这条 cgen —— EXE 的 com_entry.c 本批刻意不接线（理由见 D57）。

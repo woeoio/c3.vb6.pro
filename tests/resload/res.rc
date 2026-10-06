@@ -1,0 +1,10 @@
+STRINGTABLE
+BEGIN
+    101 "ResString-OK"
+END
+102 BITMAP "res.bmp"
+103 ICON "res.ico"
+BIN1 CUSTOM "data.bin"
+IMG1 PNG "res.png"
+IMG2 WEBP "res.png"
+IMG3 PNG "alpha.png"

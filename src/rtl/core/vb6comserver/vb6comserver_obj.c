@@ -424,6 +424,68 @@ const vb6_CoClassDesc* vb6_FindCoClassDesc(const char* classVariable) {
     return NULL;
 }
 
+// Fix <vbeclipse> rev30: **工程类实例 → coclass 描述**的反查表。
+//
+// 为什么需要 (play78 --arch x86, 探针链逐级定位, 全部是直接铁证):
+//   `ucFolder.ContainsView(ViewId)` 生成成
+//     vb6_ComCall(vb6_ComGetObjectProp(ViewTabs, L"Tabs"), L"Contains", {ViewId}, 1)
+//   探针实测: `Tabs` 对象**拿得到** (rev25 的对象返回型桥在工作), `Contains`
+//   也**返回了非空指针**, 但那个 Variant 的 **vt=0 (VT_EMPTY)** —— 值没被填。
+//   根因: `tabsObj` 是**裸 `vb6_cls_List*`** (原生工程类实例, 首字段 `__comObj` 恒 NULL
+//   ⇒ 没有真 vtable)。`vb6_ComCall` 只有两条路: 宿主对象 (HWND/包装器/UC 实例) 或
+//   真 `IDispatch`; `vb6_ComIsDispatchable` 读首字段当 vtbl → 判否 →
+//   `GetIDsOfNames` 返回 DISPID_UNKNOWN ⇒ **返回值永远是 VT_EMPTY**。
+//   ⇒ `Contains` 恒 0 ⇒ `ucPerspective.ShowView` 遍历 5 个 folder 全部 miss
+//   (探针: `ContainsView=0` ×5) ⇒ **没有任何 folder 被激活 ⇒ 停靠面板全空**。
+//
+// 为什么不能靠包装器: `vb6_ComObject_FromInstance` 能把实例包成真 IDispatch, 但
+// **调用点拿到的就是裸指针**, 包一次就多一次引用计数与一次释放责任, 而这里只需要
+// "按方法名找到 invokeFunc 并调它"。所以直接查原生方法表。
+//
+// 为什么用注册表而不是遍历 coclass 表猜: 实例指针里**没有**任何 desc 痕迹
+// (`__comObj` 是 back-ptr 且为 NULL), 无法反推是哪个类。cgen 在类工厂里登记一次
+// 是唯一可靠办法 —— 而且工厂本来就是每个实例必经之处, 零额外成本。
+//
+// 生命周期: 实例销毁时不注销 (表是"弱"映射, 只按指针查)。工程类实例都是
+// vb6_Alloc 分配的, 指针值不会被复用成别的类实例之前就一直有效; 真正的风险是
+// **同一个堆地址先释放后被别的类复用**。为避免误命中, 命中后还要用
+// `vb6_ProjClassVerify` 复核 (见 vb6com_invoke.c 的分派处), 且本表只在
+// "该指针的工厂确实登记过" 时才算命中 —— 复用后的新实例会覆盖旧登记, 不会指向
+// 错误的类。
+#define VB6_PROJCLASS_MAX 512
+static struct { void* inst; const vb6_CoClassDesc* desc; } g_vb6_projClass[VB6_PROJCLASS_MAX];
+static volatile LONG g_vb6_projClassCount = 0;
+
+void vb6_RegisterProjectClassInstance(void* inst, const vb6_CoClassDesc* desc) {
+    LONG i;
+    if (!inst || !desc) return;
+    /* 先线性找: 同一实例可能被重复登记 (DllMain + 工厂各一次), 直接覆盖即可。*/
+    for (i = 0; i < g_vb6_projClassCount; i++) {
+        if (g_vb6_projClass[i].inst == inst) {
+            g_vb6_projClass[i].desc = desc;
+            return;
+        }
+    }
+    i = InterlockedIncrement(&g_vb6_projClassCount) - 1;
+    if (i < 0 || i >= VB6_PROJCLASS_MAX) return;      // 表满: 放弃登记 (退化成原行为)
+    g_vb6_projClass[i].inst = inst;
+    g_vb6_projClass[i].desc = desc;
+}
+
+const vb6_CoClassDesc* vb6_FindProjectClassDesc(const void* inst) {
+    LONG i;
+    if (!inst) return NULL;
+    for (i = 0; i < g_vb6_projClassCount && i < VB6_PROJCLASS_MAX; i++)
+        if (g_vb6_projClass[i].inst == inst) return g_vb6_projClass[i].desc;
+    return NULL;
+}
+
+// 同上的 void* 出口: 给**看不到 vb6_CoClassDesc 完整定义**的 TU 用
+// (如 vb6com_invoke.c 里只有前向声明, 直接声明返回该类型会 C2037)。
+const void* vb6_FindProjectClassDescRaw(const void* inst) {
+    return (const void*)vb6_FindProjectClassDesc(inst);
+}
+
 // Fix 099: 从 IDispatch 取回其 VB6 类实例裸指针 (Public 对象字段的 Property Let/Set
 // 桥接用: 把客户端传来的对象写进字段). 只认本 RTL 产出的 vb6_ComObject (用自身
 // vtable 指针判定), 外部 COM 对象/非对象返回 NULL (字段置空, 与 VB6 传 Nothing 等效).

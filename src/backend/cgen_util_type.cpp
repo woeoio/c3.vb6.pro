@@ -100,6 +100,24 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
             if (knownByteVars_.count(lower)) return Vb6Type::Byte;
             if (knownLongVars_.count(lower)) return Vb6Type::Long;
             if (knownLongPtrVars_.count(lower)) return Vb6Type::LongPtr;
+            // Fix <vbeclipse> rev20 → 账 #159: 设计器 (.ctl/.pag) 模块内裸写的宿主
+            // 伪成员 (ScaleWidth / hDC / hWnd / ScaleMode / Enabled …) 在 C 侧是 RTL
+            // 全局量 (extern int32_t 等, vb6rtl_userctl.h), **不是** vb6_VARIANT。
+            // 此前它们落到下面的符号表回退 —— 符号表里没有 (不是 VB6 声明的变量),
+            // 于是答 Variant, 比较就发成 `vb6_VarCmpLongLt(&vb6_UserControl_ScaleWidth,
+            // …)` (ucTabStrip.ctl:146 实测): 拿 int32_t* 当 vb6_VARIANT* 传 (RTL 签名
+            // 是 vb6_VARIANT*, 16 字节), 读 4 字节对象的头 16 字节当 vt + lVal ⇒ 比较
+            // 结果是垃圾。此前能编过只是因为 MSVC 把它当 C4133 指针类型不兼容警告放行。
+            // 成员名与类型现在由 kHostPseudoRows 一处回答; requireBare=true 与本文件
+            // 发射侧的 HPF_BARE 门同口径 (两条路必须答同一个数)。判据要求无同名局部
+            // (Dim ScaleWidth As Long 要保住自己的类型), 与发射侧的 knownLocalVars_ 门一致。
+            if (isDesignerModule_ && !knownLocalVars_.count(lower)) {
+                Vb6Type hpT = Vb6Type::Unknown;
+                if (hostPseudoValueType(isPropertyPageDesigner_ ? "PropertyPage" : "UserControl",
+                                        lower, hpT, true)) {
+                    return hpT;
+                }
+            }
             if (knownVariantVars_.count(lower)) return Vb6Type::Variant;
             // 检查符号表
             auto* sym = symTab_.lookup(id.name);
@@ -152,9 +170,16 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
                 bin.op == BinaryOp::Le || bin.op == BinaryOp::Ge ||
                 bin.op == BinaryOp::Like || bin.op == BinaryOp::Is)
                 return Vb6Type::Boolean;
-            // 逻辑运算符 → Boolean (VB6中)
-            if (bin.op == BinaryOp::And || bin.op == BinaryOp::Or || bin.op == BinaryOp::Xor)
-                return Vb6Type::Boolean;
+            // VB6 的 And/Or/Xor/Eqv/Imp 是**位运算**，结果类型只在
+            // TypeSystem::bitwiseResult 一处写 (账 #216：以前这份 oracle 无条件答
+            // Boolean，于是 `CStr(a Or b)` 打成 True、`vb6_ComPack*(hDC Or 0)` 装箱成
+            // VT_BOOL —— 值一直是位的数，只是类型被问错)。
+            if (bin.op == BinaryOp::And || bin.op == BinaryOp::Or ||
+                bin.op == BinaryOp::Xor || bin.op == BinaryOp::Eqv ||
+                bin.op == BinaryOp::Imp) {
+                return TypeSystem::bitwiseResult(inferExprType(*bin.left),
+                                                  inferExprType(*bin.right));
+            }
             // 浮点除法 → Double
             if (bin.op == BinaryOp::Div) return Vb6Type::Double;
 
@@ -177,7 +202,10 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
         }
         case ASTNodeKind::UnaryExpr: {
             auto& un = static_cast<UnaryExpr&>(expr);
-            if (un.op == UnaryOp::Not) return Vb6Type::Boolean;
+            // 同上：`Not` 对数值是按位取反，口径只在 TypeSystem::logicalNotResult 一处。
+            if (un.op == UnaryOp::Not) {
+                return TypeSystem::logicalNotResult(inferExprType(*un.operand));
+            }
             return inferExprType(*un.operand);
         }
         case ASTNodeKind::IndexOrCallExpr: {
@@ -203,72 +231,20 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
         }
         case ASTNodeKind::MemberAccessExpr: {
             auto& ma = static_cast<MemberAccessExpr&>(expr);
-            // C29-1a: 内建窗体控件的整数型属性必须在这里就判成 Long。`Left` 同时是 VB
-            // 内置函数名, 落到下面的符号表查找会被折成 String (Fix 081i 记过同一类),
-            // 于是 `If Line1.Left = 600` 生成 vb6_StrCmp(整数值, BSTR) —— 把 600 当
-            // 指针解引用, 运行期直接段错误 (实测就是这条)。口径同上面的
-            // UserControl.ScaleWidth 分支: 按"对象是内建控件 + 属性名"给类型。
-            // 只认内建控件类型: 工程内 .ctl 宿主同名属性 (如 Value) 由它自己的符号表说话。
-            static const char* const kNumericFc[] = {
-                "left", "top", "width", "height",
-                "shape", "fillstyle", "borderwidth", "borderstyle",
-                "fillcolor", "bordercolor", "x1", "y1", "x2", "y2",
-            };
-            std::string fcName;   // 命中的内建控件名 (空 = 这不是内建控件的属性访问)
-            if (ma.object && ma.object->kind == ASTNodeKind::IdentifierExpr) {
-                fcName = Symbol::toLower(static_cast<IdentifierExpr&>(*ma.object).name);
-            } else if (ma.object && ma.object->kind == ASTNodeKind::IndexOrCallExpr) {
-                // 控件数组的元素 (`lamp(1).Left`): 对象位是 `名字(下标)`, 同一条规则。
-                // 只认确实在 knownFormControls_ 里的名字, 所以函数调用返回对象
-                // (`GetWidget(1).Left`) 不会被误判。
-                auto& callFc = static_cast<IndexOrCallExpr&>(*ma.object);
-                if (callFc.callee && callFc.callee->kind == ASTNodeKind::IdentifierExpr
-                    && callFc.positional.size() == 1) {
-                    fcName = Symbol::toLower(
-                        static_cast<IdentifierExpr&>(*callFc.callee).name);
-                }
-            }
-            if (!fcName.empty()) {
-                auto fcIt = knownFormControls_.find(fcName);
-                if (fcIt != knownFormControls_.end() && fcIt->second != FrmControlType::Unknown) {
-                    std::string memFc = Symbol::toLower(ma.memberName);
-                    for (const char* n : kNumericFc) {
-                        if (memFc == n) return Vb6Type::Long;
-                    }
-                    // C29-1b: 文件系统三控件的四个字符串属性。不登记则推断成 Variant,
-                    // `File1.FileName = File1.List(0)` 这类比较就走 vb6_VarCmpEq 而不是
-                    // vb6_StrCmp —— 右边 (RTL 声明 void*) 装箱成 VT_UNKNOWN, 于是
-                    // 同一条读数 x64 为真、x86 为假。VB6 里这四个属性是 String, 类型
-                    // 就该在这里落地, 不在用例里绕。
-                    if (fcIt->second == FrmControlType::DriveListBox
-                        || fcIt->second == FrmControlType::DirListBox
-                        || fcIt->second == FrmControlType::FileListBox) {
-                        static const char* const kStringFc3[] = {
-                            "drive", "path", "pattern", "filename", "list",
-                        };
-                        for (const char* n : kStringFc3) {
-                            if (memFc == n) return Vb6Type::String;
-                        }
-                    }
-                    // D6 / C29-9: CommonDialog 的成员面。不登记 ⇒ 字符串属性被判成
-                    // Variant ⇒ 比较/拼接走错箱（C29-1b 那条"x64 真、x86 假"的同族坑），
-                    // 而 `CancelError` 这类布尔判成 Variant 还会让 `If CD1.CancelError`
-                    // 走 VarCmp 而不是直接真值判断。
-                    if (fcIt->second == FrmControlType::CommonDialog) {
-                        static const char* const kStrFcCd[] = {
-                            "filter", "filename", "filetitle", "dialogtitle",
-                            "initdir", "defaultext", "fontname",
-                        };
-                        static const char* const kNumFcCd[] = {
-                            "flags", "cancelerror", "color", "min", "max", "copies", "fontsize",
-                        };
-                        for (const char* n : kStrFcCd) {
-                            if (memFc == n) return Vb6Type::String;
-                        }
-                        for (const char* n : kNumFcCd) {
-                            if (memFc == n) return Vb6Type::Long;
-                        }
-                    }
+            // C29-1a + P20-42 + 账 #229 + 账 #231: 对象是窗体上的已知控件 (单枚**或**数组
+            // 元素) 时, 属性类型**只问 controlPropType 这一张表**。
+            // 为什么必须问在这条 case 的**最前面**: 兜底那条 lookupModule(memberName) 按成员
+            // **裸名**查模块级符号, 凡是与模块级/内置符号同名的控件属性都会被顶掉 ——
+            // 实测 `SSTab1.Tab` 撞上返回 BSTR 的内置函数 `Tab` → 判成 String → Debug.Print
+            // 拼接不套 vb6_CStr(vb6_VariantFromValue(...)) → 而 RTL 的 vb6_SSTab_GetTab 返回
+            // int32_t → 整数当 BSTR 指针解引用 → 0xC0000005。控件数组那一形 (`uArr(0).Left`)
+            // 以前根本不进这条规则, 掉进同一个坑 (账 #229)。
+            // 只认内建控件类型: 工程内 .ctl 宿主同名属性由它自己的符号表说话 (表内那道闸)。
+            {
+                FrmControlType ctlType = FrmControlType::Unknown;
+                if (ctrlTypeOfMemberObject(ma.object.get(), ctlType)) {
+                    Vb6Type pt = controlPropType(ctlType, ma.memberName);
+                    if (pt != Vb6Type::Unknown) return pt;
                 }
             }
             // P24-12: Err对象特殊处理
@@ -285,22 +261,20 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
                     if (memLower == "lastdllerror") return Vb6Type::Long;
                 }
             }
-            // czUI fix: 宿主伪对象成员类型 — UserControl.ScaleWidth/Height 等
-            // 是 RTL int32_t 全局 (vb6rtl_userctl.h)。此前推断为 Variant,
-            // 比较时被取地址当 vb6_VARIANT* 读垃圾值 (MouseUp 里
-            // X < ScaleWidth 恒假 → RaiseEvent Click 永不触发 → Connect 无响应)。
+            // 账 #159: 限定形态的宿主伪成员 (<UserControl|PropertyPage|Extender|
+            // Ambient>.<成员>) 与裸名那一路**同源** —— 都问 kHostPseudoRows。
+            // 此前这里是第五份成员名清单 (7 枚, 一律答 Long, 且不含 hWnd/hDC/
+            // ScaleMode/Extender/Ambient) ⇒ 同一个值写 `ScaleWidth` 答 Long、写
+            // `UserControl.hWnd` 两边都不答 ⇒ 装箱比较恒假。MouseUp 里
+            // `X < ScaleWidth` 恒假 → RaiseEvent Click 永不触发 (czUI 实测) 就是它。
             if (ma.object && ma.object->kind == ASTNodeKind::IdentifierExpr) {
-                auto& objIdCz = static_cast<IdentifierExpr&>(*ma.object);
-                std::string objLowerCz = objIdCz.name;
-                std::transform(objLowerCz.begin(), objLowerCz.end(), objLowerCz.begin(), ::tolower);
-                if (objLowerCz == "usercontrol" || objLowerCz == "propertypage") {
-                    std::string memLowerCz = ma.memberName;
-                    std::transform(memLowerCz.begin(), memLowerCz.end(), memLowerCz.begin(), ::tolower);
-                    if (memLowerCz == "scalewidth" || memLowerCz == "scaleheight"
-                        || memLowerCz == "left" || memLowerCz == "top"
-                        || memLowerCz == "width" || memLowerCz == "height"
-                        || memLowerCz == "enabled") {
-                        return Vb6Type::Long;
+                const IdentifierExpr& objIdHp = static_cast<const IdentifierExpr&>(*ma.object);
+                const std::string objLowerHp = Symbol::toLower(objIdHp.name);
+                if (objLowerHp == "usercontrol" || objLowerHp == "propertypage"
+                    || objLowerHp == "extender" || objLowerHp == "ambient") {
+                    Vb6Type hpT = Vb6Type::Unknown;
+                    if (hostPseudoValueType(objLowerHp, ma.memberName, hpT, false)) {
+                        return hpT;
                     }
                 }
             }
@@ -373,21 +347,6 @@ Vb6Type CCodeGen::inferExprType(Expr& expr) const {
                         }
                         break;
                     }
-                }
-            }
-            // P20-42: 对象是窗体上的已知控件时, 属性类型先问控件属性表。
-            // **不能**直接掉到下面的 lookupModule(memberName): 那是按成员**裸名**
-            // 查模块级符号, 凡是与模块级/内置符号同名的控件属性都会被顶掉。
-            // 实测 `SSTab1.Tab` 撞上返回 BSTR 的内置函数 `Tab` → 判成 String →
-            // Debug.Print 拼接不套 vb6_CStr(vb6_VariantFromValue(...)), 而 RTL 的
-            // vb6_SSTab_GetTab 返回 int32_t → 整数当 BSTR 指针解引用 → 0xC0000005。
-            if (ma.object && ma.object->kind == ASTNodeKind::IdentifierExpr) {
-                auto& objIdCtl = static_cast<IdentifierExpr&>(*ma.object);
-                std::string objLowerCtl = Symbol::toLower(objIdCtl.name);
-                auto itCtl = knownFormControls_.find(objLowerCtl);
-                if (itCtl != knownFormControls_.end()) {
-                    Vb6Type pt = controlPropType(itCtl->second, ma.memberName);
-                    if (pt != Vb6Type::Unknown) return pt;
                 }
             }
             // 查找成员函数/属性的返回类型
@@ -547,6 +506,23 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
     }
 }
 
+// 账 #238: 比较发码那一族"能不能把这个操作数按 vb6_VARIANT* 交出去"的唯一判据。
+// 只回答**裸名字**那一形 (其余形状今天的取址判据不动, 交给调用方自己的形状测试):
+// 名字是否 vb6_VARIANT 那份存储, 问 isDefinitelyVariantExpr —— 它读声明那几张表
+// (knownVariantVars_ / knownBstrVars_ / knownLongVars_ / knownDoubleVars_ /
+// knownSingleVars_ / knownByteVars_ / knownArrays_ / moduleIntConstValues_) 再加符号表,
+// 正是这几张表把 `Dim d As Double` 钉成 double 的。以前 vb6_VarCmp*(&A, &B) 的四个取址点
+// 各自按"看着像左值"就 &，于是标量局部的地址被当 VARIANT* 递进 RTL: 按 VARIANT 的布局读一个
+// 8 字节标量 ⇒ 相等的两个数答 False (实测), 且读过头 (越界读)。
+bool CCodeGen::cmpOperandMayTakeAddr(const std::string& c, Expr* ast) const {
+    if (c.empty()) return true;
+    if (!(std::isalpha(static_cast<unsigned char>(c[0])) || c[0] == '_')) return true;
+    for (char ch : c) {
+        if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') return true;
+    }
+    return ast && isDefinitelyVariantExpr(*ast);
+}
+
 
 // ============================================================
 // Fix 038b-1: 基于 C 表达式字符串的 Variant 检测
@@ -597,19 +573,29 @@ bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
                                  //   Dim D() As Byte: D = LoadResData(...) 赋值
                                  //   需 VariantToSafeArray1D 提取 (cLang LoadData/LoadInfo C2440).
         // vbeclipse: LoadResPicture 与 LoadResData 同族, RTL 签名都是
-        //   vb6_VARIANT vb6_LoadResPicture(int32_t, int32_t) (vb6rtl_runtime.h:66 /
-        //   vb6rtl_com.c:526). 不登记会让
-        //   `Function getResourceIcon(...) As IPictureDisp` 的
+        //   vb6_VARIANT vb6_LoadResPicture(vb6_VARIANT, vb6_VARIANT) (vb6rtl_runtime.h).
+        //   不登记会让 `Function getResourceIcon(...) As IPictureDisp` 的
         //   `Set getResourceIcon = LoadResPicture(...)` 直接 `vb6_ret_X =
         //   vb6_LoadResPicture(...)` → C2440 (modResources.c 22/24/33). 登记后走
         //   Set 的 Fix 038b-6 分支包 vb6_VariantToObjectVal 提取对象指针.
+        // Fix <vbeclipse> (2026-10-06): LoadRes 实参/返回全面 Variant 化 (2026-10-05
+        //   实测 LoadResData("BIN1","CUSTOM") 的 BSTR 实参被截进 int32 形参), 三函数
+        //   返回都是 vb6_VARIANT — LoadResString 也一样, 不登记则 `s = LoadResString(1)`
+        //   发 vb6_BSTR_Assign 直收 Variant → C2440.
         "vb6_LoadResPicture(",
+        "vb6_LoadResString(",
         "vb6_DispCallByVtbl(",  // Fix 068: DispCallByVtbl returns Variant
         // Fix 110w: VB6 CallByName 返回 vb6_VARIANT (见 vb6rtl_class_com.h) —
         // 参与算术/关系运算或需 BSTR 时必须按 Variant 处理, 否则 C2088
         // ("*" 对于 struct 非法; Charts 2020 ClsResizer.cls:142/148
         //  CallByName(oCtrl, ..., VbGet) * 100).
         "vb6_CallByName(",
+        // Fix <vbeclipse> rev37: ParamArray 元素按**声明类型**解包 (rev37 前一律
+        //   GetLong ⇒ String 实参静默读成 0)。Variant 元素的解包函数返回整只
+        //   VARIANT, 必须登记成 Variant 表达式, 否则下游 BSTR/Variant 目标
+        //   不会走 vb6_VariantToString / wrapVariantValue, 直接 C2440
+        //   (ClsResizer.AddControlFont 的 `.PropFont = PropFont(i)`)。
+        "vb6_PA_GetVariant(",
     };
     for (const auto& prefix : variantPrefixes) {
         if (cExpr.compare(start, prefix.size(), prefix) == 0) return true;
@@ -801,6 +787,11 @@ std::string CCodeGen::getRuntimeParamCType(const std::string& funcName, size_t p
         // 提取 → 传入 GetTextExtentPoint32W/字符串 API 崩溃. 注册 BSTR 形参.
         {"vb6_UserControl_TextWidth",      {"BSTR"}},
         {"vb6_UserControl_TextHeight",     {"BSTR"}},
+        // 账 #196: 控件那一对（Form / PictureBox 的 .TextWidth/.TextHeight）同一条规矩 ——
+        // 第一个实参是句柄(void*)，第二个必须是 BSTR；实参是 Variant 时缺这条就
+        // 把 vb6_VARIANT 结构体裸传给 GetTextExtentPoint32W ⇒ 崩（Fix 113 记的那一味）。
+        {"vb6_ControlTextWidth",           {"void*", "BSTR"}},
+        {"vb6_ControlTextHeight",          {"void*", "BSTR"}},
         {"vb6_UserControl_AsyncRead",      {"BSTR", "int32_t", "BSTR", "int32_t"}},
         {"vb6_UserControl_PropertyChanged", {"BSTR"}},
         {"vb6_UserControl_CancelAsyncRead", {"BSTR"}},
@@ -1009,6 +1000,46 @@ std::string CCodeGen::narrowCheckAssign(Expr* target, Expr* value,
     auto& id = static_cast<IdentifierExpr&>(*target);
     std::string lower = id.name;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    // Fix <vbeclipse> rev36: **Byte 数组成员**不是标量, 绝不套窄整型溢出检查。
+    //
+    // 症状 (Charts 2020 实测, LabelPlus.ctl `Dim m_Caption() As Byte` +
+    // `Property Let Caption`): 生成
+    //   me->m_Caption = vb6_ChkByte(vb6_StringToByteArray((*New_Caption)));
+    // vb6_StringToByteArray 返回 `vb6_SafeArray1D*` (头文件 vb6rtl_builtin.h:362),
+    // x86 下这个指针被当 Byte 值送进 vb6_ChkByte ⇒ 必然落在 0~255 之外 ⇒
+    // run-time error 6 "Overflow", 启动即弹框 (实测 exit=0x00000006)。
+    // ⚠ 右侧**转换本身是对的** (Fix 140 已把 BSTR → vb6_StringToByteArray 改写对),
+    //   错的只是外面多套的那层标量检查 —— 对照 getter 是 `vb6_ByteArrayToString(me->m_Caption)`,
+    //   没有检查。所以这里必须**只**去掉检查, 不要动右值改写。
+    //
+    // 为什么在这里拦: 下面所有分支都只认**标量**类型表 (knownByteVars_ 等装的
+    // 是 `As Byte` 标量), 数组成员一个都不在 ⇒ 落到 `inferExprType` 兜底,
+    // 而它按元素类型答 Byte ⇒ 被当标量。`knownByteArrayVars_` /
+    // `classByteArrayMembers_` 正是为"这是字节数组"准备的登记表(Fix 140 起),
+    // 全代码库十几处消费点都在查它, **唯独这里漏了** —— 那才是本条的真根因。
+    // `classByteArrayMembers_` 要一并查: 类字段在过程入口从 knownByteArrayVars_
+    // copy 回, 但那是 copy 不是同一容器, 且保守起见两张都查。
+    //
+    // 判据用 `lower` 全名(含 m_ 前缀)。属性形参(如 New_Caption)不在这两张表里,
+    // 不受影响 —— 只有**被赋值的左值**进这条路径。
+    //
+    // ⚠ `id.name` 的形态要归一: 成员赋值的目标在这里既可能带 `me->` 前缀也可能不带,
+    //   而 classByteArrayMembers_ 登记的是 `m_X` / `X` 两种**裸名**(见
+    //   cgen_base_generate_state_scan.inc:53-54 的 mLower/oLower)。三处都试一遍,
+    //   否则带前缀的那条(实测就是它)永远命不中 —— 漏这一步会让本修复看起来"没生效"。
+    if (knownByteArrayVars_.count(lower) || classByteArrayMembers_.count(lower))
+        return cValue;
+    {
+        std::string bare = lower;
+        if (bare.compare(0, 4, "me->") == 0) bare = bare.substr(4);
+        else if (bare.size() > 4 && bare[0] == '(' && bare[1] == '*'
+                 && bare.back() == ')') bare = bare.substr(2, bare.size() - 3);
+        if (bare != lower
+            && (knownByteArrayVars_.count(bare) || classByteArrayMembers_.count(bare)))
+            return cValue;
+    }
+
     if (knownByteVars_.count(lower))        tt = Vb6Type::Byte;
     else if (knownIntVars_.count(lower))    tt = Vb6Type::Integer;
     else if (knownBoolVars_.count(lower))   return cValue;   // 值域只有 -1/0

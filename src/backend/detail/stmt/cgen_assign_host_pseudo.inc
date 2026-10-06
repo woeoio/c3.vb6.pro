@@ -71,17 +71,10 @@
                 // 成员名按 RTL 约定规范化（源码 hDc → RTL hDC，见 canonicalHostPseudoMember）。
                 const std::string tgtHp = "vb6_" + cIdent(objNameHp) + "_"
                     + cIdent(canonicalHostPseudoMember(objNameHp, maHp->memberName));
-                // 数值型宿主成员：Variant RHS 先转 Long（其余是句柄/对象成员，原样直传）。
-                static const char* kNumericHostMembers[] = {
-                    "backcolor", "forecolor", "enabled", "mousepointer", "oledropmode",
-                    "righttoleft", "scalewidth", "scaleheight", "scalemode", "appearance",
-                    "borderstyle", "containerhwnd", "autoredraw", "width", "height",
-                };
-                if (cExprIsVariant(valHp)) {
-                    const std::string memLowerHp = Symbol::toLower(maHp->memberName);
-                    for (const char* numHp : kNumericHostMembers) {
-                        if (memLowerHp == numHp) { valHp = "vb6_VariantToLong(" + valHp + ")"; break; }
-                    }
+                // 账 #159: 要不要拆数值由那张表答 (目标槽是整数才拆; 句柄/对象/字符串
+                // 成员按原样直传)。此前这里是又一份成员名清单 kNumericHostMembers。
+                if (cExprIsVariant(valHp) && hostPseudoIsNumeric(objLowerHp, maHp->memberName)) {
+                    valHp = "vb6_VariantToLong(" + valHp + ")";
                 }
                 c_.emitLine(tgtHp + " = " + valHp + ";  /* <host pseudo>.<prop> = v */");
                 return;

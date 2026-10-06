@@ -21,3 +21,6 @@
 #include "vb6forms_mdi.h"
 #include "vb6forms_webview.h"
 #include "vb6forms_controls.h"
+// Form/Printer 绘图方法家族 (PSet/Line/Circle/Point/Cls)。放在最后: 它 include
+// vb6forms.h 自身, 靠这里的末尾位置保证前序声明都可见。
+#include "vb6forms_draw.h"

@@ -1,4 +1,7 @@
 #include "semantics/semantic_analyzer.hpp"
+#include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
+#include "common/int_literal.hpp"   // 账 #194: 整数字面量的单一出口
+#include "common/host_pseudo.hpp"  // 账 #219: 裸写伪成员问那张表
 #include "semantics/interface_sig.hpp"  // tB Interface/继承线共用的小写键函数 (B07b)
 #include <algorithm>
 #include <cctype>
@@ -387,8 +390,12 @@ std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type
     if (lit) {
         switch (lit->literalKind) {
             case LiteralKind::Integer:
+                // 账 #194: 按**数值**重打, 不抄 rawText —— 词法把 VB 的类型后缀 (`3%` / `0&` /
+                // `&H10&`) 留在 rawText 里, 抄进生成 C 就是 C2059 "bad suffix on number"
+                // (实测 ucTreeMaps PropPagFMR.c 723/923: `if (!_has_FontIndex) (*FontIndex) = 0&;`)。
+                return intLiteralText(static_cast<int64_t>(lit->intValue), false);
             case LiteralKind::Long:
-                return lit->rawText;  // "10", "-1" 等
+                return intLiteralText(lit->longValue, true);
             case LiteralKind::LongPtr: {
                 // Fix 082: rawText 带 VB 后缀 ("&H80000000^"), 原样返回会写进生成 C →
                 // C2059. 与 cgen_expr.cpp 的 LongPtr 分支同规则: LongPtr 是平台相关宽度
@@ -408,20 +415,11 @@ std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type
                 return "((intptr_t)" + t + "ULL)";
             }
             case LiteralKind::Single: {
-                // Fix 133z: 单精度默认值 `1!` → C 浮点字面量 `1.0000000f`.
-                // 原样返回 rawText ("1!") 会写进生成 C → 语法错误
-                // (czUI.ctl: `Optional ByVal penWidth As Single = 1!` →
-                // `if (!_has_penWidth) penWidth = 1!;` → C2059).
-                float fv = lit->floatValue;
-                std::ostringstream oss133z;
-                char buf133z[64];
-                snprintf(buf133z, sizeof(buf133z), "%.9g", (double)fv);
-                oss133z << buf133z;
-                if (strchr(buf133z, '.') == nullptr && strchr(buf133z, 'e') == nullptr
-                    && strchr(buf133z, 'E') == nullptr)
-                    oss133z << ".0";
-                oss133z << "f";
-                return oss133z.str();
+                // Fix 133z: 单精度默认值 `1!` 必须打成 C 浮点字面量 —— 原样返回 rawText ("1!")
+                // 会写进生成 C → C2059 (czUI.ctl: `Optional ByVal penWidth As Single = 1!`)。
+                // 账 #188: 「后缀前必须有 '.' 或指数」这条形状不再在这里手写, 归
+                // common/float_literal.hpp 一处 (1! → `1.0f`)。
+                return floatSingleLiteral(lit->floatValue);
             }
             case LiteralKind::Double: {
                 // Fix 133z: parser 无 Single 字面量kind, `1!`/`0!` 以 Double 存储,
@@ -726,5 +724,38 @@ bool SemanticAnalyzer::namesProjectLevel(const std::string& name) const {
     if (projPublicProcs_.count(lk)) return true;
     return memberObjCtx_ && projModuleNames_.count(lk);
 }
+
+// 判据 = (文档类别, 对象名) 一格一格对，不靠字符串猜 (.ctl 与 .pag 的隐式对象前缀不同:
+// vb6_UserControl_* / vb6_PropertyPage_*)。`extender` / `ambient` 只有 UserControl 有。
+bool SemanticAnalyzer::isDocumentHostObject(const std::string& name) const {
+    if (name.empty() || !currentModule_) return false;
+    const std::string lk = ifaceLower(name);
+    if (lk == "vba") return true;   // VBA 全局库前缀, 任何模块都合法
+    const DocumentKind k = currentModule_->docKind;
+    if (lk == "usercontrol") return k == DocumentKind::UserControl;
+    if (lk == "propertypage") return k == DocumentKind::PropertyPage;
+    if (lk == "extender" || lk == "ambient") return k == DocumentKind::UserControl;
+    return false;
+}
+// 裸写的文档成员（账 #219）：判据 = 那张宿主伪成员表（common/host_pseudo.hpp）里带 HPF_BARE
+// 的那几行。发码侧从来只问这张表，语义层以前不问 —— 于是同一句 `Changed = True`
+// 一边发成正确的 vb6_PropertyPage_Changed、一边每条配一句 VB3001「未声明的标识符」
+// （语料实测 24 条，全在这一枚名字上）。收到同一张表上之后，以后往表里加一行 HPF_BARE
+// 不用再来改这里。
+// 同一格还搬走了一枚硬障碍：它以前靠 RTL 导出 `int16_t Changed` 这枚**外部链接的裸名
+// C 全局**落地 —— 与账 #220 那两枚旗标同型：工程里有一枚模块级变量叫 Changed 就撞成 C2371
+// （探针 `.build/b229out/pjChanged.bas`：`Public Changed As Long` ⇒ 连 exe 都不出）。发码侧从来
+// 交的是带前缀那一个名字（语料 186 处、裸名 0 处），所以那枚全局是纯负担，已撤。
+bool SemanticAnalyzer::isDocumentBarePseudoMember(const std::string& name) const {
+    if (!currentModule_ || name.empty()) return false;
+    const char* obj = nullptr;
+    switch (currentModule_->docKind) {
+        case DocumentKind::UserControl:  obj = "UserControl";  break;
+        case DocumentKind::PropertyPage: obj = "PropertyPage"; break;
+        default: return false;   // 标准模块 / 窗体没有这一族隐式文档成员
+    }
+    return hostPseudoBareEligible(obj, name);
+}
+
 
 } // namespace vb6c3

@@ -51,6 +51,23 @@ int vb6_DpiY(void);
 int vb6_XToTwipX(int px);
 int vb6_YToTwipY(int px);
 
+// 账 #175: 控件坐标的单位 = 所在容器的 ScaleMode (窗体或 UserControl 的 .ctl/.frm
+// 声明值)。这一对是**唯一**的像素<->容器单位换算入口; 缇 (mode 1) 那一档与上面的
+// vb6_TwipToX/XToTwipX 逐字节等价。RTL 里任何"读/写控件几何"的点位都走这一对,
+// 禁止再默认缇。
+double vb6_ScalePxToUser(double px, int32_t mode, int vert);
+int    vb6_ScaleUserToPx(double user, int32_t mode, int vert);
+// 1 设备像素 = 多少该 ScaleMode 单位 (vb6rtl_com.c 的 ScaleX/ScaleY 也读这一张表,
+// 账 #177: 全 RTL 只留这一份单位表)。
+double vb6_ScaleUnitsPerPx(int32_t mode, int vert);
+// 目标窗口的容器 ScaleMode: 容器是 UserControl 宿主 → 它的 .ctl ScaleMode;
+// 否则读窗体的 VB6_ScaleMode 属性 (缺省 1=缇)。
+int32_t vb6_ContainerScaleMode(void* hwndParent);
+// 窗口自身的 ScaleMode (ScaleWidth/ScaleHeight 那一族读法的单位)。
+int32_t vb6_WindowScaleModeSelf(void* hwnd);
+// 该 HWND 是 UserControl 宿主时返回它 .ctl 声明的 ScaleMode, 否则 0。
+int32_t vb6_UC_WindowScaleMode(const void* hwnd);
+
 // ============================================================
 // 控件创建
 // ============================================================
@@ -141,6 +158,42 @@ void vb6_SetAppInstance(void* hInstance);
 // 显示窗体 (vbModeless=0, vbModal=1)
 // 模态时: 禁用父窗口, 进入本地消息循环直到窗体关闭
 void vb6_ShowForm(void* hwnd, int modal);
+
+// Fix <vbeclipse>: 只 Load 不 Show —— 抽干延迟 Form_Load, 窗体保持隐藏
+void vb6_LoadForm(void* hwnd);
+
+// Fix <vbeclipse> rev28: 窗体 Form_Resize 的**延后触发**口 (WM_SIZE 里排, 消息循环里跑)。
+//
+// 为什么需要: WM_SIZE 是 SetWindowPos/MoveWindow 的**同步** SendMessage, 停靠布局里
+// 一整串嵌套 Move (ucPerspective → ucFolder → ViewArea → 视图窗体) 全在同一个调用栈里
+// 跑完才返回。等它返回时, 各控件才拿到**最终**尺寸。所以 Form_Resize 必须延到本轮
+// 布局收尾后再跑, 否则它按**同步中间态**去摆子控件。
+// 实证 (play78 --arch x86, 探针): 直接在 WM_SIZE 里跑, frmViewViews 的
+// `tvwViews.Move 0, 0, ScaleWidth, ScaleHeight` 拿到的是 0x0 ⇒ 树控件被摆成 0x0。
+// 这与 UserControl 侧的 vb6_UC_QueueDesignResize (rev23) 是**同一类问题的两个面**。
+//
+// 与 UC 侧同款做法: PostMessage 一个 WM_APP 消息 + 窗口属性去重 (rec/结构体都不动,
+// 避开"跨边界布局式初始化的字段顺序"那个坑)。cgen 侧在窗体 WndProc 里发一条
+// `case VB6_FORM_FR_MSG:` 调 vb6_DrainFormResize(hwnd) 即可。
+#define VB6_FORM_FR_MSG  (WM_APP + 0x61)
+#define VB6_FORM_FR_PROP L"C3_FORM_FR_PENDING"
+int32_t vb6_QueueFormResize(void* hwnd);
+void   vb6_DrainFormResize(void* hwnd);
+
+// Fix <vbeclipse> rev29: 窗体 Form_Resize 的**直调**通道。
+// 存的是 cgen 生成的 `vb6_<Form>_Form_Resize` 的地址 (通过窗口属性关联到 HWND),
+// 供 RTL 在 vb6_ControlMove 收口处同步调用 —— 不依赖 WM_SIZE, 也就绕开了
+// "启动期不在消息循环里 ⇒ PostMessage 无人 Dispatch" 这个死结。
+//
+// 为什么不走排队 (rev29 前一版实测失败, 留档):
+//   停靠视图窗体一生只收到 1 次 WM_SIZE(0x0), rev28 的 case VB6_FORM_FR_MSG
+//   永远等不到; 改在 vb6_ControlMove 里 PostMessage 也不行 —— 排队那一刻还在
+//   Form_Load 的同步栈里, 消息没人 Dispatch, 且实测堆损坏 0xC0000374。
+// 直调为何安全: SetWindowPos 已完成, Form_Resize 读到的是**终值**; 它内部再 Move
+// 子控件时由 sizeChanged 判据收敛。
+#define VB6_FORM_RESIZE_PROP L"C3_FORM_RESIZE_FN"
+void vb6_RegisterFormResize(void* hwnd, void* fn);
+int32_t vb6_InvokeFormResize(void* hwnd);
 
 // 卸载窗体
 void vb6_UnloadForm(void* hwnd);

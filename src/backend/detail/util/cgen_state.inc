@@ -71,6 +71,15 @@
 
     // P14.3.1: Dim As New自动实例化变量集合 (小写key → 类名C标识)
     std::unordered_map<std::string, std::string> knownNewVars_;
+    // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` 的窗体实例化集合
+    // (小写**变量名** → 窗体名的 C 标识)。
+    // 与 knownNewVars_ 分开是因为**发的东西不同**: 窗体没有 vb6_cls_<F>_New(),
+    // 它的运行时入口是 cgen_form_ctrl_registry.inc 发的 vb6_form_hwnd_<F>()
+    // (首次引用即隐式 Load = VB6 `New <窗体>` 语义)。判据 = knownFormModuleNames_。
+    // 之所以要存**窗体名**而不是从变量名推: VB6 惯例变量名与窗体同名但**不保证**
+    // (`Dim frm As New frmEditorText` 完全合法), 推错就会发成
+    // vb6_form_hwnd_frm() → C2065 未声明。
+    std::unordered_map<std::string, std::string> knownNewFormVars_;
     // Fix 090v: 模块/类级 As New 变量持久注册 (knownNewVars_ 在函数入口清理,
     // 需从本表恢复; 局部 As New 由 LocalDeclStmt 每函数重注册) — 否则跨函数
     // 同名局部变量 (如 cColl 的 Dim A As New cCollection vs JsonStr 的
@@ -876,9 +885,17 @@
     bool isDesignerModule_ = false;
     // Fix 110f: true = PropertyPage (.pag), false = UserControl (.ctl)
     bool isPropertyPageDesigner_ = false;
+    // 账 #179: 只有 UserControl 的实例方法要成对换入宿主上下文 (体首 Push / 统一出口尾 Pop)。
+    // 谓词写在这一处, 三个发射点 (func/proc/prop) 共用 —— 别再各抄一遍条件。
+    bool ucCtxScoped() const { return isDesignerModule_ && !isPropertyPageDesigner_; }
 
     // P6.4+: interface -> single implementer map (injected by driver)
     const std::map<std::string, std::string>* interfaceImplementers_ = nullptr;
+
+    // Fix <vbeclipse>: interface -> **全部**实现类 (小写接口名 → 实现类规范名列表),
+    // driver 侧预扫描提供。接口成员桩靠它把调用转进实现类的槽表 —— 单实现映射
+    // (interfaceImplementers_) 在多实现接口上是空的, 不能用于分派。
+    const std::map<std::string, std::vector<std::string>>* interfaceAllImplementers_ = nullptr;
 
     // Interface 契约 (tB, ai/022 B04): stage 2.7 建好的工程级只读登记表 (driver 注入).
     // 槽表/适配器/薄指针类型都由它驱动, 与 legacy 的 implementsNames 口径互不影响.
@@ -910,7 +927,18 @@
 
     // Fix 112: in-project UserControl (.ctl) designer spec table (lowercase module -> FrmFile)
     // czUI fix: UC 事件 attach 行 (文件作用域 thunk/sink 在 prelude 生成)
-    std::map<std::string, std::vector<std::string>> ucEventAttach_;
+    // 账 #222: 键从"控件名"改成"控件名 + 元素号" —— 控件数组的 24 枚元素共用一枚处理器,
+    // 但每枚要自己的 thunk 与自己的 sink (元素号得交得回去), 按名字存就只剩最后一枚。
+    // sink 变量名一起存: 挂接那侧以前把 "_sink_" + 名字**再拼一遍**, 那是第二处拼名。
+    struct UcEventAttach {
+        std::vector<std::string> lines;
+        std::string sinkVar;
+    };
+    std::map<std::string, UcEventAttach> ucEventAttach_;
+    // 账 #222: 同一趟登记顺手记下"sink 供了哪一枚事件" (键 = ctrlElemKey + "." + 事件小写名)。
+    // UC 的 Click 走 RaiseEvent 到 sink 到 thunk, 子类化那条 WM_LBUTTONUP 臂再发一遍就是
+    // 一次点击两声 (实测 ucProgressCircular 的 Form1.c 两路都有)。
+    std::set<std::string> ucSinkEvents_;
 
     // Fix <vbeclipse> rev17: 本窗体里**充当 WithEvents 事件处理器**的过程名 (小写)。
     // 由 cgen_form_prelude 在扫 <ctrl>_<Event> 命中时登记。用途: 事件处理器是"跨对象
@@ -928,6 +956,11 @@
     // 填 vb6_UserControlDesc.props/propCount 时读 (同一次 decl-pass 内, 前者先跑 ——
     // 见 cgen_base_generate_decl_pass.inc:40 与 :46)。
     int32_t ucHostPropCount_ = 0;
+
+    // Fix <vbeclipse> rev21: 本模块发出去的 UserControl 自有 **Public Sub 方法桥**条数。
+    // 与 ucHostPropCount_ 同一对生命周期: cgen_form_uc_methods.inc 算表时写入,
+    // emitDesignerControlDecls 填 vb6_UserControlDesc.methods/methodCount 时读。
+    int32_t ucHostMethodCount_ = 0;
     const std::map<std::string, FrmFile>* designerFiles_ = nullptr;
 
     // Fix 143: vbp Object= 的 OCX 文件表 (CLSID 小写去花括号 → ocx 绝对路径)
@@ -939,6 +972,9 @@
     // Fix 160: vbp ComLib= 免注册 COM 组件表 {ProgID, CLSID, coclass名, 相对exe路径}
     const std::vector<std::array<std::string, 4>>* comLibRefs_ = nullptr;
 
+    // Fix <vbeclipse> 2026-10-06: vbp Object= OCX 免注册表 {ProgID, CLSID, coclass名, 相对exe路径}
+    const std::vector<std::array<std::string, 4>>* ocxLibRefs_ = nullptr;
+
     // Fix 112: sub-controls on a form whose type is an in-project UserControl
     std::unordered_map<std::string, std::string> knownUserControlCtrlVars_;
                   // DLL的ProgID前缀
@@ -946,6 +982,9 @@
 
     // Delegate (tB 扩展): decl pass 登记的桩定义文本, epilogue 统一发射
     std::vector<std::string> delegateThunkDefs_;
+
+    // AddressOf 回调桩 (账 #184): 同上, 与委托桩同批后置发射
+    std::vector<std::string> addressOfThunkDefs_;
 
     // 重载调用变体 (O2): IndexOrCallExpr 发射 callee ident 前置入的符号键后缀,
     // 由 ident 发射路径消费并清空 ("" = 裸键 head, 产出不受影响)

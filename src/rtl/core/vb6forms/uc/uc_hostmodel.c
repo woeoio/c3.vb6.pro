@@ -296,6 +296,12 @@ void vb6_Host_FromWinVariant(const void* inV, void* outV) {
         case VT_R4:    out->vt = vb6_vtSingle; out->fltVal = in->fltVal; break;
         case VT_R8:    out->vt = vb6_vtDouble; out->dblVal = in->dblVal; break;
         case VT_BSTR:  out->vt = vb6_vtBSTR; out->bstrVal = SysAllocString(in->bstrVal); break;
+        // Fix <vbeclipse>: 对象属性 Set (如 `With l_ucSplitBar: .Folder = Folder`) 的值
+        // 是 IDispatch*/IUnknown*。原 switch 没有 object 档 → 落 default 变 Empty,
+        // 于是 ComSetRef 即便路由到 Host_SetProp 也把对象丢了。这里**借用**指针
+        // (不 AddRef): 转换缓冲是瞬时的, 所有权仍归调用方, Host_ClearVariant 只放 BSTR。
+        case VT_DISPATCH: out->vt = vb6_vtDispatch; out->pdispVal = in->pdispVal; break;
+        case VT_UNKNOWN:  out->vt = vb6_vtDispatch; out->pdispVal = in->punkVal; break;
         default:       out->vt = vb6_vtEmpty; break;
     }
 }

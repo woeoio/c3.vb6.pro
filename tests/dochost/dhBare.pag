@@ -1,0 +1,25 @@
+VERSION 5.00
+Begin VB.PropertyPage dhBare 
+   Caption         =   "B"
+   ClientHeight    =   3000
+   ClientLeft      =   0
+   ClientTop       =   0
+   ClientWidth     =   4000
+   ScaleHeight     =   3000
+   ScaleWidth      =   4000
+End
+Attribute VB_Name = "dhBare"
+Option Explicit
+' 账 #219: .pag 里裸写的 Changed 是文档自带的脏标记, 判据 = 那张表里 propertypage/changed
+' 那一行的 HPF_BARE。改前发码是对的 (交 vb6_PropertyPage_Changed) 而诊断照报,
+' 两份真工程的语料里这一枚名字就占了 24 条噪声。
+
+Public Sub MarkDirty()
+    Changed = True
+End Sub
+
+Public Sub MarkClean()
+    If Changed Then
+        Changed = False
+    End If
+End Sub

@@ -23,6 +23,9 @@
     // Fix 160: ComLib= 免注册组件表 {ProgID, CLSID, coclass名, 相对exe路径}
     const std::vector<std::array<std::string, 4>>& comLibRefs = comLibRefs_;
 
+    // Fix <vbeclipse> 2026-10-06: Object= OCX 免注册组件表 {ProgID, CLSID, coclass名, 相对exe路径}
+    const std::vector<std::array<std::string, 4>>& ocxLibRefs = ocxLibRefs_;
+
     for (size_t i = 0; i < modules_.size(); i++) {
         auto& module = modules_[i];
         auto& analyzer = analyzers_[i];
@@ -70,8 +73,10 @@
         cgen.setOcxFiles(&ocxFiles);        // Fix 143: vbp Object= 的 ocx 路径表
         cgen.setOcxRefs(&ocxRefs);          // Fix 143b: 实例化 CLSID 以 vbp Object= 为准
         cgen.setComLibRefs(&comLibRefs);    // Fix 160: ComLib= 免注册组件表 (入口点烘焙)
+        cgen.setOcxLibRefs(&ocxLibRefs);    // Fix <vbeclipse>: Object= OCX 免注册表 (入口点烘焙)
         cgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static
         cgen.setInterfaceImplementers(&ifaceImplementersMap);  // P6.4+: 接口唯一实现类映射
+        cgen.setInterfaceAllImplementers(&ifaceAllImplementersMap);  // Fix <vbeclipse>: 接口全部实现类 (桩分派用)
         cgen.setClassChainRegistry(&classes_);  // tB 类继承 (B07b): stage 2.8 只读链登记表
         cgen.setProjectClassNames(&projectClassNames);  // 工程级类名表 (不受同名成员遮蔽)
         cgen.setInterfaceRegistry(&ifaces_);  // tB Interface 契约 (B04): stage 2.7 只读登记表

@@ -19,6 +19,7 @@
 
 
 #include "vb6rtl.h"
+#include "vb6rtl_crash.h"   /* 账 #181: vb6_CrashTraceClaim */
 #include <intrin.h>   // _ReturnAddress (未处理错误定位)
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,7 +61,9 @@ extern void vb6_ComExit(void);
 // ============================================================
 
 int32_t vb6_IntDiv(int32_t a, int32_t b) {
-    if (b == 0) return 0;  // TODO: raise error
+    // VB6 语义: \ 除 0 → 运行期错误 11 ("Division by zero"), 与 '/' 同源
+    // (此前 TODO "raise error" 一直没接, 变量除数静默返回 0)。
+    if (b == 0) { vb6_ErrRaiseNumber(11); return 0; }
     // VB6 \ 运算符: 截断到整数 (C的整数除法对正负数的行为与VB6一致)
     return a / b;
 }
@@ -81,6 +84,9 @@ double vb6_Pow(double base, double exp) {
 #ifdef _WIN32
 static LONG CALLBACK vb6_CrashTraceVEH(PEXCEPTION_POINTERS ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
+    /* 账 #181: 记轨迹本身会再触发异常 (栈溢出时 fprintf 拿 CRT 锁 /
+     * CaptureStackBackTrace 再读同一批页) ⇒ 每进程只记第一次。 */
+    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_STDERR)) return EXCEPTION_CONTINUE_SEARCH;
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR
         || code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO
         || code == EXCEPTION_STACK_OVERFLOW) {
@@ -100,26 +106,42 @@ static LONG CALLBACK vb6_CrashTraceVEH(PEXCEPTION_POINTERS ep) {
                     ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
                     (unsigned long long)ep->ExceptionRecord->ExceptionInformation[1]);
         }
+        /* 账 #182: 帧不落在本 exe 镜像里时**照实标出来**。VEH 里 CaptureStackBackTrace
+         * 拿到的是派发链自己（ntdll 若干帧 + 处理器的返回地址），旧写法把它们一律减掉
+         * 本模块基址打成 "rva=0x4376..."，看着像本模块的符号、实际是隔壁 DLL 的地址。 */
+        PIMAGE_DOS_HEADER exeDos = (PIMAGE_DOS_HEADER)hSelf;
+        PIMAGE_NT_HEADERS exeNt = (PIMAGE_NT_HEADERS)((char*)hSelf + exeDos->e_lfanew);
+        char* exeLo = (char*)hSelf;
+        char* exeHi = exeLo + exeNt->OptionalHeader.SizeOfImage;
         for (USHORT i = 0; i < n; i++) {
-            fprintf(stderr, "[C3_CRASH] #%u rva=0x%lx\n", (unsigned)i,
-                    (unsigned long)((char*)frames[i] - (char*)hSelf));
+            if ((char*)frames[i] >= exeLo && (char*)frames[i] < exeHi) {
+                fprintf(stderr, "[C3_CRASH] #%u rva=0x%lx\n", (unsigned)i,
+                        (unsigned long)((char*)frames[i] - exeLo));
+            } else {
+                fprintf(stderr, "[C3_CRASH] #%u %p (outside exe)\n", (unsigned)i, frames[i]);
+            }
         }
-#ifdef _M_IX86
-        /* x86 上 CaptureStackBackTrace 常常只返回 VEH/异常派发链(4 帧), 应用侧调用者全丢。
-         * 追加一次 Esp 线性扫描, 打印落在本模块镜像内的候选返回地址(按栈深度标 st+N)。 */
+#if defined(_M_IX86) || defined(_M_X64)
+        /* x86/x64 上 CaptureStackBackTrace 都只返回 VEH/异常派发链, 应用侧调用者全丢
+         * (账 #182 之前这段只编 x86 ⇒ x64 的崩溃现场一条应用帧都没有)。
+         * 追加一次栈指针线性扫描, 打印落在本模块镜像内的候选返回地址(按栈深度标 st+N)。 */
         {
-            PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)hSelf;
-            PIMAGE_NT_HEADERS nt = (PIMAGE_NT_HEADERS)((char*)hSelf + dos->e_lfanew);
-            char* lo = (char*)hSelf;
-            char* hi = lo + nt->OptionalHeader.SizeOfImage;
+#ifdef _M_IX86
             DWORD* sp = (DWORD*)ep->ContextRecord->Esp;
+#else
+            ULONG_PTR* sp = (ULONG_PTR*)ep->ContextRecord->Rsp;
+#endif
             int printed = 0;
             for (int k = 0; k < 512 && printed < 24; k++) {
+#ifdef _M_IX86
                 DWORD v;
+#else
+                ULONG_PTR v;
+#endif
                 __try { v = sp[k]; }
                 __except (EXCEPTION_EXECUTE_HANDLER) { break; }
-                if ((char*)v >= lo && (char*)v < hi) {
-                    fprintf(stderr, "[C3_CRASH]   st+%d rva=0x%lx\n", k, (unsigned long)((char*)v - lo));
+                if ((char*)v >= exeLo && (char*)v < exeHi) {
+                    fprintf(stderr, "[C3_CRASH]   st+%d rva=0x%lx\n", k, (unsigned long)((char*)v - exeLo));
                     printed++;
                 }
             }
@@ -401,9 +423,13 @@ typedef struct vb6_ErrObject {
     int32_t number;
     BSTR description;
     BSTR source;
+    // Fix <vbeclipse> 2026-10-06: Err.LastDllError 快照 —— DLL 调用返回那一刻的
+    // GetLastError(), 由 vb6_ErrSetLastDllError 在调用点捕获; 访问 Err.LastDllError
+    // 返回此快照, 而非访问那一刻的 GetLastError() (中间 RTL/打印会重置 last-error)。
+    int32_t lastDllError;
 } vb6_ErrObject;
 
-static vb6_ErrObject vb6_err = {0, NULL, NULL};
+static vb6_ErrObject vb6_err = {0};
 
 // 全局错误处理状态 (由cgen生成的代码直接使用)
 int32_t vb6_err_resume_next = 0;
@@ -463,7 +489,16 @@ void vb6_RestoreErrState(void) {
 
 int32_t vb6_ErrNumber(void) { return vb6_err.number; }
 BSTR vb6_ErrDescription(void) { return vb6_err.description; }
-void vb6_ErrClear(void) { vb6_err.number = 0; vb6_err.description = NULL; vb6_err.source = NULL; }
+// Fix <vbeclipse> 2026-10-06: Err.Clear 清空 **全部** 属性 —— 含 LastDllError。
+// VB6/VBA 文档 "Clear Method (Err Object)" 的属性表逐项列出 Clear 后的取值:
+//   Description ""  HelpContext 0  HelpFile ""  LastDLLError 0  Number 0  Source ""
+// 且 Clear 会被 Resume / Exit Sub|Function|Property / On Error 语句**自动**调用
+// (本 RTL 里 Resume 已走 vb6_ErrClear, 见 cgen_jumps.cpp)。漏掉 lastDllError 会让
+// 快照跨过一次 Clear 存活, 与 VB6 不符。
+void vb6_ErrClear(void) {
+    vb6_err.number = 0; vb6_err.description = NULL; vb6_err.source = NULL;
+    vb6_err.lastDllError = 0;
+}
 
 // P21-27: Erl — 出错行号 (声明见 vb6rtl_class_com.h)
 // 行号嵌入机制未实现 (cgen 不生成 VB 行号标签), 按 VB6 语义返回 0 —— VB6 中源码
@@ -472,6 +507,10 @@ void vb6_ErrClear(void) { vb6_err.number = 0; vb6_err.description = NULL; vb6_er
 int32_t vb6_Erl(void) { return 0; }
 
 BSTR vb6_ErrSource(void) { return vb6_err.source; }
+
+// Fix <vbeclipse> 2026-10-06: Err.LastDllError 快照存取 (见 vb6_ErrObject.lastDllError)
+int32_t vb6_ErrLastDllError(void) { return vb6_err.lastDllError; }
+void vb6_ErrSetLastDllError(int32_t code) { vb6_err.lastDllError = code; }
 
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
     vb6_err.number = errNum;
@@ -505,7 +544,9 @@ void vb6_ErrRaiseNumber(int32_t errNum) {
 //      "Debug.Print 1 / 0" 实证); 换成函数调用即不可折叠。
 //  (b) 走 vb6_ErrRaise: On Error Resume Next 下静默置 Err.Number=11 —— InIde 的
 //      "除零探测错误处理"技巧依赖此行为; 无错误处理时按 VB6 弹框/退出。
-// 变量除数仍走裸 C 除法 (IEEE inf) —— 运行期语义缺口与 vb6_IntDiv 的 TODO 同源。
+// 账 (除零补全): cgen 现在对 **变量除数** 也统一走 vb6_Num_Div / vb6_Num_Mod /
+// vb6_IntDiv (三者都在 b==0 时 vb6_ErrRaiseNumber(11)), 此前变量除数落裸 C
+// 除法得 IEEE inf / 静默 0 的缺口已闭合。
 double vb6_Num_Div(double a, double b) {
     if (b == 0.0) { vb6_ErrRaiseNumber(11); return 0.0; }
     return a / b;
@@ -636,3 +677,10 @@ void vb6_RaiseError(int32_t errNum, BSTR description) {
     exit(errNum);
 }
 
+// 账 #181: 见 vb6rtl_runtime.h 里那条注释 —— 三个出口每进程各记一次。
+static volatile long vb6_crashClaim[4] = { 0, 0, 0, 0 };
+
+int vb6_CrashTraceClaim(int slot) {
+    if (slot < 0 || slot >= 4) return 1;           /* 未知槽位不拦 (宁可多记一份) */
+    return InterlockedCompareExchange(&vb6_crashClaim[slot], 1, 0) == 0;
+}

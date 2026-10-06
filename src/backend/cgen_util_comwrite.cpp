@@ -273,6 +273,46 @@ bool CCodeGen::tryRewriteCOMLvalue(const std::string& target, const std::string&
         if (pgPos != std::string::npos) {
             auto parens = findCallParens(target, pgPos);
             if (parens.first != std::string::npos && parens.second != std::string::npos) {
+                // 账 #191-b: prop_get_ 那一段**后面还挂着一层成员** —— VB6 的
+                //   ucChartBar1(i).Font.Size = Me.ScaleHeight / 15 / 50
+                // 改写到这里时 target 已是 `vb6_ucChartBar_prop_get_Font(recv).Size`。
+                // 下面那段是字符串级改写, 它只取 prop_get_ 那一段、尾巴整段丢掉,
+                // 于是发成 prop_let_Font(recv, <double>): 成员名没了, 值实参的槽还是
+                // vb6_ComIface_Font* (实测 Form2.c 471-477 四条 C2440, 工程直接编不过)。
+                // VB6 语义是「取回那枚对象, 再对它做一层写」, 而 StdFont 本身是真
+                // IDispatch ⇒ 交回 vb6_ComSetProp, 对象实参用**直发的 prop_get_**
+                // (不是宿主窗口的 ComGetObjectProp —— UC 不可分发时那条恒 NULL,
+                //  正是 #191 要治的那一半)。
+                std::string tail191 = target.substr(parens.second + 1);
+                {
+                    size_t b191 = tail191.find_first_not_of(" \t");
+                    if (b191 != std::string::npos) {
+                        size_t e191 = tail191.find_last_not_of(" \t");
+                        tail191 = tail191.substr(b191, e191 - b191 + 1);
+                    } else tail191.clear();
+                }
+                if (!tail191.empty()) {
+                    std::string sub191;
+                    if (tail191.rfind("->", 0) == 0) sub191 = tail191.substr(2);
+                    else if (tail191[0] == '.') sub191 = tail191.substr(1);
+                    bool simple191 = !sub191.empty();
+                    for (char ch : sub191) {
+                        if (!isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
+                            simple191 = false;
+                            break;
+                        }
+                    }
+                    // 认不得的尾巴 (再往下的索引/更深一层) 交回通用路径: 那会发成非法
+                    // 左值, 让 cl 当场翻红 —— 比静默丢掉成员名好。
+                    if (!simple191) return false;
+                    std::string packFn191 = isSet ? "vb6_ComPackObject"
+                                        : (valueExpr ? comPackExpr(*valueExpr)
+                                                     : "vb6_ComPackVariant");
+                    c_.emitLine("vb6_ComSetProp(" + target.substr(0, parens.second + 1)
+                                + ", L\"" + sub191 + "\", " + packFn191 + "(" + value
+                                + "));  /* COM SetProp through prop_get_ object (Pattern C-tail) */");
+                    return true;
+                }
                 std::string prefix = target.substr(0, pgPos);              // vb6_cX_
                 std::string afterPg = target.substr(pgPos + matchedVerb.size(),
                                                     parens.first - (pgPos + matchedVerb.size()));

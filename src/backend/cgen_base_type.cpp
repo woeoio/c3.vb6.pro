@@ -431,25 +431,39 @@ std::string CCodeGen::mapTypeRef(ASTNode* typeRef) {
             // VB6语言类型别名
             // Fix 081e: LongPtr now has its own Vb6Type::LongPtr → intptr_t
             // (handled by resolveTypeName + mapType, this fallback is for edge cases)
-            if (lookupName == "LongPtr") {
+            // 账 #228: 从这里往下全是**按名字形状/名单**的内在与外部库别名档, 问的必须是
+            // 类型本名而不是"库.本名"整串 —— VB6 里 `As OLE_COLOR` 与 `As stdole.OLE_COLOR`
+            // 是同一种类型的两种拼法, 库前缀只是出处。上面那几档符号分支 (ivref/Class/UDT/
+            // 枚举/ComClass) 各按自己的规则处理限定名 (lookupName 那里"折裸名"要符号真查得到),
+            // 能落到这里的名字已经把所有项目符号都查空了, 再拿整串去比对名单就是第二套口径:
+            // 实测限定那一形以前一路掉到本函数末尾的兜底 `void*`, 而裸名答 `int32_t`
+            // —— 同一枚 VBFlexGrid 事件 (`.ctl` 写 OLE_COLOR、容器写 stdole.OLE_COLOR) 于是
+            // 发送侧交 4 字节、处理器收 8 字节指针, x64 上高 32 位是垃圾。
+            std::string aliasName = lookupName;
+            {
+                const size_t dp8 = aliasName.rfind('.');
+                if (dp8 != std::string::npos) aliasName = aliasName.substr(dp8 + 1);
+            }
+
+            if (aliasName == "LongPtr") {
                 return "intptr_t";
             }
-            if (lookupName == "LongLong") {
+            if (aliasName == "LongLong") {
                 return "int64_t";   // Fix 084m: 恒 64 位有符号 (与 LongPtr 的架构宽度不同)
             }
             // VB6内置枚举类型 (Vb前缀): VbCompareMethod, VbTriState, VbFileAttribute等
             // VB6枚举底层是Long (int32_t)
-            if (lookupName.size() >= 2 && lookupName.compare(0, 2, "Vb") == 0) {
+            if (aliasName.size() >= 2 && aliasName.compare(0, 2, "Vb") == 0) {
                 return "int32_t";
             }
             // COM类型别名 (OLE_前缀): OLE_COLOR, OLE_HANDLE等, 通常为DWORD
-            if (lookupName.size() >= 4 && lookupName.compare(0, 4, "OLE_") == 0) {
+            if (aliasName.size() >= 4 && aliasName.compare(0, 4, "OLE_") == 0) {
                 return "int32_t";
             }
             // ADODB等外部COM库枚举类型: 名称以Enum结尾
             // 如 EventStatusEnum, ExecuteOptionEnum, CursorTypeEnum等
-            if (lookupName.size() >= 4 &&
-                lookupName.compare(lookupName.size() - 4, 4, "Enum") == 0) {
+            if (aliasName.size() >= 4 &&
+                aliasName.compare(aliasName.size() - 4, 4, "Enum") == 0) {
                 return "int32_t";
             }
             // ADODB等外部COM库对象类型 → void* (COM对象指针)
@@ -458,7 +472,7 @@ std::string CCodeGen::mapTypeRef(ASTNode* typeRef) {
                 "Field", "Fields", "Error", "Errors", "Property",
                 "Properties", "Stream"
             };
-            if (comObjTypes.count(lookupName)) {
+            if (comObjTypes.count(aliasName)) {
                 return "void*";
             }
             // Fix 010c: VB6标准枚举类型别名 (不带Vb前缀的常用枚举)
@@ -469,7 +483,7 @@ std::string CCodeGen::mapTypeRef(ASTNode* typeRef) {
                 "Calendar", "DateTimeFormat", "CallType", "VariantType",
                 "VarType", "QueryDef", "EditModeEnum", "FieldAttributeEnum"
             };
-            if (vb6EnumAliases.count(lookupName)) {
+            if (vb6EnumAliases.count(aliasName)) {
                 return "int32_t";
             }
             // 兜底: 未知类型 (如窗体模块名、外部COM类型别名等) → void*

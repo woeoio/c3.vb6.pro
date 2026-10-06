@@ -36,7 +36,10 @@ std::string radixDigits(const std::string& s) {
         begin = 2;
     }
     size_t end = s.size();
-    if (end > begin && (s[end - 1] == '^' || s[end - 1] == '&')) end--;
+    // 账 #195: `%` 也是后缀 (VB 的 Integer 档)。此前它不在剥离表里，于是 `3%` 落进
+    // 「无后缀十进制按数值大小定档」那一段，parseIntLit 看见残留的 `%` 就报
+    // 「超出 64 位整数表示范围」—— 合法程序整个编不过。
+    if (end > begin && (s[end - 1] == '^' || s[end - 1] == '&' || s[end - 1] == '%')) end--;
     return s.substr(begin, end - begin);
 }
 
@@ -116,10 +119,11 @@ Token Lexer::scanNumber() {
     // 类型后缀
     bool isLong = false;
     bool isLongPtr = false;
+    bool isInteger = false;   // 账 #195: `%` = Integer 档
     if (offset_ < content_.size()) {
         char c = peek();
         switch (c) {
-            case '%': text += advance(); break;
+            case '%': text += advance(); isInteger = true; break;  // 账 #195: 以前只吃不置标志
             case '&': text += advance(); isLong = true; break;
             case '^': // Fix 082: VBA7 LongPtr 后缀 (与幂运算符消歧见 isLongPtrSuffixHere)
                 if (!isFloat && !hasExponent && isLongPtrSuffixHere()) {
@@ -157,6 +161,22 @@ Token Lexer::scanNumber() {
     if (isLong) {
         Token tok = makeToken(TokenKind::LongLiteral, text, startLine, startCol);
         try { tok.longValue = std::stoll(text); } catch (...) {}
+        return tok;
+    }
+
+    if (isInteger) {
+        // 账 #195: 显式 `%` 后缀 = VB 的 Integer 档 —— 恒发 IntegerLiteral, 不参与
+        // 「按数值大小升成 Long」那一路 (那一档是**无后缀**字面量的规则)。值本身装不进
+        // 32 位仍是词法错 (与无后缀那一路同口径), 不静默截断。
+        int64_t iv = 0;
+        if (!parseIntLit(radixDigits(text), 10, iv) || iv < INT16_MIN || iv > INT16_MAX) {
+            // 显式 `%` 就是 VB 的 Integer 档 (-32768..32767)。超出**必须报**, 不能像
+            // int32 那样收下再让 int16 形参去截 —— 那是把值改错 (静默回绕)。
+            return errorToken("Integer 字面量超出 Integer 范围 (-32768..32767)",
+                              startLine, startCol);
+        }
+        Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
+        tok.intValue = static_cast<int32_t>(iv);
         return tok;
     }
 
@@ -224,6 +244,7 @@ Token Lexer::scanHexNumber() {
         return tok;
     }
 
+    if (peek() == '%') text += advance();   // 账 #195: &HFF% = Integer 档
     Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
     try { tok.intValue = static_cast<int32_t>(std::stoll(text.substr(2), nullptr, 16)); } catch (...) {}
     return tok;
@@ -252,6 +273,7 @@ Token Lexer::scanOctNumber() {
     }
 
     if (peek() == '&') text += advance();
+    if (peek() == '%') text += advance();   // 账 #195: 进制字面量也认 Integer 后缀
     Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
     try { tok.intValue = static_cast<int32_t>(std::stoll(text.substr(2), nullptr, 8)); } catch (...) {}
     return tok;
@@ -280,6 +302,7 @@ Token Lexer::scanBinNumber() {
     }
 
     if (peek() == '&') text += advance();
+    if (peek() == '%') text += advance();   // 账 #195: 进制字面量也认 Integer 后缀
     Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
     try { tok.intValue = static_cast<int32_t>(std::stoll(text.substr(2), nullptr, 2)); } catch (...) {}
     return tok;

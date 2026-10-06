@@ -16,6 +16,7 @@
 
 #include "vb6forms.h"
 #include "vb6forms_internal.h"
+#include "vb6rtl_crash.h"     /* 账 #181: 崩溃轨迹每进程只记一次 */
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -210,6 +211,45 @@ int vb6_DpiY(void) {
 
 int vb6_XToTwipX(int px) { return MulDiv(px, 1440, vb6_DpiX()); }
 int vb6_YToTwipY(int px) { return MulDiv(px, 1440, vb6_DpiY()); }
+
+// ============================================================
+// 账 #175: 控件坐标的**单位**只有一个来源 —— 容器声明的 ScaleMode
+// (VB6: 控件的 Left/Top/Width/Height、Move、鼠标 X/Y、ScaleWidth、TextWidth/TextHeight
+//  都按所在容器 (窗体或 UserControl) 的 ScaleMode 交/收单位)。此前这些点位一律按缇,
+//  而 .ctl 全部声明 3=Pixel ⇒ 像素型 UC 里 ScaleWidth(缇) 比绘图 DC(像素)
+//  大 15 倍, Charts 2020 的饼/柱/面积/矩形整幅画在画布外 (空白)。
+// 缇那一路必须与今天逐字节等价, 所以 mode==1 直接复用上面那对 MulDiv。
+// 枚举值以 src/semantics/builtin/builtin_consts_ext.inc 的 vbMillimeters=6 /
+// vbCentimeters=7 为准 (别按"6 比 7 大 ⇒ 6 是厘米"猜)。
+// ============================================================
+
+double vb6_ScaleUnitsPerPx(int32_t mode, int vert) {
+    double dpi = (double)(vert ? vb6_DpiY() : vb6_DpiX());
+    switch (mode) {
+        case 1:  return 1440.0 / dpi;               // Twip
+        case 2:  return   72.0 / dpi;               // Point
+        case 5:  return    1.0 / dpi;               // Inch
+        case 6:  return   25.4 / dpi;               // Millimeter
+        case 7:  return    2.54 / dpi;              // Centimeter
+        default: return    1.0;                     // 3=Pixel; 0=User/4=Character 暂按像素
+    }
+}
+
+// 设备像素 → 容器单位
+double vb6_ScalePxToUser(double px, int32_t mode, int vert) {
+    if (mode == 1) return (double)(vert ? vb6_YToTwipY((int)px) : vb6_XToTwipX((int)px));
+    return px * vb6_ScaleUnitsPerPx(mode, vert);
+}
+
+// 容器单位 → 设备像素 (四舍五入, 与 MulDiv 同口径)
+int vb6_ScaleUserToPx(double user, int32_t mode, int vert) {
+    if (mode == 1) {
+        int t = (int)(user + (user >= 0 ? 0.5 : -0.5));
+        return vert ? vb6_TwipToY(t) : vb6_TwipToX(t);
+    }
+    double px = user / vb6_ScaleUnitsPerPx(mode, vert);
+    return (int)(px + (px >= 0 ? 0.5 : -0.5));
+}
 
 // ============================================================
 // 窗体框架
@@ -439,7 +479,11 @@ static LRESULT CALLBACK vb6_GroupBoxSubclassProc(HWND hwnd, UINT msg, WPARAM wp,
             if (hdc) {
                 RECT rc; GetClientRect(hwnd, &rc);
                 // 标题带高度: 用当前字体算 (经典 groupbox 标题约一行高)。
-                HFONT hf = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+                // 账 #202: 这一问以前是裸 `SendMessageW(hwnd, WM_GETFONT, ...)`，而探针实测
+                // 裸 BUTTON(BS_GROUPBOX) 收到 WM_SETFONT 之后**也不答** WM_GETFONT（与 STATIC 同）
+                // ⇒ 拿到 NULL、SelectObject 整步跳过，带高与带宽都按 DC 的默认字体算，而组框画标题
+                // 用的是我们发过去的那张。字体今天没改过的工程里两边算出同一个数，所以它一直静默。
+                HFONT hf = vb6_ControlFont(hwnd);
                 HFONT old = hf ? (HFONT)SelectObject(hdc, hf) : NULL;
                 TEXTMETRICW tm; ZeroMemory(&tm, sizeof(tm));
                 GetTextMetricsW(hdc, &tm);
@@ -536,6 +580,11 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
             );
         }
         SendMessage(hwnd, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
+        // 账 #204: 发出去还要**存下来**。STATIC / BUTTON 这一类窗口不答 `WM_GETFONT`（#200 探针钉的），
+        // 只发不存 ⇒ 从没被写过字体的控件在 `vb6_ControlFont` 那一处两问皆空：`.FontName` 读空串、
+        // `.FontSize` 读 0、`FontPixelHeight` 读 0、`TextHeight` 按 DC 默认字体给 16（VB6 该是 MS Sans
+        // Serif 8.25pt 的那个数）。存了之后 setter 换字体时也才找得到"上一张是我们造的"那张去删。
+        vb6_ControlFontStore(hwnd, hFont);
 
         // Fix 162c-extlist: Frame(BS_GROUPBOX) 关掉 comctl6 主题化 —— 主题版的
         // groupbox 会用白色填掉整个内部 (子控件的 240 灰底反而成了色块), VB6
@@ -878,7 +927,10 @@ void vb6_SetAppInstance(void* hInstance) {
 // 「模块+偏移」写进 c3_crash.txt。没有调试器也能一眼看出异常是从
 // Test.exe 自己的代码抛的, 还是逃出第三方 OCX (NewTab01.ocx) 的 VB6 代码。
 static LONG WINAPI vb6_crashFilter(EXCEPTION_POINTERS* ep) {
-    FILE* f = fopen("c3_crash.txt", "a");
+    FILE* f;
+    /* 账 #181: 第三道槽位 (过滤器天然只跑一次, 这里只是把口径收全)。 */
+    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_FILTER)) return EXCEPTION_EXECUTE_HANDLER;
+    f = fopen("c3_crash.txt", "a");
     if (!f) return EXCEPTION_EXECUTE_HANDLER;
     fprintf(f, "=== EXCEPTION code=0x%08lX addr=%p ===\n",
             (unsigned long)ep->ExceptionRecord->ExceptionCode,
@@ -945,9 +997,12 @@ static int vb6_vehScanStackForImage(char* buf, int n, int bufsz,
         if (v >= (ULONG_PTR)imgBase &&
             v < (ULONG_PTR)imgBase + imgSize) {
 #ifdef _WIN64
-            n += wsprintfA(buf + n, "  [sp+%d] 0x%016llX -> %s+0x%llX\r\n",
-                           i, (unsigned long long)v, imgName,
-                           (unsigned long long)(v - (ULONG_PTR)imgBase));
+            /* 账 #182: 这里原本写 `0x%016llX` —— 用户态 wsprintfA **不认 `ll`**（它只有
+             * Win16 时代的 l/h 修饰符），于是这条一直打成 "0xlX -> <一串字节>+0xlX"。
+             * 这段 x64 分支以前从没被执行到（栈扫描整个被"故障地址所属模块"那一问挡住），
+             * 改成扫主 exe 之后才露出来。偏移用 32 位 RVA 打，符号化只需要它。 */
+            n += wsprintfA(buf + n, "  [sp+%d] rva=0x%08lX\r\n",
+                           i, (unsigned long)(v - (ULONG_PTR)imgBase));
 #else
             n += wsprintfA(buf + n, "  [sp+%d] 0x%08lX -> %s+0x%08lX\r\n",
                            i, (unsigned long)v, imgName,
@@ -965,6 +1020,9 @@ static LONG WINAPI vb6_heapCorruptVEH(EXCEPTION_POINTERS* ep) {
     int isAV = (code == 0xC0000005);
     if (!isCorrupt && !isAV)
         return EXCEPTION_CONTINUE_SEARCH;
+    /* 账 #181: 这个出口以前无闸 —— 栈溢出时它自己会再 fault (CreateFileA/栈扫描),
+     * 于是同一份递归栈被写 4 遍、真正的第一现场排在最后。每进程只记第一次。 */
+    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_FILE)) return EXCEPTION_CONTINUE_SEARCH;
     HANDLE h = CreateFileA("c3_crash.txt", FILE_APPEND_DATA,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -976,9 +1034,13 @@ static LONG WINAPI vb6_heapCorruptVEH(EXCEPTION_POINTERS* ep) {
             n = wsprintfA(buf, "=== HEAP CORRUPTION code=0xC0000374 addr=%p ===\r\n",
                           ep->ExceptionRecord->ExceptionAddress);
         else
+            /* 账 #182: ExceptionInformation[0] 的 8 = **执行(DEP)**, 不是写。
+             * 旧写法一律 `? "WRITE" : "READ"` 把跳飞(rip=0x1 这类)打成 "WRITE"，
+             * 与 vb6rtl.c 里 Fix 187 已经修过的同一个误导 —— 两处现在同一口径。 */
             n = wsprintfA(buf, "=== AV code=0xC0000005 addr=%p %s %p ===\r\n",
                           ep->ExceptionRecord->ExceptionAddress,
-                          ep->ExceptionRecord->ExceptionInformation[0] ? "WRITE" : "READ",
+                          ep->ExceptionRecord->ExceptionInformation[0] == 8 ? "EXECUTE(DEP)" :
+                          (ep->ExceptionRecord->ExceptionInformation[0] ? "WRITE" : "READ"),
                           (void*)ep->ExceptionRecord->ExceptionInformation[1]);
         {   /* 模块名+运行时基址+偏移 (x86 ASLR 下基址随机, 符号化必须配对基址) */
             HMODULE hm = NULL;
@@ -1037,22 +1099,17 @@ static LONG WINAPI vb6_heapCorruptVEH(EXCEPTION_POINTERS* ep) {
             }
         }
         if (isAV) {
-            /* 栈扫描: 找镜像范围内的返回地址 (需要 FAULT 模块的基址与大小) */
-            HMODULE hm = NULL;
-            if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                                   (LPCWSTR)ep->ExceptionRecord->ExceptionAddress, &hm) && hm) {
+            /* 账 #182: 扫描目标改成**主 exe 镜像**，不再问"故障地址落在哪个模块"。
+             * 旧写法在 `call` 跳飞（rip=0x1 这类）时拿不到模块句柄 ⇒ 整段栈扫描被跳过，
+             * 而现场恰恰只有这一种形态需要它；且生成代码全在 exe 里，扫系统模块没有用处。 */
+            HMODULE hm = GetModuleHandleA(NULL);
+            if (hm) {
                 MODULEINFO mi;
-                wchar_t wp[MAX_PATH] = {0};
-                char nm[80] = "?";
-                GetModuleFileNameW(hm, wp, MAX_PATH);
-                { const wchar_t* b = wcsrchr(wp, L'\\');
-                  WideCharToMultiByte(CP_ACP, 0, b ? b + 1 : wp, -1, nm, sizeof(nm), NULL, NULL); }
                 if (K32GetModuleInformation(GetCurrentProcess(), hm, &mi, sizeof(mi))) {
-                    n += wsprintfA(buf + n, "  -- stack scan (%s imgsize=0x%lX) --\r\n",
-                                   nm, (unsigned long)mi.SizeOfImage);
+                    n += wsprintfA(buf + n, "  -- stack scan (exe imgsize=0x%lX) --\r\n",
+                                   (unsigned long)mi.SizeOfImage);
                     n = vb6_vehScanStackForImage(buf, n, (int)sizeof(buf) - 256,
-                                                 ep->ContextRecord, nm,
+                                                 ep->ContextRecord, "exe",
                                                  (const char*)mi.lpBaseOfDll,
                                                  mi.SizeOfImage);
                 }
@@ -1288,6 +1345,73 @@ static void vb6_ApplyInitialFocus(HWND hwnd) {
     if (t && IsWindow(t)) SetFocus(t);
 }
 
+// Fix <vbeclipse>: VB6 的 `Load frmX` (含隐式: 把窗体默认实例当对象引用/传参)
+// 建窗并触发 Form_Load, 但**不显示** —— 窗体停在隐藏态, 等调用方 SetParent/ShowWindow。
+// 编译器把 Form_Load 用 PostMessageW(hwnd, 0x7FF0) 延迟到队列 (见 cgen_form_wndproc_create),
+// vb6_ShowForm 在 ShowWindow 前抽干它; 这里做同样的抽干但不 ShowWindow, 让"只 Load"的
+// 窗体 (如停靠视图 frmViewViews) 在交给 ucFolder 之前已完成 Form_Load 初始化。
+void vb6_LoadForm(void* hwnd) {
+    if (!hwnd) return;
+    const UINT kDeferredFormLoad = 0x7FF0;
+    MSG msg;
+    while (PeekMessageW(&msg, (HWND)hwnd, kDeferredFormLoad, kDeferredFormLoad, PM_REMOVE)) {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+}
+
+// Fix <vbeclipse> rev28: 窗体 Form_Resize 排到消息循环 (与 UC 侧 rev23 同理)。
+// 详见 vb6forms_window.h 里 VB6_FORM_FR_MSG 的注释: WM_SIZE 是同步 SendMessage,
+// 停靠布局那串嵌套 Move 跑完才返回, 此刻各控件才有最终尺寸。
+// 去重靠窗口属性 (不碰任何结构体, 避开跨边界字段顺序那个坑)。
+int32_t vb6_QueueFormResize(void* hwnd) {
+    if (!hwnd || !IsWindow((HWND)hwnd)) return 0;
+    HWND h = (HWND)hwnd;
+    if (GetPropW(h, VB6_FORM_FR_PROP)) return 1;      // 已在队列 ⇒ 不重复排
+    if (!SetPropW(h, VB6_FORM_FR_PROP, (HANDLE)1)) return 0;
+    if (!PostMessageW(h, VB6_FORM_FR_MSG, 0, 0)) {
+        RemovePropW(h, VB6_FORM_FR_PROP);
+        return 0;
+    }
+    return 1;
+}
+
+// 消息循环里接住排队的那一条: 先清标志 (允许事件体再排新一轮), 再让 cgen 生成的
+// case 回调 Form_Resize。**不直接调 Form_Resize** —— 它是生成代码的 static 函数,
+// RTL 拿不到地址; 由 cgen 在 WndProc 里 `case VB6_FORM_FR_MSG: vb6_DrainFormResize(hwnd); break;`
+// 转交。
+void vb6_DrainFormResize(void* hwnd) {
+    if (!hwnd) return;
+    RemovePropW((HWND)hwnd, VB6_FORM_FR_PROP);
+}
+
+// Fix <vbeclipse> rev29: Form_Resize 直调通道。详见 vb6forms_window.h 的注释。
+void vb6_RegisterFormResize(void* hwnd, void* fn) {
+    if (!hwnd || !fn) return;
+    SetPropW((HWND)hwnd, VB6_FORM_RESIZE_PROP, (HANDLE)fn);
+}
+
+// 返回 1 = 调过了 (无论有没有 Form_Resize), 0 = 该窗体没注册。
+//
+// ⚠ **重入防护**: Form_Resize 内部自己会 Move 子控件, 那又回到本函数。
+//   用一个 thread-local 深度闸: 已经在同一个窗体的事件里就不再进第二层。
+//   不用深度数值而用"同一个 hwnd"判重 —— 不同窗体嵌套是合法的
+//   (A 的 Form_Resize Move 了 B, B 的 Form_Resize 又 Move 回 A 的兄弟),
+//   那时仍需要各跑各的。
+static __declspec(thread) void* g_formResizeIn = NULL;
+int32_t vb6_InvokeFormResize(void* hwnd) {
+    if (!hwnd) return 0;
+    HWND h = (HWND)hwnd;
+    if (g_formResizeIn == (void*)h) return 1;      // 同窗体重入 ⇒ 跳过
+    HANDLE fn = GetPropW(h, VB6_FORM_RESIZE_PROP);
+    if (!fn) return 0;                              // 没 Form_Resize 过程
+    void* prev = g_formResizeIn;
+    g_formResizeIn = (void*)h;
+    ((void (*)(void))fn)();
+    g_formResizeIn = prev;
+    return 1;
+}
+
 void vb6_ShowForm(void* hwnd, int modal) {
     vb6_installCrashTrace();
     if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
@@ -1405,49 +1529,6 @@ void vb6_UnloadForm(void* hwnd) {
     SendMessageW((HWND)hwnd, WM_CLOSE, 0, 0);
 }
 
-// M22-Issue6: 窗体表面Print
-// VB6的"Print expr"语句在窗体表面绘制文本
-// 维护CurrentX/CurrentY用于定位下一次输出
-void vb6_Form_Print(void* hwnd, void* bstrText) {
-    if (!hwnd) return;
-    HWND hw = (HWND)hwnd;
-    BSTR text = (BSTR)bstrText;
-    
-    // Get CurrentX/CurrentY from window properties (stored as pixels)
-    float currentX = vb6_GetCurrentX(hwnd);
-    float currentY = vb6_GetCurrentY(hwnd);
-    
-    HDC hdc = GetDC(hw);
-    if (!hdc) return;
-    
-    // Set text color and background mode (transparent for form printing)
-    SetBkMode(hdc, TRANSPARENT);
-    
-    int len = text ? (int)SysStringLen(text) : 0;
-    if (len > 0) {
-        // Calculate text size for advancing CurrentX
-        SIZE size;
-        TEXTMETRICW tm;
-        GetTextExtentPoint32W(hdc, text, len, &size);
-        GetTextMetricsW(hdc, &tm);
-        
-        // Draw text at CurrentX, CurrentY
-        TextOutW(hdc, (int)currentX, (int)currentY, text, len);
-        
-        // VB6 behavior: Print automatically advances to next line (newline)
-        // CurrentY += line height, CurrentX reset to 0
-        vb6_SetCurrentY(hwnd, currentY + (float)tm.tmHeight);
-        vb6_SetCurrentX(hwnd, 0.0f);
-    } else {
-        // Empty Print = newline: advance CurrentY by font height, reset CurrentX
-        TEXTMETRICW tm;
-        GetTextMetricsW(hdc, &tm);
-        vb6_SetCurrentY(hwnd, currentY + (float)tm.tmHeight);
-        vb6_SetCurrentX(hwnd, 0.0f);
-    }
-    
-    ReleaseDC(hw, hdc);
-}
 
 // ============================================================
 // Form_Unload回调

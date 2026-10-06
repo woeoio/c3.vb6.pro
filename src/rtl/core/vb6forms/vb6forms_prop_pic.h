@@ -38,6 +38,10 @@ void vb6_SetControlPictureFromCom(void* hwnd, void* pPictureDisp);
 // AutoSize for PictureBox: resize to fit picture
 int vb6_GetPictureAutoSize(void* hwnd);
 void vb6_SetPictureAutoSize(void* hwnd, int autoSize);
+// Fix <vbeclipse> 2026-10-06: 现代 RGBA 透明绘制 — 32bpp 带 alpha 的位图用
+// AlphaBlend(AC_SRC_ALPHA) 画 (全透明整张跳过/全不透明回落原路径; 直通 alpha
+// 自动预乘)。返回 1 = 已画完, 0 = 走不了 alpha (调用方回落 BitBlt/Render)。
+int vb6_DrawBitmapAlpha(void* hdc, void* hBmp, int dstX, int dstY, int dstW, int dstH);
 
 // P17.2: Image.Stretch property
 
@@ -54,6 +58,10 @@ void vb6_InstallImageSubclass(void* hwnd);
 // VB6_ForeColor / WM_GETFONT，光标位置存 VB6_PrintX/Y（Cls 归零）。
 void vb6_ControlPrint(void* hwnd, void* bstrText);
 void vb6_ControlCls(void* hwnd);
+// 账 #221 = C29-PL-a: PictureBox/Form 的 Line 方法（原生 GDI，DC 与 Print/Cls 同一处）。
+// style 位口径 = parser 折 Line 旗标那一处的同一张表: 1=B, 2=C, 4=F（BF=5）；color<0 用 ForeColor。
+void vb6_ControlLine(void* hwnd, double x1, double y1, double x2, double y2,
+                     int32_t color, int32_t style);
 
 // P18-F: 控件子类化基础设施 (GotFocus/LostFocus/MouseEnter/MouseLeave/控件级事件)
 // 通用控件子类化安装 (复用VB6_OrigProc属性模式)

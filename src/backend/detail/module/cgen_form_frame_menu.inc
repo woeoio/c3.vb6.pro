@@ -167,6 +167,7 @@
 
                 emitDesignerFontProps(child, childHwndRead(child));    // 账 #154: 同上（字体两条也两路都发）
                 emitDesignerTabIndexProp(child, childHwndRead(child), childTi);  // 账 #160: 第二条创建路同样要发这一句
+                emitDesignerScaleModeProp(child, childHwndRead(child));  // 账 #197: 第二条创建路同样要发这一句
                 emitControlFrxProps(child);  // Fix 182: 容器子控件同样加载 .frx 设计期图片/文本/列表
                 // C29-SL-o（账 #83 的 Slider 半边）: 设计期值面以前只在顶层那条路发 ——
                 // Frame 里的 Slider 光有窗口，Min/Max/Value 那一批整条丢掉。共用同一个出口，

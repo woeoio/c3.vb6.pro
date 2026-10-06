@@ -82,6 +82,9 @@
         if (wsIt != frmDesc.formControl.properties.end() && wsIt->second.intValue != 0) {
             c_.emitLine("vb6_SetWindowState((void*)hwnd, " + std::to_string((int)wsIt->second.intValue) + ");");
         }
+        // 账 #197: 窗体自己那一档走同一个出口 —— `ScaleMode = 3  'Pixel` 的窗体里控件几何、
+        // ScaleWidth、文字量纲全按这一档折算，以前恒答缇 (实测 czUI-main/frmDemo.frm:10)。
+        emitDesignerScaleModeProp(frmDesc.formControl, "hwnd");
     }
 
     // M22-fix: 在Form_Load之前先赋值vb6_hwnd_<Form>，这样Form_Load中
@@ -106,7 +109,7 @@
             int enabled = 1;
             pIt = ctrl.properties.find("Enabled");
             if (pIt != ctrl.properties.end()) enabled = (int)pIt->second.intValue;
-            std::string timerFn = cProcName(ctrl.controlName + "_Timer", AccessLevel::Private);
+            std::string timerFn = eventHandlerFn(ctrl.controlName, "_Timer");
             // C29-T: 改之前"设计期 Enabled=0 就整段不发"，于是运行期 `Timer1.Enabled = True`
             // 永远起不来（实测 tick 数 0）。现在只要有事件处理器就**照挂**，把设计期那个
             // Enabled 当参数交给 RTL 决定起不起；key 传 Timer 控件自己的不可见句柄，
@@ -219,6 +222,13 @@
         c_.dedent();
         c_.emitLine("}");
     }
+    // ⚠ **不要**在这里给"没有 Form_Load 的窗体"补置 vb6_formLoaded_ = 1。
+    //   (rev28 曾这么试过, 探针实测**该代码从未执行** —— 停靠视图这类窗体由
+    //    vb6_CreateFormWindowB 走自己的路径建出来, 压根不进这条 WndProc 的
+    //    WM_CREATE 分支, WM_CREATE 探针零条输出即是铁证。)
+    //   真正的修法在 cgen_form_wndproc_dispatch.inc 的 WM_SIZE 转发上:
+    //   "等 Form_Load 完成"这个门**只对真的有 Form_Load 的窗体**存在。
+    //   没有 Form_Load 的窗体, Form_Resize 由每次 WM_SIZE 直接驱动 (VB6 语义)。
 
     // WM_COMMAND: 按钮点击等 (P7.6: 支持控件数组Index参数)
     c_.emitLine("case WM_COMMAND: {");
@@ -239,7 +249,7 @@
             ctrl.controlType == FrmControlType::CheckBox ||
             ctrl.controlType == FrmControlType::OptionButton) {
             if (symTab_.lookup(ctrl.controlName + "_Click")) {
-                std::string clickFn = cProcName(ctrl.controlName + "_Click", AccessLevel::Private);
+                std::string clickFn = eventHandlerFn(ctrl.controlName, "_Click");
                 // 账 #158：**只认 BN_CLICKED=0** —— 按钮族现在挂了 `BS_NOTIFY`，同一个 id 还会
                 // 携着 `code=6/7`（焦点变化）进来，不过滤就把一次焦点移动算成一次点击。
                 // 账 #171（C29-FS-h）：**单选钮这一型光按 code 筛不掉** —— 实测焦点进入组内另一枚时，
@@ -265,7 +275,7 @@
         else if (ctrl.controlType == FrmControlType::TextBox) {
             // P14.4.1: EN_CHANGE (code=0x0300=768) -> _Change() (仅当处理器存在时)
             if (symTab_.lookup(ctrl.controlName + "_Change")) {
-                std::string changeFn = cProcName(ctrl.controlName + "_Change", AccessLevel::Private);
+                std::string changeFn = eventHandlerFn(ctrl.controlName, "_Change");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 768) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + changeFn + "(); " + changeFn + "(); }");
@@ -282,7 +292,7 @@
             // ⚠ 但**时机**与 VB6 不同：这一条要等重绘才落地 —— `Text = x` 之后得过一次消息循环
             //   才收得到（夹具里那句 DoEvents 因此是判据的一部分，不 DoEvents 计数还是旧的）。
             if (symTab_.lookup(ctrl.controlName + "_Change")) {
-                std::string rtbChgFn = cProcName(ctrl.controlName + "_Change", AccessLevel::Private);
+                std::string rtbChgFn = eventHandlerFn(ctrl.controlName, "_Change");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1024) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + rtbChgFn + "(); " + rtbChgFn + "(); }");
@@ -295,7 +305,7 @@
             // 两条 arm 都接上，事件才谈得上"会来"；一条事件双发会让计数变 2 当场翻红，所以
             // 双发不可能被这两条 arm 一起放过。判据用 vb6_RTB_SimNotify 各钉一条。
             if (symTab_.lookup(ctrl.controlName + "_SelChange")) {
-                std::string rtbSelFn = cProcName(ctrl.controlName + "_SelChange", AccessLevel::Private);
+                std::string rtbSelFn = eventHandlerFn(ctrl.controlName, "_SelChange");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1815) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + rtbSelFn + "(); " + rtbSelFn + "(); }");
@@ -305,7 +315,7 @@
         } else if (ctrl.controlType == FrmControlType::ListBox) {
             // P14.4.1: LBN_SELCHANGE (code=1) -> _Click() (仅当处理器存在时)
             if (symTab_.lookup(ctrl.controlName + "_Click")) {
-                std::string clickFn = cProcName(ctrl.controlName + "_Click", AccessLevel::Private);
+                std::string clickFn = eventHandlerFn(ctrl.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + clickFn + "(); " + clickFn + "(); }");
@@ -314,7 +324,7 @@
             }
             // LBN_DBLCLK (code=2) -> _DblClick() (仅当处理器存在时)
             if (symTab_.lookup(ctrl.controlName + "_DblClick")) {
-                std::string dblClickFn = cProcName(ctrl.controlName + "_DblClick", AccessLevel::Private);
+                std::string dblClickFn = eventHandlerFn(ctrl.controlName, "_DblClick");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 2) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + dblClickFn + "(); " + dblClickFn + "(); }");
@@ -325,7 +335,7 @@
             // C29-1b: 换盘 = CBN_SELCHANGE(1) → Drive1_Change；VB6 同一条通知也发 Click，
             // 所以两个处理器各自挂一次（有哪个就发哪个，缺一不报错）。
             if (symTab_.lookup(ctrl.controlName + "_Change")) {
-                std::string drvChgFn = cProcName(ctrl.controlName + "_Change", AccessLevel::Private);
+                std::string drvChgFn = eventHandlerFn(ctrl.controlName, "_Change");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + drvChgFn + "(); " + drvChgFn + "(); }");
@@ -333,7 +343,7 @@
                 c_.emitLine("}");
             }
             if (symTab_.lookup(ctrl.controlName + "_Click")) {
-                std::string drvClkFn = cProcName(ctrl.controlName + "_Click", AccessLevel::Private);
+                std::string drvClkFn = eventHandlerFn(ctrl.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + drvClkFn + "(); " + drvClkFn + "(); }");
@@ -344,7 +354,7 @@
             // C29-1b: 双击列表项 = 下钻一层。VB6 的 Dir1_Change 是"Path 真的变了"才发,
             // 所以先让 RTL 试下钻、返回 1 才调处理器 —— 双击卷标行/空项不惊动事件。
             if (symTab_.lookup(ctrl.controlName + "_Change")) {
-                std::string dirChgFn = cProcName(ctrl.controlName + "_Change", AccessLevel::Private);
+                std::string dirChgFn = eventHandlerFn(ctrl.controlName, "_Change");
                 std::string dirHwnd = ctrlHwndExprForInit(ctrl);
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 2) {");
                 c_.indent();
@@ -357,7 +367,7 @@
                 c_.emitLine("}");
             }
             if (symTab_.lookup(ctrl.controlName + "_Click")) {
-                std::string dirClkFn = cProcName(ctrl.controlName + "_Click", AccessLevel::Private);
+                std::string dirClkFn = eventHandlerFn(ctrl.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + dirClkFn + "(); " + dirClkFn + "(); }");
@@ -367,7 +377,7 @@
         } else if (ctrl.controlType == FrmControlType::FileListBox) {
             // C29-1b: 选中文件 = LBN_SELCHANGE(1) → Click；双击 = LBN_DBLCLK(2) → DblClick
             if (symTab_.lookup(ctrl.controlName + "_Click")) {
-                std::string fileClkFn = cProcName(ctrl.controlName + "_Click", AccessLevel::Private);
+                std::string fileClkFn = eventHandlerFn(ctrl.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + fileClkFn + "(); " + fileClkFn + "(); }");
@@ -375,7 +385,7 @@
                 c_.emitLine("}");
             }
             if (symTab_.lookup(ctrl.controlName + "_DblClick")) {
-                std::string fileDblFn = cProcName(ctrl.controlName + "_DblClick", AccessLevel::Private);
+                std::string fileDblFn = eventHandlerFn(ctrl.controlName, "_DblClick");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 2) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + fileDblFn + "(); " + fileDblFn + "(); }");
@@ -385,7 +395,7 @@
         } else if (ctrl.controlType == FrmControlType::ComboBox) {
             // P14.4.1: CBN_SELCHANGE (code=1) -> _Click() (仅当处理器存在时)
             if (symTab_.lookup(ctrl.controlName + "_Click")) {
-                std::string clickFn = cProcName(ctrl.controlName + "_Click", AccessLevel::Private);
+                std::string clickFn = eventHandlerFn(ctrl.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + clickFn + "(); " + clickFn + "(); }");
@@ -394,7 +404,7 @@
             }
             // CBN_EDITCHANGE (code=5) -> _Change() (仅当处理器存在时)
             if (symTab_.lookup(ctrl.controlName + "_Change")) {
-                std::string changeFn = cProcName(ctrl.controlName + "_Change", AccessLevel::Private);
+                std::string changeFn = eventHandlerFn(ctrl.controlName, "_Change");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 5) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + changeFn + "(); " + changeFn + "(); }");
@@ -403,7 +413,7 @@
             }
             // CBN_DROPDOWN (code=7) -> _DropDown() (仅当处理器存在时)
             if (symTab_.lookup(ctrl.controlName + "_DropDown")) {
-                std::string dropDownFn = cProcName(ctrl.controlName + "_DropDown", AccessLevel::Private);
+                std::string dropDownFn = eventHandlerFn(ctrl.controlName, "_DropDown");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 7) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + dropDownFn + "(); " + dropDownFn + "(); }");
@@ -412,7 +422,7 @@
             }
             // CBN_CLOSEUP (code=8) -> _CloseUp() (仅当处理器存在时)
             if (symTab_.lookup(ctrl.controlName + "_CloseUp")) {
-                std::string closeUpFn = cProcName(ctrl.controlName + "_CloseUp", AccessLevel::Private);
+                std::string closeUpFn = eventHandlerFn(ctrl.controlName, "_CloseUp");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 8) {");
                 c_.indent();
                 c_.emitLine("{ extern void " + closeUpFn + "(); " + closeUpFn + "(); }");
@@ -459,7 +469,7 @@
     for (const auto& ctrl : frmDesc.formControl.children) {
         if (ctrl.controlType != FrmControlType::Toolbar) continue;
         if (!symTab_.lookup(ctrl.controlName + "_ButtonClick")) continue;
-        std::string tbFn5c = cProcName(ctrl.controlName + "_ButtonClick", AccessLevel::Private);
+        std::string tbFn5c = eventHandlerFn(ctrl.controlName, "_ButtonClick");
         std::string tbSrc5c = ctrlHwndExprForInit(ctrl);
         c_.emitLine("{");
         c_.indent();

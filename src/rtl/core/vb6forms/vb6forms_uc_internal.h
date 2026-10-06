@@ -90,7 +90,7 @@ typedef struct vb6_UCRec {
 typedef struct vb6_UCSaved {
     int32_t scaleWidth, scaleHeight, scaleMode;
     void*   hDC;
-    int32_t containerHwnd;
+    void*   containerHwnd;   // 账 #180: 与 vb6_UserControl_ContainerHwnd 同宽 (HWND)
     int16_t enabled;
     void*   font;
     void*   ambientFont;
@@ -170,8 +170,56 @@ vb6_UCRec* vb6_uc_findByInstance(const void* inst);
 // obj 收 UC 实例指针或宿主 HWND; 命中返回 1。见 vb6forms_controls.h 的 vb6_UcPropDesc。
 int32_t vb6_UC_OwnPropGet(void* obj, const wchar_t* name, void* outV);
 int32_t vb6_UC_OwnPropSet(void* obj, const wchar_t* name, const void* inV);
+
+// Fix <vbeclipse> rev22: 反查一个设计期子控件窗口属于哪个 UC 实例 + 槽位名。
+// vb6_ControlMove 改完尺寸后用它决定要不要触发 `<Ctrl>_Resize` 事件
+// (见 vb6forms_controls.h 里 designResize 槽的说明)。要求槽位里的窗口**就是**
+// hwnd —— 同一 UC 里可能有多个 HWND, 事件只认被改尺寸的那个。
+int32_t vb6_UC_DesignCtrlOwner(const void* hwnd, void** outInst, const char** outName);
+
+// Fix <vbeclipse> rev22: 在正确宿主上下文里跑一次 `<Ctrl>_Resize`。
+// 返回 1 = 事件跑了。护栏: 槽位窗口就是 hwnd / rec->me 非空 (HostCreate 早期还没
+// 赋值) / rec->ready (创建期不算) / 同控件不重入; push-pop 的 saved 在本函数栈上。
+// ⚠ **不要**加"g_uc_current 非空就跳过"这种判据 —— `ViewArea.Move` 恰恰总在 UC
+//   上下文内 (UserControl_Resize 本身就是 WM_SIZE→push→resize 链进来的), 那样
+//   等于本条永不触发 (首次实现就踩了, 表现为"事件装上了但尺寸没变")。
+// ⚠ vb6_ControlMove (vb6forms_ctrl.c) 调它时**不能** include 本头 (三头混一个
+//   TU 会 segfault, 见该文件里的说明), 故它靠一条 extern 原型看见本声明。
+int32_t vb6_UC_RunDesignResize(const void* hwnd);
+
+// Fix <vbeclipse> rev23: 把该 UC 的所有设计期子控件 Resize 事件**排到消息循环**
+// 里跑 (SetTimer 一轮即触发)。存在的理由: 直接在 WM_SIZE 里跑会拿到**设计期**
+// 尺寸 —— 那一整串嵌套 Move 都是同步 SendMessage, 跑完才返回, 而 ViewArea 的最终
+// 尺寸是最后那次 `ViewArea.Move` 给的。详见 uc_host.c 里的注释。
+int32_t vb6_UC_QueueDesignResize(const void* inst);
+// rev24: 按子控件 HWND 排队它所属 UC 的设计期 Resize 事件 (vb6_ControlMove 调)。
+// 宿主 WM_SIZE 那条链只覆盖"**宿主自己**变了", 而停靠布局里变的是**子控件**,
+// 它的 WM_SIZE 不冒泡 ⇒ 视图窗体停在设计期尺寸 (详见 vb6forms_ctrl.c 的注释)。
+int32_t vb6_UC_QueueDesignResizeForCtrl(const void* hwnd);
+
+// Fix <vbeclipse> rev23: 排在消息队列里的那条消息 (WM_APP+0x51) 与它的窗口属性名,
+// 以及宿主窗口过程里对应的处理入口。去重用窗口属性而不是 rec 字段 (见uc_host.c 注释)。
+#define VB6_UC_DR_MSG  (WM_APP + 0x51)
+#define VB6_UC_DR_PROP L"C3_UC_DR_PENDING"
+void vb6_UC_DrainDesignResize(void* hwnd);
+
+// Fix <vbeclipse> rev21: UserControl 自有 Public Sub 的按名桥 (晚绑定方法调用)。
+// obj 收 UC 实例指针或宿主 HWND; argv 是 vb6_VARIANT* 数组、argc 是实参个数。
+// 命中且已执行返回 1; 未命中 / 实参个数对不上返回 0 (交回调用方, 语义同改动前)。
+// 见 vb6forms_controls.h 的 vb6_UcMethodDesc —— 缺了它 ucFolder.ShowView 这类
+// 自有方法会落进"未知方法一律空实现", 视图窗体永远 Visible=False ⇒ 停在 0x0。
+int32_t vb6_UC_OwnMethodCall(void* obj, const wchar_t* name, int32_t argc,
+                             const void* argv[], void* outRet);
 void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved);
 void vb6_uc_pop(const vb6_UCSaved* saved);
+
+// Fix <vbeclipse> rev20: UserControl.ScaleWidth/ScaleHeight 的**按实例**取值口。
+// 这两个宿主伪属性在 RTL 里是进程级全局 (vb6_uc_push/pop 维护), 而 cgen 生成的
+// UC 实例方法之间是裸 C 调用、不经过 push ⇒ 多实例共享一份值, 跨实例串味。
+// cgen 在 .ctl 模块里对实例方法发射形参 `me`, 由它定位 rec 即为正解。
+// 查不到 rec 时回落全局 (保持单实例/设计期路径原行为)。定义见 uc_host.c。
+int32_t vb6_UC_ScaleWidthOf(void* inst);
+int32_t vb6_UC_ScaleHeightOf(void* inst);
 
 // --- uc_host_window.c ---
 // wndproc 内的每个 WM_PAINT/事件分支都要 push/pop 宿主状态，dumpFormComposite
@@ -233,6 +281,22 @@ void vb6_uc_dibSaveBmp(const vb6_UCDib* d, const char* path);
 void vb6_uc_dibDestroy(vb6_UCDib* d);
 void vb6_uc_dumpFormComposite(HWND root, const char* dumpDir);
 extern int32_t g_uc_dumpSeq;   // dump 文件序号
+
+// --- 账 #173 census: 内建 Collection 的成员面（uc_collection.c 定义）---
+// 以前这一族**没有集中声明** —— `uc_hostmodel_call.inc` / `uc_hostmodel_getprop.inc`
+// 直接调它们，MSVC 只给 C4013「未定义；假设外部返回 int」就放过。今天这些函数
+// 返回 void/int32_t，按 int 假设**恰好**不出错；但同一族的 `vb6_VariantToDouble`
+// （返回 double）在 x86 上因此把 x87 栈漏成溢出 —— 症状出现在完全不相干的算术里
+// （见 vb6com_internal.h 那条注释）。所以这里按**真实签名**登记，不留给编译器猜。
+void    vb6_Collection_Add(void* coll, const void* winVar);
+void    vb6_Collection_AddKeyed(void* coll, const void* winVar, const wchar_t* key);
+void    vb6_Collection_AddAt(void* coll, const void* winVar, int32_t pos1);
+void    vb6_Collection_AddKeyedAt(void* coll, const void* winVar, const wchar_t* key, int32_t pos1);
+void    vb6_Collection_Remove(void* coll, int32_t idx1);
+void    vb6_Collection_RemoveByKey(void* coll, const wchar_t* key);
+void    vb6_Collection_Item(void* coll, int32_t idx1, void* outV);
+int32_t vb6_Collection_ItemByKey(void* coll, const wchar_t* key, void* outV);
+int32_t vb6_Collection_Count(void* coll);
 
 #ifdef __cplusplus
 } // extern "C"

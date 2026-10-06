@@ -33,6 +33,13 @@
         }
     }
 
+    // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` 的自动实例化守卫由
+    // cgen_localdecl.cpp 在**声明处**发出 (VB6 语义 = 声明即构造)。这里**不要**再发 ——
+    // 窗体变量在符号表里是普通 Variable, 引用多走 MemberAccess 路径, 在此发守卫
+    // 既不可靠 (实测一条都没落到生成 C 里) 又会在纯标识符引用时重复发。
+    // 兜底: 声明处那条要求 `storageClass.empty()` (静态局部不实例化), 若变量来自
+    // Static/Const 等其他声明形态则此处不处理, 保持改动前行为。
+
     // Fix 086: 跨模块窗体默认实例引用 (cLogs 里 Unload FLogs / FLogs.Show).
     // 窗体名作为值 → 该窗体HWND访问器 vb6_form_hwnd_<Form>().
     // 成员访问 (.Visible/.Show) 由 MemberAccessExpr 的窗体模块分支处理.
@@ -163,6 +170,8 @@
             }
         }
         // P14.3.1: Dim As New自动实例化守卫
+        // (注: `Dim X As New <窗体>` 的守卫在本文件更前面统一发出 —— 那些局部变量
+        //  是普通 Variable, 会先被下面的 Variable 分支 return 掉。)
         auto itNew = knownNewVars_.find(lower);
         if (itNew != knownNewVars_.end()) {
             {

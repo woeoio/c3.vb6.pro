@@ -430,7 +430,11 @@ int32_t vb6_Input(int32_t filenumber, BSTR* outVar) {
 }
 
 // P15.4: Input function - reads count characters from file
-BSTR vb6_InputString(int32_t filenumber, int32_t count) {
+// Fix <vbeclipse>: 形参序改成 (count, filenumber) —— cgen 按 VB6 源码序发射
+// `Input$(3, ch)` → vb6_InputString(3, ch) (2026-10-05 t6.bas 实测, 旧序把 3 当
+// 通道号、ch 当字符数, 通道表越界恒返 NULL, Input$ 从来就没读到过东西)。
+// InputB 同口径。
+BSTR vb6_InputString(int32_t count, int32_t filenumber) {
     // Fix 197: 通道号上界是 VB6_MAX_FILES (表长), 不是 511 —— 原先 filenumber=100
     // 会越界读 vb6_file_table[100]。
     if (filenumber < 1 || filenumber >= VB6_MAX_FILES || !vb6_file_table[filenumber]) return NULL;
@@ -443,6 +447,26 @@ BSTR vb6_InputString(int32_t filenumber, int32_t count) {
         int32_t ch = vb6_text_getc(vb6_file_table[filenumber]);
         if (ch < 0) break;
         buf[read++] = (wchar_t)ch;
+    }
+    buf[read] = L'\0';
+    BSTR result = vb6_BSTR_FromStr(buf);
+    free(buf);
+    return result;
+}
+
+// Fix <vbeclipse>: InputB$ — 按字节读文件 (不经过文本解码), 与 Input$ 的
+// "按字符/文本编码"相对。VB6 里 InputB 常配 Binary 通道读协议头/定长记录。
+// 载体口径同 LeftB/RightB/MidB: 一个 wchar 存一个字节 (0-255)。
+BSTR vb6_InputB(int32_t count, int32_t filenumber) {
+    if (filenumber < 1 || filenumber >= VB6_MAX_FILES || !vb6_file_table[filenumber]) return NULL;
+    if (count <= 0) return vb6_BSTR_Empty();
+    wchar_t* buf = (wchar_t*)malloc(((size_t)count + 1) * sizeof(wchar_t));
+    if (!buf) return NULL;
+    int32_t read = 0;
+    for (int32_t i = 0; i < count; i++) {
+        int32_t ch = fgetc(vb6_file_table[filenumber]);
+        if (ch == EOF) break;
+        buf[read++] = (wchar_t)(ch & 0xFF);
     }
     buf[read] = L'\0';
     BSTR result = vb6_BSTR_FromStr(buf);

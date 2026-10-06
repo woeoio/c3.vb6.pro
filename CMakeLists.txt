@@ -250,6 +250,7 @@ set(C3RTL_EMBEDDED_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6rtl/vb6rtl_array.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6rtl/vb6rtl_class_com.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6rtl/vb6rtl_runtime.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6rtl/vb6rtl_crash.h
     # vb6rtl.c 按家族拆分 (2026-09-17): 13 个族实现 + format 的 6 个函数体片段
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6rtl/vb6rtl_string.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6rtl/vb6rtl_format.c

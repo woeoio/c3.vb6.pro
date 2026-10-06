@@ -127,6 +127,16 @@ struct Symbol {
     // 是否已被引用 (用于未使用变量警告)
     bool isReferenced = false;
 
+    // 被 `AddressOf` 取过址的过程 = Win32/COM 回调 (账 #184)。
+    // VB6 的 AddressOf 给出的是 __stdcall 调用桩, 不是本体地址: x86 下本体是
+    // __cdecl, 直接把它交给 OS 就等于每次回调少弹 N*4 字节 (实测 VBFlexGrid 的
+    // SUBCLASSPROC 起窗即堆损坏 0xC0000374)。cgen 见到这个标记就另发一枚
+    // __stdcall 转发桩 (见 cgen_delegate.cpp 的 AddressOf 段), 本体保持 cdecl,
+    // 只有桩被取址。x64 下 MSVC 忽略该约定 ⇒ 两架构共用一份生成码。
+    // 由 Driver::markAddressOfCallbacks() 在 stage 3.5a 置位 (定义模块与所有
+    // 引用它的外部副本一起置, 消费方只读自己表里的那份)。
+    bool addressOfCallback = false;
+
     // 是否为内置符号 (由编译器预注册, 非用户代码)
     bool isBuiltin = false;
 

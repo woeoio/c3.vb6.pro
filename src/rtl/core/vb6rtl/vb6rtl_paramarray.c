@@ -104,13 +104,20 @@ void vb6_PA_SetBSTR(SAFEARRAY* psa, int32_t index, BSTR val) {
     // v.bstrVal is now owned by the array element
 }
 
-VARIANT vb6_PA_GetVariant(SAFEARRAY* psa, int32_t index) {
+// Fix <vbeclipse> rev37: 返回 **vb6_VARIANT** 而非 Windows VARIANT。
+//   生成码把 ParamArray 的 Variant 元素直接喂给 vb6_VariantFromValue, 而那个
+//   _Generic 只认 vb6_VARIANT (C3 自己的同布局结构, vb6rtl_variant.h:35) ——
+//   喂真正的 VARIANT 会落到 `default: vb6_VariantObject` (要 void*), 报
+//   C2172 "不能从类型常数转换" (实测 paratest 夹具 4 处)。两者布局逐平台一致
+//   (同文件已注明), 直接转换零成本。
+vb6_VARIANT vb6_PA_GetVariant(SAFEARRAY* psa, int32_t index) {
     VARIANT v;
     VariantInit(&v);
-    if (!psa) return v;
+    if (!psa) { VARIANT e; VariantInit(&e); return *(vb6_VARIANT*)&e; }
     long idx = (long)index;
     SafeArrayGetElement(psa, &idx, &v);
-    return v;
+    // 转交所有权: 栈上 v 已无栈外引用, 交出其内部缓冲 (BSTR/数组) 由调用方 Clear。
+    return *(vb6_VARIANT*)&v;
 }
 
 int32_t vb6_PA_GetLong(SAFEARRAY* psa, int32_t index) {

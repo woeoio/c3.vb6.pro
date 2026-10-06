@@ -121,4 +121,9 @@
         (void)argsFixed108c;
     }
 
+    // Fix <vbeclipse> 2026-10-06: Declare 的 Err.LastDllError 快照**不在这里**做 ——
+    // 调用点注入语句会把 `While Api() <> 0` / `IIf(Api(), ...)` 这类表达式位置的
+    // 调用撕成 `(Api(); vb6_ErrSetLastDllError(...) != 0)` 这种非法 C。快照改由
+    // cgen_decl_api.cpp 为每个 Declare 生成的 static __inline 包装函数承担
+    // (调用点经 #define / declareAliasMap_ 已被重定向到该包装), 这里保持原样。
     lastExpr_ = callee + "(" + argList + ")";

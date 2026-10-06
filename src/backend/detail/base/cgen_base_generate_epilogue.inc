@@ -5,6 +5,9 @@
     // Delegate (tB 扩展): 所有过程体已发射, 桩定义落地 (原型在 decl pass, 定义可后置)
     emitDelegateThunks();
 
+    // AddressOf 回调桩 (账 #184): 与委托桩同一批后置 —— 桩体要转调的过程定义此时已发完。
+    emitAddressOfThunkDefs();
+
     // 类虚表 (tB B08d): 表实例也后置在这里 —— 表项可能是本类的 Private 过程, 那份定义是
     // `static` 且没有前置原型 (只有自家 .h 里 Public/Friend 那份有), 放前面就是未声明标识符。
     emitClassVirtImpl(module);

@@ -76,8 +76,17 @@
     c_.emitLine("static void* vb6_hwnd_" + cIdent(formName) + " = NULL;");
     // Fix 086: 跨模块窗体默认实例访问器 — 其他模块 (cLogs 等) 引用
     // FLogs.Visible / Unload FLogs 时通过 vb6_form_hwnd_<Form>() 获取窗体HWND
+    // Fix <vbeclipse>: VB6 的窗体默认实例在**被当对象引用时隐式 Load** (建窗+Form_Load,
+    // 不显示)。frmMain 的 `.AddView VIEW_VIEWS, frmViewViews` 与 `frmViewViews.tvwViews`
+    // 都靠这条隐式 Load 才拿到有效句柄; 旧访问器只 `return vb6_hwnd_` → 从没 Show 过的
+    // 视图窗体恒为 NULL → ucFolder 收到 NULL → 停靠面板全空。这里改成首次引用即 Load。
+    // (Unload/Is Nothing 语义偏差可接受: 本工程无 `frmX Is Nothing`, 且 Load+Unload 幂等。)
     h_.emitLine("void* vb6_form_hwnd_" + cIdent(formName) + "(void);");
-    c_.emitLine("void* vb6_form_hwnd_" + cIdent(formName) + "(void) { return vb6_hwnd_" + cIdent(formName) + "; }");
+    h_.emitLine("void vb6_form_load_" + cIdent(formName) + "(void);");
+    c_.emitLine("void* vb6_form_hwnd_" + cIdent(formName) + "(void) {");
+    c_.emitLine("    if (!vb6_hwnd_" + cIdent(formName) + ") vb6_form_load_" + cIdent(formName) + "();");
+    c_.emitLine("    return vb6_hwnd_" + cIdent(formName) + ";");
+    c_.emitLine("}");
     // Fix 093a: 跨模块窗体默认实例 Show — 其他模块 `Frm.Show` 转发到本函数
     h_.emitLine("void vb6_form_show_" + cIdent(formName) + "(void* hMDIClient, int modal);");
 

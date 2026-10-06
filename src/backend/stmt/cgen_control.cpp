@@ -258,10 +258,13 @@ void CCodeGen::visit(ForEachStmt& node) {
         std::string ubVar = "_fe_ub" + std::to_string(tmpIdx);
         c_.emitLine("int32_t " + idxVar + ", " + lbVar + ", " + ubVar + ";");
         if (isPA092q) {
-            // Fix 092q: ParamArray 取值是 Windows VARIANT (SafeArrayGetElement),
-            // 需经 vb6_VariantFromComResult 转成 vb6_VARIANT (ToolsTlsThunks 5468
-            // 曾因直接赋值报 C2440 "VARIANT" → "vb6_VARIANT").
-            c_.emitLine("VARIANT _pa_v" + std::to_string(tmpIdx) + " = {0};");
+            // Fix 092q: ParamArray 取值经 vb6_VariantFromStackVARIANT 转成
+            // vb6_VARIANT (ToolsTlsThunks 5468 曾因直接赋值报 C2440)。
+            // Fix <vbeclipse> rev37: vb6_PA_GetVariant 已改返回 vb6_VARIANT
+            // (与生成码的 _Generic 装箱同口径), 槽位随之改声明; 否则
+            // `VARIANT = vb6_VARIANT` → C2440 (Charts 2020 Form2.c 的
+            // `For Each v In SomeParamArray` 首个命中)。
+            c_.emitLine("vb6_VARIANT _pa_v" + std::to_string(tmpIdx) + " = {0};");
         }
         // Fix 091f: 表达式集合物化 — 避免 LBound/UBound/元素取值重复调用
         // Split/Filter (会每次重新分配数组).
@@ -301,7 +304,9 @@ void CCodeGen::visit(ForEachStmt& node) {
                 // vb6_VariantFromComResult 尾部会 free(pv) 释放堆宿主 VARIANT,
                 // 对栈地址 free → 堆损坏 (0xC0000374). 栈上源用
                 // vb6_VariantFromStackVARIANT (P24-03, 不释放源).
-                c_.emitLine(varAcc + " = vb6_VariantFromStackVARIANT(&" + paTmp092q + ");");
+                // rev37: 槽位已是 vb6_VARIANT 而该函数收 VARIANT* —— 同布局,
+                // 显式转回指针 (改 RTL 签名会波及 vb6rtl_com.c:396 的内部调用).
+                c_.emitLine(varAcc + " = vb6_VariantFromStackVARIANT((VARIANT*)&" + paTmp092q + ");");
             } else if (elemCType == "BSTR") {
                 c_.emitLine(varAcc + " = vb6_PA_GetBSTR(" + arrRef091f + ", " + idxVar + ");");
             } else if (elemCType == "double") {
@@ -418,6 +423,6 @@ void CCodeGen::visit(ForEachStmt& node) {
     loopStack_.pop_back();
 }
 
-
+
 
 } // namespace vb6c3

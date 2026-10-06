@@ -84,6 +84,16 @@ enum class ProcKind : uint8_t {
     PropertySet,
 };
 
+// VB6 的文档类别: driver 按源文件扩展名定一次 (唯一写入点在 driver_frontend)，语义层与
+// 发码层都读它。`UserControl.x` / `PropertyPage.x` / `Extender.x` / `Ambient.x` 这类
+// "文档隐式对象"只在对应类别的文档里存在，判据不该散在字符串猜测里 (账 #217 第二刀)。
+enum class DocumentKind : uint8_t {
+    Standard = 0,      // .bas / .cls
+    Form = 1,          // .frm
+    UserControl = 2,   // .ctl
+    PropertyPage = 3,  // .pag
+};
+
 // VB6类Instancing属性
 enum class VBInstancing : uint8_t {
     Private = 1,              // 仅本工程内可见（VB6默认）

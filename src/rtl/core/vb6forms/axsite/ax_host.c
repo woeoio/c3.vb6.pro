@@ -31,23 +31,107 @@ void vb6_Form_SetDispatch(void* hwnd, void* pDispatch) {
     SetPropW((HWND)hwnd, g_FormDispatchProp, (HANDLE)pDispatch);
 }
 
+/* Fix <vbeclipse> 2026-10-06: 运行期 Controls.Add 免注册 OCX 表 (vbp Object= 同款机制).
+ * cgen 在入口点烘焙 c3_ocx_libs[], 由 vb6_OcxRefRegister 登记。vb6_Form_ControlsAdd
+ * 按 ProgID 命中后改走 ocxCreateAny (LoadLibrary+DllGetClassObject, 绕开注册表);
+ * 未命中 → 原有 CLSIDFromProgID+CoCreateInstance 注册表路径 (零回归: 表空时恒回退). */
+static Vb6OcxRef g_ocxRefs[VB6_MAX_OCXREFS];
+static int       g_ocxRefCount = 0;
+
+void vb6_OcxRefRegister(const Vb6OcxRef* libs, int count) {
+    if (count > VB6_MAX_OCXREFS) {
+        fwprintf(stderr, L"[C3_OCX] ocx ref table full (%d > %d); truncating\n",
+                 count, VB6_MAX_OCXREFS);
+        count = VB6_MAX_OCXREFS;
+    }
+    for (int i = 0; i < count; i++) g_ocxRefs[i] = libs[i];
+    g_ocxRefCount = count;
+}
+
+/* 按 ProgID 或 CLSID 字符串查免注册表; 返回 NULL = 未命中. */
+static const Vb6OcxRef* vb6_OcxRefLookup(const wchar_t* progId, const wchar_t* clsidStr) {
+    if (g_ocxRefCount == 0) return NULL;
+    /* 1) ProgID 精确 (大小写不敏感) */
+    if (progId) {
+        for (int i = 0; i < g_ocxRefCount; i++) {
+            if (g_ocxRefs[i].progId && _wcsicmp(g_ocxRefs[i].progId, progId) == 0)
+                return &g_ocxRefs[i];
+        }
+        /* 2) ProgID 去版本后缀 (.1/.2) 再试 (typelib 导出版本无关 ProgID 时兜底) */
+        size_t n = wcslen(progId);
+        if (n > 2 && progId[n - 2] == L'.' && progId[n - 1] >= L'0' && progId[n - 1] <= L'9') {
+            wchar_t base[128];
+            if (n < 128) {
+                wcscpy(base, progId);
+                base[n - 2] = 0;
+                for (int i = 0; i < g_ocxRefCount; i++)
+                    if (g_ocxRefs[i].progId && _wcsicmp(g_ocxRefs[i].progId, base) == 0)
+                        return &g_ocxRefs[i];
+            }
+        }
+    }
+    /* 3) CLSID 字符串精确 (注册表可解析 CLSID 时兜底) */
+    if (clsidStr) {
+        for (int i = 0; i < g_ocxRefCount; i++) {
+            if (g_ocxRefs[i].clsidStr && _wcsicmp(g_ocxRefs[i].clsidStr, clsidStr) == 0)
+                return &g_ocxRefs[i];
+        }
+    }
+    return NULL;
+}
+
 void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctrlName) {
     if (!hwnd || !progId) return NULL;
-    (void)ctrlName;
 
-    /* 1. CLSIDFromProgID */
-    CLSID clsid;
-    HRESULT hr = CLSIDFromProgID(progId, &clsid);
-    if (FAILED(hr)) {
-        return NULL;
+    /* C3_OCX_TRACE=1: 打印实例化/激活各步 HRESULT (诊断宿主问题) */
+    int ocxTrace = (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0);
+
+    /* 0. 免注册表优先 (按 ProgID 查, 不依赖注册表).
+     *    命中 → 用表里记录的 coclass CLSID + 相对 exe 路径走 ocxCreateAny,
+     *    完全绕开 HKLM 注册表 —— CI runner 未注册 OCX 也能实例化. */
+    const Vb6OcxRef* hit = vb6_OcxRefLookup(progId, NULL);
+    if (!hit) {
+        /* 注册表可解析 CLSID 时, 再按 CLSID 试一次 (typelib progId 与用户写的
+         * ProgID 不一致时兜底; 此分支仅在机器已注册该 ProgID 时才会用到). */
+        CLSID c0;
+        if (SUCCEEDED(CLSIDFromProgID(progId, &c0))) {
+            wchar_t cs[40];
+            if (StringFromGUID2(&c0, cs, 40) > 0)
+                hit = vb6_OcxRefLookup(NULL, cs);
+        }
     }
 
-    /* 2. CoCreateInstance */
     IUnknown* pUnk = NULL;
-    hr = CoCreateInstance(&clsid, NULL, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER,
-                          &IID_IUnknown, (void**)&pUnk);
-    if (FAILED(hr) || !pUnk) {
-        return NULL;
+    HRESULT hr = ((HRESULT)0x800401F1L);
+    if (hit && hit->clsidStr && hit->fileName) {
+        CLSID c;
+        if (SUCCEEDED(CLSIDFromString((LPOLESTR)hit->clsidStr, &c))) {
+            hr = ocxCreateAny(hit->fileName, &c, (void**)&pUnk);
+            if (ocxTrace)
+                fwprintf(stderr,
+                         L"[C3_OCX] Controls.Add regfree hit progId=%ls ocx=%ls hr=0x%08lX pUnk=%p\n",
+                         progId, hit->fileName, (unsigned long)hr, (void*)pUnk);
+        }
+    }
+
+    /* 1. 注册表兜底 (原有路径): 表未命中 / ocxCreateAny 失败 (OCX 不在 exe 旁). */
+    if (!pUnk) {
+        CLSID clsid;
+        hr = CLSIDFromProgID(progId, &clsid);
+        if (FAILED(hr)) {
+            if (ocxTrace)
+                fwprintf(stderr, L"[C3_OCX] Controls.Add: 免注册表未命中且 CLSIDFromProgID 失败 progId=%ls (需注册表或 Object= 引用)\n", progId);
+            return NULL;
+        }
+        hr = CoCreateInstance(&clsid, NULL, CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER,
+                              &IID_IUnknown, (void**)&pUnk);
+        if (FAILED(hr) || !pUnk) {
+            if (ocxTrace)
+                fwprintf(stderr, L"[C3_OCX] Controls.Add registry fallback progId=%ls hr=0x%08lX\n", progId, (unsigned long)hr);
+            return NULL;
+        }
+        if (ocxTrace)
+            fwprintf(stderr, L"[C3_OCX] Controls.Add registry fallback progId=%ls pUnk=%p\n", progId, (void*)pUnk);
     }
 
     /* 3. Get IDispatch */
@@ -67,35 +151,73 @@ void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctr
         return (void*)pDisp;
     }
 
-    /* 5. Create simple ActiveX site */
+    /* Fix <vbeclipse> 2026-10-06: 运行期 Controls.Add 原先只有 SetClientSite +
+     * 写死的 extent/rect (26700x20000 HIMETRIC ≈ 1009x756px, 注释里的
+     * "400x300px≈267x200HM" 换算还是错的), 不 DoVerb 激活、不登记转发/绘制 ——
+     * windowless 控件运行期加上去就是一片空白。现在走与 vb6_OcxHost_Create
+     * (设计期 OCX) 同一套完整宿主流程, 初始几何 = 窗体客户区。 */
+
+    /* 5. 完整 site (含 windowless 三件套 + Dispatch) */
     Vb6AxSite* site = (Vb6AxSite*)calloc(1, sizeof(Vb6AxSite));
     if (!site) { pOleObj->lpVtbl->Release(pOleObj); pUnk->lpVtbl->Release(pUnk); return (void*)pDisp; }
     site->lpVtblClientSite = &g_axSiteClientSiteVtbl;
     site->lpVtblInPlaceSite = &g_axSiteInPlaceSiteVtbl;
     site->lpVtblInPlaceFrame = &g_axSiteInPlaceFrameVtbl;
+    site->lpVtblControlSite = &g_axSiteControlSiteVtbl;
+    site->lpVtblInPlaceSiteWindowless = &g_axSiteInPlaceSiteWindowlessVtbl;
+    site->lpVtblDispatch = &g_axSiteDispatchVtbl;
     site->ref = 1;
     site->hwndForm = (HWND)hwnd;
     site->pOleObj = pOleObj;
+    if (ctrlName) { wcsncpy(site->ctrlName, ctrlName, 127); site->ctrlName[127] = 0; }
+    RECT rcClient;
+    GetClientRect((HWND)hwnd, &rcClient);
+    site->rcCtrl = rcClient;
+    axSiteRegister(site);
 
     /* 6. SetClientSite */
     pOleObj->lpVtbl->SetClientSite(pOleObj, (IOleClientSite*)&site->lpVtblClientSite);
 
-    /* 7. Set initial extent (default 400x300 pixels, ~267x200 HIMETRIC) */
-    SIZEL sz = { 26700, 20000 };  /* HIMETRIC units */
+    /* 7. 初始 extent = 窗体客户区 (HIMETRIC; px→twips→HM, 与设计期同一换算) */
+    SIZEL sz = { twipsToHimetric((rcClient.right - rcClient.left) * 15),
+                 twipsToHimetric((rcClient.bottom - rcClient.top) * 15) };
     pOleObj->lpVtbl->SetExtent(pOleObj, DVASPECT_CONTENT, &sz);
 
-    /* 8. Skip DoVerb for now — WMP crashes on INPLACEACTIVATE.
-       Just return IDispatch for COM late-binding property access. */
-    /* TODO: proper ActiveX hosting with IOleInPlaceSite frame etc. */
+    /* 8. 原地激活 (与设计期同口径: 只 INPLACEACTIVATE, UIACTIVATE 需要完整的
+     * IOleInPlaceUIWindow/菜单合并, VB6 UserControl 会挂起) */
+    hr = pOleObj->lpVtbl->DoVerb(pOleObj, OLEIVERB_INPLACEACTIVATE, NULL,
+                                 (IOleClientSite*)&site->lpVtblClientSite,
+                                 -1, (HWND)hwnd, NULL);
+    if (FAILED(hr)) {
+        pOleObj->lpVtbl->DoVerb(pOleObj, OLEIVERB_SHOW, NULL,
+                                (IOleClientSite*)&site->lpVtblClientSite,
+                                -1, (HWND)hwnd, NULL);
+    }
 
-    /* 9. Set control position */
+    /* 9. SetObjectRects = 窗体客户区 (不是写死的 400x300) */
     IOleInPlaceObject* pIPO = NULL;
     hr = pOleObj->lpVtbl->QueryInterface(pOleObj, &IID_IOleInPlaceObject, (void**)&pIPO);
     if (SUCCEEDED(hr) && pIPO) {
-        RECT rc = { 0, 0, 400, 300 };
-        pIPO->lpVtbl->SetObjectRects(pIPO, &rc, &rc);
+        pIPO->lpVtbl->SetObjectRects(pIPO, &rcClient, &rcClient);
         pIPO->lpVtbl->Release(pIPO);
     }
+
+    /* 10. windowless 消息转发 + IViewObject 宿主绘制 (与设计期同: 从登记表回找 site) */
+    IOleInPlaceObjectWindowless* pIPOW = NULL;
+    if (SUCCEEDED(pDisp->lpVtbl->QueryInterface(pDisp, &IID_IOleInPlaceObjectWindowless,
+                                                (void**)&pIPOW)) && pIPOW) {
+        for (int i = g_axSiteCount - 1; i >= 0; i--) {
+            if (g_axSites[i] == site) { g_axSites[i]->pInPlaceObj = pIPOW; break; }
+        }
+    }
+    IViewObject* pView = NULL;
+    if (SUCCEEDED(pDisp->lpVtbl->QueryInterface(pDisp, &IID_IViewObject, (void**)&pView)) && pView) {
+        for (int i = g_axSiteCount - 1; i >= 0; i--) {
+            if (g_axSites[i] == site) { g_axSites[i]->pViewObj = pView; break; }
+        }
+    }
+
+    InvalidateRect((HWND)hwnd, NULL, TRUE);
 
     pUnk->lpVtbl->Release(pUnk);
     return (void*)pDisp;

@@ -46,7 +46,11 @@ extern void*   vb6_UserControl_hDC;          // 绘制 DC (Windowless: 容器客
 // VB6 语义 = 当前是否有可用绘制 DC; 生成代码按**变量**读 (vb6_ret_HasDC = ...),
 // 故用宏而不是函数, 与 hDC 的赋值点天然同步 (无需在 uc_host.c 各赋值处维护).
 #define vb6_UserControl_HasDC (vb6_UserControl_hDC ? 1 : 0)
-extern int32_t vb6_UserControl_ContainerHwnd;// 容器 HWND
+// 账 #180 (B19): 容器 HWND 必须是**指针宽度**。此前它是 int32_t, 而写入点递进来的是
+// HWND (x64 = 64 位) ⇒ 高 32 位当场丢掉; 语料里 VBFlexGrid.ctl 把它直接当 HWND 传给
+// MapWindowPoints / GetWindowLongW (实测产物 5 处), 那是把截断后的值交给窗口管理器。
+// 与 vb6_UserControl_hWnd / _hDC 同档 (两者本来就是 void*)。
+extern void*   vb6_UserControl_ContainerHwnd;// 容器 HWND (指针宽度)
 extern int16_t vb6_UserControl_Enabled;
 extern int32_t vb6_UserControl_MousePointer;
 extern void*   vb6_UserControl_MouseIcon;
@@ -88,6 +92,12 @@ int32_t vb6_UserControl_TextHeight(BSTR text);
 //   PropertyChanged(propName) → 通知容器属性已变 (触发容器端的 Changed/属性刷新)
 double vb6_UserControl_ScaleX(double x, int32_t fromScale, int32_t toScale);
 double vb6_UserControl_ScaleY(double x, int32_t fromScale, int32_t toScale);
+
+// 账 #196 第三条: 上面那一对只是**转手**到这里 —— 单位换算的实现只有一份，名字不带宿主前缀，
+// 因为 PictureBox / 窗体 / `Me.` / With 块里那一枚控件 / 窗体模块里裸写 这四形接收者要的是同一件事。
+// 声明留在本头是因为换算的声明本来就住在这儿，而生成 C 只 include vb6rtl.h (本头由它带进来)。
+double vb6_ScaleUnitX(double x, int32_t fromScale, int32_t toScale);
+double vb6_ScaleUnitY(double y, int32_t fromScale, int32_t toScale);
 void   vb6_UserControl_AsyncRead(BSTR url, int32_t asyncType, BSTR propertyName,
                                  int32_t flags);
 void   vb6_UserControl_PropertyChanged(BSTR propName);
@@ -189,11 +199,10 @@ static inline void* vb6_PropertyPage_SelectedControls(int32_t index) {
 #define vbHitResultTransparent 1
 #define vbHitResultHit         2
 
-// --- PropertyPage 内建 Changed 属性 ---
-// VB6 PropertyPage 代码惯用裸名 `Changed = True` (生成 C 亦为裸标识符),
-// 见 Charts 2020 PropPagLP.pag. 项目自定义的 Changed 只会以类字段
-// (me->m_Changed) 或模块限定名 (vb6_<Mod>_Changed) 出现, 不会占用裸键.
-extern int16_t Changed;
+// PropertyPage 的 Changed 只有 vb6_PropertyPage_Changed 这一个名字 (账 #219)。
+// 这里曾 extern 过一枚裸名 `int16_t Changed` 给"源码里裸写 Changed"落脚 —— 注释当时说
+// "项目自定义的 Changed 只会以类字段或模块限定名出现, 不会占用裸键"，**这句是错的**:
+// 标准模块里 `Public Changed As Long` 在生成的模块 C 里就是裸名 (探针实测 C2371 / no exe)。
 
 // --- AsyncProperty / Picture 类型常量 (VB6 内建, 此前缺失) ---
 #define vbAsyncTypePicture     0
@@ -208,9 +217,8 @@ extern int16_t Changed;
 #define vbPicTypeIcon          3
 #define vbPicTypeEMetafile     4
 
-// --- Picture.Line 模式常量 (Fix 102 把 `, B` / `, BF` 原样作为实参发射) ---
-extern const int32_t B;   // 画方框
-extern const int32_t BF;  // 实心方框
+// Picture.Line 的 B / BF 由 parser 在 style 位置折成字面量 1/2 (账 #220) —— 这里曾
+// extern 过两枚裸名 C 全局，与 VB 工程里叫 B 的模块级变量直接撞车，故删除。
 
 #ifdef __cplusplus
 }

@@ -448,7 +448,7 @@ function Resolve-VbpExeBase {
 # GUI smoke: require a visible main window, then close only the process we launch.
 # This checks startup, not screenshot correctness or QR decoding.
 function Test-GuiVbp {
-    param([string]$Name, [string]$VbpFile, [string]$ExeName = "", [string]$Arch = "", [int]$AutoExitSec = 0, [string]$ShardGroup = "")
+    param([string]$Name, [string]$VbpFile, [string]$ExeName = "", [string]$Arch = "", [int]$AutoExitSec = 0, [string]$ShardGroup = "", [int]$DumpMinColors = 0)
     # vbp 分片: 本片不跑这例 —— 闸门必须在任何副作用之前 (建目录/起进程)。
     if (-not (Enter-VbpShard -Group $ShardGroup)) { return }
     $script:total++
@@ -479,6 +479,13 @@ function Test-GuiVbp {
     $exe = Join-Path $guiOut ($exeBase + ".exe")
     $proc = $null
     try {
+        # 账 #175: 子进程继承本进程环境 ⇒ 用前先设、finally 里清, 不漏给后面的用例
+        $dumpDir = ""
+        if ($DumpMinColors -gt 0) {
+            $dumpDir = Join-Path $guiOut "ucdump"
+            New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
+            $env:C3_UC_DUMPDIR = $dumpDir
+        }
         $proc = Start-Process -FilePath $exe -WorkingDirectory $guiOut -PassThru -ErrorAction Stop
         $watch = [Diagnostics.Stopwatch]::StartNew()
         $windowSeen = $false
@@ -511,6 +518,7 @@ function Test-GuiVbp {
                 Write-Host "PASS (compile, window, self-exit at ~${selfSec}s, code 0)" -ForegroundColor Green
             } else {
                 $proc.Kill(); $proc.WaitForExit(5000) | Out-Null
+                if ($DumpMinColors -gt 0) { Assert-UcDumpPainted -Dir $dumpDir -MinColors $DumpMinColors }
                 Write-Host "PASS (compile, window, auto-exit after ${AutoExitSec}s)" -ForegroundColor Green
             }
             $script:pass++
@@ -526,7 +534,375 @@ function Test-GuiVbp {
         $script:fail++
         Write-Host "FAIL ($($_.Exception.Message))" -ForegroundColor Red
     } finally {
+        if ($DumpMinColors -gt 0) { Remove-Item Env:\C3_UC_DUMPDIR -ErrorAction SilentlyContinue }
         if ($proc -and -not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit() }
+    }
+}
+
+# 账 #175: 读 C3_UC_DUMPDIR 落下的每控件绘制缓冲, 数**不同颜色**个数。
+# 为什么用这个读数: 图体空白在「窗口出来了」「退出码 0」两条判据下都是绿的 —— 只有
+# 缓冲本身能说话。BASE (改前) 实测个位数, NEW 实测 >=63, 阈值取 40 留两侧余量。
+function Assert-UcDumpPainted {
+    param([string]$Dir, [int]$MinColors, [int]$MinFiles = 3)
+    $files = @(Get-ChildItem $Dir -Filter *.bmp -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike 'FORM_*' })
+    if ($files.Count -lt $MinFiles) { throw "ucdump: only $($files.Count) bmp (< $MinFiles) in $Dir" }
+    foreach ($f in $files) {
+        $b = [IO.File]::ReadAllBytes($f.FullName)
+        if ($b.Length -lt 54) { throw ("ucdump: " + $f.Name + " too short") }
+        $off = [BitConverter]::ToInt32($b, 10)
+        $w = [BitConverter]::ToInt32($b, 18)
+        $h = [BitConverter]::ToInt32($b, 22)
+        $bpp = [BitConverter]::ToInt16($b, 28)
+        $bytes = $bpp / 8
+        $stride = ((($w * $bpp) + 31) / 32) * 4
+        $set = @{}
+        for ($y = 0; $y -lt $h; $y += 2) {
+            $row = $off + $y * $stride
+            for ($x = 0; $x -lt $w; $x += 2) {
+                $k = $row + $x * $bytes
+                if ($k + 2 -lt $b.Length) { $set[[int]$b[$k] * 65536 + [int]$b[$k+1] * 256 + [int]$b[$k+2]] = 1 }
+            }
+        }
+        if ($set.Count -lt $MinColors) {
+            throw ("ucdump blank: " + $f.Name + " " + $w + "x" + $h + " distinct=" + $set.Count + " (< " + $MinColors + ")")
+        }
+    }
+}
+
+function Test-UcScaleUnitsCensus {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] uc_scale_units_census ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_uc_scale_units.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #159: 宿主伪成员只有一张表 (名字 / 类型 / 可否裸写 / 赋值拆数值)。哨兵逐行把
+# 表与 src/rtl/core/vb6rtl/vb6rtl_userctl.h 的 extern 声明对照, 并禁止那五份旧清单
+# 回潮 (成员名字面量再出现在消费点 = 抄了第二份)。
+function Test-HostPseudoTableCensus {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] host_pseudo_table_census ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_host_pseudo_table.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #184: AddressOf 交出去的必须是桩地址。口径收在 CCodeGen::addressOfTargetCName 一处,
+# 这条哨兵拦"又加一个把 (void*) 直接拼 cProcName 的取址出口" —— 那种写法 x64 毫无症状,
+# 只有 x86 运行期才炸, 所以必须静态钉住 (负控: 同一份脚本在 HEAD~1 的树上四条规则全红)。
+# 账 #185: 子类化分层的槽位哨兵 (一个属性名 = 一层, 谁都不许跟谁抢)。
+# 这一类缺陷的症状是「装了但没装」—— 编得过、发码对、事件一次也不响, 只有运行期看得见,
+# 所以静态钉住。同一份脚本在 HEAD 的树上 S1~S4 一起红 (实测 6 行)。
+# 账 #188: 浮点字面量的形状只有一个出口 (src/common/float_literal.hpp)。
+# 手拼 "f" 后缀这件事在 x86/x64 都不会有运行期症状 —— 它是**编不过**, 而带小数点的设计值 (8.25)
+# 恰好躲过, 所以必须静态钉。同一份脚本在 HEAD 的树上 R1~R3 全红 (R1 当场点出那 6 个手拼点)。
+function Test-IntSuffixSites {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] int_suffix_sites ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_int_suffix_sites.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-ScaleModeWriters {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] scalemode_writers ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_scalemode_writers.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-ControlDC {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] control_dc ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_control_dc.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-SaAccess {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] sa_access ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_sa_access.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-BitwiseAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] bitwise_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_bitwise_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-BodyDeclShape {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] bodydecl_shape ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_bodydecl_shape.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-DocHostAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] dochost_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_dochost_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-CaseIsShape {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] caseis_shape ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_caseis_shape.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-RtlNakedNames {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] rtl_naked_names ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_rtl_naked_names.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-RtlResourceIds {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] rtl_resource_ids ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_rtl_resource_ids.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-UcArrayEventSites {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] uc_array_event_sites ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_uc_array_event_sites.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-IntLiteralShape {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] int_literal_shape ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_int_literal_shape.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-FloatLiteralShape {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] float_literal_shape ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_float_literal_shape.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+
+function Test-SubclassSlotSites {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] subclass_slot_sites ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_subclass_slots.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-CtrlArrayMemberSites {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] ctrl_array_members ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_ctrl_array_members.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-CtrlPropTypeAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] ctrl_prop_type_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_ctrl_prop_type_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-FormDrawState {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] form_draw_state ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_form_draw_state.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-VariantCmpBoxing {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] variant_cmp_boxing ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_variant_cmp_boxing.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-FixtureTimerClose {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] fixture_timer_close ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_fixture_timer_close.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+
+function Test-EventHandlerNames {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] event_handler_names ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_event_handler_names.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-UcInstanceExit {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] uc_instance_exit ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_uc_instance_exit.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+
+function Test-AddressOfThunkSites {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] addrof_thunk_sites ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_addressof_thunk_sites.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
     }
 }
 
@@ -850,6 +1226,17 @@ function Test-Vbp {
         Write-Host "FAIL (no exe)" -ForegroundColor Red
         Write-Host ("    找的是 " + $exePath + " ；vbp 文件名=" + [IO.Path]::GetFileNameWithoutExtension($VbpFile) + " ；声明的 ExeName32=" + $declared) -ForegroundColor Red
         return
+    }
+
+    # 免注册便携部署: 把工程目录下的原生依赖 (OCX/DLL/TLB) 复制到 exe 同目录 ($OutDir),
+    # 与 Test-GuiVbp 行为一致 (否则依赖免注册 OCX 的用例在 CI 上拿不到控件文件 → LoadLibrary 失败)。
+    # Fix <vbeclipse> 2026-10-06: axcontrolsadd 的运行时 Me.Controls.Add 走 Object= 免注册表,
+    # 需要 NewTab01.ocx 在 exe 旁才能 regfree 加载。
+    $srcDir = Split-Path $VbpFile -Parent
+    if (Test-Path $srcDir) {
+        Get-ChildItem $srcDir -File | Where-Object { $_.Extension -match '\.(ocx|dll|tlb)$' } | ForEach-Object {
+            Copy-Item -Force $_.FullName $OutDir | Out-Null
+        }
     }
 
     # 可选环境变量 "K1=V1;K2=V2" → 显式注入子进程环境块 (RTL 用 GetEnvironmentVariableW 读它)。
@@ -1292,6 +1679,39 @@ function Test-VbpBuildFail {
 
 # ai/023 S05: build must SUCCEED but emit the given warning text (D7: 校验不拒收,
 # 警告必须可见 —— 成功路径吞警告的坑在 S01 已修, 本用例防回归).
+# 账 #187: 真工程「编得过、链得动、出得了 exe」的正面积。三个 helper 各管一头 ——
+# Test-Vbp 要跑起来并校验输出（这些第三方工程没有自退出口，CI 里会一直挂着）、
+# Test-VbpBuildFail 只钉"必须红"，中间那一格"必须绿"以前没人管：本轮 #188/#190/#191 三刀
+# 全落在 Charts 2020 的 UC 子工程上，而它们压根不在任何清单里，每次都靠手工真编译才看得见
+# （ucChartBar 的 LNK2019 就是手工编译才抓到的 —— 编不过的东西在门禁里连"红"都算不上，是根本不存在）。
+# 输出目录**按用例隔离**：这四份 .vbp 的 ExeName32 全写着 Proyecto1.exe，共用 $OutDir 会互相盖掉
+# （#166 那条"exe 名有两个权威"的姊妹坑：名字修对了还会串味）。先删干净再编，
+# 免得 Test-Path 命中上一轮的旧 exe —— 记忆里那条教训原话是「Test-Path $exe 不是构建成功的判据」。
+function Test-VbpBuild {
+    param([string]$Name, [string]$VbpFile, [string]$Arch = "")
+    $script:total++
+    if (-not (Enter-VbpShard)) { return }
+    Write-Host -NoNewline "  [VBP-BUILD] $Name ... "
+    $buildDir = Join-Path $OutDir ("build_" + $Name)
+    if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
+    New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+    $argList = '"' + $VbpFile + '" --output-dir "' + $buildDir + '"'
+    if ($Arch -ne "") { $argList += " --arch " + $Arch }
+    $result = & cmd /c ('"' + $C3 + '" ' + $argList + ' 2>&1')
+    $text = (($result | Out-String) -replace '\s+', ' ')
+    $rc = $LASTEXITCODE
+    $exePath = Join-Path $buildDir ((Resolve-VbpExeBase -VbpFile $VbpFile) + ".exe")
+    if ($rc -eq 0 -and (Test-Path $exePath)) {
+        $script:pass++
+        Write-Host ("PASS (" + (Get-Item $exePath).Length + " bytes)") -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host ("FAIL rc=" + $rc + " exe=" + (Test-Path $exePath)) -ForegroundColor Red
+        Write-Host ("    找的是 " + $exePath) -ForegroundColor DarkGray
+        if ($Verbose) { Write-Host $text }
+    }
+}
+
 function Test-VbpWarn {
     param([string]$Name, [string]$VbpFile, [string]$Needle)
     $script:total++
@@ -1407,7 +1827,74 @@ if ($Category -in @("all", "run", "bas")) {
     Add-BasTest "test_array" "$Tests\test_array.bas" @("wa-clone=22", "wa-ub=3", "wa-str=65", "wa-rt=65", "=== Array Tests PASSED ===")
     # <vbeclipse>: Array() 空数组那一形 (UBound=-1/LBound=0/For Each 零次) 与"未分配 →
     # 运行时错误 9"两形; 读数全取自真实输出。常量实参那形见 arr_n01_ubound_vbnull。
-    Add-BasTest "test_arr_empty" "$Tests\test_arr_empty.bas" @("EA-ub=-1", "EA-lb=0", "EA-n=0", "EA-isarr=True", "EA-join=[", "EA-fe=0", "EA-vub=-1", "EA-3ub=2", "EA-e2=9", "EA-rb-lb=1", "EA-rb-ub=3", "EA-DONE")
+    Add-BasTest "test_arr_empty" "$Tests\test_arr_empty.bas" @("EA-ub=-1", "EA-lb=0", "EA-n=0", "EA-isarr=True", "EA-join=[", "EA-fe=0", "EA-vub=-1", "EA-3ub=2", "EA-e2=9", "EA-rb-lb=1", "EA-rb-ub=3", "EA-err=9", "EA-ea-nullread=9", "EA-ea-nullwrite=9",
+        "EA-ea-in=20/30/50", "EA-ea-above=9", "EA-ea-below=9", "EA-ea-udt-in=11/22/0/0",
+        "EA-ea-udt=9", "EA-ea-before=8", "EA-ea-erase=9", "EA-ea-loop=100", "EA-DONE")
+    # <vbeclipse> 账 #214: 多维数组的**元素**访问收成一处带检查的出口 —— 越界 / 未分配一律错误 9
+    # (以前: 二维越界静默拿到隔壁那格、二维未分配读 NULL->data 当场 AV、4 秩连"在范围内"都崩 ——
+    #  发码那一条把实参拼成 (int[]){i0, i1} 只塞了两个下标却按实际秩数交出去)。NA-in / NA-dyn-in 是范围内的负控。
+    Add-BasTest "test_arr_nd" "$Tests\test_arr_nd.bas" @("NA-udt=5/6", "NA-in=0/23/211/2112",
+        "NA-above=9", "NA-below=9", "NA-null=9", "NA-dyn-in=102/23", "NA-rank=9", "NA-DONE")
+    # <vbeclipse> 账 #216: 位运算 (And/Or/Xor/Eqv/Imp) 与一元 Not 的**结果类型**收成一处权威
+    # (TypeSystem::bitwiseResult / logicalNotResult，语义层与发码层都调它)。改前发码那份
+    # oracle 恒答 Boolean，于是位运算数一进字符串上下文就打 True/False，COM 实参还被装箱成
+    # VT_BOOL (真工程里 MainForm 的 Render(hdc Or 0, ...) 就是这一条)。两头钉：数值档按数答
+    # (BF-or/xor/and/not/eqv/imp/byte*/int-not/dblnot)，两侧都是 Boolean 时**仍**是 Boolean
+    # (BF-bool-or / BF-bool-and / BF-boolbox)，条件位照旧当真假用 (BF-cond) —— 拦反向错。
+    $bitsNeedles = @("BF-or-lit=51", "BF-or-var=51", "BF-xor=17", "BF-and=34", "BF-not=-6",
+        "BF-int-or=3", "BF-mixed=-1", "BF-cstr=51", "BF-left=51", "BF-byte-and=80",
+        "BF-byte-or=95", "BF-byte-not=-86", "BF-int-not=-2", "BF-dblnot=-3", "BF-eqv=-7",
+        "BF-imp=-5", "BF-assigned=51", "BF-bool-or=True", "BF-bool-and=False", "BF-boolbox=False",
+        "BF-cond=hit", "BF-boolcond=miss", "BF-sum=85", "BF-DONE")
+    Add-BasTest "test_bitops" "$Tests\test_bitops.bas" $bitsNeedles
+    Add-BasTest "test_bitops_x86" "$Tests\test_bitops.bas" $bitsNeedles -Arch "x86"
+    # <vbeclipse> 账 #215: 体级声明收成「一条声明符一条 LocalDeclStmt」。改前四条体级路两种形状 ——
+    # Dim 自己手写一遍展开(那份副本漏了 WithEvents 与「后缀即类型」)，Const/Static/体级 Public 把
+    # MultiDecl 原样交给语义层(switch 不认) ⇒ 一枚名字都不登记、每条使用一条 VB3001(真工程一片 276 条)，
+    # 而 `Dim a&, b&` 第二枚落回 Variant 是**真值差**(BD-empty 改前 3/0)。BD-* 其余六条是护栏(改前改后同)。
+    $bdNeedles = @("BD-dim=9", "BD-suffix=Long/Long/15", "BD-empty=3/3", "BD-const=345",
+        "BD-static=33", "BD-arr=13/2/3", "BD-variant=Long/String/1", "BD-DONE")
+    Add-BasTest "test_bodydecl" "$Tests\test_bodydecl.bas" $bdNeedles
+    Add-BasTest "test_bodydecl_x86" "$Tests\test_bodydecl.bas" $bdNeedles -Arch "x86"
+    # <vbeclipse> 账 #217 第一刀: `Case Is > 2` 里的 Is 不是标识符。改前 parser 造一枚
+    # IdentifierExpr("Is") 留在 AST 里借优先级解析，语义层就把它当未声明的名字 —— 模块写着
+    # Option Explicit 时每形一条 VB3001(两份真工程 36 条，发码语料全仓 138 条)，没写的那面
+    # 每枚用到的过程发一枚没人引用的 vb6_VARIANT 局部(探针实测)。发码从来只读比较符与右操作数，
+    # 值一直是对的，所以这里钉的是「形状换了、判定没换」: 六个关系符各自的分档(CI-rel/CI-ne)、
+    # Is 与普通值混写同一形(CI-mixed，优先级不能把 `, 1` 吃进右操作数)、字符串 Select(CI-word)、
+    # Single Select(CI-half，Fix 136 那一档的 Case 侧)、Variant 测试表达式(CI-var)。
+    $ciNeedles = @("CI-rel=lt/le/eq/gt/ge/ge", "CI-ne=is4/ne4", "CI-mixed=big/big/two/rest",
+        "CI-word=beq/gtm/rest", "CI-half=hi/lo/mid", "CI-var=hi/lo/hi", "CI-DONE")
+    Add-BasTest "test_caseis" "$Tests\test_caseis.bas" $ciNeedles
+    Add-BasTest "test_caseis_x86" "$Tests\test_caseis.bas" $ciNeedles -Arch "x86"
+    # <vbeclipse> Fix 2026-10-06: Err.LastDllError 必须是"Declare 调用那一刻的快照"。
+    # VB6 每次由 Declare 发起的 DLL 调用: 1) 先 SetLastError(0), 2) 调 API,
+    # 3) 返回后立刻 GetLastError() 存进 Err.LastDllError (MSDN ErrObject.LastDllError +
+    # 社区对 VB6 运行时的逆向, tek-tips 222-475113 "VB 里 GetLastError 恒为 0")。
+    # 改前 cgen_expr_member_precheck.inc / cgen_expr_with.cpp 把 Err.LastDllError 直接映成
+    # **访问那一刻**的 GetLastError(), 三条可观测后果全反; 现在由 cgen_decl_api.cpp 为每个
+    # Declare 生成的 static __inline 捕获包装承担 (不能改成"调用点插两条语句" —— Declare
+    # 调用可以落在 Do While 条件这种表达式位置, 语句注入会把 C 撕成非法代码, 夹具的
+    # LDL-loop 就钉这一点)。LDL-survive 是主判据: 200 次字符串拼接 + 打印之后快照仍是 126。
+    # LDL-preclear/LDL-cleared 钉 Err.Clear: VB6 文档 "Clear Method (Err Object)" 的 Clear 后
+    # 属性表逐项写着 LastDLLError 0 —— 快照不许跨过一次 Clear 存活。
+    $ldlNeedles = @("LDL-ret=0", "LDL-fail=126", "LDL-len=492", "LDL-survive=126",
+        "LDL-ok=0", "LDL-raw=0", "LDL-loop=4", "LDL-preclear=126", "LDL-cleared=0", "LDL-DONE")
+    Add-BasTest "test_lastdllerror" "$Tests\test_lastdllerror.bas" $ldlNeedles
+    Add-BasTest "test_lastdllerror_x86" "$Tests\test_lastdllerror.bas" $ldlNeedles -Arch "x86"
+    # <vbeclipse> 账 #220: B / BF 曾被 RTL 当成两枚**外部链接的 C 全局** (const int32_t B = 1;
+    # BF = 2;) 去接 Picture.Line 发码原样吐出的语法旗标。用户模块一发 `Public B As Long` 就撞成
+    # C2373 + C2166 给 const 赋值 —— 改前探针实测 BUILD-RC=1 / 5 条诊断 / no exe。旗标现在由
+    # parser 在 Line 的 style 位置折成字面量, 这两个名字整条归还给用户 (位置那一头见 pcline 的
+    # [CODEGEN-NOTE]，两处不许互相覆盖)。
+    $ncNeedles = @("NC-B=13 NC-BFLEN=2", "NC-ACC=15", "NC-BOX=3/8", "NC-DONE")
+    Add-BasTest "test_nameclash" "$Tests\test_nameclash.bas" $ncNeedles
+    Add-BasTest "test_nameclash_x86" "$Tests\test_nameclash.bas" $ncNeedles -Arch "x86"
+    # 账 #219: RTL 那枚裸名全局 Changed 撤掉后, 模块级 Public Changed As Long 整个归用户。
+    # 改前实测 BUILD-RC=1 / no exe (C2371 重定义), 改后两种架构都要出 exe 并读出这个数。
+    $nc219Needles = @("NC219-CHANGED=6", "NC219-VT=3", "NC219-DONE")
+    Add-BasTest "test_rtl_naked_changed" "$Tests\test_rtl_naked_changed.bas" $nc219Needles
+    Add-BasTest "test_rtl_naked_changed_x86" "$Tests\test_rtl_naked_changed.bas" $nc219Needles -Arch "x86"
     # <vbeclipse>: Join/Filter 的数组槽 (Variant 数组曾按 BSTR* 读 → 段错误; Filter 的
     # VB6 可选参曾不补 → C2198/C2440 编不过)。含 1-based 源数组、零命中空数组、非字符串元素 → 13。
     Add-BasTest "test_joinfilter" "$Tests\test_joinfilter.bas" @("JF-var=[abc|xyz|abd]", "JF-var-def=[abc xyz abd]", "JF-str=[abc|xyz|abd]", "JF-f-lb=0 ub=1", "JF-f=[abc|abd]", "JF-none-ub=-1", "JF-excl-ub=0", "JF-excl=[xyz]", "JF-err=13", "JF-DONE")
@@ -1454,6 +1941,11 @@ if ($Category -in @("all", "run", "bas")) {
     Add-BasTest "test_nested_udt_array" "$Tests\test_nested_udt_array.bas" @("NA1=1;NB1=D0;NC1=1.2", "NA5=5;NB5=D4;NC5=5.2", "HDR@ABC", "NESTED-DONE")
     Add-BasTest "test_udt_assign" "$Tests\test_udt_assign.bas" @("A1=1;S1=hello;N1=42", "A2=99;S2=world;N2=7", "H1=11;HS1=alpha", "E1=5;ES1=five", "L1=2;LS1=hello", "UDT-ASSIGN-DONE")
     Add-BasTest "test_date_display" "$Tests\test_date_display.bas" @("D1-noserial=Y", "D2-year=Y", "D2b-notime=Y", "D3-nextday=Y", "D4-nextyear=Y", "D5-diff0=Y", "D6-param=Y", "D7-longparam=Y", "D8-cstr=Y", "D9-format=Y", "DATE-DONE")
+    # 账 #172: 日期**字面量** #...# 的编译期折算。改前 parser 只挂原文、发码读没写过的联合体槽
+    # (Debug 恰好 0、Release / /RTCu 是垃圾)，所以针面两头钉：与 DateSerial 的运行期算法同值、
+    # 带 PM 的那条只比整日期多出不到一天。负控 = 旧编译器上 A/B/C/E/F/G/H/I/J/K 全 False、
+    # L-serial=-6.27743597849989e+66。
+    Add-BasTest "test_datelit" "$Tests\test_datelit.bas" @("A-eq2=True", "B-epoch=True", "C-maxday=True", "D-plus31=True", "E-pm-after=True", "F-pm-in-day=True", "M-pm-not-next=True", "G-leap=True", "H-y99=True", "I-y49=True", "J-dash-dmy=True", "K-case-hit=True", "L-serial=43832", "DL-DONE")
     Add-BasTest "test_variant" "$Tests\test_variant.bas" @("PASS1a", "PASS1c", "PASS5", "Done")
     # ai/022 W1: Boolean 的类型可见性 + 装箱口径。32 条读数逐条钉: 转字符串的四条路
     # (B1-B8)、类型标记 (B9-B14)、落进 Variant 的那一半 (B15-B20)、反向护栏 —— Integer /
@@ -1461,6 +1953,20 @@ if ($Category -in @("all", "run", "bas")) {
     # 裸值 Debug.Print (B31-B32)。
     $boolNeedles = @("BOOL-DONE") + (1..30 | ForEach-Object { "B$_=Y" }) + @("B31-rawTrue", "B32-rawFalse")
     Add-BasTest "test_bool_display" "$Tests\test_bool_display.bas" $boolNeedles
+    # 账 #238: 与 Variant 比较的那个标量操作数以前**按地址交出去** (`&d`, d 是 double) ——
+    # vb6_VarCmp* 于是把一个 8 字节标量当 vb6_VARIANT 的布局读: 相等的两个数答 False (改前
+    # 两架构实测 VC01..VC05 / VC10 / VC15 七条全 False), 而且读过头。现在取址只问一处判据
+    # (CCodeGen::cmpOperandMayTakeAddr → 声明那几张表 + 符号表)。两头都钉: 每条相等都有
+    # 一条近似不等必须 False (否则"恒真"也算修好了); Long / String 那两条本来就走快捷通道与
+    # vb6_StrCmp, 一起钉住 —— 把它们改道到 VarCmp 也会红。
+    $varcmpNeedles = @("VC01-var-eq-double=True", "VC02-double-eq-var=True", "VC03-var-eq-single=True",
+        "VC04-var-eq-currency=True", "VC05-module-var-eq-double=True",
+        "VC06-var-ne-double-true=True", "VC07-var-eq-double-false=True",
+        "VC08-var-gt-double=True", "VC09-double-lt-var=True", "VC10-rel-reverse-false=True",
+        "VC11-var-eq-long=True", "VC12-var-eq-long-false=True",
+        "VC13-var-eq-string=True", "VC14-var-eq-string-false=True",
+        "VC15-var-eq-date=True", "VC16-var-eq-date-false=True", "VC-DONE")
+    Add-BasTest "test_varcmp_scalar" "$Tests\test_varcmp_scalar.bas" $varcmpNeedles
     Write-Host ""
 
         # --- P5.5 数据类型兼容性测试 ---
@@ -1572,6 +2078,15 @@ if ($Category -in @("all", "run", "bas")) {
     # Delegate (tB extension): typed function pointers, stdcall/cdecl thunks, both arches
     Add-BasTest "test_delegate" "$Tests\test_delegate.bas" @("CALL=Y", "INIT=Y", "REASSIGN=Y", "BITCMP=Y", "APICB=Y", "QSORT=Y", "MODVAR=Y", "DELEGATE-DONE")
     Add-BasTest "test_delegate_x86" "$Tests\test_delegate.bas" @("CALL=Y", "INIT=Y", "REASSIGN=Y", "BITCMP=Y", "APICB=Y", "QSORT=Y", "MODVAR=Y", "DELEGATE-DONE") -Arch "x86"
+    # 账 #184: `AddressOf` 取址的过程 = Win32/COM 回调, 交出去的必须是 __stdcall **桩**的地址
+    # (VB6 的 AddressOf 给的就是桩, 不是本体)。x86 下本体是 __cdecl ⇒ 每次回调把栈少弹 N*4 字节:
+    # VBFlexGrid 的 SUBCLASSPROC 有 6 个形参 (漏弹 24 字节) ⇒ 起窗即堆损坏 0xC0000374, 本地 3/4 复现。
+    # 这里钉"回调语义照旧"那半边: 两遍枚举计数相同 / lParam 逐字送到 / hWnd 非 0 / 返回 0 就停 /
+    # 没被取址的过程不受影响。判据不依赖"桌面上有几枚窗口"(全用自洽式), 所以两片不会因环境抖。
+    # "桩存在"那半边由 addrof_cb_shape 钉 —— 它的负控就是 BASE 的发码: 里面一个 aoThunk_ 都没有。
+    $aoNeedles = @("AC1-tag=Y", "AC2-echo=Y", "AC3-hwnd=Y", "AC4-stop=Y", "AC5-ret=Y", "AC6-plain=Y", "AC-DONE")
+    Add-BasTest "test_addrof_cb" "$Tests\test_addrof_cb.bas" $aoNeedles
+    Add-BasTest "test_addrof_cb_x86" "$Tests\test_addrof_cb.bas" $aoNeedles -Arch "x86"
     # Overloading (tB extension): same-name by-type/arity resolution, Optional span, Variant tier
     Add-BasTest "test_overload" "$Tests\test_overload.bas" @("F-L5", "F-Shi", "F-L6", "3", "5", "O0", "O17", "21", "OVERLOAD-DONE")
     Add-BasTest "test_overload_x86" "$Tests\test_overload.bas" @("F-L5", "F-Shi", "F-L6", "3", "5", "O0", "O17", "21", "OVERLOAD-DONE") -Arch "x86"
@@ -1607,6 +2122,7 @@ if ($Category -in @("all", "run", "bas")) {
     # parse, the new keywords stay soft, and the codegen path is still untouched.
     Add-BasTest "test_interface" "$Tests\test_interface.bas" @("ITF-SOFT:12", "ITF-1:OK", "ITF-2:OK", "INTERFACE-DONE")
     Add-BasTest "test_interface_x86" "$Tests\test_interface.bas" @("ITF-SOFT:12", "ITF-1:OK", "ITF-2:OK", "INTERFACE-DONE") -Arch "x86"
+    Add-BasTest "test_varcmp_scalar_x86" "$Tests\test_varcmp_scalar.bas" $varcmpNeedles -Arch "x86"
     Add-BasTest "test_bool_display_x86" "$Tests\test_bool_display.bas" $boolNeedles -Arch "x86"
 
     # ai/009 5.10 (P3, 溢出检查): 窄整型收窄赋值越界必须报 Error 6, 边界值 (255 /
@@ -1848,6 +2364,12 @@ if ($Category -in @("all", "run", "vbp")) {
     # （第一枚那 1 秒里名义只有 10 拍）。两条故意用差 5 倍的周期，翻红时差的是量级不是抖动。
     $tmNeedles = @("TIMERPROG-DONE") + (1..12 | ForEach-Object { "T$_=Y" })
     Test-Vbp "tmtimer" "$Tests\c29timer\TmApp.vbp" $tmNeedles
+    # Fix <vbeclipse> 2026-10-06: LoadRes* 实装回归 — .res 资源段加载
+    # (字符串表/裸 DIB/组图标/PNG·WebP 字节签名/CUSTOM 数据/错误 326)。
+    $resNeedles = @("STR=ResString-OK|Y", "BMP=Y/0", "ICO=Y/0", "PNG=Y/0", "WEBP=Y/0", "BIN=8/222", "MISS=326")
+    Test-Vbp "resload" "$Tests\resload\ResLoad.vbp" $resNeedles
+    $resAlphaNeedles = @("PICSET=True", "PAINTED=True")
+    Test-Vbp "resalpha" "$Tests\resload\ResAlpha.vbp" $resAlphaNeedles
     Test-Vbp "tmtimer_x86" "$Tests\c29timer\TmApp.vbp" $tmNeedles -Arch "x86"
     # 账 #157: 窗体显示时把焦点交给**这枚窗体里 TabIndex 最小的那枚拿得到焦点的控件**（VB6 口径）。
     # 改之前的实测读数（029 的「s-0 第 2 条改口径」）：窗体确实是活动/前台窗、SetFocus 本身也能落地，
@@ -2789,6 +3311,8 @@ if ($Category -in @("all", "run", "vbp")) {
     $rtNeedles = @("CTRLRICHTEXT-DONE") + (1..89 | ForEach-Object { "RT$_=Y" })
     # 128-a: ReadOnly / WordWrap 的 CStr 与 TypeName (rt1 设计期就没开换行)
     $rtNeedles += @("RT90=True/False/Boolean")
+    # 账 #161: 只动选区不该发 Change (RT91) / 一次赋值恰好一条 (RT92)
+    $rtNeedles += @("RT91=Y", "RT92=Y")
     Test-Vbp "ctrlrichtextbox" "$Tests\ctrlrichtextbox\RtfApp.vbp" $rtNeedles
     Test-Vbp "ctrlrichtextbox_x86" "$Tests\ctrlrichtextbox\RtfApp.vbp" $rtNeedles -Arch "x86"
     # 发码正面：类名 + 四位创建样式逐枚钉（1409286148 = 基+ES_MULTILINE，rt2 全默认；
@@ -3046,9 +3570,18 @@ if ($Category -in @("all", "run", "vbp")) {
     # 整数表 (ItemData)。旧 readIntList 按"每项 2B 整数"读 ItemData, 读到的是
     # 结构的字节本身, 任何工程都解出 1/304/12288 这串恒定假值 → 设计期 ItemData
     # 编进 exe 一直是垃圾。本用例的 ItemData 取 5/300/-7, 旧实现必错。
+    # 账 #207: 同一份 blob 接第二类控件。设计期 List/ItemData 的 .frx 引用以前只认
+    # ListBox 一档，ComboBox 那 17 处（Charts 2020 四个 demo 工程的 "Number of Series"）
+    # 全落空 ⇒ 下拉框是空的，而 ucTreeMaps 的 demo 正是用 Combo1.ListIndex 决定画不画。
+    # FD8 是真判据（三项 List + 两项 ItemData 各自对上），FD9 留原始读数，
+    # FD10 只钉前缀（留原始读数，不钉值）：`Combo1.ListIndex = 2` 之后 clicks=0。
+    # 这一形对不对**本机量不了**（没有 VB6）。唯一能引的旁证是自家 ctrlfiles 的 CF14/CF15：
+    # 那两条是**手工调 fileList_Click 来模拟一次点击**的，也就是说这套夹具一直按
+    # "程序改 ListIndex 不发 Click" 写 —— 所以这里不把任何一种口径钉成断言（台账 §B43 / 账 #208）。
     Test-Vbp "frxdata" "$Tests\frxdata\FrxData.vbp" @(
         "FD1=alpha|beta", "FD2=3", "FD3=1234", "FD4=5", "FD5=300", "FD6=-7",
-        "FD7=OK", "FRXDATA-DONE")
+        "FD7=OK", "FD8-COMBO=True", "FD9-COMBO-RAW count=3 item0=1234 id0=5 id2=-7",
+        "FD10-COMBO-LI-RAW", "FRXDATA-DONE")
 
     # P20-40: StatusBar 复刻 (msctls_status32, 不加载 mscomctl.ocx)。
     # comctl32 v5.82 / v6 都不注册 msctls_status32, 连 dwICC=0xFFFFFFFF 全开也补不上,
@@ -3071,6 +3604,62 @@ if ($Category -in @("all", "run", "vbp")) {
         "SB33-AFTERRM2=3", "SB34-LASTKEY=", "SB35-SETMINW=77", "SB36-SETW=123",
         "SB37-SETAUTOSZ=0", "SB38-SETTIP=hello", "SB39-SETSTYLE=6",
         "SB40-AFTERCLR=0", "CTRLSTATUSBAR-DONE")
+
+    # 账 #205: 状态条那两处问字体（sbrContents 的排版宽 + 画文字）以前都裸问窗口，而状态条是
+    # RTL 自注册的窗口类 ⇒ 恒回 NULL，实测同一串文字在 8pt 与 20pt 两枚上量出同一个宽(140)。
+    # 排版结果从 VB 没有现成的门（Panels(i).Width 读的是**请求值**，不是排版后的宽），
+    # 所以判据问窗口本人：SB_GETPARTS(WM_USER+6) 交回各格右边界。
+    # SF02/SF04 两头钉"字体参与排版"（改前都 False），SF05 钉"显式给过 Width 的那格不许挪"。
+    # RAW 三行只钉前缀 —— 110/260 是 DPI 的函数，不钉绝对数（#147 那条口径）。
+    $sbFontExpected = @(
+        "SF00-RAW pf8=", "SF01-RAW fix=", "SF02-CONTENTS-TRACKS-FONT=True",
+        "SF03-RAW after=", "SF04-RUNTIME-FONT=True",
+        "SF05-FIXED-EDGE-UNCHANGED=True", "SBFONT-DONE")
+    Test-Vbp "sbfont" "$Tests\sbfont\SbFont.vbp" $sbFontExpected
+    Test-Vbp "sbfont_x86" "$Tests\sbfont\SbFont.vbp" $sbFontExpected -Arch "x86"
+    # <vbeclipse> 账 #221 = C29-PL-a: Picture.Line 落原生 GDI。这条判据只能**画完再问像素** ——
+    # 改前 8 处 Line 全发成 ComGetObjectProp(hwnd,"Line") 再取 Item, 两跳在 RTL 都登记成
+    # "认识但什么都不做" ⇒ 编得过、跑得起、一笔不画、一条诊断也不打 (CLINE 那族静默空转的第三例)。
+    # 四形各钉两头: 画过的那枚像素 == 交进去的颜色, 没画过的那枚 != 它 —— 只钉前者会放过
+    # "整片刷成红", 只钉后者会放过"根本没落笔"。PL03 同时证明 BF(=1|4) 与 B(=1) 不是同一个数。
+    # 画与问都放在 Timer 第一拍 (dcsurf 那条口径: 窗口问题在窗口活着的时候问);
+    # 先试 Form_Load 时 GetPixel 一律 -1 (CLR_INVALID), 那不是本刀的靶子, 记在夹具注释里。
+    # 账 #239: 控件那户 Print 的笔位。改前 picP.Print 用本族自存的像素光标 (VB6_PrintX/Y)，
+    # 既不读 picP.CurrentX/CurrentY 也不推进它们 —— 同一份判据在改前的编译器上实测
+    # 推进 = 0 (而同一枚控件答 TextHeight = 13)、笔位放到 60 而墨落在第 2 行、Cls 之后
+    # CurrentY 仍是 400。PL08 钉"增量 == 自己量的 TextHeight"、PL09 钉 Cls 复位笔位、
+    # PL10 钉缇档同一问 (一份存储不许两种单位)、PL11 钉 Cls 用的是带 Fix 187 哨兵那份背景色、
+    # PL12 钉两行叠两行高。PL13/PL14 只钉前缀 (13/195/26 都是 DPI 的函数，不钉绝对数)。
+    $pcDrawExpected = @("PL01-LINE=True", "PL02-BOX=True", "PL03-FILL=True", "PL04-CIRCLE=True",
+        "PL08-PEN=True", "PL09-CLSPEN=True", "PL10-TWIPADV=True",
+        "PL11-BLACKCLS=True", "PL12-STACK=True",
+        "PL13-RAW dp=", "PL14-RAW twip=", "PL-DONE")
+    Test-Vbp "pclinedraw" "$Tests\pcline\PcDraw.vbp" $pcDrawExpected
+    Test-Vbp "pclinedraw_x86" "$Tests\pcline\PcDraw.vbp" $pcDrawExpected -Arch "x86"
+
+    # 账 #233 = Form 的绘图状态属性。这一组改前**压根编不出来**：`Me.DrawWidth = 3` 发成
+    # `vb6_Form_DrawGetWidth(vb6_hwnd_X) = 3;` (C2106) —— 写侧从没登记进 cgen 的写表，而
+    # 那四条读侧硬编码住在 cgen_expr_member_form_builtin.inc 的一份侧表里（注释还写着"写侧
+    # 不需要"）。两头各钉：FD01/02/03 = 写进去的数读回来一样（钉 +1 编码与写侧接线）；
+    # FD07/08 = 一枚像素证人（画到的那一点问得到、旁边那一点不是那个颜色）；
+    # FD10 = 两份编码合一的证人 —— `Print` 推进笔位之后，绘图那一路读得到同一个数
+    # （改前那里读回的是 float 位图案当整数的天文数，或 0）。
+    # FD04/05/06 钉的是自己算出来的定值，可以直接当判据；FD09 那行 **AFTERPRINT 的 y 与字号/DPI 有关**
+    # ⇒ 只打印不当判据（本线口径：读数留档，判据换成"落在 30..3000 之间"那一枚布尔）。
+    $fdrawExpected = @("FD01-drawwidth=True", "FD02-curxy=True", "FD03-pset2=True",
+        "FD04-RAW xy=300,130 dw=3", "FD05-sm0=1", "FD06-sm1=3",
+        "FD07-PIXEL=True", "FD08-neg=True",
+        "FD11-forecolor=True", "FD12-RAW pen=16711680 blue=16711680 first=255",
+        "FD10-printstore=True",
+        # 237: the pen advance and the paint position must use this window's own unit.
+        # The RAW lines carry DPI-dependent numbers, so only their prefixes and the
+        # two scale-mode readings are pinned; the True/False judges are ratios.
+        "FD13-printadvance-twips=True", "FD14-printadvance-points=True",
+        "FD15-RAW", "sm0=1 sm1=2",
+        "FD16-paint-units=True", "FD17-RAW",
+        "FD-DONE")
+    Test-Vbp "fdrawstate" "$Tests\fdraw\FDemo.vbp" $fdrawExpected
+    Test-Vbp "fdrawstate_x86" "$Tests\fdraw\FDemo.vbp" $fdrawExpected -Arch "x86"
 
     # --- P20-42: SSTab (SysTabControl32 复刻) ---
     # 期望串取自夹具真实输出 (别缩写标签)。TS25..TS28 是切页显隐: vb6_GetControlVisible
@@ -3106,6 +3695,25 @@ if ($Category -in @("all", "run", "vbp")) {
         "EV22-UNLOAD", "EV23-TERMINATE",
         "EV24-OLE-DROP=OLE-TEST-DROP EFF=1", "EV25-OLE-OVER",
         "EV26-DRAG-DONE", "EV27-STARTDRAG", "EV29-COMPLETE=3") -Env "C3_OLEDDB_TEST=1"
+
+    # --- 账 #185: PictureBox/Image 的事件面 vs RTL 自绘子类的同名槽位碰撞 ---
+    # 两层子类以前把原始窗口过程存在同一个窗口属性名 (VB6_OrigProc) 上, 又都写「属性已存在就不装」
+    # ⇒ 后装的那层被静默丢掉: Paint / MouseDown / MouseUp / Click 一次也不响。
+    # 判据两头 (缺一头就是假绿):
+    #   ① 事件臂要响 —— PB02..PB05 只有事件层真装上才有; PB06 是 Label 的证人 (同为 STATIC,
+    #      但不含 SS_BITMAP ⇒ 没人跟它抢), 修复前后都该有 —— 它排除「夹具自己没驱动起来」这种红。
+    #   ② 表面不能丢 —— PB01 里那颗像素必须是设计期 BackColor 的红 (255)。画序定成「最外层
+    #      BeginPaint/EndPaint 一次, DC 经 VB6_PaintDC 交下去让自绘层画表面, 再抬用户的 _Paint」。
+    # 负控 = 修复前的编译器编同一份夹具: x64 与 x86 都只剩 PB00/PB06 两条,
+    #   汇总行读 mdown=0 mup=0 click=0 img=0 lb=1 paint_ok=0。
+    Test-Vbp "pbsub" "$Tests\pbsub\PbSub.vbp" @(
+        "PB01-PAINT px=255", "PB02-PIC-MDOWN x=20", "PB03-PIC-MUP", "PB04-PIC-CLICK",
+        "PB05-IMG-CLICK", "PB06-LB-MDOWN",
+        "PB-CNT mdown=1 mup=1 click=1 img=1 lb=1 paint_ok=1", "PB-WAIT done=True")
+    Test-Vbp "pbsub_x86" "$Tests\pbsub\PbSub.vbp" @(
+        "PB01-PAINT px=255", "PB02-PIC-MDOWN x=20", "PB03-PIC-MUP", "PB04-PIC-CLICK",
+        "PB05-IMG-CLICK", "PB06-LB-MDOWN",
+        "PB-CNT mdown=1 mup=1 click=1 img=1 lb=1 paint_ok=1", "PB-WAIT done=True") -Arch "x86"
 
     # --- P20-46: 控件字符串全程 W / 支持多国语言（用户要求）的源码面反例断言 ---
     # 判据两条:
@@ -3337,12 +3945,21 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-ProductManifest "balloon_manifest_is_user_supplied" "$OutDir\BalloonTooltips\BalloonTooltips.exe" 1 "dpiAware" -ShardGroup "balloon"
     # Charts 2020 demo (3rd-party UserControl charts): windowless chart controls (x86 first;
     # x64 after LongPtr port of API pointers/handles in the .ctl/.cls sources).
-    Test-GuiVbp "Charts2020" "$Tests\Charts 2020\Proyecto1.vbp" -Arch "x86" -AutoExitSec 3
+    # 账 #175: 除"起窗口 + 退出码 0"外, 再验每控件的绘制缓冲真画了东西 (>=40 色)
+    Test-GuiVbp "Charts2020" "$Tests\Charts 2020\Proyecto1.vbp" -Arch "x86" -AutoExitSec 3 -DumpMinColors 40
     # czUI (czForm): 自定义 GDI+ UserControl (.ctl) 无边框窗体 demo, 需 -Arch x86 (32 位)
     Test-GuiVbp "czUI" "$Tests\czUI-main\czFormDemo.vbp" -Arch "x86" -AutoExitSec 3
+    # 账 #184 / B23: 这份 demo 每枚网格都经 comctl32 的 SetWindowSubclass 装了 SUBCLASSPROC,
+    # 而那个指针以前是 __cdecl 本体地址 ⇒ x86 起窗期堆损坏 (改前本地 3/4 崩、改后 14/14 起窗)。
+    # B23 当时记的是"这份 demo 完全在门禁之外 ⇒ 缺陷藏了很久", 修好之后就按它说的挂上来。
+    Test-GuiVbp "FlexGridX86" "$Tests\VBFlexGridDemo\VBFlexGridDemo.vbp" -Arch "x86" -AutoExitSec 3
     # NewTab: 第三方 OCX 控件 (NewTab01.ocx, 32 位) 真宿主验证. 免注册便携部署 (OCX 在工程目录, 由 harness 复制到 exe 旁, 不依赖本机注册);
     # 无边框窗体无关闭按钮/无自动退出逻辑, 用 -AutoExitSec 3 收尾避免阻塞后续测试
     Test-GuiVbp "NewTab" "$Tests\NewTab-test\Test.vbp" -Arch "x86" -AutoExitSec 3
+    # axcontrolsadd: 运行期 Me.Controls.Add 免注册创建第三方 OCX 控件 (NewTabCtl.NewTab), 验证
+    # Object= 免注册表在运行时路径被查询 (regfree hit); OCX 在工程目录, 由 harness 复制到 exe 旁,
+    # 不依赖本机注册。断言 ADD=OK (实例化+激活不崩)。x86: NewTab01.ocx 是 32 位, 必须与 32 位 exe 同架构。
+    Test-Vbp "axcontrolsadd" "$Tests\axcontrolsadd\AxAdd.vbp" @("ADD=OK") -Arch "x86"
     # ExtShow: 跨模块窗体默认实例"无参" Show (Fix 146 回归靶, 2026-09-20 vbman C2198):
     # .bas caller 调 Form2.Show, 定义侧签名 (hMDIClient, modal) 后调用侧须补 modal=0
     Test-GuiVbp "ExtShow" "$Tests\ext_show_test\test_ext_show.vbp" -AutoExitSec 3
@@ -3444,6 +4061,157 @@ if ($Category -in @("all", "run", "vbp")) {
     $ifaceWrapExpected = @("IFACE-CALL-OK", "IFACE-DONE")
     Test-Vbp "iface_wrap" "$Tests\iface_wrap\IfaceWrap.vbp" $ifaceWrapExpected
     Test-Vbp "iface_wrap_x86" "$Tests\iface_wrap\IfaceWrap.vbp" $ifaceWrapExpected -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (ve_units): 控件**自己的坐标系**读数。两枚 UC 同尺寸、同字体,
+    # 只差 .ctl 声明的 ScaleMode (1=缇 / 3=像素)。判据写成「缇型 = 像素型 x TwipsPerPixelX」
+    # ⇒ 与 DPI 无关, 换机器不会漂。钉的是账 #175 (ScaleWidth) 与账 #177 (TextWidth/TextHeight)
+    # 同一族口径: 控件宿主交出去的每一个量纲都得跟着它声明的 ScaleMode 走。
+    # 改前实测: U-SW=True 而 U-TW/U-TH=False (文字量纲交的是设备像素)。
+    # 账 #189 加的两条针 (ve_units 里塞一枚 UC 控件数组 uArr(0..2)): 整体成员 Count/LBound/UBound
+    # 必须走 vb6_arr_<名>。修前这夹具**编不过** —— Count 发成对句柄变量的 COM 属性读, 跨窗体时
+    # 是 undeclared identifier (C2065), 同窗体时恒答 0。负控实测 (a4e3b574 的编译器 x86):
+    #   frmUnits.c(214)/(220): error C2065 "vb6_hwnd_uArr": 未声明的标识符, BUILD rc=1。
+    $veUnitsExpected = @("U-SW=True", "U-TW=True", "U-TH=True", "U-CTX=True", "U-HW=True", "U-CNT=True",
+        "U-ARR-RAW count=3 lb=0 ub=2", "U-ARRM-methods=3", "U-ARR=True",
+        "U-ARREVT-RAW i1=1 h1=1 i2=2 h2=2 ret=7", "U-ARREVT=True",
+        "U-ARRCLICK-RAW hw=True idx=2 hits=1 ret=0", "U-ARRCLICK=True",
+        "U-ARRDBL-RAW hw=True idx=2 dbl=1 hits=0 ret=0", "U-ARRDBL=True",
+        "U-ARREXT-RAW l=3600 t=1320 w=1200 h=1140", "U-ARREXT=True", "U-DONE")
+    Test-Vbp "ve_units" "$Tests\ve_units\Units.vbp" $veUnitsExpected
+    Test-Vbp "ve_units_x86" "$Tests\ve_units\Units.vbp" $veUnitsExpected -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (evtcase) 账 #190: 控件事件臂调用的函数名必须按 **Sub 自己的拼写** 发。
+    # VB6 的标识符大小写不敏感、C 敏感: 以前臂里那个名字是拿控件的设计期拼写现拼的, 于是
+    # "改了控件名没改过程名" (VB6 完全合法) 就变成引用一个没人定义的函数 —— 链接期 LNK2019。
+    # 三枚控件: cmdRun/CmdRun_Click 与 chkOpt/ChkOpt_Click 只差大小写 (本账的两条臂),
+    # cmdSame/cmdSame_Click 拼写一致 = **证人** (它排除"BM_CLICK 这条路自己没驱动起来"那种假红)。
+    # 负控 = 修复前的编译器 (ea5155af) 真编译同一份夹具:
+    #   CaseForm.obj : error LNK2019 无法解析的外部符号 _vb6_cmdRun_Click / _vb6_chkOpt_Click,
+    #   fatal LNK1120: 2 个  —— 恰好两枚, 证人那枚没有第三条。
+    $evtCaseExpected = @("EC01-RUN-CLICK", "EC02-CHK-CLICK chk=1", "EC03-SAME-CLICK",
+        "EC-CNT run=1 chk=1 same=1", "EC-DONE")
+    Test-Vbp "evtcase" "$Tests\evtcase\EvtCase.vbp" $evtCaseExpected
+    Test-Vbp "evtcase_x86" "$Tests\evtcase\EvtCase.vbp" $evtCaseExpected -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (piccur) 账 #192: With 块里读写的那一枚必须是**它自己**的状态。
+    # 真工程那一形 = Charts 2020/ucTreeMaps 的 PropPagFMR.pag:256-266（`With Picture1 : .CurrentX /
+    # .CurrentY`）与 pag:618（`With lstFonts : Call .Clear`）—— 后端两张表从没登记过这三条，
+    # 于是全部落到 cgen_expr_with.cpp 那条 "tempVar + "." + 成员名" 的兜底 = C2039。
+    # 三头: PC01 写了读得回；PC02 **另一枚没被写坏**（RTL 按 HWND 存窗口属性，全局一份就露馅，
+    # 同 #156 那条双向钉）；PC03 清空前那个数确实是 2（拦住"Clear 什么都不做、本来就 0"那种假绿）。
+    # 负控 = 修复前那台编译器 (40bbef67) 真编同一份夹具：PicForm.c 150/151/160 三条
+    #   error C2039 "CurrentX"/"CurrentY"/"Clear" 不是 "HWND__" 的成员，BUILD rc=1、一条读数都不出。
+    $picCurExpected = @("PC01-CUR=True", "PC02-SEP=True aX=350 bX=0",
+        "PC03-CLEAR=True before=2 after=0", "PC-DONE")
+    Test-Vbp "piccur" "$Tests\piccur\PicCur.vbp" $picCurExpected
+    Test-Vbp "piccur_x86" "$Tests\piccur\PicCur.vbp" $picCurExpected -Arch "x86"
+
+    # 账 #197 (§B32): `VB6_ScaleMode` 这个窗口属性以前**读点齐全、写者为零** —— 缺省 1=缇，
+    # 而 ScaleWidth / 控件几何 (#175 那一族换算) / 文字量纲 (#177) 全按这一档折算，
+    # 所以它错起来不是"某一枚控件长歪"，是**量出来的数全是错的**。
+    # 两头判据（同 #153/#154 那条口径：存请求值 + 一枚问窗口的证人）：
+    #   SM01 设计期声明各自读回（修前三枚全答 1 = 缺省）；SM02/SM03 问窗口 —— 同尺寸的缇框
+    #   量出来必须比像素框大一个单位比（比值只取 >3，不钉绝对数，DPI 变了也不假红）；
+    #   SM04 运行期换档后两枚**逐数相等**（证明这数是活的，不是创建时烘死的）；
+    #   SM05 另一枚没被写坏（RTL 按 HWND 存，全局一份就露馅，同 #192 双向钉）；
+    #   SM06/SM07 Frame 里那枚 —— **第二条创建路**也发了这一句（账 #83/#151 那条"两条路都要打"）。
+    # 负控 = 改前那台真编同一份夹具：SmForm.c 166/182 两条 error C2039 "ScaleMode" 不是 "HWND__"
+    #   的成员 + C2198，rc=1、一条读数都不出（物证 .build/b197out/b64/c3-error.log）。
+    $scaleModeExpected = @("SM01-MODE=3/3/1", "SM02-UNIT=True", "SM03-CHILD=True",
+        "SM04-SWITCH=True", "SM05-OTHER=True", "SM06-NEST=True", "SM07-NESTCHILD=True",
+        "SM-DONE")
+    Test-Vbp "scalemode" "$Tests\scalemode\ScaleMode.vbp" $scaleModeExpected
+    Test-Vbp "scalemode_x86" "$Tests\scalemode\ScaleMode.vbp" $scaleModeExpected -Arch "x86"
+
+    # 账 #196 (绘图面那一半): RTL 早有一处「这枚控件的绘图 DC 从哪儿来」的口径 (Print/Cls 走它)，
+    # 但**句柄交不回 VB 代码** —— `.hDC` 没出口，只能撞 cgen_expr_with.cpp 那条 "hwnd.成员" 兜底
+    # = C2039（真工程物证 Charts 2020/ucTreeMaps 的 PropPagFMR.pag:258 `With Picture1 : TextOut .hDC`）。
+    # 四头判据（缺一头就是假绿）：
+    #   DS01 同一枚反复读 + With 那一形三个数彼此相等且非零（不缓存就每次换个句柄，没出口就全是 0）；
+    #   DS02 两枚互不相等（出口写成全局一份当场红，同 #192/#156 那条双向钉）；
+    #   DS03 GetDeviceCaps(hDC, LOGPIXELSX) > 0 —— 问的是 GDI，证明交回来是一张**活的 DC**，
+    #        不是数字或野句柄（DS05 只钉前缀：dpi 是函数的数，不钉绝对值）；
+    #   DS04 GetPixel 各自等于**自己那枚**的设计期底色（红/蓝）—— 这才证明这张 DC 指的是这一枚
+    #        控件的表面，而不是屏幕或别人的窗口。底色取设计期值，不与"谁最后落色"抢次序。
+    # 负控 = 改前那台真编同一份夹具: DcForm.c(167) error C2039 "hDC" 不是 "HWND__" 的成员，
+    #   BUILD rc=1、一条读数都不出（物证 .build/b196neg/）。
+    $dcSurfExpected = @("DS01-SAME=True", "DS02-SEP=True", "DS03-LIVE=True",
+        "DS04-PIXEL=True", "DS05-RAW",
+        "TH01-TWOFORMS=True", "TH02-UNITS=True", "TH03-FONT=True", "TH04-WIDTH=True",
+        "TH05-RAW", "TH06-FONTRAW", "FR01-DEFAULT=True", "FR02-RAW",
+        "SX10-FOURFORMS=True", "SX11-RAW", "DS-DONE")
+    Test-Vbp "dcsurf" "$Tests\dcsurf\DcSurf.vbp" $dcSurfExpected
+    Test-Vbp "dcsurf_x86" "$Tests\dcsurf\DcSurf.vbp" $dcSurfExpected -Arch "x86"
+
+    # 账 #187: Charts 2020 的三枚 UC 子工程真编真链 (x64 + x86)，只要求"编得过、出得了 exe"，不跑。
+    # 本轮实测字节数 (当前这台)：x64 696,320 / 576,000 / 576,000；x86 496,128 / 498,176，
+    # ucChartBar x86 = .build/b191new/ucChartBar/Proyecto1.exe。
+    # ucProgressCircular **刻意不列** —— 它今天还红着 (B29③④)，列进来就是把已知的红当门禁基线；
+    # 等编过之后再加，那一加就是"这个工程从此不许退回编不过"。ucTreeMaps 原本也在这条黑名单里，
+    # 账 #201 手写三枚 DI 桩之后它编得过、链得出 exe ⇒ 移到下面那组去了。
+    Test-VbpBuild "charts_ucChartBar"  "$Tests\Charts 2020\ucChartBar\Proyecto1.vbp"
+    Test-VbpBuild "charts_ucChartBar_x86" "$Tests\Charts 2020\ucChartBar\Proyecto1.vbp" -Arch "x86"
+    Test-VbpBuild "charts_ucChartArea"  "$Tests\Charts 2020\ucChartArea\Proyecto1.vbp"
+    Test-VbpBuild "charts_ucChartArea_x86" "$Tests\Charts 2020\ucChartArea\Proyecto1.vbp" -Arch "x86"
+    Test-VbpBuild "charts_ucPieChart"  "$Tests\Charts 2020\ucPieChart\Proyecto1.vbp"
+    Test-VbpBuild "charts_ucPieChart_x86" "$Tests\Charts 2020\ucPieChart\Proyecto1.vbp" -Arch "x86"
+    # 账 #201: ucTreeMaps 是 #187 立这条门禁时**刻意不列**的那两枚之一（当时卡在 B29③④ 与
+    # #192/#196 的编译错上）。现在两刀的编译面全清、只剩三枚 DI 桩没登记 ⇒ 手写单桩之后
+    # 第一次真编真链出 exe（本轮实测 x64 659,968 / x86 562,688 字节，.build/b201out/）。
+    # 这一加就是那句口径："这个工程从此不许退回编不过"。
+    Test-VbpBuild "charts_ucTreeMaps"  "$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp"
+    Test-VbpBuild "charts_ucTreeMaps_x86" "$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp" -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (optdef) 账 #194: VB 的整数类型后缀是**词法**，不许抄进生成 C。
+    # 语义层那份 Optional 默认值求值以前直接 return rawText，于是 `Optional ... As Long = 0&` 发成
+    # `(*FontIndex) = 0&;` = C2059 (真工程证据: Charts 2020/ucTreeMaps 的 PropPagFMR.pag:740/886)。
+    # 两头钉: OD-VAL 证明四个默认值各按声明落地 (十六进制那枚同时证明"按数值重打"没把值改错)，
+    # OD-EXPL 证明显式实参照样赢 —— 只钉前头那条的话，"恒取默认值"也是绿的。
+    # 负控 = 修复前的那台编译器 (ea3eeeec) 真编同一份夹具: OptForm.c 116/118/119 三条
+    #   error C2059 语法错误 ";" + C2065 "H10"，BUILD rc=1、一条读数都不出。
+    $optDefExpected = @("OD-RAW l=12 i=3 h=16 z=0", "OD-VAL=True",
+        "OD-SET l=1 i=5 h=32 z=9", "OD-EXPL=True", "OD-DONE")
+    Test-Vbp "optdef" "$Tests\optdef\OptDef.vbp" $optDefExpected
+    Test-Vbp "optdef_x86" "$Tests\optdef\OptDef.vbp" $optDefExpected -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (erase_sub) 账 #186: `Erase m_items(1).bvData` —— 销毁 **UDT 数组那一格里**
+    # 的动态数组。修前 parser 一律 VB2001 "Erase 不支持带下标的形式"，把真工程挡在最前面
+    # (Charts 2020/ucTreeMaps 的 PropPagFMR.pag:720 `Erase m_tvFiles(lIndex).bvData` 就卡在这)。
+    # 两头钉 (缺一头就是假绿):
+    #   ①EA01-KEEP 别的格不受影响 (s0=30 / s2=50) —— 拦"静默退化成销毁整个数组";
+    #   ②EA02-RECYCLE 那一格还能重新分配并用 (s1=20 len=1) —— 拦"没置 NULL"：ReDim 自己会先销毁旧数组,
+    #     没置 NULL 就是双释放 (现场直接崩)；反过来"没真销毁"这里会读到残留的 40。
+    # 负控 = 修复前的编译器 (a159b85d) 编同一份夹具: VB2001 + VB2003, BUILD rc=1, 一条读数都不出现。
+    $eraseSubExpected = @("EA01-KEEP s0=30 s2=50", "EA02-RECYCLE s1=20 len=1",
+        "EA-CNT keep_ok=True recycle_ok=True", "EA-DONE")
+    Test-Vbp "erase_sub" "$Tests\erase_sub\EraseSub.vbp" $eraseSubExpected
+    Test-Vbp "erase_sub_x86" "$Tests\erase_sub\EraseSub.vbp" $eraseSubExpected -Arch "x86"
+
+    # <vbeclipse> 账 #212 的两面判据 (夹子 tests/pberr, 一枚 .cls + 一个 Sub Main): 运行时错误 9 从
+    # **实例方法体内**抛出时 —— ① 方法自己写的 On Error GoTo 有没有接住它 (而不是越过它落到调用方,
+    # 或干脆落不回); ② 抛过之后那枚对象的成员还读不读得出数 (跳走时实例栈必须已经解链, 否则现场就是
+    # 「错误被吃掉了」那一族: 错误还在、对象已坏)。来源是 #209/#214: 越界元素访问改成抛 9 之后,
+    # VbEclipse 那批调用点全在 UC 的实例方法里 (`With m_Serie(Index)` 取的就是 &(me->m_arr(k)) 当对象),
+    # 而此前只量过「没处理器 ⇒ Unhandled error 9 + 进程按 9 退出」这一面。
+    # PE-1d/PE-2d/PE-null = 处理器在同一枚方法里 (一维越界 / 二维越界 / 从没 ReDim 的成员动态数组);
+    # PE-caller = 方法内**没有**处理器, 9 必须继续往上交回调用方的处理器; PE-state = 三次抛出之后
+    # 那枚对象的成员照旧读得出 20-40。真 VB6 五个数全同 (9/9/9/9/20-40) —— 实测两台逐行相同,
+    # 所以这一格没有产品改动, 是把「不回归」钉住的一枚夹子 (见 §B46 末段与 §B47)。
+    $pbErrExpected = @("PE-1d=9", "PE-2d=9", "PE-null=9", "PE-caller=9", "PE-state=20-40", "PE-DONE")
+    Test-Vbp "pberr" "$Tests\pberr\PbErr.vbp" $pbErrExpected
+    Test-Vbp "pberr_x86" "$Tests\pberr\PbErr.vbp" $pbErrExpected -Arch "x86"
+
+    # 账 #186 的**边界**负例: `Erase m_list(1)` 这形 VB6 只在元素是 Variant(装着数组) 时合法,
+    # 本仓没那条通路 —— 静默降级成"销毁整个数组"会改变语义, 所以必须继续报诊断。
+    # 针面取消息里的英文片段 (GBK 控制台下中文会被折行/转码, 与既有 Test-CompileFail 同一口径)。
+    Test-CompileFail "erase_neg_indexed" @("$Tests\erase_neg\EraseNeg.bas") `
+        "indexed Erase target not supported here"
+
+    # 发码形状针 (账 #186): 元素成员数组的销毁必须走 VB6_SA_AT(...) 那一形, 不能退回整数组,
+    # 也不能漏掉置 NULL 那半 (双释放探测器)。
+    Test-CodegenNote "erase_member_shape" @("$Tests\erase_sub\EraseSub.vbp") @(
+        "vb6_SafeArrayDestroy1D(VB6_SA_AT(vb6_type_TElem, m_items, 1).bvData); VB6_SA_AT(vb6_type_TElem, m_items, 1).bvData = NULL;") @(
+        "vb6_SafeArrayDestroy1D(m_items);")
 
     # test_vbman 用于验证外部 COM 组件 VBMANLIB (x86 DLL, 供 32 位程序调用)
     # ai/022 B07b: INH2..INH11 cover the merged member face + prefix-copied fields +
@@ -3750,6 +4518,31 @@ if ($Category -in @("all", "compile")) {
     # 这里改成每次 compile 段都静态对一遍基线 (不编译、不跑程序)。
     Write-Host "--- Static Checks ---" -ForegroundColor Yellow
     Test-DiStubCensus
+    Test-UcScaleUnitsCensus
+    Test-HostPseudoTableCensus
+    Test-AddressOfThunkSites
+    Test-FloatLiteralShape
+    Test-IntLiteralShape
+    Test-IntSuffixSites
+    Test-ScaleModeWriters
+    Test-ControlDC
+    Test-SaAccess
+    Test-BitwiseAuthority
+    Test-BodyDeclShape
+    Test-CaseIsShape
+    Test-DocHostAuthority
+    Test-RtlNakedNames
+    Test-RtlResourceIds
+    Test-UcArrayEventSites
+    Test-SubclassSlotSites
+    Test-CtrlArrayMemberSites
+    Test-CtrlPropTypeAuthority
+    Test-FormDrawState
+    Test-FixtureTimerClose
+    Test-VariantCmpBoxing
+    Test-EventHandlerNames
+    Test-UcInstanceExit
+
     Write-Host ""
 
     # --- 综合测试 (编译+运行, 以 Main 为程序入口) ---
@@ -4052,6 +4845,257 @@ if ($Category -in @("all", "syntax")) {
     }
     Test-CodegenNote "in_n3_undeclared_in_hole" @("$Tests\interp_neg\in_n3_undeclared_in_hole.bas") @("VB3001", "nopeHere")
     Test-CodegenNote "in_n4_second_hole_line" @("$Tests\interp_neg\in_n4_second_hole_line.bas") @("VB3001", "alsoNope", "(8,7)")
+    # <vbeclipse> 账 #215 的另一面: 数值针看不出 Variant 与 Long 的差别(TypeName 装箱后都打 Long)，
+    # 所以这里钉发码里的声明行，并用 Absent 钉诊断 —— 改前同一份夹具是 7 条 VB3001。
+    Test-CodegenNote "bodydecl_one_per_declarator" @("$Tests\test_bodydecl.bas") @(
+        "int32_t u1 = 0;", "int32_t u2 = 0;",
+        "const int32_t c2 = 4;", "static int32_t st2 = 0;") @("VB3001")
+    # <vbeclipse> 账 #217 的诊断两面。neg 这份同时写着 `Case Is > 2` 和一枚真没声明过的名字:
+    # 'Is' 必须不再出现(改前每形一条)，nopeHereIsNotAName 必须继续出现 —— 拦「把整条诊断关掉」
+    # 那种修法。implicit 那份故意不写 Option Explicit，钉的是改前那枚没人引用的隐式局部。
+    Test-CodegenNote "caseis_is_not_an_identifier" @("$Tests\test_caseis_neg.bas") @(
+        "VB3001", "nopeHereIsNotAName") @("'Is'")
+    Test-CodegenNote "caseis_no_phantom_local" @("$Tests\test_caseis_implicit.bas") @(
+        "int32_t _vb6_select_0", "BSTR _vb6_select_1") @("vb6_VARIANT Is")
+    # <vbeclipse> 账 #220 的位置那一头 + 账 #221 的改道: Line 尾部的 B/C/F 只在 **style 格**
+    # (color 之后) 折成位数值 (B=1 / C=2 / F=4 ⇒ BF=5), 写在 color 格时必须还是用户自己的变量;
+    # 折好之后整条调用必须由 controlCanvasMethod 那张表改成原生 vb6_ControlLine(...)。
+    # 改前两格都发裸名、由 RTL 的 const int32_t B / BF 接住 (语料实测 vb6_ComPackValue(BF)),
+    # 而 Line 本身没人应答: Absent 那两条钉的就是"又退回兜底 / 名字又回来"这两件。
+    Test-CodegenNote "pcline_flag_folded" @("$Tests\pcline\PcForm.frm") @(
+        "vb6_ControlLine((void*)vb6_hwnd_picA, (double)10, (double)10, (double)50, (double)50, (int32_t)255, (int32_t)5)",
+        "vb6_ControlLine((void*)vb6_hwnd_picA, (double)0, (double)0, (double)20, (double)20, (int32_t)16711680, (int32_t)1)",
+        "vb6_ControlLine((void*)vb6_hwnd_picA, (double)5, (double)5, (double)15, (double)15, (int32_t)B, (int32_t)0)",
+        "vb6_ControlLine((void*)vb6_hwnd_picA, (double)6, (double)6, (double)16, (double)16, (int32_t)BF, (int32_t)0)") @(
+        "vb6_ComGetObjectProp(vb6_hwnd_picA, L" + [char]34 + "Line" + [char]34 + ")",
+        "vb6_ComPackValue(BF)", "vb6_ComPackValue(B)")
+    # <vbeclipse> 账 #217 第二刀: 文档隐式对象 (UserControl / PropertyPage / Extender / Ambient)
+    # 与全局库前缀 VBA 现在语义层也认识 (判据 = Module::docKind 一处写、两处读)。两份真工程的
+    # 发码语料实测: VB3001 全仓 2934→158 (grid 499→19、Charts 主工程 499→34)，而宿主符号一个没动
+    # (vb6_UserControl_ScaleWidth 436=436 / vb6_Ambient_UserMode 94=94 / vb6_PropertyPage_hWnd 16=16)。
+    # dhExp 钉"诊断清零 + 符号照旧"，dhImp 故意不写 Option Explicit 钉"不再发死局部"。
+    Test-CodegenNote "dochost_ctl_no_undeclared" @("$Tests\dochost\dhExp.ctl") @(
+        "vb6_UserControl_ScaleWidth", "vb6_UserControl_hWnd",
+        "vb6_Ambient_UserMode", "vb6_Extender_Tag", "vb6_UCase") @("VB3001")
+    Test-CodegenNote "dochost_no_phantom_locals" @("$Tests\dochost\dhImp.ctl") @(
+        "vb6_UserControl_ScaleWidth", "vb6_Ambient_UserMode", "vb6_UCase") @(
+        "vb6_VARIANT UserControl", "vb6_VARIANT Ambient", "vb6_VARIANT VBA")
+    # 账 #219 (裸写的文档成员): 语义层以前不问 kHostPseudoRows, 于是每条合法裸写配一句 VB3001
+    # (语料实测 Changed 24 条 / hDC 24 条), 而发码那侧从来是对的 (vb6_PropertyPage_Changed 186 处、
+    # 裸名 0 处)。判据收到那张表的 HPF_BARE 一列: 表里有的一个都不许报 (两份夹子), 表里没有的
+    # 必须照报 (dhTypo) —— 否则"放行"就成了"文档里写什么都行"。
+    Test-CodegenNote "dochost_bare_ctl_symbols" @("$Tests\dochost\dhBare.ctl") @(
+        "vb6_UserControl_ScaleWidth", "vb6_UserControl_hDC", "vb6_UserControl_hWnd") @("VB3001")
+    Test-CodegenNote "dochost_bare_pag_dirty_flag" @("$Tests\dochost\dhBare.pag") @(
+        "vb6_PropertyPage_Changed = (-1);") @("VB3001")
+    Test-CodegenNote "dochost_bare_typo_still_reported" @("$Tests\dochost\dhTypo.pag") @(
+        "'Changd'") @("'Changed'", "vb6_PropertyPage_Changed")
+    # 账 #184 的形状面: 被 AddressOf 取址的过程 → Private 的发 static 桩、Public 的发外链桩,
+    # 桩体逐字转调本体 (参数个数/宽度/顺序与本体一致, 只有约定不同); AddressOf 站点取桩地址;
+    # 本体**保持 cdecl** (直接调用那条路与 RTL 的 cdecl 登记面都不受牵连)。
+    # 两条 Absent 就是负控: BASE 的发码里取址点写的是 (void*)vb6_CountWin, 本体没有 __stdcall。
+    Test-CodegenNote "addrof_cb_shape" @("$Tests\test_addrof_cb.bas") @(
+        "static int32_t __stdcall aoThunk_vb6_CountWin(intptr_t hWnd, intptr_t lParam) { return vb6_CountWin(hWnd, lParam); }",
+        "int32_t __stdcall aoThunk_vb6_StopWin(intptr_t hWnd, intptr_t lParam) { return vb6_StopWin(hWnd, lParam); }",
+        "EnumWindows((void*)aoThunk_vb6_CountWin, 4242);") @(
+        "EnumWindows((void*)vb6_CountWin, 4242);",
+        "__stdcall vb6_CountWin(intptr_t hWnd, intptr_t lParam) {")
+    # 账 #188: 设计期字号是**整数**时, 发码以前会拼出 C 里的非法字面量 `12f` (C2059 bad suffix),
+    # 而 VB6 的默认字号 8.25 带小数点 ⇒ 门禁里从来没响过。钉在真实工程上 (Charts 2020/ucChartBar 的
+    # BeginProperty TitleFont Size=12): 改后必须是 `12.0f`, 且 8.25 那一族**一个字节都不许变**
+    # (证人不抖)。Absent 那条就是负控 —— HEAD 的发码里正是 `->Size = 12f;`。
+    Test-CodegenNote "fontsize_literal" @("$Tests\Charts 2020\ucChartBar\Proyecto1.vbp") @(
+        "->Size = 12.0f;", "->Size = 8.25f;") @(
+        "->Size = 12f;")
+
+    # 账 #191 的发码形状针: 控件数组元素的方法调用必须与单枚同走"直发生成函数"那条出口,
+    # 不能落 vb6_ComCall 兜底 (宿主值不是 IDispatch ⇒ 交回空值, 编得过、静默不干活)。
+    # 修前实测同一条语句发成 vb6_ComCall(vb6_CtrlArr_GetAt(&vb6_arr_uArr, aj), L"SW", NULL, 0)。
+    Test-CodegenNote "ucarr_member_call" @("$Tests\ve_units\Units.vbp") @(
+        "vb6_ucUnitPix_SW((vb6_cls_ucUnitPix*)vb6_UC_InstanceOf(vb6_CtrlArr_GetAt(&vb6_arr_uArr, aj)))") @(
+        "vb6_ComCall(vb6_CtrlArr_GetAt(&vb6_arr_uArr, aj)"
+    # 账 #191-b 的发码形状针 (钉在真实工程 Charts 2020/ucChartBar 的 Form2.frm:223 那一条上):
+    # 「对象型属性再往下一层的写」`ucChartBar1(i).Font.Size = ...` 必须发成
+    #   vb6_ComSetProp(vb6_ucChartBar_prop_get_Font(直发的实例), L"Size", pack(...)) —— 取回那枚
+    # StdFont 再对它写一层 (StdFont 本身是真 IDispatch)。修前实测两形都坏: 左值折叠那一路只取
+    # prop_get_ 那一段、把尾巴 `.Size` 整段丢掉 ⇒ 发成 prop_let_Font(elem, <double>), 值实参的槽
+    # 是 vb6_ComIface_Font*, Form2.c 471-477 四条 C2440, 整个工程编不过; 基线那台走 ComGetObjectProp
+    # 虽然编得过, 但 UC 不可分发时那条恒 NULL, 写上去是静默无效 (#191 要治的正是这一半)。
+    Test-CodegenNote "ucobj_chain_write" @("$Tests\Charts 2020\ucChartBar\Proyecto1.vbp") @(
+        "vb6_ComSetProp(vb6_ucChartBar_prop_get_Font((vb6_cls_ucChartBar*)vb6_UC_InstanceOf(vb6_CtrlArr_GetAt(&vb6_arr_ucChartBar1, i)))") @(
+        "vb6_ucChartBar_prop_let_Font((vb6_cls_ucChartBar*)vb6_UC_InstanceOf(vb6_CtrlArr_GetAt(&vb6_arr_ucChartBar1, i)), ((double")
+
+    # 账 #194 的发码形状针: Optional 默认值那几条必须按**数值**发。Absent 是抄源码文本那一形。
+    Test-CodegenNote "optdef_default_shape" @("$Tests\optdef\OptDef.vbp") @(
+        "aL = 12L;",
+        "aH = 16L;",
+        "aZ = 0L;") @(
+        "aL = 12&",
+        "aH = &H10&",
+        "aZ = 0&")
+
+    # 同一刀钉在**真工程**上 (ucTreeMaps 的 PropPagFMR：`Optional ... As Long = 0&` 两处)。
+    # 这个工程今天还红着 (#192 那一族 C2039)，但发码面已过 —— 所以这条针现在就能红能绿。
+    Test-CodegenNote "optdef_default_shape_real" @("$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp") @(
+        "if (!_has_FontIndex) (*FontIndex) = 0L;") @(
+        "(*FontIndex) = 0&;")
+
+    # 形状针 (账 #192): With 那枚控件的属性读写与方法必须走两张表各自的出口，
+    # 不许再出现 tempVar + "." + 成员名 那一形（HWND__ 是结构体指针，那是编译错）。
+    Test-CodegenNote "with_ctrl_cursor_clear" @("$Tests\piccur\PicCur.vbp") @(
+        "vb6_SetCurrentY(_vb6_with_",
+        "vb6_ClearList((void*)_vb6_with_",
+        "vb6_GetCurrentX(vb6_hwnd_picA") @(
+        "_vb6_with_0.CurrentX",
+        "_vb6_with_0.CurrentY",
+        "_vb6_with_1.Clear()")
+
+    # 形状针 (账 #197): 设计块的 ScaleMode 必须发成那一句；读的那一头必须落回 #175 的单位权威
+    # (vb6_WindowScaleModeSelf)，不许再出现 HWND 取成员那一形（那是编译错，不是静默空转）。
+    Test-CodegenNote "scalemode_design_write" @("$Tests\scalemode\ScaleMode.vbp") @(
+        "vb6_SetScaleMode((void*)vb6_hwnd_picPix, 3);",
+        "vb6_SetScaleMode((void*)vb6_hwnd_picTwip, 1);",
+        "vb6_SetScaleMode((void*)hwnd, 3);",
+        "vb6_WindowScaleModeSelf(_vb6_with_") @(
+        "_vb6_with_0.ScaleMode",
+        "vb6_hwnd_picPix.ScaleMode",
+        "vb6_hwnd_picNest.ScaleMode")
+
+    # 同一刀钉在**真工程**上: ucTreeMaps 的 PropPagFMR.pag:256-266 `With Picture1 : .ScaleMode` ——
+    # 这一形以前是 PropPagFMR.c(74) 两条 C2039 的来源（本轮实测 C2039 4→2，剩 hDC/TextHeight = #196）。
+    Test-CodegenNote "scalemode_read_real" @("$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp") @(
+        "vb6_WindowScaleModeSelf(_vb6_with_0)") @(
+        "_vb6_with_0.ScaleMode")
+
+    # 形状针 (账 #196): `.hDC` 两形都必须落在那一个绘图 DC 出口上，不许再出现 HWND 取成员
+    # (那是编译错，With 形那一半的真红)，也不许再走晚绑定那条 `ComGetLongPtrProp(X, L"hDC")` ——
+    # 那条**实测是能用的 DC**（改前那台探针：HDC=671159075、DPI=96），但每读一次新取一张、从不归还，
+    # 与 VB6 的"一个对象一张"不符（.build/b196probe）。两条都钉住 = 两形同归一处口径。
+    Test-CodegenNote "dcsurf_dc_shape" @("$Tests\dcsurf\DcSurf.vbp") @(
+        "vb6_GetControlHDC(vb6_hwnd_picA)",
+        "vb6_GetControlHDC(_vb6_with_") @(
+        "_vb6_with_0.hDC",
+        "vb6_hwnd_picA.hDC",
+        'vb6_ComGetLongPtrProp(vb6_hwnd_picA, L"hDC")')
+
+    # 同一刀钉在**真工程**上: ucTreeMaps 的 PropPagFMR.pag:258 `With Picture1 : TextOut .hDC` ——
+    # 这一形以前是 PropPagFMR.c(74) 那条 C2039 的来源 (与 #197 那条 ScaleMode 同处，本轮实测
+    # C2039 由 2 条降到 1 条，只剩 TextHeight = #196 欠的那一半)。
+    Test-CodegenNote "dc_read_real" @("$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp") @(
+        "vb6_GetControlHDC(_vb6_with_0)") @(
+        "_vb6_with_0.hDC")
+
+    # 形状针 (账 #196 第二条): 按 HWND 的 TextHeight/TextWidth 两形都落在那两个出口上，
+    # 实参表由码头拼 —— With 形走「裸名 + pendingChainObj_」那套协议(前置句柄)，裸形直接成串。
+    Test-CodegenNote "dcsurf_text_measure" @("$Tests\dcsurf\DcSurf.vbp") @(
+        "vb6_ControlTextHeight((void*)vb6_hwnd_picB,",
+        "vb6_ControlTextWidth((void*)vb6_hwnd_picB,",
+        "vb6_ControlTextHeight((void*)_vb6_with_1") @(
+        "_vb6_with_0.TextHeight",
+        "vb6_hwnd_picB.TextHeight",
+        'vb6_ComCall(vb6_hwnd_picB, L"TextHeight"')
+
+    # 同一刀钉在真工程上: ucTreeMaps 的 PropPagFMR.pag:265 `With Picture1 : .CurrentY + .TextHeight(Text)`
+    # —— 这是 #196 收完 hDC 之后 ucTreeMaps 仅剩的那条 C2039。
+    Test-CodegenNote "text_measure_real" @("$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp") @(
+        "vb6_ControlTextHeight((void*)_vb6_with_0,") @(
+        "_vb6_with_0.TextHeight")
+
+    # 形状针 (账 #196 第三条): 窗体型接收者的 ScaleX/ScaleY **四形**都落在同一处换算上。
+    # absent 那一头钉的是接上之前的三种真形状: 假 IDispatch 调用 (编得过、跑起来回 0)、
+    # `hwnd.ScaleX(...)` (编译不过)、裸写 `= ScaleX(` (隐式声明, 真工程里今天靠 /OPT:REF 才没响)。
+    Test-CodegenNote "dcsurf_scale_units" @("$Tests\dcsurf\DcSurf.vbp") @(
+        "sx1 = vb6_ScaleUnitX(1440, 1, 3)",
+        "sx2 = vb6_ScaleUnitX(1440, 1, 3)",
+        "sx3 = vb6_ScaleUnitX(1440, 1, 3)",
+        "sx4 = vb6_ScaleUnitX(1440, 1, 3)",
+        "sy1 = vb6_ScaleUnitY(1440, 1, 3)") @(
+        'vb6_ComCallDouble(vb6_hwnd_picB, L"ScaleX"',
+        'vb6_ComCallDouble(vb6_hwnd_DcForm, L"ScaleX"',
+        ".ScaleX(1440, 1, 3)",
+        "= ScaleX(1440, 1, 3)")
+
+    # 同一刀钉在真工程上: PropPagFMR.pag:259 那个 TextOutW 的坐标换算, 以前是裸 `ScaleX(`。
+    Test-CodegenNote "scale_units_real" @("$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp") @(
+        "vb6_ScaleUnitX(vb6_GetCurrentX(_vb6_with_0)") @(
+        '", ScaleX(vb6_GetCurrentX(_vb6_with_0)"',
+        'L"ScaleX"')
+
+    # 账 #195: VB 的 Integer 类型后缀 `%` 以前在词法层就被拒 (case '%' 那一支只吃字符不置标志,
+    # 于是 `3%` 落回「无后缀十进制按数值大小定档」那一段, 残留的 % 让 parseIntLit 报「超出 64 位」并级联出
+    # 9-13 条诊断)。补上标志 + 三种进制扫描器认下这个后缀 + radixDigits 的剥离表加 %。
+    # 正例: 十进制/%H%/O%/B%/负数/表达式/参数默认值 七形都要过得了语法 (修前连一条 `y = 3%` 都过不去)。
+    Test-SyntaxMulti "int_suffix_forms" @("$Tests\intsuffix\IntSuffix.bas")
+
+    # 形状针: 三种进制的 % 必须按**数值**落地 (255 / 15 / 5), 参数默认值那形要接上 #194 那一处权威。
+    # Absent 是后缀漏进生成 C 那一形 (#194 修前实测) —— 两条规则钉在同一枚夹具上。
+    Test-CodegenNote "int_suffix_shape" @("$Tests\intsuffix\IntSuffix.bas") @(
+        "z = vb6_ChkInt(255);",
+        "z = vb6_ChkInt(15);",
+        "z = vb6_ChkInt(5);",
+        "if (!_has_a) a = 3;") @(
+        "a = 3%")
+
+    # 边界负例: 显式 `%` 就是 Integer 档 (-32768..32767)，超出必须报 —— 按 int32 收下再让 int16
+    # 去截是把值改错 (2147483648 静默回绕成 -2147483648)。针取消息里的 ASCII 片段 (GBK 口径)。
+    Test-SyntaxFailMulti "int_suffix_neg_range" @("$Tests\intsuffix_neg\IntSuffixNeg.bas") `
+        "(-32768..32767)"
+)
+
+    # 账 #189 的发码形状针: 控件数组的整体成员必须发成 vb6_CtrlArr_*, 一条都不许再落在
+    # 句柄变量的 COM 属性读上 (修前 `uArr.Count` 就是 vb6_ComGetIntProp(vb6_hwnd_uArr, L"Count"))。
+    Test-CodegenNote "ctrlarr_member" @("$Tests\ve_units\Units.vbp") @(
+        "vb6_CtrlArr_GetCount(&vb6_arr_uArr)",
+        "vb6_CtrlArr_LBound(&vb6_arr_uArr)",
+        "vb6_CtrlArr_UBound(&vb6_arr_uArr)") @(
+        "vb6_ComGetIntProp(vb6_hwnd_uArr")
+
+    # 账 #222/#226 的发码形状针: UC 控件数组的事件臂必须**每元素一套** thunk 与 sink, 并把设计期
+    # Index 交给那枚共享处理器; 处理器原型全产物只许一份, 且按事件 ABI (ByVal) 发。
+    # 三条 Absent 都是改前产物里真实存在的形状 (零形参声明 / 同名 thunk / 共享 sink 槽),
+    # 任何一条回来这枚针就红 —— 实测 ucProgressCircular 那 25 条 C2198+C2084 就是这么来的。
+    Test-CodegenNote "ucarr_evt_thunk_per_element" @("$Tests\ve_units\Units.vbp") @(
+        "static void vb6_frmUnits_uArr_Hit(int16_t Index);",
+        "vb6_frmUnits_evtThunk_uArr_Hit_1(void* handler) { vb6_frmUnits_uArr_Hit(1); }",
+        "((vb6_cls_ucUnitPix*)vb6_UC_InstanceOf(vb6_CtrlArr_GetAt(&vb6_arr_uArr, 1)))->events = &_sink_uArr_1;",
+        "vb6_ucUnitPix_ucHostClick") @(
+        "static void vb6_frmUnits_uArr_Hit();",
+        "_sink_uArr.onHit",
+        "vb6_frmUnits_evtThunk_uArr_Hit(void* handler)")
+    # 账 #222 的门 #350 回归 (charts_ucTreeMaps 两档 C2440) 的形状针: 事件形参的 C 类型
+    # 三处必须同源 —— 回调 typedef / 容器侧处理器原型 / prelude 那枚 thunk。修法是把 prelude
+    # 自带的第二张类型表撤掉、改问 mapTypeRef (见 check_uc_array_event_sites.ps1 的 E5)。
+    # Absent 那条是**改前产物里真实存在**的形状, 表一回来它就红。
+    Test-CodegenNote "ucevt_thunk_type_same_authority" @("$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp") @(
+        "typedef void (*vb6_evt_ucTreeMaps_ItemClick_cb)(void* handler, vb6_VARIANT Key);",
+        "static void vb6_Form2_evtThunk_ucTreeMaps1_ItemClick(void* handler, vb6_VARIANT a0) { vb6_Form2_ucTreeMaps1_ItemClick(a0); }") @(
+        "static void vb6_Form2_evtThunk_ucTreeMaps1_ItemClick(void* handler, int32_t a0)")
+
+    # 账 #228: 同一个 VB 类型写成两种拼法必须给出**同一种 C 类型**。库里限定的
+    # `stdole.OLE_COLOR` 以前一路掉到 mapTypeRef 末尾的兜底 void*, 而裸名 OLE_COLOR 答
+    # int32_t —— 同一枚 VBFlexGrid 事件 (.ctl 写裸名 / 容器写限定名) 于是发送侧交 4 字节、
+    # 处理器收 8 字节指针。修完反过来还要钉住**不该折的不折**: StdFont 是真外部类型
+    # (工程里没有同名符号), 两种拼法都得留 void* —— 只钉前一半的话, "把所有点号都剥掉"
+    # 这种过折照样绿。
+    Test-CodegenNote "varcmp_scalar_boxed" @("$Tests\test_varcmp_scalar.bas") @(
+        "vb6_VariantFromValue(d)",
+        "vb6_VariantFromValue(gD)",
+        "vb6_VarCmpEq(&v, ") @(
+        "vb6_VarCmpEq(&v, &d)",
+        "vb6_VarCmpEq(&d, &v)",
+        "vb6_VarCmpEq(&gV, &gD)",
+        "vb6_VarCmpGt(&v, &d)",
+        "vb6_VarCmpLt(&d, &v)")
+
+    Test-CodegenNote "alias_type_spelling_same_ctype" @("$Tests\test_alias_spellings.bas") @(
+        "void vb6_BareColor(int32_t c);",
+        "void vb6_QualColor(int32_t c);",
+        "void vb6_BareFont(void* f);",
+        "void vb6_QualFont(void* f);") @(
+        "void vb6_QualColor(void* c)",
+        "void vb6_BareFont(int32_t f)")
+
+
     # ai/028 V2 的发码形状: 插值必须** literally ** 发成手写的 & CStr() / Format$ 形状 ——
     # 注意第二枚读数挑的是 vb6_CStrLong (按实参类型改发专用 CStr), 这正是"降级成真 AST"
     # 才继承得到的东西 (计划书 R2/R3 的实测面)。
@@ -4067,6 +5111,17 @@ if ($Category -in @("all", "syntax")) {
         '#define RS_CONST (vb6_BSTR_FromStr(L"k1\r\nk2 = \"v\""))',
         'vb6_BSTR_FromStr(L"\u59D3\u540D: \u5F20\u4E09\r\n\u5907\u6CE8: \"vip\"")',
         'vb6_BSTR_FromStr(L"C:\\note\\{x}\\n")')
+
+    # 账 #174: 属性页里裸名 `SelectedControls(i)` 必须走宿主内建那张表 (cgen_expr_ident_builtin.inc 的
+    # kPropertyPageHostMembers)，发射成 RTL 出口 vb6_PropertyPage_SelectedControls(...)。
+    # 钉这一格的理由不是「值对不对」，而是 **发射成裸名 = 隐式函数声明**：cl 只给 C4013
+    # 「未定义；假设外部返回 int」就编过，而 x86 cdecl 的 double 返回值放在 ST0 —— 调用方
+    # 按 int 取值就**永不弹 x87 栈**，八次之后栈满，之后任何浮点取值得 QNaN（账 #173 的
+    # Charts 2020 启动即 error 6「Overflow」就是这么炸的，见 vb6com_internal.h 那条注释）。
+    # 发射面单文件就能验，所以用 emitc 形状针而不是运行产物。**红侧实测过**：基线编译器
+    # 编同一份 .pag 发射 `= SelectedControls(0);` 且没有这根针。
+    Test-EmitcShape "pp_selctrl_hostmember" @("$Tests\Charts 2020\LabelPlus\PropPagLP.pag") @(
+        'vb6_PropertyPage_SelectedControls(0)')
 
     # B07a positive guard: a base class in another module resolves and stays silent.
     if (Test-Path "$Tests\cls_neg\ci_pos_base.cls") {

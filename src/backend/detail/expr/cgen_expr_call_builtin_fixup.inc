@@ -2,6 +2,83 @@
 // 由 src/backend/expr/cgen_expr_call.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 2861~3250 行，逐行未改。
 
+    // Fix <vbeclipse> (2026-10-06): LoadRes* 实参统一按 VB6 Variant 形包装。
+    // RTL 签名是 (vb6_VARIANT, ...) (VB6 里三函数的实参本就是 Variant: 数字 id 与
+    // 字符串资源名都合法 —— 实测语料两边都有, cAesCBC 的 LoadResData("AES.CBC",
+    // "JSCRIPT") 与 modResources 的 LoadResPicture(102, 0))。不包装的话字符串形
+    // 会把 BSTR 截断进 int32 形参 (Fix 090bz 时代起就是坏的)。包一层
+    // vb6_VariantFromValue: 整数字面量 → VT_I4, BSTR 表达式 → VT_BSTR, Long 变量
+    // → VT_I4, RTL 按 vt 分派按名/按 id 查资源。
+    if (callee == "vb6_LoadResString" || callee == "vb6_LoadResData"
+        || callee == "vb6_LoadResPicture") {
+        std::string joinedRes;
+        for (size_t iRes = 0; iRes < args.size(); iRes++) {
+            if (iRes) joinedRes += ", ";
+            joinedRes += "vb6_VariantFromValue(" + args[iRes] + ")";
+        }
+        argList = joinedRes;
+        args.clear();
+    }
+
+
+    // Fix <vbeclipse>: `Load <控件数组>(i)` / `Unload <控件数组>(i)` 发码接入。
+    // 控件数组元素的表达式路发的是 `vb6_CtrlArr_GetAt(&vb6_arr_<名>, <idx>)`
+    // (cgen_util_ctrl.cpp / cgen_expr_member_precheck.inc 的同一出口)，于是
+    // `Load cmdBtn(3)` 落到 {"load","vb6_LoadForm"} 那一行后发成
+    // `vb6_LoadForm(默认属性读数)` —— 对 NULL 句柄读 Caption 再拿去 Load 窗体,
+    // 控件根本没被创建 (vb6_CtrlArr_Load 全仓零调用者, 2026-10-05 实测发码)。
+    // 这里按 args[0] 里的 GetAt 形状拦下, 改发 vb6_CtrlArr_Load/Unload。
+    // 仅认 `vb6_CtrlArr_GetAt(&vb6_arr_<名>, <idx>)` 这一个形状 (菜单数组没有
+    // 这个出口, Load/Unload 对菜单数组本来也不适用); 普通窗体 `Load FrmX`
+    // 不含该形状, 原样落回 vb6_LoadForm。父窗口: 窗体模块用本窗体句柄;
+    // UserControl 模块用容器句柄; 都不是才给 NULL。
+    if ((callee == "vb6_LoadForm" || callee == "vb6_UnloadForm") && args.size() == 1) {
+        static const std::string kGetAtArr224 = "vb6_CtrlArr_GetAt(&vb6_arr_";
+        size_t getAtPos224 = args[0].find(kGetAtArr224);
+        if (getAtPos224 != std::string::npos) {
+            size_t nameB224 = getAtPos224 + kGetAtArr224.size();
+            size_t comma224 = args[0].find(',', nameB224);
+            size_t open224 = args[0].find("GetAt(", getAtPos224);
+            if (comma224 != std::string::npos && open224 != std::string::npos) {
+                std::string arrName224 = args[0].substr(nameB224, comma224 - nameB224);
+                // 从 GetAt 的 '(' 起配对括号, 取出完整第二实参 (下标可能本身是表达式)
+                int depth224 = 0;
+                size_t close224 = std::string::npos;
+                for (size_t i224 = open224 + 5; i224 < args[0].size(); ++i224) {
+                    char ch224 = args[0][i224];
+                    if (ch224 == '(') depth224++;
+                    else if (ch224 == ')' && --depth224 == 0) { close224 = i224; break; }
+                }
+                if (close224 != std::string::npos) {
+                    std::string getAtArgs224 = args[0].substr(open224 + 6, close224 - (open224 + 6));
+                    size_t idxComma224 = getAtArgs224.find(',');
+                    std::string idxArg224 = (idxComma224 != std::string::npos)
+                        ? getAtArgs224.substr(idxComma224 + 1) : "0";
+                    while (!idxArg224.empty() && (idxArg224.front() == ' ' || idxArg224.front() == '\t')) idxArg224.erase(idxArg224.begin());
+                    while (!idxArg224.empty() && (idxArg224.back() == ' ' || idxArg224.back() == '\t')) idxArg224.pop_back();
+                    if (callee == "vb6_LoadForm") {
+                        std::string parent224 = "NULL";
+                        if (isFormModule_ && !knownFormName_.empty()) {
+                            auto itF224 = knownFormControlOriginalNames_.find(knownFormName_);
+                            parent224 = "(void*)vb6_hwnd_"
+                                      + cIdent(itF224 != knownFormControlOriginalNames_.end()
+                                                 ? itF224->second : knownFormName_);
+                        } else if (isDesignerModule_) {
+                            parent224 = "(void*)vb6_UserControl_ContainerHwnd";
+                        }
+                        callee = "vb6_CtrlArr_Load";
+                        argList = "&vb6_arr_" + arrName224 + ", " + idxArg224
+                                + ", " + parent224 + ", (void*)GetModuleHandleW(NULL)";
+                    } else {
+                        callee = "vb6_CtrlArr_Unload";
+                        argList = "&vb6_arr_" + arrName224 + ", " + idxArg224;
+                    }
+                    args.clear();
+                }
+            }
+        }
+    }
+
     if (callee == "vb6_UBound" || callee == "vb6_LBound") {
 
         // P14.1.5: Check if first arg is a ParamArray parameter
@@ -375,6 +452,15 @@
         // czUI fix: 省略的 length 参数用 -1 哨兵 (RTL 按"取到结尾"处理),
         // 不能补 0 — 那是字面长度 0 (VB6 返回空串), 曾让 HexToColor("#243447")
         // 解析成 0 (纯黑), 整个 czUI demo 颜色全错。
+        while (args.size() < 3) {
+            args.push_back("-1");
+            if (!argList.empty()) argList += ", ";
+            argList += "-1";
+        }
+    }
+    // Fix <vbeclipse>: MidB$ 两参形 (MidB$(s, start) 取到结尾) — 同 vb6_Mid 的
+    // -1 哨兵口径 (vb6_MidB 与 vb6_Mid 同一个"len<0 取到结尾"实现)。
+    if (callee == "vb6_MidB" && args.size() < 3) {
         while (args.size() < 3) {
             args.push_back("-1");
             if (!argList.empty()) argList += ", ";

@@ -113,7 +113,7 @@ void CCodeGen::emitMenuClickDispatch(const FrmControl& menuCtrl, int& menuId) {
                 }
             }
             if (visible && hasClickHandler(menuCtrl.controlName)) {
-                std::string clickFn = cProcName(menuCtrl.controlName + "_Click", AccessLevel::Private);
+                std::string clickFn = eventHandlerFn(menuCtrl.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(menuId) + ") {");
                 c_.indent();
                 c_.emitLine("{ extern void " + clickFn + "(); " + clickFn + "(); }");
@@ -159,7 +159,7 @@ void CCodeGen::emitMenuClickDispatch(const FrmControl& menuCtrl, int& menuId) {
         } else {
             // 叶子菜单项
             if (visible && hasClickHandler(child.controlName)) {
-                std::string clickFn = cProcName(child.controlName + "_Click", AccessLevel::Private);
+                std::string clickFn = eventHandlerFn(child.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(menuId) + ") {");
                 c_.indent();
                 c_.emitLine("{ extern void " + clickFn + "(); " + clickFn + "(); }");

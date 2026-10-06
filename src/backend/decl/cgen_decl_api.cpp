@@ -184,6 +184,29 @@ void CCodeGen::visit(DeclareDecl& node) {
     // **真实导出名** —— 归档里就是这么叫的, 少一层跳转, 也少一处要生成的桩。
     std::string cExportedIdent = isStaticDecl ? sanitizedExport : ("vb6_di_" + sanitizedExport);
 
+    // === Fix <vbeclipse> 2026-10-06: Err.LastDllError 必须是"调用那一刻的快照" ===
+    //
+    // VB6 语义 (MSDN ErrObject.LastDllError; 社区对 VB6 运行时的逐条逆向一致):
+    //   每次 VB6 代码里由 `Declare` 发起的 DLL 调用都会
+    //     1) 先把本线程 last-error 清 0   —— SetLastError(0)
+    //     2) 调用 API
+    //     3) 返回后**立刻** GetLastError(), 把值存进 Err.LastDllError
+    //   所以 Err.LastDllError 报的是"你自己那次调用"的错误码, 而不是访问那一刻的
+    //   全局 last-error —— 后者早就被中间的 RTL/打印/字符串编组/控件内部 Win32
+    //   调用冲掉了 (MSDN 原文: "The LastDllError property applies only to DLL
+    //   calls made from Visual Basic code"; 值只保留到下一次外部调用)。
+    //
+    // 落地方式: 给每个 Declare 生成一个 static __inline 真函数做这三步, 再把调用点
+    // 重定向到它。**不能用"在调用点插两条语句"** —— Declare 调用可以出现在
+    // `While Api() <> 0` / `IIf(Api(), a, b)` / 实参等表达式位置, 语句注入会把 C
+    // 撕成 `(Api(); vb6_ErrSetLastDllError(...) != 0)` 这种非法代码 (实测)。
+    // 用函数则天然在任意表达式位置成立, 且返回值类型原样保留 (含 float/double/BSTR/
+    // 结构体返回), 不需要给返回类型分类。
+    //
+    // 静态归档路 (isStaticDecl, 项目自带 .lib) 不包: 那是 C3 的内部机制而非 VB6
+    // 的 DLL 调用, 且该路调用点直连真实符号, 无重定向可言。
+    std::string callTarget = isStaticDecl ? cExportedIdent : ("vb6_lw_" + sanitizedExport);
+
     // Fix 161b-decl-out: 登记 VB名(小写) → **调用点名** (cExportedIdent 全名)。
     // 目的: VB6 `Declare Function GetUserName Lib "advapi32" Alias "GetUserNameA"`
     // 的 VB 名恰是 SDK 的 A/W 宏名 (WinBase.h `#define GetUserName GetUserNameW`)。
@@ -193,10 +216,19 @@ void CCodeGen::visit(DeclareDecl& node) {
     // 用 cExportedIdent (= vb6_di_GetUserNameA / vb6_di_ord_410) 作调用点, 天然绕开
     // SDK 的 A/W 宏, 且对上 RTL 转发桩 (序号别名也因此落成 vb6_di_ord_410)。
     // 静态路直接用真实导出名, 无 SDK 宏抢占问题 → 不登记。
-    if (!aliasName.empty() && aliasName != node.name && !isStaticDecl) {
+    // ai/024 / Fix <vbeclipse> 2026-10-06: 这个判据同时决定**包装函数放在哪个 guard 里**
+    // (见下方 emitLdlWrapper 的两处调用):
+    //   别名路 (aliasName 与 VB 名不同): 调用点无论 SDK 宏如何都直接发 callTarget
+    //     → 包装必须无条件发出 (受 diGuard 防重), 否则调用点指向不存在的函数。
+    //   非别名路: 调用点发 VB 名, 由 `#ifndef <VB名>` 的 #define 重定向;
+    //     若 SDK 已把该名定义为宏 (GetTempPath/GetUserName 这类 A/W 家族),
+    //     #define 不生效、调用走 SDK 原路 → 此时**不能**再发包装, 否则会凭空多出
+    //     一个 vb6_di_X 引用 (无桩时 LNK2019)。所以非别名路的包装跟 #define 同进同出。
+    const bool aliasedCall = (!aliasName.empty() && aliasName != node.name && !isStaticDecl);
+    if (aliasedCall) {
         std::string funcLower2 = node.name;
         std::transform(funcLower2.begin(), funcLower2.end(), funcLower2.begin(), ::tolower);
-        declareAliasMap_[funcLower2] = cExportedIdent;
+        declareAliasMap_[funcLower2] = callTarget;
     }
 
     // 2026-09-17: 把 Lib 家族写进生成头, 供 scripts/gen_di_stubs.ps1 按 DLL 家族
@@ -226,18 +258,70 @@ void CCodeGen::visit(DeclareDecl& node) {
     // ai/024 T02: 静态路这条 extern 就是**真实归档符号**本身, 无桩可桥 —— 引用符号
     // 由编译器按 callConv 生成 (x86 stdcall 得 `_MyAdd@16`), 与归档成员名一致即解析成功。
     h_.emitLine("extern " + retType + " " + callConv + " " + cExportedIdent + "(" + params + ");");
+
+    // === Fix <vbeclipse> 2026-10-06: Err.LastDllError 快照包装 ===
+    // 必须在 extern vb6_di_X 之后 emit (包装体要调用它)。
+    // params 形如 "intptr_t a, BSTR b", 无参时是 "void" —— 逐参取末段 token 当形参名,
+    // 转发时原样传回; 返回类型原样承接 (float/double/BSTR/结构体都不需要特殊处理)。
+    auto emitLdlWrapper = [&]() {
+        auto paramNamesFromList = [](const std::string& pl) -> std::string {
+            if (pl.empty() || pl == "void") return "";
+            std::string out;
+            size_t i = 0;
+            while (i < pl.size()) {
+                size_t comma = pl.find(',', i);
+                std::string part = pl.substr(i, (comma == std::string::npos) ? std::string::npos : comma - i);
+                size_t sp = part.find_last_of(" \t");
+                std::string nm = (sp == std::string::npos) ? part : part.substr(sp + 1);
+                while (!nm.empty() && (nm.front() == ' ' || nm.front() == '\t')) nm.erase(nm.begin());
+                while (!nm.empty() && (nm.back() == ' ' || nm.back() == '\t')) nm.pop_back();
+                if (!nm.empty()) { if (!out.empty()) out += ", "; out += nm; }
+                if (comma == std::string::npos) break;
+                i = comma + 1;
+            }
+            return out;
+        };
+        std::string fwdCall = cExportedIdent + "(" + paramNamesFromList(params) + ")";
+        h_.emitLine("/* Fix <vbeclipse> 2026-10-06: Declare -> Err.LastDllError 快照");
+        h_.emitLine(" * (调用前 SetLastError(0), 返回即 GetLastError(); VB6 语义) */");
+        if (retType == "void") {
+            h_.emitLine("static __inline void " + callConv + " " + callTarget + "(" + params + ") {");
+            h_.emitLine("    SetLastError(0);");
+            h_.emitLine("    " + fwdCall + ";");
+            h_.emitLine("    vb6_ErrSetLastDllError((int32_t)GetLastError());");
+            h_.emitLine("}");
+        } else {
+            h_.emitLine("static __inline " + retType + " " + callConv + " " + callTarget + "(" + params + ") {");
+            h_.emitLine("    " + retType + " _r;");
+            h_.emitLine("    SetLastError(0);");
+            h_.emitLine("    _r = " + fwdCall + ";");
+            h_.emitLine("    vb6_ErrSetLastDllError((int32_t)GetLastError());");
+            h_.emitLine("    return _r;");
+            h_.emitLine("}");
+        }
+    };
+
+    // 别名路: 调用点无条件直发 callTarget, 所以包装也**无条件**发出。
+    // 必须留在 diGuard 里面: 多模块工程里同一个 Declare 会出现在多个模块头
+    // (VBFlexGridBase.h / VisualStyles.h / VTableHandle.h ...), 每个头都带同一个
+    // diGuard 名; 放在 guard 外面会在同一个 .c 里撞同名 `static __inline` 重复定义
+    // (实测 C2084: 'vb6_lw_RtlMoveMemory' 已经有函数体)。
+    if (!isStaticDecl && aliasedCall) emitLdlWrapper();
     h_.emitLine("#endif");
 
-    // 生成: #define <VB6名> → <内部导入名> (仅当VB6名未被SDK定义为宏时)
+    // 生成: #define <VB6名> → <调用点名> (仅当VB6名未被SDK定义为宏时)
     // #ifndef 检查处理两种情况:
     //   - SDK宏 (CopyMemory等): #ifndef为false, 跳过 → 调用使用SDK宏
     //   - SDK函数声明: #ifndef为true, 生成 → 调用重定向到C3导入版本
     //   - 无SDK定义: #ifndef为true, 生成 → 正常
     // ai/024 T02: 静态路且无 Alias 时两者同名 (`MyAdd`→`MyAdd`), 自指的 #define 无意义
     // 且会让调试时宏展开停不下来, 直接跳过。
-    if (cFuncIdent != cExportedIdent) {
+    // Fix <vbeclipse> 2026-10-06: 非别名路的包装**跟 #define 同进同出** —— SDK 已把
+    // VB 名定义成宏时两者一起跳过, 否则会凭空多出一个 vb6_di_X 引用 (无桩时 LNK2019)。
+    if (cFuncIdent != callTarget) {
         h_.emitLine("#ifndef " + cFuncIdent);
-        h_.emitLine("#define " + cFuncIdent + " " + cExportedIdent);
+        if (!isStaticDecl && !aliasedCall) emitLdlWrapper();
+        h_.emitLine("#define " + cFuncIdent + " " + callTarget);
         h_.emitLine("#endif");
     }
 }

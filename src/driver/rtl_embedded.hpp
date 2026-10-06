@@ -192,6 +192,18 @@ enum RtlResourceID {
 
     // ai/029 C29-SL-a: VB6 Slider 控件 (原生 msctls_trackbar32, 不加载 MSCOMCTL.OCX)
     RTL_VB6FORMS_SLIDER_C                  = 221,
+    // 账 #181: 崩溃轨迹每进程只记一次的闸 (零依赖头, 见文件头注释)
+    RTL_VB6RTL_CRASH_H                     = 222,
+
+    // 2026-10-06: Form/Printer 绘图方法家族 (PSet/Line/Circle/Point/Cls)。
+    // 此前 Form 级绘图面**完全缺失** —— 只有 Shape/Line 控件的自绘路径,
+    // `Form_Paint` 里的 Me.PSet 等落进 COM dispatch 桩 (运行时 no-op)。
+    // ⚠ id 必须与 src/driver/c3rtl.rc 逐条对上 (.rc 里 223=头 / 224=体)。
+    // 这两行曾与之对调: 解包把头写成 .c、把体写成 .h ⇒ 每个 include vb6forms.h
+    // 的 TU 都拿到一份函数体 ⇒ 25 枚裸名约 50 份定义, 链接期 LNK2005 x1225。
+    // 对账由 scripts/check_rtl_resource_ids.ps1 钉住, 两份权威再不一致就红。
+    RTL_VB6FORMS_DRAW_H                    = 223,
+    RTL_VB6FORMS_DRAW_C                    = 224,
 };
 
 // Session directory manager

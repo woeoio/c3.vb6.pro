@@ -73,6 +73,20 @@
         }
         return 1;
     }
+    // Fix <vbeclipse> rev21: UC **自有 Public Sub** 的按名桥。
+    // 必须挂在下面那条"实例归一成 HWND"**之前** —— 归一后 obj 已是 HWND, 虽仍能
+    // 查到 rec, 但那样就再也拿不到"这是哪个实例"的语义了; 而 vb6_UC_OwnMethodCall
+    // 两种形态都收 (它自己先 findByInstance 再 findByHwnd)。
+    // 为什么必须在**内建链之前**: 名字撞车时 VB6 语义是"自定义成员遮蔽内建"吗?—— 不是。
+    // `Refresh` 同时是 Win32 内建重绘**和** .ctl 里自己写的 Public Sub (ucFolder/
+    // ucTab/ucSplitBar 都有), 真 VB6 里 `obj.Refresh` 走的是**用户写的**那个
+    // (它通常负责重排子控件, 内建重绘只是它顺带做的)。所以这里刻意排在 Refresh
+    // 之前; 未命中才继续往内建链走 (缺席 = 旧行为, 逐字节一致)。
+    // 实证 play78: 5 处 `vb6_ComCall(ucFolder实例, L"ShowView", …)` 全落空 ⇒
+    // ucFolder.ShowView 里 `l_View.View.Visible = True` 从未执行 ⇒ 所有视图窗体
+    // 永远不可见 ⇒ ViewArea_Resize 的 Move 闸门永闭 ⇒ 子面板停在 0x0 空白。
+    if (vb6_UC_OwnMethodCall(obj, name, argc, (const void**)argv, out)) return 1;
+
     // Fix <vbeclipse> rev18: UC **实例指针**归一成宿主 HWND。
     // 晚绑定调用点 (`Dim x As Variant: Set x = Controls.Item(id)`) 传进来的是
     // `vb6_cls_X*`, 而下面整条内建成员链 (与那道"三条都不匹配就 return 0"的闸门)

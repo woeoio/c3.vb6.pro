@@ -226,7 +226,13 @@ int32_t vb6_UC_ControlsEnumNext(void* enumPtr, void* outV) {
     void* hwnd = kids[e[1]++];
     memset(out, 0, sizeof(*out));
     out->vt = vb6_vtDispatch;
-    out->pdispVal = hwnd;   // 控件对象 = 其 HWND (宿主分派层识别)
+    // Fix <vbeclipse>: 交**真 IDispatch 包装器**而非裸 HWND。`For Each ctrl In Controls`
+    // 的栈 VARIANT 收尾会调 oleaut32 `VariantClear` → 对 VT_DISPATCH 无条件 Release。裸
+    // HWND 被当对象指针 Release → 解引用伪 vtable → 野调用崩 (ucTabStrip.UserControl_Resize
+    // 实测, PC=0xcccccc.. 未初始化)。Vb6HostWrap 有真 vtable, AddRef/Release 走引用计数,
+    // VariantClear 安全; 宿主属性/方法读侧 (ComGetProp/Host_GetProp) 顶部 UnwrapHost 还原
+    // 成 HWND, 语义不变。与 vb6_ComPackObject 对宿主对象的包装同口径。
+    out->pdispVal = vb6_UC_WrapHostObject(hwnd);
     return 1;
 }
 

@@ -43,7 +43,7 @@
         // 不发射窗体窗口框架: UserControl/PropertyPage 对外是类, 其可见内容由
         // 代码绘制到 UserControl.hDC; 但 `Timer1.Interval = 100` /
         // `Picture1.ScaleWidth` 这类设计期子控件成员必须能解析.
-        emitDesignerControlDecls(*frmDesc);
+        emitDesignerControlDecls(*frmDesc, module.docKind);
     }
 
     // 5. Declare (外部函数声明)
@@ -131,4 +131,8 @@
             }
         }
     }
+
+    // 7.5 AddressOf 回调桩 (账 #184): 原型跟着过程原型同批发射 (类型依赖同一条顺序),
+    //     桩定义后置到 epilogue —— 与委托桩同一套拆分/转发口径。
+    emitAddressOfThunkDecls(module);
 

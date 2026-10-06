@@ -45,6 +45,17 @@ static inline int vb6_DateFromSerial(double serial, SYSTEMTIME* st) {
 // 应用实例句柄 (vb6_SetAppInstance 设置, 多处属性设置与控件创建需要)
 extern HINSTANCE g_hInstance;
 
+// --- 控件窗口的字体 (账 #200/#202/#204, 定义在 vb6forms_ctrl.c) ---
+// 「这枚控件现在在用的字体」在本仓库只许有一处问法：先问窗口，窗口不答再读我们自存的那份。
+// 必须跨文件共享的理由是**窗口类本身** —— 探针实测裸 STATIC 与裸 BUTTON(BS_GROUPBOX)
+// 收到 `WM_SETFONT` 之后都不答 `WM_GETFONT`（`.build/b200probe/fontprobe.c`），
+// 所以凡是"自己读窗口字体"的站点（Frame 的标题带、控件数组问模板）拿到的恒是 NULL，
+// 症状不是崩而是静默按 DC 的默认字体画/量（账 #200 的 TextHeight、#202 的白带、#204 的整张 Font 面）。
+// `vb6_ControlFontStore` 是**唯一**写那份自存的出口：谁把字体发给窗口，谁就同时经它存一份
+// （创建期那一站尤其要紧 —— 从没被写过字体的控件今天连 `.FontName` 都读空，见账 #204）。
+HFONT vb6_ControlFont(HWND hwnd);
+void vb6_ControlFontStore(HWND hwnd, HFONT hFont);
+
 // ============================================================
 // Fix 190: 源码字符串 = UTF-8, 窗口层 = UTF-16
 //
@@ -94,5 +105,15 @@ static inline void vb6_wideToU8Buf(const wchar_t* w, char* out, int cap) {
         WideCharToMultiByte(CP_ACP, 0, w, -1, out, cap, NULL, NULL);
     out[cap - 1] = 0;
 }
+
+// ============================================================
+// 绘图 DC 的唯一取法 (定义在 vb6forms_ctrl.c)。
+// 账 #185/#196 把「这枚窗口的绘图 DC 从哪儿来」收成一处: WM_PAINT 派发期用宿主
+// BeginPaint 后挂在窗口属性 VB6_PaintDC 上的那张, 否则 GetDC。*pFromPaint=TRUE 就
+// 意味着这张**不许** ReleaseDC (派发期那张由宿主的 EndPaint 收尾)。
+// 账 #234 起绘图方法家族 (vb6forms_draw.c 的 PSet/Line/Circle/Point/Cls) 也问它 ——
+// 那里原本自己又写了一份同样口径, 而 check_control_dc.ps1 的名单扫不到那个文件。
+// ============================================================
+HDC vb6_ControlDrawDC(HWND hw, BOOL* pFromPaint);
 
 #endif // VB6C3_VB6FORMS_INTERNAL_H

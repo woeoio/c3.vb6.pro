@@ -463,9 +463,15 @@ Private Sub evtTimer_Timer()
     DoEvents
     Debug.Print "RT83=" & TF(gChg1 - d = 1)
     ' --- 84: SelText 赋值走 EM_REPLACESEL，那一条也发 Change ---
-    d = gChg1
+    ' 账 #161 把这条从 >= 1 收紧成 = 1: 当年量到 2 不是产品翻倍, 而是**焦点刚落到这枚
+    ' 控件时 RichEdit 补发的那条通知落进了下一个泵窗口**, 被算进相邻那一格 (与 #162 同族)。
+    ' 实测: 排空之后一次 SelText 赋值 = 1 条, 连做三次 = 1/1/1, 再泵一轮不加发。
+    rt1.SetFocus
+    DoEvents
+    DoEvents
     rt1.SelStart = 0
     rt1.SelLength = 4
+    d = gChg1
     rt1.SelText = "POST"
     DoEvents
     ' 这里刻意不写 Left(rt1.Text, 4)：窗体模块里 Left(...) 会被抢去当**窗体的 Left 属性**
@@ -474,7 +480,9 @@ Private Sub evtTimer_Timer()
     ' 焦点给它；本格上面还显式 SetFocus 了一下，所以两种编译器下都聚焦），同一次 EM_REPLACESEL
     ' 会从两条通道各发一条 Change —— 实测 delta=2（不聚焦时是 1）。本格要钉的是"这条赋值会发
     ' Change"，翻倍那条是已知缺陷、另记账 #161；把它钉成 == 1 会把旧账当成新回归。
-    Debug.Print "RT84=" & TF(gChg1 - d >= 1 And InStr(rt1.Text, "POST") = 1)
+    e2 = gChg1 - d
+    DoEvents
+    Debug.Print "RT84=" & TF(e2 = 1 And gChg1 - d = 1 And InStr(rt1.Text, "POST") = 1)
     ' --- 85: TextRTF 赋值走 EM_STREAMIN，那条发不发 Change（原始读数 E2）---
     d = gChg1
     rt1.TextRTF = rt3.TextRTF
@@ -511,6 +519,32 @@ Private Sub evtTimer_Timer()
     Debug.Print "RT89=" & TF(gChg1 - d = 0)
     Debug.Print "E3=" & (gChg1 - c0) & "/" & (gSel1 - s0) & "/" & (gChg3 - c3) & "/" & (gSel3 - s3)
 
+    ' --- 91/92 (账 #161 的判据): 两条都是"通知来源"该钉的形状 ---
+    ' 91: 只动选区、文本一字不改 ⇒ **不该**惊动 Change (该发的是 SelChange)。这条正是
+    '     当年"EN_UPDATE 选区变也发"那条猜测的反证 —— 实测 chg=0 / sel=1。
+    rt2.SetFocus
+    DoEvents
+    DoEvents
+    d = gChg1
+    rt1.SelStart = Len(rt1.Text)
+    rt1.SelLength = 0
+    DoEvents
+    rt1.SelStart = 0
+    DoEvents
+    ' 只问 Change 那一头: 自发 SelChange 的**条数**天生会抖 (同一份产物连跑 E3 的 sel 位在
+    ' 2..7 之间跳), 拿它当判据会把环境抖动读成回归 —— 本格要钉的是"选区动、文本没动 ⇒
+    ' Change 一条都不该发", 与条数无关。
+    Debug.Print "RT91=" & TF(gChg1 - d = 0)
+    ' 92: 聚焦状态下一次 Text 赋值 = 恰好 1 条 Change, 且再泵一轮不加发 (排空后取基线)。
+    rt1.SetFocus
+    DoEvents
+    DoEvents
+    d = gChg1
+    rt1.Text = "p161-pin"
+    DoEvents
+    e2 = gChg1 - d
+    DoEvents
+    Debug.Print "RT92=" & TF(e2 = 1 And gChg1 - d = 1)
         Debug.Print "RT90=" & CStr(rt3.ReadOnly) & "/" & CStr(rt1.WordWrap) & "/" & TypeName(rt3.ReadOnly)
 Debug.Print "CTRLRICHTEXT-DONE"
     Unload Me

@@ -314,6 +314,51 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                         knownNewVars_[lower] = "Collection";
                     }
                 }
+                // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` —— 窗体**也**要自动实例化。
+                //
+                // 症状链 (play78 --arch x86 实测, 探针 PC/PA 逐条对齐):
+                //   frmMain.frm:516 `Dim frmBrowser As New frmEditorBrowser` 只发成
+                //     `void* frmBrowser = 0;` —— **一条实例化守卫都没有**, 于是
+                //     frmBrowser / frmText 恒为 NULL。随后 Form_Load 里
+                //     `ucPerspective1.OpenEditor frmBrowser` 把 NULL 传进
+                //     ucPerspective.OpenEditor → `View.View = Editor` 存成 NULL
+                //     (探针 `PC ADDEditor ... m_View=00000000` 是直接铁证)
+                //     ⇒ 这两个编辑器 View 进 m_FolderViews 后是**空壳**
+                //     (探针 `have=<FolderId_1> m_View=00000000`)
+                //     ⇒ ShowView 匹配到它们时 `.Visible = True` 写不进去
+                //     ⇒ ViewArea_Resize 的 `If .Visible Then .Move` 闸门对它们永闭
+                //     ⇒ 视图窗体停在 0x0 / 设计期尺寸 ⇒ **停靠面板空白**。
+                //
+                // 为什么漏: 上面三条注册路径 (Class 符号 / projectClassNameOf /
+                // ComClass / Collection) **全都不含窗体** —— 窗体在符号表里既不是
+                // Class 也不是 ComClass, driver 只把窗体名注入 knownFormModuleNames_
+                // (见 setFormModuleNames), 于是 `var.isNew` 为真却没人登记,
+                // 守卫永不发出。**判据必须是 knownFormModuleNames_**, 与
+                // cgen_expr_ident_symbol.inc:39 (窗体名当值 → vb6_form_hwnd_<F>())
+                // 同源, 不新增第二套"算不算窗体"的判断。
+                //
+                // 发什么表达式: 窗体没有 vb6_cls_<F>_New(), 它的运行时入口是
+                // cgen_form_ctrl_registry.inc:86 发的访问器
+                //   `void* vb6_form_hwnd_<F>(void) { if (!hwnd) vb6_form_load_<F>(); ... }`
+                // 它**首次引用即隐式 Load** (建窗 + Form_Load, 不显示), 正是
+                // VB6 `New frmEditorBrowser` 的语义。该函数已在被引用窗体的 .h 里
+                // 声明 (cgen_form_ctrl_registry.inc:84), 且引用方 .c 已 include
+                // 那个 .h (frmMain.c 就 include 了 frmEditorText.h), 无需新增原型。
+                //
+                // ⚠ 必须**最后**登记 (覆盖前面可能的误判): 窗体名若同时命中工程类名
+                //   (同名 .cls + 同名 .frm), VB6 里窗体与类同空间冲突本就非法, 取窗体
+                //   更贴近本工程实际。lower != knownFormName_ 的自引用不登记 ——
+                //   `Dim frmMain As New frmMain` 在 Form_Load 里是死循环, 本工程没有。
+                if (var.isNew) {
+                    std::string formName = simple.name;
+                    std::string formLower = formName;
+                    std::transform(formLower.begin(), formLower.end(), formLower.begin(), ::tolower);
+                    if (knownFormModuleNames_.count(formLower) && formLower != knownFormName_) {
+                        std::string varLower = var.name;
+                        std::transform(varLower.begin(), varLower.end(), varLower.begin(), ::tolower);
+                        knownNewFormVars_[varLower] = cIdent(simple.name);
+                    }
+                }
                 if (clsSym && (clsSym->kind == SymbolKind::ComClass || clsSym->kind == SymbolKind::ComInterface)) {
                     isLocalComIfaceType = true;
                     // Fix 090v-com: 前期绑定COM变量C类型缓存 (供 As New 守卫转型)
@@ -415,6 +460,30 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 // Fix 084aa: #undef 防宏污染 (见 P8.1 动态数组处注释)
                 c_.emitLine("#undef " + cName);
                 c_.emitLine(storageClass + cType + " " + cName + " = " + initVal + ";");
+                // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` 在**声明处**实例化。
+                //
+                // 为什么必须在这里 (而不是等第一次引用, 像 knownNewVars_ 那样):
+                //   窗体变量在符号表里是**普通 Variable**, 引用 `frmBrowser.Caption`
+                //   走 MemberAccess 路径, 根本不经过 cgen_expr_ident_symbol.inc 的
+                //   标识符守卫发射点 —— 实测 rev27 把守卫只加在 ident 侧时, 生成的
+                //   C 里一条都没有 (`void* frmBrowser = 0;` 之后直接进 Form_Load 体)。
+                //   而 VB6 语义本来就是 `Dim ... As New` **声明即构造**, 放声明处
+                //   既绕开分派路径的坑, 又与 VB6 一致。
+                //
+                // 窗体没有 vb6_cls_<F>_New(); 运行时入口是 cgen_form_ctrl_registry.inc
+                // 发的 `void* vb6_form_hwnd_<F>(void)`, 它**首次引用即隐式 Load**
+                // (建窗 + Form_Load, 不显示) —— 正是 `New frmEditorBrowser` 的语义。
+                // 上面 emitLocalDeclCode 已按 knownFormModuleNames_ 把 (变量名→窗体名)
+                // 登记进 knownNewFormVars_, 这里只消费。
+                {
+                    std::string nfLower = var.name;
+                    std::transform(nfLower.begin(), nfLower.end(), nfLower.begin(), ::tolower);
+                    auto itNF = knownNewFormVars_.find(nfLower);
+                    if (itNF != knownNewFormVars_.end() && storageClass.empty()) {
+                        c_.emitLine("if (!" + cName + ") " + cName + " = (void*)vb6_form_hwnd_"
+                                    + itNF->second + "();  /* Fix <vbeclipse> rev27: Dim As New <Form> */");
+                    }
+                }
             }
             break;
         }

@@ -2,6 +2,7 @@
 // 由 vb6comserver.c 按 COM 接口家族拆分而来 (纯搬移, 零行为改动)
 
 #include <string.h>
+#include <wchar.h>   /* 账 #173 census: swprintf 的原型 (此前走 C4013) */
 #define COBJMACROS  /* Enable C COM macros (ITypeLib_Release etc.) */
 #include "vb6comserver.h"
 #include "vb6comserver_internal.h"

@@ -99,6 +99,49 @@ BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
 }
 
 // ============================================================
+// Fix <vbeclipse>: B 族字节串函数 — LeftB / RightB / MidB / InputB
+// 此前 RTL 只有 AscB/ChrB/LenB/InStrB, LeftB/RightB/MidB/InputB 连实现带
+// builtin 分派表登记全无, 用到即 LNK2019 / C3861。
+// 字节载体口径与 AscB/ChrB 既有约定一致: BSTR 的一个 wchar 存一个字节
+// (0-255), 所以"按字节"就是"按 wchar 计数"。InStrB 的 BSTR 路另按 UTF-16
+// 真*2 字节偏移回值, 那是它自己的口径, 不影响这一族的取子串行为。
+// ============================================================
+
+BSTR vb6_LeftB(BSTR s, int32_t n) {
+    if (!s || n <= 0) return vb6_BSTR_Empty();
+    int32_t len = vb6_BSTR_Len(s);
+    if (n > len) n = len;
+    wchar_t* buf = (wchar_t*)malloc((n + 1) * sizeof(wchar_t));
+    memcpy(buf, s, n * sizeof(wchar_t));
+    buf[n] = L'\0';
+    BSTR result = vb6_BSTR_FromStr(buf);
+    free(buf);
+    return result;
+}
+
+BSTR vb6_RightB(BSTR s, int32_t n) {
+    if (!s || n <= 0) return vb6_BSTR_Empty();
+    int32_t len = vb6_BSTR_Len(s);
+    if (n > len) n = len;
+    return vb6_BSTR_FromStr(s + len - n);
+}
+
+BSTR vb6_MidB(BSTR s, int32_t start, int32_t len) {
+    if (!s || start < 1) return vb6_BSTR_Empty();
+    int32_t slen = vb6_BSTR_Len(s);
+    int32_t offset = start - 1;  // VB6 是 1-based 字节下标
+    if (offset >= slen) return vb6_BSTR_Empty();
+    // len < 0 是 cgen 对省略 length 参数 (MidB$(s, n)) 的哨兵 — 取到结尾
+    if (len < 0 || offset + len > slen) len = slen - offset;
+    wchar_t* buf = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
+    memcpy(buf, s + offset, len * sizeof(wchar_t));
+    buf[len] = L'\0';
+    BSTR result = vb6_BSTR_FromStr(buf);
+    free(buf);
+    return result;
+}
+
+// ============================================================
 // <vbeclipse>: vbTextCompare 共用核 —— InStr/InStrRev/Replace/Split/Filter/StrComp 共用
 // ============================================================
 // VB6 的 compare 形参此前在 6 个入口被静默丢掉: RTL 里 5 处 (void)compare, 加上

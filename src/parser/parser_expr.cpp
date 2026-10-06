@@ -283,8 +283,15 @@ ExprPtr Parser::parseLiteral() {
         }
         case TokenKind::StringLiteral:
             return std::make_unique<LiteralExpr>(loc, LiteralKind::String, tok.text);
-        case TokenKind::DateLiteral:
-            return std::make_unique<LiteralExpr>(loc, LiteralKind::Date, tok.text);
+        case TokenKind::DateLiteral: {
+            // 账 #172: 值在这里折成 OLE 日期序列。改前只带原文 ⇒ 发码读没写过的联合体槽。
+            // 折不出形状就留着 0（不发新诊断）：语料里 VB6 认得而我认得的写法一旦出现，
+            // 宁可照旧算错，也不要把一个现在编得过的工程编红。
+            auto expr = std::make_unique<LiteralExpr>(loc, LiteralKind::Date, tok.text);
+            double oleDate = 0.0;
+            if (foldDateLiteralToOADate(tok.text, oleDate)) expr->doubleValue = oleDate;
+            return expr;
+        }
         case TokenKind::TrueKeyword: {
             auto expr = std::make_unique<LiteralExpr>(loc, LiteralKind::Boolean, tok.text);
             expr->boolValue = true;

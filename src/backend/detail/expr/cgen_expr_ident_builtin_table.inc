@@ -138,6 +138,11 @@ static const std::unordered_map<std::string, std::string> builtinFuncs = {
     {"chrw",       "vb6_ChrW"},
     {"ascb",       "vb6_AscB"},
     {"chrb",       "vb6_ChrB"},
+    // Fix <vbeclipse>: B 族字节串函数补齐 (此前 RTL 无实现、表里无登记 → LNK2019/C3861)
+    {"leftb",      "vb6_LeftB"},
+    {"rightb",     "vb6_RightB"},
+    {"midb",       "vb6_MidB"},
+    {"inputb",     "vb6_InputB"},   // InputB$/InputB 语句键 (parser 剥 $)
     {"timer",      "vb6_Timer"},
     {"strconv",    "vb6_StrConv"},
     {"filter",     "vb6_Filter"},

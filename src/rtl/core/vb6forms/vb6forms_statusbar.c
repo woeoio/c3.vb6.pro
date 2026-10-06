@@ -150,7 +150,10 @@ static int SbMeasureText(HWND hw, const wchar_t* txt) {
     if (!txt || !txt[0]) return 0;
     HDC hdc = GetDC(hw);
     if (!hdc) return 0;
-    HFONT font = (HFONT)SendMessageW(hw, WM_GETFONT, 0, 0);
+    // 账 #205: 状态条是 RTL 自己注册的窗口类, 裸问窗口永远拿不到那张字体 ——
+    // 实测同一串文字在 8pt 与 20pt 两枚状态条上量出**同一个宽**(140)，改了字号也不动。
+    // 字体只从 vb6_ControlFont 那一处问（#200 立的出口，#204 把创建期下发的那张存进同槽位）。
+    HFONT font = vb6_ControlFont(hw);
     HFONT old = font ? (HFONT)SelectObject(hdc, font) : NULL;
     SIZE sz = {0, 0};
     GetTextExtentPoint32W(hdc, txt, (int)wcslen(txt), &sz);
@@ -393,7 +396,8 @@ static void C3SbPaint(HWND hw) {
     HDC hdc = BeginPaint(hw, &ps);
     if (!hdc) return;
     HBRUSH bk = GetSysColorBrush(COLOR_BTNFACE);
-    HFONT font = (HFONT)SendMessageW(hw, WM_GETFONT, 0, 0);
+    // 账 #205: 画的那一遍与量的那一遍必须问同一处，否则格宽按一张字画按另一张。
+    HFONT font = vb6_ControlFont(hw);
     HFONT oldFont = font ? (HFONT)SelectObject(hdc, font) : NULL;
     int h = rc.bottom - rc.top;
     int n = w ? w->count : 0;

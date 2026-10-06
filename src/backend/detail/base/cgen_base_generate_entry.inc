@@ -32,6 +32,24 @@
                 c_.emitLine("vb6_ComLibRegister(c3_com_libs, "
                             + std::to_string(comLibRefs_->size()) + ");");
             };
+            // Fix <vbeclipse> 2026-10-06: Object= OCX 免注册表烘焙 — 与 ComLib 同构,
+            // 入口点最前发出, vb6_Form_ControlsAdd 按 ProgID 命中即绕开注册表.
+            // 表空 (未声明 Object=) 时一行不发 → 产物与改动前逐字节一致, 零回归.
+            auto emitOcxRefReg = [&]() {
+                if (!ocxLibRefs_ || ocxLibRefs_->empty()) return;
+                c_.emitBlank();
+                c_.emitLine("/* Fix <vbeclipse>: Object= 免注册 OCX 控件表 (vbp 声明; 路径相对 exe) */");
+                c_.emitLine("static const Vb6OcxRef c3_ocx_libs[] = {");
+                for (const auto& e : *ocxLibRefs_) {
+                    // Vb6OcxRef 四字段全是 const wchar_t* → 必须发宽字符串字面量
+                    c_.emitLine("    { L\"" + escapeWideCString(e[0]) + "\", L\""
+                                + escapeWideCString(e[1]) + "\", L\"" + escapeWideCString(e[2])
+                                + "\", L\"" + escapeWideCString(e[3]) + "\" },");
+                }
+                c_.emitLine("};");
+                c_.emitLine("vb6_OcxRefRegister(c3_ocx_libs, "
+                            + std::to_string(ocxLibRefs_->size()) + ");");
+            };
         for (auto& decl : module.declarations) {
             if (decl->kind == ASTNodeKind::SubDecl) {
                 auto& sub = static_cast<SubDecl&>(*decl);
@@ -81,6 +99,7 @@
                             c_.indent();
                             c_.emitLine("(void)hPrevInst; (void)lpCmdLine; (void)nCmdShow;");
             emitComLibReg();
+            emitOcxRefReg();
             c_.emitLine("vb6_Init();");
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
@@ -101,6 +120,7 @@
                             c_.emitLine("int main(int argc, char* argv[]) {");
                             c_.indent();
             emitComLibReg();
+            emitOcxRefReg();
             c_.emitLine("vb6_Init();");
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
@@ -131,6 +151,7 @@
                 c_.indent();
                 c_.emitLine("(void)hPrevInst; (void)lpCmdLine; (void)nCmdShow;");
                 emitComLibReg();
+            emitOcxRefReg();
                 c_.emitLine("vb6_Init();");
                 // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
                 if (isMultiModule_) {
@@ -151,6 +172,7 @@
                 c_.emitLine("int main(int argc, char* argv[]) {");
                 c_.indent();
             emitComLibReg();
+            emitOcxRefReg();
             c_.emitLine("vb6_Init();");
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
@@ -177,6 +199,7 @@
                 c_.indent();
                 c_.emitLine("(void)hPrevInst; (void)lpCmdLine; (void)nCmdShow;");
                 emitComLibReg();
+            emitOcxRefReg();
                 c_.emitLine("vb6_Init();");
                 if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
                 // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数

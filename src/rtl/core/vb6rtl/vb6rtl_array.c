@@ -386,6 +386,41 @@ int32_t vb6_LBound(vb6_SafeArray1D* safeArray, int32_t dimension) {
     return safeArray->lBound;
 }
 
+// 账 #209: VB6_SA_AT 的冷路径 —— 未分配的动态数组或下标越界。口径与上面
+// vb6_UBound/vb6_LBound 的 rev2 完全一致 (用户在真 VB6 实测: 都是错误 9,
+// 有 On Error 走处理器, 没有就报错退出), 这里只多带一条越界读数便于定位。
+void vb6_SaElemFail(void* arr, int32_t idx) {
+    vb6_SafeArray1D* a = (vb6_SafeArray1D*)arr;
+    if (getenv("C3_SA_TRACE")) {  // 与 vb6_UBound rev4 同一个开关
+        fprintf(stderr, "[SA] elem access out of range: arr=%p idx=%d lb=%d ub=%d\n",
+                (void*)a, (int)idx,
+                a ? (int)a->lBound : -999, a ? (int)a->uBound : -999);
+        fflush(stderr);
+    }
+    vb6_ErrRaise(9, vb6_BSTR_FromStr(L"VBA.Information"),
+                 vb6_BSTR_FromStr(L"Subscript out of range"));
+    exit(9);  /* 不可达: vb6_ErrRaise 必 longjmp 或 ExitProcess */
+}
+
+// 账 #209 同族: 多维那一支的冷路径。口径与上面那条一模一样 (VB6 的越界就是错误 9),
+// 只是把秩数与逐维下标带出来 —— 多维最容易犯的错是"某一维抄错上下界", 光一个 idx 说不清。
+void vb6_SaNdElemFail(void* arr, const int32_t* idx, int32_t rank) {
+    vb6_SafeArrayND* a = (vb6_SafeArrayND*)arr;
+    if (getenv("C3_SA_TRACE")) {  // 与 vb6_UBound rev4 / vb6_SaElemFail 同一个开关
+        fprintf(stderr, "[SA] ND elem access out of range: arr=%p rank=%d dimCount=%d",
+                (void*)a, (int)rank, a ? (int)a->dimCount : -999);
+        for (int32_t d = 0; a && d < rank && d < 16; d++) {
+            fprintf(stderr, " d%d=%d[lb=%d n=%d]", (int)d, (int)idx[d],
+                    (int)a->bounds[d].lBound, (int)a->bounds[d].cElements);
+        }
+        fprintf(stderr, "\n");
+        fflush(stderr);
+    }
+    vb6_ErrRaise(9, vb6_BSTR_FromStr(L"VBA.Information"),
+                 vb6_BSTR_FromStr(L"Subscript out of range"));
+    exit(9);  /* 不可达 */
+}
+
 // ============================================================
 // SAFEARRAY ND - VB6 多维数组实现
 // ============================================================

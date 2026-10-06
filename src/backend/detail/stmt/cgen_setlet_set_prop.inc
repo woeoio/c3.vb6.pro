@@ -1,4 +1,4 @@
-// cgen_setlet_set_prop.inc - visit(SetStmt&) 函数体片段：目标侧分派（Nothing / 属性 / COM / 接口引用）
+﻿// cgen_setlet_set_prop.inc - visit(SetStmt&) 函数体片段：目标侧分派（Nothing / 属性 / COM / 接口引用）
 // 由 src/backend/stmt/cgen_setlet.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 12~321 行，逐行未改。
 
@@ -216,6 +216,14 @@
                     }
                     // Fix 194: 字符串型控件属性的值必须转 BSTR (数值 RHS → 指针解引用 / 静默无效)
                     _setValExpr = controlPropValueExpr(_setWriteFn, _setValExpr, *node.value);
+                    // Fix <vbeclipse> 2026-10-06: Picture 属性的 RHS 是 Variant 载体
+                    // (LoadResPicture 等, controlPropValueExpr 已包 vb6_VariantToObjectVal)
+                    // 时是 COM 对象, 必须走 FromCom (QI IPicture) 而不是裸句柄 setter,
+                    // 否则 IPicture 指针被当 HBITMAP 挂上去 → 画面错乱。
+                    if (_setWriteFn == "vb6_SetControlPicture"
+                        && _setValExpr.compare(0, 23, "vb6_VariantToObjectVal(") == 0) {
+                        _setWriteFn = "vb6_SetControlPictureFromCom";
+                    }
                     c_.emitLine(_setWriteFn + "(" + makeCtrlHwndArg(_setObjLower, _setItCtrl->second) + ", " + _setValExpr + ");  /* Set Control Property */");
                     return;
                 }

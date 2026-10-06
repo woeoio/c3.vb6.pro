@@ -59,6 +59,11 @@
             lastExpr_ = readFn + "(" + formHwnd + ")  /* Form." + node.memberName + " via Me */";
             return;
         }
+        // Form 的绘图状态属性 (CurrentX / CurrentY / DrawWidth) **不在这里答** ——
+        // 上面那句 getControlPropReadFn(Form, 名) 就是唯一入口, 读写两侧成对登记在
+        // cgen_util_ctrl.cpp 的那两张表里 (账 #233)。这里曾经另摆过四条硬编码:
+        // 它只覆盖读侧, 于是赋值语句找不到写侧出口, 发成
+        // `vb6_Form_DrawGetWidth(vb6_hwnd_X) = 3;` —— C2106, 两架构都编不过。
         // 未知 Form 成员 → COM dispatch (作为编译 stub; 运行时不可靠)
         comObjExpr_ = formHwnd;
         comMemberName_ = node.memberName;
@@ -195,6 +200,25 @@
             // Task #39: Printer.hDC — ChooseFont/PrintDlg 的 hDC 字段来源
             // (cDlg.cls ShowFont: tChooseFont.hDC = Printer.hDC)
             if (memLower == "hdc") { lastExpr_ = "(void*)vb6_Printer_hDC()"; return; }
+            // 2026-10-06: Printer 绘图方法 (PSet/Line/Circle/Point/Cls) + 绘图状态。
+            //   此前这些落进下方通用 COM 绑定 ⇒ Printer 不是真 IDispatch, 运行期
+            //   静默 no-op, `Printer.Line ...` 在报表里画不出线。
+            //   方法**不在这里**翻译 —— 走 comObjExpr_ 标记, 由
+            //   cgen_expr_call_callee_withm.inc 的绘图段统一发射 (与 Form 同款,
+            //   实参个数/可选形参的判定逻辑只写一份)。
+            if (memLower == "pset" || memLower == "line" || memLower == "circle"
+                || memLower == "point" || memLower == "cls") {
+                comObjExpr_ = "Printer";
+                comMemberName_ = node.memberName;
+                isComMarker_ = true;
+                isEarlyBoundCom_ = false;
+                earlyBoundSym_ = nullptr;
+                lastExpr_ = "Printer";
+                return;
+            }
+            // 绘图状态读 (CurrentX/CurrentY 上面已给, 这里补 ForeColor/DrawWidth)
+            if (memLower == "forecolor") { lastExpr_ = "vb6_Printer_DrawGetForeColor()"; return; }
+            if (memLower == "drawwidth") { lastExpr_ = "vb6_Printer_DrawGetWidth()"; return; }
         }
 
         // P18-C: Forms 集合
@@ -257,65 +281,23 @@
                 // IDispatch. 这里按 .ctl 模块解析成员, this 取宿主窗口的实例.
                 auto itUC = knownUserControlCtrlVars_.find(objLower);
                 if (itUC != knownUserControlCtrlVars_.end()) {
-                    std::string resolvedFn = resolveClassMemberCall(itUC->second, node.memberName);
-                    if (!resolvedFn.empty()) {
-                        std::string hwndArg = makeCtrlHwndArg(objLower, itCtrl->second);
-                        std::string thisArg =
-                            "(vb6_cls_" + cIdent(itUC->second) + "*)vb6_UC_InstanceOf(" + hwndArg + ")";
-                        if (asCallCallee_) {
-                            pendingChainObj_ = thisArg;
-                            lastExpr_ = resolvedFn;
-                        } else {
-                            // 值上下文无括号调用: 按形参表补 Optional 默认值 (同 Fix 089h)
-                            std::vector<ParameterInfo> paramsUC;
-                            bool isBuiltinUC = false;
-                            if (resolvedFn.find("_prop_") == std::string::npos
-                                && findClassMemberCallParams(itUC->second, node.memberName,
-                                                             paramsUC, isBuiltinUC)
-                                && !paramsUC.empty() && !isBuiltinUC) {
-                                std::string argListUC = thisArg;
-                                for (size_t i = 0; i < paramsUC.size(); i++) {
-                                    const auto& pm = paramsUC[i];
-                                    argListUC += ", ";
-                                    std::string defV = (pm.hasDefaultValue && !pm.defaultValueExpr.empty())
-                                                     ? pm.defaultValueExpr : defaultValue(pm.type);
-                                    if (pm.isByVal) argListUC += defV;
-                                    else {
-                                        std::string ct = mapType(pm.type);
-                                        if (pm.type == Vb6Type::Variant || pm.type == Vb6Type::Empty
-                                            || pm.type == Vb6Type::Null || pm.type == Vb6Type::Object)
-                                            argListUC += "&(" + ct + "){0}";
-                                        else argListUC += "&(" + ct + "){" + defV + "}";
-                                    }
-                                }
-                                for (size_t i = 0; i < paramsUC.size(); i++) {
-                                    if (paramsUC[i].isOptional && !paramsUC[i].isParamArray)
-                                        argListUC += ", 0";
-                                }
-                                lastExpr_ = resolvedFn + "(" + argListUC + ")";
-                            } else {
-                                lastExpr_ = resolvedFn + "(" + thisArg + ")";
-                            }
-                        }
+                    // 账 #191: 这段整体抽到 CCodeGen::emitUcInstanceMemberExpr —— 控件数组的元素
+                    // (`ucChartBar1(i).AddSerie ...`) 要走同一个出口，不能各抄一份。
+                    if (emitUcInstanceMemberExpr(itUC->second, node.memberName,
+                                                makeCtrlHwndArg(objLower, itCtrl->second))) {
+                        return;
+                    }
+                }
+                // 账 #189: 数组整体成员先判 (Count 以前不在这里 ⇒ 掉进 COM 兜底拿
+                // vb6_hwnd_<数组名>，C2065)。这三条**永远不是**控件属性, 所以放在 readFn 之前。
+                if (knownControlArrays_.count(objLower)) {
+                    std::string metaExpr = ctrlArrayMetaMemberExpr(objIdent.name, memLower);
+                    if (!metaExpr.empty()) {
+                        lastExpr_ = metaExpr;
                         return;
                     }
                 }
                 std::string readFn = getControlPropReadFn(itCtrl->second, node.memberName);
-                // Fix 0xx: 控件数组级操作 — VB6 中 `ctrlArr.LBound` / `ctrlArr.UBound`
-                // 返回数组下界/上界 (VB2001 For 循环常用), 不是 OCX 的 COM 属性.
-                // 此前裸标识符落到 COM 派发 → vb6_ComGetIntProp(vb6_hwnd_ctrl, L"LBound"),
-                // 而数组控件没有单个 vb6_hwnd_ 变量 (C2065). 数组级属性走 RTL 的
-                // vb6_CtrlArr_LBound/UBound(&vb6_arr_<Name>) (P7.6).
-                if (readFn.empty() && knownControlArrays_.count(objLower)) {
-                    if (memLower == "lbound") {
-                        lastExpr_ = "vb6_CtrlArr_LBound(&vb6_arr_" + cIdent(objIdent.name) + ")  /* ctrl array LBound */";
-                        return;
-                    }
-                    if (memLower == "ubound") {
-                        lastExpr_ = "vb6_CtrlArr_UBound(&vb6_arr_" + cIdent(objIdent.name) + ")  /* ctrl array UBound */";
-                        return;
-                    }
-                }
                 if (!readFn.empty()) {
                     lastExpr_ = readFn + "(" + makeCtrlHwndArg(objLower, itCtrl->second) + ")  /* ctrl prop read */";
                     return;
@@ -419,7 +401,12 @@
                 if (itCtrl->second == FrmControlType::PictureBox) {
                     std::string memLower = node.memberName;
                     std::transform(memLower.begin(), memLower.end(), memLower.begin(), ::tolower);
-                    if (memLower == "print" || memLower == "cls") {
+                    // 账 #221: Line 也是**绘制**方法, 名字由 controlCanvasMethod 那张表回答
+                    // —— 不在这里给标记的话, 兜底会把它当 COM 属性取出来 (`ComGetObjectProp(hwnd,
+                    // L"Line")`) 再对结果取 `Item`, 两跳在 RTL 都登记成"认识但什么都不做"
+                    // ⇒ 编得过、跑得起、一笔不画。
+                    if (memLower == "print" || memLower == "cls" ||
+                        !controlCanvasMethod(itCtrl->second, memLower).empty()) {
                         comObjExpr_ = objLower;  // 小写控件名, 与 WebBrowser/ListBox 块同构
                         comMemberName_ = memLower;
                         isComMarker_ = true;

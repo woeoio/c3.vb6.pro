@@ -144,9 +144,13 @@ class CaseClause : public Stmt {
 public:
     // Case 值: 可以是单个值、Is比较、范围或多个值
     struct CaseValue {
-        ExprPtr value;       // 单个值或范围的起始值
+        ExprPtr value;       // 单个值、范围的起始值, 或 Is 比较的右操作数
         ExprPtr toValue;     // To 范围的终止值 (可为nullptr)
-        bool isIsClause = false;  // 是否是 Case Is > 0 形式
+        // `Case Is > 0`: 比较符存成 relOp, value 只装右操作数 —— VB6 的 Is 站在
+        // 测试表达式的位置, 不是标识符 (账 #217; 改动前 parser 造一枚 IdentifierExpr("Is"))
+        bool isIsClause = false;
+        BinaryOp relOp = BinaryOp::Eq;   // 仅 hasRelOp 为真时有意义
+        bool hasRelOp = false;
     };
     std::vector<CaseValue> values;  // Case val1, val2, val3
     StmtList body;
@@ -363,6 +367,13 @@ public:
 class EraseStmt : public Stmt {
 public:
     std::vector<std::string> varNames;
+    // 账 #186 (与 ReDimStmt 的 Fix 100 同一套机制): 下标 + 成员链那种目标
+    // (`Erase m_tvFiles(lIndex).bvData`) 用字符串表达不了 —— cIdent 会把 '.' 换成 '_'
+    // 且无法带下标。targets[i] 非空 ⇔ 该目标走 emitExpr 发左值
+    // (VB6_SA_AT(vb6_type_TFile, m_tvFiles, lIndex).bvData)，varNames[i] 仍存**去下标的点链名**
+    // (`m_tvFiles.bvData`)，供 Variant 成员那一问 (isVariantArrayTarget) 复用同一个判据。
+    // 两向量按目标一一对应；简单目标 (arr / arr() / obj.Field) 的 targets[i] 为空。
+    std::vector<ExprPtr> targets;
 
     EraseStmt(SourceLocation loc, std::vector<std::string> names)
         : Stmt(ASTNodeKind::EraseStmt, loc), varNames(std::move(names)) {}

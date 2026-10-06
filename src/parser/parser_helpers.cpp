@@ -201,4 +201,156 @@ bool Parser::isEndBlock() const {
     }
 }
 
+// ============================================================
+// 账 #172: 日期字面量 → OLE 自动化日期
+// ============================================================
+
+namespace {
+
+// days from civil (Howard Hinnant 的算法，无循环、跨年正确)
+int64_t daysFromCivil(int64_t y, int64_t m, int64_t d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const uint64_t yoe = static_cast<uint64_t>(y - era * 400);
+    const uint64_t mp = static_cast<uint64_t>(m + (m > 2 ? -3 : 9));
+    const uint64_t doy = (153 * mp + 2) / 5 + static_cast<uint64_t>(d) - 1;
+    const uint64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
+bool allDigits(const std::string& s) {
+    if (s.empty()) return false;
+    for (char c : s) {
+        if (c < '0' || c > '9') return false;
+    }
+    return true;
+}
+
+bool parseInt32(const std::string& s, int64_t& out) {
+    if (!allDigits(s) || s.size() > 9) return false;
+    out = 0;
+    for (char c : s) out = out * 10 + (c - '0');
+    return true;
+}
+
+bool isLeap(int64_t y) {
+    return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+}
+
+int64_t daysInMonth(int64_t y, int64_t m) {
+    static const int64_t tbl[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (m == 2 && isLeap(y)) return 29;
+    return tbl[m - 1];
+}
+
+int64_t normalizeYear(int64_t y) {
+    // VB6: 两位年份 <50 走 2000s, ≥50 走 1900s
+    if (y < 100) return y < 50 ? y + 2000 : y + 1900;
+    return y;
+}
+
+void trimAscii(std::string& s) {
+    size_t b = 0, e = s.size();
+    while (b < e && (s[b] == ' ' || s[b] == '\t')) b++;
+    while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t')) e--;
+    s = s.substr(b, e - b);
+}
+
+} // namespace
+
+bool vb6c3::foldDateLiteralToOADate(const std::string& rawIn, double& out) {
+    std::string raw = rawIn;
+    if (raw.size() < 3 || raw.front() != '#' || raw.back() != '#') return false;
+    raw = raw.substr(1, raw.size() - 2);
+    trimAscii(raw);
+    if (raw.empty()) return false;
+
+    // 日期段 / 时间段以第一个空格分（VB6 也允许 T 分隔，语料里没有，先不认）
+    std::string datePart = raw, timePart;
+    size_t sp = raw.find(' ');
+    if (sp != std::string::npos) {
+        datePart = raw.substr(0, sp);
+        timePart = raw.substr(sp + 1);
+        trimAscii(timePart);
+    }
+
+    int64_t days = 0;
+    bool haveDate = false;
+    const int64_t oleEpochDays = daysFromCivil(1899, 12, 30);
+
+    if (datePart.find('/') != std::string::npos || datePart.find('-') != std::string::npos) {
+        char sep = datePart.find('/') != std::string::npos ? '/' : '-';
+        if (datePart.find(sep == '/' ? '-' : '/') != std::string::npos) return false;  // 混用分隔符
+        std::vector<std::string> f;
+        size_t pos = 0;
+        while (true) {
+            size_t nx = datePart.find(sep, pos);
+            f.push_back(datePart.substr(pos, nx == std::string::npos ? std::string::npos : nx - pos));
+            if (nx == std::string::npos) break;
+            pos = nx + 1;
+        }
+        if (f.size() != 3) return false;
+        int64_t a, b, c;
+        if (!parseInt32(f[0], a) || !parseInt32(f[1], b) || !parseInt32(f[2], c)) return false;
+        int64_t year, month, day;
+        if (sep == '/') {          // VB6: 斜杠 = M/D/Y
+            month = a; day = b; year = c;
+        } else {                   // VB6: 连字符 = D-M-Y
+            day = a; month = b; year = c;
+        }
+        year = normalizeYear(year);
+        if (year < 100 || year > 9999) return false;
+        if (month < 1 || month > 12) return false;
+        if (day < 1 || day > daysInMonth(year, month)) return false;
+        days = daysFromCivil(year, month, day) - oleEpochDays;
+        haveDate = true;
+    } else if (!datePart.empty()) {
+        // 纯时间（无日期段）：datePart 实际就是时间
+        timePart = datePart + (timePart.empty() ? std::string() : std::string(" ") + timePart);
+    }
+
+    double frac = 0.0;
+    if (!timePart.empty()) {
+        std::string tp = timePart;
+        // 尾部 AM/PM（也认单独的 A/P）
+        int64_t pmAdj = 0;
+        std::string tail = tp;
+        size_t lastSp = tp.find_last_of(" \t");
+        std::string lastTok = (lastSp == std::string::npos) ? tp : tp.substr(lastSp + 1);
+        trimAscii(lastTok);
+        for (auto& ch : lastTok) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        if (lastTok == "AM" || lastTok == "A" || lastTok == "PM" || lastTok == "P") {
+            pmAdj = (lastTok[0] == 'P') ? 1 : 0;
+            tp = tp.substr(0, lastSp == std::string::npos ? 0 : lastSp);
+            trimAscii(tp);
+        }
+        std::vector<std::string> hf;
+        size_t pos = 0;
+        while (true) {
+            size_t nx = tp.find(':', pos);
+            hf.push_back(tp.substr(pos, nx == std::string::npos ? std::string::npos : nx - pos));
+            if (nx == std::string::npos) break;
+            pos = nx + 1;
+        }
+        if (hf.size() < 2 || hf.size() > 3) return false;
+        int64_t h, m, s = 0;
+        if (!parseInt32(hf[0], h) || !parseInt32(hf[1], m)) return false;
+        if (hf.size() == 3 && !parseInt32(hf[2], s)) return false;
+        if (m < 0 || m > 59 || s < 0 || s > 59) return false;
+        const bool hasAmPm = (lastTok == "AM" || lastTok == "A" || lastTok == "PM" || lastTok == "P");
+        if (hasAmPm) {
+            if (h < 1 || h > 12) return false;
+            if (pmAdj == 1 && h < 12) h += 12;   // PM 1..11 → 13..23（PM 12 就是 12）
+            if (pmAdj == 0 && h == 12) h = 0;    // AM 12 → 0
+        } else if (h < 0 || h > 23) {
+            return false;
+        }
+        frac = static_cast<double>(h * 3600 + m * 60 + s) / 86400.0;
+    }
+
+    if (!haveDate && timePart.empty()) return false;
+    out = static_cast<double>(days) + frac;
+    return true;
+}
+
 } // namespace vb6c3

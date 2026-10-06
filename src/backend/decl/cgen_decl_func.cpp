@@ -407,6 +407,8 @@ void CCodeGen::visit(FunctionDecl& node) {
             }
         }
     }
+    // 账 #179: 控件代码运行在自己的宿主上下文里 —— 不管调用方是窗体、别的控件还是消息泵。
+    if (ucCtxScoped()) c_.emitLine("vb6_UC_PushInstance((void*)me);");
     emitStmtList(node.body, hasResume_);
 
     // Fix <vbeclipse>: 统一出口 (Exit Function → goto vb6_proc_exit),
@@ -431,6 +433,7 @@ void CCodeGen::visit(FunctionDecl& node) {
     emitIvrefScopeRelease();
 
     // 返回值
+    if (ucCtxScoped()) c_.emitLine("vb6_UC_PopInstance();");   // 账 #179: 与体首成对
     c_.emitLine("return " + currentReturnVar_ + ";");
 
     // P14.1.2: Resume dispatch switch - 仅通过goto可达 (在return之后)

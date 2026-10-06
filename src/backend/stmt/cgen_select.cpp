@@ -89,21 +89,19 @@ void CCodeGen::visit(SelectCaseStmt& node) {
             std::string cond;
 
             if (cv.isIsClause) {
-                // Case Is > 0 → tempVar > 0
-                // cv.value 是 BinaryExpr(IdentifierExpr("Is"), op, rightOperand)
-                if (cv.value && cv.value->kind == ASTNodeKind::BinaryExpr) {
-                    auto& binExpr = static_cast<BinaryExpr&>(*cv.value);
-                    emitExpr(*binExpr.right);
+                // Case Is > 0 → tempVar > 0 (比较符在 cv.relOp, 右操作数在 cv.value)
+                if (cv.hasRelOp && cv.value) {
+                    emitExpr(*cv.value);
                     std::string rightVal = std::move(lastExpr_);
                     if (isStringSelect) {
                         // 字符串比较: vb6_StrCmp(tempVar, rightVal) op 0
                         // <vbeclipse>: 本模块 Option Compare Text → 恒文本入口
-                        cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + rightVal + ") " + mapBinaryOp(binExpr.op) + " 0";
+                        cond = std::string(optionCompareText_ ? "vb6_StrCmpT(" : "vb6_StrCmp(") + tempVar + ", " + rightVal + ") " + mapBinaryOp(cv.relOp) + " 0";
                     } else if (isFloatSelect) {
                         // Fix 136: Single 语义 — Case 侧也按 float 求值
-                        cond = "(float)" + tempVar + " " + mapBinaryOp(binExpr.op) + " (float)(" + rightVal + ")";
+                        cond = "(float)" + tempVar + " " + mapBinaryOp(cv.relOp) + " (float)(" + rightVal + ")";
                     } else {
-                        cond = tempVar + " " + mapBinaryOp(binExpr.op) + " " + rightVal;
+                        cond = tempVar + " " + mapBinaryOp(cv.relOp) + " " + rightVal;
                     }
                 } else {
                     // Case Is (无比较符) → 非零/非空

@@ -114,15 +114,15 @@
             std::vector<UcEvtPre> ucEventsPre;
             {
                 std::string lowCode = Symbol::toLower(ucSpecEvt->codeSection);
-                static const char* kTypeMapPre[][2] = {
-                    // Fix <vbeclipse> rev17: 补 `object` —— 缺它时命中 default "int32_t",
-                    // 于是 `Public Event X(ByRef Editor As Object)` 的前向声明/thunk 写成
-                    // `int32_t arg0`, 而回调 typedef (emitEventSink 走 mapTypeRef) 与
-                    // RaiseEvent 发送侧都是 `void*`。x86 上同宽侥幸能跑, x64 直接截断指针。
-                    {"boolean", "int16_t"}, {"string", "BSTR"},
-                    {"integer", "int32_t"}, {"long", "int32_t"},
-                    {"single", "float"}, {"double", "double"},
-                    {"object", "void*"}, {nullptr, nullptr} };
+                // 形参 C 类型**不在这里另立一张表**: 回调 typedef (emitEventSink) 与容器侧处理器
+                // 原型都出自 mapTypeRef, 这里是第三处, 必须同源。账 #222 首版留着这张表,
+                // 它缺 Variant 一档 (掉 default "int32_t"), 于是门 #350 上 charts_ucTreeMaps
+                // 两档红: typedef 传 vb6_VARIANT、处理器收 vb6_VARIANT, thunk 却声明 int32_t a0
+                // = C2440 + C4024。Integer 那一档同样对不上 (表给 int32_t, mapTypeRef 给 int16_t,
+                // VBFlexGrid 三十多枚事件形参全在这一档上), 一并收掉。
+                // 类型名从 .ctl 的 `Public Event` 文本里切出来, 现拼一枚 SimpleTypeRef 喂给
+                // mapTypeRef。它顺带登记的类指针前向声明走 usedClassTypes_, 注入点在 .h 顶部
+                // (#include 之后), 所以这一趟登记也来得及。
                 size_t pos = 0;
                 while (true) {
                     size_t e = lowCode.find("public event ", pos);
@@ -148,10 +148,9 @@
                             std::string ty = args.substr(tStart, tEnd - tStart);
                             while (!ty.empty() && ty.front() == ' ') ty.erase(ty.begin());
                             while (!ty.empty() && (ty.back() == ' ' || ty.back() == '\r')) ty.pop_back();
-                            std::string cty = "int32_t";
-                            std::string tyLowPre = Symbol::toLower(ty);
-                            for (int k = 0; kTypeMapPre[k][0]; k++)
-                                if (tyLowPre == kTypeMapPre[k][0]) { cty = kTypeMapPre[k][1]; break; }
+                            // 账 #222: 与 typedef / 处理器原型同源 (见上面那段注释)。
+                            SimpleTypeRef tyRefPre(SourceLocation{}, ty);
+                            std::string cty = mapTypeRef(&tyRefPre);
                             ev.ptypes.push_back(cty);
                             pcur = tEnd;
                         }
@@ -168,7 +167,13 @@
             size_t dotUc = ucShort.rfind('.');
             if (dotUc != std::string::npos) ucShort = ucShort.substr(dotUc + 1);
             std::string evtPrefixType = "vb6_events_" + cIdent(ucShort);
-            std::string sinkVar = "_sink_" + cIdent(child.controlName);
+            // 账 #222: 控件数组元素的设计期 Index 带进名字 (非数组恒空后缀) —— 以前 24 枚元素
+            // 各发一套**同名**的 thunk / sink / 前向声明, 实测就是 ucProgressCircular 编不过的
+            // 那 1 条 C2084 + 24 条 C2198 (Form1.c)。
+            const bool isArrayElem = child.index >= 0;
+            const std::string elemSfx = isArrayElem ? ("_" + std::to_string(child.index)) : std::string();
+            std::string sinkVar = "_sink_" + cIdent(child.controlName) + elemSfx;
+            const std::string attachKey = ctrlElemKey(child.controlName, child.index);
             bool anyHandler = false;
             std::vector<std::string> attachLines;
             for (const auto& ev : ucEventsPre) {
@@ -184,26 +189,34 @@
                 // 据此把形参按事件 ABI (ByVal) 发, 与下面 thunk 的 arg 类型、
                 // emitEventSink 的 typedef、RaiseEvent 发送侧三处对齐 (见状态区注释)。
                 ucEventHandlers_.insert(handlerLower);
+                // 账 #222: 登记之后**立刻**把这枚处理器的形参翻成事件 ABI (ByVal) —— 翻在
+                // visit(SubDecl) 里太晚: 模块级前置声明那一趟已经按 VB 默认(ByRef)把原型发出去了,
+                // 于是同一枚函数在产物里有三种形参表 (ByRef 声明 / 零形参声明 / ByVal 定义)。
+                // emitFormFramework 在 decl-pass 里跑在那一趟之前 (cgen_base_generate_decl_pass.inc
+                // :40 与 :46), 所以这里翻一次, 声明与定义就同源了。
+                bool handlerHasIndex = prepareEventHandlerProc(module, handlerLower);
                 std::string fnOrig = cIdent(child.controlName) + "_" + cIdent(ev.name);
                 std::string frmPrefix = "vb6_" + cIdent(formName) + "_";
-                std::string thunkName = frmPrefix + "evtThunk_" + fnOrig;
-                std::string sig = "";
-                for (size_t i = 0; i < ev.ptypes.size(); i++)
-                    sig += (i ? ", " : "") + ev.ptypes[i] + " arg" + std::to_string(i);
-                c_.emitLine("static void " + frmPrefix + fnOrig + "(" + sig + ");");
+                std::string thunkName = frmPrefix + "evtThunk_" + fnOrig + elemSfx;
+                // 前向声明**不在这里发** (原来这里逐元素发一份零形参的, 既与定义不同源又自己
+                // 重复 24 遍): 模块级那一趟发的才是唯一的一份。
                 std::string thunkSig = "void* handler";
                 for (size_t i = 0; i < ev.ptypes.size(); i++)
                     thunkSig += ", " + ev.ptypes[i] + " a" + std::to_string(i);
                 std::string callArgs = "";
+                if (handlerHasIndex && isArrayElem)
+                    callArgs += std::to_string(child.index);   // VB6: 数组元素的处理器第一形参是元素号
                 for (size_t i = 0; i < ev.ptypes.size(); i++)
-                    callArgs += (i ? ", " : "") + std::string("a") + std::to_string(i);
+                    callArgs += (callArgs.empty() ? "" : ", ") + std::string("a") + std::to_string(i);
                 c_.emitLine("static void " + thunkName + "(" + thunkSig + ") { " + frmPrefix + fnOrig + "(" + callArgs + "); }");
                 std::string evtCbType = "vb6_evt_" + cIdent(ucShort) + "_" + cIdent(ev.name) + "_cb";
                 attachLines.push_back(sinkVar + ".on" + cIdent(ev.name) + " = (" + evtCbType + ")" + thunkName + ";");
+                ucSinkEvents_.insert(attachKey + "." + Symbol::toLower(ev.name));
             }
             if (anyHandler) {
                 c_.emitLine("static " + evtPrefixType + " " + sinkVar + ";");
-                ucEventAttach_[Symbol::toLower(child.controlName)] = attachLines;
+                ucEventAttach_[attachKey].lines = attachLines;
+                ucEventAttach_[attachKey].sinkVar = sinkVar;
             }
         }
     }

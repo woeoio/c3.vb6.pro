@@ -394,6 +394,9 @@ public:
     // 模块类别
     bool isClassModule = false;     // true = .cls类模块, false = .bas标准模块/.frm窗体模块
     bool isFormModule = false;      // true = .frm窗体模块 (P7)
+    // 文档类别 (.frm/.ctl/.pag)，driver 按扩展名一处写入 (见 DocumentKind 的注释)。
+    // isFormModule 是它的历史读法，两者必须同处赋值。
+    DocumentKind docKind = DocumentKind::Standard;
     // Interface 头行宿主 (tB 扩展, ai/022 D1/B03): VB6 "一文件一接口" 的 `.cls` 写法 —
     // 文件自身就叫 IFoo.cls, 体内唯一的 Interface 块与模块同名. 由 stage 2.7 识别置位
     // (模块名要到 driver_frontend 才定得下来), 供"接口名与模块名不算撞车"的放行与

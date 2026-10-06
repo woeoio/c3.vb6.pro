@@ -143,8 +143,17 @@ float vb6_Rnd(int32_t seed) {
 //       (而不是语句块) 决定了这个差别: 同一个 vb6_ChkXxx 要同时服务赋值 / 函数返回 /
 //       For 界 / 数组下标, 没法在那些位置发多语句块。相对"完全不检查", 这已经
 //       收窄到只差 Resume Next 下的存值。
+// Fix <vbeclipse> rev37: **撤净 P48 探针** (定位 Charts2020 x86 的 error 6)。
+//   探针结论: 越界值恒为 `v=-2147483648 lo=0 hi=255`。lo/hi 唯一来自 vb6_CByte
+//   内部那道闸门 (x86 生成码 vb6_ChkByte 零命中), 而 `(Abs(Opacity)/100)*255`
+//   交出 -2147483648 只有一种成因: **Opacity 形参里装的是 OLE_COLOR 值**
+//   (&H80000000 = 系统色标志位, RGBtoARGB 自己第一行就 `If (RGBColor And
+//   &H80000000)` 判它) ⇒ 真正的缺陷是**调用点实参错位**, 不是 CByte 的检查。
+//   本函数是全局溢出安全网, 一律按原样保留, 不因这一次定位而放宽。
 static int32_t vb6_OvfChk(int64_t v, int64_t lo, int64_t hi) {
-    if (v < lo || v > hi) vb6_RaiseError(6, vb6_BSTR_FromStr(L"Overflow"));
+    if (v < lo || v > hi) {
+        vb6_RaiseError(6, vb6_BSTR_FromStr(L"Overflow"));
+    }
     return (int32_t)v;
 }
 uint8_t vb6_ChkByte(int32_t v) { return (uint8_t)vb6_OvfChk(v, 0, 255); }

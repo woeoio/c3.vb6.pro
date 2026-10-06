@@ -142,6 +142,15 @@ public:
     //      (实测 test_modulemethod: 期望 30/21，实得 0/0)。
     // 数据由 driver 在逐模块分析前从**已解析的 AST** 算好下发 (下面两个 setter)。
     bool namesProjectLevel(const std::string& name) const;
+    // 文档隐式对象 (账 #217 第二刀): `UserControl.hDC` / `PropertyPage.hWnd` /
+    // `Extender.Tag` / `Ambient.UserMode` / `VBA.Len(x)` 站在**限定符位**上的那个名字。
+    // VB6 只在对应类别的文档里给前四个 (见 Module::docKind)，`VBA` 是全局库前缀、任何模块都有。
+    // 成员与类型由发码层按 kHostPseudoRows 那张表回答 (账 #159)，语义层在这里唯一要做的
+    // 是别把它当未声明的名字 —— 开着 Option Explicit 时那是每条一次的 VB3001，
+    // 关着时更实在: 会登记成一枚隐式 Variant 局部并在发码里真发出来 (实测 `VBA` 那枚)。
+    bool isDocumentHostObject(const std::string& name) const;
+    // 裸写的文档成员（账 #219）：判据 = 宿主伪成员表的 HPF_BARE 列，定义处写清了。
+    bool isDocumentBarePseudoMember(const std::string& name) const;
     // 上条的两份数据源。driver 在逐模块分析开始前从**已解析的 AST** 算好，各分析器
     // 各持一份 (名字表很小，复制比lifetime 推理便宜)。分开两条而不是一条: 两个位
     // 要的事实不同 (裸名位 / 限定符位)，合成一条就把"模块名"和"过程名"混成一锅。

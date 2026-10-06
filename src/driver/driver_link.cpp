@@ -57,6 +57,14 @@ static void addFormsSources(MsvcDriverOptions& opts, const std::string& rtlDir) 
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_winsock.c");
     // ai/029 C29-SL-a: Slider —— 第四处登记，少这行就是全线 LNK2019 找不到 vb6_Slider_*
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_slider.c");
+    // 2026-10-06: Form/Printer 绘图方法家族 (PSet/Line/Circle/Point/Cls) ——
+    // **第六处登记**。前五处 (c3rtl.rc / rtl_embedded.hpp 的 ID /
+    // rtl_embedded.cpp 的清单 / vb6forms.h 的挂头 / .h 自身) 全对时,
+    // 这个 .c 仍会被解包到 session 却**不参与编译** —— 症状是链接器报
+    // LNK2005 "符号已在 xxx.obj 中定义" (措辞误导: 真相是 draw.c 没编,
+    // 符号**未定义**, 而 draw.obj 恰好是唯一引用它的地方, 报成冲突)。
+    // ⚠ 头 (.h) 走 rtl_embedded.cpp 的清单即可, 不必登记到这里 (它只被 include)。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_draw.c");
     // vb6forms_axsite.c 按功能家族拆 5 个编译单元 (2026-09-20): 伞文件本身不参与编译
     // 注意: axsite/ 下的 .c 解包后是平铺目录, 故这里写 basename 而非带子目录路径
     opts.sourceFiles.push_back(rtlDir + "/ax_site.c");

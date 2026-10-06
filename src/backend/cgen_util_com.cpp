@@ -3,11 +3,11 @@
 #include <cctype>
 #include <iostream>
 #include <functional>
+#include "common/host_pseudo.hpp"
 
 namespace vb6c3 {
 
 // --- cgen_util_com.cpp: COM 值解析 + 打包标记 + 类字段名规范化 ---
-
 
 
 // ============================================================
@@ -422,23 +422,51 @@ std::string CCodeGen::canonicalClassFieldName(const std::string& className,
 }
 
 
-// Fix <vbeclipse>: 宿主伪对象成员名规范化 (见 cgen_helpers.inc 声明注释).
+// 成员名规范化 (旧 Fix <vbeclipse> 的独立小表并入本表): RTL 符号名是手写约定
+// (vb6_UserControl_hDC), VB6 源码拼写可以不同 (`UserControl.hDc`), 而 C 大小写
+// 敏感 → C2065 (ucButton.ctl:64 / ucCaption.ctl:119 / ucTab.ctl:92 实测写 hDc)。
+// 表中无此项 (非宿主伪对象 / 本表刻意不收的成员) 时原样返回。
 std::string CCodeGen::canonicalHostPseudoMember(const std::string& pseudoObj,
                                                 const std::string& memberName) const {
-    if (memberName.empty()) return memberName;
-    static const std::pair<const char*, const char*> kUserControlCanon[] = {
-        {"hdc", "hDC"},
-    };
-    const std::string pj = Symbol::toLower(pseudoObj);
-    if (pj != "usercontrol" && pj != "ambient"
-        && pj != "extender" && pj != "propertypage") {
-        return memberName;
-    }
-    const std::string want = Symbol::toLower(memberName);
-    for (const auto& kv : kUserControlCanon) {
-        if (want == kv.first) return kv.second;
-    }
-    return memberName;
+    const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
+    return r ? std::string(r->rtl) : memberName;
+}
+
+// 裸名能不能解析成宿主伪成员 (.ctl/.pag 里直接写 hDC / ScaleWidth / Changed …)。
+bool CCodeGen::hostPseudoBareName(const std::string& pseudoObj,
+                                  const std::string& memberName,
+                                  std::string& outRtlName) const {
+    const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
+    if (!r || !(r->flags & HPF_BARE)) return false;
+    outRtlName = r->rtl;
+    return true;
+}
+
+// 按值读时的类型答案。requireBare=true 用于**裸名**那一路 —— 必须与发射侧同口径
+// (都认 HPF_BARE), 否则类型 oracle 会给一个发射时根本解析不出宿主符号的名字,
+// 那正是"两条路答不一样"的起源。方法成员与对象成员 (Unknown) 一律不答。
+bool CCodeGen::hostPseudoValueType(const std::string& pseudoObj,
+                                   const std::string& memberName,
+                                   Vb6Type& outType, bool requireBare) const {
+    const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
+    if (!r) return false;
+    if (requireBare && !(r->flags & HPF_BARE)) return false;
+    if (r->flags & HPF_METHOD) return false;
+    if (r->type == Vb6Type::Unknown) return false;
+    outType = r->type;
+    return true;
+}
+
+// 赋值时 RHS 是 Variant 要不要先拆成数值。口径 = 目标槽是**整数** (Long/Boolean):
+// 指针/对象成员 (LongPtr/Unknown) 不拆, 与改动前那份名单一致 —— 今天往 hDC/hWnd
+// 这类句柄槽写 Variant 的写法在 VB6 里并不存在, 拆成 int32 反而会把指针截断。
+// 字符串成员也不拆 (BSTR 槽直传)。
+bool CCodeGen::hostPseudoIsNumeric(const std::string& pseudoObj,
+                                   const std::string& memberName) const {
+    Vb6Type t = Vb6Type::Unknown;
+    if (!hostPseudoValueType(pseudoObj, memberName, t, false)) return false;
+    return t == Vb6Type::Long || t == Vb6Type::Boolean
+        || t == Vb6Type::Integer || t == Vb6Type::Byte;
 }
 
 

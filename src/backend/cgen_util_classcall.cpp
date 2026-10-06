@@ -573,4 +573,55 @@ bool CCodeGen::classMemberReturnsAsObject(const std::string& className,
     }
     return false;
 }
+// 账 #191: 工程内 UserControl 的**实例成员访问** —— Fix 112 那段从发码点抽到这里，
+// 让「单枚控件」与「控件数组的元素」两条路共用一个出口（以前只有单枚那条，
+// `ucChartBar1(i).AddSerie ...` 就整条掉进 COM 兜底 ⇒ 空值）。
+// recvExpr = 这一枚实例的宿主句柄表达式（单枚是 `vb6_hwnd_<名>`，元素是
+// `vb6_CtrlArr_GetAt(&vb6_arr_<名>, <idx>)`）—— 两条路只差这一个串。
+// 命中并把 lastExpr_ / pendingChainObj_ 填好时返回 true；成员不在这个 .ctl 上返回 false
+// （调用方据此继续走它自己的兜底）。
+bool CCodeGen::emitUcInstanceMemberExpr(const std::string& ucClass,
+                                        const std::string& member,
+                                        const std::string& recvExpr) {
+    if (ucClass.empty()) return false;
+    std::string resolvedFn = resolveClassMemberCall(ucClass, member);
+    if (resolvedFn.empty()) return false;
+
+    std::string thisArg = "(vb6_cls_" + cIdent(ucClass) + "*)vb6_UC_InstanceOf(" + recvExpr + ")";
+    if (asCallCallee_) {
+        pendingChainObj_ = thisArg;
+        lastExpr_ = resolvedFn;
+        return true;
+    }
+    // 值上下文无括号调用: 按形参表补 Optional 默认值 (同 Fix 089h)
+    std::vector<ParameterInfo> paramsUC;
+    bool isBuiltinUC = false;
+    if (resolvedFn.find("_prop_") == std::string::npos
+        && findClassMemberCallParams(ucClass, member, paramsUC, isBuiltinUC)
+        && !paramsUC.empty() && !isBuiltinUC) {
+        std::string argListUC = thisArg;
+        for (size_t i = 0; i < paramsUC.size(); i++) {
+            const auto& pm = paramsUC[i];
+            argListUC += ", ";
+            std::string defV = (pm.hasDefaultValue && !pm.defaultValueExpr.empty())
+                             ? pm.defaultValueExpr : defaultValue(pm.type);
+            if (pm.isByVal) argListUC += defV;
+            else {
+                std::string ct = mapType(pm.type);
+                if (pm.type == Vb6Type::Variant || pm.type == Vb6Type::Empty
+                    || pm.type == Vb6Type::Null || pm.type == Vb6Type::Object)
+                    argListUC += "&(" + ct + "){0}";
+                else argListUC += "&(" + ct + "){" + defV + "}";
+            }
+        }
+        for (size_t i = 0; i < paramsUC.size(); i++) {
+            if (paramsUC[i].isOptional && !paramsUC[i].isParamArray) argListUC += ", 0";
+        }
+        lastExpr_ = resolvedFn + "(" + argListUC + ")";
+    } else {
+        lastExpr_ = resolvedFn + "(" + thisArg + ")";
+    }
+    return true;
+}
+
 } // namespace vb6c3

@@ -1,0 +1,5 @@
+Type=Exe
+Form=AxAdd.frm
+Startup="AxAdd"
+ExeName32=AxAdd
+Object={D9DACE39-8348-4FC3-8BBF-9178D817C34B}#1#0;NewTab01.ocx

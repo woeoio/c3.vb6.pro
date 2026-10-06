@@ -380,6 +380,14 @@ CompileResult Driver::compile(const CompileOptions& options) {
                             g143.erase(std::remove(g143.begin(), g143.end(), '}'), g143.end());
                             ocxFiles_[g143] = obj.fileName;   // 相对 exe 的路径 (如 "bin\\NewTab01.ocx")
                             ocxRefs_.push_back({g143, obj.fileName});
+                            // Fix <vbeclipse> 2026-10-06: canonical 绝对路径 → 相对 exe 路径,
+                            // 供 runTypeLibImport 按 typelib 文件路径反查 OCX 免注册表.
+                            std::string canon = pathToUtf8(std::filesystem::absolute(ocxPath));
+                            for (char& c : canon) {
+                                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+                                else if (c == '\\') c = '/';
+                            }
+                            ocxCanonMap_[canon] = obj.fileName;   // 同路径去重
                         }
                     }
                 }
@@ -707,6 +715,11 @@ CompileResult Driver::compile(const CompileOptions& options) {
         result.warningCount = diag_->warningCount();
         return result;
     }
+
+    // === 阶段3.5c: AddressOf 取址的过程标记 (账 #184) ===
+    // 放在跨模块链接与泛型 fixpoint 之后: 两者都会改变符号归属, 而发码期各模块
+    // 只认自己符号表里的那份标记。
+    markAddressOfCallbacks();
 
     // === 阶段3.6: P6.4 标记接口类 ===
     // 遍历所有模块的类符号, 将被Implements引用的类标记为isInterface

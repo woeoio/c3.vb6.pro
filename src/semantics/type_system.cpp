@@ -245,6 +245,29 @@ Vb6Type TypeSystem::promote(Vb6Type a, Vb6Type b) {
     return Vb6Type::Variant;
 }
 
+Vb6Type TypeSystem::bitwiseResult(Vb6Type a, Vb6Type b) {
+    // VB6 的 And/Or/Xor/Eqv/Imp 是**位运算**，不是短路逻辑运算：只有两侧本身都是
+    // Boolean 时结果才是 Boolean，否则是两侧提升后的数值型。发码层 (cgen_expr_binary
+    // Fix 039) 早就把两侧转 Long 再 & | ^，所以以前只有「类型被问错」——
+    // 于是 `CStr(a Or b)`、`"x=" & (a And b)`、`vb6_ComPack*(hDC Or 0)` 打成 True/False
+    // 或装箱成 VT_BOOL。规则只在这里写一份，语义层与发码层都调它 (账 #216)。
+    if (a == Vb6Type::Boolean && b == Vb6Type::Boolean) return Vb6Type::Boolean;
+    if (isNumeric(a) && isNumeric(b)) return promote(a, b);
+    return Vb6Type::Variant;   // 字符串/对象/未知: 交给运行期 (VB6 是 Type Mismatch)
+}
+
+Vb6Type TypeSystem::logicalNotResult(Vb6Type t) {
+    // 同上：`Not` 对数值是按位取反 (发码层出 `~`)，只有操作数是 Boolean 才是布尔非。
+    // Byte/Integer 一起答 Integer —— VB6 把这两档先按 Integer 处理，答成 Byte 会让
+    // `b = Not b2` 绕过溢出检查、把 -1 静默 wrap 成 255。
+    if (t == Vb6Type::Boolean || t == Vb6Type::Variant) return t;
+    if (t == Vb6Type::Byte || t == Vb6Type::Integer) return Vb6Type::Integer;
+    if (t == Vb6Type::Long || t == Vb6Type::LongPtr || t == Vb6Type::LongLong ||
+        t == Vb6Type::ULong) return t;
+    if (isFloat(t) || t == Vb6Type::Currency || t == Vb6Type::Decimal) return Vb6Type::Long;
+    return Vb6Type::Variant;
+}
+
 int TypeSystem::typeSize(Vb6Type t) {
     switch (t) {
         case Vb6Type::Byte:     return 1;

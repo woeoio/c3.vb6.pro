@@ -367,26 +367,45 @@ void CCodeGen::emitReDimComplexTarget(ReDimStmt& node) {
 }
 
 void CCodeGen::visit(EraseStmt& node) {
-    for (auto& name : node.varNames) {
-        // Fix 084y-5: Erase 目标含成员访问 (With 块成员 .Field, ByRef UDT 参数
-        // 数组字段) 时按成员访问展开, 避免 cIdent 把 '.' 替换成 '_' 生成
-        // 未声明的单标识符 (_RemoteLegacyNextTrafficKey / uOutput_Buffer → C2065)
-        std::string cName = resolveArrayTargetIdent(name);
-        // Fix 010r: Add me-> prefix for class member arrays
-        std::string lower = name;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (isClassModule_ && classMemberVars_.count(lower) && !knownLocalVars_.count(lower)) {
-            cName = "me->" + cName;
+    for (size_t k = 0; k < node.varNames.size(); ++k) {
+        auto& name = node.varNames[k];
+        // 账 #186: 带下标的成员链目标 (`Erase m_tvFiles(lIndex).bvData`) 由 parser 备好表达式,
+        // 这里发左值 —— 与 ReDim 的复杂目标同一套机制 (emitExpr → lastExpr_)。
+        Expr* complex = (k < node.targets.size()) ? node.targets[k].get() : nullptr;
+        std::string cName;
+        if (complex) {
+            emitExpr(*complex);
+            cName = lastExpr_;
+        } else {
+            // Fix 084y-5: Erase 目标含成员访问 (With 块成员 .Field, ByRef UDT 参数
+            // 数组字段) 时按成员访问展开, 避免 cIdent 把 '.' 替换成 '_' 生成
+            // 未声明的单标识符 (_RemoteLegacyNextTrafficKey / uOutput_Buffer → C2065)
+            cName = resolveArrayTargetIdent(name);
+            // Fix 010r: Add me-> prefix for class member arrays
+            std::string lower = name;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if (isClassModule_ && classMemberVars_.count(lower) && !knownLocalVars_.count(lower)) {
+                cName = "me->" + cName;
+            }
         }
         // Fix 090p: UDT 的 As Variant 数组字段 (如 (*uFile).BufferArray) Erase —
         // 裸 vb6_SafeArrayDestroy1D((*uFile).BufferArray) 把 VARIANT 当 SafeArray* →
-        // C2440; 用 vb6_VariantClear 释放数组并置 VT_EMPTY (cZipArchive pvVfsSetEof)
+        // C2440; 用 vb6_VariantClear 释放数组并置 VT_EMPTY (cZipArchive pvVfsSetEof).
+        // 复杂目标同样按**去下标的点链名**问这一条 (name 里存的就是它) ⇒ 判据只有一处。
         if (isVariantArrayTarget(name)) {
             c_.emitLine("vb6_VariantClear(&" + cName + ");");
             continue;
         }
+        if (complex) {
+            // UDT 成员的动态数组**恒为一维** (结构体发码单点: cgen_decl.cpp 的
+            // `vb6_SafeArray1D* <成员>; /* dynamic array member */`) ⇒ 销毁只走 1D 那一支。
+            c_.emitLine("vb6_SafeArrayDestroy1D(" + cName + "); " + cName + " = NULL;");
+            continue;
+        }
         // P8.1: 根据维度数选择1D/ND销毁
-        auto it = arrayDimCounts_.find(lower);
+        std::string lowerName = name;
+        std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+        auto it = arrayDimCounts_.find(lowerName);
         if (it != arrayDimCounts_.end() && it->second > 1) {
             c_.emitLine("vb6_SafeArrayDestroyND((vb6_SafeArrayND*)" + cName + "); " + cName + " = NULL;");
         } else {

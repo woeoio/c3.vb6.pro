@@ -34,9 +34,40 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 vb6_uc_trace("resize.end", r->desc->typeName, r->me);
                 vb6_uc_pop(&saved);
             }
+            /* Fix <vbeclipse> rev22: 本 UC 的尺寸变了 ⇒ 它每个**设计期子控件**的
+             * 尺寸也快变了 ⇒ 该跑它们的 `<Ctrl>_Resize` 事件 (VB6 语义)。
+             *
+             * 为什么挂在这里而不是 vb6_ControlMove (那是所有摆位的收口):
+             *   放在 Move 里会**递归**。`ViewArea.Move …` 正是 ucFolder 的
+             *   `UserControl_Resize` 内部发的, 而那个过程就是经
+             *   WM_SIZE → vb6_uc_push → resize → Move 这条链进来的 ⇒ Move 里再跑
+             *   子控件事件 ⇒ 又 Move ⇒ 无限递归。
+             *   实测 play78 (rev22 首次实现): 视图窗体尺寸确实对上了容器
+             *   (frmViewHelp 253x219 / frmViewSnapshot 778x190), 但**整个窗口
+             *   上下颠倒 + 文字镜像** —— 递归 Move 把各层控件反复推挤, 坐标系翻转。
+             *   两害相权: 宁可尺寸停在中间值 (rev21 状态) 也不能递归。
+             *
+             * 为什么放在 pop **之后** 是安全的: 此时 g_uc_current 已还原成外层值
+             * (通常 NULL), 所以 vb6_UC_RunDesignResize 里 "上下文内就不跑" 的
+             * 判据不会误挡本调用 —— 它是唯一允许在上下文外触发的入口。
+             * 且它内部有同控件重入短路, 事件体里 Move 别的控件再发 WM_SIZE 也不会
+             * 无限展开 (那一层 g_uc_current 非空, 直接被挡)。*/
+            /* Fix <vbeclipse> rev23: 这里**只排队**, 不直接跑 —— WM_SIZE 是
+             * SetWindowPos/MoveWindow 的**同步** SendMessage, 一整串嵌套 Move 全在
+             * 同一个调用栈里跑完才返回, 那时 ucFolder 的 ViewArea 还没拿到最终尺寸
+             * ⇒ `ViewArea_Resize` 按设计期宽度去 Move 视图窗体 (实测恒 W=8505)。
+             * 排到消息循环里跑, 各控件尺寸才是最终值。详见 vb6_UC_QueueDesignResize。*/
+            vb6_UC_QueueDesignResize(r->me);
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
+        /* Fix <vbeclipse> rev23: 排队的子控件 Resize 事件在这里接住。
+         * 必须排在消息循环里 (不能直接在 WM_SIZE 里跑) —— WM_SIZE 是
+         * SetWindowPos/MoveWindow 的**同步** SendMessage, 一整串嵌套 Move 全在同
+         * 一个调用栈里跑完才返回, 那时 ucFolder 的 ViewArea 还没拿到最终尺寸。*/
+        case VB6_UC_DR_MSG:
+            vb6_UC_DrainDesignResize(hwnd);
+            return 0;
         case WM_SHOWWINDOW:
             if (r && r->ready && wParam && r->desc && r->desc->show) {
                 vb6_UCSaved saved;
@@ -70,8 +101,10 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             else if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP) ReleaseCapture();
             float sx = (float)(short)LOWORD(lParam);
             float sy = (float)(short)HIWORD(lParam);
-            // 坐标换算到控件当前 ScaleMode (1=Twip 3=Pixel, 其他按像素)
-            if (vb6_UserControl_ScaleMode == 1) { sx *= 15.0f; sy *= 15.0f; }
+            // 坐标换算到控件当前 ScaleMode 单位 (账 #175: 与 ScaleWidth/Move 同一个权威)
+            int32_t ucSm175 = r->desc->scaleMode;
+            sx = (float)vb6_ScalePxToUser((double)sx, ucSm175, 0);
+            sy = (float)vb6_ScalePxToUser((double)sy, ucSm175, 1);
             vb6_UCSaved saved;
             vb6_uc_push(r, &saved);
             // czUI fix: 回调只更新状态; 视觉刷新统一走 WM_PAINT 双缓冲
@@ -79,10 +112,32 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             vb6_UserControl_hDC = NULL;
             hook(r->me, button, 0, sx, sy);
             vb6_uc_pop(&saved);
+            // 账 #226: VB6 的 Click 是"按下并抬起"之后发的, 落点就在这条 WM_LBUTTONUP;
+            // 必须在 MouseUp 转调**之后**, 顺序才与 VB6 一致。旧 cgen 不发这一槽 ⇒
+            // 初始化式补 0 ⇒ 这里不转调, 行为与改动前逐字节一致。
+            if (msg == WM_LBUTTONUP && r->desc->click) r->desc->click(r->me);
             InvalidateRect(hwnd, NULL, FALSE);
             UpdateWindow(hwnd);
             return 0;
         }
+        case WM_LBUTTONDBLCLK: {
+            // 账 #227: 这一槽 cgen 一直在填 (UC 里写 UserControl_DblClick 才有真身, 否则是空
+            // stub), 但宿主从没有转调过它 —— 语料里六枚 UC 的 `RaiseEvent DblClick` 于是永远
+            // 发不出去。类样式上 CS_DBLCLKS 早就立了 (下面那句 czUI fix), 消息收得到,
+            // 缺的就是这一跳。
+            // MouseDown/MouseUp 的转调**不**挂在这条消息上: 物理双击 Windows 发的是
+            // DOWN/UP/DBLCLK/UP, Click 那一路已经由两条 UP 供过, 再挂就变三发。
+            if (!r || !r->ready || !r->desc || !r->me || !r->desc->dblClick) break;
+            vb6_UCSaved saved227;
+            vb6_uc_push(r, &saved227);
+            vb6_UserControl_hDC = NULL;
+            r->desc->dblClick(r->me);
+            vb6_uc_pop(&saved227);
+            InvalidateRect(hwnd, NULL, FALSE);
+            UpdateWindow(hwnd);
+            return 0;
+        }
+
         case WM_CAPTURECHANGED:
             break;
         case WM_PAINT: {

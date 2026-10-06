@@ -44,6 +44,23 @@ void CCodeGen::emitClassFactory(Module& module) {
     //   结构体的首字段 (见 cgen_base_generate_c_open.inc), EXE 的 _New() 与
     //   DLL 侧保持一致; 纯 EXE 下无人写读, 恒 NULL, 行为零变化.
     c_.emitLine("me->__comObj = NULL;  /* P6.6.3: no COM wrapper yet */");
+    // Fix <vbeclipse> rev30: 把本实例登记进 RTL 的「裸工程类实例 → coclass 描述」表。
+    //
+    // 为什么必须有这一步 (play78 --arch x86, 探针逐级实测):
+    //   晚绑定调用点传进来的是**裸 `vb6_cls_X*`**, 首字段 `__comObj` 恒 NULL ⇒ 没有
+    //   真 vtable ⇒ `vb6_ComIsDispatchable` 判否 ⇒ `vb6_getDispid` 返 DISPID_UNKNOWN
+    //   ⇒ `vb6_ComCall` 的返回值永远是 **VT_EMPTY**。
+    //   实证症状: `ucFolder.ContainsView` → `vb6_ComCall(Tabs实例, L"Contains", …)`
+    //   拿到 vt=0 ⇒ `List.Contains` 恒 0 ⇒ `ucPerspective.ShowView` 遍历 5 个 folder
+    //   全部 miss (探针 `PACT … ContainsView=0` ×5) ⇒ 没有 folder 被激活
+    //   ⇒ 停靠面板全空。
+    //
+    // 登记放在**工厂**里而不是别处: 每个实例必经此处, 零额外成本; 而且 desc 按类
+    // 模块名查 (`vb6_FindCoClassDesc("<模块名>")`), 不需要在类工厂里再存一份 desc。
+    // 未进 coclass 表的类 (无 Public 成员等) 查不到 → 传 NULL → RTL 那边退化成
+    // 改动前行为, 不会更糟。
+    c_.emitLine("{ const vb6_CoClassDesc* _d = vb6_FindCoClassDesc(\"" + cIdent(module.moduleName) + "\");");
+    c_.emitLine("  if (_d) vb6_RegisterProjectClassInstance((void*)me, _d);  /* Fix <vbeclipse> rev30 */ }");
     emitIfaceNewInit(module);  // tB Interface 契约 (B04): me->__iv_<I>.vt = &vb6_ivtbl_<I>_for_<C>
     emitClassVirtNewInit(module);  // tB Inherits (B08d): me->__cvtbl = &vb6_cvtbl_<本类>_impl
 

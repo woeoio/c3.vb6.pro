@@ -1,4 +1,5 @@
 #include "backend/cgen.hpp"
+#include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
 #include <cstdio>
 #include <cstdlib>
 #include "project/frx_reader.hpp"
@@ -169,11 +170,12 @@ void CCodeGen::emitControlHandleDecls(const FrmFormDesc& frmDesc) {
 // 这里登记控件并发射句柄变量声明. 不发射窗体窗口框架: UserControl /
 // PropertyPage 对外是类, 其可见内容由代码绘制到 UserControl.hDC / hwnd,
 // 子控件句柄保持 NULL (RTL 的属性 setter 对 NULL 句柄是安全空操作).
-void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc) {
+void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind kind) {
     // Fix 110f: 记录设计器种类 (.pag 为 PropertyPage, .ctl 为 UserControl),
     // 二者在宿主内建成员前缀上不同: vb6_PropertyPage_* / vb6_UserControl_*.
-    isPropertyPageDesigner_ =
-        frmDesc.formControl.controlTypeName.find("PropertyPage") != std::string::npos;
+    // 种类读 Module::docKind (driver 按扩展名一处写入, 账 #217 第二刀) —— 以前这里从
+    // controlTypeName 里找 "PropertyPage" 猜一遍, 与语义层的判据是两份.
+    isPropertyPageDesigner_ = (kind == DocumentKind::PropertyPage);
     // 1) 登记控件名映射 (与 emitFormFramework 的 P7.5/P7.6 块保持一致)
     std::string ownerLower = frmDesc.formName;
     std::transform(ownerLower.begin(), ownerLower.end(), ownerLower.begin(), ::tolower);
@@ -200,12 +202,49 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc) {
     emitControlHandleDecls(frmDesc);
     // czUI fix: 设计器子控件句柄改为按实例槽位 — 全局句柄被最后创建的实例覆盖,
     // 导致 11 个实例只有最后一个的 timer/textbox 生效 (开关动画死、文本框错乱)。
-    c_.emitLine("extern void** vb6_UC_DesignSlot(const char* name);");
+    // Fix VbEclipse: 必须传 `me` — UC 实例方法多由外部模块直接 C 调用发起,
+    // 此时全局 g_uc_current 已 pop 成 NULL, 只按上下文的旧签名会退化成共享
+    // orphan 槽 (恒 NULL), 面板 SetParent/Move 全部落空。
+    c_.emitLine("extern void** vb6_UC_DesignSlotOf(void* inst, const char* name);");
     for (const auto& child : frmDesc.formControl.children) {
         std::string n114 = cIdent(child.controlName);
         c_.emitLine("#undef vb6_hwnd_" + n114);
         c_.emitLine("#define vb6_hwnd_" + n114
-                  + " (*vb6_UC_DesignSlot(\"" + child.controlName + "\"))");
+                  + " (*vb6_UC_DesignSlotOf(me, \"" + child.controlName + "\"))");
+    }
+    // Fix <vbeclipse> rev20: ScaleWidth/ScaleHeight 同样必须**按实例**取, 否则
+    // 多实例共享进程级全局 (vb6_uc_push/pop 维护) ⇒ 子控件 Move 拿到别的实例的
+    // 尺寸。ucFolder.ctl 的 `ViewArea.Move 20,20,ScaleWidth-30,ScaleHeight-30`
+    // 是这类布局的主力, 读错就整块面板停在设计期尺寸。
+    //
+    // 用 #undef/#define 而不是改赋值侧: `ScaleWidth = x` 这种写法在 VB6 里
+    // 只出现在设计期属性块 (由 driver 消费, 不进 cgen 的赋值路径), 代码里的
+    // ScaleWidth/ScaleHeight 一律是**读** —— 故重定义为按 me 取值的函数调用是安全的。
+    // (唯一会写它的是 RTL 的 vb6_UserControl_Size / vb6_uc_push, 都在 RTL 侧,
+    //  不经过本宏。)
+    //
+    // `me` 的可得性: 本函数只对 .ctl/.pag 的**实例方法**发射, cgen 为每个实例
+    // 方法都加了 `me` 形参 (类实例指针) —— 与上面 vb6_hwnd_* 宏依赖 `me` 是
+    // 同一个前提。实测 VbEclipse 全部生成 .c 里 ScaleWidth/Height 的 71 处引用
+    // 100% 落在带 `me` 的函数体内 (无一处落在模块级初始化表达式)。
+    if (!isPropertyPageDesigner_) {
+        c_.emitLine("extern int32_t vb6_UC_ScaleWidthOf(void* inst);");
+        c_.emitLine("extern int32_t vb6_UC_ScaleHeightOf(void* inst);");
+        c_.emitLine("#undef vb6_UserControl_ScaleWidth");
+        c_.emitLine("#define vb6_UserControl_ScaleWidth vb6_UC_ScaleWidthOf((void*)me)");
+        c_.emitLine("#undef vb6_UserControl_ScaleHeight");
+        c_.emitLine("#define vb6_UserControl_ScaleHeight vb6_UC_ScaleHeightOf((void*)me)");
+        // 账 #177/#178: UserControl.TextWidth/.TextHeight 同一个坑、同一味药 —— 量出来是
+        // 设备像素, 折算单位必须按**这一枚控件**声明的 ScaleMode 取。读进程级
+        // vb6_UserControl_ScaleMode 不够: 容器直调控件公共成员时没人换入宿主上下文
+        // (实测 ve_units: 控件自己 Initialize 里 600 缇, 容器调同一个函数拿到 40 像素)。
+        // 只在 .ctl 里重定向, 所以取的是带 `me` 的实例方法体 —— 与上面两条同一前提。
+        c_.emitLine("extern int32_t vb6_UC_TextWidthOf(void* inst, BSTR text);");
+        c_.emitLine("extern int32_t vb6_UC_TextHeightOf(void* inst, BSTR text);");
+        c_.emitLine("#undef vb6_UserControl_TextWidth");
+        c_.emitLine("#define vb6_UserControl_TextWidth(t) vb6_UC_TextWidthOf((void*)me, (t))");
+        c_.emitLine("#undef vb6_UserControl_TextHeight");
+        c_.emitLine("#define vb6_UserControl_TextHeight(t) vb6_UC_TextHeightOf((void*)me, (t))");
     }
     c_.emitBlank();
 
@@ -244,6 +283,34 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc) {
                 c_.emitLine("}");
             }
         }
+        // Fix <vbeclipse> rev22: 设计期子控件的 `<Ctrl>_Resize` 事件转发。
+        // VB6 里 `Private Sub ViewArea_Resize()` 是 PictureBox 的 Resize 事件,
+        // 运行时在该控件尺寸变化时自动跑。RTL 的 desc 以前没有这个槽, 于是 .ctl
+        // 写在子控件事件里的布局代码永远不跑 (ucFolder.ctl:529 ViewArea_Resize
+        // 是把视图窗体摆进 ViewArea 的唯一驱动)。
+        // 收集判据: 模块 scope 里有 Public/Private 的 `<子控件名>_Resize` Sub,
+        // 且该子控件名确实是本 .ctl 设计面上的控件 (否则跨模块重名会误收)。
+        std::vector<std::string> designResizeCtrls;
+        for (const auto& child : frmDesc.formControl.children) {
+            if (child.controlName.empty()) continue;
+            std::string procName = child.controlName + "_Resize";
+            if (hasProc(procName.c_str()))
+                designResizeCtrls.push_back(cIdent(child.controlName));
+        }
+        if (!designResizeCtrls.empty()) {
+            for (const std::string& cn : designResizeCtrls)
+                c_.emitLine("static void vb6_" + ctl + "_" + cn + "_Resize(vb6_cls_" + ctl + "* me);");
+            c_.emitLine("static void vb6_" + ctl + "_ucHostDesignResize(void* me, const char* ctrlName) {");
+            c_.emitLine("    vb6_cls_" + ctl + "* m = (vb6_cls_" + ctl + "*)me;");
+            c_.emitLine("    if (!m || !ctrlName) return;");
+            // ⚠ 纯 ASCII 字符串字面量: 这段代码跑在 C locale 的 stderr 打印路径上,
+            //   非 ASCII 会让 fprintf 截断, 把"最后一行"伪装成崩溃点 (见 MEMORY)。
+            for (const std::string& cn : designResizeCtrls) {
+                c_.emitLine("    if (strcmp(ctrlName, \"" + cn + "\") == 0) { "
+                            + "vb6_" + ctl + "_" + cn + "_Resize(m); return; }");
+            }
+            c_.emitLine("}");
+        }
         c_.emitLine("static void vb6_" + ctl + "_ucHostInit(void* me) {");
         // czUI fix: 设计器子控件 (.ctl 设计面上的 TextBox 等) 属于每个实例 —
         // 逐实例创建真实子窗口 (此前 vb6_hwnd_txtEmbed 恒为 NULL, TextBox 内容
@@ -254,17 +321,58 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc) {
         // Timer 等暂不实例化 (相关 API 对 NULL 安全)。
         const bool noKids = getenv("C3_NO_DESIGNKIDS") != nullptr;
         for (const auto& child : frmDesc.formControl.children) {
+            auto iprop = [&](const char* k, int defv) -> int {
+                auto itc = child.properties.find(k);
+                return itc != child.properties.end() ? (int)itc->second.intValue : defv;
+            };
             if (!noKids && child.controlType == FrmControlType::TextBox) {
-                auto iprop = [&](const char* k, int defv) -> int {
-                    auto itc = child.properties.find(k);
-                    return itc != child.properties.end() ? (int)itc->second.intValue : defv;
-                };
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignEdit("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 400)) + ");");
             } else if (!noKids && child.controlType == FrmControlType::Timer) {
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignTimer("
                     + "vb6_" + ctl + "_ucTimerThunk_" + cIdent(child.controlName) + ", me);");
+                // Fix <vbeclipse>: 设计器 Timer 的 Enabled/Interval 是权威初值, 必须像
+                // 上面的 TextBox 一样在 ucHostInit 落盘。vb6_GetTimerEnabled 对"从没设过"
+                // 返回 True (VB6 Timer 的真实默认是 False), 于是 `Enabled = 0 'False` 的
+                // tmrDrag 被当成开着的 → 每 tick 里 `Interval = 1` 自激 → Controls.Item
+                // 洪泛 (~95k 次) 把消息循环饿死, 停靠面板全不刷新。
+                c_.emitLine("    vb6_SetTimerInterval(vb6_hwnd_" + cIdent(child.controlName) + ", "
+                    + std::to_string(iprop("Interval", 60000)) + ");");
+                c_.emitLine("    vb6_SetTimerEnabled(vb6_hwnd_" + cIdent(child.controlName) + ", "
+                    + std::to_string(iprop("Enabled", 0)) + ");");
+            } else if (!noKids && child.controlType == FrmControlType::PictureBox) {
+                // Fix <vbeclipse>: ucFolder.ViewArea 等 PictureBox 设计子控件 → STATIC 子窗,
+                // 视图窗体靠 SetParent 挂进它。旧循环不建 → ViewArea 恒 NULL → 面板全空。
+                c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignPicture("
+                    + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
+                    + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
+            } else if (!noKids && child.controlType == FrmControlType::Label) {
+                // Fix <vbeclipse> rev32: 设计子控件里的 **VB.Label** (ucTab.lblCaption)。
+                // 此前这个种类不在发射循环里 ⇒ ucTab 的设计面一个子控件都没建
+                // (对照: ucCaption/ucTabStrip/ucFolder 各有 CreateDesign*, ucTab = 0)
+                // ⇒ `vb6_hwnd_lblCaption` 恒 NULL, 而 `ucTab.ToolTip` setter 是
+                // `lblCaption.ToolTipText = NewToolTip` ⇒ 对 NULL 写属性 0xC0000005。
+                c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignLabel("
+                    + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
+                    + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 400)) + ");");
+            } else if (!noKids && child.controlType == FrmControlType::Image) {
+                // 同上: **VB.Image** (ucTab.imgIcon)。`ucTab.Icon` setter 写它。
+                c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignImage("
+                    + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
+                    + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
+            } else if (!noKids && child.controlType == FrmControlType::Unknown
+                       && child.controlTypeName.find('.') != std::string::npos) {
+                // Fix <vbeclipse>: 设计子控件里"工程内 UserControl" (parseControlType 认不出的
+                // 限定名, 如 VbEclipse.ucTabStrip / VbEclipse.ucCaption) → 复用 HostCreate 逐实例
+                // 建宿主子窗。非登记 UC (第三方 OCX) 时 helper 内 findDesc 落空返回 NULL, 与不建
+                // 等价, 不影响别的夹具 (它们没有这类设计子控件)。
+                std::string tn = child.controlTypeName;
+                for (char& ch : tn) { if (ch == '"' || ch == '\\') ch = ' '; }
+                c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignUserControl("
+                    + "\"" + tn + "\", \"" + child.controlName + "\", "
+                    + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
+                    + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
             }
         }
         if (hasInit) c_.emitLine("    vb6_" + ctl + "_UserControl_Initialize((vb6_cls_" + ctl + "*)me);");
@@ -316,9 +424,24 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc) {
             c_.emitLine("static void vb6_" + ctl + "_ucHostDblClick(void* me) { (void)me; }");
         }
 
+        // 账 #226: UserControl_Click 的封装 (与 DblClick 同形, 零参)。
+        const bool hasUcClick = hasProc("UserControl_Click");
+        if (hasUcClick) {
+            c_.emitLine("static void vb6_" + ctl + "_ucHostClick(void* me) {");
+            c_.emitLine("    vb6_" + ctl + "_UserControl_Click((" + clsShort + "*)me);");
+            c_.emitLine("}");
+        } else {
+            c_.emitLine("static void vb6_" + ctl + "_ucHostClick(void* me) { (void)me; }");
+        }
+
         // Fix <vbeclipse> rev18: 自有属性按名桥 (表 + thunk) —— 必须在本 desc 之前发。
-        // (.ctl 不走 emitFormFramework, 所以只能落在这个函数里; 见该 .inc 头部说明。)
+        // (.ctl 不走 emitFormFramework, 所以只能落在这个函数里; 见该 .inc 头部说明.)
 #include "backend/detail/module/cgen_form_uc_props.inc"
+
+        // Fix <vbeclipse> rev21: 自有 Public Sub 按名桥 (表 + thunk) —— 同样必须在本 desc 之前.
+        // 缺了它 `l_ucFolder.ShowView ViewId` 这类晚绑定方法调用会落进宿主模型的
+        // "未知方法一律空实现" ⇒ 视图窗体永远 Visible=False ⇒ 停在 0x0 空白。
+#include "backend/detail/module/cgen_form_uc_methods.inc"
 
         c_.emitLine("static const vb6_UserControlDesc vb6_" + ctl + "_ucHostDesc = {");
         c_.emitLine("    \"" + moduleName_ + "\", " + std::to_string(ucScaleMode) + ",");
@@ -330,10 +453,24 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc) {
         // (cgen_form_uc_props.inc) 先发; 那里把条数记进 ucHostPropCount_, 这里只引用.
         c_.emitLine("    vb6_" + ctl + "_ucHostMouseMove, vb6_" + ctl + "_ucHostDblClick,"
                     + (ucHostPropCount_ <= 0
-                           ? std::string(" NULL, 0")
+                           ? std::string(" NULL, 0,")
                            : (" vb6_" + ctl + "_ucProps, "
-                              + std::to_string(ucHostPropCount_)))
+                              + std::to_string(ucHostPropCount_) + ","))
                     + "  /* Fix <vbeclipse> rev18: 自有属性按名桥 */");
+        // Fix <vbeclipse> rev21: 自有 Public Sub 按名桥 (紧跟 props/propCount 之后两槽)。
+        c_.emitLine("    " + (ucHostMethodCount_ <= 0
+                           ? std::string("NULL, 0,")
+                           : ("vb6_" + ctl + "_ucMethods, "
+                              + std::to_string(ucHostMethodCount_) + ","))
+                    + "  /* Fix <vbeclipse> rev21: 自有方法按名桥 */");
+        // Fix <vbeclipse> rev22: 设计期子控件 Resize 事件转发 (rev21 之后最后一槽)。
+        c_.emitLine("    " + (designResizeCtrls.empty()
+                           ? std::string("NULL")
+                           : ("vb6_" + ctl + "_ucHostDesignResize"))
+                    + ",  /* Fix <vbeclipse> rev22: 子控件 Resize 事件 */");
+        // 账 #226: UC 自身 Click 的末槽 —— 顺序必须与 vb6_UserControlDesc 逐字一致
+        // (布局式初始化, 错位一个指针宽就是运行期 AV, 见结构体 rev22 那段教训)。
+        c_.emitLine("    vb6_" + ctl + "_ucHostClick  /* 账 #226: UserControl_Click */");
         c_.emitLine("};");
         c_.emitLine("void vb6_" + ctl + "_RegisterHost(void) { vb6_UC_Register(&vb6_" + ctl + "_ucHostDesc); }");
         // Fix <vbeclipse> rev14: 让每个 .ctl 在**本模块的 init 函数**里自注册宿主描述。

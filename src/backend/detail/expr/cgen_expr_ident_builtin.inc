@@ -196,12 +196,15 @@
     // 不是过程局部变量也不在符号表中, 之前发射裸标识符 `hDC` → C2065
     // (Charts 2020: ucChartArea/ucChartBar/ucPieChart/ucTreeMaps 的 Draw 里
     // `If GdipCreateFromHDC(hDC, hGraphics) Then Exit Sub`).
-    // 映射到 RTL 宿主符号 (rtl/core/vb6rtl/vb6rtl_userctl.h 的 vb6_UserControl_* /
-    // vb6_PropertyPage_*). 只在 sym == nullptr (模块作用域无同名符号) 且不是已知
-    // 过程局部变量时生效, 因此 `Dim hDC As Long` 的真实局部用法 (DrawText /
-    // GetWindowsDPI) 不受影响; 表外的名字维持原样 (仍留 C2065, 不引入新错误).
+    // Fix 111: UserControl 的方法在 .ctl 里也常以裸名书写 (ScaleX/ScaleY/AsyncRead/
+    // PropertyChanged), 此前落到未解析兜底 → 裸符号 → LNK2019 (Charts 2020
+    // LabelPlus/ucChartArea/…)。
+    // 账 #159: 哪些名字能裸写、接成哪个 RTL 符号, 现在由 kHostPseudoRows 一张表回答
+    // (HPF_BARE 档), 这里不再抄成员名清单。门仍是 `!sym && !knownLocalVars_`
+    // (本文件上方), 所以 `Dim hDC As Long` 这类真实局部用法不受影响; 表外的名字
+    // 维持原样 (仍留 C2065, 不引入新错误)。
     // Fix <vbeclipse>: `Controls` 在 .ctl/.pag 里无条件是宿主集合, 优先于任何同名符号。
-    // 与本表其余条目 (hDC/ScaleWidth/...) 不同, 那些必须靠 `!sym` 保住
+    // 与本表其余条目 (hDC/ScaleWidth/…) 不同, 那些必须靠 `!sym` 保住
     // `Dim hDC As Long` 之类的真实局部用法; 而 `Controls` 是 VB6 保留的宿主成员名,
     // 用户不可能在本模块声明同名局部, driver 的跨模块 CoClass 登记却会在本模块
     // 作用域留下一个 ComClass(17) 符号 (ucTabStrip 实测) → `!sym` 被否 → 发射裸
@@ -211,34 +214,6 @@
     const bool reservedHostObj = (lower == "controls");
     if (isDesignerModule_ && !knownLocalVars_.count(lower)
         && (!sym || reservedHostObj)) {
-        static const std::unordered_map<std::string, std::string> kUserControlHostMembers = {
-            {"hdc", "hDC"},
-            {"scalewidth", "ScaleWidth"},
-            {"scaleheight", "ScaleHeight"},
-            {"scalemode", "ScaleMode"},
-            {"containerhwnd", "ContainerHwnd"},
-            {"enabled", "Enabled"},
-            // Fix 111: UserControl 的方法在 .ctl 里也常以裸名书写
-            // (VB6 中它们隐式属于 UserControl 对象):
-            //   ScaleX(Extender.Left, vbContainerSize, UserControl.ScaleMode)
-            //   Call AsyncRead(sUrl, vbAsyncTypeByteArray, "URL", ...)
-            //   PropertyChanged "PictureColorize"
-            // 此前落到未解析兜底 → 裸符号 ScaleX/AsyncRead/PropertyChanged
-            // → LNK2019 (Charts 2020 LabelPlus/ucChartArea/... ).
-            {"controls", "Controls"},  // Fix <vbeclipse>: UserControl.Controls 集合
-            {"scalex", "ScaleX"},
-            {"scaley", "ScaleY"},
-            {"asyncread", "AsyncRead"},
-            {"propertychanged", "PropertyChanged"},
-        };
-        static const std::unordered_map<std::string, std::string> kPropertyPageHostMembers = {
-            {"hwnd", "hWnd"},
-            {"changed", "Changed"},
-            {"scalemode", "ScaleMode"},
-            {"scaleheight", "ScaleHeight"},
-        };
-        const auto& hostMembers = isPropertyPageDesigner_ ? kPropertyPageHostMembers
-                                                          : kUserControlHostMembers;
         // Fix <vbeclipse> rev14: 裸 `Controls` 是 UserControl.Controls 集合, 必须发射
         // 真实的集合单例 vb6_UC_Controls() (RTL 已按当前 UC 实例回落 formHwnd), 而不是
         // 宿主伪对象前缀 vb6_UserControl_Controls (恒 NULL 的空桩)。ucTabStrip.ctl 的
@@ -248,12 +223,26 @@
             lastExpr_ = "vb6_UC_Controls()";
             return;
         }
-        auto itHost = hostMembers.find(lower);
-        if (itHost != hostMembers.end()) {
+        std::string rtlHp;
+        if (hostPseudoBareName(isPropertyPageDesigner_ ? "PropertyPage" : "UserControl",
+                               lower, rtlHp)) {
             lastExpr_ = (isPropertyPageDesigner_ ? "vb6_PropertyPage_" : "vb6_UserControl_")
-                        + itHost->second;
+                        + rtlHp;
             return;
         }
+    }
+
+    // 账 #196 第三条: 窗体模块 / 属性页模块里**裸写**的 `ScaleX(...)` / `ScaleY(...)`。
+    // VB6 那一形指的是"本模块那张窗口"的换算，而换算只吃两个显式的 from/to 参数 ⇒ 与
+    // 控件接收者 / `Me.` / With 块里那枚 共同一处实现 `vb6_ScaleUnitX/Y`（见 vb6rtl_com.c）。
+    // 以前它落到本文件末尾的"发射裸标识符"兜底 ⇒ 产物里是一个既没声明也没定义的 `ScaleX(`
+    // (隐式声明；真工程里今天只被 /OPT:REF 把整个调用者删掉才没响，见 §B31 那条读数)。
+    // 刻意不走 kHostPseudoRows 那条 `vb6_<Host>_<Member>` 的命名契约 —— 那是宿主伪成员的形状，
+    // 而这一对不是伪成员；.ctl 里裸写那一形仍由表里 UC 那两行负责，走到上面就 return 了。
+    if ((isFormModule_ || isPropertyPageDesigner_)
+        && (lower == "scalex" || lower == "scaley")) {
+        lastExpr_ = (lower == "scalex") ? "vb6_ScaleUnitX" : "vb6_ScaleUnitY";
+        return;
     }
 
     // Fix 110u (续): 隐式 Variant 局部 (VB6 无 Option Explicit 时的未声明裸名).

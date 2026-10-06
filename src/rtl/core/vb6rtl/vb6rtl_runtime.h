@@ -22,7 +22,7 @@ void vb6_PA_SetLong(SAFEARRAY* psa, int32_t index, int32_t val);
 void vb6_PA_SetLongPtr(SAFEARRAY* psa, int32_t index, intptr_t val);  /* Fix 082: x64-safe VarPtr parameter */
 void vb6_PA_SetDouble(SAFEARRAY* psa, int32_t index, double val);
 void vb6_PA_SetBSTR(SAFEARRAY* psa, int32_t index, BSTR val);
-VARIANT vb6_PA_GetVariant(SAFEARRAY* psa, int32_t index);
+vb6_VARIANT vb6_PA_GetVariant(SAFEARRAY* psa, int32_t index);  /* Fix rev37: 返回 vb6_VARIANT 供 _Generic 装箱 */
 int32_t vb6_PA_GetLong(SAFEARRAY* psa, int32_t index);
 double vb6_PA_GetDouble(SAFEARRAY* psa, int32_t index);
 BSTR vb6_PA_GetBSTR(SAFEARRAY* psa, int32_t index);
@@ -63,11 +63,14 @@ static inline void vb6_DebugPrint(BSTR s) {
     vb6_DebugPrintStr(s);
 }
 
-// vb6_LoadResData — LoadResData (returns empty Variant, resource loading not supported)
-vb6_VARIANT vb6_LoadResData(int32_t resourceId, int32_t resourceType);
-// Fix <vbeclipse>: LoadResPicture / LoadResString (stub, empty Variant)
-vb6_VARIANT vb6_LoadResPicture(int32_t resourceId, int32_t resourceType);
-vb6_VARIANT vb6_LoadResString(int32_t resourceId);
+// Fix <vbeclipse>: LoadRes* 实装 (2026-10-06) — 资源从用户 .res (ResFile32, 链接时
+// 已随 exe 进资源段) 用 FindResource/LoadResource 直读。三个函数的实参在 VB6 里
+// 本来就是 Variant (LoadResString(101) 数字 id / LoadResData("BIN1","CUSTOM")
+// 字符串名都能出现), 所以形参统一 vb6_VARIANT, cgen 侧用 vb6_VariantFromValue
+// 包装 (见 cgen_expr_call_builtin_fixup.inc)。找不到资源按 VB6 抛错误 326。
+vb6_VARIANT vb6_LoadResData(vb6_VARIANT resourceId, vb6_VARIANT resourceType);
+vb6_VARIANT vb6_LoadResPicture(vb6_VARIANT resourceId, vb6_VARIANT resourceType);
+vb6_VARIANT vb6_LoadResString(vb6_VARIANT resourceId);
 
 #ifdef __cplusplus
 }

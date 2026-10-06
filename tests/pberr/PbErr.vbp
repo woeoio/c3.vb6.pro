@@ -1,0 +1,17 @@
+Type=Exe
+Name=PbErr
+Module=PbErrMain; PbErrMain.bas
+Class=PbHold; PbHold.cls
+Startup="Sub Main"
+ExeName32="PbErr.exe"
+HelpFile=""
+Command32=""
+MajorVer=1
+MinorVer=0
+RevisionVer=0
+CompatibleMode="0"
+AutoIncrementVer=0
+ServerSupportFiles=0
+CompilationType=0
+Theme=None
+RetardLine=0

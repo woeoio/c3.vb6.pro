@@ -19,6 +19,19 @@
 extern void vb6_RaiseError(int32_t errNum, void* description);
 extern int32_t vb6_err_resume_next;
 
+// 账 #173: 同一处口径下漏登记的第二个跨族符号。
+// vb6_VariantToDouble 返回 double —— x86 的 cdecl 把返回值放在 **x87 栈 ST0**,
+// 调用方必须 `fstp` 弹出; 没有原型时 MSVC 只给 C4013 "假设外部返回 int",
+// 于是调用方按 EAX 取值、**ST0 永不弹出** ⇒ 每调一次漏一层 x87, 八层之后栈满,
+// 下一次浮点运算得到无效操作 QNaN (0x7FF8000000000000)。症状因此离真因极远:
+// 实测在 Charts 2020 (x86) 里表现为不相干的 `CByte((Abs(Opacity)/100)*255)`
+// 收到 NaN ⇒ run-time error 6 "Overflow", 且**任何多插入的调用都会让它换位置**
+// (Heisenbug)。x64 的 double 返回值走 XMM0, 没有 x87 栈 ⇒ 同一份代码在 x64
+// 永远不现形, 而 CI 的门只跑默认架构。
+// 形参写 Windows VARIANT 是安全的: vb6_VARIANT 与它**逐平台同布局** (rev11 口径,
+// 见 vb6rtl_variant.h 里那段注释), 按值传结构体的 ABI 只取决于尺寸与偏移。
+extern double vb6_VariantToDouble(VARIANT v);
+
 // --- 跨族共享的内部辅助 (定义在 vb6com.c) ---
 // COM错误->VB6错误转换
 // hr: Invoke返回的HRESULT / excep: EXCEPINFO结构 / context: 调用上下文

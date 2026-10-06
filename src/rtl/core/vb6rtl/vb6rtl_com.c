@@ -18,6 +18,7 @@
 #include <oleauto.h>
 #include <olectl.h>
 #include <windows.h>
+#include <wincodec.h>   /* Fix <vbeclipse> 2026-10-06: WIC — WebP/SVG 等扩展解码 */
 #endif
 
 // P24-08: MessageBoxW (user32) + GetConsoleWindow (kernel32)
@@ -328,7 +329,12 @@ vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv) {
             break;
         case VT_DISPATCH:
             result.pdispVal = pv->pdispVal;
-            if (pv->pdispVal) pv->pdispVal->lpVtbl->AddRef(pv->pdispVal);
+            // Fix <vbeclipse>: 用受守卫的 vb6_ComAddRefDispatch (内含 vb6_ComIsDispatchable),
+            // 与 vb6_VariantObject 同口径。`For Each ctrl In Controls` 交回的是**裸子控件
+            // HWND** (宿主分派层的对象表示), 不是真 IDispatch —— 裸 AddRef 会把 HWND 首字段
+            // 当 vtable 解引用 → av read (ucTabStrip.UserControl_Resize 实测)。真 COM 接收者
+            // 仍照常 AddRef; 析构侧 vb6_ReleaseObject 同判据跳过, 收支平衡。
+            if (pv->pdispVal) vb6_ComAddRefDispatch(pv->pdispVal);
             break;
         case VT_BOOL:   result.boolVal = pv->boolVal; break;
         case VT_UI1:    result.bVal = pv->bVal; break;
@@ -537,22 +543,309 @@ void vb6_VariantArraySet(vb6_VARIANT* v, int32_t index, vb6_VARIANT val) {
     /* 对于非Variant数组, 赋值时需要按目标类型转换(简化: 仅Variant数组支持赋值) */
 }
 
-// Fix 048: LoadResData — stub (resource loading not supported in C3 runtime)
-vb6_VARIANT vb6_LoadResData(int32_t resourceId, int32_t resourceType) {
-    (void)resourceId; (void)resourceType;
-    vb6_VARIANT v; memset(&v, 0, sizeof(v)); return v;  /* empty Variant */
+// ============================================================
+// Fix <vbeclipse> (2026-10-06): LoadRes* 实装 — .res 资源段加载。
+// 此前三个都是空桩返 empty Variant; 实际上用户 .res (VBP 的 ResFile32) 早在
+// P23-03 就随链接进了 exe (driver_link.cpp "Pass user .res file to linker"),
+// 运行期 FindResource/LoadResource 直读即可, 一直缺的只是这一层。
+// 形参口径: VB6 里三个函数的实参本就是 Variant —— LoadResString(101) 数字 id、
+// LoadResData("BIN1","CUSTOM") 字符串名都合法, 故形参统一 vb6_VARIANT, 调用侧
+// 由 cgen 的 vb6_VariantFromValue 包装。资源找不到按 VB6 抛错误 326。
+// ============================================================
+
+// 实参解包: VT_BSTR → 资源名 (按名查找); 其余数值 → MAKEINTRESOURCEW。
+static const wchar_t* vb6_ResNameOf(const vb6_VARIANT* v) {
+    if (v && (vb6_vartype)v->vt == VT_BSTR && v->bstrVal) return v->bstrVal;
+    return NULL;
 }
 
-// Fix <vbeclipse>: LoadResPicture / LoadResString — stub (同 LoadResData 口径:
-// 资源段加载暂不支持, 返回 empty Variant; 调用侧拿到 Nothing/空串不崩)
-vb6_VARIANT vb6_LoadResPicture(int32_t resourceId, int32_t resourceType) {
-    (void)resourceId; (void)resourceType;
-    vb6_VARIANT v; memset(&v, 0, sizeof(v)); return v;
+// 实参解包: 数值档 (I2/I4/UI1/BYTE); BSTR 走 _wtoi 兜底 ("101" 形的字符串 id)。
+static int32_t vb6_ResIdOf(const vb6_VARIANT* v) {
+    if (!v) return 0;
+    switch ((vb6_vartype)v->vt) {
+        case (vb6_vartype)VT_I2:  return v->iVal;
+        case (vb6_vartype)VT_I4:  return v->lVal;
+        case (vb6_vartype)VT_INT: return v->lVal;
+        case (vb6_vartype)VT_UI1: return v->bVal;
+        case (vb6_vartype)VT_BSTR: return v->bstrVal ? _wtoi(v->bstrVal) : 0;
+        default: return (int32_t)v->lVal;
+    }
 }
 
-vb6_VARIANT vb6_LoadResString(int32_t resourceId) {
-    (void)resourceId;
-    vb6_VARIANT v; memset(&v, 0, sizeof(v)); return v;
+// 找到并锁定资源; 返回数据指针, *outSize 收字节数。找不到返回 NULL (调用侧抛 326)。
+static const void* vb6_ResLoad(const vb6_VARIANT* id, const wchar_t* typeName,
+                               int32_t typeId, uint32_t* outSize) {
+    *outSize = 0;
+    const wchar_t* name = vb6_ResNameOf(id);
+    LPCWSTR rName = name ? name : MAKEINTRESOURCEW(vb6_ResIdOf(id));
+    LPCWSTR rType = typeName ? typeName : MAKEINTRESOURCEW(typeId);
+    HRSRC hr = FindResourceW(NULL, rName, rType);
+    if (!hr) return NULL;
+    HGLOBAL h = LoadResource(NULL, hr);
+    if (!h) return NULL;
+    const void* p = LockResource(h);
+    if (!p) return NULL;
+    *outSize = SizeofResource(NULL, hr);
+    return p;
+}
+
+// rc.exe 会把 .ico 展开成 RT_GROUP_ICON(用户写的那个 id) + 若干重编号的 RT_ICON;
+// LoadResPicture 的 id 指的是**组**。读组里首枚 entry 的 nID, 再取对应裸图。
+// (RT_GROUP_CURSOR/RT_CURSOR 同构。)
+static const void* vb6_ResResolveGroup(const vb6_VARIANT* id, int isCursor, uint32_t* outSize) {
+    *outSize = 0;
+    const wchar_t* name = vb6_ResNameOf(id);
+    LPCWSTR rName = name ? name : MAKEINTRESOURCEW(vb6_ResIdOf(id));
+    LPCWSTR grpType = isCursor ? RT_GROUP_CURSOR : RT_GROUP_ICON;
+    LPCWSTR imgType = isCursor ? RT_CURSOR : RT_ICON;
+    HRSRC hr = FindResourceW(NULL, rName, grpType);
+    if (!hr) return NULL;
+    HGLOBAL h = LoadResource(NULL, hr);
+    const uint8_t* g = h ? (const uint8_t*)LockResource(h) : NULL;
+    if (!g) return NULL;
+    int32_t count = g[4] | (g[5] << 8);          /* idCount */
+    if (count < 1) return NULL;
+    const uint8_t* e = g + 6;                     /* 首枚 GRPICONDIRENTRY, 末 2 字节 nID */
+    int32_t nID = e[12] | (e[13] << 8);
+    HRSRC hr2 = FindResourceW(NULL, MAKEINTRESOURCEW(nID), imgType);
+    if (!hr2) return NULL;
+    HGLOBAL h2 = LoadResource(NULL, hr2);
+    const void* p = h2 ? LockResource(h2) : NULL;
+    if (!p) return NULL;
+    *outSize = SizeofResource(NULL, hr2);
+    return p;
+}
+
+vb6_VARIANT vb6_LoadResString(vb6_VARIANT resourceId) {
+    vb6_VARIANT ret; memset(&ret, 0, sizeof(ret));
+    // Win32 字符串表: 16 条一档 — 资源块 id = id/16 + 1, 档内下标 = id%16
+    // (101 → block 7 slot 5, 2026-10-06 probe 实测)。
+    // 条目格式 = **WORD 长度前缀 + 该长度的字符** (不是零结尾!) — 本机 rc.exe 产物
+    // 逐字节实测: block 7 = 5×[0000](空条目) + [0C 00]"ResString-OK" + 10×[0000],
+    // 长度恰好 56 字节。旧的 wcslen 游走把长度词当首字符, 读出 CHR$(12)&s。
+    int32_t id = vb6_ResIdOf(&resourceId);
+    if (id >= 1) {
+        int32_t block = id / 16 + 1;
+        int32_t slot = id % 16;
+        HRSRC hr = FindResourceW(NULL, MAKEINTRESOURCEW(block), RT_STRING);
+        if (hr) {
+            HGLOBAL h = LoadResource(NULL, hr);
+            const wchar_t* tab = h ? (const wchar_t*)LockResource(h) : NULL;
+            if (tab) {
+                for (int32_t i = 0; i < slot; i++) tab += 1 + (int32_t)*tab;
+                int32_t len = (int32_t)*tab;
+                if (len > 0) {
+                    wchar_t* buf = (wchar_t*)malloc(((size_t)len + 1) * sizeof(wchar_t));
+                    if (buf) {
+                        memcpy(buf, tab + 1, (size_t)len * sizeof(wchar_t));
+                        buf[len] = L'\0';
+                        BSTR b = vb6_BSTR_FromStr(buf);
+                        free(buf);
+                        return vb6_VariantString(b);
+                    }
+                }
+                return vb6_VariantString(vb6_BSTR_Empty());
+            }
+        }
+    }
+    vb6_ErrRaiseNumber(326);   /* Resource with identifier not found */
+    return ret;
+}
+
+// 常见图片文件的字节签名 (vb6_ResSigKind 用)
+static int vb6_ResSigIsOleStreamable(const void* data, uint32_t size) {
+    const uint8_t* d = (const uint8_t*)data;
+    if (size < 8 || !d) return 0;
+    if (d[0] == 0x42 && d[1] == 0x4D) return 1;                          /* 'BM' */
+    if (d[0] == 0xFF && d[1] == 0xD8 && d[2] == 0xFF) return 1;          /* JPEG */
+    if (d[0] == 0x89 && d[1] == 0x50 && d[2] == 0x4E && d[3] == 0x47) return 1;  /* PNG */
+    if (d[0] == 0x47 && d[1] == 0x49 && d[2] == 0x46 && d[3] == 0x38) return 1;  /* GIF8 */
+    if (d[0] == 0x00 && d[1] == 0x00 && d[2] == 0x01 && d[3] == 0x00) return 1;  /* ICO */
+    return 0;
+}
+
+// OleLoadPicture 流路径 — PNG/JPEG/GIF/BMP/ICO 全套 (OLE 内建 GDI+ 解码)。
+static IPicture* vb6_ResPicViaOle(const void* data, uint32_t size) {
+    IPicture* pic = NULL;
+    HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!hg) return NULL;
+    void* pv = GlobalLock(hg);
+    if (!pv) { GlobalFree(hg); return NULL; }
+    memcpy(pv, data, size);
+    GlobalUnlock(hg);
+    IStream* st = NULL;
+    if (SUCCEEDED(CreateStreamOnHGlobal(hg, TRUE, &st)) && st) {
+        OleLoadPicture(st, 0, FALSE, &IID_IPicture, (void**)&pic);
+        st->lpVtbl->Release(st);
+    } else {
+        GlobalFree(hg);
+    }
+    return pic;
+}
+
+// WIC 路径 — OleLoadPicture 不认的格式 (WebP; SVG 在装了 SVG 解码扩展的机器上)。
+// CreateDecoderFromStream 是厂商无关入口, 系统装了什么 WIC 解码器就能吃什么。
+static IPicture* vb6_ResPicViaWic(const void* data, uint32_t size) {
+    static const GUID kWICFactory   = {0xcacaf262,0x9370,0x4615,{0xa1,0x3b,0x9f,0x55,0x39,0xda,0x4c,0x0a}};
+    static const GUID kWICFactoryI  = {0xec5ec8a9,0xc395,0x4314,{0x9c,0x77,0x54,0xd7,0xa9,0x35,0xff,0x70}};
+    static const GUID kPixFmtBGRA   = {0x6fddc324,0x4e03,0x4bfe,{0xb1,0x85,0x3d,0x77,0x76,0x8d,0xc9,0x10}};
+    IPicture* pic = NULL;
+    IWICImagingFactory* fac = NULL;
+    IStream* st = NULL;
+    HGLOBAL hg = NULL;
+    IWICBitmapDecoder* dec = NULL;
+    IWICBitmapFrameDecode* frame = NULL;
+    IWICFormatConverter* conv = NULL;
+    HRESULT wicHr = CoCreateInstance(&kWICFactory, NULL, CLSCTX_INPROC_SERVER,
+                                &kWICFactoryI, (void**)&fac);
+    hg = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (hg) {
+        void* pv = GlobalLock(hg);
+        if (pv) { memcpy(pv, data, size); GlobalUnlock(hg); }
+        if (SUCCEEDED(CreateStreamOnHGlobal(hg, TRUE, &st)) && st) {
+            HRESULT hrDec = fac->lpVtbl->CreateDecoderFromStream(fac, st, NULL,
+                              WICDecodeMetadataCacheOnDemand, &dec);
+            HRESULT hrFrame = dec ? dec->lpVtbl->GetFrame(dec, 0, &frame) : -1;
+            HRESULT hrConv = (!dec || SUCCEEDED(hrFrame)) ? fac->lpVtbl->CreateFormatConverter(fac, &conv) : -1;
+            HRESULT hrInit = conv ? conv->lpVtbl->Initialize(conv, (IWICBitmapSource*)frame,
+                              &kPixFmtBGRA, WICBitmapDitherTypeNone, NULL, 0.0,
+                              WICBitmapPaletteTypeCustom) : -1;
+            if (SUCCEEDED(hrDec) && dec && SUCCEEDED(hrFrame) && frame
+                && SUCCEEDED(hrConv) && conv && SUCCEEDED(hrInit)) {
+                UINT w = 0, hgt = 0;
+                conv->lpVtbl->GetSize(conv, &w, &hgt);
+                if (w && hgt) {
+                    BITMAPINFO bmi; memset(&bmi, 0, sizeof(bmi));
+                    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+                    bmi.bmiHeader.biWidth = (LONG)w;
+                    bmi.bmiHeader.biHeight = -(LONG)hgt;   /* top-down */
+                    bmi.bmiHeader.biPlanes = 1;
+                    bmi.bmiHeader.biBitCount = 32;
+                    bmi.bmiHeader.biCompression = BI_RGB;
+                    void* bits = NULL;
+                    HBITMAP hb = CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, &bits, NULL, 0);
+                    /* CopyPixels(prc, cbStride, cbBufferSize, buf) — 第三参是**总缓冲**
+                       (stride*height), 此前误传单行步长 → INSUFFICIENTBUFFER。 */
+                    HRESULT hrCopy = hb ? conv->lpVtbl->CopyPixels(conv, NULL, w * 4, w * 4 * hgt, (BYTE*)bits) : -1;
+                    if (hb && bits && SUCCEEDED(hrCopy)) {
+                        PICTDESC pd; memset(&pd, 0, sizeof(pd));
+                        pd.cbSizeofstruct = sizeof(pd);
+                        pd.picType = PICTYPE_BITMAP;
+                        pd.bmp.hbitmap = hb;
+                        if (FAILED(OleCreatePictureIndirect(&pd, &IID_IPicture, TRUE, (void**)&pic)))
+                            pic = NULL;
+                        if (!pic) DeleteObject(hb);   /* fOwn=TRUE 失败时句柄归我们收尾 */
+                    } else if (hb) {
+                        DeleteObject(hb);
+                    }
+                }
+            }
+        } else {
+            GlobalFree(hg);
+        }
+    }
+    if (conv) conv->lpVtbl->Release(conv);
+    if (frame) frame->lpVtbl->Release(frame);
+    if (dec) dec->lpVtbl->Release(dec);
+    if (st) st->lpVtbl->Release(st);
+    if (fac) fac->lpVtbl->Release(fac);
+    return pic;
+}
+
+vb6_VARIANT vb6_LoadResPicture(vb6_VARIANT resourceId, vb6_VARIANT resourceType) {
+    vb6_VARIANT ret; memset(&ret, 0, sizeof(ret));
+    // VB6 的 format: 0=vbResBitmap, 1=vbResIcon, 2=vbResCursor; 字符串格式名也收
+    // ("BITMAP"/"ICON"/"CURSOR" 及自定义类型名 —— 语料常见把 PNG/JPEG/WebP 整个
+    // 文件挂成 "PNG" 之类的自定义资源类型, 这里按**字节签名**分流解码, 不认类型名)。
+    const wchar_t* typeName = vb6_ResNameOf(&resourceType);
+    int32_t fmt = typeName ? -1 : vb6_ResIdOf(&resourceType);
+    LPCWSTR rType;
+    if      (typeName)                      rType = typeName;
+    else if (fmt == 0 /*vbResBitmap*/)      rType = RT_BITMAP;
+    else if (fmt == 1 /*vbResIcon*/)        rType = RT_ICON;
+    else if (fmt == 2 /*vbResCursor*/)      rType = RT_CURSOR;
+    else                                    rType = RT_BITMAP;  /* 越界值落 bitmap, 比静默空值可排查 */
+    int32_t fmtIsIcon = (fmt == 1) || (typeName && wcsicmp(typeName, L"ICON") == 0);
+    int32_t fmtIsCur  = (fmt == 2) || (typeName && wcsicmp(typeName, L"CURSOR") == 0);
+    int32_t fmtIsBmp  = (fmt == 0) || (typeName && wcsicmp(typeName, L"BITMAP") == 0)
+                        || (!typeName && fmt != 0 && fmt != 1 && fmt != 2);
+
+    uint32_t size = 0;
+    const void* data = vb6_ResLoad(&resourceId, rType, fmt, &size);
+    if ((!data || !size) && (fmtIsIcon || fmtIsCur)) {
+        /* rc.exe 展开的图标: id 落在组 (RT_GROUP_ICON/CURSOR), 按组解析出裸图 */
+        data = vb6_ResResolveGroup(&resourceId, fmtIsCur, &size);
+    }
+    if (!data || !size) { vb6_ErrRaiseNumber(326); return ret; }
+
+    vb6_OleEnsureInit();
+    IPicture* pic = NULL;
+    const uint8_t* d8 = (const uint8_t*)data;
+    if (fmtIsCur) {
+        // RT_CURSOR 裸图标图 (BITMAPINFOHEADER+XOR/AND), CreateIconFromResourceEx 直接吃。
+        HICON hc = CreateIconFromResourceEx((PBYTE)data, size, FALSE, 0x00030000,
+                                            0, 0, LR_DEFAULTCOLOR);
+        if (hc) {
+            PICTDESC pd; memset(&pd, 0, sizeof(pd));
+            pd.cbSizeofstruct = sizeof(pd);
+            pd.picType = PICTYPE_ICON;   /* OLE PICTDESC 没有 cursor 档、本 SDK 也没有 PICTYPE_CURSOR —— HCURSOR 经 icon 槽传 HANDLE, 取句柄侧不分这两类 */
+            pd.icon.hicon = (HICON)hc;
+            if (FAILED(OleCreatePictureIndirect(&pd, &IID_IPicture, TRUE, (void**)&pic))) pic = NULL;
+        }
+    } else if (fmtIsIcon && !(size >= 4 && d8[0] == 0 && d8[1] == 0 && d8[2] == 1)) {
+        // RT_ICON 裸图标图 (无 .ico 文件头); 若实际存的是整枚 .ico 文件则落通用流路径。
+        HICON hi = CreateIconFromResourceEx((PBYTE)data, size, TRUE, 0x00030000,
+                                            0, 0, LR_DEFAULTCOLOR);
+        if (hi) {
+            PICTDESC pd; memset(&pd, 0, sizeof(pd));
+            pd.cbSizeofstruct = sizeof(pd);
+            pd.picType = PICTYPE_ICON;
+            pd.icon.hicon = hi;
+            if (FAILED(OleCreatePictureIndirect(&pd, &IID_IPicture, TRUE, (void**)&pic))) pic = NULL;
+        }
+    } else if (fmtIsBmp && !(size >= 2 && d8[0] == 0x42 && d8[1] == 0x4D)) {
+        // RT_BITMAP 数据 = 打包 DIB (BITMAPINFOHEADER + 调色板 + 位数据, 无文件头)。
+        // 补一个 BITMAPFILEHEADER 走 OleLoadPicture 流, 与 vb6_LoadPictureEx 同出口。
+        const BITMAPINFOHEADER* bi = (const BITMAPINFOHEADER*)data;
+        DWORD colors = bi->biClrUsed ? bi->biClrUsed
+                     : (bi->biBitCount <= 8 ? (1u << bi->biBitCount) : 0u);
+        uint32_t total = 14 + size;
+        BYTE* bmp = (BYTE*)malloc(total);
+        if (bmp) {
+            BITMAPFILEHEADER* fh = (BITMAPFILEHEADER*)bmp;
+            fh->bfType = 0x4D42;                       /* 'BM' */
+            fh->bfSize = total;
+            fh->bfReserved1 = fh->bfReserved2 = 0;
+            fh->bfOffBits = 14 + bi->biSize + colors * 4;
+            memcpy(bmp + 14, data, size);
+            pic = vb6_ResPicViaWic(bmp, total);
+            if (!pic) pic = vb6_ResPicViaOle(bmp, total);
+            free(bmp);
+        }
+    } else {
+        // 整张图片文件 (BMP/PNG/JPEG/GIF/ICO/WebP/… 签名): WIC 优先 (新系统上
+        // OleLoadPicture 的流路已返 E_FAIL, 且 WIC 覆盖 WebP/已装扩展的 SVG), OLE 兜底。
+        pic = vb6_ResPicViaWic(data, size);
+        if (!pic) pic = vb6_ResPicViaOle(data, size);
+    }
+    if (!pic) pic = vb6_ResPicViaWic(data, size);   /* WebP / 装了解码扩展的 SVG 等 */
+    if (!pic) { vb6_ErrRaiseNumber(326); return ret; }
+    return vb6_VariantObject((void*)pic);
+}
+
+vb6_VARIANT vb6_LoadResData(vb6_VARIANT resourceId, vb6_VARIANT resourceType) {
+    vb6_VARIANT ret; memset(&ret, 0, sizeof(ret));
+    // format: 字符串 (rc 侧的资源类型名, 如 "CUSTOM"/"JSCRIPT"/"BITMAP") 或
+    // 数字 (直接当 Win32 资源类型码: 1=CURSOR 2=BITMAP 3=ICON 10=RCDATA…)。
+    const wchar_t* typeName = vb6_ResNameOf(&resourceType);
+    int32_t typeId = typeName ? 10 /*RT_RCDATA*/ : vb6_ResIdOf(&resourceType);
+    uint32_t size = 0;
+    const void* data = vb6_ResLoad(&resourceId, typeName, typeId, &size);
+    if (!data || !size) { vb6_ErrRaiseNumber(326); return ret; }
+    struct vb6_SafeArray1D* arr = vb6_SafeArrayCreate1D(vb6_sa_byte, 0, (int32_t)size - 1);
+    if (!arr) return ret;
+    memcpy(arr->data, data, size);
+    return vb6_VariantArray(arr);
 }
 
 // ============================================================
@@ -573,11 +866,9 @@ void vb6_SavePicture(void* hBitmap, BSTR filename) {
 #endif
 }
 
-// Load Form — 预加载窗体 (不显示). 本运行时的窗体默认实例由
-// vb6_form_show_<Form>() 首次调用时创建, 对象恒可用, 无独立预加载阶段.
-void vb6_LoadForm(void* hwnd) {
-    (void)hwnd;
-}
+// Load Form — 预加载窗体 (建窗+触发 Form_Load, 不显示)。实现见 vb6forms.c 的
+// vb6_LoadForm (抽干延迟 Form_Load 消息); 本 TU 旧版是空桩, 与 vb6forms.c 真实版
+// 重定义 (LNK2005), 故删除桩, 单一权威定义落在 vb6forms.c。
 
 // ============================================================
 // Fix 105: UserControl/PropertyPage host built-in objects
@@ -601,7 +892,7 @@ int32_t vb6_UserControl_ScaleWidth  = 0;
 int32_t vb6_UserControl_ScaleHeight = 0;
 int32_t vb6_UserControl_ScaleMode   = 1;     // Twip (VB6 default)
 void*   vb6_UserControl_hDC          = NULL;
-int32_t vb6_UserControl_ContainerHwnd = 0;
+void*   vb6_UserControl_ContainerHwnd = NULL;  // 账 #180: 句柄成员按指针宽度存
 int16_t vb6_UserControl_Enabled     = -1;
 int32_t vb6_UserControl_MousePointer = 0;
 void*   vb6_UserControl_MouseIcon   = NULL;
@@ -666,12 +957,17 @@ int32_t vb6_PropertyPage_ScaleMode   = 1;
 int32_t vb6_PropertyPage_ScaleHeight = 0;
 int16_t vb6_PropertyPage_Changed     = 0;
 
-// --- PropertyPage built-in Changed property (Fix 108d) ---
-int16_t Changed = 0;
+// --- PropertyPage 的 Changed 不再有 C 侧裸名字 (账 #219) ---
+// 上面那枚 vb6_PropertyPage_Changed 就是它唯一的存储; 以前这里还有一份 `int16_t Changed`,
+// 专为"源码里裸写 Changed = True"留的落脚处。发码侧实测从来交的是带前缀那一个
+// (语料 vb6_PropertyPage_Changed 186 处、裸名 0 处)，而裸名全局与用户模块级变量共享 C 名字空间
+// ⇒ `Public Changed As Long` 直接 C2371 编不过 (探针 .build/b229out/pjChanged.bas 实测 no exe)。
 
-// --- Picture.Line mode constants ---
-const int32_t B  = 1;
-const int32_t BF = 2;
+// --- Picture.Line 的模式旗标不再有 C 侧名字 (账 #220) ---
+// 以前这里写着 `const int32_t B = 1; const int32_t BF = 2;`，让 parser 原样发出去的裸名
+// 有个落脚处。VB6 允许工程里有个叫 B 的模块级变量（`For B = 1 To 3` 这种写法到处都是），
+// 而那两枚是**外部链接的 C 全局** ⇒ 撞名直接 C2373 重定义 + C2166，连 exe 都出不来。
+// 旗标现在由 parser 在 Line 的 style 位置折成字面量 1/2，RTL 不再需要名字。
 
 // VB6 UserControl.TextWidth/TextHeight: measure with GDI using current Font
 // (unit = ScaleMode; simplified to pixels here; Twip handled once hosting lands)
@@ -681,6 +977,12 @@ const int32_t BF = 2;
 // 像素, 而 .ctl 的布局常数(PT16=(SW+SH)*2.5/100 等)是按 VB6 的 TWIP 语义推的,
 // 两者本就不同源; 换成更大的字体度量后饼图被图例挤没、柱图 X 轴标签裁切更重
 // (见离屏 dump ucPieChart/ucChartBar). 故保留原"默认 DC 字体测量"行为.
+/* 账 #177: 控件坐标/文字量纲的单位表只剩一份权威, 在 vb6forms.c。vb6rtl 与 vb6forms
+   是两个模块、不互相 include 头, 故就地 extern (同 vb6com_internal.h 里
+   extern vb6_RaiseError 的做法)。 */
+extern double vb6_ScalePxToUser(double px, int32_t mode, int vert);
+extern double vb6_ScaleUnitsPerPx(int32_t mode, int vert);
+
 static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
     if (!text) return 0;
     HDC hdc = GetDC(NULL);
@@ -720,11 +1022,27 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
 }
 
 int32_t vb6_UserControl_TextWidth(BSTR text) {
-    return vb6_uc_measureText(text, 1);
+    /* 账 #177: VB6 的 TextWidth/TextHeight 交的是**控件 ScaleMode 单位**, 不是设备像素。
+       vb6_uc_measureText 量的是 GetDC(NULL) 上的像素, 所以这里必须折算一次:
+       缇型控件 (语料里 FontMemRes / VbEclipse 的 ucFolder·ucPerspective 那一族) 此前
+       拿到的是像素 ⇒ 比同一枚控件的 ScaleWidth 小 15 倍, 图例/标题全挤在一起。
+       像素型控件 (Charts 2020 / czUI / VBFlexGrid) 折算系数为 1 ⇒ 读数逐字节不变。
+       ⚠ 这一对读的是进程级 vb6_UserControl_ScaleMode, 只在宿主上下文已换入时正确;
+       控件代码里请走按实例的那一对 (vb6_UC_TextWidthOf, 账 #178, 由 cgen 用 #define
+       把 UserControl.TextWidth 重定向过去)。 */
+    return (int32_t)vb6_ScalePxToUser((double)vb6_uc_measureText(text, 1),
+                                      vb6_UserControl_ScaleMode, 0);
 }
 
 int32_t vb6_UserControl_TextHeight(BSTR text) {
-    return vb6_uc_measureText(text, 0);
+    return (int32_t)vb6_ScalePxToUser((double)vb6_uc_measureText(text, 0),
+                                      vb6_UserControl_ScaleMode, 1);
+}
+
+/* 账 #177/#178: 原始像素量 (不做单位折算), 给"按实例取 ScaleMode"的那一对宿主出口用。
+   vb6_uc_measureText 是本文件 static, 外面只能从这里拿。 */
+int32_t vb6_UC_MeasureTextPx(BSTR text, int wantWidth) {
+    return vb6_uc_measureText(text, wantWidth);
 }
 
 // UserControl.Size: VB6 `UserControl.Size width, height` (unit = ScaleMode).
@@ -763,45 +1081,48 @@ void vb6_UserControl_Line(double x1, double y1, double x2, double y2, int32_t co
 // Fix 111: UserControl built-in methods (declared in vb6rtl_userctl.h).
 //
 // ScaleX/ScaleY: convert x from fromScale to toScale (VB6 ScaleMode constants).
-// 96dpi baseline: Twip = 1/15 px, Point = 96/72 px, Inch = 96 px ...
-// User(0)/ContainerPosition(8)/ContainerSize(9,10)/unknown are treated as
-// pixels -- matching Charts 2020 usage (Extender.Left is already container
-// pixels; target UserControl.ScaleMode = 3 = Pixel -> identity).
-static double vb6_ucScaleToPixels(int32_t mode) {
-    // Fix 184: 单位表必须用**真实 DPI**。此前整张表按 96 写死，而容器侧
-    // (vb6_TwipToX / vb6_XToTwipX) 已按 DPI，于是 UserControl 内部每做一次
-    // 缇<->像素往返就缩 20% (VBFlexGrid 内层窗口 914px -> 731px)。
-    static double s_dpi = 0.0;
-    double dpi;
-    if (s_dpi <= 0.0) {
-        HDC dc = GetDC(NULL);
-        int d = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
-        if (dc) ReleaseDC(NULL, dc);
-        s_dpi = (d > 0) ? (double)d : 96.0;
-    }
-    dpi = s_dpi;
-    switch (mode) {
-        case 1: return dpi / 1440.0;    /* Twips */
-        case 2: return dpi / 72.0;      /* Points */
-        case 3: return 1.0;             /* Pixels */
-        case 4: return 1.0;             /* Characters (approx) */
-        case 5: return dpi;             /* Inches */
-        case 6: return dpi / 25.4;      /* Millimeters */
-        case 7: return dpi / 2.54;      /* Centimeters */
-        default: return 1.0;            /* User / Container* / unknown */
-    }
+// 账 #177: 单位表**只剩一份** —— vb6forms.c 的 vb6_ScaleUnitsPerPx (Fix 184 把它
+// 接上真实 DPI 时, 这里另抄了一张, 于是同一件事两处口径: 那张表纵向也用 LOGPIXELSX,
+// 而权威按 vert 分 X/Y)。vb6rtl 与 vb6forms 是两个模块、不互相 include 头,
+// 故就地 extern (同 vb6com_internal.h 里 extern vb6_RaiseError 的做法)。
+// User(0)/ContainerPosition(8)/ContainerSize(9,10)/unknown 仍按像素 —— 与 Charts 2020
+// 的用法一致 (Extender.Left 已是容器像素; 目标 ScaleMode=3=Pixel ⇒ 恒等)。
+extern double vb6_ScaleUnitsPerPx(int32_t mode, int vert);
+
+static double vb6_ucScaleToPixels(int32_t mode, int vert) {
+    double u = vb6_ScaleUnitsPerPx(mode, vert);
+    return (u == 0.0) ? 1.0 : (1.0 / u);
 }
 
-double vb6_UserControl_ScaleX(double x, int32_t fromScale, int32_t toScale) {
-    double px = x * vb6_ucScaleToPixels(fromScale);
-    double f = vb6_ucScaleToPixels(toScale);
+// 账 #196 第三条: 这一对是**单位换算的唯一一份实现**，名字不带宿主前缀 —— 因为要接的接收者不止
+// UserControl：`picA.ScaleX(...)` / `Me.ScaleX(...)` / `With Picture1 : .ScaleX(...)` / 窗体模块里
+// 裸写 `ScaleX(...)` 都是 VB6 的同一件事 (`Object.ScaleX(x, fromScale, toScale)`)，而换算本身只吃
+// 那两个显式的 from/to 参数(接收者自己的 ScaleMode 是由发码侧算好后当参数交进来的，见
+// `vb6_WindowScaleModeSelf`)。
+// 接上之前这四形的形状：显式接收者与 `Me.` 那一形发成 `vb6_ComCallDouble(hwnd, L"ScaleX", …)` ——
+// 对一枚假 IDispatch 发 Invoke ⇒ **编得过、链接过、跑起来回个 0**(#143 那一族)；With 那一形发成
+// `hwnd.ScaleX(…)` ⇒ **编译不过**(#150 那一族)；窗体模块里裸写那一形发成裸 `ScaleX(…)` ⇒
+// 隐式声明，今天只在真工程里被 /OPT:REF 把整个调用者删掉才没响。
+// UserControl 那一档保留 `vb6_UserControl_ScaleX/Y` 这两个**名字**是宿主伪成员表的命名契约
+// (`vb6_<Host>_<Member>`，见 cgen_util_com.cpp 的 kHostPseudoRows)，它们只是转手到这里。
+double vb6_ScaleUnitX(double x, int32_t fromScale, int32_t toScale) {
+    double px = x * vb6_ucScaleToPixels(fromScale, 0);
+    double f = vb6_ucScaleToPixels(toScale, 0);
     return (f == 0.0) ? x : (px / f);
 }
 
-double vb6_UserControl_ScaleY(double y, int32_t fromScale, int32_t toScale) {
-    double px = y * vb6_ucScaleToPixels(fromScale);
-    double f = vb6_ucScaleToPixels(toScale);
+double vb6_ScaleUnitY(double y, int32_t fromScale, int32_t toScale) {
+    double px = y * vb6_ucScaleToPixels(fromScale, 1);
+    double f = vb6_ucScaleToPixels(toScale, 1);
     return (f == 0.0) ? y : (px / f);
+}
+
+double vb6_UserControl_ScaleX(double x, int32_t fromScale, int32_t toScale) {
+    return vb6_ScaleUnitX(x, fromScale, toScale);
+}
+
+double vb6_UserControl_ScaleY(double y, int32_t fromScale, int32_t toScale) {
+    return vb6_ScaleUnitY(y, fromScale, toScale);
 }
 
 // UserControl.AsyncRead: no container/async message pump in compiled form, so

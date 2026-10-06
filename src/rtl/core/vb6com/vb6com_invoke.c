@@ -45,7 +45,15 @@ static int32_t vb6_ComIsCodePtr(const void* p) {
 }
 
 int32_t vb6_ComIsDispatchable(const void* disp) {
-    if (!disp || IsBadReadPtr(disp, sizeof(void*))) return 0;
+    if (!disp) return 0;
+    // Fix <vbeclipse>: 窗口句柄 (HWND) 是内核索引, 不是指向 IDispatch 对象的指针。
+    // 宿主 Controls 枚举 (`For Each ctrl In Controls`) 把子控件的**裸 HWND** 放进
+    // VT_DISPATCH 槽; 下面 `*(void**)disp` 会把 HWND 当指针读堆内存, 若那块内存
+    // 恰好看着像 vtable 就误判"可分派" → 调伪 AddRef → 跳到垃圾地址崩
+    // (ucTabStrip.UserControl_Resize 实测, PC=野值)。真窗口句柄一律非 COM 分派对象,
+    // 由宿主模型 (IsHostObject/IsWindow) 单独应答, 这里直接判否。
+    if (IsWindow((HWND)disp)) return 0;
+    if (IsBadReadPtr(disp, sizeof(void*))) return 0;
     void* vtbl = *(void**)disp;
     /* IDispatch: QueryInterface/AddRef/Release/GetTypeInfoCount/
      * GetTypeInfo/GetIDsOfNames/Invoke — 前 7 槽必须在可执行页里 */
@@ -202,10 +210,14 @@ void* vb6_ComCall(void* disp, const wchar_t* methodName,
     if (vb6_ComIsDispatchable(disp) &&
         (wcscmp(methodName, L"AddRef") == 0 || wcscmp(methodName, L"Release") == 0)) {
         int32_t isAddRef191 = (wcscmp(methodName, L"AddRef") == 0);
-        void* slot191 = ((void**)disp)[1];
-        LONG n191 = isAddRef191
-            ? (LONG)((ULONG (STDMETHODCALLTYPE*)(void*))slot191)(disp)
-            : (LONG)((HRESULT (STDMETHODCALLTYPE*)(void*))slot191)(disp);
+        /* 账 #183: 槽位取自**对象首字里那个 vtable**, 不是对象首字本身。旧写法
+         * `((void**)disp)[1]` 读的是 disp+8 —— 那是对象自己的第二个字段, 在
+         * VTableHandle.bas 手搭的伪 IPAO 对象上恰好是 RefCount=1 ⇒ `call 1` 跳飞。
+         * vb6_ComIsDispatchable 已保证 *(void**)disp 是一张槽位全在可执行页的表,
+         * 所以这里直接用 C 的 COM 写法, 与 vb6com.c 里 Release/AddRef 两处同形。 */
+        IUnknown* pUnk191 = (IUnknown*)disp;
+        LONG n191 = isAddRef191 ? (LONG)pUnk191->lpVtbl->AddRef(pUnk191)
+                               : (LONG)pUnk191->lpVtbl->Release(pUnk191);
         VARIANT** uargs191 = (VARIANT**)args_void;
         if (uargs191) {
             for (int32_t ui = 0; ui < argc; ui++) { if (uargs191[ui]) free(uargs191[ui]); }
@@ -383,12 +395,6 @@ void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
         }
         return (void*)eres;
     }
-/* Fix 164z2-dbg: C3_COM_TRACE 时打印落入 IDispatch 的 disp */
-    if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
-        fprintf(stderr, "[C3_COM] GetProp fallback to IDispatch: disp=%p isFont=%d name=%ls\n",
-                disp, vb6_UC_IsFont(disp), propName);
-        fflush(stderr);
-    }
     /* Fix 112: 宿主对象分派 (见 vb6_ComCall 注释) */
     if (vb6_Host_IsHostObject(disp)) {
         char hout[64];
@@ -397,6 +403,14 @@ void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
         vb6_Host_ToWinVariant(&hout, hres);
         vb6_Host_ClearVariant(&hout);
         return (void*)hres;
+    }
+    /* 账 #182: 这条 "fallback to IDispatch" 以前打在字体/Extender/宿主三个岔口**之前**，
+     * 于是三条都不走 IDispatch 的路径也照打不误 —— 用它定位崩溃时会把嫌疑引向
+     * 根本没执行过的调用。挪到这里只在真要下 IDispatch 时打印。 */
+    if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] GetProp fallback to IDispatch: disp=%p isFont=%d name=%ls\n",
+                disp, vb6_UC_IsFont(disp), propName);
+        fflush(stderr);
     }
     IDispatch* pDisp = (IDispatch*)disp;
 
@@ -621,6 +635,20 @@ void vb6_ComSetPropArg(void* disp, const wchar_t* propName, void** args, int32_t
 void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef) {
     if (!disp) return;
     IDispatch* pDisp = (IDispatch*)disp;
+
+    // Fix <vbeclipse>: 宿主对象 (原生 vb6_cls_X* UC 实例 / HWND) 不是真 IDispatch,
+    // 走下面的 getDispid+Invoke 必 "not found"。与 vb6_ComSetProp (line 526) 同口径:
+    // 先把 objRef 包成 VT_DISPATCH 的 Win VARIANT, 转成 vb6_VARIANT 交给 Host_SetProp,
+    // 后者落到 vb6_UC_OwnPropSet 的名字桥 (uc_hostmodel_setprop.inc)。
+    if (vb6_Host_IsHostObject(disp)) {
+        VARIANT winObj; VariantInit(&winObj);
+        winObj.vt = VT_DISPATCH; winObj.pdispVal = (IDispatch*)objRef;
+        char hin[64];
+        vb6_Host_FromWinVariant(&winObj, hin);
+        vb6_Host_SetProp(disp, propName, hin);
+        vb6_Host_ClearVariant(hin);
+        return;
+    }
 
     DISPID dispid = vb6_getDispid(pDisp, propName);
     if (dispid == DISPID_UNKNOWN) {

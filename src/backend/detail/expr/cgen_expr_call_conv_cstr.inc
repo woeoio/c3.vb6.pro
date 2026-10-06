@@ -49,6 +49,18 @@
                 lastExpr_ = "vb6_BSTR_Empty()";
                 return;
             }
+            if (argType == Vb6Type::LongPtr) {
+                // 账 #180: 句柄档 (LongPtr) 的实参在 C 侧是 void* / intptr_t。落到下面
+                // 那条 `vb6_CStr(vb6_VariantFromValue(x))` 会命中 _Generic 的
+                // `default: vb6_VariantObject` (vb6rtl_variant.h:215) ⇒ CStr(句柄) 打成
+                // **空串**, 而 VB6 里 ContainerHwnd / hWnd 是 Long、CStr 打的是数字。
+                // 不能往 _Generic 补一档 void* : 真对象引用在 C 层也是 void*, 那样会把
+                // 对象一律打成数字 (装箱那一路比句柄更常见) ⇒ 只能在**类型已知**的这里分诊。
+                if (!args.empty()) {
+                    lastExpr_ = "vb6_CStrLongLong((int64_t)(intptr_t)(" + args[0] + "))";
+                    return;
+                }
+            }
             if (argType == Vb6Type::Long || argType == Vb6Type::Integer) {
                 callee = "vb6_CStrLong";
             } else if (argType == Vb6Type::Boolean) {

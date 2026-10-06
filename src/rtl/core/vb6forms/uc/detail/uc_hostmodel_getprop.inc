@@ -68,7 +68,20 @@
         }
         vb6_ho_setVariantLong(out, val); return 1;
     }
-    if (_wcsicmp(name, L"Visible") == 0)  { vb6_ho_setVariantLong(out, IsWindowVisible((HWND)obj) ? -1 : 0); return 1; }
+    // Fix <vbeclipse>: `Visible` 必须读**自身 WS_VISIBLE 位**, 不能用 IsWindowVisible。
+    // IsWindowVisible 是 Win32 的**链式**语义 —— 自身可见但任一祖先不可见就返回 0。
+    // 而 VB6 的 `对象.Visible` 只反映该对象自身的 Visible 属性, 与祖先无关。
+    // 混用会让停靠面板全空: ucFolder.ViewArea_Resize 里
+    // `If View.View.Visible Then View.View.Move ...` 是布局的唯一驱动, 而它
+    // 全部发生在 frmMain Form_Load 期间 —— 那时 frmMain 自己还没 ShowWindow,
+    // 链上层层 IsWindowVisible=0 ⇒ Move 永不执行 ⇒ 视图窗体停在 0x0。
+    // (实测 play78: [VR] enter x32, 每轮每项 vis=0; 同轮 [ST] 显示
+    //  ShowView 已把视图 style 由 460B0040 写成 560B0040, WS_VISIBLE=1。)
+    // 顺带这也修了拖动/最小化期间的误判: 祖先临时隐藏时对象自身 Visible 不变。
+    if (_wcsicmp(name, L"Visible") == 0)  {
+        LONG st = GetWindowLongW((HWND)obj, GWL_STYLE);
+        vb6_ho_setVariantLong(out, (st & WS_VISIBLE) ? -1 : 0); return 1;
+    }
     if (_wcsicmp(name, L"Enabled") == 0)  { vb6_ho_setVariantLong(out, IsWindowEnabled((HWND)obj) ? -1 : 0); return 1; }
     if (_wcsicmp(name, L"hDC") == 0)      { vb6_ho_setVariantLong(out, (int32_t)(intptr_t)GetDC((HWND)obj)); return 1; }
     if (_wcsicmp(name, L"Count") == 0)    { vb6_ho_setVariantLong(out, 0); return 1; }

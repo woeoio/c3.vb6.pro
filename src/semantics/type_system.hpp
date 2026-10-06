@@ -47,6 +47,12 @@ public:
     // 两个类型的运算结果类型 (VB6 widened rules)
     static Vb6Type promote(Vb6Type a, Vb6Type b);
 
+    // 位运算 And/Or/Xor/Eqv/Imp 的结果类型 —— 全仓唯一口径 (账 #216)
+    static Vb6Type bitwiseResult(Vb6Type a, Vb6Type b);
+
+    // 一元 Not 的结果类型 —— 全仓唯一口径 (账 #216)
+    static Vb6Type logicalNotResult(Vb6Type t);
+
     // 类型占用的字节数
     static int typeSize(Vb6Type t);
 

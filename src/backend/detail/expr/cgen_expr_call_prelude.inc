@@ -17,6 +17,11 @@
 
     std::string paName;
 
+    // Fix <vbeclipse> rev37: ParamArray 元素的**声明元素类型** (剥掉 Vb6Type::Array 位
+    // 后的族)。VB6 规定 ParamArray 只能是 Variant 数组, 但同一过程里不同 ParamArray
+    // 形参的元素仍要按各自声明取 —— 更重要的是**不能一律按 Long 取**。
+    Vb6Type paElemType = Vb6Type::Variant;
+
     if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr && node.named.empty() && currentProc_) {
 
         auto& ident = static_cast<IdentifierExpr&>(*node.callee);
@@ -39,6 +44,12 @@
 
                     paName = cIdent(p.name);
 
+                    // ParamArray 的 asType 被 parser 包成 ArrayTypeRef(SimpleTypeRef(元素)),
+                    // 语义层 resolveTypeRef 再把元素类型折进低 16 位、高位打 Array
+                    // (semantic_analyzer_typeref.cpp:139)。这里剥掉 Array 位取元素族。
+                    paElemType = static_cast<Vb6Type>(static_cast<uint16_t>(p.type)
+                                          & ~static_cast<uint16_t>(Vb6Type::Array));
+
                     break;
 
                 }
@@ -53,7 +64,18 @@
 
     if (isParamArrayAccess) {
 
-        // ParamArray access: args(i) -> vb6_PA_GetLong(args, i) or vb6_PA_GetBSTR(args, i)
+        // Fix <vbeclipse> rev37: **按声明的元素类型**选解包函数, 不再一律 GetLong。
+        //   背景: 调用端把实参按自己的类型装进 SAFEARRAY (`vb6_PA_SetBSTR` 等),
+        //   而这里硬编码 `vb6_PA_GetLong` —— 而 vb6_PA_GetLong 只认 VT_I4/VT_I2/VT_R8
+        //   (vb6rtl_paramarray.c), 遇 VT_BSTR/VT_DISPATCH **静默返回 0**。
+        //   ⇒ `ParamArray PropFont() As Variant` 收到 3 个字符串实参,
+        //   UBound 正确(=2, 长度对) 但每个元素读成 Long 0。
+        //   实测 Charts 2020 的 ClsResizer.AddControlFont 11 项 `PropFont` 全空 ⇒
+        //   SaveControlsPositions 里 `CallByName(oCtrl, FBuf(j).PropFont, VbGet)`
+        //   传的是空属性名 ⇒ 字体/标题设置全部失效 (控件标题画不出来)。
+        //   判据落在**解包函数与实参装箱类型是否同族**, 不是"默认最通用"。
+        //   GetVariant 返回整只 VARIANT, 交由下游 vb6_VariantFromValue /
+        //   vb6_VariantToString 按目标类型收敛 (与 Fix 110w CallByName 同口径)。
 
         if (node.positional.size() == 1) {
 
@@ -61,7 +83,22 @@
 
             std::string index = std::move(lastExpr_);
 
-            lastExpr_ = "vb6_PA_GetLong(" + paName + ", " + index + ")";
+            // 解包函数必须与**调用端装箱用的那个**同族 (cgen_expr_call_named_args.inc
+            // 的 isLongArg/isDoubleArg/looksLikeBSTR 四档)。对不上的读法会静默
+            // 归 0 —— 不报错, 只是值没了, 这正是本条缺陷当初难查的原因。
+            std::string paGetFn37 = "vb6_PA_GetVariant";   // Variant/Object/未声明 → 原样取整只 VARIANT
+            if (paElemType == Vb6Type::String) {
+                paGetFn37 = "vb6_PA_GetBSTR";
+            } else if (paElemType == Vb6Type::Double || paElemType == Vb6Type::Single
+                       || paElemType == Vb6Type::Currency) {
+                paGetFn37 = "vb6_PA_GetDouble";
+            } else if (paElemType == Vb6Type::Long || paElemType == Vb6Type::Integer
+                       || paElemType == Vb6Type::Byte || paElemType == Vb6Type::Boolean
+                       || paElemType == Vb6Type::LongLong) {
+                paGetFn37 = "vb6_PA_GetLong";
+            }
+
+            lastExpr_ = paGetFn37 + "(" + paName + ", " + index + ")";
 
         } else {
 
@@ -300,16 +337,28 @@
             std::string ndArr = "(vb6_SafeArrayND*)" + arrName;
             lastExpr_ = "VB6_SA_ND_AT3(" + elemCType + ", " + ndArr + ", " + idx0 + ", " + idx1 + ", " + idx2 + ")";
         } else {
-            // 4+维: 通用通过vb6_SafeArrayND_Offset + 直接指针访问
+            // 4 秩及以上 (VB6 到 60): 一律交 VB6_SA_ND_ATN —— 秩数与**全部**下标一次交全。
+            // 以前这一条拼的是 `(int[]){indices[0], indices[1]}`(只塞两个) 却按 actualDimCount
+            // 交给 vb6_SafeArrayND_Offset ⇒ 秩 >=4 时读的是 indices[2]/[3] 那两块栈上垃圾,
+            // 偏移成了垃圾再拿去寻址: 实测 `Dim a4(1 To 2, 1 To 2, 1 To 2, 1 To 2)` **在范围内**
+            // 也当场 0xC0000005 (x86/x64 同形)，而 1/2/3 秩各 0 错位。
+            // 秩数取「源码写了几枚下标」而不是 actualDimCount: 两者不等时以前是静默少传，
+            // 现在交给运行期按 dimCount 问一句 (交回错误 9，不再拿越界的下标去寻址)。
             std::vector<std::string> indices;
             for (auto& arg : node.positional) {
                 emitExpr(*arg);
                 indices.push_back(std::move(lastExpr_));
             }
-            // 构建indices数组 + offset计算
-            std::string offVar = "_ndoff_" + std::to_string(tempCounter_++);
-            c_.emitLine("int " + offVar + " = vb6_SafeArrayND_Offset(" + arrName + ", " + std::to_string(actualDimCount) + ", (int[]){" + indices[0] + ", " + indices[1] + "});");
-            lastExpr_ = "((" + elemCType + "*)(((char*)" + arrName + "->data) + " + offVar + "))[0]";
+            std::string idxList;
+            for (size_t d = 0; d < indices.size(); d++) {
+                if (d) idxList += ", ";
+                idxList += "(int32_t)(" + indices[d] + ")";
+            }
+            lastExpr_ = "VB6_SA_ND_ATN(" + elemCType + ", (vb6_SafeArrayND*)" + arrName +
+                        ", " + std::to_string(indices.size()) +
+                        ", ((const int32_t[]){" + idxList + "}))";
+            // 最外层那对括号不是装饰: 预处理器按顶层逗号切宏实参, `{a, b, c}` 里的花括号
+            // 挡不住它 —— 少了这对括号就是 cl C4002 "VB6_SA_ND_ATN 参数过多"(实测 P4.bas)。
         }
         return;
     }

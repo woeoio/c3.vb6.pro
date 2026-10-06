@@ -157,6 +157,14 @@ vb6_ComObject* vb6_ComObject_FromBorrowedInstance(const vb6_CoClassDesc* desc, v
 // Fix 099: 按类变量名 (VB6 模块名) 在 g_vb6_coclasses[] 中查描述, 未命中返回 NULL.
 const vb6_CoClassDesc* vb6_FindCoClassDesc(const char* classVariable);
 
+// Fix <vbeclipse> rev30: **裸工程类实例 → coclass 描述** 的反查。
+// cgen 在每个类工厂 (`vb6_cls_X_New`) 里登记一次, 使晚绑定调用点传进来的
+// `vb6_cls_X*` 能被认出来 —— 详见 vb6comserver_obj.c 里那张表的完整论证
+// (症状: `vb6_ComCall(裸实例, …)` 恒返回 VT_EMPTY, 因为首字段 __comObj 是 NULL,
+//  `vb6_ComIsDispatchable` 判否 ⇒ GetIDsOfNames 失败)。未登记 ⇒ 返回 NULL。
+void vb6_RegisterProjectClassInstance(void* inst, const vb6_CoClassDesc* desc);
+const vb6_CoClassDesc* vb6_FindProjectClassDesc(const void* inst);
+
 // Fix 099: 从 IDispatch 取回 VB6 实例裸指针; 非本 RTL 产出的对象返回 NULL.
 void* vb6_ComObject_GetInstance(void* pdisp);
 

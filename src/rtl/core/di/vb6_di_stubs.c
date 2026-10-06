@@ -382,3 +382,52 @@ intptr_t __stdcall vb6_di_K32GetProcessMemoryInfo(intptr_t hProcess, void* ppmc,
     if (pfn) return (intptr_t)pfn((HANDLE)(uintptr_t)hProcess, ppmc, (DWORD)cb);
     return 0;
 }
+
+/* 账 #201 三枚手写单桩 —— ucTreeMaps (Charts 2020 的字体内存资源) 编译面全清之后卡在链接期的
+   三条 LNK2019。为什么生成器没发它们：`AddFontMemResourceEx` 那一形的第三参在真源码里写的是
+   `ByRef DESIGNVECTOR`（无 As ⇒ Variant），落在生成器的"形状不定就跳过"那一档；GDI+ 那两枚
+   的名字里带 Font 会被路由到 text 那一族，但当时那一次会话没引用到 ⇒ 定义集里就是没有。
+   照本文件既有的规矩：**不重跑 gen_di_stubs**（它按当次会话整文件重写，会撤掉别人的桩）。
+
+   AddFontMemResourceEx 的第三参刻意交 NULL 而不是把那个 vb6_VARIANT* 转手给 GDI：
+   VB6 那一形 `AddFontMemResourceEx(.bvData(0), n, 0&, cnt)` 写 0& 的意思是"没有 design vector"，
+   而 Win32 对这一意的拼法就是 NULL；把 variant 的地址当 PDWORD 交进去，GDI 读到的是
+   VARIANT 的头两个字（VT_I4 那一串），比 NULL 与"真 design vector"都更像东西 —— 那是伪造。
+   gdiplus 那两枚走 LoadLibrary+GetProcAddress（gdiplus.h 是 C++ only，本仓的 Declare 一律
+   不要求导入库），解析不到时回 GpStatus 的 InvalidParameter=2，与 gdiplus 族生成桩同形。 */
+
+static void* vb6_di_gdiplus_hand_proc(const char* name) {
+    static HMODULE mod = NULL;
+    if (mod == NULL) { mod = LoadLibraryA("gdiplus.dll"); }
+    return (mod != NULL) ? (void*)GetProcAddress(mod, name) : NULL;
+}
+
+typedef HANDLE (WINAPI* vb6_di_AddFontMemResourceEx_fn)(const void*, DWORD, const DWORD*, DWORD*);
+intptr_t __stdcall vb6_di_AddFontMemResourceEx(void* pFont, intptr_t cbFont, void* pdv, int32_t* pcFonts) {
+    static vb6_di_AddFontMemResourceEx_fn pfn = NULL;
+    if (!pfn) {
+        HMODULE h = GetModuleHandleW(L"gdi32.dll");
+        if (!h) h = LoadLibraryW(L"gdi32.dll");
+        if (h) pfn = (vb6_di_AddFontMemResourceEx_fn)GetProcAddress(h, "AddFontMemResourceEx");
+    }
+    (void)pdv;                                  /* 见上：调用方那个 0& 的语义就是 NULL */
+    if (!pfn) return 0;                         /* 与 VB6 一致: 失败回 0, 调用方自己判 */
+    return (intptr_t)(uintptr_t)pfn((const void*)(uintptr_t)pFont, (DWORD)cbFont, NULL,
+                                    (DWORD*)pcFonts);
+}
+
+typedef intptr_t (WINAPI* vb6_di_GdipNewPrivateFontCollection_fn)(void*);
+intptr_t __stdcall vb6_di_GdipNewPrivateFontCollection(int32_t* mFontCollection) {
+    vb6_di_GdipNewPrivateFontCollection_fn fn =
+        (vb6_di_GdipNewPrivateFontCollection_fn)vb6_di_gdiplus_hand_proc("GdipNewPrivateFontCollection");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn((void*)mFontCollection);
+}
+
+typedef intptr_t (WINAPI* vb6_di_GdipPrivateAddMemoryFont_fn)(void*, const void*, int);
+intptr_t __stdcall vb6_di_GdipPrivateAddMemoryFont(intptr_t mFontCollection, void* mMemory, intptr_t mLength) {
+    vb6_di_GdipPrivateAddMemoryFont_fn fn =
+        (vb6_di_GdipPrivateAddMemoryFont_fn)vb6_di_gdiplus_hand_proc("GdipPrivateAddMemoryFont");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn((void*)(uintptr_t)mFontCollection, (const void*)mMemory, (int)mLength);
+}

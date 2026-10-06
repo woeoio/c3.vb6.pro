@@ -1,4 +1,5 @@
 #include "backend/cgen.hpp"
+#include "semantics/interface_sig.hpp"  // ifaceLower (Fix <vbeclipse>: 接口桩槽键)
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -314,6 +315,8 @@ void CCodeGen::visit(PropertyDecl& node) {
             }
         }
     }
+    // 账 #179: 控件代码运行在自己的宿主上下文里 (与下面的 PopInstance 成对)。
+    if (ucCtxScoped()) c_.emitLine("vb6_UC_PushInstance((void*)me);");
     emitStmtList(node.body);
 
     // Fix <vbeclipse>: Property 的统一出口 + **缺失的错误状态恢复**。
@@ -337,6 +340,9 @@ void CCodeGen::visit(PropertyDecl& node) {
 
     // tB Interface B05: 接口变量持有引用, 正常出口处经槽 Release
     emitIvrefScopeRelease();
+
+    // 账 #179: 与体首 PushInstance 成对 (Property Get/Let/Set 三条路都落到这里)
+    if (ucCtxScoped()) c_.emitLine("vb6_UC_PopInstance();");
 
     // Property Get: 隐式返回 vb6_ret_<propName>
     if (node.propKind == ProcKind::PropertyGet && node.returnType) {
@@ -436,6 +442,25 @@ std::string CCodeGen::makePropertySignature(PropertyDecl& node) {
 // 名字不同 (vb6_SchemeWinXP_prop_get_BackColor vs vb6_IScheme_prop_get_BackColor),
 // 不冲突 —— 走的是"接口自带默认实现"这条独立通道, 与实现类无关.
 // 与 vb6rtl_userctl.h:56 既有口径一致: 无容器/无实现时返回空值即可满足编译链接.
+//
+// Fix <vbeclipse>: 上面那条"与实现类无关"是**错的** —— 调用点
+// `vb6_IScheme_prop_get_BackColor(m_Scheme)` 传进来的 `me` 通常**就是**某个实现类
+// 实例 (ucPerspective 里 `Set m_Scheme = New SchemeWinXP`, 全局共享同一个变量)。
+// 桩若恒返回零值, `m_Scheme.BackColor` / `.EditorAreaBackColor` / `.FrameColor` 一律
+// 读到 0 = 纯黑, 而 SchemeWinXP 里写的是 RGB(145,155,156) 这类值。实测 play78:
+// 24 次 SetBackColor 里 17 次 color=000000, 左侧停靠面板 (UC宿主/ViewArea/Edit)
+// 整片纯黑 99%, 右边同类控件却是白的 —— 差别只在配色读到 0 还是读到真值。
+//
+// VB6 语义: 接口的 `Property Get` 既是"接口自带默认实现", 也是实现类覆写的**入口**
+// —— 通过接口引用调用时必须动态分派到实际实现类。所以桩要先问"me 是谁",
+// 是实现类实例就转调它的槽; 否则才用零值(接口自身实例 / Nothing)。
+//
+// 怎么问: 不能读 `me->__iv_<Iface>` —— 接口自身实例 (vb6_cls_IScheme 只有
+// __comObj + _placeholder) 根本没有那个字段, 读它会越界。也不能用
+// `vb6_iv_from_iv_<Cls>`: 它收的是**薄指针** (&me->__iv_<Iface>, 首字段才是 vt),
+// 而这里拿到的是**实例指针** (首字段是 __comObj), 喂进去永远比不中槽表地址。
+// 用每个实现类新增的 `vb6_iv_thin_of_<Cls>`: 从实例出发按 `me->__iv_<I>.vt` 认类,
+// 非本类实例返回 NULL。
 void CCodeGen::emitIfaceMemberStub(const SubDecl&, const std::string& sig, bool /*returnsValue*/) {
     c_.emitLine(sig + " {");
     c_.emitLine("    (void)me;");
@@ -445,37 +470,97 @@ void CCodeGen::emitIfaceMemberStub(const SubDecl&, const std::string& sig, bool 
 
 void CCodeGen::emitIfaceMemberStub(const FunctionDecl& fn, const std::string& sig, bool) {
     const std::string ret = fn.returnType ? mapTypeRef(fn.returnType.get()) : "vb6_VARIANT";
-    emitIfaceStubBody(sig, ret);
+    // Function 的槽键就是裸成员名 (小写), 不带 get_/put_ 前缀 (见 interfaces_registry.hpp
+    // 的槽键规范)。有形参则不分派 —— 见 emitIfaceStubBody 里的理由。
+    const bool takesArgs = !fn.params.empty();
+    emitIfaceStubBody(sig, ret, ifaceLower(fn.name), takesArgs);
 }
 
 void CCodeGen::emitIfaceMemberStub(const PropertyDecl& pn, const std::string& sig, bool) {
-    if (pn.propKind != ProcKind::PropertyGet) {  // Let/Set 无返回值 → 空操作
-        c_.emitLine(sig + " {");
-        c_.emitLine("    (void)me;");
-        c_.emitLine("}");
-        c_.emitBlank();
+    const char* prefix = pn.propKind == ProcKind::PropertyGet ? "get_"
+                        : pn.propKind == ProcKind::PropertyLet ? "put_"
+                                                                : "putref_";
+    const std::string slot = std::string(prefix) + ifaceLower(pn.name);
+    // Property Get 的形参在 VB6 里只能是索引 (Variant/变参), 本次不分派;
+    // Let/Set 恒有一个 New_Value 形参, 同样不分派 (落零值/空操作, 与修复前一致)。
+    const bool takesArgs = pn.propKind != ProcKind::PropertyGet;
+    if (pn.propKind != ProcKind::PropertyGet) {  // Let/Set 无返回值 → 分派后空操作
+        emitIfaceStubBody(sig, "void", slot, takesArgs);
         return;
     }
     const std::string ret = pn.returnType ? mapTypeRef(pn.returnType.get()) : "vb6_VARIANT";
-    emitIfaceStubBody(sig, ret);
+    emitIfaceStubBody(sig, ret, slot, takesArgs);
 }
 
 // 返回类型零值: 标量/指针统一 `return 0;` (C 里 0 是合法空指针常量);
 // 结构体 (Variant 等) 不能用 0 → 零初始化复合字面量.
-void CCodeGen::emitIfaceStubBody(const std::string& sig, const std::string& retType) {
+// Fix <vbeclipse>: 零值不再是唯一出路 —— 先按"me 是哪个实现类的实例"分派到它的槽,
+// 全部实现类都不是它 (接口自身实例 / Nothing) 才落回零值。
+//
+// 生成的形状 (以 IScheme.BackColor / 实现类 SchemeWinXP 为例):
+//     vb6_ivref_IScheme* h_ = NULL;
+//     void* t_ = vb6_iv_thin_of_SchemeWinXP((void*)me);
+//     if (t_) h_ = (vb6_ivref_IScheme*)t_;
+//     if (h_ && h_->vt && h_->vt->get_backcolor) return h_->vt->get_backcolor(h_);
+//     return 0;
+// 三个守卫缺一不可: thin_of_* 对非本类实例返回 NULL; 槽位可能是 NULL 占位 (契约
+// 缺失时发码留的 NULL, 见 cgen_iface_vtbl.cpp 的 slotFns.push_back("NULL"))。
+void CCodeGen::emitIfaceStubBody(const std::string& sig, const std::string& retType,
+                                 const std::string& slotKey, bool takesArgs) {
     const bool isVoid = (retType == "void");
     const bool isStruct = (retType == "vb6_VARIANT" || retType.compare(0, 7, "struct ") == 0);
+    const std::string ifaceId = cIdent(moduleName_);
+
     c_.emitLine(sig + " {");
+    c_.emitLine("    (void)me;");
+
+    // 实现类名单由 driver 预扫描注入 (接口小写名 → 全部实现类)。空 = 该接口没有
+    // 实现类 (或表未注入) → 直接落零值, 与本次修复前的行为完全一致。
+    //
+    // 只对**无参**槽分派: 槽签名除 self 外还有形参时, 转发要按槽声明逐个重建实参
+    // (ByRef 指针、Optional 的 _has_ 尾标记), 那是 ivForwardArgs 的活。本次针对的
+    // 是 Property Get (IScheme 全是这类 —— 实测 m_Scheme.BackColor /
+    // .EditorAreaBackColor / .FrameColor 都读成 0), 它们都无参; 有参槽仍走零值,
+    // 与修复前一致, 不引入新的错误转发。
+    const std::vector<std::string> impls =
+        takesArgs ? std::vector<std::string>() : allImplementationClasses(moduleName_);
+    if (!slotKey.empty() && !impls.empty()) {
+        // 槽键 → C 标识符 (槽表字段名, 如 get_backcolor)。契约里没有这一席就不分派:
+        // 编出来的 vt->get_xxx 名字不存在, 会在链接期炸。
+        const IfaceView* iv = ivLookupIface(moduleName_);
+        std::string field;
+        if (iv) {
+            const std::string k = ivSlotKeyForMember(*iv, slotKey);
+            if (!k.empty()) field = cIdent(k);
+        }
+        if (!field.empty()) {
+            c_.emitLine("    {");
+            c_.emitLine("        vb6_ivref_" + ifaceId + "* h_ = NULL;");
+            for (const std::string& cls : impls) {
+                c_.emitLine("        {");
+                c_.emitLine("            void* t_ = vb6_iv_thin_of_" + cIdent(cls) + "((void*)me);");
+                c_.emitLine("            if (t_ && !h_) h_ = (vb6_ivref_" + ifaceId + "*)t_;");
+                c_.emitLine("        }");
+            }
+            c_.emitLine("        if (h_ && h_->vt && h_->vt->" + field + ") {");
+            if (isVoid) {
+                c_.emitLine("            h_->vt->" + field + "(h_);");
+                c_.emitLine("            return;");
+            } else {
+                c_.emitLine("            return h_->vt->" + field + "(h_);");
+            }
+            c_.emitLine("        }");
+            c_.emitLine("    }");
+        }
+    }
+
     if (!isVoid) {
-        c_.emitLine(std::string("    (void)me;"));
         if (isStruct) {
             c_.emitLine("    " + retType + " vb6_iface_stub_z_ = {0};");
             c_.emitLine("    return vb6_iface_stub_z_;");
         } else {
             c_.emitLine("    return 0;");
         }
-    } else {
-        c_.emitLine("    (void)me;");
     }
     c_.emitLine("}");
     c_.emitBlank();

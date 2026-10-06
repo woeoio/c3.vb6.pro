@@ -37,6 +37,14 @@ int32_t vb6_InStrVarC(int32_t start, BSTR haystack, vb6_VARIANT needle, int32_t 
 // Fix 093a: InStrB — 字节版 InStr. 实参可为 Byte() 一维数组 (vb6_SafeArray1D*)
 // 或 BSTR; 返回 1 基字节位置 (0=未找到). 此前 RTL 无此符号 → LNK2019.
 int32_t vb6_InStrB(int32_t start, void* haystack, void* needle);
+// Fix <vbeclipse>: B 族字节串函数 (实现 vb6rtl_string.c / vb6rtl_file.c)。
+// 载体口径与 AscB/ChrB 一致: 一个 wchar 存一个字节 (0-255), "按字节"="按 wchar 计数"。
+// InputB 在 vb6rtl_file.c (与 InputString 同处, 读原始字节不经文本解码)。
+// 两个 Input* 形参序都是 (count, filenumber), 与 cgen 发射的 VB6 源码序一致。
+BSTR vb6_LeftB(BSTR s, int32_t n);
+BSTR vb6_RightB(BSTR s, int32_t n);
+BSTR vb6_MidB(BSTR s, int32_t start, int32_t len);
+BSTR vb6_InputB(int32_t count, int32_t filenumber);
 BSTR vb6_UCase(BSTR s);
 BSTR vb6_LCase(BSTR s);
 BSTR vb6_Trim(BSTR s);

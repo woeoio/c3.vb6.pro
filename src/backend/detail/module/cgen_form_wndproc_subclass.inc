@@ -99,7 +99,9 @@
             info.hasDblClick = symTab_.lookup(ctrl.controlName + "_DblClick") != nullptr;
             // C29-SL-d: 只有**没有原生 Click 来源**的类型才由这一档补上（排除表与逐条来源
             // 见 controlClickFromNativeNotify 的定义处），否则同一次点击会双发。
+            // 账 #222: UC 的 Click 由事件 sink 供 (那张表由 prelude 登记), 这里不再补一条臂。
             info.hasClick = !controlClickFromNativeNotify(ctrl.controlType) &&
+                            !ucSinkEvents_.count(ctrlElemKey(ctrl.controlName, ctrl.index) + ".click") &&
                             symTab_.lookup(ctrl.controlName + "_Click") != nullptr;
             info.hasMouseHover = symTab_.lookup(ctrl.controlName + "_MouseHover") != nullptr;
             // Fix 185: 控件级 _Paint。原先整个控件家族都没有 WM_PAINT 转发，
@@ -155,7 +157,9 @@
                 info.hasKeyUp = symTab_.lookup(child.controlName + "_KeyUp") != nullptr;
                 info.hasDblClick = symTab_.lookup(child.controlName + "_DblClick") != nullptr;
                 // C29-SL-d: 同顶层那一趟的口径（排除表见 controlClickFromNativeNotify）。
+                // 账 #222: 与顶层那一趟同一条判据 (sink 已供的不再补)。
                 info.hasClick = !controlClickFromNativeNotify(child.controlType) &&
+                                !ucSinkEvents_.count(ctrlElemKey(child.controlName, child.index) + ".click") &&
                                 symTab_.lookup(child.controlName + "_Click") != nullptr;
                 info.hasMouseHover = symTab_.lookup(child.controlName + "_MouseHover") != nullptr;
                 info.hasPaint = (child.controlType == FrmControlType::PictureBox) &&
@@ -175,12 +179,12 @@
 
             // GotFocus (WM_SETFOCUS)
             if (info.hasGotFocus) {
-                std::string fn = cProcName(info.ctrlName + "_GotFocus", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_GotFocus");
                 c_.emitLine("if (msg == WM_SETFOCUS) { extern void " + fn + "(); " + fn + "(); }");
             }
             // LostFocus (WM_KILLFOCUS)
             if (info.hasLostFocus) {
-                std::string fn = cProcName(info.ctrlName + "_LostFocus", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_LostFocus");
                 if (info.hasValidate) {
                 c_.emitLine("if (msg == WM_KILLFOCUS && !GetPropW(hwnd, L\"VB6_ValidateCancel\")) { extern void " + fn + "(); " + fn + "(); }");
             } else {
@@ -190,7 +194,7 @@
             // P20-12: Validate event (WM_KILLFOCUS with CausesValidation + Cancel)
             // Validate fires BEFORE LostFocus when the gaining focus control has CausesValidation=True
             if (info.hasValidate) {
-                std::string fn = cProcName(info.ctrlName + "_Validate", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_Validate");
                 c_.emitLine("// Validate(Cancel As Boolean) - fires before LostFocus");
                 c_.emitLine("if (msg == WM_KILLFOCUS) {");
                 c_.indent();
@@ -222,14 +226,14 @@
                 c_.emitLine("SetPropW(hwnd, L\"VB6_MouseTracked\", (HANDLE)1);");
                 c_.emitLine("vb6_StartMouseTracking((void*)hwnd);");
                 if (info.hasMouseEnter) {
-                    std::string fn = cProcName(info.ctrlName + "_MouseEnter", AccessLevel::Private);
+                    std::string fn = eventHandlerFn(info.ctrlName, "_MouseEnter");
                     c_.emitLine("{ extern void " + fn + "(); " + fn + "(); }");
                 }
                 c_.dedent();
                 c_.emitLine("}");
                 // 如果同时有MouseMove事件，也在这里分发
                 if (info.hasMouseMove) {
-                    std::string fn = cProcName(info.ctrlName + "_MouseMove", AccessLevel::Private);
+                    std::string fn = eventHandlerFn(info.ctrlName, "_MouseMove");
                     c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
                     c_.emitLine("if (wp & MK_LBUTTON) vb6_button |= 1; if (wp & MK_RBUTTON) vb6_button |= 2; if (wp & MK_MBUTTON) vb6_button |= 4;");
                     c_.emitLine("if (wp & MK_SHIFT) vb6_shift |= 1; if (wp & MK_CONTROL) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
@@ -242,7 +246,7 @@
                 c_.indent();
                 c_.emitLine("RemovePropW(hwnd, L\"VB6_MouseTracked\");");
                 if (info.hasMouseLeave) {
-                    std::string fn = cProcName(info.ctrlName + "_MouseLeave", AccessLevel::Private);
+                    std::string fn = eventHandlerFn(info.ctrlName, "_MouseLeave");
                     c_.emitLine("{ extern void " + fn + "(); " + fn + "(); }");
                 }
                 c_.dedent();
@@ -250,7 +254,7 @@
                 if (info.hasMouseHover) {
                     c_.emitLine("if (msg == WM_MOUSEHOVER) {");
                     c_.indent();
-                    std::string hfn = cProcName(info.ctrlName + "_MouseHover", AccessLevel::Private);
+                    std::string hfn = eventHandlerFn(info.ctrlName, "_MouseHover");
                     c_.emitLine("{ extern void " + hfn + "(); " + hfn + "(); }");
                     c_.dedent();
                     c_.emitLine("}");
@@ -259,7 +263,7 @@
                 // 只有MouseMove没有MouseEnter/Leave
                 c_.emitLine("if (msg == WM_MOUSEMOVE) {");
                 c_.indent();
-                std::string fn = cProcName(info.ctrlName + "_MouseMove", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_MouseMove");
                 c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
                 c_.emitLine("if (wp & MK_LBUTTON) vb6_button |= 1; if (wp & MK_RBUTTON) vb6_button |= 2; if (wp & MK_MBUTTON) vb6_button |= 4;");
                 c_.emitLine("if (wp & MK_SHIFT) vb6_shift |= 1; if (wp & MK_CONTROL) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
@@ -271,7 +275,7 @@
 
             // MouseDown
             if (info.hasMouseDown) {
-                std::string fn = cProcName(info.ctrlName + "_MouseDown", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_MouseDown");
                 c_.emitLine("if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
@@ -286,7 +290,7 @@
             }
             // MouseUp
             if (info.hasMouseUp) {
-                std::string fn = cProcName(info.ctrlName + "_MouseUp", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_MouseUp");
                 c_.emitLine("if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
@@ -302,7 +306,7 @@
 
             // KeyPress (WM_CHAR)
             if (info.hasKeyPress) {
-                std::string fn = cProcName(info.ctrlName + "_KeyPress", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_KeyPress");
                 c_.emitLine("if (msg == WM_CHAR) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keyascii = (int16_t)(unsigned char)wp;");
@@ -312,7 +316,7 @@
             }
             // KeyDown (WM_KEYDOWN)
             if (info.hasKeyDown) {
-                std::string fn = cProcName(info.ctrlName + "_KeyDown", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_KeyDown");
                 c_.emitLine("if (msg == WM_KEYDOWN) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keycode = (int16_t)wp; int16_t vb6_shift = 0;");
@@ -323,7 +327,7 @@
             }
             // KeyUp (WM_KEYUP)
             if (info.hasKeyUp) {
-                std::string fn = cProcName(info.ctrlName + "_KeyUp", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_KeyUp");
                 c_.emitLine("if (msg == WM_KEYUP) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keycode = (int16_t)wp; int16_t vb6_shift = 0;");
@@ -334,7 +338,7 @@
             }
             // P1-13修复: DblClick (WM_LBUTTONDBLCLK)
             if (info.hasDblClick) {
-                std::string fn = cProcName(info.ctrlName + "_DblClick", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_DblClick");
                 // C29-SL-n（账 #141）: VB6 的签名是 `Sub X_DblClick(Cancel As Integer)`，
                 // 而这一条 arm 以前**写死无参** ⇒ 按标准签名写的处理器在产物里撞
                 // `C2198: 用于调用的参数太多`（实测：声明是 `static void vb6_sldM6_DblClick(int16_t* Cancel)`，
@@ -356,7 +360,7 @@
             // 只发给**没有原生 Click 来源**的控件（那批由 BN_CLICKED / *_SELCHANGE /
             // TCN_SELCHANGE 供，见 controlClickFromNativeNotify），否则一次点击双发。
             if (info.hasClick) {
-                std::string fn = cProcName(info.ctrlName + "_Click", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_Click");
                 c_.emitLine("if (msg == WM_LBUTTONUP) { extern void " + fn + "(); " + fn + "(); }");
             }
 
@@ -367,10 +371,14 @@
 
             // Fix 185: 控件级 _Paint 派发 (PictureBox)。DC 用窗口属性传给
             // vb6_ControlPrint/vb6_ControlCls —— VB6 的 Print 在 _Paint 里画的正是
-            // 这次 BeginPaint 拿到的 DC。必须 return 0: 否则消息落到原 STATIC 过程
-            // 再 BeginPaint 一次，并且用户画的内容会被它的默认绘制覆盖。
+            // 这次 BeginPaint 拿到的 DC。
+            // 账 #185 把画的**序**也定在这里: 本层是最外层 (发码的 install 晚于 RTL 建窗时
+            // 那趟自绘子类), 所以 BeginPaint/EndPaint 只有这一处; 先把同一个 DC 经
+            // VB6_PaintDC 交给下面那层画表面 (BackColor + Picture), 再抬用户的 _Paint,
+            // 用户笔画落在表面之上 —— 与 VB6 一致。反过来 (先抬 _Paint 再转调) 会被表面盖掉。
+            // 必须 return 0: 尾巴上那句转调会把 WM_PAINT 第二次交给下面那层。
             if (info.hasPaint) {
-                std::string fn = cProcName(info.ctrlName + "_Paint", AccessLevel::Private);
+                std::string fn = eventHandlerFn(info.ctrlName, "_Paint");
                 c_.emitLine("if (msg == WM_PAINT) {");
                 c_.indent();
                 c_.emitLine("PAINTSTRUCT vb6_ps;");
@@ -378,6 +386,8 @@
                 c_.emitLine("if (vb6_hdc) {");
                 c_.indent();
                 c_.emitLine("SetPropW(hwnd, L\"VB6_PaintDC\", (HANDLE)vb6_hdc);");
+                c_.emitLine("{ WNDPROC vb6_below = (WNDPROC)vb6_GetOriginalWndProc((void*)hwnd);");
+                c_.emitLine("  if (vb6_below) CallWindowProcW(vb6_below, hwnd, msg, wp, lp); }");
                 c_.emitLine("{ extern void " + fn + "(); " + fn + "(); }");
                 c_.emitLine("RemovePropW(hwnd, L\"VB6_PaintDC\");");
                 c_.emitLine("EndPaint(hwnd, &vb6_ps);");

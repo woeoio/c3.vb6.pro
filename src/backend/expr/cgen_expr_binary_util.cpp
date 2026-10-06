@@ -1,4 +1,4 @@
-#include "backend/cgen.hpp"
+﻿#include "backend/cgen.hpp"
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -236,7 +236,16 @@ std::string CCodeGen::controlPropValueExpr(const std::string& writeFn,
         || writeFn.find("SetMenuCaption") != std::string::npos) {
         return wrapToBSTR(valExpr, valueNode);
     }
+    // Fix <vbeclipse> 2026-10-06: Picture 属性写遇到 Variant 载体实参 (如
+    // `Set imgA.Picture = LoadResPicture(...)` — LoadRes* 实装后返回 vb6_VARIANT)
+    // 时按对象解包, 与赋值路 (Fix 038b-6 名单) 同口径; 否则 C2172 "实参不是指针"。
+    if (writeFn == "vb6_SetControlPicture" || writeFn == "vb6_SetControlPictureFromCom") {
+        if (cExprIsVariant(valExpr)) {
+            return "vb6_VariantToObjectVal(" + valExpr + ")";
+        }
+    }
     return valExpr;
+
 }
 
 

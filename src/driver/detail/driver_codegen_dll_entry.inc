@@ -43,6 +43,7 @@
         comEntryCgen.setDesignerFiles(&frmFiles_);  // Fix 112
         comEntryCgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static
         comEntryCgen.setInterfaceImplementers(&ifaceImplementersMap);  // P6.4+: 接口唯一实现类映射
+        comEntryCgen.setInterfaceAllImplementers(&ifaceAllImplementersMap);  // Fix <vbeclipse>: 接口全部实现类 (桩分派用)
         comEntryCgen.setDefaultInstanceClasses(&defaultInstanceClasses);  // P6.4+: 类模块默认实例
         std::vector<SymbolTable*> allSymTabs;
         for (auto& analyzer : analyzers_) {

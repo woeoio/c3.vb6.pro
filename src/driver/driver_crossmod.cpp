@@ -6,6 +6,7 @@
 #include "driver/driver.hpp"
 #include "common/diagnostics.hpp"
 #include "ast/ast.hpp"
+#include "ast/ast_visitor.hpp"
 #include "semantics/semantic_analyzer.hpp"
 #include "semantics/interface_sig.hpp"   // tB Inherits B09b: ifaceLower (类链键口径)
 #include <iostream>
@@ -13,6 +14,87 @@
 #include <unordered_set>
 
 namespace vb6c3 {
+
+// === 阶段3.5a: 被 AddressOf 取址的过程 = Win32/COM 回调 (账 #184) ===
+// 扫每个模块的 AST, 把**未绑定委托类型**的 AddressOf 目标解析到定义模块, 在定义
+// 模块的符号与所有引用它的模块里一起置 Symbol::addressOfCallback。cgen 见到标记
+// 就在定义模块另发一枚 __stdcall 转发桩, AddressOf 站点取桩地址而非本体地址。
+// 口径放在这里而不是语义层: 目标可能定义在别的模块, 必须等 stage 3.5 把
+// isExternal/sourceModule 灌完才认得出归属。
+namespace {
+class AddressOfCollector : public ASTVisitor {
+public:
+    std::vector<std::string> names;   // 原样 VB 名, 可能带 `Mod.` 前缀
+    void visit(AddressOfExpr& node) override {
+        // 委托形 (绑定了 Delegate 类型) 已有按委托约定生成的桩, 不动它。
+        if (node.delegateTypeName.empty()) names.push_back(node.funcName);
+    }
+};
+} // namespace
+
+void Driver::markAddressOfCallbacks() {
+    // 注: marked 数的是**符号副本** (内层那圈对每个模块的符号表各 +1: 定义模块一份 +
+    // 每个引用模块的外部副本一份), 不是过程个数 —— 2026-10-05 实测 VBFlexGridDemo:
+    // 源码里去重后有 37 个 AddressOf 目标名, 这一行报 49。留着当"这条路走没走"的信号
+    // 足够; 精确去重 (按过程名归并再报数) 记进台账 §C, 下轮有别的源码刀时顺手改。
+    size_t marked = 0;
+    for (size_t i = 0; i < modules_.size(); i++) {
+        if (!modules_[i] || i >= analyzers_.size() || !analyzers_[i]) continue;
+        AddressOfCollector col;
+        traverseAST(*modules_[i], col);
+        for (const std::string& raw : col.names) {
+            std::string mod = raw, fn = raw;
+            size_t dot = fn.find('.');
+            bool qualified = (dot != std::string::npos);
+            if (qualified) { mod = raw.substr(0, dot); fn = raw.substr(dot + 1); }
+
+            // 归属模块: 显式前缀 > 跨模块注入的 sourceModule > 本模块
+            size_t defIdx = i;
+            std::string defModLower;
+            // 过程符号可能在模块作用域, 也可能只有全局作用 (单模块工程就是这个形状)
+            // —— 与 visit(AddressOfExpr) 那一路用同一套两段查找。
+            SymbolTable& ownTab = analyzers_[i]->symbolTable();
+            Symbol* own = ownTab.lookupModule(fn);
+            if (!own) own = ownTab.lookup(fn);
+            if (own && own->isExternal && !own->sourceModule.empty())
+                defModLower = Symbol::toLower(own->sourceModule);
+            if (qualified) defModLower = Symbol::toLower(mod);
+
+            for (size_t k = 0; k < modules_.size(); k++) {
+                if (modules_[k] && Symbol::toLower(modules_[k]->moduleName) == defModLower)
+                    defIdx = k;
+            }
+            Module* dm = modules_[defIdx].get();
+            // 只接**标准模块**的过程: 类/窗体成员的本体签名多一个 me, 桩造不出
+            // "OS 传 me" 那一步 ⇒ 维持原样 (取本体地址), 另账处理。
+            if (!dm || dm->isClassModule || dm->isFormModule) continue;
+
+            // 定义模块那份 + 名字与模块都对得上的外部副本一起置位
+            for (size_t j = 0; j < analyzers_.size(); j++) {
+                if (!analyzers_[j]) continue;
+                SymbolTable& jt = analyzers_[j]->symbolTable();
+                Symbol* s = jt.lookupModule(fn);
+                if (!s) s = jt.lookup(fn);      // 同 visit(AddressOfExpr) 的两段查找
+                if (!s) continue;
+                if (j != defIdx &&
+                    !(s->isExternal && Symbol::toLower(s->sourceModule) ==
+                      Symbol::toLower(dm->moduleName)))
+                    continue;
+                if (s->kind != SymbolKind::Sub && s->kind != SymbolKind::Function) continue;
+                // 只有**真变体**的 C 名带 _ov 指纹后缀 (与 visit(AddressOfExpr) 算出的名字
+                // 不同源) ⇒ 本刀不接; 单签名的 overloadFp 是算出来的指纹, 不入此列。
+                if (s->isOverloadVariant) continue;
+                if (!s->addressOfCallback) { s->addressOfCallback = true; marked++; }
+            }
+        }
+    }
+    if (marked) {
+        std::cerr << "C3: AddressOf callback procs: " << marked
+                  << " (__stdcall thunks emitted; only x86 observes the convention)"
+                  << std::endl;
+    }
+}
+
 
 // === 跨模块符号链接 ===
 // 遍历每个模块的符号表，查找未定义的标识符，在其他模块的Public符号中查找匹配

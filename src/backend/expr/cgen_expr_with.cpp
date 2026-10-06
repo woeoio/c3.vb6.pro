@@ -83,6 +83,31 @@ void CCodeGen::visit(WithMemberExpr& node) {
             }
             return;
         }
+        // 账 #196: With 块里的**一个实参方法** —— `With picA : .TextHeight(Text)`。
+        // 同一条 Fix 090s 协议：交裸名 + pendingChainObj_，由调用点把 With 入口那枚 HWND
+        // **前置**到实参表前面（`vb6_ControlTextHeight((void*)_vb6_with_0, text)`，见
+        // cgen_expr_call_com_bind.inc 的 classMethodObjArg → cgen_expr_call_opt_pad.inc 的拼接）。
+        // 只有带括号那一形有实参表，所以这里只看 asCallCallee_；没进这一支的成员继续往下走。
+        std::string oaFnW = asCallCallee_ ? controlOneArgMethod(info.ctrlType, memLower)
+                                          : std::string();
+        if (!oaFnW.empty()) {
+            pendingChainObj_ = "(void*)" + tempVar;
+            lastExpr_ = oaFnW;
+            return;
+        }
+        // 账 #196 第三条: With 块里那枚控件的 `ScaleX`/`ScaleY`（三个实参）。以前这一形落到下面
+        // 那条"未知属性"兜底 ⇒ 发成 `_vb6_with_N.ScaleX(...)` = **编译不过**（#150 同一族，
+        // 实测读数 `_vb6_with_2.ScaleX(1440, 1, 3)` + VB4001）。
+        // 与零/一实参那两形唯一的差别是: 这一对的换算**不吃接收者句柄**（两个单位都是显式参数），
+        // 所以这里刻意**不**交 pendingChainObj_ —— 调用点只在它非空时前置 this，留空正好得到
+        // `vb6_ScaleUnitX(1440, 1, 3)` 这个形状（见 cgen_expr_call_opt_pad.inc 的 classMethodObjArg）。
+        std::string scFnW = asCallCallee_ ? controlScaleMethod(info.ctrlType, memLower)
+                                          : std::string();
+        if (!scFnW.empty()) {
+            pendingChainObj_.clear();
+            lastExpr_ = scFnW;
+            return;
+        }
         diag_.warn(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
             std::string("P17.1: Unknown control property '.'") + node.memberName + "' in With block");
         lastExpr_ = tempVar + "." + cIdent(node.memberName);
@@ -257,7 +282,7 @@ void CCodeGen::visit(WithMemberExpr& node) {
             if (memLower == "number")      { lastExpr_ = "vb6_ErrNumber()";      return; }
             if (memLower == "description") { lastExpr_ = "vb6_ErrDescription()"; return; }
             if (memLower == "source")      { lastExpr_ = "vb6_ErrSource()";      return; }
-            if (memLower == "lastdllerror") { lastExpr_ = "GetLastError()";       return; }
+            if (memLower == "lastdllerror") { lastExpr_ = "vb6_ErrLastDllError()";       return; }
             if (memLower == "helpfile")    { lastExpr_ = "(BSTR)0";              return; }
             if (memLower == "helpcontext") { lastExpr_ = "0";                    return; }
             if (memLower == "clear")       { lastExpr_ = "vb6_ErrClear()";       return; }

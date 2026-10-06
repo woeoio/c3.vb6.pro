@@ -100,8 +100,16 @@ void* vb6_CtrlArr_Load(vb6_CtrlArr* arr, int index, void* hParent, void* hInstan
     );
 
     if (hNew) {
-        HFONT hFont = (HFONT)SendMessage(hTemplate, WM_GETFONT, 0, 0);
-        if (hFont) SendMessage(hNew, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
+        // 账 #204: 模板的字体也从那一处出口问 —— 裸 `WM_GETFONT` 对 STATIC 那一类模板恒回 NULL，
+        // 外面那句 `if (hFont) SendMessage(...)` 就会整步跳过，新窗口连一次 WM_SETFONT 都没收到。
+        // 发给新窗口之后同样要存进槽位（新窗口自己也是 STATIC 那一类的话，下一读又是 NULL）。
+        // ⚠ 这一条**运行路今天不可达**：`vb6_CtrlArr_Load` 全仓零调用者（发码侧还没接 `Load <数组>(n)`
+        // 那一形，2026-10-05 grep 证），所以这里是**口径统一**、不是产品修复，也别拿它写判据。
+        HFONT hFont = vb6_ControlFont(hTemplate);
+        if (hFont) {
+            SendMessage(hNew, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(FALSE, 0));
+            vb6_ControlFontStore(hNew, hFont);
+        }
         vb6_CtrlArr_SetAt(arr, index, (void*)hNew);
     }
     return (void*)hNew;

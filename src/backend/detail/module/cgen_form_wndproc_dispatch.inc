@@ -11,8 +11,8 @@
         // ID 口径与创建循环一致（跳过 Menu 与没有 Win32 窗口类的控件，DFS 顺序同步）。
         auto emitFocusArms158 = [&](const FrmControl& ctrl, int focusId) {
             int ctrlId = focusId;
-            std::string gotFn = cProcName(ctrl.controlName + "_GotFocus", AccessLevel::Private);
-            std::string lostFn = cProcName(ctrl.controlName + "_LostFocus", AccessLevel::Private);
+            std::string gotFn = eventHandlerFn(ctrl.controlName, "_GotFocus");
+            std::string lostFn = eventHandlerFn(ctrl.controlName, "_LostFocus");
             bool hasGot = symTab_.lookup(ctrl.controlName + "_GotFocus") != nullptr;
             bool hasLost = symTab_.lookup(ctrl.controlName + "_LostFocus") != nullptr;
             bool hasValidate = symTab_.lookup(ctrl.controlName + "_Validate") != nullptr;
@@ -582,8 +582,8 @@
     for (const auto& ctrl : frmDesc.formControl.children) {
         if (ctrl.controlType == FrmControlType::HScrollBar || ctrl.controlType == FrmControlType::VScrollBar) {
             std::string ctrlHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
-            std::string scrollFn = cProcName(ctrl.controlName + "_Scroll", AccessLevel::Private);
-            std::string changeFn = cProcName(ctrl.controlName + "_Change", AccessLevel::Private);
+            std::string scrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");
+            std::string changeFn = eventHandlerFn(ctrl.controlName, "_Change");
             bool hasScroll = symTab_.lookup(ctrl.controlName + "_Scroll") != nullptr;
             bool hasChange = symTab_.lookup(ctrl.controlName + "_Change") != nullptr;
             c_.emitLine("if (scrollHwnd == (void*)" + ctrlHwnd + ") {");
@@ -601,8 +601,8 @@
     for (const auto& ctrl : frmDesc.formControl.children) {
         if (ctrl.controlType != FrmControlType::Slider) continue;
         std::string slHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
-        std::string slScrollFn = cProcName(ctrl.controlName + "_Scroll", AccessLevel::Private);
-        std::string slChangeFn = cProcName(ctrl.controlName + "_Change", AccessLevel::Private);
+        std::string slScrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");
+        std::string slChangeFn = eventHandlerFn(ctrl.controlName, "_Change");
         bool slHasScroll = symTab_.lookup(ctrl.controlName + "_Scroll") != nullptr;
         bool slHasChange = symTab_.lookup(ctrl.controlName + "_Change") != nullptr;
         if (!slHasScroll && !slHasChange) continue;
@@ -653,7 +653,37 @@
             // CreateWindow 期间就到 — 若照搬 VB6 的 Load→Resize 顺序, 这里会在
             // Form_Load 之前触发 Form_Resize, 模块级对象 (如 cResizer) 还是
             // Nothing (空指针) · 故 Load 完成前跳过, 由 0x7FF0 分支补一次 Resize.
-            c_.emitLine("if (!vb6_formLoaded_" + cIdent(formName) + ") break;");
+            //
+            // Fix <vbeclipse> rev28: 这个门**只在窗体真的有 Form_Load 时**才该存在。
+            // 原来无条件发, 于是**没有 Form_Load 过程的窗体永远过不了这一关**
+            // (vb6_formLoaded_X 只能由 0x7FF0 分支置位, 而那整块也被 formLoadSym
+            //  门住) ⇒ Form_Resize 一次都不跑。实测 play78 (--arch x86, 探针):
+            //  frmViewViews 的 WndProc 只收到 **1 次** WM_SIZE 且 loaded=0,
+            //  此后再无 WM_SIZE ⇒ `frmViewViews.frm:66`
+            //  `tvwViews.Move 0, 0, ScaleWidth, ScaleHeight` 永不执行,
+            //  树控件停在设计期 201x169, 比它 150x387 的窗体还宽 (溢出)。
+            //
+            // VB6 语义: Form_Resize 与 Form_Load **互相独立** —— 没有 Form_Load
+            // 的窗体照样在每次尺寸变化时收到 Form_Resize。所以"等 Load 完成"这个
+            // 前置条件只对**有 Load 可等**的窗体成立。
+            if (symTab_.lookup("Form_Load")) {
+                c_.emitLine("if (!vb6_formLoaded_" + cIdent(formName) + ") break;");
+            }
+            // Fix <vbeclipse> rev28: 排队到消息循环跑, 不同步跑。
+            // WM_SIZE 是 SetWindowPos/MoveWindow 的同步 SendMessage —— 停靠布局里
+            // ucPerspective → ucFolder → ViewArea → 视图窗体 一整串嵌套 Move 全在
+            // 同一个栈里跑完才返回, 此刻各控件才有**最终**尺寸。同步跑 Form_Resize
+            // 就会按中间态摆子控件: 探针实测 frmViewViews 的
+            // `tvwViews.Move 0,0,ScaleWidth,ScaleHeight` 拿到 0x0 ⇒ 树被摆成 0x0。
+            // 与 UC 侧 vb6_UC_QueueDesignResize (rev23) 同一问题的两个面。
+            c_.emitLine("vb6_QueueFormResize(hwnd);  /* Fix <vbeclipse> rev28: defer Form_Resize */");
+            c_.emitLine("break;");
+            c_.dedent();
+            c_.emitLine("}");
+            // 排队消息的接住点: 必须排在 default 之前。
+            c_.emitLine("case VB6_FORM_FR_MSG: {");
+            c_.indent();
+            c_.emitLine("vb6_DrainFormResize(hwnd);");
             c_.emitLine("{ extern void " + resizeFn + "(); " + resizeFn + "(); }");
             c_.emitLine("break;");
             c_.dedent();

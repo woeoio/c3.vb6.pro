@@ -264,6 +264,22 @@
                 if (knownVariantVars_.count(idLower091c)) valIsVar091c = true;
             }
             std::string conv091c = value;
+            // Fix <vbeclipse> rev37: rev37 起 ParamArray 的 Variant 元素按
+            //   `vb6_PA_GetVariant(...)` 取 (按声明类型分派), 它在 LHS 上对应
+            //   `vb6_PA_SetVariant(args, VARIANT*)` —— **要指针**, 不能把值直接塞进去。
+            //   走一个临时 VARIANT 承接 (发射后不释放: SafeArrayPutElement 已深拷贝,
+            //   而栈上 VARIANT 若含堆成员由 VariantClear 负责, 这里跟既有的
+            //   ComPackMissing 同款用法 —— 临时块交给 vb6_PA_SetVariant 消费)。
+            if (kind091c == "Variant") {
+                // 栈上 VARIANT 承接 —— vb6_PA_SetVariant 的第二参要 VARIANT*,
+                // 而 boxToVariant 给的是**值**。SafeArrayPutElement 会深拷贝
+                // (另配一只 BSTR/对象), 所以这里借用栈地址、发射后不额外释放,
+                // 也不调 VariantClear (那会把刚交给 SAFEARRAY 的副本再清一次)。
+                std::string tmp091c = "_pav_" + std::to_string(tempCounter_++);
+                c_.emitLine("{ VARIANT " + tmp091c + " = " + boxToVariant(node.value.get(), value) + ";");
+                c_.emitLine("  vb6_PA_SetVariant(" + args091c + ", (VARIANT*)&" + tmp091c + "); }");
+                return;
+            }
             if (valIsVar091c) {
                 if (kind091c == "Long" || kind091c == "LongPtr") {
                     conv091c = "vb6_VariantToLong(" + value + ")";

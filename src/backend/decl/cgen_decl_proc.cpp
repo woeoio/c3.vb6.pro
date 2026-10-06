@@ -30,22 +30,10 @@ void CCodeGen::visit(SubDecl& node) {
     //   @ _vb6_frmMain_ucPerspective1_OpenEditor+0x19。
     // 这里直接把 AST 形参的 isByVal 置真, 签名与函数体**一起**跟着变 (两处都读它),
     // 不改符号表也不动事件侧, 与 prelude 只发一次前向声明互相自洽。
-    if (ucEventHandlers_.count(Symbol::toLower(node.name)) > 0) {
-        for (auto& prm : node.params) {
-            if (prm && !prm->isParamArray) prm->isByVal = true;
-        }
-        // 体里的 `(*x)` 不是 AST 说了算: cgen_expr_ident_dispatch.inc 是读
-        // `currentProc_->params[i].isByVal` 来决定要不要解一层引用的。只翻 AST 会
-        // 得到"签名 void* Editor + 体里 (*Editor)" ⇒ C2100 非法的间接寻址
-        // (实测 frmMain.c:938/943/948 三条)。所以 proc 符号的形参表同翻。
-        // 该符号是模块作用域的; 事件处理器恒为 Private ⇒ 不进 getPublicSymbols /
-        // 不被跨模块注入, 改动只影响本模块。
-        if (auto* evtSym = symTab_.lookupModuleOverloadByLoc(node.name, node.loc)) {
-            for (auto& pi : evtSym->params) {
-                if (!pi.isParamArray) pi.isByVal = true;
-            }
-        }
-    }
+    // 账 #222: 这段从 visit 里抽成 applyEventHandlerAbi 一处实现 —— 模块级前置声明那一趟与
+    // 定义这一趟翻的必须是同一份 AST, 否则声明按 ByRef、定义按 ByVal, 中间还冒出一份零形参
+    // 声明 (实测 ucProgressCircular: 一枚函数三种形参表 => 1 条 C2084 + 24 条 C2198)。
+    if (ucEventHandlers_.count(Symbol::toLower(node.name)) > 0) applyEventHandlerAbi(node);
 
     std::string sig = makeProcSignature(node);
 
@@ -361,6 +349,8 @@ void CCodeGen::visit(SubDecl& node) {
             }
         }
     }
+    // 账 #179: 控件代码运行在自己的宿主上下文里 (与下面的 PopInstance 成对)。
+    if (ucCtxScoped()) c_.emitLine("vb6_UC_PushInstance((void*)me);");
     emitStmtList(node.body, hasResume_);
 
     // Fix <vbeclipse>: 过程统一出口。Exit Sub 发的 `goto vb6_proc_exit;` 落在这里,
@@ -386,6 +376,7 @@ void CCodeGen::visit(SubDecl& node) {
     emitIvrefScopeRelease();
 
     // 正常退出守卫 - 防止落入dispatch switch
+    if (ucCtxScoped()) c_.emitLine("vb6_UC_PopInstance();");   // 账 #179: 与体首成对
     c_.emitLine("return;");
 
     // P14.1.2: Resume dispatch switch - 仅通过goto可达
@@ -418,6 +409,36 @@ void CCodeGen::visit(SubDecl& node) {
     c_.dedent();
     c_.emitLine("}");
     c_.emitBlank();
+}
+
+
+// 事件处理器的 ABI: 形参一律 ByVal (跨对象边界的回调)。AST 与 proc 符号两处都要翻 ——
+// 只翻 AST 会得到"签名 void* Editor + 体里 (*Editor)" (cgen_expr_ident_dispatch.inc 读的是
+// 符号表里的 isByVal), 实测 frmMain.c 三条 C2100。声明侧与定义侧共用这一处 (账 #222)。
+void CCodeGen::applyEventHandlerAbi(SubDecl& node) {
+    for (auto& prm : node.params) {
+        if (prm && !prm->isParamArray) prm->isByVal = true;
+    }
+    if (auto* evtSym = symTab_.lookupModuleOverloadByLoc(node.name, node.loc)) {
+        for (auto& pi : evtSym->params) {
+            if (!pi.isParamArray) pi.isByVal = true;
+        }
+    }
+}
+
+// 按名字在本模块里找那枚 <控件>_<事件> 处理器: 翻 ABI, 并回答"它的第一形参是不是元素号 Index"
+// (VB6 的控件数组处理器就是这么写的, 与非数组的差别只在这一枚形参)。找不到 = false。
+bool CCodeGen::prepareEventHandlerProc(Module& mod, const std::string& loweredName) {
+    for (auto& d : mod.declarations) {
+        if (!d || d->kind != ASTNodeKind::SubDecl) continue;
+        auto& sub = static_cast<SubDecl&>(*d);
+        if (!sub.typeParams.empty()) continue;          // 泛型模板本体不发码
+        if (Symbol::toLower(sub.name) != loweredName) continue;
+        applyEventHandlerAbi(sub);
+        return !sub.params.empty() && sub.params[0] &&
+               Symbol::toLower(sub.params[0]->name) == "index";
+    }
+    return false;
 }
 
 } // namespace vb6c3

@@ -1,4 +1,72 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-10-06: 新增 Form/Printer 绘图方法家族 vb6forms_draw.c/.h (PSet/Line/
+//   Circle/Point/Cls, 资源 223/224)。此前 Form 级绘图面**完全缺失** —— 只有
+//   Shape/Line 控件的自绘路径, `Form_Paint` 里的 Me.PSet 等落进 COM dispatch
+//   桩 (运行时 no-op)。HDC 不新建: 优先取窗口属性 VB6_PaintDC (WM_PAINT 派发期
+//   宿主 BeginPaint 过的那张), 否则 GetDC —— 与 vb6_ControlDrawDC 同口径。
+// 账 #185: PictureBox/Image 的事件面以前**一次也不响**。RTL 建窗时给 STATIC+SS_BITMAP
+//   装的自绘子类, 和发码为控件事件装的子类, 把原始窗口过程存在**同一个属性名**
+//   (VB6_OrigProc) 上, 而两边都写"属性已存在就不装" ⇒ 后装的那层被静默丢掉。
+//   改: 自绘层换自己的槽位 VB6_ImageOrigProc; 画的序定成「最外层 BeginPaint/EndPaint
+//   一次, DC 经 VB6_PaintDC 交给下面那层画表面, 然后才抬用户的 _Paint」。
+//   改的文件 = vb6forms_picture_prop.c / vb6forms_widget.c (注释) + 发码那一臂。
+// Fix <vbeclipse> rev37: vb6_PA_GetVariant 改返回 vb6_VARIANT (与生成码的
+//   _Generic 装箱口径一致; 原返回 Windows VARIANT 会落到 default: vb6_VariantObject
+//   要 void* ⇒ C2172)。另撤净 P48 临时探针。
+// Fix <vbeclipse> rev35: UC **属性**桥的对象型 setter 改用 vb6_VariantToObjectVal 拆箱。
+//   症状: `ucTabStrip.Add` 六个属性写到最后 `Icon` 时 0xC0000005。旧 thunk 无条件
+//   `(inV)->pdispVal`, 不判 vt —— vt 不是 Dispatch 时读到的是 union 里另一成员
+//   (栈上残留野值), 当 IDispatch 传进 vb6_SetControlPictureFromCom ⇒ 崩。
+//   改动: src/backend/detail/module/cgen_form_uc_props.inc (纯 cgen 侧), 本资源未变。
+//   ⚠ **实测修正(别照旧注释下结论)**: rev35 生效后 Add 的六个属性**全部写通**
+//     (探针 P37 实测顺序 Orientation→ToolTip→ViewId→Icon, Caption/Visible 走宿主内建表),
+//     但进程**仍**以 0xC0000005 结束, 崩点后移到 `SetPic` 内部, 且此时
+//     `OwnPropSet n=Icon vt=9` 配的 `pdispVal` **是非 NULL 的野值**(实测 010FEE6C,
+//     不是先前推断的 NULL)。⇒ 野值来自**调用点侧的实参打包**, 不是桥的拆箱;
+//     已排除: vb6_ComPackObject(NULL) 走 calloc+VariantInit 必得 NULL(P37 复核);
+//     HW_QI 对 IID_IPicture 正确返回 E_NOINTERFACE(包装器不是野值来源)。
+//     下一步: 查 ucTabStrip.Add 的**调用点**如何把 `Optional Icon As Picture`
+//     (省略实参) 打成 VT_DISPATCH + 非 NULL pdispVal。
+// Fix <vbeclipse> rev34: UC 方法桥 thunk 的**对象形参**改用 vb6_VariantToObjectVal
+//   拆箱。`argv[i]` 本身是 `VARIANT*` (vb6_ComGetProp 的返回值), 而原生形参要的是
+//   **对象指针**, 差一层解引用 —— rev31 原样传 `argv[idx]`, 崩在 `Image` 上。
+//   纯 cgen 侧改动 (src/backend/detail/module/cgen_form_uc_methods.inc), 本资源未变。
+// Fix <vbeclipse> rev33: UC 方法桥 thunk 的 `_has_<name>` 标记改为**追加到参数表末尾**
+//   (对齐 makeParamList / cgen_expr_call_opt_pad.inc 的全局约定)。rev31 按形参紧跟插入,
+//   遇到 optional 形参不在末位时整段错位 —— ucTabStrip.Add(ViewId, Caption,
+//   Optional Icon, Optional ToolTipText) 实参变成 (a0,a1,a2,1,a3,1) ⇒ ToolTipText 收到
+//   Icon 位 ⇒ .ToolTip = ToolTipText 拿到 Picture 指针当 BSTR ⇒ 0xC0000005。
+//   纯 cgen 侧改动 (src/backend/detail/module/cgen_form_uc_methods.inc), 本资源未变;
+//   在此登记仅为让 rev32/rev33 的时间线在 rc 顶部连续可读。
+// Fix <vbeclipse> rev32: 新增 vb6_UC_CreateDesignLabel / vb6_UC_CreateDesignImage。
+//   ucTab.ctl 的设计面只有 imgIcon( VB.Image) + lblCaption(VB.Label), 而 ucHostInit
+//   的发射循环只覆盖 TextBox/Timer/PictureBox/限定名 UC ⇒ 两个子控件恒 NULL
+//   (实测: ucCaption/ucTabStrip/ucFolder 各有 1~3 个 CreateDesign*, ucTab = 0)
+//   ⇒ `ucTab.ToolTip` setter `lblCaption.ToolTipText = …` 对 NULL 写属性
+//   ⇒ 0xC0000005, 崩在 ucTabStrip.Add 的 `.ToolTip = ToolTipText`。
+// Fix <vbeclipse> rev30: 裸工程类实例 (`vb6_cls_X*`) 的晚绑定方法直派。
+//   症状链 (探针逐级实测): `vb6_ComCall(Tabs实例, L"Contains", …)` 拿到 **vt=0
+//   (VT_EMPTY)** ⇒ `List.Contains` 恒 0 ⇒ `ucPerspective.ShowView` 遍历 5 个 folder
+//   全部 ContainsView=0 ⇒ 没有 folder 被激活 ⇒ 停靠面板全空。
+//   根因: 裸实例首字段 `__comObj` 恒 NULL ⇒ 无真 vtable ⇒ vb6_ComIsDispatchable 判否
+//   ⇒ GetIDsOfNames 失败。修: cgen 在类工厂登记「实例→coclass desc」, RTL 的
+//   vb6_ComCall 查表后直接调 desc->methods[].invokeFunc (不经 IDispatch)。
+// Fix <vbeclipse> rev29: 窗体 Form_Resize 的**直调**通道 (vb6_RegisterFormResize +
+//   vb6_InvokeFormResize)。探针实测停靠视图窗体一生只收 1 次 WM_SIZE(0x0), rev28 的
+//   case VB6_FORM_FR_MSG 永远等不到 ⇒ Form_Resize 跑 0 次, tvwViews 停在设计期
+//   251x211 比窗体 188x484 还宽。改 PostMessage 也不行: 排队时还在 Form_Load 同步栈里、
+//   不在主消息循环, 消息无人 Dispatch, 且实测堆损坏 0xC0000374 (已回退)。
+//   直调在 vb6_ControlMove 收口处: SetWindowPos 之后 ⇒ 读到终值; 同窗体重入闸防递归;
+//   只有注册过的窗体 HWND 有该属性 ⇒ 原生控件自动跳过。
+// Fix <vbeclipse> rev28: 窗体 Form_Resize 延后到消息循环跑 (WM_SIZE 里只排队)
+//   停靠布局里 ucPerspective → ucFolder → ViewArea → 视图窗体 一整串嵌套 Move 全在
+//   同一个调用栈里跑完才返回 (WM_SIZE 是同步 SendMessage), 此刻各控件才有最终尺寸。
+//   同步跑 Form_Resize 会按中间态摆子控件 —— 实测 frmViewViews 的
+//   `tvwViews.Move 0,0,ScaleWidth,ScaleHeight` 拿到 0x0, 树控件被摆成 0x0。
+//   新增 vb6_QueueFormResize / vb6_DrainFormResize + VB6_FORM_FR_MSG (WM_APP+0x61),
+//   与 UC 侧 rev23 的 vb6_UC_QueueDesignResize 同一问题的两个面。
+//   另: cgen 侧 WM_SIZE 的 "等 Form_Load 完成" 那个门改为**只在真有 Form_Load 时**
+//   才发 —— 否则没有 Form_Load 过程的窗体永远过不了, Form_Resize 一次都不跑。
 // Fix <vbeclipse> <VBFlexGridDemo>: vb6_Clipboard_SetData 加 int32_t format 形参
 //   (VB6 允许 `Clipboard.SetData data, [format]` 二形; format=vbCF* 常量,
 //    2=vbCFBitmap, 3=vbCFMetafile, 8=vbCFDIB, 14=vbCFEMetafile; 0/未指定=Bitmap)。
@@ -23,6 +91,74 @@
 //      ucPerspective.Refresh 的 `l_ucFolder.Move .LeftPos, .TopPos, …`。现走
 //      vb6_ControlMove (缇→像素 + 子窗坐标), 并补 Show/Hide。
 //   修前 play78: 7 个 ucFolder 宿主全停在设计期 569x441、重叠在左上角。
+// Fix <vbeclipse> rev21: UserControl **自有 Public Sub 的按名桥**。
+//   ① vb6forms_controls.h 加 vb6_UcMethodDesc/vb6_UcMethodFn; vb6_UserControlDesc
+//      追加 methods/methodCount 两槽 (旧 cgen 不发 ⇒ C 补 0 ⇒ 逐字节同改动前)。
+//   ② uc_host.c 新增 vb6_UC_OwnMethodCall (先 findByInstance 再 findByHwnd),
+//      uc_hostmodel_call.inc 在**实例归一成 HWND 之前**、且**内建 Refresh 之前**查它
+//      —— 同名时真 VB6 走用户写的那个 (它负责重排子控件, 内建重绘只是顺带)。
+//   ③ cgen_form_uc_methods.inc 为每个 .ctl 发 {名字, argc, fn} 表 + 拆箱 thunk。
+//   修前 play78: 5 处 `vb6_ComCall(ucFolder实例, L"ShowView", …)` 全落进
+//   "未知方法一律空实现" ⇒ ucFolder.ShowView 里 `l_View.View.Visible = True`
+//   从未执行 ⇒ 视图窗体永远 Visible=False ⇒ ViewArea_Resize 的
+//   `If .Visible Then .Move …` 闸门永闭 ⇒ 视图窗体停在 0x0/设计期尺寸
+//   ⇒ 子面板空白。判据: 窗口树里 VB6_Form_frmViewProperties / frmViewTasks = 0x0。
+// [C3_MV22] 临时探针 (排完删): uc_hostmodel_{call,getprop}.inc 打 Move 的调用时刻
+//   实参+前后尺寸、Visible 的 style+读数, 门控 C3_UC_TRACE。
+// Fix <vbeclipse> rev22: **设计期子控件的 Resize 事件**转发。
+//   ① vb6forms_controls.h 加 designResize 槽 —— ⚠ **必须追加在结构体末尾**:
+//      该结构体是布局式初始化, RTL 与 cgen 的字段顺序必须逐字一致。首版把它插在
+//      dblClick 之后/props 之前而 cgen 发在末尾 ⇒ methods/methodCount 错位一整个
+//      指针宽 ⇒ vb6_UC_OwnPropSet 拿到垃圾 propCount ⇒ 实测 av read 0xa (栈
+//      CreateFolder→ComSetProp→Host_SetProp→UC_OwnPropSet)。
+//   ② uc_host.c 加 vb6_UC_DesignCtrlOwner(按 hwnd 反查 UC 实例+槽位名) 与
+//      vb6_UC_RunDesignResize(push/pop + 同控件重入短路 + 深度上限)。
+//   ③ 挂在 uc_host_window.c 的 **WM_SIZE 尾部** (尺寸赋值+resize 之后), 遍历本 UC
+//      各设计期子控件各调一次。**不能挂 vb6_ControlMove** (所有摆位的收口, 看似
+//      最自然) —— `ViewArea.Move` 正是 UserControl_Resize 内部发的, 而那个过程经
+//      WM_SIZE→push→resize→Move 链进来 ⇒ Move 里再跑子控件事件 = 无限递归。
+//      也不能加 `if (g_uc_current) return 0` —— 实测 WM_SIZE 尾部 g_uc_current
+//      仍**非空** (WM_SIZE 是 SetWindowPos 的同步 SendMessage, 跑在 pop 之前),
+//      那道判据等于永不触发。
+//   修前 play78: ucFolder.ctl:529 `ViewArea_Resize` (ViewArea 的 Resize 事件, 是把
+//     视图窗体摆进 ViewArea 的唯一驱动) 只在 Refresh 里被裸调一次, 且那一次在
+//     Form_Load 期 —— 早于任何 WM_SIZE ⇒ 五个 folder 的视图窗体全都只拿到
+//     W=8505 (= ViewArea 设计期宽 8655 - 30 - 2*margin), 停在同一个 567x423。
+//   修后: frmViewHelp 253x219 (容器 253x219)、frmViewSnapshot 778x190 (容器
+//     778x190) —— 视图窗体尺寸**精确等于**各自容器。
+// Fix <vbeclipse> rev25: cgen 给**对象返回型 Property Get** 发桥 (之前只发标量 getter
+//   与对象 setter)。`ucTabStrip.ctl:232` `Public Property Get Tabs() As List` 是对象
+//   返回属性, 当年没桥 ⇒ `vb6_ComGetObjectProp(ViewTabs, "Tabs")` 返 NULL
+//   ⇒ `ucFolder.ContainsView` 里 `vb6_List_Count(NULL)` = -98 ⇒ **对任何 ViewId 恒 False**。
+//   后果链: ShowView 的"该 folder 含此视图吗"判定全不中 ⇒ 落到
+//   `ucPerspective.ctl:2273` 的 not-visible 分支 ⇒ 把视图塞进
+//   `Folders.Item(Folders.Count)`(最后一个 folder) ⇒ frmViewViews / frmViewEvents
+//   抢了 Left_Folder 的位置, 停在别的容器的尺寸上。
+//   装箱必须走 `vb6_ComObject_FromInstance`(包成真 IDispatch, 引用计数随 VARIANT 走),
+//   直接塞裸 `vb6_cls_List*` 会让 VariantClear 把首字段 __comObj 当 vtable 解引用。
+//   ⚠ 判据: getter/setter 是否"对象形"要看**自己那侧**的 vbType 是否空 —— Get 与 Let
+//     是两条符号合并成一行, 只看合并后的 objCType 会让标量 getter 被当对象包。
+// Fix <vbeclipse> rev24: 设计期子控件 Resize 的排队点补到 **vb6_ControlMove**。
+//   rev23 把触发挂在宿主窗口的 WM_SIZE, 只能覆盖"**宿主自己**尺寸变了"。实测
+//   (play78 --arch x86 探针): ucFolder 宿主启动后再没变过尺寸 ⇒ 15 次 Queue /
+//   15 次 Drain 全挤在启动那一段(Drain 行号 50-68 连成一片)就跑完了; 而 ViewArea
+//   的最终尺寸 (567→318/136/425/101) 是**之后**才由 `UserControl_Resize` 里
+//   `ViewArea.Move …` 定下的 —— 那发的是 **ViewArea 自己**的 WM_SIZE, 不冒泡到宿主。
+//   ⇒ `ViewArea_Resize` 全程只读到设计期宽度 567px (= 8505 缇), 视图窗体停 0x0。
+//   修法: 新增 vb6_UC_QueueDesignResizeForCtrl(hwnd) —— 由 vb6_ControlMove 在
+//   **该子控件**尺寸真变了时调 (rev22 曾在这里**直接调用**事件 ⇒ 递归 Move 风暴 /
+//   整窗上下颠倒; 现在只 PostMessage 排队, 真正调用发生在回到消息循环之后, 无栈上重入)。
+//   判据: 视图窗体尺寸 == 其 ViewArea 容器尺寸 (探针打 P3 UserControl_Resize 的
+//   ScaleW: 8535→4800/2070/2070/6405/1545 各不同 ⇒ rev20 的按实例 ScaleWidth 是好的)。
+// Fix <vbeclipse> rev23: 子控件 Resize 事件**排到消息循环**里跑 (SetTimer 一轮)。
+//   rev22 直接在 WM_SIZE尾部跑, 事件确实跑了 (ucFolder 10 次 WM_SIZE、30 次触发),
+//   但拿到的是**设计期**尺寸: `vb6_GetControlWidth(ViewArea)` 同一 hwnd 读出
+//   1515 / 8505 / 6375→8505→9330 三个阶段 —— 因为 WM_SIZE 是 SetWindowPos/MoveWindow
+//   的**同步** SendMessage, 一整串嵌套 Move 全在同一个调用栈里跑完才返回, 而
+//   ViewArea 的最终尺寸 (583/253/778) 来自 ucFolder.ctl `UserControl_Resize` 里
+//   **最后**那句 `ViewArea.Move 20,20,ScaleWidth-30,…`。⇒ `ViewArea_Resize` 按设计期
+//   宽度 Move 视图窗体 (恒 W=8505 = 8655-30-2*margin), 视图窗体停 0x0 / 超出容器。
+//   SetTimer 天然去重(同 id 重置计时器), 一串嵌套 Move 只排一条。
 // Fix <vbeclipse> rev16: Variant **槽位赋值**改"接管"语义 —— 新增
 // vb6_VariantAssign(dst, src) = vb6_VariantClear(dst) + vb6_VariantCopy(dst,&src)
 // (BSTR 另分配 / Dispatch AddRef / x86 DECIMAL 另分配)。
@@ -234,6 +370,14 @@
 136 RCDATA "../rtl/core/vb6rtl/vb6rtl_array.h"
 137 RCDATA "../rtl/core/vb6rtl/vb6rtl_class_com.h"
 138 RCDATA "../rtl/core/vb6rtl/vb6rtl_runtime.h"
+222 RCDATA "../rtl/core/vb6rtl/vb6rtl_crash.h"
+
+// 2026-10-06: Form/Printer 绘图方法家族 (PSet/Line/Circle/Point/Cls)。
+// 此前 Form 级绘图面完全缺失 —— 只有 Shape/Line 控件的自绘路径,
+// `Form_Paint` 里的 Me.PSet 等落进 COM dispatch 桩 (运行时 no-op)。
+// ⚠ 头必须排在 .c 之前 (解包后是平铺目录, 同名 .h 缺失 ⇒ cl 报 C1083)。
+223 RCDATA "../rtl/core/vb6forms/vb6forms_draw.h"
+224 RCDATA "../rtl/core/vb6forms/vb6forms_draw.c"
 
 // vb6forms 家族再细分 (2026-09-17): Picture 属性 / Widget 属性
 139 RCDATA "../rtl/core/vb6forms/vb6forms_picture_prop.c"
@@ -313,3 +457,18 @@
 196 RCDATA "../rtl/core/di/gdiplus/vb6_di_gdiplus_brush_stubs.c"
 197 RCDATA "../rtl/core/di/gdiplus/vb6_di_gdiplus_path_stubs.c"
 205 RCDATA "../rtl/core/di/vb6_di_unknown_stubs.c"
+
+/* objprop bridge re-embed */
+
+/* objprop bridge + timer/formload re-embed 1790903170 */
+
+/* loadform dedup re-embed 1790903414 */
+
+/* nesteduc reapply re-embed 1790913567 */
+
+/* enum-wrap-hostdispatch re-embed 1790913967 */
+
+/* designslot-by-instance re-embed 1790916522 */
+
+/* Fix <vbeclipse> rev20: 新增 vb6_UC_ScaleWidthOf/ScaleHeightOf (按 me 解析实例)
+   re-embed 1790930401 */

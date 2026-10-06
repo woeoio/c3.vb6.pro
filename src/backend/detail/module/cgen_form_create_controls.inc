@@ -112,11 +112,11 @@
                   + " = (vb6_ComIface_Font*)vb6_UC_NewFont();");
         c_.emitLine("  if (" + varName + ") {");
         c_.emitLine("    " + varName + "->Name = vb6_BSTR_FromStr(L\"" + escapeWideCString(nm) + "\");");
-        {
-            char szBuf[64];
-            snprintf(szBuf, sizeof(szBuf), "%.4g", sz);
-            c_.emitLine("    " + varName + "->Size = " + std::string(szBuf) + "f;");
-        }
+        // 账 #188: 这里以前自己 snprintf("%.4g") 再拼 "f" —— 整数字号 (12/14/16…) 拼出来就是
+        // C 里的非法 token `12f` (C2059 bad suffix on number)。VB6 默认字号 8.25 带小数点,
+        // 所以门禁里一直看不见; 带设计期整数字号的工程 (Charts 2020 的 ucChartBar/ucProgressCircular)
+        // 直接编不过。形状归 common/float_literal.hpp 一处, 位数照旧 4 位 (8.25 的写法不变)。
+        c_.emitLine("    " + varName + "->Size = " + floatSingleLiteral(sz, 4) + ";");
         c_.emitLine("    " + varName + "->Weight = " + std::to_string(weight) + ";");
         c_.emitLine("    " + varName + "->Charset = " + std::to_string(charset) + ";");
         c_.emitLine("    " + varName + "->Bold = " + std::to_string(bBold) + ";");
@@ -187,8 +187,17 @@
                 }
             }
 
-            // P24: ListBox.List + ItemData from .frx
-            if (ctrl.controlType == FrmControlType::ListBox) {
+            // P24 / 账 #207: 设计期 List + ItemData from .frx —— **一处出口, 两类控件**。
+            // 以前这一档只认 ListBox，而语料里用同一份 .frx blob 的 **ComboBox 有 17 处**
+            // （Charts 2020 四个 demo 工程的 "Number of Series" 那一类）⇒ 编出来的下拉框是空的，
+            // 而 ucTreeMaps 的 demo 正是拿 `Combo1.ListIndex` 决定画不画 ⇒ 图体空白。
+            // 消息对按控件型取，发出去的 ListBox 那一路文本与改前逐字节相同（护栏靠 A/B）。
+            // 两条创建路都走这里：调用点见 cgen_form_ctrl_style_apply.inc 与 cgen_form_frame_menu.inc。
+            const bool frxIsList = (ctrl.controlType == FrmControlType::ListBox);
+            const bool frxIsCombo = (ctrl.controlType == FrmControlType::ComboBox);
+            if (frxIsList || frxIsCombo) {
+                const char* addMsg = frxIsList ? "LB_ADDSTRING" : "CB_ADDSTRING";
+                const char* setMsg = frxIsList ? "LB_SETITEMDATA" : "CB_SETITEMDATA";
                 auto listIt = ctrl.properties.find("List");
                 bool hasListFromFrx = (listIt != ctrl.properties.end() && listIt->second.type == FrmValueType::FrxReference);
                 FrxListData listData;
@@ -196,14 +205,14 @@
                     listData = FrxReader::readStringList(listIt->second.frxOffset);
                     for (size_t i = 0; i < listData.items.size(); i++) {
                         c_.emitLine("{ wchar_t* vb6_witem = vb6_Utf8ToWide(\"" + escapeCString(listData.items[i]) + "\");");
-                        c_.emitLine("  if (vb6_witem) { SendMessageW((HWND)" + ctrlHwndVar + ", LB_ADDSTRING, 0, (LPARAM)vb6_witem); free(vb6_witem); } }");
+                        c_.emitLine("  if (vb6_witem) { SendMessageW((HWND)" + ctrlHwndVar + ", " + addMsg + ", 0, (LPARAM)vb6_witem); free(vb6_witem); } }");
                     }
                 }
                 auto idataIt = ctrl.properties.find("ItemData");
                 if (idataIt != ctrl.properties.end() && idataIt->second.type == FrmValueType::FrxReference) {
                     auto intData = FrxReader::readIntList(idataIt->second.frxOffset);
                     for (size_t i = 0; i < intData.items.size(); i++) {
-                        c_.emitLine("SendMessageW((HWND)" + ctrlHwndVar + ", LB_SETITEMDATA, " +
+                        c_.emitLine("SendMessageW((HWND)" + ctrlHwndVar + ", " + setMsg + ", " +
                                     std::to_string((int)i) + ", (LPARAM)" + std::to_string(intData.items[i]) + ");");
                     }
                 }
@@ -388,14 +397,15 @@
                 // czUI fix: UC 事件接线 — thunk/sink 已在文件作用域 (prelude) 生成,
                 // 这里按实例挂接 (attach 行由 prelude 存入 ucEventAttach_)。
                 {
-                    auto itAtt114 = ucEventAttach_.find(Symbol::toLower(ctrl.controlName));
+                    // 账 #222: 键与 sink 名都由 prelude 那一处算/拼, 这里只查表。
+                    auto itAtt114 = ucEventAttach_.find(ctrlElemKey(ctrl.controlName, ctrl.index));
                     if (itAtt114 != ucEventAttach_.end() && !getenv("C3_NO_EVENTS")) {
                         std::string shortCls114 = ctlClass;
                         size_t dotCls114 = shortCls114.rfind('.');
                         if (dotCls114 != std::string::npos) shortCls114 = shortCls114.substr(dotCls114 + 1);
                         c_.emitLine("{ /* UC events */");
-                        for (const auto& al : itAtt114->second) c_.emitLine("  " + al);
-                        c_.emitLine("  ((vb6_cls_" + cIdent(shortCls114) + "*)vb6_UC_InstanceOf(" + hwndExpr + "))->events = &_sink_" + cIdent(ctrl.controlName) + ";");
+                        for (const auto& al : itAtt114->second.lines) c_.emitLine("  " + al);
+                        c_.emitLine("  ((vb6_cls_" + cIdent(shortCls114) + "*)vb6_UC_InstanceOf(" + hwndExpr + "))->events = &" + itAtt114->second.sinkVar + ";");
                         c_.emitLine("}");
                     }
                 }
@@ -767,7 +777,7 @@
                                 + std::to_string(fv143.intValue) + ", 0, NULL, NULL, 0.0f, 0, 0, 0}");
                         } else if (fv143.type == FrmValueType::Float) {
                             bagLines143.push_back("{L\"" + escapeWideCString(pn143) + "\", 4/*VT_R4*/, 0, "
-                                + std::to_string(fv143.floatValue) + "f, NULL, NULL, 0.0f, 0, 0, 0}");
+                                + floatFixed6Literal(fv143.floatValue) + ", NULL, NULL, 0.0f, 0, 0, 0}");
                         } else if (fv143.type == FrmValueType::String) {
                             std::string sv143 = fv143.rawText;
                             if (sv143.size() >= 2 && sv143.front() == '"' && sv143.back() == '"')
@@ -827,7 +837,7 @@
                             bagLines143.push_back("{L\"" + escapeWideCString(blk143.blockName)
                                 + "\", 9/*VT_DISPATCH(IFont)*/, 0, 0, NULL, L\""
                                 + escapeWideCString(fName143) + "\", "
-                                + std::to_string(fSize143) + "f, "
+                                + floatFixed6Literal(fSize143) + ", "
                                 + std::to_string(fWeight143) + ", "
                                 + std::to_string(fCharset143) + ", "
                                 + std::to_string(fFlags143) + "}");

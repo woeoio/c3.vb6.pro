@@ -9,35 +9,6 @@ namespace vb6c3 {
 
 // --- cgen_expr_binary.cpp: 二元表达式求值 + BSTR 包装 + 二元运算符映射 ---
 
-// Task #44 (SSTabEx): 判断表达式是否为字面量 0 (含 -0)。
-// 用于 '/' 与 Mod 的零除数检测: 两侧都是常量时 MSVC 常量折叠 → C2124 被零除
-// (frmTest.c:1569 InIde "Debug.Print 1 / 0" 实证), 且 VB6 语义是运行期错误 11
-// 而非 IEEE inf —— 须改走 vb6_Num_Div / vb6_Num_Mod (函数调用不可折叠)。
-static bool isLiteralZeroDivisor44(const Expr* e) {
-    if (!e) return false;
-    if (e->kind == ASTNodeKind::LiteralExpr) {
-        auto* lit44 = static_cast<const LiteralExpr*>(e);
-        switch (lit44->literalKind) {
-            case LiteralKind::Integer:
-                return lit44->intValue == 0;
-            case LiteralKind::Long:
-            case LiteralKind::LongPtr:
-                return lit44->longValue == 0;
-            case LiteralKind::Single:
-                return lit44->floatValue == 0.0f;
-            case LiteralKind::Double:
-                return lit44->doubleValue == 0.0;
-            default:
-                return false;
-        }
-    }
-    if (e->kind == ASTNodeKind::UnaryExpr) {
-        auto* un44 = static_cast<const UnaryExpr*>(e);
-        if (un44->op == UnaryOp::Negate) return isLiteralZeroDivisor44(un44->operand.get());
-    }
-    return false;
-}
-
 // M22: 将非BSTR表达式包装为BSTR (用于字符串连接 & 运算符)
 void CCodeGen::visit(BinaryExpr& node) {
     // 账 #88: 非 & 的那一路以前一律按 "Long" 解封 COM 读 —— 字符串成员因此在**比较**里
@@ -186,16 +157,12 @@ void CCodeGen::visit(BinaryExpr& node) {
     // Fix 156: 操作数为 Variant 时 C 强转非法 (C2440 vb6_VARIANT→double),
     // 改走 vb6_VariantToDouble 提取 (与上方 IntDiv 的 Fix 084o 同构).
     if (node.op == BinaryOp::Div) {
-        // Task #44 (SSTabEx): 除数为字面量 0 时改走 vb6_Num_Div ——
-        // 两侧常量会被 MSVC 常量折叠 → C2124 (frmTest InIde "Debug.Print 1/0" 实证),
-        // 且 VB6 语义是运行期错误 11 而非 IEEE inf。
-        if (isLiteralZeroDivisor44(node.right.get())) {
-            lastExpr_ = "vb6_Num_Div((double)(" + toDoubleIfVariant(left, node.left.get())
-                      + "), (double)(" + toDoubleIfVariant(right, node.right.get()) + "))";
-            return;
-        }
-        lastExpr_ = "((double)(" + toDoubleIfVariant(left, node.left.get())
-                  + ") / (double)(" + toDoubleIfVariant(right, node.right.get()) + "))";
+        // Task #44 → 变量除数也补上: VB6 语义是运行期错误 11 而非 IEEE inf。
+        // 此前只有字面量 0 除数走 vb6_Num_Div, 变量除数仍落裸 C 除法得 inf
+        // (vb6_Num_Div 的注释里记为"运行期语义缺口")。既然统一走 helper,
+        // 常量折叠 C2124 也顺带消失, 无条件走即可。
+        lastExpr_ = "vb6_Num_Div((double)(" + toDoubleIfVariant(left, node.left.get())
+                  + "), (double)(" + toDoubleIfVariant(right, node.right.get()) + "))";
         return;
     }
 
@@ -346,7 +313,8 @@ void CCodeGen::visit(BinaryExpr& node) {
         };
         // Variant 表达式的取址: 左值标识符/成员/VB6_SA_AT(...) 直接 &,
         // 其余 rvalue (vb6_VariantFromComResult 等) 用临时变量存上再取址.
-        auto variantAddr158n = [&](const std::string& s) -> std::string {
+        // 账 #238: 裸名字那一形还要问"它是不是 vb6_VARIANT 那份存储" (判据在一处)。
+        auto variantAddr158n = [&](const std::string& s, Expr* ast) -> std::string {
             std::string t = s;
             while (t.size() >= 2 && t.front() == '(' && t.back() == ')')
                 t = t.substr(1, t.size() - 2);
@@ -362,7 +330,7 @@ void CCodeGen::visit(BinaryExpr& node) {
                 c_.emitLine("vb6_VARIANT " + tmp + " = vb6_VariantLong(" + s + ");");
                 return "&" + tmp;
             }
-            if (simpIdent158n(t) && !isConstIdent(t)) return "&" + s;
+            if (simpIdent158n(t) && !isConstIdent(t) && cmpOperandMayTakeAddr(t, ast)) return "&" + s;
             if (t.rfind("VB6_SA_AT(", 0) == 0) return "&" + s;
             // Fix 158u: Variant 比较左值语义落在 COM 对象指针成员 (me->VBFlexGrid
             // FlexDataSource 等 union 成员, 声类型 ComIface*/void*) 时, 裸 `vb6_VARIANT
@@ -382,17 +350,17 @@ void CCodeGen::visit(BinaryExpr& node) {
         bool rv158n = varLike158n(right, node.right.get());
         if (lv158n || rv158n) {
             if (lv158n && rv158n) {
-                lastExpr_ = "(vb6_VarCmpEq(" + variantAddr158n(left) + ", "
-                          + variantAddr158n(right) + "))";
+                lastExpr_ = "(vb6_VarCmpEq(" + variantAddr158n(left, node.left.get()) + ", "
+                          + variantAddr158n(right, node.right.get()) + "))";
             } else if (lv158n && isNothingSentinel158n(right)) {
-                lastExpr_ = "(vb6_IsNothing(vb6_VariantToObject(" + variantAddr158n(left) + ")))";
+                lastExpr_ = "(vb6_IsNothing(vb6_VariantToObject(" + variantAddr158n(left, node.left.get()) + ")))";
             } else if (rv158n && isNothingSentinel158n(left)) {
-                lastExpr_ = "(vb6_IsNothing(vb6_VariantToObject(" + variantAddr158n(right) + ")))";
+                lastExpr_ = "(vb6_IsNothing(vb6_VariantToObject(" + variantAddr158n(right, node.right.get()) + ")))";
             } else if (lv158n) {
-                lastExpr_ = "(vb6_VarCmpLongEq(" + variantAddr158n(left) + ", (int32_t)("
+                lastExpr_ = "(vb6_VarCmpLongEq(" + variantAddr158n(left, node.left.get()) + ", (int32_t)("
                           + right + ")))";
             } else {
-                lastExpr_ = "(vb6_VarCmpLongEq(" + variantAddr158n(right) + ", (int32_t)("
+                lastExpr_ = "(vb6_VarCmpLongEq(" + variantAddr158n(right, node.right.get()) + ", (int32_t)("
                           + left + ")))";
             }
             return;
@@ -514,7 +482,7 @@ void CCodeGen::visit(BinaryExpr& node) {
                     // `&vb6_enum_...` C2101 (MagneticWnd.ctl `eMsgWhen.MSG_BEFORE = When`)
                     bool leftIsLvalue = !left.empty() && (std::isalpha(static_cast<unsigned char>(left[0])) || left[0] == '_') && !isConstIdent(left) && left.rfind("vb6_enum_", 0) != 0;
                     if (leftIsLvalue) { for (char c : left) { if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') { leftIsLvalue = false; break; } } }
-                    if (leftIsLvalue) {
+                    if (leftIsLvalue && cmpOperandMayTakeAddr(left, node.left.get())) {
                         lastExpr_ = "(vb6_VarCmpLong" + cmpFn + "(&" + left + ", " + scalarArg158m(right) + "))";
                     } else {
                         std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++);
@@ -546,7 +514,7 @@ void CCodeGen::visit(BinaryExpr& node) {
                     // Fix <vbeclipse>: 枚举常量 (vb6_enum_*) 同样不可取址 (对称于 493 行)
                     bool rightIsLvalue = !right.empty() && (std::isalpha(static_cast<unsigned char>(right[0])) || right[0] == '_') && !isConstIdent(right) && right.rfind("vb6_enum_", 0) != 0;
                     if (rightIsLvalue) { for (char c : right) { if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') { rightIsLvalue = false; break; } } }
-                    if (rightIsLvalue) {
+                    if (rightIsLvalue && cmpOperandMayTakeAddr(right, node.right.get())) {
                         lastExpr_ = "(vb6_VarCmpLong" + revCmpFn + "(&" + right + ", " + scalarArg158m(left) + "))";
                     } else {
                         std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++);
@@ -584,8 +552,15 @@ void CCodeGen::visit(BinaryExpr& node) {
                     return e;
                 return "vb6_VariantFromValue(" + e + ")";
             };
-            std::string leftAddr = isLvalue(left) ? ("&" + left) : ([&]{ std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++); c_.emitLine("vb6_VARIANT " + tmp + " = " + wrapOperand132(left) + ";"); return "&" + tmp; }());
-            std::string rightAddr = isLvalue(right) ? ("&" + right) : ([&]{ std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++); c_.emitLine("vb6_VARIANT " + tmp + " = " + wrapOperand132(right) + ";"); return "&" + tmp; }());
+            // 账 #238: 取址之前还要问"这个名字是不是 vb6_VARIANT 那份存储" —— 判据在一处
+            // (CCodeGen::cmpOperandMayTakeAddr), 裸标识符的形状测试本身不够: `Dim d As Double`
+            // 的地址当 vb6_VARIANT* 递进 RTL 会按 VARIANT 布局读一个 8 字节标量。
+            std::string leftAddr = (isLvalue(left) && cmpOperandMayTakeAddr(left, node.left.get()))
+                ? ("&" + left)
+                : ([&]{ std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++); c_.emitLine("vb6_VARIANT " + tmp + " = " + wrapOperand132(left) + ";"); return "&" + tmp; }());
+            std::string rightAddr = (isLvalue(right) && cmpOperandMayTakeAddr(right, node.right.get()))
+                ? ("&" + right)
+                : ([&]{ std::string tmp = "_vcmp_" + std::to_string(vcmpCounter_++); c_.emitLine("vb6_VARIANT " + tmp + " = " + wrapOperand132(right) + ";"); return "&" + tmp; }());
             lastExpr_ = "(vb6_VarCmp" + cmpFn + "(" + leftAddr + ", " + rightAddr + "))";
             return;
         }
@@ -715,12 +690,8 @@ void CCodeGen::visit(BinaryExpr& node) {
     // Fix 108b: VB6 Mod 的语义是"操作数先转 Long 再取余"; C 的 % 不接受浮点
     // 操作数 (C2296). 这里显式取整, 与 VB6 一致.
     if (node.op == BinaryOp::Mod) {
-        // Task #44: 字面量 0 除数 → vb6_Num_Mod (常量折叠 C2124 + VB6 错误 11 语义, 同 Div)
-        if (isLiteralZeroDivisor44(node.right.get())) {
-            lastExpr_ = "vb6_Num_Mod((int32_t)(" + left + "), (int32_t)(" + right + "))";
-            return;
-        }
-        lastExpr_ = "((int32_t)(" + left + ") % (int32_t)(" + right + "))";
+        // Task #44 → 变量除数也补上: 同 Div, 统一走 vb6_Num_Mod (错误 11 语义)。
+        lastExpr_ = "vb6_Num_Mod((int32_t)(" + left + "), (int32_t)(" + right + "))";
         return;
     }
 

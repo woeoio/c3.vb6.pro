@@ -246,10 +246,15 @@ bool Driver::runParser(const CompileOptions& options) {
             genericUses_[fk] = std::move(rec);  // 同源内容一致, 覆盖幂等
         }
 
-        // P7: 设置窗体模块标志
-        if (module && isFormModule) {
-            module->isFormModule = true;
-
+        // P7: 设置窗体模块标志。文档类别 (.frm/.ctl/.pag) 的唯一写入点就在这里 ——
+        // 语义层要按它放行文档隐式对象 (账 #217 第二刀)，发码层也改读它，
+        // 所以别再往下的任何地方补第二处判定。
+        if (module) {
+            if (isFormModule) module->isFormModule = true;
+            module->docKind = isControlModule ? DocumentKind::UserControl
+                          : isPropertyPageModule ? DocumentKind::PropertyPage
+                          : isFormModule ? DocumentKind::Form
+                                         : DocumentKind::Standard;
         }
 
         if (options.dumpAST && module) {
@@ -435,6 +440,58 @@ bool Driver::runTypeLibImport(const CompileOptions& options) {
     if (options.verbose && !comLibRefs_.empty()) {
         std::cerr << "C3: ComLib= reg-free components: " << comLibRefs_.size() << "\n";
         for (const auto& e : comLibRefs_) {
+            std::cerr << "  " << e[0] << "  " << e[1] << "  <- " << e[3] << "\n";
+        }
+    }
+
+    // 2.6 Fix <vbeclipse> 2026-10-06: Object= 免注册 OCX 表收集
+    // 只有 vbp 里 Object= 显式声明过的 OCX 进表 — 普通 Reference= / auto-typelib 加载的
+    // typelib 一律不进。与 ComLib= 同构: 表为空时产物不调 vb6_OcxRefRegister,
+    // 运行期 vb6_Form_ControlsAdd 走原注册表路径, 一字不改.
+    if (!ocxCanonMap_.empty()) {
+        auto canonKey = [](const std::string& p) {
+            std::string c = p;
+            for (char& x : c) {
+                if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+                else if (x == '\\') x = '/';
+            }
+            return c;
+        };
+        std::unordered_map<std::string, std::string> seenProgId;
+        bool capWarned = false;
+        for (auto& tl : typelibParser_->cachedResults()) {
+            auto it = ocxCanonMap_.find(canonKey(tl->tlbPath));
+            if (it == ocxCanonMap_.end())
+                it = ocxCanonMap_.find(tl->canonPath);  // loadByPath 的 GetLongPathNameW 展开结果
+            if (it == ocxCanonMap_.end()) continue;
+            const std::string& relPath = it->second;
+            for (auto& cc : tl->coclasses) {
+                if (cc->progId.empty() || cc->clsidStr.empty()) continue;
+                if (ocxLibRefs_.size() >= 256) {
+                    if (!capWarned) {
+                        diag_->warn(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
+                                    "OCX reg-free table full (256 entries); further controls "
+                                    "must be registry-registered");
+                        capWarned = true;
+                    }
+                    continue;
+                }
+                std::string key = canonKey(cc->progId);
+                auto ins = seenProgId.insert({key, relPath});
+                if (!ins.second) {
+                    diag_->warn(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
+                                "Duplicate ProgID in OCX components: " + cc->progId +
+                                " in both " + ins.first->second + " and " + relPath +
+                                "; first wins");
+                }
+                ocxLibRefs_.push_back({cc->progId, cc->clsidStr, cc->name, relPath});
+            }
+        }
+    }
+
+    if (options.verbose && !ocxLibRefs_.empty()) {
+        std::cerr << "C3: Object= reg-free OCX controls: " << ocxLibRefs_.size() << "\n";
+        for (const auto& e : ocxLibRefs_) {
             std::cerr << "  " << e[0] << "  " << e[1] << "  <- " << e[3] << "\n";
         }
     }

@@ -2,6 +2,7 @@
 // Implements IClassFactory, IDispatch wrapper, DLL export skeleton, registry helpers
 
 #include <string.h>
+#include <wchar.h>   /* 账 #173 census: swprintf 的原型 (此前走 C4013) */
 #define COBJMACROS  /* Enable C COM macros (ITypeLib_Release etc.) */
 #include "vb6comserver.h"
 #include "vb6comserver_internal.h"

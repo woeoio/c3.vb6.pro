@@ -114,18 +114,33 @@ int vb6_RadioClickCounts(void* hwndFrom) {
     if ((GetWindowLongW(h, GWL_STYLE) & BS_TYPEMASK) != BS_AUTORADIOBUTTON) return 1;
     return (SendMessageW(h, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
 }
-// Position/size properties use twips on both reads and writes.
-// Codegen calls these getters directly without pixel-to-twip conversion.
-// Match the existing vb6_TwipToX/Y setters (15 twips per logical pixel).
-// Returning pixels here makes Form_Resize mix ScaleWidth/Height twips with
-// pixel margins, pushing stretched Image controls outside the parent client.
+/* 账 #175: 位置/尺寸属性的单位 = **所在容器的 ScaleMode** (VB6 语义), 不是恒为缇。
+   此前这八个点位 + vb6_ControlMove 全按缇, 而 .ctl 一律声明 3=Pixel ⇒ 像素型
+   UserControl 里"读来的数"和"写回去的数"彼此自洽, 却与 ScaleWidth/绘图 DC 差 15 倍。
+   容器是窗体时 vb6_ContainerScaleMode 给 1 (缇), 与改动前逐字节等价。 */
+
+// 容器 ScaleMode 的唯一取法: UserControl 宿主窗口 → 它 .ctl 声明的 ScaleMode;
+// 窗体 → 窗体的 VB6_ScaleMode 属性 (缺省 1=缇); 非窗口 (NULL) → 1。
+int32_t vb6_ContainerScaleMode(void* hwndParent) {
+    int32_t m = vb6_UC_WindowScaleMode(hwndParent);
+    if (m) return m;
+    return vb6_GetScaleMode(hwndParent);
+}
+
+// 账 #175: 窗口**自身**的 ScaleMode (ScaleWidth/ScaleHeight/CurrentX 那一族读法的单位)。
+int32_t vb6_WindowScaleModeSelf(void* hwnd) {
+    int32_t m = vb6_UC_WindowScaleMode(hwnd);
+    if (m) return m;
+    return vb6_GetScaleMode(hwnd);
+}
+
 int vb6_GetControlLeft(void* hwnd) {
     if (!hwnd) return 0;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
-    return vb6_XToTwipX(pt.x);
+    return (int)vb6_ScalePxToUser((double)pt.x, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 0);
 }
 
 void vb6_SetControlLeft(void* hwnd, int left) {
@@ -134,7 +149,8 @@ void vb6_SetControlLeft(void* hwnd, int left) {
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
-    SetWindowPos((HWND)hwnd, NULL, vb6_TwipToX(left), pt.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    SetWindowPos((HWND)hwnd, NULL, vb6_ScaleUserToPx((double)left, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 0),
+                 pt.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
 }
 
 int vb6_GetControlTop(void* hwnd) {
@@ -143,7 +159,7 @@ int vb6_GetControlTop(void* hwnd) {
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
-    return vb6_YToTwipY(pt.y);
+    return (int)vb6_ScalePxToUser((double)pt.y, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 1);
 }
 
 void vb6_SetControlTop(void* hwnd, int top) {
@@ -152,35 +168,41 @@ void vb6_SetControlTop(void* hwnd, int top) {
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
-    SetWindowPos((HWND)hwnd, NULL, pt.x, vb6_TwipToY(top), 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    SetWindowPos((HWND)hwnd, NULL, pt.x,
+                 vb6_ScaleUserToPx((double)top, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 1),
+                 0, 0, SWP_NOSIZE | SWP_NOZORDER);
 }
 
 int vb6_GetControlWidth(void* hwnd) {
     if (!hwnd) return 0;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
-    return vb6_XToTwipX(rc.right - rc.left);
+    return (int)vb6_ScalePxToUser((double)(rc.right - rc.left), vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 0);
 }
 
 void vb6_SetControlWidth(void* hwnd, int width) {
     if (!hwnd) return;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
-    SetWindowPos((HWND)hwnd, NULL, 0, 0, vb6_TwipToX(width), rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER);
+    SetWindowPos((HWND)hwnd, NULL, 0, 0,
+                 vb6_ScaleUserToPx((double)width, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 0),
+                 rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER);
 }
 
 int vb6_GetControlHeight(void* hwnd) {
     if (!hwnd) return 0;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
-    return vb6_YToTwipY(rc.bottom - rc.top);
+    return (int)vb6_ScalePxToUser((double)(rc.bottom - rc.top), vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 1);
 }
 
 void vb6_SetControlHeight(void* hwnd, int height) {
     if (!hwnd) return;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
-    SetWindowPos((HWND)hwnd, NULL, 0, 0, rc.right - rc.left, vb6_TwipToY(height), SWP_NOMOVE | SWP_NOZORDER);
+    SetWindowPos((HWND)hwnd, NULL, 0, 0, rc.right - rc.left,
+                 vb6_ScaleUserToPx((double)height, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 1),
+                 SWP_NOMOVE | SWP_NOZORDER);
 }
 
 // Fix 162a-extlist: VB6 `obj.Move Left[, Top[, Width[, Height]]]` —— 语言级方法
@@ -201,11 +223,84 @@ void vb6_ControlMove(void* hwnd, double L, double T, double W, double H, int mas
         ScreenToClient(GetParent(hW), &p1);
         rc.left = p0.x; rc.top = p0.y; rc.right = p1.x; rc.bottom = p1.y;
     }
-    int x = (mask & 1) ? vb6_TwipToX((int)(L + (L >= 0 ? 0.5 : -0.5))) : rc.left;
-    int y = (mask & 2) ? vb6_TwipToY((int)(T + (T >= 0 ? 0.5 : -0.5))) : rc.top;
-    int w = (mask & 4) ? vb6_TwipToX((int)(W + (W >= 0 ? 0.5 : -0.5))) : rc.right - rc.left;
-    int h = (mask & 8) ? vb6_TwipToY((int)(H + (H >= 0 ? 0.5 : -0.5))) : rc.bottom - rc.top;
+    int32_t cm = vb6_ContainerScaleMode(child ? GetParent(hW) : NULL);
+    int x = (mask & 1) ? vb6_ScaleUserToPx(L, cm, 0) : rc.left;
+    int y = (mask & 2) ? vb6_ScaleUserToPx(T, cm, 1) : rc.top;
+    int w = (mask & 4) ? vb6_ScaleUserToPx(W, cm, 0) : rc.right - rc.left;
+    int h = (mask & 8) ? vb6_ScaleUserToPx(H, cm, 1) : rc.bottom - rc.top;
+
+    /* Fix <vbeclipse> rev22: 尺寸真变了就触发该设计期子控件的 Resize 事件。
+     *
+     * 为什么要这一下: VB6 里 `Private Sub ViewArea_Resize()` 是 PictureBox 的
+     * **Resize 事件**, 由运行时在该控件尺寸变化时自动跑。C3 的 RTL 以前没有这条
+     * 转发, 于是 .ctl 写在子控件事件里的布局代码只会在"谁恰好手工调了它"时跑一次
+     * —— 而那一次通常**早于布局就绪**。
+     *
+     * 实证 play78 (--arch x86, 探针实测): 每个 ucFolder 的 WM_SIZE 序列是
+     *   设计期 (569,441) → 中间 (320,309) → 最终 (468,405)
+     * `ViewArea` 每换一次尺寸, ucFolder.ctl:529 `ViewArea_Resize` 都该跑一次并按
+     * **当时**的 ViewArea.Width 重摆视图窗体; 但 C3 只在 Refresh 里裸调一次, 而
+     * Refresh 由 frmMain 在 Form_Load 期跑 —— 那时 rec 还没收到任何 WM_SIZE,
+     * ViewArea.Width 还是设计期 8655 缇 ⇒ 五个 folder 的视图窗体**全都**只拿到
+     * W=8505 (= 8655-30-2*margin), 停在同一个 567x423。
+     *
+     * 放在 vb6_ControlMove 而不是 uc_hostmodel_call.inc 的 Move 分派里: ViewArea /
+     * ViewTabs 这些是 cgen **直调** vb6_ControlMove 的 (不过宿主分派), 那里打不到。
+     * vb6_ControlMove 是所有摆位的唯一收口, 两类调用都从这里过。
+     *
+     * ⚠ 只在**尺寸真的变了**时触发, 否则每次 Move 都跑一遍事件 ⇒ 递归 Move 风暴
+     *   (ucFolder.ViewArea_Resize 里自己就 Move 视图窗体)。*/
+    int sizeChanged = ((w != rc.right - rc.left) || (h != rc.bottom - rc.top));
     SetWindowPos(hW, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    /* Fix <vbeclipse> rev24: 设计期子控件的 `<Ctrl>_Resize` 事件在这里**排队**
+     * (rev22 曾直接在这里跑 ⇒ 递归; rev23 把触发改到宿主 WM_SIZE, 但那只覆盖
+     * "**宿主自己**尺寸变了"这一种 —— 见下面为什么不够)。
+     *
+     * 为什么宿主的 WM_SIZE 不够 (play78 --arch x86 探针实测):
+     *   ucFolder 的宿主窗口在第一轮布局后**尺寸再没变过**, 所以 rev23 的 drain
+     *   全部挤在启动那一段跑完 (探针: 15 次 Queue / 15 次 Drain, 行号 50-68 连成一片),
+     *   而 ViewArea 的最终尺寸 (567→318/136/425/101) 是**之后**才由
+     *   `UserControl_Resize` 里的 `ViewArea.Move …` 定下的 —— 那发的是
+     *   **ViewArea 自己**的 WM_SIZE, 不会回到宿主 ⇒ 宿主那条排队链再没机会跑。
+     *   结果 `ViewArea_Resize` 全程只读到设计期宽度 567px (= 8505 缇)。
+     *
+     * 为什么现在挂这里不会递归 (rev22 踩过的坑):
+     *   rev22 是**直接调用** `desc->designResize(...)`, 而 `ViewArea_Resize` 内部
+     *   自己就 Move 视图窗体 ⇒ 又进来 ⇒ 无限展开。
+     *   现在只 `PostMessage` **排队**(rev23 的机制), 真正的调用发生在**回到消息
+     *   循环之后**, 那时本轮 Move 早已全部返回, 不存在栈上的重入。
+     *   `vb6_UC_QueueDesignResize` 自带窗口属性去重, 一串嵌套 Move 只排一条。
+     */
+    if (sizeChanged) {
+        extern int32_t vb6_UC_QueueDesignResizeForCtrl(const void* hwnd);
+        vb6_UC_QueueDesignResizeForCtrl(hW);
+        /* Fix <vbeclipse> rev29: 目标是**窗体**时, 直接调它的 Form_Resize。
+         *
+         * 为什么必须"直调"而不是 PostMessage 排队 (rev29 前一版实测失败, 留档):
+         *   停靠视图窗体 (frmViewViews 等) 被 `vb6_ComCall(视图窗体, L"Move", …)`
+         *   摆到最终尺寸 —— 尺寸**确实变了** (探针: rect 0x0 → 318x291 → 202x364),
+         *   但它**一生只收到 1 次 WM_SIZE 且那次是建窗时的 0x0** ⇒ rev28 那条
+         *   `case VB6_FORM_FR_MSG` 永远等不到, Form_Resize 跑 0 次。
+         *   改在 `vb6_ControlMove` 里 PostMessage 也不行: 排队那一刻还在
+         *   Form_Load 的同步调用栈中、**根本不在主消息循环里**, 消息进队列没人
+         *   Dispatch, 实测还堆损坏 `0xC0000374`。已回退。
+         *
+         * 为什么现在直调是安全的:
+         *   ① 时机对 —— `SetWindowPos` 已在上面执行完, 目标窗体拿到的是**最终**尺寸,
+         *      Form_Resize 里 `vb6_GetScaleWidth(hwnd)` 读到的就是终值, 不是中间态
+         *      (这正是 rev23/rev28 花两版才解决的问题, 现在在 Move 收口处天然成立)。
+         *   ② 不递归 —— `vb6_InvokeFormResize` 有"同窗体重入"闸; 且 Form_Resize
+         *      内部 Move 的是**子控件**(另一个 HWND), 那一发进来时本窗体已出栈,
+         *      靠 `sizeChanged` 判据收敛。实测栈深 ≤ 2。
+         *   ③ 收窄到窗体 —— 只有 `vb6_form_load_<F>` 注册过的 HWND 才有那个属性,
+         *      原生控件 (TreeView/ListView/Edit) 根本没注册 ⇒ 自动跳过。
+         *      这一点很关键: rev29 前一版给**所有**控件 PostMessage 自定义消息,
+         *      它们的窗口过程是 Windows 自带的, 不认那条消息, 纯浪费去重名额。*/
+        {
+            extern int32_t vb6_InvokeFormResize(void* hwnd);
+            vb6_InvokeFormResize(hW);
+        }
+    }
 }
 
 // P11.8: hWnd attribute (read-only)
@@ -217,10 +312,35 @@ void* vb6_GetControlHwnd(void* hwnd) {
 // P13.1: Font properties
 // ============================================================
 
+// 账 #200：**这枚控件现在在用的字体**只从这里问一次。
+// 为什么要有这一处：PictureBox / Label 那几枚是 STATIC 类，而这个类**不记字体** ——
+// 一次性探针（`.build/b200probe/fontprobe.c`，裸 STATIC、谁也没子类化）实测
+// `WM_SETFONT` 之后 `WM_GETFONT` 回 NULL，`STM_SETFONT`/`STM_GETFONT` 同样回 NULL。
+// 于是原来那三条读法（`vb6_GetControlLogFont` 给 .FontName/.FontSize 用、Print 落笔前选字体、
+// #196 的文字量）在这类窗口上**永远拿不到用户设的字体**，只能拿 DC 的默认字体画，
+// 而 .FontSize 读回来还是设计值（那是另一份自存的属性）—— 两头谁都不报错。
+// 所以 setter 现在把自己创建的那张 HFONT 存进 `VB6_CtrlFont`（新名字，与 #185 那条
+// "一层一个窗口属性名"同纪律），这里优先问窗口、问不到再读这份自存的。
+HFONT vb6_ControlFont(HWND hw) {
+    HFONT h = (HFONT)SendMessageW(hw, WM_GETFONT, 0, 0);
+    if (!h) h = (HFONT)GetPropW(hw, L"VB6_CtrlFont");
+    return h;
+}
+
+// 账 #204: 那份自存只有这一个写口 —— 谁把字体发给窗口，谁就在这里存同一张。
+// 创建期那一站原来只发不存，而 STATIC/BUTTON 那一类窗口不答 `WM_GETFONT`（见上面那段），
+// 于是"从没被写过字体"的控件在出口这一头两问皆空：`.FontName` 读空串、`.FontSize` 读 0、
+// 文字量按 DC 的默认字体算（实测 bName= bfs=0 bpf=0 bth=16，16 是 Segoe UI 9pt、不是 VB6 的 8.25pt）。
+// 存了之后还顺带有个副作用：setter 换字体时找得到"上一张是我们造的"，那张才删得掉。
+void vb6_ControlFontStore(HWND hw, HFONT hFont) {
+    if (!hw || !hFont) return;
+    SetPropW(hw, L"VB6_CtrlFont", (HANDLE)hFont);
+}
+
 // Helper: get LOGFONT from control's current font
 static int vb6_GetControlLogFont(void* hwnd, LOGFONTW* plf) {
     if (!hwnd || !plf) return 0;
-    HFONT hFont = (HFONT)SendMessageW((HWND)hwnd, WM_GETFONT, 0, 0);
+    HFONT hFont = vb6_ControlFont((HWND)hwnd);
     if (!hFont) return 0;
     return GetObjectW(hFont, sizeof(LOGFONTW), plf) > 0;
 }
@@ -231,8 +351,12 @@ static void vb6_SetControlFontFromLogFont(void* hwnd, const LOGFONTW* plf) {
     if (!hwnd || !plf) return;
     HFONT hNewFont = CreateFontIndirectW(plf);
     if (!hNewFont) return;
-    HFONT hOldFont = (HFONT)SendMessageW((HWND)hwnd, WM_GETFONT, 0, 0);
+    // 旧字体先按"我们存过的那张"找，找不到才退回问窗口 —— 顺序反了会双删：
+    // 真记字体的那几类控件（EDIT/BUTTON…）WM_GETFONT 回来的就是我们上一轮存进去的那张。
+    HFONT hOldFont = (HFONT)GetPropW((HWND)hwnd, L"VB6_CtrlFont");
+    if (!hOldFont) hOldFont = vb6_ControlFont((HWND)hwnd);
     SendMessageW((HWND)hwnd, WM_SETFONT, (WPARAM)hNewFont, (LPARAM)TRUE);
+    vb6_ControlFontStore((HWND)hwnd, hNewFont);
     // Force redraw
     InvalidateRect((HWND)hwnd, NULL, TRUE);
     // Delete old font only if it's not a stock font
@@ -570,64 +694,146 @@ LRESULT vb6_CtlColorBtnBrush(HWND child, HWND parent) {
 // Fix 185: 控件级绘制入口 PictureBox.Print / PictureBox.Cls
 // ============================================================
 //
-// DC 来源有两档：_Paint 派发时挂上的 VB6_PaintDC（BeginPaint/EndPaint 之间才有
-// 效，绝不能 ReleaseDC），否则回落 GetDC。VB6 允许在非 _Paint 时机 Print，效果就
-// 是画在屏幕上、下次重绘即消失，这里保持同样的宽松度。
-// 绘制光标 (PrintX/PrintY) 存窗口属性，Cls 归零 —— 等价于 VB6 的当前绘制位置。
+// DC 来源只有下面这一处口径（账 #196）：_Paint 派发时挂上的 VB6_PaintDC（BeginPaint/
+// EndPaint 之间才有效，绝不能 ReleaseDC），否则回落 GetDC。VB6 允许在非 _Paint 时机
+// Print，效果就是画在屏幕上、下次重绘即消失，这里保持同样的宽松度。
+// 笔位不在这里（账 #239）：Print/Cls 都转调 vb6forms_draw.c 的同一份实现，
+// 笔位那份全仓唯一存储（VB6_CurrentX/Y，float）由它去问。
+//
+// 账 #196：**「这枚控件的绘图 DC 从哪儿来」只有下面这一处口径**（与 `.hDC` 共用）。
+// 区别只在句柄归谁：Print/Cls 这类内部调用用完就 ReleaseDC；而交回给 VB 代码的
+// `.hDC` 必须留着 —— VB6 是一个对象一张 hDC，反复读要读回同一个值，所以那一档
+// 按 HWND 缓存进窗口属性 `VB6_ObjectDC`，由 PictureBox/Image 那层自己的 WM_DESTROY
+// 归还（见 vb6forms_picture_prop.c）。以前这条没处走：`.hDC` 只能撞
+// `cgen_expr_with.cpp` 那条 "hwnd.成员" 兜底 = C2039（真工程物证 ucTreeMaps PropPagFMR.c:74）。
 
-static HDC vb6_ControlPrintDC(HWND hw, BOOL* pFromPaint) {
+HDC vb6_ControlDrawDC(HWND hw, BOOL* pFromPaint) {
     HDC hdc = (HDC)GetPropW(hw, L"VB6_PaintDC");
     *pFromPaint = (hdc != NULL) ? TRUE : FALSE;
     if (hdc) return hdc;
     return GetDC(hw);
 }
 
-void vb6_ControlCls(void* hwnd) {
-    if (!hwnd) return;
+intptr_t vb6_GetControlHDC(void* hwnd) {
+    if (!hwnd) return 0;
     HWND hw = (HWND)hwnd;
     BOOL fromPaint = FALSE;
-    HDC hdc = vb6_ControlPrintDC(hw, &fromPaint);
-    if (!hdc) return;
-    RECT rc;
-    GetClientRect(hw, &rc);
-    HBRUSH br = CreateSolidBrush((COLORREF)vb6_GetControlBackColor(hwnd));
-    if (br) {
-        FillRect(hdc, &rc, br);
-        DeleteObject(br);
-    }
+    HDC hdc = vb6_ControlDrawDC(hw, &fromPaint);   // 口径只有上面那一处
+    if (!hdc) return 0;
+    if (fromPaint) return (intptr_t)hdc;           // 派发期那张：既不缓存也不释放
+    HDC held = (HDC)GetPropW(hw, L"VB6_ObjectDC");
+    if (held) { ReleaseDC(hw, hdc); return (intptr_t)held; }   // 刚才那张是白拿的
+    SetPropW(hw, L"VB6_ObjectDC", (HANDLE)hdc);
+    return (intptr_t)hdc;
+}
+
+// 账 #196：按 HWND 的**文字量**（TextHeight / TextWidth）。两头都要对上才成立：
+// ① 量的是**这枚控件自己的字体** —— 与上面 Print 同一口径（WM_GETFONT），不是屏幕默认字体
+//    （Fix 129 在 UserControl 那一族栽过的同一件事）；DC 也从同一处权威拿，字体的 DPI 才与
+//    落笔的 DPI 同源。② 交回的单位是**这枚控件自己的 ScaleMode** —— 像素量完必须过
+//    vb6_ScalePxToUser（账 #177 那条：缇型对象上直接交像素，比同一枚控件的 ScaleWidth 小 15 倍）。
+// 语料物证：Charts 2020/ucTreeMaps 的 PropPagFMR.pag:265 `.CurrentY + .TextHeight(Text)` ——
+// 量出来的数是要加到画笔光标上的，单位错了行距就错了。
+static int vb6_ControlMeasureTextPx(void* hwnd, BSTR text, int wantWidth) {
+    HWND hw = (HWND)hwnd;
+    int len = text ? (int)SysStringLen(text) : 0;
+    if (!len) return 0;
+    BOOL fromPaint = FALSE;
+    HDC hdc = vb6_ControlDrawDC(hw, &fromPaint);
+    if (!hdc) return 0;
+    HFONT hFont = vb6_ControlFont(hw);   // 账 #200: 字体只从 vb6_ControlFont 那一处问
+    HFONT hOld = hFont ? (HFONT)SelectObject(hdc, hFont) : NULL;
+    SIZE sz = { 0, 0 };
+    GetTextExtentPoint32W(hdc, text, len, &sz);
+    if (hOld) SelectObject(hdc, hOld);
     if (!fromPaint) ReleaseDC(hw, hdc);
-    RemovePropW(hw, L"VB6_PrintX");
-    RemovePropW(hw, L"VB6_PrintY");
+    return wantWidth ? sz.cx : sz.cy;
+}
+
+// 返回档刻意用 **float**：VB6 的 TextHeight/TextWidth 就是 Single，RTL 这头直接交 Single
+// 宽的数 ⇒ 生成 C 里 `t = picA.TextHeight(s)` 不必再靠 double→float 的隐式收窄（C4244）。
+float vb6_ControlTextWidth(void* hwnd, void* bstrText) {
+    if (!hwnd) return 0;
+    return (float)vb6_ScalePxToUser((double)vb6_ControlMeasureTextPx(hwnd, (BSTR)bstrText, 1),
+                                    vb6_WindowScaleModeSelf(hwnd), 0);
+}
+
+float vb6_ControlTextHeight(void* hwnd, void* bstrText) {
+    if (!hwnd) return 0;
+    return (float)vb6_ScalePxToUser((double)vb6_ControlMeasureTextPx(hwnd, (BSTR)bstrText, 0),
+                                    vb6_WindowScaleModeSelf(hwnd), 1);
+}
+
+// 账 #221 = C29-PL-a: VB6 的 Picture.Line 落到原生 GDI。
+//
+// 为什么非补不可: 语料里那 8 条 Line 调用全发成
+// `vb6_ComCallObject(vb6_ComGetObjectProp(vb6_hwnd_PictureN, L"Line"), L"Item", {...}, 6)`
+// —— 先把方法名当**属性**取、再对取回的东西取 Item。而 RTL 两处都把 Line 登记成
+// 「认识但什么都不做」(vb6forms_axcontainer.c 的属性位交回 Empty + uc_hostmodel_call.inc
+// 的 return 1)，于是**两跳都返回成功、两跳都不落笔** —— 编得过、跑得起、画面空白。
+//
+// 三条口径:
+//   * DC 走 vb6_ControlPrint / vb6_ControlCls **同一处** vb6_ControlDrawDC（_Paint 派发
+//     挂在身上的 VB6_PaintDC 优先，取不到才 GetDC），不另开第二条取 DC 的路。
+//   * 坐标按**这枚窗口自己的** ScaleMode 换算（vb6_WindowScaleModeSelf + vb6_ScaleUserToPx，
+//     与 #196/#197 那一条单位表同一个来源），不自己再算一遍缇/像素。
+//   * style 的位口径与 parser 折旗标那一处是**同一张表**（parser_expr_postfix.cpp 的
+//     vb6_LineStyleBit 注释）: 1=B 矩形、2=C 椭圆、4=F 填充，故 BF = 1|4 = 5。
+//     color 传负数 = VB6 那一面的"没写颜色"，落到控件自己的 ForeColor。
+//
+// 刻意没做的两头（写在账里，别当已验）: ScaleLeft/ScaleTop 的**原点偏移**没进来
+// （语料的 PictureBox 都是 0），VB6 那条"Line 之后 CurrentX/CurrentY 移到终点"也没进来
+// （调用点从没读回它，接进来要先定 CurrentX 的单位口径，见 #192 那一格）。
+void vb6_ControlLine(void* hwnd, double x1, double y1, double x2, double y2,
+                     int32_t color, int32_t style) {
+    if (!hwnd) return;
+    HWND hw = (HWND)hwnd;
+    int32_t mode = vb6_WindowScaleModeSelf(hw);
+    int ax = vb6_ScaleUserToPx(x1, mode, 0);
+    int ay = vb6_ScaleUserToPx(y1, mode, 1);
+    int bx = vb6_ScaleUserToPx(x2, mode, 0);
+    int by = vb6_ScaleUserToPx(y2, mode, 1);
+
+    BOOL fromPaint = FALSE;
+    HDC hdc = vb6_ControlDrawDC(hw, &fromPaint);
+    if (!hdc) return;
+
+    COLORREF col = (color < 0) ? (COLORREF)vb6_GetControlForeColor(hw) : (COLORREF)color;
+    HPEN pen = CreatePen(PS_SOLID, 1, col);
+    HPEN hOldPen = pen ? (HPEN)SelectObject(hdc, pen) : NULL;
+    // 不填充那一档必须显式给 NULL_BRUSH: 留着上一次的画刷, Line 会顺带填出一块颜色
+    HBRUSH brush = (style & 4) ? CreateSolidBrush(col) : (HBRUSH)GetStockObject(NULL_BRUSH);
+    HBRUSH hOldBrush = brush ? (HBRUSH)SelectObject(hdc, brush) : NULL;
+
+    if (style & 2) {
+        Ellipse(hdc, ax, ay, bx, by);        // C: 两点是外接矩形
+    } else if (style & 1) {
+        Rectangle(hdc, ax, ay, bx, by);      // B: 矩形
+    } else {
+        POINT oldpt;
+        MoveToEx(hdc, ax, ay, &oldpt);       // 默认: 线段
+        LineTo(hdc, bx, by);
+    }
+
+    if (hOldPen) SelectObject(hdc, hOldPen);
+    if (hOldBrush) SelectObject(hdc, hOldBrush);
+    if (pen) DeleteObject(pen);
+    if (brush && (style & 4)) DeleteObject(brush);
+    if (!fromPaint) ReleaseDC(hw, hdc);
+}
+
+// 账 #239: 这两条以前是本族**另写的一份**实现 —— 笔位存在窗口属性 VB6_PrintX/Y 上、
+// 按像素推进，既不读 pic.CurrentX/CurrentY 也不动它们（实测把笔位放到 20 像素后 Print，
+// 墨仍落在第 2 行；Print 之后 CurrentY 的推进是 0，而同一枚控件自己答 TextHeight = 13）。
+// Form 那一族的 vb6_Form_Print / vb6_Form_Cls 经过 #233(笔位) #234(DC) #235(色)
+// #237(单位) 之后，五件都问的已经是全仓唯一的权威 ⇒ 这里直接转调：控件与窗体的
+// Print/Cls 从此同一份代码，缺的那件补上，抄的那份撤掉。
+void vb6_ControlCls(void* hwnd) {
+    vb6_Form_Cls(hwnd);
 }
 
 void vb6_ControlPrint(void* hwnd, void* bstrText) {
-    if (!hwnd) return;
-    HWND hw = (HWND)hwnd;
-    BSTR text = (BSTR)bstrText;
-    // 未赋值的 As String 是 NULL BSTR，对 VB6 而言等价于 ""（空行 = 只推进光标）
-    int len = text ? (int)SysStringLen(text) : 0;
-    BOOL fromPaint = FALSE;
-    HDC hdc = vb6_ControlPrintDC(hw, &fromPaint);
-    if (!hdc) return;
-    HFONT hFont = (HFONT)SendMessageW(hw, WM_GETFONT, 0, 0);
-    HFONT hOld = hFont ? (HFONT)SelectObject(hdc, hFont) : NULL;
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, (COLORREF)vb6_GetControlForeColor(hwnd));
-    RECT rc;
-    GetClientRect(hw, &rc);
-    int x = (int)(INT_PTR)GetPropW(hw, L"VB6_PrintX");
-    int y = (int)(INT_PTR)GetPropW(hw, L"VB6_PrintY");
-    if (len > 0) {
-        ExtTextOutW(hdc, x, y, ETO_CLIPPED, &rc, text, len, NULL);
-    }
-    TEXTMETRICW tm;
-    int advance = 0;
-    if (GetTextMetricsW(hdc, &tm)) advance = tm.tmHeight + tm.tmExternalLeading;
-    // VB6 的 Print 行末换行：光标回到最左并下移一行
-    SetPropW(hw, L"VB6_PrintX", (HANDLE)(INT_PTR)0);
-    SetPropW(hw, L"VB6_PrintY", (HANDLE)(INT_PTR)(y + advance));
-    if (hOld) SelectObject(hdc, hOld);
-    if (!fromPaint) ReleaseDC(hw, hdc);
+    vb6_Form_Print(hwnd, bstrText);
 }
 
 

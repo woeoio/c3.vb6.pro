@@ -76,10 +76,13 @@
             // 账 #143 那条"编得过、跑了、什么都没发生"（本线踩过三次的那同一条）。
             std::string zaHwnd;
             FrmControlType zaType = FrmControlType::Unknown;
-            std::string zaFn = formCtrlSlot(comObjExpr_, zaType, zaHwnd)
-                ? controlZeroArgMethod(zaType, tvMem) : std::string();
+            bool zaSlot = formCtrlSlot(comObjExpr_, zaType, zaHwnd);
+            std::string zaFn = zaSlot ? controlZeroArgMethod(zaType, tvMem) : std::string();
+            // 账 #196: 同一个接收者问法下的**一个实参方法**（TextHeight/TextWidth）。
+            // 零实参那张表命中不了它，两条各查一次、各拼各的实参表（零实参只交句柄）。
+            std::string oaFn = zaSlot ? controlOneArgMethod(zaType, tvMem) : std::string();
             bool slClear = !zaFn.empty();
-            if (tvSim || tbSim || dtSim || mvSim || slSim || slClear) {
+            if (tvSim || tbSim || dtSim || mvSim || slSim || slClear || !oaFn.empty()) {
                 isComMarker_ = false;
                 std::vector<std::string> sa;
                 for (size_t i = 0; i < node.positional.size(); i++) {
@@ -88,7 +91,9 @@
                 }
                 std::string a0 = sa.size() > 0 ? sa[0] : std::string("0");
                 std::string a1 = sa.size() > 1 ? sa[1] : std::string("0");
-                lastExpr_ = slClear
+                lastExpr_ = !oaFn.empty()
+                    ? (oaFn + "((void*)" + zaHwnd + ", " + a0 + ")")
+                    : slClear
                     ? (zaFn + "((void*)" + zaHwnd + ")")
                     : slStd
                     ? ("vb6_Slider_SimStdEvent((void*)" + comObjExpr_ + ", " + a0 + ", " + a1 + ")")
@@ -255,6 +260,37 @@
             if (dtM == "movelast")     { lastExpr_ = "vb6_Data_MoveLast(" + objExpr + ")"; return; }
             if (dtM == "refresh")      { lastExpr_ = "vb6_Data_Refresh(" + objExpr + ")"; return; }
         }
+        // 账 #196 第三条: 窗体型接收者的 `ScaleX`/`ScaleY` (`picA.ScaleX(…)`、`Me.ScaleX(…)`)。
+        // 不拦就落到下面那条通用 COM 方法调用 —— `vb6_ComCallDouble(vb6_hwnd_X, L"ScaleX", …)`：
+        // 对一枚假 IDispatch 发 Invoke ⇒ 编得过、链接过、跑起来回 0（#143 那一族在方法面上的第三味；
+        // 上面 152 行那条 `axIsScaleMethod` 只是让它别走更错的"集合 + Item"那一形）。
+        // 换算只吃那两个显式的 from/to（接收者自己的 ScaleMode 由发码侧算成参数交进来），
+        // 所以四处接收者共用一处实现 `vb6_ScaleUnitX/Y`（见 vb6rtl_com.c 那段注释）。
+        {
+            std::string scMem = Symbol::toLower(memberName);
+            FrmControlType scType = FrmControlType::Unknown;
+            std::string scHwndUnused;
+            std::string scFn = formCtrlSlot(objExpr, scType, scHwndUnused)
+                             ? controlScaleMethod(scType, scMem) : std::string();
+            if (!scFn.empty()) {
+                std::vector<std::string> sc;
+                for (size_t i = 0; i < node.positional.size(); i++) {
+                    emitExpr(*node.positional[i]);
+                    sc.push_back(lastExpr_);
+                }
+                std::string sa0 = sc.size() > 0 ? sc[0] : std::string("0");
+                std::string sa1 = sc.size() > 1 ? sc[1] : std::string("1");
+                std::string sa2 = sc.size() > 2 ? sc[2] : std::string("3");
+                // 与这一族其他"自己拼完整调用"的出口同一动作：标记位要清掉，
+                // 否则语句路会以为还有一个 COM 成员调用没消费（#143 那一族的另一半）。
+                isComMarker_ = false;
+                comObjExpr_.clear();
+                comMemberName_.clear();
+                lastExpr_ = scFn + "(" + sa0 + ", " + sa1 + ", " + sa2 + ")";
+                return;
+            }
+        }
+
         // C29-4: StatusBar1.SimClick n, dbl —— **判据专用**方法 (无头环境点不了鼠标,
         // RTL 的 vb6_StatusBar_SimClick 程序化发一条真实 WM_NOTIFY, 走完整派发链)。
         // 不对应任何 VB6 语义, 写进 ai/029 边界。
@@ -692,7 +728,25 @@
                 std::string packFn = comPackExpr(*argExpr);
                 emitExpr(*argExpr);
                 { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
-                packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                // Fix <vbeclipse>: 实参表达式本身已返回**堆 VARIANT*** (ComGetProp /
+                // ComCall / ComGetObjectProp … 返回 void* 承载一个 COM VARIANT) 时, 它
+                // 已经是 ComCall 形参数组要的东西, 不能再包一层 vb6_ComPackObject —— 那会
+                // 把这个 VARIANT* 当 IDispatch*, 读其头 4 字节 (VT_EMPTY 时 vt+reserved=0)
+                // 为 lpVtbl=NULL, 再 NULL+4 取 AddRef 槽 → av read target=0x4。
+                // (ucPerspective 停靠: ucTab.Add 的 Icon 实参 = View.Icon 晚绑定读数。)
+                bool argIsVariantPtr =
+                       lastExpr_.compare(0, 15, "vb6_ComGetProp(") == 0
+                    || lastExpr_.compare(0, 17, "vb6_ComGetPropArg(") == 0
+                    || lastExpr_.compare(0, 12, "vb6_ComCall(") == 0
+                    || lastExpr_.compare(0, 18, "vb6_ComCallObject(") == 0
+                    || lastExpr_.compare(0, 18, "vb6_ComGetObjectProp(") == 0
+                    || lastExpr_.compare(0, 23, "vb6_ComGetPropertyObject(") == 0
+                    || lastExpr_.compare(0, 23, "vb6_ComGetPropertyVariant(") == 0;
+                if (argIsVariantPtr && packFn == "vb6_ComPackObject") {
+                    packedArgs.push_back(lastExpr_);   // 已是 VARIANT*, 直接作实参 (ComCall 会 VariantClear+free)
+                } else {
+                    packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                }
             };
             for (size_t pos = 0; pos < node.positional.size(); pos++) {
                 if (node.omittedArgs.count(pos)) {

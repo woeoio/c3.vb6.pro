@@ -76,6 +76,9 @@
 
     // 生成函数签名 (不含函数体)
     std::string makeProcSignature(SubDecl& node);
+    // 账 #222: 事件处理器的 ABI 与"这枚处理器的首形参是不是元素号"两处判断的唯一实现。
+    void applyEventHandlerAbi(SubDecl& node);
+    bool prepareEventHandlerProc(Module& mod, const std::string& loweredName);
     std::string makeProcSignature(FunctionDecl& node);
 
     // ai/vb-asm-extension-spec: 过程体 = 单个 Asm 块时降级为独立 MASM 过程 (v1: x64/ml64)。
@@ -119,6 +122,16 @@
     std::string ovlCSuffixFromKey(const std::string& suffixKey) const;
     void emitDelegateDecls(Module& module);
     void emitDelegateThunks();
+    // --- AddressOf 回调桩 (账 #184) ---
+    // VB6 的 AddressOf 交出去的是 __stdcall 调用桩, 不是本体地址。x86 下本体是
+    // __cdecl ⇒ 直接把本体给 OS/COM = 每次回调少弹 N*4 字节 (VBFlexGrid 起窗即
+    // 0xC0000374 的根因)。被标记的过程 (Symbol::addressOfCallback) 在**定义模块**
+    // 里另发一枚 __stdcall 桩, AddressOf 站点取桩地址; 本体约定一字不动 ⇒
+    // 现有直接调用与 RTL 的 cdecl 登记面完全不受影响。x64 忽略该约定。
+    std::string addressOfThunkName(const std::string& procCName);
+    std::string addressOfTargetCName(const Symbol* sym, const std::string& procCName);
+    void emitAddressOfThunkDecls(Module& module);   // decl pass: 桩原型
+    void emitAddressOfThunkDefs();                  // epilogue: 桩定义
     void emitDelegateCall(IndexOrCallExpr& node);
     // 委托桩目标过程声明查找 (O2: procFp 非空时按重载变体指纹精确匹配)
     Decl* findDelegateTargetDecl(Module& module, const std::string& name,
@@ -144,7 +157,8 @@
     void emitIfaceMemberStub(const SubDecl& node, const std::string& sig, bool returnsValue);
     void emitIfaceMemberStub(const FunctionDecl& node, const std::string& sig, bool returnsValue);
     void emitIfaceMemberStub(const PropertyDecl& node, const std::string& sig, bool returnsValue);
-    void emitIfaceStubBody(const std::string& sig, const std::string& retType);
+    void emitIfaceStubBody(const std::string& sig, const std::string& retType,
+                           const std::string& slotKey, bool takesArgs);
 
     // 生成类工厂函数 (New/Destroy)
     void emitClassFactory(Module& module);
@@ -279,6 +293,10 @@
     void emitDesignerTabIndexProp(const FrmControl& ctrl, const std::string& hwndExpr,
                                   long declarationIndex);
 
+    // 账 #197: 设计期 `ScaleMode` 下发到窗口属性 `VB6_ScaleMode`（写了才发）。
+    // **三条落点共用这一处**：顶层创建路、容器子控件创建路、窗体自己的 WM_CREATE。
+    void emitDesignerScaleModeProp(const FrmControl& ctrl, const std::string& hwndExpr);
+
     // 返回控件类型相关的 Win32 样式位 (BS_*/SS_*/ES_*/CBS_*/LBS_*/WS_BORDER...)。
     // 顶层控件与容器(Frame/PictureBox)子控件必须使用同一套逻辑，否则子控件缺
     // SS_NOTIFY/BS_GROUPBOX 等样式会导致外观/交互 (含 tooltip) 异常。
@@ -328,6 +346,22 @@
                       std::string& outHwndExpr) const;
     std::string controlZeroArgMethod(FrmControlType ctrlType,
                                      const std::string& memberLower) const;
+    // 账 #196: **一个实参**的控件方法表（TextHeight / TextWidth）。只交名字，实参由码头拼 ——
+    // 与上面那张表同一套规矩，With 形与带括号裸形两条码头都要接。
+    std::string controlOneArgMethod(FrmControlType ctrlType,
+                                    const std::string& memberLower) const;
+
+    // 账 #196 第三条: 控件的单位换算方法（ScaleX/ScaleY，三个实参）名字表 —— 同一套
+    // 「表只交名字、实参由码头拼」的规矩，且刻意不给通用行（理由见定义处）。
+    std::string controlScaleMethod(FrmControlType ctrlType,
+                                   const std::string& memberLower) const;
+
+    // 账 #221 = C29-PL-a: 控件的**画表面方法**名表（目前只有 Line，六个实参）。
+    // 与上面三张表同一套规矩: 表只交名字、实参由码头拼，且**刻意不给通用行** ——
+    // VB6 只有画得上去的那几枚（Form / PictureBox）有 Line，给成通用行就等于允许
+    // `List1.Line (0,0)-(1,1)` 也答一次成功（同 #192/#196 那条"别伪造成功"的口径）。
+    std::string controlCanvasMethod(FrmControlType ctrlType,
+                                    const std::string& memberLower) const;
 
     // C29-SL-n（账 #141）: 「这枚控件要不要子类化」的**唯一一份**判据。
     // 这一趟原本被抄成三份：发 arm 的 `cgen_form_wndproc_subclass.inc`（按 info.hasXxx 汇总）、
@@ -337,6 +371,16 @@
     // ⇒ 处理器编得过、永不触发（`Slider` 首当其冲，本页 §3 就写着 DblClick）。
     // ⚠ 内容与发 arm 那一趟的 info.hasXxx 逐条对应，**两边一起改**才有意义；
     //   焦点与 Click 那两条必须带排除表，否则同一次操作会从两条路各发一次（C29-SL-g / SL-d）。
+    // 账 #189: 控件数组整体成员 (Count/LBound/UBound) 的唯一出口; 不是这三条返回空串。
+    std::string ctrlArrayMetaMemberExpr(const std::string& arrName,
+                                        const std::string& memberLower) const;
+    // 账 #190: 事件处理器的 C 函数名 = 符号自己的拼写 (与 Sub 的写法一致); 没处理器返空串。
+    std::string eventHandlerFn(const std::string& ctrlName,
+                               const std::string& suffix) const;
+    // 账 #191: 工程内 UC 的实例成员访问 (Fix 112 的出口)。recvExpr = 该实例的宿主句柄表达式,
+    // 单枚控件与控件数组元素两条路只差这一个串。命中返回 true (已填 lastExpr_/pendingChainObj_)。
+    bool emitUcInstanceMemberExpr(const std::string& ucClass, const std::string& member,
+                                  const std::string& recvExpr);
     bool controlNeedsSubclass(const FrmControl& ctrl) const;
 
     // C29-SL-o（账 #83 的 Slider 半边）: Slider 的**设计期值面**下发。
@@ -368,6 +412,11 @@
     // cgen_form_wndproc_subclass.inc（发不发这条 arm）与 cgen_form_frame_menu.inc
     // （要不要装子类化）。
     static bool controlClickFromNativeNotify(FrmControlType ctrlType);
+    // 账 #222: 控件数组元素的键 (见 cgen_util_ctrl.cpp 的定义处)。
+    static std::string ctrlElemKey(const std::string& ctrlName, int index);
+    // 账 #229: `对象.成员` 的对象位是不是窗体控件（单枚 / 数组元素两形同归），
+    // 定义与实测症状在 cgen_util_ctrl.cpp。
+    bool ctrlTypeOfMemberObject(const Expr* obj, FrmControlType& outType) const;
     // C29-SL-g: 同理，但排除的是**焦点**通知（TextBox/ComboBox/ListBox/命令按钮那六类的
     // GotFocus/LostFocus 由父窗的 WM_COMMAND 码供，见 cgen_form_wndproc_dispatch.inc 开头）。
     // 三处使用点：发 arm（subclass）、装子类化（frame_menu）、拆子类化（dispatch）——
@@ -413,6 +462,12 @@
     // 会回退到 Variant (默认值), 此处不认为那些是 Variant, 避免误用 vb6_VariantToXxx 包装.
     // isArrOut: 若不为 nullptr, 用于返回是否为 Variant() 数组类型.
     bool isDefinitelyVariantExpr(Expr& expr, bool* isArrOut = nullptr) const;
+
+    // 账 #238: 「这个操作数能不能当 vb6_VARIANT* 取址」只有一处判据。vb6_VarCmp*(&A,&B)
+    // 那四个取址点以前只看名字形状 (裸标识符就 & 取址), 于是 `Dim d As Double` 的地址被当
+    // vb6_VARIANT* 递进 RTL —— 按 VARIANT 的布局读一个 8 字节标量: 答案错, 且越界读。
+    // 裸名字那一形交回 isDefinitelyVariantExpr (声明那几张表 + 符号表); 其余形状不在这里回答。
+    bool cmpOperandMayTakeAddr(const std::string& c, Expr* ast) const;
 
     // Fix 038b: 基于 C 表达式字符串的 Variant 检测 — 补充 isDefinitelyVariantExpr
     // 的 AST 级检测. 当 codegen 生成的 C 表达式包含已知返回 vb6_VARIANT 的函数调用
@@ -582,6 +637,20 @@
     // 非宿主伪对象 / 表中无此项时原样返回.
     std::string canonicalHostPseudoMember(const std::string& pseudoObj,
                                            const std::string& memberName) const;
+
+    // 账 #159 = C29-CH-d: 上面那条规范化与下面三个问题, 全部由 cgen_util_com.cpp
+    // 里 kHostPseudoRows 这**一张表**回答 (成员名清单只此一处, 别处再抄就是回归):
+    //   hostPseudoBareName   — .ctl/.pag 里裸写的成员要不要接、接成哪个 RTL 符号
+    //   hostPseudoValueType  — 按值读时的 VB6 类型 (决定比较走不走装箱那一路)
+    //   hostPseudoIsNumeric  — 赋值时 RHS 是 Variant 要不要先拆成数值
+    // 每行的类型都必须与 src/rtl/core/vb6rtl/vb6rtl_userctl.h 的 extern 对上,
+    // 由 scripts/check_host_pseudo_table.ps1 逐行钉 (含负控)。
+    bool hostPseudoBareName(const std::string& pseudoObj, const std::string& memberName,
+                            std::string& outRtlName) const;
+    bool hostPseudoValueType(const std::string& pseudoObj, const std::string& memberName,
+                             Vb6Type& outType, bool requireBare) const;
+    bool hostPseudoIsNumeric(const std::string& pseudoObj,
+                             const std::string& memberName) const;
 
     // Fix 010r-16: COM/Property-Get 左值重写辅助
     // 当赋值语句(Let/Set/Assignment fallback)的 LHS 是非常量 C 表达式(非左值)时,
@@ -776,7 +845,7 @@
     // P6.4+: class-module default instance singleton
     void emitClassDefaultInstance(Module& module);
     // Fix 110: emit symbol support for .ctl/.pag designer sub-controls
-    void emitDesignerControlDecls(const FrmFormDesc& frmDesc);
+    void emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind kind);
     // Fix 110: recursively emit designer control handle/array/COM declarations
     void emitControlHandleDecls(const FrmFormDesc& frmDesc);
     // Fix 107: lookup type-category symbol (Class/UDT/Enum/COM), ignoring proc/var

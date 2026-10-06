@@ -48,48 +48,44 @@ std::unique_ptr<CallStmt> Parser::parseCallStmt() {
 StmtPtr Parser::parseDimStmt() {
     auto loc = currentLoc();
     advance(); // consume 'Dim'
-    auto varDecl = parseVariableDecl(AccessLevel::Private, false);
-    // P20: Dim a As Long, b As String — comma-separated multi-variable
-    if (cur_.kind != TokenKind::Comma) {
-        return std::make_unique<LocalDeclStmt>(loc, std::move(varDecl));
+    return wrapBodyDecls(loc, parseVariableDeclList(AccessLevel::Private, false));
+}
+
+// 体级声明只有一种形状: 一条声明符一条 LocalDeclStmt。parse*DeclList 在多声明符时返回
+// MultiDecl, 这里就地展开 —— 以前 Dim 自己手写一遍展开 (那份副本漏了 parseVariableDecl
+// 里的 WithEvents 与「后缀即类型」两步, 于是 `Dim a&, b&` 的第二枚落回 Variant),
+// 而 Const/Static/Public 三条把 MultiDecl 原样交给语义层, 那儿的 switch 不认这个 kind,
+// 于是一枚名字都不登记、每条使用报一条 VB3001 (账 #215)。
+StmtPtr Parser::wrapBodyDecls(SourceLocation loc, DeclPtr decl) {
+    if (decl->kind != ASTNodeKind::MultiDecl) {
+        return std::make_unique<LocalDeclStmt>(loc, std::move(decl));
     }
-    // Multiple variables: wrap in Block
+    auto& multi = static_cast<MultiDecl&>(*decl);
     StmtList stmts;
-    stmts.push_back(std::make_unique<LocalDeclStmt>(loc, std::move(varDecl)));
-    while (match(TokenKind::Comma)) {
-        // Parse additional variable name As Type
-        auto nameTok = expectName("expected variable name");
-        // Fix 028: 剥离 VB6 类型后缀 ($%&!#@), 与 parseVariableDecl 保持一致
-        auto suffixInfo = stripTypeSuffix(nameTok.text);
-        const std::string& varName = suffixInfo.name;
-        std::vector<VariableDecl::Dimension> dimensions;
-        bool isDynamicArray = false;
-        if (match(TokenKind::LeftParen)) {
-            if (cur_.kind != TokenKind::RightParen) {
-                do {
-                    VariableDecl::Dimension dim;
-                    auto first = parseExpression();
-                    if (match(TokenKind::To)) { dim.lower = std::move(first); dim.upper = parseExpression(); }
-                    else { dim.upper = std::move(first); }
-                    dimensions.push_back(std::move(dim));
-                } while (match(TokenKind::Comma));
-            } else { isDynamicArray = true; }
-            expect(TokenKind::RightParen, DiagnosticID::ParseExpectedToken, "expected ')'");
-        }
-        bool isNew = false;
-        TypeRefPtr asType;
-        if (match(TokenKind::As)) {
-            if (match(TokenKind::New)) isNew = true;
-            asType = parseTypeRef();
-        }
-        ExprPtr initializer;
-        if (match(TokenKind::Equals)) initializer = parseExpression();
-        stmts.push_back(std::make_unique<LocalDeclStmt>(loc,
-            std::make_unique<VariableDecl>(loc, AccessLevel::Private, varName,
-                false, false, isNew, std::move(asType), std::move(initializer),
-                std::move(dimensions), isDynamicArray)));
+    for (auto& d : multi.declarations) {
+        stmts.push_back(std::make_unique<LocalDeclStmt>(loc, std::move(d)));
     }
     return std::make_unique<Block>(loc, std::move(stmts));
+}
+
+// 由点链字符串构造表达式 (账 #186 起为 ReDim / Erase **共用**的单一出口)。
+// 前置 '.' 表示 With 块成员 (WithMemberExpr), 其余逐段构造 MemberAccessExpr。
+ExprPtr Parser::buildDottedNameExpr(const std::string& nm, SourceLocation l) {
+    if (!nm.empty() && nm[0] == '.') {
+        return std::make_unique<WithMemberExpr>(l, nm.substr(1));
+    }
+    ExprPtr e;
+    size_t pos = 0;
+    for (;;) {
+        size_t d = nm.find('.', pos);
+        std::string seg = (d == std::string::npos) ? nm.substr(pos)
+                                                   : nm.substr(pos, d - pos);
+        if (!e) e = std::make_unique<IdentifierExpr>(l, seg);
+        else e = std::make_unique<MemberAccessExpr>(l, std::move(e), seg);
+        if (d == std::string::npos) break;
+        pos = d + 1;
+    }
+    return e;
 }
 
 std::unique_ptr<ReDimStmt> Parser::parseReDimStmt() {
@@ -142,24 +138,10 @@ std::unique_ptr<ReDimStmt> Parser::parseReDimStmt() {
         return list;
     };
 
-    // 由点链字符串构造表达式 (复用于复杂目标的基名)。
-    // 前置 '.' 表示 With 块成员 (WithMemberExpr), 其余逐段构造 MemberAccessExpr。
+    // 由点链字符串构造表达式 (复用于复杂目标的基名)。账 #186 起出口在 Parser::buildDottedNameExpr
+    // —— Erase 与 ReDim 共用同一份，别再抄第二遍。
     auto buildNameExpr = [&](const std::string& nm, SourceLocation l) -> ExprPtr {
-        if (!nm.empty() && nm[0] == '.') {
-            return std::make_unique<WithMemberExpr>(l, nm.substr(1));
-        }
-        ExprPtr e;
-        size_t pos = 0;
-        for (;;) {
-            size_t d = nm.find('.', pos);
-            std::string seg = (d == std::string::npos) ? nm.substr(pos)
-                                                       : nm.substr(pos, d - pos);
-            if (!e) e = std::make_unique<IdentifierExpr>(l, seg);
-            else e = std::make_unique<MemberAccessExpr>(l, std::move(e), seg);
-            if (d == std::string::npos) break;
-            pos = d + 1;
-        }
-        return e;
+        return buildDottedNameExpr(nm, l);
     };
 
     // 把一组下标维度包装为 IndexOrCallExpr(base[i, j])
@@ -218,8 +200,7 @@ std::unique_ptr<ReDimStmt> Parser::parseReDimStmt() {
 StmtPtr Parser::parseConstStmtInBody() {
     auto loc = currentLoc();
     // 不需要 advance() — parseConstDeclList -> parseConstDecl 会消费 'Const'
-    auto decl = parseConstDeclList(AccessLevel::Private);
-    return std::make_unique<LocalDeclStmt>(loc, std::move(decl));
+    return wrapBodyDecls(loc, parseConstDeclList(AccessLevel::Private));
 }
 
 StmtPtr Parser::parseStaticStmtInBody() {
@@ -234,8 +215,7 @@ StmtPtr Parser::parseStaticStmtInBody() {
         auto funcDecl = parseFunctionDecl(AccessLevel::Private, true);
         return std::make_unique<LocalDeclStmt>(loc, std::move(funcDecl));
     }
-    auto varDecl = parseVariableDeclList(AccessLevel::Private, true);
-    return std::make_unique<LocalDeclStmt>(loc, std::move(varDecl));
+    return wrapBodyDecls(loc, parseVariableDeclList(AccessLevel::Private, true));
 }
 
 StmtPtr Parser::parseAccessDeclInBody() {
@@ -244,8 +224,7 @@ StmtPtr Parser::parseAccessDeclInBody() {
     AccessLevel access = (cur_.kind == TokenKind::Public)
         ? AccessLevel::Public : AccessLevel::Private;
     advance();
-    auto varDecl = parseVariableDeclList(access, false);
-    return std::make_unique<LocalDeclStmt>(loc, std::move(varDecl));
+    return wrapBodyDecls(loc, parseVariableDeclList(access, false));
 }
 
 // ============================================================
@@ -256,63 +235,154 @@ std::unique_ptr<EraseStmt> Parser::parseEraseStmt() {
     auto loc = currentLoc();
     advance(); // consume 'Erase'
     std::vector<std::string> names;
+    std::vector<ExprPtr> targets;
 
-    // 辅助: 解析一个 Erase 目标, 支持 .Member (With块) 和 obj.Member
-    auto parseEraseTarget = [this]() -> std::string {
-        std::string name;
-        if (match(TokenKind::Dot)) {
-            name = ".";
+    // 一段标识符 (与旧口径一致: 关键字位的名字也照字面收下)
+    auto takeNamePiece = [this]() -> std::string {
+        if (canBeName(cur_.kind)) return advance().text;
+        if (!cur_.text.empty() && cur_.kind != TokenKind::EndOfFile &&
+            cur_.kind != TokenKind::NewLine && cur_.kind != TokenKind::Colon &&
+            cur_.kind != TokenKind::Comma && cur_.kind != TokenKind::LeftParen &&
+            cur_.kind != TokenKind::RightParen) return advance().text;
+        return std::string();
+    };
+
+    auto wrapSubscripts = [](ExprPtr base, std::vector<ExprPtr>& subs,
+                             SourceLocation l) -> ExprPtr {
+        auto call = std::make_unique<IndexOrCallExpr>(l, std::move(base));
+        for (auto& s : subs) call->positional.push_back(std::move(s));
+        return call;
+    };
+
+    // 括号里的下标列表 (账 #186)。`To` 在 ReDim 的维度里是下界, 在**下标**里非法。
+    auto parseSubscriptList = [this](bool& toSeen) -> std::vector<ExprPtr> {
+        std::vector<ExprPtr> subs;
+        toSeen = false;
+        while (cur_.kind != TokenKind::RightParen && cur_.kind != TokenKind::EndOfFile &&
+               cur_.kind != TokenKind::NewLine) {
+            subs.push_back(parseExpression());
+            if (match(TokenKind::To)) { toSeen = true; parseExpression(); }
+            if (!match(TokenKind::Comma)) break;
         }
-        if (canBeName(cur_.kind)) {
-            name += advance().text;
-        } else if (!cur_.text.empty() && cur_.kind != TokenKind::EndOfFile &&
-                   cur_.kind != TokenKind::NewLine && cur_.kind != TokenKind::Colon &&
-                   cur_.kind != TokenKind::Comma) {
-            name += advance().text;
-        }
-        // 支持 obj.Member.Member 链
+        return subs;
+    };
+
+    // 点链继续留在名字里 (没有下标时的旧行为, 含 Fix 082 的空括号)
+    auto finishPlainName = [this, &takeNamePiece](std::string& name) {
         while (match(TokenKind::Dot)) {
-            if (canBeName(cur_.kind)) {
-                name += "." + advance().text;
-            } else if (!cur_.text.empty() && cur_.kind != TokenKind::EndOfFile &&
-                       cur_.kind != TokenKind::NewLine && cur_.kind != TokenKind::Colon &&
-                       cur_.kind != TokenKind::Comma) {
-                name += "." + advance().text;
-            } else {
-                break;
-            }
+            std::string m = takeNamePiece();
+            if (m.empty()) break;
+            name += "." + m;
         }
-        return name;
+    };
+
+    // Fix 082 的另一半: 空括号可以挂在**点链的末尾** (`Erase obj.Field()` /
+    // `Erase .MaxWidths()`, VBFlexGrid 6590 就是后者)。吃完整条点链之后再吃这一组括号,
+    // 顺序不能反 —— 反了就留下一个裸 '(' 变成 VB2003/VB2002。
+    auto dropOptionalEmptyParens = [this, &loc, &parseSubscriptList](const std::string& name) {
+        if (cur_.kind != TokenKind::LeftParen) return;
+        advance();  // '('
+        bool to = false;
+        std::vector<ExprPtr> subs = parseSubscriptList(to);
+        if (!match(TokenKind::RightParen)) {
+            diag_.error(DiagnosticID::ParseExpectedToken, loc,
+                "Erase 目标的下标缺少 ')'");
+            return;
+        }
+        if (!subs.empty() || to) {
+            diag_.error(DiagnosticID::ParseExpectedToken, loc,
+                std::string("Erase 不支持带下标的目标 (") + name
+                + ") —— 只有 'Erase arr' 与 'Erase arr()' 是销毁整个数组 (indexed Erase target not supported here)");
+        }
     };
 
     // Fix 082: VB6 允许 `Erase arr()` 的可选空括号 (Common.bas:423
-    // `Erase MsgBoxHelpData()`), 旧代码解析到变量名就停 -> 残留 '(' 触发
-    // VB2003/VB2002。此处吃掉可选的下标列表。
-    // EraseStmt 只携带变量名 (见 ast_stmt.hpp), 无法表达下标, 故只接受空括号;
-    // `Erase arr(1 To 2)` 报诊断 —— 静默丢弃下标会让后端退化成销毁整个数组。
-    auto skipEraseSubscripts = [this, &loc]() {
-        if (!match(TokenKind::LeftParen)) return;
-        int depth = 1;
-        bool empty = true;
-        while (depth > 0 && cur_.kind != TokenKind::EndOfFile) {
-            if (cur_.kind == TokenKind::LeftParen)       depth++;
-            else if (cur_.kind == TokenKind::RightParen) depth--;
-            else if (depth > 0 && cur_.kind != TokenKind::NewLine) empty = false;
-            advance();
+    // `Erase MsgBoxHelpData()`) —— 空括号照旧丢弃。
+    // 账 #186: 带**非空**下标的目标此前一律 VB2001，卡住了真工程的一句合法代码
+    // (`PropPagFMR.pag:720 Erase m_tvFiles(lIndex).bvData` —— 销毁 UDT 那一格里的动态数组)。
+    // EraseStmt 只能表达"名字"，所以下标必须配一棵表达式树才发得出来 (见 ast_stmt.hpp)：
+    //   base(subs).member   → targets[i] 非空，发码侧 emitExpr 出 VB6_SA_AT(...) 那样的左值
+    //   base(subs)          → 仍报诊断。VB6 里这形只在元素是 Variant(装着数组) 时合法，
+    //                         本仓没那条通路；静默降级成"销毁整个数组"比编不过更坏。
+    auto parseOneTarget = [&](std::string& nameOut, ExprPtr& exprOut) {
+        std::string name;
+        if (match(TokenKind::Dot)) name = ".";
+        name += takeNamePiece();
+        exprOut = nullptr;
+        if (cur_.kind != TokenKind::LeftParen) {
+            finishPlainName(name);
+            dropOptionalEmptyParens(name);   // `Erase obj.Field()` / `Erase .Field()`
+            nameOut = name;
+            return;
         }
-        if (!empty) {
+        advance();  // '('
+        bool toSeen = false;
+        std::vector<ExprPtr> subs = parseSubscriptList(toSeen);
+        if (!match(TokenKind::RightParen)) {
             diag_.error(DiagnosticID::ParseExpectedToken, loc,
-                "Erase 不支持带下标的形式, 只支持 'Erase arr' 或 'Erase arr()'");
+                "Erase 目标的下标缺少 ')'");
+            nameOut = name;
+            return;
         }
+        if (subs.empty()) {           // `Erase arr()`
+            finishPlainName(name);
+            dropOptionalEmptyParens(name);   // `Erase obj.Field()` / `Erase .Field()`
+            nameOut = name;
+            return;
+        }
+        if (toSeen || cur_.kind != TokenKind::Dot) {
+            diag_.error(DiagnosticID::ParseExpectedToken, loc,
+                toSeen ? "Erase 的下标里不支持 To 语法 (To is not allowed in an Erase subscript; it only appears in ReDim dimensions)"
+                       : std::string("Erase 的带下标目标必须是成员数组形式 (Erase arr(i).data)，'")
+                         + name + "(i)' 暂不支持 —— 静默改成销毁整个数组会改变语义 (indexed Erase target not supported here)");
+            nameOut = name;
+            return;
+        }
+        ExprPtr expr = wrapSubscripts(buildDottedNameExpr(name, loc), subs, loc);
+        std::string dotted = name;
+        while (cur_.kind == TokenKind::Dot) {
+            advance();  // '.'
+            std::string m = takeNamePiece();
+            if (m.empty()) {
+                diag_.error(DiagnosticID::ParseExpectedToken, loc, "Erase 目标的 '.' 后缺少成员名");
+                break;
+            }
+            expr = std::make_unique<MemberAccessExpr>(loc, std::move(expr), m);
+            dotted += "." + m;
+            if (cur_.kind != TokenKind::LeftParen) continue;
+            advance();  // '('
+            bool to2 = false;
+            std::vector<ExprPtr> subs2 = parseSubscriptList(to2);
+            if (!match(TokenKind::RightParen)) {
+                diag_.error(DiagnosticID::ParseExpectedToken, loc,
+                    "Erase 目标的下标缺少 ')'");
+                break;
+            }
+            if (!subs2.empty()) {   // 末段带下标 = 要销毁"数组里的一格"，Erase 无此语义
+                diag_.error(DiagnosticID::ParseExpectedToken, loc,
+                    "Erase 不支持对成员数组再带下标 (Erase arr(i).data(j))");
+                break;
+            }
+        }
+        nameOut = dotted;
+        exprOut = std::move(expr);
     };
 
-    names.push_back(parseEraseTarget());
-    skipEraseSubscripts();
+    std::string nm;
+    ExprPtr ex;
+    parseOneTarget(nm, ex);
+    names.push_back(std::move(nm));
+    targets.push_back(std::move(ex));
     while (match(TokenKind::Comma)) {
-        names.push_back(parseEraseTarget());
-        skipEraseSubscripts();
+        std::string n2;
+        ExprPtr e2;
+        parseOneTarget(n2, e2);
+        names.push_back(std::move(n2));
+        targets.push_back(std::move(e2));
     }
-    return std::make_unique<EraseStmt>(loc, std::move(names));
+    auto stmt = std::make_unique<EraseStmt>(loc, std::move(names));
+    stmt->targets = std::move(targets);
+    return stmt;
 }
 
 std::unique_ptr<RaiseEventStmt> Parser::parseRaiseEventStmt() {

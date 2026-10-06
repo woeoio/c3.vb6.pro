@@ -52,14 +52,8 @@ void SemanticAnalyzer::visit(BinaryExpr& node) {
             break;
         case BinaryOp::And: case BinaryOp::Or: case BinaryOp::Xor:
         case BinaryOp::Eqv: case BinaryOp::Imp:
-            // 逻辑运算符: 如果两边都是Boolean → Boolean, 否则 → 数值提升
-            if (leftType == Vb6Type::Boolean && rightType == Vb6Type::Boolean) {
-                lastExprType_ = Vb6Type::Boolean;
-            } else if (TypeSystem::isNumeric(leftType) && TypeSystem::isNumeric(rightType)) {
-                lastExprType_ = TypeSystem::promote(leftType, rightType);
-            } else {
-                lastExprType_ = Vb6Type::Variant;
-            }
+            // 逻辑/位运算符: 口径在 TypeSystem::bitwiseResult 一处 (账 #216)
+            lastExprType_ = TypeSystem::bitwiseResult(leftType, rightType);
             break;
         case BinaryOp::Add: case BinaryOp::Sub:
         case BinaryOp::Mul: case BinaryOp::Div:
@@ -96,14 +90,8 @@ void SemanticAnalyzer::visit(UnaryExpr& node) {
             }
             break;
         case UnaryOp::Not:
-            // Not x: Boolean → Boolean, 数值 → 数值(按位取反)
-            if (operandType == Vb6Type::Boolean) {
-                lastExprType_ = Vb6Type::Boolean;
-            } else if (TypeSystem::isIntegral(operandType)) {
-                lastExprType_ = operandType;
-            } else {
-                lastExprType_ = Vb6Type::Variant;
-            }
+            // Not x: 口径在 TypeSystem::logicalNotResult 一处 (账 #216)
+            lastExprType_ = TypeSystem::logicalNotResult(operandType);
             break;
     }
 }
@@ -151,6 +139,14 @@ void SemanticAnalyzer::visit(IdentifierExpr& node) {
         // 放在最前面：Option Explicit 那条 3001 警告同样不该为这两个位出。
         if (pass_ == 2 && namesProjectLevel(node.name)) {
             // 什么都不做 —— 不是变量，也不是未声明标识符；名字的含义由发码层按工程解析。
+        } else if (pass_ == 2 && memberObjCtx_ && isDocumentHostObject(node.name)) {
+            // 文档隐式对象 (`UserControl.hDC` / `VBA.Len(x)` 那一族的限定符位) —— 判据与
+            // 两种后果都写在 SemanticAnalyzer::isDocumentHostObject 的声明处。类型答案仍然
+            // 走下面的 Variant：成员的类型由发码层按 kHostPseudoRows 回答 (账 #159)。
+        } else if (pass_ == 2 && !memberObjCtx_ && isDocumentBarePseudoMember(node.name)) {
+            // 文档自带的裸写成员 (.pag 的 Changed、.ctl 的 hDC 一族) 不是未声明的名字 ——
+            // 判据写在 SemanticAnalyzer::isDocumentBarePseudoMember 的定义处。发码层把这一批
+            // 交给 vb6_<对象>_<成员>，这里停的是同一批名字上的 3001 与隐式局部。
         } else if (pass_ == 2 && declaredByAncestor(node.name)) {
             diag_.error(DiagnosticID::SemInheritsNotSupported, node.loc,
                 "Inherited member '" + node.name + "' cannot be called unqualified in this build"

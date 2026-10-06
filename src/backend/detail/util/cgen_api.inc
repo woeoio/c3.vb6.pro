@@ -269,6 +269,28 @@
         if (it == interfaceImplementers_->end()) return "";
         return it->second;
     }
+    // Fix <vbeclipse>: 注入"接口 → 全部实现类"表 (小写接口名 → 规范类名列表).
+    void setInterfaceAllImplementers(const std::map<std::string, std::vector<std::string>>* m) {
+        interfaceAllImplementers_ = m;
+    }
+    // 查询接口的全部实现类 (保持 driver 预扫描的首见序)。空 vector = 无实现类
+    // 或表未注入 => 接口桩退回零值。
+    //
+    // 为什么不能用上面的 singleImplementationClass: 它在**多实现类**接口上刻意
+    // 返回空串 (让依赖唯一实现类的场景报错而非猜), 而 VbEclipse 的 IScheme 有 7 个
+    // 实现类。接口桩需要的是"挨个试", 不是"唯一那个" —— 否则桩恒返回零值,
+    // `m_Scheme.BackColor` 一律读到 0 (纯黑), 停靠面板整片黑底。
+    std::vector<std::string> allImplementationClasses(const std::string& ifaceName) const {
+        std::vector<std::string> out;
+        if (!interfaceAllImplementers_) return out;
+        std::string lower = ifaceName;
+        for (auto& ch : lower) {
+            if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+        }
+        auto it = interfaceAllImplementers_->find(lower);
+        if (it == interfaceAllImplementers_->end()) return out;
+        return it->second;
+    }
 
     // P6.4+: 类模块默认实例 (VB_PredeclaredId=True), 小写类名 → 类规范名.
     void setDefaultInstanceClasses(const std::map<std::string, std::string>* m) {
@@ -305,3 +327,7 @@
     // Fix 160: vbp ComLib= 免注册 COM 组件表 {ProgID, CLSID, coclass名, 相对exe路径}.
     // 入口点生成时烘焙成 static 表 + vb6_ComLibRegister 调用; 表空则一行不发.
     void setComLibRefs(const std::vector<std::array<std::string, 4>>* v) { comLibRefs_ = v; }
+
+    // Fix <vbeclipse> 2026-10-06: vbp Object= OCX 免注册表 {ProgID, CLSID, coclass名, 相对exe路径}.
+    // 入口点生成时烘焙成 static 表 + vb6_OcxRefRegister 调用; 表空则一行不发.
+    void setOcxLibRefs(const std::vector<std::array<std::string, 4>>* v) { ocxLibRefs_ = v; }

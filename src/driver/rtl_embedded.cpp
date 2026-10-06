@@ -165,6 +165,13 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6FORMS_RICHTEXTBOX_C,  "vb6forms_richtextbox.c" },
     { RTL_VB6FORMS_WINSOCK_C,      "vb6forms_winsock.c" },
     { RTL_VB6FORMS_SLIDER_C,       "vb6forms_slider.c" },
+
+    // 2026-10-06: Form/Printer 绘图方法家族。放在 slider 之后而不是紧邻 widget,
+    // 因为它 include vb6forms.h (自身经 vb6forms_draw.h 互含), 排在后面时
+    // 前序家族的头都已解包到位。⚠ 头 (.h) 必须排在 .c 之前 ——
+    // 解包后是平铺目录, 同名 .h 缺失会在 cl 的 include 阶段报 C1083。
+    { RTL_VB6FORMS_DRAW_H,         "vb6forms_draw.h" },
+    { RTL_VB6FORMS_DRAW_C,         "vb6forms_draw.c" },
     { RTL_VB6FORMS_AXSITE_C,       "vb6forms_axsite.c" },
     { RTL_VB6FORMS_AXCONTAINER_C,  "vb6forms_axcontainer.c" },
     // vb6forms_axsite.c 按功能家族拆分 (2026-09-20): 内部头 + axsite/ 下 5 个族编译单元
@@ -185,6 +192,7 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6RTL_ARRAY_H,                 "vb6rtl_array.h" },
     { RTL_VB6RTL_CLASS_COM_H,             "vb6rtl_class_com.h" },
     { RTL_VB6RTL_RUNTIME_H,               "vb6rtl_runtime.h" },
+    { RTL_VB6RTL_CRASH_H,                 "vb6rtl_crash.h" },
 
     // vb6forms 家族再细分 (2026-09-17)
     { RTL_VB6FORMS_PICTURE_PROP_C,        "vb6forms_picture_prop.c" },
