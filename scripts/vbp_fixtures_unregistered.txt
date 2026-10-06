@@ -1,0 +1,14 @@
+﻿# .vbp 夹具未登记基线 (scripts/check_vbp_fixture_census.ps1 的判据; -Update 重写)
+# 格式: <相对 tests\ 的路径>   # <理由>
+# 出现在这里 = 承认它**不在** tests\run_tests.ps1 门禁的编译面上。门禁只认两类理由:
+#   (a) 刻意不列  —— 编不过 / 是已知红, 列进去就是把已知的红当基线;
+#   (b) 别处已覆盖 —— 由别的 runner 覆盖 (tests\run_vbman_test.ps1 / tests\regress_all.ps1)。
+# 2026-10-06 口径收紧: 凡**能确定编得过**的一律登记进 run_tests.ps1 的 Test-VbpBuild,
+# 哪怕它要跑得先在本机注册 COM/OLE —— 那只是"不跑", 不是"不编"。本批因此出册 5 个
+# (c29data / olecon / test_validate / test_com_events_winhttp / diff_smoke, 每个都先实测
+# x64+x86 rc=0 且出 exe)。理由是 (a)/(b) 之外的一概不收。
+# 共 4 个。
+Charts 2020\ucProgressCircular\Proyecto1.vbp   # 刻意不列: 已知红 (B29③④ 的 25 条 C2198+C2084), 见 run_tests.ps1 里"刻意不列"那段
+vbman_host\vbman_host.vbp                      # 别处已覆盖: tests\run_vbman_test.ps1 (由 .github\workflows\ci_vbman.yml 驱动)
+vbp_project\TestVBP.vbp                        # 别处已覆盖: tests\regress_all.ps1 (真 VB6 与 C3 双编译对照工程)
+vbp_project\TestVBP2.vbp                       # 别处已覆盖: tests\regress_all.ps1 (真 VB6 与 C3 双编译对照工程)

@@ -1054,7 +1054,7 @@ CurrentY 的增量 == Me.TextHeight(同一串)"是两条路真汇合而不是各
 本文件不许再出现 `dpi` / `LOGPIXELSX` / `1440`（四条假针逐条证红）。
 护栏：24 道哨兵 red=0、90 份 emit 捕获 changed=0（纯 RTL + 夹具）、邻域五枚真跑全绿、矩阵 4 行干净。
 
-### B68 与 Variant 比较的那个标量操作数没装箱 —— `vb6_VarCmpEq(&variant, &double)`（账 #238，**已修，等门**）
+### B68 与 Variant 比较的那个标量操作数没装箱 —— `vb6_VarCmpEq(&variant, &double)`（账 #238，**已出：已过：门 #365（run 37436391539、head `9b9c1551`、branch dev、attempt 1）= 11 job 全 completed/success、非绿 0，wall 9m40s**）
 
 写 FD13 时撞见的：`(Me.CurrentY = thTw)` 在两个数**实测相等**（`FD15-RAW` 打出来 `th=240 curTw=240`）
 的情况下答 False，反过来写 `(thTw = Me.CurrentY)` 也 False，而算术那条路 `(Abs(Me.CurrentY - thTw) < 0.001)` True。
@@ -1113,6 +1113,135 @@ Print 之后笔位推进 `0 → 13`（= 同一枚控件自己答的 `TextHeight`
 **顺带量到的新事实（属 #232 那一族）**：`Me.Cls` 在 VB→C 那一路压根没出口 —— 发成
 `vb6_ComCall(vb6_hwnd_<Form>, L"Cls", NULL, 0)`（emit 物证 `.build/b373_emit_base.c:327`），运行期 no-op。
 所以家族那份 `vb6_Form_Cls` 今天只被控件那户到达；窗体自己的 Cls 何时能跑，等 #232 那条前端出口。
+
+### B70 窗体绘图语句的"裸形"与 "Me." 形各缺一条路（账 #232，**② 已出：门 #368（run 37454147931、head `9e5c9f91`、branch dev、attempt 1）= 11 job 全 completed/success、非绿 0，wall 9m46s；①③ 未开工**）
+
+探针 `.build/b433_shapes.txt`（同一枚 `.frm` 每次只放一条语句，`--emit-c` 看发码；工具 `.build/b431_232probe.py` 那套形状表）。**七形七样**（窗体上）：
+
+| 写的形状 | 今天发出来 | 症状 |
+| --- | --- | --- |
+| `PSet (100, 100)` | `PSet(100, 100);` | **未声明的 C 函数** ⇒ cl C2065，编不过 |
+| `Circle (200, 200), 50` | `Circle(200, 200, vb6_VariantEmpty(), 50);` | 同上 |
+| `Cls` | `Cls();` + 一条 VB3001 警告"未声明的标识符" | 同上（警告 + C2065 两层都不响） |
+| `Me.Cls` | `vb6_ComCall(hwnd, L"Cls", NULL, 0)` | 编得过、跑得起、**什么都不做**（CLINE 那族静默空转） |
+| `Me.Print "AB"` | `vb6_ComCallObject(vb6_ComGetObjectProp(hwnd, L"Print"), L"Item", ...)` | 同上，一笔不画 |
+| `Line (0, 0)-(10, 10)` | —— | **VB2001 expected ')' (got ,)** —— parser 就不认 |
+| `Line -(20, 20)` | —— | **VB2001 expected 'Input' after 'Line'** |
+
+已经通的三形钉住当基准：`Print "AB"` → `vb6_Form_Print(...)`、`Me.PSet (x, y)` → `vb6_Form_PSet(...)`、`Me.Line (0,0)-(10,10)` → `vb6_Form_Line(...)`。
+所以这一格不是"绘图面没做"，是**同一条方法的两条写法各缺一段路由**：
+① 裸形（`PSet` / `Circle` / `Cls`）今天当"用户模块过程/隐式声明"处理 ⇒ 需要走 `Print` 那条"窗体上下文语句"的改写；② `Me.` 形（`Cls` / `Print`）没进控件方法改道那张表 ⇒ 落 COM 兜底；③ 裸 `Line` 的两形在 parser 就没出口（`-` 续画形连 `Line` 语句自己都不认）。
+**开工顺序按"缺口小→大"**：先 ②（登记两行 + 一条发码针，和 #143/#149 同一套手法），再 ①（`Print` 那条改写已有先例），最后 ③（要动 parser 的语句形状，且 #220/#221 那套 B/BF 旗标折叠要一起接）。判据按 #221 那条口径：**画完再问像素**，发码面另钉一条"三形都不许出现 `vb6_ComCall`"。语料里 `Charts 2020` / `czUI` 有没有用裸形，开工前先用同一枚形状表扫一遍语料。
+
+**开工前的两条读码结论（省一轮定位）**：② 那一格**不是没登记** —— `cgen_expr_call_callee_withm.inc:697` 里
+`cls` 早已有路（`vb6_Form_Cls((void*)obj)`），但 `Me.Cls` 实测仍落 `vb6_ComCall(..., L"Cls", NULL, 0)`
+⇒ 零实参的 `对象.方法` 在**语句位置**被当成"属性读并丢弃"，压根没进这条方法分派（先查 parser/语义那一步
+的"是不是 CallStmt"，别在 cgen 的表里加行 —— 加了也不会到）。`Me.Print` 同理：裸 `Print` 走的是
+`cgen_file_io.cpp:83-93` 那条"无文件号的 Print 语句 = 窗体 Print"的改写，而 `Me.Print` 是成员调用形 ⇒
+表里没有 `print` 这一档 ⇒ 落 COM 兜底。所以 ② 的最小形状 = 让这两种写法进到**已有**的那条分派，
+而不是新增第二份答案。
+
+**② 已出（门 #368（run 37454147931、head `9e5c9f91`、branch dev、attempt 1）= 11 job 全 completed/success、非绿 0，wall 9m46s，提交 `1454f5b8` + 修正 `9e5c9f91`）—— 先订正上一轮那条读码结论**：窗体自己那枚接收者**本来就认得**，
+`cgen_form_ctrl_registry.inc:10` 把窗体名也登记进 `knownFormControls_`（类型 Form），
+所以缺的不是"入口"而是**名字表少两档**。证据 = 同一条 `Me.` 上 `Me.TextHeight("AB")` 一直是通的
+（`vb6_ControlTextHeight((void*)vb6_hwnd_<窗体>, …)`，走的正是 `formCtrlSlot` + 表那两条码头），
+只有 `print` / `cls` 因为不在表里、而三处画布码头又各自硬编码 PictureBox 才落进兜底。
+
+**语料先扫（按上面定的规矩）**：`Me.Cls` 0 处、`Me.Print` 0 处、裸 `Cls` / `PSet` / `Circle` 0 处、
+`PictureN.Cls` 5 处（本来就通）⇒ 这一格是**潜伏缺陷**（编得过、跑得起、一笔不画那一族，本线第四次），
+不是当前的编译阻塞；"编不过"那两格是 ① 与 ③。
+
+**十三形实测**（探针 `.build/b434probe/Me232Form.frm`：同一份 .frm 把两接收者 × 两成员 × 括号/实参/裸形全摆上，
+`--emit-c` 逐行看，比上一轮"一次一条"更快也更硬）。改前只有两条坏：
+`Me.Cls` → `vb6_ComCall(vb6_hwnd_Me232Form, L"Cls", NULL, 0)`、
+`Me.Print "AB"` → `vb6_ComCallObject(vb6_ComGetObjectProp(同一 HWND, L"Print"), L"Item", …)`；
+改后十三形全部落到真出口，`Me.Cls` 与 `Me.Cls()` 从此给**同一条** `vb6_ControlCls((void*)vb6_hwnd_X);  /* Form.Cls */`，
+`Me.Print "AB"` / `Me.Print ("CD")` → `vb6_ControlPrint(…, BSTR)`、裸 `Me.Print` → `(…, 0)`（VB6 的空行），
+而 `Pic1.Cls` / `Pic1.Print "GH"` 两形**连尾注释都逐字节没动**（`/* PictureBox.Cls */` 那一份原样保住）。
+
+**收成一处（三条码头 + 一处打标记问同一张表）**：
+① 表 `controlCanvasMethod` 加 `cls` / `print` 两档，接收者给 `Form` 与 `PictureBox`；`line` 那一档**仍只给 PictureBox**
+—— Form 的 Line 是 12 参签名 `vb6_Form_Line`（带 Step 相对位），签名不同不能并表，那是账 #224 剩下的口径，别顺手并进去。
+② 表达式码头（`cgen_expr_call_callee_withm.inc` 原 Fix 185 那块）改成 `formCtrlSlot` + 表驱动，实参形状按成员各自签名拼
+（cls 一条不交、print 交第 0 条、缺实参交 0 = 空行）；同文件下面的 Line 码头，接收者折开也改问 `formCtrlSlot`
+（它以前自己查 `knownFormControls_`，只认裸小写名那一形态）。
+③ 语句码头（`stmt/cgen_call.cpp` 原 PictureBox 硬编码那块）同样改问表 + `formCtrlSlot`。
+④ 打标记那一路（`cgen_expr_member_form_builtin.inc:401`）撤掉 `print` / `cls` 名单，只问表 —— 表加一档它自动跟着长
+（这一处以前正是"表加一档、它漏一档"的洞）。
+⑤ 撤掉重复的答案：Form/Printer 绘图段里 `cls` 的 **Form 那一支删掉**（画布两档已由表先接走），只留 Printer ——
+`Printer.Cls` 在 VB6 是"结束文档"(`vb6_Printer_EndDoc`)，不是清画布。
+
+**判据三面**：
+① 真跑夹具 `tests/fdraw/FDForm.frm` 加 FD18 / FD19 / FD20，每条两头钉（墨 + 笔位）。
+FD20 要写成**增量**（`Me.CurrentY - penBefore` 对 `TextHeight` 取等）：第一版写成 `Me.CurrentY = thA`，
+在改前那台上因为继承上一行裸 `Print` 的推进而**假绿**（读数 16,16）—— 判据钉错方向的现场，留着当反面教材。
+BASE 那台同一份夹具 = 两架构三条**全 False**（`FD18 raw=3,-1` / `FD19 raw=-1` / `FD20 raw=0,16`），
+新台两架构三条全 True（`FD18 raw=3,-1` 的两头由笔位那一半负责红：改前 Cls 没跑，但墨被窗口自己重画抹掉过，
+所以只看墨会读数一样 —— 这也是为什么每条都要两头）。
+② 发码针 `Test-CodegenNote "form_canvas_family"`（顺带把账 #224 欠的 ⑤ 一次还掉）：五枚必须出现 + 三枚必须不出现
+（`vb6_ComCall(vb6_hwnd_FDForm` / `vb6_ComGetObjectProp(vb6_hwnd_FDForm` / `vb6_ComCallObject(`）；
+BASE 产物实测"缺 2 枚 + 命中 3 枚各 1"⇒ 两头都真能红。
+发码针的一条格式规矩（本刀踩过，代价是一整轮门 #367 红在自己身上）：`Invoke-CodegenProj` 比对之前先把 emit 输出做 `-replace '\s+',' '` —— 所以 needle 里不许写连续两个空格。我第一版照抄产物的对齐写成 `);  /* Form.Cls */`（两个空格）⇒ 永远匹配不上：本地 `-Category syntax` 164/1、CI 同一枚红，改成单空格即对。要钉**逐字节形状**（含对齐与续行）得用 `Test-EmitcShape`，只有那一条不折叠空白。
+③ 哨兵 `scripts/check_form_draw_state.ps1` 加 S9 四条：S9.1 三个 C 出口名只许住在表文件里（任何码头自己拼名字 = 又一份答案）；
+S9.2 表里 `cls` / `print` / `line` 三档与 `Form` / `PictureBox` 两档接收者齐；S9.3 调用点恰好 7（定义 1 + 声明 1 + 码头 5）；
+S9.4 打标记那一路的 PictureBox 判据必须问表、且不许把成员名抄成名单。**只看代码行**（S8 那条"注释里出现名字把判据读哑"
+的教训已经交过学费）。两条假改动各证红：码头自己拼 `vb6_ControlCls` → S9.1 + S9.3 双红；名单抄回打标记处 → S9.4 红。
+
+**护栏**：语料 A/B `inputs=90 changed=0 same=90` —— 这一刀只改"谁能答"、不改"答什么"，所以**逐字节相同**才是对的判据
+（与账 #231 / #234 同一口径）；25 道 [STATIC] 全跑一遍 rc=0（门 #344 那条"往一族加站点要同时跑别人的名单哨兵"的教训）。
+
+**边界与下一格**：`With pic : .Cls` / `.Print "x"` 仍没接 —— With 那条码头问的是 `controlZeroArgMethod` /
+`controlOneArgMethod` 两张**按实参个数**分的表，画布家族不住在那里；要接就把 With 码头也改问这张表
+（与账 #224 的 ③「With 里带实参那形没接」是同一个问题，一起定口径）。剩下两格照旧：① 裸 `Cls` / `PSet` / `Circle`
+发成未声明的 C 调用（C2065；语料 0 处，但先于 ③ 做 —— `Print` 那条"窗体上下文语句"改写已有先例可以照）；
+③ 裸 `Line` 两形在 parser 就拒。另记一条形状：`Print` 现在有两个入口名 —— 语句形 `Print "x"` 由 parser 打了
+`isFormPrint` 直调 `vb6_Form_Print`，画布形走表给的 `vb6_ControlPrint`；账 #239 之后这两枚是**同一份身体**
+（前者转调后者），等 ① 那一刀把语句形也收进同一张表时一起归一。
+
+**① 的开工家底（同一轮只读盘点 + 实测，file:line 都核过）**。探针 `.build/b463probe/B232A.frm`（一份 .frm 里把裸形与 `Me.` 形各摆两条，`--emit-c` 逐行看）读数：
+
+| 写的形状 | 今天发出来 | 判 |
+| --- | --- | --- |
+| `PSet (100, 100)` | `PSet(100, 100);` | C2065，编不过 |
+| `PSet 120, 120`（无括号） | `PSet(120, 120);` | 同上 |
+| `Me.PSet (110, 110)` | `vb6_Form_PSet((void*)vb6_hwnd_B232A, 0, 1, 110, 110, 0, 0)` | 通（当基准） |
+| `Circle (200, 200), 50` | `Circle(200, 200, vb6_VariantEmpty(), 50);` | C2065；**还自己补了一枚 Empty 实参** |
+| `Circle 220, 220, 60` | `Circle(220, 220, 60);` | C2065 |
+| `Me.Circle (210, 210), 55` | `vb6_Form_Circle((void*)vb6_hwnd_B232A, 0, 1, 210, 210, 55, 0, 0, 0, 0, 0, 0, 0, 0, 0)` | 通 |
+| `Cls` | `Cls();` + 一条 VB3001「未声明的标识符」 | C2065 |
+| `Me.Cls` | `vb6_ControlCls((void*)vb6_hwnd_B232A);  /* Form.Cls */` | 通（② 那一刀刚接的） |
+
+三条结论：
+
+**①-a 两形是两条不同的路**。`Cls` 走 `stmt/cgen_call.cpp:420` 那条 "Fix 010m 裸调用"（`callExpr` 里没有 `(` ⇒ 自己拼实参表，:581 `callExpr += "(" + bareArgList + ")"`）；`PSet (100, 100)` / `Circle (200, 200), 50` 走表达式路（postfix 已经把括号里的东西做成实参表，所以 `Circle` 那枚 `vb6_VariantEmpty()` 是**可选形参补齐**补出来的）⇒ 裸形一旦进了正确的分派，那套补齐与 Step/hasXY 旗标都不必重写。AST 侧也印证（`--dump-ast`）：裸 `Cls` 的 callee 是 `IdentifierExpr`，而 `PSet (...)` 的 callee 是 `IndexOrCallExpr(IdentifierExpr, args)` ⇒ **折叠器两种都要认**。
+
+**①-b 折叠的位置在语义层，不在 cgen**。`SemanticAnalyzer::visit(CallStmt&)`（`src/semantics/semantic_analyzer_stmt.cpp:219`，今天整函数只有 `analyzeExpr(*node.callee);` 一行）是这一族唯一"语句已成形、符号查得到、文档种类也知道"的位置（`currentModule_->docKind` 由 `driver_frontend.cpp:254-257` 一处写：UserControl / PropertyPage / Form / Standard）。在那里把"callee 是查不到符号的裸标识符 + 名字是画布动词 + 本模块是有画布的那三种 docKind"折成 `Me.<verb>`（`MemberAccessExpr(MeExpr, 名)`；`IndexOrCallExpr` 那一形就换它内层的 callee）—— 折完之后**下游一行都不用改**：`Me.Cls` 走 ② 那轮的画布表、`Me.PSet` / `Me.Circle` 走 withm 的 Form/Printer 段，`Option Explicit` 那条 VB3001 也自然停掉（名字不再"未声明"）。反过来若在 cgen 的两条码头各拦一次 = 第 5、6 份答案，正是 ② 那一轮刚清掉的形状。
+
+**①-c "画布动词"这份名单必须有唯一的家，而且要两层都能问**。现状是三处各自硬编码：`cgen_util_ctrl.cpp::controlCanvasMethod`（cls / print / line）、`cgen_expr_call_callee_withm.inc:636` 的 `isPrinterDraw`（pset / line / circle / point / cls）、以及语义层也在问的那张宿主伪成员表 `src/common/host_pseudo.hpp:73`（`usercontrol` / `cls` 一行，`HPF_METHOD` ⇒ 限定名才生效，裸名要 `HPF_BARE` 那一位）。本仓对"两层都要问的单一出口"已有定死做法 —— `host_pseudo.hpp` / `float_literal.hpp` / `int_literal.hpp` 都住 `src/common/`（账 #159 / #188 / #194 那三轮的结论）。所以这一刀的**第一步是新增**`src/common/canvas_drawing.hpp`：一行一个动词，字段 =（小写名、哪些接收者有这一档、**实参形状那一档**），然后 `controlCanvasMethod`、`isPrinterDraw`、语义层的折叠判据三处全改成问它。"实参形状"那一档必须有：`Line` 在 Form 与 PictureBox 上签名不同（12 参 `vb6_Form_Line` 带 Step/hasXY，对 7 参 `vb6_ControlLine`），这正是 ② 那一轮**没有**把 line 给 Form 那一档的原因（上面记着）；形状收进表之后，"签名不同不能并表"这条边界就变成表里的一个取值，而不是两处代码。
+
+**开工顺序**：(1) 立 `canvas_drawing.hpp`，先把 `cls` / `print` 两档搬过去 —— 预期 A/B `changed=0`；(2) 把 `pset` / `circle` / `point` / `line` 的 Form 档搬进同一张表，withm 的 Form/Printer 段改成按表里的形状 packing —— 仍应 `changed=0`；(3) 语义层的折叠器上线（这一步才是 ① 真正修好的时刻：`Cls` / `PSet` / `Circle` 三形从 C2065 变成通），判据两头钉 = `tests/fdraw` 加一形真跑像素证人 + 一条发码针（"三形都不许再出现未声明裸调用，也不许出现 `vb6_ComCall`"）+ 负控用改前那台数 C2065 的条数。**③ 那一格必须另开**（裸 `Line (0,0)-(10,10)` 在 token 层就报错：`TokenKind::Line` 在 `parser_stmt.cpp:136` 只认 `Line Input`，而坐标对续画的吸收住在 `parser_expr_postfix.cpp:183-189` 且**只认 callee 是 MemberAccessExpr 且成员名是 line** ⇒ 语义层折叠救不了它，得动 parser；动 parser 时按 ①-c 那同一张表放行，不要再列第四份动词名单）。
+
+**两件别顺手做**：(a) 别把裸形折进 `cgen_file_io.cpp` 的 `isFormPrint` 那条 —— 那是 parser 认 `Print` 是**关键字**才有的路，`Cls` / `PSet` 不是关键字，照抄就要动词法 ⇒ 白多一份形状；(b) 折叠判据里"名字查不到符号"这一问必须留着 —— 用户自己写 `Sub PSet(x, y)` 时那枚过程**该**赢（VB6 的模块内作用域），无条件折就是"修一处静默、造一处调错函数"。
+### B71 门 #369/370 那两条红只有 runner 上现形 —— 本机那台 cl 压根不诊断「实参过多」（账 #240，**已出：门待回填**）
+
+**读数**：门 #369（run 37456420314、head `39d9b119`、branch dev）11 job 里两片红，各红一条且是同一枚夹具的两个架构 —— `Tests (vbp #2)` = `[VBP-BUILD] olecon ... FAIL rc=1 exe=False`（该片 PASS=54 FAIL=1 SKIP=1）、`Tests (vbp #3)` = `olecon_x86`（PASS=53 FAIL=1 SKIP=0）；其余九片全绿。**引入方式不是改了产品**：`39d9b119` 那轮新增 [STATIC] vbp_fixture_census 把五份"跟踪着却没登记"的 .vbp 逼出册登记成编译面用例，olecon 是其中一份（提交说明里写着本地 x64+x86 rc=0 且出 exe）。同批登记的 dbgdlg（就是那枚缺 `vb6_di_PageSetupDlgA` 桩、为它才补的夹具）在两片上都 PASS ⇒ 桩表与 RTL 内嵌在 CI 上是对上的，红只跟着 olecon 走。
+
+**已排除的六条**（每条都有实物，不是推理）：(1) 夹具没进仓 —— `git ls-files tests/olecon` 有 .frm+.vbp 两份，且目录里根本没有 .frx（那条 `oc_src.bin` 只在运行期读）；(2) CI 那台 C3.exe 与我本地这台不同 —— 把 run #369 的 `c3-exe` 工件下载下来真跑，x64 与 x86 都 rc=0 出 exe；(3) `-Incremental` —— `Test-VbpBuild` 压根不传 `--incremental`；(4) 架构/命令行差异 —— 本地按登记时的两条命令行（默认 x64 与 `--arch x86`）逐字复跑；(5) RTL 内嵌资源 id 对调（账 #225 那一族）—— 那样会全线 LNK2005×1225，不会只有一条红；(6) 源码本身依赖注册表里的 VB6 类型库 —— olecon 走的是仓内原生那一条（`driver_link.cpp:45` 每次都带 `vb6forms_olecon.c`，产物里全是 `vb6_OleCon_*`/`vb6_RegisterOleConClass`，没有查注册表的路）。
+
+**剩下的唯一差异是机器**：runner 用 vswhere -latest（VS2022 + 新 SDK），本机只有 VS2019 14.29.30133 + SDK 10.0.19041。红出现在 `runLinker` 那一段（只有那一支才打 `intermediates kept at`），而 cl/link 的整段输出只落在 `c3-error.log` —— 它既不被 `Test-VbpBuild` 打印，也不在 CI 的工件通配符（`output/**/*.out|*.err|*.txt|*.dat|scores.txt`）里 ⇒ **门上看不见病因**。
+
+**本刀（一）**（`tests/run_tests.ps1`，+23/-0，纯测试面）：`Show-BuildErrorLog` 接进 `Test-VbpBuild` 的失败分支，挑 `error C####` / `: error ` / `fatal error` / `LNK####` / `unresolved external` / `=== C3 Diagnostics` 那几行（最多 25），一条都不匹配时退回尾巴 15 行。判据形状来自本地实物：一枚刻意失败的工程（b475）日志 264 行，262 行是 RTL 的 C4819/C5105/C4028 警告，直接摊 40 行尾巴会把唯一的 `error C2063` 挤出去。
+
+**归因（门 #370 的 [diag] 读数，两片各 4 行，一模一样）**：`Form1.c(100): error C2197: 'void vb6_OleCon_Init(void *,const wchar_t *,int,int,int,int)': too many arguments for call` —— **4 行 = 10 个实参减 6 个形参**，一枚多余实参报一行。对着源码量：定义 `src/rtl/core/vb6forms/vb6forms_olecon.c:920` 是 10 参（`... autoActivate, autoVerbMenu, borderStyle, sourceDoc, sourceItem`），发码 `src/backend/detail/module/cgen_form_ctrl_style_apply.inc:970` 也发 10 个，只有 `vb6forms_prop_ctrl.h:334` 那份原型还停在 6 参 —— 体 grew 上去、头没跟。**为什么只有 runner 红**：VS2019 的 cl 在 C 模式下对「实参多于原型」根本不诊断（本机用 6 参原型 + 10 实参的最小夹具 `b481/t10.c` 实测 rc=0，只在类型对不上那一枚上给 warning C4024），新 cl 把它按 C 标准的约束报成 error ⇒ 本机真编两遍都编不出这个病，判据必须换形状。
+
+**修法（本刀二）**：`vb6forms_prop_ctrl.h` 的原型补齐成 10 参（+3/-1，只动头；`src/rtl/**` 改了要 touch `src/driver/c3rtl.rc` 再重编 C3.exe，否则内嵌的还是旧字节 —— 账 #156 那条）。运行面零改动：10 个实参本来就一直发着，本机那台把多余 4 枚照 cdecl 传过去了，所以旧产物行为不变；这一刀只是让**下一台编译器**也认。本地验：新 C3.exe 真编 olecon `=== x64 rc=0 OleCon.exe 465920 字节 / === x86 rc=0 OleCon.exe 414720 字节`（这两个数与登记那轮记录逐字对上）。
+
+**本刀（三）= 结构性哨兵**`scripts/check_rtl_proto_arity.ps1`（第 27 道 —— 本轮之前实测 26 份 check_*.ps1）+ `run_tests.ps1` 的 `[STATIC] rtl_proto_arity`：判据 = RTL 里**两头都有**的名字，声明侧参数个数集合必须等于定义侧（R1），外加 census 地板「文件数 >= 100 且比较对数 >= 900」（R2，实测 127 份 / 1237 对）—— 路径写错或正则被改坏时不许变成"绿着的空转"。两条设计约束记下：① **只有第 0 列开始的行算签名**，这一条同时把所有调用点排干净（调用都缩进在函数体里），② 只比**个数**不比类型拼写（头写 `const X*`、体写 `X*` 是合法的，硬比只造噪声），认不出的参数形态（数组/函数指针/默认值）跳过、不计入也不报红。**负控两头跑过**：把头削回 4 参 ⇒ rc=1 并点名 `vb6_OleCon_Init: 头 4 参 (…prop_ctrl.h:334) 对不上 体 10 参 (…vb6forms_olecon.c:920)`；改回 10 参 ⇒ rc=0（同一份 census 读数 1237 对）。
+
+**这一轮为什么不跑语料 A/B**：本刀只动一份 RTL 头，而 `--emit-c` 的产物里压根没有 RTL（记忆里那条老读数），C++ 源一行没动 ⇒ 编译器的发码逻辑同一个程序，只有内嵌的 RCDATA 变了。90 份 emit 的 BASE 那台已被覆盖，拿它比只会量到这一个月的**夹具漂移**（账 #239 那条教训：改了夹具再跑 A/B = 假归因），所以换成正对靶子的三面：
+① 发码实物 = 10 个实参（本地 keep-for-debug 的 `Form1.c:100` 逐字读过）；② 定义 = 10 参；③ 头补齐后 = 10 参 —— 三头同值，再加两架构真编 rc=0 出 exe。**这一族的边界（记下别越界）**：哨兵管"头追不上体"，管不到"发码递的实参个数 ≠ 体"。真要钉那一头得让**每个控件方法的发码形状**与 RTL 原型对账，那是把 `controlOneArgMethod` / `controlZeroArgMethod` 那几张表的签名也拖进对账面的一件大活（且只有新 cl 才看得见后果）—— 已另立 §B72 记着，本轮不顺手做。
+
+
 
 ## C. 仍在生效的口径与工具事实（与本文档等长的一半价值在这里；完整版见记忆库）
 
@@ -1327,4 +1456,5 @@ Print 之后笔位推进 `0 → 13`（= 同一枚控件自己答的 `TextHeight`
 | 账 #236（§B66 = 门 #359 的 vbp#4 红归因到夹具：阈值收线的 `*_Timer` 里自增排在提前返回之后 => exe 永不关窗，被 60s 超时杀；修法=计数器先走，哨兵 `check_fixture_timer_close.ps1` 第 24 道钉住这条口径） | 已过：门 #360（run 37415128806、head `ea8dc7c9`、attempt 1）= 11 job 全 completed/success、非绿 0，wall 8m31s |
 | 账 #237（§B67 = Print 从 vb6forms.c 搬进绘图家族：DC / 字体 / 色彩 / 单位四件都改问已有权威，推进量取刚写那串字的 extent（与 TextHeight 同一个量）；顺带撤掉本文件自带那份只认缇的 v * dpi / 1440，换算全部交回 vb6_ScaleUserToPx / vb6_ScalePxToUser 并显式写纵/横） | FD13/FD14 推进 == TextHeight（缇、点）、FD16 = 72 点与 1 英寸同一行（蓝/红分居两个 x 窗口）；行为负控改回旧形三条全 False + 哨兵 S6/S7 四条假针逐条能红 | 已过：门 #361（run 37421550422、head `d86b478c`、attempt 1）= 11 job 全 completed/success、非绿 0，wall 8m49s |
 | 账 #239（§B69 = 控件那户 `Print` / `Cls` 撤掉自存的像素笔位 `VB6_PrintX` / `VB6_PrintY`，两条函数改成只转调家族的 `vb6_Form_Print` / `vb6_Form_Cls`；家族那份 `Cls` 的背景色改问带 Fix 187 哨兵那份唯一出口 `vb6_GetControlBackColor`） | `pic.Print` 既不读也不动 `pic.CurrentX/Y`（实测推进 0 而同一枚控件答 `TextHeight` = 13、笔位放 60 而墨落在第 2 行、`Cls` 之后 `CurrentY` 仍是 400）= #237 在 Form 侧刚拆掉的「一份存储两种单位」在控件侧重演；而合并之后若不换色彩出口，控件那户 `Cls` 会从实测 0 变成按钮面 | `tests/pcline` 加一枚 picP + 五条 needle（PL08-PEN / PL09-CLSPEN / PL10-TWIPADV / PL11-BLACKCLS / PL12-STACK + 两条 RAW）两架构真跑；BASE 那台跑同一份夹具真红（Q01 推进 0 / Q03 Cls 后仍 400 / Q05 笔位不动）；三处**行为**负控各让自己那一条红（推进归零 → 08/10/12、像素当用户单位存回 → 只 10、色彩自己答 → 只 11）；哨兵 `check_form_draw_state.ps1` 新 S8 四条假针各证红（属性名回潮 0 / 两条码头必须转调 / 定义恰好一次且住在家族里 / `Cls` 只许问那条色彩出口，且**只看代码行** —— 先前只查体内文本时注释把判据顶成假绿）；`check_control_dc.ps1` 的 D2 因这一刀 6→4（哨兵先响，归因写进规则注释）；24 份 check 全绿 + 邻域 fdraw / pbsub / dcsurf 两架构零缺失；零后端改动 ⇒ 发码逐字节不可能变（RTL 是 exe 的资源），判据只能落在真跑那一头 | 已过：门 #364（run 37429327451、head `e5c66e4d`、branch dev、attempt 1）= 11 job 全 completed/success、非绿 0，wall 12m40s |
-| 账 #238（§B68 = `vb6_VarCmp*(&A,&B)` 那四个取址点以前按"名字形状像左值"决定能不能 &，现在全问一处判据 `CCodeGen::cmpOperandMayTakeAddr`（回答只来自 `isDefinitelyVariantExpr`：声明那几张表 + 符号表），不许取址就走 `_Generic vb6_VariantFromValue` 装箱） | `Dim d As Double` 的地址被当 `vb6_VARIANT*` 递进 RTL ⇒ 按 VARIANT 布局读一个 8 字节标量：**相等的两个数答 False**（VC01..05 / VC10 / VC15 七条实测，两架构一致），且读过头；编译、运行、诊断都不响 = 静默给错答案那一族（#123 的 Byte 是同一形状的另一档）。FD13/FD14 当初因此只能写成 `Abs(a-b)<0.001` | 新夹具 `tests/test_varcmp_scalar.bas` 16 条两架构真跑（每条相等配一条近似不等，Long/String 两条本来通的腿也钉住）+ BASE 同一份夹具 7 条 False + 发码针 `varcmp_scalar_boxed`（必须装箱 / 五条旧形状必须不出现）+ FD13/FD14 换回直接相等 + 新哨兵 `check_variant_cmp_boxing.ps1`（第 25 道 [STATIC]，V1 一处判据且真问权威 / V2 五处问话 / V3 每条 & 拼接都被问过 + 旧形状禁回潮）三条假改动各证红；语料 A/B inputs=90 changed=2 逐行归因完（未归因 0），唯一真形状变化在编不过的 ucProgressCircular 裸名 `Count` ⇒ 能编过的语料零暴露；邻域 fdraw / pcline / bool_display / datelit 两架构零回归（后两条输出与 BASE 逐行相同）。附带订正：上一轮那句"暴露面 0 处"只统计了找得到声明的名字，漏了未声明裸名那一形 | 等门 |
+| 账 #238（§B68 = `vb6_VarCmp*(&A,&B)` 那四个取址点以前按"名字形状像左值"决定能不能 &，现在全问一处判据 `CCodeGen::cmpOperandMayTakeAddr`（回答只来自 `isDefinitelyVariantExpr`：声明那几张表 + 符号表），不许取址就走 `_Generic vb6_VariantFromValue` 装箱） | `Dim d As Double` 的地址被当 `vb6_VARIANT*` 递进 RTL ⇒ 按 VARIANT 布局读一个 8 字节标量：**相等的两个数答 False**（VC01..05 / VC10 / VC15 七条实测，两架构一致），且读过头；编译、运行、诊断都不响 = 静默给错答案那一族（#123 的 Byte 是同一形状的另一档）。FD13/FD14 当初因此只能写成 `Abs(a-b)<0.001` | 新夹具 `tests/test_varcmp_scalar.bas` 16 条两架构真跑（每条相等配一条近似不等，Long/String 两条本来通的腿也钉住）+ BASE 同一份夹具 7 条 False + 发码针 `varcmp_scalar_boxed`（必须装箱 / 五条旧形状必须不出现）+ FD13/FD14 换回直接相等 + 新哨兵 `check_variant_cmp_boxing.ps1`（第 25 道 [STATIC]，V1 一处判据且真问权威 / V2 五处问话 / V3 每条 & 拼接都被问过 + 旧形状禁回潮）三条假改动各证红；语料 A/B inputs=90 changed=2 逐行归因完（未归因 0），唯一真形状变化在编不过的 ucProgressCircular 裸名 `Count` ⇒ 能编过的语料零暴露；邻域 fdraw / pcline / bool_display / datelit 两架构零回归（后两条输出与 BASE 逐行相同）。附带订正：上一轮那句"暴露面 0 处"只统计了找得到声明的名字，漏了未声明裸名那一形 | 已过：门 #365（run 37436391539、head `9b9c1551`、branch dev、attempt 1）= 11 job 全 completed/success、非绿 0，wall 9m40s |
+| 账 #232 ②（§B70 = `Me.Cls` 落 `vb6_ComCall(hwnd, L"Cls")`、`Me.Print "AB"` 落"取 Print 属性 + Item 下标"，两形都编得过、跑得起、一笔不画） | 画布家族的名字被答了四遍（成员侧名单 + 表达式码头 + 语句码头 + Form/Printer 段），而每一处都只认 PictureBox。**订正**：窗体自己那枚接收者其实认得（`cgen_form_ctrl_registry.inc:10` 把窗体名也登记进 knownFormControls_，类型 Form），缺的是 `controlCanvasMethod` 里 `cls` / `print` 那两档 ⇒ 上一轮"零实参的对象.方法在语句位置压根没进分派"那条结论只对了一半。语料 `Me.Cls` / `Me.Print` 各 0 处 ⇒ 潜伏缺陷；与账 #143 / #149 / #221 同一味（落 COM 兜底 = 静默空转，本线第四次） | 表加两档（Form + PictureBox；`line` 刻意仍只给 PictureBox —— Form 那一形是 12 参签名 `vb6_Form_Line`，签名不同不并表）+ 三条码头与打标记处全改问这张表与 `formCtrlSlot` + 撤掉 Form/Printer 段里 `cls` 的 Form 那一支（只留 Printer=EndDoc）。判据三面：①FDForm 加 FD18/19/20（墨 + 笔位两头钉，FD20 必须量**增量**，写成 `Me.CurrentY = thA` 会在改前那台因为继承上一行 Print 的推进而假绿）= BASE 两架构三条全 False、新台两架构全 True；②发码针 `form_canvas_family` 五必须出现 + 三必须不出现（BASE 缺 2 命中 3 ⇒ 两头能红），顺带还掉账 #224 的 ⑤；③`check_form_draw_state.ps1` 新 S9 四条（名字只在表里 / 三档两接收者齐 / 调用点恰好 7 / 打标记处必须问表），只看代码行，两条假改动各证红。护栏 = 语料 A/B inputs=90 **changed=0 / same=90**（只改谁能答）+ 25 道 [STATIC] 全绿 | 已过：门 #368（run 37454147931、head `9e5c9f91`、branch dev、attempt 1）= 11 job 全 completed/success、非绿 0，wall 9m46s；**第一轮门 #367 红在本刀自己的发码针上**（needle 里写了两个空格，而 `Invoke-CodegenProj` 比对前折空白 ⇒ 永远匹配不上），`9e5c9f91` 一处改掉 |

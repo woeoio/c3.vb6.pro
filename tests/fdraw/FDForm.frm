@@ -171,6 +171,45 @@ Private Sub tmrF_Timer()
     Debug.Print "FD16-paint-units=" & TF(ok16)
     Debug.Print "FD17-RAW rowB=" & CStr(rowB) & " rowR=" & CStr(rowR)
     r = ReleaseDC(Me.hwnd, d)
+
+    ' ---- 232-2: the same two canvas entries written with an explicit receiver.
+    ' Before, `Me.Cls` / `Me.Print "x"` compiled to a COM no-op on the form HWND --
+    ' the canvas table answered Cls and Print for one receiver type only -- so the
+    ' surface kept its ink and the pen never moved. Each judge is two-sided: an ink
+    ' witness (a colour that is really there / really gone) AND the pen.
+    Dim ok18 As Boolean
+    Dim ok19 As Boolean
+    Dim ok20 As Boolean
+    Dim inkBefore As Long
+    Dim inkAfter As Long
+    Dim penBefore As Double
+    Dim curA As Double
+    Dim thA As Double
+
+    Me.ScaleMode = vbPixels
+    Me.ForeColor = vbRed
+    Me.CurrentX = 0
+    Me.CurrentY = 0
+    Print "MMMMMMMMMMMMMMMM"
+    d = GetDC(Me.hwnd)
+    inkBefore = FirstRowOfColor(d, vbRed, 0, 40, 1, 120)
+    Me.Cls
+    inkAfter = FirstRowOfColor(d, vbRed, 0, 40, 1, 120)
+    ok18 = (inkBefore > 0) And (inkAfter < 0) And (Abs(Me.CurrentY) < 0.001)
+    Debug.Print "FD18-mecls=" & TF(ok18) & " raw=" & CStr(inkBefore) & "," & CStr(inkAfter)
+    ' The increment is measured against the pen as it stood RIGHT BEFORE this line,
+    ' not against zero: a no-op Print then reads 0 and cannot pass by inheriting an
+    ' earlier line's advance (measured that way under the pre-fix compiler).
+    penBefore = Me.CurrentY
+    Me.Print "MMMMMMMMMMMMMMMM"
+    inkAfter = FirstRowOfColor(d, vbRed, 0, 40, 1, 120)
+    ok19 = (inkAfter > 0)
+    curA = Me.CurrentY - penBefore
+    thA = Me.TextHeight("MMMMMMMMMMMMMMMM")
+    ok20 = (curA = thA)
+    Debug.Print "FD19-mepaint=" & TF(ok19) & " raw=" & CStr(inkAfter)
+    Debug.Print "FD20-mepen=" & TF(ok20) & " raw=" & CStr(curA) & "," & CStr(thA)
+    r = ReleaseDC(Me.hwnd, d)
     Debug.Print "FD-DONE"
     Unload Me
 End Sub

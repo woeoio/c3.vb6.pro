@@ -243,8 +243,13 @@ intptr_t __stdcall vb6_di_VariantTimeToSystemTime(double vTime, void* lpSystemTi
 /* === 恢复 dev@69845a9 有、本批重生成 di 桩时丢掉的定义 ===
  * 生成器是按"那次跑它时的引用面"发桩的, 换一个会话重生成就会**静默丢掉**上一个会话
  * 引用过的桩 (实测丢 9 个: comdlg32/winspool 那一族 + ChooseColorA/GetUserNameW/WinHelpA,
- * Charts 2020 的 vb6_di_ChooseColorA 因此 LNK2019)。这里按 dev 原文补回; 生成器侧要
- * 改成"全语料并集"才不会再丢 —— 在那之前这张清单就是这次的证据。 */
+ * Charts 2020 的 vb6_di_ChooseColorA 因此 LNK2019)。这里按 dev 原文补回。
+ *
+ * 2026-10-06: 生成器的结转 (2c 节, add-only) 原先靠"独占一行的杠星注释"定位块, 而本段这些
+ * 手工补回的桩带的是说明性注释 (形如 "杠星 ChooseFontA 破折号 Task #44 ... 星杠"), 于是整段
+ * 对结转**不可见** —— 实测全 622 个定义里只有 570 个能被旧口径认出, 52 个每次重生成都会
+ * 再丢一次 (上面那句"要改成全语料并集"说的就是它)。现已把定位改成按**函数定义行**
+ * (__stdcall vb6_di_X 左括号) 匹配, 并在其上吸收紧邻注释块; 同一会话重跑实测 622→626, 零丢失。 */
 intptr_t __stdcall vb6_di_ChooseColorA(void* pChoosecolor) {
     return ((intptr_t (WINAPI *)(void*))ChooseColorA)(pChoosecolor);
 }
@@ -267,4 +272,16 @@ intptr_t __stdcall vb6_di_PrintDlgA(void* pPrintdlg) {
 /* CommDlgExtendedError — Task #44 SSTabEx cDlg.cls:49 */
 intptr_t __stdcall vb6_di_CommDlgExtendedError(void) {
     return ((intptr_t (WINAPI *)(void))CommDlgExtendedError)();
+}
+
+/* PageSetupDlgA — dbgdlg/cDlg.cls:196 (`Lib "COMDLG32" Alias "PageSetupDlgA"`, As Boolean
+ * ⇒ int16_t; 唯一形参是 VB6 UDT 指针 T_PAGESETUPDLG*, 按生成器既定规则折成 void*)。
+ *
+ * 缺口为何长期没暴露 (2026-10-06 记): 判据是"这个 Declare 有没有被**调用**", 不是"有没有
+ * 声明"。包装是 `static __inline`, 未被引用时 MSVC 根本不发符号, 于是同族里一批只声明不
+ * 调用的名字 (SetWindowsHookExW / AddFontResourceExW / SHGetFolderLocation …) 全都无桩
+ * 却安然无恙; cDlg.cls 是少数真调用的那一个 (cDlg.cls:2233 `mApiReturn = PageSetupDlg(iPsd)`),
+ * 才在链接期以 LNK2019 现形。dbgdlg 当时不在门禁里, 所以红都没红 —— 现已登记 (Test-VbpBuild)。 */
+int16_t __stdcall vb6_di_PageSetupDlgA(void* lppage) {
+    return ((int16_t (WINAPI *)(void*))PageSetupDlgA)(lppage);
 }

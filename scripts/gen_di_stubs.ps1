@@ -353,13 +353,30 @@ function Get-ExistingStubBlocks([string]$path) {
     $lines = [System.IO.File]::ReadAllLines($path)
     $i = 0
     while ($i -lt $lines.Count) {
-        # block header is a lone `/* <API name> */` line; banner comments never match
-        if ($lines[$i] -match '^/\* ([A-Za-z0-9_#]+) \*/\s*$') {
+        # Locate the block by its DEFINITION line, not by the comment above it.
+        # 2026-10-06: matching `^/\* <name> \*/$` only saw generator-emitted stubs (the
+        # generator writes a lone `/* Api */` line, while hand-added restorations carry a
+        # richer comment such as `/* ChooseFontA - Task #44 SSTabEx cDlg.cls:33 */`).
+        # Those hand-added stubs were therefore invisible to the carry-over below and got
+        # rewritten away on the next run - exactly the silent-drop this section exists to
+        # prevent. Keying on `__stdcall vb6_di_X(` covers both shapes.
+        if ($lines[$i] -match '^\s*[A-Za-z_][A-Za-z0-9_]*\s+__stdcall\s+(vb6_di_[A-Za-z0-9_]+)\s*\(') {
             $nm = $Matches[1]
-            $end = $i + 1
+            $end = $i
             while ($end -lt $lines.Count -and $lines[$end] -ne '}') { $end++ }
             if ($end -lt $lines.Count) {
-                $blocks[$nm] = $lines[$i..$end]
+                # Pull in the contiguous comment block directly above (ASCII only), so a
+                # carried-over stub keeps its rationale. Stops at a blank line or at any
+                # line that is not part of a comment.
+                $start = $i
+                while ($start -gt 0) {
+                    $prev = $lines[$start - 1].Trim()
+                    if ($prev -eq '') { break }
+                    if ($prev -match '^\*' -or $prev -match '^//' -or $prev -match '^/\*' -or $prev -match '\*/$') {
+                        $start--
+                    } else { break }
+                }
+                $blocks[$nm] = $lines[$start..$end]
                 $i = $end + 1
                 continue
             }

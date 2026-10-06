@@ -520,47 +520,50 @@
         }
     }
 
-    // Fix 185: PictureBox.Print / PictureBox.Cls → RTL 控件绘制入口。
+    // Fix 185 / 账 #232②: 画布家族的**表达式码头**（带实参或带括号那一形）。
+    // 接收者问 `formCtrlSlot`（裸小写名、`vb6_hwnd_X` 两种形态都认，窗体自己那枚也认），
+    // 名字与出口问 `controlCanvasMethod`（cls / print / line 三档）—— 两处以前各自
+    // 硬编码 `PictureBox` + `== "print" || == "cls"`，所以 `Me.Print "AB"` 没人接。
     // 成员侧 (cgen_expr_member_form_builtin.inc) 把 comObjExpr_ 存成小写控件名，
-    // 所以这里查 knownFormControls_ 拿得到类型。本片段 include 在
-    // cgen_expr_call_com_bind.inc **之前**（见 cgen_expr_call.cpp:42-43），必须在此
-    // 消费掉标记，否则通用 COM 绑定会把它编成运行期 no-op 的 vb6_ComCall。
+    // 而 `Me.` 那一路存的是 HWND 表达式，两种形态都由同一处折开。本片段 include 在
+    // cgen_expr_call_com_bind.inc **之前**，必须在此消费掉标记，否则通用 COM 绑定会把它
+    // 编成运行期 no-op 的 vb6_ComCall。
     if (isComMarker_) {
-        auto itCtrl = knownFormControls_.find(comObjExpr_);
-        if (itCtrl != knownFormControls_.end() &&
-            itCtrl->second == FrmControlType::PictureBox &&
-            (comMemberName_ == "print" || comMemberName_ == "cls")) {
+        FrmControlType cvType = FrmControlType::Unknown;
+        std::string cvHwnd;
+        std::string cvMem = Symbol::toLower(comMemberName_);
+        std::string cvFn = (cvMem == "cls" || cvMem == "print")
+            && formCtrlSlot(comObjExpr_, cvType, cvHwnd)
+            ? controlCanvasMethod(cvType, cvMem) : std::string();
+        if (!cvFn.empty()) {
             isComMarker_ = false;
             isEarlyBoundCom_ = false;
             earlyBoundSym_ = nullptr;
-            std::string method = std::move(comMemberName_);
-            std::string ctrlName = cIdent(knownFormControlOriginalNames_.count(comObjExpr_) ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
+            std::string cvLabel = cvType == FrmControlType::Form ? "Form" : "PictureBox";
             comObjExpr_.clear();
             comMemberName_.clear();
-            if (method == "print") {
-                std::string textArg = "0";  // 裸 Print = 空行
-                if (!node.positional.empty()) {
-                    emitExpr(*node.positional[0]);
-                    // 同 Fix 143: 实参自身是 COM 属性读时必须就地消费，
-                    // 否则把对象指针当字符串画、残留标记还会被上层当独立语句发射。
-                    if (isComMarker_) {
-                        isComMarker_ = false;
-                        isEarlyBoundCom_ = false;
-                        earlyBoundSym_ = nullptr;
-                        std::string objM = std::move(comObjExpr_);
-                        std::string memM = std::move(comMemberName_);
-                        comObjExpr_.clear();
-                        comMemberName_.clear();
-                        textArg = "vb6_ComGetStringProp(" + objM + ", L\"" + memM + "\")";
-                    } else {
-                        textArg = std::move(lastExpr_);
-                    }
+            std::string textArg = "0";  // 裸 Print = 空行
+            if (cvMem == "print" && !node.positional.empty()) {
+                emitExpr(*node.positional[0]);
+                // 同 Fix 143: 实参自身是 COM 属性读时必须就地消费，
+                // 否则把对象指针当字符串画、残留标记还会被上层当独立语句发射。
+                if (isComMarker_) {
+                    isComMarker_ = false;
+                    isEarlyBoundCom_ = false;
+                    earlyBoundSym_ = nullptr;
+                    std::string objM = std::move(comObjExpr_);
+                    std::string memM = std::move(comMemberName_);
+                    comObjExpr_.clear();
+                    comMemberName_.clear();
+                    textArg = "vb6_ComGetStringProp(" + objM + ", L\"" + memM + "\")";
+                } else {
+                    textArg = std::move(lastExpr_);
                 }
-                c_.emitLine("vb6_ControlPrint((void*)vb6_hwnd_" + ctrlName + ", " + textArg + ");  /* PictureBox.Print */");
-                lastExpr_ = "0";
-                return;
             }
-            c_.emitLine("vb6_ControlCls((void*)vb6_hwnd_" + ctrlName + ");  /* PictureBox.Cls */");
+            c_.emitLine(cvMem == "cls"
+                ? (cvFn + "((void*)" + cvHwnd + ");  /* " + cvLabel + ".Cls */")
+                : (cvFn + "((void*)" + cvHwnd + ", " + textArg + ");  /* "
+                   + cvLabel + ".Print */"));
             lastExpr_ = "0";
             return;
         }
@@ -573,15 +576,14 @@
     // style 缺席交 0（线段）；坐标四格 parser 的 Fix 102 一定交满。
     // 旗标 B/C/F 不在这里出现: parser 已在同一处把它们折成位数值，到这一步是 Integer 字面量。
     if (isComMarker_) {
-        auto itCtrlLine = knownFormControls_.find(comObjExpr_);
-        if (itCtrlLine != knownFormControls_.end() &&
-            !controlCanvasMethod(itCtrlLine->second, comMemberName_).empty()) {
-            std::string fnLine = controlCanvasMethod(itCtrlLine->second, comMemberName_);
+        FrmControlType cvTypeLine = FrmControlType::Unknown;
+        std::string cvHwndLine;
+        if (formCtrlSlot(comObjExpr_, cvTypeLine, cvHwndLine)
+            && !controlCanvasMethod(cvTypeLine, comMemberName_).empty()) {
+            std::string fnLine = controlCanvasMethod(cvTypeLine, comMemberName_);
             isComMarker_ = false;
             isEarlyBoundCom_ = false;
             earlyBoundSym_ = nullptr;
-            std::string ctrlLineName = cIdent(knownFormControlOriginalNames_.count(comObjExpr_)
-                ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
             comObjExpr_.clear();
             comMemberName_.clear();
             std::vector<std::string> la;
@@ -605,7 +607,7 @@
             while (la.size() < 4) la.push_back("0");
             if (la.size() < 5) la.push_back("-1");
             if (la.size() < 6) la.push_back("0");
-            c_.emitLine(fnLine + "((void*)vb6_hwnd_" + ctrlLineName + ", "
+            c_.emitLine(fnLine + "((void*)" + cvHwndLine + ", "
                         + "(double)" + la[0] + ", (double)" + la[1] + ", "
                         + "(double)" + la[2] + ", (double)" + la[3] + ", "
                         + "(int32_t)" + la[4] + ", (int32_t)" + la[5] + ");  /* Line */");
@@ -631,10 +633,14 @@
     // Print 那样只取第 0 个 —— `Line -(x1,y1)-(x2,y2), c, B` 的信息全在后几个。
     if (isComMarker_) {
         std::string mDraw = Symbol::toLower(comMemberName_);
-        bool isPrinterDraw = (mDraw == "pset" || mDraw == "line" || mDraw == "circle"
-                              || mDraw == "point" || mDraw == "cls");
         // Printer 那支的 obj 是 (void*)vb6_Printer_Object(); Form 那支是 vb6_hwnd_X
         bool looksLikePrinter = (comObjExpr_.find("Printer") != std::string::npos);
+        // 账 #232②: `cls` 只在 Printer 那一档还留在这里 —— Printer.Cls 在 VB6 是"结束文档"
+        // (vb6_Printer_EndDoc)，不是清画布；画布那两档 (Form / PictureBox) 的名字与出口
+        // 归 controlCanvasMethod 那张表，上面两条码头先接走，这里不再答第二遍。
+        bool isPrinterDraw = (mDraw == "pset" || mDraw == "line" || mDraw == "circle"
+                              || mDraw == "point"
+                              || (mDraw == "cls" && looksLikePrinter));
         if (isPrinterDraw && (isFormModule_ || looksLikePrinter)) {
             isComMarker_ = false;
             isEarlyBoundCom_ = false;
@@ -695,8 +701,9 @@
                     : ("vb6_Form_Point((void*)" + obj + ", " + x + ", " + y + ")");
                 return;
             } else if (m == "cls") {
-                call = looksLikePrinter ? std::string("vb6_Printer_EndDoc()")
-                                        : ("vb6_Form_Cls((void*)" + obj + ")");
+                // 只有 Printer 那一形能走到这里（上面的 isPrinterDraw 已经把画布的 cls 交给了
+                // controlCanvasMethod 那两条码头，账 #232②）。Printer.Cls = 结束文档。
+                call = "vb6_Printer_EndDoc()";
             } else if (m == "line") {
                 // Line 的两种形状: -(x1,y1)-(x2,y2) 4 参, 或 (x1,y1)-(x2,y2) 4 参
                 // (VB6 里 Step 由 parser 吞, 这里统一按 4 坐标 = 2 点)。

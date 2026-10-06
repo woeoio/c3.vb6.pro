@@ -368,22 +368,27 @@ void CCodeGen::visit(CallStmt& node) {
                 c_.emitLine("vb6_ClearList((void*)vb6_hwnd_" + ctrlNameCS + ");  /* ListBox.Clear */");
                 return;
             }
-            // Fix 185: 同族处理 —— 无括号的 PictureBox 绘制方法 (Picture2.Cls)。
-            // 带实参的那条走 cgen_expr_call_callee_withm.inc，两条路径都得覆盖，
-            // 否则留下 vb6_ComCall(vb6_hwnd_x, L"Cls", NULL, 0) 这种运行期 no-op。
-            if (itCtrlCS != knownFormControls_.end()
-                && itCtrlCS->second == FrmControlType::PictureBox) {
-                std::string memLowerCS = Symbol::toLower(comMemberName_);
-                if (memLowerCS == "cls" || memLowerCS == "print") {
-                    std::string ctrlNamePic = cIdent(knownFormControlOriginalNames_.count(comObjExpr_)
-                        ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
+            // 账 #185 / 账 #232②: 画布家族的**语句码头**（不写括号那一形）。
+            // 接收者问 `formCtrlSlot`（裸小写名与 `vb6_hwnd_X` 都认，窗体自己那枚也认），
+            // 名字与出口问 `controlCanvasMethod`（cls / print 两档）—— 与表达式码头
+            // (`cgen_expr_call_callee_withm.inc`) 共用同一张表。以前这一处把类型和名字
+            // 都硬编码成 `PictureBox` + `cls|print`，于是 `Me.Cls` 留下
+            // `vb6_ComCall(vb6_hwnd_<窗体>, L"Cls", NULL, 0)` 这种运行期 no-op。
+            {
+                FrmControlType cvTypeS = FrmControlType::Unknown;
+                std::string cvHwndS;
+                std::string cvMemS = Symbol::toLower(comMemberName_);
+                std::string cvFnS = (cvMemS == "cls" || cvMemS == "print")
+                    && formCtrlSlot(comObjExpr_, cvTypeS, cvHwndS)
+                    ? controlCanvasMethod(cvTypeS, cvMemS) : std::string();
+                if (!cvFnS.empty()) {
+                    std::string cvLabelS = cvTypeS == FrmControlType::Form
+                        ? "Form" : "PictureBox";
                     comObjExpr_.clear();
                     comMemberName_.clear();
-                    if (memLowerCS == "cls") {
-                        c_.emitLine("vb6_ControlCls((void*)vb6_hwnd_" + ctrlNamePic + ");  /* PictureBox.Cls */");
-                    } else {
-                        c_.emitLine("vb6_ControlPrint((void*)vb6_hwnd_" + ctrlNamePic + ", 0);  /* PictureBox.Print */");
-                    }
+                    c_.emitLine(cvMemS == "cls"
+                        ? (cvFnS + "((void*)" + cvHwndS + ");  /* " + cvLabelS + ".Cls */")
+                        : (cvFnS + "((void*)" + cvHwndS + ", 0);  /* " + cvLabelS + ".Print */"));
                     return;
                 }
             }

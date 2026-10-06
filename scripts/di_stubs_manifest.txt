@@ -1,7 +1,7 @@
 ﻿# DI 桩定义集基线 (scripts/check_di_stubs.ps1 的判据; -Update 重写)
 # 生成自: src/rtl/core/di/**/*.c 的函数定义; 少一个就是重生成丢了桩, 必须红。
 # 加桩请连同对应家族的 #pragma comment(lib, ...) 一起加。
-# 共 624 个。
+# 共 626 个。
 vb6_di_accept
 vb6_di_AddFontMemResourceEx
 vb6_di_BCryptCloseAlgorithmProvider
@@ -471,6 +471,7 @@ vb6_di_ord_412
 vb6_di_ord_413
 vb6_di_ord_644
 vb6_di_OutputDebugStringA
+vb6_di_PageSetupDlgA
 vb6_di_PatBlt
 vb6_di_PathGetArgsW
 vb6_di_PathMatchSpecW
@@ -542,6 +543,7 @@ vb6_di_SetMapMode
 vb6_di_SetMenuDefaultItem
 vb6_di_SetMenuItemBitmaps
 vb6_di_SetParent
+vb6_di_SetProcessDPIAware
 vb6_di_SetPropA
 vb6_di_SetPropW
 vb6_di_SetRect
@@ -550,7 +552,6 @@ vb6_di_SetScrollInfo
 vb6_di_setsockopt
 vb6_di_SetStretchBltMode
 vb6_di_SetTextAlign
-vb6_di_SetProcessDPIAware
 vb6_di_SetTextColor
 vb6_di_SetTimer
 vb6_di_SetupComm

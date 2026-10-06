@@ -332,7 +332,9 @@ void      vb6_Data_SetRepositionHandler(void* hwnd, void* fn);
 void*     vb6_Data_RecordsetObj(void* hwnd);                       /* Recordset 真 IDispatch */
 void      vb6_Data_FieldValueByIdx(void* hwnd, int32_t idx, wchar_t* out, int32_t outCap);
 void      vb6_OleCon_Init(void* hwnd, const wchar_t* cls, int oletTypeAllowed,
-                          int sizeMode, int displayAsIcon, int autoActivate);
+                          int sizeMode, int displayAsIcon, int autoActivate,
+                          int autoVerbMenu, int borderStyle,
+                          const wchar_t* sourceDoc, const wchar_t* sourceItem);
 int       vb6_OleCon_CreateEmbed(void* hwnd, const wchar_t* sourceDoc);  /* NULL=按 Class 新建 */
 int       vb6_OleCon_CreateLink(void* hwnd, const wchar_t* sourceDoc, const wchar_t* sourceItem);
 int       vb6_OleCon_ReadFromFile(void* hwnd, const wchar_t* path);

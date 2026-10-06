@@ -256,11 +256,88 @@ if (-not $mCls.Success) {
     }
 }
 
+# ---- S9: 画布家族 (Cls / Print / Line) 的名字只许出自一张表 (账 #232②) ----
+# 这一族以前把同一个决定答了四遍: 成员侧打标记时硬编码名字名单, 表达式码头与语句码头
+# 又各抄一份"接收者是 PictureBox 才答"。窗体自己那枚接收者不在任何一份里 ——
+# 实测 `Me.Cls` 发成 vb6_ComCall(vb6_hwnd_<窗体>, L"Cls", NULL, 0)、
+# `Me.Print "AB"` 发成 vb6_ComCallObject(vb6_ComGetObjectProp(同一 HWND, L"Print"), L"Item", ...),
+# 两形都编得过、跑得起、一笔不画 (本线第四次栽在"落 COM 兜底 = 静默空转"这一味上)。
+# 现在: 名字与 C 出口出自 controlCanvasMethod, 接收者出自 formCtrlSlot, 两条码头只做翻译。
+# 只看代码行 —— 讲历史的注释里出现这些名字不算数 (S8 那条负控就是这么变哑的)。
+
+function Get-CodeText($text) {
+    $kept = @()
+    foreach ($ln in ($text -split "`r?`n")) {
+        $t = $ln.Trim()
+        if ($t.StartsWith("//")) { continue }
+        $kept += $t
+    }
+    return ($kept -join "`n")
+}
+
+$tableFile = Join-Path $root "src\backend\cgen_util_ctrl.cpp"
+$declFile = Join-Path $root "src\backend\detail\util\cgen_helpers.inc"
+
+# S9.1 三个 C 出口名只许住在表文件里 (任何一条码头自己拼名字 = 又一份答案)
+foreach ($name in @("vb6_ControlCls", "vb6_ControlPrint", "vb6_ControlLine")) {
+    foreach ($f in Get-SrcFiles $beDir) {
+        $code = Get-CodeText ([System.IO.File]::ReadAllText($f.FullName))
+        if ($code.IndexOf($name) -lt 0) { continue }
+        if ($f.FullName -ne $tableFile) {
+            $bad += ("S9 " + $name + " is spelled outside the canvas table -> " +
+                     (Split-Path -Leaf $f.FullName) +
+                     " (only controlCanvasMethod may answer a canvas member's C entry)")
+        }
+    }
+}
+
+# S9.2 表本身三档齐、两档接收者齐 —— 少一档就是"只接了一半"回到本账那一形
+$mTbl = [regex]::Match([System.IO.File]::ReadAllText($tableFile),
+                       'std::string CCodeGen::controlCanvasMethod[\s\S]*?\r?\n\}')
+if (-not $mTbl.Success) {
+    $bad += "S9 controlCanvasMethod body not found in cgen_util_ctrl.cpp"
+} else {
+    $tbl = Get-CodeText $mTbl.Value
+    foreach ($want in @('"cls"', '"print"', '"line"', "FrmControlType::Form",
+                        "FrmControlType::PictureBox", "vb6_ControlCls", "vb6_ControlPrint")) {
+        if ($tbl.IndexOf($want) -lt 0) {
+            $bad += ("S9 the canvas table no longer carries " + $want +
+                     " -> a receiver or a member silently loses its drawing entry")
+        }
+    }
+}
+
+# S9.3 调用点名单钉死: 定义 1 + 声明 1 + 码头 5 (表达式形 3 / 打标记 1 / 语句形 1)
+$callTotal = 0
+foreach ($f in Get-SrcFiles $beDir) {
+    $code = Get-CodeText ([System.IO.File]::ReadAllText($f.FullName))
+    $callTotal += [regex]::Matches($code, 'controlCanvasMethod\s*\(').Count
+}
+if ($callTotal -ne 7) {
+    $bad += ("S9 call sites of the canvas table = " + $callTotal + " (want exactly 7:" +
+             " 1 definition + 1 declaration + 5 docks)")
+}
+
+# S9.4 打标记那一路只许问表: 那张 PictureBox 判据起 400 字符内必须调用 controlCanvasMethod，
+# 而且不许把成员名抄成名单 (以前写的是 memLower == "print" || memLower == "cls" || 表 ——
+# 表加一档它就漏一档，本账那两形正是这么漏掉的)。
+$mbFile = Join-Path $root "src\backend\detail\expr\cgen_expr_member_form_builtin.inc"
+$mbCode = Get-CodeText ([System.IO.File]::ReadAllText($mbFile))
+$mbHits = @([regex]::Matches($mbCode, 'FrmControlType::PictureBox'))
+if ($mbHits.Count -ne 1) {
+    $bad += ("S9 the member side asks PictureBox " + $mbHits.Count +
+             " times (want exactly 1) -> the canvas receiver test grew a second copy")
+} elseif ($mbCode.Substring($mbHits[0].Index, [Math]::Min(400, $mbCode.Length - $mbHits[0].Index)) -notlike "*controlCanvasMethod(*") {
+    $bad += "S9 the member side no longer asks controlCanvasMethod for that receiver"
+}
+if ($mbCode -match '==\s*"print"\s*\|\|\s*\w+\s*==\s*"cls"') {
+    $bad += 'S9 the member side hardcodes the canvas member names again (print / cls list)'
+}
 if ($bad.Count -eq 0) {
     Write-Host ("PASS form draw state: pen store unique, side-list gone, " +
                 "read/write paired for 3 props, encoding symmetric, pen color store unique, " +
                 "Print inside the family asking 7 authorities, conversions dock-only with an axis, " +
-                "Print/Cls one implementation that the control side only forwards to")
+                "Print/Cls one implementation that the control side only forwards to, canvas names from one table with both receivers")
     exit 0
 }
 foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }

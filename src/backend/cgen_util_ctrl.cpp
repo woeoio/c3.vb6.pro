@@ -1586,8 +1586,28 @@ std::string CCodeGen::controlScaleMethod(FrmControlType ctrlType,
 // 类型发射"，但后端从来没接这一刀，于是整条调用落到通用 COM 兜底
 // （`ComGetObjectProp(hwnd, L"Line")` 再对它取 `Item`，两跳都被 RTL 登记成"认识但什么都不做"），
 // 症状是**编得过、跑得起、一笔不画**。档位与 TextHeight/ScaleX 两族同样只给 Form 与 PictureBox。
+// 账 #232②: 这张表从此是画布家族**名字**的唯一出口 —— cls / print / line 三档。
+// 以前 cls 与 print 不在表里，而是三条码头各自硬编码了一遍 `== "print" || == "cls"`
+// 且每一处都只认 PictureBox（成员侧打标记、表达式码头、语句码头各抄一份），于是
+// `Me.Cls` / `Me.Print "AB"` 两形压根没人接 —— 实测发成
+// `vb6_ComCall(vb6_hwnd_<窗体>, L"Cls", NULL, 0)` 与
+// `vb6_ComCallObject(vb6_ComGetObjectProp(同一 HWND, L"Print"), L"Item", …)`：
+// 窗体句柄不是 IDispatch ⇒ 编得过、跑得起、一笔不画（本线第四次栽在同一味上）。
+// 窗体自己那枚接收者是认得的（`cgen_form_ctrl_registry.inc` 把窗体名也登记进
+// knownFormControls_，类型 Form），缺的只有这两行。
+// line 那一档**仍然只给 PictureBox**：Form 的 Line 有自己的 12 参签名
+// （`vb6_Form_Line`，带 Step 相对位），签名不同不能并进这张表 —— 那是账 #224 剩下的口径。
 std::string CCodeGen::controlCanvasMethod(FrmControlType ctrlType,
                                           const std::string& memberLower) const {
+    if (memberLower == "cls" || memberLower == "print") {
+        switch (ctrlType) {
+            case FrmControlType::Form:
+            case FrmControlType::PictureBox:
+                return memberLower == "cls" ? "vb6_ControlCls" : "vb6_ControlPrint";
+            default:
+                return "";
+        }
+    }
     if (memberLower != "line") return "";
     switch (ctrlType) {
         case FrmControlType::PictureBox:
