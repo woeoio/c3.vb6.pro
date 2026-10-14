@@ -2,10 +2,66 @@
 // VB6 块语句 + 单行语句
 
 #include "parser/parser.hpp"
+#include "ast/ast_clone.hpp"
 
 namespace vb6c3 {
 
 // --- parser_stmt_assign.cpp: 赋值与声明语句（Set / Let / Call / Dim / ReDim / Const / Static / Erase / RaiseEvent + 标号与调用消歧） ---
+
+
+// ============================================================
+// 复合赋值 (C3 扩展, ai/032): `+=` `-=` `*=` `/=` `\=` `^=` `&=` `<<=` `>>=` `Mod=`
+// ============================================================
+
+// 复合赋值记号 → 它等价的基础二元算符。`&=` 刻意映射到 Concat 而不是 Add:
+// VB6/VB.NET 里 `&` 是字符串连接, `s &= "x"` 应当拼接而不是做数值加法。
+bool Parser::compoundAssignOp(TokenKind kind, BinaryOp& out) const {
+    switch (kind) {
+        case TokenKind::PlusEq:      out = BinaryOp::Add;     return true;
+        case TokenKind::MinusEq:     out = BinaryOp::Sub;     return true;
+        case TokenKind::StarEq:      out = BinaryOp::Mul;     return true;
+        case TokenKind::SlashEq:     out = BinaryOp::Div;     return true;
+        case TokenKind::BackSlashEq: out = BinaryOp::IntDiv;  return true;
+        case TokenKind::CaretEq:     out = BinaryOp::Pow;     return true;
+        case TokenKind::AmpEq:       out = BinaryOp::Concat;  return true;
+        case TokenKind::ShlEq:       out = BinaryOp::Shl;     return true;
+        case TokenKind::ShrEq:       out = BinaryOp::Shr;     return true;
+        case TokenKind::ModEq:       out = BinaryOp::Mod;     return true;
+        default:                                              return false;
+    }
+}
+
+// `target op= value` ⇒ 右值构造成 `target op value`
+//
+// 为什么在解析期脱糖而不是加一种 AST 节点: 脱糖后的形状 (`x = x + 1`) 是既有文法里
+// 最普通的一条语句, 语义层 (类型推导/收窄检查/溢出) 与发码层 (属性写回 Let/Set 分派、
+// AutoRedraw、UDT 字段) 全都已经覆盖并测过, 一行都不用改。
+// 代价是左值求值两次 —— 对 VB6 惯用的左值 (变量/数组元素/属性) 无副作用差异; 真出现
+// `f() += 1` 这种自带副作用的左值属于病态写法, 不在本次支持口径内 (若将来要收, 再加
+// 节点并让发码层发 C 的复合赋值, 而不是在这里偷偷改变语义)。
+// 只回表达式不回语句: 调用方要建的节点类型不同 (AssignmentStmt / LetStmt), 由它们各
+// 自构造, 这里不越权决定节点种类。
+ExprPtr Parser::buildCompoundAssignValue(const ExprPtr& target, SourceLocation loc,
+                                        BinaryOp op) {
+    auto value = parseExpression();
+    if (!value) {
+        diag_.error(DiagnosticID::ParseExpectedExpression, loc,
+            "复合赋值的右值为空 (cur=" +
+            std::string(Token::kindToString(cur_.kind)) + ")");
+        return nullptr;
+    }
+    ASTCloner cloner;
+    auto lhsCopy = cloner.cloneExpr(target.get());
+    if (!lhsCopy) {
+        // 克隆失败 (节点种类不在 ASTCloner 支持面内) —— 这是编译器内部问题。不能
+        // 静默退化成"左值只算一次"那种不同语义, 直接报错, 也不发一棵畸形的半成品
+        // AST 下去。
+        diag_.error(DiagnosticID::ParseUnexpectedToken, loc,
+            "复合赋值的左值形状不受支持 (ASTCloner 无法拷贝), 无法展开成二元的 op 形式");
+        return nullptr;
+    }
+    return std::make_unique<BinaryExpr>(loc, op, std::move(lhsCopy), std::move(value));
+}
 
 
 // ============================================================
@@ -17,6 +73,10 @@ std::unique_ptr<SetStmt> Parser::parseSetStmt() {
     advance(); // consume 'Set'
     // '=' 是赋值号, 不是比较运算符; 用 minBp > '='(l_bp=8) 避免表达式吃掉 '='
     auto target = parseExpression(9);
+    // C3 扩展 (ai/032): 复合赋值在**赋值**这条路上收编。`Set` 不收 —— Set 是对象
+    // **引用**赋值 (`Set o = Nothing`), 对引用做 `+=` 在 VB.NET 里同样非法, 收编它
+    // 只会把明显的类型错推迟到运行期。`Let` 收 —— 它就是显式写法的普通赋值, 同一
+    // 个记号在 Let 上报"语法错"而在裸赋值上能过, 是纯陷阱。
     expect(TokenKind::Equals, DiagnosticID::ParseExpectedToken,
            "expected '=' in Set statement");
     auto value = parseExpression();
@@ -28,6 +88,14 @@ std::unique_ptr<LetStmt> Parser::parseLetStmt() {
     advance(); // consume 'Let'
     // 同 Set, '=' 是赋值号
     auto target = parseExpression(9);
+    {
+        BinaryOp compoundOp;
+        if (compoundAssignOp(cur_.kind, compoundOp)) {
+            advance();
+            auto value = buildCompoundAssignValue(target, loc, compoundOp);
+            return std::make_unique<LetStmt>(loc, std::move(target), std::move(value));
+        }
+    }
     expect(TokenKind::Equals, DiagnosticID::ParseExpectedToken,
            "expected '=' in Let statement");
     auto value = parseExpression();
@@ -477,6 +545,20 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
                 std::move(dba092r.positional[0]), std::move(rhs092r));
             dba092r.positional.clear();
             dba092r.positional.push_back(std::move(cond092r));
+        }
+    }
+
+    // C3 扩展 (ai/032): 复合赋值 (`x += 1` …)。判据放在 `=` 赋值之前 —— 复合记号
+    // 与 `=` 是互斥的两种 token, 先看复合的那一支不影响任何既有语句。
+    {
+        BinaryOp compoundOp;
+        if (compoundAssignOp(cur_.kind, compoundOp)) {
+            advance();  // consume the compound-assign token
+            // 先把右值算出来再用 expr 构造节点 —— 两处都要用到 expr 的内容 (右值里
+            // 有一份 clone), 顺序必须显式写开, 不能塞进一个 make_unique 的实参表里
+            // 依赖求值顺序。
+            auto value = buildCompoundAssignValue(expr, loc, compoundOp);
+            return std::make_unique<AssignmentStmt>(loc, std::move(expr), std::move(value));
         }
     }
 

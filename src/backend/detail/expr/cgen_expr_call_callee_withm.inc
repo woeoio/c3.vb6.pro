@@ -69,9 +69,11 @@
                                 if (mi.arraySize > 0) {
                                     // Pattern A: 固定大小数组字段 → tempVar->member[idx]
                                     // Fix 081j-2: With 块临时变量是指针，用 -> 访问成员
-                                    emitExpr(*node.positional[0]);
-                                    std::string idx = std::move(lastExpr_);
-                                    lastExpr_ = tempVar + "->" + cIdent(mi.name) + "[" + idx + "]";
+                                    // 账 #262: 括号层数与 obj.member(i, j) 那一形同一条出口
+                                    // (udtFixedMemberIndex)，两形必须答同一串下标。
+                                    lastExpr_ = udtFixedMemberIndex(
+                                        tempVar + "->" + cIdent(mi.name),
+                                        node.positional, mi.arrayRank);
                                     isHandled = true;
                                 } else if (mi.isArrayDynamic) {
                                     // Pattern B: 动态数组字段 → VB6_SA_AT(elemType, tempVar->member, idx)
@@ -156,6 +158,19 @@
                 const char* defProp110 = getDefaultPropertyName(itCtrl110->second);
                 std::string readFn110 = defProp110
                     ? getControlPropReadFn(itCtrl110->second, defProp110) : std::string();
+                if (suppressDefaultProp_) {
+                    // Fix <c3-menu3d>: 控件数组元素作 **With 目标** (With ImgMenu(ImgNum)):
+                    // VB6 绑定控件对象而非其默认属性 Picture. 此处分流交付元素 HWND 访问器,
+                    // 让 cgen_with 生成 `HWND _vb6_with_N = (HWND)vb6_CtrlArr_GetAt(...)`,
+                    // 块内 .Picture/.AutoRedraw/.Visible 等经 With 控件属性表写回控件本身.
+                    emitExpr(*node.positional[0]);
+                    std::string idxArg110w = std::move(lastExpr_);
+                    std::string orig110w = knownFormControlOriginalNames_.count(caLower110)
+                        ? knownFormControlOriginalNames_[caLower110] : caId110.name;
+                    lastExpr_ = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(orig110w)
+                              + ", " + idxArg110w + ")  /* ctrl array elem hwnd (With base) */";
+                    return;
+                }
                 if (!readFn110.empty()) {
                     emitExpr(*node.positional[0]);
                     std::string idxArg110 = std::move(lastExpr_);
@@ -268,39 +283,10 @@
         }
     }
 
-    // --- C29-Data: Data1.Recordset 的语句方法调用 (Refresh/Move*) ---
-    // comObjExpr_ = vb6_Data_Self(...) (recordset 透传形态)。语句路不走 com bind,
-    // 必须在这里拦, 否则落 vb6_ComCall(vb6_Data_Self(...), L"Refresh") —— 对
-    // ODBC 状态当 IDispatch 用。
-    if (isComMarker_ && comObjExpr_.find("vb6_Data_Self(") == 0) {
-        isComMarker_ = false;
-        std::string method = std::move(comMemberName_);
-        comObjExpr_.clear();
-        comMemberName_.clear();
-        std::string dh = dataSelfHwndExpr(comObjExpr_);
-        if (!dh.empty()) {
-            if (method == "refresh")      { lastExpr_ = "vb6_Data_Refresh((void*)" + dh + ")"; return; }
-            if (method == "movenext")     { lastExpr_ = "vb6_Data_MoveNext((void*)" + dh + ")"; return; }
-            if (method == "moveprevious") { lastExpr_ = "vb6_Data_MovePrevious((void*)" + dh + ")"; return; }
-            if (method == "movefirst")    { lastExpr_ = "vb6_Data_MoveFirst((void*)" + dh + ")"; return; }
-            if (method == "movelast")     { lastExpr_ = "vb6_Data_MoveLast((void*)" + dh + ")"; return; }
-            if (method == "fields") {
-                // Fields("name") / Fields(1) —— 取值即 FieldValueStr (数字下标转宽串)
-                std::string a0 = "L\"\"";
-                if (!node.positional.empty()) {
-                    emitExpr(*node.positional[0]);
-                    a0 = lastExpr_;
-                    bool allNum = !a0.empty() && a0.find_first_not_of("0123456789") == std::string::npos;
-                    if (allNum) a0 = "L\"" + a0 + "\"";
-                }
-                lastExpr_ = "vb6_Data_FieldValueStr((void*)" + dh + ", " + a0 + ")";
-                return;
-            }
-        }
-        // 未识别: 不恢复 marker —— 恢复成脏标记会污染后续语句
-        // (实测: Fields("id") 拿到 "vb6_Data_Self((" 残缺 comObjExpr_ → ComCallObject 空成员)。
-        // 落默认 COM 路即可 (marker 已在上面消费清掉)。
-    }
+    // 账 #278 §B124: 这里原来有一格 `vb6_Data_Self(` 透传形态的直译 (Refresh/Move*/Fields)，
+    // 与 cgen_expr_call_com_bind.inc / cgen_util_com.cpp / cgen_call.cpp 里那三格同属一代：
+    // 那个前缀今天没有任何发射者 ⇒ 恒假，已随九形探针量过并撤掉。recordset 一律走
+    // memberobj 的真 IDispatch (`vb6_Data_RecordsetObj` + vb6_Com*)。
 
     // P13.3: ListBox/ComboBox methods (AddItem/RemoveItem/Clear/List) via isComMarker_ flag
     if (isComMarker_) {
@@ -350,7 +336,10 @@
                 lastExpr_ = "0";
                 return;
             } else if (method == "clear") {
-                c_.emitLine("vb6_ClearList((void*)vb6_hwnd_" + ctrlName + ");  /* ListBox.Clear */");
+                // 账 #278 §B72: 名字交回零实参那张表（上面的类型判据与表里 clear 那一行是同一件事，
+                // 所以这里必然有答；注释原样留着，产物逐字节不变）。
+                std::string fnClr = controlZeroArgMethod(itCtrl->second, "clear");
+                c_.emitLine(fnClr + "((void*)vb6_hwnd_" + ctrlName + ");  /* ListBox.Clear */");
                 lastExpr_ = "0";
                 return;
             } else if (method == "list") {
@@ -378,8 +367,9 @@
             || (itCtrlCd != knownFormControls_.end() &&
                 itCtrlCd->second == FrmControlType::CommonDialog)) {
             std::string mCd = Symbol::toLower(comMemberName_);
-            if (mCd == "showopen" || mCd == "showsave" || mCd == "showcolor"
-                || mCd == "showfont" || mCd == "showprinter" || mCd == "showabout") {
+            // 账 #278 §B72 第十四刀: 与语句码头问同一张表（名单与拼法都不在这里了）
+            std::string fnCdW = controlZeroArgMethod(FrmControlType::CommonDialog, mCd);
+            if (!fnCdW.empty()) {
                 isComMarker_ = false;
                 isEarlyBoundCom_ = false;
                 earlyBoundSym_ = nullptr;
@@ -389,9 +379,7 @@
                         ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
                 comObjExpr_.clear();
                 comMemberName_.clear();
-                std::string fnCd = "vb6_CdShow"
-                    + std::string(1, (char)::toupper((unsigned char)mCd[4])) + mCd.substr(5);
-                c_.emitLine("{" + fnCd + "((void*)" + hwndCd + ");}"
+                c_.emitLine("{" + fnCdW + "((void*)" + hwndCd + ");}"
                             "  /* CommonDialog." + mCd + " (原生 comdlg32) */");
                 lastExpr_ = "0";
                 return;
@@ -409,11 +397,12 @@
         if (itWs != knownFormControls_.end() &&
             itWs->second == FrmControlType::Winsock) {
             std::string mWs = comMemberName_;
-            static const char* kWsKnown[] = { "bind", "senddata", "getdata", "peekdata",
-                                              "close", "listen", "connect", "accept" };
-            bool knownWs = false;
-            for (const char* k : kWsKnown) if (mWs == k) { knownWs = true; break; }
-            if (knownWs) {
+            // 账 #278 §B72 第十三刀: 「这一族有哪些成员」与「各自叫什么」从前分抄两处 ——
+            // 这张 kWsKnown 名单只管认不认，出口名住在下面八条分支里。现在一起问那张表:
+            // 表的键就是名单，表的值就是出口，两边再也不会一方长了档另一方没跟。
+            // 实参形状（出参取址 / (int32_t) 强制 / L"" 兜底）照旧由这条码头拼。
+            std::string fnWs = controlWinsockMethod(mWs);
+            if (!fnWs.empty()) {
                 std::string hwndWs = cIdent(knownFormControlOriginalNames_.count(comObjExpr_)
                     ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
                 isComMarker_ = false;
@@ -434,28 +423,27 @@
                 };
                 std::string preWs = "(void*)vb6_hwnd_" + hwndWs;
                 if (mWs == "close") {
-                    lastExpr_ = "vb6_Ws_Close(" + preWs + ")";
+                    lastExpr_ = fnWs + "(" + preWs + ")";
                 } else if (mWs == "listen") {
-                    lastExpr_ = "vb6_Ws_Listen(" + preWs + ")";
+                    lastExpr_ = fnWs + "(" + preWs + ")";
                 } else if (mWs == "connect") {
-                    lastExpr_ = "vb6_Ws_Connect(" + preWs + ")";
+                    lastExpr_ = fnWs + "(" + preWs + ")";
                 } else if (mWs == "accept") {
-                    lastExpr_ = "vb6_Ws_Accept(" + preWs + ", "
+                    lastExpr_ = fnWs + "(" + preWs + ", "
                               + (argWs.size() > 0 ? ("(int32_t)" + argWs[0]) : std::string("0")) + ")";
                 } else if (mWs == "bind") {
                     std::string port = argWs.size() > 0 ? ("(int32_t)" + argWs[0]) : std::string("0");
                     std::string ip = argWs.size() > 1 ? argWs[1] : std::string("L\"\"");
-                    lastExpr_ = "vb6_Ws_Bind(" + preWs + ", " + port + ", " + ip + ")";
+                    lastExpr_ = fnWs + "(" + preWs + ", " + port + ", " + ip + ")";
                 } else if (mWs == "senddata") {
-                    lastExpr_ = "vb6_Ws_SendData(" + preWs + ", "
+                    lastExpr_ = fnWs + "(" + preWs + ", "
                               + (argWs.size() > 0 ? argWs[0] : std::string("L\"\"")) + ")";
                 } else {
                     std::string out = (!argWs.empty() && isBareIdent(argWs[0]))
                                     ? ("&" + argWs[0]) : std::string("((void*)0)");
                     std::string ty = argWs.size() > 1 ? ("(int32_t)" + argWs[1]) : std::string("0");
                     std::string mx = argWs.size() > 2 ? ("(int32_t)" + argWs[2]) : std::string("(-1)");
-                    lastExpr_ = std::string(mWs == "getdata" ? "vb6_Ws_GetData(" : "vb6_Ws_PeekData(")
-                              + preWs + ", " + out + ", " + ty + ", " + mx + ")";
+                    lastExpr_ = fnWs + "(" + preWs + ", " + out + ", " + ty + ", " + mx + ")";
                 }
                 return;
             }
@@ -635,12 +623,14 @@
         std::string mDraw = Symbol::toLower(comMemberName_);
         // Printer 那支的 obj 是 (void*)vb6_Printer_Object(); Form 那支是 vb6_hwnd_X
         bool looksLikePrinter = (comObjExpr_.find("Printer") != std::string::npos);
-        // 账 #232②: `cls` 只在 Printer 那一档还留在这里 —— Printer.Cls 在 VB6 是"结束文档"
-        // (vb6_Printer_EndDoc)，不是清画布；画布那两档 (Form / PictureBox) 的名字与出口
-        // 归 controlCanvasMethod 那张表，上面两条码头先接走，这里不再答第二遍。
-        bool isPrinterDraw = (mDraw == "pset" || mDraw == "line" || mDraw == "circle"
-                              || mDraw == "point"
-                              || (mDraw == "cls" && looksLikePrinter));
+        // 账 #232①-c: 这一族的**名字与"这一档有没有出口"都问画布表** (kCanvasVerbRows 里
+        // owner=DRAW 的那一族) —— 以前这里硬编码一份动词名单 (pset/line/circle/point + cls@printer)，
+        // 表加一档它不会知道。分工现在写在数据里而不是注释里：`cls` 在窗体上归 METHOD 那一族
+        // (vb6_ControlCls，上面两条码头先接走)，只有 Printer.Cls 才是"结束文档"，所以表里那一行
+        // 挂 PRINTER + DRAW，这里问 FORM 得到空串 —— 与改前逐字同形。
+        const uint32_t cvRecvDraw = looksLikePrinter ? CR_CANVAS_PRINTER : CR_CANVAS_FORM;
+        const std::string cvDrawFn = canvasDrawEntry(mDraw, cvRecvDraw);
+        bool isPrinterDraw = !cvDrawFn.empty();
         if (isPrinterDraw && (isFormModule_ || looksLikePrinter)) {
             isComMarker_ = false;
             isEarlyBoundCom_ = false;
@@ -689,21 +679,21 @@
                 std::string y = a.size() > 1 ? a[1] : "0";
                 std::string col = hasColor ? a[a.size() - 1] : "0";
                 call = looksLikePrinter
-                    ? ("vb6_Printer_PSet(0, 1, " + x + ", " + y + ", "
+                    ? (cvDrawFn + "(0, 1, " + x + ", " + y + ", "
                        + (hasColor ? "1" : "0") + ", " + col + ")")
-                    : ("vb6_Form_PSet((void*)" + obj + ", 0, 1, " + x + ", " + y
+                    : (cvDrawFn + "((void*)" + obj + ", 0, 1, " + x + ", " + y
                        + ", " + (hasColor ? "1" : "0") + ", " + col + ")");
             } else if (m == "point") {
                 std::string x = a.size() > 0 ? a[0] : "0";
                 std::string y = a.size() > 1 ? a[1] : "0";
                 lastExpr_ = looksLikePrinter
-                    ? ("vb6_Printer_Point(" + x + ", " + y + ")")
-                    : ("vb6_Form_Point((void*)" + obj + ", " + x + ", " + y + ")");
+                    ? (cvDrawFn + "(" + x + ", " + y + ")")
+                    : (cvDrawFn + "((void*)" + obj + ", " + x + ", " + y + ")");
                 return;
             } else if (m == "cls") {
                 // 只有 Printer 那一形能走到这里（上面的 isPrinterDraw 已经把画布的 cls 交给了
                 // controlCanvasMethod 那两条码头，账 #232②）。Printer.Cls = 结束文档。
-                call = "vb6_Printer_EndDoc()";
+                call = cvDrawFn + "()";
             } else if (m == "line") {
                 // Line 的两种形状: -(x1,y1)-(x2,y2) 4 参, 或 (x1,y1)-(x2,y2) 4 参
                 // (VB6 里 Step 由 parser 吞, 这里统一按 4 坐标 = 2 点)。
@@ -723,7 +713,7 @@
                     if (i == nCoord) { hasColor = "1"; col = a[i]; }
                     else if (i == nCoord + 1) { style = a[i]; }
                 }
-                std::string pfx = looksLikePrinter ? "vb6_Printer_Line" : "vb6_Form_Line";
+                const std::string pfx = cvDrawFn;
                 if (looksLikePrinter) {
                     call = pfx + "(0, 1, " + x1 + ", " + y1 + ", 0, 1, " + x2 + ", " + y2
                          + ", " + hasColor + ", " + col + ", " + style + ")";
@@ -744,11 +734,11 @@
                 if (a.size() > 5) { hasEnd = "1"; eA = a[5]; }
                 if (a.size() > 6) { hasAsp = "1"; asp = a[6]; }
                 if (looksLikePrinter) {
-                    call = "vb6_Printer_Circle(0, 1, " + x + ", " + y + ", " + r
+                    call = cvDrawFn + "(0, 1, " + x + ", " + y + ", " + r
                          + ", " + hasColor + ", " + col + ", " + hasStart + ", " + sA
                          + ", " + hasEnd + ", " + eA + ", " + hasAsp + ", " + asp + ")";
                 } else {
-                    call = "vb6_Form_Circle((void*)" + obj + ", 0, 1, " + x + ", " + y + ", " + r
+                    call = cvDrawFn + "((void*)" + obj + ", 0, 1, " + x + ", " + y + ", " + r
                          + ", " + hasColor + ", " + col + ", " + hasStart + ", " + sA
                          + ", " + hasEnd + ", " + eA + ", " + hasAsp + ", " + asp + ")";
                 }

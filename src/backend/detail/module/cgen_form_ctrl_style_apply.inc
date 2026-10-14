@@ -361,6 +361,14 @@
                 ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
                  std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
                 ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            // 账 #252: 控件的 VB 身份在这里记一次。晚绑定的 `.Name` / `.Index` / `TypeName`
+            // 与 `Controls("名字")` 四条读法都只问这张登记表（vb6_HostObj_Register），
+            // 而以前只有**窗体**登记过（vb6rtl_system.c 那一处）—— 标准控件全靠 IsWindow
+            // 兜底认成宿主，于是名字一律答空串、类型一律答 Control、按名查找一律 NULL。
+            // 类型名交原样串（"VB.CommandButton"），去掉 "VB." 那一档由 RTL 那一处统一做。
+            c_.emitLine("vb6_HostObj_Register((void*)" + dsHwnd + ", \"" + ctrl.controlName
+                        + "\", \"" + ctrl.controlTypeName + "\", 0, "
+                        + std::to_string(ctrl.index) + ");  /* VB identity */");
             emitDesignerStyleProps(ctrl, dsHwnd);
             emitDesignerStateProps(ctrl, dsHwnd);  // 账 #125: Enabled / Visible / Value
             emitDesignerStringProps(ctrl, dsHwnd);  // 账 #142: ToolTipText / Tag（非空才发）
@@ -419,6 +427,48 @@
                      std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
                     ("vb6_hwnd_" + cIdent(ctrl.controlName));
                 c_.emitLine("vb6_SetLabelAutoSize((void*)" + asHwnd + ", -1);  /* design AutoSize */");
+            }
+        }
+
+        // Fix <c3-menu3d>: PictureBox/Image 设计期 AutoSize=True 此前从不消费。
+        // 3DMenu 的 ImgMenu(9) 全套 AutoSize=True + 设计期 25x25, .Picture 指派 127x127
+        // 图标后控件必须放大到图片本征尺寸 (VB6 语义), 否则 TransBltNow 源 (.hdc 的
+        // ARDC) 只有 25x25, 图标内容中心全被裁掉、角区又透明 → 格子恒 BackColor,
+        // 环永远画不出来。RT 侧 vb6_SetControlPictureFromCom 的 AutoSize 块读的正是
+        // 这个属性 —— 此前没人写它, 块恒不生效。
+        if (ctrl.controlType == FrmControlType::PictureBox ||
+            ctrl.controlType == FrmControlType::Image) {
+            auto asItPb = ctrl.properties.find("AutoSize");
+            if (asItPb != ctrl.properties.end() && asItPb->second.intValue != 0) {
+                std::string asPLower = ctrl.controlName; std::transform(asPLower.begin(), asPLower.end(), asPLower.begin(), ::tolower);
+                std::string asPHwnd = knownControlArrays_.count(asPLower) ?
+                    ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                     std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                    ("vb6_hwnd_" + cIdent(ctrl.controlName));
+                c_.emitLine("vb6_SetPictureAutoSize((void*)" + asPHwnd + ", -1);  /* design AutoSize */");
+            }
+        }
+
+        // Fix <c3-menu3d>: PictureBox/Image 设计期 AutoRedraw=True 此前从不消费。
+        // 3DMenu 的 ImgTitolo 只在 .frm 里写了 AutoRedraw=True —— VB 代码**从不**
+        // 重新指派它 (而 ImgMenu/ImgMenuBack/ImgSub 都在 Form_Load 里又写了
+        // `.AutoRedraw = True`, 那只顺手把它们的 ARDC 建了起来)。缺这一条时
+        // ImgTitolo 永远拿不到 VB6_AutoRedrawDC: `.hdc` 落到 GetDC(隐藏窗口) 那张
+        // 空 DC (实测 px0=FFFFFFFF = GetPixel 直接失败), 于是 TitoloTrasparente 的
+        // `GetPixel` 取不到透明色、`TransBltNow` 从空源合成 → 红色标题永不上屏。
+        // 另一半是 RT 侧的 vb6_AutoRedrawRefit: 它开头就 `if (!ARDC) return;`,
+        // 所以 SetControlPicture 的 AutoSize 缩放/镜像也救不了这个洞 —— 必须先
+        // 由这里把 ARDC 建出来, 后续指派 Picture 才会 refit+mirror 正确尺寸。
+        if (ctrl.controlType == FrmControlType::PictureBox ||
+            ctrl.controlType == FrmControlType::Image) {
+            auto arIt = ctrl.properties.find("AutoRedraw");
+            if (arIt != ctrl.properties.end() && arIt->second.intValue != 0) {
+                std::string arNLower = ctrl.controlName; std::transform(arNLower.begin(), arNLower.end(), arNLower.begin(), ::tolower);
+                std::string arHwnd = knownControlArrays_.count(arNLower) ?
+                    ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                     std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                    ("vb6_hwnd_" + cIdent(ctrl.controlName));
+                c_.emitLine("vb6_SetAutoRedraw((void*)" + arHwnd + ", -1);  /* design AutoRedraw */");
             }
         }
 
@@ -796,8 +846,21 @@
                     pv = intOf(p.properties, "Width");
                     if (pv > 0) c_.emitLine("vb6_StatusBar_SetPanelWidth((void*)" + sbHwnd
                                           + ", " + std::to_string(idx) + ", " + std::to_string(pv) + ");");
+                    // 真 VB6 设计器那一行写的是 `Object.Width`(键名带前缀, 值是 himetric),
+                    // 而 frm_parser.cpp:81 保留点号全名 ⇒ 上面那一眼在**别人的工程**里从来没命中
+                    // (账 #206: 语料 356 份 .frm / 1634 处 Object.Width, 状态条上点号形 .Width 0 处)。
+                    // 折法不在这里做 —— 交原数, 由唯一那一枚 *Hm 出口折成缇 (§B41 第二格之后,
+                    // 存储这一档是缇, 缇->像素只在 SbLayout 那一步按真实 DPI 做)。
+                    pv = intOf(p.properties, "Object.Width");
+                    if (pv > 0) c_.emitLine("vb6_StatusBar_SetPanelWidthHm((void*)" + sbHwnd
+                                          + ", " + std::to_string(idx) + ", " + std::to_string(pv) + ");");
                     pv = intOf(p.properties, "MinWidth");
-                    if (pv > 0) c_.emitLine("vb6_StatusBar_SetPanelMinWidth((void*)" + sbHwnd
+                    // 这一行的值同样是 **himetric** (账 #206 第二格, 语料 `.build/b447_panel_minwidth.py`):
+                    // 457 枚同时写了 `Object.Width` 与 `MinWidth` 的面板里, 398 枚两个数字逐字相同
+                    // (AutoSize=0/2 两档的中位数都是 1.000) ⇒ 设计器把同一档几何存了两份, 所以它与
+                    // Width 同路走 *Hm 出口。代码那一头 `Panels(i).MinWidth = v` 才是缇 (走
+                    // kSbWriters 那张表, 不经这里)。
+                    if (pv > 0) c_.emitLine("vb6_StatusBar_SetPanelMinWidthHm((void*)" + sbHwnd
                                           + ", " + std::to_string(idx) + ", " + std::to_string(pv) + ");");
                     std::string tip = litOf(p.properties, "ToolTipText");
                     if (!tip.empty()) c_.emitLine("vb6_StatusBar_SetPanelToolTip((void*)" + sbHwnd
@@ -1075,7 +1138,8 @@
                     if (pic.data.empty()) continue;
                     std::string varName = "vb6_frx_tabpic_" + cIdent(ctrl.controlName)
                                         + "_" + std::to_string(idx2);
-                    h_.emitLine(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                    frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                    h_.emitLine(bytesToHexArrayDecl(varName));
                     c_.emitLine("vb6_SSTab_SetTabPicture((void*)" + tsHwnd + ", "
                               + std::to_string(idx2) + ", " + varName + ", "
                               + varName + "_size);");

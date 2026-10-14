@@ -198,6 +198,37 @@ ExprPtr Parser::parseNullDenotation() {
             }
             return std::make_unique<IdentifierExpr>(loc, name);
         }
+
+        // --- If(cond, truePart, falsePart) 三元表达式 (C3 扩展, ai/032) ---
+        // VB.NET 的 If 运算符: 只对**被选中那一支**求值 (真短路)。这正是它相对
+        // VB6 `IIf` 的差别 —— IIf 是普通函数, 两个分支都会被求值, 所以
+        // `IIf(d <> 0, a / d, 0)` 在 d=0 时照样除零。
+        // 判据只在「`If` 紧跟 `(`」时成立: 语句位置的块 If / 单行 If 由
+        // parseStatement 先一步消费掉 `If` 才轮到表达式, 表达式位置上 VB6 里
+        // 本来就没有以 `If` 开头的表达式, 所以与任何既有语法都不重叠。
+        case TokenKind::If: {
+            auto loc = currentLoc();
+            advance();  // consume 'If'
+            if (cur_.kind != TokenKind::LeftParen) {
+                diag_.error(DiagnosticID::ParseExpectedToken, loc,
+                    "expected '(' after 'If' in expression "
+                    "(ternary form is If(condition, truePart, falsePart))");
+                return nullptr;
+            }
+            advance();  // consume '('
+            auto call = std::make_unique<IndexOrCallExpr>(loc,
+                std::make_unique<IdentifierExpr>(loc, "If"));
+            if (cur_.kind != TokenKind::RightParen) {
+                do {
+                    auto arg = parseExpression();
+                    call->positional.push_back(std::move(arg));
+                } while (match(TokenKind::Comma));
+            }
+            expect(TokenKind::RightParen, DiagnosticID::ParseExpectedToken,
+                   "expected ')' to close If(...)");
+            return call;
+        }
+
         default:
             // 软关键字在表达式位置 → 解析为标识符
             if (isSoftKeyword(cur_.kind)) {
@@ -230,6 +261,28 @@ ExprPtr Parser::parseLeftDenotation(ExprPtr left, int& minBp) {
 
     // 中缀二元运算符
     auto loc = left->loc;
+
+    // C3 扩展 (ai/032): `a IsNot b` 在解析期脱糖成 `Not (a Is b)` —— 不加 AST 节点、
+    // 不动语义层、不动发码层, 三处都零改动就能拿到正确行为, 理由是:
+    //   · 脱糖后的形状 (UnaryExpr(Not) 套 BinaryExpr(Is)) 本来就是合法 VB6 写法
+    //     `Not (a Is b)`, 所以整条下游链路 (类型推导/短路/发码) 都是既有的、被测过的;
+    //   · 发码层 exprYieldsVbBoolean() 认 BinaryOp::Is 为布尔, 于是 Not 走**逻辑**取反
+    //     (`(x != 0) ? 0 : -1`) 而不是位取反 `~` —— 恰好是 VB6 布尔语义 (-1/0)。
+    //   不能拿 `a <> b` 顶替: `<>` 走的是 Variant **值**比较, 而 Is 是**引用**比较,
+    //   对两个内容相同的对象会给出相反答案。
+    if (kind == TokenKind::IsNot) {
+        advance();  // consume 'IsNot'
+        auto rhs = parseExpression(bp.r_bp);
+        if (!rhs) {
+            diag_.error(DiagnosticID::ParseExpectedExpression, currentLoc(),
+                "expected expression after 'IsNot'");
+            return left;
+        }
+        auto isExpr = std::make_unique<BinaryExpr>(loc, BinaryOp::Is,
+            std::move(left), std::move(rhs));
+        return std::make_unique<UnaryExpr>(loc, UnaryOp::Not, std::move(isExpr));
+    }
+
     auto op = tokenToBinaryOp(kind);
     advance(); // consume operator
 

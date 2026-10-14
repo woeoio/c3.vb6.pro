@@ -43,7 +43,12 @@ extern "C" {
 
 #define VB6_UC_MAX_DESC 32
 #define VB6_UC_MAX_INST 64
-#define VB6_UC_MAX_OBJ  128
+/* 账 #252: 这张表现在也存「每枚标准控件的 VB 身份」(名字/类型/下标)，而登记表是**进程级**的
+   —— 一份工程里所有窗体的控件都往这里挤。实测语料：VBFlexGridDemo 182 枚、Charts 2020 164 枚
+   （单文件最多 73 枚），128 会**静默装不下**（vb6_HostObj_Register 满了直接 return，那几枚
+   退回「答不出名字」的旧行为）。提到 512：静态多约 110KB（一格约 292B），
+   而 collectChildren 的 kids[] 也跟着从 1KB 变 4KB，两条都远低于栈预算。 */
+#define VB6_UC_MAX_OBJ  512
 #define VB6_UC_NAME_LEN 64
 
 // 合成对象 tag
@@ -84,6 +89,12 @@ typedef struct vb6_UCRec {
     int32_t index;        // 控件数组下标, -1=非数组
     wchar_t ctrlName[VB6_UC_NAME_LEN];
     BSTR    displayNameBstr;   // Fix 116: Ambient.DisplayName 缓存 (控件实例名)
+    // Fix <vbeclipse> 2026-10-12 (账 #257 第十二层): "加载路径"的 Show/Resize 推迟标记。
+    // VB6 的顺序是 Initialize → ReadProperties → Show/Resize, 而 C3 的 ReadProps 在
+    // HostCreate 之后调用 ⇒ 不推迟就会让 Resize 读到还没恢复的设计期属性
+    // (实测 czUI: m_ControlType 未恢复 = 0 = czTitleBar ⇒ 走错分支 ⇒ AV)。
+    // 见 uc_host_create.inc 的 vb6_uc_activate 与 vb6_UC_ActivateHost。
+    int32_t pendingActivate;
 } vb6_UCRec;
 
 // UserControl 宿主状态快照（push/pop 用）
@@ -140,22 +151,22 @@ typedef struct vb6_UCDib {
 // ============================================================
 
 // --- 描述表 / 实例表 / 宿主状态（uc_host.c）---
-extern const vb6_UserControlDesc* g_uc_descs[VB6_UC_MAX_DESC];
-extern int32_t g_uc_descCount;
-extern vb6_UCRec g_uc_recs[VB6_UC_MAX_INST];
-extern int32_t g_uc_recCount;
-extern vb6_UCRec* g_uc_current;                  // 最近进入的实例
-extern vb6_ComIface_Font* g_uc_pendingFont;      // Fix 119: 待应用实例字体
+extern const vb6_UserControlDesc* vb6_ucDescs[VB6_UC_MAX_DESC];
+extern int32_t vb6_ucDescCount;
+extern vb6_UCRec vb6_ucRecs[VB6_UC_MAX_INST];
+extern int32_t vb6_ucRecCount;
+extern vb6_UCRec* vb6_ucCurrent;                  // 最近进入的实例
+extern vb6_ComIface_Font* vb6_ucPendingFont;      // Fix 119: 待应用实例字体
 
 // --- 宿主对象登记表（uc_hostmodel.c）---
-extern vb6_HostObjRec g_ho[VB6_UC_MAX_OBJ];
-extern int32_t g_hoCount;
+extern vb6_HostObjRec vb6_ucHo[VB6_UC_MAX_OBJ];
+extern int32_t vb6_ucHoCount;
 
 // --- Font 链表头（uc_controls.c）---
-extern vb6_UCFontRec* g_uc_fonts;
+extern vb6_UCFontRec* vb6_ucFonts;
 
 // --- 字体单例（定义在 vb6rtl_com.c，uc_controls.c 依赖其地址做身份判定）---
-extern vb6_ComIface_Font g_vb6_UserControl_FontObj;
+extern vb6_ComIface_Font vb6_UserControl_FontObj;
 
 // ============================================================
 // 跨族共享函数（原为文件级 static，现提升为外部链接）
@@ -180,7 +191,7 @@ int32_t vb6_UC_DesignCtrlOwner(const void* hwnd, void** outInst, const char** ou
 // Fix <vbeclipse> rev22: 在正确宿主上下文里跑一次 `<Ctrl>_Resize`。
 // 返回 1 = 事件跑了。护栏: 槽位窗口就是 hwnd / rec->me 非空 (HostCreate 早期还没
 // 赋值) / rec->ready (创建期不算) / 同控件不重入; push-pop 的 saved 在本函数栈上。
-// ⚠ **不要**加"g_uc_current 非空就跳过"这种判据 —— `ViewArea.Move` 恰恰总在 UC
+// ⚠ **不要**加"vb6_ucCurrent 非空就跳过"这种判据 —— `ViewArea.Move` 恰恰总在 UC
 //   上下文内 (UserControl_Resize 本身就是 WM_SIZE→push→resize 链进来的), 那样
 //   等于本条永不触发 (首次实现就踩了, 表现为"事件装上了但尺寸没变")。
 // ⚠ vb6_ControlMove (vb6forms_ctrl.c) 调它时**不能** include 本头 (三头混一个
@@ -246,6 +257,9 @@ vb6_UCControls* vb6_uc_newControls(void* formHwnd);  // uc_controls.c
 // --- Fix <vbeclipse> rev14: Controls 集合 (Add/Item/Remove/Count) ---
 // 单例 + 归属窗口 + 对象形态查找 + 动态增删, 定义见 uc_controls.c
 void* vb6_UC_Controls(void);
+// 账 #257: UserControl.ParentControls —— VB6 语义是**容器**(父)的控件集合, 不是本 UC 自己
+// 的子控件。单例的 formHwnd 每次取用时现算成 GetParent(当前 UC 宿主窗口)。
+void* vb6_UC_ParentControls(void);
 void* vb6_UC_ControlsOwnHwnd(void* coll);
 void* vb6_UC_ControlsItemObj(void* coll, int32_t index);
 void* vb6_UC_ControlsItemObjByName(void* coll, const wchar_t* name);
@@ -280,7 +294,7 @@ void vb6_uc_dibCreate(vb6_UCDib* d, HDC refDC, int32_t w, int32_t h);
 void vb6_uc_dibSaveBmp(const vb6_UCDib* d, const char* path);
 void vb6_uc_dibDestroy(vb6_UCDib* d);
 void vb6_uc_dumpFormComposite(HWND root, const char* dumpDir);
-extern int32_t g_uc_dumpSeq;   // dump 文件序号
+extern int32_t vb6_ucDumpSeq;   // dump 文件序号
 
 // --- 账 #173 census: 内建 Collection 的成员面（uc_collection.c 定义）---
 // 以前这一族**没有集中声明** —— `uc_hostmodel_call.inc` / `uc_hostmodel_getprop.inc`

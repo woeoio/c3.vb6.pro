@@ -167,10 +167,10 @@ const IOleInPlaceFrameVtbl g_axSiteInPlaceFrameVtbl = {
 /* ===== Fix 143d: 已创建的 OCX 宿主登记表 (windowless 控件消息转发用) ===== */
 #define VB6_MAX_AXSITES 64
 Vb6AxSite* g_axSites[VB6_MAX_AXSITES];
-int g_axSiteCount = 0;
+int vb6_axSiteCount = 0;
 
 void axSiteRegister(Vb6AxSite* s) {
-    if (g_axSiteCount < VB6_MAX_AXSITES) g_axSites[g_axSiteCount++] = s;
+    if (vb6_axSiteCount < VB6_MAX_AXSITES) g_axSites[vb6_axSiteCount++] = s;
 }
 
 

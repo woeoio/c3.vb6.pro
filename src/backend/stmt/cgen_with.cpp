@@ -433,8 +433,8 @@ void CCodeGen::visit(WithStmt& node) {
                     memExpr.object->kind == ASTNodeKind::IdentifierExpr) {
                     auto& objId133w = static_cast<IdentifierExpr&>(*memExpr.object);
                     std::string objLower133w = Symbol::toLower(objId133w.name);
-                    if (objLower133w == "usercontrol" || objLower133w == "ambient" ||
-                        objLower133w == "extender" || objLower133w == "propertypage") {
+                    // 账 #278 §B120: 这一问由那张表答。
+                    if (hostPseudoIsObject(objLower133w)) {
                         withInfo.kind = WithObjKind::COMObject;
                     }
                 }
@@ -507,10 +507,28 @@ void CCodeGen::visit(WithStmt& node) {
             // 数组元素访问如 m_uWindowState(0) → VARIANT UDT
             auto& callExpr = static_cast<IndexOrCallExpr&>(*node.object);
             if (callExpr.callee && callExpr.callee->kind == ASTNodeKind::IdentifierExpr) {
-                auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
-                std::string arrLower = idExpr.name;
-                std::transform(arrLower.begin(), arrLower.end(), arrLower.begin(), ::tolower);
-                // Fix 055: 优先检查UDT数组元素类型
+auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
+            std::string arrLower = idExpr.name;
+            std::transform(arrLower.begin(), arrLower.end(), arrLower.begin(), ::tolower);
+            // Fix <c3-menu3d>: 控件数组元素作 With 目标 — `With ImgMenu(ImgNum)` 在 VB6
+            // 绑定**控件对象** (PictureBox 数组元素), 不是其默认属性 Picture; With 表达式
+            // 从不自动解引用默认属性. 此前这里 kind 落 COMObject (行尾 fallback) + Fix 110b
+            // 把对象表达式压成 vb6_GetControlPicture(...) → 块内 .Picture/.AutoRedraw/
+            // .Visible/.TabStop 全被 vb6_ComSetProp 打到临时图片对象, 控件自身从未被设置
+            // (Menu3D 环形图标空白而 ImgMenu 控件已被 RuotaMenu 移到环位). 与普通控件
+            // 同口径: FormControl + HWND 型 With 临时, 触发下方 suppressDefaultProp_ 抑制
+            // 默认属性解析.
+            if (knownControlArrays_.count(arrLower)) {
+                auto itWithCtrl = knownFormControls_.find(arrLower);
+                if (itWithCtrl != knownFormControls_.end()
+                    && itWithCtrl->second != FrmControlType::Menu) {
+                    withInfo.kind = WithObjKind::FormControl;
+                    withInfo.ctrlType = itWithCtrl->second;
+                    withInfo.ctrlOrigName = arrLower;
+                    tempType = "HWND";
+                }
+            }
+            // Fix 055: 优先检查UDT数组元素类型
                 auto itUdtArr = arrayUdtElemTypes_.find(arrLower);
                 if (itUdtArr != arrayUdtElemTypes_.end()) {
                     tempType = itUdtArr->second;  // e.g. "vb6_type_RECT"
@@ -600,6 +618,23 @@ void CCodeGen::visit(WithStmt& node) {
 
     suppressDefaultProp_ = prevSuppress;
 
+    // 账 #299 (§B130) 第二十五刀: 这一路以前**从不消费**那枚 COM 标记。
+    // `With SB1.Panels` 的 emitExpr 把接收者留在宿主槽上、把成员名挂在标记里，于是两件事同时发生:
+    //   ① 体内每一档成员按"不是集合"去问 (实测 `.Count` 交 0)；
+    //   ② 那枚标记漏进体内**第一条语句**，把 `c = .Count` 发成
+    //      `vb6_ComSetProp(<宿主>, L"Panels", …)` —— 一次读变成往控件写属性 (不响、不崩)。
+    // 消费口径与 Set 那一路同一个出口 (memberCollectionObjectExpr 一处答"这枚成员集合怎么立"),
+    // 答不出就一字不变 —— 本刀不顺手改别的 With 形 (#260 那一族的剩余形状另说)。
+    if (isComMarker_) {
+        std::string collW = memberCollectionObjectExpr(comObjExpr_, comMemberName_);
+        if (!collW.empty()) {
+            lastExpr_ = collW;
+            isComMarker_ = false;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+        }
+    }
+
     // Fix <vbeclipse>: 工程内 UserControl 实例作 With 目标时, 目标表达式要取**宿主窗口
     // 反查到的实例指针** (vb6_UC_InstanceOf(hwnd)), 而不是裸 HWND 槽 —— 否则 tempType
     // vb6_cls_<UC>* 被灌入一个 HWND, 体内成员调用等于拿 HWND 当结构体解引用.
@@ -639,17 +674,29 @@ void CCodeGen::visit(WithStmt& node) {
     if (!withObjectInfoStack_.empty() && withObjectInfoStack_.back().kind == WithObjKind::FormControl && withObjectInfoStack_.back().ctrlType == FrmControlType::Menu) {  // P20-36
         c_.emitLine("int " + tempVar + " = 0;  /* Menu: no HWND, props use (hmenu,menuId) */");
     } else {
-        // Fix 160w: 宿主伪对象 `With UserControl` / `With PropertyPage` (UserControl
-        // 类模块内) — emitExpr(<IdentifierExpr "UserControl">) 生成裸 `UserControl`,
-        // C 无该声明 → C2065 (VBFlexGrid.c:1552). UserControl 伪对象在此作用域即当前
-        // 控件的宿主窗口 (vb6_UserControl_hWnd, extern HWND), 直接替换表达式.
-        // PropertyPage 同理用 vb6_PropertyPage_hwnd.
+        // Fix 160w: 宿主伪对象 `With UserControl` / `With PropertyPage` —— 裸名在 C 里
+        // 没有声明 (C2065, VBFlexGrid.c:1552), 这两档的答复是「当前文档的宿主句柄」。
+        // 账 #278 §B115: **那句拼法不再在这里现抄**。原来两枚字面量是手抄的，`.ctl` 那枚恰好
+        // 抄对 (vb6_UserControl_hWnd)，`.pag` 那枚抄成 `vb6_PropertyPage_hwnd`(小写 h)。
+        // 后果不是编不过 —— RTL 把**两种拼写都声明并定义了** (vb6rtl_com.c:1072/1073 各一行,
+        // vb6rtl_userctl.h:181/182 各一条 extern)，实测同一份产物里一个事实两个答复：
+        //   With PropertyPage     ->  void* _vb6_with_0 = (void*)vb6_PropertyPage_hwnd
+        //   n = PropertyPage.hWnd ->  n = vb6_PropertyPage_hWnd
+        // 今天两枚都还是 NULL (§B118: .pag 的宿主全局全仓 0 个写者) ⇒ 差别的现价是 0；
+        // 但一旦有人给 hWnd 那枚接上写者，With 块读的还是没人写的那一枚 ⇒ 静默错宿主。
+        // 装配本来就有唯一出口 (hostPseudoRtlSymbol 读 kHostPseudoRows 的 obj + rtl 两列，与
+        // 裸名/赋值那两条路同一个函数，账 #278 §B120) ⇒ 一张表答两头，第八刀扣着的 .pag 自身
+        // 对象名放行才有地方放。
         if (tempType == "void*" && node.object->kind == ASTNodeKind::IdentifierExpr) {
             auto& hid160w = static_cast<IdentifierExpr&>(*node.object);
-            if (hid160w.name == "UserControl") {
-                lastExpr_ = "vb6_UserControl_hWnd";
-            } else if (hid160w.name.compare(0, 12, "PropertyPage") == 0) {
-                lastExpr_ = "vb6_PropertyPage_hwnd";
+            const std::string hpObj160w = Symbol::toLower(hid160w.name);
+            if (hpObj160w == "usercontrol" || hpObj160w == "propertypage") {
+                lastExpr_ = hostPseudoRtlSymbol(hid160w.name, "hwnd");
+                // 账 #257 第十九层: 记下"这一帧的 With 对象是宿主伪对象", 体内 `.成员`
+                // 才能按内建成员解析 (而不是按 COM 派发命中控件自己的同名公开属性)。
+                if (!withObjectInfoStack_.empty()) {
+                    withObjectInfoStack_.back().hostPseudoObj = hid160w.name;
+                }
             }
         }
         // Fix 038: C2440 修复 — UDT 同类型转换和 UDT/VARIANT → void* 转换
@@ -725,7 +772,11 @@ void CCodeGen::visit(WithStmt& node) {
                 if (withIsVariantVal090e) {
                     c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectVal(" + lastExpr_ + ")  /* With object ref */;");
                 } else {
-                    c_.emitLine(tempType + " " + tempVar + " = (" + tempType + ")" + lastExpr_ + "  /* With object ref */;");
+                    // 账 #255: 上面那两条只管「表达式是 VARIANT **值**」；COM 调用交回的
+                    // 是 VARIANT*，(void*) 硬转会把结构体地址当对象用 ⇒ With 体内每一档属性
+                    // 都落 `not found`。解封口径与 Set 那一路共用同一个出口。
+                    c_.emitLine(tempType + " " + tempVar + " = (" + tempType + ")"
+                                + comObjectRefFromCallExpr(lastExpr_) + "  /* With object ref */;");
                 }
             } else {
                 // Fix 092j: inferClassTypeOfExpr 非空 (按 VB 声明推断出项目类) 但
@@ -758,12 +809,19 @@ void CCodeGen::visit(WithStmt& node) {
                 if (withIsVariantVal092j) {
                     c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectVal(" + lastExpr_ + ")  /* With object ref */;");
                 } else {
-                    c_.emitLine(tempType + " " + tempVar + " = (" + tempType + ")" + lastExpr_ + "  /* With object ref */;");
+                    // 账 #255: 同 090e 那一档 —— COM 调用交回的是 VARIANT*，裸转把结构体地址当对象。
+                    c_.emitLine(tempType + " " + tempVar + " = (" + tempType + ")"
+                                + comObjectRefFromCallExpr(lastExpr_) + "  /* With object ref */;");
                 }
             }
             }  /* Fix 160w: 宿主结构体 else 闭合 (tempType == "void*" 分支) */
         } else {
-            c_.emitLine(tempType + " " + tempVar + " = (" + tempType + ")" + lastExpr_ + "  /* With object ref */;");
+            // 账 #255: `With 集合(1)` (VB 侧类型不是 Variant、也不是项目类, 例：As Collection
+            // 的默认成员) 以前一路走这里裸转 —— 而 COM 调用交回的是 VARIANT*，于是 With 体内
+            // 每一档属性都落 `vb6_ComSetProp: property "…" not found`，写在虚空里 (Charts 的
+            // ClsResizer 实测 14 枚控件 × 4 档全丢)。解封口径与 Set 那一路共用同一个出口。
+            c_.emitLine(tempType + " " + tempVar + " = (" + tempType + ")"
+                        + comObjectRefFromCallExpr(lastExpr_) + "  /* With object ref */;");
         }
     }
 

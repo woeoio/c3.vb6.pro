@@ -71,7 +71,7 @@
                             if (param.hasDefaultValue && !param.defaultValueExpr.empty()) {
                                 defVal090 = param.defaultValueExpr;
                             } else {
-                                defVal090 = defaultValue(param.type);
+                                defVal090 = defaultValueForParam(param);
                             }
                             if (param.isByVal) {
                                 argList090 += defVal090;
@@ -101,10 +101,22 @@
                 return;
             }
             // 类中无此方法/属性 → 类数据字段 (Public Field): objExpr->field
+            // Fix 229: 接收者是 **Variant 载体** (VARIANT 值) 时没有结构体字段可走 ——
+            // `objExpr->field` 必是 C2039 "field 不是 vb6_VARIANT 的成员"。
+            // 与 Fix 219 (class_fallback / 本文件 221 行) 同口径: 改发后期绑定属性读。
+            if (isVariantCarrierExpr(objExpr)) {
+                lastExpr_ = lateBoundReadOnVariantCarrier(objExpr, node.memberName);
+                return;
+            }
             lastExpr_ = objExpr + "->" + cIdent(node.memberName);
             return;
         }
         // 字段类型推断失败 → 按结构体数据字段访问
+        // Fix 229: 同上 —— 这一档比上面更"兜底", 更可能撞上 VARIANT 值接收者。
+        if (isVariantCarrierExpr(objExpr)) {
+            lastExpr_ = lateBoundReadOnVariantCarrier(objExpr, node.memberName);
+            return;
+        }
         lastExpr_ = objExpr + "->" + cIdent(node.memberName);
         return;
     }
@@ -154,6 +166,28 @@
                 if (!resolvedFn.empty()) {
                     pendingChainObj_ = wrappedObj;
                     lastExpr_ = resolvedFn;  // 裸函数名, 由外层补全
+                } else if (isVariantCarrierExpr(wrappedObj)) {
+                    // Fix 230: 接收者是 **Variant 载体** (VARIANT 值) 且本成员不是已知类方法时,
+                    // `wrappedObj->member` 是对 VARIANT **结构体**做成员访问 ⇒ C2039
+                    // "member 不是 vb6_VARIANT 的成员"; 而外层 IndexOrCallExpr 还要把实参
+                    // 追加在这个"callee 文本"上, 实参也随之错位 (伴生 C2198)。
+                    //   ComCtlsDemo ToolBar.ctl:1131
+                    //     PropBagButtonMenus.WriteProperty …, StrToVar(Me.Buttons(i).ButtonMenus(ii).Key), …
+                    //   Me.Buttons(i) 是集合 Item ⇒ VARIANT 值; .ButtonMenus(ii) 是它上面的
+                    //   后期绑定成员访问 (**带下标**) ⇒ 以前发成
+                    //     vb6_VariantFromComResult(vb6_ComCall(…, L"Item", …))->ButtonMenus()
+                    //   ToolBar.c:1707 等, C2039×32 + C2198×32 (ToolBar.c 共 101 条)。
+                    // VB6 语义就是 IDispatch 后期绑定 —— 交给 com_bind 那条
+                    // `vb6_ComCall(obj, L"member", args, n)` 通路: com_bind.inc:6-7 消费
+                    // isComMarker_ + comObjExpr_/comMemberName_ (与 generic_access.inc:228-234
+                    // 的 void* 字段那一档同款)。对象先用 vb6_VariantToObjectVal 从 VARIANT 取指针。
+                    // 判据收窄到"必然编译报错"的那一格 (Variant 载体 ∧ 无已知类方法 ∧ 作 callee),
+                    // 故不改变任何当前能编过的组合。
+                    pendingChainObj_.clear();
+                    comObjExpr_ = "vb6_VariantToObjectVal(" + wrappedObj + ")";
+                    comMemberName_ = node.memberName;
+                    isComMarker_ = true;
+                    lastExpr_ = wrappedObj;
                 } else {
                     // 数据成员但被当作 callee 调用 — 罕见, 保持 wrappedObj->member 形式
                     pendingChainObj_.clear();
@@ -182,7 +216,7 @@
                             if (param.hasDefaultValue && !param.defaultValueExpr.empty()) {
                                 defVal89h = param.defaultValueExpr;
                             } else {
-                                defVal89h = defaultValue(param.type);
+                                defVal89h = defaultValueForParam(param);
                             }
                             if (param.isByVal) {
                                 argList89h += defVal89h;
@@ -209,7 +243,17 @@
                         lastExpr_ = resolvedFn + "(" + wrappedObj + ")";
                     }
                 } else {
-                    lastExpr_ = wrappedObj + "->" + cIdent(node.memberName);
+                    // Fix 219: 类中无此成员 → 数据字段; 但 Variant 载体没有结构字段,
+                    // `obj->member` 必是 C2039 —— 改走晚绑定属性读。
+                    // 实测: CoolBar.c:1226/1232 CoolBar.ctl:874 `Me.Bands(i).Caption`
+                    // → `vb6_VariantFromComResult(vb6_ComCall(…, L"Item", …))->Caption`。
+                    // (上面 resolvedFn 非空的两支不动: 那里成员确实解析成了规范函数,
+                    //  接收者若是载体另有其因, 不在这里一并改。)
+                    if (isVariantCarrierExpr(wrappedObj)) {
+                        lastExpr_ = lateBoundReadOnVariantCarrier(wrappedObj, node.memberName);
+                    } else {
+                        lastExpr_ = wrappedObj + "->" + cIdent(node.memberName);
+                    }
                 }
             }
             return;

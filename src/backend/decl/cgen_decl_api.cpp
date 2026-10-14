@@ -205,7 +205,35 @@ void CCodeGen::visit(DeclareDecl& node) {
     //
     // 静态归档路 (isStaticDecl, 项目自带 .lib) 不包: 那是 C3 的内部机制而非 VB6
     // 的 DLL 调用, 且该路调用点直连真实符号, 无重定向可言。
-    std::string callTarget = isStaticDecl ? cExportedIdent : ("vb6_lw_" + sanitizedExport);
+    //
+    // 别名判据 (原来在下方 227 行, Fix 217 提到这里 —— 它现在决定 callTarget 的**命名空间**):
+    //   别名路 (aliasName 与 VB 名不同): 调用点无论 SDK 宏如何都直接发 callTarget
+    //     → 包装必须无条件发出 (受 diGuard 防重), 否则调用点指向不存在的函数。
+    //   非别名路: 调用点发 VB 名, 由 `#ifndef <VB名>` 的 #define 重定向;
+    //     若 SDK 已把该名定义为宏 (GetTempPath/GetUserName 这类 A/W 家族),
+    //     #define 不生效、调用走 SDK 原路 → 此时**不能**再发包装, 否则会凭空多出
+    //     一个 vb6_di_X 引用 (无桩时 LNK2019)。所以非别名路的包装跟 #define 同进同出。
+    const bool aliasedCall = (!aliasName.empty() && aliasName != node.name && !isStaticDecl);
+
+    // Fix 217: 轻量包装的 C 名必须跟"去重用的那枚 guard"**同域**。
+    // 两条路的去重钥匙不同:
+    //   别名路  → `#ifndef VB6_DI_<导出名>_DEFINED` (同一个 DLL 导出只发一份包装)
+    //   非别名路 → `#ifndef <VB名>`            (同一个 VB 名跨模块重复声明只发一份包装)
+    // 原先两条路都叫 `vb6_lw_<导出名>`, 于是"某个模块的 VB 名恰好是**别人的导出名**"
+    // 就撞在同一枚 C 符号上, 而两把 guard 各管各的, 谁也挡不住谁:
+    // 实测 ComCtlsDemo —— Common/VisualStyles.bas 把 ActivateVisualStyles /
+    // RemoveVisualStyles 都 `Alias "SetWindowTheme"` (别名路, 发 vb6_lw_SetWindowTheme),
+    // Builds/TreeView/TreeView.ctl 又自己 `Private Declare PtrSafe Function
+    // SetWindowTheme Lib "uxtheme"` (非别名路, 也发 vb6_lw_SetWindowTheme)。
+    // TreeView.c 依次包含两个模块头 ⇒ 同一个 `static __inline vb6_lw_SetWindowTheme`
+    // 两份完整定义 ⇒ C2084 ×N。这条错只写进临时文件 (driver_compile.cpp 事后又把
+    // c3-error.log 覆盖成诊断文本), 外部只看到 "C3: 编译失败 (exit code 2)",
+    // 于是表现为"文件没编译完就中断, 错误不好捕捉"。
+    // 别名路改挂 `vb6_lwa_` 命名空间 (a = alias), 与它的 diGuard 同域; 非别名路照旧
+    // `vb6_lw_` + VB 名。两条路的 C 名从此不可能相交。
+    std::string callTarget = isStaticDecl ? cExportedIdent
+                            : aliasedCall  ? ("vb6_lwa_" + sanitizedExport)
+                                           : ("vb6_lw_" + cFuncIdent);
 
     // Fix 161b-decl-out: 登记 VB名(小写) → **调用点名** (cExportedIdent 全名)。
     // 目的: VB6 `Declare Function GetUserName Lib "advapi32" Alias "GetUserNameA"`
@@ -216,15 +244,8 @@ void CCodeGen::visit(DeclareDecl& node) {
     // 用 cExportedIdent (= vb6_di_GetUserNameA / vb6_di_ord_410) 作调用点, 天然绕开
     // SDK 的 A/W 宏, 且对上 RTL 转发桩 (序号别名也因此落成 vb6_di_ord_410)。
     // 静态路直接用真实导出名, 无 SDK 宏抢占问题 → 不登记。
-    // ai/024 / Fix <vbeclipse> 2026-10-06: 这个判据同时决定**包装函数放在哪个 guard 里**
-    // (见下方 emitLdlWrapper 的两处调用):
-    //   别名路 (aliasName 与 VB 名不同): 调用点无论 SDK 宏如何都直接发 callTarget
-    //     → 包装必须无条件发出 (受 diGuard 防重), 否则调用点指向不存在的函数。
-    //   非别名路: 调用点发 VB 名, 由 `#ifndef <VB名>` 的 #define 重定向;
-    //     若 SDK 已把该名定义为宏 (GetTempPath/GetUserName 这类 A/W 家族),
-    //     #define 不生效、调用走 SDK 原路 → 此时**不能**再发包装, 否则会凭空多出
-    //     一个 vb6_di_X 引用 (无桩时 LNK2019)。所以非别名路的包装跟 #define 同进同出。
-    const bool aliasedCall = (!aliasName.empty() && aliasName != node.name && !isStaticDecl);
+    // (aliasedCall 的判据已上移到 callTarget 定址处 —— 它现在同时决定旧名与包装所在的
+    //  diGuard 域, 见那一段的 Fix 217。)
     if (aliasedCall) {
         std::string funcLower2 = node.name;
         std::transform(funcLower2.begin(), funcLower2.end(), funcLower2.begin(), ::tolower);

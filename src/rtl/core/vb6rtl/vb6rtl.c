@@ -37,6 +37,43 @@
 #include <windows.h>
 #endif
 
+// 账 #257 第十八层后: CRT 调试堆诊断 (仅当构建带 C3_DEBUG_CRT ⇒ /MTd /D_DEBUG 时编译)。
+// 堆越界/坏释放被 _CRTDBG_CHECK_ALWAYS_DF 抓到时, CRT 自带报告只给 "DAMAGE: block #N",
+// 没有调用栈。这里挂一个 report hook, 在 ERROR/ASSERT 报告时补抓检测点栈, 落到
+// c3_crt_heap.log (与 sym.py/.map 同源的 RVA)。自带重入保护 + 全程 Win32/stdio, 不碰堆分配。
+#ifdef _DEBUG
+#include <crtdbg.h>
+static volatile LONG vb6_CrtHookBusy = 0;
+static int vb6_CrtReportHook(int reportType, char* message, int* returnValue) {
+    (void)returnValue;
+    if (reportType != _CRT_ERROR && reportType != _CRT_ASSERT) return 0;
+    if (InterlockedCompareExchange(&vb6_CrtHookBusy, 1, 0) != 0) return 0;  // 防重入
+    do {
+        HMODULE hSelf = GetModuleHandleA(NULL);
+        PIMAGE_DOS_HEADER d = (PIMAGE_DOS_HEADER)hSelf;
+        PIMAGE_NT_HEADERS n = (PIMAGE_NT_HEADERS)((char*)hSelf + d->e_lfanew);
+        char* lo = (char*)hSelf;
+        char* hi = lo + n->OptionalHeader.SizeOfImage;
+        void* frames[48];
+        USHORT nf = (USHORT)CaptureStackBackTrace(2, 48, frames, NULL);
+        FILE* f = fopen("c3_crt_heap.log", "a");
+        if (!f) break;
+        fprintf(f, "[CRT_HEAP] type=%d base=%p msg=%s\n", reportType, (void*)lo,
+                message ? message : "");
+        for (USHORT i = 0; i < nf; i++) {
+            if ((char*)frames[i] >= lo && (char*)frames[i] < hi)
+                fprintf(f, "[CRT_HEAP] #%u rva=0x%lx\n", i,
+                        (unsigned long)((char*)frames[i] - lo));
+            else
+                fprintf(f, "[CRT_HEAP] #%u %p (out)\n", i, frames[i]);
+        }
+        fclose(f);
+    } while (0);
+    InterlockedExchange(&vb6_CrtHookBusy, 0);
+    return 0;  // 交回 CRT 默认处理 (继续打 stderr + 按需中断)
+}
+#endif
+
 // P24-08: MessageBoxW (user32) + GetConsoleWindow (kernel32)
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "kernel32.lib")
@@ -87,9 +124,13 @@ static LONG CALLBACK vb6_CrashTraceVEH(PEXCEPTION_POINTERS ep) {
     /* 账 #181: 记轨迹本身会再触发异常 (栈溢出时 fprintf 拿 CRT 锁 /
      * CaptureStackBackTrace 再读同一批页) ⇒ 每进程只记第一次。 */
     if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_STDERR)) return EXCEPTION_CONTINUE_SEARCH;
+    // 账 #257 第十八层诊断: 堆损坏 (STATUS_HEAP_CORRUPTION 0xC0000374 / 0xC000037D) 默认不进
+    // 这里 ⇒ stderr 一片空白, 只能拿到一个无栈的退出码。把它也纳入打印集合, 至少能把
+    // 现场帧打出来 (CaptureStackBackTrace 拿不到应用侧帧时, 下面 x86/x64 栈线性扫描兜底)。
     if (code == EXCEPTION_ACCESS_VIOLATION || code == EXCEPTION_IN_PAGE_ERROR
         || code == EXCEPTION_ILLEGAL_INSTRUCTION || code == EXCEPTION_INT_DIVIDE_BY_ZERO
-        || code == EXCEPTION_STACK_OVERFLOW) {
+        || code == EXCEPTION_STACK_OVERFLOW
+        || code == 0xC0000374 || code == 0xC000037D) {
         HMODULE hSelf = GetModuleHandleA(NULL);
         void* frames[24];
         USHORT n = (USHORT)CaptureStackBackTrace(0, 24, frames, NULL);
@@ -162,14 +203,37 @@ void vb6_Init(void) {
         AddVectoredExceptionHandler(1, vb6_CrashTraceVEH);
     }
 #endif
-    // P20-44: OLE 拖放 RTL 自测 —— 环境变量 C3_OLEDDB_TEST=1 时, 把
-    // IDataObject/IDropTarget 的 DragEnter/DragOver/Drop 走一遍并写结果文件。
+#ifdef _DEBUG
+    // 账 #257 第十八层后: C3_DEBUG_CRT=1 构建 + 运行时同变量 ⇒ 打开 CRT 调试堆全量校验。
+    // CHECK_ALWAYS 让每次 alloc/free 都全堆扫描, 越界/坏释放在"下一次堆操作"即被点名
+    // (block #N + before/after), report hook 另落一份检测点栈到 c3_crt_heap.log。
+    if (getenv("C3_DEBUG_CRT")) {
+        _CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, vb6_CrtReportHook);
+        int flg = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
+        flg |= _CRTDBG_ALLOC_MEM_DF | _CRTDBG_CHECK_ALWAYS_DF | _CRTDBG_CHECK_CRT_DF;
+        _CrtSetDbgFlag(flg);
+        _CrtSetReportMode(_CRT_WARN,   _CRTDBG_MODE_FILE);
+        _CrtSetReportMode(_CRT_ERROR,  _CRTDBG_MODE_FILE);
+        _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(_CRT_WARN,   _CRTDBG_FILE_STDERR);
+        _CrtSetReportFile(_CRT_ERROR,  _CRTDBG_FILE_STDERR);
+        _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    }
+#endif
+    // P20-44: OLE 拖放 RTL 自测 —— **显式** C3_OLEDDB_SELFTEST=1 才跑
+    // (C3_OLEDDB_TEST=1 只负责"无头驱动"链路, 不让自测混进应用启动热路径)。
+    // 自测内容: 把 IDataObject/IDropTarget 的 DragEnter/DragOver/Drop 走一遍并写结果文件。
     // 无头环境没法真拖 (DoDragDrop 是模态循环), 直接调 IDropTarget 的方法才测得动。
+    // 历史: 自测曾是 C3_OLEDDB_TEST=1 的隐式前置步骤, 在 frmevents GA 上偶发
+    // 0xC0000005 (memmove ← do_GetData ← vb6_oleDD_SelfTest ← vb6_Init), 空输出红。
+    // 拆成独立开关: 需要验 RTL 自测时手动开, 用例/应用启动不受影响。
     {
         // 用 W 版取环境变量: 输出路径可能含非 ASCII (fwprintf/_wfopen 全宽链路)
-        wchar_t oleOut43[MAX_PATH] = { 0 };
+        wchar_t oleSelf43[8] = { 0 };
         wchar_t oleFlag43[8] = { 0 };
-        if (GetEnvironmentVariableW(L"C3_OLEDDB_TEST", oleFlag43, 8) > 0) {
+        if (GetEnvironmentVariableW(L"C3_OLEDDB_SELFTEST", oleSelf43, 8) > 0
+            && GetEnvironmentVariableW(L"C3_OLEDDB_TEST", oleFlag43, 8) > 0) {
+            wchar_t oleOut43[MAX_PATH] = { 0 };
             if (!GetEnvironmentVariableW(L"C3_OLEDDB_TEST_OUT", oleOut43, MAX_PATH))
                 lstrcpyW(oleOut43, L"oledd_test.txt");
             extern int32_t vb6_oleDD_SelfTest(const wchar_t* outPath);
@@ -245,9 +309,18 @@ int32_t vb6_VariantToLong(vb6_VARIANT v) {
         case vb6_vtInteger: return (int32_t)v.iVal;
         case vb6_vtLong:    return v.lVal;
         case VT_I8:         return (int32_t)v.llVal;  /* Task #44: VT_I8 进 Long 按 C 截断语义 */
+        /* ai/032 §6.6: 无符号两档 —— 同 C 截断语义 (UI8 以前落 default 答 0)。 */
+        case (vb6_vartype)VT_UI4: return (int32_t)v.ulVal;
+        case (vb6_vartype)VT_UI8: return (int32_t)v.ullVal;
         case vb6_vtSingle:  return (int32_t)round(v.fltVal);
         case vb6_vtDate:    return (int32_t)round(v.dblVal);  /* <vbeclipse>: VT_DATE 的数值面就是序列号 */
         case vb6_vtDouble:  return (int32_t)round(v.dblVal);
+        /* 账 #305 §B143: Decimal 在这张表里没有档 ⇒ default 交 0，于是
+         * `Dim i As Long` 接 CDec(5) 存进 0，而 `CDec(5) + 1` 交 1
+         * (发码把它折成 vb6_VariantToLong(v)+1)。
+         * 政策不新造：先经唯一出口 vb6_DecimalToR8 取数，再照本表对 double 的 round。
+         * 判据只喂整数 Decimal —— 平局取整的口径还没人拍(§B77 那一格)。 */
+        case vb6_vtDecimal: { double dv = 0.0; vb6_DecimalToR8(v, &dv); return (int32_t)round(dv); }
         case vb6_vtCurrency:return (int32_t)(v.cyVal / 10000);
         case vb6_vtBSTR:    return (int32_t)vb6_Val(v.bstrVal);
         default:            return 0;
@@ -265,9 +338,11 @@ intptr_t vb6_VariantToLongPtr(vb6_VARIANT v) {
         case vb6_vtSingle:  return (intptr_t)round(v.fltVal);
         case vb6_vtDate:    return (intptr_t)round(v.dblVal);  /* <vbeclipse>: 同上 */
         case vb6_vtDouble:  return (intptr_t)round(v.dblVal);
+        case vb6_vtDecimal: { double dv = 0.0; vb6_DecimalToR8(v, &dv); return (intptr_t)round(dv); }  /* 账 #305 §B143: 同上 */
         case vb6_vtCurrency:return (intptr_t)(v.cyVal / 10000);
         case vb6_vtBSTR:    return (intptr_t)vb6_Val(v.bstrVal);
         case VT_I8:         return (intptr_t)v.llVal;
+        case (vb6_vartype)VT_UI4: return (intptr_t)v.ulVal;   /* ai/032 §6.6: 零扩展 */
         case VT_UI8: {      /* 位模式按无符号解释 */
             uint64_t uv;
             memcpy(&uv, &v.llVal, sizeof(uv));
@@ -286,9 +361,12 @@ int16_t vb6_VariantToBool(vb6_VARIANT v) {
         case vb6_vtInteger:  return v.iVal ? -1 : 0;
         case vb6_vtLong:     return v.lVal ? -1 : 0;
         case VT_I8:          return v.llVal ? -1 : 0;  /* Task #44: LongLong/LongPtr 64 位 */
+        case (vb6_vartype)VT_UI4: return v.ulVal ? -1 : 0;   /* ai/032 §6.6: 非零即真 */
+        case (vb6_vartype)VT_UI8: return v.ullVal ? -1 : 0;
         case vb6_vtSingle:   return v.fltVal != 0.0f ? -1 : 0;
         case vb6_vtDate:     return v.dblVal != 0.0 ? -1 : 0;  /* <vbeclipse>: 同上 */
         case vb6_vtDouble:   return v.dblVal != 0.0 ? -1 : 0;
+        case vb6_vtDecimal: { double dv = 0.0; vb6_DecimalToR8(v, &dv); return dv != 0.0 ? -1 : 0; }  /* 账 #305 §B143: 非零即 True，本表口径 */
         case vb6_vtCurrency: return v.cyVal ? -1 : 0;
         case vb6_vtDispatch: return v.pdispVal ? -1 : 0;
         case vb6_vtBSTR:
@@ -300,6 +378,87 @@ int16_t vb6_VariantToBool(vb6_VARIANT v) {
     }
 }
 
+/* 账 #305 §B142: 槽里的 Decimal 先变成一枚合法的 OLE VARIANT(两份布局只在这里分岔)。
+ * 交出去的是**副本**, 槽自己那块 CoTaskMem 谁也不借用, 所以调用侧的 VariantClear 不会碰它。
+ * 账 #305 §B145: 这枚出口从 static 出来 —— 「往外读」那一族(出站的 vt 表) 与
+ * 「Variant 算术」都要读同一份布局知识，第二份实现就是第二次踩同一个坑。 */
+int vb6_DecimalAsVariant(vb6_VARIANT v, VARIANT *out) {
+    if (v.vt != vb6_vtDecimal) return 0;
+#ifdef _WIN64
+    out->vt = VT_DECIMAL;
+    /* 内联那一份是**同布局的匿名 struct**, 不是 DECIMAL 类型本身:
+     * 直接赋值是 C2440「无法从”转换为“DECIMAL”」(报错里源类型是
+     * 空的) —— 与台账 §B141 那段记的是同一条事实。所以这里按字节拷。 */
+    memcpy(&out->decVal, &v.decVal, sizeof(DECIMAL));
+    /* 标签在这里也补一次，与下面 x86 那臂同形：槽里可能住着「没带标签的 DECIMAL」
+     * (浮点臂的 VarDecFromR8、或别处复制进来的) —— 不补 oleaut32 就静默答 0。
+     * ⚠ 成员名按**这一侧的类型**写：`out->decVal` 是 SDK 的真 DECIMAL，标签叫 `wReserved`；
+     * `vb6_DEC_VT` 那枚宏是给槽里那份同布局匿名 struct 用的(那里叫 `wReserved1`)，两头不许互套。 */
+    out->decVal.wReserved = vb6_vtDecimal;
+    return 1;
+#else
+    if (!v.pdecVal) return 0;
+    /* x86 的 VARIANT 装 VT_DECIMAL 时**不走指针**: 那 16 字节整个被一枚 DECIMAL 盖住 ——
+     * `wReserved` 压在 `vt` 上、`scale`/`sign` 在 `wReserved1` 上、`Hi32` 在 `wReserved2`+`wReserved3`
+     * 上、`lo64` 正好落在数据区。上面那行宏注释里「wReserved 其实是 oleaut32 的 vt 标签」
+     * 说的就是这一处重叠（实测：只填 `pdecVal` 时 oleaut32 把指针本身当成数值答出来）。
+     * 所以整块按字节铺, 再把标签补成 VT_DECIMAL（老路造出来的那枚可能还是 0）。 */
+    {
+        DECIMAL d = *v.pdecVal;
+        d.wReserved = vb6_vtDecimal;
+        memcpy(out, &d, sizeof(d));
+    }
+    return 1;
+#endif
+}
+
+/* 账 #305 §B144: 上面那枚出口的**反向一问** ——「手里这枚 OLE VARIANT 里的那 16 字节 DECIMAL
+ * 住在哪」。两架构的答案都是**结构体的头**，分歧只在 SDK 怎么称呼它：x64 的 VARIANT 里
+ * `decVal` 是与 `vt` 同起点的 union 成员(取 &v->decVal 就是取头)，x86 那枚 VARIANT 整个被
+ * DECIMAL 盖住(头就是 v 本身)。§B144 量到的两处静默错(x64 把值放在 offset 8、x86 只交指针
+ * ⇒ oleaut32 把地址当数值答出来)都是这一问被各自抄了一遍抄错的产物 —— 所以「往里读」
+ * (FromComResult / FromStackVARIANT 两臂)与「服务端借用实参」今后只问这里，不再抄第二次。 */
+DECIMAL *vb6_DecimalPtrFromVariant(const VARIANT *v) {
+    if (!v || v->vt != VT_DECIMAL) return NULL;
+#ifdef _WIN64
+    return (DECIMAL *)&v->decVal;
+#else
+    return (DECIMAL *)v;
+#endif
+}
+
+BSTR vb6_DecimalToBSTR(vb6_VARIANT v) {
+    VARIANT src;
+    VariantInit(&src);
+    if (!vb6_DecimalAsVariant(v, &src)) return vb6_BSTR_FromStr(L"");
+    if (SUCCEEDED(VariantChangeType(&src, &src, 0, VT_BSTR))
+            && src.vt == VT_BSTR && src.bstrVal) {
+        BSTR r = src.bstrVal;   /* 把权抄给调用方(与其它 CStr 出口同口径), 所以不能 VariantClear */
+        src.bstrVal = NULL;
+        src.vt = VT_EMPTY;
+        VariantClear(&src);
+        return r;
+    }
+    VariantClear(&src);
+    return vb6_BSTR_FromStr(L"");
+}
+
+int vb6_DecimalToR8(vb6_VARIANT v, double *out) {
+    VARIANT src, dst;
+    int ok = 0;
+    if (out) *out = 0.0;
+    VariantInit(&src);
+    VariantInit(&dst);
+    if (!vb6_DecimalAsVariant(v, &src)) return 0;
+    if (SUCCEEDED(VariantChangeType(&dst, &src, 0, VT_R8)) && dst.vt == VT_R8) {
+        if (out) *out = dst.dblVal;
+        ok = 1;
+    }
+    VariantClear(&dst);
+    VariantClear(&src);
+    return ok;
+}
+
 double vb6_VariantToDouble(vb6_VARIANT v) {
     switch (v.vt) {
         case vb6_vtBoolean: return v.boolVal ? -1.0 : 0.0;
@@ -307,11 +466,17 @@ double vb6_VariantToDouble(vb6_VARIANT v) {
         case vb6_vtInteger: return (double)v.iVal;
         case vb6_vtLong:    return (double)v.lVal;
         case VT_I8:         return (double)v.llVal;  /* Task #44: LongLong/LongPtr 64 位 */
+        case (vb6_vartype)VT_UI4: return (double)v.ulVal;   /* ai/032 §6.6 */
+        case (vb6_vartype)VT_UI8: return (double)v.ullVal;
         case vb6_vtSingle:  return (double)v.fltVal;
         case vb6_vtDate:    return v.dblVal;  /* <vbeclipse>: 同上 */
         case vb6_vtDouble:  return v.dblVal;
         case vb6_vtCurrency:return (double)v.cyVal / 10000.0;
         case vb6_vtBSTR:    return vb6_Val(v.bstrVal);
+        /* 账 #305 §B142: 以前这一档落 default ⇒ `CLng(CDec(5))` / `CDbl(CDec(5))` / `CInt(CDec(2.5))`
+         * 全部静默答 0(三枚内置函数都是 vb6_×V 薄壳, 全部转调本函数, 所以一处漏答打掉三条)。
+         * 取舍政策交给 oleaut32, 不自己写第二遍。 */
+        case vb6_vtDecimal: { double dv = 0.0; vb6_DecimalToR8(v, &dv); return dv; }
         default:            return 0.0;
     }
 }
@@ -342,37 +507,68 @@ void* vb6_VariantToObjectVal(vb6_VARIANT v) {
     return NULL;
 }
 
-// P8.4: Variant清理 - 释放内含BSTR等资源
-void vb6_VariantClear(vb6_VARIANT* v) {
+// 账 #305 §B165 (第五十四刀): 「这一格里哪些档是**带权的**、谁分配谁释放」—— 值档的那一对出口。
+// 改前这一问住两遍(Clear 里 rev11 那三行 + Assign 里 rev16 那一段)，而夹在中间的
+// vb6_VariantCopy 压根不认 Decimal 那一档 ⇒ 任何「只 Copy 不 Assign」的路径在 x86 上都是把
+// src 那 16 字节的**指针**搬进 dst，两边各 Clear 一次就是二次 free。这一刀把两遍合成一遍。
+// 按这一条还能推出另两处调点也坏(vb6rtl_array.c 的 Variant 数组整体赋值、vb6rtl_date.c 的
+// vb6_ArraySetVariant)，但 A/B 量不出来: 改前(k52 那台)与改后 x64/x86 四份读数逐字节相同(§B165)
+// —— 它们是纸面隐患，不是本刀的靶子。量到真坏的是宿主环: 摘掉这一对里的 DECIMAL
+// 分配，x86 当场 0xC0000374(负控 B)。
+// ⚠ 对象那一档刻意不在这对出口里: 加减引用是下面两枚的事(Copy 加 / Clear 放，两枚都用
+// vb6_ComIsDispatchable 判据，裸 HWND 与伪 vtable 一律跳过)。宿主环只问这一对，于是它存的
+// 对象照旧借用不计数 —— 与改前一字不差，见 vb6_Host_FromWinVariant。
+void vb6_VariantValueFree(vb6_VARIANT* v) {
     if (!v) return;
-    // 释放BSTR
     if (v->vt == vb6_vtBSTR && v->bstrVal) {
         vb6_BSTR_Free(v->bstrVal);
         v->bstrVal = NULL;
     }
-    // 释放IDispatch指针
-    if (v->vt == vb6_vtDispatch && v->pdispVal) {
-        vb6_ReleaseObject(&v->pdispVal);
-        v->pdispVal = NULL;
-    }
 #ifndef _WIN64
-    // Fix <vbeclipse> rev11: x86 的 DECIMAL 由 pdecVal 指向外部缓冲, 需释放
+    /* x86 的 DECIMAL 由 pdecVal 指向外部缓冲, 需释放 (原 rev11 住在这里) */
     if (v->vt == vb6_vtDecimal && v->pdecVal) {
         CoTaskMemFree(v->pdecVal);
         v->pdecVal = NULL;
     }
 #endif
+}
+
+// src 的值档拷进 dst: BSTR 另分配一只、x86 的 DECIMAL 另分配一只。**不动 dst 的旧值**
+// (既有契约: vb6rtl_array.c 明写「必须清空(而非 Clear)后再 VariantCopy」)，对象档只搬指针。
+void vb6_VariantValueCopy(vb6_VARIANT* dst, const vb6_VARIANT* src) {
+    if (!dst || !src) return;
+    *dst = *src;  // 浅拷贝
+    if (src->vt == vb6_vtBSTR && src->bstrVal) {
+        dst->bstrVal = vb6_BSTR_FromBSTR(src->bstrVal);
+    }
+#ifndef _WIN64
+    /* x86 的 DECIMAL 由 pdecVal 指向外部缓冲: 上面只搬了指针, 这里必须另分配一只,
+       否则 src 的宿主释放时会把 dst 手里的同一块 free 掉 (二次 free)。
+       账 #305 §B165: 这一段原本只住在 vb6_VariantAssign 里, 现在住在这一问的唯一出口。 */
+    if (src->vt == vb6_vtDecimal && src->pdecVal) {
+        DECIMAL* p = (DECIMAL*)CoTaskMemAlloc(sizeof(DECIMAL));
+        if (p) { *p = *src->pdecVal; dst->pdecVal = p; }
+        else   { dst->vt = vb6_vtEmpty; dst->pdecVal = NULL; }
+    }
+#endif
+}
+
+// P8.4: Variant清理 - 释放内含BSTR等资源
+void vb6_VariantClear(vb6_VARIANT* v) {
+    if (!v) return;
+    vb6_VariantValueFree(v);   /* 值档: BSTR + (x86)DECIMAL —— 口径只住那一枚出口 (§B165) */
+    // 释放IDispatch指针
+    if (v->vt == vb6_vtDispatch && v->pdispVal) {
+        vb6_ReleaseObject(&v->pdispVal);
+        v->pdispVal = NULL;
+    }
     v->vt = vb6_vtEmpty;
 }
 
 // P8.4: Variant深拷贝 - 复制BSTR等需要独立所有权的资源
 void vb6_VariantCopy(vb6_VARIANT* dst, const vb6_VARIANT* src) {
     if (!dst || !src) return;
-    *dst = *src;  // 浅拷贝
-    // BSTR需要深拷贝
-    if (src->vt == vb6_vtBSTR && src->bstrVal) {
-        dst->bstrVal = vb6_BSTR_FromBSTR(src->bstrVal);
-    }
+    vb6_VariantValueCopy(dst, src);   /* 值档: BSTR/(x86)DECIMAL 另分配 (§B165) */
     // Dispatch需要AddRef
     if (src->vt == vb6_vtDispatch && src->pdispVal) {
         // Fix <vbeclipse>: 原先注释自认 "COM AddRef would go here; just copy pointer" ——
@@ -402,16 +598,7 @@ void vb6_VariantCopy(vb6_VARIANT* dst, const vb6_VARIANT* src) {
 void vb6_VariantAssign(vb6_VARIANT* dst, vb6_VARIANT src) {
     if (!dst) return;
     vb6_VariantClear(dst);        /* 释放旧值 (BSTR / Dispatch / x86 DECIMAL) */
-    vb6_VariantCopy(dst, &src);   /* *dst = src + BSTR 另分配 / Dispatch AddRef */
-#ifndef _WIN64
-    /* x86 的 DECIMAL 由 pdecVal 指向外部缓冲: 上面 Copy 只搬了指针, 这里必须另分配
-       一只, 否则 src 的宿主释放时会把 dst 手里的同一块 free 掉 (二次 free)。 */
-    if (src.vt == vb6_vtDecimal && src.pdecVal) {
-        DECIMAL* p = (DECIMAL*)CoTaskMemAlloc(sizeof(DECIMAL));
-        if (p) { *p = *src.pdecVal; dst->pdecVal = p; }
-        else   { dst->vt = vb6_vtEmpty; dst->pdecVal = NULL; }
-    }
-#endif
+    vb6_VariantCopy(dst, &src);   /* *dst = src + BSTR 另分配 / Dispatch AddRef / x86 DECIMAL 另分配 */
 }
 
 // ============================================================
@@ -524,8 +711,14 @@ void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
     // 未处理错误: 显示消息并退出
     // 定位调用点用: C3_COM_TRACE 下打印返回地址 (RVA 可对 -g 产出的 .map 符号化)
     if (GetEnvironmentVariableA("C3_COM_TRACE", NULL, 0) > 0) {
-        fprintf(stderr, "[C3_ERR] unhandled raise %d from %p\n",
-                (int)errNum, _ReturnAddress());
+        /* 定位调用点用: 打**绝对返回地址**与**本模块基址** —— 两者相减才是 RVA,
+           可对 `-g` 产出的 .map 符号化。以前只打绝对地址, 而 exe 开着 ASLR
+           (首选基址 0x400000 与实际加载基址无关), 拿不到 RVA 就无从符号化
+           (实测踩过: 先按 "基址 = 0xB10000" 猜, 反推出的 RVA 落在 **资源段**)。 */
+        HMODULE hSelfDbg = GetModuleHandleA(NULL);
+        fprintf(stderr, "[C3_ERR] unhandled raise %d from %p base=%p rva=0x%lx\n",
+                (int)errNum, _ReturnAddress(), (void*)hSelfDbg,
+                (unsigned long)((char*)_ReturnAddress() - (char*)hSelfDbg));
         fflush(stderr);
     }
     fwprintf(stderr, L"Unhandled error %d", (int)errNum);
@@ -556,6 +749,40 @@ int32_t vb6_Num_Mod(int32_t a, int32_t b) {
     if (b == 0) { vb6_ErrRaiseNumber(11); return 0; }
     return a % b;
 }
+
+// ai/032: 无符号整除/取余 (ULong=32 位 · ULongLong=64 位)。
+//   为什么另开四条: vb6_IntDiv / vb6_Num_Mod 的形参都是 int32_t, 无符号操作数先被
+//   按有符号解释 —— 实测 `&H80000000 As ULong \ 2` 得 3221225472 (应为 1073741824),
+//   因为 (int32_t)&H80000000 = -2147483648。除零语义与上面一致 (运行期错误 11)。
+uint32_t vb6_IntDivULong(uint32_t a, uint32_t b) {
+    if (b == 0) { vb6_ErrRaiseNumber(11); return 0; }
+    return a / b;
+}
+uint32_t vb6_Num_ModULong(uint32_t a, uint32_t b) {
+    if (b == 0) { vb6_ErrRaiseNumber(11); return 0; }
+    return a % b;
+}
+uint64_t vb6_IntDivULongLong(uint64_t a, uint64_t b) {
+    if (b == 0) { vb6_ErrRaiseNumber(11); return 0; }
+    return a / b;
+}
+uint64_t vb6_Num_ModULongLong(uint64_t a, uint64_t b) {
+    if (b == 0) { vb6_ErrRaiseNumber(11); return 0; }
+    return a % b;
+}
+// ai/032 rev2: 有符号 64 位整除/取余。补这两条是为了让 `\` / `Mod` 的分档完整:
+// 有符号/无符号混算按 VB.NET 的规则会提升到"更宽的有符号型", 32 位异符号的提升结果
+// 正是 64 位有符号 (`&HFFFFFFFF As ULong \ 2` 在 VB.NET 里先升到 Long(64) 再除),
+// 而 vb6_IntDiv 的形参只有 int32_t —— 少了这两条就只能退回 32 位截断。
+// 除零语义与上面一致 (运行期错误 11)。
+int64_t vb6_IntDivLongLong(int64_t a, int64_t b) {
+    if (b == 0) { vb6_ErrRaiseNumber(11); return 0; }
+    return a / b;
+}
+int64_t vb6_Num_ModLongLong(int64_t a, int64_t b) {
+    if (b == 0) { vb6_ErrRaiseNumber(11); return 0; }
+    return a % b;
+}
 // ============================================================
 // P24-Bug2: Variant比较函数
 // 简化VB6语义: 两端都是字符串→字符串比较, 否则→Double数值比较
@@ -566,8 +793,36 @@ static double vb6_VarToDouble_internal(vb6_VARIANT* v) {
     switch ((vb6_vartype)v->vt) {
         case (vb6_vartype)VT_I2: return (double)v->iVal;
         case (vb6_vartype)VT_I4: return (double)v->lVal;
+        /* 账 #230 §B137（第二十九刀）: VT_I8 以前没有档 —— default 交 0.0，于是**任何** 64 位
+         * 整数档案的 Variant 在比较面都被抹成 0：`VarPtr(x) <> 0` 在 x64 实测答 False
+         * （Fix 082 那条装箱本身就是 VT_I8），句柄进 Variant 槽之后与它自己比也答不等。
+         * 取数一侧 (VariantToLong/ToBoolean/ToDouble/ToIntPtr) 早就有 VT_I8 档，只有这里漏了。 */
+        case (vb6_vartype)VT_I8: return (double)v->llVal;
+        /* ai/032 §6.6: 无符号两档同格 —— 缺档同样把整档抹成 0.0 (VT_I8/VT_DECIMAL 同款坑)。 */
+        case (vb6_vartype)VT_UI4: return (double)v->ulVal;
+        case (vb6_vartype)VT_UI8: return (double)v->ullVal;
+        /* 账 #305 §B143: 这一处是「比较走哪个数值」的口(第二十九刀给它补的是 VT_I8)。
+         * Decimal 没档 ⇒ default 交 0.0，`(CDec(5) = 5)` 实测 False。补这一格就同时
+         * 通六条比较与它们的 Long 形 —— Eq/Ne/Lt/Gt/Le/Ge 全从这里取数，
+         * 所以换算依旧只问 vb6_DecimalToR8，不留第二条十进制拼装。 */
+        case (vb6_vartype)VT_DECIMAL: { double dv = 0.0; vb6_DecimalToR8(*v, &dv); return dv; }
         case (vb6_vartype)VT_R4: return (double)v->fltVal;
         case (vb6_vartype)VT_R8: return v->dblVal;
+        /* 账 #257 第十一层: **VT_DATE 以前没有档** ⇒ 落 default 交 0.0 —— 与上面 VT_I8
+         * (账 #230 §B137)、VT_DECIMAL (账 #305 §B143) 是**同一个坑的第三处**: 每缺一档,
+         * 该档的 Variant 在比较面上就被整体抹成 0。VT_DATE 与 VT_R8 同存 dblVal
+         * (vb6_VariantDate 就是这么装的), 所以这一格直接取 dblVal。
+         *
+         * 实测 (ComCtlsDemo DTPicker.ctl 的 `Property Let Value`):
+         *     If DateValue >= Me.MinDate And DateValue <= Me.MaxDate Then ...
+         * DateValue 经上面那句 `DateValue = CDate(DateValue)` 已是 **VT_DATE**,
+         * 而 `Me.MinDate` 被包成 VT_R8 的 2.0 ⇒ 左边读成 0.0 ⇒ `0.0 >= 2.0` **恒假**
+         * ⇒ 误 Err.Raise 35773 "A date was specified that does not fall within the
+         * MinDate and MaxDate properties" ⇒ 未处理 ⇒ 启动即退。
+         * 注意同一文件里 `Property Let MinDate` 的同类守卫 `If Value > Me.MaxDate` 走的是
+         * **裸 double 比较** (两边都是 double, 不经 Variant), 所以它一直是好的 ——
+         * 这也是为什么这个坑只在这一处暴露。 */
+        case (vb6_vartype)vb6_vtDate: return v->dblVal;
         case (vb6_vartype)VT_BOOL: return v->boolVal ? -1.0 : 0.0;
         case (vb6_vartype)VT_BSTR: {
             if (!v->bstrVal) return 0.0;
@@ -666,6 +921,27 @@ void vb6_RaiseError(int32_t errNum, BSTR description) {
             int n = swprintf(line, 600, L"Unhandled VB6 Error #%d: %ls\n", errNum,
                              description ? description : L"(no description)");
             if (n > 0) vb6_ConWriteErrW(line, n);
+#ifdef _WIN32
+            /* 3DMenu P-BMP-3D 排查: 把抛错时 C 栈帧按 RVA 打到 stderr,
+             * 便于对回生成 .c 定位 (无 PDB 就用模块名+偏移猜函数)。 */
+            {
+                void* fr[24];
+                USHORT fn = CaptureStackBackTrace(0, 24, fr, NULL);
+                HMODULE hSelf = GetModuleHandleA(NULL);
+                for (USHORT i = 0; i < fn; i++) {
+                    wchar_t bl[160];
+                    if ((char*)fr[i] >= (char*)hSelf &&
+                        (char*)fr[i] < (char*)hSelf + 0x1000000) {
+                        swprintf(bl, 160, L"  #%u rva=0x%lX\n", (unsigned)i,
+                                 (unsigned long)((char*)fr[i] - (char*)hSelf));
+                    } else {
+                        swprintf(bl, 160, L"  #%u 0x%p (outside exe)\n",
+                                 (unsigned)i, fr[i]);
+                    }
+                    { int bn = (int)wcslen(bl); if (bn > 0) vb6_ConWriteErrW(bl, bn); }
+                }
+            }
+#endif
         } else {
             // 无处可写 (双击启动的 GUI 程序): 弹 VB6 风格错误对话框
             wchar_t msg[512];

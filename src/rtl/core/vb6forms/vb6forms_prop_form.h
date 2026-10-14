@@ -74,6 +74,7 @@ void vb6_SetLineColor(void* hwnd, int32_t val);
 // PictureBox图形属性 (P20-42)
 int32_t vb6_GetAutoRedraw(void* hwnd);
 void vb6_SetAutoRedraw(void* hwnd, int32_t val);
+void vb6_AutoRedrawRefit(void* hwnd);
 int32_t vb6_GetScaleMode(void* hwnd);
 void vb6_SetScaleMode(void* hwnd, int32_t val);
 // 账 #196: 控件的 `.hDC` —— 见 vb6forms_ctrl.c 那条注释：两档来源（_Paint 派发期用外层

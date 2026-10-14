@@ -3,7 +3,7 @@
 // Win32 forwarding stubs for VB6 `Declare ... Lib "x"` (Fix 076 scheme: C3 emits
 // `extern <ret> __stdcall vb6_di_<alias>(...)` and the RTL implements it).
 //
-// Family: shell   (libs: shell32, shlwapi, imagehlp)   stubs: 5
+// Family: shell   (libs: shell32, shlwapi, imagehlp)   stubs: 32
 //
 // Each stub reproduces C3's own generated prototype verbatim (that is the ABI the
 // caller uses: ByVal Long is widened to intptr_t, ByVal Single stays float, ByRef
@@ -12,7 +12,7 @@
 // types while preserving the register/memory passing class of every argument.
 //
 // generated from: a C3 compile session (pass -SessionDir to regenerate)
-// date: 2026-09-20 07:16
+// date: 2026-10-11 17:56
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.
@@ -42,6 +42,8 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #include <ole2.h>
 #include <oleauto.h>
 #include <olectl.h>
+#include <vfw.h>
+#include <oledlg.h>
 /* NOTE: gdiplus.h is C++-only (class Gdiplus...). The GDI+ flat API is
  * resolved with GetProcAddress instead - see below. */
 
@@ -52,35 +54,29 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #pragma comment(lib, "imagehlp.lib")
 #pragma comment(lib, "comdlg32.lib")
 
-/* SHBrowseForFolder */
-intptr_t __stdcall vb6_di_SHBrowseForFolder(void* lpbi) {
-    return ((intptr_t (WINAPI *)(void*))SHBrowseForFolder)(lpbi);
-}
-
-/* SHGetPathFromIDListA */
-intptr_t __stdcall vb6_di_SHGetPathFromIDListA(intptr_t pidl, BSTR pszPath) {
-    return ((intptr_t (WINAPI *)(intptr_t, BSTR))SHGetPathFromIDListA)(pidl, pszPath);
-}
-
-/* ShellExecuteA */
-intptr_t __stdcall vb6_di_ShellExecuteA(intptr_t hwnd, BSTR lpOperation, BSTR lpFile, BSTR lpParameters, BSTR lpDirectory, intptr_t nShowCmd) {
-    return ((intptr_t (WINAPI *)(intptr_t, BSTR, BSTR, BSTR, BSTR, intptr_t))ShellExecuteA)(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShowCmd);
-}
-
-/* MakeSureDirectoryPathExists */
-intptr_t __stdcall vb6_di_MakeSureDirectoryPathExists(BSTR DirPath) {
-    return ((intptr_t (WINAPI *)(BSTR))MakeSureDirectoryPathExists)(DirPath);
-}
-
-/* PathMatchSpecW */
-intptr_t __stdcall vb6_di_PathMatchSpecW(intptr_t pszFileParam, intptr_t pszSpec) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))PathMatchSpecW)(pszFileParam, pszSpec);
-}
-
-// FATAL-HANDOFF merge: added back from fan/dev vb6_di_shell_stubs.c (missing in origin/main family)
 /* PathGetArgsW */
 intptr_t __stdcall vb6_di_PathGetArgsW(intptr_t lpszPath) {
     return ((intptr_t (WINAPI *)(intptr_t))PathGetArgsW)(lpszPath);
+}
+
+/* SHBrowseForFolderW */
+intptr_t __stdcall vb6_di_SHBrowseForFolderW(void* lpBrowseInfo) {
+    return ((intptr_t (WINAPI *)(void*))SHBrowseForFolderW)(lpBrowseInfo);
+}
+
+/* SHGetFolderLocation */
+intptr_t __stdcall vb6_di_SHGetFolderLocation(intptr_t hWndOwner, intptr_t nFolder, intptr_t hToken, intptr_t dwReserved, intptr_t* lpIDList) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t*))SHGetFolderLocation)(hWndOwner, nFolder, hToken, dwReserved, lpIDList);
+}
+
+/* ILCreateFromPath */
+intptr_t __stdcall vb6_di_ILCreateFromPath(intptr_t lpszPath) {
+    return ((intptr_t (WINAPI *)(intptr_t))ILCreateFromPath)(lpszPath);
+}
+
+/* SHGetPathFromIDListW */
+intptr_t __stdcall vb6_di_SHGetPathFromIDListW(intptr_t lpIDList, intptr_t lpBuffer) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SHGetPathFromIDListW)(lpIDList, lpBuffer);
 }
 
 /* DragAcceptFiles */
@@ -101,4 +97,40 @@ intptr_t __stdcall vb6_di_DragQueryFileW(intptr_t hDrop, intptr_t iFile, intptr_
 /* DragQueryPoint */
 intptr_t __stdcall vb6_di_DragQueryPoint(intptr_t hDrop, void* lpPoint) {
     return ((intptr_t (WINAPI *)(intptr_t, void*))DragQueryPoint)(hDrop, lpPoint);
+}
+
+/* StrCmpLogicalW */
+intptr_t __stdcall vb6_di_StrCmpLogicalW(intptr_t lpString1, intptr_t lpString2) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))StrCmpLogicalW)(lpString1, lpString2);
+}
+
+/* SHCreateDataObject */
+intptr_t __stdcall vb6_di_SHCreateDataObject(intptr_t pIDLFolder, intptr_t cIDL, intptr_t apIDL, void* pDataInner, void* riid, void** ppDataObject) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void*, void*, void**))SHCreateDataObject)(pIDLFolder, cIDL, apIDL, pDataInner, riid, ppDataObject);
+}
+
+/* InitNetworkAddressControl */
+intptr_t __stdcall vb6_di_InitNetworkAddressControl() {
+    return ((intptr_t (WINAPI *)(void))InitNetworkAddressControl)();
+}
+
+/* MakeSureDirectoryPathExists */
+intptr_t __stdcall vb6_di_MakeSureDirectoryPathExists(BSTR DirPath) {
+    return ((intptr_t (WINAPI *)(BSTR))MakeSureDirectoryPathExists)(DirPath);
+}
+/* PathMatchSpecW */
+intptr_t __stdcall vb6_di_PathMatchSpecW(intptr_t pszFileParam, intptr_t pszSpec) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))PathMatchSpecW)(pszFileParam, pszSpec);
+}
+/* SHBrowseForFolder */
+intptr_t __stdcall vb6_di_SHBrowseForFolder(void* lpbi) {
+    return ((intptr_t (WINAPI *)(void*))SHBrowseForFolder)(lpbi);
+}
+/* ShellExecuteA */
+intptr_t __stdcall vb6_di_ShellExecuteA(intptr_t hwnd, BSTR lpOperation, BSTR lpFile, BSTR lpParameters, BSTR lpDirectory, intptr_t nShowCmd) {
+    return ((intptr_t (WINAPI *)(intptr_t, BSTR, BSTR, BSTR, BSTR, intptr_t))ShellExecuteA)(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShowCmd);
+}
+/* SHGetPathFromIDListA */
+intptr_t __stdcall vb6_di_SHGetPathFromIDListA(intptr_t pidl, BSTR pszPath) {
+    return ((intptr_t (WINAPI *)(intptr_t, BSTR))SHGetPathFromIDListA)(pidl, pszPath);
 }

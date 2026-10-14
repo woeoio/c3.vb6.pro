@@ -2,6 +2,7 @@
 // 由 src/parser/parser_expr.cpp 拆出（2026-09-17），纯搬移、零行为改动。
 
 #include "parser/parser.hpp"
+#include "common/canvas_drawing.hpp"  // 账 #232③: 哪条动词带尾巴、尾巴什么形状，只问这张表
 #include <algorithm>
 #include <cctype>
 
@@ -159,15 +160,23 @@ ExprPtr Parser::parsePostfix(ExprPtr expr) {
                 //   PSet   [Step] (x, y) [, color]
                 //   Point  (x, y)                          ← 无尾巴, 无需吸收
                 // ⇒ 需要吸收的是 Circle 的 `, radius[, ...]` 与 PSet 的 `, color`。
-                if (cur_.kind == TokenKind::Comma) {
-                    bool isCircleCall = false, isPSetCall = false;
-                    if (call->callee && call->callee->kind == ASTNodeKind::MemberAccessExpr) {
-                        auto& maC = static_cast<MemberAccessExpr&>(*call->callee);
-                        std::string mn = toLower(maC.memberName);
-                        isCircleCall = (mn == "circle");
-                        isPSetCall = (mn == "pset");
+                // 账 #232③: 尾巴的名字问 canvas_drawing.hpp，而**两种写法都问**。
+                // 以前只有 MemberAccessExpr 那一形进得来（`Me.Line` / `Pic1.Circle`），
+                // 窗体上裸写的动词 callee 是 IdentifierExpr ⇒ `Circle (20, 21), 22` 的 `, 22`
+                // 与 `Line (0, 0)-(10, 10)` 的 `-(10, 10)` 都漏到外层表达式（实测三条
+                // VB2001 expected ')' / VB2003 / VB2002，整行崩坏）。折叠动作住在语义层（在 parser 之后），
+                // 所以 parser 这里问的只能是**名字**，不能问符号表。
+                std::string tailName;
+                if (call->callee) {
+                    if (call->callee->kind == ASTNodeKind::MemberAccessExpr) {
+                        tailName = toLower(static_cast<MemberAccessExpr&>(*call->callee).memberName);
+                    } else if (call->callee->kind == ASTNodeKind::IdentifierExpr) {
+                        tailName = toLower(static_cast<IdentifierExpr&>(*call->callee).name);
                     }
-                    if (isCircleCall || isPSetCall) {
+                }
+                const CanvasTailKind tailKind = canvasVerbTailKind(tailName);
+                if (cur_.kind == TokenKind::Comma) {
+                    if (tailKind == CANVAS_TAIL_COORD) {
                         // 收不动就停 (下一个 token 是语句终止符), 剩下的交给外层。
                         while (match(TokenKind::Comma)) {
                             if (cur_.kind == TokenKind::NewLine ||
@@ -181,12 +190,7 @@ ExprPtr Parser::parsePostfix(ExprPtr expr) {
                     }
                 }
                 if (cur_.kind == TokenKind::Minus && next_.kind == TokenKind::LeftParen) {
-                    bool isLineCall = false;
-                    if (call->callee && call->callee->kind == ASTNodeKind::MemberAccessExpr) {
-                        auto& maLine = static_cast<MemberAccessExpr&>(*call->callee);
-                        isLineCall = toLower(maLine.memberName) == "line";
-                    }
-                    if (isLineCall) {
+                    if (tailKind == CANVAS_TAIL_TWO_POINT) {
                         advance();  // 消费 '-'
                         advance();  // 消费 '('
                         auto x2 = parseExpression();

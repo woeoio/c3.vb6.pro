@@ -146,25 +146,16 @@
     if (lower == "vbback")         { lastExpr_ = "vb6_BSTR_FromStr(L\"\\b\")"; return; }
     if (lower == "vbformfeed")     { lastExpr_ = "vb6_BSTR_FromStr(L\"\\f\")"; return; }
     if (lower == "vbverticaltab")  { lastExpr_ = "vb6_BSTR_FromStr(L\"\\v\")"; return; }
-    if (lower == "vbsrccopy")      { lastExpr_ = "(13369376)"; return; }  // &HCC0020
-    if (lower == "vbsrcand")       { lastExpr_ = "(8913094)"; return; }   // &H8800C6
-    if (lower == "vbsrcpaint")     { lastExpr_ = "(15597702)"; return; }  // &HEE0086
-    if (lower == "vbsrcinvert")    { lastExpr_ = "(5588696)"; return; }   // &H555009
-    if (lower == "vbblackness")    { lastExpr_ = "(66)"; return; }        // &H42
-    if (lower == "vbwhiteness")    { lastExpr_ = "(16711782)"; return; }  // &HFF155A
-    if (lower == "vblogeventtypeerror")     { lastExpr_ = "4"; return; }
-    if (lower == "vblogeventtypewarning")   { lastExpr_ = "3"; return; }
-    if (lower == "vblogeventtypeinformation") { lastExpr_ = "2"; return; }
-    if (lower == "vblogeventtypeconstant")  { lastExpr_ = "1"; return; }
     if (lower == "vbnewline")      { lastExpr_ = "vb6_BSTR_FromStr(L\"\\r\\n\")"; return; }
     if (lower == "vbnullstring")   { lastExpr_ = "vb6_BSTR_Empty()"; return; }
     // vbempty is VarType constant 0, NOT vb6_VariantEmpty() — fixed in 010q
     if (lower == "vbnothing")      { lastExpr_ = "NULL"; return; }
     if (lower == "vbtrue")         { lastExpr_ = "(-1)"; return; }
     if (lower == "vbfalse")        { lastExpr_ = "0"; return; }
-    // Fix 056b: vbUseDefault (-2) - 常用于字体/光标等可选参数
-    if (lower == "vbusedefault")   { lastExpr_ = "(-2)"; return; }
-
+    // 账 #218 第三刀: 纯数值型的内在常量一律不在这里逐名折叠了 —— 名字与值都在
+    // src/semantics/builtin/builtin_consts.inc 那张表里，由下面的符号表路径交出。
+    // 上面剩下的两批各有理由：交出 BSTR/NULL 表达式的几只（本表只存整数），
+    // 以及「表里已有、发码仍折叠」的存量（由 check_builtin_const_authority.ps1 按棘轮钉住）。
     // Fix 010q: VarType constants
     if (lower == "vbempty")        { lastExpr_ = "0"; return; }
     if (lower == "vbnull")         { lastExpr_ = "1"; return; }
@@ -195,27 +186,22 @@
     if (lower == "vbnarrow")       { lastExpr_ = "8"; return; }
     if (lower == "vbkatakana")    { lastExpr_ = "16"; return; }
     if (lower == "vbhiragana")     { lastExpr_ = "32"; return; }
-    if (lower == "vbsimple")       { lastExpr_ = "256"; return; }
 
     // Fix 010q: CompareMethod constants
     if (lower == "vbbinarycompare")  { lastExpr_ = "0"; return; }
     if (lower == "vbtextcompare")    { lastExpr_ = "1"; return; }
     if (lower == "vbdatabasecompare") { lastExpr_ = "2"; return; }
-    if (lower == "vbusecompare")     { lastExpr_ = "(-1)"; return; }
 
     // Fix 010q: Misc VB6 constants
     if (lower == "vbobjecterror")  { lastExpr_ = "(-2147221504)"; return; }  // &H800A0000
-    if (lower == "vbnullchar")     { lastExpr_ = "vb6_BSTR_Empty()"; return; }  // Chr(0) ≈ empty BSTR
+    // Chr$(0) = **一枚 NUL 字符**的串 (Len=1), 不是空串 —— 老写法交 Empty 会把
+    // `s & vbNullChar` 的终止符吃掉 (Builds/ListView 的 LVN_GETDISPINFO 回调靠它给
+    // pszText 落 NUL; 少了就是「正确文字 + 后接乱码」)。走定长构造保住内嵌 NUL。
+    if (lower == "vbnullchar")     { lastExpr_ = "vb6_BSTR_FromStrN(L\"\\000\", 1)"; return; }
     if (lower == "vbobject")       { lastExpr_ = "9"; return; }  // already above but dedup-safe
-    if (lower == "vbcallobject")   { lastExpr_ = "1"; return; }
-    if (lower == "vbcallgetnext")  { lastExpr_ = "2"; return; }
-    if (lower == "vbcalllet")      { lastExpr_ = "3"; return; }
-    if (lower == "vbcallmethod")   { lastExpr_ = "13"; return; }
-    if (lower == "vbcallset")      { lastExpr_ = "14"; return; }
     if (lower == "vbfirstjan1")    { lastExpr_ = "1"; return; }
     if (lower == "vbfirstfourdays") { lastExpr_ = "2"; return; }
     if (lower == "vbfirstfullweek") { lastExpr_ = "3"; return; }
-    if (lower == "vbusesystem")    { lastExpr_ = "0"; return; }
     if (lower == "vbusesystemdayofweek") { lastExpr_ = "0"; return; }
     if (lower == "vbsunday")       { lastExpr_ = "1"; return; }
     if (lower == "vbmonday")       { lastExpr_ = "2"; return; }
@@ -225,13 +211,6 @@
     if (lower == "vbfriday")       { lastExpr_ = "6"; return; }
     if (lower == "vbsaturday")     { lastExpr_ = "7"; return; }
     if (lower == "vbusesystemdayofweek") { lastExpr_ = "0"; return; }
-    if (lower == "vbfirstdayofweek") { lastExpr_ = "1"; return; }  // vbSunday
-    if (lower == "vbfirstweekofyear") { lastExpr_ = "1"; return; }  // vbFirstJan1
-    if (lower == "vbgeneraldate")  { lastExpr_ = "0"; return; }
-    if (lower == "vblongdate")     { lastExpr_ = "1"; return; }
-    if (lower == "vbshortdate")    { lastExpr_ = "2"; return; }
-    if (lower == "vblongtime")     { lastExpr_ = "3"; return; }
-    if (lower == "vbshorttime")    { lastExpr_ = "4"; return; }
 
     // 先查符号表: 如果有用户定义的同名符号(变量/过程/常量等), 优先使用
     // 这避免了用户变量名与内置函数名冲突的问题 (如 Dim v As Long vs Val()函数)

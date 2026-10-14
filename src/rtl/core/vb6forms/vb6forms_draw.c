@@ -338,9 +338,43 @@ void vb6_Form_Circle(void* hwnd,
 // ============================================================
 // CLS —— 清掉绘图表面。Form 上等价于用 BackColor 填满客户区。
 // ============================================================
+
+// VB6 语义: Cls 清的是**运行期绘图** (PSet/Line/Print...), 不清 Picture 属性 ——
+// 设计期背景图在 Cls 之后依然在。此前 ARDC 分支把记忆位图整幅填成 BackColor,
+// 3DMenu 窗体那张 1024x768 淡紫底图在第一帧 Me.Cls 就被抹掉, 从此只剩 BackColor。
+// 口径与 WM_ERASEBKGND 那条同款: 仅收 OBJ_BITMAP 档, 0,0 起 SRCCOPY。
+static void vb6_Cls_RestoreFormPicture(HDC hdc, HWND hw) {
+    HANDLE hPic = GetPropW(hw, L"VB6_Picture");
+    if (!hPic || GetObjectType((HGDIOBJ)hPic) != OBJ_BITMAP) return;
+    BITMAP bmP;
+    if (!GetObjectW((HGDIOBJ)hPic, sizeof(bmP), &bmP)) return;
+    HDC mcP = CreateCompatibleDC(hdc);
+    if (!mcP) return;
+    HBITMAP obP = (HBITMAP)SelectObject(mcP, (HBITMAP)hPic);
+    BitBlt(hdc, 0, 0, bmP.bmWidth, bmP.bmHeight, mcP, 0, 0, SRCCOPY);
+    SelectObject(mcP, obP);
+    DeleteDC(mcP);
+}
+
 void vb6_Form_Cls(void* hwnd) {
     HWND hw = (HWND)hwnd;
     if (!hw) return;
+    // Fix <c3-menu3d> 2026-10-07: AutoRedraw 窗体/控件的 Cls 必须清**记忆位图**
+    // (VB6 语义: ARDC 是唯一绘图表面), 而不是屏幕 DC。此前 vb6_DrawAcquire 落
+    // GetDC(窗口) → 每 tick 一次全屏 BackColor 刷屏, 下一次 WM_PAINT 又把 ARDC
+    // (带着上一帧残影) 整幅 blit 回来 —— 图标重影 + 剧烈闪烁 (3DMenu 实测)。
+    HDC ar = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+    if (ar) {
+        RECT rcA;
+        GetClientRect(hw, &rcA);
+        HBRUSH brA = CreateSolidBrush((COLORREF)vb6_GetControlBackColor(hwnd));
+        if (brA) { FillRect(ar, &rcA, brA); DeleteObject(brA); }
+        vb6_Cls_RestoreFormPicture(ar, hw);   // Cls 不清 Picture (VB6 语义)
+        InvalidateRect(hw, NULL, FALSE);   // 上屏交给泵 (与 .hDC 那条同口径, 不擦底)
+        vb6_DrawSetCurX(hw, 0);
+        vb6_DrawSetCurY(hw, 0);
+        return;
+    }
     vb6_draw_dc_t d = vb6_DrawAcquire(hwnd);
     if (!d.dc) return;
     RECT rc;
@@ -352,6 +386,7 @@ void vb6_Form_Cls(void* hwnd) {
     // 两边共用；Form 自己那一路还到不了 (Me.Cls 落 COM 兜底，见账 #232)。
     HBRUSH br = CreateSolidBrush((COLORREF)vb6_GetControlBackColor(hwnd));
     if (br) { FillRect(d.dc, &rc, br); DeleteObject(br); }
+    vb6_Cls_RestoreFormPicture(d.dc, hw);     // 同上: Cls 不清 Picture
     vb6_DrawRelease(&d, hwnd);
     vb6_DrawSetCurX(hw, 0);
     vb6_DrawSetCurY(hw, 0);

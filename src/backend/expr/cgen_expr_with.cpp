@@ -1,4 +1,5 @@
 #include "backend/cgen.hpp"
+#include "common/host_pseudo.hpp"   // 账 #257 第十九层: kHostPseudoRows / HPF_METHOD / HPF_CHANNEL
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -8,6 +9,27 @@
 namespace vb6c3 {
 
 // --- cgen_expr_with.cpp: WithMemberExpr 求值（With 块成员访问） ---
+
+// 账 #257 第十九层: `With UserControl` / `With PropertyPage` 体内的 `.成员` 走内建
+// 全局而不走 COM 派发的唯一判定 (契约见 cgen_helpers.inc 的声明)。
+bool CCodeGen::withHostPseudoIntrinsic(const std::string& pseudoObj,
+                                       const std::string& memberName,
+                                       std::string& outRtl) {
+    outRtl.clear();
+    if (pseudoObj.empty() || memberName.empty()) return false;
+    if (!hostPseudoIsObject(pseudoObj)) return false;
+    const HostPseudoRow* row = hostPseudoFind(pseudoObj, memberName);
+    if (!row) return false;
+    if ((row->flags & (HPF_METHOD | HPF_CHANNEL)) != 0) return false;
+    // 撞名才改道: 当前模块 (.ctl/.pag) 自己声明了同名公开属性/方法。
+    Symbol* own = symTab_.lookupModule(memberName);
+    if (!own) own = symTab_.lookup(memberName);
+    if (!own) return false;
+    if (own->kind != SymbolKind::PropertyGet && own->kind != SymbolKind::PropertyLet
+        && own->kind != SymbolKind::PropertySet) return false;
+    outRtl = hostPseudoRtlSymbol(pseudoObj, memberName);
+    return !outRtl.empty();
+}
 
 void CCodeGen::visit(WithMemberExpr& node) {
     // P17.1: With块内 .Member — 根据对象类型分发
@@ -20,6 +42,21 @@ void CCodeGen::visit(WithMemberExpr& node) {
     const std::string& tempVar = withObjectVars_.back();
     std::string memLower = node.memberName;
     std::transform(memLower.begin(), memLower.end(), memLower.begin(), ::tolower);
+
+    // 账 #257 第十九层: `With UserControl` 体内的 `.成员` 若与控件自己声明的公开属性
+    // 撞名, 必须按**内建**成员发 (vb6_UserControl_Picture), 不能打 COM 标记 —
+    // 打了就被派发到控件自己的 Property Set, 而它末尾 Call DrawFrame ⇒ 无限互递归
+    // (ComCtlsDemo FrameW 实测栈溢出)。放在最前面: 这一档的答案与 WithObjKind 无关。
+    {
+        std::string hpRtlW;
+        if (withHostPseudoIntrinsic(info.hostPseudoObj, node.memberName, hpRtlW)) {
+            isComMarker_ = false;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            lastExpr_ = hpRtlW;
+            return;
+        }
+    }
 
     switch (info.kind) {
     case WithObjKind::FormControl: {
@@ -106,6 +143,29 @@ void CCodeGen::visit(WithMemberExpr& node) {
         if (!scFnW.empty()) {
             pendingChainObj_.clear();
             lastExpr_ = scFnW;
+            return;
+        }
+        // Fix 263: With 块里的**画布动词** `.Cls`（Form / PictureBox 的清屏）。
+        // 出口问 `controlCanvasMethod` —— 名字只许出自 src/common/canvas_drawing.hpp
+        // 那张表（哨兵 form_draw_state S9 与 rtl_proto_arity R3/R5 钉着这条；
+        // 写进零实参表 `controlZeroArgMethod` 会同时踩 R3 的"行数恰好 23"）。
+        // 为什么必须有: 三张方法表都没登记就落下面那条"未知控制属性"兜底，
+        // 发 `_vb6_with_N.Cls()` —— HWND 是结构体指针，取成员 = C2039
+        // "Cls 不是 HWND__ 的成员"（实测 ComCtlsDemo PPStatusBarPanels.pag:1163
+        // `With PictureDraw : .Cls`）。这一形**不吃接收者句柄**吗？
+        // 吃 —— 与两条 COM 码头同形（`vb6_ControlCls((void*)hwnd)`）。
+        std::string cvFnW263 = (memLower == "cls") ? controlCanvasMethod(info.ctrlType, memLower)
+                                                   : std::string();
+        if (!cvFnW263.empty()) {
+            pendingChainObj_.clear();
+            if (asCallCallee_) {
+                // 带括号的 `.Cls()`: 交裸名 + pendingChainObj_，由调用点把 With 入口
+                // 那枚 HWND 拼进实参表（同上面零实参那条 Fix 090s 协议）。
+                pendingChainObj_ = "(void*)" + tempVar;
+                lastExpr_ = cvFnW263;
+            } else {
+                lastExpr_ = cvFnW263 + "((void*)" + tempVar + ")  /* With ctrl .Cls */";
+            }
             return;
         }
         diag_.warn(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
@@ -225,10 +285,10 @@ void CCodeGen::visit(WithMemberExpr& node) {
             }
             // 未找到方法/属性 → 假设是数据字段: tempVar->member
             // (此时tempVar类型为 vb6_cls_<className>*, ->访问正确编译)
-            // Fix 092p: 字段名规范化回声明名 (源码大小写变体 → C 结构体实际成员名)
-            lastExpr_ = tempVar + "->"
-                      + cIdent(canonicalClassFieldName(info.className, node.memberName))
-                      + "  /* With class ." + node.memberName + " field */";
+            // 账 #305 §B171 (第六十二刀) → §B172 (第六十三刀): 尾注由唯一出口 classFieldReadExpr
+            //   拼 (档位词 + 字段名规范化 Fix 092p 都在那一处), 这一站只递自己的标签 "With class"。
+            lastExpr_ = classFieldReadExpr(tempVar, info.className, node.memberName,
+                                           /*isVoidPtr=*/false, "With class");
             return;
         }
 

@@ -4,6 +4,7 @@
 // 跨族共享符号见 vb6forms_uc_internal.h
 
 #include "vb6forms_uc_internal.h"
+#include "vb6forms_prop.h"      // 账 #247: 控件几何的唯一出口 (vb6_Get/SetControlLeft|Top|Width|Height)
 #include "vb6forms_prop_ctrl.h"   // Fix 143: vb6_AddItem/RemoveItem/ClearList (原生列表 COM 晚绑定)
 
 #ifdef __cplusplus
@@ -14,27 +15,41 @@ extern "C" {
 // 窗体/控件登记 (供宿主对象分派)
 // ============================================================
 
+static void ho_fillField(wchar_t* dst, const char* src) {
+    if (!src) return;
+    size_t n = strlen(src);
+    if (n >= VB6_UC_NAME_LEN) n = VB6_UC_NAME_LEN - 1;
+    for (size_t i = 0; i < n; i++) dst[i] = (wchar_t)src[i];
+    dst[n] = 0;
+}
+
 void vb6_HostObj_Register(void* hwnd, const char* name, const char* vbTypeName,
                           int32_t isForm, int32_t index) {
     if (!hwnd) return;
-    if (vb6_ho_find(hwnd)) return;
-    if (g_hoCount >= VB6_UC_MAX_OBJ) return;
-    vb6_HostObjRec* h = &g_ho[g_hoCount++];
+    /* 账 #257: 「同 hwnd 已登记」以前整条 return —— 后到的**带名**登记被静默丢掉，
+       于是同一枚窗口第二次说话永远说不出口（窗体先由 vb6_Forms_Register 登记，
+       名字晚一步到就再也进不去）。现在只补还空着的 name / typeName 两格。
+       isForm 与 index 刻意不动：那是存量答案的一部分（非数组控件的 .Index 恒 -1，
+       夹具 GC22 就钉着这个数），不能让后到的登记顺手改。 */
+    vb6_HostObjRec* found = vb6_ho_find(hwnd);
+    if (found) {
+        if (!found->name[0] && name) ho_fillField(found->name, name);
+        if (!found->typeName[0] && vbTypeName) {
+            const char* dot = strrchr(vbTypeName, '.');
+            ho_fillField(found->typeName, dot ? dot + 1 : vbTypeName);
+        }
+        return;
+    }
+    if (vb6_ucHoCount >= VB6_UC_MAX_OBJ) return;
+    vb6_HostObjRec* h = &vb6_ucHo[vb6_ucHoCount++];
     memset(h, 0, sizeof(*h));
     h->hwnd = hwnd;
     h->isForm = isForm;
     h->index = index;
-    if (name) {
-        size_t n = strlen(name);
-        if (n >= VB6_UC_NAME_LEN) n = VB6_UC_NAME_LEN - 1;
-        for (size_t i = 0; i < n; i++) h->name[i] = (wchar_t)name[i];
-    }
+    ho_fillField(h->name, name);
     if (vbTypeName) {
         const char* dot = strrchr(vbTypeName, '.');
-        if (dot) vbTypeName = dot + 1;
-        size_t n = strlen(vbTypeName);
-        if (n >= VB6_UC_NAME_LEN) n = VB6_UC_NAME_LEN - 1;
-        for (size_t i = 0; i < n; i++) h->typeName[i] = (wchar_t)vbTypeName[i];
+        ho_fillField(h->typeName, dot ? dot + 1 : vbTypeName);
     }
 }
 
@@ -51,10 +66,10 @@ const wchar_t* vb6_HostObj_GetName(void* hwnd) {
     vb6_HostObjRec* r = vb6_ho_find(hwnd);
     return r ? r->name : L"";
 }
-int32_t vb6_HostObj_Count(void) { return g_hoCount; }
+int32_t vb6_HostObj_Count(void) { return vb6_ucHoCount; }
 void* vb6_HostObj_At(int32_t i) {
-    if (i < 0 || i >= g_hoCount) return NULL;
-    return g_ho[i].hwnd;
+    if (i < 0 || i >= vb6_ucHoCount) return NULL;
+    return vb6_ucHo[i].hwnd;
 }
 
 vb6_HostObjRec* vb6_ho_findWindow(const void* hwnd) {
@@ -115,11 +130,6 @@ const wchar_t* vb6_Host_TypeNameOf(void* obj) {
 // 宿主对象属性/方法分派
 // ============================================================
 
-static int32_t vb6_ho_isForm(const void* hwnd) {
-    vb6_HostObjRec* h = vb6_ho_find(hwnd);
-    return (h && h->isForm) ? 1 : 0;
-}
-
 static int32_t vb6_ho_isControl(const void* hwnd) {
     vb6_HostObjRec* h = vb6_ho_find(hwnd);
     return (h && !h->isForm) ? 1 : 0;
@@ -177,6 +187,9 @@ int32_t vb6_ho_variantToLong(const vb6_VARIANT* v) {
         case vb6_vtInteger: case vb6_vtLong: case vb6_vtBoolean: case vb6_vtByte:
             return v->lVal;
         case vb6_vtSingle: case vb6_vtDouble: return (int32_t)v->dblVal;
+        case VT_I8: return (int32_t)v->llVal;   /* 账 #305: 这一档以前落 default ⇒ 读回 0 */
+        case VT_UI4: return (int32_t)v->ulVal;  /* ai/032 §6.6: 无符号两档同格 */
+        case VT_UI8: return (int32_t)v->ullVal;
         default: return 0;
     }
 }
@@ -186,24 +199,15 @@ double vb6_ho_variantToDouble(const vb6_VARIANT* v) {
     switch (v->vt) {
         case vb6_vtSingle: case vb6_vtDouble: return v->dblVal;
         case vb6_vtInteger: case vb6_vtLong: case vb6_vtBoolean: return (double)v->lVal;
+        case VT_I8: return (double)v->llVal;   /* 账 #305: 同上 */
+        case VT_UI4: return (double)v->ulVal;  /* ai/032 §6.6: 同上 */
+        case VT_UI8: return (double)v->ullVal;
         default: return 0.0;
     }
 }
 
 BSTR vb6_ho_variantToBstr(const vb6_VARIANT* v) {
     return (v && v->vt == vb6_vtBSTR) ? v->bstrVal : NULL;
-}
-
-// 控件的几何: 相对父窗口客户区, 缇
-static void vb6_ho_ctrlRect(void* hwnd, int32_t* l, int32_t* t, int32_t* w, int32_t* h) {
-    RECT rc; GetWindowRect((HWND)hwnd, &rc);
-    POINT pt = { rc.left, rc.top };
-    HWND p = GetParent((HWND)hwnd);
-    ScreenToClient(p ? p : hwnd, &pt);
-    if (l) *l = vb6_XToTwipX(pt.x);
-    if (t) *t = vb6_YToTwipY(pt.y);
-    if (w) *w = vb6_XToTwipX(rc.right - rc.left);
-    if (h) *h = vb6_YToTwipY(rc.bottom - rc.top);
 }
 
 static void vb6_ho_clientTwips(void* hwnd, int32_t* w, int32_t* h) {
@@ -264,23 +268,17 @@ void vb6_Host_ToWinVariant(const void* inV, void* outV) {
     VARIANT* out = (VARIANT*)outV;
     VariantInit(out);
     if (!in) return;
-    switch (in->vt) {
-        case vb6_vtInteger:  V_VT(out) = VT_I2; V_I2(out) = (short)in->iVal; break;
-        case vb6_vtLong:     V_VT(out) = VT_I4; V_I4(out) = in->lVal; break;
-        case vb6_vtBoolean:  V_VT(out) = VT_BOOL; V_BOOL(out) = in->boolVal; break;
-        case vb6_vtByte:     V_VT(out) = VT_UI1; V_UI1(out) = in->bVal; break;
-        case vb6_vtSingle:   V_VT(out) = VT_R4; V_R4(out) = in->fltVal; break;
-        case vb6_vtDouble:   V_VT(out) = VT_R8; V_R8(out) = in->dblVal; break;
-        case vb6_vtBSTR:     V_VT(out) = VT_BSTR; V_BSTR(out) = SysAllocString(in->bstrVal); break;
-        // Fix <vbeclipse> rev14: 缺这一条时 `.Item(...)` 返回的对象变体落 default →
-        // VT_EMPTY, vb6_ComCallObject 取不到 pdispVal → `Set x = Controls.Item(...)`
-        // 恒为 NULL。宿主对象 (UC 实例/HWND/集合) 不是真 IDispatch, 这里只透传指针;
-        // 释放侧由 vb6_ComIsDispatchable 守卫, 不会对裸指针调 Release。
-        case vb6_vtDispatch: V_VT(out) = VT_DISPATCH; V_DISPATCH(out) = (IDispatch*)in->pdispVal; break;
-        case vb6_vtEmpty:    V_VT(out) = VT_EMPTY; break;
-        case vb6_vtNull:     V_VT(out) = VT_NULL; break;
-        default:             V_VT(out) = VT_EMPTY; break;
-    }
+    /* 账 #305 §B142 (第五十三刀): 这一格原来是一张十档的手抄表，Decimal / LongLong(VT_I8) /
+       Currency / Date 一律落到 default ⇒ VT_EMPTY。实测 `c.Add CDec(5)` 之后 `VarType(c(1))` 与
+       `For Each` 读回来都是 0/Empty，x64 与 x86 两台逐行相同(`.build/k53_p/x64b.out` / `x86b.out`)，
+       而同一枚值直接装箱读是 14/Decimal ⇒ 罪就在这一格，不在写侧。
+       「这枚槽的数值住在真 VARIANT 的哪一格」§B145 已经收成一枚权威(vb6_VariantPackBorrow，
+       十四档 + 数组那一问都答)，这里改问它，只补它刻意不做的那一步: 宿主管道交出去的串是
+       **带权副本**(调用方随后 Host_ClearVariant 会放掉它)。**对象那一档照旧不 AddRef** ——
+       与改前一字不差：反向的 FromWinVariant 借来的指针不计数，Clear 也只放串，
+       这里给一次 AddRef 就成双份(§B144 记的那条收支)。 */
+    vb6_VariantPackBorrow(*in, out);
+    if (out->vt == VT_BSTR && out->bstrVal) out->bstrVal = SysAllocString(out->bstrVal);
 }
 
 void vb6_Host_FromWinVariant(const void* inV, void* outV) {
@@ -288,29 +286,35 @@ void vb6_Host_FromWinVariant(const void* inV, void* outV) {
     vb6_VARIANT* out = (vb6_VARIANT*)outV;
     memset(out, 0, sizeof(*out));
     if (!in) { out->vt = vb6_vtEmpty; return; }
-    switch (in->vt) {
-        case VT_I2:    out->vt = vb6_vtInteger; out->iVal = in->iVal; break;
-        case VT_I4:    out->vt = vb6_vtLong; out->lVal = in->lVal; break;
-        case VT_BOOL:  out->vt = vb6_vtBoolean; out->boolVal = in->boolVal; break;
-        case VT_UI1:   out->vt = vb6_vtByte; out->bVal = in->bVal; break;
-        case VT_R4:    out->vt = vb6_vtSingle; out->fltVal = in->fltVal; break;
-        case VT_R8:    out->vt = vb6_vtDouble; out->dblVal = in->dblVal; break;
-        case VT_BSTR:  out->vt = vb6_vtBSTR; out->bstrVal = SysAllocString(in->bstrVal); break;
-        // Fix <vbeclipse>: 对象属性 Set (如 `With l_ucSplitBar: .Folder = Folder`) 的值
-        // 是 IDispatch*/IUnknown*。原 switch 没有 object 档 → 落 default 变 Empty,
-        // 于是 ComSetRef 即便路由到 Host_SetProp 也把对象丢了。这里**借用**指针
-        // (不 AddRef): 转换缓冲是瞬时的, 所有权仍归调用方, Host_ClearVariant 只放 BSTR。
-        case VT_DISPATCH: out->vt = vb6_vtDispatch; out->pdispVal = in->pdispVal; break;
-        case VT_UNKNOWN:  out->vt = vb6_vtDispatch; out->pdispVal = in->punkVal; break;
-        default:       out->vt = vb6_vtEmpty; break;
+    /* 账 #305 §B165 (第五十四刀): 上面那张九档手抄表撤了 —— Date/Currency/I8/Decimal 一律
+       落 default ⇒ VT_EMPTY。实测 `c.Add CDec(5)` 之后 `VarType(c("d"))` 与 For Each 读回
+       都是 0/Empty，两台逐行相同(.build/k54_p/x64b.out / x86b.out)，而同一枚值直接装箱读是
+       14/Decimal/5 ⇒ 罪就在这一格，不在写侧，也不在第五十三刀刚并好的那枚核里。
+       「对端那 16 字节的数值住在哪一格」§B144/§B162 收成 vb6_VariantBorrowIntoSlot;
+       「这一格该自己持有什么」§B165 收成 vb6_VariantValueCopy。两问各只一枚答案，
+       这里正是它们的交点，所以改问它们，不抄第三遍。
+       ⚠ 对象那一档**照旧借用不计数**，与改前一字不差: ValueCopy 不 AddRef，而本环的
+       vb6_Host_ClearVariant 也刻意不放对象 —— 环上递手的可能是 Vb6HostWrap
+       (vb6com_foreach.c:160 那一趟的引用数是调用栈上那次 VariantClear 放的)，再取一份就是双份。
+       ⚠ 数组 / ByRef / IUnknown 三形**刻意不收**，读数与改前同为 Empty: 数组归 §B159/§B161
+       (BorrowIntoSlot 造的 owned 描述符在这条环上没有释放点，收了就漏)，ByRef 归 §B144 的
+       另一问，IUnknown 折成对象档那一步住在发码侧而不是这里。 */
+    if ((in->vt & (VT_ARRAY | VT_BYREF)) || in->vt == VT_UNKNOWN) {
+        out->vt = vb6_vtEmpty;
+        return;
     }
+    vb6_VARIANT borrowed;
+    vb6_VariantBorrowIntoSlot(in, &borrowed);
+    vb6_VariantValueCopy(out, &borrowed);
 }
 
-// 释放 vb6_Host_Call/GetProp 填出的 vb6_VARIANT (BSTR 需 SysFreeString)
+// 释放 vb6_Host_Call/GetProp 填出的 vb6_VARIANT: 值档问 §B165 那唯一一枚出口
+// (改前只放串 ⇒ 第五十四刀新存下来的 x86 DECIMAL 会漏)。对象那一档照旧不动，与
+// vb6_Host_FromWinVariant 的「借用不计数」配平。
 void vb6_Host_ClearVariant(void* v) {
     vb6_VARIANT* p = (vb6_VARIANT*)v;
     if (!p) return;
-    if (p->vt == vb6_vtBSTR && p->bstrVal) { SysFreeString(p->bstrVal); }
+    vb6_VariantValueFree(p);
     memset(p, 0, sizeof(*p));
     p->vt = vb6_vtEmpty;
 }
@@ -342,10 +346,25 @@ static HRESULT STDMETHODCALLTYPE HW_QI(IDispatch* self, REFIID riid, void** out)
 static ULONG STDMETHODCALLTYPE HW_AddRef(IDispatch* self) {
     Vb6HostWrap* w = (Vb6HostWrap*)self; return ++w->refs;
 }
+/* 账 #255: 包装器和它在 (wrap->target) 表里的登记必须同生同死。
+   表只在 vb6_UC_WrapHostObject 里追加、从来没人撤，而 free 掉的块地址会被下一枚
+   包装器原样复用 —— vb6_UC_UnwrapHost 从 i=0 扫表、先撞上那条早已释放的旧登记，
+   于是「每一枚成员」都解回「第一枚被包过的对象」。
+   实测 (probe255 模式 M)：For Each o In Me.Controls 的三枚成员 hWnd 同为 4326406、
+   Left 同为 120（那是 Timer 的设计期值），对它写 .Width 只落在这枚 Timer 的存属性上，
+   txtA/picP 一动不动；Charts 的 ClsResizer 因此把 N 格存成同一枚控件。 */
+static void vb6_UC_DropWrapPair(void* wrap) {
+    for (int i = 0; i < g_uc_wrapCount; i++) {
+        if (g_uc_wraps[i].wrap == wrap) {
+            g_uc_wraps[i] = g_uc_wraps[--g_uc_wrapCount];  /* 末位填补：查表按指针，次序无意义 */
+            return;
+        }
+    }
+}
 static ULONG STDMETHODCALLTYPE HW_Release(IDispatch* self) {
     Vb6HostWrap* w = (Vb6HostWrap*)self;
     ULONG r = --w->refs;
-    if (r == 0) free(w);
+    if (r == 0) { vb6_UC_DropWrapPair(w); free(w); }
     return r;
 }
 static HRESULT STDMETHODCALLTYPE HW_GetTypeInfoCount(IDispatch* self, UINT* n) {

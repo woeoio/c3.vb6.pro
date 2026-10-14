@@ -42,6 +42,8 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #include <ole2.h>
 #include <oleauto.h>
 #include <olectl.h>
+#include <vfw.h>
+#include <oledlg.h>
 /* NOTE: gdiplus.h is C++-only (class Gdiplus...). The GDI+ flat API is
  * resolved with GetProcAddress instead - see below. */
 

@@ -113,6 +113,28 @@ Vb6Type CCodeGen::resolveArrayElemType(ASTNode* typeRef) const {
     return Vb6Type::Variant;
 }
 
+// 账 #305 §B154 (第四十二刀): ReDim 的元素档只有一个答案来源 —— 声明。
+// 旧写法问的是 `resolveArrayElemType(node.asType.get())`, 而 ReDim 不带 As 子句时
+// asType 为空, 于是**标量/字符串/对象**那一族一律回落 vb6_sa_variant, 只有 UDT 有回退
+// (:109 查 arrayUdtElemTypes_)。可这张描述符的**访问侧**问的是另一张表 (arrayElemTypes_,
+// 由六条声明路填、VB6_SA_AT / VB6_SA_ND_AT2 吃的就是它), 固定数组那条路也按声明给档
+// (`Dim f(5) As String` 发 vb6_SafeArrayCreate1D(vb6_sa_bstr,…), 实测)。⇒ 同一个决定
+// 两处问、动态那条漏问, 后果是造出来 24 字节一步而写进去 8 字节一步: 直接读写自己一致
+// (所以看起来是好的), 而凡按描述符自己的档办事的消费方 (Destroy / Erase / 装箱元素读 /
+// ArrayAssign) 全走错步长 —— 实测 `Dim a() As String` + `ReDim a(1 To 3,1 To 4)` +
+// `a(2,3)="X"` 之后 `v = a` 再读 v(2,3) 交**空串**, VarType 交 8204 而不是声明那一档。
+// 收成一处 = 这一枚出口: As 子句在场时**仍然优先** (VB6 语义, 且语料实测 declared==As
+// 占 1580/1588, 两处相异的形状今天没有实物), 缺席时问声明表, 表里没有才回落 Variant
+// (隐式 Variant 数组 / 成员链 / With 成员 —— 沿用 Fix 180 的「不去猜」纪律)。
+Vb6Type CCodeGen::resolveReDimElemType(const std::string& lowerVar, ASTNode* typeRef) const {
+    if (typeRef) return resolveArrayElemType(typeRef);
+    if (!lowerVar.empty()) {
+        auto it = arrayElemTypes_.find(lowerVar);
+        if (it != arrayElemTypes_.end()) return it->second;
+    }
+    return Vb6Type::Variant;
+}
+
 std::string CCodeGen::resolveArrayUdtElemCType(ASTNode* typeRef) const {
     if (!typeRef) return "";
     if (typeRef->kind == ASTNodeKind::ArrayTypeRef) {

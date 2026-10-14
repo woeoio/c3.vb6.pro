@@ -89,6 +89,18 @@ void Parser::initBindingPowers() {
         { TokenKind::Like,     22, 23 },
         { TokenKind::Is,       22, 23 },
         { TokenKind::IsKeyword,22, 23 },
+        // C3 扩展 (ai/032): 移位 (9,10) —— VB.NET 的优先级位置。
+        // 取 (9,10) 的依据是两侧夹逼, 不是拍脑袋:
+        //   l_bp=9  > 比较的 l_bp=8  ⇒ `a << b = c` 分组为 `(a << b) = c` (VB.NET 同)
+        //   l_bp=9  < `&` 的 l_bp=10 ⇒ `a & b << c` 分组为 `(a & b) << c`
+        //   r_bp=10 > 加减的 l_bp=12? 否 —— 12>10, 所以 `a << b + c` 的右操作数会
+        //             继续吃掉 `+ c` ⇒ `a << (b + c)`, 与 VB.NET 的「算术高于移位」
+        //             一致 (C 里也是 `a << b + c` == `a << (b + c)`)。
+        { TokenKind::Shl,      9, 10 },
+        { TokenKind::Shr,      9, 10 },
+        // C3 扩展 (ai/032): IsNot 与 Is 同优先级 —— 它就是 Is 的否定形, 绑定范围
+        // 必须完全一致, 否则 `Not obj IsNot x` 这类嵌套会分组不同。
+        { TokenKind::IsNot,   22, 23 },
     };
 
     for (auto& op : ops) {
@@ -317,6 +329,15 @@ void Parser::skipNewLines() {
     }
 }
 
+void Parser::skipStatementSeparators() {
+    // 冒号与换行在 VB6 里都是语句分隔符。块语句 header 之后调用本函数即可
+    // 无差别接受 `Header: body: Terminator` 单行形式, 无需每个块语句各写一份分支。
+    while (cur_.kind == TokenKind::NewLine || cur_.kind == TokenKind::Comment ||
+           cur_.kind == TokenKind::LineContinuation || cur_.kind == TokenKind::Colon) {
+        advance();
+    }
+}
+
 bool Parser::expectEndOfStatement() {
     // 接受 NewLine 或冒号
     if (cur_.kind == TokenKind::NewLine) {
@@ -329,6 +350,37 @@ bool Parser::expectEndOfStatement() {
     }
     // 如果下一个是 EndOfFile, 也可以
     if (cur_.kind == TokenKind::EndOfFile) {
+        return true;
+    }
+    // Fix 231: **块结构 token 本身就是合法的语句边界** —— 上一条语句到此为止,
+    // 调用方 (块体的 parseBlockUntil) 下一轮会自己识别并 return。不许在这里报
+    // "expected end of statement" 再把它 advance() 掉: 一吃就会把紧随的
+    // `Sub`/`If`/`With`/语句 当新的语句解析, 级联出一整片 VB2001..VB2006。
+    //
+    // 为什么块 token 会"残留"到 expectEndOfStatement 面前: `Next var1, var2, …`
+    // 一条 Next 关多层嵌套 For (内层在前) —— 那个唯一的 Next token 由最内层消费,
+    // 逗号后其余变量排进 pendingNextVars_ 当各外层的"合成 Next" (见
+    // consumeNextClause)。外层 body 的 parseBlockUntil 凭 pendingNextVars_ 在
+    // **下一个块 token 处**收尾 —— 而 ForStmt 返回时 cur_ 就停在那枚块 token 上
+    // (合成弹出不消费 token), 于是调用方这里看到它。
+    // 实测 (tests/VBFlexGridDemo/Builds/VBFlexGrid/VBFlexGrid.ctl):
+    //   6783  For iCol = 0 To …: For iRow = LBoundRows To UBoundRows
+    //         …
+    //   6789  Next iRow, iCol      ' 关两层
+    //   6790  Else                 ' ← 残留给调用方的就是这枚 Else (层 #1)
+    // 以及 6769 的 `End If` (层 #2, `Next` 之后直接收过程)。
+    switch (cur_.kind) {
+        case TokenKind::Else:
+        case TokenKind::ElseIf:
+        case TokenKind::Case:
+        case TokenKind::Loop:
+        case TokenKind::Next:
+        case TokenKind::Wend:
+            return true;
+        default:
+            break;
+    }
+    if (cur_.kind == TokenKind::End && isEndBlock()) {
         return true;
     }
     // 报错并跳过当前token, 防止无限循环

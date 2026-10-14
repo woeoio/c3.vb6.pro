@@ -99,15 +99,22 @@
 
     // Fix <vbeclipse>: 控件跨模块访问器 — 其他模块 `frmViewViews.tvwViews` 引用
     // 控件 HWND (控件句柄变量是本 .c 的 static, 外部直接发裸名必 C2065)。
-    // 只给非数组、非 Menu/ImageList 的控件发 (数组/ImageList 的槽形态不同, 有需要再扩)。
+    // 非数组、非 Menu 的控件都发跨模块访问器。ImageList 的槽是 vb6_com_<Name>
+    // (IDispatch*, 见 emitControlHandleDecls:165), 不是 vb6_hwnd_<Name>, 下方分支处理。
     {
         std::function<void(const FrmControl&)> accRec = [&](const FrmControl& ctrl) {
             if (!ctrl.controlName.empty() && ctrl.index < 0
-                && ctrl.controlType != FrmControlType::Menu
-                && ctrl.controlType != FrmControlType::ImageList) {
+                && ctrl.controlType != FrmControlType::Menu) {
                 std::string acc = "vb6_form_ctrl_" + cIdent(formName) + "_" + cIdent(ctrl.controlName);
                 h_.emitLine("void* " + acc + "(void);");
-                c_.emitLine("void* " + acc + "(void) { return vb6_hwnd_" + cIdent(ctrl.controlName) + "; }");
+                // 族4b: ImageList 槽为 vb6_com_<Name> (IDispatch*); 其余控件回 vb6_hwnd_<Name>。
+                // 旧逻辑把 ImageList 排除, 但 comwrite 侧又发了 vb6_form_ctrl_<Form>_ImageListN()
+                // 的调用 -> 定义缺失 (LNK2019)。这里补上 ImageList 分支。
+                if (ctrl.controlType == FrmControlType::ImageList) {
+                    c_.emitLine("void* " + acc + "(void) { return vb6_com_" + cIdent(ctrl.controlName) + "; }");
+                } else {
+                    c_.emitLine("void* " + acc + "(void) { return vb6_hwnd_" + cIdent(ctrl.controlName) + "; }");
+                }
             }
             for (const auto& child : ctrl.children) accRec(child);
         };

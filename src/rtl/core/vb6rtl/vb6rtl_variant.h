@@ -48,6 +48,8 @@ typedef struct vb6_VARIANT {
         uint8_t bVal;
         int64_t cyVal;
         int64_t llVal;  /* Fix 133x: VT_I8 (LongPtr 64位指针/句柄) 存回用 */
+        uint32_t ulVal;  /* ai/032 §6.6: VT_UI4 (ULong 装箱载体, 与 lVal 同槽) */
+        uint64_t ullVal; /* ai/032 §6.6: VT_UI8 (ULongLong 装箱载体, 与 llVal 同槽) */
         struct vb6_SafeArray1D* parray;  /* P20-37: array pointer for GetAllSettings etc */
         /* Fix <vbeclipse> rev11: **与 Windows VARIANT 完全同布局**。
          * VB6/OLE 的 VARIANT 在 x86 = 16 字节 (2B vt + 6B 保留 + 8B union),
@@ -68,6 +70,16 @@ typedef struct vb6_VARIANT {
 
 #undef vb6_VARIANT  /* 取消Windows vb6_VARIANT, 使用VB6简化版 */
 
+/* 账 #305 §B142: **`DECIMAL.wReserved` 不是「保留」—— oleaut32 拿它当 vt 标签用**(它自己写的那枚是 14 = VT_DECIMAL)。
+ * 手填字段造 DECIMAL 时漏这一枚, OLE 不报错: 它返回 S_OK 却给 0 / 给空串(实测,
+ * 见台账 §B142 第四轮那段的字节对照)。两份布局字段名不同(内联匿名 struct 叫 wReserved1、
+ * 真 DECIMAL 叫 wReserved), 所以统一从这个宏进, 不许在调用点再把 #ifdef 抄第二遍。 */
+#ifdef _WIN64
+  #define vb6_DEC_VT(d)  ((d).wReserved1)
+#else
+  #define vb6_DEC_VT(d)  ((d).wReserved)
+#endif
+
 /* Fix <vbeclipse> rev11 配套: DECIMAL 访问统一宏。
  * x64: decVal 内联在 union 里, 直接成员访问。
  * x86: union 保持 8 字节 (对齐 OLE VARIANT), decVal 只能以 DECIMAL* pdecVal
@@ -78,6 +90,19 @@ typedef struct vb6_VARIANT {
 #else
   #define vb6_VARIANT_DECVAL(v) (*(v).pdecVal)
 #endif
+/* 账 #305 §B142(第三十五刀): 给槽里那枚 DECIMAL 补上 oleaut32 的 vt 标签，**只在这里写一遍**。
+ * 实测(纯 C 探针)：`VarDecFromR8` 造的那枚这两字节是 **0**，只有 `VarDecFromStr` 会写 14 ⇒ 「OLE
+ * 自己造的一定带标签」这句错了，标签必须在**造出来的那一步末尾**统一补，不许散在 case 里。
+ * x86 那侧要判空：`CDec` 的 default 臂刚把 pdecVal 释放掉，槽还算 Decimal 但没有悬体。 */
+static inline void vb6_DecSetTag(vb6_VARIANT v) {
+    if (v.vt != vb6_vtDecimal) return;
+#ifdef _WIN64
+    vb6_DEC_VT(vb6_VARIANT_DECVAL(v)) = vb6_vtDecimal;
+#else
+    if (v.pdecVal) vb6_DEC_VT(vb6_VARIANT_DECVAL(v)) = vb6_vtDecimal;
+#endif
+}
+
 
 // Variant构造
 static inline vb6_VARIANT vb6_VariantEmpty(void) {
@@ -113,6 +138,24 @@ static inline vb6_VARIANT vb6_VariantLongLong(int64_t val) {
     v.vt = (vb6_vartype)VT_I8; v.llVal = val; return v;
 }
 
+// ai/032 §6.6 收口: 无符号两档的 Variant 装箱 (VT_UI4 / VT_UI8)。
+// 以前 _Generic 把 unsigned int/long/long long 全落 vb6_VariantLong(int32) ——
+// `v = u` (ULong=4294967295) 读回 -1。档位对齐 C 侧实宽: 32 位无符号 → VT_UI4,
+// 64 位无符号 → VT_UI8 (与 VT_I8 同槽位 ullVal/llVal, 位模式不截断)。
+// (UInteger=uint16_t 走既有 `wchar_t:` 档 —— MSVC C 里 wchar_t 就是 unsigned short,
+//  原表那一档本来就是它在接; 别再加 `unsigned short:` 分支, 是同一类型, C7700。)
+// 全部读取侧本刀连同补齐 (ToLong/LongPtr/Bool/Double/比较/Format/TypeName/IsNumeric
+// /com 包与拆/host 读表/属性包)。
+static inline vb6_VARIANT vb6_VariantULong(uint32_t val) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    v.vt = (vb6_vartype)VT_UI4; v.ulVal = val; return v;
+}
+
+static inline vb6_VARIANT vb6_VariantULongLong(uint64_t val) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    v.vt = (vb6_vartype)VT_UI8; v.ullVal = val; return v;
+}
+
 static inline vb6_VARIANT vb6_VariantDouble(double val) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
     v.vt = vb6_vtDouble; v.dblVal = val; return v;
@@ -144,9 +187,15 @@ static inline vb6_VARIANT vb6_VariantBool(int16_t val) {
 }
 
 // Variant containing a SafeArray (VB6: a = Array(1,2,3))
+// 账 #305 §B155 格①（第四十六刀）: 标签不再写死成 vtArray|vtVariant —— 它问描述符自己那一档。
+// 改前任何 typed 数组装箱后 VarType 一律答 8204、TypeName 一律答 "Variant"（VB6: String 数组是
+// 8200 / "String()"）；而且拿着 VT_ARRAY|VT_VARIANT 的标签去指一枚 BSTR 载体，交回 COM 就是错档。
+// 为什么声明在本文件、定义在 vb6rtl_array.c: 伞头里 variant.h 排在 array.h **之前**（那边的
+// vb6_VariantFromUdtBytes 注释记着这条顺序），这里看不见 elemtype 枚举与两套描述符。
+int32_t vb6_SaVtOfArrayPtr(const void* arr);
 static inline vb6_VARIANT vb6_VariantArray(void* _arr) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
-    v.vt = vb6_vtArray | vb6_vtVariant; v.parray = (struct vb6_SafeArray1D*)_arr; return v;
+    v.vt = (vb6_vartype)vb6_SaVtOfArrayPtr(_arr); v.parray = (struct vb6_SafeArray1D*)_arr; return v;
 }
 
 // Fix 024: Variant containing a Byte (VT_UI1)
@@ -201,11 +250,11 @@ static inline vb6_VARIANT vb6_VariantIdentity(vb6_VARIANT v) { return v; }
     unsigned char:        vb6_VariantByte, \
     short:                vb6_VariantInt, \
     int:                  vb6_VariantLong, \
-    unsigned int:         vb6_VariantLong, \
+    unsigned int:         vb6_VariantULong, \
     long:                 vb6_VariantLong, \
-    unsigned long:        vb6_VariantLong, \
+    unsigned long:        vb6_VariantULong, \
     long long:            vb6_VariantLongLong, \
-    unsigned long long:   vb6_VariantLong, \
+    unsigned long long:   vb6_VariantULongLong, \
     wchar_t:              vb6_VariantLong, \
     float:                vb6_VariantSingle, \
     double:               vb6_VariantDouble, \
@@ -222,11 +271,11 @@ static inline vb6_VARIANT vb6_VariantIdentity(vb6_VARIANT v) { return v; }
     unsigned char:        vb6_VariantByte, \
     short:                vb6_VariantInt, \
     int:                  vb6_VariantLong, \
-    unsigned int:         vb6_VariantLong, \
+    unsigned int:         vb6_VariantULong, \
     long:                 vb6_VariantLong, \
-    unsigned long:        vb6_VariantLong, \
+    unsigned long:        vb6_VariantULong, \
     long long:            vb6_VariantLongLong, \
-    unsigned long long:   vb6_VariantLong, \
+    unsigned long long:   vb6_VariantULongLong, \
     wchar_t:              vb6_VariantLong, \
     float:                vb6_VariantSingle, \
     double:               vb6_VariantDouble, \
@@ -241,6 +290,10 @@ static inline vb6_VARIANT vb6_VariantIdentity(vb6_VARIANT v) { return v; }
 vb6_VARIANT vb6_VariantArrayGet(vb6_VARIANT* v, int32_t index);
 // Set element in a Variant that holds an array
 void vb6_VariantArraySet(vb6_VARIANT* v, int32_t index, vb6_VARIANT val);
+// 账 #305 §B150 (第四十刀): 晚绑定槽的多维元素读/写 —— 秩数与全部下标一次交全,
+// 上下界与错误 9 由 vb6rtl_array.h 那唯一一枚 vb6_SaNdElemPtr 管。
+vb6_VARIANT vb6_VariantArrayGetND(vb6_VARIANT* v, int32_t rank, ...);
+void vb6_VariantArraySetND(vb6_VARIANT* v, int32_t rank, ...);
 // Fix 084f: Variant 数组嵌套索引按值版本 — vGateway(lIdx)(0) 中内层
 // vb6_VariantArrayGet(&vGateway, lIdx) 返回 vb6_VARIANT 值(非左值无法取地址),
 // 此函数按值接收后再按索引取元素, 替代非法的 (vb6_VARIANT){...} 复合字面量.
@@ -252,6 +305,9 @@ vb6_VARIANT vb6_VariantArrayGetVal(vb6_VARIANT v, int32_t index);
 // intptr_t). 此函数返回底层 SafeArray 元素槽位的地址 (仅 vb6_sa_variant 支持,
 // 其余类型返回 NULL — 非 Variant 数组槽位不是 VARIANT 布局).
 vb6_VARIANT* vb6_VariantArrayElemPtr(vb6_VARIANT* v, int32_t index);
+/* 账 #305 §B150: 多维版取址, 形参表 = (槽, 秩数, 秩数个 int32_t 下标) —— 与
+   vb6_VariantArrayGetND 同形, 发码侧那两路交址的改写只换函数名。 */
+vb6_VARIANT* vb6_VariantArrayElemPtrND(vb6_VARIANT* v, int32_t rank, ...);
 
 // Variant转基本类型
 int32_t vb6_VariantToLong(vb6_VARIANT v);
@@ -265,6 +321,42 @@ double vb6_VariantToDouble(vb6_VARIANT v);
 void vb6_VariantSetI4(vb6_VARIANT* v, int32_t x);   // Fix 133: Declare 标量 ByRef 出参回写
 void vb6_VariantSetI8(vb6_VARIANT* v, intptr_t x);  // Fix 133x: LongPtr 出参回写 (VT_I8, x64 指针不截断)
 BSTR vb6_VariantToString(vb6_VARIANT v);
+
+/* 账 #305 §B142: Decimal 在「往外读」这一侧的**唯一两个换算出口**。都走 oleaut32
+ * 的 `VariantChangeType` —— 不是选的, 是本机只够得着它: `VarDecToR8` / `VarDecToString` /
+ * `VarDecToI4` 在 SDK x64 的 oleaut32.lib 里根本没有(台账 §B142 ③)。
+ * 成功返回真; 失败给 0 / 空串, 不抛错(与其它读表的 default 同形)。 */
+BSTR vb6_DecimalToBSTR(vb6_VARIANT v);
+int vb6_DecimalToR8(vb6_VARIANT v, double *out);
+
+/* 账 #305 §B142/§B145: 槽里那枚 Decimal 变成合法 OLE VARIANT 的**唯一出口**(见 vb6rtl.c)。
+ * 返回 0 = 槽不是 Decimal; 返回 1 = out 已铺好(带 oleaut32 的 vt 标签、且是副本)。 */
+int vb6_DecimalAsVariant(vb6_VARIANT v, VARIANT *out);
+
+/* 账 #305 §B144: 与上面那枚成对的**反向一问** ——「这枚 OLE VARIANT 的 DECIMAL 住在哪」。
+ * 两架构的答案都是结构体的头，分歧只在 SDK 的称呼；入站读 Decimal 的地方只问这里，
+ * 不再各自数偏移(x64 数错成 offset 8、x86 把数值当指针，两处都量到过)。 */
+DECIMAL *vb6_DecimalPtrFromVariant(const VARIANT *v);
+
+/* 账 #305 §B144: COM 服务端适配器那两份「槽 ↔ OLE VARIANT」的 memcpy 收成下面这一对出口。
+ * 服务端那份 .c 手上只有匿名槽(3×uint64)，不该知道槽里每一档住在第几个字节 ——
+ * 它原来那句「槽布局前 16 字节与 OLE VARIANT 内容一致」正是 §B144 静默错的根因。 */
+void vb6_VariantPackCopyInto(const void *slot, VARIANT *out);    /* 槽 → 对端 VARIANT(带权副本) */
+void vb6_VariantBorrowIntoSlot(const VARIANT *src, void *slot);  /* 对端 VARIANT → 槽(借用) */
+void vb6_VariantSlotRelease(void *slot);  /* 账 #305 §B162: 回收上面那臂造出的描述符 */
+
+/* 账 #305 §B145: 槽 → 真 VARIANT 的那张 vt 表，**只答「数值住在哪一格」**，一律借用语义
+ * (不复制 BSTR、不 AddRef)。需要带权副本的出站那一族自己补下面那一步。 */
+void vb6_VariantPackBorrow(vb6_VARIANT v, VARIANT *out);
+
+/* 账 #305 §B145: Variant 参与 + - * / 的唯一运行期出口(定义在 vb6rtl_com.c)。
+ * 两侧都装箱成真 VARIANT 后交 oleaut32 的 VarAdd/VarSub/VarMul/VarDiv —— VB6 本人的
+ * Variant 算术引擎，于是 Decimal 的 96 位精确、Double 的小数、Null 传播、Date 加天数
+ * 与它自己的舍入/越界政策一起继承，发码层不再替运行期猜档。 */
+vb6_VARIANT vb6_VarAddV(vb6_VARIANT a, vb6_VARIANT b);
+vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
+vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b);
+vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);
 // Fix 029: Variant → SafeArray extraction (variant holding array).
 // 用于调用点反向强制: callee 期望 vb6_SafeArray1D* 但实参是 vb6_VARIANT.
 struct vb6_SafeArray1D* vb6_VariantToSafeArray1D(vb6_VARIANT v);
@@ -292,6 +384,11 @@ void vb6_VariantCopy(vb6_VARIANT* dst, const vb6_VARIANT* src);
 // 实测 tests/ve_list (工程内 List.cls 形态): idx=0/1/2 全答 "Gamma";
 // 真工程 play78: Folder.Views.Item(0) 取回 1 字符垃圾 → m_Views.Item(<垃圾>) 落空。
 void vb6_VariantAssign(vb6_VARIANT* dst, vb6_VARIANT src);
+// 账 #305 §B165 (第五十四刀): 值档(BSTR + x86 那一台的 DECIMAL)所有权的一对出口。
+// Clear/Copy/Assign 与宿主环(Host_* 与内建 Collection 五站)都问它们 —— 「谁分配谁释放」
+// 只许住这一处; 对象那一档不在这对里(加减引用归 Copy/Clear 自己问 vb6_ComIsDispatchable)。
+void vb6_VariantValueFree(vb6_VARIANT* v);
+void vb6_VariantValueCopy(vb6_VARIANT* dst, const vb6_VARIANT* src);
 
 #ifdef __cplusplus
 }

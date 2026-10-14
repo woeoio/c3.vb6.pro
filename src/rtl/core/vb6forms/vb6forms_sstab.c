@@ -263,8 +263,11 @@ static LRESULT CALLBACK sstabSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
         // 窗口) 通过 WM_CTLCOLORSTATIC 向本容器要底色 — 此前不处理走原生默认,
         // vb6_SetControlBackColor 写的 VB6_BackColor 属性无人消费。与主窗体
         // WndProc 同款: 仅在子控件显式 Set 过 VB6_BackColor 时接管。
+        // Fix <c3-menu3d-labelbg>: 与主窗体 WndProc 同步放行 VB6_BackStyle0
+        // (Label.BackStyle=0 Transparent) —— 这种 Label 一定没有 BackColor,
+        // 只按 BackColorSet 放行就会落到 DefWindowProcW 被 STATIC 类背景刷成白块。
         HWND child = (HWND)lp;
-        if (child && GetPropW(child, L"VB6_BackColorSet")) {
+        if (child && (GetPropW(child, L"VB6_BackColorSet") || GetPropW(child, L"VB6_BackStyle0"))) {
             LRESULT br187 = vb6_ApplyCtlColorStatic((HDC)wp, child);
             if (br187) return br187;
         }

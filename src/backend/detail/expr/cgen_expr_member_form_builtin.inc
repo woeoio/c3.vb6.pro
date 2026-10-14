@@ -194,7 +194,11 @@
         // P18-C: Printer 对象
         if (objLower == "printer") {
             if (memLower == "print") { lastExpr_ = "vb6_Printer_Print"; return; }
-            if (memLower == "enddoc") { lastExpr_ = "vb6_Printer_EndDoc"; return; }
+            if (memLower == "enddoc") {
+                // 账 #232①-c: 名字问画布表（Printer.Cls 与 Printer.EndDoc 是同一条出口，表里两行都指向它）
+                const std::string edFn = canvasDrawEntry("enddoc", CR_CANVAS_PRINTER);
+                if (!edFn.empty()) { lastExpr_ = edFn; return; }
+            }
             if (memLower == "newpage") { lastExpr_ = "vb6_Printer_NewPage"; return; }
             if (memLower == "width") { lastExpr_ = "vb6_Printer_Width()"; return; }
             if (memLower == "height") { lastExpr_ = "vb6_Printer_Height()"; return; }

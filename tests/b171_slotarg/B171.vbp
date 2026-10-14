@@ -1,0 +1,5 @@
+Type=Exe
+Name="B171App"
+Module=B171Main; B171Main.bas
+Class=B171Holder; B171Holder.cls
+Startup="Sub Main"

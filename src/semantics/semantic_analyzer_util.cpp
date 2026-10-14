@@ -2,6 +2,7 @@
 #include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
 #include "common/int_literal.hpp"   // 账 #194: 整数字面量的单一出口
 #include "common/host_pseudo.hpp"  // 账 #219: 裸写伪成员问那张表
+#include "common/canvas_drawing.hpp"  // 账 #232①: 折叠判据的名单只问这张表
 #include "semantics/interface_sig.hpp"  // tB Interface/继承线共用的小写键函数 (B07b)
 #include <algorithm>
 #include <cctype>
@@ -531,6 +532,7 @@ std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type
                     case Vb6Type::String: {
                         // C-escape constStringValue before embedding in C string literal
                         std::string cEsc;
+                        bool hasNul = false;
                         cEsc.reserve(sym->constStringValue.size() + 16);
                         for (char ec : sym->constStringValue) {
                             switch (ec) {
@@ -539,8 +541,19 @@ std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type
                                 case '\n': cEsc += "\\n"; break;
                                 case '\r': cEsc += "\\r"; break;
                                 case '\t': cEsc += "\\t"; break;
+                                // 内嵌 NUL 必须显式转义 (否则原样落进 L"…" 会把字面量截断)
+                                case '\0': cEsc += "\\000"; hasNul = true; break;
                                 default:   cEsc += ec; break;
                             }
+                        }
+                        // 含内嵌 NUL 的串常量 (VB6 `vbNullChar` / Chr$(0) 拼出的串) 改用
+                        // **定长**构造: 普通 vb6_BSTR_FromStr 走 wcslen, 内嵌 NUL 会被当
+                        // 串尾 ⇒ 长度丢失 (实测 Builds/ListView 的 LVN_GETDISPINFO 回调
+                        // `s & vbNullChar` 因此少了终止符, 控件读越界 = 屏上「正确文字 +
+                        // 后接乱码」)。与 vb6_BSTR_FromBSTR 同口径, 都走 SysAllocStringLen。
+                        if (hasNul) {
+                            return "vb6_BSTR_FromStrN(L\"" + cEsc + "\", "
+                                 + std::to_string(sym->constStringValue.size()) + ")";
                         }
                         return std::string("vb6_BSTR_FromStr(L\"") + cEsc + "\")";
                     }
@@ -722,21 +735,56 @@ bool SemanticAnalyzer::namesProjectLevel(const std::string& name) const {
     if (name.empty()) return false;
     const std::string lk = ifaceLower(name);
     if (projPublicProcs_.count(lk)) return true;
+    // 模块级 Public Const / Public Enum 成员: **裸名位就是它的合法位置** (VB6 工程级常量),
+    // 所以不像模块名那样要挑位置。账 #278 §B106。
+    if (projPublicConsts_.count(lk)) return true;
+    // 工程内**窗体名**: VB6 里它就是默认实例，两个位都合法（`Unload TmForm2` 站在裸名位、
+    // `TmForm2.Visible` 站在限定符位）。唯一的例外与发码侧同一处口径：窗体模块里指着**自己**
+    // 那个名字不走那条路（`cgen_expr_ident_symbol.inc` 的 `lower != knownFormName_`），
+    // 放行它等于把一条 C2065 判成合法。账 #278 §B110。
+    if (projFormNames_.count(lk) &&
+        !(currentModule_ && ifaceLower(currentModule_->moduleName) == lk)) return true;
     return memberObjCtx_ && projModuleNames_.count(lk);
 }
 
 // 判据 = (文档类别, 对象名) 一格一格对，不靠字符串猜 (.ctl 与 .pag 的隐式对象前缀不同:
 // vb6_UserControl_* / vb6_PropertyPage_*)。`extender` / `ambient` 只有 UserControl 有。
-bool SemanticAnalyzer::isDocumentHostObject(const std::string& name) const {
+bool SemanticAnalyzer::isDocumentHostObject(const std::string& name, bool qualifierPos) const {
     if (name.empty() || !currentModule_) return false;
     const std::string lk = ifaceLower(name);
-    if (lk == "vba") return true;   // VBA 全局库前缀, 任何模块都合法
+    if (lk == "vba") return qualifierPos;   // VBA 全局库前缀, 但只有站在限定符位才有意义
     const DocumentKind k = currentModule_->docKind;
+    // 文档对象**自己的名字**在 VB6 两个位都合法：`UserControl.hDC`（限定符位）与
+    // `With UserControl`（值位，等价于 Me）。两档现在一起放（账 #278 §B115 的第二半）。
+    // 第八刀只放了 .ctl，当时记的理由是「.pag 值位一发码就 C2065」—— 本刀实测**推翻**：
+    // RTL 把 vb6_PropertyPage_hwnd 与 vb6_PropertyPage_hWnd 两种拼写都声明且定义了，
+    // 旧那句编得过，只是编向另一枚全局 ⇒ 同一份产物里一个事实两个答复（读数与后果
+    // 写在 cgen_with.cpp 那一处；那一族读数全是缺省值这件事另立 §B119）。
+    // 那句拼法现在来自那张表（装配在 hostPseudoRtlSymbol 一处，与裸名/赋值/限定符那四条路同一个出口，
+    // 账 #278 §B120）⇒
+    // 两档同形，这一格没有理由再扣着。
     if (lk == "usercontrol") return k == DocumentKind::UserControl;
     if (lk == "propertypage") return k == DocumentKind::PropertyPage;
-    if (lk == "extender" || lk == "ambient") return k == DocumentKind::UserControl;
+    if (lk == "extender" || lk == "ambient") return k == DocumentKind::UserControl && qualifierPos;
     return false;
 }
+
+// 账 #278 §B105: 表里带 HPF_CHANNEL 的那几行（今天只有 `Controls`）在**两个位**都放行 ——
+// VB6 里 `Controls.Add(...)` / `For Each c In Controls` 都是常规写法，而老的那两条分支
+// 一条只管限定符位的"文档对象名"、一条只管裸位的"文档成员名"，集合名当限定符用正好两头都不接。
+// 名字与码头都来自那张表（common/host_pseudo.hpp），这里不再抄成员名。
+bool SemanticAnalyzer::isDocumentChannelMember(const std::string& name) const {
+    if (!currentModule_ || name.empty()) return false;
+    const char* obj = nullptr;
+    switch (currentModule_->docKind) {
+        case DocumentKind::UserControl:  obj = "UserControl";  break;
+        case DocumentKind::PropertyPage: obj = "PropertyPage"; break;
+        default: return false;
+    }
+    std::string dock;
+    return hostPseudoChannel(obj, name, dock);
+}
+
 // 裸写的文档成员（账 #219）：判据 = 那张宿主伪成员表（common/host_pseudo.hpp）里带 HPF_BARE
 // 的那几行。发码侧从来只问这张表，语义层以前不问 —— 于是同一句 `Changed = True`
 // 一边发成正确的 vb6_PropertyPage_Changed、一边每条配一句 VB3001「未声明的标识符」
@@ -746,6 +794,54 @@ bool SemanticAnalyzer::isDocumentHostObject(const std::string& name) const {
 // C 全局**落地 —— 与账 #220 那两枚旗标同型：工程里有一枚模块级变量叫 Changed 就撞成 C2371
 // （探针 `.build/b229out/pjChanged.bas`：`Public Changed As Long` ⇒ 连 exe 都不出）。发码侧从来
 // 交的是带前缀那一个名字（语料 186 处、裸名 0 处），所以那枚全局是纯负担，已撤。
+// 账 #232①: 裸写的画布动词折成 `Me.<动词>`。
+//
+// 症状 (探针 .build/b515/FoldForm.frm，五形实测): 窗体代码里写 `Cls` / `PSet (1,2)` / `Circle 3,4,5`
+// 三形今天在**语义层**就被当成"没见过这个名字"，于是发码发出裸 C 调用 ——
+//   vb6_VARIANT Cls = vb6_VariantEmpty();  /* 隐式声明 */   Cls();
+//   PSet(1, 2);
+//   Circle(3, 4, 5);
+// 全是 C2065/C2064 (未声明的标识符 / 不是函数)，`Option Explicit` 开着还多一条 VB3001。
+// 同一件事写成 `Me.Cls` / `Me.PSet (1,2)` / `Me.Circle 3,4,5` 一直是通的 (发成
+// vb6_ControlCls / vb6_Form_PSet / vb6_Form_Circle，见夹具 FDForm 的 FD18/FD19/FD20 与
+// .build/b515) —— 差的就是 VB6 允许窗体代码裸写自己画布上的方法这一形。
+//
+// 折叠放在**这里**而不是 cgen 的两条码头：语义层是"语句已成形 + 符号查得到 + 文档种类也知道"
+// 的唯一位置 (cgen 的两条码头各自只看得见自己那一形，各拦一次 = 第 6、7 份答案，
+// 正是账 #232② 刚清掉的形状)。折完之后下游一行都不用改：`Me.Cls` 走画布表，
+// `Me.PSet` / `Me.Circle` 走 withm 的 Form/Printer 绘图段 —— 两形从此同路。
+//
+// 三问缺一不可：
+//   1) 只有**窗体**模块有这一族 (UserControl / PropertyPage 的 Cls 由宿主伪成员那张表另答);
+//   2) 名单只问画布表 (canvasVerbHasFormEntry) —— 表里"窗体那一档由谁答"就是这一刀的范围;
+//   3) 名字**查不到符号**才折：用户自己写 `Sub PSet(x, y)` 时那枚过程该赢 (VB6 的模块内作用域)，
+//      无条件折就是"修一处静默、造一处调错函数"。
+void SemanticAnalyzer::foldBareCanvasVerb(ExprPtr& callee) {
+    if (pass_ != 2 || !currentModule_ || !callee) return;
+    if (currentModule_->docKind != DocumentKind::Form) return;
+
+    // 裸 `Cls` 是一棵 IdentifierExpr 站在 callee 位；`PSet (1,2)` / `Circle 3,4,5` 是
+    // IndexOrCallExpr 站在 callee 位 —— 折的都是最内层那个名字，实参链原样不动。
+    ExprPtr* nameSlot = &callee;
+    if ((*nameSlot)->kind == ASTNodeKind::IndexOrCallExpr) {
+        nameSlot = &static_cast<IndexOrCallExpr&>(**nameSlot).callee;
+    }
+    if (!*nameSlot || (*nameSlot)->kind != ASTNodeKind::IdentifierExpr) return;
+    auto& ident = static_cast<IdentifierExpr&>(**nameSlot);
+    // `[Cls]` 是用户显式括起来的名字，不参与隐式接收者折叠。
+    if (ident.bracketed) return;
+    if (!canvasVerbHasFormEntry(canvasVerbLower(ident.name))) return;
+    if (symTab_.lookup(ident.name) || namesProjectLevel(ident.name) ||
+        declaredByAncestor(ident.name)) {
+        return;
+    }
+
+    const SourceLocation loc = ident.loc;
+    const std::string member = ident.name;
+    *nameSlot = std::make_unique<MemberAccessExpr>(
+        loc, std::make_unique<MeExpr>(loc), member);
+}
+
 bool SemanticAnalyzer::isDocumentBarePseudoMember(const std::string& name) const {
     if (!currentModule_ || name.empty()) return false;
     const char* obj = nullptr;

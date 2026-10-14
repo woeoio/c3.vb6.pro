@@ -15,6 +15,11 @@ bool Parser::isSoftKeyword(TokenKind kind) const {
         // 内置类型名 (常作变量/参数名)
         case TokenKind::Boolean:   case TokenKind::Byte:     case TokenKind::Integer:
         case TokenKind::Long:      case TokenKind::LongLong: case TokenKind::LongPtr:
+        // C3 扩展 (ai/032): 4 个新整型同为软关键字 —— 与其它类型名一致, 允许
+        // 同名标识符 (`Dim uinteger As Long` 这类老代码不因加类型而报错)。
+        // IsNot **不在此列**: 它是硬关键字 (见 lexer_keywords.cpp 的理由)。
+        case TokenKind::SByte:     case TokenKind::UInteger:
+        case TokenKind::ULong:     case TokenKind::ULongLong:
         case TokenKind::Single:    case TokenKind::Double:   case TokenKind::Currency:
         case TokenKind::Decimal:   case TokenKind::Date:     case TokenKind::Object:
         case TokenKind::String:    case TokenKind::Variant:  case TokenKind::Any:
@@ -148,6 +153,10 @@ BinaryOp Parser::tokenToBinaryOp(TokenKind kind) const {
         case TokenKind::Like:        return BinaryOp::Like;
         case TokenKind::Is:          return BinaryOp::Is;
         case TokenKind::IsKeyword:   return BinaryOp::Is;
+        // C3 扩展 (ai/032): 移位。IsNot 不在此列 —— 它在 parseLeftDenotation 里
+        // 单独脱糖成 `Not (a Is b)`, 不需要自己的 BinaryOp (见 parser_expr.cpp)。
+        case TokenKind::Shl:         return BinaryOp::Shl;
+        case TokenKind::Shr:         return BinaryOp::Shr;
         default:
             return BinaryOp::Add;  // 不应到达
     }

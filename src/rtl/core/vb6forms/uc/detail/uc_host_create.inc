@@ -2,10 +2,15 @@
 // 内容 = 拆分前 vb6forms_uc.c 第 634~738 行，逐行未改
 // 在函数体内 #include；路径一律用 basename
 
+    // Fix <vbeclipse> 2026-10-12 (第十二层): 一次性取走"推迟激活"令牌 —— 必须在**本函数
+    // 最前面**取: 后面 desc->init 内部还会为设计子控件再走一次 HostCreate, 那些实例要按
+    // 原行为立即 Show/Resize (它们没有 bag, 也就没有"之后再激活"的机会)。
+    int deferActivate = vb6_uc_deferActivateTake();
+
     vb6_uc_trace("create.begin", typeName, NULL);
     const vb6_UserControlDesc* desc = vb6_uc_findDesc(typeName);
     if (!desc) return NULL;
-    if (g_uc_recCount >= VB6_UC_MAX_INST) return NULL;
+    if (vb6_ucRecCount >= VB6_UC_MAX_INST) return NULL;
 
     // czUI fix: Ambient.BackColor 应反映容器窗体的 BackColor (VB6 语义)。
     // 控件 RedrawControl 用它做底色填充, 取不到就落到 BTNFACE 灰/系统色,
@@ -25,16 +30,16 @@
     vb6_uc_registerClass((HINSTANCE)hInstance);
     vb6_uc_gdiplusInit();
 
-    vb6_UCRec* r = &g_uc_recs[g_uc_recCount];
+    vb6_UCRec* r = &vb6_ucRecs[vb6_ucRecCount];
     memset(r, 0, sizeof(*r));
     r->desc = desc;
     r->parent = (HWND)hParent;
     r->enabled = -1;
     r->index = index;
     // Fix 119: 装入 cgen 预先设定的实例字体 (.frm BeginProperty Font)
-    if (g_uc_pendingFont) {
-        r->font = g_uc_pendingFont;
-        g_uc_pendingFont = NULL;
+    if (vb6_ucPendingFont) {
+        r->font = vb6_ucPendingFont;
+        vb6_ucPendingFont = NULL;
     }
     r->scaleWidth = vb6_TwipToX(width);
     r->scaleHeight = vb6_TwipToY(height);
@@ -69,14 +74,14 @@
     vb6_uc_trace("window.created", typeName, hwnd);
     if (!hwnd) return NULL;
     r->hwnd = hwnd;
-    g_uc_recCount++;
+    vb6_ucRecCount++;
 
     // Fix 122: 修正 VB6 z 序 (先声明者在上)
     vb6_uc_fixZOrder(hwnd);
 
     // 登记: 供 Controls 枚举 / TypeName / 宿主对象分派
-    if (g_hoCount < VB6_UC_MAX_OBJ) {
-        vb6_HostObjRec* h = &g_ho[g_hoCount++];
+    if (vb6_ucHoCount < VB6_UC_MAX_OBJ) {
+        vb6_HostObjRec* h = &vb6_ucHo[vb6_ucHoCount++];
         memset(h, 0, sizeof(*h));
         h->hwnd = (void*)hwnd;
         h->isForm = 0;
@@ -100,36 +105,29 @@
         vb6_uc_push(r, &saved);
 if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) { fprintf(stderr, "[C3_UC] HostCreate stage=create type=%s\n", typeName); fflush(stderr); }
     r->me = desc->create ? desc->create() : NULL;
+    vb6_heap_probe("after-create", typeName);
     if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) { fprintf(stderr, "[C3_UC] HostCreate stage=init type=%s me=%p\n", typeName, r->me); fflush(stderr); }
     if (r->me && desc->init) desc->init(r->me);
+    vb6_heap_probe("after-init", typeName);
     if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) { fprintf(stderr, "[C3_UC] HostCreate stage=init-done type=%s\n", typeName); fflush(stderr); }
         r->ready = 1;   // Fix 112: 之后窗口消息 (Resize/Show/Paint) 才允许进入实例
         vb6_uc_trace("instance.ready", desc->typeName, r->me);
         vb6_uc_pop(&saved);
-        if (g_hoCount) g_ho[g_hoCount - 1].instance = r->me;
+        if (vb6_ucHoCount) vb6_ucHo[vb6_ucHoCount - 1].instance = r->me;
     }
 
     ShowWindow(hwnd, SW_SHOW);
     // Fix 112: 窗口创建期间被 ready=0 拦下的 Resize/Show 在此补发
-    if (desc->resize) {
-        RECT rc; GetClientRect(hwnd, &rc);
-        r->scaleWidth = rc.right;
-        r->scaleHeight = rc.bottom;
-        vb6_UCSaved saved;
-        vb6_uc_push(r, &saved);
-        vb6_uc_trace("resize.begin", desc->typeName, r->me);
-        desc->resize(r->me);
-        vb6_uc_trace("resize.end", desc->typeName, r->me);
-        vb6_uc_pop(&saved);
+    // Fix <vbeclipse> 2026-10-12 (第十二层): 加载路径(带 bag 的顶层 UC)推迟到 ReadProperties
+    // 之后 —— VB6 的顺序是 Initialize → ReadProperties → Show/Resize, 而 C3 的 ReadProps 由
+    // 窗体创建代码在 HostCreate 之后调用。不推迟的话 Resize 会在设计期属性恢复**之前**跑,
+    // 读到全是默认值/零值的字段 (实测 czUI: m_ControlType 未恢复 = 0 = czTitleBar ⇒
+    // `If m_ControlType = czTitleBar Then ApplyFormRoundCorners` 走错分支 ⇒ AV)。
+    // 由 vb6_UC_ActivateHost(hwnd) 在 ReadProps 之后补齐这一段。
+    if (deferActivate) {
+        r->pendingActivate = 1;
+        vb6_uc_trace("activate.defer", desc->typeName, r->me);
+        return (void*)hwnd;
     }
-    if (desc->show) {
-        vb6_UCSaved saved;
-        vb6_uc_push(r, &saved);
-        vb6_uc_trace("show.begin", desc->typeName, r->me);
-        desc->show(r->me);
-        vb6_uc_trace("show.end", desc->typeName, r->me);
-        vb6_uc_pop(&saved);
-    }
-    vb6_uc_trace("create.end", typeName, r->me);
-    InvalidateRect(hwnd, NULL, FALSE);
+    vb6_uc_activate(r);
     return (void*)hwnd;

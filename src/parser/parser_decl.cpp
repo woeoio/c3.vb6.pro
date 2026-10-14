@@ -46,8 +46,22 @@ DeclPtr Parser::parseDeclaration() {
             if (d) d->virt = virt;
             return d;
         }
-        case TokenKind::Type:     return parseTypeDecl(AccessLevel::Default);
-        case TokenKind::Enum:     return parseEnumDecl(AccessLevel::Default);
+        case TokenKind::Type: {
+            auto d = parseTypeDecl(AccessLevel::Default);
+            if (d) {
+                d->packingAlignment = pendingPackingAlign_;
+                pendingPackingAlign_ = 0;
+            }
+            return d;
+        }
+        case TokenKind::Enum: {
+            auto d = parseEnumDecl(AccessLevel::Default);
+            if (d) {
+                d->packingAlignment = pendingPackingAlign_;
+                pendingPackingAlign_ = 0;
+            }
+            return d;
+        }
         case TokenKind::Declare:  return parseDeclareDecl(AccessLevel::Default);
         case TokenKind::Event:    return parseEventDecl(AccessLevel::Default);
         case TokenKind::Delegate: return parseDelegateDecl(AccessLevel::Default);
@@ -92,8 +106,22 @@ DeclPtr Parser::parseDeclaration() {
                     if (d) d->virt = virt;
                     return d;
                 }
-                case TokenKind::Type:     return parseTypeDecl(access);
-                case TokenKind::Enum:     return parseEnumDecl(access);
+                case TokenKind::Type: {
+                    auto d = parseTypeDecl(access);
+                    if (d) {
+                        d->packingAlignment = pendingPackingAlign_;
+                        pendingPackingAlign_ = 0;
+                    }
+                    return d;
+                }
+                case TokenKind::Enum: {
+                    auto d = parseEnumDecl(access);
+                    if (d) {
+                        d->packingAlignment = pendingPackingAlign_;
+                        pendingPackingAlign_ = 0;
+                    }
+                    return d;
+                }
                 case TokenKind::Declare:  return parseDeclareDecl(access);
                 case TokenKind::Identifier:
                     // `Public DeclareWide Sub ...` (ai/024)
@@ -391,6 +419,10 @@ std::unique_ptr<PropertyDecl> Parser::parsePropertyDecl(AccessLevel access) {
 
 std::unique_ptr<TypeDecl> Parser::parseTypeDecl(AccessLevel access) {
     auto loc = currentLoc();
+    // bracket attrs 可能已由调用方收集，这里不重复收集
+    if (cur_.kind != TokenKind::Type) {
+        // try to skip bracket attrs if any (should be handled by caller)
+    }
     advance(); // consume 'Type'
     auto nameTok = expectName("expected Type name");
     auto typeParams = parseTypeParams();   // 泛型 (tB): Type Foo(Of T)
@@ -425,6 +457,7 @@ std::unique_ptr<TypeDecl> Parser::parseTypeDecl(AccessLevel access) {
         //   memberName(1, 2) As Type  — 多维
         ExprPtr arraySize;
         bool isArrayDynamic = false;  // Fix 037: 标记动态数组 `()` 语法
+        std::vector<TypeMember::MoreDim> moreDims;  // 账 #262: 第 2..N 维
         if (match(TokenKind::LeftParen)) {
             if (cur_.kind != TokenKind::RightParen) {
                 // 解析第一个维度
@@ -436,12 +469,19 @@ std::unique_ptr<TypeDecl> Parser::parseTypeDecl(AccessLevel access) {
                 } else {
                     arraySize = std::move(first);
                 }
-                // 消费后续维度 (多维数组)
+                // 账 #262: 后续维度以前是"解析并丢弃"，于是 `M(0 To 4, 0 To 4)` 的第二维
+                // 整个不见 —— 结构体只发得出第一维的格数，`.M(3, 3)` 与 `.M(4, 4)` 写进
+                // 同一格 (真流量: Charts LabelPlus 的 GDI+ 色彩矩阵)。现在留着折算。
                 while (match(TokenKind::Comma)) {
-                    parseExpression(); // 解析并丢弃后续维度
+                    TypeMember::MoreDim md;
+                    md.lower = parseExpression();
                     if (match(TokenKind::To)) {
-                        parseExpression();
+                        md.upper = parseExpression();
+                    } else {
+                        md.upper = std::move(md.lower);
+                        md.lower = nullptr;
                     }
+                    moreDims.push_back(std::move(md));
                 }
             } else {
                 // 空括号 () = 动态数组, arraySize 保持 nullptr
@@ -460,6 +500,7 @@ std::unique_ptr<TypeDecl> Parser::parseTypeDecl(AccessLevel access) {
         auto memberNode = std::make_unique<TypeMember>(memberLoc,
             memberNameStr, std::move(type), std::move(arraySize));
         memberNode->isArrayDynamic = isArrayDynamic;
+        memberNode->moreDims = std::move(moreDims);
         members.push_back(std::move(memberNode));
     }
 
@@ -470,7 +511,10 @@ std::unique_ptr<TypeDecl> Parser::parseTypeDecl(AccessLevel access) {
 
     auto d = std::make_unique<TypeDecl>(loc, access, nameTok.text, std::move(members));
     d->typeParams = std::move(typeParams);
-    curTypeParams_.clear();  // G3 护栏窗口只覆盖本模板成员类型
+    // packingAlign from parser state (if set before)
+    d->packingAlignment = pendingPackingAlign_;
+    pendingPackingAlign_ = 0;
+    curTypeParams_.clear();
     return d;
 }
 
@@ -507,7 +551,8 @@ std::unique_ptr<EnumDecl> Parser::parseEnumDecl(AccessLevel access) {
     expect(TokenKind::Enum, DiagnosticID::ParseMismatchedBlock,
            "expected 'End Enum'");
 
-    return std::make_unique<EnumDecl>(loc, access, nameTok.text, std::move(members));
+    auto d = std::make_unique<EnumDecl>(loc, access, nameTok.text, std::move(members));
+    return d;
 }
 
 } // namespace vb6c3

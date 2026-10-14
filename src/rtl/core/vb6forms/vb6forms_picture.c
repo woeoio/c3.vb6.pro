@@ -85,8 +85,49 @@ wchar_t* vb6_Utf8ToWide(const char* utf8) {
 // P24: Load picture from memory buffer
 // Uses CreateStreamOnHGlobal + OleLoadPicture to support JPEG/BMP/ICO/PNG/GIF
 // ============================================================
+
+/* Fix <c3-menu3d-bg>: 本机 32 位进程里 OleLoadPicture 对 **任何 BMP** 一律回
+ * E_FAIL (0x80004005) —— 64 位同一份代码成功, 连标准工具生成的 24bpp BMP 都
+ * 失败 (对照探针 .temp/tools/picprobe 实测), 是 oleaut32 32 位 BMP 过滤器的
+ * 环境性故障, 与被解的图无关。BMP 是设计期 .frx 背景图的主流格式, 必须自救:
+ * 文件以 "BM" 开头时直接手动解析 BITMAPFILEHEADER + BITMAPINFO, 用
+ * CreateDIBSection 建位图后整块拷入像素 —— 文件扫描行顺序与 DIB 一致
+ * (bottom-up 或负高 top-down 都同序), 无需逐行翻转。其余格式 (JPEG/GIF/ICO/
+ * WMF) 的过滤器不受影响, 仍走 OleLoadPicture (ICO 实测正常: 标题栏图标在)。 */
+static HANDLE vb6_LoadBmpFromMemory(const void* data, int size) {
+    const unsigned char* p = (const unsigned char*)data;
+    if (size < 54 || p[0] != 'B' || p[1] != 'M') return NULL;
+    DWORD bfOffBits = *(const DWORD*)(p + 10);
+    const BITMAPINFO* bi = (const BITMAPINFO*)(p + 14);
+    int w = bi->bmiHeader.biWidth;
+    int h = bi->bmiHeader.biHeight;      /* 负值 = top-down, CreateDIBSection 同样接受 */
+    int bpp = bi->bmiHeader.biBitCount;
+    if (w <= 0 || h == 0 || bpp < 1 || bpp > 32) return NULL;
+    int lines = (h > 0) ? h : -h;
+    if (bi->bmiHeader.biCompression != BI_RGB &&
+        bi->bmiHeader.biCompression != BI_BITFIELDS) return NULL;
+    /* 调色板/掩码紧跟信息头; 像素从 bfOffBits 起 */
+    if (bfOffBits < 14 + (DWORD)bi->bmiHeader.biSize) return NULL;
+    int lineBytes = ((w * bpp + 31) / 32) * 4;
+    if ((DWORD)bfOffBits + (DWORD)lineBytes * (DWORD)lines > (DWORD)size) return NULL;
+
+    void* bits = NULL;
+    HDC hdc = GetDC(NULL);
+    HBITMAP hbmp = CreateDIBSection(hdc, bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    ReleaseDC(NULL, hdc);
+    if (!hbmp || !bits) { if (hbmp) DeleteObject(hbmp); return NULL; }
+    memcpy(bits, p + bfOffBits, (size_t)lineBytes * (size_t)lines);
+    return (HANDLE)hbmp;
+}
+
 void* vb6_LoadPictureFromMemory(const void* data, int size) {
     if (!data || size <= 0) return NULL;
+
+    /* BMP 走手动解析 (32 位 OleLoadPicture 对 BMP 环境性 E_FAIL, 见上) */
+    {
+        HANDLE hBmp = vb6_LoadBmpFromMemory(data, size);
+        if (hBmp) return (void*)hBmp;
+    }
 
     /* Ensure COM is initialized for OLE picture loading */
     static int oleInited = 0;

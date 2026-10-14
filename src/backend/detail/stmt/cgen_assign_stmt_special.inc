@@ -96,6 +96,46 @@
         }
     }
 
+    // Fix 257: 控件**可索引属性**的写入 —— `ListVirtualDisabledInfos.Selected(i) = True`
+    // (ComCtlsDemo PPListViewGeneral.pag:739)。LHS 是
+    // IndexOrCallExpr{callee=MemberAccess(控件, Selected), args=[i]}。
+    // 读方向有 P13.3b 的专门拦截 (cgen_expr_call_callee_withm.inc:215-222 ⇒
+    // vb6_GetSelected(hwnd, i)), 写方向没有 ⇒ 通用路径把**读函数当左值**:
+    //   vb6_GetSelected((void*)vb6_hwnd_ListVirtualDisabledInfos, i) = (-1);
+    // ⇒ C2106 "左操作数必须为左值" ×2 (PPListViewGeneral.c 623/629)。
+    // 正确形态 = RTL 里那对写函数 (getControlPropWriteFn 对 ListBox/ComboBox 已登记
+    // Selected/List/ItemData 的 vb6_Set*), 首参 hwnd、中间的索引原样、末参值 ——
+    // 与上面 Fix 110b 的控件数组默认属性写入同模板, 只多一层"属性名由 LHS 自己带"。
+    if (node.target->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& ipP = static_cast<IndexOrCallExpr&>(*node.target);
+        if (ipP.callee && ipP.callee->kind == ASTNodeKind::MemberAccessExpr
+            && !ipP.positional.empty()) {
+            auto& ipMa = static_cast<MemberAccessExpr&>(*ipP.callee);
+            if (ipMa.object && ipMa.object->kind == ASTNodeKind::IdentifierExpr) {
+                auto& ipId = static_cast<IdentifierExpr&>(*ipMa.object);
+                const std::string ipLower = Symbol::toLower(ipId.name);
+                auto itIp = knownFormControls_.find(ipLower);
+                if (itIp != knownFormControls_.end()) {
+                    std::string writeFnIp = getControlPropWriteFn(itIp->second, ipMa.memberName);
+                    if (!writeFnIp.empty()) {
+                        const std::string origIp = knownFormControlOriginalNames_.count(ipLower)
+                            ? knownFormControlOriginalNames_[ipLower] : ipId.name;
+                        std::string callIp = writeFnIp + "((void*)vb6_hwnd_" + cIdent(origIp);
+                        for (auto& aIp : ipP.positional) {
+                            emitExpr(*aIp);
+                            callIp += ", " + std::move(lastExpr_);
+                        }
+                        emitExpr(*node.value);
+                        std::string valIp = std::move(lastExpr_);
+                        valIp = controlPropValueExpr(writeFnIp, valIp, *node.value);
+                        c_.emitLine(callIp + ", " + valIp + ");  /* indexed ctrl prop write */");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // P22: LSet/RSet statement (LSet strVar = expr / RSet strVar = expr)
     if (node.isLSet || node.isRSet) {
         if (node.target->kind == ASTNodeKind::IdentifierExpr) {
@@ -469,8 +509,10 @@
                             c_.emitLine(fieldAccess084o + " = " + valExpr084o + ";  /* FnRetUdt." + maExpr.memberName + " */");
                             return;
                         case Vb6Type::Variant:
-                            c_.emitLine("vb6_VariantClear(&" + fieldAccess084o + ");");
-                            c_.emitLine(fieldAccess084o + " = vb6_VariantFromValue(" + valExpr084o + ");  /* FnRetUdt." + maExpr.memberName + " */");
+                            // §B164 站⑥: UDT 的 Variant 成员也是一枚槽, 这两行与普通赋值那一站是
+                            // 同一个决定 —— 抄在这里就少一位主人。发码逐字节沿用「清 + 搬」(flag=true)；
+                            // 「这里的右值是不是借来的」按 Fix 232 那一问还没拍(台账 §B164 形⑥)。
+                            emitVariantSlotStore(fieldAccess084o, "vb6_VariantFromValue(" + valExpr084o + ")", true);
                             return;
                         default:
                             c_.emitLine(fieldAccess084o + " = " + valExpr084o + ";  /* FnRetUdt." + maExpr.memberName + " */");
@@ -493,6 +535,10 @@
                 emitExpr(*node.value);
                 std::string valExpr = std::move(lastExpr_);
                 std::string packFn = comPackExpr(*node.value);
+                // Fix <vbeclipse> 2026-10-12: 右值整枚是 COM 调用结果时先拆堆 VARIANT*
+                // (见 comUnpackForPack) —— 不拆则 vb6_ComPackValue(void*) 会把堆
+                // VARIANT 当 IDispatch 去 AddRef ⇒ AV。
+                valExpr = comUnpackForPack(packFn, valExpr);
                 c_.emitLine("vb6_ComSetProp((void*)" + currentReturnVar_ + ", L\""
                             + maExpr.memberName + "\", " + packFn + "(" + valExpr
                             + "));  /* FnRetObj COM SetProp */");

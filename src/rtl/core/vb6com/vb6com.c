@@ -545,7 +545,7 @@ static HRESULT comLibCreateFromPath(const wchar_t* dllPath, REFCLSID rclsid, voi
 }
 
 /* 表命中后的本地激活总入口.
- * 路径候选与 OCX 的 ocxCreateAny 一致:
+ * 路径候选与 OCX 的 vb6_ocxCreateAny 一致:
  *   1) <exe目录>\<fileName 相对部分>   便携分发, 不依赖 CWD
  *   2) <exe目录>\<裸文件名>            同目录
  *   3) 原样                            开发机/绝对路径

@@ -274,8 +274,17 @@ FrxTextData FrxReader::readDocString(size_t offset) {
 
     // 以"数据起点"为主循环: 长度 dword 位于数据起点前 (4+pad) 字节 (pad=0..8),
     // 兼容 VB6 不同版本的填充差异 (实测 pad=3)。
+    //
+    // 账(乱码): 这里以前有一句 `if ((ds & 1) != 0) continue;` —— **假定 UTF-16 数据必在
+    // 偶偏移**。实测 (ComCtlsDemo MainForm.frx) 该串数据落在**奇偏移** 0xA2B; 被跳掉后
+    // 扫描退一格取 0xA2A, 每对字节读成 (0x00, 0x49) ⇒ wchar 0x4900 ⇒ "ImageCombo1"
+    // 整条变成 CJK 假字 (\u4900\u6D00…), ComboBoxEx 显示的就是这串 (屏上「整条 CJK 乱码」)。
+    // 现在**不做奇偶限制**、改**逐候选打分取最优**: 设计期串绝大多数是 ASCII, 而"错位
+    // 一个字节"的解码会把低字节恒置 0 (wchar = 0xXX00) ⇒ ASCII 计数为 0; 正确对齐的
+    // ASCII 计数 = 码元数。取 ASCII 计数最大者即可稳定选回正确对齐 (平局保留先到者)。
+    FrxTextData best;
+    int bestAscii = -1;
     for (size_t ds = offset; ds + 2 <= scanEnd; ++ds) {
-        if ((ds & 1) != 0) continue;   // UTF-16 数据必为偶偏移
         for (size_t pad = 0; pad <= 8; ++pad) {
             if (ds < offset + 4 + pad) break;
             size_t lp = ds - (4 + pad);
@@ -285,29 +294,61 @@ FrxTextData FrxReader::readDocString(size_t offset) {
             const uint8_t* s = fileData_.data() + ds;
             // 校验: 每个 UTF-16 码元都必须是可打印字符 (>= 0x20) 或常见空白
             bool ok = true;
+            int ascii = 0;
             for (uint32_t i = 0; i < nBytes; i += 2) {
                 uint32_t cp = (uint32_t)s[i] | ((uint32_t)s[i + 1] << 8);
+                if (cp < 0x0080) ascii++;
                 if (cp == 0x0009 || cp == 0x000A || cp == 0x000D) continue;
                 if (cp < 0x0020) { ok = false; break; }
             }
             if (!ok) continue;
-#ifdef _WIN32
+            if (ascii <= bestAscii) continue;   // 已有更"像文本"的候选
             int wlen = (int)(nBytes / 2);
+#ifdef _WIN32
             std::wstring wstr((const wchar_t*)s, wlen);
             int ulen = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), wlen, NULL, 0, NULL, NULL);
             if (ulen <= 0) continue;
             std::string utf8(ulen, 0);
             WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), wlen, &utf8[0], ulen, NULL, NULL);
-            result.text = utf8;
+            best.text = utf8;
 #else
-            result.text.assign((const char*)s, nBytes);  // 非 Windows 下退化为原始字节
+            best.text.assign((const char*)s, nBytes);  // 非 Windows 下退化为原始字节
 #endif
-            return result;
+            bestAscii = ascii;
         }
     }
+    if (!best.text.empty()) return best;
 
     lastError_ = "No valid DocString at offset";
     return result;
+}
+
+// ============================================================
+// Fix: 属性包块 (UserControl 持久化 PropertyBag) 识别 + 取原始字节
+//   块 = [DWORD cbSize][cbSize 字节负载]
+//   负载 = [28B 前缀: 00 | GUID(16) | 00010000 | 00000006 | 000000 ]
+//          [VB6 PropertyBag 序列化数据: WORD 0xB293 ; WORD catOff ; DWORD cbContent ; items...]
+//   判据: 前 64B 内存在 0xB293 且 该处偏移 + cbContent == cbSize (实测恒 28 + cbContent)。
+//   这样既命中所有 Init* 属性包, 又不会误判 DocString / 图片块。
+// ============================================================
+FrxPropBagBlob FrxReader::readPropBagBlob(size_t offset) {
+    FrxPropBagBlob out;
+    if (offset + 4 > fileData_.size()) return out;
+    uint32_t cbSize = readLE32(fileData_.data() + offset);
+    if (cbSize < 8 + 12 || offset + 4 + cbSize > fileData_.size()) return out;
+    const uint8_t* blob = fileData_.data() + offset + 4;
+
+    size_t scanMax = (cbSize < 64) ? cbSize : 64;
+    for (size_t h = 0; h + 8 <= cbSize && h <= scanMax; ++h) {
+        if (readLE16(blob + h) != 0xB293) continue;
+        uint32_t cbContent = readLE32(blob + h + 4);
+        if (cbContent < 8 || cbContent > cbSize) continue;
+        if (h + cbContent != cbSize) continue;          // 必须正好补满块
+        out.found = true;
+        out.bytes.assign(blob, blob + cbSize);
+        return out;
+    }
+    return out;
 }
 
 // ============================================================

@@ -130,7 +130,23 @@
             if (!className.empty()) {
                 std::vector<ParameterInfo> params;
                 bool isBuiltin = false;
-                if (findClassMemberCallParams(className, maExpr.memberName, params, isBuiltin)) {
+                // Fix 240b: 该成员解析成 `prop_get_` 时, 形参表取**读方向**那一份。
+                // findClassMemberCallParams 对「Get 与 Let 并存」的属性 (ListView.ctl:6928/6949
+                // `Get InsertMark(Optional ByRef After)` / `Let InsertMark(Optional ByRef
+                // After, ByVal Value)`) 实测交回 **Let** 表 ⇒ 补默认值时多发一枚
+                // `vb6_VariantEmpty()` (Let 末参 Value 的默认值) 顶到 `int _has_After`
+                // → C2440 "vb6_VARIANT → int" (ComCtlsDemo MainForm.frm 七处
+                // `ListView2.InsertMark(After)` / `ListView2.InsertMark`)。
+                // 只在名字确为 prop_get_ 时换表, 其余成员一字不动。
+                const std::string rcDir240 =
+                    resolveClassMemberCall(className, maExpr.memberName);
+                if (rcDir240.find("_prop_get_") != std::string::npos
+                    && findClassMemberGetParams(className, maExpr.memberName, params)) {
+                    calleeParams = std::move(params);
+                    calleeIsBuiltin = false;
+                    classAwareResolved = true;
+                    calleeParamsFound = true;
+                } else if (findClassMemberCallParams(className, maExpr.memberName, params, isBuiltin)) {
                     calleeParams = std::move(params);
                     calleeIsBuiltin = isBuiltin;
                     classAwareResolved = true;
@@ -181,11 +197,44 @@
                 Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name)) > 0;
         }
 
+        // Fix 216: `VBA.<成员>` / `VBA.Interaction.<成员>` 的形参表**只许**来自全局内置
+        // 符号表, 不许 lookupModule —— 那是**本模块作用域**, 类模块里恰好有一枚同名成员
+        // 时会被它抢走, 于是形参表按那个成员算.
+        // 实测 (ComCtlsDemo Builds/DTPicker/DTPicker.ctl): 该控件自己有
+        //   `Public Property Get Year() As Variant` (无形参) / `Property Let Year(...)`,
+        //   Month / Day / Hour / Minute / Second 各一对; 而**没有** Weekday.
+        // 于是同一个过程里:
+        //   `ST(0).wYear  = VBA.Year(PropMinDate)`  → `vb6_Year()`       (实参被清空)
+        //   `ST(0).wDayOfWeek = VBA.Weekday(...)`   → `vb6_Weekday(me->PropMinDate, 1)` ✅
+        // 机制: lookupModule 命中 0 参的 `Property Get Year` ⇒ calleeParams 空但
+        // calleeParamsFound=true ⇒ 下游 Fix 041b 的"实参多于形参就截断"把实参全砍掉
+        // ⇒ C2198 "实参太少" (该工程 Year/Month/Day/Hour/Minute/Second 共 49 处)。
+        // VBA 是 VB6 保留的全局模块 (与 Fix 092z 的 Clipboard/Screen/Printer… 同档),
+        // 用户标识符不可能占用, 所以直接跳过模块作用域那一跳; 全表 lookup 仍保留,
+        // 那份符号带 Optional 形参 (Weekday 的 firstDayOfWeek 缺省就是这么填的)。
+        bool vbaQualifiedCallee216 = false;
+        if (maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string objName216 = Symbol::toLower(
+                static_cast<IdentifierExpr&>(*maExpr.object).name);
+            vbaQualifiedCallee216 = (objName216 == "vba" || objName216 == "vba5");
+        } else if (maExpr.object && maExpr.object->kind == ASTNodeKind::MemberAccessExpr) {
+            // `VBA.Interaction.<成员>`: VB6 把 Beep/Shell/AppActivate/CreateObject 等
+            // 交互函数声明在 VBA 的 Interaction 子模块下, 真实工程两种写法都有.
+            auto& mid216 = static_cast<MemberAccessExpr&>(*maExpr.object);
+            if (mid216.object && mid216.object->kind == ASTNodeKind::IdentifierExpr &&
+                Symbol::toLower(mid216.memberName) == "interaction") {
+                const std::string pre216 = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*mid216.object).name);
+                vbaQualifiedCallee216 = (pre216 == "vba" || pre216 == "vba5");
+            }
+        }
+
         // Fix 033 回退: 类感知未命中 (对象为链式表达式 / className 找不到方法符号 /
         // 需要匹配 DeclareSub/DeclareFunc 等) → 用原 class-unaware lookupModule 兜底,
         // 保留旧行为兼容性.
         if (!classAwareResolved && !builtinGlobalObj092z) {
-            Symbol* funcSym = symTab_.lookupModule(maExpr.memberName);
+            Symbol* funcSym = vbaQualifiedCallee216 ? nullptr
+                                                    : symTab_.lookupModule(maExpr.memberName);
             // Fix 084y-7: VBA 内置函数 (VBA.Replace / VBA.Mid$ / VBA.Val 等) 注册在
             // 全局内置符号表, 不在模块作用域 — lookupModule 必然失败. 回退全表
             // lookup (去 $ 后缀: Mid$ → Mid), 拿到含 Optional 的完整形参表,
@@ -194,6 +243,24 @@
                 std::string fnName = maExpr.memberName;
                 if (!fnName.empty() && fnName.back() == '$') fnName.pop_back();
                 funcSym = symTab_.lookup(fnName);
+                // Fix 216: `VBA.<成员>` 只能是内置函数, 但全表 lookup 会命中本模块的
+                // 同名成员, 而且那条路连形参表都没有 —— define() 里 Fix 048 那条
+                // "用户成员覆盖内置函数" 已经把内置符号从模块作用域 erase 了 (为的是别让
+                // TypeLib 出现幽灵 Function 变体), 内置函数的形参只在那一份上。
+                // 实测 (DTPicker.ctl 有 `Property Get Year()` 无形参 + `Property Let Year`):
+                //   VBA.Year(PropMinDate) → calleeParams 命中 0 参的 Property Get
+                //   ⇒ 下游 Fix 041b 把唯一实参截掉 ⇒ `vb6_Year()` ⇒ C2198 (49 处)。
+                // 留档表 (shadowedBuiltins_) 保存着被顶掉的那份内置符号, 以它为准;
+                // 真找不到留档 (例如内置压根没被顶) 就沿用全表结果, 但只要它不是内置
+                // 符号就作废 —— 宁可失去 Optional 补齐 (实参照原样发出, 不会有 C2198),
+                // 也绝不让同类同名成员把实参吃掉。
+                if (vbaQualifiedCallee216) {
+                    if (Symbol* sh216 = symTab_.lookupShadowedBuiltin(fnName)) {
+                        funcSym = sh216;
+                    } else if (funcSym && !funcSym->isBuiltin) {
+                        funcSym = nullptr;
+                    }
+                }
             }
             if (funcSym && (funcSym->kind == SymbolKind::Sub || funcSym->kind == SymbolKind::Function
                 || funcSym->kind == SymbolKind::PropertyGet || funcSym->kind == SymbolKind::PropertyLet

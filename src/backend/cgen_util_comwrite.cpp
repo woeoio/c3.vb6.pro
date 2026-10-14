@@ -81,7 +81,7 @@ bool CCodeGen::tryEmitChainedComWrite(Expr* targetNode, Expr* valueNode) {
             std::string packFn25 = comPackExpr(*ic.positional[j]);
             emitExpr(*ic.positional[j]);
             { std::string r25 = resolveComMarkerForPack(packFn25); if (!r25.empty()) lastExpr_ = r25; }
-            out.push_back(packFn25 + "(" + lastExpr_ + ")");
+            out.push_back(packArgValue(packFn25, lastExpr_));
         }
         return (int32_t)ic.positional.size();
     };
@@ -120,17 +120,10 @@ bool CCodeGen::tryEmitChainedComWrite(Expr* targetNode, Expr* valueNode) {
     //   li.SubItems(1) = .RefId   → vb6_ComPackBSTR(vb6_VariantFromComResult(vb6_ComCall(_vb6_with_1, L"RefId", NULL, 0)))
     // 的实参已是 vb6_VARIANT 结构体, 与 packer 期望的 const wchar_t* / double 不匹配
     // → C2440 (4 处: 181/182/205/206)。
-    // 与 cgen_assign_com_prop.inc 同名 Fix 110i 同一处理: 按 packer 反推解封类型后
-    // resolveComValue, 得到 vb6_ComGetXxxProp(receiver) 这类与 packer 匹配的标量。
-    if (isComMarker_) {
-        std::string hint25 = "BSTR";
-        if (packVal25 == "vb6_ComPackDouble") hint25 = "Double";
-        else if (packVal25 == "vb6_ComPackInt") hint25 = "Long";
-        else if (packVal25 == "vb6_ComPackObject") hint25 = "Object";
-        else if (packVal25 == "vb6_ComPackValue") hint25 = "Variant";
-        resolveComValue(hint25);
-        valExpr25 = std::move(lastExpr_);
-    }
+    // 与 cgen_assign_com_prop.inc 同名 Fix 110i 同一处理: 账 #260 把那张「packer →
+    // 解封类型」的表收进 comMarkerValueForWrite 一处，这里是它的消费点之一（另一处
+    // 消费点漏了在 With 那一支，就是本账）。
+    valExpr25 = comMarkerValueForWrite(packVal25, valExpr25);
     c_.emitLine("vb6_ComSetPropArg(" + accExpr25 + ", " + defMemLit25 + ", "
                 + arrOut25 + ", " + std::to_string(argcOut25) + ", "
                 + packVal25 + "(" + valExpr25 + "));  /* COM chained default-prop assign (P25b) */");
@@ -320,6 +313,32 @@ bool CCodeGen::tryRewriteCOMLvalue(const std::string& target, const std::string&
                                                     parens.second - parens.first - 1);
                 std::string newVerbs = (matchedVerb != "prop_get_") ? matchedVerb
                                       : (isSet ? "prop_set_" : "prop_let_");
+                // Fix 270: **Set 方向必须重新裁决动词**, 不能沿用 emitExpr 交回的那一个。
+                // emitExpr 把 LHS 当**读**上下文发射; 「Property Let 与 Property Set 同名
+                // 并存」时它按 Let 胜出 (findClassMemberCallParams 的优先级), 于是
+                // Set 语句的改写目标被钉成 prop_let_。
+                //   实测 ComCtlsDemo CoolBar.ctl:2010
+                //     Friend Property Let FBandChild(ByVal ID As Long, ByVal Value As Object)
+                //       Set Me.FBandChild(ID) = Value      ' ← 本意是调 Property Set
+                //     Friend Property Set FBandChild(...)  ' ← 真实实现
+                //   ⇒ 发成 vb6_CoolBar_prop_let_FBandChild(me, ID, Value) —— 调回自己,
+                //     无限递归 → 栈溢出 0xC00000FD (点 Command2 即退出)。
+                // 判据与下方 Fix rev9 / Fix 268 同一把尺: 该类在该**写方向**确有访问器时,
+                // 无条件用对应动词。查不到 (类名取不到 / 成员名经 cIdent 变形 / 该类只有
+                // 另一个方向的访问器) 才退回上面那一行 —— 与改前逐字等价。
+                // 只动 isSet 这一侧: Let 语句的动词沿用旧行为, 不新增回归面。
+                if (isSet && newVerbs == "prop_let_" && prefix.rfind("vb6_", 0) == 0
+                    && !afterPg.empty() && afterPg.find('(') == std::string::npos) {
+                    std::string cls270 = prefix.substr(4);   // 去 "vb6_" → "cXx_"
+                    if (!cls270.empty() && cls270.back() == '_') cls270.pop_back();
+                    std::vector<ParameterInfo> sig270;
+                    if (!cls270.empty()
+                        && findClassMemberWriteParams(cls270, afterPg, /*isSet=*/true,
+                                                      sig270)
+                        && !sig270.empty()) {
+                        newVerbs = "prop_set_";
+                    }
+                }
                 // Fix <vbeclipse> rev9: **Property Set 的值槽是 ByRef 对象/类形参**
                 // (C 侧 `void**` / `vb6_cls_X**`) 时, 值实参必须交付**槽地址**,
                 // 不能交付对象指针本身。
@@ -425,7 +444,22 @@ bool CCodeGen::tryRewriteCOMLvalue(const std::string& target, const std::string&
                             lastP90w = &letParams90w.back();
                         }
                     }
-                    if (lastP90w && lastP90w->type == Vb6Type::Variant) {
+                    // Fix 251: 末形参槽在 C 侧是**类实例指针**时不装箱。
+                    //   `Property Let SelectedItem(ByVal Value As ImcComboItem)`
+                    //   (ImageCombo.ctl:2087) / `Property Let Group(ByVal Value As LvwGroup)`
+                    //   (LvwListItem.cls:343) 这类"对象型的 Property Let", 符号层把
+                    //   `As <类>` 折成 Vb6Type::Variant (类名只在 typeRefName 里),
+                    //   于是这里按 Variant 槽装箱 ⇒ vb6_VariantFromValue(类指针) /
+                    //   vb6_VariantFromValue(NULL) ⇒ C2440 "无法从 vb6_VARIANT 转换为
+                    //   vb6_cls_X *"。
+                    //     实测 ComCtlsDemo: ImageCombo.c:2317 (ImcComboItem*)、
+                    //     LvwListItem.c:501 (LvwGroup*)、MainForm.c:1975
+                    //     (TvwNode*, 源 `TreeView1.InsertMark = Nothing` ⇒ NULL)。
+                    //   判据与定义侧同一份映射 (cParamClassPtrType), 不另立尺。
+                    //   不装箱后落到下面的 Fix 156-B 分支: 该分支只在 RHS **是**
+                    //   Variant 表达式时才提取, 类指针/NULL 一概原样交付 —— 正是要的。
+                    if (lastP90w && lastP90w->type == Vb6Type::Variant
+                        && cParamClassPtrType(*lastP90w).empty()) {
                         valArg = packLetValueArg(*lastP90w, valueExpr, value);
                     } else if (lastP90w && writeDirResolved90w
                                && lastP90w->type != Vb6Type::Empty) {
@@ -512,6 +546,29 @@ bool CCodeGen::tryRewriteCOMLvalue(const std::string& target, const std::string&
                             //   VBFlexGrid.c:58027 prop_let_EditText(me, double) C2440.
                             valArg = wrapToBSTR(value, *valueExpr);
                         }
+                    }
+                }
+                // Fix 268: **Set** 方向的同一格。上面那段找写方向形参表的块被
+                // `!isSet` 挡在门外, 于是 `Set X.Prop = <对象>` 的值实参从不装箱 ——
+                // 而 `Property Set Prop(ByVal Value As Variant)` 的 C 形参是 vb6_VARIANT
+                // ⇒ C2440 "无法从 int 转换为 vb6_VARIANT"。
+                //   实测 ComCtlsDemo PagerForm.frm:49 `Set ToolBar1.ImageList = MainForm.ImageList1`
+                //   (ToolBar.ctl:1728 `Property Set ImageList(ByVal Value As Variant)`,
+                //    PagerForm.c:187)。同工程 VirtualControlsForm.c:221 是同形的
+                //   `Set ListView1.SmallIcons = MainForm.ImageList1`, 走的是**另一条**
+                //   码头, 交的是 `vb6_VariantFromValue(vb6_form_ctrl_MainForm_ImageList1())`。
+                // 只在末形参确为 Variant 槽 (且不是类实例槽, 同 Fix 251/264 口径) 时装箱。
+                if (isSet && prefix.rfind("vb6_", 0) == 0 && !afterPg.empty()
+                    && afterPg.find('(') == std::string::npos
+                    && newVerbs.find("prop_get_") == std::string::npos) {
+                    std::string cls268 = prefix.substr(4);
+                    if (!cls268.empty() && cls268.back() == '_') cls268.pop_back();
+                    std::vector<ParameterInfo> setP268;
+                    if (findClassMemberWriteParams(cls268, afterPg, true, setP268)
+                        && !setP268.empty()
+                        && setP268.back().type == Vb6Type::Variant
+                        && cParamClassPtrType(setP268.back()).empty()) {
+                        valArg = packLetValueArg(setP268.back(), valueExpr, value);
                     }
                 }
                 // Fix 090ad: 只写属性 (无 Get, 如 Dictionary.key(OldKey)=NewKey) 的 LHS
@@ -631,7 +688,43 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
         // 对象地址, 同时兼容非常量左值实参 (常量 (-1)、函数返回值
         // vb6_BSTR_FromStr(L"/")、prop_get_xxx()). 未列出的类型 (Object/UDT/
         // 数组/Date/Currency) 保持原样, 不改变既有行为.
-        if (lastP.isByVal) return val;
+        // Fix 249: **按值具体类型形参 ← Variant 实参 → 解箱**。VB6 在这一步做隐式
+        //   转换, C 侧原样把整只 `vb6_VARIANT` 递进 BSTR/int16_t/float 形参 ⇒ C2440。
+        //   实测 ComCtlsDemo RichTextBoxForm.frm:
+        //     With CommonDialog1
+        //         .FontName = RichTextBox1.SelFontName
+        //         .FontBold = RichTextBox1.SelBold
+        //         .FontSize = RichTextBox1.SelFontSize
+        //     End With
+        //   而 RichTextBox.ctl:2802/3097/3140 这三个属性声明都是
+        //   `Property Get …() As Variant` ⇒ 生成的 C 返回 vb6_VARIANT ⇒
+        //   vb6_CommonDialog_prop_let_FontName(_vb6_with_6, vb6_RichTextBox_prop_get_SelFontName(x))
+        //   ⇒ C2440 vb6_VARIANT→BSTR / →int16_t / →float (RichTextBoxForm.c 400/405/410/
+        //   417/422/429/436/443 共 8 条)。
+        //   解箱档位与 cgen_expr_call_arg_variant.inc 的 Fix 092q/090r/049b 同口径
+        //   (Long 档含 Integer/Byte/Boolean, Double 档含 Single/Date/Currency)。
+        if (lastP.isByVal) {
+            if (!cExprIsVariant(val)) return val;
+            switch (lastP.type) {
+                case Vb6Type::String:
+                    return "vb6_VariantToString(" + val + ")";
+                case Vb6Type::Integer:
+                case Vb6Type::Boolean:
+                    return "(int16_t)vb6_VariantToLong(" + val + ")";
+                case Vb6Type::Long:
+                    return "vb6_VariantToLong(" + val + ")";
+                case Vb6Type::Byte:
+                    return "(uint8_t)vb6_VariantToLong(" + val + ")";
+                case Vb6Type::Single:
+                    return "(float)vb6_VariantToDouble(" + val + ")";
+                case Vb6Type::Double:
+                case Vb6Type::Date:
+                case Vb6Type::Currency:
+                    return "vb6_VariantToDouble(" + val + ")";
+                default:
+                    return val;
+            }
+        }
         switch (lastP.type) {
             case Vb6Type::String:
                 if (valueExpr && cExprIsVariant(val)) {
@@ -678,6 +771,11 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
             return "(&(vb6_VARIANT){.vt=VT_BOOL, .boolVal=(int16_t)(" + val + ")})";
         default:
             // 与 M22 default 分支对齐: 变体表达式提取 BSTR, 其余未知按 BSTR 兜底
+            // 账 #305 §B171 (第六十二刀): 可寻址的那一档先走 —— 实参本身就是一枚类里的
+            //   Variant 槽时交**槽的地址** (VB6 的 ByRef 语义, 与 cgen_expr_call_arg_emit.inc
+            //   的 UDT 槽那一格同一条)。次序反了就会掉进下面那条 vb6_VariantToString:
+            //   串值照样对, 但数值槽被静默压成串、回写整个丢 (实测读数在台账)。
+            if (cExprIsVariantSlotFieldRead(val)) return "&(" + val + ")";
             if (cExprIsVariant(val)) {
                 return "(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString("
                        + val + ")})";

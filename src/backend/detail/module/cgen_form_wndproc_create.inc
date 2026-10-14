@@ -16,6 +16,10 @@
     c_.indent();
     c_.emitLine("PAINTSTRUCT _vb6_ps;");
     c_.emitLine("HDC _vb6_hdc = BeginPaint(hwnd, &_vb6_ps);");
+    // Fix <vbeclipse> 2026-10-07: AutoRedraw=True 的窗体, GDI 合成 (Form.hdc) 全部落进
+    // 记忆 DC, WM_PAINT 必须先把记忆位图刷上屏 (VB6 语义; 3DMenu 每 10ms 旋转合成一次
+    // Me.hdc, 缺这步画面恒为零)。非 AutoRedraw 窗体无 ARDC, helper 直接 no-op。
+    c_.emitLine("vb6_FormPaintBlitAutoRedraw((void*)hwnd, (void*)_vb6_hdc);  /* Fix <vbeclipse>: AutoRedraw 记忆 DC 上屏 */");
     if (std::getenv("C3_OCX_NO_PAINT") == nullptr) {
         c_.emitLine("vb6_OcxHost_PaintAll((void*)hwnd, (void*)_vb6_hdc);  /* Fix 143d: 无窗口/窗口化 OCX 绘制 */");
     }
@@ -42,7 +46,20 @@
     c_.indent();
     c_.emitLine("CREATESTRUCTA* cs = (CREATESTRUCTA*)lParam;");
     c_.emitLine(createFn + "((void*)hwnd, (void*)cs->hInstance);");
-    c_.emitLine("vb6_Forms_Register((void*)hwnd);");
+    // 账 #257: 登记窗体时把 VB 模块名一起交进去。窗体自身的 `.Name` 以前两条读法都答
+    // 空串（这一处恒传 NULL 登记），于是 Charts 排版器那句
+    // `If oCtrl.Container.Name = oForm.Name` 是「空 = 空」的真空通过 —— 现在两边都是数。
+    c_.emitLine("vb6_Forms_Register((void*)hwnd, \"" + formName + "\");");
+
+    // Fix <vbeclipse> 2026-10-07: 窗体设计期 AutoRedraw=True 时, WM_CREATE 就建记忆 DC
+    // (vb6_SetAutoRedraw 按当前客户区建 VB6_AutoRedrawDC), 之后 `.hdc` 合成才落进记忆
+    // 位图、WM_PAINT 才会镜像上屏 (VB6 语义)。必须赶在下面 P24 的 bgpic → ARDC 那步之前。
+    {
+        auto arFrmIt = frmDesc.formControl.properties.find("AutoRedraw");
+        if (arFrmIt != frmDesc.formControl.properties.end() && arFrmIt->second.intValue != 0) {
+            c_.emitLine("vb6_SetAutoRedraw((void*)hwnd, -1);  /* design AutoRedraw */");
+        }
+    }
 
     // P24: Form.Icon from .frx - load and set window icon
     // Fix 161f: 判定用 prelude 算好的 formIconHasData_ (readPicture 非空),
@@ -57,7 +74,19 @@
     if (formPicHasData_) {
         std::string varName = "vb6_frx_bgpic_" + cIdent(formName);
         c_.emitLine("{ void* vb6_bgpic = vb6_LoadPictureFromMemory(" + varName + ", " + varName + "_size);");
-        c_.emitLine("  if (vb6_bgpic) SetPropW(hwnd, L\"VB6_Picture\", (HANDLE)vb6_bgpic); }");
+        c_.emitLine("  if (vb6_bgpic) SetPropW(hwnd, L\"VB6_Picture\", (HANDLE)vb6_bgpic);");
+        // Fix <vbeclipse> 2026-10-07: AutoRedraw 窗体的背景 .Picture 也要进记忆 DC
+        // (VB6: 窗体 .Picture 初始就画进 AR 位图, WM_PAINT 镜像后可见)。位图判定与
+        // WM_ERASEBKGND 那条同口径 (GetObjectType==OBJ_BITMAP)。
+        c_.emitLine("  { HDC vb6_ard = (HDC)GetPropW(hwnd, L\"VB6_AutoRedrawDC\");");
+        c_.emitLine("    if (vb6_ard && vb6_bgpic && GetObjectType((HGDIOBJ)vb6_bgpic) == OBJ_BITMAP) {");
+        c_.emitLine("      BITMAP vb6_bmBg; GetObjectW((HBITMAP)vb6_bgpic, sizeof(vb6_bmBg), &vb6_bmBg);");
+        c_.emitLine("      HDC vb6_mcBg = CreateCompatibleDC(vb6_ard);");
+        c_.emitLine("      HBITMAP vb6_obBg = (HBITMAP)SelectObject(vb6_mcBg, (HBITMAP)vb6_bgpic);");
+        c_.emitLine("      BitBlt(vb6_ard, 0, 0, vb6_bmBg.bmWidth, vb6_bmBg.bmHeight, vb6_mcBg, 0, 0, SRCCOPY);");
+        c_.emitLine("      SelectObject(vb6_mcBg, vb6_obBg); DeleteDC(vb6_mcBg);");
+        c_.emitLine("    } }");
+        c_.emitLine("}");
     }
 
     // P20-40: 从.frm属性初始化Form属性
@@ -85,6 +114,22 @@
         // 账 #197: 窗体自己那一档走同一个出口 —— `ScaleMode = 3  'Pixel` 的窗体里控件几何、
         // ScaleWidth、文字量纲全按这一档折算，以前恒答缇 (实测 czUI-main/frmDemo.frm:10)。
         emitDesignerScaleModeProp(frmDesc.formControl, "hwnd");
+    }
+
+    // Fix <c3-form-backcolor>: 窗体自身设计期 BackColor —— 此前两条创建路都不发到
+    // 窗体 HWND 上 (只借 RegisterFormClassBg 做类背景刷, 但系统色被 `>= 0` 哨兵吞掉,
+    // 见 cgen_form_show.inc). 把属性显式 Set 到窗体句柄, 与控件级 Fix 187 同口径:
+    //   · Form.BackColor 可查 (vb6_GetControlBackColor(formHwnd) 不再恒答 BTNFACE);
+    //   · 子控件未显式设色的, 经 vb6_GetControlBackColor(parent) 继承到表单真实底色;
+    //   · 系统色 (&H800000xx, 高位置位→负) 原样下传, RTL 读取侧按 GetSysColor 翻译.
+    {
+        auto fbcIt = frmDesc.formControl.properties.find("BackColor");
+        if (fbcIt != frmDesc.formControl.properties.end()
+            && fbcIt->second.type == FrmValueType::Integer) {
+            c_.emitLine("vb6_SetControlBackColor((void*)hwnd, "
+                        + std::to_string((int)(unsigned int)fbcIt->second.intValue)
+                        + ");  /* design Form.BackColor */");
+        }
     }
 
     // M22-fix: 在Form_Load之前先赋值vb6_hwnd_<Form>，这样Form_Load中
@@ -136,6 +181,12 @@
         if (picIt != frmDesc.formControl.properties.end() && picIt->second.type == FrmValueType::FrxReference && frxLoaded) {
             c_.emitLine("case WM_ERASEBKGND: {");
             c_.indent();
+            // Fix <vbeclipse> 2026-10-07: AutoRedraw 窗体不改页面 — 记忆 DC 是唯一真相,
+            // 擦除填充 (BTNFACE) 会在下一次镜像前把合成内容盖白 (3DMenu 50ms 刷一次
+            // Refresh 正是这个擦除主导了空白画面)。VB6: AutoRedraw 窗体不做背景擦除。
+            // Fix <c3-menu3d>: 必须直接 return 1 —— break 会落进 DefWindowProc 用类刷
+            // 把整幅客户区擦一遍再被 ARDC blit 盖掉 = 每帧一闪。
+            c_.emitLine("if (GetPropW(hwnd, L\"VB6_AutoRedrawDC\")) return 1;");
             c_.emitLine("HANDLE vb6_bg = GetPropW(hwnd, L\"VB6_Picture\");");
             c_.emitLine("if (vb6_bg && GetObjectType((HGDIOBJ)vb6_bg) == OBJ_BITMAP) {");
             c_.indent();
@@ -164,10 +215,17 @@
     // (Test.exe "颜色没有写入到颜色对话左边的控件里")。RTL 统一入口
     // vb6_ApplyCtlColorStatic 仅在子控件显式 Set 过 VB6_BackColor 时接管,
     // 其余情形 break 到 DefWindowProcW 维持原生外观。
+    //
+    // Fix <c3-menu3d-labelbg>: 进这道门还要多一条 —— `VB6_BackStyle0`
+    // (Label.BackStyle=0 Transparent, 见 emitDesignerStyleProps)。这种 Label **必然
+    // 没有** BackColor (VB6 里 BackStyle=0 时 BackColor 不参与绘制, 设计期也就不写),
+    // 所以只按 VB6_BackColorSet 放行的话它永远进不来, 一路 break 到 DefWindowProcW,
+    // STATIC 的类背景刷 (COLOR_WINDOW = 纯白) 把整块控件矩形刷一遍 —— 3DMenu 的
+    // Label3 (241x33, 无 Caption) 就在窗体左下角留下一块白方块。
     c_.emitLine("case WM_CTLCOLORSTATIC: {");
     c_.indent();
     c_.emitLine("HWND vb6_clrchld = (HWND)lParam;");
-    c_.emitLine("if (vb6_clrchld && GetPropW(vb6_clrchld, L\"VB6_BackColorSet\")) {");
+    c_.emitLine("if (vb6_clrchld && (GetPropW(vb6_clrchld, L\"VB6_BackColorSet\") || GetPropW(vb6_clrchld, L\"VB6_BackStyle0\"))) {");
     c_.indent();
     c_.emitLine("LRESULT vb6_br187 = vb6_ApplyCtlColorStatic((HDC)wParam, vb6_clrchld);");
     c_.emitLine("if (vb6_br187) return vb6_br187;");
@@ -304,11 +362,41 @@
             // WM_COMMAND/1815（0x0717，SDK 头里没有这枚码）；裸码读数 .build\rtdmin_out\tr_*.txt。
             // 两条 arm 都接上，事件才谈得上"会来"；一条事件双发会让计数变 2 当场翻红，所以
             // 双发不可能被这两条 arm 一起放过。判据用 vb6_RTB_SimNotify 各钉一条。
-            if (symTab_.lookup(ctrl.controlName + "_SelChange")) {
+            if (auto* rtbSelSym258 = symTab_.lookup(ctrl.controlName + "_SelChange")) {
                 std::string rtbSelFn = eventHandlerFn(ctrl.controlName, "_SelChange");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 1815) {");
                 c_.indent();
-                c_.emitLine("{ extern void " + rtbSelFn + "(); " + rtbSelFn + "(); }");
+                // Fix 258: 实参个数按**处理器自己的形参表**交。
+                // 事件声明 (RichTextBox.ctl:332) 是三个 ByVal
+                //   (ByVal SelType As Integer, ByVal SelStart As Long, ByVal SelEnd As Long),
+                // 而 VB6 允许处理器**一个形参都不写** (夹具 tests/ctrlrichtextbox/RtfForm.frm:560
+                // 的 `Private Sub rt3_SelChange()` 就是这一形, 且它一直是既有针的形状)。
+                // 所以这里不能照事件写死 3 个 —— 以前一律 0 个, 于是 ComCtlsDemo 那枚
+                // 真正声明了 3 个形参的处理器就吃 C2198 ×2 (RichTextBoxForm.c 88/97)。
+                // 零参那一形逐字发回原形状 (夹具的 EMITC-SHAPE 针原样成立)。
+                // 选区从 RTL 取 (vb6_RTB_GetSelStart/GetSelLength, 与 .SelStart 属性同源);
+                // SelType 交 0 (原生 EN_SELCHANGE 的 seltyp 在 C 侧没有出口, VB6 常规取值即 0)。
+                const size_t nSel258 = rtbSelSym258->params.size();
+                const std::string rtbHwnd258 = isArrayCtrl
+                    ? ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", 0)")
+                    : ("vb6_hwnd_" + cIdent(ctrl.controlName));
+                if (nSel258 == 0) {
+                    c_.emitLine("{ extern void " + rtbSelFn + "(); " + rtbSelFn + "(); }");
+                } else {
+                    std::string selArgs258 = "(int16_t)0";
+                    std::string selPre258;
+                    if (nSel258 >= 2) {
+                        selPre258 = "int32_t vb6_rtbSelS258 = vb6_RTB_GetSelStart((void*)"
+                                     + rtbHwnd258 + "); ";
+                        selArgs258 += ", vb6_rtbSelS258";
+                    }
+                    if (nSel258 >= 3) {
+                        selArgs258 += ", (int32_t)(vb6_rtbSelS258 + vb6_RTB_GetSelLength((void*)"
+                                      + rtbHwnd258 + "))";
+                    }
+                    c_.emitLine("{ extern void " + rtbSelFn + "(); " + selPre258
+                                + rtbSelFn + "(" + selArgs258 + "); }");
+                }
                 c_.dedent();
                 c_.emitLine("}");
             }

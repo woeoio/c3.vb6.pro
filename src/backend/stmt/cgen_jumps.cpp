@@ -28,6 +28,20 @@ void CCodeGen::visit(GoToStmt& node) {
 }
 
 void CCodeGen::visit(OnErrorStmt& node) {
+    // 账 #271: **Err 的清空点只挂在 `On Error Resume Next` 与 `On Error GoTo label`
+    // 上, 不挂 `On Error GoTo 0`** —— 这是被两处实测夹出来的唯一解:
+    //   ① tests/test_bstr_concat_scalar.bas 照 native VB6 定的口径是
+    //        On Error Resume Next / Err.Raise 5 / On Error GoTo 0 / "a=" & Err.Number
+    //      VB6 交 "a=5" ⇒ **`On Error GoTo 0` 不清 Err** (这也与 VBA 那条众所周知的
+    //      提醒一致: GoTo 0 只关闸, 要清得自己 Err.Clear)。整刀清空会让它交 "a=0",
+    //      GA run 38442708160 的 test_bstr_concat_scalar 就是这么红的。
+    //   ② ComCtlsDemo 启动那个未处理错误 380 (CoolBar.ctl:3173 ControlIsValid)
+    //        On Error Resume Next: Set Container = Control.Container
+    //        ControlIsValid = CBool(Err.Number = 0 And ...)
+    //      要求进 ControlIsValid 时 Err 已被清 —— 它上面那一句正是 `On Error Resume Next`。
+    //      不清则读到上一层 `Value.hWndUserControl` 留下的错误号 ⇒ 恒 False ⇒ 380。
+    // 于是: ResumeNext / GoToLabel 清, GoToZero 不动。清空放在**最前**, 语句自身的
+    // 副作用 (GoToLabel 的 setjmp 登记) 不依赖 Err。
     switch (node.errorKind) {
         case OnErrorKind::GoToLabel: {
             // On Error GoTo label
@@ -37,6 +51,7 @@ void CCodeGen::visit(OnErrorStmt& node) {
             //       goto vb6_label_ErrorHandler;
             //   }
             //   vb6_err_jmp_active = 1;
+            c_.emitLine("vb6_ErrClear();  /* On Error: 见 visit(OnErrorStmt) 顶注 */");
             c_.emitLine("if (setjmp(vb6_local_err_jmp) != 0) {");
             c_.indent();
             if (hasResume_) {
@@ -61,6 +76,7 @@ void CCodeGen::visit(OnErrorStmt& node) {
         }
         case OnErrorKind::ResumeNext: {
             // On Error Resume Next
+            c_.emitLine("vb6_ErrClear();  /* On Error: 见 visit(OnErrorStmt) 顶注 */");
             c_.emitLine("vb6_err_resume_next = 1;");
             break;
         }

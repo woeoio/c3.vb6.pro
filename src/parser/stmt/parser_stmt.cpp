@@ -312,7 +312,7 @@ StmtPtr Parser::parseForOrForEach() {
 
 StmtList Parser::parseBlock(TokenKind endKind1, TokenKind endKind2) {
     StmtList stmts;
-    skipNewLines();
+    skipStatementSeparators();
 
     while (cur_.kind != TokenKind::EndOfFile &&
            cur_.kind != endKind1 &&
@@ -330,7 +330,7 @@ StmtList Parser::parseBlock(TokenKind endKind1, TokenKind endKind2) {
 // --- parseBlockUntil replacement content ---
 StmtList Parser::parseBlockUntil(std::initializer_list<TokenKind> endKinds) {
     StmtList stmts;
-    skipNewLines();
+    skipStatementSeparators();
 
     while (cur_.kind != TokenKind::EndOfFile) {
         bool isEndOfBlock = false;
@@ -348,6 +348,25 @@ StmtList Parser::parseBlockUntil(std::initializer_list<TokenKind> endKinds) {
             }
         }
         if (isEndOfBlock) return stmts;
+
+        // Fix 231: `Next var1, var2, ...` 一条 Next 关多层嵌套 For (内层在前) ——
+        // 那个**唯一的** Next token 由最内层消费, 逗号后其余变量排进
+        // pendingNextVars_ 当"各外层的合成 Next"用 (见 consumeNextClause)。
+        // 但每个外层的 body 也是 parseBlockUntil({Next}) 收的: 它只认 token,
+        // 不知道那一条 Next 已经把自己也关掉了, 于是继续往下啃过 `Next iRow, iCol`
+        // 一直吃到过程末尾的 End Sub —— 级联成一整片 VB2001..VB2006。
+        // 实测: tests/VBFlexGridDemo/Builds/VBFlexGrid/VBFlexGrid.ctl:6783
+        //   For iCol = 0 To (UBoundFields - LBoundFields): For iRow = LBoundRows To UBoundRows
+        //   ...
+        //   Next iRow, iCol
+        // 冒号不再由 parseForStmt 自己处理 (它只是通用语句分隔符), 所以这条契约
+        // 必须由**等 Next 的那一侧**自己守: pendingNextVars_ 非空就是"有一条合成
+        // Next 在等着某个外层"的证据 —— 本层 body 到此为止, 交给 consumeNextClause 弹。
+        if (!pendingNextVars_.empty()) {
+            for (auto k : endKinds) {
+                if (k == TokenKind::Next) return stmts;
+            }
+        }
 
         auto stmt = parseStatement();
         if (stmt) {

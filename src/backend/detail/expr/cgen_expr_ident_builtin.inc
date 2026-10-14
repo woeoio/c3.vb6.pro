@@ -211,23 +211,32 @@
     // `Controls` → C2065 (ucTabStrip.c For Each l_Ctrl In Controls)。
     // 成员访问形态 (Controls.Item/Add/Remove) 由 cgen_expr_member_precheck.inc 在
     // 符号解析前拦截, 不受影响。
-    const bool reservedHostObj = (lower == "controls");
+    // 账 #278 §B105: "哪个名字是保留的宿主集合 / 它由哪条码头回答"不再写在这里 ——
+    // 问那张表 (kHostPseudoRows 的 HPF_CHANNEL 行)，语义层的放行问的也是同一句。
+    std::string hostDock;
+    const bool reservedHostChannel =
+        hostPseudoChannel(isPropertyPageDesigner_ ? "PropertyPage" : "UserControl", lower, hostDock);
+    // Fix 221: 裸 `Extender` 与 CHANNEL 同档保留 —— 但它不是表里的 HPF_CHANNEL:
+    // RTL 实体是一枚**结构体** vb6_UserControl_Extender (DataChanged 是 Fix 221 补的
+    // 第三个字段), 取地址即对象指针, 不是 <dock>() 那种函数调用形态, 故单独一支。
+    // Pager.ctl:481 `Set ControlsExtender = Extender` / FontCombo.ctl 的
+    // `ControlEnum == Extender` 走这里; 不保留就落"发射裸标识符"兜底 ⇒ C2065。
+    const bool reservedHostObj = reservedHostChannel || (lower == "extender");
     if (isDesignerModule_ && !knownLocalVars_.count(lower)
         && (!sym || reservedHostObj)) {
-        // Fix <vbeclipse> rev14: 裸 `Controls` 是 UserControl.Controls 集合, 必须发射
-        // 真实的集合单例 vb6_UC_Controls() (RTL 已按当前 UC 实例回落 formHwnd), 而不是
-        // 宿主伪对象前缀 vb6_UserControl_Controls (恒 NULL 的空桩)。ucTabStrip.ctl 的
-        // `For Each l_Ctrl In Controls` 走的正是这条裸标识符通路 —— 用 NULL 会让枚举
-        // 得到空集, 而 Add/Item 返回 NULL → 后续解引用崩溃。
-        if (lower == "controls") {
-            lastExpr_ = "vb6_UC_Controls()";
+        if (reservedHostChannel) {
+            lastExpr_ = hostDock + "()";
+            return;
+        }
+        if (lower == "extender") {
+            lastExpr_ = "(&vb6_UserControl_Extender)";
             return;
         }
         std::string rtlHp;
-        if (hostPseudoBareName(isPropertyPageDesigner_ ? "PropertyPage" : "UserControl",
-                               lower, rtlHp)) {
-            lastExpr_ = (isPropertyPageDesigner_ ? "vb6_PropertyPage_" : "vb6_UserControl_")
-                        + rtlHp;
+        const std::string hostObjHp = isPropertyPageDesigner_ ? "PropertyPage" : "UserControl";
+        if (hostPseudoBareName(hostObjHp, lower, rtlHp)) {
+            // 账 #278 §B120: 装配交回唯一出口 (对象那一段与成员那一段都出自那张表)。
+            lastExpr_ = hostPseudoRtlSymbol(hostObjHp, lower);
             return;
         }
     }
@@ -241,7 +250,9 @@
     // 而这一对不是伪成员；.ctl 里裸写那一形仍由表里 UC 那两行负责，走到上面就 return 了。
     if ((isFormModule_ || isPropertyPageDesigner_)
         && (lower == "scalex" || lower == "scaley")) {
-        lastExpr_ = (lower == "scalex") ? "vb6_ScaleUnitX" : "vb6_ScaleUnitY";
+        // 账 #278 §B72: 名字交回表 —— 这一形站在窗体/属性页自己的接收者上，问 Form 那一行；
+        // 实参由调用点原样递（三形，表里同一行给了个数）。
+        lastExpr_ = controlScaleMethod(FrmControlType::Form, lower);
         return;
     }
 

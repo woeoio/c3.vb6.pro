@@ -22,17 +22,14 @@
     }
     if (_wcsicmp(name, L"Visible") == 0) { ShowWindow((HWND)obj, vb6_ho_variantToLong(v) ? SW_SHOW : SW_HIDE); return 1; }
     if (_wcsicmp(name, L"Enabled") == 0) { EnableWindow((HWND)obj, vb6_ho_variantToLong(v) ? TRUE : FALSE); return 1; }
-    if (_wcsicmp(name, L"Left") == 0 || _wcsicmp(name, L"Top") == 0 ||
-        _wcsicmp(name, L"Width") == 0 || _wcsicmp(name, L"Height") == 0) {
-        int32_t l = 0, t = 0, w = 0, hh = 0;
-        vb6_ho_ctrlRect(obj, &l, &t, &w, &hh);
-        if (_wcsicmp(name, L"Left") == 0)   l = vb6_ho_variantToLong(v);
-        if (_wcsicmp(name, L"Top") == 0)    t = vb6_ho_variantToLong(v);
-        if (_wcsicmp(name, L"Width") == 0)  w = vb6_ho_variantToLong(v);
-        if (_wcsicmp(name, L"Height") == 0) hh = vb6_ho_variantToLong(v);
-        MoveWindow((HWND)obj, vb6_TwipToX(l), vb6_TwipToY(t), vb6_TwipToX(w), vb6_TwipToY(hh), TRUE);
-        return 1;
-    }
+    // 账 #247: 与读侧同一个出口 —— 四档各写自己那一档 (单位 = 所在容器的 ScaleMode,
+    // 并把写进去的数存进 VB 侧读数缓存)。以前这一支把四档一起读成缇、再整体 MoveWindow:
+    // 写 .Left 会把 Top/Width/Height 也按缇重算一遍推回窗口, 而且谁都不存, 于是同一句
+    // `对象.Width = 7222` 走这里读回 7215, 走发码读回 7222。
+    if (_wcsicmp(name, L"Left") == 0)   { vb6_SetControlLeft(obj, vb6_ho_variantToLong(v)); return 1; }
+    if (_wcsicmp(name, L"Top") == 0)    { vb6_SetControlTop(obj, vb6_ho_variantToLong(v)); return 1; }
+    if (_wcsicmp(name, L"Width") == 0)  { vb6_SetControlWidth(obj, vb6_ho_variantToLong(v)); return 1; }
+    if (_wcsicmp(name, L"Height") == 0) { vb6_SetControlHeight(obj, vb6_ho_variantToLong(v)); return 1; }
     // Fix <vbeclipse> rev18: 内建成员都没命中 → 写**本 UserControl 的自有 Property**
     // (ucFolder.LeftPos = … 这类)。注意必须放在内建档之后: `Visible`/`Caption` 等同名
     // 内建属性仍是窗口层语义。

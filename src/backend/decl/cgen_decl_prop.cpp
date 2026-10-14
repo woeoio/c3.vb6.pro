@@ -11,6 +11,7 @@ namespace vb6c3 {
 
 
 void CCodeGen::visit(PropertyDecl& node) {
+    bumpInferEpoch();   // ai/030 续: 过程入口推推断缓存 epoch (形参/局部表在这里重建)
     // 泛型模板 (tB, G2/G3): 模板本体不发码 (泛型器注入特化副本)
     if (!node.typeParams.empty()) return;
     // Property Get/Let/Set → C函数
@@ -54,6 +55,7 @@ void CCodeGen::visit(PropertyDecl& node) {
     knownBoolVars_.clear();     // ai/022 W1
     knownByteVars_.clear();     // 账 #123
     knownIntVars_.clear();       // ai/009 5.10
+    knownNarrowIntVars_.clear(); // ai/032: SByte/UInteger/ULong/ULongLong 专属表
     knownLongVars_.clear();
     knownLongPtrVars_.clear();  // Bug #2 fix: 也清空LongPtr集合
     knownVariantVars_.clear();
@@ -84,6 +86,8 @@ void CCodeGen::visit(PropertyDecl& node) {
     if (isClassModule_) knownClassVars_["me"] = moduleName_;
     // P6.11: 恢复类模块成员变量类型 (clear后从持久化集合恢复)
     knownBstrVars_.insert(classBstrMembers_.begin(), classBstrMembers_.end());
+    // 账 #118: 同 cgen_decl_func.cpp —— 模块级定长串跨过程恢复。
+    knownFixedStringLen_.insert(moduleFixedStringLen_.begin(), moduleFixedStringLen_.end());
     knownDoubleVars_.insert(classDoubleMembers_.begin(), classDoubleMembers_.end());
     knownLongVars_.insert(classLongMembers_.begin(), classLongMembers_.end());
     // Fix 010n: 恢复类模块UDT成员变量 (knownUdtVars_被clear后需要从classUdtMembers_恢复)
@@ -172,6 +176,8 @@ void CCodeGen::visit(PropertyDecl& node) {
                 // inferExprType 先判 Byte 那张表, 所以这里进 knownLongVars_ 不会把它读成 Long。
                 if (paramType == Vb6Type::Byte) knownByteVars_.insert(pLower);
             }
+            // ai/032: SByte/UInteger/ULong/ULongLong 形参走专属表 (口径同账 #123 的 Byte)
+            else if (isNarrowIntVbType(paramType)) knownNarrowIntVars_[pLower] = paramType;
             // Bug #2 fix: LongPtr 参数注册到独立集合
             else if (paramType == Vb6Type::LongPtr || paramType == Vb6Type::LongLong) knownLongPtrVars_.insert(pLower);   // Fix 084m
             // Fix 035: Variant 参数也要注册, 否则 `(*X) = concrete` 赋值不会触发
@@ -282,7 +288,19 @@ void CCodeGen::visit(PropertyDecl& node) {
             if (retVb6Type == Vb6Type::String) knownBstrVars_.insert(retLower);
             else if (retVb6Type == Vb6Type::Double) knownDoubleVars_.insert(retLower);
             else if (retVb6Type == Vb6Type::Long || retVb6Type == Vb6Type::Integer || retVb6Type == Vb6Type::Boolean) knownLongVars_.insert(retLower);
+            // ai/032: 四档无符号/窄整型返回槽 (口径同 cgen_decl_func.cpp 那处)
+            else if (isNarrowIntVbType(retVb6Type)) knownNarrowIntVars_[retLower] = retVb6Type;
             else if (retVb6Type == Vb6Type::Variant) knownVariantVars_.insert(retLower);
+            // 账 #118 ①: 定长串返回类型 (`Property Get P() As String * 5`) —— 与
+            // cgen_decl_func.cpp 那处同款同口径 (两处都得记, 漏一处就少一种落点)。
+            // 长度表在**这个 if (node.returnType) 块内**才拿得到 returnType。
+            if (node.returnType->kind == ASTNodeKind::FixedStringTypeRef) {
+                emitExpr(*static_cast<FixedStringTypeRef&>(*node.returnType).length);
+                if (!lastExpr_.empty()) {
+                    knownFixedStringLen_[Symbol::toLower(node.name)] = lastExpr_;
+                    knownFixedStringLen_[retLower] = lastExpr_;
+                }
+            }
         }
     }
 
@@ -337,6 +355,10 @@ void CCodeGen::visit(PropertyDecl& node) {
     }
     ansiTempsToFree_.clear();
     ansiOutParams_.clear();
+
+    // 账 #305 §B166 (第五十六刀): 本次调用现造的 ParamArray 数组在统一出口销毁(口径见那枚出口)。
+    // Exit Sub 那条形同 M22 的 ANSI 临时量, 走不到这一行。
+    emitParamArrayReclaim(node.params);
 
     // tB Interface B05: 接口变量持有引用, 正常出口处经槽 Release
     emitIvrefScopeRelease();

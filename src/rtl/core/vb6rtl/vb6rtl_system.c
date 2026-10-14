@@ -543,10 +543,12 @@ static int g_msgLoopDepth = 0;   // Fix 188: 正在运行的消息循环层数 (
 
 void vb6_Forms_LoopDepth(int delta) { g_msgLoopDepth += delta; }  // Fix 188
 
-void vb6_Forms_Register(void* hwnd_) {
+void vb6_Forms_Register(void* hwnd_, const char* name) {
     if (g_formCount < VB6_MAX_FORMS) { g_formList[g_formCount++] = (HWND)hwnd_; }
-    /* Fix 112: 窗体 HWND 也是宿主对象 (Me.ScaleWidth / Me.Controls / Me.hwnd) */
-    vb6_HostObj_Register(hwnd_, NULL, "Form", 1, -1);
+    /* Fix 112: 窗体 HWND 也是宿主对象 (Me.ScaleWidth / Me.Controls / Me.hwnd)
+       账 #257: 名字一并交进去 —— 以前这里恒传 NULL，于是窗体自己的 `.Name` 两条读法
+       都答空串，排版器那句 `If oCtrl.Container.Name = oForm.Name` 靠「空 = 空」真空通过。 */
+    vb6_HostObj_Register(hwnd_, name, "Form", 1, -1);
 }
 void vb6_Forms_Unregister(void* hwnd_) {
     HWND hwnd = (HWND)hwnd_;

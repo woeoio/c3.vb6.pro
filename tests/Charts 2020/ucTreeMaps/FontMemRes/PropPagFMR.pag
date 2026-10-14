@@ -239,7 +239,7 @@ Private Declare Function AddFontResourceExW Lib "gdi32.dll" (ByVal lpszFilename 
 Private Declare Function RemoveFontResourceExW Lib "gdi32.dll" (ByVal lpFileName As Long, Optional ByVal fl As Long = FR_PRIVATE Or FR_NOT_ENUM, Optional ByVal pdv As Long) As Long
 Private Declare Function AddFontMemResourceEx Lib "gdi32.dll" (ByRef pvoid As Any, ByVal dword As Long, ByRef DESIGNVECTOR, ByRef pDword As Long) As Long
 Private Declare Function RemoveFontMemResourceEx Lib "gdi32.dll" (ByVal fh As Long) As Long
-Private Declare Function VarPtrArray Lib "msvbvm60.dll" Alias "VarPtr" (Ptr() As Any) As Long
+Private Declare Function VarPtrArray Lib "msvbvm60.dll" Alias "VarPtr" (Ptr() As Any) As LongPtr
 Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
 Private Declare Function TextOut Lib "gdi32" Alias "TextOutW" (ByVal hDC As Long, ByVal X As Long, ByVal Y As Long, ByVal lpString As Long, ByVal nCount As Long) As Long
 Private Declare Function SHGetSpecialFolderLocation Lib "shell32" (ByVal hWnd As Long, ByVal nFolder As Long, Pidl As Long) As Long
@@ -303,7 +303,7 @@ End Function
 Private Sub DrawDemo(ByRef bvData() As Byte)
     Dim lngFontCount As Long, hFontMemRes As Long
     Dim sFontName As String, sFile As String, Index As Long, f As Long
-    Const Pangrama = "El veloz murciélago hindú comía feliz cardillo y kiwi. La cigüeña tocaba el saxofón detrás del palenque de paja"
+    Const Pangrama = "El veloz murciï¿½lago hindï¿½ comï¿½a feliz cardillo y kiwi. La cigï¿½eï¿½a tocaba el saxofï¿½n detrï¿½s del palenque de paja"
     hFontMemRes = AddFontMemResourceEx(bvData(0), UBound(bvData) + 1, 0&, lngFontCount)
     
     Picture1.Cls
@@ -725,7 +725,7 @@ Private Function DeleteData(ByVal lIndex As Long) As Boolean
     
 End Function
 
-Private Function IsArrayDim(ByVal lpArray As Long) As Boolean
+Private Function IsArrayDim(ByVal lpArray As LongPtr) As Boolean
     Dim lAddress    As Long
     
     Call CopyMemory(lAddress, ByVal lpArray, &H4)

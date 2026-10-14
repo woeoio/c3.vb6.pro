@@ -222,6 +222,20 @@ void CCodeGen::visit(CallStmt& node) {
                                     // 与 CStr / `&` 拼接同一口径 (同一个值两条路读数不同,
                                     // 正是 ai/022 待拍板 5 的那处不一致)。
                                     c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrBool(" + val + "));");
+                                } else if (inferExprType(*call.positional[j]) == Vb6Type::ULong) {
+                                    // ai/032: Debug.Print u (u As ULong) —— 落到下面的
+                                    // DebugWriteLong((int32_t)(u)) 会把 &HFFFFFFFF 打成 -1。
+                                    // 与 CStr(u) 走同一条无符号格式化, 一个值两条路读数一致。
+                                    c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrULong(" + val + "));");
+                                } else if (inferExprType(*call.positional[j]) == Vb6Type::ULongLong) {
+                                    // ai/032: 同上, 64 位无符号 (2^32 不能在 32 位处截成 0)。
+                                    c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrULongLong(" + val + "));");
+                                } else if (inferExprType(*call.positional[j]) == Vb6Type::LongLong) {
+                                    // ai/032 rev2: Debug.Print x (x As LongLong) —— 落到下面的
+                                    // DebugWriteLong((int32_t)(x)) 会把 64 位值截成 32 位。
+                                    // 改前 LongLong 局部不在任何 known 表里 (类型答 Variant),
+                                    // 于是这条路也走不到; 登记之后必须补上这一档。
+                                    c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrLongLong(" + val + "));");
                                 } else {
                                     // 整数/布尔值, 用DebugWriteLong输出
                                     c_.emitLine("vb6_DebugWriteLong((int32_t)(" + val + "));");
@@ -270,42 +284,30 @@ void CCodeGen::visit(CallStmt& node) {
             // 走不到 visit(IndexOrCallExpr&), 是在这条语句路径上收尾的。这里必须同样拦一道,
             // 否则掉回 vb6_ComCall(vb6_ComGetObjectProp(...), L"Clear", NULL, 0) 的假 IDispatch。
             // (cgen_expr_call_com_bind.inc 那条管带实参的 Add/Remove, 两条并行, 别只挂一头。)
-            if (imageListNameOfExpr(comObjExpr_) != ""
-                && Symbol::toLower(comMemberName_) == "clear") {
+            // 账 #278 §B72 第十四刀: 认不认与叫什么一起问那张表（表里 (ImageList, clear) 那一行）。
+            std::string fnIl = imageListNameOfExpr(comObjExpr_) != ""
+                ? controlZeroArgMethod(FrmControlType::ImageList,
+                                       Symbol::toLower(comMemberName_))
+                : std::string();
+            if (!fnIl.empty()) {
                 std::string ilSlot = "vb6_com_" + imageListNameOfExpr(comObjExpr_);
                 comObjExpr_.clear();
                 comMemberName_.clear();
-                c_.emitLine("vb6_ImageList_ClearImages((void*)" + ilSlot + ");");
+                c_.emitLine(fnIl + "((void*)" + ilSlot + ");");
                 return;
             }
-            // C29-Data: `Data1.Recordset.Refresh` 等 —— comObjExpr_ 是 vb6_Data_Self( 透传形态
-            // (recordset 走控件属性分支不设裸控件标记, 所以这里认前缀而不是查表)。
-            // 不拦就落 vb6_ComCall(vb6_Data_Self(...), L"Refresh") —— 对 ODBC 状态当 IDispatch 用。
-            if (comObjExpr_.find("vb6_Data_Self(") == 0) {
-                std::string dhD = dataSelfHwndExpr(comObjExpr_);
-                std::string mD = Symbol::toLower(comMemberName_);
-                if (!dhD.empty()) {
-                    std::string fnD;
-                    if (mD == "refresh")      fnD = "vb6_Data_Refresh";
-                    else if (mD == "movenext")     fnD = "vb6_Data_MoveNext";
-                    else if (mD == "moveprevious") fnD = "vb6_Data_MovePrevious";
-                    else if (mD == "movefirst")    fnD = "vb6_Data_MoveFirst";
-                    else if (mD == "movelast")     fnD = "vb6_Data_MoveLast";
-                    if (!fnD.empty()) {
-                        comObjExpr_.clear();
-                        comMemberName_.clear();
-                        c_.emitLine(fnD + "((void*)" + dhD + ");");
-                        return;
-                    }
-                }
-            }
+            // 账 #278 §B124: 语句码头那一格 recordset 直译同代同因，撤掉 (判据恒假)。
             // P20-40: 同款 —— `StatusBar1.Panels.Clear` 无实参, 也必须在这条语句路径收尾。
-            if (statusBarNameOfExpr(comObjExpr_) != ""
-                && Symbol::toLower(comMemberName_) == "clear") {
+            // 账 #278 §B72 第十四刀: 同上 —— 表里 (StatusBar, clear) 那一行。
+            std::string fnSb = statusBarNameOfExpr(comObjExpr_) != ""
+                ? controlZeroArgMethod(FrmControlType::StatusBar,
+                                       Symbol::toLower(comMemberName_))
+                : std::string();
+            if (!fnSb.empty()) {
                 std::string sbHwnd = "vb6_hwnd_" + statusBarNameOfExpr(comObjExpr_);
                 comObjExpr_.clear();
                 comMemberName_.clear();
-                c_.emitLine("vb6_StatusBar_ClearPanels((void*)" + sbHwnd + ");");
+                c_.emitLine(fnSb + "((void*)" + sbHwnd + ");");
                 return;
             }
             // D6 / C29-9: 无括号的 `CommonDialog1.ShowOpen` —— 与 List1.Clear 同一条
@@ -314,14 +316,13 @@ void CCodeGen::visit(CallStmt& node) {
             {
                 auto itCd = knownFormControls_.find(comObjExpr_);
                 std::string mCd = Symbol::toLower(comMemberName_);
-                if (itCd != knownFormControls_.end()
+                // 账 #278 §B72 第十四刀: 六档名单与六个出口名一起交回表（从前这里既写名单又现拼名字）
+                std::string fnCd = itCd != knownFormControls_.end()
                     && itCd->second == FrmControlType::CommonDialog
-                    && (mCd == "showopen" || mCd == "showsave" || mCd == "showcolor"
-                        || mCd == "showfont" || mCd == "showprinter" || mCd == "showabout")) {
+                    ? controlZeroArgMethod(FrmControlType::CommonDialog, mCd) : std::string();
+                if (!fnCd.empty()) {
                     std::string hwndCd = cIdent(knownFormControlOriginalNames_.count(comObjExpr_)
                         ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
-                    std::string fnCd = "vb6_CdShow"
-                        + std::string(1, (char)::toupper((unsigned char)mCd[4])) + mCd.substr(5);
                     comObjExpr_.clear();
                     comMemberName_.clear();
                     c_.emitLine(fnCd + "((void*)vb6_hwnd_" + hwndCd + ");"
@@ -337,37 +338,30 @@ void CCodeGen::visit(CallStmt& node) {
             {
                 auto itWs = knownFormControls_.find(comObjExpr_);
                 std::string mWs = Symbol::toLower(comMemberName_);
-                const char* fnWs = nullptr;
+                // 账 #278 §B72 第十三刀: 名字改问那张表。这一形**手里一枚实参都没有**，所以只许
+                // 拿表里「个数 == 1」的那几档（close / listen / connect）；其余成员照旧落到下面
+                // 那条通用兜底，由带实参的那条码头 (withm) 收尾。从前这件事靠手写名单维持,
+                // 现在靠表交出的个数 —— 谁给某枚出口加一枚形参, 这一头会自动不再接它。
+                std::string fnWs;
                 if (itWs != knownFormControls_.end() && itWs->second == FrmControlType::Winsock) {
-                    if (mWs == "close")        fnWs = "vb6_Ws_Close";
-                    else if (mWs == "listen")  fnWs = "vb6_Ws_Listen";
-                    else if (mWs == "connect") fnWs = "vb6_Ws_Connect";
+                    int argcWs = 0;
+                    fnWs = controlWinsockMethod(mWs, &argcWs);
+                    if (argcWs != 1) fnWs.clear();
                 }
-                if (fnWs) {
+                if (!fnWs.empty()) {
                     std::string hwndWs = cIdent(knownFormControlOriginalNames_.count(comObjExpr_)
                         ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
                     comObjExpr_.clear();
                     comMemberName_.clear();
-                    c_.emitLine(std::string(fnWs) + "((void*)vb6_hwnd_" + hwndWs + ");"
+                    c_.emitLine(fnWs + "((void*)vb6_hwnd_" + hwndWs + ");"
                                 "  /* Winsock." + mWs + " (原生 Winsock2) */");
                     return;
                 }
             }
-            // Fix 086: 无括号的控件方法调用 (List1.Clear) — 与 IndexOrCallExpr
-            // 的 P13.3 处理一致, 生成 vb6_ClearList(vb6_hwnd_Listx), 而非
-            // vb6_ComCall(list1,...) 裸控制名 (C2065).
-            auto itCtrlCS = knownFormControls_.find(comObjExpr_);
-            if (itCtrlCS != knownFormControls_.end()
-                && (itCtrlCS->second == FrmControlType::ListBox
-                    || itCtrlCS->second == FrmControlType::ComboBox)
-                && Symbol::toLower(comMemberName_) == "clear") {
-                std::string ctrlNameCS = cIdent(knownFormControlOriginalNames_.count(comObjExpr_)
-                    ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
-                comObjExpr_.clear();
-                comMemberName_.clear();
-                c_.emitLine("vb6_ClearList((void*)vb6_hwnd_" + ctrlNameCS + ");  /* ListBox.Clear */");
-                return;
-            }
+            // 账 #278 §B72: 这一族从前在 Fix 086 里又硬编码了一遍 (类型判据 +
+            // `vb6_ClearList` 字面量)。表 controlZeroArgMethod 今天照样答 ListBox/ComboBox 的
+            // clear 这一行, 而语句码头在下方 C29-SL-l 那一格已经问它 —— 两份答案住两处,
+            // 改名字或改实参个数时必有一份落后。所以这里删掉, 由表答。
             // 账 #185 / 账 #232②: 画布家族的**语句码头**（不写括号那一形）。
             // 接收者问 `formCtrlSlot`（裸小写名与 `vb6_hwnd_X` 都认，窗体自己那枚也认），
             // 名字与出口问 `controlCanvasMethod`（cls / print 两档）—— 与表达式码头
@@ -463,6 +457,37 @@ void CCodeGen::visit(CallStmt& node) {
                 if (builtinGlobalObjCS) {
                     calleeIsBuiltin = true;
                 } else {
+                // Fix 254: **类感知优先** —— 接收者的类推断得出来时, 该类的成员签名
+                // 压过 lookupModule(memberName); 类感知拿不到才退回模块作用域。
+                // 反例 (本 Fix 修的那一格): ComCtlsDemo 里 12 个集合类各有一枚 `Add`,
+                // 模块作用域 `lookupModule("add")` 交回的是注册最早的那一份
+                // (CbrBands.Add, 7 形参), 而 StatusBar.ctl:518 `Me.Panels.Add` /
+                // TabStrip.ctl:654 `Me.Tabs.Add` 是无括号无实参的语句调用 → 按
+                // CbrBands 的 7 参补齐 = 1(链对象) + 7 默认值 + 7 _has_ 标志 = 15 实参,
+                // 其中 `Visible As Boolean = True` 的 -1 与两枚 vb6_VariantEmpty()
+                // 顶到 SbrPanels_Add 的 (int32_t Style, int _has_*) 槽
+                // ⇒ C2440 "vb6_VARIANT → int32_t" / "vb6_VARIANT → int"
+                //    (StatusBar.c 766 ×2)、"vb6_VARIANT → int" (TabStrip.c 1105)。
+                // 判据就交给既有唯一出口 findClassMemberCallParams (与 Fix 033/042b 同源),
+                // 不另立一套尺; 它答不出 (成员不属于该类 / 接收者不是工程类) 时逐字回落原路径。
+                bool byClassCS254 = false;
+                if (maExpr.object) {
+                    std::string chainClass254 = inferClassTypeOfExpr(*maExpr.object);
+                    if (!chainClass254.empty()) {
+                        std::vector<ParameterInfo> clsParams254;
+                        bool clsBuiltin254 = false;
+                        if (findClassMemberCallParams(chainClass254, maExpr.memberName,
+                                                      clsParams254, clsBuiltin254)) {
+                            calleeParams = clsParams254;
+                            calleeIsBuiltin = clsBuiltin254;
+                            byClassCS254 = true;
+                        }
+                    }
+                }
+                // Fix 084y-3 (原逻辑): 链式调用对象方法时 (X.Y(args).Z) 取类方法签名 ——
+                // 类感知已在上面先跑, 此处只剩"类推得出来但该类没这枚成员"的兜底,
+                // 以及"接收者不是 IdentifierExpr/推断不出类"时的原 lookupModule 行为。
+                if (!byClassCS254) {
                 Symbol* sym = symTab_.lookupModule(maExpr.memberName);
                 if (sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
@@ -470,23 +495,6 @@ void CCodeGen::visit(CallStmt& node) {
                     calleeParams = sym->params;
                     calleeIsBuiltin = sym->isBuiltin;
                 }
-                // Fix 084y-3: 链式调用对象方法时 (X.Y(args).Z), .Z 是类方法而非
-                // 模块成员, lookupModule 必然失败 → calleeParams 为空 → 不填充
-                // Optional 默认值 → C2198 参数太少 (如 Exec(Optional RecordsAffected,
-                // Optional Options As Long = -1) 声明5参却只传对象1参).
-                // 用 inferClassTypeOfExpr 推断对象类 (X.Y(args) → cDataBase),
-                // 再按类方法签名取形参表.
-                if (calleeParams.empty() && maExpr.object) {
-                    std::string chainClass = inferClassTypeOfExpr(*maExpr.object);
-                    if (!chainClass.empty()) {
-                        std::vector<ParameterInfo> clsParams;
-                        bool clsBuiltin = false;
-                        if (findClassMemberCallParams(chainClass, maExpr.memberName,
-                                                      clsParams, clsBuiltin)) {
-                            calleeParams = clsParams;
-                            calleeIsBuiltin = clsBuiltin;
-                        }
-                    }
                 }
                 }
             }
@@ -671,7 +679,8 @@ void CCodeGen::visit(CallStmt& node) {
             }
         }
 
-        if (callExpr.find("vb6_ComCall(") == 0) {
+        if (callExpr.find("vb6_ComCall(") == 0
+            || callExpr.find("vb6_ComCallByDispid(") == 0) {
             // ComCall返回可能含对象的VARIANT*, 用VarFree避免Release对象
             c_.emitLine("vb6_ComVarFree((void*)" + callExpr + ");  /* COM call, discard result */");
         } else if (callExpr.find("vb6_ComGetProp(") == 0) {

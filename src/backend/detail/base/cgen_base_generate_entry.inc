@@ -50,6 +50,20 @@
                 c_.emitLine("vb6_OcxRefRegister(c3_ocx_libs, "
                             + std::to_string(ocxLibRefs_->size()) + ");");
             };
+            // 账 §B97: 「入口点里调用哪些模块的 *_init()」以前是 5 份同形循环，各自直接
+            // 迭代一枚 unordered_set ⇒ 各模块全局的初始化先后是编译器二进制的函数（实测
+            // tests/cc_id/Id.vbp 两台各交一种序）。收成这一处：名单本身由 driver 排成
+            // modules_ 的下标序交下来（extModulesInModuleVectorOrder；那枚序**不是** .vbp 的字面行序，
+            // 见 driver_frontend.cpp:327-339 的类模块前移），这里只照序逐行发。
+            // ⚠ 五份里三份发在「本模块自己的 init」之后、两份发在其**之前**（157 / 205 那两格），
+            //   这个 own-vs-others 的相对位置是改动前就有的形状，本刀**刻意不动**（动了就是
+            //   第二件事：改变运行期初始化序，需要另立的口径与另一次的判据）。
+            auto emitExtInits = [&]() {
+                if (!isMultiModule_) return;
+                for (const auto& extMod : externalModules_) {
+                    c_.emitLine("vb6_mod_" + cIdent(extMod) + "_init();");
+                }
+            };
         for (auto& decl : module.declarations) {
             if (decl->kind == ASTNodeKind::SubDecl) {
                 auto& sub = static_cast<SubDecl&>(*decl);
@@ -103,12 +117,7 @@
             c_.emitLine("vb6_Init();");
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
-            if (isMultiModule_) {
-                for (const auto& extMod : externalModules_) {
-                    std::string extInitFunc = "vb6_mod_" + cIdent(extMod) + "_init";
-                    c_.emitLine(extInitFunc + "();");
-                }
-            }
+            emitExtInits();
             c_.emitLine("vb6_SetAppInstance((void*)hInst);");
             c_.emitLine("vb6_form_show_" + cIdent(formName) + "(NULL, 0);  /* Show form modeless, NULL=hMDIClient */");
                             c_.emitLine("int ret = vb6_MessageLoop();");
@@ -124,12 +133,7 @@
             c_.emitLine("vb6_Init();");
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
-            if (isMultiModule_) {
-                for (const auto& extMod : externalModules_) {
-                    std::string extInitFunc = "vb6_mod_" + cIdent(extMod) + "_init";
-                    c_.emitLine(extInitFunc + "();");
-                }
-            }
+            emitExtInits();
             c_.emitLine(cProcName(sub.name, sub.access) + "();");
             // Fix 167: VB6 的 Sub Main 返回后进程要继续驻留 (运行时自己泵消息),
             // 直到所有窗体关闭。此处不补循环 → modeless Load 的窗体一返回就退出。
@@ -154,12 +158,7 @@
             emitOcxRefReg();
                 c_.emitLine("vb6_Init();");
                 // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
-                if (isMultiModule_) {
-                    for (const auto& extMod : externalModules_) {
-                        std::string extInitFunc = "vb6_mod_" + cIdent(extMod) + "_init";
-                        c_.emitLine(extInitFunc + "();");
-                    }
-                }
+                emitExtInits();
                 if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
                 c_.emitLine("vb6_SetAppInstance((void*)hInst);");
                 c_.emitLine(cProcName("Main", AccessLevel::Public) + "();");
@@ -176,12 +175,7 @@
             c_.emitLine("vb6_Init();");
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
-            if (isMultiModule_) {
-                for (const auto& extMod : externalModules_) {
-                    std::string extInitFunc = "vb6_mod_" + cIdent(extMod) + "_init";
-                    c_.emitLine(extInitFunc + "();");
-                }
-            }
+            emitExtInits();
             c_.emitLine(cProcName("Main", AccessLevel::Public) + "();");
                 // Fix 167: 同上方 main 模板 — Sub Main 返回后仍要驻留 (VB6 语义)
                 c_.emitLine("if (vb6_AnyThreadWindowVisible()) vb6_MessageLoop();");
@@ -203,12 +197,7 @@
                 c_.emitLine("vb6_Init();");
                 if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
                 // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
-                if (isMultiModule_) {
-                    for (const auto& extMod : externalModules_) {
-                        std::string extInitFunc = "vb6_mod_" + cIdent(extMod) + "_init";
-                        c_.emitLine(extInitFunc + "();");
-                    }
-                }
+                emitExtInits();
                 c_.emitLine("vb6_SetAppInstance((void*)hInst);");
                 c_.emitLine("vb6_form_show_" + cIdent(formName) + "(NULL, 0);  /* Show form modeless, NULL=hMDIClient */");
                 c_.emitLine("int ret = vb6_MessageLoop();");

@@ -43,23 +43,18 @@
                 static_cast<const IdentifierExpr&>(*maHp->object).name;
             const std::string objLowerHp = Symbol::toLower(objNameHp);
             const bool isParentHp = (objLowerHp == "parent");
-            const bool isHostPseudoHp =
-                (objLowerHp == "usercontrol" || objLowerHp == "ambient"
-                 || objLowerHp == "extender" || objLowerHp == "propertypage");
+            // 账 #278 §B120: 这一问由那张表答 (抄了五份的那一份就在这)。
+            const bool isHostPseudoHp = hostPseudoIsObject(objLowerHp);
             if ((isParentHp || isHostPseudoHp) && !knownLocalVars_.count(objLowerHp)) {
                 emitExpr(*node.value);
                 std::string valHp = std::move(lastExpr_);
                 std::string packFnHp = comPackExpr(*node.value);
-                if (isComMarker_) {
-                    // RHS 本身是 COM 属性读 → 按 packer 反推解封类型
-                    std::string hintHp = "Variant";
-                    if (packFnHp == "vb6_ComPackDouble") hintHp = "Double";
-                    else if (packFnHp == "vb6_ComPackInt") hintHp = "Long";
-                    else if (packFnHp == "vb6_ComPackBSTR") hintHp = "BSTR";
-                    else if (packFnHp == "vb6_ComPackObject") hintHp = "Object";
-                    resolveComValue(hintHp);
-                    valHp = std::move(lastExpr_);
-                }
+                // 账 #260: 这一份 hint 表与写侧另两处同源，收进 comMarkerValueForWrite
+                // （取值顺序与改前一致: 先摘 lastExpr_、再算 packer、最后才消费标记）。
+                // 它原来把「其余 packer」一律按 Variant 解封，其中 Boolean 那一档会发出
+                // vb6_ComPackBool(vb6_VARIANT 结构体) —— 现在跟着同一张表走 Long 档
+                // (与 resolveComMarkerForPack 对 Boolean 的答案一致)。
+                valHp = comMarkerValueForWrite(packFnHp, valHp);
                 if (isParentHp) {
                     // Parent.<prop> = v → 宿主对象上的 IDispatch 后期绑定写
                     c_.emitLine("vb6_ComSetProp(vb6_UC_ParentObject(), L\""
@@ -68,9 +63,8 @@
                     return;
                 }
                 // 宿主伪对象成员 = RTL 全局变量（vb6rtl_userctl.h），直接赋值。
-                // 成员名按 RTL 约定规范化（源码 hDc → RTL hDC，见 canonicalHostPseudoMember）。
-                const std::string tgtHp = "vb6_" + cIdent(objNameHp) + "_"
-                    + cIdent(canonicalHostPseudoMember(objNameHp, maHp->memberName));
+                // 成员名按 RTL 约定规范化、对象名取表里那一列，装配只经 hostPseudoRtlSymbol（§B120）。
+                const std::string tgtHp = hostPseudoRtlSymbol(objNameHp, maHp->memberName);
                 // 账 #159: 要不要拆数值由那张表答 (目标槽是整数才拆; 句柄/对象/字符串
                 // 成员按原样直传)。此前这里是又一份成员名清单 kNumericHostMembers。
                 if (cExprIsVariant(valHp) && hostPseudoIsNumeric(objLowerHp, maHp->memberName)) {

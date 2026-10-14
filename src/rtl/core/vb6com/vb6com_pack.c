@@ -137,6 +137,12 @@ int32_t vb6_ComUnpackInt(void* variant) {
     if (pv->vt == VT_I2) return (int32_t)pv->iVal;
     if (pv->vt == VT_BOOL) return (pv->boolVal == VARIANT_TRUE) ? -1 : 0;
     if (pv->vt == VT_UI1) return (int32_t)pv->bVal;
+    /* ai/032 §6.6: 无符号/64 位两档 —— C 截断语义 (与 RTL 取数表同口径)。
+     * 不给这几档时落下面的 VariantChangeType(VT_I4): UI4 大值触发 DISP_E_OVERFLOW
+     * 被吞成 0 (实测路径: 无符号属性读进 Long)。 */
+    if (pv->vt == VT_UI4) return (int32_t)pv->lVal;
+    if (pv->vt == VT_I8)  return (int32_t)pv->llVal;
+    if (pv->vt == VT_UI8) return (int32_t)pv->llVal;
     // 尝试变体转换
     if (pv->vt != VT_EMPTY && pv->vt != VT_NULL) {
         VARIANT vInt;
@@ -155,6 +161,10 @@ double vb6_ComUnpackDouble(void* variant) {
     if (pv->vt == VT_R8) return pv->dblVal;
     if (pv->vt == VT_R4) return (double)pv->fltVal;
     if (pv->vt == VT_I4) return (double)pv->lVal;
+    /* ai/032 §6.6: 无符号/64 位档同格 (VariantChangeType 对 UI8 大值也会丢)。 */
+    if (pv->vt == VT_UI4) return (double)pv->ulVal;
+    if (pv->vt == VT_I8)  return (double)pv->llVal;
+    if (pv->vt == VT_UI8) return (double)pv->ullVal;
     // 尝试变体转换
     if (pv->vt != VT_EMPTY && pv->vt != VT_NULL) {
         VARIANT vDbl;

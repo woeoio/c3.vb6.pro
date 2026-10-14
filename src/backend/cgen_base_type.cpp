@@ -47,6 +47,11 @@ std::string CCodeGen::mapType(Vb6Type type) const {
         case Vb6Type::Variant:  cType = "vb6_VARIANT"; break;   // tagged union
         case Vb6Type::Byte:     cType = "uint8_t"; break;
         case Vb6Type::ULong:    cType = "uint32_t"; break;
+        // C3 扩展 (ai/032): 无符号/小整型族。位宽对照 Integer/Long/LongLong,
+        // 见 common/types.hpp 的 Vb6Type 注释。恒定位宽, 不随架构。
+        case Vb6Type::SByte:    cType = "int8_t"; break;
+        case Vb6Type::UInteger: cType = "uint16_t"; break;
+        case Vb6Type::ULongLong:cType = "uint64_t"; break;
         case Vb6Type::Void:     cType = "void"; break;
         case Vb6Type::Decimal:  cType = "vb6_VARIANT"; break;   // 用VARIANT兜底
         case Vb6Type::UserDefinedType: cType = "vb6_VARIANT"; break; // 占位, 后续改进
@@ -88,6 +93,10 @@ std::string CCodeGen::mapComType(Vb6Type type) const {
         case Vb6Type::Variant:  return "VARIANT";
         case Vb6Type::Byte:     return "uint8_t";
         case Vb6Type::ULong:    return "uint32_t";
+        // C3 扩展 (ai/032)
+        case Vb6Type::SByte:    return "int8_t";
+        case Vb6Type::UInteger: return "uint16_t";
+        case Vb6Type::ULongLong:return "uint64_t";
         case Vb6Type::Void:     return "void";
         default:                return "void*";
     }
@@ -451,6 +460,13 @@ std::string CCodeGen::mapTypeRef(ASTNode* typeRef) {
             if (aliasName == "LongLong") {
                 return "int64_t";   // Fix 084m: 恒 64 位有符号 (与 LongPtr 的架构宽度不同)
             }
+            // C3 扩展 (ai/032): 新整型兜底。正规路径是 typeSys_.resolveTypeName
+            // 认出名字后返回 mapType(t), 走到这里说明符号表与类型系统都没认出来 ——
+            // 与 LongLong 一样再钉一次, 免得同一种类型有两种答案。
+            if (aliasName == "SByte")     return "int8_t";
+            if (aliasName == "UInteger")  return "uint16_t";
+            if (aliasName == "ULong")     return "uint32_t";
+            if (aliasName == "ULongLong") return "uint64_t";
             // VB6内置枚举类型 (Vb前缀): VbCompareMethod, VbTriState, VbFileAttribute等
             // VB6枚举底层是Long (int32_t)
             if (aliasName.size() >= 2 && aliasName.compare(0, 2, "Vb") == 0) {

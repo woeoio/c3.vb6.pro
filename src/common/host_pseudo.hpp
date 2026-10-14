@@ -53,89 +53,128 @@ inline std::string hostPseudoLower(const std::string& s) {
     return o;
 }
 
-enum : uint8_t { HPF_NONE = 0, HPF_BARE = 1 << 0, HPF_METHOD = 1 << 1 };
+enum : uint8_t { HPF_NONE = 0, HPF_BARE = 1 << 0, HPF_METHOD = 1 << 1,
+                 // HPF_CHANNEL = 这一档的答案**不是** `vb6_<对象>_<rtl>`，而是一条专用码头
+                 // (channel 字段给符号名)。账 #278 §B105 的 b 案：表里必须能说得出"由哪条码头回答"，
+                 // 否则给 .pag 补一行 `Controls` 就是在说谎 —— vb6_PropertyPage_Controls
+                 // 那枚恒 NULL 的空桩从来不该被发码 (真实答复是 vb6_UC_Controls())。
+                 // 与 canvas_drawing.hpp 的 CANVAS_OWNER_METHOD/DRAW 同一形状。
+                 HPF_CHANNEL = 1 << 2 };
 
 struct HostPseudoRow {
-    const char* obj;     // 宿主伪对象名 (小写; 发成 vb6_<Obj>_<rtl>)
+    // 宿主伪对象名 —— 存的是 **RTL 符号里那一份拼法** (PascalCase)，查的时候两边都折小写。
+    // 账 #278 §B120: 这一列从前是小写，于是 `vb6_<Obj>_<rtl>` 里对象那一段没有权威，
+    // 发码侧三处各拼一次 (其中一处还把源码拼写直接抄进符号名)。
+    const char* obj;     // 发成 vb6_<obj>_<rtl>
     const char* name;    // VB6 成员名 (小写)
     const char* rtl;     // RTL 侧拼写 (C 大小写敏感, 源码拼写一律归一到它)
     Vb6Type type;        // 值读类型; Unknown = 不由本表回答
     uint32_t flags;      // uint32 而非 uint8: 行里写 HPF_BARE | HPF_METHOD 会整型提升,
                          // 花括号初始化里收窄回 uint8_t 是 narrowing (MSVC 直接报错)
+    // 只在 HPF_CHANNEL 那几行填：码头的 C 符号名（**不带括号**，发码侧自己加 `()`）。
+    // 缺省 nullptr ⇒ 其余行沿用 `vb6_<对象>_<rtl>` 那条契约。
+    const char* channel = nullptr;
 };
 
 inline const HostPseudoRow kHostPseudoRows[] = {
     // ---- UserControl (.ctl) ----
-    {"usercontrol", "asyncread",       "AsyncRead",       Vb6Type::Unknown,  HPF_BARE | HPF_METHOD},
-    {"usercontrol", "autoredraw",      "AutoRedraw",      Vb6Type::Boolean,  HPF_NONE},
-    {"usercontrol", "backcolor",       "BackColor",       Vb6Type::Long,     HPF_NONE},
-    {"usercontrol", "cancelasyncread", "CancelAsyncRead", Vb6Type::Unknown,  HPF_METHOD},
-    {"usercontrol", "cls",             "Cls",             Vb6Type::Unknown,  HPF_METHOD},
-    {"usercontrol", "containerhwnd",   "ContainerHwnd",   Vb6Type::LongPtr,  HPF_BARE},
-    {"usercontrol", "controls",        "Controls",        Vb6Type::Unknown,  HPF_BARE},
-    {"usercontrol", "enabled",         "Enabled",         Vb6Type::Boolean,  HPF_BARE},
-    {"usercontrol", "extender",        "Extender",        Vb6Type::Unknown,  HPF_NONE},
-    {"usercontrol", "forecolor",       "ForeColor",       Vb6Type::Long,     HPF_NONE},
-    {"usercontrol", "hdc",             "hDC",             Vb6Type::LongPtr,  HPF_BARE},
-    {"usercontrol", "height",          "Height",          Vb6Type::Long,     HPF_NONE},
-    {"usercontrol", "hwnd",            "hWnd",            Vb6Type::LongPtr,  HPF_BARE},
-    {"usercontrol", "mouseicon",       "MouseIcon",       Vb6Type::Unknown,  HPF_NONE},
-    {"usercontrol", "mousepointer",    "MousePointer",    Vb6Type::Long,     HPF_NONE},
-    {"usercontrol", "oledrag",         "OLEDrag",         Vb6Type::Unknown,  HPF_METHOD},
-    {"usercontrol", "oledropmode",     "OLEDropMode",     Vb6Type::Long,     HPF_NONE},
-    {"usercontrol", "picture",         "Picture",         Vb6Type::Unknown,  HPF_NONE},
-    {"usercontrol", "propertychanged", "PropertyChanged", Vb6Type::Unknown,  HPF_BARE | HPF_METHOD},
-    {"usercontrol", "refresh",         "Refresh",         Vb6Type::Unknown,  HPF_METHOD},
-    {"usercontrol", "righttoleft",     "RightToLeft",     Vb6Type::Integer,  HPF_NONE},
-    {"usercontrol", "scaleheight",     "ScaleHeight",     Vb6Type::Long,     HPF_BARE},
-    {"usercontrol", "scalemode",       "ScaleMode",       Vb6Type::Long,     HPF_BARE},
-    {"usercontrol", "scalewidth",      "ScaleWidth",      Vb6Type::Long,     HPF_BARE},
-    {"usercontrol", "scalex",          "ScaleX",          Vb6Type::Unknown,  HPF_BARE | HPF_METHOD},
-    {"usercontrol", "scaley",          "ScaleY",          Vb6Type::Unknown,  HPF_BARE | HPF_METHOD},
-    {"usercontrol", "size",            "Size",            Vb6Type::Unknown,  HPF_METHOD},
-    {"usercontrol", "textheight",      "TextHeight",      Vb6Type::Unknown,  HPF_METHOD},
-    {"usercontrol", "textwidth",       "TextWidth",       Vb6Type::Unknown,  HPF_METHOD},
-    {"usercontrol", "width",           "Width",           Vb6Type::Long,     HPF_NONE},
-    // 对象成员只登记用于**拼写规范化**; 值面一律不答 (各有专用通道: Controls 集合走
+    {"UserControl", "accesskeys",      "AccessKeys",      Vb6Type::String,   HPF_NONE},
+    {"UserControl", "appearance",      "Appearance",      Vb6Type::Long,     HPF_NONE},
+    {"UserControl", "asyncread",       "AsyncRead",       Vb6Type::Unknown,  HPF_BARE | HPF_METHOD},
+    {"UserControl", "autoredraw",      "AutoRedraw",      Vb6Type::Boolean,  HPF_NONE},
+    {"UserControl", "backcolor",       "BackColor",       Vb6Type::Long,     HPF_NONE},
+    // Fix 255: `UserControl.BackStyle` (ComCtlsDemo LabelW.ctl:936/942 ——
+    // `BackStyle = UserControl.BackStyle` 与 `UserControl.BackStyle = Value`)。
+    // 表里此前没有这一行, 而发码侧 hostPseudoRtlSymbol 在表里查不到就不再挡,
+    // 直接按 `vb6_<对象>_<成员名>` 拼出 vb6_UserControl_BackStyle —— RTL 没这枚
+    // 全局 ⇒ C2065 ×2 (LabelW.c 1608/1618)。补行 + 补 RTL 声明与定义 (int32_t/Long,
+    // 与同一族的 BackColor/ForeColor 逐字同款, 也满足 check_host_pseudo_table 的类型配对)。
+    {"UserControl", "backstyle",       "BackStyle",       Vb6Type::Long,     HPF_NONE},
+    {"UserControl", "cancelasyncread", "CancelAsyncRead", Vb6Type::Unknown,  HPF_METHOD},
+    {"UserControl", "cls",             "Cls",             Vb6Type::Unknown,  HPF_METHOD},
+    {"UserControl", "containedcontrols", "ContainedControls", Vb6Type::Unknown, HPF_NONE},
+    {"UserControl", "containerhwnd",   "ContainerHwnd",   Vb6Type::LongPtr,  HPF_BARE},
+    {"UserControl", "controls",        "Controls",        Vb6Type::Unknown,  HPF_BARE | HPF_CHANNEL, "vb6_UC_Controls"},
+    {"UserControl", "drawstyle",       "DrawStyle",       Vb6Type::Long,     HPF_NONE},
+    {"UserControl", "enabled",         "Enabled",         Vb6Type::Boolean,  HPF_BARE},
+    {"UserControl", "eventsfrozen",    "EventsFrozen",    Vb6Type::Boolean,  HPF_NONE},
+    {"UserControl", "extender",        "Extender",        Vb6Type::Unknown,  HPF_NONE},
+    {"UserControl", "forecolor",       "ForeColor",       Vb6Type::Long,     HPF_NONE},
+    {"UserControl", "hdc",             "hDC",             Vb6Type::LongPtr,  HPF_BARE},
+    {"UserControl", "height",          "Height",          Vb6Type::Long,     HPF_NONE},
+    {"UserControl", "hwnd",            "hWnd",            Vb6Type::LongPtr,  HPF_BARE},
+    {"UserControl", "mouseicon",       "MouseIcon",       Vb6Type::Unknown,  HPF_NONE},
+    {"UserControl", "mousepointer",    "MousePointer",    Vb6Type::Long,     HPF_NONE},
+    {"UserControl", "oledrag",         "OLEDrag",         Vb6Type::Unknown,  HPF_METHOD},
+    {"UserControl", "oledropmode",     "OLEDropMode",     Vb6Type::Long,     HPF_NONE},
+    {"UserControl", "picture",         "Picture",         Vb6Type::Unknown,  HPF_NONE},
+    {"UserControl", "propertychanged", "PropertyChanged", Vb6Type::Unknown,  HPF_BARE | HPF_METHOD},
+    {"UserControl", "refresh",         "Refresh",         Vb6Type::Unknown,  HPF_METHOD},
+    {"UserControl", "righttoleft",     "RightToLeft",     Vb6Type::Integer,  HPF_NONE},
+    {"UserControl", "scaleheight",     "ScaleHeight",     Vb6Type::Long,     HPF_BARE},
+    {"UserControl", "scalemode",       "ScaleMode",       Vb6Type::Long,     HPF_BARE},
+    {"UserControl", "scalewidth",      "ScaleWidth",      Vb6Type::Long,     HPF_BARE},
+    {"UserControl", "scalex",          "ScaleX",          Vb6Type::Unknown,  HPF_BARE | HPF_METHOD},
+    {"UserControl", "scaley",          "ScaleY",          Vb6Type::Unknown,  HPF_BARE | HPF_METHOD},
+    {"UserControl", "size",            "Size",            Vb6Type::Unknown,  HPF_METHOD},
+    {"UserControl", "textheight",      "TextHeight",      Vb6Type::Unknown,  HPF_METHOD},
+    {"UserControl", "textwidth",       "TextWidth",       Vb6Type::Unknown,  HPF_METHOD},
+    {"UserControl", "width",           "Width",           Vb6Type::Long,     HPF_NONE},    // 对象成员只登记用于**拼写规范化**; 值面一律不答 (各有专用通道: Controls 集合走
     // vb6_UC_Controls()、Parent 链由 Fix 133u 在 cgen_base.cpp 改写、Font 是
     // vb6_ComIface_Font*, 装箱比较本来就不该按标量发)。
-    {"usercontrol", "ambient",         "Ambient",         Vb6Type::Unknown,  HPF_NONE},
-    {"usercontrol", "font",            "Font",            Vb6Type::Unknown,  HPF_NONE},
-    {"usercontrol", "parentcontrols",  "ParentControls",  Vb6Type::Unknown,  HPF_NONE},
+    {"UserControl", "ambient",         "Ambient",         Vb6Type::Unknown,  HPF_NONE},
+    {"UserControl", "font",            "Font",            Vb6Type::Unknown,  HPF_NONE},
+    // 账 #257: ParentControls 的真实答复是 vb6_UC_ParentControls() (父容器的集合,
+    // uc_controls.c), 恒 NULL 的空桩 vb6_UserControl_ParentControls 不该被发码 ——
+    // `UserControl.ParentControls.Count` 以前发成 vb6_ComGetIntProp((void*)NULL, L"Count")
+    // ⇒ 崩在 vb6_ComUnpackInt (StatusBar 创建期 100% 复现, StatusBar.ctl:481 就在
+    // UserControl_InitProperties 里)。改道在 cgen_expr_member_generic_access.inc。
+    //
+    // ⚠ 刻意**不**给这行挂 HPF_CHANNEL(像 Controls 那样): check_host_pseudo_table.ps1 的
+    // 行正则以 `(HPF_[A-Z| ]+)\}` 收尾, **认不出带 channel 的行** ⇒ 挂了这一行就掉出解析,
+    // 行数 62→61 直接红(且那一行从此没人查)。要挂 channel 得先修那道针的正则。
+    {"UserControl", "parentcontrols",  "ParentControls",  Vb6Type::Unknown,  HPF_NONE},
 
     // ---- PropertyPage (.pag) ----
-    {"propertypage", "changed",          "Changed",          Vb6Type::Boolean, HPF_BARE},
-    {"propertypage", "hwnd",             "hWnd",             Vb6Type::LongPtr, HPF_BARE},
-    {"propertypage", "scaleheight",      "ScaleHeight",      Vb6Type::Long,    HPF_BARE},
-    {"propertypage", "scalemode",        "ScaleMode",        Vb6Type::Long,    HPF_BARE},
-    {"propertypage", "selectedcontrols", "SelectedControls", Vb6Type::Unknown, HPF_BARE | HPF_METHOD},
+    {"PropertyPage", "changed",          "Changed",          Vb6Type::Boolean, HPF_BARE},
+    // 账 #278 §B105: .pag 里裸写 `Controls.Add/Remove/Item` 与 .ctl 同一枚码头 (vb6_UC_Controls
+    // 按当前实例回落 formHwnd)。以前表里没有这一行 ⇒ 语义层问不到就配一条 VB3001，
+    // 而发码那条路一直是对的 (`vb6_ComCallObject((void*)vb6_UC_Controls(), L"Add", …)`)。
+    // 刻意不复用 `vb6_PropertyPage_Controls` —— 那枚是恒 NULL 的空桩，发出去是"枚举得空集"。
+    {"PropertyPage", "controls",         "Controls",         Vb6Type::Unknown, HPF_BARE | HPF_CHANNEL, "vb6_UC_Controls"},
+    {"PropertyPage", "hwnd",             "hWnd",             Vb6Type::LongPtr, HPF_BARE},
+    {"PropertyPage", "scaleheight",      "ScaleHeight",      Vb6Type::Long,    HPF_BARE},
+    {"PropertyPage", "scalemode",        "ScaleMode",        Vb6Type::Long,    HPF_BARE},
+    {"PropertyPage", "selectedcontrols", "SelectedControls", Vb6Type::Unknown, HPF_BARE | HPF_METHOD},
 
     // ---- Extender (容器提供的扩展对象) ----
-    {"extender", "align",           "Align",           Vb6Type::Long,    HPF_NONE},
-    {"extender", "container",       "Container",       Vb6Type::Unknown, HPF_NONE},
-    {"extender", "drag",            "Drag",            Vb6Type::Unknown, HPF_METHOD},
-    {"extender", "dragicon",        "DragIcon",        Vb6Type::Unknown, HPF_NONE},
-    {"extender", "dragmode",        "DragMode",        Vb6Type::Long,    HPF_NONE},
-    {"extender", "height",          "Height",          Vb6Type::Long,    HPF_NONE},
-    {"extender", "helpcontextid",   "HelpContextID",   Vb6Type::Long,    HPF_NONE},
-    {"extender", "left",            "Left",            Vb6Type::Long,    HPF_NONE},
-    {"extender", "setfocus",        "SetFocus",        Vb6Type::Unknown, HPF_METHOD},
-    {"extender", "tag",             "Tag",             Vb6Type::String,  HPF_NONE},
-    {"extender", "tooltiptext",     "ToolTipText",     Vb6Type::String,  HPF_NONE},
-    {"extender", "top",             "Top",             Vb6Type::Long,    HPF_NONE},
-    {"extender", "visible",         "Visible",         Vb6Type::Boolean, HPF_NONE},
-    {"extender", "whatsthishelpid", "WhatsThisHelpID", Vb6Type::Long,    HPF_NONE},
-    {"extender", "width",           "Width",           Vb6Type::Long,    HPF_NONE},
-    {"extender", "zorder",          "ZOrder",          Vb6Type::Unknown, HPF_METHOD},
+    {"Extender", "align",           "Align",           Vb6Type::Long,    HPF_NONE},
+    {"Extender", "cancel",          "Cancel",          Vb6Type::Boolean, HPF_NONE},
+    {"Extender", "container",       "Container",       Vb6Type::Unknown, HPF_NONE},
+    {"Extender", "default",         "vb6_Default",     Vb6Type::Boolean, HPF_NONE},
+    {"Extender", "drag",            "Drag",            Vb6Type::Unknown, HPF_METHOD},
+    {"Extender", "dragicon",        "DragIcon",        Vb6Type::Unknown, HPF_NONE},
+    {"Extender", "dragmode",        "DragMode",        Vb6Type::Long,    HPF_NONE},
+    {"Extender", "height",          "Height",          Vb6Type::Long,    HPF_NONE},
+    {"Extender", "helpcontextid",   "HelpContextID",   Vb6Type::Long,    HPF_NONE},
+    {"Extender", "left",            "Left",            Vb6Type::Long,    HPF_NONE},
+    {"Extender", "setfocus",        "SetFocus",        Vb6Type::Unknown, HPF_METHOD},
+    {"Extender", "tag",             "Tag",             Vb6Type::String,  HPF_NONE},
+    {"Extender", "tooltiptext",     "ToolTipText",     Vb6Type::String,  HPF_NONE},
+    {"Extender", "top",             "Top",             Vb6Type::Long,    HPF_NONE},
+    {"Extender", "visible",         "Visible",         Vb6Type::Boolean, HPF_NONE},
+    {"Extender", "whatsthishelpid", "WhatsThisHelpID", Vb6Type::Long,    HPF_NONE},
+    {"Extender", "width",           "Width",           Vb6Type::Long,    HPF_NONE},
+    {"Extender", "zorder",          "ZOrder",          Vb6Type::Unknown, HPF_METHOD},
 
     // ---- Ambient (宿主环境) ----
-    {"ambient", "backcolor",   "BackColor",   Vb6Type::Long,     HPF_NONE},
-    {"ambient", "displayname", "DisplayName", Vb6Type::String,   HPF_NONE},
-    {"ambient", "forecolor",   "ForeColor",   Vb6Type::Long,     HPF_NONE},
-    {"ambient", "font",        "Font",        Vb6Type::Unknown,  HPF_NONE},
-    {"ambient", "righttoleft", "RightToLeft", Vb6Type::Integer,  HPF_NONE},
-    {"ambient", "usermode",    "UserMode",    Vb6Type::Boolean,  HPF_NONE},
-};
+    {"Ambient", "backcolor",   "BackColor",   Vb6Type::Long,     HPF_NONE},
+    {"Ambient", "displayasdefault", "DisplayAsDefault", Vb6Type::Boolean,  HPF_NONE},
+    {"Ambient", "displayname", "DisplayName", Vb6Type::String,   HPF_NONE},
+    {"Ambient", "forecolor",   "ForeColor",   Vb6Type::Long,     HPF_NONE},
+    {"Ambient", "font",        "Font",        Vb6Type::Unknown,  HPF_NONE},
+    {"Ambient", "righttoleft", "RightToLeft", Vb6Type::Integer,  HPF_NONE},
+    {"Ambient", "usermode",    "UserMode",    Vb6Type::Boolean,  HPF_NONE},};
 
 inline const HostPseudoRow* hostPseudoFind(const std::string& pseudoObj,
                                     const std::string& memberName) {
@@ -143,17 +182,51 @@ inline const HostPseudoRow* hostPseudoFind(const std::string& pseudoObj,
     const std::string obj = hostPseudoLower(pseudoObj);
     const std::string mem = hostPseudoLower(memberName);
     for (const HostPseudoRow& r : kHostPseudoRows) {
-        if (obj == r.obj && mem == r.name) return &r;
+        if (obj == hostPseudoLower(r.obj) && mem == r.name) return &r;
     }
     return nullptr;
 }
 
+
+// 这个名字是不是表里的宿主伪对象 (今天四档)。账 #278 §B120: 这一句从前在发码侧抄了
+// 五份 (cgen_with 两处 / cgen_assign_host_pseudo / cgen_util_type / cgen_expr_member_obj_dispatch)。
+// 表里新增一档而哪一处没跟上，那一处就答"不是" —— 同一个名字两种答案，而答案决定的是
+// "这条成员访问要不要走宿主伪成员那条路"，静默。
+inline bool hostPseudoObjectKnown(const std::string& name) {
+    const std::string obj = hostPseudoLower(name);
+    if (obj.empty()) return false;
+    for (const HostPseudoRow& r : kHostPseudoRows) {
+        if (obj == hostPseudoLower(r.obj)) return true;
+    }
+    return false;
+}
+
+// 对象那一段在 RTL 符号里的拼法 (就是本表 obj 列)。装配只许经
+// CCodeGen::hostPseudoRtlSymbol 那一处，这里只交出那一段。
+inline bool hostPseudoObjectSymbol(const std::string& name, std::string& outPascal) {
+    const std::string obj = hostPseudoLower(name);
+    for (const HostPseudoRow& r : kHostPseudoRows) {
+        if (obj == hostPseudoLower(r.obj)) { outPascal = r.obj; return true; }
+    }
+    return false;
+}
 
 // 裸写的成员名能不能落到宿主伪成员上 (HPF_BARE)。发码侧的
 // CCodeGen::hostPseudoBareName 与语义层的放行判定都只问这一句。
 inline bool hostPseudoBareEligible(const std::string& pseudoObj, const std::string& memberName) {
     const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
     return r != nullptr && (r->flags & HPF_BARE) != 0;
+}
+
+// 这一档是不是"由专用码头回答"（HPF_CHANNEL），是的话把符号名交出去。
+// 两个消费点：语义层据此在**两个位**都放行（集合名当限定符用是 VB6 的常规写法），
+// 发码层据此决定发哪个码头 —— 名字到码头的映射只在这里写一次。
+inline bool hostPseudoChannel(const std::string& pseudoObj, const std::string& memberName,
+                              std::string& outChannel) {
+    const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
+    if (!r || (r->flags & HPF_CHANNEL) == 0 || r->channel == nullptr) return false;
+    outChannel = r->channel;
+    return true;
 }
 
 } // namespace vb6c3

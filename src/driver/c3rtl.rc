@@ -1,4 +1,54 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 账 #305 §B142(第三十四刀): Decimal 这一档的两处根因都是「格式」不是「数值」。
+//   ① `DECIMAL.wReserved` 这两字节其实是 oleaut32 自己的 vt 标签(它造的那些也写 14 = VT_DECIMAL)。
+//   vb6_CDec 的**手填字段**那两路以前把它留成 0 —— 字段值全对、格式不对, 于是 oleaut32 不报错地
+//   把这枚 DECIMAL 当无效: VariantChangeType 返回 S_OK 却交 0 / 交空串(逐字节对照见台账)。
+//   本刀从唯一出口 vb6_DEC_VT 补这一枚(两份布局各一处, 不在调用点抄 #ifdef)。
+//   ② x86 的 VARIANT 装 VT_DECIMAL 时**不走 pdecVal 指针**: 那 16 字节整个被一枚 DECIMAL 盖住
+//   (wReserved ↔ vt、scale/sign/Hi32 ↔ 三枚没用的 wReserved、lo64 ↔ 数据区)。只填指针时 oleaut32
+//   把那枚地址当数值答出来(前一轮那个「堆地址」读数就是这一条) —— ① 那枚标签的来历也在这里。
+//   读侧两枚出口: vb6_DecimalToBSTR(无格式串那侧) 与 vb6_DecimalToR8(Format 带格式串那侧 +
+//   vb6_VariantToDouble 的 Decimal 档 —— 后者一漏同时打掀 CLng/CDbl/CInt 三条内置函数, 它们全是
+//   转调它的薄壳)。两台实测六针全对(TypeName/IsNumeric/CStr 两条/CLng/CDbl)。
+//   选 VariantChangeType 不是取其方便: 在这套工具链里 `VarDecToR8`/`VarDecToString`/`VarDecToI4`
+//   根本没有可链接的名字(SDK 的 x64 oleaut32.lib 里没有, dll 也不按名字导出)。
+//   【第三十五刀补】标签收成一个写者(`vb6_DecSetTag`，在 `vb6_CDec` 末尾调一次）：纯 C 探针量到
+//   `VarDecFromR8` 造的那枚 `wReserved` 也是 **0**(只有 `VarDecFromStr` 写 14)，所以上面「它造的那些
+//   也写 14」只对字符串臂成立——浮点臂一直没人补，x64 上 `CStr(CDec(2.5))` 交空串、`CDbl` 交 0，而
+//   x86 被读侧的内联盖法救回来(两台不对称的形状)。读侧 x64 现在也补这一枚，与 x86 同形。
+//   同一枚带标签的 DECIMAL 逐一转的实测：→I4/→I8/→R4/→R8/→BOOL/→BSTR 全部 hr=S_OK 且答对，而带尾
+//   数的那几枚按**四舍六入向偶数**(2.5→2、3.5→4、-0.75→-1)，与 VB6 的 CLng 同形；我们的 CLng 现在
+//   答 3(它走的是 ToDouble 那一族)，所以 `CLng(CDec(2.5))` 刻意不钉 —— 它属 §B77① 那个未拍的口径。
+//   剩下的 7 处 vt 读表(ToLong/ToLongPtr/ToBool/ComPackVariant/memVariantToI4/
+//   vb6_ho_variantToLong·ToDouble)不在本刀里, 照 census 一起收在下一刀。
+//   【第三十五刀第二格(§B143)】那一刀的四格已出: vb6_VariantToLong / ToLongPtr / ToBool
+//   + vb6_VarToDouble_internal(「比较走哪个数值」那一口, 六条 Eq/Ne/Lt/Gt/Le/Ge 与它们的
+//   Long 形全从它取数)。每格的政策都不新造 —— 照**这张表对 double 的既有答案**办
+//   (整型两档 round、布尔档非零即真、比较档原样交 double)，取数一律只问 vb6_DecimalToR8。
+//   可达性是量出来的不是名单推的: 发码探针 .build/b1069_reach/probe4.bas 给出
+//   ToLong 4 处落点(赋给 Long / 赋给 Boolean / `CDec(5)+1` / 交数值形参)，其余三处各 1 处。
+//   BASE(第三十五刀第一格那台)两台逐条读数: I4=0 LP=0 BB=False IF=False ADD=1 EQ=False ARG=0。
+//   剩下三处刻意**不**补, 各自有因: vb6_ComPackVariant(往 COM 交参数, Decimal 那一档要走
+//   VARIANT 内联/指针的两套写法, 与本刀的「VB 侧取数」不是一个问)、memVariantToI4 与
+//   vb6_ho_variantToLong·ToDouble(宿主应答表那一路, 全仓 0 个 Decimal 调用点)。
+// 账 #305 §B141: CDec(...) 交出来的 VT_DECIMAL 这一档, 两张 VB-facing 读表从来没答过 —— 
+//   vb6_TypeName 落 default 答 "Variant"、vb6_IsNumeric 落 default 答假(两架构同错, 实测)。
+//   本刀补这两档(与 §B138 尾巴那批 VT_I8 同一族决定: 问的是「这枚 Variant 里是什么类型 / 算不算数」。
+//   写侧 vb6_CDec 四档本来就都答, 含 BSTR 走 VarDecFromStr)。
+// ⚠ 同一批读数把「往外读」的第二张表(vb6_Format 的类型分诊, detail/vb6rtl_format_extract.inc)量成
+//   另一格: 那一臂补上去之后 x86 把 DECIMAL 读成堆地址、x64 对 CDec(整数) 读出 0 ⇒ 罪在写侧/所有权,
+//   另立 §B142(候选块与四台读数留在 .build/b990_format_arm_candidate.inc)。
+//   【2026-10-11 第三十四刀订正】上面两句作废: 写侧的罪是**少写了一枚 vt 标签**(字段值一直是对的), 
+//   而那个「堆地址」形状是 x86 的 VARIANT 把 VT_DECIMAL 内联盖住、不走指针(见上方 §B142 ②)。
+//   过程里量到两条工具事实: ① vb6_VARIANT 在 x64 内联的 decVal 是**同布局的匿名 struct**, 不是 DECIMAL
+//   类型(直接赋值 C2440, 报错里源类型是空的); ② 本 TU 里调 VarDecToR8 只有 C4013 隐式声明,
+//   x86 真名是 _VarDecToR8@16 ⇒ LNK2019 **只在 x86 炸**(x64 不装饰反而过)。
+// 账 #305 (§B138 尾巴): 「指针宽度那一档属于 Long 同族」这条决定在 RTL 的 VB-facing 表里
+//   实现了多遍, 而其中四处漏了 VT_I8 —— §B138 把 VarPtr/StrPtr/ObjPtr 的类型答案改成 LongPtr 之后,
+//   x64 上这四处第一次真的被吃到: TypeName 答 "Variant"、IsNumeric 答假、vb6_ComPackVariant 落
+//   default ⇒ 地址**静默打包成 VT_EMPTY**、UC 宿主模型两枚取数读回 0。补的四处 =
+//   vb6rtl_conv.c (TypeName / IsNumeric) + vb6rtl_com.c (ComPackVariant) + uc_hostmodel.c (两枚取数)。
+//   touch 这份 .rc 是 RTL 重嵌的约定动作 (check_rtl_embedded.ps1 拿产物字节核对, 不靠人记着)。
 // 2026-10-06: 新增 Form/Printer 绘图方法家族 vb6forms_draw.c/.h (PSet/Line/
 //   Circle/Point/Cls, 资源 223/224)。此前 Form 级绘图面**完全缺失** —— 只有
 //   Shape/Line 控件的自绘路径, `Form_Paint` 里的 Me.PSet 等落进 COM dispatch
@@ -117,7 +167,7 @@
 //      各设计期子控件各调一次。**不能挂 vb6_ControlMove** (所有摆位的收口, 看似
 //      最自然) —— `ViewArea.Move` 正是 UserControl_Resize 内部发的, 而那个过程经
 //      WM_SIZE→push→resize→Move 链进来 ⇒ Move 里再跑子控件事件 = 无限递归。
-//      也不能加 `if (g_uc_current) return 0` —— 实测 WM_SIZE 尾部 g_uc_current
+//      也不能加 `if (vb6_ucCurrent) return 0` —— 实测 WM_SIZE 尾部 vb6_ucCurrent
 //      仍**非空** (WM_SIZE 是 SetWindowPos 的同步 SendMessage, 跑在 pop 之前),
 //      那道判据等于永不触发。
 //   修前 play78: ucFolder.ctl:529 `ViewArea_Resize` (ViewArea 的 Resize 事件, 是把
@@ -472,3 +522,84 @@
 
 /* Fix <vbeclipse> rev20: 新增 vb6_UC_ScaleWidthOf/ScaleHeightOf (按 me 解析实例)
    re-embed 1790930401 */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* 账 #218 第三刀: vbPicType/vbHitResult/vbAsync* 14 枚 RTL #define 撤掉 —— 值改由 src/semantics/builtin/builtin_consts.inc 单一权威交出, vb6rtl_userctl.h 因此变动; re-embed 1791500270 */
+/* 57b1f64e (ai/032) 给 RTL 加了 VB.NET 那一批 (vb6rtl.c / vb6rtl_builtin.h / vb6rtl_conv.c 的窄与无符号档), 但那一笔没 touch 本文件 ⇒ rc.exe 可能不重跑、C3.exe 里嵌的还是旧 RTL (见 memory rtl-reembed-c3rtl-rc-landmine)。本行就是那次 touch; §B97 那刀自己也重编了一次。 */
+/* 15e119f3 (ai/032 rev2) 又改了 src/rtl/core/vb6rtl/vb6rtl.c (id 101) 与 vb6rtl_builtin.h (id 135) 而没 touch 这个 .rc —— 补一行 marker 让 rc.exe 重跑。第 43 道哨兵 scripts/check_rtl_embedded.ps1 现在会把这种情形自己报红，不再靠人记（同一形状已撞过两次：#225 与 57b1f64e）。 */
+
+/* Fix 224: vb6rtl_userctl.h / vb6rtl_com.c 的 vb6_UserControl_ScaleX/Y 改 _Generic 分派 (真函数挂 _Raw) —— RTL 源变动, 本行是那次 touch, 让 rc.exe 重跑并把新 RTL 嵌进 C3.exe (见上一条 marker 的同款地雷)。 */
+
+/* 账 #206 第二十二刀 (面板几何换成缇 + getter 交排版结果): vb6forms_statusbar.c / vb6forms.c / vb6forms_memberobj.c / vb6forms_prop_ctrl.h / axsite/ax_load.c 都动了 RTL 源, 本行是那次 touch, 让 rc.exe 重跑并把新 RTL 嵌进 C3.exe。 */
+
+/* 账 #303 第二十三刀 (内容档那格的实测宽没从 fixedTotal 里扣 ⇒ 弹簧吃两次、末格越过客户区): 只动 vb6forms_statusbar.c 的 SbLayout, 本行是那次 touch。 */
+
+/* 账 #298 第二十四刀 (§B129 并表收尾): vb6forms.c 长出公式的唯一住处 (OnDc + 一对 float)，
+ * vb6forms_olecon.c / vb6forms_picture_prop.c / axsite/ax_site_ext.c / 头文件都改成只转调 ——
+ * DPI 不许再写死成 96。本行是那次 touch, 让 rc.exe 重跑并把新 RTL 嵌进 C3.exe。 */
+
+/* 账 #305 §B145 第三十六刀 (精确 Decimal 算数 / Variant 算术不再替运行期猜档): vb6rtl_com.c 长出
+ * 「槽 → 真 VARIANT」那张 vt 表的唯一一份 (vb6_VariantPackBorrow，补 Decimal/Currency/Date 三格)
+ * 与四枚运行期算术出口 (vb6_VarAddV / SubV / MulV / DivV)；vb6rtl.c 的 vb6_DecimalAsVariant 从
+ * static 出来；vb6rtl_variant.h 加声明；两条「往里读」的 x86 Decimal 臂一起改从结构体的头铺。
+ * 本行是那次 touch, 让 rc.exe 重跑并把新 RTL 嵌进 C3.exe。 */
+/* 账 #305 §B144 (2026-10-11 第三十八刀): vb6comserver_obj.c 的两处 memcpy 换成 RTL 出口
+ *   vb6_VariantBorrowIntoSlot / vb6_VariantPackCopyInto (新在 vb6rtl_com.c)，另把
+ *   「DECIMAL 住在 VARIANT 的哪一字节」收成 vb6_DecimalPtrFromVariant (vb6rtl.c)。
+ *   touch 本文件 = 让 125 份 RCDATA 重嵌一次 (§B99② 那道哨兵盯的就是这一格)。 */
+
+/* 账 #305 §B150 (2026-10-11 第四十刀): 晚绑定槽的多维元素读写。
+ *   vb6rtl_com.c 把「这枚数组槽的第 off 格是什么档」那张表从 vb6_VariantArrayGet 的体里提出来
+ *   (vb6_VariantElemFromSlotData) 并新发两枚出口 vb6_VariantArrayGetND / SetND；vb6rtl_array.c 的
+ *   elemType→尺寸 那张表 (vb6_sa_elem_size → vb6_SaElemSize) 同时 public 化 —— 步长由元素类型决定
+ *   这一件事不许有第二份答案。下标检查仍走唯一一枚 vb6_SaNdElemPtr (账 #209 那一族)。
+ *   再补一枚 vb6_VariantArrayElemPtrND：发码侧「整枚元素引用交址」两路 (As Any ByRef / VarPtr)
+ *   原先按老前缀比文本，新名不认就静默退化成临时盒 —— 认文本那一问也收成一张表。
+ *   touch 本文件 = 让 125 份 RCDATA 重嵌一次 (§B99② 那道哨兵盯的就是这一格)。 */
+
+
+/* 账 #305 §B150 收尾 (2026-10-12 第四十刀, 同一批的第二次 RTL 改动):
+ *   vb6rtl_registry.c 里 GetAllSettings 填两格时递给的步长, 原先手写 sizeof(vb6_VARIANT),
+ *   换成问 vb6_SaElemSize(vb6_sa_variant) —— 「一枚槽数组一格多宽」由 vb6rtl_array.c 那张表单独回答,
+ *   与上面那两条 ND 出口读的是同一份。touch 本文件 = 让 125 份 RCDATA 重嵌一次 (§B99②)。 */
+
+/* 账 #305 §B155 格①②（2026-10-12 第四十六刀）：「这枚数组是哪一档」第一次有了一张表 ——
+ *   vb6_SaVtFromElemType（vb6rtl_array.c）与上面那枚 vb6_SaElemSize 并排住；四个消费点
+ *   （vb6_VariantArray / vb6_VariantFromUdtBytes / vb6rtl_com.c 的两条 VT_ARRAY 进口）一起改问它；
+ *   装箱那一档新增唯一出口 vb6_SaVtOfArrayPtr（认载体：一维魔数 0x5A1D / 多维秩数 1..16）。
+ *   vb6_TypeName 的标量名单抽成 vb6_TypeNameScalar，数组那一支按 VB6 拼「元素名()」。
+ *   touch 本文件 = 让 125 份 RCDATA 重嵌一次（§B99②）。 */
+
+
+/* 账 #305 §B159（2026-10-12 第五十刀）：槽 → 真 VARIANT 那张表第一次有了**数组**那一臂 ——
+ *   vb6rtl_com.c 新增两枚 static：vb6_ComSaVtOut（哪几档元素许出站，blittable 才许；
+ *   「这枚数组是哪一档」仍只问上面那张 vb6_SaVtFromElemType）与 vb6_ComPackArrayOut
+ *   （唯一一处用载体**现造**一枚真 SAFEARRAY：界照抄、整块 memcpy、新数组归收到的那一头 Clear）。
+ *   vb6_VariantPackBorrow 里数组那一问排在 switch 之前（标签是 vb6_vtArray|元素码，对不上任何 case）；
+ *   vb6_VarArith 的借用契约里只有这一臂交的是新分配，所以就地 SafeArrayDestroy，不然每算一次漏一份。
+ *   回程那一半同时补：两条 VT_ARRAY 进口的手抄元素 switch（各只认 6 档）换成第三张表 vb6_SaElemTypeFromVt，
+ *   Byte/Boolean 数组交回来不再按 24 字节步长越界读、也不再答 8204/"Variant()"。
+ *   再补 §B162 那一臂（同批）：vb6_VariantBorrowIntoSlot 遇到真 SAFEARRAY 现在换成我们自己的描述符
+ *   （拷，白名单与出站同一张；认不出的档交回 vtEmpty），服务端 free 槽阵列前经 vb6_VariantSlotRelease 回收。
+ *   touch 本文件 = 让 125 份 RCDATA 重嵌一次（§B99②）。 */

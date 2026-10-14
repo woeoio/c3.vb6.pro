@@ -66,7 +66,9 @@ addConst("vbActiveTitleBarText", Vb6Type::Long, (long long)0x80000009);
     addConst("vbWhite", Vb6Type::Long, 16777215);
 
     // 字符串常量
-    auto addStrConst = [&](const char* name, const char* val) {
+    // 形参取 std::string (不是 const char*) —— 否则含**内嵌 NUL** 的常量
+    // (`vbNullChar` = Chr(0)) 会被 C 字符串语义在第一个 NUL 处截成空串。
+    auto addStrConst = [&](const char* name, const std::string& val) {
         auto sym = std::make_unique<Symbol>(SymbolKind::Constant, name, Vb6Type::String,
             SourceLocation{}, AccessLevel::Public);
         sym->hasConstValue = true;
@@ -79,7 +81,7 @@ addConst("vbActiveTitleBarText", Vb6Type::Long, (long long)0x80000009);
     addStrConst("vbLf", "\n");
     addStrConst("vbCrLf", "\r\n");
     addStrConst("vbNewLine", "\r\n");
-    addStrConst("vbNullChar", std::string(1, '\0').c_str());
+    addStrConst("vbNullChar", std::string(1, '\0'));
     addStrConst("vbTab", "\t");
     addStrConst("vbBack", "\b");
     addStrConst("vbFormFeed", "\f");
@@ -228,6 +230,11 @@ addConst("vbActiveTitleBarText", Vb6Type::Long, (long long)0x80000009);
     addConst("vbDropEffectNone", Vb6Type::Long, 0);
     addConst("vbDropEffectCopy", Vb6Type::Long, 1);
     addConst("vbDropEffectMove", Vb6Type::Long, 2);
+    addConst("vbDropEffectScroll", Vb6Type::Long, 0x80000000);
+
+    // ZOrder position constants
+    addConst("vbBringToFront", Vb6Type::Long, 0);
+    addConst("vbSendToBack", Vb6Type::Long, 1);
 
     // OLEDragOver State constants (State 参数)
     addConst("vbEnter", Vb6Type::Long, 0);
@@ -449,3 +456,55 @@ addConst("vbActiveTitleBarText", Vb6Type::Long, (long long)0x80000009);
     // vbExBackStyleConstants (BackStyle)
     addConstIfAbsent44("ssTransparent", Vb6Type::Long, 0);
     addConstIfAbsent44("ssOpaque", Vb6Type::Long, 1);
+
+
+    // 内在常量的**唯一权威**就是这张表。账 #218 第三刀把另外两格并进来：
+    // 以前「只在发码里逐名折叠」与「只在 RTL 头里 #define」各管一批名字，
+    // 语义层对这两格都不知道，于是
+    //   · 用户源文件里读 `vbPicTypeBitmap` 这类 ⇒ 语义层按未声明标识符建**隐式 Variant 变量**，
+    //     发码交出 `vb6_ChkLong(vbPicTypeBitmap)` 读的是刚初始化成 Empty 的那只 ⇒ 运行时恒 0（实测）；
+    //   · RTL 那 14 枚宏名与用户模块级变量天生撞车（账 #219 那一族），发码还得 push_macro/#undef 自救。
+    // 值全部由脚本从今天的两处权威**原样**抄来（不手改），所以对发码只改「数从哪来」。
+    // 可见后果三种，逐行归因过才认：① 折叠里带括号的写法（`(13369376)`）换成表路径的裸数字；
+    // ② 那 14 枚名字不再有 push_macro/#undef 与 `vb6_VARIANT … /* 隐式变量 */` 两行；
+    // ③ 这些名字从此有 Long 型，下游按常量而非 Variant 变量走。
+    // 字符串档（vbCrLf / vbNewLine / vbNullString 那一类交出 BSTR 表达式）不进本表：
+    // 本表只存整数，那条内联路另计。与「表里已有、发码仍逐名折叠」的那一批另计：
+    // 由 scripts/check_builtin_const_authority.ps1 按**棘轮**钉住数量，不许再长。
+    // ⚠ 这张表其实有两份片段：builtin_consts.inc + builtin_consts_ext.inc（后者在
+    // registerBuiltins 里排在后面，两段共用同一个 SymbolTable）。所以往里加名字之前
+    // 必须两份都查过 —— 只查一份会插出重复声明，每份工程编译都响 VB3002（本刀第一轮就这么红过）。
+    addConstIfAbsent44("vbblackness", Vb6Type::Long, 66);
+    addConstIfAbsent44("vbcallgetnext", Vb6Type::Long, 2);
+    addConstIfAbsent44("vbcalllet", Vb6Type::Long, 3);
+    addConstIfAbsent44("vbcallmethod", Vb6Type::Long, 13);
+    addConstIfAbsent44("vbcallobject", Vb6Type::Long, 1);
+    addConstIfAbsent44("vbcallset", Vb6Type::Long, 14);
+    addConstIfAbsent44("vbfirstdayofweek", Vb6Type::Long, 1);
+    addConstIfAbsent44("vbfirstweekofyear", Vb6Type::Long, 1);
+    addConstIfAbsent44("vblogeventtypeconstant", Vb6Type::Long, 1);
+    addConstIfAbsent44("vblogeventtypeerror", Vb6Type::Long, 4);
+    addConstIfAbsent44("vblogeventtypeinformation", Vb6Type::Long, 2);
+    addConstIfAbsent44("vblogeventtypewarning", Vb6Type::Long, 3);
+    addConstIfAbsent44("vbsimple", Vb6Type::Long, 256);
+    addConstIfAbsent44("vbsrcand", Vb6Type::Long, 8913094);
+    addConstIfAbsent44("vbsrccopy", Vb6Type::Long, 13369376);
+    addConstIfAbsent44("vbsrcinvert", Vb6Type::Long, 5588696);
+    addConstIfAbsent44("vbsrcpaint", Vb6Type::Long, 15597702);
+    addConstIfAbsent44("vbusecompare", Vb6Type::Long, -1);
+    addConstIfAbsent44("vbusedefault", Vb6Type::Long, -2);
+    addConstIfAbsent44("vbwhiteness", Vb6Type::Long, 16711782);
+    addConstIfAbsent44("vbAsyncReadAsynchronous", Vb6Type::Long, 2);
+    addConstIfAbsent44("vbAsyncReadForceUpdate", Vb6Type::Long, 4);
+    addConstIfAbsent44("vbAsyncReadSynchronous", Vb6Type::Long, 0);
+    addConstIfAbsent44("vbAsyncTypeByteArray", Vb6Type::Long, 2);
+    addConstIfAbsent44("vbAsyncTypeFile", Vb6Type::Long, 1);
+    addConstIfAbsent44("vbAsyncTypePicture", Vb6Type::Long, 0);
+    addConstIfAbsent44("vbHitResultHit", Vb6Type::Long, 2);
+    addConstIfAbsent44("vbHitResultOutside", Vb6Type::Long, 0);
+    addConstIfAbsent44("vbHitResultTransparent", Vb6Type::Long, 1);
+    addConstIfAbsent44("vbPicTypeBitmap", Vb6Type::Long, 1);
+    addConstIfAbsent44("vbPicTypeEMetafile", Vb6Type::Long, 4);
+    addConstIfAbsent44("vbPicTypeIcon", Vb6Type::Long, 3);
+    addConstIfAbsent44("vbPicTypeMetafile", Vb6Type::Long, 2);
+    addConstIfAbsent44("vbPicTypeNone", Vb6Type::Long, 0);

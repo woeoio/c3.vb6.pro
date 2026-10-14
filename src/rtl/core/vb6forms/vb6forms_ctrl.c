@@ -19,6 +19,7 @@
 #include <olectl.h>   /* IPicture, OleLoadPicture, OLE_HANDLE */
 
 
+
 // ============================================================
 // 控件属性读写 (P7.5)
 // ============================================================
@@ -134,13 +135,58 @@ int32_t vb6_WindowScaleModeSelf(void* hwnd) {
     return vb6_GetScaleMode(hwnd);
 }
 
+/* 账 #230: 控件几何的 **VB 侧读数**。
+   VB6 的 Left/Top/Width/Height 是属性值，不是窗口位置的投影：写 1007 就读回 1007，
+   哪怕窗口只能落在 67 像素（= 1005 缇）上。此前这四个 getter 一律现问 GetWindowRect
+   再折算 ⇒ 每一次读写都掉一个 1/15 的量化坑（写 5000 读回 4995），而且 .frm 里的设计值
+   也一样被重算 —— 语料实测 **238 处**设计几何值不是 15 的倍数（NewTab-test 86 处、
+   ctrlslider 22 处、btnfocus 15 处…，多半是在 120 DPI 上排出来的），今天没有一处读得回
+   当初写进去的那个数。
+   存的是 (数, 写它时容器的 ScaleMode)。两道闸决定用它还是退回投影：
+     · 容器的 ScaleMode 换过 ⇒ 那个数已经不代表同一件事了 ⇒ 投影
+       （VB6 在切换 ScaleMode 之后交回新单位的数 —— 探针 G10/G11 钉住这一头）；
+     · 按存着的数换算出来的像素 ≠ 窗口现在的像素 ⇒ **别人**挪过这枚窗口
+       （ComboBox 建窗时自己补下拉高度、PictureBox AutoSize、SSTab 翻页排版…，
+        这类点位不列清单，靠这一问自愈）⇒ 投影。
+   窗口属性名各一档（账 #185 那一课：一层一个名字，别拿同名槽位互相挤掉）。
+   值存 2v+1：它恒为奇数 ⇒ 永远不会是 0，而 SetPropW(…,0) 等于删属性（账 #107）。 */
+static const wchar_t* vb6_GeomSlotName(int slot) {
+    switch (slot) {
+        case VB6_GEOM_LEFT:  return L"VB6_GeomL";
+        case VB6_GEOM_TOP:   return L"VB6_GeomT";
+        case VB6_GEOM_WIDTH: return L"VB6_GeomW";
+        default:             return L"VB6_GeomH";
+    }
+}
+
+void vb6_GeomCacheWrite(void* hwnd, int slot, int value, int32_t mode) {
+    if (!hwnd) return;
+    SetPropW((HWND)hwnd, L"VB6_GeomMode", (HANDLE)(INT_PTR)(mode + 1));
+    SetPropW((HWND)hwnd, vb6_GeomSlotName(slot), (HANDLE)(INT_PTR)((INT_PTR)value * 2 + 1));
+}
+
+int vb6_GeomCacheRead(void* hwnd, int slot, int actualPx, int32_t mode, int fallback) {
+    if (!hwnd) return fallback;
+    HANDLE hm = GetPropW((HWND)hwnd, L"VB6_GeomMode");
+    if (!hm) return fallback;
+    if ((int32_t)(INT_PTR)hm - 1 != mode) return fallback;
+    HANDLE hv = GetPropW((HWND)hwnd, vb6_GeomSlotName(slot));
+    if (!hv) return fallback;
+    int v = (int)(((INT_PTR)hv - 1) / 2);
+    /* slot & 1 = 竖直那一轴（TOP/HEIGHT 都是奇数档），与下面各 getter 传 vert 的口径一致 */
+    if (vb6_ScaleUserToPx((double)v, mode, slot & 1) != actualPx) return fallback;
+    return v;
+}
+
 int vb6_GetControlLeft(void* hwnd) {
     if (!hwnd) return 0;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
-    return (int)vb6_ScalePxToUser((double)pt.x, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 0);
+    int32_t cm = vb6_ContainerScaleMode(GetParent((HWND)hwnd));
+    return vb6_GeomCacheRead(hwnd, VB6_GEOM_LEFT, pt.x, cm,
+                             (int)vb6_ScalePxToUser((double)pt.x, cm, 0));
 }
 
 void vb6_SetControlLeft(void* hwnd, int left) {
@@ -149,8 +195,10 @@ void vb6_SetControlLeft(void* hwnd, int left) {
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
-    SetWindowPos((HWND)hwnd, NULL, vb6_ScaleUserToPx((double)left, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 0),
+    int32_t cm = vb6_ContainerScaleMode(GetParent((HWND)hwnd));
+    SetWindowPos((HWND)hwnd, NULL, vb6_ScaleUserToPx((double)left, cm, 0),
                  pt.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    vb6_GeomCacheWrite(hwnd, VB6_GEOM_LEFT, left, cm);
 }
 
 int vb6_GetControlTop(void* hwnd) {
@@ -159,7 +207,9 @@ int vb6_GetControlTop(void* hwnd) {
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
-    return (int)vb6_ScalePxToUser((double)pt.y, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 1);
+    int32_t cm = vb6_ContainerScaleMode(GetParent((HWND)hwnd));
+    return vb6_GeomCacheRead(hwnd, VB6_GEOM_TOP, pt.y, cm,
+                             (int)vb6_ScalePxToUser((double)pt.y, cm, 1));
 }
 
 void vb6_SetControlTop(void* hwnd, int top) {
@@ -168,41 +218,61 @@ void vb6_SetControlTop(void* hwnd, int top) {
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
+    int32_t cm = vb6_ContainerScaleMode(GetParent((HWND)hwnd));
     SetWindowPos((HWND)hwnd, NULL, pt.x,
-                 vb6_ScaleUserToPx((double)top, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 1),
+                 vb6_ScaleUserToPx((double)top, cm, 1),
                  0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    vb6_GeomCacheWrite(hwnd, VB6_GEOM_TOP, top, cm);
 }
 
 int vb6_GetControlWidth(void* hwnd) {
     if (!hwnd) return 0;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
-    return (int)vb6_ScalePxToUser((double)(rc.right - rc.left), vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 0);
+    int px = rc.right - rc.left;
+    int32_t cm = vb6_ContainerScaleMode(GetParent((HWND)hwnd));
+    return vb6_GeomCacheRead(hwnd, VB6_GEOM_WIDTH, px, cm,
+                             (int)vb6_ScalePxToUser((double)px, cm, 0));
 }
 
 void vb6_SetControlWidth(void* hwnd, int width) {
     if (!hwnd) return;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
+    int32_t cm = vb6_ContainerScaleMode(GetParent((HWND)hwnd));
     SetWindowPos((HWND)hwnd, NULL, 0, 0,
-                 vb6_ScaleUserToPx((double)width, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 0),
+                 vb6_ScaleUserToPx((double)width, cm, 0),
                  rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER);
+    vb6_GeomCacheWrite(hwnd, VB6_GEOM_WIDTH, width, cm);
+    /* czUI fix (3DMenu 方块): AutoRedraw 控件运行时改 Width 时, VB6 会按新客户区
+     * 重建持久位图, 这里此前不动 ARDC —— 3DMenu 的 ImgMenuBack (AutoSize+AutoRedraw,
+     * Form_Load 里 .Width = ImgMenu(0).Width) 窗口已 127x127 而 ARDC 停在设计期
+     * 25x25, RuotaMenu/Timer_Shift 抓贴 127x127 背景全被裁成左上 25x25, 再贴回
+     * 图标左上角就是"缺一块背景色方块"。有 ARDC 就按新客户区重建。 */
+    if (GetPropW((HWND)hwnd, L"VB6_AutoRedrawDC")) vb6_AutoRedrawRefit(hwnd);
 }
 
 int vb6_GetControlHeight(void* hwnd) {
     if (!hwnd) return 0;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
-    return (int)vb6_ScalePxToUser((double)(rc.bottom - rc.top), vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 1);
+    int px = rc.bottom - rc.top;
+    int32_t cm = vb6_ContainerScaleMode(GetParent((HWND)hwnd));
+    return vb6_GeomCacheRead(hwnd, VB6_GEOM_HEIGHT, px, cm,
+                             (int)vb6_ScalePxToUser((double)px, cm, 1));
 }
 
 void vb6_SetControlHeight(void* hwnd, int height) {
     if (!hwnd) return;
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
+    int32_t cm = vb6_ContainerScaleMode(GetParent((HWND)hwnd));
     SetWindowPos((HWND)hwnd, NULL, 0, 0, rc.right - rc.left,
-                 vb6_ScaleUserToPx((double)height, vb6_ContainerScaleMode(GetParent((HWND)hwnd)), 1),
+                 vb6_ScaleUserToPx((double)height, cm, 1),
                  SWP_NOMOVE | SWP_NOZORDER);
+    vb6_GeomCacheWrite(hwnd, VB6_GEOM_HEIGHT, height, cm);
+    /* czUI fix: 同 vb6_SetControlWidth —— 运行时改 Height 也要重建 ARDC。 */
+    if (GetPropW((HWND)hwnd, L"VB6_AutoRedrawDC")) vb6_AutoRedrawRefit(hwnd);
 }
 
 // Fix 162a-extlist: VB6 `obj.Move Left[, Top[, Width[, Height]]]` —— 语言级方法
@@ -252,6 +322,13 @@ void vb6_ControlMove(void* hwnd, double L, double T, double W, double H, int mas
      *   (ucFolder.ViewArea_Resize 里自己就 Move 视图窗体)。*/
     int sizeChanged = ((w != rc.right - rc.left) || (h != rc.bottom - rc.top));
     SetWindowPos(hW, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    /* 账 #230: Move 与属性赋值是同一件事的两个来路 ⇒ 给的哪几档就存哪几档。
+       漏了这一处，Move 之后读 Left 会读到上一轮的旧缓存（缓存自己会被像素闸拦下，
+       但那正是"存什么读什么"失效的那一格）。 */
+    if (mask & 1) vb6_GeomCacheWrite(hwnd, VB6_GEOM_LEFT, (int)L, cm);
+    if (mask & 2) vb6_GeomCacheWrite(hwnd, VB6_GEOM_TOP, (int)T, cm);
+    if (mask & 4) vb6_GeomCacheWrite(hwnd, VB6_GEOM_WIDTH, (int)W, cm);
+    if (mask & 8) vb6_GeomCacheWrite(hwnd, VB6_GEOM_HEIGHT, (int)H, cm);
     /* Fix <vbeclipse> rev24: 设计期子控件的 `<Ctrl>_Resize` 事件在这里**排队**
      * (rev22 曾直接在这里跑 ⇒ 递归; rev23 把触发改到宿主 WM_SIZE, 但那只覆盖
      * "**宿主自己**尺寸变了"这一种 —— 见下面为什么不够)。
@@ -636,6 +713,26 @@ void vb6_SetControlBackColor(void* hwnd, int color) {
 // ============================================================
 LRESULT vb6_ApplyCtlColorStatic(HDC hdc, HWND child) {
     if (!hdc || !child) return 0;
+    // Fix <c3-menu3d-labelbg>: Label BackStyle=0 (Transparent) —— VB6 里这种 Label
+    // **完全不画背景**, 文字直接坐在父窗底色上。窗口层这边 Label 是 STATIC 窗口类,
+    // 它的 WM_PAINT 会用本消息返回的刷子把控件矩形整块填一遍; 不接管就落到
+    // DefWindowProcW 的类背景刷 (COLOR_WINDOW = 纯白) ⇒ 一块白方块。
+    // 口径与 vb6_CtlColorBtnBrush 对 CheckBox/OptionButton 的处理**完全一致**:
+    // 空刷 → 不填背景 → 透出父窗。
+    // 两处细节:
+    //   · 还必须 SetBkMode(TRANSPARENT) —— 否则 STATIC 画文字时按 DC 当前背景色
+    //     在每个字形后面糊一块底色 (LblSub 的 "PROGDVB IRDETO" 就会带白边)。
+    //   · 前景色仍要下发 —— 否则 STATIC 用 DC 默认黑, 丢掉 Label.ForeColor
+    //     (3DMenu 的 LblSub(0) 是浅绿 &H0080FF80&)。
+    // ⚠ 必须排在下面的 VB6_BackColorSet 检查**之前**: BackStyle=0 的 Label 通常
+    // 压根没写 BackColor (3DMenu 的 Label3/LblSub 都是), 落到下面直接 return 0。
+    if (GetPropW(child, L"VB6_BackStyle0")) {
+        COLORREF tfg = (COLORREF)vb6_GetControlForeColor((void*)child);
+        if (tfg & 0x80000000L) tfg = GetSysColor(tfg & 0xFF);
+        SetTextColor(hdc, tfg);
+        SetBkMode(hdc, TRANSPARENT);
+        return (LRESULT)GetStockObject(HOLLOW_BRUSH);
+    }
     // Fix 187: 只看 Set 哨兵, 不看值 — color=0 (黑) 的值属性是 NULL, 但它是合法色。
     if (!GetPropW(child, L"VB6_BackColorSet")) return 0;  // 未显式设色 → 调用方走默认绘制
     COLORREF bg = (COLORREF)(INT_PTR)GetPropW(child, L"VB6_BackColor");
@@ -721,6 +818,23 @@ intptr_t vb6_GetControlHDC(void* hwnd) {
     HDC hdc = vb6_ControlDrawDC(hw, &fromPaint);   // 口径只有上面那一处
     if (!hdc) return 0;
     if (fromPaint) return (intptr_t)hdc;           // 派发期那张：既不缓存也不释放
+    // Fix <vbeclipse> 2026-10-07: AutoRedraw 控件/窗体的 `.hDC` = 记忆 DC (VB6 语义)。
+    // 旧版回落 GetDC(窗口) —— 对**隐藏 / 从未画过**的 PictureBox，那张 DC 恒为空，
+    // 于是 `TransBltNow(Me.hdc, …, ImgMenu(Num).hdc, …)` 从空源合成，图标永远画不出来
+    // (3DMenu 全套 AutoRedraw=True 实测)。镜像 (vb6forms_picture_prop.c 的
+    // vb6_MirrorPictureToAutoRedraw) 已经把 Picture 画进 VB6_AutoRedrawDC，
+    // 这里只需把它交还出去。若本进程连 ARDC 都没有再落旧路。
+    HDC ard = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+    if (ard) {
+        ReleaseDC(hw, hdc);
+        /* VB6 语义: 往 AutoRedraw 记忆 DC 画完, 屏幕会在泵里跟着重绘 (Cls/hdc 绘制
+         * 都不显式 Refresh, 环形菜单的定时器动画全靠这一点上屏)。C3 此前缺这一步:
+         * ARDC 内容每 10ms 都在更新, 但没人 InvalidateRect → 窗口停在首次 WM_PAINT
+         * 的平图 (3DMenu 实测: ARDC 里环+底图齐全, 屏幕恒 F0F0F0)。标记脏即可,
+         * 不在这里 UpdateWindow — 绘制还没结束, 重绘交给泵在本 tick 回调返回后做。 */
+        InvalidateRect(hw, NULL, FALSE);
+        return (intptr_t)ard;
+    }
     HDC held = (HDC)GetPropW(hw, L"VB6_ObjectDC");
     if (held) { ReleaseDC(hw, hdc); return (intptr_t)held; }   // 刚才那张是白拿的
     SetPropW(hw, L"VB6_ObjectDC", (HANDLE)hdc);
@@ -1004,8 +1118,9 @@ static void vb6_CdCancel(void* hwnd) {
 // 只有环境变量 C3_CDPROBE=1 才上膛，不设时这条路完全不存在（现有 ctrldlg 用例逐字不变）。
 // 线程只认**本线程**创建的 #32770（EnumThreadWindows），所以不会去关别人的窗；发过去的
 // WM_COMMAND/IDCANCEL 就是「用户点了取消」那条出口。于是「对话框真出现过」这条判据的断点
-// 就是取消出口本身：框没出现 ⇒ 没人取消 ⇒ CancelError 不会报 32755。找不到就不动，
-// 那种情况由套件的 -RunTimeoutSec 兜底（用例阶段最多 60 s）。
+// 就是取消出口本身：框没出现 ⇒ 没人取消 ⇒ CancelError 不会报 32755。线程只认两条出口
+// ——命中(Fired)与撤膛(Stop)——，都等不到才由 60 s 保险丝罢手（真兜底是套件的逐例预算，
+// §B140 那张表；这一格的重复收费记在 §B157）。
 typedef struct { DWORD tid; } vb6_CdProbeArgs;
 
 static volatile LONG vb6_CdProbeFired = 0;
@@ -1025,10 +1140,20 @@ static BOOL CALLBACK vb6_CdProbeEnum(HWND h, LPARAM lp) {
 static DWORD WINAPI vb6_CdProbeProc(LPVOID arg) {
     vb6_CdProbeArgs a = *(vb6_CdProbeArgs*)arg;
     free(arg);
-    for (int i = 0; i < 400; i++) {           // 最多等约 4 s
-        BOOL found = FALSE;
-        EnumThreadWindows(a.tid, vb6_CdProbeEnum, (LPARAM)&found);
-        if (found || InterlockedCompareExchange(&vb6_CdProbeStop, 0, 0)) break;
+    // 出口只有两条，且都是真事件：Fired = 那一发 WM_COMMAND/IDCANCEL 已经递进框里；
+    // Stop = 调用方已经从 pFn 回来（撤膛）。改前这里问的是一枚**没人写**的 `found`（回调只
+    // (void)lp 就返回了），于是命中之后线程照样每拍重数一遍窗口、把取消一遍遍投进
+    // 正在关的框 —— 本机 8 枚忙等压 4 vCPU 实测一枚框吃到 259 发、同一枚 ShowSave 的墙钟
+    // 从空载 0.22 s 推到 4.64 s，而这笔放大正是门 #548/#569 那两轮吃满具名 150 s 预算的因
+    // （台账 §B157）。Fired 从前有写者没读者，哨兵 check_run_budget 的 B7 现在两头都钉。
+    // 保险丝按**毫秒**记：Sleep(10) 实测落在 15.6 ms 的系统 tick 上、压满时更长，所以拍数
+    // 不是时间单位，拿它当上限就是拿运气当上限。
+    const DWORD fuse = GetTickCount() + 60000;
+    for (;;) {
+        EnumThreadWindows(a.tid, vb6_CdProbeEnum, 0);
+        if (InterlockedCompareExchange(&vb6_CdProbeFired, 0, 0)) break;
+        if (InterlockedCompareExchange(&vb6_CdProbeStop, 0, 0)) break;
+        if ((LONG)(GetTickCount() - fuse) >= 0) break;
         Sleep(10);
     }
     return 0;
@@ -1047,6 +1172,7 @@ static int vb6_CdProbeOn(void) {
 static HANDLE vb6_CdProbeArm(void) {
     if (!vb6_CdProbeOn()) return 0;
     InterlockedExchange(&vb6_CdProbeStop, 0);
+    InterlockedExchange(&vb6_CdProbeFired, 0);   // 每一发重新归零：线程读的就是它，不归零则第二发 Show* 会看见第一发的命中、一发都不投
     vb6_CdProbeArgs* a = (vb6_CdProbeArgs*)malloc(sizeof(vb6_CdProbeArgs));
     if (!a) return 0;
     a->tid = GetCurrentThreadId();
@@ -1056,7 +1182,8 @@ static HANDLE vb6_CdProbeArm(void) {
     return h;
 }
 
-// 撤膛必须真撤：上一发的线程若没命中，会一直轮到 4 s，可能把**下一发** Show* 的框关掉。
+// 撤膛必须真撤：上一发的线程还活着就会去关**下一发** Show* 的框。Stop 落地后它最多再睡一拍
+// （实测 15.6 ms）就退，所以这里等 2 s 是够的 —— 改前那句「一直轮到 4 s」把拍数当成了时间。
 static void vb6_CdProbeDisarm(HANDLE h) {
     if (h) {
         InterlockedExchange(&vb6_CdProbeStop, 1);

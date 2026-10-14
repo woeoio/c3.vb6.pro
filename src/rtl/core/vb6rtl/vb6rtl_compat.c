@@ -347,7 +347,17 @@ struct vb6_SafeArray1D* vb6_Filter(struct vb6_SafeArray1D* source, BSTR match, i
     return result;
 }
 
+// 账 #257 第十三层: StrPtr 的空串口径。
+// VB6 里"空串"的 StrPtr 答 **0** —— 未赋值的 String、`vbNullString`、`""` 一律如此。
+// 这不是实现细节而是 VB6 明文语义, 生态里两处标准写法都靠它:
+//   · `If StrPtr(s) = 0 Then` 判"可选字符串省略了 / InputBox 被取消";
+//   · Declare 侧 `If StrPtr(FileName) = NULL_PTR Then <用默认> Else <LoadLibrary(StrPtr)>`
+//     (ComCtlsDemo Animation.LoadRes 实测就是这一处: 单参调用 `LoadRes ResID` 走了
+//      LoadLibrary 分支 ⇒ NULL ⇒ Err.Raise 53)。
+// ⚠ 判空**不能**看首字符: `String$(n, vbNullChar)` 首字符就是 NUL 但长度非 0, StrPtr 必须非 0。
+// 一律按 BSTR 的**长度**判 (SysStringLen), 它同时也把 NULL 与"显式零长 BSTR"统一成同一档。
 void* vb6_StrPtr(BSTR s) {
+    if (vb6_BSTR_Len(s) == 0) return NULL;
     return (void*)s;  // BSTR points directly to string data
 }
 
@@ -370,6 +380,15 @@ BSTR vb6_LSet(BSTR str, int32_t length) {
     BSTR result = vb6_BSTR_FromStr(buf);
     free(buf);
     return result;
+}
+
+BSTR vb6_LSetFree(BSTR str, int32_t length) {
+    /* 账 #118: 定长串赋值收口 —— LSet 同款结果, 顺带释放入参。
+     * 发码侧只在"RHS 是自有临时串"那一侧发这个 (与 vb6_BSTR_AssignMove 的选择同一把尺),
+     * 借用侧 (变量/形参/字段) 发裸 vb6_LSet —— 那时不能释放别人的串。 */
+    BSTR r = vb6_LSet(str, length);
+    vb6_BSTR_Free(str);
+    return r;
 }
 
 BSTR vb6_RSet(BSTR str, int32_t length) {

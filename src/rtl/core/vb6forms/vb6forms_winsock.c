@@ -905,7 +905,7 @@ static BSTR vb6_WsTake(struct vb6_WsInstance* e, int32_t maxLen) {
 
 // Byte 那一形的取数：把 [rxHead, rxHead+take) 这段**原始字节**装成一枚新的 vb6_sa_byte 数组交给调用方。
 // VB6 的形态就是"控件把那个变量的数组描述符换掉"，所以旧的那枚由我们销毁（不销就是每取一次漏一块）；
-// 只销 signature 对得上的 1D 把手（Fix 082g 那枚魔数就是为这种场合准备的）。
+// 只销"确实是 1D 描述符"的那一枚（vb6_SaIs1D：cDims==1 + fFeatures 标记，见 vb6rtl_array.h）。
 // take = 0 给的是 count=0 的空数组（UBound=-1、LBound=0 ⇒ `UBound-LBound+1` 读出 0，
 // 与 VB6"没数据就是空数组"同形）。consume = 0 是 PeekData 那一半：形状照做，但缓冲的头不动。
 static int32_t vb6_WsTakeBytes(struct vb6_WsInstance* e, void* out, int32_t maxLen, int consume) {
@@ -921,7 +921,7 @@ static int32_t vb6_WsTakeBytes(struct vb6_WsInstance* e, void* out, int32_t maxL
         e->rxLen -= take;
         if (!e->rxLen) e->rxHead = 0;
     }
-    if (*dst && (*dst)->signature == 0x5A1D) vb6_SafeArrayDestroy1D(*dst);
+    if (vb6_SaIs1D(*dst)) vb6_SafeArrayDestroy1D(*dst);
     *dst = arr;
     return (int32_t)take;
 }

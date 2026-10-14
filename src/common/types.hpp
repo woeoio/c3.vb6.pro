@@ -38,6 +38,15 @@ enum class Vb6Type : uint16_t {
     // -2^63 .. 2^63-1」的语义不符, 实测让 Asm 过程的 int64 返回值高位全丢。
     // 语义: 恒为 64 位有符号 (int64_t), 与架构无关 (对比 LongPtr 是架构宽度)。
     LongLong = 21,
+    // 无符号/小整型族 (C3 扩展, ai/032)。位宽**对齐本枚举自己的阶梯**:
+    // SByte/UInteger/ULong/ULongLong = 8/16/32/64, 即 `U<x>` 恒等于「<x> 的无符号版」
+    // (Integer=16 → UInteger=16, Long=32 → ULong=32, LongLong=64 → ULongLong=64)。
+    // 不取 VB.NET 的 UInteger=32 口径 —— 那会让 UInteger 与 ULong 位宽撞车, 且与本
+    // 编译器既有的 Long=32/LongLong=64 命名冲突。注意 ULong 早在 19 就存在 (值语义
+    // 一直按 uint32_t 走), 本次只是把词法/语义层的入口补齐。
+    SByte = 22,      // 8-bit signed
+    UInteger = 23,   // 16-bit unsigned (对照 Integer=16)
+    ULongLong = 24,  // 64-bit unsigned (对照 LongLong=64)
     UserDefinedType = 36,
     Array = 8192,    // bit flag
     ByRef = 16384,   // bit flag

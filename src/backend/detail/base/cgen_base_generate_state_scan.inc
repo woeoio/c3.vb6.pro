@@ -12,6 +12,11 @@
     classByteArrayMembers_.clear();  // Fix 140
     classUdtMembers_.clear();  // Fix 010n
     moduleUdtMembers_.clear();  // Fix 010n (扩展): 普通模块模块级UDT变量
+    moduleFixedStringLen_.clear();  // 账 #118: 模块级定长串 (类模块与普通模块都要)
+    // 账 #118: UDT 定长字段表按**本模块**重建。不 clear 的话, 上一个模块的
+    // `Type Rec: f As String * 8` 会在本模块同名 UDT (哪怕字段形状不同或根本不是定长)
+    // 上诈尸 —— 表键是 C 类型名, 两个模块各有自己的 `vb6_type_Rec`。
+    udtFixedStrFieldLen_.clear();
     classMemberVars_.clear();  // Fix 010r
     if (isClassModule_) {
         for (auto& decl : module.declarations) {
@@ -157,6 +162,25 @@
                 }
             }
         }
+    }
+    // 账 #118: 模块级定长串留底 (`Private gT As String * 5`)。与下面那条模块级 UDT 同因:
+    // 登记发生在 declaration 阶段, 而 knownFixedStringLen_ 在**每个过程入口**被 clear
+    // ⇒ 不在扫描阶段留底, 过程体里就再也看不见它 (`gT = "ab"` 不补空格、`Len(gT)` 给值长)。
+    // 类模块与普通模块都扫 (下面那条 UDT 只管普通模块, 定长串两侧都要)。
+    // 名字两套都记: 类模块的 C 字段是 m_Xxx, 过程体里 AST 名是原始的 Xxx —— 查表走
+    // AST 名, 但顺带记一条 m_xxx 与 classBstrMembers_ 的做法对齐, 不吃亏。
+    for (auto& decl : module.declarations) {
+        if (decl->kind != ASTNodeKind::VariableDecl) continue;
+        auto& varFs = static_cast<VariableDecl&>(*decl);
+        if (!(varFs.asType && varFs.asType->kind == ASTNodeKind::FixedStringTypeRef)) continue;
+        emitExpr(*static_cast<FixedStringTypeRef&>(*varFs.asType).length);
+        if (lastExpr_.empty()) continue;
+        std::string oLowerFs = varFs.name;
+        std::transform(oLowerFs.begin(), oLowerFs.end(), oLowerFs.begin(), ::tolower);
+        moduleFixedStringLen_[oLowerFs] = lastExpr_;
+        std::string mLowerFs = "m_" + varFs.name;
+        std::transform(mLowerFs.begin(), mLowerFs.end(), mLowerFs.begin(), ::tolower);
+        moduleFixedStringLen_[mLowerFs] = lastExpr_;
     }
     // Fix 010n (扩展): 普通模块(.bas/.frm)模块级UDT变量持久化.
     // 与类模块 classUdtMembers_ 对称 — 过程开头 knownUdtVars_.clear() 后,

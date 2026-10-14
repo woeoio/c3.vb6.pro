@@ -217,6 +217,10 @@ void SemanticAnalyzer::visit(ExitStmt& node) {
 }
 
 void SemanticAnalyzer::visit(CallStmt& node) {
+    // 账 #232①: 窗体里裸写的画布动词先折成 Me.<动词>，再按普通成员访问分析。
+    // 为什么必须在 analyzeExpr 之前: 那一路会把查不到的名字落成"隐式 Variant 局部"
+    // (实测发出 vb6_VARIANT Cls = vb6_VariantEmpty(); Cls();)，折完之后那条隐式声明根本不会出现。
+    foldBareCanvasVerb(node.callee);
     analyzeExpr(*node.callee);
 }
 

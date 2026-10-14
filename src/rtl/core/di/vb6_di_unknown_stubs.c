@@ -3,7 +3,7 @@
 // Win32 forwarding stubs for VB6 `Declare ... Lib "x"` (Fix 076 scheme: C3 emits
 // `extern <ret> __stdcall vb6_di_<alias>(...)` and the RTL implements it).
 //
-// Family: unknown   (libs: imm32, msimg32, version)   stubs: 14
+// Family: unknown   (libs: imm32, msimg32, version, winspool, msvfw32, oledlg)   stubs: 21
 //
 // Each stub reproduces C3's own generated prototype verbatim (that is the ABI the
 // caller uses: ByVal Long is widened to intptr_t, ByVal Single stays float, ByRef
@@ -11,8 +11,8 @@
 // cast. The cast keeps the compiler from complaining about unrelated API parameter
 // types while preserving the register/memory passing class of every argument.
 //
-// generated from: C:\Users\ADMINI~1\AppData\Local\Temp\C3C\119778974291800
-// date: 2026-09-21 14:08
+// generated from: a C3 compile session (pass -SessionDir to regenerate)
+// date: 2026-10-11 17:56
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.
@@ -32,7 +32,6 @@ void WINAPI RtlCopyMemory(void*, const void*, size_t);
 void WINAPI RtlFillMemory(void*, size_t, unsigned char);
 void WINAPI RtlZeroMemory(void*, size_t);
 #include <stdint.h>
-#include <string.h>
 #include <shlwapi.h>
 #include <shlobj.h>
 #include <mmsystem.h>
@@ -43,6 +42,8 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #include <ole2.h>
 #include <oleauto.h>
 #include <olectl.h>
+#include <vfw.h>
+#include <oledlg.h>
 /* NOTE: gdiplus.h is C++-only (class Gdiplus...). The GDI+ flat API is
  * resolved with GetProcAddress instead - see below. */
 
@@ -51,21 +52,19 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #pragma comment(lib, "imm32.lib")
 #pragma comment(lib, "msimg32.lib")
 #pragma comment(lib, "version.lib")
+#pragma comment(lib, "winspool.lib")
+#pragma comment(lib, "msvfw32.lib")
+#pragma comment(lib, "oledlg.lib")
 #pragma comment(lib, "comdlg32.lib")
 
-/* GetFileVersionInfoW */
-intptr_t __stdcall vb6_di_GetFileVersionInfoW(intptr_t lpFileName, intptr_t dwHandle, intptr_t dwLen, intptr_t lpData) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t))GetFileVersionInfoW)(lpFileName, dwHandle, dwLen, lpData);
+/* TransparentBlt */
+intptr_t __stdcall vb6_di_TransparentBlt(intptr_t hDestDC, intptr_t X, intptr_t Y, intptr_t nWidth, intptr_t nHeight, intptr_t hSrcDC, intptr_t XSrc, intptr_t YSrc, intptr_t nWidthSrc, intptr_t nHeightSrc, intptr_t crTransparent) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))TransparentBlt)(hDestDC, X, Y, nWidth, nHeight, hSrcDC, XSrc, YSrc, nWidthSrc, nHeightSrc, crTransparent);
 }
 
-/* GetFileVersionInfoSizeW */
-intptr_t __stdcall vb6_di_GetFileVersionInfoSizeW(intptr_t lpFileName, intptr_t lpdwHandle) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetFileVersionInfoSizeW)(lpFileName, lpdwHandle);
-}
-
-/* VerQueryValueW */
-intptr_t __stdcall vb6_di_VerQueryValueW(intptr_t lpBlock, intptr_t lpSubBlock, intptr_t* lplpBuffer, intptr_t* puLen) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t*, intptr_t*))VerQueryValueW)(lpBlock, lpSubBlock, lplpBuffer, puLen);
+/* MCIWndRegisterClass */
+intptr_t __stdcall vb6_di_MCIWndRegisterClass() {
+    return ((intptr_t (WINAPI *)(void))MCIWndRegisterClass)();
 }
 
 /* ImmIsIME */
@@ -118,7 +117,47 @@ intptr_t __stdcall vb6_di_ImmSetConversionStatus(intptr_t hIMC, intptr_t fdwConv
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))ImmSetConversionStatus)(hIMC, fdwConversion, fdwSentence);
 }
 
-/* TransparentBlt */
-intptr_t __stdcall vb6_di_TransparentBlt(intptr_t hDestDC, intptr_t X, intptr_t Y, intptr_t nWidth, intptr_t nHeight, intptr_t hSrcDC, intptr_t XSrc, intptr_t YSrc, intptr_t nWidthSrc, intptr_t nHeightSrc, intptr_t crTransparent) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))TransparentBlt)(hDestDC, X, Y, nWidth, nHeight, hSrcDC, XSrc, YSrc, nWidthSrc, nHeightSrc, crTransparent);
+/* GetFileVersionInfoW */
+intptr_t __stdcall vb6_di_GetFileVersionInfoW(intptr_t lpFileName, intptr_t dwHandle, intptr_t dwLen, intptr_t lpData) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t))GetFileVersionInfoW)(lpFileName, dwHandle, dwLen, lpData);
+}
+
+/* GetFileVersionInfoSizeW */
+intptr_t __stdcall vb6_di_GetFileVersionInfoSizeW(intptr_t lpFileName, intptr_t lpdwHandle) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetFileVersionInfoSizeW)(lpFileName, lpdwHandle);
+}
+
+/* VerQueryValueW */
+intptr_t __stdcall vb6_di_VerQueryValueW(intptr_t lpBlock, intptr_t lpSubBlock, intptr_t* lplpBuffer, intptr_t* puLen) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t*, intptr_t*))VerQueryValueW)(lpBlock, lpSubBlock, lplpBuffer, puLen);
+}
+
+/* DocumentPropertiesW */
+intptr_t __stdcall vb6_di_DocumentPropertiesW(intptr_t hWnd, intptr_t hPrinter, intptr_t lpszDeviceName, intptr_t lpDevModeOutput, intptr_t lpDevModeInput, intptr_t fMode) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))DocumentPropertiesW)(hWnd, hPrinter, lpszDeviceName, lpDevModeOutput, lpDevModeInput, fMode);
+}
+
+/* OpenPrinterW */
+intptr_t __stdcall vb6_di_OpenPrinterW(intptr_t lpszPrinterName, intptr_t* hPrinter, intptr_t lpDefault) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t*, intptr_t))OpenPrinterW)(lpszPrinterName, hPrinter, lpDefault);
+}
+
+/* ClosePrinter */
+intptr_t __stdcall vb6_di_ClosePrinter(intptr_t hPrinter) {
+    return ((intptr_t (WINAPI *)(intptr_t))ClosePrinter)(hPrinter);
+}
+
+/* GetDefaultPrinterW */
+intptr_t __stdcall vb6_di_GetDefaultPrinterW(intptr_t lpszPrinterName, int32_t* cch) {
+    return ((intptr_t (WINAPI *)(intptr_t, int32_t*))GetDefaultPrinterW)(lpszPrinterName, cch);
+}
+
+/* SetDefaultPrinterW */
+intptr_t __stdcall vb6_di_SetDefaultPrinterW(intptr_t lpszPrinterName) {
+    return ((intptr_t (WINAPI *)(intptr_t))SetDefaultPrinterW)(lpszPrinterName);
+}
+
+/* OleUIPasteSpecialW */
+intptr_t __stdcall vb6_di_OleUIPasteSpecialW(void* pOleUIPasteSpecial) {
+    return ((intptr_t (WINAPI *)(void*))OleUIPasteSpecialW)(pOleUIPasteSpecial);
 }

@@ -1,4 +1,5 @@
 #include "backend/cgen.hpp"
+#include "driver/detail/phase_timing.hpp"   // ai/030 续: C3_TIMING=1 的相位计时
 #include <algorithm>
 #include <cstdio>
 #include <cctype>
@@ -132,6 +133,7 @@ static void fixupUserControlParentChain(std::string& line) {
 }
 
 void CodeEmitter::emitLine(const std::string& line) {
+    C3ScopeTimer _c3t(0);   // ai/030 续: emitLine 累计统计 (slot 0)
     flushPending();
     for (int i = 0; i < indentLevel_; i++) {
         oss_ << "    ";  // 4空格缩进
@@ -204,19 +206,29 @@ CCodeGen::CCodeGen(Diagnostics& diag, const SymbolTable& symTab,
 // ============================================================
 
 bool CCodeGen::generate(Module& module, const std::string& baseName,
-                         const std::unordered_set<std::string>& externalModules,
+                         const std::vector<std::string>& externalModules,
                          bool isDll, const std::string& dllProgId,
                          const FrmFormDesc* frmDesc) {
 #include "backend/detail/base/cgen_base_generate_prologue.inc"
+    c3PhaseMark("g:prologue");
 #include "backend/detail/base/cgen_base_generate_state_scan.inc"
+    c3PhaseMark("g:state_scan");
 #include "backend/detail/base/cgen_base_generate_header_open.inc"
+    c3PhaseMark("g:header_open");
 #include "backend/detail/base/cgen_base_generate_crossmod.inc"
+    c3PhaseMark("g:crossmod");
 #include "backend/detail/base/cgen_base_generate_c_open.inc"
+    c3PhaseMark("g:c_open");
 #include "backend/detail/base/cgen_base_generate_decl_pass.inc"
+    c3PhaseMark("g:decl_pass");
 #include "backend/detail/base/cgen_base_generate_evt_decl.inc"
+    c3PhaseMark("g:evt_decl");
 #include "backend/detail/base/cgen_base_generate_body_pass.inc"
+    c3PhaseMark("g:body_pass");
 #include "backend/detail/base/cgen_base_generate_evt_impl.inc"
+    c3PhaseMark("g:evt_impl");
 #include "backend/detail/base/cgen_base_generate_entry.inc"
+    c3PhaseMark("g:entry");
 #include "backend/detail/base/cgen_base_generate_epilogue.inc"
 }
 

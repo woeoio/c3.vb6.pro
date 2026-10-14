@@ -78,6 +78,9 @@ Private gRepeat As String
 Private gHops As Long
 Private gBusy As Boolean
 Private gStray As Long
+' 相位之间要求的真实间隔（秒）—— 见 tMain_Timer 里那道闸的注释
+Private Const PHASE_MIN_SEC = 0.03
+Private gLastBeat As Double
 
 Private Declare PtrSafe Function PostMessage Lib "user32" Alias "PostMessageW" (ByVal hWnd As LongPtr, ByVal Msg As Long, ByVal wParam As LongPtr, ByVal lParam As LongPtr) As Long
 Private Declare PtrSafe Function GetFocus Lib "user32" () As LongPtr
@@ -137,8 +140,10 @@ End Function
 ' 不是逐拍读数 —— 某一拍没动不会假红（与 WS17 / 账 #162 那一族「条数是时序不是不变量」分开）。
 ' VB6 的次序 = 父窗内 `TabIndex`：txtMain(1) → txtSecond(2) → cmdX(3) → cmdY(4) → 回 txtMain；
 ' 交给 `IsDialogMessage` 时走的是 z-order（`txtMain → cmdY → cmdX → txtSecond`）。
-' ⇒ 负控有两条开关，各红各的：`C3_OCX_NO_TABNAV=1` 退回 z-order（红 `MW-seq`），
-' `C3_OCX_NO_DLGMSG=1` 关掉泵里的 `IsDialogMessage`（红 `MW-new` ⇒ 回到 1）。
+' ⇒ 负控只剩一条开关：`C3_OCX_NO_TABNAV=1` 退回 z-order（红 `MW-seq`；实测两架构都是
+' txtMain → cmdY → cmdX → txtSecond）。`C3_OCX_NO_DLGMSG=1` 对这一相**没有作用**（2026-10-07 实测：
+' 设与不设读数一字不差）—— 账 #163 之后 `vb6_TabNavKey` 排在 `IsDialogMessageW` 之前，VK_TAB 已被
+' 自研导航器吃掉，那个开关只剩非 Tab 那几条对话框键。旧文案「MW-new 回到 1」是接管前的行为。
 
 Private Sub tMain_Timer()
     Dim f As LongPtr
@@ -150,6 +155,16 @@ Private Sub tMain_Timer()
         gStray = gStray + 1
         Exit Sub
     End If
+    ' 账 #253: 在途的 WM_TIMER 会连着排空（busy 那一枚数的就是它们），而 VK_TAB 是 post
+    ' 给泵**异步**消化的 ⇒ 两拍挤在同一瞬间时读到的是「还没动」，第一次回头就被提前判定
+    ' （CI 实测 MW2 从 cmdX 变成 txtSecond、hops 3→1；同一份产物本地两台编译器都给 3）。
+    ' 这道闸只认真实间隔：不满 30ms 的拍不计相位，等下一拍 —— 与 #162 / #213 同族，
+    ' 那两条的界同样是「在途条数不是不变量」。
+    If gLastBeat <> 0 And (Timer - gLastBeat) < PHASE_MIN_SEC Then
+        gStray = gStray + 1
+        Exit Sub
+    End If
+    gLastBeat = Timer
     gState = gState + 1
     If gState = 1 Then
         gBusy = True

@@ -1,4 +1,4 @@
-// cgen_assign_value_sem.inc - visit(AssignmentStmt&) 函数体片段：值语义（返回值变量 / BSTR / Variant 赋值）
+﻿// cgen_assign_value_sem.inc - visit(AssignmentStmt&) 函数体片段：值语义（返回值变量 / BSTR / Variant 赋值）
 // 由 src/backend/stmt/cgen_assign.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 1056~1362 行，逐行未改。
 
@@ -13,6 +13,9 @@
 
     // BSTR赋值检测: 如果目标是BSTR变量, 使用vb6_BSTR_Assign防止悬垂指针和双重释放
     bool targetIsBstr = false;
+    // 账 #118: "这个目标是不是定长串, 定长多少" —— 在下面 targetIsBstr 块内算一次,
+    // 发码处(本文件 240 行那一支)还要用它把值收口到 N, 故提到块外。
+    std::string fixedLenTarget;
     {
         // 检查目标是否是已知BSTR变量 (me->field 或 模块级变量)
         std::string checkName = target;
@@ -38,6 +41,19 @@
         // 里 148/148 行读到同一个 "149"/列头, 写 "ZZZ" 后读回是指针数值。
         // 交给下方 targetIsBstr 分支 → vb6_BSTR_Assign (释放旧值 + 深拷贝)。
         if (!targetIsBstr && udtFieldIsBstrInCTarget(target)) targetIsBstr = true;
+        // Fix <vbeclipse> 2026-10-06: **裸 UDT 变量**的 String 字段 (`r.name = ...` /
+        // With 块 `.name = ...`, 含嵌套链 `a.b.name`)。账 #118 当时只修了定长串字段
+        // (fixedStrLenOfExpr), 动态 String 字段刻意留下 (注释"那是另一笔账") ——
+        // udtFieldIsBstrInCTarget 只认 SA_AT 宏形状, 裸 UDT 变量捡不到 ⇒ 落最底下
+        // 裸赋值 `r.name = r.num;`: 整型 RHS 静默把数字当 BSTR 指针存进字段
+        // (第一次读/释放就崩), 浮点 RHS 才是 C2440。udtFieldCTypeOfTarget 对
+        // MemberAccessExpr/WithMemberExpr 返回成员 C 类型, == "BSTR" 即 String
+        // 字段 (数组成员被 == 判等天然排除), 交上方 targetIsBstr 分支走
+        // vb6_BSTR_Assign + 账 #122 的隐式 CStr。
+        if (!targetIsBstr) {
+            std::string fieldCType206 = udtFieldCTypeOfTarget(node.target.get());
+            if (fieldCType206 == "BSTR") targetIsBstr = true;
+        }
         // Fix <vbeclipse> rev11: **String 数组元素赋值** (`m_Keys(Position) = Key`,
         // `arr(i) = s`) 的目标 C 串是 `VB6_SA_AT(BSTR, me->m_Keys, Position)` ——
         // 一个**表达式**, 上面四道按名字/符号表的判据全都捡不到它, 于是落到最底下的
@@ -74,9 +90,45 @@
             && inferExprType(*node.target) == Vb6Type::String) {
             targetIsBstr = true;
         }
+        // 账 #118 ①: 定长串 UDT 字段 (`Type Rec: f As String * 8` 的 `r.f = ...`)。
+        // 上面 udtFieldIsBstrInCTarget 那条只认 **SA_AT 宏**形状 (它要求对象部分以 ')' 收尾),
+        // 对象是裸 UDT 变量时捡不到 ⇒ 此前连 BSTR 分支都进不来, 落最底下的裸赋值
+        // (`r.f = vb6_BSTR_FromStr(L"ef")`), 既不收口到 8, 重赋也不释放旧值。
+        // 判据刻意**只认定长**字段 (宽度可静态得知): 动态 String 字段维持既有口径,
+        // 免得顺手改了 UDT 字段赋值的深拷贝/借用语义 (那是另一笔账)。
+        // 账 #305 §B169 (第六十刀): `<对象>.<类的公共 String 字段>` 与类内的 `Me.<同一字段>`
+        // —— 上面五道判据问的全是「**本模块**认不认识这个名字」(裸名 knownBstrVars_ /
+        // UDT 字段类型 / SA_AT 宏文本 / inferExprType 对裸标识符的答案), 而这条字段的 C 类型
+        // 由**那个类自己的声明**决定, 于是这一形整个漏掉, 发的是一句**裸指针赋值** (实测
+        // MSNMacro CDLG.cls `Me.SelectedPrinterName = ...`):
+        //   h.PS = s          → `h->PS = s;`  ⇒ 存进去的是**别人那只 BSTR 的地址**(别名),
+        //                        源头一重赋值/一释放, 这枚字段就悬空;
+        //   h.PS = "x" 再 h.PS = "y" → 每赋一次漏一块 (旧值没人 free, 而类析构会 free 字段);
+        //   h.PS = <COM 属性读> → `h->PS = vb6_ComGetStringProp(o, L"DeviceName");` 交的是
+        //                        **借来**的那只块, 析构 `vb6_BSTR_Free(me->PS)` 于是 free 第二遍。
+        // 这一问收成一处: 档问工程级那张表 (classFieldKind, §B168 那一趟预扫描扩的档),
+        // 命中即交 emitBstrSlotStore (释放旧值 + 深拷贝/接管) —— 与 §B168 的 Variant 那一支
+        // 同一个走法, 也**不碰槽位语义** (自有还是借来由那一份权威答, 站点不抄)。
+        // 否决与 §B168 同一条: member 若是该类的**方法/属性** (resolveClassMemberCall 非空),
+        // 这一句归属性写那一路。
+        if (!targetIsBstr && node.target
+            && node.target->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& maB = static_cast<const MemberAccessExpr&>(*node.target);
+            const std::string clsB
+                = maB.object ? inferClassTypeOfExpr(*maB.object) : std::string();
+            if (!clsB.empty()
+                && resolveClassMemberCall(clsB, maB.memberName).empty()
+                && classFieldIsBstrSlot(clsB, maB.memberName)) {
+                targetIsBstr = true;
+            }
+        }
+        fixedLenTarget = fixedStrLenOfExpr(*node.target);
+        if (!targetIsBstr && !fixedLenTarget.empty()) targetIsBstr = true;
     }
     // P8.4: Variant赋值检测 - 如果目标是Variant变量, 用Variant构造函数包装值
     bool targetIsVariant = false;
+    // Fix 232: 标记"目标 = UDT 的 Variant 字段", 供下方选**深拷贝**槽位语义
+    bool targetIsUdtVariantField232 = false;
     {
         std::string checkName = target;
         if (checkName.substr(0, 4) == "me->") checkName = checkName.substr(4);
@@ -107,145 +159,68 @@
             && target.find("(vb6_VARIANT,") != std::string::npos) {
             targetIsVariant = true;
         }
+        // Fix 232: UDT 的 **Variant 字段** (`.Image` / `With` 块内的 `.Image`) —— 与
+        // 上方 Fix 154 同源同口径, 只是判据换成字段的**声明类型**。目标发出来是
+        // `VB6_SA_AT(vb6_type_<Udt>, arr, i).Image`, 裸名集合与 Fix 154 的
+        // `(vb6_VARIANT,` 子串两道判据都捡不到它, RHS 又是裸 BSTR/int32_t →
+        // 直接 `elem.Image = ...` → C2440 "无法从 BSTR/int32_t 转换为 vb6_VARIANT"。
+        // 实测 ComCtlsDemo CoolBar.ctl / PPCoolBarBands.pag / StatusBar.ctl 的
+        // `InitBands(i).Image = <BSTR|Long>` 一族。
+        // 字段的真 C 类型是 `vb6_cls_*` 时否决 —— 那是 typed 对象指针槽, 不是
+        // Variant 容器 (与 Set 侧 cgen_setlet_set_rhs.inc Fix 084n/B08f-1 同一条
+        // 否决规则); `As Variant` 字段自身 resolveTypeName 就给 `vb6_VARIANT`,
+        // 装箱是必须的, 不能一并挡掉。字段类型问 inferUdtFieldVb6Type —— 那是
+        // UDT 字段类型的既有唯一出口, 不另抄一份成员类型表。
+        if (!targetIsVariant) {
+            const std::string udtFldC232 = udtFieldCTypeOfTarget(node.target.get());
+            if (udtFldC232.rfind("vb6_cls_", 0) != 0
+                && inferUdtFieldVb6Type(node.target.get(), nullptr) == Vb6Type::Variant) {
+                const std::string fldTRN232 = udtFieldTypeRefNameOfTarget(node.target.get());
+                if (fldTRN232.empty() || cTypeForDeclaredTypeName(fldTRN232) == "vb6_VARIANT") {
+                    targetIsVariant = true;
+                    targetIsUdtVariantField232 = true;
+                }
+            }
+        }
+        // 账 #305 §B168 (第五十九刀): `<对象>.<类的公共 Variant 字段>` 与类内的
+        // `Me.<同一字段>` —— 上面四条判据问的全是「**本模块**认不认识这个名字」(裸名
+        // knownVariantVars_ / 本模块 classVariantMembers_ / 发出来的文本长得像 VB6_SA_*
+        // / UDT 字段类型表), 而这条字段的 C 类型由**那个类自己的声明**决定, 于是这一形
+        // 整个漏掉, 发的是一句**完全不装箱**的裸赋值 (实测 use3.bas + holder2.cls):
+        //   h.PV = 7      → `h->PV = 7;`                        → cl C2440 int32_t→vb6_VARIANT
+        //   h.PV = "s"    → `h->PV = vb6_BSTR_FromStr(L"s");`    → 同形 C2440
+        //   Me.PV = x     → `me->PV = (*x);`                    → 编得过, 但浅存 + 不回收旧值
+        // C2440 是硬错误 ⇒ 整棵工程编不过 (语料 94 个写点 / 28 份文件)。
+        // 这一问收成一处: 类名问既有出口 inferClassTypeOfExpr (IdentifierExpr / MeExpr /
+        // 链式成员都在它覆盖里), 字段档问 driver 注入的工程级「类 → vb6_VARIANT 字段」表
+        // (classFieldIsVariantSlot, 与 classVoidFieldMap_/classTypedFieldMap_ 同格)。
+        // **不**认发出来的文本尾注 (`/* class var .X field */`) —— 那是拼出来的注释,
+        // 不是答案; 也**不**再抄一份字段类型表。
+        // 命中后交下方站④: wrapVariantValue 装箱 + variantRhsOwnsValue 定所有权
+        // (§B164 第五十五刀 / §B166 第五十六刀 / §B167 第五十七、五十八刀同一口径),
+        // 所以这里只把「是不是槽」答对, 不碰槽位语义 —— 借用值 (h.PV = 活的 String 变量)
+        // 由那份权威给出 vb6_VariantAssign 深拷贝, 与 UDT 的 232 那一支同一个答案。
+        // 否决: member 若是该类的**方法/属性** (resolveClassMemberCall 非空), 这一句归
+        // 属性写那一路, 不许在这里抢 —— 判据与读侧 cgen_expr_call_callee_member.inc
+        // Pattern C/D 那条「是方法→跳过, 否→数据字段」完全一致。
+        if (!targetIsVariant && node.target
+            && node.target->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& maT = static_cast<const MemberAccessExpr&>(*node.target);
+            const std::string clsT
+                = maT.object ? inferClassTypeOfExpr(*maT.object) : std::string();
+            if (!clsT.empty()
+                && resolveClassMemberCall(clsT, maT.memberName).empty()
+                && classFieldIsVariantSlot(clsT, maT.memberName)) {
+                targetIsVariant = true;
+            }
+        }
     }
     if (targetIsBstr) {
-        // Fix 038b-6: BSTR 目标 + Variant 值 → 先提取 BSTR
-        // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-        bool valueIsVariant = cExprIsVariant(value);
-        if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
-            auto& id = static_cast<IdentifierExpr&>(*node.value);
-            std::string idLower = id.name;
-            std::transform(idLower.begin(), idLower.end(), idLower.begin(), ::tolower);
-            if (knownVariantVars_.count(idLower)) valueIsVariant = true;
-        }
-        // Fix 089j: RHS 为类 Variant 字段 (me->mParentsColKey 等) 也视为
-        // Variant 表达式 — cExprIsVariant 只查函数前缀, me-> 成员不命中,
-        // 导致 PropertyGet 里 `ret = me->VarField` 不转 → C2440.
-        if (!valueIsVariant && value.compare(0, 4, "me->") == 0) {
-            std::string rhsMember = value.substr(4);
-            std::transform(rhsMember.begin(), rhsMember.end(), rhsMember.begin(), ::tolower);
-            if (classVariantMembers_.count(rhsMember)) valueIsVariant = true;
-        }
-        if (valueIsVariant) {
-            value = "vb6_VariantToString(" + value + ")";
-        }
-        // Fix 140: RHS 是 Byte() 数组 (类成员 m_Caption 或已知字节数组变量) 且目标是
-        // BSTR → 按 UTF-16LE 字节还原为字符串. 不能把数组指针当 BSTR 交给
-        // vb6_BSTR_Assign (SysStringLen 会读数组前的堆元数据当长度 → 堆损坏).
-        // 场景: LabelPlus.ctl `Property Get Caption() As String: Caption = m_Caption`.
-        // 记账这一支改没改成 (给下面 #122 那支看): 值本身是 Byte() 数组 ⇒ inferExprType 会
-        // 报 Byte, 但那已经是**转好的字符串**了, 再套一层 CStrByte 是错的 (实测把
-        // LabelPlus 的 `Caption = m_Caption` 发成 vb6_CStrByte(vb6_ByteArrayToString(..)))。
-        bool wrappedByteArr140 = false;
-        if (!valueIsVariant) {
-            std::string rhs140 = value;
-            if (rhs140.compare(0, 4, "me->") == 0) rhs140 = rhs140.substr(4);
-            if (rhs140.size() > 4 && rhs140[0] == '(' && rhs140[1] == '*'
-                && rhs140.back() == ')') {
-                rhs140 = rhs140.substr(2, rhs140.size() - 3);
-            }
-            std::string rhs140l = rhs140;
-            std::transform(rhs140l.begin(), rhs140l.end(), rhs140l.begin(), ::tolower);
-            if (rhs140.find_first_of("( .") == std::string::npos
-                && (knownByteArrayVars_.count(rhs140l)
-                    || classByteArrayMembers_.count(rhs140l))) {
-                value = "vb6_ByteArrayToString(" + value + ")";
-                wrappedByteArr140 = true;
-            }
-        }
-        // 账 #122: VB6 在**赋值那一刻**就做隐式 CStr —— `Dim s As String: s = 123` 合法，
-        // 而这一格以前把值原样交给 vb6_BSTR_Assign。后果分两种，别当成同一种：
-        //   整型那半 (Long/Integer/Boolean/Byte) 在 C 里只是警告 (int → BSTR 形参)，数字被
-        //     当指针存进 String 变量，**第一次读/释放就崩** —— 实测修复前二进制 `s = n` 是
-        //     BUILD-RC=0 而跑起来 SIGSEGV (rc=139)，所以它不是"编不过"，是静默埋雷;
-        //   浮点/日期那半 (Double/Currency/Date) 才是响的 cl `error C2440 无法从 double
-        //     转换为 BSTR`。
-        // 这一支只在 inferExprType 认得出的**标量**类型上折 (isScalarImplicitStr159:
-        // Integer/Long/Single/Double/Byte/Boolean/Currency/Date)，String/Variant/Object/
-        // 未知一律不介入。正因为整型那半今天过得去，本批的护栏不是"现存工程零改动"而是
-        // "改动必须逐条解释得清": 实测 7 枚存量工程里 6 枚逐字节相同，Charts 2020 只剩
-        // `sDiplay = CLng(me->m_Value)` 那一行 —— 那是一处真实修复而非回归。
-        // 复用形参那条路 (Fix 159-B) 的同一个 wrapToBSTR, 不另开一套折算表。
-        // 上面两支 (Variant 提取 / Byte() 还原) 已经把值转成了字符串, 不能再套一层。
-        bool wrapped122 = false;
-        if (!valueIsVariant && !wrappedByteArr140 && node.value) {
-            Vb6Type vt122 = inferExprType(*node.value);
-            if (isScalarImplicitStr159(vt122)) {
-                std::string w122 = wrapToBSTR(value, *node.value);
-                if (w122 != value) {
-                    value = w122;
-                    wrapped122 = true;
-                }
-            }
-        }
-        // 账 #113 / #119: 值是不是"自有的临时串" —— **字符串**字面量 / 拼接 / 返回 String 的
-        // 工程函数或 Property Get (返回变量 vb6_ret_* 在入口处已按值语义拷过)。变量、形参、
-        // 成员字段、数组元素都是**借来的**, 只能深拷贝。
-        // #119 之前这条判据只服务模块级目标 (#113 那格为了少翻发码面刻意加了
-        // `bstrTargetViaTypeQuery` 那道闸), 局部/形参/UDT String 字段三条老路一律 Assign
-        // ⇒ 每句从自有临时来的赋值都漏一只堆块 (`s = Left(x,2)` 就是 64 字符 + 块头那种
-        // 146 字节级的漏, 循环里就是纯漏, 旧值要等下一次赋值才被释放)。
-        // 铺开的底气是这一轮把 RTL 全扫了一遍: 77 枚 `BSTR` 返回函数里只有 3 枚发的是**借来
-        // 的**指针 (vb6_ErrDescription / vb6_ErrSource 直接回 vb6_err 那两个字段、
-        // vb6_ho_variantToBstr 回 v->bstrVal), 而它们都只能以成员访问的形态到达
-        // (`Err.Description`), 下面的 IdentifierExpr 那一支根本捡不到 ⇒ 不会被误判自有。
-        // 字面量那支限定成 LiteralKind::String: 数值/布尔字面量赋给 String 目标这一格发的是
-        // 裸数字 (`vb6_BSTR_Assign(&s, 123)` → cl C2440, 已另立一账), 把它标成自有只会把
-        // "当场编译不响"变成"存进一只假指针", 不能顺手动。
-        bool valueOwned113 = false;
-        if (node.value) {
-            switch (node.value->kind) {
-                case ASTNodeKind::LiteralExpr:
-                    valueOwned113 = (static_cast<LiteralExpr&>(*node.value).literalKind
-                                     == LiteralKind::String);
-                    break;
-                case ASTNodeKind::BinaryExpr: {
-                    auto& vb113 = static_cast<BinaryExpr&>(*node.value);
-                    valueOwned113 = (vb113.op == BinaryOp::Concat || vb113.op == BinaryOp::Add);
-                    break;
-                }
-                case ASTNodeKind::IndexOrCallExpr: {
-                    auto& vc113 = static_cast<IndexOrCallExpr&>(*node.value);
-                    if (vc113.callee && vc113.callee->kind == ASTNodeKind::IdentifierExpr) {
-                        auto* vSym113 = symTab_.lookup(
-                            static_cast<IdentifierExpr&>(*vc113.callee).name);
-                        valueOwned113 = (vSym113
-                                         && (vSym113->kind == SymbolKind::Function
-                                             || vSym113->kind == SymbolKind::PropertyGet));
-                    }
-                    break;
-                }
-                default:
-                    break;
-            }
-        }
-        // #122 折出来的 `vb6_CStrXxx(...)` 是刚 alloc 的新块, 与字面量/拼接同属"自有"。
-        if (valueOwned113 || wrapped122) {
-            c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + value + ");");
-        } else {
-            c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
-        }
+        // 账 #305 §B169: 这一问只住 emitBstrSlotStore 一处 (With 块那一站共用同一枚)。
+        emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget);
     } else if (targetIsVariant) {
-        // P8.4: 包装值为vb6_VARIANT, 先释放旧BSTR
-        std::string wrappedValue = wrapVariantValue(node.value.get(), value);
-        // Fix <vbeclipse> rev16: Variant **数组元素**槽位走"接管"语义。
-        // `Clear + 浅拷贝` 对"从别处借来的值"不足: RHS 是 ByRef Variant 实参或相邻
-        // 元素时, wrapVariantValue 给出的是 vb6_VariantFromValue(...) —— 对 vb6_VARIANT
-        // 是 identity **浅拷贝**, 槽与借用方共用同一只 BSTR / 同一个 Dispatch, 借用方
-        // 一 Clear 槽即悬垂 (地址被后续同尺寸分配复用 ⇒ 每槽都读"最后一次写入的值")。
-        // 实测 tests/ve_list (工程内 List.cls 的 m_Items) idx=0/1/2 全答 "Gamma";
-        // 真工程 play78: Folder.Views.Item(0) 取回 1 字符垃圾 → 后续 NULL 解引用。
-        // vb6_VariantAssign = Clear(dst) + 深拷贝(BSTR 另分配 / Dispatch AddRef),
-        // 与同一个类的 m_Keys (String 数组, 走 vb6_BSTR_Assign) 同一口径。
-        bool targetIsVariantArraySlot =
-            (target.compare(0, 7, "VB6_SA_") == 0
-             && target.find("(vb6_VARIANT,") != std::string::npos);
-        if (targetIsVariantArraySlot) {
-            c_.emitLine("vb6_VariantAssign(&" + target + ", " + wrappedValue + ");");
-        } else {
-            c_.emitLine("vb6_VariantClear(&" + target + ");");
-            c_.emitLine(target + " = " + wrappedValue + ";");
-        }
+        // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
+        emitVariantSlotAssign(target, node.value.get(), value, targetIsUdtVariantField232);
     } else if (target.compare(0, 10, "vb6_PA_Get") == 0) {
         // Fix 091c: ParamArray 元素赋值 OutVars(i) = value — vb6_PA_GetXxx 是取值
         // 函数 (右值), 直接赋值 → C2106 "左操作数必须为左值" (cToolsArray.c 130);
@@ -293,16 +268,12 @@
         } else {
             c_.emitLine(target + " = " + value + ";");
         }
-    } else if (target.find("vb6_VariantArrayGet(") == 0) {
-        // Fix 038 Group 2: vb6_VariantArrayGet(&arr, idx) = value
-        //   → vb6_VariantArraySet(&arr, idx, vb6_VariantFromValue(value))
-        // VariantArrayGet 返回右值, 不能赋值; 改写为 VariantArraySet.
-        size_t argStart = target.find('(');
-        size_t argEnd = target.rfind(')');
-        if (argStart != std::string::npos && argEnd != std::string::npos && argEnd > argStart) {
-            std::string args = target.substr(argStart + 1, argEnd - argStart - 1);
-            c_.emitLine("vb6_VariantArraySet(" + args + ", "
-                        + boxToVariant(node.value.get(), value) + ");");
+    } else if (isVariantSlotElemRead(target)) {
+        // Fix 038 Group 2 + 账 #305 §B150: 槽元素读改写成那一**对**写出口 —— 一维 Get->Set,
+        //   多维 GetND->SetND, 装箱后的值追加在参数表末尾。参数拼法只在 variantSlotAssignLine 一处。
+        std::string slotLine;
+        if (variantSlotAssignLine(target, boxToVariant(node.value.get(), value), slotLine)) {
+            c_.emitLine(slotLine + ";");
         } else {
             c_.emitLine(target + " = " + value + ";");
         }
@@ -355,6 +326,7 @@
         // vb6_ret_pvVfsSeek = vb6_ComCall(...) 2630). 按目标 C 类型解封:
         // VariantFromComResult 把 void* 包回 vb6_VARIANT, 再 VariantToXxx 提取.
         bool valueIsBareComResult = (value.compare(0, 12, "vb6_ComCall(") == 0
+            || value.compare(0, 20, "vb6_ComCallByDispid(") == 0
             || value.compare(0, 17, "vb6_ComCallObject(") == 0
             || value.compare(0, 15, "vb6_ComCallBSTR(") == 0
             || value.compare(0, 14, "vb6_ComCallInt(") == 0
@@ -403,6 +375,56 @@
                     default: break;
                     }
                 }
+            }
+            // Fix P24-10b(2): 目标是标量**数组元素**时 knownXxxVars_ 与
+            // IdentifierExpr 兜底都捡不到 —— 目标串是 `VB6_SA_AT(float, arr, i)`
+            // / `VB6_SA_ND_AT2(int32_t, ...)` 下标宏, 裸 COM 结果(RHS 为
+            // vb6_ComCallByDispid 等返回值 void* 承载 VARIANT*)原样赋给元素
+            // → C2440 "无法从 void* 转换为 float" (Charts2020 ucTreeMaps
+            // `Values(i) = cValues(i)` 实测, Values As Single())。
+            // 元素 C 类型按宏第一实参解析, 与下方 valueIsVariant 分支
+            // (账 038b-6/086 的 VB6_SA_AT(...) 判定) 同口径。
+            if (tgtCt124.empty()) {
+                static const std::string kSaAt   = "VB6_SA_AT(";
+                static const std::string kSaNdAt = "VB6_SA_ND_AT2(";
+                size_t elemPos = std::string::npos;
+                if (target.compare(0, kSaAt.size(), kSaAt) == 0) {
+                    elemPos = kSaAt.size();
+                } else if (target.compare(0, kSaNdAt.size(), kSaNdAt) == 0) {
+                    elemPos = kSaNdAt.size();
+                }
+                if (elemPos != std::string::npos) {
+                    size_t comma = target.find(',', elemPos);
+                    if (comma != std::string::npos) {
+                        std::string elemCt = target.substr(elemPos, comma - elemPos);
+                        size_t tb = elemCt.find_first_not_of(" \t");
+                        size_t te = elemCt.find_last_not_of(" \t");
+                        if (tb != std::string::npos)
+                            elemCt = elemCt.substr(tb, te - tb + 1);
+                        if (elemCt == "float" || elemCt == "double")
+                            tgtCt124 = "double";
+                        else if (elemCt == "BSTR")
+                            tgtCt124 = "BSTR";
+                        else if (elemCt == "int32_t" || elemCt == "int16_t"
+                                 || elemCt == "uint8_t" || elemCt == "LONG")
+                            tgtCt124 = "int32_t";
+                    }
+                }
+            }
+            // Fix P24-10b(2b): UDT 成员目标 (`me->mData.fValue = ...` 折算后
+            // 目标串带 `->` 点链) 同样不在 known 集合/裸标识符/SA_AT 三类里——
+            // 按 Fix 084n 同款 inferUdtFieldVb6Type 补问一次声明类型, 否则
+            // 裸 COM 结果原样赋给 float/double 字段 → C2440。
+            if (tgtCt124.empty()) {
+                Vb6Type udtT124 = inferUdtFieldVb6Type(node.target.get());
+                if (udtT124 == Vb6Type::String) tgtCt124 = "BSTR";
+                else if (udtT124 == Vb6Type::Long || udtT124 == Vb6Type::Integer
+                         || udtT124 == Vb6Type::Byte || udtT124 == Vb6Type::Boolean
+                         || udtT124 == Vb6Type::ULong || udtT124 == Vb6Type::LongPtr)
+                    tgtCt124 = "int32_t";
+                else if (udtT124 == Vb6Type::Double || udtT124 == Vb6Type::Single
+                         || udtT124 == Vb6Type::Currency || udtT124 == Vb6Type::Date)
+                    tgtCt124 = "double";
             }
             if (tgtCt124 == "double" || tgtCt124 == "float") {
                 c_.emitLine(target + " = vb6_VariantToDouble(" + unwrapped + ");");

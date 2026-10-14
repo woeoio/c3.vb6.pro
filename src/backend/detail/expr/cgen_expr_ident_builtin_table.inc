@@ -92,6 +92,12 @@ static const std::unordered_map<std::string, std::string> builtinFuncs = {
     {"timevalue","vb6_TimeValue"},
     // 类型转换 (P4新增)
     {"cbyte",    "vb6_CByte"},
+    // ai/032: VB.NET 无符号/窄整型转换函数 (阶梯对齐 8/16/32/64)
+    {"csbyte",   "vb6_CSByte"},
+    {"cuint",    "vb6_CUInt"},
+    {"culng",    "vb6_CULng"},
+    {"culnglng", "vb6_CULngLng"},
+    {"clngptr",  "vb6_CLngPtr"},
     {"cvar",     "vb6_CVar"},
     {"hex",      "vb6_Hex"},
     {"oct",      "vb6_Oct"},

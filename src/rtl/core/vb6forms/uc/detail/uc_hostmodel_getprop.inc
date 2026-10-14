@@ -26,10 +26,26 @@
     vb6_HostObjRec* h = vb6_ho_find(obj);
     if (!r && !h && !IsWindow((HWND)obj)) return 0;
 
-    int32_t isForm = r ? 0 : vb6_ho_isForm(obj);
     int32_t scaleMode = r ? (r->desc ? r->desc->scaleMode : 1) : 1;
 
     if (_wcsicmp(name, L"hwnd") == 0 || _wcsicmp(name, L"hWnd") == 0) {
+        vb6_ho_setVariantLong(out, (int32_t)(intptr_t)obj); return 1;
+    }
+    /* 账 #271: `hWndUserControl` 是 Krool/ComCtls 那一族 UserControl 的**通行属性**
+       (Animation/CheckBoxW/ComboBoxW/CommandButtonW … 每个 .ctl 都写
+       `Public Property Get hWndUserControl() As LongPtr: hWndUserControl = UserControl.hWnd`)。
+       CoolBar.ctl:2028 用「先问它、问不到(Err)再问 .hWnd」来区分 UC 与内建控件:
+         Handle = GetWindowFromObject(Value.Object)
+         If Handle = NULL_PTR Then
+             On Error Resume Next: Handle = Value.hWndUserControl
+             If Err.Number <> 0 Then Handle = Value.hWnd
+         …  If ControlIsValid(Value) = True And Handle <> NULL_PTR Then … Else Err.Raise 380
+       本 RTL 的宿主模型对**认不得的成员一律交 Empty 且不报错** (刻意如此, 见文件末尾),
+       于是 `Value.hWndUserControl` 不报错 ⇒ `Err.Number = 0` ⇒ 不会退到 `.hWnd`
+       ⇒ Handle 停在 0 ⇒ 第二十六层的 `Err.Raise 380`。
+       VB6 里 `UserControl.hWnd` 与本模型的 `hWnd` 是**同一个窗口**, 这里按同一口径
+       交回 obj 即可 (对 UC 与非 UC 控件都一样 ⇒ 与 VB6 那条 fallback 殊途同归)。 */
+    if (_wcsicmp(name, L"hWndUserControl") == 0) {
         vb6_ho_setVariantLong(out, (int32_t)(intptr_t)obj); return 1;
     }
     if (_wcsicmp(name, L"Name") == 0) {
@@ -40,32 +56,22 @@
         vb6_ho_setVariantLong(out, h ? h->index : (r ? r->index : -1)); return 1;
     }
     if (_wcsicmp(name, L"ScaleMode") == 0) { vb6_ho_setVariantLong(out, scaleMode); return 1; }
-    if (_wcsicmp(name, L"ScaleWidth") == 0 || _wcsicmp(name, L"ScaleHeight") == 0 ||
-        _wcsicmp(name, L"Width") == 0   || _wcsicmp(name, L"Height") == 0 ||
-        _wcsicmp(name, L"Left") == 0    || _wcsicmp(name, L"Top") == 0) {
+    /* 账 #247: Left/Top/Width/Height 在这一层**没有第二份实现** —— 读写都问
+       vb6forms_ctrl.c 那四个出口 (容器 ScaleMode 的单位 + VB 侧读数缓存)。
+       以前这一支自己量窗口矩形 + 硬编码缇, 于是同一句
+       `对象.Width = 7222` 走发码 (vb6_SetControlWidth: 存下 7222) 与走 IDispatch
+       (宿主模型: 换算到像素就丢, 且不存) 给两种答案 —— 探针实测两条路都读回 7215。 */
+    if (_wcsicmp(name, L"Left") == 0)   { vb6_ho_setVariantLong(out, vb6_GetControlLeft(obj));  return 1; }
+    if (_wcsicmp(name, L"Top") == 0)    { vb6_ho_setVariantLong(out, vb6_GetControlTop(obj));   return 1; }
+    if (_wcsicmp(name, L"Width") == 0)  { vb6_ho_setVariantLong(out, vb6_GetControlWidth(obj)); return 1; }
+    if (_wcsicmp(name, L"Height") == 0) { vb6_ho_setVariantLong(out, vb6_GetControlHeight(obj)); return 1; }
+    if (_wcsicmp(name, L"ScaleWidth") == 0 || _wcsicmp(name, L"ScaleHeight") == 0) {
         int32_t w = 0, hh = 0;
-        if (_wcsicmp(name, L"ScaleWidth") == 0 || _wcsicmp(name, L"ScaleHeight") == 0) {
-            vb6_ho_clientTwips(obj, &w, &hh);
-        } else if (isForm) {
-            RECT rc; GetWindowRect((HWND)obj, &rc);
-            w = vb6_XToTwipX(rc.right - rc.left); hh = vb6_YToTwipY(rc.bottom - rc.top);
-            if (_wcsicmp(name, L"Left") == 0 || _wcsicmp(name, L"Top") == 0) {
-                w = vb6_XToTwipX(rc.left); hh = vb6_YToTwipY(rc.top);
-            }
-        } else {
-            vb6_ho_ctrlRect(obj, NULL, NULL, &w, &hh);
-            if (_wcsicmp(name, L"Left") == 0 || _wcsicmp(name, L"Top") == 0) {
-                int32_t l = 0, t = 0; vb6_ho_ctrlRect(obj, &l, &t, NULL, NULL);
-                w = l; hh = t;
-            }
-        }
-        int32_t val = (_wcsicmp(name, L"ScaleWidth") == 0 || _wcsicmp(name, L"Width") == 0 ||
-                       _wcsicmp(name, L"Left") == 0) ? w : hh;
+        vb6_ho_clientTwips(obj, &w, &hh);
+        int32_t val = (_wcsicmp(name, L"ScaleWidth") == 0) ? w : hh;
         // ScaleWidth/ScaleHeight 需按对象自身 ScaleMode 换算
-        if (_wcsicmp(name, L"ScaleWidth") == 0 || _wcsicmp(name, L"ScaleHeight") == 0) {
-            if (scaleMode == 3)   /* Fix 184: twips -> pixels via the shared DPI source */
-                val = (_wcsicmp(name, L"ScaleHeight") == 0) ? vb6_TwipToY(val) : vb6_TwipToX(val);
-        }
+        if (scaleMode == 3)   /* Fix 184: twips -> pixels via the shared DPI source */
+            val = (_wcsicmp(name, L"ScaleHeight") == 0) ? vb6_TwipToY(val) : vb6_TwipToX(val);
         vb6_ho_setVariantLong(out, val); return 1;
     }
     // Fix <vbeclipse>: `Visible` 必须读**自身 WS_VISIBLE 位**, 不能用 IsWindowVisible。
@@ -84,10 +90,71 @@
     }
     if (_wcsicmp(name, L"Enabled") == 0)  { vb6_ho_setVariantLong(out, IsWindowEnabled((HWND)obj) ? -1 : 0); return 1; }
     if (_wcsicmp(name, L"hDC") == 0)      { vb6_ho_setVariantLong(out, (int32_t)(intptr_t)GetDC((HWND)obj)); return 1; }
-    if (_wcsicmp(name, L"Count") == 0)    { vb6_ho_setVariantLong(out, 0); return 1; }
+    /* 账 #254: VB6 的 `Form.Count` = 这枚窗体上的子控件枚数，与 `Controls.Count` 同一件事，
+       所以数法转调集合那一条出口，不在这里填常数。以前这一档硬填 0 —— #250 把 Controls
+       集合接通之后 Charts 的 ClsResizer 第一次有了流量，它 `ReDim Rects(oForm.Count - 1)`
+       铺出来的格子是空的，`For Each` 第一格写 `Rects(0)` 就是错误 9（下标越界），
+       启动期整个进程退出（CI 把它报成「窗口 5s 内没出现」）。 */
+    if (_wcsicmp(name, L"Count") == 0)    { vb6_ho_setVariantLong(out, vb6_UC_ControlsCountOf(obj)); return 1; }
+    /* 账 #257: ParentControls = **容器**的控件集合 —— 不是本 UserControl 自己的子控件。
+       ComCtlsDemo 里的用法全是 UC 去**父容器**上枚举兄弟控件(找 ImageList / 判可停靠):
+         CheckBoxW.ctl:1267  For Each ControlEnum In UserControl.ParentControls
+         CoolBar.ctl:689     If UserControl.ParentControls.Count = 0 Then CoolBarAlignable = False
+       所以取样口径必须与下面 `Container` / `Parent` 那一档**同一条关系**(GetParent),
+       否则「oCtrl 属于 X.Controls」与「oCtrl.Container = X」会给出两套互相矛盾的答案。
+       ComCtlsDemo StatusBar UC 初始化时读它拿到 NULL ⇒ 宿主初始化中断
+       ⇒ MainForm.Show 静默失败(CI 报「窗口 5s 内没出现」)。
+       顶层窗体自己没有父 ⇒ 交回空值, 与 Container 那一档同口径。 */
+    if (_wcsicmp(name, L"ParentControls") == 0) {
+        void* pcHost = (void*)GetParent((HWND)obj);
+        if (!pcHost) { vb6_ho_setVariantEmpty(out); return 1; }
+        vb6_UCControls* cpc = vb6_uc_newControls(pcHost);
+        vb6_ho_setVariantObject(out, cpc); return 1;
+    }
     if (_wcsicmp(name, L"Controls") == 0) {
+        /* 账 #250: 这一档以前用的是 setVariantDispatch —— 那一枚**刻意**只交 Empty
+           (让字体代理那一路继续走 Nothing 分支, 见 uc_hostmodel.c 的注释)。
+           rev14 给"真交对象"另立了出口 setVariantObject, 但只把 `Item` / `Add` 两个
+           调用点改过去, `Controls` 这一档漏了 ⇒ 上层拿到 NULL, 下游三条
+           (Controls.Count / Item / For Each，都在 vb6com_foreach.c 里备好了集合分支)
+           一条也进不去: 实测窗体上 `Me.Controls.Count`=0、`For Each` 零条,
+           Charts 的 ClsResizer (`For Each oCtrl In oForm.Controls`) 因此静默不做。
+           释放侧安全: 集合指针由 vb6_Host_IsHostObject 认得, 且 vb6_ComIsDispatchable
+           守卫不会对它调 Release —— 与 Item 那一档同一个口径。 */
         vb6_UCControls* c = vb6_uc_newControls(obj);
-        vb6_ho_setVariantDispatch(out, c); return 1;
+        vb6_ho_setVariantObject(out, c); return 1;
+    }
+    /* 账 #257: `Container` / `Parent` 这一档以前**压根没有** ⇒ `oCtrl.Container` 交回空值，
+       `oCtrl.Container.Name` 交回空串。实测（探针 probe255 模式 P）Charts 的 ClsResizer
+       保存循环第一句 `If oCtrl.Container.Name = oForm.Name Then` 因此靠「空 = 空」真空通过
+       （窗体自己的 `.Name` 也是空，两边一起才是那个假通过；名字那一半在同一批补）。
+       口径**不是新决定**：容器成员资格在 uc_controls.c 的 `vb6_uc_collectChildren` 里本来
+       就是「GetParent(控件) == 容器」，这一档问同一条关系 ⇒ 「oCtrl.Container.Name = X.Name」
+       与「oCtrl 属于 X.Controls」从此是同一件事，不会两套答案互相矛盾（PictureBox 有自己的
+       Controls 集合、里面的 Label 不在窗体集合里，实测 n=5，与此口径一致）。
+       交对象走 #250 立的那条唯一出口 `vb6_ho_setVariantObject`，不开第二份；
+       顶层窗体自己没有父 ⇒ 交回空值（VB6 里 Form 无 Container）。
+       另一层同名答案记下：`vb6forms_axcontainer.c:195` 那档是 OCX 扩展器对象（自己一套
+       合成 IDispatch，记录里只有 hwndForm），问的不是这一条链，本刀刻意不动它。 */
+    if (_wcsicmp(name, L"Container") == 0 || _wcsicmp(name, L"Parent") == 0) {
+        void* parentHwnd = (void*)GetParent((HWND)obj);
+        if (!parentHwnd) { vb6_ho_setVariantEmpty(out); return 1; }
+        /* 账 #271: **父是 UserControl** 时, VB6 的 Container 交回的是**该 UserControl
+           的 Extender**, 不是宿主窗口 —— 这条「同一性」在 VB6 里是真的, 而且是
+           Krool/NewTab 那一族控件唯一的"这个控件确实摆在我身上"判据:
+             ComCtlsDemo CoolBar.ctl:3173 `Set Container = Control.Container`
+                 → `CBool(Err.Number = 0 And Not Control Is Extender And Container Is Extender)`
+             NewTab ctlNewTab.ctl:12401 `If iContainer_Prev.Container Is UserControl.Extender Then`
+           以前一律交回父窗口 HWND ⇒ 上面两处的 `Is Extender` **恒假** ⇒
+           CoolBar 的 ControlIsValid 永远 False ⇒ `Err.Raise 380`
+           (ComCtlsDemo 启动即未处理错误 380 退出, 验收位"窗口 5s 内出现"因此红)。
+           父是**窗体**时维持原口径 —— Charts ClsResizer 的
+           `oCtrl.Container.Name = oForm.Name` 问的就是那一档 (Extender 没有 Name)。 */
+        if (vb6_uc_findByHwnd(parentHwnd)) {
+            vb6_ho_setVariantObject(out, (void*)&vb6_UserControl_Extender);
+            return 1;
+        }
+        vb6_ho_setVariantObject(out, parentHwnd); return 1;
     }
     if (_wcsicmp(name, L"Caption") == 0 || _wcsicmp(name, L"Text") == 0) {
         // Fix 190: 窗口层是 Unicode —— 必须 GetWindowTextW。旧代码用 GetWindowTextA

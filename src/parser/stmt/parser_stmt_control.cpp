@@ -155,21 +155,8 @@ std::unique_ptr<ForStmt> Parser::parseForStmt() {
         step = parseExpression();
     }
 
-    // 单行 For: For i = 1 To 10: stmt1: stmt2: Next i
-    if (cur_.kind == TokenKind::Colon) {
-        StmtList body;
-        while (cur_.kind == TokenKind::Colon) {
-            advance(); // consume ':'
-            if (cur_.kind == TokenKind::Next) break;
-            auto stmt = parseStatement();
-            if (stmt) body.push_back(std::move(stmt));
-        }
-        consumeNextClause(varTok.text);
-        return std::make_unique<ForStmt>(loc, varTok.text,
-            std::move(start), std::move(end), std::move(step), std::move(body));
-    }
-
-    skipNewLines();
+    // 单行 `For i = 1 To 10: stmt: Next` 与多行形式统一由 parseBlockUntil
+    // 起始处的 skipStatementSeparators() 处理 (冒号 ≡ 换行)。
     auto body = parseBlockUntil({TokenKind::Next});
 
     // Next [var] — 必须消费 Next, 可选的循环变量
@@ -189,26 +176,7 @@ std::unique_ptr<ForEachStmt> Parser::parseForEachStmt() {
            "expected 'In' in For Each statement");
     auto collection = parseExpression();
 
-    // 单行 For Each: For Each x In col: stmt1: stmt2: Next x
-    if (cur_.kind == TokenKind::Colon) {
-        StmtList body;
-        while (cur_.kind == TokenKind::Colon) {
-            advance(); // consume ':'
-            if (cur_.kind == TokenKind::Next) break;
-            auto stmt = parseStatement();
-            if (stmt) body.push_back(std::move(stmt));
-        }
-        expect(TokenKind::Next, DiagnosticID::ParseMismatchedBlock,
-               "expected 'Next'");
-        if (canBeName(cur_.kind) && cur_.kind != TokenKind::NewLine &&
-            cur_.kind != TokenKind::Colon && cur_.kind != TokenKind::EndOfFile) {
-            advance();
-        }
-        return std::make_unique<ForEachStmt>(loc, varTok.text,
-            std::move(collection), std::move(body));
-    }
-
-    skipNewLines();
+    // 单行 `For Each x In col: stmt: Next` 由 parseBlockUntil 统一处理。
     auto body = parseBlockUntil({TokenKind::Next});
 
     expect(TokenKind::Next, DiagnosticID::ParseMismatchedBlock,
@@ -246,6 +214,8 @@ std::unique_ptr<DoLoopStmt> Parser::parseDoLoopStmt() {
         skipNewLines();
     }
 
+    // 单行 `Do [While|Until cond]: stmt: Loop` 与多行形式统一由 parseBlockUntil
+    // 起始处的 skipStatementSeparators() 处理 (冒号 ≡ 换行)。
     auto body = parseBlockUntil({TokenKind::Loop});
 
     expect(TokenKind::Loop, DiagnosticID::ParseMismatchedBlock,
@@ -274,26 +244,8 @@ std::unique_ptr<WhileWendStmt> Parser::parseWhileWendStmt() {
     advance(); // consume 'While'
     auto condition = parseExpression();
 
-    // 单行 While: While cond: stmt1: stmt2: Wend (Wend 必须与 While 同行)
-    // Fix 083: 原先没有 ':' 分支, While 之后的冒号落进 parseBlockUntil, 块结构
-    // 跟踪整体崩塌。样例工程 VBFlexGrid.ctl(26918,27258) 有两处
-    // `While PeekMessage(...) <> 0: Wend`, 其级联产物占该文件 766 个错误中的 714 个。
-    // parseForStmt/parseForEachStmt 本就有此分支 (见上方 129-146 / 173-190 行),
-    // 此处照抄, 终止符换成 Wend。严格超集: `While cond:` 此前必然报错。
-    if (cur_.kind == TokenKind::Colon) {
-        StmtList body;
-        while (cur_.kind == TokenKind::Colon) {
-            advance(); // consume ':'
-            if (cur_.kind == TokenKind::Wend) break;
-            auto stmt = parseStatement();
-            if (stmt) body.push_back(std::move(stmt));
-        }
-        expect(TokenKind::Wend, DiagnosticID::ParseMismatchedBlock,
-               "expected 'Wend'");
-        return std::make_unique<WhileWendStmt>(loc, std::move(condition), std::move(body));
-    }
-
-    skipNewLines();
+    // 单行 `While cond: stmt: Wend` 与多行形式统一由 parseBlockUntil 起始处的
+    // skipStatementSeparators() 处理 (冒号 ≡ 换行)。
     auto body = parseBlockUntil({TokenKind::Wend});
     expect(TokenKind::Wend, DiagnosticID::ParseMismatchedBlock,
            "expected 'Wend'");
@@ -363,26 +315,8 @@ std::unique_ptr<WithStmt> Parser::parseWithStmt() {
     advance(); // consume 'With'
     auto object = parseExpression();
 
-    // 单行 With: With x: .a = 1: .b = 2: End With
-    if (cur_.kind == TokenKind::Colon) {
-        withDepth_++;
-        StmtList body;
-        while (cur_.kind == TokenKind::Colon) {
-            advance(); // consume ':'
-            if (cur_.kind == TokenKind::End && isEndBlock()) break;
-            auto stmt = parseStatement();
-            if (stmt) body.push_back(std::move(stmt));
-        }
-        withDepth_--;
-        expect(TokenKind::End, DiagnosticID::ParseMismatchedBlock,
-               "expected 'End With'");
-        expect(TokenKind::With, DiagnosticID::ParseMismatchedBlock,
-               "expected 'End With'");
-        return std::make_unique<WithStmt>(loc, std::move(object), std::move(body));
-    }
-
-    skipNewLines();
-
+    // 单行 `With x: .a = 1: End With` 与多行形式统一由 parseBlockUntil 起始处的
+    // skipStatementSeparators() 处理 (冒号 ≡ 换行)。
     withDepth_++;
     auto body = parseBlockUntil({TokenKind::End});
     withDepth_--;

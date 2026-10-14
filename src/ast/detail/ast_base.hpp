@@ -3,6 +3,7 @@
 // 由 src/ast/ast.hpp 拆出（2026-09-17），内容与原文件对应区间逐字节相同。
 
 #include "ast/detail/ast_fwd.hpp"
+#include <cstdint>
 
 namespace vb6c3 {
 
@@ -14,6 +15,14 @@ class ASTNode {
 public:
     ASTNodeKind kind;
     SourceLocation loc;
+
+    // ai/030 续 (§性能, 2026-10-14): inferExprType 的按节点缓存槽。
+    // epoch 是**全局单调**计数 (CCodeGen::bumpInferEpoch): 过程入口与每条语句边界
+    // 都推它 —— 任何会改推断答案的状态变更 (known*Vars_ 的体内注册 / With 栈 /
+    // currentProc_) 都发生在这些边界上。0 = 未缓存。放基类让表达式全树可用
+    // (语句节点多占 8 字节, 无碍)。
+    uint32_t inferCacheEpoch = 0;
+    uint16_t inferCacheType = 0;
 
     ASTNode(ASTNodeKind k, SourceLocation l) : kind(k), loc(l) {}
     virtual ~ASTNode() = default;

@@ -1,0 +1,4 @@
+Type=Exe
+Name="B174App"
+Module=B174Main; B174Main.bas
+Startup="Sub Main"

@@ -38,7 +38,11 @@
         c_.emitLine("hInst);");
         c_.dedent();
     } else if (isMDIChild) {
-        if (formBackColor >= 0) {
+        // Fix <c3-form-backcolor>: 窗体级 BackColor 必须**含系统色** (&H800000xx,
+        // 高位置位 → 32 位有符号为负, 如 &H80000005 = -2147483643)。此前用
+        // `>= 0` 当哨兵, 把一切系统色判成"未指定" → 落默认 BTNFACE 灰。
+        // 真正的哨兵是 -1 (prelude 初值, 且 &H80000000 也绝非合法表单色), 故改 != -1。
+        if (formBackColor != -1) {
             c_.emitLine("vb6_RegisterFormClassBg(\"" + clsName + "\", (void*)" + wndProc + ", hInst, 0, " + std::to_string(formBackColor) + ");");
         } else {
             c_.emitLine("vb6_RegisterFormClass(\"" + clsName + "\", (void*)" + wndProc + ", hInst, 0);");
@@ -57,7 +61,8 @@
         c_.emitLine("hMDIClient, hInst);");
         c_.dedent();
     } else {
-        if (formBackColor >= 0) {
+        // Fix <c3-form-backcolor>: 同上, 哨兵改 -1 (见 isMDIChild 分支)。
+        if (formBackColor != -1) {
             c_.emitLine("vb6_RegisterFormClassBg(\"" + clsName + "\", (void*)" + wndProc + ", hInst, 0, " + std::to_string(formBackColor) + ");");
         } else {
             c_.emitLine("vb6_RegisterFormClass(\"" + clsName + "\", (void*)" + wndProc + ", hInst, 0);");

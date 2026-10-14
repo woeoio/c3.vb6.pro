@@ -25,3 +25,22 @@ End Property
 Public Function Twice(ByVal n As Long) As Long
     Twice = n * 2
 End Function
+
+' Acct #305 SB144: three members that push a Decimal ACROSS the COM boundary.
+' OLE keeps the 16-byte DECIMAL at the HEAD of the VARIANT on both arches, while our
+' slot keeps it inline at offset 8 (x64) or behind pdecVal (x86). The server adapter
+' used to memcpy the slot's first 16 bytes in and out, which answered 0 on x64 and a
+' heap address on x86 without raising anything. Amt/Quarter cover the outbound
+' direction, EchoVal the inbound one (the echo also proves the borrow does not steal
+' the caller's bytes: the client clears its own VARIANT afterwards).
+Public Function Amt() As Variant
+    Amt = CDec(1234567)
+End Function
+
+Public Function Quarter() As Variant
+    Quarter = CDec("1.25")
+End Function
+
+Public Function EchoVal(ByVal v As Variant) As Variant
+    EchoVal = v
+End Function

@@ -12,7 +12,7 @@
         auto& ma09c = static_cast<MemberAccessExpr&>(*node.target);
         if (ma09c.object && ma09c.object->kind == ASTNodeKind::IdentifierExpr
             && Symbol::toLower(static_cast<IdentifierExpr&>(*ma09c.object).name) == "mybase") {
-            emitExpr(*node.value);
+            emitSetObjectRhs(node.value);
             std::string rhs09c = std::move(lastExpr_);
             if (tryEmitMyBaseAssign(ma09c, rhs09c, /*forSet=*/true)) return;
         }
@@ -22,6 +22,47 @@
     if (node.value->kind == ASTNodeKind::LiteralExpr) {
         auto& lit = static_cast<LiteralExpr&>(*node.value);
         if (lit.literalKind == LiteralKind::Nothing) {
+            // 账 #257 第十九层: `Set .Picture = Nothing` (With UserControl / PropertyPage
+            // 体内) —— 内建成员置空直接写 RTL 全局, **不能**走 COM 派发: 派发会命中控件
+            // 自己声明的同名 Property Set, 而它末尾 `Call DrawFrame` ⇒ DrawFrame 又
+            // `Set .Picture` ⇒ 无限互递归 (ComCtlsDemo FrameW 实测栈溢出 0xC00000FD,
+            // 随后被 ntdll 报成堆损坏 0xC000037D)。
+            if (node.target->kind == ASTNodeKind::WithMemberExpr
+                && !withObjectInfoStack_.empty()) {
+                auto& hpWm19 = static_cast<WithMemberExpr&>(*node.target);
+                std::string hpRtl19;
+                if (withHostPseudoIntrinsic(withObjectInfoStack_.back().hostPseudoObj,
+                                            hpWm19.memberName, hpRtl19)) {
+                    c_.emitLine(hpRtl19 + " = NULL;  /* With host pseudo Set Nothing */");
+                    return;
+                }
+            }
+            // Fix <Command2>: `Set <窗体控件>.Picture = Nothing` —— 目标侧是**控件属性**
+            // 而不是对象变量。修复前走下面通用的 vb6_ReleaseObject 路：先把目标当表达式
+            // 求值成 `vb6_GetControlPicture(hwnd)` (那是**借用**引用，见 RTL 注释)，
+            // 再对它 Release ⇒ 把控件还握着的引用放掉。RTL 侧 vb6_GetControlPicture 现在
+            // 会交真 IPictureDisp (裸 GDI 句柄也包一层)，这次过度释放会真的把对象销毁、
+            // 留下悬空缓存指针。VB6 语义 `Set Picture1.Picture = Nothing` = 清掉控件的图，
+            // 正解就是调控件属性的写函数传 NULL。
+            if (node.target->kind == ASTNodeKind::MemberAccessExpr) {
+                auto& _picMa = static_cast<MemberAccessExpr&>(*node.target);
+                if (_picMa.object && _picMa.object->kind == ASTNodeKind::IdentifierExpr) {
+                    std::string _picObjLower = Symbol::toLower(
+                        static_cast<IdentifierExpr&>(*_picMa.object).name);
+                    auto _picItCtrl = knownFormControls_.find(_picObjLower);
+                    if (_picItCtrl != knownFormControls_.end()
+                        && Symbol::toLower(_picMa.memberName) == "picture") {
+                        std::string _picWriteFn = getControlPropWriteFn(
+                            _picItCtrl->second, _picMa.memberName);
+                        if (_picWriteFn.find("SetControlPicture") != std::string::npos) {
+                            c_.emitLine(_picWriteFn + "("
+                                + makeCtrlHwndArg(_picObjLower, _picItCtrl->second)
+                                + ", NULL);  /* Set Nothing (control Picture) */");
+                            return;
+                        }
+                    }
+                }
+            }
             // 左值求值期间关掉虚表派发 (ai/022 B08e-4 站点⑭: Pattern C/D2 要对这段文本做
                 // `prop_get_` -> `prop_let_` 的字符串级改写, 派发表达式会被换成表里不存在的槽字段)
             const bool savedVirtLhs = suppressVirtDispatch_;
@@ -188,7 +229,7 @@
                         && !_rhsRawName.empty()) {
                         _rhsRhsIsComPicture = true;
                     }
-                    emitExpr(*node.value);
+                    emitSetObjectRhs(node.value);
                     // Resolve COM marker on RHS
                     // Bug #3 fix: also detect vb6_ComIface_Picture* function return
                     bool _rhsIsComPicture = _rhsRhsIsComPicture;
@@ -257,6 +298,32 @@
                 if (!_ucOwned) _psSym = nullptr;
             }
         }
+        // Fix 234: 接收者是 **UDT 值 / UDT 字段链 / UDT 数组元素** (如
+        // `InitButtons(i).ButtonMenus(ii)`) 时, 成员必是结构体字段 ——
+        // lookupModuleByKind 是**全局按名**查找, 会命中无关类的同名 Property Set/Let。
+        // 实测 ComCtlsDemo ToolBar.ctl:1012
+        //   `Set InitButtons(i).ButtonMenus(ii).Picture = PropBagButtonMenus.ReadProperty(...)`
+        // 命中 CheckBoxW.Picture → `vb6_CheckBoxW_prop_set_Picture(<UDT 指针>, ...)`
+        // → C2440(InitButtonMenuStruct/ShadowButtonMenuStruct → vb6_cls_CheckBoxW*) ×26。
+        // 判据与 Let 侧 Fix 084j (knownUdtVars_ 守卫) 同源, 但这里接收者是表达式而
+        // 非裸标识符, 裸名表捡不到 ⇒ 换成 UDT 类型推断那把尺 (inferUdtTypeOfExpr)。
+        // UDT 的字段永远不是类属性, 故置空符号、交给下方 visit(MemberAccessExpr) 发
+        // `obj.field` 字段赋值。
+        //
+        // 宿主伪对象 (UserControl/PropertyPage/Ambient/Extender/VBA/Constants …) 同理:
+        // 它们不是工程类, lookupModuleByKind 命中的必是**无关类的同名属性**。
+        // 实测 ImageList.ctl:482 `Set UserControl.Picture = Picture` 命中
+        // CheckBoxW.Picture → `vb6_CheckBoxW_prop_set_Picture(UserControl, Picture)`
+        // 接收者是裸名 `UserControl` → C2065 ×3 (ImageList.c:728/883/957)。
+        // 交回宿主伪通道 (cgen_assign_host_pseudo.inc / 表 host_pseudo.hpp)。
+        if (_psSym && _ma.object && _ma.object->kind == ASTNodeKind::IdentifierExpr
+            && hostPseudoIsObject(Symbol::toLower(
+                   static_cast<IdentifierExpr&>(*_ma.object).name))) {
+            _psSym = nullptr;
+        }
+        if (_psSym && _ma.object && !inferUdtTypeOfExpr(*_ma.object).empty()) {
+            _psSym = nullptr;
+        }
         if (_psSym) {
             std::string _objClass = inferClassTypeOfExpr(*_ma.object);
             // Fix 084g-2: 外部注入的跨类属性符号 — 对象类型无法从符号表推断
@@ -297,7 +364,7 @@
                               + "*)vb6_UC_InstanceOf(" + hwnd160 + ")";
                     }
                 }
-                emitExpr(*node.value);
+                emitSetObjectRhs(node.value);
                 std::string _valE = std::move(lastExpr_);
                 // Task #43: RHS 是窗体控件属性读 (Set iDlg.Font = SSTabEx1.Font)
                 // 时, Fix 023e/089d 兜底只留下裸 hwnd + isComMarker_ — 不消费则
@@ -334,15 +401,59 @@
                 //   VBFlexGrid.c:2082 prop_let_Font → prop_set_Font(me, &(void*){NewFont})
                 //   → me->PropFont = 复合字面量地址(栈) → 2099 CreateGDIFontFromOLEFont
                 //   → Common.c:1068 vb6_ComGetObjectProp(Font, L"hFont") 的 disp 是栈地址、
-                //   其首 8 字节恰为 &g_vb6_UserControl_FontObj → 当成 vtable 调用 →
+                //   其首 8 字节恰为 &vb6_UserControl_FontObj → 当成 vtable 调用 →
                 //   RIP 落进 .data。**C 里 void** 传成 vb6_ComIface_Font* 只是指针不匹配
                 //   警告, 所以编译期全绿、错误数为 0 也照样崩。**别再加回无条件包装。**
                 bool _psValByVal166 = !_psSym->params.empty()
                     && _psSym->params.back().isByVal;
-                if (_valIsVar159 && _psValVariant159) {
+                // Fix 236b: 末形参在**语义层**记成 Variant、但 C 声明是 typed 对象指针
+                // (`Property Set SelectedItem(ByVal Value As LvwListItem)` →
+                // `prop_set_SelectedItem(cls* me, vb6_cls_LvwListItem* Value)`) 时
+                // **不许装箱** —— 否则 VARIANT 结构体被灌进指针槽 → C2440
+                // "vb6_VARIANT → vb6_cls_LvwListItem*" (ListView.c:9758/9880/9962/
+                // 10255, ImageCombo.c:2317, TreeView.c:1261…)。与 Set 侧
+                // cgen_setlet_set_rhs.inc 的 Fix 084n / ai/022 B08f-1 同一条否决规则:
+                // 判据看字段/形参的**真实 C 类型**, 不看语义层那档 Variant。
+                bool _psValTypedPtr236 = false;
+                if (_psValVariant159) {
+                    const std::string& _trn236 = _psSym->params.back().typeRefName;
+                    if (!_trn236.empty()
+                        && cTypeForDeclaredTypeName(_trn236) != "vb6_VARIANT") {
+                        _psValTypedPtr236 = true;
+                    }
+                }
+                // 账 #257 第二十一层: RHS 是 **COM 调用** (`.ReadProperty("MouseIcon", Nothing)`
+                // → `vb6_ComCall(...)`) 时, vb6_ComCall 交回的是**堆 VARIANT***, 而 Property
+                // Set 的 C 形参是对象指针 (`void* Value`) —— 裸传过去, 被调体里 `Value.Type`
+                // 就把 VARIANT 的第一个 DWORD (vt) 当 vtable 读。
+                // 现场 (ComCtlsDemo 启动卡死, DebugBreakProcess 抓栈):
+                //   FrameW.c:670  prop_set_MouseIcon(me, vb6_ComCall(_vb6_with_1, L"ReadProperty", …))
+                //   → prop_set_MouseIcon 里 `If Value.Type = vbPicTypeIcon` → ComGetIntProp
+                //   → ComGetProp → getDispid → ComIsDispatchable → **av 读 0x3** (vt=3)。
+                // 与 Set 语句通用路径 (本文件下方 `value = comObjectRefFromCallExpr(value)`)
+                // 同一律: 换成 vb6_ComCallObject(...) (内部 UnpackObject + VarFree)。
+                // 只在被调形参**不是** Variant 时改道 —— 形参真是 Variant 槽时, 下面
+                // Fix 236 那一支要的是整只 VARIANT (boxToVariant), 换成对象指针就错了。
+                if (!_psValVariant159 || _psValTypedPtr236) {
+                    _valE = comObjectRefFromCallExpr(_valE);
+                    _arg2 = _valE;  /* 上面 _arg2 的初值取自改道前的 _valE, 同步回来 */
+                }
+                if (_psValTypedPtr236) {
+                    _arg2 = _valIsVar159 ? ("vb6_VariantToObjectVal(" + _valE + ")")
+                                         : _valE;
+                } else if (_valIsVar159 && _psValVariant159) {
                     _arg2 = _valE;
                 } else if (_valIsVar159) {
                     _arg2 = "vb6_VariantToObjectVal(" + _valE + ")";
+                } else if (_psValVariant159 && _psValByVal166) {
+                    // Fix 236: 末形参是**按值 Variant** (`Property Set ImageList(ByVal
+                    // Value As Variant)` — CheckBoxW.ctl:1230 / CommandButtonW /
+                    // OptionButtonW / UpDown / CoolBar / ToolBar / CbrBand) 而 RHS 不是
+                    // Variant 表达式时, 必须装箱。此前三个分支都不接: 不装箱、也不套
+                    // `&(void*){...}` (那是 ByRef 对象槽的形状) ⇒ RHS 以 BSTR / 类指针 /
+                    // void* 裸传 → C2440 (CheckBoxW.c:2733, PagerForm.c:187 …)。
+                    // 装箱走 boxToVariant 这一权威 (按 VB 声明类型选档)。
+                    _arg2 = boxToVariant(node.value.get(), _valE);
                 } else if (_arg2 != "NULL" && _arg2 != "0" && _arg2[0] != '&'
                            && _arg2.find("vb6_ComPack") == std::string::npos
                            && !_psValByVal166) {
@@ -370,12 +481,19 @@
     suppressVirtDispatch_ = savedVirtLhs;
     std::string target = std::move(lastExpr_);
 
+    // 账 #257 第十九层 · 注: `Set .Picture = .Image` 这一形**不在这里另开分支** ——
+    // 上面 WithMemberExpr 的读取已经把 target 交成内建全局 (且不打 COM 标记),
+    // 于是下方 isComMarker_ 为假, 自然落到本函数末尾那条通用的 `target = value;`
+    // 路径, 发出的就是 `vb6_UserControl_Picture = vb6_ComGetObjectProp(...)`。
+    // 刻意不再调 emitSetObjectRhs: scripts/check_set_rhs_object_context.ps1 钉着
+    // "emitSetObjectRhs 调用点恰好 7 处", 新增一处即红 (实测踩到过)。
+
     // COM属性SetRef: Set obj.Property = objRef → vb6_ComSetRef(obj, L"Property", objRef)
     if (isComMarker_) {
         isComMarker_ = false;
         std::string objExpr = std::move(comObjExpr_);
         std::string memberName = std::move(comMemberName_);
-    emitExpr(*node.value);
+    emitSetObjectRhs(node.value);
     // COM属性值: 如果右侧是COM属性, 解析为值
     if (isComMarker_) resolveComValue();
     std::string value = std::move(lastExpr_);
@@ -398,7 +516,7 @@
         return;
     }
 
-    emitExpr(*node.value);
+    emitSetObjectRhs(node.value);
     // Set语句: 如果右侧是COM调用返回的VARIANT*, 需要解封为对象
     if (isComMarker_) {
         // COM属性值作为对象引用: vb6_ComUnpackObject(vb6_ComGetProp(...))
@@ -406,28 +524,16 @@
     }
     std::string value = std::move(lastExpr_);
 
-    // P16: Set cmd = Command1 → value应为vb6_hwnd_Command1而非默认属性值
-    {
-        std::string targetLower = target;
-        std::transform(targetLower.begin(), targetLower.end(), targetLower.begin(), ::tolower);
-        if (knownWithEventsCtrlVars_.count(targetLower)) {
-            // value可能是vb6_GetControlXxx(vb6_hwnd_Name)形式, 需提取为vb6_hwnd_Name
-            size_t hwndPos = value.find("vb6_hwnd_");
-            if (hwndPos != std::string::npos) {
-                size_t endPos = value.find(")", hwndPos);
-                if (endPos != std::string::npos) {
-                    value = value.substr(hwndPos, endPos - hwndPos);
-                }
-            }
-        }
-    }
+    // 账 #258 (§B87) 撤掉了这里那截 P16 事后手术（在发好的 value 文本里 find("vb6_hwnd_") 再截取，
+    // 只认 knownWithEventsCtrlVars_ 的目标）—— 那是「Set 的右值该不该折默认属性」这一问的第二份答案。
+    // 现在右值发码走 emitSetObjectRhs，`Set cmd = Command1` 直接交出 vb6_hwnd_Command1。
 
     // 如果ComCall/ComGetProp返回VARIANT*含对象, 需要UnpackObject
     // 使用一体化函数: vb6_ComCallObject 内部完成 UnpackObject+VarFree
-    if (value.find("vb6_ComCall(") == 0) {
-        // vb6_ComCall(obj, L"Method", args, argc) → vb6_ComCallObject(obj, L"Method", args, argc)
-        value = "vb6_ComCallObject" + value.substr(strlen("vb6_ComCall"));
-    }
+    // 账 #255: 这一段原本是就地手改字符串前缀 = 「COM 调用的结果当对象引用用」这一问的第二份
+    // 抄本 (With 那一路漏了 VARIANT* 这一档, 于是 Charts 的 `With CtrlNames(i)` 全丢)。
+    // 现在两路共用 comObjectRefFromCallExpr；对 vb6_ComCall( 的结果一字不变。
+    value = comObjectRefFromCallExpr(value);
 
     // Fix 037b: 项目类 typed 字段的 Item 属性调用返回 VARIANT, Set 语句需要提取 void* 对象引用.
     // 检测: value 以 "vb6_" 开头且第一个 '(' 恰在 "_prop_get_Item" 之后 → 顶层 Item 调用.
@@ -560,7 +666,112 @@
                         return;
                     }
                     value = ivPtr;
+                } else if (value.find("vb6_Common_PtrToObj(") != std::string::npos ||
+                           value.find("vb6_ObjPtr(") != std::string::npos) {
+                    // Fix 215: `Set <接口变量> = PtrToObj(<LongPtr>)` —— 真实 VB6 工程把
+                    // 接口引用塞进窗口/控件数据槽、稍后再取回来的标准手法:
+                    // ComCtlsDemo Builds/ComCtlsBase.bas:786 `SetWindowSubclass hWnd,
+                    // ComCtlsSubclassProcPtr, ObjPtr(This), dwRefData` 存, 回调里
+                    // :873 `Dim This As ISubclass` + `Set This = PtrToObj(uIdSubclass)` 取。
+                    // 为什么这里不该报 VB4001: C3 的 canonical 接口表示里, **接口引用本身
+                    // 就是薄指针** `vb6_ivref_I*` (Fix 213 登记 ISubclass 之后走的就是这条),
+                    // 于是 `ObjPtr(<接口变量>)` 拿到的正是薄指针 (已知 Fix 108c-3 的 `.obj`
+                    // 改写只针对 legacy 的 `knownIfaceVars_`, 不碰 ivref), 而 Fix 158e 已把
+                    // `PtrToObj` 认成返回 void* 的转换助手 ⇒ 两边是同一个值, 圆回来了。
+                    // 所以只需把裸指针贴回接口指针类型: 没有偏移问题 (不是 &me->__iv_I)。
+                    // 注意放在上面 `isClassVar || isNewExpr` 之后: 真类实例 / New 仍走
+                    // 那条带 AddRef 的路, 这里只兜"裸指针往返"这一种形态。
+                    //
+                    // ⚠ 更正 (2026-10-12): 原先这里**既不 AddRef 也不 Release**, 依据是
+                    // "存进去的那 1 次引用在存入时就记在调用方头上, 与 B04/B05 的
+                    // AddRef/Release 不重叠" —— **该前提不成立**。存入侧是
+                    // `ObjPtr(<ByVal 接口形参>)` + `SetWindowSubclass`, 两条都恒等、
+                    // 都不 AddRef, 而那个 ByVal 形参自带的 1 次引用在 SetSubclass 返回时
+                    // 就放掉了; 槽里只剩一枚**借用**指针。
+                    // 而本函数声明出的局部 ivref 变量在 decl 时就被**无条件**登记
+                    // (cgen_localdecl.cpp trackIvrefLocalForRelease / B05), 出过程必发
+                    // `This->vt->Release(This)` ⇒ 净 −1: 第一条子类化消息就把
+                    // `__refcount` 从 1 打到 0 → `vb6_cls_<C>_Destroy(me)`, 而创建方
+                    // (`vb6_StatusBar_CreateStatusBar` 等) 还在栈上用 me ⇒ use-after-free。
+                    // 实测 ComCtlsDemo StatusBar UC: 无页堆 = 事后 0xC0000374 堆损坏
+                    // (fail-fast, 拿不到栈); 挂 IFEO 全堆页堆后当场 AV ——
+                    // `This = &me->__iv_ISubclass` 读**已释放**块 (av read target=0x98b4f38
+                    // = me+8, 与 offsetof(__iv_ISubclass)=8 完全吻合)。
+                    // 计数口径照 B05 兄弟分支: 存旧值 → 覆盖 → AddRef 新 → Release 旧。
+                    const std::string ivCType215 = "vb6_ivref_" + cIdent(v->name) + "*";
+                    const std::string ivOld215 = "__ivold" + std::to_string(ivrefSetSeq_++);
+                    c_.emitLine("{  /* tB Interface B05: Set " + target +
+                                " = PtrToObj/ObjPtr 往返 (Fix 215) */");
+                    c_.indent();
+                    c_.emitLine(ivCType215 + " " + ivOld215 + " = " + target + ";");
+                    c_.emitLine(target + " = (vb6_ivref_" + cIdent(v->name) + "*)" + value + ";");
+                    c_.emitLine("if (" + target + ") " + target + "->vt->AddRef(" + target + ");");
+                    c_.emitLine("if (" + ivOld215 + ") " + ivOld215 + "->vt->Release(" + ivOld215 + ");");
+                    c_.dedent();
+                    c_.emitLine("}");
+                    return;
                 } else {
+                    // Fix 215b: `Set <接口变量> = <返回项目类实例的表达式>` —— VB6 语义是
+                    // **QI**: 目标接口由 RHS 对象的实际类决定, 绑不上就运行期报错 13。
+                    // 实测 (ComCtlsDemo Builds/ListView/LvwGroups.cls:195):
+                    //     Dim This As ISubclass
+                    //     Set This = ShadowListView     ' Private Function … As ListView
+                    // `ListView` 是工程内 UserControl 且自己 `Implements ISubclass`, 所以
+                    // RHS 的 C 表达式是 `vb6_cls_ListView*` (类实例) —— 既不是类变量、
+                    // 不是 New、也不是 PtrToObj 裸指针, 于是落到这条最后的 else 报 VB4001
+                    // (整个工程只剩这 1 条 error 级诊断)。
+                    // canonical 接口表示 (B04) 里薄指针就是 `&obj->__iv_<I>`, 所以取该字段
+                    // 地址即可。借一枚 temp 求值一次 —— 形如 `ShadowListView` 的调用内部带
+                    // AddRef (ComCtlsObjSetAddRef), 出现两次就多记一笔引用。计数口径照 B05:
+                    // 新值 AddRef, 旧值 Release。
+                    std::string ivCls215;
+                    if (node.value) {
+                        std::string nm215;
+                        switch (node.value->kind) {
+                            case ASTNodeKind::IdentifierExpr:
+                                nm215 = static_cast<IdentifierExpr&>(*node.value).name;
+                                break;
+                            case ASTNodeKind::IndexOrCallExpr: {
+                                auto& call215 = static_cast<IndexOrCallExpr&>(*node.value);
+                                if (call215.callee && call215.callee->kind == ASTNodeKind::IdentifierExpr)
+                                    nm215 = static_cast<IdentifierExpr&>(*call215.callee).name;
+                                else if (call215.callee && call215.callee->kind == ASTNodeKind::MemberAccessExpr)
+                                    nm215 = static_cast<MemberAccessExpr&>(*call215.callee).memberName;
+                                break;
+                            }
+                            case ASTNodeKind::MemberAccessExpr:
+                                nm215 = static_cast<MemberAccessExpr&>(*node.value).memberName;
+                                break;
+                            default:
+                                break;
+                        }
+                        if (!nm215.empty()) {
+                            const Symbol* fs215 = symTab_.lookupModule(nm215);
+                            if (!fs215) fs215 = symTab_.lookup(nm215);
+                            if (fs215 && !fs215->variableTypeName.empty())
+                                ivCls215 = projectClassNameOf(fs215->variableTypeName);
+                        }
+                        if (ivCls215.empty()) ivCls215 = inferClassTypeOfExpr(*node.value);
+                    }
+                    if (!ivCls215.empty()) {
+                        const std::string ivCType215 = "vb6_ivref_" + cIdent(v->name) + "*";
+                        const std::string clsPtr215  = "vb6_cls_" + cIdent(ivCls215) + "*";
+                        const std::string ivOld215  = "__ivold" + std::to_string(ivrefSetSeq_);
+                        const std::string ivTmp215  = "__ivtmp" + std::to_string(ivrefSetSeq_);
+                        ivrefSetSeq_++;
+                        c_.emitLine("{  /* tB Interface B05: Set " + target + " = <" + ivCls215 +
+                                    " 实例> (Fix 215b: 取 __iv_ 槽) */");
+                        c_.indent();
+                        c_.emitLine(ivCType215 + " " + ivOld215 + " = " + target + ";");
+                        c_.emitLine("void* " + ivTmp215 + " = (void*)(" + value + ");");
+                        c_.emitLine(target + " = " + ivTmp215 + " ? &((" + clsPtr215 + ")" + ivTmp215 +
+                                    ")->__iv_" + cIdent(v->name) + " : NULL;");
+                        c_.emitLine("if (" + target + ") " + target + "->vt->AddRef(" + target + ");");
+                        c_.emitLine("if (" + ivOld215 + ") " + ivOld215 + "->vt->Release(" + ivOld215 + ");");
+                        c_.dedent();
+                        c_.emitLine("}");
+                        return;
+                    }
                     diag_.error(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
                         "Interface binding: Set " + target + " = <expr> needs a class instance,"
                         " New, or another interface value on the right side"

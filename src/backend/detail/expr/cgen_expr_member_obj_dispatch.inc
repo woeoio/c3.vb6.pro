@@ -233,9 +233,8 @@
         // (在 LabelPlus 模块内恰好回退到 sourceMod = "UserControl" 才碰巧正确,
         //  这也是同一表达式在不同模块生成不同符号名、仅部分模块报错的原因.)
         // 跳过本块, 交由 M22 分支以对象名作前缀生成正确的宿主标识符.
-        const bool hostPseudoObj110e =
-            objLower == "usercontrol" || objLower == "ambient" ||
-            objLower == "extender" || objLower == "propertypage";
+        // 账 #278 §B120: 这一问由那张表答。
+        const bool hostPseudoObj110e = hostPseudoIsObject(objLower);
         if (!hostPseudoObj110e && memSym
             && (memSym->kind == SymbolKind::Sub || memSym->kind == SymbolKind::Function
                     || memSym->kind == SymbolKind::PropertyGet

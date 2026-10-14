@@ -18,6 +18,299 @@
         return "vb6_hwnd_" + cIdent(c.controlName);
     };
 
+    // Fix <vbeclipse> 2026-10-12 (账 #257 第十八层): 容器(CoolBar 等工程内 UserControl)内嵌套的
+    // UserControl —— 此前 emitChildControls 仅认 controlTypeToWin32Class()!=NULL 的原生控件,
+    // .ctl 类 childClass==NULL 在下面 `if (!childClass) continue` 被跳过 ⇒ 从不创建 ⇒
+    // vb6_hwnd_<X> 恒 NULL ⇒ Form_Load 里 `<X>.<属性>` 解引用 NULL 崩 (av read target=0x64)。
+    // 这里补齐与顶层 vb6_UC_HostCreate 完全一致的发射路径, 父窗口换成容器 hwnd。
+    auto emitUserControlChild = [&](const FrmControl& uc, const std::string& parentHwnd) -> void {
+        std::string ctlClass = knownUserControlCtrlVars_[Symbol::toLower(uc.controlName)];
+        c_.emitLine("{ extern void vb6_" + cIdent(ctlClass) + "_RegisterHost(void);"
+                  + " vb6_" + cIdent(ctlClass) + "_RegisterHost(); }");
+        int ucL = 0, ucT = 0, ucW = 1000, ucH = 300;
+        auto ucP = uc.properties.find("Left");
+        if (ucP != uc.properties.end()) ucL = (int)ucP->second.intValue;
+        ucP = uc.properties.find("Top");
+        if (ucP != uc.properties.end()) ucT = (int)ucP->second.intValue;
+        ucP = uc.properties.find("Width");
+        if (ucP != uc.properties.end()) ucW = (int)ucP->second.intValue;
+        ucP = uc.properties.find("Height");
+        if (ucP != uc.properties.end()) ucH = (int)ucP->second.intValue;
+
+        std::string ctlLower = Symbol::toLower(uc.controlName);
+        auto emitUcFrmFontObj = [&](const FrmPropertyBlock& blk, const std::string& varName) {
+            std::string nm = "MS Sans Serif";
+            double sz = 8.25;
+            long weight = 400, charset = 0;
+            long bBold = 0, bItalic = 0, bUnder = 0, bStrike = 0;
+            auto it = blk.properties.find("Name");
+            if (it != blk.properties.end()) {
+                nm = it->second.rawText;
+                if (nm.size() >= 2 && nm.front() == '"' && nm.back() == '"')
+                    nm = nm.substr(1, nm.size() - 2);
+            }
+            it = blk.properties.find("Size");
+            if (it != blk.properties.end())
+                sz = (it->second.type == FrmValueType::Float) ? it->second.floatValue
+                                                              : (double)it->second.intValue;
+            it = blk.properties.find("Weight");
+            if (it != blk.properties.end()) weight = (long)it->second.intValue;
+            it = blk.properties.find("Charset");
+            if (it != blk.properties.end()) charset = (long)it->second.intValue;
+            it = blk.properties.find("Bold");
+            if (it != blk.properties.end()) bBold = (long)it->second.intValue;
+            it = blk.properties.find("Italic");
+            if (it != blk.properties.end()) bItalic = (long)it->second.intValue;
+            it = blk.properties.find("Underline");
+            if (it != blk.properties.end()) bUnder = (long)it->second.intValue;
+            it = blk.properties.find("Strikethrough");
+            if (it != blk.properties.end()) bStrike = (long)it->second.intValue;
+            if (weight >= 700) bBold = -1;
+            c_.emitLine("{ vb6_ComIface_Font* " + varName
+                      + " = (vb6_ComIface_Font*)vb6_UC_NewFont();");
+            c_.emitLine("  if (" + varName + ") {");
+            c_.emitLine("    " + varName + "->Name = vb6_BSTR_FromStr(L\"" + escapeWideCString(nm) + "\");");
+            c_.emitLine("    " + varName + "->Size = " + floatSingleLiteral(sz, 4) + ";");
+            c_.emitLine("    " + varName + "->Weight = " + std::to_string(weight) + ";");
+            c_.emitLine("    " + varName + "->Charset = " + std::to_string(charset) + ";");
+            c_.emitLine("    " + varName + "->Bold = " + std::to_string(bBold) + ";");
+            c_.emitLine("    " + varName + "->Italic = " + std::to_string(bItalic) + ";");
+            c_.emitLine("    " + varName + "->Underline = " + std::to_string(bUnder) + ";");
+            c_.emitLine("    " + varName + "->Strikethrough = " + std::to_string(bStrike) + ";");
+        };
+        for (const auto& blk : uc.propertyBlocks) {
+            if (_stricmp(blk.blockName.c_str(), "Font") != 0) continue;
+            emitUcFrmFontObj(blk, "_vb6_f119");
+            c_.emitLine("    vb6_UC_SetPendingFont(_vb6_f119);");
+            c_.emitLine("  } }");
+        }
+        bool ucIsArr = knownControlArrays_.count(ctlLower) != 0;
+        bool ucSkipInitProps = false;
+        if (const FrmFile* spInitProps = findUserControlSpec(ctlClass))
+            ucSkipInitProps = Symbol::toLower(spInitProps->codeSection)
+                                  .find("sub usercontrol_readproperties") != std::string::npos;
+        std::string hwndExpr;
+        if (ucIsArr) {
+            int idx = uc.index >= 0 ? uc.index : 0;
+            if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(1);");
+            c_.emitLine("{ void* vb6_uc_h = vb6_UC_HostCreate(\"" + ctlClass + "\", "
+                + std::to_string(ucL) + ", " + std::to_string(ucT) + ", "
+                + std::to_string(ucW) + ", " + std::to_string(ucH)
+                + ", " + parentHwnd + ", hInstance, \"" + cIdent(uc.controlName) + "_" + std::to_string(idx)
+                + "\", " + std::to_string(idx) + ");");
+            c_.emitLine("  vb6_CtrlArr_SetAt(&vb6_arr_" + cIdent(uc.controlName) + ", "
+                       + std::to_string(idx) + ", vb6_uc_h); }");
+            if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(0);");
+            hwndExpr = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(uc.controlName) + ", "
+                     + std::to_string(idx) + ")";
+        } else {
+            std::string slot220 = (uc.controlType == FrmControlType::ImageList
+                                   ? "vb6_com_" : "vb6_hwnd_")
+                                + cIdent(uc.controlName);
+            if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(1);");
+            c_.emitLine(slot220 + " = vb6_UC_HostCreate(\""
+                + ctlClass + "\", " + std::to_string(ucL) + ", " + std::to_string(ucT) + ", "
+                + std::to_string(ucW) + ", " + std::to_string(ucH)
+                + ", " + parentHwnd + ", hInstance, \"" + uc.controlName + "\", -1);");
+            if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(0);");
+            hwndExpr = slot220;
+        }
+        {
+            static const char* kSkip[] = {"Left", "Top", "Width", "Height", "Index",
+                "TabIndex", "TabStop", "Visible", "Enabled", "Name", "_ExtentX",
+                "_ExtentY", "Tag", "ToolTipText", "WhatisThis", "HelpContextID",
+                "Font", "IconFont", "TitleFont", "Caption1_Font", "Caption2_Font",
+                "Images", "ListImages", "MouseIcon"};
+            c_.emitLine("vb6_UC_Enter(" + hwndExpr + ");");
+            std::string ucRpCodeLower;
+            if (const FrmFile* spRp = findUserControlSpec(ctlClass))
+                ucRpCodeLower = Symbol::toLower(spRp->codeSection);
+            for (const auto& blk : uc.propertyBlocks) {
+                std::vector<ParameterInfo> fp119;
+                bool isSet119 = false;
+                if (findClassMemberWriteParams(ctlClass, blk.blockName, false, fp119)
+                    && !fp119.empty()) {
+                    isSet119 = false;
+                } else if (findClassMemberWriteParams(ctlClass, blk.blockName, true, fp119)
+                           && !fp119.empty()) {
+                    isSet119 = true;
+                } else {
+                    continue;
+                }
+                bool fontName119 = false;
+                {
+                    std::string bn = Symbol::toLower(blk.blockName);
+                    if (bn == "font" || (bn.size() >= 4
+                        && bn.compare(bn.size() - 4, 4, "font") == 0))
+                        fontName119 = true;
+                }
+                if (!fontName119) continue;
+                std::string canonF = canonicalClassMemberName(ctlClass, blk.blockName);
+                if (canonF.empty()) canonF = blk.blockName;
+                std::string setterF = "vb6_" + cIdent(ctlClass) + "_"
+                                    + propFnSegment(isSet119 ? "prop_set_" : "prop_let_", canonF);
+                emitUcFrmFontObj(blk, "_vb6_f119");
+                if (isSet119) {
+                    std::string getterF = "vb6_" + cIdent(ctlClass) + "_"
+                                        + propFnSegment("prop_get_", canonF);
+                    c_.emitLine("    vb6_UC_FontAssign((void*)" + getterF
+                              + "((vb6_cls_" + cIdent(ctlClass) + "*)vb6_UC_InstanceOf("
+                              + hwndExpr + ")), _vb6_f119);");
+                } else {
+                    c_.emitLine("    " + setterF + "((vb6_cls_" + cIdent(ctlClass)
+                              + "*)vb6_UC_InstanceOf(" + hwndExpr + "), _vb6_f119);");
+                }
+                c_.emitLine("  } }");
+            }
+            for (const auto& kv : uc.properties) {
+                const std::string& pn = kv.first;
+                bool skip = false;
+                for (const char* sk : kSkip) if (_stricmp(pn.c_str(), sk) == 0) { skip = true; break; }
+                if (skip) continue;
+                if (!ucRpCodeLower.empty()
+                    && ucRpCodeLower.find(".readproperty(\"" + Symbol::toLower(pn) + "\"")
+                           != std::string::npos) {
+                    continue;
+                }
+                std::vector<ParameterInfo> wp114;
+                if (!findClassMemberWriteParams(ctlClass, pn, false, wp114) || wp114.empty())
+                    continue;
+                std::string canonPn = canonicalClassMemberName(ctlClass, pn);
+                if (canonPn.empty()) canonPn = pn;
+                std::string setter = "vb6_" + cIdent(ctlClass) + "_"
+                                   + propFnSegment("prop_let_", canonPn);
+                const ParameterInfo& p114 = wp114.back();
+                const std::string p114RefLower = Symbol::toLower(p114.typeRefName);
+                const bool p114RealVariant =
+                    p114.type == Vb6Type::Variant
+                    && (p114.typeRefName.empty() || p114RefLower == "variant");
+                std::string meExpr = "(vb6_cls_" + cIdent(ctlClass)
+                                   + "*)vb6_UC_InstanceOf(" + hwndExpr + ")";
+                std::string textVal;
+                bool isStr = false;
+                if (kv.second.type == FrmValueType::String) {
+                    isStr = true;
+                    textVal = kv.second.rawText;
+                } else if (kv.second.type == FrmValueType::FrxReference) {
+                    if (frxLoaded) {
+                        FrxTextData ds114 = FrxReader::readDocString(kv.second.frxOffset);
+                        if (!ds114.text.empty()) { isStr = true; textVal = ds114.text; }
+                    }
+                    if (!isStr) continue;
+                }
+                if (isStr) {
+                    if (textVal.size() >= 2 && textVal.front() == '"' && textVal.back() == '"')
+                        textVal = textVal.substr(1, textVal.size() - 2);
+                    std::string lit = "vb6_BSTR_FromStr(L\"" + escapeWideCString(textVal) + "\")";
+                    if (p114RealVariant && p114.isByVal) {
+                        lit = "vb6_VariantFromValue(" + lit + ")";
+                    }
+                    if (p114.isByVal) {
+                        c_.emitLine(setter + "(" + meExpr + ", " + lit + ");");
+                    } else {
+                        c_.emitLine("{ BSTR _lp114 = " + lit + "; "
+                                  + setter + "(" + meExpr + ", &_lp114); }");
+                    }
+                } else {
+                    std::string valExpr = kv.second.rawText.empty()
+                            ? std::to_string(kv.second.intValue) : kv.second.rawText;
+                    if (p114RealVariant && p114.isByVal) {
+                        valExpr = "vb6_VariantFromValue(" + valExpr + ")";
+                    }
+                    c_.emitLine(setter + "(" + meExpr + ", " + valExpr + ");");
+                }
+            }
+            {
+                auto itAtt114 = ucEventAttach_.find(ctrlElemKey(uc.controlName, uc.index));
+                if (itAtt114 != ucEventAttach_.end() && !getenv("C3_NO_EVENTS")) {
+                    std::string shortCls114 = ctlClass;
+                    size_t dotCls114 = shortCls114.rfind('.');
+                    if (dotCls114 != std::string::npos) shortCls114 = shortCls114.substr(dotCls114 + 1);
+                    c_.emitLine("{ /* UC events */");
+                    for (const auto& al : itAtt114->second.lines) c_.emitLine("  " + al);
+                    c_.emitLine("  ((vb6_cls_" + cIdent(shortCls114) + "*)vb6_UC_InstanceOf(" + hwndExpr + "))->events = &" + itAtt114->second.sinkVar + ";");
+                    c_.emitLine("}");
+                }
+            }
+            {
+                const FrmFile* ucSpec114 = findUserControlSpec(ctlClass);
+                bool hasReadProps114 = false;
+                if (ucSpec114) {
+                    std::string lowerCode = Symbol::toLower(ucSpec114->codeSection);
+                    hasReadProps114 =
+                        lowerCode.find("sub usercontrol_readproperties") != std::string::npos;
+                }
+                static const char* noBagCls = getenv("C3_NO_BAG_CLS");
+                static const char* onlyBagCls = getenv("C3_ONLY_BAG_CLS");
+                bool bagBlocked = (noBagCls && strstr(noBagCls, Symbol::toLower(ctlClass).c_str()))
+                    || (onlyBagCls && strstr(onlyBagCls, Symbol::toLower(ctlClass).c_str()) == nullptr);
+                if (hasReadProps114 && !getenv("C3_NO_BAG") && !bagBlocked) {
+                    c_.emitLine("extern void vb6_" + cIdent(ctlClass) + "_UC_ReadProps(void* me, void** PropBag);");
+                    c_.emitLine("{ void* _bag = vb6_UC_PropBagCreate();");
+                    // Fix: .frx 属性包块 (UserControl 持久化 PropertyBag) —— 交原始字节,
+                    // 运行期由 RTL 的 PropertyBag.Contents 解析 (见 uc_propbag.c)。
+                    auto emitFrxBagBlob = [&](const std::string& litName,
+                                              const std::vector<uint8_t>& bytes) {
+                        c_.emitLine("vb6_UC_BagPutBin(_bag, " + litName + ",");
+                        std::string line = "\"";
+                        for (unsigned char b : bytes) {
+                            if (b == '"')        line += "\\\"";
+                            else if (b == '\\')  line += "\\\\";
+                            else if (b >= 0x20 && b < 0x7F) line += (char)b;
+                            else {
+                                line += '\\';
+                                line += (char)('0' + ((b >> 6) & 7));
+                                line += (char)('0' + ((b >> 3) & 7));
+                                line += (char)('0' + (b & 7));
+                            }
+                            if (line.size() >= 900) { c_.emitLine(line + "\""); line = "\""; }
+                        }
+                        c_.emitLine(line + "\",");
+                        c_.emitLine(std::to_string(bytes.size()) + ");");
+                    };
+                    for (const auto& kvb : uc.properties) {
+                        const std::string& pn114 = kvb.first;
+                        bool skip114 = false;
+                        for (const char* sk : kSkip) if (_stricmp(pn114.c_str(), sk) == 0) { skip114 = true; break; }
+                        if (skip114) continue;
+                        std::string litName = "L\"" + escapeWideCString(pn114) + "\"";
+                        if (kvb.second.type == FrmValueType::Integer) {
+                            c_.emitLine("vb6_UC_BagPutInt(_bag, " + litName + ", " + std::to_string((int)kvb.second.intValue) + ");");
+                        } else if (kvb.second.type == FrmValueType::Float) {
+                            c_.emitLine("vb6_UC_BagPutDbl(_bag, " + litName + ", " + std::to_string(kvb.second.floatValue) + ");");
+                        } else if (kvb.second.type == FrmValueType::String) {
+                            std::string tv = kvb.second.rawText;
+                            if (tv.size() >= 2 && tv.front() == '"' && tv.back() == '"')
+                                tv = tv.substr(1, tv.size() - 2);
+                            c_.emitLine("vb6_UC_BagPutStr(_bag, " + litName + ", L\"" + escapeWideCString(tv) + "\");");
+                        } else if (kvb.second.type == FrmValueType::Identifier) {
+                            std::string idl = Symbol::toLower(kvb.second.rawText);
+                            if (idl == "true")  c_.emitLine("vb6_UC_BagPutBool(_bag, " + litName + ", -1);");
+                            else if (idl == "false") c_.emitLine("vb6_UC_BagPutBool(_bag, " + litName + ", 0);");
+                        } else if (kvb.second.type == FrmValueType::FrxReference && frxLoaded) {
+                            FrxPropBagBlob pbB114 = FrxReader::readPropBagBlob(kvb.second.frxOffset);
+                            if (pbB114.found) {
+                                emitFrxBagBlob(litName, pbB114.bytes);
+                            } else {
+                            FrxTextData dsB114 = FrxReader::readDocString(kvb.second.frxOffset);
+                            if (!dsB114.text.empty()) {
+                                std::string tvB = dsB114.text;
+                                if (tvB.size() >= 2 && tvB.front() == '"' && tvB.back() == '"')
+                                    tvB = tvB.substr(1, tvB.size() - 2);
+                                c_.emitLine("vb6_UC_BagPutStr(_bag, " + litName + ", L\"" + escapeWideCString(tvB) + "\");");
+                            }
+                            }
+                        }
+                    }
+                    c_.emitLine("vb6_" + cIdent(ctlClass) + "_UC_ReadProps((vb6_cls_" + cIdent(ctlClass)
+                          + "*)vb6_UC_InstanceOf(" + hwndExpr + "), &_bag);");
+                    c_.emitLine("vb6_UC_PropBagFree(_bag); }");
+                }
+            }
+            if (ucSkipInitProps) c_.emitLine("vb6_UC_ActivateHost(" + hwndExpr + ");");
+        }
+    };
+
     // P14.4.2: 容器控件(Frame/PictureBox) - 创建容器的子控件(以容器 HWND 为父窗口)
     // 关键: .frm 中子控件坐标已是"相对容器的缇值", 且 vb6_CreateControl 内部会做缇→像素换算,
     //       因此这里必须直传原始缇值 —— 既不能减去容器偏移, 也不能再乘 15/10.
@@ -53,6 +346,28 @@
             for (const auto& child : container.children) {
                 childTi++;
                 if (child.controlType == FrmControlType::Menu) continue;
+                // Fix <vbeclipse> 2026-10-12 (账 #257 第十八层): 嵌套的工程内 UserControl
+                // (CoolBar 的 band 里的 ImageCombo 等) —— 先走这条, 否则下面
+                // `if (!childClass) continue` 会把它跳过 (childClass==NULL)。
+                if (findUserControlSpec(child.controlTypeName)) {
+                    emitUserControlChild(child, containerHwnd);
+                    c_.emitLine("vb6_HostObj_Register((void*)" + childHwndRead(child) + ", \""
+                                + child.controlName + "\", \"" + child.controlTypeName + "\", 0, "
+                                + std::to_string(child.index) + ");  /* VB identity */");
+                    {
+                        std::string childNameLower = child.controlName;
+                        std::transform(childNameLower.begin(), childNameLower.end(), childNameLower.begin(), ::tolower);
+                        knownFormControls_[childNameLower] = child.controlType;
+                        knownFormControlOriginalNames_[childNameLower] = child.controlName;
+                    }
+                    emitControlFrxProps(child);
+                    childCtrlId++;
+                    if (!child.children.empty()) {
+                        if (controlIsContainerType(child) || findUserControlSpec(child.controlTypeName))
+                            self(self, child, childHwndRead(child));
+                    }
+                    continue;
+                }
                 const char* childClass = FrmParser::controlTypeToWin32Class(child.controlType);
                 if (!childClass) continue;
                 int cLeft = 0, cTop = 0, cWidth = 2000, cHeight = 300;
@@ -141,6 +456,12 @@
                               + ", (void*)" + childHwndRead(child)
                               + ", " + std::to_string(tsPage) + ");");
                 }
+                // 账 #252: 第二条创建路同样要记这一次 VB 身份（容器里的控件以前一条也没有）。
+                // 句柄表达式走既有出口 ctrlHwndExprForInit —— 与下面几档设计期属性同一个口径，
+                // 控件数组的元素句柄在 vb6_arr_<名> 里，拼 vb6_hwnd_<名>_0 会 C2065。
+                c_.emitLine("vb6_HostObj_Register((void*)" + ctrlHwndExprForInit(child) + ", \""
+                            + child.controlName + "\", \"" + child.controlTypeName + "\", 0, "
+                            + std::to_string(child.index) + ");  /* VB identity */");
                 // C29-1a: 设计期外观属性 —— Frame / PictureBox 里的 Shape/Line 以前一条都不发
                 emitShapeLineProps(child, ctrlHwndExprForInit(child));
                 // 设计期 BorderStyle / Alignment (容器子控件)
@@ -161,6 +482,16 @@
                         asIt162d->second.intValue != 0 &&
                         child.controlType == FrmControlType::Label) {
                         c_.emitLine("vb6_SetLabelAutoSize((void*)" + childHwndRead(child)
+                                  + ", -1);  /* design AutoSize */");
+                    }
+                    // Fix <c3-menu3d>: 与顶层路径同口径 —— 容器里的 PictureBox/Image
+                    // 设计期 AutoSize=True 同样要发 (RT 的 FromCom AutoSize 块读它)。
+                    if (asIt162d != child.properties.end() &&
+                        asIt162d->second.type == FrmValueType::Integer &&
+                        asIt162d->second.intValue != 0 &&
+                        (child.controlType == FrmControlType::PictureBox ||
+                         child.controlType == FrmControlType::Image)) {
+                        c_.emitLine("vb6_SetPictureAutoSize((void*)" + childHwndRead(child)
                                   + ", -1);  /* design AutoSize */");
                     }
                 }
@@ -184,14 +515,17 @@
                 }
                 childCtrlId++;
                 // 递归处理多层容器(Frame/PictureBox 内再嵌容器)
-                if (!child.children.empty() && controlIsContainerType(child)) {
+                if (!child.children.empty() && (controlIsContainerType(child)
+                        || findUserControlSpec(child.controlTypeName))) {
                     self(self, child, childHwndRead(child));   // 账 #167：容器清单收成一处
                 }
             }
         };
         for (const auto& ctrl : frmDesc.formControl.children) {
             if (ctrl.children.empty()) continue;
-            if (!controlIsContainerType(ctrl)) continue;   // 账 #167
+            // Fix <vbeclipse> 2026-10-12 (账 #257 第十八层): 工程内 UserControl 容器
+            // (CoolBar 等) 也走这条, 其内部嵌套的 UserControl 才能被 emiUserControlChild 创建。
+            if (!controlIsContainerType(ctrl) && !findUserControlSpec(ctrl.controlTypeName)) continue;   // 账 #167
             emitChildControls(emitChildControls, ctrl, childHwndRead(ctrl));
         }
     }

@@ -44,7 +44,7 @@ Private Declare Function GetProcAddress Lib "kernel32" (ByVal hModule As LongPtr
 Private Declare Function LoadLibrary Lib "kernel32.dll" Alias "LoadLibraryA" (ByVal lpLibFileName As String) As LongPtr
 Private Declare Function MulDiv Lib "kernel32.dll" (ByVal nNumber As Long, ByVal nNumerator As Long, ByVal nDenominator As Long) As Long
 Private Declare Function CreateWindowExA Lib "user32.dll" (ByVal dwExStyle As Long, ByVal lpClassName As String, ByVal lpWindowName As String, ByVal dwStyle As Long, ByVal X As Long, ByVal Y As Long, ByVal nWidth As Long, ByVal nHeight As Long, ByVal hWndParent As LongPtr, ByVal hMenu As LongPtr, ByVal hInstance As LongPtr, ByRef lpParam As Any) As LongPtr
-Private Declare Function SetWindowLong Lib "user32.dll" Alias "SetWindowLongA" (ByVal hwnd As LongPtr, ByVal nIndex As Long, ByVal dwNewLong As LongPtr) As LongPtr
+Private Declare Function SetWindowLongPtr Lib "user32.dll" Alias "SetWindowLongPtrA" (ByVal hwnd As LongPtr, ByVal nIndex As Long, ByVal dwNewLong As LongPtr) As LongPtr
 Private Declare Function GetParent Lib "user32.dll" (ByVal hwnd As LongPtr) As LongPtr
 Private Declare Function GetWindow Lib "user32.dll" (ByVal hwnd As LongPtr, ByVal wCmd As Long) As LongPtr
 Private Declare Function FindWindowEx Lib "user32.dll" Alias "FindWindowExA" (ByVal hWnd1 As LongPtr, ByVal hWnd2 As LongPtr, ByVal lpsz1 As String, ByVal lpsz2 As String) As LongPtr
@@ -1106,6 +1106,33 @@ Private Sub UserControl_Show()
     Me.Refresh
 End Sub
 
+' 64-bit port of LaVolpe's "GDI+ Safe Patch" thunk (x86 original: SafeGDIplus3.asm):
+' data (0x00..0x5F) then code (0x60, 0xD7 bytes); code entry: mov rax,imm64 (patched at +2);
+' rbx=base; saved args rcx/rdx/r8/r9 -> [rsp+28/30/38/40], 5th arg slot [rsp+20].
+' [rbx+08]=CallWindowProcA [rbx+10]=VirtualFree [rbx+18]=FreeLibrary [rbx+20]=gdiToken
+' [rbx+28]=GdiplusShutdown [rbx+30]=SetWindowLongPtrA [rbx+38]=SetTimer [rbx+40]=KillTimer
+' [rbx+48]=hGDIplus [rbx+50]=prevWndProc [rbx+58]=timerID
+' SetTimer lpTimerFunc = thunk code entry (mov r9,rbx): original ASM 语义, 定时器直接把
+' hWnd==0 的消息回调到 thunk 入口, 走 0xA7 的 GdiplusShutdown/FreeLibrary/VirtualFree 路径.
+Private Const CODE_HEX64 As String = _
+    "48B8" & "0000000000000000" & "4889C3" & "55" & "4889E5" & "53" & "56" & "57" & "4883EC58" & _
+    "48894C2428" & "4889542430" & "4C89442438" & "4C894C2440" & "33F6" & "4885C9" & "7474" & "FF03" & _
+    "488B4B50" & "488B542428" & "4C8B442430" & "4C8B4C2438" & "488B442440" & "4889442420" & "FF5308" & "4889442450" & "FF0B" & _
+    "837C243002" & "7507" & "C7430402000000" & "3933" & "752B" & "837B0402" & "7525" & _
+    "488B4C2428" & "BAFCFFFFFF" & "4C8B4350" & "FF5330" & "31C9" & "31D2" & "41B832000000" & "4989D9" & "FF5338" & "48894358" & _
+    "488B442450" & "488D65E8" & "5F" & "5E" & "5B" & "5D" & "C3" & _
+    "31C9" & "488B5358" & "FF5340" & "488B4B20" & "FF5328" & "488B4B48" & "FF5318" & "488B4310" & "4889D9" & "31D2" & "41B800800000" & "488D65E8" & "5F" & "5E" & "5B" & "5D" & "FFE0"
+
+Private Function HexNib(ByVal ch As String) As Long
+    Dim x As Long
+    x = AscW(ch)
+    If x >= 48 And x <= 57 Then HexNib = x - 48 Else HexNib = x - 55
+End Function
+
+Private Function ThunkByte64(ByVal sHex As String) As Byte
+    ThunkByte64 = HexNib(Mid$(sHex, 1, 1)) * 16 + HexNib(Mid$(sHex, 2, 1))
+End Function
+
 Private Function ManageGDIToken(ByVal projectHwnd As LongPtr) As LongPtr ' by LaVolpe
     If projectHwnd = 0& Then Exit Function
     
@@ -1141,21 +1168,61 @@ Private Function ManageGDIToken(ByVal projectHwnd As LongPtr) As LongPtr ' by La
     On Error GoTo 0
 
     Dim z_ScMem         As LongPtr                 'Thunk base address
-    Dim z_Code()        As Long                 'Thunk machine-code initialised here
     Dim nAddr           As LongPtr                 'hwndGDIsafe prev window procedure
 
-    Const WNDPROC_OFF   As Long = &H30          'Offset where window proc starts from z_ScMem
     Const PAGE_RWX      As Long = &H40&         'Allocate executable memory
     Const MEM_COMMIT    As Long = &H1000&       'Commit allocated memory
     Const MEM_RELEASE   As Long = &H8000&       'Release allocated memory flag
+
+#If Win64 Then
+    Const WNDPROC_OFF   As Long = &H60          'Offset where window proc starts from z_ScMem
+    Const MEM_LEN       As Long = &H137         'Byte length of thunk
+#Else
+    Const WNDPROC_OFF   As Long = &H30          'Offset where window proc starts from z_ScMem
     Const MEM_LEN       As Long = &HD4          'Byte length of thunk
-        
+#End If
+    
     z_ScMem = VirtualAlloc(0, MEM_LEN, MEM_COMMIT, PAGE_RWX) 'Allocate executable memory
     If z_ScMem <> 0 Then                                     'Ensure the allocation succeeded
         ' we make the api window a child so we can use FindWindowEx to locate it easily
         hwndGDIsafe = CreateWindowExA(0&, "Static", "GDI+Safe Patch", WS_CHILD, 0&, 0&, 0&, 0&, projectHwnd, 0&, App.hInstance, ByVal 0&)
         If hwndGDIsafe <> 0 Then
         
+#If Win64 Then
+            Dim zB()            As Byte
+            Dim i               As Long
+            Dim qTmp            As LongPtr
+            Dim hGDIplus        As LongPtr
+            ReDim zB(0 To &HD6)
+            For i = 0 To &HD6
+                zB(i) = ThunkByte64(Mid$(CODE_HEX64, i * 2 + 1, 2))
+            Next i
+            RtlMoveMemory VarPtr(zB(2)), VarPtr(z_ScMem), 8&    ' patch mov rax,imm64 (thunk base) at code+2
+            RtlMoveMemory z_ScMem + WNDPROC_OFF, VarPtr(zB(0)), MEM_LEN
+            hGDIplus = LoadLibrary("gdiplus")                           ' library pointer (add reference)
+            qTmp = zFnAddr("user32", "CallWindowProcA")
+            RtlMoveMemory z_ScMem + &H08, VarPtr(qTmp), 8&
+            qTmp = zFnAddr("kernel32", "VirtualFree")
+            RtlMoveMemory z_ScMem + &H10, VarPtr(qTmp), 8&
+            qTmp = zFnAddr("kernel32", "FreeLibrary")
+            RtlMoveMemory z_ScMem + &H18, VarPtr(qTmp), 8&
+            qTmp = gToken                                              ' Gdi+ token
+            RtlMoveMemory z_ScMem + &H20, VarPtr(qTmp), 8&
+            qTmp = GetProcAddress(hGDIplus, "GdiplusShutdown")
+            RtlMoveMemory z_ScMem + &H28, VarPtr(qTmp), 8&
+            qTmp = zFnAddr("user32", "SetWindowLongPtrA")
+            RtlMoveMemory z_ScMem + &H30, VarPtr(qTmp), 8&
+            qTmp = zFnAddr("user32", "SetTimer")
+            RtlMoveMemory z_ScMem + &H38, VarPtr(qTmp), 8&
+            qTmp = zFnAddr("user32", "KillTimer")
+            RtlMoveMemory z_ScMem + &H40, VarPtr(qTmp), 8&
+            qTmp = hGDIplus
+            RtlMoveMemory z_ScMem + &H48, VarPtr(qTmp), 8&
+            nAddr = SetWindowLongPtr(hwndGDIsafe, GWL_WNDPROC, z_ScMem + WNDPROC_OFF) 'Subclass our API window
+            RtlMoveMemory z_ScMem + &H50, VarPtr(nAddr), 8& ' Add prev window procedure to the thunk
+            gToken = 0& ' zeroize so final check below does not release it
+#Else
+            Dim z_Code()        As Long                 'Thunk machine-code initialised here
             ReDim z_Code(0 To MEM_LEN \ 4 - 1)
         
             z_Code(12) = &HD231C031: z_Code(13) = &HBBE58960: z_Code(14) = &H12345678: z_Code(15) = &H3FFF631: z_Code(16) = &H74247539: z_Code(17) = &H3075FF5B: z_Code(18) = &HFF2C75FF: z_Code(19) = &H75FF2875
@@ -1180,9 +1247,10 @@ Private Function ManageGDIToken(ByVal projectHwnd As LongPtr) As LongPtr ' by La
         
             RtlMoveMemory z_ScMem, VarPtr(z_Code(0)), MEM_LEN               'Copy the thunk code/data to the allocated memory
         
-            nAddr = SetWindowLong(hwndGDIsafe, GWL_WNDPROC, z_ScMem + WNDPROC_OFF) 'Subclass our API window
+            nAddr = SetWindowLongPtr(hwndGDIsafe, GWL_WNDPROC, z_ScMem + WNDPROC_OFF) 'Subclass our API window
             RtlMoveMemory z_ScMem + 44, VarPtr(nAddr), 4& ' Add prev window procedure to the thunk
             gToken = 0& ' zeroize so final check below does not release it
+#End If
             
             ManageGDIToken = hwndGDIsafe    ' return handle of our GDI+ manager
         Else
@@ -1215,7 +1283,7 @@ Private Function ShiftColor(ByVal clrFirst As Long, ByVal clrSecond As Long, ByV
   
 End Function
 
-Private Function zFnAddr(ByVal sDLL As String, ByVal sProc As String) As Long
+Private Function zFnAddr(ByVal sDLL As String, ByVal sProc As String) As LongPtr
     zFnAddr = GetProcAddress(GetModuleHandleA(sDLL), sProc)  'Get the specified procedure address
 End Function
 

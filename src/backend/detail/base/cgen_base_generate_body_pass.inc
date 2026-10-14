@@ -12,14 +12,17 @@
             auto& sub = static_cast<SubDecl&>(*decl);
             if (currentClassIsInterface) { emitIfaceMemberStub(sub, makeProcSignature(sub), false); continue; }
             visit(sub);
+            c3PhaseMarkIf("  proc " + sub.name, 100.0);   // ai/030 续: 逐过程计时 (>100ms 才打)
         } else if (decl->kind == ASTNodeKind::FunctionDecl) {
             auto& func = static_cast<FunctionDecl&>(*decl);
             if (currentClassIsInterface) { emitIfaceMemberStub(func, makeProcSignature(func), true); continue; }
             visit(func);
+            c3PhaseMarkIf("  proc " + func.name, 100.0);
         } else if (decl->kind == ASTNodeKind::PropertyDecl) {
             auto& prop = static_cast<PropertyDecl&>(*decl);
             if (currentClassIsInterface) { emitIfaceMemberStub(prop, makePropertySignature(prop), prop.propKind == ProcKind::PropertyGet); continue; }
             visit(prop);
+            c3PhaseMarkIf("  proc " + prop.name, 100.0);
         }
     }
 

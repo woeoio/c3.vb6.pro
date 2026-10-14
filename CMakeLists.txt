@@ -383,6 +383,17 @@ if(WIN32)
     # 崩溃栈追踪 (C3_CRASH_TRACE=1) 需要 dbghelp
     target_link_libraries(c3 PRIVATE dbghelp)
 endif()
+if(WIN32)
+    # Fix 212: 二元表达式的 codegen 是**按运算符个数递归**的 (emitExpr → visit(BinaryExpr)
+    # → emitExpr(左))，所以栈深 ∝ 表达式里的运算符个数。MSVC 默认栈预留只有 1MB，实测
+    # 约 49 层二元嵌套就爆 (0xC00000FD STATUS_STACK_OVERFLOW，实测 48 层过、50 层崩)。
+    # 真实工程会超过这个数: ComCtlsDemo 的 Builds/RichTextBox/RichTextBox.ctl:4664 是一张
+    # 本地化字符串表 (`Text = VBA.Choose(i, "&" & ChrW(&H391&) & … )`)，单条表达式 326 个
+    # `&`; 该工程另有 248 / 175 / 131 / 116 个运算符的几条。1MB 栈下 C3 在 stage4 codegen
+    # 的第 62 个模块 (RichTextBox) 直接崩，连 cl.exe 都到不了 —— 表现为"编译到一半无声中断"。
+    # 预留只占虚拟地址空间、提交按需增长，故取 64MB (≈3000 层余量，覆盖语料实测最大值 326)。
+    target_link_options(c3 PRIVATE "/STACK:67108864")
+endif()
 if(VB6C3_ENABLE_LLVM)
     target_link_libraries(c3 PRIVATE vb6c3-llvm)
 else()

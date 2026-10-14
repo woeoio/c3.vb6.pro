@@ -73,6 +73,107 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # 账 #245 (§B73): 发码形状的**神谕必须来自产物那一台工具链**。同一笔提交用不同 MSVC 编出来的 C3.exe
+  # 会在语料上分家（实测 788 份捕获里 14 份不同，全在 Charts 2020 的 UC 工程，形状只有一种：With 目标上
+  # 的 COM 成员读走「带类型出口」还是「泛型出口」）—— 而门里 Build 与 Tests 用的是同一枚工件，这种漂移
+  # 永远不会让门红；本机 A/B 又只能描述本机那枚的答案。这里按口径**不钉 VS 版本**（只要求 VS2019 及以上），
+  # 改成让 CI 把自己那份答案留档：每个输入一行 sha256 + 产出它的工具链版本。
+  # 先只留档、不判红（两侧清单现在已知差 14 行）；等 #245 的机制修掉、两份清单逐行相同之后，
+  # 再把「与 checked-in 清单比对」升成硬判据。
+  # 只跑 x64：实测两架构的差同号同形，多一档只把墙钟翻倍、覆盖不变。
+  emit-manifest:
+    name: "Emit manifest (shape oracle)"
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    # 2026-10-09（用户拍口径②）：对 **PR 只报不挡**，推 dev 仍硬判红。
+    # 为什么这一格天生容易红：它拿「全语料发码形状」对一张 checked-in 清单比，任何一次合法的 codegen
+    # 改动都会让几十行哈希动 —— 那正是要看的读数，但对提 PR 的人来说它只是"我的 PR 挂了"。
+    # 现在红话里带着三种成因与一条命令（scripts/rebless_emit_manifest.ps1，台账 §B100），PR 上仍然报、
+    # 但不再挡合并；dev 是集成线，红由它挡（门红会顺 dev 传染，见 §B99/§B100 那两格）。
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: write   # 只给最后那一步：把清单用 git 推回 ci/emit-manifest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # fetch-depth 默认 1 = 浅克隆，而 git 拒绝从浅仓库 push。#413 侥幸推成功是因为那轮分支还
+          # 不存在、走的是 --orphan（历史被切断，没有缺失的父提交）；#414/#415 基于已有 tip 叠提交就一直
+          # 失败 —— 表现为"门全绿而 ci/emit-manifest 纹丝不动"（这一步按设计不判红）。
+          fetch-depth: 0
+
+      - name: Download C3.exe artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: c3-exe
+          path: .build/
+
+      - name: Hash the emitted C of every corpus input
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/emit_manifest.ps1 -Out emit-manifest.txt
+          if ($LASTEXITCODE -ne 0) { throw "emit_manifest.ps1 failed" }
+          Get-Content emit-manifest.txt | Select-Object -First 3 | ForEach-Object { Write-Host $_ }
+
+      - name: Upload emit manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emit-manifest
+          path: emit-manifest.txt
+          retention-days: 14
+
+      - name: Upload raw emit samples (a few inputs, un-normalized)
+        uses: actions/upload-artifact@v4
+        with:
+          name: emit-samples
+          path: .build/emit-samples
+          if-no-files-found: error
+          retention-days: 14
+
+      # 门读数过去全靠 api.github.com，而本机到它的通路是台本地反代（会整段拒：403 + Via: Caddy，
+      # 带不带 token 都一样）。git 那条（github.com）是通的 —— 所以清单也走 git 送回来：
+      # 每次把 emit-manifest.txt 提交到 ci/emit-manifest（这分支只由 CI 写，不进 dev 的历史），
+      # 本机读它只要 `git fetch github ci/emit-manifest`。这一步失败**不判红**，只打一行 publish-failed。
+      - name: Publish manifest over git
+        if: always()
+        env:
+          CI_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $url = 'https://x-access-token:' + $env:CI_TOKEN + '@github.com/' + $env:GITHUB_REPOSITORY + '.git'
+          git config user.email 'ci@users.noreply.github.com'
+          git config user.name 'ci-emit-manifest'
+          # 切到 ci/emit-manifest 之前必须先把手上这份清单挪出去：它位于仓库根、被 .gitignore 忽略，
+          # 而 checkout 对"被忽略的未跟踪文件"是直接覆盖的 ⇒ 分支里那份旧的会把手上这份换掉，于是
+          # add/commit 看不见任何变化、push 回 "Everything up-to-date" 也是退出 0。#414/#415 的
+          # "门全绿、publish-ok、分支纹丝不动"就是这么来的（浅克隆那条是另一独立成因，见上面的 fetch-depth）。
+          $hold = Join-Path $env:RUNNER_TEMP 'emit-manifest.publish.txt'
+          Copy-Item emit-manifest.txt $hold -Force
+          if (-not (Test-Path $hold)) { Write-Host 'publish-skipped: no manifest produced this run'; exit 0 }
+          git fetch $url ci/emit-manifest 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            git checkout -B ci/emit-manifest FETCH_HEAD
+          } else {
+            git checkout --orphan ci/emit-manifest
+            git rm -rq --cached . 2>$null
+          }
+          Copy-Item $hold emit-manifest.txt -Force
+          git add -f emit-manifest.txt
+          $before = (git rev-parse --short HEAD)
+          git commit -m ('ci: emit manifest head=' + $env:GITHUB_SHA.Substring(0,8))
+          git push $url HEAD:refs/heads/ci/emit-manifest
+          if ($LASTEXITCODE -eq 0) {
+            # 自证：把远端 tip 读回来打一行。回读通道按 head 归属，所以这行就是"本机下一步该 fetch 谁"。
+            $tip = (git ls-remote $url refs/heads/ci/emit-manifest 2>$null | ForEach-Object { ($_ -split "`t")[0] })
+            Write-Host ('publish-ok: ci/emit-manifest base=' + $before + ' remote-tip=' + $tip)
+          } else {
+            Write-Host 'publish-failed (not a gate failure)'
+          }
+          exit 0
+
   regression:
     name: "Tests (${{ matrix.category }}${{ matrix.shard && format(' #{0}', matrix.shard) || '' }})"
     needs: build
@@ -157,7 +258,60 @@ jobs:
       # 编译器自己的默认路径仍是关的；要退回今天这条老路，删掉这个开关即可。
       - name: "Run regression (${{ matrix.category }}${{ matrix.shard && format(' #{0}', matrix.shard) || '' }})"
         shell: pwsh
-        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/run_tests.ps1 -Category ${{ matrix.category }} -Jobs 20 ${{ matrix.shardArgs }} -Incremental -Verbose
+        run: |
+          # §B92：门红的时候本机只拿得到「exit code 1」—— job 日志与 artifact 端点要 actions:read，
+          # remote 内嵌那把凭据没有这一档 ⇒ 过去只能靠排除法猜「红在哪一枚夹具」（门 #418 就这么糊过去一次）。
+          # 这一层不动 harness（它 66 个前缀点 / 80 个计票点，全改等于重写），只认它**已经打出来**的行：
+          #   "  [类别] <用例名> ... <读数>" ⇒ 转成 ::error:: 注解，之后本机用匿名可读的
+          #   /repos/<o>/<r>/check-runs/<job-id>/annotations 就能直接点名。判红口径一字没改（仍看 run_tests 的退出码）。
+          # 一行不落照原样打到控制台（CI 那份日志与今天完全一致），同时把**剥掉颜色码**的行留在内存里判排版。
+          # 故意不写中间文件：Tee-Object 落盘的编码在 5.1 是 UTF-16、在 7 是 UTF-8，回读时把另一方的行当乱码 ——
+          # 这条通道不能建在「文件编码刚好对」上（本机复算就是这么把注解判成 0 条的，靠自证那条才发现）。
+          $ansi = [char]27 + "\[\??[0-9;]*[a-zA-Z]"
+          $clean = New-Object System.Collections.Generic.List[string]
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/run_tests.ps1 -Category ${{ matrix.category }} -Jobs 20 ${{ matrix.shardArgs }} -Incremental -Verbose *>&1 | ForEach-Object { $s = [string]$_; Write-Host $s; $clean.Add(($s -replace $ansi, "")) } | Out-Null
+          $rc = $LASTEXITCODE
+          # 只在红的时候点名：绿轮里这条通道一声不出。前缀行是 -NoNewline 写的，万一被别人的换行截断，
+          # 「不是 PASS 就算失败」会在绿轮凭空点出名字来 —— 把这条限制钉死，注解面就只剩「红」这一种输入。
+          if ($rc -eq 0) { exit 0 }
+          # 注解正文一律 ASCII：Write-Host 的中文会被按系统代码页重编码（本机复算时两条自证行整条变 U+FFFD，
+          # 与账 #267 的 --emit-c 同一个根），而用例名/类别本来就是 ASCII —— 点名不靠中文，报错的行更不能靠它。
+          # 捕获组只能走正则对象：字符串上并没有 Matches 这个成员，写成 $_.Matches 的话命中了行也在取组那步抛 NullArray、
+          # 注解照样 0 条（本机第一版就是这么红的）。尾巴 (.*) 非收不可：harness 66 个前缀点后面接的 FAIL 有 77 个 token、
+          # 其中 26 个带原因（FAIL (compile) / FAIL rc=… / FAIL: a | b），另有几个计票点压根不打 FAIL 字样、
+          # 只打一行 DarkGray 读数 —— 所以判据是「用了例行的排版、且收尾不是 PASS/SKIP」，读数原样带进注解（它比 FAIL 五个字值钱）。
+          $rx = [regex] "^\s*\[(.+?)\]\s+(.+?)\s*\.\.\.\s*(.*)$"
+          # 第二种排版（门 #538 的实物）：并行那条路（jobs>1 的汇总分支）打的不是 `<名字> ... <判定>`，
+          # 而是 `  [RUN] <用例名>: <原因>`（run_tests.ps1 的 $details 六条：compile FAIL / no exe /
+          # run timeout / run error / output mismatch / 编译无 error C 行）。那两条 test_variant_boxing
+          # 就是这么「数得着、点不出名」的 —— 自救面在最需要它的时候哑了一次。
+          # 所以这里问的是**同一条判据的第二种拼法**（名字与原因之间是冒号），而不是往 $named 里再手抄一份名单。
+          $rx2 = [regex] "^\s*\[(.+?)\]\s+([^:\[\]]+?):\s+(.+)$"
+          $named = @($clean | ForEach-Object {
+              $m = $rx.Match($_)
+              if (-not $m.Success) { $m = $rx2.Match($_) }
+              if (-not $m.Success) { return }
+              $tail = $m.Groups[3].Value.Trim()
+              if ($tail -match "^(PASS|SKIP)") { return }
+              if ($tail -eq "") { $tail = "(no verdict token)" }
+              "[" + $m.Groups[1].Value.Trim() + "] " + $m.Groups[2].Value.Trim() + " ... " + $tail
+            })
+          foreach ($n in @($named | Select-Object -First 40)) { Write-Host ("::error::" + $n) }
+          if ($named.Count -gt 40) { Write-Host ("::error::more than 40 failing cases, annotating the first 40 (total " + $named.Count + ")") }
+          # 自证：这条通道按设计不判红，所以它得自己说「这次的点名能不能信」—— 三档都不许静默。
+          if ($named.Count -eq 0) {
+            Write-Host ("::error::run_tests exit code " + $rc + " but no case line matched -- the matcher is out of sync with the harness output, fix this cell")
+          }
+          # harness 全程只打一行 Results（tests/run_tests.ps1 里唯一一处），那就是它自己数出来的失败条数。
+          $tally = 0
+          $rxT = [regex] "Results:.*FAIL=(\d+)"
+          foreach ($l in $clean) { $mt = $rxT.Match($l); if ($mt.Success) { $tally = [int]$mt.Groups[1].Value } }
+          if ($tally -eq 0) {
+            Write-Host "::error::no run_tests Results line -- naming is not trustworthy (the run may have stopped before the summary)"
+          } elseif ($named.Count -lt $tally) {
+            Write-Host ("::error::harness tallied " + $tally + " failures but naming found only " + $named.Count + " -- some failure lines are outside the matcher, fix this cell")
+          }
+          exit $rc
 
       - name: Upload test logs
         if: always()

@@ -2,19 +2,21 @@
 // 2026-09-17 两步拆分：原 2494 行单文件 → 6 个新编译单元（driver_args / driver_compile /
 //   driver_frontend / driver_semantics / driver_crossmod / driver_link，均已登记 CMakeLists）
 //   + 本文件（class ExternalRefCollector + runCodeGeneration 函数骨架）
-//   + detail/ 下 9 个「函数体片段」（在 runCodeGeneration() 函数体内被 #include）：
+//   + detail/ 下 10 个「函数体片段」（在 runCodeGeneration() 函数体内被 #include）：
 //     driver_codegen_prelude.inc             —— 模块数与分析器数校验（原 95~99 行）
 //     driver_codegen_voidfield_scan.inc      —— Fix 023: className → void* 字段集预扫描（原 100~187 行）
 //     driver_codegen_typedfield_scan.inc     —— Fix 037b/086: typed 字段表 + 窗体模块名 + Public 常量表（原 188~271 行）
+//     driver_codegen_fieldkind_scan.inc      —— 账 #305 §B168/§B169: className → (字段名 → 声明档) 预扫描
 //     driver_codegen_variant_funcs.inc       —— Fix 045: 返回 Variant 的项目函数集合（原 272~341 行）
 //     driver_codegen_dup_module_vars.inc     —— Fix 093b: 跨模块同名模块级变量（原 342~370 行）
 //     driver_codegen_module_loop.inc         —— 逐模块代码生成主循环（写 .h/.c，原 371~462 行）
 //     driver_codegen_dll_typelib.inc         —— P6.6/P9: ActiveX DLL 模式 TypeLib 构建（原 463~698 行）
 //     driver_codegen_dll_sync.inc            —— P6.6.6/M29: IID/CLSID/DISPID 符号同步（原 699~753 行）
 //     driver_codegen_dll_entry.inc           —— generateDllEntry 与 dll_entry.c 写出 + 返回（原 754~772 行）
-// 9 个 .inc 不是独立编译单元（不登记 CMakeLists），单独 include 会编译不过；片段内容逐行未改，零行为改动。
+// 10 个 .inc 不是独立编译单元（不登记 CMakeLists），单独 include 会编译不过；片段内容逐行未改，零行为改动。
 
 #include "driver/driver.hpp"
+#include "driver/detail/phase_timing.hpp"   // ai/030 续: C3_TIMING=1 的相位计时
 #include "common/diagnostics.hpp"
 #include "common/encoding.hpp"
 #include "common/source_manager.hpp"
@@ -61,10 +63,10 @@ Driver::~Driver() = default;
 class ExternalRefCollector : public ASTVisitor {
 public:
     SymbolTable& symTab;
-    const std::unordered_set<std::string>& externalModules;
+    const std::vector<std::string>& externalModules;  // 账 §B97: 有序名单 (工程声明序)
     std::unordered_set<std::string>& refd;  // 输出: 小写模块名
 
-    ExternalRefCollector(SymbolTable& st, const std::unordered_set<std::string>& ext,
+    ExternalRefCollector(SymbolTable& st, const std::vector<std::string>& ext,
                          std::unordered_set<std::string>& out)
         : symTab(st), externalModules(ext), refd(out) {}
 
@@ -113,6 +115,7 @@ bool Driver::runCodeGeneration(const CompileOptions& options, const std::string&
 #include "driver/detail/driver_codegen_prelude.inc"
 #include "driver/detail/driver_codegen_voidfield_scan.inc"
 #include "driver/detail/driver_codegen_typedfield_scan.inc"
+#include "driver/detail/driver_codegen_fieldkind_scan.inc"
 #include "driver/detail/driver_codegen_variant_funcs.inc"
 #include "driver/detail/driver_codegen_dup_module_vars.inc"
 #include "driver/detail/driver_codegen_module_loop.inc"

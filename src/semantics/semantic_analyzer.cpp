@@ -267,7 +267,7 @@ bool SemanticAnalyzer::analyze(Module& module) {
                 // 查找接口类符号
                 auto* ifaceSym = symTab_.lookupModule(ifaceName);
                 if (!ifaceSym || ifaceSym->kind != SymbolKind::Class) {
-                    diag_.warn(DiagnosticID::SemUndeclaredIdentifier, impl->loc,
+                    diag_.warn(DiagnosticID::SemImplementsInterfaceNotFound, impl->loc,
                         "Implements: interface '" + ifaceName + "' not found");
                     continue;
                 }
@@ -292,7 +292,8 @@ bool SemanticAnalyzer::analyze(Module& module) {
                         }
                     }
                     if (!found) {
-                        diag_.warn(DiagnosticID::SemUndeclaredIdentifier, impl->loc,
+                        // 缺槽这一条与新式路径同一个号 (3012): 两条路报的是同一件事。
+                        diag_.warn(DiagnosticID::SemInterfaceNotImplemented, impl->loc,
                             "Implements " + ifaceName + ": method '" + required +
                             "' not implemented in class '" + module.moduleName + "'");
                     }

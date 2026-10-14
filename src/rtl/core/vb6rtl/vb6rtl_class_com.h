@@ -41,6 +41,8 @@ BSTR vb6_Spc(int32_t count);
 
 // P22-11: For Each COM collection (IEnumVARIANT) - cgen uses these via void*
 void* vb6_ForEach_Init(void* disp);
+// 账 #257 第十五层: 集合是**工程类实例**时 (不是 IDispatch) 用它的 NewEnum 接口直接建枚举
+void* vb6_ForEach_InitFromEnumIface(void* pEnumRaw);
 int32_t vb6_ForEach_Next(void* enumPtr, void* outVar);  // outVar is VARIANT*
 void vb6_ForEach_Release(void* enumPtr);
 
@@ -65,6 +67,11 @@ void* vb6_LoadPictureEx(BSTR pathname);
 // 取 picture 的图形句柄 (不销毁 picture); *kind 出 1=BITMAP 2=METAFILE 3=ICON
 void* vb6_PictureHandleOf(void* picture, int32_t* kind);
 void  vb6_ReleasePicture(void* picture);
+
+// Picture 双支持: vb6_LoadPictureEx 产出的 IPicture 对象登记进哈希表,
+// vb6_SetControlPicture 据此把 COM IPicture 与原始 GDI 句柄区分开 (Fix P-BMP-3D)
+void vb6_PictureRegister(void* picture);
+int  vb6_PictureIsRegistered(const void* picture);
 
 // ============================================================
 // COM 互操作 (P6)

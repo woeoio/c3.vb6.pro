@@ -1,0 +1,5 @@
+Type=Exe
+Name="B168App"
+Module=B168Main; B168Main.bas
+Class=B168Holder; B168Holder.cls
+Startup="Sub Main"

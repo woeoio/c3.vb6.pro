@@ -1,4 +1,4 @@
-#include "backend/cgen.hpp"
+﻿#include "backend/cgen.hpp"
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -42,6 +42,39 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             // (否则 Fix 033 把属性名当模块名, 回退 lookupModule 命中 storageKey
             // 同名冲突的错误类 cWinsock.SyncReceiveArray → C2197 参数过多).
             if (sym && sym->kind == SymbolKind::PropertyGet && !sym->variableTypeName.empty()) {
+                const Symbol* clsSym = symTab_.lookup(sym->variableTypeName);
+                if (clsSym && clsSym->kind == SymbolKind::Class) {
+                    return sym->variableTypeName;
+                }
+            }
+            // Fix 218: 当前模块的**裸函数名 (返回项目类)** 也是一个类实例表达式 ——
+            // 与 084g 的局部变量/参数、084z-2 的 PropertyGet 同档。VB6 里 `Fn.Member`
+            // 中 Fn 是无参 Function 时, 语义就是 "(调用 Fn).Member", 接收者是这个
+            // 函数**返回的那个对象**, 不是"模块 Fn"。
+            //
+            // 实测 ComCtlsDemo (两处 pattern 完全一致, 都是"影子访问器"惯用法):
+            //   Builds/CoolBar/CbrBand.cls:44   Private Function ShadowCoolBar() As CoolBar
+            //   Builds/CoolBar/CbrBand.cls:114  Caption = ShadowCoolBar.FBandCaption(PropID)
+            //   Builds/ListView/LvwListItem.cls:52  Private Function ShadowListView() As ListView
+            //   Builds/ListView/LvwListItem.cls:80  If ShadowListView.FListItemVerify(PropPtr, PropIndex) …
+            // 修复前: Fix 083c (cgen_expr_member_class_module.inc) 只兜了 PropertyGet,
+            // 于是这两处 inferClassTypeOfExpr 返回空 → 第 18-22 行的
+            // `itClassVar.emplace` 不成立 → 落优先级3"模块名.方法名" → 接收者丢失,
+            // 生成的 callee 里根本没有这个对象 (实测 CbrBand.c:110 发成
+            // `vb6_CoolBar_prop_get_FBandCaption(me->PropID)`、LvwListItem.c:69 发成
+            // `vb6_ListView_FListItemVerify(me->PropPtr, &(me->PropIndex))`) →
+            // 下游 opt_pad 只补 `(void*)me` / com_bind 只前置部分实参 ⇒ C2198 参数太少
+            // (an5.py 归因: "Friend 方法调用(可能缺 receiver)" 408 条, 是 MSVC 侧最大一族)。
+            //
+            // 修好之后 callee 是 `vb6_<Mod>_ShadowCoolBar((void*)me)` (值上下文发射,
+            // 见本文件 path 上方 asCallCallee_ 的存取), 外层 com_bind 的 P6.5 拆分
+            // (cgen_expr_call_com_bind.inc:859) 会自动把接收者前置进实参列表。
+            //
+            // 注意排除**当前过程自身**的函数名: 那是"引用函数名 = 引用返回值槽"
+            // 的另一条语义 (Fix 084z-4 / cgen_expr_ident_dispatch.inc:118 已处理),
+            // 在这里抢先命中会把 `vb6_ret_X` 槽再包一层, 属于另一条通路, 不动。
+            if (sym && sym->kind == SymbolKind::Function && !sym->variableTypeName.empty()
+                && !(currentProc_ && Symbol::toLower(currentProc_->name) == lower)) {
                 const Symbol* clsSym = symTab_.lookup(sym->variableTypeName);
                 if (clsSym && clsSym->kind == SymbolKind::Class) {
                     return sym->variableTypeName;
@@ -143,7 +176,36 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             std::string baseClassName = inferClassTypeOfExpr(*ma.object);
             if (baseClassName.empty()) return "";
             // 查找该方法的返回类型
-            return getClassMethodReturnType(baseClassName, ma.memberName);
+            const std::string retCls242 = getClassMethodReturnType(baseClassName, ma.memberName);
+            if (retCls242.empty()) return "";
+            // Fix 242: `<集合>(i)` —— callee 是**无参属性**且返回项目集合类时, `(i)` 不是
+            // 该属性的实参, 而是返回的那个集合的**默认成员** (VB_UserMemId = 0, VB6 集合
+            // 惯例名 `Item`) 的索引; 表达式类型是**元素类**, 不是集合类本身.
+            //
+            // 实测 ComCtlsDemo Builds/ToolBar/ToolBar.ctl:4199
+            //     With Button.ButtonMenus(i)
+            //         If .Visible = True Then … .Separator … .Text … .Picture …
+            //   TbrButton.cls:308  Property Get ButtonMenus() As TbrButtonMenus   (无参)
+            //   TbrButtonMenus.cls:96 Property Get Item(ByVal Index As Variant) As TbrButtonMenu
+            //                        (Attribute Item.VB_UserMemId = 0)
+            // 修复前把 With 目标推成 vb6_cls_TbrButtonMenus*, 块内 .Visible/.Separator/
+            // .Text/.Picture/.Enabled/.Checked 全按**集合类**找成员 ⇒ C2039×18.
+            //
+            // 两道闸, 都不命中就维持原返回值 (集合类), 既不劣化既有场景也不乱动
+            // `obj.Method(args)` 这类"member 自己带参"的调用:
+            //   (a) 确实带索引 (`call.positional` 非空);
+            //   (b) member 在 base 类里是**无参**成员 (读方向形参表为空) — 带参属性/
+            //       方法走不到这里, `(i)` 就该是它自己的实参, 返回类型仍是 member 的返回类.
+            // 元素类取不出 (Item 返回非项目类) 时同样回退.
+            if (!call.positional.empty()) {
+                std::vector<ParameterInfo> collParams242;
+                if (findClassMemberGetParams(baseClassName, ma.memberName, collParams242)
+                    && collParams242.empty()) {
+                    const std::string elemCls242 = getClassMethodReturnType(retCls242, "Item");
+                    if (!elemCls242.empty()) return elemCls242;
+                }
+            }
+            return retCls242;
         }
         // Fix 037: MeExpr → 类模块内 me 即当前类
         case ASTNodeKind::MeExpr: {
@@ -216,6 +278,16 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
                         getClassMethodReturnType(info.className, wmRef.memberName);
                     if (!retClsFromProp.empty()) return retClsFromProp;
                 }
+                // Fix 246: `.X` 是**返回 As Object/Variant 的成员**时, 它本身是后期绑定
+                // 对象, 成员链必须走 COM —— 不能继续沿用 With 目标类。
+                // 实测 ComCtlsDemo ToolBar.ctl:4199 `With Button.ButtonMenus(i)` 块内
+                // `.Picture.Handle` / `.Picture.Type`: TbrButtonMenu.cls:137
+                // `Property Get Picture() As IPictureDisp` (C 侧 void*)。修复前把
+                // `.Picture` 推成 vb6_cls_TbrButtonMenu* ⇒ `.Handle` 发成
+                // `vb6_TbrButtonMenu_prop_get_Picture(x)->Handle` → C2223×6 (ToolBar.c
+                // 7147/7151/7153/7198/7202/7204)。返回空让下游按后期绑定发
+                // vb6_ComGetProp(<prop_get_Picture(x)>, L"Handle")。
+                if (classMemberReturnsAsObject(info.className, wmRef.memberName)) return "";
                 // .X 非数据字段 (方法/属性等) → 维持原行为: With 目标类自身
                 // (Fix 085b 在调用链推断处对 callee=WithMemberExpr 已按方法返回类
                 // 特判, 此处不做方法返回类型推断以免误伤 String/Long 属性场景)
@@ -227,6 +299,20 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             return "";
     }
 }
+
+
+// Fix 219: Variant 载体判定 —— 见 cgen_helpers.inc 的声明注释。
+bool CCodeGen::isVariantCarrierExpr(const std::string& cExpr) const {
+    return cExprIsVariant(cExpr) || cExpr.rfind("vb6_List_", 0) == 0;
+}
+
+// Fix 219: Variant 载体上的成员访问 = 后期绑定的属性读。
+std::string CCodeGen::lateBoundReadOnVariantCarrier(const std::string& carrierExpr,
+                                                    const std::string& memberName) const {
+    return std::string("vb6_VariantFromComResult(vb6_ComGetProp(vb6_VariantToObjectVal(")
+         + carrierExpr + "), L\"" + memberName + "\"))";
+}
+
 
 
 // Fix 037: 递归推断表达式的 UDT C 类型标识符 (如 "vb6_type_UcsBuffer").
@@ -356,9 +442,16 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
 }
 
 
-// Fix 084n: 推断 target 是否为 UDT 字段链, 是则返回字段 Vb6Type (含 Array 标志), 否则 Unknown.
+// Fix 084n: 推断 target 是否为 UDT 字段链, 是则返回字段 Vb6Type, 否则 Unknown.
 // 供赋值语句 (cgen_stmt) 将 Variant RHS 转换为目标字段类型.
-Vb6Type CCodeGen::inferUdtFieldVb6Type(const ASTNode* target) const {
+// ⚠ 账 #261 订正头注释: 这里**从来没带过 Array 标志** —— 语义层把数组成员记在
+// `mi.isArrayDynamic` / `mi.arraySize` 上 (semantic_analyzer_decl_type.cpp:130-136),
+// `mi.type` 存的是**元素**档。所以"`Data() As Byte` 这个字段"答出来就是 Byte。
+// 想知道这一槽是不是数组本体 (拿标量检查套它会 error 6: 实测 VbQRCodegen 的
+// `.Data = baData` 被包成 `vb6_ChkByte(指针)` ⇒ 启动期 Unhandled VB6 Error #6)，
+// 由 outIsArray 在**同一趟** udtMembers 走查里带回 —— 不开第二张表、不再抄一遍查表。
+Vb6Type CCodeGen::inferUdtFieldVb6Type(const ASTNode* target, bool* outIsArray) const {
+    if (outIsArray) *outIsArray = false;
     if (!target) return Vb6Type::Unknown;
     std::string memName;
     if (target->kind == ASTNodeKind::MemberAccessExpr) {
@@ -395,9 +488,33 @@ Vb6Type CCodeGen::inferUdtFieldVb6Type(const ASTNode* target) const {
     if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return Vb6Type::Unknown;
     std::string memLower = Symbol::toLower(memName);
     for (auto& mi : udtSym->udtMembers) {
-        if (Symbol::toLower(mi.name) == memLower) return mi.type;
+        if (Symbol::toLower(mi.name) == memLower) {
+            if (outIsArray) *outIsArray = (mi.isArrayDynamic || mi.arraySize > 0);
+            return mi.type;
+        }
     }
     return Vb6Type::Unknown;
+}
+
+// 账 #262: 定长成员数组的下标折算 —— 秩在这里，层数就只在这里定。
+// 发码形态是 C 的多维数组 (`float M[5][5]`)，所以每层一个括号、步长归 C 算，
+// 不需要另开一张"每行几格"的表 (那张表迟早和 cgen_decl.cpp 的折尺寸分家)。
+std::string CCodeGen::udtFixedMemberIndex(const std::string& fieldExpr,
+                                          const std::vector<ExprPtr>& args, int32_t rank) {
+    int32_t layers = rank < 1 ? 1 : rank;
+    std::string out = fieldExpr;
+    for (int32_t k = 0; k < layers; k++) {
+        std::string idx;
+        if (k < (int32_t)args.size() && args[k]) {
+            emitExpr(*args[k]);   // ⚠ emitExpr 覆写 lastExpr_，每层当场取走
+            idx = std::move(lastExpr_);
+            if (idx.empty()) idx = "0";   // 空表达式不发 `field[]`
+        } else {
+            idx = "0";            // 缺的那层 (含省略实参): 给一个确定的在范围内的格子 (VB6 此处报下标越界)
+        }
+        out += "[" + idx + "]";
+    }
+    return out;
 }
 
 // <vbeclipse> <VBFlexGridDemo>: 返回左值 UDT 字段的**声明类型名** (`mi.typeRefName`)。
@@ -561,6 +678,9 @@ std::string CCodeGen::udtFieldObjCType(const std::string& udtCType,
         // Fix 177: String 字段 → "BSTR"。调用方 appendUdtObjFieldMarker 只对
         // "void*"/"vb6_cls_*" 追加对象标记, 故新增此返回不影响既有分派;
         // 供 udtFieldIsBstrInCTarget 判定"该字段赋值必须走 vb6_BSTR_Assign 深拷贝"。
+        // Fix <vbeclipse> 2026-10-06: 数组成员 (`parts() As String`) 的 mi.type 是
+        // String|Array 位组合, 上面的 == 判等天然排除, 其 C 类型是
+        // vb6_SafeArray1D* 不是 BSTR, 另走动态数组链路。
         if (mi.type == Vb6Type::String) return "BSTR";
         // 标量/数组等非对象字段
         return "";
@@ -617,6 +737,40 @@ bool CCodeGen::udtFieldIsBstrInCTarget(const std::string& target) const {
     while (!elemCType.empty() && isspace((unsigned char)elemCType.back())) elemCType.pop_back();
     if (elemCType.rfind("vb6_type_", 0) != 0) return false;
     return udtFieldObjCType(elemCType, Symbol::toLower(member)) == "BSTR";
+}
+
+
+// ---- 账 #118: 定长串 (String * N) 的长度查询 ----
+// 见 cgen_helpers.inc 的声明注释。返回非空 = 是定长串, 值即长度表达式。
+std::string CCodeGen::fixedStrLenOfExpr(const ASTNode& expr,
+                                        const std::string& altCName) const {
+    // ① 裸标识符: 模块级变量 / 局部 / 形参 / 返回值槽
+    if (expr.kind == ASTNodeKind::IdentifierExpr) {
+        const std::string lower = Symbol::toLower(
+            static_cast<const IdentifierExpr&>(expr).name);
+        auto it = knownFixedStringLen_.find(lower);
+        if (it != knownFixedStringLen_.end()) return it->second;
+        if (!altCName.empty()) {
+            auto itAlt = knownFixedStringLen_.find(Symbol::toLower(altCName));
+            if (itAlt != knownFixedStringLen_.end()) return itAlt->second;
+        }
+        return "";
+    }
+    // ② UDT 字段: `r.f` —— 先求对象是哪个 UDT (inferUdtTypeOfExpr 认得裸 UDT 变量、
+    //    嵌套 UDT 字段、SA_AT 数组元素等既有形状), 再查该 UDT 的定长字段表。
+    //    刻意**不问**字段名跨 UDT 是否唯一: 类型来自对象, 同名不同 UDT 各查各的。
+    if (expr.kind == ASTNodeKind::MemberAccessExpr) {
+        auto& ma = static_cast<const MemberAccessExpr&>(expr);
+        if (!ma.object) return "";
+        const std::string objUdt = inferUdtTypeOfExpr(*ma.object);
+        if (objUdt.rfind("vb6_type_", 0) != 0) return "";
+        auto uit = udtFixedStrFieldLen_.find(objUdt);
+        if (uit == udtFixedStrFieldLen_.end()) return "";
+        auto mit = uit->second.find(Symbol::toLower(ma.memberName));
+        if (mit == uit->second.end()) return "";
+        return mit->second;
+    }
+    return "";
 }
 
 
@@ -841,25 +995,32 @@ std::string CCodeGen::emitUdtCopyBlock() const {
             bool scalarOwned = (bt == Vb6Type::String || bt == Vb6Type::Variant);
 
             if (mi.arraySize > 0) {
-                // 定长数组成员: 发射形态是 `T Name[N]`, 不能整体赋值
+                // 定长数组成员: 发射形态是 `T Name[...]` (账 #262 起多维也是 —— `T Name[r][c]`)，
+                // 不能整体赋值。
                 if (!scalarOwned && !subOwned) {
                     out += "    memcpy(" + dl + ", " + sl + ", sizeof(" + dl + "));\n";
                     continue;
                 }
-                std::string idx = fn + "[_i]";
-                out += "    { int32_t _n = (int32_t)(sizeof(d->" + fn
-                     + ") / sizeof(d->" + idx + ")); int32_t _i;\n";
+                // 账 #262/#265: 逐格走**扁平元素指针**，秩有几维都只数一遍格子。
+                // 旧写法是 `sizeof(d->S) / sizeof(d->S[_i])` —— 两个毛病: ① `_i` 写在
+                // 它自己那条声明**之前** ⇒ C2065 (实物: 任何带定长 String/Variant 数组成员
+                // 且会被赋值的 UDT 都编不过，语料里 0 处所以从没响过)；② 多维成员那样数出来
+                // 的是**行数**，会把 4 格当 2 格拷。`sizeof(*_dp)` 由 C 按元素类型算，与秩无关。
+                std::string elemC = (bt == Vb6Type::String) ? "BSTR"
+                              : (bt == Vb6Type::Variant) ? "vb6_VARIANT" : subUdt;
+                if (elemC.empty()) continue;   // 认不出元素档就不动这一格 (按位拷已过)
+                out += "    { " + elemC + "* _dp = (" + elemC + "*)&d->" + fn
+                     + "; const " + elemC + "* _sp = (const " + elemC + "*)&s->" + fn + ";\n";
+                out += "      int32_t _i; int32_t _n = (int32_t)(sizeof(d->" + fn
+                     + ") / sizeof(*_dp));\n";
                 out += "      for (_i = 0; _i < _n; _i++) {\n";
                 if (bt == Vb6Type::String) {
-                    out += "        BSTR _o = d->" + idx + "; d->" + idx
-                         + " = s->" + idx + " ? SysAllocString(s->" + idx + ") : NULL;\n"
-                           "        if (_o && _o != s->" + idx + ") vb6_BSTR_Free(_o);\n";
+                    out += "        BSTR _o = _dp[_i]; _dp[_i] = _sp[_i] ? SysAllocString(_sp[_i]) : NULL;\n"
+                           "        if (_o && _o != _sp[_i]) vb6_BSTR_Free(_o);\n";
                 } else if (bt == Vb6Type::Variant) {
-                    out += "        vb6_VariantClear(&d->" + idx + "); vb6_VariantCopy(&d->"
-                         + idx + ", &s->" + idx + ");\n";
+                    out += "        vb6_VariantClear(&_dp[_i]); vb6_VariantCopy(&_dp[_i], &_sp[_i]);\n";
                 } else {
-                    out += "        vb6_udtcpy_" + udtNameOfCType(subUdt) + "(&d->" + idx
-                         + ", &s->" + idx + ");\n";
+                    out += "        vb6_udtcpy_" + udtNameOfCType(subUdt) + "(&_dp[_i], &_sp[_i]);\n";
                 }
                 out += "      }\n    }\n";
                 continue;

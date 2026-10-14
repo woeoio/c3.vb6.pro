@@ -2,6 +2,35 @@
 // 由 src/backend/expr/cgen_expr_call.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 300~620 行，逐行未改。
 
+    // C3 扩展 (ai/032): `If(cond, truePart, falsePart)` 三元运算符。
+    //
+    // 与紧邻下面的 IIf 是**两条不同的路**, 不要合并:
+    //   · `IIf` 是 VB6 内置**函数** —— 实参在调用前全部求值, 两个分支都会跑;
+    //   · `If` 是 VB.NET 的**运算符** —— 只对选中的那一支求值。
+    // 差别是实打实的: `If(d <> 0, a / d, 0)` 在 d = 0 时不除零, 换成 IIf 会。
+    // C 的三目 `?:` 天生短路, 所以这里直接发 `((cond) != 0 ? t : f)`, 连运行期
+    // 辅助函数都不需要 —— 而 IIf 因为是函数语义, 必须走 vb6_IIfBSTR/Long/Double/…
+    // 那一族 "两支都先算好再选" 的调用。
+    if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr &&
+        node.positional.size() == 3) {
+        auto& identIf = static_cast<IdentifierExpr&>(*node.callee);
+        std::string ifLower = identIf.name;
+        std::transform(ifLower.begin(), ifLower.end(), ifLower.begin(), ::tolower);
+        if (ifLower == "if") {
+            emitExpr(*node.positional[0]);
+            std::string ifCond = std::move(lastExpr_);
+            emitExpr(*node.positional[1]);
+            std::string ifTrue = std::move(lastExpr_);
+            emitExpr(*node.positional[2]);
+            std::string ifFalse = std::move(lastExpr_);
+            // VB6 的 True = -1, 判真按 "非 0", 与 IIf 那一支同一口径。
+            // 两支的外层括号是必要的: 实参顺序影响 C 的求值顺序, 但更关键的是
+            // 分支本身可能是逗号表达式外的低优先级运算 (`a = b`), 不括会改写结合性。
+            lastExpr_ = "(((" + ifCond + ") != 0) ? (" + ifTrue + ") : (" + ifFalse + "))";
+            return;
+        }
+    }
+
     // P14.2.4: IIf特殊处理 - 调用类型化RTL函数(函数调用语义确保两个分支都求值,符合VB6规范)
     if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr && node.positional.size() == 3) {
         auto& ident = static_cast<IdentifierExpr&>(*node.callee);
@@ -112,9 +141,8 @@
             // ObjPtr(VarArgList(i)), VBFlexGrid.c 18504~18645 VarPtr(Value(i))).
             // 158f 的 vb6_VariantArrayElemPtr(vb6_VARIANT*, int32_t) 正是"取元素地址",
             // 与 vb6_VariantArrayGet 同参数形态 → 直接改名, 得到真左值地址.
-            if (lastExpr_.compare(0, 20, "vb6_VariantArrayGet(") == 0) {
-                lastExpr_ = "(intptr_t)vb6_VariantArrayElemPtr("
-                          + lastExpr_.substr(20);
+            if (isVariantSlotElemRead(lastExpr_)) {
+                lastExpr_ = "(intptr_t)" + variantSlotElemAddrRead(lastExpr_);
                 return;
             }
             if (vpIsCall && !vpIsLvalue092s) {
@@ -308,7 +336,15 @@
                         std::string pLower = p.name;
                         std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
                         if (pLower == argLower && p.isOptional && !p.isParamArray) {
-                            lastExpr_ = "(!_has_" + cIdent(p.name) + ")";
+                            // 账 #257 第二十层: 必须交 **VB6 布尔 (-1/0)**, 不能交 C 布尔 (0/1)。
+                            // VB6 的 `Not` 在 cgen_expr.cpp 发成 `(~(int32_t)(<操作数>))` —— 按位
+                            // 取反只有在操作数是 -1/0 时才等于逻辑非: ~0=-1 (True), ~(-1)=0 (False)。
+                            // 交 0/1 时 ~0=-1 与 ~1=-2 **都非零** ⇒ `Not IsMissing(x)` 恒真。
+                            // 实测 ComCtlsDemo TvwNodes.Add: `If Not IsMissing(Relative) Then` 在
+                            // Relative 省略 (`TreeView1.Nodes.Add , , , "1", 1`) 时也成立, 于是走进
+                            // `Select Case VarType(Relative)` 对 vbEmpty 落 Case Else ⇒ Err.Raise 13。
+                            // 直接写 `If IsMissing(x)` 那一形不受影响 (0 与 -1 都按假/真成立)。
+                            lastExpr_ = "(-(!_has_" + cIdent(p.name) + "))";
                             return;
                         }
                         // Fix 091k: ParamArray 整体 — RTL vb6_IsMissing(SAFEARRAY*)
@@ -340,6 +376,19 @@
         std::string lenLower = lenIdent.name;
         std::transform(lenLower.begin(), lenLower.end(), lenLower.begin(), ::tolower);
         if (lenLower == "len" && node.positional.size() == 1) {
+            // 账 #118 ①: **定长串的 Len 恒为声明长度 N**, 与当前装着几个字符无关
+            // (`Dim a As String * 5: a = "ab"` 在真 VB6 里 Len(a) = 5)。
+            // 此前落通用 vb6_Len 路 ⇒ SysStringLen 给的是**值的长度** (2)。
+            // 这一条必须排在下面所有 sizeof 兜底**之前**: 模块级定长串不进
+            // knownBstrVars_ (那张表每过程入口 clear), 会被"兜底桶"当数值发成
+            // sizeof(指针) —— x64 读 8 (LEN-DECL 实测), 而定长串要给的就是 N。
+            {
+                const std::string fsLen118 = fixedStrLenOfExpr(*node.positional[0]);
+                if (!fsLen118.empty()) {
+                    lastExpr_ = "((int32_t)(" + fsLen118 + "))";
+                    return;
+                }
+            }
             // VB6 口径 (真 VB6 实测): Len 的实参不是 String 就必须**能落到变量上** ——
             // 非 String 的 Len 取的是"存储宽度", 字面量没有存储宽度可言, 真 VB6 直接
             // 编译错误 "Variable required - can't assign to this expression"

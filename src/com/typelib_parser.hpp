@@ -41,8 +41,8 @@ enum class ComParamDir : uint8_t {
 
 struct ComParamInfo {
     std::string name;           // 参数名
-    Vb6Type type;              // VB6类型
-    ComParamDir direction;     // 参数方向
+    Vb6Type type = Vb6Type::Variant;    // VB6类型 (带初值: 这枚字段会被发码期当"这成员是什么型"的答案读)
+    ComParamDir direction = ComParamDir::In;  // 参数方向
     bool isOptional = false;   // Optional参数
     bool hasDefault = false;   // 有默认值
 };
@@ -50,8 +50,14 @@ struct ComParamInfo {
 struct ComMemberInfo {
     std::string name;           // 方法/属性名 (小写, 用于查找)
     std::string realName;       // 原始名称 (保留大小写)
-    ComMemberKind kind;         // 成员类别
-    Vb6Type returnType;         // 返回类型 (Method/PropertyGet)
+    ComMemberKind kind = ComMemberKind::Method;      // 成员类别
+    // 账 #245: returnType 会被 driver_semantics 复制进 Symbol::ComMethodSig, 再被发码期
+    // 当「这枚 COM 属性是什么型」的唯一答案读。曾经它没有初值, 而 parseVarDesc 只在
+    // VAR_PERINSTANCE 那支赋值 ⇒ VAR_PROPERTY (dual 接口的属性 VARDESC, 如 stdole 的
+    // StdFont.Name) 交出去的是没赋过值的 16 位字段: 同一枚二进制连跑三次读到
+    // 29620/6971/50156, 换台工具链编出的二进制就落进另一个档 ⇒ 同一笔提交的发码分家
+    // (泛型 ComGetProp ⇄ vb6_ComGetIntProp, 而 Name 是 BSTR)。初值 = Variant = "不知道"。
+    Vb6Type returnType = Vb6Type::Variant;  // 返回类型 (Method/PropertyGet)
     std::vector<ComParamInfo> params;  // 参数列表
     int32_t memid = 0;          // DISPID (成员ID)
     int32_t vtableIndex = -1;   // vtable偏移 (前期绑定用)

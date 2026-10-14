@@ -2,6 +2,67 @@
 // 由 src/backend/expr/cgen_expr_call.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 806~1009 行，逐行未改。
 
+    // Fix 245c: `<返回 Object/Variant 的无参 Function>.方法(args)` —— 后期绑定调用。
+    // ComCtlsDemo Pager.ctl:1249 `PropBuddyControl.Move PropBuddyControl.Left,
+    // PropBuddyControl.Top, …` (Pager.ctl:1203 `Private Function PropBuddyControl()
+    // As Object`)。callee 的对象部分既不是变量也不是工程内模块名 ⇒ 唯一合理的语义是
+    // 「(调用 Fn) 得到的 IDispatch 上做方法调用」→ 直接发 vb6_ComCall。
+    // **必须排在下面的 Fix 037 之前**: 否则 callee 被当"成员访问"取成属性值
+    // (`.Move` 读成 L"Move" 属性), 外层实参再被当默认成员索引, 生成
+    // vb6_ComCall(<VARIANT>, L"Item", …) → C2172 (vb6_ComCall 第一参数不是指针)
+    // ×2 + C2440 vb6_VARIANT→double ×2 (Pager.c)。
+    if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr
+        && node.named.empty()) {
+        auto& ma245c = static_cast<MemberAccessExpr&>(*node.callee);
+        if (ma245c.object && ma245c.object->kind == ASTNodeKind::IdentifierExpr) {
+            auto& oid245c = static_cast<IdentifierExpr&>(*ma245c.object);
+            const std::string oLower245c = Symbol::toLower(oid245c.name);
+            const bool otherKind245c =
+                knownLocalVars_.count(oLower245c) || knownClassVars_.count(oLower245c)
+                || knownObjectVars_.count(oLower245c) || knownTypedComVars_.count(oLower245c)
+                || knownUdtVars_.count(oLower245c) || knownIfaceVars_.count(oLower245c)
+                || knownNewVars_.count(oLower245c) || knownFormControls_.count(oLower245c);
+            if (!otherKind245c) {
+                Symbol* fn245c = symTab_.lookup(oid245c.name);
+                if (!fn245c) fn245c = symTab_.lookupModule(oid245c.name);
+                if (fn245c && fn245c->kind == SymbolKind::Function
+                    && (Symbol::toLower(fn245c->variableTypeName) == "object"
+                        || Symbol::toLower(fn245c->variableTypeName) == "variant")
+                    && !(currentProc_ && Symbol::toLower(currentProc_->name) == oLower245c)) {
+                    std::string fnMod245c = fn245c->isExternal ? fn245c->sourceModule
+                                          : (isClassModule_ ? moduleName_ : std::string());
+                    if (!fnMod245c.empty()) {
+                        std::string fnCall245c = cProcName(fn245c->name, fn245c->access, fnMod245c)
+                                               + "((void*)me)";
+                        std::vector<std::string> packed245c;
+                        for (size_t i = 0; i < node.positional.size(); i++) {
+                            std::string packFn245c = comPackExpr(*node.positional[i]);
+                            emitExpr(*node.positional[i]);
+                            { std::string r245c = resolveComMarkerForPack(packFn245c);
+                              if (!r245c.empty()) lastExpr_ = r245c; }
+                            // Fix 266: 打包器按 AST 推的型 (ComPackDouble), 而 marker 解析交回
+                            // 的可能是**无型** VARIANT ⇒ 交 packArgValue 一处收口
+                            // (Pager.ctl:1249 `PropBuddyControl.Move .Left, .Top` 的两个
+                            //  vb6_ComPackDouble(vb6_VARIANT) 就是这里发出的)。
+                            packed245c.push_back(packArgValue(packFn245c, lastExpr_));
+                        }
+                        int32_t argc245c = (int32_t)packed245c.size();
+                        std::string argsArr245c = "(void*[]){";
+                        for (int i = 0; i < argc245c; i++) {
+                            if (i > 0) argsArr245c += ", ";
+                            argsArr245c += packed245c[i];
+                        }
+                        argsArr245c += "}";
+                        lastExpr_ = "vb6_VariantFromComResult(vb6_ComCall(" + fnCall245c
+                                  + ", L\"" + escapeWideCString(ma245c.memberName) + "\", "
+                                  + argsArr245c + ", " + std::to_string(argc245c) + "))";
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // ---- Fix 037: MemberAccessExpr callee with positional args — array field/COM dispatch ----
     // 处理 obj.field(idx) 模式, field 可能是:
     //   - UDT 数组字段 (固定/动态)     — Pattern A/B → obj.member[idx] / VB6_SA_AT(...)
@@ -142,10 +203,35 @@
             }
             if (!hwndMV.empty()) {
                 std::string aMV[4] = {"0", "0", "0", "0"};
+                // Fix 261: 实参是**值上下文**, 必须清掉 asCallCallee_ 再发射。
+                // 本段是从 callee 解析路径进来的 —— 语句级 `X.Move a,b,c,d` 由
+                // visit(CallStmt) 把 asCallCallee_ 置 true 后才 emitExpr(callee),
+                // 落到这里时它仍是 true。于是实参里的成员访问 (如 `ToolBar1.Height`)
+                // 被 emitUcInstanceMemberExpr / 类成员路径当成"要接实参的 callee",
+                // 交付**裸函数名** + pendingChainObj_, 而实参位没人消费 pendingChainObj_
+                // ⇒ 裸名泄漏成实参 (接收者丢失)。
+                // 实测 ComCtlsDemo: RichTextBoxForm.frm:165
+                //   `RichTextBox1.Move 0, ToolBar1.Height, .ScaleWidth, .ScaleHeight - ToolBar1.Height`
+                // 生成 `vb6_ControlMove(vb6_hwnd_RichTextBox1, 0, vb6_ToolBar_prop_get_Height, ...)`
+                // ⇒ C2440×2 (float(__cdecl*)(vb6_cls_ToolBar*) / void* → double) +
+                //    C2113 (指针减法) + C2198 (vb6_ControlMove 实参太少)。共 4 条。
+                bool savedCcMV = asCallCallee_;
+                asCallCallee_ = false;
                 for (size_t i = 0; i < node.positional.size(); i++) {
                     emitExpr(*node.positional[i]);
+                    // Fix 261b: 实参里的 COM 成员读要**就地消费标记** —— 这里原来只
+                    // 搬走 lastExpr_, 标记留在原地, 于是 `With Me` 块里的 `.ScaleWidth`
+                    // 交出的是 With 入口那枚裸 HWND (void*) ⇒
+                    // C2440 "void* → double" (vb6_ControlMove 的四个 double 槽)。
+                    // vb6_ControlMove 清一色 double ⇒ 按 Double 档取值。
+                    // 实测 ComCtlsDemo RichTextBoxForm.frm:165
+                    //   `RichTextBox1.Move 0, ToolBar1.Height, .ScaleWidth, .ScaleHeight - ToolBar1.Height`
+                    if (isComMarker_) {
+                        lastExpr_ = resolveComValue("Double");
+                    }
                     aMV[i] = std::move(lastExpr_);
                 }
+                asCallCallee_ = savedCcMV;
                 int maskMV = (1 << (int)node.positional.size()) - 1;
                 lastExpr_ = "{ vb6_ControlMove(" + hwndMV + ", " + aMV[0] + ", "
                           + aMV[1] + ", " + aMV[2] + ", " + aMV[3] + ", "
@@ -179,7 +265,7 @@
                 emitExpr(*node.positional[i]);
                 { std::string resolvedPar = resolveComMarkerForPack(packFnPar);
                   if (!resolvedPar.empty()) lastExpr_ = resolvedPar; }
-                packedPar.push_back(packFnPar + "(" + lastExpr_ + ")");
+                packedPar.push_back(packArgValue(packFnPar, lastExpr_));
             }
             int32_t argcPar = (int32_t)packedPar.size();
             std::string argsArrayPar = "NULL";
@@ -248,11 +334,13 @@
                             if (Symbol::toLower(mi.name) == memLower) {
                                 if (mi.arraySize > 0) {
                                     // Pattern A: 固定大小数组成员 → obj.member[idx]
+                                    // 账 #262: 括号层数问 mi.arrayRank —— 多维成员的发码形态是
+                                    // C 多维数组 (`float M[5][5]`)，以前只折第一维，于是
+                                    // `.M(3, 3)` 与 `.M(4, 4)` 写进同一格。
                                     emitExpr(*node.callee);  // emits "obj.member"
                                     std::string fieldExpr = std::move(lastExpr_);
-                                    emitExpr(*node.positional[0]);
-                                    std::string idx = std::move(lastExpr_);
-                                    lastExpr_ = fieldExpr + "[" + idx + "]";
+                                    lastExpr_ = udtFixedMemberIndex(fieldExpr, node.positional,
+                                                                    mi.arrayRank);
                                     handled = true;
                                 } else if (mi.isArrayDynamic) {
                                     // Pattern B: 动态数组成员 → VB6_SA_AT(elemType, obj.member, idx)
@@ -275,10 +363,8 @@
                                     // vb6_VariantArrayGet(&obj.field, idx)
                                     emitExpr(*node.callee);  // emits "obj.field"
                                     std::string fieldExpr = std::move(lastExpr_);
-                                    emitExpr(*node.positional[0]);
-                                    // Fix 084o: 索引为 Variant 时转 Long
-                                    std::string idx = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
-                                    lastExpr_ = "vb6_VariantArrayGet(&" + fieldExpr + ", " + idx + ")";
+                                                                        // 账 #305 §B150: 秩数 = 实参个数, 这一问只在 variantSlotElemRead 一处答。
+                                    lastExpr_ = variantSlotElemRead("&" + fieldExpr, node.positional);
                                     handled = true;
                                 } else if (mi.type == Vb6Type::Object) {
                                     // Pattern H: UDT void* (Object) 字段 (持有 COM 对象) →
@@ -291,7 +377,7 @@
                                         emitExpr(*node.positional[i]);
                                         { std::string resolved = resolveComMarkerForPack(packFn);
                                           if (!resolved.empty()) lastExpr_ = resolved; }
-                                        packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
                                     }
                                     int32_t argc = (int32_t)packedArgs.size();
                                     std::string argsArray = "(void*[]){";
@@ -325,10 +411,8 @@
                         || classVariantMembers_.count(memLowerM)) {
                         emitExpr(*node.callee);  // emits "obj->member  /* class var .X field */"
                         std::string fieldExpr = std::move(lastExpr_);
-                        emitExpr(*node.positional[0]);
-                        // Fix 084o: 索引为 Variant 时转 Long
-                        std::string idx = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
-                        lastExpr_ = "vb6_VariantArrayGet(&" + fieldExpr + ", " + idx + ")";
+                                                // 账 #305 §B150: 秩数 = 实参个数, 这一问只在 variantSlotElemRead 一处答。
+                        lastExpr_ = variantSlotElemRead("&" + fieldExpr, node.positional);
                         handled = true;
                     } else {
                         // Pattern D: void* COM 字段 → vb6_ComCall(obj->member, L"Item", args, argc)
@@ -352,7 +436,7 @@
                                 emitExpr(*node.positional[i]);
                                 { std::string resolved = resolveComMarkerForPack(packFn);
                                   if (!resolved.empty()) lastExpr_ = resolved; }
-                                packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                                packedArgs.push_back(packArgValue(packFn, lastExpr_));
                             }
                             int32_t argc = (int32_t)packedArgs.size();
                             std::string argsArray = "(void*[]){";
@@ -386,7 +470,7 @@
 
                                             { std::string resolved = resolveComMarkerForPack(packFn);
                                               if (!resolved.empty()) lastExpr_ = resolved; }
-                                            packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                                            packedArgs.push_back(packArgValue(packFn, lastExpr_));
                                         }
                                         int32_t argc = (int32_t)packedArgs.size();
                                         std::string argsArray = "(void*[]){";

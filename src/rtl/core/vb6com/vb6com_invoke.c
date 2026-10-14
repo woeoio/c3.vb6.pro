@@ -302,10 +302,20 @@ void* vb6_ComCall(void* disp, const wchar_t* methodName,
 
 // P24-10: COM默认成员调用 (按DISPID直接调用, 跳过名称查找)
 // 用于后期绑定: Dim obj As Object; obj(args) → DISPID_VALUE(0)
+// 宿主对象 (窗体/控件 HWND, Controls 集合, Font 代理) 不是 IDispatch, 与
+// vb6_ComCall 的 Fix 112 同口径应答 —— 旧路径按名 L"Item" 走 vb6_Host_Call,
+// 这里保持完全一致的宿主分派语义 (DISPID_VALUE 对宿主无意义)。
 void* vb6_ComCallByDispid(void* disp, int32_t dispid,
                           void* args_void, int32_t argc) {
     VARIANT** args = (VARIANT**)args_void;
     if (!disp) return NULL;
+    /* Fix 同 vb6_ComCall: 宿主对象分派 */
+    if (vb6_Host_IsHostObject(disp)) {
+        return vb6_ComCall(disp, L"Item", args_void, argc);
+    }
+    /* 与 vb6_getDispid 的 Fix 191 同口径: 非真 IDispatch 不能解引用 lpVtbl,
+     * 否则进程直接重启 (0xC0000005)。返回 NULL, 由调用侧按空 Variant 收场。 */
+    if (!vb6_ComIsDispatchable(disp)) return NULL;
     IDispatch* pDisp = (IDispatch*)disp;
 
     DISPPARAMS dp;

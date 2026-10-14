@@ -18,6 +18,7 @@
     emittedSymbols_.clear();
     labelCounter_ = 0;
     tempCounter_ = 0;
+    ndBoundsSeq_ = 0;   // 账 #305 §B156: 与 tempCounter_ 同处复位 (界数组临时量的序号)
 
     // <vbeclipse>: 读本模块的 Option Compare (此前 module.options 只有语义层在看,
     // 代码生成层从不读 ⇒ `Option Compare Text` 编出来的比较仍是二进制, 且

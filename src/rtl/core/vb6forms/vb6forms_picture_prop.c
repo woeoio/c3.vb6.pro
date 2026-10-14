@@ -19,22 +19,161 @@
 #include <oleauto.h>  /* SysAllocString, BSTR */
 #include <olectl.h>   /* IPicture, OleLoadPicture, OLE_HANDLE */
 
+/* Fix P-BMP-3D: vb6rtl_com.c 提供的 Picture 注册表。不直接 include
+ * vb6rtl_class_com.h (本 TU 无 vb6rtl_variant.h 依赖链), 签名只涉及
+ * void* 与 const, 本地 extern 声明即可完成前向声明。 */
+extern void vb6_PictureRegister(void* picture);
+extern int  vb6_PictureIsRegistered(const void* picture);
+extern void vb6_AutoRedrawRefit(void* hwnd);   /* vb6forms_widget_prop.c (Fix c3-menu3d) */
+
+
+static void vb6_ImagePaintHelper(HWND hwnd, HDC hdc);
+
+/* Fix P-BMP-3D (AutoRedraw 后备): PictureBox 设 AutoRedraw=True 时, 图片必须
+ * 同步渲染进 VB6_AutoRedrawDC 记忆位图 —— 否则 `.hdc` (vb6_ControlDrawDC 交的
+ * 就是这张) 恒为空, 后续 `.Picture`/BitBlt(Me.hdc, ..., ctl.hdc, ...) 合成类
+ * 程序 (如 3DMenu) 全看不到图。屏幕 WM_PAINT 与记忆 DC 各自画一份。 */
+static void vb6_MirrorPictureToAutoRedraw(HWND hw) {
+    HDC ar = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+    if (ar) vb6_ImagePaintHelper(hw, ar);
+}
+
+/* Fix <vbeclipse> 2026-10-07: 窗体 WM_PAINT 的 AutoRedraw 镜像 (见 vb6forms_controls.h 说明)。
+ * 只在窗体持有 VB6_AutoRedrawDC 时有动作; 无 ARDC 的窗体 (AutoRedraw=False) 原样直绘。 */
+void vb6_FormPaintBlitAutoRedraw(void* hwndForm, void* hdc) {
+    if (!hwndForm || !hdc) return;
+    HDC ar = (HDC)GetPropW((HWND)hwndForm, L"VB6_AutoRedrawDC");
+    if (!ar) return;
+    RECT rc;
+    if (!GetClientRect((HWND)hwndForm, &rc)) return;
+    BitBlt((HDC)hdc, 0, 0, rc.right, rc.bottom, ar, 0, 0, SRCCOPY);
+}
+
+/* Fix <Command2>: 控件 Picture 的 C 面必须是**真 COM IPictureDisp**。
+ *
+ * VB 语义 `Property Get Picture() As IPictureDisp` 交出去的是**对象**
+ * (`Picture.Handle` / `.Type` / `.Width` / `.Height` 全走 IDispatch 派发)，
+ * 而 `vb6_SetControlPicture` 的裸 GDI 句柄路径 (设计期 .frx / LoadPictureFromFile)
+ * 只把 HBITMAP/HICON 存在 VB6_Picture 属性里。以前 vb6_GetControlPicture 直接
+ * 把这个裸句柄交出去 ⇒ 下游 vb6_ComGetProp 把它当 IDispatch，
+ * vb6_ComIsDispatchable 判否 ⇒ `property "Handle" not found` ⇒ 返回 0
+ * ⇒ ImageList.FListImagesAdd 里 `ElseIf Picture.Handle = NULL_PTR Then
+ *    Err.Raise 35607` ⇒ 未处理错误，程序整只退出 (ComCtlsDemo Command2 实测)。
+ *
+ * 这里用 OleCreatePictureIndirect 把裸句柄包成真 IPictureDisp 并按窗口缓存:
+ *   fOwn = FALSE —— 句柄仍归控件所有 (替换/清空/WM_DESTROY 时由控件销毁)，
+ *   包装对象只是借用，不会二次 DeleteObject。
+ *   缓存的那份引用带**一枚保险引用**: 发码层对 `Set <控件>.Picture = Nothing`
+ *   历史性地发成 `vb6_ReleaseObject((void**)(&(void*){vb6_GetControlPicture(..)}))`
+ *   (借用引用被 Release)，多留一枚可吸收这次过度释放而不让缓存指针悬空；
+ *   保险引用在替换/清空/销毁时与缓存引用一并归还。
+ */
+static IPictureDisp* vb6_WrapGdiHandleAsPictureDisp(HWND hw, HANDLE hGdi) {
+    if (!hw || !hGdi) return NULL;
+    IPictureDisp* pDisp = (IPictureDisp*)GetPropW(hw, L"VB6_IPictureDisp");
+    if (pDisp) return pDisp;
+
+    int picType = (int)(INT_PTR)GetPropW(hw, L"VB6_PictureType");
+    DWORD objType = GetObjectType((HGDIOBJ)hGdi);
+
+    PICTDESC pd;
+    memset(&pd, 0, sizeof(pd));
+    pd.cbSizeofstruct = sizeof(pd);
+    if (picType == 3 /*PICTYPE_ICON*/) {
+        pd.picType = PICTYPE_ICON;
+        pd.icon.hicon = (HICON)hGdi;
+    } else if (objType == OBJ_ENHMETAFILE) {
+        pd.picType = PICTYPE_ENHMETAFILE;
+        pd.emf.hemf = (HENHMETAFILE)hGdi;
+    } else if (objType == OBJ_METAFILE) {
+        pd.picType = PICTYPE_METAFILE;
+        pd.wmf.hmeta = (HMETAFILE)hGdi;
+        pd.wmf.xExt = 0;
+        pd.wmf.yExt = 0;
+    } else {
+        pd.picType = PICTYPE_BITMAP;
+        pd.bmp.hbitmap = (HBITMAP)hGdi;
+    }
+
+    static int oleInitedPic = 0;
+    if (!oleInitedPic) {
+        if (SUCCEEDED(OleInitialize(NULL))) oleInitedPic = 1;
+        else { CoInitialize(NULL); oleInitedPic = 2; }
+    }
+
+    /* IID_IPictureDisp = {7BF80981-BF32-101A-8BBB-00AA00300CAB}
+     * 与 vb6forms_picture.c 的 OleLoadPicture 同一枚本地定义 (本 TU 的头文件链
+     * 不保证带出该符号)。 */
+    static const GUID local_IID_IPictureDisp =
+        {0x7BF80981, 0xBF32, 0x101A, {0x8B, 0xBB, 0x00, 0xAA, 0x00, 0x30, 0x0C, 0xAB}};
+
+    IPictureDisp* pNew = NULL;
+    HRESULT hr = OleCreatePictureIndirect(&pd, &local_IID_IPictureDisp, FALSE,
+                                          (void**)&pNew);
+    if (FAILED(hr) || !pNew) return NULL;
+    /* 登进 Picture 注册表 (Fix P-BMP-3D): 这样 `Set 另一枚控件.Picture = 本控件.Picture`
+     * 时 vb6_SetControlPicture 能认出这是 COM 对象而不是 GDI 句柄，正确走 FromCom。 */
+    vb6_PictureRegister((void*)pNew);
+    /* 缓存引用 + 保险引用 (见上方注释) */
+    pNew->lpVtbl->AddRef(pNew);
+    if (!SetPropW(hw, L"VB6_IPictureDisp", (HANDLE)pNew)) {
+        pNew->lpVtbl->Release(pNew);
+        pNew->lpVtbl->Release(pNew);
+        return NULL;
+    }
+    return pNew;
+}
+
+/* 存一枚 IPictureDisp 到窗口 (含保险引用); 旧的那枚连保险引用一并归还。 */
+static void vb6_StorePictureDisp(HWND hw, IPictureDisp* pDisp) {
+    if (!hw) return;
+    IPictureDisp* pOld = (IPictureDisp*)GetPropW(hw, L"VB6_IPictureDisp");
+    if (pDisp) pDisp->lpVtbl->AddRef(pDisp);
+    if (!SetPropW(hw, L"VB6_IPictureDisp", (HANDLE)pDisp)) {
+        if (pDisp) pDisp->lpVtbl->Release(pDisp);
+        return;
+    }
+    if (pOld) { pOld->lpVtbl->Release(pOld); pOld->lpVtbl->Release(pOld); }
+}
+
+/* 归还并清掉窗口上的 IPictureDisp 缓存 (缓存引用 + 保险引用)。 */
+static void vb6_ClearPictureDisp(HWND hw) {
+    if (!hw) return;
+    IPictureDisp* pOld = (IPictureDisp*)GetPropW(hw, L"VB6_IPictureDisp");
+    if (pOld) {
+        RemovePropW(hw, L"VB6_IPictureDisp");
+        pOld->lpVtbl->Release(pOld);
+        pOld->lpVtbl->Release(pOld);
+    }
+}
 
 void* vb6_GetControlPicture(void* hwnd) {
     if (!hwnd) return NULL;
     HWND hw = (HWND)hwnd;
-    /* If a COM IPicture was stored via SetControlPictureFromCom, return the
+    /* If a COM IPictureDisp was stored via SetControlPictureFromCom, return the
      * borrowed COM pointer so callers (e.g. Clipboard.SetData) can QI/use it.
      * The caller must NOT Release this borrowed reference. */
-    IPicture* pPic = (IPicture*)GetPropW(hw, L"VB6_IPicture");
-    if (pPic) return (void*)pPic;
+    IPictureDisp* pDisp = (IPictureDisp*)GetPropW(hw, L"VB6_IPictureDisp");
+    if (pDisp) return (void*)pDisp;
+    /* Fix <Command2>: 裸 GDI 句柄也要包成真 IPictureDisp 再交出去 ——
+       VB 侧 `Picture As IPictureDisp` 是对象，交裸句柄会让下游 COM 读全部
+       "not found" (实测 ImageList.FListImagesAdd → Err.Raise 35607 → 退出)。 */
     HANDLE hProp = GetPropW(hw, L"VB6_Picture");
-    return hProp;  // HBITMAP/HICON handle
+    if (hProp) return (void*)vb6_WrapGdiHandleAsPictureDisp(hw, hProp);
+    return NULL;
 }
 
 void vb6_SetControlPicture(void* hwnd, void* hPicture) {
     if (!hwnd) return;
     HWND hw = (HWND)hwnd;
+    
+    /* Picture 双支持 (Fix P-BMP-3D): 本管线 LoadPicture 产出的 COM IPicture*
+     * 走 COM 子类化渲染路径; 原始 GDI 句柄 (设计期 frx/资源/API) 走经典
+     * STATIC 路径。二者在 vb6rtl_com.c 的注册表里可安全区分。 */
+    if (hPicture && vb6_PictureIsRegistered(hPicture)) {
+        vb6_SetControlPictureFromCom(hwnd, hPicture);
+        return;
+    }
     /* A raw handle is replacing any COM IPicture set earlier via
      * SetControlPictureFromCom. Release the retained COM reference so it
      * doesn't leak and won't be used by the subclass. */
@@ -43,6 +182,9 @@ void vb6_SetControlPicture(void* hwnd, void* hPicture) {
         pOldCom->lpVtbl->Release(pOldCom);
         RemovePropW(hw, L"VB6_IPicture");
     }
+    /* Fix <Command2>: 句柄换了，先前懒包出来的 IPictureDisp 缓存作废
+     * (它借用的是旧句柄)，连保险引用一并归还。 */
+    vb6_ClearPictureDisp(hw);
     /* Store the picture handle and type (default=bitmap) */
     SetPropW(hw, L"VB6_Picture", (HANDLE)hPicture);
     SetPropW(hw, L"VB6_PictureType", (HANDLE)1);  /* default: bitmap */
@@ -71,7 +213,9 @@ void vb6_SetControlPicture(void* hwnd, void* hPicture) {
         }
         InvalidateRect(hw, NULL, TRUE);
     }
-    
+
+    vb6_MirrorPictureToAutoRedraw(hw);
+
     /* AutoSize: if enabled, resize to fit picture */
     int autoSize = vb6_GetPictureAutoSize(hwnd);
     if (autoSize && hPicture) {
@@ -80,6 +224,9 @@ void vb6_SetControlPicture(void* hwnd, void* hPicture) {
         if (GetObjectW(hBmp, sizeof(bm), &bm) != 0) {
             SetWindowPos(hw, NULL, 0, 0, bm.bmWidth, bm.bmHeight,
                 SWP_NOMOVE | SWP_NOZORDER);
+            vb6_AutoRedrawRefit(hwnd);   /* ARDC 还是设计期小图 → 按新客户区重建 (Fix c3-menu3d) */
+            vb6_MirrorPictureToAutoRedraw(hw);   /* 上面第 132 行那次镜像画在旧小图上,
+                                                    refit 清掉了 → 按新尺寸重画一遍 */
         }
     }
 }
@@ -95,6 +242,7 @@ void vb6_SetControlPicture(void* hwnd, void* hPicture) {
 void vb6_SetControlPictureFromCom(void* hwnd, void* pPictureDisp) {
     if (!hwnd) return;
     HWND hw = (HWND)hwnd;
+    
 
     /* NULL COM setter clears the picture (release COM ref + clear props). */
     if (!pPictureDisp) {
@@ -103,6 +251,7 @@ void vb6_SetControlPictureFromCom(void* hwnd, void* pPictureDisp) {
             pOld->lpVtbl->Release(pOld);
             RemovePropW(hw, L"VB6_IPicture");
         }
+        vb6_ClearPictureDisp(hw);
         SetPropW(hw, L"VB6_Picture", (HANDLE)NULL);
         SetPropW(hw, L"VB6_PictureType", (HANDLE)0);
         InvalidateRect(hw, NULL, TRUE);
@@ -125,6 +274,7 @@ void vb6_SetControlPictureFromCom(void* hwnd, void* pPictureDisp) {
     if (FAILED(hr)) { pPic->lpVtbl->Release(pPic); return; }
     hr = pPic->lpVtbl->get_Handle(pPic, &hOle);
     if (FAILED(hr)) { pPic->lpVtbl->Release(pPic); return; }
+    
 
     /* QI already acquired the new reference, including self-assignment.
      * Transfer that reference to the control and release exactly one old ref. */
@@ -134,6 +284,22 @@ void vb6_SetControlPictureFromCom(void* hwnd, void* pPictureDisp) {
         return;
     }
     if (pOld) pOld->lpVtbl->Release(pOld);
+
+    /* Fix <Command2>: 同时存一份真 IPictureDisp (QI 自传入指针)，让
+     * vb6_GetControlPicture 交出去的是 IDispatch 而不是 IPicture* ——
+     * 两者的 vtable 槽位不同，把 IPicture* 当 IDispatch 用会让
+     * GetIDsOfNames 落到 IPicture::get_Type 上 (槽 5) 造成类型混淆。 */
+    {
+        static const GUID local_IID_IPictureDisp2 =
+            {0x7BF80981, 0xBF32, 0x101A, {0x8B, 0xBB, 0x00, 0xAA, 0x00, 0x30, 0x0C, 0xAB}};
+        IPictureDisp* pDispIn = NULL;
+        HRESULT hrD = pUnk->lpVtbl->QueryInterface(pUnk, &local_IID_IPictureDisp2,
+                                                   (void**)&pDispIn);
+        if (SUCCEEDED(hrD) && pDispIn) {
+            vb6_StorePictureDisp(hw, pDispIn);
+            pDispIn->lpVtbl->Release(pDispIn);   /* 缓存里已含引用 */
+        }
+    }
 
     /* Keep the native handle for legacy raw-handle callers (GetControlPicture
      * falls back to this when no COM pointer is stored). */
@@ -149,9 +315,32 @@ void vb6_SetControlPictureFromCom(void* hwnd, void* pPictureDisp) {
     style &= ~(SS_BITMAP | SS_ICON | SS_ENHMETAFILE | SS_CENTERIMAGE);
     SetWindowLongW(hw, GWL_STYLE, style);
 
-    vb6_InstallImageSubclass(hwnd);
+    /* AutoSize (Fix P-BMP-3D): 与原始句柄路径同口径 —— PictureBox/Image 设
+     * AutoSize=True 时, 指派图片后控件缩放到图片本征尺寸 (VB6 行为)。 */
+    if (nType == 1 /* PICTYPE_BITMAP */ && vb6_GetPictureAutoSize(hwnd)) {
+        BITMAP bm;
+        if (GetObjectW((HBITMAP)(UINT_PTR)hOle, sizeof(bm), &bm) != 0) {
+            SetWindowPos(hw, NULL, 0, 0, bm.bmWidth, bm.bmHeight,
+                SWP_NOMOVE | SWP_NOZORDER);
+            vb6_AutoRedrawRefit(hwnd);   /* ARDC 还是设计期小图 → 按新客户区重建 */
+        }
+    }
+
+vb6_InstallImageSubclass(hwnd);
     InvalidateRect(hw, NULL, TRUE);
-}
+
+    /* Fix <c3-menu3d>: COM 路径的 AutoRedraw 镜像缺位。PictureBox 设 Visible=False
+     * (3DMenu Form_Load 里 With ImgMenu(i) : .Visible=False) 时 WM_PAINT 永不触发,
+     * 子类里的 arMirror 分支 (WM_PAINT 尾部) 没机会跑, 而 RuotaMenu 用
+     * ImgMenu(Num).hdc (= VB6_AutoRedrawDC) 作 TransBltNow 源 → 合成出来恒空。
+     * 原句柄路径 (vb6_SetControlPicture) 第 110 行已调用本镜像; COM 路径在装完
+     * 子类后同样主动画一遍进记忆 DC。屏上路径 (WM_PAINT/WM_PRINTCLIENT) 照旧。 */
+vb6_MirrorPictureToAutoRedraw(hw);
+    {   HDC arDbg = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+        IPicture* pDbg = (IPicture*)GetPropW(hw, L"VB6_IPicture");
+        
+    }
+  }
 int vb6_GetPictureAutoSize(void* hwnd) {
     if (!hwnd) return 0;
     HANDLE hProp = GetPropW((HWND)hwnd, L"VB6_AutoSize");
@@ -254,7 +443,13 @@ int vb6_DrawBitmapAlpha(void* hdcV, void* hBmpV, int dstX, int dstY, int dstW, i
         fprintf(stderr, "[ALPHA] pxL BGR A=%d,%d,%d A=%u | pxR A=%d,%d,%d A=%u\n",
                 pl[2], pl[1], pl[0], pl[3], pr[2], pr[1], pr[0], pr[3]);
     }
-    if (allZero) { free(buf); return 1; }   /* 整张全透明: 什么都不画 */
+    /* alpha 全 0: 两种可能 —— (a) 真·全透明 PNG; (b) 32bpp BI_RGB, alpha 字节
+     * 从未写入 (GDI/OleLoadPicture 产物的常态, GetDIBits 读回全 0)。后者 RGB 是
+     * 实打实的 (3DMenu 图标角=FAE4E4 trsp 色实测), 按"整张透明"丢弃会让整个
+     * PictureBox 的 ARDC 恒 BackColor → 环格全空 → 白窗 (Fix <c3-menu3d>)。
+     * VB6 的 BitBlt 从不看 alpha —— 全 0 一律按不透明回落原路径, 透明色交给
+     * 调用方 (TransBltNow 按角像素色键) 处理, 与金标准同口径。 */
+    if (allZero) { free(buf); return 0; }   /* 无 alpha 信息: 回落不透明原路径 */
     if (allFF)   { free(buf); return 0; }   /* 完全不透明: 原路径足够 */
 
     if (needPreMul) {
@@ -329,12 +524,14 @@ static void vb6_ImagePaintHelper(HWND hwnd, HDC hdc) {
             dstW = rc.right;
             dstH = rc.bottom;
         } else {
-            /* Non-stretch: draw at the picture's natural pixel size, converting
-             * HIMETRIC (2540 HIMETRIC per logical inch) using the DC's DPI. */
+            /* Non-stretch: draw at the picture's natural pixel size. The conversion
+             * formula lives in exactly one place now (vb6_HimetricToPxOnDc, zhang 298);
+             * this call site keeps feeding it the **DC's** DPI, not the screen's --
+             * a picture drawn into a printer/VM DC scales with that DC. */
             int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
             int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
-            dstW = MulDiv((int)hmW, dpiX, 2540);
-            dstH = MulDiv((int)hmH, dpiY, 2540);
+            dstW = vb6_HimetricToPxOnDc((int)hmW, dpiX);
+            dstH = vb6_HimetricToPxOnDc((int)hmH, dpiY);
             if (dstW <= 0) dstW = rc.right;
             if (dstH <= 0) dstH = rc.bottom;
         }
@@ -347,6 +544,8 @@ static void vb6_ImagePaintHelper(HWND hwnd, HDC hdc) {
         if (nType206 == 1 /*PICTYPE_BITMAP*/ && hOle206
             && GetObjectType((HGDIOBJ)(UINT_PTR)hOle206) == OBJ_BITMAP
             && vb6_DrawBitmapAlpha(hdc, (void*)(UINT_PTR)hOle206, 0, 0, dstW, dstH)) {
+            { static int s_h = 0; if (s_h < 40) { s_h++;
+                 } }
             return;
         }
 
@@ -354,14 +553,20 @@ static void vb6_ImagePaintHelper(HWND hwnd, HDC hdc) {
         FillRect(hdc, &rc, (HBRUSH)GetStockObject(WHITE_BRUSH));
 
         /* HIMETRIC y points up, so flip the source rect: (0, hmH, hmW, -hmH). */
-        pPic->lpVtbl->Render(pPic, hdc, 0, 0, dstW, dstH,
+        HRESULT hrR = pPic->lpVtbl->Render(pPic, hdc, 0, 0, dstW, dstH,
                              0, hmH, hmW, -hmH, NULL);
+        { static int s_h2 = 0; if (s_h2 < 40) { s_h2++;
+             } }
         return;
     }
 
     HANDLE hPict = GetPropW(hwnd, L"VB6_Picture");
     int picType = (int)(INT_PTR)GetPropW(hwnd, L"VB6_PictureType");
-    if (!hPict) return;
+    if (!hPict) {
+        static int s_h3 = 0; if (s_h3 < 40) { s_h3++;
+             }
+        return;
+    }
 
     DWORD objType = GetObjectType((HGDIOBJ)hPict);
     if (objType == OBJ_ENHMETAFILE) {
@@ -415,6 +620,11 @@ static LRESULT CALLBACK vb6_ImageSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LP
                         (unsigned)(UINT_PTR)GetPropW(hwnd, L"VB6_BackColor") & 0xFFFFFFu,
                         GetPropW(hwnd, L"VB6_BackColorSet") ? 1 : 0, given ? 1 : 0);
             vb6_ImagePaintHelper(hwnd, hdc);
+            /* Fix P-BMP-3D: 屏幕画完再补一张进 AutoRedraw 记忆位图, 保证
+             * `.hdc` 来源 (VB6_AutoRedrawDC) 与所见一致 — 也覆盖 AutoRedraw
+             * 在 .Picture 指派之后才建记忆 DC 的场景。 */
+            HDC arMirror = (HDC)GetPropW(hwnd, L"VB6_AutoRedrawDC");
+            if (arMirror && arMirror != hdc) vb6_ImagePaintHelper(hwnd, arMirror);
             if (!given) EndPaint(hwnd, &ps);
         }
         return 0;
@@ -442,6 +652,8 @@ static LRESULT CALLBACK vb6_ImageSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LP
             pPic->lpVtbl->Release(pPic);
             RemovePropW(hwnd, L"VB6_IPicture");
         }
+        /* Fix <Command2>: 懒包出来的 IPictureDisp 缓存也在这里归还 */
+        vb6_ClearPictureDisp(hwnd);
         if (origProc) {
             SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)origProc);
             RemovePropW(hwnd, L"VB6_ImageOrigProc");

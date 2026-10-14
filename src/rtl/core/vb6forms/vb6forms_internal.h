@@ -43,7 +43,7 @@ static inline int vb6_DateFromSerial(double serial, SYSTEMTIME* st) {
 
 // --- 跨族共享的内部状态 (定义在 vb6forms.c) ---
 // 应用实例句柄 (vb6_SetAppInstance 设置, 多处属性设置与控件创建需要)
-extern HINSTANCE g_hInstance;
+extern HINSTANCE vb6_hInstance;
 
 // --- 控件窗口的字体 (账 #200/#202/#204, 定义在 vb6forms_ctrl.c) ---
 // 「这枚控件现在在用的字体」在本仓库只许有一处问法：先问窗口，窗口不答再读我们自存的那份。

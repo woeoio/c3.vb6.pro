@@ -153,10 +153,10 @@ ComMemberInfo TypeLibParser::parseVarDesc(void* pTypeInfo, void* pVarDesc) {
     member.name = member.realName;
     std::transform(member.name.begin(), member.name.end(), member.name.begin(), ::tolower);
 
-    // 类型
-    if (pVD->varkind == VAR_PERINSTANCE) {
-        member.returnType = mapTypeDesc(&pVD->elemdescVar.tdesc, pTI);
-    }
+    // 类型 (账 #245): 属性在类型库里是 VARDESC, VAR_PROPERTY / VAR_CONST / VAR_PERINSTANCE
+    // 三种 varkind 的真类型都记在 elemdescVar.tdesc 上 —— 以前只在 PERINSTANCE 那支赋值,
+    // 另两支把没赋过值的 returnType 交出去, 下游把垃圾当「这属性是什么型」的答案用。
+    member.returnType = mapTypeDesc(&pVD->elemdescVar.tdesc, pTI);
 
     return member;
 }

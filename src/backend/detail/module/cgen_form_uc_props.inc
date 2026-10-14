@@ -190,8 +190,9 @@
                 // 把首字段 (`__comObj`) 当 vtable 解引用 —— 必须经 vb6_ComObject_FromInstance
                 // 包成真 IDispatch, 引用计数随 VARIANT 走 (那个函数的头文件就是为这个存在的)。
                 c_.emitLine("static void* " + p.getFn + "(void* inst, void* outV) {");
-                c_.emitLine("    " + p.objCType + " _o = vb6_" + ctl + "_prop_get_"
-                            + cIdent(p.name) + "((vb6_cls_" + ctl + "*)inst);");
+                c_.emitLine("    " + p.objCType + " _o = vb6_" + ctl + "_"
+                            + propFnSegment("prop_get_", p.name)
+                            + "((vb6_cls_" + ctl + "*)inst);");
                 c_.emitLine("    if (!_o) { *(vb6_VARIANT*)outV = vb6_VariantEmpty(); return outV; }");
                 c_.emitLine("    vb6_VARIANT* _pv = (vb6_VARIANT*)outV;");
                 c_.emitLine("    _pv->vt = VT_DISPATCH;");
@@ -211,7 +212,8 @@
             } else {
             c_.emitLine("static void* " + p.getFn + "(void* inst, void* outV) {");
             c_.emitLine("    *(vb6_VARIANT*)outV = "
-                        + boxUcGetter(p.vbType, "vb6_" + ctl + "_prop_get_" + cIdent(p.name)
+                        + boxUcGetter(p.vbType, "vb6_" + ctl + "_"
+                                                + propFnSegment("prop_get_", p.name)
                                                 + "((vb6_cls_" + ctl + "*)inst)") + ";");
             c_.emitLine("    return outV;");
             c_.emitLine("}");
@@ -238,13 +240,14 @@
                 c_.emitLine("static int32_t " + p.setFn + "(void* inst, const void* inV) {");
                 c_.emitLine("    " + p.objCType + " _o = (" + p.objCType
                             + ")vb6_VariantToObjectVal(*(const vb6_VARIANT*)inV);");
-                c_.emitLine("    vb6_" + ctl + "_prop_set_" + cIdent(p.name) + "((vb6_cls_" + ctl
-                            + "*)inst, &_o);");
+                c_.emitLine("    vb6_" + ctl + "_" + propFnSegment("prop_set_", p.name)
+                            + "((vb6_cls_" + ctl + "*)inst, &_o);");
                 c_.emitLine("    return 1;");
                 c_.emitLine("}");
             } else {
             c_.emitLine("static int32_t " + p.setFn + "(void* inst, const void* inV) {");
-            c_.emitLine("    vb6_" + ctl + "_prop_let_" + cIdent(p.name) + "((vb6_cls_" + ctl
+            c_.emitLine("    vb6_" + ctl + "_" + propFnSegment("prop_let_", p.name)
+                        + "((vb6_cls_" + ctl
                         + "*)inst, "
                         + unboxUcSetter(p.vbType, "(*(const vb6_VARIANT*)inV)") + ");");
             c_.emitLine("    return 1;");

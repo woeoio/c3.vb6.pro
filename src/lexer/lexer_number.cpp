@@ -244,10 +244,26 @@ Token Lexer::scanHexNumber() {
         return tok;
     }
 
-    if (peek() == '%') text += advance();   // 账 #195: &HFF% = Integer 档
-    Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
-    try { tok.intValue = static_cast<int32_t>(std::stoll(text.substr(2), nullptr, 16)); } catch (...) {}
-    return tok;
+    bool intSuffix = false;                 // 账 #195: &HFF% = Integer 档
+    if (peek() == '%') { text += advance(); intSuffix = true; }
+    {
+        int64_t v = 0;
+        if (!parseIntLit(radixDigits(text), 16, v)) {
+            return errorToken("十六进制数字超出 64 位整数表示范围", startLine, startCol);
+        }
+        // ai/032 §6.6 顺带收口 (§B140 的进制形): 超过 32 位的无后缀十六进制数照
+        // 十进制那支归 LongLong —— 以前这里无条件 `static_cast<int32_t>` 截断,
+        // `&H123456789A` 被砍成 0x3456789A。≤8 位仍按 32 位位模式进 Integer 档
+        // (逐字保留旧行为, 含 &HFFFFFFFF = -1); % 后缀仍走 Integer 档。
+        if (intSuffix || (uint64_t)v <= 0xFFFFFFFFu) {
+            Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
+            tok.intValue = static_cast<int32_t>(v);
+            return tok;
+        }
+        Token tok = makeToken(TokenKind::LongLiteral, text, startLine, startCol);
+        tok.longValue = v;
+        return tok;
+    }
 }
 
 Token Lexer::scanOctNumber() {
@@ -273,10 +289,23 @@ Token Lexer::scanOctNumber() {
     }
 
     if (peek() == '&') text += advance();
-    if (peek() == '%') text += advance();   // 账 #195: 进制字面量也认 Integer 后缀
-    Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
-    try { tok.intValue = static_cast<int32_t>(std::stoll(text.substr(2), nullptr, 8)); } catch (...) {}
-    return tok;
+    bool intSuffix = false;                 // 账 #195: 进制字面量也认 Integer 后缀
+    if (peek() == '%') { text += advance(); intSuffix = true; }
+    {
+        int64_t v = 0;
+        if (!parseIntLit(radixDigits(text), 8, v)) {
+            return errorToken("八进制数字超出 64 位整数表示范围", startLine, startCol);
+        }
+        /* ai/032 §6.6: 与十六进制同一条阶梯 (>32 位归 LongLong)。 */
+        if (intSuffix || (uint64_t)v <= 0xFFFFFFFFu) {
+            Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
+            tok.intValue = static_cast<int32_t>(v);
+            return tok;
+        }
+        Token tok = makeToken(TokenKind::LongLiteral, text, startLine, startCol);
+        tok.longValue = v;
+        return tok;
+    }
 }
 
 Token Lexer::scanBinNumber() {
@@ -302,10 +331,23 @@ Token Lexer::scanBinNumber() {
     }
 
     if (peek() == '&') text += advance();
-    if (peek() == '%') text += advance();   // 账 #195: 进制字面量也认 Integer 后缀
-    Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
-    try { tok.intValue = static_cast<int32_t>(std::stoll(text.substr(2), nullptr, 2)); } catch (...) {}
-    return tok;
+    bool intSuffix = false;                 // 账 #195: 进制字面量也认 Integer 后缀
+    if (peek() == '%') { text += advance(); intSuffix = true; }
+    {
+        int64_t v = 0;
+        if (!parseIntLit(radixDigits(text), 2, v)) {
+            return errorToken("二进制数字超出 64 位整数表示范围", startLine, startCol);
+        }
+        /* ai/032 §6.6: 与十六进制同一条阶梯 (>32 位归 LongLong)。 */
+        if (intSuffix || (uint64_t)v <= 0xFFFFFFFFu) {
+            Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
+            tok.intValue = static_cast<int32_t>(v);
+            return tok;
+        }
+        Token tok = makeToken(TokenKind::LongLiteral, text, startLine, startCol);
+        tok.longValue = v;
+        return tok;
+    }
 }
 
 } // namespace vb6c3

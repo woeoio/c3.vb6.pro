@@ -156,7 +156,8 @@
                     if (!pic.data.empty()) {
                         std::string varName = "vb6_frx_pic_" + cIdent(ctrl.controlName);
                         if (ctrl.index >= 0) varName += "_" + std::to_string(ctrl.index);
-                        h_.emitLine(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                        frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                        h_.emitLine(bytesToHexArrayDecl(varName));
                         bool isGraphicalBtn = (ctrl.controlType == FrmControlType::CommandButton ||
                                                ctrl.controlType == FrmControlType::OptionButton ||
                                                ctrl.controlType == FrmControlType::CheckBox) &&
@@ -252,9 +253,23 @@
                 c_.emitLine("  } }");
             }
             bool ucIsArr = knownControlArrays_.count(ctlLower) != 0;
+            // Fix <vbeclipse> 2026-10-12 (账 #257 第十二层): 该 .ctl 有
+            // UserControl_ReadProperties ⇒ 这条 HostCreate 走的是**加载路径**(本函数稍后
+            // 会把 bag 交给 ReadProps), 按 VB6 语义不得跑 InitProperties —— 否则控件会先按
+            // 硬编码默认值把派生结构建好(如 VBFlexGrid 的 `VBFlexGridCells.Rows(0 To 1)` 与
+            // VBFlexGridCellsInit=True), ReadProperties 只改私有字段, 那条 `Call
+            // CreateVBFlexGrid` 又被 `VBFlexGridHandle <> NULL_PTR` 挡掉 ⇒ 数组停在默认尺寸
+            // 而 PropRows=150 ⇒ SetCellText 读 Rows(2) 错误 9 ⇒ 窗口 5s 内不出现。
+            // 设计子控件(本实例内部再 HostCreate)看到的标志在 ucHostInit 入口已被消费清零,
+            // 仍按原行为跑它们的 InitProperties (Fix 112d 依赖)。
+            bool ucSkipInitProps = false;
+            if (const FrmFile* spInitProps = findUserControlSpec(ctlClass))
+                ucSkipInitProps = Symbol::toLower(spInitProps->codeSection)
+                                      .find("sub usercontrol_readproperties") != std::string::npos;
             std::string hwndExpr;
             if (ucIsArr) {
                 int idx = ctrl.index >= 0 ? ctrl.index : 0;
+                if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(1);");
                 c_.emitLine("{ void* vb6_uc_h = vb6_UC_HostCreate(\"" + ctlClass + "\", "
                     + std::to_string(ucL) + ", " + std::to_string(ucT) + ", "
                     + std::to_string(ucW) + ", " + std::to_string(ucH)
@@ -262,14 +277,33 @@
                     + "\", " + std::to_string(idx) + ");");
                 c_.emitLine("  vb6_CtrlArr_SetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", "
                            + std::to_string(idx) + ", vb6_uc_h); }");
+                if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(0);");
                 hwndExpr = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", "
                          + std::to_string(idx) + ")";
             } else {
-                c_.emitLine("vb6_hwnd_" + cIdent(ctrl.controlName) + " = vb6_UC_HostCreate(\""
+                // Fix 220: 槽变量名必须与 emitControlHandleDecls 的**声明同一判据**。
+                // 全工程只有 ImageList 一类"声明写 vb6_com_、创建写 vb6_hwnd_":
+                //   emitControlHandleDecls (cgen_form.cpp:165) 按 P20-39 把 ImageList
+                //   的槽定为原生复刻实例指针 vb6_com_<X>; 而这条 C29 的宿主创建路径
+                //   对一切工程内 UserControl 一律写 vb6_hwnd_<X>。
+                // 于是 MainForm.c 出现:
+                //   :321,497,570   vb6_hwnd_ImageList1/2/3 = vb6_UC_HostCreate(...)
+                //   :72,94,95      static void* vb6_com_ImageList1/2/3 = NULL;   ← 从未赋值
+                // 前者没有声明 (C2065×13: ImageList1/2/3 各 + UC_Enter/InstanceOf/
+                // 各 prop_let_ 的连锁), 后者声明了却恒 NULL。
+                // 权威在**声明侧**: 槽名的消费者有 6 处 (cgen_util_com 的 ListImages
+                // ×2、com_bind 的 ListImages ×4) 加 makeCtrlHwndArg, 全写 vb6_com_,
+                // 只有这一处创建点写错。改这一处 → 声明/赋值/读取三者一致。
+                std::string slot220 = (ctrl.controlType == FrmControlType::ImageList
+                                       ? "vb6_com_" : "vb6_hwnd_")
+                                    + cIdent(ctrl.controlName);
+                if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(1);");
+                c_.emitLine(slot220 + " = vb6_UC_HostCreate(\""
                     + ctlClass + "\", " + std::to_string(ucL) + ", " + std::to_string(ucT) + ", "
                     + std::to_string(ucW) + ", " + std::to_string(ucH)
                     + ", hwnd, hInstance, \"" + ctrl.controlName + "\", -1);");
-                hwndExpr = "vb6_hwnd_" + cIdent(ctrl.controlName);
+                if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(0);");
+                hwndExpr = slot220;
             }
 
             // Fix 112/114: 设计期持久化的 UserControl 公共属性
@@ -288,6 +322,31 @@
                     "Font", "IconFont", "TitleFont", "Caption1_Font", "Caption2_Font",
                     "Images", "ListImages", "MouseIcon"};
                 c_.emitLine("vb6_UC_Enter(" + hwndExpr + ");  /* Fix 112: 换入宿主状态 */");
+                // Fix <vbeclipse> 2026-10-12 (账 #257 第九层): 下面这一轮的**直接 prop_let
+                // 回放**不得覆盖「该 .ctl 的 UserControl_ReadProperties 会消费」的属性。
+                //
+                // 为什么要收: 这两条路是**同一批**属性 (都取 ctrl.properties、同一份
+                // kSkip 表), 但时序错了 —— 直发在 `vb6_UC_ReadProps(&_bag)` **之前**,
+                // 那时控件还停在 InitProperties 的原始默认值上 (它的 .frm 配置一个都还没
+                // 读进来)。于是**任何跨属性的设计期守卫都会误触发**:
+                //   · ComboBoxW.ctl:1178 `Property Let Style` 判 `ComboBoxDesignMode`
+                //     ⇒ Err.Raise 382 "read-only at run time" (未处理 ⇒ ExitProcess);
+                //   · UpDown.ctl:837 `Property Let BuddyProperty` 判 `GetBuddyControl()`
+                //     ⇒ MsgBox "BuddyControl property must be set first";
+                //   · DTPicker.ctl:1484 `Property Let Value` 判 MinDate/MaxDate (还没读进来)
+                //     ⇒ MsgBox "A date was specified that does not fall within ...".
+                // 三条都是同一条机制 (实测 ComCtlsDemo 启动期逐个弹框/退进程, 窗口永不出现)。
+                //
+                // VB6 里这些属性**只有一条**设计期应用通道 = `ReadProperties(PropBag)`,
+                // 控件作者正是按「字段直写、顺序自定」写的 ReadProperties, 公开 Property Let
+                // 只服务运行期用户代码 (所以它们才敢在 Let 里放 382/35754/35773 这类守卫)。
+                // ⇒ 该 ReadProperties 会读的属性交给 bag 那条路 (它本来也装了同一批),
+                // 判据 = .ctl 代码段里是否存在 `.ReadProperty("<名>"`。
+                // 不在 ReadProperties 里的 (本工程只余 Align/Bindings 这类 Extender 转发属性)
+                // 保持原样直发 —— 它们没有"先读别的属性"的依赖。
+                std::string ucRpCodeLower;
+                if (const FrmFile* spRp = findUserControlSpec(ctlClass))
+                    ucRpCodeLower = Symbol::toLower(spRp->codeSection);
                 // Fix 119: 字体类复合属性块 (Caption1_Font / Caption2_Font / TitleFont /
                 // IconFont / Font ...) — 若 .ctl 有同名属性写方向, 构造字体对象后调用之。
                 // 例: 三个 ucProgressCircular 的 Caption1_Font=14.25 此前完全没生效。
@@ -327,15 +386,15 @@
                     if (!fontName119) continue;
                     std::string canonF = canonicalClassMemberName(ctlClass, blk.blockName);
                     if (canonF.empty()) canonF = blk.blockName;
-                    std::string setterF = "vb6_" + cIdent(ctlClass)
-                                        + (isSet119 ? "_prop_set_" : "_prop_let_") + cIdent(canonF);
+                    std::string setterF = "vb6_" + cIdent(ctlClass) + "_"
+                                        + propFnSegment(isSet119 ? "prop_set_" : "prop_let_", canonF);
                     emitFrmFontObj(blk, "_vb6_f119");
                     if (isSet119) {
                         // Fix 128: Property Set 型**不调用**其 Set 实现体 (内含 Refresh,
                         // 会在数据未就绪时刷新并把图表永久置空)。改用该控件自己的
                         // Property Get 取到内部字体对象, 原地覆写字段。
-                        std::string getterF = "vb6_" + cIdent(ctlClass)
-                                            + "_prop_get_" + cIdent(canonF);
+                        std::string getterF = "vb6_" + cIdent(ctlClass) + "_"
+                                            + propFnSegment("prop_get_", canonF);
                         c_.emitLine("    vb6_UC_FontAssign((void*)" + getterF
                                   + "((vb6_cls_" + cIdent(ctlClass) + "*)vb6_UC_InstanceOf("
                                   + hwndExpr + ")), _vb6_f119);");
@@ -350,6 +409,15 @@
                     bool skip = false;
                     for (const char* sk : kSkip) if (_stricmp(pn.c_str(), sk) == 0) { skip = true; break; }
                     if (skip) continue;
+                    // 该 .ctl 的 UserControl_ReadProperties 会读这条属性 ⇒ 由下面那条
+                    // bag 路径应用 (见本块开头 Fix <vbeclipse> 的说明: 直发跑在 bag 之前,
+                    // 控件还停在 InitProperties 默认值上, 会误触 382 / BuddyProperty /
+                    // MinMax 那三类设计期守卫)。
+                    if (!ucRpCodeLower.empty()
+                        && ucRpCodeLower.find(".readproperty(\"" + Symbol::toLower(pn) + "\"")
+                               != std::string::npos) {
+                        continue;
+                    }
                     // Fix 114: 跨模块查询 .ctl 类的 Property Let 形参表 (driver 已注入
                     // 外部 Class 符号 → Phase B 可命中 memberLetParams).
                     std::vector<ParameterInfo> wp114;
@@ -358,8 +426,20 @@
                     // 属性名拼写按 .ctl 内声明规范化 (VB6 大小写不敏感), 否则 LNK2019
                     std::string canonPn = canonicalClassMemberName(ctlClass, pn);
                     if (canonPn.empty()) canonPn = pn;
-                    std::string setter = "vb6_" + cIdent(ctlClass) + "_prop_let_" + cIdent(canonPn);
+                    std::string setter = "vb6_" + cIdent(ctlClass) + "_"
+                                       + propFnSegment("prop_let_", canonPn);
                     const ParameterInfo& p114 = wp114.back();
+                    // Fix 243c: 是否"真" Variant 形参 —— 判据是 typeRefName 为空**或**就叫
+                    // "Variant"。ParameterInfo::type 对源码里写了类型名的形参 (尤其
+                    // `As <枚举>`) 也被 resolveTypeOrDefault 折成 Vb6Type::Variant, 只看
+                    // type 会把 `Property Let ChartOrientation(ByVal New_Value As
+                    // ChartOrientationConstants)` (C 形参其实是 int32_t) 也装箱 ⇒ C2440
+                    // (Charts 2020 / ucChartBar / ucPieChart 三工程 Form1.c 回归)。
+                    // 而 `As Variant` 的 typeRefName 是 "Variant" (不是空), 所以两条都要收。
+                    const std::string p114RefLower = Symbol::toLower(p114.typeRefName);
+                    const bool p114RealVariant =
+                        p114.type == Vb6Type::Variant
+                        && (p114.typeRefName.empty() || p114RefLower == "variant");
                     std::string meExpr = "(vb6_cls_" + cIdent(ctlClass)
                                        + "*)vb6_UC_InstanceOf(" + hwndExpr + ")";
 
@@ -380,6 +460,17 @@
                         if (textVal.size() >= 2 && textVal.front() == '"' && textVal.back() == '"')
                             textVal = textVal.substr(1, textVal.size() - 2);
                         std::string lit = "vb6_BSTR_FromStr(L\"" + escapeWideCString(textVal) + "\")";
+                        // Fix 243c: 目标属性末形参是 **真 Variant** 时设计期字面量必须装箱。
+                        // 实测 ComCtlsDemo MainForm.frm 的 `Begin ... ImageList =
+                        // "ImageList1" ... End` (CoolBar.ctl:1499 `Property Let
+                        // ImageList(ByVal Value As Variant)`) 发成
+                        // vb6_CoolBar_prop_let_ImageList(me, vb6_BSTR_FromStr(L"ImageList1"))
+                        // → C2440 BSTR→vb6_VARIANT ×10 (MainForm.c)。
+                        // 数值同理: `Value = 44012` (DTPicker.ctl:1468 `Property Let
+                        // Value(ByVal DateValue As Variant)`) → C2440 int→vb6_VARIANT ×8。
+                        if (p114RealVariant && p114.isByVal) {
+                            lit = "vb6_VariantFromValue(" + lit + ")";
+                        }
                         if (p114.isByVal) {
                             c_.emitLine(setter + "(" + meExpr + ", " + lit + ");");
                         } else {
@@ -390,6 +481,9 @@
                     } else {
                         std::string valExpr = kv.second.rawText.empty()
                                 ? std::to_string(kv.second.intValue) : kv.second.rawText;
+                        if (p114RealVariant && p114.isByVal) {
+                            valExpr = "vb6_VariantFromValue(" + valExpr + ")";
+                        }
                         c_.emitLine(setter + "(" + meExpr + ", " + valExpr + ");");
                     }
                 }
@@ -433,6 +527,34 @@
                     if (hasReadProps114 && !getenv("C3_NO_BAG") && !bagBlocked) {
                         c_.emitLine("extern void vb6_" + cIdent(ctlClass) + "_UC_ReadProps(void* me, void** PropBag);");
                         c_.emitLine("{ void* _bag = vb6_UC_PropBagCreate();");
+                        // Fix: .frx 属性包块 (UserControl 持久化 PropertyBag: InitPanels/InitBands/
+                        // InitButtons/InitListImages/InitTabs...) —— 交**原始字节**, 运行期
+                        // `PropBag.Contents = <字节数组>` 由 RTL 按 VB6 PropertyBag 序列化格式
+                        // 解析成扁平的 InitXCount / InitXText<i> ... 项 (uc_propbag.c)。
+                        // 此前按 DocString 解 ⇒ 得到 `L"\uE874\uF9B1\uD001"` 这类垃圾, 且 flat 项
+                        // 全缺 ⇒ ComCtlsDemo StatusBar1 设计期 3 个面板全丢, Command2_Click
+                        // `Panels(1)` 取回 NULL 直接 AV (Unhandled 整只退出)。
+                        // 字节按 C 串转义 (可打印 ASCII 原样, 其余 \ooo 八进制 —— 后接数字
+                        // 不会被吞, 换 \xNN 会贪吃), 每 ~900 字符断一行拼接。
+                        auto emitFrxBagBlob = [&](const std::string& litName,
+                                                  const std::vector<uint8_t>& bytes) {
+                            c_.emitLine("vb6_UC_BagPutBin(_bag, " + litName + ",");
+                            std::string line = "\"";
+                            for (unsigned char b : bytes) {
+                                if (b == '"')        line += "\\\"";
+                                else if (b == '\\')  line += "\\\\";
+                                else if (b >= 0x20 && b < 0x7F) line += (char)b;
+                                else {
+                                    line += '\\';
+                                    line += (char)('0' + ((b >> 6) & 7));
+                                    line += (char)('0' + ((b >> 3) & 7));
+                                    line += (char)('0' + (b & 7));
+                                }
+                                if (line.size() >= 900) { c_.emitLine(line + "\""); line = "\""; }
+                            }
+                            c_.emitLine(line + "\",");
+                            c_.emitLine(std::to_string(bytes.size()) + ");");
+                        };
                         for (const auto& kvb : ctrl.properties) {
                             const std::string& pn114 = kvb.first;
                             bool skip114 = false;
@@ -453,15 +575,19 @@
                                 if (idl == "true")  c_.emitLine("vb6_UC_BagPutBool(_bag, " + litName + ", -1);");
                                 else if (idl == "false") c_.emitLine("vb6_UC_BagPutBool(_bag, " + litName + ", 0);");
                             } else if (kvb.second.type == FrmValueType::FrxReference && frxLoaded) {
-                                // czUI fix: Caption 等字符串常存于 .frx (如 "Form2.frx":006E) —
-                                // 跳过会让 ReadProperty 返回默认空串, 把 prop_let 设置好的
-                                // 标题清空 (Charts2020 所有 LabelPlus 标题消失的根因)
+                                // Fix: 先试"属性包块" (UserControl 持久化 PropertyBag) —— 交原始字节;
+                                // 不是属性包块时退回原来的 DocString 路径 (Caption 等字符串常存于 .frx)。
+                                FrxPropBagBlob pbB114 = FrxReader::readPropBagBlob(kvb.second.frxOffset);
+                                if (pbB114.found) {
+                                    emitFrxBagBlob(litName, pbB114.bytes);
+                                } else {
                                 FrxTextData dsB114 = FrxReader::readDocString(kvb.second.frxOffset);
                                 if (!dsB114.text.empty()) {
                                     std::string tvB = dsB114.text;
                                     if (tvB.size() >= 2 && tvB.front() == '"' && tvB.back() == '"')
                                         tvB = tvB.substr(1, tvB.size() - 2);
                                     c_.emitLine("vb6_UC_BagPutStr(_bag, " + litName + ", L\"" + escapeWideCString(tvB) + "\");");
+                                }
                                 }
                             }
                         }
@@ -470,6 +596,12 @@
                         c_.emitLine("vb6_UC_PropBagFree(_bag); }");
                     }
                 }
+                // Fix <vbeclipse> 2026-10-12 (第十二层): 加载路径的 Show/Resize 在这里补齐。
+                // 上面 HostCreate 已把本实例的 Show/Resize 挂起(pendingActivate), 因为 VB6 的
+                // 顺序是 Initialize → ReadProperties → Show/Resize; 不补齐的话 Resize 会读
+                // 未恢复的设计期属性 (实测 czUI: m_ControlType 未恢复 = 0 = czTitleBar ⇒ AV)。
+                // 放在 bag 块**之外**: 即使用 C3_NO_BAG 关掉 bag 也必须激活, 否则实例永不 Show。
+                if (ucSkipInitProps) c_.emitLine("vb6_UC_ActivateHost(" + hwndExpr + ");");
             }
             ctrlId++;
             continue;
@@ -532,7 +664,8 @@
                         imgIdx++;
                         std::string varName = "vb6_frx_imglist_" + cIdent(ctrl.controlName)
                                             + "_" + std::to_string(imgIdx);
-                        h_.emitLine(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                        frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                        h_.emitLine(bytesToHexArrayDecl(varName));
                         std::string keyLit = "NULL";
                         auto keyIt = listImg.properties.find("Key");
                         if (keyIt != listImg.properties.end()
@@ -645,7 +778,8 @@
                                 // Generate byte array in .h file
                                 imgIdx++;
                                 std::string varName = "vb6_frx_imglist_" + cIdent(ctrl.controlName) + "_" + std::to_string(imgIdx);
-                                h_.emitLine(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                                frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                                h_.emitLine(bytesToHexArrayDecl(varName));
 
                                 // Get Key property (may be empty string)
                                 std::string keyStr;
@@ -724,7 +858,7 @@
                             // 旧实现只给路径加了 size()==1 守卫, altClsid143 却对任意
                             // 条目数都取 front() —— 多 OCX 工程下正在生成 B 控件时拿到
                             // A.ocx 的 CLSID, 而此时 ocxPath143 为空 (下方 ocxFiles_
-                            // 按 tlKey143 也查不到), ocxCreateAny 会退到 CoCreateInstance
+                            // 按 tlKey143 也查不到), vb6_ocxCreateAny 会退到 CoCreateInstance
                             // 用 A 的 CLSID 激活出 A 的控件, 代码生成侧却按 B 处理,
                             // 静默用错控件。单 OCX 工程 front() 就是自己, 回退语义不变。
                             // Fix 148: front() 前必须判空 — ocxRefs_ 为空时是 UB, 实测段错误.

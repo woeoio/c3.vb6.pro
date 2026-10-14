@@ -56,6 +56,13 @@ bool Token::isOperator() const {
         case TokenKind::Eqv: case TokenKind::Imp:
         case TokenKind::Is: case TokenKind::Like:
         case TokenKind::AddressOf: case TokenKind::TypeOf:
+        // C3 扩展 (ai/032)
+        case TokenKind::Shl: case TokenKind::Shr: case TokenKind::IsNot:
+        case TokenKind::PlusEq: case TokenKind::MinusEq:
+        case TokenKind::StarEq: case TokenKind::SlashEq:
+        case TokenKind::BackSlashEq: case TokenKind::CaretEq:
+        case TokenKind::AmpEq: case TokenKind::ShlEq:
+        case TokenKind::ShrEq: case TokenKind::ModEq:
             return true;
         default:
             return false;
@@ -183,9 +190,23 @@ const char* Token::kindToString(TokenKind kind) {
         case TokenKind::Eqv:             return "Eqv";
         case TokenKind::Imp:             return "Imp";
         case TokenKind::Is:              return "Is";
+        case TokenKind::IsNot:           return "IsNot";
+        case TokenKind::Shl:             return "<<";
+        case TokenKind::Shr:             return ">>";
         case TokenKind::Like:            return "Like";
         case TokenKind::AddressOf:       return "AddressOf";
         case TokenKind::TypeOf:          return "TypeOf";
+        // 复合赋值 (C3 扩展, ai/032)
+        case TokenKind::PlusEq:          return "+=";
+        case TokenKind::MinusEq:         return "-=";
+        case TokenKind::StarEq:          return "*=";
+        case TokenKind::SlashEq:         return "/=";
+        case TokenKind::BackSlashEq:     return "\\=";
+        case TokenKind::CaretEq:         return "^=";
+        case TokenKind::AmpEq:           return "&=";
+        case TokenKind::ShlEq:           return "<<=";
+        case TokenKind::ShrEq:           return ">>=";
+        case TokenKind::ModEq:           return "Mod=";
         // 分隔符
         case TokenKind::LeftParen:       return "(";
         case TokenKind::RightParen:      return ")";

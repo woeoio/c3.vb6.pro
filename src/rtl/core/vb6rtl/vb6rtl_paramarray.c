@@ -272,19 +272,14 @@ vb6_VARIANT vb6_CallByName(void* obj, const wchar_t* procName, int32_t callType,
                               invKind, &dp, &retVal, &excep, &argErr);
 
     if (SUCCEEDED(hr)) {
-        result.vt = (vb6_vartype)retVal.vt;
-        // Copy value from COM VARIANT to vb6_VARIANT
-        switch (retVal.vt) {
-            case VT_I2: result.iVal = retVal.iVal; break;
-            case VT_I4: result.lVal = retVal.lVal; break;
-            case VT_R4: result.fltVal = retVal.fltVal; break;
-            case VT_R8: result.dblVal = retVal.dblVal; break;
-            case VT_BSTR: result.bstrVal = retVal.bstrVal; VariantInit(&retVal); break;
-            case VT_DISPATCH: result.pdispVal = retVal.pdispVal; VariantInit(&retVal); break;
-            case VT_BOOL: result.boolVal = retVal.boolVal; break;
-            case VT_UI1: result.bVal = retVal.bVal; break;
-            default: result.lVal = retVal.lVal; break;
-        }
+        /* 账 #305 §B142 (第五十三刀): 这一格原来是一张八档的手抄表，而 default 写的是
+           `result.lVal = retVal.lVal` —— 标签照抄对端的、数值只搬 32 位。于是 IDispatch 交回
+           一枚 Date / Currency / LongLong / Decimal 时，槽里挂的是**那个档的标签 + 一截垃圾**
+           (Date 的 dblVal 是 8 字节，lVal 只搬了低 4 字节)，读的人按标签去解，错得看不出来。
+           真 VARIANT → 槽 的带权副本早已有一枚权威(vb6_VariantFromStackVARIANT，第五十三刀
+           把它的双胞胎合掉了)，这里改问它；retVal 的所有权照旧留在本地，函数尾那枚
+           VariantClear(&retVal) 一字未动 —— 交回来的是副本，清掉的是原件，收支各一次。 */
+        result = vb6_VariantFromStackVARIANT(&retVal);
     }
 
     // Cleanup

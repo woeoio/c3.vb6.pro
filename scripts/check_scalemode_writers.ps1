@@ -16,7 +16,8 @@
 #   W1  src/backend 里手拼发码 `"vb6_SetScaleMode(` = 恰好 1 处 (在权威里; 表里那是返回**名字**, 不算)
 #   W2  权威恰好定义一次, 函数体里 `properties.find("ScaleMode")` 与 `design ScaleMode` 都还在
 #   W3  三条落点各有一处调用 (顶层 / 容器 / 窗体 WM_CREATE) —— 少一条就是"只接一头"那个老症状
-#   W4  读写两张表成对: `return "vb6_WindowScaleModeSelf";` >= 2 且 `return "vb6_SetScaleMode";` >= 2
+#   W4  读写两张表成对: 读侧 `vb6_WindowScaleModeSelf` 的行数 >= 2 且写侧 `vb6_SetScaleMode` >= 2
+#       (账 #278 §B109: Form 那一行搬进了 src\common\form_pseudo.hpp 的表 ⇒ 读侧跨两处数)
 #   W5  RTL 里写 `VB6_ScaleMode` 这个属性名的地方 = 1 (只有 setter 自己), 读的地方 >= 2
 #
 # 用法:  pwsh -File scripts\check_scalemode_writers.ps1
@@ -25,6 +26,16 @@
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $bad = @()
+# 只认非注释部分（§B108 那条负控实测过一次：纯文本正则会连 `// addObj("X")` 一起算进名单）。
+function Strip-RowComments([string]$text) {
+    $kept = @()
+    foreach ($line in ($text -split "`r?`n")) {
+        $cut = $line.IndexOf('//')
+        $kept += $(if ($cut -ge 0) { $line.Substring(0, $cut) } else { $line })
+    }
+    return ($kept -join "`n")
+}
+
 
 $authRel = "src\backend\cgen_util_ctrl.cpp"
 $auth = Join-Path $root $authRel
@@ -96,9 +107,14 @@ foreach ($pair in $spots) {
 }
 
 # W4: 读写成对
-$nR = @([regex]::Matches($h, 'return\s+"vb6_WindowScaleModeSelf";')).Count
+# 账 #278 §B109: Form 那一行现在住在 src\common\form_pseudo.hpp 的表里（两层的唯一出口），
+# backend 只剩 PictureBox 那条 => 读侧要跨两处数, 少任何一处都算没登记。
+$fpRawA = [System.IO.File]::ReadAllText((Join-Path $root "src\common\form_pseudo.hpp"))
+$fpTxtA = Strip-RowComments $fpRawA
+$nR = @([regex]::Matches($h, 'return\s+"vb6_WindowScaleModeSelf";')).Count +
+      @([regex]::Matches($fpTxtA, '\{\s*"scalemode"\s*,\s*"vb6_WindowScaleModeSelf"')).Count
 $nW = @([regex]::Matches($h, 'return\s+"vb6_SetScaleMode";')).Count
-if ($nR -lt 2) { $bad += ("W4 read-table rows for scalemode = " + $nR + " (want >= 2: PictureBox 与 Form 各一条)") }
+if ($nR -lt 2) { $bad += ("W4 read-table rows for scalemode = " + $nR + " (want >= 2: backend 的 PictureBox 一条 + common 表里的 Form 一条)") }
 if ($nW -lt 2) { $bad += ("W4 write-table rows for scalemode = " + $nW + " (want >= 2, 与读侧成对)") }
 
 # W5: RTL 那头, 属性名只许 setter 一个人写; 读点不许哑

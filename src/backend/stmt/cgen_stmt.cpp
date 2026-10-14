@@ -11,6 +11,7 @@ namespace vb6c3 {
 void CCodeGen::emitStmtList(StmtList& stmts, bool emitResumePoints) {
     for (auto& stmt : stmts) {
         if (!stmt) continue;
+        bumpInferEpoch();   // ai/030 续: 语句边界推推断缓存 epoch (体内中途注册全落在语句边界)
 
         // P14.1.2: 在受保护区块中为每条语句生成resume点
         if (emitResumePoints && inProtectedBlock_ &&

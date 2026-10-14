@@ -236,9 +236,10 @@ void vb6_SetAutoRedraw(void* hwnd, int32_t val) {
         HDC memDC = CreateCompatibleDC(hdc);
         HBITMAP memBmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
         HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
-        // 用背景色填充
-        HBRUSH bgBrush = (HBRUSH)(COLOR_BTNFACE + 1);
-        FillRect(memDC, &rc, bgBrush);
+        // 用背景色填充 (VB6 语义: 持久位图初始 = BackColor; 此前硬编码
+        // COLOR_BTNFACE, 窗体设了 BackColor 时首帧闪一帧错的底色)
+        HBRUSH bgBrush = CreateSolidBrush((COLORREF)vb6_GetControlBackColor(hwnd));
+        if (bgBrush) { FillRect(memDC, &rc, bgBrush); DeleteObject(bgBrush); }
         // 存储
         SetPropW((HWND)hwnd, L"VB6_AutoRedrawDC", (HANDLE)memDC);
         SetPropW((HWND)hwnd, L"VB6_AutoRedrawBmp", (HANDLE)memBmp);
@@ -251,6 +252,16 @@ void vb6_SetAutoRedraw(void* hwnd, int32_t val) {
         if (hMemDC) { DeleteDC((HDC)hMemDC); RemovePropW((HWND)hwnd, L"VB6_AutoRedrawDC"); }
         if (hMemBmp) { DeleteObject((HBITMAP)hMemBmp); RemovePropW((HWND)hwnd, L"VB6_AutoRedrawBmp"); }
     }
+}
+
+/* Fix <c3-menu3d>: AutoSize 把控件从设计期 25x25 放大到图片本征尺寸 (127x127) 之后,
+ * ARDC 仍是 WM_CREATE 时按旧客户区建的小位图 —— 镜像 127x127 图标照样被 25x25 裁掉,
+ * 格子只剩 BackColor。按新客户区重建记忆位图 (与 SetAutoRedraw 同口径)。 */
+void vb6_AutoRedrawRefit(void* hwnd) {
+    if (!hwnd) return;
+    if (!GetPropW((HWND)hwnd, L"VB6_AutoRedrawDC")) return;
+    vb6_SetAutoRedraw(hwnd, 0);
+    vb6_SetAutoRedraw(hwnd, 1);
 }
 
 int32_t vb6_GetScaleMode(void* hwnd) {

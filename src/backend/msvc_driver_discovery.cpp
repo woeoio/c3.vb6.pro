@@ -4,12 +4,49 @@
 #include <cstdio>
 #include <string>
 #include <filesystem>
+#include <chrono>
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
 namespace vb6c3 {
+
+// T30-C (ai/030 §六): 把 `vcvarsall.bat <arch> && set` 的输出解析并注入本进程环境。
+// 为什么双通道写:
+//   · SetEnvironmentVariableW —— 更新 Win32 进程环境块, 子进程 cl/link (CreateProcess
+//     继承本进程块) 靠这条;
+//   · _putenv_s —— UCRT 的 getenv 读的是 CRT 自己的副本, 不跟随 Win32 块, 而本文件
+//     上面那句 `getenv("VCINSTALLDIR")` 的早退判据读的正是它。两条都要喂, 缺一条
+//     就会出现"注入成功但下次仍重复捕获"或"子进程看不到"的半吊状态。
+// 值非 ASCII 的理论风险: `set` 的输出按控制台代码页 —— 先按 CP_OEMCP 宽转, 失败的行跳过。
+static int injectVcvarsEnvFromSetOutput(const std::string& out) {
+    int n = 0;
+    size_t pos = 0;
+    while (pos < out.size()) {
+        size_t eol = out.find('\n', pos);
+        size_t end = (eol == std::string::npos) ? out.size() : eol;
+        std::string line = out.substr(pos, end - pos);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        pos = (eol == std::string::npos) ? out.size() : eol + 1;
+        size_t eq = line.find('=');
+        if (eq == std::string::npos || eq == 0) continue;  // 空行/无等号/`=C:` 这类 cmd 特殊变量
+        const std::string name = line.substr(0, eq);
+        const std::string value = line.substr(eq + 1);
+        int wl = MultiByteToWideChar(CP_OEMCP, 0, name.c_str(), -1, nullptr, 0);
+        int wv = MultiByteToWideChar(CP_OEMCP, 0, value.c_str(), -1, nullptr, 0);
+        if (wl <= 0 || wv <= 0) continue;
+        std::wstring wname(wl, L'\0'), wvalue(wv, L'\0');
+        MultiByteToWideChar(CP_OEMCP, 0, name.c_str(), -1, &wname[0], wl);
+        MultiByteToWideChar(CP_OEMCP, 0, value.c_str(), -1, &wvalue[0], wv);
+        wname.pop_back();
+        wvalue.pop_back();
+        SetEnvironmentVariableW(wname.c_str(), wvalue.c_str());
+        _putenv_s(name.c_str(), value.c_str());
+        n++;
+    }
+    return n;
+}
 
 bool MsvcDriver::isMsvcAvailable() {
     // 1. Check if vcvarsall environment already set
@@ -163,6 +200,14 @@ std::string MsvcDriver::findMl64Exe() {
 
 // P11.4: Build vcvarsall.bat prefix if needed
 std::string MsvcDriver::buildVcvarsPrefix(const std::string& arch) const {
+    // T30-C (ai/030 §六): 每进程每架构只捕获一次 vcvarsall —— 旧行为每次调用都前置一条
+    // `call vcvarsall.bat`, 而一次构建要付两遍 (cl 前缀 + link 前缀, 实测 1.3~5s/遍)。
+    // 现在首遍把 `set` 输出注入本进程, 其后所有调用由上面那段 "VCINSTALLDIR 已设" 的
+    // 早退自然短路 (注入的 env 正好让 P24-05 的判据成立); 注入失败则原样退回"每次都前置"。
+    static bool s_injectedX64 = false;
+    static bool s_injectedX86 = false;
+    bool& injected = (arch == "x86") ? s_injectedX86 : s_injectedX64;
+
     // P24-05: Check if vcvarsall already set AND target arch matches current env
     const char* vcDir = std::getenv("VCINSTALLDIR");
     if (vcDir && vcDir[0] != '\0') {
@@ -186,9 +231,29 @@ std::string MsvcDriver::buildVcvarsPrefix(const std::string& arch) const {
         }
     }
 
+    if (injected) return "";  // 注入成功过 —— 便携工具链没有 VSCMD_ARG_TGT_ARCH 时上面认不出来, 这里兜底
+
     // Try to find vcvarsall.bat
     std::string vcvars = findVcvarsallBat();
     if (!vcvars.empty()) {
+        // T30-C: 首遍捕获 (一次 vcvarsall, 与旧行为第一遍同价) —— 之后靠注入的 env 短路。
+        std::string out;
+        auto t0 = std::chrono::steady_clock::now();
+        int rc = executeCommandCapture("call \"" + vcvars + "\" " + arch + " >nul 2>&1 && set", out);
+        double capMs = std::chrono::duration<double, std::milli>(
+                           std::chrono::steady_clock::now() - t0).count();
+        if (rc == 0) {
+            int n = injectVcvarsEnvFromSetOutput(out);
+            if (n > 0) {
+                injected = true;
+                if (std::getenv("C3_TIMING")) {
+                    std::fprintf(stderr, "C3: TIMING vcvars-inject arch=%s vars=%d capMs=%.0f\n",
+                                 arch.c_str(), n, capMs);
+                    std::fflush(stderr);
+                }
+                return "";
+            }
+        }
         return "call \"" + vcvars + "\" " + arch + " >nul 2>&1 && ";
     }
 

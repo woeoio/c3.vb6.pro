@@ -14,7 +14,21 @@ namespace vb6c3 {
 // ============================================================
 // Fix 011r-1: 类实例成员调用解析 (跨模块符号表的精确类查找)
 // ============================================================
+// ai/030 续 (§性能): 带 memo 的包装 —— 真身 (…Uncached) 每次全表扫 moduleScope;
+// 键 = (className, memberName) 各自小写 + '\x1f' 连接。命中即回, 语义与真身逐字一致。
 std::string CCodeGen::resolveClassMemberCall(const std::string& className,
+                                             const std::string& memberName) const {
+    if (className.empty()) return "";
+    const std::string memoKey =
+        Symbol::toLower(className) + '\x1f' + Symbol::toLower(memberName);
+    auto itMemo = classMemberCallMemo_.find(memoKey);
+    if (itMemo != classMemberCallMemo_.end()) return itMemo->second;
+    std::string r = resolveClassMemberCallUncached(className, memberName);
+    classMemberCallMemo_.emplace(memoKey, r);
+    return r;
+}
+
+std::string CCodeGen::resolveClassMemberCallUncached(const std::string& className,
                                                const std::string& memberName) const {
     if (className.empty()) return "";
     if (!symTab_.moduleScope()) return "";
@@ -112,7 +126,11 @@ std::string CCodeGen::resolveClassMemberCall(const std::string& className,
                 std::string canonFix = classCanonFix.empty() ? canonicalClassName : classCanonFix;
                 switch (itKindFix->second) {
                     case ProcKind::PropertyGet:
-                        return "vb6_" + cIdent(canonFix) + "_prop_get_" + cIdent(memberCanon);
+                        // Fix 269: 前缀与成员名要**一起**过 cIdent —— 与定义侧
+                        // makePropertySignature 同口径 (成员名 `Default` 单独过会
+                        // 变 "vb6_Default", 定义侧却是 "prop_get_Default")。
+                        return "vb6_" + cIdent(canonFix) + "_"
+                             + propFnSegment("prop_get_", memberCanon);
                     case ProcKind::Function:
                     case ProcKind::Sub:
                         return "vb6_" + cIdent(canonFix) + "_" + cIdent(memberCanon);
@@ -195,7 +213,8 @@ std::string CCodeGen::resolveClassMemberCall(const std::string& className,
                             cIdent(classCanonName).c_str(), prefix.c_str(),
                             cIdent(mn).c_str());
                     }
-                    return "vb6_" + cIdent(classCanonName) + "_" + prefix + cIdent(mn);                }
+                    return "vb6_" + cIdent(classCanonName) + "_"
+                         + propFnSegment(prefix, mn);                }
             }
         }
         if (dbg159) {
@@ -220,7 +239,8 @@ std::string CCodeGen::resolveClassMemberCall(const std::string& className,
                      cIdent(canonicalClassName).c_str(), prefix.c_str(),
                      cIdent(memberCanon).c_str(), (int)chosen->kind);
     }
-    return "vb6_" + cIdent(canonicalClassName) + "_" + prefix + cIdent(memberCanon);
+    return "vb6_" + cIdent(canonicalClassName) + "_"
+         + propFnSegment(prefix, memberCanon);
 }
 
 
@@ -235,6 +255,31 @@ std::string CCodeGen::resolveClassMemberCall(const std::string& className,
 // 此时 Phase B 通过 Class 符号自身的 memberParams 表 (semantic_analyzer 在
 // 类扫描阶段已填好, 按 Get > Function > Sub > Let > Set 优先级存参数) 取回.
 bool CCodeGen::findClassMemberCallParams(const std::string& className,
+                                         const std::string& memberName,
+                                         std::vector<ParameterInfo>& outParams,
+                                         bool& outIsBuiltin) const {
+    outParams.clear();
+    outIsBuiltin = false;
+    if (className.empty()) return false;
+    const std::string memoKey =
+        Symbol::toLower(className) + '\x1f' + Symbol::toLower(memberName);
+    auto itMemo = classMemberCallParamsMemo_.find(memoKey);
+    if (itMemo != classMemberCallParamsMemo_.end()) {
+        if (!itMemo->second.found) return false;
+        outParams = itMemo->second.params;
+        outIsBuiltin = itMemo->second.isBuiltin;
+        return true;
+    }
+    bool r = findClassMemberCallParamsUncached(className, memberName, outParams, outIsBuiltin);
+    ClassMemberParamsMemo m;
+    m.found = r;
+    m.isBuiltin = outIsBuiltin;
+    m.params = outParams;
+    classMemberCallParamsMemo_.emplace(memoKey, std::move(m));
+    return r;
+}
+
+bool CCodeGen::findClassMemberCallParamsUncached(const std::string& className,
                                          const std::string& memberName,
                                          std::vector<ParameterInfo>& outParams,
                                          bool& outIsBuiltin) const {
@@ -371,6 +416,94 @@ bool CCodeGen::findClassMemberWriteParams(const std::string& className,
         }
     }
 
+    return false;
+}
+
+
+// ============================================================
+// Fix 240: 属性读方向 (Property Get) 参数查找 (声明见 cgen.hpp)
+// ============================================================
+// 为什么另开一张表、而不是复用 findClassMemberCallParams: 实测「Get 与 Let 并存」的
+// 属性 (ComCtlsDemo ListView.ctl:6928/6949
+//   Property Get InsertMark(Optional ByRef After As Boolean) As LvwListItem
+//   Property Let InsertMark(Optional ByRef After As Boolean, ByVal Value As LvwListItem)
+// ) 在**窗体消费侧**经 findClassMemberCallParams 拿到的是 **Let** 那一份
+// [After, Value] —— 这正是 cgen_expr_member_class_module.inc 那段「属性不 pad」注释
+// 记下的现象。拿 Let 表去补 prop_get_ 的 Optional 入口参数, 会多发一枚
+// `vb6_VariantEmpty()`(Let 末参 Value 的默认值) 顶到 `int _has_After` 位置上
+// → C2440 "无法从 vb6_VARIANT 转换为 int" (ComCtlsDemo MainForm.c 十余处)。
+// 这里只认读方向那一份; Phase B 必须带「不许与 Let 同宽」那道否决 —— 认不出就不 pad
+// (宁可退回"参数太少" C2198, 也不拿错方向的表硬凑参数个数; 个数错了会静默编过)。
+bool CCodeGen::findClassMemberGetParams(const std::string& className,
+                                        const std::string& memberName,
+                                        std::vector<ParameterInfo>& outParams) const {
+    outParams.clear();
+    if (className.empty() || memberName.empty()) return false;
+    const std::string memoKey =
+        Symbol::toLower(className) + '\x1f' + Symbol::toLower(memberName);
+    auto itMemo = classMemberGetParamsMemo_.find(memoKey);
+    if (itMemo != classMemberGetParamsMemo_.end()) {
+        if (!itMemo->second.found) return false;
+        outParams = itMemo->second.params;
+        return true;
+    }
+    bool r = findClassMemberGetParamsUncached(className, memberName, outParams);
+    ClassMemberParamsMemo m;
+    m.found = r;
+    m.params = outParams;
+    classMemberGetParamsMemo_.emplace(memoKey, std::move(m));
+    return r;
+}
+
+bool CCodeGen::findClassMemberGetParamsUncached(const std::string& className,
+                                        const std::string& memberName,
+                                        std::vector<ParameterInfo>& outParams) const {
+    outParams.clear();
+    if (className.empty() || memberName.empty() || !symTab_.moduleScope()) return false;
+
+    const std::string memberLower = Symbol::toLower(memberName);
+    const std::string classLower  = Symbol::toLower(className);
+
+    for (const auto& [key, sym] : symTab_.moduleScope()->symbols()) {
+        if (!sym || sym->kind != SymbolKind::PropertyGet) continue;
+        if (sym->lowerName != memberLower) continue;
+        bool matches = false;
+        if (sym->isExternal) {
+            if (Symbol::toLower(sym->sourceModule) == classLower) matches = true;
+        } else if (isClassModule_ && Symbol::toLower(moduleName_) == classLower) {
+            matches = true;
+        }
+        if (!matches) continue;
+        outParams = sym->params;
+        return true;
+    }
+
+    // ---- Phase B: Class 符号自身的 memberParams ----
+    // 语义分析按「Get 总是胜出」填充 (semantic_analyzer_decl.cpp:294-297: propKind 为
+    // PropertyGet 时 wins=true) ⇒ 有 Get 的成员这条表就是读方向那一份。
+    // 消费侧 (窗体引用工程内 .ctl) Phase A 实测匹配不到 external PropertyGet 符号,
+    // 故这一跳不是可选的 —— 少了它 pad 整个失效, C2198 原样回来。
+    for (const auto& [ckey, csym] : symTab_.moduleScope()->symbols()) {
+        if (!csym || csym->kind != SymbolKind::Class) continue;
+        bool classMatches = false;
+        if (csym->isExternal) {
+            if (Symbol::toLower(csym->sourceModule) == classLower) classMatches = true;
+        } else if (isClassModule_ && Symbol::toLower(moduleName_) == classLower) {
+            classMatches = true;
+        }
+        if (!classMatches) continue;
+        auto it = csym->memberParams.find(memberLower);
+        if (it == csym->memberParams.end()) continue;
+        // 只认**读方向**的形状: memberParams 是单值槽, 万一被 Let 覆盖过就会带上
+        // 末参 Value —— 那种表拿去 pad prop_get_ 会让 `vb6_VariantEmpty()` 顶掉
+        // `int _has_After` (C2440)。宁可退回 C2198 (少量) 也不要错方向的表。
+        if (csym->memberLetParams.count(memberLower)
+            && csym->memberLetParams[memberLower].size() == it->second.size()) {
+            return false;   // 与 Let 同宽 ⇒ 不能断定是读方向, 不 pad
+        }
+        outParams = it->second;
+        return true;
+    }
     return false;
 }
 
@@ -546,6 +679,23 @@ bool CCodeGen::classMemberReturnsAsObject(const std::string& className,
         const std::string l = Symbol::toLower(n);
         return l == "object" || l == "variant" || l == "empty" || l == "null";
     };
+    // Fix 246b: 判据必须也认 **COM 接口名**。
+    //   `Property Get Picture() As IPictureDisp` 记下来的返回类型名就是
+    //   "IPictureDisp" —— 它不是 "object"/"variant" 那几个字面量, 于是 Fix 246
+    //   对 ComCtlsDemo ToolBar.ctl:4194/4200 的 `.Picture.Handle` / `.Picture.Type`
+    //   **一直没生效** (ToolBar.c 7147/7151/7153/7198/7202/7204 六条 C2223 至今还在)。
+    //   这里改用与定义侧同一份映射: 名字映射成 `vb6_ComIface_*` 或以 "void*" 收场
+    //   (typelib 注入的接口在当前模块查不到时 mapTypeRef 的兜底) 都算"对象型"。
+    //   注意工程类是 "vb6_cls_*", 不在此列 —— 真返回工程类仍走原生 `->` 路径。
+    auto isComIfaceName = [this](const std::string& n) {
+        if (n.empty()) return false;
+        const std::string ct =
+            const_cast<CCodeGen*>(this)->cTypeForDeclaredTypeName(n);
+        return ct == "void*" || ct.compare(0, 12, "vb6_ComIface_") == 0;
+    };
+    auto isObjectishEx = [&](const std::string& n) {
+        return isObjectish(n) || isComIfaceName(n);
+    };
     // ① 类符号的 memberReturnTypes
     for (const auto& [ck, cs] : symTab_.moduleScope()->symbols()) {
         if (cs->kind != SymbolKind::Class) continue;
@@ -554,19 +704,24 @@ bool CCodeGen::classMemberReturnsAsObject(const std::string& className,
             : (Symbol::toLower(cs->name) == classLower);
         if (!clsHit) continue;
         auto it = cs->memberReturnTypes.find(memberLower);
-        if (it != cs->memberReturnTypes.end() && isObjectish(it->second)) return true;
+        if (it != cs->memberReturnTypes.end() && isObjectishEx(it->second)) return true;
         break;
     }
     // ② 成员符号本体
     for (const auto& [k, s] : symTab_.moduleScope()->symbols()) {
         if (s->lowerName != memberLower) continue;
+        // Fix 246b: 原来非 external 只认"成员属于**当前编译模块**"
+        // (isClassModule_ && moduleName_ == classLower), 于是 **跨模块**的类成员
+        // 一律 continue —— 编 ToolBar 时找 TbrButtonMenu.Picture 永远匹配不上。
+        // 按 sourceModule 定位成员的归属类才是这条本来想问的事。
         const bool clsHit = s->isExternal
             ? (Symbol::toLower(s->sourceModule) == classLower)
-            : (isClassModule_ && Symbol::toLower(moduleName_) == classLower);
+            : (Symbol::toLower(s->sourceModule) == classLower
+               || (isClassModule_ && Symbol::toLower(moduleName_) == classLower));
         if (!clsHit) continue;
         if (s->kind != SymbolKind::PropertyGet && s->kind != SymbolKind::Function) continue;
         if (s->type != Vb6Type::Object) continue;
-        if (!s->variableTypeName.empty() && !isObjectish(s->variableTypeName)
+        if (!s->variableTypeName.empty() && !isObjectishEx(s->variableTypeName)
             && isClassName(s->variableTypeName))
             return false;               // 真的返回工程类 → 走原生路径
         return true;
@@ -593,18 +748,29 @@ bool CCodeGen::emitUcInstanceMemberExpr(const std::string& ucClass,
         lastExpr_ = resolvedFn;
         return true;
     }
-    // 值上下文无括号调用: 按形参表补 Optional 默认值 (同 Fix 089h)
+    // 值上下文无括号调用: 按形参表补 Optional 默认值 (同 Fix 089h)。
+    // Fix 239/240: `_prop_get_` 也要补, 但形参表必须取**读方向**那一份 ——
+    // findClassMemberCallParams 对 Get+Let 并存的属性交回 Let 表 (末参 Value),
+    // 按它补会多发一枚 vb6_VariantEmpty() 顶到 `int _has_After` → C2440。
+    const bool isPropGet239 = resolvedFn.find("_prop_get_") != std::string::npos;
     std::vector<ParameterInfo> paramsUC;
     bool isBuiltinUC = false;
-    if (resolvedFn.find("_prop_") == std::string::npos
-        && findClassMemberCallParams(ucClass, member, paramsUC, isBuiltinUC)
-        && !paramsUC.empty() && !isBuiltinUC) {
+    bool paramsOkUC = findClassMemberCallParams(ucClass, member, paramsUC, isBuiltinUC)
+                      && !isBuiltinUC;
+    if (isPropGet239) {
+        // 读方向那份说了算: 取不到就**不补** (CallParams 对 Get+Let 并存给的是 Let 表)
+        paramsOkUC = findClassMemberGetParams(ucClass, member, paramsUC);
+        isBuiltinUC = false;
+    }
+    if ((resolvedFn.find("_prop_") == std::string::npos || isPropGet239)
+        && paramsOkUC
+        && !paramsUC.empty()) {
         std::string argListUC = thisArg;
         for (size_t i = 0; i < paramsUC.size(); i++) {
             const auto& pm = paramsUC[i];
             argListUC += ", ";
             std::string defV = (pm.hasDefaultValue && !pm.defaultValueExpr.empty())
-                             ? pm.defaultValueExpr : defaultValue(pm.type);
+                             ? pm.defaultValueExpr : defaultValueForParam(pm);
             if (pm.isByVal) argListUC += defV;
             else {
                 std::string ct = mapType(pm.type);

@@ -1,4 +1,4 @@
-#include "backend/cgen.hpp"
+﻿#include "backend/cgen.hpp"
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -28,6 +28,16 @@ std::string CCodeGen::resolveUdtMemberArrayCType(const std::string& lowerVar) co
     auto it = knownUdtVars_.find(lowerVar.substr(0, dot));
     if (it == knownUdtVars_.end()) return "";
     return udtFieldObjCType(it->second, lowerVar.substr(dot + 1));
+}
+
+// 账 #305 §B156 (第四十四刀): 多维 ReDim 的界数组临时量以前**按数组名**拼
+// (`_redim_bounds_<名>`)，于是同一过程里第二条指向同一枚数组的多维 ReDim 会把同一条
+// `vb6_SafeArrayBound <名>[] = {…};` 在同一个 C 函数里发两遍 ⇒ cl C2374「重定义；多次初始化」
+// (两台同形，旧的那台也红 —— 读数 .build/b1395_k43/{n6,b6}/c3-error.log)。
+// 这一枚是**唯一拼法**出口：名字自带语句序号，visit(ReDimStmt) 与 emitReDimComplexTarget
+// 两条发码路都问它（以前两各路各拼一份，是「同一件事两处写法不同形」的又一例）。
+std::string CCodeGen::nextNDBoundsTemp(const std::string& base) {
+    return "_redim_bounds_" + base + "_" + std::to_string(ndBoundsSeq_++);
 }
 
 void CCodeGen::visit(ReDimStmt& node) {
@@ -89,7 +99,11 @@ void CCodeGen::visit(ReDimStmt& node) {
             cName = withObjectVars_.back() + "->" + cIdent(memberName);
         }
     }
-    Vb6Type elemType = resolveArrayElemType(node.asType.get());
+    // 账 #305 §B154 (第四十二刀): 元素档改问 resolveReDimElemType —— 写了 As 子句照旧优先,
+    // 没写时**问声明** (arrayElemTypes_, 与访问侧 VB6_SA_AT / VB6_SA_ND_AT2 同一张表)。
+    // 旧写法只问 asType, 于是裸写 `ReDim a(5)` 的标量/字符串/对象数组一律造出
+    // vb6_sa_variant 而访问按声明的 C 类型步进 —— 只有 UDT 那一族有回退 (:109)。
+    Vb6Type elemType = resolveReDimElemType(lowerVar, node.asType.get());
     // Fix 192: `ReDim a(1) As Circle` 的元素类名登记 (与声明侧 `Dim a() As C` 对称).
     // 这是本缺口**最初被发现的形状** (`ReDim ... As <类名>`), 但实测静态数组
     // `Dim s(1) As C` 一样坏 —— 根因在访问侧推断, 不在 ReDim。此处登记是让
@@ -123,6 +137,23 @@ void CCodeGen::visit(ReDimStmt& node) {
 
     if (node.dimensions.empty()) return;
 
+    // 账 #305 第二十二层 (2026-10-13): ReDim 的边界表达式若是 **COM 成员读**
+    // (`ReDim Preserve a(1 To coll.Count)`), emitExpr 只发出**接收者对象**
+    // (`me->coll`) 并在 lastExpr_ 里留下待 resolve 的 COM 标记; 此处以前直接取
+    // lastExpr_ 当界 ⇒ 把**对象指针**当元素个数。实测 ImcComboItems.Add 的
+    // `ReDim Preserve PropIndexPtrArr(1 To PropComboItem.Count)`: 界成了
+    // PropComboItem 的堆指针 (≈7.8e7) ⇒ 每次 Add 给 TINDEXPTR 数组 calloc+memcpy
+    // ≈600MB, 30 次 Add 拷贝 ≈15GB ⇒ 启动窗口被拖到 8s+ (采样剖析: 84% 时间在
+    // CopyUpLargeMov/memmove)。
+    // 与 For 循环三表达式同一律 (cgen_control.cpp emitForExpr092n): 取界之前先
+    // 消费 COM 标记 —— 清标记 → emitExpr → 若产生标记则 resolveComValue("Long")。
+    auto emitRedimBound = [&](Expr& e) -> std::string {
+        isComMarker_ = false;
+        emitExpr(e);
+        if (isComMarker_) resolveComValue("Long");
+        return std::move(lastExpr_);
+    };
+
     int dimCount = (int)node.dimensions.size();
 
     if (dimCount == 1) {
@@ -130,14 +161,8 @@ void CCodeGen::visit(ReDimStmt& node) {
         auto& dim = node.dimensions[0];
         std::string lBound = "0";
         std::string uBound = "0";
-        if (dim.lower) {
-            emitExpr(*dim.lower);
-            lBound = std::move(lastExpr_);
-        }
-        if (dim.upper) {
-            emitExpr(*dim.upper);
-            uBound = std::move(lastExpr_);
-        }
+        if (dim.lower) lBound = emitRedimBound(*dim.lower);
+        if (dim.upper) uBound = emitRedimBound(*dim.upper);
 
         if (node.preserve) {
             // Fix 084a: Variant 数组 ReDim Preserve — 实参提取 SafeArray, 结果包装回 Variant
@@ -184,14 +209,15 @@ void CCodeGen::visit(ReDimStmt& node) {
         if (isClassModule_ && classMemberVars_.count(lowerVar) && !knownLocalVars_.count(lowerVar)) {
             rawCName = "me_" + rawCName;
         }
-        std::string boundsVar = "_redim_bounds_" + rawCName;
+        // 账 #305 §B156 (第四十四刀): 界数组临时量走唯一出口，名字带语句序号
+        std::string boundsVar = nextNDBoundsTemp(rawCName);
         c_.emitLine("vb6_SafeArrayBound " + boundsVar + "[] = {");
         c_.indent();
         for (int d = 0; d < dimCount; d++) {
             auto& dim = node.dimensions[d];
             std::string lb = "0", ub = "0";
-            if (dim.lower) { emitExpr(*dim.lower); lb = std::move(lastExpr_); }
-            if (dim.upper) { emitExpr(*dim.upper); ub = std::move(lastExpr_); }
+            if (dim.lower) lb = emitRedimBound(*dim.lower);
+            if (dim.upper) ub = emitRedimBound(*dim.upper);
             std::string trailing = (d < dimCount - 1) ? "," : "";
             // vb6_SafeArrayBound = {lLbound, cElements}
             // cElements = uBound - lBound + 1 (VB6 "0 To 3" has 4 elements)
@@ -204,7 +230,15 @@ void CCodeGen::visit(ReDimStmt& node) {
         std::string wrapBack = "";
         if (isVariantArrayVar(cName)) {
             redimArg = "vb6_VariantToSafeArray1D(" + cName + ")";
-            wrapBack = "vb6_VariantFromValue(";
+            // 账 #305 §B154 第二格: 装箱那一层**必须先把 ND 描述符投成 vb6_SafeArray1D***。
+            // vb6_VariantFromValue 是 _Generic, 名单里只有 `vb6_SafeArray1D*` 这一档 (没有
+            // SafeArrayND 的 arm), 递一枚 vb6_SafeArrayND* 进去会掉进 default = vb6_VariantObject
+            // ⇒ 槽的 vt 成了 DISPATCH, 而 vb6_VariantArraySet/GetND 开头只认 vt & vb6_vtArray
+            // ⇒ 一声不响地不写也不读 (实测 `Dim x As Variant` + `ReDim x(1, 2)` + x(1,1)="S"
+            // 读回**空串**)。仓里对多维描述符的既有约定本来就是「1D 指针当载体, 用时再投回 ND」
+            // (见上面 (vb6_SafeArrayND*)redimArg 与下面 DestroyND 那两枚强转), 所以补的是这**一层
+            // 投影**, 不是给 _Generic 开新档。
+            wrapBack = "vb6_VariantFromValue((vb6_SafeArray1D*)";
         }
         if (node.preserve) {
             std::string res;
@@ -212,10 +246,19 @@ void CCodeGen::visit(ReDimStmt& node) {
                 // Bug4-Fix Udt Preserve: 多维 UDT 数组传入元素尺寸
                 res = "vb6_SafeArrayReDimPreserveND_Udt((int32_t)sizeof(" + udtCType + "), (vb6_SafeArrayND*)" + redimArg + ", " + std::to_string(dimCount) + ", " + boundsVar + ")";
             } else {
-                res = "vb6_SafeArrayReDimPreserveND((vb6_SafeArrayND*)" + redimArg + ", " + std::to_string(dimCount) + ", " + boundsVar + ")";
+                // 账 #305 §B155 格④ (第四十三刀): 这一枚也要**把档递下去** —— 上面
+                // 不带 Preserve 的那一支 (:244) 一直递 saElemType, Preserve 这一支却递了
+                // 空手, 于是「首次分配就走 Preserve」的形状在 RTL 里回落 vb6_sa_empty
+                // (4 字节一步) 而访问按声明档走 —— 同一件事两处写法不同形, 第三例。
+                res = "vb6_SafeArrayReDimPreserveND(" + saElemType + ", (vb6_SafeArrayND*)" + redimArg + ", " + std::to_string(dimCount) + ", " + boundsVar + ")";
             }
             if (!wrapBack.empty()) res = wrapBack + res + ")";
-            c_.emitLine(cName + " = (vb6_SafeArray1D*)" + res + ";");
+            // 账 #305 §B154 第二格: 那枚 (vb6_SafeArray1D*) 强转**只在该槽是数组指针时**才成立。
+            // wrapBack 非空时右值已经是 vb6_VARIANT (Dim x As Variant + ReDim x(1, 2)), 强转
+            // 就把装箱盖住了 —— BASE 上这一形实测 cl C2440「无法从 vb6_VARIANT 转换为
+            // vb6_SafeArray1D*」, 也就是多维的 Variant 槽那一条从没能编过 (一维那条没有强转,
+            // 见上面 dimCount==1 的 newVal, 所以只有多维红 —— 又是一个同一件事两处写法不同形)。
+            c_.emitLine(cName + " = " + (wrapBack.empty() ? "(vb6_SafeArray1D*)" : "") + res + ";");
         } else {
             std::string destroyArg = redimArg;
             c_.emitLine("vb6_SafeArrayDestroyND((vb6_SafeArrayND*)" + destroyArg + ");");
@@ -227,7 +270,9 @@ void CCodeGen::visit(ReDimStmt& node) {
                 newVal = "vb6_SafeArrayReDimND(" + saElemType + ", " + std::to_string(dimCount) + ", " + boundsVar + ")";
             }
             if (!wrapBack.empty()) newVal = wrapBack + newVal + ")";
-            c_.emitLine(cName + " = (vb6_SafeArray1D*)" + newVal + ";");
+            // 与上面 Preserve 那一支同一个决定 (账 #305 §B154 第二格): wrapBack 在场就是
+            // vb6_VARIANT, 那枚指针强转会把装箱盖住 (BASE 实测 cl C2440)。
+            c_.emitLine(cName + " = " + (wrapBack.empty() ? "(vb6_SafeArray1D*)" : "") + newVal + ";");
         }
 
         // 鏇存柊鏁扮粍缁村害淇℃伅
@@ -310,12 +355,21 @@ void CCodeGen::emitReDimComplexTarget(ReDimStmt& node) {
     if (node.dimensions.empty()) return;
     int dimCount = (int)node.dimensions.size();
 
+    // 账 #305 第二十二层: 与 visit(ReDimStmt&) 同一律 —— ReDim 界若是 COM 成员读,
+    // emitExpr 只发对象并留 COM 标记, 必须 resolve 后再当界 (否则对象指针成了元素数)。
+    auto emitRedimBound = [&](Expr& e) -> std::string {
+        isComMarker_ = false;
+        emitExpr(e);
+        if (isComMarker_) resolveComValue("Long");
+        return std::move(lastExpr_);
+    };
+
     if (dimCount == 1) {
         auto& dim = node.dimensions[0];
         std::string lBound = "0";
         std::string uBound = "0";
-        if (dim.lower) { emitExpr(*dim.lower); lBound = std::move(lastExpr_); }
-        if (dim.upper) { emitExpr(*dim.upper); uBound = std::move(lastExpr_); }
+        if (dim.lower) lBound = emitRedimBound(*dim.lower);
+        if (dim.upper) uBound = emitRedimBound(*dim.upper);
 
         if (node.preserve) {
             if (isUdtArray) {
@@ -339,18 +393,22 @@ void CCodeGen::emitReDimComplexTarget(ReDimStmt& node) {
             c_.emitLine(cName + " = " + newVal + ";");
         }
     } else {
-        // 多维 ReDim: bounds 局部数组名由目标左值净化得到 (仅需 C 标识符合法)
-        std::string boundsVar = "_redim_bounds";
+        // 多维 ReDim: bounds 局部数组名由目标左值净化得到 (仅需 C 标识符合法)。
+        // 账 #305 §B156 (第四十四刀): 拼法改问同一枚出口 —— 以前这里也按名字裸拼
+        // (`_redim_bounds` + 净化后的左值)，同一过程里两条指向同一目标的多维 ReDim
+        // 一样撞 C2374。序号由出口统一给，两条路不再各写一份。
+        std::string boundsSuffix;
         for (char ch : cName) {
-            if (isalnum((unsigned char)ch) || ch == '_') boundsVar += ch;
+            if (isalnum((unsigned char)ch) || ch == '_') boundsSuffix += ch;
         }
+        std::string boundsVar = nextNDBoundsTemp(boundsSuffix);
         c_.emitLine("vb6_SafeArrayBound " + boundsVar + "[] = {");
         c_.indent();
         for (int d = 0; d < dimCount; d++) {
             auto& dim = node.dimensions[d];
             std::string lb = "0", ub = "0";
-            if (dim.lower) { emitExpr(*dim.lower); lb = std::move(lastExpr_); }
-            if (dim.upper) { emitExpr(*dim.upper); ub = std::move(lastExpr_); }
+            if (dim.lower) lb = emitRedimBound(*dim.lower);
+            if (dim.upper) ub = emitRedimBound(*dim.upper);
             std::string trailing = (d < dimCount - 1) ? "," : "";
             c_.emitLine("{" + lb + ", (" + ub + " - " + lb + " + 1)}" + trailing);
         }
@@ -409,7 +467,11 @@ void CCodeGen::visit(EraseStmt& node) {
         if (it != arrayDimCounts_.end() && it->second > 1) {
             c_.emitLine("vb6_SafeArrayDestroyND((vb6_SafeArrayND*)" + cName + "); " + cName + " = NULL;");
         } else {
-            c_.emitLine("vb6_SafeArrayDestroy1D(" + cName + "); " + cName + " = NULL;");
+            // Fix <vbeclipse> 2026-10-06: 1D 数组统一走 vb6_EraseArrayVar —
+            // 动态数组释放存储置 NULL, **固定数组保留存储**只把元素重置
+            // (数值/BSTR/Variant 按 VB6 文档口径; 此前固定数组也被整块释放,
+            //  Erase VarArray 后再访问 UBound/元素直接错误 9, t3.bas 实测)。
+            c_.emitLine("vb6_EraseArrayVar(&" + cName + ");");
         }
     }
 }

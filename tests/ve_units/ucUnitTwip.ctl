@@ -68,3 +68,12 @@ Public Function CntStr() As String
     ' void* 落进 _Generic 的 default: vb6_VariantObject 就是空串)。
     CntStr = CStr(UserControl.ContainerHwnd)
 End Function
+
+Public Sub MoveParent(ByVal l As Long, ByVal t As Long, ByVal w As Long, ByVal h As Long)
+    ' account 251: the four arguments of UserControl.Parent.Move are VB-side numbers,
+    ' i.e. TWIPS here (the same unit the host model hands back for Parent.Left /
+    ' .Width, and the same unit a .frm records). czUI's fullscreen arm saves what it
+    ' read out of the host model and moves the parent with it, so a raw MoveWindow
+    ' here puts twips into a pixel slot.
+    UserControl.Parent.Move l, t, w, h
+End Sub

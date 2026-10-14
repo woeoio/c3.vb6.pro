@@ -107,37 +107,29 @@
         // P11.7: 如果是内置Object类型变量(=窗体控件), 优先走默认属性读取
         if (foundSym->isBuiltin && foundSym->type == Vb6Type::Object) {
             // P17.1: With块内抑制默认属性解析, 返回HWND引用
+            // 账 #258 (§B87): 拼法问唯一出口 ctrlObjectRefExpr —— 原先这里手拼
+            // "vb6_hwnd_" + 名，对 WithEvents 控件变量 (C 侧是持有 HWND 的变量本身) 与
+            // ListView 槽变量 / ImageList (vb6_com_<名>) 那几档会发出 C 里不存在的名字；
+            // Set 的右值现在也走这道闸，那一形的暴露面就是这几档。
             if (suppressDefaultProp_) {
-                lastExpr_ = "vb6_hwnd_" + cIdent(node.name);
+                lastExpr_ = ctrlObjectRefExpr(lower, cName);
                 return;
             }
 
-            auto itCtrl = knownFormControls_.find(lower);
-            if (itCtrl != knownFormControls_.end()) {
-                const char* defaultProp = getDefaultPropertyName(itCtrl->second);
-                if (defaultProp) {
-                    std::string readFn = getControlPropReadFn(itCtrl->second, defaultProp);
-                    if (!readFn.empty()) {
-                        lastExpr_ = readFn + "(" + makeCtrlHwndArg(lower, itCtrl->second) + ")  /* default prop: ." + std::string(defaultProp) + " */";
-                        return;
-                    }
+            // 账 #256: 「折不折、折成哪一枚默认属性、折出来是什么型」与晚绑定实参的打包档
+            // 共用同一条出口 ctrlDefaultPropOf —— 发码与装箱不再各抄一遍判定（改前两处
+            // 各写一份，打包那份只听 inferExprType ⇒ 对控件名答 Object ⇒ BSTR 被按
+            // IDispatch 装箱）。发出来的 C 与改前逐字相同。
+            CtrlDefaultProp fold256 = ctrlDefaultPropOf(lower);
+            if (fold256.folds) {
+                if (fold256.isWithEvents) {
+                    auto itOrig = knownWithEventsCtrlOrigNames_.find(lower);
+                    std::string weVarName = (itOrig != knownWithEventsCtrlOrigNames_.end()) ? itOrig->second : cName;
+                    lastExpr_ = fold256.readFn + "(" + weVarName + ")  /* WithEvents ctrl default prop: ." + std::string(fold256.prop) + " */";
+                } else {
+                    lastExpr_ = fold256.readFn + "(" + makeCtrlHwndArg(lower, fold256.ctrlType) + ")  /* default prop: ." + std::string(fold256.prop) + " */";
                 }
-            }
-            // P20-31: WithEvents控件变量默认属性读取
-            if (!suppressDefaultProp_) {
-                auto itWECtrl = knownWithEventsCtrlVars_.find(lower);
-                if (itWECtrl != knownWithEventsCtrlVars_.end()) {
-                    const char* defaultProp = getDefaultPropertyName(itWECtrl->second);
-                    if (defaultProp) {
-                        std::string readFn = getControlPropReadFn(itWECtrl->second, defaultProp);
-                        if (!readFn.empty()) {
-                            auto itOrig = knownWithEventsCtrlOrigNames_.find(lower);
-                            std::string weVarName = (itOrig != knownWithEventsCtrlOrigNames_.end()) ? itOrig->second : cName;
-                            lastExpr_ = readFn + "(" + weVarName + ")  /* WithEvents ctrl default prop: ." + std::string(defaultProp) + " */";
-                            return;
-                        }
-                    }
-                }
+                return;
             }
         }
         // 类模块变量通过me->访问

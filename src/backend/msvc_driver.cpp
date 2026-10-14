@@ -1,4 +1,4 @@
-#include "backend/msvc_driver.hpp"
+﻿#include "backend/msvc_driver.hpp"
 #include "common/encoding.hpp"
 
 #include <iostream>
@@ -252,7 +252,17 @@ bool MsvcDriver::compileAndLink(const MsvcDriverOptions& options) {
 
     // 调试信息
     if (options.debugInfo) {
-        cmd << " /Zi /DEBUG";
+        cmd << " /Zi /FS /DEBUG";
+        // Fix <vbeclipse>: /Zi 无 /Fd 时 PDB 落在 **cl 的工作目录** (= 工程目录)
+        // 的 vc140.pdb — 该目录常被防护软件按目录拦截新文件创建 ⇒ C1041 全灭
+        // (ComCtlsDemo -g 实测)。把 PDB 钉到 exe 的输出目录 (与 /Fe 同一目录)。
+        {
+            std::string pdbDir = options.outputFile;
+            size_t slash = pdbDir.find_last_of("/\\");
+            if (slash != std::string::npos) {
+                cmd << " /Fd\"" << pdbDir.substr(0, slash + 1) << "\"";
+            }
+        }
     }
 
     // C11标准, Unicode, UTF-8源码编码, 禁用MSVC安全警告
@@ -274,7 +284,9 @@ bool MsvcDriver::compileAndLink(const MsvcDriverOptions& options) {
 
     // P24-09: x86 RTL libraries are built with /MT (static CRT); match it to avoid LNK2038
     if (options.arch == "x86") {
-        cmd << " /MT";
+        // 账 #257 第十八层后: C3_DEBUG_CRT=1 ⇒ 静态调试 CRT (/MTd + /D_DEBUG), 让 CRT 调试堆
+        // (_CRTDBG_CHECK_ALWAYS_DF + RTL report hook) 抓堆越界/坏释放。默认仍 /MT。
+        cmd << (getenv("C3_DEBUG_CRT") ? " /MTd /D_DEBUG" : " /MT");
     }
 
     // Output file and .obj directory (P11.2: intermediates go to objDir)
@@ -370,6 +382,10 @@ bool MsvcDriver::compileAndLink(const MsvcDriverOptions& options) {
     if (options.arch == "x86") {
         cmd << " /MACHINE:X86";
     }
+
+    // czUI fix (exe 体积): 与 msvc_driver_incremental.cpp 同步 —— /Gy 编出的函数级
+    // COMDAT 要靠 /OPT:REF 剔除未引用 RTL (winsock/data/ole/...), /OPT:ICF 折叠重复。
+    cmd << " /OPT:REF /OPT:ICF";
 
     if (options.verbose) {
         std::cout << "C3: 执行: " << cmd.str() << std::endl;

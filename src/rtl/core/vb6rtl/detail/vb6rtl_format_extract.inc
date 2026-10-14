@@ -40,6 +40,24 @@
         case (vb6_vartype)VT_I8:
             if (!fmt) return vb6_CStrLongLong(expr.llVal);
             numVal = (double)expr.llVal; isNumeric = 1; break;
+        /* ai/032 §6.6: 无符号两档 —— 形状照上面 VT_I8 先例: 无格式串走精确的
+         * 无符号十进制出口 (转 double 会在 >2^53 处丢精度), 带格式串进通用数值分支。 */
+        case (vb6_vartype)VT_UI4:
+            if (!fmt) return vb6_CStrULong(expr.ulVal);
+            numVal = (double)expr.ulVal; isNumeric = 1; break;
+        case (vb6_vartype)VT_UI8:
+            if (!fmt) return vb6_CStrULongLong(expr.ullVal);
+            numVal = (double)expr.ullVal; isNumeric = 1; break;
+        /* 账 #305 §B142: VT_DECIMAL 这一档以前根本不在这张表里(落 default ⇒ CStr(Decimal)
+         * 交空串)。形状照上面 :40 那条 VT_I8 的先例: 无格式串走精确出口, 带格式串才
+         * 转 double 进通用数值分支(用户要的就是数值语义)。两个出口都在 vb6rtl.c。 */
+        case (vb6_vartype)VT_DECIMAL: {
+            if (!fmt) return vb6_DecimalToBSTR(expr);
+            { double dv = 0.0;
+              if (!vb6_DecimalToR8(expr, &dv)) return vb6_BSTR_FromStr(L"");
+              numVal = dv; isNumeric = 1; }
+            break;
+        }
         case vb6_vtByte:
             numVal = (double)expr.bVal; isNumeric = 1; break;
         case vb6_vtCurrency:

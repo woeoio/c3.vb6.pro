@@ -6,6 +6,7 @@
 #define COBJMACROS  /* Enable C COM macros (ITypeLib_Release etc.) */
 #include "vb6comserver.h"
 #include "vb6comserver_internal.h"
+#include "vb6rtl_variant.h"   /* 账 #305 §B144: 两头的槽<->VARIANT 换算出口 */
 
 /* [PROBE189] 临时探针: 包装器引用计数轨迹 (C3_COM_RC_TRACE=1 时输出到 stderr) */
 #include <stdio.h>
@@ -256,8 +257,11 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
         for (int i = 0; i < argc; i++) {
             VARIANT* src = &pDispParams->rgvarg[argc - 1 - i];
             vb6_VarSlot* slot = &((vb6_VarSlot*)coercedArgs)[i];
-            memset(slot, 0, sizeof(*slot));
-            memcpy(slot, src, sizeof(VARIANT));
+            /* 账 #305 §B144: 这里原来是 memset + memcpy(槽, src, sizeof(VARIANT))，
+             * 主张「槽的头 16 字节与 OLE VARIANT 一致」—— 标量那几档成立，VT_DECIMAL 不
+             * 成立(对端把 DECIMAL 放在结构体头，我们 x64 在 offset 8、x86 是指针)。
+             * 布局那一问自此只住 RTL 的出口，服务端不再自己数偏移。 */
+            vb6_VariantBorrowIntoSlot(src, slot);
             args[i] = slot;
         }
         for (int i = 0; i < argc; i++) {
@@ -280,9 +284,16 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
         memset(&tmpRet, 0, sizeof(tmpRet));
         method->invokeFunc(self->vb6Instance, args, argc, &tmpRet);
         if (pVarResult)
-            memcpy(pVarResult, &tmpRet, sizeof(VARIANT));
+            /* 账 #305 §B144: 同上 —— 出站也改问唯一出口(Decimal 那一档不再错位的
+             * 同时，返回的串/对象现在带权交出去，对端 VariantClear 不会释放我们的引用)。 */
+            vb6_VariantPackCopyInto(&tmpRet, pVarResult);
     }
 
+    /* 账 #305 §B162 (第五十刀): 数组那一臂是个例外 —— 递进来的真 SAFEARRAY 被换成了**我们自己**
+     * 那枚描述符, 槽阵列一 free 它就没人管了。其余各档仍是调用方的资源, 一律不动。 */
+    for (int i = 0; i < argc; i++) {
+        vb6_VariantSlotRelease(&((vb6_VarSlot*)coercedArgs)[i]);
+    }
     // 槽内是调用方 VARIANT 的副本, 资源仍归调用方, 不得 VariantClear
     if (coercedArgs) CoTaskMemFree(coercedArgs);
     if (args) CoTaskMemFree(args);
@@ -498,7 +509,7 @@ void* vb6_ComObject_GetInstance(void* pdisp) {
          * cgen 对 `Set x = <Variant 值>` 一律生成
          *   (vb6_cls_X*)vb6_ComObject_GetInstance(vb6_VariantToObjectVal(v))
          * 而 Controls.Item/Add 给出的是 UserControl **宿主 HWND** (不是 vb6_ComObject)。
-         * vb6_UC_InstanceOf 只遍历 g_uc_recs 比较 hwnd, 对任意指针安全 (含 NULL /
+         * vb6_UC_InstanceOf 只遍历 vb6_ucRecs 比较 hwnd, 对任意指针安全 (含 NULL /
          * 裸 HWND / 非宿主指针), 命中即返回该宿主的 vb6_cls_<UC>* 实例。 */
         { extern void* vb6_UC_InstanceOf(void* hwnd);
           void* inst = vb6_UC_InstanceOf(pdisp); if (inst) return inst; }

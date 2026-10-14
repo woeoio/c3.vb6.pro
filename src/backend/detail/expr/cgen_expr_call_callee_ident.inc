@@ -37,7 +37,7 @@
                             emitExpr(*node.positional[i]);
                             { std::string resolved = resolveComMarkerForPack(packFn);
                               if (!resolved.empty()) lastExpr_ = resolved; }
-                            packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                            packedArgs.push_back(packArgValue(packFn, lastExpr_));
                         }
                         int32_t argc = (int32_t)packedArgs.size();
                         std::string argsArray = "(void*[]){";
@@ -80,10 +80,8 @@
                 if (classVariantMembers_.count(nameLower) || classVariantMembers_.count(nameMLower)) {
                     emitExpr(*node.callee);  // emits "me->field"
                     std::string fieldExpr = std::move(lastExpr_);
-                    emitExpr(*node.positional[0]);
-                    // Fix 084o: 索引为 Variant 时转 Long
-                    std::string idx = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
-                    lastExpr_ = "vb6_VariantArrayGet(&" + fieldExpr + ", " + idx + ")";
+                                        // 账 #305 §B150: 秩数 = 实参个数, 这一问只在 variantSlotElemRead 一处答。
+                    lastExpr_ = variantSlotElemRead("&" + fieldExpr, node.positional);
                     handled = true;
                 } else {
                     // void* COM 字段 → vb6_ComCall(me->field, L"Item", args, argc)
@@ -105,7 +103,7 @@
                             emitExpr(*node.positional[i]);
                             { std::string resolved = resolveComMarkerForPack(packFn);
                               if (!resolved.empty()) lastExpr_ = resolved; }
-                            packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                            packedArgs.push_back(packArgValue(packFn, lastExpr_));
                         }
                         int32_t argc = (int32_t)packedArgs.size();
                         std::string argsArray = "(void*[]){";
@@ -136,7 +134,7 @@
                                         emitExpr(*node.positional[i]);
                                         { std::string resolved = resolveComMarkerForPack(packFn);
                                           if (!resolved.empty()) lastExpr_ = resolved; }
-                                        packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
                                     }
                                     int32_t argc = (int32_t)packedArgs.size();
                                     std::string argsArray = "(void*[]){";
@@ -180,7 +178,9 @@
         }
 
         // ---- Pattern F2: 局部 Object 变量 (后期绑定) ----
-        // knownObjectVars_: Dim x As Object → C 中 x 是 void*, x(idx) 应为 vb6_ComCall(x, ...).
+        // knownObjectVars_: Dim x As Object → C 中 x 是 void*, x(idx) 应为
+        // DISPID_VALUE 默认成员调用。正常已被 prelude.inc 的 P24-10 后期绑定分支
+        // 消费 (emit vb6_ComCallByDispid), 此处保留为等价的兜底, 口径一致。
         if (!handled && knownObjectVars_.count(nameLower)) {
             emitExpr(*node.callee);  // emits "name"
             std::string objExpr = std::move(lastExpr_);
@@ -190,7 +190,7 @@
                 emitExpr(*node.positional[i]);
                 { std::string resolved = resolveComMarkerForPack(packFn);
                   if (!resolved.empty()) lastExpr_ = resolved; }
-                packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                packedArgs.push_back(packArgValue(packFn, lastExpr_));
             }
             int32_t argc = (int32_t)packedArgs.size();
             std::string argsArray = "(void*[]){";
@@ -199,7 +199,7 @@
                 argsArray += packedArgs[i];
             }
             argsArray += "}";
-            lastExpr_ = "vb6_ComCall(" + objExpr + ", L\"Item\", "
+            lastExpr_ = "vb6_ComCallByDispid(" + objExpr + ", 0, "
                       + argsArray + ", " + std::to_string(argc) + ")";
             handled = true;
         }

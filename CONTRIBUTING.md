@@ -83,6 +83,34 @@ doc/<内容>             例: doc/rtl-api
    - 依赖外部 COM 组件的用例，登记时加 `-RequiresCom`，组件未注册时自动 SKIP 而非 FAIL。
 4. **GUI/窗体类**：当前只验证编译通过 (Test-Compile 风格)。
 
+### 门里那一格 `Emit manifest (shape oracle)` 红了怎么办
+
+CI 会把手上这台 `C3.exe` 对**全语料 398 份输入**的 `--emit-c` 输出逐份哈希，与仓根的
+`emit-manifest.expected.txt` 逐行比对。红了有三种成因，处置完全不同 —— 红的时候这三种会被
+分开打印出来（判据与登记逻辑都在 `scripts/compare_emit_manifest.ps1` 一处，别在别处抄第二份）：
+
+| 打印 | 含义 | 处置 |
+|------|------|------|
+| `新增 N 份输入没有登记哈希` | 你往 `tests/` 加了夹具，**发码没变** | 不是回归：新夹具本来就没有旧期望可比。直接登记（见下）。 |
+| `存量 N 份发码真的变了` | 你改了 codegen | 先看这几份是不是你想要的形状，再登记。 |
+| `登记里有、这次清单里没有` | 夹具被删/改名，或语料枚举口径变了 | **别用登记抹平**（那等于悄悄缩小覆盖面）。rebless 会拒绝，确认有意才加 `-AllowVanish`。 |
+
+```powershell
+pwsh -File scripts/rebless_emit_manifest.ps1          # 只看：取 CI 自己交回来的那份清单，报分类
+pwsh -File scripts/rebless_emit_manifest.ps1 -Bless   # 看过没问题就登记，登记完自动复算 + 跑覆盖哨兵
+git add emit-manifest.expected.txt
+git commit -m "登记：发码形状随本次改动更新（N 行）"
+```
+
+**不用本机装 MSVC、也不用等二十分钟**：CI 每一步都把自己那台的清单提交到 `ci/emit-manifest` 分支，
+`rebless` 就是去吃这份数（它会核对这份清单出自哪笔提交，与你的 HEAD 对不上就拒绝 —— 那说明门跑的不是你这笔改动）。
+本机想重跑也行：`scripts/build.bat` 之后 `pwsh -File scripts/emit_manifest.ps1 -Out emit-manifest.txt`，
+再 `rebless -Manifest emit-manifest.txt -Bless`。
+
+只改了 RTL 或 .rc 的那笔尤其注意：RTL 是嵌在 `C3.exe` 的资源里的，改 `src/rtl/**` 必须同时 touch
+`src/driver/c3rtl.rc`（否则 `rc.exe` 不重跑，本机拿到旧 RTL 测出一堆假读数）—— 这条现在有第 43 道哨兵
+`scripts/check_rtl_embedded.ps1` 逐字节比对磁盘与内嵌，不用靠人记。
+
 ---
 
 ## 四、代码规范
@@ -97,7 +125,8 @@ doc/<内容>             例: doc/rtl-api
 | 文件类型 | 编码 | 换行 |
 |----------|------|------|
 | C/C++ 源码 (.cpp/.h/.c) | UTF-8 无 BOM | CRLF |
-| CMake / 脚本 (.txt/.bat/.ps1) | 跟随现有文件 (bat/ps1 为 GBK) | CRLF |
+| CMake / 脚本 (.txt/.bat) | 跟随现有文件 (bat 为 GBK/ANSI) | CRLF |
+| PowerShell (.ps1) | UTF-8；**行内有中文的那必须带 BOM**（`scripts/check_*.ps1` 43 份全是 BOM+CRLF） | CRLF |
 | VB6 测试文件 (.bas/.frm/.cls/.vbp) | **GBK** (VB6 IDE 要求) | CRLF |
 | 文档 (.md) | UTF-8 | CRLF |
 

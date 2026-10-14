@@ -288,209 +288,123 @@
         }
     }
 
-    // P14.2.2: CurDir - VB6 allows 0-arg CurDir() → vb6_CurDir(NULL)
-    if (callee == "vb6_CurDir") {
-        if (args.empty()) {
-            argList = "NULL";
-        }
-    }
-
-    // Fix <vbeclipse>: LoadPicture() — VB6 允许**无参**调用 (取回"空图片", 常用于
-    // `Screen.MouseIcon = LoadPicture()` 复位鼠标指针; ucPerspective.ctl:596/600)。
-    // RTL 签名是 vb6_LoadPictureEx(BSTR pathname) (1 参), 0 参调用 → C2198 参数太少
-    // (ucPerspective.c:467/472)。补 NULL: vb6_LoadPictureEx 遇 NULL 直接返回 NULL,
-    // 正是"空图片"的语义。
-    if (callee == "vb6_LoadPictureEx") {
-        if (args.empty()) {
-            argList = "NULL";
-        }
-    }
-
-    // P14.2.2: Dir - VB6 allows 1-arg Dir(pattern) → vb6_Dir(pattern, 0)
-    if (callee == "vb6_Dir") {
-        if (args.size() == 1) {
-            argList += ", 0";
-        }
-        // Fix 086: 无参 Dir() (继续上次搜索) → 传 NULL, 0
-        if (args.empty()) {
-            argList = "NULL, 0";
-        }
-    }
-
     // <vbeclipse>: VB6 里 InStr/InStrRev/StrComp/Replace/Split/Filter 的 compare 形
-    // **缺省值不是常量 0, 而是本模块的 Option Compare**。下面各 padding 段统一用这个
-    // 串填 compare 槽 (旧写法一律硬编码 0 ⇒ Option Compare Text 模块里省略 compare 的
+    // **缺省值不是常量 0, 而是本模块的 Option Compare**。下面那张表里写 "%cmp%" 的档
+    // 统一由这个串填 (旧写法一律硬编码 0 ⇒ Option Compare Text 模块里省略 compare 的
     // 内置函数仍按二进制比, 与同模块的 `=` 判定互相矛盾)。
     const std::string cmpDefault = optionCompareText_ ? "1" : "0";
 
-    // P14.2.3: Split - VB6 Split(expr[, delim[, limit[, compare]]])
-    // RTL: vb6_Split(expr, delim, limit, compare)
-    if (callee == "vb6_Split") {
-        if (args.size() == 1) {
-            argList += ", NULL";        // default delimiter = space
-        }
-        if (args.size() <= 2) {
-            argList += ", -1";          // limit = -1 (unlimited)
-        }
-        if (args.size() <= 3) {
-            argList += ", " + cmpDefault;
+
+    // ==== 账 #305 §B153 = 第四十一刀: 「内置出口省略实参时补哪一档」收成这一张表 ====
+    // 旧世界里这件事有 28 位主人 (一枚内置函数一段 `if (callee == "vb6_X") { ... argList += ", 1"; }`),
+    // 而它的**答案住在 VB6 的形参表 + RTL 的 C 声明里** —— 两份从不汇合。一行 = 一枚 RTL 出口:
+    //   slots[i]  = 第 i 档的 VB6 缺省实参, **按 RTL 声明的绝对槽位编号** (0 起)
+    //   nullptr   = 这一档 VB6 里必填, 没有缺省答案 —— 缺省链在此**停住**:
+    //               少写的实参原样交给 cl, 由 C2198 响亮报错。旧写法里有两枚 nullptr 是
+    //               要拼进 std::string 的 (kInputBoxDefaults[0] + `for (i = args.size(); ...)`),
+    //               0 参 InputBox 那形当场是 UB —— 停住比补一个假答案诚实。
+    //   "%cmp%"   = 唯一的非字面档: VB6 里 InStr/InStrRev/StrComp/Replace/Split/Filter 的 compare
+    //               缺省不是常量 0, 而是**本模块的 Option Compare** (旧写法硬编码 0 ⇒ Text 模块里
+    //               省略 compare 的内置函数与同模块的 `=` 判定互相矛盾, 这条口径原样搬过来)。
+    //   intoArgs  = 缺档同时写进 args —— 这六枚下游有「按 args 重建 argList」的消费点
+    //               (conv_numeric / conv_output; Format 那一格的注释就是同一课, 见下), 只补
+    //               argList 会被抹掉。
+    //   Mid/MidB 的省略 length 补 **-1 哨兵** (RTL 按"取到结尾"处理) 而不是 0 —— 0 是字面
+    //               长度 0, 曾让 czUI 的 HexToColor("#243447") 解析成纯黑、整个 demo 颜色全错。
+    // 语义侧 calleeParams 对 builtin 标的 isOptional 今天仍被通用 padding 的 !calleeIsBuiltin
+    // 挡在外面 (RTL 的 C 过程不收 _has_ 尾巴), 所以补档只发生在这一个地方; 那张表与本表的
+    // 逐名对账 (槽数 = RTL 声明的形参数、可选尾巴 = 本表非 nullptr 的档) 由第 55 道哨兵
+    // scripts/check_builtin_opt_defaults.ps1 钉住, 新增一形硬编码补档会红。
+    struct BuiltinOptDefault {
+        const char* callee;
+        const char* const* slots;
+        size_t nslots;
+        bool intoArgs;
+    };
+    static const char* const kOD_Split[]       = { nullptr, "NULL", "-1", "%cmp%" };
+    static const char* const kOD_Join[]        = { nullptr, "NULL" };
+    static const char* const kOD_Filter[]      = { nullptr, nullptr, "-1", "%cmp%" };
+    static const char* const kOD_Replace[]     = { nullptr, nullptr, nullptr, "1", "-1", "%cmp%" };
+    static const char* const kOD_InStrRev[]    = { nullptr, nullptr, "-1", "%cmp%" };
+    static const char* const kOD_StrComp[]     = { nullptr, nullptr, "%cmp%" };
+    static const char* const kOD_DateDiff[]    = { nullptr, nullptr, nullptr, "1", "1" };
+    static const char* const kOD_DatePart[]    = { nullptr, nullptr, "1", "1" };
+    static const char* const kOD_Weekday[]     = { nullptr, "1" };
+    static const char* const kOD_FormatDT[]    = { nullptr, "0" };
+    static const char* const kOD_Round[]       = { nullptr, "0" };
+    static const char* const kOD_Shell[]       = { nullptr, "2" };
+    static const char* const kOD_AppActivate[] = { nullptr, "0" };
+    static const char* const kOD_GetSetting[]  = { nullptr, nullptr, nullptr, "vb6_BSTR_Empty()" };
+    static const char* const kOD_InputBox[]    = { nullptr, "vb6_BSTR_Empty()", "vb6_BSTR_Empty()",
+                                                   "0", "0", "vb6_BSTR_Empty()", "0" };
+    static const char* const kOD_NPer[]        = { nullptr, nullptr, nullptr, "0", "0" };
+    static const char* const kOD_IRR[]         = { nullptr, "0.1" };
+    static const char* const kOD_Dir[]         = { "NULL", "0" };
+    static const char* const kOD_CurDir[]      = { "NULL" };
+    static const char* const kOD_LoadPicEx[]   = { "NULL" };
+    static const char* const kOD_Rnd[]         = { "0" };        // VB6 无参 Rnd = 取下一个数
+    static const char* const kOD_Randomize[]   = { "0.0" };
+    static const char* const kOD_Mid[]         = { nullptr, nullptr, "-1" };
+    static const char* const kOD_MidB[]        = { nullptr, nullptr, "-1" };
+    static const char* const kOD_StrConv[]     = { nullptr, nullptr, "0" };
+    static const char* const kOD_FormatNum[]   = { nullptr, "-1", "-1", "-1", "-1" };
+    static const char* const kOD_ClipSet[]     = { nullptr, "0" };
+    static const char* const kOD_ErrRaise[]    = { nullptr, "(BSTR)0", "(BSTR)0" };
+    // §B149 格③: VB6 的 DeleteSetting 有 1/2/3 参三形, RTL 出口是 3 枚必填 BSTR。
+    // 两参 = 删整节 (RTL 在 key 为空时走 RegDeleteKeyW, vb6rtl_registry.c:107), 三参 = 删一个键。
+    // 一参那档 (删整个应用) 刻意**不补**: RTL 在 section 为空时直接 return, 补一个空串等于
+    // 把「删应用」静默变成「什么都不做」; 语料里那一形 0 处 (见 §B153) —— 让它响亮编不过。
+    static const char* const kOD_DelSetting[]  = { nullptr, nullptr, "vb6_BSTR_Empty()" };
+    static const BuiltinOptDefault kBuiltinOptDefaults[] = {
+        { "vb6_Split",           kOD_Split,       sizeof(kOD_Split) / sizeof(kOD_Split[0]),       false },
+        { "vb6_Join",            kOD_Join,        sizeof(kOD_Join) / sizeof(kOD_Join[0]),         false },
+        { "vb6_Filter",          kOD_Filter,      sizeof(kOD_Filter) / sizeof(kOD_Filter[0]),     false },
+        { "vb6_Replace",         kOD_Replace,     sizeof(kOD_Replace) / sizeof(kOD_Replace[0]),   false },
+        { "vb6_InStrRev",        kOD_InStrRev,    sizeof(kOD_InStrRev) / sizeof(kOD_InStrRev[0]), false },
+        { "vb6_StrComp",         kOD_StrComp,     sizeof(kOD_StrComp) / sizeof(kOD_StrComp[0]),   false },
+        { "vb6_DateDiff",        kOD_DateDiff,    sizeof(kOD_DateDiff) / sizeof(kOD_DateDiff[0]), false },
+        { "vb6_DatePart",        kOD_DatePart,    sizeof(kOD_DatePart) / sizeof(kOD_DatePart[0]), false },
+        { "vb6_Weekday",         kOD_Weekday,     sizeof(kOD_Weekday) / sizeof(kOD_Weekday[0]),   false },
+        { "vb6_FormatDateTime",  kOD_FormatDT,    sizeof(kOD_FormatDT) / sizeof(kOD_FormatDT[0]), false },
+        { "vb6_Round",           kOD_Round,       sizeof(kOD_Round) / sizeof(kOD_Round[0]),       false },
+        { "vb6_Shell",           kOD_Shell,       sizeof(kOD_Shell) / sizeof(kOD_Shell[0]),       false },
+        { "vb6_AppActivate",     kOD_AppActivate, sizeof(kOD_AppActivate) / sizeof(kOD_AppActivate[0]), false },
+        { "vb6_GetSetting",      kOD_GetSetting,  sizeof(kOD_GetSetting) / sizeof(kOD_GetSetting[0]),   false },
+        { "vb6_InputBox",        kOD_InputBox,    sizeof(kOD_InputBox) / sizeof(kOD_InputBox[0]),       false },
+        { "vb6_NPer",            kOD_NPer,        sizeof(kOD_NPer) / sizeof(kOD_NPer[0]),               false },
+        { "vb6_IRR",             kOD_IRR,         sizeof(kOD_IRR) / sizeof(kOD_IRR[0]),                 false },
+        { "vb6_Dir",             kOD_Dir,         sizeof(kOD_Dir) / sizeof(kOD_Dir[0]),                 false },
+        { "vb6_CurDir",          kOD_CurDir,      sizeof(kOD_CurDir) / sizeof(kOD_CurDir[0]),           false },
+        { "vb6_LoadPictureEx",   kOD_LoadPicEx,   sizeof(kOD_LoadPicEx) / sizeof(kOD_LoadPicEx[0]),     false },
+        { "vb6_Rnd",             kOD_Rnd,         sizeof(kOD_Rnd) / sizeof(kOD_Rnd[0]),                 false },
+        { "vb6_Randomize",       kOD_Randomize,   sizeof(kOD_Randomize) / sizeof(kOD_Randomize[0]),     false },
+        { "vb6_Mid",             kOD_Mid,         sizeof(kOD_Mid) / sizeof(kOD_Mid[0]),                 true  },
+        { "vb6_MidB",            kOD_MidB,        sizeof(kOD_MidB) / sizeof(kOD_MidB[0]),               true  },
+        { "vb6_StrConv",         kOD_StrConv,     sizeof(kOD_StrConv) / sizeof(kOD_StrConv[0]),         true  },
+        { "vb6_FormatNumber",    kOD_FormatNum,   sizeof(kOD_FormatNum) / sizeof(kOD_FormatNum[0]),     true  },
+        { "vb6_Clipboard_SetData", kOD_ClipSet,   sizeof(kOD_ClipSet) / sizeof(kOD_ClipSet[0]),         true  },
+        { "vb6_ErrRaise",        kOD_ErrRaise,    sizeof(kOD_ErrRaise) / sizeof(kOD_ErrRaise[0]),       true  },
+        { "vb6_DeleteSetting",   kOD_DelSetting,  sizeof(kOD_DelSetting) / sizeof(kOD_DelSetting[0]),   false },
+    };
+    for (const BuiltinOptDefault& bod : kBuiltinOptDefaults) {
+        if (callee != bod.callee) continue;
+        for (size_t i = args.size(); i < bod.nslots; i++) {
+            const char* lit = bod.slots[i];
+            if (!lit) break;                      // 必填档: 缺省链停住, 让 cl 的 C2198 说话
+            const std::string v = std::string(lit) == "%cmp%" ? cmpDefault : lit;
+            if (!argList.empty()) argList += ", ";
+            argList += v;
+            if (bod.intoArgs) args.push_back(v);
         }
     }
-
-    // P14.2.3: Join - VB6 Join(arr[, delimiter])
-    // RTL: vb6_Join(arr, delimiter)
-    if (callee == "vb6_Join") {
-        if (args.size() == 1) {
-            argList += ", NULL";        // default delimiter = space
-        }
-    }
-
     // <vbeclipse>: Format(expression[, format]) 的缺省 format 补在 conv_output 段
     // (那里 args[0] 装箱后会重建 argList, 在这补会被抹掉), 见 cgen_expr_call_conv_output.inc。
 
-    // P14.2.4: DateDiff - VB6 DateDiff(interval, date1, date2[, firstDayOfWeek[, firstWeekOfYear]])
-    // RTL: vb6_DateDiff(interval, date1, date2, firstDayOfWeek, firstWeekOfYear)
-    if (callee == "vb6_DateDiff") {
-        if (args.size() == 3) {
-            argList += ", 1, 1";  // vbSunday, vbFirstJan1
-        } else if (args.size() == 4) {
-            argList += ", 1";     // vbFirstJan1
-        }
-    }
-
-    // P14.2.4: DatePart - VB6 DatePart(interval, date[, firstDayOfWeek[, firstWeekOfYear]])
-    // RTL: vb6_DatePart(interval, date, firstDayOfWeek, firstWeekOfYear)
-    if (callee == "vb6_DatePart") {
-        if (args.size() == 2) {
-            argList += ", 1, 1";  // vbSunday, vbFirstJan1
-        } else if (args.size() == 3) {
-            argList += ", 1";     // vbFirstJan1
-        }
-    }
-
-    // Replace: VB6允许3参数形式 Replace(string, find, replacement)
-    // RTL: Replace(string, find, replacement, start, count, compare)
-    if (callee == "vb6_Replace") {
-        if (args.size() == 3) {
-            argList += ", 1, -1, " + cmpDefault;
-        } else if (args.size() == 4) {
-            argList += ", -1, " + cmpDefault;
-        } else if (args.size() == 5) {
-            argList += ", " + cmpDefault;
-        }
-    }
-
-    // P21-B: Weekday(date[, firstDayOfWeek]) - default firstDayOfWeek=1 (vbSunday)
-    if (callee == "vb6_Weekday") {
-        if (args.size() == 1) {
-            argList += ", 1";
-        }
-    }
-
-    // Fix 110l: InputBox(prompt[, title[, default[, xpos[, ypos[, helpfile[, context]]]]]]])
-    // RTL: vb6_InputBox(prompt, title, defaultstr, xpos, ypos, helpfile, context) — 7 参.
-    // VB6 允许只写前 1~3 个实参 (Charts 2020 ppProgressCircular.pag 351:
-    //   InputBox("...", , 100) → vb6_InputBox(prompt, 0L, 100) → C2198 参数太少).
-    if (callee == "vb6_InputBox") {
-        static const char* kInputBoxDefaults[7] = {
-            nullptr,                 // prompt (必填)
-            "vb6_BSTR_Empty()",      // title
-            "vb6_BSTR_Empty()",      // defaultstr
-            "0",                     // xpos
-            "0",                     // ypos
-            "vb6_BSTR_Empty()",      // helpfile
-            "0",                     // context
-        };
-        for (size_t i = args.size(); i < 7; i++) {
-            argList += ", ";
-            argList += kInputBoxDefaults[i];
-        }
-    }
-
-    // P21-10: FormatDateTime(date[, namedFormat]) - default namedFormat=0 (vbGeneralDate)
-    if (callee == "vb6_FormatDateTime") {
-        if (args.size() == 1) {
-            argList += ", 0";
-        }
-    }
-
-    // P21-16: NPer(rate, pmt, pv[, fv][, type]) - defaults: fv=0, type=0
-    if (callee == "vb6_NPer") {
-        if (args.size() == 3) argList += ", 0, 0";
-        else if (args.size() == 4) argList += ", 0";
-    }
-
-    // P21-19: IRR(values[, guess]) - default guess=0.1
-    if (callee == "vb6_IRR") {
-        if (args.size() == 1) argList += ", 0.1";
-    }
-
-    // P20-37: GetSetting(app, section, key[, default]) - default is empty string
-    if (callee == "vb6_GetSetting") {
-        if (args.size() == 3) argList += ", vb6_BSTR_Empty()";
-    }
-
-    // Fix 010e: Err.Raise with Source/Description arguments
-    // Err.Raise always calls vb6_ErrRaise(number, source, description) — 3 args
-    // Pad with NULL BSTRs when fewer args provided
-    if (callee == "vb6_ErrRaise" && args.size() < 3) {
-        // Pad to 3 args
-        while (args.size() < 3) {
-            args.push_back("(BSTR)0");
-            if (!argList.empty()) argList += ", ";
-            argList += "(BSTR)0";
-        }
-    }
     if (callee == "vb6_ErrRaise" && args.size() > 3) {
         // Truncate to 3 (Err.Raise can have up to 5 VB6 args, C RTL handles 3)
         argList = args[0] + ", " + args[1] + ", " + args[2];
     }
 
-    // Fix 010r: Builtin RTL functions with optional parameters — pad to required arg count
-    // VB6 allows omitting optional args; C RTL functions require all args
-    if (callee == "vb6_Mid" && args.size() < 3) {
-        // czUI fix: 省略的 length 参数用 -1 哨兵 (RTL 按"取到结尾"处理),
-        // 不能补 0 — 那是字面长度 0 (VB6 返回空串), 曾让 HexToColor("#243447")
-        // 解析成 0 (纯黑), 整个 czUI demo 颜色全错。
-        while (args.size() < 3) {
-            args.push_back("-1");
-            if (!argList.empty()) argList += ", ";
-            argList += "-1";
-        }
-    }
-    // Fix <vbeclipse>: MidB$ 两参形 (MidB$(s, start) 取到结尾) — 同 vb6_Mid 的
-    // -1 哨兵口径 (vb6_MidB 与 vb6_Mid 同一个"len<0 取到结尾"实现)。
-    if (callee == "vb6_MidB" && args.size() < 3) {
-        while (args.size() < 3) {
-            args.push_back("-1");
-            if (!argList.empty()) argList += ", ";
-            argList += "-1";
-        }
-    }
-    if (callee == "vb6_StrConv" && args.size() < 3) {
-        while (args.size() < 3) {
-            args.push_back("0");
-            if (!argList.empty()) argList += ", ";
-            argList += "0";
-        }
-    }
-    if (callee == "vb6_FormatNumber" && args.size() < 5) {
-        while (args.size() < 5) {
-            args.push_back("-1");  // -1 = vbUseDefault for optional args
-            if (!argList.empty()) argList += ", ";
-            argList += "-1";
-        }
-    }
-    // Fix <vbeclipse> <VBFlexGridDemo>: Clipboard.SetData 二形 data / data, format
-    //   VB 语义 `[format]` 可省, 但 RTL 已扩成 2 参 (format=vbCF* 常量, 0=Bitmap)。
-    //   1 参调用直接补 format=0，与 `vb6_Clipboard_SetData(void*, int32_t)` 对齐。
-    if (callee == "vb6_Clipboard_SetData" && args.size() < 2) {
-        while (args.size() < 2) {
-            args.push_back("0");
-            if (!argList.empty()) argList += ", ";
-            argList += "0";
-        }
-    }
     // Fix 092w: StrConv(Byte数组, vbUnicode) → vb6_StrConvFromByteArray
     // 反向转换: Byte() -> String. 第一实参为已知 Byte 数组变量 (vb6_SafeArray1D*)
     // 时, RTL vb6_StrConv 期望 BSTR 会类型不匹配; 改用返回 BSTR 的 helper.
@@ -524,44 +438,6 @@
             callee = "vb6_SafeArrayDataPtr";
         }
     }
-    // Fix 034: Builtin RTL functions with Optional params — pad to required C RTL arg count.
-    // calleeParams 已对 builtin 标 isOptional, 但 general padding (line 3291+) 被 !calleeIsBuiltin
-    // 跳过 (RTL C 函数不接受 _has_ 尾叜). 各函数硬编码补默认值, 默认值取自 VB6 语义.
-    // InStrRev(string1, string2[, start[, compare]]) — start=-1 (从末尾), compare=本模块默认
-    if (callee == "vb6_InStrRev") {
-        if (args.size() == 2) {
-            argList += ", -1, " + cmpDefault;
-        } else if (args.size() == 3) {
-            argList += ", " + cmpDefault;
-        }
-    }
-    // Round(x[, decimals]) — decimals default = 0
-    if (callee == "vb6_Round" && args.size() == 1) {
-        argList += ", 0";
-    }
-    // StrComp(s1, s2[, compare]) — compare 缺省 = 本模块 Option Compare
-    if (callee == "vb6_StrComp" && args.size() == 2) {
-        argList += ", " + cmpDefault;
-    }
-    // Shell(pathname[, windowstyle]) — windowstyle default = 2 (vbMinimizedFocus)
-    if (callee == "vb6_Shell" && args.size() == 1) {
-        argList += ", 2";
-    }
-    // Fix 158j: AppActivate(title[, wait]) — RTL 签名 vb6_AppActivate(BSTR, int32_t wait),
-    // VB6 允许省略 wait (Startup.bas: AppActivate "VBFlexGrid Demo" → 只传 1 参
-    // → C2198 参数太少). 缺省值 0 (不等待).
-    if (callee == "vb6_AppActivate" && args.size() == 1) {
-        argList += ", 0";
-    }
-    // Fix 135b: 无参 Rnd 语义 = Rnd(1) (取下一个随机数); 0 才是"重复上一值"
-    // Randomize([seed]) — handled as Sub bare-call; see cgen_stmt.cpp Randomize dispatch
-    if (callee == "vb6_Rnd" && args.empty()) {
-        argList = "0";
-    }
-    // Randomize As Function-call form `Randomize()` — pad seed = 0.0
-    if (callee == "vb6_Randomize" && args.empty()) {
-        argList = "0.0";
-    }
     // InStr 的 compare 形 (<vbeclipse>, 替换 Fix 041 的"截掉第 4 参"):
     //   InStr(s1, s2[, compare])            首参是字符串 ⇒ (s1, s2, compare)
     //   InStr(start, s1, s2[, compare])     首参是数值   ⇒ (start, s1, s2[, compare])
@@ -587,18 +463,6 @@
                       + (args.size() == 2 ? "" : ", " + args[2]) + ", 1";
         }
     }
-    // <vbeclipse>: Filter(array, string[, include[, compare]]) — RTL 签名 4 参, 此前完全没有
-    // padding ⇒ `Filter(a, "x")` 这一 VB6 合法形根本编不过 (C2198; 首参登记成 Variant|Array
-    // 之前 Variant 实参还 C2440)。include 缺省 True (VB6 的 True = -1, RTL 侧按 !=0 归一),
-    // compare 缺省 0 = vbBinaryCompare。
-    if (callee == "vb6_Filter") {
-        if (args.size() == 2) {
-            argList += ", -1, " + cmpDefault;
-        } else if (args.size() == 3) {
-            argList += ", " + cmpDefault;
-        }
-    }
-
     // P14.1.4: General Optional parameter padding for user-defined functions
     // calleeParams is empty for builtin RTL functions (registered without params), so they're auto-skipped
     // Fix 030b: builtin 即使现在有 calleeParams (用于触发包装), 也不走 padding/IsMissing 路径

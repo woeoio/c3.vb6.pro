@@ -50,7 +50,7 @@ static HRESULT ocxCreateFromPath(const wchar_t* ocxPath, REFCLSID rclsid, void**
  * 顺序保证: 同一 CLSID 已注册时也优先用随 exe 的文件, 与 VB6
  * "注册表指向哪用哪"不同 — 便携部署下注册表常指向不存在/旧版路径.
  * 用环境变量 C3_OCX_PREFER_REG=1 可改为注册表优先. */
-HRESULT ocxCreateAny(const wchar_t* ocxPath, REFCLSID rclsid, void** ppUnk) {
+HRESULT vb6_ocxCreateAny(const wchar_t* ocxPath, REFCLSID rclsid, void** ppUnk) {
     *ppUnk = NULL;
     HRESULT hr;
 
@@ -138,8 +138,10 @@ HRESULT ocxCreateAny(const wchar_t* ocxPath, REFCLSID rclsid, void** ppUnk) {
     }
 }
 
-/* twips → HIMETRIC (VB6: himetric = twips * 2540 / 1440) */
-long twipsToHimetric(long twips) { return (long)((__int64)twips * 2540 / 1440); }
+/* twips → HIMETRIC。账 #298 (§B129): 这条比例以前在 axsite 里各写一遍
+ * (这里一份、ax_site_ext 一份、vb6forms_olecon 两份), 现在只转调 vb6forms.c 那一处。
+ * 名字与签名照旧 —— 它是 ax_host.c 三处调用者认的那个出口。 */
+long vb6_twipsToHimetric(long twips) { return vb6_TwipsToHimetric(twips); }
 
 
 #ifdef __cplusplus

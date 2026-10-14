@@ -61,9 +61,64 @@ static void call_member(IDispatch *disp, const wchar_t *name, VARIANT *argv, int
     printf("CALL=%s hr=0x%08lX", tag, (unsigned long)hr);
     if (SUCCEEDED(hr) && res.vt == VT_I4) printf(" result=%ld", (long)V_I4(&res));
     else if (SUCCEEDED(hr) && res.vt != VT_EMPTY) printf(" resultvt=%u", (unsigned)res.vt);
+    /* Acct #305 SB144: a Decimal reply used to print only "resultvt=14" -- the tag was
+     * right while the value was garbage, which is exactly why this cell hid for so long.
+     * Two locale-free readings: VT_CY (fixed point, 1/10000) and VT_I8. If oleaut32
+     * cannot convert the bytes we print FAIL instead of staying silent. */
+    if (SUCCEEDED(hr) && res.vt == VT_DECIMAL) {
+        VARIANT cy, i8;
+        VariantInit(&cy); VariantInit(&i8);
+        if (SUCCEEDED(VariantChangeType(&cy, &res, 0, VT_CY)) && cy.vt == VT_CY)
+            printf(" dec_cy=%lld", (long long)cy.cyVal.int64);
+        else
+            printf(" dec_cy=FAIL");
+        if (SUCCEEDED(VariantChangeType(&i8, &res, 0, VT_I8)) && i8.vt == VT_I8)
+            printf(" dec_i8=%lld", (long long)i8.llVal);
+        else
+            printf(" dec_i8=FAIL");
+        VariantClear(&cy); VariantClear(&i8);
+    }
+    /* Acct #305 SB159 + SB162 (knife 50): an array that came IN as a real SAFEARRAY has to be
+     * readable by the callee and come BACK OUT as one. EchoVal just returns its own argument, so
+     * the whole round trip is one call: inbound converts SAFEARRAY -> our descriptor, the reply
+     * converts back. Before this knife both directions answered VT_EMPTY (no array arm at all),
+     * and the arm that exists today must not deliver a slot whose parray still points at the
+     * caller's SAFEARRAY header -- that is the cell SB162 was opened for. */
+    if (SUCCEEDED(hr) && (res.vt & VT_ARRAY)) {
+        SAFEARRAY* psa = res.parray;
+        LONG lo = 0, hi = 0, k;
+        long sum = 0;
+        printf(" arrvt=%u dims=%u", (unsigned)res.vt,
+               psa ? (unsigned)SafeArrayGetDim(psa) : 0u);
+        if (psa) {
+            SafeArrayGetLBound(psa, 1, &lo);
+            SafeArrayGetUBound(psa, 1, &hi);
+            printf(" lo=%ld hi=%ld", (long)lo, (long)hi);
+            if ((res.vt & VT_TYPEMASK) == VT_I4) {
+                for (k = lo; k <= hi; k++) {
+                    LONG one = 0;
+                    if (FAILED(SafeArrayGetElement(psa, &k, &one))) { sum = -1; break; }
+                    sum += (long)one;
+                }
+                printf(" arrsum=%ld", sum);
+            }
+        }
+    }
     printf("\n");
     VariantClear(&res);
     for (i = 0; i < argc; i++) VariantClear(&argv[i]);
+}
+
+/* Acct #305 SB144: build a VT_DECIMAL the way a real client does -- through oleaut32,
+ * so we never hand-write the arch-specific position of those 16 bytes (x86 has no
+ * decVal member at all; x64 puts it at the head). */
+static VARIANT mk_dec_i4(LONG v) {
+    VARIANT src, out;
+    VariantInit(&src); VariantInit(&out);
+    src.vt = VT_I4; src.lVal = v;
+    if (FAILED(VariantChangeType(&out, &src, 0, VT_DECIMAL)) || out.vt != VT_DECIMAL)
+        printf("MKDEC=FAIL vt=%u\n", (unsigned)out.vt);
+    return out;
 }
 
 static VARIANT mk_i4(LONG v) {
@@ -71,6 +126,31 @@ static VARIANT mk_i4(LONG v) {
     VariantInit(&x);
     x.vt = VT_I4;
     x.lVal = v;
+    return x;
+}
+
+/* Acct #305 SB159 (knife 50): a real one-element-per-slot VT_ARRAY|VT_I4 built the way a
+ * real client builds one -- SafeArrayCreate + SafeArrayPutElement, no hand-written layout. */
+static VARIANT mk_sa_i4(const LONG* vals, int n) {
+    SAFEARRAYBOUND b;
+    VARIANT x;
+    int i;
+    VariantInit(&x);
+    b.lLbound = 0;
+    b.cElements = (ULONG)n;
+    x.parray = SafeArrayCreate(VT_I4, 1, &b);
+    if (!x.parray) {
+        printf("MKSA=FAIL\n");
+        return x;
+    }
+    for (i = 0; i < n; i++) {
+        long k = i;
+        if (FAILED(SafeArrayPutElement(x.parray, &k, (void*)&vals[i]))) {
+            printf("MKSA=FAIL put=%d\n", i);
+            break;
+        }
+    }
+    x.vt = (VARTYPE)(VT_ARRAY | VT_I4);
     return x;
 }
 
@@ -213,6 +293,21 @@ int main(int argc, char **argv) {
     call_member(disp, L"SetValue", args, 1, DISPATCH_METHOD, "SETVALUE");
     call_member(disp, L"GetValue", args, 0, DISPATCH_METHOD, "GETVALUE");
 
+    /* Acct #305 SB144: the Decimal round trip, both directions. */
+    call_member(disp, L"Amt", args, 0, DISPATCH_METHOD, "AMT");
+    call_member(disp, L"Quarter", args, 0, DISPATCH_METHOD, "QUARTER");
+    {
+        VARIANT dargs[1];
+        dargs[0] = mk_dec_i4(5);
+        call_member(disp, L"EchoVal", dargs, 1, DISPATCH_METHOD, "ECHO");
+    }
+    {
+        /* Acct #305 SB159/SB162: array in and back out through the same Variant slot. */
+        VARIANT aargs[1];
+        static const LONG av[3] = { 10, 20, 30 };
+        aargs[0] = mk_sa_i4(av, 3);
+        call_member(disp, L"EchoVal", aargs, 1, DISPATCH_METHOD, "ECHOARR");
+    }
     {
         DISPID id = DISPID_UNKNOWN;
         LPOLESTR names[1];

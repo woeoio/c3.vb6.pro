@@ -16,6 +16,10 @@
     addObj("Screen");
     addObj("App");
     addObj("Printer");
+    // 账 #278 (§B108): 复数那一格原本没登记。发码侧一直在答 `vb6_Printers_Collection()`
+    // (cgen_expr_ident_dispatch.inc 的内置对象段)，语义层认不得这个名字 ⇒ Option Explicit 下
+    // 每条合法引用多配一条 VB3001，宽松模式下更实 —— 落进"隐式 Variant 局部"那格，把对象本体挤掉。
+    addObj("Printers");
     addObj("Forms");
     addObj("Clipboard");
     addObj("Console");  // Fix 161: Console 对象 (对齐 twinBASIC) —— 控制台 I/O
@@ -118,6 +122,17 @@
     addBuiltinFuncWithParams("CBool", Vb6Type::Boolean, {{"v", Vb6Type::Double, true, false}});
     addBuiltinFuncWithParams("CDate", Vb6Type::Date, {{"v", Vb6Type::Variant, true, false}});
     addBuiltinFuncWithParams("CByte", Vb6Type::Byte, {{"v", Vb6Type::Double, true, false}});
+    // ai/032: VB.NET 的无符号/窄整型转换函数 (阶梯对齐 8/16/32/64)。
+    // 同上面 CStr/CInt/CLng/CByte 一样**不加 calleeParams** —— 让 cgen 那侧的
+    // callee-rewrite (V 后缀 / BSTR→NumVal / 实参类型分派) 独立工作 (见本段开头注释)。
+    addBuiltinFunc("CSByte",   Vb6Type::SByte);
+    addBuiltinFunc("CUInt",    Vb6Type::UInteger);
+    addBuiltinFunc("CULng",    Vb6Type::ULong);
+    addBuiltinFunc("CULngLng", Vb6Type::ULongLong);
+    // twinBASIC 形 CLngPtr (doc.twinbasic.vb6.pro .../Conversion/CLngPtr.html):
+    // 转 LongPtr (x86 = Long / x64 = LongLong), .5 舍入与越界口径随 CLng 同族
+    // (RTL vb6_CLngPtr: FltToLng + OvfChk → 越界 Error 6)。同样不加 calleeParams。
+    addBuiltinFunc("CLngPtr",  Vb6Type::LongPtr);
     addBuiltinFuncWithParams("CCur", Vb6Type::Currency, {{"v", Vb6Type::Double, true, false}});
     addBuiltinFuncWithParams("CDec", Vb6Type::Variant, {{"v", Vb6Type::Variant, true, false}});
     addBuiltinFunc("CVar", Vb6Type::Variant);
@@ -252,6 +267,12 @@
     addBuiltinFunc("AppActivate", Vb6Type::Void);
     addBuiltinFunc("IsMissing", Vb6Type::Boolean);
     addBuiltinFunc("IIf", Vb6Type::Variant);
+    // C3 扩展 (ai/032): `If(cond, truePart, falsePart)` 三元运算符。
+    // 语义层这里只做"这个名字存在、返回类型按 Variant 处理"的最低登记 —— 三元分支的
+    // 具体类型由两侧分支在发码时各自决定 (C 的三目自己按通常算术转换收口)。
+    // 命名是关键字 `If` 而非标识符, parser 在表达式位置单独识别 (见 parser_expr.cpp
+    // parseNullDenotation 的 TokenKind::If 分支), 语义层拿到的是 IdentifierExpr("If")。
+    addBuiltinFunc("If", Vb6Type::Variant);
     addBuiltinFunc("Beep", Vb6Type::Void);
 // P14.3.5: CallByName(obj, procName$, callType, [args...])
 addBuiltinFunc("CallByName", Vb6Type::Variant);
@@ -272,9 +293,16 @@ addBuiltinFunc("CallByName", Vb6Type::Variant);
     addBuiltinFuncWithParams("Filter", Vb6Type::Variant,
         {{"sourcearray", kVariantArray, true, false}, {"match", Vb6Type::String, true, false},
          {"include", Vb6Type::Long, true, true}, {"compare", Vb6Type::Long, true, true}});
-    addBuiltinFunc("VarPtr", Vb6Type::Long);
-    addBuiltinFunc("StrPtr", Vb6Type::Long);
-    addBuiltinFunc("ObjPtr", Vb6Type::Long);
+    // 账 §B138: 指针三枚的类型答案 **LongPtr**, 不是 Long。
+    //   这三枚交的是**地址**, 宽度随目标架构: RTL 侧 vb6_StrPtr 返回 void*、
+    //   vb6_ObjPtr 返回 uintptr_t (vb6rtl_builtin.h:441-442), 而 Vb6Type::Long 在 C 侧
+    //   是 int32_t —— x64 一步式把结果放进槽里就把 64 位地址**截成低 32 位**。
+    //   Vb6Type::LongPtr 在 C 侧是 intptr_t (cgen_base_type.cpp Fix 081e), 与 RTL 同宽。
+    //   改前 Long ⇒ 赋值/实参/比较全按 32 位整型办; 改后按指针宽度办, x86 下
+    //   intptr_t 仍是 32 位, 行为不变。
+    addBuiltinFunc("VarPtr", Vb6Type::LongPtr);
+    addBuiltinFunc("StrPtr", Vb6Type::LongPtr);
+    addBuiltinFunc("ObjPtr", Vb6Type::LongPtr);
     addBuiltinFunc("LSet", Vb6Type::String);
     addBuiltinFunc("RSet", Vb6Type::String);
     addBuiltinFunc("WeekdayName", Vb6Type::String);

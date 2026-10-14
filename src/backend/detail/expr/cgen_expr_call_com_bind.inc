@@ -138,9 +138,7 @@
                           || comObjExpr_.find("vb6_hwnd_") == 0
                           || isListViewHostExpr(comObjExpr_)
                           || !treeViewNameOfExpr(comObjExpr_).empty()
-                          || !toolbarNameOfExpr(comObjExpr_).empty()
-                          // C29-Data: Data1.Recordset 的透传形态 (Fields/Item 走 Step1+Item 路)。
-                          || comObjExpr_.find("vb6_Data_Self(") == 0);
+                          || !toolbarNameOfExpr(comObjExpr_).empty());
         // Fix <VBFlexGridDemo>: 窗体 (Me) 的 ScaleX/ScaleY(x, fromScale, toScale) 是
         // **方法**, 不是"集合属性 + Item 下标"。axSlotObj 只按 vb6_hwnd_ 前缀认宿主槽,
         // 窗体 hwnd 同样命中 ⇒ Me.ScaleX(8, 3, Me.ScaleMode) 被编成
@@ -158,64 +156,20 @@
             // C29-3: ImageList 的 ListImages 是**真集合对象** (原生复刻, 见
             // vb6forms_memberobj.c), 不能对它发 vb6_ComGetObjectProp —— vb6_com_X 槽里
             // 放的是 HIMAGELIST 实例指针不是 IDispatch, 那样做等于拿垃圾当 vtable。
-            std::string collectionExpr;
-            {
-                if (Symbol::toLower(axMember) == "listimages") {
-                    std::string bareIL = imageListNameOfExpr(axObjExpr);
-                    if (!bareIL.empty())
-                        collectionExpr = "vb6_ImageList_ListImages((void*)vb6_com_" + bareIL + ")";
-                } else if (Symbol::toLower(axMember) == "buttons") {
-                    // C29-5b: Toolbar1.Buttons —— 宿主槽是 vb6_hwnd_X (真窗口)。
-                    std::string bareTB = toolbarNameOfExpr(axObjExpr);
-                    if (!bareTB.empty())
-                        collectionExpr = "vb6_Toolbar_Buttons((void*)vb6_hwnd_" + bareTB + ")";
-                } else if (Symbol::toLower(axMember) == "nodes") {
-                    // C29-8b: TreeView1.Nodes —— 宿主槽是 vb6_hwnd_X (真窗口)。
-                    std::string bareTV = treeViewNameOfExpr(axObjExpr);
-                    if (!bareTV.empty())
-                        collectionExpr = "vb6_TreeView_Nodes((void*)vb6_hwnd_" + bareTV + ")";
-                    // Fix <vbeclipse>: 跨窗体 TreeView (`frmViewViews.tvwViews.Nodes`) —
-                    // 宿主槽是控件句柄访问器文本。
-                    if (collectionExpr.empty()) {
-                        auto itExtTv = externalTreeViewAccs_.find(axObjExpr);
-                        if (itExtTv != externalTreeViewAccs_.end())
-                            collectionExpr = "vb6_TreeView_Nodes((void*)" + itExtTv->second + ")";
-                    }
-                } else {
-                    // C29-7: ListView 的 ListItems / ColumnHeaders 同一口径。
-                    // ⚠ 宿主槽是 **vb6_hwnd_X** (ListView 是真窗口), 不是 vb6_com_X。
-                    std::string memLV = Symbol::toLower(axMember);
-                    if (memLV == "listitems" || memLV == "columnheaders") {
-                        std::string lvHwnd = listViewHwndExprOf(axObjExpr);
-                        if (!lvHwnd.empty())
-                            collectionExpr = (memLV == "listitems")
-                                ? ("vb6_ListView_ListItems((void*)" + lvHwnd + ")")
-                                : ("vb6_ListView_ColumnHeaders((void*)" + lvHwnd + ")");
-                    }
-                }
-                if (collectionExpr.empty())
-                    collectionExpr = "vb6_ComGetObjectProp(" + axObjExpr + ", L\"" + axMember + "\")";
-            }
-            // C29-Data: `Recordset.Fields("name")` —— 取值即 FieldValueStr (不是集合 Item)。
-            // memberName 在 axSlotObj 路径上是 axMember (如 "Fields"), 实参 0 是字段名/下标。
-            if (Symbol::toLower(axMember) == "fields") {
-                std::string dhD = dataSelfHwndExpr(axObjExpr);
-                if (!dhD.empty()) {
-                    emitExpr(*node.positional[0]);
-                    std::string a0 = lastExpr_;
-                    bool allNum = !a0.empty() && a0.find_first_not_of("0123456789") == std::string::npos;
-                    if (allNum) a0 = "L\"" + a0 + "\"";
-                    lastExpr_ = "vb6_Data_FieldValueStr((void*)" + dhD + ", " + a0 + ")";
-                    return;
-                }
-            }
+            // 账 #299 第二十一刀: 这张表以前在这里也抄了一份 (listimages/buttons/nodes/
+            // listitems+columnheaders 四族，**没有 panels**) ⇒ `Set po = SB.Panels(1)` 与
+            // `With SB.Panels(1)` 的头一直发成拿 HWND 当 IDispatch。现在问唯一那一处，
+            // 认不出来才兜底。
+            std::string collectionExpr = memberCollectionObjectExpr(axObjExpr, axMember);
+            if (collectionExpr.empty())
+                collectionExpr = "vb6_ComGetObjectProp(" + axObjExpr + ", L\"" + axMember + "\")";
             // Step 2: 调用 Item(idx) 获取集合中的元素
             std::vector<std::string> packedArgs;
             for (size_t i = 0; i < node.positional.size(); i++) {
                 std::string packFn = comPackExpr(*node.positional[i]);
                 emitExpr(*node.positional[i]);
                 { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
-                packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                packedArgs.push_back(packArgValue(packFn, lastExpr_));
             }
             int32_t argc = (int32_t)packedArgs.size();
             std::string argsArray = "(void*[]){";
@@ -232,34 +186,8 @@
         std::string objExpr = std::move(comObjExpr_);
         std::string memberName = std::move(comMemberName_);
 
-        // C29-Data: Data1.Recordset 的调用面 —— Fields("name")(→FieldValueStr) 与
-        // MoveFirst/Last/Next/Previous/Refresh。objExpr 是 vb6_Data_Self( 透传形态。
-        if (objExpr.find("vb6_Data_Self(") == 0) {
-            if (getenv("C3_CG_TRACE")) {
-                FILE* tf = fopen("C:/Users/Administrator/Documents/c3.vb6.pro/.temp/cg3.log", "a");
-                if (tf) { fprintf(tf, "[COMBIND-DATA] member=[%s]\n", memberName.c_str()); fclose(tf); }
-            }
-            std::string dtM = Symbol::toLower(memberName);
-            std::vector<std::string> da;
-            for (size_t i = 0; i < node.positional.size(); i++) {
-                emitExpr(*node.positional[i]);
-                da.push_back(lastExpr_);
-            }
-            if (dtM == "fields") {
-                // VB6: Fields("name") / Fields(1) —— 取值即 FieldValueStr
-                std::string a0 = da.empty() ? std::string("L\"\"") : da[0];
-                // 数字下标转宽字面量 (FieldValueStr 的参数是 nameOrIndex 统一收宽串)
-                if (!a0.empty() && a0.find_first_not_of("0123456789") == std::string::npos)
-                    a0 = "L\"" + a0 + "\"";
-                lastExpr_ = "vb6_Data_FieldValueStr(" + objExpr + ", " + a0 + ")";
-                return;
-            }
-            if (dtM == "movenext")     { lastExpr_ = "vb6_Data_MoveNext(" + objExpr + ")"; return; }
-            if (dtM == "moveprevious") { lastExpr_ = "vb6_Data_MovePrevious(" + objExpr + ")"; return; }
-            if (dtM == "movefirst")    { lastExpr_ = "vb6_Data_MoveFirst(" + objExpr + ")"; return; }
-            if (dtM == "movelast")     { lastExpr_ = "vb6_Data_MoveLast(" + objExpr + ")"; return; }
-            if (dtM == "refresh")      { lastExpr_ = "vb6_Data_Refresh(" + objExpr + ")"; return; }
-        }
+        // 账 #278 §B124: 这一格 (`vb6_Data_Self(` 透传形态的直译) 与 §B124 列的那几格同代、
+        // 同样恒假，撤掉；顺带带走里面那台把日志路径写死在本机用户目录上的 getenv 探针。
         // 账 #196 第三条: 窗体型接收者的 `ScaleX`/`ScaleY` (`picA.ScaleX(…)`、`Me.ScaleX(…)`)。
         // 不拦就落到下面那条通用 COM 方法调用 —— `vb6_ComCallDouble(vb6_hwnd_X, L"ScaleX", …)`：
         // 对一枚假 IDispatch 发 Invoke ⇒ 编得过、链接过、跑起来回 0（#143 那一族在方法面上的第三味；
@@ -440,9 +368,11 @@
                     }
                     return;
                 }
-                if (ilMember == "clear") {
+                // 账 #278 §B72 第十四刀: 与语句码头问同一张表
+                std::string fnIlB = controlZeroArgMethod(FrmControlType::ImageList, ilMember);
+                if (!fnIlB.empty()) {
                     std::string ilSlot = "vb6_com_" + imageListNameOfExpr(objExpr);
-                    lastExpr_ = "vb6_ImageList_ClearImages((void*)" + ilSlot + ")";
+                    lastExpr_ = fnIlB + "((void*)" + ilSlot + ")";
                     return;
                 }
             }
@@ -507,8 +437,10 @@
                     }
                     return;
                 }
-                if (sbMember == "clear") {
-                    lastExpr_ = "vb6_StatusBar_ClearPanels((void*)" + sbHwnd + ")";
+                // 账 #278 §B72 第十四刀: 同上（表里 (StatusBar, clear) 那一行）
+                std::string fnSbB = controlZeroArgMethod(FrmControlType::StatusBar, sbMember);
+                if (!fnSbB.empty()) {
+                    lastExpr_ = fnSbB + "((void*)" + sbHwnd + ")";
                     return;
                 }
             }
@@ -609,34 +541,19 @@
             const Symbol* comSym = earlyBoundSym_;
             earlyBoundSym_ = nullptr;
 
-            // 查找方法签名以确定返回类型
-            std::string memLower = memberName;
-            std::transform(memLower.begin(), memLower.end(), memLower.begin(), ::tolower);
-            auto it = comSym->comMethods.find(memLower);
+            // 账 #245/§B94: 这张表只从 comSigViewOf 读一次，下面两处共用同一份视图。
+            ComSigView sv = comSigViewOf(comSym, memberName);
             bool hasArgs = (!node.positional.empty() || !node.named.empty());
 
 
             // 无参属性Get: 用后期绑定属性读取，根据返回类型选函数
-            if (it != comSym->comMethods.end() && it->second.isPropertyGet && !hasArgs) {
-                const auto& sig = it->second;
-                std::string returnType = mapType(sig.returnType);
-                if (returnType == "BSTR") {
-                    lastExpr_ = "vb6_ComGetStringProp(" + objExpr + ", L\"" + memberName + "\")";
-                } else if (returnType == "int32_t" || returnType == "int16_t") {
-                    lastExpr_ = "vb6_ComGetIntProp(" + objExpr + ", L\"" + memberName + "\")";
-                } else if (returnType == "double" || returnType == "float") {
-                    lastExpr_ = "vb6_ComGetDoubleProp(" + objExpr + ", L\"" + memberName + "\")";
-                } else if (returnType == "void*") {
-                    lastExpr_ = "vb6_ComGetObjectProp(" + objExpr + ", L\"" + memberName + "\")";
-                } else {
-                    lastExpr_ = "vb6_ComGetStringProp(" + objExpr + ", L\"" + memberName + "\")";
-                }
+            if (sv.found && sv.isGet && !hasArgs) {
+                lastExpr_ = comGetterExpr(sv, objExpr, memberName);
                 return;
             }
             // P24-07: 有参数的前期绑定方法 → 利用签名选择类型化COM调用函数
-            if (it != comSym->comMethods.end() && hasArgs) {
-                const auto& sig = it->second;
-                std::string returnType = mapType(sig.returnType);
+            if (sv.found && hasArgs) {
+                const Symbol::ComMethodSig& sig = *sv.sig;
                 std::vector<std::string> packedArgs;
                 // Fix 160-com-byref: ByRef 对象出参 (Chilkat ObjectOf2/ArrayOf2 的 obj/arr 形参)。
                 // 这类形参 type=Object 且 !isByVal; 调用方必须以 void** 形式把变量地址传出,
@@ -674,7 +591,7 @@
                         && isKnownObjectVarName(lastExpr_)) {
                         packedArgs.push_back("vb6_ComPackObjectRef((void**)&" + lastExpr_ + ")");
                     } else {
-                        packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
                     }
                 }
                 for (auto& named : node.named) {
@@ -686,7 +603,7 @@
                         && isKnownObjectVarName(lastExpr_)) {
                         packedArgs.push_back("vb6_ComPackObjectRef((void**)&" + lastExpr_ + ")");
                     } else {
-                        packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
                     }
                 }
                 int32_t argc = (int32_t)packedArgs.size();
@@ -697,17 +614,7 @@
                 }
                 argsArray += "}";
                 std::string callArgs = objExpr + ", L\"" + memberName + "\", " + argsArray + ", " + std::to_string(argc);
-                if (returnType == "BSTR") {
-                    lastExpr_ = "vb6_ComCallBSTR(" + callArgs + ")";
-                } else if (returnType == "int32_t" || returnType == "int16_t") {
-                    lastExpr_ = "vb6_ComCallInt(" + callArgs + ")";
-                } else if (returnType == "double" || returnType == "float") {
-                    lastExpr_ = "vb6_ComCallDouble(" + callArgs + ")";
-                } else if (returnType == "void*") {
-                    lastExpr_ = "vb6_ComCallObject(" + callArgs + ")";
-                } else {
-                    lastExpr_ = "vb6_ComCall(" + callArgs + ")";  // 未知返回类型: 返回void*
-                }
+                lastExpr_ = comTypedCallExpr(sv, callArgs);
                 isComMarker_ = false;
                 return;
             }
@@ -728,6 +635,14 @@
                 std::string packFn = comPackExpr(*argExpr);
                 emitExpr(*argExpr);
                 { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
+                // Fix 266: 打包器的**型**与 marker 解析的**型**不同源 ——
+                // comPackExpr 按 AST 推的给出 typed 打包器 (ComPackDouble/Int/Bool/BSTR),
+                // 而 marker 解析可能交回**无型** VARIANT 取值
+                // `vb6_VariantFromComResult(vb6_ComGetProp(obj, L"m"))` ⇒
+                // `vb6_ComPackDouble(vb6_VARIANT)` = C2440 "无法从 vb6_VARIANT 转换为 double"。
+                // 这一格收口到 packArgValue 一处（见下方 packedArgs.push_back 那一行；
+                // 与 callee_ident / callee_member / prelude 三个片段共用同一个函数，
+                // 不在每个站点各抄一份 —— 实测只堵一处等于没堵）。
                 // Fix <vbeclipse>: 实参表达式本身已返回**堆 VARIANT*** (ComGetProp /
                 // ComCall / ComGetObjectProp … 返回 void* 承载一个 COM VARIANT) 时, 它
                 // 已经是 ComCall 形参数组要的东西, 不能再包一层 vb6_ComPackObject —— 那会
@@ -738,6 +653,7 @@
                        lastExpr_.compare(0, 15, "vb6_ComGetProp(") == 0
                     || lastExpr_.compare(0, 17, "vb6_ComGetPropArg(") == 0
                     || lastExpr_.compare(0, 12, "vb6_ComCall(") == 0
+                    || lastExpr_.compare(0, 20, "vb6_ComCallByDispid(") == 0
                     || lastExpr_.compare(0, 18, "vb6_ComCallObject(") == 0
                     || lastExpr_.compare(0, 18, "vb6_ComGetObjectProp(") == 0
                     || lastExpr_.compare(0, 23, "vb6_ComGetPropertyObject(") == 0
@@ -745,7 +661,7 @@
                 if (argIsVariantPtr && packFn == "vb6_ComPackObject") {
                     packedArgs.push_back(lastExpr_);   // 已是 VARIANT*, 直接作实参 (ComCall 会 VariantClear+free)
                 } else {
-                    packedArgs.push_back(packFn + "(" + lastExpr_ + ")");
+                    packedArgs.push_back(packArgValue(packFn, lastExpr_));
                 }
             };
             for (size_t pos = 0; pos < node.positional.size(); pos++) {
@@ -856,7 +772,7 @@
     // Fix 084f: 旧实现用 (vb6_VARIANT){<内层调用>} 复合字面量以值初始化结构体,
     // 首成员是 vb6_vartype → 触发 C2440 "vb6_VARIANT → vb6_vartype".
     // 改用按值辅助函数 vb6_VariantArrayGetVal(内层调用, 外层索引).
-    if (callee.compare(0, 20, "vb6_VariantArrayGet(") == 0 && !node.positional.empty()) {
+    if (isVariantSlotElemRead(callee) && !node.positional.empty()) {
         std::string innerCall = callee;
         std::string outerIdx;
         emitExpr(*node.positional[0]);
@@ -875,9 +791,36 @@
     // 移交给 classMethodObjArg (随后会被前置到参数列表).
     // 此时 callee 是裸函数名 (如 "vb6_cDataBase_Exec"), 上面的 split 路径因
     // callee.back() != ')' 不会触发, 故不会被双重设置.
+    //
+    // Fix <Command2>: 但"裸函数名 + this"这一形态**必须**先拼回完整调用, 否则下面
+    // P6.5 的拆分与 Fix 242b 的「项目类集合默认成员索引」识别整段被跳过 ——
+    // 它们都以 `callee` 形如 `func(obj)` 为前提。UserControl 实例的成员
+    // (emitUcInstanceMemberExpr 的 asCallCallee_ 分支) 交的正是裸名:
+    //   `MyUC1.Things("abc").DoIt`
+    //     → 裸名 vb6_MyUC_prop_get_Things + pendingChainObj_ = (vb6_cls_MyUC*)…
+    // 拼不回去 ⇒ `("abc")` 落进通用位置实参路, 又被 Fix 041c 按「Things 是 0 参
+    // PropertyGet」截掉 (args.size()=1 > calleeParams.size()=0 ⇒ maxArgs=0)
+    // ⇒ 实参静默消失, 接收者变成整个集合并引发运行期错误 9。
+    // 拼回去之后 callee 形如 `func(obj)`, 下面的 split/242b 与普通类字段/属性
+    // 走**同一条**路径 (实测 ComCtlsDemo ImageList.ListImages("abc").Draw 族)。
+    // ⚠ 只在**下面的 P6.5 拆分确实会跑**时才拼: 拆分的门槛是
+    //   `callee 形如 func(obj)` && (有位置/named 实参 || needsSplitForOptionalPad
+    //   || needsSplitForMissingArgs)
+    // 无实参又不需要补齐时 (如 `s(0).Side()` —— Side 无参) 拆分整段不进, 此时若已把
+    // classMethodObjArg 清掉, 末尾 `callee + "(" + argList + ")"` 就会在**已完整的调用**
+    // 后面再拼一层空括号 ⇒ `vb6_X_Side(recv)()` ⇒ MSVC C2064 (term does not evaluate
+    // to a function taking N arguments)。tests/arr_cls 实测 (Fix 192 那一族)。
     if (!pendingChainObj_.empty()) {
         classMethodObjArg = std::move(pendingChainObj_);
         pendingChainObj_.clear();
+        const bool splitWillRun = !classMethodObjArg.empty() && !callee.empty()
+            && callee.find('(') == std::string::npos
+            && ((!node.positional.empty() || !node.named.empty())
+                || needsSplitForOptionalPad || needsSplitForMissingArgs);
+        if (splitWillRun) {
+            callee += "(" + classMethodObjArg + ")";
+            classMethodObjArg.clear();
+        }
     }
 
     if (callee.size() >= 2 && callee.back() == ')'
@@ -903,6 +846,11 @@
             // 对象的 Item 调用. 不能并入内层参数表 (C2197 参数太多).
             // 有声明参数的 prop_get (Prop(k)) 仍走合并 (内层只发了this).
             bool innerIsChainedObj = false;
+            // Fix 242b: 内层无参 `_prop_get_` 的返回类型是**项目类集合**时, 外层 (idx) 是该
+            // 集合默认成员 Item 的索引 —— 记下项目类 Item 的发射函数, 下方改走项目类路径,
+            // 而不是把它当 IDispatch (项目类实例不是 COM 对象)。见使用点注释。
+            std::string collItemFn242b;
+            std::string collCls242b;
             if (!node.positional.empty() && node.named.empty()) {
                 // funcPart 是拆开后的裸函数名 (无括号)
                 if (funcPart == "vb6_ComCall" || funcPart == "vb6_ComCallObject"
@@ -913,9 +861,56 @@
                     size_t gp = funcPart.find("_prop_get_");
                     if (gp != std::string::npos) {
                         std::string propName = funcPart.substr(gp + 10);
-                        Symbol* propSym86 = symTab_.lookupModuleByKind(propName, SymbolKind::PropertyGet);
+                        // Fix <Command2>: `_prop_get_` 必须按 **funcPart 里的类前缀**解析
+                        // (`vb6_<Cls>_prop_get_<Prop>`)。原实现只用 lookupModuleByKind
+                        // 在当前模块作用域里按**名字**找 PropertyGet —— 工程内多个类有同名
+                        // 属性 (Value / Text / Caption / Picture …) 时会命中**别的类**那枚。
+                        // 实测 ComCtlsDemo MainForm.frm:598
+                        //   `HotKey1.Value(vbCtrlMask + vbAltMask) = vbKeyA`
+                        // 撞上一枚 0 参的 Value ⇒ 被误判成"集合默认成员索引"，发成
+                        //   vb6_VariantFromComResult(vb6_ComCall(<HotKey.Value>, L"Item", …)) = …
+                        // ⇒ C2198 (实参太多) + C2106 (不是左值)，工程直接编不过。
+                        // 判据与 resolveClassMemberCall / getClassMethodReturnType 同源:
+                        // 按 sourceModule (或本模块名) 匹配类，名字只作次要条件。
+                        std::string clsPrefix86;
+                        if (gp > 4) clsPrefix86 = funcPart.substr(4, gp - 4);
+                        Symbol* propSym86 = nullptr;
+                        if (!clsPrefix86.empty() && symTab_.moduleScope()) {
+                            const std::string pLower86 = Symbol::toLower(propName);
+                            const std::string cLower86 = Symbol::toLower(clsPrefix86);
+                            for (const auto& [k86, s86] : symTab_.moduleScope()->symbols()) {
+                                if (s86->lowerName != pLower86) continue;
+                                if (s86->kind != SymbolKind::PropertyGet) continue;
+                                bool m86 = false;
+                                if (s86->isExternal) {
+                                    if (Symbol::toLower(s86->sourceModule) == cLower86) m86 = true;
+                                } else if (isClassModule_
+                                           && Symbol::toLower(moduleName_) == cLower86) {
+                                    m86 = true;
+                                }
+                                if (m86) { propSym86 = s86.get(); break; }
+                            }
+                        }
+                        if (!propSym86 && clsPrefix86.empty()) {
+                            propSym86 = symTab_.lookupModuleByKind(propName,
+                                                                   SymbolKind::PropertyGet);
+                        }
                         if (propSym86 && propSym86->params.empty()) {
                             innerIsChainedObj = true;
+                            // Fix 242b: 该无参属性返回**项目类集合**时记下项目类 Item 发射
+                            // 函数 (下方走项目类路径)。判据用 getClassMethodReturnType(返回名,
+                            // "Item") 非空 = 返回名前确实是一个项目 Class 且它有 Item 成员。
+                            if (!propSym86->variableTypeName.empty()) {
+                                const std::string retName242b = propSym86->variableTypeName;
+                                if (!getClassMethodReturnType(retName242b, "Item").empty()) {
+                                    const std::string itemFn242b =
+                                        resolveClassMemberCall(retName242b, "Item");
+                                    if (!itemFn242b.empty()) {
+                                        collItemFn242b = itemFn242b;
+                                        collCls242b = retName242b;
+                                    }
+                                }
+                            }
                         } else {
                             // Fix 092w: 内层 prop_get 调用已自带实参 (classMethodObjArg
                             // 顶层段数 >= 2, 即 this + 至少 1 个实参) 说明内层调用已自足,
@@ -938,6 +933,40 @@
             }
             if (innerIsChainedObj) {
                 std::string innerObj = funcPart + "(" + classMethodObjArg + ")";
+                // Fix 242b: 项目类集合索引 —— 内层 `_prop_get_` 返回项目类 (C 侧
+                // vb6_cls_<Coll>*) 时, 外层 (idx) 是该项目类集合默认成员 Item 的索引,
+                // 必须发 vb6_<Coll>_prop_get_Item(<coll>, <idx>) 直接拿元素类指针。
+                //
+                // 此前一律发 vb6_VariantFromComResult(vb6_ComCall(<coll>, L"Item", …))
+                // —— 把**项目类实例**当 IDispatch: C 里 vb6_cls_X* 隐式转 void* 编得过,
+                // 但结果是 VARIANT, 下游按元素类做成员访问时 `(void*)VARIANT` ⇒ C2440。
+                // 实测 ComCtlsDemo (Fix 242 同时把元素类推断接上之后暴露):
+                //   CoolBar.ctl:874 `Me.Bands(i).Caption`
+                //     Bands As CbrBands (项目类) → CbrBands.Item(i) As CbrBand
+                //     ⇒ C2440 vb6_VARIANT → void* ×157
+                //   ToolBar.ctl  `Buttons(i).ButtonMenus(ii).Key` 族
+                //     ⇒ C2440 vb6_VARIANT → vb6_cls_TbrButton* ×25
+                // 与 Pattern L (cgen_expr_call_callee_ident/member.inc 的"项目类字段
+                // 集合索引"发 vb6_<Type>_prop_get_Item) 同口径, 只是这里集合来自**属性**。
+                if (!collItemFn242b.empty()) {
+                    std::vector<ParameterInfo> collParams242b;
+                    findClassMemberGetParams(collCls242b, "Item", collParams242b);
+                    // 形参个数必须与外层索引个数一致, 否则是别的形态 → 退回 COM。
+                    if (collParams242b.size() == node.positional.size()) {
+                        std::string args242b;
+                        for (size_t i = 0; i < node.positional.size(); i++) {
+                            emitExpr(*node.positional[i]);
+                            std::string one242b = std::move(lastExpr_);
+                            if (collParams242b[i].type == Vb6Type::Variant) {
+                                one242b = boxToVariant(node.positional[i].get(), one242b);
+                            }
+                            if (i) args242b += ", ";
+                            args242b += one242b;
+                        }
+                        lastExpr_ = collItemFn242b + "(" + innerObj + ", " + args242b + ")";
+                        return;
+                    }
+                }
                 // Fix 092w: 内层函数返回 vb6_VARIANT (如 cCollection.prop_get_Item) 时,
                 // vb6_ComCall 的 obj 形参是 void* — 需先经 vb6_VariantToObjectVal 提取
                 // 对象指针, 否则 vb6_VARIANT 直传 → C2440. (无参 prop_get 返回 void* 的
@@ -950,7 +979,7 @@
                     std::string packFn86 = comPackExpr(*node.positional[i]);
                     emitExpr(*node.positional[i]);
                     { std::string resolved86 = resolveComMarkerForPack(packFn86); if (!resolved86.empty()) lastExpr_ = resolved86; }
-                    packedArgs86.push_back(packFn86 + "(" + lastExpr_ + ")");
+                    packedArgs86.push_back(packArgValue(packFn86, lastExpr_));
                 }
                 int32_t argc86 = (int32_t)packedArgs86.size();
                 std::string argsArray86 = "(void*[]){";

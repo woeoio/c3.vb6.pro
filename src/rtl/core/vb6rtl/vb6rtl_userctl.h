@@ -12,6 +12,7 @@
 // 做 With 成员写) 与 Picture1.Line 的 B/BF 模式常量、HitResult 常量。
 
 #include "vb6rtl_bstr.h"
+#include "vb6rtl_variant.h"   // Fix 224: 下面要用 vb6_VARIANT / vb6_VariantToDouble
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,6 +62,7 @@ extern int32_t vb6_UserControl_OLEDropMode;
 // 驱动, 这些成员的真实值来自容器). 命名大小写与 cIdent 保持一致.
 extern void*   vb6_UserControl_Picture;        // IPictureDisp* (Set 读写)
 extern int32_t vb6_UserControl_BackColor;      // OLE_COLOR
+extern int32_t vb6_UserControl_BackStyle;      // Fix 255: 0=Transparent 1=Opaque (与 BackColor 同族)
 extern int32_t vb6_UserControl_ForeColor;      // OLE_COLOR
 extern int16_t vb6_UserControl_RightToLeft;    // TriState: 0/1/-1
 extern void*   vb6_UserControl_ParentControls; // Controls 集合 (For Each)
@@ -90,8 +92,37 @@ int32_t vb6_UserControl_TextHeight(BSTR text);
 //   ScaleX/ScaleY(x, fromScale, toScale) → 单位换算
 //   AsyncRead(url, asyncType, propertyName, flags) → 异步读取 (编译形态下空操作)
 //   PropertyChanged(propName) → 通知容器属性已变 (触发容器端的 Changed/属性刷新)
-double vb6_UserControl_ScaleX(double x, int32_t fromScale, int32_t toScale);
-double vb6_UserControl_ScaleY(double x, int32_t fromScale, int32_t toScale);
+// Fix 224: VB6 的 ScaleX/ScaleY 接受 **Variant 实参** —— VB6 在这里做的是隐式数值转换,
+// 而 UDT/集合链上的**后期绑定属性读**交回的是 vb6_VARIANT **值**:
+//   vb6_UserControl_ScaleX(vb6_VariantFromComResult(vb6_ComGetProp(…, L"Width")), 10, 3)
+// → C2440 "无法从 vb6_VARIANT 转换为 double" (ComCtlsDemo CoolBar.c:1239/1240/1241/1242
+//   等 ×86, 场景 `ScaleX(Me.Bands(i).Item(i).Width, vbTwips, vbPixels)`)。
+// 宿形参是 `double`, 上面那一对早前直接把这个 VARIANT 值塞进去 ⇒ 编不过。
+//
+// 修法与 vb6rtl_variant.h 的 `vb6_VariantFromValue` **同一口径**: 真函数改挂 `_Raw` 后缀,
+// 原名交 `_Generic` 宏按**首参类型**分派 —— C 标量走原函数 (既有全部调用点行为一字不变),
+// vb6_VARIANT 走 `…V` 档先用 vb6_VariantToDouble 取回数值再换算。
+// 这样一处 RTL 改动就把"VB6 隐式 Variant→数值"这一格补齐, 不必去动散布在多条调用发射
+// 路径上的 codegen (那条路风险大且 Charts 等工程会跟着漂)。
+double vb6_UserControl_ScaleXRaw(double x, int32_t fromScale, int32_t toScale);
+double vb6_UserControl_ScaleYRaw(double y, int32_t fromScale, int32_t toScale);
+
+// Variant 档: 先 vb6_VariantToDouble 把 VARIANT 解成 double, 再走同一份换算实现。
+static __inline double vb6_UserControl_ScaleXV(vb6_VARIANT x, int32_t fromScale,
+                                               int32_t toScale) {
+    return vb6_UserControl_ScaleXRaw(vb6_VariantToDouble(x), fromScale, toScale);
+}
+static __inline double vb6_UserControl_ScaleYV(vb6_VARIANT y, int32_t fromScale,
+                                               int32_t toScale) {
+    return vb6_UserControl_ScaleYRaw(vb6_VariantToDouble(y), fromScale, toScale);
+}
+
+#define vb6_UserControl_ScaleX(x, fromScale, toScale) _Generic((x), \
+    vb6_VARIANT: vb6_UserControl_ScaleXV,  \
+    default:     vb6_UserControl_ScaleXRaw)((x), (fromScale), (toScale))
+#define vb6_UserControl_ScaleY(y, fromScale, toScale) _Generic((y), \
+    vb6_VARIANT: vb6_UserControl_ScaleYV,  \
+    default:     vb6_UserControl_ScaleYRaw)((y), (fromScale), (toScale))
 
 // 账 #196 第三条: 上面那一对只是**转手**到这里 —— 单位换算的实现只有一份，名字不带宿主前缀，
 // 因为 PictureBox / 窗体 / `Me.` / With 块里那一枚控件 / 窗体模块里裸写 这四形接收者要的是同一件事。
@@ -113,10 +144,12 @@ void   vb6_UserControl_Cls(void);
 // Fix 133u: UserControl.Parent (容器窗体对象). czUI.ctl 用它做全屏/恢复窗体:
 //   UserControl.Parent.hWnd       → vb6_UC_ParentHwnd(void)
 //   UserControl.Parent.Icon.Handle→ vb6_UC_ParentIconHandle(void)
-//   UserControl.Parent.Move l,t,w,h → vb6_UC_ParentMove(l,t,w,h)
+//   UserControl.Parent.Move l,t,w,h → vb6_UC_ParentMove(l,t,w,h) —— 四档是 **VB 侧量纲**
+//                                   (窗体容器=缇)，账 #251 起内部转调 vb6_ControlMove，
+//                                   不在这里自己拼 MoveWindow
 //   With UserControl.Parent       → vb6_UC_ParentObject(void) (返回窗体 HWND,
-//                                   With 内 .Left/.Top/.Width/.Height 经
-//                                   vb6_ComGetIntProp 以窗体 HWND 解析)
+//                                   With 内 .Left/.Top/.Width/.Height 走宿主模型的属性
+//                                   分派, 两头都问 vb6forms_ctrl.c 那四对进出口)
 // 由 cgen 生成端文本重写 (CodeEmitter::emitLine, Fix 133u) 把生成 C 里的
 // "vb6_UserControl_Parent.<成员>" 链改写为这些函数 — 见 cgen_base.cpp.
 void*   vb6_UC_ParentObject(void);
@@ -131,6 +164,48 @@ extern BSTR    vb6_Ambient_DisplayName;      // 控件实例名
 extern int32_t vb6_Ambient_ForeColor;
 extern int32_t vb6_Ambient_BackColor;
 extern int16_t vb6_Ambient_RightToLeft;   // Fix 154-B: TriState 从环境属性
+
+// Fix 214: ComCtlsDemo (ComCtls 控件组) 用到的其余宿主伪对象成员。
+// 生成端 M22 host-pseudo-object 通路按 `vb6_<伪对象>_<成员>` 拼名, 而这些名字此前
+// 既不在本头也不在任何 RTL 源里 → C2065 (111 个 TU 里实测: vb6_UserControl_Appearance
+// 22 处 / _AccessKeys 18 / _DrawStyle 10 / vb6_Ambient_DisplayAsDefault 4 /
+// vb6_Extender_Default 4 / vb6_Extender_Cancel 4)。
+// 与 Fix 154-B / 174 同一档次: Standard EXE 编译形态下容器不活动, 但这些槽位**不是**
+// 只写的样板 —— 控件自己的属性过程会把它们读回来 (CheckBoxW.FrameW 的 Appearance
+// getter 直接返回它并据此挑 ForeColor; LabelW/LinkLabel/CommandLink 用 DrawStyle 决定
+// 画不画边; FrameW 把 Caption 里的加速键写进 AccessKeys), 所以必须是可读写的真实槽位,
+// 不能退化成"恒零的桩"。
+// 类型按生成代码的实际用法定 (逐个核过, 别照 VB6 声明表猜):
+//   Appearance 在 prop_get_Appearance 里是 int32_t (返回类型就是 int32_t);
+//   DrawStyle 与 vbSolid/vbInvisible 直接比较赋値 → int32_t;
+//   AccessKeys 被 vb6_ChrW / vb6_BSTR_Empty 赋値 → BSTR;
+//   Ambient.DisplayAsDefault 与 Extender.Default/Cancel 是 Boolean → int16_t。
+extern int32_t vb6_UserControl_Appearance;   // 0=Flat 1=3D
+extern int32_t vb6_UserControl_DrawStyle;    // DrawStyle: vbSolid=0 / vbInvisible=5
+extern BSTR    vb6_UserControl_AccessKeys;   // 加速键字符 (Caption 里 & 后的那一个)
+// Fix 221: ComCtlsDemo 的两个 UserControl 成员 —— 生成端按
+// `vb6_<伪对象>_<成员>` 拼名, 而这两个名字此前既不在本头也不在任何 RTL 源里 ⇒
+// C2065 (实测 9 处 vb6_UserControl_EventsFrozen: DTPicker/MonthView/VirtualCombo/
+// VListBox; 3 处 vb6_UserControl_ContainedControls: FrameW ×2 / StatusBar)。
+//
+//   EventsFrozen —— `.ctl` 里只出现在**读**位置
+//     (`If Length > 0 And UserControl.EventsFrozen = False Then` 这一族)。
+//     VB6 语义: 设计器在批量设属性时冻结事件; Standard EXE 运行期恒 False。
+//     全工程没有任何一处写它 ⇒ 一枚恒 0 的 int16_t 就是正确值, 不是桩。
+//   ContainedControls —— `Set ContainedControls = UserControl.ContainedControls`
+//     与 `For Each ControlEnum In UserControl.ContainedControls` 两种用法, 都是
+//     **按值取集合**. 它不是宿主前缀命名契约那一族: RTL 侧的真实实体是控件集合
+//     单例 (uc_controls.c 的 vb6_UC_Controls()), 由 uc_controls.c 初始化这里这枚
+//     extern, 使它与 `Controls` 裸名那条路 (cgen_expr_ident_builtin.inc 发
+//     vb6_UC_Controls()) 落到**同一个**对象 —— 否则 `For Each` 枚举到空集。
+extern int16_t vb6_UserControl_EventsFrozen;
+extern void*   vb6_UserControl_ContainedControls;
+extern int16_t vb6_Ambient_DisplayAsDefault; // Ambient: 容器是否把本控件当默认按钮
+// Extender: CommandButton.Default / .Cancel 转发。注意拼写 —— `Default` 是 VB6 关键字,
+// 发码端 cIdent 给关键字加 `vb6_` 前缀, 所以 C 名是 vb6_Extender_**vb6_**Default
+// (不是 vb6_Extender_Default)。`Cancel` 不是关键字, 照常。
+extern int16_t vb6_Extender_vb6_Default;
+extern int16_t vb6_Extender_Cancel;
 
 // --- Extender (容器提供的扩展对象) ---
 extern int32_t vb6_Extender_Left;
@@ -162,6 +237,7 @@ extern void*   vb6_Extender_DragIcon;    // Set 对象 (Picture)
 void vb6_UserControl_OLEDrag(void);
 void vb6_Extender_Drag(vb6_VARIANT* Action, int _has_Action);
 void vb6_Extender_SetFocus(void);
+void vb6_UserControl_SetFocus(void);
 void vb6_Extender_ZOrder(vb6_VARIANT* Position, int _has_Position);
 
 // Fix 133u: czUI.ctl 用到 Extender 的 Visible / Height
@@ -169,9 +245,16 @@ void vb6_Extender_ZOrder(vb6_VARIANT* Position, int _has_Position);
 //   生成 C 是结构体字段访问 `vb6_UserControl_Extender.Visible`, 故提供该结构体.
 //   注意: 不能命名为 extern 单独变量, 因为 cgen 会把 Extender 当作对象,
 //   `.Visible` 作为字段追加. 结构体字段与生成代码天然吻合.
+// Fix 221: DataChanged 也走这条形状 —— `UserControl.Extender.DataChanged = True`
+//   (ComCtlsDemo 里 32 处, CheckBoxW/ComboBoxW/DTPicker/ImageCombo/LabelW/ListBoxW/
+//   MonthView/ProgressBar/RichTextBox/Slider … 全是在"属性页改了值"之后通知容器
+//   刷新). 它**只能**是结构体字段: 同一个 `.ctl` 里 `Extender.DataChanged` 那类
+//   裸对象写法另有 vb6_Extender_* 全局那一族, 而 `UserControl.Extender.X` 拼出来
+//   的对象名是 vb6_UserControl_Extender, 后面跟的成员由这里决定。
 struct vb6_UserControl_Extender_Type {
-    int16_t Visible;   // -1=可见 0=隐藏 (czUI 置位保存; 实际由宿主/property 配合)
-    int32_t Height;    // 容器提供的控件外接高度 (twips/pixels 随 ScaleMode)
+    int16_t Visible;      // -1=可见 0=隐藏 (czUI 置位保存; 实际由宿主/property 配合)
+    int32_t Height;       // 容器提供的控件外接高度 (twips/pixels 随 ScaleMode)
+    int16_t DataChanged;  // Fix 221: 容器是否要重读控件的绑定数据 (运行期恒不活动)
 };
 extern struct vb6_UserControl_Extender_Type vb6_UserControl_Extender;
 
@@ -195,9 +278,6 @@ static inline void* vb6_PropertyPage_SelectedControls(int32_t index) {
 }
 
 // --- HitTest 常量 (VB6 HitResult) ---
-#define vbHitResultOutside     0
-#define vbHitResultTransparent 1
-#define vbHitResultHit         2
 
 // PropertyPage 的 Changed 只有 vb6_PropertyPage_Changed 这一个名字 (账 #219)。
 // 这里曾 extern 过一枚裸名 `int16_t Changed` 给"源码里裸写 Changed"落脚 —— 注释当时说
@@ -205,17 +285,6 @@ static inline void* vb6_PropertyPage_SelectedControls(int32_t index) {
 // 标准模块里 `Public Changed As Long` 在生成的模块 C 里就是裸名 (探针实测 C2371 / no exe)。
 
 // --- AsyncProperty / Picture 类型常量 (VB6 内建, 此前缺失) ---
-#define vbAsyncTypePicture     0
-#define vbAsyncTypeFile        1
-#define vbAsyncTypeByteArray   2
-#define vbAsyncReadSynchronous 0
-#define vbAsyncReadAsynchronous 2
-#define vbAsyncReadForceUpdate 4
-#define vbPicTypeNone          0
-#define vbPicTypeBitmap        1
-#define vbPicTypeMetafile      2
-#define vbPicTypeIcon          3
-#define vbPicTypeEMetafile     4
 
 // Picture.Line 的 B / BF 由 parser 在 style 位置折成字面量 1/2 (账 #220) —— 这里曾
 // extern 过两枚裸名 C 全局，与 VB 工程里叫 B 的模块级变量直接撞车，故删除。

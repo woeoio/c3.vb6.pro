@@ -124,15 +124,17 @@ static HRESULT STDMETHODCALLTYPE axSite_OCS_GetExtendedControl(IOleControlSite* 
 static HRESULT STDMETHODCALLTYPE axSite_OCS_TransformCoords(IOleControlSite* This, POINTL* ptlHimetric,
                                                             POINTF* ptfContainer, DWORD flags) {
     (void)This;
-    /* VB6 的 XFORMCOORDS_* 语义: HIMETRIC ↔ 容器像素 (96dpi: 1 himetric = 1/2646 px) */
-    const double k = 96.0 / 2540.0;   /* himetric → pixel */
+    /* VB6 的 XFORMCOORDS_* 语义: HIMETRIC <-> 容器像素。折算走 vb6forms.c 那一对 float 权威
+     * (账 #298 §B129 并表) —— 以前这一行把 DPI 写死成 96（自己拿一个常数去除那一档长度），
+     * 换 DPI 的机器上容器坐标就跟着缩（与 #184 那条 VBFlexGrid 网格缩 20% 同一族）。
+     * 两轴各问各的 DPI；表示留在浮点里，交出去的是 POINTF，量化成整数 px 会替容器改掉决定。 */
     if (!ptlHimetric || !ptfContainer) return E_POINTER;
     if (flags & XFORMCOORDS_HIMETRICTOCONTAINER) {
-        ptfContainer->x = (float)(ptlHimetric->x * k);
-        ptfContainer->y = (float)(ptlHimetric->y * k);
+        ptfContainer->x = vb6_HimetricToPxF((float)ptlHimetric->x, (float)vb6_DpiX());
+        ptfContainer->y = vb6_HimetricToPxF((float)ptlHimetric->y, (float)vb6_DpiY());
     } else {
-        ptlHimetric->x = (LONG)(ptfContainer->x / k);
-        ptlHimetric->y = (LONG)(ptfContainer->y / k);
+        ptlHimetric->x = (LONG)vb6_PxToHimetricF(ptfContainer->x, (float)vb6_DpiX());
+        ptlHimetric->y = (LONG)vb6_PxToHimetricF(ptfContainer->y, (float)vb6_DpiY());
     }
     return S_OK;
 }

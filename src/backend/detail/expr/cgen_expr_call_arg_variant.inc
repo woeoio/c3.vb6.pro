@@ -107,6 +107,7 @@
             if (!argIsVariant && !argIsVariantArr) {
                 bool argIsComRes113i =
                     (argVal.compare(0, 12, "vb6_ComCall(") == 0)
+                    || (argVal.compare(0, 20, "vb6_ComCallByDispid(") == 0)
                     || (argVal.compare(0, 15, "vb6_ComGetProp(") == 0)
                     || (argVal.compare(0, 21, "vb6_ComGetObjectProp(") == 0);
                 if (argIsComRes113i) argIsVariant = true;
@@ -118,6 +119,7 @@
                 // = vb6_ComCall(...) → 原生成 VariantToSafeArray1D(ComCall) C2440.
                 bool isComResultVal2 =
                     (argVal.find("vb6_ComCall(") == 0)
+                    || (argVal.find("vb6_ComCallByDispid(") == 0)
                     || (argVal.find("vb6_ComGetProp(") == 0)
                     || (argVal.find("vb6_ComGetObjectProp(") == 0);
                 if (isComResultVal2) {
@@ -200,8 +202,26 @@
                         argVal = "vb6_VariantToString(" + argVal + ")";
                     }
                 } else if (paramBase == Vb6Type::Object) {
-                    // 右值兼容: 避免对函数返回值取址
-                    argVal = "vb6_VariantToObjectVal(" + argVal + ")";
+                    // Fix 227: 形参 Type=Object 但实参**本身已是对象指针**时, 不能再包
+                    // vb6_VariantToObjectVal —— 那个 helper 按值收 vb6_VARIANT, 把类指针塞进去
+                    // ⇒ C2440 "无法从 vb6_cls_CoolBar * 转换为 vb6_VARIANT"
+                    // (ComCtlsDemo CbrBand.c:201 / CbrBands.c:73 / ImcComboItem.c:109 等 ×33)。
+                    // VB6 源码 ComCtlsBase.bas:881
+                    //   Public Sub ComCtlsImlListImageIndex(ByVal Control As Object, …)
+                    // 生成的 C 形参是 void* Control —— 指针直接传就是 VB6 的语义 (Object 形参收对象引用):
+                    //   ComCtlsImlListImageIndex(Control:=ShadowCoolBar, …) 的 ShadowCoolBar 是
+                    //   `Private Function ShadowCoolBar() As CoolBar`, C 型 vb6_cls_CoolBar*。
+                    // 只有实参确实是 VARIANT **值** (后期绑定读 / Variant 变量) 才需要那层解盒。
+                    // 判据刻意保守: 只把"能确证是项目类实例"的那一档摘出来直传, 其余形状维持原行为,
+                    // 以免引入新的 directions 错误。
+                    bool argIsVariantVal227 = cExprIsVariant(argVal);
+                    bool argIsClassInst227 =
+                        !argIsVariantVal227 && !inferClassTypeOfExpr(*node.positional[i]).empty();
+                    if (argIsClassInst227) {
+                        argVal = "(void*)(" + argVal + ")";
+                    } else {
+                        argVal = "vb6_VariantToObjectVal(" + argVal + ")";
+                    }
                 }
             }
         }
@@ -260,7 +280,19 @@
             std::string rtParamType = getRuntimeParamCType(callee, i);
             if (!rtParamType.empty() && rtParamType != "vb6_VARIANT"
                  && rtParamType != "vb6_VARIANT*") {
-                bool argIsVariant = cExprIsVariant(argVal);
+                // 账 #305 §B173 (第六十四刀): 「这枚实参是不是整只槽」在本文件里由**两条臂**
+                // 回答 —— 上面那条 Fix 029「形参类型已知」的臂先问 AST (`isDefinitelyVariantExpr`)
+                // 再问文本; 这一臂 (内置/运行时, calleeParams 空或档为 Variant) 此前**只问文本**。
+                // 同一枚 UDT 的 Variant 成员 `u.UV` 因此两种命运: `Left`/`Len`/`Replace`/`Val`
+                // 在 builtin_funcs.inc 里带**类型化形参表** ⇒ 落上臂 ⇒ 被 AST (Fix 090l) 认出 ⇒
+                // `vb6_VariantToString(u.UV)`; 而 `InStr` 只登记返回档 (`addBuiltinFunc("InStr",
+                // Vb6Type::Long)`, 形参表为空因为 start 可选) ⇒ 落这一臂 ⇒ 文本认不出 ⇒ 裸
+                // `vb6_InStr(1, u.UV, …)` = cl C2440 (vb6_VARIANT → BSTR), x64/x86 都编不过。
+                // 口径 = §B147「改道吃 AST ∪ 文本」: 下面那三枚手抄 (COM 前缀 / knownVariantVars_
+                // / Fix 089i 符号返回档) 全是 AST 那一位已覆盖的子集, 刻意**留着**当并集的另一半,
+                // 撤它们要另一格读数 (089i 对模块 Function 的 Unknown 档比 AST 宽)。
+                bool argIsVariant = isDefinitelyVariantExpr(*node.positional[i])
+                                    || cExprIsVariant(argVal);
                 // Fix 113c: 实参是裸 COM 结果 (void* 承载 COM VARIANT*) 时, 语义即
                 // Variant — 必须判为 Variant 才能触发下方 Variant→具体类型提取
                 // (vb6_VariantFromComResult + 按 rtParamType 提取). 否则 void* 裸传
@@ -275,6 +307,7 @@
                 if (!argIsVariant) {
                     bool argIsComRes113 =
                         (argVal.compare(0, 12, "vb6_ComCall(") == 0)
+                        || (argVal.compare(0, 20, "vb6_ComCallByDispid(") == 0)
                         || (argVal.compare(0, 15, "vb6_ComGetProp(") == 0)
                         || (argVal.compare(0, 21, "vb6_ComGetObjectProp(") == 0);
                     if (argIsComRes113) argIsVariant = true;
@@ -356,6 +389,7 @@
                     // vb6_ComGetStringProp( (返回 BSTR) / vb6_ComCallObject( (对象).
                     bool isComResultVal =
                         (argVal.find("vb6_ComCall(") == 0)
+                        || (argVal.find("vb6_ComCallByDispid(") == 0)
                         || (argVal.find("vb6_ComGetProp(") == 0)
                         || (argVal.find("vb6_ComGetObjectProp(") == 0);
                     if (isComResultVal) {

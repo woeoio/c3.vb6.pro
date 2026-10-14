@@ -51,6 +51,7 @@ const std::set<std::string>& itfKnownAttrNames() {
         "dispid",         "default",      "source",
         "coclassid",      "comcreatable", "coclasscustomconstructor",
         "progid",         "implementation",  // ai/026 四节样本用到 (ai/022 D44 第 2 条)
+        "packingalignment", // tB UDT packing attribute (Type-level)
     };
     return kNames;
 }

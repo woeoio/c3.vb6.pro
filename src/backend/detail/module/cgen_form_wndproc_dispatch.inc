@@ -420,7 +420,28 @@
                 c_.emitLine("if (pNM42->code == 1794 && (void*)pNM42->hwndFrom == "
                             + rtNHwnd + ") {");
                 c_.indent();
-                c_.emitLine("{ extern void " + rtSelFn + "(); " + rtSelFn + "(); }");
+                // Fix 258: 同 create.inc 那条 arm —— 实参个数按**处理器自己的形参表**交
+                // (零参那一形在夹具 tests/ctrlrichtextbox/RtfForm.frm:560 就是这个形状,
+                //  且是既有 EMITC-SHAPE 针钉住的; 声明了 3 个形参的处理器才是 C2198 现场)。
+                // 选区从 RTL 取, SelType 交 0。
+                const size_t nSel258 = rtSelSym->params.size();
+                if (nSel258 == 0) {
+                    c_.emitLine("{ extern void " + rtSelFn + "(); " + rtSelFn + "(); }");
+                } else {
+                    std::string selArgs258 = "(int16_t)0";
+                    std::string selPre258;
+                    if (nSel258 >= 2) {
+                        selPre258 = "int32_t vb6_rtSelS258 = vb6_RTB_GetSelStart((void*)"
+                                     + rtNHwnd + "); ";
+                        selArgs258 += ", vb6_rtSelS258";
+                    }
+                    if (nSel258 >= 3) {
+                        selArgs258 += ", (int32_t)(vb6_rtSelS258 + vb6_RTB_GetSelLength((void*)"
+                                      + rtNHwnd + "))";
+                    }
+                    c_.emitLine("{ extern void " + rtSelFn + "(); " + selPre258
+                                + rtSelFn + "(" + selArgs258 + "); }");
+                }
                 c_.dedent();
                 c_.emitLine("}");
             }
@@ -439,6 +460,11 @@
         if (formUnloadSym2) {
             // 生成trampoline: 桥接 int(*)(void) 回调和 void(int16_t*) VB6签名
             std::string trampoline = formUnloadFn + "_trampoline";
+            // czUI fix (3DMenu 关闭卡顿): 先标记"卸载中"。Form_Unload 里常见的
+            // `Me.Cls: Unload Me` 在 VB6 里第二次 Unload 是空操作; 不标记的话
+            // vb6_UnloadForm 再发 WM_CLOSE ⇒ WM_CLOSE→Form_Unload→Unload Me→WM_CLOSE
+            // 无限重入, 关窗卡一拍。RTL 的 vb6_UnloadForm 见此标记直接返回。
+            c_.emitLine("SetPropW(hwnd, L\"VB6_Unloading\", (HANDLE)1);");
             // P18-B: Form_QueryUnload - check if close is allowed before Unload
             {
                 std::string queryUnloadFn = cProcName("Form_QueryUnload", AccessLevel::Private);
@@ -446,7 +472,7 @@
                 if (quSym) {
                     c_.emitLine("{ int16_t vb6_cancel = 0; int16_t vb6_unloadmode = 0; /* 0=vbFormControlMenu */");
                     c_.emitLine("extern void " + queryUnloadFn + "(int16_t*, int16_t*); " + queryUnloadFn + "(&vb6_cancel, &vb6_unloadmode);");
-                    c_.emitLine("if (vb6_cancel != 0) return 0; /* Cancel close */ }");
+                    c_.emitLine("if (vb6_cancel != 0) { RemovePropW(hwnd, L\"VB6_Unloading\"); return 0; } /* Cancel close */ }");
                 }
             }
             c_.emitLine("vb6_SetFormUnloadCallback((void*)" + trampoline + ");");
@@ -454,6 +480,8 @@
             c_.indent();
             c_.emitLine("DestroyWindow(hwnd);");
             c_.dedent();
+            c_.emitLine("} else {");
+            c_.emitLine("  RemovePropW(hwnd, L\"VB6_Unloading\");  /* 关闭被 Form_Unload 取消, 解除标记 */");
             c_.emitLine("}");
         } else {
             c_.emitLine("DestroyWindow(hwnd);");
@@ -747,6 +775,16 @@
         if (hasMouseDown) {
             c_.emitLine("case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN: {");
             c_.indent();
+            // Fix <c3-menu3d-click>: VB6 在鼠标按下时**捕获鼠标** (SetCapture)。
+            // 实证: VB6 的 Form_MouseMove 在按住左键拖出窗体时仍持续触发, 且 X/Y 会出现
+            // 负值/超出 ScaleWidth|Height —— 只有持有 capture 才可能。缺这一步时按下与抬起
+            // 不配对: 光标只要在抬起的一刻不在本窗体客户区上 (被别的前台窗/图标遮住、
+            // 窗体在忙没及时泵消息), 那条 WM_xBUTTONUP 就归别人, `Form_MouseUp` 永不触发
+            // ⇒ 应用侧"按下"标志卡在 True (3DMenu 的 Remote.Pressed) ⇒ 标题不再重画、
+            // 整屏停在同一帧, 看上去就是"点一下就卡死、不再随点击变化"。
+            // capture 保证 DOWN/UP 一定成对回到本窗体, 与 UC 宿主同口径
+            // (见 vb6forms/uc/uc_host_window.c)。
+            c_.emitLine("SetCapture(hwnd);");
             c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
             c_.emitLine("if (msg == WM_LBUTTONDOWN) vb6_button = 1;");
             c_.emitLine("else if (msg == WM_RBUTTONDOWN) vb6_button = 2;");
@@ -757,10 +795,17 @@
             c_.emitLine("break;");
             c_.dedent();
             c_.emitLine("}");
+        } else {
+            // 无 Form_MouseDown 处理器的窗体也要捕获, 否则上面的 UP 可能归别人。
+            c_.emitLine("case WM_LBUTTONDOWN: case WM_RBUTTONDOWN: case WM_MBUTTONDOWN: SetCapture(hwnd); break;");
         }
         if (hasMouseUp || hasFormClick43) {
             c_.emitLine("case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP: {");
             c_.indent();
+            // Fix <c3-menu3d-click>: 与上面的 SetCapture 配对。放在用户处理器**之前** ——
+            // VB6 语义是"这一拍按钮已抬起, 隐式捕获随之结束"; 处理器内部要自己接着捕获
+            // (拖拽类用法) 时, 早放不会把它刚设上的 capture 抹掉。
+            c_.emitLine("if (GetCapture() == hwnd) ReleaseCapture();");
             // Fix 161f: 参数计算裸块只在真有 Form_MouseUp 处理器时才发。
             // 此前 "{ int16_t vb6_button ... " 的闭合 "}" 挂在 MouseUp 调用行尾,
             // 工程"只有 Form_Click 没有 Form_MouseUp"时裸块永不闭合 ⇒ 后续所有
@@ -781,6 +826,10 @@
             c_.emitLine("break;");
             c_.dedent();
             c_.emitLine("}");
+        } else {
+            // 无 Form_MouseUp/Form_Click 处理器的窗体: 仍要把配对按下时设的捕获放掉,
+            // 否则鼠标被本窗体一直攥着, 之后所有点击都到不了别的窗口。
+            c_.emitLine("case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP: if (GetCapture() == hwnd) ReleaseCapture(); break;");
         }
         if (hasMouseMove) {
             c_.emitLine("case WM_MOUSEMOVE: {");

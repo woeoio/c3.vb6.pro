@@ -325,8 +325,8 @@ void      vb6_Data_MoveNext(void* hwnd);
 void      vb6_Data_MovePrevious(void* hwnd);
 wchar_t*  vb6_Data_FieldName(void* hwnd, int32_t idx);
 void      vb6_Data_FieldValue(void* hwnd, const wchar_t* nameOrIndex, wchar_t* out, int32_t outCap);
-void*     vb6_Data_Self(void* hwnd);                               /* Recordset 链透传 */
-wchar_t*  vb6_Data_FieldValueStr(void* hwnd, const wchar_t* nameOrIndex);  /* 静态缓冲 */
+// 账 #278 §B127: vb6_Data_Self / vb6_Data_FieldValueStr 两枚声明已撤 (0 个调用者)；
+// recordset 成员面只许走 vb6_Data_RecordsetObj 那一档，判据见 check_data_recordset_shape.ps1。
 void      vb6_Data_Bind(void* hwnd, void* ctlHwnd, const wchar_t* fieldName);
 void      vb6_Data_SetRepositionHandler(void* hwnd, void* fn);
 void*     vb6_Data_RecordsetObj(void* hwnd);                       /* Recordset 真 IDispatch */
@@ -431,10 +431,15 @@ void*   vb6_StatusBar_GetPanelKeyByKey(void* hwnd, const wchar_t* key);
 void    vb6_StatusBar_SetPanelKey(void* hwnd, int32_t index, const wchar_t* key);
 void    vb6_StatusBar_SetPanelText(void* hwnd, int32_t index, const wchar_t* text);
 int32_t vb6_StatusBar_GetPanelIndexByKey(void* hwnd, const wchar_t* key);  // 0 = 未找到
+void*           vb6_StatusBar_Panels(void* hwnd);        // 集合对象 (真 IDispatch, 账 #299)
+int32_t vb6_StatusBar_GetPanelIndex(void* hwnd, int32_t index);  // 账 #300: 数字下标那一形, 0 = 无此面板
 int32_t vb6_StatusBar_GetPanelWidth(void* hwnd, int32_t index);
+int32_t vb6_StatusBar_GetPanelLeft(void* hwnd, int32_t index);   // 排版后的左界 (缇, 账 #206 第二格)
 void    vb6_StatusBar_SetPanelWidth(void* hwnd, int32_t index, int32_t val);
+void    vb6_StatusBar_SetPanelWidthHm(void* hwnd, int32_t index, int32_t hm);  // 账 #206: 形参是 himetric
 int32_t vb6_StatusBar_GetPanelMinWidth(void* hwnd, int32_t index);
 void    vb6_StatusBar_SetPanelMinWidth(void* hwnd, int32_t index, int32_t val);
+void    vb6_StatusBar_SetPanelMinWidthHm(void* hwnd, int32_t index, int32_t hm);  // 账 #206 第二格: 设计块那一档同样是 himetric
 int32_t vb6_StatusBar_GetPanelAutoSize(void* hwnd, int32_t index);
 void    vb6_StatusBar_SetPanelAutoSize(void* hwnd, int32_t index, int32_t val);
 int32_t vb6_StatusBar_GetPanelStyle(void* hwnd, int32_t index);
@@ -877,7 +882,7 @@ int32_t vb6_Slider_TickPresent(void* hwnd);
 // 0/1/2 三档靠 chan.top 的相对高低分。四条读数实测于 .build/slprobe/slmeasure12.c。
 int32_t vb6_Slider_GetTickStyle(void* hwnd);
 void    vb6_Slider_SetTickStyle(void* hwnd, int32_t tickStyle);
-int32_t vb6_Slider_GetNumTicks(void* hwnd);
+int32_t vb6_intrSlider_GetNumTicks(void* hwnd);
 int32_t vb6_Slider_ChannelTop(void* hwnd);
 // C29-SL-i：类型库读出来的 VB6 选区面 —— **SelStart + SelLength**（dispid 0x0007/0x0008，两条 VT_I4）
 // 与方法 ClearSel（0x000e，文档原话"Sets the SelLength to 0"）。VB6 那一面**没有 SelEnd 这个名字**，
@@ -886,7 +891,7 @@ int32_t vb6_Slider_ChannelTop(void* hwnd);
 // ⇒ 终点比起点小，所以 SelLength 一律折成 0；远端超量程由控件夹住；CLEARSEL 之后两端都答 -1。
 int32_t vb6_Slider_GetSelLength(void* hwnd);
 void    vb6_Slider_SetSelLength(void* hwnd, int32_t len);
-void    vb6_Slider_ClearSel(void* hwnd);
+void    vb6_intrSlider_ClearSel(void* hwnd);
 // C29-SL-k：VB6 的 `Text`（0x0010，BSTR —— 文档原话"滑块位置变化时那颗 ToolTip 里显示的串"）与
 // `TextPosition`（0x0011，枚举 sldAboveLeft=0 / sldBelowRight=1）。走的是我们自己持的一枚
 // TRACK 型 tooltip（轨道条自带那枚 TBS_TOOLTIPS 服务不了自定义串，而且只在创建时才建 ——

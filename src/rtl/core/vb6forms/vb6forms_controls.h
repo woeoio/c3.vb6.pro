@@ -39,7 +39,7 @@ void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctr
 // ============================================================
 // cgen 在入口点烘焙: 每个 vbp Object= 引用的 OCX, 其 typelib 导入后收集的全部
 // coclass {ProgID, CLSID, coclass名, 相对exe路径} 进此表。vb6_Form_ControlsAdd 按
-// ProgID 命中后改走 ocxCreateAny (LoadLibrary+DllGetClassObject), 完全绕开注册表 ——
+// ProgID 命中后改走 vb6_ocxCreateAny (LoadLibrary+DllGetClassObject), 完全绕开注册表 ——
 // 与设计期 vb6_OcxHost_Create 用 ocxFiles_ 免注册同款机制。未命中 → 原有注册表路径.
 #define VB6_MAX_OCXREFS 256
 typedef struct Vb6OcxRef {
@@ -109,6 +109,12 @@ void* vb6_AxContainer_CreateExtender(void* hwndForm, const wchar_t* ctrlName);
 // Fix 143d: 把窗体上所有 OCX 控件画到给定 DC — 在 WM_PAINT 的
 // BeginPaint/EndPaint 之间调用 (IViewObject::Draw).
 void vb6_OcxHost_PaintAll(void* hwndForm, void* hdc);
+
+// Fix <vbeclipse> 2026-10-07: 窗体 AutoRedraw=True 时, 把记忆 DC (VB6_AutoRedrawDC)
+// 整块 BitBlt 到屏幕 DC — VB6 语义: AutoRedraw 窗体的所有 GDI 绘制先落记忆位图,
+// WM_PAINT 再把记忆位图刷上屏 (见 3DMenu: 每 10ms 把环形图标合成进 Me.hdc, 靠窗体
+// WM_PAINT 镜像可见)。无 ARDC 时不动作 (非 AutoRedraw 窗体走原生直绘)。
+void vb6_FormPaintBlitAutoRedraw(void* hwndForm, void* hdc);
 
 // ============================================================
 // Fix 112: in-project UserControl (.ctl) instance host + form/control host object model
@@ -266,6 +272,15 @@ int32_t vb6_Host_Call(void* obj, const wchar_t* name, int32_t argc,
 void* vb6_UC_NewFont(void);
 // Fix 119: 在 vb6_UC_HostCreate 之前设定该实例的字体 (.frm BeginProperty Font 块)
 void  vb6_UC_SetPendingFont(void* f);
+// Fix <vbeclipse> 2026-10-12 (账 #257 第十二层): 加载路径(带 bag 的顶层 UC)不跑
+// UserControl_InitProperties —— 见 uc_host.c 的说明。置位方 = 窗体创建代码;
+// ucHostInit 入口消费(读后清零), 由 cgen 生成的 ucHostInit 读取。
+void  vb6_UC_SetSkipInitProps(int v);
+int   vb6_UC_SkipInitPropsConsume(void);
+// Fix <vbeclipse> 第十二层: 加载路径的 Show/Resize 推迟到 ReadProperties 之后再补齐
+// (VB6 顺序 Initialize → ReadProperties → Show/Resize)。窗体创建代码在 UC_ReadProps
+// 之后调用它; 非加载路径的实例在 HostCreate 内部就已激活, 这里会直接返回。
+void  vb6_UC_ActivateHost(void* hwnd);
 // ---- czUI fix: 设计器子控件实例化 (.ctl 设计面上的 TextBox 等属于每个实例) ----
 // 在 ucHostInit (宿主实例初始化) 期间调用, 以当前 UC 宿主窗口为父创建真实子窗口。
 // left/top/width/height 单位为缇。返回子窗口句柄 (NULL = 失败)。
@@ -293,6 +308,11 @@ void  vb6_UC_BagPutStr(void* bag, const wchar_t* name, const wchar_t* value);
 void  vb6_UC_BagPutInt(void* bag, const wchar_t* name, int32_t value);
 void  vb6_UC_BagPutDbl(void* bag, const wchar_t* name, double value);
 void  vb6_UC_BagPutBool(void* bag, const wchar_t* name, int32_t value);
+// Fix: 二进制 blob (字节数组) 槽 —— .frx 里 UserControl 的持久化 PropertyBag 块
+// (InitPanels/InitBands/InitButtons/InitListImages/InitTabs...) 以原始字节喂给外层包,
+// 运行期 `PropBag.Contents = <该字节数组>` 时由 uc_propbag.c 解析成扁平的
+// InitXCount / InitXText<i> ... 项 (VB6 PropertyBag 序列化格式)。
+void  vb6_UC_BagPutBin(void* bag, const wchar_t* name, const char* bytes, int32_t len);
 // Fix 125: 字体对象身份判定 + 字段定位 (供 COM 属性读写层直接操作字体字段)
 int32_t vb6_UC_IsFont(const void* p);
 void*   vb6_UC_FontField(void* p, const wchar_t* name, int32_t* kind);
@@ -311,6 +331,9 @@ int32_t vb6_Collection_IsCollection(void* p);
 void* vb6_Collection_EnumInit(void* coll);
 int32_t vb6_Collection_EnumNext(void* enumPtr, void* outVariant);
 int32_t vb6_UC_ControlsCount(void* coll);
+// 账 #254: 接收者是窗体/UC 自身时 (VB6 的 `Form.Count`) 的同一个数 —— 两条读法共用
+// 一处收集，见 uc_controls.c。
+int32_t vb6_UC_ControlsCountOf(void* formHwnd);
 void* vb6_UC_ControlsItem(void* coll, int32_t index);
 // Fix <vbeclipse> rev14: 裸 `UserControl.Controls` 的进程级单例 (后端发射点)。
 // 必须在此声明 —— 生成代码经 vb6forms.h 伞头看到它; 缺声明会走 C4013 隐式

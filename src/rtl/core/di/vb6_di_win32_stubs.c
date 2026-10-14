@@ -3,7 +3,7 @@
 // Win32 forwarding stubs for VB6 `Declare ... Lib "x"` (Fix 076 scheme: C3 emits
 // `extern <ret> __stdcall vb6_di_<alias>(...)` and the RTL implements it).
 //
-// Family: win32   (libs: kernel32, winmm)   stubs: 466
+// Family: win32   (libs: kernel32, winmm)   stubs: 340
 //
 // Each stub reproduces C3's own generated prototype verbatim (that is the ABI the
 // caller uses: ByVal Long is widened to intptr_t, ByVal Single stays float, ByRef
@@ -12,7 +12,7 @@
 // types while preserving the register/memory passing class of every argument.
 //
 // generated from: a C3 compile session (pass -SessionDir to regenerate)
-// date: 2026-09-29 23:10
+// date: 2026-10-11 17:56
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.
@@ -42,6 +42,8 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #include <ole2.h>
 #include <oleauto.h>
 #include <olectl.h>
+#include <vfw.h>
+#include <oledlg.h>
 /* NOTE: gdiplus.h is C++-only (class Gdiplus...). The GDI+ flat API is
  * resolved with GetProcAddress instead - see below. */
 
@@ -50,19 +52,285 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "comdlg32.lib")
-// winspool.lib: DeviceCapabilitiesA (winspool.drv) 那一档要用。本批重生成 di 桩时连同
-// 该桩一起被丢掉 (生成器按"那次跑它的引用面"发桩/发 lib), 补回 —— Charts 2020 的
-// vb6_di_DeviceCapabilitiesA 曾因此 LNK2019 (__imp_DeviceCapabilitiesA 未解析)。
-#pragma comment(lib, "winspool.lib")
 
-/* GetModuleHandleA */
-intptr_t __stdcall vb6_di_GetModuleHandleA(BSTR lpModuleName) {
-    return ((intptr_t (WINAPI *)(BSTR))GetModuleHandleA)(lpModuleName);
+/* RtlMoveMemory */
+void __stdcall vb6_di_RtlMoveMemory(void* Destination, void* Source, intptr_t Length) {
+    ((void (WINAPI *)(void*, void*, intptr_t))RtlMoveMemory)(Destination, Source, Length);
 }
 
-/* GetModuleFileNameA */
-intptr_t __stdcall vb6_di_GetModuleFileNameA(intptr_t hModule, BSTR lpFilename, intptr_t nSize) {
-    return ((intptr_t (WINAPI *)(intptr_t, BSTR, intptr_t))GetModuleFileNameA)(hModule, lpFilename, nSize);
+/* LoadLibraryW */
+intptr_t __stdcall vb6_di_LoadLibraryW(intptr_t lpLibFileName) {
+    return ((intptr_t (WINAPI *)(intptr_t))LoadLibraryW)(lpLibFileName);
+}
+
+/* FreeLibrary */
+intptr_t __stdcall vb6_di_FreeLibrary(intptr_t hLibModule) {
+    return ((intptr_t (WINAPI *)(intptr_t))FreeLibrary)(hLibModule);
+}
+
+/* GetSystemDefaultLangID */
+int16_t __stdcall vb6_di_GetSystemDefaultLangID() {
+    return ((int16_t (WINAPI *)(void))GetSystemDefaultLangID)();
+}
+
+/* GetUserDefaultLangID */
+int16_t __stdcall vb6_di_GetUserDefaultLangID() {
+    return ((int16_t (WINAPI *)(void))GetUserDefaultLangID)();
+}
+
+/* GetUserDefaultUILanguage */
+int16_t __stdcall vb6_di_GetUserDefaultUILanguage() {
+    return ((int16_t (WINAPI *)(void))GetUserDefaultUILanguage)();
+}
+
+/* GetLocaleInfoW */
+intptr_t __stdcall vb6_di_GetLocaleInfoW(intptr_t LCID, intptr_t LCType, intptr_t lpLCData, intptr_t cchData) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t))GetLocaleInfoW)(LCID, LCType, lpLCData, cchData);
+}
+
+/* GetModuleHandleW */
+intptr_t __stdcall vb6_di_GetModuleHandleW(intptr_t lpModuleName) {
+    return ((intptr_t (WINAPI *)(intptr_t))GetModuleHandleW)(lpModuleName);
+}
+
+/* VirtualProtect */
+intptr_t __stdcall vb6_di_VirtualProtect(intptr_t lpAddress, intptr_t dwSize, intptr_t flNewProtect, int32_t* lpflOldProtect) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, int32_t*))VirtualProtect)(lpAddress, dwSize, flNewProtect, lpflOldProtect);
+}
+
+/* GetProcAddress */
+intptr_t __stdcall vb6_di_GetProcAddress(intptr_t hModule, void* lpProcName) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*))GetProcAddress)(hModule, lpProcName);
+}
+
+/* GetSystemTime */
+void __stdcall vb6_di_GetSystemTime(void* lpSystemTime) {
+    ((void (WINAPI *)(void*))GetSystemTime)(lpSystemTime);
+}
+
+/* lstrlenW */
+intptr_t __stdcall vb6_di_lstrlenW(intptr_t lpString) {
+    return ((intptr_t (WINAPI *)(intptr_t))lstrlenW)(lpString);
+}
+
+/* lstrcpyW */
+intptr_t __stdcall vb6_di_lstrcpyW(intptr_t lpString1, intptr_t lpString2) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))lstrcpyW)(lpString1, lpString2);
+}
+
+/* GetFileAttributesW */
+intptr_t __stdcall vb6_di_GetFileAttributesW(intptr_t lpFileName) {
+    return ((intptr_t (WINAPI *)(intptr_t))GetFileAttributesW)(lpFileName);
+}
+
+/* SetFileAttributesW */
+intptr_t __stdcall vb6_di_SetFileAttributesW(intptr_t lpFileName, intptr_t dwFileAttributes) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SetFileAttributesW)(lpFileName, dwFileAttributes);
+}
+
+/* GetFileAttributesExW */
+intptr_t __stdcall vb6_di_GetFileAttributesExW(intptr_t lpFileName, intptr_t fInfoLevelId, intptr_t lpFileInformation) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))GetFileAttributesExW)(lpFileName, fInfoLevelId, lpFileInformation);
+}
+
+/* FileTimeToLocalFileTime */
+intptr_t __stdcall vb6_di_FileTimeToLocalFileTime(intptr_t lpFileTime, intptr_t lpLocalFileTime) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))FileTimeToLocalFileTime)(lpFileTime, lpLocalFileTime);
+}
+
+/* LocalFileTimeToFileTime */
+intptr_t __stdcall vb6_di_LocalFileTimeToFileTime(intptr_t lpLocalFileTime, intptr_t lpFileTime) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))LocalFileTimeToFileTime)(lpLocalFileTime, lpFileTime);
+}
+
+/* FileTimeToSystemTime */
+intptr_t __stdcall vb6_di_FileTimeToSystemTime(intptr_t lpFileTime, intptr_t lpSystemTime) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))FileTimeToSystemTime)(lpFileTime, lpSystemTime);
+}
+
+/* SystemTimeToFileTime */
+intptr_t __stdcall vb6_di_SystemTimeToFileTime(intptr_t lpSystemTime, intptr_t lpFileTime) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SystemTimeToFileTime)(lpSystemTime, lpFileTime);
+}
+
+/* FindFirstFileW */
+intptr_t __stdcall vb6_di_FindFirstFileW(intptr_t lpFileName, void* lpFindFileData) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*))FindFirstFileW)(lpFileName, lpFindFileData);
+}
+
+/* FindNextFileW */
+intptr_t __stdcall vb6_di_FindNextFileW(intptr_t hFindFile, void* lpFindFileData) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*))FindNextFileW)(hFindFile, lpFindFileData);
+}
+
+/* FindClose */
+intptr_t __stdcall vb6_di_FindClose(intptr_t hFindFile) {
+    return ((intptr_t (WINAPI *)(intptr_t))FindClose)(hFindFile);
+}
+
+/* SystemTimeToTzSpecificLocalTime */
+intptr_t __stdcall vb6_di_SystemTimeToTzSpecificLocalTime(intptr_t lpTimeZoneInformation, intptr_t lpUniversalTime, intptr_t lpLocalTime) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))SystemTimeToTzSpecificLocalTime)(lpTimeZoneInformation, lpUniversalTime, lpLocalTime);
+}
+
+/* TzSpecificLocalTimeToSystemTime */
+intptr_t __stdcall vb6_di_TzSpecificLocalTimeToSystemTime(intptr_t lpTimeZoneInformation, intptr_t lpLocalTime, intptr_t lpUniversalTime) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))TzSpecificLocalTimeToSystemTime)(lpTimeZoneInformation, lpLocalTime, lpUniversalTime);
+}
+
+/* GetVolumePathNameW */
+intptr_t __stdcall vb6_di_GetVolumePathNameW(intptr_t lpFileName, intptr_t lpVolumePathName, intptr_t cch) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))GetVolumePathNameW)(lpFileName, lpVolumePathName, cch);
+}
+
+/* GetVolumeInformationW */
+intptr_t __stdcall vb6_di_GetVolumeInformationW(intptr_t lpRootPathName, intptr_t lpVolumeNameBuffer, intptr_t nVolumeNameSize, intptr_t* lpVolumeSerialNumber, intptr_t* lpMaximumComponentLength, intptr_t* lpFileSystemFlags, intptr_t lpFileSystemNameBuffer, intptr_t nFileSystemNameSize) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t*, intptr_t*, intptr_t*, intptr_t, intptr_t))GetVolumeInformationW)(lpRootPathName, lpVolumeNameBuffer, nVolumeNameSize, lpVolumeSerialNumber, lpMaximumComponentLength, lpFileSystemFlags, lpFileSystemNameBuffer, nFileSystemNameSize);
+}
+
+/* CreateDirectoryW */
+intptr_t __stdcall vb6_di_CreateDirectoryW(intptr_t lpPathName, intptr_t lpSecurityAttributes) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))CreateDirectoryW)(lpPathName, lpSecurityAttributes);
+}
+
+/* RemoveDirectoryW */
+intptr_t __stdcall vb6_di_RemoveDirectoryW(intptr_t lpPathName) {
+    return ((intptr_t (WINAPI *)(intptr_t))RemoveDirectoryW)(lpPathName);
+}
+
+/* CloseHandle */
+intptr_t __stdcall vb6_di_CloseHandle(intptr_t hObject) {
+    return ((intptr_t (WINAPI *)(intptr_t))CloseHandle)(hObject);
+}
+
+/* GetCommandLineW */
+intptr_t __stdcall vb6_di_GetCommandLineW() {
+    return ((intptr_t (WINAPI *)(void))GetCommandLineW)();
+}
+
+/* GetModuleFileNameW */
+intptr_t __stdcall vb6_di_GetModuleFileNameW(intptr_t hModule, intptr_t lpFileName, intptr_t nSize) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))GetModuleFileNameW)(hModule, lpFileName, nSize);
+}
+
+/* GetSystemWindowsDirectoryW */
+intptr_t __stdcall vb6_di_GetSystemWindowsDirectoryW(intptr_t lpBuffer, intptr_t nSize) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetSystemWindowsDirectoryW)(lpBuffer, nSize);
+}
+
+/* GetSystemDirectoryW */
+intptr_t __stdcall vb6_di_GetSystemDirectoryW(intptr_t lpBuffer, intptr_t nSize) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetSystemDirectoryW)(lpBuffer, nSize);
+}
+
+/* MulDiv */
+intptr_t __stdcall vb6_di_MulDiv(intptr_t nNumber, intptr_t nNumerator, intptr_t nDenominator) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))MulDiv)(nNumber, nNumerator, nDenominator);
+}
+
+/* GlobalAlloc */
+intptr_t __stdcall vb6_di_GlobalAlloc(intptr_t uFlags, intptr_t dwBytes) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GlobalAlloc)(uFlags, dwBytes);
+}
+
+/* GlobalLock */
+intptr_t __stdcall vb6_di_GlobalLock(intptr_t hMem) {
+    return ((intptr_t (WINAPI *)(intptr_t))GlobalLock)(hMem);
+}
+
+/* GlobalUnlock */
+intptr_t __stdcall vb6_di_GlobalUnlock(intptr_t hMem) {
+    return ((intptr_t (WINAPI *)(intptr_t))GlobalUnlock)(hMem);
+}
+
+/* GlobalSize */
+intptr_t __stdcall vb6_di_GlobalSize(intptr_t hMem) {
+    return ((intptr_t (WINAPI *)(intptr_t))GlobalSize)(hMem);
+}
+
+/* MultiByteToWideChar */
+intptr_t __stdcall vb6_di_MultiByteToWideChar(intptr_t CodePage, intptr_t dwFlags, intptr_t lpMultiByteStr, intptr_t cbMultiByte, intptr_t lpWideCharStr, intptr_t cchWideChar) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))MultiByteToWideChar)(CodePage, dwFlags, lpMultiByteStr, cbMultiByte, lpWideCharStr, cchWideChar);
+}
+
+/* GlobalFree */
+intptr_t __stdcall vb6_di_GlobalFree(intptr_t hMem) {
+    return ((intptr_t (WINAPI *)(intptr_t))GlobalFree)(hMem);
+}
+
+/* GetTickCount */
+intptr_t __stdcall vb6_di_GetTickCount() {
+    return ((intptr_t (WINAPI *)(void))GetTickCount)();
+}
+
+/* LoadLibraryExW */
+intptr_t __stdcall vb6_di_LoadLibraryExW(intptr_t lpLibFileName, intptr_t hFile, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))LoadLibraryExW)(lpLibFileName, hFile, dwFlags);
+}
+
+/* lstrcmpW */
+intptr_t __stdcall vb6_di_lstrcmpW(intptr_t lpString1, intptr_t lpString2) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))lstrcmpW)(lpString1, lpString2);
+}
+
+/* lstrcmpiW */
+intptr_t __stdcall vb6_di_lstrcmpiW(intptr_t lpString1, intptr_t lpString2) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))lstrcmpiW)(lpString1, lpString2);
+}
+
+/* GetProfileStringW */
+intptr_t __stdcall vb6_di_GetProfileStringW(intptr_t lpAppName, intptr_t lpKeyName, intptr_t lpDefault, intptr_t lpReturnedString, intptr_t nSize) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))GetProfileStringW)(lpAppName, lpKeyName, lpDefault, lpReturnedString, nSize);
+}
+
+/* lstrlenA */
+intptr_t __stdcall vb6_di_lstrlenA(intptr_t lpString) {
+    return ((intptr_t (WINAPI *)(intptr_t))lstrlenA)(lpString);
+}
+
+/* CreateFileW */
+intptr_t __stdcall vb6_di_CreateFileW(intptr_t lpFileName, intptr_t dwDesiredAccess, intptr_t dwShareMode, intptr_t lpSecurityAttributes, intptr_t dwCreationDisposition, intptr_t dwFlagsAndAttributes, intptr_t hTemplateFile) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))CreateFileW)(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
+}
+
+/* WriteFile */
+intptr_t __stdcall vb6_di_WriteFile(intptr_t hFile, intptr_t lpBuffer, intptr_t NumberOfBytesToWrite, int32_t* NumberOfBytesWritten, intptr_t lpOverlapped) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, int32_t*, intptr_t))WriteFile)(hFile, lpBuffer, NumberOfBytesToWrite, NumberOfBytesWritten, lpOverlapped);
+}
+
+/* ReadFile */
+intptr_t __stdcall vb6_di_ReadFile(intptr_t hFile, intptr_t lpBuffer, intptr_t NumberOfBytesToRead, int32_t* NumberOfBytesRead, intptr_t lpOverlapped) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, int32_t*, intptr_t))ReadFile)(hFile, lpBuffer, NumberOfBytesToRead, NumberOfBytesRead, lpOverlapped);
+}
+
+/* SetFilePointer */
+intptr_t __stdcall vb6_di_SetFilePointer(intptr_t hFile, intptr_t lDistanceToMove, intptr_t lpDistanceToMoveHigh, intptr_t dwMoveMethod) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t))SetFilePointer)(hFile, lDistanceToMove, lpDistanceToMoveHigh, dwMoveMethod);
+}
+
+/* GetFileSize */
+intptr_t __stdcall vb6_di_GetFileSize(intptr_t hFile, intptr_t lpFileSizeHigh) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetFileSize)(hFile, lpFileSizeHigh);
+}
+
+/* GetSystemPowerStatus */
+intptr_t __stdcall vb6_di_GetSystemPowerStatus(void* lpSystemPowerStatus) {
+    return ((intptr_t (WINAPI *)(void*))GetSystemPowerStatus)(lpSystemPowerStatus);
+}
+
+/* Sleep */
+void __stdcall vb6_di_Sleep(intptr_t dwMilliseconds) {
+    ((void (WINAPI *)(intptr_t))Sleep)(dwMilliseconds);
+}
+
+/* SetErrorMode */
+intptr_t __stdcall vb6_di_SetErrorMode(intptr_t wMode) {
+    return ((intptr_t (WINAPI *)(intptr_t))SetErrorMode)(wMode);
+}
+
+/* SetLastError */
+void __stdcall vb6_di_SetLastError(intptr_t dwErrCode) {
+    ((void (WINAPI *)(intptr_t))SetLastError)(dwErrCode);
 }
 
 /* BuildCommDCBA */
@@ -81,14 +349,6 @@ intptr_t __stdcall vb6_di_ClearCommBreak(intptr_t hFile) {
 intptr_t __stdcall vb6_di_ClearCommError(intptr_t hFile, int32_t* lpErrors, void* lpStat) {
     return ((intptr_t (WINAPI *)(intptr_t, int32_t*, void*))ClearCommError)(hFile, lpErrors, lpStat);
 }
-/* CloseHandle */
-intptr_t __stdcall vb6_di_CloseHandle(intptr_t hObject) {
-    return ((intptr_t (WINAPI *)(intptr_t))CloseHandle)(hObject);
-}
-/* CreateDirectoryW */
-intptr_t __stdcall vb6_di_CreateDirectoryW(intptr_t lpPathName, intptr_t lpSecurityAttributes) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))CreateDirectoryW)(lpPathName, lpSecurityAttributes);
-}
 /* CreateEventA */
 intptr_t __stdcall vb6_di_CreateEventA(void* lpEventAttributes, intptr_t bManualReset, intptr_t bInitialState, BSTR lpName) {
     return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, BSTR))CreateEventA)(lpEventAttributes, bManualReset, bInitialState, lpName);
@@ -97,10 +357,6 @@ intptr_t __stdcall vb6_di_CreateEventA(void* lpEventAttributes, intptr_t bManual
 intptr_t __stdcall vb6_di_CreateFileA(BSTR lpFileName, intptr_t dwDesiredAccess, intptr_t dwShareMode, intptr_t lpSecurityAttributes, intptr_t dwCreationDisposition, intptr_t dwFlagsAndAttributes, intptr_t hTemplateFile) {
     return ((intptr_t (WINAPI *)(BSTR, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))CreateFileA)(lpFileName, dwDesiredAccess, dwShareMode, lpSecurityAttributes, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
 }
-/* CreateFileW */
-intptr_t __stdcall vb6_di_CreateFileW(intptr_t lpFileName, intptr_t dwDesiredAccess, intptr_t dwShareMode, intptr_t NoSecurity, intptr_t dwCreationDisposition, intptr_t dwFlagsAndAttributes, intptr_t hTemplateFile) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))CreateFileW)(lpFileName, dwDesiredAccess, dwShareMode, NoSecurity, dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile);
-}
 /* CreatePipe */
 intptr_t __stdcall vb6_di_CreatePipe(int32_t* phReadPipe, int32_t* phWritePipe, void* lpPipeAttributes, intptr_t nSize) {
     return ((intptr_t (WINAPI *)(int32_t*, int32_t*, void*, intptr_t))CreatePipe)(phReadPipe, phWritePipe, lpPipeAttributes, nSize);
@@ -108,6 +364,10 @@ intptr_t __stdcall vb6_di_CreatePipe(int32_t* phReadPipe, int32_t* phWritePipe, 
 /* CreateProcessA */
 intptr_t __stdcall vb6_di_CreateProcessA(intptr_t lpApplicationName, BSTR lpCommandLine, void* lpProcessAttributes, void* lpThreadAttributes, intptr_t bInheritHandles, intptr_t dwCreationFlags, intptr_t lpEnvironment, intptr_t lpCurrentDirectory, void* lpStartupInfo, void* lpProcessInformation) {
     return ((intptr_t (WINAPI *)(intptr_t, BSTR, void*, void*, intptr_t, intptr_t, intptr_t, intptr_t, void*, void*))CreateProcessA)(lpApplicationName, lpCommandLine, lpProcessAttributes, lpThreadAttributes, bInheritHandles, dwCreationFlags, lpEnvironment, lpCurrentDirectory, lpStartupInfo, lpProcessInformation);
+}
+/* DeviceCapabilitiesA (winspool.drv) — Task #44 SSTabEx cDlg.cls:24 */
+intptr_t __stdcall vb6_di_DeviceCapabilitiesA(intptr_t lpDeviceName, intptr_t lpPort, intptr_t iIndex, void* lpOutput, void* pDevMode) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void*, void*))DeviceCapabilitiesA)(lpDeviceName, lpPort, iIndex, lpOutput, pDevMode);
 }
 /* DosDateTimeToFileTime */
 intptr_t __stdcall vb6_di_DosDateTimeToFileTime(intptr_t wFatDate, intptr_t wFatTime, void* lpFileTime) {
@@ -125,26 +385,6 @@ intptr_t __stdcall vb6_di_EscapeCommFunction(intptr_t hFile, intptr_t dwFunc) {
 intptr_t __stdcall vb6_di_FileTimeToDosDateTime(void* lpFileTime, intptr_t lpFatDate, intptr_t lpFatTime) {
     return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t))FileTimeToDosDateTime)(lpFileTime, lpFatDate, lpFatTime);
 }
-/* FileTimeToLocalFileTime */
-intptr_t __stdcall vb6_di_FileTimeToLocalFileTime(void* lpFileTime, void* lpLocalFileTime) {
-    return ((intptr_t (WINAPI *)(void*, void*))FileTimeToLocalFileTime)(lpFileTime, lpLocalFileTime);
-}
-/* FileTimeToSystemTime */
-intptr_t __stdcall vb6_di_FileTimeToSystemTime(void* lpFileTime, void* lpSystemTime) {
-    return ((intptr_t (WINAPI *)(void*, void*))FileTimeToSystemTime)(lpFileTime, lpSystemTime);
-}
-/* FindClose */
-intptr_t __stdcall vb6_di_FindClose(intptr_t hFindFile) {
-    return ((intptr_t (WINAPI *)(intptr_t))FindClose)(hFindFile);
-}
-/* FindFirstFileW */
-intptr_t __stdcall vb6_di_FindFirstFileW(intptr_t lpFileName, intptr_t lpFindFileData) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))FindFirstFileW)(lpFileName, lpFindFileData);
-}
-/* FindNextFileW */
-intptr_t __stdcall vb6_di_FindNextFileW(intptr_t hFindFile, intptr_t lpFindFileData) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))FindNextFileW)(hFindFile, lpFindFileData);
-}
 /* FormatMessageA */
 intptr_t __stdcall vb6_di_FormatMessageA(intptr_t dwFlags, void* lpSource, intptr_t dwMessageId, intptr_t dwLanguageId, BSTR lpBuffer, intptr_t nSize, int32_t* Arguments) {
     return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, intptr_t, BSTR, intptr_t, int32_t*))FormatMessageA)(dwFlags, lpSource, dwMessageId, dwLanguageId, lpBuffer, nSize, Arguments);
@@ -152,14 +392,6 @@ intptr_t __stdcall vb6_di_FormatMessageA(intptr_t dwFlags, void* lpSource, intpt
 /* FormatMessageW */
 intptr_t __stdcall vb6_di_FormatMessageW(intptr_t dwFlags, intptr_t lpSource, intptr_t dwMessageId, intptr_t dwLanguageId, intptr_t lpBuffer, intptr_t nSize, intptr_t Args) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))FormatMessageW)(dwFlags, lpSource, dwMessageId, dwLanguageId, lpBuffer, nSize, Args);
-}
-/* FreeLibrary */
-intptr_t __stdcall vb6_di_FreeLibrary(intptr_t hLibModule) {
-    return ((intptr_t (WINAPI *)(intptr_t))FreeLibrary)(hLibModule);
-}
-/* GetCommandLineW */
-intptr_t __stdcall vb6_di_GetCommandLineW() {
-    return ((intptr_t (WINAPI *)(void))GetCommandLineW)();
 }
 /* GetCommMask */
 intptr_t __stdcall vb6_di_GetCommMask(intptr_t hFile, int32_t* lpEventMask) {
@@ -197,33 +429,21 @@ intptr_t __stdcall vb6_di_GetEnvironmentVariableW(intptr_t lpName, intptr_t lpBu
 intptr_t __stdcall vb6_di_GetExitCodeProcess(intptr_t hProcess, int32_t* lpExitCode) {
     return ((intptr_t (WINAPI *)(intptr_t, int32_t*))GetExitCodeProcess)(hProcess, lpExitCode);
 }
-/* GetFileAttributesExW */
-intptr_t __stdcall vb6_di_GetFileAttributesExW(intptr_t lpFileName, intptr_t fInfoLevelId, intptr_t lpFileInformation) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))GetFileAttributesExW)(lpFileName, fInfoLevelId, lpFileInformation);
-}
-/* GetFileAttributesW */
-intptr_t __stdcall vb6_di_GetFileAttributesW(intptr_t lpFileName) {
-    return ((intptr_t (WINAPI *)(intptr_t))GetFileAttributesW)(lpFileName);
-}
 /* GetLastError */
 intptr_t __stdcall vb6_di_GetLastError() {
     return ((intptr_t (WINAPI *)(void))GetLastError)();
 }
-/* GetLocaleInfoW */
-intptr_t __stdcall vb6_di_GetLocaleInfoW(intptr_t LCID, intptr_t LCType, intptr_t lpLCData, intptr_t cchData) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t))GetLocaleInfoW)(LCID, LCType, lpLCData, cchData);
+/* GetLocaleInfoA — Task #44 SSTabEx cDlg.cls:51 */
+intptr_t __stdcall vb6_di_GetLocaleInfoA(intptr_t Locale, intptr_t LCType, intptr_t lpLCData, intptr_t cchData) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t))GetLocaleInfoA)(Locale, LCType, lpLCData, cchData);
 }
-/* GetModuleFileNameW */
-intptr_t __stdcall vb6_di_GetModuleFileNameW(intptr_t hModule, intptr_t lpFileName, intptr_t nSize) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))GetModuleFileNameW)(hModule, lpFileName, nSize);
+/* GetModuleFileNameA */
+intptr_t __stdcall vb6_di_GetModuleFileNameA(intptr_t hModule, BSTR lpFilename, intptr_t nSize) {
+    return ((intptr_t (WINAPI *)(intptr_t, BSTR, intptr_t))GetModuleFileNameA)(hModule, lpFilename, nSize);
 }
-/* GetModuleHandleW */
-intptr_t __stdcall vb6_di_GetModuleHandleW(intptr_t lpModuleName) {
-    return ((intptr_t (WINAPI *)(intptr_t))GetModuleHandleW)(lpModuleName);
-}
-/* GetProcAddress */
-intptr_t __stdcall vb6_di_GetProcAddress(intptr_t hModule, BSTR lpProcName) {
-    return ((intptr_t (WINAPI *)(intptr_t, BSTR))GetProcAddress)(hModule, lpProcName);
+/* GetModuleHandleA */
+intptr_t __stdcall vb6_di_GetModuleHandleA(BSTR lpModuleName) {
+    return ((intptr_t (WINAPI *)(BSTR))GetModuleHandleA)(lpModuleName);
 }
 /* GetProcessHeap */
 intptr_t __stdcall vb6_di_GetProcessHeap() {
@@ -233,73 +453,25 @@ intptr_t __stdcall vb6_di_GetProcessHeap() {
 intptr_t __stdcall vb6_di_GetStdHandle(intptr_t nStdHandle) {
     return ((intptr_t (WINAPI *)(intptr_t))GetStdHandle)(nStdHandle);
 }
-/* GetSystemDefaultLangID */
-int16_t __stdcall vb6_di_GetSystemDefaultLangID() {
-    return ((int16_t (WINAPI *)(void))GetSystemDefaultLangID)();
-}
-/* GetSystemDirectoryW */
-intptr_t __stdcall vb6_di_GetSystemDirectoryW(intptr_t lpBuffer, intptr_t nSize) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetSystemDirectoryW)(lpBuffer, nSize);
-}
-/* GetSystemTime */
-void __stdcall vb6_di_GetSystemTime(void* lpSystemTime) {
-    ((void (WINAPI *)(void*))GetSystemTime)(lpSystemTime);
-}
-/* GetSystemWindowsDirectoryW */
-intptr_t __stdcall vb6_di_GetSystemWindowsDirectoryW(intptr_t lpBuffer, intptr_t nSize) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetSystemWindowsDirectoryW)(lpBuffer, nSize);
-}
-/* GetTickCount */
-intptr_t __stdcall vb6_di_GetTickCount() {
-    return ((intptr_t (WINAPI *)(void))GetTickCount)();
-}
 /* GetTimeZoneInformation */
 intptr_t __stdcall vb6_di_GetTimeZoneInformation(void* utc_lpTimeZoneInformation) {
     return ((intptr_t (WINAPI *)(void*))GetTimeZoneInformation)(utc_lpTimeZoneInformation);
-}
-/* GetUserDefaultLangID */
-int16_t __stdcall vb6_di_GetUserDefaultLangID() {
-    return ((int16_t (WINAPI *)(void))GetUserDefaultLangID)();
 }
 /* GetUserDefaultLCID */
 intptr_t __stdcall vb6_di_GetUserDefaultLCID() {
     return ((intptr_t (WINAPI *)(void))GetUserDefaultLCID)();
 }
-/* GetUserDefaultUILanguage */
-int16_t __stdcall vb6_di_GetUserDefaultUILanguage() {
-    return ((int16_t (WINAPI *)(void))GetUserDefaultUILanguage)();
+/* === 恢复 dev@69845a9 有、本批重生成 di 桩时丢掉的定义 ===
+ * 生成器是按"那次跑它时的引用面"发桩的, 换一个会话重生成就会**静默丢掉**上一个会话
+ * 引用过的桩 (实测丢 9 个: comdlg32/winspool 那一族 + ChooseColorA/GetUserNameW/WinHelpA,
+ * Charts 2020 的 vb6_di_ChooseColorA 因此 LNK2019)。这里按 dev 原文补回; 生成器侧要
+ * 改成"全语料并集"才不会再丢 —— 在那之前这张清单就是这次的证据。 */
+intptr_t __stdcall vb6_di_GetUserNameW(intptr_t lpBuffer, intptr_t pnSize) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetUserNameW)(lpBuffer, pnSize);
 }
 /* GetVersionExW */
 intptr_t __stdcall vb6_di_GetVersionExW(void* lpVersionInformation) {
     return ((intptr_t (WINAPI *)(void*))GetVersionExW)(lpVersionInformation);
-}
-/* GetVolumeInformationW */
-intptr_t __stdcall vb6_di_GetVolumeInformationW(intptr_t lpRootPathName, intptr_t lpVolumeNameBuffer, intptr_t nVolumeNameSize, intptr_t* lpVolumeSerialNumber, intptr_t* lpMaximumComponentLength, intptr_t* lpFileSystemFlags, intptr_t lpFileSystemNameBuffer, intptr_t nFileSystemNameSize) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t*, intptr_t*, intptr_t*, intptr_t, intptr_t))GetVolumeInformationW)(lpRootPathName, lpVolumeNameBuffer, nVolumeNameSize, lpVolumeSerialNumber, lpMaximumComponentLength, lpFileSystemFlags, lpFileSystemNameBuffer, nFileSystemNameSize);
-}
-/* GetVolumePathNameW */
-intptr_t __stdcall vb6_di_GetVolumePathNameW(intptr_t lpFileName, intptr_t lpVolumePathName, intptr_t cch) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))GetVolumePathNameW)(lpFileName, lpVolumePathName, cch);
-}
-/* GlobalAlloc */
-intptr_t __stdcall vb6_di_GlobalAlloc(intptr_t wFlags, intptr_t dwBytes) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GlobalAlloc)(wFlags, dwBytes);
-}
-/* GlobalFree */
-intptr_t __stdcall vb6_di_GlobalFree(intptr_t hMem) {
-    return ((intptr_t (WINAPI *)(intptr_t))GlobalFree)(hMem);
-}
-/* GlobalLock */
-intptr_t __stdcall vb6_di_GlobalLock(intptr_t hMem) {
-    return ((intptr_t (WINAPI *)(intptr_t))GlobalLock)(hMem);
-}
-/* GlobalSize */
-intptr_t __stdcall vb6_di_GlobalSize(intptr_t hMem) {
-    return ((intptr_t (WINAPI *)(intptr_t))GlobalSize)(hMem);
-}
-/* GlobalUnlock */
-intptr_t __stdcall vb6_di_GlobalUnlock(intptr_t hMem) {
-    return ((intptr_t (WINAPI *)(intptr_t))GlobalUnlock)(hMem);
 }
 /* HeapAlloc */
 intptr_t __stdcall vb6_di_HeapAlloc(intptr_t hHeap, intptr_t dwFlags, intptr_t dwBytes) {
@@ -325,49 +497,13 @@ intptr_t __stdcall vb6_di_LCMapStringW(intptr_t LCID, intptr_t dwMapFlags, intpt
 intptr_t __stdcall vb6_di_LoadLibraryA(BSTR lpLibFileName) {
     return ((intptr_t (WINAPI *)(BSTR))LoadLibraryA)(lpLibFileName);
 }
-/* LoadLibraryW */
-intptr_t __stdcall vb6_di_LoadLibraryW(intptr_t lpLibFileName) {
-    return ((intptr_t (WINAPI *)(intptr_t))LoadLibraryW)(lpLibFileName);
-}
-/* LocalFileTimeToFileTime */
-intptr_t __stdcall vb6_di_LocalFileTimeToFileTime(void* lpLocalFileTime, void* lpFileTime) {
-    return ((intptr_t (WINAPI *)(void*, void*))LocalFileTimeToFileTime)(lpLocalFileTime, lpFileTime);
-}
 /* LocalFree */
 intptr_t __stdcall vb6_di_LocalFree(intptr_t hMem) {
     return ((intptr_t (WINAPI *)(intptr_t))LocalFree)(hMem);
 }
-/* lstrcmpiW */
-intptr_t __stdcall vb6_di_lstrcmpiW(intptr_t lpString1, intptr_t lpString2) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))lstrcmpiW)(lpString1, lpString2);
-}
-/* lstrcmpW */
-intptr_t __stdcall vb6_di_lstrcmpW(intptr_t lpString1, intptr_t lpString2) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))lstrcmpW)(lpString1, lpString2);
-}
 /* lstrcpyA */
 intptr_t __stdcall vb6_di_lstrcpyA(intptr_t lpString1, intptr_t lpString2) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t))lstrcpyA)(lpString1, lpString2);
-}
-/* lstrcpyW */
-intptr_t __stdcall vb6_di_lstrcpyW(intptr_t lpString1, intptr_t lpString2) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))lstrcpyW)(lpString1, lpString2);
-}
-/* lstrlenA */
-intptr_t __stdcall vb6_di_lstrlenA(intptr_t lpStr) {
-    return ((intptr_t (WINAPI *)(intptr_t))lstrlenA)(lpStr);
-}
-/* lstrlenW */
-intptr_t __stdcall vb6_di_lstrlenW(intptr_t lpStr) {
-    return ((intptr_t (WINAPI *)(intptr_t))lstrlenW)(lpStr);
-}
-/* MulDiv */
-intptr_t __stdcall vb6_di_MulDiv(intptr_t nNumber, intptr_t nNumerator, intptr_t nDenominator) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))MulDiv)(nNumber, nNumerator, nDenominator);
-}
-/* MultiByteToWideChar */
-intptr_t __stdcall vb6_di_MultiByteToWideChar(intptr_t CodePage, intptr_t dwFlags, void* lpMultiByteStr, intptr_t cchMultiByte, intptr_t lpWideCharStr, intptr_t cchWideChar) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, intptr_t, intptr_t, intptr_t))MultiByteToWideChar)(CodePage, dwFlags, lpMultiByteStr, cchMultiByte, lpWideCharStr, cchWideChar);
 }
 /* OutputDebugStringA */
 void __stdcall vb6_di_OutputDebugStringA(BSTR lpOutputString) {
@@ -389,14 +525,6 @@ intptr_t __stdcall vb6_di_QueryPerformanceCounter(double* lpPerformanceCount) {
 intptr_t __stdcall vb6_di_QueryPerformanceFrequency(double* lpFrequency) {
     return ((intptr_t (WINAPI *)(double*))QueryPerformanceFrequency)(lpFrequency);
 }
-/* ReadFile */
-intptr_t __stdcall vb6_di_ReadFile(intptr_t hFile, void* lpBuffer, intptr_t nNumberOfBytesToRead, int32_t* lpNumberOfBytesRead, intptr_t lpOverlapped) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, int32_t*, intptr_t))ReadFile)(hFile, lpBuffer, nNumberOfBytesToRead, lpNumberOfBytesRead, lpOverlapped);
-}
-/* RemoveDirectoryW */
-intptr_t __stdcall vb6_di_RemoveDirectoryW(intptr_t lpPathName) {
-    return ((intptr_t (WINAPI *)(intptr_t))RemoveDirectoryW)(lpPathName);
-}
 /* ResetEvent */
 intptr_t __stdcall vb6_di_ResetEvent(intptr_t hEvent) {
     return ((intptr_t (WINAPI *)(intptr_t))ResetEvent)(hEvent);
@@ -404,10 +532,6 @@ intptr_t __stdcall vb6_di_ResetEvent(intptr_t hEvent) {
 /* RtlFillMemory */
 void __stdcall vb6_di_RtlFillMemory(void* Destination, intptr_t Length, uint8_t Fill) {
     ((void (WINAPI *)(void*, intptr_t, uint8_t))RtlFillMemory)(Destination, Length, Fill);
-}
-/* RtlMoveMemory */
-void __stdcall vb6_di_RtlMoveMemory(void* Destination, void* Source, intptr_t Length) {
-    ((void (WINAPI *)(void*, void*, intptr_t))RtlMoveMemory)(Destination, Source, Length);
 }
 /* RtlZeroMemory */
 void __stdcall vb6_di_RtlZeroMemory(void* Destination, intptr_t Length) {
@@ -437,17 +561,9 @@ intptr_t __stdcall vb6_di_SetEndOfFile(intptr_t hFile) {
 intptr_t __stdcall vb6_di_SetEnvironmentVariableW(intptr_t lpName, intptr_t lpValue) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SetEnvironmentVariableW)(lpName, lpValue);
 }
-/* SetErrorMode */
-intptr_t __stdcall vb6_di_SetErrorMode(intptr_t wMode) {
-    return ((intptr_t (WINAPI *)(intptr_t))SetErrorMode)(wMode);
-}
 /* SetEvent */
 intptr_t __stdcall vb6_di_SetEvent(intptr_t hEvent) {
     return ((intptr_t (WINAPI *)(intptr_t))SetEvent)(hEvent);
-}
-/* SetFileAttributesW */
-intptr_t __stdcall vb6_di_SetFileAttributesW(intptr_t lpFileName, intptr_t dwFileAttributes) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SetFileAttributesW)(lpFileName, dwFileAttributes);
 }
 /* SetFilePointerEx */
 intptr_t __stdcall vb6_di_SetFilePointerEx(intptr_t hFile, double liDistanceToMove, void* lpNewFilePointer, intptr_t dwMoveMethod) {
@@ -457,25 +573,9 @@ intptr_t __stdcall vb6_di_SetFilePointerEx(intptr_t hFile, double liDistanceToMo
 intptr_t __stdcall vb6_di_SetFileTime(intptr_t hFile, void* lpCreationTime, void* lpLastAccessTime, void* lpLastWriteTime) {
     return ((intptr_t (WINAPI *)(intptr_t, void*, void*, void*))SetFileTime)(hFile, lpCreationTime, lpLastAccessTime, lpLastWriteTime);
 }
-/* SetLastError */
-void __stdcall vb6_di_SetLastError(intptr_t dwErrCode) {
-    ((void (WINAPI *)(intptr_t))SetLastError)(dwErrCode);
-}
 /* SetupComm */
 intptr_t __stdcall vb6_di_SetupComm(intptr_t hFile, intptr_t dwInQueue, intptr_t dwOutQueue) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))SetupComm)(hFile, dwInQueue, dwOutQueue);
-}
-/* Sleep */
-void __stdcall vb6_di_Sleep(intptr_t dwMilliseconds) {
-    ((void (WINAPI *)(intptr_t))Sleep)(dwMilliseconds);
-}
-/* SystemTimeToFileTime */
-intptr_t __stdcall vb6_di_SystemTimeToFileTime(void* lpSystemTime, void* lpFileTime) {
-    return ((intptr_t (WINAPI *)(void*, void*))SystemTimeToFileTime)(lpSystemTime, lpFileTime);
-}
-/* SystemTimeToTzSpecificLocalTime */
-intptr_t __stdcall vb6_di_SystemTimeToTzSpecificLocalTime(void* utc_lpTimeZoneInformation, void* utc_lpUniversalTime, void* utc_lpLocalTime) {
-    return ((intptr_t (WINAPI *)(void*, void*, void*))SystemTimeToTzSpecificLocalTime)(utc_lpTimeZoneInformation, utc_lpUniversalTime, utc_lpLocalTime);
 }
 /* timeGetTime */
 intptr_t __stdcall vb6_di_timeGetTime() {
@@ -501,10 +601,6 @@ intptr_t __stdcall vb6_di_TlsSetValue(intptr_t dwTlsIndex, intptr_t lpTlsValue) 
 intptr_t __stdcall vb6_di_TransmitCommChar(intptr_t hCommDev, uint8_t cChar) {
     return ((intptr_t (WINAPI *)(intptr_t, uint8_t))TransmitCommChar)(hCommDev, cChar);
 }
-/* TzSpecificLocalTimeToSystemTime */
-intptr_t __stdcall vb6_di_TzSpecificLocalTimeToSystemTime(void* utc_lpTimeZoneInformation, void* utc_lpLocalTime, void* utc_lpUniversalTime) {
-    return ((intptr_t (WINAPI *)(void*, void*, void*))TzSpecificLocalTimeToSystemTime)(utc_lpTimeZoneInformation, utc_lpLocalTime, utc_lpUniversalTime);
-}
 /* VirtualAlloc */
 intptr_t __stdcall vb6_di_VirtualAlloc(intptr_t lpAddress, intptr_t dwSize, intptr_t flAllocationType, intptr_t flProtect) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t))VirtualAlloc)(lpAddress, dwSize, flAllocationType, flProtect);
@@ -513,10 +609,6 @@ intptr_t __stdcall vb6_di_VirtualAlloc(intptr_t lpAddress, intptr_t dwSize, intp
 intptr_t __stdcall vb6_di_VirtualFree(intptr_t lpAddress, intptr_t dwSize, intptr_t dwFreeType) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))VirtualFree)(lpAddress, dwSize, dwFreeType);
 }
-/* VirtualProtect */
-intptr_t __stdcall vb6_di_VirtualProtect(void* lpAddress, intptr_t dwSize, intptr_t flNewProtect, int32_t* lpflOldProtect) {
-    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, int32_t*))VirtualProtect)(lpAddress, dwSize, flNewProtect, lpflOldProtect);
-}
 /* WaitCommEvent */
 intptr_t __stdcall vb6_di_WaitCommEvent(intptr_t hFile, int32_t* lpEventMask, void* lpOverlapped) {
     return ((intptr_t (WINAPI *)(intptr_t, int32_t*, void*))WaitCommEvent)(hFile, lpEventMask, lpOverlapped);
@@ -524,28 +616,4 @@ intptr_t __stdcall vb6_di_WaitCommEvent(intptr_t hFile, int32_t* lpEventMask, vo
 /* WaitForSingleObject */
 intptr_t __stdcall vb6_di_WaitForSingleObject(intptr_t hHandle, intptr_t dwMilliseconds) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t))WaitForSingleObject)(hHandle, dwMilliseconds);
-}
-/* WriteFile */
-intptr_t __stdcall vb6_di_WriteFile(intptr_t hFile, void* lpBuffer, intptr_t nNumberOfBytesToWrite, int32_t* lpNumberOfBytesWritten, intptr_t lpOverlapped) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, int32_t*, intptr_t))WriteFile)(hFile, lpBuffer, nNumberOfBytesToWrite, lpNumberOfBytesWritten, lpOverlapped);
-}
-
-
-/* === 恢复 dev@69845a9 有、本批重生成 di 桩时丢掉的定义 ===
- * 生成器是按"那次跑它时的引用面"发桩的, 换一个会话重生成就会**静默丢掉**上一个会话
- * 引用过的桩 (实测丢 9 个: comdlg32/winspool 那一族 + ChooseColorA/GetUserNameW/WinHelpA,
- * Charts 2020 的 vb6_di_ChooseColorA 因此 LNK2019)。这里按 dev 原文补回; 生成器侧要
- * 改成"全语料并集"才不会再丢 —— 在那之前这张清单就是这次的证据。 */
-intptr_t __stdcall vb6_di_GetUserNameW(intptr_t lpBuffer, intptr_t pnSize) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))GetUserNameW)(lpBuffer, pnSize);
-}
-
-/* GetLocaleInfoA — Task #44 SSTabEx cDlg.cls:51 */
-intptr_t __stdcall vb6_di_GetLocaleInfoA(intptr_t Locale, intptr_t LCType, intptr_t lpLCData, intptr_t cchData) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t))GetLocaleInfoA)(Locale, LCType, lpLCData, cchData);
-}
-
-/* DeviceCapabilitiesA (winspool.drv) — Task #44 SSTabEx cDlg.cls:24 */
-intptr_t __stdcall vb6_di_DeviceCapabilitiesA(intptr_t lpDeviceName, intptr_t lpPort, intptr_t iIndex, void* lpOutput, void* pDevMode) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void*, void*))DeviceCapabilitiesA)(lpDeviceName, lpPort, iIndex, lpOutput, pDevMode);
 }

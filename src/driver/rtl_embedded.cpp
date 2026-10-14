@@ -321,15 +321,25 @@ std::string SessionManager::create() {
 bool SessionManager::extractResource(int resId, const std::string& fileName, const std::string& targetDir) {
     std::vector<char> data;
     if (!loadRtlResource(resId, data)) {
+        std::fprintf(stderr, "C3: extractResource: loadRtlResource failed id=%d name=%s\n", resId, fileName.c_str());
         return false;
     }
 
     std::string filePath = targetDir + "\\" + fileName;
     std::ofstream ofs(utf8ToPath(filePath), std::ios::out | std::ios::trunc | std::ios::binary);
-    if (!ofs) return false;
+    if (!ofs) {
+        std::fprintf(stderr, "C3: extractResource: open failed: %s (errno=%d: %s)\n",
+                     filePath.c_str(), errno, std::strerror(errno));
+        return false;
+    }
 
     ofs.write(data.data(), static_cast<std::streamsize>(data.size()));
-    return ofs.good();
+    if (!ofs.good()) {
+        std::fprintf(stderr, "C3: extractResource: write failed: %s (errno=%d: %s)\n",
+                     filePath.c_str(), errno, std::strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 void SessionManager::cleanup() {
@@ -399,6 +409,11 @@ void SessionManager::cleanupOldSessions() {
         if (ec) continue;
         auto age = std::filesystem::file_time_type::clock::now() - mt;
         if (age > maxAge) {
+            std::fprintf(stderr, "C3: cleanupOldSessions: removing %s (age=%lld s, pid=%lu)\n",
+                         dirName.c_str(),
+                         static_cast<long long>(
+                             std::chrono::duration_cast<std::chrono::seconds>(age).count()),
+                         static_cast<unsigned long>(sessionDirOwnerPid(dirName)));
             std::filesystem::remove_all(entry.path(), ec);
         }
     }

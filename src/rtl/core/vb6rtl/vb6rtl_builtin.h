@@ -95,6 +95,11 @@ BSTR vb6_CStrLong(int32_t x);
 BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 Variant 解包入口
 // Fix 084m: LongLong → String (64 位, 不截断; vb6_Format 不认 VT_I8, 故独立实现)
 BSTR vb6_CStrLongLong(int64_t x);
+// ai/032: 无符号整型 (ULong/ULongLong) → String, 按**无符号十进制**输出。
+// 为什么另开两条而不复用 vb6_CStrLong/LongLong: 那两条是有符号口径 (%d/%lld),
+// CStr(&HFFFFFFFF As ULong) 会打成 "-1"。与 Fix 084m 另开 LongLong 同一处理由。
+BSTR vb6_CStrULong(uint32_t x);
+BSTR vb6_CStrULongLong(uint64_t x);
 BSTR vb6_CStrDbl(double x);
 BSTR vb6_CStrDblFromBSTR(BSTR s);      // vbeclipse: BSTR 实参 (后期绑定 COM 数值属性读) → vb6_Val 解析
 BSTR vb6_CStrDblFromVariant(vb6_VARIANT v);  // Fix 158q 同款: _Generic 的 Variant 解包入口
@@ -114,6 +119,27 @@ static inline double vb6_CDblV(vb6_VARIANT v) { return vb6_VariantToDouble(v); }
 static inline uint8_t vb6_CByteV(vb6_VARIANT v) { return vb6_CByte(vb6_VariantToDouble(v)); }
 static inline float vb6_CSngV(vb6_VARIANT v) { return (float)vb6_VariantToDouble(v); }
 static inline int16_t vb6_CBoolV(vb6_VARIANT v) { return (v.vt == vb6_vtBoolean) ? v.boolVal : vb6_CBool(vb6_VariantToDouble(v)); }
+
+// ai/032: VB.NET 的无符号/窄整型转换函数 (阶梯 8/16/32/64):
+//   CSByte → SByte(8 有符号) · CUInt → UInteger(16 无符号)
+//   CULng  → ULong(32 无符号) · CULngLng → ULongLong(64 无符号)
+// 与 CInt/CLng/CByte 同口径: 收 double, 由调用点的 _Generic/NumVal 分诊 BSTR/Variant,
+// 并沿用 vb6_OvfChk 的 VB6 语义 (越界是 Error 6, 不是静默截断)。
+int8_t   vb6_CSByte(double x);
+uint16_t vb6_CUInt(double x);
+uint32_t vb6_CULng(double x);
+uint64_t vb6_CULngLng(double x);
+static inline int8_t   vb6_CSByteV(vb6_VARIANT v) { return vb6_CSByte(vb6_VariantToDouble(v)); }
+static inline uint16_t vb6_CUIntV(vb6_VARIANT v)  { return vb6_CUInt(vb6_VariantToDouble(v)); }
+static inline uint32_t vb6_CULngV(vb6_VARIANT v)  { return vb6_CULng(vb6_VariantToDouble(v)); }
+static inline uint64_t vb6_CULngLngV(vb6_VARIANT v) { return vb6_CULngLng(vb6_VariantToDouble(v)); }
+// twinBASIC 形 CLngPtr (doc.twinbasic.vb6.pro .../Conversion/CLngPtr.html): 转 LongPtr
+// (x86 = Long / x64 = LongLong), 越界 Error 6 —— 与上面四档同族 (FltToLng + OvfChk)。
+intptr_t vb6_CLngPtr(double x);
+static inline intptr_t vb6_CLngPtrV(vb6_VARIANT v) { return vb6_CLngPtr(vb6_VariantToDouble(v)); }
+// CLngPtr 的 void* 实参档 (StrPtr / 裸 COM 结果的指针值): 精确转指针宽度整数,
+// 不给这一档会被 default 的 double 形参拒收 (C2440)。
+static inline intptr_t vb6_CLngPtrFromPtr(void* p) { return (intptr_t)(uintptr_t)p; }
 
 // 类型检查
 int32_t vb6_IsNumeric(vb6_VARIANT v);
@@ -175,6 +201,45 @@ int32_t vb6_IntDiv(int32_t a, int32_t b);
 // (常量折叠 C2124 规避 + On Error Resume Next 语义, 见 vb6rtl.c 实现)
 double vb6_Num_Div(double a, double b);
 int32_t vb6_Num_Mod(int32_t a, int32_t b);
+
+// ai/032: 无符号整除/取余 (ULong=32 位 · ULongLong=64 位)。vb6_IntDiv / vb6_Num_Mod
+// 的形参是 int32_t, 无符号操作数会被先按有符号解释 (实测 `&H80000000 As ULong \ 2`
+// 得 3221225472 而非 1073741824), 所以这两档必须另走无符号版。除零同样是错误 11。
+uint32_t vb6_IntDivULong(uint32_t a, uint32_t b);
+uint32_t vb6_Num_ModULong(uint32_t a, uint32_t b);
+uint64_t vb6_IntDivULongLong(uint64_t a, uint64_t b);
+uint64_t vb6_Num_ModULongLong(uint64_t a, uint64_t b);
+
+// ai/032 rev2: 有符号 64 位整除/取余。`\` / `Mod` 的档位由 CCodeGen::intDivResultType
+// 一处给出: 32 位异符号 (如 ULong \ Long) 按 VB.NET 的提升规则要升到 64 位**有符号**
+// 再除, 而 vb6_IntDiv 只有 int32_t 形参 —— 少了这两条就只能退回 32 位截断。
+// 除零同样是运行期错误 11。
+int64_t vb6_IntDivLongLong(int64_t a, int64_t b);
+int64_t vb6_Num_ModLongLong(int64_t a, int64_t b);
+
+// C3 扩展 (ai/032): `<<` / `>>` 移位。cgen 一律包成这三个 inline 之一, 而不是直接
+// 发 C 的 `a << b`, 因为 C 的移位在三处与 VB.NET 语义不同 —— 其中两处是 UB:
+//
+//   1) 移位计数必须屏蔽。VB.NET 把计数屏蔽到操作数位宽内, C 对 计数 >= 位宽 是
+//      **未定义行为** (变量计数时优化器可变出任意结果)。这里统一按 63 取模 ——
+//      取 63 而不是"按左操作数位宽"是有意的: cgen 把结果抬到至少 32 位 (见
+//      cgen_expr_binary.cpp 的 castBack), 于是 `1 << 20` 拿到 1048576 而不是被
+//      C3 的 16 位 Integer 截成 0, 与 VB.NET 的实测答案一致。
+//   2) 有符号左移溢出 (`&H80000000 << 1`) 在 C 里是 UB。这里按 uint64 位模式左移,
+//      位模式确定, 再由 cgen 的截断回目标类型 —— 结果与 VB.NET 的 wrap 一致。
+//   3) `>>` 的有符号性。VB.NET 对有符号整型是**算术**右移 (补符号位), 对无符号整型
+//      (Byte/UInteger/ULong/ULongLong) 是**逻辑**右移 (补 0)。C 的 >> 对有符号数是
+//      实现定义, 所以分成 vb6_Shr (有符号) / vb6_ShrU (无符号) 两支, 由 cgen 按
+//      左操作数的有符号性选。
+static inline int64_t vb6_Shl(int64_t v, int64_t n) {
+    return (int64_t)((uint64_t)v << (uint64_t)(n & 63));
+}
+static inline int64_t vb6_Shr(int64_t v, int64_t n) {
+    return v >> (n & 63);   /* 有符号: 算术右移 (MSVC/Clang 均按符号扩展) */
+}
+static inline int64_t vb6_ShrU(uint64_t v, int64_t n) {
+    return (int64_t)(v >> (uint64_t)(n & 63));   /* 无符号: 逻辑右移 */
+}
 
 // 幂运算
 double vb6_Pow(double base, double exp);
@@ -312,7 +377,7 @@ void*  vb6_Printers_Collection(void);
 // P18-C: Forms 集合
 int32_t vb6_Forms_Count(void);
 void*  vb6_Forms_Item(int32_t index);  // 0-based
-void   vb6_Forms_Register(void* hwnd);   // 窗体创建时注册
+void   vb6_Forms_Register(void* hwnd, const char* name);   // 窗体创建时注册（账 #257: 带上 VB 模块名，宿主模型的 .Name 从此有数可问）
 void   vb6_Forms_Unregister(void* hwnd); // 窗体销毁时注销
 void   vb6_Forms_LoopDepth(int delta);   // Fix 188: 消息循环进出 (最后一个窗体卸载才投 WM_QUIT)
 void*  vb6_Forms_GetActive(void);        // Fix 146: 当前活动窗体 (Screen.ActiveForm)
@@ -332,6 +397,9 @@ uint8_t vb6_CByte(double v);
 uint8_t vb6_ChkByte(int32_t v);
 int16_t vb6_ChkInt(int32_t v);
 int32_t vb6_ChkLong(int64_t v);
+// 账 #248: 浮点交给整数目标时**先取整**这一件事只有一个出口 (CLng/CInt 与隐式赋值同源)。
+// C 的参数转换是截断，发码把 `vb6_ChkLong(<double>)` 直接递进去就丢了 VB6 的取整。
+int64_t vb6_FltToLng(double x);
 float vb6_CSng(double v);
 double vb6_CDate(vb6_VARIANT v);
 BSTR vb6_Hex(int32_t n);
@@ -381,6 +449,10 @@ void*    vb6_StrPtr(BSTR s);          // StrPtr: address of string data
 uintptr_t vb6_ObjPtr(void* obj);       // ObjPtr: address of object
 BSTR   vb6_LSet(BSTR str, int32_t length);  // LSet: left-justify
 BSTR   vb6_RSet(BSTR str, int32_t length);  // RSet: right-justify
+// 账 #118: 定长串赋值 (`Dim s As String * N: s = 值`) 的收口函数 —— LSet 同款
+// (不足右侧补空格/超长截右), 顺带释放入参。给发码侧"值本身是自有临时串"那一侧用:
+// 定长串赋值必须先 fit 成一只**新** BSTR 再 move 进目标, 裸 LSet 会把 RHS 临时串漏掉。
+BSTR   vb6_LSetFree(BSTR str, int32_t length);
 BSTR   vb6_WeekdayName(int32_t weekday, int32_t abbreviate, int32_t firstDayOfWeek);
 BSTR   vb6_MonthName(int32_t month, int32_t abbreviate);
 BSTR   vb6_FormatCurrency(double value, int32_t numDigits, int32_t incLeading, int32_t useParens, int32_t groupDigits);
@@ -420,9 +492,30 @@ int32_t vb6_CLngBSTR(BSTR s);
 double vb6_CDblBSTR(BSTR s);
 int16_t vb6_CIntBSTR(BSTR s);
 double vb6_CCurBSTR(BSTR s);
+// ComCtlsDemo: 后期绑定 COM 的 **Date** 属性 (DTPicker / MonthView 的 .MinDate/.MaxDate)
+// 在「写进 Text (BSTR)」语境下被 codegen 读成 vb6_ComGetStringProp (BSTR) 再套
+// vb6_CStrDate, 而本函数原签名只收 double → C2440 "无法从 wchar_t* 转换为 double"
+// (PPDTPickerGeneral.c 208/209、PPMonthViewGeneral.c 207/208)。
+// 与上面 vb6_CStrDbl 的 BSTR 档同款: 补一个 BSTR 入口, 由 _Generic 按实参 C 类型分派。
+// BSTR 是日期串, 故这里走 VarDateFromStr 解析 (同 vb6_DateValue 那条口径),
+// 而不是 vb6_CStrDblFromBSTR 的 vb6_Val —— 后者是数值解析, 对日期串答 0。
+BSTR vb6_CStrDateFromBSTR(BSTR s);
+// ai/032: 新增四档转换函数的 BSTR 入口 —— 同 Fix 158r 的 CLngBSTR, 走 vb6_Val 解析
+// (VB6 的 CUInt("42") / CULng("&HFF") 合法)。十进制用 vb6_Val, 前缀式 (&H/&O) 由
+// cgen 那侧改发 vb6_NumVal (见 cgen_expr_call_conv_numeric.inc), 与此处不重复。
+uint64_t vb6_CULngLngBSTR(BSTR s);
+uint32_t vb6_CULngBSTR(BSTR s);
+uint16_t vb6_CUIntBSTR(BSTR s);
+int8_t   vb6_CSByteBSTR(BSTR s);
+intptr_t vb6_CLngPtrBSTR(BSTR s);   // twinBASIC 形 CLngPtr 的字符串入口 (同族口径)
+// ai/032: CStrULong/CStrULongLong 的 Variant 解包入口 (与 Fix 158q 同款)
+BSTR vb6_CStrULongFromVariant(vb6_VARIANT x);
+BSTR vb6_CStrULongLongFromVariant(vb6_VARIANT x);
 static inline double vb6_CCurV(vb6_VARIANT v) { return vb6_CCur(vb6_VariantToDouble(v)); }
 // Fix 160w: CLng(指针) 分派目标 — 截断为 int32_t (VB6 Long = 地址低半).
-static inline int32_t vb6_CLngPtr(void* p) { return (int32_t)(intptr_t)p; }
+// (更名 vb6_CLngFromPtr: 原 vb6_CLngPtr 这个名字让给下方 CLngPtr 转换函数 ——
+//  与 VB 内置同名; 旧名只在本头两处出现, 一处定义一处 _Generic。)
+static inline int32_t vb6_CLngFromPtr(void* p) { return (int32_t)(intptr_t)p; }
 #ifndef __cplusplus
 #define vb6_CStrLong(x) _Generic((x), \
     vb6_VARIANT: vb6_CStrLongFromVariant, \
@@ -435,10 +528,17 @@ static inline int32_t vb6_CLngPtr(void* p) { return (int32_t)(intptr_t)p; }
     BSTR: vb6_CStrDblFromBSTR, \
     vb6_VARIANT: vb6_CStrDblFromVariant, \
     default: vb6_CStrDbl)((x))
+// ComCtlsDemo: CStrDate 补 BSTR 分派 (默认分支不变, 既有 double 调用点行为一字不改).
+// 背景同 vb6_CStrDbl: 后期绑定 COM 的 Date 属性在 BSTR 语境下被读成
+// vb6_ComGetStringProp (BSTR) 再套 vb6_CStrDate → C2440. 这一档此前是
+// CStr 家族里唯一没有 BSTR 入口的 (Long/Byte 因只有 warning 而漏过).
+#define vb6_CStrDate(x) _Generic((x), \
+    BSTR: vb6_CStrDateFromBSTR, \
+    default: vb6_CStrDate)((x))
 #define vb6_CLng(x) _Generic((x), \
     vb6_VARIANT: vb6_CLngV, \
     BSTR: vb6_CLngBSTR, \
-    void*: vb6_CLngPtr, \
+    void*: vb6_CLngFromPtr, \
     default: vb6_CLng)((x))
 #define vb6_CDbl(x) _Generic((x), \
     vb6_VARIANT: vb6_CDblV, \
@@ -452,6 +552,37 @@ static inline int32_t vb6_CLngPtr(void* p) { return (int32_t)(intptr_t)p; }
     vb6_VARIANT: vb6_CCurV, \
     BSTR: vb6_CCurBSTR, \
     default: vb6_CCur)((x))
+// ai/032: CStrULong/CStrULongLong 与四档新转换函数的 Variant·BSTR 分派。
+// 与上面 vb6_CLng 一族同款: 宏只改**调用点**, 各 .c 的定义处自带 #undef。
+#define vb6_CStrULong(x) _Generic((x), \
+    vb6_VARIANT: vb6_CStrULongFromVariant, \
+    default: vb6_CStrULong)((x))
+#define vb6_CStrULongLong(x) _Generic((x), \
+    vb6_VARIANT: vb6_CStrULongLongFromVariant, \
+    default: vb6_CStrULongLong)((x))
+#define vb6_CSByte(x) _Generic((x), \
+    vb6_VARIANT: vb6_CSByteV, \
+    BSTR: vb6_CSByteBSTR, \
+    default: vb6_CSByte)((x))
+#define vb6_CUInt(x) _Generic((x), \
+    vb6_VARIANT: vb6_CUIntV, \
+    BSTR: vb6_CUIntBSTR, \
+    default: vb6_CUInt)((x))
+#define vb6_CULng(x) _Generic((x), \
+    vb6_VARIANT: vb6_CULngV, \
+    BSTR: vb6_CULngBSTR, \
+    default: vb6_CULng)((x))
+#define vb6_CULngLng(x) _Generic((x), \
+    vb6_VARIANT: vb6_CULngLngV, \
+    BSTR: vb6_CULngLngBSTR, \
+    default: vb6_CULngLng)((x))
+// twinBASIC 形 CLngPtr: 三档分派 + void* 档 (指针值精确转, 见 vb6_CLngPtrFromPtr)。
+// 返回 intptr_t, 宽度随目标架构 (x86 4 / x64 8)。
+#define vb6_CLngPtr(x) _Generic((x), \
+    vb6_VARIANT: vb6_CLngPtrV, \
+    BSTR: vb6_CLngPtrBSTR, \
+    void*: vb6_CLngPtrFromPtr, \
+    default: vb6_CLngPtr)((x))
 #endif
 
 // Fix 158s: vb6_InStr 的 needle 实参是 vb6_VARIANT 时 (For 循环里对每个 Buffer 判

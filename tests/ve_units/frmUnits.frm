@@ -53,6 +53,42 @@ Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 Option Explicit
 Private Declare Function SendMessageW Lib "user32" (ByVal hWnd As LongPtr, ByVal Msg As Long, ByVal wParam As LongPtr, ByVal lParam As LongPtr) As Long
+' account 251 witnesses: the placed window is asked straight from user32, and the
+' expected pixels come from kernel32 MulDiv + the real device DPI. Neither of them
+' is the product's own conversion (the lesson from account 230: a witness that
+' routes through Me.ScaleX can be wrong by itself, because handing a Double back to
+' a VB Long truncates there).
+Private Declare PtrSafe Function GetWindowRect Lib "user32" (ByVal hWnd As LongPtr, ByRef lpRect As RECTAPI) As Long
+Private Declare PtrSafe Function GetDeviceCaps Lib "gdi32" (ByVal hDC As LongPtr, ByVal nIndex As Long) As Long
+Private Declare PtrSafe Function GetDC Lib "user32" (ByVal hWnd As LongPtr) As LongPtr
+Private Declare PtrSafe Function ReleaseDC Lib "user32" (ByVal hWnd As LongPtr, ByVal hDC As LongPtr) As Long
+Private Declare PtrSafe Function MulDiv Lib "kernel32" (ByVal nNumber As Long, ByVal nNumerator As Long, ByVal nDenominator As Long) As Long
+
+Private Type RECTAPI
+    Left As Long
+    Top As Long
+    Right As Long
+    Bottom As Long
+End Type
+
+Private mDpiX As Long
+Private mDpiY As Long
+
+Private Sub ReadDpi()
+    Dim d As LongPtr
+    d = GetDC(0)
+    mDpiX = GetDeviceCaps(d, 88)   ' LOGPIXELSX
+    mDpiY = GetDeviceCaps(d, 90)   ' LOGPIXELSY
+    ReleaseDC 0, d
+End Sub
+
+Private Function ToPx(ByVal twips As Long) As Long
+    ToPx = MulDiv(twips, mDpiX, 1440)
+End Function
+
+Private Function ToPy(ByVal twips As Long) As Long
+    ToPy = MulDiv(twips, mDpiY, 1440)
+End Function
 Private mIdx As Long
 Private mHits As Long
 Private mDbl As Long
@@ -175,6 +211,37 @@ Private Sub Form_Load()
     exS = "U-ARREXT-RAW l=" & uArr(1).Left & " t=" & uArr(1).Top & " w=" & uArr(1).Width & " h=" & uArr(1).Height
     Debug.Print exS
     Debug.Print "U-ARREXT=" & CStr(exL = 3600 And exT = 1320 And exW = 1200 And exH = 1140)
+    ' account 251: UserControl.Parent.Move. The container here is the top-level form,
+    ' so the four arguments are TWIPS. Two heads, both required:
+    '   A) the window really lands on MulDiv(twips, dpi, 1440) -- asked from user32,
+    '      so "the RTL put the twips straight into MoveWindow" shows up as a delta of
+    '      607-40=567 px instead of 0;
+    '   B) the four VB-side properties read back the four numbers that were written
+    '      (a Move has to fill the same VB-side geometry cache an assignment does --
+    '      account 230).
+    ' The four numbers are deliberately NOT multiples of 15 (607/451/2407/1811), so a
+    ' projection of a misplaced window can never land back on the requested twips and
+    ' head B cannot be faked by head A. Deltas are printed instead of raw pixels: the
+    ' judgement then holds at any DPI instead of pinning this runner's 96.
+    Dim pmH As LongPtr, pmRc As RECTAPI
+    Dim pmL As Long, pmT As Long, pmW As Long, pmHt As Long
+    Dim pmOk As Boolean, pmS As String
+    ReadDpi
+    pmH = Me.hWnd
+    uTw.MoveParent 607, 451, 2407, 1811
+    pmL = Me.Left
+    pmT = Me.Top
+    pmW = Me.Width
+    pmHt = Me.Height
+    GetWindowRect pmH, pmRc
+    pmS = "U-PMOVE-RAW l=" & pmL & " t=" & pmT & " w=" & pmW & " h=" & pmHt
+    pmS = pmS & " dx=" & (pmRc.Left - ToPx(607)) & " dy=" & (pmRc.Top - ToPy(451))
+    pmS = pmS & " dw=" & (pmRc.Right - pmRc.Left - ToPx(2407)) & " dh=" & (pmRc.Bottom - pmRc.Top - ToPy(1811))
+    Debug.Print pmS
+    pmOk = (pmL = 607 And pmT = 451 And pmW = 2407 And pmHt = 1811)
+    pmOk = pmOk And (pmRc.Left = ToPx(607)) And (pmRc.Top = ToPy(451))
+    pmOk = pmOk And (pmRc.Right - pmRc.Left = ToPx(2407)) And (pmRc.Bottom - pmRc.Top = ToPy(1811))
+    Debug.Print "U-PMOVE=" & CStr(pmOk)
     Debug.Print "U-DONE"
     Unload Me
 End Sub

@@ -10,6 +10,8 @@
 #include <windows.h>
 #include <oleauto.h>
 #include <olectl.h>
+#include <vfw.h>
+#include <oledlg.h>
 #include <stdint.h>
 
 // Use static CRT to match the generated code linkage
@@ -430,4 +432,92 @@ intptr_t __stdcall vb6_di_GdipPrivateAddMemoryFont(intptr_t mFontCollection, voi
         (vb6_di_GdipPrivateAddMemoryFont_fn)vb6_di_gdiplus_hand_proc("GdipPrivateAddMemoryFont");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn((void*)(uintptr_t)mFontCollection, (const void*)mMemory, (int)mLength);
+}
+
+/* ============================================================
+ * PutMem4 (msvbvm60 运行时, 无导入库) 原生实现
+ * ------------------------------------------------------------
+ * 文档: https://doc.twinbasic.vb6.pro/official/Reference/VBA/HiddenModule/PutMem4.html
+ *   Sub PutMem4(Address As LongPtr, Value As Long)
+ * 向 Address 写入 4 字节值, 本机字节序 (x86/x64 均为小端), 不做边界/对齐检查。
+ * msvbvm60.lib 在 SDK 中不存在 (x64 无, x86 亦未随 SDK 分发), 故原生实现,
+ * 与同文件其余 msvbvm60 桩一致。生成器把 msvbvm60 标记当作 unknown 族, 但本符号
+ * 在此手写, 生成器按 HandFile 跳过、不会去发一个链接不到的转发桩。 */
+intptr_t __stdcall vb6_di_PutMem4(intptr_t Addr, intptr_t Value) {
+    *(int32_t*)(uintptr_t)Addr = (int32_t)Value;
+    return 0;
+}
+
+/* ============================================================
+ * GetMem1/2/4/8 + PutMem1/2/8 + GetMemPtr/PutMemPtr (msvbvm60 运行时, 无导入库) 原生实现
+ * ------------------------------------------------------------
+ * 家族口径 (twinBASIC HiddenModule 文档, doc.twinbasic.vb6.pro/.../HiddenModule/):
+ *   GetMemN(ByVal Address As LongPtr, ByRef retVal As <N 宽整型/Currency>) —— Sub 形, 结果写回出参
+ *   PutMemN(ByVal Address As LongPtr, ByVal Value As <N 宽整型/Currency>)
+ * ABI 是量出来的不是猜的: capstone 反汇编本机 SysWOW64\msvbvm60.dll (2026-10-14),
+ * 全部具名导出 (序号 = 名字序号表索引 + base 100):
+ *   GetMem1 #317 / GetMem2 #300 / GetMem4 #301 / GetMem8 #302
+ *       mov _, [Address]; mov [retVal], _; ret 8 —— 第二参就是出参指针 (Sub 形)
+ *   PutMem1 #318 / PutMem2 #306 / PutMem4 #307: 值写 [Address]; ret 8
+ *   PutMem8 #308: 8 字节**按值** (VB6 的 Currency 形), ret 0xc
+ *   VarPtr  #644 (mov eax,[esp+4]; ret 4) —— 与 Fix 092z-2 的序号对照一致 (无漂移)
+ * 语义照 DLL 原样: 裸解引用, 不做 NULL/边界/对齐检查 (文档同款措辞), 非法地址同 VB6
+ * 一样直接 AV —— 不在此处伪造保护。
+ * GetMem8/PutMem8 的 8 字节载体: C3 把 Currency 按值语义映射为 double (Fix 126, mapType),
+ *   故桩按 double 收/出, 用 memcpy 保位模式 (不经过 FP 寄存器, SNaN/非规格化原样过) ——
+ *   与文档 `Value As Currency` 的声明形 ABI 一致 (x64: 第二参 XMM1; x86: 12 字节栈参,
+ *   与 #308 的 ret 0xc 同形)。
+ * GetMemPtr/PutMemPtr: msvbvm60.dll **不导出** (名字表 0 命中), 是 twinBASIC 扩展 ——
+ *   指针宽度 (x86 4 / x64 8) 的读/写; C3 侧即 intptr_t, 声明形:
+ *   GetMemPtr(ByVal Address As LongPtr, ByRef retVal As LongPtr)
+ *   PutMemPtr(ByVal Address As LongPtr, ByVal Value As LongPtr) */
+#include <string.h>
+
+void __stdcall vb6_di_GetMem1(intptr_t Address, uint8_t* retVal) {
+    *retVal = *(const uint8_t*)(uintptr_t)Address;
+}
+void __stdcall vb6_di_GetMem2(intptr_t Address, int16_t* retVal) {
+    *retVal = *(const int16_t*)(uintptr_t)Address;
+}
+void __stdcall vb6_di_GetMem4(intptr_t Address, int32_t* retVal) {
+    *retVal = *(const int32_t*)(uintptr_t)Address;
+}
+void __stdcall vb6_di_GetMem8(intptr_t Address, double* retVal) {
+    memcpy(retVal, (const void*)(uintptr_t)Address, 8);
+}
+void __stdcall vb6_di_GetMemPtr(intptr_t Address, intptr_t* retVal) {
+    *retVal = *(const intptr_t*)(uintptr_t)Address;
+}
+void __stdcall vb6_di_PutMem1(intptr_t Address, uint8_t Value) {
+    *(uint8_t*)(uintptr_t)Address = Value;
+}
+void __stdcall vb6_di_PutMem2(intptr_t Address, int16_t Value) {
+    *(int16_t*)(uintptr_t)Address = Value;
+}
+/* PutMem4 见上方 (Fix 族1, ComCtlsDemo 先加的那枚) —— 值与落点都是 4 字节, 与 #307 同语义。 */
+void __stdcall vb6_di_PutMem8(intptr_t Address, double Value) {
+    memcpy((void*)(uintptr_t)Address, &Value, 8);
+}
+void __stdcall vb6_di_PutMemPtr(intptr_t Address, intptr_t Value) {
+    *(intptr_t*)(uintptr_t)Address = Value;
+}
+
+/* ============================================================
+ * shell32 序数 #740 (SHCreateFileDataObject) 转发桩
+ * ------------------------------------------------------------
+ * ComCtlsDemo RichTextBox.bas:
+ *   Declare Function SHCreateFileDataObject Lib "shell32" Alias "#740" (...)
+ * 序数导出, 按序号动态解析 (shell32.lib 不导出该符号名)。
+ * 第 5 参是生成的 vb6_ComIface_IDataObject**, 此处收 void** (ABI 兼容; 链接只看
+ * 符号名与调用约定)。解析不到时回 0, 调用方自行判。 */
+typedef intptr_t (WINAPI* vb6_di_SHCreateFileDataObject_fn)(intptr_t, intptr_t, intptr_t, void*, void**);
+intptr_t __stdcall vb6_di_ord_740(intptr_t pIDLFolder, intptr_t cIDL, intptr_t apIDL, void* pDataInner, void** ppDataObject) {
+    static vb6_di_SHCreateFileDataObject_fn pfn = NULL;
+    if (!pfn) {
+        HMODULE h = GetModuleHandleW(L"shell32.dll");
+        if (!h) h = LoadLibraryW(L"shell32.dll");
+        if (h) pfn = (vb6_di_SHCreateFileDataObject_fn)GetProcAddress(h, (LPCSTR)740);
+    }
+    if (pfn) return pfn(pIDLFolder, cIDL, apIDL, pDataInner, ppDataObject);
+    return 0;
 }

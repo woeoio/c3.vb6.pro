@@ -39,12 +39,12 @@ $parserRel = Join-Path $root 'src\parser\parser_expr_postfix.cpp'
 if (-not (Test-Path -LiteralPath $rtlDir)) { Write-Host 'FAIL src\rtl missing' -ForegroundColor Red; exit 1 }
 if (-not (Test-Path -LiteralPath $parserRel)) { Write-Host 'FAIL parser_expr_postfix.cpp missing' -ForegroundColor Red; exit 1 }
 
-$types = '(?:int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|long|short|unsigned\s+long|char|double|float|void\s*\*|BSTR|VARIANT|HRESULT|BOOL|BYTE|WORD|DWORD|LPARAM|WPARAM|size_t|VB6_[A-Za-z_]\w*)'
+$types = '(?:int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|int|long|short|unsigned\s+long|char|double|float|void|BSTR|VARIANT|VARIANTARG|HRESULT|BOOL|BYTE|WORD|DWORD|LPARAM|WPARAM|SIZE_T|size_t|HINSTANCE|HMODULE|HFONT|HDC|HWND|HBITMAP|HPEN|HBRUSH|HANDLE|UINT|INT|LPWSTR|WCHAR|GUID|CLSID|REFCLSID|ITypeLib|ITypeInfo|IDispatch|IUnknown|VB6_[A-Za-z_]\w*|vb6_[A-Za-z_]\w*)'
 $globalPat = '^(?:extern\s+)?(?:static\s+)?(?:const\s+)?' + $types + '\s*(?:\*+\s*)?([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*(?:=[^;]*)?;'
 $allowPat = '^(vb6_|VB6_|c3_|C3_)'
 
 $rtlText = @{}
-Get-ChildItem -Path $rtlDir -Recurse -Include *.c, *.h | ForEach-Object {
+Get-ChildItem -Path $rtlDir -Recurse -Include *.c, *.h, *.inc | ForEach-Object {
     $rtlText[$_.FullName] = [System.IO.File]::ReadAllText($_.FullName)
 }
 
@@ -67,9 +67,14 @@ foreach ($kv in $rtlText.GetEnumerator()) {
         $found[$name] += 1
     }
 }
-# 名单: g_uc_* / g_hoCount 是 UC 宿主的内部计数, 撞名概率低但同样该带前缀。
-#       (`Changed` 原本是名单里的一枚, 账 #219 那一刀把它撤掉了 —— 名单缩小按规矩同批改这里)
-$pin = @('g_hoCount', 'g_uc_descCount', 'g_uc_recCount', 'g_uc_dumpSeq')
+# 名单历史（账 #219）：这一格原本只钉住 4 枚，本机重测真实是 12 枚 —— 旧类型表没有 `int`、没有小写 `vb6_` 结构体档，
+#       也不扫 `.inc`，于是 `vb6_HostObjRec g_ho[N]`、`vb6_UCControls* g_uc_current`、`vb6_UCRecord g_uc_recs[N]` 全看不见
+#       （钉着一张漏提的图 = 名单里那四枚一直在替八枚隐身）。本刀把 10 枚 UC/axsite 内部的裸名换成 vb6_ 前缀
+#       （`g_hoCount`→`vb6_ucHoCount`、`g_hInstance`→`vb6_hInstance` 等），名单缩到下面这三枚。
+#       这三枚是 cgen 与 RTL 的**契约名**（`cgen_util_dllentry_exports.inc` 直接把 `g_vb6_coclasses` / `g_vb6_coclassCount`
+#       发进 dll_entry.c，`cgen_localdecl.cpp` 发 `g_vb6_optionCompareText`），改名要两头同批 + 发码 A/B 归因，不在这一刀里；
+#       它们自带 vb6_ 印记，用户手打出来的概率近零。名单要再缩小必须在同一次提交里改这里。
+$pin = @('g_vb6_coclassCount', 'g_vb6_coclasses', 'g_vb6_optionCompareText')
 $extra = @($found.Keys | Where-Object { $pin -notcontains $_ })
 $missing = @($pin | Where-Object { -not $found.ContainsKey($_) })
 if ($extra.Count -gt 0) { $bad += ('N2 new naked RTL global: ' + ($extra -join ', ') + ' - VB lets a module name a variable that, so this collides') }

@@ -51,6 +51,16 @@ struct FrxIntListData {
     std::vector<int> items;         // 整数列表
 };
 
+// Fix: .frx 里的 "属性包块" (UserControl 的持久化 PropertyBag)
+//   .frm 记 `InitPanels = "MainForm.frx":0000`, 该偏移处是一整块
+//   [DWORD cbSize][28B 前缀][VB6 PropertyBag 序列化数据]。
+//   运行期 .ctl 的 ReadProperties 会 `PropBag.Contents = <该 blob>` 再按名读字段,
+//   所以编译器只需把**原始字节**交出去 (解析在 RTL 侧做), 见 uc_propbag.c。
+struct FrxPropBagBlob {
+    bool found = false;                 // 该偏移处是否确为属性包块
+    std::vector<uint8_t> bytes;         // 块负载 (cbSize 字节, 含 28B 前缀)
+};
+
 // ============================================================
 // FrxReader: 读取 .frx 文件
 // ============================================================
@@ -75,6 +85,13 @@ public:
 
     // 读取字符串列表 (ListBox.List)
     static FrxListData readStringList(size_t offset);
+
+    // Fix: 识别/取出 "属性包块" (见上面 FrxPropBagBlob 注释)
+    //   判据: 块大小 cbSize 与前缀里的 PropertyBag 头部自洽 ——
+    //   签名 WORD 0xB293 (扫描前 64B) 且 头部偏移 + cbContent == cbSize。
+    //   该判据在实测的 InitPanels/InitBands/InitButtons/InitListImages/InitTabs
+    //   上逐一命中, 且不会误伤 DocString / 图片块。
+    static FrxPropBagBlob readPropBagBlob(size_t offset);
 
     // 读取整数列表 (ListBox.ItemData)
     static FrxIntListData readIntList(size_t offset);

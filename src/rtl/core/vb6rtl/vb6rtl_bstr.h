@@ -25,12 +25,26 @@ static inline BSTR vb6_BSTR_Empty(void) {
 #endif
 }
 
-// 定长字符串初始化: 返回len个空格的BSTR (VB6 Dim a As String * N)
+// 定长字符串初始化: 返回 len 个 **NUL 字符** (Chr$(0) / vbNullChar) 的 BSTR
+// (VB6 `Dim a As String * N`)。
+//
+// 账 #118 校准 (2026-10-07): VB6 的定长串有**两套**填充, 别混成一套 ——
+//   · **未赋值时用 0 填充**。依据两处独立: ① 仓库自带手册 Dim/Private/Static 语句
+//     ("定长的字符串则用 0 填充"); ② MSDN 同句英文本 "a fixed-length string is
+//     filled with zeros"; ③ 真机口径可查 (用 CopyMemory 取 StrPtr 后 20 字节,
+//     未赋值前全是 Chr$(0))。RTrim$/Trim$ **不裁 NUL**, 所以未赋值的定长串拿去做
+//     宽字符串 (如 `FindWindowExW` 的类名) 只会得到空串, 这是 VB6 行为不是缺陷
+//     (ai/029 里 `FindWindowExW` + `StrPtr("BUTTON")` 那枚探针当年读空就是这么来的)。
+//   · **赋值时右侧补空格、超长截右** (见 vb6_LSet / 发码侧 cgen_assign_value_sem.inc)。
+// 此前这里补的是空格, 依据是 ai/开发历程/53-M13-FIX4 那句"初始内容为10个空格" ——
+// 那句话把"赋值补空格"错记成了"初始化", 本格纠正。
 static inline BSTR vb6_BSTR_FixedSTR(int32_t len) {
     if (len <= 0) return vb6_BSTR_Empty();
 #ifdef _WIN32
+    // SysAllocStringLen(NULL, len) 本身就是零填充 (连 buf[len] 的终止符一起), 显式
+    // 再写一遍只为把"0 填充"这条口径落在代码上, 不靠 API 的隐含行为。
     BSTR bstr = SysAllocStringLen(NULL, len);
-    if (bstr) { for (int32_t i = 0; i < len; i++) bstr[i] = L' '; }
+    if (bstr) { for (int32_t i = 0; i < len; i++) bstr[i] = L'\0'; }
     return bstr;
 #else
     return NULL;
@@ -51,6 +65,31 @@ static inline BSTR vb6_BSTR_FromStr(const wchar_t* s) {
     *p = (uint32_t)len;
     BSTR bstr = (BSTR)(p + 1);
     memcpy(bstr, s, (len + 1) * sizeof(wchar_t));
+    return bstr;
+#endif
+}
+
+// 从**定长**宽串创建 BSTR —— 走 SysAllocStringLen, 不按 NUL 截断。
+// 专给含**内嵌 NUL** 的串常量用 (VB6 `vbNullChar` / Chr$(0) 拼出的串):
+// 普通 vb6_BSTR_FromStr 走 wcslen, 会把内嵌 NUL 当串尾 ⇒ 长度丢失,
+// 最直接的受害者是 `s & vbNullChar` 这类「末尾补 NUL」的写法 (ListView 的
+// LVN_GETDISPINFO 回调正是靠它给 pszText 落终止符) —— 少了终止符, 控件读越界,
+// 屏幕上是「正确文字 + 后接一串乱码」。与 vb6_BSTR_FromBSTR (Fix 161b-decl-out) 同口径。
+static inline BSTR vb6_BSTR_FromStrN(const wchar_t* s, int32_t n) {
+    if (!s || n <= 0) return vb6_BSTR_Empty();
+#ifdef _WIN32
+    BSTR r = SysAllocStringLen(NULL, (UINT)n);
+    if (!r) return vb6_BSTR_Empty();
+    memcpy(r, s, (size_t)n * sizeof(WCHAR));
+    r[n] = L'\0';
+    return r;
+#else
+    uint32_t* p = (uint32_t*)malloc(sizeof(uint32_t) + (size_t)(n + 1) * sizeof(wchar_t));
+    if (!p) return NULL;
+    *p = (uint32_t)n;
+    BSTR bstr = (BSTR)(p + 1);
+    memcpy(bstr, s, (size_t)n * sizeof(wchar_t));
+    bstr[n] = 0;
     return bstr;
 #endif
 }

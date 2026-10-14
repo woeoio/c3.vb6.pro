@@ -60,8 +60,9 @@ Option Explicit
 
 ' 账 #205 的测量面：状态条那两处问字体以前都是**裸问窗口**，而状态条是 RTL 自己注册的
 ' 窗口类 ⇒ 那一问恒回 NULL，量的（sbrContents 的排版宽）与画的都按 DC 的默认字体。
-' 排版结果从 VB 里没有现成的门（Panels(i).Width 读的是**请求值**，不是排版后的宽），
-' 所以判据问窗口本人：SB_GETPARTS (WM_USER+6) 交回各格的右边界。
+' Witness stays the window itself (SB_GETPARTS, WM_USER+6): since the 22nd cut (zhang 206)
+' Panels(i).Width does answer laid-out twips, but reading it back through the VB layer would
+' let the RTL certify its own converter - the pixels below come from the control, untouched.
 Private Declare Function SbGetParts Lib "user32" Alias "SendMessageW" (ByVal hWin As LongPtr, _
     ByVal msg As Long, ByVal n As Long, ByRef parts As Any) As Long
 

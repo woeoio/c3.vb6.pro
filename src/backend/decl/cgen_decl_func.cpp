@@ -11,6 +11,7 @@ namespace vb6c3 {
 
 
 void CCodeGen::visit(FunctionDecl& node) {
+    bumpInferEpoch();   // ai/030 续: 过程入口推推断缓存 epoch (形参/局部表在这里重建)
     // 泛型模板 (tB, G2/G3): 模板本体不发码 (泛型器注入特化副本)
     if (!node.typeParams.empty()) return;
     // ai/vb-asm-extension-spec: Asm 块过程 → x64 独立 MASM 过程 / x86 内联 __asm 块
@@ -47,6 +48,7 @@ void CCodeGen::visit(FunctionDecl& node) {
     knownBoolVars_.clear();     // ai/022 W1
     knownByteVars_.clear();     // 账 #123
     knownIntVars_.clear();       // ai/009 5.10
+    knownNarrowIntVars_.clear(); // ai/032: SByte/UInteger/ULong/ULongLong 专属表
     knownLongVars_.clear();
     knownLongPtrVars_.clear();  // Bug #2 fix: 也清空LongPtr集合
     knownVariantVars_.clear();
@@ -77,6 +79,10 @@ void CCodeGen::visit(FunctionDecl& node) {
     if (isClassModule_) knownClassVars_["me"] = moduleName_;
     // P6.11: 恢复类模块成员变量类型 (clear后从持久化集合恢复)
     knownBstrVars_.insert(classBstrMembers_.begin(), classBstrMembers_.end());
+    // 账 #118: 同上, 模块级定长串也要跨过程恢复 —— 否则第一个过程一入口
+    // `knownFixedStringLen_.clear()` 就把 declaration 阶段那条登记抹了
+    // (`Private gT As String * 5` 的 `gT = "ab"` / `Len(gT)` 双双退回动态串口径)。
+    knownFixedStringLen_.insert(moduleFixedStringLen_.begin(), moduleFixedStringLen_.end());
     knownDoubleVars_.insert(classDoubleMembers_.begin(), classDoubleMembers_.end());
     knownLongVars_.insert(classLongMembers_.begin(), classLongMembers_.end());
     // Fix 010n: 恢复类模块UDT成员变量 (knownUdtVars_被clear后需要从classUdtMembers_恢复)
@@ -99,6 +105,27 @@ void CCodeGen::visit(FunctionDecl& node) {
             std::string pLower = p->name;
             std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
             knownVariantVars_.insert(pLower);
+        }
+        // 账 #118: 形参若与模块级定长串同名也算遮蔽 —— 先撤掉过程入口恢复进来的那条
+        // (定长形参下面那一格会重新登记, 非定长就该撤)。
+        {
+            std::string pShadowFs = p->name;
+            std::transform(pShadowFs.begin(), pShadowFs.end(), pShadowFs.begin(), ::tolower);
+            knownFixedStringLen_.erase(pShadowFs);
+        }
+        // 账 #118 ③: 定长串形参。`Sub S(ByVal x As String * 4)` 的 typeRef 是
+        // FixedStringTypeRef **不是** SimpleTypeRef ⇒ 下面整条登记链 (BSTR 桶、长度桶)
+        // 全部跳过, 于是过程体内:
+        //   · `Debug.Print x` 落"按数值解包"那条 → `vb6_DebugWriteLong((int32_t)x)`
+        //     —— 把 BSTR 当数值打, x64 上还要把指针截成 32 位;
+        //   · `Len(x)` 落 sizeof 兜底 → 发成**指针宽度** (x64 读 8 / x86 读 4), VB6 应为 4。
+        // C 侧形参类型本来就对 (mapTypeRef 的 FixedStringTypeRef 分支给 BSTR), 这里只补登记。
+        if (p->asType && p->asType->kind == ASTNodeKind::FixedStringTypeRef) {
+            std::string pFsLower = p->name;
+            std::transform(pFsLower.begin(), pFsLower.end(), pFsLower.begin(), ::tolower);
+            knownBstrVars_.insert(pFsLower);
+            emitExpr(*static_cast<FixedStringTypeRef&>(*p->asType).length);
+            if (!lastExpr_.empty()) knownFixedStringLen_[pFsLower] = lastExpr_;
         }
         if (p->asType && p->asType->kind == ASTNodeKind::SimpleTypeRef) {
             auto& simpleP = static_cast<SimpleTypeRef&>(*p->asType);
@@ -182,6 +209,9 @@ void CCodeGen::visit(FunctionDecl& node) {
                 // inferExprType 先判 Byte 那张表, 所以这里进 knownLongVars_ 不会把它读成 Long。
                 if (paramType == Vb6Type::Byte) knownByteVars_.insert(pLower);
             }
+            // ai/032: SByte/UInteger/ULong/ULongLong 形参走专属表 (口径同账 #123 的 Byte
+            // —— C 型不同串就永远看不见; 局部/形参在 symTab_ 里不可达, 只能靠登记)。
+            else if (isNarrowIntVbType(paramType)) knownNarrowIntVars_[pLower] = paramType;
             // Bug #2 fix: LongPtr 参数注册到独立集合
             // Fix 084m: LongLong 同路 —— 二者都是标量整数 (intptr_t / int64_t), 表达式侧
             // 需要绕开 Variant 分派走直接 C 运算, 复用同一集合即可 (宽度由 C 整型提升决定)。
@@ -304,10 +334,25 @@ void CCodeGen::visit(FunctionDecl& node) {
     }
     // Bug #2 fix: LongPtr 返回值变量注册到独立集合
     // Fix 084m: LongLong 同路 (见参数处注释)
+    // ai/032: 四档无符号/窄整型同路 —— 返回槽 `vb6_ret_X` 不在 symTab_ 里, 不登记则
+    // `CStr(F())` / `Debug.Print F()` 看不见返回类型 (Half() As ULong 实测)。
+    else if (isNarrowIntVbType(funcRetVb6Type)) knownNarrowIntVars_[funcRetLower] = funcRetVb6Type;
     else if (funcRetVb6Type == Vb6Type::LongPtr || funcRetVb6Type == Vb6Type::LongLong) knownLongPtrVars_.insert(funcRetLower);
     // Fix 035: Variant 返回值变量也要注册, 否则 `Foo = concrete_expr` 赋值不会触发
     // wrapVariantValue 包装, 导致 C2440 (BSTR/int32_t → vb6_VARIANT).
     else if (funcRetVb6Type == Vb6Type::Variant) knownVariantVars_.insert(funcRetLower);
+    // 账 #118 ①: 定长串返回类型 (`Function F() As String * 5`)。返回槽本身就是那只定长串 ——
+    //   · `F = "ab"` 必须收口到 5 (补齐/截断, 见 cgen_assign_value_sem.inc);
+    //   · `Len(F)` 恒为 5, 不是值长 2。
+    // 键两个都记: AST 侧名字是 `F`(过程名), 而目标发码时已被换成 vb6_ret_F
+    // (cgen_assign_value_sem.inc 的"给函数名赋值=给返回值赋值"那条), 两处查表都能命中。
+    if (node.returnType && node.returnType->kind == ASTNodeKind::FixedStringTypeRef) {
+        emitExpr(*static_cast<FixedStringTypeRef&>(*node.returnType).length);
+        if (!lastExpr_.empty()) {
+            knownFixedStringLen_[Symbol::toLower(node.name)] = lastExpr_;
+            knownFixedStringLen_[funcRetLower] = lastExpr_;
+        }
+    }
     // Fix 088c: 函数返回类实例 → 注册返回值变量 (vb6_ret_X) 到 knownClassVars_,
     // 使函数体内 FuncName.Method(...)/FuncName.Field 走类成员分发.
     // 此前该变量未注册, MemberAccessExpr 主 fallback 找不到 → 生成
@@ -428,6 +473,10 @@ void CCodeGen::visit(FunctionDecl& node) {
     }
     ansiTempsToFree_.clear();
     ansiOutParams_.clear();
+
+    // 账 #305 §B166 (第五十六刀): 本次调用现造的 ParamArray 数组在统一出口销毁(口径见那枚出口)。
+    // Exit Sub 那条形同 M22 的 ANSI 临时量, 走不到这一行。
+    emitParamArrayReclaim(node.params);
 
     // tB Interface B05: 接口变量持有引用, 正常出口处经槽 Release (Exit Sub 例外, 同 ANSI 临时变量)
     emitIvrefScopeRelease();

@@ -190,6 +190,11 @@ Private gAkUp As String
 Private gAkStep As Long
 Private gAkClick As Long
 Private gAkDue As Boolean
+Private gAkLast As String          ' station read by the previous step = the settle baseline
+Private gAkWait As Long            ' beats already spent waiting inside the current step
+Private gAkWaitMax As Long         ' longest wait any step needed (printed, deliberately not pinned)
+Private gAkLate As Long            ' steps that gave up waiting (pinned: this must stay 0)
+Private Const AK_WAIT_MAX As Long = 40   ' one beat = 50ms => a step waits at most 2 seconds
 
 Private Declare PtrSafe Function PostMessage Lib "user32" Alias "PostMessageW" (ByVal hWnd As LongPtr, ByVal Msg As Long, ByVal wParam As LongPtr, ByVal lParam As LongPtr) As Long
 Private Declare PtrSafe Function GetFocus Lib "user32" () As LongPtr
@@ -203,6 +208,7 @@ Private Const WM_KEYDOWN As Long = &H100
 Private Const WM_KEYUP As Long = &H101
 Private Const VK_TAB As Long = &H9
 Private Const VK_DOWN As Long = &H28
+Private Const VK_UP As Long = &H26
 
 Private Function TF(ByVal ok As Boolean) As String
     If ok Then TF = "Y" Else TF = "N"
@@ -333,18 +339,36 @@ Private Sub tWalk_Timer()
 
     ' 相 3：组内方向键 —— 程序化给 optA 焦点，post VK_DOWN，读跑到哪一枚。
     ' `AK-pre` 必须先读出来：如果 SetFocus 根本没落地，`down=` 那条读数就什么也不证明。
-    If gAkStep < 3 Then
+    If gAkStep < 4 Then
+        ' Account #213: VK_DOWN / VK_UP are posted, so the pump digests them asynchronously.
+        ' Each step used to advance after exactly one beat, which pins the judgment to a beat
+        ' count -- the same family as #253 (modal `hops=3` read `1` on CI under load, stable on
+        ' both local compilers) and #332 (pbsb read its five notifications as all-zero on a
+        ' starved machine until beat 8). Now: wait until the station really moved; if
+        ' AK_WAIT_MAX beats go by without it, read anyway -- a genuinely lost key still reads
+        ' wrong and still reddens, it is just no longer decided by how far the queue happened to
+        ' drain this instant. Still one post per step (re-posting every beat would skip a station).
+        ' Four steps for three keys: the last one posts nothing and only waits, so `up=` --
+        ' phase 4 reads it -- is no longer decided by a fixed beat either.
         If gAkStep = 0 Then
             optA.SetFocus
-            gAkPre = WhereIs(GetFocus())
-        Else
-            If gAkStep = 1 Then gAkDown = WhereIs(GetFocus())
-            If gAkStep = 2 Then gAkWrap = WhereIs(GetFocus())
+        ElseIf WhereIs(GetFocus()) = gAkLast Then
+            gAkWait = gAkWait + 1
+            If gAkWait < AK_WAIT_MAX Then Exit Sub
+            gAkLate = gAkLate + 1
         End If
-        ' 每拍都往**当前焦点**再发一声：step0/1 用 VK_DOWN（第二声该回绕），step2 用 VK_UP
-        vk = IIf(gAkStep = 2, VK_UP, VK_DOWN)
-        Call PostMessage(GetFocus(), WM_KEYDOWN, vk, 0)
-        Call PostMessage(GetFocus(), WM_KEYUP, vk, 0)
+        If gAkWait > gAkWaitMax Then gAkWaitMax = gAkWait
+        gAkWait = 0
+        st = WhereIs(GetFocus())
+        If gAkStep = 0 Then gAkPre = st
+        If gAkStep = 1 Then gAkDown = st
+        If gAkStep = 2 Then gAkWrap = st
+        gAkLast = st
+        If gAkStep < 3 Then
+            vk = IIf(gAkStep = 2, VK_UP, VK_DOWN)
+            Call PostMessage(GetFocus(), WM_KEYDOWN, vk, 0)
+            Call PostMessage(GetFocus(), WM_KEYUP, vk, 0)
+        End If
         gAkStep = gAkStep + 1
         Exit Sub
     End If
@@ -358,6 +382,7 @@ Private Sub tWalk_Timer()
     Log1 "TW-order=" & gSeen
     Log1 "TW-new=" & CStr(gNew)
     Log1 "TW-ticks=" & CStr(gTick)
+    Log1 "TW-SETTLE late=" & CStr(gAkLate) & "/maxwait=" & CStr(gAkWaitMax)
     Log1 "TW-orenter=" & TF(SeenIt("optA"))
     Log1 "TW-in1=" & TF(SeenIt("cmdIn1")) & "/in2=" & TF(SeenIt("cmdIn2"))
     Log1 "TW-deep=" & TF(SeenIt("cmdDeep")) & "/inpic=" & TF(SeenIt("cmdInPic"))

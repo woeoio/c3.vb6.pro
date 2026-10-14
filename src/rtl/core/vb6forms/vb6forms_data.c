@@ -446,19 +446,10 @@ void vb6_Data_FieldValue(void* hwnd, const wchar_t* nameOrIndex, wchar_t* out, i
     if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) out[0] = 0;
 }
 
-// Recordset 链的"透传": `Data1.Recordset` 的求值就是 Data1 自己 (recordset 状态
-// 全存在控件实例里)。发码上让链上第一层落成一个可识别的表达式前缀, 后续
-// .Fields(...)/.BOF/.MoveNext 在 com bind / resolveComValue 拦截直译。
-void* vb6_Data_Self(void* hwnd) { return hwnd; }
-
-// Fields("name").Value 的发码形态 —— 返回**静态缓冲**的宽字符串。
-// ⚠ 一次调用覆盖上一次: 同一表达式里连续读两个字段要用中间变量接着 (判据就这么写)。
-wchar_t* vb6_Data_FieldValueStr(void* hwnd, const wchar_t* nameOrIndex) {
-    static wchar_t buf[1024];
-    vb6_Data_FieldValue(hwnd, nameOrIndex, buf, 1024);
-    return buf;
-}
-
+// 账 #278 §B127: 这里从前有两枚出口 —— 一枚把 Recordset 求值透传成控件自己(供发码侧认前缀)，
+// 一枚把 Fields("x").Value 折成静态缓冲的宽串。第十五刀量到发码侧那套认前缀的判据恒假并已撤，
+// 两枚出口从此全仓 0 个调用者 ⇒ 一起撤。Recordset 成员面唯一的路是 vb6_Data_RecordsetObj
+// (下面 20 行) → RTL memberobj 的真 IDispatch；Fields("x") / BOF / RecordCount 都由那张成员名表应答。
 // 按下标取字段值 (Field.Value 的后端) —— 走整行缓存 (SQLGetData 列序约束)
 void vb6_Data_FieldValueByIdx(void* hwnd, int32_t idx, wchar_t* out, int32_t outCap) {
     Vb6Data* s = dataFromHwnd((HWND)hwnd);

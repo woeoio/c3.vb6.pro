@@ -1,0 +1,5 @@
+Type=Exe
+Name="B172App"
+Module=B172Main; B172Main.bas
+Class=B172Holder; B172Holder.cls
+Startup="Sub Main"

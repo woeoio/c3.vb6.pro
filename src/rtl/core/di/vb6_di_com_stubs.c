@@ -3,7 +3,7 @@
 // Win32 forwarding stubs for VB6 `Declare ... Lib "x"` (Fix 076 scheme: C3 emits
 // `extern <ret> __stdcall vb6_di_<alias>(...)` and the RTL implements it).
 //
-// Family: com   (libs: ole32, oleaut32, advapi32, comdlg32)   stubs: 181
+// Family: com   (libs: ole32, oleaut32, advapi32, comdlg32)   stubs: 189
 //
 // Each stub reproduces C3's own generated prototype verbatim (that is the ABI the
 // caller uses: ByVal Long is widened to intptr_t, ByVal Single stays float, ByRef
@@ -12,7 +12,7 @@
 // types while preserving the register/memory passing class of every argument.
 //
 // generated from: a C3 compile session (pass -SessionDir to regenerate)
-// date: 2026-09-29 23:09
+// date: 2026-10-11 17:56
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.
@@ -42,6 +42,8 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #include <ole2.h>
 #include <oleauto.h>
 #include <olectl.h>
+#include <vfw.h>
+#include <oledlg.h>
 /* NOTE: gdiplus.h is C++-only (class Gdiplus...). The GDI+ flat API is
  * resolved with GetProcAddress instead - see below. */
 
@@ -53,30 +55,167 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "comdlg32.lib")
 
-/* GetUserNameA */
-intptr_t __stdcall vb6_di_GetUserNameA(BSTR lpBuffer, int32_t* nSize) {
-    return ((intptr_t (WINAPI *)(BSTR, int32_t*))GetUserNameA)(lpBuffer, nSize);
+/* CoTaskMemFree */
+void __stdcall vb6_di_CoTaskMemFree(intptr_t hMem) {
+    ((void (WINAPI *)(intptr_t))CoTaskMemFree)(hMem);
+}
+
+/* CoTaskMemAlloc */
+intptr_t __stdcall vb6_di_CoTaskMemAlloc(intptr_t cBytes) {
+    return ((intptr_t (WINAPI *)(intptr_t))CoTaskMemAlloc)(cBytes);
+}
+
+/* SysReAllocString */
+intptr_t __stdcall vb6_di_SysReAllocString(intptr_t pbString, intptr_t pszStrPtr) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SysReAllocString)(pbString, pszStrPtr);
+}
+
+/* VarDecFromI8 */
+intptr_t __stdcall vb6_di_VarDecFromI8(double i64In, void* pDecOut) {
+    return ((intptr_t (WINAPI *)(double, void*))VarDecFromI8)(i64In, pDecOut);
+}
+
+/* OleTranslateColor */
+intptr_t __stdcall vb6_di_OleTranslateColor(intptr_t Color, intptr_t hPal, int32_t* RGBResult) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, int32_t*))OleTranslateColor)(Color, hPal, RGBResult);
+}
+
+/* OleLoadPicture */
+intptr_t __stdcall vb6_di_OleLoadPicture(void* pStream, intptr_t lSize, intptr_t fRunmode, void* riid, void** pIPicture) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, void*, void**))OleLoadPicture)(pStream, lSize, fRunmode, riid, pIPicture);
+}
+
+/* OleLoadPicturePath */
+intptr_t __stdcall vb6_di_OleLoadPicturePath(intptr_t lpszPath, intptr_t pUnkCaller, intptr_t dwReserved, intptr_t ClrReserved, void* riid, void** pIPicture) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, void**))OleLoadPicturePath)(lpszPath, pUnkCaller, dwReserved, ClrReserved, riid, pIPicture);
+}
+
+/* CreateStreamOnHGlobal */
+intptr_t __stdcall vb6_di_CreateStreamOnHGlobal(intptr_t hGlobal, intptr_t fDeleteOnRelease, void** pStream) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void**))CreateStreamOnHGlobal)(hGlobal, fDeleteOnRelease, pStream);
+}
+
+/* CommDlgExtendedError */
+intptr_t __stdcall vb6_di_CommDlgExtendedError() {
+    return ((intptr_t (WINAPI *)(void))CommDlgExtendedError)();
+}
+
+/* GetOpenFileNameW */
+intptr_t __stdcall vb6_di_GetOpenFileNameW(void* lpOpenFileName) {
+    return ((intptr_t (WINAPI *)(void*))GetOpenFileNameW)(lpOpenFileName);
+}
+
+/* GetSaveFileNameW */
+intptr_t __stdcall vb6_di_GetSaveFileNameW(void* lpOpenFileName) {
+    return ((intptr_t (WINAPI *)(void*))GetSaveFileNameW)(lpOpenFileName);
 }
 
 /* ChooseColorW */
 intptr_t __stdcall vb6_di_ChooseColorW(void* lpChooseColor) {
     return ((intptr_t (WINAPI *)(void*))ChooseColorW)(lpChooseColor);
 }
+
+/* ChooseFontW */
+intptr_t __stdcall vb6_di_ChooseFontW(void* lpChooseFont) {
+    return ((intptr_t (WINAPI *)(void*))ChooseFontW)(lpChooseFont);
+}
+
+/* PrintDlgW */
+intptr_t __stdcall vb6_di_PrintDlgW(void* lpPrintDlg) {
+    return ((intptr_t (WINAPI *)(void*))PrintDlgW)(lpPrintDlg);
+}
+
+/* PrintDlgExW */
+intptr_t __stdcall vb6_di_PrintDlgExW(void* lpPrintDlgEx) {
+    return ((intptr_t (WINAPI *)(void*))PrintDlgExW)(lpPrintDlgEx);
+}
+
+/* PageSetupDlgW */
+intptr_t __stdcall vb6_di_PageSetupDlgW(void* lpPageSetupDlg) {
+    return ((intptr_t (WINAPI *)(void*))PageSetupDlgW)(lpPageSetupDlg);
+}
+
+/* FindTextW */
+intptr_t __stdcall vb6_di_FindTextW(void* lpFindReplace) {
+    return ((intptr_t (WINAPI *)(void*))FindTextW)(lpFindReplace);
+}
+
+/* ReplaceTextW */
+intptr_t __stdcall vb6_di_ReplaceTextW(void* lpFindReplace) {
+    return ((intptr_t (WINAPI *)(void*))ReplaceTextW)(lpFindReplace);
+}
+
+/* RevokeDragDrop */
+intptr_t __stdcall vb6_di_RevokeDragDrop(intptr_t hWnd) {
+    return ((intptr_t (WINAPI *)(intptr_t))RevokeDragDrop)(hWnd);
+}
+
+/* OleCreatePropertyFrame */
+intptr_t __stdcall vb6_di_OleCreatePropertyFrame(intptr_t hWndOwner, intptr_t X, intptr_t Y, intptr_t lpszCaption, intptr_t cObjects, void** pUnk, intptr_t cPages, void* pPageCLSID, intptr_t LCID, intptr_t dwReserved, intptr_t pvReserved) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, void**, intptr_t, void*, intptr_t, intptr_t, intptr_t))OleCreatePropertyFrame)(hWndOwner, X, Y, lpszCaption, cObjects, pUnk, cPages, pPageCLSID, LCID, dwReserved, pvReserved);
+}
+
 /* CLSIDFromString */
 intptr_t __stdcall vb6_di_CLSIDFromString(intptr_t lpszProgID, void* pCLSID) {
     return ((intptr_t (WINAPI *)(intptr_t, void*))CLSIDFromString)(lpszProgID, pCLSID);
 }
-/* CoTaskMemAlloc */
-intptr_t __stdcall vb6_di_CoTaskMemAlloc(intptr_t cBytes) {
-    return ((intptr_t (WINAPI *)(intptr_t))CoTaskMemAlloc)(cBytes);
+
+/* CoCreateInstance */
+intptr_t __stdcall vb6_di_CoCreateInstance(void* rclsid, intptr_t pUnkOuter, intptr_t dwClsContext, void* riid, void** ppv) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, void*, void**))CoCreateInstance)(rclsid, pUnkOuter, dwClsContext, riid, ppv);
 }
-/* CoTaskMemFree */
-intptr_t __stdcall vb6_di_CoTaskMemFree(intptr_t hMem) {
-    return ((intptr_t (WINAPI *)(intptr_t))CoTaskMemFree)(hMem);
+
+/* StgCreateDocfile */
+intptr_t __stdcall vb6_di_StgCreateDocfile(intptr_t pwcsName, intptr_t grfMode, intptr_t Reserved, void** ppStgOpen) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void**))StgCreateDocfile)(pwcsName, grfMode, Reserved, ppStgOpen);
 }
-/* CreateStreamOnHGlobal */
-intptr_t __stdcall vb6_di_CreateStreamOnHGlobal(intptr_t hGlobal, intptr_t fDeleteOnRelease, void* ppstm) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*))CreateStreamOnHGlobal)(hGlobal, fDeleteOnRelease, ppstm);
+
+/* OleSetContainedObject */
+intptr_t __stdcall vb6_di_OleSetContainedObject(void* pUnknown, intptr_t fContained) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t))OleSetContainedObject)(pUnknown, fContained);
+}
+
+/* OleCreateFromFile */
+intptr_t __stdcall vb6_di_OleCreateFromFile(void* pCLSID, intptr_t lpszFileName, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateFromFile)(pCLSID, lpszFileName, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
+}
+
+/* OleCreateLinkToFile */
+intptr_t __stdcall vb6_di_OleCreateLinkToFile(intptr_t lpszFileName, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateLinkToFile)(lpszFileName, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
+}
+
+/* OleCreateStaticFromData */
+intptr_t __stdcall vb6_di_OleCreateStaticFromData(void* pSrcDataObject, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
+    return ((intptr_t (WINAPI *)(void*, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateStaticFromData)(pSrcDataObject, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
+}
+
+/* SysAllocString */
+intptr_t __stdcall vb6_di_SysAllocString(intptr_t lpString) {
+    return ((intptr_t (WINAPI *)(intptr_t))SysAllocString)(lpString);
+}
+
+/* VariantCopy */
+intptr_t __stdcall vb6_di_VariantCopy(void* pvargDest, void* pvargSrc) {
+    return ((intptr_t (WINAPI *)(void*, void*))VariantCopy)(pvargDest, pvargSrc);
+}
+
+/* === 恢复 dev@69845a9 有、本批重生成 di 桩时丢掉的定义 ===
+ * 生成器是按"那次跑它时的引用面"发桩的, 换一个会话重生成就会**静默丢掉**上一个会话
+ * 引用过的桩 (实测丢 9 个: comdlg32/winspool 那一族 + ChooseColorA/GetUserNameW/WinHelpA,
+ * Charts 2020 的 vb6_di_ChooseColorA 因此 LNK2019)。这里按 dev 原文补回。
+ *
+ * 2026-10-06: 生成器的结转 (2c 节, add-only) 原先靠"独占一行的杠星注释"定位块, 而本段这些
+ * 手工补回的桩带的是说明性注释 (形如 "杠星 ChooseFontA 破折号 Task #44 ... 星杠"), 于是整段
+ * 对结转**不可见** —— 实测全 622 个定义里只有 570 个能被旧口径认出, 52 个每次重生成都会
+ * 再丢一次 (上面那句"要改成全语料并集"说的就是它)。现已把定位改成按**函数定义行**
+ * (__stdcall vb6_di_X 左括号) 匹配, 并在其上吸收紧邻注释块; 同一会话重跑实测 622→626, 零丢失。 */
+intptr_t __stdcall vb6_di_ChooseColorA(void* pChoosecolor) {
+    return ((intptr_t (WINAPI *)(void*))ChooseColorA)(pChoosecolor);
+}
+/* ChooseFontA — Task #44 SSTabEx cDlg.cls:33 (comdlg32 字体对话框) */
+intptr_t __stdcall vb6_di_ChooseFontA(void* pChoosefont) {
+    return ((intptr_t (WINAPI *)(void*))ChooseFontA)(pChoosefont);
 }
 /* CryptAcquireContextA */
 intptr_t __stdcall vb6_di_CryptAcquireContextA(int32_t* phProv, BSTR pszContainer, BSTR pszProvider, intptr_t dwProvType, intptr_t dwFlags) {
@@ -150,29 +289,28 @@ intptr_t __stdcall vb6_di_GetFileTitleA(BSTR szFile, BSTR szTitle, intptr_t cbBu
 intptr_t __stdcall vb6_di_GetOpenFileNameA(void* file) {
     return ((intptr_t (WINAPI *)(void*))GetOpenFileNameA)(file);
 }
-/* GetOpenFileNameW */
-intptr_t __stdcall vb6_di_GetOpenFileNameW(void* pOpenfilename) {
-    return ((intptr_t (WINAPI *)(void*))GetOpenFileNameW)(pOpenfilename);
+/* GetSaveFileNameA — Task #44 SSTabEx cDlg.cls:42 */
+intptr_t __stdcall vb6_di_GetSaveFileNameA(void* pOpenfilename) {
+    return ((intptr_t (WINAPI *)(void*))GetSaveFileNameA)(pOpenfilename);
 }
-/* GetSaveFileNameW */
-intptr_t __stdcall vb6_di_GetSaveFileNameW(void* pOpenfilename) {
-    return ((intptr_t (WINAPI *)(void*))GetSaveFileNameW)(pOpenfilename);
+/* GetUserNameA */
+intptr_t __stdcall vb6_di_GetUserNameA(BSTR lpBuffer, int32_t* nSize) {
+    return ((intptr_t (WINAPI *)(BSTR, int32_t*))GetUserNameA)(lpBuffer, nSize);
 }
-/* OleCreatePropertyFrame */
-intptr_t __stdcall vb6_di_OleCreatePropertyFrame(intptr_t hWndOwner, intptr_t X, intptr_t Y, intptr_t lpszCaption, intptr_t cObjects, void** pUnk, intptr_t cPages, void* pPageCLSID, intptr_t LCID, intptr_t dwReserved, intptr_t pvReserved) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, void**, intptr_t, void*, intptr_t, intptr_t, intptr_t))OleCreatePropertyFrame)(hWndOwner, X, Y, lpszCaption, cObjects, pUnk, cPages, pPageCLSID, LCID, dwReserved, pvReserved);
+/* PageSetupDlgA — dbgdlg/cDlg.cls:196 (`Lib "COMDLG32" Alias "PageSetupDlgA"`, As Boolean
+ * ⇒ int16_t; 唯一形参是 VB6 UDT 指针 T_PAGESETUPDLG*, 按生成器既定规则折成 void*)。
+ *
+ * 缺口为何长期没暴露 (2026-10-06 记): 判据是"这个 Declare 有没有被**调用**", 不是"有没有
+ * 声明"。包装是 `static __inline`, 未被引用时 MSVC 根本不发符号, 于是同族里一批只声明不
+ * 调用的名字 (SetWindowsHookExW / AddFontResourceExW / SHGetFolderLocation …) 全都无桩
+ * 却安然无恙; cDlg.cls 是少数真调用的那一个 (cDlg.cls:2233 `mApiReturn = PageSetupDlg(iPsd)`),
+ * 才在链接期以 LNK2019 现形。dbgdlg 当时不在门禁里, 所以红都没红 —— 现已登记 (Test-VbpBuild)。 */
+int16_t __stdcall vb6_di_PageSetupDlgA(void* lppage) {
+    return ((int16_t (WINAPI *)(void*))PageSetupDlgA)(lppage);
 }
-/* OleLoadPicture */
-intptr_t __stdcall vb6_di_OleLoadPicture(intptr_t pStream, intptr_t lSize, intptr_t fRunmode, void* riid, void* ppvObj) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void*, void*))OleLoadPicture)(pStream, lSize, fRunmode, riid, ppvObj);
-}
-/* OleLoadPicturePath */
-intptr_t __stdcall vb6_di_OleLoadPicturePath(intptr_t lpszPath, intptr_t pUnkCaller, intptr_t dwReserved, intptr_t ClrReserved, void* riid, void** pIPicture) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, void**))OleLoadPicturePath)(lpszPath, pUnkCaller, dwReserved, ClrReserved, riid, pIPicture);
-}
-/* OleTranslateColor */
-intptr_t __stdcall vb6_di_OleTranslateColor(intptr_t lOleColor, intptr_t lHPalette, intptr_t lColorRef) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))OleTranslateColor)(lOleColor, lHPalette, lColorRef);
+/* PrintDlgA — Task #44 SSTabEx cDlg.cls:45 */
+intptr_t __stdcall vb6_di_PrintDlgA(void* pPrintdlg) {
+    return ((intptr_t (WINAPI *)(void*))PrintDlgA)(pPrintdlg);
 }
 /* RegCloseKey */
 intptr_t __stdcall vb6_di_RegCloseKey(intptr_t HKey) {
@@ -186,17 +324,9 @@ intptr_t __stdcall vb6_di_RegOpenKeyExA(intptr_t HKey, BSTR lpSubKey, intptr_t u
 intptr_t __stdcall vb6_di_RegQueryValueExA(intptr_t HKey, BSTR lpValueName, intptr_t lpReserved, int32_t* lpType, BSTR lpData, int32_t* lpcbData) {
     return ((intptr_t (WINAPI *)(intptr_t, BSTR, intptr_t, int32_t*, BSTR, int32_t*))RegQueryValueExA)(HKey, lpValueName, lpReserved, lpType, lpData, lpcbData);
 }
-/* SysAllocString */
-intptr_t __stdcall vb6_di_SysAllocString(intptr_t lpString) {
-    return ((intptr_t (WINAPI *)(intptr_t))SysAllocString)(lpString);
-}
 /* SysFreeString */
 intptr_t __stdcall vb6_di_SysFreeString(intptr_t lpString) {
     return ((intptr_t (WINAPI *)(intptr_t))SysFreeString)(lpString);
-}
-/* SysReAllocString */
-intptr_t __stdcall vb6_di_SysReAllocString(intptr_t pbString, intptr_t pszStrPtr) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SysReAllocString)(pbString, pszStrPtr);
 }
 /* SystemTimeToVariantTime */
 intptr_t __stdcall vb6_di_SystemTimeToVariantTime(void* lpSystemTime, double* pvTime) {
@@ -205,10 +335,6 @@ intptr_t __stdcall vb6_di_SystemTimeToVariantTime(void* lpSystemTime, double* pv
 /* VarCmp */
 intptr_t __stdcall vb6_di_VarCmp(void* pvargLeft, void* pvargRight, intptr_t LCID, intptr_t dwFlags) {
     return ((intptr_t (WINAPI *)(void*, void*, intptr_t, intptr_t))VarCmp)(pvargLeft, pvargRight, LCID, dwFlags);
-}
-/* VarDecFromI8 */
-intptr_t __stdcall vb6_di_VarDecFromI8(double i64In, void* pDecOut) {
-    return ((intptr_t (WINAPI *)(double, void*))VarDecFromI8)(i64In, pDecOut);
 }
 /* VarI8FromDec */
 intptr_t __stdcall vb6_di_VarI8FromDec(void* pDecIn, double* i64Out) {
@@ -226,10 +352,6 @@ intptr_t __stdcall vb6_di_VarI8FromStr(intptr_t lpStrIn, intptr_t LCID, intptr_t
 intptr_t __stdcall vb6_di_VariantClear(void* pvarg) {
     return ((intptr_t (WINAPI *)(void*))VariantClear)(pvarg);
 }
-/* VariantCopy */
-intptr_t __stdcall vb6_di_VariantCopy(void* pvargDest, void* pvargSrc) {
-    return ((intptr_t (WINAPI *)(void*, void*))VariantCopy)(pvargDest, pvargSrc);
-}
 /* VariantInit */
 void __stdcall vb6_di_VariantInit(void* pvarg) {
     ((void (WINAPI *)(void*))VariantInit)(pvarg);
@@ -237,51 +359,4 @@ void __stdcall vb6_di_VariantInit(void* pvarg) {
 /* VariantTimeToSystemTime */
 intptr_t __stdcall vb6_di_VariantTimeToSystemTime(double vTime, void* lpSystemTime) {
     return ((intptr_t (WINAPI *)(double, void*))VariantTimeToSystemTime)(vTime, lpSystemTime);
-}
-
-
-/* === 恢复 dev@69845a9 有、本批重生成 di 桩时丢掉的定义 ===
- * 生成器是按"那次跑它时的引用面"发桩的, 换一个会话重生成就会**静默丢掉**上一个会话
- * 引用过的桩 (实测丢 9 个: comdlg32/winspool 那一族 + ChooseColorA/GetUserNameW/WinHelpA,
- * Charts 2020 的 vb6_di_ChooseColorA 因此 LNK2019)。这里按 dev 原文补回。
- *
- * 2026-10-06: 生成器的结转 (2c 节, add-only) 原先靠"独占一行的杠星注释"定位块, 而本段这些
- * 手工补回的桩带的是说明性注释 (形如 "杠星 ChooseFontA 破折号 Task #44 ... 星杠"), 于是整段
- * 对结转**不可见** —— 实测全 622 个定义里只有 570 个能被旧口径认出, 52 个每次重生成都会
- * 再丢一次 (上面那句"要改成全语料并集"说的就是它)。现已把定位改成按**函数定义行**
- * (__stdcall vb6_di_X 左括号) 匹配, 并在其上吸收紧邻注释块; 同一会话重跑实测 622→626, 零丢失。 */
-intptr_t __stdcall vb6_di_ChooseColorA(void* pChoosecolor) {
-    return ((intptr_t (WINAPI *)(void*))ChooseColorA)(pChoosecolor);
-}
-
-/* ChooseFontA — Task #44 SSTabEx cDlg.cls:33 (comdlg32 字体对话框) */
-intptr_t __stdcall vb6_di_ChooseFontA(void* pChoosefont) {
-    return ((intptr_t (WINAPI *)(void*))ChooseFontA)(pChoosefont);
-}
-
-/* GetSaveFileNameA — Task #44 SSTabEx cDlg.cls:42 */
-intptr_t __stdcall vb6_di_GetSaveFileNameA(void* pOpenfilename) {
-    return ((intptr_t (WINAPI *)(void*))GetSaveFileNameA)(pOpenfilename);
-}
-
-/* PrintDlgA — Task #44 SSTabEx cDlg.cls:45 */
-intptr_t __stdcall vb6_di_PrintDlgA(void* pPrintdlg) {
-    return ((intptr_t (WINAPI *)(void*))PrintDlgA)(pPrintdlg);
-}
-
-/* CommDlgExtendedError — Task #44 SSTabEx cDlg.cls:49 */
-intptr_t __stdcall vb6_di_CommDlgExtendedError(void) {
-    return ((intptr_t (WINAPI *)(void))CommDlgExtendedError)();
-}
-
-/* PageSetupDlgA — dbgdlg/cDlg.cls:196 (`Lib "COMDLG32" Alias "PageSetupDlgA"`, As Boolean
- * ⇒ int16_t; 唯一形参是 VB6 UDT 指针 T_PAGESETUPDLG*, 按生成器既定规则折成 void*)。
- *
- * 缺口为何长期没暴露 (2026-10-06 记): 判据是"这个 Declare 有没有被**调用**", 不是"有没有
- * 声明"。包装是 `static __inline`, 未被引用时 MSVC 根本不发符号, 于是同族里一批只声明不
- * 调用的名字 (SetWindowsHookExW / AddFontResourceExW / SHGetFolderLocation …) 全都无桩
- * 却安然无恙; cDlg.cls 是少数真调用的那一个 (cDlg.cls:2233 `mApiReturn = PageSetupDlg(iPsd)`),
- * 才在链接期以 LNK2019 现形。dbgdlg 当时不在门禁里, 所以红都没红 —— 现已登记 (Test-VbpBuild)。 */
-int16_t __stdcall vb6_di_PageSetupDlgA(void* lppage) {
-    return ((int16_t (WINAPI *)(void*))PageSetupDlgA)(lppage);
 }

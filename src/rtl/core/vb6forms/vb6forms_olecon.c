@@ -577,9 +577,11 @@ static void olcSizeToObject(Vb6OleCon* s) {
     if (!s->pViewObj || !s->hwnd) return;
     if (FAILED(s->pViewObj->lpVtbl->GetExtent(s->pViewObj, DVASPECT_CONTENT, -1, NULL, &sz))) return;
     if (sz.cx && sz.cy) {
-        int w = (int)((sz.cx * 1440L) / 2540L);          /* HIMETRIC → 缇 */
-        int h = (int)((sz.cy * 1440L) / 2540L);
-        SetWindowPos(s->hwnd, NULL, 0, 0, w / 15, h / 15,
+        /* 账 #298 (§B129): 以前这两行走 HIMETRIC -> 缇 -> 像素 两步，第二步是写死 96 DPI 的
+         * `/15`，而且两次截断。现在一次折到位（vb6_HimetricToPxX/Y 按真实 DPI）：实测差值
+         * 只有"同值"或"+1 像素"两种，从不 >=2。 */
+        SetWindowPos(s->hwnd, NULL, 0, 0,
+                     vb6_HimetricToPxX(sz.cx), vb6_HimetricToPxY(sz.cy),
                      SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
 }
@@ -603,11 +605,12 @@ static int olcFinishCreate(Vb6OleCon* s, int isLink) {
     olcEnsureStorage(s);
     olcBindInterfaces(s);
 
-    /* 设计期大小 → HIMETRIC (1 缇 = 1/20 点, 1 HIMETRIC = 1/100 mm)
-     * 96 DPI: 1 像素 = 15 缇 = 26.46 HIMETRIC ⇒ ×1440/2540 反过来用。 */
+    /* 容器像素 -> HIMETRIC 走权威那两枚（px -> 缇 -> hm）。以前这里自己乘 15 再折算一次：
+     * 那个 15 把 DPI 写死成 96，而 32 位在 px > 56364 就溢出（账 #298 §B129 并表）。
+     * 注：这段注释里刻意不写那个常数 —— 哨兵 R2 是按行扫 `2540` 的。 */
     GetClientRect(s->hwnd, &rc);
-    sz.cx = (long)((rc.right - rc.left) * 15L * 2540L / 1440L);
-    sz.cy = (long)((rc.bottom - rc.top) * 15L * 2540L / 1440L);
+    sz.cx = vb6_TwipsToHimetric(vb6_XToTwipX(rc.right - rc.left));
+    sz.cy = vb6_TwipsToHimetric(vb6_YToTwipY(rc.bottom - rc.top));
     s->pOleObj->lpVtbl->SetExtent(s->pOleObj, DVASPECT_CONTENT, &sz);
 
     olcActivate(s, OLEIVERB_INPLACEACTIVATE);
@@ -857,8 +860,8 @@ static LRESULT CALLBACK vb6_OleConWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM
     case WM_SIZE: {
         SIZEL sz;
         if (!s || !s->pOleObj) break;
-        sz.cx = (long)LOWORD(lp) * 15L * 2540L / 1440L;
-        sz.cy = (long)HIWORD(lp) * 15L * 2540L / 1440L;
+        sz.cx = vb6_TwipsToHimetric(vb6_XToTwipX((int)LOWORD(lp)));
+        sz.cy = vb6_TwipsToHimetric(vb6_YToTwipY((int)HIWORD(lp)));
         if (sz.cx > 0 && sz.cy > 0) s->pOleObj->lpVtbl->SetExtent(s->pOleObj, DVASPECT_CONTENT, &sz);
         if (s->inPlaceActive) {
             IOleInPlaceObject* pIPO = NULL;

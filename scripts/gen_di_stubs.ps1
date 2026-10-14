@@ -100,6 +100,14 @@ foreach ($f in $headers) {
         $name = $m.Groups[2].Value
         if ($protos.ContainsKey($name)) { continue }
         $ret = $m.Groups[1].Value.Trim()
+        # project-generated return types (vb6_*): pointer -> void*, by-value -> intptr_t
+        # (ABI: pointer-sized). The RTL cannot name them, and returning void*/intptr_t is fine
+        # because __stdcall decoration depends only on arg bytes, not the return type.
+        if ($ret -match 'vb6_[A-Za-z0-9_]*\s*\*') {
+            $ret = [regex]::Replace($ret, 'vb6_[A-Za-z0-9_]*\s*\*', 'void*')
+        } elseif ($ret -match 'vb6_[A-Za-z0-9_]*') {
+            $ret = 'intptr_t'
+        }
         $pOpen = $buf.IndexOf('(', $m.Index + $m.Length - 1)
         $pClose = $buf.LastIndexOf(')')
         if ($pOpen -lt 0 -or $pClose -le $pOpen) { continue }
@@ -154,6 +162,16 @@ $badUdt = New-Object System.Collections.Generic.List[string]
 $seen = @{}
 $counts = @{}
 
+# commctrl macros that wrap a real function: they cannot be used as a function-pointer cast
+# target (the identifier is undeclared -> C2065). key = Declare alias; fn = real function to
+# call; extra = literal args appended after the original ones.
+#   ImageList_AddIcon(himl,hicon)     -> ImageList_Add(himl,hicon,0)
+#   ImageList_ReplaceIcon(himl,i,hicon) -> ImageList_Replace(himl,i,hicon)
+$macroMap = @{
+    'ImageList_AddIcon'     = @{ fn = 'ImageList_Add';     extra = @('0') }
+    'ImageList_ReplaceIcon' = @{ fn = 'ImageList_Replace'; extra = @() }
+}
+
 foreach ($s in $order) {
     if ($seen.ContainsKey($s)) { continue }
     $seen[$s] = 1
@@ -187,11 +205,14 @@ foreach ($s in $order) {
             $ptype = $pt
         }
         if ($ptype -eq '') { $ptype = 'intptr_t' }
-        # VB UDTs (vb6_type_xxx) are project-generated structs the RTL cannot see.
-        # Every occurrence here is by-pointer, so void* is ABI-identical.
-        if ($ptype -match 'vb6_type_[A-Za-z0-9_]*\s*\*') {
-            $ptype = [regex]::Replace($ptype, 'vb6_type_[A-Za-z0-9_]*\s*\*', 'void*')
-        } elseif ($ptype -match 'vb6_type_[A-Za-z0-9_]*') {
+        # VB UDTs / project interfaces / VARIANT (vb6_type_*, vb6_ivref_*, vb6_ComIface_*,
+        # vb6_VARIANT*) are project-generated types the RTL cannot see. Every Declare passes
+        # them by pointer, so void* is ABI-identical. A by-value vb6_* type is not representable
+        # here -> skip the stub (badUdt) rather than emit an undeclared type (which cascades into
+        # C2143/C2081/C2370 for the whole TU and breaks the SHARED rtl for every project).
+        if ($ptype -match 'vb6_[A-Za-z0-9_]*\s*\*') {
+            $ptype = [regex]::Replace($ptype, 'vb6_[A-Za-z0-9_]*\s*\*', 'void*')
+        } elseif ($ptype -match 'vb6_[A-Za-z0-9_]*') {
             $udtBad = $true
         }
         $declParts += ($ptype + ' ' + $pname)
@@ -209,8 +230,30 @@ foreach ($s in $order) {
     if ($dyn) { $usedLibs[$famName]['__dynamic__'] = 1 }
     if ($protos[$s].lib -ne '') { $usedLibs[$famName][$protos[$s].lib] = 1 }
 
+    # DllGetVersion (comctl32) is NOT declared by the SDK for C, so resolve it by name
+    # through vb6_di_dllproc. Using a bare cast on an undeclared identifier is a C2065,
+    # and the FATAL-HANDOFF note records that losing the prototyped loader truncated the
+    # function pointer on x64 -> 0xC0000005. Route it through the loader instead.
+    $runtimeName = ''
+    if ($api -eq 'DllGetVersion' -or $api -eq 'DllGetVersionEx') {
+        $runtimeName = $api
+        $usedLibs[$famName]['__dllproc__'] = 1
+    }
+
     $out = $bodies[$bodyKey]
     $out.Add('/* ' + ($s -replace '^vb6_di_', '') + ' */')
+    # commctrl macro aliases cannot be cast-to-function-pointer; route them through the real
+    # underlying function with any literal args the macro injects.
+    $targetFn = $api
+    $callTypes = $types
+    $callArgs = $args
+    if ($macroMap.ContainsKey($api)) {
+        $targetFn = $macroMap[$api].fn
+        if ($macroMap[$api].extra.Count -gt 0) {
+            $callTypes = $(if ($types -eq '' -or $types -eq 'void') { 'int' } else { $types + ', int' })
+            $callArgs = $(if ($args -eq '') { '0' } else { $args + ', ' + ($macroMap[$api].extra -join ', ') })
+        }
+    }
     if ($dyn) {
         if ($ret -eq 'void') {
             $out.Add('void __stdcall ' + $s + '(' + $decl + ') {')
@@ -224,13 +267,29 @@ foreach ($s in $order) {
             $out.Add('    return fn(' + $args + ');')
             $out.Add('}')
         }
+    } elseif ($runtimeName -ne '') {
+        $dllLib = $protos[$s].lib
+        if ($dllLib -eq '') { $dllLib = 'comctl32' }
+        $dllLib = $dllLib + '.dll'
+        if ($ret -eq 'void') {
+            $out.Add('void __stdcall ' + $s + '(' + $decl + ') {')
+            $out.Add('    void (WINAPI *fn)(' + $types + ') = (void (WINAPI *)(' + $types + '))vb6_di_dllproc("' + $dllLib + '", "' + $runtimeName + '");')
+            $out.Add('    if (fn != NULL) { fn(' + $args + '); }')
+            $out.Add('}')
+        } else {
+            $out.Add($ret + ' __stdcall ' + $s + '(' + $decl + ') {')
+            $out.Add('    ' + $ret + ' (WINAPI *fn)(' + $types + ') = (' + $ret + ' (WINAPI *)(' + $types + '))vb6_di_dllproc("' + $dllLib + '", "' + $runtimeName + '");')
+            $out.Add('    if (fn == NULL) { return (' + $ret + ')2; /* GpStatus InvalidParameter */ }')
+            $out.Add('    return fn(' + $args + ');')
+            $out.Add('}')
+        }
     } elseif ($ret -eq 'void') {
         $out.Add('void __stdcall ' + $s + '(' + $decl + ') {')
-        $out.Add('    ((void (WINAPI *)(' + $types + '))' + $api + ')(' + $args + ');')
+        $out.Add('    ((' + 'void (WINAPI *)(' + $callTypes + '))' + $targetFn + ')(' + $callArgs + ');')
         $out.Add('}')
     } else {
         $out.Add($ret + ' __stdcall ' + $s + '(' + $decl + ') {')
-        $out.Add('    return ((' + $ret + ' (WINAPI *)(' + $types + '))' + $api + ')(' + $args + ');')
+        $out.Add('    return ((' + $ret + ' (WINAPI *)(' + $callTypes + '))' + $targetFn + ')(' + $callArgs + ');')
         $out.Add('}')
     }
     $out.Add('')
@@ -238,7 +297,7 @@ foreach ($s in $order) {
 }
 
 # ---------- 5. write one file per family ----------
-function New-Banner([string]$family, [string[]]$libs, [bool]$needDynamic, [int]$stubs) {
+function New-Banner([string]$family, [string[]]$libs, [bool]$needDynamic, [int]$stubs, [bool]$needDllProc = $false) {
     $b = @()
     $b += ('// vb6_di_' + $family + '_stubs.c - generated by scripts/gen_di_stubs.ps1')
     $b += '//'
@@ -287,6 +346,10 @@ function New-Banner([string]$family, [string[]]$libs, [bool]$needDynamic, [int]$
     $b += '#include <ole2.h>'
     $b += '#include <oleauto.h>'
     $b += '#include <olectl.h>'
+    # unknown family also pulls msvfw32 (vfw.h: MCIWndRegisterClass) and oledlg
+    # (oledlg.h: OleUIPasteSpecialW); neither is declared by windows.h's prelude.
+    $b += '#include <vfw.h>'
+    $b += '#include <oledlg.h>'
     $b += '/* NOTE: gdiplus.h is C++-only (class Gdiplus...). The GDI+ flat API is'
     $b += ' * resolved with GetProcAddress instead - see below. */'
     $b += ''
@@ -304,6 +367,25 @@ function New-Banner([string]$family, [string[]]$libs, [bool]$needDynamic, [int]$
         $b += '    static HMODULE mod = NULL;'
         $b += '    if (mod == NULL) { mod = LoadLibraryA("gdiplus.dll"); }'
         $b += '    return (mod != NULL) ? (void*)GetProcAddress(mod, name) : NULL;'
+        $b += '}'
+        $b += ''
+    }
+    if ($needDllProc) {
+        # comctl32's DllGetVersion is NOT declared by the SDK headers for C (it is a
+        # "reserved" API resolved via GetProcAddress). The FATAL-HANDOFF merge note in
+        # vb6_di_user32_stubs.c records that without a proper prototype the function
+        # pointer is truncated to 32 bits on x64 and fn(pdvi) jumps to garbage -> a real
+        # 0xC0000005 in the byref-UDT-out path. Resolve it by name through this loader and
+        # keep it file-local so regeneration can never silently drop it again.
+        $b += '/* DllGetVersion is not declared by the SDK headers for C, so resolve it by'
+        $b += ' * name at first use. Must stay file-local + prototyped (see FATAL-HANDOFF). */'
+        $b += 'static void* vb6_di_dllproc(const char* dll, const char* name) {'
+        $b += '    static HMODULE mod = NULL;'
+        $b += '    static const char* dllname = NULL;'
+        $b += '    if (mod != NULL && dllname != NULL && strcmp(dll, dllname) != 0) { mod = NULL; }'
+        $b += '    if (mod == NULL) { mod = LoadLibraryA(dll); dllname = dll; }'
+        $b += '    if (mod == NULL) { return NULL; }'
+        $b += '    return (void*)GetProcAddress(mod, name);'
         $b += '}'
         $b += ''
     }
@@ -399,7 +481,11 @@ function Get-StubNamesFromLines([string[]]$lines) {
 $freshAll = @{}
 foreach ($k in $bodies.Keys) {
     $freshNames = Get-StubNamesFromLines $bodies[$k]
-    foreach ($nm in $freshNames.Keys) { $freshAll[$nm] = $true }
+    # FIX: Get-StubNamesFromLines keys are BARE names (BeginPaint); oldBlocks keys are
+    # PREFIXED (vb6_di_BeginPaint). The carry-over check below compares $nm (prefixed)
+    # against $freshAll, so without the prefix it never matched -> every old block got
+    # carried over -> duplicate definitions. Key both sides with the vb6_di_ prefix.
+    foreach ($nm in $freshNames.Keys) { $freshAll['vb6_di_' + $nm] = $true }
 }
 foreach ($nm in $hand.Keys) { $freshAll[$nm] = $true }
 
@@ -440,6 +526,7 @@ foreach ($fam in $families) {
     # 如 dwmapi 的 DwmSetWindowAttribute — 按需裁剪会漏 lib 导致 LNK2019)
     foreach ($l in $fam.libs) { $libs += $l }
     $needDynamic = $usedLibs[$name].ContainsKey('__dynamic__')
+    $needDllProc = $usedLibs[$name].ContainsKey('__dllproc__')
     $path = Join-Path $OutDir ('vb6_di_' + $name + '_stubs.c')
     $carried = @()
     $oldBlocks = Get-ExistingStubBlocks $path
@@ -449,7 +536,7 @@ foreach ($fam in $families) {
     if ($carried.Count -gt 0) {
         Write-Output ('  ' + $name.PadRight(9) + '    carried over ' + $carried.Count + ' stub(s) from previous file')
     }
-    $content = ((New-Banner $name $libs $needDynamic ($counts[$name] + $carried.Count)) + $bodies[$name] + $carried) -join "`r`n"
+    $content = ((New-Banner $name $libs $needDynamic ($counts[$name] + $carried.Count) $needDllProc) + $bodies[$name] + $carried) -join "`r`n"
     [System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
     $written.Add($path)
     Write-Output ('  ' + $name.PadRight(9) + ' -> ' + (Split-Path $path -Leaf) +
@@ -463,7 +550,11 @@ if ($bodies['unknown'].Count -gt 0) {
     foreach ($nm in ($oldBlocks.Keys | Sort-Object)) {
         if (-not $freshAll.ContainsKey($nm)) { $carried += $oldBlocks[$nm] }
     }
-    $content = ((New-Banner 'unknown' @() $false ($counts['unknown'] + $carried.Count)) + $bodies['unknown'] + $carried) -join "`r`n"
+    # FIX: unknown 家族承载"无 vb6_di_lib 标记的杂项符号"以及被生成器归到 unmapped
+    # Lib 的符号 (winspool.drv / msvfw32 / oledlg / imm32 / msimg32 / version)。
+    # 之前 New-Banner 收的是空 lib 表, 导致 Imm*/TransparentBlt/VerQueryValueW 的
+    # import lib 被整段丢掉 -> 这些桩反过来 LNK2019。这里显式带上它们需要的 lib。
+    $content = ((New-Banner 'unknown' @('imm32','msimg32','version','winspool','msvfw32','oledlg') $false ($counts['unknown'] + $carried.Count) $false) + $bodies['unknown'] + $carried) -join "`r`n"
     [System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
     $written.Add($path)
     Write-Output ('  unknown   -> vb6_di_unknown_stubs.c   stubs ' + $counts['unknown'] + '   !!! no vb6_di_lib marker')

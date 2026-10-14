@@ -252,14 +252,15 @@ int32_t vb6_InStrVarC(int32_t start, BSTR haystack, vb6_VARIANT needle, int32_t 
 //  · Byte() 一维数组 (vb6_SafeArray1D*) — VB6 允许 InStrB(ByteArray1, ByteArray2)
 //    做字节流查找 (类里常写成 `InStrB(a, b) = 1` 判两个字节数组相等);
 //  · BSTR — 返回字节偏移 (VB6 InStrB 语义: 宽字符下标 * 2 + 1).
-// 用 SafeArray1D 魔数 (0x5A1D) 区分两种载体, 避免在 RTL 里区分运行时指针类型.
+// 用 1D 描述符判定 (cDims==1 + fFeatures 标记, 见 vb6rtl_array.h) 区分两种载体,
+// 避免在 RTL 里区分运行时指针类型. 旧写法是比 signature == 0x5A1D.
 int32_t vb6_InStrB(int32_t start, void* haystack, void* needle) {
     if (!haystack || !needle) return 0;
     if (start < 1) start = 1;
     {
         const vb6_SafeArray1D* ha = (const vb6_SafeArray1D*)haystack;
         const vb6_SafeArray1D* ne = (const vb6_SafeArray1D*)needle;
-        if (ha->signature == 0x5A1D && ne->signature == 0x5A1D) {
+        if (vb6_SaIs1D(ha) && vb6_SaIs1D(ne)) {
             int32_t hlen = ha->count * ha->elemSize;
             int32_t nlen = ne->count * ne->elemSize;
             if (nlen == 0) return start;

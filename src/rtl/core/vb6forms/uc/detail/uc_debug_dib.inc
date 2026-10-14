@@ -2,9 +2,9 @@
 // 内容 = 拆分前 vb6forms_uc.c 第 308~369 行，逐行未改（结构体除外）
 // 在函数体内 #include；路径一律用 basename
 // 注: vb6_UCDib 结构体已上移到 vb6forms_uc_internal.h（uc_host_window.c 也要用）
-// 注: g_uc_dumpSeq / vb6_uc_dibCreate / dibSaveBmp / dibDestroy 已去 static 供跨单元使用
+// 注: vb6_ucDumpSeq / vb6_uc_dibCreate / dibSaveBmp / dibDestroy 已去 static 供跨单元使用
 
-int32_t g_uc_dumpSeq = 0;
+int32_t vb6_ucDumpSeq = 0;
 
 void vb6_uc_dibCreate(vb6_UCDib* d, HDC refDC, int32_t w, int32_t h) {
     BITMAPINFO bi;

@@ -16,7 +16,8 @@
             } else if (firstArg.find("vb6_VariantFromComResult") == 0) {
                 // COM调用结果(VARIANT*)→vb6_VARIANT, 需转BSTR
                 firstArg = "vb6_VariantToString(" + firstArg + ")";
-            } else if (firstArg.find("vb6_ComCall(") == 0) {
+            } else if (firstArg.find("vb6_ComCall(") == 0
+                           || firstArg.find("vb6_ComCallByDispid(") == 0) {
                 // P24-01: 后期绑定COM调用返回VARIANT*, 需解包转BSTR
                 firstArg = "vb6_VariantToString(vb6_VariantFromComResult(" + firstArg + "))";
             } else if (firstArg.find("vb6_VariantToString(") == 0) {
@@ -121,6 +122,7 @@
             // Fix 121b: 同 Fix 121 — 裸 COM 结果必须解引用 (VariantFromComResult),
             // 否则 _Generic 按 void* 包装得到空 Variant。
             bool comRes121b = (args[0].compare(0, 12, "vb6_ComCall(") == 0)
+                || (args[0].compare(0, 20, "vb6_ComCallByDispid(") == 0)
                 || (args[0].compare(0, 15, "vb6_ComGetProp(") == 0)
                 || (args[0].compare(0, 21, "vb6_ComGetObjectProp(") == 0);
             args[0] = comRes121b

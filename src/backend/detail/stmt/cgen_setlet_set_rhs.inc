@@ -62,6 +62,23 @@
     // VariantFromComResult(ComGetProp(...)) (Variant 值), 应直接拷贝进容器
     // (051 的 vb6_VariantFromValue _Generic Identity 安全处理), 而非先 ToObjectVal
     // 提取 void* 再重包 (多余且二次语义).
+    // Fix <vbeclipse> 2026-10-07 (P24-10b 的漏网): `Set o = <晚绑定默认成员>`
+    //   (`Set o = d("x")`, d 是晚绑定 Object) 的 RHS 发出来是 vb6_ComCallByDispid(...)
+    //   —— 它返回 **VARIANT*** (void*), 不是 IDispatch*。原样塞进对象槽
+    //   (`void* o = ...`) 后, 后续任何 .成员 / CallByName 都会把那只 VARIANT 结构体
+    //   当 IDispatch 的 lpVtbl 解引用 → 0xC0000005。
+    //   实测: tests_github/t2_cases	est_exe_com_bridge —— 打印到 "EXEB:3 got object"
+    //   之后 `CallByName o, "Ping", VbMethod` 段错误 (退出码 139; 夜间 GitHub Tests
+    //   T0+T1+T2 run 37543812934 的 t2 shard 2/2 就是这一条)。
+    //   与 cgen_expr_member_generic_access.inc 的 ByDispid 成员访问**同口径**:
+    //   先 vb6_VariantFromComResult 把 VARIANT* 解成 by-value VARIANT, 再交给下面
+    //   既有的 vb6_VariantToObjectVal 取 IDispatch* (工程类槽还会再剥一层)。
+    //   只动 ByDispid 这一族 —— 具名晚绑定那条路 (`d.Item("x")`) 早在发码时就按目标
+    //   类型挑了 vb6_ComCallObject, 实测已发成 `o = vb6_ComCallObject(d, L"Item", ...)`。
+    if (!targetIsVariant && value.compare(0, 20, "vb6_ComCallByDispid(") == 0) {
+        value = "vb6_VariantFromComResult(" + value + ")";
+    }
+
     {
         bool valueIsVariant = cExprIsVariant(value);
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
@@ -142,7 +159,7 @@
             && target.find(".") == std::string::npos
             && target.find("[") == std::string::npos
             && target.find("VB6_SA_AT(") != 0
-            && target.find("vb6_VariantArrayGet(") != 0
+            && !isVariantSlotElemRead(target)
             && target.find("vb6_PA_Get") != 0
             && target.find("prop_get_") == std::string::npos
             && target.find("prop_let_") == std::string::npos

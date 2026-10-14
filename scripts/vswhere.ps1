@@ -1,4 +1,4 @@
-#查找visual studio的安装位置
+﻿#查找visual studio的安装位置
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 
 if (Test-Path $vswhere) {

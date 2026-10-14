@@ -1,0 +1,5 @@
+Type=Exe
+Name="B173App"
+Module=B173Main; B173Main.bas
+Class=B173Holder; B173Holder.cls
+Startup="Sub Main"

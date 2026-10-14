@@ -654,6 +654,12 @@ std::unique_ptr<TypeDecl> ASTCloner::cloneTypeDecl(const TypeDecl& d,
                                                m->arraySize ? cloneExpr(m->arraySize.get())
                                                             : nullptr);
         mt->isArrayDynamic = m->isArrayDynamic;
+        for (auto& md : m->moreDims) {
+            TypeMember::MoreDim nd;
+            nd.lower = md.lower ? cloneExpr(md.lower.get()) : nullptr;
+            nd.upper = md.upper ? cloneExpr(md.upper.get()) : nullptr;
+            mt->moreDims.push_back(std::move(nd));
+        }
         if (m->type && !mt->type) { failed_ = true; return nullptr; }
         members.push_back(std::move(mt));
     }

@@ -10,7 +10,7 @@ Begin VB.Form TmForm2
    ScaleWidth      =   2400
    Begin VB.Timer t2 
       Enabled         =   -1   'True
-      Interval        =   20
+      Interval        =   100
       Left            =   240
       Top             =   240
    End
@@ -27,6 +27,7 @@ Option Explicit
 ' 第一枚窗体的第一枚 Timer 同号 —— 派发只按 id 查进程内那张表，先建的那格先命中，
 ' 于是这里的 t2_Timer 一次都不会跑（第一枚窗体里读到的数就是 0），而第一枚的事件
 ' 过程跑得翻倍。两边各读一次，才是这一条的完整形状。
+' 间隔取 100 ms（第一枚那一相是 500 ms，差 5 倍；两档都在 tick 取整误差 <=7% 那一侧）。
 Private m2 As Long
 
 Private Sub t2_Timer()

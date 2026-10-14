@@ -135,6 +135,29 @@
                     ev.name = ucSpecEvt->codeSection.substr(nameStart, lp - nameStart);
                     ev.lowName = Symbol::toLower(ev.name);
                     size_t rp = lowCode.find(')', lp);
+                    // Fix 259: 上面那一句是**朴素**找 `)` —— 形参表里只要有数组形参
+                    // (`ByRef State() As Boolean`), 它抓到的是 **`State()` 自己的右括号**,
+                    // 于是 args 只到 `..., ByRef State(` 为止 ⇒ 少一枚形参。
+                    //   实测 ComCtlsDemo MonthView.ctl:128 / DTPicker.ctl:154
+                    //     Public Event GetDayBold(ByVal StartDate As Date, ByVal Count As Long,
+                    //                             ByRef State() As Boolean)
+                    //   ⇒ thunk 只声明/只传 2 个 (typedef 那头是 3 个: vb6_evt_*_cb
+                    //     (void*, double, int32_t, vb6_SafeArray1D*)) ⇒ C2198 ×2
+                    //     (MainForm.c 44/46)。按**括号深度**找配对的右括号。
+                    // 注: lowCode 与 codeSection 等长 (ASCII 小写化), 索引可以直接互用。
+                    {
+                        int depth259 = 0;
+                        size_t scan259 = lp;
+                        while (scan259 < lowCode.size()) {
+                            if (lowCode[scan259] == '(') depth259++;
+                            else if (lowCode[scan259] == ')') {
+                                depth259--;
+                                if (depth259 == 0) break;
+                            }
+                            scan259++;
+                        }
+                        rp = (scan259 < lowCode.size()) ? scan259 : std::string::npos;
+                    }
                     if (rp != std::string::npos && (eol == std::string::npos || rp < eol)) {
                         std::string args = ucSpecEvt->codeSection.substr(lp + 1, rp - lp - 1);
                         std::string argsLow = Symbol::toLower(args);
@@ -148,9 +171,24 @@
                             std::string ty = args.substr(tStart, tEnd - tStart);
                             while (!ty.empty() && ty.front() == ' ') ty.erase(ty.begin());
                             while (!ty.empty() && (ty.back() == ' ' || ty.back() == '\r')) ty.pop_back();
+                            // Fix 259: 数组形参的 `()` 挂在**形参名**上 (在 `As` 之前),
+                            // 所以类型文本 (ty) 里看不见它 —— 但它决定 C 侧是 SAFEARRAY*
+                            // (typedef 那头就是这个)。截出本形参从上一个逗号到 ` as ` 的
+                            // 名字段, 见 `()` 就按 mapType 的数组档定型 (与
+                            // cgen_base_type.cpp:61-67 的 `vb6_SafeArray1D*` 同一答案)。
+                            size_t nameFrom = pcur;
+                            size_t prevComma = args.find(',', nameFrom);
+                            while (prevComma != std::string::npos && prevComma < asPos) {
+                                nameFrom = prevComma + 1;
+                                prevComma = args.find(',', nameFrom);
+                            }
+                            const std::string nameSeg = argsLow.substr(
+                                nameFrom, asPos > nameFrom ? asPos - nameFrom : 0);
+                            const bool isArrParam259 = nameSeg.find("()") != std::string::npos;
                             // 账 #222: 与 typedef / 处理器原型同源 (见上面那段注释)。
                             SimpleTypeRef tyRefPre(SourceLocation{}, ty);
-                            std::string cty = mapTypeRef(&tyRefPre);
+                            std::string cty = isArrParam259 ? std::string("vb6_SafeArray1D*")
+                                                            : mapTypeRef(&tyRefPre);
                             ev.ptypes.push_back(cty);
                             pcur = tEnd;
                         }
@@ -234,7 +272,8 @@
             if (!pic.data.empty()) {
                 formIconHasData_ = true;
                 std::string varName = "vb6_frx_icon_" + cIdent(formName);
-                h_.emitLine(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                h_.emitLine(bytesToHexArrayDecl(varName));
                 // Will be used in WM_CREATE to set window icon
                 // Store a flag for later code generation
             }
@@ -249,7 +288,8 @@
             if (!pic.data.empty()) {
                 formPicHasData_ = true;
                 std::string varName = "vb6_frx_bgpic_" + cIdent(formName);
-                h_.emitLine(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
+                h_.emitLine(bytesToHexArrayDecl(varName));
             }
         }
     }

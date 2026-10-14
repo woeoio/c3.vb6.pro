@@ -127,6 +127,8 @@ public:
     // 合并只发生在 Class 符号的成员表上, 模块作用域里没有它的过程符号 → 裸名会静默生成
     // 空调用, 所以发码前必须报错 (见 visit(IdentifierExpr) 的调用点)。
     bool declaredByAncestor(const std::string& name) const;
+    // 账 #232①: 裸写的画布动词 (Cls / PSet / Circle) 折成 Me.<动词> —— 判据与后果写在定义处
+    void foldBareCanvasVerb(ExprPtr& callee);
     // 虚方法 (tB, B08b): 本类体内对这个名字的调用必须走虚槽 (有后代 Overrides 了它)
     bool virtualCallNeedsDispatch(const std::string& name) const;
 
@@ -148,22 +150,40 @@ public:
     // 成员与类型由发码层按 kHostPseudoRows 那张表回答 (账 #159)，语义层在这里唯一要做的
     // 是别把它当未声明的名字 —— 开着 Option Explicit 时那是每条一次的 VB3001，
     // 关着时更实在: 会登记成一枚隐式 Variant 局部并在发码里真发出来 (实测 `VBA` 那枚)。
-    bool isDocumentHostObject(const std::string& name) const;
+    bool isDocumentHostObject(const std::string& name, bool qualifierPos) const;
     // 裸写的文档成员（账 #219）：判据 = 宿主伪成员表的 HPF_BARE 列，定义处写清了。
     bool isDocumentBarePseudoMember(const std::string& name) const;
+    // 账 #278 §B105: 「答案由一条专用码头给出」的那几行（表的 HPF_CHANNEL 列）—— **两个位都合法**，
+    // 因为集合名当限定符用是 VB6 的常规写法（`Controls.Add(...)` / `For Each c In Controls`）。
+    bool isDocumentChannelMember(const std::string& name) const;
     // 上条的两份数据源。driver 在逐模块分析开始前从**已解析的 AST** 算好，各分析器
-    // 各持一份 (名字表很小，复制比lifetime 推理便宜)。分开两条而不是一条: 两个位
-    // 要的事实不同 (裸名位 / 限定符位)，合成一条就把"模块名"和"过程名"混成一锅。
+    // 各持一份 (名字表很小，复制比lifetime 推理便宜)。分开几条而不是一条: 各位要的事实
+    // 不同 (裸名位 / 限定符位)，合成一条就把"模块名"和"过程名"混成一锅。
+    // 第三份 (Public Const / Public Enum 成员) 是**位置无关**的: 裸名位就是它的合法位置。
     void setProjectModuleNames(std::unordered_set<std::string> s) {
         projModuleNames_ = std::move(s);
     }
     void setProjectPublicProcNames(std::unordered_set<std::string> s) {
         projPublicProcs_ = std::move(s);
     }
+    // 账 #278 (§B106): 标准模块的模块级 Public Const / Public Enum 成员 —— VB6 里与 Public
+    // 过程同格 (工程级裸名可见)。这份名单只由 driver 从 AST 算一次; 语义层只问, 不自己扫声明。
+    void setProjectPublicConstNames(std::unordered_set<std::string> s) {
+        projPublicConsts_ = std::move(s);
+    }
+    // 账 #278 (§B110): 工程内**窗体模块名**。窗体名在裸名位就是 VB6 的默认实例
+    // （`Unload TmForm2` / `Set f = TmForm2`），发码侧 `cgen_expr_ident_symbol.inc` 那条支路答
+    // `vb6_form_hwnd_<名>()`，两边同源 = Driver::collectFormModuleNames()（唯一建造点）。
+    // 与模块名那份的分别：模块名只在**限定符位**合法（`Mod.成员`），窗体名两个位都合法。
+    void setProjectFormNames(std::unordered_set<std::string> s) {
+        projFormNames_ = std::move(s);
+    }
     // 当前正在分析的标识符是否站在 `Mod.成员` 的限定符位上 (visit(MemberAccessExpr) 置位)。
     bool memberObjCtx_ = false;
     std::unordered_set<std::string> projModuleNames_;
     std::unordered_set<std::string> projPublicProcs_;
+    std::unordered_set<std::string> projPublicConsts_;
+    std::unordered_set<std::string> projFormNames_;   // 账 #278 §B110: 窗体模块名 (默认实例)
 
     // 类继承 (tB, B08c): `obj.<成员>` 的 Protected 越权判定, 命中即报错并返回 true。
     // 只在"接收者解析得出工程类 + 链上最近的声明者把它声明成 Protected + 当前模块不在那条

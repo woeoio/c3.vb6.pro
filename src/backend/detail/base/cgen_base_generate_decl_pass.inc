@@ -46,6 +46,18 @@
         emitDesignerControlDecls(*frmDesc, module.docKind);
     }
 
+    // C3 bloat fix: emitFormFramework 期间攒下的 frx 字节数组**定义**, 在此处 (c_ 已回到
+    // 文件作用域) 一次性发射, 让 2~16MB 的只读数据在**本模块** .c 里只物化一份。
+    // 各调用点 (CreateControls 等) 落在生成代码的函数体内, `extern ... = {...}` 在块作用域
+    // 非法, 故必须延后到这里。.h 侧只发 extern 声明 (bytesToHexArrayDecl)。
+    if (!frxArrayDefs_.empty()) {
+        c_.emitBlank();
+        c_.emitLine("/* frx 图片数据 (定义集中于此, 避免被每个 include .h 的 TU 各复制一份) */");
+        for (const auto& def : frxArrayDefs_) c_.emitLine(def);
+        c_.emitBlank();
+        frxArrayDefs_.clear();
+    }
+
     // 5. Declare (外部函数声明)
     for (auto& decl : module.declarations) {
         if (decl->kind == ASTNodeKind::DeclareDecl) {

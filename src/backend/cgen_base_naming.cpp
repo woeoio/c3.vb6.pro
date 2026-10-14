@@ -49,6 +49,16 @@ std::string CCodeGen::defaultValue(Vb6Type type) const {
 // Optional ByRef String 形参被填成 vb6_BSTR_Empty() 的 BSTR **值**, 传到声明为
 // BSTR* 的 C 形参后, 被调方 (*SocketAddress) 把 BSTR 数据首 4 字节当 BSTR 指针,
 // 在 OLEAUT32 里对 0xBAAD0000 (L"" 之后的未初始化堆字节) 解引用 → 0xC0000005.
+// Fix 250: 见 cgen_helpers.inc 声明处的注释。类实例指针槽的省略实参是 Nothing ⇒ NULL;
+// 其余形状原样回落 defaultValue(type), 行为逐字不变。
+std::string CCodeGen::defaultValueForParam(const ParameterInfo& p) const {
+    // cParamClassPtrType 非 const (与 mapTypeRef 同族), 本函数是 const —— 只读调用,
+    // 与 cgen_base_naming.cpp 里既有的同款 const_cast 先例一致。
+    const std::string clsPtr = const_cast<CCodeGen*>(this)->cParamClassPtrType(p);
+    if (!clsPtr.empty()) return "NULL";
+    return defaultValue(p.type);
+}
+
 std::string CCodeGen::defaultArgForParam(Vb6Type type, bool isByVal,
                                         const std::string& explicitDefault) const {
     std::string defVal = (explicitDefault.empty() ? defaultValue(type) : explicitDefault);
@@ -330,6 +340,19 @@ std::string CCodeGen::wrapByRefVariantParamArg(const std::string& paramName,
         case Vb6Type::LongPtr:
         case Vb6Type::ULong:
             return "(&(vb6_VARIANT){.vt=VT_I8, .llVal=(int64_t)(" + src + ")})";
+        // C3 扩展 (ai/032): 新整型装箱 —— 一律挑**能无损装下该值域的最小既有 VT**,
+        // 而不是新造 VT_I1/VT_UI2/VT_UI4 那几档:
+        //   · 值不丢 (SByte ⊂ I2, UInteger ⊂ I4, ULong/ULongLong ⊂ I8);
+        //   · 转换/格式化/COM 打包全部走已有并测过的既有分支, RTL 一行不用改;
+        //   · 与上面 ULong → VT_I8 的既有写法保持同一口径 (那条本来就这么做)。
+        // 代价只有 VarType() 会答成有符号档 —— 一个可接受的保真度损失, 换来的是
+        // 不把 4 条新的 VT 通道铺进 vb6_VariantToLong/Double/Bool/Format 全部 switch。
+        case Vb6Type::SByte:
+            return "(&(vb6_VARIANT){.vt=VT_I2, .iVal=(int16_t)(" + src + ")})";
+        case Vb6Type::UInteger:
+            return "(&(vb6_VARIANT){.vt=VT_I4, .lVal=(int32_t)(" + src + ")})";
+        case Vb6Type::ULongLong:
+            return "(&(vb6_VARIANT){.vt=VT_I8, .llVal=(int64_t)(" + src + ")})";
         default:
             return std::string();
     }
@@ -350,6 +373,15 @@ std::string CCodeGen::cProcName(const std::string& procName, AccessLevel access,
         return "vb6_" + cIdent(moduleName_) + "_" + cIdent(procName);
     }
     return "vb6_" + cIdent(procName);
+}
+
+// Fix 269: 类属性 C 函数名的成员段。见 cgen_helpers.inc 的说明 ——
+// 关键是**整串** cIdent, 与 makePropertySignature 的 cProcName(prefix + name) 同口径。
+// 非关键字成员逐字节不变 ("prop_get_Text" → "prop_get_Text"), 只有成员名本身
+// 撞 C 关键字 (如 `Default`) 时才会与旧的分段写法分道扬镳。
+std::string CCodeGen::propFnSegment(const std::string& prefix,
+                                    const std::string& member) const {
+    return cIdent(prefix + member);
 }
 
 // 重载变体的 C 名后缀 (O2): 非变体/裸键 head 返回空串 —— 零重载工程产出一字不变.

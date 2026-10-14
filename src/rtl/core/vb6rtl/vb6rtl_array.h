@@ -1,7 +1,13 @@
-#pragma once
+﻿#pragma once
 // vb6rtl_array.h - SAFEARRAY（一维 / 多维）与错误状态栈
 // 由 vb6rtl.h 伞头 include；生成代码不要直接 include 本文件
 #include "vb6rtl_base.h"
+
+#ifdef _WIN32
+#include <stdio.h>
+#include <stdlib.h>
+#include <intrin.h>   /* 越界探针: _ReturnAddress 取发码调用点 */
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,16 +34,83 @@ typedef enum vb6_safearray_elemtype {
 } vb6_safearray_elemtype;
 
 // 一维数组描述符 (VB6绝大多数用例是一维)
+//
+// ⚠ **前 24 字节必须与 oleauto.h 的 SAFEARRAY 逐字节同布局** —— 这一条不是洁癖，
+// 是 VB6 生态的硬需求。VB6 里从 Variant 掏数组的地址是这么写的：
+//
+//     CopyMemory Ptr, ByVal UnsignedAdd(VarPtr(SomeVariant), 8), PTR_SIZE  ' union 在偏移 8
+//     If Ptr <> NULL_PTR Then
+//         CopyMemory DimensionCount, ByVal Ptr, 2                          ' 当 SAFEARRAY* 读首 WORD
+//         If DimensionCount = 1 Then ...                                   '  = .cDims
+//
+// 也就是**把 `Variant.parray` 直接当 `SAFEARRAY*` 用**。实测工程 ComCtlsDemo 里
+// **7 处**这么写：CommonDialog.CustomColors / ListView.ColumnOrder /
+// ListView.FListItemTileViewIndices / FontCombo.RestoreRecent /
+// SpinBox.SetAcceleration(×2) / Common.IsArrayInitialized。
+//
+// 此前首字段是 `int32_t signature = 0x5A1D`，于是 `.cDims` 读出 23197 ⇒ 恒 ≠ 1 ⇒
+// 恒抛**错误 5** ("Array must be single dimensioned")。ComCtlsDemo 的 Form_Load 就死在
+// `ListView1.ListItems(1).TileViewIndices = Array(1, 2)` 这一句上（第十六个卡点）。
+//
+// x86 上 SAFEARRAY 的实际偏移：0 cDims(W) / 2 fFeatures(W) / 4 cbElements(D) /
+// 8 cLocks(D) / 12 pvData(P) / 16 rgsabound[0].cElements(D) / 20 rgsabound[0].lLbound(D)。
+// 下面逐槽对上 (总尺寸仍是 32 字节，与改动前一致)。
 typedef struct vb6_SafeArray1D {
-    int32_t signature;                  // Fix 082g: 魔数标识1D数组 = 0x5A1D ('SA1D')
-    vb6_safearray_elemtype elemType;  // 元素类型
-    int32_t elemSize;                  // 单个元素字节数
-    int32_t lBound;                    // 下界 (VB6默认0, 可指定1)
-    int32_t uBound;                    // 上界
-    int32_t count;                     // 元素个数 = uBound - lBound + 1
-    void*   data;                      // 数据指针 (calloc分配, 零初始化)
-    int32_t isDynamic;                 // 是否动态数组 (ReDim创建)
+    /* ===== OLE SAFEARRAY 兼容前缀 (偏移与字段语义都对得上) ===== */
+    uint16_t cDims;                     /*  0  [.cDims]     1 维数组恒为 1 */
+    uint16_t fFeatures;                 /*  2  [.fFeatures] C3 标记 VB6_SA1D_FFEATURES */
+    int32_t  elemSize;                  /*  4  [.cbElements] 单个元素字节数 */
+    int32_t  elemType;                  /*  8  [.cLocks 槽]  ⚠ C3 扩展: 元素类型枚举 */
+    void*    data;                      /* 12  [.pvData]    数据指针 (calloc分配, 零初始化) */
+    int32_t  count;                     /* 16  [rgsabound[0].cElements] 元素个数 */
+    int32_t  lBound;                    /* 20  [rgsabound[0].lLbound]   下界 */
+    /* ===== 以下为 C3 内部扩展 (OLE 侧看不到) ===== */
+    int32_t  uBound;                    /* 24  冗余: = lBound + count - 1 */
+    int32_t  isDynamic;                 /* 28  是否动态数组 (ReDim创建) */
 } vb6_SafeArray1D;
+
+// 1D 描述符的 fFeatures 标记。真实 SAFEARRAY 的 fFeatures 是 FADF_* 位集，这里借它
+// 放一枚 C3 标记：既让 `vb6_SaIs1D` 能把 1D 描述符与 `vb6_SafeArrayND`
+// (首字段 dimCount = 2..16，offset 2 恒 0) 区分开，又让 `.fFeatures` 保持非零。
+#define VB6_SA1D_FFEATURES 0xA1D1u
+
+// ⚠ 注意 offset 8 的 `elemType` 占的是 SAFEARRAY.cLocks 的位置。oleaut32 的
+// SafeArrayLock/Unlock 会把 cLocks 当计数器加减 —— 对 C3 描述符调用它就会篡改
+// elemType (进而影响销毁时的逐元素释放路径)。C3 自己的数组只经本 RTL 流转，
+// 从不交给 oleaut32 的 SafeArray* API，所以这一槽冲突不成立；真要交给它们时，
+// 必须先深拷成真 SAFEARRAY (见 vb6_VariantToSafeArray1D 的调用面)。
+//
+// 这几条断言把"与 SAFEARRAY 同布局"变成编译期事实：谁重排/插入字段都会当场编不过。
+// x64 的偏移与 x86 不同 —— `void* pvData` 要 8 字节对齐，于是编译器在 elemType(cLocks 槽)
+// 后插 4 字节填充：pvData 落 16、cElements 落 24、lLbound 落 28，struct 长到 40。
+// 这**正好**也是 oleaut32 在 x64 上 SAFEARRAY 的布局，所以两档都自然对齐，无需手动填充。
+_Static_assert(offsetof(vb6_SafeArray1D, cDims)    == 0,  "SAFEARRAY.cDims 槽");
+_Static_assert(offsetof(vb6_SafeArray1D, fFeatures) == 2,  "SAFEARRAY.fFeatures 槽");
+_Static_assert(offsetof(vb6_SafeArray1D, elemSize) == 4,  "SAFEARRAY.cbElements 槽");
+#ifdef _WIN64
+_Static_assert(sizeof(vb6_SafeArray1D) == 40, "vb6_SafeArray1D must stay 40 bytes (x64 SAFEARRAY prefix)");
+_Static_assert(offsetof(vb6_SafeArray1D, data)   == 16, "SAFEARRAY.pvData 槽 (x64)");
+_Static_assert(offsetof(vb6_SafeArray1D, count)  == 24, "SAFEARRAY.rgsabound[0].cElements 槽 (x64)");
+_Static_assert(offsetof(vb6_SafeArray1D, lBound) == 28, "SAFEARRAY.rgsabound[0].lLbound 槽 (x64)");
+#else
+_Static_assert(sizeof(vb6_SafeArray1D) == 32, "vb6_SafeArray1D must stay 32 bytes (x86 SAFEARRAY prefix)");
+_Static_assert(offsetof(vb6_SafeArray1D, data)   == 12, "SAFEARRAY.pvData 槽 (x86)");
+_Static_assert(offsetof(vb6_SafeArray1D, count)  == 16, "SAFEARRAY.rgsabound[0].cElements 槽 (x86)");
+_Static_assert(offsetof(vb6_SafeArray1D, lBound) == 20, "SAFEARRAY.rgsabound[0].lLbound 槽 (x86)");
+#endif
+
+// 1D 描述符初始化 (所有构造点共用：Create1D / ReDim1D_Udt / ArrayAssign1D /
+// com 的两处 / codegen 的复合字面量)。
+static inline void vb6_Sa1DInit(vb6_SafeArray1D* arr) {
+    arr->cDims = 1;
+    arr->fFeatures = (uint16_t)VB6_SA1D_FFEATURES;
+}
+
+// 这是不是 C3 的 1D 描述符？(ND 描述符首 WORD 是 dimCount = 2..16，offset 2 恒 0)
+static inline int vb6_SaIs1D(const void* p) {
+    const vb6_SafeArray1D* a = (const vb6_SafeArray1D*)p;
+    return a != NULL && a->cDims == 1 && a->fFeatures == (uint16_t)VB6_SA1D_FFEATURES;
+}
 
 // P14.2.3: 字符串数组函数
 vb6_SafeArray1D* vb6_Split(BSTR expr, BSTR delimiter, int32_t limit, int32_t compare);
@@ -76,6 +149,10 @@ vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D_Udt(int32_t elemSize,
 
 // 销毁数组 (释放内存)
 void vb6_SafeArrayDestroy1D(vb6_SafeArray1D* arr);
+// Fix <vbeclipse> 2026-10-06: Erase 语句的数组变量出口 (VB6 文档口径):
+// 动态数组 → 释放存储并置 NULL; 固定数组 → 保留存储, 元素重置
+// (数值/UDT 置零, BSTR 置零长串, Variant 置 Empty)。
+void vb6_EraseArrayVar(vb6_SafeArray1D** parr);
 
 // Fix 170: 整体数组赋值 `A() = B()` —— 深拷贝 src 为新载体返回, 原 dst 销毁
 vb6_SafeArray1D* vb6_ArrayAssign1D(vb6_SafeArray1D* dst, vb6_SafeArray1D* src);
@@ -107,7 +184,17 @@ void  vb6_SafeArrayPutElem(vb6_SafeArray1D* arr, int32_t index, void* value);
 void vb6_SaElemFail(void* arr, int32_t idx);  // 必抛 9, 不返回
 static inline void* vb6_SaElemPtr(void* arrV, int32_t idx, int32_t elemSize) {
     vb6_SafeArray1D* arr = (vb6_SafeArray1D*)arrV;
-    if (!arr || idx < arr->lBound || idx > arr->uBound) vb6_SaElemFail(arrV, idx);
+    if (!arr || idx < arr->lBound || idx > arr->uBound) {
+#ifdef _WIN32
+        if (getenv("C3_SA_TRACE")) {
+            /* 定位用: 这里打的是**发码调用点**的绝对返回地址 (本函数在 Debug 下是独立
+               函数, 未内联), 与 vb6_SaElemFail 里打的 base 相减即得可符号化的 RVA。 */
+            fprintf(stderr, "[SA]   site ret=%p\n", _ReturnAddress());
+            fflush(stderr);
+        }
+#endif
+        vb6_SaElemFail(arrV, idx);
+    }
     return (char*)arr->data + (ptrdiff_t)(idx - arr->lBound) * (ptrdiff_t)elemSize;
 }
 #define VB6_SA_AT(type, arr, idx) \
@@ -148,8 +235,15 @@ vb6_SafeArrayND* vb6_SafeArrayReDimND(vb6_safearray_elemtype elemType,
     int32_t dimCount, vb6_SafeArrayBound bounds[]);
 vb6_SafeArrayND* vb6_SafeArrayReDimND_Udt(int32_t elemSize,
     int32_t dimCount, vb6_SafeArrayBound bounds[]);
-vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND(vb6_SafeArrayND* arr,
-    int32_t dimCount, vb6_SafeArrayBound newBounds[]);
+/* 账 #305 §B155 格④ (第四十三刀): 这一枚也**收 elemType**, 与上面一维那条 _T 同一个决定。
+   此前形参表里没有它, arr==NULL (首次分配就写 Preserve) 时只能按 vb6_sa_empty 建 ——
+   尺寸表对 empty 给 default 档 4 字节, 而访问侧按声明档步进:
+     `Dim p() As String` + `ReDim Preserve p(1 To 2, 1 To 3)` 在 x64 上造 4 字节一步、
+     写 8 字节一步 ⇒ 堆越界 (实测旧编译器 0xC0000374 堆损坏、新编译器 0xC0000005,
+     两条都是响的; Variant 档 24/4 同形)。
+   UDT 不在这一枚 (它走下面的 _Udt, 元素尺寸由调用方的 sizeof 给)。 */
+vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND(vb6_safearray_elemtype elemType,
+    vb6_SafeArrayND* arr, int32_t dimCount, vb6_SafeArrayBound newBounds[]);
 
 // UDT版ReDim Preserve(多维): elemSize由调用方提供
 vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND_Udt(int32_t elemSize,
@@ -157,6 +251,20 @@ vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND_Udt(int32_t elemSize,
 
 int32_t vb6_SafeArrayND_Offset(vb6_SafeArrayND* arr, int32_t dimCount, int32_t indices[]);
 void* vb6_SafeArrayND_GetPtr(vb6_SafeArrayND* arr, ...);
+// 账 #305 §B150: elemType → 单元素字节数 (UDT 档不在这里答, 由描述符自己的 elemSize 说话)。
+int32_t vb6_SaElemSize(vb6_safearray_elemtype t);
+
+// 账 #305 §B155 格①（第四十六刀）: elemType → VB6 的 VarType **元素**码（vbArray 那一位由调用方 OR 上）。
+// 与上面那张尺寸表同一族 —— 「这枚数组是哪一档」只许一处答。认不出的档（empty / udt）回落 variant：
+// 那就是改前每一档的答案。Date 档在这枚枚举里根本没有（数组里的 Date 存成 double），那一格记在 §B159。
+int32_t vb6_SaVtFromElemType(vb6_safearray_elemtype t);
+
+// 账 #305 §B159（第五十刀）：与上面那张表并排住的**反向**表 —— Windows 的 VARENUM → 我们的元素枚举。
+// 「哪一档对应哪一档」第二次有了唯一答案：改前 vb6rtl_com.c 里两条进口各抄了一份元素 switch，
+// 两份都只认 6 档、默认回落 variant；于是 COM 交回一枚 Byte 数组时按 24 字节步长 memcpy 一枚
+// 1 字节/元素的源 = **越界读**，而标签答 8204/"Variant()"。认不出的档照旧回落 variant
+//（= 改前那两条的答案，行为不动），元素宽度一律交回上面那张尺寸表答。
+vb6_safearray_elemtype vb6_SaElemTypeFromVt(VARTYPE comVt);
 
 int32_t vb6_UBoundND(vb6_SafeArrayND* arr, int32_t dimension);
 int32_t vb6_LBoundND(vb6_SafeArrayND* arr, int32_t dimension);
@@ -180,7 +288,7 @@ static inline vb6_VARIANT vb6_VariantFromUdtBytes(const void* src, int32_t nByte
     vb6_SafeArray1D* arr = vb6_SafeArrayCreate1D(vb6_sa_byte, 0, nBytes - 1);
     if (!arr) { v.vt = vb6_vtEmpty; return v; }
     memcpy(arr->data, src, (size_t)nBytes);
-    v.vt = vb6_vtArray | vb6_vtByte;    // VT_ARRAY | VT_UI1
+    v.vt = (vb6_vartype)(vb6_vtArray | vb6_SaVtFromElemType(vb6_sa_byte));   /* VT_ARRAY|VT_UI1，问表不写死 */
     v.parray = arr;
     return v;
 }
@@ -198,9 +306,11 @@ void vb6_SaNdElemFail(void* arr, const int32_t* idx, int32_t rank);   // 必抛 
 static inline void* vb6_SaNdElemPtr(void* arrV, int32_t rank, const int32_t* idx,
                                     int32_t elemSize) {
     vb6_SafeArrayND* a = (vb6_SafeArrayND*)arrV;
-    // 一维描述符被按多维形状用 (Fix 056 那条"声明 1D、ReDim 成 ND"的双面形) —— 一维的
-    // 首字段是魔数 0x5A1D=23069, 落不进 1..16, 所以这一问既认出"不是 ND"又不必多读字段。
-    if (!a || a->dimCount < 1 || a->dimCount > 16 || rank < 1 || rank > a->dimCount) {
+    // 一维描述符被按多维形状用 (Fix 056 那条"声明 1D、ReDim 成 ND"的双面形) ——
+    // 1D 描述符的首 WORD 现在是 SAFEARRAY.cDims == 1 (与 OLE 同布局, 见上面 struct 注释),
+    // 而 ND 的 dimCount 只可能是 2..16 (发码侧 dimCount==1 必走 1D 路径), 所以下界取 2
+    // 就同时认出"这不是 ND"且不必多读字段。
+    if (!a || a->dimCount < 2 || a->dimCount > 16 || rank < 1 || rank > a->dimCount) {
         vb6_SaNdElemFail(arrV, idx, rank);
     }
     ptrdiff_t off = 0;

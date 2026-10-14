@@ -137,3 +137,5 @@ scripts/_tmp_*.bat
 # 二分定位调试产物 (bisect*.vbp): 不属于门禁用例
 **/bisect*.vbp
 tests/ctrlstatusbar/run*.out
+# 账 #245 的语料发码清单（本机/CI 各产一份，只用于两边对 diff，不入仓）
+emit-manifest.txt

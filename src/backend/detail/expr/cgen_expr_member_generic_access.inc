@@ -38,8 +38,10 @@
             objExpr.find("vb6_TreeView_Nodes(") == 0 ||
             // C29-5b: `Toolbar1.Buttons` 的真 IDispatch 集合同理。
             objExpr.find("vb6_Toolbar_Buttons(") == 0 ||
-            // C29-Data: Fields("x") 的求值结果 (FieldValueStr) 上再 .Value —— 透传。
-            objExpr.find("vb6_Data_FieldValueStr(") == 0) {
+            // 账 #299: `StatusBar1.Panels` 的真 IDispatch 集合同理 —— 这一族的名单在三处
+        // (这里两处 + cgen_state.inc 的 isControlCollectionExpr)，漏一处就拼出
+        // `vb6_StatusBar_Panels(…).Count` → cl C2224。哨兵 check_statusbar_panels_authority 钉三处同值。
+            objExpr.find("vb6_StatusBar_Panels(") == 0) {
             // 链式COM: 设置COM标记, objExpr是中间对象表达式
             comObjExpr_ = objExpr;
             comMemberName_ = node.memberName;
@@ -53,6 +55,35 @@
     }
 
     std::string obj = std::move(lastExpr_);
+
+    // 账 #257 第十四层: 对象表达式若是以「裸函数名 + pendingChainObj_」协议交付的,
+    // 这里必须**把 this 补回去**。
+    //
+    // 协议本身没问题 (emitUcInstanceMemberExpr / class_fallback / voidptr_com 的
+    // asCallCallee_ 分支都按它交付: lastExpr_ = 裸函数名, pendingChainObj_ = this 实参),
+    // 问题在**谁算消费者**: 上面 `emitExpr(*node.object)` 发射的是**对象**, 是值上下文;
+    // 而 `asCallCallee_` 是从外层 CallStmt/IndexOrCallExpr 一路带下来的, 于是对象也被
+    // 按 callee 交付了裸名。此后 obj 便是"一个函数名"而不是值 ——
+    // 下游 class_fallback 的 `thisArg088c = "(void*)" + obj` / generic_access 自己的
+    // `"(void*)" + objExpr` 都把它当对象交出去 ⇒ **接收者丢失**, 编译期完全看不见。
+    //
+    // 实测 ComCtlsDemo MainForm.frm:474 `ListView1.ColumnHeaders.Add , , "Col1"`:
+    //   内层 `ListView1.ColumnHeaders` 交 裸名 vb6_ListView_prop_get_ColumnHeaders
+    //   + pendingChainObj_ = (vb6_cls_ListView*)vb6_UC_InstanceOf(vb6_hwnd_ListView1);
+    //   外层（本节点, member="Add"）经 Fix 088c 认出接收者类 LvwColumnHeaders,
+    //   发 `vb6_LvwColumnHeaders_Add((void*)vb6_ListView_prop_get_ColumnHeaders, ...)`
+    //   ⇒ `me` 是**代码地址** 0x4BB2A0, `me->ShadowObjectPointer`([me+4]) 读到的是
+    //   指令字节 0x45C724EC ⇒ objset 的 IsRealComObject 当场 AV
+    //   (av read target=0x45c724ec, 与反汇编 [0x4BB2A4..0x4BB2A7] 逐字节吻合)。
+    //   同形共 76 处 (ListView.ListItems/ColumnHeaders/Groups/SelectedItem,
+    //   TreeView.Nodes, ImageCombo.ComboItems, ToolBar.ButtonMenus,
+    //   ImageList.ListImages, LvwListItem.ListSubItems …)。
+    //
+    // 与 Fix 261 (实参位同样要清 asCallCallee_/消费协议) 是同一条纪律的两个位置。
+    if (!pendingChainObj_.empty()) {
+        obj += "(" + pendingChainObj_ + ")";
+        pendingChainObj_.clear();
+    }
 
     // Fix 090af: Variant 数组元素 (VB6_SA_AT(vb6_VARIANT, arr, i)) 的对象成员访问.
     // VB6: Dim d() As Variant ... If TypeOf d(0) Is cJson Then Set d(0) = d(0).Root
@@ -95,6 +126,7 @@
     if (obj.find("vb6_ComCallObject(") == 0 ||
         obj.find("vb6_ComGetObjectProp(") == 0 ||
         obj.find("vb6_ComCall(") == 0 ||
+        obj.find("vb6_ComCallByDispid(") == 0 ||
         obj.find("vb6_ComGetProp(") == 0 ||
         // Fix <vbeclipse>: 同上 — 外部窗体控件句柄访问器前缀。
         obj.find("vb6_form_ctrl_") == 0 ||
@@ -113,8 +145,10 @@
         obj.find("vb6_TreeView_Nodes(") == 0 ||
         // C29-5b: `Toolbar1.Buttons` 的真 IDispatch 集合同理。
         obj.find("vb6_Toolbar_Buttons(") == 0 ||
-        // C29-Data: FieldValueStr 上 .Value 同理。
-        obj.find("vb6_Data_FieldValueStr(") == 0 ||
+        // 账 #299: `StatusBar1.Panels` 的真 IDispatch 集合同理 —— 这一族的名单在三处
+        // (这里两处 + cgen_state.inc 的 isControlCollectionExpr)，漏一处就拼出
+        // `vb6_StatusBar_Panels(…).Count` → cl C2224。哨兵 check_statusbar_panels_authority 钉三处同值。
+        obj.find("vb6_StatusBar_Panels(") == 0 ||
         obj.find("vb6_PropertyPage_SelectedControls(") == 0) {
         // 对于vb6_ComCall/vb6_ComGetProp, 需要先解封为对象
         // 链式调用: ComCall返回VARIANT*, 需ComCallObject才能拿到IDispatch*
@@ -122,6 +156,11 @@
         if (obj.find("vb6_ComCall(") == 0) {
             // vb6_ComCall → vb6_ComCallObject (同一参数, 返回void*而非VARIANT*)
             resolvedObj = "vb6_ComCallObject" + obj.substr(strlen("vb6_ComCall"));
+        } else if (obj.find("vb6_ComCallByDispid(") == 0) {
+            // vb6_ComCallByDispid → 返回 VARIANT* (void*, 承载 COM VARIANT).
+            // 成员访问要先解出对象指针: VariantFromComResult 解引用 → ToObjectVal 取 IDispatch*.
+            // (与 .member 链式调用的 P24-10 后期绑定默认成员同族)
+            resolvedObj = "vb6_VariantToObjectVal(vb6_VariantFromComResult(" + obj + "))";
         } else if (obj.find("vb6_ComGetProp(") == 0) {
             // vb6_ComGetProp → vb6_ComGetObjectProp
             resolvedObj = "vb6_ComGetObjectProp" + obj.substr(strlen("vb6_ComGetProp"));
@@ -160,8 +199,11 @@
         // rev14: `vb6_UserControl_Controls` 是恒 NULL 的"编译先行"空桩, 改用 RTL 真实
         // 集合单例 vb6_UC_Controls() (按当前 UC 实例回落 formHwnd); 否则 Controls.Item/Add
         // 恒返回 NULL → ucFolder_AddView(NULL) 崩溃。
-        std::string ctlObjExpr = (obj == "vb6_UserControl_Controls")
-                                     ? "vb6_UC_Controls()" : obj;
+        // 账 #257: ParentControls 同样不该退回恒 NULL 的空桩 —— 换真实访问器
+        // (父容器的集合), 与 Controls 同一口径。
+        std::string ctlObjExpr = obj;
+        if (obj == "vb6_UserControl_Controls")            ctlObjExpr = "vb6_UC_Controls()";
+        else if (obj == "vb6_UserControl_ParentControls") ctlObjExpr = "vb6_UC_ParentControls()";
         comObjExpr_ = "(void*)" + ctlObjExpr;
         comMemberName_ = node.memberName;
         isComMarker_ = true;
@@ -216,6 +258,13 @@
                 return;
             }
             // 类中无此方法/属性 → 类数据字段 (Public Field): objExpr->field
+            // Fix 229: 接收者是 **Variant 载体** (VARIANT 值) 时没有结构体字段 ——
+            // `objExpr->field` ⇒ C2039 "field 不是 vb6_VARIANT 的成员"。
+            // 口径同 Fix 219/229 的其余三处: 改发后期绑定属性读。
+            if (isVariantCarrierExpr(objExpr)) {
+                lastExpr_ = lateBoundReadOnVariantCarrier(objExpr, node.memberName);
+                return;
+            }
             lastExpr_ = objExpr + "->" + cIdent(node.memberName);
             return;
         }

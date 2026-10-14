@@ -15,6 +15,20 @@ namespace vb6c3 {
 // .inc 是「函数体片段」，在 visit(SetStmt&) 函数体内被 #include（C++ 允许），故不用 .cpp/.hpp 后缀 ——
 // 它们不是独立编译单元，单独 include 会编译不过。片段局部变量原样不动，逐行未改 → 零行为改动。
 
+// 账 #258 (§B87): Set 的右值永远是「对象引用上下文」—— VB6 在这里交出**控件本身**，
+// 默认属性只在值上下文里展开（`s = Text1` 取 .Text 才对，`Set o = Text1` 要的是控件）。
+// 改前这一问有两份答案：环境闸 suppressDefaultProp_（With 块 / As Object 形参那两档设它）
+// 与 P16 事后在发好的文本里截 "vb6_hwnd_"（只认 knownWithEventsCtrlVars_ 的目标）——
+// 于是泛对象槽 (`Dim o As Object`) 与 Variant 槽拿到的是一枚 BSTR / 一个 int。
+// 闸只在这一枚标识符上开：右值是表达式（`Set o = f(Text1)`）时子树照旧按值上下文，不顺着漏下去。
+void CCodeGen::emitSetObjectRhs(const ExprPtr& value) {
+    const bool bareIdent = value && value->kind == ASTNodeKind::IdentifierExpr;
+    const bool savedSuppress = suppressDefaultProp_;
+    if (bareIdent) suppressDefaultProp_ = true;
+    emitExpr(*value);
+    suppressDefaultProp_ = savedSuppress;
+}
+
 void CCodeGen::visit(SetStmt& node) {
 #include "backend/detail/stmt/cgen_setlet_set_prop.inc"
 #include "backend/detail/stmt/cgen_setlet_set_rhs.inc"
@@ -130,8 +144,8 @@ void CCodeGen::visit(LetStmt& node) {
                         && !wp132.empty()) {
                         std::string canon132 = canonicalClassMemberName(itUC132->second, maExpr.memberName);
                         if (canon132.empty()) canon132 = maExpr.memberName;
-                        std::string setter132 = "vb6_" + cIdent(itUC132->second)
-                                              + "_prop_let_" + cIdent(canon132);
+                        std::string setter132 = "vb6_" + cIdent(itUC132->second) + "_"
+                                              + propFnSegment("prop_let_", canon132);
                         std::string hwndArg132 = makeCtrlHwndArg(objLower, itCtrl->second);
                         std::string meExpr132 = "(vb6_cls_" + cIdent(itUC132->second)
                                               + "*)vb6_UC_InstanceOf(" + hwndArg132 + ")";
@@ -220,12 +234,11 @@ void CCodeGen::visit(LetStmt& node) {
     }
 
     // Fix 038 Group 1/2: Variant 数组元素赋值 (同 AssignmentStmt 路径)
-    if (target.find("vb6_VariantArrayGet(") == 0) {
-        size_t argStart = target.find('(');
-        size_t argEnd = target.rfind(')');
-        if (argStart != std::string::npos && argEnd != std::string::npos && argEnd > argStart) {
-            std::string args = target.substr(argStart + 1, argEnd - argStart - 1);
-            c_.emitLine("vb6_VariantArraySet(" + args + ", vb6_VariantFromValue(" + value + "));  /* Let */");
+    if (isVariantSlotElemRead(target)) {
+        // 账 #305 §B150: 与 AssignmentStmt 那一支同一条改写 (一维/多维都在 variantSlotAssignLine 里)
+        std::string slotLine;
+        if (variantSlotAssignLine(target, "vb6_VariantFromValue(" + value + ")", slotLine)) {
+            c_.emitLine(slotLine + ";  /* Let */");
         } else {
             c_.emitLine(target + " = " + value + ";  /* Let */");
         }

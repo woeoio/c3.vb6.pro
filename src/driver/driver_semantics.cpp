@@ -20,6 +20,22 @@ namespace {
 // isPropertyGet 变 false。于是 obj.Prop.Method() 这类链式访问被判成"标量取值",
 // 再对 int16_t 拼 C 结构体成员访问 → C2224 (vbman-demo 的 ctx.Request.QueryString)。
 // 读取路径只认 getter; 属性写入走名字化的晚绑定, 不查 comMethods, 故让 getter 优先。
+// 两枚签名之间「读取方真会用的东西」是否不同: getter 标志、返回档、形参表 (名 / 型 / 方向)。
+// 只有这里变了, 「谁赢」才是一个会改掉发码的决定; 其余的覆盖只是同一份答案写了两遍 ——
+// 实测全语料 994 次同类覆盖 (Dictionary / IDictionary 的 item: put_Item 与 putref_Item 折成同一个
+// 小写键) 三项全同, 所以它们不许响 (响了就是噪声, 见 scripts/check_com_sig_collision_policy.ps1)。
+bool comSigReadShapeDiffers(const Symbol::ComMethodSig& oldSig, const Symbol::ComMethodSig& newSig) {
+    if (oldSig.isPropertyGet != newSig.isPropertyGet) return true;
+    if (oldSig.returnType != newSig.returnType) return true;
+    if (oldSig.params.size() != newSig.params.size()) return true;
+    for (size_t i = 0; i < oldSig.params.size(); i++) {
+        if (oldSig.params[i].name != newSig.params[i].name) return true;
+        if (oldSig.params[i].type != newSig.params[i].type) return true;
+        if (oldSig.params[i].isByVal != newSig.params[i].isByVal) return true;
+    }
+    return false;
+}
+
 void insertComMethod(Symbol& sym, const std::string& key, Symbol::ComMethodSig sig,
                      ComMemberKind kind) {
     bool incomingSetter = (kind == ComMemberKind::PropertyPut
@@ -28,22 +44,66 @@ void insertComMethod(Symbol& sym, const std::string& key, Symbol::ComMethodSig s
     if (incomingSetter && it != sym.comMethods.end() && it->second.isPropertyGet) {
         return;  // 已有 getter, setter 不得覆盖
     }
+    // 账 #245 / §B94 的政策就两条: ① getter 永远赢 over setter (上面那道闸, 两向都对); ② 其余的覆盖今天
+    // **没有任何政策**: 赢家决定的是返回档 (发 vb6_ComGet* 哪一种) 与 ByRef 对象出参探测用的形参表, 两处
+    // 都静默。响完仍然后写覆盖 —— 这一声是等实物来定政策的哨子, 不是判死。
+    // 实测分界 (全 396 份输入): blessed 那一向 put->get 21930 次; 同类 put->put 994 次 (put_Item 与
+    // putref_Item 折成同一个小写键, 读形三项全同) —— 两种都不许响。响的只剩「读形真的变了、又不是
+    // blessed 那一向」那一种 (实测语料 0 次)。
+    {
+        bool exists = (it != sym.comMethods.end());
+        // 注意顺序: 先判存在, 再解引用 it->second —— 反过来就是把 end() 迭代器当元素读
+        // (本机实测: 每台输入一进来就 0xC0000409 崩在 insertComMethod 里)。
+        bool oldSetter = exists && (it->second.isPropertyPut || it->second.isPropertyPutRef);
+        bool incomingGetter = (kind == ComMemberKind::PropertyGet);
+        bool blessed = (exists && oldSetter && incomingGetter);
+        if (exists && !blessed && comSigReadShapeDiffers(it->second, sig)) {
+            std::cerr << "C3: COMSIG-AMBIG sym=" << sym.name << " name=" << key
+                      << " old(get=" << (it->second.isPropertyGet ? 1 : 0)
+                      << " rt=" << static_cast<int>(it->second.returnType)
+                      << " n=" << it->second.params.size() << ")"
+                      << " new(get=" << (incomingGetter ? 1 : 0)
+                      << " rt=" << static_cast<int>(sig.returnType)
+                      << " n=" << sig.params.size() << ")"
+                      << " memid=" << it->second.memid << "/" << sig.memid
+                      << " vt=" << it->second.vtableIndex << "/" << sig.vtableIndex
+                      << std::endl;
+        }
+    }
     sym.comMethods[key] = std::move(sig);
 }
 
 } // namespace
+
+// 账 #278 §B110: 工程内窗体模块名（小写）的**唯一**建造点。语义层的"裸名位放行"与发码侧那台
+// cgen 的 knownFormModuleNames_ 都从这里拿 —— 两边各扫一遍 modules_ 就是两份权威。
+std::unordered_set<std::string> Driver::collectFormModuleNames() const {
+    std::unordered_set<std::string> names;
+    for (const auto& module : modules_) {
+        if (module && module->isFormModule && !module->moduleName.empty()) {
+            names.insert(Symbol::toLower(module->moduleName));
+        }
+    }
+    return names;
+}
 
 bool Driver::runSemanticAnalysis(const CompileOptions& options) {
     // ai/084a M1: 类成员访问级别预计算表 (只读, 随后随各分析器下发)
     buildMemberAccessTable();
 
     analyzers_.clear();
-    // <vbeclipse>: 先把"工程级已有的名字"收齐，随各分析器下发。两份都必须从**已解析的
+    // <vbeclipse>: 先把"工程级已有的名字"收齐，随各分析器下发。三份都必须从**已解析的
     // AST** 取，不能取符号表那份 getExternalModuleNames()：跨模块注入跑在逐模块分析之后，
     // 而隐式变量声明发生在分析当刻 —— 晚了就把 Module1.ShowForm2 这种名字挤成局部变量
     // (实测 ext_show_test C2063、test_modulemethod 恒返 0)。见 namesProjectLevel 注释。
     std::unordered_set<std::string> projModNames;
     std::unordered_set<std::string> projPubProcs;
+    std::unordered_set<std::string> projPubConsts;
+    // 账 #278 §B110: 第四份 = 工程内**窗体模块名**。VB6 里窗体名在裸名位就是它的默认实例
+    // （`Unload TmForm2` / `Set f = TmForm2`），发码侧 `cgen_expr_ident_symbol.inc` 一直在答
+    // `vb6_form_hwnd_TmForm2()`；语义层认不得 ⇒ 那条合法写法多配一条 VB3001（宽松模块里还会
+    // 落成一枚隐式 Variant 局部）。名单与发码侧同源：都走 collectFormModuleNames()。
+    std::unordered_set<std::string> projFormNames = collectFormModuleNames();
     for (auto& module : modules_) {
         if (!module) continue;
         projModNames.insert(Symbol::toLower(module->moduleName));
@@ -52,6 +112,29 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
         if (module->isClassModule || module->isFormModule) continue;
         for (auto& d : module->declarations) {
             if (!d) continue;
+            // 账 #278 (§B106): 同一格还漏了**模块级 Public Const / Public Enum 成员**。
+            // VB6 里它们与 Public 过程一样是工程级裸名可见 (类模块/窗体里 VB6 本人不许
+            // Public Const, 所以仍只收标准模块)。发码侧早就把它们折成字面量了 —— 缺的只是
+            // 语义层"这名字工程里有"这一问, 缺了它就要在 Option Explicit 下多配一条 VB3001,
+            // 而在宽松模式下更实: 会被登记成一枚隐式 Variant 局部 (把常量吃掉)。
+            if (d->kind == ASTNodeKind::ConstDecl) {
+                auto& c = static_cast<ConstDecl&>(*d);
+                if (c.access == AccessLevel::Public && !c.name.empty()) {
+                    projPubConsts.insert(Symbol::toLower(c.name));
+                }
+                continue;
+            }
+            if (d->kind == ASTNodeKind::EnumDecl) {
+                auto& e = static_cast<EnumDecl&>(*d);
+                if (e.access == AccessLevel::Public) {
+                    for (auto& m : e.members) {
+                        if (m && !m->name.empty()) {
+                            projPubConsts.insert(Symbol::toLower(m->name));
+                        }
+                    }
+                }
+                continue;
+            }
             std::string nm;
             AccessLevel acc = AccessLevel::Private;
             switch (d->kind) {
@@ -66,8 +149,25 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                 }
                 default: continue;
             }
-            if (acc == AccessLevel::Public && !nm.empty()) {
-                projPubProcs.insert(Symbol::toLower(nm));
+            // 账 #278 §B117: 这一档以前只认 Public。VB6 里标准模块的 Friend 过程**就是
+            // 工程级可见** (types.hpp 那句 "VB6无此关键字" 是错的: parser 认、发码认,
+            // 兄弟模块按裸名调它一直发得出 `vb6_<模块>_<过程>()`)。缺这一问的两种后果与
+            // §B106 同一对: Option Explicit 下一条假 VB3001 (探针 .build/b176_fr), 而**宽松
+            // 模块里更实** —— 那枚名字落成一枚隐式 Variant 局部, 调用发成 `SecretSub();`
+            // ⇒ error C2063「不是一个函数」, 整个工程编不过 (探针 .build/b182_loose)。
+            // 放行**不许吃掉包边界**: 语料里 friend_bad.vbp 钉的就是 VB7006「is not exported
+            // by package」(那枚包 manifest 写 Friend=False)。所以这一支不去抄一遍 manifest
+            // 规则, 只问那份现成的权威 packageBlockedNames_ —— 它已经按 manifest 算好了
+            // 「哪些名字对本工程消费方屏蔽」, 屏蔽名单里的名字不进工程级名单, 答案只有一处。
+            if (!nm.empty() &&
+                (acc == AccessLevel::Public || acc == AccessLevel::Friend)) {
+                const std::string lk = Symbol::toLower(nm);
+                bool blockedByPkg = false;
+                if (!module->packageName.empty()) {
+                    auto pit = packageBlockedNames_.find(Symbol::toLower(module->packageName));
+                    if (pit != packageBlockedNames_.end()) blockedByPkg = pit->second.count(lk) > 0;
+                }
+                if (!blockedByPkg) projPubProcs.insert(lk);
             }
         }
     }
@@ -76,6 +176,9 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
         // <vbeclipse>: 工程级名字表 (见上面两份的注释)
         analyzer->setProjectModuleNames(projModNames);
         analyzer->setProjectPublicProcNames(projPubProcs);
+        analyzer->setProjectPublicConstNames(projPubConsts);
+        // 账 #278 §B110: 第四份 = 工程内窗体模块名（裸名位 = VB6 的默认实例引用）
+        analyzer->setProjectFormNames(projFormNames);
         // 泛型 (tB, G3): 调用点推断需要模板只读视图 (runGenericsPrepass 已构建)
         analyzer->setGenericRegistry(&genView_);
         // Interface 契约 (tB, B02): stage 2.7 建好的只读登记表

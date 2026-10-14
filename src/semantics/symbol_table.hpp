@@ -331,7 +331,13 @@ struct Symbol {
         std::string name;           // 成员名 (保留大小写)
         Vb6Type type = Vb6Type::Empty;  // 成员类型
         std::string typeRefName;    // 若类型为UDT, 保存UDT名称
-        int32_t arraySize = 0;      // 固定大小数组: 0=非数组, >0=上界+1
+        int32_t arraySize = 0;      // 固定大小数组: 0=非数组, >0=**是**定长数组 (占位标记)
+        // ⚠ 这里存的**不是**元素个数 (语义层只写 1) —— 真正的格数只在发码侧由
+        // tryEvalConstInt 从 AST 折出 (cgen_decl.cpp 的 UDT 成员那一支是唯一算它的地方)。
+        // 上一格账 (#261) 就是被这种"注释说带尺寸、其实只带标记"的字段骗过一次。
+        // 账 #262: 定长数组的**秩** (维数)。0=标量或动态数组, 1=一维, >=2=多维。
+        // 只有秩、没有各维格数 —— 各维格数属于发码侧，这里刻意不留第二份真相。
+        int32_t arrayRank = 0;
         // Fix 037: 动态数组标记. `memberName() As Type` 语法, arraySize=0 且 isArrayDynamic=true.
         // 用于 UDT C 结构体 emit `vb6_SafeArray1D* Member;` 并支持 obj.member(idx) → VB6_SA_AT.
         bool isArrayDynamic = false;
@@ -530,8 +536,12 @@ public:
     std::vector<const Symbol*> getPublicSymbols() const;
 
     // 获取当前模块引用的所有外部模块名集合
-    // 遍历模块级符号, 返回所有 isExternal=true 的 sourceModule
-    std::unordered_set<std::string> getExternalModuleNames() const;
+    // 遍历模块级符号, 返回所有 isExternal=true 的 sourceModule。
+    // 账 §B97: 返回类型是 **有序** vector（去重 + 字典序）而不是 unordered_set ——
+    // 这份名单往下会决定 #include 段与入口点里模块 init 的**调用序**，而 unordered_map
+    // 的遍历序是「编译器二进制的函数」。真正的权威顺序由 driver 按 modules_ 的下标序排（见
+    // driver_codegen_module_loop.inc 的 extModulesInModuleVectorOrder），这里只保证自身确定。
+    std::vector<std::string> getExternalModuleNames() const;
 
     // Fix <vbeclipse>: VB6 隐式变量声明 (工程未写 Option Explicit 时, 首次使用的
     // 裸标识符自动成为 Variant 局部变量)。语义层登记 "<module>$<proc>" → 名字集,
@@ -552,6 +562,26 @@ private:
     Scope* current_;
     std::vector<std::unique_ptr<Scope>> scopes_;
     std::unordered_map<std::string, std::unordered_set<std::string>> implicitVars_;
+    // Fix 216: 被用户成员顶掉的内置函数符号留档 (见 lookupShadowedBuiltin 的注释)。
+    std::unordered_map<std::string, std::unique_ptr<Symbol>> shadowedBuiltins_;
+
+public:
+    // Fix 216: 被"用户成员覆盖内置函数"那条规则 (define 里 Fix 048 那段) 挪走的内置符号。
+    //
+    // 为什么需要它: 那条 erase 是**必要**的 —— 同名属性与内置 Function 符号共存会让
+    // TypeLib 出现幽灵 Function 变体 (同名同 dispid, SetFuncAndParamNames 返回
+    // TYPE_E_TYPEMISMATCH)。但它同时是**数据损失**: 内置函数**只在这里带形参表**,
+    // 一旦被顶掉, 该模块里再也没有第二个来源。
+    // 后果实测 (ComCtlsDemo Builds/DTPicker/DTPicker.ctl): 控件自己有
+    // `Public Property Get Year()` / `Property Let Year(...)`, 于是
+    //   `ST(0).wYear = VBA.Year(PropMinDate)` 的 calleeParams 落到空的
+    //   `Property Get Year` 上 ⇒ 下游 Fix 041b "实参多于形参就截断" 把实参全砍掉
+    //   ⇒ `vb6_Year()` ⇒ C2198 (该工程 Year/Month/Day/Hour/Minute/Second 共 49 处)。
+    // `VBA.<成员>` 是**显式限定**写法, VB6 里只可能指内置函数, 所以 codegen 侧拿它兜底。
+    Symbol* lookupShadowedBuiltin(const std::string& name) const {
+        auto it = shadowedBuiltins_.find(Symbol::toLower(name));
+        return it == shadowedBuiltins_.end() ? nullptr : it->second.get();
+    }
 };
 
 } // namespace vb6c3

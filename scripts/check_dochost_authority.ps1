@@ -14,15 +14,24 @@
 # 规则 (改坏了会红, 不是装饰):
 #   D1  DocumentKind 定义 1 份, 四个档位齐
 #   D2  docKind 的**写入点全仓 1 处** (driver_frontend) —— 多一处就是第二个权威
-#   D3  isDocumentHostObject 定义 1 / 声明 1 / 调用 1, 且调用点带 memberObjCtx_ (限定符位)
+#   D3  isDocumentHostObject 定义 1 / 声明 1 / 调用 1, 三处都带着那个位置形参 —— 账 #278
+#       第八刀把「哪个位合法」收进了唯一出口 (qualifierPos), 调用点只负责交出手里的
+#       memberObjCtx_; 老形状 (调用点自己在外面 && 一次) 现在反过来钉它为 0
+#   D3b 剩下的两档必须真的按位置分档 (vba / extender+ambient 各恰好 1) —— 裸位的真缺项
+#       还得响；这条守的就是老 D3 守的那件事，只是搬到判据自己那一头 (第十刀起数收到 2)
+#   D3d 文档自身那两档 (usercontrol / propertypage) 必须**不带**位置 —— 账 #278 §B115:
+#       发码拼法改问那张表之后，`.pag` 的值位没有理由再扣着
 #   D4  旧的字符串猜测不许回来: controlTypeName 里找 "PropertyPage" 必须为 0
 #   D5  那张名字表要五枚齐全 (usercontrol / propertypage / extender / ambient / vba)
 #
 # 用法:  pwsh -File scripts\check_dochost_authority.ps1
 # 退出码: 0 = 全绿; 1 = 红
 
+param(
+    [string]$Root = ""      # 负控用: 把整棵树指到副本上跑 (哨兵只读源码, 不起 cl)
+)
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent $PSScriptRoot
+$root = if ($Root) { $Root } else { Split-Path -Parent $PSScriptRoot }
 $bad = @()
 
 function ReadSrc([string]$rel) {
@@ -68,14 +77,37 @@ foreach ($t in $allSrc) { $writes += @([regex]::Matches($t, '->docKind\s*=')).Co
 if ($writes -ne 1) { $bad += ('D2 docKind writers ' + $writes + ' times (want exactly 1 - the single authority)') }
 
 # D3
-$d3def = @([regex]::Matches($files[$semUtilRel], 'bool SemanticAnalyzer::isDocumentHostObject')).Count
-$d3dec = @([regex]::Matches($files[$hdrRel], 'bool isDocumentHostObject')).Count
-$d3use = @([regex]::Matches($files[$semExprRel], 'isDocumentHostObject\(node\.name\)')).Count
-if ($d3def -ne 1) { $bad += ('D3 isDocumentHostObject defined ' + $d3def + ' times (want 1)') }
-if ($d3dec -ne 1) { $bad += ('D3 isDocumentHostObject declared ' + $d3dec + ' times in the header (want 1)') }
-if ($d3use -ne 1) { $bad += ('D3 call sites in visit(IdentifierExpr) ' + $d3use + ' times (want 1)') }
-$gated = @([regex]::Matches($files[$semExprRel], 'memberObjCtx_\s*&&\s*isDocumentHostObject')).Count
-if ($gated -ne 1) { $bad += ('D3 the exemption is not gated by memberObjCtx_ (found ' + $gated + ', want 1) - bare uses must still warn') }
+$d3def = @([regex]::Matches($files[$semUtilRel], 'bool SemanticAnalyzer::isDocumentHostObject\(const std::string& name, bool qualifierPos\) const')).Count
+$d3dec = @([regex]::Matches($files[$hdrRel], 'bool isDocumentHostObject\(const std::string& name, bool qualifierPos\) const')).Count
+$d3use = @([regex]::Matches($files[$semExprRel], 'isDocumentHostObject\(node\.name, memberObjCtx_\)')).Count
+if ($d3def -ne 1) { $bad += ('D3 isDocumentHostObject defined ' + $d3def + ' times taking the position (want 1)') }
+if ($d3dec -ne 1) { $bad += ('D3 isDocumentHostObject declared ' + $d3dec + ' times taking the position (want 1)') }
+if ($d3use -ne 1) { $bad += ('D3 call sites handing memberObjCtx_ to the authority ' + $d3use + ' times (want 1)') }
+# D3c: 调用点再自己 && 一次 = 同一个决定两份答案 (第八刀之前那正是唯一形状, 现在禁掉)
+$d3outer = @([regex]::Matches($files[$semExprRel], 'memberObjCtx_\s*(&&|\|\|)\s*isDocumentHostObject')).Count
+if ($d3outer -ne 0) { $bad += ('D3 the caller re-gates the exemption ' + $d3outer + ' times (want 0 - two answers for one decision)') }
+# D3b: 形参不是摆设 —— 按位置分档的行必须逐条点名。第十刀把数从第八刀的 >=3 收到 2：
+#      `.pag 自身对象名` 那一格本来正扣着位置，本刀把它放开（当初扣着的理由「一发码
+#      就 C2065」实测是假的 —— RTL 两种拼写都声明且定义了，见 §B115/§B118）。剩下守位
+#      的两档 (vba / extender+ambient) 各钉一次：少一档 = 位置又成了摆设，多一档 = 放开
+#      的那两格退了回去。
+$b3 = $files[$semUtilRel].IndexOf('SemanticAnalyzer::isDocumentHostObject')
+if ($b3 -lt 0) {
+    $bad += 'D3b predicate body not found'
+} else {
+    $n3 = $files[$semUtilRel].IndexOf('SemanticAnalyzer::', $b3 + 10)
+    if ($n3 -lt 0) { $t3 = $files[$semUtilRel].Substring($b3) } else { $t3 = $files[$semUtilRel].Substring($b3, $n3 - $b3) }
+$vbaGate = @([regex]::Matches($t3, 'if \(lk == "vba"\) return qualifierPos;')).Count
+$extGate = @([regex]::Matches($t3, 'return k == DocumentKind::UserControl && qualifierPos;')).Count
+$d3pos = $vbaGate + $extGate
+if ($vbaGate -ne 1) { $bad += ('D3b vba row gated on the position ' + $vbaGate + ' times (want exactly 1)') }
+if ($extGate -ne 1) { $bad += ('D3b extender/ambient row gated on the position ' + $extGate + ' times (want exactly 1)') }
+# D3d (账 #278 §B115): 文档自身那两档两个位都合法 —— 拼法来自那张表之后不许再按位置扣
+$selfUc = @([regex]::Matches($t3, 'if \(lk == "usercontrol"\) return k == DocumentKind::UserControl;')).Count
+$selfPg = @([regex]::Matches($t3, 'if \(lk == "propertypage"\) return k == DocumentKind::PropertyPage;')).Count
+if ($selfUc -ne 1) { $bad += ('D3d usercontrol row position-free ' + $selfUc + ' times (want exactly 1)') }
+if ($selfPg -ne 1) { $bad += ('D3d propertypage row position-free ' + $selfPg + ' times (want exactly 1)') }
+}
 
 # D4
 $sniff = 0
@@ -103,6 +135,6 @@ if ($bad.Count -gt 0) {
     exit 1
 }
 Write-Host ('PASS doc-host authority: kind def 1 (4 档), writers ' + $writes +
-    ', predicate ' + $d3def + '+' + $d3dec + '+' + $d3use + ' gated ' + $gated +
+    ', predicate ' + $d3def + '+' + $d3dec + '+' + $d3use + ' pos ' + $d3pos + ' outer ' + $d3outer +
     ', old sniffs ' + $sniff)
 exit 0

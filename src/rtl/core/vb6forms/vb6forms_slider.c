@@ -524,7 +524,7 @@ void vb6_Slider_SetTickStyle(void* hwnd, int tickStyle) {
 
 // VB6: Slider.GetNumTicks（只读，dispid 0x000f）—— "当前看得见几条刻度"。
 // 原生这条消息在 NOTICKS 下真答 0（实测），所以它同时是 ts=3 那一档的控件侧证人。
-int vb6_Slider_GetNumTicks(void* hwnd) {
+int vb6_intrSlider_GetNumTicks(void* hwnd) {
     if (!hwnd) return 0;
     return (int)SendMessageW((HWND)hwnd, TBM_GETNUMTICS, 0, 0);
 }
@@ -585,7 +585,7 @@ void vb6_Slider_SetSelLength(void* hwnd, int len) {
 }
 
 // VB6: Slider.ClearSel（方法，0x000e）。运行期调用形：`sld1.ClearSel()`。
-void vb6_Slider_ClearSel(void* hwnd) {
+void vb6_intrSlider_ClearSel(void* hwnd) {
     if (!hwnd) return;
     SendMessageW((HWND)hwnd, TBM_CLEARSEL, TRUE, 0);
 }

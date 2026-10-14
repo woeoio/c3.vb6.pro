@@ -19,6 +19,34 @@
         lastExpr_ = "(void*)vb6_UC_Controls()";
         return;
     }
+    // Fix 255: 上一支的**限定写法** —— `PropertyPage.Controls.Add(...)` /
+    // `UserControl.Controls.Item(k)`. 上面的判据要求 node.object 是裸 `Controls`
+    // 标识符, 而这里 node.object 是 MemberAccessExpr(`PropertyPage`.`Controls`),
+    // 于是整句落到"宿主伪对象 + 成员"那条兜底: 先按 v6_<对象>_<成员> 拼出
+    // `vb6_PropertyPage_Controls` (RTL 里没有这枚 ⇒ C2065), 再把 `.Add(...)` 挂在
+    // 一个 void* 上 ⇒ C2224 "左侧必须具有结构/联合类型" (ComCtlsDemo
+    // PPTextBoxWText.pag 的 PropertyPage_Initialize, PPTextBoxWText.c:17 两条)。
+    // 表里 `PropertyPage/controls` 那一行本来就写着 HPF_CHANNEL = vb6_UC_Controls
+    // (账 #278 §B105: 恒 NULL 的空桩"从来不该被发码", 真实答复是 vb6_UC_Controls()),
+    // 这里只是让**限定形式**也问同一句 —— 不再自己拼一个未声明的符号名。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& midHp = static_cast<MemberAccessExpr&>(*node.object);
+        if (midHp.object && midHp.object->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string hostNameHp = Symbol::toLower(
+                static_cast<IdentifierExpr&>(*midHp.object).name);
+            std::string chanDockHp;
+            if (hostPseudoIsObject(hostNameHp)
+                && hostPseudoChannel(hostNameHp, midHp.memberName, chanDockHp)) {
+                comObjExpr_ = "(void*)" + chanDockHp + "()";
+                comMemberName_ = node.memberName;
+                isComMarker_ = true;
+                isEarlyBoundCom_ = false;
+                earlyBoundSym_ = nullptr;
+                lastExpr_ = comObjExpr_;
+                return;
+            }
+        }
+    }
     // Fix 086: AddressOf 模块限定函数 (AddressOf ToolsTlsThunks.pvCallCollectionItem)
     // — 解析器将 `ToolsTlsThunks.pvCallCollectionItem` 交给 AddressOfExpr(仅取
     // object名) + 外层MemberAccessExpr(成员名). 此前生成非法的
@@ -90,9 +118,25 @@
 
     // Fix 010k: Err/builtin object member access — check FIRST before anything else
     // This must be at the very top to avoid any other code path consuming the node
+    // Fix 214: 接收者名的两种写法 —— 裸标识符 (`Err.Number` / `VBA.Beep`), 或 VB6 的
+    // `VBA.Interaction.<成员>` 两段式。VB6 把 Beep / Shell / AppActivate / CreateObject /
+    // MsgBox 这些交互函数声明在 VBA 的 **Interaction 子模块**下, 所以真实工程两种写法
+    // 都有 (ComCtlsDemo 里 4 处 `VBA.Interaction.Beep`)。此前判据只认"node.object 是裸
+    // 标识符", 两段式于是掉进 M22 宿主伪对象兜底 → 发 `vb6_VBA_Interaction.Beep()`
+    // (rtl 从来没有 vb6_VBA_Interaction → C2065)。这里把 `VBA.Interaction` 折成前段
+    // `VBA`, 外层成员就落回下面同一条 VBA 通路 (常量折叠 / vb6_<Fn> 拼名)。
+    std::string _objName214;
     if (node.object && node.object->kind == ASTNodeKind::IdentifierExpr) {
-        auto& _objId = static_cast<IdentifierExpr&>(*node.object);
-        std::string _objLower = _objId.name;
+        _objName214 = static_cast<IdentifierExpr&>(*node.object).name;
+    } else if (node.object && node.object->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& _mid214 = static_cast<MemberAccessExpr&>(*node.object);
+        if (_mid214.object && _mid214.object->kind == ASTNodeKind::IdentifierExpr &&
+            Symbol::toLower(_mid214.memberName) == "interaction") {
+            _objName214 = static_cast<IdentifierExpr&>(*_mid214.object).name;
+        }
+    }
+    if (!_objName214.empty()) {
+        std::string _objLower = _objName214;
         std::transform(_objLower.begin(), _objLower.end(), _objLower.begin(), ::tolower);
         std::string _memLower = node.memberName;
         std::transform(_memLower.begin(), _memLower.end(), _memLower.begin(), ::tolower);
@@ -125,7 +169,7 @@
         if (_objLower == "vba" || _objLower == "vba5") {
             static const std::unordered_map<std::string, std::string> vbaConsts = {
                 {"vbcr", "13"}, {"vblf", "10"}, {"vbtab", "9"},
-                {"vbnullchar", "0"}, {"vbnullstring", "vb6_BSTR_FromStr(L\"\")"},
+                {"vbnullchar", "vb6_BSTR_FromStrN(L\"\\000\", 1)"}, {"vbnullstring", "vb6_BSTR_FromStr(L\"\")"},
                 {"vbcrif", "vb6_BSTR_FromStr(L\"\\r\\n\")"},
                 {"vbnewline", "vb6_BSTR_FromStr(L\"\\r\\n\")"},
                 {"vbempty", "0"}, {"vbnull", "1"}, {"vbinteger", "2"}, {"vblong", "3"},

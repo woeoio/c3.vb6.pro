@@ -140,7 +140,7 @@ static HWND vb6_GetToolTipCtrl(void) {
         s_hwndTT = CreateWindowExW(0, TOOLTIPS_CLASSW, NULL,
             WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,
             CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-            NULL, NULL, g_hInstance, NULL);
+            NULL, NULL, vb6_hInstance, NULL);
     }
     return s_hwndTT;
 }

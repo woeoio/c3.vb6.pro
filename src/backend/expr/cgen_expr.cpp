@@ -11,6 +11,7 @@
 #include <limits>
 #include <locale>
 #include <sstream>
+#include "driver/detail/phase_timing.hpp"   // ai/030 续: emitExpr 累计统计
 
 namespace vb6c3 {
 
@@ -19,21 +20,30 @@ namespace vb6c3 {
 // --- cgen_expr.cpp: emitExpr 分发 + 字面量/一元/字典访问/New/TypeOf/AddressOf/Me 表达式 ---
 
 void CCodeGen::emitExpr(Expr& expr) {
+    C3ScopeTimer _c3t(2);   // ai/030 续: emitExpr 累计统计 (slot 2)
     switch (expr.kind) {
         case ASTNodeKind::LiteralExpr:
             visit(static_cast<LiteralExpr&>(expr)); break;
-        case ASTNodeKind::IdentifierExpr:
+        case ASTNodeKind::IdentifierExpr: {
+            C3ScopeTimer _k(4);   // ai/030 续: 逐类自时 (ident)
             visit(static_cast<IdentifierExpr&>(expr)); break;
-        case ASTNodeKind::BinaryExpr:
+        }
+        case ASTNodeKind::BinaryExpr: {
+            C3ScopeTimer _k(7);   // ai/030 续: 逐类自时 (binary)
             visit(static_cast<BinaryExpr&>(expr)); break;
+        }
         case ASTNodeKind::UnaryExpr:
             visit(static_cast<UnaryExpr&>(expr)); break;
-        case ASTNodeKind::MemberAccessExpr:
+        case ASTNodeKind::MemberAccessExpr: {
+            C3ScopeTimer _k(5);   // ai/030 续: 逐类自时 (member)
             visit(static_cast<MemberAccessExpr&>(expr)); break;
+        }
         case ASTNodeKind::DictionaryAccessExpr:
             visit(static_cast<DictionaryAccessExpr&>(expr)); break;
-        case ASTNodeKind::IndexOrCallExpr:
+        case ASTNodeKind::IndexOrCallExpr: {
+            C3ScopeTimer _k(6);   // ai/030 续: 逐类自时 (call)
             visit(static_cast<IndexOrCallExpr&>(expr)); break;
+        }
         case ASTNodeKind::NewExpr:
             visit(static_cast<NewExpr&>(expr)); break;
         case ASTNodeKind::TypeOfExpr:
@@ -400,7 +410,13 @@ void CCodeGen::visit(NewExpr& node) {
 
 void CCodeGen::visit(TypeOfExpr& node) {
     emitExpr(*node.object);
-    std::string obj = std::move(lastExpr_);
+    // 账 #257: 操作数是**成员访问**时, emitExpr 走 COM marker 那条路 —— lastExpr_ 只是
+    // "基对象"串 (实测 `TypeOf o.Parent Is VB.MDIForm` 得 obj="o"), 真值必须在这里
+    // 用 resolveComValue 收口。不收口的话外层会用 marker 发成一次属性读
+    // (vb6_ComGetIntProp(o, L"Parent")), 把已写进 lastExpr_ 的 vb6_TypeOf(…) 整个盖掉
+    // ⇒ 类型测试**静默消失**, 退化成"读 .Parent 当布尔" (StatusBar.ctl:506 的崩点)。
+    // 要的是**对象指针**, 所以按 "Object" 档解 (cgen_util_com.cpp:348 → vb6_ComGetObjectProp)。
+    std::string obj = isComMarker_ ? resolveComValue("Object") : std::move(lastExpr_);
     // tB Interface B06a: TypeOf x Is <新式接口> → 真 QueryInterface，经 RTL 的
     // vb6_IfaceSupports（QI 成功后立刻 Release，净效果只回答"支持不支持"）。
     // 左侧只认接口变量：类变量/COM 变量的 TypeOf 仍走 vb6_TypeOf 老路 —— 那个桩

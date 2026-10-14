@@ -152,6 +152,7 @@ static HRESULT WINAPI do_GetData(IDataObject* self, FORMATETC* fmt, STGMEDIUM* m
             HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, need + 1);
             if (!g) return STG_E_MEDIUMFULL;
             char* p = (char*)GlobalLock(g);
+            if (!p) { GlobalFree(g); return STG_E_MEDIUMFULL; }
             WideCharToMultiByte(CP_ACP, 0, o->d->text, chars, p, need, NULL, NULL);
             p[need] = 0; GlobalUnlock(g);
             med->hGlobal = g; return S_OK;
@@ -159,6 +160,7 @@ static HRESULT WINAPI do_GetData(IDataObject* self, FORMATETC* fmt, STGMEDIUM* m
         HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, sizeof(wchar_t) * (chars + 1));
         if (!g) return STG_E_MEDIUMFULL;
         wchar_t* p = (wchar_t*)GlobalLock(g);
+        if (!p) { GlobalFree(g); return STG_E_MEDIUMFULL; }
         memcpy(p, o->d->text, sizeof(wchar_t) * chars);
         p[chars] = 0; GlobalUnlock(g);
         med->hGlobal = g; return S_OK;
@@ -166,16 +168,21 @@ static HRESULT WINAPI do_GetData(IDataObject* self, FORMATETC* fmt, STGMEDIUM* m
     if (fmt->cfFormat == CF_HDROP) {
         if (!o->d->files || o->d->fileCount == 0) return DV_E_FORMATETC;
         int need = sizeof(DROPFILES);
-        for (int i = 0; i < o->d->fileCount; i++) need += (int)sizeof(wchar_t) * (lstrlenW(o->d->files[i]) + 1);
+        for (int i = 0; i < o->d->fileCount; i++) {
+            if (!o->d->files[i]) continue;
+            need += (int)sizeof(wchar_t) * (lstrlenW(o->d->files[i]) + 1);
+        }
         need += sizeof(wchar_t);   // 结尾双 0
         HGLOBAL g = GlobalAlloc(GMEM_MOVEABLE, need);
         if (!g) return STG_E_MEDIUMFULL;
         DROPFILES* df = (DROPFILES*)GlobalLock(g);
+        if (!df) { GlobalFree(g); return STG_E_MEDIUMFULL; }
         ZeroMemory(df, sizeof(*df));
         df->pFiles = sizeof(DROPFILES);
         df->fWide = TRUE;
         wchar_t* w = (wchar_t*)((char*)df + sizeof(DROPFILES));
         for (int i = 0; i < o->d->fileCount; i++) {
+            if (!o->d->files[i]) continue;
             int n = lstrlenW(o->d->files[i]) + 1;
             memcpy(w, o->d->files[i], sizeof(wchar_t) * n);
             w += n;

@@ -1,9 +1,11 @@
 #include "backend/cgen.hpp"
+#include "common/canvas_drawing.hpp"  // 账 #232①: 画布动词表 (绘图码头问它要名字与"这一档有没有出口")
 #include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <functional>
 #include <cstdio>
+#include "driver/detail/phase_timing.hpp"   // ai/030 续: call 分段打点 (c3StatSplit; 必须在 namespace 外)
 
 namespace vb6c3 {
 
@@ -47,18 +49,24 @@ void CCodeGen::visit(IndexOrCallExpr& node) {
         node.callee->kind == ASTNodeKind::IdentifierExpr) {
         pendingCalleeOvl_ = node.calleeOvlSuffix;
     }
+    std::chrono::steady_clock::time_point _c3sCall = std::chrono::steady_clock::now();
 #include "backend/detail/expr/cgen_expr_call_prelude.inc"
 #include "backend/detail/expr/cgen_expr_call_builtin_pre.inc"
+    c3StatSplit(8, _c3sCall);   // ai/030 续: call:prelude+builtin_pre
 #include "backend/detail/expr/cgen_expr_call_callee_ident.inc"
 #include "backend/detail/expr/cgen_expr_call_callee_member.inc"
 #include "backend/detail/expr/cgen_expr_call_callee_withm.inc"
 #include "backend/detail/expr/cgen_expr_call_com_bind.inc"
+    c3StatSplit(9, _c3sCall);   // call:callee (ident/member/withm/com_bind)
 #include "backend/detail/expr/cgen_expr_call_callee_params.inc"
+    c3StatSplit(10, _c3sCall);  // call:params
 #include "backend/detail/expr/cgen_expr_call_arg_emit.inc"
 #include "backend/detail/expr/cgen_expr_call_arg_variant.inc"
 #include "backend/detail/expr/cgen_expr_call_named_args.inc"
+    c3StatSplit(11, _c3sCall);  // call:args
 #include "backend/detail/expr/cgen_expr_call_builtin_fixup.inc"
 #include "backend/detail/expr/cgen_expr_call_opt_pad.inc"
+    c3StatSplit(12, _c3sCall);  // call:fixup+pad
 #include "backend/detail/expr/cgen_expr_call_conv_cstr.inc"
 #include "backend/detail/expr/cgen_expr_call_conv_numeric.inc"
 #include "backend/detail/expr/cgen_expr_call_conv_output.inc"

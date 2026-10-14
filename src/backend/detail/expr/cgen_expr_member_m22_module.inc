@@ -30,6 +30,16 @@
              objSym2->kind == SymbolKind::PropertySet)) {
             isVarName2 = true;
         }
+        // Fix 235: 同上 —— **无参 Function** (返回工程类) 的名字也不是"工程内模块名"。
+        // `ShadowCoolBar.ImageList` 落进这里会发成 vb6_ShadowCoolBar_ImageList (C2065);
+        // 按对象表达式放行, 交给 Fix 088c AST 层兜底 (inferClassTypeOfExpr 认 Function)。
+        // 同样排除当前过程自身的函数名 (那是 vb6_ret_X 引用槽语义)。
+        if (!isVarName2 && objSym2 && objSym2->kind == SymbolKind::Function
+            && !objSym2->variableTypeName.empty()
+            && !(currentProc_ && Symbol::toLower(currentProc_->name) == objLower2)) {
+            const Symbol* fnClsSym2 = symTab_.lookup(objSym2->variableTypeName);
+            if (fnClsSym2 && fnClsSym2->kind == SymbolKind::Class) isVarName2 = true;
+        }
         // Fix 084y-8: 枚举类型名.成员 (EnumLogLevel.LvCustom) — 枚举类型不是
         // 变量也不是模块, 原逻辑落入模块名限定符 → vb6_EnumLogLevel_LvCustom
         // (C2065, 声明名是 vb6_enum_EnumLogLevel_LvCustom 带 enum_ 层). 成员
@@ -103,6 +113,14 @@
             // Fix <vbeclipse>: 宿主伪对象 (UserControl/Ambient/...) 的成员名按 RTL 约定
             // 规范化 (源码 `UserControl.hDc` → RTL 只有 vb6_UserControl_hDC), 否则
             // 生成未声明的 vb6_UserControl_hDc (C2065 ×3: ucButton/ucCaption/ucTab).
+            // 账 #278 §B120: 第四处装配点。宿主伪对象那一段交回唯一出口 (对象名与成员名都出自
+            // 那张表) —— 从前这里把**源码拼写**直接抄进 C 标识符, 于是 `usercontrol.hDC` 发成
+            // vb6_usercontrol_hDC (没人声明它) ⇒ C2065, 而同一份文档写 `UserControl.hDC` 是通的。
+            // 其余限定符是工程内模块名, 那条路一字不动。
+            if (!isIncluded2 && hostPseudoIsObject(modName2)) {
+                lastExpr_ = hostPseudoRtlSymbol(modName2, varName2);
+                return;
+            }
             varName2 = cIdent(canonicalHostPseudoMember(modName2, varName2));
             lastExpr_ = isIncluded2 ? varName2 : ("vb6_" + cIdent(modName2) + "_" + varName2);
             return;
@@ -160,7 +178,7 @@
                         if (param.hasDefaultValue && !param.defaultValueExpr.empty()) {
                             defVal090am = param.defaultValueExpr;
                         } else {
-                            defVal090am = defaultValue(param.type);
+                            defVal090am = defaultValueForParam(param);
                         }
                         if (param.isByVal) {
                             argList090am += defVal090am;

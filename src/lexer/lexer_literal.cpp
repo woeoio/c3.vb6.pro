@@ -364,6 +364,15 @@ Token Lexer::scanOperator() {
 
     if (c == '&') {
         advance();
+        // C3 扩展 (ai/032): `&=` 复合赋值。能走到这里说明这个 `&` 前面是空白或
+        // 运算符 —— 紧贴标识符的 `&` (如 `x&` 的 Long 后缀) 已被
+        // scanIdentifierOrKeyword 的类型后缀那一步吃掉 (它的判据是「`&` 后面不是
+        // 字母/数字/下划线」, `=` 正好落在里面), 所以这里不会与 VB6 的
+        // `x& = 5` 撞车。参见 lexer.cpp 运算符 switch 的同类注释。
+        if (offset_ < content_.size() && peek() == '=') {
+            advance();
+            return makeToken(TokenKind::AmpEq, "&=", startLine, startCol);
+        }
         // & 作为 Long类型后缀 : 在标识符后
         // & 作为字符串连接符 : 在表达式中间
         // 上下文决定, 这里统一返回Ampersand, 由语法分析器区分

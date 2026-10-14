@@ -17,7 +17,8 @@
 #   D3  vb6_GetControlHDC 恰好定义一次, 体内必须同时有: 调权威 / 缓存槽位写 / 白拿那张的 ReleaseDC;
 #       并且**不许**自己 GetDC( —— 那就是第二处口径
 #   D4  缓存槽位 VB6_ObjectDC: 写者(SetPropW) = 恰好 1, 归还(ReleaseDC) >= 1, 撤名(RemovePropW) >= 1
-#   D5  后端: 表里 `return "vb6_GetControlHDC";` = 恰好 2 (PictureBox 与 Form 各一条, 不给通用行),
+#   D5  后端: 读表里 `vb6_GetControlHDC` 的行 = 恰好 2 (PictureBox 在 cgen_util_ctrl.cpp、
+#       Form 自账 #278 §B109 起住 src\common\form_pseudo.hpp; 都不给通用行),
 #       且 src/backend 里手拼发码 `"vb6_GetControlHDC(` = 0 (表交的是名字, 别处不许再拼一遍)
 #   D13 vb6forms_draw.c 不许自己开 DC (账 #234: 那份重复的"先问 VB6_PaintDC 否则 GetDC"撤掉了,
 #       它现在只许问权威 D1 那一处; D2 的调用点数因此从 5 涨到 6)
@@ -26,6 +27,16 @@
 # 退出码: 0 = 全绿; 1 = 红
 
 $ErrorActionPreference = "Stop"
+# 只认非注释部分（§B108 那条负控实测过一次：纯文本正则会连 `// addObj("X")` 一起算进名单）。
+function Strip-RowComments([string]$text) {
+    $kept = @()
+    foreach ($line in ($text -split "`r?`n")) {
+        $cut = $line.IndexOf('//')
+        $kept += $(if ($cut -ge 0) { $line.Substring(0, $cut) } else { $line })
+    }
+    return ($kept -join "`n")
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $bad = @()
 
@@ -48,6 +59,16 @@ function Get-RtlLine {
 
 $rtl = @(Get-RtlLine)
 
+# 判"这枚函数的体里有没有某个调用"之前先把注释剥掉。
+# 为什么必须剥（账 #261 那轮撞上的）：合并进来的 3DMenu/AutoRedraw 那笔（`90fb8069`）在
+# vb6_GetControlHDC 的**注释**里写了"旧版在这里 GetDC(过程)" —— 按字面匹配判据把一句说明
+# 读成一次调用 ⇒ D3 整条假红。哨兵钉的是代码里有没有那条口径，不是散文里提没提那个名字。
+function Remove-CStyleComments($s) {
+    $t = [regex]::Replace($s, '/\*[\s\S]*?\*/', " ")
+    $t = [regex]::Replace($t, '//[^\r\n]*', " ")
+    return $t
+}
+
 # ---- D1: 权威恰好一处, 两档都还在 ----
 $defs = @($rtl | Where-Object { $_.Text -match 'HDC\s+vb6_ControlDrawDC\s*\(' -and $_.Text -notmatch '=' -and -not $_.Text.EndsWith(";") })
 if ($defs.Count -ne 1) {
@@ -60,10 +81,11 @@ if (Test-Path -LiteralPath $ctrl) {
     if (-not $body.Success) {
         $bad += "D1 authority body not found"
     } else {
-        if ($body.Value -notmatch 'L"VB6_PaintDC"') {
+        $bodyClean = Remove-CStyleComments $body.Value
+        if ($bodyClean -notmatch 'L"VB6_PaintDC"') {
             $bad += "D1 the authority no longer honors the _Paint-dispatch DC (BeginPaint 那张会被当成泄漏释放掉)"
         }
-        if ($body.Value -notmatch 'GetDC\(') {
+        if ($bodyClean -notmatch 'GetDC\(') {
             $bad += "D1 the authority no longer falls back to the window DC (派发期之外没人给 DC 了)"
         }
     }
@@ -96,20 +118,24 @@ if ($exitDef.Count -ne 1) {
     $bad += ("D3 vb6_GetControlHDC defined " + $exitDef.Count + " times in src/rtl (want exactly 1; 头文件那条声明在 .h 里以 ; 结尾, 不算)")
 } else {
     $txt = [System.IO.File]::ReadAllText($exitDef[0].Full)
-    $blk = [regex]::Match($txt, 'intptr_t\s+vb6_GetControlHDC\s*\([\s\S]{0,900}?\r?\n\}')
+    # 窗口原来是定长 900（#234 那轮的体长 + 余量）。vbeclipse 另一路的 3DMenu/AutoRedraw 那笔
+    # (`90fb8069`) 把这张出口长到 ~1350 字符 ⇒ 定长窗口读不到体尾的 `}`，整条 D3 假红。
+    # 修法不是换个更大的数：懒配到**第一个顶格的 }** 就是"这枚函数的体"本身，不含任何尺寸假设。
+    $blk = [regex]::Match($txt, 'intptr_t\s+vb6_GetControlHDC\s*\([\s\S]*?\r?\n\}')
     if (-not $blk.Success) {
         $bad += "D3 exit body not found"
     } else {
-        if ($blk.Value -notmatch 'vb6_ControlDrawDC\(') {
+        $blkClean = Remove-CStyleComments $blk.Value
+        if ($blkClean -notmatch 'vb6_ControlDrawDC\(') {
             $bad += "D3 the exit no longer goes through the authority (口径又分家了)"
         }
-        if ($blk.Value -notmatch 'SetPropW\([^;]*L"VB6_ObjectDC"') {
+        if ($blkClean -notmatch 'SetPropW\([^;]*L"VB6_ObjectDC"') {
             $bad += "D3 the exit no longer caches one-DC-per-object (反复读会换句柄)"
         }
-        if ($blk.Value -notmatch 'ReleaseDC\(') {
+        if ($blkClean -notmatch 'ReleaseDC\(') {
             $bad += "D3 the exit no longer returns the free GetDC (每读一次漏一张)"
         }
-        if ($blk.Value -match 'GetDC\(') {
+        if ($blkClean -match 'GetDC\(') {
             $bad += "D3 the exit grabs a DC itself (绕过权威的第二处口径)"
         }
     }
@@ -144,8 +170,12 @@ foreach ($f in (Get-ChildItem -LiteralPath $be -Recurse -File | Where-Object { $
         }
     }
 }
-if ($rows -ne 2) {
-    $bad += ("D5 read-table rows for hdc = " + $rows + " (want exactly 2: PictureBox 与 Form; 给成通用行 = List1.hDC 也答一个数)")
+# 账 #278 §B109: Form 那一行搬进了 common 的表 ⇒ 两处合起来数。
+$fpRawB = [System.IO.File]::ReadAllText((Join-Path $root "src\common\form_pseudo.hpp"))
+$fpTxtB = Strip-RowComments $fpRawB
+$fpRowsB = @([regex]::Matches($fpTxtB, '\{\s*"hdc"\s*,\s*"vb6_GetControlHDC"')).Count
+if (($rows + $fpRowsB) -ne 2) {
+    $bad += ("D5 read-table rows for hdc = " + ($rows + $fpRowsB) + " (want exactly 2: PictureBox 与 Form; 给成通用行 = List1.hDC 也答一个数)")
 }
 
 # ---- D6~D9: 文字量那一半 (账 #196 的第二条: TextHeight / TextWidth) ----
@@ -316,10 +346,11 @@ if ($storeCalls.Count -ne 3 -or $storeFiles.Count -ne 3) {
 }
 
 # ---- D12: 单位换算那一处 (账 #196 第三条) ----
-# 规矩与前两张表一样: **表只交名字**, 实参由码头拼。三个码头里只有两处从表来 (With 形 /
-# 显式接收者与 `Me.` 那一形)，第三处是窗体/页模块里**裸写**的名字, 走标识符那一路, 只能就地
-# 写出口名 —— 所以字面量在 src/backend 里恰好两处: 这张表 + 那一路。多一处就是有人又抄了一遍
-# 换算出口 (那是 #177 那条"单位表只剩一份"在本家族的翻版)。
+# 规矩与前两张表一样: **表只交名字**, 实参由码头拼。三个码头从前只有两处从表来 (With 形 /
+# 显式接收者与 `Me.` 那一形)，第三处是窗体/页模块里**裸写**的名字, 走标识符那一路, 就地写出口名
+# ⇒ 字面量两处。账 #278 §B72 把那一头也接到同一张表 (问的是 Form 那一行) ⇒ 字面量在 src/backend
+# 里从此恰好一处: 这张表自己。多一处就是有人又抄了一遍换算出口 (#177 那条"单位表只剩一份"的翻版),
+# 而少一处 = 有人把裸写那一路退回就地拼名字, 所以两头都钉: 数数 + 那一形必须真的在问表。
 $scAuth = 0
 $scSites = @()
 $scHard = @()
@@ -339,7 +370,7 @@ foreach ($f in (Get-ChildItem -LiteralPath $beDir2 -Recurse -File | Where-Object
 }
 if ($scAuth -ne 1) { $bad += ("D12 controlScaleMethod defined " + $scAuth + " times (want exactly 1)") }
 $scFiles = @($scSites | ForEach-Object { ($_ -split ":")[0] } | Sort-Object -Unique)
-foreach ($need in @("cgen_expr_with.cpp", "cgen_expr_call_com_bind.inc")) {
+foreach ($need in @("cgen_expr_with.cpp", "cgen_expr_call_com_bind.inc", "cgen_expr_ident_builtin.inc")) {
     if ($scFiles -notcontains $need) {
         $bad += ("D12 那一形不再问这张表: " + $need + " (少一形就是一形落回假 IDispatch 调用或裸 ScaleX( —— #143/#150 两族)")
     }
@@ -347,12 +378,20 @@ foreach ($need in @("cgen_expr_with.cpp", "cgen_expr_call_com_bind.inc")) {
 # 出口名只许出现在两个地方: 表本身 (交名字的那一处) 与"裸写标识符"那一路的码头 (它没有表可问)。
 # 两处从表来的码头 (With 形 / 显式接收者形) 里再出现一次字面量, 就是有人绕开表自己抄了一遍。
 $scHardFiles = @($scHard | ForEach-Object { ($_ -split ":")[0] } | Sort-Object -Unique)
-if ($scHard.Count -ne 2 -or $scHardFiles.Count -ne 2 -or
-    ($scHardFiles -notcontains "cgen_util_ctrl.cpp") -or
-    ($scHardFiles -notcontains "cgen_expr_ident_builtin.inc")) {
+if ($scHard.Count -ne 1 -or $scHardFiles.Count -ne 1 -or
+    ($scHardFiles -notcontains "cgen_util_ctrl.cpp")) {
     $bad += ("D12 硬编码 vb6_ScaleUnitX 的处数 = " + $scHard.Count + " / 文件 " + ($scHardFiles -join ",") +
-             " (want 2 且只许 cgen_util_ctrl.cpp 这张表 + cgen_expr_ident_builtin.inc 那一路) -> " +
-             ($scHard -join " | "))
+             " (want 1 且只许 cgen_util_ctrl.cpp 这张表) -> " + ($scHard -join " | "))
+}
+# 裸写 ScaleX/ScaleY 那一路不许退回"就地拼名字": 它必须真的问表, 且问的是 Form 那一行
+$scBareRel = "src\backend\detail\expr\cgen_expr_ident_builtin.inc"
+$scBare = 0
+if (Test-Path -LiteralPath (Join-Path $root $scBareRel)) {
+    $scBare = @([regex]::Matches([System.IO.File]::ReadAllText((Join-Path $root $scBareRel)),
+                                 'controlScaleMethod\(FrmControlType::Form')).Count
+}
+if ($scBare -ne 1) {
+    $bad += ("D12 裸写那一路问表的处数 = " + $scBare + " (want exactly 1 - 形参交的是 Form 那一行)")
 }
 $scBlk = [regex]::Match($scBody, 'CCodeGen::controlScaleMethod\s*[\s\S]{0,700}?\r?\n\}')
 if (-not $scBlk.Success) {

@@ -8,14 +8,11 @@
     // 用于 IndexOrCallExpr 中 obj.typedField(idx) 模式: typedField 是对象数据字段
     // (非函数), VB6 语义为调用其默认 Item 属性.
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> classTypedFieldMap;
-    // Fix 086: 收集工程内窗体模块名 (小写) — 供跨模块窗体默认实例引用
-    // (FLogs.Visible / Unload FLogs → vb6_form_hwnd_FLogs()) 解析
-    std::unordered_set<std::string> formModuleNames;
-    for (const auto& module : modules_) {
-        if (module->isFormModule && !module->moduleName.empty()) {
-            formModuleNames.insert(Symbol::toLower(module->moduleName));
-        }
-    }
+    // Fix 086: 工程内窗体模块名 (小写) — 供跨模块窗体默认实例引用
+    // (FLogs.Visible / Unload FLogs → vb6_form_hwnd_FLogs()) 解析。
+    // 账 #278 §B110: 建造点搬进 Driver::collectFormModuleNames() —— 语义层那份"裸名位放行"的
+    // 名单与这里必须同源, 两边各扫一遍 modules_ 就是两份权威 (改一边漏一边 = 又一个"产物对、诊断错")。
+    std::unordered_set<std::string> formModuleNames = collectFormModuleNames();
     // Fix 086: 收集各模块 Public 常量表 (小写模块名 → 小写常量名 → 值).
     // 当本地同名过程符号 (如 cSerialPort.Sub SetDTR) 阻止了跨模块常量注入时,
     // Module.Const (modSerialPortAPI.SetDTR) 引用仍能内联数值.

@@ -1,0 +1,39 @@
+VERSION 5.00
+Begin VB.PropertyPage dhWithHost 
+   Caption         =   "WH"
+   ClientHeight    =   3000
+   ClientLeft      =   0
+   ClientTop       =   0
+   ClientWidth     =   4000
+   ScaleHeight     =   3000
+   ScaleWidth      =   4000
+End
+Attribute VB_Name = "dhWithHost"
+Option Explicit
+' ledger 278 knife 10 (two heads of ONE fact):
+'  - the With-object (value position) and the qualified read must land on the same
+'    RTL global, so the emitted symbol appears on both heads and the old hand-copied
+'    lowercase spelling must not appear at all;
+'  - the position still has to be consulted: VBA standing in the value position is not
+'    a name, so it must keep its VB3001 while VBA.Len(...) stays silent.
+
+Public Sub WithSelf()
+    With PropertyPage
+        Debug.Print .ScaleWidth
+    End With
+End Sub
+
+Public Sub QualifiedSelf()
+    Dim n As LongPtr
+    n = PropertyPage.hWnd
+End Sub
+
+Public Sub VbaQualified()
+    Dim t As String
+    t = VBA.Len("abcd")
+End Sub
+
+Public Sub VbaInValuePos()
+    Dim m As Long
+    m = VBA
+End Sub

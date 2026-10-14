@@ -115,4 +115,24 @@ inline bool existsUtf8(const std::string& utf8Path) {
     return std::filesystem::exists(utf8ToPath(utf8Path), ec) && !ec;
 }
 
+// ============================================================
+// 账 #267: 产物字节走 stdout，不过控制台代码页那一层
+// ------------------------------------------------------------
+// std::cout 在 main() 一进来就被 ConsoleUtf8Buf 接管了：**句柄是控制台**就转宽字符交
+// WriteConsoleW（渲染与 chcp 无关），**句柄是管道/文件**就按**控制台代码页**转字节 —— 因为
+// 诊断文本是给那个人/那个终端看的，实测 PS 5.1 与 pwsh 7 的 [Console]::OutputEncoding 都跟
+// 控制台代码页走。这个口径对"消息"是对的，对"产物"是错的：--emit-c 交出的是一份 C 源码，
+// 而同一次发码写进中间目录的那两份 .h/.c 是**内部 UTF-8 原样**（cl 正是拿 /utf-8 编它们的，
+// 见 msvc_driver.cpp 的命令行）。同一个问题两个答案，其中一个还是机器的函数：本机控制台
+// 代码页 936 ⇒ stdout 落 GBK，CI runner 是 65001 ⇒ 落 UTF-8 —— 实测同一枚 C3.exe、同一次运行，
+// Temp\C3C\...\AccMain.c 里"过程实现"是 UTF-8 (E8 BF 87…)、--emit-c 的 stdout 里是 GBK (B9 FD…)。
+//
+// 所以产物这一路直接 fwrite 到 stdout 的 C 流（文本模式：'\n' 照旧翻成 CRLF，与 ofstream 写的
+// 那两份一致），调用方先 cout.flush() 把压着的诊断落干净，顺序不乱。
+// ============================================================
+inline void writeStdoutRaw(const std::string& bytes) {
+    if (bytes.empty()) return;
+    std::fwrite(bytes.data(), 1, bytes.size(), stdout);
+}
+
 } // namespace vb6c3

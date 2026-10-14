@@ -129,8 +129,28 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
             }
             return false;
         };
-        // 全部成员都是无体签名 => 是接口类
-        auto allMembersBodyless = [](const Module& m) {
+        // 全部成员都是无体签名 => 是接口类.
+        //
+        // Fix 213: "空体" 的判据不能只看 `body->empty()`. VB6 接口宿主的每个成员都带
+        // 过程内属性行 —— `Attribute Message.VB_Description = "..."` /
+        // `Attribute X.VB_UserMemId = ...` —— 而 parser 把 Attribute 行收成
+        // `AttributeStmt` 语句放进过程体 (parseAttributeInBody, parser_stmt_io.cpp:331).
+        // 于是 `Public Function Message(...) … End Function` 这种**真正的无体签名**体里
+        // 恰好有 1 条 AttributeStmt, `body->empty()` 为假 ⇒ 宿主被误判成普通类 ⇒
+        // Pass A2 不登记 ⇒ 发码层 `ivLookupIface("ISubclass")` 恒 nullptr ⇒
+        // `emitInterfaceVtable` 按 35 个实现类各发一份同名 `vb6_vtbl_ISubclass` /
+        // `vb6_iface_ISubclass` ⇒ 111 个 TU × 68 份重定义 = 7548×C2011 + 111×C2079,
+        // 且 35×VB3001 "Implements: interface not found" (连工程内的 ISubclass.cls 都
+        // "找不到")。判据改为"体里除了 Attribute 行之外没有任何语句".
+        auto bodyHasImplementation = [](const StmtList& body) {
+            for (const auto& s : body) {
+                if (!s) continue;
+                if (s->kind == ASTNodeKind::AttributeStmt) continue;  // 纯元数据, 不是实现
+                return true;
+            }
+            return false;
+        };
+        auto allMembersBodyless = [&](const Module& m) {
             for (const auto& d : m.declarations) {
                 if (!d) continue;
                 const StmtList* body = nullptr;
@@ -143,7 +163,7 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
                 } else {
                     continue;  // Type/Enum/Declare 之类不是可实现成员
                 }
-                if (!body->empty()) return false;
+                if (bodyHasImplementation(*body)) return false;
             }
             return true;
         };

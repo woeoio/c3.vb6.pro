@@ -89,6 +89,9 @@ int vb6_EnumNext(void* penum, vb6_VARIANT* outElem) {
         case VT_NULL:   outElem->vt = vb6_vtNull; break;
         case VT_I2:     outElem->vt = vb6_vtInteger; outElem->iVal = varElem.iVal; break;
         case VT_I4:     outElem->vt = vb6_vtLong; outElem->lVal = varElem.lVal; break;
+        /* ai/032 §6.6: 无符号两档 (缺档时 default 是把数值转 BSTR —— 不是答错而是换型)。 */
+        case VT_UI4:    outElem->vt = (vb6_vartype)VT_UI4; outElem->ulVal = varElem.ulVal; break;
+        case VT_UI8:    outElem->vt = (vb6_vartype)VT_UI8; outElem->ullVal = varElem.ullVal; break;
         case VT_R4:     outElem->vt = vb6_vtSingle; outElem->fltVal = varElem.fltVal; break;
         case VT_R8:     outElem->vt = vb6_vtDouble; outElem->dblVal = varElem.dblVal; break;
         case VT_BSTR:   outElem->vt = vb6_vtBSTR; outElem->bstrVal = varElem.bstrVal; break;
@@ -133,12 +136,14 @@ void vb6_EnumRelease(void* penum) {
 static int vb6_OleEnsureInit(void) {
     static int oleInited = 0;
     if (oleInited) return oleInited;
-    if (SUCCEEDED(OleInitialize(NULL))) {
+    HRESULT hrO = OleInitialize(NULL);
+    if (SUCCEEDED(hrO)) {
         oleInited = 1;
     } else {
         CoInitialize(NULL);
         oleInited = 2;
     }
+    
     return oleInited;
 }
 
@@ -146,11 +151,127 @@ static int vb6_OleEnsureInit(void) {
 // 返回活着的 IPicture* (带一次引用); 失败返回 NULL。用完请 vb6_ReleasePicture。
 void* vb6_LoadPictureEx(BSTR pathname) {
     if (!pathname) return NULL;
-    vb6_OleEnsureInit();
+    int oinit = vb6_OleEnsureInit();
     IPicture* pPicture = NULL;
     HRESULT hr = OleLoadPicturePath(pathname, NULL, 0, 0, &IID_IPicture, (void**)&pPicture);
-    if (FAILED(hr) || !pPicture) return NULL;
+    if (FAILED(hr) || !pPicture) {
+        /* DETERMINISTIC GDI FALLBACK — oleaut32's own picture parser is
+         * process-fragile under the C3 runtime (observed: OleLoadPicturePath /
+         * OleLoadPicture / StdPicture::IPersistStream all E_FAIL in-app on valid
+         * files, then S_OK in a plain exe; even the tiny in-memory BMP case flips
+         * between runs). GDI file decode (LoadImageW) has been stable every run.
+         * Missing files must still yield NULL (the app's CaricaIcone loop relies on
+         * LoadPicture failing to stop at the first absent file), so only attempt
+         * the fallback when the file actually exists. */
+        DWORD fa = GetFileAttributesW(pathname);
+        if (fa != INVALID_FILE_ATTRIBUTES) {
+            HBITMAP hBmp = (HBITMAP)LoadImageW(GetModuleHandleW(NULL), pathname,
+                                               IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+            if (hBmp) {
+                PICTDESC pd;
+                memset(&pd, 0, sizeof(pd));
+                pd.cbSizeofstruct = sizeof(pd);
+                pd.picType = PICTYPE_BITMAP;
+                pd.bmp.hbitmap = hBmp;
+                pd.bmp.hpal = NULL;
+                IPicture* pWrap = NULL;
+                if (SUCCEEDED(OleCreatePictureIndirect(&pd, &IID_IPicture, TRUE, (void**)&pWrap))) {
+                    
+                    vb6_PictureRegister(pWrap);
+                    return (void*)pWrap;
+                }
+                /* OleCreatePictureIndirect is crippled too: hand the raw HBITMAP
+                 * over instead. vb6_SetControlPicture's registered==0 path stores
+                 * it as a plain GDI handle and paints it (STATIC + STM_SETIMAGE).
+                 * Only reachable when oleaut32's COM picture layer is dead. */
+                
+                return (void*)hBmp;
+            }
+            /* Last resort: same file via an IStream + OleLoadPicture. GDI's
+             * LoadImageW only decodes BMP/ICO/CUR, so for an existing file that
+             * reached here (e.g. a JPEG/PNG that LoadImageW cannot read) this is
+             * the only remaining decode path. */
+            IPicture* pAlt = NULL;
+            DWORD rd = 0, sizeF = 0;
+            HANDLE hf = CreateFileW(pathname, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+            if (hf != INVALID_HANDLE_VALUE) {
+                sizeF = GetFileSize(hf, NULL);
+                HANDLE hg = GlobalAlloc(GMEM_MOVEABLE, sizeF);
+                void* pv = GlobalLock(hg);
+                if (pv) { ReadFile(hf, pv, sizeF, &rd, NULL); GlobalUnlock(hg); }
+                CloseHandle(hf);
+                IStream* st = NULL;
+                if (pv && SUCCEEDED(CreateStreamOnHGlobal(hg, TRUE, &st))) {
+                    OleLoadPicture(st, (LONG)rd, FALSE, &IID_IPicture, (void**)&pAlt);
+                    st->lpVtbl->Release(st);
+                } else if (pv) {
+                    GlobalFree(hg);
+                }
+            }
+            if (pAlt) pAlt->lpVtbl->Release(pAlt);
+        }
+        /* VB6 语义: LoadPicture 指到**不存在**的文件要抛运行时错误 53 (File not found),
+         * 而不是静默返回 Nothing。3DMenu 的 CaricaIcone 循环正是靠
+         *   For i = 0 To 40 : On Error GoTo Err: Set Img(Num,i)=LoadPicture(Nfile) : ... : Next
+         * 里"第一个缺帧 ⇒ 抛错 ⇒ 跳 Err ⇒ 退出循环"来定 Totale(Num) 的。
+         * 早先这里只 return NULL: 循环跑满 40 次, Totale(Num) 被写成 40 (真实只有 18 帧),
+         * Timer_Shift 于是把 22 个空帧喂给 ImgMenu(sel) → Picture 被清空 → AutoRedraw 位图
+         * 回到 BackColor → `TrspCol = GetPixel(hdc,0,0)` 读到 0xE0E0E0 而不是图标角上的
+         * 透明色 0xFAE4E4 → TransBltNow 的 XOR/AND/XOR 掩码合成只能整片糊掉 ⇒
+         * 环顶那枚"中间的图标"消失/被背景色方块盖住。
+         * 空 pathname 不抛 (VB6 用 LoadPicture("") 清空 Picture, 合法且无错)。
+         * On Error Resume Next 下 vb6_RaiseError 会提前返回 —— CaricaIconeSub/CaricaTitoli/
+         * CaricaFondi 那些 Resume Next 站点行为不变。 */
+        if (pathname && pathname[0] && GetFileAttributesW(pathname) == INVALID_FILE_ATTRIBUTES) {
+            extern void vb6_RaiseError(int32_t errNum, BSTR description);
+            vb6_RaiseError(53, vb6_BSTR_FromStr(L"File not found"));
+        }
+        return NULL;
+    }
+    
+    vb6_PictureRegister(pPicture);
     return (void*)pPicture;
+}
+
+// ============================================================
+// Picture 双支持注册表 (Fix P-BMP-3D):
+//   vb6_LoadPictureEx 返回的是 COM IPicture* (VB6 的 StdPicture), 而设计期/资源
+//   图片走的是原始 GDI 句柄 (HBITMAP/HICON)。cgen 对 `.Picture =` 一律发
+//   vb6_SetControlPicture(句柄语义), 导致 IPicture* 被当 HBITMAP 用 → 图标画不出。
+//   这里维护一张"本管线活 IPicture 对象"的开放寻址哈希表, vb6_SetControlPicture
+//   据此安全区分 COM 对象与 GDI 句柄。IPicture* 是用户态指针, 绝不与 GDI
+//   句柄 (内核句柄表索引, 值很小) 重叠, 因此无歧义无探测。不主动注销:
+//   残留条目顶多把某个解放后的地址误判为 COM(概率可忽略, 且不影响正确性)。
+// ============================================================
+#define VB6_PICREG_SIZE 4096
+static uintptr_t g_vb6_picReg[VB6_PICREG_SIZE];
+
+static uint32_t vb6_picRegHash(uintptr_t p) {
+    uintptr_t h = (uintptr_t)(p >> 4);
+    h ^= h >> 16;
+    h *= 0x9E3779B97F4A7C15ull;
+    return (uint32_t)(h & (VB6_PICREG_SIZE - 1));
+}
+
+void vb6_PictureRegister(void* picture) {
+    if (!picture) return;
+    uintptr_t p = (uintptr_t)picture;
+    uint32_t i = vb6_picRegHash(p);
+    for (uint32_t n = 0; n < VB6_PICREG_SIZE; n++, i = (i + 1) & (VB6_PICREG_SIZE - 1)) {
+        if (g_vb6_picReg[i] == p) return;
+        if (g_vb6_picReg[i] == 0) { g_vb6_picReg[i] = p; return; }
+    }
+}
+
+int vb6_PictureIsRegistered(const void* picture) {
+    if (!picture) return 0;
+    uintptr_t p = (uintptr_t)picture;
+    uint32_t i = vb6_picRegHash(p);
+    for (uint32_t n = 0; n < VB6_PICREG_SIZE; n++, i = (i + 1) & (VB6_PICREG_SIZE - 1)) {
+        if (g_vb6_picReg[i] == p) return 1;
+        if (g_vb6_picReg[i] == 0) return 0;
+    }
+    return 0;
 }
 
 // 从活着的 IPicture 里取图形句柄 (不销毁 picture 本身)。
@@ -176,145 +297,90 @@ void vb6_ReleasePicture(void* picture) {
 }
 
 // ============================================================
-// COM调用结果→vb6_VARIANT转换
-// 将后期绑定COM调用的VARIANT*结果转为vb6_VARIANT并释放原指针
-// 用于: v = dic.Item("hello") 等场景
-// 此函数消耗VARIANT*所有权, 调用后原指针不可再使用
+// COM 调用结果→vb6_VARIANT 转换
+// 账 #305 §B142 (第五十三刀): 「这一枚 Windows VARIANT 的数值住在槽的哪一格」以前答了
+// **两遍** —— vb6_VariantFromComResult(134 行) 与 vb6_VariantFromStackVARIANT(121 行) 的
+// 23 档逐条相同(剥掉注释 diff 只余四处不同)，而那四处全是**所有权**：BSTR(偷 / 复制)、
+// DISPATCH(置 NULL 转移 / 受守卫 AddRef)、SAFEARRAY 的 BSTR 元素(偷指针 / 逐个复制)、
+// 以及「没列到的那一档交什么」。两枚公开名照旧留给发码(它们是全仓按名字发射的)，
+// 差的那一件事改成一枚参数(steal = 消耗所有权，与原 FromComResult 同口径)。
+// 一起拍掉的第二件事：数组性以前是一张**八行的名单**，名单外的 VT_ARRAY|VT_DATE 那一类
+// 落进 default 的**数组块**(把标量字段当 SAFEARRAY 解 = SafeArrayGetDim(垃圾)，块尾还
+// pv->parray = NULL 抹掉原值)，名单外的标量也走同一块；那块底下那格换 BSTR 的兜底
+// 因此从来没被任何一枚走到过。现在数组只问 `vt & VT_ARRAY` 这一面旗标，认不出的标量
+// 统一走换 BSTR 那一格。
 // ============================================================
-vb6_VARIANT vb6_VariantFromComResult(void* variant_ptr) {
-    vb6_VARIANT result;
-    memset(&result, 0, sizeof(result));
-    if (!variant_ptr) { result.vt = vb6_vtEmpty; return result; }
-    VARIANT* pv = (VARIANT*)variant_ptr;
-    // Windows VARENUM 与 vb6_vartype 值一致, 可直接赋值
-    result.vt = (vb6_vartype)pv->vt;
-    switch (pv->vt) {
-        case VT_EMPTY: break;
-        case VT_NULL:  break;
-        case VT_I2:    result.iVal = pv->iVal; break;
-        case VT_I4:    result.lVal = pv->lVal; break;
-        case VT_R4:    result.fltVal = pv->fltVal; break;
-        case VT_R8:    result.dblVal = pv->dblVal; break;
-        case VT_CY:    result.cyVal = *(int64_t*)&pv->cyVal; break;
-        case VT_DATE:  result.dblVal = pv->date; break;
-        case VT_BSTR:
-            result.bstrVal = pv->bstrVal;
-            pv->bstrVal = NULL;  // 转移所有权, 防止VariantClear释放
-            break;
-        case VT_DISPATCH:
-            result.pdispVal = pv->pdispVal;
-            pv->pdispVal = NULL;  // 转移所有权
-            break;
-        case VT_BOOL:   result.boolVal = pv->boolVal; break;
-        case VT_UI1:    result.bVal = pv->bVal; break;
-        case VT_ERROR:  result.lVal = pv->scode; break;
-        case VT_DECIMAL:
-#ifdef _WIN64
-            memcpy(&result.decVal, &pv->decVal, sizeof(result.decVal));
-#else
-            /* Fix <vbeclipse> rev11: x86 的 OLE VARIANT union 只 8 字节, DECIMAL 在
-             * 外部由 pdecVal 指向 (vb6_VARIANT 现同布局); 深拷贝到自持缓冲,
-             * 由 vb6_VariantClear 释放。 */
-            if (pv->pdecVal) {
-                result.pdecVal = (DECIMAL*)CoTaskMemAlloc(sizeof(DECIMAL));
-                if (result.pdecVal) memcpy(result.pdecVal, pv->pdecVal, sizeof(DECIMAL));
-            }
-#endif
-            break;
-        default:
-            // P24-02: VT_ARRAY - 将Windows SAFEARRAY转换为vb6_SafeArray1D
-        case VT_ARRAY|VT_BSTR:
-        case VT_ARRAY|VT_VARIANT:
-        case VT_ARRAY|VT_I4:
-        case VT_ARRAY|VT_I2:
-        case VT_ARRAY|VT_R8:
-        case VT_ARRAY|VT_R4: {
-            SAFEARRAY* psa = pv->parray;
-            if (psa && SafeArrayGetDim(psa) == 1) {
-                LONG lBound = 0, uBound = 0;
-                SafeArrayGetLBound(psa, 1, &lBound);
-                SafeArrayGetUBound(psa, 1, &uBound);
-                int32_t count = uBound - lBound + 1;
-                VARTYPE baseVt = pv->vt & VT_TYPEMASK;
-                vb6_safearray_elemtype et;
-                int32_t esz;
-                switch (baseVt) {
-                    case VT_BSTR:    et = vb6_sa_bstr;     esz = sizeof(BSTR); break;
-                    case VT_VARIANT: et = vb6_sa_variant;  esz = sizeof(VARIANT); break;
-                    case VT_I4:      et = vb6_sa_long;     esz = sizeof(int32_t); break;
-                    case VT_I2:      et = vb6_sa_int;      esz = sizeof(int16_t); break;
-                    case VT_R8:      et = vb6_sa_double;   esz = sizeof(double); break;
-                    case VT_R4:      et = vb6_sa_single;   esz = sizeof(float); break;
-                    default:         et = vb6_sa_variant;  esz = sizeof(VARIANT); break;
-                }
-                vb6_SafeArray1D* arr = (vb6_SafeArray1D*)calloc(1, sizeof(vb6_SafeArray1D));
-                arr->signature = 0x5A1D;  /* Fix 082g */
-                arr->elemType = et;
-                arr->elemSize = esz;
-                arr->lBound = lBound;
-                arr->uBound = uBound;
-                arr->count = count;
-                arr->data = calloc(count, esz);
-                arr->isDynamic = 0;
-                // Copy elements from Windows SAFEARRAY
-                char* srcData = (char*)psa->pvData;
-                if (baseVt == VT_VARIANT) {
-                    // VARIANT elements: convert each to vb6_VARIANT
-                    for (int32_t i = 0; i < count; i++) {
-                        VARIANT* srcElem = (VARIANT*)(srcData + i * sizeof(VARIANT));
-                        vb6_VARIANT* dstElem = (vb6_VARIANT*)((char*)arr->data + i * sizeof(vb6_VARIANT));
-                        // Use recursive call for each element
-                        VARIANT* copy = (VARIANT*)malloc(sizeof(VARIANT));
-                        VariantInit(copy);
-                        VariantCopy(copy, srcElem);
-                        *dstElem = vb6_VariantFromComResult(copy);
-                    }
-                } else if (baseVt == VT_BSTR) {
-                    // BSTR elements: copy pointer (transfer ownership)
-                    for (int32_t i = 0; i < count; i++) {
-                        BSTR srcBstr = ((BSTR*)srcData)[i];
-                        BSTR* dstBstr = &((BSTR*)arr->data)[i];
-                        *dstBstr = srcBstr;
-                        // Clear source so VariantClear doesn't free it
-                        ((BSTR*)srcData)[i] = NULL;
-                    }
-                } else {
-                    // Numeric types: direct memcpy
-                    memcpy(arr->data, srcData, (size_t)count * esz);
-                }
-                result.vt = (vb6_vartype)(vb6_vtArray | (baseVt == VT_BSTR ? vb6_vtBSTR : baseVt == VT_VARIANT ? vb6_vtVariant : vb6_vtLong));
-                result.parray = arr;
-            }
-            // Null out the SAFEARRAY pointer before VariantClear
-            pv->parray = NULL;
-            break;
-        }
-// 未知类型: 尝试转换为BSTR
-            {
-                VARIANT vBSTR;
-                VariantInit(&vBSTR);
-                if (SUCCEEDED(VariantChangeType(&vBSTR, pv, 0, VT_BSTR))) {
-                    result.vt = vb6_vtBSTR;
-                    result.bstrVal = vBSTR.bstrVal;
-                    vBSTR.bstrVal = NULL;
-                } else {
-                    result.vt = vb6_vtEmpty;
-                }
-                VariantClear(&vBSTR);
-            }
-            break;
-    }
-    VariantClear(pv);  // 清理原始VARIANT (BSTR/pdispVal已转移)
-    free(pv);
-    return result;
-}
-// P24-03: 栈上VARIANT→vb6_VARIANT转换 (不释放源VARIANT)
-// 用于For Each等场景, 源VARIANT在栈上而非堆上
-vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv) {
+static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
     vb6_VARIANT result;
     memset(&result, 0, sizeof(result));
     if (!pv) { result.vt = vb6_vtEmpty; return result; }
+    // Windows VARENUM 与 vb6_vartype 值一致, 可直接赋值
     result.vt = (vb6_vartype)pv->vt;
+
+    if (pv->vt & VT_ARRAY) {
+        /* P24-02: VT_ARRAY - 将Windows SAFEARRAY转换为vb6_SafeArray1D。
+           元素档问 vb6_SaElemTypeFromVt(唯一那张反向表)、宽度交回 vb6_SaElemSize、标签交回
+           vb6_SaVtFromElemType —— 这三张表吃同一个枚举，不在这里第二次答(§B159 第五十刀)。 */
+        SAFEARRAY* psa = pv->parray;
+        if (psa && SafeArrayGetDim(psa) == 1) {
+            LONG lBound = 0, uBound = 0;
+            SafeArrayGetLBound(psa, 1, &lBound);
+            SafeArrayGetUBound(psa, 1, &uBound);
+            int32_t count = uBound - lBound + 1;
+            VARTYPE baseVt = pv->vt & VT_TYPEMASK;
+            vb6_safearray_elemtype et = vb6_SaElemTypeFromVt(baseVt);
+            int32_t esz = vb6_SaElemSize(et);
+
+            vb6_SafeArray1D* arr = (vb6_SafeArray1D*)calloc(1, sizeof(vb6_SafeArray1D));
+            vb6_Sa1DInit(arr);
+            arr->elemType = et;
+            arr->elemSize = esz;
+            arr->lBound = lBound;
+            arr->uBound = uBound;
+            arr->count = count;
+            arr->data = calloc(count, esz);
+            arr->isDynamic = 0;
+            // Copy elements from Windows SAFEARRAY
+            char* srcData = (char*)psa->pvData;
+            if (baseVt == VT_VARIANT) {
+                // VARIANT elements: convert each to vb6_VARIANT
+                for (int32_t i = 0; i < count; i++) {
+                    VARIANT* srcElem = (VARIANT*)(srcData + i * sizeof(VARIANT));
+                    vb6_VARIANT* dstElem = (vb6_VARIANT*)((char*)arr->data + i * sizeof(vb6_VARIANT));
+                    VARIANT* copy = (VARIANT*)malloc(sizeof(VARIANT));
+                    VariantInit(copy);
+                    VariantCopy(copy, srcElem);
+                    *dstElem = vb6_ComVariantIntoSlot(copy, 1);
+                }
+            } else if (baseVt == VT_BSTR) {
+                BSTR* dstBstr = (BSTR*)arr->data;
+                for (int32_t i = 0; i < count; i++) {
+                    if (steal) {
+                        /* 消耗式: 把指针搬过来并清掉源里那一格，免得外层的 VariantClear 放它 */
+                        dstBstr[i] = ((BSTR*)srcData)[i];
+                        ((BSTR*)srcData)[i] = NULL;
+                    } else {
+                        dstBstr[i] = SysAllocString(((BSTR*)srcData)[i]);
+                    }
+                }
+            } else {
+                // Numeric types: direct memcpy
+                memcpy(arr->data, srcData, (size_t)count * esz);
+                /* 账 #305 §B142 (第五十三刀)刻意留的一格，别当成已经修好：认不出档的元素
+                   (VT_DATE / VT_CY / VT_I8 / VT_DECIMAL / VT_DISPATCH / VT_UI4 ...)在这里回落
+                   variant 档 ⇒ 对端一格 8/4/16 字节、我们一格 sizeof(vb6_VARIANT)，这一条
+                   memcpy 就是越界读。第五十三刀先试过「问 SafeArrayGetElemsize 拿对端宽度、
+                   不符就逐元素装箱」，实测把语义改坏了(见 emit 后的元素读回 3 + 堆写坏 0xC0000374
+                   —— 那张宽度答案与尺寸表打架时，逐元素那一支写的是**槽**而描述符按 4 字节步长
+                   分配)。宽度这一问要在动手前先量准(§B165 旁边另记)，不在本刀半修。 */
+            }
+            result.vt = (vb6_vartype)(vb6_vtArray | vb6_SaVtFromElemType(et));
+            result.parray = arr;
+        }
+        if (steal) pv->parray = NULL;  /* 只有消耗式才动源里那一格 */
+        return result;
+    }
+
     switch (pv->vt) {
         case VT_EMPTY: break;
         case VT_NULL:  break;
@@ -325,86 +391,56 @@ vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv) {
         case VT_CY:    result.cyVal = *(int64_t*)&pv->cyVal; break;
         case VT_DATE:  result.dblVal = pv->date; break;
         case VT_BSTR:
-            result.bstrVal = SysAllocString(pv->bstrVal);  /* copy (不转移所有权) */
+            if (steal) {
+                result.bstrVal = pv->bstrVal;
+                pv->bstrVal = NULL;  // 转移所有权, 防止VariantClear释放
+            } else {
+                result.bstrVal = SysAllocString(pv->bstrVal);  /* copy (不转移所有权) */
+            }
             break;
         case VT_DISPATCH:
             result.pdispVal = pv->pdispVal;
-            // Fix <vbeclipse>: 用受守卫的 vb6_ComAddRefDispatch (内含 vb6_ComIsDispatchable),
-            // 与 vb6_VariantObject 同口径。`For Each ctrl In Controls` 交回的是**裸子控件
-            // HWND** (宿主分派层的对象表示), 不是真 IDispatch —— 裸 AddRef 会把 HWND 首字段
-            // 当 vtable 解引用 → av read (ucTabStrip.UserControl_Resize 实测)。真 COM 接收者
-            // 仍照常 AddRef; 析构侧 vb6_ReleaseObject 同判据跳过, 收支平衡。
-            if (pv->pdispVal) vb6_ComAddRefDispatch(pv->pdispVal);
+            if (steal) {
+                pv->pdispVal = NULL;  // 转移所有权
+            } else if (pv->pdispVal) {
+                // Fix <vbeclipse>: 用受守卫的 vb6_ComAddRefDispatch (内含 vb6_ComIsDispatchable),
+                // 与 vb6_VariantObject 同口径。`For Each ctrl In Controls` 交回的是**裸子控件
+                // HWND** (宿主分派层的对象表示), 不是真 IDispatch —— 裸 AddRef 会把 HWND 首字段
+                // 当 vtable 解引用 → av read (ucTabStrip.UserControl_Resize 实测)。真 COM 接收者
+                // 仍照常 AddRef; 析构侧 vb6_ReleaseObject 同判据跳过, 收支平衡。
+                vb6_ComAddRefDispatch(pv->pdispVal);
+            }
             break;
         case VT_BOOL:   result.boolVal = pv->boolVal; break;
         case VT_UI1:    result.bVal = pv->bVal; break;
         case VT_ERROR:  result.lVal = pv->scode; break;
+        /* 账 #305 §B145: 缺这一档时 FromComResult 的 default 走的是**数组**那段(pv->parray
+         * 把 llVal 当指针解) —— 不是「答错数」而是直接垃圾；而 VarAdd(VT_I8, VT_I4) 本来
+         * 就交回 vt=20 的结果(实测)，所以这一格是 Variant 算术的必经之路。 */
+        case VT_I8:    result.llVal = pv->llVal; break;
+        /* ai/032 §6.6: 无符号两档与 VT_I8 同条 —— 缺档时 default 那段会把 ullVal
+         * 当数组指针解 (与 §B145 那次同形的垃圾读)。原样带值过界。 */
+        case VT_UI4:   result.ulVal = pv->ulVal; break;
+        case VT_UI8:   result.ullVal = pv->ullVal; break;
         case VT_DECIMAL:
+            /* 账 #305 §B144: 这一档只问唯一出口「DECIMAL 住在哪一字节」—— 两架构的布局
+             * 不在这里抄第二遍(这里曾经抄过两次，都是抄错的)。 */
+            {
+                const DECIMAL *d144 = vb6_DecimalPtrFromVariant(pv);
 #ifdef _WIN64
-            memcpy(&result.decVal, &pv->decVal, sizeof(result.decVal));
+                if (d144) memcpy(&result.decVal, d144, sizeof(result.decVal));
 #else
-            /* Fix <vbeclipse> rev11: x86 的 OLE VARIANT union 只 8 字节, DECIMAL 在
-             * 外部由 pdecVal 指向 (vb6_VARIANT 现同布局); 深拷贝到自持缓冲,
-             * 由 vb6_VariantClear 释放。 */
-            if (pv->pdecVal) {
-                result.pdecVal = (DECIMAL*)CoTaskMemAlloc(sizeof(DECIMAL));
-                if (result.pdecVal) memcpy(result.pdecVal, pv->pdecVal, sizeof(DECIMAL));
-            }
+                /* 两种所有权都要一份私有副本: x86 那台的 DECIMAL 是对端 VARIANT **内联**那
+                   16 字节(§B144)，借用出去的存活期只到调用方清完它那枚 VARIANT 为止。 */
+                result.pdecVal = (DECIMAL *)CoTaskMemAlloc(sizeof(DECIMAL));
+                if (result.pdecVal && d144)
+                    memcpy(result.pdecVal, d144, sizeof(DECIMAL));
 #endif
-            break;
-        case VT_ARRAY|VT_BSTR:
-        case VT_ARRAY|VT_VARIANT:
-        case VT_ARRAY|VT_I4:
-        case VT_ARRAY|VT_I2:
-        case VT_ARRAY|VT_R8:
-        case VT_ARRAY|VT_R4: {
-            SAFEARRAY* psa = pv->parray;
-            if (psa && SafeArrayGetDim(psa) == 1) {
-                LONG lBound = 0, uBound = 0;
-                SafeArrayGetLBound(psa, 1, &lBound);
-                SafeArrayGetUBound(psa, 1, &uBound);
-                int32_t count = uBound - lBound + 1;
-                VARTYPE baseVt = pv->vt & VT_TYPEMASK;
-                vb6_safearray_elemtype et;
-                int32_t esz;
-                switch (baseVt) {
-                    case VT_BSTR:    et = vb6_sa_bstr;     esz = sizeof(BSTR); break;
-                    case VT_VARIANT: et = vb6_sa_variant;  esz = sizeof(VARIANT); break;
-                    case VT_I4:      et = vb6_sa_long;     esz = sizeof(int32_t); break;
-                    case VT_I2:      et = vb6_sa_int;      esz = sizeof(int16_t); break;
-                    case VT_R8:      et = vb6_sa_double;   esz = sizeof(double); break;
-                    case VT_R4:      et = vb6_sa_single;   esz = sizeof(float); break;
-                    default:         et = vb6_sa_variant;  esz = sizeof(VARIANT); break;
-                }
-                vb6_SafeArray1D* arr = (vb6_SafeArray1D*)calloc(1, sizeof(vb6_SafeArray1D));
-                arr->signature = 0x5A1D;  /* Fix 082g */
-                arr->elemType = et;
-                arr->elemSize = esz;
-                arr->lBound = lBound;
-                arr->uBound = uBound;
-                arr->count = count;
-                arr->data = calloc(count, esz);
-                arr->isDynamic = 0;
-                char* srcData = (char*)psa->pvData;
-                if (baseVt == VT_BSTR) {
-                    for (int32_t i = 0; i < count; i++) {
-                        ((BSTR*)arr->data)[i] = SysAllocString(((BSTR*)srcData)[i]);
-                    }
-                } else if (baseVt == VT_VARIANT) {
-                    for (int32_t i = 0; i < count; i++) {
-                        VARIANT* srcElem = (VARIANT*)(srcData + i * sizeof(VARIANT));
-                        vb6_VARIANT* dstElem = (vb6_VARIANT*)((char*)arr->data + i * sizeof(vb6_VARIANT));
-                        *dstElem = vb6_VariantFromStackVARIANT(srcElem);  /* recursive */
-                    }
-                } else {
-                    memcpy(arr->data, srcData, (size_t)count * esz);
-                }
-                result.vt = (vb6_vartype)(vb6_vtArray | (baseVt == VT_BSTR ? vb6_vtBSTR : baseVt == VT_VARIANT ? vb6_vtVariant : vb6_vtLong));
-                result.parray = arr;
             }
             break;
-        }
         default:
+            /* 认不出的标量档(原两枚双胞胎都没走到过这里): 交 oleaut32 换算成串，
+               换不动就交 Empty —— 与「答错数」相比，这一格交的是一个读得出的答案。 */
             {
                 VARIANT vBSTR;
                 VariantInit(&vBSTR);
@@ -419,8 +455,28 @@ vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv) {
             }
             break;
     }
-    /* 注意: 不调用 free(pv), 因为源VARIANT在栈上 */
     return result;
+}
+
+// 此函数**消耗** VARIANT* 的所有权, 调用后原指针不可再使用(交给 VariantClear + free)。
+// 用法: v = dic.Item("hello") 这类「COM 交回一枚堆上的 VARIANT」的场景。
+vb6_VARIANT vb6_VariantFromComResult(void* variant_ptr) {
+    VARIANT* pv = (VARIANT*)variant_ptr;
+    if (!pv) {
+        vb6_VARIANT empty;
+        memset(&empty, 0, sizeof(empty));
+        empty.vt = vb6_vtEmpty;
+        return empty;
+    }
+    vb6_VARIANT result = vb6_ComVariantIntoSlot(pv, 1);
+    VariantClear(pv);  // 清理原始VARIANT (BSTR/pdispVal 已转移的那几格是 NULL)
+    free(pv);
+    return result;
+}
+
+// P24-03: 栈上 VARIANT → vb6_VARIANT(带权副本, 不动源) —— For Each 那一族用这一枚。
+vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv) {
+    return vb6_ComVariantIntoSlot(pv, 0);
 }
 
 /* P24-04: Extract IDispatch pointer from Variant for COM late-binding */
@@ -432,6 +488,192 @@ void* vb6_VariantToObject(vb6_VARIANT* v) {
     return NULL;
 }
 
+/* 账 #305 §B159 (第五十刀): 「这一档元素许不许原样交给对端」。可搬的判据只有一条: 我们那一格的
+ * 宽与 SAFEARRAY 对同一个 vt 算出来的宽**逐档相等** —— 于是整块 memcpy 就是正确的编组。
+ * bstr / variant 要逐元素深拷贝、udt 的元素尺寸由调用方给、ptr 那一档涉及引用计数:
+ * 口径都还没拍 (§B161 记着), 交出去一律答 VT_EMPTY —— 宁可少给, 不猜 (§B144 那条口径)。
+ * ⚠ 「这枚数组是哪一档」仍只问 vb6_SaVtFromElemType(vb6rtl_array.c), 这里只补「哪几档许出站」;
+ *   VB6 的 VarType 元素码与 Windows 的 VARENUM 同值, 所以那张表的答案可以直接当 vt 用 (第四十六刀注明)。
+ */
+static VARTYPE vb6_ComSaVtBlittable(vb6_safearray_elemtype et) {
+    switch (et) {
+        case vb6_sa_bool:
+        case vb6_sa_int:
+        case vb6_sa_byte:
+        case vb6_sa_long:
+        case vb6_sa_single:
+        case vb6_sa_double:
+            return (VARTYPE)vb6_SaVtFromElemType(et);
+        default:
+            return 0;   /* 0 = 这一档不出站 */
+    }
+}
+
+/* 账 #305 §B162 (第五十刀): 反向 —— 对端递进来的真 SAFEARRAY → 我们那一格的描述符。
+ * 口径 = **拷**（自己建一枚描述符 + 原样搬元素），不是借：服务端这一趟结束就 free 掉槽阵列
+ *   (vb6comserver_obj.c 那句 CoTaskMemFree)，而 VB 代码会把这枚 Variant 存进变量、带出这次调用,
+ *   借来的 psa->pvData 在那之后就是悬垂的。回写（VB6 的数组按引用传）刻意不做 —— 与 §B160/
+ *   §B161 同一口径，那一格补的时候两头一起补。
+ * 白名单与出站**同一张表**：元素档认不出、或认出来的档与真数组的 vt 不是同一档，一律交回
+ *   vb6_vtEmpty。改前这里是「对端 VARIANT 头 16 字节的位拷贝」—— 于是一枚看着像数组、
+ *   parray 却指着一整条 SAFEARRAY 头部的槽被递进被调方 (实测语料那 7 行 oPC.AddPaletteColors
+ *   m_PF_Colors 走的正是这一格)。
+ */
+static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
+    SAFEARRAY* psa = src->parray;
+    VARTYPE base = (VARTYPE)(src->vt & VT_TYPEMASK);
+    vb6_safearray_elemtype et;
+    VARTYPE allow;
+    LONG lo = 0, hi = 0;
+    int32_t n, esz;
+    void* srcData = NULL;
+    vb6_SafeArray1D* arr;
+    void* data;
+    s->vt = vb6_vtEmpty;
+    if (!psa || SafeArrayGetDim(psa) != 1) return;          /* 多维: 描述符是另一套 (§B151) */
+    et = vb6_SaElemTypeFromVt(base);
+    allow = vb6_ComSaVtBlittable(et);
+    if (!allow || allow != base) return;                   /* 白名单外 / 认不出 = 不猜 */
+    SafeArrayGetLBound(psa, 1, &lo);
+    SafeArrayGetUBound(psa, 1, &hi);
+    n = hi - lo + 1;
+    esz = vb6_SaElemSize(et);
+    if (n <= 0 || esz <= 0) return;
+    if (FAILED(SafeArrayAccessData(psa, &srcData)) || !srcData) {
+        if (srcData) SafeArrayUnaccessData(psa);
+        return;
+    }
+    arr = (vb6_SafeArray1D*)calloc(1, sizeof(*arr));
+    data = calloc((size_t)n, (size_t)esz);
+    if (!arr || !data) {
+        free(arr); free(data);
+        SafeArrayUnaccessData(psa);
+        return;
+    }
+    memcpy(data, srcData, (size_t)n * (size_t)esz);
+    SafeArrayUnaccessData(psa);
+    vb6_Sa1DInit(arr);
+    arr->elemType = et;
+    arr->elemSize = esz;
+    arr->lBound = lo;
+    arr->uBound = hi;
+    arr->count = n;
+    arr->data = data;
+    arr->isDynamic = 0;
+    s->vt = (vb6_vartype)(vb6_vtArray | allow);
+    s->parray = arr;
+}
+
+/* 账 #305 §B162: 上面那一臂造出来的描述符归**这一趟调用**所有 —— 服务端 free 槽阵列之前
+ * 必须经这里，否则它就漏了。别的档一律不动（借用契约：串与对象仍归调用方）。 */
+void vb6_VariantSlotRelease(void *slot) {
+    vb6_VARIANT* s = (vb6_VARIANT*)slot;
+    if (!s || !(s->vt & vb6_vtArray)) return;
+    vb6_SafeArrayDestroy1D(s->parray);
+    s->parray = NULL;
+    s->vt = vb6_vtEmpty;
+}
+
+/* 账 #305 §B159 (第五十刀): 我们的数组载体 → 真 WINDOWS SAFEARRAY (出站那一臂唯一的造处)。
+ * 认载体只问首字段: 一维是魔数 0x5A1D、多维是秩数 1..16, 魔数落不进 1..16 —— 与
+ * vb6_SaVtOfArrayPtr / vb6_SaNdElemPtr 同一形, 不新增第三种认法。
+ * 界照抄 (lBound/cElements), 多维那一支不重排: 我们的 ND 是 d=0 变得最快, 与 SAFEARRAY 的列主序同序。
+ * 所有权: 新建的 psa 挂在 out->parray 上, 归**收到这一枚 VARIANT 的那一头** VariantClear ——
+ *   客户端实参: vb6_ComCall 的发码 epilogue 逐枚 VariantClear (vb6com_invoke.c:277-286);
+ *   服务端返回值: 交对端, 由对端 VariantClear (oleaut32 的标准 ABI);
+ *   Variant 算术 (vb6_VarArith): 借用契约不许 VariantClear, 那里就地 SafeArrayDestroy。
+ * 谁要把这一份留住, 自己 VariantCopy (加引用) —— 载体本体一律不动。
+ */
+static void vb6_ComPackArrayOut(const void* arrV, VARIANT* out) {
+    SAFEARRAYBOUND rg[16];
+    const vb6_SafeArray1D* a1 = (const vb6_SafeArray1D*)arrV;
+    VARTYPE vt = 0;
+    int32_t esz = 0, n = 0, rank = 0;
+    const void* data = NULL;
+    SAFEARRAY* psa;
+    void* pvData = NULL;
+    out->vt = VT_EMPTY;
+    if (!arrV) return;
+    if (vb6_SaIs1D(a1)) {
+        vt = vb6_ComSaVtBlittable(a1->elemType);
+        if (!vt) return;
+        esz = vb6_SaElemSize(a1->elemType);
+        /* 步长与那张尺寸表不符 = 这枚载体当年按错尺寸建过 (§B150 记的坑), 数据不可信, 不搬。 */
+        if (a1->elemSize != esz || a1->count <= 0 || !a1->data) return;
+        rg[0].lLbound = (ULONG)a1->lBound;
+        rg[0].cElements = (ULONG)a1->count;
+        rank = 1; n = a1->count; data = a1->data;
+    } else {
+        const vb6_SafeArrayND* nd = (const vb6_SafeArrayND*)arrV;
+        int64_t total = 1;
+        int32_t d;
+        if (nd->dimCount < 1 || nd->dimCount > 16) return;
+        vt = vb6_ComSaVtBlittable(nd->elemType);
+        if (!vt) return;
+        esz = vb6_SaElemSize(nd->elemType);
+        if (nd->elemSize != esz || !nd->data) return;
+        for (d = 0; d < nd->dimCount; d++) {
+            if (nd->bounds[d].cElements <= 0) return;
+            rg[d].lLbound = (ULONG)nd->bounds[d].lBound;
+            rg[d].cElements = (ULONG)nd->bounds[d].cElements;
+            total *= nd->bounds[d].cElements;
+            if (total > 0x7FFFFFFFll) return;   /* 溢出/零元素: 不搬 */
+        }
+        rank = nd->dimCount; n = (int32_t)total; data = nd->data;
+    }
+    psa = SafeArrayCreate(vt, (ULONG)rank, rg);
+    if (!psa) return;
+    if (FAILED(SafeArrayAccessData(psa, &pvData)) || !pvData) {
+        SafeArrayDestroy(psa);
+        return;
+    }
+    memcpy(pvData, data, (size_t)n * (size_t)esz);
+    SafeArrayUnaccessData(psa);
+    out->vt = (VARTYPE)(VT_ARRAY | vt);
+    out->parray = psa;
+}
+
+/* 账 #305 §B145: 槽 → 真 VARIANT 那张 vt 表的**唯一一份**(借用语义: 不复制 BSTR、不 AddRef)。
+ * 「住在哪一格」与「谁负责释放」是两个问题，这里只答前一个 —— 出站要带权副本的那一族
+ * 在下面 vb6_ComPackVariant 里自己补那一步，于是这张表只有一份，两处不会再各自漏档
+ * (§B142 的 census 量到的正是「出站的表」与「Variant 算术」都要它)。
+ * ⚠ 接收者叫 `v` 的 `switch (v.vt)` 是 scripts/check_variant_i8_coverage.ps1 认的形状，
+ *   改名或换接收者 = 这张表从 census 里隐身(§B143 那条「变目只认一种写法」的老坑)。 */
+/* 账 #305 §B159 (第五十刀): 下面那条 switch 吃的是**整枚** vt, 而数组那一档的标签是
+ * vb6_vtArray|元素码, 对不上任何一条 case ⇒ 改前一路落 default, 交给 COM 的是 VT_EMPTY
+ * (数组**静默变成空值**)。所以数组那一问排在表之前、只问一次, 真数组由上面的
+ * vb6_ComPackArrayOut 现造。 */
+void vb6_VariantPackBorrow(vb6_VARIANT v, VARIANT *out) {
+    VariantInit(out);
+    if (v.vt & vb6_vtArray) { vb6_ComPackArrayOut(v.parray, out); return; }
+    switch (v.vt) {
+        case vb6_vtEmpty: out->vt = VT_EMPTY; break;
+        case vb6_vtNull:  out->vt = VT_NULL; break;
+        case vb6_vtInteger: out->vt = VT_I2; out->iVal = v.iVal; break;
+        case vb6_vtLong:    out->vt = VT_I4; out->lVal = v.lVal; break;
+        case vb6_vtSingle:  out->vt = VT_R4; out->fltVal = v.fltVal; break;
+        case vb6_vtDouble:  out->vt = VT_R8; out->dblVal = v.dblVal; break;
+        case vb6_vtBSTR:    out->vt = VT_BSTR; out->bstrVal = v.bstrVal; break;   /* 借用: 不复制 */
+        case vb6_vtDispatch: out->vt = VT_DISPATCH; out->pdispVal = (IDispatch*)v.pdispVal; break;
+        case vb6_vtBoolean: out->vt = VT_BOOL; out->boolVal = v.boolVal ? VARIANT_TRUE : VARIANT_FALSE; break;
+        case vb6_vtByte:    out->vt = VT_UI1; out->bVal = v.bVal; break;
+        /* 账 #305: 以前这一档落 default ⇒ 交出去是 VT_EMPTY —— 地址**静默变成空值**，不是报错。*/
+        case VT_I8:       out->vt = VT_I8; out->llVal = v.llVal; break;
+        /* ai/032 §6.6: 无符号两档按原档交给 COM (缺档时 default 交 VT_EMPTY —— 
+         * 与 VT_I8 那条同一条严重度)。 */
+        case (vb6_vartype)VT_UI4: out->vt = VT_UI4; out->ulVal = v.ulVal; break;
+        case (vb6_vartype)VT_UI8: out->vt = VT_UI8; out->ullVal = v.ullVal; break;
+        /* 账 #305 §B145: §B142 census 点名的那三格 —— Decimal / Currency / Date 以前都落 default
+         * ⇒ 交给 COM 或交给 VarAdd 的是 VT_EMPTY，与上面 VT_I8 同一条严重度分级。
+         * Decimal 走 §B142 那枚唯一出口(两份布局不在这里抄第二遍)；Currency 那一格是
+         * CURRENCY(=LONGLONG) 而不是标量，与上面「往里读」的 *(int64_t*)&pv->cyVal 同形。 */
+        case vb6_vtDecimal:  if (!vb6_DecimalAsVariant(v, out)) out->vt = VT_EMPTY; break;
+        case vb6_vtCurrency: out->vt = VT_CY;   *(int64_t*)&out->cyVal = v.cyVal; break;
+        case vb6_vtDate:     out->vt = VT_DATE; out->date = v.dblVal; break;
+        default: out->vt = VT_EMPTY; break;
+    }
+}
+
 /* P24-04: Pack vb6_VARIANT (by value) into Windows VARIANT for COM call args */
 /* Used when Variant-typed variable member access result is passed as COM arg */
 void* vb6_ComPackVariant(vb6_VARIANT v) {
@@ -440,22 +682,106 @@ void* vb6_ComPackVariant(vb6_VARIANT v) {
        跨分配器释放损坏堆, 表现为 OLEAUT32.dll 内 0xC0000005 (NewTab Theme 赋值实测) */
     VARIANT* pv = (VARIANT*)malloc(sizeof(VARIANT));
     if (!pv) return NULL;
-    VariantInit(pv);
-    switch (v.vt) {
-        case vb6_vtEmpty: pv->vt = VT_EMPTY; break;
-        case vb6_vtNull:  pv->vt = VT_NULL; break;
-        case vb6_vtInteger: pv->vt = VT_I2; pv->iVal = v.iVal; break;
-        case vb6_vtLong:    pv->vt = VT_I4; pv->lVal = v.lVal; break;
-        case vb6_vtSingle:  pv->vt = VT_R4; pv->fltVal = v.fltVal; break;
-        case vb6_vtDouble:  pv->vt = VT_R8; pv->dblVal = v.dblVal; break;
-        case vb6_vtBSTR:    pv->vt = VT_BSTR; pv->bstrVal = SysAllocString(v.bstrVal); break;
-        case vb6_vtDispatch: pv->vt = VT_DISPATCH; pv->pdispVal = (IDispatch*)v.pdispVal; break;
-        case vb6_vtBoolean: pv->vt = VT_BOOL; pv->boolVal = v.boolVal ? VARIANT_TRUE : VARIANT_FALSE; break;
-        case vb6_vtByte:    pv->vt = VT_UI1; pv->bVal = v.bVal; break;
-        default: pv->vt = VT_EMPTY; break;
-    }
+    vb6_VariantPackBorrow(v, pv);
+    /* 出站实参要的是**带权**的串: 接收方(IDispatch::Invoke)按自己的副本处理它，而槽里
+       那一份还要继续用。对象那一档维持原状(借用，不 AddRef) —— 那是另一格的口径。 */
+    if (pv->vt == VT_BSTR && pv->bstrVal) pv->bstrVal = SysAllocString(pv->bstrVal);
     return pv;
 }
+/* 账 #305 §B144: 服务端**出站**那一格（COM 客户端拿到的返回值）唯一出口。
+ * 改前那里是 `memcpy(pVarResult, &tmpRet, sizeof(VARIANT))`，注释写着「槽的前 16 字节
+ * 与 OLE VARIANT 内容一致」—— 标量那几档确实一致，VT_DECIMAL 不一致：对端(和 oleaut32)
+ * 从**结构体头**读那 16 字节，而我们 x64 把它放在 offset 8、x86 放的是指针。实测两台都
+ * 静默答错数(x64 三问全答 0；x86 把堆地址当数值答出 18416048)，一个错误都不报。
+ * 现在：表仍问 §B145 那份唯一的 `vb6_VariantPackBorrow`(它自己再问 §B142 的布局出口)，
+ * 这里只补「带权」那一步 —— 交出去的那份归对端 VariantClear，所以串要新分配、对象要 AddRef
+ * (改前那两档是把槽里的指针直接递出去 = 对端释放我们的引用)。 */
+void vb6_VariantPackCopyInto(const void *slot, VARIANT *out) {
+    if (!out) return;
+    VariantInit(out);
+    if (!slot) return;
+    vb6_VariantPackBorrow(*(const vb6_VARIANT *)slot, out);
+    if (out->vt == VT_BSTR && out->bstrVal) out->bstrVal = SysAllocString(out->bstrVal);
+    /* 用受守卫的那枚出口(内含 vb6_ComIsDispatchable)：槽里挂着 VT_DISPATCH 标签的可能是
+     * 裸子控件 HWND，直接 ->AddRef() 会把 HWND 首字段当 vtable 解引用 ⇒ av read。
+     * ⚠ 本文件按 **C** 编(/std:c11)，`p->AddRef()` 那种 C++ 形态的写法根本进不了编译器。 */
+    if (out->vt == VT_DISPATCH && out->pdispVal) vb6_ComAddRefDispatch(out->pdispVal);
+}
+
+/* 账 #305 §B144: 服务端**入站**那一格（调用方递进来的实参）唯一出口，语义是**借用**。
+ * 不能改问现成的 `vb6_VariantFromComResult` —— 那一枚的契约是**消耗所有权**(把 VT_BSTR /
+ * VT_DISPATCH 的指针字段置 NULL 拿走)，而 `IDispatch::Invoke` 的实参数组是对端的，
+ * 被调方不许改动它。先 memcpy 一份私有副本再交给它也不行：转移走的是副本里的裸指针，
+ * 等于最后 clear 掉的是调用方拥有的那只串。所以这里只搬字节、只问布局出口，谁也不接管。 */
+void vb6_VariantBorrowIntoSlot(const VARIANT *src, void *slot) {
+    vb6_VARIANT *s = (vb6_VARIANT *)slot;
+    memset(s, 0, sizeof(*s));
+    if (!src) { s->vt = vb6_vtEmpty; return; }
+    /* 账 #305 §B162 (第五十刀): 数组那一档进不了下面那条 memcpy —— 位拷贝会把对端的
+     * SAFEARRAY 头部当成我们的描述符递给被调方。这一问排在最前（标签是 VT_ARRAY|元素码）。 */
+    if (src->vt & VT_ARRAY) { vb6_VariantArrayIntoSlot(src, s); return; }
+    if (src->vt == VT_DECIMAL) {
+        const DECIMAL *d = vb6_DecimalPtrFromVariant(src);
+        s->vt = (vb6_vartype)VT_DECIMAL;
+#ifdef _WIN64
+        if (d) memcpy(&s->decVal, d, sizeof(*d));
+#else
+        s->pdecVal = (DECIMAL *)d;   /* 借用：指向对端内联的那 16 字节，存活期 = 这一趟 Invoke */
+#endif
+        return;
+    }
+    memcpy(s, src, sizeof(VARIANT));  /* 其余各档：对端的头 16 字节与我们那一格本来就对齐 */
+}
+
+/* 账 #305 §B145: Variant 参与 + - * / 时的**唯一运行期出口**。
+ * 改前发码层替运行期猜了一档整数(Variant 操作数一律发成 vb6_VariantToLong(...))，实测两架构
+ * 一致: 盒里是 Double 时 1.5+1 答 **3**、1.5*2 答 **4**；是 Decimal 时 1.25+1 答 **2**、
+ * 0.1+0.2 答 **0** —— 小数与 Decimal 的精确值整个丢掉(探针 .build/b1095_arith，读数在台账)。
+ * 这里不猜档: 两侧装箱成真 VARIANT，交 oleaut32 的 VarAdd/VarSub/VarMul/VarDiv —— VB6 自己的
+ * Variant 算术就是这台引擎，于是 0.1+0.2 交 Decimal 0.3(96 位精确)、1.5+1 交 R8 2.5、
+ * Null 传播 Null、Date+天数交 Date、1/3 交 scale=28 的 Decimal，舍入与越界政策也一起继承。
+ * 只有错误号映射是我们写的，而且**按运算符分家**(两台实测): DISP_E_OVERFLOW 在加减乘是 VB 6
+ * (Overflow)，在除法是 VB 11 —— 因为 x86 那台的 1.0/0 交的是 DISP_E_OVERFLOW，而 x64 交
+ * DISP_E_DIVBYZERO；DISP_E_TYPEMISMATCH(如 "abc"+1)两架构都交回 VB 13。 */
+static vb6_VARIANT vb6_VarArith(int op, vb6_VARIANT a, vb6_VARIANT b) {
+    VARIANT va, vb, res;
+    vb6_VARIANT out;
+    HRESULT hr;
+    vb6_VariantPackBorrow(a, &va);
+    vb6_VariantPackBorrow(b, &vb);
+    VariantInit(&res);
+    switch (op) {
+    case 0:  hr = VarAdd(&va, &vb, &res); break;
+    case 1:  hr = VarSub(&va, &vb, &res); break;
+    case 2:  hr = VarMul(&va, &vb, &res); break;
+    default: hr = VarDiv(&va, &vb, &res); break;
+    }
+    /* 两份实参是借用的: 这里绝不许 VariantClear(那会把槽自己的 BSTR / 对象释放掉)。 */
+    /* 账 #305 §B159 (第五十刀): 唯一的例外是数组那一臂 —— PackBorrow 对数组交的是**新建**的真
+     * SAFEARRAY (借用契约里只有它是新分配的), 它归这一趟所有。不在这两条早退路上都收掉,
+     * 每算一次 `arr + 1` 就漏一份。 */
+    if (va.vt & VT_ARRAY) { SafeArrayDestroy(va.parray); va.parray = NULL; }
+    if (vb.vt & VT_ARRAY) { SafeArrayDestroy(vb.parray); vb.parray = NULL; }
+    if (FAILED(hr)) {
+        int32_t err;
+        if (hr == DISP_E_DIVBYZERO) err = 11;
+        else if (hr == DISP_E_OVERFLOW) err = (op == 3) ? 11 : 6;
+        else err = 13;
+        vb6_ErrRaiseNumber(err);
+        return vb6_VariantEmpty();
+    }
+    out = vb6_VariantFromStackVARIANT(&res);   /* 复制 BSTR / AddRef 对象，所有权留在 res 上 */
+    VariantClear(&res);
+    /* oleaut32 造的 Decimal 这一族自带标签(b1093 实测: VarDec* 那一族**不写**，而
+     * VarAdd 这一族**写**)，但标签只许有一个写者 —— 再补一次是幂等的。 */
+    vb6_DecSetTag(out);
+    return out;
+}
+
+vb6_VARIANT vb6_VarAddV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(0, a, b); }
+vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(1, a, b); }
+vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(2, a, b); }
+vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(3, a, b); }
 
 
 /* Fix 084f: Variant数组嵌套索引按值版本 (见 vb6rtl.h 说明) */
@@ -472,6 +798,83 @@ vb6_VARIANT* vb6_VariantArrayElemPtr(vb6_VARIANT* v, int32_t index) {
     return &((vb6_VARIANT*)arr->data)[index - arr->lBound];
 }
 
+/* 账 #305 §B150: 上面那一枚的多维版 —— 发码侧「整枚元素引用交址」的两路 (As Any ByRef
+   实参 / VarPtr) 以前按老前缀比文本, 本刀新那枚名不认就静默退化成临时盒 (写不回填)
+   或 C2440。参数形态与 vb6_VariantArrayGetND 同形, 所以发码侧只换函数名。
+   越界交回错误 9 (唯一那枚 vb6_SaNdElemPtr, 账 #209 那一族的口径); 非 Variant 数组槽
+   交 NULL, 与上面一维那条同形。 */
+vb6_VARIANT* vb6_VariantArrayElemPtrND(vb6_VARIANT* v, int32_t rank, ...) {
+    if (!v || !(v->vt & vb6_vtArray) || !v->parray || rank < 1 || rank > 16) return NULL;
+    vb6_SafeArrayND* nd = (vb6_SafeArrayND*)v->parray;
+    if (nd->elemType != vb6_sa_variant) return NULL;
+    int32_t idx[16];
+    va_list ap;
+    va_start(ap, rank);
+    for (int32_t d = 0; d < rank; d++) idx[d] = va_arg(ap, int32_t);
+    va_end(ap);
+    if (nd->dimCount < 1 || nd->dimCount > 16) return vb6_VariantArrayElemPtr(v, idx[0]);
+    int32_t es = vb6_SaElemSize(nd->elemType);
+    if (es <= 0 || !nd->data) { vb6_SaNdElemFail(nd, idx, rank); }
+    return (vb6_VARIANT*)vb6_SaNdElemPtr(nd, rank, idx, es);
+}
+
+// 账 #305 §B150 (第四十刀): 「这枚槽里的数组第 off 格是什么档」以前只写在
+// vb6_VariantArrayGet 的函数体里, 而同一枚槽的**多维**读根本没进过这一问 ——
+// 发码侧把 v(1,2) 发成 vb6_VariantArrayGet(&v, 1), 第二个下标整块丢掉 (实测读回空),
+// 可同一份产物里 UBound(v, 2) 却按 ND 问 ⇒ 同一个"这枚槽是几维"的决定说了两遍、漏了一遍。
+// 现在档位表提出来只有一份, 一维与多维都从它出来; 多维的下标检查走那唯一一枚
+// vb6_SaNdElemPtr (越界/NULL 一律抛 9, 与账 #209 那一族同口径)。
+static vb6_VARIANT vb6_VariantElemFromSlotData(void* data, int32_t off, vb6_safearray_elemtype t) {
+    vb6_VARIANT result;
+    memset(&result, 0, sizeof(result));
+    result.vt = vb6_vtEmpty;
+    switch (t) {
+        case vb6_sa_long:
+            result.vt = vb6_vtLong;
+            result.lVal = ((int32_t*)data)[off];
+            break;
+        case vb6_sa_int:
+            result.vt = vb6_vtInteger;
+            result.iVal = ((int16_t*)data)[off];
+            break;
+        case vb6_sa_double:
+            result.vt = vb6_vtDouble;
+            result.dblVal = ((double*)data)[off];
+            break;
+        case vb6_sa_single:
+            result.vt = vb6_vtDouble; /* VB6 Single -> Double promotion */
+            result.dblVal = (double)((float*)data)[off];
+            break;
+        case vb6_sa_bstr:
+            result.vt = vb6_vtBSTR;
+            result.bstrVal = ((BSTR*)data)[off];
+            break;
+        case vb6_sa_bool:
+            result.vt = vb6_vtBoolean;
+            result.boolVal = ((int16_t*)data)[off];
+            break;
+        case vb6_sa_byte:
+            result.vt = vb6_vtInteger; /* VB6 Byte -> Integer promotion */
+            result.iVal = (int16_t)((uint8_t*)data)[off];
+            break;
+        case vb6_sa_variant:
+            result = ((vb6_VARIANT*)data)[off];
+            break;
+        case vb6_sa_ptr:
+            result.vt = vb6_vtLong; /* object pointer as Long */
+            result.lVal = (int32_t)(intptr_t)((void**)data)[off];
+            break;
+        case vb6_sa_currency:
+            result.vt = vb6_vtLong;
+            result.lVal = (int32_t)((int64_t*)data)[off]; /* truncate to Long */
+            break;
+        default:
+            result.vt = vb6_vtEmpty;
+            break;
+    }
+    return result;
+}
+
 /* Variant数组索引: 从持有SafeArray的Variant中取/设元素 */
 vb6_VARIANT vb6_VariantArrayGet(vb6_VARIANT* v, int32_t index) {
     vb6_VARIANT result;
@@ -480,52 +883,59 @@ vb6_VARIANT vb6_VariantArrayGet(vb6_VARIANT* v, int32_t index) {
     if (!v || !(v->vt & vb6_vtArray) || !v->parray) return result;
     vb6_SafeArray1D* arr = v->parray;
     if (index < arr->lBound || index > arr->uBound) return result;
-    int32_t off = index - arr->lBound;
-    switch (arr->elemType) {
-        case vb6_sa_long:
-            result.vt = vb6_vtLong;
-            result.lVal = ((int32_t*)arr->data)[off];
-            break;
-        case vb6_sa_int:
-            result.vt = vb6_vtInteger;
-            result.iVal = ((int16_t*)arr->data)[off];
-            break;
-        case vb6_sa_double:
-            result.vt = vb6_vtDouble;
-            result.dblVal = ((double*)arr->data)[off];
-            break;
-        case vb6_sa_single:
-            result.vt = vb6_vtDouble; /* VB6 Single -> Double promotion */
-            result.dblVal = (double)((float*)arr->data)[off];
-            break;
-        case vb6_sa_bstr:
-            result.vt = vb6_vtBSTR;
-            result.bstrVal = ((BSTR*)arr->data)[off];
-            break;
-        case vb6_sa_bool:
-            result.vt = vb6_vtBoolean;
-            result.boolVal = ((int16_t*)arr->data)[off];
-            break;
-        case vb6_sa_byte:
-            result.vt = vb6_vtInteger; /* VB6 Byte -> Integer promotion */
-            result.iVal = (int16_t)((uint8_t*)arr->data)[off];
-            break;
-        case vb6_sa_variant:
-            result = ((vb6_VARIANT*)arr->data)[off];
-            break;
-        case vb6_sa_ptr:
-            result.vt = vb6_vtLong; /* object pointer as Long */
-            result.lVal = (int32_t)(intptr_t)((void**)arr->data)[off];
-            break;
-        case vb6_sa_currency:
-            result.vt = vb6_vtLong;
-            result.lVal = (int32_t)((int64_t*)arr->data)[off]; /* truncate to Long */
-            break;
-        default:
-            result.vt = vb6_vtEmpty;
-            break;
+    return vb6_VariantElemFromSlotData(arr->data, index - arr->lBound, arr->elemType);
+}
+
+/* 账 #305 §B150: 晚绑定槽的**多维**元素读。形参表 = (槽, 秩数, 秩数个 int32_t 下标)。
+   非数组槽 / 秩数非法交 Empty (与上面一维那一条同形, 越界则由 ND 权威抛 9 —— 那一档
+   与一维不一致的旧口径另记在账里, 本刀不去改既有的一维语义)。 */
+vb6_VARIANT vb6_VariantArrayGetND(vb6_VARIANT* v, int32_t rank, ...) {
+    vb6_VARIANT result;
+    memset(&result, 0, sizeof(result));
+    result.vt = vb6_vtEmpty;
+    if (!v || !(v->vt & vb6_vtArray) || !v->parray || rank < 1 || rank > 16) return result;
+    vb6_SafeArrayND* nd = (vb6_SafeArrayND*)v->parray;
+    int32_t idx[16];
+    va_list ap;
+    va_start(ap, rank);
+    for (int32_t d = 0; d < rank; d++) idx[d] = va_arg(ap, int32_t);
+    va_end(ap);
+    /* 兜底: 槽里其实挂着一枚 1D 描述符 (自家把多维折成一维那一族, 见 §B90 / §B151) ——
+     * 1D 描述符的首字段是魔数 0x5A1D = 23069, 落不进 1..16, 所以这一问就认得出来。
+     * 这种槽改前读的是第一个下标 (VBFlexGridDemo 的 ArrRows(iCol, iRow) 实测就是这个形,
+     * 见 .build/b1274_emit_new.txt 那一行), 所以这里退回**同一枚一维出口**: 修的是真 2-D,
+     * 不把已经在跑的写法换成错误 9。折叠本身是 §B151, 不在本格。 */
+    if (nd->dimCount < 1 || nd->dimCount > 16) return vb6_VariantArrayGet(v, idx[0]);
+    int32_t es = (nd->elemType == vb6_sa_udt) ? nd->elemSize : vb6_SaElemSize(nd->elemType);
+    if (es <= 0 || !nd->data) { vb6_SaNdElemFail(nd, idx, rank); }
+    void* p = vb6_SaNdElemPtr(nd, rank, idx, es);   /* 唯一一枚带上下界检查的 ND 落点 */
+    int32_t off = (int32_t)(((char*)p - (char*)nd->data) / es);
+    return vb6_VariantElemFromSlotData(nd->data, off, nd->elemType);
+}
+
+/* 同上, 写侧: (槽, 秩数, 秩数个 int32_t 下标, 末尾一枚 vb6_VARIANT 值) —— 这个顺序是**故意**
+   与 vb6_VariantArraySet(v, index, val) 同形, 发码侧那两处「Get 改 Set」的改写只换函数名、
+   把装箱后的值追加在末尾, 不必再拼一次参数。 */
+void vb6_VariantArraySetND(vb6_VARIANT* v, int32_t rank, ...) {
+    if (!v || !(v->vt & vb6_vtArray) || !v->parray || rank < 1 || rank > 16) return;
+    vb6_SafeArrayND* nd = (vb6_SafeArrayND*)v->parray;
+    if (nd->elemType != vb6_sa_variant) return;   /* 与一维那条同口径: 只有 Variant 数组可写 */
+    int32_t idx[16];
+    va_list ap;
+    va_start(ap, rank);
+    for (int32_t d = 0; d < rank; d++) idx[d] = va_arg(ap, int32_t);
+    vb6_VARIANT val = va_arg(ap, vb6_VARIANT);
+    va_end(ap);
+    if (nd->dimCount < 1 || nd->dimCount > 16) {
+        /* 同一枚兜底: 一维描述符按第一个下标写回, 与改前一维那条形 */
+        vb6_VariantArraySet(v, idx[0], val);
+        return;
     }
-    return result;
+    int32_t es = vb6_SaElemSize(nd->elemType);
+    if (es <= 0 || !nd->data) { vb6_SaNdElemFail(nd, idx, rank); }
+    vb6_VARIANT* slot = (vb6_VARIANT*)vb6_SaNdElemPtr(nd, rank, idx, es);
+    /* 接管语义 (rev16 那一课): Clear + 浅拷贝会让槽与借来的 Variant 共用同一只 BSTR。 */
+    vb6_VariantAssign(slot, val);
 }
 
 void vb6_VariantArraySet(vb6_VARIANT* v, int32_t index, vb6_VARIANT val) {
@@ -885,7 +1295,7 @@ void vb6_SavePicture(void* hBitmap, BSTR filename) {
 // czUI fix: 环境字体必须有有效 Name — Bag 重放路径 ReadProperty("Font",
 // Ambient.Font) 会把此对象设为控件字体; Name=NULL 时 GdipCreateFontFamily
 // 失败 → 所有 GDI+ 文字静默消失 (Charts2020 图表标题/百分比实测)
-vb6_ComIface_Font g_vb6_UserControl_FontObj = { NULL, 8.25f, 0, 0, 0, 0, 400, 0 };
+vb6_ComIface_Font vb6_UserControl_FontObj = { NULL, 8.25f, 0, 0, 0, 0, 400, 0 };
 
 // --- UserControl host state ---
 int32_t vb6_UserControl_ScaleWidth  = 0;
@@ -900,16 +1310,17 @@ int32_t vb6_UserControl_OLEDropMode = 0;
 // Fix 154-B: UserControl 其余宿主属性定义 (设计期/宿主状态, 初值随意).
 void*   vb6_UserControl_Picture = NULL;
 int32_t vb6_UserControl_BackColor = 0;
+int32_t vb6_UserControl_BackStyle = 1;   // Fix 255: VB6 的 BackStyle 缺省 Opaque (1)
 int32_t vb6_UserControl_ForeColor = 0;
 int16_t vb6_UserControl_RightToLeft = 0;
 void*   vb6_UserControl_ParentControls = NULL;
 void*   vb6_UserControl_Controls = NULL;
 void*   vb6_Screen_MouseIcon = NULL;       // Fix <vbeclipse>: Screen.MouseIcon 槽   // Fix <vbeclipse>: UserControl.Controls (集合未建模, 恒 NULL)
-vb6_ComIface_Font* vb6_UserControl_Font = &g_vb6_UserControl_FontObj;
-struct vb6_UserControl_Ambient_Type vb6_UserControl_Ambient = { &g_vb6_UserControl_FontObj };
+vb6_ComIface_Font* vb6_UserControl_Font = &vb6_UserControl_FontObj;
+struct vb6_UserControl_Ambient_Type vb6_UserControl_Ambient = { &vb6_UserControl_FontObj };
 
 // --- Ambient host environment ---
-vb6_ComIface_Font* vb6_Ambient_Font = &g_vb6_UserControl_FontObj;
+vb6_ComIface_Font* vb6_Ambient_Font = &vb6_UserControl_FontObj;
 int16_t vb6_Ambient_UserMode   = -1;         // compiled output is runtime
 BSTR    vb6_Ambient_DisplayName = NULL;     // set to control instance name at runtime
 int32_t vb6_Ambient_ForeColor  = 0;          // black
@@ -943,8 +1354,25 @@ int32_t vb6_Extender_WhatsThisHelpID = 0;
 void*   vb6_Extender_Container = NULL;
 void*   vb6_Extender_DragIcon = NULL;
 
+// --- Fix 214: 宿主伪对象其余成员 (ComCtlsDemo / ComCtls 控件组) ---
+// 声明在 vb6rtl_userctl.h。设计期/运行期都由控件自己的属性过程收发 (见那头部的注释),
+// 初值取 VB6 默认: Appearance=0 (Flat), DrawStyle=0 (vbSolid),
+// AccessKeys/DisplayAsDefault/Default/Cancel 空或 0。
+int32_t vb6_UserControl_Appearance   = 0;
+int32_t vb6_UserControl_DrawStyle    = 0;
+BSTR    vb6_UserControl_AccessKeys   = NULL;
+int16_t vb6_Ambient_DisplayAsDefault = 0;
+int16_t vb6_Extender_vb6_Default = 0;
+int16_t vb6_Extender_Cancel  = 0;
+
 // --- Fix 133u: Extender.Visible/Height (czUI.ctl) ---
-struct vb6_UserControl_Extender_Type vb6_UserControl_Extender = { -1, 0 };
+// Fix 221: 第三格 DataChanged (ComCtlsDemo 的 `UserControl.Extender.DataChanged = True`,
+// 32 处). 运行期容器不活动 ⇒ 只写不读, 保留可写字段。
+struct vb6_UserControl_Extender_Type vb6_UserControl_Extender = { -1, 0, 0 };
+
+// Fix 221: UserControl.EventsFrozen —— .ctl 里只出现在读位置 (见 vb6rtl_userctl.h
+// 的注释), VB6 运行期恒 False ⇒ 恒 0 的槽位就是正确值。
+int16_t vb6_UserControl_EventsFrozen = 0;
 
 // --- Fix 133u: UserControl.hWnd / AutoRedraw (czUI.ctl) ---
 void*   vb6_UserControl_hWnd = NULL;
@@ -1117,11 +1545,13 @@ double vb6_ScaleUnitY(double y, int32_t fromScale, int32_t toScale) {
     return (f == 0.0) ? y : (px / f);
 }
 
-double vb6_UserControl_ScaleX(double x, int32_t fromScale, int32_t toScale) {
+// Fix 224: 这两个名字在 vb6rtl_userctl.h 里已交 `_Generic` 宏按首参类型分派 (VB6 的
+// Variant 隐式数值转换), 故**定义必须挂 _Raw** —— 否则宏会把这里的定义整形成乱语。
+double vb6_UserControl_ScaleXRaw(double x, int32_t fromScale, int32_t toScale) {
     return vb6_ScaleUnitX(x, fromScale, toScale);
 }
 
-double vb6_UserControl_ScaleY(double y, int32_t fromScale, int32_t toScale) {
+double vb6_UserControl_ScaleYRaw(double y, int32_t fromScale, int32_t toScale) {
     return vb6_ScaleUnitY(y, fromScale, toScale);
 }
 
@@ -1159,6 +1589,13 @@ void vb6_Extender_Drag(vb6_VARIANT* Action, int _has_Action) {
 }
 
 void vb6_Extender_SetFocus(void) {
+    if (vb6_UserControl_hWnd) SetFocus((HWND)vb6_UserControl_hWnd);
+}
+
+// 族4a: UserControl.SetFocus —— 与 vb6_Extender_SetFocus 同形 (ComCtls ListView.ctl 的
+// FColumnHeaderEditFilter 经 `vb6_UserControl_SetFocus()` 把焦点交还宿主 UserControl)。
+// 旧日志装饰名 _vb6_UserControl_SetFocus@0 印证 0 实参。
+void vb6_UserControl_SetFocus(void) {
     if (vb6_UserControl_hWnd) SetFocus((HWND)vb6_UserControl_hWnd);
 }
 

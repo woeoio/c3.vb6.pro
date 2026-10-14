@@ -297,13 +297,38 @@ Token Lexer::scanToken() {
     }
 
     // 运算符和分隔符
+    // C3 扩展 (ai/032): 复合赋值族 (`+=` `-=` …) 与移位族 (`<<` `>>` `<<=` `>>=`)。
+    // 都是「符号 + 紧跟 =」的形状, 在各自分支里先看 `=` 再看单符号即可。
+    // 存量 VB6 源码里这些相邻组合都不是合法记号 (`a + = b` 本来也解析不过), 所以
+    // 整族是纯加法 —— 唯一需要留神的是 `&` (Long 类型后缀), 它的判据在
+    // scanIdentifierOrKeyword 的类型后缀那一步: `x& = 5` 的 `&` 在那里就被并进
+    // 标识符了, 根本到不了这里; 只有 `x &= 5` 这种 `&` 前有空白的写法才会落到
+    // scanOperator, 于是「复合赋值要带空白、`x&=5` 仍是 Long 后缀」成为一条可预测的规则。
     switch (c) {
-        case '+': advance(); return makeToken(TokenKind::Plus, "+", startLine, startCol);
-        case '-': advance(); return makeToken(TokenKind::Minus, "-", startLine, startCol);
-        case '*': advance(); return makeToken(TokenKind::Star, "*", startLine, startCol);
-        case '/': advance(); return makeToken(TokenKind::Slash, "/", startLine, startCol);
-        case '\\': advance(); return makeToken(TokenKind::BackSlash, "\\", startLine, startCol);
-        case '^': advance(); return makeToken(TokenKind::Caret, "^", startLine, startCol);
+        case '+':
+            advance();
+            if (match('=')) return makeToken(TokenKind::PlusEq, "+=", startLine, startCol);
+            return makeToken(TokenKind::Plus, "+", startLine, startCol);
+        case '-':
+            advance();
+            if (match('=')) return makeToken(TokenKind::MinusEq, "-=", startLine, startCol);
+            return makeToken(TokenKind::Minus, "-", startLine, startCol);
+        case '*':
+            advance();
+            if (match('=')) return makeToken(TokenKind::StarEq, "*=", startLine, startCol);
+            return makeToken(TokenKind::Star, "*", startLine, startCol);
+        case '/':
+            advance();
+            if (match('=')) return makeToken(TokenKind::SlashEq, "/=", startLine, startCol);
+            return makeToken(TokenKind::Slash, "/", startLine, startCol);
+        case '\\':
+            advance();
+            if (match('=')) return makeToken(TokenKind::BackSlashEq, "\\=", startLine, startCol);
+            return makeToken(TokenKind::BackSlash, "\\", startLine, startCol);
+        case '^':
+            advance();
+            if (match('=')) return makeToken(TokenKind::CaretEq, "^=", startLine, startCol);
+            return makeToken(TokenKind::Caret, "^", startLine, startCol);
         case '(': advance(); return makeToken(TokenKind::LeftParen, "(", startLine, startCol);
         case ')': advance(); return makeToken(TokenKind::RightParen, ")", startLine, startCol);
         case '.': advance(); return makeToken(TokenKind::Dot, ".", startLine, startCol);
@@ -320,11 +345,22 @@ Token Lexer::scanToken() {
         case '=': advance(); return makeToken(TokenKind::Equals, "=", startLine, startCol);
         case '<':
             advance();
+            // C3 扩展 (ai/032): << / <<= 。必须在 <> 与 <= 之前判 —— 三者首字符
+            // 相同, 先看第二个字符是哪个才能定形。
+            if (match('<')) {
+                if (match('=')) return makeToken(TokenKind::ShlEq, "<<=", startLine, startCol);
+                return makeToken(TokenKind::Shl, "<<", startLine, startCol);
+            }
             if (match('>')) return makeToken(TokenKind::NotEquals, "<>", startLine, startCol);
             if (match('=')) return makeToken(TokenKind::LessEqual, "<=", startLine, startCol);
             return makeToken(TokenKind::LessThan, "<", startLine, startCol);
         case '>':
             advance();
+            // C3 扩展 (ai/032): >> / >>= 。同上, 先判第二个字符。
+            if (match('>')) {
+                if (match('=')) return makeToken(TokenKind::ShrEq, ">>=", startLine, startCol);
+                return makeToken(TokenKind::Shr, ">>", startLine, startCol);
+            }
             if (match('=')) return makeToken(TokenKind::GreaterEqual, ">=", startLine, startCol);
             return makeToken(TokenKind::GreaterThan, ">", startLine, startCol);
         case '_':
@@ -374,6 +410,15 @@ Token Lexer::scanIdentifierOrKeyword() {
                 text += advance();
             }
             return makeToken(TokenKind::Comment, text, startLine, startCol);
+        }
+        // C3 扩展 (ai/032): `Mod=` 复合赋值。只在 `Mod` 与 `=` **紧邻**时成立
+        // (`x Mod= 2`)。带空白的 `x Mod = 2` 维持原样 —— 它与 `If x Mod 2 = 0`
+        // 这类比较语法形状太近, 不做空白容忍是刻意的保守选择: 宁可少收一种写法,
+        // 也不要把既有语法判错。
+        if (it->second == TokenKind::Mod &&
+            offset_ < content_.size() && peek() == '=') {
+            advance();
+            return makeToken(TokenKind::ModEq, text + "=", startLine, startCol);
         }
         return makeToken(it->second, text, startLine, startCol);
     }

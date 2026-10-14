@@ -94,6 +94,10 @@ private:
     // 新行处理: VB6 新行是语句分隔符
     // 跳过零或多个 NewLine (同时跳过 Comment)
     void skipNewLines();
+    // 跳过零或多个 NewLine/Colon/LienContinuation 等语句分隔符。
+    // 用于块语句 header 之后: VB6 允许 `Do While x: stmt: Loop` /
+    // `For i=1 To 9: stmt: Next` 这类**单行冒号形式**, 冒号与换行等价。
+    void skipStatementSeparators();
     // 期望至少一个 NewLine (语句终止), 变体: 也接受冒号
     bool expectEndOfStatement();
 
@@ -191,6 +195,8 @@ private:
     // ai/vb-asm-extension-spec: `<Naked>` 角括号过程属性。角括号属性行 (VB6 家族没有这条路)
     // 只承载 Naked 一个名字; 解析后暂存, 由紧随其后的 Sub/Function 声明取走。
     bool pendingNaked_ = false;
+    int pendingPackingAlign_ = 0;  // tB: [PackingAlignment(n)] 前置于 Type/Enum? TBC
+
     bool tryParseAngleAttr();   // 命中并消费 `<Naked>` 返回 true; 否则不动 token 流
 
     // 单行语句
@@ -284,6 +290,18 @@ private:
 
     // TokenKind → BinaryOp 映射
     BinaryOp tokenToBinaryOp(TokenKind kind) const;
+
+    // ============================================================
+    // 复合赋值 (C3 扩展, ai/032)
+    // ============================================================
+    // `+=` `-=` … `Mod=` 这族记号在词法层就是**独立 TokenKind 且无绑定力**, 所以
+    // 表达式解析器拿到左值后会在它前面自然停住, 由语句层在中缀循环之外处理。
+    bool compoundAssignOp(TokenKind kind, BinaryOp& out) const;
+    // 把 `target op= value` 的**右值**构造成 `target op value`。左值用 ASTCloner 深拷贝
+    // 一份供右值使用 —— 不能共享同一个 Expr 节点: 下游 (属性写回的 cgen_assign_*、
+    // 局部声明推断) 会把"目标"和"值"当两棵独立子树各访问一次, 共享会出双份副作用。
+    // 返回节点类型由调用方决定 (AssignmentStmt / LetStmt), 所以这里只回表达式。
+    ExprPtr buildCompoundAssignValue(const ExprPtr& target, SourceLocation loc, BinaryOp op);
 
     // 判断 token 是否是中缀运算符
     bool isInfixOperator(TokenKind kind) const;

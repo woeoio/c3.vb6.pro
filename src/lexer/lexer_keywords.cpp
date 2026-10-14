@@ -21,6 +21,11 @@ void Lexer::initKeywords() {
 
         {"select", TokenKind::Select}, {"case", TokenKind::Case},
         {"is", TokenKind::IsKeyword},
+        // IsNot (C3 扩展, ai/032): 硬关键字。与 `is` 同一个词法家族 —— VB 标识符
+        // 不看大小写, 所以 `isnot` 一旦登记, `obj IsNot Nothing` 里的 `IsNot` 才
+        // 会成为一个 token 而不是普通标识符 (否则表达式解析在 `obj` 后即停住,
+        // 后面 `IsNot Nothing` 变成语法错)。
+        {"isnot", TokenKind::IsNot},
 
         {"with", TokenKind::With},
         // ai/vb-asm-extension-spec: Asm 块起始 (End Asm 由 End + Asm 组合解析)
@@ -70,6 +75,9 @@ void Lexer::initKeywords() {
         {"date", TokenKind::Date}, {"object", TokenKind::Object},
         {"string", TokenKind::String}, {"variant", TokenKind::Variant},
         {"any", TokenKind::Any},
+        // 无符号/小整型族 (C3 扩展, ai/032): 位宽对照 Integer/Long/LongLong
+        {"sbyte", TokenKind::SByte}, {"uinteger", TokenKind::UInteger},
+        {"ulong", TokenKind::ULong}, {"ulonglong", TokenKind::ULongLong},
 
         {"defbool", TokenKind::DefBool}, {"defbyte", TokenKind::DefByte},
         {"defint", TokenKind::DefInt}, {"deflng", TokenKind::DefLng},

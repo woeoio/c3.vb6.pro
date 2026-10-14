@@ -33,7 +33,7 @@ void vb6_Form_SetDispatch(void* hwnd, void* pDispatch) {
 
 /* Fix <vbeclipse> 2026-10-06: 运行期 Controls.Add 免注册 OCX 表 (vbp Object= 同款机制).
  * cgen 在入口点烘焙 c3_ocx_libs[], 由 vb6_OcxRefRegister 登记。vb6_Form_ControlsAdd
- * 按 ProgID 命中后改走 ocxCreateAny (LoadLibrary+DllGetClassObject, 绕开注册表);
+ * 按 ProgID 命中后改走 vb6_ocxCreateAny (LoadLibrary+DllGetClassObject, 绕开注册表);
  * 未命中 → 原有 CLSIDFromProgID+CoCreateInstance 注册表路径 (零回归: 表空时恒回退). */
 static Vb6OcxRef g_ocxRefs[VB6_MAX_OCXREFS];
 static int       g_ocxRefCount = 0;
@@ -87,7 +87,7 @@ void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctr
     int ocxTrace = (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0);
 
     /* 0. 免注册表优先 (按 ProgID 查, 不依赖注册表).
-     *    命中 → 用表里记录的 coclass CLSID + 相对 exe 路径走 ocxCreateAny,
+     *    命中 → 用表里记录的 coclass CLSID + 相对 exe 路径走 vb6_ocxCreateAny,
      *    完全绕开 HKLM 注册表 —— CI runner 未注册 OCX 也能实例化. */
     const Vb6OcxRef* hit = vb6_OcxRefLookup(progId, NULL);
     if (!hit) {
@@ -106,7 +106,7 @@ void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctr
     if (hit && hit->clsidStr && hit->fileName) {
         CLSID c;
         if (SUCCEEDED(CLSIDFromString((LPOLESTR)hit->clsidStr, &c))) {
-            hr = ocxCreateAny(hit->fileName, &c, (void**)&pUnk);
+            hr = vb6_ocxCreateAny(hit->fileName, &c, (void**)&pUnk);
             if (ocxTrace)
                 fwprintf(stderr,
                          L"[C3_OCX] Controls.Add regfree hit progId=%ls ocx=%ls hr=0x%08lX pUnk=%p\n",
@@ -114,7 +114,7 @@ void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctr
         }
     }
 
-    /* 1. 注册表兜底 (原有路径): 表未命中 / ocxCreateAny 失败 (OCX 不在 exe 旁). */
+    /* 1. 注册表兜底 (原有路径): 表未命中 / vb6_ocxCreateAny 失败 (OCX 不在 exe 旁). */
     if (!pUnk) {
         CLSID clsid;
         hr = CLSIDFromProgID(progId, &clsid);
@@ -179,8 +179,8 @@ void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctr
     pOleObj->lpVtbl->SetClientSite(pOleObj, (IOleClientSite*)&site->lpVtblClientSite);
 
     /* 7. 初始 extent = 窗体客户区 (HIMETRIC; px→twips→HM, 与设计期同一换算) */
-    SIZEL sz = { twipsToHimetric((rcClient.right - rcClient.left) * 15),
-                 twipsToHimetric((rcClient.bottom - rcClient.top) * 15) };
+    SIZEL sz = { vb6_twipsToHimetric((rcClient.right - rcClient.left) * 15),
+                 vb6_twipsToHimetric((rcClient.bottom - rcClient.top) * 15) };
     pOleObj->lpVtbl->SetExtent(pOleObj, DVASPECT_CONTENT, &sz);
 
     /* 8. 原地激活 (与设计期同口径: 只 INPLACEACTIVATE, UIACTIVATE 需要完整的
@@ -206,13 +206,13 @@ void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctr
     IOleInPlaceObjectWindowless* pIPOW = NULL;
     if (SUCCEEDED(pDisp->lpVtbl->QueryInterface(pDisp, &IID_IOleInPlaceObjectWindowless,
                                                 (void**)&pIPOW)) && pIPOW) {
-        for (int i = g_axSiteCount - 1; i >= 0; i--) {
+        for (int i = vb6_axSiteCount - 1; i >= 0; i--) {
             if (g_axSites[i] == site) { g_axSites[i]->pInPlaceObj = pIPOW; break; }
         }
     }
     IViewObject* pView = NULL;
     if (SUCCEEDED(pDisp->lpVtbl->QueryInterface(pDisp, &IID_IViewObject, (void**)&pView)) && pView) {
-        for (int i = g_axSiteCount - 1; i >= 0; i--) {
+        for (int i = vb6_axSiteCount - 1; i >= 0; i--) {
             if (g_axSites[i] == site) { g_axSites[i]->pViewObj = pView; break; }
         }
     }
@@ -230,7 +230,7 @@ void* vb6_Form_ControlsAdd(void* hwnd, const wchar_t* progId, const wchar_t* ctr
 int32_t vb6_OcxHost_ForwardMessage(void* hwndForm, unsigned int msg, uintptr_t wp,
                                    intptr_t lp, intptr_t* plResult) {
     int handled = 0;
-    for (int i = 0; i < g_axSiteCount; i++) {
+    for (int i = 0; i < vb6_axSiteCount; i++) {
         Vb6AxSite* s = g_axSites[i];
         if (!s || s->hwndForm != (HWND)hwndForm || !s->pInPlaceObj) continue;
         IOleInPlaceObjectWindowless* p = (IOleInPlaceObjectWindowless*)s->pInPlaceObj;
@@ -246,7 +246,7 @@ int32_t vb6_OcxHost_ForwardMessage(void* hwndForm, unsigned int msg, uintptr_t w
 
 /* 主动让该窗体上的无窗口控件重绘 (窗体首次呈现 / 尺寸变化后) */
 void vb6_OcxHost_InvalidateAll(void* hwndForm) {
-    for (int i = 0; i < g_axSiteCount; i++) {
+    for (int i = 0; i < vb6_axSiteCount; i++) {
         Vb6AxSite* s = g_axSites[i];
         if (!s || s->hwndForm != (HWND)hwndForm) continue;
         InvalidateRect(s->hwndForm, &s->rcCtrl, TRUE);
@@ -261,7 +261,7 @@ void vb6_OcxHost_InvalidateAll(void* hwndForm) {
 void vb6_OcxHost_PaintAll(void* hwndForm, void* hdc) {
     HDC dc = (HDC)hdc;
     if (!dc) return;
-    for (int i = 0; i < g_axSiteCount; i++) {
+    for (int i = 0; i < vb6_axSiteCount; i++) {
         Vb6AxSite* s = g_axSites[i];
         if (!s || s->hwndForm != (HWND)hwndForm || !s->pViewObj) continue;
         /* 只画真正的无窗口控件! 有自己窗口的控件 (VB6 UserControl 绝大多数是
@@ -305,7 +305,7 @@ void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t*
         for (int ci = 0; ci < nCand && !pUnk; ci++) {
             CLSID c;
             if (FAILED(CLSIDFromString((LPOLESTR)cand[ci], &c))) continue;
-            hr = ocxCreateAny(ocxPath, &c, (void**)&pUnk);
+            hr = vb6_ocxCreateAny(ocxPath, &c, (void**)&pUnk);
             if ((FAILED(hr) || !pUnk) && nCand > 1 && ci + 1 < nCand) {
                 /* 第一个候选失败 → 试下一个 */
                 if (ocxTrace) fprintf(stderr, "[C3_OCX]   clsid[%d] failed hr=0x%08lX, trying next\n",
@@ -360,7 +360,7 @@ void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t*
             if (ocxTrace) fprintf(stderr, "[C3_OCX]   SetClientSite done\n");
         }
         /* 4. 设计期大小 (HIMETRIC) */
-        SIZEL sz = { twipsToHimetric(w * 15), twipsToHimetric(h * 15) };
+        SIZEL sz = { vb6_twipsToHimetric(w * 15), vb6_twipsToHimetric(h * 15) };
         pOleObj->lpVtbl->SetExtent(pOleObj, DVASPECT_CONTENT, &sz);
         if (ocxTrace) fprintf(stderr, "[C3_OCX]   SetExtent done\n");
 
@@ -445,7 +445,7 @@ void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t*
                                                     (void**)&pIPOW)) && pIPOW) {
             /* 找一个属于本窗体的 site 记录 (site 在步骤 3 创建, 用 QI 反查不可靠,
              * 故这里按 hwndForm 从登记表里找最新一条) */
-            for (int i = g_axSiteCount - 1; i >= 0; i--) {
+            for (int i = vb6_axSiteCount - 1; i >= 0; i--) {
                 if (g_axSites[i] && g_axSites[i]->hwndForm == (HWND)hwndForm) {
                     g_axSites[i]->pInPlaceObj = pIPOW;
                     break;
@@ -461,7 +461,7 @@ void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t*
     {
         IViewObject* pView = NULL;
         if (SUCCEEDED(pDisp->lpVtbl->QueryInterface(pDisp, &IID_IViewObject, (void**)&pView)) && pView) {
-            for (int i = g_axSiteCount - 1; i >= 0; i--) {
+            for (int i = vb6_axSiteCount - 1; i >= 0; i--) {
                 if (g_axSites[i] && g_axSites[i]->hwndForm == (HWND)hwndForm) {
                     g_axSites[i]->pViewObj = pView;
                     break;

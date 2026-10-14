@@ -31,7 +31,7 @@ Option Explicit
 Private Const FR_PRIVATE           As Long = &H10
 Private Const FR_NOT_ENUM          As Long = &H20
 
-Private Declare Function VarPtrArray Lib "msvbvm60.dll" Alias "VarPtr" (Ptr() As Any) As Long
+Private Declare Function VarPtrArray Lib "msvbvm60.dll" Alias "VarPtr" (Ptr() As Any) As LongPtr
 Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
 Private Declare Function TlsGetValue Lib "kernel32.dll" (ByVal dwTlsIndex As Long) As Long
 Private Declare Function TlsSetValue Lib "kernel32.dll" (ByVal dwTlsIndex As Long, ByVal lpTlsValue As Long) As Long
@@ -183,7 +183,7 @@ End Sub
 '==================================================================================
 '////////////////////////////      HELPER FUNCTIONS      \\\\\\\\\\\\\\\\\\\\\\\\\\
 '==================================================================================
-Private Function IsArrayDim(ByVal lpArray As Long) As Boolean
+Private Function IsArrayDim(ByVal lpArray As LongPtr) As Boolean
     Dim lAddress    As Long
     
     Call CopyMemory(lAddress, ByVal lpArray, &H4)

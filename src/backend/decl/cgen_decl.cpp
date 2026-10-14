@@ -476,7 +476,10 @@ void CCodeGen::visit(TypeDecl& node) {
     // 泛型模板 (tB, G2): 模板本体不发码 (特化副本由泛型器注入, 是普通 TypeDecl)
     if (!node.typeParams.empty()) return;
     std::string typeName = cIdent(node.name);
-
+    bool hasPack = (node.packingAlignment > 0);
+    if (hasPack) {
+        h_.emitLine("#pragma pack(push, " + std::to_string(node.packingAlignment) + ")");
+    }
     // Fix 010b: 多个VB6模块可能定义同名UDT (如SYSTEMTIME, FILETIME), 用#ifndef防止C2011重定义
     std::string guardName = "VB6_TYPE_" + typeName + "_DEFINED";
     h_.emitLine("#ifndef " + guardName);
@@ -487,18 +490,43 @@ void CCodeGen::visit(TypeDecl& node) {
     for (auto& member : node.members) {
         std::string memType = mapTypeRef(member->type.get());
         std::string memName = cIdent(member->name);
+        // 账 #118: 定长串字段 (`f As String * 8`) 的长度登记 —— 结构体这边只发
+        // `BSTR f;`, 长度不进符号表 (语义层把 FixedStringTypeRef 折成 Vb6Type::String,
+        // typeRefName 为空), 于是 `r.f = "ef"` 与 `Len(r.f)` 都无从知道该收口到 8。
+        // 在这里按**声明**留一份 (键 = 结构体的 C 类型名), 供 fixedStrLenOfExpr 查。
+        // 注意 emitExpr 会覆写 lastExpr_, 故先取长度再发字段行 (下面 mapTypeRef 已算完)。
+        if (member->type && member->type->kind == ASTNodeKind::FixedStringTypeRef) {
+            auto& fsField = static_cast<FixedStringTypeRef&>(*member->type);
+            emitExpr(*fsField.length);
+            if (!lastExpr_.empty())
+                udtFixedStrFieldLen_["vb6_type_" + typeName][Symbol::toLower(member->name)] = lastExpr_;
+        }
         // P15.2: 固定大小数组成员 (如 Buf(0 To 255) As Byte)
         if (member->arraySize) {
             // Fix 010d: 优先用常量折叠将数组维度求值为字面量
             // Private Const 只发射到.c, 不在.h中, 跨模块#include时会变成未声明标识符(C2065/C2057/C2229)
             // tryEvalConstInt覆盖: LiteralExpr, UnaryExpr, BinaryExpr(算术/位运算), IdentifierExpr(跨模块Const/EnumMember)
+            // 账 #262: 每一维都走同一条折叠出口，所以 `M(0 To 4, 0 To 4)` 发得出
+            // `float M[5][5]` —— 100 字节连片，正是 GDI+ ColorMatrix 要的那个形状
+            // (以前只发得出第一维，第二维整个不见)。折不动的维沿用旧形 `(expr) + 1`。
+            // 下界与第一维同口径: 只留语法、折算按 0..upper (声明 1 To 4 会多空一格)。
             int64_t arrVal;
+            std::string brackets;
             if (tryEvalConstInt(member->arraySize.get(), arrVal)) {
-                h_.emitLine(memType + " " + memName + "[" + std::to_string(arrVal + 1) + "];");
+                brackets = "[" + std::to_string(arrVal + 1) + "]";
             } else {
                 emitExpr(*member->arraySize);
-                h_.emitLine(memType + " " + memName + "[(" + lastExpr_ + ") + 1];");
+                brackets = "[(" + lastExpr_ + ") + 1]";
             }
+            for (auto& md : member->moreDims) {
+                if (tryEvalConstInt(md.upper.get(), arrVal)) {
+                    brackets += "[" + std::to_string(arrVal + 1) + "]";
+                } else {
+                    emitExpr(*md.upper);
+                    brackets += "[(" + lastExpr_ + ") + 1]";
+                }
+            }
+            h_.emitLine(memType + " " + memName + brackets + ";");
         } else if (member->isArrayDynamic) {
             // Fix 037 Pattern B: 动态数组成员 (`Data() As Byte`) emit `vb6_SafeArray1D* Member;`
             // 之前 bug: arraySize==nullptr 与无括号成员无法区分, emit `uint8_t Data;` (单标量字段),
@@ -512,6 +540,9 @@ void CCodeGen::visit(TypeDecl& node) {
     h_.dedent();
     h_.emitLine("} vb6_type_" + typeName + ";");
     h_.emitLine("#endif");
+    if (hasPack) {
+        h_.emitLine("#pragma pack(pop)");
+    }
     h_.emitBlank();
 }
 

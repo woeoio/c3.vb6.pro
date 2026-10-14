@@ -37,6 +37,10 @@ enum class TokenKind : uint16_t {
     BackSlash,      // \ 整除
     Mod,            // Mod
     Caret,          // ^ 幂
+    // 移位 (C3 扩展, ai/032): VB.NET 语法的 << / >>。VB6 只有 integer 运算没有移位
+    // 运算符, 所以这两个记号的引入是纯加法 —— 存量源码里 `<` 后紧跟 `<` 不成词。
+    Shl,            // <<
+    Shr,            // >>
     // 字符串连接
     Ampersand,      // &
     // 赋值/比较
@@ -55,6 +59,9 @@ enum class TokenKind : uint16_t {
     Imp,
     // 对象比较
     Is,
+    IsNot,          // IsNot (C3 扩展, ai/032): VB.NET 语法。**不登记绑定力之外的东西**——
+                    // 解析期脱糖成 `Not (a Is b)`, 发码层完全不必知道它存在。
+                    // 语义上不能用 `a <> b` 代替: Is 是**引用**比较, <> 会走 Variant 值比较。
     Like,
     // 特殊运算符
     AddressOf,      // AddressOf
@@ -75,6 +82,22 @@ enum class TokenKind : uint16_t {
     AtSign,         // @  (Currency类型后缀)
     Dollar,         // $  (String类型后缀)
     Assign,         // := (命名参数)
+
+    // 复合赋值 (C3 扩展, ai/032): VB.NET 语法。
+    // 关键设计: 它们是**独立 TokenKind 且不登记任何绑定力** —— 于是 Pratt 的
+    // 中缀循环在拿到 {0,0} 时自然停住 (parser_expr.cpp:42/50 两处判据), 左值
+    // 表达式完整地解析出来交回语句层, 由 parser_stmt_assign.cpp 脱糖。
+    // 若改在表达式层当二元算符处理, `x += 1` 会被吃掉成 `x + (= 1)` 而报错。
+    PlusEq,         // +=
+    MinusEq,        // -=
+    StarEq,         // *=
+    SlashEq,        // /=
+    BackSlashEq,    // \=
+    CaretEq,        // ^=
+    AmpEq,          // &=
+    ShlEq,          // <<=
+    ShrEq,          // >>=
+    ModEq,          // Mod=
 
     // === 块结构关键字 ===
     If,
@@ -167,6 +190,14 @@ enum class TokenKind : uint16_t {
     Long,
     LongLong,        // 64-bit (VB7+)
     LongPtr,         // 平台相关指针 (VB7+)
+    // 无符号/小整型族 (C3 扩展, ai/032)。位宽**对齐 C3 自己的类型阶梯**
+    // (Integer=16 / Long=32 / LongLong=64), 而不是 VB.NET 的 (UInteger=32) ——
+    // 这样 `U<x>` 恒等于「<x> 的无符号版」, 不用查表记第二套宽度。
+    // Byte(8 位无符号) 本来就有, 所以无符号族只缺 16/32/64 三档。
+    SByte,           // 8-bit signed (VB.NET 语法)
+    UInteger,        // 16-bit unsigned (对照 Integer=16)
+    ULong,           // 32-bit unsigned (对照 Long=32)
+    ULongLong,       // 64-bit unsigned (对照 LongLong=64)
     Single,
     Double,
     Currency,

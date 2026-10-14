@@ -2,8 +2,8 @@
 #
 # 触发: .github/workflows/ci_t0.yml 的 t1 job (needs: t0, 复用 T0 构建的 C3.exe artifact)
 # 内容两段:
-#   1. bas 类 33 个: 编译 + 运行 + 输出断言; x64/x86 双架构 (31 个双跑 + 2 个原生 x86
-#      专用项 = 64 任务; -Jobs 并行, PS7 ForEach-Object -Parallel, -RunTimeoutSec 超时)
+#   1. bas 类 34 个: 编译 + 运行 + 输出断言; x64/x86 双架构 (32 个双跑 + 2 个原生 x86
+#      专用项 = 66 任务; -Jobs 并行, PS7 ForEach-Object -Parallel, -RunTimeoutSec 超时)
 #   2. compile 类 10 个: 只编译不运行 (comprehensive x2 + 8 个窗体 .frm)
 # 与 tests\run_tests.ps1 的关系: 用例 2026-09-20 cp 自 tests\ (复制而非引用) ——
 #   方向是 tests_github 自包含、后续废弃 tests\; 因此本脚本自带清单与引擎,
@@ -14,7 +14,7 @@
 #       [-Shard K -ShardTotal M]
 #   -Jobs 1 (默认) = 今天的执行路径 (输出不变); >1 时 bas 用例在**本 runner 内**并行 (每 worker
 #   独立输出目录)。-Shard/-ShardTotal (默认 0/1 = 不分片) 供 CI 把 bas 切给**多 runner** 并行,
-#   compile 段与冒烟一样只由 shard 1 跑。清单守卫始终对完整 33/64 校验, 再切执行集。
+#   compile 段与冒烟一样只由 shard 1 跑。清单守卫始终对完整 34/66 校验, 再切执行集。
 
 param(
     [string]$C3Path = "",
@@ -81,7 +81,7 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # ============================================================
-# 段 1: bas 类 33 个 (编译+运行+输出断言, -Jobs 并行)
+# 段 1: bas 类 34 个 (编译+运行+输出断言, -Jobs 并行)
 # ============================================================
 Write-Host "--- Bas Tests x64+x86 (parallel, jobs=$Jobs) ---" -ForegroundColor Yellow
 
@@ -127,18 +127,19 @@ Add-BasTest "test_not_com" "test_not_com.bas" @("NOT-COM:OK", "NOT-COM2:OK", "NO
 Add-BasTest "test_err_obj" "test_err_obj.bas" @("ERR-1:OK", "ERR-6:OK", "ERR:6/6")
 Add-BasTest "test_variant_cmp" "test_variant_cmp.bas" @("VC-1:OK", "VC-4:OK", "VC:4/4")
 Add-BasTest "test_com_default_prop" "test_com_default_prop.bas" @("DP-1:OK", "DP-4:OK", "P24-10: 4/4")
+Add-BasTest "test_com_latebound" "test_com_latebound.bas" @("LB-1:OK", "LB-2:OK", "LB-3:OK", "LB-4:OK", "LB-5:OK", "P24-10b: 5/5")
 Add-BasTest "test_com_optional" "test_com_optional.bas" @("OP-1:OK", "OP-4:OK", "P24-11: 4/4")
 Add-BasTest "test_bstr_concat_scalar" "test_bstr_concat_scalar.bas" @("BCS:16/16")
 
-# 清单守卫: 队列数量必须等于 33, 防止清单被误改后静默丢用例
-if ($script:basQueue.Count -ne 33) {
-    Write-Host "[ERROR] bas 清单数量异常: $($script:basQueue.Count) (应为 33)" -ForegroundColor Red
+# 清单守卫: 队列数量必须等于 34, 防止清单被误改后静默丢用例
+if ($script:basQueue.Count -ne 34) {
+    Write-Host "[ERROR] bas 清单数量异常: $($script:basQueue.Count) (应为 34)" -ForegroundColor Red
     exit 1
 }
 
-# === 双架构展开 (2026-09-20 用户决策: VB6 生态以 32 位为主, 33 个用例全量双跑) ===
+# === 双架构展开 (2026-09-20 用户决策: VB6 生态以 32 位为主, 34 个用例全量双跑) ===
 # 31 个用例 x64+x86 各一遍 (x86 任务 Name 加 _x86 后缀); test_earlybound2 / test_not_com
-# 原生只登记 x86, 保持不跑 x64 (该组合从未验证过, 不贸然进门禁) => 31*2 + 2 = 64 任务
+# 原生只登记 x86, 保持不跑 x64 (该组合从未验证过, 不贸然进门禁) => 32*2 + 2 = 66 任务
 $fullQueue = @()
 foreach ($it in $script:basQueue) {
     if ($it.Arch -eq "x86") {
@@ -158,7 +159,7 @@ foreach ($it in $script:basQueue) {
         }
     }
 }
-if ($fullQueue.Count -ne 64) {
+if ($fullQueue.Count -ne 66) {
     Write-Host "[ERROR] 双架构任务数异常: $($fullQueue.Count) (应为 64)" -ForegroundColor Red
     exit 1
 }
@@ -298,7 +299,7 @@ function Invoke-BasSetParallel {
 }
 
 # === 分片 (CI 多 runner 并行): 各 runner 只执行 fullQueue 的第 Shard 片 (按调用次序连续切片) ===
-# 33/64 清单守卫在上面已对**完整**清单跑过, 这里只切"执行集", 每个 runner 仍会先校验清单完整。
+# 34/66 清单守卫在上面已对**完整**清单跑过, 这里只切"执行集", 每个 runner 仍会先校验清单完整。
 # 分片算法见 shard.ps1 (三个脚本共用): ShardTotal<=1 原样返回, >1 按清单次序连续切片
 $fullQueue = @(Select-ShardSlice -Items $fullQueue -Shard $Shard -ShardTotal $ShardTotal -Label "bas")
 
@@ -350,7 +351,7 @@ if (($ShardTotal -gt 1) -and ($Shard -ne 1)) {
 }
 Write-Host ""
 
-# === 汇总 (bas 64 任务 = 33 用例双架构 + compile 10 = 74) ===
+# === 汇总 (bas 66 任务 = 34 用例双架构 + compile 10 = 76) ===
 $total = $script:pass + $script:fail
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  T1 Results: PASS=$($script:pass) FAIL=$($script:fail) TOTAL=$total" -ForegroundColor $(if ($script:fail -gt 0) { "Red" } else { "Green" })

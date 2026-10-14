@@ -4,6 +4,7 @@
 #include <tuple>
 #include <initializer_list>
 #include "semantics/semantic_analyzer_internal.h"
+#include "common/form_pseudo.hpp"  // 账 #278 §B109: 窗体裸写属性问那张表 (与 backend 同一处登记)
 
 namespace vb6c3 {
 
@@ -139,14 +140,24 @@ void SemanticAnalyzer::visit(IdentifierExpr& node) {
         // 放在最前面：Option Explicit 那条 3001 警告同样不该为这两个位出。
         if (pass_ == 2 && namesProjectLevel(node.name)) {
             // 什么都不做 —— 不是变量，也不是未声明标识符；名字的含义由发码层按工程解析。
-        } else if (pass_ == 2 && memberObjCtx_ && isDocumentHostObject(node.name)) {
+        } else if (pass_ == 2 && isDocumentHostObject(node.name, memberObjCtx_)) {
             // 文档隐式对象 (`UserControl.hDC` / `VBA.Len(x)` 那一族的限定符位) —— 判据与
             // 两种后果都写在 SemanticAnalyzer::isDocumentHostObject 的声明处。类型答案仍然
             // 走下面的 Variant：成员的类型由发码层按 kHostPseudoRows 回答 (账 #159)。
+        } else if (pass_ == 2 && isDocumentChannelMember(node.name)) {
+            // 账 #278 §B105: 表里标了 HPF_CHANNEL 的那几行（`Controls` 一族）**两个位都合法**。
+            // 语料三处（Charts 的 ppProgressCircular.pag 两行 + VBFlexGrid.ctl 一行）产物从来是对的
+            // (`vb6_UC_Controls()`)，只有诊断在报噪声 —— 判据与发码同源：都问那张表。
         } else if (pass_ == 2 && !memberObjCtx_ && isDocumentBarePseudoMember(node.name)) {
             // 文档自带的裸写成员 (.pag 的 Changed、.ctl 的 hDC 一族) 不是未声明的名字 ——
             // 判据写在 SemanticAnalyzer::isDocumentBarePseudoMember 的定义处。发码层把这一批
             // 交给 vb6_<对象>_<成员>，这里停的是同一批名字上的 3001 与隐式局部。
+        } else if (pass_ == 2 && !memberObjCtx_ && currentModule_ && currentModule_->isFormModule &&
+                   formPseudoIsBare(node.name)) {
+            // 窗体模块里裸写的窗体属性 (`ScaleWidth` / `WindowState` 那一族, VB6 里等价于 `Me.` 打头)
+            // 不是未声明的名字 —— 判据 = kFormPseudoRows 里"窗体这一档答不答"，与发码侧
+            // `cgen_expr_ident_symbol.inc` 走的是同一张表（账 #278 §B109）。停的是同一批名字上的
+            // 3001 与隐式局部；类型答案仍走下面的 Variant（成员的类型由发码侧按属性读函数回答）。
         } else if (pass_ == 2 && declaredByAncestor(node.name)) {
             diag_.error(DiagnosticID::SemInheritsNotSupported, node.loc,
                 "Inherited member '" + node.name + "' cannot be called unqualified in this build"

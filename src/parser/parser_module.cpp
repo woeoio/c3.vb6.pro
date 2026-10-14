@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <algorithm>
 
 namespace vb6c3 {
 
@@ -138,10 +139,21 @@ void Parser::parseModuleBody(Module& mod) {
         {
             bool sawAttr = false;
             std::vector<InterfaceAttr> pendingAttrs;
+            int pendingAlign = 0;
             while (atBracketAttrLine()) {
                 sawAttr = true;
                 InterfaceAttr attr;
-                if (parseBracketAttrLine(attr)) pendingAttrs.push_back(std::move(attr));
+                if (parseBracketAttrLine(attr)) {
+                    std::string an;
+                    an.resize(attr.name.size());
+                    std::transform(attr.name.begin(), attr.name.end(), an.begin(),
+                                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+                    if (an == "packingalignment" && attr.hasNum) {
+                        pendingAlign = (int)attr.numValue;
+                    } else {
+                        pendingAttrs.push_back(std::move(attr));
+                    }
+                }
                 skipNewLines();
             }
             if (cur_.kind == TokenKind::Interface) {
@@ -156,13 +168,24 @@ void Parser::parseModuleBody(Module& mod) {
                 expectEndOfStatement();
                 continue;
             }
+            // [PackingAlignment(n)] Type ...
+            if (cur_.kind == TokenKind::Type && pendingAlign != 0) {
+                pendingPackingAlign_ = pendingAlign;
+            }
             if (sawAttr) {
                 if (!pendingAttrs.empty()) {
                     diag_.error(DiagnosticID::ParseUnexpectedToken, currentLoc(),
                         "Attribute line must precede an Interface or CoClass declaration");
                     skipToNextLine();
                 }
-                continue;  // 属性行本身已报错并越过该行
+                // 若仅是 PackingAlignment 且后面是 Type, 不继续跳过整行（由下面声明分支处理）
+                if (!(cur_.kind == TokenKind::Type && pendingAlign != 0)) {
+                    // 属性行本身已报错并越过该行? parseBracketAttrLine 跳过行了，需小心
+                }
+                // continue 逻辑：如果不是 Type，continue；如果是 Type，让下面声明分支处理
+                if (!(cur_.kind == TokenKind::Type && pendingAlign != 0)) {
+                    continue;
+                }
             }
         }
 
@@ -196,6 +219,12 @@ void Parser::parseModuleBody(Module& mod) {
                 diag_.error(DiagnosticID::ParseUnknownAttribute, currentLoc(),
                             "<Naked> 只能修饰 Sub/Function");
                 pendingNaked_ = false;
+            }
+            if (pendingPackingAlign_ != 0) {
+                // 如果是 Type，parseDeclaration 应该已把它读走；否则清掉（避免泄漏）
+                if (!decl || decl->kind != ASTNodeKind::TypeDecl) {
+                    pendingPackingAlign_ = 0;
+                }
             }
             if (decl) {
                 // 逗号分隔的多变量声明展开为独立声明

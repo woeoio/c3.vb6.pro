@@ -112,7 +112,7 @@ static const wchar_t* kColumnHeaderNames[] = {
 // C29-4: StatusBar 的 Panel (事件参数)。数据面照 vb6forms_statusbar.c 的 getter/setter。
 static const wchar_t* kPanelNames[] = {
     L"Key", L"Index", L"Text", L"Width", L"MinWidth", L"AutoSize", L"Style",
-    L"ToolTipText", NULL };
+    L"ToolTipText", L"Left", NULL };   // Left = 账 #206 第二格补的那一枚 (DISPID 9)
 // C29-8b: TreeView 的 Node。名字表顺序即 DISPID (下标 + 1)。
 // 只登记扁平层真做得动的成员: Bold / Sorted / RelativeX / Node.Style 一律不放,
 // 放进去就是「看着支持、实则答错」 (与 ListView 那族同一取舍)。
@@ -155,6 +155,7 @@ static const wchar_t* kRsFieldNames[] = {
 #define VB6_MEMD_AUTOSIZE   6
 #define VB6_MEMD_STYLE      7
 #define VB6_MEMD_TOOLTIP    8
+#define VB6_MEMD_PANEL_LEFT 9   // Panel.Left —— 排版后的左界 (缇), 与 Width 同源
 // Node (kNodeNames 顺序; Key/Index/Text 沿用上面同号的定义)
 #define VB6_MEMD_NODE_TAG       4
 #define VB6_MEMD_NODE_CHECKED   5
@@ -261,6 +262,7 @@ static int32_t memVariantToI4(VARIANT* v) {
     case VT_I2: return (int32_t)v->iVal;
     case VT_UI1: return (int32_t)v->bVal;
     case VT_I8: return (int32_t)v->llVal;
+    case VT_UI8: return (int32_t)v->ullVal;   /* ai/032 §6.6: 无符号 64 位档同格 */
     case VT_BOOL: return (v->boolVal == VARIANT_TRUE) ? -1 : 0;
     case VT_R8: return (int32_t)v->dblVal;
     case VT_R4: return (int32_t)v->fltVal;
@@ -496,7 +498,11 @@ static HRESULT memInvokePanel(Vb6MemObj* p, int dispid, VARIANT* out) {
         memSetStr(out, (const wchar_t*)vb6_StatusBar_GetPanelKey(p->owner, p->index));
         return S_OK;
     case VB6_MEMD_INDEX:
-        memSetI4(out, p->index);
+        // 账 #299: 以前这里是 inline 交 `p->index` —— 同一个事实的**第三份答案**
+        // (另两份: 发码侧 recognizer 的 `vb6_StatusBar_GetPanelIndex`, 与存储层的
+        // `SbAt`)。改成问那唯一一枚 getter: 面板已被 Remove 时它答 0, 而 inline 那
+        // 一份会照样交出旧下标。
+        memSetI4(out, vb6_StatusBar_GetPanelIndex(p->owner, p->index));
         return S_OK;
     case VB6_MEMD_TEXT:
         memSetStr(out, (const wchar_t*)vb6_StatusBar_GetPanelText(p->owner, p->index));
@@ -515,6 +521,9 @@ static HRESULT memInvokePanel(Vb6MemObj* p, int dispid, VARIANT* out) {
         return S_OK;
     case VB6_MEMD_TOOLTIP:
         memSetStr(out, (const wchar_t*)vb6_StatusBar_GetPanelToolTip(p->owner, p->index));
+        return S_OK;
+    case VB6_MEMD_PANEL_LEFT:
+        memSetI4(out, vb6_StatusBar_GetPanelLeft(p->owner, p->index));
         return S_OK;
     default:
         break;
@@ -1034,6 +1043,9 @@ static HRESULT STDMETHODCALLTYPE memColl_Invoke(IDispatch* This, DISPID dispid, 
             else if (p->kind == VB6_MEMCK_LISTIMAGES) idx = vb6_ImageListIndexByKey(owner, key);
             else if (p->kind == VB6_MEMCK_NODES)      idx = vb6_TreeView_NodeIndexByKey(owner, key);
             else if (p->kind == VB6_MEMCK_BUTTONS)  idx = vb6_Toolbar_ButtonIndexByKey(owner, key);
+            // 账 #299: 集合对象立起来之后, `Panels("k")` 走的就是这一支。以前名单里没有
+            // PANELS ⇒ 掉进 `else idx = 0` ⇒ 交回 Nothing, 而 VB6 交的是那一格面板。
+            else if (p->kind == VB6_MEMCK_PANELS)   idx = vb6_StatusBar_GetPanelIndexByKey(owner, key);
             else                                     idx = 0;
         }
         if (idx <= 0) { memSetEmpty(out); return S_OK; }
@@ -1207,6 +1219,19 @@ void* vb6_StatusBar_PanelAt(void* hwnd, int32_t index) {
     if (!hwnd || index < 1) return NULL;
     if (index > vb6_StatusBar_GetPanelsCount(hwnd)) return NULL;
     return (void*)memObjNew(VB6_MEMK_PANEL, hwnd, index);
+}
+
+// 账 #299: `StatusBar1.Panels` 的**集合对象**。姊妹控件这一枚早就有
+// (vb6_TreeView_Nodes / vb6_Toolbar_Buttons / vb6_ListView_ListItems /
+// vb6_ImageList_ListImages, 同一处机制), Panels 一族只补了事件参数用的
+// PanelAt, 集合本体一直没人造 ⇒ `Set po = SB1.Panels(1)` / 模块级 `As Object`
+// / `For Each pv In SB1.Panels` / `With SB1.Panels(1)` 四形的头都掉回
+// vb6_ComGetObjectProp(HWND, L"Panels") = 拿 HWND 当 IDispatch 用, 一条读数都
+// 交不出(实测 `.build/b351_probe/P300b.frm`)。立起来之后整条链
+// (Count/Item(i)/Item("key")/For Each/Panel.八成员) 由这里答, cgen 零特例。
+void* vb6_StatusBar_Panels(void* hwnd) {
+    if (!hwnd) return NULL;
+    return (void*)memCollNew(VB6_MEMCK_PANELS, hwnd);
 }
 
 // C29-8b: TreeView1.Nodes —— owner 是 HWND (与 ListView / StatusBar 同)。

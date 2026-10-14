@@ -72,7 +72,7 @@
                                 if (param.hasDefaultValue && !param.defaultValueExpr.empty()) {
                                     defVal89h = param.defaultValueExpr;
                                 } else {
-                                    defVal89h = defaultValue(param.type);
+                                    defVal89h = defaultValueForParam(param);
                                 }
                                 if (param.isByVal) {
                                     argList89h += defVal89h;
@@ -147,6 +147,47 @@
                 }
             }
 
+            // Fix 235: obj 是**无参 Function** (返回类对象) — `ShadowCoolBar.ImageList`
+            // (ComCtlsDemo CbrBands.cls:74, 同类模块内 `Private Function ShadowCoolBar()
+            // As CoolBar`)。函数名既不是变量也不是工程内模块名, 按"模块名.方法名"分支
+            // 会发成 `vb6_ShadowCoolBar_ImageList` → C2065 (没人声明它); CbrBands.c:73 /
+            // ImcComItems.c:75,81 共 3 处。这里只**摘掉模块名标签** (置 isVarName), 让
+            // 后面的 Fix 088c AST 层兜底按 inferClassTypeOfExpr 认 Function 返回类
+            // (cgen_util_classtype.cpp:76, Fix 218 已扩 Function), 由它生成
+            // `<类成员取用>(vb6_<Mod>_<Fn>(me))` —— 方法/字段两条形态都走同一条路,
+            // 不在这里另拼函数名 (Fix 083c 那条只认 PropertyGet 的 prop_get 形状)。
+            // 排除**当前过程自身**的函数名: 那是"引用函数名 = 引用返回值槽 vb6_ret_X"
+            // 的另一条语义 (与 inferClassTypeOfExpr 的同一处排除对称)。
+            if (!isVarName && objSym && objSym->kind == SymbolKind::Function
+                && !objSym->variableTypeName.empty()
+                && !(currentProc_ && Symbol::toLower(currentProc_->name) == objLower)) {
+                const Symbol* fnClsSym = symTab_.lookup(objSym->variableTypeName);
+                if (fnClsSym && fnClsSym->kind == SymbolKind::Class) {
+                    isVarName = true;
+                } else if (Symbol::toLower(objSym->variableTypeName) == "object"
+                           || Symbol::toLower(objSym->variableTypeName) == "variant") {
+                    // Fix 245: 返回 **Object/Variant** 的无参 Function 名 + `.成员` ——
+                    // ComCtlsDemo Pager.ctl:1203 `Private Function PropBuddyControl()
+                    // As Object` 与 :1247/:1337/:1350 的
+                    // `PropBuddyControl.Height / .Width / .Left / .Top`。
+                    // 函数名既不是变量、不是工程内模块名, 返回类型又推不出项目类 ⇒
+                    // 唯一合理的语义就是"(调用 Fn).成员"的**后期绑定** —— 直接发
+                    // vb6_VariantFromComResult(vb6_ComGetProp(<Fn>(me), L"<成员>")),
+                    // 与 lateBoundReadOnVariantCarrier 同形。
+                    // 修复前落优先级3 发 `vb6_PropBuddyControl_prop_get_Height`
+                    // (没有任何地方声明它) → C2065×8 (Pager.c)。
+                    std::string fnMod245 = objSym->isExternal ? objSym->sourceModule
+                                         : (isClassModule_ ? moduleName_ : std::string());
+                    if (!fnMod245.empty()) {
+                        std::string fnCall245 = cProcName(objSym->name, objSym->access, fnMod245)
+                                              + "((void*)me)";
+                        lastExpr_ = "vb6_VariantFromComResult(vb6_ComGetProp(" + fnCall245
+                                  + ", L\"" + escapeWideCString(node.memberName) + "\"))";
+                        return;
+                    }
+                }
+            }
+
             // Fix 086: 成员命中本模块符号但限定符是另一个模块名时, 优先在该模块
             // 中解析成员常量 (modSerialPortAPI.SetDTR — 本模块恰有同名 Sub SetDTR,
             // 误生成 vb6_modSerialPortAPI_SetDTR → C2065; 实际取的是模块常量 SETDTR=5).
@@ -192,7 +233,7 @@
                 // Fix 159-F: 对象是**过程级变量** (symTab_ 只看模块作用域, 形参/局部
                 // 不可见 → isVarName 误判为 false) 而成员是 hWnd 时, 直接取该变量的值.
                 // 运行时约定"窗体/控件对象值本身就是它的 HWND"
-                //   (vb6_Forms_Register(void* hwnd)、Me→vb6_hwnd_MainForm、
+                //   (vb6_Forms_Register(hwnd, 名)、Me→vb6_hwnd_MainForm、
                 //    控件实例经 vb6_UC_InstanceOf(vb6_hwnd_X) 反查),
                 // 故 VB6 的 Form.hWnd / RefForm.hWnd / CurrControl.hWnd 即该变量本身.
                 // 此前落到下面的"模块.成员"分支: memSym 命中 VBFlexGrid.ctl 的 hWnd 属性

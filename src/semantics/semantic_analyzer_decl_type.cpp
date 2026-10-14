@@ -128,6 +128,9 @@ void SemanticAnalyzer::visit(TypeDecl& node) {
             }
             if (memberPtr->arraySize) {
                 mi.arraySize = 1;
+                // 账 #262: 只传**秩** (维数)。各维格数不在这里算 —— 那是发码侧
+                // tryEvalConstInt 的活，这里留一份就成了第二张真相。
+                mi.arrayRank = 1 + (int32_t)memberPtr->moreDims.size();
             }
             // Fix 037: 传播动态数组标记 (`() As Type`) — UdtMemberInfo.isArrayDynamic
             if (memberPtr->isArrayDynamic) {

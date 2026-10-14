@@ -113,58 +113,73 @@ void vb6_DeleteSetting(BSTR appName, BSTR section, BSTR key) {
 vb6_VARIANT vb6_GetAllSettings(BSTR appName, BSTR section) {
     vb6_VARIANT result;
     memset(&result, 0, sizeof(result));
-    /* VB6 returns a 2D Variant array, but we simplify to 1D with alternating key/value */
-    result.vt = (vb6_vtVariant); /* simplified: not true 2D array */
-    
+    /* 账 #305 §B149 (2026-10-11 第四十刀): VB6 这一族只有两档 ——
+     *   应用/节没有条目  => Null
+     *   有条目          => **二维** Variant 数组: 第一维 0..n-1 是键的序号,
+     *                      第二维 **1..2** (1 = 键名, 2 = 值)
+     * 外部证人: VB6 真语料 mdoceditor/E-Type/Main.bas:269 写的就是
+     *   `For i = 0 To UBound(varFiles, 1)` + `varFiles(i, 1)`。
+     * 改前这里交回一枚 vt 写着 vb6_vtVariant、parray 挂着 1D 交替表的槽 —— 两档都不是,
+     * 于是五读全错而一声不响: VarType=12 / IsNull=False / UBound(_,1)=0 / UBound(_,2)=0 /
+     * v(0,2) 读回空串 (读数 .build/b1265_nd/r6.txt, 两台同形)。 */
+    result.vt = vb6_vtNull;
     if (!appName || !section) return result;
-    
+
     BSTR keyPath = vb6_RegBuildKey(appName, section);
     HKEY hKey;
     LONG rc = RegOpenKeyExW(HKEY_CURRENT_USER, keyPath, 0, KEY_QUERY_VALUE, &hKey);
     SysFreeString(keyPath);
     if (rc != ERROR_SUCCESS) return result;
-    
+
     DWORD numValues = 0;
     DWORD maxNameLen = 0;
     DWORD maxDataLen = 0;
     RegQueryInfoKeyW(hKey, NULL, NULL, NULL, NULL, NULL, NULL, &numValues, &maxNameLen, &maxDataLen, NULL, NULL);
-    
     if (numValues == 0) {
         RegCloseKey(hKey);
         return result;
     }
-    
-    /* Create 1D variant array with numValues*2 elements (key, value pairs) */
-    struct vb6_SafeArray1D* sa = vb6_SafeArrayCreate1D(vb6_sa_variant, 0, (int32_t)(numValues * 2) - 1);
-    if (!sa) {
+
+    vb6_SafeArrayBound bounds[2];
+    bounds[0].lBound = 0;
+    bounds[0].cElements = (int32_t)numValues;
+    bounds[1].lBound = 1;
+    bounds[1].cElements = 2;
+    vb6_SafeArrayND* nd = vb6_SafeArrayCreateND(vb6_sa_variant, 2, bounds);
+    if (!nd) {
         RegCloseKey(hKey);
         return result;
     }
-    
+
     wchar_t* nameBuf = (wchar_t*)calloc(maxNameLen + 2, sizeof(wchar_t));
     BYTE* dataBuf = (BYTE*)calloc(maxDataLen + sizeof(wchar_t), 1);
     if (!nameBuf || !dataBuf) {
+        /* 连名字缓冲都分配不出来 => 按"没有条目"那一档答, 不交半枚数组 */
         free(nameBuf);
         free(dataBuf);
-        vb6_SafeArrayDestroy1D(sa);
+        vb6_SafeArrayDestroyND(nd);
         RegCloseKey(hKey);
+        memset(&result, 0, sizeof(result));
+        result.vt = vb6_vtNull;
         return result;
     }
-    
+
     for (DWORD i = 0; i < numValues; i++) {
         DWORD nameSize = maxNameLen + 2;
         DWORD dataSize = maxDataLen + sizeof(wchar_t);
-        DWORD type;
-        RegEnumValueW(hKey, i, nameBuf, &nameSize, NULL, &type, dataBuf, &dataSize);
-        
-        /* Key (name) - index i*2 */
+        DWORD type = 0;
+        nameBuf[0] = L'\0';
+        dataBuf[0] = 0;
+        if (RegEnumValueW(hKey, i, nameBuf, &nameSize, NULL, &type, dataBuf, &dataSize) != ERROR_SUCCESS) {
+            type = 0;
+            dataSize = sizeof(wchar_t);
+        }
+
         vb6_VARIANT varKey;
         memset(&varKey, 0, sizeof(varKey));
         varKey.vt = vb6_vtBSTR;
         varKey.bstrVal = SysAllocString(nameBuf);
-        vb6_ArraySetVariant(sa, (int32_t)(i * 2), varKey);
-        
-        /* Value - index i*2+1 */
+
         vb6_VARIANT varVal;
         memset(&varVal, 0, sizeof(varVal));
         varVal.vt = vb6_vtBSTR;
@@ -173,14 +188,26 @@ vb6_VARIANT vb6_GetAllSettings(BSTR appName, BSTR section) {
         } else {
             varVal.bstrVal = vb6_BSTR_Empty();
         }
-        vb6_ArraySetVariant(sa, (int32_t)(i * 2 + 1), varVal);
+
+        /* 两个格子都从那一枚带检查的 ND 落点里拿 (账 #209 那一族的口径);
+         * Assign 是"接管"语义 (rev16 那一课), 所以借用出来的 BSTR 有唯一的主人。
+         * 步长问 vb6_SaElemSize —— 「Variant 槽数组一格多宽」只许那一张表回答。 */
+        const int32_t es = vb6_SaElemSize(vb6_sa_variant);
+        int32_t row[2];
+        row[0] = (int32_t)i;
+        row[1] = 1;
+        vb6_VariantAssign((vb6_VARIANT*)vb6_SaNdElemPtr(nd, 2, row, es), varKey);
+        row[1] = 2;
+        vb6_VariantAssign((vb6_VARIANT*)vb6_SaNdElemPtr(nd, 2, row, es), varVal);
     }
-    
+
     free(nameBuf);
     free(dataBuf);
     RegCloseKey(hKey);
-    
-    result.parray = sa;
+
+    /* 账 #305 §B155 格①（第四十六刀）: 问描述符而不是写死；这一枚是 variant 档 ⇒ 仍 8204 = vbArray + vbVariant */
+    result.vt = (vb6_vartype)vb6_SaVtOfArrayPtr(nd);
+    result.parray = (struct vb6_SafeArray1D*)nd;
     return result;
 }
 

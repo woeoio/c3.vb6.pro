@@ -36,7 +36,7 @@ static int vb6_TabNavKey(const MSG *msg);
 
 
 // 全局变量
-HINSTANCE g_hInstance = NULL;
+HINSTANCE vb6_hInstance = NULL;
 static int g_nextControlId = 100;  // 控件ID从100开始 (1-99保留给菜单)
 // 账 #156: 计时器 id **不能**跟着控件 id 走。控件 id 每建一枚窗体就复位一次
 // (cgen_form_create_controls.inc 发 vb6_ResetControlId())，而 g_timerTable 是进程内
@@ -128,7 +128,12 @@ struct vb6_TimerSlot {
     vb6_TimerCallback callback;
     UINT  period;     // ms
     int   running;
-    int   useMm;      // 1 = winmm timeSetEvent, 0 = 退回 SetTimer
+    int   inCallback; // 1 = 这一格的 Timer 事件过程正在执行 (VB6: 不可重入, 见 vb6_DispatchTimer)
+    int   useMm;      // 1 = winmm timeSetEvent (兜底), 0 = SetTimer (正常路径)
+    // 兜底路径 (winmm + PostMessageW) 专用："已经有一条 WM_TIMER 在队列里等着"标志。
+    // 正常路径走 Win32 SetTimer，由系统维护"同一计时器至多一条待处理"，此标志恒为 0。
+    // 见 vb6_MmThunk / vb6_TimerStart。
+    volatile LONG posted;
     UINT  mmId;
 };
 static struct vb6_TimerSlot g_timerTable[VB6_MAX_TIMERS];
@@ -210,6 +215,30 @@ int vb6_DpiY(void) {
 }
 
 int vb6_XToTwipX(int px) { return MulDiv(px, 1440, vb6_DpiX()); }
+
+// 账 #206 + 账 #298 (§B129): himetric(0.01mm) 是 **VB6 容器/OCX 存几何用的那一档**(设计块里
+// `Object.Width` 就是它)。这一族的折算以前在 RTL 里各写各的（§B129 那份名单：olecon 两处方向、
+// picture_prop 按 DC 的 DPI、ax_site_ext 把 DPI 写死成 96、ax_load 自己乘一遍），第二十四刀起
+// **公式只住这一枚**：DPI 从外面递进来，屏 DPI / 某枚 DC 的 DPI 各是调用方的一层选择。
+int vb6_HimetricToPxOnDc(int hm, int dpi) { return MulDiv(hm, dpi, 2540); }
+int vb6_HimetricToPxX(int hm) { return vb6_HimetricToPxOnDc(hm, vb6_DpiX()); }
+int vb6_HimetricToPxY(int hm) { return vb6_HimetricToPxOnDc(hm, vb6_DpiY()); }
+
+// float 那一档是给 **OLE 容器坐标** 用的（IOleControlSite::TransformCoords 交的是 POINTF）：
+// 表示必须留在浮点里，替容器把亚像素量化成整数 px 就是把决定改了。DPI 同样问权威 ——
+// 这一对在并表之前住在 axsite/ax_site_ext.c 里，那里的 DPI 写死成 96（换 DPI 的机器上容器坐标
+// 跟着缩 —— 与 #184 那条 VBFlexGrid 同一族；本机就是 96，这条只有形状能证，见 §B133）。
+float vb6_HimetricToPxF(float hm, float dpi) { return hm * dpi / 2540.0f; }
+float vb6_PxToHimetricF(float px, float dpi) { return px * 2540.0f / dpi; }
+
+// 账 #206 (§B41) 第二格 + 账 #298 (§B129): himetric <-> 缇 是**与 DPI 无关**的那条比例 ——
+// 两个都是绝对长度 (1 缇 = 1/1440 英寸, 1 himetric = 1/100 mm ⇒ 1 hm = 1440/2540 缇)。
+// VB6 往 .frm 里写的那一档是 himetric, VB 代码读写的那一档是缇: 所以设计块的值进来先折成
+// 缇存着, 缇->像素只许在排版那一步做 (走上面那枚按真实 DPI 的权威)。
+// §B129 数出来的另外几份写法 (ax_load.c 的 twipsToHimetric、olecon 的 *1440L/2540L 与
+// *15L*2540L/1440L) 从这里转调; 整数**截断**语义照旧保留, 免得并表顺手改了值。
+long vb6_TwipsToHimetric(long tw) { return (long)(((__int64)tw) * 2540 / 1440); }
+long vb6_HimetricToTwips(long hm) { return (long)(((__int64)hm) * 1440 / 2540); }
 int vb6_YToTwipY(int px) { return MulDiv(px, 1440, vb6_DpiY()); }
 
 // ============================================================
@@ -272,8 +301,11 @@ int vb6_RegisterFormClassBg(const char* className, void* wndProc, void* hInstanc
     wc.hInstance = (HINSTANCE)hInstance;
     wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
     // czUI fix: .frm 的窗体级 BackColor — 用 .frm 颜色做类背景刷, 否则窗体永远
-    // 是 BTNFACE 灰 (czForm Demo 深蓝底变灰底). backColor<0 = 未指定, 走 VB6 默认.
-    if (backColor >= 0) {
+    // 是 BTNFACE 灰 (czForm Demo 深蓝底变灰底).
+    // Fix <c3-form-backcolor>: 哨兵是 -1 (后端 prelude 初值, 且 &H80000000 也绝非
+    // 合法表单色). 系统色 (&H800000xx, 高位置位 → 32 位有符号为负, 如 -2147483643)
+    // 是**合法值**, 必须放行到下面的 GetSysColor 翻译, 不能因 <0 被当未指定.
+    if (backColor != -1) {
         COLORREF cref = (backColor & 0x80000000L)
                             ? GetSysColor(backColor & 0xFF)
                             : (COLORREF)backColor;
@@ -567,6 +599,21 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
        SetPropW(…, 0) 等于删属性（账 #107 那一课）。 */
     if (hwnd) SetPropW(hwnd, L"VB6_TabStop", (HANDLE)(DWORD_PTR)((style & WS_TABSTOP) ? 1 : 2));
 
+    /* 账 #230: 设计期那四个数一起存进 VB 侧读数，**单位记成缇**。
+       .frm 的 Left/Top/Width/Height 恒按缇写，与容器自己声明的 ScaleMode 无关 ——
+       实证 tests/czUI-main/frmDemo.frm：那枚窗体写 `ScaleMode = 3  'Pixel`，同时写
+       `ClientWidth = 6600` 与 `ScaleWidth = 440`（同一块客户区的两种单位），而子控件
+       `Width = 6240` —— 按缇是 416 像素（占满 440 宽的客户区，对），按像素就是 6240
+       像素（放不下）。⇒ 上面那句 vb6_TwipToX 的换算本来就是对的，这里只是把"按缇写进去
+       的那个数"留住，别让它被像素量化重算掉（写 1007 读回 1005 那一格）。
+       容器真是像素档时，读侧的档位闸对不上 ⇒ 自动回落投影，交回的就是像素数。 */
+    if (hwnd) {
+        vb6_GeomCacheWrite(hwnd, VB6_GEOM_LEFT, x, 1);
+        vb6_GeomCacheWrite(hwnd, VB6_GEOM_TOP, y, 1);
+        vb6_GeomCacheWrite(hwnd, VB6_GEOM_WIDTH, width, 1);
+        vb6_GeomCacheWrite(hwnd, VB6_GEOM_HEIGHT, height, 1);
+    }
+
     // 设置默认字体 (VB6使用MS Sans Serif 8.25pt)
     if (hwnd) {
         // Fix 181: 原先直接用 GetStockObject(DEFAULT_GUI_FONT) —— 现代 Windows 上
@@ -684,11 +731,20 @@ static struct vb6_TimerSlot* vb6_SlotById(int id) {
 
 // winmm 的回调跑在它自己的线程上，**不能**直接调 VB 的事件处理函数（生成代码里那个
 // 事件体属于 UI 线程）。所以只把到期事件投回派发窗，仍走原来的
-// case WM_TIMER -> vb6_DispatchTimer，语义与 SetTimer 一致，只是不再等 15.6 ms 的地板。
+// case WM_TIMER -> vb6_DispatchTimer。
+//
+// ⚠ Fix <c3-menu3d-click>: 这条路现在**只是兜底**（派发窗无效时才走），正常运行走
+// Win32 的 SetTimer —— 原因见 vb6_TimerStart 里的长注释：自己 PostMessage 出去的
+// WM_TIMER 是一条**真实待处理消息**，会长期占住线程队列，把硬件输入（鼠标/键盘）
+// 顶到后面去甚至饿死。这条路保留 posted 合并 (Win32 的"同一计时器至多一条待处理"
+// 不变式) 只是为了兜底时症状不至于无限恶化：投递成功到派发之间不再重复投递。
 static void CALLBACK vb6_MmThunk(UINT mmCssId, UINT msg, DWORD user, DWORD dw1, DWORD dw2) {
     (void)mmCssId; (void)msg; (void)dw1; (void)dw2;
     struct vb6_TimerSlot* e = vb6_SlotById((int)user);
-    if (e && e->running) PostMessageW(e->hwnd, WM_TIMER, (WPARAM)e->timerId, 0);
+    if (!e || !e->running) return;
+    if (InterlockedExchange(&e->posted, 1) == 0) {
+        PostMessageW(e->hwnd, WM_TIMER, (WPARAM)e->timerId, 0);
+    }
 }
 
 static void vb6_TimerStop(struct vb6_TimerSlot* e) {
@@ -700,17 +756,48 @@ static void vb6_TimerStop(struct vb6_TimerSlot* e) {
         KillTimer(e->hwnd, (UINT_PTR)e->timerId);
     }
     e->running = 0;
+    InterlockedExchange(&e->posted, 0);  // Fix <c3-menu3d-click>: 停了就不再持有"已投递"名额
 }
 
 static void vb6_TimerStart(struct vb6_TimerSlot* e) {
-    // VB6 口径: Interval 合法域 1..65535，0 = 不跑
+    // VB6 语义: Interval 合法 1..65535，0 = 停止
     if (e->running || e->period == 0 || e->period > 65535) return;
+    InterlockedExchange(&e->posted, 0);
+    // Fix <c3-menu3d-click>: **必须用 Win32 的 SetTimer**，不要自己 PostMessage 一条
+    // WM_TIMER 去"顶掉 15.6 ms 的地板"。
+    //
+    // 为什么：SetTimer 的 WM_TIMER 是**低优先级合成消息** —— 它不占队列槽位，只在
+    // "线程队列里没有别的消息"时才被合成出来，同一枚计时器任意时刻至多一条待处理。
+    // 这正是 VB6 Timer 控件的实现（VB6 内部就是 SetTimer），所以计时器再密也**不会**
+    // 影响真实输入。
+    //
+    // 一旦改成 winmm + PostMessageW 自发 WM_TIMER，这条性质就没了：投递出去的是一条
+    // **真实待处理消息**，会一直占着队列。只要队列里长期有待处理的投递消息，硬件输入
+    // (鼠标/键盘) 就永远轮不到 —— 实测 3DMenu: Timer_Menu.Interval=10 而一拍里要做
+    // Me.Cls + 10 枚图标各一次 SetWindowPos 与透明贴图，投递速率长期 ≥ 消费速率，于是
+    // 点下鼠标后 WM_LBUTTONUP 几秒都取不到（trace 里只剩 WM_TIMER，连 WM_MOUSEMOVE
+    // 都没有），Form_MouseUp 不执行 ⇒ MRemote.Pressed 永远为 True ⇒
+    // Timer_Menu_Timer 里的 TitoloTrasparente / Timer_Shift.Enabled=True 全被跳过
+    // ⇒ 红色标题不再重画、逐帧动画停住，看上去就是"点一下标题消失、窗体卡住、不随
+    // 点击变换"。而 VB6 编译的同代码一切正常（因为它走 SetTimer）。改用 SetTimer 后
+    // 既不占队列，也**不需要** posted 合并（系统自带这条不变式）。
+    if (e->hwnd && IsWindow(e->hwnd)) {
+        UINT elapse = e->period;
+        // 系统地板 (USER_TIMER_MINIMUM = 10ms)，与 VB6 一致：VB6 的 Interval<10 也是这个值
+        if (elapse < USER_TIMER_MINIMUM) elapse = USER_TIMER_MINIMUM;
+        if (SetTimer(e->hwnd, (UINT_PTR)e->timerId, elapse, NULL)) {
+            e->running = 1; e->useMm = 0; return;
+        }
+    }
+    // 兜底 (派发窗无效 / SetTimer 失败): 仍退回 winmm，见 vb6_MmThunk 的说明
     vb6_MmProbe();
     if (vb6_pTimeSetEvent) {
         UINT id = vb6_pTimeSetEvent(e->period, 1, vb6_MmThunk, (DWORD)e->timerId, TIME_PERIODIC);
         if (id != 0) { e->mmId = id; e->useMm = 1; e->running = 1; return; }
     }
-    if (SetTimer(e->hwnd, (UINT_PTR)e->timerId, e->period, NULL)) e->running = 1;
+    if (e->hwnd && IsWindow(e->hwnd) && SetTimer(e->hwnd, (UINT_PTR)e->timerId, e->period, NULL)) {
+        e->running = 1;
+    }
 }
 
 // 挂一枚计时器。owner = 派发窗（窗体），key = Timer 控件自己的不可见句柄 ——
@@ -726,7 +813,7 @@ void vb6_TimerAttach(void* owner, void* key, int period, void* callback, int ena
     e->key = (HWND)key;
     e->callback = (vb6_TimerCallback)callback;
     e->period = (UINT)period;
-    e->running = 0; e->useMm = 0; e->mmId = 0;
+    e->running = 0; e->useMm = 0; e->mmId = 0; e->posted = 0;
     if (enabled) vb6_TimerStart(e);
 }
 
@@ -735,10 +822,12 @@ void vb6_TimerSetEnabled(void* key, int enabled) {
     for (int i = 0; i < g_timerCount; i++) {
         struct vb6_TimerSlot* e = &g_timerTable[i];
         if (e->key == (HWND)key) {
+            
             if (enabled) vb6_TimerStart(e); else vb6_TimerStop(e);
             return;
         }
     }
+    
 }
 
 // 运行期 Interval：改了立刻按新周期重排（VB6 就是这个行为，不是"下一轮才生效"）
@@ -755,6 +844,7 @@ void vb6_TimerSetPeriod(void* key, int period) {
             return;
         }
     }
+    
 }
 
 // 兼容旧入口：没有身份窗时派发窗自己当身份，建完即启。
@@ -766,7 +856,7 @@ int vb6_SetTimer(void* hwnd, int interval, void* callback) {
     e->timerId = id; e->hwnd = (HWND)hwnd; e->key = (HWND)hwnd;
     e->callback = (vb6_TimerCallback)callback;
     e->period = (UINT)(interval > 65535 ? 65535 : (interval < 0 ? 0 : interval));
-    e->running = 0; e->useMm = 0; e->mmId = 0;
+    e->running = 0; e->useMm = 0; e->mmId = 0; e->posted = 0;
     vb6_TimerStart(e);
     return id;
 }
@@ -784,10 +874,31 @@ void vb6_KillTimer(int timerId) {
 
 // P24-Timer: WndProc中分发WM_TIMER (替代消息循环拦截)
 void vb6_DispatchTimer(int timerId) {
+    // Fix <c3-menu3d>: VB6 的 Timer 事件过程**不可重入**。
+    // 过程还在执行时 (哪怕它自己调了 DoEvents 让出), 同一枚 Timer 的下一拍必须排队等
+    // —— VB6 不会在 Timer_Menu_Timer 还没返回时就再投一次 WM_TIMER 给它。
+    // 缺这条守卫时 3DMenu 是这样坏的: Timer_Menu_Timer → RuotaMenu(True) → 画标题 →
+    // WaitKeyMenu 在 `Do While KeyPress=0: DoEvents: Loop` 里等按键, DoEvents 把
+    // WM_TIMER 也泵了进来 ⇒ Timer_Menu_Timer 重进, RuotaMenu 开头那句 Me.Cls 无条件
+    // 清掉整张记忆位图; 而重进后 Rotazione 已偏离目标角, RuotaMenu 恒返回 False,
+    // 于是 `If RuotaMenu = True` 里的 TitoloTrasparente 再也补不回来 —— 实测 4 秒里
+    // Cls 跑了 182 次、标题只画了 1 次, 红色标题永远不上屏 (参考图有标题)。
+    // 顺带这也是"卡"的一半: 本该等按键的空转期在做整屏 Cls + 10 枚图标重合成。
     for (int i = 0; i < g_timerCount; i++) {
         if (g_timerTable[i].timerId == timerId) {
+            // Fix <c3-menu3d-click>: 这条 WM_TIMER 已经从队列里取走了, 立刻把"已投递"
+            // 名额还回去, 下一拍才投得出来 (见 vb6_MmThunk 的合并说明)。
+            InterlockedExchange(&g_timerTable[i].posted, 0);
+            // 已 Enabled=False / 已 Detach 的计时器: 队列里那条迟到的 WM_TIMER 不再回调
+            // (Win32 KillTimer 本来就会丢掉待处理的那条, VB6 同理)。
+            if (!g_timerTable[i].running) return;
             if (g_timerTable[i].callback) {
+                if (g_timerTable[i].inCallback) {   // 上一拍还没返回 → 丢弃这一拍
+                    return;
+                }
+                g_timerTable[i].inCallback = 1;
                 g_timerTable[i].callback();
+                g_timerTable[i].inCallback = 0;
             }
             break;
         }
@@ -885,16 +996,62 @@ int vb6_MessageLoop(void) {
     return (int)msg.wParam;
 }
 
+// 259: WM_QUIT 全进程只有一份，谁把它抽出来谁就负责把它投回去。
+// 最后一个窗体卸载时 vb6_Forms_Unregister 投的那条 quit，若被内层泵（DoEvents / 模态 Show）
+// 抽走，外层主循环再也等不到退出信号 ⇒ 窗口一个不剩、进程驻留（实测：CI 饿机器上
+// combofocus_x86 跑满 60s 不退，判据全打完、CPU 62ms；本地用“在 DoEvents 里把最后一个窗体卸掉”
+// 那个形状写的确定性探针 6/6 挂。原本循环体里那行 "WM_QUIT 模态循环结束" 的 trace 是死码：
+// GetMessage 取到 quit 时返回 0，循环直接结束，从来不会把它送进循环体。
+//
+// 账 <3DMenu-close> 2026-10-08: "投回去" 是有**隐含前提**的 —— 调用者最终一定会回到一个
+// GetMessage 泵。259 只覆盖了「内层泵把 quit 抄走、随后**返回**给外层泵」这一种形状；
+// 用户代码里的**忙等**不满足前提，投回去等于没投：
+//     Do While MRemote.KeyPress = 0 : DoEvents : Loop      (3DMenu 的 WaitKeyMenu)
+// 它没有 GetMessage。quit 被同一圈循环反复抽到 → 循环条件永远为真 → 窗早关了、进程却挂在
+// 一个 ~100 Hz 的 DoEvents 空转上（实测：关窗后 4 s 内烧掉 0.33–0.66 s 单核 CPU，窗口 0 个；
+// 残留进程还占着 exe，下一次构建直接 LNK1104）。
+// VB6 语义是「最后一个窗体卸载 ⇒ 程序结束」，**哪怕此刻正停在 DoEvents 忙等里**（3DMenu 在
+// VB6 下关窗就是立即退出）。判据：同一条 quit 被抽到**第二次** = 没有任何一个泵在等它 =
+// 由 DoEvents 自己结束进程。只抽到一次就 break 的老路径原样保留：appqquit 那种「内层泵抽走
+// quit 后控制权还给外层 GetMessage 泵」的形状仍然只抽到一次，不受影响。
+// 回归开关：C3_NO_QUIT_IN_DOEVENTS=1 退回 259 的纯投递行为（A/B 用）。
+static int g_quitReposts = 0;   // 账 <3DMenu-close>: quit 被投回去的次数
+
+static int vb6_RePostQuitIfTaken(const MSG* m) {
+    if (!m || m->message != WM_QUIT) return 0;
+    PostQuitMessage((int)m->wParam);
+    return ++g_quitReposts;   // 1 = 第一次还给最外层泵; >=2 = 它又回来了, 没有泵在等它
+}
+
 int vb6_DoEvents(void) {
     MSG msg;
     int count = 0;
     while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+        // 259: 抽到 quit 就投回去并停泵 —— 这条 quit 是给最外层主循环的退出信号。
+        if (msg.message == WM_QUIT) {
+            if (vb6_RePostQuitIfTaken(&msg) >= 2) {
+                // 账 <3DMenu-close>: 第二次抽到 ⇒ 调用者不回泵 (忙等) ⇒ 程序结束。
+                extern void vb6_End(void);   // vb6rtl.c; 跑 vb6_Exit() 后 exit(), 不返回
+                static int noQuitExit = -1;
+                if (noQuitExit < 0)
+                    noQuitExit = (GetEnvironmentVariableW(L"C3_NO_QUIT_IN_DOEVENTS", NULL, 0) > 0);
+                if (!noQuitExit) vb6_End();
+            }
+            break;
+        }
         // P24-Timer: WM_TIMER现在由WndProc分发, DoEvents不再拦截
         TranslateMessage(&msg);
         DispatchMessage(&msg);
         count++;
         // 安全限制: 防止无限循环 (VB6 DoEvents行为: 处理完就返回)
         if (count > 1000) break;
+    }
+    // Fix <c3-menu3d> 2026-10-07: 队列空时让出时间片。WaitKeyMenu 那类
+    // `Do While ... DoEvents ... Loop` 忙等 (3DMenu 常驻状态) 会把一个核打满,
+    // 整机发卡。VB6 的 DoEvents 本质是让 CPU 给系统; 这里队列空就最多等 10ms,
+    // 有消息 (按键/Timer 到点) 立即醒来, 不影响响应性。
+    if (count == 0) {
+        MsgWaitForMultipleObjects(0, NULL, FALSE, 10, QS_ALLINPUT);
     }
     return count;
 }
@@ -916,11 +1073,11 @@ void* vb6_GetFormUserData(void* hwnd) {
 // ============================================================
 
 void* vb6_GetAppInstance(void) {
-    return (void*)g_hInstance;
+    return (void*)vb6_hInstance;
 }
 
 void vb6_SetAppInstance(void* hInstance) {
-    g_hInstance = (HINSTANCE)hInstance;
+    vb6_hInstance = (HINSTANCE)hInstance;
 }
 
 // Fix 149 诊断: C3_CRASH_TRACE=1 时安装未处理异常过滤器, 把崩溃栈各帧的
@@ -1354,9 +1511,11 @@ void vb6_LoadForm(void* hwnd) {
     if (!hwnd) return;
     const UINT kDeferredFormLoad = 0x7FF0;
     MSG msg;
+    int vb6_lfdrain = 0;
     while (PeekMessageW(&msg, (HWND)hwnd, kDeferredFormLoad, kDeferredFormLoad, PM_REMOVE)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
+        vb6_lfdrain++;
     }
 }
 
@@ -1421,6 +1580,7 @@ void vb6_ShowForm(void* hwnd, int modal) {
     }
     if (!hwnd) return;
 
+
     // Fix 115: 恢复 VB6 的 "先 Form_Load, 后 Show" 顺序。
     // 编译器把 Form_Load 用 PostMessageW(hwnd, 0x7FF0, 0, 0) 延迟到消息队列
     // (见 cgen_form_wndproc_create.inc 的 WM_CREATE 处理), 而这里的
@@ -1432,9 +1592,11 @@ void vb6_ShowForm(void* hwnd, int modal) {
     {
         const UINT kDeferredFormLoad = 0x7FF0;   // 编译器生成的"延迟 Form_Load"消息
         MSG msg;
+        int vb6_sfdrain = 0;
         while (PeekMessageW(&msg, (HWND)hwnd, kDeferredFormLoad, kDeferredFormLoad, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
+            vb6_sfdrain++;
         }
     }
 
@@ -1503,6 +1665,8 @@ void vb6_ShowForm(void* hwnd, int modal) {
             if (msg.message == WM_QUIT && traceModal)
                 fprintf(stderr, "[C3_MODAL] 收到 WM_QUIT, 模态循环结束 (hwnd=%p)\n", hwnd);
         }
+        // 259: 模态循环也是内层泵：它的 GetMessage 若把那条 quit 抄了，Show 还回去、主循环则永久阻塞。
+        vb6_RePostQuitIfTaken(&msg);
         if (traceModal)
             fprintf(stderr, "[C3_MODAL] 模态循环退出: IsWindow=%d (hwnd=%p, owner=%p)\n",
                     IsWindow((HWND)hwnd) ? 1 : 0, hwnd, owner);
@@ -1518,6 +1682,12 @@ void vb6_ShowForm(void* hwnd, int modal) {
 
 void vb6_UnloadForm(void* hwnd) {
     if (!hwnd) return;
+    /* czUI fix (3DMenu 关闭卡顿): WM_CLOSE 处理入口后端已置 VB6_Unloading。
+     * Form_Unload / Form_Terminate 里再调 `Unload Me` 在 VB6 里是空操作 (窗体已在
+     * 卸载); 此前这里照发 WM_CLOSE ⇒ WM_CLOSE→Form_Unload→Unload Me→WM_CLOSE
+     * 无限重入, 直到把嵌套 SendMessage/堆栈耗尽 —— 关窗肉眼可见地卡一拍。
+     * 看到标记直接返回, 交回外层 WM_CLOSE 继续 DestroyWindow。 */
+    if (GetPropW((HWND)hwnd, L"VB6_Unloading")) return;
     if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0)
         fprintf(stderr, "[C3_MODAL] UnloadForm hwnd=%p\n", hwnd);
     // P20-43: **不能直接 DestroyWindow** —— 那会跳过 WM_CLOSE, 于是 VB 代码里的

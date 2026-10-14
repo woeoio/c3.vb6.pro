@@ -170,7 +170,20 @@ bool SymbolTable::define(std::unique_ptr<Symbol> sym) {
                 || sym->kind == SymbolKind::PropertyLet
                 || sym->kind == SymbolKind::PropertySet)) {
             // 移除内置符号, 允许用户符号替换
-            current_->symbols_.erase(existing->storageKey());
+            // Fix 216: 但别把形参表一起扔掉 —— 内置函数的形参只在这里, 顶掉之后本模块
+            // 再没有第二份来源。`VBA.<成员>` 这种显式限定调用在 VB6 里一定指内置函数,
+            // 丢了形参表就会发成 0 实参 (`vb6_Year()` → C2198, 见 .hpp 里 lookupShadowedBuiltin
+            // 的注释)。这里把符号整体**转移**到留档表 (move 而非拷贝: 所有权换手,
+            // existing 指针仍有效), 再按原键 erase。
+            auto itShadowed = current_->symbols_.find(existing->storageKey());
+            if (itShadowed != current_->symbols_.end()) {
+                if (shadowedBuiltins_.find(existing->storageKey()) == shadowedBuiltins_.end()) {
+                    shadowedBuiltins_.emplace(existing->storageKey(), std::move(itShadowed->second));
+                }
+                current_->symbols_.erase(itShadowed);
+            } else {
+                current_->symbols_.erase(existing->storageKey());
+            }
         }
     }
 
@@ -459,14 +472,22 @@ std::vector<const Symbol*> SymbolTable::getPublicSymbols() const {
     return result;
 }
 
-std::unordered_set<std::string> SymbolTable::getExternalModuleNames() const {
-    std::unordered_set<std::string> result;
+// 账 §B97: 去重 + 升序。集合内容一处没变（仍是 isExternal 符号的 sourceModule 全集），
+// 变的是**顺序的来源**：以前由 unordered_map 的桶布局决定，同一份 .vbp 换一台编译器
+// 就换一种顺序，而下游三处码头（.c 的 include 段 / .h 的 crossmod include 段 / 入口点里
+// vb6_mod_<X>_init() 的调用序）都按这个顺序逐行发码。排序后它至少是确定的；
+// 语义上有意义的顺序（工程声明序）由 driver 用 modules_ 重排。
+std::vector<std::string> SymbolTable::getExternalModuleNames() const {
+    std::vector<std::string> result;
     if (!moduleScope_) return result;
+    std::unordered_set<std::string> seen;
     for (const auto& [key, sym] : moduleScope_->symbols()) {
-        if (sym->isExternal && !sym->sourceModule.empty()) {
-            result.insert(sym->sourceModule);
+        if (sym->isExternal && !sym->sourceModule.empty() &&
+            seen.insert(sym->sourceModule).second) {
+            result.push_back(sym->sourceModule);
         }
     }
+    std::sort(result.begin(), result.end());
     return result;
 }
 

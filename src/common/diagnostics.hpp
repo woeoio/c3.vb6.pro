@@ -128,6 +128,11 @@ enum class DiagnosticID : uint16_t {
     // 折成整数直接塞进 vb6_UBound 的指针形参 → 运行期解引用地址 1 → 0xC0000005。
     // 文案 ASCII (D12)。
     SemArrayArgExpected = 3043,
+    // 账 #278: Implements 的两条契约诊断原本借用 VB3001 (未声明的标识符), 而 VB3001 是
+    // 「一个名字解析不出来」那一族; 这里两条报的都是「接口/槽」, 主语不是标识符使用点。
+    // 分家出独立号, 才可以让 VB3001 的严重级单独动 (见 §B102 ③)。文案 ASCII (D12)。
+    // 缺槽那条沿用既有的 SemInterfaceNotImplemented = 3012 (新式 Interface 那条路已在用)。
+    SemImplementsInterfaceNotFound = 3044,  // Implements 的接口名在本工程内找不到
 
     // 代码生成 (4xxx)
     CodeGenUnsupportedFeature = 4001,

@@ -104,12 +104,12 @@ ULONG   STDMETHODCALLTYPE axSite_CS_Release(IOleClientSite* This);
 // 已创建宿主登记表 (定义在 ax_site.c; 消息转发/绘制按窗体遍历它)
 // 定义处仍用 VB6_MAX_AXSITES 定长数组, 故此处不作尺寸声明。
 extern Vb6AxSite* g_axSites[];
-extern int g_axSiteCount;
+extern int vb6_axSiteCount;
 void axSiteRegister(Vb6AxSite* s);
 
 // OCX 实例化 + 单位换算 (定义在 ax_load.c)
-HRESULT ocxCreateAny(const wchar_t* ocxPath, REFCLSID rclsid, void** ppUnk);
-long twipsToHimetric(long twips);
+HRESULT vb6_ocxCreateAny(const wchar_t* ocxPath, REFCLSID rclsid, void** ppUnk);
+long vb6_twipsToHimetric(long twips);
 
 // 简易 IPropertyBag vtable (定义在 ax_propbag.c, 由 ax_host.c 装配)
 extern const IPropertyBagVtbl g_pbVtbl;

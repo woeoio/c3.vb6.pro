@@ -400,7 +400,7 @@
 
                 } else {
 
-                    defVal = defaultValue(param.type);
+                    defVal = defaultValueForParam(param);
 
                 }
 

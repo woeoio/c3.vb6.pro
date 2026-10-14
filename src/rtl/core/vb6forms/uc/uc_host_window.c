@@ -47,11 +47,11 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
              *   上下颠倒 + 文字镜像** —— 递归 Move 把各层控件反复推挤, 坐标系翻转。
              *   两害相权: 宁可尺寸停在中间值 (rev21 状态) 也不能递归。
              *
-             * 为什么放在 pop **之后** 是安全的: 此时 g_uc_current 已还原成外层值
+             * 为什么放在 pop **之后** 是安全的: 此时 vb6_ucCurrent 已还原成外层值
              * (通常 NULL), 所以 vb6_UC_RunDesignResize 里 "上下文内就不跑" 的
              * 判据不会误挡本调用 —— 它是唯一允许在上下文外触发的入口。
              * 且它内部有同控件重入短路, 事件体里 Move 别的控件再发 WM_SIZE 也不会
-             * 无限展开 (那一层 g_uc_current 非空, 直接被挡)。*/
+             * 无限展开 (那一层 vb6_ucCurrent 非空, 直接被挡)。*/
             /* Fix <vbeclipse> rev23: 这里**只排队**, 不直接跑 —— WM_SIZE 是
              * SetWindowPos/MoveWindow 的**同步** SendMessage, 一整串嵌套 Move 全在
              * 同一个调用栈里跑完才返回, 那时 ucFolder 的 ViewArea 还没拿到最终尺寸
@@ -182,7 +182,7 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 const int doDump = (dumpDir113h && *dumpDir113h);
                 (void)doDump;
                 _snprintf(path113h, sizeof(path113h), "%s\\%s_%d_%p.bmp", dumpDir113h,
-                          r->desc->typeName, (int)++g_uc_dumpSeq, hwnd);
+                          r->desc->typeName, (int)++vb6_ucDumpSeq, hwnd);
                 path113h[sizeof(path113h) - 1] = '\0';
                 if (doDump) {
                     vb6_uc_dibSaveBmp(&dib113h, path113h);
@@ -269,8 +269,8 @@ void vb6_uc_gdiplusInit(void) {
     done = 1;
     // czUI fix: 环境字体默认名 — Bag 重放 ReadProperty("Font", Ambient.Font)
     // 会把此对象设为控件字体; Name=NULL 时所有 GDI+ 文字静默消失
-    if (!g_vb6_UserControl_FontObj.Name)
-        g_vb6_UserControl_FontObj.Name = SysAllocString(L"Segoe UI");
+    if (!vb6_UserControl_FontObj.Name)
+        vb6_UserControl_FontObj.Name = SysAllocString(L"Segoe UI");
     HMODULE mod = LoadLibraryA("gdiplus.dll");
     if (!mod) return;
     long (__stdcall *pStartup)(ULONG_PTR*, const void*, void*) =

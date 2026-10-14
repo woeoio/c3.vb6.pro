@@ -28,12 +28,10 @@ static void vb6_coll_push(void* coll, const vb6_VARIANT* v, const wchar_t* key) 
     }
     vb6_VARIANT* dst = &((vb6_VARIANT*)c->items)[c->count];
     memset(dst, 0, sizeof(*dst));
-    if (v->vt == vb6_vtBSTR) {
-        dst->vt = vb6_vtBSTR;
-        dst->bstrVal = v->bstrVal ? SysAllocString(v->bstrVal) : NULL;
-    } else {
-        *dst = *v;
-    }
+    /* 账 #305 §B165 (第五十四刀): 改前只有串那一档另分配，其余裸结构赋值 ⇒ x86 的 Decimal
+       存进来就是**别人那 16 字节的指针**，取回时早悬空(实测读回 2066035336255469780997 那一类
+       数)。存值口径问那唯一一枚出口，与 vb6_Host_ClearVariant 的放那一对配平。 */
+    vb6_VariantValueCopy(dst, v);
     if (c->keys) c->keys[c->count] = key ? SysAllocString(key) : NULL;
     c->count++;
 }
@@ -118,7 +116,7 @@ void vb6_Collection_Remove(void* coll, int32_t idx1) {
     if (!vb6_uc_isColl(c) || idx1 < 1 || idx1 > c->count) return;
     vb6_VARIANT* items = (vb6_VARIANT*)c->items;
     vb6_VARIANT* v = &items[idx1 - 1];
-    if (v->vt == vb6_vtBSTR && v->bstrVal) { SysFreeString(v->bstrVal); }
+    vb6_VariantValueFree(v);   /* 账 #305 §B165: 释放口径与 vb6_coll_push 同源(对象档照旧不动) */
     if (c->keys) {
         if (c->keys[idx1 - 1]) SysFreeString(c->keys[idx1 - 1]);
         memmove(&c->keys[idx1 - 1], &c->keys[idx1], sizeof(wchar_t*) * (size_t)(c->count - idx1));
@@ -139,15 +137,10 @@ void vb6_Collection_RemoveByKey(void* coll, const wchar_t* key) {
     }
 }
 
-// Item(i): 1-based; BSTR 需复制 (宿主管道的 ClearVariant 会 SysFreeString)
+// Item(i): 1-based; 取回的那一格自己持有一份 (宿主管道随后按同一口径放掉)
 static void vb6_coll_itemCopy(const vb6_VARIANT* src, vb6_VARIANT* out) {
     memset(out, 0, sizeof(*out));
-    if (src->vt == vb6_vtBSTR && src->bstrVal) {
-        out->vt = vb6_vtBSTR;
-        out->bstrVal = SysAllocString(src->bstrVal);
-    } else {
-        *out = *src;
-    }
+    vb6_VariantValueCopy(out, src);   /* 账 #305 §B165: 与 vb6_coll_push 同一枚出口 */
 }
 
 void vb6_Collection_Item(void* coll, int32_t idx1, void* outV) {

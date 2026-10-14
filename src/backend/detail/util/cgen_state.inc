@@ -21,6 +21,12 @@
     // 代码输出
     CodeEmitter h_;   // .h 文件内容
     CodeEmitter c_;   // .c 文件内容
+    // C3 bloat fix: 窗体 frx 字节数组 (Icon/Picture/控件 Picture/ImageList/SSTab) 的**定义**。
+    // 这些定义在 emitFormFramework 期间从多个调用点产生, 但那些调用点大多落在生成代码的
+    // **函数体**里 (CreateControls 等) —— `extern ... = {...}` 在块作用域非法, 故统一攒到
+    // 这里, 等 emitFormFramework 返回、c_ 回到文件作用域时一次性发射 (见
+    // cgen_base_generate_decl_pass.inc)。.h 侧只发 extern 声明 (bytesToHexArrayDecl)。
+    std::vector<std::string> frxArrayDefs_;
     std::string header_;
     std::string source_;
     std::string baseName_;        // 输出文件基名 (如 "hello")
@@ -38,6 +44,11 @@
     std::string currentReturnCType_; // Fix 054: 当前函数返回值的C类型名 (如 "vb6_type_QRCodegenSegment")
     int labelCounter_ = 0;           // 标签计数器 (避免C标签冲突)
     int tempCounter_ = 0;            // 临时变量计数器
+    // 账 #305 §B156 (第四十四刀): 多维 ReDim 的界数组临时量以前**按数组名**拼
+    // (_redim_bounds_<名>), 同一过程里第二条多维 ReDim 就在同一个 C 函数里把定义发两遍
+    // ⇒ cl C2374「重定义；多次初始化」。这一枚计数器给的是「同一模块内第几条多维 ReDim」,
+    // 与 tempCounter_ 同生同灭 (同处复位), 使名字在同一过程内必然唯一。
+    int ndBoundsSeq_ = 0;             // 多维 ReDim 界数组临时量的序号
 
     // 表达式求值结果 (累加器模式: 每个emitExpr调用设置lastExpr_)
     std::string lastExpr_;           // 最近一次表达式生成的C代码字符串
@@ -65,6 +76,11 @@
         // 已知时优先通过 resolveClassMemberCall 精确解析该类的成员方法/属性,
         // 并把 tempType 设为 vb6_cls_<className>* (避免 void* 上的 .member/->member 错误)
         std::string className;
+        // 账 #257 第十九层: With 目标是**宿主伪对象** (UserControl / PropertyPage) 时,
+        // 记下源码里那份拼法 (PascalCase 由 hostPseudoRtlSymbol 归一); 空串 = 不是。
+        // 体内 `.成员` 是 VB6 的**内建**成员, 与控件自己声明的同名公开属性是两个东西
+        // (见 CCodeGen::withHostPseudoIntrinsic)。
+        std::string hostPseudoObj;
     };
     std::vector<WithObjInfo> withObjectInfoStack_;
     bool suppressDefaultProp_ = false;  // P17.1: With对象表达式时抑制默认属性读取
@@ -166,6 +182,19 @@
     // **并存**, 消费点先判它, 以免既有整数路径失去变量。
     std::unordered_set<std::string> knownIntVars_;
 
+    // ai/032: 无符号/窄整型 (SByte/UInteger/ULong/ULongLong) 的局部/形参/返回槽专属登记表
+    // (小写名 → 真 Vb6Type)。口径同上面 knownByteVars_ / knownBoolVars_:
+    // 这四档的 C 型 (int8_t / uint16_t / uint32_t / uint64_t) 都不在既有的
+    // `int32_t | int16_t | VBABOOL` 那一支里, 而**局部变量在 symTab_ 里不可达**
+    // (symTab_ 只有模块作用域) ⇒ 以前 inferExprType 一律答 Variant。后果:
+    //   · `CStr(u)` (u As ULong) 走 vb6_CStr(vb6_VariantFromValue(u)), _Generic 的
+    //     `unsigned int: vb6_VariantLong` 把 &HFFFFFFFF 打成 "-1";
+    //   · `Debug.Print u` 落到 vb6_DebugWriteLong((int32_t)(u)) → 同样 -1。
+    // 用一张 name→Vb6Type 的表 (而不是四个 set) 是因为消费点需要知道**哪一档**,
+    // 才能选 vb6_CStrULong / vb6_CStrULongLong。模块级变量不进此表 —— 它们在
+    // symTab_ 里可达, inferExprType 已能答出, 且本表随过程入口 clear()。
+    std::unordered_map<std::string, Vb6Type> knownNarrowIntVars_;
+
     // 已知Long/Integer/Boolean变量名集合 (小写) - 用于COM值解封类型推断
     std::unordered_set<std::string> knownLongVars_;
 
@@ -251,6 +280,20 @@
     // 项目类 → 直接调用 vb6_<Type>_prop_get_Item(obj.field, arg);
     // COM 接口 → vb6_ComCall((void*)obj.field, L"Item", args, argc).
     const std::unordered_map<std::string, std::unordered_map<std::string, std::string>>* classTypedFieldMap_ = nullptr;
+    // 账 #305 §B168 (第五十九刀) + §B169 (第六十刀): 工程级「类 → (标量数据字段 → 声明档)」表
+    // — driver 预扫描。key: 小写类名, value: 小写字段名 (原名 + "m_" 前缀两种拼法都在) → Vb6Type。
+    // 用途: 回答「`<对象>.<字段>` 这个左值到底属于哪一档」—— 只有三档用得着:
+    //   Variant → 必须装箱 (vb6_VARIANT 槽);  String → 必须深拷贝/接管 (BSTR 槽);
+    //   其它标量 → 直发字段赋值;  数组/定长串/对象名/UDT **不入表** (各有自己的账与表)。
+    // 赋值站的四条既有判据 (裸名 / 本模块 classVariantMembers_ / VB6_SA_* 文本 / UDT 字段类型)
+    // 都够不着**别类**的字段, 于是 §B168 发的是不装箱裸赋值 (cl C2440, `h->PV = 7;`)、
+    // §B169 形② 发的是指针别名裸赋值 (`h->PS = s;` — 旧值不释放, 析构再 free 一遍),
+    // 而 With 块那一站 (§B169 形①) 在查不到 Property Let/Set 之后**凭空拼一个函数名**
+    // `vb6_<Cls>_prop_let_<F>` (实测 DllPrint 281 句) ⇒ C4013 + LNK2019。
+    // 查询走 classFieldKind() 一处, 不要在调用点再抄一遍 find; 三个布尔投影
+    // (classFieldIsVariantSlot / classFieldIsBstrSlot / classFieldIsScalarData) 也都问它。
+    const std::unordered_map<std::string, std::unordered_map<std::string, Vb6Type>>*
+        classFieldKindMap_ = nullptr;
     // Fix 045: 跨模块 Variant 返回值函数 C 名集合 — 由 driver.cpp 预扫描所有模块构建.
     // 包含所有返回 vb6_VARIANT 的项目函数的 C 名称 (如 "vb6_cAsyncSocket_Znl").
     // 在 cExprIsVariant() 中检查 C 表达式是否调用这些函数, 以正确识别 Variant 值.
@@ -295,6 +338,21 @@
     // 定长字符串变量 (小写var名 → 长度表达式, 如 "a" → "10")
     // 用于LSet/RSet使用固定长度而非SysStringLen
     std::unordered_map<std::string, std::string> knownFixedStringLen_;
+
+    // 账 #118: 定长字符串 **UDT 字段** 的长度表 (UDT 的 C 类型名 → 成员小写名 → 长度表达式)。
+    // `Type Rec: f As String * 8` 的 `r.f = ...` / `Len(r.f)` 靠它收口到 8。
+    // 在 visit(TypeDecl&) 里按声明填 (那一步的 C 类型名就是 key), 全模块有效 —— **不随
+    // 过程入口 clear** (与 knownFixedStringLen_ 不同), 所以别把它加进任何一个 clear 列表。
+    // 跨模块 UDT 查不到 (符号表按模块隔离, 同 udtFieldObjCType 的既有边界)。
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> udtFixedStrFieldLen_;
+
+    // 账 #118: **模块级**定长串的持久副本 (小写变量名 → 长度表达式)。knownFixedStringLen_
+    // 在每个过程入口 clear (cgen_decl_func.cpp / cgen_decl_proc.cpp / cgen_decl_prop.cpp),
+    // 而模块级 `Private gT As String * 5` 是在 declaration 阶段登记的 —— 于是第一个过程
+    // 一入口那条登记就没了, `gT = "ab"` 与 `Len(gT)` 双双退回"普通动态串"口径 (实测
+    // A-len=2 / A=[ab])。与 classBstrMembers_ / moduleUdtMembers_ 同一套办法:
+    // 在 cgen_base_generate_state_scan.inc 里扫一遍留底, 每个过程入口再插回来。
+    std::unordered_map<std::string, std::string> moduleFixedStringLen_;
 
     // M22: Declare A版API函数名集合 (小写) - 需要BSTR->ANSI转换的ByVal String参数
     // 判断: 函数名或Alias以'A'结尾 (如 GetWindowTextA, Alias "WritePrivateProfileStringA")
@@ -378,8 +436,10 @@
     // 只有启动对象所在模块可以生成进程入口点.
     std::string startupObject_;
 
-    // M22: 外部模块名称集合 (用于跨模块变量解析时判断模块是否已#include)
-    std::unordered_set<std::string> externalModules_;
+    // M22: 外部模块名称 (用于跨模块变量解析时判断模块是否已#include)。
+    // 账 §B97: vector 不是 unordered_set —— 三处会出顺序的码头（.c/.h 的 #include 段、
+    // 入口点里的模块 init 调用序）直接迭代它，顺序必须是 driver 定下来的工程声明序。
+    std::vector<std::string> externalModules_;
 
     // M22: 当前IdentifierExpr是否在IndexOrCallExpr的callee位置
     // VB6语义: 同名函数引用 — callee上下文返回函数名(供调用), 其他上下文返回返回值变量
@@ -553,29 +613,13 @@
         return listViewHwndExprOf(objExpr);
     }
     // C29-Data: Data 控件 (不可见类 VB6_DATA 属性宿主, 登记裸控件名如 "Data1")。
-    // Recordset 链 (Data1.Recordset.Fields("x").Value / .MoveNext / .BOF) 全直译 RTL。
+    // 账 #278 §B124: Recordset 链今天**只有一条路** —— cgen_util_ctrl.cpp 在 recordset
+    // 那一档交出 `vb6_Data_RecordsetObj`，RTL 那边是 memberobj 的真 IDispatch（成员名表
+    // vb6forms_memberobj.c:136-137）。从前那套"透传形态直译"认的是 `vb6_Data_Self(` 前缀，
+    // 而这个前缀今天没有任何发射者 ⇒ 判据恒假，直译分支一条都进不去（九形探针量过，
+    // 见台账 §B124）。⇒ 撤掉，别再给死码立表。dataVars_ 留着：控件自己那一档
+    // (dataNameOfExpr) 还在用。
     std::unordered_set<std::string> dataVars_;
-    // 从 vb6_Data_Self(vb6_hwnd_X) / vb6_Data_Self((void*)vb6_hwnd_X) 抠出裸槽名。
-    // ⚠ 控件属性分支发的形态**不带** (void*) 强转, 两种都要认。
-    std::string dataSelfHwndExpr(const std::string& objExpr) const {
-        const char* kHeads[] = { "vb6_Data_Self((void*)", "vb6_Data_Self(" };
-        for (const char* kHead : kHeads) {
-            size_t p = objExpr.find(kHead);
-            if (p == std::string::npos) continue;
-            size_t s = p + strlen(kHead);
-            if (s > 0 && objExpr.compare(s, 9, "vb6_hwnd_") != 0 && s > 0) {
-                // 允许中间有空白
-                while (s < objExpr.size() && objExpr[s] == ' ') s++;
-            }
-            size_t e = s;
-            while (e < objExpr.size() && (isalnum((unsigned char)objExpr[e]) || objExpr[e] == '_')) e++;
-            std::string n = objExpr.substr(s, e - s);
-            // ⚠ 扫出来的是完整槽名 "vb6_hwnd_Data1" —— 剥掉前缀再查表
-            if (n.size() > 9 && n.compare(0, 9, "vb6_hwnd_") == 0) n = n.substr(9);
-            if (dataVars_.count(n)) return "vb6_hwnd_" + n;
-        }
-        return "";
-    }
     std::string dataNameOfExpr(const std::string& objExpr) const {
         if (objExpr.size() > 9 && objExpr.compare(0, 9, "vb6_hwnd_") == 0) {
             std::string n = objExpr.substr(9);
@@ -656,7 +700,12 @@
         //   vb6_ComCallObject(vb6_hwnd_X, L"Panels", …)     真窗口期链式下标
         // 都按 `vb6_<X>` 抠, 再用 statusBarVars_ 核对是不是真 StatusBar
         // (vb6_ComCallObject(vb6_hwnd_Form1, L"Controls") 会抠出 Form1, 核对刷掉)。
-        static const char* kHeads[] = { "vb6_ComGetObjectProp(vb6_", "vb6_ComCallObject(vb6_" };
+        // 账 #299 起还有第三种写法: 集合本体由 memberobj 的真 IDispatch 答
+        //   `vb6_StatusBar_Panels((void*)vb6_hwnd_X)` (以及它外面套的 Item 那一层)。
+        // 这一条**必须**跟着拦子一起加: 不认新头, 链式那 8 条成员与 `Panels.Add/Remove`
+        // 的直译就全都判不出"接收者是 StatusBar", 一起打回晚绑定 —— 那是行为改动, 不是收口。
+        static const char* kHeads[] = { "vb6_ComGetObjectProp(vb6_", "vb6_ComCallObject(vb6_",
+                                        "vb6_StatusBar_Panels((void*)vb6_" };
         for (const char* h : kHeads) {
             size_t p = objExpr.find(h);
             while (p != std::string::npos) {
@@ -765,11 +814,57 @@
         static const std::vector<std::string> heads = {
             "vb6_TreeView_Nodes(", "vb6_Toolbar_Buttons(", "vb6_ImageList_ListImages(",
             "vb6_ListView_ListItems(", "vb6_ListView_ColumnHeaders(",
+            // 账 #299: StatusBar 的 Panels 集合对象 (与上面几族同一个 memberobj 机制)。
+            "vb6_StatusBar_Panels(",
         };
         for (const auto& h : heads) {
             if (expr.size() >= h.size() && expr.compare(0, h.size(), h) == 0) return true;
         }
         return false;
+    }
+
+    // <vbeclipse> 账 #299 第二十一刀: "这枚成员集合的创建式是什么" —— 唯一一处答案。
+    // 这张表以前在**三处**各写一遍 (resolveComValue / resolveComMarkerForPack /
+    // cgen_expr_call_com_bind 的默认成员下标那一段)，而且每一处各缺几族: Panels 三处全缺
+    // ⇒ `Set po = SB.Panels(1)` 与 `With SB.Panels(1)` 的头一直发成
+    // `vb6_ComGetObjectProp(<HWND>, L"Panels")` = 拿 HWND 当 IDispatch 用 (一条读数都交不出)，
+    // 第二十刀只补了 resolveComValue 那一处 ⇒ 四形里只有 `For Each` 活了过来。
+    // 三条发射路的**返回语义**各不相同 (改 lastExpr_+isComMarker_ / 直接 return /
+    // 拼完还要再套一层 Item)，所以这里只交**串**，语义留在调用点。空串 = 不是已知的成员集合。
+    // 宿主槽前缀按族走各自的事实: ImageList 无窗口 ⇒ vb6_com_X 是实例指针；
+    // TreeView/Toolbar/StatusBar 是真窗口 ⇒ vb6_hwnd_X；ListView 用 listViewHwndExprOf
+    // (它还认 With 槽里那个裸 HWND 变量)；跨窗体 TreeView 查 externalTreeViewAccs_。
+    std::string memberCollectionObjectExpr(const std::string& hostExpr,
+                                           const std::string& memberName) const {
+        std::string mem = memberName;
+        for (char& ch : mem) ch = (char)tolower((unsigned char)ch);
+        if (mem == "nodes") {                                   // C29-8b
+            std::string bare = treeViewNameOfExpr(hostExpr);
+            if (!bare.empty()) return "vb6_TreeView_Nodes((void*)vb6_hwnd_" + bare + ")";
+            auto itExt = externalTreeViewAccs_.find(hostExpr);   // 跨窗体: 槽是访问器文本
+            if (itExt != externalTreeViewAccs_.end())
+                return "vb6_TreeView_Nodes((void*)" + itExt->second + ")";
+            return "";
+        }
+        if (mem == "buttons") {                                 // C29-5b
+            std::string bare = toolbarNameOfExpr(hostExpr);
+            return bare.empty() ? "" : "vb6_Toolbar_Buttons((void*)vb6_hwnd_" + bare + ")";
+        }
+        if (mem == "panels") {                                  // 账 #299
+            std::string bare = statusBarNameOfExpr(hostExpr);
+            return bare.empty() ? "" : "vb6_StatusBar_Panels((void*)vb6_hwnd_" + bare + ")";
+        }
+        if (mem == "listimages") {                               // C29-3
+            std::string bare = imageListNameOfExpr(hostExpr);
+            return bare.empty() ? "" : "vb6_ImageList_ListImages((void*)vb6_com_" + bare + ")";
+        }
+        if (mem == "listitems" || mem == "columnheaders") {      // C29-7
+            std::string lvHwnd = listViewHwndExprOf(hostExpr);
+            if (lvHwnd.empty()) return "";
+            return (mem == "listitems") ? ("vb6_ListView_ListItems((void*)" + lvHwnd + ")")
+                                        : ("vb6_ListView_ColumnHeaders((void*)" + lvHwnd + ")");
+        }
+        return "";
     }
     // C29-DT-c: DTPicker 的裸名登记。认法照 treeViewNameOfExpr —— 它也是真窗口，
     // 判据方法 (SimChange/SimDropDown/SimCloseUp) 的宿主槽只会是 `vb6_hwnd_<裸名>`，

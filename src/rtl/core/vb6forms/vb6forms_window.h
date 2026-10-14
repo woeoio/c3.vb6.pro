@@ -47,6 +47,14 @@ int vb6_TwipToY(int twips);
 // Fix 184: 唯一 DPI 源 + 反向换算 (像素 -> 缇)。RTL 内任何 px/缇 转换都必须
 // 走这四个入口，禁止再写死 15。
 int vb6_DpiX(void);
+int vb6_HimetricToPxOnDc(int hm, int dpi);  // 账 #298: himetric -> 像素那**一个公式**的唯一住处 (DPI 由调用方递)
+int vb6_HimetricToPxX(int hm);   // = OnDc(hm, vb6_DpiX())  —— 屏 DPI 那一档
+int vb6_HimetricToPxY(int hm);   // = OnDc(hm, vb6_DpiY())
+float vb6_HimetricToPxF(float hm, float dpi);   // OLE 容器坐标那一路 (POINTF, 不许量化成整数)
+float vb6_PxToHimetricF(float px, float dpi);
+// 账 #206 第二格 + 账 #298: himetric <-> 缇 (与 DPI 无关的纯单位换算), 唯一那一处。
+long vb6_TwipsToHimetric(long tw);
+long vb6_HimetricToTwips(long hm);
 int vb6_DpiY(void);
 int vb6_XToTwipX(int px);
 int vb6_YToTwipY(int px);

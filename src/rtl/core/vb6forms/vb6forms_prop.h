@@ -65,6 +65,12 @@ int vb6_GetControlWidth(void* hwnd);
 void vb6_SetControlWidth(void* hwnd, int width);
 int vb6_GetControlHeight(void* hwnd);
 void vb6_SetControlHeight(void* hwnd, int height);
+
+// 账 #230: 控件几何的 VB 侧读数（详见 vb6forms_ctrl.c 那段注释）。四个 getter 与 Move
+// 都问这一处，**没有第二份存储**。写侧三个来路：属性赋值、Move、建窗（设计值）。
+enum { VB6_GEOM_LEFT = 0, VB6_GEOM_TOP = 1, VB6_GEOM_WIDTH = 2, VB6_GEOM_HEIGHT = 3 };
+void vb6_GeomCacheWrite(void* hwnd, int slot, int value, int32_t mode);
+int  vb6_GeomCacheRead(void* hwnd, int slot, int actualPx, int32_t mode, int fallback);
 // Fix 162a: obj.Move l[,t[,w[,h]]] —— twips 进; mask 位 1=L 2=T 4=W 8=H, 缺失位不变
 void vb6_ControlMove(void* hwnd, double l, double t, double w, double h, int mask);
 

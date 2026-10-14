@@ -1,10 +1,12 @@
 #include "backend/cgen.hpp"
+#include "common/host_pseudo.hpp"
 #include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <cstdlib>
 #include <functional>
 #include <cstdio>
+#include "driver/detail/phase_timing.hpp"   // ai/030 续: ident 分段打点 (c3StatSplit; 必须在 namespace 外)
 
 namespace vb6c3 {
 
@@ -22,9 +24,13 @@ namespace vb6c3 {
 #include "backend/detail/expr/cgen_expr_ident_builtin_table.inc"
 
 void CCodeGen::visit(IdentifierExpr& node) {
+    std::chrono::steady_clock::time_point _c3sIdent = std::chrono::steady_clock::now();
 #include "backend/detail/expr/cgen_expr_ident_dispatch.inc"
+    c3StatSplit(20, _c3sIdent);   // ai/030 续: ident:dispatch
 #include "backend/detail/expr/cgen_expr_ident_symbol.inc"
+    c3StatSplit(21, _c3sIdent);   // ident:symbol
 #include "backend/detail/expr/cgen_expr_ident_builtin.inc"
+    c3StatSplit(22, _c3sIdent);   // ident:builtin (片段内早退的直落尾不收)
 }
 
 } // namespace vb6c3

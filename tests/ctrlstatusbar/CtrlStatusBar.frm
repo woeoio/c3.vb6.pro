@@ -60,13 +60,25 @@ Option Explicit
 ' ③Align/Style/SimpleText 三个自身属性 ④时间/日期面板的文本由 RTL 自己算
 ' (SDK 10.0.19041.0 的 commctrl.h 里没有 SBT_TIME/SBT_DATE, 只能自己来)。
 
+' prints a boolean as True/False (this fixture printed bare values only until SB36 moved)
+Function SBTF(b As Boolean) As String
+    If b Then SBTF = "True" Else SBTF = "False"
+End Function
+
 Private Sub Form_Load()
-    Debug.Print "SB0-HWND=" & Me.hwnd & " CAP=" & Me.Caption & " CL=" & Me.Controls.Count
+    Dim sbW0 As Long, sbW1 As Long, sbSum As Long, sbTol As Long
+    Dim sbH0 As String
+    ' SB0 asks whether a handle survives the stringify road: VB6 hands hWnd out as a
+    ' Long, so CStr of it is digits. An empty string here meant the pointer went into
+    ' the object box and came back as "".
+    sbH0 = CStr(Me.hwnd)
+    Debug.Print "SB0-HWND-NUM=" & SBTF(Len(sbH0) > 0) & " CAP=" & Me.Caption & " CL=" & Me.Controls.Count
     Debug.Print "SB1-COUNT=" & StatusBar1.Panels.Count
     Debug.Print "SB2-KEY1=" & StatusBar1.Panels(1).Key
     Debug.Print "SB3-TEXT1=" & StatusBar1.Panels(1).Text
     Debug.Print "SB4-STYLE1=" & StatusBar1.Panels(1).Style
     Debug.Print "SB5-AUTOSZ1=" & StatusBar1.Panels(1).AutoSize
+    ' Design-block MinWidth is himetric like Object.Width; the getter answers twips -> 22
     Debug.Print "SB6-MINW1=" & StatusBar1.Panels(1).MinWidth
     Debug.Print "SB7-KEY2=" & StatusBar1.Panels(2).Key
     Debug.Print "SB8-TEXT2=" & StatusBar1.Panels(2).Text
@@ -117,8 +129,29 @@ Private Sub Form_Load()
     ' 设置类属性回读
     StatusBar1.Panels(1).MinWidth = 77
     Debug.Print "SB35-SETMINW=" & StatusBar1.Panels(1).MinWidth
+    ' SB36 used to pin 123, i.e. "whatever you wrote is what you read back". From the 22nd
+    ' cut (zhang 206, B41 face 2) this member answers the Laid-out geometry in twips, and
+    ' panel 1 is a spring panel whose requested width is meaningless - so that number can
+    ' only come from the window. Restated per #157: take the baseline in place and ask for
+    ' the increment (writing a width into a spring panel must not move what it reports),
+    ' never a hand-added total. The RAW line prints all four numbers.
+    sbW0 = StatusBar1.Panels(1).Width
     StatusBar1.Panels(1).Width = 123
-    Debug.Print "SB36-SETW=" & StatusBar1.Panels(1).Width
+    sbW1 = StatusBar1.Panels(1).Width
+    sbSum = StatusBar1.Panels(1).Width + StatusBar1.Panels(2).Width _
+            + StatusBar1.Panels(3).Width
+    Debug.Print "SB36-RAW before=" & sbW0 & " after=" & sbW1 & " sum=" & sbSum _
+                & " bar=" & StatusBar1.Width
+    Debug.Print "SB36-SPRING-FOLLOWS-WINDOW=" & SBTF((sbW1 > 0) And (sbW1 = sbW0))
+    ' SB36-TILES-BAR = the existence witness for zhang 303 (B132), the defect the 22nd cut
+    ' exposed by fixing the getter: SbLayout put a sbrContents tile's measured width into
+    ' want[] but never into fixedTotal, so the spring was handed that width a second time and
+    ' the last right edge ran past the client rect - BASE reads sum=6630 against bar=6000
+    ' (the 630 twips = 42px clock text, counted twice), NEW must tile the bar.
+    ' Tolerance, not a hand-added total: every tile is folded pixels->twips with rounding, so
+    ' three tiles may differ from the bar's own width by a couple of twips (45 twips = 3px).
+    sbTol = Abs(sbSum - StatusBar1.Width)
+    Debug.Print "SB36-TILES-BAR=" & SBTF((sbSum > 0) And (sbTol <= 45))
     StatusBar1.Panels(1).AutoSize = 0
     Debug.Print "SB37-SETAUTOSZ=" & StatusBar1.Panels(1).AutoSize
     StatusBar1.Panels(1).ToolTipText = "hello"
