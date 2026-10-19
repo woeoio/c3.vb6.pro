@@ -1,56 +1,21 @@
-// cgen_expr_call_conv_output.inc - visit(IndexOrCallExpr&) 函数体片段：输出侧适配：MsgBox 首参包装 + Format 首参包装 + CStr 兜底包装
+// cgen_expr_call_conv_output.inc - visit(IndexOrCallExpr&) 函数体片段：输出侧适配：Format 首参装箱 + CStr 兜底包装（MsgBox 那一腿已并入 Fix 175, 见下）
 // 由 src/backend/detail/expr/cgen_expr_call_pad_conv.inc 拆出（2026-09-19），
 // 在函数体内被 #include，非独立编译单元。内容 = 拆分前该文件第 249~353 行，逐行未改。
 
-    // MsgBox自动BSTR转换: MsgBox期望BSTR, 非BSTR的prompt参数需包装
-    // 注意: 只转换第一个参数(prompt), 不能把整个argList包进去(MsgBox v, , title时argList含3个参数)
-    if (callee == "vb6_MsgBox" || callee == "vb6_MsgBox1") {
-        if (!args.empty()) {
-            std::string& firstArg = args[0];
-            if (firstArg.find("vb6_ComGetIntProp") == 0 ||
-                firstArg.find("vb6_ComVtableGetInt") == 0) {
-                firstArg = "vb6_CStrLong(" + firstArg + ")";
-            } else if (firstArg.find("vb6_ComGetDoubleProp") == 0 ||
-                       firstArg.find("vb6_ComVtableGetDouble") == 0) {
-                firstArg = "vb6_CStrDbl(" + firstArg + ")";
-            } else if (firstArg.find("vb6_VariantFromComResult") == 0) {
-                // COM调用结果(VARIANT*)→vb6_VARIANT, 需转BSTR
-                firstArg = "vb6_VariantToString(" + firstArg + ")";
-            } else if (firstArg.find("vb6_ComCall(") == 0
-                           || firstArg.find("vb6_ComCallByDispid(") == 0) {
-                // P24-01: 后期绑定COM调用返回VARIANT*, 需解包转BSTR
-                firstArg = "vb6_VariantToString(vb6_VariantFromComResult(" + firstArg + "))";
-            } else if (firstArg.find("vb6_VariantToString(") == 0) {
-                // Fix 090u: 实参已是 VariantToString(...) (参数打包段对 Variant 实参
-                // 按 BSTR 形参已转换一次, 如 MsgBox .FindFirst(...) As Variant /
-                // MsgBox .Value(1,6) As Variant) — 再包一层 → VariantToString(BSTR)
-                // C2440 "BSTR→vb6_VARIANT". 此处保持一层.
-            } else if (!node.positional.empty() && inferExprType(*node.positional[0]) == Vb6Type::Variant) {
-                // Variant类型变量/表达式: MsgBox v → vb6_VariantToString(v)
-                firstArg = "vb6_VariantToString(" + firstArg + ")";
-            } else if (!node.positional.empty()) {
-                // Fix 161e: 上面那串只认领了 **COM 读 / Variant** 两类形态,
-                // **纯数值**一条都没包 ⇒ `MsgBox Len("你好hello")` / `MsgBox 7` /
-                // `MsgBox (n + 1)` / `MsgBox 3.5` / `MsgBox True` 全都把 int32_t
-                // (double / int16_t) **直接当 BSTR 指针**传给 vb6_MsgBox1 ——
-                // 弹窗是空的: 地址 7、123 之类根本不可读, 真读得到时显示的也是
-                // 垃圾而不是数字。VB6 会隐式把数值转成字符串再显示。
-                // 这里对上面没认领的形态统一过 wrapToBSTR
-                // (cgen_expr_binary_util.cpp:81) —— 它按 inferExprType 分流
-                // (Long/Integer/Boolean/Byte/Double/Single/Date/LongLong…),
-                // 且 String 分支原样返回, 所以不会把已正确的字符串实参再包一层。
-                firstArg = wrapToBSTR(firstArg, *node.positional[0]);
-            }
-        }
-    }
-    // P25: MsgBox BSTR转换可能修改了args[0], 需重建argList
-    if (callee == "vb6_MsgBox" || callee == "vb6_MsgBox1") {
-        argList.clear();
-        for (size_t i = 0; i < args.size(); i++) {
-            if (i > 0) argList += ", ";
-            argList += args[i];
-        }
-    }
+    // 账 #305 §B175 (第六十六刀): 原此处的 MsgBox prompt 折算段 (六条文本文案连判 +
+    // Fix 161e 那条 wrapToBSTR 兜底) 与紧随其后的 argList 重建整段撤掉 —— 那六是**同一问**
+    // (「实参档位与形参档位不符 ⇒ 折算」) 的第二个主人, 而它吃的是 args[] 的文本前缀。
+    // 现在这一问由 Fix 175 在 arg_emit 那一站答 (位号问 builtinNoParamTableStringSlot,
+    // 形状走 wrapToBSTR), 且实测**覆盖面一字不差**: BASE(段在) vs OFF(段撤) 跑 tests/ 全
+    // 422 份输入, 移动的 6 行全在 tests/msgbox_num.bas 且全是那六条文本案里的数值一档
+    // (`MsgBox n` / `MsgBox 123` / `MsgBox (n+1)` / `MsgBox d` / `MsgBox True` / `MsgBox Len(...)`),
+    // 而 COM 结果 / Variant / 已折过 那三条案在段撤后产物**逐字节相同** (= 那三条今天已由
+    // 别的站办完, 这一段在语料上只承数值一档) —— 读数 `.build/k66_ab_report.txt`。
+    // 顺带被这一段管不着的旧账: MsgBox 的**标题位**是 BSTR, 而它只管 prompt ⇒ 今天仍裸送
+    // (`vb6_MsgBox(s1, 0, d2)`), 新站按名单 {0,2} 一起管。
+    // 下面那三段 (MsgBox arity 改道 / Format 首参装箱 / CStr 兜底) 问的是**另一件事**
+    // (补默认实参、把值装进 VARIANT 形参、按实参类型挑 CStr 出口), 与本问无关, 一字未动。
+
     // MsgBox(prompt) -> vb6_MsgBox1(prompt)
     // MsgBox(prompt, buttons) -> vb6_MsgBox(prompt, buttons, NULL)
     if (callee == "vb6_MsgBox") {
@@ -76,7 +41,20 @@
         } else if (argType == Vb6Type::Byte) {
             args[0] = "vb6_VariantInt((int16_t)(" + args[0] + "))";
         } else if (argType == Vb6Type::Date) {
-            args[0] = "vb6_VariantDouble((double)(" + args[0] + "))";
+            // 账 #430（§B204）: 这一臂原来**手抄**了一张"VB 类型 → 装箱出口"的名单, 其中
+            // Date 那一行写的是 vb6_VariantDouble((double)(...)) —— 与唯一权威 boxToVariant
+            // 对同一问的答案 vb6_VariantDate(...) **相反**。两位主人两个答案, 而权威那条从
+            // 这一站**从没被走到**。跟已结的 #428/#431 同一条教训: 表的格子就是口径, 抄表的
+            // 人不会知道自己抄错了。
+            // 实测后果: 一枚 Dim d As Date 局部发成 double, 每一发 Format(d, …) 都贴
+            // VT_R8, 可同一枚 VarType(d) 答 7 ⇒ "这枚值真是日期"在运行期根本读不出来。
+            // 改法 = 改问权威(与上面 Boolean 档 Fix 198 同一个做法, 一处、零新形状)。
+            // ⚠ **只动这一臂**: Long/Integer/Double/Single/String/Byte 那几档与权威**也各不同**
+            //   (它们多数走 VariantFromValue, 而这站刻意发 VariantLong/VariantDouble/…),
+            //   但那些都是**已登记的既存形状**, 且数值臂还得留给真数值
+            //   (Format(43831, "mmm") 那一族, 见 vb6rtl_format_parse.inc:37-44)——
+            //   不在 #430 范围内。**别顺手塌成一句 boxToVariant**, 那会一次性移动六档形状。
+            args[0] = boxToVariant(node.positional[0].get(), args[0]);
         }
         // Fix 036: Format fallback — 未匹配类型 (Currency/Unknown 等, 非 Variant) 用
         // vb6_VariantFromValue 包装. Variant 类型无需包装 (已是 vb6_VARIANT).

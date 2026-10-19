@@ -157,6 +157,12 @@ void vb6_SetWindowState(void* hwnd, int32_t val) {
 
 int32_t vb6_GetScaleWidth(void* hwnd) {
     if (!hwnd) return 0;
+    double uLeft = 0.0, uTop = 0.0, uW = 0.0, uH = 0.0;
+    /* 账 #305: vbUser 那一档的 ScaleWidth 是**用户设出来的跨度**, 不是从客户区像素
+       倒推的 —— `Scale (0,0)-(100,100)` 之后读数必须是 100。而 vb6_ScalePxToUser 在
+       mode==0 上按 1:1 像素交回客户区像素数, `Line (0,0)-(ScaleWidth, ScaleHeight)`
+       这类写法会因为读数与落笔两头口径不同而画不满整窗。 */
+    if (vb6_UserScaleOf(hwnd, &uLeft, &uTop, &uW, &uH)) return (int32_t)uW;
     RECT rc;
     if (GetClientRect((HWND)hwnd, &rc)) {
         /* VB6 ScaleWidth: 客户区宽度, 单位 = 该窗口自己的 ScaleMode (账 #175)。
@@ -170,6 +176,9 @@ int32_t vb6_GetScaleWidth(void* hwnd) {
 
 int32_t vb6_GetScaleHeight(void* hwnd) {
     if (!hwnd) return 0;
+    double uLeft = 0.0, uTop = 0.0, uW = 0.0, uH = 0.0;
+    /* 同上 (账 #305): vbUser 的 ScaleHeight 是用户设的跨度, 不是客户区像素。 */
+    if (vb6_UserScaleOf(hwnd, &uLeft, &uTop, &uW, &uH)) return (int32_t)uH;
     RECT rc;
     if (GetClientRect((HWND)hwnd, &rc)) {
         /* VB6 ScaleHeight: 客户区高度, 单位同上 (账 #175)。 */

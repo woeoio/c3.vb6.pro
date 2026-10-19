@@ -46,6 +46,43 @@
         for (size_t i = 0; i < calleeParams.size(); i++) {
             const auto& param = calleeParams[i];
             if (param.isOptional && !param.isParamArray) {
+                // IsMissing 转发 (账 #291): 本过程的一个 `Optional As Variant` 形参省略时,
+                // VB6 拿到的是 Missing variant; 把它**原样转发**给另一个 `Optional` 形参时,
+                // Missing 标志会一起传过去 —— 被调方的 `IsMissing(该形参)` 是 True。
+                // 只看"本调用处是否写了实参"会把它判成已传(=1), 于是被调方走错分支。
+                // 实测 ComCtlsDemo: LvwColumnHeaders.Add 把 Width 原样转给
+                // ListView.FColumnHeadersAdd, 被调方 `If IsMissing(Width) Then .CX = 96 * PixelsPerDIP_X()`
+                // 误判为 False ⇒ 走 `CSng(Empty)=0` ⇒ LVCOLUMN.cx=0 ⇒ 七个列全零宽
+                // ⇒ 不触发横向滚动条 ⇒ 列表控件列头和 1000 行项目一个像素都不画。
+                //
+                // 只有 Variant 族会传递 Missing: `Optional As String` 省略时拿到的是
+                // 类型缺省值(""), 不是 Missing, 转发后 IsMissing 仍是 False, 标志照旧发 1。
+                std::string fwdHasFlag;
+                if (currentProc_ && i < node.positional.size()
+                    && node.positional[i] && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
+                    const std::string fwdName =
+                        static_cast<IdentifierExpr&>(*node.positional[i]).name;
+                    std::string fwdLower = fwdName;
+                    std::transform(fwdLower.begin(), fwdLower.end(), fwdLower.begin(), ::tolower);
+                    for (const auto& srcParam : currentProc_->params) {
+                        std::string srcLower = srcParam.name;
+                        std::transform(srcLower.begin(), srcLower.end(), srcLower.begin(), ::tolower);
+                        if (srcLower != fwdLower) continue;
+                        if (srcParam.isOptional && !srcParam.isParamArray
+                            && (srcParam.type == Vb6Type::Variant
+                                || srcParam.type == Vb6Type::Empty
+                                || srcParam.type == Vb6Type::Null
+                                || srcParam.type == Vb6Type::Object)) {
+                            fwdHasFlag = "_has_" + cIdent(srcParam.name);
+                        }
+                        break;
+                    }
+                }
+                if (!fwdHasFlag.empty()) {
+                    if (!argList.empty()) argList += ", ";
+                    argList += fwdHasFlag;
+                    continue;
+                }
                 if (!argList.empty()) argList += ", ";
                 // Fix 081c: For named-arg path, use actuallyPassedParams to determine _has_ flag.
                 // For positional-arg path, args.size() already equals actual arg count (padding

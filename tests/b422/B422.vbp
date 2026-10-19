@@ -1,0 +1,4 @@
+Type=Exe
+Name="B422App"
+Module=B422Main; B422Main.bas
+Startup="Sub Main"

@@ -886,54 +886,20 @@ float vb6_ControlTextHeight(void* hwnd, void* bstrText) {
 // 「认识但什么都不做」(vb6forms_axcontainer.c 的属性位交回 Empty + uc_hostmodel_call.inc
 // 的 return 1)，于是**两跳都返回成功、两跳都不落笔** —— 编得过、跑得起、画面空白。
 //
-// 三条口径:
-//   * DC 走 vb6_ControlPrint / vb6_ControlCls **同一处** vb6_ControlDrawDC（_Paint 派发
-//     挂在身上的 VB6_PaintDC 优先，取不到才 GetDC），不另开第二条取 DC 的路。
-//   * 坐标按**这枚窗口自己的** ScaleMode 换算（vb6_WindowScaleModeSelf + vb6_ScaleUserToPx，
-//     与 #196/#197 那一条单位表同一个来源），不自己再算一遍缇/像素。
-//   * style 的位口径与 parser 折旗标那一处是**同一张表**（parser_expr_postfix.cpp 的
-//     vb6_LineStyleBit 注释）: 1=B 矩形、2=C 椭圆、4=F 填充，故 BF = 1|4 = 5。
-//     color 传负数 = VB6 那一面的"没写颜色"，落到控件自己的 ForeColor。
-//
-// 刻意没做的两头（写在账里，别当已验）: ScaleLeft/ScaleTop 的**原点偏移**没进来
-// （语料的 PictureBox 都是 0），VB6 那条"Line 之后 CurrentX/CurrentY 移到终点"也没进来
-// （调用点从没读回它，接进来要先定 CurrentX 的单位口径，见 #192 那一格）。
-void vb6_ControlLine(void* hwnd, double x1, double y1, double x2, double y2,
-                     int32_t color, int32_t style) {
-    if (!hwnd) return;
-    HWND hw = (HWND)hwnd;
-    int32_t mode = vb6_WindowScaleModeSelf(hw);
-    int ax = vb6_ScaleUserToPx(x1, mode, 0);
-    int ay = vb6_ScaleUserToPx(y1, mode, 1);
-    int bx = vb6_ScaleUserToPx(x2, mode, 0);
-    int by = vb6_ScaleUserToPx(y2, mode, 1);
-
-    BOOL fromPaint = FALSE;
-    HDC hdc = vb6_ControlDrawDC(hw, &fromPaint);
-    if (!hdc) return;
-
-    COLORREF col = (color < 0) ? (COLORREF)vb6_GetControlForeColor(hw) : (COLORREF)color;
-    HPEN pen = CreatePen(PS_SOLID, 1, col);
-    HPEN hOldPen = pen ? (HPEN)SelectObject(hdc, pen) : NULL;
-    // 不填充那一档必须显式给 NULL_BRUSH: 留着上一次的画刷, Line 会顺带填出一块颜色
-    HBRUSH brush = (style & 4) ? CreateSolidBrush(col) : (HBRUSH)GetStockObject(NULL_BRUSH);
-    HBRUSH hOldBrush = brush ? (HBRUSH)SelectObject(hdc, brush) : NULL;
-
-    if (style & 2) {
-        Ellipse(hdc, ax, ay, bx, by);        // C: 两点是外接矩形
-    } else if (style & 1) {
-        Rectangle(hdc, ax, ay, bx, by);      // B: 矩形
-    } else {
-        POINT oldpt;
-        MoveToEx(hdc, ax, ay, &oldpt);       // 默认: 线段
-        LineTo(hdc, bx, by);
-    }
-
-    if (hOldPen) SelectObject(hdc, hOldPen);
-    if (hOldBrush) SelectObject(hdc, hOldBrush);
-    if (pen) DeleteObject(pen);
-    if (brush && (style & 4)) DeleteObject(brush);
-    if (!fromPaint) ReleaseDC(hw, hdc);
+// 账 #239 第三枚: 与 vb6_ControlPrint / vb6_ControlCls 同形 —— 笔位/DC/色/单位四件经
+// 账 #233/#234/#235/#237 已收成全仓唯一权威 (vb6_GetCurrentX / vb6_DrawAcquire /
+// vb6_GetControlForeColor / vb6_ScaleUserToPx 都对控件 HWND 成立), 转发 vb6_Form_Line
+// 不引入第二套口径。has 位 (起点省略 = 取当前笔位) 与「Line 之后笔位移到终点」由
+// Form_Line (vb6forms_draw.c:201 / :253) 兜下 —— 此前旧体「刻意没做」的那两头随转发一并补上。
+// style 位口径同 Form: 1=B 矩形 / 2=C 椭圆 / 4=F 填充 (BF=5), parser 折旗标那一张表;
+// color 传负数 = "没写颜色", 落到控件自己的 ForeColor。
+void vb6_ControlLine(void* hwnd,
+                     int32_t step1, int32_t has1, double x1, double y1,
+                     int32_t step2, int32_t has2, double x2, double y2,
+                     int32_t hasColor, int32_t color,
+                     int32_t style) {
+    vb6_Form_Line(hwnd, step1, has1, x1, y1, step2, has2, x2, y2,
+                  hasColor, color, style);
 }
 
 // 账 #239: 这两条以前是本族**另写的一份**实现 —— 笔位存在窗口属性 VB6_PrintX/Y 上、

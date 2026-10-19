@@ -264,16 +264,106 @@ static void* vb6_bag_make_picture(const uint8_t* p, uint32_t n) {
     uint32_t palEntry = (bits <= 8) ? (clrUsed ? clrUsed : (1u << bits)) : 0u;
     uint32_t hdrTotal = 40u + palEntry * 4u;
     uint32_t stride = (((uint32_t)w * (uint32_t)bits) + 31u) / 32u * 4u;
+    uint32_t maskStride = (((uint32_t)w + 31u) / 32u) * 4u;   /* 1bpp 行按 4 字节对齐 */
     uint32_t imgSize = vb6_bag_rd32(dib + 20);
-    if (imgSize == 0 || imgSize > stride * absH) imgSize = stride * absH;
     uint32_t off = (uint32_t)(dib - p);
     if (off + hdrTotal >= n) return NULL;
-    if (imgSize > n - off - hdrTotal) imgSize = n - off - hdrTotal;
+    uint32_t avail = n - off - hdrTotal;
+    if (imgSize == 0 || imgSize > avail) imgSize = avail;
+
+    /* ⚠⚠ StdPicture 的位图块常见的是 **DDB (颜色位 [+ 1bpp AND 掩码])**, 不是 DIB:
+     * `biHeight` 是 DDB 高度 = 图高的两倍, 于是 biSizeImage 不等于 stride*biHeight。
+     * 旧实现直接拿 biHeight 当图高建 DIB ⇒ 图被拉成两倍高、掩码字节被当颜色解出来,
+     * 症状是图标挤在格子底部、其余全黑 (ComCtlsDemo 的 ImageList1/2/3 全线:
+     * Toolbar / TabStrip / TreeView / ListView / ImageCombo 的图标)。
+     * 三种布局都用 biSizeImage 自证 (字节数互不相同), 不猜:
+     *   ① stride*absH                    —— 纯 DIB, 图高 = biHeight
+     *   ② stride*(absH/2) + maskStride*(absH/2) —— DDB 带 AND 掩码 (ImageList1/2)
+     *   ③ stride*(absH/2)                —— 只存色行、头高度仍翻倍 (ImageList3 的 32x32)
+     * 行序一律是 BMP 那套自下而上, 所以**保持 biHeight 为正**建 DIB 就不必翻转。 */
+    uint32_t plainBytes = stride * absH;
+    uint32_t half = (absH % 2u) ? 0u : absH / 2u;
+    uint32_t colourHalf = half ? stride * half : 0u;
+    uint32_t ddbBytes = half ? (colourHalf + maskStride * half) : 0u;
+    uint32_t imgH = absH;
+    int halfHeight = 0, hasMask = 0;
+    if (bits <= 8 && imgSize != plainBytes && half) {
+        /* 只有调色板图才可能是 DDB —— 下面的位操作按每字节 8/bits 个像素算, 16bpp 以上不成立 */
+        if (ddbBytes && imgSize == ddbBytes) { imgH = half; halfHeight = 1; hasMask = 1; }
+        else if (colourHalf && imgSize == colourHalf) { imgH = half; halfHeight = 1; }
+    }
 
     void* bitsPtr = NULL;
-    HBITMAP hbm = CreateDIBSection(NULL, (BITMAPINFO*)dib, DIB_RGB_COLORS, &bitsPtr, NULL, 0);
-    if (!hbm || !bitsPtr) { if (hbm) DeleteObject(hbm); return NULL; }
-    if (imgSize) memcpy(bitsPtr, dib + hdrTotal, imgSize);
+    HBITMAP hbm;
+    if (!halfHeight) {
+        hbm = CreateDIBSection(NULL, (BITMAPINFO*)dib, DIB_RGB_COLORS, &bitsPtr, NULL, 0);
+        if (!hbm || !bitsPtr) { if (hbm) DeleteObject(hbm); return NULL; }
+        uint32_t copy = imgSize < plainBytes ? imgSize : plainBytes;
+        if (copy) memcpy(bitsPtr, dib + hdrTotal, copy);
+    } else {
+        /* 掩码位 1 = 透明, 且**掩码段与色行同序** (都自下而上) —— 两条独立核出来的:
+         * MainForm.frx 的第 1 枚 16x16/4bpp 图标, 图行 0 与掩码行 15 相配 (掩码行 15
+         * = ff 01, 只有 x=8..15 不透明, 正好对上 VB6 截图里那一行露出的 7 个灰点),
+         * 图行 10 与掩码行 5 (c0 07) 相配 (x=0/1/14/15 透明, VB6 截图那两端确为空)。
+         * 透明格涂 **&HC0C0C0 银灰**: ComCtls ImageList 默认 `PropMaskColor = &HC0C0C0`,
+         * 填充走 `ImageList_AddMasked(himl, .Handle, WinColor(PropMaskColor))`, 于是
+         * 洞被键成透明, 与 VB6 一致。落白则整圈白方块 (工具条底色是 240 灰, 一眼可见)。
+         * 已知残留: 图标**自带的银灰**与 MaskColor 同值, 那一档像素会被一起键掉
+         * (实测这枚 16x16 图标 256 格里差 29 格)。改调色板第 0 项能救回, 但那样
+         * 未被掩码的 index 0 (真黑) 也变成银灰一起被键掉, 实测反而差 137 格 —— 因为
+         * VB6 那些像素是真黑, 靠 AddMasked 的取色键根本达不到, 要一致得让 .Handle
+         * 交出带 AND 掩码的 DDB (OleCreatePictureIndirect 没有带掩码的 PICTDESC)。
+         * 现状取两者里好的那个, 记在这里备查。
+         * 扩成 24bpp: 原调色板里没有"透明"这一档, 且 Common.bas 的 RenderPicture
+         * 见到 32bpp 就改走 GdiAlphaBlend 那一支 —— 那支在 C3 里从没跑过
+         * (VB6 递的是 24bpp 位图, 见 MainForm.frx 的 Picture1), 踩了直接报错误 9 退出。
+         * DIB 用正的 biHeight = 自下而上, 于是 r 同时是色行号与掩码行号。
+         * ⚠ 调色板要**从 DIB 头**取 (dib+40), 不是从像素区 src —— src 已经过了头+调色板。 */
+        BITMAPINFO bi24;
+        memset(&bi24, 0, sizeof(bi24));
+        bi24.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        bi24.bmiHeader.biWidth = w;
+        bi24.bmiHeader.biHeight = (LONG)imgH;        /* 正 = 自下而上, 与色行同序 */
+        bi24.bmiHeader.biPlanes = 1;
+        bi24.bmiHeader.biBitCount = 24;
+        bi24.bmiHeader.biCompression = BI_RGB;
+        hbm = CreateDIBSection(NULL, &bi24, DIB_RGB_COLORS, &bitsPtr, NULL, 0);
+        if (!hbm || !bitsPtr) { if (hbm) DeleteObject(hbm); return NULL; }
+        const uint8_t* pal = dib + 40;                 /* 调色板跟在头后面 */
+        const uint8_t* src = dib + hdrTotal;
+        const uint8_t* msk = hasMask ? (src + colourHalf) : NULL;
+        uint8_t* dst = (uint8_t*)bitsPtr;
+        uint32_t dstStride = (((uint32_t)w * 24u) + 31u) / 32u * 4u;
+        for (uint32_t r = 0; r < imgH; r++) {         /* r = DIB 行, 0 = 图的底行 */
+            const uint8_t* line = src + (size_t)r * stride;
+            const uint8_t* mskRow = msk ? (msk + (size_t)r * maskStride) : NULL;
+            uint8_t* out = dst + (size_t)r * dstStride;
+            for (int32_t x = 0; x < w; x++) {
+                uint8_t r8 = 192, g8 = 192, b8 = 192;   /* 透明格 = MaskColor 银灰 */
+                if (!mskRow || !((mskRow[x / 8] >> (7 - (x % 8))) & 1)) {
+                    if (bits <= 8) {
+                        int pxPerByte = 8 / (int)bits;
+                        int shift = 8 - (int)bits - (x % pxPerByte) * (int)bits;
+                        uint32_t idx = (uint32_t)((line[x / pxPerByte] >> shift)
+                                                  & ((1u << bits) - 1u));
+                        if (idx < palEntry) {
+                            b8 = pal[idx * 4 + 0];
+                            g8 = pal[idx * 4 + 1];
+                            r8 = pal[idx * 4 + 2];
+                        }
+                    } else {
+                        size_t bo = (size_t)x * (bits / 8u);
+                        b8 = line[bo + 0];
+                        g8 = line[bo + 1];
+                        r8 = line[bo + 2];
+                    }
+                }
+                out[x * 3 + 0] = b8;
+                out[x * 3 + 1] = g8;
+                out[x * 3 + 2] = r8;
+            }
+        }
+    }
 
     PICTDESC pd;
     memset(&pd, 0, sizeof(pd));

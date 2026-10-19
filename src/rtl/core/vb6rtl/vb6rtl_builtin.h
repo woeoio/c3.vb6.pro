@@ -58,10 +58,19 @@ BSTR vb6_RTrim(BSTR s);
 BSTR vb6_Chr(int32_t code);
 int32_t vb6_Asc(BSTR s);
 double vb6_Val(BSTR s);
-// Fix 090d: VB6 类型转换函数的字符串解析 (支持 &H/&O 前缀, 见 vb6rtl.c)
+// 账 #416: 严格转换族 (CByte/CInt/CLng/CSng/CDbl/CCur/... 的字符串实参) 的那一句解析 ——
+// 政策交给 oleaut32, 解析不出就报 13; Val 的宽松口径与它刻意不同, 别合。
 double vb6_NumVal(BSTR s);
+// 账 #418 (§B192): 「认不认作一个数」与「认不出报几号」是两问，拆成两层 ⇒ 全仓那条
+// oleaut32 数值解析站点仍只有一处（住在 vb6_NumTryParse 里），而 IsNumeric 问的是前者。
+int32_t vb6_NumTryParse(BSTR s, double* out);
+int32_t vb6_IsNumericText(BSTR s);   // = vb6_NumTryParse 的成功本身，**不许报错**
+int16_t vb6_BoolVal(BSTR s);      // 账 #416: Boolean 那一档问的是 VarBoolFromStr ("True" 算话)
 BSTR vb6_Str(int32_t n);
 BSTR vb6_Format(vb6_VARIANT expr, BSTR fmt, int32_t firstDayOfWeek, int32_t firstWeekOfYear);
+// 账 #428 (§B202): 这枚出口被内置表点名，cgen 把它**直接发进用户 TU**。头里没声明时 C 只当它「返回 int 的隐式声明」—— 两台都照编照链，所以这一格从形状上看不见: x86 把截断后的低 32 位当指针用恰好还通，x64 交出去的就是废指针 ⇒ vb6_BSTR_AssignMove 一解引用就 AV(0xC0000005)。判据里那枚 VarType 针把它在两台上都钉住: 缺声明时答 3 (VT_I4)，有了才答 8 (VT_BSTR)。
+BSTR vb6_FormatDateTime(double dateSerial, int32_t namedFormat);
+
 #ifndef __cplusplus
 #define vb6_LTrim(x) _Generic((x), \
     vb6_VARIANT: vb6_LTrimVar, \
@@ -113,12 +122,23 @@ BSTR vb6_CStrDate(double x);
 int16_t vb6_CBool(double v);
 uint8_t vb6_CByte(double v);
 float vb6_CSng(double v);
-static inline int16_t vb6_CIntV(vb6_VARIANT v) { return vb6_CInt(vb6_VariantToDouble(v)); }
-static inline int32_t vb6_CLngV(vb6_VARIANT v) { return vb6_CLng(vb6_VariantToDouble(v)); }
-static inline double vb6_CDblV(vb6_VARIANT v) { return vb6_VariantToDouble(v); }
-static inline uint8_t vb6_CByteV(vb6_VARIANT v) { return vb6_CByte(vb6_VariantToDouble(v)); }
-static inline float vb6_CSngV(vb6_VARIANT v) { return (float)vb6_VariantToDouble(v); }
-static inline int16_t vb6_CBoolV(vb6_VARIANT v) { return (v.vt == vb6_vtBoolean) ? v.boolVal : vb6_CBool(vb6_VariantToDouble(v)); }
+// 账 #416: 严格转换族读 Variant 里那串文本时问的那一句。以前这一档直接借
+// vb6_VariantToDouble —— 它对 vtBSTR 走 vb6_Val(宽松)，于是同一个 `CInt(x)` 对
+// 「x 是 String 变量」报 13、对「x 是装着同一串文本的 Variant」静默给 0，两半答两种。
+// 数值/布尔之外的档仍归 vb6_VariantToDouble 那一枚权威，这里只把文本那一档改问严格解析。
+static inline double vb6_VariantConvNum(vb6_VARIANT v) {
+    return (v.vt == vb6_vtBSTR) ? vb6_NumVal(v.bstrVal) : vb6_VariantToDouble(v);
+}
+static inline int16_t vb6_CIntV(vb6_VARIANT v) { return vb6_CInt(vb6_VariantConvNum(v)); }
+static inline int32_t vb6_CLngV(vb6_VARIANT v) { return vb6_CLng(vb6_VariantConvNum(v)); }
+static inline double vb6_CDblV(vb6_VARIANT v) { return vb6_VariantConvNum(v); }
+static inline uint8_t vb6_CByteV(vb6_VARIANT v) { return vb6_CByte(vb6_VariantConvNum(v)); }
+static inline float vb6_CSngV(vb6_VARIANT v) { return (float)vb6_VariantConvNum(v); }
+static inline int16_t vb6_CBoolV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtBoolean) return v.boolVal;
+    if (v.vt == vb6_vtBSTR) return vb6_BoolVal(v.bstrVal);
+    return vb6_CBool(vb6_VariantToDouble(v));
+}
 
 // ai/032: VB.NET 的无符号/窄整型转换函数 (阶梯 8/16/32/64):
 //   CSByte → SByte(8 有符号) · CUInt → UInteger(16 无符号)
@@ -129,14 +149,21 @@ int8_t   vb6_CSByte(double x);
 uint16_t vb6_CUInt(double x);
 uint32_t vb6_CULng(double x);
 uint64_t vb6_CULngLng(double x);
-static inline int8_t   vb6_CSByteV(vb6_VARIANT v) { return vb6_CSByte(vb6_VariantToDouble(v)); }
-static inline uint16_t vb6_CUIntV(vb6_VARIANT v)  { return vb6_CUInt(vb6_VariantToDouble(v)); }
-static inline uint32_t vb6_CULngV(vb6_VARIANT v)  { return vb6_CULng(vb6_VariantToDouble(v)); }
-static inline uint64_t vb6_CULngLngV(vb6_VARIANT v) { return vb6_CULngLng(vb6_VariantToDouble(v)); }
+static inline int8_t   vb6_CSByteV(vb6_VARIANT v) { return vb6_CSByte(vb6_VariantConvNum(v)); }
+static inline uint16_t vb6_CUIntV(vb6_VARIANT v)  { return vb6_CUInt(vb6_VariantConvNum(v)); }
+static inline uint32_t vb6_CULngV(vb6_VARIANT v)  { return vb6_CULng(vb6_VariantConvNum(v)); }
+static inline uint64_t vb6_CULngLngV(vb6_VARIANT v) { return vb6_CULngLng(vb6_VariantConvNum(v)); }
+// CLngLng — 阶梯里有符号的 64 位那一档 (CInt/CLng 的 32 位往上数第三级)。
+// 与 CLng 同口径: 收 double, 半值远离零 (vb6_FltToLng), 越界按 VB6 语义报 Error 6。
+// 用途 (ComCtlsDemo ProgressBar.ctl 的 `#If Win64` 分支): 给
+// ITaskBarList3::SetProgressValue(HWND, ULONGLONG, ULONGLONG) 送 64 位值 ——
+// VB6 没有 LongLong 类型, 只能用转换函数把值凑成 64 位整数送进 vtable 调用。
+int64_t vb6_CLngLng(double x);
+static inline int64_t vb6_CLngLngV(vb6_VARIANT v) { return vb6_CLngLng(vb6_VariantConvNum(v)); }
 // twinBASIC 形 CLngPtr (doc.twinbasic.vb6.pro .../Conversion/CLngPtr.html): 转 LongPtr
 // (x86 = Long / x64 = LongLong), 越界 Error 6 —— 与上面四档同族 (FltToLng + OvfChk)。
 intptr_t vb6_CLngPtr(double x);
-static inline intptr_t vb6_CLngPtrV(vb6_VARIANT v) { return vb6_CLngPtr(vb6_VariantToDouble(v)); }
+static inline intptr_t vb6_CLngPtrV(vb6_VARIANT v) { return vb6_CLngPtr(vb6_VariantConvNum(v)); }
 // CLngPtr 的 void* 实参档 (StrPtr / 裸 COM 结果的指针值): 精确转指针宽度整数,
 // 不给这一档会被 default 的 double 形参拒收 (C2440)。
 static inline intptr_t vb6_CLngPtrFromPtr(void* p) { return (intptr_t)(uintptr_t)p; }
@@ -318,9 +345,29 @@ int32_t vb6_DatePart(BSTR interval, double date, int32_t firstDayOfWeek, int32_t
 
 // P21-B: Weekday/DateValue/TimeSerial/TimeValue
 int32_t vb6_Weekday(double date, int32_t firstDayOfWeek);
+// 账 #427 (§B201): 「这一年里第几周」这一问的唯一出口 (定义在 vb6rtl_date.c)。
+// 读者两位: vb6_DatePart 的「ww」臂与 vb6_Format 的「ww」档 —— 所以它不再是 date.c 的内部静态函数。
+int32_t vb6_WeekOfYear(int32_t serial, int32_t fdow, int32_t fwoy);
+// 账 #429 (§B203) 第一百零一刀: locale 的那几问在 RTL 里只许一处答案 (定义在 vb6rtl_format.c)。
+// 读者跨文件 —— vb6rtl_system.c 的 vb6_FormatDateTime、vb6rtl_conv.c 的 vb6_CStrDate、Format 家族自己，
+// 所以它们不是 file-static。「general date 什么时候该带长时间」这一条也只住在最后那条出口里。
+void vb6_fmtLocaleShortDate(const SYSTEMTIME* st, wchar_t* out, size_t cap);
+void vb6_fmtLocaleLongDate(const SYSTEMTIME* st, wchar_t* out, size_t cap);
+void vb6_fmtLocaleLongTime(const SYSTEMTIME* st, wchar_t* out, size_t cap);
+void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, wchar_t* out, size_t cap);
 double vb6_DateValue(BSTR dateStr);
 double vb6_TimeSerial(int32_t hour, int32_t minute, int32_t second);
 double vb6_TimeValue(BSTR timeStr);
+// 账 #417 (§B191): 文本→日期序列的解析只有 vb6rtl_date.c 里那一条 VarDateFromStr 站点,
+// 「认不出算几号」由下面两位主人各按自己的档答 (全是 13, 但**认不认纯数字串**两档不同):
+//   vb6_DateParse = DateValue / TimeValue / CStr(日期形文本) 那一档, 只认日期时间写法;
+//   vb6_DateVal   = CDate 那一档 = 日期写法 ∪ 严格数值 (vb6_NumVal), 且保留时间小数。
+// 实测口径见 .build/k234_cdate.vbs / k235_datescan.vbs / k236_datefail.vbs。
+double vb6_DateParse(BSTR s);
+double vb6_DateVal(BSTR s);
+// 账 #418 (§B192): 同一句问「像不像」而不是「折出几号」—— IsDate 的文本档问这一枚，
+// 它**不报错**（判据不是一次转换），收下集合就是那条唯一解析站点的成功集。
+int32_t vb6_DateCanParse(BSTR s);
 
 // P14.3.4: App全局对象属性
 BSTR vb6_App_Path(void);     // App.Path - EXE所在目录
@@ -446,6 +493,11 @@ BSTR   vb6_ByteArrayToString(struct vb6_SafeArray1D* arr);
 void*  vb6_SafeArrayDataPtr(struct vb6_SafeArray1D* arr);
 struct vb6_SafeArray1D* vb6_Filter(struct vb6_SafeArray1D* source, BSTR match, int32_t include, int32_t compare);
 void*    vb6_StrPtr(BSTR s);          // StrPtr: address of string data
+// 账 #305 §B180 (第六十九刀): StrPtr 收**整枚槽**那一档 —— vt 已是串时**借**槽里那枚 BSTR，
+// 不再像 `vb6_StrPtr(vb6_VariantToString(v))` 那样每调用现造一枚没人回收的临时串。
+// 发码侧由 arg_variant (撤回解包) 与 builtin_fixup (改 callee 名) 两站同归一处新问句决定，
+// 只有「实参本身是槽」时才走这一枚 (理由与读数见 §B180 —— 无条件按位号答槽会打坏 1679 处)。
+void*    vb6_StrPtrVar(vb6_VARIANT v);
 uintptr_t vb6_ObjPtr(void* obj);       // ObjPtr: address of object
 BSTR   vb6_LSet(BSTR str, int32_t length);  // LSet: left-justify
 BSTR   vb6_RSet(BSTR str, int32_t length);  // RSet: right-justify
@@ -500,18 +552,20 @@ double vb6_CCurBSTR(BSTR s);
 // BSTR 是日期串, 故这里走 VarDateFromStr 解析 (同 vb6_DateValue 那条口径),
 // 而不是 vb6_CStrDblFromBSTR 的 vb6_Val —— 后者是数值解析, 对日期串答 0。
 BSTR vb6_CStrDateFromBSTR(BSTR s);
-// ai/032: 新增四档转换函数的 BSTR 入口 —— 同 Fix 158r 的 CLngBSTR, 走 vb6_Val 解析
-// (VB6 的 CUInt("42") / CULng("&HFF") 合法)。十进制用 vb6_Val, 前缀式 (&H/&O) 由
-// cgen 那侧改发 vb6_NumVal (见 cgen_expr_call_conv_numeric.inc), 与此处不重复。
+// ai/032: 新增四档转换函数的 BSTR 入口 —— 同 Fix 158r 的 CLngBSTR.
+// 账 #416: 这一族的解析口径归 vb6_NumVal 那一位主人 (十进制 / "&H"&O" 前缀 / 区域分隔符
+// 都由它答, 解析不出报 13); cgen 那侧的表达式实参走同一枚函数, 两条路不再各写一份。
 uint64_t vb6_CULngLngBSTR(BSTR s);
 uint32_t vb6_CULngBSTR(BSTR s);
 uint16_t vb6_CUIntBSTR(BSTR s);
 int8_t   vb6_CSByteBSTR(BSTR s);
 intptr_t vb6_CLngPtrBSTR(BSTR s);   // twinBASIC 形 CLngPtr 的字符串入口 (同族口径)
+// CLngLng (阶梯里有符号 64 位那一档) 的字符串入口 —— 与上面四档同口径, 走 vb6_Val。
+int64_t  vb6_CLngLngBSTR(BSTR s);
 // ai/032: CStrULong/CStrULongLong 的 Variant 解包入口 (与 Fix 158q 同款)
 BSTR vb6_CStrULongFromVariant(vb6_VARIANT x);
 BSTR vb6_CStrULongLongFromVariant(vb6_VARIANT x);
-static inline double vb6_CCurV(vb6_VARIANT v) { return vb6_CCur(vb6_VariantToDouble(v)); }
+static inline double vb6_CCurV(vb6_VARIANT v) { return vb6_CCur(vb6_VariantConvNum(v)); }
 // Fix 160w: CLng(指针) 分派目标 — 截断为 int32_t (VB6 Long = 地址低半).
 // (更名 vb6_CLngFromPtr: 原 vb6_CLngPtr 这个名字让给下方 CLngPtr 转换函数 ——
 //  与 VB 内置同名; 旧名只在本头两处出现, 一处定义一处 _Generic。)
@@ -576,6 +630,10 @@ static inline int32_t vb6_CLngFromPtr(void* p) { return (int32_t)(intptr_t)p; }
     vb6_VARIANT: vb6_CULngLngV, \
     BSTR: vb6_CULngLngBSTR, \
     default: vb6_CULngLng)((x))
+#define vb6_CLngLng(x) _Generic((x), \
+    vb6_VARIANT: vb6_CLngLngV, \
+    BSTR: vb6_CLngLngBSTR, \
+    default: vb6_CLngLng)((x))
 // twinBASIC 形 CLngPtr: 三档分派 + void* 档 (指针值精确转, 见 vb6_CLngPtrFromPtr)。
 // 返回 intptr_t, 宽度随目标架构 (x86 4 / x64 8)。
 #define vb6_CLngPtr(x) _Generic((x), \

@@ -142,7 +142,11 @@ typedef struct vb6_IDispatchVtable {
 } vb6_IDispatchVtable;
 
 // 创建VB6 COM对象 (包装VB6实例为IDispatch)
-vb6_ComObject* vb6_ComObject_Create(const vb6_CoClassDesc* desc);
+// 账 #305 §B186: 这一步会走进类体的 Class_Initialize, 所以它自带一枚错误边界 ——
+// pFailHr 交回「这一趟进门失败该给客户端哪个 HRESULT」: 体里没人接住的运行期错误折成
+// 0x800A0000|错误号 (这一条通道没有 EXCEPINFO), 真·分配失败交回 E_OUTOFMEMORY, 认不出
+// 的档不许冒充前者。成功时不动 *pFailHr。可传 NULL (调用方不关心失败形状)。
+vb6_ComObject* vb6_ComObject_Create(const vb6_CoClassDesc* desc, HRESULT* pFailHr);
 
 // Fix 099: 包装一个**已存在**的 VB6 类实例 (不调 factoryFunc).
 // 用于 Public 对象字段 getter —— 字段实例在类内部创建, 是裸结构体指针.
@@ -167,6 +171,20 @@ const vb6_CoClassDesc* vb6_FindProjectClassDesc(const void* inst);
 
 // Fix 099: 从 IDispatch 取回 VB6 实例裸指针; 非本 RTL 产出的对象返回 NULL.
 void* vb6_ComObject_GetInstance(void* pdisp);
+
+// 账 #305 §B187 第五腿: **值自己说明自己** —— 这枚指针是不是我们自家的 vb6_ComObject
+// 包装器。问句与 vb6_ComObject_GetInstance 同一条, 差别在交进来的东西: 那边拿到的是
+// 调用点**已经确定**是包装器的表达式, 这边拿到的是"一枚槽里此刻装着什么" —— 可能是裸
+// 工程类实例、外部 IDispatch、控件 HWND (宿主那一路交出去的就是句柄) 或一个随机整数,
+// 而 GetInstance 头一句就是 obj->vtable 的**裸读** (vb6com_foreach.c 顶部那条
+// "读 0x20404 撞 NULL+0x404" 的崩记录就是同一形状)。⇒ 三闸照抄 vb6_ComIsDispatchable
+// (IsWindow / IsBadReadPtr / 首字段可读), 最后一闸换成**身份**: 首字段 == g_ComObjectVtable。
+int32_t vb6_ComObject_IsBoxed(void* v);
+
+// 账 #305 §B189 第一档: 「这枚包装器是哪一枚工程类」—— 交类模块名 (VB6 的 TypeName 对
+// 工程内类实例答的就是类模块名)。只认 vb6_ComObject_IsBoxed 说"是"的值, 其余一律 NULL:
+// 调用方 (vb6rtl_conv.c 的 vb6_TypeName) 拿 NULL 就继续走它原来的答案, 本刀不改标签也不改档。
+BSTR vb6_ComObject_ClassNameBStr(void* v);
 
 // ExeComBridge 03: 把工程类实例包成"COM 调用实参格式"的 VARIANT* (VT_DISPATCH).
 // cgen 为每个类模块生成 vb6_ComPack_<类名>(void* instance) 包一层本函数; 触发场景

@@ -77,6 +77,15 @@
         if (vb == "long" || vb == "longptr") return "vb6_VariantLong((int32_t)(" + call + "))";
         if (vb == "byte")    return "vb6_VariantByte((uint8_t)(" + call + "))";
         if (vb == "single")  return "vb6_VariantSingle((float)(" + call + "))";
+        // ⚠ 账 #430(§B204)同族的**潜伏**孪生: `vb == "date"` 与 double 并列走
+        //   VariantDouble, 而唯一权威 boxToVariant 对 Date 答 VariantDate —— 又是
+        //   "两位主人两个答案"。**本刀刻意不动它**, 因为它**打不到真代码**:
+        //   `vb` 来自 UC/Form 属性的**声明类型名**(vbScalarOfName), 而全语料
+        //   (.frm/.ctl 共 404 份) 没有任何一个 Property 声明成 `As Date` ——
+        //   那 16 处 `As Date` 全是 Dim/局部变量, 不是属性声明。⇒ 没有证人, 也就没法
+        //   验证改动; 改不可验证的代码正是本仓纪律要避开的。
+        //   哪天真语料里出现 `Property X As Date`, 这一臂就该跟
+        //   cgen_expr_call_conv_output.inc 的 Format 首参 Date 臂一样改问权威。
         if (vb == "double" || vb == "date") return "vb6_VariantDouble((double)(" + call + "))";
         if (vb == "string")  return "vb6_VariantString(" + call + ")";
         return std::string();

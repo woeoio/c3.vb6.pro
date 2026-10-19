@@ -7,6 +7,20 @@
 #include "vb6comserver.h"
 #include "vb6comserver_internal.h"
 #include "vb6rtl_variant.h"   /* 账 #305 §B144: 两头的槽<->VARIANT 换算出口 */
+/* 账 #305 §B185: 服务端进门那趟要自带一枚 VB 错误帧。下面这批跨族 extern 按本仓既有做法就地声明
+ * (vb6com 系列不 include vb6rtl.h —— VARIANT 冲突), 定义全在 vb6rtl.c。 */
+#include <setjmp.h>
+extern jmp_buf* vb6_error_jmp_ptr;
+extern int32_t vb6_error_jmp_set;
+extern int32_t vb6_err_jmp_active;
+extern int32_t vb6_err_resume_next;
+extern void vb6_SaveErrState(void);
+extern void vb6_RestoreErrState(void);
+extern int32_t vb6_ErrNumber(void);
+extern BSTR vb6_ErrDescription(void);   /* 借来的指针, 交出去前要自己拷一份 (见 vb6_ComFailExcep) */
+extern HRESULT vb6_ComFailExcep(EXCEPINFO* pexcep, int32_t errNum,
+                                const wchar_t* desc, const wchar_t* fallback);
+extern HRESULT vb6_ComVbHresult(int32_t errNum);  /* §B186: 类工厂那一趟的交回形状 (定义在 vb6com.c) */
 
 /* [PROBE189] 临时探针: 包装器引用计数轨迹 (C3_COM_RC_TRACE=1 时输出到 stderr) */
 #include <stdio.h>
@@ -107,6 +121,28 @@ static ULONG STDMETHODCALLTYPE ComObj_AddRef(vb6_ComObject* self) {
     return count;
 }
 
+/* 账 #305 §B188 (第九十一刀): 下面那条 [C3_COM] 诊断原先**每出厂一枚实例打一行**。
+ * 它是一指, 不是流水 —— 判据 (tests\tools\leak_probe.c) 一轮 5000 次 create/release
+ * 就是 5000 行, 本机 20 万轮实测 19.3 MB stderr 把现场盖掉。口径照 §B181 的
+ * vb6_CrashTraceClaim: **同一枚类只记第一次**, 拿不准的一律放行 (指针没有 desc 的空值,
+ * 表满也照打) —— 漏掉一条真诊断比多打十条贵。表是进程内的定长小表, 不回收。 */
+#define VB6_TERM_ERR_LOG_MAX 4
+static const void* volatile vb6_termErrLogged[VB6_TERM_ERR_LOG_MAX];
+
+static int vb6_TermErrClaim(const void* desc) {
+    int i;
+    if (!desc) return 1;
+    for (i = 0; i < VB6_TERM_ERR_LOG_MAX; i++) {
+        if (vb6_termErrLogged[i] == desc) return 0;
+        if (vb6_termErrLogged[i] == NULL &&
+            InterlockedCompareExchangePointer((void* volatile*)&vb6_termErrLogged[i],
+                                              (void*)desc, NULL) == NULL) {
+            return 1;
+        }
+    }
+    return 1;
+}
+
 static ULONG STDMETHODCALLTYPE ComObj_Release(vb6_ComObject* self) {
     ULONG count = InterlockedDecrement(&self->refCount);
     P189("[189] RELEASE W=%p cnt=%u owns=%d inst=%p\n", (void*)self, (unsigned)count,
@@ -119,11 +155,43 @@ static ULONG STDMETHODCALLTYPE ComObj_Release(vb6_ComObject* self) {
         // 拥有型里, 实现了新式接口的类走 claim 那条: 包装器退掉自己的"底座引用",
         // 实例若有薄引用在世则不销毁 (由最后一个薄引用的 Release 收尾), 否则当场销毁;
         // 没有这道 claim 的类 (存量/无接口) 结果与原来直接 destroyFunc 完全一致。
+        //
+        // 账 #305 §B188 (第八十刀): 上面这两条腿都会**踏进 VB 代码** (Class_Terminate), 以前
+        // 是本文件里三站中唯一没接错误边界的一站 —— 体里没人接住的错走到 vb6_RaiseError,
+        // 那里没有帧 ⇒ 打一行 stderr 再 ExitProcess(错误号), 把**正在放手的客户端进程**打死
+        // (x64 实测: 一枚 terminate 里只写 Err.Raise 234 的类 ⇒ 探针 exit=234, 后面那枚干净
+        // 对象的 CREATE=2 与 DONE 全都没打出来)。
+        // 这一趟与 §B185/§B186 那两趟有一处实质差别: **没有一条通道能把号带回去** —— Release
+        // 交回的是 ULONG 引用计数, 也没有 EXCEPINFO, 改返回值 = 破坏 COM 契约。所以这里只做
+        // 底线: 自带帧 + 失败往 stderr 记一条带号诊断 + 照常把包装器拆干净、照常交回引用计数。
+        // 号此刻既不进 Err 也不进客户端 (§B188 出路 (b) 是另一格: 那要先答「谁有权改 Err 的
+        // 清除时机」)。帧的登记顺序照 cgen 的 On Error GoTo 协议 ⇒ 体里自己写了 On Error 的
+        // 照常由体接住, 走到这里的是真没人管的那一类。
         if (self->ownsInstance) {
-            if (self->desc && self->desc->instanceClaimRelease && self->vb6Instance) {
-                self->desc->instanceClaimRelease(self->vb6Instance);
-            } else if (self->desc && self->desc->destroyFunc && self->vb6Instance) {
-                self->desc->destroyFunc(self->vb6Instance);
+            int32_t termErrNum = 0;
+            {
+                jmp_buf termJmp;
+                vb6_SaveErrState();
+                if (setjmp(termJmp) != 0) {
+                    termErrNum = vb6_ErrNumber();
+                } else {
+                    vb6_error_jmp_ptr = &termJmp;
+                    vb6_error_jmp_set = 1;
+                    vb6_err_jmp_active = 1;
+                    vb6_err_resume_next = 0;
+                    if (self->desc && self->desc->instanceClaimRelease && self->vb6Instance) {
+                        self->desc->instanceClaimRelease(self->vb6Instance);
+                    } else if (self->desc && self->desc->destroyFunc && self->vb6Instance) {
+                        self->desc->destroyFunc(self->vb6Instance);
+                    }
+                }
+                vb6_RestoreErrState();
+            }
+            if (termErrNum && vb6_TermErrClaim(self->desc)) {
+                fprintf(stderr, "[C3_COM] Class_Terminate raised error %d in \"%s\"; the client was kept alive (ledger 305 B188)\n",
+                        (int)termErrNum,
+                        (self->desc && self->desc->classVariable) ? self->desc->classVariable : "?");
+                fflush(stderr);
             }
         } else if (self->vb6Instance) {
             *(void**)self->vb6Instance = NULL;
@@ -279,11 +347,34 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
     }
 
     // Call VB6 method
+    /* 账 #305 §B185: 这一句是工程类服务端走进 VB 代码的**唯一**入口 (方法、属性、Public 字段
+     * 三类都从它走), 而它过去没有任何错误边界: VB 体里没人接住的运行期错误一路走到
+     * vb6_RaiseError, 那里没有帧 ⇒ 打一行 stderr 再 exit(错误号), 把**客户端**进程打死
+     * (两台实测: 写越界的 Integer 字段 RC=6, 体里一句 Err.Raise 5 RC=5)。
+     * 现在这一趟自带一枚帧: 帧只登记在**外层没人装**的时候才轮得到接住 —— 顺序照 cgen 的
+     * On Error GoTo 协议 (先 setjmp, 成功后再登记 ptr/set/active 并清 resume_next),
+     * 于是体里自己写了 On Error 的那些照常由体接住, 交回 S_OK 与空 EXCEPINFO。
+     * 失败时按内置 Collection 早就在用的那一形状交回 (vb6_ComFailExcep), 客户端的
+     * vb6_ComCheckError 把它折回成一条 VB 错误 ⇒ 客户的 On Error 拿得到错误号。
+     * 注意: 不许在这里 longjmp 之后直接 return —— 下面那条收尾要回收 args/coercedArgs
+     * 与 §B162 那枚数组那一臂, 跳过它就是漏窗。 */
+    int32_t srvErrNum = 0;
     if (method->invokeFunc) {
         vb6_VarSlot tmpRet;
+        jmp_buf srvJmp;
         memset(&tmpRet, 0, sizeof(tmpRet));
-        method->invokeFunc(self->vb6Instance, args, argc, &tmpRet);
-        if (pVarResult)
+        vb6_SaveErrState();
+        if (setjmp(srvJmp) != 0) {
+            srvErrNum = vb6_ErrNumber();
+        } else {
+            vb6_error_jmp_ptr = &srvJmp;
+            vb6_error_jmp_set = 1;
+            vb6_err_jmp_active = 1;
+            vb6_err_resume_next = 0;
+            method->invokeFunc(self->vb6Instance, args, argc, &tmpRet);
+        }
+        vb6_RestoreErrState();
+        if (srvErrNum == 0 && pVarResult)
             /* 账 #305 §B144: 同上 —— 出站也改问唯一出口(Decimal 那一档不再错位的
              * 同时，返回的串/对象现在带权交出去，对端 VariantClear 不会释放我们的引用)。 */
             vb6_VariantPackCopyInto(&tmpRet, pVarResult);
@@ -297,6 +388,9 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
     // 槽内是调用方 VARIANT 的副本, 资源仍归调用方, 不得 VariantClear
     if (coercedArgs) CoTaskMemFree(coercedArgs);
     if (args) CoTaskMemFree(args);
+    /* 账 #305 §B185: 收尾(上面那批回收)之后才交回错误 —— 顺序是硬要求。 */
+    if (srvErrNum != 0)
+        return vb6_ComFailExcep(pExcepInfo, srvErrNum, vb6_ErrDescription(), L"COM server error");
     return S_OK;
 }
 
@@ -312,16 +406,52 @@ static const vb6_IDispatchVtable g_ComObjectVtable = {
 };
 
 // Create VB6 COM object
-vb6_ComObject* vb6_ComObject_Create(const vb6_CoClassDesc* desc) {
-    if (!desc || !desc->factoryFunc) return NULL;
+vb6_ComObject* vb6_ComObject_Create(const vb6_CoClassDesc* desc, HRESULT* pFailHr) {
+    if (!desc || !desc->factoryFunc) {
+        if (pFailHr) *pFailHr = CLASS_E_CLASSNOTAVAILABLE;
+        return NULL;
+    }
     
     vb6_ComObject* obj = (vb6_ComObject*)CoTaskMemAlloc(sizeof(vb6_ComObject));
-    if (!obj) return NULL;
+    if (!obj) {
+        if (pFailHr) *pFailHr = E_OUTOFMEMORY;
+        return NULL;
+    }
     
     obj->vtable = &g_ComObjectVtable;
     obj->refCount = 1;
     obj->desc = desc;
-    obj->vb6Instance = desc->factoryFunc();  // Call vb6_cls_<Name>_New()
+    obj->vb6Instance = NULL;
+    /* 账 #305 §B186 (第七十八刀): 服务端进门的**第二站** —— 下面这一步走进 VB 代码, 而且走的是
+     * Class_Initialize (§B185 那一趟是方法/属性/字段那三类)。它过去同样没有错误边界: 体里没人接住
+     * 的运行期错误一路走到 vb6_RaiseError, 那里没有帧 ⇒ 打一行 stderr 再 exit(错误号), 把**客户端**
+     * 进程打死 (两台实测一枚只写 Err.Raise 7 的类 = RC=7, CREATE 那一行根本没打出来)。
+     * 帧的登记顺序照 cgen 的 On Error GoTo 协议 (先 setjmp, 成功后再登记 ptr/set/active 并清
+     * resume_next), 于是体里自己写了 On Error 的那些照常由体接住、照旧构造成功。
+     * 交回形状只能编进 HRESULT: IClassFactory::CreateInstance 的签名里没有 EXCEPINFO 通道,
+     * 所以「造」那一问问 vb6_ComVbHresult (vb6com.c, §B185 已在用同一枚答案), 不在这里抄形状。
+     * 回收只到 obj 为止: 类实例指针是 factoryFunc 的返回值, 抛错时永远拿不到, 要回收它得动类工厂
+     * 的发码 —— 那是另一问, 已另立 §B187 登记读数。 */
+    int32_t srvErrNum = 0;
+    {
+        jmp_buf srvJmpC;
+        vb6_SaveErrState();
+        if (setjmp(srvJmpC) != 0) {
+            srvErrNum = vb6_ErrNumber();
+        } else {
+            vb6_error_jmp_ptr = &srvJmpC;
+            vb6_error_jmp_set = 1;
+            vb6_err_jmp_active = 1;
+            vb6_err_resume_next = 0;
+            obj->vb6Instance = desc->factoryFunc();  // Call vb6_cls_<Name>_New()
+        }
+        vb6_RestoreErrState();
+    }
+    if (srvErrNum) {
+        CoTaskMemFree(obj);
+        if (pFailHr) *pFailHr = vb6_ComVbHresult(srvErrNum);
+        return NULL;
+    }
     P189("[189] CREATE W=%p inst=%p cls=%s\n", (void*)obj, (void*)obj->vb6Instance,
          desc->classVariable ? desc->classVariable : "?");
     obj->ownsInstance = 1;  // Fix 188: 类工厂创建的实例归客户端所有
@@ -335,6 +465,7 @@ vb6_ComObject* vb6_ComObject_Create(const vb6_CoClassDesc* desc) {
     
     if (!obj->vb6Instance) {
         CoTaskMemFree(obj);
+        if (pFailHr) *pFailHr = E_OUTOFMEMORY;
         return NULL;
     }
     
@@ -353,8 +484,9 @@ vb6_ComObject* vb6_ComObject_Create(const vb6_CoClassDesc* desc) {
 //
 // 复用规则: 实例首个字段 __comObj 已指向包装对象时直接 AddRef 复用 (同一实例
 // 每次读出返回同一 IDispatch, 引用计数正确), 否则新建包装并回填 __comObj.
-// 前置条件: 实例所在类的结构体首字段必须是 __comObj —— cgen 仅在 ActiveX DLL
-// 工程 (isDll_) 的类结构体里生成该字段, 故本函数只能用于 DLL 侧的字段 getter.
+// 前置条件: 实例所在类的结构体首字段必须是 __comObj —— 自 ExeComBridge 01 起**所有**类模块
+// 的结构体都有这一格 (工厂里那句 me->__comObj = NULL 是无条件发的), 所以本函数不只服务 DLL
+// 侧的字段 getter; 但 EXE 里今天既不装箱也没人查登记表 (§B187), 真走到它的仍只有 ActiveX 那一路。
 vb6_ComObject* vb6_ComObject_FromInstance(const vb6_CoClassDesc* desc, void* instance) {
     void** ppComObj;
     vb6_ComObject* existing;
@@ -459,19 +591,43 @@ const vb6_CoClassDesc* vb6_FindCoClassDesc(const char* classVariable) {
 //
 // 生命周期: 实例销毁时不注销 (表是"弱"映射, 只按指针查)。工程类实例都是
 // vb6_Alloc 分配的, 指针值不会被复用成别的类实例之前就一直有效; 真正的风险是
-// **同一个堆地址先释放后被别的类复用**。为避免误命中, 命中后还要用
-// `vb6_ProjClassVerify` 复核 (见 vb6com_invoke.c 的分派处), 且本表只在
-// "该指针的工厂确实登记过" 时才算命中 —— 复用后的新实例会覆盖旧登记, 不会指向
-// 错误的类。
+// **同一个堆地址先释放后被别的类复用**; 复用后的新实例会覆盖旧登记, 所以不会指向错误的类。
+//
+// 2026-10-15 (账 #305 §B187) 两条订正, 都按读码/真跑核过:
+//   ① 这里原来写的是「命中后还要用 vb6_ProjClassVerify 复核 (见 vb6com_invoke.c 的分派
+//      处)」—— 那一枚复核函数与那个分派处在整棵树与全部历史里都不存在 (git log -S 对两个
+//      名字都只命中引入本表那一笔), 所以它是一个从来没接上的打算, 不是现有机制。今天
+//      查表的读者是 0 枚: vb6_FindProjectClassDesc / ...Raw 全仓无调用点 ⇒ 本表只有登记
+//      这一腿在跑。2026-10-15 口径已拍 (§B187 第二格): **按工程类型分档** —— ActiveX 那一档
+//      (Type=DLL / Type=Control, 后端读 isDll_) 走 (b) = 接读者 + 配注销腿, 其余走 (a) =
+//      连登记都不发。订正一条旧解释: 先前写的「EXE 里没有 CoClass 块 ⇒ vb6_FindCoClassDesc
+//      恒 NULL ⇒ 这类实例压根没进表」是**错的** —— EXE 也链一张完整 coclass 表 (com_entry.c,
+//      ExeComBridge 01), 收集判据是类的 Instancing 而非有没有手写 CoClass 块, 那张表在 EXE 里
+//      天天被写。真断点在两条腿都没接: Set v = <工程内对象> 发成**裸指针赋值** (不装箱、不查
+//      表), 晚绑定那站 vb6_ComIsDispatchable 判否 ⇒ DISPID_UNKNOWN ⇒ 恒 VT_EMPTY (实测
+//      .build/k79_late/ 与 .build/k81_run.bat, 两台逐行相同: v.Twice(21) 空答、Err=0)。
+//   ② 「扫到哪儿」这一问以前有两个答案: 登记腿那圈只按 g_vb6_projClassCount 走, 查表腿
+//      那圈另外夹住 VB6_PROJCLASS_MAX; 而计数是在夹界检查之前自增、放弃登记那一路不回退
+//      ⇒ 计数无上界, 从第 514 枚实例起登记腿就在读数组外面的相邻静态数据 (巧合命中时还会
+//      往外面写)。现在两圈都只问 vb6_ProjClassScanLimit() 这一处。
 #define VB6_PROJCLASS_MAX 512
 static struct { void* inst; const vb6_CoClassDesc* desc; } g_vb6_projClass[VB6_PROJCLASS_MAX];
 static volatile LONG g_vb6_projClassCount = 0;
+
+/* 「扫到哪儿」这一问的唯一答案 (账 #305 §B187): 登记腿与查表腿以前各写各的边界, 登记那一遍
+ * 漏了夹界, 而计数在夹界检查之前自增且不回退 ⇒ 表满之后每登记一枚就往数组外多读一格。 */
+static LONG vb6_ProjClassScanLimit(void) {
+    LONG n = g_vb6_projClassCount;
+    if (n > VB6_PROJCLASS_MAX) n = VB6_PROJCLASS_MAX;
+    if (n < 0) n = 0;
+    return n;
+}
 
 void vb6_RegisterProjectClassInstance(void* inst, const vb6_CoClassDesc* desc) {
     LONG i;
     if (!inst || !desc) return;
     /* 先线性找: 同一实例可能被重复登记 (DllMain + 工厂各一次), 直接覆盖即可。*/
-    for (i = 0; i < g_vb6_projClassCount; i++) {
+    for (i = 0; i < vb6_ProjClassScanLimit(); i++) {
         if (g_vb6_projClass[i].inst == inst) {
             g_vb6_projClass[i].desc = desc;
             return;
@@ -486,7 +642,7 @@ void vb6_RegisterProjectClassInstance(void* inst, const vb6_CoClassDesc* desc) {
 const vb6_CoClassDesc* vb6_FindProjectClassDesc(const void* inst) {
     LONG i;
     if (!inst) return NULL;
-    for (i = 0; i < g_vb6_projClassCount && i < VB6_PROJCLASS_MAX; i++)
+    for (i = 0; i < vb6_ProjClassScanLimit(); i++)
         if (g_vb6_projClass[i].inst == inst) return g_vb6_projClass[i].desc;
     return NULL;
 }
@@ -525,6 +681,35 @@ void* vb6_ComObject_GetInstance(void* pdisp) {
         fflush(stderr);
     }
     return obj->vb6Instance;
+}
+
+/* 账 #305 §B187 第五腿: 「这枚值是不是我们那族包装器」—— deref 之前先证明可读,
+ * 论证见 vb6comserver.h 声明处。命中 ⇒ 交回身份判据真; 其余一律 0 (原样交回调用点)。 */
+int32_t vb6_ComObject_IsBoxed(void* v) {
+    if (!v) return 0;
+    if (IsWindow((HWND)v)) return 0;
+    if (IsBadReadPtr(v, sizeof(void*))) return 0;
+    return ((vb6_ComObject*)v)->vtable == &g_ComObjectVtable;
+}
+
+/* 账 #305 §B189 第一档: 见 vb6comserver.h 声明处的论证。char*→BSTR 走 CP_ACP 那一条,
+ * 与本文件上方 progId / 类名那几处同一口径 (VB 的类模块名允许非 ASCII 标识符)。
+ * 认不出 (不是我们的包装器 / desc 缺 / 名为空) 一律 NULL —— 调用方那一路要交回原答案。 */
+BSTR vb6_ComObject_ClassNameBStr(void* v) {
+    const vb6_ComObject* obj;
+    const char* s;
+    int wlen;
+    BSTR r;
+    if (!vb6_ComObject_IsBoxed(v)) return NULL;
+    obj = (const vb6_ComObject*)v;
+    s = obj->desc ? obj->desc->classVariable : NULL;
+    if (!s || !s[0]) return NULL;
+    wlen = MultiByteToWideChar(CP_ACP, 0, s, -1, NULL, 0);  /* -1 = 输入以 NUL 结尾 */
+    if (wlen <= 1) return NULL;
+    r = SysAllocStringLen(NULL, (UINT)wlen - 1);
+    if (!r) return NULL;
+    MultiByteToWideChar(CP_ACP, 0, s, -1, r, wlen);
+    return r;
 }
 
 // ============================================================

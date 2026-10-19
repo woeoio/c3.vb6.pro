@@ -118,16 +118,33 @@ void CCodeGen::visit(LetStmt& node) {
                     }
                 }
             }
-            auto itCtrl = knownFormControls_.find(objLower);
-            if (itCtrl != knownFormControls_.end()) {
-                std::string writeFn = getControlPropWriteFn(itCtrl->second, maExpr.memberName);
-                if (!writeFn.empty()) {
-                    emitExpr(*node.value);
-                    std::string valExpr = std::move(lastExpr_);
-                    valExpr = controlPropValueExpr(writeFn, valExpr, *node.value);  // Fix 194
-                    c_.emitLine(writeFn + "(" + makeCtrlHwndArg(objLower, itCtrl->second) + ", " + valExpr + ");  /* Let Control Property */");
-                    return;
-                }
+        auto itCtrl = knownFormControls_.find(objLower);
+        if (itCtrl != knownFormControls_.end()) {
+            // Fix 292: 表单上的 **UserControl** 若与内置控件同名, 属性必须走 .ctl
+            // 实例, 不能走内置 shim。ComCtls 的 ListView / ToolBar / MonthView / ...
+            // 全都撞内置控件的名字, 一旦先试 shim 就永远到不了下面的 Fix 133y 分支。
+            // 内置 shim 按 hwnd 找的是**它自己那套原生控件**(vb6forms_listview.c 的
+            // lvFind), 对 VB6_UserControlHost 一律返回 NULL ⇒ 属性写入静默丢失。
+            // 实测 ComCtlsDemo: `ListView1.Sorted = True` 被发成
+            //   vb6_ListView_SetSorted(vb6_hwnd_ListView1, (-1))
+            // ⇒ ComCtls 的 `Property Let Sorted` 没跑 ⇒ SortListItems 没调
+            // ⇒ LVM_SORTITEMSEX 一次都没发(1000 项停在插入序, VB6 是排好序的)。
+            // 12 个属性撞名: AllowColumnReorder/Checkboxes/ColumnWidth/FullRowSelect/
+            // GridLines/HideColumnHeaders/LabelEdit/MultiSelect/Sorted/SortKey/
+            // SortOrder/View。注意读路径 (cgen_expr_member_form_builtin.inc:289) 本来就
+            // 先试 .ctl (Fix 112), 只有这里的**写**路径是反的 —— 只改了写路径。
+            const bool isUC292 = knownUserControlCtrlVars_.find(objLower)
+                                 != knownUserControlCtrlVars_.end();
+            std::string writeFn = isUC292
+                ? std::string()
+                : getControlPropWriteFn(itCtrl->second, maExpr.memberName);
+            if (!writeFn.empty()) {
+                emitExpr(*node.value);
+                std::string valExpr = std::move(lastExpr_);
+                valExpr = controlPropValueExpr(writeFn, valExpr, *node.value);  // Fix 194
+                c_.emitLine(writeFn + "(" + makeCtrlHwndArg(objLower, itCtrl->second) + ", " + valExpr + ");  /* Let Control Property */");
+                return;
+            }
                 // Fix 133y: 工程内 UserControl 子控件属性写入
                 // (`czLabel3.Caption = "..."` / `ucChartBar1.Value = 30`)。
                 // builtin 控件 readFn/writeFn 只在表单代码访问标准属性时生效;

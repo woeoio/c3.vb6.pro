@@ -97,6 +97,12 @@ static const std::unordered_map<std::string, std::string> builtinFuncs = {
     {"cuint",    "vb6_CUInt"},
     {"culng",    "vb6_CULng"},
     {"culnglng", "vb6_CULngLng"},
+    // CLngLng: 阶梯里缺的那一档 (有符号 64 位)。ai/032 只落了无符号四档,
+    // 签名 64 位的那一位没登记 —— ComCtlsDemo Builds\ProgressBar\ProgressBar.ctl:1328
+    // (`VTableCall ..., CLngLng(PropValue), CLngLng(Me.Max - Me.Min)` 给
+    // ITaskBarList3::SetProgressValue 送 ULONGLONG) 因此发成裸 `CLngLng(...)`,
+    // 解析不到符号 ⇒ LNK2019。口径与 CLng 同族 (FltToLng + OvfChk), 返回 int64_t。
+    {"clnglng",  "vb6_CLngLng"},
     {"clngptr",  "vb6_CLngPtr"},
     {"cvar",     "vb6_CVar"},
     {"hex",      "vb6_Hex"},

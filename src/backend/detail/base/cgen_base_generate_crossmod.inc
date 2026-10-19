@@ -9,6 +9,7 @@
             auto* clsSym = lookupModuleDotted(sym->variableTypeName);
             if (clsSym && clsSym->kind == SymbolKind::Class && !clsSym->isInterface) {
                 knownClassVars_[varLower] = clsSym->name;
+                moduleClassVars_[varLower] = clsSym->name;
                 // Fix 183: 外部 As New 变量同样需惰性实例化 — 标志随 Symbol 跨模块复制,
                 // 注册进 moduleNewVars_ 后过程入口带入 knownNewVars_, 生成 if (!X) X = ... 守卫.
                 if (sym->isNewVar) {
@@ -26,6 +27,7 @@
                     const std::string projClsXm = projectClassNameOf(sym->variableTypeName);
                     if (!projClsXm.empty()) {
                         knownClassVars_[varLower] = projClsXm;
+                        moduleClassVars_[varLower] = projClsXm;
                         if (sym->isNewVar) moduleNewVars_[varLower] = cIdent(projClsXm);
                     } else {
                         knownTypedComVars_[varLower] = clsSym;

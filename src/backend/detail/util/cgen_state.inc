@@ -251,6 +251,10 @@
     // 防止类方法内对me->m_Xxx的BSTR赋值无法识别类型
     std::unordered_set<std::string> classBstrMembers_;
     std::unordered_set<std::string> classLongMembers_;
+
+    // 账 #305 §B183: Integer 类字段的窄档名单（两种拼法都登，同上面那张表）。
+    // 唯一消费者是 narrowTargetTypeOf，它只问「这枚左值有多窄」。
+    std::unordered_set<std::string> classIntMembers_;
     std::unordered_set<std::string> classDoubleMembers_;
     // Fix 037: 类 Variant 成员变量集合 (As Variant 字段, 含 m_ 前缀格式).
     // 用于 IndexOrCallExpr 处理 `me->VarField(idx)` 或 `obj.VarField(args)` 模式:
@@ -315,6 +319,19 @@
     // 用于方法调用翻译 c.Method → vb6_cls_ClassName_Method(c)
     // Fix 010r-10: 从 unordered_set 改为 unordered_map 以支持类名查找
     std::unordered_map<std::string, std::string> knownClassVars_;
+
+    // 账 #305 #408: 本过程形参表里声明成 As Object 的名字 (小写)。
+    // 每张过程入口清空, 只描述当前过程的作用域 —— 用来挡住上面那张表跨过程漏答案。
+    std::unordered_set<std::string> procObjectFormals_;
+    // 账 #305 §B218 (甲): 本过程**工程类形参**的名字名册 (同上面那张的生命周期, 按过程重开)。
+    // 引用计数那两条腿 (覆写 claim / 置空 release) 要它落空 —— ByVal 形参槽里那一枚引用
+    // 今天没有任何一站 claim 过它 (实参那一站是腿⑤, 还没接), 让它放手就是拆调用方还在用的实例。
+    std::unordered_set<std::string> procClassFormals_;
+
+    // 账 #305 #408: knownClassVars_ 里模块级那一档登记的持久快照 (模块级 Dim As 类、类字段、窗体上的
+    // UserControl 子控件、跨模块实例变量)。每张过程入口恢复一份 —— 与 moduleNewVars_ / moduleFixedStringLen_
+    // 同一条形状; 形参那一档不进快照, 所以形参遮蔽只影响本过程。
+    std::unordered_map<std::string, std::string> moduleClassVars_;
 
     // Fix 037b: 标记最近一次 IndexOrCallExpr 生成的表达式是否为返回 VARIANT 的
     // 项目类 Item 属性调用 — Set 语句需要将其转换为 void* 对象引用.
@@ -381,6 +398,13 @@
     // 每条: { 临时char*变量名, 回写目标左值表达式, 缓冲容量表达式(可空) }。
     struct AnsiOutParam { std::string tempVar; std::string targetExpr; std::string capExpr; };
     std::vector<AnsiOutParam> ansiOutParams_;
+    // 账 #305 §B217 (第一百二十一刀): 本站为 ByRef Variant 实参 mint 的那枚具名临时槽
+    // (`_vb6_vararg_<n>`) 里住着一枚**装箱自己取的引用** —— 语句末收回, 与上面
+    // `ansiOutParams_`/`ansiTempsToFree_` 同一条"编译器自己 mint 的临时量, 范围就是这条语句"
+    // 的口径。连着记下**发声明时那层的缩进**: 语句的收回行只在同层落地, 层不同就说明声明发在
+    // 一对已经合上的花括号里 (Debug.Print 那族 `{ ... }` 自带块), 那时宁可不收也不许发成
+    // 引用越界的 C。
+    std::vector<std::pair<std::string, int>> boxTempsToClear_;
     int ansiCounter_ = 0;
     int vcmpCounter_ = 0;  // P25: Variant比较临时变量计数器
 
@@ -481,7 +505,15 @@
     // 成员访问片段 -> 调用片段之间传递"这次是接口槽调用"的接口名 (B04)
     std::string ivrefIfaceName_;
     // tB Interface B05: 本过程内需要"作用域末尾 Release"的接口变量 (C 名)
-    std::vector<std::string> ivrefLocalsToRelease_;
+    // 账 #305 §B218 (甲) 腿④: 「过程出口这一格该不该放手」收成一张**带档**的表
+    // (原来只有 ivref 一档有答案, 具体类那一档压根没有登记面 = 今天每条 `Dim x As C` 漏一枚)。
+    // isView = true 走 `->vt->Release` (接口薄指针), false 走本类那对 mint 出入口 (工程类实例)。
+    struct SlotRelease {
+        std::string expr;
+        bool isView;
+        std::string clsName;   // 只有工程类那一档带类名
+    };
+    std::vector<SlotRelease> slotsToRelease_;
     // Set 语句里"旧值"临时变量的序号 (只有新语法路径消耗, 不影响其他工程)
     int ivrefSetSeq_ = 0;
 
@@ -1006,6 +1038,17 @@
     // 工程级类名表 (小写类名 → 原大小写类名, driver 注入). 本模块符号表会被同名成员
     // 遮蔽, 判"某类型名是不是工程类"只能问这张表 (详见 setProjectClassNames 注释).
     const std::unordered_map<std::string, std::string>* projClassNames_ = nullptr;
+
+    // 账 #305 §B187 第二腿: 工程级「在运行期 coclass 描述表里占一行」的类名名单
+    // (小写, driver 与建表那侧同一条判据扫出 —— 见 driver_codegen_voidfield_scan.inc)。
+    // 装箱腿发每一句 vb6_FindCoClassDesc("<类>") 之前先问它: 表里没有这行 ⇒ desc=NULL
+    // ⇒ 包装器=NULL ⇒ 槽里成了 Nothing, 比裸指针还差, 所以那种形状一律不装箱。
+    const std::unordered_set<std::string>* projCoclassNames_ = nullptr;
+
+    // 账 #305 §B189 第二档: 工程级「被谁 Implements 过」的名单 (小写, driver 从语义层那份
+    // Symbol::implementsNames 注入)。 TypeName 按声明档折叠那一刀用它挡掉接口视图 (注释见
+    // driver_codegen_voidfield_scan.inc)。
+    const std::unordered_set<std::string>* projImplementedNames_ = nullptr;
 
     // CoClass 身份 (tB, ai/022 B13b): stage 2.7 Pass E 求出的唯一出口 (coclassIds_)。
     // 只有 generateDllEntry 读它 —— 产品里的 CLSID / 默认接口 IID / 组名 ProgID 一律

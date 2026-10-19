@@ -184,6 +184,51 @@
         }
     }
 
+    // 账 #305 §B189 第二档 (第八十八刀): TypeName(<一枚 typed 工程类变量>) —— VB6 答的是
+    // **声明档那个类的模块名**，而这一路改前把实参装进槽再去问 vb6_TypeName: 槽里是裸实例
+    // 指针 (不是 §B189 第一档认得出的那枚包装器)，于是交回 "Object" (两台实测:
+    // .build/k93_t 的 A 臂 42060)。真语料 9949 份里 65 处拿 TypeName 比工程内类名，56 处比的
+    // 就是自己那个类 ⇒ 承面在行为，不在外观。
+    // 闸门三条，都在**发码之前**问完 (发射实参只在决定折之后才做，免得拒折时留下发射副作用):
+    //   · 实参必须是一枚裸标识符 —— 调用结果/成员读那一族的值不是"一枚变量"，声明档说了不算;
+    //   · 名字被谁 Implements 过 ⇒ 这是接口视图，VB6 答实体的真身类名，声明档不是答案 ⇒ 不折
+    //     (真语料那 9 处 CEmployeeCol 那一族就是这一形);
+    //   · 控件那一族留在闸门外 (与 boxIntoLateSlot 同一条负条件): 窗体上的子控件在 C 侧的值是
+    //     HWND，按声明档折会给句柄报出个类名 —— tests/setobj 钉的 TypeName(o) = "TextBox"
+    //     那一档归宿主那一问 (Fix 112) 管。
+    // NULL 那一支与第八十七刀同一条口径: 对象变量不指向对象 = "Nothing"。
+    // 第四道闸 (§B147 那一条口径用在这里): 实参是**整枚槽** ⇒ 这一问是运行期的, 声明档不是答案。
+    // 逼出这条闸的是 A/B 上唯一一处真语料移动 (尺 .build/k96_ab.py, 读数 .build/k96_ab.txt):
+    // VBFlexGrid.ctl 的 `Public Property Let ColImageList(ByVal Index As Long, ByVal Value As Variant)`
+    // 里 `TypeName(Value) = "ImageList"` 被折成了常量 —— 因为"这枚标识符是哪一枚类"按名查的那张表
+    // (knownClassVars_)把**另一个过程**里那枚 `Property Let FlexDataSource(ByVal Value As
+    // IVBFlexDataSource)` 的声明漏了过来 (两台产物对上: 改前那一行发的是 `vb6_TypeName(vb6_VariantFromValue(
+    // vb6_VariantFromValue(Value)))`, 内层那一枚就是"Value 是槽"的既有答案)。折了就是把这个分支
+    // 变成恒假 ⇒ 静默行为改动, 不是外观改动。
+    if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
+        && node.positional.size() == 1 && node.positional[0]
+        && node.positional[0]->kind == ASTNodeKind::IdentifierExpr) {
+        auto& tnId88 = static_cast<IdentifierExpr&>(*node.callee);
+        std::string tnLow88 = tnId88.name;
+        std::transform(tnLow88.begin(), tnLow88.end(), tnLow88.begin(), ::tolower);
+        if (tnLow88 == "typename") {
+            std::string tnCls88 = inferClassTypeOfExpr(*node.positional[0]);
+            std::string tnSpell88 = tnCls88.empty() ? std::string() : projectClassNameOf(tnCls88);
+            if (!tnSpell88.empty() && !classUsedAsInterface(tnCls88)
+                && !variantOperandAST(node.positional[0].get())) {
+                std::string tnKeep88 = lastExpr_;
+                emitExpr(*node.positional[0]);
+                std::string tnArg88 = lastExpr_;
+                lastExpr_ = tnKeep88;
+                if (tnArg88.find("vb6_hwnd_") == std::string::npos
+                    && tnArg88.find("vb6_form_ctrl_") == std::string::npos) {
+                    lastExpr_ = "(((" + tnArg88 + ") != NULL) ? vb6_BSTR_FromStr(L\""
+                              + tnSpell88 + "\") : vb6_BSTR_FromStr(L\"Nothing\"))";
+                    return;
+                }
+            }
+        }
+    }
 
     // P18-E: Choose special handling - nested ternary chain
     if (node.callee && !node.positional.empty()) {

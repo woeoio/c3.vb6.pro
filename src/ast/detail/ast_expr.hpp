@@ -115,6 +115,19 @@ public:
     // 重载选择结果 (O2): 语义层 resolveOverload 选定的变体键后缀
     // ("" = 裸键 head / 非重载, 零改动; 否则 "$ov$<fp>", cgen 据此定形 C 名与形参表).
     std::string calleeOvlSuffix;
+    // 账 #232④: `Line -(x, y)` —— **起点省略**那一形 (VB6: 从 CurrentX/CurrentY 起笔)。
+    // 为什么必须是语法事实而不是发码侧按实参个数猜: 起点省略 + 可选 color/style 时
+    // 实参个数与「起点终点都给」那一形撞车 (2 坐标 + color + style = 4 格 = 4 格坐标),
+    // 按个数分派必然把 color/style 读成第二点的两格。只有 parser 知道源码里那个 `-`
+    // 之后**没有** `(x1,y1)`。
+    bool canvasStartOmitted = false;
+    // 账 #232⑥: `Step` 前缀 —— VB6 里坐标相对 CurrentX/CurrentY（`PSet Step (x,y)` /
+    // `Line [Step] (x1,y1) [Step] -(x2,y2)` / `Circle Step (x,y), r`）。**Line 的两个点各有一格**
+    // Step，所以分两枚；其余动词只有第一格。
+    // 为什么必须是语法事实而不是发码侧猜: `Step` 与不带 Step 走的是**同一串实参**（坐标个数一样），
+    // 差别只有「相对/绝对」，发码侧看不到，只能由 parser 在**消费掉那枚 token 的那一刻**记下。
+    bool canvasStep1 = false;
+    bool canvasStep2 = false;
 
     IndexOrCallExpr(SourceLocation loc, ExprPtr callee)
         : Expr(ASTNodeKind::IndexOrCallExpr, loc),

@@ -130,11 +130,30 @@ if ($err5.Count -gt 0) {
 }
 if ($ast5) {
     $wantD = @{
-    # 名字 = @(位置实参个数, Needles 针数, Absent 针数) —— 加针/加调用点要同时改这张名单
+    # 名字 = @(element数-助手名, Needles 针数, Absent 针数, -Tail 针数) —— 加针/加调用点要同时改这张名单
     # 账 #305 §B159/§B162 (第五十刀): 两台各加一条 CALL=ECHOARR (真 SAFEARRAY 进服务端、再交回客户端)。
-    'ax_dll_dispatch_invoke'         = @(6, 6, 1)
-    'cc_dll_dispatch_iface_only'     = @(7, 11, 1)
-    'cc_dll_dispatch_iface_only_x86' = @(8, 11, 1)
+    'ax_dll_dispatch_invoke'         = @(6, 6, 1, 0)
+    'cc_dll_dispatch_iface_only'     = @(7, 11, 1, 0)
+    'cc_dll_dispatch_iface_only_x86' = @(8, 11, 1, 0)
+    # 账 #305 §B185 (第七十七刀): IDispatch 服务端进门那枚错误边界, 两台各一条真跑用例。
+    # 针面各写一份(见 run_tests.ps1 那两条的理由); x86 那格多出的两枚元素是 `-Arch "x86"`
+    # 这一对**命名**实参 —— AST 里它们各算一格 CommandElement, 所以是 8 而不是 7。
+    'b185_server_error_frame'        = @(6, 12, 1, 0)
+    'b185_server_error_frame_x86'    = @(8, 12, 1, 0)
+    # 账 #305 §B186 (第七十八刀): 类工厂那辙门的错误边界, 两台各一条真跑用例。
+    # 第四格 = -Tail 那枚数组里的针数 (没有这一档就写 0): 这一族用例给助手新增了一个
+    # 命名数组实参, 「数组实参恰好两枚」那句话从此只管**位置**那两档。
+    'b186_factory_error_frame'         = @(8, 5, 2, 1)
+    'b186_factory_error_frame_x86'    = @(10, 5, 2, 1)
+    # 账 #305 §B188 (第八十刀判据): 出厂那一趟的格子, 两枚一类各一台; 位置面 6 (+2 = -Arch),
+    # Needles 6 / Absent 1 (「Unhandled error」当反面证人) / -Tail 1 枚 CREATE= 臂
+    'b188_terminate_error_frame'          = @(8, 6, 1, 1)
+    'b188_terminate_error_frame_x86'     = @(10, 6, 1, 1)
+    # 账 #305 §B187 第二腿 + 第四腿 + 第五腿 (八十三刀装箱 / 八十四刀实参那一站 / 第八十五刀 ByRef 那座桥 / 八十六刀 TypeName 认包装器): 两架构真跑格。
+    # 位置面 8 (+2 = -Arch), Needles 10 / Absent 6 (装箱腿 / 实参站 / ByRef 桥 / 类名那一问 / Nothing 那一问 / 声明档折叠那一问 六处各留一枚"没落地就回来"的数)
+    # / -Tail 1 枚 CREATE= 臂 (7 个 CLSID 写在同一条里)
+    'b187_boxed_object_slot'                    = @(8, 10, 6, 1)
+    'b187_boxed_object_slot_x86'               = @(10, 10, 6, 1)
 }
 $ds = @($ast5.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.CommandAst] -and
@@ -146,10 +165,27 @@ if ($ds.Count -ne $wantD.Count) {
 foreach ($c in $ds) {
     $els = @($c.CommandElements)
     $nm = ($els[1].Extent.Text -replace '"', '')
-    $arrays = @($els | Where-Object { $_.GetType().Name -eq 'ArrayExpressionAst' })
+    # 账 #305 §B186 (第七十八刀): 数组实参分两档。紧跟在**命名参数**后面的那档不是针面,
+    # 是给助手的参数据的 (今天只认 -Tail 这一枚); 位置那两档才是 Needles 与 Absent。
+    # 之前那句「数组实参恰好 2 枚」把两档混在一起数, 加了 -Tail 就会永远红 ——
+    # 要钉的其实是「位置两档各自的针数 + 命名那档叫什么、里面几条」。
+    $pos = @(); $named = @()
+    for ($e = 0; $e -lt $els.Count; $e++) {
+        if ($els[$e].GetType().Name -ne 'ArrayExpressionAst') { continue }
+        if ($e -gt 0 -and $els[$e - 1].GetType().Name -eq 'CommandParameterAst') {
+            $named += , @($els[$e - 1].Extent.Text, $els[$e])
+        } else {
+            $pos += $els[$e]
+        }
+    }
     # 注释行里也写引号(那几行是给人读的)，先丢掉再数针的条数
-    $counts = @($arrays | ForEach-Object {
+    $counts = @($pos | ForEach-Object {
         $clean = ($_.Extent.Text -split '\r?\n' | Where-Object { $_.TrimStart() -notmatch '^#' }) -join "`n"
+        ([regex]::Matches($clean, '"[^"\r\n]*"')).Count
+    })
+    $tailNames = @($named | ForEach-Object { $_[0] })
+    $tailCounts = @($named | ForEach-Object {
+        $clean = ($_[1].Extent.Text -split '\r?\n' | Where-Object { $_.TrimStart() -notmatch '^#' }) -join "`n"
         ([regex]::Matches($clean, '"[^"\r\n]*"')).Count
     })
     if (-not $wantD.ContainsKey($nm)) { $fails += ('H5 没登记过的调用点 ' + $nm); continue }
@@ -158,8 +194,19 @@ foreach ($c in $ds) {
         $fails += ('H5 ' + $nm + ' 位置实参 ' + ($els.Count - 1) + ' != ' + $w[0] +
                    ' —— 数组收尾被吃掉时后面的实参会整体往前挪')
     }
-    if ($arrays.Count -ne 2) {
-        $fails += ('H5 ' + $nm + ' 数组实参 ' + $arrays.Count + ' != 2 (Needles + Absent)')
+    if ($pos.Count -ne 2) {
+        $fails += ('H5 ' + $nm + ' 位置数组实参 ' + $pos.Count + ' != 2 (Needles + Absent)')
+    }
+    if ($tailNames.Count -gt 1 -or ($tailNames.Count -eq 1 -and $tailNames[0] -ne '-Tail')) {
+        $fails += ('H5 ' + $nm + ' 不认得的命名数组实参: ' + ($tailNames -join ',') +
+                   ' —— 名单只认 -Tail 这一档')
+    }
+    $tailN = 0
+    if ($tailCounts.Count -eq 1) { $tailN = $tailCounts[0] }
+    if ($w.Count -lt 4) {
+        $fails += ('H5 名单 ' + $nm + ' 只有 ' + $w.Count + ' 个数 —— 第四格是 -Tail 的针数 (没有写 0)')
+    } elseif ($tailN -ne $w[3]) {
+        $fails += ('H5 ' + $nm + ' -Tail 针数 ' + $tailN + ' != ' + $w[3])
     }
     if ($counts.Count -eq 2 -and ($counts[0] -ne $w[1] -or $counts[1] -ne $w[2])) {
         $fails += ('H5 ' + $nm + ' 针数 ' + ($counts -join '/') + ' != ' + $w[1] + '/' + $w[2])
@@ -197,11 +244,33 @@ if ($ast5) {
     }
 }
 
+# ---- H7: 这套 harness 自己（与全部哨兵）必须带 UTF-8 BOM ----
+#   为什么这道门非有不可: pwsh 7 读无 BOM 的 UTF-8 也认中文 ⇒ **本机永远绿**，只有 CI 的
+#   Windows PowerShell 5.1 会按 ANSI(cp936) 读 ⇒ 中文注释被解成乱码，乱码里带出的引号/反引号
+#   把语法**炸掉**。账 #438 实测: `tests/run_tests.ps1` 的 BOM 被 `[IO.File]::WriteAllText` 顺手
+#   抹掉（那一句是为了插一个调用点），本机 `pwsh` 一路绿，CI 上
+#   `[STATIC] ps51_joinpath` + `[STATIC] test_helper_integrity` 双双红成
+#   「Unexpected token '\Include'」/「parse errors: 72」—— 而报错指的地方跟动手的地方
+#   **隔着一千多行**，因为真正炸的是**注释**。
+#   作用域只取「CI 会去 parse 的那批」= harness + scripts/check_*.ps1：仓库里另有 10 份
+#   无 BOM 的 .ps1（含 6 份带中文的构建/开发脚本），它们不由这套 harness parse，
+#   拿「全仓库都要 BOM」当判据会平白判红 6 条。
+if (-not $fails.Contains('H7x')) {
+    $needBom = @($rt) + @(Get-ChildItem (Join-Path $PSScriptRoot 'check_*.ps1') | ForEach-Object { $_.FullName })
+    foreach ($p7 in $needBom) {
+        $b7 = [System.IO.File]::ReadAllBytes($p7)
+        if ($b7.Length -lt 3 -or $b7[0] -ne 0xEF -or $b7[1] -ne 0xBB -or $b7[2] -ne 0xBF) {
+            $fails += ('H7 ' + (Split-Path -Leaf $p7) + ' 没有 UTF-8 BOM —— pwsh 7 照样绿，只有 CI 的 5.1 会按 ' +
+                       'ANSI 读，把中文注释解成乱码再炸语法；要改这个文件请用会保留 BOM 的写法')
+        }
+    }
+}
+
 if ($fails.Count -gt 0) {
     $fails | ForEach-Object { Write-Host "FAIL $_" }
     exit 1
 }
-Write-Host ('OK check_test_helper_integrity: H1..H6 (functions=' + $defs.Count +
+Write-Host ('OK check_test_helper_integrity: H1..H7 (functions=' + $defs.Count +
              ' Test-* helpers=' + @($defs.Keys | Where-Object { $_ -like 'Test-*' }).Count +
-             ' no shadowing, all reachable)')
+             ' no shadowing, all reachable, harness+sentinels all BOM-ed)')
 exit 0

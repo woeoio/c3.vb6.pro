@@ -131,5 +131,26 @@ Sub Main()
         Debug.Print "TOF12:FAIL cnt=" & cnt
     End If
 
+    ' TOF13 (账 #446 / §B218): `TypeOf x Is Object` —— Object 是基类, 等价于"活的对象引用"。
+    '   此前落到 vb6_TypeOf 那个恒返 0 的桩 ⇒ 一律答"否" (含活对象)。修后: 活引用 True,
+    '   Nothing 不匹配任何类型 (含 Object) False。COM 晚绑对象 (CreateObject) 也走这一位。
+    Set leaf = New TofLeaf
+    Dim d As Object
+    Set d = CreateObject("Scripting.Dictionary")
+    If (TypeOf leaf Is Object) And (TypeOf d Is Object) And Not (TypeOf n Is Object) Then
+        Debug.Print "TOF13:OK"
+    Else
+        Debug.Print "TOF13:FAIL (Object 基类判定错)"
+    End If
+
+    ' TOF14 (账 #447 / §B219): `TypeOf x IsNot T` —— ai/032 的 IsNot 接到 TypeOf 构造上,
+    '   解析期脱糖成 Not(TypeOf x Is T) (同 binary a IsNot b)。与 TOF13 互补: 活对象
+    '   IsNot Object=False, Nothing IsNot Object=True, COM 晚绑对象 IsNot Object=False。
+    If Not (TypeOf leaf IsNot Object) And (TypeOf n IsNot Object) And Not (TypeOf d IsNot Object) Then
+        Debug.Print "TOF14:OK"
+    Else
+        Debug.Print "TOF14:FAIL (TypeOf IsNot 判定错)"
+    End If
+
     Debug.Print "TOF-DONE"
 End Sub

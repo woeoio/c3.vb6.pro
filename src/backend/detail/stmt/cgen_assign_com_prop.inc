@@ -428,6 +428,52 @@
                 return;
             }
         }
+        /* Fix 294: `With UserControl ... .Extender.<成员> = v` 的对象修正 (纯属性赋值)。
+           裸 `Extender` 标识符早就认得 (cgen_expr_ident_builtin.inc:234 →
+           `(&vb6_UserControl_Extender)`, Fix 221); With 形态下 `.Extender` 走成员
+           访问, 于是发成
+               vb6_ComSetProp(vb6_ComGetObjectProp(_vb6_with_N, L"Extender"), L"Height", …)
+           而 `_vb6_with_N = (void*)vb6_UserControl_hWnd` 是 **HWND 不是 IDispatch**
+           ⇒ 取不到对象 ⇒ 整条写入静默丢弃(不报错)。ToolBar.ctl:1185 /
+           MonthView.ctl:634 算自己的"自然高度"就走这条。
+
+           把**属性赋值**这一种形态的对象换成那个同步伪结构, 让它落进既有的
+           vb6_UC_IsExtender / vb6_UC_ExtenderField 通道 (Fix 168), 直接写
+           vb6_Extender_Height。
+
+           **只管赋值, 不碰方法**: Extender 上还有 SetFocus/ZOrder/Drag/Move/
+           DataChanged, 它们走调用路径; 之前在 RTL 侧无条件把这个伪结构递出去,
+           它们拿它进 vb6_ComCall → Invoke, 实测直接 C0000374 堆损坏。
+           名单与 RTL `vb6_UC_ExtenderField` (uc_controls.c) 一一对应, 其余成员
+           (DataChanged 之类不是 RTL 全局的) 照旧落回 COM 分支。 */
+        {
+            size_t g0 = objExpr.find("vb6_ComGetObjectProp(");
+            if (g0 != std::string::npos && objExpr.find("L\"Extender\"", g0) != std::string::npos) {
+                std::string memLow = memberName;
+                std::transform(memLow.begin(), memLow.end(), memLow.begin(), ::tolower);
+                static const struct { const char* vb; } kExtProps[] = {
+                    { "left" }, { "top" }, { "width" }, { "height" }, { "align" },
+                    { "visible" }, { "dragmode" }, { "helpcontextid" },
+                    { "whatsthishelpid" }, { "tag" }, { "tooltiptext" },
+                };
+                bool known = false;
+                for (const auto& ep : kExtProps) if (memLow == ep.vb) { known = true; break; }
+                if (known) {
+                    size_t lp = objExpr.find('(', g0);
+                    size_t comma = (lp == std::string::npos) ? std::string::npos
+                                                             : objExpr.find(',', lp);
+                    std::string target = (comma == std::string::npos)
+                        ? std::string() : objExpr.substr(lp + 1, comma - lp - 1);
+                    std::string tLow = target;
+                    std::transform(tLow.begin(), tLow.end(), tLow.begin(), ::tolower);
+                    // 目标必须是 With 变量, 别把别的东西也劫持过来
+                    if (tLow.rfind("vb6_with_", 0) == 0 || tLow.rfind("_vb6_with_", 0) == 0
+                        || tLow.rfind("vb6_ext_", 0) == 0 || tLow.rfind("_vb6_ext_", 0) == 0) {
+                        objExpr = "(&vb6_UserControl_Extender)";
+                    }
+                }
+            }
+        }
         emitExpr(*node.value);
         std::string valExpr = std::move(lastExpr_);
         std::string packFn = comPackExpr(*node.value);

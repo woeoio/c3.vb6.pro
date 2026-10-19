@@ -478,6 +478,24 @@ void CCodeGen::visit(TypeOfExpr& node) {
             }
         }
     }
+    // 账 #446（§B218）: `TypeOf x Is <非项目类>` 这一位**恒答"否"** —— 走到这里 = 目标
+    // 不是项目类（Fix 193 那条 `return` 拦的是项目类），于是落到下面 `vb6_TypeOf(obj, L"...")`，
+    // 而那个出口是 vb6rtl_conv.c 里**恒返 0 的桩**（注释自写「简化版: 始终返回 False」）⇒
+    // `TypeOf x Is Object` 也被答成"否"。语料里**真的会被走到**：`Common.bas` 的
+    // `TypeOf .ParentControls(0) Is VB.VBControlExtender`、`TypeOf Form Is VB.MDIForm`、
+    // `cTT.cls` 的 `TypeOf ParentControl Is TextBox`，以及 `If TypeOf v Is Object Then` 惯用写法。
+    // 本机实测（尺 `.build/output/_tmp/tofx`）：`Set d = CreateObject("Scripting.Dictionary")`
+    // 后 `TypeOf d Is Object` 交 False，而 VB6 为真。
+    //
+    // 这一刀只修**判得了**的那一位：`Object` 是基类 ⇒ `TypeOf x Is Object` ≡ x 是活的对象引用
+    // （Nothing 不匹配任何类型，包括 Object —— 与 P4 实测一致）。判据与上面项目类那一支同形
+    // `(obj) != NULL`；不命中仍走下面 `vb6_TypeOf` 老路。
+    // ⚠ **不要顺手扩到 String/Integer/Long/Date/Control**：前四个要按实体的运行时类型判
+    // （Variant 装箱那一层），后一个要控件的运行时类型标识 —— 都不是「判一下非空」能盖的。
+    if (Symbol::toLower(node.typeName) == "object") {
+        lastExpr_ = "(" + obj + ") != NULL";
+        return;
+    }
     // Fix 040b: vb6_TypeOf expects void* (IDispatch*). If the operand is a
     // Variant (vb6_VARIANT struct), extract the object pointer first.
     if (cExprIsVariant(obj)) {

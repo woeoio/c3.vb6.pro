@@ -346,7 +346,14 @@
             }
             auto itCtrl = knownFormControls_.find(objLower);
             if (itCtrl != knownFormControls_.end()) {
-                std::string writeFn = getControlPropWriteFn(itCtrl->second, maExpr.memberName);
+                // Fix 292: 同 cgen_setlet.cpp —— 同名 UserControl 必须优先走 .ctl 实例,
+                // 否则内置 shim (vb6forms_listview.c 的 lvFind) 对 VB6_UserControlHost
+                // 返回 NULL, `ListView1.Sorted = True` 这类写入会静默丢失。
+                const bool isUC292 = knownUserControlCtrlVars_.find(objLower)
+                                     != knownUserControlCtrlVars_.end();
+                std::string writeFn = isUC292
+                    ? std::string()
+                    : getControlPropWriteFn(itCtrl->second, maExpr.memberName);
                 if (!writeFn.empty()) {
                     emitExpr(*node.value);
                     // ImageList Picture fix: resolve COM marker on RHS before using value

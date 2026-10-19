@@ -437,12 +437,22 @@ ExprPtr Parser::parseTypeOfExpr() {
     auto loc = currentLoc();
     advance(); // consume 'TypeOf'
     auto obj = parseExpression(23);  // TypeOf 比 Is 优先级低
-    // 词法器将Is输出为IsKeyword，两者都接受
-    if (cur_.kind != TokenKind::Is && cur_.kind != TokenKind::IsKeyword) {
-        diag_.error(DiagnosticID::ParseExpectedToken, currentLoc(),
-                    "expected 'Is' after 'TypeOf'");
-    } else {
+    // C3 扩展 (ai/032): 账 #447 / §B219 —— `TypeOf x IsNot T` 同 binary `a IsNot b`, 在解析期脱糖成
+    // `Not (TypeOf x Is T)`, 不加 AST 节点、不动语义层/发码层。理由与 binary IsNot
+    // (parser_expr.cpp:265) 同形: 发码层 exprYieldsVbBoolean() 认 TypeOfExpr 为布尔
+    // (cgen_expr.cpp:211), 于是 Not 走**逻辑**取反 (`(... != 0) ? 0 : -1`) 而非位取反。
+    // 对 `TypeOf x Is Object` 那一位 (账 #446, 发 `(obj) != NULL`) 取反 ⇒
+    // 活对象→False / Nothing→True, 正合 VB6 语义。
+    bool negated = false;
+    if (cur_.kind == TokenKind::IsNot) {
+        negated = true;
+        advance(); // consume 'IsNot'
+    } else if (cur_.kind == TokenKind::Is || cur_.kind == TokenKind::IsKeyword) {
+        // 词法器将Is输出为IsKeyword，两者都接受
         advance();
+    } else {
+        diag_.error(DiagnosticID::ParseExpectedToken, currentLoc(),
+                    "expected 'Is' or 'IsNot' after 'TypeOf'");
     }
     auto typeTok = expectName("expected type name");
     // Fix 088: TypeOf obj Is ADODB.Recordset / VBMANLIB.Dictionary — 类型名可带
@@ -455,7 +465,12 @@ ExprPtr Parser::parseTypeOfExpr() {
         auto nextTok = expectName("expected type name after '.'");
         typeName += "." + nextTok.text;
     }
-    return std::make_unique<TypeOfExpr>(loc, std::move(obj), typeName);
+    auto e = std::make_unique<TypeOfExpr>(loc, std::move(obj), typeName);
+    if (negated) {
+        // 脱糖 Not(TypeOf x Is T) —— 与 binary IsNot (parser_expr.cpp:283) 同形
+        return std::make_unique<UnaryExpr>(loc, UnaryOp::Not, std::move(e));
+    }
+    return e;
 }
 
 ExprPtr Parser::parseAddressOfExpr() {

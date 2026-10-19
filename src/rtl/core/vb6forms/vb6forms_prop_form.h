@@ -77,6 +77,12 @@ void vb6_SetAutoRedraw(void* hwnd, int32_t val);
 void vb6_AutoRedrawRefit(void* hwnd);
 int32_t vb6_GetScaleMode(void* hwnd);
 void vb6_SetScaleMode(void* hwnd, int32_t val);
+// 自定义坐标系 (VB6 的 vbUser): 由 `Scale (x1,y1)-(x2,y2)` 设, 存的就是 VB6 那四个
+// Single 属性 —— ScaleLeft / ScaleTop / ScaleWidth / ScaleHeight。
+// vb6_UserScaleOf 返回 1 = 这枚窗口今天挂着一套自定义坐标系 (0 = 走那六档固定单位)。
+void vb6_SetUserScale(void* hwnd, double left, double top, double width, double height);
+int32_t vb6_UserScaleOf(void* hwnd, double* left, double* top, double* width, double* height);
+void vb6_ClearUserScale(void* hwnd);
 // 账 #196: 控件的 `.hDC` —— 见 vb6forms_ctrl.c 那条注释：两档来源（_Paint 派发期用外层
 // 挂上的 VB6_PaintDC，否则窗口 DC），且**一个对象一张**，反复读回同一个句柄，销毁时归还。
 intptr_t vb6_GetControlHDC(void* hwnd);

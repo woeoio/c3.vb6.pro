@@ -1,0 +1,8 @@
+Type=DLL
+Class=B186Boom; B186Boom.cls; {11112222-3333-4444-5555-6666777788B1}
+Class=B186Good; B186Good.cls; {11112222-3333-4444-5555-6666777788B2}
+Class=B186Held; B186Held.cls; {11112222-3333-4444-5555-6666777788B3}
+Module=DllBlocks; DllBlocks.bas
+Startup=""
+Command32=""
+Name="B186d"

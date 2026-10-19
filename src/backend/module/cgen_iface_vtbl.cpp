@@ -380,11 +380,11 @@ std::string CCodeGen::ivParamDeclsRef(const Decl* sig) {
 // ============================================================
 
 void CCodeGen::emitIfaceClassFields(Module& module) {
+    // 账 #305 §B218 (甲, 第一刀): 计数头不再跟着接口走 —— **每个类模块都带它**.
+    // 位置仍钉在 __comObj (第 0 字段, D19 硬约束) 之后、__iv_<I> 槽字段之前 ⇒ "谁握着这枚实例"
+    // 从此在类型里有答案; 代价 = 工程类结构体每个字段偏移都动 (两架构 padding 不同形 ⇒ x86 要真验).
+    h_.emitLine("    int32_t __refcount;  /* tB B05 / 账 #445 (甲): 1 at New, +1 per owning ref */");
     const std::vector<const IfaceView*> ifaces = ivImplementedIfaces(module);
-    if (ifaces.empty()) return;
-    // B05: 引用计数头. 只落在"实现新式接口"的类上 —— 无新语法的工程结构体逐字节不变.
-    // 位置在 __comObj (第 0 字段, D19 硬约束) 之后、__iv_<I> 槽字段之前.
-    h_.emitLine("    int32_t __refcount;  /* tB Interface B05: 1 at New, +1 per owning ref */");
     for (const IfaceView* v : ifaces) {
         const std::string id = cIdent(v->name);
         h_.emitLine("    vb6_ivref_" + id + " __iv_" + id +
@@ -394,11 +394,11 @@ void CCodeGen::emitIfaceClassFields(Module& module) {
 
 void CCodeGen::emitIfaceNewInit(Module& module) {
     const std::string clsId = cIdent(moduleName_);
+    // 账 #305 §B218 (甲): 初值 1 也无条件发 —— 语义不变 (`_New` 交出的那一次引用归"接住它的那一枚槽"),
+    // 变的是那一枚槽从此**要**在覆写/置空/过程出口上放手 (那三条腿见 emitClassRefPair 与 §B218 五腿).
+    c_.emitLine("me->__refcount = 1;  /* tB B05 / 账 #445 (甲): 交出的一枚引用归接住它的那一枚槽 */");
     const std::vector<const IfaceView*> ifaces = ivImplementedIfaces(module);
     if (ifaces.empty()) return;
-    // B05: _New 交出的那一次引用由"创建者"持有: 类变量永不 Release (现状),
-    // 而 `Set <接口变量> = New <类>` 走引用移交 (不 AddRef) → 该接口变量就是唯一主人.
-    c_.emitLine("me->__refcount = 1;  /* tB Interface B05 */");
     for (const IfaceView* v : ifaces) {
         const std::string id = cIdent(v->name);
         c_.emitLine("me->__iv_" + id + ".vt = &vb6_ivtbl_" + id + "_for_" + clsId + ";");
@@ -485,19 +485,15 @@ void CCodeGen::emitIfaceImplTables(Module& module) {
         c_.emitLine("static unsigned long __stdcall vb6_iunk_" + clsId + "_" + id + "_AddRef(void* self) {");
         c_.indent();
         c_.emitLine(walk);
-        c_.emitLine("me->__refcount += 1;");
-        c_.emitLine("return (unsigned long)me->__refcount;");
+        // 账 #305 §B218 (甲): 公式只住 emitClassRefPair 那一处, 这里转调.
+        c_.emitLine("return " + clsStruct + "_AddRef(me);");
         c_.dedent();
         c_.emitLine("}");
         c_.emitLine("static unsigned long __stdcall vb6_iunk_" + clsId + "_" + id + "_Release(void* self) {");
         c_.indent();
         c_.emitLine(walk);
-        c_.emitLine("me->__refcount -= 1;");
-        c_.emitLine("if (me->__refcount > 0) return (unsigned long)me->__refcount;");
-        // 实例已被 COM 包装器接管时 (__comObj 非空) 销毁权在包装器 (P6/B13 统一两套计数)
-        c_.emitLine("if (me->__comObj != NULL) return 0UL;  /* wrapper owns teardown */");
-        c_.emitLine(clsStruct + "_Destroy(me);  /* 0 引用: Class_Terminate + 释放 */");
-        c_.emitLine("return 0UL;");
+        // 账 #305 §B218 (甲): 退一 + 到 0 才拆 + 「被包装器接管就不拆」那一条规则只住 emitClassRefPair.
+        c_.emitLine("return " + clsStruct + "_Release(me);");
         c_.dedent();
         c_.emitLine("}");
 
@@ -674,9 +670,9 @@ void CCodeGen::emitIfaceImplTables(Module& module) {
     c_.emitLine(clsStruct + "* me = (" + clsStruct + "*)instance;");
     c_.emitLine("if (!me) return;");
     c_.emitLine("me->__comObj = NULL;  /* B16: 包装器已走, 薄引用的最后一次 Release 自己收尾 */");
-    c_.emitLine("me->__refcount -= 1;");
-    c_.emitLine("if (me->__refcount > 0) return;  /* 还有薄引用在世 */");
-    c_.emitLine(clsStruct + "_Destroy(me);");
+    // 账 #305 §B218 (甲): 退数搬到那一处出入口; 清完回指之后 __comObj 为空 ⇒ 到 0 就走"自己销毁"那一支,
+    // 与前面手抄的三行同语义 (>0 就直接回, 还有薄引用在世).
+    c_.emitLine(clsStruct + "_Release(me);");
     c_.dedent();
     c_.emitLine("}");
 }
@@ -685,21 +681,108 @@ void CCodeGen::emitIfaceImplTables(Module& module) {
 // B05: 接口变量的作用域末尾释放
 // ============================================================
 
-void CCodeGen::trackIvrefLocalForRelease(const std::string& cName) {
-    for (const std::string& s : ivrefLocalsToRelease_) {
-        if (s == cName) return;
+// 账 #305 §B218 (甲) 腿④: 「这一枚过程级槽在正常出口放手」那张表的唯一登记口。
+// 夹 = 返回槽: 那一枚引用是**交出去**的那一枚, 出口再放手 = 调用方刚接手的东西当场读已释放块
+// (#445 钉住的那条夹, 原来只有接口一档写着一句注释, 现在两档共用同一句代码)。
+void CCodeGen::trackSlotForRelease(const std::string& expr, bool isView,
+                                   const std::string& clsName) {
+    if (!currentReturnVar_.empty() && expr == currentReturnVar_) return;
+    for (const SlotRelease& s : slotsToRelease_) {
+        if (s.expr == expr) return;
     }
-    ivrefLocalsToRelease_.push_back(cName);
+    SlotRelease rec;
+    rec.expr = expr;
+    rec.isView = isView;
+    rec.clsName = clsName;
+    slotsToRelease_.push_back(rec);
 }
 
-// 与 ansiTempsToFree_ 在同一位置调用（过程正常出口）。Exit Sub/Function 走裸
-// return，与 ANSI 临时变量同样漏清理——现状与本批边界一并记进总表。
-void CCodeGen::emitIvrefScopeRelease() {
-    for (const std::string& s : ivrefLocalsToRelease_) {
-        c_.emitLine("if (" + s + ") " + s + "->vt->Release(" + s +
-                    ");  /* tB Interface B05: scope-exit release */");
+void CCodeGen::trackClassSlotForRelease(const std::string& cName, const std::string& clsName) {
+    trackSlotForRelease(cName, false, clsName);
+}
+
+void CCodeGen::trackIvrefLocalForRelease(const std::string& cName) {
+    trackSlotForRelease(cName, true, std::string());
+}
+
+// 账 #305 §B218 (甲) 腿④ 的第二道夹: 这一格的**地址**交出去过 —— 写它的那一站在计数系统外面
+// (一枚外部 Declare 的 `As Any` ByRef 实参, 例如 VB6 运行时的 __vbaObjSetAddref)。本过程从没
+// 经自己的主人手里拿过这一枚引用, 出口就不能放手: C3 的那枚桩对**工程内实例**刻意不 AddRef
+// (结构体首字段不是 vtable, 加了就 0xC0000005 —— Fix 164x2), 于是"出口退一枚"= 无对价的退。
+// 门 #763 实测 = FlexGridX86 起窗期: `Dim This As VBFlexGrid` + `FlexObjSetAddRef This, uId`
+// 之后那一句出口 Release 把还活着的控件当场拆掉, 主窗口压根不出来。
+// 只撤工程类那一档: 视图那一档的引用是本站 QueryInterface 出来的, 与外部写者无关。
+void CCodeGen::dropClassSlotRelease(const std::string& expr) {
+    for (auto it = slotsToRelease_.begin(); it != slotsToRelease_.end();) {
+        if (!it->isView && it->expr == expr) it = slotsToRelease_.erase(it);
+        else ++it;
     }
-    ivrefLocalsToRelease_.clear();
+}
+
+// 账 #305 §B221: `x->vt-><slot>(x, args)` 这一发射形状只许有一位作者 —— com_bind 的
+// ivref 臂与「接收者是视图值的调用」那一站 (形②) 都调它。槽解析不出来 = 这个成员不在
+// 这张面上，返回空串让调用点继续往下落 (契约检查另有诊断)。
+std::string CCodeGen::ivrefVtableCall(const std::string& ifaceName, const std::string& member,
+                                      const std::string& recv,
+                                      const std::vector<std::string>& args) {
+    const IfaceView* v = ivLookupIface(ifaceName);
+    if (!v) return std::string();
+    const std::string slot = ivSlotKeyForMember(*v, member);
+    if (slot.empty()) return std::string();
+    std::string call = recv + "->vt->" + cIdent(slot) + "(" + recv;
+    for (const std::string& a : args) call += ", " + a;
+    call += ")";
+    return call;
+}
+
+// 账 #305 §B221: B06a 那条视图→视图的 QueryInterface 发射挪成一位主人 —— 原来这段
+// 内联在 cgen_setlet_set_prop.inc 的按名臂里，而 RHS 是「返回工程内接口的调用」那一形
+// (#448 的形①) 也要同一条腿；留在站点里就会长出第二个答案。
+// 计数口径不变: QI 成功即已 AddRef (失败得 NULL = Nothing)，旧值当场 Release。
+void CCodeGen::emitIvrefQiSet(const std::string& target, const std::string& ifaceName,
+                              const std::string& valueExpr) {
+    const std::string ivCType = ivrefCType(ifaceName);
+    // valueExpr 在这个块里出现三次 (判空 / QI 的接收者 / QI 的首参)。裸标识符无所谓，
+    // 但形①交进来的是 `MakeDirect()` 那种调用 ⇒ 三次求值 = 三枚实例、三笔引用
+    // (实测)。同一 Fix 090q 那条通道：先落一枚临时量，后面三处都用它。
+    const bool plainVal = !valueExpr.empty()
+        && valueExpr.find_first_not_of(
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+           == std::string::npos;
+    std::string ivVal = valueExpr;
+    if (!plainVal) {
+        ivVal = "__ivrhs" + std::to_string(ivrefSetSeq_);
+        c_.addPending(ivCType + " " + ivVal + " = " + valueExpr + ";");
+    }
+    const std::string ivOld = "__ivold" + std::to_string(ivrefSetSeq_);
+    const std::string ivGot = "__ivgot" + std::to_string(ivrefSetSeq_);
+    ivrefSetSeq_++;
+    c_.emitLine("{  /* tB Interface B06a: Set " + target + " = QueryInterface */");
+    c_.indent();
+    c_.emitLine(ivCType + " " + ivOld + " = " + target + ";");
+    c_.emitLine("void* " + ivGot + " = NULL;");
+    c_.emitLine("if (" + ivVal + ") " + ivVal + "->vt->QueryInterface(" + ivVal +
+                ", vb6_iv_iid_" + cIdent(ifaceName) + ", &" + ivGot + ");");
+    c_.emitLine(target + " = (" + ivCType + ")" + ivGot + ";");
+    c_.emitLine("if (" + ivOld + ") " + ivOld + "->vt->Release(" + ivOld + ");");
+    c_.dedent();
+    c_.emitLine("}");
+}
+
+// 出口那一腿与 ansiTempsToFree_ 在同一位置调用（过程统一出口 vb6_proc_exit，
+// Exit Sub/Function 自 c97e65bd 起也走那条 goto ⇒ 这一族不漏清理）。
+void CCodeGen::emitIvrefScopeRelease() {
+    for (const SlotRelease& s : slotsToRelease_) {
+        if (s.isView) {
+            c_.emitLine("if (" + s.expr + ") " + s.expr + "->vt->Release(" + s.expr +
+                        ");  /* tB Interface B05: scope-exit release */");
+        } else {
+            c_.emitLine("if (" + s.expr + ") vb6_cls_" + cIdent(s.clsName) +
+                        "_Release(" + s.expr +
+                        ");  /* 账 #305 (甲) 腿④: scope-exit release */");
+        }
+    }
+    slotsToRelease_.clear();
 }
 
 } // namespace vb6c3

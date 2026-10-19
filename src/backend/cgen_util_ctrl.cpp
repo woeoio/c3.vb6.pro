@@ -2826,6 +2826,28 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
         return "vb6_VariantSingle((float)(" + cExpr + "))";
     case Vb6Type::Date:
         return "vb6_VariantDate(" + cExpr + ")";
+    /* ai/032 §6.9 收口: C3 扩展的无符号/小整型族 (SByte 8 / UInteger 16 / ULong 32 /
+     * ULongLong 64 —— `U<x>` 恒等于「<x> 的无符号版」, 见 types.hpp:41-49)。
+     *   以前这四档**没有臂**, 全落 default -> vb6_VariantFromValue, 也就是交给
+     *   RTL 的 _Generic 按 C 类型猜: uint32/uint64 猜对了(VT_UI4/VT_UI8), 而
+     *   SByte(int8_t=char) 命中 `char:` 档、UInteger(uint16_t=unsigned short) 命中
+     *   `wchar_t:` 档, 两档都被装成 **VT_I4**。值没丢(8/16 位塞得进), 丢的是**类型
+     *   身份** —— TypeName 答 "Long"、VarType 答 3。ULong/VT_UI4 那两档的注释写着
+     *   「答 "Long" 才是误导」, 这两档按同一口径。
+     *   ⚠ 别去给 _Generic 加 `unsigned short:` 分支 —— MSVC C 里 wchar_t 就是
+     *     unsigned short, 两者是同一类型, 会被判重复关联 (C7700, 见 vb6rtl_variant.h
+     *     VT_UI4 段那段话)。正确做法就是这里点名调各自的出口。
+     *   顺带 LongLong/VT_I8 也一并点名(以前同样靠 _Generic 的 `long long:` 猜)。 */
+    case Vb6Type::SByte:
+        return "vb6_VariantSByte((int8_t)(" + cExpr + "))";
+    case Vb6Type::UInteger:
+        return "vb6_VariantUInteger((uint16_t)(" + cExpr + "))";
+    case Vb6Type::ULong:
+        return "vb6_VariantULong((uint32_t)(" + cExpr + "))";
+    case Vb6Type::ULongLong:
+        return "vb6_VariantULongLong((uint64_t)(" + cExpr + "))";
+    case Vb6Type::LongLong:
+        return "vb6_VariantLongLong((int64_t)(" + cExpr + "))";
     case Vb6Type::LongPtr:
         // 账 #230 §B137（第二十九刀）：句柄读进 Variant 槽以前落的是 _Generic 的 default
         // 一档 = vb6_VariantObject，于是**一枚 HWND 被当 IDispatch\* 装走**。实测读数（两台同形，

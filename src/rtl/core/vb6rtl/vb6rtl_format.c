@@ -79,6 +79,47 @@ static int vb6_fmtNamedDateTimeKind(BSTR fmt) {
     return 0;
 }
 
+// 「locale 的短日期 / 长日期 / 长时间」这三问在 RTL 里只许住一处 (账 #427 §B201 起，第一百零一刀 §B203 补全)。
+// 吃它的: general date 那一档、short date / long date / long time 三档、没有格式串那条兜底臂、
+// dddd / ddddd / ttttt 三枚令牌，再加**跨文件**的两位读者 —— vb6rtl_system.c 的 vb6_FormatDateTime 与
+// vb6rtl_conv.c 的 vb6_CStrDate（第一百零一刀把它俩接回来；此前每家各抄一份 GetDateFormatW，同一问三个答案）。
+// 所以这一族不再是 file-static，声明在 vb6rtl_builtin.h。
+void vb6_fmtLocaleShortDate(const SYSTEMTIME* st, wchar_t* out, size_t cap) {
+    out[0] = 0;
+    GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, st, NULL, out, (int)cap);
+}
+void vb6_fmtLocaleLongDate(const SYSTEMTIME* st, wchar_t* out, size_t cap) {
+    out[0] = 0;
+    GetDateFormatW(LOCALE_USER_DEFAULT, DATE_LONGDATE, st, NULL, out, (int)cap);
+}
+void vb6_fmtLocaleLongTime(const SYSTEMTIME* st, wchar_t* out, size_t cap) {
+    out[0] = 0;
+    GetTimeFormatW(LOCALE_USER_DEFAULT, 0, st, NULL, out, (int)cap);
+}
+// 「general date 这一档到底给不给时间」这一问只住这里 (账 #429 ①, 第一百零一刀)。
+// 引擎本人的读数 (发问表 .build/k559_olefdt3.c -> k559_out.txt 二十行; 逐点定带 .build/k564_oleband.c ->
+// k564_out.txt 十九行 —— **两发合起来**才是这一条, 单看任何一发都会读成别的规则):
+//   零头 0 / 1e-11 / 1e-10 / 1e-9 / 1e-8 日, 与 50 / 60 / 70 / 80 / 86.4 / 100 / 150 / 200 / 300 / 400 /
+//   499 / 500 毫秒 => 全只给短日期 (`2026/1/5` len=8, **不带尾随空格**)
+//   600 毫秒 => `0:00:01`; 59.4 秒 => `0:00:59`; 59.6 秒 => `0:01:00`; 29.9 秒 => `0:00:30`
+//                          => 时间那一段是**四入到整秒**交回的 (账 #419 那条「截断」是另一问, 与这里无关)
+//   午夜前一毫秒 (46028 - 1 毫秒) => `2026/1/6` len=8 => 四入**越过午夜**那一档整段不给、连日期一起进位
+// => 那条闸既不在 0 上、也不是任何浮点容差, 而是「四入之后的当日时分秒全为零就不给时间段」: 判「给不给」
+//   与渲染「给什么」吃同一个四入, 而那枚 SYSTEMTIME 已由 VariantTimeToSystemTime 四入过 => 这一问连序列号
+//   本体都不需要, 出口的形参跟着少一条。
+// 两条旧答案一起作废: Fix 175 留在 conv.c 的 1e-9 在 500 毫秒那一档答带时间; vb6rtl_system.c 那条
+//   「零头 != 0」在午夜前一毫秒那一档答带时间 —— 引擎两处都答「只给日期」。
+void vb6_fmtLocaleGeneralDate(const SYSTEMTIME* st, wchar_t* out, size_t cap) {
+    size_t n;
+    vb6_fmtLocaleShortDate(st, out, cap);
+    if (st->wHour == 0 && st->wMinute == 0 && st->wSecond == 0) return;
+    n = wcslen(out);
+    if (n + 2 > cap) return;
+    out[n] = L' ';
+    out[n + 1] = 0;
+    vb6_fmtLocaleLongTime(st, out + n + 1, cap - n - 1);
+}
+
 // Fix 162b-extlist: 命名日期/时间格式 → 按各规格取值。
 //   general date = 短日期 + 空格 + 长时间 (locale)
 //   long date    = locale 长日期        short date = locale 短日期
@@ -92,13 +133,9 @@ static BSTR vb6_fmtNamedDateTime(double serial, BSTR fmt) {
     wchar_t buf[128];
     buf[0] = 0;
     switch (kind) {
-        case 1: {  // general date
-            wchar_t d[64], t[64];
-            GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &st, NULL, d, 64);
-            GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, NULL, t, 64);
-            swprintf(buf, 128, L"%s %s", d, t);
+        case 1:  // general date = 短日期，四入后当日时分秒全零就不加时间段 (第一百零一刀)
+            vb6_fmtLocaleGeneralDate(&st, buf, 128);
             break;
-        }
         case 2: {  // medium date —— locale 相关: zh-CN = yy-MM-dd (参考图 "26-12-14"),
                    // 西文 = d-mmm-yy ("28-Dec-26")。按用户主语言分流。
             wchar_t md[16] = L"d-MMM-yy";
@@ -113,13 +150,13 @@ static BSTR vb6_fmtNamedDateTime(double serial, BSTR fmt) {
             GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, L"hh:mm tt", buf, 128);
             break;
         case 4:  // long date
-            GetDateFormatW(LOCALE_USER_DEFAULT, DATE_LONGDATE, &st, NULL, buf, 128);
+            vb6_fmtLocaleLongDate(&st, buf, 128);
             break;
         case 5:  // short date
-            GetDateFormatW(LOCALE_USER_DEFAULT, DATE_SHORTDATE, &st, NULL, buf, 128);
+            vb6_fmtLocaleShortDate(&st, buf, 128);
             break;
         case 6:  // long time = locale 默认时间格式 (含秒)
-            GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, NULL, buf, 128);
+            vb6_fmtLocaleLongTime(&st, buf, 128);
             break;
         case 7:  // short time = HH:mm (24 小时制)
             GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, L"HH:mm", buf, 128);
@@ -130,10 +167,47 @@ static BSTR vb6_fmtNamedDateTime(double serial, BSTR fmt) {
 
 // Fix 162b-extlist: vb6_fmtNamedDateTimeKind 定义在上方 (vb6_fmtNamedDateTime 前)。
 
-static int vb6_fmtIsDateFormat(BSTR fmt) {
+// 「这枚格式串里有没有上午/下午记号、它怎么写、在哪个位置」这一问收成一处 (账 #426 第九十八刀)。
+// 运行期那张表认三形: AM/PM (或写成 AMPM) 交两位记号、A/P 交一位记号，大小写跟随串里写的那一种；
+// 串里出现任意一枚就把小时切到 12 小时制，否则 h/hh 是 24 小时制 (语料把「hh:mm:ss」当时间戳用、
+// 把「h:nn AMPM」当上下午用，两种写法都存在，所以这一位必须由记号决定而不是固定某一档)。
+static int vb6_fmtAmPmLenAt(BSTR fmt, int i, int n) {
+    static const wchar_t* const kTokens[] = { L"AM/PM", L"AMPM", L"A/P" };
+    for (int k = 0; k < 3; k++) {
+        int tl = (int)wcslen(kTokens[k]);
+        if (i + tl > n) continue;
+        int ok = 1;
+        for (int j = 0; j < tl; j++)
+            if (towlower(fmt[i + j]) != towlower(kTokens[k][j])) { ok = 0; break; }
+        if (ok) return (k == 2) ? -1 : tl;   // 负数 = A/P 那一形 (只交一位字母)
+    }
+    return 0;
+}
+
+static int vb6_fmtHasAmPm(BSTR fmt) {
+    int n = fmt ? SysStringLen(fmt) : 0;
+    for (int i = 0; i < n; i++)
+        if (vb6_fmtAmPmLenAt(fmt, i, n) != 0) return 1;
+    return 0;
+}
+
+// 「这枚格式串算不算日期/时间格式」这一问被两条臂用 (账 #427 §B201 新认 w / ww / q / ttttt 之后):
+//   allowWQT = 1  值真是 VT_DATE (extract.inc 那条臂) —— 新令牌无条件认。
+//   allowWQT = 0  值是数值 (parse.inc 的 Fix 118b 兜底) —— 新令牌**只在整串里一个数值占位符都没有**
+//                 时才认 (0 与 # 是数值档的唯一记号)。
+// 为什么要加这一道闸: 语料里字面量格式串含 w/q/t 的 218 处全是裸写 (没有一处把单位文本用引号包起来),
+// 其中「数值 + 单位」那一族 15 处 (#,##0 Twip 3 / Settings 4 / T0 2 / #### Byte 1 / #,# bytes 4 /
+// ISO 串那枚字面 T 1) 走的正是数值臂, 而裸字母一视同仁就把它们从「那个数」改成「一个日期」
+// (尺 .build/k496_census.txt + k497_wqt_where.txt; 现状读数 .build/k504 / k505 / k511)。
+// 为什么单靠「值真是日期」这一档不够: 实测 Date 型实参到 vb6_Format 手里已经是 R8 —— Format(d1,「ttttt」)
+// 与 Format(d1,「w」) 走的是数值臂 (而 VarType(d1) 答 7), 所以「值是不是日期」这一问在运行期答不全;
+// 那一格另立新账 #431 (要动的是发码那头的装箱档), 本刀用「没有数值占位符」这一条把 Date 局部救回来。
+// 游程仍然要紧: t 只有五连 (ttttt)、单枚 t 是字面量 —— ISO 串里那枚字面 T 与「T0」靠这一位保住。
+static int vb6_fmtIsDateFormat(BSTR fmt, int allowWQT) {
     int n = fmt ? SysStringLen(fmt) : 0;
     if (n <= 0) return 0;
     if (vb6_fmtIsNamedFormat(fmt)) return 0;   // 命名格式走既有分支
+    if (vb6_fmtHasAmPm(fmt)) return 1;   // 上午/下午记号也是日期习惯—— 一枚「A/P」串也得进日期分支 (账 #426)
     int hasY = 0, hasD = 0, hasH = 0, hasM = 0, hasS = 0, hasN = 0;
     for (int i = 0; i < n; i++) {
         switch (towlower(fmt[i])) {
@@ -145,7 +219,20 @@ static int vb6_fmtIsDateFormat(BSTR fmt) {
             case L'n': hasN = 1; break;
         }
     }
-    return hasY || hasD || hasH || hasS || hasN || hasM;
+    if (hasY || hasD || hasH || hasS || hasN || hasM) return 1;
+    // 数值占位符闸: 串里出现 0 或 # 就是数值档的写法, 数值臂那条不许被新令牌拖进日期臂。
+    if (!allowWQT) {
+        for (int i = 0; i < n; i++)
+            if (fmt[i] == L'0' || fmt[i] == L'#') return 0;
+    }
+    for (int i = 0; i < n; ) {
+        int j = i; while (j < n && fmt[j] == fmt[i]) j++;
+        wchar_t lc = towlower(fmt[i]);
+        if (lc == L'w' || lc == L'q') return 1;
+        if (lc == L't' && j - i >= 5) return 1;
+        i = j;
+    }
+    return 0;
 }
 
 static void vb6_fmtAppendW(wchar_t* out, size_t cap, size_t* o, const wchar_t* s) {
@@ -160,7 +247,19 @@ static void vb6_fmtAppendN(wchar_t* out, size_t cap, size_t* o, int value, int d
     vb6_fmtAppendW(out, cap, o, tmp);
 }
 
-static BSTR vb6_fmtDateSerial(double serial, BSTR fmt) {
+static void vb6_fmtAppendAmPm(wchar_t* out, size_t cap, size_t* o, BSTR fmt, int i, int len, int beforeNoon) {
+    const wchar_t* s = (len < 0) ? (beforeNoon ? L"A" : L"P") : (beforeNoon ? L"AM" : L"PM");
+    wchar_t buf[4];
+    size_t k = 0;
+    if (towlower(fmt[i]) == fmt[i]) {                 // 串里写的是小写 => 交小写记号
+        for (; s[k] && k < 3; k++) buf[k] = (wchar_t)towlower(s[k]);
+        buf[k] = 0;
+        s = buf;
+    }
+    vb6_fmtAppendW(out, cap, o, s);
+}
+
+static BSTR vb6_fmtDateSerial(double serial, BSTR fmt, int32_t firstDayOfWeek, int32_t firstWeekOfYear) {
     SYSTEMTIME st;
     if (!VariantTimeToSystemTime(serial, &st)) return vb6_BSTR_FromStr(L"");
     static const wchar_t* kMonLong[12] = {L"January", L"February", L"March", L"April",
@@ -175,6 +274,7 @@ static BSTR vb6_fmtDateSerial(double serial, BSTR fmt) {
     if (month < 1) month = 1; if (month > 12) month = 12;
     if (day < 1) day = 1; if (day > 31) day = 31;
     int dow = st.wDayOfWeek; if (dow < 0 || dow > 6) dow = 0;
+    int use12 = vb6_fmtHasAmPm(fmt);   // 12/24 小时那一问只在这里定一次
 
     wchar_t out[256]; out[0] = 0; size_t o = 0;
     int n = SysStringLen(fmt);
@@ -184,6 +284,13 @@ static BSTR vb6_fmtDateSerial(double serial, BSTR fmt) {
         int j = i; while (j < n && fmt[j] == c) j++;
         int cnt = j - i;
         wchar_t lc = towlower(c);
+        int ampmLen = vb6_fmtAmPmLenAt(fmt, i, n);
+        if (ampmLen != 0) {
+            vb6_fmtAppendAmPm(out, 256, &o, fmt, i, ampmLen, st.wHour < 12);
+            i += (ampmLen < 0) ? 3 : ampmLen;
+            prevHour = 0;
+            continue;
+        }
         switch (lc) {
             case L'y':
                 if (cnt >= 4) vb6_fmtAppendN(out, 256, &o, year, 4);
@@ -197,14 +304,20 @@ static BSTR vb6_fmtDateSerial(double serial, BSTR fmt) {
                 else                        vb6_fmtAppendN(out, 256, &o, month, cnt == 2 ? 2 : 1);
                 break;
             case L'd':
-                if (cnt >= 4)     vb6_fmtAppendW(out, 256, &o, kDayLong[dow]);
+                // ddddd = locale 短日期 (VB6 那张表里第五枚另是一档), dddd 才是长周名 —— 原先 cnt>=4 一并算走
+                if (cnt >= 5) {
+                    wchar_t sd[64];
+                    vb6_fmtLocaleShortDate(&st, sd, 64);
+                    vb6_fmtAppendW(out, 256, &o, sd);
+                }
+                else if (cnt == 4) vb6_fmtAppendW(out, 256, &o, kDayLong[dow]);
                 else if (cnt == 3) vb6_fmtAppendW(out, 256, &o, kDayShort[dow]);
                 else if (cnt == 2) vb6_fmtAppendN(out, 256, &o, day, 2);
                 else               vb6_fmtAppendN(out, 256, &o, day, 1);
                 prevHour = 0;
                 break;
             case L'h': {
-                int h = st.wHour % 12; if (h == 0) h = 12;
+                int h = use12 ? ((st.wHour % 12) == 0 ? 12 : st.wHour % 12) : st.wHour;
                 vb6_fmtAppendN(out, 256, &o, h, cnt == 2 ? 2 : 1);
                 prevHour = 1;
                 break;
@@ -215,6 +328,30 @@ static BSTR vb6_fmtDateSerial(double serial, BSTR fmt) {
                 break;
             case L's':
                 vb6_fmtAppendN(out, 256, &o, st.wSecond, cnt == 2 ? 2 : 1);
+                prevHour = 0;
+                break;
+            case L'q':
+                // 季度: 与 vb6_DatePart 的「q」臂同一算式 (month-1)/3+1, 语料 1 处
+                vb6_fmtAppendN(out, 256, &o, (month - 1) / 3 + 1, 1);
+                prevHour = 0;
+                break;
+            case L'w':
+                // w = 星期序号 (Sunday=1..7, 与周首无关) / ww = 一年里第几周 (那两条形参真被读)
+                if (cnt >= 2) vb6_fmtAppendN(out, 256, &o,
+                    vb6_WeekOfYear((int32_t)serial, firstDayOfWeek, firstWeekOfYear), 1);
+                else          vb6_fmtAppendN(out, 256, &o, vb6_Weekday(serial, 1), 1);
+                prevHour = 0;
+                break;
+            case L't':
+                // 只有 ttttt (五枚) 是「长时间」令牌; 1..4 枚按字面量交 (ISO 串里那枚字面 T 就是这一档)
+                if (cnt >= 5) {
+                    wchar_t lt[64];
+                    vb6_fmtLocaleLongTime(&st, lt, 64);
+                    vb6_fmtAppendW(out, 256, &o, lt);
+                } else {
+                    for (int k = 0; k < cnt; k++)
+                        if (o < 254) { out[o++] = c; out[o] = 0; }
+                }
                 prevHour = 0;
                 break;
             default:
@@ -230,10 +367,11 @@ static BSTR vb6_fmtDateSerial(double serial, BSTR fmt) {
 
 BSTR vb6_Format(vb6_VARIANT expr, BSTR fmt, int32_t firstDayOfWeek, int32_t firstWeekOfYear) {
     // <vbeclipse> 扩到 VB6 完整 4 形 (expr[, fmt[, FirstDayOfWeek[, FirstWeekOfYear]]]).
-    // 现有格式解析不消费这两个日期参数 (Date 分支走系统默认周)；VBFlexGrid.ctl:
-    // 20425/20428 `Format$(Text, Col.Format, vbUseSystemDayOfWeek, vbUseSystem)`
-    // 直接 C2197 too many args —— 补上签名即可，语义与旧 2 参实现等价。
-    (void)firstDayOfWeek; (void)firstWeekOfYear;
+    // VBFlexGrid.ctl:20425/20428 `Format$(Text, Col.Format, vbUseSystemDayOfWeek, vbUseSystem)`
+    // 直接 C2197 too many args —— 补上签名即可。
+    // 账 #427 (§B201): 这两条形参从「(void) 丢掉」变成真被读 —— 「ww」那一档把它交给 vb6_WeekOfYear,
+    // 与 vb6_DatePart 同一个主人。0 = vbUseSystem / vbUseSystemDayOfWeek 由那一位归到 vbSunday+vbFirstJan1
+    // (实测 0 与 1 同档, 见 date.c 那条注释), 这里不再各自兜底。
 #include "vb6rtl_format_extract.inc"
 #include "vb6rtl_format_parse.inc"
 #include "vb6rtl_format_string.inc"

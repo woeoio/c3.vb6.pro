@@ -18,6 +18,11 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             // base case: 变量 → knownClassVars_
             auto& id = static_cast<const IdentifierExpr&>(expr);
             std::string lower = Symbol::toLower(id.name);
+            // 账 #305 #408 (第八十九刀第五试): 本过程把这个名字声明成 As Object = 一枚裸对象指针, 不是任何工程类的实例。
+            // 那张按名索引、全程不清空的表 (knownClassVars_) 会把另一个过程里同名形参或模块级声明的类答案漏过来
+            // (实测: 成员读发成 Thing->Alpha 而 Thing 的 C 类型是 void* = cl C2223; 第八十八刀又把 TypeName(Thing)
+            // 折成上一过程的类名常量), 而符号表那条退路会认下同名的模块级变量 —— 所以这一问排在这两问之前。
+            if (procObjectFormals_.count(lower)) return "";
             auto it = knownClassVars_.find(lower);
             if (it != knownClassVars_.end()) return it->second;
             if (std::getenv("C3_DBG110") && lower == "usercontrol") {
@@ -298,6 +303,41 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
         default:
             return "";
     }
+}
+
+
+// 账 #305 §B221/#449 (§B222): 「这枚表达式的值是不是接口视图薄指针」的唯一主人。
+// 两条既有答案拼起来用，不新写第三份判据：按名那张表 (knownIvrefVars_，B04/B05 一直
+// 用它) 答裸标识符；类型名问句 (inferClassTypeOfExpr) 答调用/属性表达式，再过一道
+// ivrefCType —— 非空即「这个名字是新式接口」，也就是值本身就是 vb6_ivref_<I>*，
+// 而不是 vb6_cls_<C> 实例。命中时接口名交给调用点去取槽表 (ivLookupIface)。
+std::string CCodeGen::ifaceViewOfExpr(const ASTNode& expr) {
+    if (expr.kind == ASTNodeKind::IdentifierExpr) {
+        auto itIv = knownIvrefVars_.find(
+            Symbol::toLower(static_cast<const IdentifierExpr&>(expr).name));
+        if (itIv != knownIvrefVars_.end()) return itIv->second;
+    }
+    if (expr.kind == ASTNodeKind::IndexOrCallExpr) {
+        // 返回工程内接口的调用 (`MakeDirect()`)：Fix 218 那一条只认**裸函数名**，而形①③
+        // 递进来的是带括号的调用，所以这一档要自己问符号表的返回类型 —— 与
+        // cgen_setlet_set_prop.inc 里 Fix 215b 那段现取现用的口径同一张表，不另立拼法。
+        const auto& call221 = static_cast<const IndexOrCallExpr&>(expr);
+        if (call221.callee && call221.callee->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string nm221 =
+                static_cast<const IdentifierExpr&>(*call221.callee).name;
+            const Symbol* fs221 = symTab_.lookupModule(nm221);
+            if (!fs221) fs221 = symTab_.lookup(nm221);
+            if (fs221 && (fs221->kind == SymbolKind::Function
+                          || fs221->kind == SymbolKind::PropertyGet)
+                && !fs221->variableTypeName.empty()
+                && !ivrefCType(fs221->variableTypeName).empty()) {
+                return fs221->variableTypeName;
+            }
+        }
+    }
+    std::string n = inferClassTypeOfExpr(expr);
+    if (n.empty()) return std::string();
+    return ivrefCType(n).empty() ? std::string() : n;
 }
 
 

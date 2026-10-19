@@ -1,0 +1,4 @@
+Type=Exe
+Name="B186Client"
+Module=BoomMain; BoomMain.bas
+Startup="Sub Main"

@@ -32,6 +32,52 @@
         return it == projectClassNames.end() ? std::string() : it->second;
     };
 
+    // 账 #305 §B187 第二腿: 工程级「在运行期 coclass 描述表 (g_vb6_coclasses[]) 里占一行」
+    // 的类名名单 (小写)。
+    // 为什么发码期要它: 装箱腿 (cgen_setlet_set_rhs.inc) 每一句
+    // `vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("<类>"), …)` 都得先知道
+    // "查 desc 查不查得中" —— 查不中 RTL 交回 NULL 包装器，槽里就成了一枚 Nothing，
+    // 比今天的裸指针**更坏** (裸指针至少早绑定那半能用)。§B216 第一百一十九刀把这一问答了
+    // 两遍的现场收成一处: 行内 `New` 那一臂原来不问表就发包器 (表外靠运行期落空交 Nothing),
+    // 现在与变量那一臂共用这一份名单, 表外那一档**两臂同答原样**。
+    // 名单与建表那侧同一条判据 (Symbol::isCoClassTableEntry)、同一份输入 (每张模块符号表
+    // 都扫，含注入副本)：rev17 记的那条漏路在这里同样成立 —— 类名与同名成员撞车时
+    // driver_crossmod 的注入守卫会跳过，只看单模块表就收不到这类。
+    // EXE 与 DLL 共用这一份: com_entry.c (driver_codegen_dll_entry.inc 的 EXE 平行分支)
+    // 与 dll_entry.c 发的是同一张表。
+    std::unordered_set<std::string> projectCoclassNames;
+    for (const auto& cocAn : analyzers_) {
+        if (!cocAn) continue;
+        Scope* cocMs = cocAn->symbolTable().moduleScope();
+        if (!cocMs) continue;
+        for (const auto& cocKv : cocMs->symbols()) {
+            if (cocKv.second && cocKv.second->isCoClassTableEntry()) {
+                projectCoclassNames.insert(Symbol::toLower(cocKv.second->name));
+            }
+        }
+    }
+
+    // 账 #305 §B189 第二档 (第八十八刀): 工程级「被谁 Implements 过」的名字名单 (小写)。
+    // 为什么发码期要它: TypeName 按声明档折叠那一刀 (cgen_expr_call_builtin_pre.inc) 折的是
+    // **声明的那个类**，而 VB6 交的是**实体自己的真身类名** —— 一枚 `Dim o As IThing` 装了
+    // Thing 实例时 VB6 答 "Thing" 不是 "IThing"。真语料 9949 份里 65 处拿 TypeName 比工程内
+    // 类名，其中 56 处比的就是自己那个类 (可折)，剩下那 9 处 (CEmployeeCol 那一族) 正是接口
+    // 视图 (不可折) —— 这份名单就是那两拨的分界线。
+    // 答案只问语义层那一份 (Symbol::implementsNames, stage 2 收集), 这里不重扫 AST。
+    std::unordered_set<std::string> projectImplementedNames;
+    for (const auto& impAn : analyzers_) {
+        if (!impAn) continue;
+        Scope* impMs = impAn->symbolTable().moduleScope();
+        if (!impMs) continue;
+        for (const auto& impKv : impMs->symbols()) {
+            if (!impKv.second) continue;
+            for (const auto& ifaceNm : impKv.second->implementsNames) {
+                if (!ifaceNm.empty())
+                    projectImplementedNames.insert(Symbol::toLower(ifaceNm));
+            }
+        }
+    }
+
     // Fix 023: 预扫描所有模块的 AST, 构建 className → void* 字段集 映射.
     // 这个映射在 cgen_expr.cpp 的 knownClassVars_ fallback 路径用于判断
     // obj->member 是否返回 void* COM 指针 (例: cDataBase.Rs As New ADODB.Recordset,

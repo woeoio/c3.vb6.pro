@@ -1,0 +1,9 @@
+Type=DLL
+Class=B189Iface; B189Iface.cls; {11112222-3333-4444-5555-6666777788F1}
+Class=B189Impl; B189Impl.cls; {11112222-3333-4444-5555-6666777788F2}
+Class=B189Drv; B189Drv.cls; {11112222-3333-4444-5555-6666777788F3}
+Startup=""
+Command32=""
+Name="B189gate"
+HelpStringID="0"
+Thread=0

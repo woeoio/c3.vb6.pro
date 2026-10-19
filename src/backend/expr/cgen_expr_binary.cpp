@@ -58,6 +58,20 @@ void CCodeGen::visit(BinaryExpr& node) {
             || op == BinaryOp::Gt || op == BinaryOp::Le || op == BinaryOp::Ge;
     };
     auto hint88 = [&](const ExprPtr& sib) -> const char* {
+        // 账 #257 续 / Fix 280: `Is` 是**对象同一性**比较 (映射 C `==`) —— 两侧都
+        // 必须交**指针值**。以前这里对 `Is` 也答 "Long" ⇒ 宿主对象上的对象成员
+        // (典型 `X.Container` / `X.Parent` / `X.Extender`) 被解成
+        // `vb6_ComGetIntProp(X, L"Container")` —— 而那一枚内部是
+        // `VariantChangeType(&tmp, &v, 0, VT_I4)`, OLEAUT32 对该 VARIANT 里的
+        // VT_DISPATCH 会去调 `IDispatch::Invoke`; 宿主模型交回的容器是
+        // Extender (裸结构体, **没有 vtable**) ⇒ 0xC0000005
+        // (实测崩溃栈: DispatchMessage → … → VariantChangeType → OLEAUT32;
+        //  调用点 UpDown.ctl:224 `If ControlEnum.Container Is Extender.Container Then`
+        //  发成 `vb6_ComGetIntProp(ControlEnum, L"Container") == vb6_Extender_Container`,
+        //  而右侧那枚 RTL 全局是 `void*`)。改成 "Object" ⇒ 交回
+        // `vb6_ComGetObjectProp(...)` 的 `void*`, 两侧同类, 比较即指针相等。
+        // 对非 COM-marker 操作数无影响 (resolveComValue 首句 `if (!isComMarker_)`)。
+        if (node.op == BinaryOp::Is) return "Object";
         if (!sib || !isCmp88(node.op)) return "Long";
         if (sib->kind == ASTNodeKind::LiteralExpr
             && static_cast<const LiteralExpr&>(*sib).literalKind == LiteralKind::String) {
@@ -81,7 +95,15 @@ void CCodeGen::visit(BinaryExpr& node) {
         else resolveComValue(hint88(node.left));
     }
     std::string right = std::move(lastExpr_);
-
+    /* Fix 296 / 3b 的最后一族: 二元操作数里的宿主伪成员(UpDown.ctl 那 4 处
+       `vb6_ComGetObjectProp(x, L"Container") == vb6_Extender_Container`)。
+       **这一族只能走消费点, 不能回到成员表达式出生地** —— 操作数**永远不是左值**, 而出生地
+       同时服务赋值目标: 上一刀在出生地换道, 把合成出来的 `Property Set Container` 存取器
+       目标变成 `vb6_UC_GetExtenderMemberObj(L"Container")` 这个**函数调用**, Fix 098 随即
+       当它不可赋值, 整个赋值**静默丢**成 `(void)(Value);`。两个操作数都换, `Extender.X` 在
+       左边或右边都接住; 换道在类型合并/装箱**之前**, 下面那一整套按类型收口的逻辑照旧。 */
+    left = extenderMemberReadExpr(left);
+    right = extenderMemberReadExpr(right);
     // 字符串连接运算: VB6 & → vb6_BSTR_Concat / vb6_BSTR_ConcatFree
     // 嵌套Concat时用ConcatFree释放中间临时BSTR，避免内存泄漏
     // M22: 非BSTR操作数自动包装为BSTR (int→vb6_CStr(vb6_CLng(x)), double→vb6_CStr(vb6_CDbl(x)))
@@ -398,6 +420,13 @@ void CCodeGen::visit(BinaryExpr& node) {
     //   3. 变体 vs 其它标量 → vb6_VarCmpLongEq(取值契形参)
     // 普通对象/指针 Is (void* <=> NULL) 不满足 varLike, 保持原样, 不受影响.
     if (node.op == BinaryOp::Is) {
+        // 账 #305 §B187 装箱腿的读者③: `Is` 落的是 C `==`, 两侧得在**同一档**才答得出
+        // 对象同一性。泛对象槽里现在装的可能是包装器 (vb6_ComObject*, 见 Set 那一站的
+        // 装箱腿 / Fix 179a) 而 typed 变量那侧是裸实例 —— 不剥就是 `If o Is f` 恒假
+        // (VB6 交真)。判据问 varHoldsComWrapper (唯一那张登记表), 只认裸变量名那一形,
+        // 两侧各自独立剥 (都装箱时剥回同一裸实例, 照样相等)。
+        if (varHoldsComWrapper(left))  left  = unwrapComVarExpr(left);
+        if (varHoldsComWrapper(right)) right = unwrapComVarExpr(right);
         auto varLike158n = [&](const std::string& c, Expr* ast) -> bool {
             // Fix <vbeclipse> rev6: `Property Get Foo() As <工程类>` 的返回变量
             // (**vb6_cls_X\* 类型**) 不是 Variant, 尽管 cExprIsVariant /

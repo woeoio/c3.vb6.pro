@@ -10,8 +10,12 @@
         // ai/032: 四档无符号/窄整型转换函数 —— 同口径 (Variant → *V, BSTR → vb6_NumVal)
         || callee == "vb6_CSByte" || callee == "vb6_CUInt"
         || callee == "vb6_CULng" || callee == "vb6_CULngLng"
+        || callee == "vb6_CLngLng"
         // twinBASIC 形 CLngPtr 同路 (RTL vb6_CLngPtr* 已在头里备齐三档)
         || callee == "vb6_CLngPtr") {
+        // 账 #416: Boolean 那一档问的是另一句话 ("True"/"False" 是话, 不是数) —— 桥的名字
+        // 要在下面 V 后缀改写之前按 VB 函数认, 不能等 callee 被换掉之后再猜。
+        const bool convIsBool = (callee == "vb6_CBool");
         // 检查第一个参数是否为Variant变量
         bool firstArgIsVariant = false;
         bool firstArgIsBstr = false;
@@ -45,6 +49,7 @@
             else if (callee == "vb6_CUInt")    callee = "vb6_CUIntV";
             else if (callee == "vb6_CULng")    callee = "vb6_CULngV";
             else if (callee == "vb6_CULngLng") callee = "vb6_CULngLngV";
+            else if (callee == "vb6_CLngLng")  callee = "vb6_CLngLngV";
             else if (callee == "vb6_CLngPtr")  callee = "vb6_CLngPtrV";
             // Fix 084l: 撤销 Fix 038b-2 的 Variant→double 提前提取 (getRuntimeParamCType
             // 把 CLng/CDbl/CInt 形参当作 double, 已将 lRet 替换为 vb6_VariantToDouble(lRet)).
@@ -100,7 +105,8 @@
                 a0.find("vb6_GetMenuCaption(") == 0;
         }
         if (argIsBstrExpr && !args.empty()) {
-            args[0] = "vb6_NumVal(" + args[0] + ")";
+            // 账 #416: 两位主人各问各的 —— 数值族问 vb6_NumVal, CBool 问 vb6_BoolVal。
+            args[0] = std::string(convIsBool ? "vb6_BoolVal(" : "vb6_NumVal(") + args[0] + ")";
             argList.clear();
             for (size_t i = 0; i < args.size(); i++) {
                 if (i > 0) argList += ", ";

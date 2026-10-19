@@ -53,8 +53,13 @@ static HRESULT STDMETHODCALLTYPE CF_CreateInstance(vb6_ClassFactory* self, IUnkn
     if (pUnkOuter) return CLASS_E_NOAGGREGATION;
     
     // Create VB6 COM object
-    vb6_ComObject* obj = vb6_ComObject_Create(self->desc);
-    if (!obj) return E_OUTOFMEMORY;
+    /* 账 #305 §B186: 这一格的失败形状过去只有一种读法 —— vb6_ComObject_Create 交回 NULL 就一律
+     * 说 E_OUTOFMEMORY, 于是「内存不够」与「体里 Class_Initialize 抛了一条自己的错」这两问在这里
+     * 汇成一格。现在进门那一趟自带错误边界并把失败原因交出来, 这一句照它答: 服务端自己 raise 的那条
+     * 编成 0x800A0000|错误号 (客户端的 create 腿据此折回原号), 真·激活失败维持原形状。 */
+    HRESULT failHr = E_OUTOFMEMORY;
+    vb6_ComObject* obj = vb6_ComObject_Create(self->desc, &failHr);
+    if (!obj) return failHr;
     
     // QI for requested interface
     HRESULT hr = obj->vtable->QueryInterface(obj, riid, ppv);

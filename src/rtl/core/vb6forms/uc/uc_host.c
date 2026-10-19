@@ -196,6 +196,13 @@ static void vb6_uc_defaultFont(void) {
     if (!vb6_Ambient_Font) vb6_Ambient_Font = vb6_UserControl_Font;
 }
 
+/* 账 #257 续(诊断期): 兼容全局 vb6_UserControl_ParentControls 的同步点。 */
+static void vb6_uc_syncParentControls(void) {
+    extern void* vb6_UC_ParentControls(void);
+    extern void* vb6_UserControl_ParentControls;
+    vb6_UserControl_ParentControls = vb6_UC_ParentControls();
+}
+
 void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     saved->scaleWidth = vb6_UserControl_ScaleWidth;
     saved->scaleHeight = vb6_UserControl_ScaleHeight;
@@ -205,10 +212,14 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     saved->enabled = vb6_UserControl_Enabled;
     saved->font = vb6_UserControl_Font;
     saved->ambientFont = vb6_Ambient_Font;
-    saved->extLeft = vb6_Extender_Left;
-    saved->extTop = vb6_Extender_Top;
-    saved->extWidth = vb6_Extender_Width;      // Fix 162
-    saved->extHeight = vb6_Extender_Height;    // Fix 162
+    saved->userWidth = vb6_UserControl_Width;
+    saved->userHeight = vb6_UserControl_Height;
+    /* Fix 296 / 3b: Extender 那 15 枚全局**刻意不**存取。发码侧全部走实例通道
+       (vb6_UC_GetExtenderMemberNum/Str/Obj + vb6_UC_SetExtenderMember, 内部统一经
+       vb6_UC_ExtenderField 落到当前实例记录 vb6_UCRec.ext*), 生成码里已经**一处**都
+       不再读/写这些全局 —— 这套存取是纯开销, 而且它正是「控件之间互相污染」的来源。
+       剩下的唯一读者是 vb6_UC_ExtenderField 的全局兜底段(uc_controls.c), 只在没有
+       当前记录时才走, 属刻意保留的退路 —— 别把它连同这里一起"清理"掉。 */
     saved->hWnd = vb6_UserControl_hWnd;
     saved->autoRedraw = vb6_UserControl_AutoRedraw;
     saved->ext = vb6_UserControl_Extender;
@@ -235,12 +246,11 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
         vb6_UserControl_Font = (vb6_ComIface_Font*)r->font;
         vb6_Ambient_Font = (vb6_ComIface_Font*)r->font;
     }
-    vb6_Extender_Left = r->extLeft;
-    vb6_Extender_Top = r->extTop;
-    // Fix 162: 外框尺寸同步。UserControl.<Member> 与 Extender.<Member> 由 cgen
-    // 发成两个不同标识符, VB6 里同值, 故四处一起填。
-    vb6_Extender_Width = r->extWidth;
-    vb6_Extender_Height = r->extHeight;
+    /* Fix 296 / 3b: 这里曾把 r->ext* 回灌进那 15 枚 vb6_Extender_* 全局。**已删除** ——
+       发码侧不再读它们, 唯一读者是 vb6_UC_ExtenderField 的兜底段, 而它只在没有当前记录
+       时才走; 继续回灌只会让"全局是活状态"这个误会一直留着。Extender 的权威值是当前
+       实例记录 vb6_UCRec.ext*, 经通道取, 不经全局。
+       下面两行是 **UserControl** 那一族(vb6_UserControl_*), 与 Extender 无关, 保留。 */
     vb6_UserControl_Width = r->extWidth;
     vb6_UserControl_Height = r->extHeight;
     vb6_UserControl_hWnd = r->hwnd;                 // Fix 133u
@@ -257,6 +267,7 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     if (!r->displayNameBstr && r->ctrlName[0])
         r->displayNameBstr = SysAllocString(r->ctrlName);
     vb6_Ambient_DisplayName = r->displayNameBstr;
+    vb6_uc_syncParentControls();
 }
 
 void vb6_uc_pop(const vb6_UCSaved* saved) {
@@ -268,17 +279,18 @@ void vb6_uc_pop(const vb6_UCSaved* saved) {
     vb6_UserControl_Enabled = saved->enabled;
     vb6_UserControl_Font = (vb6_ComIface_Font*)saved->font;
     vb6_Ambient_Font = (vb6_ComIface_Font*)saved->ambientFont;
-    vb6_Extender_Left = saved->extLeft;
-    vb6_Extender_Top = saved->extTop;
-    vb6_Extender_Width = saved->extWidth;            // Fix 162
-    vb6_Extender_Height = saved->extHeight;          // Fix 162
-    vb6_UserControl_Width = saved->extWidth;         // Fix 162
-    vb6_UserControl_Height = saved->extHeight;       // Fix 162
+    /* Fix 296 / 3b: 这里曾把那 15 枚 vb6_Extender_* 全局从 saved 还原。**已删除** ——
+       生成码一处都不再读它们(push 也不再存/publish), Extender 的权威值是当前实例记录
+       vb6_UCRec.ext*, 经 vb6_UC_ExtenderField 取。下一行是 **UserControl** 那一族,
+       与 Extender 无关, 保留。 */
+    vb6_UserControl_Width = saved->userWidth;        // Fix 162
+    vb6_UserControl_Height = saved->userHeight;      // Fix 162
     vb6_UserControl_hWnd = saved->hWnd;              // Fix 133u
     vb6_UserControl_AutoRedraw = saved->autoRedraw;  // Fix 133u
     vb6_UserControl_Extender = saved->ext;           // Fix 133u
     vb6_ucCurrent = saved->current;
     vb6_Ambient_DisplayName = (BSTR)saved->displayName;   // Fix 116
+    vb6_uc_syncParentControls();
 }
 
 // 仅换入不换出 — 供「窗体代码直接调用控件公开方法」路径使用
@@ -324,10 +336,16 @@ static void vb6_uc_snapshot(vb6_UCSaved* s) {
     s->enabled = vb6_UserControl_Enabled;
     s->font = vb6_UserControl_Font;
     s->ambientFont = vb6_Ambient_Font;
-    s->extLeft = vb6_Extender_Left;
-    s->extTop = vb6_Extender_Top;
-    s->extWidth = vb6_Extender_Width;
-    s->extHeight = vb6_Extender_Height;
+    s->userWidth = vb6_UserControl_Width;
+    s->userHeight = vb6_UserControl_Height;
+    /* Fix 296 / 3b: 这里曾把 15 枚 vb6_Extender_* 全局拷进 s。**已删除**, 两个理由:
+       1) vb6_UCSaved 里那 15 个字段跟着一起删了(Clean Slate), 留着这半截编不过;
+       2) 更根本 —— 这条分支把 g_uc_ctxReal[slot] 置 0, 而 g_uc_ctxStack[slot] 全仓
+          **只被** vb6_uc_pop 读一次(uc_host.c:391), 且那句被 if (g_uc_ctxReal[slot])
+          挡着 ⇒ 走 snapshot 这条路时整个 saved 结构**写了从来没人读**。它压根不是
+          什么退路, 只是一次没人消费的全局快照。
+       Extender 真正的兜底在 vb6_UC_ExtenderField 的全局兜底段(uc_controls.c) —— 那个
+       保留, 它是**读通道成员**时才走的路, 与这里不是一回事。 */
     s->hWnd = vb6_UserControl_hWnd;
     s->autoRedraw = vb6_UserControl_AutoRedraw;
     s->ext = vb6_UserControl_Extender;

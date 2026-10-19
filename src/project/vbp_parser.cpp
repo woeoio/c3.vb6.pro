@@ -5,8 +5,67 @@
 #include "common/source_manager.hpp"
 #include <sstream>
 #include <algorithm>
+#include <cstring>
+#include <vector>
 
 namespace vb6c3 {
+
+namespace {
+
+// Fix 293: VB6 原生 .vbp 的源文件条目**不带扩展名**:
+//     Module=Module1
+//     Form=MainForm
+//     Class=Cls1
+//     UserControl=Uc1
+// C3 之前把值原样当路径用, 于是 open("<proj>\Module1") 失败 → VB1006
+// "无法打开文件"。ComCtlsDemo.vbp 能过只是因为它手写了扩展名
+// (`Module=Common; Common\Common.bas`), 不是 C3 支持无扩展名。
+//
+// 这里按条目类型补候选扩展名。顺序: 原样 → 类型专属 → 全扫 (类型对不上时的兜底,
+// 例如 Designer 被写成 Form= 之类)。只在**路径确实没有扩展名**时才补, 已带扩展名的
+// 一律原样保留, 免得把 Foo.Bar 这种带点的名字改坏。
+std::string resolveSourceExtension(const VbpProject& project,
+                                   const std::string& filePath,
+                                   VbpSourceType srcType) {
+    if (filePath.empty()) return filePath;
+
+    auto exists = [](const std::filesystem::path& p) {
+        std::error_code ec;
+        return std::filesystem::is_regular_file(p, ec);
+    };
+
+    std::filesystem::path abs = project.resolvePath(filePath);
+    if (exists(abs)) return filePath;
+
+    // 已经有扩展名 ⇒ 不猜 (`.frx`/`.vbp` 之类的相对引用, 或名字里本来就带点)
+    if (!abs.extension().empty()) return filePath;
+
+    const char* preferred = nullptr;
+    switch (srcType) {
+        case VbpSourceType::Module:       preferred = ".bas";  break;
+        case VbpSourceType::Form:         preferred = ".frm";  break;
+        case VbpSourceType::Class:        preferred = ".cls";  break;
+        case VbpSourceType::UserControl:  preferred = ".ctl";  break;
+        case VbpSourceType::PropertyPage: preferred = ".pag";  break;
+        case VbpSourceType::Designer:     preferred = ".dsr";  break;
+        default: break;
+    }
+
+    std::vector<std::string> candidates;
+    if (preferred) candidates.emplace_back(preferred);
+    for (const char* ext : {".bas", ".frm", ".cls", ".ctl", ".pag", ".dsr"}) {
+        if (!preferred || std::strcmp(preferred, ext) != 0) candidates.emplace_back(ext);
+    }
+
+    for (const std::string& ext : candidates) {
+        std::filesystem::path probe = abs;
+        probe += ext;
+        if (exists(probe)) return filePath + ext;
+    }
+    return filePath;  // 都找不到 ⇒ 保持原样, 让下游照旧报 VB1006
+}
+
+}  // namespace
 
 VbpProject VbpParser::parse(const std::string& vbpFilePath) {
     VbpProject project;
@@ -127,6 +186,7 @@ VbpProject VbpParser::parseString(const std::string& content, const std::string&
             }
 
             if (!entry.filePath.empty()) {
+                entry.filePath = resolveSourceExtension(project, entry.filePath, srcType);
                 project.sources.push_back(std::move(entry));
             }
             continue;

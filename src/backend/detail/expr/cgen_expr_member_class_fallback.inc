@@ -267,6 +267,25 @@
                    || (obj.find('.') == std::string::npos && !trailingLower.empty()
                        && knownTypedComVars_.count(trailingLower))) {
             lastExpr_ = obj + "->" + cIdent(node.memberName);
+        } else if (node.object && !ifaceViewOfExpr(*node.object).empty()) {
+            // 账 #305 §B221 (形②): 接收者的值**已经是接口视图** —— `MakeDirect().Twice(21)`
+            // 这种「返回工程内接口的调用」当接收者。下面 Fix 088c 那条会把接口名当工程类名
+            // 使，于是发成字段访问 `vb6_Main_MakeDirect()->Twice(21)` (实测两台 C2039:
+            // 视图结构体里只有一枚 vt)。正答案是按名那一臂 (cgen_expr_member_obj_dispatch
+            // .inc 的 B04 臂) 交给 com_bind 的 vtable 发射 —— 这里只把「接收者不是裸变量」
+            // 那一形接进同一条腿，不另写发射。接收者只许求值一次 (Fix 215b 为这件事钉过：
+            // 返回对象的调用内部自带 AddRef) ⇒ 借 Fix 090q 的 addPending 通道先落一枚临时量。
+            const std::string ivIface221 = ifaceViewOfExpr(*node.object);
+            const std::string ivRecv221 = "__ivrecv" + std::to_string(ivrefSetSeq_++);
+            c_.addPending(ivrefCType(ivIface221) + " " + ivRecv221 + " = " + obj + ";");
+            comObjExpr_ = ivRecv221;
+            comMemberName_ = node.memberName;
+            ivrefIfaceName_ = ivIface221;
+            isComMarker_ = true;
+            isEarlyBoundCom_ = false;
+            earlyBoundSym_ = nullptr;
+            lastExpr_ = ivRecv221;
+            return;
         } else if (node.object) {
             // Fix 088c: AST 层兜底推断 — obj 是 knownClassVars_ 未覆盖的类实例
             // 表达式文本 (prop_get 调用文本 vb6_cY_prop_get_Z(a)、类方法链返回、

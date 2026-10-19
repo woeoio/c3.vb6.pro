@@ -263,6 +263,11 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     const std::string projClsLoc = projectClassNameOf(simple.name);
                     if (!projClsLoc.empty()) {
                         knownClassVars_[lower] = projClsLoc;
+                        // 账 #305 §B218 (甲) 腿④: 过程级那一格才登记; Static / Static Sub 里
+                        // 那一格跨调用活着 (C 侧发的是 static 存储), 出口放手 = 下次进来读已释放块。
+                        if (!var.isStatic && !inStaticProc_) {
+                            trackClassSlotForRelease(cIdent(var.name), projClsLoc);
+                        }
                         knownObjectVars_.erase(lower);
                         if (var.isNew) knownNewVars_[lower] = cIdent(projClsLoc);
                     } else {
@@ -332,6 +337,11 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                         // Fix 010r-10: map赋值, 存储类名以便方法分发时查找
                         knownClassVars_[lower] = localClsName;
                         isLocalClassType = true;
+                        // 账 #305 §B218 (甲) 腿④: 同上, Static 那一档不登记 (窗体不在这一档:
+                        // 窗体槽走 knownFormModuleNames_ 那条访问器路, 压根不是 vb6_cls_F* 槽)。
+                        if (!var.isStatic && !inStaticProc_) {
+                            trackClassSlotForRelease(cIdent(var.name), localClsName);
+                        }
                         // P14.3.1: Dim As New自动实例化
                         if (var.isNew) {
                             knownNewVars_[lower] = cIdent(localClsName);

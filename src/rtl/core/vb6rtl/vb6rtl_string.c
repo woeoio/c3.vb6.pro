@@ -401,37 +401,53 @@ double vb6_Val(BSTR s) {
     return strtod(narrow, NULL);
 }
 
-// Fix 090d: VB6 类型转换函数 (CByte/CInt/CLng/CDbl/CSng/CBool) 的字符串解析语义.
-// 与 Val 不同, 类型转换识别 &H(hex)/&O(octal) 前缀, 十进制按前缀数字解析,
-// 尾部无效字符忽略 (如 CByte("&HFF")=255, CByte("123abc")=123).
+// 账 #416 = VB6 手册 §类型转换函数 那三句话的落地：`必要的 expression 可以是任何字符串
+// 表达式`、`超过目标数据类型范围将发生错误`、`应该用转换函数代替 Val, 国际版的分隔符按
+// 国别设置识别`。改前这一枚自己写解析 (wcstod + 手抄的 &H/&O 两档)，注释里那句「尾部无效
+// 字符忽略」是一条**从没跟 VB6 对过表**的自选口径：`CInt("abc")` 静默给 0、`CInt("123abc")`
+// 吞掉尾巴、`CInt("")` 给 0 —— VB6 三句全是 13 Type mismatch。越界那一支本来就对 (6)，
+// 因为窄档的范围检查另有唯一主人 (vb6_OvfChk)，本函数不参与。
+//
+// 取舍政策交给 oleaut32，不自己写第二遍 (§B142 同口径)。尺 = .build/k205_oleconv.c 的
+// 读数 (.build/k205_out.txt)：被 VarR8FromStr 收的写法 = 十进制 / "&H"/"&O" 前缀 / 前后空格 /
+// "+7" / ".5" / "5." / "1e3" / 区域千分位；被它拒的 (DISP_E_TYPEMISMATCH) = 非数字、空串、
+// 纯空格、尾部垃圾、"0x10" 那种 C 式十六进制、"1 2"、日期串。参数位次按本机实测：这一族的
+// **slot2 是 LCID、slot3 是 dwFlags** (尺 .build/k207_olearg.c —— ULONG 与 LCID 同型，cl
+// 抓不到写反，只能这样验)。
 double vb6_NumVal(BSTR s) {
-    if (!s) return 0.0;
-    int32_t len = vb6_BSTR_Len(s);
-    const wchar_t* p = s;
-    int32_t i = 0;
-    while (i < len && iswspace(p[i])) i++;
-    if (i + 2 < len && p[i] == L'&') {
-        wchar_t pre = p[i + 1];
-        if (pre == L'H' || pre == L'h') {
-            wchar_t tmp[64];
-            int32_t n = len - (i + 2);
-            if (n > 63) n = 63;
-            for (int32_t k = 0; k < n; k++) tmp[k] = p[i + 2 + k];
-            tmp[n] = L'\0';
-            return (double)(int32_t)wcstoul(tmp, NULL, 16);
-        }
-        if (pre == L'O' || pre == L'o') {
-            wchar_t tmp[64];
-            int32_t n = len - (i + 2);
-            if (n > 63) n = 63;
-            for (int32_t k = 0; k < n; k++) tmp[k] = p[i + 2 + k];
-            tmp[n] = L'\0';
-            return (double)(int32_t)wcstoul(tmp, NULL, 8);
-        }
+    double d = 0.0;
+    if (!vb6_NumTryParse(s, &d)) {
+        vb6_RaiseError(13, vb6_BSTR_FromStr(L"Type mismatch"));
+        return 0.0;
     }
-    wchar_t* end = NULL;
-    double d = wcstod(p + i, &end);
     return d;
+}
+
+// 账 #418 (§B192): 上面那一句「认不认作一个数」本来直接长在 vb6_NumVal 里，于是
+// `IsNumeric` 这一问没处可问 —— 它只看 Variant 的 vt 标签，对文本一律答否（VB6 实测
+// IsNumeric("123") = True、IsNumeric("123abc") = False，尺 .build/k253_isfam.vbs）。
+// 拆成「问一句」+「答一个值/报一声错」两层之后，这一位主人仍只有一条 oleaut32 站点，
+// 而 IsNumeric 问的是**成功与否**、不许报错（它是一问判据，不是一次转换）。
+int32_t vb6_NumTryParse(BSTR s, double* out) {
+    return (s && SUCCEEDED(VarR8FromStr(s, LOCALE_USER_DEFAULT, 0, out))) ? -1 : 0;
+}
+
+// 与 vb6_DateCanParse 同一条形状：IsNumeric 的文本档 = vb6_NumTryParse 的成功本身。
+int32_t vb6_IsNumericText(BSTR s) {
+    double d = 0.0;
+    return vb6_NumTryParse(s, &d);
+}
+
+// 账 #416 的第二问：Boolean 那一档问的不是数值。尺同 k205：VarBoolFromStr 收 "True"/"False"
+// (大小写都收) 和一切数值串，拒非数字文本 ⇒ VB6 的 CBool(Text) 认 "True" 而 CInt(Text) 报 13，
+// 所以发码那侧 (cgen_expr_call_conv_numeric.inc) 对 CBool 发这一枚桥，不再共用 vb6_NumVal。
+int16_t vb6_BoolVal(BSTR s) {
+    VARIANT_BOOL b = VARIANT_FALSE;
+    if (!s || FAILED(VarBoolFromStr(s, LOCALE_USER_DEFAULT, 0, &b))) {
+        vb6_RaiseError(13, vb6_BSTR_FromStr(L"Type mismatch"));
+        return 0;
+    }
+    return b ? -1 : 0;   /* VB6 True = -1，与 vb6_CBool 同一个答法 */
 }
 
 BSTR vb6_Str(int32_t n) {

@@ -416,6 +416,13 @@ extern int32_t vb6_err_in_handler;      // 当前在On Error GoTo处理器中
 #define VB6_ERR_STACK_SIZE 8
 void vb6_SaveErrState(void);      // 保存当前错误状态到栈 (函数入口调用)
 void vb6_RestoreErrState(void);   // 从栈恢复错误状态 (函数出口调用)
+// 账 #305 §B188 (第九十刀): 把一截 VB 体跑在**自己带着的错误帧**里, 返回它抛出来的号
+// (0 = 干净跑完)。用途只有一处 = 发码里的 `vb6_cls_<X>_Destroy`: `Class_Terminate` 抛错时,
+// 体后面那三截尾巴(字段 BSTR / 数组字段 / `vb6_Free(me)`)照旧要走完 —— 边界装在**知道尾巴在
+// 哪儿的那一站**, 不装在调用它的那一站(出厂两腿 `destroyFunc` 与 `instanceClaimRelease` 都汇
+// 到 `_Destroy`, 在那里套帧就是一份答案被两个地方各答一遍)。Err 里的号与描述原样留着, 由发
+// 码在尾巴走完后 `vb6_RaiseError` 交回外层帧(COM 出厂那层记诊断, VB 调用方在 Err 里看见)。
+int32_t vb6_RunVbProtected(void (*body)(void*), void* me);
 
 // 字典访问
 BSTR vb6_BSTR_Concat(BSTR a, BSTR b);

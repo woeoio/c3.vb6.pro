@@ -339,7 +339,8 @@ $wantPairs = @(
     @('line',   'PBOX'),    @('line',   'FORM'),    @('line',   'PRINTER'),
     @('pset',   'FORM'),    @('pset',   'PRINTER'),
     @('circle', 'FORM'),    @('circle', 'PRINTER'),
-    @('point',  'FORM'),    @('point',  'PRINTER'))
+    @('point',  'FORM'),    @('point',  'PRINTER'),
+    @('scale',  'FORM'))
 if (Test-Path -LiteralPath $canvasTable) {
     $mTbl = [regex]::Match($tableText, 'kCanvasVerbRows\[\] = \{[\s\S]*?\};')
     if (-not $mTbl.Success) {
@@ -432,14 +433,31 @@ foreach ($want in @('common/canvas_drawing.hpp', 'canvasVerbTailKind(', 'CANVAS_
                  " -> a canvas verb's tail is being decided by a hand-written list again")
     }
 }
-# 一问只许问一次（两处吸收共用同一个 tailKind），但两档都得真的被用到
+# 一问只许问一次（尾巴档的名字归一全在本文件这一处），而"两坐标那一档"只许**判**一次:
+# 吸收点与 `case TokenKind::Minus` 的分发点都问 isTwoPointCanvasVerb —— 两个语法位置
+# 各问一次是必然的（要不要消费 token 只能在动手之前决定），但答案只有一位主人。
+# 账 #232④ 把这两点钉死: 吸收动作一份都不许抄第二遍 (抄一遍 = 旗标折法分家),
+# "哪一档是这一形"也不许在第二处重新判。
 if ([regex]::Matches($parserCode, 'canvasVerbTailKind\s*\(').Count -ne 1) {
     $bad += "S10 the parser asks canvasVerbTailKind a number of times other than 1 (one question, both absorptions read the answer)"
 }
-if ([regex]::Matches($parserCode, 'tailKind\s*==\s*CANVAS_TAIL_').Count -ne 2) {
+$twoPointJudges = [regex]::Matches($parserCode, 'CANVAS_TAIL_TWO_POINT').Count
+if ($twoPointJudges -ne 1) {
+    $bad += ("S10 the parser judges CANVAS_TAIL_TWO_POINT " + $twoPointJudges +
+             " times, want exactly 1 (the two-point tail has one owner: isTwoPointCanvasVerb)")
+}
+$absorbSites = [regex]::Matches($parserCode, 'absorbCanvasLineTail\s*\(').Count
+if ($absorbSites -ne 3) {
+    $bad += ("S10 absorbCanvasLineTail appears " + $absorbSites +
+             " times, want exactly 3 (1 definition + the '(' branch + the '-' branch) -> " +
+             "the second-point tail got copied instead of shared")
+}
+# 坐标尾巴那一格 (Circle 的半径 / PSet 的颜色) 仍由左括号那一支自己判，位置没挪。
+if ([regex]::Matches($parserCode, 'tailKind\s*==\s*CANVAS_TAIL_').Count -ne 1) {
     $bad += ("S10 the parser gates on tailKind " +
-            [regex]::Matches($parserCode, 'tailKind\s*==\s*CANVAS_TAIL_').Count +
-            " times, want exactly 2 (coordinate tail + second point)")
+             [regex]::Matches($parserCode, 'tailKind\s*==\s*CANVAS_TAIL_').Count +
+             " times, want exactly 1 (the coordinate tail; the second-point tail moved " +
+             "into isTwoPointCanvasVerb, which is the one place that decides it)")
 }
 foreach ($lit in @('== "circle"', '== "pset"', '== "line"')) {
     if ($parserCode.IndexOf($lit) -ge 0) {
@@ -459,11 +477,61 @@ if (-not $tailBody.Success) {
     }
 }
 
+# S11 = `[Step]` 前缀这一族 (账 #232⑥)。三条各钉**一件事**, 每件都有"坏掉长什么样"的实物:
+#   (a) 名单只许住表里 (canvasVerbHasStep), parser 恰好问一次 —— Step 是不是软关键字 + 左边
+#       是不是画布动词, 这两问都在同一枚 file-static 里, 不许在第二处重判;
+#   (b) parser 必须在**消费掉 Step 那一枚 token 的那一刻**把两枚旗标写上 (canvasStep1/2);
+#   (c) 发码侧三处码头 (Form.PSet / Form.Line / PictureBox.Line) 都得**读**旗标, 一个都不许
+#       把 step 位写死 —— 写死的那一格编得过、跑得起、画到别处去 (本线栽过四次的"静默"那一味)。
+$withmTxt = [System.IO.File]::ReadAllText((Join-Path $root "src\backend\detail\expr\cgen_expr_call_callee_withm.inc"))
+$stmtTxt = [System.IO.File]::ReadAllText((Join-Path $root "src\parser\stmt\parser_stmt.cpp"))
+$astTxt = [System.IO.File]::ReadAllText((Join-Path $root "src\ast\detail\ast_expr.hpp"))
+
+$askStep = @([regex]::Matches($parserCode, 'canvasVerbHasStep\s*\(')).Count
+if ($askStep -ne 1) {
+    $bad += ("S11 the parser asks canvasVerbHasStep " + $askStep +
+             " times (want exactly 1 - the verb list lives in the table, not in a second reader)")
+}
+$stepBody = [regex]::Match($tableText, 'canvasVerbHasStep[\s\S]*?\r\n\}')
+if (-not $stepBody.Success) {
+    $bad += "S11 canvasVerbHasStep is gone from canvas_drawing.hpp -> the Step question has no answer left"
+} else {
+    # Point 刻意**不在**名单里: 本仓 vb6_Form_Point(hwnd,x,y) 没有 step 位 (台账 §B225 那一格)。
+    foreach ($want in @('"line"', '"pset"', '"circle"')) {
+        if ($stepBody.Value.IndexOf($want) -lt 0) {
+            $bad += ("S11 canvasVerbHasStep no longer maps " + $want + " -> that verb's [Step] stops parsing")
+        }
+    }
+    if ($stepBody.Value -match '"point"') {
+        $bad += "S11 canvasVerbHasStep maps point -> its RTL exit has no step bit; that is a signature change (ledger 232 open grid), not a parser answer"
+    }
+}
+foreach ($flag in @('canvasStep1', 'canvasStep2')) {
+    $sets = @([regex]::Matches($parserCode, $flag + '\s*=')).Count
+    $has  = @([regex]::Matches($astTxt, 'bool\s+' + $flag + '\s*=')).Count
+    if ($sets -lt 1) { $bad += ("S11 the parser never assigns " + $flag + " -> a [Step] prefix would be swallowed and the coordinates read as absolute") }
+    if ($sets -gt 1) { $bad += ("S11 the parser assigns " + $flag + " " + $sets + " times (want 1 - the hand-off from the Step branch / the absorb point)") }
+    if ($has -ne 1) { $bad += ("S11 IndexOrCallExpr carries " + $flag + " " + $has + " times (want 1)") }
+}
+# 发码侧: 三处码头读旗标的次数 —— PSet/Circle 共用 st1, 两条 Line 支各读两个位。
+if (@([regex]::Matches($withmTxt, 'node\.canvasStep1')).Count -ne 3) {
+    $bad += ("S11 only " + @([regex]::Matches($withmTxt, 'node\.canvasStep1')).Count +
+             " docks read node.canvasStep1 (want 3: PictureBox.Line / Form-Printer Line / the shared PSet+Circle st1) -> some dock writes the step bit as a literal 0")
+}
+if (@([regex]::Matches($withmTxt, 'node\.canvasStep2')).Count -ne 2) {
+    $bad += ("S11 only " + @([regex]::Matches($withmTxt, 'node\.canvasStep2')).Count +
+             " docks read node.canvasStep2 (want 2: PictureBox.Line / Form-Printer Line)")
+}
+if ($stmtTxt -notmatch 'next_\.kind\s*==\s*TokenKind::Step') {
+    $bad += "S11 the Line statement no longer routes a Step successor -> `Line Step (x,y)-(x2,y2)` goes back to `Line Input` (VB2001)"
+}
+
 if ($bad.Count -eq 0) {
     Write-Host ("PASS form draw state: pen store unique, side-list gone, " +
                 "read/write paired for 3 props, encoding symmetric, pen color store unique, " +
                 "Print inside the family asking 7 authorities, conversions dock-only with an axis, " +
-                "Print/Cls one implementation that the control side only forwards to, canvas verbs one common table that the backend asks with both receivers, and the parser's coordinate tails asked of that same table")
+                "Print/Cls one implementation that the control side only forwards to, canvas verbs one common table that the backend asks with both receivers, the parser's coordinate tails asked of that same table, " +
+                "and the [Step] prefix asked once, recorded by the parser and read by all three drawing docks")
     exit 0
 }
 foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }

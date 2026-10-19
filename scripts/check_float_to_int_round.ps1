@@ -11,7 +11,9 @@
 #   S2  那份 round() 也只许有一处: `(int64_t)round(` 在 src/rtl 里恰好 1 次，且住在 vb6_FltToLng 体内
 #       (改前 vb6_CInt / vb6_CLng 各抄了一遍 —— 那正是"两个答案"的另一半)
 #   S3  显式转换与隐式赋值同源: vb6_CInt / vb6_CLng 的体内必须调 vb6_FltToLng (两处)
-#   S4  发码侧浮点档齐: narrowCheckAssign 里那一道浮点分支必须认 Single / Double / Currency 三档
+#   S4  发码侧浮点档齐: narrowCheckAssign 里那一道取整分支必须认 Single / Double / Currency / Date 四档
+#       (第一百零二刀把 Date 接进来: Date 在 C 侧就是 double 的 OLE 序列号，交给窄整型目标时
+#        与浮点同一条命 —— 少它一档就是 `r = DateValue(...)` 在调用边界上截断, 账 #431 §B205)
 #   S5  旧形不回潮: 套检查的两条发射路径写死 —— 浮点那条必须裹 helper，整数那条必须不裹；
 #       出现第三种 `std::string(fn) + ...` 就是又开了一条不经 helper 的路
 #   S6  helper 只住一处: vb6_FltToLng( 在 src/backend 里只许出现在 narrowCheckAssign 那一处，
@@ -61,6 +63,22 @@ function Get-SrcFiles($dir) {
         Where-Object { $_.Extension -in ".c", ".h", ".cpp", ".inc", ".hpp" }
 }
 
+# 读一份源码的**代码部分**: 把 // 注释去掉再数。两道普查 (S6 的"别人不许出现 Chk 名字"、
+# S8 的"别人不许问 narrowTargetTypeOf") 数的是**消费点**, 而注释里提一句权威的名字是给人看的
+# 说明, 不是调用 —— 门 #634 就红在这一点上 (第七十三刀给三条形参臂写的 WHY 注释各提了一次
+# narrowTargetTypeOf, 被 S8 数成三处消费)。只裁"行首或空白后的 //"两种形状, 免得吃掉字符串里的
+# 路径; 块注释不裁 (真要藏一个调用进 /* */ 里, 那是另一回事, 这里不放宽)。
+function Get-CodeText($path) {
+    $raw = [System.IO.File]::ReadAllText($path)
+    $kept = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($raw -split "`n")) {
+        $line = $line.TrimEnd("`r")
+        $m = [regex]::Match($line, '(^|\s)//')
+        if ($m.Success) { $kept.Add($line.Substring(0, $m.Index)) } else { $kept.Add($line) }
+    }
+    return ($kept -join "`n")
+}
+
 # ---- S1: 取整出口只有一枚 ----
 $defSites = @()
 $defCount = 0
@@ -106,9 +124,9 @@ foreach ($fn in @("vb6_CInt", "vb6_CLng")) {
 # ---- S4: 发码侧浮点档齐 ----
 # 三道档必须一起在册: cgenIntBits(Single) 答 32，Long 目标也 32 —— 少了 Single 那一档，
 # `l = 某Single` 会被下面那句"装得下, 不套"放过，连截断都省了 (实测 F2L05 那一形)。
-$mGate = [regex]::Match($typeText, 'if\s*\(\s*vt == Vb6Type::Single\s*\|\|\s*vt == Vb6Type::Double\s*\|\|\s*vt == Vb6Type::Currency\s*\)')
+$mGate = [regex]::Match($typeText, 'if\s*\(\s*vt == Vb6Type::Single\s*\|\|\s*vt == Vb6Type::Double\s*\|\|\s*vt == Vb6Type::Currency\s*\|\|\s*vt == Vb6Type::Date\s*\)')
 if (-not $mGate.Success) {
-    $bad += "S4 narrowCheckAssign's float gate no longer names all three of Single / Double / Currency"
+    $bad += "S4 narrowCheckAssign's rounding gate no longer names all four of Single / Double / Currency / Date"
 }
 
 # ---- S5: 两条发射路径写死 ----
@@ -125,7 +143,7 @@ if ($bHelp -ne 1) { $bad += ("S6 vb6_FltToLng( occurrences in cgen_util_type.cpp
 $others = @()
 foreach ($f in Get-SrcFiles $beDir) {
     if ($f.FullName -eq $typeFile) { continue }
-    $n = @([regex]::Matches([System.IO.File]::ReadAllText($f.FullName), '"vb6_Chk(Byte|Int|Long)"')).Count
+    $n = @([regex]::Matches((Get-CodeText $f.FullName), '"vb6_Chk(Byte|Int|Long)"')).Count
     if ($n -gt 0) { $others += ($f.Name + "=" + $n) }
 }
 if ($others.Count -ne 0) {
@@ -186,7 +204,7 @@ $nOtherAsk = 0
 foreach ($f in Get-SrcFiles $beDir) {
     if ($f.FullName -eq $typeFile) { continue }
     if ($f.FullName -eq $helpFile) { continue }
-    $nOtherAsk += @([regex]::Matches([System.IO.File]::ReadAllText($f.FullName), 'narrowTargetTypeOf')).Count
+    $nOtherAsk += @([regex]::Matches((Get-CodeText $f.FullName), 'narrowTargetTypeOf')).Count
 }
 if ($nOtherAsk -ne 0) {
     $bad += ("S8 narrowTargetTypeOf consumed outside cgen_util_type.cpp: " + $nOtherAsk + " site(s)")
@@ -196,4 +214,4 @@ if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS float_to_int_round (S1 one helper, S2 one round(), S3 CLng/CInt same source, S4 three float types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate)"
+Write-Host "PASS float_to_int_round (S1 one helper, S2 one round(), S3 CLng/CInt same source, S4 four float-ish types gated, S5 two emission paths, S6 census clean, S7 one target-type answer, S8 no identifier-only gate)"

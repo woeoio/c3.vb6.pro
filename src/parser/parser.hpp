@@ -280,6 +280,11 @@ private:
     // 后缀: .member, !dict, (args)
     ExprPtr parsePostfix(ExprPtr expr);
 
+    // 画布两坐标尾巴 `-(x2, y2)[, color][, B|BF|F]` 的**唯一**吸收点 (账 #232③/④)。
+    // 两个语法位置共用: `Line (x1,y1)-(x2,y2)` (左括号那一档) 与 `Line -(x2,y2)`
+    // (`case TokenKind::Minus` 那一档)。收不动就返回 false, token 一枚不动。
+    bool absorbCanvasLineTail(const std::unique_ptr<IndexOrCallExpr>& call);
+
     // Case 值解析 (Is > 0, 1 To 10, 等变体)
     CaseClause::CaseValue parseCaseValue();
 

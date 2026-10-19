@@ -118,7 +118,8 @@ static COLORREF vb6_DrawForeColor(void* hwnd) {
 //   高 dpi 屏上整幅图缩掉一截 (与 Print 的 TextWidth 同款约束)。
 // ============================================================
 static int vb6_DrawScaleMode(void* hwnd) {
-    // 账 #233: `VB6_ScaleMode` 的唯一写者是 vb6_SetScaleMode (存裸值), 这里以前按
+    // 账 #233: `VB6_ScaleMode` 的唯一写者是 vb6_SetScaleMode (账 #305 起存 val+1,
+    // 因为 vbUser=0 存裸值会被读成"没设过"), 这里以前按
     // "带 +1 的编码"读 => 同一个属性名两种编码。改问账 #197 那道权威: 读法与几何
     // 换算必须同一处 (vb6_WindowScaleModeSelf)。
     return (int)vb6_WindowScaleModeSelf(hwnd);
@@ -129,12 +130,65 @@ static int vb6_DrawScaleMode(void* hwnd) {
 // 全走它)。以前本文件自带一份 `v * dpi / 1440` —— 那是第二套口径，而且**只认缇**:
 // ScaleMode = Point/Inch/Centimeter/Millimeter 时它照缇算，差 20 倍；纵向还拿横向的 dpi。
 // 现在竖/横分开交给权威，与本文件其余三件 (DC / 字体 / 色彩) 同一形状: 只问，不再自己答。
+// 账 #305: vbUser(0) 那一档是**仿射**, 不是"一个单位折几个像素" —— Scale (x1,y1)-(x2,y2)
+// 之后, 整块客户区的左上角/右下角分别对应 (x1,y1) / (x2,y2), 所以落笔要**先减原点**
+// (ScaleLeft/ScaleTop)、**再按跨度** (ScaleWidth/ScaleHeight) 把客户区像素摊开。
+// 原点与跨度都住在这枚窗口自己身上, 所以这一档只能在码头里做 —— vb6_ScaleUserToPx
+// 那一对没有 hwnd, 答不了这一问; 其余六档仍交它们 (本文件不许自带第二份单位口径, S7)。
 static double vb6_DrawUserToPx(void* hwnd, double v, int vert) {
-    return (double)vb6_ScaleUserToPx(v, vb6_DrawScaleMode(hwnd), vert);
+    const int mode = vb6_DrawScaleMode(hwnd);
+    if (mode == 0) {
+        double left = 0.0, top = 0.0, sw = 0.0, sh = 0.0;
+        if (vb6_UserScaleOf(hwnd, &left, &top, &sw, &sh)) {
+            const double span   = vert ? sh : sw;
+            const double origin = vert ? top : left;
+            RECT rc; rc.left = 0; rc.top = 0; rc.right = 0; rc.bottom = 0;
+            GetClientRect((HWND)hwnd, &rc);
+            const double client = (double)(vert ? (rc.bottom - rc.top)
+                                                : (rc.right - rc.left));
+            if (span != 0.0) return (v - origin) * client / span;
+            return v;
+        }
+    }
+    return (double)vb6_ScaleUserToPx(v, mode, vert);
 }
 
 static double vb6_DrawPxToUser(void* hwnd, double px, int vert) {
-    return vb6_ScalePxToUser(px, vb6_DrawScaleMode(hwnd), vert);
+    const int mode = vb6_DrawScaleMode(hwnd);
+    if (mode == 0) {
+        double left = 0.0, top = 0.0, sw = 0.0, sh = 0.0;
+        if (vb6_UserScaleOf(hwnd, &left, &top, &sw, &sh)) {
+            const double span   = vert ? sh : sw;
+            const double origin = vert ? top : left;
+            RECT rc; rc.left = 0; rc.top = 0; rc.right = 0; rc.bottom = 0;
+            GetClientRect((HWND)hwnd, &rc);
+            const double client = (double)(vert ? (rc.bottom - rc.top)
+                                                : (rc.right - rc.left));
+            if (client != 0.0) return origin + px * span / client;
+            return origin;
+        }
+    }
+    return vb6_ScalePxToUser(px, mode, vert);
+}
+
+// ============================================================
+// SCALE —— 设自定义坐标系 (VB6 的 vbUser)
+//   Scale (x1, y1)-(x2, y2) : 把客户区的左上角/右下角分别钉成 (x1,y1) / (x2,y2),
+//                             即 ScaleLeft=x1 ScaleTop=y1 ScaleWidth=x2-x1 ScaleHeight=y2-y1
+//   Scale (不带坐标)        : 复位 —— 回到 VB6 的缺省坐标系 (缇), 原点归零
+// ============================================================
+void vb6_Form_Scale(void* hwnd, int32_t hasXY, double x1, double y1, double x2, double y2) {
+    if (!hwnd) return;
+    if (!hasXY) {
+        vb6_ClearUserScale(hwnd);
+        vb6_SetScaleMode(hwnd, 1);   // vbTwips = VB6 的缺省
+        return;
+    }
+    // 跨度按 VB6 语义就是**终点减起点** (可以为负 —— 负跨度等于把那根轴翻过来, 与 VB6 同;
+    // 上面那对仿射不假设正负)。先存跨度再切 vbUser: vb6_SetScaleMode 见到非 0 会作废
+    // 自定义坐标系, 顺序反了就把刚设好的那套清掉。
+    vb6_SetUserScale(hwnd, x1, y1, x2 - x1, y2 - y1);
+    vb6_SetScaleMode(hwnd, 0);       // vbUser
 }
 
 // ============================================================

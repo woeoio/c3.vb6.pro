@@ -142,6 +142,10 @@
             }
         }
         h_.emitLine("void " + clsStruct + "_Destroy(" + clsStruct + "* me);");
+        // 账 #305 §B218 (甲, 第一刀): 「这枚实例现在几处握着」的加与减只这一对答;
+        // 覆写 / 置空 / 过程出口 / 包装器那几腿全调它 (跨模块可见 —— 槽在别的 TU 里).
+        h_.emitLine("unsigned long " + clsStruct + "_AddRef(void* instance);  /* (甲): 握一枚 */");
+        h_.emitLine("unsigned long " + clsStruct + "_Release(void* instance);  /* (甲): 放一枚, 到 0 且没被包装器接管才拆 */");
         // ExeComBridge 03: COM 实参打包函数 (实现在本类 .c, 见 cgen_com.cpp
         // emitClassFactory). 声明必须跨模块可见 —— `New <该类>` 的调用点通常
         // 在别的模块 (VBMAN_DEMO 的 Form1.frm), 缺声明就是隐式 int 截断指针.

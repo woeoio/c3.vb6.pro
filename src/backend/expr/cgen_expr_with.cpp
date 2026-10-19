@@ -53,7 +53,10 @@ void CCodeGen::visit(WithMemberExpr& node) {
             isComMarker_ = false;
             comObjExpr_.clear();
             comMemberName_.clear();
-            lastExpr_ = hpRtlW;
+            // Fix 296 / 4a: 与 Property Get 那一条同一个出口 —— hpRtlW 是 vb6_Extender_*
+            // 时换实例感知读入口。withHostPseudoIntrinsic 只答"这个成员该发哪个内建符号",
+            // 换道放在**读**的消费点, 于是 Set 那条 (cgen_setlet_set_prop.inc) 的形状不动。
+            lastExpr_ = extenderMemberReadExpr(hpRtlW);
             return;
         }
     }

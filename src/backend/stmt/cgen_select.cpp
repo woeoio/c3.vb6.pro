@@ -31,7 +31,11 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         else if (isFloatSelect)  resolveComValue("Double");
         else                     resolveComValue("Long");
     }
-    std::string testVar = lastExpr_;
+    /* Fix 296 / 4b: `Select Case Extender.Align` 的判据临时量也走实例入口
+       (ToolBar.ctl 发成 `int32_t _vb6_select_10 = vb6_Extender_Align;`, 实测 1 处)。
+       换道落在**临时量的初始化**这一处 —— 下游 cond / switch 读的都是 tempVar,
+       所以 getter 只调一次, 不会每个 Case 调一遍。 */
+    std::string testVar = extenderMemberReadExpr(lastExpr_);
 
     // 为test创建临时变量
     std::string tempVar = "_vb6_select_" + std::to_string(tempCounter_++);

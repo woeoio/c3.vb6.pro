@@ -30,4 +30,13 @@ Public Sub Show()
     Debug.Print "UF-u3-box=" & CStr(v)          ' 78187493530
     v = mUI
     Debug.Print "UF-ui-box=" & CStr(v)          ' 65535
+    ' ai/032 §6.9 收口: 这两格钉的是**类型身份**, 不只是值。
+    ' 以前 SByte/UInteger 没有自己的出口, boxToVariant 落 default -> vb6_VariantFromValue,
+    ' 由 RTL 的 _Generic 按 C 类型猜: int8_t 命中 `char:` 档、uint16_t 命中 `wchar_t:` 档,
+    ' 两档都被装成 **VT_I4** ⇒ 值对(65535 / -128), 而 TypeName 答 "Long"、VarType 答 3。
+    ' ULong/VT_UI4 早就有真出口(它的注释写着「答 "Long" 才是误导」), 这两档按同一口径补齐。
+    Debug.Print "UF-ui-box-tn=" & TypeName(v)   ' UInteger (改前: Long)
+    v = mSB
+    Debug.Print "UF-sb-box=" & CStr(v)           ' -128
+    Debug.Print "UF-sb-box-tn=" & TypeName(v)    ' SByte (改前: Long)
 End Sub

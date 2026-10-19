@@ -158,6 +158,7 @@ void CCodeGen::visit(VariableDecl& node) {
             } else {
                 // Fix 010r-10: map赋值, 存储类名以便方法分发时查找
                 knownClassVars_[lower] = clsSym->name;
+                moduleClassVars_[lower] = clsSym->name;
                 // P14.3.1: Dim As New自动实例化 (模块级)
                 if (node.isNew) {
                     knownNewVars_[lower] = cIdent(clsSym->name);  // Fix 090v reg
@@ -243,7 +244,13 @@ void CCodeGen::visit(VariableDecl& node) {
             std::string lower = node.name;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
             knownClassVars_[lower] = projCls;
+            moduleClassVars_[lower] = projCls;
             knownObjectVars_.erase(lower);
+            // Fix 运行期第二十六层同批: 同名 `Dim Item As Variant` (TvwNodes.cls:53)
+            // 把 "item" 登记进 knownVariantVars_, 同模块 :132 `Dim Item As TvwNode`
+            // 遮蔽它时, 不擦掉 ⇒ ObjPtr(Item) 的 void* 形参分支误套
+            // vb6_VariantToObjectVal(Item) (按值收 vb6_VARIANT) → C2440.
+            knownVariantVars_.erase(lower);
             if (node.isWithEvents) knownWithEventsVars_[lower] = projCls;
             if (node.isNew) {
                 knownNewVars_[lower] = cIdent(projCls);
@@ -264,6 +271,15 @@ void CCodeGen::visit(VariableDecl& node) {
             knownIfaceVars_.find(lower) == knownIfaceVars_.end()) {
             knownObjectVars_.insert(lower);
         }
+        // Fix 运行期第二十六层同批: 局部 `Dim X As Control/Object` 遮蔽同名
+        // `Property Get X() As Variant` 时, 属性那一档的返回类型 Variant 已把
+        // "x" 登记进 knownVariantVars_ (cgen_decl_proc.cpp:343). 不擦掉 ⇒ 后续
+        // CallByName(X, ...) / ObjPtr(X) 的 void* 形参分支按"实参是 Variant"
+        // 套 vb6_VariantToObjectVal(X) (按值收 16B vb6_VARIANT) → C2440.
+        // (ComCtlsDemo Builds/UpDown/UpDown.ctl:803 `Dim BuddyControl As Control`
+        // 遮蔽 :719 `Property Get BuddyControl() As Variant`; 同理
+        // TvwNodes.cls:132 `Dim Item As TvwNode` 遮蔽 :53 `Dim Item As Variant`.)
+        knownVariantVars_.erase(lower);
     }
 
     // Fix 082: COM interface pointer types (vb6_ComIface_*) are pointer-sized on x64
@@ -288,6 +304,7 @@ void CCodeGen::visit(VariableDecl& node) {
             const std::string projClsVar = projectClassNameOf(simple.name);
             if (!projClsVar.empty()) {
                 knownClassVars_[lower] = projClsVar;
+                moduleClassVars_[lower] = projClsVar;
                 knownObjectVars_.erase(lower);
                 if (node.isNew) {
                     knownNewVars_[lower] = cIdent(projClsVar);   // Dim As New 工程类

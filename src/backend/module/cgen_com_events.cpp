@@ -43,6 +43,12 @@ void CCodeGen::visit(RaiseEventStmt& node) {
     for (size_t i = 0; i < node.args.size(); i++) {
         emitExpr(*node.args[i]);
         std::string argVal = lastExpr_;
+        /* Fix 296 / 4b: 事件实参位上的 Extender 成员读也走实例入口 (CoolBar.ctl
+           `RaiseEvent HeightChanged(Extender.Height)` 实测 ComCtlsDemo 1 处)。
+           **这是第四条消费路径**: RaiseEvent 自带一条发码, 不经过 cgen_expr_call_arg_emit,
+           所以那里那道闸够不着 —— 4b 前三道都装上了唯独这处漏掉, 就是哨兵少一条负控的代价。
+           换道放在**捕获的那一刻**, 下面的 VariantFromValue / ObjectVal 装箱才套得住。 */
+        argVal = extenderMemberReadExpr(argVal);
         // Fix 029: Variant 形参 → 用 vb6_VariantFromValue 包装标量实参.
         // 其它具体类型 (Long/String/...)形参期望已由 emitExpr 生成匹配类型,
         // 不做额外包装以避免破坏现有正确调用.

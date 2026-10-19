@@ -366,6 +366,25 @@ struct Symbol {
         return result;
     }
 
+    // 账 #305 §B187 第二腿: 「这一枚工程类会不会在运行期的 coclass 描述表
+    // (g_vb6_coclasses[]) 里占一行」—— 这一问的唯一定义。
+    // 为什么必须有它: 运行期只有表里的类能拿到 desc, 而 `vb6_FindCoClassDesc()` 查不中
+    // 就交回 NULL ⇒ 装箱出空壳 (Nothing)。所以**任何**要发
+    // `vb6_ComObject_From*BorrowedInstance(vb6_FindCoClassDesc("<类>"), …)` 的发码点
+    // 都必须先问这里, 而建表那侧 (cgen_util_dllentry_collect.inc 的收集循环) 用**同一条**
+    // 判据 —— 两边各抄一遍就是下一次"表里有 / 发码侧以为没有"漏档的现场 (rev17 的
+    // play78 缺 View/PopupMenu 那一族)。
+    // BUG-4 原口径: PublicNotCreatable(2) 可见但对外不可创建, 只有 MultiUse(5)/
+    // SingleUse(3) 进表; 接口宿主块没有实例, 一并排除。
+    // instancing 的唯一真相是 `Module::instancing` (parse 期从 .cls 的 BEGIN 头读,
+    // 见 driver_interface.cpp:400 那条注释), 语义层再抄进 Class 符号 —— 所以这条判据
+    // 对同一枚类在任何模块的表 (宿主 + 注入副本) 里给同一个答案。
+    bool isCoClassTableEntry() const {
+        return kind == SymbolKind::Class && !isInterface
+            && (instancing == VBInstancing::MultiUse
+                || instancing == VBInstancing::SingleUse);
+    }
+
     // 存储键: Property Get/Let/Set加后缀区分同名共存, Event也加后缀, 其他用lowerName
     std::string storageKey() const {
         if (isPropertyKind(kind)) {

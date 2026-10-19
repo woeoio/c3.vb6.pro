@@ -261,6 +261,8 @@ static int32_t memVariantToI4(VARIANT* v) {
     case VT_I4: case VT_INT: case VT_UI4: case VT_UINT: return (int32_t)v->lVal;
     case VT_I2: return (int32_t)v->iVal;
     case VT_UI1: return (int32_t)v->bVal;
+    case VT_I1:  return (int32_t)v->cVal;    /* ai/032 §6.9: 真 VARIANT 的 CHAR 那一个字节 */
+    case VT_UI2: return (int32_t)v->uiVal;   /* ai/032 §6.9: 真 VARIANT 的 USHORT 那一短字 */
     case VT_I8: return (int32_t)v->llVal;
     case VT_UI8: return (int32_t)v->ullVal;   /* ai/032 §6.6: 无符号 64 位档同格 */
     case VT_BOOL: return (v->boolVal == VARIANT_TRUE) ? -1 : 0;

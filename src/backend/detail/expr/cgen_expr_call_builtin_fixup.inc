@@ -342,12 +342,18 @@
     static const char* const kOD_Dir[]         = { "NULL", "0" };
     static const char* const kOD_CurDir[]      = { "NULL" };
     static const char* const kOD_LoadPicEx[]   = { "NULL" };
-    static const char* const kOD_Rnd[]         = { "0" };        // VB6 无参 Rnd = 取下一个数
-    static const char* const kOD_Randomize[]   = { "0.0" };
+static const char* const kOD_Rnd[]         = { "0" };        // VB6 无参 Rnd = 取下一个数
+static const char* const kOD_Randomize[]   = { "0.0" };
+// 账 #439 (§B212): 位 3 = **UseParentheses**，默认是 **False(0)**，**不是 -1**。
+//   ⚠ 这一格原先和另外两位一样填 "-1"，于是「**省略**」与「**显式写 True**」在 C 侧**同码**
+//   （VB6 的 True 恒为 -1）⇒ RTL 收到 -1 分不清是「省略、走默认」还是「要括号」。
+//     按 -1 走默认 ⇒ 显式 True 被吃掉（实测 FormatNumber(-1234.5678,2,True,True) 交 -1,234.57，
+//     运行期交 (1,234.57)）；按 -1 当真 ⇒ **省略档**全部变括号 = 把绝大多数正常调用一起改坏。
+//   位 1/2/4 的默认（NumDigits=-1、IncludeLeadingDigits=True、GroupDigits=True）都还是 -1。
     static const char* const kOD_Mid[]         = { nullptr, nullptr, "-1" };
     static const char* const kOD_MidB[]        = { nullptr, nullptr, "-1" };
     static const char* const kOD_StrConv[]     = { nullptr, nullptr, "0" };
-    static const char* const kOD_FormatNum[]   = { nullptr, "-1", "-1", "-1", "-1" };
+    static const char* const kOD_FormatNum[]   = { nullptr, "-1", "-1", "0", "-1" };
     static const char* const kOD_ClipSet[]     = { nullptr, "0" };
     static const char* const kOD_ErrRaise[]    = { nullptr, "(BSTR)0", "(BSTR)0" };
     // §B149 格③: VB6 的 DeleteSetting 有 1/2/3 参三形, RTL 出口是 3 枚必填 BSTR。
@@ -382,6 +388,12 @@
         { "vb6_MidB",            kOD_MidB,        sizeof(kOD_MidB) / sizeof(kOD_MidB[0]),               true  },
         { "vb6_StrConv",         kOD_StrConv,     sizeof(kOD_StrConv) / sizeof(kOD_StrConv[0]),         true  },
         { "vb6_FormatNumber",    kOD_FormatNum,   sizeof(kOD_FormatNum) / sizeof(kOD_FormatNum[0]),     true  },
+    // 账 #439 (§B212): 这两家与 FormatNumber **同形**（同一条 5 位 C 签名、同样的可选实参），
+    //   改前**只有 FormatNumber 登记了**默认档 ⇒ `FormatCurrency(1234.5678)` / `FormatPercent(...)`
+    //   发成 1 个实参进 5 参的 RTL 出口 = **cl C2198 实参太少**，整份文件编不过。
+    //   三家共用 kOD_FormatNum（位置 0 是 value，其余 1..4 省略档 = "-1" = 各用自己的默认）。
+    { "vb6_FormatCurrency", kOD_FormatNum,   sizeof(kOD_FormatNum) / sizeof(kOD_FormatNum[0]),     true  },
+    { "vb6_FormatPercent",  kOD_FormatNum,   sizeof(kOD_FormatNum) / sizeof(kOD_FormatNum[0]),     true  },
         { "vb6_Clipboard_SetData", kOD_ClipSet,   sizeof(kOD_ClipSet) / sizeof(kOD_ClipSet[0]),         true  },
         { "vb6_ErrRaise",        kOD_ErrRaise,    sizeof(kOD_ErrRaise) / sizeof(kOD_ErrRaise[0]),       true  },
         { "vb6_DeleteSetting",   kOD_DelSetting,  sizeof(kOD_DelSetting) / sizeof(kOD_DelSetting[0]),   false },
@@ -411,7 +423,10 @@
     if (callee == "vb6_StrConv" && !args.empty()) {
         std::string arg0name = args[0];
         if (arg0name.compare(0, 4, "me->") == 0) arg0name = arg0name.substr(4);
-        if (arg0name.size() > 4 && arg0name[0] == '(' && arg0name[1] == '*'
+        // 账 #305 §B181 (第七十一刀): 长度闸原来是 `> 4`，于是枚长正好 4 的 `(*b)`
+        // (单字母名) 剥不出 `b` ⇒ 这一族的规则在 backend 里有 24 位主人、各家闸不同
+        // (`> 2` / `> 3` / `> 4`)，同一个问题在不同站点答案不一样。这里收成「至少 `(*x)`」。
+        if (arg0name.size() >= 4 && arg0name[0] == '(' && arg0name[1] == '*'
             && arg0name.back() == ')') {
             arg0name = arg0name.substr(2, arg0name.size() - 3);
         }
@@ -427,7 +442,11 @@
     if (callee == "vb6_StrPtr" && !args.empty()) {
         std::string a140 = args[0];
         if (a140.compare(0, 4, "me->") == 0) a140 = a140.substr(4);
-        if (a140.size() > 4 && a140[0] == '(' && a140[1] == '*'
+        // 账 #305 §B181 (第七十一刀): 原来写 `> 4` ⇒ 枚长正好 4 的 `(*b)` (单字母名) 剥不出
+        // `b`，而这一站剥不出来就等于认不出是字节数组 ⇒ 静默把描述符指针交给要 BSTR 的形参。
+        // 闸改成「至少 `(*x)`」。同一条剥壳规则在 backend 里有 24 位主人、闸各有三种
+        // (`> 2` / `> 3` / `> 4`) ⇒ 收成一处是下一格 (§B181 先手)，本刀先把这一格修对。
+        if (a140.size() >= 4 && a140[0] == '(' && a140[1] == '*'
             && a140.back() == ')') {
             a140 = a140.substr(2, a140.size() - 3);
         }
@@ -437,6 +456,18 @@
             && (knownByteArrayVars_.count(l140) || classByteArrayMembers_.count(l140))) {
             callee = "vb6_SafeArrayDataPtr";
         }
+    }
+    // 账 #305 §B180 (第六十九刀): StrPtr 收**整枚槽**那一形改道到收槽的出口。
+    // 上面 Fix 140 已经立了「按实参换 callee 名」这一形状的先例 (Byte() → SafeArrayDataPtr)，
+    // 本格只是把同一形状用到 Variant 上 —— 而**问句只有一处主人**
+    // (`builtinWantsRawSlotFromVariant`，另一枚读者 = arg_variant 撤回解包；两站判据同源，
+    // 免得再长一次 §B176 形② 那种「一位两主、各判各的」)。改道后发码 =
+    // `vb6_StrPtrVar(v)`，RTL 那一枚在 `vt` 已是串时**借**槽里的 BSTR (空串仍答 0，
+    // 与账 #257 第十三层同一条口径)，不再每调用现造一枚没人回收的临时串。
+    if (callee == "vb6_StrPtr" && !node.positional.empty() && node.positional[0]
+        && builtinWantsRawSlotFromVariant(callee, node.positional.size(), 0,
+                                          *node.positional[0])) {
+        callee = "vb6_StrPtrVar";
     }
     // InStr 的 compare 形 (<vbeclipse>, 替换 Fix 041 的"截掉第 4 参"):
     //   InStr(s1, s2[, compare])            首参是字符串 ⇒ (s1, s2, compare)

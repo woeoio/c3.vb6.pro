@@ -478,11 +478,10 @@
         if (!ivrefIfaceName_.empty()) {
             const std::string ivIface = ivrefIfaceName_;
             ivrefIfaceName_.clear();
-            std::string slotKey;
-            if (const IfaceView* v = ivLookupIface(ivIface)) {
-                slotKey = ivSlotKeyForMember(*v, memberName);
-            }
-            if (!slotKey.empty()) {
+            const IfaceView* ivV221 = ivLookupIface(ivIface);
+            const std::string ivSlot221 =
+                ivV221 ? ivSlotKeyForMember(*ivV221, memberName) : std::string();
+            if (!ivSlot221.empty()) {
                 std::vector<std::string> ivArgs;
                 for (size_t i = 0; i < node.positional.size(); i++) {
                     emitExpr(*node.positional[i]);
@@ -492,11 +491,11 @@
                     emitExpr(*named.value);
                     ivArgs.push_back(lastExpr_);
                 }
-                std::string call = objExpr + "->vt->" + cIdent(slotKey) + "(" + objExpr;
-                for (size_t i = 0; i < ivArgs.size(); i++) call += ", " + ivArgs[i];
-                call += ")";
-                lastExpr_ = call;
-                return;
+                const std::string ivCall = ivrefVtableCall(ivIface, memberName, objExpr, ivArgs);
+                if (!ivCall.empty()) {
+                    lastExpr_ = ivCall;
+                    return;
+                }
             }
             // 接口里没有这个成员: 契约检查已报过错, 落回后续路径不再级联
         }

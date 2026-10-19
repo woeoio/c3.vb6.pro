@@ -1,0 +1,7 @@
+Type=DLL
+Class=T88Boom; T88Boom.cls; {11112222-3333-4444-5555-6666777788D1}
+Class=T88Good; T88Good.cls; {11112222-3333-4444-5555-6666777788D2}
+Module=DllBlocks; DllBlocks.bas
+Startup=""
+Command32=""
+Name="B188d"

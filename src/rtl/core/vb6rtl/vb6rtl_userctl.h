@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 // vb6rtl_userctl.h - UserControl/PropertyPage 宿主内建对象 (Fix 105)
 //
 // 背景: VB6 UserControl 工程 (Charts 2020 等) 的 .ctl/.pag 代码里直接引用
@@ -257,6 +257,13 @@ struct vb6_UserControl_Extender_Type {
     int16_t DataChanged;  // Fix 221: 容器是否要重读控件的绑定数据 (运行期恒不活动)
 };
 extern struct vb6_UserControl_Extender_Type vb6_UserControl_Extender;
+/* Fix 294 / 3a: Extender.<成员> = v 的实例感知写入口(代码生成侧调用)。
+   内部按当前记录落进 b6_UCRec.ext*; 没有当前记录时退回全局, 与
+   b6_UC_ExtenderField 的兜底一致。kind 约定 0=BSTR / 2=int16 / 3=int32。 */
+void* vb6_UC_GetExtenderMemberObj(const wchar_t* name);
+void vb6_UC_SetExtenderMember(const wchar_t* name, void* value);
+int32_t vb6_UC_GetExtenderMemberNum(const wchar_t* name);
+BSTR    vb6_UC_GetExtenderMemberStr(const wchar_t* name);
 
 // --- PropertyPage 设计器页 ---
 extern void*   vb6_PropertyPage_hwnd;

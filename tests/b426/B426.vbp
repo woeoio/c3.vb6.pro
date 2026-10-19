@@ -1,0 +1,4 @@
+Type=Exe
+Name="B426App"
+Module=B426Main; B426Main.bas
+Startup="Sub Main"

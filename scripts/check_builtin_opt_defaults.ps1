@@ -19,7 +19,7 @@
 #   R4 表里登记过的名字，不许在同一个文件里另有 `callee == "vb6_X"` 且往 argList 追加实参的段（第二份抄法）。
 #   R5 语义侧 src/semantics/builtin/builtin_funcs.inc 若给这枚名字登记了形参表，它的**可选档集合**必须
 #      等于表里非 nullptr 的档集合（不齐 = 两份名单从不汇合；例外要写理由，见 $leadingDefault）。
-#   R6 census 不许读空：rows >= 25、数组数 == 行数、RTL 形参数至少读出 300 枚、语义形参表至少 100 行。
+#   R6 census 不许读空：rows >= 25、每行引用的数组**都真的存在**（不要求数组数 >= 行数 —— 同一张表被几家共用是合法的，见下面 §1 的注）、RTL 形参数至少读出 300 枚、语义形参表至少读出 80 行。
 #   R7 留在发码侧按实参个数做决定的那些名字（改写 callee / 重排实参 / 截断，不是补档）必须**恰好**是
 #   R8 表里一枚出口只许一行（重复行会让前一档的缺省答案静默失效，本机负控实测）。
 #      下面这一份名单 —— 多一名 = 新写了一形硬编码，少一名 = 名单过期了。
@@ -75,7 +75,20 @@ foreach ($m in [regex]::Matches($fix, 'static const char\* const (kOD_[A-Za-z0-9
     $arrays[$m.Groups[1].Value] = $slots
 }
 if ($rows.Count -lt 25) { Write-Host ('FAIL R6: 表只读出 ' + $rows.Count + ' 行 (<25) —— 扫描读空, 不是一条绿着的判据'); exit 1 }
-if ($arrays.Count -lt $rows.Count) { Write-Host ('FAIL R6: 数组只读出 ' + $arrays.Count + ' 条 < 行数 ' + $rows.Count); exit 1 }
+# ⚠ 这里曾经写的是 `$arrays.Count -lt $rows.Count`，**比错了两个量**：`$arrays` 数的是**去重后
+#   的数组个数**，`$rows` 数的是**调用方个数**。表里**一行一枚私数组**本来只是巧合，不是规矩 ——
+#   账 #428 把 `vb6_FormatCurrency` / `vb6_FormatPercent` 登记到**既有的 `kOD_FormatNum`** 上
+#   （三家 C 签名逐字同形，共用一张表才是对的），于是 rows 31 / arrays 29，那条判据立刻红了。
+#   ⇒ 同一张表被几家共用是**合法且应当鼓励**的写法，不能拿来当「扫描读空」的信号。
+#   真正的「读空」信号改成两件事：数组本身读不出多少条（<25），以及**每行引用的数组必须真的存在**
+#   （下面逐行判的那条才是权威，R6 行找不到数组）。这里先做一次前置的整体断言，免得逐行那条
+#   在 0 行时静默通过。
+$dangling = @($rows.Values | Where-Object { -not $arrays.ContainsKey($_) } | Sort-Object -Unique)
+if ($dangling.Count -gt 0) {
+    Write-Host ('FAIL R6: ' + $dangling.Count + ' 枚数组被引用但没定义: ' + ($dangling -join ', ')) -ForegroundColor Red
+    exit 1
+}
+if ($arrays.Count -lt 25) { Write-Host ('FAIL R6: 只读出 ' + $arrays.Count + ' 枚数组 (<25) —— 数组扫描读空'); exit 1 }
 
 # ---- 2) RTL: 每一枚 vb6_X( 的形参个数 (取第一条能认的声明) ----
 # 认法与 check_rtl_proto_arity.ps1 的 $HeadRx 同形: 返回类型 + 名字 + '('; 跨行的那几条按「认不出」跳过。

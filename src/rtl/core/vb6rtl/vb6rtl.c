@@ -311,6 +311,9 @@ int32_t vb6_VariantToLong(vb6_VARIANT v) {
         case VT_I8:         return (int32_t)v.llVal;  /* Task #44: VT_I8 进 Long 按 C 截断语义 */
         /* ai/032 §6.6: 无符号两档 —— 同 C 截断语义 (UI8 以前落 default 答 0)。 */
         case (vb6_vartype)VT_UI4: return (int32_t)v.ulVal;
+        /* ai/032 §6.9: SByte/UInteger 两档(此前被 _Generic 的 char:/wchar_t: 档接走成 VT_I4)。 */
+        case (vb6_vartype)VT_I1:  return (int32_t)v.sbVal;
+        case (vb6_vartype)VT_UI2: return (int32_t)v.usVal;
         case (vb6_vartype)VT_UI8: return (int32_t)v.ullVal;
         case vb6_vtSingle:  return (int32_t)round(v.fltVal);
         case vb6_vtDate:    return (int32_t)round(v.dblVal);  /* <vbeclipse>: VT_DATE 的数值面就是序列号 */
@@ -342,6 +345,8 @@ intptr_t vb6_VariantToLongPtr(vb6_VARIANT v) {
         case vb6_vtCurrency:return (intptr_t)(v.cyVal / 10000);
         case vb6_vtBSTR:    return (intptr_t)vb6_Val(v.bstrVal);
         case VT_I8:         return (intptr_t)v.llVal;
+        case (vb6_vartype)VT_I1:  return (intptr_t)v.sbVal;   /* ai/032 §6.9: 此前被 char: 档接成 VT_I4 */
+        case (vb6_vartype)VT_UI2: return (intptr_t)v.usVal;   /* ai/032 §6.9: 此前被 wchar_t: 档接成 VT_I4 */
         case (vb6_vartype)VT_UI4: return (intptr_t)v.ulVal;   /* ai/032 §6.6: 零扩展 */
         case VT_UI8: {      /* 位模式按无符号解释 */
             uint64_t uv;
@@ -361,6 +366,8 @@ int16_t vb6_VariantToBool(vb6_VARIANT v) {
         case vb6_vtInteger:  return v.iVal ? -1 : 0;
         case vb6_vtLong:     return v.lVal ? -1 : 0;
         case VT_I8:          return v.llVal ? -1 : 0;  /* Task #44: LongLong/LongPtr 64 位 */
+        case (vb6_vartype)VT_I1:  return v.sbVal ? -1 : 0;   /* ai/032 §6.9 */
+        case (vb6_vartype)VT_UI2: return v.usVal ? -1 : 0;   /* ai/032 §6.9 */
         case (vb6_vartype)VT_UI4: return v.ulVal ? -1 : 0;   /* ai/032 §6.6: 非零即真 */
         case (vb6_vartype)VT_UI8: return v.ullVal ? -1 : 0;
         case vb6_vtSingle:   return v.fltVal != 0.0f ? -1 : 0;
@@ -466,6 +473,8 @@ double vb6_VariantToDouble(vb6_VARIANT v) {
         case vb6_vtInteger: return (double)v.iVal;
         case vb6_vtLong:    return (double)v.lVal;
         case VT_I8:         return (double)v.llVal;  /* Task #44: LongLong/LongPtr 64 位 */
+        case (vb6_vartype)VT_I1:  return (double)v.sbVal;   /* ai/032 §6.9 */
+        case (vb6_vartype)VT_UI2: return (double)v.usVal;   /* ai/032 §6.9 */
         case (vb6_vartype)VT_UI4: return (double)v.ulVal;   /* ai/032 §6.6 */
         case (vb6_vartype)VT_UI8: return (double)v.ullVal;
         case vb6_vtSingle:  return (double)v.fltVal;
@@ -674,6 +683,28 @@ void vb6_RestoreErrState(void) {
     }
 }
 
+// 账 #305 §B188 (第九十刀): 一截 VB 体跑在自己带的帧里, 抛出来的号交回调用方(声明见 vb6rtl_array.h)。
+// 登记顺序照 §B188 第八十刀那三行协议: 先 setjmp, 成功了才登记帧 —— 体里自己写了 On Error 的照常由
+// 体接住, 走到这里的是真没人管的那一类。Save/Restore 只管帧那一族, 不动 vb6_err 的内容, 所以返回时
+// 号与描述都还在 Err 里, 调用方要交回去不必另存。
+int32_t vb6_RunVbProtected(void (*body)(void*), void* me) {
+    jmp_buf frame;
+    int32_t thrown = 0;
+    if (!body) return 0;
+    vb6_SaveErrState();
+    if (setjmp(frame) != 0) {
+        thrown = vb6_ErrNumber();
+    } else {
+        vb6_error_jmp_ptr = &frame;
+        vb6_error_jmp_set = 1;
+        vb6_err_jmp_active = 1;
+        vb6_err_resume_next = 0;
+        body(me);
+    }
+    vb6_RestoreErrState();
+    return thrown;
+}
+
 int32_t vb6_ErrNumber(void) { return vb6_err.number; }
 BSTR vb6_ErrDescription(void) { return vb6_err.description; }
 // Fix <vbeclipse> 2026-10-06: Err.Clear 清空 **全部** 属性 —— 含 LastDllError。
@@ -799,6 +830,8 @@ static double vb6_VarToDouble_internal(vb6_VARIANT* v) {
          * 取数一侧 (VariantToLong/ToBoolean/ToDouble/ToIntPtr) 早就有 VT_I8 档，只有这里漏了。 */
         case (vb6_vartype)VT_I8: return (double)v->llVal;
         /* ai/032 §6.6: 无符号两档同格 —— 缺档同样把整档抹成 0.0 (VT_I8/VT_DECIMAL 同款坑)。 */
+        case (vb6_vartype)VT_I1:  return (double)v->sbVal;   /* ai/032 §6.9 */
+        case (vb6_vartype)VT_UI2: return (double)v->usVal;   /* ai/032 §6.9 */
         case (vb6_vartype)VT_UI4: return (double)v->ulVal;
         case (vb6_vartype)VT_UI8: return (double)v->ullVal;
         /* 账 #305 §B143: 这一处是「比较走哪个数值」的口(第二十九刀给它补的是 VT_I8)。

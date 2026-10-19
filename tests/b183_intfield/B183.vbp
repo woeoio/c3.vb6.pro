@@ -1,0 +1,5 @@
+Type=Exe
+Name="B183App"
+Module=B183Main; B183Main.bas
+Class=B183Holder; B183Holder.cls
+Startup="Sub Main"

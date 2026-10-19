@@ -42,6 +42,9 @@ void   vb6_Form_Circle(void* hwnd,
                        int32_t hasEnd, double endAngle,
                        int32_t hasAspect, double aspect);
 void   vb6_Form_Cls(void* hwnd);
+// 自定义坐标系 (VB6 的 vbUser): `Scale (x1, y1)-(x2, y2)` 把客户区钉成那一格坐标范围,
+// 不带坐标的 `Scale` = 复位回缺省 (缇) ⇒ hasXY=0 就是那一形。
+void   vb6_Form_Scale(void* hwnd, int32_t hasXY, double x1, double y1, double x2, double y2);
 
 // ---- Form 绘图状态读写 (cgen 的 Me.CurrentX / .ForeColor / .DrawWidth) ----
 // 笔位不在这张表里 —— 账 #233: CurrentX/Y 只有一份存储, cgen 直接登记

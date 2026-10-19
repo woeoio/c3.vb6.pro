@@ -29,6 +29,13 @@ std::string CCodeGen::registerDefaultInstanceClass(const std::string& name) {
     return cls;
 }
 
+// 账 #305 §B218 (甲): 工程类形参登记收成一处 —— 按名那张表 (成员读要它) 与
+// 「这一档槽在过程出口/覆写/置空都不许动计数」的名册必须同时命中, 分两处写就会长漏。
+void CCodeGen::registerClassFormal(const std::string& pLower, const std::string& clsName) {
+    knownClassVars_[pLower] = clsName;
+    procClassFormals_.insert(pLower);
+}
+
 std::string CCodeGen::generateDllEntry(const std::string& progId, const std::vector<SymbolTable*>& allSymTabs, bool includeDllExports) {
 #include "backend/detail/util/cgen_util_dllentry_prelude.inc"
 #include "backend/detail/util/cgen_util_dllentry_collect.inc"

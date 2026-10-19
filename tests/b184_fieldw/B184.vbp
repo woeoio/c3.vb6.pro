@@ -1,0 +1,6 @@
+Type=Exe
+Name="B184App"
+Module=B184Main; B184Main.bas
+Class=B184Holder; B184Holder.cls
+Class=B184Peer; B184Peer.cls
+Startup="Sub Main"

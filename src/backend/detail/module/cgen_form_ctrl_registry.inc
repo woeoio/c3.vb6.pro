@@ -37,6 +37,7 @@
                         // 同时登记为类实例变量: 使 IndexOrCallExpr 的可选参数补全
                         // (Fix 090c/Fix 042b) 能按该类形参表展开.
                         knownClassVars_[ctrlNameLower] = ucSpec->form.formName;
+                        moduleClassVars_[ctrlNameLower] = ucSpec->form.formName;
                     }
                 }
             }

@@ -1,0 +1,5 @@
+Type=Exe
+Module=Main; Main.bas
+Class=B444Impl; B444Impl.cls
+Startup="Sub Main"
+ExeName32="B444d.exe"

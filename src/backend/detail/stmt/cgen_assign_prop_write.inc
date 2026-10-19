@@ -792,7 +792,9 @@
                 c_.emitLine(tempVar + "->"
                             + cIdent(canonicalClassFieldName(info.className,
                                                              wmExpr.memberName))
-                            + " = " + lastExpr_ + ";  /* With class field write */");
+                            + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
+                                                        lastExpr_)
+                            + ";  /* With class field write */");
                 return;
             }
 

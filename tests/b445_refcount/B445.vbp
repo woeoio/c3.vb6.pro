@@ -1,0 +1,6 @@
+Type=Exe
+Class=C445; C445.cls
+Class=C445H; C445H.cls
+Module=Main; Main.bas
+Startup="Sub Main"
+ExeName32="B445d.exe"

@@ -128,6 +128,19 @@ c_.emitLine("switch(vb6_gosub_stack[--vb6_gosub_sp]) {");
             c_.emitLine("vb6_FreeANSI(" + ansiVar + ");");
         }
         ansiTempsToFree_.clear();
+
+        // 账 #305 §B217 (第一百二十一刀): 收回 ByRef Variant 实参那枚临时槽**装箱多取的**
+        // 那一枚引用 (发码处在 cgen_expr_call_arg_emit.inc 登记)。声明发在这条语句之前、
+        // 同一层花括号里 ⇒ 在这里清正好同作用域; 层号对不上说明声明在一对已经合上的花括号里
+        // (Debug.Print 那族自带 `{ ... }`), 那时**宁可不收**也不许发成引用越界的 C。
+        // Clear 空槽是 no-op, 被调方写过那一格也照 VB6 的规矩一并还掉。
+        for (auto& bt : boxTempsToClear_) {
+            if (bt.second == c_.indentLevel()) {
+                c_.emitLine("vb6_VariantClear(&" + bt.first +
+                            ");  /* 账 #305 §B217: 语句末收回装箱多取的那一枚引用 */");
+            }
+        }
+        boxTempsToClear_.clear();
     }
 }
 

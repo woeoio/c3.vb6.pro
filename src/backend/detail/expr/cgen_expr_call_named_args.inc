@@ -26,7 +26,7 @@
         }
 
         // ByRef handling helper lambda
-        auto applyByRef = [&](std::string& argVal, size_t pi) {
+        auto applyByRef = [&](std::string& argVal, size_t pi, const ASTNode* actualAst) {
             // Fix 078 rev2: ByRef array params are now vb6_SafeArray1D**,
             // so they need & at call site — same as other ByRef params.
             bool piHasByValOverride = node.byvalOverrides.count(pi) > 0;
@@ -115,6 +115,11 @@
                         if (pi < calleeParams.size()) pType = calleeParams[pi].type;
                         argVal = wrapConstArgForByRef(argVal, pType);
                     } else {
+                        // 账 #305 §B187 第五腿: 命名实参 (`Foo b:=o`) 那一格与位置实参同桥 ——
+                        // 同一个出口、同一条判据, 站点不再各抄一份。
+                        if (pi < calleeParams.size()) {
+                            bridgeByRefLateSlotArg(calleeParams[pi], argVal, actualAst);
+                        }
                         argVal = "&" + argVal;
                     }
                 } else {
@@ -146,7 +151,13 @@
                 size_t pi = it->second;
                 emitExpr(*named.value);
                 std::string argVal = std::move(lastExpr_);
-                applyByRef(argVal, pi);
+                // 账 #305 §B187 第四腿: 命名实参 (`Foo b:=o, a:=1`) 那一格与位置实参同一句
+                // —— 同一档闸门 (ByVal + 泛对象形参) + 同一个唯一发码处 boxIntoLateSlot。
+                if (pi < calleeParams.size() && calleeParams[pi].isByVal
+                    && !cParamLateSlotType(calleeParams[pi]).empty()) {
+                    argVal = boxIntoLateSlot(argVal, named.value.get());
+                }
+                applyByRef(argVal, pi, named.value.get());
                 // Fix 091o: 命名实参 (Name:=expr) 此前只做 ByRef 处理, 漏了 ByVal
                 // 形参类型适配 — ByVal Variant 形参收具体类型实参需
                 // vb6_VariantFromValue 打包 (_Generic 宏按实类型选 ctor).

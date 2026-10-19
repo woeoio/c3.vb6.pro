@@ -398,6 +398,41 @@
             }
         }
 
+        // ---- 账 #305 §B221 形②: 接收者的值已经是接口视图 (MakeDirect().Twice(21)) ----
+        // 下面 Pattern C/D 会把接口名当工程类名用 ⇒ 发成字段访问 `X()->Twice(21)`
+        // (两台实测 C2039: 视图结构体里只有一枚 vt)。视图的成员调用只有一条正解 =
+        // `x->vt-><slot>(x, args)`，而那条发射的主人刚收在 ivrefVtableCall 里；接收者
+        // 必须只求值一次 (返回对象的调用内部自带 AddRef) ⇒ 走 Fix 090q 的 addPending。
+        if (!handled && maExpr.object
+            && !(maExpr.object->kind == ASTNodeKind::IdentifierExpr
+                 && knownIvrefVars_.count(Symbol::toLower(
+                        static_cast<const IdentifierExpr&>(*maExpr.object).name)))) {
+            // 裸接口变量那种接收者 (Dim o As I 之后 o.M(...)) 早由 visit(MemberAccessExpr)
+            // 的 B04 臂接住、发成 `o->vt->m(o, ...)`，这一臂刻意不插手 —— 否则每条存量
+            // 接口调用都会多出一枚临时量，把「零行为改动」那条护栏打成一片假差异。
+            const std::string ivIface221 = ifaceViewOfExpr(*maExpr.object);
+            const IfaceView* ivV221 = ivIface221.empty() ? nullptr : ivLookupIface(ivIface221);
+            const std::string ivSlot221 =
+                ivV221 ? ivSlotKeyForMember(*ivV221, maExpr.memberName) : std::string();
+            if (!ivSlot221.empty()) {
+                emitExpr(*maExpr.object);
+                const std::string ivRecv221 = "__ivrecv" + std::to_string(ivrefSetSeq_++);
+                c_.addPending(ivrefCType(ivIface221) + " " + ivRecv221 + " = "
+                              + lastExpr_ + ";");
+                std::vector<std::string> ivArgs221;
+                for (size_t i = 0; i < node.positional.size(); i++) {
+                    emitExpr(*node.positional[i]);
+                    ivArgs221.push_back(lastExpr_);
+                }
+                for (auto& named : node.named) {
+                    emitExpr(*named.value);
+                    ivArgs221.push_back(lastExpr_);
+                }
+                lastExpr_ = ivrefVtableCall(ivIface221, maExpr.memberName, ivRecv221, ivArgs221);
+                handled = true;
+            }
+        }
+
         // ---- Pattern C/D: 类实例字段访问 ----
         if (!handled && maExpr.object) {
             std::string className = inferClassTypeOfExpr(*maExpr.object);

@@ -1,0 +1,6 @@
+Type=DLL
+Class=B185Holder; B185Holder.cls; {11112222-3333-4444-5555-6666777788A0}
+Module=DllBlocks; DllBlocks.bas
+Startup=""
+Command32=""
+Name="B185d"

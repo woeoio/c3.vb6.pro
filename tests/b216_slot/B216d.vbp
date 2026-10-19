@@ -1,0 +1,6 @@
+Type=Exe
+Module=Main; Main.bas
+Class=B216Impl; B216Impl.cls
+Class=B216Plain; B216Plain.cls
+Startup="Sub Main"
+ExeName32="B216d.exe"

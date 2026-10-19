@@ -251,6 +251,55 @@
         auto it = projClassNames_->find(Symbol::toLower(name));
         return it == projClassNames_->end() ? std::string() : it->second;
     }
+    // 账 #305 §B187 第二腿: 注入"在运行期 coclass 描述表里占一行"的类名名单 (小写)。
+    void setProjectCoclassNames(const std::unordered_set<std::string>* s) {
+        projCoclassNames_ = s;
+    }
+    // 「vb6_FindCoClassDesc("<类名>") 查不查得中」—— 这一问的**唯一**出口。
+    // 名单由 driver 用 Symbol::isCoClassTableEntry() 扫全部模块符号表建 (与建表那侧同一
+    // 判据、同一输入), 所以这里答"有"就是运行期真有。查不到的类**不许**装箱: 装箱出
+    // NULL 包装器 = 槽里一枚 Nothing, 比裸指针更坏 (§B216 第一百一十九刀量完照旧作数,
+    // 那一刀的归一把行内 New 那一臂也拉到这一问上来, 表外那一档两臂同答"原样")。
+    bool classHasCoClassDesc(const std::string& className) const {
+        return projCoclassNames_ && !className.empty()
+            && projCoclassNames_->count(Symbol::toLower(className)) > 0;
+    }
+    // 账 #305 §B189 第二档: 注入「本工程里被谁 Implements 过」的名单 (小写)。
+    void setProjectImplementedNames(const std::unordered_set<std::string>* s) {
+        projImplementedNames_ = s;
+    }
+    // 「这个名字在本工程里被当接口用过没有」—— 这一问的**唯一**出口。
+    // 只要有任何一枚类 Implements 它，按声明档答 TypeName 就是错的 (VB6 答实体的真身类名)，
+    // 那一族一律不折，留在原来问运行期的那一路。
+    bool classUsedAsInterface(const std::string& className) const {
+        return projImplementedNames_ && !className.empty()
+            && projImplementedNames_->count(Symbol::toLower(className)) > 0;
+    }
+
+    // ---- 账 #305 §B187 装箱腿的"读者那一问" ------------------------------------
+    // 「这枚 C 表达式现在装的是不是一枚 vb6_ComObject 包装器」—— 判据只问
+    // wrappedComVars_ 那一张登记表 那一站按「最后一次 Set 交的是不是包装器」登记 / 注销，站点不许各自抄。
+    // 三处读者都问它:
+    //   ① Fix 179b  `Set <typed 字段> = <装箱变量>` → 解包回裸实例 (原来就在问)
+    //   ② deliverToClassSlot  装箱变量交给**类形参槽**
+    //   ③ BinaryOp::Is  同一性比较 (Is 落的是 C `==`，两侧得同一档才答对)
+    // 只认**裸变量名 / me-> 字段**两形: 登记表跟的是变量，不是值；表达式 (调用结果、
+    // 取址、数组元素) 一律答"不是" —— 宁可少解包，也不要解错。
+    bool varHoldsComWrapper(const std::string& cExpr) const {
+        std::string nm = cExpr;
+        if (nm.rfind("me->", 0) == 0) nm = nm.substr(4);
+        if (nm.empty()) return false;
+        for (unsigned char ch : nm) {
+            const bool alnum = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9');
+            if (!alnum && ch != '_' && ch != '.') return false;
+        }
+        return wrappedComVars_.count(Symbol::toLower(nm)) > 0;
+    }
+    // 剥回裸实例 (RTL: vb6_ComObject_GetInstance 认 g_ComObjectVtable，其余交回 NULL)。
+    std::string unwrapComVarExpr(const std::string& cExpr) const {
+        return "vb6_ComObject_GetInstance((void*)" + cExpr + ")";
+    }
     // 账 #305 §B168/§B169: 工程级「类 → (标量数据字段 → 声明档)」表 (driver 预扫描).
     void setClassFieldKindMap(const std::unordered_map<std::string, std::unordered_map<std::string, Vb6Type>>* m) {
         classFieldKindMap_ = m;

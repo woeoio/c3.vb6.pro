@@ -38,6 +38,8 @@ public:
     // 缩进控制
     void indent() { indentLevel_++; }
     void dedent() { if (indentLevel_ > 0) indentLevel_--; }
+    // 账 #305 §B217: 站点登记临时量时把当前层号一起记下, 语句末只在同层落地 (见 boxTempsToClear_)
+    int indentLevel() const { return indentLevel_; }
 
     // 获取生成的代码
     std::string str() const { return oss_.str(); }

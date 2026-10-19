@@ -188,6 +188,8 @@ int32_t vb6_ho_variantToLong(const vb6_VARIANT* v) {
             return v->lVal;
         case vb6_vtSingle: case vb6_vtDouble: return (int32_t)v->dblVal;
         case VT_I8: return (int32_t)v->llVal;   /* 账 #305: 这一档以前落 default ⇒ 读回 0 */
+        case (vb6_vartype)VT_I1:  return (int32_t)v->sbVal;  /* ai/032 §6.9 */
+        case (vb6_vartype)VT_UI2: return (int32_t)v->usVal;  /* ai/032 §6.9 */
         case VT_UI4: return (int32_t)v->ulVal;  /* ai/032 §6.6: 无符号两档同格 */
         case VT_UI8: return (int32_t)v->ullVal;
         default: return 0;
@@ -200,6 +202,8 @@ double vb6_ho_variantToDouble(const vb6_VARIANT* v) {
         case vb6_vtSingle: case vb6_vtDouble: return v->dblVal;
         case vb6_vtInteger: case vb6_vtLong: case vb6_vtBoolean: return (double)v->lVal;
         case VT_I8: return (double)v->llVal;   /* 账 #305: 同上 */
+        case (vb6_vartype)VT_I1:  return (double)v->sbVal;  /* ai/032 §6.9 */
+        case (vb6_vartype)VT_UI2: return (double)v->usVal;  /* ai/032 §6.9 */
         case VT_UI4: return (double)v->ulVal;  /* ai/032 §6.6: 同上 */
         case VT_UI8: return (double)v->ullVal;
         default: return 0.0;

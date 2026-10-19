@@ -39,10 +39,14 @@
     for (auto* st : allSymTabs) {
     if (!st->moduleScope()) continue;
     for (auto& [key, sym] : st->moduleScope()->symbols()) {
-        if (sym->kind == SymbolKind::Class && !sym->isInterface) {
-            // BUG-4 fix: PublicNotCreatable(2) is visible but NOT externally creatable
-            // Only MultiUse(5)/SingleUse(3) should have ClassFactory entries
-            if (sym->instancing == VBInstancing::MultiUse || sym->instancing == VBInstancing::SingleUse) {
+        if (sym->kind == SymbolKind::Class) {
+            // 账 #305 §B187 第二腿: 「哪些档的类在表里占一行」这条判据搬进了
+            // Symbol::isCoClassTableEntry() —— 发码侧的装箱腿 (cgen_setlet_set_rhs.inc)
+            // 要先问"这类有没有 desc"，两边必须是同一把尺子，否则表里有而发码以为没有
+            // (或反之) 就又是一条静默漏档 (rev17 的 play78 缺 View/PopupMenu 那一族)。
+            // 原 BUG-4 口径: PublicNotCreatable(2) 可见但对外不可创建, 只有 MultiUse(5)/
+            // SingleUse(3) 应该有 ClassFactory 项; 接口宿主块没有实例。
+            if (sym->isCoClassTableEntry()) {
                 std::string lowerName = Symbol::toLower(sym->name);
                 if (seenCoClassNames.count(lowerName)) continue;  // 已处理, 跳过
                 seenCoClassNames.insert(lowerName);

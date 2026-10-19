@@ -90,6 +90,9 @@ int vb6_EnumNext(void* penum, vb6_VARIANT* outElem) {
         case VT_I2:     outElem->vt = vb6_vtInteger; outElem->iVal = varElem.iVal; break;
         case VT_I4:     outElem->vt = vb6_vtLong; outElem->lVal = varElem.lVal; break;
         /* ai/032 §6.6: 无符号两档 (缺档时 default 是把数值转 BSTR —— 不是答错而是换型)。 */
+        /* ai/032 §6.9: 源是真 VARIANT(cVal/uiVal), 槽是本仓 vb6_VARIANT(sbVal/usVal) —— 两侧成员名不同。 */
+        case VT_I1:     outElem->vt = (vb6_vartype)VT_I1;  outElem->sbVal = (int8_t)varElem.cVal; break;
+        case VT_UI2:    outElem->vt = (vb6_vartype)VT_UI2; outElem->usVal = varElem.uiVal; break;
         case VT_UI4:    outElem->vt = (vb6_vartype)VT_UI4; outElem->ulVal = varElem.ulVal; break;
         case VT_UI8:    outElem->vt = (vb6_vartype)VT_UI8; outElem->ullVal = varElem.ullVal; break;
         case VT_R4:     outElem->vt = vb6_vtSingle; outElem->fltVal = varElem.fltVal; break;
@@ -420,6 +423,8 @@ static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
         case VT_I8:    result.llVal = pv->llVal; break;
         /* ai/032 §6.6: 无符号两档与 VT_I8 同条 —— 缺档时 default 那段会把 ullVal
          * 当数组指针解 (与 §B145 那次同形的垃圾读)。原样带值过界。 */
+        case VT_I1:    result.sbVal = (int8_t)pv->cVal; break;   /* ai/032 §6.9: 源侧是真 VARIANT */
+        case VT_UI2:   result.usVal = pv->uiVal; break;        /* ai/032 §6.9 */
         case VT_UI4:   result.ulVal = pv->ulVal; break;
         case VT_UI8:   result.ullVal = pv->ullVal; break;
         case VT_DECIMAL:
@@ -661,6 +666,9 @@ void vb6_VariantPackBorrow(vb6_VARIANT v, VARIANT *out) {
         case VT_I8:       out->vt = VT_I8; out->llVal = v.llVal; break;
         /* ai/032 §6.6: 无符号两档按原档交给 COM (缺档时 default 交 VT_EMPTY —— 
          * 与 VT_I8 那条同一条严重度)。 */
+        /* ai/032 §6.9: 源侧是本仓 vb6_VARIANT(sbVal/usVal), 目标侧是真 VARIANT(cVal/uiVal)。 */
+        case (vb6_vartype)VT_I1:  out->vt = VT_I1;  out->cVal  = v.sbVal; break;
+        case (vb6_vartype)VT_UI2: out->vt = VT_UI2; out->uiVal = v.usVal; break;
         case (vb6_vartype)VT_UI4: out->vt = VT_UI4; out->ulVal = v.ulVal; break;
         case (vb6_vartype)VT_UI8: out->vt = VT_UI8; out->ullVal = v.ullVal; break;
         /* 账 #305 §B145: §B142 census 点名的那三格 —— Decimal / Currency / Date 以前都落 default

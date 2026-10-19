@@ -281,9 +281,40 @@
     void emitIfaceImplTables(Module& module);         // .c: 适配器 + 类侧槽表实例
     void emitIfaceNewInit(Module& module);            // .c: _New() 里回填 vt
     void trackIvrefLocalForRelease(const std::string& cName);  // B05: 登记局部接口变量
+    // 账 #305 §B218 (甲) 腿④: 工程类那一档的登记入口 + 两档共用的那条夹
+    void trackClassSlotForRelease(const std::string& cName, const std::string& clsName);
+    // 账 #305 §B218 (甲) 腿④ 第二道夹: 这一格的地址交给了外部 Declare ⇒ 出口不放手 (只撤类档)。
+    void dropClassSlotRelease(const std::string& expr);
+    void trackSlotForRelease(const std::string& expr, bool isView,
+                             const std::string& clsName);
     void emitIvrefScopeRelease();                     // B05: 过程出口发 Release
     std::string ivrefCType(const std::string& typeName);   // 空串 = 不是新式接口
     const IfaceView* ivLookupIface(const std::string& written);
+    // 账 #305 §B221/#449 (§B222): 「这一枚表达式的值**已经是接口视图薄指针**
+    // (vb6_ivref_<I>*)了吗」 —— 这一问只许住在这里。答「是」时给接口名，答「不是」
+    // 给空串。四个消费站点 (Set 目标侧 / Set 返回槽 / 成员访问接收者 / 实参) 都只问它，
+    // 别各写一遍「名字是不是接口」，那正是 #448 数出来的多主人病灶。
+    std::string ifaceViewOfExpr(const ASTNode& expr);
+    // B04 那条 vtable 发射 (`x->vt-><slot>(x, args)`) 的唯一作者：com_bind 与
+    // 「接收者是视图值的调用」那一站都调它 (账 #305 §B221 形②)。槽名解析不出来返回空串。
+    std::string ivrefVtableCall(const std::string& ifaceName, const std::string& member,
+                                const std::string& recv,
+                                const std::vector<std::string>& args);
+    // B06a 那条视图→视图的 QueryInterface 发射 (存旧 → QI → 覆盖 → 放手旧)，
+    // 由按名那一臂与 §B221 的调用表达式那一臂共用。
+    void emitIvrefQiSet(const std::string& target, const std::string& ifaceName,
+                        const std::string& valueExpr);
+    // 账 #305 §B218 (甲): 工程类形参登记的一处出口 (按名表 + 本过程形参名册)。
+    void registerClassFormal(const std::string& pLower, const std::string& clsName);
+    // 账 #305 §B218 (甲) 腿②③②': typed 工程类槽的「覆写 / 置空 / 写进出参槽」一位主人
+    // (valueExpr 传空串 = 置空; 与上面那位接口主人同形, 几条腿共用一条顺序。
+    //  outSlot = true: 目标在计数系统外 (ByRef 出参那一格) ⇒ 只补 claim, 不碰旧值)。
+    void emitClassSlotRefSet(const std::string& target, const std::string& className,
+                             const std::string& valueExpr, bool rhsTransferred, bool outSlot);
+    // 账 #305 §B218 (甲) 刀3: 「这一发右值是不是**已经带着一枚移交过来的引用**」—— 上面那位
+    // 主人手上「不 claim」那条臂的全部成因共用这一条问句（**三形**：裸名调用 / 成员调用 /
+    // 无括号的属性读；`New <类>` 那一发仍由调用点自己答）。问句只此一位，别在别处再答一遍。
+    bool rhsTransfersProjectRef(const ASTNode& expr);
     std::vector<const IfaceView*> ivImplementedIfaces(Module& module);
     Decl* ivFindImplMember(Module& module, const IfaceView& v, const IfaceSlotView& slot);
     // tB 委托式实现 (ai/022 B10): 本类把接口 v 整份转交给哪个持有字段 (无则 nullptr)
@@ -546,6 +577,13 @@
     // String / 推不出) 一律 Unknown ⇒ narrowCheckAssign 原样发, 与改前同形。
     Vb6Type narrowTargetTypeOf(Expr* target) const;
 
+    // 账 #305 §B184 (第七十五刀): 「这一档 VB 窄整型要套哪一枚范围闸、闸的位宽是多少」
+    // 的**唯一**答案处。返回 nullptr = 这一档不是窄整型 (调用方原样发)。
+    // 两位主人: ① 赋值路 narrowCheckAssign (还要按**源**宽决定套不套, 所以取 bits);
+    // ② COM 字段写回路的 let 腿 (cgen_com.cpp) —— 值是以 Variant 的 lVal 交回来的,
+    //   恒为 int32, 存进比它窄的那一档就会被 C 静默截断, 所以那一侧只问闸名。
+    const char* narrowCheckFnForVbType(Vb6Type t, int* bits) const;
+
     // P20-42: 窗体控件的**属性返回类型**。见 cgen_util_type.cpp 的 MemberAccessExpr
     // 分支: 那里对 `对象.成员` 的兜底是 lookupModule(memberName), 只按成员**裸名**
     // 查模块符号 —— 于是 `SSTab1.Tab` 会命中返回 BSTR 的内置函数 vb6_Tab 而被判成
@@ -599,9 +637,49 @@
     //   折成哪一种 CStr      = wrapToBSTR (全仓唯一的 数值→BSTR 形状出口)。
     // 原来第二、三问还有另一位主人 = Fix 108c 那张 13 枚名单 (在 argList 拼成串之后做文本替换),
     // 本刀整段撤掉。
+    // 账 #305 §B176 (第六十七刀): 「没有形参表的那一族, 第 pos 位要什么 C 档」收成**一枚出口**
+    // (builtinNoParamTableFormalCType, 按**写出来的** arity 数位号), 上面那枚「是不是字符串位」
+    // 降级成它在 BSTR 档上的投影; 读者 = 这一位出口自己 (投影) + arg_variant 那条臂 (Fix 038b-2),
+    // 而 `getRuntimeParamCType` 那张按 callee 名登的 C 签名表**不再答位号** —— 它的 InStr 行是
+    // 按 VB 两参形登的, 按发码位号问就会把 int32_t 的 start 位答成 BSTR (§B176 形②)。
     bool typeTakesImplicitCStr(Vb6Type t) const;
+    std::string builtinNoParamTableFormalCType(const std::string& callee, size_t argc, size_t pos,
+                                               Vb6Type firstArgType) const;
+    // 账 #433 §B207 (第一百零五刀): 「这一位要的是不是**日期**」—— 与上面那一问**刻意分开**。
+    // 为什么不能从 C 签名反推(§B174 教训① 的同一形状): C 侧全叫 `double`，可引擎对文本实参的
+    //   口径按 builtin 分两种 —— `FormatDateTime("46027",0)` = 2026/1/5(纯数字文本按序列号那天)，
+    //   而 `Sqr("4")` = 2、`Pow("2",3)` = 8 都是**数值折算**。同一个 `double` 形参，两种问法。
+    //   所以这一问自带名单，不许拿 `rtParamType == "double"` 当答案。
+    bool builtinNoParamTableFormalIsDate(const std::string& callee, size_t argc, size_t pos) const;
+    // 账 #434 §B208 (第一百零六刀): 「这一位要的是不是**数值**(文本实参按数字折算)」
+    //   —— 与上面那一问**同形而不同答**。同形: C 侧也都是 double, 同样不许照签名反推。
+    //   不同答: 判别格就是引擎读数 —— 同一枚 `DateAdd` 的两个位给出两种问法:
+    //     DateAdd("d", "3", "2026/1/5") = 2026/1/8  ⇒ 位 1(number) 走**数值**折算(3 天)
+    //     DateAdd("d", 3,   "2026/1/5")            ⇒ 位 2(date)   走**日期**解析
+    //   而 Sqr("2026/1/5") = err13 ⇒ 数值那一族**不许**复用 vb6_CDate(会把日期串折成序列号)。
+    bool builtinNoParamTableFormalWantsNumericFold(const std::string& callee, size_t argc, size_t pos) const;
     bool builtinNoParamTableStringSlot(const std::string& callee, size_t argc, size_t pos,
                                        Vb6Type firstArgType) const;
+    // 账 #305 §B177 (第六十八刀): 同一张表的**第三问** —— 「这一位是不是那枚 _Generic 宏的分派位」。
+    // 位号只在 builtinNoParamTableDispatchSlot 里数一遍, 上面「第 pos 位要什么档」与这一问都是它的
+    // 投影: needle 那一位对**数值**实参答 BSTR (要折, §B175), 对 **Variant** 实参要**裸交**
+    // (宏自己选 vb6_InStrVar 解包并 free) ⇒ 一枚 C 档串表达不了这一位, 六十七刀就是被这一维绊住的
+    // (它按「裸交」把整格答成空, 数值那一半跟着掉了, `InStr(2, s, 7)` 当场 AV)。
+    // 读者 = arg_variant 那条臂一枚 (Fix 038b-2), 站点数不许增加。
+    size_t builtinNoParamTableDispatchSlot(const std::string& callee, size_t argc,
+                                           Vb6Type firstArgType) const;
+    bool builtinNoParamTableVariantMayStayRaw(const std::string& callee, size_t argc, size_t pos,
+                                              Vb6Type firstArgType) const;
+    // 账 #305 §B180 (第六十九刀): 「这一位要不要收**整枚槽**而不是收串」—— 一枚出口三件一起答
+    // (callee + 位号 + **实参本身是不是槽**)，读者**恰好两枚**：arg_variant 用它撤回 Variant→BSTR
+    // 的解包，builtin_fixup 用它把 callee 换成收槽的那枚出口 (`vb6_StrPtr` → `vb6_StrPtrVar`)。
+    // 为什么不并进上面那张按位号答档的表: `vb6_StrPtr(` 在语料里 1720 次调用有 1478 次交的是
+    // **普通 String 变量** (§B180 的普查) ⇒ 无条件按 callee+位号答 `vb6_VARIANT` 会把那 1679 处
+    // 打成 BSTR 进 vb6_VARIANT 形参 = C2440；这一问必须**看实参**。
+    // 只认 AST 那一半 (`isDefinitelyVariantExpr`)：文本那一半 (`cExprIsVariant`) 今天还含
+    // 「裸 COM 结果」一类形状，那些形状下的解包是 Fix 113c 的活，没量过就不撤。
+    bool builtinWantsRawSlotFromVariant(const std::string& callee, size_t argc, size_t pos,
+                                        Expr& actual) const;
 
     // 账 #305 §B147: 「这枚 C 表达式是不是整只 vb6_VARIANT 槽」的 **AST 那一半** ——
     // 与上面 cExprIsVariant (文本前缀表) 合起来回答同一个问句。为什么必须分两头供出：
@@ -671,6 +749,27 @@
     // clsPtr 为空 (= 不是类槽) 时原样返回，所以调用点写成 argVal = deliverToClassSlot(...)
     // 是不分支的一句，不必每个站点各写一遍"是类槽就跳过装箱"。
     std::string deliverToClassSlot(const std::string& clsPtr, const std::string& argVal) const;
+
+    // 账 #305 §B187 第四腿: 与 cParamClassPtrType 对称的另一档 —— 形参声明的是**泛对象槽**
+    // (VB 写 `As Object`, C 侧是 void* 里装 IDispatch*) 时返回 "void*", 其余返回空串。
+    // 判据与那边同一条纪律: 只问定义侧那份映射 (cTypeForDeclaredTypeName → mapTypeRef),
+    // 不拿 p.type 当第二判据 (rev13 那条教训在这一族里一字不改地适用)。名字也要问 =
+    // 只认 Object 关键字本身: `As IPictureDisp` / typelib 里的 coclass 名同样映射成 void*,
+    // 但那一档要的是**接口指针**, 塞一枚 IDispatch 包装器反而是另一种坏指针, 不在本腿范围。
+    std::string cParamLateSlotType(const ParameterInfo& p);
+
+    // 账 #305 §B187 第五腿: ByRef 泛对象形参那一座桥 —— 调用前就地装箱、调用后剥回。
+    // 判据、所有权与两条负条件全在定义处 (cgen_base_type.cpp)。站点只有把实参按
+    // `&<名字>` 交付那一支能调它 (实参必须自己拥有存储，否则写回没处落)，两处
+    // (位置实参 / 命名实参) 同问这一句，别处不许再抄一份。
+    bool bridgeByRefLateSlotArg(const ParameterInfo& p, const std::string& slot,
+                                const ASTNode* actualAst);
+
+    // 账 #305 §B187 装箱腿的**唯一发码处**: 把一枚工程类实例交给泛对象槽 (void* 里该装
+    // IDispatch*) 时换成借用型包装器。三处站点都问它 = Set 那一站 (目标槽) + 位置实参
+    // 那一站 + 命名实参那一站 (形参槽) —— 条件不齐时原样返回, 所以站点写成一句不分支
+    // (与 deliverToClassSlot 同形)。
+    std::string boxIntoLateSlot(const std::string& argVal, const ASTNode* argAst) const;
 
     // <vbeclipse> rev7: 配套 deliverToClassSlot 的**落临时**侧名生成器。ByRef 类形参
     // 收到右值实参时必须先落局部再取址 (&(右值) = C2102)。名里只保留标识符字符
@@ -884,6 +983,21 @@
                              Vb6Type& outType, bool requireBare) const;
     bool hostPseudoIsNumeric(const std::string& pseudoObj,
                              const std::string& memberName) const;
+
+    // Fix 296 / 4a: `Extender.<成员>` 作**右值**时的实例感知入口 —— 写侧 (3a) 的镜像。
+    //
+    // 3a 把写拉进了通道, 读还发裸全局。`Property Get Left() As Single` 体内那句
+    // `Left = Extender.Left` 生成 `vb6_ret_Left = vb6_Extender_Left;` —— 读的是
+    // push/pop 一直在同步的那枚副本, 而权威值在 `vb6_UCRec.ext*`。
+    //
+    // 入参是**发射出去的符号** (hostPseudoRtlSymbol 的产物), 闸门是它的 `vb6_Extender_`
+    // 前缀 —— 不是 hostPseudoBareName(它不覆盖 Extender 成员, 拿它当闸门会静默漏掉,
+    // 3a 踩过一次)。类型答案只从 kHostPseudoRows 问; 答不出来的行 (对象成员
+    // Container/DragIcon 与方法行) 原样返回, 不硬换。
+    //
+    // 返回**数值与字符串两个入口之一**而不是一个 void*: 读要参与算术和字符串表达式,
+    // 单一 void* getter 会把每个调用点都变成强制转换, 比原来更脏。
+    std::string extenderMemberReadExpr(const std::string& rtlSymbol) const;
 
     // 账 #257 第十九层: `With UserControl` 体内 `.成员` 的**内建**判定。
     //

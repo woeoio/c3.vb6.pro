@@ -100,6 +100,8 @@
         cgen.setInterfaceAllImplementers(&ifaceAllImplementersMap);  // Fix <vbeclipse>: 接口全部实现类 (桩分派用)
         cgen.setClassChainRegistry(&classes_);  // tB 类继承 (B07b): stage 2.8 只读链登记表
         cgen.setProjectClassNames(&projectClassNames);  // 工程级类名表 (不受同名成员遮蔽)
+        cgen.setProjectCoclassNames(&projectCoclassNames);  // 账 #305 §B187: 装箱腿问"这类在 coclass 表里有没有一行"
+        cgen.setProjectImplementedNames(&projectImplementedNames);  // 账 #305 §B189 第二档: 接口视图那一族不许按声明档折 TypeName
         cgen.setInterfaceRegistry(&ifaces_);  // tB Interface 契约 (B04): stage 2.7 只读登记表
         cgen.setInterfaceIidMap(&ifaceIds_);  // tB 接口 IID 唯一出口 (B13c): 同一个 Pass E 建的表
         cgen.setViaRegistry(&vias_);          // tB 委托式实现 (B10): stage 2.7 Pass D 裁决表

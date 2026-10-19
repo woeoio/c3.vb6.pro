@@ -46,6 +46,12 @@ typedef struct vb6_VARIANT {
         void* pdispVal;
         int16_t boolVal;
         uint8_t bVal;
+        /* ai/032 §6.9 收口: SByte / UInteger 两档的装箱载体。
+         * 与 bVal / iVal **同槽**(union 共享存储) ⇒ sizeof(vb6_VARIANT) 逐平台不变,
+         * 与 Windows VARIANT 的 x86=16 / x64=24 布局仍然对齐(OLE 的 VT_I1 就是那一字节,
+         * VT_UI2 就是那一短字, 只是有符号/无符号之分)。 */
+        int8_t  sbVal;   /* VT_I1  (SByte, 8-bit signed)   */
+        uint16_t usVal;  /* VT_UI2 (UInteger, 16-bit unsigned) */
         int64_t cyVal;
         int64_t llVal;  /* Fix 133x: VT_I8 (LongPtr 64位指针/句柄) 存回用 */
         uint32_t ulVal;  /* ai/032 §6.6: VT_UI4 (ULong 装箱载体, 与 lVal 同槽) */
@@ -202,6 +208,25 @@ static inline vb6_VARIANT vb6_VariantArray(void* _arr) {
 static inline vb6_VARIANT vb6_VariantByte(uint8_t val) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
     v.vt = vb6_vtByte; v.bVal = val; return v;
+}
+
+// ai/032 §6.9 收口: 小整型两档的 Variant 装箱 (VT_I1 / VT_UI2)。
+// 为什么这两档以前答不对: `vb6_VariantFromValue` 的 _Generic 按 **C 类型**分派, 而
+//   SByte    = int8_t   = char         -> 命中既有的 `char:` 档 -> vb6_VariantLong = VT_I4
+//   UInteger = uint16_t = unsigned short -> 命中既有的 `wchar_t:` 档 -> vb6_VariantLong = VT_I4
+// (MSVC C 里 wchar_t 就是 unsigned short, 所以那一档本来在接它; 见上面 VT_UI4 那段
+//  注释里「别再加 unsigned short 分支, 会 C7700」—— 那个约束依然成立, 所以这里
+//  **不去碰 _Generic**, 而是让唯一权威 boxToVariant 直接点名调这两枚出口。)
+// 值没丢(8/16 位塞得进 VT_I4), 丢的是**类型身份**: TypeName 答 "Long"、VarType 答 3。
+// 与 ULong/VT_UI4、ULongLong/VT_UI8 同一口径 —— 那两档的注释写着「答 "Long" 才是误导」。
+static inline vb6_VARIANT vb6_VariantSByte(int8_t val) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    v.vt = (vb6_vartype)VT_I1; v.sbVal = val; return v;
+}
+
+static inline vb6_VARIANT vb6_VariantUInteger(uint16_t val) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    v.vt = (vb6_vartype)VT_UI2; v.usVal = val; return v;
 }
 
 // Fix <vbeclipse>: vb6_ReleaseObject 的反向操作, 定义在 vb6com/ (与 vb6_ReleaseObject

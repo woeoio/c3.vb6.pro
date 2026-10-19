@@ -94,22 +94,40 @@ if (Test-Path -LiteralPath $ctrl) {
 }
 
 # ---- D2: 调用点形状与条数 ----
-# 4 处: GetControlHDC / ControlMeasureTextPx / ControlLine
+# 3 处: GetControlHDC / ControlMeasureTextPx
 #        + vb6forms_draw.c 的 vb6_DrawAcquire (账 #234: 绘图方法家族 PSet/Line/Circle/Point/Cls
 #        整族都从这一条拿, 不再自己写第二份口径)
 # （账 #196 第二条把文字量也接到同一处口径上；账 #221 把 Line 接进来 —— 绘图面每一型都只从这一处拿 DC）
 # 账 #239 让这一数从 6 降到 4: 控件那户的 Print/Cls 以前各问一次权威, 现在它们只是码头,
 # 真正拿 DC 的那一趟住在 vb6_Form_Print / vb6_Form_Cls 里, 从 vb6_DrawAcquire 那一条走。
+# 账 #232⑤ 让这一数从 4 降到 3: PictureBox 的 Line 也变成同一族 —— vb6_ControlLine 转发
+# vb6_Form_Line, 拿 DC 那一趟住在绘图家族里, 与 Form/Printer 走的是**同一条**路。
+# (以前 PictureBox 一边走 ControlDrawDC、Form 一边走 DrawAcquire = 同一块画布两套取 DC 的口径。)
+# D2b 把"转发"这件事钉住: 上面那个数掉下来不是 Line 自己去拿了 DC, 而是它不再自己拿。
 $acq = @($rtl | Where-Object { $_.File -eq "vb6forms_draw.c" -and $_.Text -match 'vb6_ControlDrawDC\s*\(' })
 if ($acq.Count -lt 1) {
     $bad += "D2 vb6forms_draw.c no longer goes through the authority (账 #234 那一处合成又分家了)"
 }
 $calls = @($rtl | Where-Object { $_.Text.Contains("= vb6_ControlDrawDC(") })
-if ($calls.Count -ne 4) {
+if ($calls.Count -ne 3) {
     $bad += ("D2 call sites of the drawing-DC authority = " + $calls.Count +
-             " (want exactly 4: GetControlHDC / ControlMeasureTextPx / ControlLine / draw-acquire;" +
-             " Print/Cls reach it through draw-acquire since 239) -> " +
+             " (want exactly 3: GetControlHDC / ControlMeasureTextPx / draw-acquire;" +
+             " Print/Cls/Line reach it through draw-acquire since 239 / 232⑤) -> " +
              (($calls | ForEach-Object { $_.File + ":" + $_.Line }) -join " | "))
+}
+# D2b: PictureBox.Line 只许是**转发**那一枚单行壳 —— 自己再写一份取 DC / 认 has 位 / 挪笔位,
+# 就是同一块画布第二个主人 (本线第四次栽在"两条码头各自硬编码"那一味上)。
+$ctrlTxt2 = [System.IO.File]::ReadAllText($ctrl)
+$lineBody = [regex]::Match($ctrlTxt2, 'void\s+vb6_ControlLine\s*\([\s\S]*?\r?\n\}')
+if (-not $lineBody.Success) {
+    $bad += "D2b vb6_ControlLine body not found in vb6forms_ctrl.c"
+} else {
+    if ($lineBody.Value -notmatch 'vb6_Form_Line\s*\(') {
+        $bad += "D2b vb6_ControlLine no longer forwards to vb6_Form_Line -> PictureBox got a second drawing implementation (has bits / pen / scale drift apart again)"
+    }
+    if ($lineBody.Value -match 'vb6_ControlDrawDC\s*\(') {
+        $bad += "D2b vb6_ControlLine takes its own DC again -> the drawing family has two ways of getting one"
+    }
 }
 
 # ---- D3: 出口自己不许抢 DC ----

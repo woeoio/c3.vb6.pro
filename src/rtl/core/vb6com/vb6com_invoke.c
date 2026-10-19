@@ -400,6 +400,11 @@ void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
                 case 0: eres->vt = VT_BSTR; eres->bstrVal = SysAllocString(*(BSTR*)efp); break;
                 case 1: eres->vt = VT_R4;   eres->fltVal = *(float*)efp; break;
                 case 2: eres->vt = VT_I2;   eres->iVal = *(int16_t*)efp; break;
+                // 对象成员 (kind 4): 传**指针本身**, 不 SysAllocString。此前它们报的是
+                // kind 0 = BSTR, 于是这条分支去读对象结构体的头当 BSTR 长度 —— 会炸的读。
+                // 语料里 `With UserControl.Extender` 只碰 Height/Left/Top/Width, 这条分支
+                // 对对象成员今天没有覆盖, 是按字段类型 (void*) 摆平的 (Fix 296 / 3b 前置)。
+                case 4: eres->vt = VT_DISPATCH; eres->punkVal = (IUnknown*)(*(void**)efp); break;
                 default: eres->vt = VT_I4;  eres->lVal = *(int32_t*)efp; break;
             }
         }
@@ -540,6 +545,11 @@ void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
                                    ? SysAllocString(v.bstrVal) : NULL; break;
                 case 1: *(float*)efp = (float)vb6_VariantToDouble(v); break;
                 case 2: *(int16_t*)efp = (int16_t)vb6_VariantToDouble(v); break;
+                // 对象成员 (kind 4): 原样搬指针, **不** SysAllocString (不接管所有权),
+                // 也不走 int32 截断 (x64 上把 64 位指针砍成 32 位)。
+                // 同 ComGetProp 那条: `With UserControl.Extender` 对对象成员今天没有语料覆盖,
+                // 这是按字段类型 (void*) 摆平的 (Fix 296 / 3b 前置)。
+                case 4: *(void**)efp = (void*)v.punkVal; break;
                 default: *(int32_t*)efp = (int32_t)vb6_VariantToDouble(v); break;
             }
         }

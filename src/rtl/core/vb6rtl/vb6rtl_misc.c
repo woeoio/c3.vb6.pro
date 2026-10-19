@@ -293,11 +293,16 @@ vb6_VARIANT vb6_CDec(vb6_VARIANT v) {
         /* ai/032 §6.6: 64 位整数与无符号两档按整数进 DECIMAL (以前整段落 default → 0)。
          * 负数取绝对值用补码技巧 (INT64_MIN 的 -i64 是 UB)。 */
         case (vb6_vartype)VT_I8:
+        /* ai/032 §6.9: 小整型两档也走这条(8/16 位, 直接扩宽即可, 位模式不截断)。 */
+        case (vb6_vartype)VT_I1:
+        case (vb6_vartype)VT_UI2:
         case (vb6_vartype)VT_UI4:
         case (vb6_vartype)VT_UI8: {
             uint64_t mag; int neg = 0;
             if (v.vt == (vb6_vartype)VT_UI4)      { mag = (uint64_t)v.ulVal; }
             else if (v.vt == (vb6_vartype)VT_UI8) { mag = v.ullVal; }
+            else if (v.vt == (vb6_vartype)VT_I1)  { int64_t s8 = (int64_t)v.sbVal; neg = (s8 < 0); mag = neg ? ~(uint64_t)s8 + 1u : (uint64_t)s8; }
+            else if (v.vt == (vb6_vartype)VT_UI2) { mag = (uint64_t)v.usVal; }
             else { int64_t i64 = v.llVal; neg = (i64 < 0); mag = neg ? ~(uint64_t)i64 + 1u : (uint64_t)i64; }
             vb6_VARIANT_DECVAL(result).Lo32  = (uint32_t)(mag & 0xFFFFFFFF);
             vb6_VARIANT_DECVAL(result).Mid32 = (uint32_t)((mag >> 32) & 0xFFFFFFFF);

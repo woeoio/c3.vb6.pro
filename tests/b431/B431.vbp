@@ -1,0 +1,4 @@
+Type=Exe
+Name="B431App"
+Module=B431Main; B431Main.bas
+Startup="Sub Main"

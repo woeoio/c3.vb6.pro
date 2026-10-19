@@ -126,6 +126,17 @@
         }
     }
 
+    // 账 #305 §B216 格② (#404): `Set <Variant 槽> = <工程内实例>` 这一站以前**连表都不问** ——
+    // 裸实例指针直接交给下面的 _Generic, 指针臂把它投成对象档。第一百一十八刀的真跑读数
+    // (E03/E11/E15, .build/k820out/): vt=9 看着像 VT_DISPATCH 而 pdispVal 是一枚裸 `vb6_cls_X*`
+    // ⇒ TypeName 答 "Object"、晚绑定 stderr `vb6_ComCall: method "Twice" not found` + 空答。
+    // 现在与泛对象槽问**同一位主人** (唯一发码处 boxIntoLateSlot): 装箱成功交回的是包装器 (void*),
+    // 下面那一站的 _Generic 正好走 vb6_VariantObject = 真 IDispatch; 交回原样的形态 (认不出工程类 /
+    // 值自己就是槽 / 宿主句柄 / 已剥壳) 一字不变。
+    if (targetIsVariant && node.value) {
+        value = boxIntoLateSlot(value, node.value.get());
+    }
+
     // Fix 051: Set 语句中 void* → vb6_VARIANT 包装
     // 当 LHS 是 Variant 变量 (如 vb6_ret_Xxx, Dim x As Variant) 而 RHS 是
     // void* (对象指针, 如 vb6_ComCallObject, 类字段访问, vb6_VariantToObjectVal 等) 时,
@@ -188,36 +199,81 @@
     // 2026-09-21 CI VBMAN cTlsSocket 实证). void* 目标的表示是 IDispatch*
     // (vb6_ComCall 解 lpVtbl / vb6_ReleaseObject Release), 不是 VARIANT*;
     // 不能用 vb6_ComPack_<X>() (返回 VARIANT*, 仅作 COM 实参).
-    // 仅 void* 目标包装; typed 目标保持裸指针; Variant 走上方 _Generic 路径.
+    // ⚠ 账 #305 §B216 格①: 这一句**发码**已经搬进唯一发码处 boxIntoLateSlot (cgen_base_type.cpp),
+    // 那一形认得 New 就交拥有型; typed 目标照旧保持裸指针, Variant 目标走上面格② 那一站。
     bool fix179bUnwrapped = false;
     {
-        // value 形如 "(vb6_cls_<X>_New())"
-        std::string bare179;
-        if (value.size() > 16 && value.compare(0, 9, "(vb6_cls_") == 0
-            && value.compare(value.size() - 7, 7, "_New())") == 0) {
-            bare179 = value.substr(9, value.size() - 16);
-        }
-        if (!bare179.empty()
-            && bare179.find_first_not_of(
-                   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
-                   == std::string::npos
-            && !targetIsVariant) {
-            bool targetIsCom179 = false;
+        // 「这枚目标槽是不是后期绑定的泛对象槽 (void* 里该装 IDispatch*)」——
+        // 唯一发码处与登记表那一问**同一问**，所以收成一条 lambda 问一次:
+        //   me-> 字段 → classVoidFieldMap_ (driver 预扫描, 含 As Object / As New)
+        //   其余      → knownObjectVars_   (本过程登记过的晚绑定变量/参数)
+        auto lateBoundSlotTarget = [&]() -> bool {
             if (target.rfind("me->", 0) == 0) {
-                if (classVoidFieldMap_) {
-                    auto itV179 = classVoidFieldMap_->find(moduleName_);
-                    if (itV179 != classVoidFieldMap_->end()
-                        && itV179->second.count(targetLower)) {
-                        targetIsCom179 = true;
-                    }
-                }
-            } else {
-                targetIsCom179 = knownObjectVars_.count(targetLower) > 0;
+                if (!classVoidFieldMap_) return false;
+                auto itV = classVoidFieldMap_->find(moduleName_);
+                return itV != classVoidFieldMap_->end()
+                    && itV->second.count(targetLower) > 0;
             }
-            if (targetIsCom179) {
-                value = "(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc(\""
-                      + bare179 + "\"), (void*)" + value.substr(1, value.size() - 2) + ")";
-                wrappedComVars_.insert(targetLower);
+            return knownObjectVars_.count(targetLower) > 0;
+        };
+
+        // 进站时的值 (下面几条臂会改写 value, 登记表那一问要吃**原样**那一枚)
+        const std::string rawSrcForReg = value;
+
+        bool wrappedBy179a = false;   // 行内 New 那一形交回**拥有型**包装器
+        bool boxedHere = false;       // 装箱腿: 借用型包装器
+        // 账 #305 §B216 格①: 两臂归一 —— Fix 179a 原来在这一处手抄的
+        // `(vb6_cls_<X>_New())` 文本判据与那句拥有型发码一起搬进了唯一发码处 boxIntoLateSlot
+        // (它按同一形认出新实例、交拥有型, 其余交借用型), 站点这一处只剩**一问**:
+        // 这枚目标槽是不是后期绑定的泛对象槽。表外那一档 (工程类不占运行期 coclass 表那行)
+        // 两臂现在也答同一个: 交**原样** —— 台账 #443 原先写的「归一成交 Nothing」已由本机
+        // A/B 推翻, 两处实物与理由记在 cgen_base_type.cpp 那一格 (尺 .build/k842_ab.py)。
+        if (!targetIsVariant && node.value && lateBoundSlotTarget()) {
+            value = boxIntoLateSlot(value, node.value.get());
+            // 下面那张登记表要问「这一站刚交的是不是包装器」: 唯一发码处交出的只有这两枚形状
+            // (前缀判据用 rfind(…, 0), 不写长度字面量 —— 那一族的坑是恒假也不报错)。
+            boxedHere = value.rfind("(void*)vb6_ComObject_FromBorrowedInstance(", 0) == 0;
+            wrappedBy179a = value.rfind("(void*)vb6_ComObject_FromInstance(", 0) == 0;
+        }
+
+        // 登记表的口径: wrappedComVars_ 记的是「这个名字**最后一次** Set 进去的是不是
+        // 一枚包装器」—— 只有那一次交的是包装器才许登记，交了别的东西 (裸实例 / 外部
+        // IDispatch / Nothing) 一律注销。收不拢就会留一枚过期答案给三处读者:
+        //   Set o = New Foo          → 登记 (179a 交的是包装器)
+        //   Set o = CreateObject(…)  → 这一站既不装箱也不注销 ⇒ 表里还挂着"o 装着包装器"
+        //   If o Is Nothing          → 拿着旧答案去 GetInstance 一枚活着的外部 IDispatch
+        //                              ⇒ 认不出 vtable ⇒ 交回 NULL ⇒ **真对象被判成 Nothing**
+        // 原来只有 `Set x = Nothing` 一条注销, 那本来就是这条规则的一个特例。
+        // 复制 (`Set v2 = v1`, v1 装着包装器) 也算"最后一次交的是包装器" —— 槽里换的
+        // 就是同一枚指针，不登记会让读者② / ③ 在 v2 上漏一次剥壳。
+        if (!targetIsVariant) {
+            bool holdsWrapper = wrappedBy179a || boxedHere
+                || (lateBoundSlotTarget() && varHoldsComWrapper(rawSrcForReg));
+            if (holdsWrapper) wrappedComVars_.insert(targetLower);
+            else              wrappedComVars_.erase(targetLower);
+        } else {
+            // Variant 槽里的值是 vb6_VARIANT 那份存储，不是裸包装器指针 —— 名字不许进
+            // 登记表 (否则读者② / ③ 会把它当指针剥壳)。`Set v = Nothing` 那半直译自这里。
+            wrappedComVars_.erase(targetLower);
+        }
+
+        // 账 #305 §B187 装箱腿的读者①: Set <typed 工程类**局部/形参**目标> = <装箱过的
+        // 泛对象变量> → 剥回裸实例。Fix 179b 只接了 me-> 字段那一格 (且限类模块), 局部
+        // 那一格漏着: 装箱腿把这枚变量的内容从裸实例换成了包装器, 原样赋给 typed 目标
+        // 就是把包装器当实例用 (读字段整排错位)。判据问 varHoldsComWrapper (唯一那张
+        // 登记表), 目标类名问 knownClassVars_ (与 Fix 084g / deliverToClassSlot 同一条)。
+        {
+            std::string srcBoxed = value;
+            if (srcBoxed.size() >= 2 && srcBoxed.front() == '(' && srcBoxed.back() == ')') {
+                srcBoxed = srcBoxed.substr(1, srcBoxed.size() - 2);
+            }
+            if (!targetIsVariant && varHoldsComWrapper(srcBoxed)
+                && target.rfind("me->", 0) != 0) {
+                auto itTgtCls = knownClassVars_.find(targetLower);
+                if (itTgtCls != knownClassVars_.end() && !itTgtCls->second.empty()) {
+                    value = "(vb6_cls_" + cIdent(itTgtCls->second) + "*)"
+                          + unwrapComVarExpr(srcBoxed);
+                }
             }
         }
         // Fix 179b: Set <typed工程类目标> = <179a包装的Object变量> → 解包回裸实例
@@ -230,11 +286,10 @@
             && !src179.empty()
             && src179.find_first_of(" ()+*/,") == std::string::npos
             && !targetIsVariant) {
-            std::string srcLower179 = src179;
-            std::transform(srcLower179.begin(), srcLower179.end(), srcLower179.begin(), ::tolower);
-            std::string srcField179 = srcLower179;
-            if (srcField179.rfind("me->", 0) == 0) srcField179 = srcField179.substr(4);
-            if (wrappedComVars_.count(srcField179)) {
+            // 账 #305 §B187: 「这枚源变量此刻装着包装器吗」收成一条问句
+            // (varHoldsComWrapper) —— 别名复制、类槽实参交付、`Is` 同一性那三站问的
+            // 就是同一句话，这里不再手抄「lowercase + 剥 me-> + 查表」那一段。
+            if (varHoldsComWrapper(src179)) {
                 std::string tgtClass179;
                 if (classTypedFieldMap_) {
                     auto itT179 = classTypedFieldMap_->find(moduleName_);
@@ -254,10 +309,8 @@
                 }
             }
         }
-        // Set Nothing 清除跟踪
-        if (value == "NULL" || value == "0") {
-            wrappedComVars_.erase(targetLower);
-        }
+        // (原来这条 "Set Nothing 清除跟踪" 已并入上面那条"最后一次 Set 交的是不是包装器"
+        //  —— Nothing 那一形本来就落在它的 else 分支上，两条并着就是一处问。)
     }
 
     if (!fix179bUnwrapped) {
@@ -268,13 +321,67 @@
         // 本条把两条路径并到 vb6_VariantAssign (Clear + 深拷贝 / AddRef)。
         // 实测 List.cls: `Set m_Items(i) = m_Items(i - 1)` 之后
         // `Set m_Items(i - 1) = Nothing` 会把两只槽共用的那只 BSTR 放掉。
+        /* Fix 296 / 3b 最后一格: Set 语句的**右值**那一问同样要过实例入口。
+           `Property Get Container` 的返回槽那句**也是 Set 语句** —— 行尾那个标记就是证据
+           (目标侧是 vb6_ret_Container, 所以上面那道目标闸正确地没碰它, 但右值
+           `Extender.Container` 还是那枚裸全局)。ComCtlsDemo 实测 66 处。
+           换道放在发码**之前**, 下面 targetIsVariantArraySlot 那一支的 VariantAssign
+           包装、以及写侧那一支的 (void*)(intptr_t) 都照旧套在外面 —— 与 4a 同款。 */
+        value = extenderMemberReadExpr(value);
         bool targetIsVariantArraySlot =
             (target.compare(0, 7, "VB6_SA_") == 0
              && target.find("(vb6_VARIANT,") != std::string::npos);
         if (targetIsVariantArraySlot) {
             c_.emitLine("vb6_VariantAssign(&" + target + ", " + value + ");  /* Set */");
+        } else if (target.rfind("vb6_Extender_", 0) == 0) {
+            /* Fix 296 / 3a 的**镜像**, 但走的是**另一条**发码路径: Property Set 存取器体
+               (`Public Property Set Container(ByVal Value As Object)`) 的那句赋值由
+               visit(SetStmt&) 发出, 不是 visit(AssignmentStmt&) —— 所以 3a 那道闸
+               (cgen_assign_host_pseudo.inc) 压根够不着, 66 处
+               `vb6_Extender_Container = Value;` (line-tail Set marker not pasted: it would close this comment early) 一路活到今天。
+               成员名直接取发射符号的后缀 = 表里那一行的 rtl 列, ExtenderField 按
+               _wcsicmp 匹配, 所以 `vb6_Default` 那行 name/rtl 不同拼法也对得上。 */
+            c_.emitLine("vb6_UC_SetExtenderMember(L\""
+                        + escapeWideCString(target.substr(std::string("vb6_Extender_").size()))
+                        + "\", (void*)(intptr_t)" + value + ");"
+                        "  /* Extender.<prop> = v (per-instance, Set stmt) */");
         } else {
-            c_.emitLine(target + " = " + value + ";  /* Set */");
+            // 账 #305 §B218 (甲) 腿②: 目标是一格 typed 工程类槽 ⇒ 走那位主人。
+            // 类名两问按 #408 定的次序排: 先问 AST (作用域感知), 落空才问按名那张表。
+            // 拿不到类名、或槽是**下标/调用形态** (`VB6_SA_*(...)` / `dict(key)`) 时维持
+            // 今天那条裸拷贝: 那种形状里 target 出现三次 = 下标算术求值三次, 而「下标里的
+            // 副作用算不算一次」这一问本刀没有答案, 不猜 (已在册, 与腿⑤ 同批开格)。
+            std::string clsOfSlot = node.target ? inferClassTypeOfExpr(*node.target)
+                                                : std::string();
+            if (clsOfSlot.empty()) {
+                auto itSlot = knownClassVars_.find(targetLower);
+                if (itSlot != knownClassVars_.end()) clsOfSlot = itSlot->second;
+            }
+            // 账 #305 §B218 (甲) 腿②': 目标是**出参槽** `(*p)` (ByRef 形参那座桥的写回站)。
+            // 写进去的那一枚由本过程一位局部持有, 而腿④ 会在过程出口放手它 ⇒ 这一格不自己取走
+            // 一枚引用, 调用者还看着它时它就已经拆了 (门 #763 实测 = b187 第五臂
+            // probe exit=-1073740940, 两台同形)。类名问**右侧**: 出参槽没有类型档 (void*),
+            // 只有 RHS 答得出。旧值仍不退 = 出参写回那一格泄漏, 与下标槽同在册。
+            bool outSlotClaim = false;
+            std::string clsOfRhs;
+            if (target.rfind("(*", 0) == 0 && value.find('(') == std::string::npos) {
+                clsOfRhs = node.value ? inferClassTypeOfExpr(*node.value) : std::string();
+                outSlotClaim = !clsOfRhs.empty();
+            }
+            // 账 #305 §B218 (甲) 刀3: 「不 claim」那一臂现在有两个成因 —— `New <类>`, 以及
+            // 工程内过程交回来的那一枚 (自带对价)。问句只有一处: rhsTransfersProjectRef。
+            bool rhsTransferred = node.value && node.value->kind == ASTNodeKind::NewExpr;
+            if (!rhsTransferred && node.value) {
+                rhsTransferred = rhsTransfersProjectRef(*node.value);
+            }
+            if (!clsOfSlot.empty() && target.find('(') == std::string::npos
+                && !procClassFormals_.count(targetLower)) {
+                emitClassSlotRefSet(target, clsOfSlot, value, rhsTransferred, false);
+            } else if (outSlotClaim) {
+                emitClassSlotRefSet(target, clsOfRhs, value, rhsTransferred, true);
+            } else {
+                c_.emitLine(target + " = " + value + ";  /* Set */");
+            }
         }
     }
 

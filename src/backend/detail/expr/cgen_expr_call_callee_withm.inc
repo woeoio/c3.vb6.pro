@@ -575,7 +575,7 @@
             comObjExpr_.clear();
             comMemberName_.clear();
             std::vector<std::string> la;
-            for (size_t i = 0; i < node.positional.size() && i < 6; i++) {
+            for (size_t i = 0; i < node.positional.size(); i++) {
                 emitExpr(*node.positional[i]);
                 // 同 Fix 143/185: 实参自身是 COM 成员读时必须就地消费标记，否则交出去的是对象
                 // 指针，而残留标记还会被上层当独立语句再发一遍。
@@ -592,13 +592,38 @@
                     la.push_back(std::move(lastExpr_));
                 }
             }
-            while (la.size() < 4) la.push_back("0");
-            if (la.size() < 5) la.push_back("-1");
-            if (la.size() < 6) la.push_back("0");
+            // 账 #232⑤ = PictureBox.Line 起点省略: 与 Form/Printer 那条码头 (下方 block 622
+            // 的 Line 分支) 同形 —— 读 parser 记在 node.canvasStartOmitted 上的语法事实定
+            // has1, 不再按实参个数猜 (2 格坐标 + color + style = 4, 与起点终点都给撞车)。
+            // RTL 侧 vb6_ControlLine 已随账 #239 转发 vb6_Form_Line, has1=0 ⇒ 从 CurrentX/
+            // CurrentY 起笔, 画完笔位落终点。Step 关键字 parser 未吞 (开口格 ②), step1=step2=0。
+            // B/C/F 已由 parser 折成位值 (BF=5), 这里照旧不按名归一。
+            const bool hasStart = !node.canvasStartOmitted;
+            size_t nCoord = hasStart ? 4 : 2;
+            if (la.size() < nCoord) nCoord = la.size();
+            const size_t i2 = hasStart ? 2 : 0;
+            std::string x1 = hasStart && la.size() > 0 ? la[0] : "0";
+            std::string y1 = hasStart && la.size() > 1 ? la[1] : "0";
+            std::string x2 = la.size() > i2 ? la[i2] : "0";
+            std::string y2 = la.size() > i2 + 1 ? la[i2 + 1] : "0";
+            std::string hasColor = "0", col = "0", style = "0";
+            for (size_t i = nCoord; i < la.size(); i++) {
+                if (i == nCoord) { hasColor = "1"; col = la[i]; }
+                else if (i == nCoord + 1) { style = la[i]; }
+            }
+            // 账 #232⑥: 两个 Step 前缀各一格（VB6 `Line [Step] (x1,y1) [Step] -(x2,y2)`），
+            // 由 parser 记在 AST 上。起点省略那一形（has1=0）不交 step1 —— RTL 见 step1 就把
+            // 当前笔位再加一次，等于把起点从 (cx,cy) 挪到 (2cx,2cy)。
+            const std::string h1 = hasStart ? "1" : "0";
+            const std::string s1 = (node.canvasStep1 && hasStart) ? "1" : "0";
+            const std::string s2 = node.canvasStep2 ? "1" : "0";
             c_.emitLine(fnLine + "((void*)" + cvHwndLine + ", "
-                        + "(double)" + la[0] + ", (double)" + la[1] + ", "
-                        + "(double)" + la[2] + ", (double)" + la[3] + ", "
-                        + "(int32_t)" + la[4] + ", (int32_t)" + la[5] + ");  /* Line */");
+                        + "(int32_t)" + s1 + ", (int32_t)" + h1 + ", "
+                        + "(double)" + x1 + ", (double)" + y1 + ", "
+                        + "(int32_t)" + s2 + ", (int32_t)1, "
+                        + "(double)" + x2 + ", (double)" + y2 + ", "
+                        + "(int32_t)" + hasColor + ", (int32_t)" + col + ", "
+                        + "(int32_t)" + style + ");  /* PictureBox.Line */");
             // ⚠ 合并 rev38 时这段的收尾曾被丢掉 (与下面的 Form/Printer 段撞在同一
             // 位置, git 把它判成冲突)。两个 if 各自闭合, 别再省。
             lastExpr_ = "0";
@@ -664,24 +689,26 @@
                     a.push_back(std::move(lastExpr_));
                 }
             }
-            // 形状判定: Step 关键字只能在**语法位置**上出现, 编译期不可得
-            // (VB6 的 Step 落到 AST 上已被 parser 吞掉)。所以按"实参个数 + 首参
-            // 是不是坐标对"来分派, 这是能拿到的最强信号。
+            // 形状判定: parser 把 `Step` / 起点省略这些**语法事实**记在 node 上, 这里只读旗标,
+            // 不再按"实参个数 + 首参是不是坐标对"去猜 (那是账 #232④ 以前的办法, 猜错过一次:
+            // 起点省略 + color + style 恰好也是 4 格, 颜色与样式被读成第二点的两格)。
             //   PSet(x,y) / PSet(x,y,c) / PSet Step(x,y) / PSet(x,y),c
-            //   Line -(x1,y1)-(x2,y2) [,c] [,B] [,F]
-            //   Circle (x,y),r [,c] [,start] [,end] [,aspect]
-            //   Point(x,y)
+            //   Line (x1,y1)-(x2,y2) [,c] [,B] [,F] / Line -(x2,y2) / Line [Step]...(...)
+            //   Circle (x,y),r [,c] [,start] [,end] [,aspect] / Circle Step(x,y),r
+            //   Point(x,y)  ← 本仓 RTL 那一枚没有 step 位 (vb6_Form_Point(hwnd,x,y)),
+            //                所以 parser 不收 `Point Step`（名单问 canvas_drawing.hpp 那一处）
             std::string call;
+            const std::string st1 = node.canvasStep1 ? "1" : "0";
             if (m == "pset") {
-                // PSet(x,y) / PSet(x,y),color —— 3 参时末参是颜色。
+                // PSet(x,y) / PSet(x,y),color / PSet Step(x,y) —— 3 参时末参是颜色。
                 bool hasColor = (a.size() >= 3);
                 std::string x = a.size() > 0 ? a[0] : "0";
                 std::string y = a.size() > 1 ? a[1] : "0";
                 std::string col = hasColor ? a[a.size() - 1] : "0";
                 call = looksLikePrinter
-                    ? (cvDrawFn + "(0, 1, " + x + ", " + y + ", "
+                    ? (cvDrawFn + "(" + st1 + ", 1, " + x + ", " + y + ", "
                        + (hasColor ? "1" : "0") + ", " + col + ")")
-                    : (cvDrawFn + "((void*)" + obj + ", 0, 1, " + x + ", " + y
+                    : (cvDrawFn + "((void*)" + obj + ", " + st1 + ", 1, " + x + ", " + y
                        + ", " + (hasColor ? "1" : "0") + ", " + col + ")");
             } else if (m == "point") {
                 std::string x = a.size() > 0 ? a[0] : "0";
@@ -695,14 +722,23 @@
                 // controlCanvasMethod 那两条码头，账 #232②）。Printer.Cls = 结束文档。
                 call = cvDrawFn + "()";
             } else if (m == "line") {
-                // Line 的两种形状: -(x1,y1)-(x2,y2) 4 参, 或 (x1,y1)-(x2,y2) 4 参
-                // (VB6 里 Step 由 parser 吞, 这里统一按 4 坐标 = 2 点)。
+                // Line 的两种形状 (VB6), 按 parser 记下的**语法事实**分派:
+                //   Line (x1, y1)-(x2, y2)  4 格 = 起点与终点都给
+                //   Line -(x2, y2)         2 格 = **起点省略**, 从 CurrentX/CurrentY 起笔
+                // (`Step` 那一族今天 parser 压根没吞, 到不了这里 —— 见台账 §B223 还开着的那三格)
                 // 后面的可选实参: color / box / fill, 按 VB6 文档的实参顺序。
-                size_t nCoord = (a.size() >= 4) ? 4 : 2;
-                std::string x1 = nCoord > 0 ? a[0] : "0";
-                std::string y1 = nCoord > 1 ? a[1] : "0";
-                std::string x2 = nCoord > 2 ? a[2] : "0";
-                std::string y2 = nCoord > 3 ? a[3] : "0";
+                // 账 #232④: 起点给没给由 parser 记在 canvasStartOmitted 上 (旗标, 不是猜) ——
+                // 以前按"坐标实参 >= 4 就当起点也给"分派, 于是 `Line -(340, 80), vbRed, BF`
+                // (2 格坐标 + color + style = 4 格) 被读成起点 (340,80) → 终点 (255,5),
+                // 颜色与样式直接落进坐标格。4 格坐标那一支逐字不变 (FD25 那条针是护栏)。
+                size_t nCoord = (node.canvasStartOmitted ? 2 : 4);
+                const bool hasStart = !node.canvasStartOmitted;
+                if (a.size() < nCoord) nCoord = a.size();   // 收不满就按给的那些算 (下面各有默认值)
+                const size_t i2 = hasStart ? 2 : 0;      // 第二点实参从哪一格起算
+                std::string x1 = hasStart && a.size() > 0 ? a[0] : "0";
+                std::string y1 = hasStart && a.size() > 1 ? a[1] : "0";
+                std::string x2 = a.size() > i2 ? a[i2] : "0";
+                std::string y2 = a.size() > i2 + 1 ? a[i2 + 1] : "0";
                 std::string hasColor = "0", col = "0", style = "0";
                 for (size_t i = nCoord; i < a.size(); i++) {
                     // ⚠ B / BF / F **已由 parser 折成位值** (账 #220, B=1 C=2 F=4,
@@ -714,16 +750,38 @@
                     else if (i == nCoord + 1) { style = a[i]; }
                 }
                 const std::string pfx = cvDrawFn;
+                const std::string h1 = hasStart ? "1" : "0";
+                // 账 #232⑥: 两个点各有一格 Step 前缀 (VB6 语法两个都可选), 由 parser 记下;
+                // 起点省略那一形不交 step1 (RTL 见 step1 会把当前笔位再加一次 = (2cx,2cy))。
+                const std::string s1 = (node.canvasStep1 && hasStart) ? "1" : "0";
+                const std::string s2 = node.canvasStep2 ? "1" : "0";
                 if (looksLikePrinter) {
-                    call = pfx + "(0, 1, " + x1 + ", " + y1 + ", 0, 1, " + x2 + ", " + y2
+                    call = pfx + "(" + s1 + ", " + h1 + ", " + x1 + ", " + y1
+                         + ", " + s2 + ", 1, " + x2 + ", " + y2
                          + ", " + hasColor + ", " + col + ", " + style + ")";
                 } else {
-                    call = pfx + "((void*)" + obj + ", 0, 1, " + x1 + ", " + y1
-                         + ", 0, 1, " + x2 + ", " + y2
+                    call = pfx + "((void*)" + obj + ", " + s1 + ", " + h1 + ", " + x1 + ", " + y1
+                         + ", " + s2 + ", 1, " + x2 + ", " + y2
                          + ", " + hasColor + ", " + col + ", " + style + ")";
                 }
+            } else if (m == "scale") {
+                // VB6: `Scale (x1, y1)-(x2, y2)` = 设自定义坐标系; `Scale` (不带坐标) = 复位回默认。
+                // 出口名**只从表里来** (cvDrawFn) —— backend 任何一处再拼一次 vb6_Form_Scale
+                // 就是第二份答案 (S9.1)。
+                // 两形的区分靠**语法事实**: parser 已把 `-(x2, y2)` 收成第 2/3 格实参, 所以
+                // "带坐标" 恒是 4 格、"不带" 恒是 0 格 —— Scale 没有 Line 那种"起点省略"
+                // 会与"两格 + color + style"撞车的形状, 按格数判是稳的 (不猜)。
+                std::string hx = "0", sx1 = "0", sy1 = "0", sx2 = "0", sy2 = "0";
+                if (a.size() >= 4) {
+                    hx = "1";
+                    sx1 = a[0]; sy1 = a[1]; sx2 = a[2]; sy2 = a[3];
+                }
+                call = cvDrawFn + "((void*)" + obj + ", " + hx + ", "
+                     + sx1 + ", " + sy1 + ", " + sx2 + ", " + sy2 + ")";
             } else { // circle
-                // Circle (x,y),r [,color] [,start] [,end] [,aspect]
+                // Circle (x,y),r [,color] [,start] [,end] [,aspect] / Circle Step(x,y),r
+                // ⚠ 下面那个 hasStart 是「起始角给没给」，与 Line 分支里的 hasStart（起点给没给）
+                // 不是一个东西 —— 同名两义正是本仓吃过的那味，Circle 这格的名字别再复用。
                 std::string x = a.size() > 0 ? a[0] : "0";
                 std::string y = a.size() > 1 ? a[1] : "0";
                 std::string r = a.size() > 2 ? a[2] : "0";
@@ -734,11 +792,11 @@
                 if (a.size() > 5) { hasEnd = "1"; eA = a[5]; }
                 if (a.size() > 6) { hasAsp = "1"; asp = a[6]; }
                 if (looksLikePrinter) {
-                    call = cvDrawFn + "(0, 1, " + x + ", " + y + ", " + r
+                    call = cvDrawFn + "(" + st1 + ", 1, " + x + ", " + y + ", " + r
                          + ", " + hasColor + ", " + col + ", " + hasStart + ", " + sA
                          + ", " + hasEnd + ", " + eA + ", " + hasAsp + ", " + asp + ")";
                 } else {
-                    call = cvDrawFn + "((void*)" + obj + ", 0, 1, " + x + ", " + y + ", " + r
+                    call = cvDrawFn + "((void*)" + obj + ", " + st1 + ", 1, " + x + ", " + y + ", " + r
                          + ", " + hasColor + ", " + col + ", " + hasStart + ", " + sA
                          + ", " + hasEnd + ", " + eA + ", " + hasAsp + ", " + asp + ")";
                 }

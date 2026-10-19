@@ -21,6 +21,13 @@ param(
     [string]$CiBranch = "ci/emit-manifest",
     [string]$Manifest = "",
     [switch]$Bless,
+    # ⚠ 这枚开关原来**根本没有出口**：`RunCompare` 声明了 `[switch]$allowVanish` 并会转发给
+    #   compare 的 `-AllowVanish`，但三个调用点**一个都没启用它** —— 于是本脚本自己印出
+    #   「确认是有意为之再加 -AllowVanish」，而**从本脚本根本加不上**。改路径只能绕过 rebless
+    #   直接调 `compare_emit_manifest.ps1 -Bless -AllowVanish`。撞见的场景 = 夹具**改名**
+    #   （旧行消失、新行出现，形状逐字节未变）：那道「别用登记把它抹平 = 悄悄缩小覆盖面」
+    #   的门在这里是对的，但**逃生口得能走通**。
+    [switch]$AllowVanish,
     [switch]$ForceHead
 )
 $ErrorActionPreference = 'Continue'
@@ -105,10 +112,10 @@ if ($rc -eq 2) { exit 2 }
 # ---- 3) 登记 + 自证 ----
 if (-not $Bless) {
     Write-Host '上面只是「看」。确认这确实是你这次改动想要的形状之后：'
-    Write-Host ('  pwsh -File scripts/rebless_emit_manifest.ps1' + $(if ($Manifest) { ' -Manifest ' + $work } else { ''}) + ' -Bless')
+    Write-Host ('  pwsh -File scripts/rebless_emit_manifest.ps1' + $(if ($Manifest) { ' -Manifest ' + $work } else { ''}) + ' -Bless' + $(if ($AllowVanish) { ' -AllowVanish' } else { ''}))
     exit 1
 }
-$rc = RunCompare $work -asBless
+$rc = RunCompare $work -asBless -allowVanish:$AllowVanish
 if ($rc -ne 0) { Write-Host '登记被挡住（见上面那句「拒绝登记」），先把成因问清楚。'; exit 2 }
 $rc = RunCompare $work
 if ($rc -ne 0) { Write-Host '登记后复算仍然不一致 —— 不要提交，直接来找本线。'; exit 2 }

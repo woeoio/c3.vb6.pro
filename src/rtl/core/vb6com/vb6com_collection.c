@@ -45,13 +45,12 @@ static IDispatchVtbl   g_collVtbl;
 // 与手写 COM 对象的标准做法一致: 填 EXCEPINFO.scode (VB6 错误号的 OLE 形式
 // 0x800A0000|err) 并返回 DISP_E_EXCEPTION, 由调用方 vb6_ComCheckError 统一
 // 转成 Err.Raise —— 这里不直接 RaiseError, 否则同一错误会被上报两次。
+/* 账 #305 §B185: 形状本身搬进 vb6com.c 的 vb6_ComFailExcep —— 这一枚从此只是转调,
+ * 「Collection error」那一句缺省描述留在这里 (它是本族的答案, 不是那道决定的答案)。
+ * 描述文本照旧先问 vb6_StdErrorDesc 那张表: 内置 Collection 不经过 vb6_RaiseError,
+ * Err 里装的是上一层留下的东西, 不许拿来当本条错误的描述。 */
 static HRESULT coll_fail(EXCEPINFO* pexcep, int32_t errNum) {
-    if (pexcep) {
-        pexcep->scode = (SCODE)(0x800A0000u | (unsigned)(errNum & 0xFFFF));
-        const wchar_t* desc = vb6_StdErrorDesc(errNum);
-        pexcep->bstrDescription = SysAllocString(desc ? desc : L"Collection error");
-    }
-    return DISP_E_EXCEPTION;
+    return vb6_ComFailExcep(pexcep, errNum, vb6_StdErrorDesc(errNum), L"Collection error");
 }
 
 // ============================================================

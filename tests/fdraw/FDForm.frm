@@ -13,6 +13,15 @@ Begin VB.Form FDForm
       Left            =   120
       Top             =   1560
    End
+   Begin VB.PictureBox picP
+      Height          =   1680
+      Left            =   3720
+      ScaleHeight     =   1680
+      ScaleWidth      =   1680
+      TabIndex        =   3
+      Top             =   60
+      Width           =   1680
+   End
 End
 Attribute VB_Name = "FDForm"
 Attribute VB_GlobalNameSpace = False
@@ -270,6 +279,126 @@ Private Sub tmrF_Timer()
     rowM = FirstRowOfColor(d, vbMagenta, 294, 306, 35, 125)
     ok25 = (rowM0 < 0) And (rowM > 0)
     Debug.Print "FD25-bareline=" & TF(ok25) & " raw=" & CStr(rowM0) & "," & CStr(rowM)
+    ' 232-4 = `Line -(x, y)`: the START is omitted (VB6: from CurrentX/CurrentY). Before this
+    ' cut the form was rejected in the parser (VB2001 "expected 'Input' after 'Line'" plus the
+    ' `-(310` read as an infix minus), so there was no build to run at all. Two-sided like
+    ' FD24/FD25 on colours nothing else here uses, and each judge ALSO reads the pen: the ink
+    ' has to land on the endpoint the source named, and the pen must end there (the RTL moves
+    ' it to the endpoint when has2 -- vb6forms_draw.c:207).
+    ' ⚠ The coordinates live in the LEFT band on purpose: this form is 6400x3200 twips, which
+    ' is **426x213 px at 96 dpi** (1440 twips = 1 inch), not 640x320. The first version of
+    ' these two judges used x up to 560 and CI read `raw=-1,-1 pen=560,140` on the `Me.` one:
+    ' the pen moved (the call is right) but the whole segment sat past the right edge of the
+    ' client area, so nothing was ever painted. A pixel judge whose window is off the window
+    ' is a False that reads exactly like a broken codegen -- keep the whole segment inside.
+    ' Also keep it clear of FD24's circle (205..275) and FD25's magenta line (298..302); the
+    ' scans filter by colour, but overlapping ink would still be one more thing to explain.
+    ' The pen half is what rejects "read the two given coordinates as the START": that shape
+    ' ends the pen at (0,0) (measured: `pen=0,0` on the pre-fix dock), while its ink would
+    ' still cross these windows.
+    Dim ok26 As Boolean, ok27 As Boolean
+    Dim rowC0 As Long, rowC As Long
+    Dim rowY0 As Long, rowY As Long
+    Me.ForeColor = vbCyan
+    Me.DrawWidth = 3
+    Me.CurrentX = 40
+    Me.CurrentY = 30
+    rowC0 = FirstRowOfColor(d, vbCyan, 35, 125, 25, 105)
+    Line -(120, 100)
+    rowC = FirstRowOfColor(d, vbCyan, 35, 125, 25, 105)
+    ok26 = (rowC0 < 0) And (rowC > 0) And (Me.CurrentX = 120) And (Me.CurrentY = 100)
+Debug.Print "FD26-barelinestart=" & TF(ok26) & " raw=" & CStr(rowC0) & "," & CStr(rowC) & _
+              " pen=" & CStr(Me.CurrentX) & "," & CStr(Me.CurrentY)
+    Me.ForeColor = vbYellow
+    Me.DrawWidth = 3
+    Me.CurrentX = 40
+    Me.CurrentY = 120
+    rowY0 = FirstRowOfColor(d, vbYellow, 35, 125, 115, 195)
+    Me.Line -(120, 190)
+    rowY = FirstRowOfColor(d, vbYellow, 35, 125, 115, 195)
+    ok27 = (rowY0 < 0) And (rowY > 0) And (Me.CurrentX = 120) And (Me.CurrentY = 190)
+Debug.Print "FD27-melinestart=" & TF(ok27) & " raw=" & CStr(rowY0) & "," & CStr(rowY) & _
+              " pen=" & CStr(Me.CurrentX) & "," & CStr(Me.CurrentY)
+    ' 232-5 = PictureBox.Line -(x,y): the same start-omitted form as FD26/FD27, on a PictureBox.
+    ' Before, vb6_ControlLine was the only sibling not forwarded to vb6_Form_Line (账 #239) -- it
+    ' kept a 7-arg body with no has bit, so Line -(x,y) drew (x,y)->(0,0) and left the pen where it
+    ' was. After forwarding, has1=0 => start from picP.CurrentX/CurrentY, pen lands on the endpoint.
+    ' Two-sided like FD26/FD27: a colour scan that comes back empty then finds the rows, AND the pen
+    ' on the endpoint. The pen half is what rejects "read the two given coordinates as the START" --
+    ' that shape leaves the pen untouched (20 != 100).
+    ' ⚠ picP sits at the **far right** on purpose, and this is not cosmetic: a child window paints
+    ' OVER the form's DC, so the first version of this block (Left = 3360 twips ~ 280 px) covered
+    ' FD25's magenta line at x ~ 300 px and turned THAT judge red on the gate (run 39232007659:
+    ' FD28/FD29 green, FD25-bareline raw=-1,-1 where it had read row 38 two runs earlier).
+    ' Every existing judge on this form lives at x <= 306, so picP starts at 3720 twips (~310 px)
+    ' and is 1680 twips square (~112 px) -- the whole of it inside the form's 426 px client area,
+    ' with the two segments kept at x,y <= 110 (picP's own client, see draw-fixture-client-area-pixels).
+    Dim dp As LongPtr
+    Dim ok28 As Boolean, ok29 As Boolean
+    Dim rowP0 As Long, rowP As Long
+    Dim rowQ0 As Long, rowQ As Long
+    picP.ScaleMode = vbPixels
+    dp = GetDC(picP.hwnd)
+    picP.CurrentX = 20
+    picP.CurrentY = 20
+    rowP0 = FirstRowOfColor(dp, vbCyan, 15, 105, 15, 65)
+    picP.Line -(100, 60), vbCyan
+    rowP = FirstRowOfColor(dp, vbCyan, 15, 105, 15, 65)
+    ok28 = (rowP0 < 0) And (rowP > 0) And (picP.CurrentX = 100) And (picP.CurrentY = 60)
+    Debug.Print "FD28-piclinestart=" & TF(ok28) & " raw=" & CStr(rowP0) & "," & CStr(rowP) & _
+               " pen=" & CStr(picP.CurrentX) & "," & CStr(picP.CurrentY)
+    picP.CurrentX = 20
+    picP.CurrentY = 70
+    rowQ0 = FirstRowOfColor(dp, vbYellow, 15, 105, 65, 115)
+    picP.Line -(100, 110), vbYellow
+    rowQ = FirstRowOfColor(dp, vbYellow, 15, 105, 65, 115)
+    ok29 = (rowQ0 < 0) And (rowQ > 0) And (picP.CurrentX = 100) And (picP.CurrentY = 110)
+    Debug.Print "FD29-piclinestart2=" & TF(ok29) & " raw=" & CStr(rowQ0) & "," & CStr(rowQ) & _
+               " pen=" & CStr(picP.CurrentX) & "," & CStr(picP.CurrentY)
+    ' 232-6 = `Step` 前缀: 坐标相对 CurrentX/CurrentY。改前这一族在 parser 就被拒 (`Line Step ...`
+    ' 报 expected 'Input' after 'Line'; `Circle Step (x,y), r` 报 expected ')' (got ,))。
+    ' 两格画在窗体右侧那块**空带**上 (x 210..300 / y 140..205): 这块窗体上别的一切判据都在
+    ' x <= 306, 其中 FD24 的圆止于 y=125、FD22 的点止于 y=133 —— 新的线绝不压到它们
+    ' （FD18 那一课: 子窗口/新笔画到别人的扫描窗里, 只会把别人的判据弄红）。
+    ' 颜色用 RGB() 而不是又一枚 vb 常量: 这块窗体上 vb 常量已经用尽, 而 RGB(255,128,0) /
+    ' RGB(128,0,255) 在别处一个像素都没有 —— 两枚判据的扫描窗也因此互不相干。
+    ' pen 半钉的是「Step 没生效」那一形: 相对坐标被当绝对坐标时, 落点与笔位都不在源码写的地方。
+    Dim ok30 As Boolean, ok31 As Boolean
+    Dim pixA0 As Long, pixA As Long
+    Dim rowU0 As Long, rowU As Long
+    Me.ForeColor = RGB(255, 128, 0)
+    Me.DrawWidth = 1
+    Me.CurrentX = 220
+    Me.CurrentY = 150
+    pixA0 = FirstRowOfColor(d, RGB(255, 128, 0), 255, 265, 175, 185)
+    Me.PSet Step (40, 30)
+    pixA = FirstRowOfColor(d, RGB(255, 128, 0), 255, 265, 175, 185)
+    ok30 = (pixA0 < 0) And (pixA > 0) And (Me.CurrentX = 260) And (Me.CurrentY = 180)
+    Debug.Print "FD30-psetstep=" & TF(ok30) & " raw=" & CStr(pixA0) & "," & CStr(pixA) & _
+               " pen=" & CStr(Me.CurrentX) & "," & CStr(Me.CurrentY)
+    Me.ForeColor = RGB(128, 0, 255)
+    Me.CurrentX = 220
+    Me.CurrentY = 200
+    rowU0 = FirstRowOfColor(d, RGB(128, 0, 255), 235, 265, 145, 205)
+    Me.Line Step (40, 0) Step -(20, -50)
+    rowU = FirstRowOfColor(d, RGB(128, 0, 255), 235, 265, 145, 205)
+    ok31 = (rowU0 < 0) And (rowU > 0) And (Me.CurrentX = 240) And (Me.CurrentY = 150)
+    Debug.Print "FD31-linestep=" & TF(ok31) & " raw=" & CStr(rowU0) & "," & CStr(rowU) & _
+               " pen=" & CStr(Me.CurrentX) & "," & CStr(Me.CurrentY)
+    ' 同一族在 PictureBox 上再走一遍: 那一支码头（vb6_ControlLine）自己也要读 Step 旗标,
+    ' 不是借 Form 那一支。颜色第三枚, 与 FD28/FD29/FD30/FD31 都不撞。
+    Dim ok32 As Boolean
+    Dim rowT0 As Long, rowT As Long
+    picP.ForeColor = RGB(0, 128, 128)
+    picP.CurrentX = 5
+    picP.CurrentY = 100
+    rowT0 = FirstRowOfColor(dp, RGB(0, 128, 128), 10, 30, 95, 112)
+    picP.Line Step (10, 5) Step -(20, 0)
+    rowT = FirstRowOfColor(dp, RGB(0, 128, 128), 10, 30, 95, 112)
+    ok32 = (rowT0 < 0) And (rowT > 0) And (picP.CurrentX = 25) And (picP.CurrentY = 100)
+    Debug.Print "FD32-piclinestep=" & TF(ok32) & " raw=" & CStr(rowT0) & "," & CStr(rowT) & _
+               " pen=" & CStr(picP.CurrentX) & "," & CStr(picP.CurrentY)
+    r = ReleaseDC(picP.hwnd, dp)
     Point 7, 9
     Debug.Print "FD23-userpoint=" & CStr(userPoint)
     r = ReleaseDC(Me.hwnd, d)

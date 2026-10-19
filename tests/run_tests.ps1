@@ -688,6 +688,124 @@ function Test-ScaleModeWriters {
         $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
     }
 }
+function Test-VbpSourceExt {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] vbp_source_ext ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_vbp_source_ext.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-ExtenderPushPop {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] extender_push_pop ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_extender_push_pop.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-ExtenderEmitChannel {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] extender_emit_channel ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root/scripts/check_extender_emit_channel.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-FormatDateArgArm {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] format_date_arg_arm ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_format_date_arg_arm.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B433DateFormalAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b433_date_formal_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b433_date_formal_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-NoLocaleNeedles {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] no_locale_needles ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_no_locale_needles.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B438VoidParamCensus {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b438_void_param_census ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b438_void_param_census.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B437FormatLeadingGroup {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b437_format_leading_group ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b437_format_leading_group.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B439FormatUseParens {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b439_format_useparens ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b439_format_useparens.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B442DateaddInterval {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b442_dateadd_interval ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b442_dateadd_interval.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B425DateserialDomain {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b425_dateserial_domain ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b425_dateserial_domain.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B424DatedPartParams {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b424_datedpart_params ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b424_datedpart_params.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B436FdtBounds {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b436_fdt_bounds ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b436_fdt_bounds.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B423IntervalPerBuiltin {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b423_interval_per_builtin ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b423_interval_per_builtin.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-B440SerialSplitAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] b440_serial_split_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_b440_serial_split_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
+function Test-ExtenderGlobalCensus {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] extender_global_census ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_extender_global_census.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) { $script:pass++; Write-Host "PASS" -ForegroundColor Green }
+    else { $script:fail++; Write-Host "FAIL" -ForegroundColor Red; $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" } }
+}
 function Test-ControlDC {
     $script:total++
     Write-Host -NoNewline "  [STATIC] control_dc ... "
@@ -1448,6 +1566,252 @@ function Test-AddressOfThunkSites {
     }
 }
 
+# 账 #305 §B185(第七十七刀): 服务端进门那趟的错误边界 + 交回形状只住一处
+function Test-ComServerErrorFrame {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] com_server_error_frame ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_com_server_error_frame.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# ai/022 §B187 (第七十九刀): 工程类登记表「扫到哪儿」只许一处答 + 读者普查
+function Test-ProjClassScanBound {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] projclass_scan_bound ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_projclass_scan_bound.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# ai/022 §B187 第二腿 (第八十三刀): 泛对象槽的装箱腿只许一站 + coclass 判据只许一处答
+function Test-ObjectSlotBoxing {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] object_slot_boxing ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_object_slot_boxing.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #305 §B217 (第一百二十一刀): ByRef Variant 实参那枚临时槽的语句末收回只许一处登记 + 顺序必须晚于最后一次引用
+function Test-BoxTempReclaim {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] box_temp_reclaim ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_box_temp_reclaim.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #305 §B221/#449 (第一百二十五刀): 「这一枚表达式是视图还是实例」只许一位主人 —— vtable 发射形状
+# 恰好 1 处 · ifaceViewOfExpr 消费文件恰好 4 份 · "vb6_ivref_" 字面量文件恰好 6 份
+function Test-ClassRefcountAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] class_refcount_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_class_refcount_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-IfaceViewAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] iface_view_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_iface_view_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #305 #416 (第九十三刀): 文本进严格转换的那一句解析只许问 oleaut32 一次 + 两位桥分开
+function Test-ConvStrictParse {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] conv_strict_parse ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_conv_strict_parse.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #305 (#417, 第九十四刀): 文本→日期只许一条解析站点、报错那一句只许两位主人各答一次。
+function Test-DateConv {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] date_conv ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_date_conv.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #305 (#418, 第九十五刀): Is* 那一族问文本只许问「认不认得出」那一层，且不许报错。
+function Test-IsPredText {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] ispred_text ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_ispred_text.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #305 (#419, 第九十六刀): DATE 双半边的拆分只许住在一枚四舍五入的出口里。
+function Test-TimeSplit {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] time_split ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_time_split.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+# 账 #305 (#422, 第九十七刀): DatePart 的两条臂 —— 「d」与「y」是两问、「年第几周」只许住一处。
+function Test-DatePartArms {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] datepart_arms ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_datepart_arms.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-FormatAmPm {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] format_ampm ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_format_ampm.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-EmittedDeclared {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] emitted_declared ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_emitted_declared.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+# 账 #305 #427 (§B201) 的结构性哨兵: 「日期令牌从哪儿进日期臂、周数与星期序号由谁答」这两问各只许住一处。
+function Test-FormatDateTokens {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] format_date_tokens ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_format_date_tokens.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 12 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+# 账 #305 #429 ①+④ (§B203) 的结构性哨兵: 「general date 给不给时间段」与「locale 那四问由谁答」各只许住一处。
+function Test-GeneralDateOutlets {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] general_date_outlets ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_general_date_outlets.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 12 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-DateSerialTag {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] dateserial_tag ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_dateserial_tag.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 12 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-FormatDateTimeArgs {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] formatdatetime_args ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_formatdatetime_args.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 12 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 # === 编译冒烟测试 (编译+链接, 不运行生成物) ===
 function Test-Run {
     param(
@@ -2673,6 +3037,195 @@ if ($Category -in @("all", "run", "bas")) {
         "VE-DONE")
     Add-BasTest "test_vbnet_ext" "$Tests\test_vbnet_ext.bas" $vbnetExtNeedles
     Add-BasTest "test_vbnet_ext_x86" "$Tests\test_vbnet_ext.bas" $vbnetExtNeedles -Arch "x86"
+
+    # 账 #433 (§B207, 第一百零五刀): 「日期形参吃 As String 实参」承面九格。
+    # 改前这九格全是 cl C2440(无法从 BSTR 转换为 double) —— 两臂(有/无类型化形参表)都以
+    # argIsVariant 为闸, 文本实参压根进不去, 于是 BSTR 裸递进 double date 形参。
+    # 每一格都与引擎逐格相同 (cscript 尺 .build/k207f_oracle.vbs / _g_oracle.vbs):
+    # 2026/1/5 → 2026 / 1 / 5 / 2 / 0 / +1日 / 2026 / 31;纯数字文本 "46027" 按**序列号**那天。
+    # ⚠ FormatDateTime 那两格**只钉 1/0 不钉字面量**: namedFormat=0 是 vbShortDate =
+    #   **跟着区域设置走**的一档(本机 zh-CN 读 "2026/1/5", CI 那台 en-US 读 "1/5/2026"),
+    #   钉字面量必假红 —— 与 §B142 "`VB-dec-fmt` 照打不钉(区域设置)" 同一个坑, 本刀踩了一次。
+    #   同理 Boolean 也不钉(CStr(True) 的字面文本各语言不同), 比成数字 1/0。
+    # 出口是 vb6_CDate 而不是账本原候选的 vb6_DateValue(后者严格, DateValue("46027") 引擎
+    #   也报 13 = 会判死合法实参); 实测值由上面 Y/M/D 三格逐字钉死。
+    # NEG 那格是**负控**: 数值形参那一族(Sqr/Abs)不在本刀名单内, 照 C 签名反推会把它误伤。
+    $b433Needles = @(
+        "Y=2026", "M=1", "D=5", "W=2", "H=0", "ADD=2026/01/06",
+        "PART=2026", "DIFF=31", "FDT-ok=1", "FDTNUM-ok=1",
+        "NEG-sqr-untouched=1", "B433-DONE")
+    Add-BasTest "b433_strdatearg" "$Tests\b433_strdatearg.bas" $b433Needles
+    Add-BasTest "b433_strdatearg_x86" "$Tests\b433_strdatearg.bas" $b433Needles -Arch "x86"
+
+    # 账 #434 (§B208, 第一百零六刀): 「数值形参吃 As String 实参」—— §B207 的另一半,
+    # 承面量测 = **0 处**(真语料没有把文本喂数值形参), 由 §B207 的负控顺手发现。
+    # 出口 vb6_CDbl 而不是 vb6_CDate: 判别格 `Sqr("2026/1/5")` = **err13**(日期串进数值形参
+    #   要报错, 折成序列号就答错); 也不是 vb6_Val(Val 宽松语义、永不报错, 与 13 相反)。
+    # 逐格与引擎相同 (cscript 尺 .build/k434_oracle.vbs): Sqr("4")=2 / Int("3.7")=3 /
+    #   区域化数字("1,234.5")**收** / 前后空白(" 42 ")**收** / "abc"=13 / "2026/1/5"=13。
+    # ADDnum 与 ADDdate 是**逐位登记**的证据: 同一枚 DateAdd, 位 1 走数值、位 2 走日期。
+    # FDT-ok 是**负控**: §B207 那一族仍是日期解析, 没被本刀改成数值折算。
+    $b434Needles = @(
+        "SQR=2", "ABS=4", "INT=3", "SGN=1", "SQRlit=4",
+        "SQRdate-err=13", "SQRabc-err=13", "SQRfmt-err=0", "SQRspc-err=0",
+        "ADDnum=2026/01/09", "ADDdate=2026/01/08", "FDT-ok=1", "B434-DONE")
+    Add-BasTest "b434_numfold" "$Tests\b434_numfold.bas" $b434Needles
+    Add-BasTest "b434_numfold_x86" "$Tests\b434_numfold.bas" $b434Needles -Arch "x86"
+
+    # 账 #440 (§B209，第一百零七刀) = #420 (§B194) + #421 (§B195) 一次结掉:
+    # 「一枚序列号拆成日期 + 日内秒」原本**两处各答一半**。
+    #   ① §B194: 一天末尾只归零日内秒、日期那一半**不进位** ⇒ 46023.9999988426 改前答 Day=1
+    #   ② §B195: epoch 之前零头与运行期**反号**(运行期取绝对值, 本仓原 `+1.0`)
+    #      ⇒ -657433.395833333 改前答 14:30, 运行期 9:30
+    # 两半符号对称(负数那一侧日期也进位: -46023.9999988426 → 1773/12/28), 由 cscript 同机
+    # 代理逐格量死 (尺 .build/k421_grid.vbs 12 格 + k420b_grid.vbs 进位边界 8 格 = 20 格零失配)。
+    # pos/whole/frac6 三格是**不许动**的对照 (§B193 那条 +0.5 进位口径仍要成立)。
+    $b440Needles = @(
+        "roll-hms=0/0/0", "roll-day=2", "neghi-day=28",
+        "neg-hms=9/30/0", "neg-day=2/1/100", "neg4-hms=6/0/0", "neg6-hms=18/0/0",
+        "pos-hms=14/30/45", "whole-hms=0/0/0", "frac6-hms=23/59/59", "B440-DONE")
+    Add-BasTest "b440_serialsplit" "$Tests\b440_serialsplit.bas" $b440Needles
+    Add-BasTest "b440_serialsplit_x86" "$Tests\b440_serialsplit.bas" $b440Needles -Arch "x86"
+
+    # 账 #423 (§B197，第一百零八刀) = DateDiff 的「ww」与「w」两条臂。
+    # 病根 = vb6_parse_interval 是 DateAdd/DateDiff/DatePart **三家共用**的一问，而 w 与 ww 的
+    #   含义**按 builtin 分岔**(DatePart w=星期序号 / DateDiff w=整段七天)。改那枚共用枚举会把
+    #   另外两家的正确答案一起弄坏 ⇒ **枚举那一问不动**，DateDiff 自己认这一格。
+    # 改前这一格落进 vb6_di_weekday 的 d2-d1 ⇒ 答**天数**(1/5→1/12 答 7、1/5→2/5 答 31);
+    #   运行期两格都答 1 / 4。「w」与周首**无关**(w-f2 与 w-f7 同答 4)、「ww」与周首**有关**。
+    # NC-ok 是**负控**: 共用解析器那一家(DatePart 的 w/ww、DateAdd 的 w)本刀一个字没动。
+    # 承面 = 0 处(真语料 76 处 DateDiff 全三实参形、区间只有 d/s/m/n/y)，纸面缺口。
+    $b423Needles = @(
+        "w-7d=1", "w-31d=4", "w-rev=-1", "w-same=0", "w-f2=4", "w-f7=4",
+        "ww-7d=1", "ww-rev=-1", "ww-31d=4", "ww-f2=4", "ww-f7=4", "NC-ok=1", "B423-DONE")
+    Add-BasTest "b423_datediff_w" "$Tests\b423_datediff_w.bas" $b423Needles
+    Add-BasTest "b423_datediff_w_x86" "$Tests\b423_datediff_w.bas" $b423Needles -Arch "x86"
+
+    # 账 #436 (§B210，第一百零九刀) = 账 #429 (§B203) 的 ②③ 两格(① 尾随空格已随上一刀转绿)。
+    # ② 越界 namedFormat(9/99/-1) ⇒ **err 5**;改前落 default 当 general date 照常交卷。
+    # ③ 不再拿「今天」兜底 —— 本刀量出账上没列、更根本的两条:
+    #   (a) **序列号 0 是合法日期(1899-12-30)、不是哨兵**(改前答今天);
+    #   (b) `VariantTimeToSystemTime` **成功 ≠ 运行期会交卷** —— 它能翻出 1601 年以前的年份,
+    #       而 GetDateFormatW 下限就是 1601 ⇒ 改前那一段交**空串 + err=0**。
+    #   窗逐格二分 = **年份 1601**(尺 .build/k429e|429f|429g|429h.vbs): -109200→1601/1/6 ok、
+    #   -109300→ERR5。窗外现在报 err 5。
+    # ⚠ 本夹具**一个字都不钉格式化字面量**(namedFormat 1/2/4 全是 locale 档, 跨机器必假红,
+    #   与 §B142 同一个坑本刀踩了两次): 值走 Year/Month/Day 数值 getter, 报错走 Err。
+    # NC-nospace 是**负控**: 零头为 0 的 general date 不许多尾随空格(① 已转绿, 盯住别退)。
+    $b436Needles = @(
+        "ok1=OK", "ok2=OK", "ok4=OK",
+        "bad9=ERR5", "bad99=ERR5", "badneg=ERR5",
+        "zero-y=1899/12/30", "out1601=ERR5", "in1601-y=1601", "neg1-y=1899/12/29",
+        "NC-nospace=1", "B436-DONE")
+    Add-BasTest "b436_fdt_bounds" "$Tests\b436_fdt_bounds.bas" $b436Needles
+    Add-BasTest "b436_fdt_bounds_x86" "$Tests\b436_fdt_bounds.bas" $b436Needles -Arch "x86"
+
+    # 账 #424 (§B198，第一百零九刀) = DatePart/DateDiff 那两条形参的两档口径。**由用户拍板**。
+    #   ① firstWeekOfYear >= 4 ⇒ **报 err 5**（对齐运行期：cscript 实测 fwy=4/5 两格当场抛，
+    #      尺 .build/k424_oracle.vbs）；改前静默按 1 档答 2。合法档 0..3 逐格不变（0 与 1 同档）。
+    #   ② firstDayOfWeek = 0 (vbGeneral) ⇒ **继续 clamp 到 vbSunday**，作为一条**显式的已知偏离**：
+    #      运行期交系统（本机=周一）⇒ 跟随系统跨机器不可复现；clamp 换来读数稳定，那是本仓
+    #      emit-manifest / 夹具逐字节对账的前提。本机量不出差别（f=0/1/2/7 同答 2）。
+    # NC-fdow 两格是**负控**：那一处偏离是**有意保留**的，哨兵盯住它别被顺手改成"跟随系统"。
+    $b424Needles = @("fwy0=2", "fwy1=2", "fwy2=1", "fwy3=1",
+        "fwy4=ERR5", "fwy5=ERR5", "fwy9=ERR5", "NC-fdow0=2", "NC-fdow7=2", "B424-DONE")
+    Add-BasTest "b424_datedpart_params" "$Tests\b424_datedpart_params.bas" $b424Needles
+    Add-BasTest "b424_datedpart_params_x86" "$Tests\b424_datedpart_params.bas" $b424Needles -Arch "x86"
+
+    # 账 #425 (§B199，第一百一十刀) = **只结账、不改行为**：「月/日超出范围」那一问，
+    #   量完的结论是「**现成的出口已经对了，别盲修**」。本夹具把两半都钉住:
+    #   域内(月份 1..14) 九格与运行期**逐格相同**；域外(月份 >= 15) 两格钉住"**仍然是偏的**"。
+    # 承面(本刀重新点过): 真语料 DateSerial **46 处**，月份 > 14 的 **0 处** ⇒ 域外不可达。
+    # ⚠ 域外偏差只有 **2 天**（`30.6001` 与 `365.25` 两项互相抵消，只剩小残差) ⇒ **看起来几乎是对的**，
+    #   编译与运行都不会响。所以必须钉住 + 由哨兵 R1 禁止"顺手补归一"——补归一恰好是**引入偏差**。
+    $b425Needles = @(
+        "mm01=2026-1-1", "mm12=2026-12-31", "mm13=2027-1-1", "mm14=2027-2-1", "leap=2024-2-29",
+        "d00=2025-12-31", "d32=2026-2-1", "d40=2026-2-9", "d400=2027-2-4",
+        "mm15=2027-3-3", "mm25=2028-1-3", "OUT-OF-DOMAIN-is-off=1", "B425-DONE")
+    Add-BasTest "b425_dateserial_domain" "$Tests\b425_dateserial_domain.bas" $b425Needles
+    Add-BasTest "b425_dateserial_domain_x86" "$Tests\b425_dateserial_domain.bas" $b425Needles -Arch "x86"
+
+    # 账 #442 (§B211，第一百一十一刀) = **只钉行为、不改行为**：DateAdd 的「w / ww」那一格。
+    # #423 给 DateDiff 补了「按 builtin 分岔」之后，隔壁 DateAdd 的同款分岔看着可疑 ——
+    #   共享枚举把单枚 w 答成 vb6_di_weekday，而 DateAdd 的 weekday 臂是 `datePart += n`（加**天**），
+    #   于是「DateAdd("w",1,·) 只加一天」看着像 bug。
+    # ⚠ **量完证明它是对的**（cscript 同机代理逐格量 **12 格零失配**）：
+    #     DateAdd("w",  1, #2026/1/5#) = 2026-01-06   ← w  = 加**天**
+    #     DateAdd("ww", 1, #2026/1/5#) = 2026-01-12   ← ww = 加**周**
+    # 顺带**反证 #423 的架构是对的**：那枚共享枚举对 DateAdd 与 DatePart 两家都恰好正确，
+    #   只有 DateDiff 一家分岔 ⇒ #423「不动枚举、让 DateDiff 自己认」是唯一正解；
+    #   若当时顺手统一成 DateDiff 口径，DateAdd 与 DatePart 会**同时**被弄坏。
+    $b442Needles = @(
+        "w_p1=2026-1-6", "ww_p1=2026-1-12", "w_m1=2026-1-4", "w_p3=2026-1-8", "w_0=2026-1-5",
+        "ww_m2=2025-12-22", "w_cross=2026-12-29", "w_leap=2024-2-27",
+        "d_p1=2026-1-6", "m_p1=2026-2-5", "y_p1=2026-1-6", "h_p1=2026-1-6", "B442-DONE")
+    Add-BasTest "b442_dateadd_interval" "$Tests\b442_dateadd_interval.bas" $b442Needles
+    Add-BasTest "b442_dateadd_interval_x86" "$Tests\b442_dateadd_interval.bas" $b442Needles -Arch "x86"
+
+    # 账 #439 (§B212，第一百一十二刀) = FormatNumber / FormatCurrency / FormatPercent 三家两笔账。
+    # ① **编不过那一族**：`FormatCurrency(x)` / `FormatPercent(x)` 发 1 个实参进 5 参的 RTL 出口
+    #   = cl C2198 整份编不过。病根 = 省略实参的默认档表 `kOD_FormatNum` **只登记了 FormatNumber**，
+    #   而三家 C 签名与可选实参完全同形 ⇒ 两家补同一张表。
+    # ② **读数那一族**：三家出口都写着 `(void)incLeading; (void)useParens; (void)groupDigits;`
+    #   ⇒ UseParentheses 被丢掉，负数永远交 `-1,234.57`；运行期该为真时交 `(1,234.57)`。
+    # ⚠ 本刀真正的坑 = **省略档与显式 True 在 C 侧同码**：VB6 的 True 恒为 -1，而省略档原先也填
+    #   -1 ⇒ 「省略」与「显式 True」分不开（当默认 ⇒ 显式 True 被吃；当真 ⇒ 省略档全变括号）。
+    #   VB6 里 UseParentheses 默认是 **False**，故发码那一档改成 **0**（位 1/2/4 仍是 -1）。
+    #   `def=` 与 `false=` 两格钉住「默认形态不许变」，`true=`/`skip=` 钉住「显式 True 要括号」。
+    # 三家那一族只钉**括号形状**不钉货币符号（符号跟着区域设置走，§B142 同一条纪律）。
+    $b439Needles = @(
+        "def-1arg=1", "cur-1arg=1", "pct-1arg=1", "cur-2arg=1",
+        "def=-1,234.57", "false=-1,234.57", "true=(1,234.57)", "pos=1,234.57", "skip=(1,234.57)",
+        "cur-def-parens=False", "cur-true-parens=True", "pct-true-parens=True", "B439-DONE")
+    Add-BasTest "b439_format_useparens" "$Tests\b439_format_useparens.bas" $b439Needles
+    Add-BasTest "b439_format_useparens_x86" "$Tests\b439_format_useparens.bas" $b439Needles -Arch "x86"
+
+    # 账 #437 (§B213，第一百一十三刀) = 5 位签名上**剩下那两枚**被 `(void)` 丢掉的位。
+    # §B212 收了 useParens，incLeading 与 groupDigits 当时一个字没动 ⇒ 接着量，全是**静默答错**。
+    #   IncludeLeadingDigits：显式 False ⇒ 整数部分**恰为 "0"** 时去掉那个 0。实测 `0.50`/`.50`/
+    #     `-.50`/`.00`，而 `FormatNumber(0,0,False)` 是**空串**、`FormatPercent(0,0,False)` 是 **`%`**。
+    #   GroupThousands：显式 False ⇒ 不插千分位。实测 `1,234.50`/`1234.50`/`1,234.50%`。
+    # ⚠ 这一族还**顺手逮到 §B212 错了一刀**：夹具当时只钉 `InStr(s,"(")>0` 的形状，于是「货币符号
+    #   该在括号里还是括号外」没人看见 —— 引擎是 `(¥1,234.57)`，我们交的是 `¥(1,234.57)`。
+    #   `k_cur_par=` / `k_cur_ng=` 两格把**位置**连同千分位一起钉；`k_pct_true=` 钉住千分位在
+    #   括号里**照插**（引擎 `(123,456.78%)`，而 §B212 记的「同读数」其实是形状同、数字不同）。
+    $b437Needles = @(
+        "inc_T=0.50", "inc_def=0.50", "inc_F=.50", "inc_F_neg=-.50", "inc_F_zero=.00",
+        "inc_F_empty=[]", "inc_F_odd=1,234.50",
+        "grp_T=1,234.50", "grp_def=1,234.50", "grp_F=1234.50", "grp_F_neg=-1234.50",
+        "grp_big=1,000,000.00",
+        "pct_inc_T=0.50%", "pct_inc_F=.50%", "pct_inc_F_pct=[%]",
+        "pct_grp_T=1,234.50%", "pct_grp_F=1234.50%", "pct_grp_def=1,234.50%",
+        "cur_inc_T=0.50", "cur_inc_F=.50", "cur_grp_T=1,234.50", "cur_grp_F=1234.50",
+        "cur_grp_neg=-1234.50",
+        "k_def=-1,234.57", "k_false=-1,234.57", "k_true=(1,234.57)", "k_skip=(1,234.57)",
+        "k_pct_def=12.34%", "k_pct_neg=-123,456.78%", "k_pct_true=(123,456.78%)",
+        "k_pct_ng=(123456.78%)", "k_cur_par=(1,234.57)", "k_cur_ng=(1234.57)", "B437-DONE")
+    Add-BasTest "b437_format_leading_group" "$Tests\b437_format_leading_group.bas" $b437Needles
+    Add-BasTest "b437_format_leading_group_x86" "$Tests\b437_format_leading_group.bas" $b437Needles -Arch "x86"
+
+    # 账 #438 (§B214) = 「(void) 形参」那一族的普查结论 —— **三条全是误报，逐条钉死防误修**。
+    # §B212 与 §B213 两刀都是从「某处写着 (void)x;」这句源码里读出来的；普查顺着同一句找到
+    # 121 枚 (void)，其中三枚最像「静默丢了一位」，量完之后**全是误报**：
+    #   ① `vb6_DateDiff` 的 `(void)firstWeekOfYear` = **实测惰性**，不是丢掉了一位。
+    #      尺 `.build/kfwy.vbs`：6 间隔(w/ww/y/q/m/d) x 5 组**跨年边界**，fwy=1/2/3 **全同**。
+    #      §B197 那两条公式只吃 f=firstDayOfWeek ⇒ 这里 (void) 是对的。任何普查都会重新举它一次，
+    #      然后有人去「修」，把对的实现改成错的 ⇒ `w_f1..3` / `ww_f1..3` / `wwb_*` 六格钉住「全同」。
+    #   ② `vb6_IIfLong/Double` 的 `(void)falsepart` = **多余**，下一行就用到了。而且这三个出口
+    #      发码真的走得到（`cgen_expr_call_builtin_pre.inc` 会发 vb6_IIfLong/Double/BSTR），
+    #      IIf 是 VB6 高频件而**普查前一处回归都没有** ⇒ 这里补 `iifL_*`/`iifD_*`/`iifS_*`。
+    #      `iifL_n=7` 钉的是「**非零（含负）即真**」—— 我第一版注释写成该交 8，量出来 7，
+    #      **注释错了代码是对的**；真正的风险方向是把负数当假。
+    #   ③ `vb6_IPmt` 的 `(void)nper` / `(void)fv` = 同样多余，两个都喂给了下一行的 vb6_Pmt。
+    # ⚠ 诚实性：**本机没有财务族的引擎代理** —— VBScript 压根没有财务函数（连 IIf 也没有），
+    #   所以夹具**不钉** IPmt/PPmt/Pmt 的绝对读数，只在哨兵里钉「形参仍被引用」这条静态事实。
+    $b438Needles = @(
+        "w_f1=52", "w_f2=52", "w_f3=52", "ww_f1=53", "ww_f2=53", "ww_f3=53",
+        "wwb_1=1", "wwb_2=1",
+        "iifL_t=11", "iifL_f=22", "iifD_t=1.5", "iifD_f=2.5", "iifS_t=yes", "iifS_f=no",
+        "iifL_0=8", "iifL_n=7", "B438-DONE")
+    Add-BasTest "b438_void_param_census" "$Tests\b438_void_param_census.bas" $b438Needles
+    Add-BasTest "b438_void_param_census_x86" "$Tests\b438_void_param_census.bas" $b438Needles -Arch "x86"
     # <vbeclipse> 账 #215: 体级声明收成「一条声明符一条 LocalDeclStmt」。改前四条体级路两种形状 ——
     # Dim 自己手写一遍展开(那份副本漏了 WithEvents 与「后缀即类型」)，Const/Static/体级 Public 把
     # MultiDecl 原样交给语义层(switch 不认) ⇒ 一枚名字都不登记、每条使用一条 VB3001(真工程一片 276 条)，
@@ -3103,6 +3656,37 @@ if ($Category -in @("all", "run", "bas")) {
         'vb6_LenB(vb6_CStr',
         'vb6_Len(vb6_CStrLong'
     )
+
+    # <vbeclipse> 账 #305 §B175（第六十六刀）：**没有类型化形参表**的那 66 枚内在函数，字符串
+    # 形参位从此也问得到 Fix 175 那一站。八枚 = 注册表家族的四位 + Format 的 style 位 + DeleteSetting
+    # 的节位；形状全部出自 wrapToBSTR（与 §B174 同一个口径，档位差异只在那一枚共享闸里）。
+    # 第 5/6/7 枚是本格最响的一条：语料里 `GetSetting("A","S","K", 0)` 那一形 369 处、
+    # `SaveSetting … , 42` 78 处 —— 修前交的是裸 int32_t，写侧静默存指针、读侧拿它当 wchar_t*。
+    Test-EmitcShape 'b175_notab_str_arg_shape' @(
+        "$Tests\b175_num_bstr.bas") @(
+        'vb6_GetSetting(NB_APP, vb6_BSTR_FromStr(L"Sec"), sKey, vb6_CStrLong(nLen))',
+        'vb6_GetSetting(NB_APP, vb6_BSTR_FromStr(L"Sec"), sKey, vb6_CStrDbl(dDef))',
+        'vb6_GetSetting(vb6_CStrLong(nLen),',
+        'vb6_SaveSetting(NB_APP, vb6_BSTR_FromStr(L"Sec"), sKey, vb6_CStrLong(nSet))',
+        'vb6_SaveSetting(NB_APP, vb6_CStrLong(nSec), sKey, vb6_CStrLong(nLen))',
+        'vb6_GetAllSettings(NB_APP, vb6_CStrLong(nSec))',
+        'vb6_DeleteSetting(NB_APP, vb6_CStrLong(nSec), sKey)',
+        'vb6_Format(vb6_VariantDouble(1234.567), vb6_CStrLong(nForm)',
+        # 第 9/10 枚 = 同一句问句的**反面**: 省略掉的标题位不许折 (真语料 ppProgressCircular.pag:351
+        # `InputBox("...", , 100)` —— 占位 0 折成 "0" 就把「没写标题」变成了标题 "0")。
+        'vb6_InputBox(vb6_BSTR_FromStr(L"witness omitted title"), 0L, vb6_CStrLong(100), 0, 0'
+    )
+    # 反针四枚 = 病形本身（数值裸进那一位），第五枚钉「不许二次折」—— 六十五刀在 argtype 那站
+    # 量到的双层折 (`vb6_CStrDbl((double)(vb6_VariantToString(...)))`) 不许在这一站重演。
+    Test-EmitcAbsent 'b175_notab_str_arg_lesion' @(
+        "$Tests\b175_num_bstr.bas") @(
+        'vb6_GetSetting(NB_APP, vb6_BSTR_FromStr(L"Sec"), sKey, nLen)',
+        'vb6_SaveSetting(NB_APP, vb6_BSTR_FromStr(L"Sec"), sKey, nSet)',
+        'vb6_GetSetting(nLen,',
+        'vb6_GetAllSettings(NB_APP, nSec)',
+        'vb6_InputBox(vb6_BSTR_FromStr(L"witness omitted title"), vb6_CStrLong(0L)',
+        'vb6_CStrLong(vb6_CStrLong'
+    )
     # 账 #305 §B149 + §B150 (第四十刀): 注册表家族的真往返 + 晚绑定槽的二维元素读写。
     # 读数来源 = .build/b1280_rs (新 exe, x64 与 x86 **逐行相同**, 故同针同过); 外部口径证人 =
     # VB6 真语料 mdoceditor/E-Type/Main.bas:269 (`For i = 0 To UBound(varFiles, 1)` + `varFiles(i, 1)`)。
@@ -3130,6 +3714,322 @@ if ($Category -in @("all", "run", "bas")) {
         "RS-DONE")
     Add-BasTest "test_registry_settings" "$Tests\test_registry_settings.bas" $rsSetNeedles
     Add-BasTest "test_registry_settings_x86" "$Tests\test_registry_settings.bas" $rsSetNeedles -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (b175_num_bstr, 账 #305 §B175 第六十六刀): 数值实参交进**没有形参表**
+    # 的内在函数的字符串形参位 —— 注册表家族真往返 + Format 的 style 位。
+    # 读数来源 = .build/k66_fix (新 exe, x64 与 x86 **逐行相同**)。行为负控 = BASE 那台
+    # (C3_k66_on.exe = 六十五刀合完那台) 跑同一份夹具: **两台都 cl C2440**
+    # (`b175.c(39): 无法从 double 转换到 BSTR`)、无 exe (.build/k66_fix_base/<arch>/c3-error.log)
+    # —— 整型那几档今天只是 C4047 (在 -W3 之外) 所以编得过、真跑 AV, 浮点这一档本来就是硬错误。
+    # R7/R8 是不依赖地区小数点的证人: 数值 style 折成串之后与手写 "2" 那一形**同答**
+    # (Len=8 = 千分位那一形), 于是这条针钉的是「两档汇合」而不是「格式对不对」。
+    # ⚠ 变量名不叫 $rsNeedles / $b174Expected —— 那两个名字上面已经有人用了。
+    $nb175Needles = @("R1-default-long=12", "R2-default-dbl=1.5", "R3-app-numeric=d3",
+        "R4-write-read=42", "R5-num-section=12",
+        "R6-gas-vt=8204", "R6-gas-cell=K1|12",
+        "R7-fmt-eq=True", "R8-fmt-len=8", "NB-DONE")
+    Add-BasTest "b175_num_bstr" "$Tests\b175_num_bstr.bas" $nb175Needles
+    Add-BasTest "b175_num_bstr_x86" "$Tests\b175_num_bstr.bas" $nb175Needles -Arch "x86"
+    # <vbeclipse> 账 #305 §B176（第六十七刀）：「这一位形参要什么 C 档」原先有三位主人，
+    # 第三位（getRuntimeParamCType 那张表）登的是 **VB 书写的个数**、问它的位号却是**发码位置**，
+    # 两者不同源 —— InStr 那一格按两参形只登了两枚 BSTR，于是三参形整格错位一格：Variant 的
+    # start 位被当成字符串解包、串交进 int32_t 形参。cl 只给一条 C4047（在 -W3 之外，而 C3 的
+    # 构建日志根本不打 cl 警告）⇒ 运行期 start = 被截断的指针，InStr **静默答 0**。本刀把这一问
+    # 收成一处 builtinNoParamTableFormalCType（档位表），字符串位由它投影出
+    # builtinNoParamTableStringSlot —— 同一张表答两问，不再各自抄。
+    # 八枚形状针全部出自 .build/k67_w2 的 --emit-c 逐行读数（两台逐字节相同）。
+    # 第 2/3 枚 = Variant 进**数值**形参那一半（vb6_VariantToLong），钉「不许裸交结构体」；
+    # 第 7/8 枚 = 同一问的两档 arity：三参形 start 在位 0、两参形压根没有 start（haystack
+    # 仍在位 0）—— 两枚同时落地才证明位号不再跟书写个数错位。
+    Test-EmitcShape 'b176_var_slot_shape' @(
+        "$Tests\b176_var_slot.bas") @(
+        'vb6_MsgBox(vb6_VariantToString(vP), vb6_VariantToLong(vBtn), vb6_VariantToString(vTitle))',
+        'vb6_SendKeys(vb6_VariantToString(vKeys), vb6_VariantToLong(vWait))',
+        'vb6_SetAttr(vb6_VariantToString(vName), vb6_VariantToLong(vAttr))',
+        'vb6_SavePicture(pic, vb6_VariantToString(vName))',
+        'vb6_InStr(vb6_VariantToLong(vS3), w1, vNeedle)',
+        'vb6_InStrC(vb6_VariantToLong(vS3), w1, vb6_BSTR_FromStr(L"7"), vb6_VariantToLong(vCmp))',
+        'vb6_InStr(vb6_VariantToLong(vS4), s1, vb6_BSTR_FromStr(L"7"))',
+        'vb6_InStr(1, vb6_VariantToString(vKey), vb6_BSTR_FromStr(L"text"))'
+    )
+    # 反针七枚：前四枚 = 病形本身（Variant 裸交进 BSTR 位 / 串交进数值位 / 指针位被解包），
+    # 第 5 枚钉「不许二次折」（六十五刀在 argtype 那站量到的双层折不许在这一站重演），
+    # 第 6 枚钉 needle 位**不许预先解包** —— vb6_InStr 是 _Generic 宏，它自己会走 vb6_InStrVar
+    # 解包并 SysFreeString；发码侧抢先解一次就多出一枚没人回收的临时串（§B176 读数③）。
+    Test-EmitcAbsent 'b176_var_slot_lesion' @(
+        "$Tests\b176_var_slot.bas") @(
+        'vb6_MsgBox(vP,',
+        'vb6_GetSetting(BV_APP, vSec,',
+        'vb6_InStr(vb6_VariantToString(vS4)',
+        'vb6_SavePicture(vb6_VariantToString',
+        'vb6_VariantToString(vb6_VariantToString',
+        'vb6_InStr(vb6_VariantToLong(vS3), w1, vb6_VariantToString(vNeedle)',
+        'vb6_Format(dNum, vStyle'
+    )
+    # 真跑读数来源 = .build/k67_w2（新 exe，x64 与 x86 **逐行相同**）。V1/V2 是形②那一位的
+    # 读数（start 是 Variant 的三参形），V3 是没写 Variant 的那一形 = 证人（老形状不许变），
+    # V4 钉两参形不许被当成 start。V5..V7 是注册表家族真往返、V8..V10 是 Format 的 style 位。
+    # 行为负控分两条，因为两形的 BASE 表现根本不同：
+    #   形①（Variant 进 BSTR 位）：整份夹具在 BASE 那台**压根编不过** —— 两台各十六枚 cl C2440、
+    #     无产物（.build/k67_base2/{x64,x86}/c3-error.log）；
+    #   形②（Variant 进 int32_t 位）：BASE **编得过、静默答错**。单独一份只含 InStr 的探针
+    #     (.build/k67_istr_probe2.bas, BASE 读数 .build/k67_istr2_{x64,x86}) 四行全答 0，
+    #     修后六/0/四/七 —— 而这条探针在 BASE x64 上**有过一次答对**（截断后的指针低 32 位
+    #     恰好落进串长之内，.build/k67_istr_base/x64 那次 I1=6）⇒ 「BASE 上也对」只是反面证人
+    #     不够格，真跑判据必须钉在 NEW 这一台的确定值上（V1=4 与 V2=0 两头，缺一头不成立）。
+    $bv176Needles = @("V1-start4=4", "V2-start5=0", "V3-start2=4", "V4-twoarg=0",
+        "V5-roundtrip=roundtrip", "V6-vartype=8", "V7-miss=roundtrip",
+        "V8-fmt=1235", "V9-fmt-lit=1235", "V10-fmt-len=4", "BV-DONE")
+    Add-BasTest "b176_var_slot" "$Tests\b176_var_slot.bas" $bv176Needles
+    Add-BasTest "b176_var_slot_x86" "$Tests\b176_var_slot.bas" $bv176Needles -Arch "x86"
+    # <vbeclipse> 账 #305 §B177（第六十八刀）：InStr 的 needle 位**一位两答** —— 数值实参要折成串
+    # (VB6 隐式 CStr)，而 Variant 实参要**裸交**：`vb6_InStr` / `vb6_InStrC` 是按 needle 分派的
+    # _Generic 宏，Variant 那一臂 `vb6_InStrVar` 自己解包**并 free**（`vb6rtl_string.c:235-247`）。
+    # 六十七刀把这一位在「写了 start」的两形答成空，于是**数值那一半跟着掉了**：`InStr(2, s, 7)`
+    # 发裸 int 进 `wchar_t*`，cl 不报，两台跑到那行都崩（实测修前 x64 与 x86 都停在 N5 那行、
+    # 只剩前四行输出；六十六刀那台答 4）。反过来两参形与「串首三参形」又多折一层：20000 次
+    # `InStr(hay, vStr)` 比同形状的 String 实参多 753664 字节（两台修前 753664、修后 0）。
+    # 修法 = 位号只在一处数（`builtinNoParamTableDispatchSlot`），「第 pos 位要什么档」与
+    # 「这一位的 Variant 可不可以不折」都是它的投影 ⇒ 两答同源、站点数不增加。
+    $b177Needles = @("N1-twoarg-lit=4", "N2-twoarg-long=4", "N5-start-lit=4", "N6-start-long=4",
+        "N13-cmp-long=4", "N14-start-cmp-long=4", "N3-twoarg-varstr=4", "N4-twoarg-varnum=4",
+        "N7-start-varstr=4", "N8-cmp-varstr=4", "N10-start-cmp-varstr=4", "N15-miss=0",
+        "N16-bin-vs-text=0|4", "B177-apiBad=0", "B177-leak-ok=Y", "B177-acc=4",
+        "C3ProbeB177-DONE")
+    Add-BasTest "b177_instr_needle" "$Tests\b177_instr_needle.bas" $b177Needles
+    Add-BasTest "b177_instr_needle_x86" "$Tests\b177_instr_needle.bas" $b177Needles -Arch "x86"
+    # 发码针：六枚数值折算（两形不写 start、两形写 start、两形带 compare）+ 五枚 Variant **裸交**
+    # + 一枚 haystack 位照旧解包（宏不按那一维分派 ⇒ 那一位的折是必须的，别跟着改）。
+    Test-EmitcShape 'b177_instr_needle_shape' @(
+        "$Tests\b177_instr_needle.bas") @(
+        'vb6_InStr(1, hay, vb6_CStrLong(7))',
+        'vb6_InStr(1, hay, vb6_CStrLong(nLong))',
+        'vb6_InStr(2, hay, vb6_CStrLong(7))',
+        'vb6_InStr(2, hay, vb6_CStrLong(nLong))',
+        'vb6_InStrC(1, hay, vb6_CStrLong(nLong), 1)',
+        'vb6_InStrC(2, hay, vb6_CStrLong(nLong), 1)',
+        'vb6_InStr(1, hay, vStr)',
+        'vb6_InStrC(1, hay, vStr, 1)',
+        'vb6_InStrC(wNum, wHay, wVar, vb6_VariantToLong(wCmp))',
+        'vb6_InStr(1, vb6_VariantToString(wVar), wHay)',
+        'vb6_InStr(wNum, wHay, vb6_CStrLong(7))'
+    )
+    # 反针：前两枚 = 六十七刀丢掉的那一半（裸数值进 needle 位），中两枚 = 多折的那一半
+    # （needle 位被预先解包），第五枚钉「不许二次折」，最后一枚钉四参形也不许预先解包。
+    Test-EmitcAbsent 'b177_instr_needle_lesion' @(
+        "$Tests\b177_instr_needle.bas") @(
+        'vb6_InStr(2, hay, 7)',
+        'vb6_InStr(2, hay, nLong)',
+        'vb6_InStr(1, hay, vb6_VariantToString(vStr)',
+        'vb6_InStrC(1, hay, vb6_VariantToString(vStr)',
+        'vb6_VariantToString(vb6_VariantToString',
+        'vb6_InStrC(wNum, wHay, vb6_VariantToString(wVar), '
+    )
+    # <vbeclipse> 账 #305 §B180（第六十九刀）：`StrPtr(<Variant>)` 曾经发
+    # `vb6_StrPtr(vb6_VariantToString(v))` —— 而 `vb6_VariantToString` 的定义就一句 `return vb6_CStr(v)`
+    # (= `vb6_Format(...)`) ⇒ **每次调用现造一枚 BSTR**，地址交给 Win32 之后那枚串没人回收。
+    # 两台实测（`.build/k69sp`，18000 次减去同形状普通 String 的零分配基线窗）=
+    # x64 1089536 / x86 909312 字节；真语料 18 份文件 41 处，全坐在 `lpszIcon` / `pszText` /
+    # `CreateWindowExW` / `FindFirstFileW` / `VarI8FromStr` / `dwTypeData` 这些指针交接位上。
+    # 修法 = `vt` 已是串时**借**槽里那枚 BSTR（RTL 新出口 `vb6_StrPtrVar`），发码侧由一枚**看实参**的
+    # 问句撤回解包 + `builtin_fixup` 改 callee 名（两站同归一处）。⚠ 这一问不许按位号无条件答槽：
+    # 同一个 `vb6_StrPtr(` 在全语料 1720 处里只有 41 处是槽，其余 1679 处交的是普通 String 变量 / 数组元素 / 解引用（逐枚分解见台账 §B180 的订正条），无条件答槽会把它们全打成
+    # C2440（读数 = `.build/k69_strptr_census.txt`）。非串那档仍 mint，那半归 §B164 形①。
+    $b180Needles = @("P1-var-string-nonzero=Y", "P2-empty-string=0",
+        "P3-variant-empty-string=0", "P4-var-numeric-nonzero=Y", "P5-stable=Y",
+        "B180-apiBad=0", "B180-leak-ok=Y", "B180-acc=-1", "C3ProbeB180-DONE")
+    Add-BasTest "b180_strptr_variant" "$Tests\b180_strptr_variant.bas" $b180Needles
+    Add-BasTest "b180_strptr_variant_x86" "$Tests\b180_strptr_variant.bas" $b180Needles -Arch "x86"
+    # 发码针：三枚 Variant 形走收槽的出口（装串 / 装空串 / 装数值），两枚证人钉「普通 String
+    # 变量与空串变量**照旧**走 `vb6_StrPtr`（不许过度改道）， witness 子程序里两枚各一档。
+    Test-EmitcShape 'b180_strptr_variant_shape' @(
+        "$Tests\b180_strptr_variant.bas") @(
+        'vb6_StrPtrVar(vStr);',
+        'vb6_StrPtrVar(vEmptyStr);',
+        'vb6_StrPtrVar(vNum);',
+        'vb6_StrPtr(e);',
+        'vb6_StrPtr(s);',
+        'vb6_StrPtrVar(wHay);',
+        'vb6_StrPtr(wTxt);'
+    )
+    # 反针：前两枚 = 病形本体（解包后进 StrPtr / mint 分支被绕进解包），中两枚 = 二次解包与
+    # 把 String 变量也改道到收槽出口（那正是普查警告过的 1478 处误伤形状）。
+    Test-EmitcAbsent 'b180_strptr_variant_lesion' @(
+        "$Tests\b180_strptr_variant.bas") @(
+        'vb6_StrPtr(vb6_VariantToString(',
+        'vb6_StrPtr(vb6_CStr(',
+        'vb6_StrPtrVar(vb6_VariantToString(',
+        'vb6_VariantToString(vb6_VariantToString(',
+        'vb6_StrPtrVar(e)',
+        'vb6_StrPtrVar(s)'
+    )
+    # <vbeclipse> 账 #305 §B181（第七十一刀）：`StrPtr` / `StrConv` 收一枚 **ByRef Byte() 形参**时，
+    # 以前交出去的是 SafeArray **描述符**的地址，不是数据首地址 —— cl 在 C 里只警告不拦，静默。
+    # 两处独立成因，都用本夹具自己的形状在修前那台（`C3_k69_new.exe`）上量到：① 字节数组名单
+    # 压根没有「形参」那条登记路（模块级与局部都有：`cgen_decl_var.cpp:85` / `cgen_localdecl.cpp:104`），
+    # ② 剥 `(*x)` 的长度闸写作 `> 4` ⇒ 单字母形参连查表那一步都没进。BASE 读数 = formal 指针 ≠
+    # 调用方指针、delta 非 0、`lstrlenW` 把描述符头读成 3；修后两台逐行相同（都是 2 / 都是 Y）。
+    $b181Needles = @("C3ProbeB181-P1-short-formal-same=Y", "C3ProbeB181-P2-long-formal-same=Y",
+        "C3ProbeB181-P3-short-formal-len=2", "C3ProbeB181-P4-long-formal-len=2",
+        "C3ProbeB181-P5-module-len=2", "C3ProbeB181-P6-caller-nonzero=True", "C3ProbeB181-DONE")
+    Add-BasTest "b181_baformal" "$Tests\b181_baformal.bas" $b181Needles
+    Add-BasTest "b181_baformal_x86" "$Tests\b181_baformal.bas" $b181Needles -Arch "x86"
+    # 发码针：单字母与长名两枚形参都走数据指针出口；兄弟站 StrConv 同一条腿；模块级那枚是**证人**
+    # （修前修后都在，钉「这一站本来就对的那些形状不许动」）；最后一枚 = 非字节数组的元素照旧走裸
+    # `vb6_StrPtr`，钉这一档没被过度改道。
+    Test-EmitcShape 'b181_baformal_shape' @(
+        "$Tests\b181_baformal.bas") @(
+        'vb6_SafeArrayDataPtr((*b))',
+        'vb6_SafeArrayDataPtr((*data))',
+        'vb6_StrConvFromByteArray((*data)',
+        'vb6_SafeArrayDataPtr(m_Module)',
+        'vb6_StrPtr(VB6_SA_AT'
+    )
+    # 反针：前三枚 = 病形本体（描述符指针进 BSTR 形参）；后两枚 = 把 String 数组元素也改道过去
+    # 的过度形状（那正是 §B180 那条普查警告过的误伤方向）。
+    Test-EmitcAbsent 'b181_baformal_lesion' @(
+        "$Tests\b181_baformal.bas") @(
+        'vb6_StrPtr((*b))',
+        'vb6_StrPtr((*data))',
+        'vb6_StrConv((*data)',
+        'vb6_SafeArrayDataPtr(VB6_SA_AT',
+        'vb6_StrConvFromByteArray(VB6_SA_AT'
+    )
+
+    # <vbeclipse> 账 #305 §B182（第七十三刀）：一枚 Integer **形参**的赋值从不查 16 位范围 ——
+    # 模块级与局部 Integer 的存值都走 vb6_ChkInt（越界 = run-time error 6 Overflow），而三条形参臂
+    # 把 Integer 只折进 knownLongVars_、没进 knownIntVars_ ⇒ 发码成裸 `(*fi) = 40000;`，C 静默
+    # 截断成 -25536 并**顺着 ByRef 写回调用方的变量**。BASE 读数 = P2 一声不响、P6 = -25536；
+    # 修后两台逐行相同：P2 报 6、P6 保持 1（那次存值被拒 ⇒ 调用方没被污染）。
+    # P9 = Long 形参的证人：32 位目标不许被窄检查碰。
+    $b182Needles = @("C3ProbeB182-P1-local-raised=6", "C3ProbeB182-P2-formal-raised=6",
+        "C3ProbeB182-P3-module-raised=6", "C3ProbeB182-P4-byval-inrange-ok=6",
+        "C3ProbeB182-P5-formal-inrange-ok", "C3ProbeB182-P6-sink-after-outofrange=1",
+        "C3ProbeB182-P7-sink-after-inrange=7", "C3ProbeB182-P8-untouched=2",
+        "C3ProbeB182-P9-long-formal-ok=40000", "C3ProbeB182-DONE")
+    Add-BasTest "b182_intformal" "$Tests\b182_intformal.bas" $b182Needles
+    Add-BasTest "b182_intformal_x86" "$Tests\b182_intformal.bas" $b182Needles -Arch "x86"
+    # 发码针：ByRef 与 ByVal 两形形参都上窄检查；模块级/局部那两枚是**证人**（修前修后都在，钉
+    # 「本来就对的那些形状不许动」）；最后一枚 = Long 形参的裸存照旧。
+    Test-EmitcShape 'b182_intformal_shape' @(
+        "$Tests\b182_intformal.bas") @(
+        '(*fi) = vb6_ChkInt(40000)',
+        'fv = vb6_ChkInt((fv + 1))',
+        'li = vb6_ChkInt(40000)',
+        'gi = vb6_ChkInt(40000)',
+        '(*lg) = 40000'
+    )
+    # 反针：前两枚 = 病形本体（形参存值不查范围）；后两枚 = 过度形状的闸（Long 形参、Single 形参
+    # 都不许被卷进窄检查——Single 的存值走它自己的浮点档，与这一问无关）。
+    Test-EmitcAbsent 'b182_intformal_lesion' @(
+        "$Tests\b182_intformal.bas") @(
+        '(*fi) = 40000;',
+        'fv = (fv + 1);',
+        'vb6_ChkInt((*lg))',
+        'vb6_ChkInt((*fi) +'
+    )
+
+    # <vbeclipse> 账 #305 §B183（第七十四刀）：Integer **类字段**的存值也不查 16 位范围 —— 类成员扫描
+    # 把 Long/Integer/Boolean 一起折进放宽档 classLongMembers_，而那张表全仓只有三处过程入口整份拷回
+    # knownLongVars_；于是一枚类自己的代码里，裸名成员左值在窄档表之前先被放宽档答成 32 位 ⇒
+    # `ci = 40000` 发成裸存：VB6 给 run-time error 6 **且保留旧值**，C 静默截成 -25536 并写回字段。
+    # 修法 = 同一条折叠臂旁另立窄档表 classIntMembers_（m_ 与裸名两拼都记）+ 三处入口各补一行恢复；
+    # **不摘**放宽档里的 Integer（它另有消费方，双登记是本文件族既有口径：Byte 账 #123 / Boolean
+    # ai/022 W1 / Date Fix 175）。窄表全仓只有一位消费点 narrowTargetTypeOf ⇒ 本刀唯一后果 = 越界存值多套一层 vb6_ChkInt。
+    # BASE 读数（两台逐行相同）= P1/P2/P7 一声不响、P3/P4 都是 -25536；修后：三处报 6、两处读回保住
+    # 上一次那个合法值。P0 = 合法存值照旧落位（检查不许改答案）；P5/P6/P8 = 证人（Byte 字段本来就响、
+    # Long 字段不许被卷进窄检查）。
+    $b183Needles = @("C3ProbeB183-P0-seed=12345|23456", "C3ProbeB183-P1-bare-raised=6",
+        "C3ProbeB183-P2-fromlong-raised=6", "C3ProbeB183-P7-private-raised=6",
+        "C3ProbeB183-P3-ci-kept=12345", "C3ProbeB183-P4-pf-kept=23456",
+        "C3ProbeB183-P5-byte-raised=6", "C3ProbeB183-P6-long-noerr",
+        "C3ProbeB183-P8-cl=40000", "C3ProbeB183-DONE")
+    Test-Vbp 'b183_int_field' "$Tests\b183_intfield\B183.vbp" $b183Needles
+    Test-Vbp 'b183_int_field_x86' "$Tests\b183_intfield\B183.vbp" $b183Needles -Arch "x86"
+    # 发码针：前三枚 = 三条病形（裸名 / 来源是 Long 变量 / 私有字段）都上了 vb6_ChkInt；中间两枚 =
+    # 合法值那一趟也被套上但答案不变（钉「检查不改数」）；后两枚 = 证人形状（Byte 仍走 ChkByte、
+    # Long 仍是裸存），BASE 与 NEW 都在场。
+    Test-EmitcShape 'b183_intfield_shape' @(
+        "$Tests\b183_intfield\B183Main.bas",
+        "$Tests\b183_intfield\B183Holder.cls") @(
+        'me->ci = vb6_ChkInt(40000);',
+        'me->ci = vb6_ChkInt(t);',
+        'me->pf = vb6_ChkInt(40000);',
+        'me->ci = vb6_ChkInt(12345);',
+        'me->cb = vb6_ChkByte(300);',
+        'me->cl = 40000;'
+    )
+    # 反针：前四枚 = 病形本体（BASE 产物各命中一次，NEW 全 0）；后两枚 = 过度形状的闸（Long 字段、
+    # Byte 字段都不许被挪进 ChkInt——那是把别一档的宽度答案改嫁过来）。
+    Test-EmitcAbsent 'b183_intfield_lesion' @(
+        "$Tests\b183_intfield\B183Main.bas",
+        "$Tests\b183_intfield\B183Holder.cls") @(
+        'me->ci = 40000;',
+        'me->ci = t;',
+        'me->pf = 40000;',
+        'me->pf = 23456;',
+        'vb6_ChkInt(me->cl)',
+        'me->cb = vb6_ChkInt'
+    )
+    # <vbeclipse> 账 #305 §B184（第七十五刀）：「这枚左值有多窄」那一问收成一张表、四站都问它。
+    # 改前这条问句在发码侧住两家：① 赋值站 narrowCheckAssign 自己手抄了一遍宽度 switch，
+    # ② COM 字段写回那条链压根不知道有这张表（`me->ci = (int16_t)value.lVal;` 是裸 C 截断）。
+    # 另一大片缺的是**接收者拼写出来**的那一族 —— narrowTargetTypeOf 的成员臂只认
+    # SymbolKind::UserDefinedType，于是 `Me.ci` / `h.ci`（类形参）/ `k.ci`（局部对象变量）/
+    # `With h : .ci` 四种拼法全落同一句裸存：40000 存进 int16_t 变 -25536，而真 VB6 交 error 6
+    # **且保住上一个合法值**（第七十四刀 §B183 只修了类内那个裸名拼法 ci = 40000）。
+    # 修法 = 表 narrowCheckFnForVbType（Byte/Integer/Long → 检查名 + 位宽，一处声明一处定义）
+    # + 字段档权威 classFieldKind（§B169 那趟工程级预扫描）+ §B170 同一条否决（类里有同名
+    # 方法/属性时这一句归属性那一路）；With 那一站补上同一个包装。⚠ Long / Boolean 两臂刻意不动：
+    # 前者源本就 32 位不截，后者是归一不是截断。
+    # BASE 读数（两台逐行相同，.build/k75_base_{x64,x86}/）= P1/P5/P3/P7/P13 一声不响、
+    # ci 读回 -25536、cb 读回 44、P12 读回 6（C 截断，VB6 是四舍五入）；修后：五处报 6、
+    # 三处读回保住上一次那个合法值、P12 = 7。证人 = P9/P9b（Long 字段不许被卷进新闸）、
+    # P10（Boolean 归一）、P15（同名属性仍走 prop_let = 否决生效）。
+    $b184Needles = @("C3ProbeB184-P0-seed=12345|200|7", "C3ProbeB184-P1-me-raised=6",
+        "C3ProbeB184-P2-ci-kept=12345", "C3ProbeB184-P5-with-raised=6",
+        "C3ProbeB184-P6-ci-kept2=12345", "C3ProbeB184-P3-mebyte-raised=6",
+        "C3ProbeB184-P4-cb-kept=200", "C3ProbeB184-P7-param-raised=6",
+        "C3ProbeB184-P8-ci-kept3=12345", "C3ProbeB184-P12-float-round=7",
+        "C3ProbeB184-P13-local-raised=6|1111", "C3ProbeB184-P15-prop=7",
+        "C3ProbeB184-P9-long-noerr", "C3ProbeB184-P9b-cl=40000",
+        "C3ProbeB184-P10-bool-noerr", "C3ProbeB184-DONE")
+    Test-Vbp 'b184_field_narrow' "$Tests\b184_fieldw\B184.vbp" $b184Needles
+    Test-Vbp 'b184_field_narrow_x86' "$Tests\b184_fieldw\B184.vbp" $b184Needles -Arch "x86"
+    # 发码针：前六枚 = 四条病形（Me. / With / 类形参 / 局部对象变量）+ COM 写回 + 浮点那一路
+    # 都上了表里那枚检查；后三枚 = 证人形状（Long、Boolean 字段仍是裸存，同名属性仍走 prop_let），
+    # 这两类在 BASE 与 NEW 都在场（钉「本刀不许把它们卷进来」的发码那一半）。
+    Test-EmitcShape 'b184_fieldw_shape' @(
+        "$Tests\b184_fieldw\B184Main.bas",
+        "$Tests\b184_fieldw\B184Holder.cls",
+        "$Tests\b184_fieldw\B184Peer.cls") @(
+        'me->ci  /* class var .ci field */ = vb6_ChkInt(40000);',
+        '_vb6_with_0->ci = vb6_ChkInt(40000);  /* With class field write */',
+        '(*h)->ci  /* class var .ci field */ = vb6_ChkInt(t);',
+        'k->ci  /* class var .ci field */ = vb6_ChkInt(40000);',
+        'me->ci = vb6_ChkInt(value.lVal);',
+        'me->ci  /* class var .ci field */ = vb6_ChkInt(vb6_FltToLng(d));',
+        'me->cl  /* class var .cl field */ = 40000;',
+        'me->bl  /* class var .bl field */ = 300;',
+        'vb6_B184Holder_prop_let_Pi(k, 7);'
+    )
+    # 反针：前六枚 = 病形本体（BASE 上各命中一次，NEW 全 0）；后两枚 = 过度形状的闸
+    # （Long 字段不许被挪进 ChkInt，Byte 字段那一档的答案也不许改成 ChkInt —— 那是把别的
+    # 宽度答案改嫁过来）。
+    Test-EmitcAbsent 'b184_fieldw_lesion' @(
+        "$Tests\b184_fieldw\B184Main.bas",
+        "$Tests\b184_fieldw\B184Holder.cls",
+        "$Tests\b184_fieldw\B184Peer.cls") @(
+        'me->ci  /* class var .ci field */ = 40000;',
+        'me->cb  /* class var .cb field */ = 300;',
+        '_vb6_with_0->ci = 40000;',
+        '(*h)->ci  /* class var .ci field */ = t;',
+        'k->ci  /* class var .ci field */ = 40000;',
+        'me->ci = (int16_t)value.lVal;',
+        'vb6_ChkInt(me->cl',
+        'me->cb = vb6_ChkInt'
+    )
+
     # <vbeclipse> 账 #305 §B154（第四十二刀）：ReDim 重建一枚动态数组时，元素档**问声明**，不是问 ReDim 自己
     # 的 As 子句。修前 cgen_redim.cpp 只问 asType，没写 As 就交 vb6_sa_variant，而访问侧（VB6_SA_AT /
     # VB6_SA_ND_AT2）问的是声明表 arrayElemTypes_ —— 同一枚描述符两个答案：造出来 24 字节一步（x64），
@@ -3670,7 +4570,11 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp "test_uintfields" "$Tests\test_uintfields.vbp" @("UF-u=4294967295", "UF-ui=65535",
         "UF-u3=78187493530", "UF-sb=-128", "UF-u-add=4294967296", "UF-u-idiv=2147483647",
         "UF-u3-idiv=39093746765", "UF-u-box=4294967295", "UF-u-box-tn=ULong",
-        "UF-u3-box=78187493530", "UF-ui-box=65535", "UF-DONE")
+        "UF-u3-box=78187493530", "UF-ui-box=65535",
+        # ai/032 §6.9: 后三格钉的是**类型身份**(SByte / UInteger 的 TypeName)。
+        # 改前这两档没有自己的出口, 被 _Generic 的 `char:` / `wchar_t:` 档装成 VT_I4 ⇒
+        # 值对(65535 / -128)而 TypeName 答 "Long"。补上真出口后答各自的类型名。
+        "UF-ui-box-tn=UInteger", "UF-sb-box=-128", "UF-sb-box-tn=SByte", "UF-DONE")
 
     # Cross-module overload resolution (O3): modA exports Sub/Function overload
     # groups; modB Main calls them. Deferred re-resolution must pick variants.
@@ -5182,6 +6086,34 @@ if ($Category -in @("all", "run", "vbp")) {
         # very fixture). Two-sided on a colour nothing else here uses: scan empty,
         # draw, scan again and find the rows.
         "FD24-barecircle=True", "FD25-bareline=True",
+# 232-4: `Line -(x, y)` -- the START is omitted (VB6: from CurrentX/CurrentY).
+        # Before the cut the parser rejected the form outright (VB2001 "expected 'Input'
+        # after 'Line'" plus the `-(460` read as an infix minus), so the pre-cut compiler
+        # produced NO build and NO reading for these two at all -- there is nothing to
+        # regress from, which is why the compile-side is pinned separately below.
+        # Each judge is ink + pen. The ink window starts at the pen position, so a shape
+        # that drew the two given coordinates as the START would leave it empty; the pen
+        # must end on the endpoint the source named (the old codegen shape ended it on
+        # (0,0) -- measured `pen=0,0` against `pen=120,100` / `pen=120,190` here).
+        # The coordinates sit in the LEFT band on purpose: this form is 6400x3200 twips =
+        # **426x213 px at 96 dpi** (1440 twips = 1 inch). Gate run 39209565086 read
+        # `raw=-1,-1 pen=560,140` on FD27 with the first version's x up to 560: the pen
+        # moved (the call is right) but the whole segment sat past the right edge of the
+        # client area, so nothing was painted -- a pixel window that is off the window
+        # produces a False that reads exactly like a broken codegen.
+        "FD26-barelinestart=True", "FD27-melinestart=True",
+# 232-5: PictureBox.Line -(x,y) —— 同 FD26/FD27 的起点省略形, 承载面从 Form 换到 PictureBox。
+# 改前 vb6_ControlLine 是旧族里唯一没随账 #239 转发的那枚 (7 参无 has 位), Line - 画成
+# (x,y)→(0,0) 且不挪笔; 改后转发 vb6_Form_Line, has1=0 ⇒ 从 picP.CurrentX/Y 起笔, 笔位落终点。
+# 两側色扫 + pen 落终点同 FD26/FD27; 段压在 picP 自己的客户区内 (3000×3000 缇 ≈ 200×200px, 见
+# draw-fixture-client-area-pixels)。pen 半钉的正是「把给的坐标当起点」那形 —— 那形 pen 不动 (40≠120)。
+        "FD28-piclinestart=True", "FD29-piclinestart2=True",
+        # 232-6: `Step` 前缀 (坐标相对 CurrentX/CurrentY). 改前这一族在 parser 就被拒:
+        # `Line Step ...` 报 expected 'Input' after 'Line', `Circle Step (x,y), r` 报
+        # expected ')' (got ,) —— 两个动词各自的错法. FD31 用**两个** Step 前缀 (VB6 语法里
+        # `Line [Step] (x1,y1) [Step] -(x2,y2)` 两个都可选), FD32 走 PictureBox 那一支码头,
+        # 三枚的 pen 半钉的都是「相对坐标被当绝对坐标」那一形.
+        "FD30-psetstep=True", "FD31-linestep=True", "FD32-piclinestep=True",
         "FD-DONE")
     Test-Vbp "fdrawstate" "$Tests\fdraw\FDemo.vbp" $fdrawExpected
     Test-Vbp "fdrawstate_x86" "$Tests\fdraw\FDemo.vbp" $fdrawExpected -Arch "x86"
@@ -5701,7 +6633,7 @@ if ($Category -in @("all", "run", "vbp")) {
     # TOF11 类数组元素 (与 Fix 192 联动), TOF12 进 If 分支不是只在 Print 里对。
     # 基线(改动前)实测 8 FAIL / 4 OK —— 那 4 个 OK 只是"本该 False"被恒假蒙对。
     $tofExpected = @("TOF1:OK", "TOF2:OK", "TOF3:OK", "TOF4:OK", "TOF5:OK", "TOF6:OK",
-        "TOF7:OK", "TOF8:OK", "TOF9:OK", "TOF10:OK", "TOF11:OK", "TOF12:OK", "TOF-DONE")
+        "TOF7:OK", "TOF8:OK", "TOF9:OK", "TOF10:OK", "TOF11:OK", "TOF12:OK", "TOF13:OK", "TOF14:OK", "TOF-DONE")
     Test-Vbp "typeof_class" "$Tests\typeof\Tof.vbp" $tofExpected
     Test-Vbp "typeof_class_x86" "$Tests\typeof\Tof.vbp" $tofExpected -Arch "x86"
     # <vbeclipse>: `Option Compare Text` 按模块生效 (修复前 module.options 从没进代码生成层,
@@ -6364,6 +7296,828 @@ if ($Category -in @("all", "run", "vbp")) {
         "DONE") @(
         "CALL=ADD") "{F5CEF988-3217-6173-94B7-BB99C4B8CB81}" "x86"
 
+    # 账 #305 §B185 (第七十七刀): IDispatch 服务端进门那趟的错误边界。
+    # 为什么这一格值得单独两条用例：改前 `ComObj_Invoke` 收下 pExcepInfo 却从不碰、invokeFunc 返回
+    # void、末尾无条件 return S_OK ⇒ 服务端里**任何**没人接住的运行期错误一路走到 vb6_RaiseError,
+    # 那里没帧 ⇒ 打一行 stderr 再 exit(错误号) —— **打死的是客户端进程**。两台实测(BASE):
+    #   越界写 Public Integer 字段 ⇒ probe exit=6；体里一句 Err.Raise 5 ⇒ probe exit=5。
+    # ⇒ 判据的形状是「一台进程活到底 + 十三行读数」：BASE 上第一臂 PUTRANGE 就把进程打死,
+    #   后面每一行都不存在, 所以这些针在 BASE 上必红（不需要反着写期望）。
+    # 针面：
+    #   - 两头 = 合法值经客户真落位(GETLEGAL num=7) + 越界不许静默截断(GETRANGE 读回**上一个**
+    #     合法值 7, 既不是 -25536 也不是 0)；GETSEED/GETSEEDLONG 先证种子真存进去过(防「空=空」蒙)。
+    #   - scode 必须单独钉：DISP_E_EXCEPTION 只说「服务端抛了一条 VB 错误」, 错误号住在
+    #     EXCEPINFO.scode —— 只比 hr 就等于把「hr 是 0x80020009」当结论(§B144 那条同形)。
+    #   - 证人身 = 三次 Long 档写(40000/30000)照落, 且 PUTLONG2 证「不是只有第一次生效」；
+    #     CALL=HANDLED hr=0 证新帧没抢走体里自己那枚 On Error(那一臂还会打 B185-handled-raised=5)。
+    #   - desc 只在 ASCII 那一形钉(Overflow)；Err.Raise 那一臂的描述来自那张中文表, 针面不碰字节。
+    # 针面两台各写一份(不提成变量): H5 那道哨兵按 AST 数「每条调用点自带的数组实参」,
+    # 提给变量它就只看得见一份, 与这一族既有形状(各自一份)不同形。
+    Test-DispatchInvoke "b185_server_error_frame" "$Tests\b185_srv\B185d.vbp" "B185d" `
+        "{11112222-3333-4444-5555-6666777788A0}" @(
+        "CALL=SEED hr=0x00000000",
+        "CALL=GETSEED hr=0x00000000 resultvt=2 num=12345",
+        "CALL=GETSEEDLONG hr=0x00000000 result=999",
+        "CALL=PUTLEGAL hr=0x00000000",
+        "CALL=GETLEGAL hr=0x00000000 resultvt=2 num=7",
+        "CALL=PUTRANGE hr=0x80020009 scode=0x800A0006 desc=Overflow",
+        "CALL=GETRANGE hr=0x00000000 resultvt=2 num=7",
+        "CALL=GETLONG hr=0x00000000 result=40000",
+        "CALL=GETLONG2 hr=0x00000000 result=30000",
+        "CALL=BOOM hr=0x80020009 scode=0x800A0005",
+        "CALL=HANDLED hr=0x00000000",
+        "DONE") @(
+        "CALL=PUTRANGE hr=0x00000000")
+    Test-DispatchInvoke "b185_server_error_frame_x86" "$Tests\b185_srv\B185d.vbp" "B185d" `
+        "{11112222-3333-4444-5555-6666777788A0}" @(
+        "CALL=SEED hr=0x00000000",
+        "CALL=GETSEED hr=0x00000000 resultvt=2 num=12345",
+        "CALL=GETSEEDLONG hr=0x00000000 result=999",
+        "CALL=PUTLEGAL hr=0x00000000",
+        "CALL=GETLEGAL hr=0x00000000 resultvt=2 num=7",
+        "CALL=PUTRANGE hr=0x80020009 scode=0x800A0006 desc=Overflow",
+        "CALL=GETRANGE hr=0x00000000 resultvt=2 num=7",
+        "CALL=GETLONG hr=0x00000000 result=40000",
+        "CALL=GETLONG2 hr=0x00000000 result=30000",
+        "CALL=BOOM hr=0x80020009 scode=0x800A0005",
+        "CALL=HANDLED hr=0x00000000",
+        "DONE") @(
+        "CALL=PUTRANGE hr=0x00000000") -Arch "x86"
+
+    # 账 #305 SB186 (第七十八刀): 服务端进门的**第二站** —— IClassFactory::CreateInstance 走进
+    # Class_Initialize 那一步。这条通道连 EXCEPINFO 都没有, 错误号只能编在交回的 HRESULT 里; 这一趟过去同样
+    # 没有边界: 体里一条没人接住的 Err.Raise 123 会把客户端进程打死(两台实测 RC=123 + stderr
+    # "Unhandled error 123", CREATE 那一行根本没打出来)。
+    # 主 CLSID 故意用**干净的那一枚类**(B186Good): 它自己的 CREATE 那一行就是「不是所有构造都坏」的
+    # 证人; 抛错的那枚(B1)与自带 On Error 的那枚(B3)走 -Tail 的 CREATE= 臂, 排在最后跑 —— 万一客户端
+    # 被打死, 前面的读数已经落在管道里了。臂里成功的那枚还要点一次成员(CREATE2MEM=42), 否则「一律失败」也能蒙过。
+    # 反面证人(「交回 NULL 不准再一律说成 E_OUTOFMEMORY」)就是 0x800A007B 这一枚数本身: 低 16 位 = 123,
+    # 而旧行为交回的是 0x8007000E。这一条通道上没有 scode, 所以针面只钉 hr, 不钉描述。
+    Test-DispatchInvoke "b186_factory_error_frame" "$Tests\b186_srv\B186d.vbp" "B186d" `
+        "{11112222-3333-4444-5555-6666777788B2}" @(
+        "CREATE hr=0x00000000 ptr=OK",
+        "CREATE=1[{11112222-3333-4444-5555-6666777788B1}] hr=0x800A007B ptr=NULL",
+        "CREATE=2[{11112222-3333-4444-5555-6666777788B3}] hr=0x00000000 ptr=OK",
+        "CALL=CREATE2MEM hr=0x00000000 result=42",
+        "DONE") @(
+        "CREATE=1[{11112222-3333-4444-5555-6666777788B1}] hr=0x8007000E",
+        "CREATE=1[{11112222-3333-4444-5555-6666777788B1}] hr=0x00000000") `
+        -Tail @("CREATE={11112222-3333-4444-5555-6666777788B1},{11112222-3333-4444-5555-6666777788B3}")
+    Test-DispatchInvoke "b186_factory_error_frame_x86" "$Tests\b186_srv\B186d.vbp" "B186d" `
+        "{11112222-3333-4444-5555-6666777788B2}" @(
+        "CREATE hr=0x00000000 ptr=OK",
+        "CREATE=1[{11112222-3333-4444-5555-6666777788B1}] hr=0x800A007B ptr=NULL",
+        "CREATE=2[{11112222-3333-4444-5555-6666777788B3}] hr=0x00000000 ptr=OK",
+        "CALL=CREATE2MEM hr=0x00000000 result=42",
+        "DONE") @(
+        "CREATE=1[{11112222-3333-4444-5555-6666777788B1}] hr=0x8007000E",
+        "CREATE=1[{11112222-3333-4444-5555-6666777788B1}] hr=0x00000000") `
+        -Tail @("CREATE={11112222-3333-4444-5555-6666777788B1},{11112222-3333-4444-5555-6666777788B3}") -Arch "x86"
+
+    # 账 #305 §B188 (第八十刀): 服务端进门**第三站** = 出厂那一趟。ComObj_Release 走到零 ⇒ destroyFunc ⇒
+    # Class_Terminate, 以前是本文件三站里唯一没接边界的一站, 而它比前两站更狠: 这条通道**没有带号的载体**
+    # (Release 交回 ULONG 引用计数, 也没有 EXCEPINFO), 所以改前是「体里一句没人接住的错 = 客户端的死法」:
+    # 两台实测一枚 terminate 只写 Err.Raise 234 的类 ⇒ 探针 exit=234, 后面那枚干净对象的 CREATE=2 与 DONE
+    # 全都没打出来。修完的口径 = 只保证客户端不死 + 一条带号诊断(见 stderr), 号交不回任何人。
+    # 主 CLSID 用干净那枚(D2): 「不是所有出厂都坏」的证人; 抛错那枚(D1)走 -Tail 的 CREATE= 臂, 排在前面造、
+    # 最后放 —— 两枚都造成功之后才轮到 Release, 所以 D1 的 Release 一旦打死进程, DONE 就出不来(= 本针会红)。
+    # 臂里两枚都点一次成员(42): 否则「服务器压根没建成对象」也能蒙过前两条。
+    Test-DispatchInvoke "b188_terminate_error_frame" "$Tests\b188_term\B188d.vbp" "B188d" `
+        "{11112222-3333-4444-5555-6666777788D2}" @(
+        "CREATE hr=0x00000000 ptr=OK",
+        "CREATE=1[{11112222-3333-4444-5555-6666777788D1}] hr=0x00000000 ptr=OK",
+        "CALL=CREATE1MEM hr=0x00000000 result=42",
+        "CREATE=2[{11112222-3333-4444-5555-6666777788D2}] hr=0x00000000 ptr=OK",
+        "CALL=CREATE2MEM hr=0x00000000 result=42",
+        "DONE") @(
+        "Unhandled error") `
+        -Tail @("CREATE={11112222-3333-4444-5555-6666777788D1},{11112222-3333-4444-5555-6666777788D2}")
+    Test-DispatchInvoke "b188_terminate_error_frame_x86" "$Tests\b188_term\B188d.vbp" "B188d" `
+        "{11112222-3333-4444-5555-6666777788D2}" @(
+        "CREATE hr=0x00000000 ptr=OK",
+        "CREATE=1[{11112222-3333-4444-5555-6666777788D1}] hr=0x00000000 ptr=OK",
+        "CALL=CREATE1MEM hr=0x00000000 result=42",
+        "CREATE=2[{11112222-3333-4444-5555-6666777788D2}] hr=0x00000000 ptr=OK",
+        "CALL=CREATE2MEM hr=0x00000000 result=42",
+        "DONE") @(
+        "Unhandled error") `
+        -Tail @("CREATE={11112222-3333-4444-5555-6666777788D1},{11112222-3333-4444-5555-6666777788D2}") -Arch "x86"
+
+    # 账 #305 §B187 第二腿 (第八十三刀): 装箱腿一处 —— `Set <泛对象槽> = <工程内实例>`。
+    # 改前这一问的答案是"什么都不交": 槽里躺着一枚裸 `vb6_cls_X*`, 于是同一枚槽被两条读路各读各的 ——
+    # vb6_ComCall 认不出它 (实测 `method "Twice" not found` 之后静默空答 42000), 而把它当 IDispatch*
+    # 交给外部 COM 实参的那一路直接在 OLE 的 VariantClear 里 0xC0000005 (BASE 上探针 exit=-1073741819,
+    # x64/x86 两架构皆然)。现在交的是**借用型**包装器 (ownsInstance=0, 不接管实例生命周期), 闸门只有一问:
+    # 这枚类在运行期 coclass 表里占不占一行 (Symbol::isCoClassTableEntry, 与建表那侧同一条)。
+    # 八条臂各交一个数, 编码见 tests\b187_box\*.cls:
+    #   42042  = 早绑定 + 晚绑定两条腿都真 (42000 = 晚绑定那半又空了),
+    #   999    = 只有把槽里那枚对象**交给外部 IDispatch 客户端当实参**才可能出的数 (BASE 在这里崩),
+    #   101042 = 同一枚实例包装器进槽、解包回typed形参后仍是它自己 (Is 那一路的类型归一)。
+    #   42042 (第四臂) = ByVal 泛对象形参收到工程内实例也点得动晚绑定 (第八十四刀),
+    #   42014201 (第五臂) = ByRef 那一座桥的四形一数同台: 实形参位晚绑定 42 / 被调方 Set p = Nothing 落回调用方 /
+    #              Set p = <实例> 之后早绑定 42 / Set p = CreateObject 那枚活对象没被判成 Nothing; BASE 那一台交 14201 (第一形 = 0)
+    #   42081 (第六臂, §B189 第一档 / 第八十六刀) = TypeName 认出自家包装器是哪一枚工程类。编码 = 早绑定 42e3
+    #              + 名字长度*10 + (名字等 B187Good 那一形); 长度那一项就是没有换成别的非空名字的证人,
+    #              BASE 那一台交 42060 (长度 6 = Object)
+    #   42717151 (第七臂, §B189 第二格 / 第八十七刀) = 一枚对象变量不指向任何对象时 TypeName 答
+    #              Nothing 而不是 Object。一臂三形同台, 每形 = 名字长度*10 + (命中 VB6 那个答案):
+    #              从没 Set 的泛对象槽 / Set 过又置回 Nothing 的 typed 实例 / 从没赋值的 Variant
+    #              (最后一形是别把它顺手动了的证人, 两台都该是 Empty 长度 5 且命中) ⇒ BASE 42606051
+    #   501717181 (第八臂, §B189 第二档 / 第八十八刀) = TypeName 吃一枚**声明成工程类**的变量时答**类名**
+    #              而不是 Object —— 答案按声明档在编译期折出三元式。一臂四形同台, 每形 = 名字长度*10 + 命中:
+    #              Set 过的 typed 实例 (BASE 60 "Object" / 本刀 81 "B187Good") / 置回 Nothing 的那一枚 (两台 71) /
+    #              从没 Set 的 typed 实例 (两台 71, 走的就是折叠那支的 NULL 那一头) / **另一枚声明档**
+    #              (tx As B187Name, Set 过: BASE 60 / 本刀 81) —— 最后这一形钉的是"折的是声明, 不是写死的一个名字"
+    #              ⇒ BASE 480717160, 本刀 501717181 (四形里只有两形动, 另两形是本刀的证人)
+    # 反面证人 = Absent 里那枚 42000: 装箱没落地它就回来了。
+    Test-DispatchInvoke "b187_boxed_object_slot" "$Tests\b187_box\B187d.vbp" "B187d" `
+        "{11112222-3333-4444-5555-6666777788E3}" @(
+        "CREATE hr=0x00000000 ptr=OK",
+        "CALL=CREATE1MEM hr=0x00000000 result=42042",
+        "CALL=CREATE2MEM hr=0x00000000 result=999",
+        "CALL=CREATE3MEM hr=0x00000000 result=101042",
+        "CALL=CREATE4MEM hr=0x00000000 result=42042",
+        "CALL=CREATE5MEM hr=0x00000000 result=42014201",
+        "CALL=CREATE6MEM hr=0x00000000 result=42081",
+        "CALL=CREATE7MEM hr=0x00000000 result=42717151",
+        "CALL=CREATE8MEM hr=0x00000000 result=501717181",
+        "DONE") @(
+        "CALL=CREATE1MEM hr=0x00000000 result=42000",
+        "CALL=CREATE4MEM hr=0x00000000 result=42000",
+        "CALL=CREATE5MEM hr=0x00000000 result=14201",
+        "CALL=CREATE6MEM hr=0x00000000 result=42060",
+        "CALL=CREATE7MEM hr=0x00000000 result=42606051",
+        "CALL=CREATE8MEM hr=0x00000000 result=480717160") `
+        -Tail @("CREATE={11112222-3333-4444-5555-6666777788E3},{11112222-3333-4444-5555-6666777788E4},{11112222-3333-4444-5555-6666777788E5},{11112222-3333-4444-5555-6666777788E6},{11112222-3333-4444-5555-6666777788E7},{11112222-3333-4444-5555-6666777788E8},{11112222-3333-4444-5555-6666777788E9},{11112222-3333-4444-5555-6666777788EA}")
+    Test-DispatchInvoke "b187_boxed_object_slot_x86" "$Tests\b187_box\B187d.vbp" "B187d" `
+        "{11112222-3333-4444-5555-6666777788E3}" @(
+        "CREATE hr=0x00000000 ptr=OK",
+        "CALL=CREATE1MEM hr=0x00000000 result=42042",
+        "CALL=CREATE2MEM hr=0x00000000 result=999",
+        "CALL=CREATE3MEM hr=0x00000000 result=101042",
+        "CALL=CREATE4MEM hr=0x00000000 result=42042",
+        "CALL=CREATE5MEM hr=0x00000000 result=42014201",
+        "CALL=CREATE6MEM hr=0x00000000 result=42081",
+        "CALL=CREATE7MEM hr=0x00000000 result=42717151",
+        "CALL=CREATE8MEM hr=0x00000000 result=501717181",
+        "DONE") @(
+        "CALL=CREATE1MEM hr=0x00000000 result=42000",
+        "CALL=CREATE4MEM hr=0x00000000 result=42000",
+        "CALL=CREATE5MEM hr=0x00000000 result=14201",
+        "CALL=CREATE6MEM hr=0x00000000 result=42060",
+        "CALL=CREATE7MEM hr=0x00000000 result=42606051",
+        "CALL=CREATE8MEM hr=0x00000000 result=480717160") `
+        -Tail @("CREATE={11112222-3333-4444-5555-6666777788E3},{11112222-3333-4444-5555-6666777788E4},{11112222-3333-4444-5555-6666777788E5},{11112222-3333-4444-5555-6666777788E6},{11112222-3333-4444-5555-6666777788E7},{11112222-3333-4444-5555-6666777788E8},{11112222-3333-4444-5555-6666777788E9},{11112222-3333-4444-5555-6666777788EA}") -Arch "x86"
+
+    # 账 #305 §B189 第二档 (第八十八刀): 折叠那一刀**是发码改动** ⇒ 形状要在产物上钉住。
+    # 正针三枚 = 三枚 typed 工程类变量各自折成的三元式 (tg 那一枚出现两次: Set 过与置回 Nothing 之后,
+    # 这里只钉一次; tn = 从没 Set, 走的就是折叠那支的 NULL 那一头; tx 折的是**另一枚类名** ⇒ 钉的是
+    # "折的是声明档"而不是一个写死的名字)。
+    Test-EmitcShape "b189_decl_fold_shape" @("$Tests\b187_box\B187d.vbp") @(
+        '(((tg) != NULL) ? vb6_BSTR_FromStr(L"B187Good") : vb6_BSTR_FromStr(L"Nothing"))',
+        '(((tn) != NULL) ? vb6_BSTR_FromStr(L"B187Good") : vb6_BSTR_FromStr(L"Nothing"))',
+        '(((tx) != NULL) ? vb6_BSTR_FromStr(L"B187Name") : vb6_BSTR_FromStr(L"Nothing"))')
+    # 闸门那一问的两侧同站同台 (tests\b189_gate, 两份声明只差"这个类有没有被谁 Implements"):
+    # 没被 implements 的那一枚照折 (正针), 被 implements 的那一枚**一口都不许折** (反针) —— 视图那一头
+    # VB6 答的是实体真身类名, 按声明折就是把接口名当成对象的名字。
+    # ⚠ 这份夹具只发码、不进 cl: 接口档变量进 Variant 期望的那一站今天交的是**整枚视图结构体**
+    #   (vb6_iface_X 是 {vtbl,obj} 的值类型, _Generic 落 default ⇒ vb6_VariantObject(结构体) = cl C2172),
+    #   两台都一样 —— 那一格是独立的缺陷, 已另立任务 (#407), 本刀不并批。
+    Test-EmitcShape "b189_gate_plain_class_folds" @("$Tests\b189_gate\B189g.vbp") @(
+        '(((m) != NULL) ? vb6_BSTR_FromStr(L"B189Impl") : vb6_BSTR_FromStr(L"Nothing"))')
+    Test-EmitcAbsent "b189_gate_interface_view_not_folded" @("$Tests\b189_gate\B189g.vbp") @(
+        '(((o) != NULL) ? vb6_BSTR_FromStr(L"B189Iface")')
+    # 第四道闸 = 实参是整枚槽 ⇒ 那是运行期的问句。F4 与 F3 **同名 (Value) 而声明档不同**:
+    # 一枚 As 工程类 (要折)、一枚 As Variant (不许折)。这一双钉的就是"按名那张类表会跨过程漏"
+    # —— 实物 = 本刀护栏那台 A/B 上唯一一处真语料移动 (VBFlexGrid.ctl 的 `ByVal Value As Variant`
+    # 被另一过程同名的 `As IVBFlexDataSource` 折成了常量, `TypeName(Value) = "ImageList"` 变恒假)。
+    Test-EmitcShape "b189_gate_same_name_slot_pair" @("$Tests\b189_gate\B189g.vbp") @(
+        'AssignMove(&vb6_ret_F4, (((Value) != NULL) ? vb6_BSTR_FromStr(L"B189Impl") : vb6_BSTR_FromStr(L"Nothing")))',
+        'AssignMove(&vb6_ret_F3, vb6_TypeName(')
+
+    # 账 #305 #408 (第八十九刀第五试): 按名那张类表 (knownClassVars_) 全程不清空, 于是**上一过程**
+    # 里 `ByVal Item As <工程类>` 登记的 "item" 会替**本过程**那枚 `ByVal Item As Object` 答题。两形病灶
+    # (夹具 tests\b190_scope, 两台实测): ① 成员读发成 `Item->Alpha` 而这枚形参的 C 类型是 void* =
+    #   cl C2223, 整棵工程压根编不出 exe (改前两台都 rc=1 且无产物); ② 第八十八刀把 TypeName(Thing)
+    #   折成了上一过程的类名常量。
+    # 修法两半同批: 读侧否决 (procObjectFormals_ 那一问排在按名的表与符号表退路**之前**, 治折叠那一形)
+    # 再 + 形参遮蔽那一站把表里那条撤掉 (治成员读那一形, 形状照仓里现成的 UDT 形参那一格); 撤表要有底 =
+    # moduleClassVars_ 那份**模块级**快照每张过程入口恢复一次, 否则后面过程里同名模块级类变量的原生
+    # 字段读会跟着掉 (P5 与上面那枚 Thing->Alpha 针钉的就是这一条)。
+    Test-EmitcShape "b190_object_formal_goes_late" @("$Tests\b190_scope\B190.vbp") @(
+        'vb6_BSTR_Assign(&vb6_ret_ShadowParam, vb6_ComGetStringProp(Item, L"Alpha"));',
+        'vb6_BSTR_Assign(&vb6_ret_UsesObj, vb6_ComGetStringProp(Thing, L"Alpha"));',
+        'vb6_BSTR_Assign(&vb6_ret_UsesModuleVar, Thing->Alpha  /* class var .Alpha field */);')
+    Test-EmitcAbsent "b190_object_formal_keeps_no_stale_class_answer" @("$Tests\b190_scope\B190.vbp") @(
+        'vb6_ret_ShadowParam, Item->Alpha',
+        'vb6_ret_UsesObj, Thing->Alpha',
+        '(((Thing) != NULL) ? vb6_BSTR_FromStr(L"B190A")')
+    Test-EmitcShape "b190_typename_of_object_formal_stays_runtime" @("$Tests\b190_scope\B190.vbp") @(
+        'vb6_BSTR_AssignMove(&vb6_ret_TnShadow, vb6_TypeName(')
+    # 两台真跑只钉 VB6 也答得出的那五条: P1/P2 = 类形参照旧早绑定 (负条件, 否决不许过界),
+    # P5 = 模块级同名变量没被撤走, P6 = 折叠那一支的 NULL 头, DONE = 进程活着。
+    # P3/P4/P7-P12 今天交空串与 "Object" —— 那不是本刀的靶子, 是 #412 (Type=Exe 工程里 Set 工程实例
+    # 进 Object 槽从不发包器 ⇒ Object 那一路晚绑定全落空) 的读数, 故意不钉成针。
+    $b190Needles = @("C3ProbeB190-P1-classparam=A1", "C3ProbeB190-P2-classparamB=B2",
+                     "C3ProbeB190-P5-modulevar=A1", "C3ProbeB190-P6-typename-nothing=Nothing",
+                     "C3ProbeB190-DONE")
+    Test-Vbp 'b190_object_formal_scope' "$Tests\b190_scope\B190.vbp" $b190Needles
+    Test-Vbp 'b190_object_formal_scope_x86' "$Tests\b190_scope\B190.vbp" $b190Needles -Arch "x86"
+    # 账 #305 §B216 (第一百一十九刀): 「一枚工程类实例进后期绑定的槽」这一问今天只许有一个答案。
+    # 九形同台、两架构各钉一遍 (读数在 .build/k845_*_run.txt, BASE = C3_k117 那一台):
+    #   A1..A4 = 泛 Object 槽的四条 RHS 形 (行内 New / 局部类变量 / 模块级 As New / 返回工程类的函数),
+    #            改前改后都交 tn=B216Impl + 晚绑定 42 —— 这一族是**不许动**的证人 (第一百一十八刀
+    #            读数 X 的「通的那六形」在本夹具里就是它们, 归一不许把它们改坏)。
+    #   V1/V2  = Variant 槽那一站 (#404, 格②) 的正靶: 改前那一站连表都不问, 发的是
+    #            vb6_VariantFromValue(裸实例), _Generic 的指针臂投成 vt=9 而 pdispVal 是一枚
+    #            vb6_cls_B216Impl* ⇒ tn=Object、stderr `vb6_ComCall: method "Twice" not found` +
+    #            late 交空 (两台同形); 改后交的是包装器 ⇒ tn=B216Impl + late=42, 而 vt 照旧 9
+    #            (钉 vt 那一手是为了别把这条改道读成"档也换了")。
+    #   N1/N2  = 格① 的正靶: 同一枚**表外**类 B216Plain (与 B216Impl 只差 BEGIN/MultiUse 那一块)
+    #            的两臂。改前 N1 (行内 New) 交 Nothing 而 N2 (模块级 As New 的变量) 交裸指针 ——
+    #            一个问句两个答案; 归一之后两臂同答那枚裸实例 (tn=Object / isNothing=False,
+    #            两条读数逐字相同)。⚠ 台账 #443 当初把坏法写成"归一成交 Nothing", 开工前的本机
+    #            A/B 把它推翻了 (两处实物见 cgen_base_type.cpp 那一格的注释), 这两形钉的就是**改后**
+    #            真正落地的方向。
+    #   N3     = 表外那一档的 Variant 形, 本刀**没动** (照旧 tn=Object): 它欠的是「要不要给这类
+    #            模块 mint 一枚最小 COM 档」那句口径 = #407 同一条, 别把它读成已修。
+    $b216Needles = @("A1-inlineNew-tn=B216Impl late=42", "A2-classVar-tn=B216Impl late=42",
+                     "A3-moduleNew-tn=B216Impl late=42", "A4-fnResult-tn=B216Impl late=42",
+                     "V1-variant-inlineNew-vt=9 tn=B216Impl late=42",
+                     "V2-variant-classVar-vt=9 tn=B216Impl late=42",
+                     "N1-plain-inlineNew-tn=Object isNothing=False",
+                     "N2-plain-moduleNew-tn=Object isNothing=False",
+                     "N3-plain-variant-tn=Object", "B216-DONE")
+    Test-Vbp 'b216_slot_arm_answers' "$Tests\b216_slot\B216d.vbp" $b216Needles
+    Test-Vbp 'b216_slot_arm_answers_x86' "$Tests\b216_slot\B216d.vbp" $b216Needles -Arch "x86"
+    # 发码针 (同一问只许从唯一发码处出): 四形 + Variant 两形都问那一位主人, 而且
+    # 表外那一枚类**一口都不许问表** —— 问到了就是有人在归一之外又发了一枚空壳包器。
+    Test-EmitcShape 'b216_slot_stations_ask_one_owner' @("$Tests\b216_slot\B216d.vbp") @(
+        'vo1 = (void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New());',
+        'vo4 = (void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_Main_MakeImpl());',
+        'v1 = vb6_VariantFromValue((void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New()));',
+        'v2 = vb6_VariantFromValue((void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)a));')
+    Test-EmitcAbsent 'b216_slot_keeps_no_bare_box_and_no_empty_desc_ask' @("$Tests\b216_slot\B216d.vbp") @(
+        'vb6_VariantFromValue((vb6_cls_B216Impl',
+        'vb6_FindCoClassDesc("B216Plain")',
+        '((void)(a), (void*)0)')
+    # 账 #305 §B217 (第一百二十一刀): ByRef Variant 实参那一站每次调用取走**两枚**引用 —— 站点自己
+    # 问 `vb6_ComObject_From*Instance` 取一枚, 装箱那一臂 `vb6_VariantObject` 又 AddRef 一枚
+    # (vb6rtl_variant.h:243-248 的注释写明它为什么要 AddRef), 而站点 mint 的具名临时槽 `_vb6_vararg_N`
+    # 全仓没人收回。本刀把**装箱多取的那一枚**在语句末收回, 走 emitStmtList 里与
+    # `ansiOutParams_`/`ansiTempsToFree_` 同一条收尾道; 剩下那一枚(实例自己的)的归属 = §B187/#407
+    # 那句没拍的口径, 本格刻意不动它 —— 所以读数是"行为一字不变、记账少一枚"。
+    #   P1/P2 = 被调方**仍然看得见**那枚对象 (vt=9 / tn=类名) ⇒ 收回落在调用之后而不是之前。
+    #           P2 是这条顺序的靶: 一条语句两枚装箱实参, 若把收回挂到 emitLine 的 postLines 队列上,
+    #           第一条 clear 会被第二条声明冲出来 ⇒ 被调方读到空槽 (a-vt=0)。
+    #   P4/P5/P6 = 调用方自己的实例在 see / 被调方 `Set Item = Nothing` / 被调方 `Item = 5` 之后
+    #           都还活着、值也没被写脏 (a.n=7 twice=42, b.n=9) ⇒ 少收的那一枚确实是别人的。
+    #   P7/P8 = If 头与 Debug.Print 实参那两形: P7 今天**不收** (声明与收回不同层 ⇒ 宁可不收也不许
+    #           发成引用越界的 C), P8 收; 两形的读数都须是 9 ⇒ 这条限制没把行为改坏。
+    $b444Needles = @("P1-see vt=9 tn=B444Impl", "P2-two a-vt=9 b-vt=9",
+                    "P4-after-see n=7 twice=42", "P5-after-clear n=7 tn=B444Impl twice=42",
+                    "P6-after-write n=9 tn=B444Impl", "P7-in-condition seen=9",
+                    "P8-in-print vt=9", "P9-fresh=7", "B444-DONE")
+    Test-Vbp 'b444_vararg_reclaim_after_call' "$Tests\b444_vararg\B444.vbp" $b444Needles
+    Test-Vbp 'b444_vararg_reclaim_after_call_x86' "$Tests\b444_vararg\B444.vbp" $b444Needles -Arch "x86"
+    # 发码针: 语句末的收回行必须与站点声明成对出现 (顺序与计数由哨兵
+    # check_box_temp_reclaim.ps1 按行号钉, 这里只钉形状确实发出来了)。
+    Test-EmitcShape 'b444_vararg_stmt_temps_are_reclaimed' @("$Tests\b444_vararg\B444.vbp") @(
+        'vb6_Main_TakeTwo(&_vb6_vararg_1, &_vb6_vararg_2);',
+        'vb6_VariantClear(&_vb6_vararg_1);',
+        'vb6_VariantClear(&_vb6_vararg_2);',
+        'vb6_VariantClear(&_vb6_vararg_8);')
+    Test-EmitcAbsent 'b444_vararg_leaves_the_header_shape_uncleared' @("$Tests\b444_vararg\B444.vbp") @(
+        'vb6_VariantClear(&_vb6_vararg_6);',
+        'vb6_VariantAssign(&(_vb6_vararg_')
+    # 账 #305 §B221/#449 (第一百二十五刀): 「视图还是实例」四站同台 —— 修复前三形全都编译不过
+    #   (cl C2039: __iv_IB448 不是 vb6_cls_IB448 的成员 / Twice 不是 vb6_ivref_IB448 的成员
+    #    + C2198 参数太少), 第四形 (被调方体内 Set <返回槽> = New <类>) 交出去的值本身就是坏的。
+    #   读数: P1/P2 = 视图进接口槽再走 vtable 各答 43; P3 = 视图当实参 (Twice(30) = 61);
+    #   P4/P5 = 具体类那条路不受影响 (11 / 一枚命中)。
+    $b448Needles = @("P1-setslot twice=43", "P2-inline twice=43", "P3-arg twice=61",
+                    "P4-plain twice=11", "P5-hits=1", "B448-DONE")
+    Test-Vbp 'b448_iface_view_not_instance' "$Tests\b448_iface_ret\B448.vbp" $b448Needles
+    Test-Vbp 'b448_iface_view_not_instance_x86' "$Tests\b448_iface_ret\B448.vbp" $b448Needles -Arch "x86"
+    # 发码针: 视图值的三个消费形状各钉一条 —— 视图进槽走 QueryInterface、成员调用走 vtable、
+    # 视图进接口形参原样传; 反面针钉「不许再 mint 一枚 vb6_cls_<接口名>」(那一枚结构体不存在)。
+    Test-EmitcShape 'b448_iface_view_consumers' @("$Tests\b448_iface_ret\B448.vbp") @(
+        'vb6_iv_iid_IB448',
+        '->vt->twice(',
+        'vb6_Main_TakeByVal(vb6_Main_MakeNew());')
+    Test-EmitcAbsent 'b448_iface_view_never_mints_a_class_struct_for_an_interface' @(
+        "$Tests\b448_iface_ret\B448.vbp") @(
+        '(vb6_cls_IB448*)')
+
+    # 账 #305 §B218 (甲) 第一百二十七刀 = 刀1-a/b/c: 工程类实例的引用计数头扩到每一枚工程类,
+    #   覆写 (腿②) / 置空 (腿③) / 过程出口 (腿④) 三条腿接到同一位主人 emitClassSlotRefSet。
+    #   读数 (两台一字相同, 尺见下面 BASE 那两行):
+    #   W1 置空 1 / W3 自赋值 1 / W4 覆写模块级槽 2 = 这一刀新出厂的次数;
+    #   W2 别名 0 (置空 a 之后 b 还读得到 7) / W5 As New 只造一枚 / W6 工厂那枚还活着 /
+    #   W7 形参里 Set = Nothing 没拆调用方那枚 / W9 返回槽那枚交出去还活着 = 反面证人;
+    #   W8 = 腿④ 那一格: 循环 200 次现造现出, 出厂恰好 200 次 = (甲) 这一档的靶。
+    #   W10 = 腿②' 那一格: 被调方现造一枚写进调用方的出参槽, 出口之后调用方还读得到 (n=7)
+    #     且这一刻一次没出厂 (terms=0), 调用方自己置空时才出厂 (gone-terms=1)。这一格是门 #763
+    #     三条红 (b187 两架构 + FlexGrid x86) 的靶: 出参槽不 claim, 被调方出口就拆了它。
+    #   W11 = 腿④ 的第二道夹: 一格工程类局部的地址交给了外部 Declare (VB6 运行时
+    #     __vbaObjSetAddref 那一族, 对工程内实例刻意不 AddRef) ⇒ 本过程手里没有这一枚的对价,
+    #     出口不许退 (FlexGridX86 起窗期那一条红就是这个形状把活控件拆了)。
+    #   BASE (= 账 #450 收线那台 CI 编的 exe, run 39212142582 的 c3-exe 工件) 的读数 =
+    #   W1/W3/W4/W8 全 0 ⇒ 这四格出厂次数就是本刀的行为面; 其余五格两台同值 (尺:
+    #   NEW .build/k1003_n64.txt + _n32.txt / BASE .build/k1003_b64.txt + _b32.txt)。
+    $b445Needles = @("W1-terms=1 null=1", "W2-terms=0 n=7", "W3-terms=1 n=7",
+                    "W4-terms=2 null=1", "W5-made=1 sum=14", "W6-terms=0 n=7",
+                    "W7-terms=0 n=7", "W8-terms=200", "W9-terms=0 n=7 twice=7",
+                    "W10-live-terms=0 n=7", "W10-gone-terms=1",
+                    "W11-n=7 terms=0 owner-gone=1",
+                    "W12-inner-made=1 inner-terms=1", "W12-holder-made=1 holder-terms=1",
+                    "W13-terms=2", "W14-alive-terms=0 n=7", "W14-gone-terms=1",
+                    "W15-made=50 terms=50", "W16-made=1 terms=1",
+                    "W17-made=20 terms=20", "W18-made=1 terms=1",
+                    "W19-field-alive-terms=0 n=7", "W19-field-gone-terms=1",
+                    "B445-DONE")
+    Test-Vbp 'b445_class_slot_refcount' "$Tests\b445_refcount\B445.vbp" $b445Needles
+    Test-Vbp 'b445_class_slot_refcount_x86' "$Tests\b445_refcount\B445.vbp" $b445Needles -Arch "x86"
+    # 发码针: 出入口那一对的 mint / claim / release / 以及 R6 那条守卫仍是一枚裸赋值。
+    Test-EmitcShape 'b445_slot_leg_shapes' @("$Tests\b445_refcount\B445.vbp") @(
+        'unsigned long vb6_cls_C445_Release(void* instance) {',
+        'if (b) vb6_cls_C445_AddRef(b);',
+        'if (__clsold0) vb6_cls_C445_Release(__clsold0);',
+        'if (!m_auto) m_auto = vb6_cls_C445_New();',
+        'if (t) vb6_cls_C445_Release(t);',
+        'if ((*p)) vb6_cls_C445_AddRef((*p));',
+        '(void*)&(borrowed)',
+        'if (me->mInner12) vb6_cls_C445_Release(me->mInner12);',
+        't = vb6_C445H_prop_get_NewOne16((void*)me);',
+        # 刀4 的两形: 正证人 = 这两格确实发成一次调用 (反面针才有东西可钉);
+        #   W19 = 数据字段那一档 (那一枚别人还握着) ⇒ claim 必须继续在, 两态同值。
+        'c17 = vb6_C445H_Make17(hh17);',
+        'c18 = vb6_C445H_prop_get_Next18(hh18);',
+        'if (f19) vb6_cls_C445_AddRef(f19);')
+    # 反面针 (腿⑤ 的边界): As Object 那一格是 void*, As Variant 那一格是槽 —— 两档都答不出
+    #   工程类, 出厂这一站不许碰。钉形状 (mLate15 = 专属名) 而不是钉名字, 与门 #764 那条同口径。
+    Test-EmitcAbsent 'b445_nonclass_object_slots_get_no_teardown_release' @(
+        "$Tests\b445_refcount\B445.vbp") @(
+        '_Release(me->mLate15)')
+    # 反面针: borrowed 那一格的地址交给了外部 Declare (__vbaObjSetAddref) ⇒ 写它的主人在
+    #   计数系统外面, 出口不许退它 (退 = 无对价的退, 门 #763 的 FlexGridX86 就死在这一句上)。
+    Test-EmitcAbsent 'b445_foreign_written_slot_keeps_no_exit_release' @(
+        "$Tests\b445_refcount\B445.vbp") @(
+        'if (borrowed) vb6_cls_C445_Release(borrowed);')
+    # 反面针: 形参那一档整个留在计数系统外面 (今天没有一站在实参处 claim, 让形参放手
+    #   就是拆调用方还在用的那枚实例)。形参起名 oF = 专属名: 门 #764 上这条针红过一轮, 红得
+    #   没有道理 —— 别的原因没有, 只是 W10 新加的那格局部也叫 o, 而反面针钉的是**名字**;
+    #   同名局部在出口那一行 (Release(o)) 把它满足了。反面针要钉形状或专属名, 不钉常用名。
+    Test-EmitcAbsent 'b445_class_formal_stays_out_of_count' @(
+        "$Tests\b445_refcount\B445.vbp") @(
+        'vb6_cls_C445_AddRef(oF)',
+        'vb6_cls_C445_Release(oF)',
+        'vb6_cls_C445_Release(vb6_ret_MakeOne)')
+    # 反面针 (第一百三十一刀 = (甲) 刀3): 工程内过程交回来的那一枚**自带对价** (被调方在返回槽那一格
+    #   claim 过、出口退的是它自己那枚局部)，所以接手这一格不许再 claim —— 再 claim = 每调用净 +1,
+    #   那一枚永远没人退 (实测 BASE 的发码 = `if (c) vb6_cls_C445_AddRef(c);` 四处 + 形⑤ 的 property
+    #   一处; NEW 两形都 0 处)。上面那条正证人 (`c = vb6_Main_MakeOne();` / `t = ...NewOne16(...)`) 在
+    #   两态都存在，所以这两枚反面针不是空的。第一百三十二刀 = (甲) 刀4 把同一条问句扩到另两形
+    #   (`hh17.Make17()` 与不带括号的 `hh18.Next18`)，两形各钉一枚专属名 (c17 / c18) —— 正证人见
+    #   上面 b445_slot_leg_shapes 那三条, 其中 `f19` = 数据字段那一档, 它的 claim 是**反面**的正证人。
+    Test-EmitcAbsent 'b445_transferred_call_rhs_is_adopted_not_claimed' @(
+        "$Tests\b445_refcount\B445.vbp") @(
+        'vb6_cls_C445_AddRef(c)',
+        'vb6_cls_C445_AddRef(t)',
+        'vb6_cls_C445_AddRef(c17)',
+        'vb6_cls_C445_AddRef(c18)')
+    # 账 #305 §B188 ④ (第九十刀): 出厂那一腿的**尾巴**。`Class_Terminate` 抛错时, `_Destroy` 里体之后
+    # 那三截(字段 BSTR / 数组字段 / vb6_Free(me))曾被 ComObj_Release 的帧一起 longjmp 跳掉 —— 实测每枚
+    # 抛错的出厂漏一份实例资源: x64 每枚 35~37 字节、x86 每枚 17 字节, 多一枚 20 字符 String 字段就涨到
+    # 120~123 字节, 而出厂干净那枚恒 0 (尺已搬进仓 = tests/tools/leak_probe.c, 当年读数 .build/k108_*.txt +
+    # .build/k109_x64.txt; 改后两台四档全 0 = .build/k117_x64.txt / .build/k117_x86.txt)。
+    # 改法 = 帧装在 `_Destroy` 自己身上(新出口 vb6_RunVbProtected, 出厂两腿都汇到这一处), 尾巴走完才把
+    # 号交回外层帧: COM 出厂那层照旧记一条 [C3_COM] 诊断、进程内的 `Set x = Nothing` 照旧由调用方的
+    # On Error 接住 —— 两台跑完客户端都不死。(那条诊断自第九十一刀起**同一枚类只记一次**, 原先每枚出厂一行。)
+    Test-EmitcShape "b188_destroy_tail_is_reachable" @("$Tests\b188_term\B188d.vbp") @(
+        'vb6_termErr = vb6_RunVbProtected((void(*)(void*))vb6_T88Boom_Class_Terminate, me);',
+        'if (vb6_termErr) vb6_RaiseError(vb6_termErr, vb6_ErrDescription());')
+    Test-EmitcAbsent "b188_destroy_keeps_no_bare_terminate_call" @("$Tests\b188_term\B188d.vbp") @(
+        'vb6_T88Boom_Class_Terminate(me);',
+        'vb6_T88Good_Class_Terminate(me);')
+    # 运行期那一头（任务 #414 的判据升格）: 两台各跑一遍「抛错那枚 vs 干净那枚」各造各放 5000 次,
+    # 两头都要 verdict=OK —— 抛错那枚钉的是本刀修的漏, 干净那枚是反面证人 (它一直 OK 才说明读数不是别的
+    # 形状带来的)。`verdict=LEAK` 同时钉成 Absent: 工具自己判的红也看得见。
+    Test-InstanceLeak "b188_way_out_tail_releases" "$Tests\b188_term\B188d.vbp" "B188d" `
+        "{11112222-3333-4444-5555-6666777788D1}" "{11112222-3333-4444-5555-6666777788D2}" 5000 `
+        @("LEAK-BOOM verdict=OK", "LEAK-GOOD verdict=OK", "LEAK-DONE") @("verdict=LEAK", "verdict=BROKEN")
+    Test-InstanceLeak "b188_way_out_tail_releases_x86" "$Tests\b188_term\B188d.vbp" "B188d" `
+        "{11112222-3333-4444-5555-6666777788D1}" "{11112222-3333-4444-5555-6666777788D2}" 5000 `
+        @("LEAK-BOOM verdict=OK", "LEAK-GOOD verdict=OK", "LEAK-DONE") @("verdict=LEAK", "verdict=BROKEN") `
+        -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (b416_convstr, 账 #305 #416 第九十三刀): 文本进严格转换的那一句解析。
+    # 改前 C3 对非数字文本一律静默给 0 —— CInt("abc")=0、CInt("")=0、CInt("123abc")=123(吞尾巴)，
+    # 而 VB6 三句全是 13 Type mismatch；越界那一支本来就报 6，那是 vb6_OvfChk 的答案，本刀一字没动。
+    # 两台实测读数逐行相同 (.build/k208_run64.txt 与 .build/k208_run32.txt)。
+    # 负控 = BASE 那台编译器编的同一份夹具 (.build/k208_run64_base.txt)：01/02/03/12/13/14 答 0、
+    # 11 答 False，其余十行两台一致 —— 那十行是「别把对的答改成错的」的证人 (Val 仍宽松、
+    # &H 前缀仍认、Empty 仍答 0 且不许开始报错)。
+    $b416Expected = @(
+        "B416-01=13",
+        "B416-02=13",
+        "B416-03=13",
+        "B416-04=6",
+        "B416-05=255",
+        "B416-06=123",
+        "B416-07=255",
+        "B416-08=42",
+        "B416-09=123",
+        "B416-10=0",
+        "B416-11=True",
+        "B416-12=13",
+        "B416-13=13",
+        "B416-14=13",
+        "B416-15=42",
+        "B416-16=0/0",
+        "B416-DONE")
+    Test-Vbp 'b416_conv_strict' "$Tests\b416\B416.vbp" $b416Expected
+    Test-Vbp 'b416_conv_strict_x86' "$Tests\b416\B416.vbp" $b416Expected -Arch "x86"
+    # 发码那一头: 两位桥各归各的档 —— 数值族吃 vb6_NumVal, Boolean 那一档吃 vb6_BoolVal,
+    # Val 那一枚证人继续吃 vb6_Val (宽松是它的口径, 不是漏的帧)。
+    Test-EmitcShape 'b416_conv_bridge_split' @("$Tests\b416\B416Main.bas") @(
+        'vb6_CBool(vb6_BoolVal(',
+        'vb6_CInt(vb6_NumVal(',
+        'vb6_CLng(vb6_NumVal(',
+        'vb6_CStrDbl(vb6_Val(')
+    Test-EmitcAbsent 'b416_cbool_no_longer_asks_the_number' @("$Tests\b416\B416Main.bas") @(
+        'vb6_CBool(vb6_NumVal(')
+
+    # <vbeclipse> 回归夹子 (b417_dateconv, 账 #305 #417 第九十四刀): 文本进日期转换的那一句解析。
+    # 改前 vb6_CDate 收文本那一支问的是**数值**解析 (它自己那行注释写的却是「字符串按日期解析」)，
+    # 而日期那三位主人 (vb6_DateValue / vb6_TimeValue / CStr(日期形文本) 入口) 各自抄了一份
+    # VarDateFromStr、解析不出全静默返 0。两台实测读数逐行相同 (.build/k239_run64.txt 与
+    # .build/k239_run32.txt)；负控 = 本刀之前那台编译器 (C3_k212_merged.exe) 编的同一份夹具
+    # (.build/k242_runbase.txt)：01 与 15 答 2026 (那一年、不是那一天)，02/03 答 0，
+    # 06/07/08/11/12 答 0 且 Err 也是 0，17 答 1905-7-18；其余八行两台一致 —— 那八行是
+    # 「别把对的答改成错的」的证人 (CDate 的纯数字串兜底两档、DateValue 砍成整天、
+    # TimeValue 只留小数、Val 仍宽松、Date 进槽再 CDate 那一路、认得出的文本不许报错)。
+    # 夹具用 12:45 而不是 14:30: 14:30 的一天小数在二进制里落不整，而 Hour/Minute/Second 三枚
+    # getter 直接截断乘积 (本机 VB-family 运行期答 30，本仓答 29 —— 尺 .build/k240_minute.vbs)，
+    # 那是另一格 (新账 #418)，不许混进本针的判据里。
+    $b417Expected = @(
+        "B417-01=46023",
+        "B417-02=12",
+        "B417-03=45",
+        "B417-04=46000",
+        "B417-05=1",
+        "B417-06=13",
+        "B417-07=13",
+        "B417-08=13",
+        "B417-09=46023",
+        "B417-10=12",
+        "B417-11=13",
+        "B417-12=13",
+        "B417-13=46023",
+        "B417-14=123",
+        "B417-15=46023",
+        "B417-16=0",
+        "B417-17=2026-1-1",
+        "B417-DONE")
+    Test-Vbp 'b417_date_conv' "$Tests\b417\B417.vbp" $b417Expected
+    Test-Vbp 'b417_date_conv_x86' "$Tests\b417\B417.vbp" $b417Expected -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (b418_ispred, 账 #305 #418 第九十五刀): IsDate / IsNumeric 那两问
+    # 以前只看 Variant 的 vt 标签 ⇒ 文本一律答否 (IsNumeric("123")=False、IsDate("2026/1/1")=False)，
+    # 而 VB6 两句都吃「这串折不折得出来」。改后问的是第九十三/九十四刀那两位主人的**成功与否**，
+    # 所以既不报错、也不许再长出第二份解析。两台实测读数逐行相同 (.build/k263_run64.txt 与
+    # .build/k263_run32.txt)；负控 = 本刀之前那台编译器 (C3_k259_base) 编同一份夹具
+    # (.build/k263_runbase.txt)：01/02/08/09/14/15 全答 False、17 答 -1 (那扇门根本没开)，
+    # 其余十一行两台一致 —— 那十一行是「别把对的答改成错的」的证人：非文本档 (06/07/12/13)、
+    # 认不出的文本 (03/04/05/10/11 = 含「日期串不是数」这一条两档确实不同的读数)、
+    # 判据不许报错 (16)、以及 DONE。17 那一针是给 VBFlexGrid 那形 If IsDate(Text) Then CDate(Text)
+    # 开的门 (第九十四刀修好了 CDate，可门一直没开) —— 承面尺 .build/k254_isnum_census.py。
+    $b418Expected = @(
+        "B418-01=True",
+        "B418-02=True",
+        "B418-03=False",
+        "B418-04=False",
+        "B418-05=False",
+        "B418-06=True",
+        "B418-07=False",
+        "B418-08=True",
+        "B418-09=True",
+        "B418-10=False",
+        "B418-11=False",
+        "B418-12=True",
+        "B418-13=False",
+        "B418-14=True/True",
+        "B418-15=True/True",
+        "B418-16=0/0",
+        "B418-17=46023",
+        "B418-DONE")
+    Test-Vbp 'b418_ispred_text' "$Tests\b418\B418.vbp" $b418Expected
+    Test-Vbp 'b418_ispred_text_x86' "$Tests\b418\B418.vbp" $b418Expected -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (b419_time_split, 账 #305 #419 第九十六刀): DATE 的小数半边怎么拆。
+    # 以前三枚 getter 与 DateAdd 分解站各自抄一份「小数 * 24/1440/86400 然后截断」，而 14:30 那种
+    # 分数在二进制里落不整 => 本仓 Minute(CDate("2026/1/1 14:30")) 答 29、Second(…23:59:59) 答 58，
+    # 一天 86400 秒按截断算 43136 个落错一档。本机 VB-family 运行期实测是**四舍五入到整秒**
+    # (+0.4/+0.5 不进位、+0.6/+0.99 进位; 尺 .build/k272_timeparts.vbs + k277_round.vbs +
+    # k278_roll.vbs)，收成一条唯一出口 vb6_SecondsOfDay，三枚 getter 与 DateAdd 都问它
+    # (DatePart 的 h/n/s 三档本来就转调那三枚 getter，跟着一起好)。
+    # 两台实测读数逐行相同 (.build/k289_run64.txt 与 k289_run32.txt)。负控 = 本刀之前那台编译器
+    # (C3_k270_base.exe) 编同一份夹具 (.build/k289_runbase.txt): 移动 10 行
+    # (02/03/04/09/11/12/13/14/15/16)，其余 6 行 (01/05/06/07/08/10) 两台一致 = 「别把对的答改成
+    # 错的」的证人 (12:45 那种落得整的分数、14:30:45、纯日期、+0.4 不进位、Hour 那一半本来就对)。
+    # 刻意不钉的两形 (各自另立一格账): 23:59:59.9 那格运行期连**日期**半边也进一天 (本刀只把日内秒
+    # 归零)，以及 1899-12-30 之前那种负数序列的分数符号口径。
+    $b419Expected = @(
+        "B419-01=14",
+        "B419-02=30",
+        "B419-03=0",
+        "B419-04=23/59/59",
+        "B419-05=14/30/45",
+        "B419-06=45/0",
+        "B419-07=0/0/0",
+        "B419-08=2026-1-1",
+        "B419-09=46",
+        "B419-10=45",
+        "B419-11=14/30",
+        "B419-12=15/30/0",
+        "B419-13=23/30 day=31-12-2025",
+        "B419-14=0/0/0 day=2",
+        "B419-15=30/0",
+        "B419-16=6/15/30",
+        "B419-DONE")
+    Test-Vbp 'b419_time_split' "$Tests\b419\B419.vbp" $b419Expected
+    Test-Vbp 'b419_time_split_x86' "$Tests\b419\B419.vbp" $b419Expected -Arch "x86"
+
+    # <vbeclipse> 回归夹子 (b422_datepart_arms, 账 #305 #422 第九十七刀): vb6_DatePart 的两条臂。
+    # ① case vb6_di_day 直接掉进「一年里第几天」那条臂 => DatePart(「d」, 2026/3/1) 本仓答 60、
+    # 本机运行期答 1 (答 60 的那一档叫「y」; 尺 .build/k309_datepart.vbs)。②「ww」那一臂就地抄了
+    # 一条 (dayOfYear-1)/7+1 且把 firstDayOfWeek / firstWeekOfYear 用 (void) 丢掉 => 与运行期逐日
+    # 比对 2026 年 365 天里 208 天不同、2024 年 366 天里 52 天不同 (.build/k310_ww.vbs)，而语料那
+    # 4 处「ww」全在 ComCtlsDemo 的 DTPicker/MonthView 里、四处分节符都把 vbFirstFourDays 传出来。
+    # 收成一条唯一出口 vb6_WeekOfYear: 口径 = 运行期 14 年 × 21 组合 = 107394 天逐日拟合零失配
+    # (尺 .build/k321/k324/k330_ww_grid*.vbs，拟合与复核 k323_ww_fit.py，报告 k329/k330)。
+    # B422-14..16 是闰年那半的证人: 2023-12-29 是周五 (fdow=6 的周首)，它那一周在 2024 里有 4 天，
+    # 本该算来年的第 1 周，运行期却把周首那一天自己留在 2023 的末周里 —— 因为来年是闰年 (实测)。
+    # 刻意不钉: DateDiff(「ww」) 还在数整段七天、同样不吃那两条形参 (自成一格账)。
+    $b422Expected = @(
+        "B422-01=1/1",
+        "B422-02=60",
+        "B422-03=3",
+        "B422-04=1",
+        "B422-05=2026",
+        "B422-06=1",
+        "B422-07=1",
+        "B422-08=2",
+        "B422-09=2",
+        "B422-10=10",
+        "B422-11=24",
+        "B422-12=53/1/52",
+        "B422-13=53/1/52",
+        "B422-14=53",
+        "B422-15=1",
+        "B422-16=1/53",
+        "B422-17=1/53/52",
+        "B422-18=53",
+        "B422-19=53",
+        "B422-20=9/9",
+        "B422-21=9",
+        "B422-22=53",
+        "B422-23=53",
+        "B422-24=9/9",
+        "B422-DONE")
+    Test-Vbp 'b422_datepart_arms' "$Tests\b422\B422.vbp" $b422Expected
+    Test-Vbp 'b422_datepart_arms_x86' "$Tests\b422\B422.vbp" $b422Expected -Arch "x86"
+    # <vbeclipse> 回归夹子 (b426_format_ampm, 账 #305 #426 第九十八刀): Format 的日期面三格。
+    # ① h/hh 恒按 12 小时报 (那条算式无条件走 st.wHour % 12) => 语料把「hh:mm:ss」「yyyy-mm-dd
+    # hh:mm:ss」当**时间戳**用 (真语料 1693 处日期类格式串里各占 70 / 101, 尺 .build/k392_fmt_census.py),
+    # 一整个下午被写进日志与报表成了半个下午。②「AM/PM」令牌被逐字符循环当成月份吃掉 => Format(d,
+    # 「AM/PM」) 交 A1/P1 —— 那两枚 1 / 7 就是两个月号 (两枚探针时间分别在 1 月与 7 月, 尺 k391_run.txt,
+    # 台账里原先那句「数值段分隔吃掉」是错的, 同日订正)。③ 只写记号、不带日期字母的串 (「A/P」「AMPM」)
+    # 过不了 vb6_fmtIsDateFormat => 掉回数值臂交裸序列号 46027.6046875。收成一处三枚: vb6_fmtAmPmLenAt
+    # (在哪 / 几长 / 哪一形) + vb6_fmtHasAmPm (有没有, 同时就是「小时走 12 还是 24」的判据) +
+    # vb6_fmtAppendAmPm (大小写跟随串里写的那一种; 交**不变英文**记号, 与本函数已有的 January/Sunday
+    # 同一档, 不跟 locale)。
+    # ⚠ 这一格没有运行期 oracle: VBScript 不带 Format、oleaut32 VarTokenizeFormatString 在本机每串返
+    # E_INVALIDARG (尺 k388_varfmt.c)、.NET Strings.Format 走它自己的令牌表 (尺 k390_vbnet.txt) =>
+    # 下面 17 行期望值 = 文档那张表 + 语料自身写法 (先按口径手推、再两台复算全合), **不是运行期实测**。
+    # B426-14/17 是证人: mm 的两问 (月 vs 分) 与「没有日期字母的串走数值」都不许被本刀牵动。
+    # 负控 (.build/k408_negctl.txt, 同一份夹具两台编译器): 16 行移动、B426-17 与 DONE 两行不动。
+    $b426Expected = @(
+        "B426-01=14:30:45|00:05:00",
+        "B426-02=14:30|0:05",
+        "B426-03=2026-01-05 14:30:45|2026-07-04 00:05:00",
+        "B426-04=02:30 PM|12:05 AM",
+        "B426-05=2:30:45 p|12:05:00 a",
+        "B426-06=2:30 PM|12:05 AM",
+        "B426-07=023045 PM|120500 AM",
+        "B426-08=2:30 pm|12:05 am",
+        "B426-09=PM|AM",
+        "B426-10=P|A",
+        "B426-11=pm|am",
+        "B426-12=5-Jan-26 2:30 PM|4-Jul-26 12:05 AM",
+        "B426-13=2026-01-05 02:30:45 PM|2026-07-04 12:05:00 AM",
+        "B426-14=2026-01-05|01/05/2026|14:30",
+        "B426-15=12:00 PM|12:00 AM|12:00|00:00",
+        "B426-16=11:00 PM|13",
+        "B426-17=1234.50|-1234.50",
+        "B426-DONE")
+    Test-Vbp 'b426_format_ampm' "$Tests\b426\B426.vbp" $b426Expected
+    Test-Vbp 'b426_format_ampm_x86' "$Tests\b426\B426.vbp" $b426Expected -Arch "x86"
+    # <vbeclipse> 回归夹子 (b429_emitted_declared, 账 #305 #428 第九十九刀): FormatDateTime 在 x64 上
+    # 第一发就 0xC0000005。根因不在口径: vb6_FormatDateTime 住 vb6rtl_system.c:46，被内置表点名、
+    # 发码把它直接写进用户 TU，可 src/rtl 全树的 .h 里没有它的声明 ⇒ C 走隐式声明(假定返回 int)，
+    # x64 把返回的 BSTR 指针折成 32 位再交 vb6_BSTR_AssignMove ⇒ 解引用就死；x86 指针本来 32 位所以看着全对
+    # （同一份源 x86 七发全跑完，五档答案还与本机 VBScript 逐档相同 —— 尺 .build/k423_proj -> k424_run.txt）。
+    # 这一格从发码形状上看不见（隐式声明只是 cl 的忠告，两台都照编照链），所以判据面选了两枚:
+    #   · B429-16 问 VarType(FormatDateTime(…)) —— 缺声明时答 3(VT_I4)、补上才答 8，BASE 机上 x86 也读 False/False
+    #     （尺 .build/k472_x86_run.txt）⇒ 这一针在两台上都会移，不只靠 x64 崩。
+    #   · 能跑到 B429-DONE 本身就是 x64 那条腿活着的证人。
+    # 命名格式五档走 LOCALE_USER_DEFAULT，字串随机器 locale 变（本机 zh-CN、CI 是 en-US）⇒ 期望值只钉
+    # 关系与标签，不钉字面串: general date 以 short date 开头、里面含 long time、长/短格式互不相等。
+    # 负控 (.build/k472_*.txt，同一份夹具两台编译器): BASE 的 x64 只打印两行就死、x86 只有第 16 行不同。
+    $b429Expected = @(
+        "B429-01=8",
+        "B429-02=8/8/8/8",
+        "B429-03=True/True/True",
+        "B429-04=True/True",
+        "B429-05=True",
+        "B429-06=True",
+        "B429-07=True",
+        "B429-08=True",
+        "B429-09=True",
+        "B429-10=True",
+        "B429-11=True",
+        "B429-12=True",
+        "B429-13=True",
+        "B429-14=True",
+        "B429-15=8/True",
+        "B429-16=True/True",
+        "B429-17=True",
+        "B429-DONE")
+    Test-Vbp 'b429_formatdatetime' "$Tests\b429\B429.vbp" $b429Expected
+    Test-Vbp 'b429_formatdatetime_x86' "$Tests\b429\B429.vbp" $b429Expected -Arch "x86"
+
+    # 账 #305 #427 (§B201) 第一百刀: Format 的日期面还欠 w / ww / q / ttttt 四枚门票 + ddddd 那一档。
+    # 修前读数 (尺 .build/k504_proj -> k504_x64_run.txt): 前四枚交**裸序列号** 46027.6046875、
+    #   ddddd 交 Monday (日档 cnt>=4 把第五枚 d 当成长周名), 而语料把 ddddd ttttt 写了 36 处。
+    # 命名格式那五档走 LOCALE_USER_DEFAULT ⇒ 字串随机器 locale 变 (本机 zh-CN / CI en-US) ⇒ 期望值只钉
+    # 关系: w/ww/q 与 DatePart 同答、ttttl 与 FormatDateTime(vbLongTime) 同答、ddddd 与 vbShortDate 同答,
+    # 外加两枚与 locale 无关的字面证人 (自家不变英文的周名表 + ISO 串里那枚字面 t)。
+    # 反面的爆炸半径证人 (B430-24/25): 数值臂那条不许被新字母拖进日期臂 —— 语料的「数值 + 单位」串
+    # (#,##0 Twip / T0 / #### Byte, 15 处) 仍交那个数; 门票的 allowWQT + 「串里有 0/# 就不算日期」两条闸
+    # 就是为这一格钉的 (尺 .build/k496_census.txt + k497_wqt_where.txt)。
+    # 负控 = 本刀之前那台冷编 (C3_k100_base.exe) 编同一份夹具: 20 针红、只有 DONE 与 5 针不红
+    # (.build/k512_x64_run.txt vs .build/k511_x64_run.txt)。
+    $b430Expected = @(
+        "B430-01=True/True",
+        "B430-02=True",
+        "B430-03=True",
+        "B430-04=True",
+        "B430-05=True",
+        "B430-06=True",
+        "B430-07=True",
+        "B430-08=True",
+        "B430-09=True",
+        "B430-10=True",
+        "B430-11=True",
+        "B430-12=True",
+        "B430-13=True",
+        "B430-14=True",
+        "B430-15=True",
+        "B430-16=True/True/True",
+        "B430-17=True",
+        "B430-18=True",
+        "B430-19=True",
+        "B430-20=True",
+        "B430-21=True",
+        "B430-22=True",
+        "B430-23=True",
+        "B430-24=True/True",
+        "B430-25=True/True",
+        "B430-26=True/True",
+        "B430-27=True/True",
+        "B430-DONE")
+    Test-Vbp 'b430_format_date' "$Tests\b430\B430.vbp" $b430Expected
+    Test-Vbp 'b430_format_date_x86' "$Tests\b430\B430.vbp" $b430Expected -Arch "x86"
+
+    # <vbeclipse> 第一百零一刀 (账 #429 ①+④ / §B203): 「general date 这一档到底给不给时间」以前有三位主人、三个答案。
+    # 改前三户对同一枚零头为 0 的日期各答一次 (尺 .build/k541_proj -> k541_x64_run.txt / k541_x86_run.txt, 两台同读):
+    #   FormatDateTime(d0, vbGeneralDate) = "2026/1/5 "        len 9  (一枚孤儿尾随空格)
+    #   Format(d0, "General Date")        = "2026/1/5 0:00:00" len 16
+    #   CStr(d0)                          = "2026/1/5"         len 8  (只有这一条与引擎一字不差)
+    # 机制: vb6_FormatDateTime 里那句 `buf[len - 1] = 空格` 是**无条件**做的, 而 GetDateFormatW 交回的长度含结束符
+    #   => 那一句把结束符改成了空格; 只有拼时间那一段才判零头。conv.c 又另抄一份 1e-9 容差 (Fix 175) 住在第二家。
+    # 判据口径: 本机 zh-CN、CI en-US 交回同一份 .out (第一百/九十九刀两台逐字节验过这条纪律), 所以这里只钉关系式 ——
+    #   尾随空格、冒号有无、长度、以及「三户交同一枚串」与「= 短日期 + 一枚空格 + 长时间」; 一枚日期拼写都不钉。
+    # B431-07/08/09/14/15 钉引擎本人那条闸 (尺 .build/k559_out.txt 二十行 + k564_out.txt 十九行, **两发合起来**):
+    #   零头四入到整秒之后**当日时分秒全为零**就不给时间段 —— 50/200/400/499/500 毫秒只给日期, 600 毫秒起才给;
+    #   而**午夜前一毫秒**交的是次日短日期且整段不给 (四入越过午夜) ⇒ 「零头 != 0」(system.c 那条) 与任何亚秒容差
+    #   (conv.c 的 1e-9) 两条一起判死。渲染那一段也是四入的 (VariantTimeToSystemTime 已四入) ⇒ 判与渲染同一个问。
+    # B431-12/13 是反面的爆炸半径证人: 数值那一臂 (Format(1234, "0")) 与第一百刀的 ddddd / ttttt 双生不许被牵连。
+    $b431Expected = @(
+        "B431-01=True/True",
+        "B431-02=True/True",
+        "B431-03=True/True/True",
+        "B431-04=True/True",
+        "B431-05=True/True",
+        "B431-06=True/True/True",
+        "B431-07=True/True",
+        "B431-08=True/True",
+        "B431-09=True/True",
+        "B431-10=True/True",
+        "B431-11=True/True/True",
+        "B431-12=True/True/True",
+        "B431-13=True/True",
+        "B431-14=True/True",
+        "B431-15=True/True",
+        "B431-DONE")
+    Test-Vbp 'b431_general_date' "$Tests\b431\B431.vbp" $b431Expected
+    Test-Vbp 'b431_general_date_x86' "$Tests\b431\B431.vbp" $b431Expected -Arch "x86"
+
+
+    # 账 #305 §B205 第一百零二刀 (#431): DateSerial 的返回档 = 语义表那一格说了算。
+    # 改前那张表里九枚日期构造函数只有它写 Vb6Type::Double ⇒ 进槽贴 VT_R8，六档与引擎相反
+    # (VarType 5 / TypeName "Double" / IsDate False / IsNumeric True / CStr [46027] / Len 5，
+    # 尺 .build/k607_run_x64.txt vs 同机 oracle .build/k607_oracle_out.txt)。
+    # 针面全关系式: 标签与数值钉死、串面只与同一出口的另一枚日期比 (两台 .out 逐字节相同，
+    # 尺 .build/k620_x64_run.txt / k620_x86_run.txt，md5 7550f32d...)；B432-05..10/14/16 是证人
+    # (那些档改前就与引擎同答，换档不许把它们弄坏)，B432-17/18 各钉一格: 17 = Date 进窄整型目标
+    # 要过同一份取整出口 (BASE 在 CDate 那一形上就是红的)，18 = 槽里那枚日期交给无格式串的
+    # Format 之后与第一百零一刀的 general date 出口接上 (改前交 [46027]、改后交 [2026/1/5])；
+    # 18 的第二格是**故意钉下的错答案** (label witness): As Date 局部直接交给 Format 仍走数值臂，
+    # 因为首参由新账 #430 那张手抄装箱表决定 ⇒ 谁修 #430 谁回来把它翻成 True。
+    # (尺 .build/k636_charts_diff.txt / k639_b432_newemit.txt)。
+    $b432Expected = @(
+        "B432-01=True/True/True/True",
+        "B432-02=True/True",
+        "B432-03=True/True",
+        "B432-04=True/True",
+        "B432-05=True/True",
+        "B432-06=True/True",
+        "B432-07=True/True",
+        "B432-08=True/True",
+        "B432-09=True/True",
+        "B432-10=True/True/True/True",
+        "B432-11=True/True",
+        "B432-12=True/True/True",
+        "B432-13=True/True",
+        "B432-14=True/True/True/True",
+        "B432-15=True/True",
+        "B432-16=True/True",
+        "B432-17=True/True",
+        "B432-18=True/True",
+        "B432-DONE")
+    Test-Vbp 'b432_dateserial_tag' "$Tests\b432\B432.vbp" $b432Expected
+    Test-Vbp 'b432_dateserial_tag_x86' "$Tests\b432\B432.vbp" $b432Expected -Arch "x86"
+
+    # 账 #305 §B206 第一百零三刀 (#432): FormatDateTime 的两条形参现在问那一位唯一权威。
+    # 改前 kNoTableFormalKinds176 与 getRuntimeParamCType 两级都没 vb6_FormatDateTime 那一行
+    # ⇒ rtParamType 空 ⇒ 不包 ⇒ 整枚 vb6_VARIANT 裸交进 double / int32_t = cl C2440，**整份工程
+    # 编不过** (BASE 那台 14 条 C2440、两台同一行集，尺 .build/k691_base_read.txt)。这一族十二形
+    # 逐形真编译 = 八形硬错误 / 四形编得过 (.build/k672_k103_readings.md)，夹具把其中七形各钉一针，
+    # 今天编得过的那四形当证人 (B433-04)。
+    # 口径与 b431/b432 同一套: 每针要么关系式、要么 locale-free —— 本机 zh-CN、CI 那台 en-US，
+    # 拼出来的日期从不与字面量比，只与「同一枚已经通得过的值问同一档」比 (尺 .build/k689_x64_run.txt
+    # / k689_x86_run.txt，两台 .out 逐字节相同 = md5 54714ae9efc018fb71ee39660691d3ee)。
+    # 文本那一形 (As String 交进来) 刻意不在这里: 它改完仍是硬错误，且正确答案是「按日期解析文本」
+    # 不是「折成数值」⇒ 新账 #433，与 #417 (CDate 收文本) 同批。
+    $b433Expected = @(
+        "B433-01=True/True",
+        "B433-02=True/True",
+        "B433-03=True",
+        "B433-04=True/True/True/True",
+        "B433-05=True/True",
+        "B433-06=True",
+        "B433-07=True/True",
+        "B433-08=True",
+        "B433-09=True",
+        "B433-10=True/True",
+        "B433-11=True/True/True",
+        "B433-DONE")
+    Test-Vbp 'b433_formatdatetime_args' "$Tests\b433\B433.vbp" $b433Expected
+    Test-Vbp 'b433_formatdatetime_args_x86' "$Tests\b433\B433.vbp" $b433Expected -Arch "x86"
+
+
+    # 账 #305 SB186 第二头: VB 客户那一头　「口径」的唯一读数面　—— 探针是 C 客户, 它只能读 hr;
+    # 「服务端自己那条错折回原号」还是「一律 429」这一问, 只有真的 VB 客户点得到。
+    # BC1 = 抛错的那枚: 客户活着(rc=0)且 On Error 拿到 123(不是 429, 也不是 exit(123)), 对象仍是 Nothing;
+    # BC2 = 干净的那枚: twice=42 / seed=12345(构造真跑过 Class_Initialize)/ num=0(不残留错误);
+    # BC3 = 体里自带 On Error 的那枚: handled=123 证它接住了自己的错, twice=8 证构造成功、成员点得通。
+    Test-ComActivateClient "b186_create_client" "$Tests\b186_srv\B186d.vbp" "B186d" `
+        "{11112222-3333-4444-5555-6666777788B1}" "B186d.Boom" "$Tests\b186_srv\B186Client.vbp" @(
+        "BC1:num=123",
+        "BC1:null=yes",
+        "BC2:twice=42 seed=12345 num=0",
+        "BC3:handled=123 twice=8",
+        "BC-DONE")
+    Test-ComActivateClient "b186_create_client_x86" "$Tests\b186_srv\B186d.vbp" "B186d" `
+        "{11112222-3333-4444-5555-6666777788B1}" "B186d.Boom" "$Tests\b186_srv\B186Client.vbp" @(
+        "BC1:num=123",
+        "BC1:null=yes",
+        "BC2:twice=42 seed=12345 num=0",
+        "BC3:handled=123 twice=8",
+        "BC-DONE") -Arch "x86"
+
     # --- ai/022 B17: 外部激活（注册 -> 系统那条路 -> 反注册后不留键）---
     # 上面两条走的是**进程内**独立客户端（LoadLibrary + DllGetClassObject，刻意不查注册表）；
     # 这两条走的是系统那条路：DllRegisterServer 真写注册表，再按 CLSID/ProgID 让 COM 自己去找
@@ -6540,6 +8294,22 @@ if ($Category -in @("all", "compile")) {
     Test-IntLiteralShape
     Test-IntSuffixSites
     Test-ScaleModeWriters
+    Test-VbpSourceExt
+    Test-ExtenderEmitChannel
+    Test-ExtenderPushPop
+    Test-ExtenderGlobalCensus
+    Test-FormatDateArgArm
+    Test-B433DateFormalAuthority
+    Test-B440SerialSplitAuthority
+    Test-B423IntervalPerBuiltin
+    Test-B436FdtBounds
+    Test-NoLocaleNeedles
+    Test-B438VoidParamCensus
+    Test-B437FormatLeadingGroup
+    Test-B439FormatUseParens
+    Test-B442DateaddInterval
+    Test-B425DateserialDomain
+    Test-B424DatedPartParams
     Test-ControlDC
     Test-SaAccess
     Test-BitwiseAuthority
@@ -6591,6 +8361,23 @@ if ($Category -in @("all", "compile")) {
     Test-ComMarkerWriteSites
     Test-SetRhsObjectContext
     Test-UdtMemberDims
+    Test-ComServerErrorFrame
+    Test-ProjClassScanBound
+    Test-ObjectSlotBoxing
+    Test-BoxTempReclaim
+    Test-IfaceViewAuthority
+    Test-ClassRefcountAuthority
+    Test-ConvStrictParse
+    Test-DateConv
+    Test-IsPredText
+    Test-TimeSplit
+    Test-DatePartArms
+    Test-FormatAmPm
+    Test-EmittedDeclared
+    Test-FormatDateTokens
+    Test-GeneralDateOutlets
+    Test-DateSerialTag
+    Test-FormatDateTimeArgs
 
     Write-Host ""
 
@@ -6925,11 +8712,14 @@ if ($Category -in @("all", "syntax")) {
     # 折好之后整条调用必须由 controlCanvasMethod 那张表改成原生 vb6_ControlLine(...)。
     # 改前两格都发裸名、由 RTL 的 const int32_t B / BF 接住 (语料实测 vb6_ComPackValue(BF)),
     # 而 Line 本身没人应答: Absent 那两条钉的就是"又退回兜底 / 名字又回来"这两件。
+    # 账 #232⑤: PictureBox.Line 随 vb6_ControlLine 转发 vb6_Form_Line 改成 12 参 has 位形
+    # (step1=0, has1=1[这四条都显式起点], step2=0, has2=1, …, hasColor, col, style) —— 4 条全是
+    # 显式起点 ⇒ has1=1, 与改前 7 参形语义逐字同 (起点终点都给); 起点省略那一形由 FD28/FD29 钉。
     Test-CodegenNote "pcline_flag_folded" @("$Tests\pcline\PcForm.frm") @(
-        "vb6_ControlLine((void*)vb6_hwnd_picA, (double)10, (double)10, (double)50, (double)50, (int32_t)255, (int32_t)5)",
-        "vb6_ControlLine((void*)vb6_hwnd_picA, (double)0, (double)0, (double)20, (double)20, (int32_t)16711680, (int32_t)1)",
-        "vb6_ControlLine((void*)vb6_hwnd_picA, (double)5, (double)5, (double)15, (double)15, (int32_t)B, (int32_t)0)",
-        "vb6_ControlLine((void*)vb6_hwnd_picA, (double)6, (double)6, (double)16, (double)16, (int32_t)BF, (int32_t)0)") @(
+        "vb6_ControlLine((void*)vb6_hwnd_picA, (int32_t)0, (int32_t)1, (double)10, (double)10, (int32_t)0, (int32_t)1, (double)50, (double)50, (int32_t)1, (int32_t)255, (int32_t)5)",
+        "vb6_ControlLine((void*)vb6_hwnd_picA, (int32_t)0, (int32_t)1, (double)0, (double)0, (int32_t)0, (int32_t)1, (double)20, (double)20, (int32_t)1, (int32_t)16711680, (int32_t)1)",
+        "vb6_ControlLine((void*)vb6_hwnd_picA, (int32_t)0, (int32_t)1, (double)5, (double)5, (int32_t)0, (int32_t)1, (double)15, (double)15, (int32_t)1, (int32_t)B, (int32_t)0)",
+        "vb6_ControlLine((void*)vb6_hwnd_picA, (int32_t)0, (int32_t)1, (double)6, (double)6, (int32_t)0, (int32_t)1, (double)16, (double)16, (int32_t)1, (int32_t)BF, (int32_t)0)") @(
         "vb6_ComGetObjectProp(vb6_hwnd_picA, L" + [char]34 + "Line" + [char]34 + ")",
         "vb6_ComPackValue(BF)", "vb6_ComPackValue(B)")
     # <vbeclipse> 账 #217 第二刀: 文档隐式对象 (UserControl / PropertyPage / Extender / Ambient)
@@ -6939,7 +8729,7 @@ if ($Category -in @("all", "syntax")) {
     # dhExp 钉"诊断清零 + 符号照旧"，dhImp 故意不写 Option Explicit 钉"不再发死局部"。
     Test-CodegenNote "dochost_ctl_no_undeclared" @("$Tests\dochost\dhExp.ctl") @(
         "vb6_UserControl_ScaleWidth", "vb6_UserControl_hWnd",
-        "vb6_Ambient_UserMode", "vb6_Extender_Tag", "vb6_UCase") @("VB3001")
+        "vb6_Ambient_UserMode", "vb6_UC_SetExtenderMember", "vb6_UCase") @("VB3001")
     Test-CodegenNote "dochost_no_phantom_locals" @("$Tests\dochost\dhImp.ctl") @(
         "vb6_UserControl_ScaleWidth", "vb6_Ambient_UserMode", "vb6_UCase") @(
         "vb6_VARIANT UserControl", "vb6_VARIANT Ambient", "vb6_VARIANT VBA")
@@ -7268,6 +9058,32 @@ if ($Category -in @("all", "syntax")) {
         "vb6_Point((&(int32_t){7}), (&(int32_t){9}));") @(
         "vb6_VariantEmpty()",
         "Circle(240, 90")
+    # 账 #232④: `Line -(x, y)` —— **起点省略**那一形。两件事一起钉，缺一件都过不去:
+    #   (1) parser 必须把这一形收成一次调用。改前它在**语句分发层**就被拒 (parser_stmt.cpp
+    #       的 `TokenKind::Line` 只把 `=` / `(` / `.` 交回调用路，`-` 落进 `Line Input`
+    #       那一支 ⇒ VB2001)，随后 `-(460` 又被 Pratt 当中缀减法读 ⇒ 一串级联，整个工程
+    #       exit 1 —— 这枚针的两条 needle 在改前那台上压根产不出来。
+    #   (2) 第一对坐标必须带 has=0 交出去 (RTL 那一头 vb6forms_draw.c:201 见 has1==0 就取
+    #       CurrentX/CurrentY)。发码侧以前是**按实参个数猜**的 (">= 4 就当起点也给")，
+    #       而起点省略 + color + style 恰好也是 4 格 ⇒ `Line -(x, y), vbRed, BF` 的颜色与
+    #       样式直接落进第二点的两格（实测发成 (…, 340, 80, 0, 1, 255, 5, …)）。现在起点
+    #       给没给由 parser 记在 AST 上（canvasStartOmitted），发码侧读旗标不猜。
+    # Absent 那一条钉死"错位"这一族形状：把给的两格当起点 ⇒ has=1 且第一格就是那两格。
+    Test-CodegenNote "form_canvas_tail_start" @("$Tests\fdraw\FDemo.vbp") @(
+        "vb6_Form_Line((void*)vb6_hwnd_FDForm, 0, 0, 0, 0, 0, 1, 120, 100, 0, 0, 0); /* Form.Line */",
+        "vb6_Form_Line((void*)vb6_hwnd_FDForm, 0, 0, 0, 0, 0, 1, 120, 190, 0, 0, 0); /* Form.Line */") @(
+        "vb6_Form_Line((void*)vb6_hwnd_FDForm, 0, 1, 120, 100",
+        "vb6_Form_Line((void*)vb6_hwnd_FDForm, 0, 1, 120, 190")
+    # 账 #232⑥: `Step` 前缀。改前这一族连解析都过不去, 所以这三条 needle 在改前那台上
+    # **压根产不出来** (exit=1)。三枚分别钉三条码头: Form.PSet / Form.Line (两个 Step 前缀
+    # 各一位) / PictureBox.Line。Absent 那两条钉死「旗标被写死成 0」—— 那一格编得过、跑得起、
+    # 画到别处去, 正是本线反复栽的那味; pen 半 (FD30/31/32) 是它的运行期证人。
+    Test-CodegenNote "form_canvas_step" @("$Tests\fdraw\FDemo.vbp") @(
+        "vb6_Form_PSet((void*)vb6_hwnd_FDForm, 1, 1, 40, 30, 0, 0); /* Form.PSet */",
+        "vb6_Form_Line((void*)vb6_hwnd_FDForm, 1, 1, 40, 0, 1, 1, 20, (-50), 0, 0, 0); /* Form.Line */",
+        "vb6_ControlLine((void*)vb6_hwnd_picP, (int32_t)1, (int32_t)1, (double)10, (double)5, (int32_t)1, (int32_t)1, (double)20, (double)0, (int32_t)0, (int32_t)0, (int32_t)0); /* PictureBox.Line */") @(
+        "vb6_Form_PSet((void*)vb6_hwnd_FDForm, 0, 1, 40, 30",
+        "vb6_Form_Line((void*)vb6_hwnd_FDForm, 0, 1, 40, 0, 1, 1, 20")
     # 账 #278 §B113: `Load/Unload <窗体名>` 的实参站在**对象位**，不许折成默认属性。
     #   夹具里那枚没人调的 UsOwnNameProbe 写 `Unload FDForm`（VB6 里与 `Unload Me` 同义）。
     #   改前那一台在这一形里交的是 `vb6_GetControlText(vb6_hwnd_FDForm)`（Caption 的 BSTR）

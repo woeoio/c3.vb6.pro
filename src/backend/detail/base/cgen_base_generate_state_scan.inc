@@ -7,6 +7,7 @@
     // 生成代码时类成员的C名格式为 m_Xxx (首字母大写), lowercase 后为 m_xxx
     classBstrMembers_.clear();
     classLongMembers_.clear();
+    classIntMembers_.clear();  // 账 #305 §B183
     classDoubleMembers_.clear();
     classVariantMembers_.clear();  // Fix 037
     classByteArrayMembers_.clear();  // Fix 140
@@ -45,6 +46,13 @@
                     } else if (vtype == Vb6Type::Long || vtype == Vb6Type::Integer || vtype == Vb6Type::Boolean) {
                         classLongMembers_.insert(mLower);
                         classLongMembers_.insert(oLower);
+                        // 账 #305 §B183: Integer 另登一份窄档表。不从上面那张表里摘掉 Integer：
+                        // 它的消费者不止「这枚左值有多窄」那一问，摘了会搬家。双登记是这一族
+                        // 的既有口径：Byte 见账 #123、Boolean 见 ai/022 W1、Date 见 Fix 175。
+                        if (vtype == Vb6Type::Integer) {
+                            classIntMembers_.insert(mLower);
+                            classIntMembers_.insert(oLower);
+                        }
                     } else if (vtype == Vb6Type::Double || vtype == Vb6Type::Single || vtype == Vb6Type::Date) {
                         classDoubleMembers_.insert(mLower);
                         classDoubleMembers_.insert(oLower);

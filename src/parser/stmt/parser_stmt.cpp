@@ -133,13 +133,20 @@ StmtPtr Parser::parseStatement() {
             }
             return parseCloseStmt();
         }
-        case TokenKind::Line: {
+case TokenKind::Line: {
+            // `-` / `Step` 那一格 = 画布两坐标形 (账 #232④/⑥): VB6 里 `Line` 的**语句**义只有
+            // `Line Input` (后继是 `Input` 关键字)，所以 `Line` 后面跟 `-` 或 `Step` 只可能是绘图义
+            // —— 不存在「`Line - 5`」「`Line Step = 3`」那种语句写法 ⇒ 抢不走任何一格。
+            // 绘图义为什么以前进不来: 交回调用路以后表达式层不认识这两枚 (parser_expr_postfix.cpp
+            // 的 `case TokenKind::Minus` / `case TokenKind::Step` 两条)。
             if (next_.kind == TokenKind::Equals ||
                 next_.kind == TokenKind::LeftParen ||
-                next_.kind == TokenKind::Dot) {
+                next_.kind == TokenKind::Dot ||
+                next_.kind == TokenKind::Minus ||
+                next_.kind == TokenKind::Step) {
                 return parseLabelOrAssignmentOrCall();
             }
-            return parseLineInputStmt();
+return parseLineInputStmt();
         }
         case TokenKind::Width: {
             if (next_.kind == TokenKind::Equals ||

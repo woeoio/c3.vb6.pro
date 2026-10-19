@@ -98,11 +98,28 @@ if ($litInt -ne 1) { $bad += ('N3 literal handoff ' + $litInt + ' times (want 1)
 if ($hand -ne 1) { $bad += ('N4 intValue=styleBits appears ' + $hand + ' times (want 1 - the folded value must BE the bit mask)') }
 if ($idName -ne 0) { $bad += ('N3 the flag name is back in the AST ' + $idName + ' times (want 0) - that is what created the collision') }
 
-# N5: RTL 解释的必须是**同三位** —— parser 与 RTL 是一张表, 不是两边各自编号
+# N5: RTL 解释的必须是**同三位** —— parser 与 RTL 是一张表, 不是两边各自编号。
+# 账 #232⑤: 这张表的**主人换了家** —— PictureBox 的 vb6_ControlLine 随 #239 转发
+# vb6_Form_Line 之后, 位解释只剩 vb6forms_draw.c 一处 (旧体自己那份 `style & 1/2/4`
+# 与 Form 那份是**两张同形的表**, 改一处就分家)。所以现在钉两半:
+#   (a) 主人那份仍在 (vb6forms_draw.c 里三位齐全, 按 0x7 掩码 + 0x2/0x4 两支);
+#   (b) vb6forms_ctrl.c 里**一处都不许再解释** (0 才是对的那一格 —— N5 反过来钉"不许有")。
 $rtlCtrl = [System.IO.File]::ReadAllText((Join-Path $root 'src\rtl\core\vb6forms\vb6forms_ctrl.c'))
-foreach ($bit in @('1', '2', '4')) {
-    $one = @([regex]::Matches($rtlCtrl, '\(\s*style\s*&\s*' + $bit + '\)')).Count
-    if ($one -lt 1) { $bad += ('N5 RTL never interprets style bit ' + $bit + ' - parser and RTL must be one table') }
+$rtlDraw = [System.IO.File]::ReadAllText((Join-Path $root 'src\rtl\core\vb6forms\vb6forms_draw.c'))
+# 钉**恰好 2** 而不是">=1": 位表在这个文件里有两枚主人 (vb6_Form_Line / vb6_Printer_Line),
+# 写">=1"时把其中一枚改成别的掩码照样绿 (负控实测: `(style & 0x2)` 改 `(style & 0x3)` rc=0,
+# 因为另一枚还在) —— 那一格要抓的是"两枚**同形**", 不是"至少有一枚"。
+foreach ($bit in @('0x2', '0x4', '0x7')) {
+    $one = @([regex]::Matches($rtlDraw, '\(\s*style\s*&\s*' + $bit + '\s*\)')).Count
+    if ($one -ne 2) {
+        $bad += ('N5 the RTL owner (vb6forms_draw.c) reads style bit ' + $bit + ' ' + $one +
+                 ' times (want exactly 2: vb6_Form_Line + vb6_Printer_Line read the same mask; ' +
+                 'one of them drifting is how B/C/F stop being one table)')
+    }
+}
+$ctrlBits = @([regex]::Matches($rtlCtrl, '\(\s*style\s*&')).Count
+if ($ctrlBits -ne 0) {
+    $bad += ('N5 vb6forms_ctrl.c interprets the style bits ' + $ctrlBits + ' times (want 0 - the owner is vb6forms_draw.c; a second reader is the drift this account deleted)')
 }
 $lineFn = @([regex]::Matches($rtlCtrl, 'void vb6_ControlLine\(')).Count
 if ($lineFn -ne 1) { $bad += ('N5 vb6_ControlLine defined ' + $lineFn + ' times (want 1)') }

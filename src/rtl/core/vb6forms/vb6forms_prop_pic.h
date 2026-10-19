@@ -59,9 +59,14 @@ void vb6_InstallImageSubclass(void* hwnd);
 void vb6_ControlPrint(void* hwnd, void* bstrText);
 void vb6_ControlCls(void* hwnd);
 // 账 #221 = C29-PL-a: PictureBox/Form 的 Line 方法（原生 GDI，DC 与 Print/Cls 同一处）。
-// style 位口径 = parser 折 Line 旗标那一处的同一张表: 1=B, 2=C, 4=F（BF=5）；color<0 用 ForeColor。
-void vb6_ControlLine(void* hwnd, double x1, double y1, double x2, double y2,
-                     int32_t color, int32_t style);
+// 账 #239 第三枚: 转发 vb6_Form_Line 的单行壳 (has 位 + 笔位语义同 Form), 与 ControlPrint/
+// ControlCls 同形。style 位口径 = parser 折 Line 旗标那一处的同一张表: 1=B, 2=C, 4=F（BF=5）；
+// color<0 用 ForeColor；起点省略 (has1=0) ⇒ 从 CurrentX/CurrentY 起笔, 画完笔位落终点。
+void vb6_ControlLine(void* hwnd,
+                     int32_t step1, int32_t has1, double x1, double y1,
+                     int32_t step2, int32_t has2, double x2, double y2,
+                     int32_t hasColor, int32_t color,
+                     int32_t style);
 
 // P18-F: 控件子类化基础设施 (GotFocus/LostFocus/MouseEnter/MouseLeave/控件级事件)
 // 通用控件子类化安装 (复用VB6_OrigProc属性模式)

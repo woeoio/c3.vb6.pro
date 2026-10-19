@@ -1,0 +1,4 @@
+Type=Exe
+Name="B432App"
+Module=B432Main; B432Main.bas
+Startup="Sub Main"

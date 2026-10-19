@@ -38,7 +38,7 @@ void CCodeGen::visit(FunctionDecl& node) {
     clearProcArrayTracking();
     ansiTempsToFree_.clear();
     ansiOutParams_.clear();
-    ivrefLocalsToRelease_.clear();  // tB Interface B05
+    slotsToRelease_.clear();  // tB Interface B05 / 账 #305 §B218 (甲) 腿④
     ansiCounter_ = 0;
     asmMixedBlockCounter_ = 0;   // ai/vb-asm-extension-spec 项2: 混排片段序号按过程重置
     knownBstrVars_.clear();
@@ -74,6 +74,11 @@ void CCodeGen::visit(FunctionDecl& node) {
     earlyBoundSym_ = nullptr;
     withObjectVars_.clear();
     withObjectInfoStack_.clear();
+    // 账 #305 #408: 形参名册按过程重开 (上面那张表全程不清空)。
+    procObjectFormals_.clear();
+    procClassFormals_.clear();  // 账 #305 §B218 (甲): 与上面那张同一条"按过程重开"
+    // 账 #305 #408: 模块级那一档先恢复进来, 下面形参那一档的遮蔽才只吃本过程。
+    knownClassVars_.insert(moduleClassVars_.begin(), moduleClassVars_.end());
     // Fix 010r/010r-10: 类模块中注册me到knownClassVars_ (使Me.Method()正确分发)
     // 改为map赋值: me → 当前模块名(类名)
     if (isClassModule_) knownClassVars_["me"] = moduleName_;
@@ -85,6 +90,8 @@ void CCodeGen::visit(FunctionDecl& node) {
     knownFixedStringLen_.insert(moduleFixedStringLen_.begin(), moduleFixedStringLen_.end());
     knownDoubleVars_.insert(classDoubleMembers_.begin(), classDoubleMembers_.end());
     knownLongVars_.insert(classLongMembers_.begin(), classLongMembers_.end());
+    // 账 #305 §B183: Integer 类字段的窄档名单也要在过程入口恢复一份，否则裸名成员左值问「有多窄」只查到放宽档。
+    knownIntVars_.insert(classIntMembers_.begin(), classIntMembers_.end());
     // Fix 010n: 恢复类模块UDT成员变量 (knownUdtVars_被clear后需要从classUdtMembers_恢复)
     knownUdtVars_.insert(classUdtMembers_.begin(), classUdtMembers_.end());
     // Fix 010n (扩展): 恢复普通模块模块级UDT变量 (同 classUdtMembers_ 机制)
@@ -131,6 +138,14 @@ void CCodeGen::visit(FunctionDecl& node) {
             auto& simpleP = static_cast<SimpleTypeRef&>(*p->asType);
             std::string pLower = p->name;
             std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
+
+            // 账 #305 #408: 这一档形参在 C 侧是裸对象指针 (void*), 把名字记进本过程名册, 让类推断先落空。
+            if (Symbol::toLower(simpleP.name) == "object") {
+                procObjectFormals_.insert(pLower);
+                // 账 #305 #408: 同上面 UDT 形参那一格的形状 —— 名字在本过程是裸对象指针,
+                // 把按名那张表里**别的**登记撤掉 (成员读那几站是直接查表的)。
+                knownClassVars_.erase(pLower);
+            }
             // P20-44: `As DataObject` 形参 → 记入 dataObjectParams_, 成员访问改道 RTL
             if (Symbol::toLower(simpleP.name) == "dataobject")
                 dataObjectParams_.insert(pLower);
@@ -151,12 +166,12 @@ void CCodeGen::visit(FunctionDecl& node) {
             // 走"模块限定"路径丢实参 (C2224)。
             if (!pSym || pSym->kind != SymbolKind::Class) {
                 const std::string projClsP092r = projectClassNameOf(simpleP.name);
-                if (!projClsP092r.empty()) knownClassVars_[pLower] = projClsP092r;
+                if (!projClsP092r.empty()) registerClassFormal(pLower, projClsP092r);
             }
             if (pSym && pSym->kind == SymbolKind::UserDefinedType) {
                 knownUdtVars_[pLower] = "vb6_type_" + cIdent(simpleP.name);
             } else if (pSym && pSym->kind == SymbolKind::Class) {
-                knownClassVars_[pLower] = pSym->name;
+                registerClassFormal(pLower, pSym->name);
             } else if (pSym && (pSym->kind == SymbolKind::ComClass || pSym->kind == SymbolKind::ComInterface)) {
                 // Fix <vbeclipse>-2: 本工程有同名类模块 ⇒ 类型名指工程类, 走原生
                 // (VB6: 工程内定义优先于引用库). 类型库自动加载会把 Shell32 的
@@ -166,7 +181,7 @@ void CCodeGen::visit(FunctionDecl& node) {
                 // 0xC0000005). 判据与 mapTypeRef 同源: projectClassNameOf.
                 const std::string projCls2 = projectClassNameOf(simpleP.name);
                 if (!projCls2.empty()) {
-                    knownClassVars_[pLower] = projCls2;
+                    registerClassFormal(pLower, projCls2);
                 } else {
                     knownTypedComVars_[pLower] = pSym;
                 }
@@ -202,6 +217,11 @@ void CCodeGen::visit(FunctionDecl& node) {
             else if (paramType == Vb6Type::Long || paramType == Vb6Type::Integer || paramType == Vb6Type::Boolean
                      || paramType == Vb6Type::Byte) {
                 knownLongVars_.insert(pLower);
+                // 账 #305 §B182: Integer 形参也要进窄档表 —— knownIntVars_ 是 narrowTargetTypeOf
+                // 「这个左值有多窄」的唯一问句, 缺这一档就不套 vb6_ChkInt ⇒ C 把 40000 静默截成
+                // -25536, 而 ByRef 那形还把它写回调用方的变量。口径同 Fix 175 的 Date、账 #123 的
+                // Byte: 放宽档登记过不等于窄档看得见。
+                if (paramType == Vb6Type::Integer) knownIntVars_.insert(pLower);
                 // ai/022 W1: 布尔形参另登记一份 (口径同 Fix 175 的 Date 形参)
                 if (paramType == Vb6Type::Boolean) knownBoolVars_.insert(pLower);
                 // 账 #123: Byte 形参一并进这一支 (口径同 ai/022 W1 的 Boolean —— C 型不同串
@@ -281,6 +301,12 @@ void CCodeGen::visit(FunctionDecl& node) {
             // Fix 055: 注册UDT数组元素C类型
             std::string udtCType = resolveArrayUdtElemCType(p->asType.get());
             if (!udtCType.empty()) arrayUdtElemTypes_[pLower] = udtCType;
+            // 账 #305 §B181 (第七十一刀): 形参这一档以前只进上面那几张表, **没进字节数组名单**
+            // (knownByteArrayVars_ 的写者只有模块级两条 + 局部两条声明路) ⇒
+            // `StrPtr(b)` / `StrConv(b, …)` 里 b 是 `ByRef b() As Byte` 时按裸名查不到,
+            // 静默把 SafeArray **描述符**指针交给要 BSTR 的 Win32 形参。与
+            // cgen_decl_var.cpp:85 / cgen_localdecl.cpp:104 那两条登记路对称。
+            if (elemType == Vb6Type::Byte) knownByteArrayVars_.insert(pLower);
             knownLocalVars_.insert(pLower);
         }
     }
@@ -369,6 +395,18 @@ void CCodeGen::visit(FunctionDecl& node) {
     // 与变量注册 (941-946: cType=="void*" → knownObjectVars_) 对齐.
     else if (retType == "void*") {
         knownObjectVars_.insert(funcRetLower);
+    }
+    // 账 #305 §B221/#449 (§B222 那格最靠上游的一条): 返回类型是新式接口 ⇒ 返回槽本身
+    // 就是一枚视图 (`vb6_ivref_I* vb6_ret_F`)，必须进那张按名表，否则函数体内
+    // `Set <本函数名> = <实例>` 进不了 visit(SetStmt&) 的 ivref 目标臂，今天发的是
+    // 裸类指针塞进视图槽 (两台实测 C2172/C2039，交出去的值压根是坏的那一枚)。
+    // 刻意**不进** ivrefLocalsToRelease_：那一枚引用是交出去的那一枚，出口再放手 =
+    // 调用方刚接手的视图当场读已释放块 (#448 钉住的那条夹子)。
+    else if (retType.rfind("vb6_ivref_", 0) == 0) {
+        std::string ivRet221 = retType.substr(10);
+        size_t star221 = ivRet221.find('*');
+        if (star221 != std::string::npos) ivRet221 = ivRet221.substr(0, star221);
+        if (!ivRet221.empty()) knownIvrefVars_[funcRetLower] = ivRet221;
     }
     // Fix 090i: 函数返回 UDT → 注册返回值变量到 knownUdtVars_ (如 pvVfsOpen /
     // pvVfsCreate / pvArrPtr 等 As ZipVfsType 的内部函数). 此前漏注册, 函数体内

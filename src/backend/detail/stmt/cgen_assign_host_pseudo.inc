@@ -70,6 +70,21 @@
                 if (cExprIsVariant(valHp) && hostPseudoIsNumeric(objLowerHp, maHp->memberName)) {
                     valHp = "vb6_VariantToLong(" + valHp + ")";
                 }
+                /* Fix 294 / 3a: 目标是 vb6_Extender_* 全局时换通道, 别发裸赋值。
+                   通道(vb6_UC_ExtenderField)已改指 vb6_UCRec.ext*, 裸写 vb6_Extender_X = v
+                   进不去 => 用户代码改 Extender.Height/Width/Left/Top 静默不生效。
+                   实测生成码里这种裸写 ToolBar 9 / MonthView 7 / ComboBoxW 7 处。
+                   判据用发射出去的符号名, 不用 hostPseudoBareName(它不覆盖 Extender 成员)。 */
+                if (tgtHp.rfind("vb6_Extender_", 0) == 0) {
+                    std::string a3 = valHp;
+                    if (hostPseudoIsNumeric("Extender", maHp->memberName) && cExprIsVariant(a3)) {
+                        a3 = "vb6_VariantToLong(" + a3 + ")";
+                    }
+                    c_.emitLine("vb6_UC_SetExtenderMember(L\"" +
+                                escapeWideCString(maHp->memberName) + "\", (void*)(intptr_t)" + a3 + ");"
+                                "  /* Extender.<prop> = v (per-instance) */");
+                    return;
+                }
                 c_.emitLine(tgtHp + " = " + valHp + ";  /* <host pseudo>.<prop> = v */");
                 return;
             }

@@ -1,0 +1,5 @@
+Type=Exe
+Name="B433App"
+Module=B433Main; B433Main.bas
+Class=B433Holder; B433Holder.cls
+Startup="Sub Main"

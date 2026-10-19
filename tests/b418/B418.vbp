@@ -1,0 +1,4 @@
+Type=Exe
+Name="B418App"
+Module=B418Main; B418Main.bas
+Startup="Sub Main"

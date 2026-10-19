@@ -446,6 +446,43 @@ std::string CCodeGen::hostPseudoRtlSymbol(const std::string& pseudoObj,
     return "vb6_" + objSym + "_" + cIdent(r ? r->rtl : memberName);
 }
 
+// Fix 296 / 4a: `Extender.<成员>` 作**右值**时的实例感知读入口 —— 写侧 (3a) 的镜像。
+//
+// 通道 (vb6_UC_ExtenderField) 已经改指 `vb6_UCRec.ext*`, 而读侧发的一直是裸全局
+// `vb6_Extender_X` —— push/pop 把它同步着, 于是 getter 读到的是副本而不是当前实例记录。
+// ComCtlsDemo 实测 333 处 Property Get 返回槽走的是这枚副本。
+//
+// 闸门照 3a 的形状: 判**发射符号的前缀**, 不判 hostPseudoBareName(它不覆盖 Extender
+// 成员, 拿它当闸门会静默一个都匹配不到 —— 3a 的第一版就这么踩过, 生成码 bare=9 new=0)。
+// 符号后缀正是表里那一行的 rtl 列 (hostPseudoRtlSymbol 拼的就是它), 故按 rtl 反查,
+// 而不是按 VB6 拼写反查 —— `vb6_Default` 那行 name/rtl 本来就是两种拼法。
+//
+// 两个入口而不是一个: 读要参与算术与字符串表达式, void* getter 会逼每个调用点写强制转换。
+// 数值/字符串的选择只问表里那一行的类型 (kind 约定 0=BSTR / 2=int16 / 3=int32, 见
+// vb6_UC_ExtenderField); `Unknown` 的行 (对象成员 Container/DragIcon、方法行
+// Drag/SetFocus/ZOrder) 刻意原样返回 —— 两个入口都不递对象与句柄, 硬换会把 void* 槽
+// 接成 int32_t。Container/DragIcon 属另一笔账, 本轮不碰。
+std::string CCodeGen::extenderMemberReadExpr(const std::string& rtlSymbol) const {
+    if (rtlSymbol.rfind("vb6_Extender_", 0) != 0) return rtlSymbol;
+    const std::string suffix = rtlSymbol.substr(std::string("vb6_Extender_").size());
+    if (suffix.empty()) return rtlSymbol;
+    for (const HostPseudoRow& r : kHostPseudoRows) {
+        if (hostPseudoLower(r.obj) != "extender") continue;
+        if (hostPseudoLower(r.rtl) != hostPseudoLower(suffix)) continue;
+        /* Fix 296 / 3b 最后一格: 表里 type=Unknown 的行分**两种**, 不能只看 type ——
+           Drag/SetFocus/ZOrder 是 HPF_METHOD, 是**调用**不是读 (换过去会发成一个没人
+           接收的 getter 调用); Container/DragIcon 才是对象成员, 换道到对象入口。
+           少了这道方法行闸, 三个方法会跟着对象成员一起被换掉。 */
+        if (r.flags & HPF_METHOD) return rtlSymbol;
+        const char* dock296;
+        if (r.type == Vb6Type::String)          dock296 = "vb6_UC_GetExtenderMemberStr";
+        else if (r.type == Vb6Type::Unknown)    dock296 = "vb6_UC_GetExtenderMemberObj";
+        else                                    dock296 = "vb6_UC_GetExtenderMemberNum";
+        return std::string(dock296) + "(L\"" + escapeWideCString(r.rtl) + "\")";
+    }
+    return rtlSymbol;
+}
+
 // "这个名字是不是宿主伪对象"由那张表答 (这一句从前在发码侧抄了五份)。
 bool CCodeGen::hostPseudoIsObject(const std::string& name) const {
     return hostPseudoObjectKnown(name);

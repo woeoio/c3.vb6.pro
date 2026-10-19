@@ -1,0 +1,7 @@
+Type=Exe
+Name="B190App"
+Module=B190Main; B190Main.bas
+Class=B190A; B190A.cls
+Class=B190B; B190B.cls
+Startup="Sub Main"
+ExeName32="B190.exe"

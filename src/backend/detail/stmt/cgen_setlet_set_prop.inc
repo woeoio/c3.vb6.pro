@@ -177,11 +177,24 @@
             // 会 C2106/C2440.
             std::string targetCls101 = isCallTarget ? std::string()
                                                     : inferClassTypeOfExpr(*node.target);
+            if (targetCls101.empty()) {
+                auto itCls101 = knownClassVars_.find(targetLower);
+                if (itCls101 != knownClassVars_.end()) targetCls101 = itCls101->second;
+            }
             if (!targetCls101.empty() || knownClassVars_.count(targetLower)) {
-                // 项目类实例 (Dim c As CCircle / Dim WithEvents s As EventSource) 不是 COM
-                // 对象, 没有引用计数: 调用 vb6_ReleaseObject 会对纯 C 结构体走 vtable
-                // Release → 运行期 0xC0000005. Set Nothing 只需断开引用.
-                c_.emitLine(target + " = NULL;  /* Set Nothing (项目类实例) */");
+                // 账 #305 §B218 (甲) 腿③: 置空 = 放手那一枚 + 清槽, 与覆写同一位主人
+                // (接口那一族在上面 :141-142 早就是这个形状, 具体类只是今天才补上计数头)。
+                // 为什么不退回 vb6_ReleaseObject: 那会把纯 C 结构体首字段当 vtable
+                // Release → 0xC0000005 (Fix 101 当初正是为这条判死的); 也不许留裸清槽:
+                // 裸清槽每次覆写漏一枚 (ai/033 §1.1 行 203/204 的实物)。
+                // 拿不到类名 / 目标是调用形态 (`dict(key) = Nothing`) ⇒ 维持裸清槽。
+                if (!targetCls101.empty() && !isCallTarget
+                    && target.find('(') == std::string::npos
+                    && !procClassFormals_.count(targetLower)) {
+                    emitClassSlotRefSet(target, targetCls101, std::string(), false, false);
+                } else {
+                    c_.emitLine(target + " = NULL;  /* Set Nothing (项目类实例) */");
+                }
             } else if (knownTypedComVars_.count(targetLower)) {
                 c_.emitLine("vb6_ComReleaseTyped((void**)" + relObjTarget + ");  /* Set Nothing (early bound) */");
             } else {
@@ -622,20 +635,7 @@
                         == std::string::npos;
                 const bool isIvrefVar = knownIvrefVars_.count(ivValLower) != 0;
                 if (plainIvTarget && isIvrefVar) {
-                    const std::string ivCType = "vb6_ivref_" + cIdent(v->name) + "*";
-                    const std::string ivOld = "__ivold" + std::to_string(ivrefSetSeq_);
-                    const std::string ivGot = "__ivgot" + std::to_string(ivrefSetSeq_);
-                    ivrefSetSeq_++;
-                    c_.emitLine("{  /* tB Interface B06a: Set " + target + " = QueryInterface */");
-                    c_.indent();
-                    c_.emitLine(ivCType + " " + ivOld + " = " + target + ";");
-                    c_.emitLine("void* " + ivGot + " = NULL;");
-                    c_.emitLine("if (" + value + ") " + value + "->vt->QueryInterface(" + value +
-                                ", vb6_iv_iid_" + cIdent(v->name) + ", &" + ivGot + ");");
-                    c_.emitLine(target + " = (" + ivCType + ")" + ivGot + ";");
-                    c_.emitLine("if (" + ivOld + ") " + ivOld + "->vt->Release(" + ivOld + ");");
-                    c_.dedent();
-                    c_.emitLine("}");
+                    emitIvrefQiSet(target, v->name, value);
                     return;
                 }
                 if (isClassVar || isNewExpr) {
@@ -752,6 +752,22 @@
                                 ivCls215 = projectClassNameOf(fs215->variableTypeName);
                         }
                         if (ivCls215.empty()) ivCls215 = inferClassTypeOfExpr(*node.value);
+                    }
+                    // 账 #305 §B221 (形①): RHS 的值**已经是接口视图** —— `Set <接口槽> =
+                    // MakeDirect()` 这种「返回工程内接口的调用」。上面那条类型名问句会把
+                    // 接口名当工程类名答，于是下面铸出一枚根本不存在的 `vb6_cls_<接口名>`
+                    // 再去取 `__iv_` 槽（实测两台同红 = cl C2039）。视图→视图的正答案只有
+                    // B06a 那一条，且已挪成 emitIvrefQiSet 一位主人；目标不是裸标识符
+                    // (me->字段 那一形) 时沿用上面 B04 的纯赋值口径，不另立第三条。
+                    if (node.value) {
+                        std::string ivView221 = ifaceViewOfExpr(*node.value);
+                        if (!ivView221.empty()) {
+                            if (plainIvTarget) {
+                                emitIvrefQiSet(target, v->name, value);
+                                return;
+                            }
+                            value = "(" + ivrefCType(v->name) + ")" + value;
+                        }
                     }
                     if (!ivCls215.empty()) {
                         const std::string ivCType215 = "vb6_ivref_" + cIdent(v->name) + "*";

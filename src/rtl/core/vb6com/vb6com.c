@@ -215,6 +215,24 @@ const wchar_t* vb6_StdErrorDesc(int32_t errNum) {
 }
 
 
+/* 账 #305 §B185/§B186: 「一条 VB 运行期错误 crossed 服务边界该长成哪个 HRESULT」的答案, 与它的反向。
+ *   VB6 那台机器交回的就是 0x800A0000|错误号 —— 造与认这两问从此只住下面这两枚函数:
+ *   发腿 (vb6_ComFailExcep 填 EXCEPINFO.scode、类工厂那趟没有 EXCEPINFO 通道的路) 问前者,
+ *   收腿 (vb6_ComCheckError 与 vb6_CreateObject 那条 create 腿) 问后者。
+ * vb6_ComVbErrFromHr 认不出那一档就答 0: 0x8004xxxx (REGDB_E_CLASSNOTREG / CLASS_E_NOTLICENSED)
+ * 与 0x8007xxxx 这些**真·激活失败**不许被低 16 位当成 VB 错误号读出一串垃圾。 */
+#define VB6_COM_VB_HR_FACILITY 0x800A0000u
+
+HRESULT vb6_ComVbHresult(int32_t errNum) {
+    return (HRESULT)(VB6_COM_VB_HR_FACILITY | (unsigned)(errNum & 0xFFFF));
+}
+
+int32_t vb6_ComVbErrFromHr(HRESULT hr) {
+    unsigned long u = (unsigned long)hr;
+    if ((u & 0xFFFF0000UL) != VB6_COM_VB_HR_FACILITY) return 0;
+    return (int32_t)(u & 0xFFFFUL);
+}
+
 // COM错误→VB6错误转换辅助函数
 // hr: Invoke返回的HRESULT
 // excep: EXCEPINFO结构 (可能包含scode/bstrDescription)
@@ -228,6 +246,10 @@ const wchar_t* vb6_StdErrorDesc(int32_t errNum) {
 // 把排查方向引到 GoSub/Return 上。此处显式映射 DISP_E_* 到 VB6 官方错误号
 // (描述表 vb6_StdErrorDesc 中 438/449/450/451 均已有条目)。
 static int32_t vb6_HresultToErrNum(long hr) {
+    /* 账 #305 §B186: 「这一枚 hr 是不是服务端交回的 VB 错误、是哪一号」只问上面那唯一一枚认腿,
+     * 不在这里再抄一遍低 16 位的算法 (抄出来的两份会漂)。认不出那一档才往下走原路。 */
+    int32_t vbErr = vb6_ComVbErrFromHr((HRESULT)hr);
+    if (vbErr) return vbErr;
     switch ((unsigned long)hr) {
     case 0x80020003UL: return 438;  // DISP_E_MEMBERNOTFOUND → 对象不支持此属性或方法
     case 0x80020006UL: return 438;  // DISP_E_UNKNOWNNAME    → 同上
@@ -306,6 +328,24 @@ void vb6_ComCheckError(HRESULT hr, EXCEPINFO* excep, const wchar_t* context) {
     }
 
     vb6_RaiseError(errNum, desc);
+}
+
+HRESULT vb6_ComFailExcep(EXCEPINFO* pexcep, int32_t errNum,
+                         const wchar_t* desc, const wchar_t* fallback) {
+    if (pexcep) {
+        pexcep->scode = (SCODE)vb6_ComVbHresult(errNum);
+        pexcep->bstrSource = NULL;
+        pexcep->bstrHelpFile = NULL;
+        pexcep->dwHelpContext = 0;
+        /* 三级缺省:  raiser 自己带的那句(服务端传进来的 vb6_ErrDescription) -> 那张 VB 标准错误号
+         *  描述表 -> 调用方给的兜底。中间这一级不许跳: 没有 Err.Raise 描述的那一形(内在错误,
+         *  如服务端里 raise 的 5)在真 VB6 里交回的不是空串, 而是那一号的默认描述。
+         *  表交的是中文, 所以判据只钉 scode, 不钉这一句的字节。 */
+        if (!desc) desc = vb6_StdErrorDesc(errNum);
+        if (!desc) desc = fallback;
+        pexcep->bstrDescription = SysAllocString(desc ? desc : L"");
+    }
+    return DISP_E_EXCEPTION;
 }
 // C-style vtable helpers for IUnknown (avoid C++ IUnknown method call issues)
 // ============================================================
@@ -551,8 +591,11 @@ static HRESULT comLibCreateFromPath(const wchar_t* dllPath, REFCLSID rclsid, voi
  *   3) 原样                            开发机/绝对路径
  *   4) 裸文件名                        系统 DLL 搜索路径
  * 绝对路径只在候选 3 出现一次, 不重复拼 exe 目录.
- * 返回 IDispatch*; 失败 NULL — 调用方继续注册表路径. */
-static void* comLibCreateLocal(const Vb6ComLib* e) {
+ * 返回 IDispatch*; 失败 NULL — 调用方继续注册表路径。
+ * pFailHr (账 #305 §B186): 交回**最后那一趟**的 HRESULT —— 调用方要分得出「DLL 里有人 raise 了一条
+ * 自己的 VB 错误」(0x800A0000|n, 不许再咽进注册表回退) 与「这台机器上根本没这枚 DLL」。 */
+static void* comLibCreateLocal(const Vb6ComLib* e, HRESULT* pFailHr) {
+    if (pFailHr) *pFailHr = E_FAIL;
     if (!e || !e->clsidStr || !*e->clsidStr) return NULL;
     CLSID clsid;
     if (FAILED(CLSIDFromString((LPOLESTR)e->clsidStr, &clsid))) {
@@ -607,6 +650,7 @@ static void* comLibCreateLocal(const Vb6ComLib* e) {
         if (SUCCEEDED(hr) && pUnk) break;
     }
     if (!pUnk) {
+        if (pFailHr) *pFailHr = hr;
         if (comLibTraceEnabled())
             fwprintf(stderr, L"[C3_COM]   local activation failed: %ls (0x%08lX)\n",
                      e->fileName ? e->fileName : L"(no path)", (unsigned long)hr);
@@ -615,7 +659,10 @@ static void* comLibCreateLocal(const Vb6ComLib* e) {
     IDispatch* pDisp = NULL;
     hr = pUnk->lpVtbl->QueryInterface(pUnk, &IID_IDispatch, (void**)&pDisp);
     pUnk->lpVtbl->Release(pUnk);
-    if (FAILED(hr) || !pDisp) return NULL;
+    if (FAILED(hr) || !pDisp) {
+        if (pFailHr) *pFailHr = hr;
+        return NULL;
+    }
     /* Fix 160-com: 登记 对象→默认调度接口 ITypeInfo, 供 vb6_getDispid /
      * vb6_ComInvoke 免注册解析 DISPID 与分派 (TLB 未注册时 Chilkat 等仍可用). */
     if (e->dispIface) comLibRegisterObjTI((void*)pDisp, e->dispIface);
@@ -625,6 +672,36 @@ static void* comLibCreateLocal(const Vb6ComLib* e) {
 // ============================================================
 // CreateObject / GetObject
 // ============================================================
+
+/* 账 #305 §B186: create 那一趟失败该交回哪一条 VB 错误, 从此只住这一枚函数 ——
+ * 三条腿 (ProgID 解析失败 / 免注册本地激活失败 / 注册表 CoCreateInstance 失败) 都问它,
+ * 不再各抄一遍「一律 429」。
+ * 服务端里没人接住的运行期错误现在由类工厂交回 0x800A0000|错误号 (§B185 同一决定的第二站),
+ * 那一档折回它自己的号 —— 与「同一个类在客户进程里直接 New、调用方 On Error 拿到的就是那一号」
+ * 对齐；认不出那一档 (0x8004xxxx 没注册 / 0x8007xxxx 起不动进程) 才照旧 429。
+ * 描述三级: IErrorInfo (既有那条通道) -> VB 标准错误号表 (只有折回来的那一号才查) ->
+ * 那句 ASCII 的 can't create object。第二级不许跳: 真·内存不够以外的失败交的是服务端自己的错号,
+ * 拿 429 那句描述去配它会指错方向。 */
+static void vb6_ComFailCreate(HRESULT hr, const wchar_t* progId) {
+    int32_t vbErr = vb6_ComVbErrFromHr(hr);
+    BSTR desc = NULL;
+    IErrorInfo* perr = NULL;
+    if (SUCCEEDED(GetErrorInfo(0, &perr)) && perr) {
+        perr->lpVtbl->GetDescription(perr, &desc);
+        perr->lpVtbl->Release(perr);
+    }
+    if (!desc && vbErr) {
+        const wchar_t* std = vb6_StdErrorDesc(vbErr);
+        if (std) desc = SysAllocString(std);
+    }
+    if (!desc) {
+        wchar_t buf[512];
+        swprintf(buf, 512, L"ActiveX component can't create object (ProgID: %ls, HRESULT: 0x%08lX)",
+                 progId ? progId : L"?", (unsigned long)hr);
+        desc = SysAllocString(buf);
+    }
+    vb6_RaiseError(vbErr ? vbErr : 429, desc);
+}
 
 void* vb6_CreateObject(const wchar_t* progId) {
     if (!progId) return NULL;
@@ -640,8 +717,16 @@ void* vb6_CreateObject(const wchar_t* progId) {
         if (preferReg == 0) {
             const Vb6ComLib* hit = vb6_ComLibLookup(progId);
             if (hit) {
-                void* p = comLibCreateLocal(hit);
+                HRESULT localHr = S_OK;
+                void* p = comLibCreateLocal(hit, &localHr);
                 if (p) return p;
+                /* 账 #305 §B186: 本地那一趟要是交回服务端自己 raise 的错误, 就地折给调用方 ——
+                 * 再回退注册表会把「DLL 里抛了 7」读成「这台机器上没这个组件」(429)。
+                 * 真·找不到 DLL/起不动的那些照旧往下回退, 便携分发那条路一行没动。 */
+                if (vb6_ComVbErrFromHr(localHr)) {
+                    vb6_ComFailCreate(localHr, progId);
+                    return NULL;
+                }
                 if (comLibTraceEnabled())
                     fwprintf(stderr, L"[C3_COM]   %ls: local activation failed, trying registry\n",
                              progId);
@@ -653,10 +738,7 @@ void* vb6_CreateObject(const wchar_t* progId) {
     HRESULT hr = CLSIDFromProgID(progId, &clsid);
     if (FAILED(hr)) {
         // VB6 Error 429: ActiveX component can't create object
-        wchar_t buf429[512];
-        swprintf(buf429, 512, L"ActiveX component can't create object (ProgID: %ls, HRESULT: 0x%08lX)", progId, (unsigned long)hr);
-        BSTR desc = SysAllocString(buf429);
-        vb6_RaiseError(429, desc);
+        vb6_ComFailCreate(hr, progId);
         return NULL;
     }
 
@@ -664,18 +746,7 @@ void* vb6_CreateObject(const wchar_t* progId) {
     hr = CoCreateInstance(&clsid, NULL, CLSCTX_LOCAL_SERVER | CLSCTX_INPROC_SERVER,
                           &IID_IDispatch, (void**)&pDisp);
     if (FAILED(hr)) {
-        BSTR desc429 = NULL;
-        IErrorInfo* perror429 = NULL;
-        if (SUCCEEDED(GetErrorInfo(0, &perror429)) && perror429) {
-            perror429->lpVtbl->GetDescription(perror429, &desc429);
-            perror429->lpVtbl->Release(perror429);
-        }
-        if (!desc429) {
-            wchar_t buf429b[512];
-            swprintf(buf429b, 512, L"ActiveX component can't create object (ProgID: %ls, HRESULT: 0x%08lX)", progId, (unsigned long)hr);
-            desc429 = SysAllocString(buf429b);
-        }
-        vb6_RaiseError(429, desc429);
+        vb6_ComFailCreate(hr, progId);
         return NULL;
     }
 

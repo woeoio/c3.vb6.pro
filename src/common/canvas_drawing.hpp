@@ -69,6 +69,11 @@ inline const CanvasVerbRow kCanvasVerbRows[] = {
     {"circle", CR_CANVAS_PRINTER, CANVAS_OWNER_DRAW,   "vb6_Printer_Circle"},
     {"point",  CR_CANVAS_FORM,    CANVAS_OWNER_DRAW,   "vb6_Form_Point"},
     {"point",  CR_CANVAS_PRINTER, CANVAS_OWNER_DRAW,   "vb6_Printer_Point"},
+    // scale = VB6 的自定义坐标系 (Scale (x1,y1)-(x2,y2) ⇒ ScaleMode 转 vbUser,
+    // 原点 ScaleLeft/Top 与跨度 ScaleWidth/Height 都由此设)。VB6 里 PictureBox 与 Printer
+    // 也各有这一枚方法，但本仓今天只给**窗体**那一档出口 —— 其余两档落回 COM 兜底,
+    // 与"表加一档它不会知道"是同一条纪律: 没出口就不许在调用点顺手补一个。
+    {"scale",  CR_CANVAS_FORM,    CANVAS_OWNER_DRAW,   "vb6_Form_Scale"},
 };
 
 // 名字归一：common 不许向上依赖 semantics，所以这里自己拼 ASCII 小写（与 Symbol::toLower 同结果）。
@@ -125,8 +130,23 @@ enum CanvasTailKind {
 
 inline CanvasTailKind canvasVerbTailKind(const std::string& verb) {
     if (verb == "pset" || verb == "circle") return CANVAS_TAIL_COORD;
-    if (verb == "line") return CANVAS_TAIL_TWO_POINT;
+    // Scale 与 Line 同形: `Scale (x1, y1)-(x2, y2)` 的第二点也是紧跟的第二枚坐标,
+    // 不收就会漏到外层表达式, 在 `-(` 里的逗号上当场 `expected ')'` (与 Line 那一族
+    // 同一味, 实测 VB2001/VB2003/VB2002 三条)。
+    if (verb == "line" || verb == "scale") return CANVAS_TAIL_TWO_POINT;
     return CANVAS_TAIL_NONE;
+}
+
+// parser 问的这一问（账 #232⑥）：**这一档动词的语法里有没有 `[Step]` 前缀** ——
+// VB6: `PSet [Step] (x, y)` / `Line [Step] (x1,y1) [Step] -(x2,y2)` /
+//      `Circle [Step] (x, y), radius` / `Point [Step] (x, y)`。
+// 为什么单独一问而不是「凡是画布动词都收」: `Point` 在 VB6 也有 Step，但本仓 RTL 那一枚出口
+// **没有 step 位**（`vb6_Form_Point(hwnd, x, y)` = 两个坐标），硬收 Step 等于把相对坐标当绝对
+// 坐标画/读，编得过、读数错 —— 与账 #217/#219「表里没有出口就别在调用点顺手补一个」同一味。
+// 要给 Point 补 Step = 改 `vb6_Form_Point` 的签名 + 过 `rtl_proto_arity`，单开。
+// `Line` 的两个点**各有各的** Step（VB6 语法里两个前缀都可选），所以位要分两枚记在 AST 上。
+inline bool canvasVerbHasStep(const std::string& verb) {
+    return verb == "line" || verb == "pset" || verb == "circle";
 }
 
 } // namespace vb6c3

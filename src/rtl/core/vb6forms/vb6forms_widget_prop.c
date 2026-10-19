@@ -267,13 +267,71 @@ void vb6_AutoRedrawRefit(void* hwnd) {
 int32_t vb6_GetScaleMode(void* hwnd) {
     if (!hwnd) return 1;  // Default: Twips
     HANDLE hProp = GetPropW((HWND)hwnd, L"VB6_ScaleMode");
-    if (hProp) return (int32_t)(INT_PTR)hProp;
+    // 存的是 val+1 —— SetPropW 把 (HANDLE)0 存进去后 GetPropW 回 NULL, 与"从没设过"
+    // 完全不可分辨。而 vbUser 恰好就是 0: 存裸值的话 `ScaleMode = vbUser` 与 Scale()
+    // 切 vbUser 那一档都会被读成默认的缇 (账 #305 —— 自定义坐标系因此整个静默失效)。
+    // 与 VB6_ShapeBorderStyle 那一户同一味 (见本文件上面那一户的注释)。
+    if (hProp) return (int32_t)(INT_PTR)hProp - 1;
     return 1;  // Twips
 }
 
 void vb6_SetScaleMode(void* hwnd, int32_t val) {
     if (!hwnd) return;
-    SetPropW((HWND)hwnd, L"VB6_ScaleMode", (HANDLE)(INT_PTR)val);
+    SetPropW((HWND)hwnd, L"VB6_ScaleMode", (HANDLE)(INT_PTR)(val + 1));
+    // VB6 里改 ScaleMode 就是**换坐标系**: 自定义那一套 (vbUser 存的原点与跨度) 随之作废,
+    // ScaleWidth/Height 按新单位从客户区重算。不清这枚旗标的话, `Scale (0,0)-(100,100)`
+    // 之后再 `ScaleMode = 3`, 落笔仍按旧跨度仿射 —— 读数与画出去的两头各说一套。
+    if (val != 0) RemovePropW((HWND)hwnd, L"VB6_UserScaleSet");
+}
+
+// ============================================================
+// 自定义坐标系 (VB6 的 vbUser) 的那一份存储
+// ============================================================
+// `Scale (x1,y1)-(x2,y2)` 之后, 客户区的左上角/右下角分别对应 (x1,y1) / (x2,y2):
+//   ScaleLeft = x1  ScaleTop = y1  ScaleWidth = x2-x1  ScaleHeight = y2-y1
+// 落笔要把用户单位先减原点、再按「客户区像素 / 跨度」缩放 —— 原点与跨度都是**这枚窗口
+// 自己**的属性, 所以存储按 HWND 挂, 仿射那一步在绘图码头 (vb6_DrawUserToPx) 里做。
+//
+// VB6 的这四个属性是 **Single** (4 字节), 而窗口属性 (HANDLE) 在 32 位产物上只有 4 字节
+// —— 存 double 直接放不下, 所以与 VB6_CurrentX 那一户同口径: 把 float 的位图案 memcpy
+// 进 HANDLE。而 float 的 0.0 位图案是全 0, 存进去后 GetPropW 回 NULL, 与"从没设过"不可
+// 分辨 (正是 VB6_BackColor 黑色那颗哨兵的同一味) —— 所以**存在性**另挂一枚旗标
+// VB6_UserScaleSet, 四个数值本身不去编码 +1。
+static void vb6_UserScaleStore(void* hwnd, const wchar_t* name, float v) {
+    HANDLE h;
+    memcpy(&h, &v, sizeof(float));
+    SetPropW((HWND)hwnd, name, h);
+}
+
+static float vb6_UserScaleLoad(void* hwnd, const wchar_t* name) {
+    HANDLE h = GetPropW((HWND)hwnd, name);
+    float v = 0.0f;
+    if (h) memcpy(&v, &h, sizeof(float));
+    return v;
+}
+
+void vb6_SetUserScale(void* hwnd, double left, double top, double width, double height) {
+    if (!hwnd) return;
+    vb6_UserScaleStore(hwnd, L"VB6_UserScaleLeft",   (float)left);
+    vb6_UserScaleStore(hwnd, L"VB6_UserScaleTop",    (float)top);
+    vb6_UserScaleStore(hwnd, L"VB6_UserScaleWidth",  (float)width);
+    vb6_UserScaleStore(hwnd, L"VB6_UserScaleHeight", (float)height);
+    SetPropW((HWND)hwnd, L"VB6_UserScaleSet", (HANDLE)1);
+}
+
+int32_t vb6_UserScaleOf(void* hwnd, double* left, double* top, double* width, double* height) {
+    if (!hwnd) return 0;
+    if (!GetPropW((HWND)hwnd, L"VB6_UserScaleSet")) return 0;
+    if (left)   *left   = (double)vb6_UserScaleLoad(hwnd, L"VB6_UserScaleLeft");
+    if (top)    *top    = (double)vb6_UserScaleLoad(hwnd, L"VB6_UserScaleTop");
+    if (width)  *width  = (double)vb6_UserScaleLoad(hwnd, L"VB6_UserScaleWidth");
+    if (height) *height = (double)vb6_UserScaleLoad(hwnd, L"VB6_UserScaleHeight");
+    return 1;
+}
+
+void vb6_ClearUserScale(void* hwnd) {
+    if (!hwnd) return;
+    RemovePropW((HWND)hwnd, L"VB6_UserScaleSet");
 }
 
 float vb6_GetCurrentX(void* hwnd) {

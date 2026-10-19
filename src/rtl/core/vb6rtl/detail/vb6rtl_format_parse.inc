@@ -34,12 +34,17 @@
             return vb6_fmtNamedDateTime(numVal, fmt);
         }
         // Fix 118b: 数值 + 日期/时间格式串 → 按日期序列号格式化。
-        // (VB6 把数值当日期序列号; 且本 RTL 的 DateSerial 返回 VT_R8, 故不能只靠
-        //  extract.inc 里的 VT_DATE 分支。Charts 2020 的 X 轴月份标签即此场景:)
-        //   Format(DateSerial(2020,1,1), "mmm") 期望 "Jan")
-        if (vb6_fmtIsDateFormat(fmt)) {
+        // (VB6 把数值当日期序列号。Charts 2020 的 X 轴月份标签 Format(DateSerial(2020,i,1), "mmm")
+        //  改前改后吃的都是这条臂 —— 第一百零二刀 (账 #431 §B205) 把 DateSerial 的返回档改回 Date 之后，
+        //  Format 的**首参**仍由账 #430 那张手抄装箱表决定 (Date 档交 vb6_VariantDouble)，所以那一形
+        //  没换站；换站的是「值先落进一枚 Variant 槽再交给 Format」那一形 (尺 .build/k638_new_run.txt:
+        //  Format(槽) 交 [2026/1/5] 而改前交 [46027])。这条臂同时是 Format(43831, "mmm") 那族真数值的
+        //  唯一出口 —— **臂不撤，理由换掉了**。)
+        // allowWQT=0: 这条臂是「数值 + 日期字母」的兜底, 不许扩到 w/q/t ——
+        // 语料里「#,##0 Twip」「T0」「#### Byte」那一族 15 处吃的就是这条臂 (账 #427 §B201)
+        if (vb6_fmtIsDateFormat(fmt, 0)) {
             free(fmtStr);
-            return vb6_fmtDateSerial(numVal, fmt);
+            return vb6_fmtDateSerial(numVal, fmt, firstDayOfWeek, firstWeekOfYear);
         }
         // Named numeric formats
         if (strcmp(fmtLower, "general number") == 0) {

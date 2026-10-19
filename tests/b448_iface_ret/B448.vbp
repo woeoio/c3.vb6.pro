@@ -1,0 +1,6 @@
+Type=Exe
+Class=IB448; IB448.cls
+Class=CB448; CB448.cls
+Module=Main; Main.bas
+Startup="Sub Main"
+ExeName32="B448d.exe"

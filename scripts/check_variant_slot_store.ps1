@@ -128,7 +128,10 @@ foreach ($k in $bareByFile.Keys) {
 #   R5c 那张表只在 driver 的一趟预扫描里建 (恰好 1 份文件
 #       driver_codegen_fieldkind_scan.inc), 注入站点恰好 1 处
 #   R5d 「认文本尾注」这条歧路不许复活: `class var .` 这份拼写逐文件钉死处数, 新增即红
-#       (今天 9 处 / 6 份文件 —— 第六十三刀 (§B172) 之前 11 处: 那两处**生产**尾注的字面量收进了
+#       (今天 10 处 / 7 份文件 —— 第七十五刀 (§B184) 加的那一处住在 cgen_util_type.cpp, 是
+#        narrowTargetTypeOf 上方讲病形的说明注释**引**了那句形状, 不是生产点; 名单仍把它钉死,
+#        因为这条规则本来的口径就是「谁在提这句文本都算」(见本节末那句)。
+#        第六十三刀 (§B172) 之前 11 处: 那两处**生产**尾注的字面量收进了
 #        唯一出口 classFieldReadExpr, 它按 label 实参拼这句, 于是发码文件里再无该字面量; 「哪几站
 #        调它」改由 R9c 钉。剩下的都是讲这件事的注释或消费点 —— 注释也一起钉, 因为「谁在提这句
 #        文本」正是这一族重新长出来的地方)
@@ -193,6 +196,7 @@ $WantMark168 = [ordered]@{
     'cgen_state.inc'                      = 1
     'cgen_call.cpp'                       = 1
     'cgen_assign_value_sem.inc'           = 1
+    'cgen_util_type.cpp'                  = 1   # §B184 第七十五刀: 说明注释里引那句形状
 }
 foreach ($k in $WantMark168.Keys) {
     $g168 = 0
@@ -270,13 +274,16 @@ foreach ($k in $bstrByFile169.Keys) {
 $bstrTotal169 = 0
 foreach ($v in $bstrByFile169.Values) { $bstrTotal169 += $v }
 
-# ---- R8 (账 #305 §B170 第六十一刀): 「这枚成员读是哪一档」那两站都问那张表 ----
+# ---- R8 (账 #305 §B170 第六十一刀 → §B184 第七十五刀): 「这枚成员是哪一档」那几站都问那张表 ----
 # 钉的是**读侧**三站 (inferExprType 的点号 case + With 体内 case + isDefinitelyVariantExpr 的认槽 case) 各问一次 classFieldKind,
 # 并且问点只许长在名单里那几个文件。少一站 = 那一站回到按裸成员名查全局符号 —— 实测: 字段名
 # 撞上内置函数名就读成内置的返回档 (`CStr(h.PV)` 撞 PV() 答 Double ⇒ 串值 0|1; 一枚
 # `Public Command As Long` 撞 Command() 答 String ⇒ 把 7 当 BSTR 指针解, 两台原生 AV)。
+# 第七十五刀 (§B184) 的第四站不是第五个读点 —— 它是**写侧**那一问 (narrowTargetTypeOf 的成员臂:
+# 「这枚左值有多窄」也要先问这张表, 才答得出 `Me.ci` / `h.ci` / `k.ci` 三形该套哪只范围闸);
+# 读侧那三站一处不许少, 写侧这一站也只许一处。
 # 第六十二刀 (§B171) 的第三站是**同一问的第三个读点** (isDefinitelyVariantExpr 的成员读分支), 不是新抄一份答案; 它同时把「尾注 variant 词」收进 cExprIsVariantSlotFieldRead 一处 (见 R9).
-$WantReadAsk170 = [ordered]@{ 'cgen_util_type.cpp' = 3 }
+$WantReadAsk170 = [ordered]@{ 'cgen_util_type.cpp' = 4 }
 $KnownAskFiles170 = @('cgen_api.inc', 'cgen_state.inc', 'driver_codegen_fieldkind_scan.inc',
                       'cgen_assign_prop_write.inc', 'cgen_util_type.cpp')
 $askByFile170 = @{}
@@ -289,7 +296,7 @@ foreach ($k in $WantReadAsk170.Keys) {
     $g170 = 0
     if ($askByFile170.ContainsKey($k)) { $g170 = $askByFile170[$k] }
     if ($g170 -ne $WantReadAsk170[$k]) {
-        $bad += ('R8 ' + $k + ' 问 classFieldKind ' + $g170 + ' 处, 名单钉的是 ' + $WantReadAsk170[$k] + ' (点号 + With + 认槽三站)')
+        $bad += ('R8 ' + $k + ' 问 classFieldKind ' + $g170 + ' 处, 名单钉的是 ' + $WantReadAsk170[$k] + ' (点号 + With + 认槽三站读侧 + §B184 写侧那一问)')
     }
 }
 foreach ($k in $askByFile170.Keys) {

@@ -103,6 +103,24 @@ $decExempt = @{
     "pb_Read" = "ActiveX 属性包(IPropertyBag::Read)只把**设计期存过的属性**交回容器，写侧那几档由 C3 自己的下发决定；语料里 Decimal/I8 走到属性包的读数 0 处，要补先证明可达"
 }
 
+# ai/032 §6.9: 小整型两档（VT_I1 / VT_UI2）—— 同一张表要答的第四、五档，名单也各列一份。
+# 与 I8/Decimal 的区别：这两档在 C3 里**只在显式 SByte / UInteger 表达式装箱时**才产生，
+# 而 SByte=int8_t(=char)、UInteger=uint16_t(=wchar_t)，以前都被 _Generic 接走装成 VT_I4 ——
+# 所以「漏答」在既往语料里读不出来（值对、TypeName 答 "Long"），是本账第一次把这两档摆上台面。
+$smMust = @(
+    "vb6_VariantToLong", "vb6_VariantToLongPtr", "vb6_VariantToBool", "vb6_VariantToDouble",
+    "vb6_TypeNameScalar", "vb6_IsNumeric", "vb6_VarToDouble_internal", "vb6_VariantPackBorrow",
+    "vb6_ComVariantIntoSlot", "vb6_Format", "memVariantToI4", "vb6_ho_variantToLong", "vb6_ho_variantToDouble"
+)
+$smExempt = @{
+    "vb6_CDec"            = "造 Decimal 的那一档不是读表；补它等于把同一个问题抄第二遍（与 decExempt 同理由）"
+    "vb6_EnumNext"        = "IEnumVARIANT 取元素，全仓 0 个调用者的死码；死码上不写档（与 I8 豁免同理由）"
+    "vb6_bag_deserialize" = "UC 属性包按 **iVarType 标签**分档解(name,value)，不是槽表；这两档在包格式里没有编码，补它等于改线格式"
+    "vb6_ResIdOf"         = "资源 id 的实参解包只认 BSTR 与数值档，且 default 交 lVal(不是 0)；语料里这两档走到它 0 处"
+    "vb6_SaElemTypeFromVt"= "SAFEARRAY 的元素档表不是槽表；枚举里没有 SByte/UInteger 两档，回落 variant 是既有口径"
+    "pb_Read"             = "ActiveX 属性包只交回设计期存过的属性；UI2 那档它本来就答，I1 要补先证明语料可达"
+}
+
 $fnRe     = [regex]'^[A-Za-z_][A-Za-z0-9_ \*]*?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*\{\s*$'
 # 接收者叫 v 的 vt switch，**允许带强转**：`switch ((vb6_vartype)v->vt)` 与 `switch (v.vt)` 是同一族表。
 # 以前这条正则不认强转写法，于是「比较走哪个数值」那一口(vb6_VarToDouble_internal)整个不在 census 里。
@@ -119,13 +137,18 @@ $incOwner = @{ 'vb6rtl_format_extract.inc' = 'vb6_Format' }
 $armRe = @{
     I8  = [regex]'case\s+(?:\([^)]*\)\s*)?(?:VT_I8|vb6_vtI8)\s*:'
     DEC = [regex]'case\s+(?:\([^)]*\)\s*)?(?:VT_DECIMAL|vb6_vtDecimal)\s*:'
+    # ai/032 §6.9: C3 扩展的小整型两档。两档都**值不缺**（8/16 位塞得进 VT_I4），缺的是**类型身份** ——
+    #   以前被 _Generic 的 `char:` / `wchar_t:` 档接走装成 VT_I4，TypeName 答 "Long"。与 I8/Decimal 同口径
+    #   逐张 vt 表都要么答要么写明豁免；正转 (VT_I1) 两档本体都要这枚 arm。
+    I1  = [regex]'case\s+(?:\([^)]*\)\s*)?(?:VT_I1|vb6_vtSByte|vb6_vtByte1)\s*:'
+    UI2 = [regex]'case\s+(?:\([^)]*\)\s*)?(?:VT_UI2|vb6_vtUInteger)\s*:'
 }
 
 # ---------- 扫一遍：站点 + 每个函数的体 ----------
 $files = @(Get-ChildItem -LiteralPath $rtl -Recurse -File -Include *.c, *.inc)
 $sites = @()
 $bodies = @{}
-$allNames = @($must + $decMust + @($exempt.Keys) + @($decExempt.Keys) + 
+$allNames = @($must + $decMust + $smMust + @($exempt.Keys) + @($decExempt.Keys) + @($smExempt.Keys) + 
                @('vb6_VariantFromComResult', 'vb6_VariantFromStackVARIANT',
                  # 账 #305 §B165 (第五十四刀): C2 要读这一对出口与宿主环五站的体 —— 名字不在这张表里
                  # 就进不了 $bodies, C2 会红在「函数不存在」上(那是假红, 不是发现)。
@@ -178,7 +201,7 @@ foreach ($f in $files) {
                 $incName = Split-Path -Leaf $im.Groups[1].Value
                 $hit = @(Get-ChildItem -LiteralPath $f.DirectoryName -Recurse -File -Filter $incName)
                 if ($hit.Count -ge 1) { $ip = $hit[0].FullName }
-            }
+}
             if (Test-Path -LiteralPath $ip) { $body += [System.IO.File]::ReadAllText($ip) }
         }
         $bodies[$name] = $body
@@ -196,7 +219,10 @@ if ($sites.Count -lt 18) {
 # ---------- 每一档各问一遍：闭合 census + 名单自己 ----------
 $arms = @(
     [pscustomobject]@{ Tag = "V2/V3"; Arm = "VT_I8";      Must = $must;    Exempt = $exempt;    Floor = 13; Re = $armRe.I8 },
-    [pscustomobject]@{ Tag = "D1/D2"; Arm = "VT_DECIMAL"; Must = $decMust; Exempt = $decExempt; Floor = 10;  Re = $armRe.DEC }
+    [pscustomobject]@{ Tag = "D1/D2"; Arm = "VT_DECIMAL"; Must = $decMust; Exempt = $decExempt; Floor = 10;  Re = $armRe.DEC },
+    # ai/032 §6.9: 两档共用一组名单（每张表要么答正转+无符号，要么两者都豁免），故两组用同一份 must/exempt。
+    [pscustomobject]@{ Tag = "S1/S2"; Arm = "VT_I1";      Must = $smMust;  Exempt = $smExempt;  Floor = 12; Re = $armRe.I1 },
+    [pscustomobject]@{ Tag = "S1/S2"; Arm = "VT_UI2";     Must = $smMust;  Exempt = $smExempt;  Floor = 12; Re = $armRe.UI2 }
 )
 foreach ($a in $arms) {
     # 闭合性：每张 vt 表都要在这一档二选一(答它 / 写明为什么不答)
@@ -317,7 +343,9 @@ foreach ($fn in @($ringStations.Keys)) {
 if ($bad.Count -eq 0) {
     Write-Host ("PASS variant_i8_coverage: switches " + $sites.Count + " I8 must " + $must.Count +
                 " exempt " + $exempt.Count + " | DEC must " + $decMust.Count + " exempt " +
-                $decExempt.Count + " | inbound core 1 | value pair 2 ring 5 | violations 0") -ForegroundColor Green
+                $decExempt.Count + " | I1 must " + $smMust.Count + " | UI2 must " + $smMust.Count +
+                " exempt " + $smExempt.Count +
+                " | inbound core 1 | value pair 2 ring 5 | violations 0") -ForegroundColor Green
     exit 0
 }
 foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }

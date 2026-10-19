@@ -45,7 +45,7 @@ void CCodeGen::visit(PropertyDecl& node) {
     clearProcArrayTracking();
     ansiTempsToFree_.clear();
     ansiOutParams_.clear();
-    ivrefLocalsToRelease_.clear();  // tB Interface B05
+    slotsToRelease_.clear();  // tB Interface B05 / 账 #305 §B218 (甲) 腿④
     ansiCounter_ = 0;
     asmMixedBlockCounter_ = 0;   // ai/vb-asm-extension-spec 项2: 混排片段序号按过程重置
     knownBstrVars_.clear();
@@ -81,6 +81,11 @@ void CCodeGen::visit(PropertyDecl& node) {
     earlyBoundSym_ = nullptr;
     withObjectVars_.clear();
     withObjectInfoStack_.clear();
+    // 账 #305 #408: 形参名册按过程重开 (上面那张表全程不清空)。
+    procObjectFormals_.clear();
+    procClassFormals_.clear();  // 账 #305 §B218 (甲): 与上面那张同一条"按过程重开"
+    // 账 #305 #408: 模块级那一档先恢复进来, 下面形参那一档的遮蔽才只吃本过程。
+    knownClassVars_.insert(moduleClassVars_.begin(), moduleClassVars_.end());
     // Fix 010r/010r-10: 类模块中注册me到knownClassVars_ (使Me.Method()正确分发)
     // 改为map赋值: me → 当前模块名(类名)
     if (isClassModule_) knownClassVars_["me"] = moduleName_;
@@ -90,6 +95,8 @@ void CCodeGen::visit(PropertyDecl& node) {
     knownFixedStringLen_.insert(moduleFixedStringLen_.begin(), moduleFixedStringLen_.end());
     knownDoubleVars_.insert(classDoubleMembers_.begin(), classDoubleMembers_.end());
     knownLongVars_.insert(classLongMembers_.begin(), classLongMembers_.end());
+    // 账 #305 §B183: Integer 类字段的窄档名单也要在过程入口恢复一份，否则裸名成员左值问「有多窄」只查到放宽档。
+    knownIntVars_.insert(classIntMembers_.begin(), classIntMembers_.end());
     // Fix 010n: 恢复类模块UDT成员变量 (knownUdtVars_被clear后需要从classUdtMembers_恢复)
     knownUdtVars_.insert(classUdtMembers_.begin(), classUdtMembers_.end());
     // Fix 010n (扩展): 恢复普通模块模块级UDT变量 (同 classUdtMembers_ 机制)
@@ -115,6 +122,14 @@ void CCodeGen::visit(PropertyDecl& node) {
             auto& simpleP = static_cast<SimpleTypeRef&>(*p->asType);
             std::string pLower = p->name;
             std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
+
+            // 账 #305 #408: 这一档形参在 C 侧是裸对象指针 (void*), 把名字记进本过程名册, 让类推断先落空。
+            if (Symbol::toLower(simpleP.name) == "object") {
+                procObjectFormals_.insert(pLower);
+                // 账 #305 #408: 同上面 UDT 形参那一格的形状 —— 名字在本过程是裸对象指针,
+                // 把按名那张表里**别的**登记撤掉 (成员读那几站是直接查表的)。
+                knownClassVars_.erase(pLower);
+            }
             // Fix 161f: 同 cgen_decl_func.cpp — 限定名 (ComctlLib.ColumnHeader) 用
             // lookupTypeSymbol 按全名→末段查, 与 mapTypeRef 同口径。
             auto* pSym = lookupTypeSymbol(simpleP.name);
@@ -126,19 +141,19 @@ void CCodeGen::visit(PropertyDecl& node) {
             // Fix <vbeclipse> rev7: 工程类名表兜底 —— 同 cgen_decl_proc.cpp 同款。
             if (!pSym || pSym->kind != SymbolKind::Class) {
                 const std::string projClsP092r = projectClassNameOf(simpleP.name);
-                if (!projClsP092r.empty()) knownClassVars_[pLower] = projClsP092r;
+                if (!projClsP092r.empty()) registerClassFormal(pLower, projClsP092r);
             }
             if (pSym && pSym->kind == SymbolKind::UserDefinedType) {
                 knownUdtVars_[pLower] = "vb6_type_" + cIdent(simpleP.name);
             } else if (pSym && pSym->kind == SymbolKind::Class) {
-                knownClassVars_[pLower] = pSym->name;
+                registerClassFormal(pLower, pSym->name);
             } else if (pSym && (pSym->kind == SymbolKind::ComClass || pSym->kind == SymbolKind::ComInterface)) {
                 // Fix <vbeclipse>-2: 同 cgen_decl_func.cpp —— 本工程有同名类模块时走原生
                 // (判据 projectClassNameOf, 不是 isExternal; 类型库自动加载注进来的
                 // 内建 coclass isExternal=false).
                 const std::string projCls2 = projectClassNameOf(simpleP.name);
                 if (!projCls2.empty()) {
-                    knownClassVars_[pLower] = projCls2;
+                    registerClassFormal(pLower, projCls2);
                 } else {
                     knownTypedComVars_[pLower] = pSym;
                 }
@@ -169,6 +184,11 @@ void CCodeGen::visit(PropertyDecl& node) {
             else if (paramType == Vb6Type::Long || paramType == Vb6Type::Integer || paramType == Vb6Type::Boolean
                      || paramType == Vb6Type::Byte) {
                 knownLongVars_.insert(pLower);
+                // 账 #305 §B182: Integer 形参也要进窄档表 —— knownIntVars_ 是 narrowTargetTypeOf
+                // 「这个左值有多窄」的唯一问句, 缺这一档就不套 vb6_ChkInt ⇒ C 把 40000 静默截成
+                // -25536, 而 ByRef 那形还把它写回调用方的变量。口径同 Fix 175 的 Date、账 #123 的
+                // Byte: 放宽档登记过不等于窄档看得见。
+                if (paramType == Vb6Type::Integer) knownIntVars_.insert(pLower);
                 // ai/022 W1: 布尔形参另登记一份 (口径同 Fix 175 的 Date 形参)
                 if (paramType == Vb6Type::Boolean) knownBoolVars_.insert(pLower);
                 // 账 #123: Byte 形参一并进这一支 (口径同 ai/022 W1 的 Boolean —— C 型不同串
@@ -241,6 +261,11 @@ void CCodeGen::visit(PropertyDecl& node) {
             // Fix 055: 注册UDT数组元素C类型
             std::string udtCType = resolveArrayUdtElemCType(p->asType.get());
             if (!udtCType.empty()) arrayUdtElemTypes_[pLower] = udtCType;
+            // 账 #305 B181 (knife 71): a ByRef Byte() FORMAL used to reach none of the two
+            // byte-array name sets (only module-level + local declaration paths write them),
+            // so StrPtr(b) / StrConv(b, ...) silently handed the SafeArray DESCRIPTOR pointer
+            // to a BSTR formal. Symmetric with cgen_decl_var.cpp:85 / cgen_localdecl.cpp:104.
+            if (elemType == Vb6Type::Byte) knownByteArrayVars_.insert(pLower);
             knownLocalVars_.insert(pLower);
         }
     }

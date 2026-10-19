@@ -1048,6 +1048,17 @@ int16_t __stdcall vb6_di_RegisterClassExW(void* lpWndClassEx) {
 intptr_t __stdcall vb6_di_SetClassLongW(intptr_t hWnd, intptr_t nIndex, intptr_t dwNewLong) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))SetClassLongW)(hWnd, nIndex, dwNewLong);
 }
+/* SetClassLongPtrW — ComCtlsDemo Builds\VirtualCombo\VirtualComboBase.bas:51
+ * (`Private Declare PtrSafe Function SetClassLongPtr Lib "user32" Alias "SetClassLongPtrW"`),
+ * 只在 `#If Win64` 分支里声明并真调用 (SetClassLBoxProc: `SetClassLongPtr hWndClass,
+ * GCLP_WNDPROC, AddressOf VcbComboLBoxCreateProc`), 改 ComboLBox 的窗口过程。
+ * 32 位目标 (--arch x86) 时 Win64=False, 该分支整段不编译 ⇒ 这枚桩从来没被要过;
+ * x64 目标第一次走到这里就 LNK2019 现形 (与 2026-10-06 的 vb6_di_PageSetupDlgA 同因:
+ * 判据是"这个 Declare 有没有被**调用**", 只声明不调用时包装是 static __inline,
+ * MSVC 根本不发符号)。形参口径与 vb6_di_SetClassLongW 同款 (ByVal LongPtr/Long → intptr_t)。 */
+intptr_t __stdcall vb6_di_SetClassLongPtrW(intptr_t hWnd, intptr_t nIndex, intptr_t dwNewLong) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))SetClassLongPtrW)(hWnd, nIndex, dwNewLong);
+}
 
 /* CallWindowProcW */
 intptr_t __stdcall vb6_di_CallWindowProcW(intptr_t lpPrevWndFunc, intptr_t hWnd, intptr_t wMsg, intptr_t wParam, intptr_t lParam) {

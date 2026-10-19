@@ -1,4 +1,4 @@
-﻿// cgen_expr_call_arg_emit.inc - visit(IndexOrCallExpr&) 函数体片段：位置实参发射（一）—— UDT 打包、Declare ANSI 与 ByRef 取地址（位于实参 for 循环内）
+// cgen_expr_call_arg_emit.inc - visit(IndexOrCallExpr&) 函数体片段：位置实参发射（一）—— UDT 打包、Declare ANSI 与 ByRef 取地址（位于实参 for 循环内）
 // 由 src/backend/expr/cgen_expr_call.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 1771~2136 行，逐行未改。
 
@@ -107,6 +107,25 @@
             }
         }
         std::string argVal = std::move(lastExpr_);
+        /* Fix 296 / 4b: 实参位上的 Extender 成员读也走实例入口 (CoolBar.ctl
+           `RaiseEvent HeightChanged` 发成 `onHeightChanged(h, Extender.Height)`,
+           实测 ComCtlsDemo 1 处)。换道放在**捕获的那一刻** —— boxIntoLateSlot /
+           VariantToString / wrapToBSTR / boxToVariant 那一层包装全在下面, 于是包装套在
+           读入口**外面**, 与 4a "外层 vb6_ChkInt 照旧套着" 同款。 */
+        argVal = extenderMemberReadExpr(argVal);
+        // 账 #305 §B187 第四腿 实参那一站: ByVal <泛对象形参> (VB 写 `As Object`, C 侧是
+        // void* 里该装 IDispatch*) 收到工程内实例时交**借用型包装器** —— 与 Set 那一站同一句
+        // (唯一发码处 boxIntoLateSlot)。为什么这一站单独欠着: 装箱腿只管 `Set` 语句那一站，
+        // 而 `argLate = TakeIt(o)` 把 `Dim o As New B89Good` 直接递进形参槽，发码现场是
+        //     vb6_B89Driver_TakeIt((void*)me, o)          (探针 .build/k89_arg 实测)
+        // 被调方 `p.Twice(21)` 落进 vb6_ComCall(p, ...) → 判否 → result=42000 (早绑定那半 42
+        // 一直是对的，红只有晚绑定那一半)。ByRef 那一档**不在本腿**: `ByRef p As Object` 的
+        // C 侧是 void**，装箱必须先落一枚临时，被调方写回就丢 (VB6 交的是写回调用方那一格)
+        // —— 那需要一座桥，先把暴露面量出来再单开一刀，别在这里顺手改坏。
+        if (i < calleeParams.size() && calleeParams[i].isByVal
+            && !cParamLateSlotType(calleeParams[i]).empty()) {
+            argVal = boxIntoLateSlot(argVal, node.positional[i].get());
+        }
 
         // Fix 265: 宿主伪**结构体全局** (`UserControl.Extender` / `UserControl.Ambient`,
         // RTL 侧是结构体**值**而非指针) 交付给**指针形参** (`As Object` / `VB.Control`
@@ -254,7 +273,23 @@
         // (两位旧主人两份清单的并集); 形状仍走 wrapToBSTR (全仓唯一的 数值→BSTR 出口,
         // Boolean 那档它给 vb6_CStrBool = VB6 的 "True"/"False", 与 Fix 108c 的 "-1" 不同口径,
         // 收成一位之后只剩这一个口径)。
-        if (!isDeclareAnsiCall && node.positional[i] && !cExprIsVariant(argVal)) {
+        // 账 #305 §B175 (第六十六刀): 这条闸多问一句「这一位是不是用户**写**出来的实参」。
+        // Fix 142 那段 (本站上面 8 行) 对**有形参表**的 callee 已经把省略位拦下 (填缺省值后
+        // continue), 但对 builtin (calleeIsBuiltin) 不拦 —— 省略位带着解析器留的占位 0 落进
+        // 本站。两处实物 (都在本仓语料里, 都是 --emit-c 逐行看过):
+        //   `Opacity = InputBox("...", , 100)` (tests/Charts 2020/ucProgressCircular/
+        //     ppProgressCircular.pag:351) —— 本刀把 InputBox 接进来之后, 省略的**标题位**被折成
+        //     vb6_CStrLong(0L), 标题从「没写」(NULL ⇒ 用应用标题) 变成字符串 "0"; 同一条调用里
+        //     写出来的 100 该折 ⇒ 一头不许多吃、另一头不许漏。
+        //   Set xl = GetObject(, "Excel.Application")` (tests/test_p24_04b/test_getobject.bas:18
+        //     + VBFlexGridDemo) —— 这一形**不是本刀带进来的**: 六十五刀的 BASE 那台
+        //     (C3_base_k65.exe, 不含六十五刀) 实测就发
+        //     `vb6_GetObject(vb6_CStrLong(0L), ...)` (Fix 175 出生起就有), 而 RTL 的分支是
+        //     「pathName 非空 ⇒ IPersistFile::Load(拿 "0" 当文件名)」/「空 ⇒ GetActiveObject」
+        //     (vb6com/vb6com.c:705) ⇒ 折一下正好挑错那一支。本刀的闸把它改回 `0L`。
+        // 省略位到底该交 NULL 还是 vb6_BSTR_Empty() 是 §B149 那张缺省表那一格的事, 本刀不动。
+        if (!isDeclareAnsiCall && node.positional[i] && !cExprIsVariant(argVal)
+            && !node.omittedArgs.count(i)) {
             bool strSlot175 = false;
             if (i < calleeParams.size()) {
                 strSlot175 = calleeParams[i].isByVal
@@ -648,6 +683,10 @@
                         && !isConstMacro;
                     if (isLValue) {
                         // 左值: 变量名、数组元素、me->field、(*ptr) 解引用 — 可以取地址
+                        // 账 #305 §B218 (甲) 腿④ 第二道夹: 把一个**标识符**格子的地址交给外部
+                        // Declare ⇒ 这一格从此由外面写, 本过程没经自己的主人拿过它。若它正好在
+                        // 出口放手那张表里 (工程类那一档), 就把这一条撤掉 (只动类档, 视图档不动)。
+                        if (isSimpleIdent) dropClassSlotRelease(argValLv);
                         argVal = "(void*)&(" + argVal + ")";
                     } else if (!argUdtRetCType090q.empty()) {
                         // Fix 090q: 实参是返回 UDT 的函数调用 — VB6 把返回值拷入临时
@@ -997,6 +1036,13 @@
                                     c_.emitLine("vb6_VARIANT " + tmp92y
                                         + " = vb6_VariantFromValue(" + boxed92y
                                         + ");  /* Fix <vbeclipse>: ByRef Variant 实参装箱 */");
+                                    // 账 #305 §B217 (第一百二十一刀): `vb6_VariantFromValue` 落到
+                                    // void* 那一臂 = `vb6_VariantObject`, 它**自己就 AddRef**
+                                    // (vb6rtl_variant.h:243-248), 而上面那句 `From*Instance` 已经
+                                    // 取过一枚 ⇒ 每次调用两枚。站点自己只该留下一枚(实例自己的那一枚,
+                                    // 归属由唯一发码处答), 装箱多取的这一枚登记下来, 由 emitStmt 在
+                                    // 这条语句末收回 —— 与 ansiOutParams_/ansiTempsToFree_ 同一条道。
+                                    boxTempsToClear_.push_back({tmp92y, c_.indentLevel()});
                                     argVal = "&" + tmp92y;
                                 } else {
                                     // Variant 变量 / UDT 字段: 值已是 vb6_VARIANT 且可寻址。
@@ -1050,6 +1096,13 @@
                         }
                         argVal = "&" + vref;
                     } else {
+                        // 账 #305 §B187 第五腿: ByRef 泛对象形参那一座桥 —— 判据与两句发码
+                        // 全在 bridgeByRefLateSlotArg 一处 (为什么这里得按**运行期的值**问、
+                        // 为什么装箱与剥回都只许动调用方自己那一格, 见定义处注释)。
+                        if (i < calleeParams.size() && i < node.positional.size()) {
+                            bridgeByRefLateSlotArg(calleeParams[i], argVal,
+                                                   node.positional[i].get());
+                        }
                         argVal = "&" + argVal;
                     }
                 } else {
@@ -1387,7 +1440,11 @@
         // __refcount (ComCtlsDemo ComCtlsSubclassProc 实测: av read 0xC 崩在
         // Release, StatusBar UC 创建期 100% 复现)。
         if (cTypeIvfix.rfind("vb6_ivref_", 0) == 0 && i < node.positional.size()
-            && node.positional[i]) {
+            && node.positional[i]
+            && ifaceViewOfExpr(*node.positional[i]).empty()) {
+            // 账 #305 §B221 (形③): 实参本身已经是视图 (`Take MakeDirect()`) ⇒ 值就是那枚
+            // 薄指针，再取一次 `->__iv_<I>` 是剥第二层皮 (实测 C2039 + C2198)，所以这一问
+            // 由 ifaceViewOfExpr 在闸上答一次，站点不另写判据。
             std::string argCls = inferClassTypeOfExpr(*node.positional[i]);
             if (!argCls.empty()) {
                 const IfaceView* ivFix = ivLookupIface(

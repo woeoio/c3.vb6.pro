@@ -129,6 +129,11 @@
     addBuiltinFunc("CUInt",    Vb6Type::UInteger);
     addBuiltinFunc("CULng",    Vb6Type::ULong);
     addBuiltinFunc("CULngLng", Vb6Type::ULongLong);
+    // CLngLng: 上面对应的**有符号** 64 位那一档 (ai/032 的四档全是无符号/窄的,
+    // 签名这一位当时没登记)。ComCtlsDemo ProgressBar.ctl:1328 真在用它 —— `#If Win64`
+    // 分支里 `CLngLng(PropValue)` 给 ITaskBarList3::SetProgressValue 送 ULONGLONG。
+    // 返回 LongLong (int64_t), 口径同 CLng (FltToLng + 越界 Error 6), 同样不加 calleeParams。
+    addBuiltinFunc("CLngLng",  Vb6Type::LongLong);
     // twinBASIC 形 CLngPtr (doc.twinbasic.vb6.pro .../Conversion/CLngPtr.html):
     // 转 LongPtr (x86 = Long / x64 = LongLong), .5 舍入与越界口径随 CLng 同族
     // (RTL vb6_CLngPtr: FltToLng + OvfChk → 越界 Error 6)。同样不加 calleeParams。
@@ -218,7 +223,10 @@
     addBuiltinFuncWithParams("DatePart", Vb6Type::Long,
         {{"interval", Vb6Type::String, true, false}, {"date", Vb6Type::Double, true, false},
          {"firstDayOfWeek", Vb6Type::Long, true, true}, {"firstWeekOfYear", Vb6Type::Long, true, true}});
-    addBuiltinFuncWithParams("DateSerial", Vb6Type::Double,
+    // 返回档必须是 Date 而不是 Double: 这一格就是「这枚返回值进槽时贴哪枚标签」的唯一答案
+    // (账 #431 §B205, 第一百零二刀)。写成 Double 时 DateSerial 交进 Variant 槽是 VT_R8 ⇒
+    // VarType 5 / TypeName "Double" / IsDate False / CStr 打序列号, 与引擎六档全反。
+    addBuiltinFuncWithParams("DateSerial", Vb6Type::Date,
         {{"year", Vb6Type::Long, true, false}, {"month", Vb6Type::Long, true, false},
          {"day", Vb6Type::Long, true, false}});
     addBuiltinFuncWithParams("DateValue", Vb6Type::Date, {{"dateStr", Vb6Type::String, true, false}});
