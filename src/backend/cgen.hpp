@@ -21,6 +21,7 @@
 #include "semantics/interfaces_registry.hpp"  // tB Interface 契约发码 (ai/022 B04)
 #include "semantics/class_chain_registry.hpp"  // tB 类继承发码 (ai/022 B07b)
 #include "common/diagnostics.hpp"
+#include "common/member_array_decl.hpp"   // 账 #476 §B190: 类动态数组成员声明语法表 (driver 运来)
 #include "semantics/coclass_identity.hpp"  // CoClass 身份唯一出口 (ai/022 B13b)
 #include "project/frm_parser.hpp"
 #include "backend/asm_proc.hpp"  // ai/vb-asm-extension-spec: Asm 过程降级元数据

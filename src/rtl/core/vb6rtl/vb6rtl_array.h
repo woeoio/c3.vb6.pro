@@ -142,6 +142,14 @@ vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D_T(vb6_safearray_elemtype elemType,
     vb6_SafeArray1D* arr, int32_t newLBound, int32_t newUBound);
 vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D(vb6_SafeArray1D* arr,
     int32_t newLBound, int32_t newUBound);
+// 账 #305 §B218 (甲) 腿⑤ 第四格 (第一百四十八刀): 上面那位主人的**带回调兄弟** —— 元素是工程类
+// 裸实例 (vb6_sa_ptr) 时, 收缩丢尾的那几格要在搬移之前把引用交回。为什么多收一枚函数指针:
+// 裸结构体没有 vtable、每类的 Release 是各自一对出口 ⇒ RTL 自己认不出该调谁 (与
+// vb6_SA_ReleaseElements 同一口径)。搬移本身**不重复实现**: 这枚只做完出厂就转调 _T,
+// 所以两条路的保留/重建规则永远一字相同。非类元素请继续直接用 _T (发码形状逐字节不变)。
+vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D_Tr(vb6_safearray_elemtype elemType,
+    vb6_SafeArray1D* arr, int32_t newLBound, int32_t newUBound,
+    unsigned long (*release)(void*));
 
 // UDT版ReDim Preserve: elemSize由调用方提供 (用于UDT动态数组)
 vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D_Udt(int32_t elemSize,
@@ -149,6 +157,11 @@ vb6_SafeArray1D* vb6_SafeArrayReDimPreserve1D_Udt(int32_t elemSize,
 
 // 销毁数组 (释放内存)
 void vb6_SafeArrayDestroy1D(vb6_SafeArray1D* arr);
+// 账 #305 §B218 (甲) 腿⑤ 数组档 (第一百四十刀): 元素是**工程类实例指针** (vb6_sa_ptr) 时,
+// 逐元素把引用交回给持有它的那位主人 —— 谁的 Release 只有调用方知道 (每类一对出口),
+// 所以这里收函数指针。elemType 不是 vb6_sa_ptr 或 release 为空 ⇒ 一个字都不做 (=旧行为)。
+// 必须在销毁载体**之前**调用: 载体一没, 元素地址就没了。
+void vb6_SA_ReleaseElements(void* arr, unsigned long (*release)(void*));
 // Fix <vbeclipse> 2026-10-06: Erase 语句的数组变量出口 (VB6 文档口径):
 // 动态数组 → 释放存储并置 NULL; 固定数组 → 保留存储, 元素重置
 // (数值/UDT 置零, BSTR 置零长串, Variant 置 Empty)。
@@ -231,6 +244,12 @@ typedef struct vb6_SafeArrayND {
 vb6_SafeArrayND* vb6_SafeArrayCreateND(vb6_safearray_elemtype elemType,
     int32_t dimCount, vb6_SafeArrayBound bounds[]);
 void vb6_SafeArrayDestroyND(vb6_SafeArrayND* arr);
+// 账 #305 §B218 (甲) 腿⑤ 第五格 (第一百四十九刀): 上面 1D 那位 vb6_SA_ReleaseElements 的**多维兄弟** ——
+// 元素是本工程类裸实例 (vb6_sa_ptr) 的 ND 载体在销毁前逐枚交回。步进口径与 vb6_SafeArrayDestroyND 里
+// bstr / variant 那两档一字相同 (按 i * elemSize 线性走 totalElements 格), 区别只在「这一格是裸实例指针」
+// ⇒ 该调谁的 Release 仍只有调用方知道。release 为空 / elemType 不是 vb6_sa_ptr / 载体还没建 ⇒ 一个字不做。
+// 同样必须在销毁载体**之前**调用。
+void vb6_SA_ReleaseElementsND(void* arr, unsigned long (*release)(void*));
 vb6_SafeArrayND* vb6_SafeArrayReDimND(vb6_safearray_elemtype elemType,
     int32_t dimCount, vb6_SafeArrayBound bounds[]);
 vb6_SafeArrayND* vb6_SafeArrayReDimND_Udt(int32_t elemSize,
@@ -244,6 +263,12 @@ vb6_SafeArrayND* vb6_SafeArrayReDimND_Udt(int32_t elemSize,
    UDT 不在这一枚 (它走下面的 _Udt, 元素尺寸由调用方的 sizeof 给)。 */
 vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND(vb6_safearray_elemtype elemType,
     vb6_SafeArrayND* arr, int32_t dimCount, vb6_SafeArrayBound newBounds[]);
+/* 账 #305 §B218 (甲) 腿⑤ 第六格 (第一百五十四刀): 本体多收一枚元素交回回调, 上面那枚是它的转调。
+   与一维那位兄弟 vb6_SafeArrayReDimPreserve1D_Tr 同一个理由 —— 收缩丢尾那几格躺的是本工程
+   哪一类的实例, 只有 cgen 知道该递哪一枚 <Cls>_Release。release 为空 = 今天那一发留着。 */
+vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND_Tr(vb6_safearray_elemtype elemType,
+    vb6_SafeArrayND* arr, int32_t dimCount, vb6_SafeArrayBound newBounds[],
+    unsigned long (*release)(void*));
 
 // UDT版ReDim Preserve(多维): elemSize由调用方提供
 vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND_Udt(int32_t elemSize,

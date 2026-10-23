@@ -1,0 +1,6 @@
+Type=Exe
+Name="K489SlotDirApp"
+Module=mdlK489; mdlK489.bas
+Class=IK489; IK489.cls
+Class=K489Holder; K489Holder.cls
+Startup="Sub Main"

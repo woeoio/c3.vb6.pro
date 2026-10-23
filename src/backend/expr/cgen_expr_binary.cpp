@@ -80,7 +80,14 @@ void CCodeGen::visit(BinaryExpr& node) {
         if (inferExprType(*sib) == Vb6Type::String) return "BSTR";
         return "Long";
     };
+    // 账 #464 §B164: 拼接站那条判据读的是**左操作数的发码文本**（"左文本里含
+    // vb6_BSTR_Concat 子串" ⇒ 发 vb6_BSTR_ConcatFree，而 ConcatFree 会放掉左操作数）
+    // ⇒ 左操作数里的一切**不许**被回收刀提名（提了名那条子串判据会翻面 ⇒ 行为变了）。
+    // 左操作数发码期间把计数抬起来, 右操作数发码期间落回去（递归地护住每一层的左操作数）。
+    const bool guardConcatLeft464 = (node.op == BinaryOp::Concat);
+    if (guardConcatLeft464) ++concatLeftDepth_;
     emitExpr(*node.left);
+    if (guardConcatLeft464) --concatLeftDepth_;
     // COM标记解析: 如果左操作数是COM属性, 解析为值
     // P24-02: 算术运算默认Long解包
     if (isComMarker_) {
@@ -110,8 +117,28 @@ void CCodeGen::visit(BinaryExpr& node) {
     if (node.op == BinaryOp::Concat) {
         left = wrapToBSTR(left, *node.left);
         right = wrapToBSTR(right, *node.right);
+        // 账 #464 §B164 回收刀: **右操作数**若是「整枚就是一个 mint 调用」, 提成具名临时量,
+        // 语句末按档收回（拼接站这一族是漏面里最大的一支: 右操作数没人放）。
+        // 为什么只动右操作数: ① 左操作数的**发码文本**被下面那条「含 vb6_BSTR_Concat 子串」的
+        //    判据读过 ⇒ 动它那条判据会翻面（ConcatFree ⇢ Concat）⇒ 行为变了 ⇒ 不许动;
+        // ② 右操作数是安全的: 左操作数**在右操作数之前就已经求完值**了（发码时先发左后发右），
+        //    ⇒ 把右操作数提成临时量**不动求值次序**。
+        // ③ 判据本身（现造? 消费者留不留? 消费者自己放不放? closed?）全在头里那位主人身上。
+        hoistOwnedTempSlot(right, "vb6_BSTR_Concat", 1, left);
         bool leftIsConcat = (left.find("vb6_BSTR_Concat") != std::string::npos);
-        if (leftIsConcat) {
+        // 账 #469 §B164 拼接站那一族: **左操作数自己**若是「整枚就是一个 owned 且档是 BSTR 的
+        // mint 调用」⇒ 那一枚**没人放**（拼接站发 Concat 时只放右操作数… 准确说：发 Concat
+        // 时左操作数**根本不放**）⇒ 漏。
+        // 修法**不是**把它提成临时量（那会把求值次序往前挪 ⇒ 有次序风险），
+        // 而是**让拼接站自己放掉它**：发 ConcatFree ⇒ vb6_BSTR_ConcatFree 内部
+        //   result = vb6_BSTR_Concat(a, b); vb6_BSTR_Free(a);
+        // 而 vb6_BSTR_Concat 是**拷贝**内容（memcpy 到新串）⇒ 放掉左操作数**安全**，
+        // 且**只放一次**（本站放 ⇒ 不进回收名单 ⇒ 不双放）。
+        // 判据：左操作数**整枚**是一个 owned BSTR 档的 mint（权威 = owned_temp_keeps.hpp）。
+        // 那条「左文本含 vb6_BSTR_Concat 子串」的旧判据**留着**（它是上面那条的一个子集：
+        // 拼接站自己产出的左操作数必是 owned BSTR mint ⇒ 新判据已覆盖它）。
+        bool leftIsOwnedMint = exprIsOwnedBstrMint(left);
+        if (leftIsConcat || leftIsOwnedMint) {
             lastExpr_ = "vb6_BSTR_ConcatFree(" + left + ", " + right + ")";
         } else {
             lastExpr_ = "vb6_BSTR_Concat(" + left + ", " + right + ")";
@@ -192,8 +219,16 @@ void CCodeGen::visit(BinaryExpr& node) {
     if (node.op == BinaryOp::Add && addIsConcat092i) {
         left = wrapToBSTR(left, *node.left);
         right = wrapToBSTR(right, *node.right);
+        // 账 #473 §B164: 这一站（`+` 当拼接, Fix 092i）也有**右操作数**那一格 —— #465
+        // 落地时只改了 `&` 那一站, 于是 `s + CStr(n)` 里现造的那枚串临时量一直没人放。
+        // 两站同一个消费者 (vb6_BSTR_Concat, slot 1) ⇒ 同一条提名判据; 门 ⑩ 仍拿 `left`
+        // 当旁证 (左操作数里有调用 ⇒ 不提名) ⇒ 求值次序不动。
+        hoistOwnedTempSlot(right, "vb6_BSTR_Concat", 1, left);
         bool leftIsConcat = (left.find("vb6_BSTR_Concat") != std::string::npos);
-        if (leftIsConcat) {
+        // 账 #469 §B164: 与 `&` 那一站**同一条规则** —— 左操作数整枚若是 owned BSTR 档的 mint,
+        // 这一站**自己**放掉它（vb6_BSTR_Concat 是**拷贝**内容 ⇒ 放掉左操作数安全）。
+        bool leftIsOwnedMint = exprIsOwnedBstrMint(left);
+        if (leftIsConcat || leftIsOwnedMint) {
             lastExpr_ = "vb6_BSTR_ConcatFree(" + left + ", " + right + ")";
         } else {
             lastExpr_ = "vb6_BSTR_Concat(" + left + ", " + right + ")";
@@ -427,6 +462,40 @@ void CCodeGen::visit(BinaryExpr& node) {
         // 两侧各自独立剥 (都装箱时剥回同一裸实例, 照样相等)。
         if (varHoldsComWrapper(left))  left  = unwrapComVarExpr(left);
         if (varHoldsComWrapper(right)) right = unwrapComVarExpr(right);
+        // 账 #305 第一百七十二刀 站C: 操作数是一枚 legacy 接口的**视图** (值结构体
+        // `vb6_iface_<I> { vtbl; obj; }`) 时 `Is` 不许落进 C 内置 `==` —— 结构体不能比
+        // (实测 Ray.vbp RayTrace.c(114/210/223) 三发 C2088「"==": 对 struct 非法」)。
+        // 同一性比的是 `.obj` 那一格: 它既是视图持有的裸实例指针，也是第一百七十一刀
+        // `vb6_VariantFromProjectInstance` 按指针查身份用的同一格 ⇒ "是不是同一只" 只有一个答案。
+        // `Is Nothing` 也就是 `.obj == NULL` (视图出厂就是 `{0}`，接管值时两格一起写)。
+        // 认槽只问第一百六十五刀那位唯一主人 slotIsLegacyIfaceView，本刀给它添第三个读者。
+        {
+            auto viewOperand172 = [&](const Expr* ast) -> bool {
+                if (!ast || ast->kind != ASTNodeKind::IdentifierExpr) return false;
+                return slotIsLegacyIfaceView(Symbol::toLower(
+                    static_cast<const IdentifierExpr&>(*ast).name));
+            };
+            auto isNothing172 = [](const std::string& s) -> bool {
+                std::string t2 = s;
+                while (t2.size() >= 2 && t2.front() == '(' && t2.back() == ')')
+                    t2 = t2.substr(1, t2.size() - 2);
+                return t2 == "NULL" || t2 == "0";
+            };
+            const bool lv172 = viewOperand172(node.left.get());
+            const bool rv172 = viewOperand172(node.right.get());
+            if (lv172 && rv172) {
+                lastExpr_ = "((" + left + ").obj == (" + right + ").obj)";
+                return;
+            }
+            if (lv172 && isNothing172(right)) {
+                lastExpr_ = "((" + left + ").obj == NULL)";
+                return;
+            }
+            if (rv172 && isNothing172(left)) {
+                lastExpr_ = "((" + right + ").obj == NULL)";
+                return;
+            }
+        }
         auto varLike158n = [&](const std::string& c, Expr* ast) -> bool {
             // Fix <vbeclipse> rev6: `Property Get Foo() As <工程类>` 的返回变量
             // (**vb6_cls_X\* 类型**) 不是 Variant, 尽管 cExprIsVariant /

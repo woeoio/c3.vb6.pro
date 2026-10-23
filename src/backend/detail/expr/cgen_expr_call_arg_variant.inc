@@ -591,6 +591,22 @@
                 }
             }
         }
+        // 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): 形参槽收工程类实例指针、实参自带一枚
+        // 移交来的对价 (`New <类>` / 被调方返回槽交回来的那一枚) ⇒ 这一站先落一枚自己的临时量,
+        // 调用行之后当场交回 —— 修前这一枚没有任何一站退 (实测 Q1-term=0, VB6 答 3)。
+        // 问句与发码都只在那一位主人里答 (见 cgen_com.cpp); ByRef 那一支在
+        // cgen_expr_call_arg_emit.inc 的 092r 分支已落临时, 那边登记交回, 这里只管 ByVal。
+        if (!isByRef && i < calleeParams.size() && i < node.positional.size()
+            && node.positional[i]) {
+            const std::string clsArg136 = cParamClassPtrType(calleeParams[i]);
+            if (!clsArg136.empty()
+                && argHandsOverProjectRef(*node.positional[i], clsArg136)) {
+                const std::string tmpArg136 = classSlotTempName(clsArg136, tempCounter_++);
+                c_.addPending(clsArg136 + " " + tmpArg136 + " = " + argVal + ";");
+                registerClassArgRefHandback(clsArg136, tmpArg136);
+                argVal = tmpArg136;
+            }
+        }
         args.push_back(std::move(argVal));
     }
 

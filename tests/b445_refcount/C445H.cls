@@ -62,6 +62,14 @@ End Property
 ' claim 一枚, 否则调用方放手就把持有者手里那枚拆了。
 Public mField19 As C445
 
+Private mKids23(1 To 2) As C445
+
+' W23 = 数组字段那一档 (腿⑤ 的数组形): 元素那两枚**由各自那一格握**, 持有者拆掉时逐枚交回。
+Public Sub FillKids23()
+    Set mKids23(1) = New C445
+    Set mKids23(2) = New C445
+End Sub
+
 Public Sub Hold19()
     Set mField19 = New C445
 End Sub

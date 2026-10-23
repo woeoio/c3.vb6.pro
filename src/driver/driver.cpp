@@ -48,6 +48,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include "semantics/interface_sig.hpp"  // 账 #305 新账 #489: ifaceSlotKeyNamed (legacy 槽键与 D2 同源的位主人)
 #endif
 
 namespace vb6c3 {

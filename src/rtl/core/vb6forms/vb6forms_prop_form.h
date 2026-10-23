@@ -16,6 +16,10 @@ int32_t vb6_GetWindowState(void* hwnd);
 void vb6_SetWindowState(void* hwnd, int32_t val);
 int32_t vb6_GetScaleWidth(void* hwnd);
 int32_t vb6_GetScaleHeight(void* hwnd);
+// 账 #305 第四/第五格: 与 ScaleWidth/ScaleHeight 同一套自定义坐标系的另外两个数。
+// 读法同样问 vb6_UserScaleOf (见 vb6forms_widget.c), 没挂坐标系时恒 0 (VB6 语义)。
+int32_t vb6_GetScaleLeft(void* hwnd);
+int32_t vb6_GetScaleTop(void* hwnd);
 int32_t vb6_GetControlBox(void* hwnd);
 void vb6_SetControlBox(void* hwnd, int32_t val);
 int32_t vb6_GetMaxButton(void* hwnd);

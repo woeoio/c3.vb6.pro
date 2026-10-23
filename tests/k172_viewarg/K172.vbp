@@ -1,0 +1,7 @@
+Type=Exe
+Name="K172ViewArgApp"
+Module=mdlK172; mdlK172.bas
+Class=IK172; IK172.cls
+Class=K172Alpha; K172Alpha.cls
+Class=K172Beta; K172Beta.cls
+Startup="Sub Main"

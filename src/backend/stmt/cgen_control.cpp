@@ -455,6 +455,24 @@ void CCodeGen::visit(ForEachStmt& node) {
             // C 侧声明就是 vb6_VARIANT, 故先判它.
             if (knownVariantVars_.count(lower)) {
                 emitVariantSlotStore(varAcc, "vb6_VariantFromStackVARIANT(&" + feVar + ")", true);  /* §B164 站③ COM 集合: 栈 VARIANT 带权副本 = 自己持有(改前只赋不清, 每元素漏 81/71 B) */
+            } else if (const std::string iface174 = slotLegacyIfaceViewName(lower); !iface174.empty()) {
+                // 账 #305 新账 #471 (第一百七十四刀) 站A: 循环变量是**视图** (值结构体 `vb6_iface_<I>`)
+                // ⇒ 那一发既不能收 `vb6_VARIANT` (两台实测 = cl C2440, 语料 `Ray.vbp` 这一族 14 站),
+                // 也不能按工程类那一档去 cast 成 `vb6_cls_<I>*` (第一百六十五刀撞过的那一发)。
+                // 元素是集合交回来的本族包装器: 「它是哪一枚实现类」只有运行期知道 —— 接口自己铸的
+                // 那一发 `view_from` 按类名选中那一对 wrap (`static` 的 vtbl 在实现类那份 TU 里,
+                // 消费侧看不见, 所以这一问必须留在运行期)。视图是**借来的值** ⇒ 不退旧, 与第一百七十二刀站B 一字口径。
+                // 三行的**次序**是判据的一部分: `vb6_ComObject_GetInstance` 头一句就是 `obj->vtable` 的裸读
+                // (它自己不带闸, 见 vb6comserver_obj.c:659 那条宿主 HWND 回落), 而集合里完全可以塞着不是本族
+                // 包装器的东西 (数值元素 / 外部 COM 对象 / 控件句柄)。`ClassNameA` 第一句问的正是那位唯一
+                // 权威 `vb6_ComObject_IsBoxed` ⇒ 先取名字, 名字非空才敢要实例, 认不出交 NULL 视图 (静默)。
+                const std::string box174 = "_vb6_fe_box_" + std::to_string(tmpIdx);
+                const std::string name174 = "_vb6_fe_name_" + std::to_string(tmpIdx);
+                c_.emitLine("void* " + box174 + " = vb6_ComUnpackObject(&" + feVar + ");");
+                c_.emitLine("const char* " + name174 + " = vb6_ComObject_ClassNameA(" + box174 + ");");
+                c_.emitLine(varAcc + " = " + legacyIfaceViewFromFn(iface174) + "("
+                            + name174 + " ? vb6_ComObject_GetInstance(" + box174 + ") : (void*)0"
+                            + ", " + name174 + ");");
             } else if (knownObjectVars_.count(lower) || knownTypedComVars_.count(lower)) {
                 c_.emitLine(varAcc + " = vb6_ComUnpackObject(&" + feVar + ");  /* P24-05: For Each Object: VARIANT→IDispatch* */");
             } else if (knownClassVars_.count(lower)) {

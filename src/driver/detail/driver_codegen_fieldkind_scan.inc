@@ -53,6 +53,11 @@
     //     另格账 §B118) / 项目类·COM·未知对象名 (void* 或类指针, Fix 090bx 那批) /
     //     UDT (vb6_type_x) / 查不到符号的名字。
     std::unordered_map<std::string, std::unordered_map<std::string, Vb6Type>> classFieldKindMap;
+    // 账 #476 §B190: 同一趟扫描、同一个来源 (VariableDecl), 另运一份**动态数组成员**的声明
+    // 语法 (只运 `As <T>` 的 AST + 秩, 不运档位 —— 档位到 C 元素类型的映射在发码层那一枚
+    // 出口里做, 与发射类结构体字段同一枚)。上面那张表刻意不收数组字段, 而 `clsreg_` 在无
+    // 继承的工程里根本不建表 ⇒ 类字段那一腿以前在发码侧没有答案 (§B190 的 11 处 C2064)。
+    ClassMemberArrayMap classMemberArrayMap;
     auto classFieldBucket = [](const VariableDecl& var, const TypeSystem& typeSys,
                                SymbolTable& symTab) -> Vb6Type {
         if (var.isDynamicArray || !var.dimensions.empty()) return Vb6Type::Unknown;
@@ -84,6 +89,17 @@
         for (const auto& decl : module->declarations) {
             if (decl->kind != ASTNodeKind::VariableDecl) continue;
             const auto& var = static_cast<const VariableDecl&>(*decl);
+            // 账 #476 §B190: 动态数组成员**另外**记一份语法 (与 kindByName 同一循环、同一来源,
+            // 不新开一趟扫描)。只收 `Field() As T` 这一形; 定长数组 (`Field(2)`) 不归 §B190
+            // —— 那一形的元素访问走 Pattern A (C 多维数组), 出口也只认动态。
+            if (var.isDynamicArray) {
+                MemberArraySyntax syn;
+                syn.asType = var.asType.get();
+                syn.rank = (int)var.dimensions.size();
+                const std::string oLower = Symbol::toLower(var.name);
+                classMemberArrayMap[Symbol::toLower(module->moduleName)][oLower] = syn;
+                classMemberArrayMap[Symbol::toLower(module->moduleName)]["m_" + oLower] = syn;
+            }
             const Vb6Type bucket = classFieldBucket(
                 var, analyzers_[i]->typeSystem(), analyzers_[i]->symbolTable());
             if (bucket == Vb6Type::Unknown) continue;

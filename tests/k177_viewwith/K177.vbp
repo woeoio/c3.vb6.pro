@@ -1,0 +1,7 @@
+Type=Exe
+Name="K177ViewWithApp"
+Module=mdlK177; mdlK177.bas
+Class=IK177; IK177.cls
+Class=K177Alpha; K177Alpha.cls
+Class=K177Beta; K177Beta.cls
+Startup="Sub Main"

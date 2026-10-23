@@ -348,15 +348,20 @@
         } else {
             // 账 #305 §B218 (甲) 腿②: 目标是一格 typed 工程类槽 ⇒ 走那位主人。
             // 类名两问按 #408 定的次序排: 先问 AST (作用域感知), 落空才问按名那张表。
-            // 拿不到类名、或槽是**下标/调用形态** (`VB6_SA_*(...)` / `dict(key)`) 时维持
-            // 今天那条裸拷贝: 那种形状里 target 出现三次 = 下标算术求值三次, 而「下标里的
-            // 副作用算不算一次」这一问本刀没有答案, 不猜 (已在册, 与腿⑤ 同批开格)。
+            // 拿不到类名时维持今天那条裸拷贝。**下标形态从第一百四十刀起也进主人** (走地址
+            // 那一臂, 见下面 elemTy140)，仍留在外面的只有**真调用形态** (`dict(key)`)：那种
+            // target 不是左值，取不了址，而「下标算术里的副作用算几次」已由第一百三十九刀
+            // 量成一句有答案的口径 (两栏都答一次) ⇒ 地址临时量那一臂就是它的答案。
             std::string clsOfSlot = node.target ? inferClassTypeOfExpr(*node.target)
                                                 : std::string();
             if (clsOfSlot.empty()) {
                 auto itSlot = knownClassVars_.find(targetLower);
                 if (itSlot != knownClassVars_.end()) clsOfSlot = itSlot->second;
             }
+            // 账 #305 §B218 第一百六十五刀: 槽装的是 legacy 接口视图 ⇒ 本主人不接手
+            // (它只会写 `vb6_cls_<名>* 旧 = 目标`，而那一型从没为接口造过 = cl C2440)。
+            // 视图那一档今天落回下面那条裸拷贝 —— 与**局部**声明那一路发的一字相同 (实测)。
+            if (!clsOfSlot.empty() && slotIsLegacyIfaceView(targetLower)) clsOfSlot.clear();
             // 账 #305 §B218 (甲) 腿②': 目标是**出参槽** `(*p)` (ByRef 形参那座桥的写回站)。
             // 写进去的那一枚由本过程一位局部持有, 而腿④ 会在过程出口放手它 ⇒ 这一格不自己取走
             // 一枚引用, 调用者还看着它时它就已经拆了 (门 #763 实测 = b187 第五臂
@@ -368,15 +373,31 @@
                 clsOfRhs = node.value ? inferClassTypeOfExpr(*node.value) : std::string();
                 outSlotClaim = !clsOfRhs.empty();
             }
-            // 账 #305 §B218 (甲) 刀3: 「不 claim」那一臂现在有两个成因 —— `New <类>`, 以及
+            // 账 #305 §B218 (甲) 形A (第一百四十四刀): 出参槽那一格**由调用方持有**那一枚引用
+            // (调用侧现在是把持有者自己的地址交出来的)，所以覆写 = 取走新的 + **当场退旧**，
+            // 与第一百三十九刀⑤栏那句代理读数「落回调用者并当场退旧」同一条口径。
+            // 类名问**形参声明档** (classOfProjectRefOutSlot)，不再问右侧那枚文本的形状 ——
+            // 下面那条 outSlotClaim 是按「RHS 发码文本有没有括号」分臂的旧判据，同一条语句
+            // 换种写法就换一套答案 (New / Nothing / (*q) 三形落裸写、只有裸标识符落腿②′)，
+            // 它现在只剩 §B187 那一档 (出参槽是泛对象 / Variant) 还会走到，一字未动。
+            const std::string outCls144 = classOfProjectRefOutSlot(target);
+            // 账 #305 §B218 (甲) 刀3: 「不 claim」那一臂有两个成因 —— `New <类>`, 以及
             // 工程内过程交回来的那一枚 (自带对价)。问句只有一处: rhsTransfersProjectRef。
+            // 第一百三十四刀给它补了第二档 (forViewSlot): 本站的槽装实例 ⇒ 报 false。
             bool rhsTransferred = node.value && node.value->kind == ASTNodeKind::NewExpr;
             if (!rhsTransferred && node.value) {
-                rhsTransferred = rhsTransfersProjectRef(*node.value);
+                rhsTransferred = rhsTransfersProjectRef(*node.value, false);
             }
-            if (!clsOfSlot.empty() && target.find('(') == std::string::npos
-                && !procClassFormals_.count(targetLower)) {
-                emitClassSlotRefSet(target, clsOfSlot, value, rhsTransferred, false);
+            // 账 #305 §B218 第一百四十刀: 「带括号就不进主人」那条老闸对**数组元素**不成立 ——
+            // VB6_SA_AT(…) 是产出左值的函数式宏 (Fix 113f)，第一百三十九刀量到它今天裸写
+            // ⇒ 覆写不退旧值。改走主人的地址那一臂：元素档非空 = 这一形有可寻址的地址临时量，
+            // 下标算术仍只算一次；真调用形态 (`dict(key)`) 元素档为空串 ⇒ 维持裸拷贝。
+            const std::string elemTy140 = classArraySlotElemType(target);
+            if (!clsOfSlot.empty() && !procClassFormals_.count(targetLower)
+                && (target.find('(') == std::string::npos || !elemTy140.empty())) {
+                emitClassSlotRefSet(target, clsOfSlot, value, rhsTransferred, false, elemTy140);
+            } else if (!outCls144.empty()) {
+                emitClassSlotRefSet(target, outCls144, value, rhsTransferred, false);
             } else if (outSlotClaim) {
                 emitClassSlotRefSet(target, clsOfRhs, value, rhsTransferred, true);
             } else {

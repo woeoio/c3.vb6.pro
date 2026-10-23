@@ -29,6 +29,11 @@
     // === Inherits (tB B07b): 祖先成员的转发桩定义 (排在过程体之后、工厂函数之前) ===
     if (isClassModule_ && !currentClassIsInterface) emitInheritedProcDefs(module);
 
+    // 账 #305 新账 #471 (第一百七十四刀): 接口自己这份 TU 再补一发「按运行期类名选中那一枚 wrap」
+    // —— For Each 的循环变量声明成视图时, 元素是哪一枚实现类只有运行期知道 (`.obj` 与类名都住在
+    // 集合交回来的那枚包装器里)。只有这一份 TU 同时看得见全工程实现类的那批 wrap 原型。
+    if (isClassModule_ && currentClassIsInterface) emitLegacyIfaceViewFrom(module);
+
     // === 类模块: 生成工厂函数 ===
     if (isClassModule_ && !currentClassIsInterface) {  // P6.4: 接口类不生成工厂/析构函数
         emitClassFactory(module);

@@ -304,6 +304,13 @@
     void setClassFieldKindMap(const std::unordered_map<std::string, std::unordered_map<std::string, Vb6Type>>* m) {
         classFieldKindMap_ = m;
     }
+    // 账 #476 §B190: 「类 → 动态数组成员 → 声明语法」表 (driver 同一次扫描另运一份)。
+    // ⚠ 与上面那张表的分工: 那张刻意**不收数组字段** (数组元素的赋值是另一格账), 而
+    // `clsreg_` 在无继承的工程里根本不建表 ⇒ 类字段那一腿只有这一份来源。
+    // 本表只运语法 (`As <T>` 的 AST + 秩); 档位到 C 元素类型的映射在那一枚出口里做。
+    void setClassMemberArrayMap(const ClassMemberArrayMap* m) {
+        classMemberArrayMap_ = m;
+    }
     // 「类 <className> 的字段 <memberName> 是哪一档」—— 这一问的**唯一**出口。
     // 交回 Vb6Type::Unknown = 表里没有这个名字 (不是标量数据字段, 或整个类不认识),
     // 调用点因此**不许**把它当成"那就是字段" —— 数组/定长串/对象字段/UDT 都走这里交回 Unknown。
@@ -358,6 +365,11 @@
     // Fix <vbeclipse>: 注入"接口 → 全部实现类"表 (小写接口名 → 规范类名列表).
     void setInterfaceAllImplementers(const std::map<std::string, std::vector<std::string>>* m) {
         interfaceAllImplementers_ = m;
+    }
+    // 账 #305 新账 #464: 注入 driver 预扫描建好的 legacy 接口形状表
+    // (小写接口名 → 接口模块自己的成员声明, 按声明顺序)。只读。
+    void setLegacyIfaceShapes(const LegacyIfaceShapeMap* m) {
+        legacyIfaceShapes_ = m;
     }
     // 查询接口的全部实现类 (保持 driver 预扫描的首见序)。空 vector = 无实现类
     // 或表未注入 => 接口桩退回零值。

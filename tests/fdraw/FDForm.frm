@@ -398,6 +398,27 @@ Debug.Print "FD27-melinestart=" & TF(ok27) & " raw=" & CStr(rowY0) & "," & CStr(
     ok32 = (rowT0 < 0) And (rowT > 0) And (picP.CurrentX = 25) And (picP.CurrentY = 100)
     Debug.Print "FD32-piclinestep=" & TF(ok32) & " raw=" & CStr(rowT0) & "," & CStr(rowT) & _
                " pen=" & CStr(picP.CurrentX) & "," & CStr(picP.CurrentY)
+    ' 305 B227: 画布动词**不写括号**那一形 (`Me.Scale` / 裸 `Scale`) = 复位自定义坐标系。
+    ' 改前这两形落到 vb6_ComCall(hwnd, L"Scale", NULL, 0) —— 假 IDispatch, 编得过、链接过、
+    ' 跑起来一声不响, 于是复位不生效: `after=` 那一半读到的还是设进去的 10/20 (30/40)。
+    ' 两枚各钉两头: 设进去读得到 (证明 Me.Scale (x1,y1)-(x2,y2) 那一形没坏) +
+    ' 复位后读回 0 (证明不写括号那一形真的到了 RTL 出口)。
+    Dim ok33 As Boolean, ok34 As Boolean
+    Dim sl33 As Long, st33 As Long, sl34 As Long, st34 As Long
+    Me.Scale (10, 20)-(100, 100)
+    sl33 = Me.ScaleLeft
+    st33 = Me.ScaleTop
+    Me.Scale
+    ok33 = (sl33 = 10) And (st33 = 20) And (Me.ScaleLeft = 0) And (Me.ScaleTop = 0)
+    Debug.Print "FD33-mescalereset=" & TF(ok33) & " raw=" & CStr(sl33) & "," & CStr(st33) & _
+               " after=" & CStr(Me.ScaleLeft) & "," & CStr(Me.ScaleTop)
+    Me.Scale (30, 40)-(200, 200)
+    sl34 = Me.ScaleLeft
+    st34 = Me.ScaleTop
+    Scale
+    ok34 = (sl34 = 30) And (st34 = 40) And (Me.ScaleLeft = 0) And (Me.ScaleTop = 0)
+    Debug.Print "FD34-barescalereset=" & TF(ok34) & " raw=" & CStr(sl34) & "," & CStr(st34) & _
+               " after=" & CStr(Me.ScaleLeft) & "," & CStr(Me.ScaleTop)
     r = ReleaseDC(picP.hwnd, dp)
     Point 7, 9
     Debug.Print "FD23-userpoint=" & CStr(userPoint)

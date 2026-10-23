@@ -1,0 +1,7 @@
+Type=Exe
+Name="K175ViewStmtApp"
+Module=mdlK175; mdlK175.bas
+Class=IK175; IK175.cls
+Class=K175Alpha; K175Alpha.cls
+Class=K175Beta; K175Beta.cls
+Startup="Sub Main"

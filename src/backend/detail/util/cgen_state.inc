@@ -298,6 +298,10 @@
     // (classFieldIsVariantSlot / classFieldIsBstrSlot / classFieldIsScalarData) 也都问它。
     const std::unordered_map<std::string, std::unordered_map<std::string, Vb6Type>>*
         classFieldKindMap_ = nullptr;
+    // 账 #476 §B190: 「类 → 动态数组成员 → 声明语法」表 (driver 同一次扫描另运一份, 只运
+    // 语法不运档位)。上面那张表刻意不收数组字段, `clsreg_` 在无继承工程里不建表 ⇒ 类字段
+    // 那一腿只有这一份来源; 档位到 C 元素类型的映射在 resolveMemberArrayDecl 里做。
+    const ClassMemberArrayMap* classMemberArrayMap_ = nullptr;
     // Fix 045: 跨模块 Variant 返回值函数 C 名集合 — 由 driver.cpp 预扫描所有模块构建.
     // 包含所有返回 vb6_VARIANT 的项目函数的 C 名称 (如 "vb6_cAsyncSocket_Znl").
     // 在 cExprIsVariant() 中检查 C 表达式是否调用这些函数, 以正确识别 Variant 值.
@@ -408,6 +412,33 @@
     int ansiCounter_ = 0;
     int vcmpCounter_ = 0;  // P25: Variant比较临时变量计数器
 
+    // 账 #464 §B164 回收刀: 一条语句里现造的带权临时量（**整枚实参 = 一个 mint 调用**）
+    // 提成具名临时量之后, 语句末按**档**收回。
+    // 档: 1 = BSTR（vb6_BSTR_Free）· 2 = VARIANT（vb6_VariantClear(&t)）。
+    // 档号**只由 mint 出口的返回档定**（owned_temp_keeps.hpp 的 [own] 节）——
+    // 源表达式的 VB 档不作数, 消费者的 VB 形参档也不作数。
+    // 连着记下**发声明时那层的缩进**: 语句末的收回行只在同层落地, 层不同就说明声明发在
+    // 一对已经合上的花括号里 ⇒ 那时**宁可不收**也不许发成引用越界的 C（同 boxTempsToClear_）。
+    struct OwnedTemp { std::string name; int level; int kind; };
+    std::vector<OwnedTemp> ownedTempsToFree_;
+    int ownedTempCounter_ = 0;
+    // 拼接站左操作数守卫: 左操作数的**发码文本**被拼接站那条「含 vb6_BSTR_Concat 子串」的
+    // 判据读过 ⇒ 左操作数里的一切**不许提名**（提了名那条判据会翻面 ⇒ 行为变了）。
+    // 左操作数发码期间把计数抬起来, 右操作数发码期间落回去（递归地护住每一层的左操作数）。
+    int concatLeftDepth_ = 0;
+    // 当前**语句**所在的那一层（emitStmtList 每进一条语句记一次）——
+    // 回收刀只在「这一枚临时量的声明与它的收回落在同一层」时才提名：
+    // 声明发在语句这一层 ⇒ 语句末的收回行也发在语句这一层 ⇒ 同作用域，引用不越界。
+    // 声明若发在更深的块里（那一层的块已经合上了）⇒ 宁可不收。
+    int stmtLevel_ = 0;
+    // 账 #464 §B164: **块内条件**的深度 —— 回收刀的门 ⑨。
+    // 有一类表达式是在**块已经开起来之后**才求值的：ElseIf 的条件
+    //   （生成器发成 `} else {` + 条件 + `if (...) {`，见 visit(IfStmt) 的 Fix 063b）
+    //   —— 那一枚临时量的**声明**因此落在 else 块**内**，而语句末的收回行落在 else 块**外**
+    //   ⇒ 引用越界（cl C2065: '_own_N': 未声明的标识符）。
+    // 这一格只许在「块内条件」里挡下提名（宁可不收 ⇒ 与基线同漏，不新增漏）。
+    int blockCondDepth_ = 0;
+
     // 已知COM对象变量名集合 (小写) - 用于后期绑定 obj.Method → vb6_ComCall(obj, L"Method", ...)
     std::unordered_set<std::string> knownObjectVars_;
 
@@ -508,12 +539,31 @@
     // 账 #305 §B218 (甲) 腿④: 「过程出口这一格该不该放手」收成一张**带档**的表
     // (原来只有 ivref 一档有答案, 具体类那一档压根没有登记面 = 今天每条 `Dim x As C` 漏一枚)。
     // isView = true 走 `->vt->Release` (接口薄指针), false 走本类那对 mint 出入口 (工程类实例)。
+    // isCarrier = true = 第三档「数组载体」(第一百五十二刀): 这一格躺的不是引用而是一枚载体,
+    // 出口发的不是 `_Release` 而是那位数组主人 (出厂逐枚)。arrayName = 登记那一刻的**数组名**,
+    // 出口照它问「哪一类的元素 / 几维」—— 两问与语句站点共用同一位主人, 不另开第二问。
     struct SlotRelease {
         std::string expr;
         bool isView;
         std::string clsName;   // 只有工程类那一档带类名
+        bool isCarrier = false;
+        bool freeCarrier = false;  // 只有载体档用: 出口除逐枚交回之外还销毁载体
+        std::string arrayName; // 只有载体档带带数组名
     };
     std::vector<SlotRelease> slotsToRelease_;
+    // 账 #305 §B218 (甲) 第一百五十六刀: 「这一档局部数组的载体有没有在本过程里被整体用掉」
+    // 由过程入口那一趟预扫 (scanLocalArrayEscapes) 一次性回答, 存小写裸名。登记口只在这张名单
+    // 不含它时才允许出口销毁载体 —— 认不出的形状一律算逃逸 (漏判的方向是继续漏, 不是悬空读)。
+    std::set<std::string> escapedLocalArrays_;
+    // 第一百五十六刀立、第一百六十四刀改口径的第二道闸: 「出口那一发拿这个名字去销毁, 那一刻它
+    // 在不在场」。从前这一问等于「Dim 是不是过程体的直接子句」—— 嵌在 If / For / With 括号里的那
+    // 几档只在那对括号内存在, 拿它们去销毁 = cl C2065 (门 #821 的 FlexGridX86 十二发)。现在声明
+    // 住在序言里就算在场: 动态那一档从 Fix 086 起就是, 定长与多维那一档由本刀补上 ⇒ 提升开着 ⇒
+    // 每一档局部数组都进名单; C3_NO_HOIST 关掉提升 ⇒ 缩回「只有直接子句」那一个答案。
+    std::set<std::string> exitVisibleArrayCarriers_;
+    // 第一百六十四刀: 提升那一趟发过序言声明的那几枚载体名 (小写)。名单由主人一处写、原位那一发
+    // 一处读 —— 原位不许自己再推一遍「我这枚到底在不在序言」。
+    std::set<std::string> preludeArrayCarriers_;
     // Set 语句里"旧值"临时变量的序号 (只有新语法路径消耗, 不影响其他工程)
     int ivrefSetSeq_ = 0;
 
@@ -1023,6 +1073,10 @@
     // driver 侧预扫描提供。接口成员桩靠它把调用转进实现类的槽表 —— 单实现映射
     // (interfaceImplementers_) 在多实现接口上是空的, 不能用于分派。
     const std::map<std::string, std::vector<std::string>>* interfaceAllImplementers_ = nullptr;
+
+    // 账 #305 新账 #464: legacy 接口（没进 tB `IfaceRegistry` 的那批 .cls 宿主）的**形状表**，
+    // driver 预扫描建、发码期只读。键 = 小写接口名；值 = 规范拼写 + 按序的可实现成员声明。
+    const LegacyIfaceShapeMap* legacyIfaceShapes_ = nullptr;
 
     // Interface 契约 (tB, ai/022 B04): stage 2.7 建好的工程级只读登记表 (driver 注入).
     // 槽表/适配器/薄指针类型都由它驱动, 与 legacy 的 implementsNames 口径互不影响.

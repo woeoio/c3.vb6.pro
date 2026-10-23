@@ -113,6 +113,86 @@ Vb6Type CCodeGen::resolveArrayElemType(ASTNode* typeRef) const {
     return Vb6Type::Variant;
 }
 
+// 账 #476 §B190 (第一百九十刀的第一步: 收出口) —— 「这个成员的声明档」的唯一答案。
+// 两腿, 都由**调用方**把 owner 解好再传进来:
+//   ① UDT 所有者 (ownerUdtCType = `vb6_type_X`) → 问 udtMembers (§B220 那枚的老来源,
+//      原样搬进来, 不留第二份答案)。
+//   ② 工程类所有者 (ownerClassName = 类名) → 问 clsreg_ 里那个模块的 structFieldDecls
+//      (含继承字段, 根→叶)。类字段那一腿**以前没有答案** —— 这就是 §B190 那 11 处 C2064 的根。
+// 只有**动态**数组成员答 ok=true; 定长数组 (arraySize>0) 与标量字段答 false, 调用点照旧
+// 走它们自己那条路 (Pattern A / 普通字段), 不许被本格接走。
+bool CCodeGen::resolveMemberArrayDecl(const std::string& ownerUdtCType,
+                                     const std::string& ownerClassName,
+                                     const std::string& memberName,
+                                     MemberArrayDecl& out) const {
+    out = MemberArrayDecl();
+    if (memberName.empty()) return false;
+    const std::string mem = Symbol::toLower(memberName);
+    const std::string memM = "m_" + mem;   // 字段名两种拼法都在 (与 classFieldKind 同口径)
+
+    auto fillFromUdtMember = [&](const struct Symbol::UdtMemberInfo& mi) {
+        out.ok = true;
+        out.isDynamic = true;
+        out.elemType = mi.type;
+        out.isUdt = (mi.type == Vb6Type::UserDefinedType);
+        // Fix 092s: UDT 元素必须发 vb6_type_<UDT>; mapSaElemCType 对 UserDefinedType 会
+        // 退化成 vb6_VARIANT ⇒ 元素大小/取址全错 (cTlsSocket 4086/4093 实测)。
+        out.elemCType = (out.isUdt && !mi.typeRefName.empty())
+            ? ("vb6_type_" + cIdent(mi.typeRefName)) : mapSaElemCType(mi.type);
+        out.arrayRank = mi.arrayRank;
+    };
+
+    // ---- 腿①: UDT ----
+    if (!ownerUdtCType.empty()) {
+        const std::string prefix = "vb6_type_";
+        if (ownerUdtCType.size() <= prefix.size()
+            || ownerUdtCType.compare(0, prefix.size(), prefix) != 0) return false;
+        Symbol* udtSym = symTab_.lookupModule(ownerUdtCType.substr(prefix.size()));
+        if (!udtSym) udtSym = symTab_.lookup(ownerUdtCType.substr(prefix.size()));
+        if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return false;
+        for (auto& mi : udtSym->udtMembers) {
+            const std::string miLower = Symbol::toLower(mi.name);
+            if (miLower != mem && miLower != memM) continue;
+            if (!mi.isArrayDynamic) return false;      // 定长/标量: 不归本格
+            fillFromUdtMember(mi);
+            return true;
+        }
+        return false;
+    }
+
+    // ---- 腿②: 工程类 (或窗体模块) ----
+    // ⚠ 这里**不能**问 clsreg_: runClassChainPrepass 在工程里没有 Inherits / 虚修饰符 /
+    // Protected 成员时根本不建表 (早退), 而语料里绝大多数类正是独立的 ⇒ 查不到。
+    // 正确答案来自 driver 同一次扫描运来的语法表 (classMemberArrayMap_): 它只运
+    // `As <T>` 的 AST + 秩, 档位到 C 元素类型的映射就在本函数里做 —— 与发射类结构体字段
+    // (cgen_base_generate_c_open.inc) 用的是**同一枚** resolveArrayElemType /
+    // resolveArrayUdtElemCType, 所以分配侧与访问侧必然同档。
+    if (!ownerClassName.empty() && classMemberArrayMap_) {
+        auto it = classMemberArrayMap_->find(Symbol::toLower(ownerClassName));
+        if (it != classMemberArrayMap_->end()) {
+            const std::string mem2 = mem;
+            auto f = it->second.find(mem2);
+            if (f == it->second.end()) f = it->second.find(memM);
+            if (f != it->second.end()) {
+                const MemberArraySyntax& syn = f->second;
+                // 经 const 引用读出来是 `ASTNode* const`, 而 resolveArrayElemType 吃非 const
+                // 指针 ⇒ 拷一份 (内容同一个节点, 不是第二份真相)。
+                ASTNode* asType = syn.asType;
+                out.ok = true;
+                out.isDynamic = true;
+                out.elemType = asType ? resolveArrayElemType(asType) : Vb6Type::Variant;
+                const std::string udtElem = asType
+                    ? resolveArrayUdtElemCType(asType) : std::string();
+                if (!udtElem.empty()) { out.isUdt = true; out.elemCType = udtElem; }
+                else out.elemCType = mapSaElemCType(out.elemType);
+                out.arrayRank = syn.rank;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // 账 #305 §B154 (第四十二刀): ReDim 的元素档只有一个答案来源 —— 声明。
 // 旧写法问的是 `resolveArrayElemType(node.asType.get())`, 而 ReDim 不带 As 子句时
 // asType 为空, 于是**标量/字符串/对象**那一族一律回落 vb6_sa_variant, 只有 UDT 有回退
@@ -125,12 +205,44 @@ Vb6Type CCodeGen::resolveArrayElemType(ASTNode* typeRef) const {
 // `a(2,3)="X"` 之后 `v = a` 再读 v(2,3) 交**空串**, VarType 交 8204 而不是声明那一档。
 // 收成一处 = 这一枚出口: As 子句在场时**仍然优先** (VB6 语义, 且语料实测 declared==As
 // 占 1580/1588, 两处相异的形状今天没有实物), 缺席时问声明表, 表里没有才回落 Variant
-// (隐式 Variant 数组 / 成员链 / With 成员 —— 沿用 Fix 180 的「不去猜」纪律)。
-Vb6Type CCodeGen::resolveReDimElemType(const std::string& lowerVar, ASTNode* typeRef) const {
+// (隐式 Variant 数组 / With 成员 —— 沿用 Fix 180 的「不去猜」纪律)。
+// 账 #475 §B220 (第一百七十九刀): UDT 成员的动态数组 (`ReDim t.Items(1 To 3)`) 不在
+// arrayElemTypes_ 里 (那张表只按裸变量名登记), 于是分配侧回落 vb6_sa_variant 而访问侧
+// Pattern B 按成员声明发 VB6_SA_AT(int32_t, t.Items, i) —— 16 字节一步 vs 4 字节一步。
+// owner 能由 knownUdtVars_ 认出来时, 就问**同一份** udtMembers 的 mi.type (与 Pattern B
+// 同源); 认不出 (类字段 me->Foo.Items / With 成员 / 跨模块表为空) 仍回落 Variant,
+// 与 Fix 180 的 resolveUdtMemberArrayCType 保持同一条边界。
+// 账 #476 §B190: 点号链那一支改问**那一枚出口** (§B220 起它自己不再摸 udtMembers),
+// 并且**新接上类字段**—— owner 在 knownClassVars_ 里就是工程类, 以前这一腿没有答案,
+// 于是 `ReDim o.Items(1 To 3)` 分配侧回落 vb6_sa_variant 而访问侧按声明发 int32_t
+// (§B220 记的就是这个病, 只是它只修了 UDT 那一半)。
+// As 子句与裸变量表那两条腿不动: 前者是 VB6 语义 (写了 As 就以它为准), 后者是
+// 六条声明路填的按名表 (本格管的是"成员", 不是裸变量)。
+Vb6Type CCodeGen::resolveReDimElemType(const std::string& lowerVar, ASTNode* typeRef) {
     if (typeRef) return resolveArrayElemType(typeRef);
     if (!lowerVar.empty()) {
         auto it = arrayElemTypes_.find(lowerVar);
         if (it != arrayElemTypes_.end()) return it->second;
+        const size_t dot = lowerVar.rfind('.');
+        if (dot != std::string::npos && dot > 0 && dot + 1 < lowerVar.size()) {
+            const std::string owner = lowerVar.substr(0, dot);
+            const std::string member = lowerVar.substr(dot + 1);
+            // UDT 腿: 走出口 resolveUdtMemberElemInfo → resolveMemberArrayDecl (单一答案, 满足账 #475/A8)
+            auto ou = knownUdtVars_.find(owner);
+            if (ou != knownUdtVars_.end()) {
+                Vb6Type et;
+                std::string uc;
+                if (resolveUdtMemberElemInfo(ou->second, member, et, uc)) return et;
+            }
+            // 工程类腿: 直接问出口 (§B190 新增, 腿①不再绕过出口)
+            auto oc = knownClassVars_.find(owner);
+            if (oc != knownClassVars_.end()) {
+                MemberArrayDecl mad;
+                if (resolveMemberArrayDecl(std::string(), oc->second, member, mad) && mad.ok) {
+                    return mad.elemType;
+                }
+            }
+        }
     }
     return Vb6Type::Variant;
 }

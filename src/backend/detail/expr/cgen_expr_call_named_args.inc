@@ -59,10 +59,15 @@
                     if (piIsCurrentByRefParam) {
                         // Fix 189: 被调方形参是 ByRef Variant 时不可直传 T*
                         // (同位置实参路径 — vt 取到 T 的字节 → 0xC0000005)
+                        // 账 #305 §B218 (甲) 形A (第一百四十四刀): 被调方那一格是工程类槽、**且实参那一格
+                        // 自己也是工程类形参** (链) 时才直传；泛对象 / Variant 那一格仍按今天打包
+                        // (§B187 待拍那一族，改了会把静默错值变成响的堆损坏)。
                         std::string piRep189;
                         if (pi < calleeParams.size()
                             && (calleeParams[pi].type == Vb6Type::Variant
-                                || calleeParams[pi].type == Vb6Type::Empty)) {
+                                || calleeParams[pi].type == Vb6Type::Empty)
+                            && !(!cParamClassPtrType(calleeParams[pi]).empty()
+                                 && procClassFormals_.count(Symbol::toLower(innerName)))) {
                             piRep189 = wrapByRefVariantParamArg(innerName, piCurPType189);
                         }
                         argVal = piRep189.empty() ? innerName : piRep189;
@@ -100,10 +105,13 @@
                     if (piArgIsCurrentByRefParam) {
                         // ByRef param of current function → already T*, pass directly
                         // Fix 189: ByRef Variant 形参时需重打包 (见上)
+                        // 账 #305 §B218 (甲) 形A (第一百四十四刀): 工程类槽不算 Variant 槽 (同一道闸)。
                         std::string piRep189b;
                         if (pi < calleeParams.size()
                             && (calleeParams[pi].type == Vb6Type::Variant
-                                || calleeParams[pi].type == Vb6Type::Empty)) {
+                                || calleeParams[pi].type == Vb6Type::Empty)
+                            && !(!cParamClassPtrType(calleeParams[pi]).empty()
+                                 && procClassFormals_.count(Symbol::toLower(argVal)))) {
                             piRep189b = wrapByRefVariantParamArg(argVal, piArgCurPType189);
                         }
                         if (!piRep189b.empty()) argVal = piRep189b;
@@ -117,10 +125,24 @@
                     } else {
                         // 账 #305 §B187 第五腿: 命名实参 (`Foo b:=o`) 那一格与位置实参同桥 ——
                         // 同一个出口、同一条判据, 站点不再各抄一份。
-                        if (pi < calleeParams.size()) {
-                            bridgeByRefLateSlotArg(calleeParams[pi], argVal, actualAst);
+                        // 账 #305 §B218 (甲) 形A (第一百四十四刀): 被调方那一格是**工程类槽**时，
+                        // 只有「实参那一格持有它交出的那一枚」才许直传地址；借来的那一档落临时量 +
+                        // 先付一枚 (copy-in) + 调用行之后交回 —— 与位置实参那两臂问同一位主人。
+                        const std::string clsSlotNo = (pi < calleeParams.size())
+                            ? cParamClassPtrType(calleeParams[pi]) : std::string();
+                        if (!clsSlotNo.empty() && !argHoldsProjectRefInOwnSlot(argVal, clsSlotNo)) {
+                            const std::string tmpNo = classSlotTempName(clsSlotNo, tempCounter_++);
+                            c_.addPending(clsSlotNo + " " + tmpNo + " = "
+                                          + deliverToClassSlot(clsSlotNo, argVal) + ";");
+                            registerClassArgRefCopyIn(clsSlotNo, tmpNo);
+                            registerClassArgRefHandback(clsSlotNo, tmpNo);
+                            argVal = "&" + tmpNo;
+                        } else {
+                            if (pi < calleeParams.size()) {
+                                bridgeByRefLateSlotArg(calleeParams[pi], argVal, actualAst);
+                            }
+                            argVal = "&" + argVal;
                         }
-                        argVal = "&" + argVal;
                     }
                 } else {
                     std::string cType = "int32_t";

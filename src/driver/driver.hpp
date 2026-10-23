@@ -22,6 +22,7 @@
 #include <map>
 #include <unordered_map>
 #include "common/encoding.hpp"
+#include "common/member_array_decl.hpp"   // 账 #476 §B190: 「类 → 动态数组成员 → 声明语法」表
 
 namespace vb6c3 {
 

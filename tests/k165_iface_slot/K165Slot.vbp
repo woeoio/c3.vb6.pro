@@ -1,0 +1,6 @@
+Type=Exe
+Name="K165SlotApp"
+Module=mdlK165; mdlK165.bas
+Class=K165Iface; K165Iface.cls
+Class=K165Impl; K165Impl.cls
+Startup="Sub Main"

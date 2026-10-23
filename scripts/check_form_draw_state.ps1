@@ -526,12 +526,33 @@ if ($stmtTxt -notmatch 'next_\.kind\s*==\s*TokenKind::Step') {
     $bad += "S11 the Line statement no longer routes a Step successor -> `Line Step (x,y)-(x2,y2)` goes back to `Line Input` (VB2001)"
 }
 
+# S12 = 窗体自定义坐标系那一族 (ScaleLeft / ScaleTop, 账 #305 第四/第五格)。
+# 钉的是"这两档有没有出口、出口是不是真存在": 掉了就退回 vb6_ComGetIntProp(hwnd, L"ScaleLeft")
+# 那一格 COM 兜底 —— 编得过、跑得起、读数恒 0, 与"从来没接"长得一模一样, 只有静态针抓得住。
+# 与 host_pseudo / canvas 那两张表同一条纪律: 名单一处, 表加一档两条码头都跟着走。
+$pseudoTxt = [System.IO.File]::ReadAllText((Join-Path $root "src\common\form_pseudo.hpp"))
+$widgetTxt = [System.IO.File]::ReadAllText((Join-Path $root "src\rtl\core\vb6forms\vb6forms_widget.c"))
+$propFormTxt = [System.IO.File]::ReadAllText((Join-Path $root "src\rtl\core\vb6forms\vb6forms_prop_form.h"))
+foreach ($nm in @('scaleleft', 'scaletop')) {
+    $fn = if ($nm -eq 'scaleleft') { 'vb6_GetScaleLeft' } else { 'vb6_GetScaleTop' }
+    if ($pseudoTxt -notmatch ('\{\s*"' + $nm + '"\s*,\s*"' + $fn + '"')) {
+        $bad += ("S12 kFormPseudoRows no longer maps " + $nm + " -> " + $fn + " -> Me." + $nm + " falls back to the COM stub (reads a constant 0)")
+    }
+    if ($widgetTxt -notmatch ('int32_t\s+' + $fn + '\s*\(')) {
+        $bad += ("S12 the RTL no longer defines " + $fn + " -> the table row points at a symbol that does not exist (LNK2019 the moment anyone writes Me." + $nm + ")")
+    }
+    if ($propFormTxt -notmatch ('int32_t\s+' + $fn + '\s*\(')) {
+        $bad += ("S12 vb6forms_prop_form.h no longer declares " + $fn + " -> the call site compiles against an implicit int (x86侥幸、x64 必崩)")
+    }
+}
+
 if ($bad.Count -eq 0) {
     Write-Host ("PASS form draw state: pen store unique, side-list gone, " +
                 "read/write paired for 3 props, encoding symmetric, pen color store unique, " +
                 "Print inside the family asking 7 authorities, conversions dock-only with an axis, " +
                 "Print/Cls one implementation that the control side only forwards to, canvas verbs one common table that the backend asks with both receivers, the parser's coordinate tails asked of that same table, " +
-                "and the [Step] prefix asked once, recorded by the parser and read by all three drawing docks")
+                "and the [Step] prefix asked once, recorded by the parser and read by all three drawing docks, " +
+                "and the two custom-coordinate reads (ScaleLeft/ScaleTop) registered in the one pseudo table with their RTL exits present")
     exit 0
 }
 foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }

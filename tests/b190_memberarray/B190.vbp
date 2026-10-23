@@ -1,0 +1,5 @@
+Type=Exe
+Class=B190Holder; B190Holder.cls
+Module=B190Main; B190Main.bas
+Startup="Sub Main"
+ExeName32="B190d.exe"

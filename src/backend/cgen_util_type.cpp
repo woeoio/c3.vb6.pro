@@ -469,6 +469,22 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                     return Vb6Type::Unknown;
                 }
             }
+            // 账 #476 §B190: 类成员的**动态数组**整体读 (`v = o.Items`) —— VB6 语义是
+            // 「Variant 装一只数组」(VarType 8204), 所以本站答 Variant, 让装箱站走
+            // boxToVariant → `vb6_VariantFromValue` → _Generic 的 `struct vb6_SafeArray1D*`
+            // 臂 (vb6_VariantArray)。以前这一形没有答案, 落到底下那张按返回类型的表之外,
+            // 最终被答成 Long ⇒ 发 `vb6_VariantLong(o->Items)` (cl C2440, 实测两处)。
+            // 只做「是不是动态数组成员」的投影; 档位与元素类型问那一枚出口 (与元素访问 /
+            // ReDim 同一处), 本站不另答一份。
+            if (ma.object) {
+                const std::string cls476 = inferClassTypeOfExpr(*ma.object);
+                if (!cls476.empty()) {
+                    MemberArrayDecl mad476;
+                    if (resolveMemberArrayDecl(std::string(), cls476, ma.memberName, mad476)) {
+                        return Vb6Type::Variant;
+                    }
+                }
+            }
             // 类实例成员函数返回类型 (tB 泛型类特化高发的跨类同名碰撞):
             // 按 object 推断出的宿主类查 memberReturnTypes, 内置标量名直接映射.
             // 下面的裸名 lookupModule(memberName) 在多个类同名成员时只命中
@@ -1140,6 +1156,11 @@ bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
         // 账 #305 §B150: 秩 ≥ 2 的晚绑定槽元素读走这一枚新出口 (variantSlotElemRead 按实参
         //   个数二选一)。不登记 = 表只认识单下标那一形, 新出口发出去下游按裸标量读它。
         "vb6_VariantArrayGetND(",
+        // 账 #305 新账 #407 第一百七十一刀: 视图/裸实例进对象档的那枚新出口交回的也是整只槽
+        //   (RTL 签名 vb6_VARIANT vb6_VariantFromProjectInstance(void*))。不登记 = 站点第二次拿到
+        //   同一枚 AST 时按裸值发码, 实测就是 `FromProjectInstance((void*)(FromProjectInstance(...)).obj)`
+        //   这种自套 (cl C2039「obj 不是 vb6_VARIANT 的成员」)。
+        "vb6_VariantFromProjectInstance(",
         "vb6_VariantFromComResult(",
         "vb6_VariantFromStackVARIANT(",
         "vb6_VariantFromValue(",
@@ -1293,6 +1314,9 @@ bool CCodeGen::cExprIsSafeArrayCarrier(const std::string& cExpr) const {
         // Fix <vbeclipse> rev3: 带 elemType 的新入口。注意**不能**指望上一行前缀
         // 命中 —— `vb6_SafeArrayReDimPreserve1D(` 与 `...1D_T(` 在第 25 个字符处分叉。
         "vb6_SafeArrayReDimPreserve1D_T(",
+        // 账 #305 §B218 (甲) 第一百四十八刀: 那位主人的带回调兄弟同样在第 25 字符后分叉
+        // (`_T(` 与 `_Tr(`), 漏了这一条就是「载体被再包一层」= 双重解引用。
+        "vb6_SafeArrayReDimPreserve1D_Tr(",
         "vb6_VariantToSafeArray1D(",   // 已提取过, 再包一层就是双重解引用
         "vb6_VariantToByteArray(",
         "vb6_StringToByteArray(",
@@ -1519,7 +1543,23 @@ std::string CCodeGen::rewriteByteArrayValue(const std::string& value) const {
 // 模块级数组。判定口径与 cgen_expr_call_prelude.inc 的 isArrayAccess 一致 (先 knownArrays_,
 // 再查模块符号表 sym->isArray), 因此 `GetTickCount()` / `Command()` 这类零参调用不会误判。
 bool CCodeGen::isWholeArrayRef(const Expr* e) const {
-    if (!e || e->kind != ASTNodeKind::IndexOrCallExpr) return false;
+    if (!e) return false;
+    // 账 #305 §B218 第一百五十八刀 (新账 #460): **裸名那一形也是整枚数组**。
+    // `Dim d() As Long ... d = b` 在 VB6 里是合法的整体赋值 (语料 125 处), 而这一问原先只认
+    // `A()` 那对空括号 ⇒ 裸名退化成载体指针直赋: 两个名字共用一枚载体 (别名), 而定长那一形
+    // 还要再过一遍窄整型闸 (`pv = vb6_ChkLong(b)`) = 把载体指针截成 int32, x64 上当场 AV。
+    // 两条排除各有主人: Variant 槽的 C 类型是 vb6_VARIANT 结构体 (装箱那一站负责),
+    // Object 槽是指针但不是载体 ⇒ 都不许按载体处置。
+    if (e->kind == ASTNodeKind::IdentifierExpr) {
+        auto& bare = static_cast<const IdentifierExpr&>(*e);
+        std::string bareLower = Symbol::toLower(bare.name);
+        if (knownVariantVars_.count(bareLower) || knownObjectVars_.count(bareLower))
+            return false;
+        if (knownArrays_.count(bareLower)) return true;
+        Symbol* bsym = symTab_.lookupModule(bare.name);
+        return bsym && bsym->kind == SymbolKind::Variable && bsym->isArray;
+    }
+    if (e->kind != ASTNodeKind::IndexOrCallExpr) return false;
     auto& n = static_cast<const IndexOrCallExpr&>(*e);
     if (!n.positional.empty() || !n.named.empty()) return false;
     if (!n.callee) return false;
@@ -1619,13 +1659,39 @@ std::string CCodeGen::wrapWholeArrayAssign(const std::string& target,
             }
         }
     }
+    // 第一百五十八刀 (新账 #460): 裸名那一形 (`d = b`) 从前 dst 恒传 NULL = 只克隆新载体、
+    // 不碰旧的那一枚。第一百五十九刀把**甲档**接上退旧, 门就用第一百五十六刀出口那两道闸:
+    //   甲 声明在出口那一刻还在场的那一档局部数组 (第一百六十四刀: 从前只有体顶层那条 Dim,
+    //      现在嵌在块里那几档的声明住在序言, 也算在场。动态 / 定长两档, 两档的描述符都是堆上的 —— 定长那档
+    //      发 `vb6_SafeArrayCreate1D`) 且预扫说它没被整体用掉 ⇒ 这一格的旧载体唯一主人就是本站
+    //      ⇒ dst 交实参, RTL 里那句 `if (dst && !sameCarrier) vb6_SafeArrayDestroy1D(dst)` 才真活着。
+    //      不放行的实测代价 (页尺 .build/k2086_dst.bas, 两台): 「先 ReDim 再整体赋值」每调用净漏
+    //      一枚 (x64 346 / x86 323 字节), 「同一枚连赋两次」同样漏 (102 / 88)。
+    //   乙 模块级数组与工程类字段: 别的过程 / 别的实例也经这枚全局指针或同一枚字段看它 ⇒ 恒 NULL。
+    //      这一档在真语料里是主量 (9400 份 = 字段动态 700 + 模块级动态 253), 不是纸面缺口。
+    //   丙 `Static d()` 那一形: 出口收尾本来就不认它 (`cgen_localdecl.cpp` 那几道 `!var.isStatic`),
+    //      所以这一格的旧载体只有本站这发能放 —— 交实参 = 比今天少漏一枚, 不会双放。
+    //      (顺带记下: `Static` 那一形今天压根没发成 C 的 `static` 存储 ⇒ 静态局部数组**不跨调用存活**,
+    //       另一条账, 本刀不动。)
+    // `d = d` 那一形由 RTL 的 sameCarrier 那一支兜住 (克隆但不销毁手里这枚) ⇒ 最坏是漏一次, 不是拆活物。
+    //
+    // 只许管新认下来的裸名那一形。`A() = B()` (Fix 170 那一形) 照旧发 dst=A = 退旧, 一个字没动:
+    //   那一形的左值本来就是它自己那枚描述符的唯一主人, 把 NULL 套上去 = 静默撤掉 Fix 170 的
+    //   回收 (形状门的行照过, 因为哈希仍然变)。
+    std::string dstArg = target;
+    if (targetNode && targetNode->kind == ASTNodeKind::IdentifierExpr) {
+        auto& tgt = static_cast<const IdentifierExpr&>(*targetNode);
+        std::string lower = Symbol::toLower(tgt.name);
+        dstArg = (exitVisibleArrayCarriers_.count(lower) && escapedLocalArrays_.count(lower) == 0)
+                     ? target : "NULL";
+    }
     if (!elemUdt.empty() && elemUdt.compare(0, 9, "vb6_type_") == 0
         && udtHasOwnedMembers(elemUdt)) {
         requestUdtCopy(elemUdt, true);
-        return "vb6_ArrayAssign1D_Cb(" + target + ", " + rhs + ", vb6_udtcpy_"
+        return "vb6_ArrayAssign1D_Cb(" + dstArg + ", " + rhs + ", vb6_udtcpy_"
              + elemUdt.substr(9) + "_v)";
     }
-    return "vb6_ArrayAssign1D(" + target + ", " + rhs + ")";
+    return "vb6_ArrayAssign1D(" + dstArg + ", " + rhs + ")";
 }
 
 // ============================================================
@@ -1765,6 +1831,13 @@ Vb6Type CCodeGen::narrowTargetTypeOf(Expr* target) const {
     auto& id = static_cast<IdentifierExpr&>(*target);
     std::string lower = id.name;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    // 账 #305 §B218 第一百五十八刀 (新账 #460): 裸名那一形现在也算整体数组左值
+    // (`isWholeArrayRef` 那一位主人), 而载体指针不是标量槽 —— 套上窄整型闸就是把指针
+    // 截成 int32 (`mFix = vb6_ChkLong(b)`: x64 当场 AV, x86 静默别名)。下面那三张
+    // Byte/Integer/Long 表对数组名也可能命中 (模块级数组登记在 knownLongVars_ 里),
+    // 所以这一问必须排在它们之前。
+    if (isWholeArrayRef(target)) return Vb6Type::Unknown;
 
     // Fix <vbeclipse> rev36: **Byte 数组成员**不是标量, 绝不套窄整型溢出检查。
     //

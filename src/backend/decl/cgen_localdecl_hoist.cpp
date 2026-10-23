@@ -13,7 +13,7 @@ namespace vb6c3 {
 
 // ---- Fix 086: 局部声明过程级作用域提升 ----
 
-void CCodeGen::collectLocalDeclStmts(StmtList& stmts, std::vector<LocalDeclStmt*>& out) {
+void CCodeGen::collectLocalDeclStmts(const StmtList& stmts, std::vector<LocalDeclStmt*>& out) {
     for (auto& stmt : stmts) {
         if (!stmt) continue;
         switch (stmt->kind) {
@@ -161,25 +161,55 @@ bool CCodeGen::isVariantArrayTarget(const std::string& name) {
     return false;
 }
 
+// 账 #305 §B218 (甲) 第一百六十四刀: 「提升开着没有」这一问只许住在这里 —— 早退那一发与闸①
+// 那一问 (scanLocalArrayEscapes) 都问同一位主人。C3_NO_HOIST 关掉时闸① 必须跟着答否: 名字压根
+// 没进序言, 出口拿它去销毁 = cl C2065 (门 #821 那十二发就是这一形)。
+bool CCodeGen::hoistingLocalDeclsEnabled() {
+    return std::getenv("C3_NO_HOIST") == nullptr;
+}
+
+// 「把这枚嵌在块里的定长/多维载体的声明提到序言」那一小步 = 两笔: 发那一行 + 写名单。
+// 创建留在原位 —— Fix 086 那句老话照旧成立 (边界表达式可能依赖执行到该点时的状态)。
+void CCodeGen::hoistFixedArrayDeclToPrelude(const VariableDecl& var) {
+    emitArrayCarrierPreludeDecl(var);
+    std::string lower = var.name;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    preludeArrayCarriers_.insert(lower);
+}
+
 void CCodeGen::hoistLocalDecls(StmtList& body) {
-    if (const char* dis = std::getenv("C3_NO_HOIST")) {
-        (void)dis;
-        hoistedLocalDeclSet_.clear();
-        return;
-    }
     hoistedLocalDeclSet_.clear();
+    preludeArrayCarriers_.clear();
+    if (!hoistingLocalDeclsEnabled()) return;
+    // 「这条声明是不是过程体的直接子句」按节点地址认: 顶层那一发今天就已经在出口在场, 再动它
+    // 只是把 94 处产物形状重排一遍, 换不到任何东西 ⇒ 只提嵌在块里的那几档。
+    std::set<const ASTNode*> directChildren;
+    for (const StmtPtr& st : body) {
+        if (st && st->kind == ASTNodeKind::LocalDeclStmt) directChildren.insert(st.get());
+    }
     std::vector<LocalDeclStmt*> decls;
     collectLocalDeclStmts(body, decls);
     for (auto* d : decls) {
         if (!d || !d->decl) continue;
         if (hoistedLocalDeclSet_.count(d)) continue;
         bool hoistable = false;
+        const bool nested = directChildren.count(d) == 0;
         if (d->decl->kind == ASTNodeKind::VariableDecl) {
             auto& var = static_cast<VariableDecl&>(*d->decl);
-            // 固定边界数组保留原位 (边界表达式可能依赖执行到该点时的状态)
+            // 标量与动态数组: 整条声明提上来 (Fix 086 的原样)。
+            // 定长与多维: 只有嵌在块里那一档把**声明**提上来 (第一百六十四刀), 创建留原位。
             hoistable = var.dimensions.empty();
+            if (!hoistable && nested) hoistFixedArrayDeclToPrelude(var);
         } else if (d->decl->kind == ASTNodeKind::ConstDecl) {
             hoistable = true;
+        } else if (d->decl->kind == ASTNodeKind::MultiDecl && nested) {
+            // 逗号声明整条今天不提升 (原位展开时 emitLocalDeclCode 会 std::move 掉子声明,
+            // 提上一半就把创建吃掉了) ⇒ 这一支只**读**子声明, 单独发那几行序言声明。
+            for (auto& child : static_cast<MultiDecl&>(*d->decl).declarations) {
+                if (!child || child->kind != ASTNodeKind::VariableDecl) continue;
+                const VariableDecl& cv = static_cast<const VariableDecl&>(*child);
+                if (!cv.dimensions.empty()) hoistFixedArrayDeclToPrelude(cv);
+            }
         }
         if (hoistable) {
             hoistedLocalDeclSet_.insert(d);

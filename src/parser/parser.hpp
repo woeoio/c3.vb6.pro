@@ -132,6 +132,9 @@ private:
     DeclPtr parseConstDeclList(AccessLevel access);
     std::unique_ptr<SubDecl> parseSubDecl(AccessLevel access, bool isStatic);
     std::unique_ptr<FunctionDecl> parseFunctionDecl(AccessLevel access, bool isStatic);
+    // 第一百六十一刀 (任务 #471): `Static Sub` / `Static Function` 是过程头那一形 —— 这一问只许有一处答案。
+    // 返回 nullptr = 后面不是 Sub / Function, 状态一字不动, 调用方照旧按变量声明走。
+    DeclPtr tryParseStaticProcDecl(AccessLevel access, ProcVirt virt);
     std::unique_ptr<PropertyDecl> parsePropertyDecl(AccessLevel access);
     std::unique_ptr<TypeDecl> parseTypeDecl(AccessLevel access);
     std::unique_ptr<EnumDecl> parseEnumDecl(AccessLevel access);

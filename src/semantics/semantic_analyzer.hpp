@@ -129,6 +129,9 @@ public:
     bool declaredByAncestor(const std::string& name) const;
     // 账 #232①: 裸写的画布动词 (Cls / PSet / Circle) 折成 Me.<动词> —— 判据与后果写在定义处
     void foldBareCanvasVerb(ExprPtr& callee);
+    // 账 #305 (§B227): 不写括号的画布动词语句 (`Me.Scale` / 裸 `Scale`) 折成零实参调用,
+    // 让两条写法落到**同一条码头**。判据与后果写在定义处。
+    void foldParenlessCanvasVerbCall(ExprPtr& callee);
     // 虚方法 (tB, B08b): 本类体内对这个名字的调用必须走虚槽 (有后代 Overrides 了它)
     bool virtualCallNeedsDispatch(const std::string& name) const;
 

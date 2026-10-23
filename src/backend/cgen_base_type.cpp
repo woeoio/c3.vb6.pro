@@ -252,6 +252,137 @@ std::string CCodeGen::cParamClassPtrType(const ParameterInfo& p) {
     return {};
 }
 
+// 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): 「这一档槽装的是视图薄指针吗」—— 上面那位主人
+// 的两档里读视图那一档的唯一出口。前缀知识刻意留在这份文件 (= cParamClassPtrType 的出生地),
+// 别处再抄一次字面量就是把「谁认得 vb6_ivref_」这张名单扩大。
+bool CCodeGen::clsPtrIsViewSlot(const std::string& clsPtr) {
+    return clsPtr.compare(0, 10, "vb6_ivref_") == 0;  // vb6_ivref_ = 10 个字符
+}
+
+// 账 #305 第一百七十二刀 站B: 「这一档形参槽收不收 legacy 接口的**视图值**」(交回声明名,
+// 认不出 = 空串)。上面那位主人刻意只认 vb6_cls_ / vb6_ivref_ 两档 ⇒ legacy 的 `vb6_iface_<I>`
+// 值结构体在它那儿是"不是类槽"，调用点于是把裸实例直交 (实测 Ray.vbp 四枚类各一发 C2440:
+// `vb6_RayTrace_CalculateHitColor(Objects, me, …)` 对着 `vb6_iface_RayTraceable TargetObj`)。
+// 交回的是 **VB 声明名** (与 `Set <视图> = <实例>` 那三臂喂 legacyIfaceWrapFn 的入参同一形状)，
+// 前缀知识照旧只住这份文件。
+std::string CCodeGen::cParamLegacyIfaceSlotName(const ParameterInfo& p) {
+    if (p.typeRefName.empty()) return {};
+    const std::string t = cTypeForDeclaredTypeName(p.typeRefName);
+    if (t.compare(0, 10, "vb6_iface_") != 0) return {};  // vb6_iface_ = 10 个字符
+    std::string nm = p.typeRefName;
+    const size_t dot = nm.rfind('.');
+    if (dot != std::string::npos) nm = nm.substr(dot + 1);
+    return nm;
+}
+
+// 账 #305 §B218 第一百四十刀: 「这枚目标表达式是不是一个**可寻址的数组元素槽**」—— 唯一出口。
+// VB6_SA_AT(<元素档>, <数组>, <下标>) 是 RTL 里唯一产出左值的函数式宏 (Fix 113f 定的口径,
+// ByRef 实参那一族早就按它取址)，所以「带括号 = 函数调用 = 非左值」那条老判据对它不成立。
+// 交回的是宏的第一个实参 (= 元素 C 档，类数组是 void*)，发码那一处靠它落地址临时量；
+// 认不出来一律交空串 = 维持今天那条裸拷贝。前缀知识同 `clsPtrIsViewSlot` 一样留在这份文件。
+std::string CCodeGen::classArraySlotElemType(const std::string& target) {
+    static const std::string pre = "VB6_SA_AT(";
+    if (target.compare(0, pre.size(), pre) != 0) return std::string();
+    const size_t comma = target.find(',');
+    if (comma == std::string::npos || comma < pre.size()) return std::string();
+    std::string ty = target.substr(pre.size(), comma - pre.size());
+    const size_t b = ty.find_first_not_of(" \t");
+    const size_t e = ty.find_last_not_of(" \t");
+    if (b == std::string::npos) return std::string();
+    ty = ty.substr(b, e - b + 1);
+    // 视图那一档的元素槽走的是接口主人 (emitIvrefQiSet)，不归本问句管。
+    if (clsPtrIsViewSlot(ty)) return std::string();
+    return ty;
+}
+
+// 账 #305 §B218 (甲) 腿⑤ 第一百四十刀: 「mapTypeRef 交回来的这一档是不是**本工程类的指针**」——
+// 出厂那一站的两档 (标量字段 / 数组元素) 共用这一问，别各抄一遍形状。答案要长成
+// `vb6_cls_<类>*` (单个 *、中间无空格)：`As Object` 是 void*、`As Variant` 是整枚槽、
+// 外部接口是 vb6_ComIface_* ⇒ 一律交空串 = 维持今天的"不动"。
+std::string CCodeGen::projectClsStructOfCType(const std::string& cType) {
+    static const std::string prefix = "vb6_cls_";
+    if (cType.size() <= prefix.size() + 1) return std::string();
+    if (cType.compare(0, prefix.size(), prefix) != 0) return std::string();
+    if (cType[cType.size() - 1] != '*' || cType.find(' ') != std::string::npos) return std::string();
+    return cType.substr(0, cType.size() - 1);
+}
+
+// 账 #305 §B218 (甲) 形A (第一百四十四刀): 被调方那一格发成 `(*<名>)` 时, **这一格是谁的**。
+// 名册 procClassFormals_ 只登记形参名, 而 ByRef 工程类形参在 C 侧是 `vb6_cls_X** 名`、
+// 站点拿到的 target 文本是 `(*名)` —— 按名查表那两问 (inferClassTypeOfExpr / knownClassVars_)
+// 都答不出这一格 ⇒ 出参槽的覆写与置空三形落到主人外面裸写 (第一百三十九刀量到的那一格)。
+// 这一问就是补那一个缺口: 命中的那一格**由调用方持有那一枚引用** (桥的另一头), 所以
+// 覆写要退旧、置空要退旧且清槽 —— 与第一百三十九刀⑤栏那句代理读数「落回调用者并当场退旧」同一条口径。
+std::string CCodeGen::classOfProjectRefOutSlot(const std::string& target) {
+    if (target.size() < 4) return std::string();
+    if (target.compare(0, 2, "(*") != 0 || target[target.size() - 1] != ')') return std::string();
+    const std::string inner = target.substr(2, target.size() - 3);
+    if (inner.empty() || inner.find(' ') != std::string::npos
+        || inner.find('(') != std::string::npos) {
+        return std::string();
+    }
+    const std::string lower = Symbol::toLower(inner);
+    if (!procClassFormals_.count(lower)) return std::string();
+    auto it = knownClassVars_.find(lower);
+    return it == knownClassVars_.end() ? std::string() : it->second;
+}
+
+// 账 #305 §B218 (甲) 形A (第一百四十四刀): 「这一枚实参**持有**它交出去的那一枚引用吗」——
+// 答真是「把它的地址直接交给被调方」的唯一前提：被调方那一发写回会**退掉这一格原来的那一枚**，
+// 所以这一格必须先握着它 (P1 口径: 谁写谁付、谁握谁退)。
+//   成立 = 本过程局部 / 模块级 / 类字段 —— 三档都由 腿②/腿③ 各持一枚 (第一百三十、一百四十刀定的账)；
+//   不成立 = **ByVal 工程类形参**：procClassFormals_ 的名册理由写死了「没人 claim 过它」
+//            (`cgen_state.inc` 那句注释)，退旧 = 拆调用方还在用的实例 = 过退 ⇒ 继续走临时量，
+//            写回丢掉是**有意的**，不是漏；
+//   不成立 = `me` 与默认实例类名 —— 都不是可以被被调方写回的变量 (VB6 里 `Foo Me` 那一形
+//            被调方 `Set p = …` 不落回调用者)；
+//   不成立 = 交付要被 deliverToClassSlot 改写的那两形 (Variant / 包装器槽) —— 站点另问，
+//            那一族的口径归 §B187 待拍，本刀不吃。
+bool CCodeGen::argHoldsProjectRefInOwnSlot(const std::string& ident, const std::string& clsPtr) {
+    if (ident.empty() || clsPtr.empty()) return false;
+    if (clsPtrIsViewSlot(clsPtr)) return false;
+    if (ident.find('(') != std::string::npos || ident.find(' ') != std::string::npos
+        || ident.find('.') != std::string::npos) {
+        return false;   // 只认**裸标识符**：带括号的那一形是调用 / 宏展开出来的地址，不是槽
+    }
+    const std::string lower = Symbol::toLower(ident);
+    if (lower == "me") return false;
+    if (procClassFormals_.count(lower)) return false;
+    if (!defaultInstanceClassName(ident).empty()) return false;
+    auto it = knownClassVars_.find(lower);
+    if (it == knownClassVars_.end()) return false;
+    return cTypeForDeclaredTypeName(it->second) == clsPtr;
+}
+
+// 账 #305 §B218 (甲) 腿⑤ 第三格 (第一百四十六刀): 「这一枚**数组变量**握着的元素是不是工程类实例」——
+// 载体销毁那一族 (`Erase` / `ReDim` 不带 Preserve) 唯一的那一问。交回 `vb6_cls_<类>` (单个 * 已被
+// 剥掉)，认不出交空串 = 维持今天的"不动"。三道闸一道都不能少：
+//   1) 只认**裸名** —— `arrayClassElemTypes_` 这张表就是按裸名登记的 (Fix 192 的口径: 点链成员链的
+//      键与访问侧对不上，猜错比不猜更坏)，`obj.Field` / `VB6_SA_AT(...)` 那一形今天答不出来；
+//   2) 表里那个类名必须真是**本工程的类模块** (`isProjectClassName`) —— RTL/typelib 里
+//      `typedef vb6_ComIface_Font vb6_cls_StdFont;` 那一族也有 `vb6_cls_` 的痕迹，但没有类模块去
+//      发 `vb6_cls_StdFont_Release`，按它发码就是调一个不存在的出口；
+//   3) 形状问句 `projectClsStructOfCType` —— `As Object` 是 void*、`As Variant` 是整枚槽、
+//      外部接口是 vb6_ComIface_* ⇒ 一律空串。
+std::string CCodeGen::classOfArrayCarrier(const std::string& name) {
+    if (name.empty()) return std::string();
+    if (name.find_first_of(".() ,") != std::string::npos) return std::string();
+    auto it = arrayClassElemTypes_.find(Symbol::toLower(name));
+    if (it == arrayClassElemTypes_.end()) return std::string();
+    if (!isProjectClassName(it->second)) return std::string();
+    return projectClsStructOfCType(cTypeForDeclaredTypeName(it->second));
+}
+
+// 账 #305 §B218 (甲) 腿⑤ 第五格 (第一百四十九刀): 「这一枚载体是**多维**的吗」—— 销毁那一族的
+// 发码主人挑出口用的唯一一问。表按代码顺序更新 (`cgen_redim.cpp` 每走过一发 ReDim 就写一次),
+// 查不到 = 当一维 (= 今天的形状)。这一问只许住在主人那一侧: 站点若自己判维度,
+// 「1D 读法套 ND 载体」那处交错型就又长出一位主人 (步长错位 = 拆错布局)。
+bool CCodeGen::carrierIsMultidim(const std::string& name) {
+    if (name.empty()) return false;
+    auto it = arrayDimCounts_.find(Symbol::toLower(name));
+    return it != arrayDimCounts_.end() && it->second > 1;
+}
+
 // <vbeclipse>: 这个名字是不是**本工程的一个类/窗体模块** —— 它的 prop_let_/prop_set_/
 // 成员函数真的会被发出来。判法 = 名字命中"本模块 ∪ 驱动下发的其它模块", 且
 // mapTypeRef 把它映射成 vb6_cls_* (与 cParamClassPtrType 同一口径)。
@@ -515,7 +646,7 @@ std::string CCodeGen::mapTypeRef(ASTNode* typeRef) {
             // (driver 阶段 3.6 对 Implements 宿主逐模块打标) 的名字也一并劫走, 发成裸类指针。
             // 实测 BalloonTooltips: `Dim Subclass As ISubclass` (ISubclass 是 VB_Creatable=True
             // 的接口宿主, 进不了 ivref 表) 被劫成 `vb6_cls_ISubclass*`, 而 Set 侧仍发
-            // `vb6_iface_ISubclass_wrap(...)` ⇒ C2440, 整个工程编不过 (GA vbp#2)。
+            // `vb6_iface_ISubclass_wrap_<Impl>(...)` ⇒ C2440, 整个工程编不过 (GA vbp#2)。
             // 现在的次序: ivrefCType(tB 接口) → Class 符号分支(按 isInterface 真值分流:
             // 宿主发 vb6_iface_<Name> 包装 / 普通类发 vb6_cls_<Name>*) → 本兜底(只救
             // "符号真查不到"的名字, 免得掉 void*) → ComClass 分支。rev17 之后工程类符号

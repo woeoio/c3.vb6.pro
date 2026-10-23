@@ -35,6 +35,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -376,6 +378,150 @@ std::string CCodeGen::ivParamDeclsRef(const Decl* sig) {
 }
 
 // ============================================================
+// 账 #305 新账 #464: legacy VB6 接口 (`.cls` 宿主、没进 tB 登记表) 的槽表
+// ============================================================
+//
+// 从前这一发住在 `emitInterfaceVtable` 里, 由**每枚实现类**按自家成员声明顺序 + 自家
+// `classMeParam()` 现 harvest ⇒ 一枚接口被 N 枚类实现就发 N 份同名 `vb6_vtbl_<I>`
+// (真语料 Ray.vbp 实测 54 发 C2011, 四份表里槽序有两套)。现在形状读 driver 预扫描的
+// 那张只读表, 表类型只由接口自己这一趟发一份, `me` 一律 `void*` —— 派发点
+// (`<view>.vtbl-><成员>(<view>.obj, …)`) 交的本来就是 `void*`, 与实现类是谁无关。
+//
+// 与 `emitIfaceContractTypedefs` 那套薄面对 (`vb6_ivref_<I>` / `vb6_ivtbl_<I>`) 刻意并存、
+// 不合并: 两套类型名、两套所有权, 合并会把已经进登记表的接口重新拖回胖值结构的口径。
+
+std::vector<CCodeGen::LegacyIfaceSlot> CCodeGen::legacyIfaceSlots(const std::string& ifaceName) {
+    std::vector<LegacyIfaceSlot> out;
+    if (!legacyIfaceShapes_) return out;
+    const std::string key = ifaceLower(ifaceName);
+    auto it = legacyIfaceShapes_->find(key);
+    if (it == legacyIfaceShapes_->end()) return out;
+    const std::string prefix = key + "_";
+    for (const Decl* sig : it->second.slots) {
+        if (!sig) continue;
+        Decl& d = *const_cast<Decl*>(sig);
+        std::string written;
+        if (d.kind == ASTNodeKind::SubDecl) {
+            written = static_cast<SubDecl&>(d).name;
+        } else if (d.kind == ASTNodeKind::FunctionDecl) {
+            written = static_cast<FunctionDecl&>(d).name;
+        } else if (d.kind == ASTNodeKind::PropertyDecl) {
+            written = static_cast<PropertyDecl&>(d).name;
+        } else {
+            continue;
+        }
+        // 宿主在工程外时形状是按实现类那批 `<接口名>_成员` 建的, 摘掉前缀才是成员名
+        const std::string lower = ifaceLower(written);
+        LegacyIfaceSlot s;
+        if (lower.size() > prefix.size() && lower.compare(0, prefix.size(), prefix) == 0) {
+            written = written.substr(prefix.size());
+        }
+        // 键带档 = 同一位主人 ifaceSlotKeyNamed (interface_sig.hpp); 字段名只给 Let/Set
+        // 那两档加后缀 => Get/Sub/Function 的产物逐字节不动 (账 #305 新账 #489)。
+        const ProcKind dir = ifaceDeclProcKind(d);
+        s.slotKey = ifaceSlotKeyNamed(ifaceLower(written), d.kind, dir);
+        s.field = dir == ProcKind::PropertyLet  ? cIdent(written) + "_put"
+                : dir == ProcKind::PropertySet ? cIdent(written) + "_putref"
+                                               : cIdent(written);
+        s.retType = ivSlotRetType(&d);
+        s.params = ivParamDecls(d);   // 带前置 ", "; 无参 = 空串
+        out.push_back(std::move(s));
+    }
+    return out;
+}
+
+void CCodeGen::emitLegacyIfaceContractTypedefs() {
+    // 无 legacy 接口的工程: 零输出 (护栏)。std::map 按键有序 ⇒ 发射顺序与模块顺序、
+    // 与编译器二进制都无关 (同 §B97 那条「定序不许交给 unordered」的口径)。
+    if (!legacyIfaceShapes_ || legacyIfaceShapes_->empty()) return;
+
+    bool headerDone = false;
+    for (const auto& kv : *legacyIfaceShapes_) {
+        const std::string& writtenName = kv.second.writtenName;
+        const std::vector<LegacyIfaceSlot> slots = legacyIfaceSlots(writtenName);
+        if (slots.empty()) continue;
+        if (!headerDone) {
+            h_.emitLine("// === legacy VB6 interface slot tables (账 #305 新账 #464: 形状归接口自己定) ===");
+            headerDone = true;
+        }
+        const std::string id = cIdent(writtenName);
+        const std::string vtblName = "vb6_vtbl_" + id;
+        const std::string ifaceType = "vb6_iface_" + id;
+        std::string guard = "VB6_IFACE_" + id + "_TBL";
+        for (char& ch : guard) {
+            if (ch >= 'a' && ch <= 'z') ch = static_cast<char>(ch - 'a' + 'A');
+        }
+        h_.emitLine("#ifndef " + guard);
+        h_.emitLine("#define " + guard);
+        h_.emitLine("typedef struct " + vtblName + " {");
+        h_.indent();
+        for (const LegacyIfaceSlot& s : slots) {
+            h_.emitLine(s.retType + " (*" + s.field + ")(void* me" + s.params + ");");
+        }
+        h_.dedent();
+        h_.emitLine("} " + vtblName + ";");
+        h_.emitLine("typedef struct " + ifaceType + " {");
+        h_.indent();
+        h_.emitLine(vtblName + "* vtbl;");
+        h_.emitLine("void* obj;");
+        h_.dedent();
+        h_.emitLine("} " + ifaceType + ";");
+        h_.emitLine("#endif");
+        h_.emitBlank();
+    }
+}
+
+// wrap 名的唯一出口: 一枚接口的表是工程级一份, 而 `_wrap` 绑的是**实现类** ——
+// 名字不带实现者, 多实现类就会发 N 份同名函数 (C2084)。
+std::string CCodeGen::legacyIfaceWrapFn(const std::string& ifaceName,
+                                        const std::string& implName) const {
+    return "vb6_iface_" + cIdent(ifaceName) + "_wrap_" + cIdent(implName);
+}
+
+// 账 #305 新账 #471 (第一百七十四刀): 「运行期手里那一枚实例是哪一枚工程类 → 交回这一枚接口的
+// 视图」这一发的名字唯一出口。与上面那位主人同一格 —— `vb6_iface_` 那串前缀不许在这里长第三份。
+std::string CCodeGen::legacyIfaceViewFromFn(const std::string& ifaceName) const {
+    return "vb6_iface_" + cIdent(ifaceName) + "_view_from";
+}
+
+// 铸在**接口自己**那份 TU 里 (原型进它的 .h、定义进它的 .c —— 视图怎么造出来归接口自己定,
+// 与 `emitLegacyIfaceWrapDefs` 那一批同处)。
+// 为什么必须在运行期问: `For Each Obj In 集合` 的循环变量声明成视图 (`Dim Obj As <接口>`) 时,
+// 元素是集合交回来的一枚 COM VARIANT, 里面装的是哪一枚实现类**编译期不知道** —— 而视图的 vtbl
+// 是 `static` 在各实现类那份 TU 里的 (第一百六十六刀), 消费侧手里只有 wrap 的原型。
+// 交回的是**具名结构体值**, 与 wrap 那一族同形 ⇒ 不赌「返回结构体」那一族的调用约定。
+// 认不出 (不是本族包装器 / 外部 COM 对象 / 控件句柄 / 名字不在这份名单里) 一律 `{0}` 静默 ——
+// VB6 那一形报 13 类型不匹配, 那是这条线在册的欠项口径 (#471 那一格), 本刀不引错误腿。
+void CCodeGen::emitLegacyIfaceViewFrom(Module& module) {
+    if (!legacyIfaceShapes_) return;
+    const std::string ifaceName = module.moduleName;
+    if (legacyIfaceShapes_->find(ifaceLower(ifaceName)) == legacyIfaceShapes_->end()) return;
+    if (legacyIfaceSlots(ifaceName).empty()) return;   // 与表类型那一趟同一个闸
+
+    const std::string ifaceType = "vb6_iface_" + cIdent(ifaceName);
+    const std::string fn = legacyIfaceViewFromFn(ifaceName);
+    const std::vector<std::string> impls = allImplementationClasses(ifaceName);
+
+    h_.emitBlank();
+    h_.emitLine(ifaceType + " " + fn + "(void* instance, const char* className);");
+
+    c_.emitBlank();
+    c_.emitLine("// === 账 #305 #471: 运行期那一枚元素 → " + ifaceName + " 的视图 (For Each 那一站) ===");
+    c_.emitLine(ifaceType + " " + fn + "(void* instance, const char* className) {");
+    c_.indent();
+    c_.emitLine(ifaceType + " v = {0};");
+    c_.emitLine("if (!instance || !className) return v;");
+    for (const std::string& impl : impls) {
+        c_.emitLine("if (_stricmp(className, \"" + impl + "\") == 0)"
+                    " return " + legacyIfaceWrapFn(ifaceName, impl) +
+                    "((vb6_cls_" + cIdent(impl) + "*)instance);");
+    }
+    c_.emitLine("return v;  /* 认不出 = 空视图; 在册欠项 = 这一形 VB6 报 13 */");
+    c_.dedent();
+    c_.emitLine("}");
+}
+
+// ============================================================
 // 类结构体字段 + _New 初始化
 // ============================================================
 
@@ -685,7 +831,8 @@ void CCodeGen::emitIfaceImplTables(Module& module) {
 // 夹 = 返回槽: 那一枚引用是**交出去**的那一枚, 出口再放手 = 调用方刚接手的东西当场读已释放块
 // (#445 钉住的那条夹, 原来只有接口一档写着一句注释, 现在两档共用同一句代码)。
 void CCodeGen::trackSlotForRelease(const std::string& expr, bool isView,
-                                   const std::string& clsName) {
+                                   const std::string& clsName,
+                                   const std::string& arrayName, bool freeCarrier) {
     if (!currentReturnVar_.empty() && expr == currentReturnVar_) return;
     for (const SlotRelease& s : slotsToRelease_) {
         if (s.expr == expr) return;
@@ -694,7 +841,159 @@ void CCodeGen::trackSlotForRelease(const std::string& expr, bool isView,
     rec.expr = expr;
     rec.isView = isView;
     rec.clsName = clsName;
+    rec.arrayName = arrayName;
+    rec.isCarrier = !arrayName.empty();
+    rec.freeCarrier = freeCarrier;
     slotsToRelease_.push_back(rec);
+}
+
+// 账 #305 §B218 (甲) 第一百五十二刀: 「这一枚过程级**数组载体**在正常出口要把元素交回」那张表的
+// 唯一登记口。闸一条不加、一条不少:
+//  - 认不出元素类 (`classOfArrayCarrier` 空串 = `As Object` 包装器 / `As Long` 裸值 / 外部类 / 点链成员数组)
+//    压根不登记 = 维持今天的裸着出作用域;
+//  - Static 那一档 (`Static a() As C`, 或整个 `Static Sub`) 由调用方 (cgen_localdecl.cpp 那两条臂)
+//    拦在门外 —— 那一格跨调用活着, 出口放手 = 下次进来读已释放块 (与类槽那一档同一句理由)。
+// 账 #305 §B218 (甲) 第一百五十六刀: 这一口从「只认工程类元素的载体」放宽到**每一档局部数组**——
+// 元素认不出就一声不交回, 但载体那一块该销毁还是要销毁 (Destroy1D 自己会按 elemType 收尾
+// bstr / variant 元素)。多出来的那一档只有一条闸: 预扫说这枚载体在本过程里被整体用掉过
+// (`Dim v: v = a` / `P(a)` / `For Each x In a` / `UBound(a)` 一律算) ⇒ 不登记 = 维持今天的漏。
+void CCodeGen::trackArrayCarrierForRelease(const std::string& cName,
+                                           const std::string& arrayName) {
+    if (cName.empty() || arrayName.empty()) return;
+    std::string lower = arrayName;
+    for (char& ch : lower) ch = (char)tolower((unsigned char)ch);
+    // 闸① (第一百五十六刀立, 第一百六十四刀改口径): 出口那一发拿的是 C 变量名, 只有声明在那一刻
+    // 还在场的才算 —— 名单由 scanLocalArrayEscapes 照提升那一条规则填 (嵌在块里那几档的声明现在
+    // 住在序言), 关掉提升就缩回「只有过程体直接子句」那一个答案 (门 #821 那十二发 C2065 归它挡)。
+    if (exitVisibleArrayCarriers_.count(lower) == 0) return;
+    // 闸②: 预扫说这枚载体在本过程里被整体用掉过 ⇒ 不销毁。
+    trackSlotForRelease(cName, false, std::string(), arrayName,
+                        escapedLocalArrays_.count(lower) == 0);
+}
+
+// 「这枚局部数组有没有被整体用掉」那一问的唯一答案。判据按**节点地址**认, 不按文本:
+// traverseExpr 先 visit 父节点再下钻 ⇒ 在父节点里把「这一格不算逃逸」的子节点指针记下,
+// 到 IdentifierExpr 那一访按指针放行。认不出的形状默认算逃逸 (fail-safe: 少发一发销毁)。
+// 算逃逸的 = 其余每一次裸出现: 右值装箱 (`v = a`, 装的正是这枚载体)、实参 (`P(a)` / `UBound(a)`)、
+// 零实参的整枚数组那一形 (`v = a()`, 载体当场交给调用方)、`For Each x In a` 的集合、成员链的宿主 (`a.Field`)。
+// 放行三格, 每一格都有一发实测撑着:
+//   ① 带实参的元素访问 `a(i)` 里那个被调者 —— 只碰一格, 载体没交出去;
+//   ② 第一百五十八刀: **整数组赋值的左值** `a = ...` —— 旧话是「刻意不放行」, 那时那一发是
+//      `d = b;` 裸指针赋值 (两边共用同一枚载体, 出口按自己的名义去销毁 = 把别人还活着的东西拆了);
+//      现在那一行走 vb6_ArrayAssign1D = 复制, 槽里握的是自己新克隆的那一枚 ⇒ 出口收尾才是正确答案,
+//      不放行的实测代价 = 第一百五十六刀那把尺的 B225-take 从 leak=0 涨成 leak=1;
+//   ③ 第一百五十九刀: **整数组赋值的右值** —— 复制不吃源的载体 (`vb6_ArrayAssign1D_Cb` calloc 新描述符,
+//      元素按档各建副本), 源那枚仍是这一站自己的东西 ⇒ 出口该收尾; 不放行的实测代价 = 同一把页尺的
+//      「ReDim 一枚局部数组、只把它复制给另一枚局部数组」那一格 leak=1。放行条件问的是**左值**在
+//      exitVisibleArrayCarriers_ 里 —— 左值是 Variant 槽那一发是装箱 (②③都不免), 左值是形参 / 模块级数组
+//      那两档压根没有出口收尾, 免不免都不发东西。
+// 三格只免**那一格**: 同一个名字在别处任何裸出现照旧算, 所以 `v = a` 之后再 `a = b` 仍然不放手
+// (夹具 B263 那一档钉的就是它)。
+namespace {
+struct EscapeScan : public ASTVisitor {
+    std::set<const ASTNode*> exempt;
+    std::map<std::string, int> bare;
+    // 第一百五十九刀: 右值那一格要不要放行, 问的是「左值是不是本过程的局部数组」——
+    // 这张名单由 scanLocalArrayEscapes 先填好, 指针递进来, 不再另起一趟扫描。
+    const std::set<std::string>* exitVisibleArrayCarriers = nullptr;
+    static std::string low(const std::string& s) {
+        std::string r = s;
+        for (char& ch : r) ch = (char)tolower((unsigned char)ch);
+        return r;
+    }
+    void visit(IdentifierExpr& node) override {
+        if (exempt.count(&node)) return;
+        bare[low(node.name)]++;
+    }
+    // 第一百五十八刀: **整数组赋值的左值那一格不再算逃逸**。
+    // 第一百五十六刀把它算进去的理由是「发完 `l = mg` 之后本地槽里握的是别人的载体」——
+    // 那是别名时代的事实。这一刀把那一发改成复制 (vb6_ArrayAssign1D 交一枚新载体) ⇒ 左值就是
+    // 那枚新载体的唯一主人, 出口销毁它既安全又是唯一不漏的去处。不豁免的实测代价 (本机两台,
+    // 第一百五十六刀那把尺): B225-take 从 leak=0 涨成 leak=1 = 每一发整数组赋值净漏一枚载体。
+    // 只豁免左值**这一格**: 同一个名字在别处的任何裸出现 (右值装箱 / 实参位 / `A()` 整枚交给
+    // 调用方) 照旧算逃逸。标量目标那格豁免是空转 —— 这张名单只被数组那一档消费。
+    void visit(AssignmentStmt& node) override {
+        if (node.target && node.target->kind == ASTNodeKind::IdentifierExpr) {
+            exempt.insert(node.target.get());
+            // 第一百五十九刀 (第二格): **整数组赋值的右值那一格也放行**。
+            // 复制这一发不吃源的载体: `vb6_ArrayAssign1D_Cb`  calloc 一枚新描述符, 元素按档各自
+            // 建副本 (bstr 走 SysAllocString, variant 先 memset 再 VariantCopy, UDT 交生成的
+            // vb6_udtcpy_*), 发完源那枚仍然是它自己那一站的东西, 没有第二个持有者 ⇒ 出口该收尾。
+            // 不放的代价实测 = 第一百五十九刀那把页尺里「ReDim 一枚局部数组、只把它当右值复制走」
+            // 那一格 leak=1 = 每调用净漏一枚 (与 W2/W3 那两格同源)。
+            // 只在**左值也是本过程的局部数组**时放行: 左值是 Variant 槽 (`mv = a`) 那一发是装箱,
+            // 装的正是这枚载体 ⇒ 照旧算逃逸 (夹具 B263 钉的那一发); 左值是标量同理不走复制。
+            if (exitVisibleArrayCarriers && node.value &&
+                node.value->kind == ASTNodeKind::IdentifierExpr) {
+                auto& tgt = static_cast<const IdentifierExpr&>(*node.target);
+                if (exitVisibleArrayCarriers->count(low(tgt.name)))
+                    exempt.insert(node.value.get());
+            }
+        }
+    }
+    void visit(IndexOrCallExpr& node) override {
+        // `a(i)` 那一形: 被调者就是数组本身, 只碰一格, 载体不交出去 ⇒ 放行。
+        // `a()` (零实参) 在 VB6 里是**整枚数组**那一形 —— 函数返回数组、整数组赋值的右边都写它,
+        // 载体当场交给了调用方, 和 `P(a)` 同一族 ⇒ 这一格不放行, 按裸出现算逃逸。
+        if (node.callee &&
+            (!node.positional.empty() || !node.named.empty())) {
+            exempt.insert(node.callee.get());
+        }
+    }
+};
+
+// 「这条声明是不是数组载体」+ 是就把名字记进名单 (逗号声明要展开成子声明逐条看)。
+// 以什么范围调用它 = 闸① 那一条规则, 只住在 scanLocalArrayEscapes; 这一位只管认形状、收名字。
+void collectArrayCarrierNames(const Decl* d, std::set<std::string>& out) {
+    if (!d) return;
+    if (d->kind == ASTNodeKind::MultiDecl) {
+        for (const DeclPtr& child : static_cast<const MultiDecl&>(*d).declarations) {
+            collectArrayCarrierNames(child.get(), out);
+        }
+        return;
+    }
+    if (d->kind != ASTNodeKind::VariableDecl) return;
+    const VariableDecl& var = static_cast<const VariableDecl&>(*d);
+    // 「这条声明是不是数组」问的正是发码那两条臂各自的条件 (定长/多维看 dimensions,
+    // 动态看 isDynamicArray —— `Dim d()` 的 dimensions 是空的), 少一条就把动态那一档漏回今天的漏。
+    if (var.dimensions.empty() && !var.isDynamicArray) return;
+    std::string lower = var.name;
+    for (char& ch : lower) ch = (char)tolower((unsigned char)ch);
+    out.insert(lower);
+}
+} // namespace
+
+void CCodeGen::scanLocalArrayEscapes(const StmtList& body) {
+    escapedLocalArrays_.clear();
+    exitVisibleArrayCarriers_.clear();
+    // 直接子句那几条: 提升开没开, 它们的 C 变量在出口那一刻都在场 (第一百五十六刀的原口径)。
+    for (const StmtPtr& st : body) {
+        if (st && st->kind == ASTNodeKind::LocalDeclStmt) {
+            collectArrayCarrierNames(static_cast<const LocalDeclStmt&>(*st).decl.get(),
+                                      exitVisibleArrayCarriers_);
+        }
+    }
+    // 第一百六十四刀: 提升开着 ⇒ 嵌在块里那几档也算在场 —— 动态那一档整条声明就在序言 (Fix 086),
+    // 定长与多维那一档由本刀把声明提上来 (hoistLocalDecls 写 preludeArrayCarriers_, 创建留原位)。
+    // 走的是提升那一位主人自己的递归 (collectLocalDeclStmts), 不是第二把尺; C3_NO_HOIST 关掉提升
+    //  ⇒ 这一问跟着答否, 门 #821 那一形立刻回来。
+    if (hoistingLocalDeclsEnabled()) {
+        std::vector<LocalDeclStmt*> decls;
+        collectLocalDeclStmts(body, decls);
+        for (auto* d : decls) {
+            if (d && d->decl) {
+                collectArrayCarrierNames(d->decl.get(), exitVisibleArrayCarriers_);
+            }
+        }
+    }
+    EscapeScan scan;
+    scan.exitVisibleArrayCarriers = &exitVisibleArrayCarriers_;
+    for (const auto& st : body) {
+        if (st) traverseStmt(*st, scan);
+    }
+    for (const auto& kv : scan.bare) {
+        escapedLocalArrays_.insert(kv.first);
+    }
 }
 
 void CCodeGen::trackClassSlotForRelease(const std::string& cName, const std::string& clsName) {
@@ -740,7 +1039,7 @@ std::string CCodeGen::ivrefVtableCall(const std::string& ifaceName, const std::s
 // (#448 的形①) 也要同一条腿；留在站点里就会长出第二个答案。
 // 计数口径不变: QI 成功即已 AddRef (失败得 NULL = Nothing)，旧值当场 Release。
 void CCodeGen::emitIvrefQiSet(const std::string& target, const std::string& ifaceName,
-                              const std::string& valueExpr) {
+                              const std::string& valueExpr, bool rhsTransferred) {
     const std::string ivCType = ivrefCType(ifaceName);
     // valueExpr 在这个块里出现三次 (判空 / QI 的接收者 / QI 的首参)。裸标识符无所谓，
     // 但形①交进来的是 `MakeDirect()` 那种调用 ⇒ 三次求值 = 三枚实例、三笔引用
@@ -765,6 +1064,15 @@ void CCodeGen::emitIvrefQiSet(const std::string& target, const std::string& ifac
                 ", vb6_iv_iid_" + cIdent(ifaceName) + ", &" + ivGot + ");");
     c_.emitLine(target + " = (" + ivCType + ")" + ivGot + ";");
     c_.emitLine("if (" + ivOld + ") " + ivOld + "->vt->Release(" + ivOld + ");");
+    // 账 #305 §B218 第一百三十四刀 (甲) 腿② 视图档: 右值那枚临时量是**接管来的** (被调方 =
+    // 返回工程内接口的过程, 它自己的返回槽在 腿④ 不退 ⇒ 交出来就带一枚对价; 契约同 刀3/刀4,
+    // 问句也只那一位主人 —— rhsTransfersProjectRef)。本站 QI 出来的那一枚另算 (QI 自己 AddRef),
+    // 所以接管来的那一枚当场交回, 不退 = 每调用净 +1 = 永不销毁。
+    // 借来的那一档 (裸标识符右值 / New 那一站) 天然 rhsTransferred=false ⇒ 一发都不补。
+    if (rhsTransferred) {
+        c_.emitLine("if (" + ivVal + ") " + ivVal + "->vt->Release(" + ivVal +
+                    ");  /* 账 #305 (甲) 腿②: 交回接管来的那一枚 */");
+    }
     c_.dedent();
     c_.emitLine("}");
 }
@@ -773,6 +1081,29 @@ void CCodeGen::emitIvrefQiSet(const std::string& target, const std::string& ifac
 // Exit Sub/Function 自 c97e65bd 起也走那条 goto ⇒ 这一族不漏清理）。
 void CCodeGen::emitIvrefScopeRelease() {
     for (const SlotRelease& s : slotsToRelease_) {
+        // 第三档 (第一百五十二刀): 数组载体 —— 交给那位数组主人, 出口自己不问臂
+        // (`classOfArrayCarrier` + `carrierIsMultidim` 两问都住在主人里)。
+        // 刻意**只出厂、不销毁载体**: 载体的形状在出口这一发只有「按代码顺序」那一个答案,
+        // 出厂那一支答错的下限是静默不漏 (第一百五十刀那条 elemType 闸), 而 free 那一支答错
+        // 就是拿错步长解引用再 free —— 载体级的销毁 (= 内存那半, 全元素档一起) 是另一格机制。
+        if (s.isCarrier) {
+            const bool nd = carrierIsMultidim(s.arrayName);
+            emitClassArrayElemHandback(s.expr, s.arrayName,
+                                       s.freeCarrier ? "作用域出口逐枚交回 (载体随后销毁)"
+                                                     : "作用域出口逐枚交回 (载体不销毁)");
+            // 第一百五十二刀刻意留在册的那一半 (第一百五十五刀量完 = 每次调用实测漏 316/334 字节):
+            // 出口销毁载体。臂由同一位主人挑 (`carrierIsMultidim` 读的是当前载体那一档, 与 152 那条
+            // 「表在出口这一刻反映的就是当前载体」的实测同前提); 双 free 那两条封死 —— Erase 四支都
+            // 要么置 NULL 要么保留载体, 而非 Preserve 的 ReDim 先销毁旧载体再赋新 (读数在台账)。
+            if (s.freeCarrier) {
+                const std::string kill = nd
+                    ? ("vb6_SafeArrayDestroyND((vb6_SafeArrayND*)" + s.expr + ");")
+                    : ("vb6_SafeArrayDestroy1D(" + s.expr + ");");
+                c_.emitLine(kill +
+                            "  /* 账 #305 (甲) 腿⑤: 作用域出口销毁载体 (本过程内它从没整体用掉) */");
+            }
+            continue;
+        }
         if (s.isView) {
             c_.emitLine("if (" + s.expr + ") " + s.expr + "->vt->Release(" + s.expr +
                         ");  /* tB Interface B05: scope-exit release */");

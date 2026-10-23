@@ -1,4 +1,5 @@
 #include "backend/cgen.hpp"
+#include "common/owned_temp_keeps.hpp"  // 账 #464 §B164: 回收刀的**唯一权威**（那张表由 RTL 推导 ⇒ 哨兵双向对账）
 #include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
 #include "common/int_literal.hpp"   // 账 #194: 整数字面量的单一出口
 #include "common/canvas_drawing.hpp"  // 账 #232①: 画布动词的单一出口 (名字 / 接收者 / 实参形状)
@@ -2650,6 +2651,163 @@ bool CCodeGen::variantRhsOwnsValue(Expr* rhs, const std::string& rawC) const {
     return !exprBorrowsBstrStorage(rhs, rawC);
 }
 
+
+// ============================================================================================
+// 账 #464 §B164 回收刀: 「一条语句里现造的带权临时量」提成具名临时量, 语句末按档收回
+// ============================================================================================
+//
+// 这一刀的判据**全部**来自 src/common/owned_temp_keeps.hpp（那张表由
+// scripts/check_owned_temp_keeps.ps1 从 RTL **推导** ⇒ 哨兵双向对账 ⇒ 漂不了），
+// 本文件只负责**落地**（怎么把那一格提出来、怎么声明、怎么收回）。
+//
+// 提名的问句（owner = ownedTempNominationVerdict, 四道闸都在头里）:
+//   ① 这一枚是不是**现造**的（mint 出口在 [own] 节 ⇒ 新造且归我们所有）
+//   ② 消费者那一格会不会把指针**带走**（keeps=0 才提名）
+//   ③ 消费者会不会**自己放掉**那一格（消费轴 ⇒ 不提名, 否则双放 ⇒ 堆损坏）
+//   ④ 消费者不在 closed 族（未归因 ⇒ 停机）
+//
+// 档号**只由 mint 出口的返回档定**（BSTR / VARIANT）—— 不是消费者的 VB 形参档,
+// 也不是源表达式的 VB 档（#461 拿形参档当 C 档 ⇒ 一枚 double 被声明成 BSTR ⇒ cl C2440;
+// 账 #463 已把 [own] 表与 RTL 原型的返回档逐枚对账 = 112/112 一致）。
+namespace {
+// 把一段发码文本按**顶层逗号**切成实参（顶层 = 括号深度 0）。
+std::vector<std::string> splitTopLevelArgs464(const std::string& s) {
+    std::vector<std::string> out;
+    int depth = 0;
+    size_t start = 0;
+    for (size_t i = 0; i < s.size(); ++i) {
+        const char ch = s[i];
+        if (ch == '(' || ch == '[' || ch == '{') ++depth;
+        else if (ch == ')' || ch == ']' || ch == '}') --depth;
+        else if (ch == ',' && depth == 0) {
+            out.push_back(s.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    out.push_back(s.substr(start));
+    for (auto& a : out) {
+        const size_t b = a.find_first_not_of(" \t\r\n");
+        const size_t e = a.find_last_not_of(" \t\r\n");
+        a = (b == std::string::npos) ? std::string() : a.substr(b, e - b + 1);
+    }
+    return out;
+}
+// 「整枚实参 = 一个调用」？返回 callee 名（空 = 不是）。
+std::string topLevelCallee464(const std::string& arg) {
+    size_t i = 0;
+    while (i < arg.size() && (std::isalnum(static_cast<unsigned char>(arg[i])) || arg[i] == '_')) ++i;
+    if (i == 0 || i >= arg.size() || arg[i] != '(') return std::string();
+    const std::string callee = arg.substr(0, i);
+    // 括号必须**配平到末尾**（`f(a)(b)` / `f(a) + g(b)` 都不算「整枚就是一个调用」）
+    int depth = 0;
+    for (size_t j = i; j < arg.size(); ++j) {
+        if (arg[j] == '(') ++depth;
+        else if (arg[j] == ')') {
+            --depth;
+            if (depth == 0) return (j + 1 == arg.size()) ? callee : std::string();
+        }
+    }
+    return std::string();
+}
+// 这一枚实参里**有没有调用**？（闸 ④ 用：别的实参里有调用 ⇒ 求值次序会动 ⇒ 不提名）
+bool argHasCall464(const std::string& arg) {
+    for (size_t i = 0; i + 1 < arg.size(); ++i) {
+        if (arg[i] != '(') continue;
+        // 往前找标识符（`f(` 是调用；`(x)` 是括号；`)(` 不是）
+        size_t j = i;
+        while (j > 0 && (std::isalnum(static_cast<unsigned char>(arg[j - 1])) || arg[j - 1] == '_')) --j;
+        if (j == i) continue;                       // 前面没有标识符 ⇒ 不是调用
+        return true;
+    }
+    return false;
+}
+// 这一枚文本**整枚**是不是一个「owned 且档是 BSTR」的 mint 调用？
+//   （账 #468 §B164 拼接站那一族：左操作数若是这样一枚，拼接站**自己**放掉它 ⇒ 不漏）
+// 判据全在 src/common/owned_temp_keeps.hpp 一个权威里：档由 mint 出口的 RTL 返回档定
+//   （BSTR 档 ⇒ 拼接站发 ConcatFree 时 vb6_BSTR_Free 放的就是它 ⇒ 放一次，不双放）。
+}  // namespace
+
+bool CCodeGen::exprIsOwnedBstrMint(const std::string& text) {
+    if (!currentProc_) return false;
+    const std::string mint = topLevelCallee464(text);
+    if (mint.empty()) return false;
+    return ownedTempMintKind(mint.c_str()) == 'B';
+}
+
+// 提名**指定那一格**（拼接站的右操作数用；实参站用整张表那一版）。
+// 这一格改写成具名临时量; 返回 true = 提了名。
+bool CCodeGen::hoistOwnedTempSlot(std::string& arg, const std::string& consumer, int slot,
+                                  const std::string& siblingText) {
+    if (!currentProc_) return false;
+    if (concatLeftDepth_ > 0) return false;
+    // 门 ⑨: **块内条件**不许提名（声明落在块内、收回落在块外 ⇒ 引用越界）
+    if (blockCondDepth_ > 0) return false;
+    // 门 ⑩: 提了名 ⇒ 这一枚**提前到调用之前**求值 ⇒ 若**旁的那一枚**（拼接站的左操作数）
+    //   里有调用, 两者的求值次序就动了（C 里实参次序本来是不定的, 但基线在 x64 上
+    //   事实上是左到右, 提了名会变成右到左 ⇒ 行为变了）⇒ 那一格有调用就不提名。
+    //   口径与闸 ⑤（实参站: 别的实参里有调用 ⇒ 不提名）同一条。
+    if (!siblingText.empty() && argHasCall464(siblingText)) return false;
+    // 闸 ⑦: 声明与收回必须**同一层**（这一枚临时量的作用域就在这条语句这一层）
+    if (c_.indentLevel() != stmtLevel_) return false;
+    if (consumer.empty()) return false;
+    const std::string mint = topLevelCallee464(arg);
+    if (mint.empty()) return false;
+    const char verdict = ownedTempNominationVerdict(consumer.c_str(), slot, mint.c_str());
+    if (!verdict) return false;
+    const std::string tmp = "_own_" + std::to_string(++ownedTempCounter_);
+    const bool isVariant = (verdict == 'V');
+    c_.addPending((isVariant ? "vb6_VARIANT " : "BSTR ") + tmp + " = " + arg + ";");
+    ownedTempsToFree_.push_back(OwnedTemp{tmp, c_.indentLevel(), isVariant ? 2 : 1});
+    arg = tmp;
+    return true;
+}
+bool CCodeGen::hoistOwnedTempArgs(std::string& argList, const std::string& callee) {
+    // 闸 ⑥: 文件作用域没有「语句末」可以收回 ⇒ 不提名
+    if (!currentProc_) return false;
+    // 闸 ⑤: 拼接站左操作数里的一切不提名（那条子串判据会翻面 ⇒ 行为变了）
+    if (concatLeftDepth_ > 0) return false;
+    // 门 ⑨: **块内条件**不许提名（ElseIf 的条件：声明落在 else 块内、收回落在块外）
+    if (blockCondDepth_ > 0) return false;
+    // 闸 ⑦: 声明与收回必须**同一层**（这一枚临时量的作用域就在这条语句这一层）
+    if (c_.indentLevel() != stmtLevel_) return false;
+    if (callee.empty()) return false;
+    std::vector<std::string> args = splitTopLevelArgs464(argList);
+    if (args.empty()) return false;
+    // 闸 ④: **只提名「别的实参都没有副作用」的那一格** ——
+    //   多实参时把一枚实参提成临时量会**改动求值次序**（那一枚提前到调用之前求值）。
+    //   基线里实参的求值次序本来就是编译器定的（C89 不定序；MSVC x86 从右往左），
+    //   所以只有当**别的实参都是无副作用的**（纯字面量 / 纯读一个变量 / 纯成员读，
+    //   也就是**不含任何调用**）时，次序改了也看不出差别 ⇒ 这才提名；
+    //   其余情形（别的实参里有调用）一律不提名（宁可不收）。
+    bool changed = false;
+    for (size_t slot = 0; slot < args.size(); ++slot) {
+        const std::string mint = topLevelCallee464(args[slot]);
+        if (mint.empty()) continue;
+        bool othersPure = true;
+        for (size_t j = 0; j < args.size() && othersPure; ++j) {
+            if (j == slot) continue;
+            if (argHasCall464(args[j])) othersPure = false;
+        }
+        if (!othersPure) continue;
+        // 判据那四道闸, 都在头里那位主人身上
+        const char verdict = ownedTempNominationVerdict(callee.c_str(), (int)slot, mint.c_str());
+        if (!verdict) continue;
+        // 提出来: 声明走 pending（落在调用那一行之前）, 收回登记在语句末
+        const std::string tmp = "_own_" + std::to_string(++ownedTempCounter_);
+        const bool isVariant = (verdict == 'V');
+        c_.addPending((isVariant ? "vb6_VARIANT " : "BSTR ") + tmp + " = " + args[slot] + ";");
+        ownedTempsToFree_.push_back(OwnedTemp{tmp, c_.indentLevel(), isVariant ? 2 : 1});
+        args[slot] = tmp;
+        changed = true;
+    }
+    if (!changed) return false;
+    argList.clear();
+    for (size_t slot = 0; slot < args.size(); ++slot) {
+        if (slot) argList += ", ";
+        argList += args[slot];
+    }
+    return true;
+}
 std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cExpr) const {
     if (!valueNode) return "vb6_VariantEmpty()";
     
@@ -2707,6 +2865,17 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
             if (itB163 != arrayDimCounts_.end() && itB163->second <= 1)
                 return "vb6_VariantFromValue(" + cExpr + ")";
         }
+    }
+
+    // 账 #305 新账 #407 / §B190 第一百七十一刀: **视图值进装箱站**（`TypeName(mv)` / 赋给
+    // Variant 槽那一族）。这一问排在下面那张 inferExprType 表之前 —— 那张表对视图名答的是
+    // **接口模块名**，而 C 侧那一档是值结构体，落 _Generic 的 default = vb6_VariantObject(整枚
+    // 结构体) ⇒ cl C2172「实参不是指针」(实物 = 门禁在册的 tests/b189_gate，B189Drv.c(11)，
+    // 改前两台同红、第一百六十六刀收线时数到的)。改的是一条从前**编不过**的路 ⇒ 存量产物
+    // 按定义一个字不许动。
+    {
+        std::string viewBox171 = legacyViewBoxExpr(valueNode, cExpr);
+        if (!viewBox171.empty()) return viewBox171;
     }
 
     // 使用inferExprType推断表达式类型
@@ -2811,6 +2980,12 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
                    || (cExpr.compare(cs, 15, "vb6_ComGetProp(") == 0)
                    || (cExpr.compare(cs, 21, "vb6_ComGetObjectProp(") == 0);
         if (comRes) return "vb6_VariantFromComResult(" + cExpr + ")";
+    }
+    // 账 #305 新账 #407 第一百七十一刀: 与上面 wrapVariantValue 同一问、同一出口 (视图值进装箱站)。
+    // 这一站也必须在 inferExprType 之前问: 它对视图名给的是接口模块名，不是 C 侧那一档。
+    {
+        std::string viewBox171b = legacyViewBoxExpr(expr, cExpr);
+        if (!viewBox171b.empty()) return viewBox171b;
     }
     if (!expr) return "vb6_VariantFromValue(" + cExpr + ")";
     // 已经是 VARIANT 的表达式交给 _Generic 的 vb6_VariantIdentity 档恒等直传,

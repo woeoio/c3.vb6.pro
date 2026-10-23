@@ -9,6 +9,32 @@ namespace vb6c3 {
 // 声明分发
 // ============================================================
 
+// 账 #305 (甲) 第一百六十一刀 (任务 #471): VB6 的过程头可以带 Static 修饰 (真语料 10 处全写
+// `Private Static Sub`, 见 PUZZLE.FRM / SolitaireRound.frm / frm1.frm)，含义是「这一枚过程里的每一条
+// 局部声明都跨调用持久」。从前这一形在语法面就被拒 —— 分派表把 TokenKind::Static 认成变量声明关键字,
+// 于是紧随的 Sub / Function 成了「变量名」, 实测交 VB2001 expected variable name。
+// 「Static 后面跟的是不是过程」这一问只许有一处答案: 裸写那一形与带访问修饰符那一形都走这一条路。
+// 返回 nullptr 时状态一字不动 (不吃 token), 调用方照旧按变量声明走 —— `Static a(5) As Long` 那条老路
+// 因此完全不受影响。Property 那一档刻意不带: 语料 0 处, 而 parsePropertyDecl 没有 isStatic 形参,
+// 多发一条没有读者的路不如不发。inStaticProc_ 在后端早有两位读者 (cgen_decl_func.cpp:318 /
+// cgen_decl_proc.cpp:321 都写 `inStaticProc_ = node.isStatic`), AST / clone / printer 也都带得上这枚位。
+DeclPtr Parser::tryParseStaticProcDecl(AccessLevel access, ProcVirt virt) {
+    if (cur_.kind != TokenKind::Static) return nullptr;
+    const Token& nxt = peek2(); // 本仓的 peek() 交的是 cur_，前瞻一枚是 peek2()
+    const bool isSub = (nxt.kind == TokenKind::Sub);
+    const bool isFunc = (nxt.kind == TokenKind::Function);
+    if (!isSub && !isFunc) return nullptr;
+    advance(); // 吃掉 Static, 紧随的过程头按 isStatic=true 解析
+    if (isSub) {
+        auto d = parseSubDecl(access, true);
+        if (d) d->virt = virt;
+        return d;
+    }
+    auto f = parseFunctionDecl(access, true);
+    if (f) f->virt = virt;
+    return f;
+}
+
 DeclPtr Parser::parseDeclaration() {
     // ai/vb-asm-extension-spec: `<Naked>` 只对 Sub/Function 有意义。角括号属性行在模块循环里
     // 就被 tryParseAngleAttr() 摘走并置 pendingNaked_; 若紧随的不是过程声明, 由调用方清掉。
@@ -67,7 +93,11 @@ DeclPtr Parser::parseDeclaration() {
         case TokenKind::Delegate: return parseDelegateDecl(AccessLevel::Default);
         case TokenKind::Const:    return parseConstDeclList(AccessLevel::Default);
         case TokenKind::Dim:      return parseVariableDeclList(AccessLevel::Default, false);
-        case TokenKind::Static:   return parseVariableDeclList(AccessLevel::Private, true);
+        case TokenKind::Static: {
+            // 第一百六十一刀: 后面是 Sub / Function 就是过程头, 否则照旧是变量声明。
+            if (auto d = tryParseStaticProcDecl(AccessLevel::Default, virt)) return d;
+            return parseVariableDeclList(AccessLevel::Private, true);
+        }
 
         case TokenKind::Public:
         case TokenKind::Private:
@@ -132,6 +162,11 @@ DeclPtr Parser::parseDeclaration() {
                 case TokenKind::Event:    return parseEventDecl(access);
                 case TokenKind::Delegate: return parseDelegateDecl(access);
                 case TokenKind::Const:    return parseConstDeclList(access);
+                case TokenKind::Static: {
+                    // 第一百六十一刀: `Public|Private Static Sub/Function` —— 与裸写那一形问同一位主人。
+                    if (auto d = tryParseStaticProcDecl(access, virt)) return d;
+                    return parseVariableDeclList(access, false);
+                }
                 default:                  return parseVariableDeclList(access, false);
             }
         }

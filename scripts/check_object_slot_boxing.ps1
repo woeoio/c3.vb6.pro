@@ -43,8 +43,10 @@
 #       声明 1 + 定义 1 + 站点 2; 进场临时量名 `_vb6_latebox` 与剥回临时量名 `_vb6_lateunbox`
 #       各恰好 1 处且都在定义体内; 剥回那一腿的 `c_.addPostLine` 在本文件里恰好 1 处 (别处再挂
 #       一条就是第二条退路)。「这枚**值**是不是包装器」= vb6_ComObject_IsBoxed: src/backend 恰好
-#       2 处 (桥的两端各一, 都在定义体内) 且 src/rtl 恰好 3 处 (声明 1 + 定义 1 + 类名那一问 1,
-#       见 B8) —— 多一处就是有人绕过 deref 三闸自己去读首字段 (GetInstance 那条 0x20404 崩记录的同族)。
+#       3 处 (桥的两端各一, 都在定义体内; 第三处 = 账 #305 §B218 第一百四十四刀的 copy-in 那一格,
+#       只许住在 registerClassArgRefCopyIn 的定义体里 —— 见下面那条按代码行数的那一针) 且 src/rtl
+#       恰好 4 处 (声明 1 + 定义 1 + 类名那一问 2 = BSTR 档一枚 + ANSI 档一枚, 见 B8) —— 多一处就是有人绕过 deref 三闸自己去
+#       读首字段 (GetInstance 那条 0x20404 崩记录的同族)。
 #   B9  「一枚对象变量不指向任何对象」那一问只许答一处 (§B189 第二格, 第八十七刀):
 #       vb6_BSTR_FromStr(L"Nothing") 在 src/rtl 恰好 1 处, 且它那一行必须排在 vb6_Host_TypeNameOf
 #       之前 (NULL 不许递给宿主那一路); 标表里 case vb6_vtEmpty 仍必须恰好答 L"Empty" 一次
@@ -211,8 +213,14 @@ $nPost = @([regex]::Matches($boxTxt, "c_\.addPostLine")).Count
 if ($nPost -ne 1) { $script:bad += ("B7 桥里的 addPostLine = $nPost (要 1: 剥回那一腿只许一条退路)") }
 $nIsBoxed = Count-InFiles "src\backend" $srcExts "vb6_ComObject_IsBoxed"
 $nIsBoxedRtl = Count-InFiles "src\rtl" $srcExts "vb6_ComObject_IsBoxed"
-if ($nIsBoxed -ne 2) { $script:bad += ("B7 src/backend 问 vb6_ComObject_IsBoxed = $nIsBoxed (要 2: 桥的两端各一)") }
-if ($nIsBoxedRtl -ne 3) { $script:bad += ("B7 src/rtl 的 vb6_ComObject_IsBoxed = $nIsBoxedRtl (要 3: 声明 1 + 定义 1 + 类名那一问 1)") }
+if ($nIsBoxed -ne 3) { $script:bad += ("B7 src/backend 问 vb6_ComObject_IsBoxed = $nIsBoxed (要 3: 桥的两端各一 + copy-in 那一格)") }
+if ($nIsBoxedRtl -ne 4) { $script:bad += ("B7 src/rtl 的 vb6_ComObject_IsBoxed = $nIsBoxedRtl (要 4: 声明 1 + 定义 1 + 类名那一问 2 = BSTR 档 + ANSI 档)") }
+# 第三处不是野读: 它必须住在 copy-in 那一位主人的定义体里 (账 #305 §B218 第一百四十四刀 ——
+# 借来的实参调用前落一枚自有引用, 先得认出它是不是包装器)。别处再问就是第二条退路。
+# 按**代码行**数 (Count-InFiles 把注释行放掉): copy-in 那段注释里本来就写着这枚出口的名字。
+$copyDir = "src\backend\module"
+$nCopyBox = Count-InFiles $copyDir $srcExts "vb6_ComObject_IsBoxed"
+if ($nCopyBox -ne 1) { $script:bad += ("B7 copy-in 那一格问 vb6_ComObject_IsBoxed = $nCopyBox (要 1, 且只许在 " + $copyDir + ")") }
 
 # B6
 if (-not (Test-Path -LiteralPath (Join-Path $root "tests\b187_box\B187d.vbp"))) {
@@ -247,10 +255,10 @@ if (-not (Test-Path -LiteralPath (Join-Path $root "tests\b187_box\B187Decl.cls")
     $script:bad += "B6 缺第八臂夹具 tests/b187_box/B187Decl.cls (TypeName 按声明档折叠)"
 }
 if (-not (Test-Path -LiteralPath (Join-Path $root "tests\b189_gate\B189g.vbp"))) {
-    $script:bad += "B6 缺闸门夹具 tests/b189_gate/B189g.vbp (折叠那问的接口视图那一头, 只发码不建)"
+    $script:bad += "B6 缺闸门夹具 tests/b189_gate/B189g.vbp (折叠那问的接口视图那一头; 第一百七十一刀起它还是这一族唯一一枚真编证人)"
 }
 $nGateCells = @([regex]::Matches($rtTxt, "b189_gate_")).Count
-if ($nGateCells -ne 3) { $script:bad += ("B6 b189_gate_ 那三枚发码判据 = $nGateCells (要 3: 视图反针 + 实体正针 + 同名槽那一双)") }
+if ($nGateCells -ne 4) { $script:bad += ("B6 b189_gate_ 那四枚判据 = $nGateCells (要 4: 视图反针 + 实体正针 + 同名槽那一双 + 第一百七十一刀那枚真编 b189_gate_real_build)") }
 
 # B8 — TypeName 认自家包装器 (§B189 第一档): 一处出口、一处消费, 且排在宿主那一问之后
 $convRel = "src\rtl\core\vb6rtl\vb6rtl_conv.c"

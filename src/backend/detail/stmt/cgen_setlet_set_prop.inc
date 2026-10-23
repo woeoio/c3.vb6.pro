@@ -174,24 +174,42 @@
             // COM 类型化类 (SymbolKind::ComClass) 一律返回空串, 不误伤本应走
             // vb6_ComReleaseTyped / vb6_ReleaseObject 的目标.
             // 函数调用形态 (isCallTarget) 排除: 其求值非左值, 生成 "<call> = NULL"
-            // 会 C2106/C2440.
-            std::string targetCls101 = isCallTarget ? std::string()
-                                                    : inferClassTypeOfExpr(*node.target);
+            // 会 C2106/C2440.  ⚠ 但 **VB6_SA_AT(…) 那一形不是调用** —— 它是 RTL 里产出左值
+            // 的函数式宏 (Fix 113f 定的口径), 第一百四十刀起它归主人管 (见下面 elemTyP140)。
+            const std::string elemTyP140 = classArraySlotElemType(target);
+            std::string targetCls101 = (isCallTarget && elemTyP140.empty())
+                                        ? std::string()
+                                        : inferClassTypeOfExpr(*node.target);
             if (targetCls101.empty()) {
                 auto itCls101 = knownClassVars_.find(targetLower);
                 if (itCls101 != knownClassVars_.end()) targetCls101 = itCls101->second;
             }
-            if (!targetCls101.empty() || knownClassVars_.count(targetLower)) {
+            // 账 #305 §B218 第一百六十五刀: 与覆写那一站同一条问句 —— 槽装的是 legacy 接口视图时
+            // 本主人不接手 (置空那一发它会写 `vb6_cls_<接口名>* 旧 = 目标` = cl C2440)。
+            // 落空之后走下面那条 vb6_ReleaseObject，与**局部**视图置空今天发的一字相同 (实测)。
+            if (!targetCls101.empty() && slotIsLegacyIfaceView(targetLower)) targetCls101.clear();
+            // 账 #305 §B218 (甲) 形A (第一百四十四刀): 出参槽 `(*名)` 的置空 —— 那一格由调用方
+            // 持有，所以「置空」= 放手调用方那一枚 + 清槽 (与覆写同一位主人、同一个声明档类名)。
+            // 判据住在 classOfProjectRefOutSlot 一处，与覆写那一站同问。
+            const std::string outClsP144 = classOfProjectRefOutSlot(target);
+            if (!targetCls101.empty() || !outClsP144.empty() || knownClassVars_.count(targetLower)) {
                 // 账 #305 §B218 (甲) 腿③: 置空 = 放手那一枚 + 清槽, 与覆写同一位主人
                 // (接口那一族在上面 :141-142 早就是这个形状, 具体类只是今天才补上计数头)。
                 // 为什么不退回 vb6_ReleaseObject: 那会把纯 C 结构体首字段当 vtable
                 // Release → 0xC0000005 (Fix 101 当初正是为这条判死的); 也不许留裸清槽:
                 // 裸清槽每次覆写漏一枚 (ai/033 §1.1 行 203/204 的实物)。
-                // 拿不到类名 / 目标是调用形态 (`dict(key) = Nothing`) ⇒ 维持裸清槽。
-                if (!targetCls101.empty() && !isCallTarget
-                    && target.find('(') == std::string::npos
+                // 拿不到类名 / 目标是**真调用**形态 (`dict(key) = Nothing`) ⇒ 维持裸清槽。
+                // 数组元素 (`VB6_SA_AT(void*, arr, i) = Nothing`) 从第一百四十刀起进主人：
+                // 第一百三十九刀量到它今天发的是 `vb6_ReleaseObject((void**)(&(void*){…}))`，
+                // 而那枚 `&(void*){…}` 是复合字面量临时量、ReleaseObject 对裸结构体只清
+                // `*objPtr` ⇒ 数组元素既不放手也不清空 = 整条语句 no-op (两台实测 S3b-term=0)。
+                if (!outClsP144.empty()) {
+                    emitClassSlotRefSet(target, outClsP144, std::string(), false, false);
+                } else if (!targetCls101.empty()
+                    && (target.find('(') == std::string::npos || !elemTyP140.empty())
                     && !procClassFormals_.count(targetLower)) {
-                    emitClassSlotRefSet(target, targetCls101, std::string(), false, false);
+                    emitClassSlotRefSet(target, targetCls101, std::string(), false, false,
+                                        elemTyP140);
                 } else {
                     c_.emitLine(target + " = NULL;  /* Set Nothing (项目类实例) */");
                 }
@@ -635,7 +653,11 @@
                         == std::string::npos;
                 const bool isIvrefVar = knownIvrefVars_.count(ivValLower) != 0;
                 if (plainIvTarget && isIvrefVar) {
-                    emitIvrefQiSet(target, v->name, value);
+                    // 账 #305 §B218 第一百三十四刀: 接管问句只有一位主人, 两站都问它 ——
+                    // 这一档的右值按上面那条判据就是一枚裸视图变量 (借来的), 问句答 false。
+                    emitIvrefQiSet(target, v->name, value,
+                                   node.value ? rhsTransfersProjectRef(*node.value, true)
+                                              : false);
                     return;
                 }
                 if (isClassVar || isNewExpr) {
@@ -763,7 +785,10 @@
                         std::string ivView221 = ifaceViewOfExpr(*node.value);
                         if (!ivView221.empty()) {
                             if (plainIvTarget) {
-                                emitIvrefQiSet(target, v->name, value);
+                                // 账 #305 §B218 第一百三十四刀: 这一档的右值是「返回工程内接口的调用」
+                                // ⇒ 交出来的那枚薄指针自带对价, 视图腿② QI 完当场交回 (问句同 刀3/刀4)。
+                                emitIvrefQiSet(target, v->name, value,
+                                               rhsTransfersProjectRef(*node.value, true));
                                 return;
                             }
                             value = "(" + ivrefCType(v->name) + ")" + value;
@@ -827,27 +852,41 @@
         }
     }
 
-    // P6.4: 接口引用赋值: Set ifaceRef = obj → ifaceRef = vb6_iface_IFoo_wrap(obj)
+    // P6.4: 接口引用赋值: Set ifaceRef = obj → ifaceRef = vb6_iface_IFoo_wrap_<Impl>(obj)
+    // 账 #305 新账 #464: wrap 名带上实现类 —— 一枚 legacy 接口的**表**是工程级一份, 而**包装**
+    // 必须一枚实现类一份 (它填的是 `vb6_vtbl_<I>_for_<Impl>`)。名字不带实现者时, N 枚类就发
+    // N 份同名函数 (C2084), 与从前那 N 份同名 typedef (C2011) 是同一处漏的两半。
     {
         std::string targetLower = target;
         std::transform(targetLower.begin(), targetLower.end(), targetLower.begin(), ::tolower);
         auto itIface = knownIfaceVars_.find(targetLower);
         if (itIface != knownIfaceVars_.end()) {
             std::string ifaceName = itIface->second;
-            std::string ifaceType = "vb6_iface_" + cIdent(ifaceName);
+            // `_New()` 那个形: 类名已经烘在 C 表达式里 (`vb6_cls_<Impl>_New()`), 摘出来就是实现者
+            auto classOfNewExpr = [](const std::string& e) -> std::string {
+                const std::string head = "vb6_cls_";
+                size_t p = e.find(head);
+                if (p == std::string::npos) return std::string();
+                size_t s = p + head.size();
+                size_t q = e.find("_New()", s);
+                if (q == std::string::npos) return std::string();
+                return e.substr(s, q - s);
+            };
             // 如果右侧值包含_New()或是指向类实例的变量, 包装为接口引用
-            if (value.find("_New()") != std::string::npos) {
-                value = ifaceType + "_wrap(" + value + ")";
+            std::string implCls = classOfNewExpr(value);
+            if (!implCls.empty()) {
+                value = legacyIfaceWrapFn(ifaceName, implCls) + "(" + value + ")";
             } else {
                 // 简单变量引用: value可能是类实例指针变量名
                 std::string valLower = value;
                 std::transform(valLower.begin(), valLower.end(), valLower.begin(), ::tolower);
-                if (knownClassVars_.find(valLower) != knownClassVars_.end()) {
-                    value = ifaceType + "_wrap(" + value + ")";
+                auto itCls = knownClassVars_.find(valLower);
+                if (itCls != knownClassVars_.end()) {
+                    value = legacyIfaceWrapFn(ifaceName, itCls->second) + "(" + value + ")";
                 } else {
                     // P6.4+: RHS 是 Variant (ByRef 参数/表达式), 只含对象引用.
                     // 需唯一实现类才能安全 cast:
-                    //   vb6_iface_IFoo_wrap((vb6_cls_Impl*)vb6_VariantToObjectVal(<var>))
+                    //   vb6_iface_IFoo_wrap_<Impl>((vb6_cls_Impl*)vb6_VariantToObjectVal(<var>))
                     // 生成的串已含 "vb6_VariantToObjectVal", Fix 038b-6 下方守卫会跳过,
                     // 不会二次转换. 无唯一实现类时无法推断 → 报编译错误 (绝不静默误编).
                     bool rhsIsVariant = cExprIsVariant(value);
@@ -868,7 +907,8 @@
                                 "' 在全项目有唯一实现类, 当前无法推断转换类型; "
                                 "可将 RHS 改为 objptr/类型化对象变量后重试");
                         } else {
-                            value = ifaceType + "_wrap((vb6_cls_" + cIdent(impl) +
+                            value = legacyIfaceWrapFn(ifaceName, impl) +
+                                    "((vb6_cls_" + cIdent(impl) +
                                     "*)vb6_VariantToObjectVal(" + value + "))";
                         }
                     }

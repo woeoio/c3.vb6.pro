@@ -181,6 +181,19 @@ bool Driver::runCrossModuleResolution() {
                 if (existingIsSetter && sym->kind == SymbolKind::PropertyGet) {
                     globalPublicSyms[sKey] = {i, sym};
                 }
+                // 账 #468: UDT 的成员表归**声明它的那模块**所有 —— 先到先得在这里不成立。
+                // 消费模块自己解析 `As <跨模块 Type>` 时会先立一枚**无成员**的占位符号
+                // (Fix 047 那一路), 它也进 getPublicSymbols(); 模块遍历顺序又不固定
+                // (§B97), 于是占位版可能当上这个 sKey 的代表。下面那条回填闸门
+                // (`localSym 空 && srcSym 非空 → 抄 srcSym`) 就拿不到东西可抄: 每个消费者
+                // 都只抄到一枚空表, udtMembers 恒 0 ⇒ 定长数组成员的下标没有秩可问,
+                // `me->Location.Coord(1)` 原样发进 C (cl C2064; Ray.vbp 95 处)。
+                // 只在 空→非空 这一个方向换人, 所以与遍历顺序无关。
+                else if (sym->kind == SymbolKind::UserDefinedType
+                         && existing->kind == SymbolKind::UserDefinedType
+                         && existing->udtMembers.empty() && !sym->udtMembers.empty()) {
+                    globalPublicSyms[sKey] = {i, sym};
+                }
                 // Fix 095: 过程符号撞名 — 类版已在, 标准 .bas 版到来时切换
                 else if ((sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function)
                          && (existing->kind == SymbolKind::Sub || existing->kind == SymbolKind::Function)) {

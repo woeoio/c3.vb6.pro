@@ -88,6 +88,14 @@ inline const FormPseudoRow* formPseudoRows(size_t& count) {
         {"enabled",           "vb6_GetControlEnabled",           FPQ_NONE, true},
         {"windowstate",       "vb6_GetWindowState",              FPQ_NONE, true},
         {"scalemode",         "vb6_WindowScaleModeSelf",         FPQ_NONE, true},  // 账 #197: 与写侧成对
+        // 账 #305 第四/第五格: ScaleLeft / ScaleTop 与 ScaleWidth / ScaleHeight 是**同一套
+        // 自定义坐标系的四个数**。⚠ 这里刻意只挂 formOnly —— VB6 里 PictureBox / UserControl /
+        // Printer 也各有这一对, 但本轮只给窗体那一档出口; 给成通用行就等于允许
+        // `List1.ScaleLeft` 也答一个数 (伪造成功, 同 #192/#196 那条口径), 而"没挂坐标系时恒 0"
+        // 那一形会让伪造出来的 0 与真读数无法区分。未服务的那几档维持原状落 COM 兜底 ——
+        // 那是"没接"而不是"接错", 两条路的症状不同。
+        {"scaleleft",         "vb6_GetScaleLeft",                FPQ_NONE, true},  // 账 #305: vbUser 原点
+        {"scaletop",          "vb6_GetScaleTop",                 FPQ_NONE, true},
         {"currentx",          "vb6_GetCurrentX",                 FPQ_NONE, true},  // 笔位只有一份存储 (float)
         {"currenty",          "vb6_GetCurrentY",                 FPQ_NONE, true},
         {"drawwidth",         "vb6_Form_DrawGetWidth",           FPQ_NONE, true},

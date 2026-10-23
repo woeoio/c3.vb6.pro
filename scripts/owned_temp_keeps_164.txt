@@ -1,0 +1,365 @@
+# owned_temp_keeps_164.txt —— 账 #454 §B164 形① 的 KEEPS 表（出口面出自 RTL 的权威头）
+# 字段（TAB 分隔）: 出口名|形参序号 <TAB> keeps_pointer(0/1/U) <TAB> 逃逸通道 <TAB> persists_data(1/0/U) <TAB> gate(open/closed) <TAB> 形参档
+# keeps_pointer = 指针/槽位/引用有没有带出调用（**回收只看这一轴**）
+# persists_data = 这条形参的数据有没有落到比调用活得久的地方（**不参与回收**）
+# gate=closed = **不进提名面**（注册表那一族：CI 红未归因 ⇒ 停机）
+# 用户过程与晚绑定 COM 不在表里（不是具名出口）⇒ 按规则归 U，见 check_owned_temp_keeps.ps1
+vb6_AppActivate|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_ArraySetBSTR|2	0	handoff-reads:vb6_BSTR_FromBSTR	0	open	BSTR
+vb6_ArraySetVariant|2	1	write	0	open	VARIANT
+vb6_Asc|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_AscB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_AscW|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_BoolVal|0	0		0	open	BSTR
+vb6_BSTR_Assign|1	0	handoff-reads:vb6_BSTR_FromBSTR	0	open	BSTR
+vb6_BSTR_AssignMove|1	1	write	0	open	BSTR
+vb6_BSTR_Concat|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_BSTR_Concat|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_BSTR_ConcatFree|0	0	handoff-reads:vb6_BSTR_Concat	0	open	BSTR
+vb6_BSTR_ConcatFree|1	0	handoff-reads:vb6_BSTR_Concat	0	open	BSTR
+vb6_BSTR_Free|0	0		0	open	BSTR
+vb6_BSTR_FromBSTR|0	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
+vb6_BSTR_Len|0	0		0	open	BSTR
+vb6_BSTR_ToANSI_cap|0	0		0	open	BSTR
+vb6_BSTR_ToANSI|0	0		0	open	BSTR
+vb6_CBoolV|0	0	handoff-reads:vb6_BoolVal	0	open	VARIANT
+vb6_CCurBSTR|0	0	handoff-reads:vb6_NumVal	0	open	BSTR
+vb6_CDate|0	0	handoff-reads:vb6_DateVal	0	open	VARIANT
+vb6_CDblBSTR|0	0	handoff-reads:vb6_NumVal	0	open	BSTR
+vb6_CDec|0	1	ret	0	open	VARIANT
+vb6_ChDir|0	0	handoff-reads:vb6_path_from	0	open	BSTR
+vb6_ChDrive|0	0		0	open	BSTR
+vb6_CIntBSTR|0	0	handoff-reads:vb6_NumVal	0	open	BSTR
+vb6_Clipboard_SetText|0	0		U	open	BSTR
+vb6_CLngBSTR|0	0	handoff-reads:vb6_NumVal	0	open	BSTR
+vb6_CLngLngBSTR|0	0	handoff-to-plain:vb6_CLngLng	0	open	BSTR
+vb6_CLngPtrBSTR|0	0	handoff-to-plain:vb6_CLngPtr	0	open	BSTR
+vb6_ComPackVariant|0	0	handoff-reads:vb6_VariantPackBorrow	0	open	VARIANT
+vb6_Console_Write|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Console_WriteLine|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_CSByteBSTR|0	0	handoff-to-plain:vb6_CSByte	0	open	BSTR
+vb6_CStr|0	0	handoff-reads:vb6_Format	0	open	VARIANT
+vb6_CStrDateFromBSTR|0	0	handoff-to-plain:vb6_CStrDate	0	open	BSTR
+vb6_CStrDblFromBSTR|0	0	handoff-to-plain:vb6_CStrDbl	0	open	BSTR
+vb6_CStrDblFromVariant|0	0	handoff-to-plain:vb6_CStrDbl	0	open	VARIANT
+vb6_CStrLongFromVariant|0	0		0	open	VARIANT
+vb6_CStrULongFromVariant|0	0		0	open	VARIANT
+vb6_CStrULongLongFromVariant|0	0		0	open	VARIANT
+vb6_CUIntBSTR|0	0	handoff-to-plain:vb6_CUInt	0	open	BSTR
+vb6_CULngBSTR|0	0	handoff-to-plain:vb6_CULng	0	open	BSTR
+vb6_CULngLngBSTR|0	0	handoff-to-plain:vb6_CULngLng	0	open	BSTR
+vb6_CurDir|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_DateAdd|0	0	handoff-reads:vb6_parse_interval	0	open	BSTR
+vb6_DateCanParse|0	0	handoff-reads:vb6_TryDateFromStr	0	open	BSTR
+vb6_DateDiff|0	0	handoff-reads:vb6_parse_interval	0	open	BSTR
+vb6_DateParse|0	0	handoff-reads:vb6_TryDateFromStr	0	open	BSTR
+vb6_DatePart|0	0	handoff-reads:vb6_parse_interval	0	open	BSTR
+vb6_DateSet|0	0		0	open	BSTR
+vb6_DateVal|0	0	handoff-reads:vb6_TryDateFromStr	0	open	BSTR
+vb6_DateValue|0	0	handoff-reads:vb6_DateParse	0	open	BSTR
+vb6_Debug_Print|0	0		0	open	BSTR
+vb6_DebugPrint|0	0	handoff-reads:vb6_DebugPrintStr	0	open	BSTR
+vb6_DebugPrintStr|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_DebugWriteBSTR|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_DecimalAsVariant|0	1	write	0	open	VARIANT
+vb6_DecimalToBSTR|0	1	store	0	open	VARIANT
+vb6_DecimalToR8|0	1	store	0	open	VARIANT
+vb6_DecSetTag|0	U	handoff-unknown:vb6_DEC_VT	0	open	VARIANT
+vb6_DeleteSetting|0	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
+vb6_DeleteSetting|1	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
+vb6_DeleteSetting|2	0		0	closed	BSTR
+vb6_Dir|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Environ|0	0		0	open	BSTR
+vb6_ErrRaise|1	1	store	0	open	BSTR
+vb6_ErrRaise|2	1	store	0	open	BSTR
+vb6_FileCopy|0	0	handoff-reads:vb6_path_from	U	open	BSTR
+vb6_FileCopy|1	0	handoff-reads:vb6_path_from	U	open	BSTR
+vb6_FileDateTime|0	0		0	open	BSTR
+vb6_FileLen|0	0		0	open	BSTR
+vb6_Filter|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Format|0	0		0	open	VARIANT
+vb6_Format|1	0		0	open	BSTR
+vb6_GetAllSettings|0	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
+vb6_GetAllSettings|1	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
+vb6_GetAttr|0	0		0	open	BSTR
+vb6_GetSetting|0	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
+vb6_GetSetting|1	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
+vb6_GetSetting|2	0		0	closed	BSTR
+vb6_GetSetting|3	0		0	closed	BSTR
+vb6_ho_setVariantBstr|1	1	store	0	open	BSTR
+vb6_IIfBSTR|1	0	handoff-reads:vb6_BSTR_Free	0	open	BSTR
+vb6_IIfBSTR|2	0	handoff-reads:vb6_BSTR_Free	0	open	BSTR
+vb6_IIfVariant|1	1	ret+write	0	open	VARIANT
+vb6_IIfVariant|2	1	ret+write	0	open	VARIANT
+vb6_InputBox|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_InputBox|1	0		0	open	BSTR
+vb6_InputBox|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_InputBox|5	0		0	open	BSTR
+vb6_InStr|1	0	handoff-reads:vb6_InStrC	0	open	BSTR
+vb6_InStr|2	0	handoff-reads:vb6_InStrC	0	open	BSTR
+vb6_InStrC|1	0	handoff-reads:vb6_TextFind	0	open	BSTR
+vb6_InStrC|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_InStrRev|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_InStrRev|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_InStrVar|1	0	handoff-reads:vb6_InStrC	0	open	BSTR
+vb6_InStrVar|2	0	handoff-reads:vb6_VariantToString	0	open	VARIANT
+vb6_InStrVarC|1	0	handoff-reads:vb6_InStrC	0	open	BSTR
+vb6_InStrVarC|2	0	handoff-reads:vb6_VariantToString	0	open	VARIANT
+vb6_IsArray|0	0		0	open	VARIANT
+vb6_IsDate|0	0	handoff-reads:vb6_DateCanParse	0	open	VARIANT
+vb6_IsEmpty|0	0		0	open	VARIANT
+vb6_IsError|0	0		0	open	VARIANT
+vb6_IsNull|0	0		0	open	VARIANT
+vb6_IsNumeric|0	0	handoff-reads:vb6_IsNumericText	0	open	VARIANT
+vb6_IsNumericText|0	0	handoff-reads:vb6_NumTryParse	0	open	BSTR
+vb6_IsObject|0	0		0	open	VARIANT
+vb6_Join|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Kill|0	0	handoff-reads:vb6_path_from	0	open	BSTR
+vb6_LCase_str|0	0	handoff-reads:vb6_LCase	0	open	BSTR
+vb6_LCase|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Left|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LeftB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Len|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LenB_BSTR|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Like|0	0	handoff-reads:vb6_LikeC	0	open	BSTR
+vb6_Like|1	0	handoff-reads:vb6_LikeC	0	open	BSTR
+vb6_LikeC|0	0		0	open	BSTR
+vb6_LikeC|1	0		0	open	BSTR
+vb6_LoadPictureEx|0	0		0	open	BSTR
+vb6_LoadResData|0	1	write	0	open	VARIANT
+vb6_LoadResData|1	1	write	0	open	VARIANT
+vb6_LoadResPicture|0	1	write	0	open	VARIANT
+vb6_LoadResPicture|1	1	write	0	open	VARIANT
+vb6_LoadResString|0	1	write	0	open	VARIANT
+vb6_LSet|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LSetFree|0	0	handoff-reads:vb6_LSet	0	open	BSTR
+vb6_LTrim|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LTrimVar|0	0	handoff-reads:vb6_LTrim	0	open	VARIANT
+vb6_Mid|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_MidB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_MidSet|3	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_MkDir|0	0	handoff-reads:vb6_path_from	0	open	BSTR
+vb6_MsgBox|0	0		0	open	BSTR
+vb6_MsgBox|2	0		0	open	BSTR
+vb6_MsgBox1|0	0	handoff-reads:vb6_MsgBox	0	open	BSTR
+vb6_Name|0	0	handoff-reads:vb6_path_from	0	open	BSTR
+vb6_Name|1	0	handoff-reads:vb6_path_from	0	open	BSTR
+vb6_NumTryParse|0	0		0	open	BSTR
+vb6_NumVal|0	0	handoff-reads:vb6_NumTryParse	0	open	BSTR
+vb6_Open|0	0	handoff-reads:vb6_path_from	0	open	BSTR
+vb6_PA_SetBSTR|2	0		0	open	BSTR
+vb6_Print|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Printer_Print|0	0		0	open	BSTR
+vb6_RaiseError|1	1	store	0	open	BSTR
+vb6_Replace|0	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
+vb6_Replace|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Replace|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Right|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_RightB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_RmDir|0	0	handoff-reads:vb6_path_from	0	open	BSTR
+vb6_RSet|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_RTrim|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_SavePicture|1	0		0	open	BSTR
+vb6_SaveSetting|0	0	handoff-reads:vb6_RegBuildKey	U	closed	BSTR
+vb6_SaveSetting|1	0	handoff-reads:vb6_RegBuildKey	U	closed	BSTR
+vb6_SaveSetting|2	0		1	closed	BSTR
+vb6_SaveSetting|3	0		1	closed	BSTR
+vb6_SendKeys|0	1	write	0	open	BSTR
+vb6_SetAttr|0	0		0	open	BSTR
+vb6_Shell|0	0		0	open	BSTR
+vb6_Split|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_Split|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_StrComp|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_StrComp|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_StrConv|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_StrConvToByteArray|0	0	handoff-reads:vb6_StringToByteArray	0	open	BSTR
+vb6_StringToByteArray|0	0		0	open	BSTR
+vb6_StrPtr|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_StrPtrVar|0	0	handoff-reads:vb6_StrPtr	0	open	VARIANT
+vb6_StrReverse|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TextFind|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TextFind|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TextFindRev|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TextFindRev|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TextMatchAt|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TextMatchAt|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TimeSet|0	0		0	open	BSTR
+vb6_TimeValue|0	0	handoff-reads:vb6_DateParse	0	open	BSTR
+vb6_Trim|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TypeName|0	0	handoff-to-plain:vb6_Host_TypeNameOf	0	open	VARIANT
+vb6_UCase_str|0	0	handoff-reads:vb6_UCase	0	open	BSTR
+vb6_UCase|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_UserControl_AsyncRead|0	0		0	open	BSTR
+vb6_UserControl_AsyncRead|2	0		0	open	BSTR
+vb6_UserControl_CancelAsyncRead|0	0		0	open	BSTR
+vb6_UserControl_PropertyChanged|0	0		0	open	BSTR
+vb6_UserControl_ScaleXV|0	0	handoff-to-plain:vb6_UserControl_ScaleXRaw	0	open	VARIANT
+vb6_UserControl_ScaleYV|0	0	handoff-to-plain:vb6_UserControl_ScaleYRaw	0	open	VARIANT
+vb6_UserControl_TextHeight|0	0	handoff-reads:vb6_uc_measureText	0	open	BSTR
+vb6_UserControl_TextWidth|0	0	handoff-reads:vb6_uc_measureText	0	open	BSTR
+vb6_Val|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_VarAddV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VarAddV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VarDivV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VarDivV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VariantArrayGetVal|0	1	write	0	open	VARIANT
+vb6_VariantArraySet|2	1	write	0	open	VARIANT
+vb6_VariantAssign|1	1	write	0	open	VARIANT
+vb6_VariantConvNum|0	0	handoff-reads:vb6_NumVal	0	open	VARIANT
+vb6_VariantIdentity|0	1	ret	0	open	VARIANT
+vb6_VariantPackBorrow|0	0	handoff-to-plain:vb6_ComPackArrayOut	0	open	VARIANT
+vb6_VariantString|0	1	store	0	open	BSTR
+vb6_VariantToBool|0	1	store	0	open	VARIANT
+vb6_VariantToByteArray|0	0	handoff-reads:vb6_StringToByteArray	0	open	VARIANT
+vb6_VariantToDouble|0	0	handoff-reads:vb6_Val	0	open	VARIANT
+vb6_VariantToLong|0	1	store	0	open	VARIANT
+vb6_VariantToLongPtr|0	1	write	0	open	VARIANT
+vb6_VariantToObjectVal|0	0		0	open	VARIANT
+vb6_VariantToSafeArray1D|0	0		0	open	VARIANT
+vb6_VariantToString|0	0	handoff-reads:vb6_CStr	0	open	VARIANT
+vb6_VarMulV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VarMulV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VarSubV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VarSubV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VarType|0	0		0	open	VARIANT
+vb6_Write|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+# --- 借用轴（返回侧）：这一枚出口交出去的指针是借来的，不归调用方所有 ⇒ 不许放它 ---
+[borrow] vb6_ErrDescription
+[borrow] vb6_ErrSource
+[borrow] vb6_ho_variantToBstr
+# --- 返回侧所有权：owned = 这一枚交出去的是**新造且归调用方所有**（调用方可以放它）---
+[own] vb6_App_EXEName BSTR
+[own] vb6_App_HelpFile BSTR
+[own] vb6_App_Path BSTR
+[own] vb6_BSTR_Concat BSTR
+[own] vb6_BSTR_ConcatFree BSTR
+[own] vb6_BSTR_Empty BSTR
+[own] vb6_BSTR_FixedSTR BSTR
+[own] vb6_BSTR_FromANSIBuf BSTR
+[own] vb6_BSTR_FromBSTR BSTR
+[own] vb6_BSTR_FromStr BSTR
+[own] vb6_BSTR_FromStrN BSTR
+[own] vb6_ByteArrayToString BSTR
+[own] vb6_CallByName VARIANT
+[own] vb6_Chr BSTR
+[own] vb6_ChrB BSTR
+[own] vb6_ChrW BSTR
+[own] vb6_Clipboard_GetText BSTR
+[own] vb6_Command BSTR
+[own] vb6_ConReadKey BSTR
+[own] vb6_ConReadLine BSTR
+[own] vb6_Console_ReadKey BSTR
+[own] vb6_Console_ReadLine BSTR
+[own] vb6_CStr BSTR
+[own] vb6_CStrBool BSTR
+[own] vb6_CStrByte BSTR
+[own] vb6_CStrDate BSTR
+[own] vb6_CStrDateFromBSTR BSTR
+[own] vb6_CStrDbl BSTR
+[own] vb6_CStrDblFromBSTR BSTR
+[own] vb6_CStrDblFromVariant BSTR
+[own] vb6_CStrLong BSTR
+[own] vb6_CStrLongFromVariant BSTR
+[own] vb6_CStrLongLong BSTR
+[own] vb6_CStrSingle BSTR
+[own] vb6_CStrULong BSTR
+[own] vb6_CStrULongFromVariant BSTR
+[own] vb6_CStrULongLong BSTR
+[own] vb6_CStrULongLongFromVariant BSTR
+[own] vb6_CurDir BSTR
+[own] vb6_CVErr VARIANT
+[own] vb6_DecimalToBSTR BSTR
+[own] vb6_Dir BSTR
+[own] vb6_Environ BSTR
+[own] vb6_FormatCurrency BSTR
+[own] vb6_FormatDateTime BSTR
+[own] vb6_FormatNumber BSTR
+[own] vb6_FormatPercent BSTR
+[own] vb6_GetSetting BSTR
+[own] vb6_Hex BSTR
+[own] vb6_InputB BSTR
+[own] vb6_InputBox BSTR
+[own] vb6_InputString BSTR
+[own] vb6_Join BSTR
+[own] vb6_LCase BSTR
+[own] vb6_LCase_str BSTR
+[own] vb6_Left BSTR
+[own] vb6_LeftB BSTR
+[own] vb6_LineInput BSTR
+[own] vb6_LoadResString VARIANT
+[own] vb6_LSet BSTR
+[own] vb6_LSetFree BSTR
+[own] vb6_LTrim BSTR
+[own] vb6_LTrimVar BSTR
+[own] vb6_Mid BSTR
+[own] vb6_MidB BSTR
+[own] vb6_MonthName BSTR
+[own] vb6_NumToBSTRDefault BSTR
+[own] vb6_Oct BSTR
+[own] vb6_PA_GetBSTR BSTR
+[own] vb6_Partition BSTR
+[own] vb6_Replace BSTR
+[own] vb6_Right BSTR
+[own] vb6_RightB BSTR
+[own] vb6_RSet BSTR
+[own] vb6_RTrim BSTR
+[own] vb6_Space BSTR
+[own] vb6_Spc BSTR
+[own] vb6_Str BSTR
+[own] vb6_StrConv BSTR
+[own] vb6_StrConvFromByteArray BSTR
+[own] vb6_String BSTR
+[own] vb6_StrReverse BSTR
+[own] vb6_Tab BSTR
+[own] vb6_Trim BSTR
+[own] vb6_TypeName BSTR
+[own] vb6_UCase BSTR
+[own] vb6_UCase_str BSTR
+[own] vb6_VarAddV VARIANT
+[own] vb6_VarDivV VARIANT
+[own] vb6_VariantBool VARIANT
+[own] vb6_VariantByte VARIANT
+[own] vb6_VariantDate VARIANT
+[own] vb6_VariantDouble VARIANT
+[own] vb6_VariantEmpty VARIANT
+[own] vb6_VariantFromComResult VARIANT
+[own] vb6_VariantInt VARIANT
+[own] vb6_VariantLong VARIANT
+[own] vb6_VariantLongLong VARIANT
+[own] vb6_VariantNull VARIANT
+[own] vb6_VariantSByte VARIANT
+[own] vb6_VariantSingle VARIANT
+[own] vb6_VariantToString BSTR
+[own] vb6_VariantUInteger VARIANT
+[own] vb6_VariantULong VARIANT
+[own] vb6_VariantULongLong VARIANT
+[own] vb6_VarMulV VARIANT
+[own] vb6_VarSubV VARIANT
+[own] vb6_WeekdayName BSTR
+# --- 返回侧所有权：alias = 交出去的是**别名**（指着调用方的内存或一个全局）⇒ 不许放它 ---
+[alias] vb6_CDec VARIANT
+[alias] vb6_ErrDescription BSTR
+[alias] vb6_ErrSource BSTR
+[alias] vb6_IIfBSTR BSTR
+[alias] vb6_IIfVariant VARIANT
+[alias] vb6_LoadResData VARIANT
+[alias] vb6_LoadResPicture VARIANT
+[alias] vb6_VariantArray VARIANT
+[alias] vb6_VariantArrayGet VARIANT
+[alias] vb6_VariantArrayGetND VARIANT
+[alias] vb6_VariantArrayGetVal VARIANT
+[alias] vb6_VariantFromStackVARIANT VARIANT
+[alias] vb6_VariantIdentity VARIANT
+[alias] vb6_VariantObject VARIANT
+[alias] vb6_VariantString VARIANT
+# --- 消费轴（账 #463 §B164 研究新增）：消费者**自己放掉**自己的形参的那几格 ---
+# 字段: 出口名|形参序号 <TAB> 条件性(0/1) <TAB> 放掉它的调用 <TAB> 形参名
+# 条件性=1 ⇒ 放不放**看运行期分支**（IIf 那一族）⇒ 调用方无从知道 ⇒ 不许提名
+vb6_BSTR_ConcatFree|0	0	vb6_BSTR_Free	a
+vb6_BSTR_Free|0	0	SysFreeString	bstr
+vb6_IIfBSTR|1	1	vb6_BSTR_Free	truepart
+vb6_IIfBSTR|2	1	vb6_BSTR_Free	falsepart
+vb6_IIfVariant|1	1	vb6_VariantClear	truepart
+vb6_IIfVariant|2	1	vb6_VariantClear	falsepart
+vb6_LSetFree|0	0	vb6_BSTR_Free	str
+vb6_VariantAssign|0	0	vb6_VariantClear	dst

@@ -49,7 +49,11 @@
         && !withObjectVars_.empty() && !withObjectInfoStack_.empty()) {
         auto& wmExpr = static_cast<WithMemberExpr&>(*node.callee);
         const auto& info = withObjectInfoStack_.back();
-        if (info.kind == WithObjKind::Unknown) {
+        // 账 #476 §B190: 这一支从"只认 Unknown"扩成 Unknown ∪ ClassInstance ——
+        // `With o` (o 是工程类实例) 的 info.kind 实测就是 **Unknown** (类实例没被分类),
+        // 所以类臂必须落在**同一支内部** (放在 UDT 那一支没接住之后), 不能另起 else if。
+        if (info.kind == WithObjKind::Unknown
+            || info.kind == WithObjKind::ClassInstance) {
             // UDT With block — 查找 UDT 类型
             const std::string& tempVar = withObjectVars_.back();
             std::string tempLower = Symbol::toLower(tempVar);
@@ -63,6 +67,11 @@
                     Symbol* udtSym = symTab_.lookupModule(udtName);
                     if (udtSym && udtSym->kind == SymbolKind::UserDefinedType) {
                         std::string memLower = Symbol::toLower(wmExpr.memberName);
+                        // 账 #476 §B190 (拍板: 路由只消费出口): 档位只问那一枚出口。
+                        MemberArrayDecl madW;
+                        const bool wIsDynArr =
+                            resolveMemberArrayDecl(udtCType, std::string(),
+                                                   wmExpr.memberName, madW);
                         for (auto& mi : udtSym->udtMembers) {
                             if (Symbol::toLower(mi.name) == memLower) {
                                 bool isHandled = false;
@@ -75,17 +84,13 @@
                                         tempVar + "->" + cIdent(mi.name),
                                         node.positional, mi.arrayRank);
                                     isHandled = true;
-                                } else if (mi.isArrayDynamic) {
-                                    // Pattern B: 动态数组字段 → VB6_SA_AT(elemType, tempVar->member, idx)
+                                } else if (wIsDynArr && node.positional.size() == 1) {
+                                    // Pattern B: 动态数组字段 → VB6_SA_AT(elemCType, tempVar->member, idx)
                                     // Fix 081j-2: With 块临时变量是指针，用 -> 访问成员
                                     emitExpr(*node.positional[0]);
                                     std::string idx = std::move(lastExpr_);
-                                    // Fix 092s: 同 3626 — UDT 元素类型成员数组
-                                    std::string elemCType = (mi.type == Vb6Type::UserDefinedType
-                                                             && !mi.typeRefName.empty())
-                                        ? ("vb6_type_" + cIdent(mi.typeRefName))
-                                        : mapSaElemCType(mi.type);
-                                    lastExpr_ = "VB6_SA_AT(" + elemCType + ", "
+                                    // Fix 092s: 同 3626 — UDT 元素类型成员数组 (档位由出口答)
+                                    lastExpr_ = "VB6_SA_AT(" + madW.elemCType + ", "
                                               + tempVar + "->" + cIdent(mi.name) + ", " + idx + ")";
                                     isHandled = true;
                                 }
@@ -93,6 +98,31 @@
                                 break;
                             }
                         }
+                    }
+                }
+            }
+            // 账 #476 §B190 (拍板: 路由只消费出口): 上面 UDT 那一支没接住 ⇒ 再问**类成员**。
+            // `With o: .Field(i)` 里的 Field 是类成员的动态数组 —— 这一臂以前整条落空, 于是
+            // 发成 `tempVar->Field(i)`: 在调用 `vb6_SafeArray1D*` 指针 (cl C2064)。
+            // 类名两个来源: info.className (ClassInstance 时有) 或 knownClassVars_ 里的
+            // 临时变量 (Unknown 时走这条) —— 与 `obj.Field(i)` 那一臂问同一个出口。
+            {
+                const std::string& tempVar2 = withObjectVars_.back();
+                std::string wCls = info.className;
+                if (wCls.empty()) {
+                    auto cIt = knownClassVars_.find(Symbol::toLower(tempVar2));
+                    if (cIt != knownClassVars_.end()) wCls = cIt->second;
+                }
+                if (!wCls.empty()) {
+                    MemberArrayDecl madWc;
+                    const bool wClsIsDynArr =
+                        resolveMemberArrayDecl(std::string(), wCls, wmExpr.memberName, madWc);
+                    if (wClsIsDynArr && node.positional.size() == 1) {
+                        emitExpr(*node.positional[0]);
+                        const std::string idx = std::move(lastExpr_);
+                        lastExpr_ = "VB6_SA_AT(" + madWc.elemCType + ", "
+                                  + tempVar2 + "->" + cIdent(wmExpr.memberName) + ", " + idx + ")";
+                        return;
                     }
                 }
             }

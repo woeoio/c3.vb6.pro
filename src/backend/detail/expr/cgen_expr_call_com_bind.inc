@@ -501,13 +501,15 @@
         }
 
         // P6.4: 接口引用方法调用 (Dim x As IFoo → x.Method → x.vtbl->Method(x.obj, args))
+        // 账 #305 新账 #471 (第一百七十五刀): 那一发的形状交给唯一主人 `legacyViewCallExpr`（语句路
+        // 也问它）。**换主人不换形状**：拼法逐字照旧 ⇒ 存量产物应当一字不动（清单零移动是本刀的护栏）。
+        // 这里先问一次「是不是视图」是**必须的**：实参的 emitExpr 有副作用，不能白发了再退。
+        // `isEarlyBoundCom_` 那道闸留在本站 —— 它说的是「这条表达式路上接收者已被前期绑定接管」，
+        // 是本路的上下文，不是名册那一问的一部分。
         {
             std::string objLower = objExpr;
             std::transform(objLower.begin(), objLower.end(), objLower.begin(), ::tolower);
-            auto itIfaceVar = knownIfaceVars_.find(objLower);
-            if (itIfaceVar != knownIfaceVars_.end() && !isEarlyBoundCom_) {
-                std::string ifaceName = itIfaceVar->second;
-                std::string ifaceId = cIdent(ifaceName);
+            if (slotIsLegacyIfaceView(objLower) && !isEarlyBoundCom_) {
                 // 生成参数列表
                 std::vector<std::string> callArgs;
                 for (size_t i = 0; i < node.positional.size(); i++) {
@@ -518,17 +520,11 @@
                     emitExpr(*named.value);
                     callArgs.push_back(lastExpr_);
                 }
-                std::string argsStr;
-                for (size_t i = 0; i < callArgs.size(); i++) {
-                    if (i > 0) argsStr += ", ";
-                    argsStr += callArgs[i];
+                const std::string p64Call = legacyViewCallExpr(objExpr, memberName, callArgs);
+                if (!p64Call.empty()) {
+                    lastExpr_ = p64Call;
+                    return;
                 }
-                // x.vtbl->Method(x.obj, args...)
-                std::string call = objExpr + ".vtbl->" + cIdent(memberName) + "(" + objExpr + ".obj";
-                if (!argsStr.empty()) call += ", " + argsStr;
-                call += ")";
-                lastExpr_ = call;
-                return;
             }
         }
 

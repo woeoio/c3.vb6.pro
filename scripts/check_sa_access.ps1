@@ -284,7 +284,7 @@ if ($offsetEmit -ne 0) {
 
 # A8: ReDim 的元素档只问一处出口
 $beFiles = @(Get-ChildItem -LiteralPath $beDir -Recurse -File | Where-Object { $_.Extension -in ".cpp", ".inc", ".hpp" })
-$rdDef = 0; $rdDecl = 0; $rdCall = 0; $rdAsOnly = 0; $rdBodyBoth = 0
+$rdDef = 0; $rdDecl = 0; $rdCall = 0; $rdAsOnly = 0; $rdBodyBoth = 0; $rdBodyMember = 0
 foreach ($f in $beFiles) {
     $txt = [System.IO.File]::ReadAllText($f.FullName)
     foreach ($line in (Lines $f.FullName)) {
@@ -298,8 +298,12 @@ foreach ($f in $beFiles) {
         }
     }
     if ($f.Name -eq "cgen_expr_array.cpp") {
-        $blk = [regex]::Match($txt, 'Vb6Type\s+CCodeGen::resolveReDimElemType[\s\S]{0,900}?\r?\n\}')
+        # 账 #475 §B220: 体里现在三头都在 —— As 子句 / arrayElemTypes_ / 点号链 UDT 成员
+        # (resolveUdtMemberElemInfo)。窗口不设上限: 函数体首个 col-0 的 `}` 就是收尾，
+        # 从前那个 900 字上限会在加了几行之后就量不到 arrayElemTypes_ (假红)。
+        $blk = [regex]::Match($txt, 'Vb6Type\s+CCodeGen::resolveReDimElemType[\s\S]*?\r?\n\}')
         if ($blk.Value -match 'resolveArrayElemType\(\s*typeRef\s*\)' -and $blk.Value -match 'arrayElemTypes_\.find') { $rdBodyBoth++ }
+        if ($blk.Value -match 'resolveUdtMemberElemInfo\s*\(') { $rdBodyMember++ }
     }
 }
 if ($rdDef -ne 1) { $bad += ("A8 resolveReDimElemType 定义 = " + $rdDef + " (要求 1；两处定义 = 第二份答案)") }
@@ -307,6 +311,26 @@ if ($rdDecl -ne 1) { $bad += ("A8 resolveReDimElemType 声明(cgen_helpers.inc) 
 if ($rdCall -lt 1) { $bad += "A8 cgen_redim.cpp 不再调 resolveReDimElemType（ReDim 的元素档又回到只问 As 子句）" }
 if ($rdAsOnly -ne 0) { $bad += ("A8 cgen_redim.cpp 里「声明处只问 As」的老形状 = " + $rdAsOnly + " 处 (要求 0；那正是本刀改掉的那一行)") }
 if ($rdDef -eq 1 -and $rdBodyBoth -ne 1) { $bad += "A8 resolveReDimElemType 的体里没同时问 As 子句与 arrayElemTypes_（只剩一头 = 修前的形状）" }
+if ($rdDef -eq 1 -and $rdBodyMember -ne 1) { $bad += "A8 resolveReDimElemType 不再问点号链 UDT 成员（成员动态数组的元素档又回落 Variant ⇒ 账 #475 的 16/4 字节步长错位回来）" }
+
+# A20: UDT 成员动态数组的元素档只许一位主人 (账 #475 §B220, 第一百七十九刀)
+# 修前: `ReDim t.Items(1 To 3)` 走裸名回退, 分配 vb6_sa_variant, 访问 Pattern B 按
+# `VB6_SA_AT(int32_t, t.Items, i)` 4 字节步 —— 16 vs 4。修后成员表那一问收进
+# resolveUdtMemberElemInfo, 复杂目标与点号链目标各问一次, 谁也不许自己抄一份 udtMembers 循环。
+$memDecl = 0; $memDef = 0; $memAll = 0
+foreach ($f in $beFiles) {
+    foreach ($line in (Lines $f.FullName)) {
+        $t = $line.Trim()
+        if ($t.StartsWith("//")) { continue }
+        if ($f.Name -eq "cgen_helpers.inc" -and $t -match '^bool\s+resolveUdtMemberElemInfo\s*\(') { $memDecl++ }
+        if ($f.Name -eq "cgen_redim.cpp" -and $t -match '^bool\s+CCodeGen::resolveUdtMemberElemInfo\s*\(') { $memDef++ }
+        if ($t -match '\bresolveUdtMemberElemInfo\s*\(' -and $t -notmatch '^bool\s+(CCodeGen::)?resolveUdtMemberElemInfo') { $memAll++ }
+    }
+}
+if ($memAll -ne 2) { $bad += ("A20 resolveUdtMemberElemInfo 调用点 = " + $memAll + " (恰 2: cgen_expr_array.cpp 点号链 + cgen_redim.cpp 复杂目标转调)") }
+if ($memDecl -ne 1) { $bad += ("A20 resolveUdtMemberElemInfo 的声明(cgen_helpers.inc) = " + $memDecl + " (恰好 1；0 = 点号链那一头又问不到成员表)") }
+if ($memDef -ne 1)  { $bad += ("A20 resolveUdtMemberElemInfo 的定义(cgen_redim.cpp) = " + $memDef + " (恰好 1；>1 = 第二份成员循环)") }
+
 
 # A9: 字面量兜底档的名单恰好三条
 $saVariant = @()
@@ -393,7 +417,9 @@ if ($slotDef -ne 1) { $bad += ("A16 vb6_SaNdSlot 的定义 = " + $slotDef + " (�
 if ($slotAll -ne 5) { $bad += ("A16 vb6_SaNdSlot 的定义+调用 = " + $slotAll + " 处 (恰好 5：1 定义 + 两枚 Preserve 各 2 次)") }
 if ($oldStr + $newStr -ne 0) { $bad += ("A16 oldStrides/newStrides = " + ($oldStr + $newStr) + " 处 (要求 0：那两份表就是与访问侧相反的第二套算术)") }
 if ($descIdx -ne 0) { $bad += ("A16 丢弃旧元素那一段的下标枚举是降序 = " + $descIdx + " 处 (要求 0：枚举序即线性格位序，降序算出的 indices 与 linear 不是同一套对应)") }
-foreach ($sigA16 in @('vb6_SafeArrayND\* vb6_SafeArrayReDimPreserveND\(vb6_safearray_elemtype',
+# 第一百五十四刀: ND 那位 Preserve 的本体改名 _Tr (多收一枚元素交回回调), 老名字退成转调
+    # ⇒ A16 读函数体的那两枚钉跟着搬到 _Tr 上; 老名字与它的 NULL 转调由 A12b 钉住。
+foreach ($sigA16 in @('vb6_SafeArrayND\* vb6_SafeArrayReDimPreserveND_Tr\(vb6_safearray_elemtype',
                       'vb6_SafeArrayND\* vb6_SafeArrayReDimPreserveND_Udt\(int32_t elemSize')) {
     $mA16 = [regex]::Match($csrc, $sigA16 + '[\s\S]{0,3000}')
     if (-not $mA16.Success) { $bad += ("A16 找不到这一枚 Preserve 的定义：" + $sigA16); continue }
@@ -406,7 +432,15 @@ $ndPresDeclH = @([regex]::Matches($h, 'vb6_SafeArrayReDimPreserveND\s*\(\s*vb6_s
 $ndPresDefC = @([regex]::Matches($csrc, 'vb6_SafeArrayND\*\s+vb6_SafeArrayReDimPreserveND\s*\(\s*vb6_safearray_elemtype\s+elemType')).Count
 if ($ndPresDeclH -ne 1) { $bad += ("A12 vb6_SafeArrayReDimPreserveND 的声明收 elemType = " + $ndPresDeclH + " 处 (恰好 1；0 = 形参表又回到没有档，NULL 描述符只能猜)") }
 if ($ndPresDefC -ne 1) { $bad += ("A12 vb6_SafeArrayReDimPreserveND 的定义收 elemType = " + $ndPresDefC + " 处 (恰好 1；头/体个数不一致在 runner 上是 cl C2197)") }
-$ndPresHead = [regex]::Match($csrc, 'vb6_SafeArrayND\*\s+vb6_SafeArrayReDimPreserveND\s*\(\s*vb6_safearray_elemtype[\s\S]{0,900}')
+# A12b: 第一百五十四刀 —— 两个名字都要钉住 (本体 _Tr 收档又收回调; 老名字只剩一句转调)
+$ndTrDeclH = @([regex]::Matches($h, 'vb6_SafeArrayReDimPreserveND_Tr\s*\(\s*vb6_safearray_elemtype\s+elemType')).Count
+$ndTrDefC = @([regex]::Matches($csrc, 'vb6_SafeArrayND\*\s+vb6_SafeArrayReDimPreserveND_Tr\s*\(\s*vb6_safearray_elemtype\s+elemType')).Count
+$ndTrNull = @([regex]::Matches($csrc, 'vb6_SafeArrayReDimPreserveND_Tr\s*\(elemType,\s*arr,\s*dimCount,\s*newBounds,\s*NULL\)')).Count
+if ($ndTrDeclH -ne 1) { $bad += ("A12b _Tr 的声明收 elemType = " + $ndTrDeclH + " (恰好 1; 0 = 兄弟出口在头上没有声明)") }
+if ($ndTrDefC -ne 1) { $bad += ("A12b _Tr 的定义收 elemType = " + $ndTrDefC + " (恰好 1; 头/体不一致在 runner 上是 cl C2197)") }
+if ($ndTrNull -ne 1) { $bad += ("A12b 老名字转调传 NULL = " + $ndTrNull + " (恰好 1; 0 = 转调丢了, 非类档那一发也开始交回元素)") }
+
+$ndPresHead = [regex]::Match($csrc, 'vb6_SafeArrayND\*\s+vb6_SafeArrayReDimPreserveND_Tr\s*\(\s*vb6_safearray_elemtype[\s\S]{0,900}')
 if ($ndPresHead.Value -notmatch 'vb6_SafeArrayReDimND\(\s*elemType') { $bad += "A12 首次分配那一条不再按调用方给的档建（回到 empty = 尺寸表 default 4 字节）" }
 if ($ndPresHead.Value -match 'vb6_sa_empty') { $bad += "A12 多维 Preserve 里又出现 vb6_sa_empty 兜底（那正是本刀撤掉的那一行）" }
 if ($ndPresHead.Value -notmatch 'elemType == vb6_sa_udt') { $bad += "A12 多维 Preserve 不再挡 udt 档（尺寸表对 udt 答 0 ⇒ calloc(n,0) 是非空零长指针）" }
@@ -575,6 +609,7 @@ if ($bad.Count -eq 0) {
                 " / cold-path decl " + $decl + " def " + $defn +
                 " / backend raw-data lines " + $rawData.Count +
                 " / raw-index shape " + $shape + " / ND macros " + $ndMacros.Count + " / ND inline " + $ndDefs.Count + " / ATN emit " + $atnEmit + " / ATN literal " + $atnLiteral + " / redim helper def " + $rdDef + " call " + $rdCall + " / sa_variant lit " + $saVariant.Count + " / box cast " + $boxCast + " / table w " + $tblWrite + " f " + $tblFind + " e " + $tblErase + " / ndPres decl " + $ndPresDeclH + " def " + $ndPresDefC + " emit " + $ndPresEmit + " typed " + $ndPresTyped + " / nb call " + $nbCall + " lit " + $nbLit + " / seq " + $nbSeq + " fix " + $fxBounds + " / slot def " + $slotDef + " all " + $slotAll + " strideTab " + ($oldStr + $newStr) + " desc " + $descIdx +
+                " / ndPres_Tr decl " + $ndTrDeclH + " def " + $ndTrDefC + " fwd-NULL " + $ndTrNull +
                 " / vt-flavor decl " + $vtfDecl + " def " + $vtfDef + " call " + ($vtfAll - $vtfDecl - $vtfDef) +
                 " / pack-of-ptr " + ($vtPackAll - $vtPackDecl - $vtPackDef) + " hard tag " + $hardTag + " tern " + $ternTag +
                 " / TypeName list " + $tnEmpty + " scalar " + ($tnScalarAll - $tnScalarDef) +

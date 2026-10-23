@@ -78,11 +78,20 @@ CCodeGen::ComSigView CCodeGen::comSigViewOf(const Symbol* comSym,
 std::string CCodeGen::comGetterExpr(const ComSigView& sv, const std::string& objExpr,
                                     const std::string& memberName) const {
     if (!sv.found || !sv.isGet) return "";   // put/method/未登记 ⇒ 调用方走晚绑定
+    return comGetterExprForRetCType(sv.retCType, objExpr, memberName);
+}
+
+// 账 #305 新账 #474 (第一百七十八刀): 那张 switch 从此只这一处，**按返回类型**答。
+// 多出来的这位读者要的正是「同一档返回类型在本机发的是哪一发」—— 它拿站点已经拼好的那一发
+// 与这一问的答案**逐字节比**，相等才把访问路换成视图的直槽 (同型 ⇒ 换算与所有权一字不动)。
+std::string CCodeGen::comGetterExprForRetCType(const std::string& retCType,
+                                               const std::string& objExpr,
+                                               const std::string& memberName) const {
     std::string args = objExpr + ", L\"" + memberName + "\"";
-    if (sv.retCType == "BSTR") return "vb6_ComGetStringProp(" + args + ")";
-    if (sv.retCType == "int32_t" || sv.retCType == "int16_t") return "vb6_ComGetIntProp(" + args + ")";
-    if (sv.retCType == "double" || sv.retCType == "float") return "vb6_ComGetDoubleProp(" + args + ")";
-    if (sv.retCType == "void*") return "vb6_ComGetObjectProp(" + args + ")";
+    if (retCType == "BSTR") return "vb6_ComGetStringProp(" + args + ")";
+    if (retCType == "int32_t" || retCType == "int16_t") return "vb6_ComGetIntProp(" + args + ")";
+    if (retCType == "double" || retCType == "float") return "vb6_ComGetDoubleProp(" + args + ")";
+    if (retCType == "void*") return "vb6_ComGetObjectProp(" + args + ")";
     // 类型未知 (Enum→UserDefinedType / 签名压根没读到) ⇒ **不猜目标档**: 交回原生 VARIANT,
     // 让运行期按 VARIANT 自己办。这一档以前有两处各自猜 (一处按 unpackType 猜 Long ⇒ BSTR 属性
     // 发成 vb6_ComGetIntProp，读回是指针宽度当整数用; 一处直接发 StringProp ⇒ 未初始化的
@@ -353,6 +362,13 @@ std::string CCodeGen::resolveComValue(const std::string& unpackType) {
     } else {
         // 默认: BSTR解封 (最通用, COM VARIANT → BSTR自动转换)
         lastExpr_ = "vb6_ComGetStringProp(" + getPropArgs + ")";
+    }
+    // 账 #305 新账 #474 站F (第一百七十八刀): 上面那一档是**按目标**答的晚绑定；接收者是一枚
+    // legacy 接口视图时它把值结构体塞进 helper 首枚 `void*` 槽 = cl C2172 (With 内外同红)。
+    // 只问一次、形状交回视图那一族的主人；不同型 (含对象档/带实参的属性) 一律保留本处那一发。
+    {
+        std::string viewRead = legacyViewGetterReadExpr(objExpr, memberName, lastExpr_);
+        if (!viewRead.empty()) lastExpr_ = viewRead;
     }
     return lastExpr_;
 }

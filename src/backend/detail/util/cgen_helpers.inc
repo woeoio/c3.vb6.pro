@@ -98,6 +98,38 @@
     // 上面那一问的第二形, 单独露出来是给哨兵与后来的站点(§B164 形⑥ 那一站)当口径用的。
     bool exprBorrowsBstrStorage(Expr* rhs, const std::string& rawC) const;
 
+    // 账 #464 §B164 回收刀: 在**发码的实参表**上提名「整枚实参 = 一个 mint 调用」的那一格,
+    // 把它提成一个**具名临时量**, 语句末按**档**收回。
+    //
+    // 提名的口径全部来自 src/common/owned_temp_keeps.hpp（那张表由
+    // scripts/check_owned_temp_keeps.ps1 从 RTL **推导** ⇒ 哨兵双向对账 ⇒ 漂不了）:
+    //   ① 档号 = **mint 出口的返回档**（BSTR / VARIANT），**不是**消费者的 VB 形参档
+    //      （#461 拿形参档当 C 档 ⇒ 一枚 double 被声明成 BSTR ⇒ cl C2440）
+    //   ② 消费者那一格：不带走指针（keeps=0）· 不在 closed 族 · **不在消费轴**上
+    //      （消费者自己放掉这一格 ⇒ 再放就是双放 ⇒ 堆损坏）
+    //   ③ mint 出口在 [own] 节（新造且归我们所有）—— 借来/别名/「返回值是形参」一律不提名
+    // 另外三道「宁可不收」的闸（发码这一侧独有的）：
+    //   ④ **只提名单实参的调用** —— 多实参时把一枚实参提成临时量会**改动求值次序**
+    //      （那一枚提前到调用之前求值，而基线里实参的求值次序本来就是编译器定的）
+    //   ⑤ **拼接站的左操作数里的一切不提名** —— 拼接站那条判据读的是**左操作数的发码文本**
+    //      （"左文本里含 vb6_BSTR_Concat 子串" ⇒ 发 ConcatFree，而 ConcatFree 放掉左操作数）
+    //      ⇒ 提了名那条子串判据会**翻面** ⇒ 行为变了（台账 #463 记的那条暗道）
+    //   ⑥ 文件作用域（!currentProc_）不收 —— 那里没有「语句末」可以收回
+    //
+    // 返回 true = argList 被改写过（有临时量提了出来）。
+    bool hoistOwnedTempArgs(std::string& argList, const std::string& callee);
+
+    // 同一把刀的**单格**那一版：只提名**指定的那一格**（拼接站的右操作数用 ——
+    // 左操作数那条「含 vb6_BSTR_Concat 子串」的判据不许动，右操作数可以）。
+    // 拼接站那一格是安全的：左操作数**在右操作数之前就已经求完值**了（发码时先发左后发右），
+    // ⇒ 把右操作数提成临时量**不动求值次序**。
+    bool hoistOwnedTempSlot(std::string& arg, const std::string& consumer, int slot,
+                            const std::string& siblingText = "");
+
+    // 账 #468 §B164 拼接站那一族：这一枚文本**整枚**是不是一个「owned 且档是 BSTR」的 mint？
+    //   拼接站的左操作数若是 ⇒ 拼接站**自己**放掉它（发 ConcatFree）⇒ 那一枚不漏。
+    bool exprIsOwnedBstrMint(const std::string& text);
+
     // Fix 198: 装箱点上的布尔口径修正. `As Boolean` 在 C 层就是 int16_t (与 Integer
     // 同型), 布尔字面量又是裸 (-1) (int) → 交给 _Generic vb6_VariantFromValue 会分别
     // 选到 short:/int: 分支, 装箱成 VT_I2 / VT_I4: 实测 VarType(b)=2、
@@ -277,6 +309,24 @@
     void emitClassInitChain(Module& module);  // .c: 派生类 _New() 里根→叶跑祖先初始化
 
     void emitIfaceContractTypedefs();                 // .h: 工程级 vb6_ivtbl_/vb6_ivref_ 类型
+    // ---- legacy VB6 接口 (.cls 宿主、没进 tB 登记表) 的槽表 (账 #305 新账 #464) ----
+    // 形状读 driver 预扫描那张只读表, 发码层只渲染不采集 ⇒「一枚接口一份表」是结构上的
+    // 保证, 不是发射顺序上的运气。表类型住接口自己那一趟 (每份模块头 + #ifndef 守卫),
+    // 实现类只发**自己的实例**与**带自己名字的 wrap**。
+    struct LegacyIfaceSlot {
+        std::string field;     // 结构体字段名 = cIdent(裸成员名), 唯一的读者按接收者写的名字取它
+        std::string slotKey;   // 带档的槽键 (D2: 属性 = get_/put_/putref_ + 裸名; 账 #489 之后 legacy 也用这把)
+        std::string retType;   // C 返回类型; "void" = Sub 或 Property Let/Set
+        std::string params;    // 不含 me 的形参声明, 带前置 ", "; 无参 = 空串
+    };
+    std::vector<LegacyIfaceSlot> legacyIfaceSlots(const std::string& ifaceName);
+    void emitLegacyIfaceContractTypedefs();           // .h: 每枚 legacy 接口一份 vb6_vtbl_/vb6_iface_
+    std::string legacyIfaceWrapFn(const std::string& ifaceName,
+                                  const std::string& implName) const;  // wrap 名唯一出口
+    // 账 #305 新账 #471 (第一百七十四刀): 「按运行期类名选中那一枚 wrap」这一发 —— 名字唯一出口
+    // 与铸那一发 (声明跟着表类型走, 定义铸在接口自己那份 .c)。站点只问这一处: For Each 那一站。
+    std::string legacyIfaceViewFromFn(const std::string& ifaceName) const;
+    void emitLegacyIfaceViewFrom(Module& module);     // .h 声明 + .c 定义, 都在接口自己那份 TU
     void emitIfaceClassFields(Module& module);        // .h: 类结构体里的 __iv_<I> 字段
     void emitIfaceImplTables(Module& module);         // .c: 适配器 + 类侧槽表实例
     void emitIfaceNewInit(Module& module);            // .c: _New() 里回填 vt
@@ -285,8 +335,43 @@
     void trackClassSlotForRelease(const std::string& cName, const std::string& clsName);
     // 账 #305 §B218 (甲) 腿④ 第二道夹: 这一格的地址交给了外部 Declare ⇒ 出口不放手 (只撤类档)。
     void dropClassSlotRelease(const std::string& expr);
+    // 第一百五十二刀: arrayName 非空 = 第三档「数组载体」(clsName 那一格空着不用)。
     void trackSlotForRelease(const std::string& expr, bool isView,
-                             const std::string& clsName);
+                             const std::string& clsName,
+                             const std::string& arrayName = std::string(),
+                             bool freeCarrier = false);
+    // 账 #305 §B218 (甲) 腿④: 局部数组出作用域那一格的唯一登记口 (第一百五十二刀立,
+    // 第一百五十六刀放宽) —— 每一档局部数组都登记; 元素认不出类就不交回元素, 载体照样收尾,
+    // 收尾那一发只在过程入口预扫说「这枚载体在本过程里没被整体用掉」时才发。
+    void trackArrayCarrierForRelease(const std::string& cName,
+                                     const std::string& arrayName);
+    // 账 #305 §B218 (甲) 第一百六十刀: 「这枚局部声明要不要 C 的 static 存储」的唯一一问。
+    //   标量那一路 (storageClass) 与数组那三支都问它, 站点不许自己再拼 `var.isStatic || inStaticProc_`
+    //   —— 那正是数组三支从前掉这一档的成因 (判据只长在出口那道闸上, 存储级没人问)。
+    bool wantsStaticLocalStorage(const VariableDecl& var) const;
+    // 账 #305 §B218 (甲) 第一百六十刀: 数组载体声明那一发的唯一形状。非静态照旧就地建;
+    //   静态那一档发 `static T* x = NULL;` + 一发「指针本身」当首轮守卫 (C 不许静态局部用非常量
+    //   初始化器, 同 Fix 084aa 那条老规矩)。initCode 本来就是 NULL (动态数组那一支) ⇒ 只加前缀、
+    //   不发守卫 —— VB6「没 ReDim 过就读 = 错误 9」那条语义由 NULL 这一格自己保住。
+    //   第一百六十四刀加第三档 (declaredInPrelude): 嵌在块里那几档定长/多维载体的**声明**由提升
+    //   那一趟发到序言, 原位这一发只剩那一发创建 —— 块可能一次都不进、也可能进多次, 守卫同 Static。
+    void emitArrayCarrierDecl(const std::string& cType, const std::string& cName,
+                              const std::string& initCode, bool staticStorage,
+                              bool declaredInPrelude);
+    // 账 #305 §B218 (甲) 第一百六十四刀: 「拿指针本身当首建守卫」那一块的形状 —— Static 那一档与
+    //   序言那一档共用 (两处不同成因、同一个下限: 那一发创建每调用只许落地一次)。
+    void emitArrayCarrierGuardedCreate(const std::string& cName, const std::string& initCode,
+                                       const std::string& why);
+    // 「这枚载体在 C 里是哪一档描述符指针」的唯一一问 —— 序言那一发与原位那三支同一个答案
+    //   (答错 = 拿 1D 的指针去接 ND 的创建, cl C2440)。
+    std::string arrayCarrierCType(const VariableDecl& var);
+    // 序言那一发的形状: 只有指针、没有创建。
+    void emitArrayCarrierPreludeDecl(const VariableDecl& var);
+    // 「提升开着没有」那一问 (C3_NO_HOIST ⇒ 关): 提升那一趟与闸① 那一问共用一位主人。
+    bool hoistingLocalDeclsEnabled();
+    // 账 #305 §B218 (甲) 第一百五十六刀: 过程入口跑一趟, 把「载体被整体用掉」的数组名收进
+    // escapedLocalArrays_ (与 clear 那张表同一位置调用)。
+    void scanLocalArrayEscapes(const StmtList& body);
     void emitIvrefScopeRelease();                     // B05: 过程出口发 Release
     std::string ivrefCType(const std::string& typeName);   // 空串 = 不是新式接口
     const IfaceView* ivLookupIface(const std::string& written);
@@ -295,6 +380,35 @@
     // 给空串。四个消费站点 (Set 目标侧 / Set 返回槽 / 成员访问接收者 / 实参) 都只问它，
     // 别各写一遍「名字是不是接口」，那正是 #448 数出来的多主人病灶。
     std::string ifaceViewOfExpr(const ASTNode& expr);
+    // 账 #305 §B218 第一百六十五刀: 「这一格**槽**装的是不是 legacy 那一档接口视图」——
+    // knownIfaceVars_ 那张名册的唯一问句。与上面那一问的分工 = 上面问**新式薄指针**
+    // (vb6_ivref_<I>*) 与「返回接口的调用」，本问只认名册里那一档值结构体 (vb6_iface_<I>)。
+    // 工程类那一位主人 (emitClassSlotRefSet) 接手它就铸一枚从没造过的 `vb6_cls_<接口名>`。
+    bool slotIsLegacyIfaceView(const std::string& nameLower) const;
+    // 账 #305 新账 #471 (第一百七十四刀): 同一次查表的**带名字**那一档 (不是视图 ⇒ 空串)。
+    // 上面那句问句是这一句的投影 ⇒ 名册只这一处读。For Each 那一站 (站A) 是唯一要名字的读者。
+    std::string slotLegacyIfaceViewName(const std::string& nameLower) const;
+    // 账 #305 新账 #407 第一百七十一刀: 视图值进 Variant 装箱站该发的那一句 (唯一出口)。
+    // 不是视图 ⇒ 空串。调用者只有两位 = wrapVariantValue 与 boxToVariant，别添第三位。
+    std::string legacyViewBoxExpr(const ASTNode* expr, const std::string& cExpr) const;
+    // 账 #305 新账 #471 站D (第一百七十五刀): 「接收者是一枚视图时那一发方法调用怎么拼」的唯一出口
+    // (`x.vtbl-><成员>(x.obj, 实参…)`)。两位消费者 = 表达式路 (cgen_expr_call_com_bind.inc 的 P6.4，
+    // 换主人不换形状) 与语句路 (cgen_call.cpp 落在 COM 兜底之前)。不是视图 ⇒ 空串，站点按原路走。
+    // 站D′（`With <视图>`）已由第一百七十七刀接上：它不需要第二位形状主人 —— 临时量按视图值发 +
+    // 把临时量登记进名册，体内成员本来就由下面这两位消费者答。属性读写那一站是站F (#474)，见下面那位读者。
+    std::string legacyViewCallExpr(const std::string& objExpr, const std::string& memberName,
+                                   const std::vector<std::string>& args) const;
+    // 账 #305 新账 #474 站F (第一百七十八刀): 视图接收者的**属性读**那一发。站点把自己本来要发的
+    // 那一发 (晚绑定 helper 文本) 交进来，同型且那一席是零实参有返回值的槽 ⇒ 换成 `.vtbl-><槽>(….obj)`
+    // (形状仍由上面那位主人答)；任何不合 ⇒ 空串，站点保留自己那一发。
+    std::string legacyViewGetterReadExpr(const std::string& objExpr, const std::string& memberName,
+                                         const std::string& lateCall);
+    // 账 #305 新账 #474 站F (写侧, 前置 = 新账 #489): 视图接收者的**属性写**那一发。站点把自己那一发
+    // 的**目标档** (写方向形参的 C 类型) 与值实参一起交进来; 那一席是 `put_<裸名>` 且 retType=void
+    // 且形参恰好一枚且类型同型 ⇒ 换成 `.vtbl-><槽>(….obj, 值)` (形状仍由上面那位主人答)。
+    // 任何不合 ⇒ 空串, 站点保留自己那一发 (Set 档 / 多入口参数那形 / 类型不合, 照旧 = 不掩盖)。
+    std::string legacyViewSetterCallExpr(const std::string& objExpr, const std::string& memberName,
+                                         const std::string& valExpr, const std::string& wantParamCType);
     // B04 那条 vtable 发射 (`x->vt-><slot>(x, args)`) 的唯一作者：com_bind 与
     // 「接收者是视图值的调用」那一站都调它 (账 #305 §B221 形②)。槽名解析不出来返回空串。
     std::string ivrefVtableCall(const std::string& ifaceName, const std::string& member,
@@ -302,19 +416,40 @@
                                 const std::vector<std::string>& args);
     // B06a 那条视图→视图的 QueryInterface 发射 (存旧 → QI → 覆盖 → 放手旧)，
     // 由按名那一臂与 §B221 的调用表达式那一臂共用。
+    // 账 #305 §B218 第一百三十四刀: 多收一个 rhsTransferred = 「右值那枚临时量自带对价」，
+    // 真就当场把接管来的那一枚交回 (只在这一位主人里交, 站点不许自己补一行)。
     void emitIvrefQiSet(const std::string& target, const std::string& ifaceName,
-                        const std::string& valueExpr);
+                        const std::string& valueExpr, bool rhsTransferred);
     // 账 #305 §B218 (甲): 工程类形参登记的一处出口 (按名表 + 本过程形参名册)。
     void registerClassFormal(const std::string& pLower, const std::string& clsName);
     // 账 #305 §B218 (甲) 腿②③②': typed 工程类槽的「覆写 / 置空 / 写进出参槽」一位主人
     // (valueExpr 传空串 = 置空; 与上面那位接口主人同形, 几条腿共用一条顺序。
     //  outSlot = true: 目标在计数系统外 (ByRef 出参那一格) ⇒ 只补 claim, 不碰旧值)。
+    // 账 #305 §B218 第一百四十刀: slotElemType 非空 = 「目标是一枚**可寻址的数组元素**，
+    // 其元素档是这个 C 类型 (类数组 = void*)」⇒ 先把地址落一枚临时量，**下标算术只算一次**
+    // (第一百三十九刀两栏读数：今天算一次、本机 VB-family 运行期也答一次)；留空 = 今天那一直写形状。
     void emitClassSlotRefSet(const std::string& target, const std::string& className,
-                             const std::string& valueExpr, bool rhsTransferred, bool outSlot);
+                             const std::string& valueExpr, bool rhsTransferred, bool outSlot,
+                             const std::string& slotElemType = std::string());
     // 账 #305 §B218 (甲) 刀3: 「这一发右值是不是**已经带着一枚移交过来的引用**」—— 上面那位
     // 主人手上「不 claim」那条臂的全部成因共用这一条问句（**三形**：裸名调用 / 成员调用 /
     // 无括号的属性读；`New <类>` 那一发仍由调用点自己答）。问句只此一位，别在别处再答一遍。
-    bool rhsTransfersProjectRef(const ASTNode& expr);
+    // 账 #305 §B218 第一百三十四刀: 多收一个 forViewSlot = 「本站的槽装的是接口视图还是工程类」——
+    // 同一条契约问句, 两站各自报自己要的那一档返回类型 (视图那一站 = 视图腿② 交回接管值)。
+    bool rhsTransfersProjectRef(const ASTNode& expr, bool forViewSlot);
+    // 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): 实参那一站的两枚出口 —— 问句把上面那条
+    // 契约问句与 `New` 那一形成因合起来只答一次 (forViewSlot 取**形参槽自己**那一档),
+    // 发码只在这一位主人里登记交回, 站点不许自己补一行。
+    bool argHandsOverProjectRef(const ASTNode& expr, const std::string& clsPtr);
+    void registerClassArgRefHandback(const std::string& clsPtr, const std::string& tmp);
+    // 账 #305 §B218 (甲) 形A (第一百四十四刀): 交回的另一半 —— 实参读来的是**借的**时,
+    // 临时量先落一枚自有引用 (并按运行期问一句是不是包装器)，与上面那条交回配对使用。
+    void registerClassArgRefCopyIn(const std::string& clsPtr, const std::string& tmp);
+    // 账 #305 §B218 (甲) 腿⑤ 第三格 (第一百四十六刀): 载体销毁那一族 (`Erase` / `ReDim` 不带
+    // Preserve) 的发码主人 —— 只调这一枚，站点不许自己拼 `vb6_SA_ReleaseElements`; 认不出就一声不出。
+    // note = 只改注释那一截 (语句站点 / 过程出口两读法共用同一位主人, 臂与问句只有一份)。
+    void emitClassArrayElemHandback(const std::string& carrierExpr, const std::string& arrayName,
+                                    const std::string& note = "载体销毁前逐枚交回");
     std::vector<const IfaceView*> ivImplementedIfaces(Module& module);
     Decl* ivFindImplMember(Module& module, const IfaceView& v, const IfaceSlotView& slot);
     // tB 委托式实现 (ai/022 B10): 本类把接口 v 整份转交给哪个持有字段 (无则 nullptr)
@@ -739,6 +874,33 @@
     // 只认 vb6_cls_ / vb6_ivref_ 两档：legacy 接口的 vb6_iface_<I>（非指针）和 COM 的
     // vb6_ComIface_X* 一律返回空串 = 维持本改动之前的行为，不在这里顺手扩大。
     std::string cParamClassPtrType(const ParameterInfo& p);
+    // 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): cParamClassPtrType 交回来的那个 C 类型名
+    // 装的是**视图薄指针**还是工程类实例 —— 前缀名单只住在上面那位主人出生的那份文件里,
+    // 站点与所有权主人都不许再抄一遍视图那一档的前缀 (check_iface_view_authority ③ 钉的就是这张名单)。
+    bool clsPtrIsViewSlot(const std::string& clsPtr);
+    // 账 #305 第一百七十二刀 站B: 上面那位主人**不认**的那一档 —— legacy 接口的 `vb6_iface_<I>`
+    // 值结构形参槽 (交回 VB 声明名, 认不出 = 空串)。与 clsPtrIsViewSlot 同住 cgen_base_type.cpp,
+    // `vb6_iface_` 这串前缀别处不许再抄 (哨兵 check_legacy_view_arg_owners V1 钉的就是这一处)。
+    std::string cParamLegacyIfaceSlotName(const ParameterInfo& p);
+    // 账 #305 §B218 第一百四十刀: 「这枚目标表达式是不是可寻址的数组元素槽」= VB6_SA_AT 那一形，
+    // 交回元素 C 档 (认不出 = 空串)。与上面那位前缀主人同住 cgen_base_type.cpp。
+    std::string classArraySlotElemType(const std::string& target);
+    // 账 #305 §B218 (甲) 腿⑤ 第一百四十刀: 「mapTypeRef 这一档是不是本工程类的指针」= 出厂那一站
+    // 两档 (标量字段 / 数组元素) 共用的那一问；交回 `vb6_cls_<类>` (认不出 = 空串)。
+    std::string projectClsStructOfCType(const std::string& cType);
+    // 账 #305 §B218 (甲) 形A (第一百四十四刀): 出参槽那一格的两问 —— 「`(*名)` 里的名是不是本过程
+    // 声明过的工程类形参 (交回类名)」与「这一枚实参**持有**它交出去的那一枚引用吗 (才许直传地址)」。
+    // 两位主人同住 cgen_base_type.cpp；两站 (覆写 / 置空) 与调用侧都只问这两句，不许各抄一遍。
+    std::string classOfProjectRefOutSlot(const std::string& target);
+    bool argHoldsProjectRefInOwnSlot(const std::string& ident, const std::string& clsPtr);
+    // 账 #305 §B218 (甲) 腿⑤ 第三格 (第一百四十六刀): 「这一枚**数组变量**握着的元素是不是工程类
+    // 实例」= 载体销毁那一族 (`Erase` / `ReDim` 不带 Preserve) 唯一的那一问，交回 `vb6_cls_<类>`
+    // (认不出 = 空串 = 维持今天的裸销毁)。三道闸 (只认裸名 / 得是本工程类 / 形状) 一道不能少，
+    // 与上面几位主人同住 cgen_base_type.cpp；站点只调 emitClassArrayElemHandback，不许自己查表。
+    std::string classOfArrayCarrier(const std::string& name);
+    // 账 #305 §B218 (甲) 腿⑤ 第五格 (第一百四十九刀): 「这一枚载体是多维的吗」= 销毁那一族挑
+    // 一维/多维出口用的唯一一问，只许 emitClassArrayElemHandback 那一处主人问，站点不许自己判。
+    bool carrierIsMultidim(const std::string& name);
 
     // <vbeclipse>: 该名字是否为本工程的某个类/窗体模块 (它的 prop_let_/成员函数真会被发出)。
     // 与 cParamClassPtrType 同一口径, 见 cgen_base_type.cpp 定义处注释。凡是要"按类实例
@@ -798,7 +960,9 @@
     // 预扫描收集所有可提升的 LocalDeclStmt (非数组标量/动态数组指针/Const),
     // 在函数序言处统一声明, 原位置的 visit 跳过.
     void hoistLocalDecls(StmtList& body);
-    void collectLocalDeclStmts(StmtList& stmts, std::vector<LocalDeclStmt*>& out);
+    // 「把这枚嵌在块里的定长/多维载体的声明提到序言」那一小步 = 发那一行 + 写名单。
+    void hoistFixedArrayDeclToPrelude(const VariableDecl& var);
+    void collectLocalDeclStmts(const StmtList& stmts, std::vector<LocalDeclStmt*>& out);
     // 已提升的声明节点集合 (按指针, 每过程清空)
     std::set<const ASTNode*> hoistedLocalDeclSet_;
     // Fix 086: 工程内窗体模块名集合 (小写), driver预扫描填充
@@ -925,6 +1089,11 @@
     // 保留自己的晚绑定路；类型未知 ⇒ 交回原生 VARIANT，绝不按上下文猜一档。
     std::string comGetterExpr(const ComSigView& sv, const std::string& objExpr,
                               const std::string& memberName) const;
+
+    // 上面那一条的 switch 本体，**按返回类型**答（账 #305 #474: 站F 那位读者要问的就是这一问，
+    // 第二处不许再抄一份档位表）。未知档 ⇒ 交回原生 VARIANT 那一发，与 comGetterExpr 同一答案。
+    std::string comGetterExprForRetCType(const std::string& retCType, const std::string& objExpr,
+                                         const std::string& memberName) const;
 
     // 带实参调用的类型化表达式；callArgs 已是 `obj, L"Name", (void*[]){…}, argc`。
     // 类型未知或表里没有这条签名 ⇒ 裸 vb6_ComCall（返回 void* 那一档）。
@@ -1293,11 +1462,41 @@
     // VB6类型 → SAFEARRAY元素类型C枚举名
     std::string mapSaElemType(Vb6Type type) const;
     // VB6类型 → SAFEARRAY元素C类型 (如int32_t)
+    // 账 #476 §B190 (拍板: 先收出口, 再接路由; 路由不得绕开出口) —— 「一个**动态数组成员**
+    // 的声明档」的唯一答案。元素类型 / 元素 C 类型 / 秩 / 是不是 UDT / 访问形状, 全部只从
+    // 这里解析, 三处同问: ① UDT 成员的 Pattern B 元素访问 ② ReDim 的分配侧 ③ **类字段**的
+    // 类外元素访问。§B220 的 `resolveUdtMemberElemInfo` 保留为 UDT 腿的薄委托 (它自己不再
+    // 摸 udtMembers), 以免留下第二份答案。
+    // 为什么必须是一枚: 这个决定今天有三份答案 (UDT 版 / ReDim 版 / 类字段版**没有**),
+    // 而 §B154 与 §B220 两次都是"分配侧与访问侧各问一处、漏问的那处回落 Variant"造成的
+    // 「分配 16 字节一步、访问 4 字节一步」。类字段那一腿以前压根没有答案 ⇒ 类外元素访问
+    // 发成 `obj->Field(idx)` (调用 vb6_SafeArray1D* 指针) ⇒ C2064, 连 exe 都出不来。
+    // owner 两种拼法由**调用方**解好再传进来 (它手上有接收者表达式): UDT 传 ownerUdtCType
+    // (`vb6_type_X`), 工程类传 ownerClassName (类名)。两者都空 = 这一问不接。
+    struct MemberArrayDecl {
+        bool        ok = false;        // 找到了一个**动态**数组成员
+        Vb6Type     elemType = Vb6Type::Variant;   // 声明的元素档
+        std::string elemCType;         // C 元素类型 (UDT → vb6_type_<UDT>; 其余 mapSaElemCType)
+        int         arrayRank = 0;     // 秩: 0 = 一维动态, >=2 = 多维
+        bool        isUdt = false;     // 元素是 UDT (Fix 092s: 必须发 vb6_type_, 不能退化 vb6_VARIANT)
+        bool        isDynamic = false; // 确认是动态数组 (`Field() As T`), 不是定长
+    };
+    bool resolveMemberArrayDecl(const std::string& ownerUdtCType,
+                               const std::string& ownerClassName,
+                               const std::string& memberName,
+                               MemberArrayDecl& out) const;
     std::string mapSaElemCType(Vb6Type type) const;
     // 从ArrayTypeRef或asType获取元素Vb6Type
     Vb6Type resolveArrayElemType(ASTNode* typeRef) const;
     // 账 #305 §B154: ReDim 那一问的元素档 —— 写了 As 子句按 As, **没写就问声明**
-    Vb6Type resolveReDimElemType(const std::string& lowerVar, ASTNode* typeRef) const;
+    Vb6Type resolveReDimElemType(const std::string& lowerVar, ASTNode* typeRef);
+    // 账 #475 §B220: UDT 成员类型解析的唯一出口 (owner C 类型 + 成员名 → Vb6Type/UDT C 类型)。
+    // resolveReDimComplexElemType 与 resolveReDimElemType 的点号链分支都问它, 与访问侧
+    // Pattern B 的 udtMembers 来源一致。false = 不是已知 UDT / 成员查不到。
+    bool resolveUdtMemberElemInfo(const std::string& udtCType,
+                                  const std::string& memberName,
+                                  Vb6Type& outType,
+                                  std::string& outUdtCType);
     // Fix 055: 从ArrayTypeRef获取UDT元素C类型名 (如"vb6_type_RECT"), 非UDT返回空串
     std::string resolveArrayUdtElemCType(ASTNode* typeRef) const;
     // Fix 192: 从ArrayTypeRef/asType获取元素**类名** (如"ShapeAct"), 非项目类返回空串
@@ -1310,7 +1509,7 @@
     std::string nextNDBoundsTemp(const std::string& base);
     // Fix 100: resolve element type of a complex ReDim target
     void resolveReDimComplexElemType(const ReDimStmt& node, Vb6Type& outType,
-                                     std::string& outUdtCType) const;
+                                     std::string& outUdtCType);
     // P6.4+: class-module default instance singleton
     void emitClassDefaultInstance(Module& module);
     // Fix 110: emit symbol support for .ctl/.pag designer sub-controls

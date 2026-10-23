@@ -24,6 +24,17 @@ void CCodeGen::emitStmtList(StmtList& stmts, bool emitResumePoints) {
             dispatchPoints_.push_back(pt);
         }
 
+        // 账 #464 §B164: 记下**这一条语句**所在的那一层 —— 回收刀用它判「声明与收回同层」。
+        // 语句走完要**还原**成外层的层号: 块语句（If/For/…）的**体**里也是语句,
+        //   它们会把 stmtLevel_ 改深; 不还原的话, 块语句**之后**的那一条语句会拿
+        //   「体内那一层」当自己的层号 ⇒ 回收刀在那儿整条失灵（宁可不收）。
+        const int savedStmtLevel = stmtLevel_;
+        stmtLevel_ = c_.indentLevel();
+        // 账 #464 §B164: 记下**回收刀名单**的起点 —— 本条语句只认**自己**登记的那几枚。
+        //   块语句的**体**里那些语句各自登记的归它们自己收; 本条语句的清理**不许**顺手
+        //   把它们带走（早先写成 ownedTempsToFree_.clear() 就是这个坑：体内的清理先把
+        //   **外层条件里**登记的那一枚抹掉 ⇒ 那一枚永远没人放 ⇒ 漏）。
+        const size_t ownedMark = ownedTempsToFree_.size();
         switch (stmt->kind) {
             case ASTNodeKind::AssignmentStmt:  visit(static_cast<AssignmentStmt&>(*stmt)); break;
             case ASTNodeKind::SetStmt:         visit(static_cast<SetStmt&>(*stmt)); break;
@@ -141,6 +152,26 @@ c_.emitLine("switch(vb6_gosub_stack[--vb6_gosub_sp]) {");
             }
         }
         boxTempsToClear_.clear();
+
+        // 账 #464 §B164 回收刀: 收回那些「一条语句里现造的带权临时量」。
+        // 档 1 = BSTR ⇒ vb6_BSTR_Free; 档 2 = VARIANT ⇒ vb6_VariantClear(&t)。
+        // 只收**本条语句自己登记**的那几枚（ownedMark 之后的那一段）——
+        //   体内那些语句登记的归它们自己收, 外层条件里登记的归外层那条语句收。
+        // 层号对不上 = 声明发在一对已经合上的花括号里 ⇒ 宁可不收（与 boxTempsToClear_ 同一口径）。
+        // 放掉一次的责任只许一处: 这一枚**只**由这里放（拼接站自己放掉的那一枚不进名单）。
+        for (size_t k = ownedMark; k < ownedTempsToFree_.size(); ++k) {
+            const OwnedTemp& ot = ownedTempsToFree_[k];
+            if (ot.level != stmtLevel_) continue;
+            if (ot.kind == 2) {
+                c_.emitLine("vb6_VariantClear(&" + ot.name +
+                            ");  /* 账 #464 §B164: 语句末收回现造的那枚变体临时量 */");
+            } else {
+                c_.emitLine("vb6_BSTR_Free(" + ot.name +
+                            ");  /* 账 #464 §B164: 语句末收回现造的那枚串临时量 */");
+            }
+        }
+        ownedTempsToFree_.resize(ownedMark);
+        stmtLevel_ = savedStmtLevel;
     }
 }
 
@@ -177,7 +208,14 @@ void CCodeGen::visit(IfStmt& node) {
     int elseIfWrapCount = 0;
     for (auto& elseif : node.elseIfs) {
         c_.emitLine("} else {");
+        // 账 #464 §B164 回收刀的门 ⑨: **块内条件**不许提名。
+        //   这一枚条件是在 `} else {` **之后**求值的 ⇒ 那一枚临时量的声明落在 else 块**内**,
+        //   而语句末的收回行落在 else 块**外** ⇒ 收回那一行引用越界（cl C2065）。
+        //   门 ⑦ 的层号拦不住它: else 体与 if 体**同层**（生成器不在 else 里再缩进）。
+        //   ⇒ 这一格宁可不收（与基线同漏, 不新增漏, 也不发越界的 C）。
+        ++blockCondDepth_;
         emitExpr(*elseif->condition);
+        --blockCondDepth_;
         c_.emitLine("if (" + lastExpr_ + ") {");
         c_.indent();
         emitStmtList(elseif->body);

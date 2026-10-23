@@ -5,6 +5,7 @@
 // 语义层 (Implements 契约比对) 与后续发码层 (B04 槽表) 共用同一份视图。
 // 与泛型的 GenRegistry 同族: plain 结构 + 指针引用 AST 节点, 不克隆、不拥有。
 
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -64,5 +65,27 @@ struct ViaView {
 
 // key = 实现类模块名小写; 一个类可以委托多个接口, 按 `Implements` 书写序
 using ViaRegistry = std::unordered_map<std::string, std::vector<ViaView>>;
+
+// ============================================================
+// 账 #305 新账 #464: legacy VB6 接口 (`.cls` 宿主、**没**进上面那张登记表) 的**槽表形状**
+// ============================================================
+//
+// 为什么另开一张: 语义层 Pass A2 的四条例外 (VB_Creatable 写了 True / 成员带实现体 /
+// 不是类模块 / 没人 Implements) 里任何一条不过, 那枚接口就不在 `IfaceRegistry` 里 ——
+// 发码层因此退回 `emitInterfaceVtable`, 而它过去**在每枚实现类里各 harvest 一份**同名
+// `vb6_vtbl_<I>`, 槽序与 `me` 类型都跟着实现类走。真语料 `图像/光线追踪/Ray.vbp`
+// (四枚类 Implements `IRayTraceable`) 实测 cl 54 发 C2011, 四份表里槽序有两套。
+//
+// 这张表把「一枚接口的槽表长什么样」这个问题从实现类手里收回来:
+//   键 = 接口名小写; writtenName = 类型名里用的规范拼写; slots = 按序的可实现成员声明。
+// 与 IfaceRegistry 同族: plain 结构 + 只指 AST 节点, 不克隆、不拥有; stage 3.5 预扫描
+// 一次建成, 之后只读。新式接口 (在登记表里) 一律不进这张表 —— 两条路各管一套类型名,
+// 谁也不给谁发第二份。
+struct LegacyIfaceShape {
+    std::string writtenName;          // 接口名规范拼写 (宿主模块名优先, 否则取首个书写形式)
+    std::vector<const Decl*> slots;   // Sub/Function/Property, 顺序 = 槽序 (见 .inc 的两段来源)
+};
+
+using LegacyIfaceShapeMap = std::map<std::string, LegacyIfaceShape>;
 
 } // namespace vb6c3

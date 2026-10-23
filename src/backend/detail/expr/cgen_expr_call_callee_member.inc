@@ -330,6 +330,14 @@
                     std::string udtName = udtCType.substr(prefix.size());
                     Symbol* udtSym = symTab_.lookupModule(udtName);
                     if (udtSym && udtSym->kind == SymbolKind::UserDefinedType) {
+                        // 账 #476 §B190 (拍板: 路由只消费出口): 这个成员是不是**动态**数组、
+                        // 元素是哪一档、是不是 UDT、秩多少 —— 一律先问那一枚出口, 本站不再自己
+                        // 摸 udtMembers 答档。Pattern A (定长) 仍然走 mi.arraySize: 出口只认
+                        // 动态数组成员, 定长那一形不归它。
+                        MemberArrayDecl mad;
+                        const bool memIsDynArr =
+                            resolveMemberArrayDecl(udtCType, std::string(),
+                                                   maExpr.memberName, mad);
                         for (auto& mi : udtSym->udtMembers) {
                             if (Symbol::toLower(mi.name) == memLower) {
                                 if (mi.arraySize > 0) {
@@ -342,21 +350,26 @@
                                     lastExpr_ = udtFixedMemberIndex(fieldExpr, node.positional,
                                                                     mi.arrayRank);
                                     handled = true;
-                                } else if (mi.isArrayDynamic) {
-                                    // Pattern B: 动态数组成员 → VB6_SA_AT(elemType, obj.member, idx)
+                                } else if (memIsDynArr && node.positional.size() == 1) {
+                                    // Pattern B: 动态数组成员 → VB6_SA_AT(elemCType, obj.member, idx)
+                                    // Fix 092s: UDT 元素发 vb6_type_<UDT> (mapSaElemCType 对
+                                    // UserDefinedType 会退化成 vb6_VARIANT ⇒ 元素大小/取址全错,
+                                    // cTlsSocket 4086/4093) —— 这件事现在由那一枚出口答。
                                     emitExpr(*node.callee);
                                     std::string fieldExpr = std::move(lastExpr_);
                                     emitExpr(*node.positional[0]);
                                     std::string idx = std::move(lastExpr_);
-                                    // Fix 092s: UDT 元素类型成员数组须用 vb6_type_<UDT>
-                                    // (mapSaElemCType 对 UserDefinedType 退化为 vb6_VARIANT
-                                    // → 元素大小/取址全错, cTlsSocket 4086/4093)
-                                    std::string elemCType = (mi.type == Vb6Type::UserDefinedType
-                                                             && !mi.typeRefName.empty())
-                                        ? ("vb6_type_" + cIdent(mi.typeRefName))
-                                        : mapSaElemCType(mi.type);
-                                    lastExpr_ = "VB6_SA_AT(" + elemCType + ", "
+                                    lastExpr_ = "VB6_SA_AT(" + mad.elemCType + ", "
                                               + fieldExpr + ", " + idx + ")";
+                                    handled = true;
+                                } else if (memIsDynArr && node.positional.empty()) {
+                                    // 账 #476 §B190: 整数组读 (`v = t.Items`) —— 让字段指针原样
+                                    // 进 vb6_VariantFromValue, _Generic 的 `struct
+                                    // vb6_SafeArray1D*` 臂选 vb6_VariantArray ⇒ VT 8204。
+                                    // 以前这一形落到底层通用路, 发成 `vb6_VariantLong(t->Items)`。
+                                    emitExpr(*node.callee);
+                                    std::string fieldExpr = std::move(lastExpr_);
+                                    lastExpr_ = "vb6_VariantFromValue(" + fieldExpr + ")";
                                     handled = true;
                                 } else if (mi.type == Vb6Type::Variant) {
                                     // Pattern J: UDT Variant 字段 (持有 SafeArray) →
@@ -436,13 +449,55 @@
         // ---- Pattern C/D: 类实例字段访问 ----
         if (!handled && maExpr.object) {
             std::string className = inferClassTypeOfExpr(*maExpr.object);
+            if (getenv("C3_DBG476")) {
+                MemberArrayDecl dbg476;
+                const bool dbgOk = resolveMemberArrayDecl(std::string(), className,
+                                                          maExpr.memberName, dbg476);
+                fprintf(stderr, "[DBG476] member=%s className=%s npos=%zu exit=%d ok=%d elem=%s\n",
+                        maExpr.memberName.c_str(), className.c_str(), node.positional.size(),
+                        (int)dbgOk, (int)dbg476.ok, dbg476.elemCType.c_str());
+            }
             if (!className.empty()) {
                 // resolveClassMemberCall 验证 member 是否为方法/属性:
                 // 是 → 跳过 (正常函数调用 fallback 处理); 否 → 数据字段 → 检查 Variant/void*
                 std::string resolvedFn = resolveClassMemberCall(className, maExpr.memberName);
                 if (resolvedFn.empty()) {
-                    // Pattern C: Variant 字段 → vb6_VariantArrayGet(&obj->member, idx)
-                    if (classVariantMembers_.count(memLower)
+                    // 账 #476 §B190 (拍板: 路由只消费出口): 类字段是**动态数组成员** ⇒ 元素
+                    // 读 / 元素写 / 整数组读一律先问那一枚出口, 档位与形状都由它给。
+                    // 这一臂以前**不存在** —— `o.Items(i)` 于是落到底层通用路, 发成
+                    // `o->Items(i)`: 那是在调用 `vb6_SafeArray1D*` 这个指针 (cl C2064,
+                    // 11 处实测), 而 `v = o.Items` 发成 `vb6_VariantLong(o->Items)` (C2440)。
+                    // 只接**一维** (positional.size()==1) 与零参两种形状: 多维动态数组成员
+                    // 今天没有实物 (Pattern B 同样只发一维), 多维那形照旧落底层, 不猜。
+                    MemberArrayDecl madC;
+                    const bool clsIsDynArr =
+                        resolveMemberArrayDecl(std::string(), className, maExpr.memberName, madC);
+                    if (clsIsDynArr && node.positional.size() == 1) {
+                        emitExpr(*node.callee);  // emits "obj->member" (带字段尾注)
+                        std::string fieldExpr = std::move(lastExpr_);
+                        emitExpr(*node.positional[0]);
+                        std::string idx = std::move(lastExpr_);
+                        if (madC.isUdt) {
+                            // 账 #476 §B190: 元素是 UDT 且这一枚还要被外层 `.Field` 接住
+                            // (真语料 `TextureTool.Vertices(i).tU`) —— 必须发**指针形**。
+                            // `VB6_SA_AT` 是宏 `(*(type*)vb6_SaElemPtr(...))`, 外层再拼
+                            // `->X` 会接在宏调用的括号外 ⇒ cl C2816「宏调用缺少终止 )」。
+                            lastExpr_ = "(" + madC.elemCType
+                                      + "*)vb6_SaElemPtr(" + fieldExpr + ", (int32_t)("
+                                      + idx + "), (int32_t)sizeof(" + madC.elemCType + "))";
+                        } else {
+                            lastExpr_ = "VB6_SA_AT(" + madC.elemCType + ", "
+                                      + fieldExpr + ", " + idx + ")";
+                        }
+                        handled = true;
+                    } else if (clsIsDynArr && node.positional.empty()) {
+                        // 整数组读: 字段指针原样进 vb6_VariantFromValue ⇒ _Generic 选
+                        // vb6_VariantArray ⇒ VT 8204 (VB6 的形状)。
+                        emitExpr(*node.callee);
+                        std::string fieldExpr = std::move(lastExpr_);
+                        lastExpr_ = "vb6_VariantFromValue(" + fieldExpr + ")";
+                        handled = true;
+                    } else if (classVariantMembers_.count(memLower)
                         || classVariantMembers_.count(memLowerM)) {
                         emitExpr(*node.callee);  // emits "obj->member  /* class var .X field */"
                         std::string fieldExpr = std::move(lastExpr_);

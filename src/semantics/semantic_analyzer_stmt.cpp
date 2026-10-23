@@ -221,6 +221,9 @@ void SemanticAnalyzer::visit(CallStmt& node) {
     // 为什么必须在 analyzeExpr 之前: 那一路会把查不到的名字落成"隐式 Variant 局部"
     // (实测发出 vb6_VARIANT Cls = vb6_VariantEmpty(); Cls();)，折完之后那条隐式声明根本不会出现。
     foldBareCanvasVerb(node.callee);
+    // 账 #305 (§B227): 折完再补一刀 —— 不写括号的画布动词 (`Me.Scale` / 裸 `Scale`) 折成
+    // 零实参调用，两条写法落到同一条码头（判据写在定义处）。
+    foldParenlessCanvasVerbCall(node.callee);
     analyzeExpr(*node.callee);
 }
 

@@ -6,7 +6,8 @@
 # statement. Rules below pin that the decision stays in exactly one place and that the reclaim
 # really lands AFTER the call, which is what the runtime reading alone cannot prove.
 #
-# R1 single authority   : push_back exactly 1, declaration exactly 1, drain loop exactly 1
+# R1 single authority   : push_back exactly 2 (knife 121 那一站 + 第一百七十二刀站E 第二位登记者),
+#                         declaration exactly 1, drain loop exactly 1 —— 登记可以多人，收回只许一处
 # R2 drain placement    : the reclaim loop sits in the same per-statement tail as ansiTempsToFree_
 # R3 indent guard       : the drain only fires on the emitter's current indent level
 # R4 fixture shape      : 10 station temps / 9 reclaims, every reclaim after its last use,
@@ -30,7 +31,7 @@ $pushHits = @(Get-ChildItem -Recurse (Join-Path $root 'src') -Include *.inc,*.cp
               Select-String -Pattern 'boxTempsToClear_\.push_back').Count
 $declHits = @(Select-String -Path $state -Pattern 'std::vector<std::pair<std::string, int>> boxTempsToClear_').Count
 $drainHits = @(Select-String -Path $drainF -Pattern 'for \(auto& bt : boxTempsToClear_\)').Count
-if ($pushHits -ne 1) { $bad += "R1 push-back-sites=$pushHits want=1" }
+if ($pushHits -ne 2) { $bad += "R1 push-back-sites=$pushHits want=2 (121 那一站 + 第一百七十二刀站E)" }
 if ($declHits -ne 1) { $bad += "R1 declaration-sites=$declHits want=1" }
 if ($drainHits -ne 1) { $bad += "R1 drain-sites=$drainHits want=1" }
 

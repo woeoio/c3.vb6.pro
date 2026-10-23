@@ -1,0 +1,6 @@
+Type=Exe
+Name="K173App"
+Module=K173Types; K173Types.bas
+Module=K173Main; K173Main.bas
+Class=K173Holder; K173Holder.cls
+Startup="Sub Main"

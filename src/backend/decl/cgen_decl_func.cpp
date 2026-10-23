@@ -39,6 +39,9 @@ void CCodeGen::visit(FunctionDecl& node) {
     ansiTempsToFree_.clear();
     ansiOutParams_.clear();
     slotsToRelease_.clear();  // tB Interface B05 / 账 #305 §B218 (甲) 腿④
+    // 账 #305 §B218 (甲) 第一百五十六刀: 「这档局部数组的载体能不能在出口销毁」在过程入口
+    // 一次答完 (登记表在发尾之前没人再问), 登记口只照结论决定要不要发那一发销毁。
+    scanLocalArrayEscapes(node.body);
     ansiCounter_ = 0;
     asmMixedBlockCounter_ = 0;   // ai/vb-asm-extension-spec 项2: 混排片段序号按过程重置
     knownBstrVars_.clear();

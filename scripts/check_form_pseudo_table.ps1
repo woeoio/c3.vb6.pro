@@ -162,8 +162,9 @@ try {
         foreach ($m in (Collect-Matches $tblTxt '\{\s*"([a-z][a-z0-9]*)"\s*,\s*"([A-Za-z_0-9]+)"')) {
             $rows += $m.Groups[1].Value
         }
-        if ($rows.Count -ne 34) {
-            $bad += ("S2 kFormPseudoRows has " + $rows.Count + " rows (want exactly 34; a new row must be deliberate)")
+        # 34 -> 36 (账 #305 第四/第五格): +scaleleft / +scaletop, 两档读侧 formOnly。
+        if ($rows.Count -ne 36) {
+            $bad += ("S2 kFormPseudoRows has " + $rows.Count + " rows (want exactly 36; a new row must be deliberate)")
         }
         if (@($rows | Sort-Object -Unique).Count -ne $rows.Count) {
             $bad += "S2 kFormPseudoRows has a duplicate name"
@@ -220,5 +221,5 @@ if ($bad.Count -gt 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) }
     exit 1
 }
-Write-Host "PASS form_pseudo_table (V1 4 names silent, V2 bogus name still reported, V3 no implicit local + real read route, S1 one call site, S2 34 rows / 1 consumer)"
+Write-Host "PASS form_pseudo_table (V1 4 names silent, V2 bogus name still reported, V3 no implicit local + real read route, S1 one call site, S2 36 rows / 1 consumer)"
 exit 0

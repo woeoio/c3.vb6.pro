@@ -113,6 +113,29 @@
            VariantToString / wrapToBSTR / boxToVariant 那一层包装全在下面, 于是包装套在
            读入口**外面**, 与 4a "外层 vb6_ChkInt 照旧套着" 同款。 */
         argVal = extenderMemberReadExpr(argVal);
+        // 账 #305 第一百七十二刀 站B = 实例递进 legacy 接口的**视图形参**那一档。视图
+        // (`vb6_iface_<I> { vtbl; obj; }`) 是一枚值结构体，C 里没有任何转换能把裸实例
+        // `vb6_cls_<Impl>*` 喂进去 (实测 Ray.vbp: Sphere.c(146) / Plane.c(83) / Disk.c(110) /
+        // Cylinder.c(76) 各一发 C2440 = `CalculateHitColor Objects, Me, …` 对着
+        // `vb6_iface_RayTraceable TargetObj`)。包装那一发今天已有唯一主人 `legacyIfaceWrapFn`
+        // (第一百六十六刀收的口，`Set <视图> = <实例>` 那三臂都在用它) ⇒ 本刀只给它添第二个读者，
+        // 不在赋值/实参两条支上各拼一种名字。实现者名单问 `allImplementationClasses`: 实参那枚类
+        // 不在名单里就**原样直交** —— 宁可留着 cl 那一声响，也不许凭空铸一枚没定义的 `_wrap_` 名。
+        if (i < calleeParams.size() && node.positional[i]) {
+            const std::string iface172b = cParamLegacyIfaceSlotName(calleeParams[i]);
+            if (!iface172b.empty()) {
+                const std::string impl172b = inferClassTypeOfExpr(*node.positional[i]);
+                if (!impl172b.empty() && Symbol::toLower(impl172b) != Symbol::toLower(iface172b)) {
+                    bool knowsImpl = false;
+                    for (const std::string& c : allImplementationClasses(iface172b)) {
+                        if (Symbol::toLower(c) == Symbol::toLower(impl172b)) { knowsImpl = true; break; }
+                    }
+                    if (knowsImpl) {
+                        argVal = legacyIfaceWrapFn(iface172b, impl172b) + "(" + argVal + ")";
+                    }
+                }
+            }
+        }
         // 账 #305 §B187 第四腿 实参那一站: ByVal <泛对象形参> (VB 写 `As Object`, C 侧是
         // void* 里该装 IDispatch*) 收到工程内实例时交**借用型包装器** —— 与 Set 那一站同一句
         // (唯一发码处 boxIntoLateSlot)。为什么这一站单独欠着: 装箱腿只管 `Set` 语句那一站，
@@ -559,10 +582,23 @@
                         // 时不能直传 T*: 被调方 vb6_VariantFromValue((*p)) 会把 T 的
                         // 字节当 VARIANT.vt 解析 → 字段错位 → 解引用垃圾 BSTR →
                         // 0xC0000005. 按当前形参的 VB 类型重打包为字段式 VARIANT.
+                        // 账 #305 §B218 (甲) 形A (第一百四十四刀): **工程类槽不在这个例外里** ——
+                        // resolveTypeOrDefault 把类名折成 Variant, 于是 `Sub Take(p As <工程类>)`
+                        // 也答真, 链形调用 (`Sub Outer(x As CB): Take x`) 被发成
+                        //   vb6_Take((&(vb6_VARIANT){… vb6_ComObject_FromInstance(…, (void*)(*x))}))
+                        // = 一枚 vb6_VARIANT* 喂进 vb6_cls_CB** (cl 只按不兼容指针放过) ⇒ 被调方一写
+                        // 就打在那枚复合字面量的 vt 头上, 调用行之后没人写回 x, 而且每调用多铸一枚
+                        // 没人放手的拥有型包装器 (实测 L1-after-chain term=0 = 调用者那枚再也拆不掉)。
+                        // 判据与 092r / 下面 875 那一臂同一个口径: cParamClassPtrType。
+                        // 判据与 092r / 下面 875 那一臂同一个口径: 只有**实参那一格自己也是工程类形参**
+                        // (链 = 上游那一格的地址) 才直传; 泛对象 / Variant 那一格喂工程类槽仍按今天那样
+                        // 打包 (§B187 待拍那一族, 本刀刻意不吃 —— 改了会把静默的错值变成响的堆损坏)。
                         std::string rep189;
                         if (i < calleeParams.size()
                             && (calleeParams[i].type == Vb6Type::Variant
-                                || calleeParams[i].type == Vb6Type::Empty)) {
+                                || calleeParams[i].type == Vb6Type::Empty)
+                            && !(!cParamClassPtrType(calleeParams[i]).empty()
+                                 && procClassFormals_.count(Symbol::toLower(innerName)))) {
                             rep189 = wrapByRefVariantParamArg(innerName, curPType189);
                         }
                         argVal = rep189.empty() ? innerName : rep189;
@@ -856,10 +892,23 @@
                     if (argIsCurrentByRefParam) {
                         // ByRef param of current function → already T*, pass directly
                         // Fix 189: ByRef Variant 形参时需重打包 (同 (*x) 路径, 见上).
+                        // 账 #305 §B218 (甲) 形A (第一百四十四刀): **工程类那一档不在这个口径里** ——
+                        // `resolveTypeOrDefault` 把类名折成 Variant (类名只留在 typeRefName), 所以
+                        // 上一行那道闸对 `Sub Take(p As <工程类>)` 同样答真, 于是链形调用
+                        // (`Sub Outer(x As CB): Take x`) 发出
+                        //   vb6_Take((&(vb6_VARIANT){.vt=VT_DISPATCH, .pdispVal=(IDispatch*)
+                        //            vb6_ComObject_FromInstance(vb6_FindCoClassDesc("CB"), (void*)(*x))}))
+                        // = 一枚 vb6_VARIANT* 喂进 vb6_cls_CB** 形参 (cl 只按不兼容指针放过), 被调方
+                        // 一写就打在那枚复合字面量的 vt 头上, 而调用行之后没有任何东西写回 x; 每调用还
+                        // 多铸一枚没人放手的拥有型包装器 (实测 L1-after-chain term=0 = 调用者那枚再也
+                        // 拆不掉)。下面那条 092r 的同名守卫 (cParamClassPtrType) 就是为同一个根因设的,
+                        // 这一臂欠它一道 —— 补上: 类槽那一档 x 本身就是 vb6_cls_X** (形参地址), 原样递出去。
                         std::string rep189b;
                         if (i < calleeParams.size()
                             && (calleeParams[i].type == Vb6Type::Variant
-                                || calleeParams[i].type == Vb6Type::Empty)) {
+                                || calleeParams[i].type == Vb6Type::Empty)
+                            && !(!cParamClassPtrType(calleeParams[i]).empty()
+                                 && procClassFormals_.count(Symbol::toLower(argVal)))) {
                             rep189b = wrapByRefVariantParamArg(argVal, argCurPType189);
                         }
                         if (!rep189b.empty()) argVal = rep189b;
@@ -897,12 +946,30 @@
                         // 而 deliverToClassSlot 在实参是 Variant 值时会返回
                         // `(vb6_cls_X*)vb6_ComObject_GetInstance(vb6_VariantToObjectVal(v))`
                         // —— 那是**右值**, &(右值) = C2102。走落临时后两侧生成码同形。
+                        // 账 #305 §B218 (甲) 形A (第一百四十四刀): **持有者直传** —— 实参那一格自己
+                        // 就握着它交出去的那一枚引用时，把它的地址原样交给被调方，被调方的写回当场落在
+                        // 调用者那一格上 (退旧由 腿② 那一臂做)，副本与「调用行之后没人写回」这两件事一起消失。
+                        // 判据只有一处 = argHoldsProjectRefInOwnSlot（**问所有权，不问可寻址性**：ByVal
+                        // 工程类形参照样寻址得到，可它从不 claim，退旧就是拆调用方还在用的实例 ⇒ 那一档
+                        // 必须继续走临时量）。交付被 deliverToClassSlot 改写过的两形（Variant / 包装器槽
+                        // = §B187 待拍那一族）压根不进这一臂。
                         {
                             const std::string clsSlot092r = cParamClassPtrType(calleeParams[i]);
-                            const std::string tmpCls092r = classSlotTempName(clsSlot092r, tempCounter_++);
-                            c_.addPending(clsSlot092r + " " + tmpCls092r + " = "
-                                          + deliverToClassSlot(clsSlot092r, argVal) + ";");
-                            argVal = "&" + tmpCls092r;
+                            if (argHoldsProjectRefInOwnSlot(argVal, clsSlot092r)
+                                && deliverToClassSlot(clsSlot092r, argVal) == argVal) {
+                                argVal = "&" + argVal;
+                            } else {
+                                const std::string tmpCls092r = classSlotTempName(clsSlot092r, tempCounter_++);
+                                c_.addPending(clsSlot092r + " " + tmpCls092r + " = "
+                                              + deliverToClassSlot(clsSlot092r, argVal) + ";");
+                                // 账 #305 §B218 (甲) 形A (第一百四十四刀): 落临时量这一臂交出去的是
+                                // **借来**的一枚 (ByVal 形参 / 泛对象槽 / 按名剥出来的实例)，而被调方
+                                // 那一格从本刀起按 腿② 的形状**当场退旧** ⇒ 这一臂必须自己先付一枚，
+                                // 调用行之后再把被调方留在临时量里的那一枚交回 (两位主人都在 cgen_com.cpp)。
+                                registerClassArgRefCopyIn(clsSlot092r, tmpCls092r);
+                                registerClassArgRefHandback(clsSlot092r, tmpCls092r);
+                                argVal = "&" + tmpCls092r;
+                            }
                         }
                     } else if (i < calleeParams.size()
                                && !calleeParams[i].isByVal && !calleeParams[i].isParamArray
@@ -984,6 +1051,28 @@
                                 //     FromInstance 的 1 个引用按头文件说明直接转移给 VARIANT。
                                 //     判据 inferClassTypeOfExpr (与 Fix 101 同源)。
                                 const bool isObjVar92y = knownObjectVars_.count(argLs92y) > 0;
+                                // 账 #305 第一百七十二刀 站E: 实参本身是一枚**视图**
+                                // (`Dim/形参 As <legacy 接口>`) ⇒ 问第一百七十一刀那位唯一主人
+                                // `legacyViewBoxExpr`，与 wrapVariantValue / boxToVariant 那两站共用
+                                // 同一句答案 (身份按指针查 `vb6_VariantFromProjectInstance`)。
+                                // 为什么这一站单独欠着: inferClassTypeOfExpr 对视图槽答的是**接口宿主
+                                // 名** (Ray.vbp 实测 = "RayTraceable")，于是下面那句按类名包的
+                                // `vb6_FindCoClassDesc("RayTraceable")` 查不中 desc，还把整枚值结构体
+                                // `(void*)(TargetObj)` 喂进形参 = C2440 + C2198 (RayTrace.c(158))。
+                                // 所有权口径与 §B217 那条一字相同: 装箱多取的那一枚仍登记给语句末。
+                                {
+                                    const std::string viewBox172e =
+                                        legacyViewBoxExpr(node.positional[i].get(), argVal);
+                                    if (!viewBox172e.empty()) {
+                                        const std::string tmp172e = "_vb6_vararg_"
+                                            + std::to_string(ansiCounter_++);
+                                        c_.emitLine("vb6_VARIANT " + tmp172e + " = " + viewBox172e
+                                                    + ";  /* Fix <vbeclipse>: ByRef Variant 实参装箱 */");
+                                        boxTempsToClear_.push_back({tmp172e, c_.indentLevel()});
+                                        argVal = "&" + tmp172e;
+                                        break;
+                                    }
+                                }
                                 std::string argCls92y =
                                     isObjVar92y ? std::string()
                                                 : inferClassTypeOfExpr(*node.positional[i]);
@@ -1285,6 +1374,17 @@
                             // cType 都不重合, 所以只能显式短路)。
                             isClassSlot092r = true;
                             cType = clsSlotP092r;   // 供下方 090d 的 void* 判定等留个一致的读数
+                            // 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): 本站已经落好一枚只活到
+                            // 这条语句的临时量 —— 实参自带移交的对价时就在那枚临时量上登记交回
+                            // (借来的实参问句答 false ⇒ 一个字节都不发)。裸标识符那一支 (上面 092r)
+                            // 按契约问句自己的规则压根答不出移交 (既不是 New 也不是调用), 不补。
+                            if (i < node.positional.size() && node.positional[i]) {
+                                // 账 #305 §B218 (甲) 形A (第一百四十四刀): 移交来的那一枚自带对价 ⇒ 只交回
+                                // (第一百三十八刀那一形)；借来的一枚要先在这一格付钱，因为被调方现在当场退旧。
+                                const bool ownedP144 = argHandsOverProjectRef(*node.positional[i], clsSlotP092r);
+                                if (!ownedP144) registerClassArgRefCopyIn(clsSlotP092r, tmpCls092r);
+                                registerClassArgRefHandback(clsSlotP092r, tmpCls092r);
+                            }
                         }
                     }
                     // Fix 120: ByRef 具体数值形参 ← 裸 COM 结果 (void* 承载 COM VARIANT*)

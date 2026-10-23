@@ -188,6 +188,28 @@ int32_t vb6_GetScaleHeight(void* hwnd) {
     return 0;
 }
 
+// 账 #305 那一刀的第四/第五格: ScaleLeft / ScaleTop 与 ScaleWidth / ScaleHeight 是**同一套
+// 自定义坐标系的四个数** (`Scale (x1,y1)-(x2,y2)` ⇒ Left=x1 Top=y1 Width=x2-x1 Height=y2-y1),
+// 所以读法必须问同一位主人 vb6_UserScaleOf, 不能各自从客户区像素倒推 —— 倒推出来的原点恒 0,
+// `Scale (10,20)-(100,100)` 之后读到 0 就是"编得过、跑得起、读数恒 0"那一味。
+int32_t vb6_GetScaleLeft(void* hwnd) {
+    if (!hwnd) return 0;
+    double uLeft = 0.0, uTop = 0.0, uW = 0.0, uH = 0.0;
+    /* vbUser 那一档的 ScaleLeft 是**用户设出来的原点**, 与 ScaleWidth 同一条口径。 */
+    if (vb6_UserScaleOf(hwnd, &uLeft, &uTop, &uW, &uH)) return (int32_t)uLeft;
+    /* VB6: 没挂自定义坐标系时原点恒为 0, 与 ScaleMode 取哪一档无关 (缺省坐标系的原点就是
+       客户区左上角)。这里刻意不从客户区倒推 —— 倒推只会再答一个 0, 还把"有没有挂坐标系"
+       这一问的答案糊掉。 */
+    return 0;
+}
+
+int32_t vb6_GetScaleTop(void* hwnd) {
+    if (!hwnd) return 0;
+    double uLeft = 0.0, uTop = 0.0, uW = 0.0, uH = 0.0;
+    if (vb6_UserScaleOf(hwnd, &uLeft, &uTop, &uW, &uH)) return (int32_t)uTop;
+    return 0;
+}
+
 int32_t vb6_GetControlBox(void* hwnd) {
     if (!hwnd) return -1;
     LONG style = GetWindowLongW((HWND)hwnd, GWL_STYLE);

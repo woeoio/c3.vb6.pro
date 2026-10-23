@@ -21,7 +21,7 @@ jobs:
       # 交给脚本的 vswhere 自动发现 vcvarsall (无需显式设置)
       C3_VCVARSALL: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Sanity — required dev tools (MSVC)
         shell: pwsh
@@ -35,7 +35,7 @@ jobs:
           ninja --version
 
       - name: Cache C3.exe build dir (fast path when src/ untouched)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/c3build
           key: c3build-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**') }}
@@ -66,7 +66,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "built C3.exe smoke check failed" }
 
       - name: Upload C3.exe artifact (shared by all test jobs)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: c3-exe
           path: .build/C3.exe
@@ -98,7 +98,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # fetch-depth 默认 1 = 浅克隆，而 git 拒绝从浅仓库 push。#413 侥幸推成功是因为那轮分支还
           # 不存在、走的是 --orphan（历史被切断，没有缺失的父提交）；#414/#415 基于已有 tip 叠提交就一直
@@ -106,7 +106,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download C3.exe artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: c3-exe
           path: .build/
@@ -119,14 +119,14 @@ jobs:
 
       - name: Upload emit manifest
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: emit-manifest
           path: emit-manifest.txt
           retention-days: 14
 
       - name: Upload raw emit samples (a few inputs, un-normalized)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: emit-samples
           path: .build/emit-samples
@@ -235,10 +235,10 @@ jobs:
     env:
       C3_VCVARSALL: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download C3.exe artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: c3-exe
           path: .build/
@@ -315,7 +315,7 @@ jobs:
 
       - name: Upload test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: "test-logs-${{ matrix.category }}${{ matrix.shard && format('-{0}', matrix.shard) || '' }}"
           path: |

@@ -842,6 +842,54 @@ void SemanticAnalyzer::foldBareCanvasVerb(ExprPtr& callee) {
         loc, std::make_unique<MeExpr>(loc), member);
 }
 
+// 账 #305 (§B227) = 画布动词**语句形**不稳的那一处:
+// VB6 允许画布动词不带括号地站在语句位 —— `Me.Scale` (复位坐标系) / 裸 `Scale` 都合法,
+// 与 `Cls` / `Print` 同一族。但 cgen 那边这一形走的是**另一条码头**: parser 对行尾无参数的
+// 成员调用交付的是 `CallStmt(callee = MemberAccessExpr)`，到不了表达式码头
+// (`cgen_expr_call_callee_withm.inc`)，只能由语句码头 `cgen_call.cpp` 收尾 —— 而那条码头的
+// 画布闸门写死成 `cvMemS == "cls" || cvMemS == "print"`。于是
+//     Me.Scale   ⇒ vb6_ComCall(vb6_hwnd_<窗体>, L"Scale", NULL, 0)   ← 假 IDispatch, 运行期 no-op
+//     Me.Scale() ⇒ vb6_Form_Scale(hwnd, 0, 0,0,0,0)                  ← 对
+// 同一样东西两种写法两种下场，而且错那一形"编得过、链接过、跑起来一声不响"(本线踩过三次的那条)。
+//
+// 修在**语义层**而不是把 scale 再塞进语句码头那句 `cls || print`：
+//   ① 那句写死名单正是账 #232② 刚清掉的形状，加第三个字面量 = 动词名单的又一份副本;
+//   ② DRAW 那一族的实参打平（Step / 坐标省略 / 颜色 / B|C|F 位值）**只住在表达式码头**，
+//      语句码头再拼一遍 = 第二份答案，表加一档它照样不知道。
+// 所以这里把「零实参」这一形折成 `IndexOrCallExpr(Me.<动词>, 实参表为空)` —— 与 `Me.Scale ()`
+// 逐字同形，从此两种写法同路，语句码头那句硬编码不必再动。
+//
+// 三问缺一不可（与 foldBareCanvasVerb 同一口径）:
+//   1) 只有**窗体**模块有这一族;
+//   2) 折哪些动词问画布表 —— 只折 DRAW 那一族 (pset/line/circle/point/scale)。
+//      METHOD 那一族 (cls / print) 语句码头本就接得住，折过去等于让它在两条码头各接一次;
+//      而且 `Print` 那一档语句码头还管着实参补齐，动它没好处只有风险。
+//   3) 接收者必须是**本窗体自己** (`Me.` 或模块名) —— `Picture1.Scale` 那一档表里没这一行
+//      (本仓今天只给窗体出口)，折了就是把"没接"伪装成"接了"。
+void SemanticAnalyzer::foldParenlessCanvasVerbCall(ExprPtr& callee) {
+    if (pass_ != 2 || !currentModule_ || !callee) return;
+    if (currentModule_->docKind != DocumentKind::Form) return;
+    // 带括号 / 带实参那一形 parser 已经交成 IndexOrCallExpr，本来就走表达式码头，别动它。
+    if (callee->kind != ASTNodeKind::MemberAccessExpr) return;
+
+    auto& ma = static_cast<MemberAccessExpr&>(*callee);
+    const std::string verb = canvasVerbLower(ma.memberName);
+    const char* entry = canvasVerbEntry(verb, CR_CANVAS_FORM, CANVAS_OWNER_DRAW);
+    if (!entry || !*entry) return;   // 表里这一档没有出口 ⇒ 落回原路（COM 兜底），不伪造
+
+    if (!ma.object) return;
+    bool selfReceiver = (ma.object->kind == ASTNodeKind::MeExpr);
+    if (!selfReceiver && ma.object->kind == ASTNodeKind::IdentifierExpr) {
+        const auto& objIdent = static_cast<IdentifierExpr&>(*ma.object);
+        selfReceiver = Symbol::toLower(objIdent.name)
+                       == Symbol::toLower(currentModule_->moduleName);
+    }
+    if (!selfReceiver) return;
+
+    const SourceLocation loc = callee->loc;
+    callee = std::make_unique<IndexOrCallExpr>(loc, std::move(callee));
+}
+
 bool SemanticAnalyzer::isDocumentBarePseudoMember(const std::string& name) const {
     if (!currentModule_ || name.empty()) return false;
     const char* obj = nullptr;

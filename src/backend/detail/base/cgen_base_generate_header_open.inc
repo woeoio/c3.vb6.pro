@@ -66,3 +66,8 @@
     // tB Interface 契约 (ai/022 B04): 工程级槽表类型. 每个模块头文件各发一份,
     // 块内 #ifndef 守卫 -> 同一 TU 多次包含无害; 无新式接口的工程零输出.
     emitIfaceContractTypedefs();
+
+    // 账 #305 新账 #464: legacy VB6 接口 (.cls 宿主、没进 tB 登记表) 的槽表类型. 同样每份
+    // 模块头一发 + 块内 #ifndef 守卫; 形状来自 driver 预扫描, 不再跟着实现类跑.
+    // 无 legacy 接口的工程零输出.
+    emitLegacyIfaceContractTypedefs();

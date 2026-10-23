@@ -712,6 +712,18 @@ BSTR vb6_ComObject_ClassNameBStr(void* v) {
     return r;
 }
 
+/* 账 #305 新账 #471 第一百七十四刀: 「这枚包装器是哪一枚工程类」的不分配那一档 —— 论证见
+ * vb6comserver.h 声明处。三闸与身份判据全走兄弟那位主人 vb6_ComObject_IsBoxed, 这里只把
+ * desc 里那根 ANSI 名交回去 (不复制、不分配、不归调用方释放)。 */
+const char* vb6_ComObject_ClassNameA(void* v) {
+    const vb6_ComObject* obj;
+    const char* s;
+    if (!vb6_ComObject_IsBoxed(v)) return NULL;
+    obj = (const vb6_ComObject*)v;
+    s = obj->desc ? obj->desc->classVariable : NULL;
+    return (s && s[0]) ? s : NULL;
+}
+
 // ============================================================
 // ExeComBridge 03: 工程类实例 → COM 调用实参 (VT_DISPATCH VARIANT*)
 // ============================================================
@@ -746,4 +758,27 @@ void* vb6_ComPackVB6InstanceRaw(const char* classVariable, void* instance) {
     pv->vt = VT_DISPATCH;
     pv->pdispVal = (IDispatch*)obj;  /* 引用已由 FromInstance 提供, 所有权转移给 VARIANT */
     return (void*)pv;
+}
+
+/* 账 #305 新账 #407 / §B190 第一百七十一刀 = 「视图那一档怎么进 Variant」的唯一出口。
+ * 为什么要按**指针**问身份: 视图 (vb6_iface_<I>) 是值结构体、静态类型是接口，实现类只有运行期
+ * 才知道，而兄弟 vb6_ComPackVB6InstanceRaw (本文件 :726) 问的是**类名** —— 这一站手里没有名字。
+ * 身份那张表本来就有唯一主人 vb6_FindProjectClassDesc (:642)，写者就是每枚工程类 _New 里那句
+ * vb6_RegisterProjectClassInstance(me, desc)，所以这里只读、不另立一张。
+ * 认不出身份 (没进 coclass 表的类 = Private / 非 MultiUse 与 SingleUse 那两档) 交回 VT_EMPTY，
+ * 与兄弟那条「不冒充对象」的口径一字相同 —— 把裸实例指针塞进 dispatch 档就是 §B85 那族野 Release。
+ * 所有权: FromBorrowedInstance 造新那一路把 refCount 停在 1 并写进实例的 __comObj (那一枚归实例)，
+ * 已包过那一路自带一次 AddRef；vb6_VariantObject 另加一枚，正好与槽清时那一次 Release 相抵。 */
+vb6_VARIANT vb6_VariantFromProjectInstance(void* instance) {
+    vb6_VARIANT v;
+    const vb6_CoClassDesc* desc;
+    vb6_ComObject* wrapper;
+    memset(&v, 0, sizeof(v));
+    v.vt = vb6_vtEmpty;
+    if (!instance) return v;
+    desc = vb6_FindProjectClassDesc(instance);
+    if (!desc) return v;
+    wrapper = vb6_ComObject_FromBorrowedInstance(desc, instance);
+    if (!wrapper) return v;
+    return vb6_VariantObject((void*)wrapper);
 }

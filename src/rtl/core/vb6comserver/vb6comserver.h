@@ -186,6 +186,12 @@ int32_t vb6_ComObject_IsBoxed(void* v);
 // 调用方 (vb6rtl_conv.c 的 vb6_TypeName) 拿 NULL 就继续走它原来的答案, 本刀不改标签也不改档。
 BSTR vb6_ComObject_ClassNameBStr(void* v);
 
+// 账 #305 新账 #471 第一百七十四刀: 同一问句的**不分配**那一档。兄弟那一枚服务 TypeName
+// (一年调不了几回), 每调一次 SysAllocString 一次; 而 For Each 把集合元素交进视图槽那一站
+// **每迭代一枚**都要问一次类名 ⇒ 那里要的是 desc 里那根现成的 ANSI 名, 不是又一枚 BSTR。
+// 交回的指针归 desc 所有 (静态寿命), 调用方只比名字不释放; 认不出口径与兄弟一字相同 (NULL)。
+const char* vb6_ComObject_ClassNameA(void* v);
+
 // ExeComBridge 03: 把工程类实例包成"COM 调用实参格式"的 VARIANT* (VT_DISPATCH).
 // cgen 为每个类模块生成 vb6_ComPack_<类名>(void* instance) 包一层本函数; 触发场景
 // 是 `New <本工程类>` 出现在 COM 调用实参位置

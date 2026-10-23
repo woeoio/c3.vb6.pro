@@ -8,6 +8,55 @@ namespace vb6c3 {
 
 // --- cgen_localdecl.cpp: 局部声明与提升 (Option/Dim/Const/hoist) ---
 
+// 账 #305 §B218 (甲) 第一百六十刀: 这一问只许住在这里 (声明口), 站点调用。
+bool CCodeGen::wantsStaticLocalStorage(const VariableDecl& var) const {
+    return var.isStatic || inStaticProc_;
+}
+
+// 账 #305 §B218 (甲) 第一百六十四刀: 「拿指针本身当首建守卫」那一块的形状只许住在这里。
+// Static 那一档与序言那一档共用 —— 两处成因不同, 下限同一个: 那一发创建每调用只许落地一次。
+void CCodeGen::emitArrayCarrierGuardedCreate(const std::string& cName,
+                                             const std::string& initCode,
+                                             const std::string& why) {
+    c_.emitLine("if (" + cName + " == NULL) {  /* 账 #305 (甲) 腿⑤ " + why + " */");
+    c_.indent();
+    c_.emitLine(cName + " = " + initCode + ";");
+    c_.dedent();
+    c_.emitLine("}");
+}
+
+// 账 #305 §B218 (甲) 第一百六十刀: 数组载体声明那一发的形状只许住在这里。
+void CCodeGen::emitArrayCarrierDecl(const std::string& cType, const std::string& cName,
+                                    const std::string& initCode, bool staticStorage,
+                                    bool declaredInPrelude) {
+    if (declaredInPrelude) {
+        emitArrayCarrierGuardedCreate(cName, initCode,
+            "第一百六十四刀: 声明在序言, 这一站只在第一次走到时建");
+        return;
+    }
+    if (!staticStorage) {
+        c_.emitLine(cType + "* " + cName + " = " + initCode + ";");
+        return;
+    }
+    c_.emitLine("static " + cType + "* " + cName + " = NULL;");
+    if (initCode == "NULL") return;
+    emitArrayCarrierGuardedCreate(cName, initCode,
+        "第一百六十刀: Static 那一格只在第一次进来建");
+}
+
+// 账 #305 §B218 (甲) 第一百六十四刀: 「这枚载体在 C 里是哪一档描述符指针」只许答在这里 ——
+// 序言那一发与原位那三支共用同一个答案 (答错 = 拿 1D 的指针去接 ND 的创建, cl C2440)。
+std::string CCodeGen::arrayCarrierCType(const VariableDecl& var) {
+    return var.dimensions.size() >= 2 ? "vb6_SafeArrayND" : "vb6_SafeArray1D";
+}
+
+// 序言那一发的形状: 只有指针、没有创建 (创建留在原位)。存储级那一问照旧单独问
+// wantsStaticLocalStorage —— 少问一条, 嵌在块里的 `Static q(5)` 就掉回「每调用换一块」那一档。
+void CCodeGen::emitArrayCarrierPreludeDecl(const VariableDecl& var) {
+    c_.emitLine((wantsStaticLocalStorage(var) ? "static " : "") + arrayCarrierCType(var)
+                + "* " + cIdent(var.name) + " = NULL;");
+}
+
 void CCodeGen::visit(OptionStmt& node) {
     // P18-C: Option Compare Text/Binary
     if (node.optionKind == OptionKind::CompareText) {
@@ -54,6 +103,11 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 std::string udtCType = resolveArrayUdtElemCType(var.asType.get());
                 bool isUdtArr = !udtCType.empty();
                 int dimCount = (int)var.dimensions.size();
+                // 账 #305 §B218 (甲) 第一百六十四刀: 名字先算下来 —— 序言那一发写的、注册那一段读的是
+                // 同一枚; declaredInPrelude 只问提升那一位主人写的名单, 原位不许自己再推形状。
+                std::string lower = var.name;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                const bool declaredInPrelude = preludeArrayCarriers_.count(lower) > 0;
 
                 if (dimCount == 1) {
                     // 一维数组: 保持原有1D代码
@@ -74,7 +128,8 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     } else {
                         initCode = "vb6_SafeArrayCreate1D(" + saElemType + ", " + lBound + ", " + uBound + ")";
                     }
-                    c_.emitLine("vb6_SafeArray1D* " + cName + " = " + initCode + ";");
+                    emitArrayCarrierDecl(arrayCarrierCType(var), cName, initCode,
+                                         wantsStaticLocalStorage(var), declaredInPrelude);
                 } else {
                     // 多维数组: 使用ND运行时
                     std::string boundsVar = "_bounds_" + cName;
@@ -92,12 +147,14 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     }
                     c_.dedent();
                     c_.emitLine("};");
-                    c_.emitLine("vb6_SafeArrayND* " + cName + " = vb6_SafeArrayCreateND(" + saElemType + ", " + std::to_string(dimCount) + ", " + boundsVar + ");");
+                    emitArrayCarrierDecl(
+                        arrayCarrierCType(var), cName,
+                        "vb6_SafeArrayCreateND(" + saElemType + ", " +
+                            std::to_string(dimCount) + ", " + boundsVar + ")",
+                        wantsStaticLocalStorage(var), declaredInPrelude);
                 }
 
-                // 注册到已知数组集合
-                std::string lower = var.name;
-                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                // 注册到已知数组集合 (lower 已在分支头上算好)
                 knownArrays_.insert(lower);
                 arrayElemTypes_[lower] = elemType;
                 arrayDimCounts_[lower] = dimCount;
@@ -111,6 +168,12 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 {
                     std::string cls = resolveArrayClassElemType(var.asType.get());
                     if (!cls.empty()) arrayClassElemTypes_[lower] = cls;
+                    // 账 #305 §B218 (甲) 第一百五十二刀立的那位登记口; 第一百五十六刀放宽到
+                    // **每一档**局部数组 (认不出元素类的也登记, 只是不交回元素), 闸一条不少:
+                    // Static 那一格跨调用活着, 出口放手 = 下次进来读已释放块。
+                    if (!var.isStatic && !inStaticProc_) {
+                        trackArrayCarrierForRelease(cIdent(var.name), var.name);
+                    }
                 }
                 knownLocalVars_.insert(lower);
                 break;
@@ -131,7 +194,9 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     emitExpr(*var.initializer);
                     dynInit = rewriteByteArrayValue(lastExpr_);
                 }
-                c_.emitLine("vb6_SafeArray1D* " + cName + " = " + dynInit + ";");
+                // 动态那一档整条声明本来就在序言 (Fix 086) ⇒ 没有「声明与创建分两腿」这一形。
+                emitArrayCarrierDecl(arrayCarrierCType(var), cName, dynInit,
+                                     wantsStaticLocalStorage(var), false);
 
                 // 注册到已知数组集合
                 std::string lower = var.name;
@@ -149,6 +214,12 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 {
                     std::string cls = resolveArrayClassElemType(var.asType.get());
                     if (!cls.empty()) arrayClassElemTypes_[lower] = cls;
+                    // 账 #305 §B218 (甲) 第一百五十二刀立的那位登记口; 第一百五十六刀放宽到
+                    // **每一档**局部数组 (认不出元素类的也登记, 只是不交回元素), 闸一条不少:
+                    // Static 那一格跨调用活着, 出口放手 = 下次进来读已释放块。
+                    if (!var.isStatic && !inStaticProc_) {
+                        trackArrayCarrierForRelease(cIdent(var.name), var.name);
+                    }
                 }
                 knownLocalVars_.insert(lower);
                 break;
@@ -327,8 +398,14 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     if (!ivrefCType(simple.name).empty()) {
                         knownIvrefVars_[lower] = simple.name;
                         isLocalIvrefType = true;
-                        // B05: 过程级接口变量在正常出口处 Release 自己那一份引用
-                        trackIvrefLocalForRelease(cIdent(var.name));
+                        // B05: 过程级接口变量在正常出口处 Release 自己那一份引用。
+                        // 账 #305 §B218 第一百三十三刀: 这一站与上面两条工程类腿 (第 268 / 342 行) 共用
+                        // **同一道闸** —— Static / Static Sub 里那一格 C 侧发的是 static 存储, 槽跨调用还
+                        // 活着, 出口放手 = 下一次进来读已释放块 (实测: 一枚 `Static sv As IB448` 调四次,
+                        // 第三次出口就把还有人握着的实例退到 0, 第四次 0xC0000374)。
+                        if (!var.isStatic && !inStaticProc_) {
+                            trackIvrefLocalForRelease(cIdent(var.name));
+                        }
                     } else if (localIsInterface) {
                         // P6.4: 接口类 → knownIfaceVars_ (而非 knownClassVars_)
                         knownIfaceVars_[lower] = localClsName;
@@ -473,7 +550,8 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
 
             // VB6 Static变量: 跨调用持久化 → C static局部变量
             // 包括: 显式Static声明 或 Static Sub/Function内的所有局部变量
-            std::string storageClass = (var.isStatic || inStaticProc_) ? "static " : "";
+            // 账 #305 §B218 (甲) 第一百六十刀: 这一问搬进 wantsStaticLocalStorage (与数组三支同源)。
+            std::string storageClass = wantsStaticLocalStorage(var) ? "static " : "";
 
             // Fix 010r-12c: Register non-array local variable to knownLocalVars_
             // so it shadows cross-module external Public symbols with the same name.

@@ -5,9 +5,14 @@
 # 走, 查表腿那圈另外夹住 VB6_PROJCLASS_MAX; 而计数在夹界检查之前自增、放弃登记那一路不回退
 # ⇒ 计数无上界, 从第 514 枚实例起登记腿就在读数组外面的相邻静态数据 (巧合命中还会往外面写)。
 # 本刀把两圈收成一处 vb6_ProjClassScanLimit()。另两条在册事实也一并钉住: 那句指向
-# vb6_ProjClassVerify 的注释描述的机制从来不存在, 而查表的读者今天是 0 枚 ——
+# vb6_ProjClassVerify 的注释描述的机制从来不存在, 而当时查表的读者是 0 枚 ——
 # 「撤掉整格 vs 把读者接上」是口径待拍 (§B187 出路 a/b), 所以哪天有人接上读者,
 # 这一道要红一声, 逼他先回台账把那一格读完。
+# 2026-10-22 第一百七十一刀 (新账 #407 / §B190) 接上了第一枚读者, 红声按原话起过作用:
+# 台账那两条读数读完的答案是走 (b) 档 —— 视图进装箱站按指针查身份 vb6_VariantFromProjectInstance。
+# 它只读登记腿本来就发的那一档 (P5 的 isDll_ 夹一个字没动), 所以这张表从今天起不再是
+# 「写了没人读」。 (b) 档原话还配一句「注销腿」, 至今没有: 表是弱映射, 实例释放后地址留在表里
+# —— 读者为 0 时那条是惰性缺陷, 读者为 1 起它是活风险, 欠项已回台账记着。
 #
 # 规则 (改坏了会红, 不是装饰):
 #   P1  两圈扫描都问 vb6_ProjClassScanLimit(), 且那个形状在文件里恰好 2 处。
@@ -15,8 +20,8 @@
 #   P3  那枚夹界出口: 定义恰好 1 处; VB6_PROJCLASS_MAX 在代码里恰好 5 处(住在 4 行上:
 #       #define / 数组尺寸 / 出口里那行夹界(同一行点了它两次) / 放弃登记那一句), 后者恰好 1 处。
 #   P5  登记腿只许 ActiveX 那一档发: cgen_com.cpp 里恰好 1 处, 且它上面一行就是 if (isDll_) {
-#   P4  读者普查: vb6_FindProjectClassDesc( 在 .c 的代码里恰好 2 处 (定义 + ...Raw 的转调)、
-#       在 .h 里至多 1 处 (就那一枚声明); vb6_ProjClassVerify 在代码里 0 处 (它不存在,
+#   P4  读者普查: vb6_FindProjectClassDesc( 在 .c 的代码里恰好 3 处 (定义 + ...Raw 的转调 +
+#       第一百七十一刀那枚真读者)、在 .h 里至多 1 处 (就那一枚声明); vb6_ProjClassVerify 在代码里 0 处 (它不存在,
 #       只许住在注释里)。
 #
 # 用法: powershell -File scripts\check_projclass_scan_bound.ps1 [-Root <副本目录>]  (PASS = exit 0)
@@ -84,11 +89,12 @@ if ($giveUp -ne 1) { $bad += ("P3 the table-full bail-out = " + $giveUp + " (wan
 $callRx = 'vb6_FindProjectClassDesc\s*\('
 $objCalls = @([regex]::Matches($objCode, $callRx)).Count
 $hdrCalls = @([regex]::Matches($hdrCode, $callRx)).Count
-# .c 里那 2 处 = 定义本身 + ...Raw 里那句转调; 多一处就是有人新接了读者
-if ($objCalls -gt 2 -or $hdrCalls -gt 1) {
+# .c 里那 3 处 = 定义本身 + ...Raw 里那句转调 (它自己至今 0 调用者) + 第一百七十一刀那枚真读者。
+# 从 <=2 收成 ==3 是这一刀接读者换来的: 再有人接第二枚读者, 这一道照样红。
+if ($objCalls -ne 3 -or $hdrCalls -gt 1) {
     $bad += ("P4 the project-class lookup gained readers (code mentions: .c=" + $objCalls +
-             " .h=" + $hdrCalls + ", want <=2 / <=1) - §B187 的「撤掉整格 vs 把读者接上」是待拍口径,")
-    $bad += ("     接上之前先回台账读那两条读数 (2026-10-15 拍定的分档: ActiveX DLL/Control 走 (b) = 接读者 + 配注销腿,")
+             " .h=" + $hdrCalls + ", want exactly 3 / <=1: 定义 + 那枚至今 0 调用者的 ...Raw + 第一百七十一刀那枚读者) - §B187 那条「接读者」按台账分档走 (b),")
+    $bad += ("     接之前先回台账读那两条读数 (2026-10-15 拍定的分档: ActiveX DLL/Control 走 (b) = 接读者 + 配注销腿,")
     $bad += ("     其余走 (a) = 连登记都不发; 而「EXE 里没有 CoClass 块 ⇒ 实例没进表」那句旧解释已被 com_entry.c 推翻")
 }
 $verify = @([regex]::Matches($objCode, 'vb6_ProjClassVerify')).Count
@@ -123,5 +129,5 @@ if ($bad.Count -gt 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) }
     exit 1
 }
-Write-Host ("PASS check_projclass_scan_bound: loops=2 raw-bound=0 helper=1 cap=5/4lines bail=1 readers=0 verify-in-code=0 reg-site=1 gated=isDll_")
+Write-Host ("PASS check_projclass_scan_bound: loops=2 raw-bound=0 helper=1 cap=5/4lines bail=1 c-mentions=3(readers=1) verify-in-code=0 reg-site=1 gated=isDll_")
 exit 0

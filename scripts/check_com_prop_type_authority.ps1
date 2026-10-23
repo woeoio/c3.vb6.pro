@@ -84,14 +84,32 @@ if ($geIdx -lt 0) {
     $geBlk = if ($geTail -gt 0) { $com.Substring($geIdx, $geTail - $geIdx) } else { $com.Substring($geIdx) }
     # 判据前先剥 //… 与 /*…*/: 函数上方的说明里就写着 "unpackType"，不剥会把一句说明读成一次猜档。
     $geCode = ($geBlk -replace '//[^\r\n]*', '') -replace '/\*[\s\S]*?\*/', ''
-    if ($geCode -notmatch 'vb6_VariantFromComResult\(vb6_ComGetProp\(') {
-        $fails += 'C3 unknown return type no longer falls back to the generic VARIANT read'
-    }
     if ($geCode -notmatch '!sv\.isGet') {
         $fails += 'C3 the getter exit stopped gating on the confirmed property-getter flag (a put/method signature must not be unpacked as a property read)'
     }
+    if ($geCode -notmatch 'comGetterExprForRetCType\(sv\.retCType') {
+        $fails += 'C3 the getter exit no longer routes the tier choice through the by-type switch (a second copy of the tier table)'
+    }
     if ($geCode -match 'unpackType|packFnHint') {
         $fails += 'C3 the getter exit guesses a shape from the call context again (that is how BSTR props became ComGetIntProp)'
+    }
+}
+# 第一百七十八刀: 那张 switch 搬进「按返回类型答」的那一位出口 (站F 的读者与 comGetterExpr 共用它)。
+$swIdx = $com.IndexOf('std::string CCodeGen::comGetterExprForRetCType(')
+if ($swIdx -lt 0) {
+    $fails += 'C3 comGetterExprForRetCType (the by-type property-read tier switch, shared by comGetterExpr and station F) is gone'
+} else {
+    $swTail = $com.IndexOf("`n}", $swIdx)
+    $swBlk = if ($swTail -gt 0) { $com.Substring($swIdx, $swTail - $swIdx) } else { $com.Substring($swIdx) }
+    $swCode = ($swBlk -replace '//[^\r\n]*', '') -replace '/\*[\s\S]*?\*/', ''
+    if ($swCode -notmatch 'vb6_VariantFromComResult\(vb6_ComGetProp\(') {
+        $fails += 'C3 unknown return type no longer falls back to the generic VARIANT read'
+    }
+    if ($swCode -match 'unpackType|packFnHint') {
+        $fails += 'C3 the by-type tier switch reads the call context again (that is how BSTR props became ComGetIntProp)'
+    }
+    if ($com.IndexOf('std::string CCodeGen::comGetterExprForRetCType(', $swIdx + 1) -ge 0) {
+        $fails += 'C3 a second by-type tier switch grew in the same file'
     }
 }
 $svIdx = $com.IndexOf('CCodeGen::ComSigView CCodeGen::comSigViewOf(')

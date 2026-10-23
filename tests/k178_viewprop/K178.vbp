@@ -1,0 +1,7 @@
+Type=Exe
+Name="K178ViewPropApp"
+Module=mdlK178; mdlK178.bas
+Class=IK178; IK178.cls
+Class=K178Alpha; K178Alpha.cls
+Class=K178Beta; K178Beta.cls
+Startup="Sub Main"

@@ -98,6 +98,7 @@
         cgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static
         cgen.setInterfaceImplementers(&ifaceImplementersMap);  // P6.4+: 接口唯一实现类映射
         cgen.setInterfaceAllImplementers(&ifaceAllImplementersMap);  // Fix <vbeclipse>: 接口全部实现类 (桩分派用)
+        cgen.setLegacyIfaceShapes(&legacyIfaceShapeMap);  // 账 #305 新账 #464: legacy 接口槽表的形状归接口自己定
         cgen.setClassChainRegistry(&classes_);  // tB 类继承 (B07b): stage 2.8 只读链登记表
         cgen.setProjectClassNames(&projectClassNames);  // 工程级类名表 (不受同名成员遮蔽)
         cgen.setProjectCoclassNames(&projectCoclassNames);  // 账 #305 §B187: 装箱腿问"这类在 coclass 表里有没有一行"
@@ -107,6 +108,7 @@
         cgen.setViaRegistry(&vias_);          // tB 委托式实现 (B10): stage 2.7 Pass D 裁决表
         cgen.setDefaultInstanceClasses(&defaultInstanceClasses);  // P6.4+: 类模块默认实例
         cgen.setClassFieldKindMap(&classFieldKindMap);  // 账 #305 §B168/§B169: 工程级「类 → 标量字段 → 声明档」表
+        cgen.setClassMemberArrayMap(&classMemberArrayMap);  // 账 #476 §B190: 「类 → 动态数组成员 → 声明语法」表 (只运语法, 档位在出口里映射)
         cgen.setTrimIncludes(options.trimIncludes);  // opt4: 裁剪未实际引用的跨模块include
         cgen.setTargetArch(options.arch);            // ai/vb-asm-extension-spec: Asm 块仅 x64
         if (options.trimIncludes) {

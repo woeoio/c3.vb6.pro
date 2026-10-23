@@ -138,4 +138,12 @@
     // 调用撕成 `(Api(); vb6_ErrSetLastDllError(...) != 0)` 这种非法 C。快照改由
     // cgen_decl_api.cpp 为每个 Declare 生成的 static __inline 包装函数承担
     // (调用点经 #define / declareAliasMap_ 已被重定向到该包装), 这里保持原样。
+    // 账 #464 §B164 回收刀: 实参位上「整枚就是一个 mint 调用」的那一格 ⇒ 提成具名临时量,
+    // 语句末按档收回。
+    // ⚠ 这一格必须**放在最后**: 到这一步实参表才是**最终**形状（前面的 fixup 会补缺省参数、
+    // 换 callee 名、改实参文本）⇒ 「消费者第几格」取的是**发码里那一格的位号**, 与
+    // scripts/owned_temp_census_164.py 那份清点（同样按发码文本算）**同源**。
+    // 判据全部来自 src/common/owned_temp_keeps.hpp（表由 RTL 推导 ⇒ 哨兵双向对账）。
+    hoistOwnedTempArgs(argList, callee);
+
     lastExpr_ = callee + "(" + argList + ")";

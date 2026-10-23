@@ -311,6 +311,12 @@ static inline vb6_VARIANT vb6_VariantIdentity(vb6_VARIANT v) { return v; }
 )((x))
 #endif
 
+// 账 #305 新账 #407 第一百七十一刀: 一枚**裸实例指针**装成对象档 VARIANT 的唯一出口。
+// 视图那一档 (vb6_iface_<I> 是值结构体) 落 vb6_VariantFromValue 的 _Generic default
+// = vb6_VariantObject 是 cl C2172「实参不是指针」的主人，那一档改问这一句。
+// 定义不在本层 —— 身份表与 IDispatch 包装器都在 src/rtl/core/vb6comserver/vb6comserver_obj.c。
+vb6_VARIANT vb6_VariantFromProjectInstance(void* instance);
+
 // Index into a Variant that holds an array -- returns element as vb6_VARIANT
 vb6_VARIANT vb6_VariantArrayGet(vb6_VARIANT* v, int32_t index);
 // Set element in a Variant that holds an array

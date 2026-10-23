@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <functional>
 #include <map>
+#include "semantics/interface_sig.hpp"  // 账 #305 新账 #489: ifaceSlotKeyNamed (legacy 槽键与 D2 同源的位主人)
 
 namespace vb6c3 {
 
@@ -338,6 +339,119 @@ std::string CCodeGen::ifaceViewOfExpr(const ASTNode& expr) {
     std::string n = inferClassTypeOfExpr(expr);
     if (n.empty()) return std::string();
     return ivrefCType(n).empty() ? std::string() : n;
+}
+
+// 账 #305 §B218 第一百六十五刀: 「这一格槽装的是不是 legacy 那一档接口视图」的唯一问句
+// (名册 = knownIfaceVars_，由 cgen_decl_var.cpp / cgen_localdecl.cpp / 三处形参登记共同写入)。
+// 为什么需要单独一问: 视图那一档的 C 值是**一枚值结构体** vb6_iface_<I> { vtbl, obj }，
+// 而工程类那一位主人只会写 `vb6_cls_<类名>* 旧 = 目标;` —— 它拿到的是左值的**声明类型名**，
+// 接口名也照样答得出，于是铸出一枚声明侧从没造过的 `vb6_cls_<接口名>` (实测 = cl C2440，
+// #407 那十二形全撞在这一发上)。视图那一档的覆写/置空本就有自己的形状 (wrap / ReleaseObject)，
+// 站点问这一句落空才归工程类那位主人管，别再长第三种答案。
+// 账 #305 新账 #471 (第一百七十四刀): 名册那一问从此有**带名字**的那一档 —— For Each 那一站要拿
+// 接口名去拼「按运行期类名选中那一枚 wrap」的发码 (`legacyIfaceViewFromFn`)，而名字与 bool 必须
+// 出自同一次查表：上面那句问句从此是这一句的投影 (count → find，答案同源、名单还是那一张)。
+std::string CCodeGen::slotLegacyIfaceViewName(const std::string& nameLower) const {
+    auto it = knownIfaceVars_.find(nameLower);
+    return it == knownIfaceVars_.end() ? std::string() : it->second;
+}
+
+bool CCodeGen::slotIsLegacyIfaceView(const std::string& nameLower) const {
+    return !slotLegacyIfaceViewName(nameLower).empty();
+}
+
+// 账 #305 新账 #407 / §B190 第一百七十一刀: 「这一枚表达式是不是视图值、装箱该发哪一句」。
+// 名单还是第一百六十五刀那一张 (knownIfaceVars_)，这里只是它在**装箱**这一维的投影；
+// 不是视图就交空串，让站点按它原来的路走 —— 别在这一处发明第二种答案。
+// .obj 就是视图里那枚裸实例指针 (vb6_iface_<I> { vtbl, obj })，也是 _New 登记进表的那个值。
+std::string CCodeGen::legacyViewBoxExpr(const ASTNode* expr, const std::string& cExpr) const {
+    if (!expr || expr->kind != ASTNodeKind::IdentifierExpr || cExpr.empty()) return std::string();
+    // 同一枚 AST 可能被连问两站 (wrapVariantValue 之后 boxToVariant 还问一次)。第二次的 cExpr
+    // 已经是槽文本, 再套一层就是自套 ⇒ 「这段文本是不是一枚槽」也问既有那一位主人。
+    if (cExprIsVariantCarrier(cExpr)) return std::string();
+    const auto& id = static_cast<const IdentifierExpr&>(*expr);
+    if (!slotIsLegacyIfaceView(Symbol::toLower(id.name))) return std::string();
+    return "vb6_VariantFromProjectInstance((void*)(" + cExpr + ").obj)";
+}
+
+// 账 #305 新账 #471 站D (第一百七十五刀): 「接收者是一枚视图，它的方法那一发怎么发」收成一处。
+// 从前这一发只在表达式路现场拼 (P6.4)，语句路（不写括号的零实参那一形）直接落 `vb6_ComCall(视图, …)`
+// —— 整枚结构体进 `void*` 槽 = cl C2172（探针实测，外部真语料 24 行 / 去重 8 份文件）。
+// 是不是视图只问名册那一位主人（同一次查表），站点只许问、不许自己拼形状。
+// 带实参那两形（`x.M 5` / `x.M(5)`）本就由表达式路收尾 ⇒ 本刀接的是**第二条消费路**。
+std::string CCodeGen::legacyViewCallExpr(const std::string& objExpr, const std::string& memberName,
+                                         const std::vector<std::string>& args) const {
+    if (objExpr.empty() || slotLegacyIfaceViewName(Symbol::toLower(objExpr)).empty()) {
+        return std::string();
+    }
+    std::string argsStr;
+    for (size_t i = 0; i < args.size(); i++) {
+        if (i > 0) argsStr += ", ";
+        argsStr += args[i];
+    }
+    std::string call = objExpr + ".vtbl->" + cIdent(memberName) + "(" + objExpr + ".obj";
+    if (!argsStr.empty()) call += ", " + argsStr;
+    return call + ")";
+}
+
+// 账 #305 新账 #474 站F (第一百七十八刀): 「接收者是一枚视图，它的**属性读**那一发怎么发」。
+// 站点从前只认 IDispatch：视图是值结构体，塞进 helper 首枚 `void*` 槽 = cl C2172 (With 内外同红，
+// 外部真语料 读 25 处)。形状仍交回上一行那位主人 (`legacyViewCallExpr`) —— 零实参的 Property Get
+// 与零实参的方法在本族的表里本来就是同一发；这里只补两问:
+//   ① 这一席槽是不是**读**那一档: 键按 D2 带档 (`get_`/`put_`/`putref_`，新账 #489 之后
+//      legacy 与登记那族同源)，读者只问 `get_` 那一档 ⇒ Let/Set 的席位根本不会被选中;
+//      仍额外挡掉 `void` / 带实参 / `void*`(对象档的引用计数口径没读数) 三种形;
+//   ② 这一档的 C 类型与**站点本来要发的那一发**同型吗: 不同型就换不了访问路
+//      (换算与所有权是站点按目标档已经 baked 进去的)，比的是文本 ⇒ 拿唯一那位 switch 现拼一份来比。
+std::string CCodeGen::legacyViewGetterReadExpr(const std::string& objExpr,
+                                               const std::string& memberName,
+                                               const std::string& lateCall) {
+    if (objExpr.empty() || lateCall.empty()) return std::string();
+    const std::string ifaceName = slotLegacyIfaceViewName(Symbol::toLower(objExpr));
+    if (ifaceName.empty()) return std::string();
+    // 键带档 (账 #489 之后 legacy 的 Get 席位是 `get_<成员名>`) => 读者问的是读那一档的键。
+    const std::string want = ifaceSlotKeyNamed(Symbol::toLower(memberName),
+                                               ASTNodeKind::PropertyDecl, ProcKind::PropertyGet);
+    for (const LegacyIfaceSlot& s : legacyIfaceSlots(ifaceName)) {
+        if (s.slotKey != want) continue;
+        if (s.retType == "void" || s.retType == "void*" || !s.params.empty()) return std::string();
+        if (comGetterExprForRetCType(s.retType, objExpr, memberName) != lateCall) return std::string();
+        return legacyViewCallExpr(objExpr, s.field, std::vector<std::string>());
+    }
+    return std::string();
+}
+
+
+// 账 #305 新账 #474 站F (写侧; 前置 = 新账 #489 那一席 `put_` 的键): 「接收者是一枚视图，
+// 它的**属性写**那一发怎么发」。病灶 = 站点按「接收者的类名」现场拼
+// `vb6_<接口名>_prop_let_<成员>(视图, 值)` —— 视图是值结构体 `vb6_iface_<I>`，而那一发的首枚形参
+// 是 `vb6_cls_<I>*` ⇒ cl **C2440**「无法从 `vb6_iface_<I>` 转换为 `vb6_cls_<I> *`」(两台同红、没有 exe)。
+// 与读侧同规, 三问都不自己长答案:
+//   ① 这枚接收者在名册里是视图吗 (问读侧同一把名册钥匙, 只查一次表);
+//   ② 那一席是**写**那一档吗 (键 = `ifaceSlotKeyNamed(裸名, PropertyDecl, PropertyLet)`，
+//      `retType == "void"`; Set 那一档 `putref_` **刻意不接** = 对象形的引用计数口径与值形不是一件事);
+//   ③ 站点为自己那一发算好的**目标档** (写方向末形参的 C 类型) 与那一席的形参声明同型吗 ——
+//      形参必须恰好一枚 (`params` 里不许再有第二格) 且类型逐字节相同, 不合就交空串。
+// 形状那一头仍交回上一位的 `legacyViewCallExpr` (本函数是它的第四位消费者), 站点一枚都不拼。
+std::string CCodeGen::legacyViewSetterCallExpr(const std::string& objExpr, const std::string& memberName,
+                                               const std::string& valExpr,
+                                               const std::string& wantParamCType) {
+    if (objExpr.empty() || valExpr.empty() || wantParamCType.empty()) return std::string();
+    const std::string ifaceName = slotLegacyIfaceViewName(Symbol::toLower(objExpr));
+    if (ifaceName.empty()) return std::string();
+    const std::string want = ifaceSlotKeyNamed(Symbol::toLower(memberName),
+                                               ASTNodeKind::PropertyDecl, ProcKind::PropertyLet);
+    const std::string paramDecl = ", " + wantParamCType;
+    for (const LegacyIfaceSlot& s : legacyIfaceSlots(ifaceName)) {
+        if (s.slotKey != want) continue;
+        if (s.retType != "void") return std::string();
+        if (s.params.size() <= paramDecl.size()) return std::string();
+        if (s.params.compare(0, paramDecl.size(), paramDecl) != 0) return std::string();
+        const std::string rest = s.params.substr(paramDecl.size());
+        if (rest[0] != ' ' || rest.find(',') != std::string::npos) return std::string();
+        return legacyViewCallExpr(objExpr, s.field, std::vector<std::string>{valExpr});
+    }
+    return std::string();
 }
 
 

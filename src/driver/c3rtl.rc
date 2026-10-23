@@ -1,4 +1,12 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-10-23 (ledger #305, ScaleLeft / ScaleTop): the form's custom coordinate
+//   system has four numbers (ScaleLeft / ScaleTop / ScaleWidth / ScaleHeight); only the
+//   last two were wired. `Me.ScaleLeft` / `Me.ScaleTop` had no row in kFormPseudoRows
+//   and fell through to the COM stub `vb6_ComGetIntProp(hwnd, L"ScaleLeft")` = compiles,
+//   runs, reads a constant 0. Added vb6_GetScaleLeft / vb6_GetScaleTop (both ask the same
+//   authority vb6_UserScaleOf; 0 when no coordinate system is set, per VB6) and registered
+//   them formOnly - PictureBox / UserControl / Printer keep failing honestly, not faked.
+
 // 2026-10-15 (账 #305 §B188, 第八十刀): ComObj_Release 的出厂那条腿 (destroyFunc 与
 //   instanceClaimRelease 两处) 以前是本文件三站里唯一没接错误边界的一站 —— 体里没人接住的
 //   错走到 vb6_RaiseError, 那里没帧 ⇒ 打一行 stderr 再 ExitProcess(错误号), 把正在放手的
@@ -711,162 +719,208 @@
  *   vb6_CrashTraceClaim: 拿不准一律放行, 漏一条真诊断比多打十条贵)。
  *   touch 本文件 = 让 RCDATA 重编一次（§B99②）。 */
 
-/* �� #305 #416 �ھ�ʮ���� (2026-10-16): �ϸ�ת������ı���һ���ճ���λ���� ���� vb6_NumVal ���� oleaut32 �� VarR8FromStr(���������� 13, ���Լ�д�ڶ���, ��B142 ͬ�ھ�), ���� vb6_BoolVal �� VarBoolFromStr(CBool �� "True" ��仰), ʮö vb6_*BSTR �����ʮ��ö *V ����ȫ��������һ��; �����ǲ� cgen_expr_call_conv_numeric.inc �� CBool �� vb6_BoolVal �š���ǰ CInt("abc") �� CInt(�մ�) ��Ĭ�� 0��CInt("123abc") ��β��, VB6 ����ȫ�� 13 (�� .build/k205_oleconv.c / k207_olearg.c)�� touch ���ļ� = �� RCDATA �ر�һ�Σ���B99�ڣ��� */
-/* �� #305 ��B191 �ھ�ʮ�ĵ� (2026-10-16): ���⴮�ı�����һ�졹��һ��ԭ�������Ҹ��Գ�
- *   (vb6_DateValue��vb6_TimeValue��vb6rtl_conv.c �� CStr(�������ı�) ���), �����ϲ����㼸�š�
- *   �Ǿ�����ȫ��Ĭ������վ���ճ�һ�� vb6_TryDateFromStr, ������һ�佻����λ����:
- *   vb6_DateParse = DateValue/TimeValue/CStr ��һ�� (ֻ������ʱ��д��), vb6_DateVal = CDate
- *   ��һ�� (���� �� �ϸ���ֵ vb6_NumVal, �ұ���ʱ��С��)����ǰ CDate("2026/1/1") �� 2026��
- *   CDate("abc") ��Ĭ 0 ��ͬһ�ݳ����� DateValue �ǶԵ�; �ھ������� VB-family ������ʵ��
- *   (�� .build/k233_dateconv.c / k234_cdate.vbs / k235_datescan.vbs / k236_datefail.vbs)��
- *   touch ���ļ� = �� RCDATA �ر�һ�Σ���B99�ڣ��� */
-/* �� #305 ��B192 �ھ�ʮ�嵶 (2026-10-17): IsDate / IsNumeric ��һ����ǰֻ�� Variant �� vt
- *   ��ǩ => �ı�һ�ɴ�� (IsNumeric("123")=False��IsDate("2026/1/1")=False, ���� VB-family
- *   ���������䶼�� True, �� .build/k253_isfam.vbs)��������ѡ��ϲ��ϵó����롸�ϲ��������š�
- *   �ֿ�: ��ֵ��һλ���� vb6_NumTryParse (ȫ��Ψһ���� VarR8FromStr վ������) +
- *   vb6_IsNumericText, ������һλ���� vb6_DateCanParse (ת���ھ�ʮ�ĵ�����Ψһվ��);
- *   vb6_NumVal �� vb6_DateVal/vb6_DateParse һ��δ�����, ֻ�Ǹ��������ǲ㡣
- *   ���ʵ�� = VBFlexGrid ������ If IsDate(Text) Then CDate(Text) �� Then ��ûִ�й���
- *   touch ���ļ� = �� RCDATA �ر�һ�Σ���B99�ڣ��� */
-/* �� #305 ��B193 �ھ�ʮ���� (2026-10-17): Hour / Minute / Second �� DateAdd �� DATE ��С��
- *   ���**ֱ�ӽض�** => ͬһ�� VB Դ����̨������������ (Minute(CDate("2026/1/1 14:30")) ���ִ�
- *   29, ���� VB-family �����ڴ� 30; Second(CDate("2026/1/1 23:59:59")) ���ִ� 58 ������ 59)��
- *   �� .build/k272_timeparts.vbs + k277_round.vbs + k278_roll.vbs: ��������**�������뵽����**
- *   (+0.4 �벻��λ��+0.6 ���λ; 23:59:59.9 ��һ�����������)��86400 ����һ����ĵڼ��롹��
- *   ���ض����� 43136 �����һ�� (��һ��)��DateAdd ����: �����껹Ҫд��ȥ, �ٵ���һ����������
- *   ���µ�ֵ��ճ�һ��Ψһ���� vb6_SecondsOfDay(double), ���� = ��ö getter + DateAdd �ֽ�վ
- *   (DatePart �� h/n/s ����������ת������ö getter, ����һ���)��
- *   touch ���ļ� = �� RCDATA �ر�һ�Σ���B99�ڣ��� */
-/* �� #305 ��B196 �ھ�ʮ�ߵ� (2026-10-17): vb6_DatePart �������۴������ case vb6_di_day ֱ��
- *   ������һ����ڼ��졹��һ���� => DatePart("d", 2026/3/1) ���ִ� 60, ���������ڴ� 1 (�� "y" ��
- *   �ô� 60, �� .build/k309_datepart.vbs)���ڡ�ww����һ���͵س���һ�� (dayOfYear-1)/7+1 => ��������
- *   ���ձȶ� 2026 �� 365 ���� 208 �첻ͬ��2024 �� 366 ���� 52 �첻ͬ���� �����β� firstDayOfWeek /
- *   firstWeekOfYear �� (void) ����, ������ 4 �� "ww" ȫ�� ComCtlsDemo �� DTPicker/MonthView �
- *   �Ĵ��ֽڷ����� vbFirstFourDays ���˳��� => ����ֽ��ȱ�� (ͬһ��Դ�ﻹ����������д��һ��
- *   "DatePart function can return wrong week number")���ճ�һ��Ψһ���� vb6_WeekOfYear, �ھ� =
- *   ������ 14 �� �� 21 ��� = 107394 �����������ʧ�� (�� .build/k321/k324/k330_ww_grid*.vbs +
- *   k323_ww_fit.py)���� ˳��һ�񱾵��Լ��ȵ���: vb6_date_to_serial ����ǡ�������������Ҫ�ټ� 1899-12-30
- *   (= 2415019) ���� VB/OLE ���кţ�����һ������ԭ���ڱ��ļ������ı� ���� ��һ���´���ֱ�����������к��ã�
- *   ʵ��������� DatePart("ww") �� -2415012 ��һ�� (�� .build/k354_proj + k354_run.txt)�������ճ�Ψһ
- *   ���� vb6_SerialOf���ı��ֳ����������ڱ� check_datepart_arms.ps1 �� R7 ��ס (�� helper վ�� 3������վ�� 11)��
- *   touch ���ļ� = �� RCDATA �ر�һ�Σ���B99�ڣ��� */
-/* �� #305 ��B200 �ھ�ʮ�˵� (2026-10-17): Format ����������������
- *   �� h/hh �㰴 12 Сʱ�� (������ʽ�� st.wHour % 12) => ���ϰѡ�hh:mm:ss����yyyy-mm-dd hh:mm:ss��
- *   ��**ʱ���**�� (�� .build/k392_fmt_census.py: �������ʽ�� 1693 �� / 164 �ִ�, �����ָ� 70 / 101 ��),
- *   ����һ����ĳ�������־�뱨����д�Ķ��ǰ�����硣�ڡ�AM/PM����ö���Ʊ����ַ�ѭ�������·ݳԵ� =>
- *   Format(d,��AM/PM h:mm��) �� A1/P1 2:30 (����ö 1 / 7 ���������º�, ֤�� = ��ö̽��ʱ��ֱ��� 1 ����
- *   7 ��, �� .build/k391_run.txt) ���� ̨����ԭ�ȼǵġ���ֵ�ηָ��Ե����Ǿ��Ǵ���, ͬ���Ѷ������� ֻд�Ǻš�
- *   �����κ�������ĸ�Ĵ� (��A/P����AMPM��) ������ vb6_fmtIsDateFormat => ������ֵ�۽������к�
- *   46027.6046875���ճ�һ����ö: vb6_fmtAmPmLenAt (���� / ���� / ��һ��) + vb6_fmtHasAmPm (��û����һ�ʵ�
- *   Ψһ��, ͬʱ���ǡ�Сʱ�� 12 ���� 24�����о�) + vb6_fmtAppendAmPm (��Сд���洮��д����һ��)��
- *   �ھ� = ��**����Ӣ��** AM/PM, �뱾�������е� January/Sunday ͬһ��, ���� locale��
- *   ע����һ��û�������� oracle: VBScript ���� Format��oleaut32 VarTokenizeFormatString �ڱ���ÿ������
- *   E_INVALIDARG (�� k388_varfmt.c)��.NET �� Strings.Format �����Լ������Ʊ� (�� k390_vbnet.txt) =>
- *   ����ֵֻ���ĵ� + ��������д����, �о���������д�ɡ�������ʵ�⡹��
- *   touch ���ļ� = �� RCDATA �ر�һ�Σ���B99�ڣ��� */
-/* �� #305 ��B202 �ھ�ʮ�ŵ� (2026-10-17): FormatDateTime �� x64 ��һ���� 0xC0000005��
- *   �����ڿھ�: vb6_FormatDateTime ס src/rtl/core/vb6rtl/vb6rtl_system.c:46���� src/rtl ȫ���� .h ��û����������
- *   ���� ���ñ����������������**ֱ��д���û� TU**������ C ����ʽ����(�ٶ����� int)��
- *   x64 �ѷ��ص� BSTR ָ���۳� 32 λ�ٽ� vb6_BSTR_AssignMove => �����ü� AV; x86 ָ�뱾�� 32 λ
- *   => ͬһ��Դ�߷�ȫ���꣬�嵵�𰸻��뱾�� VBScript �� FormatDateTime ����ͬ(�� k423_proj / k424_run.txt /
- *   k426_new_x86_run.txt)������֤��: BASE ��(����֮ǰ��̨)x64 ͬ�� = ����ȱ��; ͬһöֵ�� Format(d,��general date��)
- *   ���� vb6_Format �� vb6rtl_builtin.h �ﱾ�������� ���� �� x64 ����������
- *   census(�� k428_emit_gap.py): �ᷢ���û� TU ������������ 882 ö vs ͷ�ļ�����ֹ��� 1587 ö
- *   => ȫ��ֻȱ��һö�������޷��ǲ�һ���������о�ȴ������������(�ڱ� check_emitted_declared.ps1)��
- *   ȱ����ʱ VarType(FormatDateTime(...)) �� 3(VT_I4)�����˲Ŵ� 8 => ��ö���� x86 Ҳ�ƣ�b429 ��ֻ��
- *   ��x64 ���ܵ� DONE����֤�ˡ�
- *   ����ֻ�����������ⲻ���ھ�: ������ʽ�嵵�� LOCALE_USER_DEFAULT���ִ������ locale ��(���� zh-CN��CI en-US)
- *   => �о�ֻ����ϵ���������洮; ��ͷΪ�ζ�һöβ��ո�Խ�� namedFormat ������ʵ�εĿھ������ˡ�
- *   touch ���ļ� = �� RCDATA �ر�һ�Σ���B99�ڣ��� */
+/* 账 #305 #416 第九十三刀 (2026-10-16): 严格转换族读文本那一句收成两位主人 —— vb6_NumVal 改问 oleaut32 的 VarR8FromStr(解析不出报 13, 不自己写第二遍, §B142 同口径), 新增 vb6_BoolVal 问 VarBoolFromStr(CBool 认 "True" 这句话), 十枚 vb6_*BSTR 入口与十三枚 *V 薄壳全部改问这一句; 发码那侧 cgen_expr_call_conv_numeric.inc 对 CBool 发 vb6_BoolVal 桥。改前 CInt("abc") 与 CInt(空串) 静默给 0、CInt("123abc") 吞尾巴, VB6 三句全是 13 (尺 .build/k205_oleconv.c / k207_olearg.c)。 touch 本文件 = 让 RCDATA 重编一次（§B99②）。 */
+/* 账 #305 §B191 第九十四刀 (2026-10-16): 「这串文本是哪一天」那一问原先有三家各自抄
+ *   (vb6_DateValue、vb6_TimeValue、vb6rtl_conv.c 的 CStr(日期形文本) 入口), 而「认不出算几号」
+ *   那句三家全沉默。解析站点收成一条 vb6_TryDateFromStr, 报错那一句交给两位主人:
+ *   vb6_DateParse = DateValue/TimeValue/CStr 那一档 (只认日期时间写法), vb6_DateVal = CDate
+ *   那一档 (日期 ∪ 严格数值 vb6_NumVal, 且保留时间小数)。改前 CDate("2026/1/1") 答 2026、
+ *   CDate("abc") 静默 0 而同一份程序里 DateValue 是对的; 口径按本机 VB-family 运行期实测
+ *   (尺 .build/k233_dateconv.c / k234_cdate.vbs / k235_datescan.vbs / k236_datefail.vbs)。
+ *   touch 本文件 = 让 RCDATA 重编一次（§B99②）。 */
+/* 账 #305 §B192 第九十五刀 (2026-10-17): IsDate / IsNumeric 那一族以前只看 Variant 的 vt
+ *   标签 => 文本一律答否 (IsNumeric("123")=False、IsDate("2026/1/1")=False, 本机 VB-family
+ *   运行期两句都答 True, 尺 .build/k253_isfam.vbs)。拆两层把「认不认得出」与「认不出报几号」
+ *   分开: 数值那一位新增 vb6_NumTryParse (全仓唯一那条 VarR8FromStr 站点搬进它) +
+ *   vb6_IsNumericText, 日期那一位新增 vb6_DateCanParse (转调第九十四刀那条唯一站点);
+ *   vb6_NumVal 与 vb6_DateVal/vb6_DateParse 一字未改其答案, 只是改问下面那层。
+ *   后果实物 = VBFlexGrid 那两处 If IsDate(Text) Then CDate(Text) 的 Then 从没执行过。
+ *   touch 本文件 = 让 RCDATA 重编一次（§B99②）。 */
+/* 账 #305 §B193 第九十六刀 (2026-10-17): Hour / Minute / Second 与 DateAdd 把 DATE 的小数
+ *   半边**直接截断** => 同一份 VB 源码两台机器两个读数 (Minute(CDate("2026/1/1 14:30")) 本仓答
+ *   29, 本机 VB-family 运行期答 30; Second(CDate("2026/1/1 23:59:59")) 本仓答 58 而不是 59)。
+ *   尺 .build/k272_timeparts.vbs + k277_round.vbs + k278_roll.vbs: 运行期是**四舍五入到整秒**
+ *   (+0.4 秒不进位、+0.6 秒进位; 23:59:59.9 那一格日内秒归零)。86400 个「一天里的第几秒」里
+ *   按截断算有 43136 个落错一档 (≈一半)。DateAdd 更疼: 它拆完还要写回去, 少的那一秒永久留在
+ *   存下的值里。收成一条唯一出口 vb6_SecondsOfDay(double), 读者 = 三枚 getter + DateAdd 分解站
+ *   (DatePart 的 h/n/s 三档本来就转调那三枚 getter, 跟着一起好)。
+ *   touch 本文件 = 让 RCDATA 重编一次（§B99②）。 */
+/* 账 #305 §B196 第九十七刀 (2026-10-17): vb6_DatePart 的两条臂答错。① case vb6_di_day 直接
+ *   掉进「一年里第几天」那一条臂 => DatePart("d", 2026/3/1) 本仓答 60, 本机运行期答 1 (而 "y" 才
+ *   该答 60, 尺 .build/k309_datepart.vbs)。②「ww」那一条就地抄了一条 (dayOfYear-1)/7+1 => 与运行期
+ *   逐日比对 2026 年 365 天里 208 天不同、2024 年 366 天里 52 天不同。③ 两条形参 firstDayOfWeek /
+ *   firstWeekOfYear 被 (void) 丢掉, 而语料 4 处 "ww" 全在 ComCtlsDemo 的 DTPicker/MonthView 里、
+ *   四处分节符都把 vbFirstFourDays 传了出来 => 不是纸面缺口 (同一份源里还留着作者自写的一句
+ *   "DatePart function can return wrong week number")。收成一条唯一出口 vb6_WeekOfYear, 口径 =
+ *   运行期 14 年 × 21 组合 = 107394 天逐日拟合零失配 (尺 .build/k321/k324/k330_ww_grid*.vbs +
+ *   k323_ww_fit.py)。④ 顺带一格本刀自己踩的雷: vb6_date_to_serial 答的是「儒略日数」，要再减 1899-12-30
+ *   (= 2415019) 才是 VB/OLE 序列号，而这一道减法原先在本文件抄了四遍 —— 第一版新代码直接拿它当序列号用，
+ *   实测读数就是 DatePart("ww") 答 -2415012 那一档 (尺 .build/k354_proj + k354_run.txt)。现在收成唯一
+ *   出口 vb6_SerialOf，四遍手抄并进来，哨兵 check_datepart_arms.ps1 的 R7 钉住 (裸 helper 站点 3、出口站点 11)。
+ *   touch 本文件 = 让 RCDATA 重编一次（§B99②）。 */
+/* 账 #305 §B200 第九十八刀 (2026-10-17): Format 的日期面三格答错。
+ *   ① h/hh 恒按 12 小时报 (那条算式是 st.wHour % 12) => 语料把「hh:mm:ss」「yyyy-mm-dd hh:mm:ss」
+ *   当**时间戳**用 (尺 .build/k392_fmt_census.py: 日期类格式串 1693 处 / 164 种串, 这两种各 70 / 101 处),
+ *   于是一下午的程序往日志与报表里写的都是半个下午。②「AM/PM」那枚令牌被逐字符循环当成月份吃掉 =>
+ *   Format(d,「AM/PM h:mm」) 交 A1/P1 2:30 (那两枚 1 / 7 就是两个月号, 证人 = 两枚探针时间分别在 1 月与
+ *   7 月, 尺 .build/k391_run.txt) —— 台账里原先记的「数值段分隔吃掉」那句是错的, 同日已订正。③ 只写记号、
+ *   不带任何日期字母的串 (「A/P」「AMPM」) 过不了 vb6_fmtIsDateFormat => 掉回数值臂交裸序列号
+ *   46027.6046875。收成一处三枚: vb6_fmtAmPmLenAt (在哪 / 几长 / 哪一形) + vb6_fmtHasAmPm (有没有这一问的
+ *   唯一答案, 同时就是「小时走 12 还是 24」的判据) + vb6_fmtAppendAmPm (大小写跟随串里写的那一种)。
+ *   口径 = 交**不变英文** AM/PM, 与本函数已有的 January/Sunday 同一档, 不跟 locale。
+ *   注意这一格没有运行期 oracle: VBScript 不带 Format、oleaut32 VarTokenizeFormatString 在本机每串都返
+ *   E_INVALIDARG (尺 k388_varfmt.c)、.NET 的 Strings.Format 走它自己的令牌表 (尺 k390_vbnet.txt) =>
+ *   期望值只由文档 + 语料自身写法钉, 判据来历不许写成「运行期实测」。
+ *   touch 本文件 = 让 RCDATA 重编一次（§B99②）。 */
+/* 账 #305 §B202 第九十九刀 (2026-10-17): FormatDateTime 在 x64 第一发就 0xC0000005。
+ *   根因不在口径: vb6_FormatDateTime 住 src/rtl/core/vb6rtl/vb6rtl_system.c:46，而 src/rtl 全树的 .h 里没有它的声明
+ *   —— 内置表点名它，发码把它**直接写进用户 TU**，于是 C 走隐式声明(假定返回 int)。
+ *   x64 把返回的 BSTR 指针折成 32 位再交 vb6_BSTR_AssignMove => 解引用即 AV; x86 指针本来 32 位
+ *   => 同一份源七发全跑完，五档答案还与本机 VBScript 的 FormatDateTime 逐档相同(尺 k423_proj / k424_run.txt /
+ *   k426_new_x86_run.txt)。两条证人: BASE 机(本刀之前那台)x64 同红 = 存量缺陷; 同一枚值走 Format(d,「general date」)
+ *   —— vb6_Format 在 vb6rtl_builtin.h 里本来有声明 —— 在 x64 正常出串。
+ *   census(尺 k428_emit_gap.py): 会发进用户 TU 的字面量名字 882 枚 vs 头文件里出现过的 1587 枚
+ *   => 全仓只缺这一枚，所以修法是补一行声明，判据却按整个问题收(哨兵 check_emitted_declared.ps1)。
+ *   缺声明时 VarType(FormatDateTime(...)) 答 3(VT_I4)、有了才答 8 => 这枚针在 x86 也移，b429 不只靠
+ *   「x64 能跑到 DONE」当证人。
+ *   本刀只补声明，故意不动口径: 命名格式五档走 LOCALE_USER_DEFAULT，字串随机器 locale 变(本机 zh-CN、CI en-US)
+ *   => 判据只钉关系、不钉字面串; 零头为何多一枚尾随空格、越界 namedFormat 与异型实参的口径另入账。
+ *   touch 本文件 = 让 RCDATA 重编一次（§B99②）。 */
 
 /* ============================================================
-   touch: 2026-10-17 ��һ�ٵ� = �� #427 (��B201) Format �������滹Ƿ����ö����
+   touch: 2026-10-17 第一百刀 = 账 #427 (§B201) Format 的日期面还欠的五枚令牌
    ------------------------------------------------------------
-   ���� (�� .build/k504_proj -> k504_x64_run.txt / k504_x86_run.txt, ��̨ͬ����;
-   ��һ�� .build/k505_proj -> k505_x64_run.txt):
-     Format(2026/1/5 14:30:45, ��w��)      = 46027.6046875  (DatePart��w��= 2 / Weekday = 2)
-     Format(ͬ��, ��ww��)                  = 46027.6046875  (DatePart��ww��= 2)
-     Format(ͬ��, ��q��)                   = 46027.6046875  (DatePart��q��= 1)
-     Format(ͬ��, ��ttttt��)               = 46027.6046875  (FormatDateTime(d,3) = 14:30:45)
-     Format(ͬ��, ��ddddd��)               = Monday         (FormatDateTime(d,2) = 2026/1/5)
-     Format(ͬ��, ��ddddd ttttt��)         = Monday ttttt   (������һ��д�� 36 ��)
-   ��������: �� ��Ʊ vb6_fmtIsDateFormat ����ĸ��ֻ�� y/d/h/m/s/n (+ AM/PM �Ǻ�), w/q/t ���������ڱ�
-             �͵�����ֵ�۰� VariantTime �� double �����; �� �յ�д���� cnt >= 4 �ϳ�����, ���� d �������̡�
-   �޷��ճ�����: �� ��Ʊ��һ�� allowWQT ���� ֻ�С�ֵ���� VB6 Date�������۶��� w/ww/q/ttttt, ��ֵ����������
-             ��ĸ��������ΪʲôҪ�ֵ�: �������ʽ���� w/q/t �������� 218 ��ȫ����д (û��һ���ѵ�λ�ı�
-             �����Ű�����), ���С���ֵ + ��λ����һ�� 15 �� (#,##0 Twip 3 / Settings 4 / T0 2 / #### Byte 1 /
-             #,# bytes 4 / ISO ����ö���� T 1) �Ե�������ֵ���������� ���� ����ĸһ��ͬ�ʾͰ��� 15 ���ӡ��Ǹ�����
-             �ĳɡ�һ�����ڡ� (�� .build/k496_census.txt + k497_wqt_where.txt)��
-             �� t ֻ������ (ttttt): ��״ Format(d,��yyyy-mm-ddTHH:mm:ss��) �� 2026-01-05T14:30:45, ��ö���� T
-             ���γ̳��ȱ�ס (1..4 ö����������)���� ������������Ų����ٳ�һ��: ���岻�� static ��
-             vb6_WeekOfYear ������ vb6rtl_builtin.h (�ڶ������� = Format �� ww), DatePart �ġ�w���۸�����ʹ��ڵ�
-             vb6_Weekday (����ԭ���ǵڶ��ݳ�д); locale ������/��ʱ�������� Format �������ճ�
-             vb6_fmtLocaleShortDate / vb6_fmtLocaleLongTime һ������ (����վ��: general date ���� + short date /
-             long time ���� + �޸�ʽ���������ױ� + ���ϵ� ddddd / ttttt)��vb6_Format �������βδ� (void) ����
-             ����汻��, �� vb6_DatePart ͬһλ����; 0 = vbUseSystem ����һλ�鵽 vbSunday + vbFirstJan1��
-   ���ⲻ�������� (������, �����ѵ���): �� vb6_DateSerial ������ double ���� VT_DATE (ʵ�� VarType = 5, ��
-             Now/Date/CDate/TimeSerial/DateAdd ȫ�� 7), ���� Format(DateSerial(...),��ww��) ������ֵ�� ���� ��һ��
-             Ҫ������ DateSerial �����͵�, ���� Format; �� ���ļ��� locale ������/��ʱ���������
-             vb6rtl_system.c �� vb6_FormatDateTime, �� ��B203 ������Խ��ھ�ͬ����
+   读数 (尺 .build/k504_proj -> k504_x64_run.txt / k504_x86_run.txt, 两台同读数;
+   另一发 .build/k505_proj -> k505_x64_run.txt):
+     Format(2026/1/5 14:30:45, 「w」)      = 46027.6046875  (DatePart「w」= 2 / Weekday = 2)
+     Format(同上, 「ww」)                  = 46027.6046875  (DatePart「ww」= 2)
+     Format(同上, 「q」)                   = 46027.6046875  (DatePart「q」= 1)
+     Format(同上, 「ttttt」)               = 46027.6046875  (FormatDateTime(d,3) = 14:30:45)
+     Format(同上, 「ddddd」)               = Monday         (FormatDateTime(d,2) = 2026/1/5)
+     Format(同上, 「ddddd ttttt」)         = Monday ttttt   (语料这一串写了 36 处)
+   根因两格: ① 门票 vb6_fmtIsDateFormat 的字母表只有 y/d/h/m/s/n (+ AM/PM 记号), w/q/t 进不了日期臂
+             就掉回数值臂把 VariantTime 当 double 打出来; ② 日档写的是 cnt >= 4 认长周名, 五连 d 被四连吞。
+   修法收成三处: ① 门票加一档 allowWQT —— 只有「值真是 VB6 Date」那条臂多认 w/ww/q/ttttt, 数值兜底那条臂
+             字母表不动。为什么要分档: 语料里格式串含 w/q/t 的字面量 218 处全是裸写 (没有一处把单位文本
+             用引号包起来), 其中「数值 + 单位」那一族 15 处 (#,##0 Twip 3 / Settings 4 / T0 2 / #### Byte 1 /
+             #,# bytes 4 / ISO 串那枚字面 T 1) 吃的正是数值兜底那条臂 —— 裸字母一视同仁就把那 15 处从「那个数」
+             改成「一个日期」 (尺 .build/k496_census.txt + k497_wqt_where.txt)。
+             ② t 只认五连 (ttttt): 现状 Format(d,「yyyy-mm-ddTHH:mm:ss」) 交 2026-01-05T14:30:45, 那枚字面 T
+             靠游程长度保住 (1..4 枚按字面量交)。③ 周数与星期序号不许再抄一遍: 定义不再 static 的
+             vb6_WeekOfYear 声明进 vb6rtl_builtin.h (第二个读者 = Format 的 ww), DatePart 的「w」臂改问早就存在的
+             vb6_Weekday (那里原先是第二份抄写); locale 短日期/长时间两问在 Format 家族里收成
+             vb6_fmtLocaleShortDate / vb6_fmtLocaleLongTime 一条出口 (六处站点: general date 两半 + short date /
+             long time 两档 + 无格式串那条兜底臂 + 新认的 ddddd / ttttt)。vb6_Format 那两条形参从 (void) 丢掉
+             变成真被读, 与 vb6_DatePart 同一位主人; 0 = vbUseSystem 由那一位归到 vbSunday + vbFirstJan1。
+   刻意不并的两格 (另立账, 读数已到手): ① vb6_DateSerial 交的是 double 不是 VT_DATE (实测 VarType = 5, 而
+             Now/Date/CDate/TimeSerial/DateAdd 全是 7), 所以 Format(DateSerial(...),「ww」) 仍落数值臂 —— 那一格
+             要动的是 DateSerial 的类型档, 不是 Format; ② 跨文件的 locale 短日期/长时间第三家在
+             vb6rtl_system.c 的 vb6_FormatDateTime, 与 §B203 那三格越界口径同批。
    ============================================================ */
 
 
 /* ============================================================
-   touch: 2026-10-17 ��һ����һ�� = �� #429 ��+�� (��B203) general date ��һ�ʴ��������ճ�һ������
+   touch: 2026-10-17 第一百零一刀 = 账 #429 ①+④ (§B203) general date 那一问从三个答案收成一条出口
    ------------------------------------------------------------
-   ��ǰͬһö����ͷΪ 0 �����ڡ���������һ�� (�� .build/k541_proj -> k541_x64_run.txt / k541_x86_run.txt,
-   ��̨ͬ��; ���汾�� = .build/k559_olefdt3.c -> k559_out.txt):
-     FormatDateTime(#1/5/2026#, vbGeneralDate) = "2026/1/5 "          len 9  (һö�¶�β��ո�)
+   改前同一枚「零头为 0 的日期」三户各答一次 (尺 .build/k541_proj -> k541_x64_run.txt / k541_x86_run.txt,
+   两台同读; 引擎本人 = .build/k559_olefdt3.c -> k559_out.txt):
+     FormatDateTime(#1/5/2026#, vbGeneralDate) = "2026/1/5 "          len 9  (一枚孤儿尾随空格)
      Format(#1/5/2026#, "General Date")        = "2026/1/5 0:00:00"   len 16
-     CStr(#1/5/2026#)                          = "2026/1/5"           len 8  (ֻ����һ��������һ�ֲ���)
-   ������ (��): vb6rtl_system.c �� `buf[len - 1] = L' '` ��**������**����, �� GetDateFormatW ���صĳ���
-             �������� => ��һ��ѽ������ĳ��˿ո�; ֻ��ƴʱ����һ�β�����ͷ => ��ͷΪ 0 ������һö�ո�
-        (��): ��locale �Ķ����� / ������ / ��ʱ�� / general date�������ʾ��� RTL ��ס������ ����
-             format.c �������� (��һ�ٵ�����һ��) / system.c ����һ�� Get*FormatW / conv.c �� vb6_CStrDate
-             �Լ�����һ����ͷ�������Ѻ������ӻ�ͬһ������; ���ڲ����� file-static, ������ vb6rtl_builtin.h��
-   �ճ�һ��: ��general date ���׸�����ʱ��Ρ�ֻס vb6_fmtLocaleGeneralDate; ���� = named case 1 /
-             extract.inc �� !fmt ���� / vb6_FormatDateTime �� vbGeneralDate �� / vb6_CStrDate (ֻʣת��)��
-             �������ڵĶ���һ�ֲ��� (�� .build/k568_run_x64.txt / k568_run_x86.txt, ��̨ͬ��):
-               ��ͷΪ 0      ����ȫ�� "2026/1/5" (len 8, ��β��ո���ð��)
-               ��ͷ 14:30:45 ����ȫ�� "2026/1/5 14:30:45" �� = ������ + �ո� + ��ʱ��
-   ����ھ� (���������������, ���ǲµ�; **����������**������һ��): ��ͷ���뵽����֮��**����ʱ����ȫΪ��**
-             �Ͳ���ʱ��� ���� 1e-11 / 1e-10 / 1e-9 / 1e-8 �� �� 50 / 200 / 400 / 499 / 500 ����һ��ֻ������,
-             600 ���� (0.6 ��) ��Ÿ�; 600 ���뽻 "0:00:01", 59.4 �뽻 "0:00:59", 59.6 �뽻 "0:01:00"
-             => ��Ⱦ��һ��Ҳ������� (VariantTimeToSystemTime ���ص� SYSTEMTIME �������) => �С�����������
-             ��Ⱦ����ʲô����ͬһ������, ��һ�������кű��嶼����Ҫ (������һ���β�)��
-             �������һ��: **��ҹǰһ���뽻 "2026/1/6" len=8** ���� ����Խ����ҹ�����β�����������һ���λ��
-             ��һ��������ɴ�һ������: �������µ��ݲ� (Fix 175 ���� conv.c �� 1e-9) �� 500 ������,
-             ����ͷ != 0��(system.c ԭ������) ����һ������
-   ���ⲻ�� (Ƿ�ھ�, ������ #429): �� ���к� 0 �븺ֵ ���� vb6_FormatDateTime �䱾����
-             (dateSerial == 0.0 -> GetLocalTime, ԭ��û��), Format ��һ���� 1899-12-30; ���汾���� 0
-             ��һ���Լ�Ҳ��һ��� (�� "1899-12-30 0:00:00" �����Ǵ�����) => ������˭Ҳ������˭����
-   �о���: tests/b431 (��̨����һ����, ȫ��ϵʽ / locale �޹�) + �ڱ� scripts/check_general_date_outlets.ps1��
-   touch ���ļ� = �� 142 �� RCDATA ��Ƕһ�� (��B99��)��
+     CStr(#1/5/2026#)                          = "2026/1/5"           len 8  (只有这一条与引擎一字不差)
+   病机制 (①): vb6rtl_system.c 里 `buf[len - 1] = L' '` 是**无条件**做的, 而 GetDateFormatW 交回的长度
+             含结束符 => 那一句把结束符改成了空格; 只有拼时间那一段才判零头 => 零头为 0 就留下一枚空格。
+        (④): 「locale 的短日期 / 长日期 / 长时间 / general date」这条问句在 RTL 里住了三户 ——
+             format.c 两条出口 (第一百刀并到一处) / system.c 各抄一份 Get*FormatW / conv.c 的 vb6_CStrDate
+             自己又判一次零头。本刀把后两户接回同一批出口; 出口不再是 file-static, 声明在 vb6rtl_builtin.h。
+   收成一条: 「general date 到底给不给时间段」只住 vb6_fmtLocaleGeneralDate; 读者 = named case 1 /
+             extract.inc 的 !fmt 兜底 / vb6_FormatDateTime 的 vbGeneralDate 档 / vb6_CStrDate (只剩转调)。
+             三户现在的读数一字不差 (尺 .build/k568_run_x64.txt / k568_run_x86.txt, 两台同读):
+               零头为 0      三户全交 "2026/1/5" (len 8, 无尾随空格、无冒号)
+               零头 14:30:45 三户全交 "2026/1/5 14:30:45" 且 = 短日期 + 空格 + 长时间
+   引擎口径 (本刀逐点量出来的, 不是猜的; **两发合起来**才是这一条): 零头四入到整秒之后**当日时分秒全为零**
+             就不给时间段 —— 1e-11 / 1e-10 / 1e-9 / 1e-8 日 与 50 / 200 / 400 / 499 / 500 毫秒一律只给日期,
+             600 毫秒 (0.6 秒) 起才给; 600 毫秒交 "0:00:01", 59.4 秒交 "0:00:59", 59.6 秒交 "0:01:00"
+             => 渲染那一段也是四入的 (VariantTimeToSystemTime 交回的 SYSTEMTIME 已四入过) => 判「给不给」与
+             渲染「给什么」吃同一个四入, 这一问连序列号本体都不需要 (出口少一条形参)。
+             最锋利的一格: **午夜前一毫秒交 "2026/1/6" len=8** —— 四入越过午夜就整段不给、连日期一起进位。
+             这一格把两条旧答案一起判死: 半秒以下的容差 (Fix 175 留在 conv.c 的 1e-9) 在 500 毫秒答错,
+             「零头 != 0」(system.c 原来那条) 在这一格答错。
+   刻意不并 (欠口径, 留在账 #429): ③ 序列号 0 与负值 —— vb6_FormatDateTime 落本机钟
+             (dateSerial == 0.0 -> GetLocalTime, 原样没动), Format 那一家落 1899-12-30; 引擎本人在 0
+             那一档自己也有一格怪 (交 "1899-12-30 0:00:00" 而不是纯日期) => 那两条谁也不许替谁作答。
+   判据面: tests/b431 (两台各钉一针面, 全关系式 / locale 无关) + 哨兵 scripts/check_general_date_outlets.ps1。
+   touch 本文件 = 让 142 份 RCDATA 重嵌一次 (§B99②)。
    ============================================================ */
 
 /* ============================================================
-   ��һ������� (�� #431 ��B205) ���� DateSerial �ķ��ص��ӡ���ֵ���Ļء����ڡ�
+   第一百零二刀 (账 #431 §B205) —— DateSerial 的返回档从「数值」改回「日期」
    ------------------------------------------------------------
-   ��: src/semantics/builtin/builtin_funcs.inc �������ú�������, DateSerial �ķ��ص�д����
-       Vb6Type::Double, ��ͬ���� Now / Date / Time / DateAdd / DateValue / TimeSerial /
-       TimeValue / FileDateTime ȫд Vb6Type::Date; RTL ��һ�����ö�� C ���ض��� double,
-       ���ԡ�����ֵ����ʱ����ö��ǩ����ȫ����һ�������ʵ����̨ͬ�� (��
-       .build/k607_run_x64.txt / k607_x86_run.txt) vs ͬ�� oracle (.build/k607_oracle_out.txt):
+   病: src/semantics/builtin/builtin_funcs.inc 那张内置函数表里, DateSerial 的返回档写的是
+       Vb6Type::Double, 而同表的 Now / Date / Time / DateAdd / DateValue / TimeSerial /
+       TimeValue / FileDateTime 全写 Vb6Type::Date; RTL 这一边这九枚的 C 返回都是 double,
+       所以「返回值进槽时贴哪枚标签」完全由那一格决定。实测两台同读 (尺
+       .build/k607_run_x64.txt / k607_x86_run.txt) vs 同机 oracle (.build/k607_oracle_out.txt):
        VarType 5 / TypeName "Double" / IsDate False / IsNumeric True / CStr [46027] / Len 5
-       ���� ����ȫ�������෴ (���� = 7 / Date / True / False / [2026/1/5] / 8)��
-   ˳�����ľɶ�: �����ǲ� narrowCheckAssign ��ȡ��բ (�� #248 ��һ��) ԭ��ֻ��
-       Single / Double / Currency, ����֮�� `n = DateSerial(...)` �������װ����, ���ס���һ����
-       �� double ��ݽ� vb6_ChkLong(int64_t) => C �ڵ��ñ߽��Ͻضϡ�Date һ���ӽ�����բ ����
-       Now / DateAdd �����ʹ� Date, ��һ���ڸĵ�֮ǰ��Ƿ�š�
-   ���ļ��� RTL �Ķ� = һ��ע�͵� rationale ����: vb6rtl_format_parse.inc ���ֵ + ������ĸ������
-       ���ױ۴�ǰ��Ϊ��DateSerial ����ֵ�����ŵǼǵġ�**�ĵ�֮����һ�β�û�л�վ** ���� Format ���ײ�
-       ���� #430 �����ֳ�װ������� (Date ���Խ� vb6_VariantDouble)��ʵ�� Charts 2020 �� b432 ��
-       Format(DateSerial(��), "mmm") ��ǰ�ĺ�����ֵ�� (�� .build/k636_charts_diff.txt /
-       k639_b432_newemit.txt)����վ���ǡ�ֵ�����һö���ٽ��� Format����һ��: Format(��) ��
-       [2026/1/5] ����ǰ�� [46027] (�� .build/k638_base_run.txt / k638_new_run.txt)��
-       �۱����� Format(43831, "mmm") ��������ֵ��Ψһ���� ���� **�۲���, ֻ������**��
-   ���ⲻ��: �� #432 (FormatDateTime ��һö�� => ��۽� double �β�, cl C2440) �ǵھ�ʮ�ŵ���
-       ����֮��¶���ĵڶ��㲡, �뱾����ͬվ, Ƿһ�䡸�Ȳ���һվ�������� census���Ŀھ���
-   �о���: tests/b432 (��̨����һ����) + �ڱ� scripts/check_dateserial_tag.ps1��
-   touch ���ļ� = ������ RCDATA ��Ƕһ�� (��B99��)��
+       —— 六档全与引擎相反 (引擎 = 7 / Date / True / False / [2026/1/5] / 8)。
+   顺带补的旧洞: 发码那侧 narrowCheckAssign 的取整闸 (账 #248 那一处) 原来只认
+       Single / Double / Currency, 换档之后 `n = DateSerial(...)` 会掉进「装得下, 不套」那一条、
+       把 double 裸递进 vb6_ChkLong(int64_t) => C 在调用边界上截断。Date 一并接进那条闸 ——
+       Now / DateAdd 本来就答 Date, 这一格在改档之前就欠着。
+   本文件的 RTL 改动 = 一条注释的 rationale 过期: vb6rtl_format_parse.inc 里「数值 + 日期字母」那条
+       兜底臂从前是为「DateSerial 交数值档」才登记的。**改档之后那一形并没有换站** —— Format 的首参
+       由账 #430 那张手抄装箱表决定 (Date 档仍交 vb6_VariantDouble)，实测 Charts 2020 与 b432 的
+       Format(DateSerial(…), "mmm") 改前改后都走数值臂 (尺 .build/k636_charts_diff.txt /
+       k639_b432_newemit.txt)。换站的是「值先落进一枚槽再交给 Format」那一形: Format(槽) 交
+       [2026/1/5] 而改前交 [46027] (尺 .build/k638_base_run.txt / k638_new_run.txt)。
+       臂本身是 Format(43831, "mmm") 那族真数值的唯一出口 —— **臂不撤, 只改理由**。
+   刻意不动: 账 #432 (FormatDateTime 吃一枚槽 => 裸槽进 double 形参, cl C2440) 是第九十九刀补
+       声明之后露出的第二层病, 与本刀不同站, 欠一句「先补这一站还是整族 census」的口径。
+   判据面: tests/b432 (两台各钉一针面) + 哨兵 scripts/check_dateserial_tag.ps1。
+   touch 本文件 = 让整批 RCDATA 重嵌一次 (§B99②)。
    ============================================================ */
+/* 账 #305 §B218 (甲) 腿⑤ 数组档 = 第一百四十刀 (2026-10-20): 数组字段的元素出厂没人退。
+ *   新增一枚 RTL 出口 vb6_SA_ReleaseElements(void* arr, unsigned long (*release)(void*))
+ *   (住 src/rtl/core/vb6rtl/vb6rtl_array.c, 声明在同目录 vb6rtl_array.h) —— 逐元素把引用交回
+ *   调用方指定的那位主人; 谁的 Release 只有 cgen 知道 (每类一对出口), RTL 侧只认 elemType==vb6_sa_ptr。
+ *   判据读数: 探针 k1438_probe 的 S8b/S8c 两栏 (覆写退旧 / 元素出厂) 修前 0/1、修后 1/4, 两台一字相同。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+/* 账 #305 §B218 (甲) 腿⑤ 第四格 = 第一百四十八刀 (2026-10-20): ReDim Preserve 收缩丢尾那几格没人退。
+ *   新增一枚 RTL 出口 vb6_SafeArrayReDimPreserve1D_Tr(elemType, arr, newLBound, newUBound,
+ *       unsigned long (*release)(void*)) —— 上面那位 _T 主人的带回调兄弟: 先把落在新范围之外
+ *   的旧槽逐枚交回 (与 vb6_SA_ReleaseElements 同一口径: 裸结构体没有 vtable, 该调谁的 Release
+ *   只有 cgen 知道), 再原样转调 _T ⇒ 搬移/重建规则只有一份, 这里不重复实现。
+ *   只有元素是本工程类的载体才走这一形 (认不出仍发 _T, 全语料形状一字不动)。
+ *   判据读数: 探针 k1591_probe 的 A8 一格 (3 缩到 1) 修前 after-shrink term 不动、修后 +2,
+ *   K145-END 12 -> 14; 夹具 b445 的 W32 (同尺寸 Preserve) 必须继续 = 0 = 反面证人。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+/* 账 #305 §B218 (甲) 腿⑤ 第五格 = 第一百五十刀 (2026-10-20 深夜): 多维类数组的载体销毁没人逐枚交回。
+ *   新增一枚 RTL 出口 vb6_SA_ReleaseElementsND(void* 载体, unsigned long (*release)(void*)) —— 1D 那位
+ *   vb6_SA_ReleaseElements 的多维兄弟: 按 i * elemSize 线性走 totalElements 格 (与 vb6_SafeArrayDestroyND
+ *   里 bstr / variant 那两档同一进口径), 先清槽再放手; 谁的 Release 只有 cgen 知道 (裸结构体没有 vtable)。
+ *   挑哪一档出口由发码主人自己问 (carrierIsMultidim 读 arrayDimCounts_), 站点只调 emitClassArrayElemHandback
+ *   ⇒ 多维那一档补上时不必改任何站点的判断, 「1D 读法套 ND 载体」那处交错型也没长出新主人。
+ *   判据读数: 探针 k1591_probe 的 A9 一格 (Erase 一个 2x2 类数组) 修前 term 不动、修后 +2, K145-END 14 -> 16;
+ *   夹具 b445 的 W34 从反面证人翻成本体 (0 -> 2)，W32/W33/W35 与其余针一字未动。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+/* 账 #305 §B218 (甲) 腿⑤ 第六格 = 第一百五十四刀 (2026-10-21): 多维 ReDim Preserve 收缩丢尾没人交回。
+ *   vb6_SafeArrayReDimPreserveND 的丢尾那一段原来只认 vb6_sa_bstr / vb6_sa_variant 两档, vb6_sa_ptr
+ *   整段跳过 ⇒ 丢掉那几格的引用连旧块一起被 free。做法 = 本体改名 ..._Tr 多收一枚 release, 同一段循环
+ *   里补一条指针档 (先清槽再放手), 老名字改成传 NULL 的转调 ⇒ 格位算术只有一份 (§B158 立的口径), 而
+ *   认不出元素类的那些工程产物逐字节不动 (门内 tests/test_redim_elem.bas 那 7 发多维 Preserve 全非类档)。
+ *   判据读数: 探针 k1591_probe 的 A10 一格 (2x3 缩到 2x1) 修前 after-shrink term 不动、修后 +2,
+ *   K145-END made=24 term=22 -> 24; 夹具 b445 新增 W37 (ND Preserve 收缩), W33/W35 继续 = 反面证人。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+/* 账 #305 新账 #407 / §B190 第一百七十一刀 (2026-10-22): 视图值进 Variant 装箱站那一句发错。
+ *   vb6_VariantFromValue 的 _Generic default = vb6_VariantObject(指针)，视图是值结构体 ⇒ cl C2172
+ *   「实参不是指针」(实物 = 门禁在册 tests/b189_gate 的 B189Drv.c(11)，改前两台同红)。
+ *   新出口 vb6_VariantFromProjectInstance 按**指针**问身份 (vb6_FindProjectClassDesc，写者是每枚
+ *   工程类 _New 里那句 RegisterProjectClassInstance)，认不出就交 VT_EMPTY (不冒充对象，§B85 那条)。
+ *   发码两位调用者 (wrapVariantValue / boxToVariant) 共用一处问句 legacyViewBoxExpr，名单仍是
+ *   knownIfaceVars_ (第一百六十五刀那一位主人)。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+/* 账 #305 新账 #471 第一百七十四刀 (2026-10-23): For Each 的循环变量是一枚 legacy 接口视图时, 元素是哪一枚实现类
+ *   只有运行期知道 —— 接口自己那份 TU 从此铸一发 vb6_iface_<I>_view_from(instance, className), 逐实现类 _stricmp
+ *   比名 (尺与 vb6_FindCoClassDesc 同一把) 选中第一百六十六刀那批 wrap; 认不出交 {0} (在册欠项 = 这一形 VB6 报 13)。
+ *   新 RTL 出口 vb6_ComObject_ClassNameA = 兄弟 ClassNameBStr 的不分配那一档: 这一站每迭代一枚都要问一次,
+ *   不能每问一次 SysAllocString; 认不出交 NULL 的口径与兄弟一字相同。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */

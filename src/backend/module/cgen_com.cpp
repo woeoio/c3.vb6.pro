@@ -3,6 +3,7 @@
 #include <cctype>
 #include <iostream>
 #include <functional>
+#include "semantics/interface_sig.hpp"  // 账 #305 新账 #489: ifaceSlotKeyNamed (legacy 槽键与 D2 同源的位主人)
 
 namespace vb6c3 {
 
@@ -256,6 +257,18 @@ void CCodeGen::emitClassFactory(Module& module) {
             if (varType == Vb6Type::String) {
                 c_.emitLine("vb6_BSTR_Free(me->" + cIdent(var.name) + ");");
             } else if (var.isDynamicArray || !var.dimensions.empty()) {
+                // 账 #305 §B218 (甲) 腿⑤ 数组档 (第一百四十刀): 元素那一枚引用由**那一格元素**握,
+                // 而载体销毁那一发认不出工程类裸结构体 (`vb6_ReleaseObject` 的 Fix 191 判据) ⇒
+                // 每枚被数组字段持有的实例永不走 Class_Terminate (漏, 不是崩)。逐元素放手交回
+                // RTL 那一趟 (release 是函数指针: 谁的出口只有调用方知道), 且必须排在销毁载体之前。
+                // 元素档 = 与下面标量那一支同一个问句; 多维载体不是 vb6_SafeArray1D ⇒ 维持"不动"
+                // (真语料里工程类数组字段全是 1 维, 尺 .build/k1477_decl140.py)。
+                const std::string elemStruct = var.asType
+                    ? projectClsStructOfCType(mapTypeRef(var.asType.get())) : std::string();
+                if (!elemStruct.empty() && var.dimensions.size() <= 1) {
+                    c_.emitLine("vb6_SA_ReleaseElements(me->" + cIdent(var.name) + ", " + elemStruct +
+                                "_Release);  /* 账 #305 (甲) 腿⑤ 数组档: 元素出厂逐枚交回 */");
+                }
                 c_.emitLine("if (me->" + cIdent(var.name) + ") vb6_SA_Destroy(me->" + cIdent(var.name) + ");");
             } else if (var.asType) {
                 // 账 #305 §B218 (甲) 腿⑤: 字段那一枚引用**由字段自己握** —— 覆写(腿②)与置空(腿③)
@@ -264,13 +277,9 @@ void CCodeGen::emitClassFactory(Module& module) {
                 // 类名问 `mapTypeRef` = 发这枚字段那一行用的同一个答案, 不开第二问;
                 // 答出来不是 `vb6_cls_X*` 那一个形状 (As Object 是 void* / As Variant 是槽 /
                 // 外部接口是裸指针) 就维持今天的"不动"。
-                const std::string fieldCType = mapTypeRef(var.asType.get());
-                const std::string prefix = "vb6_cls_";
-                if (fieldCType.size() > prefix.size() + 1 &&
-                    fieldCType.compare(0, prefix.size(), prefix) == 0 &&
-                    fieldCType[fieldCType.size() - 1] == '*' &&
-                    fieldCType.find(' ') == std::string::npos) {
-                    const std::string fieldStruct = fieldCType.substr(0, fieldCType.size() - 1);
+                const std::string fieldStruct =
+                    projectClsStructOfCType(mapTypeRef(var.asType.get()));
+                if (!fieldStruct.empty()) {
                     c_.emitLine("if (me->" + cIdent(var.name) + ") " + fieldStruct +
                                 "_Release(me->" + cIdent(var.name) +
                                 ");  /* 账 #305 (甲) 腿⑤: 字段那一枚引用出厂放手 */");
@@ -342,7 +351,8 @@ void CCodeGen::emitClassFactory(Module& module) {
 // rhsTransferred = 右侧那枚引用**已经带着对价交给这一格了**: 两种成因 (`New <类>` 与工程内过程
 // 的调用, 见 rhsTransfersProjectRef) ⇒ 移交、不 claim。
 void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string& className,
-                                   const std::string& valueExpr, bool rhsTransferred, bool outSlot) {
+                                   const std::string& valueExpr, bool rhsTransferred, bool outSlot,
+                                   const std::string& slotElemType) {
     const std::string clsStruct = "vb6_cls_" + cIdent(className);
     if (outSlot) {
         // 腿②' = 写进一枚**活在本过程之外**的槽 (ByRef 出参那座桥的写回站)。这里的判断只有一条
@@ -360,6 +370,31 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
     }
     const std::string legTag = valueExpr.empty() ? "③" : "②";
     const std::string oldSlot = "__clsold" + std::to_string(ivrefSetSeq_++);
+    if (!slotElemType.empty()) {
+        // 第一百三十九刀量完的形状: 目标是一枚**数组元素** (类数组的元素档是 void*) ⇒ 先把
+        // 地址落一枚临时量，之后读、写、claim、退旧全部走这一枚 —— 「下标算术算几次」这一问
+        // 于是只有一个答案 (一次)。抄 target 三遍那一形 (下面那条直写臂) 用在这里就是把 1 次
+        // 悄悄改成 3 次：本机 VB-family 运行期对 `a(Bump())` 与 `a(Bump()+k-1)` 两形都答 1。
+        const std::string addrSlot = "__clsaddr" + std::to_string(ivrefSetSeq_++);
+        const std::string deref = "(*" + addrSlot + ")";
+        c_.emitLine("{  /* 账 #305 (甲) 腿" + legTag + ": Set 数组元素 " + target
+                    + " (地址落一次, 下标算术只算一次) */");
+        c_.indent();
+        c_.emitLine(slotElemType + "* " + addrSlot + " = &(" + target + ");");
+        c_.emitLine(slotElemType + " " + oldSlot + " = " + deref + ";");
+        if (!valueExpr.empty()) {
+            c_.emitLine(deref + " = " + valueExpr + ";");
+            if (!rhsTransferred) {
+                c_.emitLine("if (" + deref + ") " + clsStruct + "_AddRef(" + deref + ");");
+            }
+        } else {
+            c_.emitLine(deref + " = NULL;  /* Set Nothing (项目类实例) */");
+        }
+        c_.emitLine("if (" + oldSlot + ") " + clsStruct + "_Release(" + oldSlot + ");");
+        c_.dedent();
+        c_.emitLine("}");
+        return;
+    }
     c_.emitLine("{  /* 账 #305 (甲) 腿" + legTag + ": Set " + target + " */");
     c_.indent();
     c_.emitLine(clsStruct + "* " + oldSlot + " = " + target + ";");
@@ -383,7 +418,7 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
 // 本身带一枚对价引用; 调用方再 claim 就是每调用净 +1, 那一枚永远没人退 (实测 W6 / W9 `terms=0`)。
 // 刻意只认**裸标识符 callee** 且模块符号表认到 Function / Property Get、返回类型是工程 Class:
 // 带接收者的成员调用 (`obj.Method()`) 走的是另一套契约 (COM 打包 / 视图 QI), 本刀不碰。
-bool CCodeGen::rhsTransfersProjectRef(const ASTNode& expr) {
+bool CCodeGen::rhsTransfersProjectRef(const ASTNode& expr, bool forViewSlot) {
     // 账 #305 §B218 (甲) 刀3 + 刀4: 「这一发右值自带一枚移交过来的引用」= 上面那位主人
     // 「不 claim」那条臂的**唯一**问句, 三条臂都收在这里 (别处再答一遍 = 第二套判据):
     //   形① `Set c = MakeOne()`               callee 是裸标识符 (刀3);
@@ -394,6 +429,10 @@ bool CCodeGen::rhsTransfersProjectRef(const ASTNode& expr) {
     // 继承那几档包装器 `return vb6_<Base>_M((vb6_cls_<Base>*)me);` 原样转交不退 ⇒ 交出来的指针
     // 本身就带对价 ⇒ 调用方再 claim = 每调用净 +1 = 永不销毁。
     // 反面 = 数据字段: 那一枚仍由持有者握着, 接手会少一枚, 所以字段那一档继续 claim。
+    // 第一百三十四刀: 同一位主人多答一档。forViewSlot = 本站槽装的是**接口视图** —— 交出来的
+    // 那枚薄指针带的也是对价 (`Set vb6_ret_F = New CB448` 那一档 isNewExpr **不 AddRef** = New 的
+    // 初始引用就地移交, 而返回槽在 腿④ 不退)，视图腿② 因此 QI 完必须交回它 (见 emitIvrefQiSet)；
+    // 两档互斥, 各站只认自己那一档, 工程类那一站的答案与发码一字不改。
     const ASTNode* callee = nullptr;
     if (expr.kind == ASTNodeKind::IndexOrCallExpr) {
         callee = static_cast<const IndexOrCallExpr&>(expr).callee.get();
@@ -410,6 +449,7 @@ bool CCodeGen::rhsTransfersProjectRef(const ASTNode& expr) {
             || fn->variableTypeName.empty()) {
             return false;
         }
+        if (forViewSlot) return !ivrefCType(fn->variableTypeName).empty();
         return !projectClassNameOf(fn->variableTypeName).empty();
     }
     if (callee->kind != ASTNodeKind::MemberAccessExpr) return false;
@@ -444,10 +484,81 @@ bool CCodeGen::rhsTransfersProjectRef(const ASTNode& expr) {
         }
     }
     // 过程返回类: 只认 Function / PropertyGet 符号, 与形① 同一位主人。返回的是工程内**接口**
-    // 那一档刻意不走这条腿 (薄指针不是实例, 它的所有权由接口那一位主人管)。
+    // 那一档 = ProjectView (第一百三十四刀), 工程类那一站 (forViewSlot=false) 仍照第一百三十二刀
+    // 的原话不认它 —— 薄指针不是实例, 归接口那一位主人管。
     const std::string retCls = getClassMethodReturnType(recvCls, ma.memberName);
-    if (retCls.empty() || !ivrefCType(retCls).empty()) return false;
-    return true;
+    if (retCls.empty()) return false;
+    const bool retIsView = !ivrefCType(retCls).empty();
+    return forViewSlot ? retIsView : !retIsView;
+}
+
+// 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): 「实参这一站交出去之后欠不欠一次交回」。
+// 问句不新立, 只把上面那条契约问句与 `New` 那一形成因合起来答一次; forViewSlot 取的是**形参槽
+// 自己**那一档 (各站只认自己那一档 = §B221 那条纪律)。`New <类>` 交的是**实例**, 而视图槽收到它时
+// 发出来的是包出来的薄指针 `&(<实例>->__iv_<I>)` (见 cgen_expr_call_arg_emit.inc 那条 2026-10-12
+// 的 ivfix), 那一枚对价归 §B187 待拍的那一句管 ⇒ 这一形刻意答 false: 交回错对象比漏一枚更坏。
+bool CCodeGen::argHandsOverProjectRef(const ASTNode& expr, const std::string& clsPtr) {
+    const bool forView = clsPtrIsViewSlot(clsPtr);
+    if (expr.kind == ASTNodeKind::NewExpr) return !forView;
+    return rhsTransfersProjectRef(expr, forView);
+}
+
+// 同一站的**唯一**发码出口: 站点把实参落进一枚只活到这条语句结束的临时量, 这里登记
+// 「调用行之后把那一枚交回」。两档形状各一条 —— 实例档问每类一对的 `vb6_cls_X_Release`
+// (与 emitClassSlotRefSet 退旧值那一发同一位主人), 视图档走薄指针自己的 vtable
+// (与第一百三十四刀 emitIvrefQiSet 末尾那一发同一形状)。
+void CCodeGen::registerClassArgRefHandback(const std::string& clsPtr, const std::string& tmp) {
+    std::string releaseCall;
+    if (clsPtrIsViewSlot(clsPtr)) {
+        releaseCall = tmp + "->vt->Release(" + tmp + ")";
+    } else {
+        const size_t star = clsPtr.find('*');
+        const std::string rel
+            = (star != std::string::npos) ? clsPtr.substr(0, star) : clsPtr;
+        releaseCall = rel + "_Release(" + tmp + ")";
+    }
+    c_.addPostLine("if (" + tmp + ") " + releaseCall
+                   + ";  /* 账 #305 (甲) 腿⑤: 实参那一站交回 */");
+}
+
+// 账 #305 §B218 (甲) 形A (第一百四十四刀): 上面那条交回的另一半 —— **借来的实参先付钱**。
+// 出参槽那一格从本刀起按 腿② 的形状写 (claim 新 + **当场退旧**)，所以落进那枚临时量的初值
+// 必须是**这一格自己的**一枚引用；实参读来的那一枚 (ByVal 形参 / 泛对象槽 / 数组元素 / 属性读)
+// 是借的 ⇒ 在这里补一枚 AddRef, 被调方退的就是我们这一枚, 调用者那一格一个字节都不动。
+// 为什么还要问一句「槽里是不是包装器」(运行期 vb6_ComObject_IsBoxed, 与 §B187 第五腿那座桥同一把尺):
+// 泛对象槽里躺着的是 `vb6_ComObject` 包装器, 对它跑 `vb6_cls_X_AddRef` = 把包装器当实例拆 = 堆损坏
+// (实测 x64 停在 PassLate 之后)。剥回实例再 claim ⇒ 临时量握的是实例, 调用者槽里那枚包装器原样留着。
+// 视图那一档 (薄指针) 不吃这一形: 它的借/移交仍由第一百三十四刀那条问句一处答。
+void CCodeGen::registerClassArgRefCopyIn(const std::string& clsPtr, const std::string& tmp) {
+    if (clsPtrIsViewSlot(clsPtr) || clsPtr.empty()) return;
+    const size_t star = clsPtr.find('*');
+    const std::string base = (star != std::string::npos) ? clsPtr.substr(0, star) : clsPtr;
+    c_.addPending("{ void* __bx = (void*)" + tmp + "; if (__bx) { if (vb6_ComObject_IsBoxed(__bx))"
+        + " { void* __bi = vb6_ComObject_GetInstance(__bx); if (__bi) " + tmp + " = (" + clsPtr
+        + ")__bi; } " + base + "_AddRef(" + tmp + "); } }  /* 账 #305 (甲) 腿⑤: 借来的实参在这一格先落一枚自有引用 */");
+}
+
+// 账 #305 §B218 (甲) 腿⑤ 第三格 (第一百四十六刀): **销毁载体之前**把元素逐枚交回 —— 与上面那条
+// copy-in、与第一百四十刀 `_Destroy` 里那一发「元素出厂」同属腿⑤，只是这一站的形状是「载体整块没了」。
+// 问句只许问一处 (`classOfArrayCarrier` = 登记表 + 工程类那一闸 + 形状问句)，站点不许各抄一份名单；
+// 认不出 (点链成员数组 / `As Object` / `As Variant` / 外部类) 就一声不出 = 维持今天的裸销毁。
+// 出口排在销毁**之前**是硬约束: `vb6_SA_ReleaseElements` 要按载体的元素档步进读槽，而
+// `vb6_SafeArrayDestroy1D` / `vb6_EraseArrayVar` 一进去就把 data 与载体 free 了。
+// RTL 那一头先清槽再放手 ⇒ 被放手那枚的 Class_Terminate 若回头写这一格，不会退第二遍 (同一枚
+// 载体的字段出厂那一档也是这个口径，见 cgen_com.cpp 的 `_Destroy`); 固定数组那一支随后 memset
+// 已清空的槽 = 无害。多维 (ND) 载体不是 `vb6_SafeArray1D` ⇒ 本刀不硬塞 cast，等 ND 那一枚兄弟出口。
+// note 只改**注释**那一截 (第一百五十二刀): 语句站点那一发后面紧跟销毁, 过程出口那一发刻意不销毁
+// (载体级的 free 是另一格机制) —— 两发的读者不一样, 注释各说各那句, 臂与问句仍只有一位主人。
+void CCodeGen::emitClassArrayElemHandback(const std::string& carrierExpr, const std::string& arrayName,
+                                     const std::string& note) {
+    const std::string cls = classOfArrayCarrier(arrayName);
+    if (cls.empty() || carrierExpr.empty()) return;
+    // 载体形状只在这一处问 (第一百四十九刀): 多维那一档换 ND 兄弟出口 ——
+    // 1D 那枚读的是 count/lBound 那一套头部字段, 递给 ND 载体就是步长错位。
+    const std::string fn = carrierIsMultidim(arrayName) ? "vb6_SA_ReleaseElementsND"
+                                                        : "vb6_SA_ReleaseElements";
+    c_.emitLine(fn + "(" + carrierExpr + ", " + cls
+        + "_Release);  /* 账 #305 (甲) 腿⑤ 数组档: " + note + " */");
 }
 
 // P6.4+: 类模块默认实例 (VB_PredeclaredId=True) 惰性单例访问器.
@@ -658,6 +769,14 @@ void CCodeGen::emitClassFieldAccessors(Module& module) {
 
 // ============================================================
 // P6.4: 接口 vtable + 包装类型生成 (Implements 代码生成)
+//
+// 账 #305 新账 #464: 表**类型** (`vb6_vtbl_<I>` / `vb6_iface_<I>`) 不再在这里发 —— 它由
+// 接口自己那一趟 `emitLegacyIfaceContractTypedefs` 每份模块头一发 + `#ifndef` 守卫,
+// 形状读 driver 预扫描的 `legacyIfaceShapes_`。从前这里是「每枚实现类按自家成员声明顺序 +
+// 自家 `classMeParam()` harvest 一份同名 typedef」, 一枚接口被 N 枚类实现就发 N 份:
+// 真语料 Ray.vbp 实测 54 发 C2011, 且四份表里槽序有两套 —— 「留第一份丢其余」会把三通槽
+// 按两套含义发出去, 那不是修法。这里从此只发两样: **本类那一份实例** (按字段名填, 没实现的
+// 槽发 438 桩) 与 **带本类名字的 wrap** (`_wrap` 不带实现者名时会撞成 N 份同名函数 C2084)。
 // ============================================================
 
 void CCodeGen::emitInterfaceVtable(Module& module) {
@@ -667,111 +786,98 @@ void CCodeGen::emitInterfaceVtable(Module& module) {
         const std::string& ifaceName = impl->interfaceName;
         // 登记在册的接口 (tB `Interface` 块, 或 Pass A2 认进来的 VB6 .cls 宿主) 由
         // `emitIfaceImplTables` 那条 canonical 路径发: 槽序由接口自己定, `me` 是统一的
-        // `vb6_ivref_I*`, 表结构带 guard 只发一份。这里按实现类 harvest 再发一遍就是同名
-        // 结构 C2011 撞车 (实测 290 次), 所以只发登记表里查不到的接口。
+        // `vb6_ivref_I*`, 表结构带 guard 只发一份。这里只管登记表查不到的 legacy 接口。
         if (ivLookupIface(ifaceName)) continue;
-        std::string ifaceId = cIdent(ifaceName);
 
-        // 收集接口方法信息: 从实现类中查找 IFoo_MethodName 方法
-        struct IfaceMethodInfo {
-            std::string methodName;   // 原始方法名 (如 "Bar")
-            std::string implFuncName; // 实现函数C名 (如 "vb6_Class1_IFoo_Bar")
-            std::string retType;      // 返回C类型
-            std::string params;       // 参数列表 (不含me, 如 "int32_t x")
-            bool isSub;               // Sub vs Function
+        // 形状来自那张工程级表; 表里没有 = 本接口没有任何可实现成员 (过去也是 `methods.empty()` 跳过)
+        const std::vector<LegacyIfaceSlot> slots = legacyIfaceSlots(ifaceName);
+        if (slots.empty()) continue;
+
+        const std::string ifaceId = cIdent(ifaceName);
+        const std::string vtblName = "vb6_vtbl_" + ifaceId;
+        const std::string ifaceTypeName = "vb6_iface_" + ifaceId;
+        const std::string vtblInstance = vtblName + "_for_" + cIdent(moduleName_);  // Fix 013: VB_Name
+        const std::string wrapFn = legacyIfaceWrapFn(ifaceName, moduleName_);
+
+        // --- 本类认领: 实现成员按 `<接口名>_成员` 命名, 摘掉前缀 + 带档 = 槽键 ---
+        // 键与铸表那趟同源 (ifaceSlotKeyNamed) => 同名属性的 Get 与 Let 各认各的席位。
+        // 从前这里是裸名 + `emplace` 首见胜出, 于是「形状来自 A 档、函数来自 B 档」是静默的
+        // (账 #305 新账 #489: Let 先声明 => getter 的函数被硬套成 setter 的签名)。
+        std::map<std::string, std::string> implOfSlot;
+        const std::string ifacePrefix = Symbol::toLower(ifaceName) + "_";
+        auto harvest = [&](const std::string& written, const std::string& fnName,
+                           ASTNodeKind kind, ProcKind pk) {
+            std::string lower = Symbol::toLower(written);
+            if (lower.size() <= ifacePrefix.size() ||
+                lower.compare(0, ifacePrefix.size(), ifacePrefix) != 0) {
+                return;  // 不是本接口那一份成员
+            }
+            implOfSlot.emplace(ifaceSlotKeyNamed(lower.substr(ifacePrefix.size()), kind, pk), fnName);
         };
-        std::vector<IfaceMethodInfo> methods;
-
         for (auto& decl : module.declarations) {
             if (decl->kind == ASTNodeKind::SubDecl) {
                 auto& sub = static_cast<SubDecl&>(*decl);
-                // 检查是否为 Implements 实现方法 (IFoo_MethodName 格式)
-                if (sub.name.size() > ifaceName.size() + 1 &&
-                    Symbol::toLower(sub.name.substr(0, ifaceName.size() + 1)) ==
-                    Symbol::toLower(ifaceName + "_")) {
-                    std::string methodName = sub.name.substr(ifaceName.size() + 1);
-                    std::string params = makeParamList(sub.params);
-                    methods.push_back({methodName, cProcName(sub.name, sub.access, isClassModule_ ? moduleName_ : ""),
-                                       "void", params, true});
-                }
+                harvest(sub.name, cProcName(sub.name, sub.access, isClassModule_ ? moduleName_ : ""),
+                        ASTNodeKind::SubDecl, ProcKind::Sub);
             } else if (decl->kind == ASTNodeKind::FunctionDecl) {
                 auto& func = static_cast<FunctionDecl&>(*decl);
-                if (func.name.size() > ifaceName.size() + 1 &&
-                    Symbol::toLower(func.name.substr(0, ifaceName.size() + 1)) ==
-                    Symbol::toLower(ifaceName + "_")) {
-                    std::string methodName = func.name.substr(ifaceName.size() + 1);
-                    std::string params = makeParamList(func.params);
-                    std::string retType = mapTypeRef(func.returnType.get());
-                    methods.push_back({methodName, cProcName(func.name, func.access, isClassModule_ ? moduleName_ : ""),
-                                       retType, params, false});
-                }
+                harvest(func.name, cProcName(func.name, func.access, isClassModule_ ? moduleName_ : ""),
+                        ASTNodeKind::FunctionDecl, ProcKind::Function);
             } else if (decl->kind == ASTNodeKind::PropertyDecl) {
                 auto& prop = static_cast<PropertyDecl&>(*decl);
-                if (prop.name.size() > ifaceName.size() + 1 &&
-                    Symbol::toLower(prop.name.substr(0, ifaceName.size() + 1)) ==
-                    Symbol::toLower(ifaceName + "_")) {
-                    std::string methodName = prop.name.substr(ifaceName.size() + 1);
-                    std::string params = makeParamList(prop.params);
-                    // Property Get → Function, Property Let/Set → Sub
-                    // 使用prop_get_/prop_let_/prop_set_前缀
-                    std::string propPrefix;
-                    if (prop.propKind == ProcKind::PropertyGet) {
-                        propPrefix = "prop_get_";
-                        std::string retType = mapTypeRef(prop.returnType.get());
-                        methods.push_back({methodName, cProcName(propPrefix + prop.name, prop.access, isClassModule_ ? moduleName_ : ""),
-                                           retType, params, false});
-                    } else {
-                        propPrefix = (prop.propKind == ProcKind::PropertySet) ? "prop_set_" : "prop_let_";
-                        methods.push_back({methodName, cProcName(propPrefix + prop.name, prop.access, isClassModule_ ? moduleName_ : ""),
-                                           "void", params, true});
-                    }
-                }
+                std::string prefix = "prop_let_";
+                if (prop.propKind == ProcKind::PropertyGet) prefix = "prop_get_";
+                else if (prop.propKind == ProcKind::PropertySet) prefix = "prop_set_";
+                harvest(prop.name, cProcName(prefix + prop.name, prop.access,
+                                             isClassModule_ ? moduleName_ : ""),
+                        ASTNodeKind::PropertyDecl, prop.propKind);
             }
         }
 
-        if (methods.empty()) continue;
-
-        // 1. 生成 vtable 结构体 (函数指针表)
-        std::string vtblName = "vb6_vtbl_" + ifaceId;
-        h_.emitLine("// Interface vtable: " + ifaceName);
-        h_.emitLine("typedef struct " + vtblName + " {");
-        for (auto& m : methods) {
-            std::string paramList = classMeParam();
-            if (m.params != "void") {
-                paramList += ", " + m.params;
-            }
-            h_.emitLine("    " + m.retType + " (*" + cIdent(m.methodName) + ")(" + paramList + ");");
-        }
-        h_.emitLine("} " + vtblName + ";");
-        h_.emitBlank();
-
-        // 2. 生成接口引用包装类型 (vtable指针 + 对象指针)
-        std::string ifaceTypeName = "vb6_iface_" + ifaceId;
-        h_.emitLine("typedef struct " + ifaceTypeName + " {");
-        h_.emitLine("    " + vtblName + "* vtbl;");
-        h_.emitLine("    void* obj;");
-        h_.emitLine("} " + ifaceTypeName + ";");
-        h_.emitBlank();
-
-        // 3. 生成全局 vtable 实例 (指向实现类的接口方法)
-        std::string vtblInstance = vtblName + "_for_" + cIdent(moduleName_);  // Fix 013: VB_Name
+        // --- 1. 本类那一份表实例 (按字段名填; 没实现的一席发 438 桩) ---
+        // 为什么必须发桩而不是留着不填: 表类型现在是工程级一份, 字段必须在; 少填一个
+        // 不是错 (C 会把它零初始化) 而是**静默的 NULL 槽** —— 调用点一跑就是原生 AV,
+        // 而 VB6 里「这个类没实现这一席」本来就是运行时 438。
         c_.emitBlank();
         c_.emitLine("// Interface vtable instance: " + ifaceName + " for " + module.moduleName);
+        std::vector<std::string> entries;
+        for (const LegacyIfaceSlot& s : slots) {
+            auto it = implOfSlot.find(s.slotKey);
+            std::string target;
+            if (it != implOfSlot.end()) {
+                target = it->second;
+            } else {
+                target = "vb6_iface_" + ifaceId + "_unimpl_" + s.field + "_" + cIdent(moduleName_);
+                c_.emitBlank();
+                c_.emitLine("static " + s.retType + " " + target + "(void* me" + s.params + ") {");
+                c_.indent();
+                if (s.retType != "void") {
+                    c_.emitLine(s.retType + " __unimpl = {0};");
+                }
+                c_.emitLine("vb6_RaiseError(438, NULL);  /* 账 #305 #464: '" + ifaceName + "." +
+                            s.field + "' 没由 '" + module.moduleName + "' 实现 */");
+                if (s.retType != "void") c_.emitLine("return __unimpl;");
+                c_.dedent();
+                c_.emitLine("}");
+            }
+            // me 从 `vb6_cls_<本类>*` 换成 `void*` (表归接口), 填进去要按表那一档 cast。
+            entries.push_back("." + s.field + " = (" + s.retType + " (*)(void*" + s.params + "))" +
+                              target);
+        }
+        c_.emitBlank();
         c_.emitLine("static " + vtblName + " " + vtblInstance + " = {");
         c_.indent();
-        for (size_t i = 0; i < methods.size(); i++) {
-            std::string entry = "." + cIdent(methods[i].methodName) + " = " + methods[i].implFuncName;
-            if (i < methods.size() - 1) entry += ",";
-            c_.emitLine(entry);
+        for (size_t i = 0; i < entries.size(); i++) {
+            c_.emitLine(entries[i] + (i + 1 < entries.size() ? "," : ""));
         }
         c_.dedent();
         c_.emitLine("};");
 
-        // 4. 生成包装函数: vb6_iface_IFoo_wrap(obj) → 创建接口引用
-        h_.emitLine(ifaceTypeName + " " + ifaceTypeName + "_wrap(" + clsStruct + "* obj);");
+        // --- 2. 包装函数: vb6_iface_IFoo_wrap_<Impl>(obj) → 创建接口引用 ---
         h_.emitBlank();
+        h_.emitLine(ifaceTypeName + " " + wrapFn + "(" + clsStruct + "* obj);");
         c_.emitBlank();
-        c_.emitLine(ifaceTypeName + " " + ifaceTypeName + "_wrap(" + clsStruct + "* obj) {");
+        c_.emitLine(ifaceTypeName + " " + wrapFn + "(" + clsStruct + "* obj) {");
         c_.indent();
         c_.emitLine(ifaceTypeName + " iface;");
         c_.emitLine("iface.vtbl = &" + vtblInstance + ";");

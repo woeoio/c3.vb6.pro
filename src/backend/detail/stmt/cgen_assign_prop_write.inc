@@ -161,6 +161,7 @@
                     // 他类同名属性 (其 Variant 参数表) → 误打包 → 大规模 C2440
                     // (cHttpServer/cDataBase/cJson 的 Rs.Status = 200 等).
                     std::string padArgs158h; // Fix 158h 入口参数 padding 结果
+                    std::string wantLet091n; // 账 #474 站F 写侧: 这一发算好的**目标档** (仅 Let、仅一枚形参)
                     {
                         std::vector<ParameterInfo> wp091n;
                         bool isSet091n = (propLetSym->kind == SymbolKind::PropertySet);
@@ -169,6 +170,9 @@
                                                           isSet091n, wp091n)
                             && !wp091n.empty()) {
                             const ParameterInfo& lastP091n = wp091n.back();
+                            if (!isSet091n && wp091n.size() == 1) {
+                                wantLet091n = mapType(lastP091n.type);   // 站点自己那一发的目标档
+                            }
                             if (lastP091n.type == Vb6Type::Variant) {
                                 // 仅打包"数组载体"值: 直接给具体类型标量 (如
                                 // Dictionary.CompareMode = 1, C 形参 int32_t)
@@ -295,8 +299,18 @@
                         c_.emitLine(funcName + "(" + padArgs158h
                                     + ");  /* Property Let (Fix 158h) */");
                     } else {
-                        c_.emitLine(funcName + "(" + objExpr + ", " + valExpr
-                                    + ");  /* Property Let */");
+                        // 账 #305 新账 #474 站F (写侧): 接收者是一枚视图 ⇒ 那一发交给在册那两位主人
+                        // (名册 + 接口自己那张槽表)，站点一枚形状都不拼。不合 (非视图 / 那一席没有 /
+                        // Set 档 / 类型不同型) 就保留下面那一发原样 = 仍红，不掩盖。
+                        std::string vSet091n = wantLet091n.empty()
+                            ? std::string()
+                            : legacyViewSetterCallExpr(objExpr, maExpr.memberName, valExpr, wantLet091n);
+                        if (!vSet091n.empty()) {
+                            c_.emitLine(vSet091n + ";  /* Property Let (视图直槽) */");
+                        } else {
+                            c_.emitLine(funcName + "(" + objExpr + ", " + valExpr
+                                        + ");  /* Property Let */");
+                        }
                     }
                     return;
                 }

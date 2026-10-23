@@ -13,6 +13,10 @@ void CCodeGen::visit(WithStmt& node) {
     WithObjInfo withInfo;
     std::string tempVar = "_vb6_with_" + std::to_string(tempCounter_++);
     std::string tempType = "void*";
+    // 账 #305 新账 #471 站D′ (第一百七十七刀): 接收者本身是一枚 legacy 接口**视图**时,
+    // 这一格非空 = 接口名。它同时决定两件事: 临时量的**类型** (视图是值结构体, 不是 void*)
+    // 和临时量自己要不要登记进名册 (体内成员那两路主人只认名册里的名字)。
+    std::string viewIface177;
 
     // 检测With对象类型: 遍历表达式判断
     if (node.object) {
@@ -106,6 +110,15 @@ void CCodeGen::visit(WithStmt& node) {
         }
 
         if (!objNameLower.empty()) {
+            // 账 #305 新账 #471 站D′ (第一百七十七刀): 视图那一问**排在整条判定链之前**，
+            // 只问名册那一位主人 (与 For Each / 站D 同一次查表)。视图就是 COM 对象，
+            // 所以 kind 仍留 COMObject、**不开新档** —— WithObjKind 那一族被 15 份文件读，
+            // 添一档的代价是整张判定表重排，收益是零；差的只是**值的形状**。
+            viewIface177 = slotLegacyIfaceViewName(objNameLower);
+            if (!viewIface177.empty()) {
+                withInfo.kind = WithObjKind::COMObject;
+                tempType = "vb6_iface_" + cIdent(viewIface177);
+            }
             // Fix 161f-extlist: `With lv` —— lv 是**形参/局部持有的 ListView**
             // (`Sub RefillList(lv As ListView)`)。ListView 是真窗口, C 侧槽变量本身
             // 就是 HWND (调用点传的就是 vb6_hwnd_ListView1), 所以:
@@ -701,7 +714,14 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         }
         // Fix 038: C2440 修复 — UDT 同类型转换和 UDT/VARIANT → void* 转换
         bool isUdtTempType = (tempType.rfind("vb6_type_", 0) == 0);
-        if (isUdtTempType) {
+        if (!viewIface177.empty()) {
+            // 视图是一枚**借来的值** ⇒ 临时量就是同型值拷贝: 不取址、不强转、不退旧
+            // (退旧那半句与第一百七十二刀站B 一字口径 —— With 没接管所有权)。
+            // 从前这一格发的是 `void* _vb6_with_N = (void*)视图` = cl **C2440**（探针实测），
+            // 一发把整块 With 打死，体内每一档成员 consequently 全落 COM 兜底。
+            c_.emitLine(tempType + " " + tempVar + " = " + lastExpr_ +
+                        "  /* With object ref (视图值拷贝) */;");
+        } else if (isUdtTempType) {
             // Fix 081j: UDT With块使用指针引用，而非值拷贝
             // VB6中 With uPoints(lIdx) 内 .X = ... 直接修改数组元素
             // C中需要用指针: vb6_type_RECT* _vb6_with = &VB6_SA_AT(...)
@@ -827,6 +847,16 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
 
     withObjectVars_.push_back(tempVar);
 
+    // 账 #305 新账 #471 站D′: 临时量自己也登记进那张名册 —— 体内成员的两位主人
+    // (表达式路 P6.4 / 语句路站D) 认的是**名字**, 不登记就问不出「这一格是视图」。
+    // 出块必须撤销 (tempVar 的号在下一枚过程里会复用 = 假命中), 与下方
+    // listViewSlotVars_ 那一档同款口径。
+    bool viewSlotRegistered177 = false;
+    if (!viewIface177.empty()) {
+        viewSlotRegistered177 =
+            knownIfaceVars_.insert(std::make_pair(Symbol::toLower(tempVar), viewIface177)).second;
+    }
+
     // Fix 161f-extlist: With 目标是 ListView 槽 (形参/局部) 时, 把 _vb6_with_N 本身
     // 也登记为 ListView 槽 —— 体 `.ListItems` / `.ColumnHeaders` 生成的 comObjExpr_
     // 就是这个 tempVar, 登记后 listViewHwndExprOf 才能把它解析成 HWND。
@@ -847,6 +877,7 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     withObjectVars_.pop_back();
     withObjectInfoStack_.pop_back();
     if (lvSlotRegistered161f) listViewSlotVars_.erase(Symbol::toLower(tempVar));
+    if (viewSlotRegistered177) knownIfaceVars_.erase(Symbol::toLower(tempVar));  // 站D′
 }
 
 

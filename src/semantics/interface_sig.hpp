@@ -36,21 +36,37 @@ inline std::string ifaceTypeText(const ASTNode* t) {
     }
 }
 
-// COM 惯例槽键 (D2): 属性拆三槽, Sub/Function 用原名
+// COM 惯例槽键 (D2): 属性拆三槽, Sub/Function 用原名。
+// 前缀表只有 ifacePropSlotPrefix 这一处 (ifaceSlotKeyNamed / ifaceSlotPrefix 都转调它) —— legacy 那条路 (铸 VB6 接口槽表的两趟) 的名字是
+// 先摘掉 `<接口名>_` 前缀的裸成员名, 走下面这第二位入口, 用的是同一张词汇表
+// (账 #305 新账 #489: 从前 legacy 两侧各自按裸名去重, 同名属性的 Get 与 Let 共用一席,
+//  哪一档进表由声明序决定 => Let 先写就把 getter 的函数硬套进 setter 的形状, 静默)。
+inline std::string ifacePropSlotPrefix(ProcKind pk) {
+    switch (pk) {
+        case ProcKind::PropertyGet: return "get_";
+        case ProcKind::PropertyLet: return "put_";
+        case ProcKind::PropertySet: return "putref_";
+        default:                    return std::string();
+    }
+}
+
+inline std::string ifaceSlotKeyNamed(const std::string& bareLower, ASTNodeKind kind, ProcKind pk) {
+    if (kind != ASTNodeKind::PropertyDecl) return bareLower;
+    return ifacePropSlotPrefix(pk) + bareLower;
+}
+
+// 那一档是什么: 只有 PropertyDecl 有 Get/Let/Set 之分, 其余按 Sub 走裸名。
+inline ProcKind ifaceDeclProcKind(const Decl& d) {
+    return d.kind == ASTNodeKind::PropertyDecl ? static_cast<const PropertyDecl&>(d).propKind
+                                               : ProcKind::Sub;
+}
+
 inline std::string ifaceSlotKey(const Decl& d) {
     std::string n = ifaceLower(
         d.kind == ASTNodeKind::SubDecl      ? static_cast<const SubDecl&>(d).name :
         d.kind == ASTNodeKind::FunctionDecl ? static_cast<const FunctionDecl&>(d).name :
         d.kind == ASTNodeKind::PropertyDecl ? static_cast<const PropertyDecl&>(d).name : std::string());
-    if (d.kind == ASTNodeKind::PropertyDecl) {
-        switch (static_cast<const PropertyDecl&>(d).propKind) {
-            case ProcKind::PropertyGet: return "get_" + n;
-            case ProcKind::PropertyLet: return "put_" + n;
-            case ProcKind::PropertySet: return "putref_" + n;
-            default: break;
-        }
-    }
-    return n;
+    return ifaceSlotKeyNamed(n, d.kind, ifaceDeclProcKind(d));
 }
 
 struct IfaceParamSig {
@@ -159,12 +175,7 @@ inline const std::vector<ImplementsClause>* ifaceProcClauses(const Decl& d) {
 // 属性成员槽键前缀 (Sub/Function = 空), 与 ifaceSlotKey 同一套 COM 惯例 (D2)
 inline std::string ifaceSlotPrefix(const Decl& d) {
     if (d.kind != ASTNodeKind::PropertyDecl) return std::string();
-    switch (static_cast<const PropertyDecl&>(d).propKind) {
-        case ProcKind::PropertyGet: return "get_";
-        case ProcKind::PropertyLet: return "put_";
-        case ProcKind::PropertySet: return "putref_";
-        default:                    return std::string();
-    }
+    return ifacePropSlotPrefix(static_cast<const PropertyDecl&>(d).propKind);
 }
 
 // 子句 `I.M` 的目标槽键: 按实现成员的 Get/Let/Set 补前缀 (也允许直接写槽名,

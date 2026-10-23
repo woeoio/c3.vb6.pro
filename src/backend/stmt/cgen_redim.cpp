@@ -27,7 +27,13 @@ std::string CCodeGen::resolveUdtMemberArrayCType(const std::string& lowerVar) co
     if (dot == std::string::npos || dot == 0 || dot + 1 >= lowerVar.size()) return "";
     auto it = knownUdtVars_.find(lowerVar.substr(0, dot));
     if (it == knownUdtVars_.end()) return "";
-    return udtFieldObjCType(it->second, lowerVar.substr(dot + 1));
+    std::string ctype = udtFieldObjCType(it->second, lowerVar.substr(dot + 1));
+    // 账 #475 §B220: `Names() As String` 的成员 C 类型是 BSTR, 但 BSTR **不是 UDT** ——
+    // 这一格不能交给 _Udt 分配 (那样描述符记成 vb6_sa_udt, Erase/Destroy 不释放元素,
+    // VarType 也答 8204 而不是 vb6 的 8200|vtBSTR)。元素档由 resolveReDimElemType
+    // 给出的 String → vb6_sa_bstr 才是权威。
+    if (ctype == "BSTR") return "";
+    return ctype;
 }
 
 // 账 #305 §B156 (第四十四刀): 多维 ReDim 的界数组临时量以前**按数组名**拼
@@ -184,13 +190,25 @@ void CCodeGen::visit(ReDimStmt& node) {
                 // 销毁时再被当 bstrVal 二次 free (实测 play78.exe 的 List.Contains)。
                 // saElemType 来自 mapSaElemType(elemType), 与非 preserve 分支
                 // (下方 vb6_SafeArrayReDim1D(saElemType, …)) 同一口径。
-                assignVal = "vb6_SafeArrayReDimPreserve1D_T(" + saElemType + ", " + callArg + ", " + lBound + ", " + uBound + ")";
+                // 账 #305 §B218 (甲) 腿⑤ 第四格 (第一百四十八刀): 元素是**本工程类实例**时换那位
+                // 带回调的兄弟出口 —— 收缩丢尾的那几格在搬移之前逐枚交回同一位主人。界仍只算一次:
+                // lBound/uBound 是同一对文本, 出厂逻辑在 RTL 那一处, 搬移本身直接转调 _T。
+                // 认不出 (As Object = 包装器 / As Variant = 槽 / 外部类 / 点链成员数组) ⇒ 今天那一发
+                // 逐字节留着 ⇒ 全语料的 Preserve 形状只有类数组那几格会动。
+                const std::string clsPreserve = classOfArrayCarrier(node.varName);
+                assignVal = clsPreserve.empty()
+                    ? ("vb6_SafeArrayReDimPreserve1D_T(" + saElemType + ", " + callArg + ", " + lBound + ", " + uBound + ")")
+                    : ("vb6_SafeArrayReDimPreserve1D_Tr(" + saElemType + ", " + callArg + ", " + lBound + ", " + uBound + ", " + clsPreserve + "_Release)");
             }
             c_.emitLine(cName + " = " + assignVal + ";");
         } else {
             // Fix 084a: Variant 数组非 preserve ReDim — 先销毁提取出的 SafeArray, 再包装新数组回 Variant
             std::string destroyArg = cName;
             if (isVariantArrayVar(cName)) destroyArg = "vb6_VariantToSafeArray1D(" + cName + ")";
+            // 账 #305 §B218 (甲) 腿⑤ 第三格 (第一百四十六刀): 不带 Preserve 的那一发把旧载体整块
+            // 换掉 ⇒ 旧元素那一枚引用没人放手 = 漏。销毁之前问一处 (认不出 = 一声不出)。
+            // Preserve 那一支**不吃**: 元素是被搬走的, 不是被丢的 (丢尾那一档随 RTL 出口另议)。
+            emitClassArrayElemHandback(cName, node.varName);
             c_.emitLine("vb6_SafeArrayDestroy1D(" + destroyArg + ");");
             std::string newVal;
             if (isUdtArray) {
@@ -250,7 +268,14 @@ void CCodeGen::visit(ReDimStmt& node) {
                 // 不带 Preserve 的那一支 (:244) 一直递 saElemType, Preserve 这一支却递了
                 // 空手, 于是「首次分配就走 Preserve」的形状在 RTL 里回落 vb6_sa_empty
                 // (4 字节一步) 而访问按声明档走 —— 同一件事两处写法不同形, 第三例。
-                res = "vb6_SafeArrayReDimPreserveND(" + saElemType + ", (vb6_SafeArrayND*)" + redimArg + ", " + std::to_string(dimCount) + ", " + boundsVar + ")";
+                // 账 #305 §B218 (甲) 腿⑤ 第六格 (第一百五十四刀): 元素是本工程类时换那位带回调的兄弟出口 ——
+                // 收缩丢尾的那几格在旧块被 free 之前逐枚交回同一位主人。哪些格出局、每格多宽都由载体自己在
+                // 运行期答, 所以这一站不吃 arrayDimCounts_ 那张按代码顺序的表; 认不出 (As Object 包装器 /
+                // As Long 裸值 / 外部类 / 点链成员数组) 继续发今天那一发, 产物逐字节留着。
+                const std::string clsNDPreserve = classOfArrayCarrier(node.varName);
+                res = clsNDPreserve.empty()
+                    ? ("vb6_SafeArrayReDimPreserveND(" + saElemType + ", (vb6_SafeArrayND*)" + redimArg + ", " + std::to_string(dimCount) + ", " + boundsVar + ")")
+                    : ("vb6_SafeArrayReDimPreserveND_Tr(" + saElemType + ", (vb6_SafeArrayND*)" + redimArg + ", " + std::to_string(dimCount) + ", " + boundsVar + ", " + clsNDPreserve + "_Release)");
             }
             if (!wrapBack.empty()) res = wrapBack + res + ")";
             // 账 #305 §B154 第二格: 那枚 (vb6_SafeArray1D*) 强转**只在该槽是数组指针时**才成立。
@@ -261,6 +286,9 @@ void CCodeGen::visit(ReDimStmt& node) {
             c_.emitLine(cName + " = " + (wrapBack.empty() ? "(vb6_SafeArray1D*)" : "") + res + ";");
         } else {
             std::string destroyArg = redimArg;
+            // 账 #305 §B218 (甲) 腿⑤ 第五格 (第一百四十九刀): 多维载体的元素出厂走同一位主人，
+            // 由它自己问「这枚载体是几维」挑 1D / ND 那一发 —— 排在销毁之前同样是硬约束。
+            emitClassArrayElemHandback("(vb6_SafeArrayND*)" + destroyArg, node.varName);
             c_.emitLine("vb6_SafeArrayDestroyND((vb6_SafeArrayND*)" + destroyArg + ");");
             std::string newVal;
             if (isUdtArray) {
@@ -282,13 +310,33 @@ void CCodeGen::visit(ReDimStmt& node) {
     }
 }
 
+// 账 #476 §B190: 这一枚从"自己摸 udtMembers"改成**那一枚出口的薄委托** —— §B190 的口径是
+// 「三处同问同一个出口」(Pattern B 元素访问 / ReDim 分配侧 / 类字段类外访问), 而 §B220 那版
+// 自己查表, 于是 UDT 腿留下了第二份答案。现在它只负责把 udtCType 翻成出口的两个入参,
+// 答案一律由 resolveMemberArrayDecl 给。
+// ⚠ 它与 Pattern B 的差别只剩一个: 这里答的是"成员声明档"(定长也答), 而出口只认**动态**
+// 数组成员 —— 所以定长那一形照旧由调用点走 Pattern A, 不经本格。
+bool CCodeGen::resolveUdtMemberElemInfo(const std::string& udtCType,
+                                        const std::string& memberName,
+                                        Vb6Type& outType,
+                                        std::string& outUdtCType) {
+    outType = Vb6Type::Variant;
+    outUdtCType.clear();
+    MemberArrayDecl mad;
+    if (!resolveMemberArrayDecl(udtCType, std::string(), memberName, mad) || !mad.ok) {
+        return false;
+    }
+    outType = mad.elemType;
+    if (mad.isUdt) outUdtCType = mad.elemCType;
+    return true;
+}
+
 // Fix 100: 解析 ReDim 复杂目标 (arr(i).Field) 的元素类型。
 // targetExpr 的末段必须是 MemberAccessExpr; 其 object 的 UDT C 类型由
 // inferUdtTypeOfExpr 推断 (UDT 数组元素 arr(idx) 走 arrayUdtElemTypes_),
-// 再在 udtMembers 中查该成员的标量与 typeRefName — 与 cgen_expr_call.cpp
-// Pattern B (动态数组成员元素访问 VB6_SA_AT) 使用同一来源, 保证二者一致。
+// 再交给 resolveUdtMemberElemInfo 问那唯一一份成员表。
 void CCodeGen::resolveReDimComplexElemType(const ReDimStmt& node, Vb6Type& outType,
-                                           std::string& outUdtCType) const {
+                                           std::string& outUdtCType) {
     outType = Vb6Type::Variant;
     outUdtCType.clear();
     if (!node.targetExpr) return;
@@ -297,26 +345,7 @@ void CCodeGen::resolveReDimComplexElemType(const ReDimStmt& node, Vb6Type& outTy
     if (!ma.object) return;
 
     std::string ownerCType = inferUdtTypeOfExpr(*ma.object);
-    const std::string prefix = "vb6_type_";
-    if (ownerCType.size() <= prefix.size()
-        || ownerCType.compare(0, prefix.size(), prefix) != 0) return;
-    std::string udtName = ownerCType.substr(prefix.size());
-
-    Symbol* udtSym = symTab_.lookupModule(udtName);
-    if (!udtSym) udtSym = symTab_.lookup(udtName);
-    if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return;
-
-    std::string memLower = Symbol::toLower(ma.memberName);
-    std::string memLowerM = "m_" + memLower;
-    for (auto& mi : udtSym->udtMembers) {
-        std::string miLower = Symbol::toLower(mi.name);
-        if (miLower != memLower && miLower != memLowerM) continue;
-        outType = mi.type;
-        if (mi.type == Vb6Type::UserDefinedType && !mi.typeRefName.empty()) {
-            outUdtCType = "vb6_type_" + cIdent(mi.typeRefName);
-        }
-        return;
-    }
+    resolveUdtMemberElemInfo(ownerCType, ma.memberName, outType, outUdtCType);
 }
 
 // Fix 100: 发射 ReDim 复杂目标 — ReDim arr(i).Field(dims) / obj.List(j).Field(dims)。
@@ -336,7 +365,12 @@ void CCodeGen::emitReDimComplexTarget(ReDimStmt& node) {
         elemType = resolveArrayElemType(node.asType.get());
         udtCType = resolveArrayUdtElemCType(node.asType.get());
     }
-    if (udtCType.empty() && !node.varName.empty()) {
+    // 账 #475 §B220: 这一段是**非复杂目标**的裸名回退 (键 = node.varName)。复杂目标
+    // (node.targetExpr 非空) 的元素档已由上面 resolveReDimComplexElemType 问过成员表，
+    // 而它的 node.varName 常只是基数组名 (`ReDim arr(1).Numbers(...)` → "arr") —— 再拿它
+    // 查 arrayUdtElemTypes_ 会命中的是**基数组元素 UDT**，于是标量成员被按 sizeof(UDT)
+    // 分配 (实测 Probe5: vb6_SafeArrayReDim1D_Udt(sizeof(vb6_type_TNum)) 而访问是 int32)。
+    if (!node.targetExpr && udtCType.empty() && !node.varName.empty()) {
         std::string cv = node.varName;
         std::transform(cv.begin(), cv.end(), cv.begin(), ::tolower);
         auto it = arrayUdtElemTypes_.find(cv);
@@ -414,6 +448,9 @@ void CCodeGen::emitReDimComplexTarget(ReDimStmt& node) {
         }
         c_.dedent();
         c_.emitLine("};");
+        // 账 #305 §B218 (甲) 腿⑤ 第五格 (第一百四十九刀): 这一支的目标是复杂左值 (成员链 / 下标)，
+        // 问句只认裸名 ⇒ 认不出就一声不出；认得出时仍由主人自己判维度挑出口，站点不代替它判。
+        emitClassArrayElemHandback("(vb6_SafeArrayND*)" + cName, node.varName);
         c_.emitLine("vb6_SafeArrayDestroyND((vb6_SafeArrayND*)" + cName + ");");
         std::string newVal = isUdtArray
             ? ("vb6_SafeArrayReDimND_Udt((int32_t)sizeof(" + udtCType + "), "
@@ -465,12 +502,19 @@ void CCodeGen::visit(EraseStmt& node) {
         std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
         auto it = arrayDimCounts_.find(lowerName);
         if (it != arrayDimCounts_.end() && it->second > 1) {
+            // 账 #305 §B218 (甲) 腿⑤ 第五格 (第一百四十九刀): 多维载体的 Erase 也走同一位主人。
+            emitClassArrayElemHandback("(vb6_SafeArrayND*)" + cName, name);
             c_.emitLine("vb6_SafeArrayDestroyND((vb6_SafeArrayND*)" + cName + "); " + cName + " = NULL;");
         } else {
             // Fix <vbeclipse> 2026-10-06: 1D 数组统一走 vb6_EraseArrayVar —
             // 动态数组释放存储置 NULL, **固定数组保留存储**只把元素重置
             // (数值/BSTR/Variant 按 VB6 文档口径; 此前固定数组也被整块释放,
             //  Erase VarArray 后再访问 UBound/元素直接错误 9, t3.bas 实测)。
+            // 账 #305 §B218 (甲) 腿⑤ 第三格 (第一百四十六刀): 类数组的元素由**这一格**握着 ⇒
+            // 销毁载体之前逐枚交回同一位主人 (问句与出口只住在 emitClassArrayElemHandback 那一处,
+            // 认不出就一声不出 = 维持今天的裸销毁)。固定数组那一支同样吃这一发: RTL 里的
+            // vb6_ReleaseObject 认不出工程类裸结构体 (Fix 191), 过去只把槽清成 NULL 而不放手。
+            emitClassArrayElemHandback(cName, name);
             c_.emitLine("vb6_EraseArrayVar(&" + cName + ");");
         }
     }

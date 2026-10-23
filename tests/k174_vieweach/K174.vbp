@@ -1,0 +1,8 @@
+Type=Exe
+Name="K174ViewEachApp"
+Module=mdlK174; mdlK174.bas
+Class=IK174; IK174.cls
+Class=K174Alpha; K174Alpha.cls
+Class=K174Beta; K174Beta.cls
+Class=K174Plain; K174Plain.cls
+Startup="Sub Main"
