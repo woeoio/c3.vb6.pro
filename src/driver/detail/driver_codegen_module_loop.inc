@@ -105,8 +105,11 @@
         cgen.setFormModuleNames(formModuleNames);  // Fix 086: 跨模块窗体默认实例引用
         // 账 #305 第320刀 (账 #592): App.Title 真值 = .vbp 的 Title（空则工程 Name）。
         // 单文件编译（无 .vbp）时为空 ⇒ 入口点一行不发，读取侧退 EXEName（旧口径）。
-        // 第330刀 (账 #605): 那句算法搬进 appTitleSeed() —— DLL 的 dllCgen 现在也要同一个值,
-        // 两处各抄一遍就会让 Exe 与 DLL 的题头在「Title 与 Name 谁优先」上分家。
+        // 第330刀 (账 #605) + 第三百五十九刀: 算法仍只住 appTitleSeed() 一处 (DLL 的
+        // dllCgen 要同一个值, 两处各抄一遍就会在「Title 与 Name 谁优先」上分家)。
+        // 359 刀把「无 Title=」那一档从工程 Name 改成 **exe 名** (ExeName32 的 stem):
+        // 参考二进制 (Codejock GUISample.exe) 的 SaveSetting(App.Title, ...) 键就是
+        // exe 名, 编译产物要与参考运行的持久化状态同键才能表现一致。
         cgen.setProjectTitle(appTitleSeed());
         cgen.setStartupObject(startupObject);      // Fix 142: 启动对象 (入口点归属模块)
         cgen.setModulePublicConsts(&modulePublicConsts);  // Fix 086: 跨模块常量内联

@@ -340,7 +340,13 @@ private:
     // 两处各抄一遍，「Title 与 Name 谁优先」就会在 Exe 与 DLL 之间分家 (VB6 实测答甲 = 本工程
     // 自己的 Title，见 ai/probes/app_title_dll/client_out.txt 的 P1)。单文件编译两位都空 ⇒
     // 种子为空，两个入口都不发播种行，读取侧仍退 App.EXEName (旧口径)。
-    std::string appTitleSeed() const { return !verTitle_.empty() ? verTitle_ : vbpProjectName_; }
+    // 第三百五十九刀: 无 Title= 时用 **exe 名** (ExeName32 的 stem = projectBaseName_)。
+    // 参考二进制 (Codejock GUISample.exe) 的 SaveSetting(App.Title, ...) 键就是 exe 名;
+    // 工程 Name 是 Project1, 永远对不上。DLL 没有 exe 名时退回工程 Name (330 刀口径)。
+    std::string appTitleSeed() const {
+        return !verTitle_.empty() ? verTitle_
+               : (!projectBaseName_.empty() ? projectBaseName_ : vbpProjectName_);
+    }
 
     // TypeLib解析器 (P6.3, COM类型导入)
     std::unique_ptr<TypeLibParser> typelibParser_;
