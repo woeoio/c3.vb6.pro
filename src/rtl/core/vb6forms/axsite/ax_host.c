@@ -549,6 +549,20 @@ int32_t vb6_OcxHost_GetRect(void* ctlDisp, int32_t out[4], void** outForm) {
     return 0;
 }
 
+/* windowless 控件没有窗口 ⇒ 没有 GeomCache 那一格，几何只能按站点账本折给用户。
+ * 四个 getter 各折一遍就是四本账，收成这一处；账本住在这里，折算就跟着账本走。
+ * slot 即 VB6_GEOM_* (0..3)，slot & 1 = 竖直那一轴，与 vb6_GeomCacheRead 同口径。 */
+int32_t vb6_OcxHost_GetUserCoord(void* ctlDisp, int32_t slot) {
+    int32_t r[4]; void* form = NULL;
+    if (!vb6_OcxHost_GetRect(ctlDisp, r, &form)) return 0;
+    int32_t cm = vb6_ContainerScaleMode(form);
+    int32_t u = (int32_t)vb6_ScalePxToUser((double)r[slot], cm, (int)(slot & 1));
+    if (GetEnvironmentVariableW(L"C3_GEOM_TRACE", NULL, 0) > 0)
+        fprintf(stderr, "[C3_GEOM] GetUserCoord ctl=%p slot=%d px=%d cm=%d user=%d\n",
+                ctlDisp, (int)slot, (int)r[slot], (int)cm, (int)u);
+    return u;
+}
+
 int32_t vb6_OcxHost_SetRect(void* ctlDisp, int32_t x, int32_t y, int32_t w, int32_t h, int32_t mask) {
     if (!ctlDisp) return 0;
     for (int i = vb6_axSiteCount - 1; i >= 0; i--) {

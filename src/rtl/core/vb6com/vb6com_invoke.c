@@ -1287,8 +1287,7 @@ void* vb6_ComGetPropArg(void* disp, const wchar_t* propName,
 
 void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
     void* owned = NULL;
-    void* d = vb6_ComDispViewIn(disp, &owned);
-    vb6_ComSetPropRcv(d, propName, value_void);
+    vb6_ComSetPropRcv(vb6_ComDispViewIn(disp, &owned), propName, value_void);
     vb6_ComDispViewOut(owned);
 }
 

@@ -134,6 +134,8 @@ int32_t vb6_OcxHost_GetVisible(void* ctlDisp, int32_t* outVisible);
 int32_t vb6_OcxHost_SetVisible(void* ctlDisp, int32_t visible);
 int32_t vb6_OcxHost_SyncRects(void* ctlDisp);
 int32_t vb6_OcxHost_GetRect(void* ctlDisp, int32_t out[4], void** outForm);
+// windowless 那条路的几何出口: 站点账本(像素)按容器 ScaleMode 折成用户单位; slot = VB6_GEOM_*
+int32_t vb6_OcxHost_GetUserCoord(void* ctlDisp, int32_t slot);
 int32_t vb6_OcxHost_SetRect(void* ctlDisp, int32_t x, int32_t y, int32_t w, int32_t h, int32_t mask);
 
 // Fix <vbeclipse> 2026-10-07: 窗体 AutoRedraw=True 时, 把记忆 DC (VB6_AutoRedrawDC)

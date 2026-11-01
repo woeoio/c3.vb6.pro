@@ -159,8 +159,8 @@ static HRESULT STDMETHODCALLTYPE axSite_D_Invoke(IDispatch* This, DISPID dispid,
             Vb6AxSite* s = SITE_OF(This, lpVtblDispatch);
             if (!s->pAmbientFont) {
                 LOGFONTW lf;
-                HFONT hf = (HFONT)SendMessageW(s->hwndForm, WM_GETFONT, 0, 0);
-                if (!hf) hf = vb6_ControlFontStored(s->hwndForm);
+                /* 问窗口字体只许走 vb6_ControlFont 那一枚出口（哨兵 control_dc D11） */
+                HFONT hf = vb6_ControlFont(s->hwndForm);
                 s->pAmbientFont = (hf && GetObjectW(hf, sizeof(lf), &lf) == sizeof(lf))
                                       ? axSiteMakeFont(&lf) : axSiteMakeFont(NULL);
                 if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0)

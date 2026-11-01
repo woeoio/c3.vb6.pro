@@ -226,12 +226,7 @@ int vb6_GeomCacheRead(void* hwnd, int slot, int actualPx, int32_t mode, int fall
 int vb6_GetControlLeft(void* hwnd) {
     void* ctlObj = hwnd;
     hwnd = vb6_CtlWin(hwnd);
-    if (!hwnd) {
-        int32_t r[4]; void* form = NULL;
-        if (vb6_OcxHost_GetRect(ctlObj, r, &form))   /* windowless: 站点账本 */
-            return (int)vb6_ScalePxToUser((double)r[0], vb6_ContainerScaleMode(form), 0);
-        return 0;
-    }
+    if (!hwnd) return vb6_OcxHost_GetUserCoord(ctlObj, VB6_GEOM_LEFT);   /* windowless: 站点账本 */
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
@@ -267,12 +262,7 @@ void vb6_SetControlLeft(void* hwnd, int left) {
 int vb6_GetControlTop(void* hwnd) {
     void* ctlObj = hwnd;
     hwnd = vb6_CtlWin(hwnd);
-    if (!hwnd) {
-        int32_t r[4]; void* form = NULL;
-        if (vb6_OcxHost_GetRect(ctlObj, r, &form))   /* windowless: 站点账本 */
-            return (int)vb6_ScalePxToUser((double)r[1], vb6_ContainerScaleMode(form), 1);
-        return 0;
-    }
+    if (!hwnd) return vb6_OcxHost_GetUserCoord(ctlObj, VB6_GEOM_TOP);   /* windowless: 站点账本 */
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
@@ -307,16 +297,7 @@ void vb6_SetControlTop(void* hwnd, int top) {
 int vb6_GetControlWidth(void* hwnd) {
     void* ctlObj = hwnd;
     hwnd = vb6_CtlWin(hwnd);
-    if (!hwnd) {
-        int32_t r[4]; void* form = NULL;
-        if (vb6_OcxHost_GetRect(ctlObj, r, &form)) {   /* windowless: 站点账本 */
-            int32_t cmw = vb6_ContainerScaleMode(form);
-            int rw = (int)vb6_ScalePxToUser((double)r[2], cmw, 0);
-            vb6_geomLog("GetWidth(less)", ctlObj, form, r[2], cmw, rw);
-            return rw;
-        }
-        return 0;
-    }
+    if (!hwnd) return vb6_OcxHost_GetUserCoord(ctlObj, VB6_GEOM_WIDTH);   /* windowless: 站点账本 */
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     int px = rc.right - rc.left;
@@ -359,12 +340,7 @@ void vb6_SetControlWidth(void* hwnd, int width) {
 int vb6_GetControlHeight(void* hwnd) {
     void* ctlObj = hwnd;
     hwnd = vb6_CtlWin(hwnd);
-    if (!hwnd) {
-        int32_t r[4]; void* form = NULL;
-        if (vb6_OcxHost_GetRect(ctlObj, r, &form))   /* windowless: 站点账本 */
-            return (int)vb6_ScalePxToUser((double)r[3], vb6_ContainerScaleMode(form), 1);
-        return 0;
-    }
+    if (!hwnd) return vb6_OcxHost_GetUserCoord(ctlObj, VB6_GEOM_HEIGHT);   /* windowless: 站点账本 */
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     int px = rc.bottom - rc.top;
