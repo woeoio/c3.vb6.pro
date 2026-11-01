@@ -23,6 +23,28 @@
 // 控件属性读写 (P7.5)
 // ============================================================
 
+/* 账 (Outlook2013 主区 Report 盖住 Calendar): VB6 的 Visible / Enabled / 几何 /
+   Move 是**容器 Extender**的账, 落的都是控件自己那个窗口。原生控件这里拿到的
+   就是 HWND; OCX 控件拿到的是控件对象 (IDispatch*, 即生成码里的 vb6_hwnd_<name>)
+   —— IsWindow() 判假, 从前下面每个出口都静默不动作。这一位把它换回窗口。 */
+static void* vb6_CtlWin(void* h) {
+    if (!h) return NULL;
+    if (IsWindow((HWND)h)) return h;
+    return vb6_OcxHost_WindowOf(h);
+}
+
+/* 临时追踪 (C3_GEOM_TRACE=1): 定位 frmPaneCalendar 的宽度换算 */
+static int vb6_geomTrace(void) {
+    static int t = -1;
+    if (t < 0) t = GetEnvironmentVariableW(L"C3_GEOM_TRACE", NULL, 0) > 0;
+    return t;
+}
+static void vb6_geomLog(const char* what, void* ctl, void* win, int a, int b, int c) {
+    if (!vb6_geomTrace()) return;
+    fprintf(stderr, "[C3_GEOM] %s ctl=%p win=%p a=%d b=%d c=%d\n", what, ctl, win, a, b, c);
+    fflush(stderr);
+}
+
 wchar_t* vb6_GetControlText(void* hwnd) {
     if (!hwnd) return NULL;
     HWND h = (HWND)hwnd;
@@ -77,21 +99,32 @@ void vb6_SetOptionValue(void* hwnd, int value) {
 }
 
 int vb6_GetControlVisible(void* hwnd) {
+    void* ctlObj = hwnd;
+    int32_t vis = 0;
+    if (vb6_OcxHost_GetVisible(ctlObj, &vis))
+        return vis ? -1 : 0;   /* OCX 控件: 站点标记 / 控件窗口可见性 */
+    hwnd = vb6_CtlWin(hwnd);
     if (!hwnd) return 0;
     return IsWindowVisible((HWND)hwnd) ? -1 : 0;  // VB6: True=-1
 }
 
 void vb6_SetControlVisible(void* hwnd, int visible) {
+    void* ctlObj = hwnd;
+    if (vb6_OcxHost_SetVisible(ctlObj, visible ? 1 : 0))
+        return;   /* OCX 控件: 有窗口 ShowWindow, windowless 只改站点标记 */
+    hwnd = vb6_CtlWin(hwnd);
     if (!hwnd) return;
     ShowWindow((HWND)hwnd, visible ? SW_SHOW : SW_HIDE);
 }
 
 int vb6_GetControlEnabled(void* hwnd) {
+    hwnd = vb6_CtlWin(hwnd);
     if (!hwnd) return 0;
     return IsWindowEnabled((HWND)hwnd) ? -1 : 0;  // VB6: True=-1
 }
 
 void vb6_SetControlEnabled(void* hwnd, int enabled) {
+    hwnd = vb6_CtlWin(hwnd);
     if (!hwnd) return;
     EnableWindow((HWND)hwnd, enabled ? TRUE : FALSE);
 }
@@ -191,18 +224,35 @@ int vb6_GeomCacheRead(void* hwnd, int slot, int actualPx, int32_t mode, int fall
 }
 
 int vb6_GetControlLeft(void* hwnd) {
-    if (!hwnd) return 0;
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form))   /* windowless: 站点账本 */
+            return (int)vb6_ScalePxToUser((double)r[0], vb6_ContainerScaleMode(form), 0);
+        return 0;
+    }
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
     ScreenToClient(GetParent((HWND)hwnd), &pt);
     int32_t cm = vb6_ContainerScaleMode(vb6_UC_ContainerWindowOf(hwnd));
-    return vb6_GeomCacheRead(hwnd, VB6_GEOM_LEFT, pt.x, cm,
+    int r0 = vb6_GeomCacheRead(hwnd, VB6_GEOM_LEFT, pt.x, cm,
                              (int)vb6_ScalePxToUser((double)pt.x, cm, 0));
+    vb6_geomLog("GetLeft", ctlObj, hwnd, pt.x, cm, r0);
+    return r0;
 }
 
 void vb6_SetControlLeft(void* hwnd, int left) {
-    if (!hwnd) return;
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form))
+            vb6_OcxHost_SetRect(ctlObj, (int32_t)vb6_ScaleUserToPx((double)left,
+                               vb6_ContainerScaleMode(form), 0), 0, 0, 0, 1);
+        return;
+    }
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
@@ -210,11 +260,19 @@ void vb6_SetControlLeft(void* hwnd, int left) {
     int32_t cm = vb6_ContainerScaleMode(vb6_UC_ContainerWindowOf(hwnd));
     SetWindowPos((HWND)hwnd, NULL, vb6_ScaleUserToPx((double)left, cm, 0),
                  pt.y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    vb6_OcxHost_SyncRects(ctlObj);
     vb6_GeomCacheWrite(hwnd, VB6_GEOM_LEFT, left, cm);
 }
 
 int vb6_GetControlTop(void* hwnd) {
-    if (!hwnd) return 0;
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form))   /* windowless: 站点账本 */
+            return (int)vb6_ScalePxToUser((double)r[1], vb6_ContainerScaleMode(form), 1);
+        return 0;
+    }
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
@@ -225,7 +283,15 @@ int vb6_GetControlTop(void* hwnd) {
 }
 
 void vb6_SetControlTop(void* hwnd, int top) {
-    if (!hwnd) return;
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form))
+            vb6_OcxHost_SetRect(ctlObj, 0, (int32_t)vb6_ScaleUserToPx((double)top,
+                               vb6_ContainerScaleMode(form), 1), 0, 0, 2);
+        return;
+    }
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     POINT pt = { rc.left, rc.top };
@@ -234,27 +300,53 @@ void vb6_SetControlTop(void* hwnd, int top) {
     SetWindowPos((HWND)hwnd, NULL, pt.x,
                  vb6_ScaleUserToPx((double)top, cm, 1),
                  0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    vb6_OcxHost_SyncRects(ctlObj);
     vb6_GeomCacheWrite(hwnd, VB6_GEOM_TOP, top, cm);
 }
 
 int vb6_GetControlWidth(void* hwnd) {
-    if (!hwnd) return 0;
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form)) {   /* windowless: 站点账本 */
+            int32_t cmw = vb6_ContainerScaleMode(form);
+            int rw = (int)vb6_ScalePxToUser((double)r[2], cmw, 0);
+            vb6_geomLog("GetWidth(less)", ctlObj, form, r[2], cmw, rw);
+            return rw;
+        }
+        return 0;
+    }
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     int px = rc.right - rc.left;
     int32_t cm = vb6_ContainerScaleMode(vb6_UC_ContainerWindowOf(hwnd));
-    return vb6_GeomCacheRead(hwnd, VB6_GEOM_WIDTH, px, cm,
+    int r2 = vb6_GeomCacheRead(hwnd, VB6_GEOM_WIDTH, px, cm,
                              (int)vb6_ScalePxToUser((double)px, cm, 0));
+    vb6_geomLog("GetWidth", ctlObj, hwnd, px, cm, r2);
+    return r2;
 }
 
 void vb6_SetControlWidth(void* hwnd, int width) {
-    if (!hwnd) return;
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form)) {
+            vb6_geomLog("SetWidth(less)", ctlObj, NULL, width, vb6_ContainerScaleMode(form), 0);
+            vb6_OcxHost_SetRect(ctlObj, 0, 0, (int32_t)vb6_ScaleUserToPx((double)width,
+                               vb6_ContainerScaleMode(form), 0), 0, 4);
+        }
+        return;
+    }
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     int32_t cm = vb6_ContainerScaleMode(vb6_UC_ContainerWindowOf(hwnd));
+    vb6_geomLog("SetWidth", ctlObj, hwnd, width, cm, 0);
     SetWindowPos((HWND)hwnd, NULL, 0, 0,
                  vb6_ScaleUserToPx((double)width, cm, 0),
                  rc.bottom - rc.top, SWP_NOMOVE | SWP_NOZORDER);
+    vb6_OcxHost_SyncRects(ctlObj);
     vb6_GeomCacheWrite(hwnd, VB6_GEOM_WIDTH, width, cm);
     /* czUI fix (3DMenu 方块): AutoRedraw 控件运行时改 Width 时, VB6 会按新客户区
      * 重建持久位图, 这里此前不动 ARDC —— 3DMenu 的 ImgMenuBack (AutoSize+AutoRedraw,
@@ -265,7 +357,14 @@ void vb6_SetControlWidth(void* hwnd, int width) {
 }
 
 int vb6_GetControlHeight(void* hwnd) {
-    if (!hwnd) return 0;
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form))   /* windowless: 站点账本 */
+            return (int)vb6_ScalePxToUser((double)r[3], vb6_ContainerScaleMode(form), 1);
+        return 0;
+    }
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     int px = rc.bottom - rc.top;
@@ -275,13 +374,22 @@ int vb6_GetControlHeight(void* hwnd) {
 }
 
 void vb6_SetControlHeight(void* hwnd, int height) {
-    if (!hwnd) return;
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form))
+            vb6_OcxHost_SetRect(ctlObj, 0, 0, 0, (int32_t)vb6_ScaleUserToPx((double)height,
+                               vb6_ContainerScaleMode(form), 1), 8);
+        return;
+    }
     RECT rc;
     GetWindowRect((HWND)hwnd, &rc);
     int32_t cm = vb6_ContainerScaleMode(vb6_UC_ContainerWindowOf(hwnd));
     SetWindowPos((HWND)hwnd, NULL, 0, 0, rc.right - rc.left,
                  vb6_ScaleUserToPx((double)height, cm, 1),
                  SWP_NOMOVE | SWP_NOZORDER);
+    vb6_OcxHost_SyncRects(ctlObj);
     vb6_GeomCacheWrite(hwnd, VB6_GEOM_HEIGHT, height, cm);
     /* czUI fix: 同 vb6_SetControlWidth —— 运行时改 Height 也要重建 ARDC。 */
     if (GetPropW((HWND)hwnd, L"VB6_AutoRedrawDC")) vb6_AutoRedrawRefit(hwnd);
@@ -294,8 +402,22 @@ void vb6_SetControlHeight(void* hwnd, int height) {
 // 4=Width 8=Height, 未给的参数保持当前值。子控件用父客户区坐标,
 // 顶层窗口 (Form) 用屏幕坐标 —— 与对应属性 setter 的坐标空间一致。
 void vb6_ControlMove(void* hwnd, double L, double T, double W, double H, int mask) {
+    void* ctlObj = hwnd;   /* OCX 控件对象 (若实参是控件而非 HWND); 见下面的 SyncRects */
+    hwnd = vb6_CtlWin(hwnd);
     HWND hW = (HWND)hwnd;
-    if (!hW || !IsWindow(hW)) return;
+    if (!hW || !IsWindow(hW)) {
+        /* windowless 控件: 没有窗口可挪, 容器的账落在站点 rcCtrl 上 */
+        int32_t r[4]; void* form = NULL;
+        if (vb6_OcxHost_GetRect(ctlObj, r, &form)) {
+            int32_t cm = vb6_ContainerScaleMode(form);
+            int x = (mask & 1) ? (int)vb6_ScaleUserToPx(L, cm, 0) : r[0];
+            int y = (mask & 2) ? (int)vb6_ScaleUserToPx(T, cm, 1) : r[1];
+            int w = (mask & 4) ? (int)vb6_ScaleUserToPx(W, cm, 0) : r[2];
+            int h = (mask & 8) ? (int)vb6_ScaleUserToPx(H, cm, 1) : r[3];
+            vb6_OcxHost_SetRect(ctlObj, x, y, w, h, 15);
+        }
+        return;
+    }
     BOOL child = (GetWindowLongW(hW, GWL_STYLE) & WS_CHILD) != 0;
     RECT rc;
     GetWindowRect(hW, &rc);
@@ -334,6 +456,9 @@ void vb6_ControlMove(void* hwnd, double L, double T, double W, double H, int mas
      *   (ucFolder.ViewArea_Resize 里自己就 Move 视图窗体)。*/
     int sizeChanged = ((w != rc.right - rc.left) || (h != rc.bottom - rc.top));
     SetWindowPos(hW, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    /* 账 (Outlook2013 日历只铺 561px): 原地激活的 OCX 要 SetObjectRects 才会重排
+       自己的客户区 —— 只挪控件窗口, 内层 XTPCalendar 仍停在设计尺寸。 */
+    vb6_OcxHost_SyncRects(ctlObj);
     /* 账 #230: Move 与属性赋值是同一件事的两个来路 ⇒ 给的哪几档就存哪几档。
        漏了这一处，Move 之后读 Left 会读到上一轮的旧缓存（缓存自己会被像素闸拦下，
        但那正是"存什么读什么"失效的那一格）。 */
@@ -393,8 +518,26 @@ void vb6_ControlMove(void* hwnd, double L, double T, double W, double H, int mas
 }
 
 // P11.8: hWnd attribute (read-only)
+/* 账 (Outlook2013 frmInbox: `wndCalendarControl.SetScrollBars 0, ScrollBarCalendar.hwnd`):
+  OCX 控件在生成码里的 `vb6_hwnd_<name>` 槽里存的是**控件对象** (IDispatch*), 不是窗口
+  句柄 —— 直接交出去就把一枚堆指针当 HWND 递给了日历 (实测 Codejock 的滚动条因此永远停在
+  0 位, 参考 exe 的滑块在 41%)。VB6 的 `.hWnd` 是控件激活后的那个窗口, 这里照同一口径把它
+  换回来 (无窗口控件回落 NULL, 与旧行为一致)。 */
 void* vb6_GetControlHwnd(void* hwnd) {
-    return hwnd;  // Already the HWND
+    if (!hwnd) return NULL;
+    if (IsWindow((HWND)hwnd)) return hwnd;
+    void* w = vb6_OcxHost_WindowOf(hwnd);
+    /* EXPERIMENT: 交给控件内部那扇等大的子窗口 */
+    while (w && IsWindow((HWND)w)) {
+        HWND child = GetWindow((HWND)w, GW_CHILD);
+        if (!child) break;
+        RECT rp, rc2;
+        GetWindowRect((HWND)w, &rp); GetWindowRect(child, &rc2);
+        if (rc2.right - rc2.left != rp.right - rp.left ||
+            rc2.bottom - rc2.top != rp.bottom - rp.top) break;
+        w = (void*)child;
+    }
+    return w;
 }
 
 // ============================================================
@@ -683,6 +826,20 @@ void vb6_SetControlFontStrikethrough(void* hwnd, int strike) {
 // P13.2: ForeColor/BackColor
 // ============================================================
 
+/* 原生 SysTreeView32 不看 VB6_BackColor/VB6_ForeColor 窗口属性 (那两位只有 RTL
+   自绘与 WM_CTLCOLOR 族消费), 它的底色/文字色只认 TVM_SETBKCOLOR /
+   TVM_SETTEXTCOLOR —— 不发给它, tree.BackColor / tree.ForeColor 在原生树上恒为
+   默认白底黑字 (Outlook2013 左面板 "My Calendars" 树: VB6 是 F8F8F8 底 + #444444
+   字, C3 是白底 + 黑字)。color 允许是 VB6 的系统色负值 (0x8000000n → GetSysColor)。 */
+static void vb6_NativeTreeColorMsg(void* hwnd, UINT msg, int color) {
+    wchar_t cls[64];
+    if (!GetClassNameW((HWND)hwnd, cls, 64)) return;
+    if (_wcsicmp(cls, L"SysTreeView32") != 0) return;
+    COLORREF c = (COLORREF)(color & 0xFFFFFF);
+    if (color & 0x80000000) c = GetSysColor(color & 0xFF);
+    SendMessageW((HWND)hwnd, msg, 0, (LPARAM)c);
+}
+
 int vb6_GetControlForeColor(void* hwnd) {
     if (!hwnd) return 0;
     // For most controls, text color is set via WM_CTLCOLOR* parent handler
@@ -695,6 +852,10 @@ int vb6_GetControlForeColor(void* hwnd) {
 void vb6_SetControlForeColor(void* hwnd, int color) {
     if (!hwnd) return;
     SetPropW((HWND)hwnd, L"VB6_ForeColor", (HANDLE)(INT_PTR)color);
+    /* 原生控件里有一族不看窗口属性、只认自己的消息: SysTreeView32 的文字色就是
+       TVM_SETTEXTCOLOR。不发给它, tree.ForeColor=&H444444 在原生树上恒为黑
+       (Outlook2013 左面板 "My Calendars" 树的 Calendar 行)。 */
+    vb6_NativeTreeColorMsg(hwnd, TVM_SETTEXTCOLOR, color);
     InvalidateRect((HWND)hwnd, NULL, TRUE);
 }
 
@@ -712,6 +873,7 @@ int vb6_GetControlBackColor(void* hwnd) {
 void vb6_SetControlBackColor(void* hwnd, int color) {
     if (!hwnd) return;
     SetPropW((HWND)hwnd, L"VB6_BackColor", (HANDLE)(INT_PTR)color);
+    vb6_NativeTreeColorMsg(hwnd, TVM_SETBKCOLOR, color);
     // Fix 187: 「Set 过」哨兵必须独立于值本身 — color=0 (黑色) 经
     // (HANDLE)(INT_PTR)0 转换后是 NULL, 与「未设置」同构, 宿主判空检查会把
     // 黑色误判为未设置 (颜色对话框默认选黑 → OK 后色块不动的直接原因)。

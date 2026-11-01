@@ -110,6 +110,32 @@ void* vb6_AxContainer_CreateExtender(void* hwndForm, const wchar_t* ctrlName);
 // BeginPaint/EndPaint 之间调用 (IViewObject::Draw).
 void vb6_OcxHost_PaintAll(void* hwndForm, void* hdc);
 
+// 账 (Outlook2013): 容器 Extender 的账 —— VB6 的 `控件.Visible / .Left/.Top/.Width/
+// Height / .Move` 落在控件**窗口**上, 但 C3 生成码把它们当"原生控件"发给拿 HWND 的
+// RTL 出口, 实参却是控件对象 (IDispatch*) ⇒ IsWindow() 判假、静默不动作。
+// 下面三位按控件对象反查站点:
+//   vb6_OcxHost_WindowOf   → 控件激活后的窗口 (windowless 返回 NULL);
+//   vb6_OcxHost_GetVisible → 1 = 是托管控件 (结果写 *outVisible);
+//   vb6_OcxHost_SetVisible → 1 = 已按容器语义处理 (ShowWindow / 站点标记)。
+//   vb6_OcxHost_SyncRects  → 把控件窗口**当前**矩形补发给 IOleInPlaceObject::
+//                            SetObjectRects (OCX 依它重排客户区); 1 = 是托管控件。
+//   vb6_OcxHost_GetRect / SetRect → windowless 控件没有窗口, 容器的几何账落在站点
+//                            的 rcCtrl (像素, 相对 hwndForm 客户区); 1 = 命中。
+void* vb6_OcxHost_WindowOf(void* ctlDisp);
+// 按 (窗体, 实例名) 反查托管控件对象 (容器 Extender 的几何/Move 用); 没有返回 NULL
+void* vb6_OcxHost_DispByName(void* hwndForm, const wchar_t* name);
+// 反向: 窗口(含 Codejock 内部子窗口/外层容器) → 宿主托管控件 IDispatch; 不是控件的窗口返回 NULL
+void* vb6_OcxHost_DispatchOf(void* hwndOrCtl);
+// 把该窗体上**无窗口**的站点控件对象补进 Controls 集合 (有窗的已由窗口枚举覆盖); 返回补入个数
+int32_t vb6_OcxHost_CollectWindowless(void* hwndForm, void** out, int32_t max);
+// 控件类名 (站点创建时按 CLSID 的注册 ProgID 记下); 1 = 确实是本宿主托管的 OCX 控件
+int32_t vb6_OcxHost_TypeNameOf(void* hwndOrCtl, wchar_t* out, int32_t cch);
+int32_t vb6_OcxHost_GetVisible(void* ctlDisp, int32_t* outVisible);
+int32_t vb6_OcxHost_SetVisible(void* ctlDisp, int32_t visible);
+int32_t vb6_OcxHost_SyncRects(void* ctlDisp);
+int32_t vb6_OcxHost_GetRect(void* ctlDisp, int32_t out[4], void** outForm);
+int32_t vb6_OcxHost_SetRect(void* ctlDisp, int32_t x, int32_t y, int32_t w, int32_t h, int32_t mask);
+
 // Fix <vbeclipse> 2026-10-07: 窗体 AutoRedraw=True 时, 把记忆 DC (VB6_AutoRedrawDC)
 // 整块 BitBlt 到屏幕 DC — VB6 语义: AutoRedraw 窗体的所有 GDI 绘制先落记忆位图,
 // WM_PAINT 再把记忆位图刷上屏 (见 3DMenu: 每 10ms 把环形图标合成进 Me.hdc, 靠窗体

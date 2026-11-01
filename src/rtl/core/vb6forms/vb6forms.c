@@ -485,6 +485,17 @@ void* vb6_CreateFormWindowB(const char* className, const char* formName,
 // 有 v6 清单就主题化, C3 给每个 exe 都注入 v6 清单(driver_link.cpp embedManifestViaMt),
 // 所以"关样式"在清单工程里恒为偏差。extlist 当时看到经典外观, 是它那份参考 exe
 // 没有清单(= 进程内无 v6 上下文), 属清单策略问题, 不该由控件层替它承担。
+// 账 (Outlook2013 FrameBorder): VB6 的 Frame 是 **BorderStyle = 0/1 两档**的外观
+// (0 = None 只留一块底色, 1 = Fixed Single 才画蚀刻框 + 标题), 而本方把它建成了
+// BUTTON/BS_GROUPBOX —— 后者恒画框和标题, 与 None 档差一整圈 1px 线
+// (实测 frmInbox 的 FrameBorder 声明 BorderStyle = 0 'None, 参考 exe 该处纯白,
+//  本方画了 #dcdcdc 的左右两列)。vb6_SetBorderStyle 已经把档位记进 VB6_BorderStyle
+// (值 = 档位 + 1, 0 档存 1、1 档存 2; 属性缺席 = 默认 1), 这里按它决定画什么。
+static int vb6_GBoxBorderStyle(HWND hwnd) {
+    INT_PTR v = (INT_PTR)GetPropW(hwnd, L"VB6_BorderStyle");
+    return v ? (int)(v - 1) : 1;
+}
+
 // Fix 162f-extlist: 取 groupbox 的标题底色 (父窗 BackColor, 未设回落 BTNFACE)。
 static COLORREF vb6_GBoxTitleBg(HWND hwnd) {
     HWND parent = GetParent(hwnd);
@@ -513,6 +524,21 @@ static LRESULT CALLBACK vb6_GroupBoxSubclassProc(HWND hwnd, UINT msg, WPARAM wp,
     //   ③ 再单独把**标题文字下面那条带**重新填灰 (对付它在白底上画的文字残影)。
     // 判据: 只对有非空 Caption 的 groupbox 这么干 (空标题 Frame2 无此带)。
     if (msg == WM_PAINT) {
+        // None 档: 整块只留底色 (VB6 Frame BorderStyle=0 不画框也不显示 Caption)。
+        if (vb6_GBoxBorderStyle(hwnd) == 0) {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            if (hdc) {
+                RECT rc; GetClientRect(hwnd, &rc);
+                HBRUSH br = CreateSolidBrush(vb6_GBoxTitleBg(hwnd));
+                if (br) {
+                    FillRect(hdc, &rc, br);
+                    DeleteObject(br);
+                }
+                EndPaint(hwnd, &ps);
+            }
+            return 0;
+        }
         wchar_t cap[256] = {0};
         GetWindowTextW(hwnd, cap, 256);
         LRESULT r = orig ? CallWindowProcW(orig, hwnd, msg, wp, lp)

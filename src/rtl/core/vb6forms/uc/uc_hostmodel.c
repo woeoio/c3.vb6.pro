@@ -349,8 +349,18 @@ static int32_t vb6_ho_putFontMember(void* fontProxy, const wchar_t* name, const 
  * 站点名由调用方交进来, 打出的字节与改前那三条各自的手抄完全同形。 */
 static void vb6_ho_reportUnknown(const wchar_t* site, const wchar_t* name, void* obj) {
     g_host_unknown_member++;
-    fwprintf(stderr, L"[C3_HOST_MEMBER_MISS #%ld] site=%ls name=\"%ls\" obj=%p\n",
-             (long)g_host_unknown_member, site, name ? name : L"(null)", obj);
+    {   /* 诊断: 认不出时把接收者身份一起打出来 (窗口? 类名? 父类名?) */
+        wchar_t cls[128] = L"-", pcls[128] = L"-";
+        HWND h = (HWND)obj;
+        if (h && IsWindow(h)) {
+            GetClassNameW(h, cls, 128);
+            HWND p = GetParent(h);
+            if (p) GetClassNameW(p, pcls, 128);
+        }
+        fwprintf(stderr, L"[C3_HOST_MEMBER_MISS #%ld] site=%ls name=\"%ls\" obj=%p isWin=%d cls=%ls parent=%ls\n",
+                 (long)g_host_unknown_member, site, name ? name : L"(null)", obj,
+                 (h && IsWindow(h)) ? 1 : 0, cls, pcls);
+    }
     fflush(stderr);
 }
 

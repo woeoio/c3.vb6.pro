@@ -203,7 +203,17 @@
                 // 缺的是属性面。这里只给 VB6 的**默认观感**: LineStyle=0 (画树线、根层不画)
                 // + BorderStyle=1 (Fixed)。其余四位由设计期 Init 那条补 (下面 vb6_TreeView_Init)。
                 // WS_BORDER: 与 ListBox/Dir/File 同口径，否则 VB6 那圈凹边框没了。
-                style |= 0x0002L | kWsBorder;   // TVS_HASLINES
+                style |= 0x0002L;               // TVS_HASLINES
+                {
+                    /* XtremeSuiteControls.TreeView 的边框开关叫 ShowBorder (不是标准
+                       MSComctlLib 的 BorderStyle)。设计期显式给了 ShowBorder=0 就不能再套
+                       WS_BORDER —— Outlook2013 左面板 "My Calendars" 树在 VB6 里没有边框。 */
+                    auto sbIt = ctrl.properties.find("ShowBorder");
+                    if (sbIt != ctrl.properties.end() && sbIt->second.intValue == 0)
+                        style &= ~kWsBorder;
+                    else
+                        style |= kWsBorder;     // 标准 TreeView / 默认: 保留凹边框
+                }
                 createCaption = "";
                 break;
             case FrmControlType::DTPicker: {

@@ -166,6 +166,10 @@ intptr_t vb6_ComGetLongPtrProp(void* disp, const wchar_t* propName);
 double vb6_ComGetDoubleProp(void* disp, const wchar_t* propName);
 // COM属性Get→对象 (内部UnpackObject+VarFree)
 void* vb6_ComGetObjectProp(void* disp, const wchar_t* propName);
+// `Set <接口类型变量> = <对象>` 的类型检查 (VB6: 不符 = 错误 13):
+// 是本宿主托管的 OCX 控件时按控件类名比对该接口名, 不符返回 NULL;
+// 其余对象原样返回 (普通 COM 对象 / 工程类 / 宿主包装器都不受影响)。
+void* vb6_ComObjectTypeCast(void* obj, const wchar_t* typeName);
 
 // 参数化属性Get (带参数, 如Dictionary.Item(key))
 // 内部使用DISPATCH_METHOD|DISPATCH_PROPERTYGET组合标志

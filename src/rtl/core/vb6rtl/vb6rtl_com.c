@@ -632,6 +632,32 @@ static void vb6_ComPackArrayOut(const void* arrV, VARIANT* out) {
     out->vt = VT_EMPTY;
     if (!arrV) return;
     if (vb6_SaIs1D(a1)) {
+        /* 账 (Outlook2013 全无图标): `vb6_ArrayCreate` 造的是 **Variant 元素档**载体
+           (VB6 里 `Array(...)` 本来就是一维 Variant 数组), 而下面那张白名单只收可直搬
+           的数值档 —— 认不出就 return, 整枚实参变成 VT_EMPTY。接收方
+           (Codejock `ImageManager.LoadBitmap` 的 ID 数组) 看到"没有实参"就静默什么
+           都不加载: hr=0、一枚图标也没进管理器, 于是 ribbon 只剩文字。
+           这里把 Variant 载体的元素逐个装箱成真 VARIANT: 用**带权**出口(串复制 /
+           对象 AddRef), 因为收下这一枚 VARIANT 的那一头会用 VariantClear 释放它。 */
+        if (a1->elemType == vb6_sa_variant) {
+            int32_t i;
+            if (a1->elemSize != (int32_t)sizeof(vb6_VARIANT) || a1->count <= 0 || !a1->data) return;
+            rg[0].lLbound = (ULONG)a1->lBound;
+            rg[0].cElements = (ULONG)a1->count;
+            psa = SafeArrayCreate(VT_VARIANT, 1, rg);
+            if (!psa) return;
+            if (FAILED(SafeArrayAccessData(psa, &pvData)) || !pvData) {
+                SafeArrayDestroy(psa);
+                return;
+            }
+            for (i = 0; i < a1->count; i++)
+                vb6_VariantPackCopyInto(&VB6_SA_AT(vb6_VARIANT, (void*)a1, i),
+                                        (VARIANT*)pvData + i);
+            SafeArrayUnaccessData(psa);
+            out->vt = (VARTYPE)(VT_ARRAY | VT_VARIANT);
+            out->parray = psa;
+            return;
+        }
         vt = vb6_ComSaVtBlittable(a1->elemType);
         if (!vt) return;
         esz = vb6_SaElemSize(a1->elemType);

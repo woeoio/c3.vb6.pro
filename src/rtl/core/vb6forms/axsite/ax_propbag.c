@@ -51,6 +51,17 @@ static HRESULT STDMETHODCALLTYPE pb_Read(IPropertyBag* This, LPCOLESTR pszPropNa
     int dbg = (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0);
     if (dbg) fprintf(stderr, "[C3_BAG] Read '%ls' wantVT=%d count=%d\n",
                      pszPropName, (int)pVar->vt, b->count);
+    /* .frm 里 `_ExtentX/_ExtentY` (HIMETRIC) 是容器的账, 不在生成码的属性表里;
+     * VB6 一定答得出, 这里按 SetExtent 同一尺寸补上. */
+    if (wcscmp(pszPropName, L"_ExtentX") == 0 || wcscmp(pszPropName, L"_ExtentY") == 0) {
+        LONG v = (pszPropName[7] == L'X') ? b->extentX : b->extentY;
+        VARTYPE want = pVar->vt;
+        VariantInit(pVar);
+        if (want == VT_I2) { pVar->vt = VT_I2; pVar->iVal = (short)v; }
+        else               { pVar->vt = VT_I4; pVar->lVal = v; }
+        if (dbg) fprintf(stderr, "[C3_BAG]   hit extent %ld\n", (long)v);
+        return S_OK;
+    }
     for (int i = 0; i < b->count; i++) {
         const Vb6OcxProp* p = &b->props[i];
         if (wcscmp(pszPropName, p->name) != 0) continue;

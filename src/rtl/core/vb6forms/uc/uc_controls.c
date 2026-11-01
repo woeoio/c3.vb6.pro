@@ -113,6 +113,10 @@ static int32_t vb6_uc_collectChildren(void* formHwnd, void** out, int32_t max) {
         if (!seen) out[n++] = (void*)child;
         child = GetWindow(child, GW_HWNDNEXT);
     }
+    // 账 (Outlook2013 左面板 VisualTheme): VB6 的 Controls 含**无窗口**的 OCX 控件,
+    // 窗口枚举看不见它们 —— 不补进来, `For Each Ctrl In Form.Controls` 就永远
+    // 遍历不到 (CtrlCaption.VisualTheme 一类设置全部落空)。
+    n += vb6_OcxHost_CollectWindowless(formHwnd, out + n, max - n);
     return n;
 }
 

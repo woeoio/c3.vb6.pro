@@ -139,6 +139,12 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
         if (p == "linestyle" || p == "indentation") {
             return Vb6Type::Long;
         }
+        // IconSize 是 XtremeSuiteControls.TreeView 的扩展 (像素), RTL getter 给 int32_t。
+        // 原生 SysTreeView32 没有这一格 —— RTL 拿它当"预留图标列"的宽度 (挂 16x16
+        // ImageList)，见 vb6forms_treeview.c 的 SetIconSize。
+        if (p == "iconsize") {
+            return Vb6Type::Long;
+        }
         // 账 #128: 这三条 getter 走 `vb6_TvBitAsVbBool` ⇒ 答的就是 VB6 的 -1/0，
         // 所以它们与 #124 那两条同档（以前跟着"全是 int32_t"那一句一起吃 Long）。
         if (p == "checkboxes" || p == "hottracking" || p == "hideselection") {
@@ -580,6 +586,7 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
     case FrmControlType::TreeView:
         if (propLower == "linestyle") return "vb6_TreeView_GetLineStyle";
         if (propLower == "indentation") return "vb6_TreeView_GetIndentation";
+        if (propLower == "iconsize") return "vb6_TreeView_GetIconSize";
         if (propLower == "checkboxes") return "vb6_TreeView_GetCheckBoxes";
         if (propLower == "hottracking") return "vb6_TreeView_GetHotTracking";
         if (propLower == "hideselection") return "vb6_TreeView_GetHideSelection";
@@ -997,6 +1004,7 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
     case FrmControlType::TreeView:
         if (propLower == "linestyle") return "vb6_TreeView_SetLineStyle";
         if (propLower == "indentation") return "vb6_TreeView_SetIndentation";
+        if (propLower == "iconsize") return "vb6_TreeView_SetIconSize";
         if (propLower == "checkboxes") return "vb6_TreeView_SetCheckBoxes";
         if (propLower == "hottracking") return "vb6_TreeView_SetHotTracking";
         if (propLower == "hideselection") return "vb6_TreeView_SetHideSelection";

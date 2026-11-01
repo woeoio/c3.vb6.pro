@@ -561,9 +561,22 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
     WORD callFlags = vb6_ComFlagsFor(pDisp, dispid, argc);
     HRESULT hr = vb6_ComInvoke(pDisp, dispid, callFlags, &dp, result, &excep, &argErr);
 
-    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0)
-        fprintf(stderr, "[C3_COM] Call '%ls' hr=0x%08lX vt=%d\n",
-                methodName, (unsigned long)hr, result ? result->vt : -1); fflush(stderr);
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        long val = -1;
+        if (result) {
+            if (result->vt == VT_I4) val = result->lVal;
+            else if (result->vt == VT_BOOL) val = result->boolVal;
+        }
+        fprintf(stderr, "[C3_COM] Call '%ls' hr=0x%08lX vt=%d val=%ld\n",
+                methodName, (unsigned long)hr, result ? result->vt : -1, val);
+        if (wcscmp(methodName, L"SetScrollBars") == 0) {
+            for (int32_t ai = 0; ai < argc; ai++)
+                fprintf(stderr, "[C3_COM]   arg[%ld] vt=%d val=%ld\n", (long)ai,
+                        args[ai] ? args[ai]->vt : -1,
+                        (long)((args[ai] && args[ai]->vt == VT_I4) ? args[ai]->lVal : 0));
+        }
+        fflush(stderr);
+    }
 
     if (FAILED(hr)) {
         vb6_ComCheckError(hr, &excep, L"ComCall");
@@ -730,6 +743,54 @@ static void* vb6_ComCallObjectDefaultRcv(void* disp, void* args_void, int32_t ar
     vb6_ComVarFree(pv);
     return obj;
 }
+/* 账 (Outlook2013 左面板 VisualTheme): 宿主模型只认窗口层的 Extender 成员;
+ * `For Each Ctrl In Form.Controls: Set CtrlCaption = Ctrl: CtrlCaption.VisualTheme = v`
+ * 交出的接收者是控件**窗口** (Codejock 还有内部子窗口), 控件自有属性以前被
+ * 宿主模型静默丢弃。这里把窗口换回控件 IDispatch, 但**只在**控件类型库确实认得
+ * 这个名字时才换 —— Extender 那一档 (几何/可见性/标题) 仍交宿主模型, 行为不变。 */
+static int32_t vb6_ComIsExtenderMember(const wchar_t* name) {
+    static const wchar_t* const kExt[] = {
+        L"Left", L"Top", L"Width", L"Height", L"Move", L"Visible", L"Enabled",
+        L"Caption", L"Text", L"Tag", L"Name", L"Index", L"Parent", L"Container",
+        L"hWnd", L"hWndUserControl", L"Object", L"Extender", L"TabIndex", L"TabStop",
+        L"DragIcon", L"DragMode", L"OLEDropMode", L"WhatsThisHelpID", L"HelpContextID"
+    };
+    for (int i = 0; i < (int)(sizeof(kExt) / sizeof(kExt[0])); i++)
+        if (_wcsicmp(name, kExt[i]) == 0) return 1;
+    return 0;
+}
+
+static void* vb6_ComOcxRcvOf(void* disp, const wchar_t* name) {
+    if (!disp || !name) return NULL;
+    if (vb6_ComIsExtenderMember(name)) return NULL;
+    /* Controls 集合交出的项常是宿主包装器: 先透明解包, 解包结果可能是控件对象本身 */
+    extern void* vb6_UC_UnwrapHost(void* obj);
+    void* raw = vb6_UC_UnwrapHost(disp);
+    if (!raw) raw = disp;
+    void* ocx = vb6_OcxHost_DispatchOf(raw);
+    if (!ocx) return NULL;
+    if (vb6_getDispid((IDispatch*)ocx, name) == DISPID_UNKNOWN) return NULL;
+    return ocx;
+}
+
+/* 账 (Outlook2013 左面板 VisualTheme): VB6 的
+ *   `Dim CtrlCaption As ShortcutCaption` … `Set CtrlCaption = Ctrl`
+ * 是按**声明接口** QI, 控件类型不符 ⇒ 错误 13; 工程里那句多在
+ * `On Error Resume Next` 里, 于是赋值根本没发生 (VB6 实测: 该循环对
+ * CommandBars / DockingPaneManager 之类毫无作用)。
+ * C3 的 Controls 集合交出的是裸 IDispatch, 赋值是一句裸指针拷贝 ⇒ 循环里
+ * 每一次 `CtrlCaption.VisualTheme = v` 都会打到 CommandBars 自己, 把 ribbon
+ * 主题改坏 (实测: 整个 ribbon 变黑)。这里补上同一道类型检查:
+ * 是本宿主托管的 OCX 控件时按控件类名比对, 不符返回 NULL (调用点据此跳过);
+ * 其余对象 (普通 COM 对象 / 工程类 / 宿主包装器) 一律原样通过 —— 不改判。 */
+void* vb6_ComObjectTypeCast(void* obj, const wchar_t* typeName) {
+    if (!obj || !typeName) return obj;
+    wchar_t ctrlType[128];
+    if (vb6_OcxHost_TypeNameOf(obj, ctrlType, 128) && _wcsicmp(ctrlType, typeName) != 0)
+        return NULL;
+    return obj;
+}
+
 // COM属性Get (返回VARIANT*)
 static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
     /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
@@ -737,6 +798,21 @@ static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
         vb6_ComLateBindMiss(L"ComGetProp", propName, disp);
     }
     if (!disp) return NULL;
+    /* 账 (Outlook2013 主区 Report 盖住 Calendar): VB6 的 `控件.Visible` 是**容器
+       Extender** 的账, 实际落的是控件自己的窗口。而这里拿到的是控件对象
+       (IDispatch*), 硬发下去只是问了控件自身一个 dispid=2 的属性 —— 窗口照样可见。
+       先问 OCX 宿主: 命中 (返回 1) 就按容器语义答复。 */
+    if (propName && _wcsicmp(propName, L"Visible") == 0) {
+        int32_t vis = 0;
+        if (vb6_OcxHost_GetVisible(disp, &vis)) {
+            VARIANT* vres = (VARIANT*)calloc(1, sizeof(VARIANT));
+            if (vres) {
+                vres->vt = VT_BOOL;
+                vres->boolVal = vis ? VARIANT_TRUE : VARIANT_FALSE;
+            }
+            return (void*)vres;
+        }
+    }
     /* Fix 164z2-dbg: C3_COM_TRACE 入口日志 */
     if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
         fprintf(stderr, "[C3_COM] GetProp entry: disp=%p isFont=%d isHost=%d name=%ls\n",
@@ -788,6 +864,8 @@ static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
         }
         return (void*)eres;
     }
+    /* 账 (Outlook2013 左面板 VisualTheme): 控件窗口 → 控件 IDispatch (只换控件自有成员) */
+    { void* ocxRcv = vb6_ComOcxRcvOf(disp, propName); if (ocxRcv) disp = ocxRcv; }
     /* Fix 112: 宿主对象分派 (见 vb6_ComCall 注释) */
     if (vb6_Host_IsHostObject(disp)) {
         char hout[64];
@@ -825,9 +903,16 @@ static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
 
     HRESULT hr = vb6_ComInvoke(pDisp, dispid, (DISPATCH_METHOD | DISPATCH_PROPERTYGET), &dp, result, &excep, &argErr);
 
-    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0)
-        fprintf(stderr, "[C3_COM] GetProp '%ls' hr=0x%08lX vt=%d\n",
-                propName, (unsigned long)hr, result ? result->vt : -1); fflush(stderr);
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        long val = -1;
+        if (result) {
+            if (result->vt == VT_I4) val = result->lVal;
+            else if (result->vt == VT_BOOL) val = result->boolVal;
+        }
+        fprintf(stderr, "[C3_COM] GetProp '%ls' rcv=%p hr=0x%08lX vt=%d val=%ld\n",
+                propName, disp, (unsigned long)hr, result ? result->vt : -1, val);
+        fflush(stderr);
+    }
 
     if (FAILED(hr)) {
         vb6_ComCheckError(hr, &excep, L"ComGetProp");
@@ -914,6 +999,17 @@ static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_v
             fflush(stderr);
         }
     }
+    /* 账 (Outlook2013 主区 Report 盖住 Calendar): `控件.Visible = v` 是**容器
+       Extender** 的账。此处 disp 是控件对象 (IDispatch*), 交给控件自身只会改它
+       内部的一个属性, 承载它的 AfxOleControl 窗口照旧可见 ⇒ Report 盖住 Calendar。
+       先问 OCX 宿主: 命中 (返回 1) 就按容器语义落窗口/站点。 */
+    if (disp && propName && _wcsicmp(propName, L"Visible") == 0 && value_void) {
+        int32_t vis = (int32_t)vb6_VariantToDouble(*(VARIANT*)value_void);
+        if (vb6_OcxHost_SetVisible(disp, vis)) {
+            free(value_void);
+            return;
+        }
+    }
     /* Fix 125: 字体结构体 (非 COM 对象) 直接写字段 —— 这是 `Property Set X_Font` 里
        `With m_X_Font: .Name = New_Font.Name ...` 的实现路径; 走 Invoke 必崩。 */
     if (disp && vb6_UC_IsFont(disp)) {
@@ -966,8 +1062,14 @@ static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_v
         free(value_void);
         return;
     }
+    /* 账 (Outlook2013 左面板 VisualTheme): 控件窗口 → 控件 IDispatch (只换控件自有成员) */
+    { void* ocxRcv = vb6_ComOcxRcvOf(disp, propName); if (ocxRcv) disp = ocxRcv; }
     /* Fix 112: 宿主对象分派 (见 vb6_ComCall 注释) */
     if (disp && vb6_Host_IsHostObject(disp)) {
+        if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+            fprintf(stderr, "[C3_COM] SetProp '%ls' rcv=%p -> HOST\n", propName, disp);
+            fflush(stderr);
+        }
         char hin[64];
         vb6_Host_FromWinVariant(value_void, hin);
         vb6_Host_SetProp(disp, propName, hin);
@@ -1004,6 +1106,12 @@ static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_v
     UINT argErr = 0;
 
     HRESULT hr = vb6_ComInvoke(pDisp, dispid, DISPATCH_PROPERTYPUT, &dp, NULL, &excep, &argErr);
+
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] SetProp '%ls' rcv=%p -> COM dispid=%ld hr=0x%08lX\n",
+                propName, disp, (long)dispid, (unsigned long)hr);
+        fflush(stderr);
+    }
 
     if (FAILED(hr)) {
         vb6_ComCheckError(hr, &excep, L"ComSetProp");
@@ -1078,7 +1186,13 @@ static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) 
     // 走下面的 getDispid+Invoke 必 "not found"。与 vb6_ComSetProp (line 526) 同口径:
     // 先把 objRef 包成 VT_DISPATCH 的 Win VARIANT, 转成 vb6_VARIANT 交给 Host_SetProp,
     // 后者落到 vb6_UC_OwnPropSet 的名字桥 (uc_hostmodel_setprop.inc)。
+    /* 账 (Outlook2013 左面板 VisualTheme): 控件窗口 → 控件 IDispatch (只换控件自有成员) */
+    { void* ocxRcv = vb6_ComOcxRcvOf(disp, propName); if (ocxRcv) disp = ocxRcv; }
     if (vb6_Host_IsHostObject(disp)) {
+        if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+            fprintf(stderr, "[C3_COM] SetRef '%ls' rcv=%p -> HOST\n", propName, disp);
+            fflush(stderr);
+        }
         VARIANT winObj; VariantInit(&winObj);
         winObj.vt = VT_DISPATCH; winObj.pdispVal = (IDispatch*)objRef;
         char hin[64];
@@ -1115,6 +1229,12 @@ static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) 
     HRESULT hr = vb6_ComInvoke(pDisp, dispid, DISPATCH_PROPERTYPUTREF, &dp, NULL, &excep, &argErr);
     if (FAILED(hr)) {
         hr = vb6_ComInvoke(pDisp, dispid, DISPATCH_PROPERTYPUT, &dp, NULL, &excep, &argErr);
+    }
+
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] SetRef '%ls' rcv=%p -> COM dispid=%ld hr=0x%08lX\n",
+                propName, disp, (long)dispid, (unsigned long)hr);
+        fflush(stderr);
     }
 
     if (FAILED(hr)) {
@@ -1167,7 +1287,8 @@ void* vb6_ComGetPropArg(void* disp, const wchar_t* propName,
 
 void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
     void* owned = NULL;
-    vb6_ComSetPropRcv(vb6_ComDispViewIn(disp, &owned), propName, value_void);
+    void* d = vb6_ComDispViewIn(disp, &owned);
+    vb6_ComSetPropRcv(d, propName, value_void);
     vb6_ComDispViewOut(owned);
 }
 

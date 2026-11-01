@@ -415,6 +415,29 @@
             // ⇒ 覆写不退旧值。改走主人的地址那一臂：元素档非空 = 这一形有可寻址的地址临时量，
             // 下标算术仍只算一次；真调用形态 (`dict(key)`) 元素档为空串 ⇒ 维持裸拷贝。
             const std::string elemTy140 = classArraySlotElemType(target);
+            // 账 (Outlook2013 左面板 VisualTheme): VB6 的 `Set <接口类型变量> = <对象>`
+            // 先按**声明类型** QI, 不符 = 错误 13 —— 工程里那句几乎都在
+            // `On Error Resume Next` 里, 于是赋值根本没发生 (实测 VB6: 该循环对
+            // CommandBars / DockingPaneManager 一律无效)。C3 发的是裸指针拷贝, 而
+            // `Form.Controls` 交给我们的是一枚裸 IDispatch ⇒ 循环里
+            // `CtrlCaption.VisualTheme = v` 会一路打到 CommandBars 自己, 把 ribbon
+            // 主题改坏 (实测: 整个 ribbon 变黑, 标签条消失)。
+            // 判据只有两问, 多一问都不加: 左槽是早期绑定的 COM 接口变量, 右值是一枚
+            // **裸对象变量**。其余形状 (成员/下标槽、属性表达式、NULL、_New) 一字不动。
+            const Symbol* comTypeCheckSym = nullptr;
+            if (!target.empty() && target.find_first_of("(-") == std::string::npos
+                && node.value && node.value->kind == ASTNodeKind::IdentifierExpr
+                && value != "NULL" && value.find('(') == std::string::npos) {
+                auto itTC = knownTypedComVars_.find(targetLower);
+                if (itTC != knownTypedComVars_.end() && itTC->second
+                    && (itTC->second->kind == SymbolKind::ComClass
+                        || itTC->second->kind == SymbolKind::ComInterface)) {
+                    std::string vLowTC = value;
+                    std::transform(vLowTC.begin(), vLowTC.end(), vLowTC.begin(), ::tolower);
+                    if (knownObjectVars_.count(vLowTC) || knownTypedComVars_.count(vLowTC))
+                        comTypeCheckSym = itTC->second;
+                }
+            }
             // 账 #305 第二百零三刀: 这格槽的**声明档**是新式接口视图 (`vb6_ivref_<I>*`) ⇒ 交给视图那两位
             // 主人，别让工程类主人接手 —— 它只会按声明名拼 `vb6_cls_<接口名>_AddRef/_Release`(接口档不发
             // 定义 ⇒ VbEclipse 链接期最后两声)，而且把 `New <实现者>` 的实例指针直接写进视图槽。
@@ -466,6 +489,19 @@
                 //     (实测 Common.bas PictureFromHandle: 每发图片漏一只 IPicture)。
                 // `New` / 工程类返回 / 视图 / Nothing 四形各归各的主人, 这里都不接手。
                 emitLateSlotRefClaim(target, value);
+            } else if (comTypeCheckSym) {
+                // 声明类型 = 类型库里的 coclass 名 (ShortcutCaption); 生成码的槽类型
+                // 是该 coclass 的默认接口 (vb6_ComIface__DShortcutCaption*), 与
+                // cgen_base_type 的映射同源。RTL 侧按控件类名 (ProgID 尾段) 比对,
+                // 只有"本宿主托管的 OCX 控件"那一路才可能返回 NULL —— 其余对象原样通过。
+                std::string ifaceNmTC = comTypeCheckSym->name;
+                if (comTypeCheckSym->kind == SymbolKind::ComClass
+                    && !comTypeCheckSym->comDefaultIfaceName.empty())
+                    ifaceNmTC = comTypeCheckSym->comDefaultIfaceName;
+                c_.emitLine("{ void* _vb6_chk = vb6_ComObjectTypeCast(" + value
+                            + ", L\"" + comTypeCheckSym->name + "\"); if (_vb6_chk) "
+                            + target + " = (vb6_ComIface_" + cIdent(ifaceNmTC)
+                            + "*)_vb6_chk; }  /* Set: 类型不符 = 错误 13 (被 On Error Resume Next 吞掉) */");
             } else {
                 c_.emitLine(target + " = " + value + ";  /* Set */");
             }
