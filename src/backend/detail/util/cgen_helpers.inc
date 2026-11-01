@@ -776,7 +776,10 @@
     // 不在这张表里（它在 SelectCaseStmt::elseCase）。空表答 NoString —— 没有标签就没有证据。
     // 第319刀多一档：Mixed = 至少一枚 String 且并非全是 ⇒ 主语是槽时逐项 VarCmp。
     enum class SelectCaseLabelClass { AllString, Mixed, NoString };
-    SelectCaseLabelClass selectCaseLabelClass(SelectCaseStmt& node) const;
+    // 账 #305 第324刀: 同一次遍历顺带回答「有没有一枚标签**本身就是整枚 Variant 槽**」。
+    // 传 *outSlotLabel 即写；不开第二处问句 —— 承载档由标签回答这条口径只有一个主人。
+    SelectCaseLabelClass selectCaseLabelClass(SelectCaseStmt& node,
+                                              bool* outSlotLabel = nullptr) const;
 
     // ai/009 §5.10 (P3): 给**窄整型目标**的赋值右值套上溢出检查 (vb6_ChkByte/
     // ChkInt/ChkLong), 越界即 run-time error 6。原先这类赋值是裸 `t = v;`, 由 C

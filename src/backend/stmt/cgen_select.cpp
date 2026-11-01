@@ -13,18 +13,30 @@ namespace vb6c3 {
 // `Case a To b` 的两端都是标签；`Case Else` 不在 node.cases 里，不用管。
 // 三类答案：AllString = 每一枚都答得出 String；Mixed = 至少一枚 String 且并非全是；
 // NoString = 没有 String 标签（含拿不到标签/类型问不出）—— 后两档以外**宁可退回现行为也不猜**。
-CCodeGen::SelectCaseLabelClass CCodeGen::selectCaseLabelClass(SelectCaseStmt& node) const {
+CCodeGen::SelectCaseLabelClass CCodeGen::selectCaseLabelClass(SelectCaseStmt& node,
+                                                             bool* outSlotLabel) const {
     bool sawLabel = false;
     bool sawString = false;
     bool allString = true;
+    bool sawSlotLabel = false;
+    // 槽标签的问法与主语同一条（第319刀那道闸）：只认**按名在册的 Variant 槽**这一形。
+    // 调用 / 成员读那一档 C 侧是 int32_t 还是整枚槽问不出（要发了码才知道），宁可不改口。
+    auto labelIsSlot = [&](const Expr* e) -> bool {
+        if (!e || e->kind != ASTNodeKind::IdentifierExpr) return false;
+        std::string n = static_cast<const IdentifierExpr&>(*e).name;
+        std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+        return knownVariantVars_.count(n) != 0;
+    };
     for (auto& clause : node.cases) {
         for (auto& cv : clause->values) {
             if (!cv.value || !TypeSystem::isString(inferExprType(*cv.value))) allString = false;
             else sawString = true;
             if (cv.toValue && !TypeSystem::isString(inferExprType(*cv.toValue))) allString = false;
             sawLabel = true;
+            if (labelIsSlot(cv.value.get()) || labelIsSlot(cv.toValue.get())) sawSlotLabel = true;
         }
     }
+    if (outSlotLabel) *outSlotLabel = sawSlotLabel;
     if (!sawLabel) return SelectCaseLabelClass::NoString;
     if (allString) return SelectCaseLabelClass::AllString;
     return sawString ? SelectCaseLabelClass::Mixed : SelectCaseLabelClass::NoString;
@@ -43,11 +55,18 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     // 假** ⇒ 恒落 Case Else。靶子 = ComCtlsDemo 工具栏 `Select Case Button.Tag`
     // （TbrButton.cls:73 `Property Get Tag() As Variant`）：点 "Show ListBoxW1" 该让
     // SysListView32 隐身、ListBox 上位，实测只弹了一句 "clicked button 5"、零枚窗口翻转。
-    const SelectCaseLabelClass labelClass = selectCaseLabelClass(node);
+    bool slotLabel = false;
+    const SelectCaseLabelClass labelClass = selectCaseLabelClass(node, &slotLabel);
     if (!isStringSelect && !isFloatSelect && testType == Vb6Type::Variant
         && labelClass == SelectCaseLabelClass::AllString) {
         isStringSelect = true;
     }
+    // 账 #305 第324刀 = 311/319 留下的最后那一档（账 #606）：标签里有**整枚 Variant 槽**时，
+    // 三条整档承载（串承载 / 浮点承载 / Long 解包）没有一条成立 —— 它们都把主语折成一个
+    // 标量，再拿标量去 `==` / `vb6_StrCmp` 那枚结构体，发出来的是**编不过的 C**
+    // （实测 `error C2088: “==”: 对于 struct 非法`，四种主语档同形：Variant / Long / String / Double）。
+    // VB6 那一侧本来就是按 Case 项逐项 VarCmp，所以承载档一律改走整枚槽 + 下面那条 VarCmp 链。
+    if (slotLabel) { isStringSelect = false; isFloatSelect = false; }
     // 账 #305 第319刀 = 311 留下的那一形：串数**混合**标签。同一份标签里既有 Case "a"
     // 又有 Case 1 时，311 的两条整档出口（串承载 / Long 解包）都不成立 —— 只有逐项
     // 按该标签自己的档比才对。承载档改成整枚槽，逐项走 VarCmp（与 binary 比较同一份
@@ -55,7 +74,8 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     // 只放开「主语**真是**槽」这一形（下面 testIsVariant 那一道闸），类型化 getter
     // （inferExprType 答 Variant 而 C 侧是 int32_t 的那档）仍走 ToLong。
     const bool wantVariantCarrier = !isStringSelect && !isFloatSelect
-        && testType == Vb6Type::Variant && labelClass == SelectCaseLabelClass::Mixed;
+        && (slotLabel
+            || (testType == Vb6Type::Variant && labelClass == SelectCaseLabelClass::Mixed));
 
     emitExpr(*node.testExpr);
     if (isComMarker_) {
@@ -100,7 +120,9 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     }
     // 混合档的第二道闸：类型化 getter（inferExprType 答 Variant、C 侧却是 int32_t 那档）
     // 不满足 testIsVariant ⇒ 退回 ToLong，与第311刀以前的行为一致。
-    const bool isVariantSelect = wantVariantCarrier && testIsVariant;
+    // 第324刀放宽一处：槽标签那一档不要求主语是槽 —— 主语不是槽就**装箱**（下面那处
+    // wrapVariantValue 唯一出口），因为要迁就的是标签的档，不是主语的档。
+    const bool isVariantSelect = wantVariantCarrier && (testIsVariant || slotLabel);
 
     // 根据测试表达式类型选择临时变量类型
     std::string tempType;
@@ -121,9 +143,16 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     }
 
     // 声明并初始化临时变量, 保存测试表达式的值
+    bool subjectBoxOwned = false;
     {
         std::string initExpr = testVar;
-        if (isVariantSelect) {
+        if (isVariantSelect && !testIsVariant) {
+            // 第324刀：主语不是槽而标签是槽 ⇒ 把主语装箱成整枚槽（唯一那处 wrapVariantValue，
+            // 与标签同一个打包器）。它说 owns 的（现造的调用 / 对象档取了引用）要在链尾收，
+            // 说 borrowed 的（裸变量别名）一个都不许清 —— 同 §B164 那条主人。
+            initExpr = wrapVariantValue(node.testExpr.get(), testVar);
+            subjectBoxOwned = variantRhsOwnsValue(node.testExpr.get(), testVar);
+        } else if (isVariantSelect) {
             // 已是槽: 原样拷进临时量, 不解包 (解包就把标签的档丢了)
         } else if (testIsVariant && !isStringSelect && !isFloatSelect) {
             // int32_t temp = Variant → vb6_VariantToLong(Variant)
@@ -236,6 +265,10 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         // 宁可不收也不许把收尾发成悬空 —— 本处不欠新账）。借来的那几枚（见上）不在此列。
         for (auto& lblClear : labelClears) {
             c_.emitLine("vb6_VariantClear(&" + lblClear + ");");
+        }
+        // 第324刀：装箱的主语同样只收「箱自己拿下所有权」的那一枚（声明在标签之前 ⇒ 收在之后）
+        if (subjectBoxOwned) {
+            c_.emitLine("vb6_VariantClear(&" + tempVar + ");");
         }
         c_.dedent();
         c_.emitLine("}");

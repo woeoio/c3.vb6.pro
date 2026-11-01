@@ -4571,6 +4571,33 @@ if ($Category -in @("all", "run", "bas")) {
         'vb6_VARIANT _vb6_select_lbl_'
     )
 
+    # <vbeclipse> 账 #606（第324刀）：Case 标签**本身就是整枚 Variant 槽**时，四条承载档里前三条
+    # （串承载 / 浮点承载 / Long 解包）都把主语折成一个标量，再拿标量去比那枚结构体 —— 修复前
+    # 四档主语实测全部发**编不过的 C**（同一夹具在修复前那台编译器上 cl exit=2）：
+    #   Variant / Long 档 -> error C2088: 「==」对于 struct 非法
+    #   String 档        -> error C2440: vb6_VARIANT -> const wchar_t*
+    #   Double 档        -> error C2440: vb6_VARIANT -> float
+    # 修法 = 主人 selectCaseLabelClass 同一次遍历顺带回答「有没有一枚标签是整枚槽」，有则承载档
+    # 一律改走整枚槽 + 逐项 VarCmp；主语不是槽的那三档按 wrapVariantValue 唯一出口装箱。
+    # 形状由 check_select_carrier_authority R7 钉（折档那三形回来就红）。
+    $b606Needles = @("S606-v-lit=lit", "S606-v-slot=slot", "S606-v-none=none",
+        "S606-l-lit=lit", "S606-l-slot=slot", "S606-l-none=none",
+        "S606-s-lit=lit", "S606-s-slot=slot", "S606-s-none=none",
+        "S606-d-lit=lit", "S606-d-slot=slot", "S606-d-none=none", "S606-DONE")
+    Add-BasTest "b606_slot_label" "$Tests\b606_slot_label.bas" $b606Needles
+    Add-BasTest "b606_slot_label_x86" "$Tests\b606_slot_label.bas" $b606Needles -Arch "x86"
+    # 发码针：主语与槽标签都在整枚槽上比（装箱走唯一那处），被折档的三形一条都不许留。
+    Test-EmitcShape "b606_slot_label_shape" @("$Tests\b606_slot_label.bas") @(
+        'vb6_VARIANT _vb6_select_',
+        'vb6_VarCmpEq(&_vb6_select_',
+        'vb6_VariantFromValue((*w))'
+    )
+    Test-EmitcAbsent "b606_slot_label_no_fold" @("$Tests\b606_slot_label.bas") @(
+        '== (*w)',
+        'vb6_StrCmp(_vb6_select_',
+        'vb6_VariantToLong((*v))'
+    )
+
     # <vbeclipse> 账 #305 §B180（第六十九刀）：`StrPtr(<Variant>)` 曾经发
     # `vb6_StrPtr(vb6_VariantToString(v))` —— 而 `vb6_VariantToString` 的定义就一句 `return vb6_CStr(v)`
     # (= `vb6_Format(...)`) ⇒ **每次调用现造一枚 BSTR**，地址交给 Win32 之后那枚串没人回收。

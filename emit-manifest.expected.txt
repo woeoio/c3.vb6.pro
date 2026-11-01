@@ -589,6 +589,7 @@ sha256=dbe3dfc4ebc92fadd825615390657e982f0c65e0ddc6a1d7795a4f4efd865813 ascii256
 sha256=4029ea59feb92ae916cf5ad589260d2fdad5fe96b4948c16e3c082d9ce8e6130 ascii256=d8f6f34e1f044c198d9f23f19c8d6d8d6312bb541a28e8e40781dc6b95fe2094 rc=0 bytes=2098 tests/b592_apptitle/B592.vbp
 sha256=15c56652ba8aca19b9264377a28c10799b99cb0204c6750be6b10b81254bc236 ascii256=395dfa795c490c40220b704936bd91c36abe998c372fb671ec42866724fde89b rc=0 bytes=1722 tests/b592_apptitle_fallback.bas
 sha256=e159d291c691acbc21cd80f59e96f946b2d8d50030f657eddcb95ed19592bea8 ascii256=fd1e576a3b385b573354c162571651baecd48071c70582d8fa540e1e7190e0c5 rc=0 bytes=16707 tests/b604_select_label_owner.bas
+sha256=65d2b49fa2bf6a354fb1c4715d4113c5a6c82157ba3785fca381dc1a687ee029 ascii256=1318c6f019cc70e133efe5e152825fe770dda03821c5440568bf85afe3921a7f rc=0 bytes=7276 tests/b606_slot_label.bas
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；

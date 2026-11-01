@@ -65,10 +65,12 @@ if ($bad.Count -gt 0) {
 # ---- R1: 主人的三张脸，各一处 ----
 $defN = @([regex]::Matches($select, 'SelectCaseLabelClass\s+CCodeGen::selectCaseLabelClass')).Count
 $declN = @([regex]::Matches($helpers, '(?m)^[ \t]*SelectCaseLabelClass\s+selectCaseLabelClass\s*\(')).Count
-$callN = @([regex]::Matches($select, 'selectCaseLabelClass\(node\)')).Count
+$callN = @([regex]::Matches($select, 'selectCaseLabelClass\(node')).Count
 if ($defN -ne 1) { $bad += ('R1 definition of selectCaseLabelClass = ' + $defN + ' (want exactly 1)') }
 if ($declN -ne 1) { $bad += ('R1 declaration in cgen_helpers.inc = ' + $declN + ' (want exactly 1)') }
-if ($callN -ne 1) { $bad += ('R1 call site selectCaseLabelClass(node) = ' + $callN + ' (want exactly 1)') }
+# 第324刀起主人多一位出参（槽标签那一问），所以认**前缀**而不是认闭合括号 ——
+# 钉的始终是「调用恰一处」，不是实参表的写法。
+if ($callN -ne 1) { $bad += ('R1 call site selectCaseLabelClass(node… = ' + $callN + ' (want exactly 1)') }
 
 # 全 src 树里那个裸名的合计（定义 + 声明 + 调用 = 3；第四处出现在任何文件都是另抄一份）
 $srcFiles = Get-ChildItem -Path (Join-Path $root 'src') -Recurse -File -Include *.cpp,*.hpp,*.inc
@@ -152,10 +154,27 @@ if ($boolN -ne 1) { $bad += ('R6 quoted vb6_VariantToBool( emit = ' + $boolN + '
 if ($mixDecN -ne 1) { $bad += ('R6 the carrier decision asks SelectCaseLabelClass::Mixed = ' + $mixDecN + ' times (want exactly 1)') }
 if ($wantN -ne 3) { $bad += ('R6 wantVariantCarrier sites = ' + $wantN + ' (want exactly 3: declaration + resolveComValue branch + isVariantSelect gate)') }
 
+# ---- R7: 第324刀（账 #606）= 标签本身就是整枚 Variant 槽那一档 ----
+# 改前四条承载档（串 / 浮点 / Long 解包 / 已是槽）里前三条遇到槽标签都发**编不过的 C**
+# （实测 error C2088 + C2440 × 2 形）；这一档的形状必须钉住，否则下一次折档就悄悄回来了。
+$slotOutN  = @([regex]::Matches($select, 'bool\* outSlotLabel')).Count
+$slotDecN  = @([regex]::Matches($helpers, 'bool\* outSlotLabel')).Count
+$slotFlipN = @([regex]::Matches($select, 'if \(slotLabel\) \{ isStringSelect = false; isFloatSelect = false; \}')).Count
+$slotGateN = @([regex]::Matches($select, 'isVariantSelect = wantVariantCarrier && \(testIsVariant \|\| slotLabel\)')).Count
+$slotBoxN  = @([regex]::Matches($select, 'wrapVariantValue\(node\.testExpr\.get\(\), testVar\)')).Count
+$slotOwnN  = @([regex]::Matches($select, 'subjectBoxOwned')).Count
+if ($slotOutN -ne 1) { $bad += ('R7 outSlotLabel in the master definition = ' + $slotOutN + ' (want exactly 1)') }
+if ($slotDecN -ne 1) { $bad += ('R7 outSlotLabel in the header declaration = ' + $slotDecN + ' (want exactly 1)') }
+if ($slotFlipN -ne 1) { $bad += ('R7 slot-label carrier flip = ' + $slotFlipN + ' (want exactly 1; 0 = 又回到拿标量去比结构体那发 C2088)') }
+if ($slotGateN -ne 1) { $bad += ('R7 isVariantSelect gate admits the slot-label arm = ' + $slotGateN + ' (want exactly 1)') }
+if ($slotBoxN -ne 1) { $bad += ('R7 subject boxing goes through wrapVariantValue = ' + $slotBoxN + ' (want exactly 1; 0 或 >1 = 又开了一台装箱机)') }
+if ($slotOwnN -ne 3) { $bad += ('R7 subjectBoxOwned sites = ' + $slotOwnN + ' (want exactly 3: 声明 + 问主人 + 链尾收)') }
+
 if ($bad.Count -gt 0) {
     $bad | ForEach-Object { Write-Host ('FAIL ' + $_) }
     exit 1
 }
 Write-Host ('PASS select_carrier_authority: def=' + $defN + ' decl=' + $declN + ' call=' + $callN +
-            ' census=' + $allN + ' flip=' + $flipN + ' unwraps=3x1 mix=carrier1 pack1 cmp4')
+            ' census=' + $allN + ' flip=' + $flipN + ' unwraps=3x1 mix=carrier1 pack1 cmp4' +
+            ' slot=' + $slotFlipN + 'x' + $slotGateN + ' box=' + $slotBoxN + ' own=' + $slotOwnN)
 exit 0
