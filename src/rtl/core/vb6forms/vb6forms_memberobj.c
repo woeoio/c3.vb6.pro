@@ -119,7 +119,7 @@ static const wchar_t* kPanelNames[] = {
 static const wchar_t* kNodeNames[] = {
     L"Key", L"Index", L"Text", L"Tag", L"Checked", L"Expanded",
     L"Parent", L"Child", L"Children", L"Next", L"Previous", L"Root",
-    L"EnsureVisible", NULL };
+    L"EnsureVisible", L"Bold", NULL };   /* Bold = 第三百四十九刀 (原生 TVIS_BOLD) */
 
 // C29-5b: Toolbar 的 Button。文本那条在 VB6 里叫 Caption (不是 Text)。
 // Width 登记了但**宽度真变不了** —— 原生 cx 只对分隔符起作用，普通按钮的宽度由
@@ -167,6 +167,7 @@ static const wchar_t* kRsFieldNames[] = {
 #define VB6_MEMD_NODE_PREV      11
 #define VB6_MEMD_NODE_ROOT      12
 #define VB6_MEMD_NODE_ENSVIS    13
+#define VB6_MEMD_NODE_BOLD      14
 // Button (kButtonNames 顺序; Key/Index 沿用上面同号的定义)
 #define VB6_MEMD_BTN_CAPTION   3
 #define VB6_MEMD_BTN_TAG       4
@@ -577,6 +578,9 @@ static HRESULT memInvokeNode(Vb6MemObj* p, int dispid, VARIANT* out) {
         vb6_TreeView_NodeEnsureVisible(p->owner, p->index);
         memSetEmpty(out);
         return S_OK;
+    case VB6_MEMD_NODE_BOLD:
+        memSetI4(out, vb6_TreeView_GetNodeBold(p->owner, p->index));
+        return S_OK;
     default:
         break;
     }
@@ -752,6 +756,9 @@ static void memObjPutProp(Vb6MemObj* p, int dispid, DISPPARAMS* dp) {
             break;
         case VB6_MEMD_NODE_CHECKED:
             vb6_TreeView_SetNodeChecked(p->owner, p->index, memVariantToI4(v));
+            break;
+        case VB6_MEMD_NODE_BOLD:
+            vb6_TreeView_SetNodeBold(p->owner, p->index, memVariantToI4(v));
             break;
         case VB6_MEMD_NODE_EXPANDED:
             vb6_TreeView_SetNodeExpanded(p->owner, p->index, memVariantToI4(v));

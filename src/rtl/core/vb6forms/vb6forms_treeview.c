@@ -565,6 +565,30 @@ void vb6_TreeView_SetNodeChecked(void* hwnd, int32_t idx, int32_t v) {
     InvalidateRect((HWND)hwnd, NULL, FALSE);
 }
 
+/* 账 #305 第三百四十九刀: Node.Bold —— 原生位 TVIS_BOLD, 与 Checked/Expanded
+ * 同一条「读数与屏幕同源」口径 (GUISample frmClassView/frmSolutionView
+ * `Root.Bold = True` 实测)。 */
+int32_t vb6_TreeView_GetNodeBold(void* hwnd, int32_t idx) {
+    Vb6TvNode* n = vb6_TvNode(hwnd, idx);
+    if (!n) return 0;
+    DWORD st = (DWORD)(INT_PTR)SendMessageW((HWND)hwnd, TVM_GETITEMSTATE, (WPARAM)n->h,
+                                            (LPARAM)TVIS_BOLD);
+    return (st & TVIS_BOLD) ? -1 : 0;
+}
+
+void vb6_TreeView_SetNodeBold(void* hwnd, int32_t idx, int32_t v) {
+    Vb6TvNode* n = vb6_TvNode(hwnd, idx);
+    if (!n) return;
+    TVITEMW it;
+    ZeroMemory(&it, sizeof(it));
+    it.mask = TVIF_HANDLE | TVIF_STATE;
+    it.hItem = n->h;
+    it.stateMask = TVIS_BOLD;
+    it.state = (v != 0) ? TVIS_BOLD : 0;
+    SendMessageW((HWND)hwnd, TVM_SETITEMW, 0, (LPARAM)&it);
+    InvalidateRect((HWND)hwnd, NULL, FALSE);
+}
+
 // 展开态同样住在原生位上 (TVIS_EXPANDED) —— 与 Checked 同一个理由：读数与屏幕同源。
 #ifndef TVIS_EXPANDED
 #define TVIS_EXPANDED 0x0020

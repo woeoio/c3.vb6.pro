@@ -266,7 +266,12 @@ static HRESULT STDMETHODCALLTYPE axSite_IPSW_GetWindowContext(IOleInPlaceSiteWin
     const RECT* rc = (s->rcCtrl.right > s->rcCtrl.left) ? &s->rcCtrl : &rb;
     if (lprcPosRect)  memcpy(lprcPosRect, rc, sizeof(RECT));
     if (lprcClipRect) memcpy(lprcClipRect, rc, sizeof(RECT));
-    if (lpFrameInfo) { lpFrameInfo->fMDIApp=FALSE; lpFrameInfo->hwndFrame=s->hwndForm;
+    if (lpFrameInfo) { /* 账 #305 第三百五十一刀: fMDIApp 按**宿主是否真有 MDIClient** 答 —— Codejock
+     * 的 CommandBars/DockingPaneManager 靠它进 MDI 布局模式 (接管 MDI 客体,
+     * 随窗体 resize 回流窗格); 恒 FALSE 便退化为普通窗体, maximize 后窗格
+     * 不回流 (GUISample 实测)。 */
+    lpFrameInfo->fMDIApp = (GetPropW(s->hwndForm, L"VB6_MDIClient") != NULL);
+    lpFrameInfo->hwndFrame=s->hwndForm;
                        lpFrameInfo->haccel=0; lpFrameInfo->cAccelEntries=0; }
     return S_OK;
 }

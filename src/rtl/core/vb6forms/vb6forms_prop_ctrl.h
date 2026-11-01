@@ -568,6 +568,9 @@ void            vb6_TreeView_SetNodeKey(void* hwnd, int32_t idx, const wchar_t* 
 void            vb6_TreeView_SetNodeTag(void* hwnd, int32_t idx, const wchar_t* v);
 int32_t         vb6_TreeView_GetNodeChecked(void* hwnd, int32_t idx);
 void            vb6_TreeView_SetNodeChecked(void* hwnd, int32_t idx, int32_t v);
+/* 账 #305 第三百四十九刀: Node.Bold (原生 TVIS_BOLD) */
+int32_t         vb6_TreeView_GetNodeBold(void* hwnd, int32_t idx);
+void            vb6_TreeView_SetNodeBold(void* hwnd, int32_t idx, int32_t v);
 int32_t         vb6_TreeView_GetNodeExpanded(void* hwnd, int32_t idx);
 void            vb6_TreeView_SetNodeExpanded(void* hwnd, int32_t idx, int32_t v);
 int32_t         vb6_TreeView_GetNodeParent(void* hwnd, int32_t idx);

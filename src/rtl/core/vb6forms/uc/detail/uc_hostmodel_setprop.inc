@@ -41,6 +41,51 @@
     // Fix <vbeclipse> rev18: 内建成员都没命中 → 写**本 UserControl 的自有 Property**
     // (ucFolder.LeftPos = … 这类)。注意必须放在内建档之后: `Visible`/`Caption` 等同名
     // 内建属性仍是窗口层语义。
+#ifndef TVS_HASLINES
+#define TVS_HASLINES    0x0002
+#endif
+#ifndef TVS_LINESATROOT
+#define TVS_LINESATROOT 0x0004
+#endif
+#ifndef TVS_EDITLABELS
+#define TVS_EDITLABELS  0x0008
+#endif
+    /* 账 #305 第三百五十刀: 原生 **TreeView** 的外观属性写 (GUISample 的
+     * SetTreeTheme/Icons 一族)。ShowLines/LineStyle 真改样式位 (TVS_HASLINES/
+     * TVS_LINESATROOT); Icons/Appearance/ShowBorder 等收下不响 (视觉无实义的
+     * 先不造假答案, 与 memberobj 名单的取舍同一口径)。 */
+    {
+        wchar_t cls350[64] = {0};
+        GetClassNameW((HWND)obj, cls350, 63);
+        if (wcsncmp(cls350, L"SysTreeView32", 13) == 0) {
+            LONG st = GetWindowLongW((HWND)obj, GWL_STYLE);
+            LONG nv = st;
+            if (_wcsicmp(name, L"ShowLines") == 0)
+                nv = (vb6_ho_variantToLong(v) != 0) ? (st | TVS_HASLINES)
+                                                    : (st & ~TVS_HASLINES);
+            else if (_wcsicmp(name, L"LineStyle") == 0)
+                nv = (vb6_ho_variantToLong(v) == 0) ? (st | TVS_LINESATROOT)
+                                                    : (st & ~TVS_LINESATROOT);
+            else if (_wcsicmp(name, L"LabelEdit") == 0)
+                nv = (vb6_ho_variantToLong(v) == 0) ? (st | TVS_EDITLABELS)
+                                                    : (st & ~TVS_EDITLABELS);
+            if (nv != st) {
+                SetWindowLongW((HWND)obj, GWL_STYLE, nv);
+                SetWindowPos((HWND)obj, NULL, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+                             | SWP_FRAMECHANGED);
+                return 1;
+            }
+            /* 树已知的其余属性 (Icons/Appearance/ShowBorder/CheckBoxes/
+             * Sorted/HotTracking/HideSelection/SingleSel): 收下不报。 */
+            static const wchar_t* const kTvKnown[] = {
+                L"Icons", L"Appearance", L"ShowBorder", L"CheckBoxes",
+                L"Sorted", L"HotTracking", L"HideSelection", L"SingleSel",
+                L"Indentation", L"FullRowSelect", L"Scroll", NULL };
+            for (const wchar_t* const* k = kTvKnown; *k; ++k)
+                if (_wcsicmp(name, *k) == 0) return 1;
+        }
+    }
     if (vb6_UC_OwnPropSet(obj, name, v)) return 1;
 
     /* 账 #305 第二百六十二刀 (丙): 同 Call 那条 —— 不认识的属性名以前静默忽略。 */

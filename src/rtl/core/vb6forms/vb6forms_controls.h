@@ -133,6 +133,11 @@ int32_t vb6_OcxHost_TypeNameOf(void* hwndOrCtl, wchar_t* out, int32_t cch);
 int32_t vb6_OcxHost_GetVisible(void* ctlDisp, int32_t* outVisible);
 int32_t vb6_OcxHost_SetVisible(void* ctlDisp, int32_t visible);
 int32_t vb6_OcxHost_SyncRects(void* ctlDisp);
+/* 账 #305 第三百四十八刀: MDIForm 尺寸变化后, 给该窗体上所有 **windowless OCX**
+ * (CommandBars/DockingPaneManager 这类隐形控件) 补发 SetObjectRects(全客户区)
+ * + 重绘 —— 它们的排布引擎按 site 矩形走, 缺了这一发停靠带停在旧宽度。 */
+void vb6_OcxHost_FormResized(void* hwndForm, int w, int h);
+void vb6_OcxHost_InvokeAll(void* hwndForm, const wchar_t* method);
 int32_t vb6_OcxHost_GetRect(void* ctlDisp, int32_t out[4], void** outForm);
 // windowless 那条路的几何出口: 站点账本(像素)按容器 ScaleMode 折成用户单位; slot = VB6_GEOM_*
 int32_t vb6_OcxHost_GetUserCoord(void* ctlDisp, int32_t slot);

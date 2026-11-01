@@ -293,6 +293,17 @@ static BOOL CALLBACK vb6_mdi_band_cb(HWND h, LPARAM lp) {
     return TRUE;
 }
 
+struct Ctx352 { HWND paneMgr; };
+static BOOL CALLBACK vb6_mdi_panemgr_cb352(HWND h, LPARAM lp) {
+    wchar_t cls[64] = {0};
+    GetClassNameW(h, cls, 63);
+    if (wcsncmp(cls, L"XTPDockingPaneManager", 22) == 0) {
+        ((struct Ctx352*)lp)->paneMgr = h;
+        return FALSE;
+    }
+    return TRUE;
+}
+
 void vb6_MDI_RelayoutClient(void* hMDIForm) {
     HWND hForm = (HWND)hMDIForm;
     if (!hForm || !IsWindow(hForm)) return;
@@ -313,6 +324,49 @@ void vb6_MDI_RelayoutClient(void* hMDIForm) {
     if (rcCur.left != 0 || rcCur.top != ctx.top
         || (rcCur.right - rcCur.left) != w || (rcCur.bottom - rcCur.top) != h)
         MoveWindow(hClient, 0, ctx.top, w, h, TRUE);
+    /* 第三十四至三百五十三刀: Codejock 的排布/回流只在**窗体尺寸真的变化**时做
+     * 一套 (FormResized 的 SetObjectRects + DockingPaneManager 的 WM_SIZE +
+     * CommandBars.RecalcLayout)。按消息逐发会打乱它的布局状态 (实测: 窗口被
+     * 隐藏回小尺寸)。静态表记每个 MDI 窗体上一次的尺寸。 */
+    {
+        static struct { HWND h; int w, h_; } s_lastSize[8] = {0};
+        static int s_nLast = 0;
+        int i353 = -1;
+        for (int k = 0; k < s_nLast; k++)
+            if (s_lastSize[k].h == hForm) { i353 = k; break; }
+        if (i353 < 0 && s_nLast < 8) {
+            i353 = s_nLast++;
+            s_lastSize[i353].h = hForm;
+            s_lastSize[i353].w = -1; s_lastSize[i353].h_ = -1;
+        }
+        int sizeChanged353 = (i353 < 0)
+            ? 1
+            : (s_lastSize[i353].w != rc.right || s_lastSize[i353].h_ != rc.bottom);
+        if (i353 >= 0) {
+            s_lastSize[i353].w = rc.right;
+            s_lastSize[i353].h_ = rc.bottom;
+        }
+        if (sizeChanged353) {
+            vb6_OcxHost_FormResized(hForm, rc.right, rc.bottom);
+            struct Ctx352 c352 = { NULL };
+            EnumChildWindows(hForm, vb6_mdi_panemgr_cb352, (LPARAM)&c352);
+            if (c352.paneMgr) {
+                /* 物理把控件窗口改成客户区大小再发 WM_SIZE —— Codejock 的
+                 * 窗格回流由自己的 WM_SIZE 驱动, 而 0x0 隐窗没人给它改尺寸。 */
+                SetWindowPos(c352.paneMgr, NULL, 0, 0, rc.right, rc.bottom,
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                SendMessageW(c352.paneMgr, WM_SIZE, SIZE_RESTORED,
+                             MAKELPARAM(rc.right, rc.bottom));
+            }
+            vb6_OcxHost_InvokeAll(hForm, L"RecalcLayout");
+        /* 第三百五十五刀: 真正的回流驱动 —— 无窗口 OCX (Codejock 一族) 的窗口
+         * 消息靠容器**转发** (IOleInPlaceObjectWindowless::OnWindowMessage),
+         * 而转发站 (vb6_OcxHost_ForwardMessage) 此前没有任何调用者 ⇒ 它们永远
+         * 收不到 WM_SIZE, 停靠带/窗格全冻结在激活那一刻的尺寸。这里补发。 */
+        vb6_OcxHost_ForwardMessage(hForm, WM_SIZE, SIZE_RESTORED,
+            MAKELPARAM(rc.right, rc.bottom), NULL);
+        }
+    }
     HWND hAbove = GetWindow(hClient, GW_HWNDPREV);
     wchar_t clsAbove[32] = {0};
     if (hAbove) {
