@@ -390,6 +390,15 @@ void CCodeGen::visit(NewExpr& node) {
         //   - Set <Variant 目标>       → vb6_VariantFromValue _Generic 包装
         //   - Set <typed 工程类目标>    → 裸指针直赋
         // 与上方 Class 分支同形 (原生实例) 即处处正确。
+        // 账 #305 第三百三十一刀: New <工程窗体> —— C3 的窗体默认实例是单例
+        // (vb6_form_hwnd_<F>() 访问器, 首次引用即隐式 Load), 与 setlet_set_prop 的
+        // `Set <窗体名> = New <窗体名>` no-op 同一模型。此前落到下面的
+        // vb6_NewObject(L"frmMain") → 运行期 CLSIDFromProgID 必失败 (429), GUISample
+        // Module1 Sub Main 的 `Set fMainForm = New frmMain` 直接炸。
+        if (knownFormModuleNames_.count(clsLower)) {
+            lastExpr_ = "(void*)vb6_form_hwnd_" + cIdent(node.className) + "()";
+            return;
+        }
         const std::string projClsNew = projectClassNameOf(node.className);
         if (!projClsNew.empty()) {
             std::string clsStructNew = "vb6_cls_" + cIdent(projClsNew);

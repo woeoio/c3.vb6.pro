@@ -6,6 +6,15 @@
         if (sym->isExternal && sym->kind == SymbolKind::Variable && !sym->variableTypeName.empty()) {
             std::string varLower = sym->name;
             std::transform(varLower.begin(), varLower.end(), varLower.begin(), ::tolower);
+            // 账 #305 第三百三十一刀: As <工程窗体类型> 的外部变量 (Public fMainForm As
+            // frmMain 声明在标准模块, 消费方 frmMain/frmClassView/frmSolutionView 都要
+            // 认得) —— 先于 Class/Object 各支登记 knownFormTypeVars_, 成员访问走
+            // form_builtin 外部窗体支; 否则被下面的 Object 支收进 knownObjectVars_,
+            // 发 vb6_ComCall(fMainForm, L"ActiveForm") (C2224 / 运行期双输)。
+            if (knownFormModuleNames_.count(Symbol::toLower(sym->variableTypeName))) {
+                knownFormTypeVars_[varLower] = sym->variableTypeName;
+                continue;
+            }
             auto* clsSym = lookupModuleDotted(sym->variableTypeName);
             if (clsSym && clsSym->kind == SymbolKind::Class && !clsSym->isInterface) {
                 knownClassVars_[varLower] = clsSym->name;

@@ -691,7 +691,11 @@ std::string CCodeGen::canonicalClassMemberName(const std::string& className,
 
 
 std::string CCodeGen::comPackExpr(Expr& expr) {
-    // Fix <vbeclipse>: **UDT (Type ... End Type) 实参**必须走字节数组编组。
+    if (std::getenv("C3_DBG_ST") && expr.kind == ASTNodeKind::IdentifierExpr
+        && (Symbol::toLower(static_cast<IdentifierExpr&>(expr).name) == "propertygridtheme"
+            || Symbol::toLower(static_cast<IdentifierExpr&>(expr).name) == "taskpaneltheme")) {
+        std::cerr << "[ST-PACK2] " << static_cast<IdentifierExpr&>(expr).name << std::endl;
+    }    // Fix <vbeclipse>: **UDT (Type ... End Type) 实参**必须走字节数组编组。
     // `m_Rect As RECT` 传给 COM 方法时, inferExprType 推不出标量类型 → 落
     // default 分支 → vb6_ComPackInt(me->m_Rect) → C2440 "无法从 vb6_type_RECT
     // 转换为 int32_t" (ucSplitBar.ctl:149 `.SplitterMouseDown UserControl.hWnd,
@@ -758,6 +762,37 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
             auto it50 = arrayDimCounts_.find(lower);
             if (it50 != arrayDimCounts_.end() && it50->second <= 1) return "vb6_ComPackValue";
         }
+        // 账 #305 第三百三十九刀: 跨模块注入的**标量全局** (Definitions.bas 的
+        // , 消费侧 frmMain) —— 前端在消费模块
+        // 没解析到 (警告 VB3001), 该名又不在任何 known*Vars_ 表里 ⇒ inferExprType
+        // 答 Object ⇒ 发 vb6_ComPackObject(int32 全局) ⇒ 运行期对整数 AddRef ⇒
+        // 0xD 处 AV (GUISample CommandBars_Update 事件里的
+        //  实测)。
+        // 按符号声明 的类型名打包。
+        {
+            Symbol* cmSym339 = symTab_.lookupModule(id.name);
+            if (!cmSym339) cmSym339 = symTab_.lookup(id.name);
+            if (std::getenv("C3_DBG_ST")) { if (cmSym339) std::cerr << "[ST-PACK3] " << id.name << " kind=" << (int)cmSym339->kind << " vtn=[" << cmSym339->variableTypeName << "] type=" << (int)cmSym339->type << std::endl; else std::cerr << "[ST-PACK3] " << id.name << " NOSYM" << std::endl; }
+            if (cmSym339 && cmSym339->kind == SymbolKind::Variable
+                && !cmSym339->variableTypeName.empty() && !cmSym339->isArray) {
+                const std::string vt339 = Symbol::toLower(cmSym339->variableTypeName);
+                if (vt339 == "long" || vt339 == "integer" || vt339 == "byte"
+                    || vt339 == "boolean") return "vb6_ComPackInt";
+                // typelib 枚举 (As XTPPropertyGridVisualTheme) —— VB6 枚举一律是
+                // 32 位值; 符号 type 被填成 Object (枚举类型名在前端不可解析), 但
+                // 声明侧 C 类型是 int32_t (Definitions.h extern int32_t)。查得到
+                // EnumType/枚举成员符号即按 Long 打包。
+                {
+                    Symbol* enSym339 = lookupModuleDotted(cmSym339->variableTypeName);
+                    if (!enSym339) enSym339 = symTab_.lookupModule(cmSym339->variableTypeName);
+                    if (!enSym339) enSym339 = symTab_.lookup(cmSym339->variableTypeName);
+                    if (std::getenv("C3_DBG_ST")) { std::cerr << "[ST-PACK4] enum " << cmSym339->variableTypeName << " -> " << (enSym339 ? (int)enSym339->kind : -1) << std::endl; }
+                    if (enSym339 && enSym339->kind == SymbolKind::EnumType) return "vb6_ComPackInt";
+                }
+                if (vt339 == "double" || vt339 == "single" || vt339 == "currency") return "vb6_ComPackDouble";
+                if (vt339 == "string") return "vb6_ComPackBSTR";
+            }
+
         // Fix 110v: knownVariantVars_ 先于 knownObjectVars_ 判定. `Dim Value As Variant`
         // 的局部变量在 For Each 语境下同时被登记进 knownObjectVars_ (旧代码把
         // For-Each 元素一律当对象), 使 Variant 变量走 vb6_ComPackObject →
@@ -770,6 +805,7 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
         if (knownBstrVars_.count(lower)) return "vb6_ComPackBSTR";
         if (knownDoubleVars_.count(lower)) return "vb6_ComPackDouble";
         if (knownLongVars_.count(lower)) return "vb6_ComPackInt";
+        }
     }
     // ExeComBridge 03: 本工程类的 `New <类>` 实参.
     //   cgen_expr.cpp visit(NewExpr) 对它生成裸实例指针 (vb6_cls_X_New()); 通用

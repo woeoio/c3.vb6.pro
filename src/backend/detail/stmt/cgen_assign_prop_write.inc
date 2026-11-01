@@ -425,6 +425,41 @@
                 }
             }
         }
+        // 账 #305 第三百二十九刀: 裸窗体内建属性写 (GUISample frmDocument Form_Load
+        // `Caption = "Document " & lDocumentCount`, 隐式 Me.Caption)。此前裸标识符目标
+        // 只认 PropertyLet/控件默认属性/WithEvents 三关 (全不中) → 穿透到通用路径,
+        // 左值被当右值发射 (Fix 056 读支把 Caption 发成 vb6_GetControlText(hwnd)) →
+        // `vb6_GetControlText(hwnd) = v` —— getter 函数调用做左值, C2106。
+        // 镜像 stmt_special M22 的写法: getControlPropWriteFn(Form, 名) 非空 →
+        // 发 writeFn(formHwnd, value)。上方各支先到先得 (局部/参数/PropertyLet/控件
+        // 都已拦截), 能走到这里说明目标名在 VB6 语义里只能是窗体自身属性
+        // (Form 写表只收 Caption/Visible/Enabled/坐标族); 函数返回值赋值
+        // (过程名 == 目标名) 不在此表内, 天然不受影响。
+        if (isFormModule_ && !knownFormName_.empty()
+            && !knownLocalVars_.count(tgtLower)) {
+            bool bareParamShadow329 = false;
+            if (currentProc_) {
+                for (const auto& p : currentProc_->params) {
+                    std::string pLower329 = p.name;
+                    std::transform(pLower329.begin(), pLower329.end(), pLower329.begin(), ::tolower);
+                    if (pLower329 == tgtLower) { bareParamShadow329 = true; break; }
+                }
+            }
+            if (!bareParamShadow329) {
+                std::string bareWriteFn = getControlPropWriteFn(FrmControlType::Form, tgtId.name);
+                if (!bareWriteFn.empty()) {
+                    std::string bareFormHwnd = "vb6_hwnd_" + moduleName_;
+                    auto bareOrigIt = knownFormControlOriginalNames_.find(knownFormName_);
+                    if (bareOrigIt != knownFormControlOriginalNames_.end())
+                        bareFormHwnd = "vb6_hwnd_" + cIdent(bareOrigIt->second);
+                    emitExpr(*node.value);
+                    std::string bareVal = std::move(lastExpr_);
+                    bareVal = controlPropValueExpr(bareWriteFn, bareVal, *node.value);
+                    c_.emitLine(bareWriteFn + "(" + bareFormHwnd + ", " + bareVal + ");  /* bare form prop: " + tgtId.name + " */");
+                    return;
+                }
+            }
+        }
         // P20-31: WithEvents控件变量默认属性写入
         if (node.target->kind == ASTNodeKind::IdentifierExpr) {
             auto& tgtId2 = static_cast<IdentifierExpr&>(*node.target);

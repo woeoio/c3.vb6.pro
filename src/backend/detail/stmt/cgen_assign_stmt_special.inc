@@ -3,6 +3,50 @@
 // 内容 = 原文件第 12~405 行，逐行未改。
 
     if (!node.target || !node.value) return;
+    // 账 #305 第三百三十三刀: 对象变量默认属性 Let (GUISample frmPropertyGrid:60
+    // `Item = Item + 6`, Item 是 Dim As PropertyGridItem 的局部对象变量, 无 Set)。
+    // VB6 语义: 两端都走 DISPID 0 默认属性 —— Item.<Def> = Item.<Def> + 6。
+    // 此前裸发 C `Item = (Item + 6);` —— iface 指针只前向声明, 算术取 sizeof
+    // → C2036 (未知大小)。窄匹配: 目标是带默认成员名的 typed COM 变量且 RHS 是
+    // 二目 `+`; 两臂中"带默认成员的对象裸名"折 vb6_ComGetProp 默认读, 标量臂
+    // vb6_VariantFromValue 包; 求和 vb6_VarAddV, 回写 vb6_ComSetProp。
+    if (node.target->kind == ASTNodeKind::IdentifierExpr
+        && node.value->kind == ASTNodeKind::BinaryExpr) {
+        auto& tgtDef333 = static_cast<IdentifierExpr&>(*node.target);
+        std::string tgtLower333 = Symbol::toLower(tgtDef333.name);
+        bool isRetSlot333 = currentProc_
+                            && Symbol::toLower(currentProc_->name) == tgtLower333;
+        auto itDef333 = knownTypedComVars_.find(tgtLower333);
+        auto& bin333 = static_cast<BinaryExpr&>(*node.value);
+        if (!isRetSlot333 && itDef333 != knownTypedComVars_.end() && itDef333->second
+            && !itDef333->second->comDefaultMemberRealName.empty()) {
+            // 臂折叠: 裸名 typed COM 变量 (带默认成员) → 默认属性读; 返回空串 = 标量
+            auto armFold333 = [&](ASTNode* opNode) -> std::string {
+                if (!opNode) return "";
+                if (opNode->kind != ASTNodeKind::IdentifierExpr) return "";
+                auto& opId = static_cast<IdentifierExpr&>(*opNode);
+                auto itOp = knownTypedComVars_.find(Symbol::toLower(opId.name));
+                if (itOp == knownTypedComVars_.end() || !itOp->second
+                    || itOp->second->comDefaultMemberRealName.empty()) return "";
+                return "vb6_VariantFromComResult(vb6_ComGetProp((void*)" + cIdent(opId.name)
+                     + ", L\"" + itOp->second->comDefaultMemberRealName + "\"))";
+            };
+            std::string a333 = armFold333(bin333.left.get());
+            std::string b333 = armFold333(bin333.right.get());
+            if (a333.empty()) {
+                emitExpr(*bin333.left);
+                a333 = "vb6_VariantFromValue(" + std::move(lastExpr_) + ")";
+            }
+            if (b333.empty()) {
+                emitExpr(*bin333.right);
+                b333 = "vb6_VariantFromValue(" + std::move(lastExpr_) + ")";
+            }
+            c_.emitLine("vb6_ComSetProp((void*)" + cIdent(tgtDef333.name) + ", L\""
+                        + itDef333->second->comDefaultMemberRealName
+                        + "\", vb6_ComPackVariant(vb6_VarAddV(" + a333 + ", " + b333 + ")));  /* default prop let (obj arith) */");
+            return;
+        }
+    }
     // P22: Date$/Time$ statement interception (Date$ = "12-31-2025" / Time$ = "23:59:59")
     if (node.target->kind == ASTNodeKind::IdentifierExpr) {
         auto& _tgtId22 = static_cast<IdentifierExpr&>(*node.target);

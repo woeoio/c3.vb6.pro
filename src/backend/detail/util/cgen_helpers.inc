@@ -1091,6 +1091,10 @@
     std::set<const ASTNode*> hoistedLocalDeclSet_;
     // Fix 086: 工程内窗体模块名集合 (小写), driver预扫描填充
     std::unordered_set<std::string> knownFormModuleNames_;
+    // 账 #305 第三百三十一刀: As <窗体类型> 的变量 (小写变量名 → 窗体名, 原大小写)。
+    // `Public fMainForm As frmMain` 这类跨模块窗体引用变量 —— C3 单实例模型下
+    // 即窗体默认实例, 成员访问/裸值引用改道 form_builtin 的外部窗体支。
+    std::unordered_map<std::string, std::string> knownFormTypeVars_;
     // Fix 086: For方向拆分的循环体副本索引 (0=首份, 1=第二份); Label/GoTo配对加后缀
     int labelCopyIdx_ = 0;
     // Fix 090o: For方向拆分期间各被拆 body 内定义的标签名栈 (嵌套层)。

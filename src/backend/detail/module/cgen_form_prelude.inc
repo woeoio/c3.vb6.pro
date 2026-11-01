@@ -23,6 +23,10 @@
     std::string showFn = "vb6_form_show_" + cIdent(formName);      // Show函数名
     int ctrlId = 0;  // P7.6: 控件ID计数器(在WM_COMMAND和CreateControls中复用)
     bool isMDIForm = (frmDesc.formControl.controlType == FrmControlType::MDIForm);  // P7.7
+    // 账 #305 第三百三十四刀: MDIForm 的事件过程名是 MDIForm_Load/Resize/Unload/QueryUnload
+    // (VB6 语法; 非 MDI 窗体是 Form_*)。此前全部站点只认 Form_* ⇒ MDIForm_Load 定义了
+    // 却永远没人调用 (GUISample frmMain 整个初始化都在 MDIForm_Load 里 ⇒ 空白窗口)。
+    const char* formEvtBase334 = isMDIForm ? "MDIForm" : "Form";
     bool isMDIChild = frmDesc.isMDIChild;  // P7.7
 
     // P20-36: 收集菜单项ID映射 (与emitMenuItem/emitMenuClickDispatch一致)

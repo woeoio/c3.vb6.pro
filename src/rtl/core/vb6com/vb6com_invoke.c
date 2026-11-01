@@ -525,6 +525,40 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
     }
     DISPID dispid = vb6_getDispid(pDisp, methodName);
     if (dispid == DISPID_UNKNOWN) {
+        /* 账 #305 第三百三十六刀: VB6 默认成员兜底。接收者没有该方法时, VB6 会沿
+         * typelib 的 DISPID 0 默认属性再走一层 —— GUISample frmMain:
+         *   With ControlFile.CommandBar
+         *       .Add xtpControlButton, ...   ' = CommandBar.Controls.Add(...)
+         *   End With
+         * ICommandBar 没有 Add, 默认属性是 Controls (DISPID 0); 此前直接报
+         * "method not found" 返回 NULL => 菜单/工具栏项全部丢失, 下游对 NULL 的
+         * Control.IconId 等写接二连三炸错误 13。名字查找失败后取 DISPID 0 的对象
+         * (须 VT_DISPATCH) 原样重调一次; 深度旗标防环。 */
+        static int defMemberDepth336 = 0;
+        VARIANT defv336;
+        VariantInit(&defv336);
+        DISPPARAMS dprop336;
+        memset(&dprop336, 0, sizeof(dprop336));
+        HRESULT hrDef336 = pDisp->lpVtbl->Invoke(pDisp, DISPID_VALUE, &IID_NULL,
+            GetUserDefaultLCID(), DISPATCH_METHOD | DISPATCH_PROPERTYGET,
+            &dprop336, &defv336, NULL, NULL);
+        if (SUCCEEDED(hrDef336) && defv336.vt == VT_DISPATCH && defv336.pdispVal
+            && (void*)defv336.pdispVal != (void*)pDisp && defMemberDepth336 == 0) {
+            defMemberDepth336 = 1;
+            if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+                fprintf(stderr, "[C3_COM] defmember hit: %ls disp=%p defobj=%p\n",
+                        methodName, (void*)pDisp, (void*)defv336.pdispVal); fflush(stderr);
+            }
+            void* r336 = vb6_ComCall((void*)defv336.pdispVal, methodName, args_void, argc);
+            defMemberDepth336 = 0;
+            VariantClear(&defv336);
+            return r336;
+        }
+        if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+            fprintf(stderr, "[C3_COM] defmember miss: %ls disp=%p hr=0x%08lX vt=%d\n",
+                    methodName, (void*)pDisp, (unsigned long)hrDef336, defv336.vt); fflush(stderr);
+        }
+        VariantClear(&defv336);
         vb6_ComDropPackedArgs(args, argc);   /* 账 #305 第二百八十九刀: 早退之前清点来路 */
         fwprintf(stderr, L"vb6_ComCall: method \"%ls\" not found\n", methodName);
         return NULL;

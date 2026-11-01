@@ -570,6 +570,21 @@
     suppressVirtDispatch_ = savedVirtLhs;
     std::string target = std::move(lastExpr_);
 
+    // 账 #305 第三百三十五刀: `Set <裸对象变量> = ...` 的目标发射 (typed COM 变量
+    // → 裸名) 不立也不清 COM marker; 但**前文残留**的 marker (With 目标求值
+    // `_vb6_with_N = GetObjectProp(obj, L"Member")` / 上一条链式语句) 会让
+    // isComMarker_ 此处仍为真 ⇒ 把普通对象引用赋值误发成
+    // `vb6_ComSetRef(<残留接收者>, <残留成员名>, value)` —— GUISample frmMain
+    // `Set ControlNew = .Add(...)` (With ControlFile.CommandBar 块内首条) 实测:
+    // 接收者=With 目标、成员=残留的 "Controls" ⇒ Codejock 答 0x80020005 ⇒
+    // 未处理错误 13 启动即崩。Set 语义 = 对象引用赋给变量, 永不走默认属性写,
+    // 裸标识符目标下的 marker 必然是残留, 直接清。
+    if (node.target->kind == ASTNodeKind::IdentifierExpr && isComMarker_) {
+        isComMarker_ = false;
+        comObjExpr_.clear();
+        comMemberName_.clear();
+    }
+
     // 账 #257 第十九层 · 注: `Set .Picture = .Image` 这一形**不在这里另开分支** ——
     // 上面 WithMemberExpr 的读取已经把 target 交成内建全局 (且不打 COM 标记),
     // 于是下方 isComMarker_ 为假, 自然落到本函数末尾那条通用的 `target = value;`

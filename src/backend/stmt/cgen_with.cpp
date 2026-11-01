@@ -718,6 +718,24 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         }
     }
 
+    // 账 #305 第三百三十七刀: With 目标链的**尾层成员**兜底解。
+    // `With ControlFile.CommandBar.Controls` —— emitExpr 只解到第一层
+    // (GetObjectProp(ControlFile, CommandBar)), 尾层 "Controls" 挂在 marker 里
+    // (generic_access 的链协议: 解一层留一员)。上面 #299 那格只认已知集合,
+    // 其余 (Codejock 的 CommandBarControls 等) 全漏 => With 体整个骑在错误对象上
+    // (菜单建不出来, .Add 全部 0x80020006), 尾层标记还漏进体内首条语句
+    // (Set ControlNew = .Add(...) 被发成 SetRef(<With 目标>, L"Controls", ...))。
+    // 这里把尚挂着的尾层成员解成对象值再继续。
+    if (std::getenv("C3_DBG_ST")) {
+        std::cerr << "[ST-WITH] marker=" << isComMarker_ << " obj=" << comObjExpr_ << " mem=" << comMemberName_ << " le=" << lastExpr_.substr(0,60) << std::endl;
+    }
+    if (isComMarker_ && !comMemberName_.empty()) {
+        resolveComValue("Object");
+        isComMarker_ = false;
+        comObjExpr_.clear();
+        comMemberName_.clear();
+    }
+
     // 账 #305 第三百六刀: 窗体那一格的 New 入口 (判定见上方 NewExpr 段)。
     // emitExpr(NewExpr) 对窗体名只会发 vb6_NewObject(L"<窗体>"), 这里换成窗体
     // 默认实例访问器 —— 首次引用即隐式 Load, 正是 VB6 `New <窗体>` 的语义。

@@ -55,14 +55,27 @@
                 // 类同名时 (frmMain.CommandBars: 控件 XtremeCommandBars.CommandBars
                 // vs 库里同名的 coclass) 必须发控件句柄访问器, 发过程调用 = LNK2019
                 // (该窗体根本没有那个过程)。控件不是再问自类型过程/限定键过程。
+                // 账 #305 第三百三十一刀: 基也可以是 **As <窗体类型> 的变量**
+                // (`fMainForm.ActiveForm.RefreshColors`, GUISample frmMain:766) ——
+                // C3 单实例模型下即窗体默认实例, 限定键/访问器一律按变量绑定的
+                // 窗体名取。贴基成员不是控件也不是该窗体的过程时, 当普通 COM
+                // 成员接在窗体默认实例上 (stArmSt=1, vb6_ComGetObjectProp 续链)。
                 if (!haveSt0 && chainSt.size() >= 2
                     && oLowerSt0 != Symbol::toLower(moduleName_)
-                    && knownFormModuleNames_.count(oLowerSt0)) {
+                    && (knownFormModuleNames_.count(oLowerSt0)
+                        || knownFormTypeVars_.count(oLowerSt0))) {
+                    std::string formNameB331 = oidSt0.name;
+                    {
+                        auto itFtvB331 = knownFormTypeVars_.find(oLowerSt0);
+                        if (itFtvB331 != knownFormTypeVars_.end())
+                            formNameB331 = itFtvB331->second;
+                    }
+                    const std::string formLowerB331 = Symbol::toLower(formNameB331);
                     const std::string& midName0 = chainSt[chainSt.size() - 1]->memberName;
                     std::string midLower0 = Symbol::toLower(midName0);
-                    const FrmControl* extCtrlB = findExternalFormControl(oidSt0.name, midName0);
+                    const FrmControl* extCtrlB = findExternalFormControl(formNameB331, midName0);
                     if (extCtrlB) {
-                        std::string accB = "vb6_form_ctrl_" + cIdent(oidSt0.name)
+                        std::string accB = "vb6_form_ctrl_" + cIdent(formNameB331)
                                          + "_" + cIdent(midName0);
                         if (extCtrlB->controlType == FrmControlType::TreeView)
                             externalTreeViewAccs_[accB] = accB;
@@ -75,16 +88,20 @@
                             || knownFormControls_.count(midLower0);
                         Symbol* midCls0 = symTab_.lookup(midName0);
                         Symbol* midQk0 = symTab_.moduleScope()
-                            ? symTab_.moduleScope()->lookupLocal(oLowerSt0 + "_" + midLower0)
+                            ? symTab_.moduleScope()->lookupLocal(formLowerB331 + "_" + midLower0)
                             : nullptr;
                         if (!otherMid0
                             && ((midCls0 && midCls0->kind == SymbolKind::ComClass
                                  && Symbol::toLower(midCls0->name) == midLower0)
                                 || (midQk0 && midQk0->isExternal
                                     && midQk0->kind == SymbolKind::Function))) {
-                            recvSt = cProcName(midName0, AccessLevel::Public, oidSt0.name) + "()";
+                            recvSt = cProcName(midName0, AccessLevel::Public, formNameB331) + "()";
                             haveSt0 = true;
                             stArmSt = 2;
+                        } else {
+                            recvSt = "vb6_form_hwnd_" + cIdent(formNameB331) + "()";
+                            haveSt0 = true;
+                            stArmSt = 1;
                         }
                     }
                 }

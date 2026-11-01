@@ -225,5 +225,41 @@
             }
         }
 
+        // ---- Pattern F4 (账 #305 第三百三十二刀): 窗体**单控件**带索引 ----
+        // `DockingPaneManager(i).Closed` (GUISample frmMain:586) —— DockingPaneManager
+        // 是窗体上的单个 OCX 控件 (非控件数组), `(i)` 是取它 DISPID 0 默认属性 Item 的
+        // 索引调用 (返回 IPane 对象)。此前控件名不在 knownObjectVars_/knownArrays_ 的
+        // 任何一支里 → 裸 C 函数调用 `DockingPaneManager(i)` (隐式 int) → 外层 .Closed
+        // 拼 void* 成员 → C2224 ×6。控件槽 (vb6_hwnd_<名>) 是 IDispatch*, 发
+        // vb6_ComCallByDispid(槽, 0, args, argc); 外层成员由 generic_access 的
+        // vb6_ComCallByDispid( 白名单解封续链 (Closed/Hidden 读, Hide 调用)。
+        // 控件数组走自己的路 (P7.6), 窗体本体 (FrmControlType::Form) 不在此列。
+        if (!handled && node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr) {
+            auto itCtrlF4 = knownFormControls_.find(nameLower);
+            if (itCtrlF4 != knownFormControls_.end() && itCtrlF4->second != FrmControlType::Form
+                && !knownControlArrays_.count(nameLower)
+                && !knownLocalVars_.count(nameLower)) {
+                std::string objExprF4 = makeCtrlHwndArg(nameLower, itCtrlF4->second);
+                std::vector<std::string> packedArgsF4;
+                for (size_t i = 0; i < node.positional.size(); i++) {
+                    std::string packFnF4 = comPackExpr(*node.positional[i]);
+                    emitExpr(*node.positional[i]);
+                    { std::string resolvedF4 = resolveComMarkerForPack(packFnF4);
+                      if (!resolvedF4.empty()) lastExpr_ = resolvedF4; }
+                    packedArgsF4.push_back(packArgValue(packFnF4, lastExpr_));
+                }
+                int32_t argcF4 = (int32_t)packedArgsF4.size();
+                std::string argsArrayF4 = "(void*[]){";
+                for (int32_t i = 0; i < argcF4; i++) {
+                    if (i > 0) argsArrayF4 += ", ";
+                    argsArrayF4 += packedArgsF4[i];
+                }
+                argsArrayF4 += "}";
+                lastExpr_ = "vb6_ComCallByDispid(" + objExprF4 + ", 0, "
+                          + argsArrayF4 + ", " + std::to_string(argcF4) + ")";
+                handled = true;
+            }
+        }
+
         if (handled) return;
     }

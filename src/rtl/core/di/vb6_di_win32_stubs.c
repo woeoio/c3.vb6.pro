@@ -362,6 +362,12 @@ intptr_t __stdcall vb6_di_GetUserNameW(intptr_t lpBuffer, intptr_t pnSize) {
 intptr_t __stdcall vb6_di_GetVersionExW(void* lpVersionInformation) {
     return ((intptr_t (WINAPI *)(void*))GetVersionExW)(lpVersionInformation);
 }
+/* GetVersionExA (账 #305 第三百三十刀: GUISample Definitions.bas:236
+ * Declare Function GetVersionEx Lib "kernel32" Alias "GetVersionExA", alias 路
+ * 包装 vb6_lwa_GetVersionExA 引用本桩; 生成器按引用面发桩只出了 W 版 ⇒ LNK2019) */
+intptr_t __stdcall vb6_di_GetVersionExA(void* lpVersionInformation) {
+    return ((intptr_t (WINAPI *)(void*))GetVersionExA)(lpVersionInformation);
+}
 /* GetVolumeInformationW */
 intptr_t __stdcall vb6_di_GetVolumeInformationW(intptr_t lpRootPathName, intptr_t lpVolumeNameBuffer, intptr_t nVolumeNameSize, intptr_t* lpVolumeSerialNumber, intptr_t* lpMaximumComponentLength, intptr_t* lpFileSystemFlags, intptr_t lpFileSystemNameBuffer, intptr_t nFileSystemNameSize) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t*, intptr_t*, intptr_t*, intptr_t, intptr_t))GetVolumeInformationW)(lpRootPathName, lpVolumeNameBuffer, nVolumeNameSize, lpVolumeSerialNumber, lpMaximumComponentLength, lpFileSystemFlags, lpFileSystemNameBuffer, nFileSystemNameSize);

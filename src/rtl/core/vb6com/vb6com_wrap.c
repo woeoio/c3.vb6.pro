@@ -134,13 +134,14 @@ void* vb6_ComGetObjectProp(void* disp, const wchar_t* propName) {
         obj = (void*)pv->pdispVal;
     } else if (pv->vt == VT_UNKNOWN) {
         pv->punkVal->lpVtbl->QueryInterface(pv->punkVal, &IID_IDispatch, &obj);
-    } else if (pv->vt != VT_EMPTY && pv->vt != VT_NULL) {
-        VARIANT vObj;
-        VariantInit(&vObj);
-        if (SUCCEEDED(VariantChangeType(&vObj, pv, 0, VT_DISPATCH))) {
-            obj = (void*)vObj.pdispVal;
         }
-        VariantClear(&vObj);
+    /* 账 #305 第三百四十刀: 标量 (I4/BSTR/...) 一律不算对象。原先对
+     * VT_EMPTY/NULL 以外的档做 VariantChangeType(.., VT_DISPATCH) —— 数值会被
+     * 强转成 pdispVal=数值 (GUISample: GlobalSettings.Icons 走到这一格交回
+     * VT_I4=13 => obj=0xD => vb6_ComPackObject 对 0xD AddRef => AV)。
+     * VB6 语义里 对象属性/方法读到标量 = Nothing, 交 NULL。 */
+    else if (pv->vt != VT_EMPTY && pv->vt != VT_NULL) {
+        obj = NULL;
     }
     if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
         fprintf(stderr, "[C3_COM] GetObjectProp obj: disp=%p prop=%ls vt=%d -> obj=%p\n",
@@ -194,13 +195,14 @@ void* vb6_ComGetPropertyObject(void* disp, const wchar_t* propName,
         obj = (void*)pv->pdispVal;
     } else if (pv->vt == VT_UNKNOWN) {
         pv->punkVal->lpVtbl->QueryInterface(pv->punkVal, &IID_IDispatch, &obj);
-    } else if (pv->vt != VT_EMPTY && pv->vt != VT_NULL) {
-        VARIANT vObj;
-        VariantInit(&vObj);
-        if (SUCCEEDED(VariantChangeType(&vObj, pv, 0, VT_DISPATCH))) {
-            obj = (void*)vObj.pdispVal;
         }
-        VariantClear(&vObj);
+    /* 账 #305 第三百四十刀: 标量 (I4/BSTR/...) 一律不算对象。原先对
+     * VT_EMPTY/NULL 以外的档做 VariantChangeType(.., VT_DISPATCH) —— 数值会被
+     * 强转成 pdispVal=数值 (GUISample: GlobalSettings.Icons 走到这一格交回
+     * VT_I4=13 => obj=0xD => vb6_ComPackObject 对 0xD AddRef => AV)。
+     * VB6 语义里 对象属性/方法读到标量 = Nothing, 交 NULL。 */
+    else if (pv->vt != VT_EMPTY && pv->vt != VT_NULL) {
+        obj = NULL;
     }
     vb6_ComVarFree(pv);
     return obj;

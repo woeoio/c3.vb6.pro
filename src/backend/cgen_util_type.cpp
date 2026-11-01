@@ -1025,6 +1025,12 @@ std::string CCodeGen::builtinNoParamTableFormalCType(const std::string& callee, 
     //   带类型化形参表的那一族 (InStrRev / Mid / Filter / Left / Right …) —— 它们不落这张表,
     //     Fix 175 与 arg_variant 那一站直接问 `calleeParams`。
     static const std::unordered_map<std::string, std::vector<std::string>> kNoTableFormalKinds176 = {
+        // 账 #305 第三百三十刀 (续): Clipboard.SetText 只收 BSTR (vb6rtl_builtin.h:393
+        // `void vb6_Clipboard_SetText(BSTR text)`)。链式 COM 读的实参
+        // (GUISample frmMain:574 `Clipboard.SetText ActiveForm.rtfText.SelRTF`)
+        // 交回 vb6_VARIANT —— Fix 175 闸按 cExprIsVariant 让位, 但本表此前没这
+        // 一行, VARIANT 那条提取臂也进不来 ⇒ C2440。VB6 语义按当前子类型折字符串。
+        {"vb6_Clipboard_SetText", {"BSTR"}},
         {"vb6_GetSetting",    {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key[, default])
         {"vb6_SaveSetting",   {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key, setting)
         {"vb6_DeleteSetting", {"BSTR", "BSTR", "BSTR"}},           // (app, section[, key])

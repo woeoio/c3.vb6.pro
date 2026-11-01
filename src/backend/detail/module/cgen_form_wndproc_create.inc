@@ -153,8 +153,8 @@
     // Fix 058: Form_Load 用 PostMessage 延迟执行, 避免在 WM_CREATE 中
     // 执行 COM 操作 (如 Controls.Add) 导致消息死锁
     // 调用VB6 Form_Load事件 (仅当存在时调用)
-    std::string formLoadFn = cProcName("Form_Load", AccessLevel::Private);
-    auto* formLoadSym = symTab_.lookup("Form_Load");
+    std::string formLoadFn = cProcName(std::string(formEvtBase334) + "_Load", AccessLevel::Private);
+    auto* formLoadSym = symTab_.lookup(std::string(formEvtBase334) + "_Load");
     if (formLoadSym) {
         c_.emitLine("PostMessageW(hwnd, 0x7FF0, 0, 0);  /* defer Form_Load */");
     }
@@ -268,7 +268,7 @@
         // 用 static 标志保证整个进程只走一次 (0x7FF0 理论上只会到一次, 保险起见)。
         {
             auto* initSym43 = symTab_.lookup(formName + "_Initialize");
-            if (!initSym43) initSym43 = symTab_.lookup("Form_Initialize");
+            if (!initSym43) initSym43 = symTab_.lookup(std::string(formEvtBase334) + "_Initialize");
             if (initSym43) {
                 std::string initFn = cProcName(initSym43->name, AccessLevel::Private);
                 c_.emitLine("static int vb6_formInited_" + cIdent(formName) + " = 0;");
@@ -284,14 +284,15 @@
         // Fix 112: Load 完成后再触发首次 Form_Resize (与 VB6 的 Load→Resize 顺序一致)
         c_.emitLine("vb6_formLoaded_" + cIdent(formName) + " = 1;");
         {
-            std::string resizeFnLoad = cProcName("Form_Resize", AccessLevel::Private);
+            std::string resizeFnLoad = cProcName(std::string(formEvtBase334) + "_Resize", AccessLevel::Private);
             // 守卫只认**本模块自有**的处理器 (与 show/dispatch 两处同批) ——
             // 裸名 lookup 命中跨模块注入的别家 Form_Resize ⇒ LNK2019。
             auto hasOwnResizeCr = [&](const char* nm) -> bool {
                 Symbol* sCr = symTab_.lookupModule(nm);
                 return sCr && !sCr->isExternal;
             };
-            if (hasOwnResizeCr((formName + "_Resize").c_str()) || hasOwnResizeCr("Form_Resize")) {
+            if (hasOwnResizeCr((formName + "_Resize").c_str()) || hasOwnResizeCr("Form_Resize")
+                || hasOwnResizeCr((std::string(formEvtBase334) + "_Resize").c_str())) {
                 c_.emitLine("{ extern void " + resizeFnLoad + "(); " + resizeFnLoad + "(); }");
             }
         }

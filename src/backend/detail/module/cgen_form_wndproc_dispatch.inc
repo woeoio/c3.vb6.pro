@@ -455,8 +455,8 @@
     c_.emitLine("case WM_CLOSE: {");
     c_.indent();
     {
-        std::string formUnloadFn = cProcName("Form_Unload", AccessLevel::Private);
-        auto* formUnloadSym2 = symTab_.lookup("Form_Unload");
+        std::string formUnloadFn = cProcName(std::string(formEvtBase334) + "_Unload", AccessLevel::Private);
+        auto* formUnloadSym2 = symTab_.lookup(std::string(formEvtBase334) + "_Unload");
         if (formUnloadSym2) {
             // 生成trampoline: 桥接 int(*)(void) 回调和 void(int16_t*) VB6签名
             std::string trampoline = formUnloadFn + "_trampoline";
@@ -467,8 +467,8 @@
             c_.emitLine("SetPropW(hwnd, L\"VB6_Unloading\", (HANDLE)1);");
             // P18-B: Form_QueryUnload - check if close is allowed before Unload
             {
-                std::string queryUnloadFn = cProcName("Form_QueryUnload", AccessLevel::Private);
-                auto* quSym = symTab_.lookup("Form_QueryUnload");
+                std::string queryUnloadFn = cProcName(std::string(formEvtBase334) + "_QueryUnload", AccessLevel::Private);
+                auto* quSym = symTab_.lookup(std::string(formEvtBase334) + "_QueryUnload");
                 if (quSym) {
                     c_.emitLine("{ int16_t vb6_cancel = 0; int16_t vb6_unloadmode = 0; /* 0=vbFormControlMenu */");
                     c_.emitLine("extern void " + queryUnloadFn + "(int16_t*, int16_t*); " + queryUnloadFn + "(&vb6_cancel, &vb6_unloadmode);");
@@ -673,14 +673,15 @@
 
     // P14.4.1d: WM_SIZE -> Form_Resize() (仅当处理器存在时生成)
     {
-        std::string resizeFn = cProcName("Form_Resize", AccessLevel::Private);
+        std::string resizeFn = cProcName(std::string(formEvtBase334) + "_Resize", AccessLevel::Private);
         // 守卫只认**本模块自有**的处理器 (与 cgen_form_show.inc rev29 同批) ——
         // 裸名 lookup 会命中跨模块注入的别家 Form_Resize ⇒ LNK2019。
         auto hasOwnResizeWp = [&](const char* nm) -> bool {
             Symbol* sWp = symTab_.lookupModule(nm);
             return sWp && !sWp->isExternal;
         };
-        if (hasOwnResizeWp((formName + "_Resize").c_str()) || hasOwnResizeWp("Form_Resize")) {
+        if (hasOwnResizeWp((formName + "_Resize").c_str()) || hasOwnResizeWp("Form_Resize")
+            || hasOwnResizeWp((std::string(formEvtBase334) + "_Resize").c_str())) {
             c_.emitLine("case WM_SIZE: {");
             c_.indent();
             // Fix 112: Form_Load 由 PostMessage 延迟执行, 而首次 WM_SIZE 在
@@ -700,7 +701,7 @@
             // VB6 语义: Form_Resize 与 Form_Load **互相独立** —— 没有 Form_Load
             // 的窗体照样在每次尺寸变化时收到 Form_Resize。所以"等 Load 完成"这个
             // 前置条件只对**有 Load 可等**的窗体成立。
-            if (symTab_.lookup("Form_Load")) {
+            if (symTab_.lookup(std::string(formEvtBase334) + "_Load")) {
                 c_.emitLine("if (!vb6_formLoaded_" + cIdent(formName) + ") break;");
             }
             // Fix <vbeclipse> rev28: 排队到消息循环跑, 不同步跑。

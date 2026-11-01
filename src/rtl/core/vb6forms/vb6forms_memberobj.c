@@ -876,6 +876,20 @@ static HRESULT STDMETHODCALLTYPE memObj_Invoke(IDispatch* This, DISPID dispid, R
 //   ListImages.Add   (index, key, picture)
 //   ListItems.Add    (index, key, text, iconIdx, smalliconIdx)
 //   ColumnHeaders.Add(index, key, text, width, alignment, iconIdx)
+// 账 #305 第三百三十八刀: relative 实参是 Node **对象** (VT_DISPATCH) 的解析。
+// Nodes.Add(NodeObj, tvwChild, ...) 此前落到 memVariantToI4 把 IDispatch 指针截成
+// I4 当 1 基下标 (x86 = 截断指针) => 乱索引 => vb6_TreeView_AddNode 拿垃圾 hItem
+// 当 relative => 原生崩溃 (GUISample frmSolutionView/frmClassView Form_Load 静默死)。
+// 只认本 RTL 自产的 NODE 成员对象 (lpVtbl 指纹 + kind + owner 三重校验), 其余放 0。
+static int32_t memDispatchToNodeIndex(VARIANT* v, void* owner) {
+    if (!v || v->vt != VT_DISPATCH || !v->pdispVal) return 0;
+    Vb6MemObj* o = (Vb6MemObj*)v->pdispVal;
+    if (o->lpVtbl != &g_memObjVtbl) return 0;
+    if (o->kind != VB6_MEMK_NODE) return 0;
+    if (owner && o->owner != owner) return 0;
+    return o->index;
+}
+
 static int32_t memCollAdd(int32_t kind, void* owner, DISPPARAMS* dp, void** outObj) {
     *outObj = NULL;
     VARIANT* a0 = memArg(dp, 0);   // index
@@ -932,8 +946,14 @@ static int32_t memCollAdd(int32_t kind, void* owner, DISPPARAMS* dp, void** outO
         // Nodes.Add([relative], [relationship], [key], [text], [image], [selectedimage])
         // relative 可以是下标也可以是 Key (VB6 两者都收)；Key 先换成下标再往下传。
         const wchar_t* rKey = NULL;
-        int32_t rel = memParseIndexOrKey(memArg(dp, 0), &rKey);
-        if (rel < 0) rel = (rKey && *rKey) ? vb6_TreeView_NodeIndexByKey(owner, rKey) : 0;
+        VARIANT* relArg338 = memArg(dp, 0);
+        int32_t rel = 0;
+        if (relArg338 && relArg338->vt == VT_DISPATCH) {
+            rel = memDispatchToNodeIndex(relArg338, owner);
+        } else {
+            rel = memParseIndexOrKey(relArg338, &rKey);
+            if (rel < 0) rel = (rKey && *rKey) ? vb6_TreeView_NodeIndexByKey(owner, rKey) : 0;
+        }
         int32_t relship = memArgIsMissing(a1) ? 4 /* tvwChild */ : memVariantToI4(a1);
         int32_t newIdx = vb6_TreeView_AddNode(owner, rel, relship, memArgStr(a2), memArgStr(a3),
                                             memArgIsMissing(a4) ? 0 : memVariantToI4(a4),

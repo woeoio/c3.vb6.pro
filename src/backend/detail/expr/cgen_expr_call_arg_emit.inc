@@ -327,6 +327,20 @@
                 argVal = wrapToBSTR(argVal, *node.positional[i]);
             }
         }
+        // 账 #305 第三百三十刀 (续): **无形参表**的内置全局对象成员 (Clipboard.SetText/
+        // Screen…, Fix 092z 那一族) 收到 VARIANT 实参 —— 链式 COM 读
+        // (vb6_VariantFromComResult(vb6_ComGetProp(...))) 交回的是 vb6_VARIANT,
+        // 裸传 vb6_Clipboard_SetText(BSTR) → C2440 (GUISample frmMain:574/576
+        // Clipboard.SetText ActiveForm.rtfText.SelRTF)。VB6 语义按当前子类型转
+        // 字符串; 上面的 Fix 175 闸被 cExprIsVariant 挡住进不来, 这里单独收。
+        if (!isDeclareAnsiCall && node.positional[i] && cExprIsVariant(argVal)
+            && calleeParams.empty() && !node.omittedArgs.count(i)) {
+            const Vb6Type first330v = node.positional[0]
+                ? inferExprType(*node.positional[0]) : Vb6Type::Empty;
+            if (builtinNoParamTableStringSlot(callee, node.positional.size(), i, first330v)) {
+                argVal = "vb6_VariantToString(" + argVal + ")";
+            }
+        }
 
         // Fix 210: 用户 Sub/Function/Property 的 **ByVal Variant 形参**收到标量实参
         // (`List.Item(i)` / `List.Item(sKey)`, 形参是 `ByVal Index As Variant`)。

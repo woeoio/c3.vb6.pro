@@ -533,6 +533,9 @@
     // 类模块标志
     bool isClassModule_ = false;
     bool isFormModule_ = false;
+    // 账 #305 第三百三十刀: 当前窗体是否 VB.MDIForm (frmDesc.formControl.controlType)。
+    // 裸 ActiveForm 只在 MDIForm 模块里合法 (MDI 活动子窗体), 用它挡普通窗体误认。
+    bool currentFormIsMDI_ = false;
 
     // Fix 010: 类模块变量注册模式 — 只填充tracking set, 不生成变量声明(已在结构体中)
     bool trackOnly_ = false;

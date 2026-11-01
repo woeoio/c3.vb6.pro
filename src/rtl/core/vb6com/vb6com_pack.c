@@ -56,6 +56,11 @@ void* vb6_ComPackDouble(double val) {
 
 // 将void*(IDispatch*)封装为VARIANT (用于对象参数)
 void* vb6_ComPackObject(void* obj) {
+    if (obj && (uintptr_t)obj < 0x10000 && GetEnvironmentVariableA("C3_CRASH_TRACE", NULL, 0) > 0) {
+        HMODULE hb = GetModuleHandleA(NULL);
+        fprintf(stderr, "[C3_PACK] suspicious obj=%p rva=0x%lx\n", obj,
+                (unsigned long)((char*)_ReturnAddress() - (char*)hb)); fflush(stderr);
+    }
     VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
     VariantInit(pv);
     pv->vt = VT_DISPATCH;
