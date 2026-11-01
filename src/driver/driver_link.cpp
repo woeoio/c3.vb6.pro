@@ -5,6 +5,7 @@
 #include "driver/driver.hpp"
 #include "driver/res_inventory.hpp"   // ai/029 C29-M: 让位判据要问那份 .res 里有没有 #1 清单
 #include "driver/default_form_icon.hpp" // 账 #305 第303刀: VB6 默认窗体图标（链接期注入 EXE）
+#include "driver/project_form_icon.hpp" // 账 #305 第328刀: 工程自带那枚 —— 从 IconForm 那张窗体的 .frx 现取
 #include "common/diagnostics.hpp"
 #include "common/encoding.hpp"
 #include "ast/ast.hpp"
@@ -609,45 +610,98 @@ static bool embedManifestViaMt(const std::string& exePath, const std::string& ma
 // 走 UpdateResource 而不是再多编一份 .rc：mt.exe 已经把 .rsrc 建起来（资源目录存在），
 // 这一步只往里加条目；资源号照抄 VB6 ⇒ 产物里这四份资源与参考**逐字节相同**，判据好写。
 // 用户自带 .res 里已有图标组时不注入（再塞一份组 1 会让 Explorer 挑错图 / 与链接器打架）。
+//
+// 账 #305 第328刀: 同一扇门里多了一条来路 —— 工程**自己带**的那枚图标（`.frm` 的
+// `Icon = "<名>.frx":NNNN`，语料 431 份 EXE 工程有）。两条来路只在这里汇成一份材料，
+// 写资源的两发 UpdateResourceW 仍只有一处；组号与帧号起始值都问 default_form_icon.hpp。
 #if defined(_WIN32)
-static bool embedDefaultFormIcon(const std::string& exePath, bool verbose) {
-    std::filesystem::path exe = utf8ToPath(exePath);
-    HANDLE hUpd = BeginUpdateResourceW(exe.c_str(), FALSE);
-    if (!hUpd) {
-        std::cerr << "C3: warning: default form icon: BeginUpdateResource failed (err "
-                  << (unsigned long)GetLastError() << ")" << std::endl;
-        return false;
+// 默认那一份：字节表住在 default_form_icon.hpp（照抄 VB6 产物，逐字节可对）。
+static void defaultFormIconParts(std::vector<unsigned int>& ids,
+                                 std::vector<std::vector<unsigned char>>& images,
+                                 std::vector<unsigned char>& group) {
+    ids.clear();
+    images.clear();
+    group.assign(kDefaultFormIconGroup,
+                 kDefaultFormIconGroup + sizeof(kDefaultFormIconGroup));
+    for (const DefaultFormIconImage& img : kDefaultFormIconImages) {
+        ids.push_back(img.id);
+        images.push_back(std::vector<unsigned char>(img.data, img.data + img.size));
     }
+}
+
+// 两发写资源：N 枚 RT_ICON + 一枚 RT_GROUP_ICON。失败由调用方 discard 回滚。
+static bool embedFormIconImages(HANDLE hUpd, const std::vector<unsigned int>& ids,
+                                const std::vector<std::vector<unsigned char>>& images) {
     // lang 0 = 中性，与 VB6 产物一致。
     const WORD lang = 0;
     bool ok = true;
-    for (const DefaultFormIconImage& img : kDefaultFormIconImages) {
-        if (!UpdateResourceW(hUpd, MAKEINTRESOURCEW(3 /*RT_ICON*/), MAKEINTRESOURCEW(img.id),
-                             lang, const_cast<unsigned char*>(img.data), img.size)) {
-            std::cerr << "C3: warning: default form icon: UpdateResource(RT_ICON " << img.id
+    for (size_t i = 0; i < ids.size() && i < images.size(); i++) {
+        if (!UpdateResourceW(hUpd, MAKEINTRESOURCEW(3 /*RT_ICON*/), MAKEINTRESOURCEW(ids[i]),
+                             lang, const_cast<unsigned char*>(images[i].data()),
+                             static_cast<DWORD>(images[i].size()))) {
+            std::cerr << "C3: warning: form icon: UpdateResource(RT_ICON " << ids[i]
                       << ") failed (err " << (unsigned long)GetLastError() << ")" << std::endl;
             ok = false;
             break;
         }
     }
-    if (ok && !UpdateResourceW(hUpd, MAKEINTRESOURCEW(14 /*RT_GROUP_ICON*/),
-                               MAKEINTRESOURCEW(kDefaultFormIconGroupId), lang,
-                               const_cast<unsigned char*>(kDefaultFormIconGroup),
-                               (DWORD)sizeof(kDefaultFormIconGroup))) {
-        std::cerr << "C3: warning: default form icon: UpdateResource(RT_GROUP_ICON "
+    return ok;
+}
+
+// 组那一发单独一站：它必须最后写 ⇒ 失败时上面那几发跟着 discard 一起回滚。
+static bool embedFormIconGroup(HANDLE hUpd, const std::vector<unsigned char>& group) {
+    const WORD lang = 0;
+    if (!UpdateResourceW(hUpd, MAKEINTRESOURCEW(14 /*RT_GROUP_ICON*/),
+                         MAKEINTRESOURCEW(kDefaultFormIconGroupId), lang,
+                         const_cast<unsigned char*>(group.data()),
+                         static_cast<DWORD>(group.size()))) {
+        std::cerr << "C3: warning: form icon: UpdateResource(RT_GROUP_ICON "
                   << kDefaultFormIconGroupId << ") failed (err "
                   << (unsigned long)GetLastError() << ")" << std::endl;
-        ok = false;
+        return false;
     }
+    return true;
+}
+
+// iconFrmUtf8 = 那张供图标窗体的 .frm 绝对路径（空 = 工程没指 / 找不到 ⇒ 直接用默认那一份）。
+static bool embedFormIcon(const std::string& exePath, const std::string& iconFrmUtf8,
+                          bool verbose) {
+    std::vector<unsigned int> ids;
+    std::vector<std::vector<unsigned char>> images;
+    std::vector<unsigned char> group;
+    bool fromProject = false;
+    if (!iconFrmUtf8.empty()) {
+        FormIconData ico;
+        std::string why;
+        if (loadFormIconFromFrm(iconFrmUtf8, ico, why) &&
+            buildFormIconResources(ico, images, ids, group)) {
+            fromProject = true;
+        } else if (verbose) {
+            std::cout << "C3: form icon falls back to default: " << why << std::endl;
+        }
+    }
+    const char* sourceTag = fromProject ? "project" : "default";
+    if (!fromProject) {
+        defaultFormIconParts(ids, images, group);
+    }
+
+    std::filesystem::path exe = utf8ToPath(exePath);
+    HANDLE hUpd = BeginUpdateResourceW(exe.c_str(), FALSE);
+    if (!hUpd) {
+        std::cerr << "C3: warning: form icon: BeginUpdateResource failed (err "
+                  << (unsigned long)GetLastError() << ")" << std::endl;
+        return false;
+    }
+    bool ok = embedFormIconImages(hUpd, ids, images);
+    if (ok) ok = embedFormIconGroup(hUpd, group);
     if (!EndUpdateResourceW(hUpd, ok ? FALSE : TRUE)) {   // 失败时丢弃这半次修改
-        std::cerr << "C3: warning: default form icon: EndUpdateResource failed (err "
+        std::cerr << "C3: warning: form icon: EndUpdateResource failed (err "
                   << (unsigned long)GetLastError() << ")" << std::endl;
         return false;
     }
     if (verbose && ok) {
-        std::cout << "C3: default form icon embedded (group " << kDefaultFormIconGroupId
-                  << ", " << (sizeof(kDefaultFormIconImages) / sizeof(kDefaultFormIconImages[0]))
-                  << " images): " << exePath << std::endl;
+        std::cout << "C3: form icon embedded (" << sourceTag << ", " << ids.size()
+                  << " images, group " << kDefaultFormIconGroupId << "): " << exePath << std::endl;
     }
     return ok;
 }
@@ -1167,11 +1221,21 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
 
     // 账 #305 第303刀: 默认窗体图标 —— 只在 EXE、工程里有 .frm、且用户 .res 没自带图标时注入。
     // 认不动的 .res 与清单那一档同口径：保守让位（宁可没图标，也不与用户资源打架）。
+    // 第328刀: 那一份字节按 IconForm（没写则 Startup）那张窗体的 .frm/.frx 现取；
+    // 取不到仍落默认那一份 —— 与「窗体没有 Icon 属性」在 VB6 里的行为同一条口径。
 #if defined(_WIN32)
     if (!options.isDll && !msvcOpts.outputFile.empty()) {
         bool hasFormModule = false;
+        std::string iconFormName = !iconFormName_.empty() ? iconFormName_ : startupObject_;
+        std::transform(iconFormName.begin(), iconFormName.end(), iconFormName.begin(), ::tolower);
+        std::string iconFrmUtf8;
         for (size_t i = 0; i < modules_.size(); i++) {
-            if (modules_[i] && modules_[i]->isFormModule) { hasFormModule = true; break; }
+            if (!modules_[i] || !modules_[i]->isFormModule) continue;
+            hasFormModule = true;
+            if (!iconFrmUtf8.empty() || iconFormName.empty()) continue;
+            std::string lower = modules_[i]->moduleName;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if (lower == iconFormName) iconFrmUtf8 = modules_[i]->filename;
         }
         bool userHasIcon = false;
         if (!userResFile_.empty() && std::filesystem::exists(utf8ToPath(userResFile_))) {
@@ -1182,7 +1246,7 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
             }
         }
         if (hasFormModule && !userHasIcon) {
-            embedDefaultFormIcon(msvcOpts.outputFile, options.verbose);
+            embedFormIcon(msvcOpts.outputFile, iconFrmUtf8, options.verbose);
         }
     }
 #endif

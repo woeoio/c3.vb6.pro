@@ -330,6 +330,10 @@ private:
     std::string verOriginalFileName_;
     std::string verTitle_;
     std::string userResFile_;         // P23-03: VBP ResFile= .res path (absolute)
+    // 账 #305 第328刀: 应用图标的来处。VB6 按 IconForm= 找那枚窗体、没写才看 Startup=，
+    // 窗体 .frm 里的 `Icon = "<名>.frx":NNNN` 才是字节的家 (读法见 driver/project_form_icon.cpp)。
+    // 这两位只在这里存原样 —— 链接期一次解析，别在第二处再问一次 .vbp。
+    std::string iconFormName_;        // VBP IconForm="Form1"（窗体名；Startup 那一位 = startupObject_，Fix 142）
 
     // TypeLib解析器 (P6.3, COM类型导入)
     std::unique_ptr<TypeLibParser> typelibParser_;

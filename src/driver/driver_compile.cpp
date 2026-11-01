@@ -446,6 +446,9 @@ CompileResult Driver::compile(const CompileOptions& options) {
             if (!project.resFile.empty()) {
                 userResFile_ = pathToUtf8(project.resolvePath(project.resFile));
             }
+            // 账 #305 第328刀: 图标来处存原样, 由链接期一次性解析 (driver_link.cpp)。
+            // Startup 那一位早就有了（上面 Fix 142 那段），这里只补 IconForm 这一问。
+            iconFormName_ = project.iconForm;
         }
     }
 

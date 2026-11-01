@@ -3404,6 +3404,49 @@ function Test-VbpWarn {
     }
 }
 
+# === 窗体图标落在产物的资源目录里 (账 #305 第328刀) ===
+# 这一族的判据不在发码里 —— `--emit-c` 一个字都看不见资源，只有真链接出来的那台 exe 作数。
+# 尺住在 scripts/check_form_icon_resources.ps1：打开 PE 的 .rsrc，数 RT_ICON 的 id/长度，
+# 再校验组里点到的每一帧都在、长度对得上。两条来路各验一档 = 正证 + 反面证人。
+function Test-FormIconResources {
+    if (-not (Enter-VbpShard)) { return }
+    # 文件名写在本函数体内：R1/R1b 那两道 census 按「被裸调用的 Test-* 体内出现 check_*.ps1」认覆盖面。
+    $ruler = Join-Path $Root "scripts\check_form_icon_resources.ps1"
+    $cases = @(
+        @("balloon_icon_project", "$Tests\BalloonTooltips\prjBalloonTooltips.vbp", "BalloonTooltips", "30001=744,30002=296", 34),
+        @("sbevent_icon_default", "$Tests\c29statusbarevt\SbEvent.vbp", "SbEvent", "30001=304,30002=744,30003=296", 48)
+    )
+    foreach ($c in $cases) {
+        $name = $c[0]; $vbp = $c[1]; $exeNm = $c[2]; $expect = $c[3]; $grpSize = $c[4]
+        $script:total++   # 一枚用例 = 一次真链接 + 一次读资源，计数按用例走
+        Write-Host -NoNewline ("  [VBP-ICON] " + $name + " ... ")
+        $buildDir = Join-Path $OutDir ("icon_" + $name)
+        if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
+        New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+        $argList = '"' + $vbp + '" --output-dir "' + $buildDir + '"'
+        $null = & cmd /c ('"' + $C3 + '" ' + $argList + ' 2>&1')
+        $rc = $LASTEXITCODE
+        $exePath = Join-Path $buildDir ($exeNm + ".exe")
+        if ($rc -ne 0 -or -not (Test-Path $exePath)) {
+            $script:fail++
+            Write-Host ("FAIL build rc=" + $rc + " exe=" + (Test-Path $exePath)) -ForegroundColor Red
+            continue
+        }
+        $psExe = "powershell"
+        $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
+        if ($ps7) { $psExe = $ps7.Source }
+        $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File $ruler -Exe $exePath -Expect $expect -ExpectGroupSize $grpSize 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $script:pass++
+            Write-Host "PASS" -ForegroundColor Green
+        } else {
+            $script:fail++
+            Write-Host "FAIL" -ForegroundColor Red
+            $out | Select-Object -Last 8 | ForEach-Object { Write-Host "  $_" }
+        }
+    }
+}
+
 # ai/023 S05/S06: generic CLI check — exit 0 and output contains needle.
 function Test-CliOk {
     param([string]$Name, [string[]]$C3Args, [string]$Needle, [string]$ShardGroup = "")
@@ -7544,12 +7587,8 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-GuiVbp "VbQRCodegen" "$Tests\VbQRCodegen-master\test\Project1.vbp"
     # BalloonTooltips: form loads with controls + creates its common-controls tooltip windows (x64).
     Test-GuiVbp "BalloonTooltips" "$Tests\BalloonTooltips\prjBalloonTooltips.vbp" -ExeName "BalloonTooltips" -ShardGroup "balloon"
-    # ai/029 C29-M 的反面：这枚工程的 .res **自带** #1 清单（BalloonTooltips.rc 里
-    # `1 RT_MANIFEST "BalloonTooltips.exe.manifest"`，那段含 dpiAware/compatibility）
-    # ⇒ 必须"用他的、且只有一份"。`dpiAware` 只有用户那份里有，所以这条同时钉住
-    # "让位生效"与"内置那份没叠上去"（两份 #1 会让加载器直接报错）。
-    # 路径注意：Test-GuiVbp 的产物落在 `output\<用例名>\` 下（不是 $OutDir 根），
-    # 第一版我按 $OutDir\BalloonTooltips.exe 断 ⇒ CI 直接 FAIL (no exe) —— 记下来。
+    # 第328刀: 窗体图标落在**产物的资源目录**里 —— 判据只能真链接之后读 .rsrc。
+    Test-FormIconResources
     Test-ProductManifest "balloon_manifest_is_user_supplied" "$OutDir\BalloonTooltips\BalloonTooltips.exe" 1 "dpiAware" -ShardGroup "balloon"
     # Charts 2020 demo (3rd-party UserControl charts): windowless chart controls (x86 first;
     # x64 after LongPtr port of API pointers/handles in the .ctl/.cls sources).
