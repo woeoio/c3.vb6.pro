@@ -317,13 +317,6 @@ void vb6_MDI_RelayoutClient(void* hMDIForm) {
     int w = rc.right;
     int h = rc.bottom - ctx.top - ctx.bottom;
     if (w <= 0 || h <= 0) return;
-    /* 矩形没变就不动 (本钩每条消息都跑; Codejock 自己重排 MDIClient 后,
-     * 下一条消息立即纠正)。z 序同理: 只有 MDIClient 真在停靠条之上才压。 */
-    RECT rcCur; GetWindowRect(hClient, &rcCur);
-    MapWindowPoints(NULL, hForm, (POINT*)&rcCur, 2);
-    if (rcCur.left != 0 || rcCur.top != ctx.top
-        || (rcCur.right - rcCur.left) != w || (rcCur.bottom - rcCur.top) != h)
-        MoveWindow(hClient, 0, ctx.top, w, h, TRUE);
     /* 第三十四至三百五十三刀: Codejock 的排布/回流只在**窗体尺寸真的变化**时做
      * 一套 (FormResized 的 SetObjectRects + DockingPaneManager 的 WM_SIZE +
      * CommandBars.RecalcLayout)。按消息逐发会打乱它的布局状态 (实测: 窗口被
@@ -347,6 +340,9 @@ void vb6_MDI_RelayoutClient(void* hMDIForm) {
             s_lastSize[i353].h_ = rc.bottom;
         }
         if (sizeChanged353) {
+            /* MDIClient 收进带内 —— 只在尺寸真变时做一次。逐消息做会与
+             * Codejock 自己的 MDIClient 重排打乒乓 (实测应用假死)。 */
+            MoveWindow(hClient, 0, ctx.top, w, h, TRUE);
             vb6_OcxHost_FormResized(hForm, rc.right, rc.bottom);
             struct Ctx352 c352 = { NULL };
             EnumChildWindows(hForm, vb6_mdi_panemgr_cb352, (LPARAM)&c352);
@@ -365,6 +361,15 @@ void vb6_MDI_RelayoutClient(void* hMDIForm) {
          * 收不到 WM_SIZE, 停靠带/窗格全冻结在激活那一刻的尺寸。这里补发。 */
         vb6_OcxHost_ForwardMessage(hForm, WM_SIZE, SIZE_RESTORED,
             MAKELPARAM(rc.right, rc.bottom), NULL);
+            /* nudge 链是同步的 —— Codejock 重排完可能把 MDIClient 挪回顶部
+             * 盖住菜单带 (实测)。链尾重申一次带内位置与 z 序。 */
+            RECT rcNow; GetWindowRect(hClient, &rcNow);
+            MapWindowPoints(NULL, hForm, (POINT*)&rcNow, 2);
+            if (rcNow.left != 0 || rcNow.top != ctx.top
+                || (rcNow.right - rcNow.left) != w || (rcNow.bottom - rcNow.top) != h)
+                MoveWindow(hClient, 0, ctx.top, w, h, TRUE);
+            SetWindowPos(hClient, HWND_BOTTOM, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
     HWND hAbove = GetWindow(hClient, GW_HWNDPREV);
