@@ -4583,19 +4583,26 @@ if ($Category -in @("all", "run", "bas")) {
     $b606Needles = @("S606-v-lit=lit", "S606-v-slot=slot", "S606-v-none=none",
         "S606-l-lit=lit", "S606-l-slot=slot", "S606-l-none=none",
         "S606-s-lit=lit", "S606-s-slot=slot", "S606-s-none=none",
-        "S606-d-lit=lit", "S606-d-slot=slot", "S606-d-none=none", "S606-DONE")
+        "S606-d-lit=lit", "S606-d-slot=slot", "S606-d-none=none",
+        # 末四行 = 槽标签落在关系形 (`Case Is > w`) 与范围形 (`Case 1 To w`) 上。
+        "S606-is-gt=gt", "S606-is-no=no", "S606-to-in=in", "S606-to-no=no", "S606-DONE")
     Add-BasTest "b606_slot_label" "$Tests\b606_slot_label.bas" $b606Needles
     Add-BasTest "b606_slot_label_x86" "$Tests\b606_slot_label.bas" $b606Needles -Arch "x86"
     # 发码针：主语与槽标签都在整枚槽上比（装箱走唯一那处），被折档的三形一条都不许留。
     Test-EmitcShape "b606_slot_label_shape" @("$Tests\b606_slot_label.bas") @(
         'vb6_VARIANT _vb6_select_',
         'vb6_VarCmpEq(&_vb6_select_',
-        'vb6_VariantFromValue((*w))'
+        'vb6_VariantFromValue((*w))',
+        'vb6_VarCmpGt(&_vb6_select_',
+        'vb6_VarCmpGe(&_vb6_select_',
+        'vb6_VarCmpLe(&_vb6_select_'
     )
     Test-EmitcAbsent "b606_slot_label_no_fold" @("$Tests\b606_slot_label.bas") @(
         '== (*w)',
         'vb6_StrCmp(_vb6_select_',
-        'vb6_VariantToLong((*v))'
+        'vb6_VariantToLong((*v))',
+        '> (*w)',
+        '(float)((*w))'
     )
 
     # <vbeclipse> 账 #305 §B180（第六十九刀）：`StrPtr(<Variant>)` 曾经发

@@ -11,7 +11,9 @@ Option Explicit
 ' 逐项 VarCmp，所以修法 = 承载档由标签回答: 有槽标签就整枚槽 + 逐项 VarCmp，主语不是槽的
 ' 那三档按 wrapVariantValue 唯一出口装箱（借来的不收，同 §B164 那位主人）。
 '
-' 每档三条读数: 命中字面量标签 / 命中槽标签 / 两支都不命中（走 Case Else）。
+' 每档三条读数: 命中字面量标签 / 命中槽标签 / 两支都不命中（走 Case Else）。
+' 末两档 hitIs / hitTo 钉的是**槽标签落在关系形与范围形**上的那两形（第324刀当时只在
+' 一次性探针 .local/p606/P606e.bas 量过，本刀升格进来；改夹具=动清单那一行，随本刀一起登记）。
 ' 读数一律不带方括号: 套件用 PowerShell 的 -like 比针，[ABC] 会被当字符类。
 
 Private Function hitV(v As Variant, w As Variant) As String
@@ -58,6 +60,25 @@ Private Function hitD(d As Double, w As Variant) As String
     End Select
 End Function
 
+Private Function hitIs(n As Long, w As Variant) As String
+    Select Case n
+        Case Is > w
+            hitIs = "gt"
+        Case Else
+            hitIs = "no"
+    End Select
+End Function
+
+Private Function hitTo(d As Double, w As Variant) As String
+    Select Case d
+        Case 1 To w
+            hitTo = "in"
+        Case Else
+            hitTo = "no"
+    End Select
+End Function
+
+
 Sub Main()
     Debug.Print "S606-v-lit=" & hitV(7, 9)
     Debug.Print "S606-v-slot=" & hitV(5, 5)
@@ -71,5 +92,9 @@ Sub Main()
     Debug.Print "S606-d-lit=" & hitD(1.5, 2.5)
     Debug.Print "S606-d-slot=" & hitD(0.5, 0.5)
     Debug.Print "S606-d-none=" & hitD(0.5, 2.5)
+    Debug.Print "S606-is-gt=" & hitIs(9, 5)
+    Debug.Print "S606-is-no=" & hitIs(3, 5)
+    Debug.Print "S606-to-in=" & hitTo(3, 5)
+    Debug.Print "S606-to-no=" & hitTo(7, 5)
     Debug.Print "S606-DONE"
 End Sub
