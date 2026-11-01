@@ -597,6 +597,23 @@
         isComMarker_ = false;
         std::string objExpr = std::move(comObjExpr_);
         std::string memberName = std::move(comMemberName_);
+        /* 账 #305 第三百四十四刀: 窗体接收者上的 **Public 变量写** (GUISample
+         * frmMain:973 `Set frmD.fMain = Me`, frmDocument 声明 Public fMain As frmMain)。
+         * 窗体 Public 变量的 C 存储是**裸全局** (frmDocument.c `void* fMain`),
+         * 直接赋值; 走 COM SetRef 是拿窗体 HWND 当 IDispatch 派发 —— 宿主 miss
+         * 静默丢, 事后对空/garbage 的成员链把进程带走 (实测)。 */
+        {
+            Symbol* pvVar344 = symTab_.lookupModule(memberName);
+            if (!pvVar344) pvVar344 = symTab_.lookup(memberName);
+            if (pvVar344 && pvVar344->kind == SymbolKind::Variable && pvVar344->isExternal
+                && knownFormModuleNames_.count(Symbol::toLower(pvVar344->sourceModule))) {
+                emitSetObjectRhs(node.value);
+                if (isComMarker_) resolveComValue("Object");
+                std::string v344 = std::move(lastExpr_);
+                c_.emitLine(cIdent(pvVar344->name) + " = (void*)" + v344 + ";  /* form Public var Set */");
+                return;
+            }
+        }
     emitSetObjectRhs(node.value);
     // COM属性值: 如果右侧是COM属性, 解析为值
     // 账 (Outlook2013 frmMain:830): Set 的右值是**对象** —— 默认档 String 会发

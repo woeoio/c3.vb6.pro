@@ -130,6 +130,25 @@
         vb6_UCControls* cpc = vb6_uc_newControls(pcHost);
         vb6_ho_setVariantObject(out, cpc); return 1;
     }
+    /* 账 #305 第三百四十三刀: MDIForm 的 ActiveForm —— MDI 活动子窗体 (对象)。
+     * GUISample 的 CommandBars_Update/Execute 每一发都问它 (Is Nothing /
+     * TypeName / .rtfText 链), 此前宿主模型不认 => Empty 刷屏 (C3_HOST_MEMBER_MISS
+     * 上千发) 且 `fMainForm.ActiveForm.RefreshColors` 永远空转。口径:
+     *   接收者是登记过的**窗体** 且挂了 MDI client => WM_MDIGETACTIVE 的子窗体 HWND;
+     *   没有 MDI client (普通窗体) => Empty (VB6 里 ActiveForm 只在 MDIForm 上有)。
+     * 交对象走 #250 立的唯一出口 vb6_ho_setVariantObject (HWND 由宿主模型认得)。 */
+    if (_wcsicmp(name, L"ActiveForm") == 0) {
+        if (h && h->isForm) {
+            HWND hClient = (HWND)vb6_GetMDIClient(obj);
+            if (hClient) {
+                HWND hChild = (HWND)SendMessageW(hClient, WM_MDIGETACTIVE, 0, 0);
+                if (hChild && IsWindow(hChild)) {
+                    vb6_ho_setVariantObject(out, (void*)hChild); return 1;
+                }
+            }
+            vb6_ho_setVariantEmpty(out); return 1;
+        }
+    }
     if (_wcsicmp(name, L"Controls") == 0) {
         /* 账 #250: 这一档以前用的是 setVariantDispatch —— 那一枚**刻意**只交 Empty
            (让字体代理那一路继续走 Nothing 分支, 见 uc_hostmodel.c 的注释)。

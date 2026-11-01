@@ -942,6 +942,8 @@
     c_.emitLine("default:");
     c_.indent();
     if (isMDIForm) {
+        // 账 #305 第三百四十六刀: Codejock 停靠条共存 —— MDIClient 收进空余带
+        c_.emitLine("vb6_MDI_RelayoutClient((void*)hwnd);");
         c_.emitLine("return DefFrameProcW(hwnd, (HWND)vb6_GetMDIClient(hwnd), msg, wParam, lParam);");
     } else if (isMDIChild) {
         c_.emitLine("return DefMDIChildProcW(hwnd, msg, wParam, lParam);");

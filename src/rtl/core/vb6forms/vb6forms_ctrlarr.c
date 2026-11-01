@@ -265,6 +265,65 @@ void* vb6_CreateMDIChildWindow(const char* className, const char* formName,
     return (void*)hChild;
 }
 
+/* 账 #305 第三百四十六刀: MDI 客体带重排 (Codejock 停靠条共存)。
+ * CommandBars 控件排好了自己的菜单/工具栏带 (XTPDockBar 顶带) 和状态栏
+ * (XTPStatusBar 底带), 但 **MDIClient 没被挪进空余带** —— 它从窗体顶铺到底,
+ * 活动子窗体盖住菜单 (GUISample 实测: frmDocument @y=94 压住顶带)。这里在
+ * 窗体 WM_SIZE 时把 MDIClient 收进 [顶带底, 底带顶] 的空余区, 并压到 z 序底
+ * (停靠条必须留在它上面)。只接管有 XTPDockBar 的窗体, 原生 MDI 工程零影响。 */
+typedef struct VB6_MdiBandCtx { HWND form; int top, bottom; BOOL xtp; } VB6_MdiBandCtx;
+
+static BOOL CALLBACK vb6_mdi_band_cb(HWND h, LPARAM lp) {
+    VB6_MdiBandCtx* c = (VB6_MdiBandCtx*)lp;
+    wchar_t cls[64] = {0};
+    GetClassNameW(h, cls, 63);
+    if (GetParent(h) != c->form) return TRUE;
+    if (wcsncmp(cls, L"XTPDockBar", 10) != 0 && wcsncmp(cls, L"XTPStatusBar", 12) != 0)
+        return TRUE;
+    c->xtp = TRUE;
+    RECT rc; GetWindowRect(h, &rc);
+    MapWindowPoints(NULL, c->form, (POINT*)&rc, 2);
+    RECT rf; GetClientRect(c->form, &rf);
+    if (rc.top <= 4) {                        /* 顶带: 取最深的底 */
+        if (rc.bottom > c->top) c->top = rc.bottom;
+    } else if (rc.bottom >= rf.bottom - 4) {  /* 底带: 取最高 */
+        int bh = rc.bottom - rc.top;
+        if (bh > c->bottom) c->bottom = bh;
+    }
+    return TRUE;
+}
+
+void vb6_MDI_RelayoutClient(void* hMDIForm) {
+    HWND hForm = (HWND)hMDIForm;
+    if (!hForm || !IsWindow(hForm)) return;
+    HWND hClient = (HWND)GetPropW(hForm, L"VB6_MDIClient");
+    if (!hClient || !IsWindow(hClient)) return;
+    VB6_MdiBandCtx ctx;
+    ctx.form = hForm; ctx.top = 0; ctx.bottom = 0; ctx.xtp = FALSE;
+    EnumChildWindows(hForm, vb6_mdi_band_cb, (LPARAM)&ctx);
+    if (!ctx.xtp) return;
+    RECT rc; GetClientRect(hForm, &rc);
+    int w = rc.right;
+    int h = rc.bottom - ctx.top - ctx.bottom;
+    if (w <= 0 || h <= 0) return;
+    /* 矩形没变就不动 (本钩每条消息都跑; Codejock 自己重排 MDIClient 后,
+     * 下一条消息立即纠正)。z 序同理: 只有 MDIClient 真在停靠条之上才压。 */
+    RECT rcCur; GetWindowRect(hClient, &rcCur);
+    MapWindowPoints(NULL, hForm, (POINT*)&rcCur, 2);
+    if (rcCur.left != 0 || rcCur.top != ctx.top
+        || (rcCur.right - rcCur.left) != w || (rcCur.bottom - rcCur.top) != h)
+        MoveWindow(hClient, 0, ctx.top, w, h, TRUE);
+    HWND hAbove = GetWindow(hClient, GW_HWNDPREV);
+    wchar_t clsAbove[32] = {0};
+    if (hAbove) {
+        GetClassNameW(hAbove, clsAbove, 31);
+        if (wcsncmp(clsAbove, L"XTPDockBar", 10) != 0
+            && wcsncmp(clsAbove, L"XTPStatusBar", 12) != 0)
+            SetWindowPos(hClient, HWND_BOTTOM, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
 void* vb6_GetMDIClient(void* hMDIForm) {
     if (!hMDIForm) return NULL;
     return (void*)GetPropW((HWND)hMDIForm, L"VB6_MDIClient");

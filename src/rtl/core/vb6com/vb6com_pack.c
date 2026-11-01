@@ -76,8 +76,19 @@ void* vb6_ComPackObject(void* obj) {
         if (vb6_Host_IsHostObject(obj)) {
             pv->pdispVal = (IDispatch*)vb6_UC_WrapHostObject(obj);
             pv->vt = VT_DISPATCH;
-        } else {
+        } else if (vb6_ComIsDispatchable(obj)) {
             ((IDispatch*)obj)->lpVtbl->AddRef((IDispatch*)obj);
+        } else {
+            /* 账 #305 第三百四十一刀: 非可分派的垃圾 (BSTR/UDT/野指针) 被当对象
+             * 打包 —— 原样 AddRef 会把字符串头当 vtable 调槽 => AV (GUISample
+             * AttachPane 链实测 av read 0x2e0032)。不崩优先: 原样装箱 (调用点
+             * 反正错了, 空引用比野调用好查), 响亮报出来。 */
+            if (GetEnvironmentVariableA("C3_CRASH_TRACE", NULL, 0) > 0) {
+                HMODULE hb341 = GetModuleHandleA(NULL);
+                fprintf(stderr, "[C3_PACK] not-dispatchable obj=%p rva=0x%lx\n", obj,
+                        (unsigned long)((char*)_ReturnAddress() - (char*)hb341));
+                fflush(stderr);
+            }
         }
     }
     return (void*)pv;

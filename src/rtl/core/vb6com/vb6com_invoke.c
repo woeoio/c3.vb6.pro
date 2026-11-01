@@ -37,6 +37,19 @@ static int32_t vb6_dispid_cache_count = 0;
 // `VTableIPAO() As LongPtr` 数组, 载体在堆上, 那样会把合法对象一并拒掉):
 //   对象指针可读 → 首槽 vtable 可读且容得下前 7 槽 → 槽 0/1/2/5/6 指向可执行内存。
 // 放在 DISPID 缓存查找之后, 命中缓存的调用不受影响。
+/* 账 #305 第三百四十二刀: IsBadReadPtr 在守卫页/页堆下不可靠 (探针本身可能触发
+ * 系统侧异常路径), 换 VirtualQuery 的提交+可读档判定。区间可能跨页, 两端都查。 */
+static int32_t vb6_ComIsReadable(const void* p, size_t n) {
+    if (!p) return 0;
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(p, &mbi, sizeof(mbi)) != sizeof(mbi)) return 0;
+    if (mbi.State != MEM_COMMIT) return 0;
+    DWORD prot = mbi.Protect & 0xFF;
+    if (prot == PAGE_NOACCESS) return 0;
+    if (n > 1) return vb6_ComIsReadable((const char*)p + n - 1, 1);
+    return 1;
+}
+
 static int32_t vb6_ComIsCodePtr(const void* p) {
     MEMORY_BASIC_INFORMATION mbi;
     if (!p || VirtualQuery(p, &mbi, sizeof(mbi)) == 0) return 0;
@@ -53,11 +66,11 @@ int32_t vb6_ComIsDispatchable(const void* disp) {
     // (ucTabStrip.UserControl_Resize 实测, PC=野值)。真窗口句柄一律非 COM 分派对象,
     // 由宿主模型 (IsHostObject/IsWindow) 单独应答, 这里直接判否。
     if (IsWindow((HWND)disp)) return 0;
-    if (IsBadReadPtr(disp, sizeof(void*))) return 0;
+    if (!vb6_ComIsReadable(disp, sizeof(void*))) return 0;
     void* vtbl = *(void**)disp;
     /* IDispatch: QueryInterface/AddRef/Release/GetTypeInfoCount/
      * GetTypeInfo/GetIDsOfNames/Invoke — 前 7 槽必须在可执行页里 */
-    if (!vtbl || IsBadReadPtr(vtbl, 7 * sizeof(void*))) return 0;
+    if (!vtbl || !vb6_ComIsReadable(vtbl, 7 * sizeof(void*))) return 0;
     void** slot = (void**)vtbl;
     return vb6_ComIsCodePtr(slot[0]) && vb6_ComIsCodePtr(slot[1])
         && vb6_ComIsCodePtr(slot[2]) && vb6_ComIsCodePtr(slot[5])
@@ -148,6 +161,15 @@ static int32_t vb6_ComDispViewOffset(void* disp) {
 /* 交回本次调用该用的接收者; *owned 非空 = 借出的一枚引用, 用完交给 ...Out。 */
 static void* vb6_ComDispViewIn(void* disp, void** owned) {
     *owned = NULL;
+    /* 账 #305 第三百四十二刀: 非可分派接收者 (BSTR/UDT/野指针) 在这里就拦下 ——
+     * 原先 DispViewOffset 对它直接 QueryInterface, 间接调用字符串头冒充的
+     * vtable 槽 => AV (GUISample AttachPane 链, av read 0x2e0032 实测)。
+     * 拦下后原样交回, Rcv 的 getDispid 走 not-found 安全路 (与 ComCall 的
+     * C3_LATEBIND_MISS 同口径, 响亮不崩)。 */
+    if (disp && !vb6_ComLateBindIsPseudo(disp) && !vb6_ComIsDispatchable(disp)) {
+        vb6_ComLateBindMiss(L"DispView", L"(receiver)", disp);
+        return disp;
+    }
     int32_t off = vb6_ComDispViewOffset(disp);
     if (off <= 0) return disp;
     void* d = (char*)disp + off;

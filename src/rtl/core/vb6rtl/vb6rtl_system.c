@@ -633,7 +633,10 @@ void vb6_Forms_Register(void* hwnd_, const char* name) {
     /* Fix 112: 窗体 HWND 也是宿主对象 (Me.ScaleWidth / Me.Controls / Me.hwnd)
        账 #257: 名字一并交进去 —— 以前这里恒传 NULL，于是窗体自己的 `.Name` 两条读法
        都答空串，排版器那句 `If oCtrl.Container.Name = oForm.Name` 靠「空 = 空」真空通过。 */
-    vb6_HostObj_Register(hwnd_, name, "Form", 1, -1);
+    /* 账 #305 第三百四十三刀 (二): typeName 传**窗体本名** (frmDocument 等) ——
+     * VB6 的 TypeName(窗体实例) 答的是类名, 不是 "Form"; GUISample 的
+     * `TypeName(ActiveForm) = "frmDocument"` 判据靠它。 */
+    vb6_HostObj_Register(hwnd_, name, name && *name ? name : "Form", 1, -1);
 }
 void vb6_Forms_Unregister(void* hwnd_) {
     HWND hwnd = (HWND)hwnd_;

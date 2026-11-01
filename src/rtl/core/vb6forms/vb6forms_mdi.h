@@ -28,6 +28,8 @@ void* vb6_CreateMDIChildWindow(const char* className, const char* formName,
 
 // 获取MDI客户窗口句柄 (从MDI父窗体获取)
 void* vb6_GetMDIClient(void* hMDIForm);
+/* 账 #305 第三百四十六刀: MDIClient 收进 Codejock 停靠条的空余带 (WM_SIZE 钩) */
+void vb6_MDI_RelayoutClient(void* hMDIForm);
 
 // MDI消息循环 (处理TranslateMDISysAccel)
 int vb6_MDIMessageLoop(void* hAccelTable);
