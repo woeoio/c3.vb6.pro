@@ -14,7 +14,7 @@
 # 规则 (每条都对应一个会让本哨兵红的假改动, 见 .local/k321/nc_321.py):
 #   R1 标签箱声明只此一处, 且装箱仍只问 wrapVariantValue (不另开打包器);
 #   R2 所有权问句只此一处, 且问的是 variantRhsOwnsValue (不许按文本/按表另答);
-#   R3 清收循环与清收那一行各只一处, 整份文件的 VariantClear 只此一枚;
+#   R3 两位放箱主人各只一处(标签箱=账 #604 / 主语承载箱=账 #606), 整份文件 VariantClear 恰两枚;
 #   R4 本文件里不许出现自己的串/变体打包器或 BSTR 释放器 (那会把 borrowed 档一起放掉);
 #   R5 位置序: 声明 -> if 链 -> 清收 (清收落进 Case 体就等于没清);
 #   R6 扫描地板 (文件长度 + VarCmp 站点数), 扫描瞎了不许报干净;
@@ -84,7 +84,8 @@ Want 'R2 clears list' (C 'std::vector<std::string> labelClears;' $COD) 1 '清收
 # ---- R3 清收循环与清收行 ----
 Want 'R3 clear loop' (C 'for (auto& lblClear : labelClears) {' $COD) 1 '清收循环只许一处'
 Want 'R3 clear line' (C ('c_.emitLine("vb6_VariantClear(&" + lblClear + ");");') $COD) 1 '清收那一行只许拼一处'
-Want 'R3 one VariantClear in file' (C 'vb6_VariantClear(' $COD) 1 '本文件里 VariantClear 只此一枚 (另开一站 = 第二个释放主人)'
+Want 'R3 subject clear line' (C ('c_.emitLine("vb6_VariantClear(&" + tempVar + ");");') $COD) 1 '主语承载箱那一行只许拼一处 (整枚槽浅拷直取, 自己造的自己放)' 
+Want 'R3 two VariantClear in file' (C 'vb6_VariantClear(' $COD) 2 '本文件里 VariantClear 恰两枚: 标签箱 + 主语箱 (第三站 = 又一个释放主人)'
 
 # ---- R4 本文件不许自造打包器/释放器 ----
 Want 'R4 no own VariantString' (C 'vb6_VariantString(' $COD) 0 '标签箱的打包归 wrapVariantValue, 这里不许另发'
@@ -95,6 +96,7 @@ Want 'R4 no BSTR_Free' (C 'vb6_BSTR_Free(' $COD) 0 'VARIANT 箱要用 VariantCle
 Before 'for (auto& decl : labelDecls) c_.emitLine(decl);' 'c_.emitLine("if (" + clauseConds[ci] + ") {");' $COD 'R5 decls before chain' '声明必须在 if 链之前 (否则第二枚标签的声明落在 } 与 else if 之间 = 非法 C)'
 Before 'c_.emitLine("if (" + clauseConds[ci] + ") {");' 'for (auto& lblClear : labelClears) {' $COD 'R5 chain before clears' '清收必须在 if 链(含 Case 体)之后 —— 放到链前就是边比边放, 比的还是已释放的块'
 Before 'if (!firstVariant) {' 'for (auto& lblClear : labelClears) {' $COD 'R5 clears after chain close' '清收要落在最后一条 Case 的闭括号之后'
+Before 'for (auto& lblClear : labelClears) {' 'c_.emitLine("vb6_VariantClear(&" + tempVar + ");");' $COD 'R5 subject box after labels' '主语箱要排在标签箱清完之后 (比较链没走完就放主语 = 比的还是已释放的槽)'
 
 # ---- R6 扫描地板 ----
 if ($SEL.Length -lt 8000) { $fail += ('R6 scan floor: cgen_select.cpp is ' + $SEL.Length + ' chars (want >=8000) -- 扫描瞎了却报干净') }
@@ -117,7 +119,7 @@ if ($fail.Count -gt 0) {
 }
 Write-Output ('PASS check_select_label_owner: decls=' + (C 'labelDecls.push_back(' $COD) +
     ' owns=' + (C 'variantRhsOwnsValue(ast, expr)' $COD) +
-    ' clears=' + (C 'vb6_VariantClear(' $COD) +
+    ' clears=' + (C 'vb6_VariantClear(' $COD) + ' box=' + (C 'vb6_VariantClear(&" + tempVar' $COD) +
     ' cmps=' + (C 'vb6_VarCmp' $COD) +
     ' cells=' + (C 'Add-BasTest "b604_select_label_owner' $RUN) +
     ' needles=' + (C 'Debug.Print "S604-' $FX))
