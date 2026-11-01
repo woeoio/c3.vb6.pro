@@ -199,6 +199,32 @@ static int32_t vb6_text_getc(FILE* f) {
 // ============================================================
 
 // VB6文件I/O使用通道号(1-511), 我们用文件指针表实现
+// Get # / Put # byte buffer -> BSTR. Whole-buffer ACP conversion: the buffer may
+// contain NUL bytes (binary Get), so the NUL-terminated vb6_BSTR_FromANSIBuf path
+// is not usable here.
+static BSTR vb6_bytes_to_bstr(const char* buf, int32_t n) {
+    if (!buf || n <= 0) return vb6_BSTR_Empty();
+#if defined(_WIN32)
+    int wlen = MultiByteToWideChar(CP_ACP, 0, buf, n, NULL, 0);
+    if (wlen <= 0) return vb6_BSTR_Empty();
+    BSTR r = SysAllocStringLen(NULL, (UINT)wlen);
+    if (!r) return vb6_BSTR_Empty();
+    MultiByteToWideChar(CP_ACP, 0, buf, n, r, wlen);
+    r[wlen] = L'\0';
+    return r;
+#else
+    size_t wlen = mbstowcs(NULL, buf, (size_t)n);
+    if (wlen == (size_t)-1) return vb6_BSTR_Empty();
+    wchar_t* tmp = (wchar_t*)malloc((wlen + 1) * sizeof(wchar_t));
+    if (!tmp) return vb6_BSTR_Empty();
+    mbstowcs(tmp, buf, (size_t)n);
+    tmp[wlen] = L'\0';
+    BSTR r = vb6_BSTR_FromStr(tmp);
+    free(tmp);
+    return r;
+#endif
+}
+
 #define VB6_MAX_FILES 32
 static FILE* vb6_file_table[VB6_MAX_FILES] = {0};
 static int32_t vb6_file_mode[VB6_MAX_FILES] = {0};  // 1=Input, 2=Output, 4=Random, 8=Append, 16=Binary
@@ -554,6 +580,29 @@ int32_t vb6_Get(int32_t filenumber, int32_t recnumber, void* varPtr, int32_t var
     FILE* f = vb6_file_table[filenumber];
     int32_t mode = vb6_file_mode[filenumber];
 
+    // varSize == 0 is the codegen sentinel for a variable-length String target
+    // (GetStmt emits sizeExpr = "0" for knownBstrVars_). VB6 Get/Put on a String
+    // uses no length prefix: it transfers exactly the CURRENT length of the
+    // string (VB6 file I/O is byte-oriented, one ACP byte per character).
+    // `s = Space$(LOF(f)): Get #f, , s` is the classic whole-file read
+    // (VBWolf modEpisodes.bas:32) and only works with that rule. Before this,
+    // varSize=0 fell through to fread(..., 0, ...): not a single byte was read,
+    // the string stayed Space$ blanks and every line looked blank
+    // (symptom: "No levels are listed in ...episodes.txt").
+    if (varSize == 0) {
+        BSTR* pstr = (BSTR*)varPtr;
+        int32_t want = (pstr && *pstr) ? vb6_BSTR_Len(*pstr) : 0;
+        if (want <= 0) return -1;
+        char* buf = (char*)malloc((size_t)want + 1);
+        if (!buf) return 0;
+        size_t got = fread(buf, 1, (size_t)want, f);
+        buf[got] = '\0';
+        BSTR nv = vb6_bytes_to_bstr(buf, (int32_t)got);
+        free(buf);
+        vb6_BSTR_AssignMove(pstr, nv);
+        return -1;
+    }
+
     if (mode == 4) {
         // Random模式: recnumber是1-based记录号, 按reclength定位
         int32_t reclen = vb6_file_reclen[filenumber];
@@ -584,6 +633,16 @@ int32_t vb6_Put(int32_t filenumber, int32_t recnumber, void* varPtr, int32_t var
     FILE* f = vb6_file_table[filenumber];
     int32_t mode = vb6_file_mode[filenumber];
 
+    // Same sentinel as vb6_Get: Put of a String writes its characters as ACP
+    // bytes, no length prefix (VB6 semantics; symmetric with the read side).
+    if (varSize == 0) {
+        BSTR s = varPtr ? *(BSTR*)varPtr : NULL;
+        int32_t len = s ? vb6_BSTR_Len(s) : 0;
+        for (int32_t i = 0; i < len; i++) vb6_text_putc(f, (wchar_t)s[i]);
+        fflush(f);
+        return -1;
+    }
+
     if (mode == 4) {
         // Random模式: recnumber是1-based记录号, 按reclength定位
         int32_t reclen = vb6_file_reclen[filenumber];
@@ -611,6 +670,56 @@ int32_t vb6_Put(int32_t filenumber, int32_t recnumber, void* varPtr, int32_t var
     return -1;  // True
 }
 
+
+// ============================================================
+// Get # / Put # on a whole dynamic array (codegen: cgen_file_io.cpp)
+// ------------------------------------------------------------
+// VB6 Get on an array variable transfers the WHOLE array: element count x
+// element size bytes, straight into the SafeArray payload. VBWolf
+// modFile.bas:24 `Get #f, , data` (Byte() map file) depends on it; the old
+// codegen emitted `vb6_Get(f, 0, &(*data), sizeof(int32_t))` -- one element
+// into the descriptor pointer slot, i.e. nothing useful.
+int32_t vb6_GetArray(int32_t filenumber, int32_t recnumber, vb6_SafeArray1D* arr) {
+    if (filenumber < 1 || filenumber >= VB6_MAX_FILES || !vb6_file_table[filenumber]) return 0;
+    if (!arr || !arr->data || arr->count <= 0 || arr->elemSize <= 0) return -1;
+    FILE* f = vb6_file_table[filenumber];
+    int32_t mode = vb6_file_mode[filenumber];
+    int32_t total = arr->count * arr->elemSize;
+    if (mode == 4) {
+        int32_t reclen = vb6_file_reclen[filenumber];
+        if (reclen <= 0) reclen = 128;
+        fseek(f, (long)(recnumber - 1) * reclen, SEEK_SET);
+        if (total > reclen) total = reclen;
+    } else if (mode == 16) {
+        if (recnumber > 0) fseek(f, (long)(recnumber - 1), SEEK_SET);
+    } else {
+        return 0;
+    }
+    size_t n = fread(arr->data, 1, (size_t)total, f);
+    if ((int32_t)n < total) memset((char*)arr->data + n, 0, (size_t)(total - (int32_t)n));
+    return -1;
+}
+
+int32_t vb6_PutArray(int32_t filenumber, int32_t recnumber, vb6_SafeArray1D* arr) {
+    if (filenumber < 1 || filenumber >= VB6_MAX_FILES || !vb6_file_table[filenumber]) return 0;
+    if (!arr || !arr->data || arr->count <= 0 || arr->elemSize <= 0) return -1;
+    FILE* f = vb6_file_table[filenumber];
+    int32_t mode = vb6_file_mode[filenumber];
+    int32_t total = arr->count * arr->elemSize;
+    if (mode == 4) {
+        int32_t reclen = vb6_file_reclen[filenumber];
+        if (reclen <= 0) reclen = 128;
+        fseek(f, (long)(recnumber - 1) * reclen, SEEK_SET);
+        if (total > reclen) total = reclen;
+    } else if (mode == 16) {
+        if (recnumber > 0) fseek(f, (long)(recnumber - 1), SEEK_SET);
+    } else {
+        return 0;
+    }
+    fwrite(arr->data, 1, (size_t)total, f);
+    fflush(f);
+    return -1;
+}
 
 // ============================================================
 // P18-E: File Locking

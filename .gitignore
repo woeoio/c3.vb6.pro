@@ -4,6 +4,7 @@
 
 # ---------- 构建产物 ----------
 .build/
+.build-*/
 build/
 out/
 output/

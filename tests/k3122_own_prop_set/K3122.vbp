@@ -1,0 +1,5 @@
+Type=Exe
+Name="K3122App"
+Module=mdl3122; mdl3122.bas
+Class=P3122; P3122.cls
+Startup="Sub Main"

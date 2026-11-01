@@ -225,6 +225,7 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                     sym->comClsidStr = cc->clsidStr;
                     sym->comProgId = cc->progId;
                     sym->comDefaultIfaceName = cc->defaultIfaceName;
+                    sym->comIsAppObject = cc->isAppObject;
 
                     // 复制默认接口的方法签名到ComClass
                     if (cc->defaultIface) {
@@ -334,6 +335,18 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                 for (auto& en : tl->enums) totalEnumMembers += en->members.size();
                 if (totalEnumMembers <= 1000) {
                     for (auto& en : tl->enums) {
+                        // 枚举**类型名**也注册 (EnumType): 限定形式 `EnumType.成员`
+                        // (XTPCommandBarsSpecialCommands.XTP_ID_RIBBONCONTROLTAB) 靠
+                        // m22 Fix 084y-8 拦截, 判据是 object 标识符的符号 kind==EnumType。
+                        // 此前只注册成员 ⇒ 类型名未声明 (VB3001) 且限定式发成
+                        // vb6_<Enum>_<Member> 平铺名 (C2065, Outlook2013 frmMain:1080)。
+                        {
+                            auto enumTypeSym = std::make_unique<Symbol>(
+                                SymbolKind::EnumType, en->name, Vb6Type::Long,
+                                SourceLocation{}, AccessLevel::Public);
+                            enumTypeSym->isBuiltin = true;
+                            analyzer->symbolTable().define(std::move(enumTypeSym));
+                        }
                         for (auto& m : en->members) {
                             auto enumSym = std::make_unique<Symbol>(
                                 SymbolKind::EnumMember, m.name, Vb6Type::Long,

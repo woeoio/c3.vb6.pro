@@ -1,0 +1,6 @@
+Type=Exe
+Name="K3100App"
+Module=mdl3100; mdl3100.bas
+Class=IK3100; IK3100.cls
+Class=H3100; H3100.cls
+Startup="Sub Main"

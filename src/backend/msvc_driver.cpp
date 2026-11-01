@@ -257,11 +257,19 @@ bool MsvcDriver::compileAndLink(const MsvcDriverOptions& options) {
         // 的 vc140.pdb — 该目录常被防护软件按目录拦截新文件创建 ⇒ C1041 全灭
         // (ComCtlsDemo -g 实测)。把 PDB 钉到 exe 的输出目录 (与 /Fe 同一目录)。
         {
-            std::string pdbDir = options.outputFile;
-            size_t slash = pdbDir.find_last_of("/\\");
-            if (slash != std::string::npos) {
-                cmd << " /Fd\"" << pdbDir.substr(0, slash + 1) << "\"";
-            }
+            // A bare directory inside quotes must not end with a separator: in a
+            // response file that trailing backslash escapes the closing quote, so cl
+            // swallows every following argument (D8038 "unrecognized source file
+            // type" with the whole command line as one argument). Pin a concrete PDB
+            // file name instead -- /Fd takes a pathname, and the stem keeps concurrent
+            // builds from sharing one compiler PDB.
+            std::string outPath = options.outputFile;
+            size_t slash = outPath.find_last_of("/\\");
+            std::string pdbDir = (slash != std::string::npos) ? outPath.substr(0, slash + 1) : std::string();
+            std::string pdbStem = (slash != std::string::npos) ? outPath.substr(slash + 1) : outPath;
+            size_t dot = pdbStem.find_last_of('.');
+            if (dot != std::string::npos) pdbStem = pdbStem.substr(0, dot);
+            cmd << " /Fd\"" << pdbDir << pdbStem << "_cl.pdb\"";
         }
     }
 
@@ -385,7 +393,7 @@ bool MsvcDriver::compileAndLink(const MsvcDriverOptions& options) {
 
     // czUI fix (exe 体积): 与 msvc_driver_incremental.cpp 同步 —— /Gy 编出的函数级
     // COMDAT 要靠 /OPT:REF 剔除未引用 RTL (winsock/data/ole/...), /OPT:ICF 折叠重复。
-    cmd << " /OPT:REF /OPT:ICF";
+    cmd << " /OPT:REF /OPT:ICF /MAP";
 
     if (options.verbose) {
         std::cout << "C3: 执行: " << cmd.str() << std::endl;
@@ -434,6 +442,14 @@ bool MsvcDriver::compileAndLink(const MsvcDriverOptions& options) {
         std::ofstream errLog = ofstreamUtf8(errorLogPath, std::ios::out | std::ios::trunc);
         if (tmpLog && errLog) {
             errLog << "C3: Compilation failed (exit code " << ret << ")" << std::endl;
+            // 失败留档完整命令与响应文件: 只看 tail-N 时, cl 静默退出 (D8050/C1083
+            // 这类竞态) 会把"到底用什么参数编的"一起丢掉, 离线无法重放。rsp 是
+            // UTF-16LE+BOM (Fix 196), 不能按 UTF-8 回读 —— 这里写的是刚交给 cl
+            // 的同一份内容 (writeMsvcResponseFile 的入参), 与磁盘上的 rsp 等价。
+            errLog << "=== Command ===" << std::endl;
+            errLog << fullCmd << std::endl;
+            errLog << "=== Response File (" << rspPath << ") ===" << std::endl;
+            errLog << cmd.str().substr(cl.length()) << std::endl;
             errLog << "=== MSVC Output ===" << std::endl;
             std::string line;
             while (std::getline(tmpLog, line)) {

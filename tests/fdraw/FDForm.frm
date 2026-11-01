@@ -185,7 +185,14 @@ Private Sub tmrF_Timer()
     Me.CurrentX = 0
     Me.CurrentY = 1
     Print "M"
-    rowB = FirstRowOfColor(d, vbBlue, 150, 200, 20, 240)
+    ' 278: this window used to start at x=150, which was calibrated to the DC's default
+    ' font (16 px high -- 16 M's spanned 176 px). From the 278th knife the form paints
+    ' with VB6's own font: read live off the reference process that LOGFONT is
+    ' {-13 at 120 dpi, weight 400, "MS Sans Serif"} = -11 / 13 px high / 144 px of ink
+    ' at 96 dpi, so 150 sat past the end of the blue line and only the row judge was
+    ' left standing. Scan from x=60: still clear of the one-char red line (~9 px) and
+    ' inside the blue run at 72 / 96 / 120 dpi.
+    rowB = FirstRowOfColor(d, vbBlue, 60, 200, 20, 240)
     rowR = FirstRowOfColor(d, vbRed, 0, 10, 20, 240)
     ok16 = (rowR > 50) And (rowR = rowB)
     Debug.Print "FD16-paint-units=" & TF(ok16)

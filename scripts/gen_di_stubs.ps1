@@ -536,6 +536,14 @@ foreach ($fam in $families) {
     if ($carried.Count -gt 0) {
         Write-Output ('  ' + $name.PadRight(9) + '    carried over ' + $carried.Count + ' stub(s) from previous file')
     }
+    # A carried-over stub can reference the file-local vb6_di_dllproc helper (DllGetVersion)
+    # even when the current session does not declare it. Emitting the helper is mandatory
+    # then, otherwise the file compiles but links with LNK2019 on _vb6_di_dllproc.
+    if (-not $needDllProc) {
+        foreach ($blk in $carried) {
+            if ($blk -match 'vb6_di_dllproc\(') { $needDllProc = $true; break }
+        }
+    }
     $content = ((New-Banner $name $libs $needDynamic ($counts[$name] + $carried.Count) $needDllProc) + $bodies[$name] + $carried) -join "`r`n"
     [System.IO.File]::WriteAllText($path, $content, (New-Object System.Text.UTF8Encoding($false)))
     $written.Add($path)

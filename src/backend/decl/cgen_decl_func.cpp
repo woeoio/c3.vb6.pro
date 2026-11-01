@@ -60,6 +60,7 @@ void CCodeGen::visit(FunctionDecl& node) {
     knownFixedStringLen_.clear();
     // Fix 010o: 清空局部变量集合
     knownLocalVars_.clear();
+    procNonArrayLocalVars_.clear();
     knownNewVars_.clear();
     knownNewVars_.insert(moduleNewVars_.begin(), moduleNewVars_.end());  // Fix 090v
     // Fix 091m: 回灌模块级 Variant 变量 (knownVariantVars_ 已被 clear)
@@ -346,7 +347,8 @@ void CCodeGen::visit(FunctionDecl& node) {
     // 修复: 仅检查 C 类型名前缀即可 (typeSys 可能将 UDT 解析为 Unknown/Variant)
     {
         std::string initVal = defaultValue(funcRetVb6Type);
-        if (retType.rfind("vb6_type_", 0) == 0) {
+        // 账 #305 第一百八十八刀: 值聚合 (UDT / legacy 接口视图) 用 `{0}`, 其余档照旧 `= 0`。
+        if (cTypeIsValueAggregate(retType)) {
             initVal = "{0}";
         }
         c_.emitLine(retType + " " + currentReturnVar_ + " = " + initVal + ";");
@@ -411,6 +413,18 @@ void CCodeGen::visit(FunctionDecl& node) {
         if (star221 != std::string::npos) ivRet221 = ivRet221.substr(0, star221);
         if (!ivRet221.empty()) knownIvrefVars_[funcRetLower] = ivRet221;
     }
+    // 账 #305 第一百八十八刀: 返回类型是 legacy 接口视图 (`vb6_iface_<I>`) ⇒ 返回槽自己就是
+    // 一枚视图值。登进 knownIfaceVars_ 之后 `Set <函数名> = New <实现类>` 走 P6.4 的 wrap
+    // 那一臂、`Set <函数名> = <视图>` 维持裸拷贝；不登记时腿② 会把它当类槽，发
+    // `vb6_cls_<I>* __clsold = vb6_ret_X;` ⇒ cl C2440。与前面几档互斥，先擦掉残留同名项。
+    else {
+        const std::string ifaceRet188 = legacyIfaceNameOfCType(retType);
+        if (!ifaceRet188.empty()) {
+            knownIfaceVars_[funcRetLower] = ifaceRet188;
+            knownClassVars_.erase(funcRetLower);
+            knownIvrefVars_.erase(funcRetLower);
+        }
+    }
     // Fix 090i: 函数返回 UDT → 注册返回值变量到 knownUdtVars_ (如 pvVfsOpen /
     // pvVfsCreate / pvArrPtr 等 As ZipVfsType 的内部函数). 此前漏注册, 函数体内
     // vb6_ret_X.Field 的字段类型推断失败 (inferExprType → inferUdtTypeOfExpr
@@ -446,7 +460,21 @@ void CCodeGen::visit(FunctionDecl& node) {
                     if (pi.type == Vb6Type::String) {
                         c_.emitLine("if (!" + hasFlag + ") vb6_BSTR_Assign(" + pName + ", " + pi.defaultValueExpr + ");");
                     } else if (pi.type == Vb6Type::Variant) {
-                        c_.emitLine("if (!" + hasFlag + ") (*" + pName + ") = " + pi.defaultValueExpr + ";");
+                        // Variant ByRef 缺省回填: vb6_VARIANT 是结构体, 裸数值直接
+                        // `(*p) = -1` 赋不上 (C2440, Outlook2013 frmInbox GetDate
+                        //   `Optional Week = -1` ×6)。整数字面量折 vb6_VariantLong;
+                        // 其余维持旧形状 (语料暂无)。
+                        std::string dv462 = pi.defaultValueExpr;
+                        while (dv462.size() >= 2 && dv462.front() == '(' && dv462.back() == ')')
+                            dv462 = dv462.substr(1, dv462.size() - 2);
+                        bool isIntLit462 = !dv462.empty()
+                            && dv462.find_first_not_of("0123456789-") == std::string::npos;
+                        if (isIntLit462) {
+                            c_.emitLine("if (!" + hasFlag + ") vb6_VariantAssign(" + pName
+                                      + ", vb6_VariantLong(" + dv462 + "));");
+                        } else {
+                            c_.emitLine("if (!" + hasFlag + ") (*" + pName + ") = " + pi.defaultValueExpr + ";");
+                        }
                     } else {
                         c_.emitLine("if (!" + hasFlag + ") (*" + pName + ") = " + pi.defaultValueExpr + ";");
                     }

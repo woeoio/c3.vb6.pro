@@ -1,0 +1,10 @@
+Type=DLL
+Class=SatIface; SatIface.cls; {A4810001-1111-2222-3333-444455556601}
+Class=SatImpl; SatImpl.cls; {A4810002-1111-2222-3333-444455556602}
+Class=SatOther; SatOther.cls; {A4810004-1111-2222-3333-444455556604}
+Class=SatWorker; SatWorker.cls; {A4810003-1111-2222-3333-444455556603}
+Startup=""
+Command32=""
+Name="K481Sat"
+HelpStringID="0"
+Thread=0

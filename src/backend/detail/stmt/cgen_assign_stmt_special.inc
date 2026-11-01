@@ -401,6 +401,23 @@
             // Check if object is NOT a known variable → assume module name
             auto* objSym = symTab_.lookup(objIdent.name);
             if (!objSym) objSym = symTab_.lookupModule(objIdent.name);
+            // 跨模块窗体**内建属性写** (`frmEditEvent.BorderStyle = 3`, frmInbox:1170):
+            // 读侧 (form_builtin external-form) 交 vb6_GetBorderStyle(hwnd), 写侧
+            // 必须走配对的 vb6_SetBorderStyle(hwnd, v) —— 此前落 Module.var 回退发
+            // `vb6_GetBorderStyle(hwnd) = 3` (C2106 非左值)。
+            if (objLower != Symbol::toLower(moduleName_)
+                && knownFormModuleNames_.count(objLower)) {
+                std::string wfEf = getControlPropWriteFn(FrmControlType::Form, maExpr.memberName);
+                if (!wfEf.empty()) {
+                    std::string hwndEf = "vb6_form_hwnd_" + cIdent(objIdent.name) + "()";
+                    emitExpr(*node.value);
+                    std::string valEf = std::move(lastExpr_);
+                    valEf = controlPropValueExpr(wfEf, valEf, *node.value);
+                    c_.emitLine(wfEf + "(" + hwndEf + ", " + valEf + ");  /* external form prop write */");
+                    return;
+                }
+            }
+
             bool isVarName = (objSym && (objSym->kind == SymbolKind::Variable || objSym->kind == SymbolKind::Parameter));
             // M22-fix: 补充检查cgen层跟踪集合，防止过程级UDT/类变量被误判为模块名
             if (!isVarName && knownUdtVars_.count(objLower)) isVarName = true;
@@ -412,6 +429,37 @@
             if (!isVarName && knownObjectVars_.count(objLower)) isVarName = true;
             if (!isVarName && knownTypedComVars_.count(objLower)) isVarName = true;
             if (!isVarName && knownIfaceVars_.count(objLower)) isVarName = true;
+            // 自类型过程作赋值目标 (`RibbonBar.Minimized = ...` / `RibbonBar.FontHeight = n`,
+            // frmMain:426/434/1042 — `Public Function RibbonBar() As RibbonBar` 过程名=
+            // 返回的 typelib 类名)。先调过程得 IDispatch, 属性按 COM SetProp 写。
+            // 此前这里 objSym(Function) 只认"objLower==当前过程名"的 FnRet 形状,
+            // 其余落 Module.var 回退/FnRetObj 发 vb6_ComSetProp((void*), ...) 空接收者。
+            if (!isVarName) {
+                // 模块作用域查找 (认 $pg 键) —— 全表 lookup 先命中同名 typelib ComClass。
+                Symbol* stSymAs0 = symTab_.lookupModuleByKind(objIdent.name, SymbolKind::Function);
+                if (!stSymAs0) stSymAs0 = symTab_.lookupModuleByKind(objIdent.name, SymbolKind::PropertyGet);
+                objSym = stSymAs0;
+            }
+            if (!isVarName && objSym
+                && (objSym->kind == SymbolKind::Function || objSym->kind == SymbolKind::PropertyGet)
+                && !objSym->variableTypeName.empty()
+                && Symbol::toLower(objSym->variableTypeName) == objLower
+                && !knownLocalVars_.count(objLower)
+                && !(currentProc_ && Symbol::toLower(currentProc_->name) == objLower)) {
+                std::string stModAs0 = objSym->isExternal ? objSym->sourceModule : moduleName_;
+                std::string stNameAs0 = objSym->name;
+                if (objSym->kind == SymbolKind::PropertyGet)
+                    stNameAs0 = "prop_get_" + stNameAs0;
+                std::string stCallAs0 = cProcName(stNameAs0, objSym->access, stModAs0)
+                                      + (isClassModule_ ? "((void*)me)" : "()");
+                emitExpr(*node.value);
+                std::string valAs0 = std::move(lastExpr_);
+                std::string packAs0 = comPackExpr(*node.value);
+                valAs0 = comUnpackForPack(packAs0, valAs0);
+                c_.emitLine("vb6_ComSetProp(" + stCallAs0 + ", L\"" + maExpr.memberName
+                            + "\", " + packAs0 + "(" + valAs0 + "));  /* self-typed proc SetProp */");
+                return;
+            }
             // Fix <vbeclipse>: 本模块自己的 Property Get 也是合法"对象表达式"
             // (ucSplitBar.ctl:161 `Folder.Relationship` / :176
             //   `Folder.Ratio = NewRatio` — Folder 是 Property Get 返回 Folder 类)。
@@ -575,6 +623,50 @@
             }
 
             if (!isVarName && !knownFormControls_.count(objLower)) {
+                if (std::getenv("C3_DBG_ST")) {
+                std::cerr << "[ST-M22] obj=" << objIdent.name << " mem=" << maExpr.memberName
+                          << " isVar=" << isVarName << " forms=" << knownFormModuleNames_.count(objLower)
+                          << " wf=" << getControlPropWriteFn(FrmControlType::Form, maExpr.memberName) << std::endl;
+            }
+            // typelib appobject 全局单例的属性写 (`CommandBarsGlobalSettings.App = App`):
+                // 与读取侧 (cgen_expr_member_form_builtin) 同一判定, 走 COM SetProp。
+                // 此前落 Module.var 回退发成 vb6_X_GlobalSettings_App (C2065, frmMain:793)。
+                {
+                    Symbol* aoSymAs = symTab_.lookup(objIdent.name);
+                    if (aoSymAs && aoSymAs->kind == SymbolKind::ComClass && aoSymAs->comIsAppObject
+                        && !knownObjectVars_.count(objLower) && !knownTypedComVars_.count(objLower)) {
+                        // `GlobalSettings.App = App` 特形: RHS 是 VB6 App 伪对象 — 编译版
+                        // 没有 App 的 COM 对象 (ident_dispatch 发 (void*)0 哨兵)。NULL 塞进
+                        // Codejock 的 put_App ⇒ 对方答类型不匹配 (Run-time error 13, 启动即弹)。
+                        // 整句跳过 (对方内部有默认 App 解析)。
+                        if (node.value->kind == ASTNodeKind::IdentifierExpr
+                            && Symbol::toLower(static_cast<IdentifierExpr&>(*node.value).name) == "app"
+                            && !knownLocalVars_.count("app") && !knownObjectVars_.count("app")) {
+                            c_.emitLine("/* appobject .App = App skipped (no App COM object in compiled exe) */");
+                            return;
+                        }
+                        std::string instAs = std::string("vb6_ComGlobalInstance(L\"") + aoSymAs->comProgId + "\")";
+                        emitExpr(*node.value);
+                        std::string valAs = std::move(lastExpr_);
+                        Vb6Type valTAs = inferExprType(*node.value);
+                        std::string packAs = "vb6_ComPackValue";
+                        if (valTAs == Vb6Type::Object || valTAs == Vb6Type::Variant) {
+                            packAs = "vb6_ComPackValue";
+                        } else if (valTAs == Vb6Type::String) {
+                            packAs = "vb6_ComPackBSTR";
+                        } else if (valTAs == Vb6Type::Long || valTAs == Vb6Type::Integer
+                                || valTAs == Vb6Type::Boolean) {
+                            packAs = "vb6_ComPackInt";
+                        } else if (valTAs == Vb6Type::Double || valTAs == Vb6Type::Single
+                                || valTAs == Vb6Type::Date) {
+                            packAs = "vb6_ComPackDouble";
+                        }
+                        valAs = comUnpackForPack(packAs, valAs);
+                        c_.emitLine("vb6_ComSetProp(" + instAs + ", L\"" + maExpr.memberName
+                                    + "\", " + packAs + "(" + valAs + "));  /* appobject SetProp */");
+                        return;
+                    }
+                }
                 // Module.varName = expr
                 // When module is #included, use unprefixed name
                 std::string modName = objIdent.name;

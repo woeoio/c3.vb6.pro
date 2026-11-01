@@ -21,13 +21,21 @@ param(
     [int]$Jobs = 1,        # >1 时 vbp/GUI 用例并行 (每 worker 独立输出目录); 默认 1 = 今天的串行行为
     [int]$Shard = 0,       # 分片当前编号 (1..ShardTotal); 0 = 不分片整队跑 (供 CI 多 runner 并行)
     [int]$ShardTotal = 1,  # 分片总数
-    [int]$RunTimeoutSec = 60   # 单条用例跑 exe 的墙钟预算。默认 60 与 tests\run_tests.ps1
+    [int]$RunTimeoutSec = 60,  # 单条用例跑 exe 的墙钟预算。默认 60 与 tests\run_tests.ps1
                                # 的 -RunTimeoutSec 同值 (那里从 5s 提到 60s 就是为这个原因)。
                                # 实测 run_t1 在 -Jobs 8 下把 test_rtl_x86 (空闲 0.03s 跑完)
                                # 判成 run timeout —— 预算是给并行负载留余量的, 不是给空闲机
                                # 定的; 5s 会把**负载**造成的慢误判成**代码**造成的挂。
                                # (GUI 的 Run3s 那条 3 秒存活自检不走这里, 那是另一回事。)
+    [switch]$Incremental   # 打开时给 C3 传 --incremental (见下面的 $IncArg; 默认关 = 今天的行为)
 )
+
+# ai/030 T30-B: 只有 -Incremental 时才有的实参, 口径与 tests\run_tests.ps1 一致。
+# --incremental 让 C3 走内容寻址的 obj store (%LOCALAPPDATA%\C3\objcache), 键含
+# {架构, 工具串, RTL 源内容} ⇒ 每个 runner 只有头一例真编那 65 个 RTL .c, 其余直接取 obj;
+# 错配的 obj 只会没命中, 绝不会被用错 (不会把"编译能过"变成"编译能过但是错的")。
+# 关掉时实参为空 ⇒ 调用命令行与今天逐字相同。
+if ($Incremental) { $IncArg = @('--incremental') } else { $IncArg = @() }
 
 $ErrorActionPreference = "SilentlyContinue"
 # <shared-shard>: 分片算法在 shard.ps1 (三个门禁脚本共用, 不要在这里再抄一遍)
@@ -278,9 +286,9 @@ function Test-Vbp {
     }
 
     if ($It.Arch) {
-        $compileResult = & $C3Path $It.VbpFile --arch $It.Arch --output-dir $OutDir 2>&1
+        $compileResult = & $C3Path $It.VbpFile --arch $It.Arch --output-dir $OutDir @IncArg 2>&1
     } else {
-        $compileResult = & $C3Path $It.VbpFile --output-dir $OutDir 2>&1
+        $compileResult = & $C3Path $It.VbpFile --output-dir $OutDir @IncArg 2>&1
     }
     if ($LASTEXITCODE -ne 0) {
         $script:fail++
@@ -346,6 +354,7 @@ function Invoke-VbpSetParallel {
         $workDir    = $_[1]
         New-Item -ItemType Directory -Path $workDir -Force | Out-Null
         $c3 = $using:C3Path
+        $inc = $using:IncArg
         $runTimeoutMs = $using:runTimeoutMs
         $p = 0; $f = 0; $sk = 0; $details = @()
         foreach ($it in $shardItems) {
@@ -355,7 +364,7 @@ function Invoke-VbpSetParallel {
                 if (-not (Test-Path -Path $regPath)) { $sk++; $details += "$($it.Name): SKIP (COM '$($it.RequiresCom)' 未注册)"; continue }
             }
             # --- 编译 ---
-            if ($it.Arch) { $cr = & $c3 $it.VbpFile --arch $it.Arch --output-dir $workDir 2>&1 } else { $cr = & $c3 $it.VbpFile --output-dir $workDir 2>&1 }
+            if ($it.Arch) { $cr = & $c3 $it.VbpFile --arch $it.Arch --output-dir $workDir @inc 2>&1 } else { $cr = & $c3 $it.VbpFile --output-dir $workDir @inc 2>&1 }
             if ($LASTEXITCODE -ne 0) {
                 $tail = ($cr | Select-Object -Last 25) -join "`n"
                 $c3err = Join-Path $workDir "c3-error.log"
@@ -500,9 +509,9 @@ function Test-GuiCompileOnly {
     param([object]$It)
     Write-Host -NoNewline "  [GUI-COMPILE] $($It.Name) ... "
     if ($It.Arch) {
-        $result = & $C3Path $It.VbpFile --arch $It.Arch --output-dir $OutDir 2>&1
+        $result = & $C3Path $It.VbpFile --arch $It.Arch --output-dir $OutDir @IncArg 2>&1
     } else {
-        $result = & $C3Path $It.VbpFile --output-dir $OutDir 2>&1
+        $result = & $C3Path $It.VbpFile --output-dir $OutDir @IncArg 2>&1
     }
     if ($LASTEXITCODE -eq 0) {
         $script:pass++
@@ -602,9 +611,10 @@ function Invoke-GuiSetParallel {
         $workDir    = $_[1]
         New-Item -ItemType Directory -Path $workDir -Force | Out-Null
         $c3 = $using:C3Path
+        $inc = $using:IncArg
         $p = 0; $f = 0; $details = @()
         foreach ($it in $shardItems) {
-            if ($it.Arch) { $r = & $c3 $it.VbpFile --arch $it.Arch --output-dir $workDir 2>&1 } else { $r = & $c3 $it.VbpFile --output-dir $workDir 2>&1 }
+            if ($it.Arch) { $r = & $c3 $it.VbpFile --arch $it.Arch --output-dir $workDir @inc 2>&1 } else { $r = & $c3 $it.VbpFile --output-dir $workDir @inc 2>&1 }
             if ($LASTEXITCODE -eq 0) {
                 $p++
             } else {

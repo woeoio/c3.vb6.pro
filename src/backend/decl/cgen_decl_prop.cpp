@@ -67,6 +67,7 @@ void CCodeGen::visit(PropertyDecl& node) {
     knownFixedStringLen_.clear();
     // Fix 010o: 清空局部变量集合
     knownLocalVars_.clear();
+    procNonArrayLocalVars_.clear();
     knownNewVars_.clear();
     knownNewVars_.insert(moduleNewVars_.begin(), moduleNewVars_.end());  // Fix 090v
     // Fix 091m: 回灌模块级 Variant 变量 (knownVariantVars_ 已被 clear)
@@ -303,7 +304,8 @@ void CCodeGen::visit(PropertyDecl& node) {
             // Fix 038/054: UDT 返回值不能用 = 0 初始化 (C2440), 改用 {0}
             // 修复: 仅检查 C 类型名前缀即可 (typeSys 可能将 UDT 解析为 Unknown/Variant)
             std::string initVal = defaultValue(retVb6Type);
-            if (retType.rfind("vb6_type_", 0) == 0) {
+            // 账 #305 第一百八十八刀: 与 cgen_decl_func.cpp 那处同一问 (值聚合 ⇒ `{0}`)。
+            if (cTypeIsValueAggregate(retType)) {
                 initVal = "{0}";
             }
             c_.emitLine(retType + " " + currentReturnVar_ + " = " + initVal + ";");
@@ -319,6 +321,15 @@ void CCodeGen::visit(PropertyDecl& node) {
             // ai/032: 四档无符号/窄整型返回槽 (口径同 cgen_decl_func.cpp 那处)
             else if (isNarrowIntVbType(retVb6Type)) knownNarrowIntVars_[retLower] = retVb6Type;
             else if (retVb6Type == Vb6Type::Variant) knownVariantVars_.insert(retLower);
+            // 账 #305 第一百八十八刀: 返回类型是 legacy 接口视图 (`vb6_iface_<I>`) ⇒ 返回槽
+            // 登进视名册 (与 cgen_decl_func.cpp 同口径)。不登记时 `Set <属性名> = <实例>`
+            // 会把视图当类槽，发 `vb6_cls_<I>* __clsold = vb6_ret_X;` ⇒ cl C2440。
+            const std::string ifaceRet188 = legacyIfaceNameOfCType(retType);
+            if (!ifaceRet188.empty()) {
+                knownIfaceVars_[retLower] = ifaceRet188;
+                knownClassVars_.erase(retLower);
+                knownIvrefVars_.erase(retLower);
+            }
             // 账 #118 ①: 定长串返回类型 (`Property Get P() As String * 5`) —— 与
             // cgen_decl_func.cpp 那处同款同口径 (两处都得记, 漏一处就少一种落点)。
             // 长度表在**这个 if (node.returnType) 块内**才拿得到 returnType。

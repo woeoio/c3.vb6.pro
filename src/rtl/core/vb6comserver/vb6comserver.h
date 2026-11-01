@@ -106,6 +106,12 @@ typedef struct vb6_DispMethodDesc {
     // 调用函数指针 (void* this, VARIANT* args, int argc, VARIANT* result)
     // this=VB6类实例, args=参数数组, argc=参数数, result=返回值(可NULL)
     void (*invokeFunc)(void*, void**, int32_t, void*);
+    // 账 #305 §B219(第二百二十刀): 每一枚形参的**声明档**，长度 = paramVtCount。
+    // Invoke 进门那一趟按它把实参换算到声明档(vb6_ComArgNormalize)，于是生成的读臂可以
+    // 继续直接取联合体成员 —— 标签那一问不再散在 16 处发码里。
+    // NULL = 这一条不问(字段桥那几条走 vb6_VARIANT 整槽、自己认档)；单格 VB6_ARGVT_SKIP = 那一枚形参不问。
+    const VARTYPE* paramVts;
+    int32_t paramVtCount;
 } vb6_DispMethodDesc;
 
 // cgen生成的全局coclass描述表
@@ -167,6 +173,7 @@ const vb6_CoClassDesc* vb6_FindCoClassDesc(const char* classVariable);
 // (症状: `vb6_ComCall(裸实例, …)` 恒返回 VT_EMPTY, 因为首字段 __comObj 是 NULL,
 //  `vb6_ComIsDispatchable` 判否 ⇒ GetIDsOfNames 失败)。未登记 ⇒ 返回 NULL。
 void vb6_RegisterProjectClassInstance(void* inst, const vb6_CoClassDesc* desc);
+void vb6_UnregisterProjectClassInstance(void* inst);  /* 账 #481: 与登记配对, 由 _Destroy 在 free 前调 */
 const vb6_CoClassDesc* vb6_FindProjectClassDesc(const void* inst);
 
 // Fix 099: 从 IDispatch 取回 VB6 实例裸指针; 非本 RTL 产出的对象返回 NULL.

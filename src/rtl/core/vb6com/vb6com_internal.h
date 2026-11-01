@@ -32,6 +32,11 @@ extern int32_t vb6_err_resume_next;
 // 见 vb6rtl_variant.h 里那段注释), 按值传结构体的 ABI 只取决于尺寸与偏移。
 extern double vb6_VariantToDouble(VARIANT v);
 
+// 账 #305 §B224: 「VARIANT → 目标档」的唯一出口(定义在 vb6rtl_com.c)。以 VT_BSTR 为目的档时
+// 布尔答 True/False(VB 语言口径)，其余档转交 VariantChangeType。vb6com 不 include vb6rtl.h,
+// 所以与上面 vb6_VariantToDouble 同法在这里补一份原型。
+extern HRESULT vb6_ComChangeType(VARIANT *dest, const VARIANT *src, VARTYPE want);
+
 // --- 跨族共享的内部辅助 (定义在 vb6com.c) ---
 // COM错误->VB6错误转换
 // hr: Invoke返回的HRESULT / excep: EXCEPINFO结构 / context: 调用上下文

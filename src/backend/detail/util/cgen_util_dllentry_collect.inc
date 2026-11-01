@@ -412,7 +412,11 @@
                         provided = "((VARIANT*)args[" + idx + "])->lVal";
                         missing = "0";
                     } else if (pType == Vb6Type::Boolean) {
-                        provided = "(((VARIANT*)args[" + idx + "])->vt == VT_BOOL ? (((VARIANT*)args[" + idx + "])->boolVal == VARIANT_TRUE ? -1 : 0) : ((VARIANT*)args[" + idx + "])->lVal)";
+                        // 账 #305 §B219: 这一臂原来自己问了一次 `vt == VT_BOOL`(唯一一处看标签
+                        // 的读臂)，与上面服务端那一趟的换算答的是同一问。现在标签那一问只住
+                        // vb6_ComArgNormalize + cDispatchArgVt(Boolean ⇒ VT_I4)，走到这里的槽
+                        // 已经是 VT_I4 的 -1/0 ⇒ 与 Long 那一臂同形，读臂一律不看标签。
+                        provided = "((VARIANT*)args[" + idx + "])->lVal";
                         missing = "0";
                     } else if (pType == Vb6Type::Double || pType == Vb6Type::Single) {
                         provided = "((VARIANT*)args[" + idx + "])->dblVal";

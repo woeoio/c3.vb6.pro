@@ -1,0 +1,5 @@
+Type=Exe
+Class=B446Cls; B446Cls.cls
+Module=B446Main; B446Main.bas
+Startup="Sub Main"
+ExeName32="B446.exe"

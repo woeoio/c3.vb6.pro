@@ -68,6 +68,15 @@
         return;
     }
 
+    // typelib appobject 全局单例 (Codejock *GlobalSettings 家族): 裸类名作值
+    // (`Set x = CommandBarsGlobalSettings`) → 进程级单例访问器。成员访问不走
+    // 这里 (由 form_builtin 的成员分支先行接管)。
+    if (foundSym && foundSym->kind == SymbolKind::ComClass && foundSym->comIsAppObject
+        && !knownObjectVars_.count(lower) && !knownTypedComVars_.count(lower)) {
+        lastExpr_ = std::string("vb6_ComGlobalInstance(L\"") + foundSym->comProgId + "\")";
+        return;
+    }
+
     // 用户变量/常量 (非参数、非函数)
     if (foundSym && (foundSym->kind == SymbolKind::Variable
                   || foundSym->kind == SymbolKind::Constant)) {

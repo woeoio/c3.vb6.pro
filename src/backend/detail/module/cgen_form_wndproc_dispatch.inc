@@ -674,7 +674,13 @@
     // P14.4.1d: WM_SIZE -> Form_Resize() (仅当处理器存在时生成)
     {
         std::string resizeFn = cProcName("Form_Resize", AccessLevel::Private);
-        if (symTab_.lookup(formName + "_Resize") || symTab_.lookup("Form_Resize")) {
+        // 守卫只认**本模块自有**的处理器 (与 cgen_form_show.inc rev29 同批) ——
+        // 裸名 lookup 会命中跨模块注入的别家 Form_Resize ⇒ LNK2019。
+        auto hasOwnResizeWp = [&](const char* nm) -> bool {
+            Symbol* sWp = symTab_.lookupModule(nm);
+            return sWp && !sWp->isExternal;
+        };
+        if (hasOwnResizeWp((formName + "_Resize").c_str()) || hasOwnResizeWp("Form_Resize")) {
             c_.emitLine("case WM_SIZE: {");
             c_.indent();
             // Fix 112: Form_Load 由 PostMessage 延迟执行, 而首次 WM_SIZE 在

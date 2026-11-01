@@ -248,6 +248,77 @@ if (-not (Test-Path $c3x)) {
     if ($n3001 -ne 1) { $viol += ($bareMsg -f $n3001) }
 }
 
+# ---------- 6b) 账 #305 第二百六十一刀「甲」: With UserControl 体内的改道 + 实参那一读 ----------
+# 两件事各钉一头, 因为它们是同一个缺口的上下游:
+#   甲-1 体内 `.Extender` / `.ScaleX` / `.ScaleY` 由**发码侧**问那张表 (不再打 COM 标记
+#         去 Invoke 一枚宿主句柄 —— 262 刀量到 Extender ×18 / ScaleY ×5 / ScaleX ×2 全在那);
+#   甲-2 链式成员读当**实参**时, 打包器不许把成员丢掉 (以前 `resolveComMarkerForPack`
+#         顶上那一格看见 lastExpr_ 是 COM 前缀就直接剥壳交回**对象本体**, 于是
+#         `.Extender.Move .Extender.Left, …` 的四枚实参全变成 Extender 对象)。
+$ctlExt = "tests\dochost\dhWithExt.ctl"
+$extWith = "src\backend\expr\cgen_expr_with.cpp"
+if (-not (Test-Path $c3x)) {
+    $viol += ("NEEDLE-EXT: no compiler at " + $c3x)
+} elseif (-not (Test-Path (Join-Path $Root $ctlExt))) {
+    $viol += ("NEEDLE-EXT: missing fixture " + $ctlExt)
+} else {
+    $t1 = Join-Path ([System.IO.Path]::GetTempPath()) ("hpext_" + [guid]::NewGuid().ToString("N") + ".c")
+    $t1e = [System.IO.Path]::ChangeExtension($t1, ".err")
+    $p1 = Start-Process -FilePath $c3x -ArgumentList @('"' + (Join-Path $Root $ctlExt) + '"', '--emit-c') -WorkingDirectory $Root -RedirectStandardOutput $t1 -RedirectStandardError $t1e -NoNewWindow -Wait -PassThru
+    $e1 = $lat2.GetString([System.IO.File]::ReadAllBytes($t1))
+    $e1err = $lat2.GetString([System.IO.File]::ReadAllBytes($t1e))
+    Remove-Item $t1, $t1e -Force -ErrorAction SilentlyContinue
+    if ($p1.ExitCode -ne 0) { $viol += ("NEEDLE-EXT: fixture exits " + $p1.ExitCode) }
+    if (@([regex]::Matches($e1err, 'VB3001')).Count -ne 0) {
+        $viol += 'NEEDLE-EXT: fixture reports VB3001 (the routed members are not table-known)'
+    }
+    $extWant = @(
+        @('vb6_ComGetProp\(\(&vb6_UserControl_Extender\), L"(Left|Top|Width)"', 3,
+          'chain reads lost their member (甲-2: the packer pre-empted a pending marker)'),
+        @('vb6_ComCall\(\(&vb6_UserControl_Extender\), L"Move"', 1,
+          'Extender.Move did not land on the Extender object address (甲-1)'),
+        @('vb6_ComSetProp\(\(&vb6_UserControl_Extender\), L"Height"', 1,
+          'the write side lost its parity with the read side (Fix 294) (甲-1)'),
+        @('vb6_UserControl_Scale[XY]', 3,
+          'ScaleX/ScaleY still go through the late-bound exit instead of the RTL entry (甲-1)')
+    )
+    foreach ($w in $extWant) {
+        $n = @([regex]::Matches($e1, $w[0])).Count
+        if ($n -lt $w[1]) { $viol += ("NEEDLE-EXT: emit has " + $n + " of " + $w[0] + " (want >= " + $w[1] + " - " + $w[2] + ")") }
+    }
+    # 两条反面针: 这两串就是**改道之前**的产物形状 (262 刀那份 cc_all.c 里数得出 20+ 条),
+    # 它们在场 = 体内成员又变成「问宿主模型要 Extender」或「把对象本体当值打包」。
+    $extBan = @(
+        @('L"Extender"', 'the With body asked the host model for an Extender member again'),
+        @('vb6_ComPackValue\(vb6_VariantFromComResult\(vb6_ComGetObjectProp\(', 'a member read was packed as the bare object'),
+        @('vb6_ComCall\(_vb6_with_\d+, L"Scale[XY]"', 'ScaleX/ScaleY emitted as a late-bound call on the With handle')
+    )
+    foreach ($b in $extBan) {
+        $n = @([regex]::Matches($e1, $b[0])).Count
+        if ($n -ne 0) { $viol += ("NEEDLE-EXT-NEG: emit still carries " + $b[0] + " x" + $n + " (" + $b[1] + ")") }
+    }
+}
+
+# 唯一住所 (这一段自己数, 因为下面第 7 段才定义 Count-InFile)
+function Count261([string]$relPath, [string]$pat) {
+    $p = Join-Path $Root $relPath
+    if (-not (Test-Path $p)) { return -1 }
+    return @([regex]::Matches($lat2.GetString([System.IO.File]::ReadAllBytes($p)), $pat)).Count
+}
+$cGate = Count261 "src\backend\cgen_util_com.cpp" '&& !isComMarker_'
+if ($cGate -ne 1) { $viol += ("PACK-GATE: " + $cGate + " preemption gates in cgen_util_com.cpp (want exactly 1 - the unwrap shortcut must not run while a member marker is pending)") }
+$cUnwrap = Count261 "src\backend\cgen_util_com.cpp" 'vb6_VariantFromComResult\(" \+ lastExpr_ \+ "\)'
+if ($cUnwrap -ne 1) { $viol += ("PACK-UNWRAP: " + $cUnwrap + " unwrap-lastExpr sites (want exactly 1 - the second copy is the bug that dropped the member)") }
+foreach ($h in @('hostPseudoExtenderObjExpr', 'hostPseudoScaleCall')) {
+    $d1 = Count261 "src\backend\cgen_util_com.cpp" ('bool CCodeGen::' + $h + '\(')
+    $d2 = Count261 "src\backend\detail\util\cgen_helpers.inc" ('bool ' + $h + '\(')
+    $d3 = Count261 "src\backend\expr\cgen_expr_with.cpp" ($h + '\(')
+    if ($d1 -ne 1 -or $d2 -ne 1 -or $d3 -ne 1) {
+        $viol += ("ROUTING-SITE: " + $h + " def=" + $d1 + " decl=" + $d2 + " consume=" + $d3 + " (want 1/1/1)")
+    }
+}
+# 那一行白名单的存在不必再钉: 上面的 NEEDLE-EXT 正向针就是它的行为面 (抽掉那一行, 体内 .Extender.Left 会拼成 (&vb6_...).Left = C2039, 针当场掉到 0)。
+
 # ---------- 7) 账 #278 §B120: 命名契约与"是不是宿主伪对象"各只有一个住所 ----------
 $hp = Join-Path $Root "src\common\host_pseudo.hpp"
 $com = Join-Path $Root "src\backend\cgen_util_com.cpp"

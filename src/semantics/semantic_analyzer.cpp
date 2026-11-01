@@ -1,5 +1,6 @@
 #include "semantics/semantic_analyzer.hpp"
 #include "semantics/semantic_analyzer_internal.h"
+#include "common/event_param_abi.hpp"   // 账 #305 256: 事件形参按不按地址的那一位主人
 #include <algorithm>
 #include <cctype>
 #include <tuple>
@@ -157,6 +158,15 @@ bool SemanticAnalyzer::analyze(Module& module) {
                     auto& e = static_cast<EventDecl&>(*decl);
                     classSym->memberNames.push_back(e.name);
                     classSym->eventNames.push_back(e.name);  // P6.5: 收集事件名
+                    // 账 #305 256: 顺手把「哪几位形参是出参」算一次, 存进与 eventNames 同序的表
+                    // (六处消费者必须同一个答案 —— 见 Symbol::eventParamByAddr 那段注释)
+                    std::vector<char> addrSlots;
+                    for (auto& p : e.params) {
+                        addrSlots.push_back(eventParamByAddress(
+                            p->isByRef,
+                            p->asType && p->asType->kind == ASTNodeKind::ArrayTypeRef) ? 1 : 0);
+                    }
+                    classSym->eventParamByAddr.push_back(std::move(addrSlots));
                     classSym->memberAccessLevels[Symbol::toLower(e.name)] = e.access;  // tB B08a
                     break;
                 }

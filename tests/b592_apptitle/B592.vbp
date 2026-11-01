@@ -1,0 +1,6 @@
+Type=Exe
+Module=APT; APT.bas
+Startup="Sub Main"
+Name="B592AppTitle"
+Title="B592 Title"
+ExeName32="B592AppTitle.exe"

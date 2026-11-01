@@ -15,6 +15,12 @@ extern "C" {
 // CreateObject(progId) - 通过ProgID创建COM对象，返回IDispatch*
 void* vb6_CreateObject(const wchar_t* progId);
 
+// typelib appobject 全局单例 (VB6 全局对象): 首次按 ProgID CoCreate 并缓存,
+// 之后每次调用复用同一实例 (VB6 GlobalMultiUse/appobject 的进程级单例语义 ——
+// 同一实例上的状态如 GlobalSettings.Icons 累积的位图在多次访问间保持)。
+// 失败返回 NULL (错误已由 vb6_CreateObject raise)。
+void* vb6_ComGlobalInstance(const wchar_t* progId);
+
 // GetObject(pathName, progId) - 获取运行中的COM对象
 void* vb6_GetObject(const wchar_t* pathName, const wchar_t* progId);
 
@@ -51,6 +57,13 @@ void vb6_ReleaseObject(void** objPtr);
 // 伪装的接收者 (UDT/类实例的地址) 一旦解引用 lpVtbl 就是 AV, 而不是 VB6 的
 // "对象不支持此属性或方法" —— 后期绑定与 Release 路径都先用它把这类挡掉。
 int32_t vb6_ComIsDispatchable(const void* disp);
+
+// 账 #305 第二百六十二刀 (丙): 晚绑定出口漏掉的「非 IDispatch 接收者」计数。
+// 七个出口 (ComCall / ComCallByDispid / ComGetProp / ComGetPropArg / ComSetProp /
+// ComSetPropArg / ComSetRef) 现在都会把这种接收者**报一行** (stderr 标记
+// C3_LATEBIND_MISS) 并计数; 行为不变 (仍按原路返回空)。
+// 判据「非 IDispatch 进晚绑定出口 = 0」按 stderr 里那条标记的条数读。
+int32_t vb6_ComLateBindMissCount(void);
 
 // Fix <vbeclipse>: vb6_ReleaseObject 的反向操作 (AddRef), 判据相同 (vb6_ComIsDispatchable)。
 // 供 vb6rtl_variant.h 的 vb6_VariantObject / vb6rtl.c 的 vb6_VariantCopy 使用 ——
@@ -91,6 +104,15 @@ void* vb6_ComPackObject(void* obj);
 // ppObj 指向调用方的 void* 变量; Invoke 写入新指针后, 调用方变量即持有新对象。
 void* vb6_ComPackObjectRef(void** ppObj);
 
+// 账 #305 §B224 第二半 (第二百三十九刀): 标量实参按引用打包 (VT_BYREF|型)。
+// 真 VB6 晚绑定对带型变量递的就是这一形 (实测 x As Long 被 `Bump(ByRef v As Long)` 写回成 11);
+// 按 C 存储宽度分五档 —— Integer/Boolean 都是 2 字节, 不许按 I4 打。
+void* vb6_ComPackIntRef(int32_t* p);
+void* vb6_ComPackIntegerRef(int16_t* p);
+void* vb6_ComPackBoolRef(int16_t* p);
+void* vb6_ComPackSingleRef(float* p);
+void* vb6_ComPackDoubleRef(double* p);
+
 // Fix 104: 将"省略的实参"封装为 VARIANT (VT_ERROR + DISP_E_PARAMNOTFOUND).
 // VB6 遇到 obj.Method a, , c 这类省略实参时, 对该形参位置传的正是这个值 ——
 // 接收方 (IDispatch 实现) 据此把"未提供"与"显式传 0/空串"区分开.
@@ -120,6 +142,10 @@ void vb6_ComVarFree(void* variant);
 // COM方法调用→对象 (内部UnpackObject+VarFree)
 void* vb6_ComCallObject(void* disp, const wchar_t* methodName,
                         void* args, int32_t argc);
+// COM**默认成员**调用→对象: `coll(idx)` 的 VB6 语义是 DISPID_VALUE(0), 不是按名
+// "Item"。名字表里没有 "Item" 时 (Codejock 的 ReportColumns/Actions 一族默认成员
+// 叫 Column/Action) 按名找一律 DISP_E_MEMBERNOTFOUND ⇒ 交回 NULL。
+void* vb6_ComCallObjectDefault(void* disp, void* args, int32_t argc);
 // COM方法调用→BSTR (内部UnpackBSTR+VarClear)
 wchar_t* vb6_ComCallBSTR(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);
@@ -140,6 +166,10 @@ intptr_t vb6_ComGetLongPtrProp(void* disp, const wchar_t* propName);
 double vb6_ComGetDoubleProp(void* disp, const wchar_t* propName);
 // COM属性Get→对象 (内部UnpackObject+VarFree)
 void* vb6_ComGetObjectProp(void* disp, const wchar_t* propName);
+// `Set <接口类型变量> = <对象>` 的类型检查 (VB6: 不符 = 错误 13):
+// 是本宿主托管的 OCX 控件时按控件类名比对该接口名, 不符返回 NULL;
+// 其余对象原样返回 (普通 COM 对象 / 工程类 / 宿主包装器都不受影响)。
+void* vb6_ComObjectTypeCast(void* obj, const wchar_t* typeName);
 
 // 参数化属性Get (带参数, 如Dictionary.Item(key))
 // 内部使用DISPATCH_METHOD|DISPATCH_PROPERTYGET组合标志
@@ -215,6 +245,10 @@ void vb6_ComExit(void);
 void* vb6_ForEach_Init(void* disp);       // Call _NewEnum, return IEnumVARIANT*
 // 账 #257 第十五层: 集合是**工程类实例**时 (不是 IDispatch) 用它的 NewEnum 接口直接建枚举
 void* vb6_ForEach_InitFromEnumIface(void* pEnumRaw);
+
+// For Each Form In Forms: RTL 窗体注册表 (vb6_Forms_Register) 的合成枚举器。
+// 元素 = 窗体 HWND 的宿主包装 (真 IDispatch, .Controls 走宿主 Controls 应答)。
+void* vb6_ForEach_InitForms(void);
 int32_t vb6_ForEach_Next(void* enumPtr, VARIANT* outVar);  // Next element, returns 1=ok 0=done
 void vb6_ForEach_Release(void* enumPtr);  // Release IEnumVARIANT
 

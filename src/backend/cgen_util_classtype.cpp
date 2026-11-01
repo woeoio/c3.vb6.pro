@@ -174,7 +174,31 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
                 if (withObjectInfoStack_.empty()) return "";
                 const auto& winfo = withObjectInfoStack_.back();
                 if (winfo.kind != WithObjKind::ClassInstance || winfo.className.empty()) return "";
-                return getClassMethodReturnType(winfo.className, wm.memberName);
+                const std::string wmColl242 = getClassMethodReturnType(winfo.className, wm.memberName);
+                if (wmColl242.empty()) return "";
+                // 账 #305 第二百四十八刀: `With .<集合>(i)` 与下面那条路的 `obj.<集合>(i)`
+                //   是同一问 —— `(i)` 不是该属性的实参, 而是**返回的那个集合的默认成员
+                //   Item** 的索引, 表达式的类是**元素类**, 不是集合类本身。
+                //   Fix 242 只把这道闸加在 MemberAccessExpr 那条路上; With 这条路在
+                //   `return getClassMethodReturnType(...)` 就提前交回集合类 ⇒ 同一份 VB6
+                //   源码写成 With 块就退化成集合类, 写成本地变量链则正确。
+                //   实测 ComCtlsDemo Builds/ToolBar/ToolBar.ctl:3518 `With .Buttons(i)`
+                //   (ToolBar Prop Get Buttons() As TbrButtons; TbrButtons.Item As TbrButton)
+                //   ⇒ 发成 `vb6_cls_TbrButtons* _vb6_with_N = (vb6_cls_TbrButtons*)
+                //   vb6_TbrButtons_prop_get_Item(...)`, 块内 .Key/.Tag/.Caption/.Style/
+                //   .Image/.ImageIndex/.ToolTipText/.Description/.Value/… 全按**集合类**找
+                //   成员 ⇒ C2039 × 54 (ToolBar.c 5924-6028); 同形 TabStrip.ctl 的
+                //   `With .Tabs(i)` ⇒ C2039 × 22 (TabStrip.c 3305-3319)。
+                //   两道闸与 Fix 242 逐字同款: (a) 确实带索引; (b) 该成员在宿主类里无参。
+                if (!call.positional.empty()) {
+                    std::vector<ParameterInfo> wmParams242;
+                    if (findClassMemberGetParams(winfo.className, wm.memberName, wmParams242)
+                        && wmParams242.empty()) {
+                        const std::string wmElem242 = getClassMethodReturnType(wmColl242, "Item");
+                        if (!wmElem242.empty()) return wmElem242;
+                    }
+                }
+                return wmColl242;
             }
             auto& ma = static_cast<const MemberAccessExpr&>(*call.callee);
             if (!ma.object) return "";
@@ -351,13 +375,39 @@ std::string CCodeGen::ifaceViewOfExpr(const ASTNode& expr) {
 // 账 #305 新账 #471 (第一百七十四刀): 名册那一问从此有**带名字**的那一档 —— For Each 那一站要拿
 // 接口名去拼「按运行期类名选中那一枚 wrap」的发码 (`legacyIfaceViewFromFn`)，而名字与 bool 必须
 // 出自同一次查表：上面那句问句从此是这一句的投影 (count → find，答案同源、名单还是那一张)。
+// 账 #305 第二百一十五刀 (字段档): 与**新式**那一位主人 `slotIvrefViewName` (第二百一十刀) 同一条
+// 补档 —— 类模块里裸写的字段成员读/成员写，站在那儿拿到的是**发射文本** `me-><字段>`，名册那一问
+// 只查裸名就永远问不中 (实测 legacy 那族字段槽四张脸: 读 = 结构体进 helper 首槽 C2172 / 装填 =
+// 裸拷贝实例指针 C2440 / 工厂初始化 = `me->m_lv = NULL` C2440 / 置空落哪一档都问不中同一张表)。
+// 只剥 `me->` **一层**前缀，且尾巴必须在名册里 (名册只由 `As <legacy 接口>` 的声明写入) ⇒ 普通类
+// 字段、局部同名、以及 `me->me->` 那种不可能的形状都不可能被我这条答成视图。
 std::string CCodeGen::slotLegacyIfaceViewName(const std::string& nameLower) const {
     auto it = knownIfaceVars_.find(nameLower);
-    return it == knownIfaceVars_.end() ? std::string() : it->second;
+    if (it != knownIfaceVars_.end()) return it->second;
+    static const std::string mePre = "me->";
+    if (nameLower.size() > mePre.size() && nameLower.compare(0, mePre.size(), mePre) == 0) {
+        auto itF = knownIfaceVars_.find(nameLower.substr(mePre.size()));
+        if (itF != knownIfaceVars_.end()) return itF->second;
+    }
+    return std::string();
 }
 
 bool CCodeGen::slotIsLegacyIfaceView(const std::string& nameLower) const {
     return !slotLegacyIfaceViewName(nameLower).empty();
+}
+
+// 账 #305 第二百一十七刀: 「一枚**值结构体槽**怎么清成空」那一发的唯一主人。
+// 为什么要有主人: 这一族的 C 值是 `vb6_iface_<I> { vtbl, obj }` (不是指针)，所以「空」没有 NULL
+// 这一形 —— 站点从前各自发 `= NULL` (cl C2440，类工厂字段初始化实测) 或把结构体的**地址**交给
+// `vb6_ReleaseObject(void**)` (置空那一站实测 = 它读的首字段是一张函数指针表，判据
+// vb6_ComIsDispatchable 要看表后第 5/6 槽，答案取决于那张表后面挨着什么)。两档都归这一处 =
+// 整枚槽零化 (与同一条腿里 UDT 字段那一支同形，第一百八十八刀 `cTypeIsValueAggregate` 认那一档)。
+// 视图是**借来的** (第 166/174 刀定的口径: wrap 不 AddRef) ⇒ 清槽不退旧，也不许顺手 Release。
+void CCodeGen::emitValueStructSlotClear(const std::string& slotExpr,
+                                        const std::string& note) {
+    std::string line = "memset(&" + slotExpr + ", 0, sizeof(" + slotExpr + "));";
+    if (!note.empty()) line += "  /* " + note + " */";
+    c_.emitLine(line);
 }
 
 // 账 #305 新账 #407 / §B190 第一百七十一刀: 「这一枚表达式是不是视图值、装箱该发哪一句」。
@@ -414,7 +464,15 @@ std::string CCodeGen::legacyViewGetterReadExpr(const std::string& objExpr,
                                                ASTNodeKind::PropertyDecl, ProcKind::PropertyGet);
     for (const LegacyIfaceSlot& s : legacyIfaceSlots(ifaceName)) {
         if (s.slotKey != want) continue;
-        if (s.retType == "void" || s.retType == "void*" || !s.params.empty()) return std::string();
+        if (s.retType == "void" || !s.params.empty()) return std::string();
+        // 第一百八十七刀: 对象档 getter (`Property Get Owner() As Object`) —— 槽里那一席的
+        // C 返回就是 `void*`, 晚绑定那一发是 `vb6_ComGetObjectProp(视图, …)` (那条路把值结构体
+        // 塞进首枚 `void*` 槽 ⇒ cl C2172)。判据 = 目标就是那一发；换回读槽后所有权口径与
+        // **普通类**那条路逐字一致 (`o = vb6_H_prop_get_Own(h)` = 纯赋值, 不 AddRef)。
+        if (s.retType == "void*") {
+            if (lateCall.rfind("vb6_ComGetObjectProp(", 0) != 0) return std::string();
+            return legacyViewCallExpr(objExpr, s.field, std::vector<std::string>());
+        }
         if (comGetterExprForRetCType(s.retType, objExpr, memberName) != lateCall) return std::string();
         return legacyViewCallExpr(objExpr, s.field, std::vector<std::string>());
     }
@@ -428,28 +486,69 @@ std::string CCodeGen::legacyViewGetterReadExpr(const std::string& objExpr,
 // 是 `vb6_cls_<I>*` ⇒ cl **C2440**「无法从 `vb6_iface_<I>` 转换为 `vb6_cls_<I> *`」(两台同红、没有 exe)。
 // 与读侧同规, 三问都不自己长答案:
 //   ① 这枚接收者在名册里是视图吗 (问读侧同一把名册钥匙, 只查一次表);
-//   ② 那一席是**写**那一档吗 (键 = `ifaceSlotKeyNamed(裸名, PropertyDecl, PropertyLet)`，
-//      `retType == "void"`; Set 那一档 `putref_` **刻意不接** = 对象形的引用计数口径与值形不是一件事);
+//   ② 那一席是**写**那一档吗 (键 = `ifaceSlotKeyNamed(裸名, PropertyDecl, setKind)`，
+//      `retType == "void"`; setKind 由站点交进来 —— Let 与 Set 是同一问的两档，
+//      第一百八十五刀起 `Set <视图>.<属性> = …` (putref_) 也走这一枚，不再落 ComSetRef);
 //   ③ 站点为自己那一发算好的**目标档** (写方向末形参的 C 类型) 与那一席的形参声明同型吗 ——
 //      形参必须恰好一枚 (`params` 里不许再有第二格) 且类型逐字节相同, 不合就交空串。
 // 形状那一头仍交回上一位的 `legacyViewCallExpr` (本函数是它的第四位消费者), 站点一枚都不拼。
+// 第一百八十六刀: 槽形参串 (`", int32_t i, BSTR v"`) 的**唯一**解析口 —— 前缀实参那两问
+// (条数 / 末段类型) 与只读查询共用它, 免得「几枚形参」与「末段是什么档」各抄一遍。
+static std::vector<std::string> ivSetterParamDecls(const std::string& params) {
+    // 串以 ", " 起头 ⇒ 先切出一段空串, 跳过它; 之后每段形如 " int32_t i"。
+    std::vector<std::string> out;
+    size_t i = 0;
+    while (i < params.size()) {
+        const size_t j = params.find(',', i);
+        std::string one = (j == std::string::npos) ? params.substr(i) : params.substr(i, j - i);
+        if (!one.empty()) out.push_back(one);
+        if (j == std::string::npos) break;
+        i = j + 1;
+    }
+    return out;
+}
+static std::string ivSetterLastCTypeOf(const std::string& params, size_t prefixCount) {
+    const std::vector<std::string> decls = ivSetterParamDecls(params);
+    if (decls.size() != prefixCount + 1) return std::string();
+    std::string last = decls.back();
+    if (!last.empty() && last[0] == ' ') last = last.substr(1);
+    const size_t sp = last.find(' ');
+    return (sp == std::string::npos) ? last : last.substr(0, sp);
+}
+
 std::string CCodeGen::legacyViewSetterCallExpr(const std::string& objExpr, const std::string& memberName,
                                                const std::string& valExpr,
-                                               const std::string& wantParamCType) {
+                                               const std::string& wantParamCType,
+                                               ProcKind setKind,
+                                               const std::vector<std::string>& prefixArgs) {
     if (objExpr.empty() || valExpr.empty() || wantParamCType.empty()) return std::string();
     const std::string ifaceName = slotLegacyIfaceViewName(Symbol::toLower(objExpr));
     if (ifaceName.empty()) return std::string();
     const std::string want = ifaceSlotKeyNamed(Symbol::toLower(memberName),
-                                               ASTNodeKind::PropertyDecl, ProcKind::PropertyLet);
-    const std::string paramDecl = ", " + wantParamCType;
+                                               ASTNodeKind::PropertyDecl, setKind);
     for (const LegacyIfaceSlot& s : legacyIfaceSlots(ifaceName)) {
         if (s.slotKey != want) continue;
         if (s.retType != "void") return std::string();
-        if (s.params.size() <= paramDecl.size()) return std::string();
-        if (s.params.compare(0, paramDecl.size(), paramDecl) != 0) return std::string();
-        const std::string rest = s.params.substr(paramDecl.size());
-        if (rest[0] != ' ' || rest.find(',') != std::string::npos) return std::string();
-        return legacyViewCallExpr(objExpr, s.field, std::vector<std::string>{valExpr});
+        if (ivSetterLastCTypeOf(s.params, prefixArgs.size()) != wantParamCType) return std::string();
+        std::vector<std::string> callArgs = prefixArgs;
+        callArgs.push_back(valExpr);
+        return legacyViewCallExpr(objExpr, s.field, callArgs);
+    }
+    return std::string();
+}
+
+std::string CCodeGen::legacyViewSetterLastParamCType(const std::string& objExpr,
+                                                     const std::string& memberName,
+                                                     ProcKind setKind,
+                                                     size_t argCount) {
+    const std::string ifaceName = slotLegacyIfaceViewName(Symbol::toLower(objExpr));
+    if (ifaceName.empty()) return std::string();
+    const std::string want = ifaceSlotKeyNamed(Symbol::toLower(memberName),
+                                               ASTNodeKind::PropertyDecl, setKind);
+    for (const LegacyIfaceSlot& s : legacyIfaceSlots(ifaceName)) {
+        if (s.slotKey != want) continue;
+        if (s.retType != "void") return std::string();
+        return ivSetterLastCTypeOf(s.params, argCount);
     }
     return std::string();
 }

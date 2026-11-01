@@ -251,6 +251,10 @@
         auto it = projClassNames_->find(Symbol::toLower(name));
         return it == projClassNames_->end() ? std::string() : it->second;
     }
+    // 账 #305 第320刀 (账 #592): 工程标题（.vbp 的 Title，空则 Name），driver 在模块循环前
+    // 算好注入。入口点把它播种给 RTL 的 `vb6_SetAppTitle` —— App.Title 与 MsgBox 默认题头
+    // 都只问那一格（见 vb6rtl_system.c 的所有权注释）。
+    void setProjectTitle(std::string t) { projectTitle_ = std::move(t); }
     // 账 #305 §B187 第二腿: 注入"在运行期 coclass 描述表里占一行"的类名名单 (小写)。
     void setProjectCoclassNames(const std::unordered_set<std::string>* s) {
         projCoclassNames_ = s;

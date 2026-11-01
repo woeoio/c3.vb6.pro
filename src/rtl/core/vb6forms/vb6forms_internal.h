@@ -55,6 +55,11 @@ extern HINSTANCE vb6_hInstance;
 // （创建期那一站尤其要紧 —— 从没被写过字体的控件今天连 `.FontName` 都读空，见账 #204）。
 HFONT vb6_ControlFont(HWND hwnd);
 void vb6_ControlFontStore(HWND hwnd, HFONT hFont);
+// 账 #305 第二百七十九刀: 同一格只读的那一问（自注册的窗口类本人答那一问时问它）。
+HFONT vb6_ControlFontStored(HWND hwnd);
+// 账 #305 第二百七十八刀: 同一族「发」那一站 (定义在 vb6forms_ctrl.c) —— 造一枚 HFONT、WM_SETFONT 给窗口、
+// 把这张存进上面那个唯一写口、再删掉上一张我们自己造的。只给 RTL 内部用, 生成代码不许看见。
+void vb6_SetControlFontFromLogFont(void* hwnd, const LOGFONTW* plf);
 
 // ============================================================
 // Fix 190: 源码字符串 = UTF-8, 窗口层 = UTF-16

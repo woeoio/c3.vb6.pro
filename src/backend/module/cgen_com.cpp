@@ -146,9 +146,16 @@ void CCodeGen::emitClassFactory(Module& module) {
                 std::string fieldCT = mapTypeRef(var.asType.get());
                 if (!fieldCT.empty() && fieldCT.back() == '*') {
                     c_.emitLine("me->" + field + " = NULL;");
-                } else if (fvt == Vb6Type::UserDefinedType) {
+                } else if (fvt == Vb6Type::UserDefinedType || cTypeIsValueAggregate(fieldCT)) {
                     // Fix 038: UDT 字段不能用 = 0 初始化 (C2440), 改用 memset 零化
-                    c_.emitLine("memset(&me->" + field + ", 0, sizeof(me->" + field + "));");
+                    // 账 #305 第二百一十五刀: 同一档再认**legacy 接口视图** (`vb6_iface_<I>` =
+                    // 值结构体 { vtbl, obj }) —— 它不带星号 ⇒ 过不了上面那道指针闸，落到下面
+                    // `defaultValue(Object)` 交出的 NULL ⇒ cl C2440 (探针 .local/probe_legfield
+                    // 实测 = 类工厂里 `me->m_lv = NULL;`)。问句不新立: 值聚合那一档的主人是
+                    // 第一百八十八刀那位 `cTypeIsValueAggregate` (UDT ∪ vb6_iface_)。
+                    // 账 #305 第二百一十七刀: 零化那一发本身也不再由站点拼 —— 交回值结构体空形那
+                    // 一位主人 (与 Set 置空那一站同一个形状)，站点只留「这一档要不要零化」那一问。
+                    emitValueStructSlotClear("me->" + field);
                 } else {
                     c_.emitLine("me->" + field + " = " + defaultValue(fvt) + ";");
                 }
@@ -249,14 +256,15 @@ void CCodeGen::emitClassFactory(Module& module) {
                     ", me);  /* 账 305 B188: 体抛错也要把下面的尾巴走完 */");
     }
 
-    // 释放BSTR字段
+    // 字段出厂: 「是不是数组」必须问在元素档之前 —— 账 #305 §B220 (第二百二十二刀)。
+    // resolveArrayElemType 把数组性剥掉, 所以先问元素档的那一版里 `Dim m_Keys() As String`
+    // 答出 String, 走进标量那一支把 SafeArray 载体整枚交给 SysFreeString = 堆损坏
+    // (靶工程 List/PopupMenu 释放那一趟打死客户端, 读数见 ai/022 第二百二十一刀)。
     for (VariableDecl* var_p : structFieldDecls(module)) {
         if (var_p) {
             auto& var = *var_p;
             Vb6Type varType = var.asType ? resolveArrayElemType(var.asType.get()) : Vb6Type::Variant;
-            if (varType == Vb6Type::String) {
-                c_.emitLine("vb6_BSTR_Free(me->" + cIdent(var.name) + ");");
-            } else if (var.isDynamicArray || !var.dimensions.empty()) {
+            if (var.isDynamicArray || !var.dimensions.empty()) {
                 // 账 #305 §B218 (甲) 腿⑤ 数组档 (第一百四十刀): 元素那一枚引用由**那一格元素**握,
                 // 而载体销毁那一发认不出工程类裸结构体 (`vb6_ReleaseObject` 的 Fix 191 判据) ⇒
                 // 每枚被数组字段持有的实例永不走 Class_Terminate (漏, 不是崩)。逐元素放手交回
@@ -270,6 +278,9 @@ void CCodeGen::emitClassFactory(Module& module) {
                                 "_Release);  /* 账 #305 (甲) 腿⑤ 数组档: 元素出厂逐枚交回 */");
                 }
                 c_.emitLine("if (me->" + cIdent(var.name) + ") vb6_SA_Destroy(me->" + cIdent(var.name) + ");");
+            } else if (varType == Vb6Type::String) {
+                // 标量 String 字段: 这一格自己就是那枚 BSTR
+                c_.emitLine("vb6_BSTR_Free(me->" + cIdent(var.name) + ");");
             } else if (var.asType) {
                 // 账 #305 §B218 (甲) 腿⑤: 字段那一枚引用**由字段自己握** —— 覆写(腿②)与置空(腿③)
                 // 两站从第一刀起就问同一位主人, 只有出厂这一站缺着: 持有者拆掉时字段里那枚没人退,
@@ -288,6 +299,13 @@ void CCodeGen::emitClassFactory(Module& module) {
         }
     }
 
+    // 账 #481 = 第一百八十二刀: 登记腿的配对另一半 —— 表是「裸实例 → desc」的弱映射,
+    // 登记了就必须在实例真被拆掉之前撤下来。否则地址留在表里 (地址复用后按旧指针查会答旧类),
+    // 且登记计数只增不减 ⇒ 累计建过 VB6_PROJCLASS_MAX 枚实例之后新实例一个都登记不进去。
+    // 闸与登记腿同一道 isDll_ (非 ActiveX 从来没喂过那张表, 也就不发这一行 ⇒ 产物零移动)。
+    if (isDll_) {
+    c_.emitLine("vb6_UnregisterProjectClassInstance((void*)me);  /* (b) 档注销腿: 与登记同一道闸 */");
+    }
     c_.emitLine("vb6_Free(me);");
     if (destroyHasTerm) {
         // 尾巴拆完了, 号才交出去: COM 出厂那一腿由 ComObj_Release 的帧接住(照旧记一条带号诊断),
@@ -411,6 +429,50 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
     c_.emitLine("}");
 }
 
+// 账 #305 §B218 第三百十四刀: 「这格 C 存储是不是一枚指针形对象槽」的唯一问句。原文是第二百七十一刀
+// 长在 cgen_expr_call_com_bind.inc 站点里的 lambda; 本刀第二位读者 (泛对象返回槽的主人) 问的是同一句,
+// 于是提到成员位 —— 一处定义, 两处问, 不再手抄第三份。
+bool CCodeGen::ctypeIsObjectSlotPtr(const std::string& t) const {
+    if (t.empty() || t.back() != '*') return false;
+    return t == "void*"                              // As Object
+        || t.rfind("vb6_cls_", 0) == 0               // 工程类实例指针
+        || t.rfind("vb6_ComIface_", 0) == 0;         // 前期绑定接口指针 (IFont/StdFont)
+}
+
+// 账 #305 §B218 (甲) 腿②″: 泛对象槽 (void* 档) 的覆写主人 —— 与 vb6_ReleaseObject (`Set x = Nothing`
+// 那一站, 早就在放这一格) **成对**: 一头只退不取, 另一头只取不退, 两半合起来才是 VB 的 `Set a = b`。
+// claim 走 vb6_ComAddRefDispatch 而不是裸 AddRef: 它内含 vb6_ComIsDispatchable 那道闸, 对裸工程类实例
+// (`vb6_cls_X*`, 首格是 __comObj 而非 vtable) 与 HWND 一律判否 ⇒ 与退那一头同一个安全口径, 不会新造野调用。
+void CCodeGen::emitLateSlotRefClaim(const std::string& target, const std::string& valueExpr) {
+    c_.emitLine("{  /* 账 #305 (甲) 腿②″: Set 泛对象槽 " + target + " */");
+    c_.indent();
+    c_.emitLine(target + " = " + valueExpr + ";");
+    c_.emitLine("vb6_ComAddRefDispatch((void*)" + target + ");");
+    c_.dedent();
+    c_.emitLine("}");
+}
+
+// 账 #305 §B218 (甲) 腿②″ 的第二问: 「右值那一格是不是**本过程的局部**」。
+// VB 里 `Set ret = 局部` 也是取走一枚 —— 但紧接着**过程出口把那枚局部放手**, 一进一出相抵。
+// C3 的局部对象格从没进计数系统 (既不 claim 也不在出口 Release, = §B164 那族泄漏账的同一格),
+// 所以那一枚引用今天就是**靠裸拷贝交出去**的: 实测 `Common.bas PictureFromHandle`:
+//     Dim NewPicture As IPicture                  ' OleCreatePictureIndirect 给它 1 枚
+//     Set PictureFromHandle = NewPicture          ' VB: +1, 出口 Release 局部 -1 ⇒ 交出去 1
+// 若在这一格也 claim ⇒ 每次调用净 +1, 那一枚永不有人退 (本机实测: 状态条那一路每点一次留一只活 IPicture)。
+// 反过来, **模块级槽 / me-> 字段**是计数系统自己会放手的 (源码里明写的 `Set x = Nothing`、
+// 字段出厂 腿⑤) ⇒ 不 claim 就变成把别人还要用的那一枚交出去 (= ImageList.ctl:562 那发 AV)。
+// 判据 = AST 认标识符 + 发码文本认「裸名」+ knownLocalVars_ (每过程开头清一次的那张表, 与形参同生命周期)。
+bool CCodeGen::localSlotHandsOverRef(const std::string& rhsText, const ASTNode* rhs) const {
+    if (!rhs || rhs->kind != ASTNodeKind::IdentifierExpr) return false;
+    if (rhsText.empty()) return false;
+    if (rhsText.find_first_of("(.-[") != std::string::npos) return false;   // 成员 / 下标 / 调用形态不算
+    if (!std::isalpha(static_cast<unsigned char>(rhsText[0]))
+        && rhsText[0] != '_') return false;
+    std::string lower = rhsText;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return knownLocalVars_.count(lower) > 0;
+}
+
 // 账 #305 §B218 (甲) 刀3: 「这一发右值是不是自带一枚移交过来的引用」—— 上面那位主人「不 claim」
 // 那条臂的第二个成因, 与 `New` 同一条契约, 所以只在这一处问, 不在站点各抄一遍。
 // 契约的实物 (三台工程同形, 尺 `.build/k1081_proj_emit.c`): 被调方 `Set <返回槽> = <局部/字段>`
@@ -494,12 +556,16 @@ bool CCodeGen::rhsTransfersProjectRef(const ASTNode& expr, bool forViewSlot) {
 
 // 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): 「实参这一站交出去之后欠不欠一次交回」。
 // 问句不新立, 只把上面那条契约问句与 `New` 那一形成因合起来答一次; forViewSlot 取的是**形参槽
-// 自己**那一档 (各站只认自己那一档 = §B221 那条纪律)。`New <类>` 交的是**实例**, 而视图槽收到它时
-// 发出来的是包出来的薄指针 `&(<实例>->__iv_<I>)` (见 cgen_expr_call_arg_emit.inc 那条 2026-10-12
-// 的 ivfix), 那一枚对价归 §B187 待拍的那一句管 ⇒ 这一形刻意答 false: 交回错对象比漏一枚更坏。
+// 自己**那一档 (各站只认自己那一档 = §B221 那条纪律)。
+// 账 #305 第二百零五刀: `New <类>` 那一档视图槽从此也答**移交** —— 交付侧给它的正是包出来的
+// 薄指针 `&(<实例>->__iv_<I>)` (第二百零四刀那位主人, nullable=false 那一档), 而 `New` 的初始
+// 引用就是这一枚的对面价; 视图档的 copy-in 从本刀起不再早退 (它会 AddRef), 这一问不翻正就是
+// 给「自己交出的那一枚」再付一遍 = 每调用净 +1 永不销毁。ByVal 那一站同问同一句, 它的实参在
+// 问之前已被 ivfix 那一段铸成视图 (见 cgen_expr_call_arg_emit.inc 的 Fix <vbeclipse> 2026-10-12),
+// 所以答案一样成立。
 bool CCodeGen::argHandsOverProjectRef(const ASTNode& expr, const std::string& clsPtr) {
     const bool forView = clsPtrIsViewSlot(clsPtr);
-    if (expr.kind == ASTNodeKind::NewExpr) return !forView;
+    if (expr.kind == ASTNodeKind::NewExpr) return true;
     return rhsTransfersProjectRef(expr, forView);
 }
 
@@ -528,9 +594,17 @@ void CCodeGen::registerClassArgRefHandback(const std::string& clsPtr, const std:
 // 为什么还要问一句「槽里是不是包装器」(运行期 vb6_ComObject_IsBoxed, 与 §B187 第五腿那座桥同一把尺):
 // 泛对象槽里躺着的是 `vb6_ComObject` 包装器, 对它跑 `vb6_cls_X_AddRef` = 把包装器当实例拆 = 堆损坏
 // (实测 x64 停在 PassLate 之后)。剥回实例再 claim ⇒ 临时量握的是实例, 调用者槽里那枚包装器原样留着。
-// 视图那一档 (薄指针) 不吃这一形: 它的借/移交仍由第一百三十四刀那条问句一处答。
+// 账 #305 第二百零五刀: 视图档从此**不再早退** —— 借来的那一形 (裸类变量 / 视图变量) 也要在这一格
+// 先落一枚自有引用, 因为被调方 腿② 那一臂当场退旧 (第一百四十四刀的口径对两档槽同形)。修前它一声
+// 不出 ⇒ 交回腿净 −1: 视图变量的实跑读数 `vv=2` 照常打、到过程出口拆槽时报 0xC0000374 = 过退的双自由。
+// 形状与 emitIvrefRefSet 那发 AddRef 同一位 (薄指针自带 vt, 不问本类那对 mint 出入口)。
 void CCodeGen::registerClassArgRefCopyIn(const std::string& clsPtr, const std::string& tmp) {
-    if (clsPtrIsViewSlot(clsPtr) || clsPtr.empty()) return;
+    if (clsPtr.empty()) return;
+    if (clsPtrIsViewSlot(clsPtr)) {
+        c_.addPending("if (" + tmp + ") " + tmp + "->vt->AddRef(" + tmp
+            + ");  /* 账 #305 (甲) 腿⑤: 借来的实参在这一格先落一枚自有引用 */");
+        return;
+    }
     const size_t star = clsPtr.find('*');
     const std::string base = (star != std::string::npos) ? clsPtr.substr(0, star) : clsPtr;
     c_.addPending("{ void* __bx = (void*)" + tmp + "; if (__bx) { if (vb6_ComObject_IsBoxed(__bx))"

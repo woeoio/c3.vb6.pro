@@ -322,13 +322,26 @@ void CCodeGen::visit(DeclareDecl& node) {
         }
     };
 
-    // 别名路: 调用点无条件直发 callTarget, 所以包装也**无条件**发出。
-    // 必须留在 diGuard 里面: 多模块工程里同一个 Declare 会出现在多个模块头
-    // (VBFlexGridBase.h / VisualStyles.h / VTableHandle.h ...), 每个头都带同一个
-    // diGuard 名; 放在 guard 外面会在同一个 .c 里撞同名 `static __inline` 重复定义
-    // (实测 C2084: 'vb6_lw_RtlMoveMemory' 已经有函数体)。
-    if (!isStaticDecl && aliasedCall) emitLdlWrapper();
     h_.emitLine("#endif");
+
+    // 别名路: 调用点无条件直发 callTarget, 所以包装也**无条件**发出。
+    // 账 #305 第一百九十八刀 族A: 包装的去重键换成**包装自己的 C 名**, 不再蹭 diGuard。
+    // diGuard 的钥匙是「导出名」, 非别名路那条 (`Declare Sub RtlMoveMemory Lib "kernel32"`)
+    // 吃的是同一把钥匙 ⇒ 同一个模块里两条 Declare 指向同一枚导出 (VB6 的常见写法:
+    // `CopyMemory Alias "RtlMoveMemory"` 与 `RtlMoveMemory` 并存 —— 实测 VbEclipse
+    // MagneticWnd.cls:120 与 :182) 时, 后发那条的**整块**被先发那条的 `#ifndef` 吃掉,
+    // 连带全工程唯一一份 `static __inline vb6_lwa_RtlMoveMemory` 一起没了, 而调用点按别名
+    // 直发这个名字 ⇒ C 只当隐式声明 (C4013 是警告、压根不进错误日志) ⇒ 链接期 LNK2019。
+    // 换成按本名去重同时保住这块原本在 guard 里的理由: 多模块工程里同一个别名 Declare 会
+    // 出现在多个模块头 (VBFlexGridBase.h / VisualStyles.h / VTableHandle.h ...), 同一个 .c
+    // 里仍然只有一份定义 (裸发会撞 C2084: 已经有函数体 —— 实测过)。
+    if (!isStaticDecl && aliasedCall) {
+        const std::string lwaGuard = "VB6_LWA_" + sanitizedExport + "_DEFINED";
+        h_.emitLine("#ifndef " + lwaGuard);
+        h_.emitLine("#define " + lwaGuard);
+        emitLdlWrapper();
+        h_.emitLine("#endif");
+    }
 
     // 生成: #define <VB6名> → <调用点名> (仅当VB6名未被SDK定义为宏时)
     // #ifndef 检查处理两种情况:

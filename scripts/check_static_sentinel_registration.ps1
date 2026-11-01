@@ -51,7 +51,11 @@ foreach ($m in $fnRx.Matches($harnessText)) {
     $name = $m.Groups[1].Value
     $refs = @([regex]::Matches($m.Value, 'check_[A-Za-z0-9_]+\.ps1') | ForEach-Object { $_.Value })
     if ($refs.Count -eq 0) { continue }
-    $callRx = '(?m)^\s+' + [regex]::Escape($name) + '\s*$'
+    # 调用点有两种合法写法（2026-10-24 起）：裸调用 `    Test-Xxx`，以及被静态 census 分片
+    # 包起来的 `    if (Enter-StaticShard) { Test-Xxx }`（见 tests/run_tests.ps1 的 $StaticShard）。
+    # 后者仍然是**会被跑到**的调用点 —— 只是按片次跑，不是死码。判据的语义（"有调用点"）不变，
+    # 变的只是它允许的拼法。不认这一种, 90+ 道哨兵会在分片模式下集体误报成 dead cell。
+    $callRx = '(?m)^\s+(?:if \(Enter-StaticShard\) \{ )?' + [regex]::Escape($name) + '\s*(?: \})?\s*$'
     if (@([regex]::Matches($harnessText, $callRx)).Count -lt 1) {
         $bad += ('R1b ' + $name + ' runs ' + ($refs -join ', ') + ' but the harness never calls it (dead cell)')
         continue

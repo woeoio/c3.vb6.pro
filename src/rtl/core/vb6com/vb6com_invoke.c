@@ -64,6 +64,117 @@ int32_t vb6_ComIsDispatchable(const void* disp) {
         && vb6_ComIsCodePtr(slot[6]);
 }
 
+/* 账 #305 第二百六十二刀 (丙): 晚绑定出口的「非 IDispatch 接收者」护栏。
+ * 七个出口 (ComCall / ComCallByDispid / ComGetProp / ComGetPropArg /
+ * ComSetProp / ComSetPropArg / ComSetRef) 以前对「接收者不是真 IDispatch」
+ * 各行其是: 有的打一行 "not found" 就走人, 有的 (CallByDispid / NULL 接收者)
+ * 一声不吭。静默 = 下回再漏时没人知道漏在哪一枚。
+ * 这里收成一位主人: 计数 + 一行 stderr 标记 (C3_LATEBIND_MISS)。
+ * **行为不变** (仍按原路返回 NULL / 空): 只把「静默」换成「响亮」。
+ * 刻意不在这儿抛错 —— 无处理器的 vb6_RaiseError 会 exit(424) 把进程带走。
+ * 判据「非 IDispatch 进晚绑定出口 = 0」按 stderr 里 C3_LATEBIND_MISS 的条数读。
+ * 伪接收者 (字体 / Extender / 宿主对象: HWND / 控件集合 / Collection /
+ * UC 实例) 由各自的岔口应答, 不算漏 —— 判据是 vb6_ComLateBindIsPseudo。 */
+static int32_t g_com_latebind_miss = 0;
+
+int32_t vb6_ComLateBindMissCount(void) { return g_com_latebind_miss; }
+
+/* 这枚接收者是不是「宿主伪对象」? 不是 IDispatch, 但宿主模型会应答。 */
+static int32_t vb6_ComLateBindIsPseudo(const void* disp) {
+    if (!disp) return 0;
+    if (vb6_UC_IsFont(disp)) return 1;
+    if (vb6_UC_IsExtender(disp)) return 1;
+    if (vb6_Host_IsHostObject(disp)) return 1;
+    return 0;
+}
+
+/* 护栏的唯一判据: 既不是真 IDispatch, 也不是宿主伪对象。 */
+static int32_t vb6_ComLateBindIsMiss(const void* disp) {
+    if (vb6_ComLateBindIsPseudo(disp)) return 0;
+    return !vb6_ComIsDispatchable(disp);
+}
+
+static void vb6_ComLateBindMiss(const wchar_t* site, const wchar_t* name, void* disp) {
+    g_com_latebind_miss++;
+    fwprintf(stderr, L"[C3_LATEBIND_MISS #%ld] site=%ls name=\"%ls\" disp=%p kind=%ls\n",
+             (long)g_com_latebind_miss, site, name ? name : L"(null)", disp,
+             disp ? L"notdispatchable" : L"null");
+    fflush(stderr);
+}
+
+/* 账 #305 第三百十七刀 (#600 的实测收口): 晚绑定的接收者可能是**另一张接口视图**。
+ * 实证 (ComCtlsDemo Command2): Common.bas 的 PictureFromHandle 用
+ *   OleCreatePictureIndirect(&PICD, IID_IPicture, ...) 造出 IPicture*, 而 VB6 在
+ *   `Set <IPictureDisp 槽> = <IPicture>` 那一站做一次 QI; 我们照抄指针 ⇒ 下游
+ *   `.Handle` 晚绑定把 IPicture 的 vtable 当 IDispatch 用, 第 5 槽 GetIDsOfNames
+ *   落到 IPicture::get_Type 上, 把 `&IID_NULL` (只读) 当 short* 写 ⇒ 0xC0000005。
+ * 独立探针 (本机 .local/k317/probe_pic.c, x64): QI(IID_IPictureDisp) ==
+ *   QI(IID_IDispatch) == p+0x10 (换指针!), 在该指针上 GetIDsOfNames("Handle")
+ *   得 dispid=0, Invoke 得 65579 = 图标的 hIcon。
+ *
+ * 修法 = VB6 那条规则本身: 晚绑定前先换到 IDispatch 视图。逐调用一发 QI 太贵,
+ * 而「同一 vtable ⇒ 同一布局 ⇒ 同一偏移」是 COM 的硬性质 ⇒ 按 **vtable** 缓存
+ * 「本指针到它 IDispatch 视图的字节偏移」: 真 IDispatch 缓存 0 (原路零改动);
+ * QI 不认的伪 vtable (VTableHandle 那种手写表) 缓存 -1 (同样原路, 不能把它们
+ * 当野指针拒掉); 只有异视图才真付一次 QI。取出的视图 AddRef、用完 Release
+ * (IUnknown 三槽在所有视图里同址), 所以调用期间视图一定活着。 */
+typedef struct { void* vtbl; int32_t off; } Vb6DispViewEnt;
+#define VB6_DISPVIEW_CACHE 64
+static Vb6DispViewEnt g_dispView[VB6_DISPVIEW_CACHE];
+static int32_t g_dispViewCount = 0;
+static int32_t g_dispViewNext = 0;
+
+static int32_t vb6_ComDispViewOffset(void* disp) {
+    if (!disp) return -1;
+    if (!vb6_ComIsDispatchable(disp)) return -1;
+    void* vtbl = *(void**)disp;
+    for (int32_t i = 0; i < g_dispViewCount; i++)
+        if (g_dispView[i].vtbl == vtbl) return g_dispView[i].off;
+    int32_t off = -1;
+    void* d = NULL;
+    if (SUCCEEDED(((IUnknown*)disp)->lpVtbl->QueryInterface((IUnknown*)disp, &IID_IDispatch, &d)) && d) {
+        off = (int32_t)((char*)d - (char*)disp);
+        ((IUnknown*)d)->lpVtbl->Release((IUnknown*)d);
+        if (off < 0) off = -1;   /* 负偏移理论上不存在; 当「不动」处理 */
+    }
+    Vb6DispViewEnt ent;
+    ent.vtbl = vtbl; ent.off = off;
+    if (g_dispViewCount < VB6_DISPVIEW_CACHE) g_dispView[g_dispViewCount++] = ent;
+    else { g_dispView[g_dispViewNext] = ent;
+           g_dispViewNext = (g_dispViewNext + 1) % VB6_DISPVIEW_CACHE; }
+    return off;
+}
+
+/* 交回本次调用该用的接收者; *owned 非空 = 借出的一枚引用, 用完交给 ...Out。 */
+static void* vb6_ComDispViewIn(void* disp, void** owned) {
+    *owned = NULL;
+    int32_t off = vb6_ComDispViewOffset(disp);
+    if (off <= 0) return disp;
+    void* d = (char*)disp + off;
+    ((IUnknown*)d)->lpVtbl->AddRef((IUnknown*)d);
+    *owned = d;
+    return d;
+}
+
+static void vb6_ComDispViewOut(void* owned) {
+    if (owned) ((IUnknown*)owned)->lpVtbl->Release((IUnknown*)owned);
+}
+
+/* 账 #305 第二百八十九刀 (§B164 新形): 「认不出这个名字」那一支的统一清点。
+   打包来的实参 (vb6_ComPackVariant 每次一发一枚堆上 VARIANT) 交进这七个出口后就只有本文件
+   那几条 clear 路接手 —— 早退不接, 就是整批发漏。空跑靶工程 8 秒 29 发 `Move`, 每发四枚。
+   VT_BYREF 那一档的内容指向调用方的存储, 与成功路径 rgvarg 那圈同一个规矩: 不清内容。
+   (在册: ComGetPropArg 的**成功**尾巴也从没 free 过结构体, ComSetProp/ComSetPropArg 只 free
+    结构体不清内容 —— 那些路今天没有读数, 且要先证调用方不 reuse 那枚数组, 不在这一格动。 */
+static void vb6_ComDropPackedArgs(VARIANT** a, int32_t argc) {
+    if (!a) return;
+    for (int32_t i = 0; i < argc; i++) {
+        if (!a[i]) continue;
+        if (!(a[i]->vt & VT_BYREF)) VariantClear(a[i]);
+        free(a[i]);
+    }
+}
+
 static DISPID vb6_getDispid(IDispatch* pDisp, const wchar_t* name) {
     // 先查缓存
     for (int32_t i = 0; i < vb6_dispid_cache_count; i++) {
@@ -181,11 +292,142 @@ HRESULT vb6_ComInvoke(IDispatch* pDisp, DISPID dispid, WORD wFlags,
     return pDisp->lpVtbl->Invoke(pDisp, dispid, &IID_NULL, LOCALE_USER_DEFAULT, wFlags, dp, result, excep, argErr);
 }
 
+/* 账 #305 第二百九十刀: 出站实参按**被调方声明的形参类型**收窄。
+   VB6 的晚绑定是 ITypeInfo 驱动的: 实参先折到形参档再进 Invoke。OLE 自己那套
+   标准实现则在自己的 Invoke 里按 typelib 严格校验 —— 把 `.Height` (VT_R8) 递进
+   一个 `typedef LONG` 的形参, 直接 DISP_E_TYPEMISMATCH, 于是 Common.bas 的
+   `.Render hDC, x, y, cx, cy, 0, .Height, .Width, -.Height, ByVal 0&`
+   一声不响地什么都没画 (ComCtlsDemo 状态条 panel1 那枚图标就是这么丢的)。
+   判据 (RTL 外的产物级读数, .local/k294/render_probe): 同一个 IPictureDisp,
+   cArgs=10 全 VT_I4 + DISPATCH_METHOD ⇒ S_OK 且真画出 20x20; 三个 himetric
+   实参换成 VT_R8 ⇒ 0x80020005; 旗标带上 DISPATCH_PROPERTYGET ⇒ 0x8002000E。
+   只收窄**数值变窄**这一档 (R8/R4 → 整型), 已经是整数档的实参一个都不动 ——
+   这是本刀"零回归"的根据, 也是不碰 ByRef/BSTR/对象三档的理由。*/
+static int vb6_ComIntParamVt(ITypeInfo* ti, const TYPEDESC* td) {
+    if (!ti || !td) return 0;
+    VARTYPE vt = td->vt;
+    if (vt == VT_USERDEFINED) {
+        ITypeInfo* ref = NULL;
+        if (FAILED(ti->lpVtbl->GetRefTypeInfo(ti, td->hreftype, &ref)) || !ref) return 0;
+        int out = 0;
+        TYPEATTR* ta = NULL;
+        if (SUCCEEDED(ref->lpVtbl->GetTypeAttr(ref, &ta)) && ta) {
+            if (ta->typekind == TKIND_ALIAS) {
+                VARTYPE av = ta->tdescAlias.vt;
+                if (av == VT_I4 || av == VT_I2 || av == VT_INT ||
+                    av == VT_UI4 || av == VT_UI2) out = (int)av;
+            }
+            ref->lpVtbl->ReleaseTypeAttr(ref, ta);
+        }
+        ref->lpVtbl->Release(ref);
+        return out;
+    }
+    if (vt == VT_I4 || vt == VT_I2 || vt == VT_INT || vt == VT_UI4 || vt == VT_UI2) return (int)vt;
+    return 0;
+}
+
+/* 每枚对象取一次 GetTypeInfo(0) 并记住 —— 绘制路径一秒能问几十次。 */
+#define VB6_TI_CACHE_SIZE 64
+static struct { IDispatch* disp; ITypeInfo* ti; } vb6_ti_cache[VB6_TI_CACHE_SIZE];
+static int vb6_ti_cache_count = 0;
+
+static ITypeInfo* vb6_ComTypeInfoOf(IDispatch* pDisp) {
+    for (int i = 0; i < vb6_ti_cache_count; i++)
+        if (vb6_ti_cache[i].disp == pDisp) return vb6_ti_cache[i].ti;
+    ITypeInfo* ti = NULL;
+    if (FAILED(pDisp->lpVtbl->GetTypeInfo(pDisp, 0, 0, &ti)) || !ti) {
+        ti = NULL;
+        if (FAILED(pDisp->lpVtbl->GetTypeInfo(pDisp, 0, LOCALE_USER_DEFAULT, &ti)) || !ti) return NULL;
+    }
+    if (vb6_ti_cache_count < VB6_TI_CACHE_SIZE) {
+        vb6_ti_cache[vb6_ti_cache_count].disp = pDisp;
+        vb6_ti_cache[vb6_ti_cache_count].ti = ti;
+        vb6_ti_cache_count++;
+    }
+    return ti;
+}
+
+/* 账 #305 第291刀 (b): 旗标按被调方声明的 INVOKEKIND 走, 不按"有没有实参"猜。
+   第一版写成 `argc > 0 ⇒ 只发 METHOD`, 当场打红两只: `test_com_default_prop` 与
+   b433-10 —— Scripting.Dictionary 的默认成员 Item 是**带实参的 propget**,
+   只发 METHOD 它答"找不到成员"。老行为 (METHOD|PROPERTYGET 一发齐递) 对
+   propget 一直是对的, 只有真函数 (INVOKE_FUNC, 例如 IPictureDisp::Render) 才
+   必须单发 METHOD。认不出成员的 (无 typeinfo / 无 FUNCDESC) 一律退回老行为,
+   这样这条规则只碰"能证明是函数"的那一发。 */
+static WORD vb6_ComFlagsFor(IDispatch* pDisp, DISPID dispid, int32_t argc) {
+    WORD dflt = DISPATCH_METHOD | DISPATCH_PROPERTYGET;   /* 猜不出就按老行为两可齐递 */
+    if (argc <= 0) return dflt;
+    ITypeInfo* ti = vb6_ComTypeInfoOf(pDisp);
+    if (!ti) return dflt;
+    TYPEATTR* ta = NULL;
+    if (FAILED(ti->lpVtbl->GetTypeAttr(ti, &ta)) || !ta) return dflt;
+    WORD fl = 0;
+    for (UINT f = 0; f < ta->cFuncs; f++) {
+        FUNCDESC* fd = NULL;
+        if (FAILED(ti->lpVtbl->GetFuncDesc(ti, f, &fd)) || !fd) continue;
+        if (fd->memid == dispid) {
+            if (fd->invkind == INVOKE_FUNC) fl = DISPATCH_METHOD;
+            ti->lpVtbl->ReleaseFuncDesc(ti, fd);
+            break;
+        }
+        ti->lpVtbl->ReleaseFuncDesc(ti, fd);
+    }
+    ti->lpVtbl->ReleaseTypeAttr(ti, ta);
+    return fl ? fl : dflt;
+}
+
+static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, int32_t argc) {
+    if (!pDisp || !args || argc <= 0) return;
+    int widen = 0;
+    for (int32_t i = 0; i < argc; i++)
+        if (args[i] && (args[i]->vt == VT_R8 || args[i]->vt == VT_R4)) { widen = 1; break; }
+    if (!widen) return;                       /* 没有浮点实参 ⇒ 这条路径零代价 */
+    ITypeInfo* ti = vb6_ComTypeInfoOf(pDisp);
+    if (!ti) return;
+    TYPEATTR* ta = NULL;
+    if (FAILED(ti->lpVtbl->GetTypeAttr(ti, &ta)) || !ta) return;
+    for (UINT f = 0; f < ta->cFuncs; f++) {
+        FUNCDESC* fd = NULL;
+        if (FAILED(ti->lpVtbl->GetFuncDesc(ti, f, &fd)) || !fd) continue;
+        if (fd->memid != dispid || !fd->lprgelemdescParam) {
+            ti->lpVtbl->ReleaseFuncDesc(ti, fd);
+            continue;
+        }
+        /* rgvarg[j] = 形参 (cParams-1-j); args[i] 落在 rgvarg[argc-1-i]
+           ⇒ args[i] 对的是形参 cParams-argc+i (cParams==argc 时就是 i)。
+           反过来写 (argc-1-i) 会整列错位: 第 7 个实参去对了第 4 个形参, 于是
+           该收窄的三个 himetric 实参一个都没被认出来。 */
+        for (int32_t i = 0; i < argc; i++) {
+            int k = (int)(fd->cParams - argc + i);
+            if (k < 0 || k >= (int)fd->cParams) continue;
+            VARIANT* a = args[i];
+            if (!a || (a->vt != VT_R8 && a->vt != VT_R4)) continue;
+            int want = vb6_ComIntParamVt(ti, &fd->lprgelemdescParam[k].tdesc);
+            if (!want) continue;
+            VARIANT tmp;
+            VariantInit(&tmp);
+            if (SUCCEEDED(VariantChangeType(&tmp, a, 0, (VARTYPE)want))) {
+                VariantClear(a);
+                *a = tmp;
+            } else {
+                VariantClear(&tmp);
+            }
+        }
+        ti->lpVtbl->ReleaseFuncDesc(ti, fd);
+        break;
+    }
+    ti->lpVtbl->ReleaseTypeAttr(ti, ta);
+}
+
 // COM方法调用 (返回VARIANT*, 调用方需vb6_ComVarClear释放)
 // args_void: VARIANT*[] (指向已分配VARIANT的指针数组), 每个元素由vb6_ComPackXxx分配
-void* vb6_ComCall(void* disp, const wchar_t* methodName,
-                  void* args_void, int32_t argc) {
+static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
+                            void* args_void, int32_t argc) {
     VARIANT** args = (VARIANT**)args_void;
+    /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    if (vb6_ComLateBindIsMiss(disp)) {
+        vb6_ComLateBindMiss(L"ComCall", methodName, disp);
+    }
     if (!disp) return NULL;
     /* Fix 112: 宿主对象 (窗体/控件 HWND, Controls 集合, Font 代理) 不是 IDispatch,
      * 直接解引用 lpVtbl 会 AV. 用 Win32 语义的宿主分派应答. */
@@ -200,9 +442,56 @@ void* vb6_ComCall(void* disp, const wchar_t* methodName,
         vb6_Host_ClearVariant(&hout);
         return (void*)hres;
     }
+    /* 账 #305 第二百九十五刀: Extender 伪对象的**方法形** —— 把「静默丢且护栏数不到」改成
+       「响亮地丢」。
+       GetProp / SetProp 两站从 Fix 168 起各有 Extender 岔口, 唯独 ComCall 一个都没有 ⇒
+       `.Extender.Move l, t, w, h` (UC 自己量完尺寸来请求摆位的那一发) 一路掉到 vb6_getDispid
+       那扇 IDispatch 门上, 打一行 method "Move" not found 就丢。而 vb6_ComLateBindIsPseudo
+       的豁免句「伪接收者由各自的岔口应答」对 Extender 是**无条件**成立的 ⇒ 这 26 发在护栏的
+       计数里一条都不见 (实测靶工程 18 秒: C3_LATEBIND_MISS 只有 5 条, 全是另一族
+       OnControlInfoChanged; 295 刀埋点量到 Move 落在 CoolBar1 x10 / ComboBoxW1 x5 /
+       ImageCombo1 x4 / StatusBar1 x3 / MonthView1 x3 / Slider1 x1)。
+       **写侧这一刀刻意不接** —— 本刀先接过一次 (四档交 vb6_ControlMove), 逐窗口归因后是三条
+       不同的塌法: CoolBar1 宿主 900→552 缇 (原生 rebar 60→37, VB6 是 55; 它量的是 band 行高,
+       那一路输入仍欠在第二百九十刀); ComboBoxW1 宿主 288↔504 缇来回摆 5 发都不收敛;
+       ImageCombo1 交来的四档是**缇**而它容器 (CoolBar, 声明 ScaleMode=3 像素) 要的是像素,
+       于是 3672 缇被当 3672 像素落回去, 宿主一度长成 3672x324。
+       ⇒ 顺序仍按第二百八十八刀定的那一串: 先定「几何的父窗口该问谁」(今天走 GetParent,
+       交不出 UC 自己声明的 ScaleMode), 再谈落地写。这一刀只把看不见改成看得见。
+       **账 #305 第三百零一刀: 那两条前置都落地了, `Move` 接回** —— 第二百九十七刀把单位那一问
+       收到容器主人 (不再问 GetParent), 第二百九十九刀把 authored 容器戳到窗口上, 第二百九十刀
+       补了 ReBar band 行高那一路输入。本条只补通道, 兜底一概不抄: 四档原样交 vb6_ControlMove。 */
+    if (vb6_UC_IsExtender(disp)) {
+        if (methodName && wcscmp(methodName, L"Move") == 0) {
+            extern int32_t vb6_UC_ExtenderMoveApply(double l, double t, double w, double h, int32_t mask);
+            double v4[4] = { 0, 0, 0, 0 };
+            int32_t mask = 0;
+            for (int32_t i = 0; i < argc && i < 4; i++) {
+                VARIANT scratch;
+                if (!args || !args[i]) continue;
+                VariantInit(&scratch);
+                if (SUCCEEDED(VariantChangeType(&scratch, args[i], 0, VT_R8))) {
+                    v4[i] = scratch.dblVal;
+                    mask |= (1 << i);
+                }
+                VariantClear(&scratch);
+            }
+            vb6_UC_ExtenderMoveApply(v4[0], v4[1], v4[2], v4[3], mask);
+            vb6_ComDropPackedArgs(args, argc);
+            return NULL;
+        }
+        vb6_ComLateBindMiss(L"ExtenderCall", methodName, disp);
+        if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+            fwprintf(stderr, L"[C3_EXT] Call name=\"%ls\" argc=%ld dropped=1\n",
+                     methodName ? methodName : L"(null)", (long)argc);
+            fflush(stderr);
+        }
+        vb6_ComDropPackedArgs(args, argc);
+        return NULL;
+    }
     /* Fix 191: IUnknown 三法在**所有** COM 接口的 vtable 里固定在槽 0/1/2,
-     * 自定义接口 (IOleInPlaceActiveObject / IOleObject 这类无 IDispatch 的) 也一样。
-     * 而按名后期绑定要先 GetIDsOfNames —— 那是 IDispatch 的槽 5。对手写伪 vtable
+
+     * 自定义接口 (IOleInPlaceActiveObject / IOleObject 这类无 IDispatch 的) 也一样。     * 而按名后期绑定要先 GetIDsOfNames —— 那是 IDispatch 的槽 5。对手写伪 vtable
      * (VTableHandle.bas 的 VTableIPAO[] 槽位: QI/AddRef/Release/GetWindow/
      * ContextSensitiveHelp/TranslateAccelerator/…) 就等于把
      * IOleIPAO_TranslateAccelerator 当 GetIDsOfNames 调用, 参数全错位 → AV。
@@ -236,9 +525,15 @@ void* vb6_ComCall(void* disp, const wchar_t* methodName,
     }
     DISPID dispid = vb6_getDispid(pDisp, methodName);
     if (dispid == DISPID_UNKNOWN) {
+        vb6_ComDropPackedArgs(args, argc);   /* 账 #305 第二百八十九刀: 早退之前清点来路 */
         fwprintf(stderr, L"vb6_ComCall: method \"%ls\" not found\n", methodName);
         return NULL;
     }
+
+    /* 收窄必须发生在抄进 DISPPARAMS 之前 —— dp.rgvarg 是逐枚 VARIANT 的**值拷贝**,
+       改 args[] 影响不到已经抄好的那一份 (第一版就栽在顺序上: 三个实参都识别成该收窄,
+       Invoke 依旧 0x80020005)。 */
+    vb6_ComNarrowArgs(pDisp, dispid, args, argc);
 
     DISPPARAMS dp;
     memset(&dp, 0, sizeof(dp));
@@ -262,11 +557,26 @@ void* vb6_ComCall(void* disp, const wchar_t* methodName,
     memset(&excep, 0, sizeof(excep));
     UINT argErr = 0;
 
-    HRESULT hr = vb6_ComInvoke(pDisp, dispid, DISPATCH_METHOD | DISPATCH_PROPERTYGET, &dp, result, &excep, &argErr);
+    /* 账 #305 第291刀 (b): 旗标按被调方声明的 INVOKEKIND 走。 */
+    WORD callFlags = vb6_ComFlagsFor(pDisp, dispid, argc);
+    HRESULT hr = vb6_ComInvoke(pDisp, dispid, callFlags, &dp, result, &excep, &argErr);
 
-    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0)
-        fprintf(stderr, "[C3_COM] Call '%ls' hr=0x%08lX vt=%d\n",
-                methodName, (unsigned long)hr, result ? result->vt : -1); fflush(stderr);
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        long val = -1;
+        if (result) {
+            if (result->vt == VT_I4) val = result->lVal;
+            else if (result->vt == VT_BOOL) val = result->boolVal;
+        }
+        fprintf(stderr, "[C3_COM] Call '%ls' hr=0x%08lX vt=%d val=%ld\n",
+                methodName, (unsigned long)hr, result ? result->vt : -1, val);
+        if (wcscmp(methodName, L"SetScrollBars") == 0) {
+            for (int32_t ai = 0; ai < argc; ai++)
+                fprintf(stderr, "[C3_COM]   arg[%ld] vt=%d val=%ld\n", (long)ai,
+                        args[ai] ? args[ai]->vt : -1,
+                        (long)((args[ai] && args[ai]->vt == VT_I4) ? args[ai]->lVal : 0));
+        }
+        fflush(stderr);
+    }
 
     if (FAILED(hr)) {
         vb6_ComCheckError(hr, &excep, L"ComCall");
@@ -305,9 +615,13 @@ void* vb6_ComCall(void* disp, const wchar_t* methodName,
 // 宿主对象 (窗体/控件 HWND, Controls 集合, Font 代理) 不是 IDispatch, 与
 // vb6_ComCall 的 Fix 112 同口径应答 —— 旧路径按名 L"Item" 走 vb6_Host_Call,
 // 这里保持完全一致的宿主分派语义 (DISPID_VALUE 对宿主无意义)。
-void* vb6_ComCallByDispid(void* disp, int32_t dispid,
-                          void* args_void, int32_t argc) {
+static void* vb6_ComCallByDispidRcv(void* disp, int32_t dispid,
+                                    void* args_void, int32_t argc) {
     VARIANT** args = (VARIANT**)args_void;
+    /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    if (vb6_ComLateBindIsMiss(disp)) {
+        vb6_ComLateBindMiss(L"ComCallByDispid", L"(byDispid)", disp);
+    }
     if (!disp) return NULL;
     /* Fix 同 vb6_ComCall: 宿主对象分派 */
     if (vb6_Host_IsHostObject(disp)) {
@@ -362,9 +676,143 @@ void* vb6_ComCallByDispid(void* disp, int32_t dispid,
 
     return (void*)result;
 }
-// COM属性Get (返回VARIANT*)
-void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
+
+// ============================================================
+// 账 (Outlook2013 frmInbox:331): **默认成员**调用返回对象 —— `coll(idx)`。
+// VB6 里 `coll(idx)` 编到默认成员 (DISPID_VALUE = 0), 从不按名字 "Item" 找。
+// 生成器此前一律发 `vb6_ComCallObject(recv, L"Item", …)`, 对 VB6 Collection /
+// ADODB.Recordset 恰好命中 (它们的默认成员名字就叫 Item), 但对 Codejock 的集合
+// 一律落空: ReportColumns 的默认成员叫 Column、Actions 的默认成员不叫 Item ——
+// getDispid("Item") = DISPID_UNKNOWN ⇒ Invoke 不发 ⇒ 交回 NULL ⇒
+//   wndReportControl.GroupsOrder.Add <NULL>  →  Run-time error 13 (类型不匹配)。
+// 口径: 名字 "Item" 能解析就仍按名走 (RTL 伪集合 —— ListImages/Panels/Nodes 一族 ——
+// 只登记名字, 没有 0 号成员); 解析不到才按 VB6 语义发 DISPID 0。
+// ============================================================
+/* 账 (Outlook2013 frmMain:207 运行错误 87): 先按类型信息认**默认成员** (memid 0),
+   认得到就直发 DISPID_VALUE, 不再按名 "Item" 找。实测 Codejock ICommandBarActions
+   只有 memid {0(Action),1,2,5,6,-4}, 但它的 GetIDsOfNames 在 LOCALE_NEUTRAL(0) 上
+   把并不存在的 "Item" 映射成 dispid 3 (USER/SYSTEM 两档才是 DISP_E_UNKNOWNNAME);
+   照名走 ⇒ Invoke 3 ⇒ Codejock 抛 helpContext 87「属性名称无效」, 未接住的运行错误
+   直接把进程带走。VB6 里 `obj(args)` 本来就编成 DISPID_VALUE, 名字 "Item" 只在
+   认不出类型信息 (RTL 伪集合只登记名字) 时兜底。 */
+static int vb6_ComHasDefaultMemid(IDispatch* pDisp) {
+    ITypeInfo* ti = vb6_ComTypeInfoOf(pDisp);
+    if (!ti) return -1;                       /* 无类型信息: 认不出, 交回老口径 */
+    TYPEATTR* ta = NULL;
+    if (FAILED(ti->lpVtbl->GetTypeAttr(ti, &ta)) || !ta) return -1;
+    int has = 0;
+    for (UINT f = 0; f < ta->cFuncs; f++) {
+        FUNCDESC* fd = NULL;
+        if (FAILED(ti->lpVtbl->GetFuncDesc(ti, f, &fd)) || !fd) continue;
+        if (fd->memid == DISPID_VALUE) has = 1;
+        ti->lpVtbl->ReleaseFuncDesc(ti, fd);
+        if (has) break;
+    }
+    ti->lpVtbl->ReleaseTypeAttr(ti, ta);
+    return has;
+}
+
+static void* vb6_ComCallObjectDefaultRcv(void* disp, void* args_void, int32_t argc) {
     if (!disp) return NULL;
+    DISPID d = DISPID_UNKNOWN;
+    /* 宿主对象 (窗体/控件槽/Controls 集合) 不是真 IDispatch: 交给 vb6_ComCallByDispid
+     * 的宿主分派 (它内部转 vb6_ComCall(…, L"Item", …)), 这里不碰 vtable。 */
+    if (!vb6_Host_IsHostObject(disp) && vb6_ComIsDispatchable(disp)) {
+        int hasDefault = vb6_ComHasDefaultMemid((IDispatch*)disp);
+        if (hasDefault != 1) d = vb6_getDispid((IDispatch*)disp, L"Item");
+    }
+    if (d == DISPID_UNKNOWN) d = DISPID_VALUE;
+
+    VARIANT* pv = (VARIANT*)vb6_ComCallByDispid(disp, (int32_t)d, args_void, argc);
+    if (!pv) return NULL;
+    void* obj = NULL;
+    if (pv->vt == VT_DISPATCH) {
+        /* 与 vb6_ComCallObject 同口径: 解包 RTL 伪对象, 转移引用所有权 */
+        extern void* vb6_UC_UnwrapHost(void* obj);
+        obj = vb6_UC_UnwrapHost((void*)pv->pdispVal);
+    } else if (pv->vt == VT_UNKNOWN) {
+        pv->punkVal->lpVtbl->QueryInterface(pv->punkVal, &IID_IDispatch, &obj);
+    } else if (pv->vt != VT_EMPTY && pv->vt != VT_NULL) {
+        VARIANT vObj;
+        VariantInit(&vObj);
+        if (SUCCEEDED(VariantChangeType(&vObj, pv, 0, VT_DISPATCH))) {
+            obj = (void*)vObj.pdispVal;
+        }
+        VariantClear(&vObj);
+    }
+    vb6_ComVarFree(pv);
+    return obj;
+}
+/* 账 (Outlook2013 左面板 VisualTheme): 宿主模型只认窗口层的 Extender 成员;
+ * `For Each Ctrl In Form.Controls: Set CtrlCaption = Ctrl: CtrlCaption.VisualTheme = v`
+ * 交出的接收者是控件**窗口** (Codejock 还有内部子窗口), 控件自有属性以前被
+ * 宿主模型静默丢弃。这里把窗口换回控件 IDispatch, 但**只在**控件类型库确实认得
+ * 这个名字时才换 —— Extender 那一档 (几何/可见性/标题) 仍交宿主模型, 行为不变。 */
+static int32_t vb6_ComIsExtenderMember(const wchar_t* name) {
+    static const wchar_t* const kExt[] = {
+        L"Left", L"Top", L"Width", L"Height", L"Move", L"Visible", L"Enabled",
+        L"Caption", L"Text", L"Tag", L"Name", L"Index", L"Parent", L"Container",
+        L"hWnd", L"hWndUserControl", L"Object", L"Extender", L"TabIndex", L"TabStop",
+        L"DragIcon", L"DragMode", L"OLEDropMode", L"WhatsThisHelpID", L"HelpContextID"
+    };
+    for (int i = 0; i < (int)(sizeof(kExt) / sizeof(kExt[0])); i++)
+        if (_wcsicmp(name, kExt[i]) == 0) return 1;
+    return 0;
+}
+
+static void* vb6_ComOcxRcvOf(void* disp, const wchar_t* name) {
+    if (!disp || !name) return NULL;
+    if (vb6_ComIsExtenderMember(name)) return NULL;
+    /* Controls 集合交出的项常是宿主包装器: 先透明解包, 解包结果可能是控件对象本身 */
+    extern void* vb6_UC_UnwrapHost(void* obj);
+    void* raw = vb6_UC_UnwrapHost(disp);
+    if (!raw) raw = disp;
+    void* ocx = vb6_OcxHost_DispatchOf(raw);
+    if (!ocx) return NULL;
+    if (vb6_getDispid((IDispatch*)ocx, name) == DISPID_UNKNOWN) return NULL;
+    return ocx;
+}
+
+/* 账 (Outlook2013 左面板 VisualTheme): VB6 的
+ *   `Dim CtrlCaption As ShortcutCaption` … `Set CtrlCaption = Ctrl`
+ * 是按**声明接口** QI, 控件类型不符 ⇒ 错误 13; 工程里那句多在
+ * `On Error Resume Next` 里, 于是赋值根本没发生 (VB6 实测: 该循环对
+ * CommandBars / DockingPaneManager 之类毫无作用)。
+ * C3 的 Controls 集合交出的是裸 IDispatch, 赋值是一句裸指针拷贝 ⇒ 循环里
+ * 每一次 `CtrlCaption.VisualTheme = v` 都会打到 CommandBars 自己, 把 ribbon
+ * 主题改坏 (实测: 整个 ribbon 变黑)。这里补上同一道类型检查:
+ * 是本宿主托管的 OCX 控件时按控件类名比对, 不符返回 NULL (调用点据此跳过);
+ * 其余对象 (普通 COM 对象 / 工程类 / 宿主包装器) 一律原样通过 —— 不改判。 */
+void* vb6_ComObjectTypeCast(void* obj, const wchar_t* typeName) {
+    if (!obj || !typeName) return obj;
+    wchar_t ctrlType[128];
+    if (vb6_OcxHost_TypeNameOf(obj, ctrlType, 128) && _wcsicmp(ctrlType, typeName) != 0)
+        return NULL;
+    return obj;
+}
+
+// COM属性Get (返回VARIANT*)
+static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
+    /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    if (vb6_ComLateBindIsMiss(disp)) {
+        vb6_ComLateBindMiss(L"ComGetProp", propName, disp);
+    }
+    if (!disp) return NULL;
+    /* 账 (Outlook2013 主区 Report 盖住 Calendar): VB6 的 `控件.Visible` 是**容器
+       Extender** 的账, 实际落的是控件自己的窗口。而这里拿到的是控件对象
+       (IDispatch*), 硬发下去只是问了控件自身一个 dispid=2 的属性 —— 窗口照样可见。
+       先问 OCX 宿主: 命中 (返回 1) 就按容器语义答复。 */
+    if (propName && _wcsicmp(propName, L"Visible") == 0) {
+        int32_t vis = 0;
+        if (vb6_OcxHost_GetVisible(disp, &vis)) {
+            VARIANT* vres = (VARIANT*)calloc(1, sizeof(VARIANT));
+            if (vres) {
+                vres->vt = VT_BOOL;
+                vres->boolVal = vis ? VARIANT_TRUE : VARIANT_FALSE;
+            }
+            return (void*)vres;
+        }
+    }
     /* Fix 164z2-dbg: C3_COM_TRACE 入口日志 */
     if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
         fprintf(stderr, "[C3_COM] GetProp entry: disp=%p isFont=%d isHost=%d name=%ls\n",
@@ -383,6 +831,12 @@ void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
                 case 0: res->vt = VT_BSTR; res->bstrVal = SysAllocString(*(BSTR*)fp); break;
                 case 1: res->vt = VT_R4;   res->fltVal = *(float*)fp; break;
                 case 2: res->vt = VT_I2;   res->iVal = *(int16_t*)fp; break;
+                /* 账 #305 第二百七十六刀 kind 5 = 句柄: 按**指针宽度**取, 交 VT_I8。
+                   落进 default 的 int32 那档就是 x64 上把 GDI 句柄砍掉高 32 位
+                   (与 Fix 296 给 Extender 对象成员立的同一条规矩); 而 VB6 的
+                   IFont.hFont 虽在类型库里标 Long, 语料一律把它交给 As LongPtr 的
+                   形参 (Common.bas:231 那份 PtrSafe 声明), 所以交 VT_I8 才是应答。 */
+                case 5: res->vt = VT_I8;   res->llVal = (LONG_PTR)*(void**)fp; break;
                 default: res->vt = VT_I4;  res->lVal = *(int32_t*)fp; break;
             }
         }
@@ -410,6 +864,8 @@ void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
         }
         return (void*)eres;
     }
+    /* 账 (Outlook2013 左面板 VisualTheme): 控件窗口 → 控件 IDispatch (只换控件自有成员) */
+    { void* ocxRcv = vb6_ComOcxRcvOf(disp, propName); if (ocxRcv) disp = ocxRcv; }
     /* Fix 112: 宿主对象分派 (见 vb6_ComCall 注释) */
     if (vb6_Host_IsHostObject(disp)) {
         char hout[64];
@@ -447,9 +903,16 @@ void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
 
     HRESULT hr = vb6_ComInvoke(pDisp, dispid, (DISPATCH_METHOD | DISPATCH_PROPERTYGET), &dp, result, &excep, &argErr);
 
-    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0)
-        fprintf(stderr, "[C3_COM] GetProp '%ls' hr=0x%08lX vt=%d\n",
-                propName, (unsigned long)hr, result ? result->vt : -1); fflush(stderr);
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        long val = -1;
+        if (result) {
+            if (result->vt == VT_I4) val = result->lVal;
+            else if (result->vt == VT_BOOL) val = result->boolVal;
+        }
+        fprintf(stderr, "[C3_COM] GetProp '%ls' rcv=%p hr=0x%08lX vt=%d val=%ld\n",
+                propName, disp, (unsigned long)hr, result ? result->vt : -1, val);
+        fflush(stderr);
+    }
 
     if (FAILED(hr)) {
         vb6_ComCheckError(hr, &excep, L"ComGetProp");
@@ -463,14 +926,19 @@ void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
 // COM属性Get带参数 (参数化属性读取, 如Dictionary.Item(key))
 // 使用DISPATCH_METHOD|DISPATCH_PROPERTYGET组合标志
 // 返回VARIANT* (调用方需vb6_ComVarClear释放)
-void* vb6_ComGetPropArg(void* disp, const wchar_t* propName,
-                        void* args_void, int32_t argc) {
+static void* vb6_ComGetPropArgRcv(void* disp, const wchar_t* propName,
+                                  void* args_void, int32_t argc) {
     VARIANT** args = (VARIANT**)args_void;
+    /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    if (vb6_ComLateBindIsMiss(disp)) {
+        vb6_ComLateBindMiss(L"ComGetPropArg", propName, disp);
+    }
     if (!disp) return NULL;
     IDispatch* pDisp = (IDispatch*)disp;
 
     DISPID dispid = vb6_getDispid(pDisp, propName);
     if (dispid == DISPID_UNKNOWN) {
+        vb6_ComDropPackedArgs(args, argc);   /* 账 #305 第二百八十九刀 */
         fwprintf(stderr, L"vb6_ComGetPropArg: property \"%ls\" not found\n", propName);
         return NULL;
     }
@@ -515,7 +983,33 @@ void* vb6_ComGetPropArg(void* disp, const wchar_t* propName,
 
 // COM属性Set (值类型)
 // COM属性Set (值类型)
-void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
+static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_void) {
+    /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    if (vb6_ComLateBindIsMiss(disp)) {
+        vb6_ComLateBindMiss(L"ComSetProp", propName, disp);
+    }
+    {   /* 临时排查 (Outlook2013 Form_Load Error 13): 失败时打印属性名与值类型 */
+        static int dbgSP = -1;
+        if (dbgSP < 0) dbgSP = GetEnvironmentVariableW(L"C3_DBG_SETPROP", NULL, 0) > 0;
+        if (dbgSP && value_void) {
+            wchar_t msg[160];
+            swprintf(msg, 160, L"[C3_SETPROP] %ls vt=%d\n", propName, (int)((VARIANT*)value_void)->vt);
+            OutputDebugStringW(msg);
+            fwprintf(stderr, L"%ls", msg);
+            fflush(stderr);
+        }
+    }
+    /* 账 (Outlook2013 主区 Report 盖住 Calendar): `控件.Visible = v` 是**容器
+       Extender** 的账。此处 disp 是控件对象 (IDispatch*), 交给控件自身只会改它
+       内部的一个属性, 承载它的 AfxOleControl 窗口照旧可见 ⇒ Report 盖住 Calendar。
+       先问 OCX 宿主: 命中 (返回 1) 就按容器语义落窗口/站点。 */
+    if (disp && propName && _wcsicmp(propName, L"Visible") == 0 && value_void) {
+        int32_t vis = (int32_t)vb6_VariantToDouble(*(VARIANT*)value_void);
+        if (vb6_OcxHost_SetVisible(disp, vis)) {
+            free(value_void);
+            return;
+        }
+    }
     /* Fix 125: 字体结构体 (非 COM 对象) 直接写字段 —— 这是 `Property Set X_Font` 里
        `With m_X_Font: .Name = New_Font.Name ...` 的实现路径; 走 Invoke 必崩。 */
     if (disp && vb6_UC_IsFont(disp)) {
@@ -528,6 +1022,12 @@ void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
                                      ? SysAllocString(v.bstrVal) : NULL; break;
                 case 1: *(float*)fp = (float)vb6_VariantToDouble(v); break;
                 case 2: *(int16_t*)fp = (int16_t)vb6_VariantToDouble(v); break;
+                /* 第二百七十六刀 kind 5 = hFont 那一格: **按只读处理**。
+                   stdole2.tlb 里 hFont 只有 propget (IFont 没有 putref_hFont), VB6 里
+                   `Font.hFont = x` 是编译期错误 ⇒ 语料 0 处; 落进 default 那档会把
+                   一个 int32 写进指针宽度的缓存格、而快照不跟着改 ⇒ 下一发问句
+                   交出半新半旧的句柄。不写它、也不报数 (报数是给"认不出"的, 这一档认得出)。 */
+                case 5: break;
                 default: *(int32_t*)fp = (int32_t)vb6_VariantToDouble(v); break;
             }
         }
@@ -552,12 +1052,24 @@ void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
                 case 4: *(void**)efp = (void*)v.punkVal; break;
                 default: *(int32_t*)efp = (int32_t)vb6_VariantToDouble(v); break;
             }
+            /* 账 #305 第二百八十七刀: `With UserControl.Extender: .Visible = v` 这一路
+               与 uc_controls.c 那一条按名的写手同源, 存完字段都交给同一位主人上窗口。 */
+            if (ekind == 2 && wcscmp(propName, L"Visible") == 0) vb6_UC_ExtenderVisibleApplied();
+            /* 账 #305 第二百九十二刀: 几何那一档的第二位写手 (第一位是 uc_controls.c 按名那条)。 */
+            else if (ekind == 3) vb6_UC_ExtenderGeomApplied(propName);
+
         }
         free(value_void);
         return;
     }
+    /* 账 (Outlook2013 左面板 VisualTheme): 控件窗口 → 控件 IDispatch (只换控件自有成员) */
+    { void* ocxRcv = vb6_ComOcxRcvOf(disp, propName); if (ocxRcv) disp = ocxRcv; }
     /* Fix 112: 宿主对象分派 (见 vb6_ComCall 注释) */
     if (disp && vb6_Host_IsHostObject(disp)) {
+        if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+            fprintf(stderr, "[C3_COM] SetProp '%ls' rcv=%p -> HOST\n", propName, disp);
+            fflush(stderr);
+        }
         char hin[64];
         vb6_Host_FromWinVariant(value_void, hin);
         vb6_Host_SetProp(disp, propName, hin);
@@ -595,6 +1107,12 @@ void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
 
     HRESULT hr = vb6_ComInvoke(pDisp, dispid, DISPATCH_PROPERTYPUT, &dp, NULL, &excep, &argErr);
 
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] SetProp '%ls' rcv=%p -> COM dispid=%ld hr=0x%08lX\n",
+                propName, disp, (long)dispid, (unsigned long)hr);
+        fflush(stderr);
+    }
+
     if (FAILED(hr)) {
         vb6_ComCheckError(hr, &excep, L"ComSetProp");
     }
@@ -604,10 +1122,14 @@ void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
 // P25: COM参数化属性Put (如dic.Item(key) = value)
 // propName: 属性名 (如"Item"), args: 索引参数数组, argc: 索引参数个数
 // value: 新值(已打包为堆VARIANT*, 同ComSetProp)
-void vb6_ComSetPropArg(void* disp, const wchar_t* propName, void** args, int32_t argc, void* value_void) {
+static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** args, int32_t argc, void* value_void) {
     VARIANT varValue;
     VariantInit(&varValue);
     if (value_void) varValue = *(VARIANT*)value_void;
+    /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    if (vb6_ComLateBindIsMiss(disp)) {
+        vb6_ComLateBindMiss(L"ComSetPropArg", propName, disp);
+    }
     if (!disp) { free(value_void); return; }
     IDispatch* pDisp = (IDispatch*)disp;
 
@@ -652,7 +1174,11 @@ void vb6_ComSetPropArg(void* disp, const wchar_t* propName, void** args, int32_t
 }
 
 // COM属性SetRef (对象引用 -- PROPERTYPUTREF)
-void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef) {
+static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) {
+    /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    if (vb6_ComLateBindIsMiss(disp)) {
+        vb6_ComLateBindMiss(L"ComSetRef", propName, disp);
+    }
     if (!disp) return;
     IDispatch* pDisp = (IDispatch*)disp;
 
@@ -660,7 +1186,13 @@ void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef) {
     // 走下面的 getDispid+Invoke 必 "not found"。与 vb6_ComSetProp (line 526) 同口径:
     // 先把 objRef 包成 VT_DISPATCH 的 Win VARIANT, 转成 vb6_VARIANT 交给 Host_SetProp,
     // 后者落到 vb6_UC_OwnPropSet 的名字桥 (uc_hostmodel_setprop.inc)。
+    /* 账 (Outlook2013 左面板 VisualTheme): 控件窗口 → 控件 IDispatch (只换控件自有成员) */
+    { void* ocxRcv = vb6_ComOcxRcvOf(disp, propName); if (ocxRcv) disp = ocxRcv; }
     if (vb6_Host_IsHostObject(disp)) {
+        if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+            fprintf(stderr, "[C3_COM] SetRef '%ls' rcv=%p -> HOST\n", propName, disp);
+            fflush(stderr);
+        }
         VARIANT winObj; VariantInit(&winObj);
         winObj.vt = VT_DISPATCH; winObj.pdispVal = (IDispatch*)objRef;
         char hin[64];
@@ -699,7 +1231,75 @@ void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef) {
         hr = vb6_ComInvoke(pDisp, dispid, DISPATCH_PROPERTYPUT, &dp, NULL, &excep, &argErr);
     }
 
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] SetRef '%ls' rcv=%p -> COM dispid=%ld hr=0x%08lX\n",
+                propName, disp, (long)dispid, (unsigned long)hr);
+        fflush(stderr);
+    }
+
     if (FAILED(hr)) {
         vb6_ComCheckError(hr, &excep, L"ComSetRef");
     }
+}
+
+/* ============================================================
+ * 账 #305 第三百十七刀: 八个晚绑定出口的**唯一入口** —— 先换到 IDispatch 视图
+ * (vb6_ComDispViewIn 的判据与代价见文件头)。原函数体改名 ...Rcv 后原样保留;
+ * 这一层只做「进来换视图 / 出去还引用」, 不改任何出口自己的语义。
+ * ============================================================ */
+void* vb6_ComCall(void* disp, const wchar_t* methodName,
+                  void* args_void, int32_t argc) {
+    void* owned = NULL;
+    void* r = vb6_ComCallRcv(vb6_ComDispViewIn(disp, &owned), methodName, args_void, argc);
+    vb6_ComDispViewOut(owned);
+    return r;
+}
+
+void* vb6_ComCallByDispid(void* disp, int32_t dispid,
+                          void* args_void, int32_t argc) {
+    void* owned = NULL;
+    void* r = vb6_ComCallByDispidRcv(vb6_ComDispViewIn(disp, &owned), dispid, args_void, argc);
+    vb6_ComDispViewOut(owned);
+    return r;
+}
+
+void* vb6_ComCallObjectDefault(void* disp, void* args_void, int32_t argc) {
+    void* owned = NULL;
+    void* r = vb6_ComCallObjectDefaultRcv(vb6_ComDispViewIn(disp, &owned), args_void, argc);
+    vb6_ComDispViewOut(owned);
+    return r;
+}
+
+void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
+    void* owned = NULL;
+    void* r = vb6_ComGetPropRcv(vb6_ComDispViewIn(disp, &owned), propName);
+    vb6_ComDispViewOut(owned);
+    return r;
+}
+
+void* vb6_ComGetPropArg(void* disp, const wchar_t* propName,
+                        void* args_void, int32_t argc) {
+    void* owned = NULL;
+    void* r = vb6_ComGetPropArgRcv(vb6_ComDispViewIn(disp, &owned), propName, args_void, argc);
+    vb6_ComDispViewOut(owned);
+    return r;
+}
+
+void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
+    void* owned = NULL;
+    vb6_ComSetPropRcv(vb6_ComDispViewIn(disp, &owned), propName, value_void);
+    vb6_ComDispViewOut(owned);
+}
+
+void vb6_ComSetPropArg(void* disp, const wchar_t* propName, void** args,
+                       int32_t argc, void* value_void) {
+    void* owned = NULL;
+    vb6_ComSetPropArgRcv(vb6_ComDispViewIn(disp, &owned), propName, args, argc, value_void);
+    vb6_ComDispViewOut(owned);
+}
+
+void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef) {
+    void* owned = NULL;
+    vb6_ComSetRefRcv(vb6_ComDispViewIn(disp, &owned), propName, objRef);
+    vb6_ComDispViewOut(owned);
 }

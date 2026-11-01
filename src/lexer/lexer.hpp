@@ -113,6 +113,10 @@ private:
 
     // 创建token的辅助
     Token makeToken(TokenKind kind, const std::string& text, uint32_t startLine, uint32_t startCol);
+    // 账 #305 第313刀: 三种进制扫描器 (&H / &O / &B) 的**唯一**出口 —— 档位与值都问
+    // lexer_number.cpp 里那一位主人, 三支不许各自再抄一遍 (抄一次漏一次 = 静默错值)。
+    Token makeRadixToken(const std::string& text, uint32_t startLine, uint32_t startCol,
+                         uint64_t magnitude, bool intSuffix, bool allowNarrowFold);
     Token errorToken(const std::string& msg, uint32_t startLine, uint32_t startCol);
 
     // 状态

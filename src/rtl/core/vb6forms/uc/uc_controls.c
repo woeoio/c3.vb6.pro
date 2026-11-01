@@ -71,7 +71,14 @@ void* vb6_UC_ParentControls(void) {
     void* ucHwnd = NULL;
     if (vb6_ucCurrent) ucHwnd = (void*)vb6_ucCurrent->hwnd;
     if (!ucHwnd) ucHwnd = vb6_UserControl_hWnd;
-    void* parentHwnd = ucHwnd ? (void*)GetParent((HWND)ucHwnd) : NULL;
+    /* 账 #305 第293刀: 口径 = **窗体这一层**的控件，不是「直接父窗口的子控件」。
+       实测 (ComCtlsDemo): ImageCombo1 装在 CoolBar1 里, 它要的 ImageList1/2/3 摆在
+       MainForm 上; 参考版靠 `For Each c In UserControl.ParentControls` +
+       `TypeName(c)="ImageList"` + `c.hImageList` 挂上图标 —— 若只交 CoolBar 的子控件,
+       三枚 ImageList 一枚都进不来, 循环空转, 下拉列表就没有图标 (且全程不报错)。
+       VB6 这一族的容器概念是窗体 (Extender.Container), 嵌套 UC 也一样。 */
+    void* parentHwnd = ucHwnd ? (void*)GetAncestor((HWND)ucHwnd, GA_ROOT) : NULL;
+    if (!parentHwnd && ucHwnd) parentHwnd = (void*)GetParent((HWND)ucHwnd);
     g_uc_parentControlsSingleton.formHwnd = parentHwnd;
     return (void*)&g_uc_parentControlsSingleton;
 }
@@ -83,9 +90,19 @@ static int32_t vb6_uc_collectChildren(void* formHwnd, void** out, int32_t max) {
     if (!formHwnd) return 0;
     int32_t n = 0;
     for (int32_t i = 0; i < vb6_ucHoCount && n < max; i++) {
-        if (!vb6_ucHo[i].isForm && vb6_ucHo[i].hwnd &&
-            GetParent((HWND)vb6_ucHo[i].hwnd) == (HWND)formHwnd) {
-            out[n++] = vb6_ucHo[i].hwnd;
+        vb6_HostObjRec* rec = &vb6_ucHo[i];
+        if (rec->isForm) continue;
+        if (rec->hwnd) {
+            if (GetParent((HWND)rec->hwnd) == (HWND)formHwnd) out[n++] = rec->hwnd;
+        } else {
+            /* 账 #305 第二百八十二刀: 无窗宿主 (第二百五十八刀那户 InvisibleAtRuntime) ——
+               容器关系问创建时就填好的 `UCRec->parent`(有窗那一支走的是同一条关系:
+               GetParent(自己的窗口))，交回**实例指针**。VB6 本人把这三枚 ImageList 一样摆在
+               容器的 Controls 里（靶工程 ToolBar/ListView/TreeView 全靠
+               `For Each ControlEnum In UserControl.ParentControls` + `TypeName(...) = "ImageList"`
+               找到它们再问 `.hImageList`），少交一枚 ⇒ 图标一个都不挂。 */
+            vb6_UCRec* ur = vb6_uc_findByInstance(rec->instance);
+            if (ur && (void*)ur->parent == formHwnd) out[n++] = rec->instance;
         }
     }
     // 兜底: 枚举真实子窗口 (vb6_CreateControl 创建的标准控件未必逐个登记)
@@ -96,6 +113,10 @@ static int32_t vb6_uc_collectChildren(void* formHwnd, void** out, int32_t max) {
         if (!seen) out[n++] = (void*)child;
         child = GetWindow(child, GW_HWNDNEXT);
     }
+    // 账 (Outlook2013 左面板 VisualTheme): VB6 的 Controls 含**无窗口**的 OCX 控件,
+    // 窗口枚举看不见它们 —— 不补进来, `For Each Ctrl In Form.Controls` 就永远
+    // 遍历不到 (CtrlCaption.VisualTheme 一类设置全部落空)。
+    n += vb6_OcxHost_CollectWindowless(formHwnd, out + n, max - n);
     return n;
 }
 
@@ -154,15 +175,23 @@ void* vb6_UC_ControlsItemByName(void* coll, const wchar_t* name, int32_t tabIdx)
     /* 优先在已注册宿主对象表里找 (名字精确, 不受父窗口层级影响) */
     for (int32_t i = 0; i < vb6_ucHoCount; i++) {
         vb6_HostObjRec* r = &vb6_ucHo[i];
-        if (r->isForm || !r->hwnd) continue;
-        if (formHwnd && GetAncestor((HWND)r->hwnd, GA_ROOT) != formHwnd
-            && !IsChild(formHwnd, (HWND)r->hwnd)) {
+        if (r->isForm) continue;
+        void* item = r->hwnd;
+        /* 账 #305 第二百八十二刀: 按名查这一路以前把无窗宿主整个跳过 (`!r->hwnd) continue`)，
+           与上面 collectChildren 那一档同一条病 —— 容器关系改问记录里的 parent，交实例指针。 */
+        if (!item) {
+            vb6_UCRec* ur = vb6_uc_findByInstance(r->instance);
+            if (!ur) continue;
+            if (formHwnd && (void*)ur->parent != formHwnd) continue;
+            item = r->instance;
+        } else if (formHwnd && GetAncestor((HWND)item, GA_ROOT) != formHwnd
+                   && !IsChild(formHwnd, (HWND)item)) {
             /* 不在该窗体下 (可能是别的窗体的同名控件) — 跳过 */
-            if (!IsWindow((HWND)r->hwnd)) continue;
+            if (!IsWindow((HWND)item)) continue;
         }
         if (_wcsicmp(r->name, base) != 0) continue;
         if (wantIdx >= 0 && r->index != wantIdx) continue;
-        return r->hwnd;
+        return item;
     }
     return NULL;
 }
@@ -298,6 +327,24 @@ void* vb6_UC_NewFont(void) {
     return f; // 与 cgen 的 vb6_ComIface_Font* 直接字段访问保持一致
 }
 
+/* 账 #305 第二百七十七刀: 「磅 → 像素」这一问的唯一主人 (lfHeight 那一格)。
+ * 之前它住三处、两套口径: vb6forms.c 的 vb6_Vb6DefaultGuiFont 用 -MulDiv(825,dpiY,7200)
+ * (MulDiv **四舍五入**), vb6forms_ctrl.c 的 vb6_SetControlFontSize 用 -(int)(pt*dpi/72f+0.5f)
+ * (也是四舍五入), 而第二百七十六刀那位八档主人里再抄了第三份 —— 三处同公式, 于是全都比
+ * VB6 大一档。证据 = 第二百七十四刀立的那把时间无关的尺 (逐枚窗口问它自己的字体再抄回 LOGFONTW 读数):
+ *   参考 ComCtlsDemo.exe  69 枚窗口 (-13, 400, "MS Sans Serif")  ← 8.25pt @ 120dpi = 13.75 截断
+ *   C3 编出来的同一工程  38 枚窗口 (-14, 400, ...)              ← 同一发四舍五入 = 14
+ * 两台都是 system-DPI-aware (探针 .local/k277/aware.py: awareness=1、GetDpiForWindow=120、
+ * 顶层客户区 844x780 ↔ 844x781 逐家相同) ⇒ 这一档差**不是** DPI 虚拟化造的, 是换算本身的口径。
+ * ⚠ 只有一条读数支撑这个口径 (语料里 8.25pt 是绝对主力): 差只在 frac(pt*dpi/72) >= 0.5 时现形,
+ *   96dpi 下 8.25pt = 11.0 整 ⇒ 本机 CI (96dpi) 上这刀**零可见效果**, 判据只能靠那把尺。
+ * 返回**负的** lfHeight (字符高度, GDI 的 VB6 那一档), 0pt 交 0 (SP3 那枚行为钉要吃这个)。
+ * dpi <= 0 一律按 96 兜底 (调用方拿不到 DC 时的旧口径, 一字未动)。 */
+int32_t vb6_UC_FontHeightPx(double pt, int32_t dpiY) {
+    int dpi = (dpiY > 0) ? dpiY : 96;
+    return -(int)(pt * (double)dpi / 72.0);   /* 截断, 不四舍五入 —— 照 VB6 的读数 */
+}
+
 vb6_ComIface_Font* vb6_uc_fontOf(void* p) {
     if (p == &vb6_UserControl_FontObj) return &vb6_UserControl_FontObj;
     for (vb6_UCFontRec* f = vb6_ucFonts; f; f = f->next)
@@ -314,7 +361,132 @@ int32_t vb6_UC_IsFont(const void* p) {
     return vb6_uc_fontOf((void*)p) != NULL;
 }
 
-// 返回字段地址; *kind: 0=BSTR, 1=float, 2=int16, 3=int32; 未命中返回 NULL
+/* 账 #305 第二百七十六刀: 「八档 → LOGFONT」这一问的**唯一主人**。
+ * 在此之前它只有一位抄写员: vb6rtl_com.c 的 vb6_uc_measureText 就地一份 (量字用,
+ * DPI 写死 96), 而 VB 层要的 `Font.hFont` 压根没人答 —— 第三百零五刀靶工程那 34 枚
+ * 全零 LOGFONT 就是这么来的 (Common/Common.bas:1012 GetObjectAPI(Font.hFont, …) 拿到
+ * 的是 0, 那次 GetObject 直接失败, 局部 UDT 保持全零, 递给窗口的就是 GDI 默认字体)。
+ * 本刀把 measureText 那一份撤进来当第一位主人 (它那份的算法一字未改: 磅→像素仍是
+ * `-(int)(pt*dpi/72+0.5)` (第二百七十七刀把这一步交给 vb6_UC_FontHeightPx, 口径改成截断)、八档的兜底仍是 8.25 / 400 / DEFAULT_CHARSET / "MS Sans Serif",
+ * 连"其余字段留零"也照抄), 从此第二格答案只在调用方 (递进来的 DPI 与质量档)。
+ * ⚠ 一处**刻意**的口径修正: 字重按 VB6 的读侧派生 —— Bold 为真一律 700, 与 Weight
+ *   存的是哪个数无关 (StdFont 的真实存储只有 Weight, Bold 是它的视图)。旧写法
+ *   `Weight ? Weight : (Bold ? 700 : 400)` 让写进 Bold 的那个 True 永远被默认的
+ *   Weight=400 挡在后面, 也就是第二百七十三刀修好的那 13 处 Bold 到了这里又掉。
+ *   只在 Bold 非零时答案才不同, 而语料里 Bold 非零只有两种来源: 设计期 Weight>=700
+ *   (cgen_form_create_controls.inc:109 同步设过 Bold ⇒ 那档两边都给 700, 读数不变)
+ *   或用户代码写 Bold ⇒ 后者正是本刀要它生效的那一种。
+ * 参数按**void*** 收 (本头不含 wingdi.h 的调用方也能递栈上的 LOGFONTW), dpi/quality
+ *   由调用方决定 —— 与账 #298 §B129 那条「公式只住一枚, DPI 从外面递进来」同口径。 */
+void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut) {
+    const vb6_ComIface_Font* f = (const vb6_ComIface_Font*)fontFields;
+    LOGFONTW* lf = (LOGFONTW*)lfOut;
+    double pt;
+    int dpi = (dpiY > 0) ? dpiY : 96;
+    if (!lf) return;
+    memset(lf, 0, sizeof(*lf));
+    pt = (f && f->Size > 0) ? (double)f->Size : 8.25;
+    lf->lfHeight    = vb6_UC_FontHeightPx(pt, dpi);
+    lf->lfWeight    = (f && f->Bold) ? 700 : ((f && f->Weight) ? f->Weight : 400);
+    lf->lfItalic    = (BYTE)((f && f->Italic) ? 1 : 0);
+    lf->lfUnderline = (BYTE)((f && f->Underline) ? 1 : 0);
+    lf->lfStrikeOut = (BYTE)((f && f->Strikethrough) ? 1 : 0);
+    lf->lfCharSet   = (BYTE)((f && f->Charset) ? f->Charset : DEFAULT_CHARSET);
+    lf->lfQuality   = (BYTE)quality;
+    /* 名字那一档把**零长串**也算"没有名字" (f->Name 非 NULL 但内容空)。
+     * 依据两条: ① VB6 的 StdFont.Name 不允许是空串, 所以这八档里出现空名字只能是
+     *    "没指定", 而"没指定"在 VB6 交出的就是默认字族; ② 探针 (.local/k276/fontprobe.c
+     *    F 行) 实测空名字交出去, GetObject 读回来的 lfFaceName 仍是空 —— GDI 不改写它,
+     *    于是下游谁再拿这枚 LOGFONT 去造字体, 拿到的是 DC 默认字体而不是 VB6 的那一枚,
+     *    而且是**静默**的。这一档宁可退回 "MS Sans Serif", 也不留一条静默路。
+     * ⚠ 这条与本刀靶工程那 34 枚 Segoe UI **无关** (我一开始就是这么记的, 探针把它推翻:
+     *    那 34 枚的名字是真从字段里读出来的 "Segoe UI", 产地在 uc_host_window.c:353)。 */
+    if (f && f->Name && f->Name[0]) {
+        size_t n = wcslen(f->Name);
+        if (n > 31) n = 31;
+        memcpy(lf->lfFaceName, f->Name, n * sizeof(wchar_t));
+    } else {
+        wcscpy(lf->lfFaceName, L"MS Sans Serif");
+    }
+}
+
+/* 快照与当前八档是否一致 (一致 = 缓存里那枚 HFONT 还代表这八档, 不用重造)。
+ * 名字比的是内容副本, 不借 Name 那枚指针: 本 RTL 往 Name 写的时候从不 SysFreeString
+ * 旧串 (见 vb6_UC_FontAssign / vb6com_invoke.c 的 kind 0 那支), 借来比是踩在泄漏上。 */
+static int32_t vb6_uc_fontSigSame(const vb6_ComIface_Font* f) {
+    if (f->Size != f->hFontSigSize) return 0;
+    if (f->Bold != f->hFontSigBold || f->Italic != f->hFontSigItalic) return 0;
+    if (f->Underline != f->hFontSigUnderline || f->Strikethrough != f->hFontSigStrike) return 0;
+    if (f->Weight != f->hFontSigWeight || f->Charset != f->hFontSigCharset) return 0;
+    return wcsncmp(f->Name ? f->Name : L"", f->hFontSigFace, 32) == 0 ? 1 : 0;
+}
+
+static void vb6_uc_fontSigTake(vb6_ComIface_Font* f) {
+    f->hFontSigSize      = f->Size;
+    f->hFontSigBold      = f->Bold;
+    f->hFontSigItalic    = f->Italic;
+    f->hFontSigUnderline = f->Underline;
+    f->hFontSigStrike    = f->Strikethrough;
+    f->hFontSigWeight    = f->Weight;
+    f->hFontSigCharset   = f->Charset;
+    f->hFontSigFace[0] = 0;
+    if (f->Name) {
+        size_t n = wcslen(f->Name);
+        if (n > 31) n = 31;
+        memcpy(f->hFontSigFace, f->Name, n * sizeof(wchar_t));
+        f->hFontSigFace[n] = 0;
+    }
+}
+
+/* 造 / 取这枚伪字体的 HFONT (账 #305 第二百七十六刀, `Font.hFont` 那一条答案)。
+ * 为什么是缓存而不是每次新建: 问的人只要 LOGFONT 的内容 (靶工程拿句柄去 GetObjectAPI,
+ * 再自己 CreateFontIndirect 一份), 而问的频率是每建一枚控件一发 —— 每次一枚的话
+ * 就是每枚控件漏一枚 GDI 对象, 而这里连伪字体本体都还欠 §B164 那一族回收。
+ * 自失效: 八档一改就作废重建 (写侧没钩子, 见 vb6rtl_userctl.h 那八格新字段的注释)。
+ * 所有权照 VB6 的 IFont.hFont: 句柄属于这枚字体, **不属于问它的人** ⇒
+ * ⚠ 不许把它交给 WM_SETFONT —— vb6forms_ctrl.c 的 vb6_SetControlFontFromLogFont
+ *   换字体后无条件 DeleteObject(旧句柄) (vb6forms.c:147 那条注释记的就是这一格),
+ *   递出去就等于把缓存换成悬空句柄。本 RTL 无任何调用点这么做。
+ * 质量档 = NONANTIALIASED_QUALITY, 与 vb6_Vb6DefaultGuiFont 为窗口字体定下的那条
+ * 「VB6 的 MS Sans Serif 是点阵字体, 从不抗锯齿」同口径 (量字那一位调用方维持它
+ * 一直以来的 0, 不跟着动 —— Fix 113k 记过: 给 TextWidth/TextHeight 换字体度量会把
+ * Charts 的图例/轴标签排布推坏)。 */
+static void* vb6_uc_fontEnsureHFont(vb6_ComIface_Font* f) {
+    LOGFONTW lf;
+    HFONT h;
+    if (!f) return NULL;
+    if (f->hFontCache && vb6_uc_fontSigSame(f)) return f->hFontCache;
+    if (f->hFontCache) { DeleteObject((HFONT)f->hFontCache); f->hFontCache = NULL; }
+    vb6_UC_FontLogFont(f, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    h = CreateFontIndirectW(&lf);
+    if (!h) return NULL;
+    vb6_uc_fontSigTake(f);
+    f->hFontCache = (void*)h;
+    return (void*)h;
+}
+
+void* vb6_UC_FontHFont(void* p) {
+    return vb6_uc_fontEnsureHFont(vb6_uc_fontOf(p));
+}
+
+/* 账 #305 第二百七十八刀: 把一枚字体的答案**发到窗口上**。
+ * 靶 = 参考 ComCtlsDemo.exe 那 29 枚 ThunderRT6UserControl 每一枚都答字体 (27 枚 -13/MS Sans Serif +
+ * 2 枚 -11/Tahoma)、ThunderRT6FormDC 也答 -13/MS Sans Serif; C3 的对应两户 (27 枚 VB6_UserControlHost
+ * + 顶层 VB6_Form_*) 在同一把时间无关的尺上读回**空** —— 从没发过。发过之后它们的文字量、owner-draw
+ * 与 .FontName 那一族读数才落在 VB6 那枚字体上, 不是 DC 默认字体。
+ * 本站只拼答案: 八档 (fontFields = NULL 即 VB6 的默认档 8.25pt / MS Sans Serif / 400) 问第二百七十六刀
+ * 那位主人, DPI 递真屏、质量档递 NONANTIALIASED (与窗口字体同口径); 发出去 / 自存 / 删旧 交给
+ * vb6forms_ctrl.c 里那一位既有主人 —— 那一站自带「只删我们自己造的那张」的账, 不抄第二份。
+ * ⚠ 也别顺手把第二百七十六刀那枚缓存句柄交出去: WM_SETFONT 的接手方换字体时 DeleteObject 旧句柄。 */
+void vb6_UC_ApplyFontToWindow(void* hwnd, const void* fontFields) {
+    LOGFONTW lf;
+    if (!hwnd) return;
+    vb6_UC_FontLogFont((void*)fontFields, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    vb6_SetControlFontFromLogFont((HWND)hwnd, &lf);
+}
+
+
+// 返回字段地址; *kind: 0=BSTR, 1=float, 2=int16, 3=int32, 5=句柄(指针宽度); 未命中返回 NULL
 void* vb6_UC_FontField(void* p, const wchar_t* name, int32_t* kind) {
     vb6_ComIface_Font* f = vb6_uc_fontOf(p);
     if (!f || !name || !kind) return NULL;
@@ -326,6 +498,15 @@ void* vb6_UC_FontField(void* p, const wchar_t* name, int32_t* kind) {
     if (_wcsicmp(name, L"Strikethrough") == 0) { *kind = 2; return &f->Strikethrough; }
     if (_wcsicmp(name, L"Weight") == 0)        { *kind = 3; return &f->Weight; }
     if (_wcsicmp(name, L"Charset") == 0)       { *kind = 3; return &f->Charset; }
+    /* 第二百七十六刀: hFont 不是字段, 是八档的派生量 —— 交的是**缓存那一格**的地址,
+       所以必须先把这格填上再返回 (造不出来就答"认不出", 由调用方去报数)。
+       名字不叫 hFont 的那半句理由在同一条注释里: 用户代码的 `Font.hFont` 只会以
+       vb6_ComGetProp(..., L"hFont") 的形状到达, 不会发成结构体字段直读。 */
+    if (_wcsicmp(name, L"hFont") == 0) {
+        if (!vb6_uc_fontEnsureHFont(f)) return NULL;
+        *kind = 5;
+        return &f->hFontCache;
+    }
     return NULL;
 }
 
@@ -391,12 +572,110 @@ void* vb6_UC_GetExtenderMemberObj(const wchar_t* name) {
     if (!fp || kind != 4) return NULL;
     return *(void**)fp;
 }
+/* 账 #305 第二百八十七刀: 「Extender.Visible 这一发要落到宿主窗口上」收成一位主人。
+   两处写手(本文件按名的那一条 + vb6com_invoke.c 的 IDispatch Extender 臂)存完字段都转调这里。
+   从前只把值存进 rc->extVisible 而**没有任何东西读它**, 于是容器侧 `SpinBox1.Visible = False`
+   (它发成控件自己的 Property Let, Let 体就是 `Extender.Visible = Value`) 静默不隐藏 ——
+   实测靶工程 TabStrip1 切回第一页后, 那一页的 SpinBox / ListView 两台都还留着。
+   窗口那一侧早已有主人 `vb6_SetControlVisible`(原生控件那一路用的就是它), 这里只转调、不抄第二份。 */
+void vb6_UC_ExtenderVisibleApplied(void) {
+    vb6_UCRec* rc = vb6_ucCurrent;
+    if (!rc || !rc->hwnd || !IsWindow((HWND)rc->hwnd)) return;
+    vb6_SetControlVisible(rc->hwnd, rc->extVisible);
+}
+
+/* 账 #305 第二百八十九刀: `Extender` 的四档几何 (Left/Top/Width/Height) 与那一发 `Move`。
+   VB6 的 Extender 几何不是第二本账: 读 = 这枚宿主窗口当前的矩形按**容器 ScaleMode** 折出来的
+   数; 写 = 向容器请求把这块矩形改成那样。我方从前只把写落进 rc->ext* (建宿主时填的设计缇值,
+   之后再没人刷新), 而 `Move` 那一路连应答都没有 —— 第二百八十八刀的读数: 空跑 8 秒 29 发
+   method "Move" not found, 于是控件自己量出来的尺寸既进不去也读不出。
+   两头都交回**已有**的那两位主人, 这里不抄第二份:
+     读 = vb6_GetControlLeft/Top/Width/Height (自带 #230 的 VB 侧缓存与像素闸, 单位由
+          vb6_ContainerScaleMode 答 —— 即 #175 那一位主人);
+     写 = vb6_ControlMove (所有摆位的唯一收口: 按容器 ScaleMode 换像素、写 #230 缓存、
+          尺寸真的变了才触发 Resize)。
+   刻意不在这里判「交来的值合不合法」: 第二百八十四刀记的「排版只跑一次、跑在属性到齐之前」
+   是上游那一格, 不在这一问里补兜底。 */
+static int32_t vb6_ucExtGeomMask(const wchar_t* name) {
+    if (!name) return 0;
+    if (_wcsicmp(name, L"Left")   == 0) return 1;
+    if (_wcsicmp(name, L"Top")    == 0) return 2;
+    if (_wcsicmp(name, L"Width")  == 0) return 4;
+    if (_wcsicmp(name, L"Height") == 0) return 8;
+    return 0;
+}
+
+/* 读侧: 交出去之前按活宿主窗口把四档问一遍。读写都过 vb6_UC_ExtenderField, 所以这一问同时治
+   掉「读到建宿主时的死值」与「写之前另三档还是死值」两格。没有窗口 (建宿主前 / 无窗宿主) 就
+   保留记录里那个设计值 —— 与今天一致, 不凭空造数。 */
+static void vb6_ucExtGeomRefresh(vb6_UCRec* rc) {
+    if (!rc->hwnd || !IsWindow(rc->hwnd)) return;
+    rc->extLeft   = vb6_GetControlLeft((void*)rc->hwnd);
+    rc->extTop    = vb6_GetControlTop((void*)rc->hwnd);
+    rc->extWidth  = vb6_GetControlWidth((void*)rc->hwnd);
+    rc->extHeight = vb6_GetControlHeight((void*)rc->hwnd);
+}
+
+/* 容器 ScaleMode 的那一问, 给 vb6rtl_com.c 的 vbContainerPosition(9) / vbContainerSize(10)
+   两档用。答 0 = 问不到 (没有当前记录或父窗没了), 调用方保留它今天那档。 */
+/* 账 #305 第二百九十二刀: Extender 四档几何的**属性形写手**（`.Extender.Height = v`）。
+   289 那批留下读侧投影、把写整块撤回 —— 当时写一落地就有两处塌缩；逐窗口归因后看清：**四格好转全部
+   来自属性形**（ToolBar 32→26 / MonthView 160x161 / ListBoxW 170 / ComboBoxW 19），**两处塌缩全部来自
+   方法形** `.Extender.Move`（CoolBar.ctl:996 与 ComboBoxW.ctl:1791）⇒ 两形可以分开落地：这一刀只接
+   属性形，`Move` 继续没人应答（那 29 发 not found 照旧，等输入量清）。写交唯一收口 vb6_ControlMove。 */
+void vb6_UC_ExtenderGeomApplied(const wchar_t* name) {
+    vb6_UCRec* rc = vb6_ucCurrent;
+    if (!rc || !rc->hwnd || !IsWindow((HWND)rc->hwnd)) return;
+    int32_t which = vb6_ucExtGeomMask(name);
+    if (!which) return;
+    extern void vb6_ControlMove(void* hwnd, double l, double t, double w, double h, int mask);
+    vb6_ControlMove((void*)rc->hwnd, (double)rc->extLeft, (double)rc->extTop,
+                    (double)rc->extWidth, (double)rc->extHeight, (int)which);
+}
+
+/* 账 #305 第三百零一刀: Extender 四档几何的**方法形写手**（`.Extender.Move l, t, w, h`）——
+   控件自己量完尺寸、来请求摆位的那一发。第二百九十五刀把它改成「响亮地丢」；当时第一次落地
+   的三个塌法（CoolBar 60→37 / ComboBoxW 288↔504 来回 / ImageCombo 3672 像素）的前置都变了：
+   第二百九十七刀把「几何按谁的 ScaleMode 折」收到容器主人（不再问 GetParent），第二百九十九刀
+   把 authored 容器戳到窗口上，第二百九十刀补了 ReBar band 行高那一路输入。
+   本条只补通道、兜底一概不抄 —— 四档原样交给 vb6_ControlMove（所有摆位的唯一收口：按容器
+   ScaleMode 换像素、写 #230 缓存、尺寸真变了才排队 Resize）。VB6 的 Move 允许多种实参个数：
+   给几档就只动几档（mask），一档都没有就什么也不做。
+   实测靶工程：MonthView.ctl 的 `UserControl_Resize` 靠它把宿主缩到自己量出的 160x161（参考那台
+   同形）；我方从前停在设计期 172x156，内层 SysMonthCal32 跟着大一圈。 */
+int32_t vb6_UC_ExtenderMoveApply(double L, double T, double W, double H, int32_t mask) {
+    vb6_UCRec* rc = vb6_ucCurrent;
+    if (!rc || !rc->hwnd || !IsWindow((HWND)rc->hwnd)) return 0;
+    if (!mask) return 0;
+    extern void vb6_ControlMove(void* hwnd, double l, double t, double w, double h, int mask);
+    vb6_ControlMove((void*)rc->hwnd, L, T, W, H, (int)mask);
+    return 1;
+}
+
+int32_t vb6_UC_ContainerScaleModeCurrent(void) {
+    vb6_UCRec* rc = vb6_ucCurrent;
+    if (!rc) return 0;
+    /* 账 #305 第297刀: 容器那一问只有一位主人 —— 有宿主窗口就问它 (答创建时记录的容器,
+       不随 SetParent 漂); 没有窗口 (无窗宿主 / 建宿主前) 才落回记录里那个父。 */
+    void* cw = rc->hwnd ? vb6_UC_ContainerWindowOf((void*)rc->hwnd) : (void*)rc->parent;
+    if (!cw || !IsWindow((HWND)cw)) return 0;
+    extern int32_t vb6_ContainerScaleMode(void* hwndParent);
+    return vb6_ContainerScaleMode(cw);
+}
+
 void vb6_UC_SetExtenderMember(const wchar_t* name, void* value) {
     extern void* vb6_UC_ExtenderField(void* p, const wchar_t* n, int32_t* k);
     void* p = (void*)&vb6_UserControl_Extender;
     int32_t kind = -1;
     void* fp = vb6_UC_ExtenderField(p, name, &kind);
-    if (!fp || !value) return;
+    if (!fp) return;
+    /* 账 #305 第二百八十七刀: 这道早退原本还带一条 `|| !value` ⇒ **凡递来 0 的写全被静默丢掉**,
+       而 kind 2 那三档布尔（Visible / vb6_Default / Cancel）递来的「假」正是 0。实测靶工程
+       `SpinBox1.Visible = False` 就是这么没的：容器侧那一发走到这里, 字段没存、窗口也没动。
+       第二百九十二刀把几何接到窗口之后, kind 3 也进「放开」那一档：语料里 `Property Let Left(Value As
+       Long)` 的体就是 `Extender.Left = Value`, 容器侧一句 `Label1.Left = 0` 递来的正是 0。kind 0/4
+       （Tag / ToolTipText / Container / DragIcon）的零值写今天仍没有读数, 刻意不动（在册）。 */
+    if (!value && kind != 2 && kind != 3) return;
     switch (kind) {
         case 0: *(BSTR*)fp  = (BSTR)value; break;                 // BSTR: 搬指针
         case 2: *(int16_t*)fp = (int16_t)(intptr_t)value; break;
@@ -405,6 +684,8 @@ void vb6_UC_SetExtenderMember(const wchar_t* name, void* value) {
         case 4: *(void**)fp = value; break;
         default: *(int32_t*)fp = (int32_t)(intptr_t)value; break;
     }
+    if (kind == 2 && _wcsicmp(name, L"Visible") == 0) vb6_UC_ExtenderVisibleApplied();
+    else if (kind == 3) vb6_UC_ExtenderGeomApplied(name);   /* 账 #305 第二百九十二刀: 属性形写手 */
 }
 void* vb6_UC_ExtenderField(void* p, const wchar_t* name, int32_t* kind) {
     if (!vb6_UC_IsExtender(p) || !name || !kind) return NULL;
@@ -418,6 +699,7 @@ void* vb6_UC_ExtenderField(void* p, const wchar_t* name, int32_t* kind) {
     {
         vb6_UCRec* rc = vb6_ucCurrent;
         if (rc) {
+            if (vb6_ucExtGeomMask(name)) vb6_ucExtGeomRefresh(rc);   /* 账 #305 第二百八十九刀: 读侧投影 */
             if (_wcsicmp(name, L"Width")  == 0) { *kind = 3; return &rc->extWidth;  }
             if (_wcsicmp(name, L"Height") == 0) { *kind = 3; return &rc->extHeight; }
             if (_wcsicmp(name, L"Left")   == 0) { *kind = 3; return &rc->extLeft;   }

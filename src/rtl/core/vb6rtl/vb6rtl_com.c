@@ -102,8 +102,8 @@ int vb6_EnumNext(void* penum, vb6_VARIANT* outElem) {
         case VT_DISPATCH: outElem->vt = vb6_vtDispatch; outElem->pdispVal = varElem.pdispVal; break;
         case VT_DATE:   outElem->vt = vb6_vtDate; outElem->dblVal = varElem.date; VariantClear(&varElem); break;
         default: {
-            // Convert to BSTR for unknown types
-            VariantChangeType(&varElem, &varElem, 0, VT_BSTR);
+            // Convert to BSTR for unknown types (目的档 BSTR 走唯一出口; 布尔在上面已有自己的 case)
+            vb6_ComChangeType(&varElem, &varElem, VT_BSTR);
             if (varElem.vt == VT_BSTR) {
                 outElem->vt = vb6_vtBSTR;
                 outElem->bstrVal = varElem.bstrVal;
@@ -449,7 +449,7 @@ static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
             {
                 VARIANT vBSTR;
                 VariantInit(&vBSTR);
-                if (SUCCEEDED(VariantChangeType(&vBSTR, pv, 0, VT_BSTR))) {
+                if (SUCCEEDED(vb6_ComChangeType(&vBSTR, pv, VT_BSTR))) {
                     result.vt = vb6_vtBSTR;
                     result.bstrVal = vBSTR.bstrVal;
                     vBSTR.bstrVal = NULL;
@@ -477,6 +477,35 @@ vb6_VARIANT vb6_VariantFromComResult(void* variant_ptr) {
     VariantClear(pv);  // 清理原始VARIANT (BSTR/pdispVal 已转移的那几格是 NULL)
     free(pv);
     return result;
+}
+
+// 账 #305 第二百四十四刀: 「这发晚绑定调用的结果当 VB6 的真值」—— 三件事一次办完:
+//   一是走 vb6_VariantToBool 那一位既有的口径主人按档读回真值 (Empty/0/False 为假);
+//   二是消耗参数带来的那一枚堆上 VARIANT —— vb6_VariantFromComResult 的契约就是吃掉所有权
+//      (内部 VariantClear + free, 见上面那枚), 这里绝不能再 free 一次;
+//   三是收回二深拷出来的那枚槽 (BSTR / 对象 / 数组那几档有载荷, 不收就漏)。
+// 从前发码在条件那一读直接 if (vb6_ComCall(...)), 测的是指针, 恒真。
+int16_t vb6_ComResultToBool(void* variant_ptr) {
+    vb6_VARIANT v = vb6_VariantFromComResult(variant_ptr);
+    int16_t r = vb6_VariantToBool(v);
+    vb6_VariantClear(&v);
+    return r;
+}
+
+// 账 #305 第二百四十七刀: 晚绑定调用的结果当 `Not` 的操作数用 —— 与上面同一族, 一次办完
+//   「解引用 + 收回那枚堆块 + 按 VB 的档取值」。从前发码把指针本身截成 int32 再取反
+//   (`~(int32_t)(vb6_ComCall(...))`) = 恒非零: `If Not <缺席键>` 答对纯属巧合, 而
+//   `If Not <在场的键>` 与 `x = Not <在场的键>` 全答反 (真语料按产物 46 处 / 20 份文件)。
+// 口径 (本机走 cscript 的 VBScript 引擎量的, 同语言代理): `Not True` = False / `Not False` = True /
+//   `Not 5` = -6 / `Not Empty` = -1 / `Not "abc"` = 错误 13。布尔在 -1/0 这套编码下
+//   **按位取反与逻辑取反是同一件事**, 所以真值位 (if 非零即真) 与值位 (交回 -1/0/按位值)
+//   共用这一枚出口就够。数值档的读法走唯一主人 vb6_VariantToLong (VT_BOOL 归成 -1/0 也在那张表里);
+//   它现在对 VT_BSTR 不换算、对浮点按 round —— 那两档与 VB6 的差别是那张表的既有口径, 不在本刀扩。
+int32_t vb6_ComResultToNot(void* variant_ptr) {
+    vb6_VARIANT v = vb6_VariantFromComResult(variant_ptr);
+    int32_t r = (int32_t)(~vb6_VariantToLong(v));
+    vb6_VariantClear(&v);
+    return r;
 }
 
 // P24-03: 栈上 VARIANT → vb6_VARIANT(带权副本, 不动源) —— For Each 那一族用这一枚。
@@ -525,7 +554,10 @@ static VARTYPE vb6_ComSaVtBlittable(vb6_safearray_elemtype et) {
  *   m_PF_Colors 走的正是这一格)。
  */
 static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
-    SAFEARRAY* psa = src->parray;
+    /* 账 #305 §B222 (第二百三十刀): 数组在 VB6 里只能**按引用**传 —— 真客户端交来的是
+     * VT_BYREF|VT_ARRAY|T，parray 那一格放的是 `SAFEARRAY**`。改前这里直接拿 `src->parray`
+     * 当 SAFEARRAY* 用 ⇒ 维数那问读的是指针自己的字节、早退，槽留 Empty（实测每发漏 85.8 B）。 */
+    SAFEARRAY* psa = (src->vt & VT_BYREF) ? (src->pparray ? *src->pparray : NULL) : src->parray;
     VARTYPE base = (VARTYPE)(src->vt & VT_TYPEMASK);
     vb6_safearray_elemtype et;
     VARTYPE allow;
@@ -600,6 +632,32 @@ static void vb6_ComPackArrayOut(const void* arrV, VARIANT* out) {
     out->vt = VT_EMPTY;
     if (!arrV) return;
     if (vb6_SaIs1D(a1)) {
+        /* 账 (Outlook2013 全无图标): `vb6_ArrayCreate` 造的是 **Variant 元素档**载体
+           (VB6 里 `Array(...)` 本来就是一维 Variant 数组), 而下面那张白名单只收可直搬
+           的数值档 —— 认不出就 return, 整枚实参变成 VT_EMPTY。接收方
+           (Codejock `ImageManager.LoadBitmap` 的 ID 数组) 看到"没有实参"就静默什么
+           都不加载: hr=0、一枚图标也没进管理器, 于是 ribbon 只剩文字。
+           这里把 Variant 载体的元素逐个装箱成真 VARIANT: 用**带权**出口(串复制 /
+           对象 AddRef), 因为收下这一枚 VARIANT 的那一头会用 VariantClear 释放它。 */
+        if (a1->elemType == vb6_sa_variant) {
+            int32_t i;
+            if (a1->elemSize != (int32_t)sizeof(vb6_VARIANT) || a1->count <= 0 || !a1->data) return;
+            rg[0].lLbound = (ULONG)a1->lBound;
+            rg[0].cElements = (ULONG)a1->count;
+            psa = SafeArrayCreate(VT_VARIANT, 1, rg);
+            if (!psa) return;
+            if (FAILED(SafeArrayAccessData(psa, &pvData)) || !pvData) {
+                SafeArrayDestroy(psa);
+                return;
+            }
+            for (i = 0; i < a1->count; i++)
+                vb6_VariantPackCopyInto(&VB6_SA_AT(vb6_VARIANT, (void*)a1, i),
+                                        (VARIANT*)pvData + i);
+            SafeArrayUnaccessData(psa);
+            out->vt = (VARTYPE)(VT_ARRAY | VT_VARIANT);
+            out->parray = psa;
+            return;
+        }
         vt = vb6_ComSaVtBlittable(a1->elemType);
         if (!vt) return;
         esz = vb6_SaElemSize(a1->elemType);
@@ -636,6 +694,53 @@ static void vb6_ComPackArrayOut(const void* arrV, VARIANT* out) {
     SafeArrayUnaccessData(psa);
     out->vt = (VARTYPE)(VT_ARRAY | vt);
     out->parray = psa;
+}
+
+/* 账 #305 §B222 (第二百三十刀): 数组形参的**出站回写**。
+ * 被调方 `ReDim a(n)` 现场是 `vb6_SafeArrayDestroy1D(*p); *p = vb6_SafeArrayReDim1D(...)`
+ * —— 新载体只活在**这一趟的槽**里（§B162 那条「回写刻意不做」的另一半）。这里把槽里那枚
+ * 现成的 1D 描述符用 vb6_ComPackArrayOut 造成真 SAFEARRAY，落到客户 VARIANT 的 `pparray`
+ * 所指处；旧的那枚由我们 SafeArrayDestroy（VB6 的 ReDim 语义就是"旧数组没了"）。
+ * 只写 `VT_BYREF|VT_ARRAY` 那一形：数组在 VB6 里只能按引用传，按值那形没有落点。
+ * 调用方必须在 `vb6_VariantSlotRelease` **之前**跑这一趟 —— 本函数只读槽、不动描述符，
+ * 回写成功后把槽的 vt 补成数组档，于是收尾那一步照常把我们的描述符回收（改前 BYREF 形
+ * 槽留 Empty、ReDim 出来那枚没人回收：实测 20000 发 +1716224 字节）。 */
+void vb6_ArraySlotWriteBack(VARIANT *client, void *slot) {
+    vb6_VARIANT* s = (vb6_VARIANT*)slot;
+    vb6_SafeArray1D* arr;
+    VARIANT built;
+    if (!client || !s) return;
+    if ((client->vt & VT_ARRAY) == 0 || (client->vt & VT_BYREF) == 0) return;
+    if (!client->pparray) return;
+    /* 槽被清成 Empty 时被调方只把指针写进了 union 头一格(两架构都在 offset 8) ——
+     * 认载体照旧只问 vb6_SaIs1D 那一位主人，不再自己数偏移。 */
+    arr = (vb6_SafeArray1D*)s->parray;
+    if (!arr || !vb6_SaIs1D(arr)) return;
+    VariantInit(&built);
+    vb6_ComPackArrayOut(arr, &built);
+    if (built.vt == VT_EMPTY) return;   /* 元素档认不出/步长不符: 不搬、也不动客户那枚 */
+    if (*client->pparray) SafeArrayDestroy(*client->pparray);
+    *client->pparray = built.parray;
+    s->vt = (vb6_vartype)(vb6_vtArray | (built.vt & VT_TYPEMASK));
+}
+
+/* 账 #305 §B223 (第二百三十三刀): ByRef **标量**形参的出站回写 —— 与上面那枚数组桥同一个时机
+ * （被调方返回之后、`vb6_VariantSlotRelease` 之前）。入槽那一臂已经把 pointee 的值搬进槽，
+ * 体里改的也是槽，这里按 pointee 的类型写回对端变量。只认数值/布尔那几档：BSTR 要换分配器、
+ * 对象要动引用计数、Variant 要整枚拷贝 —— 都不在本刀（槽留 Empty 那一形与改前同形）。 */
+void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot) {
+    const vb6_VARIANT* s = (const vb6_VARIANT*)slot;
+    if (!client || !s) return;
+    if ((client->vt & VT_BYREF) == 0 || (client->vt & VT_ARRAY) != 0) return;
+    switch (client->vt & VT_TYPEMASK) {
+        case VT_I4:   if (client->plVal)    *client->plVal    = s->lVal;    break;
+        case VT_I2:   if (client->piVal)    *client->piVal    = s->iVal;    break;
+        case VT_R8:   if (client->pdblVal)  *client->pdblVal  = s->dblVal;  break;
+        case VT_R4:   if (client->pfltVal)  *client->pfltVal  = s->fltVal;  break;
+        case VT_BOOL: if (client->pboolVal) *client->pboolVal = s->boolVal; break;
+        case VT_UI1:  if (client->pbVal)    *client->pbVal    = s->bVal;    break;
+        default: break;
+    }
 }
 
 /* 账 #305 §B145: 槽 → 真 VARIANT 那张 vt 表的**唯一一份**(借用语义: 不复制 BSTR、不 AddRef)。
@@ -728,6 +833,22 @@ void vb6_VariantBorrowIntoSlot(const VARIANT *src, void *slot) {
     /* 账 #305 §B162 (第五十刀): 数组那一档进不了下面那条 memcpy —— 位拷贝会把对端的
      * SAFEARRAY 头部当成我们的描述符递给被调方。这一问排在最前（标签是 VT_ARRAY|元素码）。 */
     if (src->vt & VT_ARRAY) { vb6_VariantArrayIntoSlot(src, s); return; }
+    /* 账 #305 §B223 (第二百三十三刀): ByRef **标量** —— 对端交来的是「某个 LONG 的地址」，而生成的
+     * 读臂交出去的是 `&槽->lVal`（槽里那一格的地址）。位拷贝会让体里把**指针当值**读（实测
+     * `Bump(ByRef v As Long)` 客户端给 10，体里算出「指针低 32 位 + 1」）。这里按 pointee 的类型把
+     * **值**搬进槽，出站再由 vb6_ByRefScalarWriteBack 写回对端。BSTR / 对象 / 变体 / 未知档一律不猜
+     * （槽留 Empty，读臂拿到 NULL/0 —— 与本刀之前同形）。 */
+    if (src->vt & VT_BYREF) {
+        switch (src->vt & VT_TYPEMASK) {
+            case VT_I4:   s->vt = vb6_vtLong;    s->lVal    = src->plVal    ? *src->plVal    : 0; return;
+            case VT_I2:   s->vt = vb6_vtInteger; s->iVal    = src->piVal    ? *src->piVal    : 0; return;
+            case VT_R8:   s->vt = vb6_vtDouble;  s->dblVal  = src->pdblVal  ? *src->pdblVal  : 0; return;
+            case VT_R4:   s->vt = vb6_vtSingle;  s->fltVal  = src->pfltVal  ? *src->pfltVal  : 0; return;
+            case VT_BOOL: s->vt = vb6_vtBoolean; s->boolVal = src->pboolVal ? *src->pboolVal : 0; return;
+            case VT_UI1:  s->vt = vb6_vtByte;    s->bVal    = src->pbVal    ? *src->pbVal    : 0; return;
+            default:      return;
+        }
+    }
     if (src->vt == VT_DECIMAL) {
         const DECIMAL *d = vb6_DecimalPtrFromVariant(src);
         s->vt = (vb6_vartype)VT_DECIMAL;
@@ -739,6 +860,45 @@ void vb6_VariantBorrowIntoSlot(const VARIANT *src, void *slot) {
         return;
     }
     memcpy(s, src, sizeof(VARIANT));  /* 其余各档：对端的头 16 字节与我们那一格本来就对齐 */
+}
+
+/* 账 #305 §B224 (第二百三十八刀): 「VARIANT → 目标档」这一问的唯一出口。除了一档之外全交
+ * oleaut32；那一档是**布尔转字符串** —— Automation 的 VarBstrFromBool 答 "-1"/"0"
+ * (.local/k3684_ole.exe 实测 len=2)，而 VB 语言答 "True"/"False"。用户在真 VB6 6.0 上跑的
+ * 服务端探针给了判决: `EchoStr(ByVal s As String)` 收 VT_BOOL(True) 答 "[True]"、
+ * 收 VT_BOOL(False) 答 "[False]"(ai/probes/bool_string 的 A1/A2)。
+ * 全仓凡以 VT_BSTR 为目的档的换算都问这里 —— 改前服务端答 -1 而 RTL 的 CStr 答 True，
+ * 同一个进程里两种拼法。dest 必须是 VariantInit 过的空 VARIANT；与 VariantChangeType
+ * 一样 dest 可等于 src。 */
+HRESULT vb6_ComChangeType(VARIANT *dest, const VARIANT *src, VARTYPE want) {
+    if (dest && src && want == VT_BSTR && !(src->vt & VT_ARRAY)
+        && (src->vt & VT_TYPEMASK) == VT_BOOL) {
+        BOOL b = (src->vt & VT_BYREF)
+                     ? (src->pboolVal ? (*src->pboolVal != VARIANT_FALSE) : FALSE)
+                     : (src->boolVal != VARIANT_FALSE);
+        dest->vt = VT_BSTR;
+        dest->bstrVal = SysAllocString(b ? L"True" : L"False");
+        return dest->bstrVal ? S_OK : E_OUTOFMEMORY;
+    }
+    return VariantChangeType(dest, src, 0, want);
+}
+
+/* 账 #305 §B219(第二百二十刀): 入站「VARIANT → 声明档」那一问的唯一出口，规则见声明处。
+ * 换算走 oleaut32 的 VariantChangeType(dest, src) —— **不是**就地那一发：src 与 dest 分开，
+ * 对端那份资源一个字节都不动，产物住在调用方给的 scratch 里由调用方回收。
+ * 同档那一发也刻意不调换算：槽里那一份是 §B144 的借用，本来就正确，多走一趟反而会把
+ * 借来的指针换成我们自己的副本(就没人回收了)。 */
+HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIANT *scratch) {
+    VariantInit(scratch);
+    if (want == VB6_ARGVT_SKIP) return S_OK;   /* 这一格不问，也不许顺手清一下 */
+    if (!src || src->vt == want) return S_OK;  /* 同档：借用就是答案 */
+    /* 账 #305 §B224: 目的档是 BSTR 时口径归 VB 语言(布尔答 True/False)，见 vb6_ComChangeType。 */
+    if (FAILED(vb6_ComChangeType(scratch, src, want))) {
+        VariantInit(scratch);
+        return DISP_E_TYPEMISMATCH;
+    }
+    vb6_VariantBorrowIntoSlot(scratch, slot);
+    return S_OK;
 }
 
 /* 账 #305 §B145: Variant 参与 + - * / 时的**唯一运行期出口**。
@@ -1431,23 +1591,16 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
     // 标题预留高度(TopHeader)不足 → 图例压在标题上; 轴标签宽度不对 → 文字裁切。
     HFONT hOld = NULL, hNew = NULL;
     if (len) {
-        vb6_ComIface_Font* f = (vb6_ComIface_Font*)vb6_UserControl_Font;
+        /* 账 #305 第二百七十六刀: 这一整块「八档 → LOGFONT」以前就地抄了一份,
+           现在问唯一主人 vb6_UC_FontLogFont (uc_controls.c) —— VB 层那枚 `Font.hFont`
+           也从同一位主人拿答案, 两处不许各有第二套字重/兜底。
+           DPI 与质量档是**调用方**的选择, 量字这一路维持它自己一贯的 96 + 0
+           (Fix 113k 记过: 给 TextWidth/TextHeight 换成真屏 DPI 的字体度量, 反而把
+           Charts 的图例/轴标签排布推坏)。vb6rtl 与 vb6forms 不互 include 头,
+           故就地 extern (与上面 vb6_ScalePxToUser 同款)。 */
+        extern void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut);
         LOGFONTW lf;
-        memset(&lf, 0, sizeof(lf));
-        double pt = (f && f->Size > 0) ? (double)f->Size : 8.25;
-        lf.lfHeight = -(int)(pt * 96.0 / 72.0 + 0.5);          // 磅 → 像素 @96dpi
-        lf.lfWeight = (f && f->Weight) ? f->Weight : ((f && f->Bold) ? 700 : 400);
-        lf.lfItalic = (BYTE)((f && f->Italic) ? 1 : 0);
-        lf.lfUnderline = (BYTE)((f && f->Underline) ? 1 : 0);
-        lf.lfStrikeOut = (BYTE)((f && f->Strikethrough) ? 1 : 0);
-        lf.lfCharSet = (BYTE)((f && f->Charset) ? f->Charset : DEFAULT_CHARSET);
-        if (f && f->Name) {
-            size_t n = wcslen(f->Name);
-            if (n > 31) n = 31;
-            memcpy(lf.lfFaceName, f->Name, n * sizeof(wchar_t));
-        } else {
-            wcscpy(lf.lfFaceName, L"MS Sans Serif");
-        }
+        vb6_UC_FontLogFont(vb6_UserControl_Font, 96, 0, &lf);
         hNew = CreateFontIndirectW(&lf);
         if (hNew) hOld = (HFONT)SelectObject(hdc, hNew);
     }
@@ -1555,12 +1708,25 @@ double vb6_ScaleUnitY(double y, int32_t fromScale, int32_t toScale) {
 
 // Fix 224: 这两个名字在 vb6rtl_userctl.h 里已交 `_Generic` 宏按首参类型分派 (VB6 的
 // Variant 隐式数值转换), 故**定义必须挂 _Raw** —— 否则宏会把这里的定义整形成乱语。
+/* 账 #305 第二百八十九刀: vbContainerPosition(9) / vbContainerSize(10) 答的是**容器**的
+   ScaleMode, 不是恒等 —— 从前这两档落进 vb6_ScaleUnitsPerPx 的 default 按 1.0 折 (像素),
+   而同一发 `.Extender.Move` 的另两槽来自 rc->ext* (容器缇), vb6_ControlMove 又一律按容器
+   ScaleMode 收 ⇒ 第二百八十八刀的读数: CoolBar 那一发 width 交 321 (像素) 而宿主在 826 缇
+   那一档自量的宽。只解这一对**宿主伪成员**入口 (Form/Picture 那几形仍原样走 vb6_ScaleUnitX);
+   问不到容器就退回今天那档, 不凭空改一整族。 */
+static int32_t vb6_ucContainerModeOrSelf(int32_t mode) {
+    if (mode != 9 && mode != 10) return mode;
+    extern int32_t vb6_UC_ContainerScaleModeCurrent(void);
+    int32_t m = vb6_UC_ContainerScaleModeCurrent();
+    return m ? m : mode;
+}
+
 double vb6_UserControl_ScaleXRaw(double x, int32_t fromScale, int32_t toScale) {
-    return vb6_ScaleUnitX(x, fromScale, toScale);
+    return vb6_ScaleUnitX(x, vb6_ucContainerModeOrSelf(fromScale), vb6_ucContainerModeOrSelf(toScale));
 }
 
 double vb6_UserControl_ScaleYRaw(double y, int32_t fromScale, int32_t toScale) {
-    return vb6_ScaleUnitY(y, fromScale, toScale);
+    return vb6_ScaleUnitY(y, vb6_ucContainerModeOrSelf(fromScale), vb6_ucContainerModeOrSelf(toScale));
 }
 
 // UserControl.AsyncRead: no container/async message pump in compiled form, so
@@ -1576,7 +1742,10 @@ void vb6_UserControl_AsyncRead(BSTR url, int32_t asyncType, BSTR propertyName,
 // callback registry in compiled form; no-op, consistent with the built-in
 // Changed (vb6_PropertyPage_Changed / bare Changed).
 void vb6_UserControl_PropertyChanged(BSTR propName) {
-    (void)propName;
+    /* 账 #305 第二百八十五刀: 这一发以前整个丢掉 (把参数当垃圾丢掉) ⇒ 控件通知容器
+       「我的值变了」这条路**从来没有主人**。实测补上主人之前/之后的读数在
+       `ai/C3_FIX_HANDOFF.md` 行 5045 那一格 (靶工程右下角 OptionButtonW 两台能同时勾上)。 */
+    vb6_UC_ValueGroupNotify((const wchar_t*)propName);
 }
 
 // Fix 174: Extender / UserControl host methods referenced by VBFlexGrid.ctl

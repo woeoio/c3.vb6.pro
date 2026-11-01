@@ -34,6 +34,18 @@ jobs:
           cmake --version
           ninja --version
 
+      # 直接缓存**编好的 C3.exe**（不只是 ninja 构建目录）。原因：下面那个 c3build 目录缓存
+      # 其实救不了重编 —— 缓存 tar 保留的是**旧 mtime**，而 checkout 出来的源码是**刚写的 mtime**，
+      # ninja 一比「源比 obj 新」就把 128 个 TU 全重编（实测门 #880 的 Build job = 210s，日志里
+      # [1/128]..[128/128] 一个不少）。key 与 c3build 同源（src/** + cmake），src 没动就直接把这枚
+      # exe 拿来用、整个构建步骤跳过；src 动了 key 变了自然重编（本来就该重编）。
+      - name: Cache built C3.exe (skip rebuild when src/ unchanged)
+        id: c3exe
+        uses: actions/cache@v6
+        with:
+          path: .build/C3.exe
+          key: c3exe-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**') }}
+
       - name: Cache C3.exe build dir (fast path when src/ untouched)
         uses: actions/cache@v6
         with:
@@ -41,8 +53,72 @@ jobs:
           key: c3build-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**') }}
           restore-keys: c3build-
 
-      - name: Build C3.exe from source (never ship a vendored binary)
+      # sccache: 编译缓存。构建每次 src 变更都要全编 128 个 TU（实测门 #881 Build=253s），
+      # 而多数 TU 在两次提交间不变 —— sccache 按「预处理后源 + 编译器身份 + flags」做键，命中即
+      # 跳过本次 cl 调用。实测（probe 分支两支：冷 290s / 热 84s、123/123 命中）⇒ 构建步骤提速约 3×。
+      # 装不上就退回直接编（install 是 best-effort），不给门添红风险。cache key 只用 runner.os：
+      # 编译器身份已经进了 sccache 自己的键，镜像滚动时自然整批 miss 重编一次（不误用旧对象）。
+      # 与 ci_t0.yml 同一口径（那里实测出两个坑，这里是同一个病）：
+      #   ① save key 必须每次不同（带 run_id），否则一旦命中既有 key，actions/cache 就再也不存新版本
+      #      ⇒ 本轮刚编的对象回不到 cache，下一轮接着 0 命中；runner 镜像滚动（编译器身份进 sccache
+      #      自己的键）之后尤其明显。restore-keys 负责捡最近那一份。
+      #   ② 把落地的 exe 一起缓存，免掉每轮一次不可复用的 `choco install`（ci_t0 上实测 54s）。
+      # ⚠ 顺序：缓存恢复必须排在 Install **之前**。放在其后的话，Install 那一步永远看不到上一轮的
+      #   tools/（还没被恢复出来），于是每轮都白装一次 choco（ci_t0 上实测 54s）。
+      - name: Cache sccache
+        if: steps.c3exe.outputs.cache-hit != 'true'
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/sccache
+            ${{ runner.temp }}/sccache-bin
+          key: sccache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
+
+      - name: Install sccache (best-effort)
+        id: sccache
+        if: steps.c3exe.outputs.cache-hit != 'true'
+        continue-on-error: true
         shell: pwsh
+        run: |
+          $binDir = Join-Path $env:RUNNER_TEMP "sccache-bin"
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+          $tools = Join-Path $binDir "tools"
+          # ⚠ 与 ci_t0.yml 同一条纪律：choco 落在 bin\sccache.exe 的是一枚 **shim**，按相对路径
+          #   ..\lib\sccache\tools\<ver>\sccache.exe 找本体；只拷这枚 shim 到别处会炸（ci_t0 上实测
+          #   FAILED [code=4294967295] "Cannot find file at '..\lib\sccache\tools\...'"）。
+          #   所以连 tools 子树一起搬，且 USE_SCCACHE 指向**真本体**（绝不用 Get-Command 拿到的 shim）。
+          $exe = $null
+          if (Test-Path $tools) {
+            $exe = (Get-ChildItem $tools -Recurse -Filter sccache.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          if ($exe -and (Test-Path $exe)) {
+            Write-Host "sccache from cache: $exe"
+          } else {
+            choco install sccache -y --no-progress 2>&1 | Out-Null
+            $src = Join-Path ${env:ChocolateyInstall} "lib\sccache\tools"
+            if (-not $src -or -not (Test-Path $src)) { $src = "C:\ProgramData\chocolatey\lib\sccache\tools" }
+            if (Test-Path $src) { Copy-Item $src $tools -Recurse -Force }
+            $exe = (Get-ChildItem $tools -Recurse -Filter sccache.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          if ($exe -and (Test-Path $exe)) {
+            Write-Host "sccache available: $exe"
+            & $exe --version
+            "USE_SCCACHE=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+          } else {
+            Write-Host "sccache not available; build will run without it"
+          }
+        env:
+          SCCACHE_DIR: ${{ runner.temp }}/sccache
+          SCCACHE_CACHE_SIZE: 2G
+
+      - name: Build C3.exe from source (never ship a vendored binary)
+        if: steps.c3exe.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          SCCACHE_DIR: ${{ runner.temp }}/sccache
+          SCCACHE_CACHE_SIZE: 2G
         run: |
           # MSVC 官方只保证从 vcvarsall 拿到的环境有效; 这里在子进程里导出后注入当前进程。
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
@@ -56,14 +132,32 @@ jobs:
             }
           }
           $buildDir = Join-Path $env:RUNNER_TEMP "c3build"
-          cmake -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release
+          # 关键（修 #896 ci_t0.yml 红）：launcher 必须**每次显式给值**，没有就给空。
+          # 原因：ci.yml 用过一次 "-DCMAKE_CXX_COMPILER_LAUNCHER=..."，CMake 就把它持久化进
+          # $buildDir/CMakeCache.txt；而这个目录正是 actions/cache 缓存的东西（key = c3build-<hash>，
+          # ci_t0.yml 复用同一套 key）。ci_t0.yml 不装 sccache，它恢复同一个 c3build-<hash> 后
+          # 即使不给 -D，CMake 也会沿袭那枚旧值 ⇒ 128 个 TU 全部
+          # "CreateProcess failed: The system cannot find the file specified"。
+          # 所以这里把「有 / 没有」写死成 configure 行的一部分，不让 CMakeCache 说了算。
+          # 同理：sccache 装不上时（best-effort 失败）USE_SCCACHE 为空，这一次也会把残留值清掉。
+          $launcher = ""
+          if ($env:USE_SCCACHE -and (Test-Path $env:USE_SCCACHE)) { $launcher = $env:USE_SCCACHE }
+          cmake -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher"
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build $buildDir
           if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
+          if ($launcher) { & $launcher --show-stats }
           New-Item -ItemType Directory -Force -Path .build | Out-Null
           Copy-Item (Join-Path $buildDir "C3.exe") .build\C3.exe -Force
           & .build\C3.exe --version
           if ($LASTEXITCODE -ne 0) { throw "built C3.exe smoke check failed" }
+
+      # 构建步骤在 cache-hit 时被跳过，所以版本自证挪到这里无条件跑一遍（重建 / 缓存取回都验）。
+      - name: Smoke check C3.exe (rebuilt or restored from cache)
+        run: |
+          if (-not (Test-Path .build\C3.exe)) { throw "C3.exe missing (cache restore failed?)" }
+          & .build\C3.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "C3.exe broken (cache-restored?)" }
 
       - name: Upload C3.exe artifact (shared by all test jobs)
         uses: actions/upload-artifact@v7
@@ -202,7 +296,13 @@ jobs:
           # 用例本身只占剩下的三分之一 —— 再切细, 摊到的用例还不够付第二次 RTL 编译。
           # 所以 bas 留在 2 片, 要提速得改成跨 runner 共享 obj store (artifact), 不是分片能解决的。
           #
-          # 加用例时不必动这里: 两个分片都是按调用次序取模, 总数写不进代码。
+          # 2026-10-23 提速 (门 #876 读数): vbp 4→8 片, 并给每个 test job 挂 actions/cache 共享
+          # 那个内容寻址 obj store (%LOCALAPPDATA%\C3\objcache)。原来的死结就是「每个 shard 都要自己
+          # 编那 65 个 RTL .c」—— store 一旦跨 runner 复用, RTL 全流水线只编一次, 分片才真能摊薄墙钟。
+          # 实测 #876: build 272s + vbp 四片 704/528/479/449s, 既冗且不匀 (最重单片=704s, 单例最重
+          # VBP-DLL=116s)。既然 RTL 那 2.3 min 的固定项被缓存吃掉, 才敢把片数翻倍。
+          #
+          # 加用例时不必动这里: 各分片都是按调用次序取模, 总数写不进代码。
           #
           # shardArgs 逐条显式写出, 不用 matrix.category 三元表达式拼 —— 拼出来的式子要同时
           # 照顾 bas/vbp 两套开关, 再加一个分类时很容易拼错 (GitHub 表达式不报错, 只会静默少传参)。
@@ -214,20 +314,71 @@ jobs:
           - category: bas
             shard: 2
             shardArgs: "-BasShard 2 -BasShardTotal 2"
+          # 2026-10-24 提速（门 #898 后的读数 40035228642）: 关键路径 = Build 24s（c3exe 命中直接
+          # 跳过构建）+ max(vbp 八片) = 247s。vbp 8 → 11 片: 最慢一片按 247×8/11 ≈ 180s 摊薄。
+          # 上限取 11 而不是更多: 本 job 的 job 总数 = 11(vbp) + bas 2 + smoke/compile/syntax/asm 4
+          # + build + emit-manifest = 19, 顶到免费公共仓并发 20 的边（再多加就会排队, 墙钟反涨）。
+          # 且 emit-manifest 本身就 177s, 把 vbp 压到 180s 以下收益会被它接住 —— 下一刀该切它。
+          #
+          # 2026-10-24 第二刀（真实 push 流 40044645228 的读数）: 11 片的实测是
+          #   226/219/205/186/182/177/164/159/148/143/135s, 合计 2012s、平均 182s、最重 226s。
+          # ⇒ 11 → 12 片: 理论 max 2012/12 ≈ 168s; 12 片正好把 job 总数填到 20（并发上限，不再加）。
+          # 这一步只动片数、不改 Enter-VbpShard 的取模口径 —— 加权切片需要一个"每用例代价表",
+          # 而 run_tests.ps1 里没有这张表（409 个槽靠 $script:VbpCaseNo++ 递增取模），凭空造表
+          # 反而要长期维护 ⇒ 不加片以外的手段只有"把轻格合并腾名额", 那一步等这轮读数再定。
+          # 附带提醒: 12 片意味着 #12 是新 key（objcache 按 job 分键）⇒ 它的**首轮**是冷的,
+          # 判据只认第二轮（见 ci_t0 侧同一条记录）。
           - category: vbp
             shard: 1
-            shardArgs: "-VbpShard 1 -VbpShardTotal 4"
+            shardArgs: "-VbpShard 1 -VbpShardTotal 12"
           - category: vbp
             shard: 2
-            shardArgs: "-VbpShard 2 -VbpShardTotal 4"
+            shardArgs: "-VbpShard 2 -VbpShardTotal 12"
           - category: vbp
             shard: 3
-            shardArgs: "-VbpShard 3 -VbpShardTotal 4"
+            shardArgs: "-VbpShard 3 -VbpShardTotal 12"
           - category: vbp
             shard: 4
-            shardArgs: "-VbpShard 4 -VbpShardTotal 4"
+            shardArgs: "-VbpShard 4 -VbpShardTotal 12"
+          - category: vbp
+            shard: 5
+            shardArgs: "-VbpShard 5 -VbpShardTotal 12"
+          - category: vbp
+            shard: 6
+            shardArgs: "-VbpShard 6 -VbpShardTotal 12"
+          - category: vbp
+            shard: 7
+            shardArgs: "-VbpShard 7 -VbpShardTotal 12"
+          - category: vbp
+            shard: 8
+            shardArgs: "-VbpShard 8 -VbpShardTotal 12"
+          - category: vbp
+            shard: 9
+            shardArgs: "-VbpShard 9 -VbpShardTotal 12"
+          - category: vbp
+            shard: 10
+            shardArgs: "-VbpShard 10 -VbpShardTotal 12"
+          - category: vbp
+            shard: 11
+            shardArgs: "-VbpShard 11 -VbpShardTotal 12"
+          - category: vbp
+            shard: 12
+            shardArgs: "-VbpShard 12 -VbpShardTotal 12"
+          # compile 拆两格（2026-10-24 第三刀）。读数依据 run 40046664271（vbp 已到 12 片的
+          # 那一轮）：vbp 最重降到 191s，而 **Tests (compile) 227s 接手成了新瓶颈** —— 这一格
+          # 224s 里的构成是「~100 个静态 census 158s + 10 例真编 17s + 固定开销」，跟名字给人的
+          # 印象正好相反。census 是纯扫源的检查、互不依赖，所以按 $StaticShard 对半切。
+          # ⚠ 真编只归片 1（-SkipRealCompile 反之）：objcache 的键含 job 名，片 2 拿不到片 1
+          #   编出来的 obj，会从零重编 65 个 RTL .c（~2.3min），比省下的 17s 还多。
+          # 代价: job 总数 20 → 21，超出免费公共仓并发 20 一个 —— 但 Build(20s)/smoke(42s)/
+          #   syntax(37s) 都很快让位，第 21 个 job 立刻能被调度，不涨墙钟。
+          # 另注: 片 1 的 objcache 键从 `compile` 变成 `compile1` ⇒ **首轮是冷的**，判据只认第二轮。
           - category: compile
-            shardArgs: ""
+            shard: 1
+            shardArgs: "-StaticShard 1 -StaticShardTotal 2"
+          - category: compile
+            shard: 2
+            shardArgs: "-StaticShard 2 -StaticShardTotal 2 -SkipRealCompile"
           - category: syntax
             shardArgs: ""
           - category: asm
@@ -247,6 +398,30 @@ jobs:
         run: |
           & .build\C3.exe --version
           if ($LASTEXITCODE -ne 0) { throw "downloaded C3.exe broken" }
+
+      # 内容寻址的增量 obj store（本机实测 2656 个 .obj / 51 MB，其中 vb6* 那批 RTL 类对象 663 枚/~16 MB）。
+      # -Incremental 下每个 job 的第一例真编那 65 个 RTL .c (~2.3 min)；store 的键只含 {架构, 工具串,
+      # RTL 源内容}，所以错配的 obj 只会没命中、绝不会被用错（见 ai/030 §六）—— 跨 run 缓存是安全的。
+      #
+      # 为什么 key 里带 matrix.category+shard，而不是一个全流水线共用的 key：actions/cache 对**同一个 key**
+      # 只让本 run 里**最先跑完的那个 job**落盘，其余全被 "already exists" 顶掉。实测门 #877（run
+      # 39939573105）：最先结束的是最轻的 Tests (syntax)(40s)，它落下的 store 只有 **581 KiB**（几乎是空的，
+      # RTL 一个都没进去）⇒ 那一轮 cache 等于没存，重引那 2.3 min 白省。分键之后每个 job 各自存/读自己那份
+      # warmed store，冷启动一轮后全体命中，再不会被先跑完的轻活顶掉。x86/x64 的 obj 同处一店（架构本就是
+      # 键的一部分），所以不必按架构拆；这里拆的是 **job**，不是架构。
+      # key 带 src 哈希：RTL 改动即换 key，旧 entry 自然过期；restore-keys 用去哈希的前缀，兜住"src 动了
+      # 但 RTL 没动"那一档（仍能命中原 obj；只有 RTL 真变了才重编）。
+      # 路径是 GitHub 托管 Windows runner 的固定用户目录；万一哪天换了用户名，也只是 cache miss（不判红）。
+      - name: Cache C3 incremental obj store (per-job, content-addressed)
+        # compile 片 2 只跑静态 census、一例都不真编 ⇒ 它不需要 obj store，跳过免得白恢复
+        # 一份 15MB 的空 store（也更省 cache 配额）。其余格子照旧。
+        if: ${{ !(matrix.category == 'compile' && matrix.shard == 2) }}
+        uses: actions/cache@v6
+        with:
+          path: C:\Users\runneradmin\AppData\Local\C3\objcache
+          key: c3objcache-${{ runner.os }}-${{ matrix.category }}${{ matrix.shard }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            c3objcache-${{ runner.os }}-${{ matrix.category }}${{ matrix.shard }}-
 
       # run_tests.ps1 内: 纯 .bas 用例支持 -Jobs 并行 (每个 worker 独立输出目录) 与
       # -BasShard 分片 (CI 用多 runner 并行跑 bas 用例); VBP/GUI 用例始终**在本 runner 内**串行

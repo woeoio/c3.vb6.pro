@@ -372,5 +372,8 @@ void vb6_SetBorderStyle(void* hwnd, int style) {
     } else {
         // Store as property for other controls
         SetPropW(hw, L"VB6_BorderStyle", (HANDLE)(INT_PTR)(style + 1));
+        // Frame (BUTTON/BS_GROUPBOX) 的两档外观由 vb6_GroupBoxSubclassProc 按这枚属性
+        // 现画 (None 档不画框), 所以改档之后必须重画一次。
+        if (wcsicmp(className, L"Button") == 0) InvalidateRect(hw, NULL, TRUE);
     }
 }

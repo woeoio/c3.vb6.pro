@@ -59,7 +59,12 @@ StmtPtr Parser::parseStatement() {
 
         // --- P14.1.3: Error --
         case TokenKind::Error: {
-            if (next_.kind == TokenKind::Equals || next_.kind == TokenKind::LeftParen) {
+            // `Error` 是软关键字 (canBeName), 语句起始的 `Error:` (后跟冒号) 是
+            // 行标签定义, 不是 Error 语句 —— Error 语句必须有编号实参。
+            // (Outlook2013 frmProperties.frm 的错误处理块用 `On Error GoTo Error` +
+            //   `Error:` 标签, 与内置函数/语句同名)
+            if (next_.kind == TokenKind::Equals || next_.kind == TokenKind::LeftParen ||
+                next_.kind == TokenKind::Colon) {
                 return parseLabelOrAssignmentOrCall();
             }
             return parseErrorStmt();
@@ -186,7 +191,16 @@ return parseLineInputStmt();
             return std::make_unique<ResetStmt>(loc);
         }
         case TokenKind::FileCopy: return parseFileCopyStmt();
-        case TokenKind::Kill:     return parseKillStmt();
+        case TokenKind::Kill: {
+            // VB6 projects use `kill` as a variable name; `kill = expr` is an
+            // assignment, not the Kill statement.
+            if (next_.kind == TokenKind::Equals ||
+                next_.kind == TokenKind::LeftParen ||
+                next_.kind == TokenKind::Dot) {
+                return parseLabelOrAssignmentOrCall();
+            }
+            return parseKillStmt();
+        }
         case TokenKind::MkDir:    return parseMkDirStmt();
         case TokenKind::RmDir:    return parseRmDirStmt();
         case TokenKind::ChDir:    return parseChDirStmt();

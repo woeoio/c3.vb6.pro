@@ -21,6 +21,11 @@ public:
     std::string name;
     bool isOptional = false;
     bool isByVal = false;
+    // 账 #305 第二百五十六刀: **显式**写了 ByRef 的那一枚形参。`isByVal == false` 分不出
+    // "作者写了 ByRef" 与 "什么都没写"(VB 默认也是 ByRef), 而事件形参那一问只认前者 ——
+    // 事件声明里明写 ByRef = 这是一枚出参 (处理器写进去的值要回到递出方), 没写就维持
+    // 今天这套按值 ABI (语料里几千处, 一处都不许被本刀改动)。
+    bool isByRef = false;
     bool isParamArray = false;
     TypeRefPtr asType;      // As Type (可为nullptr = Variant)
     ExprPtr defaultValue;   // Optional参数的默认值 (可为nullptr)

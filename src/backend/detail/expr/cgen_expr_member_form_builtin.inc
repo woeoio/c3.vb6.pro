@@ -62,6 +62,27 @@
             lastExpr_ = readFn + "(" + formHwnd + ")  /* Form." + node.memberName + " via Me */";
             return;
         }
+        // Me.<本窗体控件>: 控件槽 (vb6_hwnd_X / vb6_com_X) 就在本模块
+        // 的 C 文件里, 而下面那条"未知 Form 成员 → COM dispatch"会把控件名当成
+        // 宿主属性去问窗体 HWND (C3_HOST_MEMBER_MISS → NULL)。VB6 里
+        // `DockingPaneManager.SetCommandBars Me.CommandBars` 传的是控件对象本身。
+        // 控件数组 (`Me.Text1`) 在 VB6 里本就不合法, 且没有单一 vb6_hwnd_ 槽,
+        // 留给原来的 COM 分支。
+        {
+            const std::string ctrlLowerMe = Symbol::toLower(node.memberName);
+            auto itCtrlMe = knownFormControls_.find(ctrlLowerMe);
+            if (itCtrlMe != knownFormControls_.end()
+                && !knownControlArrays_.count(ctrlLowerMe)
+                // **只答「整枚当值/当对象」那一形**。`Me.<控件>.<成员>` 里内层这一问
+                // 也在场 (generic_access 把它当接收者求值, inMemberObjectEmit_ 为真),
+                // 而外层要的是「控件属性」——发裸槽会让外层拼成
+                // `vb6_hwnd_cboLabelsPositions.ListIndex = 0` (对 void* 取成员, C2224,
+                // Charts 2020/ucPieChart Form1:247 实测)。那一形留给原来的路。
+                && !inMemberObjectEmit_) {
+                lastExpr_ = makeCtrlHwndArg(ctrlLowerMe, itCtrlMe->second);
+                return;
+            }
+        }
         // Form 的绘图状态属性 (CurrentX / CurrentY / DrawWidth) **不在这里答** ——
         // 上面那句 getControlPropReadFn(Form, 名) 就是唯一入口, 读写两侧成对登记在
         // cgen_util_ctrl.cpp 的那两张表里 (账 #233)。这里曾经另摆过四条硬编码:
@@ -100,7 +121,9 @@
             if (memLower == "hinstance") { lastExpr_ = "vb6_App_hInstance()"; return; }
             if (memLower == "hinstancehnd") { lastExpr_ = "vb6_App_hInstance()"; return; }  // VB6别名
             if (memLower == "previnstance") { lastExpr_ = "vb6_App_PrevInstance()"; return; }  // Fix 158k: 此前落到 (void*)0.PrevInstance → C2059
-            if (memLower == "title") { lastExpr_ = "vb6_App_EXEName()"; return; }  // 简化
+            // 账 #305 第320刀 (账 #592): App.Title 是 .vbp 的 Title（VB6 里运行期还可写），
+            // 不是 EXE 名。真值住在 RTL 那一格 `vb6_SetAppTitle`（入口点按本工程标题播种）。
+            if (memLower == "title") { lastExpr_ = "vb6_App_Title()"; return; }
             if (memLower == "major") { lastExpr_ = "0"; return; }
             if (memLower == "minor") { lastExpr_ = "0"; return; }
             if (memLower == "revision") { lastExpr_ = "0"; return; }
@@ -116,6 +139,46 @@
             if (memLower == "logevent") {
                 // RTL 无 LogEvent — 转发到调试输出 (首参为消息文本, 类型参数忽略)
                 lastExpr_ = "((void(*)(BSTR,int32_t))vb6_DebugWriteBSTR)";
+                return;
+            }
+        }
+
+        // VBA.DateTime 隐藏模块 (VB6 内置): `DateTime.Now` / `DateTime.DateSerial` 等。
+        // DateTime 是 VBA 库的隐藏全局模块, 成员即内置日期函数; Codejock 样例
+        // (Outlook2013 frmMain) 这么写, 此前发成 vb6_DateTime_Now 平铺名 (C2065 ×4)。
+        // 成员须是内置函数才接管 —— 用户若有同名对象/变量, 让位 (上面的 known* 已挡;
+        // 这里再核一次成员是不是内置)。
+        if (objLower == "datetime") {
+            Symbol* dtSym = symTab_.lookup(node.memberName);
+            if (!dtSym) dtSym = symTab_.lookupModule(node.memberName);
+            if (dtSym && dtSym->isBuiltin && dtSym->kind == SymbolKind::Function) {
+                std::string dtFn = dtSym->name;
+                if (!dtFn.empty() && dtFn.back() == '$') dtFn.pop_back();
+                std::string dtCallee = "vb6_" + cIdent(dtFn);
+                // 调用形态交裸名 (实参由外层 IndexOrCallExpr 追加);
+                // 值形态 (`DateTime.Now` 无括号引用) 按无参调用发。
+                lastExpr_ = asCallCallee_ ? dtCallee : (dtCallee + "()");
+                return;
+            }
+        }
+
+        // typelib appobject 全局单例 (Codejock *GlobalSettings 家族): TYPEFLAG_FAPPOBJECT
+        // 的 coclass 裸类名即进程级单例对象, 成员沿 IDispatch 晚绑定链走。
+        // 此前这里不认, 落到 M22 模块限定符发成 vb6_X_GlobalSettings_Member 平铺名
+        // (无人声明 ⇒ C2065; Outlook2013 实测 144 处)。运行期 vb6_ComGlobalInstance
+        // 首次 CoCreate 后缓存同一实例 —— GlobalSettings.Icons 累积的位图在多次
+        // 访问间保持, 与 VB6 全局对象语义一致。
+        if (!knownObjectVars_.count(objLower) && !knownTypedComVars_.count(objLower)
+            && !knownClassVars_.count(objLower) && !knownUdtVars_.count(objLower)) {
+            Symbol* aoSym = symTab_.lookup(objIdent.name);
+            if (aoSym && aoSym->kind == SymbolKind::ComClass && aoSym->comIsAppObject) {
+                std::string inst = std::string("vb6_ComGlobalInstance(L\"") + aoSym->comProgId + "\")";
+                comObjExpr_ = inst;
+                comMemberName_ = node.memberName;
+                isComMarker_ = true;
+                isEarlyBoundCom_ = false;
+                earlyBoundSym_ = nullptr;
+                lastExpr_ = inst;
                 return;
             }
         }
@@ -152,6 +215,12 @@
             // cgen_expr_member_generic_access 的 `vb6_form_ctrl_` 前缀识别接管。
             {
                 const FrmControl* extCtrl = findExternalFormControl(objIdent.name, node.memberName);
+                if (std::getenv("C3_DBG_ST")) {
+                    std::cerr << "[ST-EXTCTRL] form=" << objIdent.name
+                              << " ctrl=" << node.memberName
+                              << " hit=" << (extCtrl ? "yes" : "no")
+                              << " df=" << (designerFiles_ ? "set" : "null") << std::endl;
+                }
                 if (extCtrl) {
                     std::string acc = "vb6_form_ctrl_" + cIdent(objIdent.name)
                                     + "_" + cIdent(node.memberName) + "()";
@@ -159,6 +228,137 @@
                         externalTreeViewAccs_[acc] = acc;
                     lastExpr_ = acc;
                     return;
+                }
+            }
+            // 跨模块窗体默认实例的 **Public 函数** (`frmMain.RibbonBar.FindTab(...)`
+            // 的值/接收者形态, frmShortcutBar:83; 语句调用形态
+            // `frmPaneMail.SetFlatStyle FlatStyle` 的 callee 也在这里接管,
+            // frmMain:293)。此前值形态落通用兜底发裸成员名 (C2065), 语句形态发
+            // `vb6_form_hwnd_X().Proc` (C2106 函数调用做左值/非法成员)。
+            // 按符号表查「名字 = 成员名 且 sourceModule = 该窗体」的 Function/Sub。
+            {
+                Symbol* xfSym = nullptr;
+                if (symTab_.moduleScope()) {
+                    // 先问**模块限定二级键** `<form>_<proc>` (driver_crossmod 为窗体
+                    // Public 过程注入) —— 多窗体同名过程时裸键先到先得, 只有它认得
+                    // 限定符指的那家 (名字+形参表)。
+                    xfSym = symTab_.moduleScope()->lookupLocal(
+                        objLower + "_" + Symbol::toLower(node.memberName));
+                    if (xfSym && !(xfSym->isExternal
+                                   && (xfSym->kind == SymbolKind::Sub
+                                       || xfSym->kind == SymbolKind::Function))) {
+                        xfSym = nullptr;  // 键被别的占用 → 回扫描
+                    }
+                }
+                if (!xfSym && symTab_.moduleScope()) {
+                    const std::string wantXf = Symbol::toLower(node.memberName);
+                    for (const auto& [kxf, sxf] : symTab_.moduleScope()->symbols()) {
+                        if (!sxf || !sxf->isExternal) continue;
+                        if (sxf->lowerName != wantXf && Symbol::toLower(sxf->name) != wantXf) continue;
+                        if (Symbol::toLower(sxf->sourceModule) != objLower) continue;
+                        if (sxf->kind == SymbolKind::Sub || sxf->kind == SymbolKind::Function) {
+                            xfSym = sxf.get();
+                            break;
+                        }
+                    }
+                }
+                if (xfSym) {
+                    std::string xfCall = cProcName(xfSym->name, xfSym->access,
+                                                   xfSym->sourceModule);
+                    // 形态分流:
+                    //   Sub (语句调用)                → 裸名, 实参/"()" 由外层追加
+                    //   Function 带参 (语句调用)       → 裸名, 实参由外层追加
+                    //   Function 无参 (语句/链中接收者) → 带 "()" 收尾 —— 裸名会被
+                    //     链式机制再拼 ".成员" (frmMain.RibbonBar.FindTab ⇒
+                    //     vb6_frmMain_RibbonBar.FindTab C2065); 带 "()" 后外层按
+                    //     COM 接收者续链。Sub 不能带 "()" —— 会被包成
+                    //     vb6_ComCall(void 调用) (C2095, 实测)。
+                    bool xfZeroParams = xfSym->params.empty();
+                    if (asCallCallee_ && (xfSym->kind == SymbolKind::Sub || !xfZeroParams)) {
+                        lastExpr_ = xfCall;
+                        return;
+                    }
+                    if (xfSym->kind == SymbolKind::Function) {
+                        // 链中接收者 (inMemberObjectEmit_) 必须立标记 (成员名留空 =
+                        // 对象值已就绪), 否则外层落 `call().成员` 结构体文本
+                        // (C2224, pageBackstageInfo:374 frmMain.RibbonBar.SystemButton)。
+                        if (inMemberObjectEmit_) {
+                            comObjExpr_ = xfCall + "()";
+                            comMemberName_.clear();
+                            isComMarker_ = true;
+                            isEarlyBoundCom_ = false;
+                            earlyBoundSym_ = nullptr;
+                        }
+                        lastExpr_ = xfCall + "()";
+                        return;
+                    }
+                    // PropertyGet 值形态: 先调用, 成员按 COM 晚绑定续链。
+                    std::string xfRecv = "()";
+                    comObjExpr_ = xfCall + xfRecv;
+                    comMemberName_ = inMemberObjectEmit_ ? std::string() : node.memberName;
+                    isComMarker_ = true;
+                    isEarlyBoundCom_ = false;
+                    earlyBoundSym_ = nullptr;
+                    lastExpr_ = xfCall + xfRecv;
+                    return;
+                }
+                // 自类型函数的跨模块形态: `frmMain.RibbonBar` — 成员与 typelib 类
+                // 同名 (函数与类型同键, defineExternal 注入时被 ComClass 占位丢弃,
+                // 上面的扫描查不到)。VB6 里限定形式 `frmX.<TypeName>` 只可能是该
+                // 窗体的同名函数 (类型名在限定位置无意义)。
+                if (!xfSym) {
+                    Symbol* stClsXf = symTab_.lookup(node.memberName);
+                    if (stClsXf && stClsXf->kind == SymbolKind::ComClass
+                        && Symbol::toLower(stClsXf->name) == Symbol::toLower(node.memberName)
+                        && !findExternalFormControl(objIdent.name, node.memberName)) {
+                        if (std::getenv("C3_DBG_ST")) {
+                            std::cerr << "[ST-XF] base=" << objIdent.name
+                                      << " mid=" << node.memberName
+                                      << " flag=" << inMemberObjectEmit_ << std::endl;
+                        }
+                        std::string xfCall2 = cProcName(node.memberName, AccessLevel::Public,
+                                                        objIdent.name);
+                        // 自类型函数按无参处理 (RibbonBar() 形): 链中收尾带 "()"
+                        // (理由同上 —— 裸名会被链式机制再拼 ".成员")。
+                        comObjExpr_ = xfCall2 + "()";
+                        comMemberName_ = inMemberObjectEmit_ ? std::string() : node.memberName;
+                        isComMarker_ = true;
+                        isEarlyBoundCom_ = false;
+                        earlyBoundSym_ = nullptr;
+                        lastExpr_ = xfCall2 + "()";
+                        return;
+                    }
+                }
+                // 跨模块窗体 **Public 变量** (`frmEditEvent.AllDayOverride = 0`,
+                // frmMain:1240): 窗体模块变量在 C 侧发裸名 (Public 非 static +
+                // .h extern, frmEditEvent.c:28 / frmEditEvent.h:57), 消费方经
+                // #include 直接用裸名。此前落通用兜底发 hwnd.AllDayOverride
+                // 文本 (C2224)。
+                {
+                    Symbol* xfVar = symTab_.lookupModule(node.memberName);
+                    if (xfVar && xfVar->kind == SymbolKind::Variable && xfVar->isExternal
+                        && Symbol::toLower(xfVar->sourceModule) == objLower) {
+                        lastExpr_ = cIdent(xfVar->name);
+                        // Public **对象**变量 (As CalendarEvent/As Object 等) 的成员访问:
+                        // 裸名是 IDispatch 槽 (vb6_ComIface_X*/void*), 成员按 COM 晚绑定
+                        // 续链 —— 否则落结构体文本 (C2037, frmProperties:241
+                        //   frmEditRecurrence.m_pMasterEvent.RecurrenceState)。
+                        // 标量 Public 变量 (String/Long/...) 不立标记。
+                        const std::string vtnXf = xfVar->variableTypeName;
+                        static const char* kScalarXf[] = {"string", "long", "integer",
+                            "boolean", "double", "single", "currency", "date", "byte", nullptr};
+                        bool scalarXf = false;
+                        for (auto sc = kScalarXf; *sc; ++sc)
+                            if (Symbol::toLower(vtnXf) == *sc) { scalarXf = true; break; }
+                        if (!scalarXf && !vtnXf.empty()) {
+                            comObjExpr_ = lastExpr_;
+                            comMemberName_ = node.memberName;
+                            isComMarker_ = true;
+                            isEarlyBoundCom_ = false;
+                            earlyBoundSym_ = nullptr;
+                        }
+                        return;
+                    }
                 }
             }
         }

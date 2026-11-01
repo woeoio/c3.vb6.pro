@@ -322,6 +322,7 @@ std::unique_ptr<ParameterDecl> Parser::parseParameter() {
 
     bool isOptional = false;
     bool isByVal = false;
+    bool isByRef = false;   // 账 #305 第二百五十六刀: 显式写了 ByRef (与"什么都没写"要分得开)
     bool isParamArray = false;
 
     if (match(TokenKind::Optional)) {
@@ -330,7 +331,8 @@ std::unique_ptr<ParameterDecl> Parser::parseParameter() {
     if (match(TokenKind::ByVal)) {
         isByVal = true;
     } else if (match(TokenKind::ByRef)) {
-        isByVal = false;  // 显式 ByRef (默认)
+        isByVal = false;   // 显式 ByRef (默认)
+        isByRef = true;
     }
     if (match(TokenKind::ParamArray)) {
         isParamArray = true;
@@ -381,8 +383,10 @@ std::unique_ptr<ParameterDecl> Parser::parseParameter() {
         asType = std::make_unique<ArrayTypeRef>(simple.loc, std::move(elemType), std::vector<ArrayTypeRef::Dimension>{});
     }
 
-    return std::make_unique<ParameterDecl>(loc, paramName, isOptional,
+    auto prm = std::make_unique<ParameterDecl>(loc, paramName, isOptional,
         isByVal, isParamArray, std::move(asType), std::move(defaultValue));
+    prm->isByRef = isByRef;
+    return prm;
 }
 
 // ============================================================

@@ -182,21 +182,10 @@ void CCodeGen::visit(Block& node) {
 void CCodeGen::visit(IfStmt& node) {
     emitExpr(*node.condition);
     if (isComMarker_) resolveComValue("Int");  // If条件通常是Boolean/整数
-    // Fix 090ag: If <Variant 值> 条件 — VB6 将 Variant 按真值判定 (Empty/0/False 为假).
-    // 此前对 As Variant 参数/变量的裸标识符条件生成 if (JsonValue) → C2083 (vb6_VARIANT
-    // 结构体比较非法). 需显式 vb6_VariantToBool.
-    if (!isComMarker_) {
-        bool condIsVariant = cExprIsVariant(lastExpr_);
-        if (!condIsVariant && node.condition
-            && node.condition->kind == ASTNodeKind::IdentifierExpr) {
-            std::string cndLower =
-                Symbol::toLower(static_cast<IdentifierExpr&>(*node.condition).name);
-            if (knownVariantVars_.count(cndLower)) condIsVariant = true;
-        }
-        if (condIsVariant && lastExpr_.find("vb6_VariantToBool(") == std::string::npos) {
-            lastExpr_ = "vb6_VariantToBool(" + lastExpr_ + ")";
-        }
-    }
+    // 账 #305 第二百四十四刀: 「这条 C 怎么当 VB6 的真值测」收进唯一主人 conditionTruthExpr。
+    //   原来那一段 (Fix 090ag) 只认「是不是槽」, 于是裸晚绑定调用那一发发成 if (vb6_ComCall(...))
+    //   = 测指针, 恒真; 槽那一档的答案 (含 As Variant 裸标识符那一路) 逐字沿用。
+    lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
     c_.emitLine("if (" + lastExpr_ + ") {");
     c_.indent();
     emitStmtList(node.thenBody);
@@ -216,6 +205,9 @@ void CCodeGen::visit(IfStmt& node) {
         ++blockCondDepth_;
         emitExpr(*elseif->condition);
         --blockCondDepth_;
+        // 账 #305 第二百四十四刀: 这一站从前连「真值那一问」都没问 (既不包槽也不认裸晚绑定调用),
+        //   同一句条件写在 ElseIf 上比写在 If 上还少一层。
+        lastExpr_ = conditionTruthExpr(lastExpr_, elseif->condition.get());
         c_.emitLine("if (" + lastExpr_ + ") {");
         c_.indent();
         emitStmtList(elseif->body);

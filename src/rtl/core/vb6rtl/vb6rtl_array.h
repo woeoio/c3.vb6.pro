@@ -397,6 +397,9 @@ int32_t vb6_FileCopy(BSTR source, BSTR destination);
 // P8.2: 随机/二进制文件访问 (Get/Put)
 int32_t vb6_Get(int32_t filenumber, int32_t recnumber, void* varPtr, int32_t varSize);
 int32_t vb6_Put(int32_t filenumber, int32_t recnumber, void* varPtr, int32_t varSize);
+// Whole 1D array Get/Put (`Get #f, , arr`): raw element bytes, no String length prefix.
+int32_t vb6_GetArray(int32_t filenumber, int32_t recnumber, vb6_SafeArray1D* arr);
+int32_t vb6_PutArray(int32_t filenumber, int32_t recnumber, vb6_SafeArray1D* arr);
 
 // 错误处理
 // Variant比较 (VB6语义: 数值vs数值, 字符串vs字符串, 混合转Double)

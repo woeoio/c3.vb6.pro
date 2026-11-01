@@ -46,6 +46,12 @@ void vb6_SetControlEnabled(void* hwnd, int enabled);
 // 实测会发 WM_SETFOCUS）。拿不到焦点时原生就是回 NULL 什么都不做，本项目不伪造、不重试。
 void vb6_SetControlFocus(void* hwnd);
 
+// 窗体裸名 `ZOrder`（= `Me.ZOrder`）：`.frm` 里不带接收者写 `ZOrder` 是窗体自己的方法
+// (Outlook2013 frmInbox:753/895/964 三处，弹菜单前把窗体提到最前)。名字在符号表里查不到，
+// 从前直接发 `ZOrder()` ⇒ LNK2019 未解析外部符号。position 0 = 提到最前 (缺省)，1 = 压到最后。
+// 只动窗体的 z 序，不激活、不移动、不改尺寸 —— 与 VB6 的 Form.ZOrder 同一口径。
+void vb6_FormZOrder(void* hwnd, int position);
+
 // 账 #171（C29-FS-h）：单选钮那一条 `BN_CLICKED` 该不该升成 VB6 的 `Click` —— 口径只留这一处。
 // 实测（探针 `.build/ck171c`，两头证人：VB 侧 `Value` 与 OS 侧 `BM_GETCHECK`）：`BS_AUTORADIOBUTTON`
 // 在**焦点进入**时也会替父窗发一条 `BN_CLICKED`，而那一刻它自己**并没有被勾上**；真点击（含 `BM_CLICK`）

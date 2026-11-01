@@ -1,0 +1,6 @@
+Type=DLL
+Class=B220Args; B220Args.cls; {11112222-3333-4444-5555-6666777788B7}
+Module=DllBlocks; DllBlocks.bas
+Startup=""
+Command32=""
+Name="B220a"

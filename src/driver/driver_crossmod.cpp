@@ -157,6 +157,9 @@ bool Driver::runCrossModuleResolution() {
     // 用lowerName去重会导致只有第一个变体(通常Get)被保留, Let/Set丢失
     // 消费模块的P6.7查找 lookupModuleByKind(name, PropertyLet) 会失败
     std::unordered_map<std::string, std::pair<size_t, const Symbol*>> globalPublicSyms;
+    // 窗体 Public 过程的模块限定键表 (`<form>_<proc>`): 裸键先到先得之外,
+    // 每家窗体各存一份 —— 限定调用 `frmX.Proc` 按限定符精确解析名字+形参表。
+    std::unordered_map<std::string, std::pair<size_t, const Symbol*>> formQualifiedSyms;
     for (size_t i = 0; i < exportedSymbols.size(); i++) {
         for (const Symbol* sym : exportedSymbols[i]) {
             std::string sKey = sym->storageKey();
@@ -204,6 +207,20 @@ bool Driver::runCrossModuleResolution() {
                         globalPublicSyms[sKey] = {i, sym};
                     }
                 }
+            }
+            // 窗体 Public 过程的**模块限定键表** (`<form>_<procKey>`): 裸键
+            // globalPublicSyms 先到先得, 8 家窗体同名 SetFlatStyle 只有首家进得了
+            // 上面的注入循环 —— 限定调用 `frmPaneContacts.SetFlatStyle x` 在消费
+            // 模块里既无名可用也无形参表可问 (Outlook2013 frmMain:293-298 实测:
+            // 首家之外的调用发成 hwnd.Proc 文本/实参被截断)。此表逐窗体各存一份,
+            // 注入到每个消费者作用域的 `<form>_<proc>` 键下; 裸键查找永不命中
+            // (键含限定前缀), 裸调路径零变化。
+            if (modules_[i]->isFormModule
+                && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
+                    || sym->kind == SymbolKind::PropertyGet
+                    || sym->kind == SymbolKind::PropertyLet
+                    || sym->kind == SymbolKind::PropertySet)) {
+                formQualifiedSyms[Symbol::toLower(moduleBaseNames[i]) + "_" + sym->lowerName] = {i, sym};
             }
         }
     }
@@ -370,6 +387,9 @@ bool Driver::runCrossModuleResolution() {
                 extSym->implementsNames = srcSym->implementsNames;  // P6.4
                 extSym->interfaceMethodNames = srcSym->interfaceMethodNames;  // P6.4
                 extSym->eventNames = srcSym->eventNames;  // P6.5
+                // 账 #305 256: 与 eventNames 同索引的「哪几位形参按地址」也必须跟着复制 ——
+                // P6.5 包装站按 eventNames 的下标读它，两份名单不同源就等于丢了答案。
+                extSym->eventParamByAddr = srcSym->eventParamByAddr;
                 extSym->comClsidStr = srcSym->comClsidStr;  // P6.8: CLSID
             }
             // Fix 010r-11 / Fix 015: 复制变量/返回类型名
@@ -398,6 +418,27 @@ bool Driver::runCrossModuleResolution() {
             }
 
             symTab.defineExternal(std::move(extSym), replaceBuiltinComSym);
+        }
+    }
+
+    // 窗体 Public 过程的模块限定二级键注入 (`<form>_<proc>`): 每家窗体各一份,
+    // 限定调用 `frmX.Proc` 在 cgen 按 `<form>_<proc>` 精确取名字+形参表
+    // (cgen_expr_member_form_builtin 的跨窗体函数扫描 / cgen_expr_call_callee_params)。
+    // 键含限定前缀, 裸键查找永不命中 —— 裸调路径零变化。
+    for (size_t i = 0; i < analyzers_.size(); i++) {
+        SymbolTable& symTab = analyzers_[i]->symbolTable();
+        if (!symTab.moduleScope()) continue;
+        for (const auto& [qKey, qEntry] : formQualifiedSyms) {
+            auto [qSrcIdx, qSym] = qEntry;
+            if (qSrcIdx == i) continue;   // 本模块自己的过程, 裸键已可见
+            auto qExt = std::make_unique<Symbol>(
+                qSym->kind, qSym->name, qSym->type, qSym->location, qSym->access);
+            qExt->isExternal = true;
+            qExt->sourceModule = moduleBaseNames[qSrcIdx];
+            qExt->params = qSym->params;
+            qExt->variableTypeName = qSym->variableTypeName;
+            qExt->access = qSym->access;
+            symTab.moduleScope()->define(std::move(qExt), qKey);
         }
     }
 

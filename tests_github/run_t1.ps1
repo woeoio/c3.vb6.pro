@@ -22,12 +22,20 @@ param(
     [int]$Jobs = 1,        # >1 时 bas 用例并行 (每 worker 独立输出目录); 默认 1 走今天的路径
     [int]$Shard = 0,       # 分片当前编号 (1..ShardTotal); 0 = 不分片整队跑 (供 CI 多 runner 并行)
     [int]$ShardTotal = 1,  # 分片总数
-    [int]$RunTimeoutSec = 60   # 单条用例跑 exe 的墙钟预算。默认 60 与 tests\run_tests.ps1
+    [int]$RunTimeoutSec = 60,  # 单条用例跑 exe 的墙钟预算。默认 60 与 tests\run_tests.ps1
                                # 的 -RunTimeoutSec 同值 (那里从 5s 提到 60s 就是为这个原因)。
                                # 实测: -Jobs 8 下 test_rtl_x86 空闲 0.03s 跑完, 却在 5s 预算
                                # 下被判 run timeout —— 预算是给并行负载留余量的, 不是给空闲机
                                # 定的; 5s 会把**负载**造成的慢误判成**代码**造成的挂。
+    [switch]$Incremental   # 打开时给 C3 传 --incremental (见下面的 $IncArg; 默认关 = 今天的行为)
 )
+
+# ai/030 T30-B: 只有 -Incremental 时才有的实参, 口径与 tests\run_tests.ps1 一致。
+# --incremental 让 C3 走内容寻址的 obj store (%LOCALAPPDATA%\C3\objcache), 键含
+# {架构, 工具串, RTL 源内容} ⇒ 每个 runner 只有头一例真编那 65 个 RTL .c, 其余直接取 obj;
+# 错配的 obj 只会没命中, 绝不会被用错 (不会把"编译能过"变成"编译能过但是错的")。
+# 关掉时实参为空 ⇒ 调用命令行与今天逐字相同。
+if ($Incremental) { $IncArg = @('--incremental') } else { $IncArg = @() }
 
 $ErrorActionPreference = "SilentlyContinue"
 # <shared-shard>: 分片算法在 shard.ps1 (三个门禁脚本共用, 不要在这里再抄一遍)
@@ -194,12 +202,13 @@ function Invoke-BasSetParallel {
         New-Item -ItemType Directory -Path $workDir -Force | Out-Null
         $c3 = $using:C3Path
         $runTimeoutMs = $using:runTimeoutMs
+        $inc = $using:IncArg
         $p = 0; $f = 0; $details = @()
         foreach ($it in $shardItems) {
             if ($it.Arch) {
-                $cr = & $c3 $it.Source --arch $it.Arch --output-dir $workDir 2>&1
+                $cr = & $c3 $it.Source --arch $it.Arch --output-dir $workDir @inc 2>&1
             } else {
-                $cr = & $c3 $it.Source --output-dir $workDir 2>&1
+                $cr = & $c3 $it.Source --output-dir $workDir @inc 2>&1
             }
             $ec = $LASTEXITCODE
             if ($ec -ne 0) {
@@ -312,7 +321,7 @@ Write-Host ""
 function Test-Compile {
     param([string]$Name, [string]$Source)
     Write-Host -NoNewline "  [COMPILE] $Name ... "
-    $result = & $C3Path $Source --output-dir $OutDir 2>&1
+    $result = & $C3Path $Source --output-dir $OutDir @IncArg 2>&1
     if ($LASTEXITCODE -eq 0) {
         $script:pass++
         Write-Host "PASS" -ForegroundColor Green

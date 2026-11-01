@@ -40,8 +40,10 @@ $OPEN = @(
     @{ File = 'cgen_assign_value_sem.inc'; N = 0 },
     # For 循环起点: varAcc = vb6_VariantFromValue(start)
     @{ File = 'cgen_control.cpp'; N = 1 },
-    # Property Let 进槽: target = vb6_VariantFromValue(value)
-    @{ File = 'cgen_setlet.cpp'; N = 1 }
+    # 第一百八十四刀 (§B164 形⑤ 站③) 之前: `Let <变体> = …` 的 Property Let 进槽那一支
+    # 裸发 `target = vb6_VariantFromValue(value)` 且**从不问目标是不是槽** (三形 C2440);
+    # 现在那一支问 variantSlotTargetOf, 命中就交给 emitVariantSlotAssign —— 裸发归零。
+    @{ File = 'cgen_setlet.cpp'; N = 0 }
 )
 
 $files = @(Get-ChildItem -Path $backend -Recurse -File -Include *.cpp, *.hpp, *.inc)
@@ -128,7 +130,10 @@ foreach ($k in $bareByFile.Keys) {
 #   R5c 那张表只在 driver 的一趟预扫描里建 (恰好 1 份文件
 #       driver_codegen_fieldkind_scan.inc), 注入站点恰好 1 处
 #   R5d 「认文本尾注」这条歧路不许复活: `class var .` 这份拼写逐文件钉死处数, 新增即红
-#       (今天 10 处 / 7 份文件 —— 第七十五刀 (§B184) 加的那一处住在 cgen_util_type.cpp, 是
+#       (第一百八十四刀 (§B164 形⑤ 站③) 之前是 10 处 / 7 份文件; 本刀把赋值站那六条判据的
+#        内联段整体搬进 cgen_util_ctrl.cpp 的 variantSlotTargetOf, 其中**引述**这句形状的那段
+#        说明注释一并搬走并改写成不点名的说法 ⇒ cgen_assign_value_sem.inc 归零 (名单留 0 记账)。
+#        第七十五刀 (§B184) 加的那一处住在 cgen_util_type.cpp, 是
 #        narrowTargetTypeOf 上方讲病形的说明注释**引**了那句形状, 不是生产点; 名单仍把它钉死,
 #        因为这条规则本来的口径就是「谁在提这句文本都算」(见本节末那句)。
 #        第六十三刀 (§B172) 之前 11 处: 那两处**生产**尾注的字面量收进了
@@ -195,7 +200,7 @@ $WantMark168 = [ordered]@{
     'cgen_expr_member_voidptr_com.inc'    = 4
     'cgen_state.inc'                      = 1
     'cgen_call.cpp'                       = 1
-    'cgen_assign_value_sem.inc'           = 1
+    'cgen_assign_value_sem.inc'           = 0   # 第一百八十四刀: 内联判据搬去 cgen_util_ctrl.cpp
     'cgen_util_type.cpp'                  = 1   # §B184 第七十五刀: 说明注释里引那句形状
 }
 foreach ($k in $WantMark168.Keys) {

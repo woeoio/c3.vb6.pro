@@ -47,7 +47,37 @@ Sub Main()
         Debug.Print "ERR-6:OK Source"
     End If
     
+    ' Test 7..9 (账 #305 第二百四十一刀): named 实参按**名字**落位 —— 改前两形都把 Description
+    ' 的文案交进 RTL 的第 2 档 (source)，Err.Description 留空；第三形按声明序写，改前改后都对，
+    ' 留着钉「别把位置序改错」。三发读数与第二百四十刀 A1/A2/A3 的探针同源。
+    Err.Clear
+    On Error Resume Next
+    Err.Raise Number:=7001, Description:="DESC7"
+    If Err.Number = 7001 And Err.Description = "DESC7" And Len(Err.Source) = 0 Then
+        passCount = passCount + 1
+        Debug.Print "ERR-7:OK named-desc"
+    Else
+        Debug.Print "ERR-7:NO Number="; Err.Number; " DESC=["; Err.Description; "] SRC=["; Err.Source; "]"
+    End If
+
+    Err.Clear
+    Err.Raise Number:=7002, Source:="SRC8", Description:="DESC8"
+    If Err.Number = 7002 And Err.Description = "DESC8" And Err.Source = "SRC8" Then
+        passCount = passCount + 1
+        Debug.Print "ERR-8:OK named-declared-order"
+    Else
+        Debug.Print "ERR-8:NO Number="; Err.Number; " DESC=["; Err.Description; "] SRC=["; Err.Source; "]"
+    End If
+
+    Err.Clear
+    Err.Raise Number:=7003, Description:="DESC9", Source:="SRC9"
+    If Err.Number = 7003 And Err.Description = "DESC9" And Err.Source = "SRC9" Then
+        passCount = passCount + 1
+        Debug.Print "ERR-9:OK named-reversed"
+    Else
+        Debug.Print "ERR-9:NO Number="; Err.Number; " DESC=["; Err.Description; "] SRC=["; Err.Source; "]"
+    End If
     On Error GoTo 0
     
-    Debug.Print "ERR:"; passCount; "/6"
+    Debug.Print "ERR:"; passCount; "/9"
 End Sub

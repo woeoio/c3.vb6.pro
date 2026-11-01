@@ -20,6 +20,7 @@ public:
     bool   parsed = false;              // 文件读到且目录走通（false ⇒ 结论不可用）
     bool   hasAppManifest = false;      // RT_MANIFEST(24) + 名字 1 = CREATEPROCESS
     bool   hasIsolatedManifest = false; // RT_MANIFEST(24) + 名字 2 = ISOLATED，**不参与进程激活上下文**
+    bool   hasIconGroup = false;        // RT_GROUP_ICON(14)：工程自带图标 ⇒ 不再塞默认窗体图标（账 #305 第303刀）
     int    entries = 0;                 // 走到的资源条数（诊断用）
     std::string why;                    // 一行结论，给 stderr 的 C3: 行用
 

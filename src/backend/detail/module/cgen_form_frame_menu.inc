@@ -86,13 +86,17 @@
         }
         bool ucIsArr = knownControlArrays_.count(ctlLower) != 0;
         bool ucSkipInitProps = false;
-        if (const FrmFile* spInitProps = findUserControlSpec(ctlClass))
-            ucSkipInitProps = Symbol::toLower(spInitProps->codeSection)
+        // 账 #305 第二百五十八刀: 与顶层那条创建路同一问 (invisible_at_runtime.hpp)。
+        const FrmFile* spUc258 = findUserControlSpec(ctlClass);
+        const bool ucWindowless258 = ucInvisibleAtRuntime(spUc258);
+        if (spUc258)
+            ucSkipInitProps = Symbol::toLower(spUc258->codeSection)
                                   .find("sub usercontrol_readproperties") != std::string::npos;
         std::string hwndExpr;
         if (ucIsArr) {
             int idx = uc.index >= 0 ? uc.index : 0;
             if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(1);");
+            if (ucWindowless258) c_.emitLine("vb6_UC_SetWindowless(1);");
             c_.emitLine("{ void* vb6_uc_h = vb6_UC_HostCreate(\"" + ctlClass + "\", "
                 + std::to_string(ucL) + ", " + std::to_string(ucT) + ", "
                 + std::to_string(ucW) + ", " + std::to_string(ucH)
@@ -100,6 +104,7 @@
                 + "\", " + std::to_string(idx) + ");");
             c_.emitLine("  vb6_CtrlArr_SetAt(&vb6_arr_" + cIdent(uc.controlName) + ", "
                        + std::to_string(idx) + ", vb6_uc_h); }");
+            if (ucWindowless258) c_.emitLine("vb6_UC_SetWindowless(0);");
             if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(0);");
             hwndExpr = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(uc.controlName) + ", "
                      + std::to_string(idx) + ")";
@@ -108,10 +113,12 @@
                                    ? "vb6_com_" : "vb6_hwnd_")
                                 + cIdent(uc.controlName);
             if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(1);");
+            if (ucWindowless258) c_.emitLine("vb6_UC_SetWindowless(1);");
             c_.emitLine(slot220 + " = vb6_UC_HostCreate(\""
                 + ctlClass + "\", " + std::to_string(ucL) + ", " + std::to_string(ucT) + ", "
                 + std::to_string(ucW) + ", " + std::to_string(ucH)
                 + ", " + parentHwnd + ", hInstance, \"" + uc.controlName + "\", -1);");
+            if (ucWindowless258) c_.emitLine("vb6_UC_SetWindowless(0);");
             if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(0);");
             hwndExpr = slot220;
         }

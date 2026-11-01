@@ -56,6 +56,30 @@
         }
 
         if (!isVarName2) {
+            // 账 (Outlook2013 frmInbox:222/244/732): 跨窗体**控件**成员
+            // (`frmMain.CommandBars`) — 控件句柄是另一 .c 的 static, 模块限定
+            // 发 vb6_frmMain_CommandBars 裸名 = LNK2019。form_builtin 的
+            // extCtrl 臂只覆盖部分上下文 (同一表达式不同访问点命中不一, 实测
+            // 4 命中 2 漏), 这里按 findExternalFormControl 兜底发访问器。
+            if (std::getenv("C3_DBG_ST") && node.memberName == "CommandBars") {
+                std::cerr << "[ST-M22CB] obj=" << objIdent2.name << " forms="
+                          << knownFormModuleNames_.count(objLower2) << std::endl;
+            }
+            if (knownFormModuleNames_.count(objLower2)
+                && objLower2 != Symbol::toLower(moduleName_)) {
+                const FrmControl* extCtrlM22 = findExternalFormControl(objIdent2.name, node.memberName);
+                if (extCtrlM22) {
+                    std::string accM22 = "vb6_form_ctrl_" + cIdent(objIdent2.name)
+                                       + "_" + cIdent(node.memberName);
+                    if (extCtrlM22->controlType == FrmControlType::TreeView)
+                        externalTreeViewAccs_[accM22] = accM22;
+                    // 控件数组: 访问器带 (int32_t idx) 形参, 下标由外层
+                    // IndexOrCallExpr 追加; 普通控件 0 参调用。
+                    lastExpr_ = (extCtrlM22->index >= 0)
+                        ? accM22 : (accM22 + "()");
+                    return;
+                }
+            }
             // object不是已知变量 → 假设是模块名限定符
             // 成员是变量: Module1.myName
             // When module is #included, use the unprefixed name directly
@@ -122,6 +146,9 @@
                 return;
             }
             varName2 = cIdent(canonicalHostPseudoMember(modName2, varName2));
+            if (std::getenv("C3_DBG_ST") && modLower2 == "frmmain") {
+                std::cerr << "[ST-M22EMIT] var=" << node.memberName << " incl=" << isIncluded2 << std::endl;
+            }
             lastExpr_ = isIncluded2 ? varName2 : ("vb6_" + cIdent(modName2) + "_" + varName2);
             return;
         }
@@ -143,6 +170,30 @@
             if (!resolvedFn.empty()) {
                 emitExpr(*node.object);
                 std::string objExpr = std::move(lastExpr_);
+                // 账 #305 第一百九十刀: 接收者是 legacy 接口视图的**表达式** (属性链 / With 成员),
+                // 零参属性读被当成类方法 `vb6_<I>_<成员>((void*)…)` ⇒ C2440。
+                // 与调用站同一答案: 落临时量 (只求值一次) + 按值适配器。
+                {
+                    const Symbol* cs190d = symTab_.lookup(className);
+                    if (cs190d && cs190d->kind == SymbolKind::Class && cs190d->isInterface) {
+                        std::string rl190d = objExpr;
+                        std::transform(rl190d.begin(), rl190d.end(), rl190d.begin(), ::tolower);
+                        if (slotLegacyIfaceViewName(rl190d).empty()) {
+                            const std::string want190d = cIdent(node.memberName);
+                            for (const LegacyIfaceSlot& s190d : legacyIfaceSlots(cs190d->name)) {
+                                if (s190d.field != want190d || !s190d.params.empty()) continue;
+                                const std::string bound190d = "vb6_" + cIdent(cs190d->name) + "_" + s190d.field;
+                                if (resolvedFn != bound190d) break;
+                                std::string recv190d = objExpr;
+                                if (recv190d.rfind("(void*)", 0) == 0) recv190d = recv190d.substr(7);
+                                const std::string tmp190d = "__vbvread" + std::to_string(tempCounter_++);
+                                c_.addPending("vb6_iface_" + cIdent(cs190d->name) + " " + tmp190d + " = " + recv190d + ";");
+                                lastExpr_ = legacyIfaceSlotCallFn(cs190d->name, s190d.field) + "(" + tmp190d + ")";
+                                return;
+                            }
+                        }
+                    }
+                }
                 // 类虚表 (tB, ai/022 B08e 第⑪站): 这一支的 object 是"非标识符表达式", 但
                 // `Me.<字段>` 这种字段链发出来仍是纯读 (`me->m_up`), 所以 `Me.m_up.<属性>` 的读
                 // 实测落在这里 —— 上一版地图把它一概判成"按构造不纯 → 只能判死", 本轮按证据订正。

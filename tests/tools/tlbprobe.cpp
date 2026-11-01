@@ -95,9 +95,29 @@ static void dumpType(ITypeLib* lib, UINT i) {
     {
         std::string g = guidStr(ta->guid);
         const char* k = kindName(ta->typekind);
-        printf("TYPE %u kind=%s name=%s guid=%s\n", i, k, typeName.c_str(), g.c_str());
+        printf("TYPE %u kind=%s name=%s guid=%s typeflags=0x%X\n", i, k, typeName.c_str(), g.c_str(),
+               (unsigned)ta->wTypeFlags);
     }
     for (UINT r = 0; r < ta->cImplTypes; r++) dumpRef(ti, r);
+    if (ta->typekind == TKIND_ENUM) {
+        for (UINT v = 0; v < ta->cVars; v++) {
+            VARDESC* vd = nullptr;
+            if (FAILED(ti->GetVarDesc(v, &vd)) || !vd) continue;
+            BSTR vn = nullptr;
+            ti->GetDocumentation(vd->memid, &vn, nullptr, nullptr, nullptr);
+            std::string varName = w2u(vn);
+            SysFreeString(vn);
+            long val = 0;
+            if (vd->lpvarValue) {
+                VARIANT tmp;
+                VariantInit(&tmp);
+                if (SUCCEEDED(VariantChangeType(&tmp, (VARIANT*)vd->lpvarValue, 0, VT_I4))) val = tmp.lVal;
+                VariantClear(&tmp);
+            }
+            printf("  VAR %u name=%s value=%ld\n", v, varName.c_str(), val);
+            ti->ReleaseVarDesc(vd);
+        }
+    }
     for (UINT f = 0; f < ta->cFuncs; f++) {
         FUNCDESC* fa = nullptr;
         if (FAILED(ti->GetFuncDesc(f, &fa)) || !fa) continue;

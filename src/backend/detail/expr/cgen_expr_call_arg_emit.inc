@@ -955,13 +955,17 @@
                         // = §B187 待拍那一族）压根不进这一臂。
                         {
                             const std::string clsSlot092r = cParamClassPtrType(calleeParams[i]);
+                            // 账 #305 第二百零五刀: 这一站也交 AST —— 视图槽的「借来」那一形 (裸类变量)
+                            // 由交付侧的主人认出实参的声明档是工程类实例，铸成带 NULL 守卫的视图。
+                            const ASTNode* act092r = (i < node.positional.size())
+                                ? node.positional[i].get() : nullptr;
                             if (argHoldsProjectRefInOwnSlot(argVal, clsSlot092r)
-                                && deliverToClassSlot(clsSlot092r, argVal) == argVal) {
+                                && deliverToClassSlot(clsSlot092r, argVal, act092r) == argVal) {
                                 argVal = "&" + argVal;
                             } else {
                                 const std::string tmpCls092r = classSlotTempName(clsSlot092r, tempCounter_++);
                                 c_.addPending(clsSlot092r + " " + tmpCls092r + " = "
-                                              + deliverToClassSlot(clsSlot092r, argVal) + ";");
+                                              + deliverToClassSlot(clsSlot092r, argVal, act092r) + ";");
                                 // 账 #305 §B218 (甲) 形A (第一百四十四刀): 落临时量这一臂交出去的是
                                 // **借来**的一枚 (ByVal 形参 / 泛对象槽 / 按名剥出来的实例)，而被调方
                                 // 那一格从本刀起按 腿② 的形状**当场退旧** ⇒ 这一臂必须自己先付一枚，
@@ -1358,8 +1362,13 @@
                             // 不能直接 & —— 必须先落一个临时再取址, 否则 &(右值) C2102。
                             // 落临时这一层与 Fix 161d 的 ByRef(As Any/UDT) 复杂右值同源。
                             const std::string tmpCls092r = classSlotTempName(clsSlotP092r, tempCounter_++);
+                            // 账 #305 第二百零四刀: 把实参那棵 AST 交给交付侧 —— 槽是视图档时
+                            // 它才答得出「右值是不是一枚自己交出引用的实例」(见 deliverToClassSlot)。
+                            const ASTNode* actP092r = (i < node.positional.size())
+                                ? node.positional[i].get() : nullptr;
                             c_.addPending(clsSlotP092r + " " + tmpCls092r + " = "
-                                          + deliverToClassSlot(clsSlotP092r, argVal) + ";");
+                                          + deliverToClassSlot(clsSlotP092r, argVal,
+                                                               actP092r) + ";");
                             argVal = "&" + tmpCls092r;
                             // ⚠ argVal 就位后必须让**下面整段** (Fix 120 → M22/090d → 收尾
                             // `&(cType){argVal}`) 全部跳过, 否则它们会再包一层:
@@ -1520,7 +1529,18 @@
                         // Fix <vbeclipse> rev7: 类槽已交付 (&temp, 见上) —— 绝不能再包一层
                         // (&(vb6_cls_View*){&temp}) : 那是"把地址的地址"当类指针传。
                         if (!isClassSlot092r) {
-                            argVal = "(&(" + cType + "){" + argVal + "})";
+                            // 账 #305 §B164 (第二百五十三刀): 先问那位主人 —— 答得出就**直递那一格的地址**
+                            //   (写回落进数组元素本身, 被调方退旧退的也是它自己那一枚), 答不出才落副本。
+                            //   原样落副本 = 递出去的是元素当前值的拷贝, 被调方 `BSTR_Assign(&(*p),…)`
+                            //   退掉的是元素自己那枚串 (实测靶工程 BSTR 档 48 处, 判据见 cgen_util_type.cpp)。
+                            {
+                                const std::string addr253 = byRefElementAddressExpr(argVal, cType);
+                                if (addr253.empty()) {
+                                    argVal = "(&(" + cType + "){" + argVal + "})";
+                                } else {
+                                    argVal = addr253;
+                                }
+                            }
                         }
                     }
                     }
@@ -1541,14 +1561,18 @@
         // Release, StatusBar UC 创建期 100% 复现)。
         if (cTypeIvfix.rfind("vb6_ivref_", 0) == 0 && i < node.positional.size()
             && node.positional[i]
-            && ifaceViewOfExpr(*node.positional[i]).empty()) {
+            && ifaceViewOfExpr(*node.positional[i]).empty()
+            // 账 #305 第一百九十六刀: ByRef ivref 形参 (C 型 `vb6_ivref_I**`) 的实参
+            // 已由腿⑤/类槽站落成 `&vb6_argtmp_vb6_ivref_I_N` —— 临时名由形参 C 型派生,
+            // 见到它即「地址已按形参类型交付」; 再剥一层 `->__iv_I` 是对薄指针取成员
+            // (VbEclipse ucPerspective.SetScheme 实测 C2039 + C2198)。
+            && argVal.rfind("&vb6_argtmp_", 0) != 0) {
             // 账 #305 §B221 (形③): 实参本身已经是视图 (`Take MakeDirect()`) ⇒ 值就是那枚
             // 薄指针，再取一次 `->__iv_<I>` 是剥第二层皮 (实测 C2039 + C2198)，所以这一问
             // 由 ifaceViewOfExpr 在闸上答一次，站点不另写判据。
             std::string argCls = inferClassTypeOfExpr(*node.positional[i]);
             if (!argCls.empty()) {
-                const IfaceView* ivFix = ivLookupIface(
-                    cTypeIvfix.substr(10, cTypeIvfix.find('*', 10) - 10));
+                const IfaceView* ivFix = ivLookupIface(ivrefNameOfCType(cTypeIvfix));
                 if (ivFix) {
                     std::string ivField = "__iv_" + cIdent(ivFix->name);
                     argVal = "(vb6_ivref_" + cIdent(ivFix->name) + "*)&((" + argVal

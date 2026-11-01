@@ -53,7 +53,8 @@ if ($e2def -ne 1)  { $viol += ("E2: applyEventHandlerAbi 的定义应为 1 处�
 if ($e2dec -ne 1)  { $viol += ("E2: applyEventHandlerAbi 的声明应为 1 处，读到 " + $e2dec) }
 if ($e2call -ne 2) { $viol += ("E2: 调用点应为 2 处（声明趟 + 登记趟），读到 " + $e2call) }
 # 登记之后**立刻**翻 —— 翻在 visit 里就赶不上模块级声明那一趟
-if ((Count-Of $prelude 'prepareEventHandlerProc(module, handlerLower)') -ne 1) {
+# 账 #305 256: 调用多带一位「哪几位形参按地址」(ev.pbyaddr) —— 钉的仍是「登记之后立刻翻、且只许一处」
+if ((Count-Of $prelude 'prepareEventHandlerProc(module, handlerLower, ev.pbyaddr)') -ne 1) {
     $viol += 'E2: prelude 必须在登记处理器后立刻调 prepareEventHandlerProc 翻 ABI（一处）'
 }
 if ((Count-Of $decl 'bool CCodeGen::prepareEventHandlerProc(') -ne 1) {
@@ -100,16 +101,18 @@ if ($e5node -ne 1) { $viol += ('E5: prelude 现拼 SimpleTypeRef 应为 1 处，
 # ---- C: 账 #226 的 click 落点 —— 三份权威 + 顺序 (布局式初始化) ----
 # vb6_UserControlDesc 是**按位置**初始化式, 所以『新槽追加到末尾』不是风格问题,
 # 而是错位一个指针宽就运行期 AV 的那种问题 (rev22 那段教训)。这里钉两头:
-# RTL 的结构体末尾必须是 click, cgen 的初始化式末槽也必须是 click。
+# RTL 的结构体尾部顺序 = designResize → click → transparent (账 #492 只许往 click
+# 之后追加; 旧 cgen 不发 transparent ⇒ C 补 0 ⇒ Opaque, 与改动前一致)。
 $hdrTxt = Read-Src 'src\rtl\core\vb6forms\vb6forms_controls.h'
 $uhoTxt = Read-Src 'src\rtl\core\vb6forms\uc\uc_host_window.c'
 $iClick = $hdrTxt.IndexOf('(*click)(void* me);')
+$iTrans = $hdrTxt.IndexOf('int32_t     transparent;')
 $iResize = $hdrTxt.IndexOf('(*designResize)(void* me, const char* ctrlName);')
 $iClose  = $hdrTxt.IndexOf('} vb6_UserControlDesc;')
-if ($iClick -lt 0 -or $iResize -lt 0 -or $iClose -lt 0) {
-    $viol += 'C1: 结构体里找不到 click / designResize / 收尾括号 (权威变了先看清再改)'
-} elseif (-not ($iResize -lt $iClick -and $iClick -lt $iClose)) {
-    $viol += 'C1: click 槽必须是 vb6_UserControlDesc 的**最后一枚**成员 (顺序=布局)'
+if ($iClick -lt 0 -or $iTrans -lt 0 -or $iResize -lt 0 -or $iClose -lt 0) {
+    $viol += 'C1: 结构体里找不到 click / transparent / designResize / 收尾括号 (权威变了先看清再改)'
+} elseif (-not ($iResize -lt $iClick -and $iClick -lt $iTrans -and $iTrans -lt $iClose)) {
+    $viol += 'C1: 结构体尾部必须是 designResize → click → transparent (顺序=布局, 新槽只许追加)'
 }
 # 运行期: 必须在 MouseUp 转调之后才转 Click (VB6 的顺序)
 $nHandoff = (Count-Of $uhoTxt 'r->desc->click(r->me)')
@@ -119,16 +122,18 @@ $iCl = $uhoTxt.IndexOf('r->desc->click(r->me)')
 if ($iUp -lt 0 -or $iCl -lt 0 -or -not ($iUp -lt $iCl)) {
     $viol += 'C2: click 转调必须排在 MouseUp 转调之后 (VB6: 抬起之后才发 Click)'
 }
-# 发码: 末槽 + 封装各一处, 且末槽在 designResize 之后
+# 发码: click 槽 + 封装各一处, 顺序必须是 designResize → click → transparent
 $genTxt = Read-Src 'src\backend\module\cgen_form.cpp'
 $nWrap = (Count-Of $genTxt '_ucHostClick(void* me) {')
-$nSlot = (Count-Of $genTxt '_ucHostClick  /*')
+$nSlot = (Count-Of $genTxt '_ucHostClick,  /*')
 if ($nWrap -ne 2) { $viol += ('C3: ucHostClick 的封装应为 2 条 (有/无处理器两支)，读到 ' + $nWrap) }
-if ($nSlot -ne 1) { $viol += ('C3: desc 初始化式里的 click 末槽应为 1 条，读到 ' + $nSlot) }
+if ($nSlot -ne 1) { $viol += ('C3: desc 初始化式里的 click 槽应为 1 条，读到 ' + $nSlot) }
 $gRes = $genTxt.IndexOf('_ucHostDesignResize"))')
-$gCli = $genTxt.IndexOf('_ucHostClick  /*')
-if ($gRes -lt 0 -or $gCli -lt 0 -or -not ($gRes -lt $gCli)) {
-    $viol += 'C3: 发码里 click 必须排在 designResize 之后 (与结构体同序)'
+$gCli = $genTxt.IndexOf('_ucHostClick,  /*')
+$gTransSlot = $genTxt.IndexOf('std::to_string(ucTransparent)')
+if ($gRes -lt 0 -or $gCli -lt 0 -or $gTransSlot -lt 0 -or
+    -not ($gRes -lt $gCli -and $gCli -lt $gTransSlot)) {
+    $viol += 'C3: 发码顺序必须是 designResize → click → transparent (与结构体同序)'
 }
 # ---- C4: 账 #227 —— desc 的鼠标/点击那一族, 每一槽都必须有落点 ----
 # cgen 是按位置把这张表填满的, 所以 RTL 少转调哪一格都不会有编译症状, 只会让那一格

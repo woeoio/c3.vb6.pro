@@ -110,7 +110,12 @@
             const FrmFile* ucSpecEvt = findUserControlSpec(child.controlTypeName);
             if (!ucSpecEvt) continue;
             // 解析 Public Event 声明
-            struct UcEvtPre { std::string name; std::string lowName; std::vector<std::string> ptypes; };
+            struct UcEvtPre {
+                std::string name;
+                std::string lowName;
+                std::vector<std::string> ptypes;
+                std::vector<char> pbyaddr;   // 账 #305 256: 每一位事件形参按不按地址递
+            };
             std::vector<UcEvtPre> ucEventsPre;
             {
                 std::string lowCode = Symbol::toLower(ucSpecEvt->codeSection);
@@ -190,6 +195,11 @@
                             std::string cty = isArrParam259 ? std::string("vb6_SafeArray1D*")
                                                             : mapTypeRef(&tyRefPre);
                             ev.ptypes.push_back(cty);
+                            // 账 #305 第二百五十六刀: 这一位按不按地址，问的是同一位主人
+                            // (emitEventSink 的 typedef、thunk、处理器形参三处都问它)。
+                            // 声明是这里从 .ctl 文本里切的，所以 ByRef 那一档也从同一段文本认。
+                            ev.pbyaddr.push_back(eventParamByAddress(
+                                nameSeg.find("byref") != std::string::npos, isArrParam259) ? 1 : 0);
                             pcur = tEnd;
                         }
                     }
@@ -232,15 +242,19 @@
                 // 于是同一枚函数在产物里有三种形参表 (ByRef 声明 / 零形参声明 / ByVal 定义)。
                 // emitFormFramework 在 decl-pass 里跑在那一趟之前 (cgen_base_generate_decl_pass.inc
                 // :40 与 :46), 所以这里翻一次, 声明与定义就同源了。
-                bool handlerHasIndex = prepareEventHandlerProc(module, handlerLower);
+                bool handlerHasIndex = prepareEventHandlerProc(module, handlerLower, ev.pbyaddr);
                 std::string fnOrig = cIdent(child.controlName) + "_" + cIdent(ev.name);
                 std::string frmPrefix = "vb6_" + cIdent(formName) + "_";
                 std::string thunkName = frmPrefix + "evtThunk_" + fnOrig + elemSfx;
                 // 前向声明**不在这里发** (原来这里逐元素发一份零形参的, 既与定义不同源又自己
                 // 重复 24 遍): 模块级那一趟发的才是唯一的一份。
                 std::string thunkSig = "void* handler";
-                for (size_t i = 0; i < ev.ptypes.size(); i++)
-                    thunkSig += ", " + ev.ptypes[i] + " a" + std::to_string(i);
+                for (size_t i = 0; i < ev.ptypes.size(); i++) {
+                    // 账 #305 256: 按地址那一位的星号由主人挂 (与 typedef 同一句问、同一个答案)
+                    const bool byAddr256 = i < ev.pbyaddr.size() && ev.pbyaddr[i] != 0;
+                    thunkSig += ", " + eventParamCDecl(ev.ptypes[i], byAddr256,
+                                                       "a" + std::to_string(i));
+                }
                 std::string callArgs = "";
                 if (handlerHasIndex && isArrayElem)
                     callArgs += std::to_string(child.index);   // VB6: 数组元素的处理器第一形参是元素号

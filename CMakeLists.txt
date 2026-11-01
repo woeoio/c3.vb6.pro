@@ -130,6 +130,17 @@ target_compile_definitions(vb6c3-core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_ME
 # TypeLib parser needs ole32/oleaut32 (COM API)
 target_link_libraries(vb6c3-core PRIVATE ole32 oleaut32 uuid)
 
+# PCH (experiment): the umbrella headers below are pulled in by nearly every
+# translation unit; compiling them once per target instead of once per .cpp
+# is the single biggest lever on incremental build time.
+if(MSVC)
+    target_precompile_headers(vb6c3-core PRIVATE
+        <windows.h>
+        <string> <vector> <map> <memory> <unordered_map> <array> <set>
+        "src/common/diagnostics.hpp"
+    )
+endif()
+
 # --- C code generation backend ---
 add_library(vb6c3-cgen STATIC
     src/backend/cgen_base.cpp
@@ -189,6 +200,14 @@ add_library(vb6c3-cgen STATIC
 )
 target_compile_definitions(vb6c3-cgen PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_link_libraries(vb6c3-cgen PRIVATE vb6c3-core)
+
+if(MSVC)
+    target_precompile_headers(vb6c3-cgen PRIVATE
+        <windows.h>
+        <string> <vector> <map> <memory> <unordered_map> <array> <set>
+        "src/backend/cgen.hpp"
+    )
+endif()
 
 # --- LLVM backend (optional) ---
 if(VB6C3_ENABLE_LLVM)

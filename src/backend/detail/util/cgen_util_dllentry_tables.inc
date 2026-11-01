@@ -16,8 +16,10 @@
         std::unordered_map<std::string, int> dispIdMap;
         int nextDispid = 1;
 
-        entry.emitLine("static const vb6_DispMethodDesc " + methodsVar + "[] = {");
-        entry.indent();
+        // 账 #305 §B219(第二百二十刀): 表行要引用一枚**先于表**定义好的声明档数组(文件作用域，
+        // 表体内不能塞定义)，所以方法那一趟先把数组行与表行各自攒下来，再按「数组 → 表头 → 行」落。
+        std::vector<std::string> argVtArrayLines;
+        std::vector<std::string> methodRowLines;
 
         for (size_t mi = 0; mi < cc.publicMethodNames.size(); mi++) {
             std::string& methodName = cc.publicMethodNames[mi];
@@ -56,9 +58,36 @@
             }
 std::string wideName = "L\"" + bareName + "\"";
 
-            entry.emitLine("{ " + wideName + ", " + std::to_string((int32_t)dispid) +
-                        ", " + std::to_string(invkind) + ", " + invokeName + " },");
+            // 账 #305 §B219: 这一枚方法的形参声明档表(服务端进门那一趟按它换算实参)。
+            // 档位答案只住 cDispatchArgVt 那一处，这里只负责把它落成一行静态数组。
+            // 空形参表 = 不发数组、表行交 NULL(与 §B219 之前「没人问」同一形状)。
+            std::string argVtRef = "NULL";
+            {
+                const size_t nPrm = methodSym->params.size();
+                if (nPrm > 0) {
+                    std::string init;
+                    for (size_t pi = 0; pi < nPrm; pi++) {
+                        if (!init.empty()) init += ", ";
+                        init += cDispatchArgVt(methodSym->params[pi]);
+                    }
+                    // 名字直接从 invokeName 派生 —— invokeName 本来就是全模块唯一的真符号，
+                    // 再拼一遍类名/后缀就是第二套命名口径。
+                    argVtRef = "vb6_avt_" + invokeName;
+                    argVtArrayLines.push_back("static const VARTYPE " + argVtRef +
+                                              "[" + std::to_string((int)nPrm) + "] = { " + init + " };");
+                }
+            }
+
+            methodRowLines.push_back("{ " + wideName + ", " + std::to_string((int32_t)dispid) +
+                        ", " + std::to_string(invkind) + ", " + invokeName + ", " + argVtRef + ", " +
+                        (argVtRef == "NULL" ? std::string("0")
+                             : std::to_string((int)methodSym->params.size())) + " },");
         }
+
+        for (auto& arrayLine : argVtArrayLines) entry.emitLine(arrayLine);
+        entry.emitLine("static const vb6_DispMethodDesc " + methodsVar + "[] = {");
+        entry.indent();
+        for (auto& rowLine : methodRowLines) entry.emitLine(rowLine);
 
         // Fix 099: Public 字段条目 —— 每字段两条 (invkind 2=PropertyGet / 4=PropertyPut),
         // 共享同一 dispid (COM 约定: 同名 Property 的 Get/Let 同 dispid, TypeLib 侧亦然).
@@ -72,10 +101,12 @@ std::string wideName = "L\"" + bareName + "\"";
                 fdispid = 9000 + (int32_t)fi;
             }
             std::string fInvoke = "vb6_disp_" + clsId + "_" + cIdent(fname);
+            // 账 #305 §B219: 字段那一腿的桥接把**整槽 vb6_VARIANT** 交给 _field_let_(它自己按
+            // 字段档装箱)，认档那一问早就住在 cgen_com.cpp 的发码里 ⇒ 表行交 NULL, 0 = 服务端不问。
             entry.emitLine("{ L\"" + fname + "\", " + std::to_string(fdispid) +
-                           ", 2, " + fInvoke + "_get_invoke },");
+                           ", 2, " + fInvoke + "_get_invoke, NULL, 0 },");
             entry.emitLine("{ L\"" + fname + "\", " + std::to_string(fdispid) +
-                           ", 4, " + fInvoke + "_let_invoke },");
+                           ", 4, " + fInvoke + "_let_invoke, NULL, 0 },");
         }
 
         entry.dedent();

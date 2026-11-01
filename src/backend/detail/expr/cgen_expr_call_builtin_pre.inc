@@ -53,7 +53,7 @@
                     "vb6_UCase","vb6_LCase","vb6_Trim","vb6_LTrim","vb6_RTrim","vb6_Chr",
                     "vb6_Str","vb6_CStr","vb6_Format","vb6_Replace","vb6_Space","vb6_String",
                     "vb6_Command","vb6_CurDir","vb6_Environ","vb6_Dir",
-                    "vb6_IIfBSTR","vb6_InputBox","vb6_App_Path","vb6_App_EXEName","vb6_App_HelpFile",
+                    "vb6_IIfBSTR","vb6_InputBox","vb6_App_Path","vb6_App_EXEName","vb6_App_Title","vb6_App_HelpFile",
                     "vb6_Console_ReadLine","vb6_Console_ReadKey",  // Fix 161: Console 输入返回 BSTR
                     "vb6_GetControlText","vb6_GetControlCaption",nullptr};
                 for (int i = 0; bstrPfx[i]; i++)

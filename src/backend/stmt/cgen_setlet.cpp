@@ -259,8 +259,16 @@ void CCodeGen::visit(LetStmt& node) {
         } else {
             c_.emitLine(target + " = " + value + ";  /* Let */");
         }
-    } else if (target.find("VB6_SA_AT(vb6_VARIANT,") != std::string::npos) {
-        c_.emitLine(target + " = vb6_VariantFromValue(" + value + ");  /* Let */");
+    } else if ([&] {
+                   // 账 #305 §B164 形⑤ 站③ (第一百八十四刀): 目标是不是 Variant 槽只问这位主人
+                   // (与 AssignmentStmt 同一枚); 命中就交给同一枚 emitVariantSlotAssign ——
+                   // 装箱 / 所有权 / 清旧值三件都在那一处, LetStmt 不再自己拼形状。
+                   bool letUdtField = false;
+                   if (!variantSlotTargetOf(node.target.get(), target, letUdtField)) return false;
+                   emitVariantSlotAssign(target, node.value.get(), value, letUdtField);
+                   return true;
+               }()) {
+        return;
     } else {
         // Fix 038b-6/045: 具体类型目标 + Variant 值 → 自动提取 (同 AssignmentStmt 路径)
         // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.

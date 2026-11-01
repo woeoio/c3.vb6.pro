@@ -250,6 +250,12 @@ struct Symbol {
     // --- P6.5 事件相关 ---
     bool isWithEvents = false;                         // 变量是否声明为WithEvents
     std::vector<std::string> eventNames;               // 类声明的事件名列表(仅Class)
+    // 账 #305 第二百五十六刀: 与 eventNames **同序同长** —— 每一位事件形参要不要按地址递。
+    // 答案由 src/common/event_param_abi.hpp 那一位主人在这里算一次 (声明里显式 ByRef 且不是
+    // 数组形参 ⇒ 是出参)。消费方 = 回调 typedef / 窗体 thunk / 模块级包装器的声明与实现 /
+    // 处理器形参的 ABI / RaiseEvent 实参位 —— 六处必须同一个答案, 否则 cast 会把它藏成
+    // 运行期的野指针 (typedef 是 T*、包装器却是 T)。
+    std::vector<std::vector<char>> eventParamByAddr;
     std::string withEventsSourceClass;                 // WithEvents变量的源类名
 
     // --- COM前期绑定相关 (P6.3, SymbolKind::ComClass/ComInterface) ---
@@ -261,6 +267,10 @@ struct Symbol {
     int32_t comVtblBase = 7;         // vtable起始偏移 (IDispatch=7, IUnknown=3)
     int32_t comDispid = 0;           // M29: 方法的TypeLib DISPID (由driver在TypeLib阶段回写, 供cgen生成dll_entry.c方法表用, 确保两边dispid一致; 0=未分配)
     bool comIsDual = false;           // 双重接口 (dispinterface + vtable)
+    // typelib appobject (TYPEFLAG_FAPPOBJECT): 裸类名 = 进程级全局单例 (Codejock
+    // *GlobalSettings 家族、VB6 GlobalMultiUse)。cgen 见位即发 vb6_ComGlobalInstance
+    // (首次 CoCreate, 之后复用), 成员访问沿既有 IDispatch 晚绑定链走。
+    bool comIsAppObject = false;
     // P13.23: COM event source interface (for WithEvents on external COM objects)
     std::string comSourceIfaceName;    // 默认事件源接口名
     std::string comSourceIfaceIid;     // 事件源接口IID

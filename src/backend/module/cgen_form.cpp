@@ -1,5 +1,7 @@
 #include "backend/cgen.hpp"
 #include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
+#include "common/event_param_abi.hpp"
+#include "common/invisible_at_runtime.hpp"   // 账 #305 258: InvisibleAtRuntime 的唯一判据  // 账 #305 第二百五十六刀: 事件形参按不按地址的单一主人
 #include <cstdio>
 #include <cstdlib>
 #include "project/frx_reader.hpp"
@@ -214,6 +216,7 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
             }
             knownFormControls_[ctrlLower] = ctrl.controlType;
             knownFormControlOriginalNames_[ctrlLower] = ctrl.controlName;
+            knownFormControlTypeNames_[ctrlLower] = ctrl.controlTypeName;
         }
         for (const auto& child : ctrl.children) registerCtrlRec(child);
     };
@@ -426,6 +429,14 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         auto smIt = frmDesc.formControl.properties.find("ScaleMode");
         if (smIt != frmDesc.formControl.properties.end()) ucScaleMode = (int)smIt->second.intValue;
 
+        // 账 #492: `.ctl` 的 `BackStyle = 0 'Transparent'` —— 宿主窗口据此在离屏
+        // DIB 里合成下层 (兄弟卡片) 再画 UC, 见 vb6_UserControlDesc.transparent。
+        // 只在设计期**显式**写过 0 时置 1; VB6 缺省是 1 (Opaque), 没写就保持 0。
+        int ucTransparent = 0;
+        auto bksIt = frmDesc.formControl.properties.find("BackStyle");
+        if (bksIt != frmDesc.formControl.properties.end() && (int)bksIt->second.intValue == 0)
+            ucTransparent = 1;
+
         // czUI fix: 鼠标事件封装 — 宿主 wndproc 收到鼠标消息后经由 desc 钩子
         // 调用 UserControl_MouseDown/Up/Move/DblClick (此前无转发, 控件无法交互)。
         // 注意生成的处理器的 Integer/Single 形参按指针发射。
@@ -501,7 +512,9 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
                     + ",  /* Fix <vbeclipse> rev22: 子控件 Resize 事件 */");
         // 账 #226: UC 自身 Click 的末槽 —— 顺序必须与 vb6_UserControlDesc 逐字一致
         // (布局式初始化, 错位一个指针宽就是运行期 AV, 见结构体 rev22 那段教训)。
-        c_.emitLine("    vb6_" + ctl + "_ucHostClick  /* 账 #226: UserControl_Click */");
+        c_.emitLine("    vb6_" + ctl + "_ucHostClick,  /* 账 #226: UserControl_Click */");
+        c_.emitLine("    " + std::to_string(ucTransparent)
+                    + "  /* 账 #492: .ctl BackStyle=0 'Transparent' ⇒ 宿主合成下层 */");
         c_.emitLine("};");
         c_.emitLine("void vb6_" + ctl + "_RegisterHost(void) { vb6_UC_Register(&vb6_" + ctl + "_ucHostDesc); }");
         // Fix <vbeclipse> rev14: 让每个 .ctl 在**本模块的 init 函数**里自注册宿主描述。

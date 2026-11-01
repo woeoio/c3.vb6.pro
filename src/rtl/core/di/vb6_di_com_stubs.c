@@ -3,7 +3,7 @@
 // Win32 forwarding stubs for VB6 `Declare ... Lib "x"` (Fix 076 scheme: C3 emits
 // `extern <ret> __stdcall vb6_di_<alias>(...)` and the RTL implements it).
 //
-// Family: com   (libs: ole32, oleaut32, advapi32, comdlg32)   stubs: 189
+// Family: com   (libs: ole32, oleaut32, advapi32, comdlg32)   stubs: 273
 //
 // Each stub reproduces C3's own generated prototype verbatim (that is the ABI the
 // caller uses: ByVal Long is widened to intptr_t, ByVal Single stays float, ByRef
@@ -12,7 +12,7 @@
 // types while preserving the register/memory passing class of every argument.
 //
 // generated from: a C3 compile session (pass -SessionDir to regenerate)
-// date: 2026-10-11 17:56
+// date: 2026-10-28 16:45
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.
@@ -56,148 +56,8 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #pragma comment(lib, "comdlg32.lib")
 
 /* CoTaskMemFree */
-void __stdcall vb6_di_CoTaskMemFree(intptr_t hMem) {
-    ((void (WINAPI *)(intptr_t))CoTaskMemFree)(hMem);
-}
-
-/* CoTaskMemAlloc */
-intptr_t __stdcall vb6_di_CoTaskMemAlloc(intptr_t cBytes) {
-    return ((intptr_t (WINAPI *)(intptr_t))CoTaskMemAlloc)(cBytes);
-}
-
-/* SysReAllocString */
-intptr_t __stdcall vb6_di_SysReAllocString(intptr_t pbString, intptr_t pszStrPtr) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SysReAllocString)(pbString, pszStrPtr);
-}
-
-/* VarDecFromI8 */
-intptr_t __stdcall vb6_di_VarDecFromI8(double i64In, void* pDecOut) {
-    return ((intptr_t (WINAPI *)(double, void*))VarDecFromI8)(i64In, pDecOut);
-}
-
-/* OleTranslateColor */
-intptr_t __stdcall vb6_di_OleTranslateColor(intptr_t Color, intptr_t hPal, int32_t* RGBResult) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, int32_t*))OleTranslateColor)(Color, hPal, RGBResult);
-}
-
-/* OleLoadPicture */
-intptr_t __stdcall vb6_di_OleLoadPicture(void* pStream, intptr_t lSize, intptr_t fRunmode, void* riid, void** pIPicture) {
-    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, void*, void**))OleLoadPicture)(pStream, lSize, fRunmode, riid, pIPicture);
-}
-
-/* OleLoadPicturePath */
-intptr_t __stdcall vb6_di_OleLoadPicturePath(intptr_t lpszPath, intptr_t pUnkCaller, intptr_t dwReserved, intptr_t ClrReserved, void* riid, void** pIPicture) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, void**))OleLoadPicturePath)(lpszPath, pUnkCaller, dwReserved, ClrReserved, riid, pIPicture);
-}
-
-/* CreateStreamOnHGlobal */
-intptr_t __stdcall vb6_di_CreateStreamOnHGlobal(intptr_t hGlobal, intptr_t fDeleteOnRelease, void** pStream) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void**))CreateStreamOnHGlobal)(hGlobal, fDeleteOnRelease, pStream);
-}
-
-/* CommDlgExtendedError */
-intptr_t __stdcall vb6_di_CommDlgExtendedError() {
-    return ((intptr_t (WINAPI *)(void))CommDlgExtendedError)();
-}
-
-/* GetOpenFileNameW */
-intptr_t __stdcall vb6_di_GetOpenFileNameW(void* lpOpenFileName) {
-    return ((intptr_t (WINAPI *)(void*))GetOpenFileNameW)(lpOpenFileName);
-}
-
-/* GetSaveFileNameW */
-intptr_t __stdcall vb6_di_GetSaveFileNameW(void* lpOpenFileName) {
-    return ((intptr_t (WINAPI *)(void*))GetSaveFileNameW)(lpOpenFileName);
-}
-
-/* ChooseColorW */
-intptr_t __stdcall vb6_di_ChooseColorW(void* lpChooseColor) {
-    return ((intptr_t (WINAPI *)(void*))ChooseColorW)(lpChooseColor);
-}
-
-/* ChooseFontW */
-intptr_t __stdcall vb6_di_ChooseFontW(void* lpChooseFont) {
-    return ((intptr_t (WINAPI *)(void*))ChooseFontW)(lpChooseFont);
-}
-
-/* PrintDlgW */
-intptr_t __stdcall vb6_di_PrintDlgW(void* lpPrintDlg) {
-    return ((intptr_t (WINAPI *)(void*))PrintDlgW)(lpPrintDlg);
-}
-
-/* PrintDlgExW */
-intptr_t __stdcall vb6_di_PrintDlgExW(void* lpPrintDlgEx) {
-    return ((intptr_t (WINAPI *)(void*))PrintDlgExW)(lpPrintDlgEx);
-}
-
-/* PageSetupDlgW */
-intptr_t __stdcall vb6_di_PageSetupDlgW(void* lpPageSetupDlg) {
-    return ((intptr_t (WINAPI *)(void*))PageSetupDlgW)(lpPageSetupDlg);
-}
-
-/* FindTextW */
-intptr_t __stdcall vb6_di_FindTextW(void* lpFindReplace) {
-    return ((intptr_t (WINAPI *)(void*))FindTextW)(lpFindReplace);
-}
-
-/* ReplaceTextW */
-intptr_t __stdcall vb6_di_ReplaceTextW(void* lpFindReplace) {
-    return ((intptr_t (WINAPI *)(void*))ReplaceTextW)(lpFindReplace);
-}
-
-/* RevokeDragDrop */
-intptr_t __stdcall vb6_di_RevokeDragDrop(intptr_t hWnd) {
-    return ((intptr_t (WINAPI *)(intptr_t))RevokeDragDrop)(hWnd);
-}
-
-/* OleCreatePropertyFrame */
-intptr_t __stdcall vb6_di_OleCreatePropertyFrame(intptr_t hWndOwner, intptr_t X, intptr_t Y, intptr_t lpszCaption, intptr_t cObjects, void** pUnk, intptr_t cPages, void* pPageCLSID, intptr_t LCID, intptr_t dwReserved, intptr_t pvReserved) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, void**, intptr_t, void*, intptr_t, intptr_t, intptr_t))OleCreatePropertyFrame)(hWndOwner, X, Y, lpszCaption, cObjects, pUnk, cPages, pPageCLSID, LCID, dwReserved, pvReserved);
-}
-
-/* CLSIDFromString */
-intptr_t __stdcall vb6_di_CLSIDFromString(intptr_t lpszProgID, void* pCLSID) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*))CLSIDFromString)(lpszProgID, pCLSID);
-}
-
-/* CoCreateInstance */
-intptr_t __stdcall vb6_di_CoCreateInstance(void* rclsid, intptr_t pUnkOuter, intptr_t dwClsContext, void* riid, void** ppv) {
-    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, void*, void**))CoCreateInstance)(rclsid, pUnkOuter, dwClsContext, riid, ppv);
-}
-
-/* StgCreateDocfile */
-intptr_t __stdcall vb6_di_StgCreateDocfile(intptr_t pwcsName, intptr_t grfMode, intptr_t Reserved, void** ppStgOpen) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void**))StgCreateDocfile)(pwcsName, grfMode, Reserved, ppStgOpen);
-}
-
-/* OleSetContainedObject */
-intptr_t __stdcall vb6_di_OleSetContainedObject(void* pUnknown, intptr_t fContained) {
-    return ((intptr_t (WINAPI *)(void*, intptr_t))OleSetContainedObject)(pUnknown, fContained);
-}
-
-/* OleCreateFromFile */
-intptr_t __stdcall vb6_di_OleCreateFromFile(void* pCLSID, intptr_t lpszFileName, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
-    return ((intptr_t (WINAPI *)(void*, intptr_t, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateFromFile)(pCLSID, lpszFileName, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
-}
-
-/* OleCreateLinkToFile */
-intptr_t __stdcall vb6_di_OleCreateLinkToFile(intptr_t lpszFileName, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateLinkToFile)(lpszFileName, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
-}
-
-/* OleCreateStaticFromData */
-intptr_t __stdcall vb6_di_OleCreateStaticFromData(void* pSrcDataObject, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
-    return ((intptr_t (WINAPI *)(void*, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateStaticFromData)(pSrcDataObject, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
-}
-
-/* SysAllocString */
-intptr_t __stdcall vb6_di_SysAllocString(intptr_t lpString) {
-    return ((intptr_t (WINAPI *)(intptr_t))SysAllocString)(lpString);
-}
-
-/* VariantCopy */
-intptr_t __stdcall vb6_di_VariantCopy(void* pvargDest, void* pvargSrc) {
-    return ((intptr_t (WINAPI *)(void*, void*))VariantCopy)(pvargDest, pvargSrc);
+void __stdcall vb6_di_CoTaskMemFree(intptr_t pv) {
+    ((void (WINAPI *)(intptr_t))CoTaskMemFree)(pv);
 }
 
 /* === 恢复 dev@69845a9 有、本批重生成 di 桩时丢掉的定义 ===
@@ -213,9 +73,37 @@ intptr_t __stdcall vb6_di_VariantCopy(void* pvargDest, void* pvargSrc) {
 intptr_t __stdcall vb6_di_ChooseColorA(void* pChoosecolor) {
     return ((intptr_t (WINAPI *)(void*))ChooseColorA)(pChoosecolor);
 }
+/* ChooseColorW */
+intptr_t __stdcall vb6_di_ChooseColorW(void* lpChooseColor) {
+    return ((intptr_t (WINAPI *)(void*))ChooseColorW)(lpChooseColor);
+}
 /* ChooseFontA — Task #44 SSTabEx cDlg.cls:33 (comdlg32 字体对话框) */
 intptr_t __stdcall vb6_di_ChooseFontA(void* pChoosefont) {
     return ((intptr_t (WINAPI *)(void*))ChooseFontA)(pChoosefont);
+}
+/* ChooseFontW */
+intptr_t __stdcall vb6_di_ChooseFontW(void* lpChooseFont) {
+    return ((intptr_t (WINAPI *)(void*))ChooseFontW)(lpChooseFont);
+}
+/* CLSIDFromString */
+intptr_t __stdcall vb6_di_CLSIDFromString(intptr_t lpszProgID, void* pCLSID) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*))CLSIDFromString)(lpszProgID, pCLSID);
+}
+/* CoCreateInstance */
+intptr_t __stdcall vb6_di_CoCreateInstance(void* rclsid, intptr_t pUnkOuter, intptr_t dwClsContext, void* riid, void** ppv) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, void*, void**))CoCreateInstance)(rclsid, pUnkOuter, dwClsContext, riid, ppv);
+}
+/* CommDlgExtendedError */
+intptr_t __stdcall vb6_di_CommDlgExtendedError() {
+    return ((intptr_t (WINAPI *)(void))CommDlgExtendedError)();
+}
+/* CoTaskMemAlloc */
+intptr_t __stdcall vb6_di_CoTaskMemAlloc(intptr_t cBytes) {
+    return ((intptr_t (WINAPI *)(intptr_t))CoTaskMemAlloc)(cBytes);
+}
+/* CreateStreamOnHGlobal */
+intptr_t __stdcall vb6_di_CreateStreamOnHGlobal(intptr_t hGlobal, intptr_t fDeleteOnRelease, void** pStream) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void**))CreateStreamOnHGlobal)(hGlobal, fDeleteOnRelease, pStream);
 }
 /* CryptAcquireContextA */
 intptr_t __stdcall vb6_di_CryptAcquireContextA(int32_t* phProv, BSTR pszContainer, BSTR pszProvider, intptr_t dwProvType, intptr_t dwFlags) {
@@ -281,6 +169,10 @@ intptr_t __stdcall vb6_di_CryptSetHashParam(intptr_t hHash, intptr_t dwParam, vo
 intptr_t __stdcall vb6_di_CryptSignHashW(intptr_t hHash, intptr_t dwKeySpec, intptr_t szDescription, intptr_t dwFlags, void* pbSignature, int32_t* pdwSigLen) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, int32_t*))CryptSignHashW)(hHash, dwKeySpec, szDescription, dwFlags, pbSignature, pdwSigLen);
 }
+/* FindTextW */
+intptr_t __stdcall vb6_di_FindTextW(void* lpFindReplace) {
+    return ((intptr_t (WINAPI *)(void*))FindTextW)(lpFindReplace);
+}
 /* GetFileTitleA */
 intptr_t __stdcall vb6_di_GetFileTitleA(BSTR szFile, BSTR szTitle, intptr_t cbBuf) {
     return ((intptr_t (WINAPI *)(BSTR, BSTR, intptr_t))GetFileTitleA)(szFile, szTitle, cbBuf);
@@ -289,13 +181,53 @@ intptr_t __stdcall vb6_di_GetFileTitleA(BSTR szFile, BSTR szTitle, intptr_t cbBu
 intptr_t __stdcall vb6_di_GetOpenFileNameA(void* file) {
     return ((intptr_t (WINAPI *)(void*))GetOpenFileNameA)(file);
 }
+/* GetOpenFileNameW */
+intptr_t __stdcall vb6_di_GetOpenFileNameW(void* lpOpenFileName) {
+    return ((intptr_t (WINAPI *)(void*))GetOpenFileNameW)(lpOpenFileName);
+}
 /* GetSaveFileNameA — Task #44 SSTabEx cDlg.cls:42 */
 intptr_t __stdcall vb6_di_GetSaveFileNameA(void* pOpenfilename) {
     return ((intptr_t (WINAPI *)(void*))GetSaveFileNameA)(pOpenfilename);
 }
+/* GetSaveFileNameW */
+intptr_t __stdcall vb6_di_GetSaveFileNameW(void* lpOpenFileName) {
+    return ((intptr_t (WINAPI *)(void*))GetSaveFileNameW)(lpOpenFileName);
+}
 /* GetUserNameA */
 intptr_t __stdcall vb6_di_GetUserNameA(BSTR lpBuffer, int32_t* nSize) {
     return ((intptr_t (WINAPI *)(BSTR, int32_t*))GetUserNameA)(lpBuffer, nSize);
+}
+/* OleCreateFromFile */
+intptr_t __stdcall vb6_di_OleCreateFromFile(void* pCLSID, intptr_t lpszFileName, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateFromFile)(pCLSID, lpszFileName, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
+}
+/* OleCreateLinkToFile */
+intptr_t __stdcall vb6_di_OleCreateLinkToFile(intptr_t lpszFileName, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateLinkToFile)(lpszFileName, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
+}
+/* OleCreatePropertyFrame */
+intptr_t __stdcall vb6_di_OleCreatePropertyFrame(intptr_t hWndOwner, intptr_t X, intptr_t Y, intptr_t lpszCaption, intptr_t cObjects, void** pUnk, intptr_t cPages, void* pPageCLSID, intptr_t LCID, intptr_t dwReserved, intptr_t pvReserved) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, void**, intptr_t, void*, intptr_t, intptr_t, intptr_t))OleCreatePropertyFrame)(hWndOwner, X, Y, lpszCaption, cObjects, pUnk, cPages, pPageCLSID, LCID, dwReserved, pvReserved);
+}
+/* OleCreateStaticFromData */
+intptr_t __stdcall vb6_di_OleCreateStaticFromData(void* pSrcDataObject, void* riid, intptr_t RenderOpt, intptr_t lpFormatEtc, void* pClientSite, void* pStg, void** ppvObj) {
+    return ((intptr_t (WINAPI *)(void*, void*, intptr_t, intptr_t, void*, void*, void**))OleCreateStaticFromData)(pSrcDataObject, riid, RenderOpt, lpFormatEtc, pClientSite, pStg, ppvObj);
+}
+/* OleLoadPicture */
+intptr_t __stdcall vb6_di_OleLoadPicture(void* pStream, intptr_t lSize, intptr_t fRunmode, void* riid, void** pIPicture) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, void*, void**))OleLoadPicture)(pStream, lSize, fRunmode, riid, pIPicture);
+}
+/* OleLoadPicturePath */
+intptr_t __stdcall vb6_di_OleLoadPicturePath(intptr_t lpszPath, intptr_t pUnkCaller, intptr_t dwReserved, intptr_t ClrReserved, void* riid, void** pIPicture) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, void**))OleLoadPicturePath)(lpszPath, pUnkCaller, dwReserved, ClrReserved, riid, pIPicture);
+}
+/* OleSetContainedObject */
+intptr_t __stdcall vb6_di_OleSetContainedObject(void* pUnknown, intptr_t fContained) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t))OleSetContainedObject)(pUnknown, fContained);
+}
+/* OleTranslateColor */
+intptr_t __stdcall vb6_di_OleTranslateColor(intptr_t Color, intptr_t hPal, int32_t* RGBResult) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, int32_t*))OleTranslateColor)(Color, hPal, RGBResult);
 }
 /* PageSetupDlgA — dbgdlg/cDlg.cls:196 (`Lib "COMDLG32" Alias "PageSetupDlgA"`, As Boolean
  * ⇒ int16_t; 唯一形参是 VB6 UDT 指针 T_PAGESETUPDLG*, 按生成器既定规则折成 void*)。
@@ -308,9 +240,21 @@ intptr_t __stdcall vb6_di_GetUserNameA(BSTR lpBuffer, int32_t* nSize) {
 int16_t __stdcall vb6_di_PageSetupDlgA(void* lppage) {
     return ((int16_t (WINAPI *)(void*))PageSetupDlgA)(lppage);
 }
+/* PageSetupDlgW */
+intptr_t __stdcall vb6_di_PageSetupDlgW(void* lpPageSetupDlg) {
+    return ((intptr_t (WINAPI *)(void*))PageSetupDlgW)(lpPageSetupDlg);
+}
 /* PrintDlgA — Task #44 SSTabEx cDlg.cls:45 */
 intptr_t __stdcall vb6_di_PrintDlgA(void* pPrintdlg) {
     return ((intptr_t (WINAPI *)(void*))PrintDlgA)(pPrintdlg);
+}
+/* PrintDlgExW */
+intptr_t __stdcall vb6_di_PrintDlgExW(void* lpPrintDlgEx) {
+    return ((intptr_t (WINAPI *)(void*))PrintDlgExW)(lpPrintDlgEx);
+}
+/* PrintDlgW */
+intptr_t __stdcall vb6_di_PrintDlgW(void* lpPrintDlg) {
+    return ((intptr_t (WINAPI *)(void*))PrintDlgW)(lpPrintDlg);
 }
 /* RegCloseKey */
 intptr_t __stdcall vb6_di_RegCloseKey(intptr_t HKey) {
@@ -324,9 +268,29 @@ intptr_t __stdcall vb6_di_RegOpenKeyExA(intptr_t HKey, BSTR lpSubKey, intptr_t u
 intptr_t __stdcall vb6_di_RegQueryValueExA(intptr_t HKey, BSTR lpValueName, intptr_t lpReserved, int32_t* lpType, BSTR lpData, int32_t* lpcbData) {
     return ((intptr_t (WINAPI *)(intptr_t, BSTR, intptr_t, int32_t*, BSTR, int32_t*))RegQueryValueExA)(HKey, lpValueName, lpReserved, lpType, lpData, lpcbData);
 }
+/* ReplaceTextW */
+intptr_t __stdcall vb6_di_ReplaceTextW(void* lpFindReplace) {
+    return ((intptr_t (WINAPI *)(void*))ReplaceTextW)(lpFindReplace);
+}
+/* RevokeDragDrop */
+intptr_t __stdcall vb6_di_RevokeDragDrop(intptr_t hWnd) {
+    return ((intptr_t (WINAPI *)(intptr_t))RevokeDragDrop)(hWnd);
+}
+/* StgCreateDocfile */
+intptr_t __stdcall vb6_di_StgCreateDocfile(intptr_t pwcsName, intptr_t grfMode, intptr_t Reserved, void** ppStgOpen) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void**))StgCreateDocfile)(pwcsName, grfMode, Reserved, ppStgOpen);
+}
+/* SysAllocString */
+intptr_t __stdcall vb6_di_SysAllocString(intptr_t lpString) {
+    return ((intptr_t (WINAPI *)(intptr_t))SysAllocString)(lpString);
+}
 /* SysFreeString */
 intptr_t __stdcall vb6_di_SysFreeString(intptr_t lpString) {
     return ((intptr_t (WINAPI *)(intptr_t))SysFreeString)(lpString);
+}
+/* SysReAllocString */
+intptr_t __stdcall vb6_di_SysReAllocString(intptr_t pbString, intptr_t pszStrPtr) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SysReAllocString)(pbString, pszStrPtr);
 }
 /* SystemTimeToVariantTime */
 intptr_t __stdcall vb6_di_SystemTimeToVariantTime(void* lpSystemTime, double* pvTime) {
@@ -335,6 +299,10 @@ intptr_t __stdcall vb6_di_SystemTimeToVariantTime(void* lpSystemTime, double* pv
 /* VarCmp */
 intptr_t __stdcall vb6_di_VarCmp(void* pvargLeft, void* pvargRight, intptr_t LCID, intptr_t dwFlags) {
     return ((intptr_t (WINAPI *)(void*, void*, intptr_t, intptr_t))VarCmp)(pvargLeft, pvargRight, LCID, dwFlags);
+}
+/* VarDecFromI8 */
+intptr_t __stdcall vb6_di_VarDecFromI8(double i64In, void* pDecOut) {
+    return ((intptr_t (WINAPI *)(double, void*))VarDecFromI8)(i64In, pDecOut);
 }
 /* VarI8FromDec */
 intptr_t __stdcall vb6_di_VarI8FromDec(void* pDecIn, double* i64Out) {
@@ -351,6 +319,10 @@ intptr_t __stdcall vb6_di_VarI8FromStr(intptr_t lpStrIn, intptr_t LCID, intptr_t
 /* VariantClear */
 intptr_t __stdcall vb6_di_VariantClear(void* pvarg) {
     return ((intptr_t (WINAPI *)(void*))VariantClear)(pvarg);
+}
+/* VariantCopy */
+intptr_t __stdcall vb6_di_VariantCopy(void* pvargDest, void* pvargSrc) {
+    return ((intptr_t (WINAPI *)(void*, void*))VariantCopy)(pvargDest, pvargSrc);
 }
 /* VariantInit */
 void __stdcall vb6_di_VariantInit(void* pvarg) {

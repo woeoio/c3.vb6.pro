@@ -36,6 +36,14 @@ ExprPtr Parser::parseExpression(int minBp) {
         return left;
     }
 
+    return parseExpressionRest(std::move(left), minBp);
+}
+
+ExprPtr Parser::parseExpressionRest(ExprPtr left, int minBp) {
+    if (!left) {
+        return left;
+    }
+
     // Step 2: 循环处理中缀/后缀运算符
     while (true) {
         auto bp = getBindingPower(cur_.kind);

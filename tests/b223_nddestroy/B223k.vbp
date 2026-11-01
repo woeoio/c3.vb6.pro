@@ -1,0 +1,8 @@
+Type=DLL
+Class=NdLongCls; NdLongCls.cls; {22223333-4444-5555-6666-77778888B223}
+Class=NdStrCls; NdStrCls.cls; {22223333-4444-5555-6666-77778888B224}
+Class=OneDCls; OneDCls.cls; {22223333-4444-5555-6666-77778888B225}
+Module=DllBlocks; DllBlocks.bas
+Startup=""
+Command32=""
+Name="B223k"

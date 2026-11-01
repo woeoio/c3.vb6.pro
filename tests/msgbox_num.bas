@@ -26,4 +26,24 @@ Public Sub Main()
     MsgBox d                  ' ⑤ 浮点 (Double)            → vb6_CStrDbl
     MsgBox b                  ' ⑥ 布尔                     → vb6_CStrBool
     MsgBox s                  ' ⑦ 字符串 (对照)            → 原样, 不得被误包
+
+    ' ---- 账 #490 §B178: MsgBox 的 VB6 全签名是五参 (prompt, buttons, title, helpfile, context),
+    '      RTL 原型此前只有三参 ⇒ 四/五参形 (语料 10 处真调用) 是**静默多递** (本机 cl 不报),
+    '      且第 4/5 位没有形参类型 ⇒ Variant 直接进 BSTR 槽。原型扩到五参之后, 缺位要补齐。
+    Dim sty As Long
+    Dim ttl As String
+    Dim hlp As String
+    Dim ctx As Long
+    Dim v As Variant
+    sty = 0
+    ttl = "t"
+    hlp = "h"
+    ctx = 100
+    v = "hv"
+
+    MsgBox s, sty                   ' (8) 两参  -> 补 NULL, NULL, 0
+    MsgBox s, sty, ttl              ' (9) 三参  -> 补 NULL, 0
+    MsgBox s, sty, ttl, hlp         ' (10) 四参 -> 补 0
+    MsgBox s, sty, ttl, hlp, ctx    ' (11) 五参 -> 原样 (原型收满)
+    MsgBox s, sty, ttl, v, ctx      ' (12) helpfile 位是 Variant -> vb6_VariantToString
 End Sub

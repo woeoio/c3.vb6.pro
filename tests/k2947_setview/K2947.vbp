@@ -1,0 +1,7 @@
+Type=Exe
+Name="K2947App"
+Module=mdl2947; mdl2947.bas
+Class=IK2947; IK2947.cls
+Class=H2947; H2947.cls
+Class=O2947; O2947.cls
+Startup="Sub Main"

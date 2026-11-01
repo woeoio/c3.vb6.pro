@@ -1,4 +1,6 @@
 #include "backend/cgen.hpp"
+#include "common/event_param_abi.hpp"
+#include "common/invisible_at_runtime.hpp"   // 账 #305 258: InvisibleAtRuntime 的唯一判据     // 账 #305 256: 事件形参按不按地址的唯一主人（两处 P6.5 包装站）
 #include "driver/detail/phase_timing.hpp"   // ai/030 续: C3_TIMING=1 的相位计时
 #include <algorithm>
 #include <cstdio>

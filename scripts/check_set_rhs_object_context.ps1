@@ -8,8 +8,9 @@
 # 「作为对象交出去发什么 C」只有 CCodeGen::ctrlObjectRefExpr 一处回答。
 #
 # 规则 (改坏了会红, 不是装饰):
-#   S1  emitSetObjectRhs( 在 src/backend 里恰好 7 处 = 声明 + 定义 + **五个** Set 右值发码点
-#       (MyBase 属性写 / 控件属性原生 setter / 跨类 prop_set_ / COM SetRef / 主路)。
+#   S1  emitSetObjectRhs( 在 src/backend 里恰好 8 处 = 声明 + 定义 + **六个** Set 右值发码点
+#       (MyBase 属性写 / `Set x = New …` 求值副作用 / 控件属性原生 setter / 跨类 prop_set_ /
+#        COM SetRef / 主路)。
 #       少一处 = 又有一个 Set 出口没问它 (本账的形状)；多一处 = 有人在抄第二份
 #   S2  cgen_setlet_set_prop.inc 里 emitExpr(*node.value) 必须 0 处 —— 那正是"绕过唯一出口"的形
 #   S3  同一文件里 value.find("vb6_hwnd_") 必须 0 处 —— P16 那截事后手术不许回来
@@ -45,7 +46,7 @@ function Count-Pat([string]$pattern) {
 
 # ---- S1: 唯一出口的站点计数 ----
 $s1 = Count-Pat 'emitSetObjectRhs\s*\('
-if ($s1 -ne 7) { $bad += ("S1 emitSetObjectRhs sites = " + $s1 + " (need exactly 7: decl + def + 5 Set RHS sites)") }
+if ($s1 -ne 8) { $bad += ("S1 emitSetObjectRhs sites = " + $s1 + " (need exactly 8: decl + def + 6 Set RHS sites)") }
 
 # ---- S2: Set 的右值不许再绕过唯一出口 ----
 $setPropFile = Join-Path $root "src\backend\detail\stmt\cgen_setlet_set_prop.inc"
@@ -94,4 +95,4 @@ if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS set_rhs_object_context (S1 7 sites, S2 no bypass, S3 no P16 surgery, S4 3 hwnd-authority sites, S5 suppress branch asks it, S6 gate is identifier-only)"
+Write-Host "PASS set_rhs_object_context (S1 8 sites, S2 no bypass, S3 no P16 surgery, S4 3 hwnd-authority sites, S5 suppress branch asks it, S6 gate is identifier-only)"

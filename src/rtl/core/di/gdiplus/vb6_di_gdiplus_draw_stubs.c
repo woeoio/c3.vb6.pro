@@ -2,13 +2,13 @@
 //
 // Win32 forwarding stubs for VB6 `Declare ... Lib "gdiplus"` (Fix 076 scheme).
 //
-// Family: gdiplus/draw   (routed by object domain, see Get-GdiplusSub)   stubs: 170
+// Family: gdiplus/draw   (routed by object domain, see Get-GdiplusSub)   stubs: 200
 //
 // Each stub reproduces C3's own generated prototype verbatim and forwards 1:1 to
 // the real flat API through a function-pointer cast (gdiplus.h is C++-only, so the
 // flat API is resolved by name at first use via the loader below).
 //
-// date: 2026-09-20 07:16
+// date: 2026-10-28 16:45
 
 #include <windows.h>
 #include <stdint.h>
@@ -21,16 +21,16 @@ static void* vb6_di_gdiplus_proc(const char* name) {
 }
 
 /* GdiplusStartup */
-intptr_t __stdcall vb6_di_GdiplusStartup(int32_t* Token, void* inputBuf, intptr_t outputBuf) {
+intptr_t __stdcall vb6_di_GdiplusStartup(int32_t* token, void* inputbuf, intptr_t outputbuf) {
     intptr_t (WINAPI *fn)(int32_t*, void*, intptr_t) = (intptr_t (WINAPI *)(int32_t*, void*, intptr_t))vb6_di_gdiplus_proc("GdiplusStartup");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(Token, inputBuf, outputBuf);
+    return fn(token, inputbuf, outputbuf);
 }
 
 /* GdiplusShutdown */
-void __stdcall vb6_di_GdiplusShutdown(intptr_t Token) {
+void __stdcall vb6_di_GdiplusShutdown(intptr_t token) {
     void (WINAPI *fn)(intptr_t) = (void (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdiplusShutdown");
-    if (fn != NULL) { fn(Token); }
+    if (fn != NULL) { fn(token); }
 }
 
 /* GdipCreateFromHDC */
@@ -39,42 +39,12 @@ intptr_t __stdcall vb6_di_GdipCreateFromHDC(intptr_t hdc, int32_t* hGraphics) {
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(hdc, hGraphics);
 }
-
 /* GdipDeleteGraphics */
 intptr_t __stdcall vb6_di_GdipDeleteGraphics(intptr_t hGraphics) {
     intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipDeleteGraphics");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(hGraphics);
 }
-
-/* GdipSetSmoothingMode */
-intptr_t __stdcall vb6_di_GdipSetSmoothingMode(intptr_t graphics, intptr_t SmoothingMd) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetSmoothingMode");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(graphics, SmoothingMd);
-}
-
-/* GdipResetClip */
-intptr_t __stdcall vb6_di_GdipResetClip(intptr_t mGraphics) {
-    intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipResetClip");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(mGraphics);
-}
-
-/* GdipSetClipPath */
-intptr_t __stdcall vb6_di_GdipSetClipPath(intptr_t mGraphics, intptr_t mpath, intptr_t mCombineMode) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetClipPath");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(mGraphics, mpath, mCombineMode);
-}
-
-/* GdipSetClipHrgn */
-intptr_t __stdcall vb6_di_GdipSetClipHrgn(intptr_t mGraphics, intptr_t mHRgn, intptr_t mCombineMode) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetClipHrgn");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(mGraphics, mHRgn, mCombineMode);
-}
-
 /* GdipDrawArc */
 intptr_t __stdcall vb6_di_GdipDrawArc(intptr_t mGraphics, intptr_t mPen, float mX, float mY, float mWidth, float mHeight, float mStartAngle, float mSweepAngle) {
     intptr_t (WINAPI *fn)(intptr_t, intptr_t, float, float, float, float, float, float) = (intptr_t (WINAPI *)(intptr_t, intptr_t, float, float, float, float, float, float))vb6_di_gdiplus_proc("GdipDrawArc");
@@ -183,6 +153,12 @@ intptr_t __stdcall vb6_di_GdipFillRectangleI(intptr_t mGraphics, intptr_t mBrush
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(mGraphics, mBrush, mX, mY, mWidth, mHeight);
 }
+/* GdipResetClip */
+intptr_t __stdcall vb6_di_GdipResetClip(intptr_t mGraphics) {
+    intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipResetClip");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mGraphics);
+}
 /* GdipResetWorldTransform */
 intptr_t __stdcall vb6_di_GdipResetWorldTransform(intptr_t mGraphics) {
     intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipResetWorldTransform");
@@ -207,6 +183,18 @@ intptr_t __stdcall vb6_di_GdipSaveGraphics(intptr_t mGraphics, int32_t* mState) 
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(mGraphics, mState);
 }
+/* GdipSetClipHrgn */
+intptr_t __stdcall vb6_di_GdipSetClipHrgn(intptr_t mGraphics, intptr_t mHRgn, intptr_t mCombineMode) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetClipHrgn");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mGraphics, mHRgn, mCombineMode);
+}
+/* GdipSetClipPath */
+intptr_t __stdcall vb6_di_GdipSetClipPath(intptr_t mGraphics, intptr_t mpath, intptr_t mCombineMode) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetClipPath");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mGraphics, mpath, mCombineMode);
+}
 /* GdipSetClipRectI */
 intptr_t __stdcall vb6_di_GdipSetClipRectI(intptr_t mGraphics, intptr_t mX, intptr_t mY, intptr_t mWidth, intptr_t mHeight, intptr_t mCombineMode) {
     intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetClipRectI");
@@ -224,6 +212,12 @@ intptr_t __stdcall vb6_di_GdipSetPixelOffsetMode(intptr_t graphics, intptr_t Mod
     intptr_t (WINAPI *fn)(intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetPixelOffsetMode");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(graphics, Mode);
+}
+/* GdipSetSmoothingMode */
+intptr_t __stdcall vb6_di_GdipSetSmoothingMode(intptr_t graphics, intptr_t SmoothingMd) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetSmoothingMode");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(graphics, SmoothingMd);
 }
 /* GdipSetTextRenderingHint */
 intptr_t __stdcall vb6_di_GdipSetTextRenderingHint(intptr_t graphics, intptr_t hint) {

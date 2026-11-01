@@ -20,3 +20,7 @@ End Sub
 Public Function Twice(ByVal n As Long) As Long
 
 End Function
+
+Public Property Get Num() As Long
+
+End Property

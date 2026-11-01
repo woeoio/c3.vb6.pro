@@ -23,6 +23,8 @@
 #   R7 留在发码侧按实参个数做决定的那些名字（改写 callee / 重排实参 / 截断，不是补档）必须**恰好**是
 #   R8 表里一枚出口只许一行（重复行会让前一档的缺省答案静默失效，本机负控实测）。
 #      下面这一份名单 —— 多一名 = 新写了一形硬编码，少一名 = 名单过期了。
+#   R9 表里可以登记「每档的 VB 形参名」(第 5 枚字段 kNames_*)：登记了的行数**恰好**是钉死的档数，
+#      且每行 names 长度 == 该行档数、每枚 kNames_* 都被恰好一行引用、按名落位那一段全仓只许有一处。
 #
 # 用法: powershell -File scripts\check_builtin_opt_defaults.ps1   (PASS = exit 0)
 
@@ -84,6 +86,17 @@ if ($rows.Count -lt 25) { Write-Host ('FAIL R6: 表只读出 ' + $rows.Count + '
 #   （下面逐行判的那条才是权威，R6 行找不到数组）。这里先做一次前置的整体断言，免得逐行那条
 #   在 0 行时静默通过。
 $dangling = @($rows.Values | Where-Object { -not $arrays.ContainsKey($_) } | Sort-Object -Unique)
+
+# 账 #305 第二百四十一刀 (甲): 表里可选的第 5 枚字段 = 每档的 VB 形参名 (named 实参按名落位吃它)。
+$nameRows = @{}   # callee -> kNames_ 数组名
+foreach ($m in [regex]::Matches($fix, '\{\s*"(vb6_[A-Za-z0-9_]+)"\s*,\s*(kOD_[A-Za-z0-9_]+)\s*,\s*.*?,\s*(?:true|false)\s*,\s*(kNames_[A-Za-z0-9_]+)\s*\}')) {
+    $nameRows[$m.Groups[1].Value] = $m.Groups[3].Value
+}
+$nameArrays = @{}
+foreach ($m in [regex]::Matches($fix, 'static const char\* const (kNames_[A-Za-z0-9_]+)\s*\[\]\s*=\s*\{(?<b>[^}]*)\};')) {
+    $slots = @(); foreach ($e in ($m.Groups['b'].Value -split ',')) { $e = $e.Trim(); if ($e -ne '') { $slots += $e } }
+    $nameArrays[$m.Groups[1].Value] = $slots
+}
 if ($dangling.Count -gt 0) {
     Write-Host ('FAIL R6: ' + $dangling.Count + ' 枚数组被引用但没定义: ' + ($dangling -join ', ')) -ForegroundColor Red
     exit 1
@@ -218,6 +231,15 @@ foreach ($nm in @($rows.Keys | Sort-Object)) {
         if ($s.n -ne $slots.Count) { $viol += ('R5 形参个数不齐: ' + $nm + ' ( 语义 ' + $s.n + ' vs 表 ' + $slots.Count) }
         elseif ($got -ne $want) { $viol += ('R5 可选档不齐: ' + $nm + ' ( 语义 opt={' + $got + '} vs 表 non-null={' + $want + '}') }
     }
+
+    # R9: 这一行若登记了 VB 形参名，长度必须与档数同 (named 落位按它数号)
+    if ($nameRows.ContainsKey($nm)) {
+        $na = $nameRows[$nm]
+        if (-not $nameArrays.ContainsKey($na)) { $viol += ('R9 行引用了不存在的名字表: ' + $nm + ' -> ' + $na) }
+        elseif ($nameArrays[$na].Count -ne $slots.Count) {
+            $viol += ('R9 名字表档数不齐: ' + $nm + ' ( names ' + $nameArrays[$na].Count + ' vs slots ' + $slots.Count)
+        }
+    }
 }
 
 # R7 的另一半: $notPadding 里写了理由而文件里已经没这一段的, 也算过期
@@ -227,7 +249,20 @@ foreach ($nm in @($notPadding.Keys | Sort-Object)) {
     }
 }
 
-Write-Host ('census: rows=' + $rows.Count + ' arrays=' + $arrays.Count +
+# R9 的另外三条: 登记数钉死 (加一族要连带补手册依据与判据, 不许顺手放宽)
+$namedWant = 1
+if ($nameRows.Count -ne $namedWant) {
+    Write-Host ('FAIL R9: 登记了 VB 形参名的行有 ' + $nameRows.Count + ' 行, 钉死的是 ' + $namedWant + ' 行 —— 新增一族要连带三件: 手册或类型库依据 + 该族的按名落位判据 + 这里的档数')
+    exit 1
+}
+$unusedNames = @($nameArrays.Keys | Where-Object { $nameRows.Values -notcontains $_ } | Sort-Object)
+if ($unusedNames.Count -gt 0) { Write-Host ('FAIL R9: 躺着没人用的名字表: ' + ($unusedNames -join ', ')); exit 1 }
+$placeSites = ([regex]::Matches($fix, 'bod\.names &&')).Count
+if ($placeSites -ne 1) {
+    Write-Host ('FAIL R9: 按名落位那一段出现 ' + $placeSites + ' 处 (钉死 1 处) —— 第二位主人就是一份抄法'); exit 1
+}
+
+Write-Host ('census: rows=' + $rows.Count + ' namesRows=' + $nameRows.Count + ' nameArrays=' + $nameArrays.Count +
             ' rtlArityNames=' + $arity.Count + ' semParamTables=' + $sem.Count +
             ' leadingDefault=' + $leadingDefault.Count + ' notPadding=' + $notPadding.Count)
 
@@ -236,5 +271,5 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_opt_defaults: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL/语义名单对账 (改档/改名/撤段), 不是往例外名单里加名字; 真要走例外请连带写清 VB6 手册依据并重跑 §B153 那把语料 A/B (401 份 --emit-c 逐行不变)')
     exit 1
 }
-Write-Host 'PASS builtin_opt_defaults (R0..R8)'
+Write-Host 'PASS builtin_opt_defaults (R0..R9)'
 exit 0

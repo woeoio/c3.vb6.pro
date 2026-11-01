@@ -130,6 +130,9 @@ void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value);
 void vb6_ComSetPropArg(void* disp, const wchar_t* propName, void** args, int32_t argc, void* value);
 void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef);
 
+// 账 #305 第二百六十二刀 (丙): 同 vb6com.h 那份声明 (生成码与 RTL 各 include 一份头)。
+int32_t vb6_ComLateBindMissCount(void);
+
 // COM vb6_VARIANT封装/解封 — cgen生成的C代码使用 (P6.2)
 // 实际实现在vb6com.c, 此处用void*避免vb6_VARIANT类型冲突
 void* vb6_ComPackBSTR(const wchar_t* bstr);
@@ -172,6 +175,13 @@ void* vb6_ComGetObjectProp(void* disp, const wchar_t* propName);
 intptr_t vb6_ComGetLongPtrProp(void* disp, const wchar_t* propName);
 // COM调用结果→vb6_VARIANT (后期绑定, 如dic.Item(key))
 vb6_VARIANT vb6_VariantFromComResult(void* variant_ptr);
+// 账 #305 第二百四十四刀: 晚绑定调用的结果当 VB6 的「真值」用 (If / ElseIf / Do While /
+// Do Until / Loop While / Loop Until / While Wend 那七站)。交回来的是堆上一枚 VARIANT 的
+// 指针 —— 按档读回真值, 连那一枚堆块一起收回; 从前发码把指针本身当条件, 恒真。
+int16_t vb6_ComResultToBool(void* variant_ptr);
+// 账 #305 第二百四十七刀: 晚绑定调用的结果当 `Not` 的操作数用 (真值位与值位共用这一枚)。
+// 从前发码把指针截成 int32 再取反 = 恒非零 ⇒ 「在场的键」那一头全答反。
+int32_t vb6_ComResultToNot(void* variant_ptr);
 vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv);  /* P24-03: 栈上VARIANT转换(不释放) */
 void* vb6_VariantToObject(vb6_VARIANT* v);  /* P24-04: Extract IDispatch from Variant for COM late-binding */
 void* vb6_ComPackVariant(vb6_VARIANT v);     /* P24-04: Pack vb6_VARIANT (by value) into Windows VARIANT */

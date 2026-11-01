@@ -1,4 +1,40 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-10-31 (ledger #305, knife 317): vb6com_invoke.c gained the late-binding
+//   receiver view switch -- a receiver that is a *different interface view* of a
+//   real COM object (measured: IPicture obtained from OleCreatePictureIndirect with
+//   IID_IPicture, whose vtable slot 5 is get_Type, not GetIDsOfNames) used to be
+//   dispatched as if it were IDispatch: GetIDsOfNames landed on get_Type and wrote
+//   through the read-only IID_NULL (0xC0000005 in ComCtlsDemo Command2). The eight
+//   late-binding exits now enter through vb6_ComDispViewIn, which QIs for
+//   IID_IDispatch and caches the byte offset per vtable (0 = already IDispatch,
+//   -1 = unknown/pseudo vtable = unchanged path). Probe: .local/k317/probe_pic.c
+//   (QI(IID_IPictureDisp) == QI(IID_IDispatch) == p+0x10 on x64).
+//   This touch exists only so rc.exe re-embeds src/rtl/** into C3.exe --
+//   check_rtl_embedded R1 catches the stale embed.
+// 2026-10-27 (ledger #305, knife 262): vb6com_invoke.c gained the late-binding exit
+//   guard -- a receiver that is neither a real IDispatch nor a host pseudo-object
+//   (Font / Extender / host table entry) used to fall through the exits silently and
+//   answer Empty/0. Now each of the seven exits (vb6_ComCall / vb6_ComCallByDispid /
+//   vb6_ComGetProp / vb6_ComGetPropArg / vb6_ComSetProp / vb6_ComSetPropArg /
+//   vb6_ComSetRef) prints one [C3_LATEBIND_MISS #N] line to stderr and bumps the
+//   counter exported as vb6_ComLateBindMissCount(). Behaviour is unchanged (no raise):
+//   vb6_RaiseError with no handler would exit(424) and turn the gate red.
+//   uc_hostmodel*.inc gained the sibling report -- the host pseudo channel answers
+//   "handled / Empty" for member names it does not know (ScaleX / ScaleY / Size),
+//   which is how the With-UserControl half (knife 261 item A) was leaking silently;
+//   each miss prints [C3_HOST_MEMBER_MISS #N] and bumps vb6_Host_UnknownMemberCount().
+//   This touch exists only so rc.exe re-embeds src/rtl/** into C3.exe --
+//   check_rtl_embedded R1 catches the stale embed.
+// 2026-10-25 (account #490, knife 216, §B178): vb6rtl_conv.c / vb6rtl_builtin.h --
+//   vb6_MsgBox grew from the 3-arg prototype to VB6's full 5-arg signature
+//   (prompt, buttons, title, helpfile, context), matching vb6_InputBox which already
+//   carries all seven. Before this, `MsgBox(msg, Style, Title, Help, Ctxt)` (10 real
+//   call sites in the corpus) emitted five actuals into a 3-param prototype = silent
+//   over-pass that the local cl never diagnoses. This touch exists only so rc.exe
+//   re-embeds src/rtl/** into C3.exe -- check_rtl_embedded R1 caught the stale embed.
+// 2026-10-23 (account #481, knife 182): vb6comserver_obj.c gained vb6_UnregisterProjectClassInstance
+//   (the registration table's other leg) and the register leg now reuses freed slots; this touch exists
+//   only so rc.exe re-embeds src/rtl/** into C3.exe -- check_rtl_embedded R1 caught the stale embed.
 // 2026-10-23 (ledger #305, ScaleLeft / ScaleTop): the form's custom coordinate
 //   system has four numbers (ScaleLeft / ScaleTop / ScaleWidth / ScaleHeight); only the
 //   last two were wired. `Me.ScaleLeft` / `Me.ScaleTop` had no row in kFormPseudoRows
@@ -358,9 +394,11 @@
 // 标题的 FillRect 底需要**父窗底色的实心刷** (此前空刷 → 标题后露白块); 复选/单选仍空刷。
 // 窗体 WndProc (cgen_form_wndproc_create.inc) + Frame 子类化 (vb6forms.c) 同口径。
 // vb6forms_ctrl.c + vb6forms_prop.h。
-// Fix 163-extlist: 所有 BUTTON 类控件关 comctl6 视觉样式 (vb6_DisableControlTheme) ——
-// 带样式的命令按钮/单选钮由主题绘制器渲染文字 (主题字体 + ClearType), 比窗体标题/
-// 复选框的 MS Sans Serif 8.25pt 点阵明显模糊; 关样式后统一走经典 GDI 文本渲染。
+// 账 #305 第三百五刀: Fix 163-extlist "所有 BUTTON 类关 comctl6 视觉样式"
+// (vb6_DisableControlTheme / SetWindowTheme(hwnd,L"",L"")) 已撤 —— 前提错了。
+// 依据: 参考 ComCtlsDemo exe 与本方产物带同一份 comctl32 v6 清单(逐字节相同),
+// 参考按钮面色 253(主题) vs 本方 240(经典), 一轮客户端像素差 1/3 落在这族。
+// VB6 固有控件跟随进程激活上下文; C3 给每个 exe 注入 v6 清单 ⇒ 控件层不再自行关样式。
 // vb6forms.c。
 // Fix 162e-extlist: WM_CTLCOLORBTN 统一返回 HOLLOW_BRUSH (VB6 透明语义) ——
 // (1) 生成窗体 WndProc (cgen_form_wndproc_create.inc): CheckBox/OptionButton/
@@ -924,3 +962,82 @@
  *   新 RTL 出口 vb6_ComObject_ClassNameA = 兄弟 ClassNameBStr 的不分配那一档: 这一站每迭代一枚都要问一次,
  *   不能每问一次 SysAllocString; 认不出交 NULL 的口径与兄弟一字相同。
  *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+/* 账 #305 §B219 第二百二十刀 (2026-10-25): 入站实参「VARIANT → 形参声明档」那一问收成一处主人 ——
+ *   服务端进门那一趟改问新 RTL 出口 vb6_ComArgNormalize (定义在 vb6rtl_com.c, 声明在 vb6rtl_variant.h,
+ *   连同新哨兵常量 VB6_ARGVT_SKIP)，vb6comserver_obj.c 里那半张手抄换算表(只折 I2/I1/UI1/UI2/BOOL/
+ *   EMPTY→I4、R4→R8)撤掉；vb6_DispMethodDesc 从此多带一枚每方法形参声明档数组。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* knife 230: RTL changed (array slot write-back) -- force c3rtl.rc re-embed */
+
+/* knife 233: RTL changed (byref scalar write-back) -- force c3rtl.rc re-embed */
+
+/* knife 238: RTL changed (variant -> string authority: BOOL answers True/False) -- force c3rtl.rc re-embed */
+
+/* knife 239: RTL changed (byref scalar arg packers for late-bound calls) -- force c3rtl.rc re-embed */
+
+/* knife 276: RTL changed (Font.hFont -- one eight-fields->LOGFONT owner plus a self-invalidating HFONT cache; the font property/write arms now report unknown names) -- force c3rtl.rc re-embed */
+/* knife 278: RTL changed (a UC host window and a form top-level window now get their font at creation; the create+WM_SETFONT+store residence in vb6forms_ctrl.c is shared, not copied) -- force c3rtl.rc re-embed */
+/* knife 279: RTL changed (the UC host window answers WM_GETFONT itself -- DefWindowProc does not remember WM_SETFONT; plus the VB6_CtrlFont slot gains one read-side owner) -- force re-embed */
+/* knife 280: RTL changed (generated-code-facing thin shell vb6_FormAnswerGetFont -- the form top-level window now answers the font question through that one read-side owner) -- force re-embed */
+/* knife 277: RTL changed (one pt->pixel authority for lfHeight, truncating like VB6 (8.25pt at 120dpi: -14 -> -13); the shared UserControl font default family is MS Sans Serif, not Segoe UI) -- force c3rtl.rc re-embed */
+
+/* 账 #305 第二百九十五刀: Extender 伪对象的方法形 `.Extender.Move` 接进属性形那同一位主人
+ *   (新 RTL 出口 vb6_UC_ExtenderMoveGeom)；除 Move 以外的 Extender 方法名改走 vb6_ComLateBindMiss
+ *   报数 (行为不变，仍返回 NULL)。touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 #305 第二百九十七刀: 「这枚窗口的几何按谁的 ScaleMode 折」收成一位主人
+ *   vb6_UC_ContainerWindowOf (uc_host.c) —— vb6forms_ctrl.c 那九站不再拿 GetParent 现答
+ *   (band 里的控件被 SetParent 进 CoolBar 宿主、又被 rebar 搬进 ReBarWindow32 ⇒ 同一发
+ *   四档数拿到过两种单位), uc_controls.c 的 vb6_UC_ContainerScaleModeCurrent 并进同一位。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 #305 第二百九十九刀: 「这枚窗口 authored 在哪一层容器」改成创建期戳在窗口上
+ *   (新 RTL 出口 vb6_GeomOwnerStamp → 窗口属性 VB6_AuthoredOwner)。上面那位主人的第一问
+ *   改读这一枚戳, 名册与 GetParent 退成落回 —— .frm 的孩子被 CoolBar 搬进 band 之后
+ *   仍答**窗体**那一档 (296 那发的 3672x324 瞬态), 而 .ctl 设计面的孩子仍答**那枚 UC**
+ *   声明的像素档 (Charts/Animation 体内摆位不变)。写侧 = vb6_CreateControl (两条创建路
+ *   共用) + 四枚 vb6_UC_CreateDesign* + CtrlArr_Load + CreateWebView 共七处。
+ *   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 #305 第三百刀: UC 交出去的那张 hDC 上要选着**这枚控件自己的字体** (VB6 语义) ——
+   uc_host_window.c 的 AutoRedraw 持久表面与 WM_PAINT 那张离屏 DIB 都是 CreateCompatibleDC
+   造的，缺省选着 GDI 的 SYSTEM_FONT ⇒ 用户代码 `DrawText UserControl.hDC, …` 整块换字
+   (ComCtlsDemo 第二页 FrameW 题头变粗变大)。字体仍只问 vb6_ControlFont (WM_GETFONT)。
+   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 #305 第三百零一刀: Extender 的**方法形** `.Extender.Move` 接回写侧 ——
+   vb6com_invoke.c 的 Extender 岔口 → uc_controls.c vb6_UC_ExtenderMoveApply → vb6_ControlMove。
+   第二百九十五刀撤它时欠的两个前置 (单位问容器 / authored 容器戳 + ReBar band 行高输入)
+   已由二百九十七 / 二百九十九 / 二百九十刀补齐。
+   (订正上一格末句: 那两处 DC 选字读的是 vb6_ControlFontStored —— 从 push/paint 进
+    vb6_ControlFont 会 SendMessage(WM_GETFONT), 实发过一次 0xC0000409。)
+   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 #305 第303刀: VB6 的**默认窗体图标** —— 工程里没有 Icon 属性时 VB6 塞的是
+   RT_GROUP_ICON 1 + RT_ICON 30001..30003（32x32 1bpp / 32x32 4bpp / 16x16 4bpp，语言档 0），
+   运行时由框架 WM_SETICON(ICON_BIG) 交给窗体窗口（参考那台 GCLP_HICON 仍为 0）。
+   链接期由 driver 用 UpdateResource 注入进 EXE（src/driver/default_form_icon.hpp 存这四份字节）；
+   RTL 侧 vb6forms.c 的 vb6_formApplyDefaultIcon 只负责"有这枚资源就发给窗口"。
+   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 #305 第三百七刀: UC 宿主窗口把子控件的 WM_COMMAND / WM_NOTIFY 原样上抛给父窗口 ——
+   .frm 里 authored 在 UserControl Begin 块里的控件 (ComCtlsDemo MainForm 的 Command4
+   "Pager Demo" 放在 ComCtlsDemo.CoolBar CoolBar1 里) 把 BN_CLICKED 发给父窗口 = UC 宿主,
+   而事件处理器住在窗体模块; 以前这条落 DefWindowProc ⇒ 点按钮什么也不发生
+   (程序发 WM_COMMAND id=201 能开 PagerForm, 鼠标点不能)。uc_host_window.c。
+   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 #305 第三百七刀 (同刀第二处): UC desc 注册表容量 32 → 128 ——
+   ComCtlsDemo 自带 35 个 UserControl 源码（Builds\ 下的 OCX），模块 init 各注册一枚;
+   满了 `vb6_UC_Register` 静默 return ⇒ `vb6_uc_findDesc` 找不到 ⇒ HostCreate 交 NULL ⇒
+   发码侧那发 `((cls*)vb6_UC_InstanceOf(hwnd))->events = …` 写 NULL+0x88 (0xC000041D)。
+   vb6forms_uc_internal.h。touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 #305 第320刀 (账 #592): App.Title 的运行期真值 = .vbp 的 Title（空则 Name）——
+   vb6rtl_system.c 新增 vb6_SetAppTitle / vb6_App_Title / vb6_AppTitleBorrow 三个出口：
+   生成的入口点在 vb6_Init 之后把工程标题播种进去；`App.Title = v`（VB6 允许运行期改，
+   语料 17 行写、1181 处读，落在 13 份文件里）落同一枚 setter；读取交一份新副本（与 vb6_App_EXEName 同一
+   所有权约定）。vb6rtl_conv.c 的 vb6_MsgBox 在 title 省略时借用那一格 —— 改前交空串，
+   所以 MsgBox 的默认题头一直是空的（ComCtlsDemo Command3 的现场）。
+   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */

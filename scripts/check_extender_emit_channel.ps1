@@ -211,8 +211,8 @@ $invk = [System.IO.File]::ReadAllText((Join-Path (Split-Path -Parent $PSScriptRo
 $sites = [ordered]@{
     'vb6_UC_ExtenderField'  = 'void* vb6_UC_ExtenderField(void* p, const wchar_t* name, int32_t* kind) {'
     'vb6_UC_SetExtenderMember' = 'void vb6_UC_SetExtenderMember(const wchar_t* name, void* value) {'
-    'vb6_ComGetProp'         = 'void* vb6_ComGetProp(void* disp, const wchar_t* propName) {'
-    'vb6_ComSetProp'         = 'void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {'
+    'vb6_ComGetProp'         = 'static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {'
+    'vb6_ComSetProp'         = 'static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_void) {'
 }
 $bodies = @{}
 foreach ($k in $sites.Keys) {

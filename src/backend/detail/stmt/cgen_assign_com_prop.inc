@@ -393,6 +393,49 @@
         }
     }
 
+    // 第一百八十六刀 (账 #305 站F 写侧): 多入口参数写在视图上 —— `x.Item(3) = "a"`。
+    // 目标 = IndexOrCallExpr{callee = MemberAccessExpr(视图, 成员), args}; 通用路把它
+    // 按普通左值发成 **Get 槽** (`x.vtbl->Item(x.obj, 3) = …`) ⇒ cl C2106。写席是
+    // `put_` 那一档, 形参数 = 下标实参 + 值。两问都先问出来: ① 槽末形参的 C 类型
+    // (唯一槽表) ② 值那一头同型吗 —— 只有都成立才换路, 否则原样落回 (不掩盖)。
+    if (node.target && node.target->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& ioc186 = static_cast<IndexOrCallExpr&>(*node.target);
+        if (ioc186.callee && ioc186.callee->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& ma186 = static_cast<MemberAccessExpr&>(*ioc186.callee);
+            if (ma186.object && ma186.object->kind == ASTNodeKind::IdentifierExpr) {
+                // 两问都**先问再发码**: 命中才求值接收者/下标/右值。
+                // 旧写法是「先 emit 接收者再问」—— 落回时那一发已经求过值, 于是 `Dim As New`
+                // 的变量多出一行自实例化 (实测 tests/b190_memberarray 清单 +360 字节)。
+                const std::string recvName186 = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*ma186.object).name);
+                const std::string wantLast186 = legacyViewSetterLastParamCType(
+                    recvName186, ma186.memberName, ProcKind::PropertyLet, ioc186.positional.size());
+                if (!wantLast186.empty()
+                    && mapType(inferExprType(*node.value)) == wantLast186) {
+                    const bool savedVd186 = suppressVirtDispatch_;
+                    suppressVirtDispatch_ = true;
+                    emitExpr(*ma186.object);
+                    suppressVirtDispatch_ = savedVd186;
+                    const std::string obj186 = std::move(lastExpr_);
+                    std::vector<std::string> argExprs186;
+                    for (auto& a186 : ioc186.positional) {
+                        emitExpr(*a186);
+                        argExprs186.push_back(std::move(lastExpr_));
+                    }
+                    emitExpr(*node.value);
+                    std::string val186 = std::move(lastExpr_);
+                    const std::string call186 = legacyViewSetterCallExpr(
+                        obj186, ma186.memberName, val186, wantLast186,
+                        ProcKind::PropertyLet, argExprs186);
+                    if (!call186.empty()) {
+                        c_.emitLine(call186 + ";  /* Property Let (视图直传参槽) */");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // Fix 170: 目标是 VB6 **整体数组** (`A() = expr`, 空括号) —— emit 期间置
     // wholeArrayLvalue_, 让 IndexOrCallExpr 发数组载体 (vb6_SafeArray1D*) 而不是
     // VB6_SA_AT(elem, A, 0)。值语义侧用 tgtIsWholeArray170 决定右侧是否需要深拷贝。
@@ -590,6 +633,48 @@
                 case Vb6Type::Object:                       unpackHint = "Object";  break;
                 case Vb6Type::Variant:                      unpackHint = "Variant"; break;
                 default: break;
+            }
+        }
+        // 账 #305 第294刀: 目标是**成员** (`Obj.Prop` / `Obj.Field`, Obj 为工程类实例) 时
+        // 上面三轮都答不出: 第一轮只认裸标识符, 第二轮认 UDT 字段, 第三轮刻意不收成员目标。
+        // 于是 RHS 的 COM 读一律落到默认档 BSTR —— 实测 ComCtlsDemo LvwColumnHeaders.Add:
+        //   NewColumnHeader.Index = PropColumnHeader.Count
+        //   -> vb6_ComGetStringProp(me->PropColumnHeader, L"Count")
+        // BSTR 指针被截成 int32 存进 PropIndex => 每个列头的 Index 都是垃圾 =>
+        // LVM_GET/SETCOLUMN 永远问错列 => 表头的 SortArrow(HDF_SORTDOWN) /
+        // CheckBox(HDF_CHECKBOX) 一个都落不下 (ComCtlsDemo 页面 1 的列头缺箭头与复选框)。
+        // 写方向的声明类型: 类**属性** = findClassMemberWriteParams 末参 (Property Let 的
+        // 值槽); 类**数据字段** 不改抄一份档表, 交给 Fix 092m 那位既有主人
+        // classFieldComUnpackHint (上面第三轮的注释就点名了它)。两个方向都只接能明确
+        // 映射的那几档, Variant / 认不出维持原默认 (不猜)。
+        if (unpackHint.empty() && node.target
+            && node.target->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& maTgt294 = static_cast<MemberAccessExpr&>(*node.target);
+            const std::string tgtCls294 = inferClassTypeOfExpr(*maTgt294.object);
+            if (!tgtCls294.empty() && Symbol::toLower(tgtCls294) != "object") {
+                std::vector<ParameterInfo> wl294;
+                if (findClassMemberWriteParams(tgtCls294, maTgt294.memberName,
+                                               /*isSet=*/false, wl294)
+                    && !wl294.empty()) {
+                    switch (wl294.back().type) {
+                        case Vb6Type::String:                       unpackHint = "BSTR";    break;
+                        case Vb6Type::Long:
+                        case Vb6Type::Byte:
+                        case Vb6Type::Error:                        unpackHint = "Long";    break;
+                        case Vb6Type::Integer:
+                        case Vb6Type::Boolean:                      unpackHint = "Int";     break;
+                        case Vb6Type::Single:                       unpackHint = "Single";  break;
+                        case Vb6Type::Double:
+                        case Vb6Type::Date:
+                        case Vb6Type::Currency:                     unpackHint = "Double";  break;
+                        case Vb6Type::LongPtr:                      unpackHint = "LongPtr"; break;
+                        case Vb6Type::Object:                       unpackHint = "Object";  break;
+                        default: break;   // Variant / Unknown: 落到下面那一位主人
+                    }
+                }
+                if (unpackHint.empty()) {
+                    unpackHint = classFieldComUnpackHint(tgtCls294, maTgt294.memberName);
+                }
             }
         }
         resolveComValue(unpackHint);

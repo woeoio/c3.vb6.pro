@@ -141,6 +141,7 @@ vb6_MidSet|3	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_MkDir|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_MsgBox|0	0		0	open	BSTR
 vb6_MsgBox|2	0		0	open	BSTR
+vb6_MsgBox|3	0		0	open	BSTR
 vb6_MsgBox1|0	0	handoff-reads:vb6_MsgBox	0	open	BSTR
 vb6_Name|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_Name|1	0	handoff-reads:vb6_path_from	0	open	BSTR
@@ -348,6 +349,7 @@ vb6_Write|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_VariantArrayGet VARIANT
 [alias] vb6_VariantArrayGetND VARIANT
 [alias] vb6_VariantArrayGetVal VARIANT
+[alias] vb6_VariantFromProjectInstance VARIANT
 [alias] vb6_VariantFromStackVARIANT VARIANT
 [alias] vb6_VariantIdentity VARIANT
 [alias] vb6_VariantObject VARIANT

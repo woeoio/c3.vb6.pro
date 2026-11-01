@@ -168,8 +168,14 @@ int32_t vb6_GetScaleWidth(void* hwnd) {
         /* VB6 ScaleWidth: 客户区宽度, 单位 = 该窗口自己的 ScaleMode (账 #175)。
            Fix 184: 缇那一档仍走同一个 DPI 源 (vb6_ScalePxToUser 的 mode==1 分支
            就是 vb6_XToTwipX), 所以窗体 (缺省 1=缇) 的读数与改动前逐字节相同。 */
-        return (int32_t)vb6_ScalePxToUser((double)(rc.right - rc.left),
-                                          vb6_WindowScaleModeSelf(hwnd), 0);
+        int32_t m = vb6_WindowScaleModeSelf(hwnd);
+        int32_t v = (int32_t)vb6_ScalePxToUser((double)(rc.right - rc.left), m, 0);
+        if (GetEnvironmentVariableW(L"C3_GEOM_TRACE", NULL, 0) > 0) {
+            fprintf(stderr, "[C3_GEOM] ScaleWidth win=%p mode=%d px=%ld val=%d\n",
+                    (void*)hwnd, (int)m, (long)(rc.right - rc.left), (int)v);
+            fflush(stderr);
+        }
+        return v;
     }
     return 0;
 }

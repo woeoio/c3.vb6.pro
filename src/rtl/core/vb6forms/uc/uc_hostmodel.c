@@ -11,6 +11,15 @@
 extern "C" {
 #endif
 
+// 账 #305 第二百六十二刀 (丙): 宿主模型「不认识的成员」计数。
+// 宿主通道对**任何**成员名都返回「已处理」 (三条 .inc 的末尾 return 1),
+// 于是 ScaleX / ScaleY / Size 这类没人认领的成员被静默答成 Empty ——
+// 调用方拿到空值也看不出漏了谁。这里把「不认识的名字」数出来并报一行,
+// 行为不变 (仍 return 1), 只是把静默换成响亮。
+static int32_t g_host_unknown_member = 0;
+
+int32_t vb6_Host_UnknownMemberCount(void) { return g_host_unknown_member; }
+
 // ============================================================
 // 窗体/控件登记 (供宿主对象分派)
 // ============================================================
@@ -122,6 +131,12 @@ const wchar_t* vb6_Host_TypeNameOf(void* obj) {
         buf[i] = 0;
         return buf;
     }
+    /* 账 #305 第二百八十二刀: 无窗宿主 (InvisibleAtRuntime) 递进来的是**实例指针**,
+       上面两问都落空 ⇒ 以前这里答 NULL，晚绑定那头就报 "Object"，而 Krool 那一族全靠
+       `If TypeName(ControlEnum) = "ImageList" Then` 认控件（靶工程 ToolBar/ListView/
+       TreeView/OptionButtonW 四处都这么写）—— 答错一个名，整条 ImageList 接线全断。 */
+    h = vb6_ho_findInstance(obj);
+    if (h && h->typeName[0]) return h->typeName;
     if (IsWindow((HWND)obj)) return L"Control";
     return NULL;
 }
@@ -139,6 +154,17 @@ void vb6_ho_setVariantLong(vb6_VARIANT* out, int32_t v) {
     memset(out, 0, sizeof(*out));
     out->vt = vb6_vtLong;   // 由调用方按 VT_I4 解释
     out->lVal = v;
+}
+
+/* 账 #305 第二百七十六刀: 句柄那一档 —— 与上面那枚差在**宽度**。
+ * VB6 的 IFont.hFont 在类型库里标的是 Long, 而语料一律把它交给 As LongPtr 的形参
+ * (靶工程 Common.bas:231 那份 PtrSafe 声明), x64 上按 int32 交就是把 GDI 句柄砍掉
+ * 高 32 位。标签交 VT_I8: vb6_vartype 那张表里没有这一档, 按 §B142 那格的口径
+ * 由 vb6_VariantPackBorrow 原样递进真 VARIANT 的 llVal (第五十三刀刚把它并表)。 */
+void vb6_ho_setVariantLongPtr(vb6_VARIANT* out, void* p) {
+    memset(out, 0, sizeof(*out));
+    out->vt = (vb6_vartype)VT_I8;
+    out->llVal = (LONG_PTR)p;
 }
 
 void vb6_ho_setVariantBstr(vb6_VARIANT* out, BSTR s) {
@@ -181,8 +207,37 @@ void vb6_ho_setVariantDouble(vb6_VARIANT* out, double v) {
     out->dblVal = v;
 }
 
+// 账 #305 §B224: 晚绑定对**带型变量**递 VT_BYREF|<type> (见 vb6_ComPackIntRef 那一族),
+// union 里存的是调用方变量的地址, 不是值。宿主对象模型此前直接按值读 union ⇒
+// `c.Remove j` 读成指针低位/0, Builtin Collection 的 Remove 静默无效 ——
+// Charts 2020 ucTreeMaps.AddLineSeries 的降序排序 (`Remove j : Add v, , i`)
+// 因此只增不删, 标签重复、Count 从 7 涨到 13。这里按 §B224 的标签逐档解引用。
+// 注意: 这些指针**指向标量本身**, 不是指向另一枚 VARIANT (VT_VARIANT 那档除外)。
+static const void* vb6_ho_byrefAddr(const vb6_VARIANT* v) {
+    if (!v || !(v->vt & VT_BYREF)) return NULL;
+    return (const void*)v->pdispVal;
+}
+
 int32_t vb6_ho_variantToLong(const vb6_VARIANT* v) {
     if (!v) return 0;
+    if (v->vt & VT_BYREF) {
+        const void* p = vb6_ho_byrefAddr(v);
+        if (!p) return 0;
+        switch (v->vt & ~VT_BYREF) {
+            case vb6_vtInteger: case vb6_vtBoolean: return (int32_t)*(const int16_t*)p;
+            case vb6_vtLong: return *(const int32_t*)p;
+            case vb6_vtByte: return (int32_t)*(const uint8_t*)p;
+            case vb6_vtSingle: return (int32_t)*(const float*)p;
+            case vb6_vtDouble: return (int32_t)*(const double*)p;
+            case VT_I8: return (int32_t)*(const int64_t*)p;
+            case (vb6_vartype)VT_I1:  return (int32_t)*(const int8_t*)p;
+            case (vb6_vartype)VT_UI2: return (int32_t)*(const uint16_t*)p;
+            case VT_UI4: return (int32_t)*(const uint32_t*)p;
+            case VT_UI8: return (int32_t)*(const uint64_t*)p;
+            case VT_VARIANT: return vb6_ho_variantToLong((const vb6_VARIANT*)p);
+            default: return 0;
+        }
+    }
     switch (v->vt) {
         case vb6_vtInteger: case vb6_vtLong: case vb6_vtBoolean: case vb6_vtByte:
             return v->lVal;
@@ -198,6 +253,24 @@ int32_t vb6_ho_variantToLong(const vb6_VARIANT* v) {
 
 double vb6_ho_variantToDouble(const vb6_VARIANT* v) {
     if (!v) return 0.0;
+    if (v->vt & VT_BYREF) {   /* 账 #305 §B224: 与 ToLong 同一口径 */
+        const void* p = vb6_ho_byrefAddr(v);
+        if (!p) return 0.0;
+        switch (v->vt & ~VT_BYREF) {
+            case vb6_vtSingle: return (double)*(const float*)p;
+            case vb6_vtDouble: return *(const double*)p;
+            case vb6_vtInteger: case vb6_vtBoolean: return (double)*(const int16_t*)p;
+            case vb6_vtLong: return (double)*(const int32_t*)p;
+            case vb6_vtByte: return (double)*(const uint8_t*)p;
+            case VT_I8: return (double)*(const int64_t*)p;
+            case (vb6_vartype)VT_I1:  return (double)*(const int8_t*)p;
+            case (vb6_vartype)VT_UI2: return (double)*(const uint16_t*)p;
+            case VT_UI4: return (double)*(const uint32_t*)p;
+            case VT_UI8: return (double)*(const uint64_t*)p;
+            case VT_VARIANT: return vb6_ho_variantToDouble((const vb6_VARIANT*)p);
+            default: return 0.0;
+        }
+    }
     switch (v->vt) {
         case vb6_vtSingle: case vb6_vtDouble: return v->dblVal;
         case vb6_vtInteger: case vb6_vtLong: case vb6_vtBoolean: return (double)v->lVal;
@@ -211,7 +284,17 @@ double vb6_ho_variantToDouble(const vb6_VARIANT* v) {
 }
 
 BSTR vb6_ho_variantToBstr(const vb6_VARIANT* v) {
-    return (v && v->vt == vb6_vtBSTR) ? v->bstrVal : NULL;
+    if (!v) return NULL;
+    if (v->vt & VT_BYREF) {   /* 账 #305 §B224: ByRef String 递的是 BSTR* */
+        const void* p = vb6_ho_byrefAddr(v);
+        if (!p) return NULL;
+        switch (v->vt & ~VT_BYREF) {
+            case vb6_vtBSTR: return *(BSTR*)p;
+            case VT_VARIANT: return vb6_ho_variantToBstr((const vb6_VARIANT*)p);
+            default: return NULL;
+        }
+    }
+    return (v->vt == vb6_vtBSTR) ? v->bstrVal : NULL;
 }
 
 static void vb6_ho_clientTwips(void* hwnd, int32_t* w, int32_t* h) {
@@ -231,6 +314,16 @@ static int32_t vb6_ho_getFontMember(void* fontProxy, const wchar_t* name, vb6_VA
     if (_wcsicmp(name, L"Weight") == 0)    { vb6_ho_setVariantLong(out, f->Weight); return 1; }
     if (_wcsicmp(name, L"Charset") == 0)   { vb6_ho_setVariantLong(out, f->Charset); return 1; }
     if (_wcsicmp(name, L"Name") == 0)      { vb6_ho_setVariantBstr(out, SysAllocString(f->Name)); return 1; }
+    /* 账 #305 第二百七十六刀: `hFont` —— 与 vb6com_invoke.c 那条 kind 5 臂**同一个答案、
+       同一位主人** (vb6_UC_FontHFont → 内部问 vb6_UC_FontLogFont 那唯一一份换算)。
+       造不出句柄就答"认不出"(return 0), 由调用方那一条报数出口说话 —— 与第二百七十三刀
+       给方法臂立的口径一致: 这一臂以前对认不出的名字静默答 Empty, 所以靶工程那 34 发
+       `name=hFont` 在 C3_HOST_MEMBER_MISS 名册里一条也没有 (第二百七十五刀记的那格洞)。 */
+    if (_wcsicmp(name, L"hFont") == 0) {
+        void* h = vb6_UC_FontHFont(f);
+        if (!h) return 0;
+        vb6_ho_setVariantLongPtr(out, h); return 1;
+    }
     return 0;
 }
 
@@ -246,6 +339,64 @@ static int32_t vb6_ho_putFontMember(void* fontProxy, const wchar_t* name, const 
     if (_wcsicmp(name, L"Charset") == 0)   { f->Charset = vb6_ho_variantToLong(v); return 1; }
     if (_wcsicmp(name, L"Name") == 0)      { f->Name = vb6_ho_variantToBstr(v); return 1; }
     return 0;
+}
+
+/* 账 #305 第二百七十三刀: 「报一行宿主通道认不出的名字」从三条岔口的手抄收成一位主人。
+ * 第二百六十二刀装护栏时, 字体那一臂在 uc_hostmodel_call.inc 的第一行就 return 1 ——
+ * 位置在护栏之前, 于是靶工程那 13 发 Font.Clone 既空转又一声不响 (实测 stderr 里
+ * 既无 C3_HOST_MEMBER_MISS、也无 getDispid("Clone")、也无 method "Clone" not found)。
+ * 行为面一字不改: 认不出仍是「答了但没答」(调用方拿空值), 只是从此响亮。
+ * 站点名由调用方交进来, 打出的字节与改前那三条各自的手抄完全同形。 */
+static void vb6_ho_reportUnknown(const wchar_t* site, const wchar_t* name, void* obj) {
+    g_host_unknown_member++;
+    {   /* 诊断: 认不出时把接收者身份一起打出来 (窗口? 类名? 父类名?) */
+        wchar_t cls[128] = L"-", pcls[128] = L"-";
+        HWND h = (HWND)obj;
+        if (h && IsWindow(h)) {
+            GetClassNameW(h, cls, 128);
+            HWND p = GetParent(h);
+            if (p) GetClassNameW(p, pcls, 128);
+        }
+        fwprintf(stderr, L"[C3_HOST_MEMBER_MISS #%ld] site=%ls name=\"%ls\" obj=%p isWin=%d cls=%ls parent=%ls\n",
+                 (long)g_host_unknown_member, site, name ? name : L"(null)", obj,
+                 (h && IsWindow(h)) ? 1 : 0, cls, pcls);
+    }
+    fflush(stderr);
+}
+
+/* 宿主字体伪对象的**方法**面 (账 #305 第二百七十三刀)。
+ * stdole2.tlb 里 IFont.Clone 的档位 = invkind=1 (method) + 一枚 [out] 参
+ * (FUNC 17 memid=1610678289 nparams=1) ⇒ 结果**只**走实参, VARIANT 返回值天生是空档
+ * (实测 `CallObject: disp=… method=Clone vt=0`), 而发码把这一发当**语句**发、
+ * 返回值就地丢弃 ⇒ 光答 out 拿不到东西, 必须把新对象写进 argv[0] 那枚
+ * VT_DISPATCH|VT_BYREF 指向的存储 (= vb6_ComPackObjectRef 交出的调用方槽)。
+ * 其余三枚方法 IsEqual / SetRatio / AddRefHfont / ReleaseHfont 在靶工程发码里 0 处
+ * ⇒ 不发明没人走的答案, 认不出就走上面那枚报告。
+ * 返回值那一腿**刻意不碰** out: 岔口进来时已被 `vb6_ho_setVariantEmpty` 清零, 而伪字体
+ * 不许包成 VT_DISPATCH (= 上面 159 行那两条注释说的同一桩事故: VariantClear 会对它调
+ * Release)。写 argv[0] 是唯一出路, 也是一条不发明新档的路。
+ * 所有权: 新建那枚伪字体进 vb6_ucFonts 那张表 (= 与 getprop 的 Font 那一臂同一个工厂),
+ * 回收仍欠 §B164 那一族; 这里刻意不发明第二种生命周期。 */
+static int32_t vb6_ho_fontMethod(void* fontProxy, const wchar_t* name, int32_t argc,
+                                 void** argv) {
+    vb6_ComIface_Font* src = vb6_uc_fontOf(fontProxy);
+    if (!src || !name) return 0;
+    if (_wcsicmp(name, L"Clone") != 0 || argc < 1 || !argv || !argv[0]) return 0;
+    vb6_ComIface_Font* dst = (vb6_ComIface_Font*)vb6_UC_NewFont();
+    if (!dst) return 0;
+    if (dst->Name) SysFreeString(dst->Name);
+    dst->Name = src->Name ? vb6_BSTR_FromStr(src->Name) : NULL;
+    dst->Size = src->Size;
+    dst->Bold = src->Bold;
+    dst->Italic = src->Italic;
+    dst->Underline = src->Underline;
+    dst->Strikethrough = src->Strikethrough;
+    dst->Weight = src->Weight;
+    dst->Charset = src->Charset;
+    /* vb6_VARIANT 与 Windows VARIANT 同布局 (rev11) ⇒ 这一读不是猜型, 是那一刀的成品。 */
+    VARIANT* a = (VARIANT*)argv[0];
+    if ((a->vt & VT_BYREF) && a->ppdispVal) *(void**)(void*)a->ppdispVal = (void*)dst;
+    return 1;
 }
 
 int32_t vb6_Host_GetProp(void* obj, const wchar_t* name, void* outV) {

@@ -107,6 +107,11 @@ struct ComCoClassInfo {
     // P24-04: VB_GlobalNameSpace = True 的coclass, 其默认接口的Public方法提升为全局符号
     // 检测启发式: TYPEFLAG_FPREDECLID + 默认接口有与TypeLib项目名同名的方法, 或名字含"Global"
     bool isGlobalNamespace = false;
+    // VB6 全局对象 (appobject): coclass TYPEATTR 带 TYPEFLAG_FAPPOBJECT —— 裸类名
+    // 即该 coclass 的进程级单例, 成员直接挂其上, 无需 CreateObject。Codejock 各
+    // 套件的 *GlobalSettings 与 VB6 GlobalMultiUse 类都打这枚旗标; 普通控件
+    // coclass 不带 (实测 CommandBars=0x26, CommandBarsGlobalSettings=0xB)。
+    bool isAppObject = false;
 };
 
 // ============================================================

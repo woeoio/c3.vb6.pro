@@ -259,6 +259,15 @@ void CCodeGen::visit(UnaryExpr& node) {
             break;
         case UnaryOp::Not:
             // Fix 100: 布尔型操作数必须用逻辑取反 —— VB6 Not True = False(0),
+            // 账 #305 第二百四十七刀: 裸晚绑定调用交回的是**堆上一枚 VARIANT 的指针** ——
+            //   往下任何一条臂都是把它当数值截成 int32 再取反 = 恒非零 (在场/缺席两头一起答错,
+            //   缺席那头条纯属巧合对)。这一档由 vb6_ComResultToNot 一次办完 (解引用 + 按档取
+            //   值 + 收回那枚堆块), 且它问的是第二百四十四刀那位主人 cExprIsBareComResult,
+            //   不在这里再抄一份前缀名单。放在最前: 上面那条布尔臂万一答真, 交回的也是指针截断。
+            if (cExprIsBareComResult(operand)) {
+                lastExpr_ = "vb6_ComResultToNot(" + operand + ")";
+                break;
+            }
             // Not False = True(-1). 理由见 exprYieldsVbBoolean() 注释.
             if (node.operand && exprYieldsVbBoolean(*node.operand)) {
                 lastExpr_ = "((((int32_t)(" + operand + ")) != 0) ? 0 : -1)";

@@ -101,7 +101,22 @@ Vb6Type TypeSystem::resolveTypeName(const std::string& name) const {
         return Vb6Type::Long;
     }
     // Vb 前缀枚举 (VbCompareMethod, VbTriState, VbFileAttribute 等) — Long
-    if (lower.size() >= 2 && lower.compare(0, 2, "vb") == 0 &&
+    // 账 #305 第二百六十七刀: **限定名不许吃这一条**。这条启发式只看首两字母, 而库前缀本身
+    // 就可能以 vb 开头 —— `VBRUN.` 是 ComCtls 那套 OCX 的类型库名。实测靶工程
+    // D:\vb_yqt4qPac\ComCtlsDemo 写 `Public Property Get ContainedControls() As
+    // VBRUN.ContainedControls` / `ControlsEnum() As VBRUN.ParentControls`（CoolBar.ctl:2879
+    // 与 :1073），整串 "vbrun.containedcontrols" 首两字母命中 ⇒ Long ⇒ 发码侧那 13 枚
+    // 属性 getter 的 C 返回档成 int32_t, 而它们交回的是 RTL 的 `void*
+    // vb6_UserControl_ContainedControls`（= &g_uc_controlsSingleton, uc_controls.c:35）⇒
+    // **x64 把集合指针折成 32 位** ⇒ `vb6_UC_ControlsIsCollection`（按指针比身份）认不出 ⇒
+    // 落进 IDispatch 通道, `vb6_ForEach_Init` 拿野值调 GetIDsOfNames ⇒ 起窗期未处理 AV
+    // (0xC000041D, 因为整条链在子类化窗口过程 = 内核模式回调里)。裸 `VB.`/`VBA.` 那一格
+    // 早就由 Fix 161 单独处理（见上）, 本条从未被它覆盖过 —— 同族名字实测还有
+    // VBMANLIB.cTimer / vbSplitter.cSplitter / vbalDTab6X.cTab / VBA.Collection：它们全是
+    // 对象, 过去一律被这条折成 Long。判据与承面见台账行 5024/5025（语料 6212 处限定 As 里
+    // 改答案 121 处 / 26 个名字）。
+    if (lower.find('.') == std::string::npos &&
+        lower.size() >= 2 && lower.compare(0, 2, "vb") == 0 &&
         lower != "boolean" && lower != "byte") {
         return Vb6Type::Long;
     }
@@ -128,6 +143,25 @@ Vb6Type TypeSystem::resolveTypeName(const std::string& name) const {
     if (lower.rfind("msdatasrc.", 0) == 0) {
         std::string leaf = lower.substr(10);
         if (leaf == "datasource" || leaf == "datamember") return Vb6Type::String;
+    }
+    // 账 #305 第二百六十七刀（第二半）: 以上按**整串**的规则全部答不出 ⇒ 库限定名最后按 leaf
+    // 再问一遍本函数。理由与上一条同源: 前缀是出处不是类型, 而 `X.<leaf>` 与裸 `<leaf>` 必须
+    // 同一答案（账 #228 为 stdole.OLE_COLOR 定过的口径, 当时只改了 codegen 那侧的名单, 语义层
+    // 这一问仍然分家: 裸 OLE_COLOR 答 Long、限定那形答 Unknown）。leaf 里没有点, 所以这一问
+    // 只会递归一层; 放在 MSDATASRC 那一格**之后**是刻意的 —— 那条规则按整串限定形匹配
+    // (`msdatasrc.` + datasour/datamember, 见上), 排在前头就会把 Fix 160-G 的 String 折成
+    // Unknown（21 处, VBFlexGrid.ctl:2030 那格 C2440 的病灶会复发）。
+    const size_t dot = lower.rfind('.');
+    if (dot != std::string::npos && dot + 1 < lower.size()) {
+        // leaf 也答不出 ⇒ 交回**对象档**, 与 codegen 末尾那条「未知类型 → 通用对象指针」的
+        // 兜底 (cgen_base_type.cpp:876 `return "void*"`) 取同一答案。两层对同一个名字给两个
+        // 答案是第二百六十七刀实测出来的: 语义层答 Unknown 时, 发码侧的进槽站
+        // (`isDefinitelyVariantExpr` / `knownVariantVars_`, 见 cgen_control.cpp:400-414 的
+        //  For Each 接收者) 按 Variant 包一发 `vb6_VariantToObjectVal(...)`, 而那一发的 C
+        //  类型其实是 `void*` ⇒ cl C2440「无法从 void* 转换为 vb6_VARIANT」(ComCtlsDemo 三处:
+        //  CbrBand.c:129 / FrameW.c:2093 / ComCtlsBase.c:901)。答 Object 之后两问同答。
+        const Vb6Type leafType = resolveTypeName(lower.substr(dot + 1));
+        return leafType == Vb6Type::Unknown ? Vb6Type::Object : leafType;
     }
     // 用户自定义类型 (Type/Enum)
     return Vb6Type::Unknown;

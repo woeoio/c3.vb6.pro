@@ -10,7 +10,13 @@
             auto* srcClsSym = symTab_.lookup(srcClassName);
             if (!srcClsSym) continue;
             if (srcClsSym->kind == SymbolKind::Class) {
-                for (auto& evtName : srcClsSym->eventNames) {
+                for (size_t evtIdx256 = 0; evtIdx256 < srcClsSym->eventNames.size(); ++evtIdx256) {
+                    const std::string& evtName = srcClsSym->eventNames[evtIdx256];
+                    // 账 #305 256: .h 的前向声明与 .c 的定义必须同形 —— 两处都读同一张
+                    // Symbol::eventParamByAddr (语义层由 src/common/event_param_abi.hpp 算一次)。
+                    const std::vector<char>* evtSlots256 =
+                        evtIdx256 < srcClsSym->eventParamByAddr.size()
+                            ? &srcClsSym->eventParamByAddr[evtIdx256] : nullptr;
                     std::string varName = varLower;
                     auto* varSym = symTab_.lookup(varLower);
                     if (varSym) varName = varSym->name;
@@ -25,7 +31,12 @@
                         if (decl2->kind == ASTNodeKind::SubDecl) {
                             auto& sub = static_cast<SubDecl&>(*decl2);
                             if (Symbol::toLower(sub.name) == Symbol::toLower(handlerName)) {
+                                size_t pidx256 = 0;
                                 for (auto& param : sub.params) {
+                                    const bool byAddr256 =
+                                        evtSlots256 && pidx256 < evtSlots256->size() &&
+                                        (*evtSlots256)[pidx256] != 0;
+                                    pidx256++;
                                     ParameterInfo pi;
                                     pi.name = param->name;
                                     pi.type = (param->asType && param->asType->kind == ASTNodeKind::SimpleTypeRef)
@@ -33,11 +44,12 @@
                                         : Vb6Type::Variant;
                                     if (pi.type == Vb6Type::Unknown || pi.type == Vb6Type::Empty)
                                         pi.type = Vb6Type::Variant;
-                                    pi.isByVal = true;
+                                    pi.isByVal = !byAddr256;
                                     evtParams.push_back(pi);
                                     // Fix 084k: 类名参数用 mapTypeRef → vb6_cls_X*, 不能
                                     // resolveTypeName 解析失败回退为 vb6_VARIANT (导致 C2440)
-                                    evtParamCTypes.push_back(mapTypeRef(param->asType.get()) + " " + cIdent(param->name));
+                                    evtParamCTypes.push_back(eventParamCDecl(
+                                        mapTypeRef(param->asType.get()), byAddr256, cIdent(param->name)));
                                 }
                                 break;
                             }

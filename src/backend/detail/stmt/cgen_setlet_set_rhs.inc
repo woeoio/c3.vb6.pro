@@ -133,7 +133,22 @@
     // 现在与泛对象槽问**同一位主人** (唯一发码处 boxIntoLateSlot): 装箱成功交回的是包装器 (void*),
     // 下面那一站的 _Generic 正好走 vb6_VariantObject = 真 IDispatch; 交回原样的形态 (认不出工程类 /
     // 值自己就是槽 / 宿主句柄 / 已剥壳) 一字不变。
-    if (targetIsVariant && node.value) {
+    // 账 #305 第二百四十八刀: 右值**自己就是一枚 Variant 表达式**时不许进装箱那一站。
+    //   格② 这一站问的是「目标是不是 Variant 槽」, 没问右值那一侧; 而唯一发码处
+    //   boxIntoLateSlot 的负条件只按 C **文本**问「是不是槽」(cExprIsVariant) —— 一枚
+    //   `As Variant` 的形参在 C 里的形状就是个裸名, 文本那一问答不出 ⇒ 它把整只
+    //   vb6_VARIANT 结构体当成裸实例指针交给 vb6_ComObject_FromBorrowedInstance
+    //   (而那一位头一件事是 `*(void**)instance` 回填 __comObj = 往结构体首格写)。
+    //   实测 ComCtlsDemo Builds/ListView/LvwListItem.cls:504
+    //   `Set PropShadowListSubItems(SubItemIndex).Tag = Value`
+    //   (Property Set FListSubItemProp(ByVal … ByVal Value As Variant);
+    //    目标字段 Tag As Variant ⇒ 走的就是格② 这一站)
+    //   ⇒ LvwListItem.c:778 C2440「无法从 vb6_VARIANT 转换到 void *」+ C2198。
+    //   VB6 侧语义也支持这道闸: `Set <Variant 槽> = <Variant 变量>` 是**复制那一枚
+    //   Variant** (引用照旧), 不是把右值再包一层包装器。
+    //   判据问 AST 那一侧的主人 isDefinitelyVariantExpr (与 With 那一站同一问句),
+    //   不在这里另抄一份"名字像不像 Variant"的表。
+    if (targetIsVariant && node.value && !isDefinitelyVariantExpr(*node.value)) {
         value = boxIntoLateSlot(value, node.value.get());
     }
 
@@ -345,6 +360,13 @@
                         + escapeWideCString(target.substr(std::string("vb6_Extender_").size()))
                         + "\", (void*)(intptr_t)" + value + ");"
                         "  /* Extender.<prop> = v (per-instance, Set stmt) */");
+        } else if (targetIsVariant) {
+            // 账 #305 第一百九十四刀: 本过程声明这一格是 Variant 槽 ⇒ 上面那条 boxToVariant
+            // 已经把它装进去了; 工程类那条腿只认**声明是工程类**的槽。knownClassVars_ 全程
+            // 不清空, 别的过程里同名的类局部会漏进来 (VbEclipse ucPerspective.Refresh:
+            // `Dim l_ucFolder As Variant` 拿到 ClosePerspective 的同名 `As ucFolder` ⇒
+            // `vb6_cls_ucFolder* __clsold = l_ucFolder;` = cl C2440 + AddRef(C2172/C2083))。
+            c_.emitLine(target + " = " + value + ";  /* Set */");
         } else {
             // 账 #305 §B218 (甲) 腿②: 目标是一格 typed 工程类槽 ⇒ 走那位主人。
             // 类名两问按 #408 定的次序排: 先问 AST (作用域感知), 落空才问按名那张表。
@@ -393,13 +415,93 @@
             // ⇒ 覆写不退旧值。改走主人的地址那一臂：元素档非空 = 这一形有可寻址的地址临时量，
             // 下标算术仍只算一次；真调用形态 (`dict(key)`) 元素档为空串 ⇒ 维持裸拷贝。
             const std::string elemTy140 = classArraySlotElemType(target);
-            if (!clsOfSlot.empty() && !procClassFormals_.count(targetLower)
+            // 账 (Outlook2013 左面板 VisualTheme): VB6 的 `Set <接口类型变量> = <对象>`
+            // 先按**声明类型** QI, 不符 = 错误 13 —— 工程里那句几乎都在
+            // `On Error Resume Next` 里, 于是赋值根本没发生 (实测 VB6: 该循环对
+            // CommandBars / DockingPaneManager 一律无效)。C3 发的是裸指针拷贝, 而
+            // `Form.Controls` 交给我们的是一枚裸 IDispatch ⇒ 循环里
+            // `CtrlCaption.VisualTheme = v` 会一路打到 CommandBars 自己, 把 ribbon
+            // 主题改坏 (实测: 整个 ribbon 变黑, 标签条消失)。
+            // 判据只有两问, 多一问都不加: 左槽是早期绑定的 COM 接口变量, 右值是一枚
+            // **裸对象变量**。其余形状 (成员/下标槽、属性表达式、NULL、_New) 一字不动。
+            const Symbol* comTypeCheckSym = nullptr;
+            if (!target.empty() && target.find_first_of("(-") == std::string::npos
+                && node.value && node.value->kind == ASTNodeKind::IdentifierExpr
+                && value != "NULL" && value.find('(') == std::string::npos) {
+                auto itTC = knownTypedComVars_.find(targetLower);
+                if (itTC != knownTypedComVars_.end() && itTC->second
+                    && (itTC->second->kind == SymbolKind::ComClass
+                        || itTC->second->kind == SymbolKind::ComInterface)) {
+                    std::string vLowTC = value;
+                    std::transform(vLowTC.begin(), vLowTC.end(), vLowTC.begin(), ::tolower);
+                    if (knownObjectVars_.count(vLowTC) || knownTypedComVars_.count(vLowTC))
+                        comTypeCheckSym = itTC->second;
+                }
+            }
+            // 账 #305 第二百零三刀: 这格槽的**声明档**是新式接口视图 (`vb6_ivref_<I>*`) ⇒ 交给视图那两位
+            // 主人，别让工程类主人接手 —— 它只会按声明名拼 `vb6_cls_<接口名>_AddRef/_Release`(接口档不发
+            // 定义 ⇒ VbEclipse 链接期最后两声)，而且把 `New <实现者>` 的实例指针直接写进视图槽。
+            // 第一百六十五刀那道闸只认 legacy 档; 字段档(普通类字段 `me->x` 与 UC 被 globalize 的裸名)
+            // 从没进 knownIvrefVars_，所以按名查表那条路对两档都失灵 —— 这里改问**声明档**那一问。
+            const std::string ivC231 = clsOfSlot.empty() ? std::string() : ivrefCType(clsOfSlot);
+            if (!ivC231.empty() && !procClassFormals_.count(targetLower)) {
+                std::string vLow231 = value;
+                std::transform(vLow231.begin(), vLow231.end(), vLow231.begin(), ::tolower);
+                const bool nil231 = (value == "NULL");
+                const bool new231 = !nil231 && value.find("_New(") != std::string::npos;
+                const bool cls231 = !nil231 && !new231 && knownClassVars_.count(vLow231) != 0;
+                if (new231 || cls231) {
+                    // 账 #305 第二百零四刀: 这一发形状挪给唯一主人 ivrefInstanceViewExpr
+                    // (与实参站那一条腿同一个答案) —— 逐字节相同，只是不再在站点里现拼。
+                    emitIvrefRefSet(target, clsOfSlot,
+                                    ivrefInstanceViewExpr(clsOfSlot, value, cls231), new231);
+                } else if (nil231) {
+                    // 置空那一格由 腿③ 那一站 (cgen_setlet_set_prop.inc) 主持; 这里只兜「同一条
+                    // 语句被别的路走到」的那一档 —— 交给同一位主人, 不许落进下面那条 QI 分支
+                    // (`NULL->vt` 是 cl C2039)。
+                    emitIvrefRefSet(target, clsOfSlot, "NULL", false);
+                } else {
+                    emitIvrefQiSet(target, clsOfSlot, value,
+                                   node.value ? rhsTransfersProjectRef(*node.value, true) : false);
+                }
+            } else if (!clsOfSlot.empty() && !procClassFormals_.count(targetLower)
                 && (target.find('(') == std::string::npos || !elemTy140.empty())) {
                 emitClassSlotRefSet(target, clsOfSlot, value, rhsTransferred, false, elemTy140);
             } else if (!outCls144.empty()) {
                 emitClassSlotRefSet(target, outCls144, value, rhsTransferred, false);
             } else if (outSlotClaim) {
                 emitClassSlotRefSet(target, clsOfRhs, value, rhsTransferred, true);
+            } else if (clsOfSlot.empty() && !currentReturnVar_.empty()
+                       && target == currentReturnVar_
+                       && ctypeIsObjectSlotPtr(currentReturnCType_)
+                       && !rhsTransferred && value.size() > 1 && value != "NULL"
+                       && value.find('(') == std::string::npos
+                       && !localSlotHandsOverRef(value, node.value.get())) {
+                // 账 #305 §B218 (甲) 腿②″ (第三百十四刀): 泛对象档的**返回槽**从没主人 ——
+                // 靶工程 ImageList.ctl:562 `Set FListImageExtractIcon = UserControl.Picture` 发成裸拷贝,
+                // 紧跟着 563 `Set UserControl.Picture = Nothing` 把唯一那一枚退掉 ⇒ 交出去的是已回收的
+                // IPictureDisp ⇒ Command2 一点就 0xC0000005 (写进 oleaut32 的 GetIDsOfNames)。
+                // 两道负条件各是一个**在册的口径**, 都不在这一站另答一遍:
+                //   不带括号 = 右值是一次调用 (`Set ret = MakeOne()`) 时, 被调方按 腿②″/腿② 已经自带
+                //     一枚对价 ⇒ 再 claim = 每调用净 +1 (与 rhsTransfersProjectRef 那段同一契约);
+                //   !localSlotHandsOverRef = 右值是**本过程的局部**时, 那一枚引用今天靠裸拷贝移交
+                //     (C3 不在过程出口放手局部对象格 = §B164 那族账), claim 就是净 +1
+                //     (实测 Common.bas PictureFromHandle: 每发图片漏一只 IPicture)。
+                // `New` / 工程类返回 / 视图 / Nothing 四形各归各的主人, 这里都不接手。
+                emitLateSlotRefClaim(target, value);
+            } else if (comTypeCheckSym) {
+                // 声明类型 = 类型库里的 coclass 名 (ShortcutCaption); 生成码的槽类型
+                // 是该 coclass 的默认接口 (vb6_ComIface__DShortcutCaption*), 与
+                // cgen_base_type 的映射同源。RTL 侧按控件类名 (ProgID 尾段) 比对,
+                // 只有"本宿主托管的 OCX 控件"那一路才可能返回 NULL —— 其余对象原样通过。
+                std::string ifaceNmTC = comTypeCheckSym->name;
+                if (comTypeCheckSym->kind == SymbolKind::ComClass
+                    && !comTypeCheckSym->comDefaultIfaceName.empty())
+                    ifaceNmTC = comTypeCheckSym->comDefaultIfaceName;
+                c_.emitLine("{ void* _vb6_chk = vb6_ComObjectTypeCast(" + value
+                            + ", L\"" + comTypeCheckSym->name + "\"); if (_vb6_chk) "
+                            + target + " = (vb6_ComIface_" + cIdent(ifaceNmTC)
+                            + "*)_vb6_chk; }  /* Set: 类型不符 = 错误 13 (被 On Error Resume Next 吞掉) */");
             } else {
                 c_.emitLine(target + " = " + value + ";  /* Set */");
             }

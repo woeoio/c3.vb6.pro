@@ -1,0 +1,5 @@
+Type=Exe
+Name="K3060App"
+Module=mdl3060; mdl3060.bas
+Class=C3060; C3060.cls
+Startup="Sub Main"

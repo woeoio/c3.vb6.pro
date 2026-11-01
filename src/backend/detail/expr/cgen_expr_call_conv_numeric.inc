@@ -89,7 +89,8 @@
                 a0.find("vb6_UCase(") == 0 || a0.find("vb6_LCase(") == 0 ||
                 a0.find("vb6_Space(") == 0 || a0.find("vb6_IIfBSTR(") == 0 ||
                 a0.find("vb6_Chr(") == 0 || a0.find("vb6_ChrW(") == 0 ||
-                a0.find("vb6_BSTR_Concat(") == 0 || a0.find("vb6_BSTR_FromStr(") == 0 ||
+                a0.find("vb6_BSTR_Concat(") == 0 || a0.find("vb6_BSTR_ConcatFree(") == 0 ||
+                a0.find("vb6_BSTR_FromStr(") == 0 ||  // 第一百九十五刀: 拼接站发的是 ConcatFree
                 a0.find("vb6_CStr") == 0 || a0.find("vb6_VariantToString(") == 0 ||
                 a0.find("VB6_SA_AT(BSTR,") != std::string::npos ||
                 // Fix 152g: 控件字符串属性读取器返回 BSTR/wchar_t*, 之前未列入
@@ -105,6 +106,10 @@
                 a0.find("vb6_GetMenuCaption(") == 0;
         }
         if (argIsBstrExpr && !args.empty()) {
+            // 账 #305 第一百九十五刀: 这一发若**自己造串** (如 ConcatFree), 先按拼接站同一张
+            // 提名表落成 _own_N (语句末收回), 再包 NumVal —— 否则串被 NumVal 吃进去之后没人放
+            // (VbEclipse MagneticWnd `CByte("&H" & Mid(...))` 实测)。
+            hoistOwnedTempSlot(args[0], callee, 0, std::string());
             // 账 #416: 两位主人各问各的 —— 数值族问 vb6_NumVal, CBool 问 vb6_BoolVal。
             args[0] = std::string(convIsBool ? "vb6_BoolVal(" : "vb6_NumVal(") + args[0] + ")";
             argList.clear();

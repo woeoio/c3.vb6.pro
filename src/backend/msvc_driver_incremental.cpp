@@ -309,6 +309,13 @@ bool MsvcDriver::compileAndLinkIncremental(const MsvcDriverOptions& options) {
             std::ofstream errLog = ofstreamUtf8(errorLogPath, std::ios::out | std::ios::trunc);
             if (tmpLog && errLog) {
                 errLog << "C3: Compilation failed (exit code " << ret << ")" << std::endl;
+                // 失败留档完整命令与响应文件 (同 msvc_driver.cpp; rsp 为 UTF-16,
+                // 这里写内存里的同一份 UTF-8 内容, 不回读文件)。rspPath 在本分支
+                // 之前已删 (增量路径的成功清理), 段头里的路径仅作定位参考。
+                errLog << "=== Command ===" << std::endl;
+                errLog << fullCmd << std::endl;
+                errLog << "=== Response File (" << rspPath << ") ===" << std::endl;
+                errLog << compileCmd.str().substr(cl.length()) << std::endl;
                 errLog << "=== MSVC Output ===" << std::endl;
                 std::string line;
                 while (std::getline(tmpLog, line)) errLog << line << "\n";
@@ -432,6 +439,11 @@ bool MsvcDriver::compileAndLinkIncremental(const MsvcDriverOptions& options) {
         std::ofstream errLog = ofstreamUtf8(errorLogPath, std::ios::out | std::ios::trunc);
         if (tmpLog && errLog) {
             errLog << "C3: Compilation failed (exit code " << ret2 << ")" << std::endl;
+            // 失败留档完整命令与响应文件 (同 msvc_driver.cpp 编译分支)。
+            errLog << "=== Command ===" << std::endl;
+            errLog << fullLinkCmd << std::endl;
+            errLog << "=== Response File (" << linkRsp << ") ===" << std::endl;
+            errLog << linkCmd.str().substr(linkExe.length()) << std::endl;
             errLog << "=== MSVC Output ===" << std::endl;
             std::string line;
             while (std::getline(tmpLog, line)) errLog << line << "\n";

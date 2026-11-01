@@ -100,6 +100,8 @@ void* vb6_CtrlArr_Load(vb6_CtrlArr* arr, int index, void* hParent, void* hInstan
     );
 
     if (hNew) {
+        vb6_GeomOwnerStamp(hNew, vb6_GeomAuthoredOwner(hParent));   /* 账 #305 299: 与 vb6_CreateControl 同一口径 */
+
         // 账 #204: 模板的字体也从那一处出口问 —— 裸 `WM_GETFONT` 对 STATIC 那一类模板恒回 NULL，
         // 外面那句 `if (hFont) SendMessage(...)` 就会整步跳过，新窗口连一次 WM_SETFONT 都没收到。
         // 发给新窗口之后同样要存进槽位（新窗口自己也是 STATIC 那一类的话，下一读又是 NULL）。

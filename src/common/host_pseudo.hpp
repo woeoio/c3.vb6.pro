@@ -218,6 +218,16 @@ inline bool hostPseudoBareEligible(const std::string& pseudoObj, const std::stri
     return r != nullptr && (r->flags & HPF_BARE) != 0;
 }
 
+// 账 #305 第二百九十二刀: 这一档能不能当"可写的标量全局"用 (With 体内的属性写
+// `.AutoRedraw = v` 这类)。答 true 的才改写成 RTL 全局赋值/专用入口 —— 答不出类型
+// (Unknown) 或本身是方法/码头的一律维持原 COM 晚绑定, 不猜。
+inline bool hostPseudoHasScalarRow(const std::string& pseudoObj, const std::string& memberName) {
+    const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
+    if (!r) return false;
+    if ((r->flags & (HPF_METHOD | HPF_CHANNEL)) != 0) return false;
+    return r->type != Vb6Type::Unknown;
+}
+
 // 这一档是不是"由专用码头回答"（HPF_CHANNEL），是的话把符号名交出去。
 // 两个消费点：语义层据此在**两个位**都放行（集合名当限定符用是 VB6 的常规写法），
 // 发码层据此决定发哪个码头 —— 名字到码头的映射只在这里写一次。

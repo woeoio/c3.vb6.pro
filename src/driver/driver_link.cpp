@@ -4,6 +4,7 @@
 
 #include "driver/driver.hpp"
 #include "driver/res_inventory.hpp"   // ai/029 C29-M: 让位判据要问那份 .res 里有没有 #1 清单
+#include "driver/default_form_icon.hpp" // 账 #305 第303刀: VB6 默认窗体图标（链接期注入 EXE）
 #include "common/diagnostics.hpp"
 #include "common/encoding.hpp"
 #include "ast/ast.hpp"
@@ -16,6 +17,10 @@
 #include <algorithm>
 #include <cctype>
 #include <unordered_set>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace vb6c3 {
 
@@ -594,6 +599,60 @@ static bool embedManifestViaMt(const std::string& exePath, const std::string& ma
     return true;
 }
 
+// 账 #305 第303刀: 把 VB6 的**默认窗体图标**塞进刚链接好的 EXE。
+//
+// 口径出处（实测）：参考工程 ComCtlsDemo 的 vbp 写 IconForm="MainForm"、MainForm.frm 却没有
+// Icon 属性，VB6 于是塞进默认窗体图 —— RT_GROUP_ICON 1 + RT_ICON 30001..30003（语言档 0），
+// 运行时再由框架 SendMessage(WM_SETICON, ICON_BIG) 交给窗口（参考那台 GCLP_HICON 仍是 0、
+// WM_GETICON(ICON_BIG) 非 0）。我方此前一枚图标资源都没有 ⇒ 标题栏落回系统缺省图。
+//
+// 走 UpdateResource 而不是再多编一份 .rc：mt.exe 已经把 .rsrc 建起来（资源目录存在），
+// 这一步只往里加条目；资源号照抄 VB6 ⇒ 产物里这四份资源与参考**逐字节相同**，判据好写。
+// 用户自带 .res 里已有图标组时不注入（再塞一份组 1 会让 Explorer 挑错图 / 与链接器打架）。
+#if defined(_WIN32)
+static bool embedDefaultFormIcon(const std::string& exePath, bool verbose) {
+    std::filesystem::path exe = utf8ToPath(exePath);
+    HANDLE hUpd = BeginUpdateResourceW(exe.c_str(), FALSE);
+    if (!hUpd) {
+        std::cerr << "C3: warning: default form icon: BeginUpdateResource failed (err "
+                  << (unsigned long)GetLastError() << ")" << std::endl;
+        return false;
+    }
+    // lang 0 = 中性，与 VB6 产物一致。
+    const WORD lang = 0;
+    bool ok = true;
+    for (const DefaultFormIconImage& img : kDefaultFormIconImages) {
+        if (!UpdateResourceW(hUpd, MAKEINTRESOURCEW(3 /*RT_ICON*/), MAKEINTRESOURCEW(img.id),
+                             lang, const_cast<unsigned char*>(img.data), img.size)) {
+            std::cerr << "C3: warning: default form icon: UpdateResource(RT_ICON " << img.id
+                      << ") failed (err " << (unsigned long)GetLastError() << ")" << std::endl;
+            ok = false;
+            break;
+        }
+    }
+    if (ok && !UpdateResourceW(hUpd, MAKEINTRESOURCEW(14 /*RT_GROUP_ICON*/),
+                               MAKEINTRESOURCEW(kDefaultFormIconGroupId), lang,
+                               const_cast<unsigned char*>(kDefaultFormIconGroup),
+                               (DWORD)sizeof(kDefaultFormIconGroup))) {
+        std::cerr << "C3: warning: default form icon: UpdateResource(RT_GROUP_ICON "
+                  << kDefaultFormIconGroupId << ") failed (err "
+                  << (unsigned long)GetLastError() << ")" << std::endl;
+        ok = false;
+    }
+    if (!EndUpdateResourceW(hUpd, ok ? FALSE : TRUE)) {   // 失败时丢弃这半次修改
+        std::cerr << "C3: warning: default form icon: EndUpdateResource failed (err "
+                  << (unsigned long)GetLastError() << ")" << std::endl;
+        return false;
+    }
+    if (verbose && ok) {
+        std::cout << "C3: default form icon embedded (group " << kDefaultFormIconGroupId
+                  << ", " << (sizeof(kDefaultFormIconImages) / sizeof(kDefaultFormIconImages[0]))
+                  << " images): " << exePath << std::endl;
+    }
+    return ok;
+}
+#endif
+
 bool Driver::runLinker(const CompileOptions& options, const std::string& outputDir,
                        const std::string& intermediatesDir, SessionManager& session) {
     // --emit-c mode: no linking needed
@@ -1105,6 +1164,28 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
     if (!msvcOpts.manifestXmlFile.empty()) {
         embedManifestViaMt(msvcOpts.outputFile, msvcOpts.manifestXmlFile, options.verbose);
     }
+
+    // 账 #305 第303刀: 默认窗体图标 —— 只在 EXE、工程里有 .frm、且用户 .res 没自带图标时注入。
+    // 认不动的 .res 与清单那一档同口径：保守让位（宁可没图标，也不与用户资源打架）。
+#if defined(_WIN32)
+    if (!options.isDll && !msvcOpts.outputFile.empty()) {
+        bool hasFormModule = false;
+        for (size_t i = 0; i < modules_.size(); i++) {
+            if (modules_[i] && modules_[i]->isFormModule) { hasFormModule = true; break; }
+        }
+        bool userHasIcon = false;
+        if (!userResFile_.empty() && std::filesystem::exists(utf8ToPath(userResFile_))) {
+            ResFileProbe iconProbe;
+            userHasIcon = iconProbe.loadFromPath(userResFile_) ? iconProbe.hasIconGroup : true;
+            if (userHasIcon && options.verbose) {
+                std::cout << "C3: default form icon skipped (user .res carries one)" << std::endl;
+            }
+        }
+        if (hasFormModule && !userHasIcon) {
+            embedDefaultFormIcon(msvcOpts.outputFile, options.verbose);
+        }
+    }
+#endif
 
     return true;
 }

@@ -59,6 +59,10 @@ struct Vb6AxSite {
     const IOleControlSiteVtbl* lpVtblControlSite;
     const IOleInPlaceSiteWindowlessVtbl* lpVtblInPlaceSiteWindowless;
     const IDispatchVtbl* lpVtblDispatch;
+    /* VB6 容器对每个控件都会 IOleObject::Advise 一个 IAdviseSink
+     * (OnShowWindow / OnClose / OnViewChange 由此送到容器). */
+    const IAdviseSinkVtbl* lpVtblAdviseSink;
+    DWORD adviseCookie;
     int inPlaceActive;
     int captured;         /* IOleInPlaceSiteWindowless::SetCapture 状态 */
     int focused;          /* IOleInPlaceSiteWindowless::SetFocus 状态 */
@@ -66,6 +70,23 @@ struct Vb6AxSite {
     void* pViewObj;       /* IViewObject* — 宿主 WM_PAINT 里绘制控件用 */
     wchar_t ctrlName[128];/* Fix 148: 控件实例名 (容器对象模型用) */
     void* pExtender;      /* Fix 148: Extender 缓存 (IOleControlSite::GetExtendedControl) */
+    void* pAmbientFont;   /* ambient Font 缓存: 控件 (Codejock 等) 经 IDispatch 取容器字体 */
+    /* 账 (Outlook2013 主区 Report 盖住 Calendar): VB6 里控件的 Visible / Left / Top /
+       Width / Height / Move 是**容器 Extender** 的账, 落的都是控件自己那个窗口;
+       而 C3 的生成码把这些当"原生控件"发给 vb6_GetControlVisible / vb6_ControlMove,
+       实参却是控件对象 (IDispatch*) 不是 HWND ⇒ IsWindow() 判假, 静默不动作。
+       下面两格让宿主按控件对象反查回来: pDisp = 控件 IDispatch (与生成码里的
+       vb6_hwnd_<name> 同一个指针), hwndCtrl = 它激活后的窗口 (windowless 为 0),
+       visible = 容器那份可见状态 (windowless 控件只能靠它)。 */
+    void* pDisp;
+    HWND hwndCtrl;
+    int visible;
+    /* 账 (Outlook2013 左面板 VisualTheme): 控件**类名** (CLSID 注册 ProgID 的尾段,
+       "XtremeShortcutBar.ShortcutCaption" → "ShortcutCaption")。
+       VB6 里 `Set <接口类型变量> = <控件>` 按声明类型 QI, 不符就是 Error 13; 而
+       C3 的 Controls 集合交出的是裸 IDispatch, 没有任何类型可查 ⇒ 宿主在这里记一份,
+       供 vb6_ComObjectTypeCast 做同一道判定。 */
+    wchar_t typeName[128];
 };
 
 /* Fix 143d: 从接口指针反推宿主对象.
@@ -83,6 +104,10 @@ typedef struct Vb6PropBag {
     LONG ref;
     const Vb6OcxProp* props;
     int count;
+    /* 容器的控件尺寸 (HIMETRIC), 供 `_ExtentX/_ExtentY` 应答: .frm 持久化这两项,
+     * 控件按它算主题缩放; 缺了只拿到 E_INVALIDARG, 边框厚度会退化为 0. */
+    LONG extentX;
+    LONG extentY;
 } Vb6PropBag;
 
 // ===== 跨族共享符号 (原 static, 拆分后提升为外部链接) =====
@@ -95,6 +120,7 @@ extern const IOleInPlaceFrameVtbl g_axSiteInPlaceFrameVtbl;
 extern const IDispatchVtbl g_axSiteDispatchVtbl;
 extern const IOleControlSiteVtbl g_axSiteControlSiteVtbl;
 extern const IOleInPlaceSiteWindowlessVtbl g_axSiteInPlaceSiteWindowlessVtbl;
+extern const IAdviseSinkVtbl g_axSiteAdviseSinkVtbl;
 
 // 站点 IUnknown 实现 (定义在 ax_site.c): 各接口的 QI/AddRef/Release 都转发到这里
 HRESULT STDMETHODCALLTYPE axSite_CS_QueryInterface(IOleClientSite* This, REFIID riid, void** ppv);

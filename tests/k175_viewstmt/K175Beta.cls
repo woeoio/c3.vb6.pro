@@ -14,6 +14,10 @@ Attribute VB_Exposed = False
 Option Explicit
 Implements IK175
 
+Private Property Get IK175_Num() As Long
+    IK175_Num = 1200
+End Property
+
 Private Sub IK175_Ping()
     mdlK175.Beta = mdlK175.Beta + 10
 End Sub

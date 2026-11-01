@@ -1,0 +1,6 @@
+Type=DLL
+Class=StrArrCls; StrArrCls.cls; {11112222-3333-4444-5555-66667777B221}
+Module=DllBlocks; DllBlocks.bas
+Startup=""
+Command32=""
+Name="B221k"

@@ -13,8 +13,11 @@
 // ============================================================
 
 // COM方法调用, 返回对象 (IDispatch*) — 内部完成Unpack+VarFree
+// methodName == NULL: **默认成员**调用 (`coll(idx)`)。VB6 把它编到 DISPID_VALUE(0),
+// 从不按名字 "Item" 找; 详见 vb6com_invoke.c 的 vb6_ComCallObjectDefault。
 void* vb6_ComCallObject(void* disp, const wchar_t* methodName,
                         void* args_void, int32_t argc) {
+    if (!methodName) return vb6_ComCallObjectDefault(disp, args_void, argc);
     VARIANT* pv = (VARIANT*)vb6_ComCall(disp, methodName, args_void, argc);
     if (!pv) return NULL;
     void* obj = NULL;

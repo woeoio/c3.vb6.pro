@@ -1,10 +1,80 @@
 #include "backend/cgen.hpp"
+#include "common/event_param_abi.hpp"
 #include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <functional>
 
 namespace vb6c3 {
+
+namespace {
+// 账 #305 第二百五十六刀: 「这一串递出去能不能取地址」—— 认 标识符 / 成员链(. 与 ->) /
+// 尾随一层下标 `[…]`；其余（带括号的调用、逗号、字面量、类型转换…）一律答否，
+// 由调用方落一枚临时量。刻意保守：答否只是少一次直递，答错才会发出非法 C。
+bool evtArgIsLvalue(const std::string& s) {
+    size_t p = 0;
+    auto eatChar = [&s, &p](bool first) {
+        if (p >= s.size()) return false;
+        const unsigned char c = static_cast<unsigned char>(s[p]);
+        const bool ok = first ? (isalpha(c) || c == '_' || c >= 0x80)
+                              : (isalnum(c) || c == '_' || c >= 0x80);
+        if (ok) p++;
+        return ok;
+    };
+    auto eatIdent = [&]() {
+        const size_t st = p;
+        if (!eatChar(true)) return false;
+        while (eatChar(false)) {}
+        return p > st;
+    };
+    if (!eatIdent()) return false;
+    while (p < s.size()) {
+        if (s.compare(p, 2, "->") == 0) { p += 2; if (!eatIdent()) return false; continue; }
+        if (s[p] == '.') { p += 1; if (!eatIdent()) return false; continue; }
+        if (s[p] == '[') {
+            const size_t close = s.find(']', p);
+            return (close != std::string::npos && close + 1 == s.size());
+        }
+        return false;
+    }
+    return true;
+}
+
+// 账 #305 第三百八刀: 「处理器写回的那枚槽怎么搬回实参自己的存储」—— 只有声明档搬得回去的
+// 那几形有答案，出口一律问 src/rtl/core/vb6rtl/vb6rtl_variant.h 那一族 To{String,Bool,Long,
+// LongPtr,Double}。串那一发用 AssignMove: vb6_VariantToString 交的是**新分配**的一枚
+// (vb6_Format 的每个 return 都是 vb6_BSTR_FromStr)，搬进目标后所有权归目标，槽随后 clear
+// 不会双 Free。数组载体 / 对象 / 64 位那几档交回空串 = 不回写 —— 装箱那一发照做，
+// 「往标量存储里写整枚槽」的崩已经修掉，写回欠的是另一座桥（跟 ByRef As Object 同一族）。
+std::string evtVariantWriteBack(const Vb6Type ty, const std::string& dst, const std::string& box,
+                                const std::string& dstCType) {
+    const uint16_t raw = static_cast<uint16_t>(ty);
+    if ((raw & static_cast<uint16_t>(Vb6Type::Array)) != 0) return std::string();
+    switch (static_cast<Vb6Type>(raw & ~static_cast<uint16_t>(Vb6Type::ByRef))) {
+        case Vb6Type::String:
+            return "vb6_BSTR_AssignMove(&(" + dst + "), vb6_VariantToString(" + box + "));";
+        case Vb6Type::Boolean:
+            return "(" + dst + ") = vb6_VariantToBool(" + box + ");";
+        case Vb6Type::LongPtr:
+            return "(" + dst + ") = vb6_VariantToLongPtr(" + box + ");";
+        case Vb6Type::Single:
+        case Vb6Type::Double:
+        case Vb6Type::Date:
+        case Vb6Type::Currency:
+            return "(" + dst + ") = (" + dstCType + ")vb6_VariantToDouble(" + box + ");";
+        case Vb6Type::Integer:
+        case Vb6Type::Long:
+        case Vb6Type::ULong:
+        case Vb6Type::Byte:
+        case Vb6Type::SByte:
+        case Vb6Type::UInteger:
+        case Vb6Type::Error:
+            return "(" + dst + ") = (" + dstCType + ")vb6_VariantToLong(" + box + ");";
+        default:
+            return std::string();
+    }
+}
+}  // namespace
 
 // --- cgen_com_events.cpp: RaiseEvent 分发 + 事件接收器表 + 外部 COM vtable sink ---
 // 由 src/backend/module/cgen_com.cpp 拆出（2026-09-17），纯搬移、零行为改动。
@@ -40,9 +110,62 @@ void CCodeGen::visit(RaiseEventStmt& node) {
     c_.indent();
     // 生成回调调用
     std::string call = "me->events->" + callbackName + "(me->events->handler";
+    std::vector<std::string> evtRefTemps256;   // 不可取址的按地址实参：先落一枚临时量
+    std::vector<std::string> evtPostCall308;   // 账 #305 第三百八刀：装箱槽的出站回写 + 清槽
     for (size_t i = 0; i < node.args.size(); i++) {
         emitExpr(*node.args[i]);
         std::string argVal = lastExpr_;
+        // 账 #305 第二百五十六刀: 这一位形参按不按地址，问 src/common/event_param_abi.hpp
+        // (与 emitEventSink 的 typedef / prelude 的 thunk / 处理器形参同源)。按地址那一档
+        // 不走下面任何一条装箱 —— 那些出口发的是**右值**，取不了地址。
+        const ParameterDecl* prm256 =
+            (evtDecl && i < evtDecl->params.size()) ? evtDecl->params[i].get() : nullptr;
+        const bool byAddr256 = prm256 && eventParamByAddress(
+            prm256->isByRef,
+            prm256->asType && prm256->asType->kind == ASTNodeKind::ArrayTypeRef);
+        if (byAddr256) {
+            /* 账 #305 第三百八刀: 形参声明的是**槽** (As Variant / 无型) 而实参在 C 侧不是槽 ——
+               直递 `&(<标量>)` 把「标量的地址」交给了一枚 `vb6_VARIANT*` 形参，处理器一发赋值
+               就往 4/8 字节的标量存储里写整枚槽 (x86 24B) ⇒ 栈被写穿。实测 ComCtlsDemo
+               VirtualControls Demo 起窗后 0xC000041D，现场 ListView.c:13721
+               `onGetVirtualItem(…, &(CallbackText))`（CallbackText = `Dim Text As String`），
+               紧接着 13724 读它 ⇒ AV read 0x8 in wcscmp。VB6 在这一格交的就是一枚临时 Variant
+               （装箱进去 + 调用后按声明档回写），照做。
+               「是不是槽」两条判据**都要点头才留在直递**（inferExprType ∧ cExprIsVariant）：
+               少装箱只是少一层保护，错装箱会把本来就是槽的那份复制再回写，改坏已正确的组合。 */
+            const std::string prmBase256 =
+                prm256->asType ? mapTypeRef(prm256->asType.get()) : std::string("vb6_VARIANT");
+            const Vb6Type argTy308 = inferExprType(*node.args[i]);
+            if (prmBase256 == "vb6_VARIANT" && argTy308 != Vb6Type::Variant &&
+                !cExprIsVariant(argVal)) {
+                const std::string src308 = argVal;
+                const std::string box308 = "_evt_box_" + std::to_string(i);
+                evtRefTemps256.push_back("vb6_VARIANT " + box308 + " = vb6_VariantEmpty();");
+                evtRefTemps256.push_back("vb6_VariantAssign(&" + box308 + ", vb6_VariantFromValue(" +
+                                         src308 + "));");
+                if (evtArgIsLvalue(src308)) {
+                    const std::string back308 =
+                        evtVariantWriteBack(argTy308, src308, box308, mapType(argTy308));
+                    if (!back308.empty()) evtPostCall308.push_back(back308);
+                }
+                evtPostCall308.push_back("vb6_VariantClear(&" + box308 + ");");
+                call += ", &" + box308;
+                continue;
+            }
+            if (evtArgIsLvalue(argVal)) {
+                argVal = "&(" + argVal + ")";
+            } else {
+                // 实参不是左值（函数调用 / 带括号的下标 / 字面量）：VB6 那里递进去的本来
+                // 就是一枚匿名临时量，处理器写回的值递出方同样看不见 ⇒ 落一枚同形临时量。
+                const std::string baseTy256 =
+                    prm256->asType ? mapTypeRef(prm256->asType.get()) : std::string("vb6_VARIANT");
+                const std::string tmp256 = "_evt_ref_" + std::to_string(i);
+                evtRefTemps256.push_back(baseTy256 + " " + tmp256 + " = " + argVal + ";");
+                argVal = "&" + tmp256;
+            }
+            call += ", " + argVal;
+            continue;
+        }
         /* Fix 296 / 4b: 事件实参位上的 Extender 成员读也走实例入口 (CoolBar.ctl
            `RaiseEvent HeightChanged(Extender.Height)` 实测 ComCtlsDemo 1 处)。
            **这是第四条消费路径**: RaiseEvent 自带一条发码, 不经过 cgen_expr_call_arg_emit,
@@ -94,7 +217,9 @@ void CCodeGen::visit(RaiseEventStmt& node) {
         call += ", " + argVal;
     }
     call += ");";
+    for (const auto& d256 : evtRefTemps256) c_.emitLine(d256);
     c_.emitLine(call);
+    for (const auto& p308 : evtPostCall308) c_.emitLine(p308);
     c_.dedent();
     c_.emitLine("}");
 
@@ -232,12 +357,18 @@ void CCodeGen::emitEventSink(Module& module) {
                     : Vb6Type::Variant;
                 if (pi.type == Vb6Type::Unknown || pi.type == Vb6Type::Empty)
                     pi.type = Vb6Type::Variant;
-                // 事件参数总是ByVal传递(跨对象边界)
-                pi.isByVal = true;
+                // 账 #305 第二百五十六刀: 「按不按地址」问的是**事件声明里那一位形参**，
+                // 主人 = src/common/event_param_abi.hpp。从前这里无条件 isByVal=true
+                // (注释「事件参数总是ByVal传递(跨对象边界)」)，把声明里明写的 ByRef 出参
+                // 一起按值发了；今天只有**没写 ByRef** 的那些维持按值 (语料里那几千处形状不动)。
+                const bool byAddr256 = eventParamByAddress(
+                    param->isByRef,
+                    param->asType && param->asType->kind == ASTNodeKind::ArrayTypeRef);
+                pi.isByVal = !byAddr256;
                 info.params.push_back(pi);
                 // Fix 084k: 回调typedef须与包装函数签名一致 — 类名参数用 mapTypeRef
                 // → vb6_cls_X* (ByVal单指针), 不能回退为 vb6_VARIANT (导致 C2440)
-                info.ctypes.push_back(mapTypeRef(param->asType.get()) + " " + cIdent(param->name));
+                info.ctypes.push_back(eventParamCDecl(cType, byAddr256, cIdent(param->name)));
             }
             events.push_back(std::move(info));
         }

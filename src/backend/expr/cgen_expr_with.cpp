@@ -187,6 +187,96 @@ void CCodeGen::visit(WithMemberExpr& node) {
         return;
     }
     case WithObjKind::COMObject: {
+        // 账 #305 第二百六十一刀「甲」: With 接收者是宿主伪对象 (With UserControl /
+        // With PropertyPage) 时, 体内成员先问那张宿主伪表 —— 表里登记了答案的两档
+        // 以前**从没被问到**, 一律打了 COM 标记交给晚绑定, 而晚绑定那一头对宿主句柄
+        // 只有「宿主模型认得的成员」才有答。262 刀量到的 25 条宿主缺口
+        // (GetProp "Extender" ×18 / Call "ScaleY" ×5 / Call "ScaleX" ×2) 全在这一格。
+        // 改道判据与「为什么只接这两档」写在 cgen_util_com.cpp 那两条出口上。
+        //   .Extender → (&vb6_UserControl_Extender)：vb6_UC_IsExtender 认的唯一身份,
+        //     晚绑定出口据此把成员读写岔进 vb6_UC_ExtenderField 那条 per-instance 通道
+        //     ⇒ `With UserControl` 里的 `.Extender.Width` 与 `With UserControl.Extender`
+        //     里的 `.Width`、以及写侧 Fix 294 一直在发的那一枚, 从此同一个答复。
+        //   .ScaleX/.ScaleY → 裸名 + 清空 this：换算不吃接收者 (与 #196 控件那半同形)。
+        // 两形都刻意**不打** marker —— 留着 marker 就是让下一跳去 Invoke 一枚假 IDispatch。
+        if (!info.hostPseudoObj.empty() && hostPseudoIsObject(info.hostPseudoObj)) {
+            std::string hpObj261, hpCallee261;
+            const bool isExt261 =
+                hostPseudoExtenderObjExpr(info.hostPseudoObj, node.memberName, hpObj261);
+            const bool isScl261 = !isExt261 && asCallCallee_
+                && hostPseudoScaleCall(info.hostPseudoObj, node.memberName, hpCallee261);
+            if (isExt261 || isScl261) {
+                isComMarker_ = false;
+                isEarlyBoundCom_ = false;
+                earlyBoundSym_ = nullptr;
+                comObjExpr_.clear();
+                comMemberName_.clear();
+                pendingChainObj_.clear();
+                lastExpr_ = isExt261 ? hpObj261 : hpCallee261;
+                return;
+            }
+        }
+        // 账 #305 第二百九十二刀: `With UserControl` 体内**答得出**的成员按宿主伪表发。
+        // 此前只接了 Extender/ScaleX/ScaleY 两档, 其余 (`.Cls` / `.AutoRedraw` …) 全
+        // 落 vb6_ComCall/vb6_ComSetProp —— 接收者是 hWnd, 晚绑定必然落空; FrameW 的
+        // DrawFrame 因此既清不了屏也开不了 AutoRedraw, 第二页整块白板。
+        // 判据 = 那张表 (hostPseudoHasScalarRow / HPF_METHOD), 答不出的成员维持原样。
+        if (!info.hostPseudoObj.empty() && hostPseudoIsObject(info.hostPseudoObj)) {
+            const HostPseudoRow* hpRow292 = hostPseudoFind(info.hostPseudoObj, node.memberName);
+            if (hpRow292) {
+                const bool isMethod292 = (hpRow292->flags & (HPF_METHOD | HPF_CHANNEL)) != 0;
+                if (isMethod292 && asCallCallee_) {
+                    std::string hpChan292;
+                    if (hostPseudoChannel(info.hostPseudoObj, node.memberName, hpChan292)) {
+                        lastExpr_ = hpChan292;
+                    } else {
+                        lastExpr_ = "vb6_" + std::string(hpRow292->obj) + "_" + hpRow292->rtl;
+                    }
+                    isComMarker_ = false;
+                    isEarlyBoundCom_ = false;
+                    earlyBoundSym_ = nullptr;
+                    comObjExpr_.clear();
+                    comMemberName_.clear();
+                    pendingChainObj_.clear();
+                    return;
+                }
+                if (!isMethod292 && hpRow292->type != Vb6Type::Unknown) {
+                    std::string hpRtl292 = hostPseudoRtlSymbol(info.hostPseudoObj, node.memberName);
+                    if (!hpRtl292.empty()) {
+                        isComMarker_ = false;
+                        isEarlyBoundCom_ = false;
+                        earlyBoundSym_ = nullptr;
+                        comObjExpr_.clear();
+                        comMemberName_.clear();
+                        pendingChainObj_.clear();
+                        lastExpr_ = extenderMemberReadExpr(hpRtl292);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 账 #305 第三百六刀: `With New <窗体>` 的接收者是窗体默认实例的 HWND, 不是
+        // IDispatch。必须排在通用 COM 标记之前 —— 否则 `.Show` 发成
+        // vb6_ComCall(HWND, L"Show", …), 运行期 C3_LATEBIND_MISS (disp=0) 静默, 窗体
+        // 不弹 (ComCtlsDemo 三枚按钮实测)。两条出口与外部窗体那条
+        // (`Frm.Show` → cgen_expr_member_form_builtin.inc) 同一个拼法:
+        //   .Show [modal] → vb6_form_show_<窗体>(NULL)  (欠的那一枚 mode 由形参表的
+        //                     唯一作者 formShowForwarderParams 交出：拆包后补/截)
+        //   标量属性       → 控件读表 getControlPropReadFn(Form, …)(tempVar)
+        if (info.ctrlType == FrmControlType::Form && !info.ctrlOrigName.empty()) {
+            if (memLower == "show") {
+                // 不可带尾注释: 上层 com_bind 靠 callee 以 ')' 结尾拆包追加 modal。
+                lastExpr_ = "vb6_form_show_" + info.ctrlOrigName + "(NULL)";
+                return;
+            }
+            std::string readFnF306 = getControlPropReadFn(FrmControlType::Form, node.memberName);
+            if (!readFnF306.empty()) {
+                lastExpr_ = readFnF306 + "(" + tempVar + ")  /* With form .Property */";
+                return;
+            }
+        }
+
         // Fix 161f-extlist: With 目标是 ListView 槽 (形参/局部) —— `.View` / `.hWnd`
         // / `.Sorted` 等标量属性走控件读表, 不让它落 COM 晚绑定
         // (vb6_ComGetStringProp(_vb6_with_N, L"hWnd") = 拿 HWND 当 IDispatch →
@@ -198,6 +288,27 @@ void CCodeGen::visit(WithMemberExpr& node) {
             if (!readFnLv.empty()) {
                 lastExpr_ = readFnLv + "((void*)" + tempVar + ")  /* With ListView slot .Property */";
                 return;
+            }
+        }
+        // 账 #305 第一百九十三刀: With 临时量装的是 legacy 接口视图时 (`viewIface177`
+        // 那一档已按名字登记进 knownIfaceVars_), 体内**零参属性读** (`.Has`) 是视图槽的
+        // 读, 不是 IDispatch —— 写侧由站F 写读者接住, 带括号的由调用站接住, 缺的正是
+        // 这一形 (`With <视图>: x = .成员`)。槽表与名字主人与第一百九十刀同一份。
+        if (!asCallCallee_) {
+            const std::string ifaceVW193 = slotLegacyIfaceViewName(Symbol::toLower(tempVar));
+            if (!ifaceVW193.empty()) {
+                const Symbol* ifSym193 = symTab_.lookup(ifaceVW193);
+                if (ifSym193 && ifSym193->kind == SymbolKind::Class && ifSym193->isInterface) {
+                    const std::string resolved193 = resolveClassMemberCall(ifSym193->name, node.memberName);
+                    const std::string want193 = cIdent(node.memberName);
+                    for (const LegacyIfaceSlot& s193 : legacyIfaceSlots(ifSym193->name)) {
+                        if (s193.field != want193 || !s193.params.empty()) continue;
+                        if (resolved193 != "vb6_" + cIdent(ifSym193->name) + "_" + s193.field) break;
+                        lastExpr_ = legacyIfaceSlotCallFn(ifSym193->name, s193.field) + "(" + tempVar + ")";
+                        isComMarker_ = false;
+                        return;
+                    }
+                }
             }
         }
         // .Property → 设置COM标记，让下游(IndexOrCallExpr/AssignmentStmt)处理

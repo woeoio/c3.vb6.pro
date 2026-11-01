@@ -18,6 +18,21 @@
         }
     }
 
+    // Set <跨模块窗体名> = New <窗体名> —— 窗体默认实例是 C3 的全局单例
+    // (vb6_form_hwnd_<F>() 访问器, 非左值)。VB6 语义里 `Set F = New F` 让 F 指向
+    // 新实例; C3 的默认实例模型下等价于继续用单例 (先到先建), 不支持重绑。
+    // 此前发 `vb6_form_hwnd_F() = vb6_NewObject(...)` → C2106 (函数调用做左值)。
+    // (Outlook2013 frmInbox:306 Set frmEditEvent = New frmEditEvent, frmMain:3 处)
+    if (node.target->kind == ASTNodeKind::IdentifierExpr) {
+        auto& tgtFormSi = static_cast<IdentifierExpr&>(*node.target);
+        std::string tgtFormLowerSi = Symbol::toLower(tgtFormSi.name);
+        if (tgtFormLowerSi != knownFormName_ && knownFormModuleNames_.count(tgtFormLowerSi)) {
+            emitSetObjectRhs(node.value);  // 保留 RHS 副作用 (New 无副作用, 仅求值)
+            c_.emitLine("/* Set " + tgtFormSi.name + " = New (form default instance, auto-managed) */");
+            return;
+        }
+    }
+
     // 检测 Set obj = Nothing → vb6_ReleaseObject(&obj)
     if (node.value->kind == ASTNodeKind::LiteralExpr) {
         auto& lit = static_cast<LiteralExpr&>(*node.value);
@@ -74,6 +89,17 @@
             // COM属性SetRef Nothing: Set obj.Property = Nothing → vb6_ComSetRef(obj, L"Property", NULL)
             if (isComMarker_) {
                 isComMarker_ = false;
+                // 第一百八十五刀 (账 #305 站F 写侧 Set 档): 接收者是 legacy 视图时, Set 与 Let 问
+                // 同一枚写读者 —— 视图是值结构体 `vb6_iface_<I>`, 交给 vb6_ComSetRef 会
+                // C2172 (实参不是指针)。命中的槽是 `putref_<裸名>` 那一席。
+                const std::string vSetNothing = legacyViewSetterCallExpr(
+                    comObjExpr_, comMemberName_, "NULL", "void*", ProcKind::PropertySet);
+                if (!vSetNothing.empty()) {
+                    c_.emitLine(vSetNothing + ";  /* Property Set Nothing (视图直槽) */");
+                    comObjExpr_.clear();
+                    comMemberName_.clear();
+                    return;
+                }
                 c_.emitLine("vb6_ComSetRef(" + comObjExpr_ + ", L\"" + comMemberName_ + "\", NULL);  /* COM SetRef Nothing */");
                 comObjExpr_.clear();
                 comMemberName_.clear();
@@ -187,11 +213,29 @@
             // 账 #305 §B218 第一百六十五刀: 与覆写那一站同一条问句 —— 槽装的是 legacy 接口视图时
             // 本主人不接手 (置空那一发它会写 `vb6_cls_<接口名>* 旧 = 目标` = cl C2440)。
             // 落空之后走下面那条 vb6_ReleaseObject，与**局部**视图置空今天发的一字相同 (实测)。
-            if (!targetCls101.empty() && slotIsLegacyIfaceView(targetLower)) targetCls101.clear();
+            // 账 #305 第二百一十七刀: 这一问在这一站只问**一次** —— 上面那道闸 (视图那一档不许工程类
+            // 主人接手) 与下面的空形 (置空到底发什么) 必须出自同一个答案。
+            const bool isLegViewP217 = slotIsLegacyIfaceView(targetLower);
+            if (!targetCls101.empty() && isLegViewP217) targetCls101.clear();
+            // 账 #305 第二百一十七刀: 槽装的是 legacy 那一档接口视图 ⇒ 置空 = 整枚值结构体零化，
+            // 不许再把结构体的地址交给下面那条 ReleaseObject —— 它拿到的是一枚**值结构体**的地址，
+            // 读的首字段是那张函数指针表 (判据 vb6_ComIsDispatchable 要看表后第 5/6 槽才判得出
+            // 「不是 IDispatch」= 答案取决于那张表后面挨着什么)。视图是借来的 ⇒ 不退旧 (与第 166/174
+            // 刀同一口径)，所以这一发只清零、不放手；形状交回值结构体空形那一位主人，
+            // 与类工厂字段初始化同一条。
+            if (isLegViewP217) {
+                emitValueStructSlotClear(target, "Set Nothing (接口视图空形)");
+                return;
+            }
             // 账 #305 §B218 (甲) 形A (第一百四十四刀): 出参槽 `(*名)` 的置空 —— 那一格由调用方
             // 持有，所以「置空」= 放手调用方那一枚 + 清槽 (与覆写同一位主人、同一个声明档类名)。
             // 判据住在 classOfProjectRefOutSlot 一处，与覆写那一站同问。
             const std::string outClsP144 = classOfProjectRefOutSlot(target);
+            // 账 #305 第二百零三刀 (2): 「这格槽的声明档是不是新式接口视图」那一问, 置空这一站
+            // 也要问 —— 覆写那一站 (cgen_setlet_set_rhs.inc) 第一百六十五刀之后已经有了, 这一站
+            // 落空就照旧铸一枚从没造过的 `vb6_cls_<接口名>_Release` (K3138 夹具实测: 整工程
+            // 唯一一声 LNK2019 就是它)。两站同问 ⇒ 同一个出口 ivrefCType(声明档)。
+            const std::string ivClsP231 = ivrefCType(targetCls101);
             if (!targetCls101.empty() || !outClsP144.empty() || knownClassVars_.count(targetLower)) {
                 // 账 #305 §B218 (甲) 腿③: 置空 = 放手那一枚 + 清槽, 与覆写同一位主人
                 // (接口那一族在上面 :141-142 早就是这个形状, 具体类只是今天才补上计数头)。
@@ -203,7 +247,11 @@
                 // 第一百三十九刀量到它今天发的是 `vb6_ReleaseObject((void**)(&(void*){…}))`，
                 // 而那枚 `&(void*){…}` 是复合字面量临时量、ReleaseObject 对裸结构体只清
                 // `*objPtr` ⇒ 数组元素既不放手也不清空 = 整条语句 no-op (两台实测 S3b-term=0)。
-                if (!outClsP144.empty()) {
+                if (!ivClsP231.empty()
+                    && (target.find('(') == std::string::npos || !elemTyP140.empty())
+                    && !procClassFormals_.count(targetLower)) {
+                    emitIvrefRefSet(target, targetCls101, "NULL", false);
+                } else if (!outClsP144.empty()) {
                     emitClassSlotRefSet(target, outClsP144, std::string(), false, false);
                 } else if (!targetCls101.empty()
                     && (target.find('(') == std::string::npos || !elemTyP140.empty())
@@ -490,6 +538,16 @@
                            && !_psValByVal166) {
                     _arg2 = "&(void*){" + _valE + "}";
                 }
+                // 第一百八十五刀: 接收者是 legacy 视图时问同一枚写读者 (putref_ 档) ——
+                // 视图是值结构体 `vb6_iface_<I>`, 拼出来的 `vb6_<I>_prop_set_<m>(视图, …)`
+                // 首形参是 `vb6_cls_<I>*` ⇒ C2440。不合(非视图/没那一席/类型不同型)交空串,
+                // 下面那一发原样 = 不掩盖。
+                const std::string _vSetView185 = legacyViewSetterCallExpr(
+                    _objE, _ma.memberName, _arg2, "void*", ProcKind::PropertySet);
+                if (!_vSetView185.empty()) {
+                    c_.emitLine(_vSetView185 + ";  /* Set Property (视图直槽) */");
+                    return;
+                }
                 c_.emitLine(_fn + "(" + _objE + ", " + _arg2 + ");  /* Set Property */");
                 return;
             }
@@ -526,7 +584,10 @@
         std::string memberName = std::move(comMemberName_);
     emitSetObjectRhs(node.value);
     // COM属性值: 如果右侧是COM属性, 解析为值
-    if (isComMarker_) resolveComValue();
+    // 账 (Outlook2013 frmMain:830): Set 的右值是**对象** —— 默认档 String 会发
+    // vb6_ComGetStringProp (Icons 集合被当 BSTR 取) 再塞进 vb6_ComSetRef ⇒
+    // Codejock 答类型不匹配 (Run-time error 13, 启动即弹)。强制 Object 档。
+    if (isComMarker_) resolveComValue("Object");
     std::string value = std::move(lastExpr_);
     // Fix <vbeclipse>: SetRef 的第3参是 void* (对象指针), 右侧若是 Variant 表达式
     // (如 .Item(i) — vb6_List_Item 返回 vb6_VARIANT 结构体, SubClass.cls:56
@@ -543,6 +604,13 @@
             value = "vb6_VariantToObjectVal(" + value + ")";
         }
     }
+        // 第一百八十五刀: 同一枚写读者 (putref_ 档), 与 Let 那条同一口径。
+        const std::string vSetView = legacyViewSetterCallExpr(
+            objExpr, memberName, value, "void*", ProcKind::PropertySet);
+        if (!vSetView.empty()) {
+            c_.emitLine(vSetView + ";  /* Property Set (视图直槽) */");
+            return;
+        }
         c_.emitLine("vb6_ComSetRef(" + objExpr + ", L\"" + memberName + "\", " + value + ");  /* COM SetRef */");
         return;
     }
@@ -665,26 +733,11 @@
                     // (NULL + offsetof)，紧接着的 AddRef 就会解引用它。New 的返回值恒非空，
                     // 而且对它做三目会让 _New() 求值两次（凭空多创建一个实例），所以守卫只加在
                     // "裸类变量"这条路上。
-                    const std::string ivField = "__iv_" + cIdent(v->name);
-                    const std::string ivPtr = isClassVar
-                        ? "((" + value + ") ? &(" + value + ")->" + ivField + " : NULL)"
-                        : "&(" + value + ")->" + ivField;
+                    // 账 #305 第二百零四刀: 这一发形状挪给唯一主人 ivrefInstanceViewExpr ——
+                    // 逐字节相同，站点不再自己拼 (`Set` 两站 + ByRef 实参站从此同一个答案)。
+                    const std::string ivPtr = ivrefInstanceViewExpr(v->name, value, isClassVar);
                     if (plainIvTarget) {
-                        // COM 口径: 存旧值 → 覆盖 → AddRef 新 → Release 旧.
-                        // RHS 是 New 时那 1 次初始引用直接移交, 故不 AddRef.
-                        const std::string ivCType = "vb6_ivref_" + cIdent(v->name) + "*";
-                        const std::string ivOld = "__ivold" + std::to_string(ivrefSetSeq_++);
-                        c_.emitLine("{  /* tB Interface B05: Set " + target + " (refcounted) */");
-                        c_.indent();
-                        c_.emitLine(ivCType + " " + ivOld + " = " + target + ";");
-                        c_.emitLine(target + " = " + ivPtr + ";");
-                        if (!isNewExpr) {
-                            c_.emitLine("if (" + target + ") " + target + "->vt->AddRef(" +
-                                        target + ");");
-                        }
-                        c_.emitLine("if (" + ivOld + ") " + ivOld + "->vt->Release(" + ivOld + ");");
-                        c_.dedent();
-                        c_.emitLine("}");
+                        emitIvrefRefSet(target, v->name, ivPtr, isNewExpr);
                         return;
                     }
                     value = ivPtr;
@@ -859,9 +912,11 @@
     {
         std::string targetLower = target;
         std::transform(targetLower.begin(), targetLower.end(), targetLower.begin(), ::tolower);
-        auto itIface = knownIfaceVars_.find(targetLower);
-        if (itIface != knownIfaceVars_.end()) {
-            std::string ifaceName = itIface->second;
+        // 账 #305 第二百一十五刀: 这一问改问**那位名册主人** —— 站点自己查那张名册只认裸名，于是
+        // 「字段槽」那一档 (`me->m_lv`) 在这站落空、裸拷贝实例指针进值结构体槽 = cl C2440；改问主人
+        // 之后 `me->` 那一层由主人一处剥掉，与覆写腿② 那道闸同一次查表、同一个答案。
+        std::string ifaceName = slotLegacyIfaceViewName(targetLower);
+        if (!ifaceName.empty()) {
             // `_New()` 那个形: 类名已经烘在 C 表达式里 (`vb6_cls_<Impl>_New()`), 摘出来就是实现者
             auto classOfNewExpr = [](const std::string& e) -> std::string {
                 const std::string head = "vb6_cls_";

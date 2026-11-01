@@ -64,7 +64,7 @@ void CCodeGen::visit(PrintStmt& node) {
         "vb6_Trim", "vb6_LTrim", "vb6_RTrim", "vb6_Chr",
         "vb6_Str", "vb6_CStr", "vb6_Format", "vb6_Hex", "vb6_Oct",
         "vb6_Replace", "vb6_Space", "vb6_String", "vb6_StrReverse",
-        "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption"
+        "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_Title", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption"
     };
     auto isBstrExpr = [&](const std::string& expr) -> bool {
         for (auto& prefix : bstrFuncs) {
@@ -127,7 +127,7 @@ void CCodeGen::visit(WriteStmt& node) {
         "vb6_Trim", "vb6_LTrim", "vb6_RTrim", "vb6_Chr",
         "vb6_Str", "vb6_CStr", "vb6_Format", "vb6_Hex", "vb6_Oct",
         "vb6_Replace", "vb6_Space", "vb6_String", "vb6_StrReverse",
-        "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption"
+        "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_Title", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption"
     };
     auto isBstrExpr = [&](const std::string& expr) -> bool {
         for (auto& prefix : bstrFuncs) {
@@ -182,6 +182,30 @@ void CCodeGen::visit(GetStmt& node) {
     std::string fnum = std::move(lastExpr_);
     emitExpr(*node.varName);
     std::string varExpr = std::move(lastExpr_);
+    // Whole 1D array target (`Get #f, , data`): every C3 array is a SafeArray1D
+    // descriptor, so the payload is arr->data and the byte count is
+    // count * elemSize. The old path emitted &var + sizeof(int32_t), which for a
+    // descriptor variable wrote 4 bytes over the descriptor pointer slot.
+    // (ND arrays are left on the old path; vb6_GetArray only knows 1D.)
+    auto wholeArray1D = [&](const Expr* e) -> bool {
+        if (!isWholeArrayRef(e)) return false;
+        std::string nm;
+        if (e->kind == ASTNodeKind::IdentifierExpr) {
+            nm = Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name);
+        } else if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+            auto& ic = static_cast<const IndexOrCallExpr&>(*e);
+            if (ic.callee && ic.callee->kind == ASTNodeKind::IdentifierExpr)
+                nm = Symbol::toLower(static_cast<const IdentifierExpr&>(*ic.callee).name);
+        }
+        auto it = arrayDimCounts_.find(nm);
+        return it == arrayDimCounts_.end() || it->second <= 1;
+    };
+    if (wholeArray1D(node.varName.get())) {
+        std::string recnum = "0";
+        if (node.recordNumber) { emitExpr(*node.recordNumber); recnum = std::move(lastExpr_); }
+        c_.emitLine("vb6_GetArray(" + fnum + ", " + recnum + ", " + varExpr + ");");
+        return;
+    }
     // 确定变量大小: 根据变量名查询已知类型
     std::string varLower = varExpr;
     std::transform(varLower.begin(), varLower.end(), varLower.begin(), ::tolower);
@@ -212,6 +236,30 @@ void CCodeGen::visit(PutStmt& node) {
     std::string fnum = std::move(lastExpr_);
     emitExpr(*node.varName);
     std::string varExpr = std::move(lastExpr_);
+    // Whole 1D array source (`Put #f, , data`): every C3 array is a SafeArray1D
+    // descriptor, so the payload is arr->data and the byte count is
+    // count * elemSize. The old path emitted &var + sizeof(int32_t), which for a
+    // descriptor variable wrote 4 bytes over the descriptor pointer slot.
+    // (ND arrays are left on the old path; vb6_PutArray only knows 1D.)
+    auto wholeArray1D = [&](const Expr* e) -> bool {
+        if (!isWholeArrayRef(e)) return false;
+        std::string nm;
+        if (e->kind == ASTNodeKind::IdentifierExpr) {
+            nm = Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name);
+        } else if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+            auto& ic = static_cast<const IndexOrCallExpr&>(*e);
+            if (ic.callee && ic.callee->kind == ASTNodeKind::IdentifierExpr)
+                nm = Symbol::toLower(static_cast<const IdentifierExpr&>(*ic.callee).name);
+        }
+        auto it = arrayDimCounts_.find(nm);
+        return it == arrayDimCounts_.end() || it->second <= 1;
+    };
+    if (wholeArray1D(node.varName.get())) {
+        std::string recnum = "0";
+        if (node.recordNumber) { emitExpr(*node.recordNumber); recnum = std::move(lastExpr_); }
+        c_.emitLine("vb6_PutArray(" + fnum + ", " + recnum + ", " + varExpr + ");");
+        return;
+    }
     // 确定变量大小: 根据变量名查询已知类型
     std::string varLower = varExpr;
     std::transform(varLower.begin(), varLower.end(), varLower.begin(), ::tolower);

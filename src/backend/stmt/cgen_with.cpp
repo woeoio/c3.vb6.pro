@@ -20,6 +20,16 @@ void CCodeGen::visit(WithStmt& node) {
 
     // 检测With对象类型: 遍历表达式判断
     if (node.object) {
+        // 账 #305 第一百九十一刀: `With Me` —— Me 是 MeExpr, 不是 IdentifierExpr,
+        // 上面按名查表的整条链都够不着 ⇒ tempType 落 void* ⇒ 体内 `.P` 走
+        // vb6_ComGetObjectProp(me, …) (拿类结构体当 IDispatch). 类模块里
+        // Me 就是本类实例, 直接按 ClassInstance 处理。
+        if (node.object->kind == ASTNodeKind::MeExpr && isClassModule_) {
+            withInfo.kind = WithObjKind::ClassInstance;
+            withInfo.className = cIdent(moduleName_);
+            tempType = "vb6_cls_" + withInfo.className + "*";
+            withInfo.ctrlOrigName = withInfo.className;
+        }
         // --- Fix 086: 方法调用链对象推断 (With .Sql(...) / With obj.Method(...)) ---
         // With 对象是 IndexOrCallExpr/MemberAccessExpr/WithMemberExpr (方法调用链) 时,
         // 用 inferClassTypeOfExpr 推断返回类. 此前 `With .Sql(...)` 解析为
@@ -38,6 +48,12 @@ void CCodeGen::visit(WithStmt& node) {
                     withInfo.className = cIdent(inferred);
                     tempType = "vb6_cls_" + withInfo.className + "*";
                     withInfo.ctrlOrigName = withInfo.className;
+                } else if (clsSym && clsSym->kind == SymbolKind::Class && clsSym->isInterface) {
+                    // 账 #305 第一百九十二刀: `With <返回视图的表达式>` —— 与裸名视图同一格:
+                    // 临时量是**值拷贝**, 体内成员交给视图那几位主人 (临时量自身登记进名册)。
+                    viewIface177 = clsSym->name;
+                    withInfo.kind = WithObjKind::COMObject;
+                    tempType = "vb6_iface_" + cIdent(clsSym->name);
                 }
             }
         }
@@ -50,7 +66,34 @@ void CCodeGen::visit(WithStmt& node) {
             // Class 符号 (ComClass/ComInterface 或未注册), 不能按项目类生成
             // vb6_cls_<X>* 临时 (类型未定义 → C2065). 转 COMObject 走后期绑定.
             const Symbol* newClsSym = lookupModuleDotted(newExpr.className);
-            if (!newClsSym || newClsSym->kind == SymbolKind::ComClass
+            // 账 #305 第三百六刀: `With New <窗体>` —— 窗体在符号表里既不是 COM 类也不是
+            // 工程 Class, 于是通用路把 New 发成 vb6_NewObject(L"<窗体>") (运行期查不到
+            // ProgID, 恒 NULL), 体内 `.Show vbModal` 再落晚绑定 (实测
+            // C3_LATEBIND_MISS name="Show" disp=00000000 kind=null ⇒ 窗体不弹;
+            // ComCtlsDemo Command1/CommandButtonW1/Command4 三枚按钮全静默)。
+            // 窗体在 C3 里是**默认实例 + HWND**, 所以这一格按 Form 控件档记:
+            //   New <窗体>      → vb6_form_hwnd_<窗体>()  (首次引用即隐式 Load)
+            //   .Show [modal]   → vb6_form_show_<窗体>(NULL) (modal 实参由 com_bind 追加,
+            //                     与外部窗体那条 `Frm.Show` 同一个拼法)
+            //   标量属性        → getControlPropReadFn(Form, …)(tempVar)
+            // 函数名的拼写取 VB_Name (designerFiles_ 的键), 不取源码大小写 ——
+            // 源码写 `New richtextboxform` 也得落到 vb6_form_hwnd_RichTextBoxForm。
+            std::string formLower306 = Symbol::toLower(newExpr.className);
+            if (knownFormModuleNames_.count(formLower306) && formLower306 != knownFormName_) {
+                std::string formCanon306 = cIdent(newExpr.className);
+                if (designerFiles_) {
+                    for (const auto& kvF306 : *designerFiles_) {
+                        if (Symbol::toLower(kvF306.first) == formLower306) {
+                            formCanon306 = cIdent(kvF306.first);
+                            break;
+                        }
+                    }
+                }
+                withInfo.kind = WithObjKind::COMObject;
+                withInfo.ctrlType = FrmControlType::Form;
+                withInfo.ctrlOrigName = formCanon306;
+                tempType = "HWND";
+            } else if (!newClsSym || newClsSym->kind == SymbolKind::ComClass
                 || newClsSym->kind == SymbolKind::ComInterface) {
                 withInfo.kind = WithObjKind::COMObject;
                 tempType = "void*";
@@ -303,6 +346,33 @@ void CCodeGen::visit(WithStmt& node) {
                         knownUdtVars_[tempVar] = currentReturnCType_;
                         knownLocalVars_.insert(tempVar);
                     }
+                }
+            }
+
+            // 账 #305 第二百六十九刀: `With <本类的一枚成员过程>` —— 裸名既不是变量也不是
+            // 字段, 上面那几张"按名登记"的名册都问不中 ⇒ kind 留 Unknown ⇒ 行尾兜底成
+            // COMObject。但它在 VB 里就是"调本类的 Function/Property Get 拿到的对象",
+            // 返回类型是工程类 ⇒ 它就是类实例, 体内成员该走类成员直调那一条既有路。
+            // 实证靶工程 ComCtlsDemo\Builds\ListView\LvwListSubItem.cls:89/103/125/135/142
+            // (LvwListSubItem.cls:33 `Private Function ShadowListView() As ListView`):
+            // 修复前发
+            //   void* _vb6_with_1 = (void*)vb6_LvwListSubItem_ShadowListView((void*)me);
+            //   vb6_ComCall(_vb6_with_1, L"FListItemVerify", …)   ← 拿裸结构体指针当 IDispatch
+            // 而同一条 VB 写在体外 (LvwListItem.cls:133) 发的是直调
+            //   vb6_ListView_FListItemVerify(vb6_LvwListItem_ShadowListView((void*)me), …)
+            // ⇒ 同一事实两形两答; x86 名册里这一族空转 7040 次 (台账行 5026)。
+            // 与上面"With 本函数返回值变量"那一格同一条判据 (getClassMethodReturnType
+            // 只对真实工程 Class 返回类名, rev7 口径), 区别只是那次查的是**过程自己**、
+            // 这一次查的是**本类的成员**。位置放在所有名册之后、内置对象之前:
+            // 局部/形参/字段在 VB 作用域里都盖过类成员, 先到先得的次序不许倒。
+            // 口径(用户定): 不在通用晚绑定出口加类型特判, 只在分类这一处答。
+            if (withInfo.kind == WithObjKind::Unknown && isClassModule_) {
+                const std::string retCls269 = getClassMethodReturnType(moduleName_, objNameLower);
+                if (!retCls269.empty() && isProjectClassName(retCls269)) {
+                    withInfo.kind = WithObjKind::ClassInstance;
+                    withInfo.className = cIdent(retCls269);
+                    tempType = "vb6_cls_" + withInfo.className + "*";
+                    withInfo.ctrlOrigName = withInfo.className;
                 }
             }
 
@@ -646,6 +716,15 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
             comObjExpr_.clear();
             comMemberName_.clear();
         }
+    }
+
+    // 账 #305 第三百六刀: 窗体那一格的 New 入口 (判定见上方 NewExpr 段)。
+    // emitExpr(NewExpr) 对窗体名只会发 vb6_NewObject(L"<窗体>"), 这里换成窗体
+    // 默认实例访问器 —— 首次引用即隐式 Load, 正是 VB6 `New <窗体>` 的语义。
+    if (withInfo.kind == WithObjKind::COMObject
+        && withInfo.ctrlType == FrmControlType::Form
+        && node.object->kind == ASTNodeKind::NewExpr) {
+        lastExpr_ = "vb6_form_hwnd_" + withInfo.ctrlOrigName + "()";
     }
 
     // Fix <vbeclipse>: 工程内 UserControl 实例作 With 目标时, 目标表达式要取**宿主窗口

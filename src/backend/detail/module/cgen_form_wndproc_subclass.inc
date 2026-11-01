@@ -44,6 +44,8 @@
             bool hasValidate = false;
             bool hasPaint = false;   // Fix 185: 控件级 _Paint (PictureBox.Print/Cls 的落点)
             FrmControlType ctrlType;
+            int arrayIndex = -1;     // 控件数组索引 (-1=非数组) —— GotFocus/Click 等事件
+                                     // 处理器带 Index 形参时, 转发站按它实参化
         };
         std::vector<SubclassInfo> subclassCtrls;
         std::unordered_set<std::string> emitted;
@@ -62,6 +64,7 @@
             SubclassInfo info;
             info.ctrlName = ctrl.controlName;
             info.ctrlType = ctrl.controlType;
+            info.arrayIndex = ctrl.index;
             if (knownControlArrays_.count(ctrlNameLower)) {
                 info.hwndVar = "(void*)vb6_arr_" + cIdent(ctrl.controlName) + ".hwnds[0]";
             } else {
@@ -139,6 +142,7 @@
                 SubclassInfo info;
                 info.ctrlName = child.controlName;
                 info.ctrlType = child.controlType;
+                info.arrayIndex = child.index;
                 info.hwndVar = "vb6_hwnd_" + cIdent(child.controlName);
                 // C29-SL-g: 与顶层那一趟同一口径（按"有没有另一条原生来源"排除）
                 if (!controlFocusFromNativeNotify(child.controlType)) {
@@ -177,18 +181,29 @@
             c_.emitLine("static LRESULT CALLBACK " + subProcName + "(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {");
             c_.indent();
 
+            // 事件转发调用文本: 控件**数组**的事件处理器带 `Index As Integer` 首形参
+            // (btnTab_GotFocus(Index As Integer), Outlook2013 pageBackstageSend:528),
+            // 转发站必须把数组下标实参化 —— 此前一律 0 参调用 (C2198)。
+            auto evCallWithIndex = [&](const char* suffix) -> std::string {
+                Symbol* evSym = symTab_.lookup(info.ctrlName + suffix);
+                std::string fn = eventHandlerFn(info.ctrlName, suffix);
+                if (evSym && !evSym->params.empty() && info.arrayIndex >= 0) {
+                    return "{ extern void " + fn + "(int16_t*); int16_t vb6_evindex = "
+                         + std::to_string(info.arrayIndex) + "; " + fn + "(&vb6_evindex); }";
+                }
+                return "{ extern void " + fn + "(); " + fn + "(); }";
+            };
+
             // GotFocus (WM_SETFOCUS)
             if (info.hasGotFocus) {
-                std::string fn = eventHandlerFn(info.ctrlName, "_GotFocus");
-                c_.emitLine("if (msg == WM_SETFOCUS) { extern void " + fn + "(); " + fn + "(); }");
+                c_.emitLine("if (msg == WM_SETFOCUS) " + evCallWithIndex("_GotFocus"));
             }
             // LostFocus (WM_KILLFOCUS)
             if (info.hasLostFocus) {
-                std::string fn = eventHandlerFn(info.ctrlName, "_LostFocus");
                 if (info.hasValidate) {
-                c_.emitLine("if (msg == WM_KILLFOCUS && !GetPropW(hwnd, L\"VB6_ValidateCancel\")) { extern void " + fn + "(); " + fn + "(); }");
+                c_.emitLine("if (msg == WM_KILLFOCUS && !GetPropW(hwnd, L\"VB6_ValidateCancel\")) " + evCallWithIndex("_LostFocus"));
             } else {
-                c_.emitLine("if (msg == WM_KILLFOCUS) { extern void " + fn + "(); " + fn + "(); }");
+                c_.emitLine("if (msg == WM_KILLFOCUS) " + evCallWithIndex("_LostFocus"));
             }
             }
             // P20-12: Validate event (WM_KILLFOCUS with CausesValidation + Cancel)
@@ -360,8 +375,7 @@
             // 只发给**没有原生 Click 来源**的控件（那批由 BN_CLICKED / *_SELCHANGE /
             // TCN_SELCHANGE 供，见 controlClickFromNativeNotify），否则一次点击双发。
             if (info.hasClick) {
-                std::string fn = eventHandlerFn(info.ctrlName, "_Click");
-                c_.emitLine("if (msg == WM_LBUTTONUP) { extern void " + fn + "(); " + fn + "(); }");
+                c_.emitLine("if (msg == WM_LBUTTONUP) " + evCallWithIndex("_Click"));
             }
 
             // P20-12: WM_VB6_RESTOREFOCUS - restore focus after Validate cancel

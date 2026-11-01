@@ -7,7 +7,15 @@
     (void)argc;
     if (!obj || !name) return 0;
     vb6_ho_setVariantEmpty(out);
-    if (vb6_uc_isFont(obj)) return 1;
+    /* 账 #305 第二百七十三刀: 这一臂以前对**任何**方法名一律答 Empty 且提前返回,
+     * 而位置在文件末尾那枚护栏之前 ⇒ 靶工程 13 发 `Font.Clone` 静默空转。
+     * 现在认得的方法按 stdole2.tlb 那一档答 (Clone 走 [out] 实参写回), 认不出的报数。
+     * 刻意**不**往下落到 HWND / 集合那几臂 —— 伪字体不是窗口, 误当窗口会打飞。 */
+    if (vb6_uc_isFont(obj)) {
+        if (vb6_ho_fontMethod(obj, name, argc, argv)) return 1;
+        vb6_ho_reportUnknown(L"Call", name, obj);
+        return 1;
+    }
     if (vb6_uc_isColl(obj)) {   // Fix 112c: Collection 方法
         if (_wcsicmp(name, L"Add") == 0 && argc >= 1) {
             BSTR k = (argc >= 2) ? vb6_ho_variantToBstr((vb6_VARIANT*)argv[1]) : NULL;
@@ -152,4 +160,8 @@
         _wcsicmp(name, L"Print") == 0 || _wcsicmp(name, L"Line") == 0) {
         return 1;
     }
+    /* 账 #305 第二百六十二刀 (丙): 走到这里 = 宿主模型**不认识**这个成员。
+       以前直接 return 1 (静默答「已处理」) ⇒ 调用方拿到 Empty, 看不出漏了谁。
+       现在数出来并报一行 (C3_HOST_MEMBER_MISS); 行为不变 (仍 return 1)。 */
+    vb6_ho_reportUnknown(L"Call", name, obj);
     return 1;   // 宿主对象: 未知方法一律空实现

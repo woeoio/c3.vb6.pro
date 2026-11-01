@@ -8,6 +8,11 @@
     // 构建 C 函数名: vb6_<moduleName>_<procName> (与 cProcName 多模块模式一致).
     // 供 cExprIsVariant() 检测项目类函数返回 Variant 的表达式.
     std::unordered_set<std::string> variantReturnFuncs;
+    // 账 #305 第318刀 (账 #594): 第三形 —— cProcName 在「本工程只有这一枚发码模块」时发
+    //   **裸名** vb6_<proc>（cgen_base_naming.cpp:372 那条闸反过来读），上面登记的
+    //   vb6_<模块>_<proc> / vb6_pv_<proc> 两形都够不着它。先按模块记下候选，裸名要不要补
+    //   由模块循环按 cProcName 的同一条条件答（isClassModule 的方法恒带模块名，不进候选）。
+    std::unordered_map<std::string, std::vector<std::string>> variantBareProcNames;
     for (size_t i = 0; i < modules_.size(); i++) {
         const auto& module = modules_[i];
         const std::string& modName = module->moduleName;
@@ -56,6 +61,9 @@
                 };
                 std::string cName = "vb6_" + cIdentS(modName) + "_" + cIdentS(procName);
                 variantReturnFuncs.insert(cName);
+                if (!module->isClassModule) {
+                    variantBareProcNames[modName].push_back(cIdentS(procName));
+                }
                 // Fix 066: 同模块调用 Private 函数时 C 函数名使用 vb6_pv_ 前缀,
                 // 也需加入 variantReturnFuncs 以便 cExprIsVariant 正确检测.
                 bool isPrivate = false;

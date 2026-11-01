@@ -300,25 +300,30 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
          method->name ? method->name : L"?", (int)(pDispParams ? pDispParams->cArgs : 0));
 
     // Collect arguments
-    // Note: Script engines like VBScript may pass VT_I2 etc.,
-    // while bridge functions expect VT_I4 (via lVal). Coerce each param to VT_I4.
+    // Note: 调用方(VBScript/Office/另一枚工程类)递来的 vt 与形参的声明档**不一定相同**，
+    //   而下面生成的读臂是按声明档取联合体成员的 —— 这一趟负责把每一格先换算到那一档，
+    //   见 §B219 那段与 vb6_ComArgNormalize 的声明处。
     // invokeFunc 的实参/返回槽在适配器里按 vb6_VARIANT (x86 24B: vt 4B +
     // pad 4B + union 16B) 布局访问; 前 16 字节与 OLE VARIANT 内容一致。
     typedef struct { uint64_t v[3]; } vb6_VarSlot;
     int argc = pDispParams ? (int)pDispParams->cArgs : 0;
     void** args = NULL;
     void* coercedArgs = NULL;   /* 槽阵列, 每槽 vb6_VarSlot */
+    VARIANT* scratch = NULL;    /* 账 #305 §B219: 换算产物住这里, 服务端在收尾那一臂回收 */
+    int argErrSlot = -1;        /* 账 #305 §B219: 换算不动的那一枚(声明序下标), -1 = 没有 */
 
     if (argc > 0) {
         args = (void**)CoTaskMemAlloc(argc * sizeof(void*));
         coercedArgs = (void*)CoTaskMemAlloc(argc * sizeof(vb6_VarSlot));
-        if (!args || !coercedArgs) {
+        scratch = (VARIANT*)CoTaskMemAlloc(argc * sizeof(VARIANT));
+        if (!args || !coercedArgs || !scratch) {
             if (args) CoTaskMemFree(args);
             if (coercedArgs) CoTaskMemFree(coercedArgs);
+            if (scratch) CoTaskMemFree(scratch);
             return E_OUTOFMEMORY;
         }
         // 适配器按 vb6_VARIANT (24B) 布局访问实参与返回槽, 而 COM 边界的
-        // OLE VARIANT 是 16B。每个实参先整复制进 24B 槽, 再按需数值强转。
+        // OLE VARIANT 是 16B。每个实参先整复制进 24B 槽, 再按声明档换算。
         // (ai/022 B17 那条"未初始化就被 VariantClear"的堆损坏在这里由下面的
         //  `memset(slot, 0, sizeof(*slot))` 一并解决 —— 旧写法按 VARIANT 尺寸清零,
         //  在这套 24B 槽设计下 x86 会算少, 故合并时只保留这一份。)
@@ -332,16 +337,28 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
             vb6_VariantBorrowIntoSlot(src, slot);
             args[i] = slot;
         }
-        for (int i = 0; i < argc; i++) {
-            VARIANT* src = &pDispParams->rgvarg[argc - 1 - i];
-            VARIANT* dst = (VARIANT*)&((vb6_VarSlot*)coercedArgs)[i];
-            // Coerce numeric types to VT_I4 (bridge functions use lVal)
-            if (src->vt == VT_I2 || src->vt == VT_I1 || src->vt == VT_UI1 ||
-                src->vt == VT_UI2 || src->vt == VT_BOOL || src->vt == VT_EMPTY) {
-                VariantChangeType(dst, src, 0, VT_I4);
-            } else if (src->vt == VT_R4) {
-                // Float -> Double for dblVal access
-                VariantChangeType(dst, src, 0, VT_R8);
+        /* 账 #305 §B219(第二百二十刀): 「往里读」那一族在此多出来的一问 —— 发码那 16 处读臂
+         * 按**形参声明档**取联合体成员、从不看标签，于是异档实参一律读错一格。靶工程与合成
+         * 夹具两台实测(20 发矩阵在 022 第二百二十刀的账里)：
+         *   String 档 ← VT_I4 40 / VT_R8 / VT_BOOL ⇒ 把标量当 BSTR 解 ⇒ 原生 AV，**打死客户端**；
+         *   Long 档 ← VT_BSTR "12" ⇒ 答指针低 32 位(实测 1833297976)、← VT_R8 12.75 ⇒ 答 0，静默错；
+         *   Long 档 ← VT_BOOL / VT_EMPTY ⇒ 侥幸对(靠本处原先那半张手抄表恰好折了这两档)。
+         * 这里原来是那半张表(只折 VT_I2/I1/UI1/UI2/BOOL/EMPTY→I4、R4→R8，异档名单之外的照旧
+         * 裸取)，与发码那一半合起来才是「两半各答一半」。现在两半都并到唯一出口
+         * vb6_ComArgNormalize 上：档位答案由表里的 paramVts 给(cgen 那一处权威 cDispatchArgVt 答)，
+         * 换算与失败那一问住 RTL。换算不动交回 DISP_E_TYPEMISMATCH —— 客户端 vb6_ComCheckError
+         * 已经把它折成 VB 13(vb6com.c:256)，与 VB6 本人的「Type mismatch」同号。
+         * 不许图省事就地换算槽：槽借用了调用方的 BSTR/Dispatch 指针，VariantChangeType 会替
+         * 它们 SysFreeString/Release ⇒ 对端随后 clear 就是双份。 */
+        for (int i = 0; i < argc; i++) VariantInit(&scratch[i]);
+        if (method->paramVts) {
+            for (int i = 0; i < argc && i < (int)method->paramVtCount; i++) {
+                VARIANT* src = &pDispParams->rgvarg[argc - 1 - i];
+                vb6_VarSlot* slot = &((vb6_VarSlot*)coercedArgs)[i];
+                if (FAILED(vb6_ComArgNormalize(src, method->paramVts[i], slot, &scratch[i]))) {
+                    argErrSlot = i;
+                    break;
+                }
             }
         }
     }
@@ -357,9 +374,9 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
      * 失败时按内置 Collection 早就在用的那一形状交回 (vb6_ComFailExcep), 客户端的
      * vb6_ComCheckError 把它折回成一条 VB 错误 ⇒ 客户的 On Error 拿得到错误号。
      * 注意: 不许在这里 longjmp 之后直接 return —— 下面那条收尾要回收 args/coercedArgs
-     * 与 §B162 那枚数组那一臂, 跳过它就是漏窗。 */
+     * 与 §B162 那枚数组那一臂, 跳过它就是漏窗。 §B219 同规: 换算不动那一发也是先收尾再交回。 */
     int32_t srvErrNum = 0;
-    if (method->invokeFunc) {
+    if (argErrSlot < 0 && method->invokeFunc) {
         vb6_VarSlot tmpRet;
         jmp_buf srvJmp;
         memset(&tmpRet, 0, sizeof(tmpRet));
@@ -382,12 +399,37 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
 
     /* 账 #305 §B162 (第五十刀): 数组那一臂是个例外 —— 递进来的真 SAFEARRAY 被换成了**我们自己**
      * 那枚描述符, 槽阵列一 free 它就没人管了。其余各档仍是调用方的资源, 一律不动。 */
+    /* 账 #305 §B222 (第二百三十刀): 数组形参的**出站回写** —— 被调方 ReDim 过之后新载体只活在
+     * 这一趟的槽里, 不写回去客户端拿到的还是调用前那枚(§B162「回写刻意不做」的另一半)。
+     * 只认 VT_BYREF|VT_ARRAY 那一形(数组在 VB6 里只能按引用传)。顺序不能挪: 本趟只读槽、
+     * 回写成功后把槽的 vt 补成数组档, 下面那句 SlotRelease 才认得出并回收我们的描述符。 */
+    if (argErrSlot < 0 && method->invokeFunc) {
+        for (int i = 0; i < argc; i++) {
+            vb6_ArraySlotWriteBack(&pDispParams->rgvarg[argc - 1 - i],
+                                   &((vb6_VarSlot*)coercedArgs)[i]);
+            /* 账 #305 §B223 (第二百三十三刀): ByRef 标量那一族同一时机回写(数值/布尔);
+             * 两枚各认各的形(BYREF|ARRAY vs BYREF|标量), 互不重叠。 */
+            vb6_ByRefScalarWriteBack(&pDispParams->rgvarg[argc - 1 - i],
+                                     &((vb6_VarSlot*)coercedArgs)[i]);
+        }
+    }
     for (int i = 0; i < argc; i++) {
         vb6_VariantSlotRelease(&((vb6_VarSlot*)coercedArgs)[i]);
     }
     // 槽内是调用方 VARIANT 的副本, 资源仍归调用方, 不得 VariantClear
+    /* 账 #305 §B219: 换算过的那几格例外 —— 槽里借的是 scratch 里的**我们自己的**副本，
+     * 所以回收顺序是「先让被调方用完，再 clear scratch」；scratch 一定先于槽阵列 free。 */
+    if (scratch) {
+        for (int i = 0; i < argc; i++) VariantClear(&scratch[i]);
+        CoTaskMemFree(scratch);
+    }
     if (coercedArgs) CoTaskMemFree(coercedArgs);
     if (args) CoTaskMemFree(args);
+    /* 账 #305 §B219: 换算不动那一枚 —— pArgErr 交的是 **rgvarg 的下标**(逆序那一头), 不是声明序。 */
+    if (argErrSlot >= 0) {
+        if (puArgErr) *puArgErr = (UINT)(argc - 1 - argErrSlot);
+        return DISP_E_TYPEMISMATCH;
+    }
     /* 账 #305 §B185: 收尾(上面那批回收)之后才交回错误 —— 顺序是硬要求。 */
     if (srvErrNum != 0)
         return vb6_ComFailExcep(pExcepInfo, srvErrNum, vb6_ErrDescription(), L"COM server error");
@@ -589,9 +631,12 @@ const vb6_CoClassDesc* vb6_FindCoClassDesc(const char* classVariable) {
 // (`__comObj` 是 back-ptr 且为 NULL), 无法反推是哪个类。cgen 在类工厂里登记一次
 // 是唯一可靠办法 —— 而且工厂本来就是每个实例必经之处, 零额外成本。
 //
-// 生命周期: 实例销毁时不注销 (表是"弱"映射, 只按指针查)。工程类实例都是
-// vb6_Alloc 分配的, 指针值不会被复用成别的类实例之前就一直有效; 真正的风险是
-// **同一个堆地址先释放后被别的类复用**; 复用后的新实例会覆盖旧登记, 所以不会指向错误的类。
+// 生命周期 (账 #481 = 第一百八十二刀订正): 实例销毁时**必须**注销 (见 vb6_UnregisterProjectClassInstance,
+// 调用点 = 每个类 _Destroy 里 vb6_Free 前一行, 与登记腿同一道 isDll_ 闸)。从前的说法是
+// 「表是弱映射, 只按指针查, 不注销也没事」—— 两处站不住:
+//   ① 实例释放后地址留在表里, 地址被别的分配复用、而新主人不是工程类实例时, 按旧地址查会答旧类;
+//   ② 计数只增不减 ⇒ 一个进程里累计建过 VB6_PROJCLASS_MAX 枚实例之后, 新实例一个都登记不进去。
+// 注销只把那一格置空、不动计数 (计数 = 扫描上界的高水位), 登记腿优先复用空出来的格。
 //
 // 2026-10-15 (账 #305 §B187) 两条订正, 都按读码/真跑核过:
 //   ① 这里原来写的是「命中后还要用 vb6_ProjClassVerify 复核 (见 vb6com_invoke.c 的分派
@@ -624,19 +669,44 @@ static LONG vb6_ProjClassScanLimit(void) {
 }
 
 void vb6_RegisterProjectClassInstance(void* inst, const vb6_CoClassDesc* desc) {
-    LONG i;
+    LONG i, hole = -1;
     if (!inst || !desc) return;
-    /* 先线性找: 同一实例可能被重复登记 (DllMain + 工厂各一次), 直接覆盖即可。*/
+    /* 先线性找: 同一实例可能被重复登记 (DllMain + 工厂各一次), 直接覆盖即可。
+     * 顺手记下第一枚空位 —— 注销腿腾出来的格必须能复用, 否则计数只增不减, 累计建过
+     * VB6_PROJCLASS_MAX 枚实例之后整张表永久饱和。*/
     for (i = 0; i < vb6_ProjClassScanLimit(); i++) {
         if (g_vb6_projClass[i].inst == inst) {
             g_vb6_projClass[i].desc = desc;
             return;
         }
+        if (hole < 0 && g_vb6_projClass[i].inst == NULL) hole = i;
+    }
+    if (hole >= 0 &&
+        InterlockedCompareExchangePointer((PVOID volatile*)&g_vb6_projClass[hole].inst, inst, NULL) == NULL) {
+        /* 空洞用 CAS 抢: 两枚并发登记同时看见同一个洞时只有一个占得到, 输的那枚落到下面新增槽
+         * (它一个字都没碰这个洞 ⇒ 不会改坏赢家刚写的 desc)。desc 在 inst 之后写, 与新增槽那一支
+         * 同形 —— 查表只认 inst, 这个窗口与既往「计数先动、字段后写」是同一个。*/
+        g_vb6_projClass[hole].desc = desc;
+        return;
     }
     i = InterlockedIncrement(&g_vb6_projClassCount) - 1;
     if (i < 0 || i >= VB6_PROJCLASS_MAX) return;      // 表满: 放弃登记 (退化成原行为)
     g_vb6_projClass[i].inst = inst;
     g_vb6_projClass[i].desc = desc;
+}
+
+/* 账 #481 = 第一百八十二刀: 登记腿的配对另一半。实例真被拆掉前撤掉登记, 那一格置空
+ * 留给下一次登记复用; 计数是扫描上界的高水位, 这里不动它。 */
+void vb6_UnregisterProjectClassInstance(void* inst) {
+    LONG i;
+    if (!inst) return;
+    for (i = 0; i < vb6_ProjClassScanLimit(); i++) {
+        if (g_vb6_projClass[i].inst == inst) {
+            g_vb6_projClass[i].inst = NULL;
+            g_vb6_projClass[i].desc = NULL;
+            return;
+        }
+    }
 }
 
 const vb6_CoClassDesc* vb6_FindProjectClassDesc(const void* inst) {

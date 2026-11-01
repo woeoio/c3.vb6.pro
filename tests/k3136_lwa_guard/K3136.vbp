@@ -1,0 +1,4 @@
+Type=Exe
+Name="K3136App"
+Module=mdl3136; mdl3136.bas
+Startup="Sub Main"

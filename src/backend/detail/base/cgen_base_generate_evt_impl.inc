@@ -76,8 +76,16 @@
                         || refType.find("vb6_cls_") != std::string::npos
                         || refType.find("vb6_iface_") != std::string::npos
                         || refType == "void*";
+                    // 枚举形参: resolveTypeName 只认简单名, 限定名 (XtremeDockingPane.DockingPaneAction /
+                    // XtremeCalendarControl.CalendarSelectionChanged) 落到 Object, 而 mapTypeRef 的类型感知
+                    // 查找能认成 EnumType → int32_t。照 Object 发 `void*` 再赋 vb6_VariantFromStackVARIANT
+                    // 就是 C2440 (枚举实参本来就是 VT_I4, 不是 VT_DISPATCH):
+                    //   Outlook2013 frmMain.c(2355) DockingPaneManager_Action / frmInbox.c(1309) SelectionChanged
+                    bool refIsInt = !isObj && refType != pType
+                        && (refType == "int32_t" || refType == "int16_t" || refType == "uint32_t"
+                            || refType == "uint16_t" || refType == "intptr_t");
                     std::string localType = pType;
-                    if (!isArray && isObj) localType = refType;
+                    if (!isArray && (isObj || refIsInt)) localType = refType;
                     c_.emitLine(localType + " " + pName + ";");
                     if (isArray) {
                         // P13.23: COM event arrays come as VARIANT containing SAFEARRAY (VT_ARRAY | VT_xxx).
@@ -94,6 +102,9 @@
                         c_.emitLine(pName + " = (" + refType + ")((args[" + idx + "].vt & VT_DISPATCH) ? args[" + idx + "].pdispVal : ((args[" + idx + "].vt & VT_UNKNOWN) ? args[" + idx + "].punkVal : NULL));");
                     } else if (evtParams[pi].type == Vb6Type::Long || evtParams[pi].type == Vb6Type::Integer) {
                         c_.emitLine(pName + " = (" + pType + ")V_I4(&args[" + idx + "]);");
+                    } else if (refIsInt) {
+                        // 见上方 refIsInt: 枚举形参 (Object 兜底 + mapTypeRef 认出枚举) 按 VT_I4 取
+                        c_.emitLine(pName + " = (" + refType + ")V_I4(&args[" + idx + "]);");
                     } else if (evtParams[pi].type == Vb6Type::Boolean) {
                         c_.emitLine(pName + " = (args[" + idx + "].vt == VT_BOOL) ? (V_I4(&args[" + idx + "]) != 0) : 0;");
                     } else if (evtParams[pi].type == Vb6Type::Single || evtParams[pi].type == Vb6Type::Double) {

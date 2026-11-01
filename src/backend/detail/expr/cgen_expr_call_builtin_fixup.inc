@@ -320,6 +320,7 @@
         const char* const* slots;
         size_t nslots;
         bool intoArgs;
+        const char* const* names;   // 每档的 VB 名 (只给登记了的那一族吃 named 实参; nullptr = 不吃)
     };
     static const char* const kOD_Split[]       = { nullptr, "NULL", "-1", "%cmp%" };
     static const char* const kOD_Join[]        = { nullptr, "NULL" };
@@ -356,6 +357,10 @@ static const char* const kOD_Randomize[]   = { "0.0" };
     static const char* const kOD_FormatNum[]   = { nullptr, "-1", "-1", "0", "-1" };
     static const char* const kOD_ClipSet[]     = { nullptr, "0" };
     static const char* const kOD_ErrRaise[]    = { nullptr, "(BSTR)0", "(BSTR)0" };
+    // 账 #305 第二百四十一刀 (甲): 这一族每档的 VB 形参名，口径取自仓里的 VB6 手册
+    // docs/vb6-manual/07-方法/Raise 方法.md —— `Raise number, source, description, ...`，
+    // 与 RTL 声明 vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) 逐档同序。
+    static const char* const kNames_ErrRaise[] = { "number", "source", "description" };
     // §B149 格③: VB6 的 DeleteSetting 有 1/2/3 参三形, RTL 出口是 3 枚必填 BSTR。
     // 两参 = 删整节 (RTL 在 key 为空时走 RegDeleteKeyW, vb6rtl_registry.c:107), 三参 = 删一个键。
     // 一参那档 (删整个应用) 刻意**不补**: RTL 在 section 为空时直接 return, 补一个空串等于
@@ -395,11 +400,54 @@ static const char* const kOD_Randomize[]   = { "0.0" };
     { "vb6_FormatCurrency", kOD_FormatNum,   sizeof(kOD_FormatNum) / sizeof(kOD_FormatNum[0]),     true  },
     { "vb6_FormatPercent",  kOD_FormatNum,   sizeof(kOD_FormatNum) / sizeof(kOD_FormatNum[0]),     true  },
         { "vb6_Clipboard_SetData", kOD_ClipSet,   sizeof(kOD_ClipSet) / sizeof(kOD_ClipSet[0]),         true  },
-        { "vb6_ErrRaise",        kOD_ErrRaise,    sizeof(kOD_ErrRaise) / sizeof(kOD_ErrRaise[0]),       true  },
+        { "vb6_ErrRaise",        kOD_ErrRaise,    sizeof(kOD_ErrRaise) / sizeof(kOD_ErrRaise[0]),       true,  kNames_ErrRaise },
         { "vb6_DeleteSetting",   kOD_DelSetting,  sizeof(kOD_DelSetting) / sizeof(kOD_DelSetting[0]),   false },
     };
     for (const BuiltinOptDefault& bod : kBuiltinOptDefaults) {
         if (callee != bod.callee) continue;
+        // 账 #305 第二百四十一刀 (甲): **命名实参按名字落位** —— 只吃表里登记了形参名的那一族折叠内置。
+        // VB6 的 `Foo Name:=v` 绑的是形参名，而这一族的形参表在语义层不可达：cgen_expr_call_named_args.inc
+        // 那条「没有形参信息」的兜底把 node.named 按**书写序** append ⇒ `Err.Raise Number:=5, Description:="m"`
+        // 的文案交进了 RTL 的第 2 档 = source，Err.Description 留空 (第二百四十刀 A1 的真跑证人)。
+        // 名字、档数、省略档三问同住这一行 ⇒ 第二问不在别处再抄一份；认不出名字/撞档/要跳过必填档
+        // 这三种情况一律**退回老路**，不猜。
+        if (bod.names && !node.named.empty() && calleeParams.empty()
+            && args.size() >= node.named.size()) {
+            const size_t nn = node.named.size();
+            const size_t np = args.size() - nn;
+            bool okPlaced = (np == node.positional.size() && np <= bod.nslots);
+            std::vector<std::string> placed(bod.nslots);
+            std::vector<bool> used(bod.nslots, false);
+            for (size_t i = 0; okPlaced && i < np; i++) {
+                placed[i] = std::move(args[i]);
+                used[i] = true;
+            }
+            for (size_t j = 0; okPlaced && j < nn; j++) {
+                std::string nm = node.named[j].name;
+                std::transform(nm.begin(), nm.end(), nm.begin(), ::tolower);
+                size_t slot = bod.nslots;
+                for (size_t k = 0; k < bod.nslots; k++) {
+                    if (nm == bod.names[k]) { slot = k; break; }
+                }
+                if (slot >= bod.nslots || used[slot]) { okPlaced = false; break; }
+                placed[slot] = args[np + j];
+                used[slot] = true;
+            }
+            for (size_t k = 0; okPlaced && k < bod.nslots; k++) {
+                if (used[k]) continue;
+                if (!bod.slots[k]) { okPlaced = false; break; }   // 被跳过的档是必填档: 交回老路
+                const std::string dv = std::string(bod.slots[k]) == "%cmp%" ? cmpDefault : bod.slots[k];
+                placed[k] = dv;
+            }
+            if (okPlaced) {
+                args.assign(placed.begin(), placed.end());
+                argList.clear();
+                for (size_t k = 0; k < placed.size(); k++) {
+                    if (k) argList += ", ";
+                    argList += placed[k];
+                }
+            }
+        }
         for (size_t i = args.size(); i < bod.nslots; i++) {
             const char* lit = bod.slots[i];
             if (!lit) break;                      // 必填档: 缺省链停住, 让 cl 的 C2198 说话

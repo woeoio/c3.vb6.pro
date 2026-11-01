@@ -58,6 +58,39 @@ void* vb6_ForEach_InitFromEnumIface(void* pEnumRaw) {
     return (void*)state;
 }
 
+// ============================================================
+// Forms 集合的 For Each (Outlook2013 frmMain:273 `For Each Form In Forms`)
+// 合成枚举器: 状态 = [tag哨兵, 游标] 两枚指针, 元素 = 窗体 HWND 的宿主包装
+// (vb6_UC_WrapHostObject — 真 vtable, VariantClear 的 Release 安全;
+//  循环体 `Form.Controls` 走 vb6_Host_GetProp 的宿主 Controls 应答)。
+// ============================================================
+static char g_vb6_formsEnumTag = 0;
+
+void* vb6_ForEach_InitForms(void) {
+    void** e = (void**)malloc(sizeof(void*) * 2);
+    if (!e) return NULL;
+    e[0] = (void*)&g_vb6_formsEnumTag;
+    e[1] = (void*)0;
+    return e;
+}
+
+static int32_t vb6_ForEach_NextForms(void* enumPtr, VARIANT* outVar) {
+    extern void* vb6_UC_WrapHostObject(void* obj);   /* vb6forms_uc.c (uc_hostmodel.c) */
+    extern int32_t vb6_Forms_Count(void);            /* vb6rtl_system.c */
+    extern void* vb6_Forms_Item(int32_t index);
+    void** e = (void**)enumPtr;
+    int32_t idx = (int32_t)(intptr_t)e[1];
+    int32_t n = vb6_Forms_Count();
+    if (idx >= n) return 0;
+    e[1] = (void*)(intptr_t)(idx + 1);
+    void* hwnd = vb6_Forms_Item(idx);
+    VariantInit(outVar);
+    if (!hwnd) return vb6_ForEach_NextForms(enumPtr, outVar);  /* 注册空洞 → 下一枚 */
+    outVar->vt = VT_DISPATCH;
+    outVar->pdispVal = (IDispatch*)vb6_UC_WrapHostObject(hwnd);
+    return 1;
+}
+
 // For Each Init: Call _NewEnum (DISPID -4) on collection object to get IEnumVARIANT
 // Also reads Count property for safety limit (works around buggy IEnumVARIANT)
 // Returns vb6_ForEachState* (or NULL on failure)
@@ -152,6 +185,10 @@ void* vb6_ForEach_Init(void* disp) {
 // P25-fix4: enforce Count limit (buggy IEnumVARIANT may never terminate)
 int32_t vb6_ForEach_Next(void* enumPtr, VARIANT* outVar) {
     if (!enumPtr || !outVar) return 0;
+    /* Forms 合成枚举器 (vb6_ForEach_InitForms) */
+    if (*((void**)enumPtr) == (void*)&g_vb6_formsEnumTag) {
+        return vb6_ForEach_NextForms(enumPtr, outVar);
+    }
     /* Fix 112: 宿主 Controls 集合的原生枚举器 (vb6_ForEach_Init 的宿主分支) */
     if (vb6_UC_ControlsIsCollection(*((void**)enumPtr))) {
         char hv[64];
@@ -202,6 +239,11 @@ int32_t vb6_ForEach_Next(void* enumPtr, VARIANT* outVar) {
 // For Each Release: Release IEnumVARIANT and free wrapper
 void vb6_ForEach_Release(void* enumPtr) {
     if (!enumPtr) return;
+    /* Forms 合成枚举器: 无 COM 接口要放, 直接释放 */
+    if (*((void**)enumPtr) == (void*)&g_vb6_formsEnumTag) {
+        free(enumPtr);
+        return;
+    }
     /* Fix 112/112c: 宿主枚举句柄 (Controls 集合 / 内建 Collection) 不是 vb6_ForEachState
      * —— 首元素是集合指针而非 IEnumVARIANT*, 当 state->pEnum 解引用会取到结构体自身
      * 的字节当 vtable → 0xC0000005. 宿主句柄没有需要 Release 的 COM 接口, 直接释放. */

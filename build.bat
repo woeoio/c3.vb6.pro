@@ -2,6 +2,12 @@
 REM ============================================================
 REM build.bat - portable build for C3
 REM
+REM NOTE: for day-to-day development prefer ./build.sh -- same build, but it
+REM       drives ninja from bash instead of cmd.exe.  cmd.exe spawns child
+REM       processes at ~82 ms each once vcvars has padded the environment,
+REM       versus ~17 ms from bash, so a no-op build costs 9.3 s here and
+REM       ~0.5 s there.  build.bat stays the portable / CI path.
+REM
 REM Locates the Visual Studio C++ toolset via vswhere (no hardcoded
 REM install path), sets up the x64 environment, then runs the existing
 REM build. Usage:

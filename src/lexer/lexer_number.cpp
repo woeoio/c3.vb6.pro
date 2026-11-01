@@ -43,7 +43,55 @@ std::string radixDigits(const std::string& s) {
     return s.substr(begin, end - begin);
 }
 
+// 账 #305 第313刀: 无后缀进制字面量「写下的位模式 → VB 认的类型与值」那一问, 全编译器只此一处。
+//
+// VB6 的档位 = 装得下这个位模式的**最小有符号类型**, 于是值先按那一档取补码再交给上层:
+//   <= 0xFFFF      → 16 位补码 (&HBF32 = -16590、&HFFFF = -1、&O177777 = -1)
+//   <= 0xFFFFFFFF  → 32 位补码 (&HFFFFFFFF = -1 —— 旧行为, 逐字保留)
+//   再大            → 交给 LongLiteral 按 int64 存 (ai/032 §6.6 那一档)
+// 分界量的是**数值位宽**, 不是位数: 同一发里 &H10000 = +65536 与 &O200000 = +65536 不动,
+// 而 &O100000 = -32768 要动 —— 口径由 VBScript 引擎实测 (.local/k313 两轮探针)。
+//
+// 缺 16 位那一档不是洁癖而是静默改坏值: `CLSID.Data2 = &HBF32` (ComCtlsDemo 与
+// VBFlexGridDemo 共用的 Common.bas) 从前发成 vb6_ChkInt(48946), 运行期抛错误 6 打死进程;
+// 位运算那一路更广 —— 255 Or &HFF00 在 VB 里是 -1 (掩码自己带符号扩展), 按 +65280 算是另一个数。
+//
+// `%` 后缀强制 Integer 档 (账 #195), 它**不许**参加上面那档折叠: 显式后缀说的是「按这个类型收」,
+// 而 VB 对 `&HFFFF&` 实测交回 65535 (带 & 后缀走各自那一支, 见 tests/intsuffix 的证人)。
+// allowNarrowFold 就是「这一发真的无后缀」那一问: &H 那一支的 & 后缀在更早处就返回了, 而 &O / &B
+// 两支从前把 & 吃进文本却不改档位 (实测语料 0 处落在 16 位档, .local/k313/octbin.txt) ⇒ 逐字保留
+// 它们今天的行为, 只把折叠让给无后缀那一形。
+struct RadixTier { TokenKind kind; int64_t value; };
+
+RadixTier radixTierOf(uint64_t magnitude, bool intSuffix, bool allowNarrowFold) {
+    if (intSuffix) return {TokenKind::IntegerLiteral, static_cast<int32_t>(magnitude)};
+    if (allowNarrowFold && magnitude <= 0xFFFFu) {
+        return {TokenKind::IntegerLiteral,
+                static_cast<int64_t>(magnitude) - ((magnitude & 0x8000u) ? 0x10000 : 0)};
+    }
+    if (magnitude <= 0xFFFFFFFFu) {
+        return {TokenKind::IntegerLiteral, static_cast<int32_t>(static_cast<uint32_t>(magnitude))};
+    }
+    return {TokenKind::LongLiteral, static_cast<int64_t>(magnitude)};
+}
+
 } // namespace
+
+// 进制字面量 (&H / &O / &B) 三条扫描支路的**唯一**发token出口: 档位与值都问上面那位主人。
+// 三支从前各抄一份阶梯 (三处 `(uint64_t)v <= 0xFFFFFFFFu` + 三处 static_cast), 于是第312刀
+// 量到的那一档缺口一次性存在于三处 —— 加一档要改三遍、漏一遍就是静默错值 (本刀的病灶正是漏了
+// 16 位那一档)。以后要动档位只许动 radixTierOf, 别在支路里再拼比较。
+Token Lexer::makeRadixToken(const std::string& text, uint32_t startLine, uint32_t startCol,
+                            uint64_t magnitude, bool intSuffix, bool allowNarrowFold) {
+    const RadixTier tier = radixTierOf(magnitude, intSuffix, allowNarrowFold);
+    Token tok = makeToken(tier.kind, text, startLine, startCol);
+    if (tier.kind == TokenKind::IntegerLiteral) {
+        tok.intValue = static_cast<int32_t>(tier.value);
+    } else {
+        tok.longValue = tier.value;
+    }
+    return tok;
+}
 
 // offset_ 指向 '^' 本身. 从 offset_+1 起向后看 (跳过空格/制表符): 若不是数字/&/.
 // /-/+/( 之一, 则这个 '^' 是 LongPtr 后缀; 否则是幂运算符.
@@ -251,18 +299,10 @@ Token Lexer::scanHexNumber() {
         if (!parseIntLit(radixDigits(text), 16, v)) {
             return errorToken("十六进制数字超出 64 位整数表示范围", startLine, startCol);
         }
-        // ai/032 §6.6 顺带收口 (§B140 的进制形): 超过 32 位的无后缀十六进制数照
-        // 十进制那支归 LongLong —— 以前这里无条件 `static_cast<int32_t>` 截断,
-        // `&H123456789A` 被砍成 0x3456789A。≤8 位仍按 32 位位模式进 Integer 档
-        // (逐字保留旧行为, 含 &HFFFFFFFF = -1); % 后缀仍走 Integer 档。
-        if (intSuffix || (uint64_t)v <= 0xFFFFFFFFu) {
-            Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
-            tok.intValue = static_cast<int32_t>(v);
-            return tok;
-        }
-        Token tok = makeToken(TokenKind::LongLiteral, text, startLine, startCol);
-        tok.longValue = v;
-        return tok;
+        // ai/032 §6.6 定下的阶梯 (>32 位归 LongLiteral) 与账 #305 第313刀补的 16 位补码那一档
+        // 全住在 radixTierOf 那一处 —— 这里只许问它, 不许再抄一遍比较 (抄一次漏一次)。
+        return makeRadixToken(text, startLine, startCol, static_cast<uint64_t>(v),
+                              intSuffix, /*allowNarrowFold=*/true);
     }
 }
 
@@ -288,7 +328,8 @@ Token Lexer::scanOctNumber() {
         return tok;
     }
 
-    if (peek() == '&') text += advance();
+    bool longSuffix = false;                // & 后缀: 照旧只吃字符、不改档 (逐字保留, 语料 0 处)
+    if (peek() == '&') { text += advance(); longSuffix = true; }
     bool intSuffix = false;                 // 账 #195: 进制字面量也认 Integer 后缀
     if (peek() == '%') { text += advance(); intSuffix = true; }
     {
@@ -296,15 +337,9 @@ Token Lexer::scanOctNumber() {
         if (!parseIntLit(radixDigits(text), 8, v)) {
             return errorToken("八进制数字超出 64 位整数表示范围", startLine, startCol);
         }
-        /* ai/032 §6.6: 与十六进制同一条阶梯 (>32 位归 LongLong)。 */
-        if (intSuffix || (uint64_t)v <= 0xFFFFFFFFu) {
-            Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
-            tok.intValue = static_cast<int32_t>(v);
-            return tok;
-        }
-        Token tok = makeToken(TokenKind::LongLiteral, text, startLine, startCol);
-        tok.longValue = v;
-        return tok;
+        /* 阶梯与值都问那一位主人 (账 #305 第313刀), 这里不许再抄一遍。 */
+        return makeRadixToken(text, startLine, startCol, static_cast<uint64_t>(v),
+                              intSuffix, /*allowNarrowFold=*/!longSuffix);
     }
 }
 
@@ -330,7 +365,8 @@ Token Lexer::scanBinNumber() {
         return tok;
     }
 
-    if (peek() == '&') text += advance();
+    bool longSuffix = false;                // & 后缀: 照旧只吃字符、不改档 (逐字保留, 语料 0 处)
+    if (peek() == '&') { text += advance(); longSuffix = true; }
     bool intSuffix = false;                 // 账 #195: 进制字面量也认 Integer 后缀
     if (peek() == '%') { text += advance(); intSuffix = true; }
     {
@@ -338,15 +374,9 @@ Token Lexer::scanBinNumber() {
         if (!parseIntLit(radixDigits(text), 2, v)) {
             return errorToken("二进制数字超出 64 位整数表示范围", startLine, startCol);
         }
-        /* ai/032 §6.6: 与十六进制同一条阶梯 (>32 位归 LongLong)。 */
-        if (intSuffix || (uint64_t)v <= 0xFFFFFFFFu) {
-            Token tok = makeToken(TokenKind::IntegerLiteral, text, startLine, startCol);
-            tok.intValue = static_cast<int32_t>(v);
-            return tok;
-        }
-        Token tok = makeToken(TokenKind::LongLiteral, text, startLine, startCol);
-        tok.longValue = v;
-        return tok;
+        /* 阶梯与值都问那一位主人 (账 #305 第313刀), 这里不许再抄一遍。 */
+        return makeRadixToken(text, startLine, startCol, static_cast<uint64_t>(v),
+                              intSuffix, /*allowNarrowFold=*/!longSuffix);
     }
 }
 

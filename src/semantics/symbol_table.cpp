@@ -129,7 +129,8 @@ bool SymbolTable::define(std::unique_ptr<Symbol> sym) {
     // Fix 018: builtin EnumMember 同样跳过 (COM 类型库枚举成员跨 enum 同名时 first-wins, 如 MSHTML)
     if (sym->isBuiltin && (sym->kind == SymbolKind::ComClass || sym->kind == SymbolKind::ComInterface
                          || sym->kind == SymbolKind::ComModule || sym->kind == SymbolKind::ComGlobalNs
-                         || sym->kind == SymbolKind::EnumMember)) {
+                         || sym->kind == SymbolKind::EnumMember
+                         || sym->kind == SymbolKind::EnumType)) {
         auto* existing = current_->lookupLocal(lowerName);
         if (existing) {
             // 已有同名符号, 跳过COM类型注册 (避免重复注册)

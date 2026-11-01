@@ -41,7 +41,15 @@ extern "C" {
 // 容量上限（多族共用）
 // ============================================================
 
-#define VB6_UC_MAX_DESC 32
+/* 账 #305 第三百七刀: 32 会**静默装不下**。ComCtlsDemo 的 .vbp 里有 35 个 UserControl
+   （Builds\ 下自带的 OCX 源码全部按 UC 编译），每个模块的 init 各注册一枚 hostDesc；
+   `vb6_UC_Register` 满了直接 return，`vb6_uc_findDesc` 随后找不到 → `vb6_UC_HostCreate`
+   交 NULL → 发码侧 `((cls*)vb6_UC_InstanceOf(hwnd))->events = …` 往 NULL+0x88 写
+   ⇒ 点 "VirtualControls Demo" 进程 0xC000041D（PDB 行号钉在 VirtualControlsForm.c 的
+   `vb6_hwnd_VListBox1 = vb6_UC_HostCreate(...)` 之后那一发 sink 赋值）。
+   注册序 = 模块 init 序（unordered_set，见 §B97）⇒ 哪几枚被丢随编译器二进制漂。
+   128 = 一段指针表 1KB，留给更大的语料。 */
+#define VB6_UC_MAX_DESC 128
 #define VB6_UC_MAX_INST 64
 /* 账 #252: 这张表现在也存「每枚标准控件的 VB 身份」(名字/类型/下标)，而登记表是**进程级**的
    —— 一份工程里所有窗体的控件都往这里挤。实测语料：VBFlexGridDemo 182 枚、Charts 2020 164 枚
@@ -64,6 +72,14 @@ extern "C" {
 #define VB6_UC_DESIGN_SLOTS 8
 typedef struct Vb6UcDesignSlot { char name[64]; void* value; } Vb6UcDesignSlot;
 
+// Fix 113h: 离屏 DIB（定义在 uc_debug.c，uc_host_window.c 的 WM_PAINT 调试路径也要用）
+typedef struct vb6_UCDib {
+    HDC     memDC;
+    HBITMAP bmp;
+    HBITMAP oldBmp;
+    void*   bits;
+    int32_t w, h, stride;
+} vb6_UCDib;
 typedef struct vb6_UCRec {
     const vb6_UserControlDesc* desc;
     void*  me;
@@ -108,6 +124,11 @@ typedef struct vb6_UCRec {
     // (实测 czUI: m_ControlType 未恢复 = 0 = czTitleBar ⇒ 走错分支 ⇒ AV)。
     // 见 uc_host_create.inc 的 vb6_uc_activate 与 vb6_UC_ActivateHost。
     int32_t pendingActivate;
+    // 账 #305 第二百九十二刀: VB6 `UserControl.AutoRedraw = True` 的持久表面。
+    // 之前 hDC 只在 WM_PAINT 期间有效、Cls 恒空转 ⇒ 只在 Resize/Refresh 里画一次的
+    // 控件 (ComCtlsDemo 的 FrameW) 永远是白板。adOn = VB 代码写过 .AutoRedraw = True。
+    vb6_UCDib adSurf;
+    int32_t   adOn;
 } vb6_UCRec;
 
 // UserControl 宿主状态快照（push/pop 用）
@@ -174,14 +195,6 @@ typedef struct vb6_UCFontRec {
     struct vb6_UCFontRec* next;
 } vb6_UCFontRec;
 
-// Fix 113h: 离屏 DIB（定义在 uc_debug.c，uc_host_window.c 的 WM_PAINT 调试路径也要用）
-typedef struct vb6_UCDib {
-    HDC     memDC;
-    HBITMAP bmp;
-    HBITMAP oldBmp;
-    void*   bits;
-    int32_t w, h, stride;
-} vb6_UCDib;
 
 // ============================================================
 // 跨族共享状态（定义在各族 .c，原为文件级 static）
@@ -277,6 +290,7 @@ void vb6_uc_registerClass(HINSTANCE hInst);
 
 // --- uc_hostmodel.c ---
 vb6_HostObjRec* vb6_ho_find(const void* hwnd);
+vb6_HostObjRec* vb6_ho_findInstance(const void* inst);   /* 账 #305 282: 只认无窗宿主那一档 */
 // czUI fix: 宿主对象 IDispatch 包装器（定义在 uc_hostmodel.c；
 // WrapHostObject 由生成代码调用，UnwrapHost 供 GetProp/SetProp/Call 透明解包）
 void* vb6_UC_WrapHostObject(void* obj);
@@ -327,6 +341,10 @@ void* vb6_HostObj_At(int32_t i);
 
 // --- Fix 113h/Fix 123 调试辅助（uc_debug.c 定义，uc_host_window.c 的 WM_PAINT 依赖）---
 // 离屏 DIB 工具 + 整窗合成 dump；未设环境变量 C3_UC_DUMPDIR 时不会被调用。
+// 账 #305 第二百九十二刀: AutoRedraw 持久表面 (uc_host_window.c 定义)
+HDC  vb6_uc_autoRedrawDC(vb6_UCRec* r);
+void vb6_uc_autoRedrawSet(vb6_UCRec* r, int32_t on);
+void vb6_uc_autoRedrawCls(vb6_UCRec* r);
 void vb6_uc_dibCreate(vb6_UCDib* d, HDC refDC, int32_t w, int32_t h);
 void vb6_uc_dibSaveBmp(const vb6_UCDib* d, const char* path);
 void vb6_uc_dibDestroy(vb6_UCDib* d);

@@ -60,7 +60,13 @@
         }
     }
 
-    HWND hwnd = CreateWindowExW(0, L"VB6_UserControlHost", L"",
+    // 账 #305 第二百五十八刀: 无窗宿主 (InvisibleAtRuntime) —— 记录已填好, 窗口一个都不建。
+    // 设计期子控件靠 vb6_UserControl_hWnd == NULL 自己早退 (vb6_UC_CreateDesignImage 那条
+    // `if (!parent) return NULL;` 就是现成的闸), 不用在这里另写一套。
+    const int windowless = vb6_uc_windowless;
+    HWND hwnd = NULL;
+    if (!windowless) {
+    hwnd = CreateWindowExW(0, L"VB6_UserControlHost", L"",
                                 // Fix 124: WS_CLIPSIBLINGS 必不可少 —— 没有它, 一个窗口
                                 // 重绘时会画到同层兄弟控件上, 于是 z 序在下的不透明面板
                                 // (Charts 2020 的 LabelPlus1 白底) 每次重绘都会把上层控件
@@ -73,11 +79,19 @@
                                 (HWND)hParent, NULL, (HINSTANCE)hInstance, r);
     vb6_uc_trace("window.created", typeName, hwnd);
     if (!hwnd) return NULL;
+    /* 账 #305 第二百七十八刀: VB6 的 UC 宿主窗口自己答字体 (参考那 29 枚每枚都带), C3 这一户
+     * 以前一个都没发过。设计期 BeginProperty Font 走 r->font, 没有就交 NULL = VB6 默认档。
+     * 必须在 desc->init 之前发: 初始化里就画第一帧的 UC 要看见自己那枚字体。 */
+    vb6_UC_ApplyFontToWindow(hwnd, r->font);
+    }
     r->hwnd = hwnd;
+    /* 账 #305 第299刀: UC 实例也要被戳 (它可能是 `.frm` 嵌进 OCX 块那一族)。无窗宿主
+       (windowless, 第二百五十八刀) 时 hwnd 为 NULL ⇒ vb6_GeomOwnerStamp 自己早退。 */
+    vb6_GeomOwnerStamp(hwnd, vb6_GeomAuthoredOwner(hParent));
     vb6_ucRecCount++;
 
     // Fix 122: 修正 VB6 z 序 (先声明者在上)
-    vb6_uc_fixZOrder(hwnd);
+    if (!windowless) vb6_uc_fixZOrder(hwnd);
 
     // 登记: 供 Controls 枚举 / TypeName / 宿主对象分派
     if (vb6_ucHoCount < VB6_UC_MAX_OBJ) {
@@ -116,7 +130,7 @@ if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) { fprintf(stderr, "[C
         if (vb6_ucHoCount) vb6_ucHo[vb6_ucHoCount - 1].instance = r->me;
     }
 
-    ShowWindow(hwnd, SW_SHOW);
+    if (!windowless) ShowWindow(hwnd, SW_SHOW);
     // Fix 112: 窗口创建期间被 ready=0 拦下的 Resize/Show 在此补发
     // Fix <vbeclipse> 2026-10-12 (第十二层): 加载路径(带 bag 的顶层 UC)推迟到 ReadProperties
     // 之后 —— VB6 的顺序是 Initialize → ReadProperties → Show/Resize, 而 C3 的 ReadProps 由
@@ -124,10 +138,14 @@ if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) { fprintf(stderr, "[C
     // 读到全是默认值/零值的字段 (实测 czUI: m_ControlType 未恢复 = 0 = czTitleBar ⇒
     // `If m_ControlType = czTitleBar Then ApplyFormRoundCorners` 走错分支 ⇒ AV)。
     // 由 vb6_UC_ActivateHost(hwnd) 在 ReadProps 之后补齐这一段。
-    if (deferActivate) {
+    if (!windowless && deferActivate) {
         r->pendingActivate = 1;
         vb6_uc_trace("activate.defer", desc->typeName, r->me);
         return (void*)hwnd;
     }
-    vb6_uc_activate(r);
+    if (!windowless) vb6_uc_activate(r);
+    // 账 #305 第二百五十八刀: 无窗宿主 (InvisibleAtRuntime) 没有 Show/Resize 可发 (VB6 那台
+    // 同样不发), 而调用方那枚槽还要做成员访问 ⇒ 交回**实例**而不是句柄;
+    // vb6_UC_InstanceOf 那头跟着认实例 (见 uc_host.c)。
+    if (windowless) return (void*)r->me;
     return (void*)hwnd;

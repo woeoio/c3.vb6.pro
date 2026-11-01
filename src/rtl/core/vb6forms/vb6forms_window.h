@@ -75,6 +75,17 @@ int32_t vb6_ContainerScaleMode(void* hwndParent);
 int32_t vb6_WindowScaleModeSelf(void* hwnd);
 // 该 HWND 是 UserControl 宿主时返回它 .ctl 声明的 ScaleMode, 否则 0。
 int32_t vb6_UC_WindowScaleMode(const void* hwnd);
+// 账 #305 第297刀: 这枚窗口在 **VB 里**的容器是哪一窗 (几何单位的唯一答案)。
+// UC 实例宿主答它创建时记录的容器、UC 的设计期子控件答那位 UC 的宿主窗口,
+// 两者都不随 SetParent 漂; 问不到才落回 GetParent (普通控件那一路本来同值)。
+void* vb6_UC_ContainerWindowOf(const void* hwnd);
+/* 账 #305 第299刀: 创建期把「authored 在哪一层容器」戳在子窗口上 (一枚窗口属性);
+   上面那位主人第一问就是这一枚戳。两处成对, 别只加一边。 */
+void vb6_GeomOwnerStamp(void* hwndChild, void* hwndOwner);
+/* 账 #305 第299刀: `.frm` 那一路创建期的父窗交给谁 —— 嵌进 OCX 实例 Begin 块的孩子
+   创建期拿到的是那枚 UC 的宿主窗口, 而它们的 authored 容器是那扇窗体 (298 读④) ⇒
+   先跳过 UC 宿主那几层再交。`.ctl` 设计面那一路**不走**这里 (按精确容器直接戳)。 */
+void* vb6_GeomAuthoredOwner(void* hwndParent);
 
 // ============================================================
 // 控件创建

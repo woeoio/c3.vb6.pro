@@ -1,0 +1,5 @@
+Type=Exe
+Name="K294App"
+Module=mdl294; mdl294.bas
+Class=P294; P294.cls
+Startup="Sub Main"

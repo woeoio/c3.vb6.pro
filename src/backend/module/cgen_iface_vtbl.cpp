@@ -146,6 +146,64 @@ std::string CCodeGen::ivrefCType(const std::string& typeName) {
     return v ? "vb6_ivref_" + cIdent(v->name) + "*" : std::string();
 }
 
+// 账 #305 第二百零四刀: 「一枚**工程类实例**怎么交进视图槽」那一发形状的唯一主人 ——
+// 视图 = 指向实例内那张接口的槽字段 (`&inst->__iv_<I>`)，把实例基址原样交出去，下一发
+// `->vt->` 读到的就是结构体首字段 (`__refcount`) = 拿整数当 vtable (实测 rc=139 / C4133)。
+// nullable = 右值可能是 Nothing (裸类变量 / 属性读) ⇒ 必须带 NULL 守卫：`&NULL->__iv_I` 算出来
+// 是个**非空**野地址 (D22-10 那条)；`New` 那一形恒非空，而且对它做三目会让 `_New()` 求值两次
+// (凭空多造一枚实例) ⇒ nullable=false。
+std::string CCodeGen::ivrefInstanceViewExpr(const std::string& ifaceName,
+                                           const std::string& instExpr, bool nullable) const {
+    const std::string field = "__iv_" + cIdent(ifaceName);
+    if (!nullable) return "&(" + instExpr + ")->" + field;
+    return "((" + instExpr + ") ? &(" + instExpr + ")->" + field + " : NULL)";
+}
+
+// 账 #305 第二百一十刀 S1: 「这一枚**文本**接收者是不是新式接口视图」—— 第一百二十五刀那位
+// 主人按名那一臂的文本投影，名单同源 (knownIvrefVars_)，不另立第二份判据。
+std::string CCodeGen::slotIvrefViewName(const std::string& nameLower) {
+    auto it = knownIvrefVars_.find(nameLower);
+    if (it != knownIvrefVars_.end()) return it->second;
+    // 账 #305 第二百一十刀 (字段档): 类模块里裸写的字段成员读，接收者交进来的**发射文本**是
+    // `me-><字段>` (站S1 拿到的是文本，AST 那边 IdentifierExpr 只有裸名) ⇒ 名册那一问要认这一形。
+    // 只剥 `me->` 这一层前缀，且尾巴必须在名册里 (名册只由 `As <新式接口>` 的声明写入) ⇒
+    // 普通类字段 / 局部同名都不可能被这条答成视图。
+    static const std::string mePre = "me->";
+    if (nameLower.size() > mePre.size() && nameLower.compare(0, mePre.size(), mePre) == 0) {
+        auto itF = knownIvrefVars_.find(nameLower.substr(mePre.size()));
+        if (itF != knownIvrefVars_.end()) return itF->second;
+    }
+    return std::string();
+}
+
+// 账 #305 第二百一十刀 S1: 接收者是一枚新式接口视图 (`vb6_ivref_<I>*`) 时，属性读那一发不许走
+// IDispatch 那批 helper —— 视图指针进 helper 首枚 `void*` 槽编得过、跑起来把**薄指针**当
+// IDispatch 去问 ⇒ 恒 0 的静默错（VbEclipse 实测 70 处读 modPublic 的模块级视图槽 m_Scheme）。
+// 与第一百七十八刀 legacy 那一臂同三条问句，一条都不自己长答案:
+//   ① 这一枚接收者在名册里是新式视图吗 (slotIvrefViewName，与主人同一张表);
+//   ② 那一席是**读**那一档吗 (槽键带 `get_` 前缀 ⇒ Let/Set 的席位根本不会被选中);
+//   ③ 那一席的 C 返回与**站点本来要发的那一发**同型吗 —— 不同型就换不了访问路（换算与所有权
+//      是站点按目标档已经 baked 进去的），比的是文本 ⇒ 拿 switch 现拼一份来比。
+// 形状那一头仍交回唯一主人 `ivrefVtableCall`（哨兵①钉着 `->vt->` 只许一处发射），站点一枚不拼。
+std::string CCodeGen::ivrefViewGetterReadExpr(const std::string& objExpr,
+                                              const std::string& memberName,
+                                              const std::string& lateCall) {
+    if (objExpr.empty() || lateCall.empty()) return std::string();
+    const std::string ifaceName = slotIvrefViewName(ifaceLower(objExpr));
+    if (ifaceName.empty()) return std::string();
+    const IfaceView* v = ivLookupIface(ifaceName);
+    if (!v) return std::string();
+    const std::string want = "get_" + ifaceLower(memberName);
+    for (const IfaceSlotView& s : v->slots) {
+        if (s.key != want) continue;
+        if (comGetterExprForRetCType(ivSlotRetType(s.sig), objExpr, memberName) != lateCall) {
+            return std::string();
+        }
+        return ivrefVtableCall(ifaceName, memberName, objExpr, std::vector<std::string>());
+    }
+    return std::string();
+}
+
 // 本模块（类）实现了哪些新式接口：按 `Implements` 书写序，同名去重
 std::vector<const IfaceView*> CCodeGen::ivImplementedIfaces(Module& module) {
     std::vector<const IfaceView*> out;
@@ -466,6 +524,30 @@ void CCodeGen::emitLegacyIfaceContractTypedefs() {
         h_.emitLine("void* obj;");
         h_.dedent();
         h_.emitLine("} " + ifaceType + ";");
+        // 账 #305 第一百八十九刀: 按值适配器 —— 接收者是**表达式** (调用/属性链) 时,
+        // 视图值只有两个指针, 交给适配器 = 只求值一次; 槽名与转发实参都问这张表。
+        for (const LegacyIfaceSlot& s : slots) {
+            std::string fwd;
+            for (size_t i = 0; i < s.params.size();) {
+                const size_t j = s.params.find(',', i);
+                std::string one = (j == std::string::npos) ? s.params.substr(i)
+                                                           : s.params.substr(i, j - i);
+                const size_t sp = one.rfind(' ');
+                if (sp != std::string::npos) {
+                    const std::string nm = one.substr(sp + 1);
+                    if (!nm.empty()) fwd += ", " + nm;
+                }
+                if (j == std::string::npos) break;
+                i = j + 1;
+            }
+            h_.emitLine("static inline " + s.retType + " " + legacyIfaceSlotCallFn(writtenName, s.field)
+                        + "(" + ifaceType + " _v" + s.params + ") {");
+            h_.indent();
+            h_.emitLine((s.retType == "void" ? std::string() : std::string("return "))
+                        + "_v.vtbl->" + s.field + "(_v.obj" + fwd + ");");
+            h_.dedent();
+            h_.emitLine("}");
+        }
         h_.emitLine("#endif");
         h_.emitBlank();
     }
@@ -1038,6 +1120,25 @@ std::string CCodeGen::ivrefVtableCall(const std::string& ifaceName, const std::s
 // 内联在 cgen_setlet_set_prop.inc 的按名臂里，而 RHS 是「返回工程内接口的调用」那一形
 // (#448 的形①) 也要同一条腿；留在站点里就会长出第二个答案。
 // 计数口径不变: QI 成功即已 AddRef (失败得 NULL = Nothing)，旧值当场 Release。
+// 账 #305 第二百零三刀 (1): 从 cgen_setlet_set_prop.inc 的 B05 那一臂提出来的唯一主人。
+void CCodeGen::emitIvrefRefSet(const std::string& target, const std::string& ifaceName,
+                               const std::string& ivPtr, bool skipAddRef) {
+    const std::string ivCType = "vb6_ivref_" + cIdent(ifaceName) + "*";
+    const std::string ivOld = "__ivold" + std::to_string(ivrefSetSeq_++);
+    c_.emitLine("{  /* tB Interface B05: Set " + target + " (refcounted) */");
+    c_.indent();
+    c_.emitLine(ivCType + " " + ivOld + " = " + target + ";");
+    c_.emitLine(target + " = " + ivPtr + ";");
+    // 置空那一发 (ivPtr == "NULL") 没什么可加引用: 那句 `if (槽) 槽->vt->AddRef(槽)` 紧跟在
+    // `槽 = NULL` 后面, 恒假 = 死码。取走多少 = 只由旧值那一发决定。
+    if (!skipAddRef && ivPtr != "NULL") {
+        c_.emitLine("if (" + target + ") " + target + "->vt->AddRef(" + target + ");");
+    }
+    c_.emitLine("if (" + ivOld + ") " + ivOld + "->vt->Release(" + ivOld + ");");
+    c_.dedent();
+    c_.emitLine("}");
+}
+
 void CCodeGen::emitIvrefQiSet(const std::string& target, const std::string& ifaceName,
                               const std::string& valueExpr, bool rhsTransferred) {
     const std::string ivCType = ivrefCType(ifaceName);

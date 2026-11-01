@@ -78,7 +78,7 @@ void CCodeGen::visit(CallStmt& node) {
                                 "vb6_Trim", "vb6_LTrim", "vb6_RTrim", "vb6_Chr",
                                 "vb6_Str", "vb6_CStr", "vb6_Format", "vb6_Hex", "vb6_Oct",
                                 "vb6_Replace", "vb6_Space", "vb6_String", "vb6_StrReverse",
-                                "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption",
+                                "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_Title", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption",
                                 "vb6_ComCallBSTR",  // Fix 160-com-byref: 早期绑定COM方法返回BSTR (StringOf/StringAt 等) — 按BSTR打印
                                 "vb6_Console_ReadLine", "vb6_Console_ReadKey"  // Fix 161: Console 输入返回 BSTR
                             };
@@ -273,12 +273,28 @@ void CCodeGen::visit(CallStmt& node) {
         // (parser_stmt_assign 收尾), 不经过 IndexOrCallExpr; 而 form_builtin 的
         // external form show 转发只交付 vb6_form_show_<Form>(NULL) 半成品
         // (modal 实参由 com_bind 拆包路径追加), 语句形态原样 emit → 1 参调用
-        // 对 Fix 146 的 2 参签名 (void* hMDIClient, int modal) → C2198.
-        // 无参 Show 即 modeless, 此处补默认 modal=0.
-        if (callExpr.size() > 6
-            && callExpr.compare(0, 14, "vb6_form_show_") == 0
-            && callExpr.compare(callExpr.size() - 6, 6, "(NULL)") == 0) {
-            callExpr = callExpr.substr(0, callExpr.size() - 1) + ", 0)";
+        // 对 2 参签名 (void* hMDIClient, int modal) → C2198。
+        // 账 #305 第三百零九刀: 这里**补哪几枚**不再手拼 ", 0" —— 形参表问它的唯一作者
+        // formShowForwarderParams，缺省值那一档走 defaultArgForParam（和命名实参补齐同
+        // 一条出口）。无参 Show = modeless 这条 VB6 语义因此只有表里一份。
+        // ⚠ 只补**半成品**那一形（尾巴是 `(NULL)`，即只有 hMDIClient、mode 还欠）：
+        //   带实参的语句 `Frm.Show vbModal` 到这里时 callee 已经发成完整调用，
+        //    arity 归表达式路（callee_params 答形参表 + named_args 截 / opt_pad 补）管，
+        //   这里再补一发就是三个参数打两个槽（实测读数 (NULL, 1, 0)）。
+        {
+            static const std::string kHalfTail = "(NULL)";
+            std::vector<ParameterInfo> fsParams309;
+            if (callExpr.size() >= kHalfTail.size()
+                && callExpr.compare(callExpr.size() - kHalfTail.size(),
+                                    kHalfTail.size(), kHalfTail) == 0
+                && formShowForwarderParams(callExpr, fsParams309)) {
+                for (const auto& p309 : fsParams309) {
+                    const std::string def309 = defaultArgForParam(
+                        p309.type, p309.isByVal,
+                        p309.hasDefaultValue ? p309.defaultValueExpr : std::string());
+                    callExpr = callExpr.substr(0, callExpr.size() - 1) + ", " + def309 + ")";
+                }
+            }
         }
 
         // COM调用检测 (P6.2): isComMarker_标志
@@ -606,6 +622,26 @@ void CCodeGen::visit(CallStmt& node) {
                 bareArgList = "0.0";
             }
             callExpr += "(" + bareArgList + ")";
+            // 窗体裸名 `ZOrder` (= `Me.ZOrder`): `.frm` 里不带接收者写 `ZOrder` 是窗体自己
+            // 的方法 (Outlook2013 frmInbox:753/895/964, 弹菜单前提到最前), 而这个名字在符号表
+            // 里查不到 —— 从前发成裸 `ZOrder()`。事件连接点接上后处理器第一次被引用, 这条未解析
+            // 外部符号才浮出水面 (frmInbox.obj: LNK2019 _ZOrder)。RTL 出口见 vb6forms_prop.h。
+            if (isFormModule_ && !knownFormName_.empty()
+                && node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
+                && Symbol::toLower(static_cast<IdentifierExpr&>(*node.callee).name) == "zorder"
+                && !symTab_.lookupModule("zorder")) {
+                // 本窗体的 hwnd 槽名取原大小写 (knownFormName_ 是小写键; 与
+                // cgen_expr_ident_symbol.inc 同一取法, 否则发成 vb6_hwnd_frminbox ⇒ C2065)
+                std::string zoSelfHwnd;
+                auto itZo = knownFormControlOriginalNames_.find(knownFormName_);
+                if (itZo != knownFormControlOriginalNames_.end()) {
+                    zoSelfHwnd = "vb6_hwnd_" + cIdent(itZo->second);
+                } else {
+                    zoSelfHwnd = "vb6_hwnd_" + moduleName_;
+                }
+                callExpr = "vb6_FormZOrder(" + zoSelfHwnd + ", "
+                         + (bareArgList.empty() ? "0" : bareArgList) + ")";
+            }
         }
 
         // Fix 090g: fallback 合成 (visit MemberAccessExpr asCallCallee_ → func(obj)

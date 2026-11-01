@@ -48,9 +48,16 @@ int vb6_StrCmpT(const wchar_t* a, const wchar_t* b);  // 恒 vbTextCompare 口�
 // Fix 048: Missing runtime functions that were generating C4013 warnings
 
 // vb6_SA_Destroy — generic SafeArray destroyer (used by COM class destructor codegen)
-// Destroys 1D SafeArray; for NULL it's a no-op
+// 账 #305 §B220 (第二百二十四刀): "generic" 之前只对 1D 成立 —— 多维定长字段的载体是
+// vb6_SafeArrayND* (创建在 cgen_com.cpp 的出厂圈), 硬投成 vb6_SafeArray1D* 在 x86 上把
+// data 读成 totalElements (free(0x8) = AV), 在 x64 上则因 data 偏移恰好相同而"看着没事"
+// (ND String 那一形静默漏掉全部元素 BSTR)。秩不能看声明: `Dim x()` 再 `ReDim x(1 To 2, 3)`
+// 的存储是 1D* 而载体已是 ND ⇒ 只能问运行期 (vb6_SaIs1D 就是为这件事写的)。
+// 读数: ai/022 第二百二十三刀。
 static inline void vb6_SA_Destroy(void* arr) {
-    if (arr) vb6_SafeArrayDestroy1D((vb6_SafeArray1D*)arr);
+    if (!arr) return;
+    if (vb6_SaIs1D(arr)) vb6_SafeArrayDestroy1D((vb6_SafeArray1D*)arr);
+    else vb6_SafeArrayDestroyND((vb6_SafeArrayND*)arr);
 }
 
 // vb6_DebugAssert — Debug.Assert (no-op in compiled mode)

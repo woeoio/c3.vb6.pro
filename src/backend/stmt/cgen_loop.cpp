@@ -28,6 +28,8 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 c_.emitLine(condLabel + ":;");
                 emitExpr(*node.condition);
                 if (isComMarker_) resolveComValue("Int");
+                // 账 #305 第二百四十四刀: 条件那一族同问一位主人 (Do While 恒真 = 死循环)
+                lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
                 c_.emitLine("if (!(" + lastExpr_ + ")) goto " + exitLabel + ";");
                 c_.indent();
                 emitStmtList(node.body);
@@ -47,6 +49,8 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 std::string condLabel = "vb6_loop_cond_" + std::to_string(labelCounter_++);
                 c_.emitLine(condLabel + ":;");
                 emitExpr(*node.condition);
+                // 账 #305 第二百四十四刀: Do Until 恒真 = 一次都不跑
+                lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
                 c_.emitLine("if (" + lastExpr_ + ") goto " + exitLabel + ";");
                 c_.indent();
                 emitStmtList(node.body);
@@ -68,6 +72,8 @@ void CCodeGen::visit(DoLoopStmt& node) {
             c_.dedent();
             if (node.condition) {
                 emitExpr(*node.condition);
+                // 账 #305 第二百四十四刀: Loop While 恒真 = 出不去
+                lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
                 c_.emitLine("} while (" + lastExpr_ + ");");
             } else {
                 c_.emitLine("} while (1);");
@@ -81,6 +87,8 @@ void CCodeGen::visit(DoLoopStmt& node) {
             c_.dedent();
             if (node.condition) {
                 emitExpr(*node.condition);
+                // 账 #305 第二百四十四刀: Loop Until 恒真 = 只跑一轮
+                lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
                 c_.emitLine("} while (!(" + lastExpr_ + "));");
             } else {
                 c_.emitLine("} while (1);");
@@ -110,6 +118,8 @@ void CCodeGen::visit(WhileWendStmt& node) {
     std::string condLabel = "vb6_loop_cond_" + std::to_string(labelCounter_++);
     c_.emitLine(condLabel + ":;");
     emitExpr(*node.condition);
+    // 账 #305 第二百四十四刀: While...Wend 与 Do While 同问 (第七站)
+    lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
     c_.emitLine("if (!(" + lastExpr_ + ")) goto " + exitLabel + ";");
     c_.indent();
     emitStmtList(node.body);

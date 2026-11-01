@@ -304,7 +304,8 @@
                         // Set 档 / 类型不同型) 就保留下面那一发原样 = 仍红，不掩盖。
                         std::string vSet091n = wantLet091n.empty()
                             ? std::string()
-                            : legacyViewSetterCallExpr(objExpr, maExpr.memberName, valExpr, wantLet091n);
+                            : legacyViewSetterCallExpr(objExpr, maExpr.memberName, valExpr, wantLet091n,
+                                                       ProcKind::PropertyLet);
                         if (!vSet091n.empty()) {
                             c_.emitLine(vSet091n + ";  /* Property Let (视图直槽) */");
                         } else {
@@ -495,6 +496,24 @@
                     return;
                 }
             }
+            /* 账 #305 第二百九十二刀: `With UserControl : .AutoRedraw = v` 是宿主
+               伪成员写, 不是 COM SetProp (接收者是 hWnd, 晚绑定必然落空)。表里答得出
+               类型的行才改道 —— 答不出 (Unknown/对象成员) 维持原样, 不掩盖。*/
+            if (!info.hostPseudoObj.empty() && hostPseudoIsObject(info.hostPseudoObj)
+                && hostPseudoHasScalarRow(info.hostPseudoObj, wmExpr.memberName)) {
+                emitExpr(*node.value);
+                std::string valHp = std::move(lastExpr_);
+                if (cExprIsVariant(valHp)) valHp = "vb6_VariantToLong(" + valHp + ")";
+                const std::string tgtHp = hostPseudoRtlSymbol(info.hostPseudoObj, wmExpr.memberName);
+                if (tgtHp == "vb6_UserControl_AutoRedraw") {
+                    c_.emitLine("vb6_UC_SetAutoRedraw((void*)(intptr_t)" + valHp +
+                                ");  /* With host pseudo .AutoRedraw = v */");
+                } else {
+                    c_.emitLine(tgtHp + " = " + valHp + ";  /* With host pseudo ." +
+                                wmExpr.memberName + " = v */");
+                }
+                return;
+            }
             emitExpr(*node.value);
             std::string valExpr = std::move(lastExpr_);
             std::string packFn = comPackExpr(*node.value);
@@ -507,6 +526,20 @@
             // Fix <vbeclipse> 2026-10-12: 右值整枚是 COM 调用结果 ⇒ 先经
             // vb6_VariantFromComResult 拆掉堆 VARIANT* (见 comUnpackForPack)。
             valExpr = comUnpackForPack(packFn, valExpr);
+            // 账 #305 新账 #474 站F 写侧第二格 (第一百八十一刀): 载体是视图时，这一发交给
+            // 那位形状主人（名册 + 接口自己那张槽表）。本站没有属性符号，所以「目标档」只能
+            // 从自己**已经算好的那枚打包器名**反推（comVbTypeForPackFn，与正向同一张表）；
+            // 不合（非视图 / 那一席没有 / Set 档 / 类型不同型 / 打包器无单一对应）就保留
+            // 下面那一发原样 = 仍红，不掩盖。
+            Vb6Type tier181 = Vb6Type::Empty;
+            const std::string vWith181 = comVbTypeForPackFn(packFn, tier181)
+                ? legacyViewSetterCallExpr(tempVar, wmExpr.memberName, valExpr, mapType(tier181),
+                                                  ProcKind::PropertyLet)
+                : std::string();
+            if (!vWith181.empty()) {
+                c_.emitLine(vWith181 + ";  /* Property Let (视图直槽, With) */");
+                return;
+            }
             c_.emitLine("vb6_ComSetProp(" + tempVar + ", L\"" + wmExpr.memberName + "\", " +
                          packFn + "(" + valExpr + "));  /* With COM SetProp */");
             return;

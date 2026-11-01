@@ -753,6 +753,25 @@ void* vb6_CreateObject(const wchar_t* progId) {
     return (void*)pDisp;
 }
 
+void* vb6_ComGlobalInstance(const wchar_t* progId) {
+    /* typelib appobject 单例缓存: 线性表足够 (每个引用库至多几枚 appobject)。
+     * 实例持有到进程结束 (VB6 语义: 全局对象与工程同生命周期, 不显式释放)。 */
+    static struct { const wchar_t* progId; void* disp; } cache[32];
+    static int count = 0;
+    if (progId) {
+        for (int i = 0; i < count; i++) {
+            if (wcscmp(cache[i].progId, progId) == 0) return cache[i].disp;
+        }
+    }
+    void* disp = vb6_CreateObject(progId);
+    if (disp && count < 32) {
+        cache[count].progId = progId;
+        cache[count].disp = disp;
+        count++;
+    }
+    return disp;
+}
+
 void* vb6_GetObject(const wchar_t* pathName, const wchar_t* progId) {
     if (!progId) return NULL;
 

@@ -2,6 +2,57 @@
 // 由 src/backend/expr/cgen_expr_member.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 363~552 行，逐行未改。
 
+        // 自类型过程作接收者: `Public Function RibbonBar() As RibbonBar` /
+        // `Property Get CalendarControl() As CalendarControl` (过程名 = 返回的
+        // typelib 类名, 两名在符号表同键, 类型被本地过程遮蔽) 配
+        // `RibbonBar.Minimized = ...` / `CalendarControl.Options.X = v`。
+        // (Outlook2013 frmMain:426/1042, frmTimeZone:336) 此前接收者发空或落 M22
+        // 发 vb6_RibbonBar_Minimized 平铺名 (C2065)。先调过程得 IDispatch,
+        // 成员按 COM 晚绑定续链。排除当前过程自身名 (那是返回值槽语义)。
+        if (node.object && node.object->kind == ASTNodeKind::IdentifierExpr) {
+            // 模块作用域查找 (认 $pg 键) —— 全表 lookup 先命中同名 typelib ComClass。
+            Symbol* stSym235t = symTab_.lookupModuleByKind(objIdent.name, SymbolKind::Function);
+            if (!stSym235t) stSym235t = symTab_.lookupModuleByKind(objIdent.name, SymbolKind::PropertyGet);
+            if (stSym235t
+                && (stSym235t->kind == SymbolKind::Function
+                    || stSym235t->kind == SymbolKind::PropertyGet)
+                && !stSym235t->variableTypeName.empty()
+                && Symbol::toLower(stSym235t->variableTypeName) == objLower
+                // 本地同名变量 (Dim RibbonBar As RibbonBar, frmMain:1204/1399) 遮蔽
+                // 同名过程 —— 那是普通 COM 对象变量, 走 knownObjectVars_/TypedComVars 路。
+                && !knownLocalVars_.count(objLower)
+                && !(currentProc_ && Symbol::toLower(currentProc_->name) == objLower)) {
+                std::string stMod235t = stSym235t->isExternal ? stSym235t->sourceModule
+                                      : moduleName_;
+                std::string stName235t = stSym235t->name;
+                if (stSym235t->kind == SymbolKind::PropertyGet)
+                    stName235t = "prop_get_" + stName235t;
+                std::string stCall235t = cProcName(stName235t, stSym235t->access, stMod235t)
+                                       + (isClassModule_ ? "((void*)me)" : "()");
+                comObjExpr_ = stCall235t;
+                if (std::getenv("C3_DBG_ST")) {
+                    std::cerr << "[ST-OBJ] member=" << node.memberName
+                              << " flag=" << inMemberObjectEmit_ << std::endl;
+                }
+                // 这一支的 node.object 是标识符、node.memberName 是「函数返回值上的
+                // 真成员」, 所以链中对象求值 (inMemberObjectEmit_) 也必须留名:
+                //   `RibbonBar.Controls.Add(...)`  (frmMain:1421, RibbonBar = 自类型
+                //   函数 RibbonBar() As RibbonBar) 若把 "Controls" 抹掉, 外层 Add
+                //   会直接打到 RibbonBar 本体上 —— getDispid("Add") 0x80020006 ⇒
+                //   Nothing ⇒ 整条 Options/Styles 弹出菜单链全空 ⇒ FindControl(2900)
+                //   交空 ⇒ Execute 空转 ⇒ Office2013 主题没设上, 资源主题又没加载
+                //   ⇒ ribbon/状态栏画成黑片。
+                // (跨模块 `frmMain.RibbonBar` 那种「成员其实是函数名」的形态在
+                //  form_builtin 的 xfSym 支, 不在这里。)
+                comMemberName_ = node.memberName;
+                isComMarker_ = true;
+                isEarlyBoundCom_ = false;
+                earlyBoundSym_ = nullptr;
+                lastExpr_ = stCall235t;
+                return;
+            }
+        }
+
         // 优先级0: COM前期绑定成员访问 (P6.3, Dim x As FileSystemObject)
         // 有具体类型信息的COM变量, 通过vtable直接调用而非IDispatch::Invoke
         if (knownTypedComVars_.count(objLower)) {

@@ -361,6 +361,20 @@ void CCodeGen::visit(ForEachStmt& node) {
             resolveComValue("Object");  // 集合必须是Object(IDispatch*), 生成ComGetObjectProp
         }
         std::string collExpr = lastExpr_;
+        // For Each 的集合表达式是**本窗体控件实例** (`For Each Item In wndShortcutBar`,
+        // Outlook2013 frmShortcutBar:184/198): AX 控件的 `vb6_hwnd_<名>` 槽存的就是
+        // 控件真 IDispatch (vb6_OcxHost_Create 的返回值, ax_host.c:320), 直接喂
+        // vb6_ForEach_Init 走真 _NewEnum。裸名此前落变量兜底发
+        // `vb6_ForEach_Init(wndShortcutBar)` (C2065)。
+        if (!isComMarker_ && node.collection
+            && node.collection->kind == ASTNodeKind::IdentifierExpr) {
+            auto& feCollId = static_cast<IdentifierExpr&>(*node.collection);
+            std::string feCollLower = Symbol::toLower(feCollId.name);
+            auto feItCtrl = knownFormControls_.find(feCollLower);
+            if (feItCtrl != knownFormControls_.end()) {
+                collExpr = makeCtrlHwndArg(feCollLower, feItCtrl->second);
+            }
+        }
         // Fix 091q: vb6_ComCall/vb6_ComCallObject 已返回对象指针 (void*),
         // vb6_ForEach_Init 直接接收. 不可再按 Variant 提取 — cLang 26:
         // For Each x In me.LangInfo.Item("LangList") (COM Item 调用, 生成
@@ -426,6 +440,18 @@ void CCodeGen::visit(ForEachStmt& node) {
         // 有这一枚就直调, 把 IEnumVARIANT 交给 vb6_ForEach_InitFromEnumIface。
         // 没有 NewEnum 的 (或推不出类的) 保持原样 —— 那种集合本来就是真 IDispatch。
         std::string feInitFn = "vb6_ForEach_Init";
+        // For Each Form In Forms (Outlook2013 frmMain:273): RTL 窗体注册表的
+        // 合成枚举器 —— 裸 `Forms` 落变量兜底发 vb6_ForEach_Init(Forms) (C2065)。
+        // 仅当 `Forms` 不是本工程同名变量时接管 (与 ident 内建对象段同一口径)。
+        {
+            auto* feCollForms = dynamic_cast<IdentifierExpr*>(node.collection.get());
+            if (feCollForms && Symbol::toLower(feCollForms->name) == "forms"
+                && !knownLocalVars_.count("forms") && !knownVariantVars_.count("forms")
+                && !knownObjectVars_.count("forms") && !knownFormControls_.count("forms")) {
+                feInitFn = "vb6_ForEach_InitForms";
+                collExpr = "";
+            }
+        }
         if (collIsProjectClass247) {
             const std::string cls247 = inferClassTypeOfExpr(*node.collection);
             const std::string newEnumFn247 = resolveClassMemberCall(cls247, "NewEnum");

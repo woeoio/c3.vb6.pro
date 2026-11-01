@@ -139,6 +139,12 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
         if (p == "linestyle" || p == "indentation") {
             return Vb6Type::Long;
         }
+        // IconSize 是 XtremeSuiteControls.TreeView 的扩展 (像素), RTL getter 给 int32_t。
+        // 原生 SysTreeView32 没有这一格 —— RTL 拿它当"预留图标列"的宽度 (挂 16x16
+        // ImageList)，见 vb6forms_treeview.c 的 SetIconSize。
+        if (p == "iconsize") {
+            return Vb6Type::Long;
+        }
         // 账 #128: 这三条 getter 走 `vb6_TvBitAsVbBool` ⇒ 答的就是 VB6 的 -1/0，
         // 所以它们与 #124 那两条同档（以前跟着"全是 int32_t"那一句一起吃 Long）。
         if (p == "checkboxes" || p == "hottracking" || p == "hideselection") {
@@ -580,6 +586,7 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
     case FrmControlType::TreeView:
         if (propLower == "linestyle") return "vb6_TreeView_GetLineStyle";
         if (propLower == "indentation") return "vb6_TreeView_GetIndentation";
+        if (propLower == "iconsize") return "vb6_TreeView_GetIconSize";
         if (propLower == "checkboxes") return "vb6_TreeView_GetCheckBoxes";
         if (propLower == "hottracking") return "vb6_TreeView_GetHotTracking";
         if (propLower == "hideselection") return "vb6_TreeView_GetHideSelection";
@@ -997,6 +1004,7 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
     case FrmControlType::TreeView:
         if (propLower == "linestyle") return "vb6_TreeView_SetLineStyle";
         if (propLower == "indentation") return "vb6_TreeView_SetIndentation";
+        if (propLower == "iconsize") return "vb6_TreeView_SetIconSize";
         if (propLower == "checkboxes") return "vb6_TreeView_SetCheckBoxes";
         if (propLower == "hottracking") return "vb6_TreeView_SetHotTracking";
         if (propLower == "hideselection") return "vb6_TreeView_SetHideSelection";
@@ -2105,9 +2113,22 @@ bool CCodeGen::ctrlTypeOfMemberObject(const Expr* obj, FrmControlType& outType) 
         return false;
     }
     auto it = knownFormControls_.find(name);
-    if (it == knownFormControls_.end()) return false;
-    outType = it->second;
-    return true;
+    if (it != knownFormControls_.end()) {
+        outType = it->second;
+        return true;
+    }
+    // A cross-module form default instance (`frmMain.hWnd`) is not a control, but its
+    // properties answer from the very same controlPropType table. The bare-member-name
+    // fallback does not know the host, so `hWnd` came back Variant -> the comparison
+    // boxed the HWND as VariantObject -> vb6_VarCmpLongEq answered 0 -> `focused`
+    // stayed False and every KeyHit was swallowed (VBWolf ignored the keyboard).
+    // Non-current form only: same guard as cgen_expr_member_form_builtin.inc.
+    if (knownFormModuleNames_.count(name)
+        && (!isFormModule_ || name != knownFormName_)) {
+        outType = FrmControlType::Form;
+        return true;
+    }
+    return false;
 }
 bool CCodeGen::controlClickFromNativeNotify(FrmControlType ctrlType) {
     switch (ctrlType) {
@@ -2504,6 +2525,65 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     } else {
         c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
     }
+}
+
+// 账 #305 §B164 形⑤ 站③ (第一百八十四刀): 「这一发赋值的目标是不是一枚 Variant 槽」——
+// 原先这六条判据内联在 visit(AssignmentStmt&) 里, 而 LetStmt 那一站 (显式 `Let`)
+// 从不问它们, 于是 `Let <变体> = "abc"` / `= <String 变量>` / `= <拼接>` 三种形
+// 全发成裸赋值 ⇒ cl C2440「无法从 BSTR 转换为 vb6_VARIANT」(实测 BASE 3 发),
+// 而 `Let <变体> = <变体槽>` / `Let <变体数组元素> = …` 两种形编得过但不清旧值。
+// 两个站点问的是同一个问题, 答案只许住在这里; 命中后由调用方交给同一枚
+// emitVariantSlotAssign (装箱 + 所有权 + 槽位语义), 站点不许自己拼形状。
+bool CCodeGen::variantSlotTargetOf(const Expr* target, const std::string& targetText,
+                                   bool& udtField) {
+    udtField = false;
+    std::string checkName = targetText;
+    if (checkName.substr(0, 4) == "me->") checkName = checkName.substr(4);
+    // Fix 025: (*name) 解引用形式 — ByRef Variant 参数, 剥掉外层才能查名字。
+    if (checkName.size() > 4 && checkName[0] == '(' && checkName[1] == '*'
+        && checkName.back() == ')') {
+        checkName = checkName.substr(2, checkName.size() - 3);
+    }
+    std::string lower = checkName;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (knownVariantVars_.count(lower)) return true;
+    // Fix 054: 类成员 Variant 字段 (me->m_P1)。
+    if (classVariantMembers_.count(lower)) return true;
+    if (target && target->kind == ASTNodeKind::IdentifierExpr) {
+        auto& id = static_cast<const IdentifierExpr&>(*target);
+        std::string idLower = id.name;
+        std::transform(idLower.begin(), idLower.end(), idLower.begin(), ::tolower);
+        if (knownVariantVars_.count(idLower)) return true;
+    }
+    // Fix 154: VARIANT 数组元素 —— 目标发出来是 `VB6_SA_AT(vb6_VARIANT, …)` 族下标宏。
+    if (targetText.compare(0, 7, "VB6_SA_") == 0
+        && targetText.find("(vb6_VARIANT,") != std::string::npos) {
+        return true;
+    }
+    if (!target) return false;
+    // Fix 232: UDT 的 Variant 字段 (`.Image` / With 块内的 `.Image`) —— 判据是字段声明类型;
+    // 字段的真 C 类型是 vb6_cls_* 时否决 (typed 对象指针槽, 不是 Variant 容器)。
+    const std::string udtFldC232 = udtFieldCTypeOfTarget(target);
+    if (udtFldC232.rfind("vb6_cls_", 0) != 0
+        && inferUdtFieldVb6Type(target, nullptr) == Vb6Type::Variant) {
+        const std::string fldTRN232 = udtFieldTypeRefNameOfTarget(target);
+        if (fldTRN232.empty() || cTypeForDeclaredTypeName(fldTRN232) == "vb6_VARIANT") {
+            udtField = true;
+            return true;
+        }
+    }
+    // 账 #305 §B168: `<对象>.<类的公共 Variant 字段>` / 类内 `Me.<同一字段>` —— 字段档问
+    // driver 注入的工程级表 (classFieldIsVariantSlot); member 是方法/属性时否决 (归属性写那一路)。
+    if (target->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maT = static_cast<const MemberAccessExpr&>(*target);
+        const std::string clsT = maT.object ? inferClassTypeOfExpr(*maT.object) : std::string();
+        if (!clsT.empty()
+            && resolveClassMemberCall(clsT, maT.memberName).empty()
+            && classFieldIsVariantSlot(clsT, maT.memberName)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // 账 #305 §B169 (第六十刀): 「把这枚右值收进一枚 Variant 槽」(装箱 + 所有权 + 槽位语义)

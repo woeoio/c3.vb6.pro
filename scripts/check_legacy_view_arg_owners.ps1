@@ -17,8 +17,8 @@
 #       (Set 那三臂 3 / cgen_com 发定义那 1 / 实参位 1)。
 #   V4  legacyViewBoxExpr( 在代码里恰好 5 处 = 定义 1 + 声明 1 + 调用 3
 #       (wrapVariantValue / boxToVariant / ByRef Variant 实参位)。
-#   V5  slotIsLegacyIfaceView( 在代码里恰好 7 处 = 定义 1 + 声明 1 + 调用 5
-#       (legacyViewBoxExpr 自己 / 腿② 覆写 / 腿③ 置空 / Is 比较那一站 / 第一百七十五刀表达式路那一问)。
+#   V5  slotIsLegacyIfaceView( 在代码里恰好 6 处 = 定义 1 + 声明 1 + 调用 4
+#       (legacyViewBoxExpr 自己 / 腿② 覆写 / 腿③ 置空 / 第一百七十五刀表达式路那一问) —— 第二百四十八刀把 「Is」 比较那一站换成**带名字**那一问 (要拿接口名再问一次形状), 所以这一档从 5 处调用降到 4 处, 那一处搬到 V7 去数。
 #   V6  视图参与比较那两句发码: `).obj == (` 恰好 1 处、`).obj == NULL` 恰好 2 处,
 #       都住在 cgen_expr_binary.cpp。
 #
@@ -76,7 +76,7 @@ $v4 = CountWhere "legacyViewBoxExpr(" ""
 if ($v4 -ne 5) { $fail += ("V4 装箱主人(定义+声明+调用)位数: 期望 5 = 3 处调用 + 定义 + 声明, 实到 " + $v4) }
 
 $v5 = CountWhere "slotIsLegacyIfaceView(" ""
-if ($v5 -ne 7) { $fail += ("V5 认视图槽(定义+声明+调用)位数: 期望 7 = 5 处调用 + 定义 + 声明, 实到 " + $v5) }
+if ($v5 -ne 6) { $fail += ("V5 认视图槽(定义+声明+调用)位数: 期望 6 = 4 处调用 + 定义 + 声明, 实到 " + $v5) }
 
 $v6a = CountWhere ").obj == (" "cgen_expr_binary.cpp"
 $v6b = CountWhere ").obj == NULL" "cgen_expr_binary.cpp"
@@ -95,15 +95,15 @@ if ((CountWhere ").obj == " "") -gt 3) { $fail += "V6 视图比较发码在别�
 #   V8  比名那把尺 `_stricmp(className` 全仓恰好 1 处, 且在 cgen_iface_vtbl.cpp (接口自己铸的那一发 view_from
 #        里) —— 站点自己比名 = 第二条答案; mint 外再比一次名 = 又一位主人。
 $v7 = CountWhere "slotLegacyIfaceViewName(" ""
-if ($v7 -ne 8) { $fail += ("V7 认视图槽那一问位址: 期望 8 = 定义 + 声明 + bool 投影 + For Each 那一站 + 调用主人自己那一问 + With 那一站 + 站F 读侧读者 + 站F 写侧读者, 实际到 " + $v7) }
+if ($v7 -ne 14) { $fail += ("V7 认视图槽那一问位址: 期望 14 = 定义 + 声明 + bool 投影 + For Each 那一站 + 调用主人自己那一问 + With 那一站 + 站F 读侧读者 + 站F 写侧读者 + 带参写槽只读查询 (第186刀) + With 体内零参读 (第193刀) + Set 装填那一站 (第215刀) + 「Is」 那一站 (第248刀: 认完名册再用 ivrefCType 问形状), 实际到 " + $v7) }
 if ((CountWhere "slotLegacyIfaceViewName(" "cgen_control.cpp") -ne 1) {
     $fail += "V7 站点: For Each 那一站只许问一次认视图槽那一问"
 }
 if ((CountWhere "slotLegacyIfaceViewName(" "cgen_with.cpp") -ne 1) {
     $fail += "V7 站点: With 那一站 (站D') 只许问一次认视图槽那一问"
 }
-if ((CountWhere "slotLegacyIfaceViewName(" "cgen_util_classtype.cpp") -ne 5) {
-    $fail += "V7 站点: 视图那一族自己这一份文件里, 认视图槽那一问只许五处 (定义 + bool 投影 + 方法主人那一问 + 站F 读侧读者 + 站F 写侧读者)"
+if ((CountWhere "slotLegacyIfaceViewName(" "cgen_util_classtype.cpp") -ne 6) {
+    $fail += "V7 站点: 视图那一族自己这一份文件里, 认视图槽那一问只许六处 (定义 + bool 投影 + 方法主人那一问 + 站F 读侧读者 + 站F 写侧读者 + 带参写槽查询)"
 }
 $v8 = CountWhere "_stricmp(className" ""
 if ($v8 -ne 1) { $fail += ("V8 视图那一族的比名尺: 期望 1 (只许写在接口自己铸的 view_from 里), 实际到 " + $v8) }
@@ -118,26 +118,60 @@ if ((CountWhere "_stricmp(className" "cgen_iface_vtbl.cpp") -ne 1) {
 #   于是体内成员由上面那两路主人接手 —— 所以 V9 的位数一枚都不许因为站D′ 而涨。
 #   第一百七十八刀站F 的读者是**第三位消费者** (属性读的形状也交回这位主人, 站点自己一枚都不拼)。
 $v9 = CountWhere "legacyViewCallExpr(" ""
-if ($v9 -ne 6) { $fail += ("V9 视图调用主人位数: 期望 6 = 定义 + 声明 + 表达式路 + 语句路 + 站F 读侧读者 + 站F 写侧读者, 实际到 " + $v9) }
+if ($v9 -ne 7) { $fail += ("V9 视图调用主人位数: 期望 7 = 定义 + 声明 + 表达式路 + 语句路 + 站F 读侧读者 (值档 + 对象档两发) + 站F 写侧读者, 实际到 " + $v9) }
 if ((CountWhere "legacyViewCallExpr(" "cgen_call.cpp") -ne 1) {
     $fail += "V9 语句路: cgen_call.cpp 只许问一次视图调用主人"
 }
 if ((CountWhere "legacyViewCallExpr(" "cgen_expr_call_com_bind.inc") -ne 1) {
     $fail += "V9 表达式路: com_bind 只许问一次视图调用主人 (别把形状又现场拼一遍)"
 }
-if ((CountWhere "legacyViewCallExpr(" "cgen_util_classtype.cpp") -ne 3) {
-    $fail += "V9 主人自己这一份文件: 只许定义 + 站F 读侧/写侧两位读者各一发, 别处再拼一份形状就是第二位主人"
+if ((CountWhere "legacyViewCallExpr(" "cgen_util_classtype.cpp") -ne 4) {
+    $fail += "V9 主人自己这一份文件: 只许定义 + 站F 读侧 (值档 + 对象档) / 写侧读者各一发, 别处再拼一份形状就是第二位主人"
 }
 # V10 开线 (2026-10-23, 账 #305 新账 #474 写侧): 属性写那一站的读者 = 视图调用主人的第四位消费者;
+# V11 开线 (2026-10-23, 第一百八十一刀): 「VB 型 ↔ 晚绑定打包器」这一张配对表只许住一处。
+#   正向 comPackFnForVbType = 定义 + 声明 + 两处消费 (comPackExpr 的类型分支 / 裸控件名折默认属性) = 4 处;
+#   反向 comVbTypeForPackFn = 定义 + 声明 + With 体内那一问 = 3 处;
+#   表本体 kComPackTiers = 3 处 (表定义 + 两个循环)、且只住 cgen_util_com.cpp 一份文件。
+#   谁在别处再抄一份 switch / 名单，这两问就会在不同站点给出不同答案。
+$v11r = CountWhere "comVbTypeForPackFn(" ""
+if ($v11r -ne 3) { $fail += ("V11 打包器反向问位数: 期望 3 = 定义 + 声明 + With 站点一问, 实际到 " + $v11r) }
+$v11f = CountWhere "comPackFnForVbType(" ""
+if ($v11f -ne 4) { $fail += ("V11 打包器正向问位数: 期望 4 = 定义 + 声明 + 两处消费, 实际到 " + $v11f) }
+$v11t = CountWhere "kComPackTiers" ""
+if ($v11t -ne 3) { $fail += ("V11 配对表本体位数: 期望 3 = 表定义 + 正向循环 + 反向循环, 实际到 " + $v11t) }
+if ((CountWhere "kComPackTiers" "cgen_util_com.cpp") -ne 3) {
+    $fail += "V11 配对表住处: 三处全部只许在 cgen_util_com.cpp (别在别处抄第二份)"
+}
 #   站点 (cgen_assign_prop_write.inc) 只许问一次, 形状仍在主人手里 (站点一枚都不拼)。
+# V12 (第一百八十六刀): 「带参写槽的末形参是什么 C 类型」只许住一处查询 —— 定义 + 声明 + 一个站点
+$v12 = CountWhere "legacyViewSetterLastParamCType(" ""
+if ($v12 -ne 3) { $fail += ("V12 带参写槽查询位数: 期望 3 = 定义 + 声明 + 多入口参数站点一问, 实际到 " + $v12) }
+# V13 (第一百八十八刀): 「这一档返回类型是不是值聚合」只许住一处判据 (`vb6_type_` ∪ `vb6_iface_`) ——
+#   定义 + 声明 + Function / Property Get 两处返回槽 = 4; `vb6_iface_` 前缀比较仍只住 cgen_base_type.cpp (V1 守)。
+#   第二百一十五刀再添一位读者 = 类工厂的**字段初始化**那一档 (视图字段槽没有 NULL 这一形) ⇒ 5。
+$v13 = CountWhere "cTypeIsValueAggregate(" ""
+if ($v13 -ne 5) { $fail += ("V13 值聚合判据: 期望 5 = 定义 + 声明 + 两处返回槽 + 类工厂字段初始化 (第215刀), 实际到 " + $v13) }
+# V14 (第一百八十八刀): 「返回类型若为视图, 交回接口名」只许住一处 —— 定义 + 声明 + 两处登记站点 = 4。
+$v14 = CountWhere "legacyIfaceNameOfCType(" ""
+if ($v14 -ne 4) { $fail += ("V14 视图返回名: 期望 4 = 定义 + 声明 + 两处登记站点, 实际到 " + $v14) }
+# V15 (第一百八十九刀): 表达式接收者的按值适配器名只许住一处 —— 定义 + 声明 + 铸 + 问 = 4。
+$v15 = CountWhere "legacyIfaceSlotCallFn(" ""
+if ($v15 -ne 6) { $fail += ("V15 视图按值适配器名: 期望 6 = 定义 + 声明 + 铸 + 调用站一问 + 裸零参读一问 + With 体内零参读一问, 实际到 " + $v15) }
+if ((CountWhere "legacyViewSetterCallExpr(" "cgen_assign_com_prop.inc") -ne 1) {
+    $fail += "V10 站点: 多入口参数那一站 (cgen_assign_com_prop.inc) 只许问一次视图写读者"
+}
 $v10 = CountWhere "legacyViewSetterCallExpr(" ""
-if ($v10 -ne 3) { $fail += ("V10 视图属性写读者位数: 期望 3 = 定义 + 声明 + 站点一问, 实际到 " + $v10) }
-if ((CountWhere "legacyViewSetterCallExpr(" "cgen_assign_prop_write.inc") -ne 1) {
-    $fail += "V10 站点: 属性写那一站只许问一次视图写读者 (别在站点拼 .vtbl-><槽>(….obj, 值))"
+if ($v10 -ne 8) { $fail += ("V10 视图属性写读者位数: 期望 8 = 定义 + 声明 + 块外站点一问 + With 体内站点一问 + Set 语句三处 + 多入口参数站点一处 (第186刀), 实际到 " + $v10) }
+if ((CountWhere "legacyViewSetterCallExpr(" "cgen_assign_prop_write.inc") -ne 2) {
+    $fail += "V10 站点: 属性写只许问两次视图写读者 = 块外一站 + With 体内一站 (别在站点拼 .vtbl-><槽>(….obj, 值))"
+}
+if ((CountWhere "legacyViewSetterCallExpr(" "cgen_setlet_set_prop.inc") -ne 3) {
+    $fail += "V10 站点: Set 语句只许问三次视图写读者 = Nothing 那支 + 命名属性那支 + objRef 那支 (putref_ 档同一主人)"
 }
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ("FAIL " + $m) }
     exit 1
 }
-Write-Host ("PASS 前缀名单=" + $v1all + "(本文件 " + $v1 + ") 形参问句=" + $v2 + " wrap主人=" + $v3 + " 装箱主人=" + $v4 + " 认槽主人=" + $v5 + " 比较发码=" + $v6a + "+" + $v6b + " 认视图槽那一问=" + $v7 + " 比名尺=" + $v8 + " 视图调用主人=" + $v9)
+Write-Host ("PASS 前缀名单=" + $v1all + "(本文件 " + $v1 + ") 形参问句=" + $v2 + " wrap主人=" + $v3 + " 装箱主人=" + $v4 + " 认槽主人=" + $v5 + " 比较发码=" + $v6a + "+" + $v6b + " 认视图槽那一问=" + $v7 + " 比名尺=" + $v8 + " 视图调用主人=" + $v9 + " 写读者=" + $v10 + " 打包器配对=" + $v11f + "/" + $v11r + "/" + $v11t + " 值聚合=" + $v13 + " 视图返回名=" + $v14 + " 适配器名=" + $v15)
 exit 0

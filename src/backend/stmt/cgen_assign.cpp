@@ -22,6 +22,26 @@ void CCodeGen::visit(AssignmentStmt& node) {
     // `Set` 语句走 visit(SetStmt&)，不受影响。
     bool savedLetScalar = memObjLetScalar_;
     memObjLetScalar_ = true;
+
+    // 账 #305 第320刀 (账 #592): `App.Title = v` —— VB6 允许运行期改应用标题 (语料 16 行)。
+    // 改前这里把读取侧的折算当左值: `vb6_App_EXEName() = vb6_BSTR_FromStr(L"...")` ⇒ C2106,
+    // 整棵工程编不过。读写各一处出口: 写落 vb6_SetAppTitle (RTL 自持一份副本, 借入不交出),
+    // 读走 vb6_App_Title。局部同名变量优先 (VB6 里局部遮蔽内建名), 与读取侧同一判据。
+    if (node.target && node.target->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maAt = static_cast<MemberAccessExpr&>(*node.target);
+        if (maAt.object && maAt.object->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string objAt = Symbol::toLower(
+                static_cast<IdentifierExpr&>(*maAt.object).name);
+            const std::string memAt = Symbol::toLower(maAt.memberName);
+            if (objAt == "app" && memAt == "title" && !knownLocalVars_.count(objAt)) {
+                emitExpr(*node.value);
+                std::string rhsAt = wrapToBSTR(std::move(lastExpr_), *node.value);
+                c_.emitLine("vb6_SetAppTitle(" + rhsAt + ");");
+                memObjLetScalar_ = savedLetScalar;
+                return;
+            }
+        }
+    }
 #include "backend/detail/stmt/cgen_assign_host_pseudo.inc"
 #include "backend/detail/stmt/cgen_assign_stmt_special.inc"
 #include "backend/detail/stmt/cgen_assign_prop_write.inc"

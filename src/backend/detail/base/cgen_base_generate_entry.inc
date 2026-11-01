@@ -12,6 +12,16 @@
         } else {
             c_.emitBlank();
             c_.emitLine("// === 入口点 ===");
+            // 账 #305 第320刀 (账 #592): 把 .vbp 的 Title 播种给 RTL 那一格运行期真值。
+            // MsgBox 的默认题头与 `App.Title` 读取都只问那一格 (vb6rtl_system.c 的所有权注释);
+            // 单文件编译 (无 .vbp) 时 projectTitle_ 为空 ⇒ 一行不发, 行为与改动前一致。
+            // 与 emitComLibReg / emitOcxRefReg 同一条约定: 每个入口模板都调一次, 顺序在
+            // vb6_Init() 之后、任何用户代码/对话框之前。
+            auto emitAppTitleInit = [&]() {
+                if (projectTitle_.empty()) return;
+                c_.emitLine("vb6_SetAppTitle(L\"" + escapeWideCString(projectTitle_)
+                            + "\");  /* 账 #592: App.Title = .vbp 的 Title */");
+            };
             bool hasMain = false;
             // Fix 160: ComLib= 免注册组件表烘焙 — 在 vb6_Init() 之前发出.
             // vb6_ComLibRegister 只填一张静态表, 与 vb6_Init 无顺序依赖, 但必须在任何
@@ -115,6 +125,7 @@
             emitComLibReg();
             emitOcxRefReg();
             c_.emitLine("vb6_Init();");
+            emitAppTitleInit();
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
             emitExtInits();
@@ -131,6 +142,7 @@
             emitComLibReg();
             emitOcxRefReg();
             c_.emitLine("vb6_Init();");
+            emitAppTitleInit();
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
             emitExtInits();
@@ -157,6 +169,7 @@
                 emitComLibReg();
             emitOcxRefReg();
                 c_.emitLine("vb6_Init();");
+                emitAppTitleInit();
                 // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
                 emitExtInits();
                 if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
@@ -173,6 +186,7 @@
             emitComLibReg();
             emitOcxRefReg();
             c_.emitLine("vb6_Init();");
+            emitAppTitleInit();
             if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
             // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
             emitExtInits();
@@ -195,6 +209,7 @@
                 emitComLibReg();
             emitOcxRefReg();
                 c_.emitLine("vb6_Init();");
+                emitAppTitleInit();
                 if (!modInitFuncName.empty()) c_.emitLine(modInitFuncName + "();");
                 // Fix 080: 多模块工程中, 调用所有外部模块的初始化函数
                 emitExtInits();

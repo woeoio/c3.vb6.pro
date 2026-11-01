@@ -375,6 +375,36 @@ DECIMAL *vb6_DecimalPtrFromVariant(const VARIANT *v);
 void vb6_VariantPackCopyInto(const void *slot, VARIANT *out);    /* 槽 → 对端 VARIANT(带权副本) */
 void vb6_VariantBorrowIntoSlot(const VARIANT *src, void *slot);  /* 对端 VARIANT → 槽(借用) */
 void vb6_VariantSlotRelease(void *slot);  /* 账 #305 §B162: 回收上面那臂造出的描述符 */
+/* 账 #305 §B222(第二百三十刀): 数组形参的出站回写(VT_BYREF|VT_ARRAY 那一形)。
+ * 必须在 vb6_VariantSlotRelease **之前**调用；成功后槽的 vt 被补成数组档，收尾照常回收。 */
+void vb6_ArraySlotWriteBack(VARIANT *client, void *slot);
+/* 账 #305 §B223(第二百三十三刀): ByRef 标量形参的出站回写(数值/布尔那几档)。
+ * 同样必须在 vb6_VariantSlotRelease **之前**调用；BSTR/对象/Variant 三档不猜。 */
+void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot);
+
+/* 账 #305 §B219(第二百二十刀): 入站实参「这一槽声明的是什么档」的那一问，值域就两样：
+ * 一个真 VARTYPE(要换算到它)，或 VB6_ARGVT_SKIP(这一格本刀不问，槽里保持纯借用)。
+ * 声明档不明 / ByRef / Variant / 数组 那几形交回 SKIP —— 它们的 C 存储是不是联合体那一格
+ * 还没量过(见 022 第二百二十刀的在册欠项)，猜一档就是造第二套口径。 */
+#define VB6_ARGVT_SKIP ((VARTYPE)0xFFFF)
+
+/* 账 #305 §B219: 「往里读」那一族在此之上多出来的一问 ——「调用方递的 vt 与形参声明档
+ * 不合时怎么办」。发码那 16 处读臂各自按声明档取联合体成员、从不看标签(实测两架构：
+ * VT_BSTR 进 Long 档答指针低 32 位、VT_I4 进 String 档把 40 当 BSTR 解 ⇒ 原生 AV 打死客户端)。
+ * 规则三条：同档不动(槽里就是答案)；异档换算产物**先进自己的临时量**再走上面那枚借用出口
+ * —— 不许就地覆盖槽(槽借用了调用方的 BSTR，VariantChangeType 会把它 SysFreeString 掉)；
+ * 换算不动交回 DISP_E_TYPEMISMATCH(客户端 vb6_ComCheckError 已把它折成 VB 13)。
+ * scratch 由调用方在**被调方返回之后** VariantClear —— 顺序与 §B185 那扇边界同规。 */
+HRESULT vb6_ComArgNormalize(const VARIANT *src, VARTYPE want, void *slot, VARIANT *scratch);
+
+/* 账 #305 §B224 (第二百三十八刀): 「VARIANT → 目标档」这一问的唯一出口(定义在 vb6rtl_com.c)。
+ * 除了一档之外全交 oleaut32 的 VariantChangeType；那一档是**布尔转字符串**：
+ * Automation 答 "-1"/"0"，VB 语言答 "True"/"False"。真 VB6 6.0 服务端实测
+ * `EchoStr(ByVal s As String)` 收 VT_BOOL 答 "[True]"/"[False]"(ai/probes/bool_string
+ * A1/A2) ⇒ 服务端入站那一格与 VB 语言同口径，不是 Automation 的换算口径。
+ * 全仓凡以 VT_BSTR 为目的档的换算都问这里(服务端入站 / COM 结果解包 / 十进制转串)。
+ * dest 必须是 VariantInit 过的空 VARIANT；与 VariantChangeType 一样 dest 可等于 src。 */
+HRESULT vb6_ComChangeType(VARIANT *dest, const VARIANT *src, VARTYPE want);
 
 /* 账 #305 §B145: 槽 → 真 VARIANT 的那张 vt 表，**只答「数值住在哪一格」**，一律借用语义
  * (不复制 BSTR、不 AddRef)。需要带权副本的出站那一族自己补下面那一步。 */

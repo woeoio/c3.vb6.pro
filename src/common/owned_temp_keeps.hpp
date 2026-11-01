@@ -183,6 +183,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_App_EXEName",
         "vb6_App_HelpFile",
         "vb6_App_Path",
+        "vb6_App_Title",
         "vb6_BSTR_Concat",
         "vb6_BSTR_ConcatFree",
         "vb6_BSTR_Empty",

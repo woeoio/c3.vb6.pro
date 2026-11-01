@@ -66,6 +66,7 @@ void* vb6_CreateWebView(void* hParent, int x, int y, int width, int height, cons
         x, y, width, height,
         (HWND)hParent, NULL, (HINSTANCE)vb6_GetAppInstance(), NULL);
     free(wname);
+    vb6_GeomOwnerStamp(hwnd, vb6_GeomAuthoredOwner(hParent));   /* 账 #305 299: 与 vb6_CreateControl 同一口径 */
 
     if (hwnd && g_webViewCount < VB6_WEBVIEW_MAX) {
         vb6_WebViewInfo* info = &g_webViews[g_webViewCount++];

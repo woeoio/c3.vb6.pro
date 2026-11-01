@@ -14,6 +14,10 @@ Sub Main()
     Set x = New K489Holder
     x.Label = "abc"
     x.Label = "zzz"
+    With x
+        .Label = "www"
+        s = .Label
+    End With
     s = x.Label
     n = x.Num
     Debug.Print "K489-s=" & s

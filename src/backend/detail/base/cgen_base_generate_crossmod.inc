@@ -38,6 +38,21 @@
                     knownObjectVars_.insert(varLower);
                 }
             }
+            else if (sym->isArray && sym->type == Vb6Type::UserDefinedType && !sym->variableTypeName.empty()) {
+                // Cross-module Public UDT *array* (`Public Tracers(0 To XRES-1) As TTracePoint`).
+                // Element access asks arrayUdtElemTypes_ by bare name; without an entry here
+                // it fell back to mapSaElemCType(UserDefinedType) = vb6_VARIANT, i.e. a 16-byte
+                // stride into an array whose elements are sizeof(UDT) apart. modRenderer read
+                // modRaycaster's Tracers through VB6_SA_AT(vb6_VARIANT, ...) while the real
+                // element was 48 bytes -> garbage trace points (grey stripe walls).
+                arrayUdtElemTypes_[varLower] = "vb6_type_" + cIdent(sym->variableTypeName);
+                if (sym->dimCount > 0) arrayDimCounts_[varLower] = sym->dimCount;
+            }
+            else if (sym->type == Vb6Type::UserDefinedType && !sym->variableTypeName.empty()) {
+                // Cross-module Public UDT variable: register its C struct type so
+                // `Player.ammo(i)` is emitted as an array index, not a function call.
+                moduleUdtMembers_[varLower] = "vb6_type_" + cIdent(sym->variableTypeName);
+            }
         }
     }
 

@@ -602,6 +602,19 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
     ExprPtr calleeOverride110y;
     ExprPtr leadingArg110y;
     bool debugPrintCollapse110y = false;
+    // VB6 statement-level call: the first argument may be a binary expression.
+    //     Attack (Player.cmdButtons And BUTTON_ATTACK) <> 0, tics
+    // parseExpression(9) consumed `Attack (flags)` as a call/index node and
+    // stopped at `<>`; re-open it so `(flags) <> 0` becomes the first argument.
+    if (expr->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& iocReopen = static_cast<IndexOrCallExpr&>(*expr);
+        if (iocReopen.callee && iocReopen.named.empty() &&
+            iocReopen.positional.size() == 1 &&
+            cur_.kind != TokenKind::Equals && isInfixOperator(cur_.kind)) {
+            calleeOverride110y = std::move(iocReopen.callee);
+            leadingArg110y = parseExpressionRest(std::move(iocReopen.positional[0]), 0);
+        }
+    }
     if (expr->kind == ASTNodeKind::BinaryExpr) {
         ExprPtr* leafSlot = &expr;
         while ((*leafSlot)->kind == ASTNodeKind::BinaryExpr) {
@@ -684,7 +697,7 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
     // Fix <vbeclipse>: 负数首参折叠后, 行内没有逗号续参 (`obj.Method -30` 单独成句)
     // 就直接收口成 CallStmt; 有逗号则交给下方无括号调用参数列表 (它会把
     // leadingArg110y 作为首参再继续吃 `, arg...`)。
-    if (negFirstArgCollapse
+    if (leadingArg110y
         && (cur_.kind == TokenKind::NewLine || cur_.kind == TokenKind::Colon
             || cur_.kind == TokenKind::EndOfFile)) {
         auto call = std::make_unique<IndexOrCallExpr>(loc, std::move(calleeOverride110y));

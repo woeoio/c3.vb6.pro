@@ -147,6 +147,14 @@ if ($ast5) {
     'b186_factory_error_frame_x86'    = @(10, 5, 2, 1)
     # 账 #305 §B188 (第八十刀判据): 出厂那一趟的格子, 两枚一类各一台; 位置面 6 (+2 = -Arch),
     # Needles 6 / Absent 1 (「Unhandled error」当反面证人) / -Tail 1 枚 CREATE= 臂
+    # 账 #305 SB222 (第二百三十刀): 数组形参的出站回写, 两台各一条; 位置面 8 (+2 = -Arch),
+    # Needles 3 (byref 读数 + plain 反面读数 + DONE) / Absent 0 / -Tail 2 枚臂 (ARRARG= / ARRARGV=)
+    'b230_arrout_writeback'          = @(8, 3, 0, 2)
+    # 账 #305 SB223 (第二百三十三刀): ByRef 标量形参的回写, 两台各一条; 位置面 8 (+2 = -Arch),
+    # Needles 3 / Absent 0 / -Tail 2 枚臂 (BYREFARG= / BYVALARG=)
+    'b231_byref_scalar'              = @(8, 3, 0, 2)
+    'b231_byref_scalar_x86'          = @(10, 3, 0, 2)
+    'b230_arrout_writeback_x86'      = @(10, 3, 0, 2)
     'b188_terminate_error_frame'          = @(8, 6, 1, 1)
     'b188_terminate_error_frame_x86'     = @(10, 6, 1, 1)
     # 账 #305 §B187 第二腿 + 第四腿 + 第五腿 (八十三刀装箱 / 八十四刀实参那一站 / 第八十五刀 ByRef 那座桥 / 八十六刀 TypeName 认包装器): 两架构真跑格。
@@ -154,6 +162,26 @@ if ($ast5) {
     # / -Tail 1 枚 CREATE= 臂 (7 个 CLSID 写在同一条里)
     'b187_boxed_object_slot'                    = @(8, 10, 6, 1)
     'b187_boxed_object_slot_x86'               = @(10, 10, 6, 1)
+    # 账 #481 (第一百八十三刀): 进程内客户端在 DLL 里 churn 600 次建/拆, 再问身份 —— 两架构各一条,
+    # Needles 4 (CREATE / CHURN_CALL / CHURN_TYPE=SatOther / DONE), Absent 0, -Tail 1 枚 CHURN= 臂。
+    'k481_projclass_identity_after_churn'      = @(8, 4, 0, 1)
+    'k481_projclass_identity_after_churn_x86'  = @(10, 4, 0, 1)
+    # 账 #305 §B219 (第二百二十刀): 入站实参声明档那一族 —— 27 枚 VTARG 臂 + DONE 一枚收尾针,
+    # Absent 2 枚(改前那一发「换不动也 hr=0 交回垃圾」+ §B224 改前 EchoStr<-VT_BOOL 的 -1 拼法)。
+    # 两架构各一条, x86 那格多 -Arch 那一对。
+    # §B224 (第二百三十八刀) 加了 EchoStr:B (False) 那一臂: Needles 27->28 / Absent 1->2 / Tail 26->27。
+    'b220_inbound_argvt'                        = @(8, 28, 2, 27)
+    'b220_inbound_argvt_x86'                   = @(10, 28, 2, 27)
+    # 账 #305 §B220 (第二百二十二刀): 类字段出厂那一圈的运行期证人 —— 六枚 VTARG 臂 + DONE 一枚收尾针,
+    # Absent 0 (标量那一支的读数 KeyAt/TagAt/EchoS 改前改后一字未动, 反面证人在 R5/R2 那两道钉),
+    # -Tail 6 枚臂。两架构各一条。
+    'b221_strarr_field_release'                  = @(8, 7, 0, 6)
+    'b221_strarr_field_release_x86'             = @(10, 7, 0, 6)
+    # 账 #305 SB220 (第二百二十四刀): 通用销毁按运行期秩选口径, 两台 × 两枚 ND 类。
+    'b223_nddestroy_long'                       = @(8, 2, 0, 1)
+    'b223_nddestroy_long_x86'                   = @(10, 2, 0, 1)
+    'b223_nddestroy_str'                        = @(8, 2, 0, 1)
+    'b223_nddestroy_str_x86'                    = @(10, 2, 0, 1)
 }
 $ds = @($ast5.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.CommandAst] -and

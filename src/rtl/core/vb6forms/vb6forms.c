@@ -155,7 +155,7 @@ static HFONT vb6_Vb6DefaultGuiFont(void) {
     int dpiY = hdc ? GetDeviceCaps(hdc, LOGPIXELSY) : 96;
     HFONT hFont;
     if (hdc) ReleaseDC(NULL, hdc);
-    lf.lfHeight = -MulDiv(825, dpiY, 7200);   /* 8.25pt → 像素 */
+    lf.lfHeight = vb6_UC_FontHeightPx(8.25, dpiY);   /* 8.25pt -> 像素, 截断口径在主人那一处 (账 #305 二百七十七刀) */
     lf.lfWeight = FW_NORMAL;
     // Fix 190: 保持 DEFAULT_CHARSET —— 它让 GDI 按**字符串实际字符**做字体链接,
     // 于是同一控件既能画 CJK 也能画韩文/西里尔/希腊文; 写死某个具体代码页字符集
@@ -285,6 +285,21 @@ int vb6_ScaleUserToPx(double user, int32_t mode, int vert) {
 // ============================================================
 
 static void vb6_formClassBg_set(const char* className, int bg);
+
+/* 账 #305 第303刀: VB6 给"没有 Icon 属性的窗体"画的是**默认窗体图标** —— 参考那台把它
+ * 交给窗口 (WM_GETICON(ICON_BIG) 非 0) 而类图标仍为 0, 所以这里也走 WM_SETICON, 不改类。
+ * 资源由链接期注入 (RT_GROUP_ICON 1, 见 src/driver/default_form_icon.hpp); 没有这枚资源
+ * (旧产物 / DLL 宿主) 就什么都不做。类图标已指定时(Icon 属性那一路)不覆盖。 */
+#define VB6_DEFAULT_FORM_ICON_ID 1
+static void vb6_formApplyDefaultIcon(HWND hwnd, void* hInstance) {
+    if (GetClassLongPtrW(hwnd, GCLP_HICON) != 0) return;
+    /* BAS 的 Sub Main 入口不调 vb6_SetAppInstance ⇒ 这里拿到的是 NULL;
+     * LoadIconW(NULL, id) 会去系统图标里找 id=1 而失败。资源始终住在 exe 里。 */
+    HINSTANCE hi = (HINSTANCE)hInstance;
+    if (!hi) hi = GetModuleHandleW(NULL);
+    HICON hIcon = LoadIconW(hi, MAKEINTRESOURCEW(VB6_DEFAULT_FORM_ICON_ID));
+    if (hIcon) SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
+}
 
 int vb6_RegisterFormClassBg(const char* className, void* wndProc, void* hInstance,
                             int iconResId, int backColor) {
@@ -448,6 +463,11 @@ void* vb6_CreateFormWindowB(const char* className, const char* formName,
     }
 
     free(wtitle);
+    /* 账 #305 第二百七十八刀: 参考的顶层窗体自己答字体 (-13/MS Sans Serif), C3 的 VB6_Form_* 顶层
+     * 从没被发过 => 窗体上 Print/TextWidth 那一族按 DC 默认字体量。交 NULL = VB6 默认档;
+     * 窗体若带设计期字体, 后面那条 setter 会再来发一张 (那一站自带作废)。 */
+    vb6_UC_ApplyFontToWindow(hwnd, NULL);
+    vb6_formApplyDefaultIcon(hwnd, hInstance);
     return (void*)hwnd;
 }
 
@@ -457,21 +477,23 @@ void* vb6_CreateFormWindowB(const char* className, const char* formName,
 // VB6 观感 = Frame 内部透出窗体 BackColor → 子类化 WM_ERASEBKGND，
 // 用父窗体底色填（vb6_GetControlBackColor 未显式设置时回落 BTNFACE，
 // 与 VB6 默认 &H8000000F 等效）。
-// Fix 163-extlist: 关掉一个控件的 comctl6 视觉样式 (SetWindowTheme(hwnd,L"",L""))。
-// 为什么要关: 带视觉样式的 Button 类 (命令按钮/单选钮) 的**文字**由主题绘制器渲染 ——
-// 它用主题自己的字体并在 ClearType 下描边, 结果明显比窗体标题/MS Sans Serif 点阵糊。
-// ⚠ 复选框在本机实测**没有**被主题化 (原生就清晰), 但单选钮、命令按钮被主题化了
-// (单选钮圆点是蓝色 = 主题标记), 二者视觉不一致。统一关样式后都退回经典 GDI
-// 文本渲染 (走我们下发的 MS Sans Serif 8.25pt + NONANTIALIASED), 与标题/复选框齐平。
-// ⚠ 这也正是经典 Windows 9x/VB6 的观感 —— VB6 运行时本来就禁用该控件的主题。
-// uxtheme 走 LoadLibrary 动态取 (不新增 import lib, 与 Frame 的处理同路子)。
-static void vb6_DisableControlTheme(HWND hwnd) {
-    HMODULE themeDll = LoadLibraryW(L"uxtheme.dll");
-    if (!themeDll) return;
-    typedef HRESULT (WINAPI *pfnSetTheme)(HWND, LPCWSTR, LPCWSTR);
-    pfnSetTheme setTheme = (pfnSetTheme)(void*)GetProcAddress(themeDll, "SetWindowTheme");
-    if (setTheme) setTheme(hwnd, L"", L"");
-    FreeLibrary(themeDll);
+// 账 #305 第三百五刀: Fix 163-extlist 那枚"给 BUTTON 族 SetWindowTheme(hwnd,L"",L"")"
+// 已撤 —— 那句的前提("VB6 运行时本来就禁用该控件的主题")是错的。
+// 依据(实测): ComCtlsDemo 参考 exe 与本方产物带**同一份** manifest(comctl32 v6,
+// 逐字节相同), 参考那台命令按钮/复选框的面色 253(主题外观)而本方 240(经典);
+// 一轮客户端像素差 33584 里 11537 来自这一族。VB6 SP6 的固有控件跟随**进程激活上下文**:
+// 有 v6 清单就主题化, C3 给每个 exe 都注入 v6 清单(driver_link.cpp embedManifestViaMt),
+// 所以"关样式"在清单工程里恒为偏差。extlist 当时看到经典外观, 是它那份参考 exe
+// 没有清单(= 进程内无 v6 上下文), 属清单策略问题, 不该由控件层替它承担。
+// 账 (Outlook2013 FrameBorder): VB6 的 Frame 是 **BorderStyle = 0/1 两档**的外观
+// (0 = None 只留一块底色, 1 = Fixed Single 才画蚀刻框 + 标题), 而本方把它建成了
+// BUTTON/BS_GROUPBOX —— 后者恒画框和标题, 与 None 档差一整圈 1px 线
+// (实测 frmInbox 的 FrameBorder 声明 BorderStyle = 0 'None, 参考 exe 该处纯白,
+//  本方画了 #dcdcdc 的左右两列)。vb6_SetBorderStyle 已经把档位记进 VB6_BorderStyle
+// (值 = 档位 + 1, 0 档存 1、1 档存 2; 属性缺席 = 默认 1), 这里按它决定画什么。
+static int vb6_GBoxBorderStyle(HWND hwnd) {
+    INT_PTR v = (INT_PTR)GetPropW(hwnd, L"VB6_BorderStyle");
+    return v ? (int)(v - 1) : 1;
 }
 
 // Fix 162f-extlist: 取 groupbox 的标题底色 (父窗 BackColor, 未设回落 BTNFACE)。
@@ -502,6 +524,21 @@ static LRESULT CALLBACK vb6_GroupBoxSubclassProc(HWND hwnd, UINT msg, WPARAM wp,
     //   ③ 再单独把**标题文字下面那条带**重新填灰 (对付它在白底上画的文字残影)。
     // 判据: 只对有非空 Caption 的 groupbox 这么干 (空标题 Frame2 无此带)。
     if (msg == WM_PAINT) {
+        // None 档: 整块只留底色 (VB6 Frame BorderStyle=0 不画框也不显示 Caption)。
+        if (vb6_GBoxBorderStyle(hwnd) == 0) {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            if (hdc) {
+                RECT rc; GetClientRect(hwnd, &rc);
+                HBRUSH br = CreateSolidBrush(vb6_GBoxTitleBg(hwnd));
+                if (br) {
+                    FillRect(hdc, &rc, br);
+                    DeleteObject(br);
+                }
+                EndPaint(hwnd, &ps);
+            }
+            return 0;
+        }
         wchar_t cap[256] = {0};
         GetWindowTextW(hwnd, cap, 256);
         LRESULT r = orig ? CallWindowProcW(orig, hwnd, msg, wp, lp)
@@ -599,6 +636,13 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
        SetPropW(…, 0) 等于删属性（账 #107 那一课）。 */
     if (hwnd) SetPropW(hwnd, L"VB6_TabStop", (HANDLE)(DWORD_PTR)((style & WS_TABSTOP) ? 1 : 2));
 
+    /* 账 #305 第299刀: hParent = 这枚控件 authored 的那一层容器 (窗体 / 窗体上的容器控件 /
+       .ctl 的宿主窗口)。VB6 的几何单位跟的就是**这一层**, 运行期谁把 HWND 搬走都不改它,
+       所以在这里留住 (窗体自己那发 hParent 为空 => 不戳)。嵌进 OCX 实例 Begin 块的那一族
+       (.frm:33 ImageCombo1 / :44 Command4) 创建期的 hParent 是那枚 UC 的宿主窗口, 而它们的
+       authored 容器按 298 读④ 是那扇窗体 ⇒ 交 vb6_GeomAuthoredOwner 跳过 UC 宿主层再戳。 */
+    vb6_GeomOwnerStamp(hwnd, vb6_GeomAuthoredOwner(hParent));
+
     /* 账 #230: 设计期那四个数一起存进 VB 侧读数，**单位记成缇**。
        .frm 的 Left/Top/Width/Height 恒按缇写，与容器自己声明的 ScaleMode 无关 ——
        实证 tests/czUI-main/frmDemo.frm：那枚窗体写 `ScaleMode = 3  'Pixel`，同时写
@@ -633,18 +677,12 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
         // Serif 8.25pt 的那个数）。存了之后 setter 换字体时也才找得到"上一张是我们造的"那张去删。
         vb6_ControlFontStore(hwnd, hFont);
 
-        // Fix 162c-extlist: Frame(BS_GROUPBOX) 关掉 comctl6 主题化 —— 主题版的
-        // groupbox 会用白色填掉整个内部 (子控件的 240 灰底反而成了色块), VB6
-        // 参考图是经典蚀刻边框 + 透出窗体 BTNFACE 底色。classic groupbox
-        // 内部透明, 观感与 VB6 一致。
-        // Fix 163-extlist: **所有 BUTTON 类**都关样式 —— 命令按钮/单选钮的主题文字
-        // 渲染比 MS Sans Serif 点阵糊 (见 vb6_DisableControlTheme 注释)。
-        // 复选框本机未被主题化, 关掉是无害的 no-op; 关样式统一了整族观感。
-        if (_stricmp(win32Class, "BUTTON") == 0) {
-            vb6_DisableControlTheme(hwnd);
-        }
-        // Fix 162d-extlist: Frame 关主题后内部不再白填, 但也没有人涂底色了 ——
-        // 子类化补上"填父窗体底色"(见 vb6_GroupBoxSubclassProc 注释)。
+        // 账 #305 第三百五刀: 这里原本对所有 BUTTON 调 Fix 163-extlist 的
+        // vb6_DisableControlTheme (SetWindowTheme(hwnd,L"",L""))。已撤, 理由见上面那段:
+        // 参考 ComCtlsDemo 带 v6 清单 ⇒ 它的按钮是主题外观, 关样式反而逐像素不同。
+        // 主题与否交给进程激活上下文决定 (= 与 VB6 同一口径), 控件层不替它作决定。
+        // Fix 162d-extlist: groupbox 的子类化 WM_ERASEBKGND 保留 —— 主题版 groupbox
+        // 内部同样要求"透出父窗底色", 这条填充与主题/经典两档都不冲突。
         if (((style & 0x0000000FL) == 0x7L) && _stricmp(win32Class, "BUTTON") == 0) {
             if (!GetPropW(hwnd, L"VB6_GBox_OrigProc")) {
                 WNDPROC gOrig = (WNDPROC)SetWindowLongPtrW(hwnd, GWLP_WNDPROC,
@@ -1076,8 +1114,17 @@ void* vb6_GetAppInstance(void) {
     return (void*)vb6_hInstance;
 }
 
+static void vb6_installCrashTrace(void);
+
 void vb6_SetAppInstance(void* hInstance) {
     vb6_hInstance = (HINSTANCE)hInstance;
+    /* 崩溃跟踪装在这里, 而不是等到 vb6_ShowForm —— WinMain 的顺序是
+     *   vb6_Init → 各模块 init → SetAppInstance → form_show_xxx
+     * 而 form_show_xxx 是「先 Form_Load, 再 vb6_ShowForm」: 装在 ShowForm 里等于
+     * 把**整个 Form_Load 段**漏在保护之外。Outlook2013 那次无声 SIGSEGV 就发生在
+     * frmMain 的 Form_Load (加载各 DockPane 子窗体) 里, c3_crash.txt 一片空白,
+     * 只能靠二分法猜。SetAppInstance 是 Form_Load 之前最后一个稳定落点。 */
+    vb6_installCrashTrace();
 }
 
 // Fix 149 诊断: C3_CRASH_TRACE=1 时安装未处理异常过滤器, 把崩溃栈各帧的
@@ -1085,8 +1132,10 @@ void vb6_SetAppInstance(void* hInstance) {
 // Test.exe 自己的代码抛的, 还是逃出第三方 OCX (NewTab01.ocx) 的 VB6 代码。
 static LONG WINAPI vb6_crashFilter(EXCEPTION_POINTERS* ep) {
     FILE* f;
-    /* 账 #181: 第三道槽位 (过滤器天然只跑一次, 这里只是把口径收全)。 */
-    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_FILTER)) return EXCEPTION_EXECUTE_HANDLER;
+    /* 账 #181: 第三道槽位 (过滤器天然只跑一次, 这里只是把口径收全)。
+     * 第三百十五刀: 故障地址照递 —— 与另外两出口同一个问法, 不在这里另答一遍。 */
+    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_FILTER, ep->ExceptionRecord->ExceptionAddress))
+        return EXCEPTION_EXECUTE_HANDLER;
     f = fopen("c3_crash.txt", "a");
     if (!f) return EXCEPTION_EXECUTE_HANDLER;
     fprintf(f, "=== EXCEPTION code=0x%08lX addr=%p ===\n",
@@ -1178,8 +1227,11 @@ static LONG WINAPI vb6_heapCorruptVEH(EXCEPTION_POINTERS* ep) {
     if (!isCorrupt && !isAV)
         return EXCEPTION_CONTINUE_SEARCH;
     /* 账 #181: 这个出口以前无闸 —— 栈溢出时它自己会再 fault (CreateFileA/栈扫描),
-     * 于是同一份递归栈被写 4 遍、真正的第一现场排在最后。每进程只记第一次。 */
-    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_FILE)) return EXCEPTION_CONTINUE_SEARCH;
+     * 于是同一份递归栈被写 4 遍、真正的第一现场排在最后 ⇒ 同一个故障地址只记一次。
+     * 账 #305 第三百十五刀: 旧口径"每进程只记一次"让 IsBadReadPtr 那发受守卫的 first-chance
+     * AV 吃掉唯一名额, 真打死进程的那一发只剩 filter 帧 (靶工程 Command2 / 账 #599)。 */
+    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_FILE, ep->ExceptionRecord->ExceptionAddress))
+        return EXCEPTION_CONTINUE_SEARCH;
     HANDLE h = CreateFileA("c3_crash.txt", FILE_APPEND_DATA,
                            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1602,6 +1654,16 @@ void vb6_ShowForm(void* hwnd, int modal) {
 
     ShowWindow((HWND)hwnd, SW_SHOWDEFAULT);
     UpdateWindow((HWND)hwnd);
+
+    // 账 #305: 首次显示时窗体背景从未被擦除过 —— Charts 2020 Form2 (BackColor &H00E5E5E5&)
+    // 的卡片是子控件画的白底, 卡片**之间**的空隙第一次上屏时无人填, 于是留白;
+    // VB6 下这些空隙是窗体底色 229,229,229。这里在首次 Show 之后显式擦一次背景
+    // (含子窗口), 让灰条出现。只做一次: 后续重绘仍由各子控件的 WM_ERASEBKGND 负责,
+    // 不能每帧擦 (会与 AutoRedraw 记忆 DC 打架, 3DMenu 每 50ms 镜像一次)。
+    if (!GetPropW((HWND)hwnd, L"VB6_AutoRedrawDC")) {
+        RedrawWindow((HWND)hwnd, NULL, NULL,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
 
     // Fix 137: VB6 启动的窗体会出现在最前并获得焦点; 我们只 ShowWindow 的话
     // 窗口常落在已有窗口后面 (双击 exe 时尤甚 —— 没有前台权限继承)。

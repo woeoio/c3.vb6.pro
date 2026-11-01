@@ -263,13 +263,20 @@
             // 设计子控件(本实例内部再 HostCreate)看到的标志在 ucHostInit 入口已被消费清零,
             // 仍按原行为跑它们的 InitProperties (Fix 112d 依赖)。
             bool ucSkipInitProps = false;
-            if (const FrmFile* spInitProps = findUserControlSpec(ctlClass))
-                ucSkipInitProps = Symbol::toLower(spInitProps->codeSection)
+            // 账 #305 第二百五十八刀: InvisibleAtRuntime = VB6 里**根本不建窗口**。
+            // 这一位住在这枚 UC 自己的 .ctl 头里（与 CanGetFocus/HasDC 同表），见
+            // src/common/invisible_at_runtime.hpp。下面四条创建路（本文件两处、frame_menu
+            // 两处）都按它置/清同一个 RTL 标志。
+            const FrmFile* spUc258 = findUserControlSpec(ctlClass);
+            const bool ucWindowless258 = ucInvisibleAtRuntime(spUc258);
+            if (spUc258)
+                ucSkipInitProps = Symbol::toLower(spUc258->codeSection)
                                       .find("sub usercontrol_readproperties") != std::string::npos;
             std::string hwndExpr;
             if (ucIsArr) {
                 int idx = ctrl.index >= 0 ? ctrl.index : 0;
                 if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(1);");
+                if (ucWindowless258) c_.emitLine("vb6_UC_SetWindowless(1);");
                 c_.emitLine("{ void* vb6_uc_h = vb6_UC_HostCreate(\"" + ctlClass + "\", "
                     + std::to_string(ucL) + ", " + std::to_string(ucT) + ", "
                     + std::to_string(ucW) + ", " + std::to_string(ucH)
@@ -277,6 +284,7 @@
                     + "\", " + std::to_string(idx) + ");");
                 c_.emitLine("  vb6_CtrlArr_SetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", "
                            + std::to_string(idx) + ", vb6_uc_h); }");
+                if (ucWindowless258) c_.emitLine("vb6_UC_SetWindowless(0);");
                 if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(0);");
                 hwndExpr = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", "
                          + std::to_string(idx) + ")";
@@ -298,13 +306,30 @@
                                        ? "vb6_com_" : "vb6_hwnd_")
                                     + cIdent(ctrl.controlName);
                 if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(1);");
+                if (ucWindowless258) c_.emitLine("vb6_UC_SetWindowless(1);");
                 c_.emitLine(slot220 + " = vb6_UC_HostCreate(\""
                     + ctlClass + "\", " + std::to_string(ucL) + ", " + std::to_string(ucT) + ", "
                     + std::to_string(ucW) + ", " + std::to_string(ucH)
                     + ", hwnd, hInstance, \"" + ctrl.controlName + "\", -1);");
+                if (ucWindowless258) c_.emitLine("vb6_UC_SetWindowless(0);");
                 if (ucSkipInitProps) c_.emitLine("vb6_UC_SetSkipInitProps(0);");
                 hwndExpr = slot220;
             }
+            // 账 #305 第二百五十四刀: 设计期 Enabled/Visible/Value 此前**三条创建路只打了两条**
+            // (顶层 cgen_form_ctrl_style_apply.inc、容器内 cgen_form_frame_menu.inc), 工程内
+            // UserControl 这一路走 vb6_UC_HostCreate, 一盏都没发 —— 而 `Visible` 在 UC 那两张
+            // 属性跳过名单 (kSkip / kBagSkip) 里, 既不去 prop_let 也不进属性包 ⇒ .frm 里写的
+            // `Visible = 0` 对 UC 是**纯丢**。
+            //   实测 ComCtlsDemo MainForm.frm:368 `Begin ComCtlsDemo.ListBoxW ListBoxW1` 带
+            //   `Visible = 0`(Height 2595 / Width 3855 缇 = 173x257 px): VB6 那台对应窗口
+            //   ThunderRT6UserControl 257x170 vis=False(连它里面那枚 ListBox 一起藏),
+            //   C3 这台 VB6_UserControlHost 257x173 vis=True ⇒ 屏幕上凭空多一块列表区。
+            //   同为 `Visible = 0` 的 VB.PictureBox Picture3 (MainForm.frm:407) 在 C3 里**藏对了**
+            //   (它走顶层那条路) ⇒ 病根就是"这一路没去问那位主人", 不是 Visible 本身没解析。
+            //   修法照搬旧招 = 复用同一出口 emitDesignerStateProps(它按"属性"分出口、只在 .frm
+            //   显式写过反面时才发; ImageList / Timer / Menu 在它自己那道 switch 里早退, 而
+            //   Value 那两条只认 CheckBox / OptionButton ⇒ 对 UC 实际只可能发出 Enabled/Visible)。
+            emitDesignerStateProps(ctrl, hwndExpr);
 
             // Fix 112/114: 设计期持久化的 UserControl 公共属性
             // (Caption=... / Value=30 / PB_Color1=... / Caption2="..." / ChartStyle=1 ...)
@@ -1007,6 +1032,70 @@
                     } else {
                         c_.emitLine("vb6_hwnd_" + cIdent(ctrl.controlName) + " = " + call143
                                   + ";  /* Fix 143: OCX 真宿主 */");
+                        // 设计器 OCX 控件的事件连接点 (见 cgen_form_ctrl_registry.inc 的登记)。
+                        // VB6 在控件创建后对控件的事件源接口 Advise, `<控件>_<事件>` 处理器
+                        // 才收得到 (CommandBars.Execute ⇒ CommandBars_Execute 一类)。
+                        // 只有登记过 (有事件源接口 + 本模块写了处理器) 的控件才发这段。
+                        {
+                            std::string evtCtrlLower = Symbol::toLower(ctrl.controlName);
+                            auto itOcxEvt = knownWithEventsVars_.find(evtCtrlLower);
+                            if (itOcxEvt != knownWithEventsVars_.end()) {
+                                Symbol* evtCls = symTab_.lookup(itOcxEvt->second);
+                                if (evtCls && evtCls->kind == SymbolKind::ComClass
+                                    && evtCls->comHasSourceIface
+                                    && !evtCls->comSourceIfaceIid.empty()) {
+                                    std::string iidStr = evtCls->comSourceIfaceIid;
+                                    std::string iidInit = emitGuidInitializer(iidStr);
+                                    std::string evtVar = "vb6_evt_" + cIdent(ctrl.controlName);
+                                    std::string hwndSlot = "vb6_hwnd_" + cIdent(ctrl.controlName);
+                                    if (!iidInit.empty()) {
+                                        c_.emitLine("/* 设计器控件事件连接点: " + ctrl.controlName + " */");
+                                        c_.emitLine("static int " + evtVar + "_cookie = 0;");
+                                        c_.emitLine("static const char* " + evtVar + "_iid = \"" + iidStr + "\";");
+                                        c_.emitLine("static const IID " + evtVar + "_iid_struct = " + iidInit + ";");
+                                        c_.emitLine("if (" + hwndSlot + ") {");
+                                        c_.indent();
+                                        if (evtCls->comSourceIfaceIsDispOnly) {
+                                            std::vector<std::string> dispids;
+                                            std::vector<std::string> callbacks;
+                                            for (const auto& evtName : evtCls->eventNames) {
+                                                if (!symTab_.lookup(ctrl.controlName + "_" + evtName)) continue;
+                                                std::string evtLower = Symbol::toLower(evtName);
+                                                auto itDispId = evtCls->comEventDispids.find(evtLower);
+                                                int dispid = (itDispId != evtCls->comEventDispids.end()) ? itDispId->second : 0;
+                                                dispids.push_back(std::to_string(dispid));
+                                                callbacks.push_back(comEvtWrapperName(evtCtrlLower, evtName));
+                                            }
+                                            if (!dispids.empty()) {
+                                                std::string dispidsInit;
+                                                for (size_t di = 0; di < dispids.size(); di++) {
+                                                    if (di > 0) dispidsInit += ", ";
+                                                    dispidsInit += dispids[di];
+                                                }
+                                                std::string cbsInit;
+                                                for (size_t ci = 0; ci < callbacks.size(); ci++) {
+                                                    if (ci > 0) cbsInit += ", ";
+                                                    cbsInit += "(void(*)(void*,VARIANT*,int,VARIANT*))" + callbacks[ci];
+                                                }
+                                                c_.emitLine("static int " + evtVar + "_dispids[] = {" + dispidsInit + "};");
+                                                c_.emitLine("static void (*" + evtVar + "_cbs[])(void*,VARIANT*,int,VARIANT*) = {" + cbsInit + "};");
+                                                c_.emitLine("void* " + evtVar + "_sink = vb6_CreateEventSink(" + evtVar + "_dispids, (void**)"
+                                                          + evtVar + "_cbs, " + std::to_string(dispids.size())
+                                                          + ", &" + evtVar + "_iid_struct, NULL);");
+                                                c_.emitLine("vb6_ComAdvise((IUnknown*)" + hwndSlot + ", " + evtVar + "_iid, "
+                                                          + evtVar + "_sink, &" + evtVar + "_cookie);");
+                                            }
+                                        } else {
+                                            c_.emitLine("void* " + evtVar + "_sink = vb6_vsink_" + evtCtrlLower + "_create(NULL);");
+                                            c_.emitLine("vb6_ComAdvise((IUnknown*)" + hwndSlot + ", " + evtVar + "_iid, "
+                                                      + evtVar + "_sink, &" + evtVar + "_cookie);");
+                                        }
+                                        c_.dedent();
+                                        c_.emitLine("}");
+                                    }
+                                }
+                            }
+                        }
                     }
                     ctrlId++;
                     continue;

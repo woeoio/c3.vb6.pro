@@ -216,6 +216,25 @@ void CCodeGen::visit(BinaryExpr& node) {
             }
         }
     }
+    // Fix (Outlook2013 frmMain:265 / pageBackstageInfo:353): 对称的那一半 —— 左操作数是
+    // **BSTR 回值内建调用** (`App.Path &/+ "\res\x.ico"` 的 App.Path →
+    // vb6_App_Path()) 而右操作数是 String 型 (字面量/变量) 时, inferExprType 对
+    // App.Path 答不出 String ⇒ 整式掉进算术 + ⇒ `vb6_App_Path() + vb6_BSTR_FromStr(...)`
+    // 指针相加 (C2110)。左 BSTR 回值 + 右 String 同样按拼接处理。
+    if (!addIsConcat092i && inferExprType(*node.right) == Vb6Type::String) {
+        static const char* bstrReturnLefts092i[] = {
+            "vb6_App_Path(", "vb6_App_EXEName(", "vb6_App_Title(", "vb6_App_HelpFile(",
+            "vb6_Chr(", "vb6_ChrW(", "vb6_Mid(", "vb6_Left(", "vb6_Right(",
+            "vb6_Trim(", "vb6_LTrim(", "vb6_RTrim(", "vb6_UCase(", "vb6_LCase(",
+            "vb6_Replace(", "vb6_String(", "vb6_Space(", "vb6_StrConv(",
+            "vb6_Format(", "vb6_VariantToString(", "vb6_BSTR_"};
+        for (auto* bcp092i : bstrReturnLefts092i) {
+            if (left.compare(0, strlen(bcp092i), bcp092i) == 0) {
+                addIsConcat092i = true;
+                break;
+            }
+        }
+    }
     if (node.op == BinaryOp::Add && addIsConcat092i) {
         left = wrapToBSTR(left, *node.left);
         right = wrapToBSTR(right, *node.right);
@@ -468,12 +487,27 @@ void CCodeGen::visit(BinaryExpr& node) {
         // 同一性比的是 `.obj` 那一格: 它既是视图持有的裸实例指针，也是第一百七十一刀
         // `vb6_VariantFromProjectInstance` 按指针查身份用的同一格 ⇒ "是不是同一只" 只有一个答案。
         // `Is Nothing` 也就是 `.obj == NULL` (视图出厂就是 `{0}`，接管值时两格一起写)。
-        // 认槽只问第一百六十五刀那位唯一主人 slotIsLegacyIfaceView，本刀给它添第三个读者。
+        // 认槽只问第一百六十五刀那位唯一主人（第二百四十八刀起走带名字那一问，再按形状定档）。
         {
             auto viewOperand172 = [&](const Expr* ast) -> bool {
                 if (!ast || ast->kind != ASTNodeKind::IdentifierExpr) return false;
-                return slotIsLegacyIfaceView(Symbol::toLower(
-                    static_cast<const IdentifierExpr&>(*ast).name));
+                const std::string nm172 = Symbol::toLower(
+                    static_cast<const IdentifierExpr&>(*ast).name);
+                // 账 #305 第二百四十八刀: 名册那一问只认「声明是 `As <接口>`」，答不出这一枚
+                //   槽的 C 到底是**legacy 值结构体** vb6_iface_<I> { vtbl; obj; } 还是
+                //   **新式薄指针** vb6_ivref_<I>* —— 两套同名的接口都在同一张 knownIfaceVars_ 里
+                //   (形参只往那一张写, knownIvrefVars_ 没有形参那一档)。于是 `Is` 对一枚新式
+                //   接口槽发了 `.obj`, 而 vb6_ivref_<I> 只有 `vt` 一格 ⇒ cl C2039。
+                //   实测 ComCtlsDemo Builds/ListView/ListView.ctl:5198
+                //   `If This Is Nothing Then` (形参 ByVal This As ISubclass, C 侧
+                //   vb6_ivref_ISubclass* This, 而该结构只有 vt 一格) ⇒ ListView.c:7751
+                //   `"obj": 不是 "vb6_ivref_ISubclass" 的成员`。
+                //   判据改问**形状**而不是名册: 名字落 legacy 那一问之后, 再用新式那位主人
+                //   ivrefCType 按接口名问一次 —— 非空 = 这一档是指针, 没有 .obj 可谈,
+                //   交回 false 让 `Is` 落 C 内置 `==` (指针判空, 正是这一问的答案)。
+                const std::string ifaceNm248 = slotLegacyIfaceViewName(nm172);
+                if (ifaceNm248.empty()) return false;
+                return ivrefCType(ifaceNm248).empty();
             };
             auto isNothing172 = [](const std::string& s) -> bool {
                 std::string t2 = s;

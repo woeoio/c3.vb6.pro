@@ -107,6 +107,38 @@
         }
     }
 
+    // 账 #305 第一百八十九刀: 接收者是一枚 legacy 接口视图值、但它**不在视名册里**
+    // (调用/属性链表达式) —— 早绑定那一发把值结构体交给 `vb6_<I>_<成员>(...)` 的首参
+    // (cl C2440/C2198)。视图只有两个指针: 先落一枚临时量 (只求值一次), 再交给接口自己
+    // 铸的按值适配器; 槽名与转发实参仍归槽表。裸名视图由既有读者接住, 这一支不碰。
+    if (!classMethodObjArg.empty() && node.callee
+        && node.callee->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& ma189 = static_cast<MemberAccessExpr&>(*node.callee);
+        if (ma189.object) {
+            const std::string cls189 = inferClassTypeOfExpr(*ma189.object);
+            const Symbol* cs189 = cls189.empty() ? nullptr : symTab_.lookup(cls189);
+            if (cs189 && cs189->kind == SymbolKind::Class && cs189->isInterface) {
+                std::string recvRaw189 = classMethodObjArg;
+                if (recvRaw189.rfind("(void*)", 0) == 0) recvRaw189 = recvRaw189.substr(7);
+                std::string recvLower189 = recvRaw189;
+                std::transform(recvLower189.begin(), recvLower189.end(), recvLower189.begin(), ::tolower);
+                if (slotLegacyIfaceViewName(recvLower189).empty()) {
+                    const std::string wantField189 = cIdent(ma189.memberName);
+                    for (const LegacyIfaceSlot& s189 : legacyIfaceSlots(cs189->name)) {
+                        if (s189.field != wantField189) continue;
+                        const std::string bound189 = "vb6_" + cIdent(cs189->name) + "_" + s189.field;
+                        if (callee != bound189) break;
+                        const std::string tmp189 = "__vbvrecv" + std::to_string(tempCounter_++);
+                        c_.addPending("vb6_iface_" + cIdent(cs189->name) + " " + tmp189 + " = " + recvRaw189 + ";");
+                        callee = legacyIfaceSlotCallFn(cs189->name, s189.field);
+                        classMethodObjArg = tmp189;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // P6.5: 如果classMethodObjArg非空, 需要将其作为第一个参数插入
     if (!classMethodObjArg.empty()) {
         if (argList.empty()) {

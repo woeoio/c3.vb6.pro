@@ -15,7 +15,16 @@
         if (_wcsicmp(name, L"Count") == 0) { vb6_ho_setVariantLong(out, vb6_Collection_Count(obj)); return 1; }
         return 1;
     }
-    if (vb6_uc_isFont(obj)) return vb6_ho_getFontMember(obj, name, out);
+    if (vb6_uc_isFont(obj)) {
+        /* 账 #305 第二百七十六刀: 认得就答、认不出**先报数** —— 第二百七十三刀给方法
+           那一臂装的那位主人, 属性这一臂当时没跟着接 (第二百七十五刀点出的那格洞:
+           靶工程 34 发 `name=hFont` 在 C3_HOST_MEMBER_MISS 名册里一条也没有)。
+           行为一字不改: 认不出仍是「答了但没答」—— 出口那格早被上面的
+           vb6_ho_setVariantEmpty 清零, 调用方拿到的还是同一个空值。 */
+        if (vb6_ho_getFontMember(obj, name, out)) return 1;
+        vb6_ho_reportUnknown(L"GetProp", name, obj);
+        return 1;
+    }
 
     // Fix <vbeclipse> rev18: UC **实例指针**归一成宿主 HWND —— 晚绑定属性读
     // (`Dim x As Variant: Set x = Controls.Item(id)` 之后 `x.LeftPos`) 传进来的是
@@ -24,6 +33,16 @@
 
     vb6_UCRec* r = vb6_uc_findByHwnd(obj);
     vb6_HostObjRec* h = vb6_ho_find(obj);
+    /* 账 #305 第二百八十二刀: 无窗宿主 (第二百五十八刀那户 InvisibleAtRuntime) 递进来的
+       接收者**就是实例指针**, 上面那两把按 hwnd 的钥匙都开不了它的门 ⇒ 以前在这一行
+       `return 0` 早退, 连 :189 那位「自有 Property」出口都走不到 (实测靶工程
+       `ControlEnum.hImageList` 一条都不发 —— ImageList1/2/3 全挂在无窗那一档)。
+       这一档只补「认得接收者是谁」, 已有的取值一律不动: 窗口类的伪成员 (Visible/Enabled/
+       Container/Parent 那些按 HWND 问的) 对无效句柄只会答 0/NULL, 与改前「答 Empty」同形。 */
+    if (!r && !h && !IsWindow((HWND)obj)) {
+        h = vb6_ho_findInstance(obj);
+        if (h) r = vb6_uc_findByInstance(h->instance);
+    }
     if (!r && !h && !IsWindow((HWND)obj)) return 0;
 
     int32_t scaleMode = r ? (r->desc ? r->desc->scaleMode : 1) : 1;
@@ -178,5 +197,12 @@
     // vb6_UcPropDesc 表就是为这一档准备的 —— 没有它, ucPerspective.Refresh 的
     // `l_ucFolder.Move .LeftPos, .TopPos, …` 会读到 0, 停靠区就摆不出来。
     if (vb6_UC_OwnPropGet(obj, name, out)) return 1;
+    /* 账 #305 第293刀: 递进来的常常是**宿主包装器** 或句柄, 不是 .ctl 实例本身;
+       自有属性表 (vb6_UcPropDesc) 是按实例查的 ⇒ 再用记录里的实例试一次。
+       实测 (ComCtlsDemo 下拉图标): `ControlEnum.hImageList` 两把钥匙都开不了门,
+       一路答 Empty ⇒ CBEM_SETIMAGELIST 收 0, 条目有字无图。 */
+    if (r && r->me && r->me != obj && vb6_UC_OwnPropGet(r->me, name, out)) return 1;
 
+    /* 账 #305 第二百六十二刀 (丙): 同 Call 那条 —— 不认识的属性名以前静默答 Empty。 */
+    vb6_ho_reportUnknown(L"GetProp", name, obj);
     return 1;   // 宿主对象: 未知属性一律返回 Empty (不崩)

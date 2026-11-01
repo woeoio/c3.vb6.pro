@@ -47,8 +47,14 @@ $ctrl = Join-Path $root $ctrlRel
 function Get-RtlLine {
     $dir = Join-Path $root "src\rtl"
     foreach ($f in (Get-ChildItem -LiteralPath $dir -Recurse -File | Where-Object { $_.Extension -in ".c", ".h" })) {
+        # 块注释（/* … */）按**等长空格**抹掉、换行原样保留 ⇒ 行号不动, 散文不再冒充代码。
+        # 为什么必须抹（第三百刀那轮门红）: D11 数「带 WM_GETFONT 的代码行」时, 新写的注释里提了三次
+        # 那个消息名 ⇒ 报成 4 处全红。哨兵钉的是代码里有没有那条口径, 不是散文里提没提这个名字
+        # （与 §B108 / 账 #261 同一条道理, 只是那一次只剥了单行 //）。
+        $txt = [System.IO.File]::ReadAllText($f.FullName)
+        $txt = [regex]::Replace($txt, '/\*[\s\S]*?\*/', { param($m) [regex]::Replace($m.Value, '[^\r\n]', ' ') })
         $ln = 0
-        foreach ($line in ([System.IO.File]::ReadAllText($f.FullName) -split "`r?`n")) {
+        foreach ($line in ($txt -split "`r?`n")) {
             $ln++
             $t = $line.Trim()
             if ($t.StartsWith("//")) { continue }
@@ -337,16 +343,53 @@ if ($fntR.Count -lt 1) { $bad += "D10 nobody reads the VB6_CtrlFont slot (证人
 #     少一个就是一个站点又"只发不存"（#204 的根因形状）。
 #     数组那一路今天运行期不可达（`vb6_CtrlArr_Load` 全仓零调用者, 2026-10-05 grep 证），列进来是**口径**。
 $rawAll = @($rtl | Where-Object { $_.Text.Contains("WM_GETFONT") })
-# 账 #202/#204 那轮这里留过一条**具名豁免**（状态条那两处，want 3 = 出口 1 + 豁免 2）。
-# 那两处已改走出口（账 #205），豁免随之删除 ⇒ 现在全 src/rtl 只许有出口那一行裸问。
-# 再出现第二行就是有人又开始"按 DC 的默认字体画/量"（STATIC/BUTTON/自注册类都不答那一问，探针实测）。
-if ($rawAll.Count -ne 1) {
-    $bad += ("D11 全 src/rtl 里带 WM_GETFONT 的代码行 = " + $rawAll.Count +
-             " 处 (want exactly 1 = 出口那一行; 别处再裸问一次就是静默按 DC 默认字体画) -> " +
-             (($rawAll | ForEach-Object { $_.File + ":" + $_.Line }) -join " | "))
+# 账 #202/#204 那轮这里留过一条**具名豁免**（状态条那两处）。那两处已改走出口（账 #205），豁免随之删除。
+# 第二百七十九刀起这一问分成两个角色来数: **问的人** = 拿 SendMessage 去问窗口是谁的字体（只许出口
+# 那一行；STATIC/BUTTON/自注册类都不答，裸问一次就是静默按 DC 默认字体画/量）；**答的人** = 我们自己
+# 注册的窗口类本人答那一问（`case WM_GETFONT:`，恰好一处，住 uc_host_window.c，且只交自己存过的那张）。
+# 以前按"带这个 token 的行 = 1"数，今天会把「多了一个答问的人」误报成「多了一个裸问的人」——两回事。
+$askAll = @($rawAll | Where-Object { $_.Text -notmatch '^\s*case\s+WM_GETFONT\s*:' })
+$ansAll = @($rawAll | Where-Object { $_.Text -match '^\s*case\s+WM_GETFONT\s*:' })
+if ($askAll.Count -ne 1) {
+    $bad += ("D11 全 src/rtl 里裸问 WM_GETFONT 的代码行 = " + $askAll.Count +
+             " 处 (want exactly 1 = 出口 vb6_ControlFont 那一行; 别处再裸问一次就是静默按 DC 默认字体画) -> " +
+             (($askAll | ForEach-Object { $_.File + ":" + $_.Line }) -join " | "))
 } elseif ($accDef.Count -eq 1) {
-    $inside = @($rawAll | Where-Object { $_.File -eq "vb6forms_ctrl.c" })
+    $inside = @($askAll | Where-Object { $_.File -eq "vb6forms_ctrl.c" })
     if ($inside.Count -ne 1) { $bad += "D11 出口所在文件里没有那一行 WM_GETFONT" }
+}
+# 第三百刀起这一问多了**第三个角色**: 把那一格存储**选进交出去的 DC** 的人（`vb6_uc_selectOwnFont`）。
+# 它不提问 —— 从 vb6_uc_push/paint 里 SendMessage(WM_GETFONT) 实测当场 0xC0000409 —— 只读存储, 所以
+# 不算"问的人"; 但条数要钉死: 定义一处, 两处交 DC 的地方各调一次（AutoRedraw 持久表面 / WM_PAINT 的 DIB）,
+# 少一处就是一半 hDC 又按 GDI 的缺省字体画（FrameW 题头又粗又大那一形）。
+$ansBlk = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $root "src\rtl\core\vb6forms\uc\uc_host_window.c")),
+                         'case\s+WM_GETFONT\s*:([\s\S]{0,300}?)(?=\r?\n\s*(?:case|default)\b)')
+$ansUse = @()
+if ($ansBlk.Success) { $ansUse = @([regex]::Matches((Remove-CStyleComments $ansBlk.Value), 'vb6_ControlFontStored\(')) }
+if ($ansAll.Count -ne 1 -or $ansAll[0].File -ne "uc_host_window.c" -or $ansUse.Count -ne 1) {
+    $bad += ("D11 自注册窗口类答 WM_GETFONT = " + $ansAll.Count + " 处 / 答句里交 vb6_ControlFontStored 的处数 = " + $ansUse.Count +
+             " (want 1 + 1，且那一处在 uc_host_window.c 的 case 里; 答别的 = 答的不是我们自己存的那张) -> " +
+             (($ansAll | ForEach-Object { $_.File + ":" + $_.Line }) -join " | "))
+}
+$selDef = @($rtl | Where-Object { $_.File -eq "uc_host_window.c" -and $_.Text -match '^\s*static\s+void\s+vb6_uc_selectOwnFont\s*\(' })
+if ($selDef.Count -eq 1) {
+    $selTxt = [System.IO.File]::ReadAllText($selDef[0].Full)
+    $mSel = [regex]::Match($selTxt, 'static\s+void\s+vb6_uc_selectOwnFont\s*\([^)]*\)\s*\{[\s\S]{0,400}?\r?\n\}')
+    $selBody = ""
+    if ($mSel.Success) { $selBody = Remove-CStyleComments $mSel.Value }
+    if ($selBody -notmatch 'vb6_ControlFontStored\(' -or $selBody -notmatch 'SelectObject\(') {
+        $bad += "D11 vb6_uc_selectOwnFont 不再从那一格存储取字体并选进 DC (第三个角色哑了 = 交出去的 hDC 又按 GDI 缺省字体画)"
+    }
+    if ($selBody -match 'vb6_ControlFont\s*\(') {
+        $bad += "D11 vb6_uc_selectOwnFont 改问 vb6_ControlFont (= SendMessage(WM_GETFONT)); 这两站从 push/paint 进来, 实测当场 0xC0000409"
+    }
+}
+$selSites = @($rtl | Where-Object { $_.File -eq "uc_host_window.c" -and $_.Text.Contains("vb6_uc_selectOwnFont(") -and
+                                      $_.Text -notmatch '^\s*static\s+void\s+vb6_uc_selectOwnFont' })
+if ($selDef.Count -ne 1 -or $selSites.Count -ne 2) {
+    $bad += ("D11 vb6_uc_selectOwnFont 定义 " + $selDef.Count + " 处 / 调用 " + $selSites.Count +
+             " 处 (want 1 + 2: AutoRedraw 持久表面与 WM_PAINT 那张 DIB 各一次) -> " +
+             (($selSites | ForEach-Object { $_.File + ":" + $_.Line }) -join " | "))
 }
 $storeDef = @($rtl | Where-Object { $_.File -eq "vb6forms_ctrl.c" -and $_.Text -match '^\s*void\s+vb6_ControlFontStore\s*\(' })
 if ($storeDef.Count -ne 1) { $bad += ("D11 vb6_ControlFontStore defined " + $storeDef.Count + " times in vb6forms_ctrl.c (want exactly 1)") }
@@ -454,7 +497,8 @@ if ($bad.Count -eq 0) {
                 " 槽位写 " + $fntW.Count + " 读 " + $fntR.Count +
                 " / 覆盖面 全仓裸问 " + $rawAll.Count + " 存口 " + $storeDef.Count +
                 " 站点 " + $storeCalls.Count + "/" + $storeFiles.Count + " 文件" +
-                " / 换算表 " + $scAuth + " 码头 " + $scSites.Count + " 硬编码 " + $scHard.Count) -ForegroundColor Green
+                " / 换算表 " + $scAuth + " 码头 " + $scSites.Count + " 硬编码 " + $scHard.Count +
+                " / DC选字 " + $selDef.Count + " 站 " + $selSites.Count) -ForegroundColor Green
     exit 0
 }
 foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }

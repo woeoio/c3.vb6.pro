@@ -252,11 +252,70 @@ std::string CCodeGen::cParamClassPtrType(const ParameterInfo& p) {
     return {};
 }
 
+// 账 #305 §B219 (第二百二十刀): 入站实参的**声明档** —— 服务端进门那一趟照着它把 VARIANT
+// 换算到形参声明的那一档，于是 cgen_util_dllentry_collect.inc 那 16 处读臂可以继续裸取
+// 联合体成员。判据与**那条读臂逐格对齐**(读 lVal 的答 VT_I4、读 dblVal 的答 VT_R8、读
+// bstrVal 的答 VT_BSTR、读 pdispVal 的答 VT_DISPATCH)，读整槽的 Variant、取地址的 ByRef、
+// 以及那条 if-链兜底臂(枚举/UDT/Date/Currency/Decimal/LongPtr/… —— 它们的 C 存储是不是
+// int32_t 还没量过)一律 VB6_ARGVT_SKIP。新增一档之前先量那一档的 C 存储，别在这里猜。
+std::string CCodeGen::cDispatchArgVt(const ParameterInfo& p) {
+    if (!p.isByVal) return "VB6_ARGVT_SKIP";
+    // 工程类/接口槽: 读臂取的是 pdispVal ⇒ VT_DISPATCH (与下面 Object 那一档同一个答案)。
+    if (!cParamClassPtrType(p).empty()) return "VT_DISPATCH";
+    const Vb6Type t = p.type;   // 刻意**不加** Array 位掩码: 与读臂那条 == 比较逐字同形
+    if (t == Vb6Type::Long || t == Vb6Type::Integer || t == Vb6Type::Byte ||
+        t == Vb6Type::Boolean) return "VT_I4";
+    if (t == Vb6Type::Double || t == Vb6Type::Single) return "VT_R8";
+    if (t == Vb6Type::String) return "VT_BSTR";
+    if (t == Vb6Type::Object) return "VT_DISPATCH";
+    return "VB6_ARGVT_SKIP";
+}
+
 // 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): 「这一档槽装的是视图薄指针吗」—— 上面那位主人
 // 的两档里读视图那一档的唯一出口。前缀知识刻意留在这份文件 (= cParamClassPtrType 的出生地),
 // 别处再抄一次字面量就是把「谁认得 vb6_ivref_」这张名单扩大。
-bool CCodeGen::clsPtrIsViewSlot(const std::string& clsPtr) {
+bool CCodeGen::clsPtrIsViewSlot(const std::string& clsPtr) const {
     return clsPtr.compare(0, 10, "vb6_ivref_") == 0;  // vb6_ivref_ = 10 个字符
+}
+
+// 账 #305 第二百零四刀: 上面那一问的**带名字**那一档 —— 「这一档 C 类型是哪张接口的视图」
+// (交回 `vb6_ivref_` 后面那一段，即已 cIdent 过的接口名；认不出 = 空串)。与 legacy 那一位
+// 主人 `legacyIfaceNameOfCType` 同形，前缀知识照旧只住这份文件。交付侧 (deliverToClassSlot)
+// 与 ByVal 那个适配器都问它，站点再手写一遍 `substr(10, find('*', 10))` 就是把名单扩大。
+std::string CCodeGen::ivrefNameOfCType(const std::string& cType) const {
+    if (!clsPtrIsViewSlot(cType)) return {};
+    std::string t = cType;
+    if (!t.empty() && t.back() == '*') t.pop_back();   // vb6_ivref_I* → vb6_ivref_I
+    return t.substr(10);
+}
+
+// 账 #305 第一百八十八刀: `vb6_iface_` 前缀的**唯一比较点** (上面 V1 那条哨兵钉的就是这一处)。
+// 「这枚 C 类型是不是 legacy 接口视图」这一问从此只有这一个答案；形参槽、返回槽、值聚合判据
+// 三处读者都调它。
+static bool isLegacyIfaceCType(const std::string& cType) {
+    return cType.compare(0, 10, "vb6_iface_") == 0;  // vb6_iface_ = 10 个字符
+}
+
+// 账 #305 第一百八十八刀: 「这一档返回类型是不是值聚合」= 不许 `= 0`、必须 `{0}` 零初始化。
+// 名单两档: UDT (`vb6_type_`) ∪ legacy 接口视图 (`vb6_iface_`)。局部变量那条路早就是 `{0}`
+// (cgen_localdecl.cpp)，此前只有**过程返回槽**漏了视图这一档 ⇒ cl C2440。
+bool CCodeGen::cTypeIsValueAggregate(const std::string& cType) {
+    return cType.compare(0, 9, "vb6_type_") == 0 || isLegacyIfaceCType(cType);
+}
+
+// 账 #305 第一百八十八刀: 返回类型若是 legacy 接口视图，交回接口名 (认不出 = 空串) ——
+// 返回槽要进 knownIfaceVars_ 那张名册，否则 `Set <函数名> = <实例>` 会把视图当类槽发
+// (`vb6_cls_<I>* __clsold = vb6_ret_X;` = C2440)。前缀知识仍只住这份文件。
+std::string CCodeGen::legacyIfaceNameOfCType(const std::string& cType) {
+    if (!isLegacyIfaceCType(cType)) return {};
+    return cType.substr(10);
+}
+
+// 账 #305 第一百八十九刀: 接收者是**表达式**时的按值适配器名 —— 唯一出口。
+// 铸的人 (cgen_iface_vtbl.cpp) 与问的人 (调用点) 都走这里, 别各自拼一遍。
+std::string CCodeGen::legacyIfaceSlotCallFn(const std::string& ifaceName,
+                                          const std::string& field) const {
+    return "vb6_iface_" + cIdent(ifaceName) + "_call_" + field;
 }
 
 // 账 #305 第一百七十二刀 站B: 「这一档形参槽收不收 legacy 接口的**视图值**」(交回声明名,
@@ -268,7 +327,7 @@ bool CCodeGen::clsPtrIsViewSlot(const std::string& clsPtr) {
 std::string CCodeGen::cParamLegacyIfaceSlotName(const ParameterInfo& p) {
     if (p.typeRefName.empty()) return {};
     const std::string t = cTypeForDeclaredTypeName(p.typeRefName);
-    if (t.compare(0, 10, "vb6_iface_") != 0) return {};  // vb6_iface_ = 10 个字符
+    if (!isLegacyIfaceCType(t)) return {};
     std::string nm = p.typeRefName;
     const size_t dot = nm.rfind('.');
     if (dot != std::string::npos) nm = nm.substr(dot + 1);
@@ -409,7 +468,35 @@ bool CCodeGen::isProjectClassName(const std::string& name) {
 // Nothing 是 NULL，加一层强制转换只会把真正的类型错配 (接口薄指针喂给类槽) 变成
 // 静默的坏指针。不套 boxToVariant：那是"目标槽收 VARIANT"时才有的动作。
 std::string CCodeGen::deliverToClassSlot(const std::string& clsPtr,
-                                         const std::string& argVal) const {
+                                        const std::string& argVal,
+                                        const ASTNode* actual) const {
+    // 账 #305 第二百零四刀: 槽那一档是**接口视图薄指针**时，交进去的必须是视图，不是实例基址。
+    // 裸着交 (= 今天的样子) 让被调方 `s->vt->…` 读到结构体首字段 (那枚计数头) = 拿整数当
+    // vtable (VbEclipse ucPerspective.SetScheme 六发实测 rc=139，而 cl 只报 C4133 警告、
+    // 压根不进 c3-error.log ⇒ 一声不响)。形状只许问一位主人 ivrefInstanceViewExpr (与 Set
+    // 那两站同一个答案)。
+    // 只放开「实参自己交出那一枚引用」的形状 = `New <类>`: 站点那头的交回腿
+    // (registerClassArgRefHandback 的视图档 `tmp->vt->Release(tmp)`) 退的正是这一枚，
+    // 计数当场平了。
+    if (!clsPtr.empty() && clsPtrIsViewSlot(clsPtr) && actual) {
+        const std::string ivName204 = ivrefNameOfCType(clsPtr);
+        if (ivName204.empty()) return argVal;
+        if (actual->kind == ASTNodeKind::NewExpr) {
+            return ivrefInstanceViewExpr(ivName204, argVal, false);
+        }
+        // 账 #305 第二百零五刀: **借来的实例** (裸类变量) 也铸视图，走主人 nullable 那一档 ——
+        // 它可能就是 Nothing，而 `&NULL->__iv_I` 算出来是一枚**非空**野地址 (D22-10)。
+        // 站点那头由 registerClassArgRefCopyIn 的视图档先付一枚、交回腿再退一枚，净 0。
+        // 只认**裸标识符**：调用/属性读那一形在这里再走主人会把那个过程**调两遍** (三目两侧
+        // 各一次求值)，而且它带的对价归移交那条问句管，不归本刀。
+        if (actual->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string actCls205 = inferClassTypeOfExpr(*actual);
+            if (!actCls205.empty() && !projectClassNameOf(actCls205).empty()) {
+                return ivrefInstanceViewExpr(ivName204, argVal, true);
+            }
+        }
+        return argVal;   // 借来的**视图** (视图变量) 值本来就是那枚薄指针，原样交
+    }
     if (!clsPtr.empty() && clsPtr.compare(0, 8, "vb6_cls_") == 0 && cExprIsVariant(argVal)) {
         return "(" + clsPtr + ")vb6_ComObject_GetInstance("
                "vb6_VariantToObjectVal(" + argVal + "))";
@@ -700,6 +787,8 @@ std::string CCodeGen::mapTypeRef(ASTNode* typeRef) {
             }
             // 检查是否是枚举类型 → 基础类型int32_t (VB6枚举底层是Long)
             if (udtSym && udtSym->kind == SymbolKind::EnumType) {
+                if (std::getenv("C3_DBG_TYPEREF") && typeName.find("Docking") != std::string::npos)
+                    std::cerr << "[TYPEREF] enum name='" << typeName << "' -> int32_t\n";
                 return "int32_t";
             }
             // Delegate 类型 (tB 扩展) → intptr_t: 委托值 = 生成调用桩的地址,
@@ -786,6 +875,8 @@ std::string CCodeGen::mapTypeRef(ASTNode* typeRef) {
             // 兜底: 未知类型 (如窗体模块名、外部COM类型别名等) → void*
             // Fix 010c: 窗体模块(.frm)未注册为Class符号, 但VB6中可作为类型使用
             // 任何不是内置类型/UDT/枚举/类/COM类型的名称都视为通用对象指针
+            if (std::getenv("C3_DBG_TYPEREF"))
+                std::cerr << "[TYPEREF] unresolved name='" << typeName << "' lookup='" << lookupName << "'\n";
             return "void*";
         }
         case ASTNodeKind::ArrayTypeRef:

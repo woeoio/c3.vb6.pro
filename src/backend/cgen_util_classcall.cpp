@@ -52,6 +52,23 @@ std::string CCodeGen::resolveClassMemberCallUncached(const std::string& classNam
     // Fix 011r-1b: VB6 case-insensitive — compare class name ignoring case
     // (用户源代码可能写 "cWinsock", 但struct定义用的是文件名大小写 "cWinSock")
     const std::string classNameLower = Symbol::toLower(className);
+
+    // 账 (Outlook2013 frmInbox:244/732): className 是**跨模块窗体**且成员是其
+    // **控件** (`frmMain.CommandBars`) — 控件句柄变量是另一 .c 的 static,
+    // 按类成员函数解析出 vb6_frmMain_CommandBars = LNK2019 (该窗体没有那个
+    // 过程)。一律改发控件句柄访问器; 返回**裸名** (0 参访问器由调用方补
+    // "()", 控件数组由调用方补 "(idx)" — 访问器带 int32_t idx 形参)。
+    if (knownFormModuleNames_.count(classNameLower)
+        && classNameLower != Symbol::toLower(moduleName_)) {
+        const FrmControl* extCtrlCc = findExternalFormControl(className, memberName);
+        if (extCtrlCc) {
+            std::string accCc = "vb6_form_ctrl_" + cIdent(className)
+                              + "_" + cIdent(memberName);
+            if (extCtrlCc->controlType == FrmControlType::TreeView)
+                externalTreeViewAccs_[accCc] = accCc;
+            return accCc;
+        }
+    }
     // 跟踪规范类名 (取自符号表, 用于C输出大小写一致)
     std::string canonicalClassName;
 
@@ -787,6 +804,28 @@ bool CCodeGen::emitUcInstanceMemberExpr(const std::string& ucClass,
     } else {
         lastExpr_ = resolvedFn + "(" + thisArg + ")";
     }
+    return true;
+}
+
+// 账 #305 第三百零九刀: 「窗体 Show 转发子还欠哪几枚形参」的唯一作者（问句与三个消费者
+// 见 cgen_helpers.inc 声明处）。转发子是发码期合成的，符号表里没有 `Show` 这个人，
+// 所以三条 AST 查表路（IdentifierExpr / MemberAccessExpr / WithMemberExpr 的类实例档）
+// 全都问不到它 —— 那三档各自手补过 `, 0`（com_bind 的 Fix 146、cgen_call 的 Fix 150），
+// 而**多写**的那一发（VB 的 OwnerForm）从没人管：形参表答"查无此人" ⇒ 调用点的截断
+// (named_args 的 Fix 041b) 不触发 ⇒ 实参全数追加。这里把形参表交出去，补与截都归通用流程。
+bool CCodeGen::formShowForwarderParams(const std::string& calleeText,
+                                       std::vector<ParameterInfo>& out) const {
+    static const std::string kPrefix = "vb6_form_show_";
+    if (calleeText.size() <= kPrefix.size()
+        || calleeText.compare(0, kPrefix.size(), kPrefix) != 0) {
+        return false;
+    }
+    ParameterInfo mode;
+    mode.name = "Mode";
+    mode.type = Vb6Type::Long;   // VB6 的 Mode 是 Long (vbModal = 1)；原型那一头是 int
+    mode.isByVal = true;         // 按值 ⇒ 省略时补的是裸 0，不是 &(...){0}
+    out.clear();
+    out.push_back(mode);
     return true;
 }
 

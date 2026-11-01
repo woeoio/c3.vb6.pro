@@ -19,6 +19,14 @@ void CCodeGen::visit(VariableDecl& node) {
     if (!node.dimensions.empty()) {
         Vb6Type elemType = resolveArrayElemType(node.asType.get());
         std::string saElemType = mapSaElemType(elemType);
+        // A UDT element must be allocated with its real element size.
+        // resolveArrayElemType folds an unknown type name to Variant, so the old
+        // `vb6_SafeArrayCreate1D(vb6_sa_variant, ...)` handed out 16-byte slots
+        // while every accessor stepped by sizeof(UDT) -- a heap overflow. VBWolf
+        // `Private Hdr(0 To NUM_BUFS-1) As WAVEHDR` gave waveOutPrepareHeader a
+        // 64-byte block for 4 headers of 32 bytes each; the 0xC0000005 that came
+        // out of the corrupted heap was the first symptom.
+        std::string udtCType = resolveArrayUdtElemCType(node.asType.get());
         int dimCount = (int)node.dimensions.size();
         std::string cType = (dimCount > 1) ? "vb6_SafeArrayND*" : "vb6_SafeArray1D*";
 
@@ -35,7 +43,9 @@ void CCodeGen::visit(VariableDecl& node) {
             std::string uBound = "0";
             if (dim.lower) { emitExpr(*dim.lower); lBound = std::move(lastExpr_); }
             if (dim.upper) { emitExpr(*dim.upper); uBound = std::move(lastExpr_); }
-            std::string initCode = "vb6_SafeArrayCreate1D(" + saElemType + ", " + lBound + ", " + uBound + ")";
+            std::string initCode = udtCType.empty()
+                ? ("vb6_SafeArrayCreate1D(" + saElemType + ", " + lBound + ", " + uBound + ")")
+                : ("vb6_SafeArrayReDim1D_Udt((int32_t)sizeof(" + udtCType + "), " + lBound + ", " + uBound + ")");
             // Fix 054: C语言文件作用域变量必须用常量表达式初始化 (C2099)
             // 改为先声明为NULL, 再在模块初始化函数中赋值
             if (isPublicModuleDecl(node)) {
@@ -62,7 +72,9 @@ void CCodeGen::visit(VariableDecl& node) {
             }
             c_.dedent();
             c_.emitLine("};");
-            std::string initCode = "vb6_SafeArrayCreateND(" + saElemType + ", " + std::to_string(dimCount) + ", " + boundsVar + ")";
+            std::string initCode = udtCType.empty()
+                ? ("vb6_SafeArrayCreateND(" + saElemType + ", " + std::to_string(dimCount) + ", " + boundsVar + ")")
+                : ("vb6_SafeArrayReDimND_Udt((int32_t)sizeof(" + udtCType + "), " + std::to_string(dimCount) + ", " + boundsVar + ")");
             // Fix 054: C语言文件作用域变量必须用常量表达式初始化 (C2099)
             if (isPublicModuleDecl(node)) {
                 c_.emitLine(cType + " " + cName + " = NULL;");
@@ -83,10 +95,7 @@ void CCodeGen::visit(VariableDecl& node) {
         // Fix 062: Byte 数组变量注册
         if (elemType == Vb6Type::Byte) knownByteArrayVars_.insert(lower);
         // Fix 055: 注册UDT数组元素C类型
-        {
-            std::string udtCType = resolveArrayUdtElemCType(node.asType.get());
-            if (!udtCType.empty()) arrayUdtElemTypes_[lower] = udtCType;
-        }
+        if (!udtCType.empty()) arrayUdtElemTypes_[lower] = udtCType;
         // Fix 192: 注册类数组元素类名 (`Dim s(1) As ShapeAct` — 静态数组同样踩 C2224,
         // 不是只有 ReDim 的形状坏)。没有它, s(0).Move 的接收者推断不出类。
         {
@@ -128,8 +137,8 @@ void CCodeGen::visit(VariableDecl& node) {
         if (elemType == Vb6Type::Byte) knownByteArrayVars_.insert(lower);
         // Fix 055: 注册UDT数组元素C类型
         {
-            std::string udtCType = resolveArrayUdtElemCType(node.asType.get());
-            if (!udtCType.empty()) arrayUdtElemTypes_[lower] = udtCType;
+            std::string dynUdtCType = resolveArrayUdtElemCType(node.asType.get());
+            if (!dynUdtCType.empty()) arrayUdtElemTypes_[lower] = dynUdtCType;
         }
         // Fix 192: 同上, 动态数组 `Dim a() As ShapeAct`
         {

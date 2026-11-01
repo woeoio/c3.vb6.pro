@@ -27,6 +27,7 @@
                 }
                 knownFormControls_[ctrlNameLower] = ctrl.controlType;
                 knownFormControlOriginalNames_[ctrlNameLower] = ctrl.controlName;
+                knownFormControlTypeNames_[ctrlNameLower] = ctrl.controlTypeName;
                 // Fix 112: 工程内 UserControl 子控件 (Begin Proyecto1.ucChartBar ucChartBar1)
                 // — 记录 控件名 → .ctl 模块名, 使 `ucChartBar1.AddSerie(...)` 走类成员
                 // 直接调用 (vb6_ucChartBar_AddSerie) 而非按 HWND 走 COM 晚绑定.
@@ -47,6 +48,50 @@
         };
         for (const auto& ctrl : frmDesc.formControl.children) {
             registerCtrlRec(ctrl);
+        }
+
+        // 设计器 OCX 控件的事件连接点。VB6 里 `<Control>_<Event>` 是控件**事件源接口**
+        // 的接收器 (控件创建后 Advise 连接点), 而不是窗体自己的事件: 从前只有
+        // `Dim WithEvents x As ...` 会登记 knownWithEventsVars_, 设计期放的 OCX 控件
+        // 没人登记 —— 于是 `CommandBars_Execute` 这类处理器成了「有函数没人调」,
+        // FindControl(...).Execute 的 COM 调用虽然成功, 事件却永远到不了 VB 代码
+        // (Outlook2013: 主题切换没执行 ⇒ ribbon/状态栏一片黑)。
+        //
+        // 登记条件: 控件类型解析到 ComClass + 该 ComClass 有事件源接口 + 本模块
+        // 真写了至少一个 `<控件名>_<事件名>` 处理器。登记后 evt_decl/evt_impl 照常
+        // 发包装器, 控件创建点 (cgen_form_create_controls.inc) 照常 Advise。
+        {
+            std::function<void(const FrmControl&)> regOcxEvtRec = [&](const FrmControl& ctrl) {
+                if (!ctrl.controlName.empty()) {
+                    Symbol* cs = lookupDotted(ctrl.controlTypeName);
+                    if (!cs || cs->kind != SymbolKind::ComClass) {
+                        size_t dot = ctrl.controlTypeName.find('.');
+                        if (dot != std::string::npos)
+                            cs = symTab_.lookup(ctrl.controlTypeName.substr(dot + 1));
+                    }
+                    if (cs && cs->kind == SymbolKind::ComClass && cs->comHasSourceIface
+                        && !cs->comSourceIfaceIid.empty() && !cs->eventNames.empty()) {
+                        // 处理器必须**本模块自有**: 裸 lookup 会命中别家窗体同名的
+                        // Public Sub (pageBackstageInfo.frm:148 也有 CommandBars 控件,
+                        // 而 `Public Sub CommandBars_Execute` 只写在 frmMain:405) ——
+                        // 那样会在本模块发一个指向 `vb6_pageBackstageInfo_CommandBars_Execute`
+                        // 的包装器, LNK2019。判据同 cgen_form_show.inc 的 hasOwnResize29。
+                        bool anyHandler = false;
+                        for (const auto& evtName : cs->eventNames) {
+                            Symbol* hSym = symTab_.lookupModule(ctrl.controlName + "_" + evtName);
+                            if (hSym && !hSym->isExternal) {
+                                anyHandler = true;
+                                break;
+                            }
+                        }
+                        if (anyHandler) {
+                            knownWithEventsVars_[Symbol::toLower(ctrl.controlName)] = cs->name;
+                        }
+                    }
+                }
+                for (const auto& child : ctrl.children) regOcxEvtRec(child);
+            };
+            for (const auto& ctrl : frmDesc.formControl.children) regOcxEvtRec(ctrl);
         }
 
         // P7.6: 构建控件ID→Index映射 (WM_COMMAND事件分发用)
@@ -103,18 +148,41 @@
     // 非数组、非 Menu 的控件都发跨模块访问器。ImageList 的槽是 vb6_com_<Name>
     // (IDispatch*, 见 emitControlHandleDecls:165), 不是 vb6_hwnd_<Name>, 下方分支处理。
     {
+        // 控件数组只发一枚带下标的访问器 (递归会逐元素 visit, 按名去重) —
+        // 跨窗体 `frmX.btnTab(0).Appearance` 引用 vb6_form_ctrl_<F>_<C>(idx)
+        // (Outlook2013 frmMain:327-330, 数组访问器缺失 = LNK2019)。
+        std::unordered_set<std::string> accEmitted;
         std::function<void(const FrmControl&)> accRec = [&](const FrmControl& ctrl) {
-            if (!ctrl.controlName.empty() && ctrl.index < 0
-                && ctrl.controlType != FrmControlType::Menu) {
+            if (!ctrl.controlName.empty() && ctrl.controlType != FrmControlType::Menu) {
                 std::string acc = "vb6_form_ctrl_" + cIdent(formName) + "_" + cIdent(ctrl.controlName);
-                h_.emitLine("void* " + acc + "(void);");
-                // 族4b: ImageList 槽为 vb6_com_<Name> (IDispatch*); 其余控件回 vb6_hwnd_<Name>。
-                // 旧逻辑把 ImageList 排除, 但 comwrite 侧又发了 vb6_form_ctrl_<Form>_ImageListN()
-                // 的调用 -> 定义缺失 (LNK2019)。这里补上 ImageList 分支。
-                if (ctrl.controlType == FrmControlType::ImageList) {
-                    c_.emitLine("void* " + acc + "(void) { return vb6_com_" + cIdent(ctrl.controlName) + "; }");
-                } else {
-                    c_.emitLine("void* " + acc + "(void) { return vb6_hwnd_" + cIdent(ctrl.controlName) + "; }");
+                // 兼容别名 `vb6_<Form>_<Ctrl>()`: 类成员调用机制 (Fix 015/088c 把
+                // 窗体当类、控件当成员) 与若干回退会按这个形状发码 —— 直接提供
+                // 定义, 不再追每一处发射点 (Outlook2013 frmMain.CommandBars 实测
+                // LNK2019, 发射点在三套链式机制深处)。
+                std::string alias = "vb6_" + cIdent(formName) + "_" + cIdent(ctrl.controlName);
+                if (ctrl.index < 0) {
+                    h_.emitLine("void* " + acc + "(void);");
+                    h_.emitLine("void* " + alias + "(void);");
+                    // 族4b: ImageList 槽为 vb6_com_<Name> (IDispatch*); 其余控件回 vb6_hwnd_<Name>。
+                    // 旧逻辑把 ImageList 排除, 但 comwrite 侧又发了 vb6_form_ctrl_<Form>_ImageListN()
+                    // 的调用 -> 定义缺失 (LNK2019)。这里补上 ImageList 分支。
+                    if (ctrl.controlType == FrmControlType::ImageList) {
+                        c_.emitLine("void* " + acc + "(void) { return vb6_com_" + cIdent(ctrl.controlName) + "; }");
+                    } else {
+                        c_.emitLine("void* " + acc + "(void) { return vb6_hwnd_" + cIdent(ctrl.controlName) + "; }");
+                    }
+                    c_.emitLine("void* " + alias + "(void) { return " + acc + "(); }");
+                } else if (!accEmitted.count(ctrl.controlName)) {
+                    accEmitted.insert(ctrl.controlName);
+                    h_.emitLine("void* " + acc + "(int32_t idx);");
+                    h_.emitLine("void* " + alias + "(int32_t idx);");
+                    // 控件数组载体是 vb6_CtrlArr (hwnds[256] + count/lowerBound/upperBound),
+                    // 不是 vb6_SafeArray1D*。用 VB6_SA_AT 会把裸 hwnds 数组当安全数组头解引用
+                    // ⇒ 边界读成 lb=0 ub=0 ⇒ `pageBackstageSend.btnTab(1)` 直接
+                    // "Subscript out of range" (Outlook2013 frmMain:328)。
+                    c_.emitLine("void* " + acc + "(int32_t idx) { return vb6_CtrlArr_GetAt(&vb6_arr_"
+                              + cIdent(ctrl.controlName) + ", idx); }");
+                    c_.emitLine("void* " + alias + "(int32_t idx) { return " + acc + "(idx); }");
                 }
             }
             for (const auto& child : ctrl.children) accRec(child);

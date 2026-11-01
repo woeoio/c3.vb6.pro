@@ -248,6 +248,32 @@ BSTR vb6_App_EXEName(void) {
     return vb6_BSTR_FromStr(fname);
 }
 
+/* 账 #305 第320刀 (账 #592): App.Title 的运行期真值只住这一格。
+   来源与去向: 生成的入口点在 vb6_Init 之后调 vb6_SetAppTitle(L"<.vbp Title>") 播种;
+   `App.Title = v` (VB6 允许运行期改, 语料 16 行) 也只落这一枚 setter; `App.Title` 读取走
+   vb6_App_Title (交一份新副本, 与 vb6_App_EXEName 同一所有权约定); MsgBox 的默认题头
+   借用 vb6_AppTitleBorrow (只借不释放)。
+   所有权: setter 借入 const wchar_t*, 内部自己 SysAllocString 一份 —— 调用方不必交出/释放。
+   g_vb6AppTitleSet 区分「从没播种过」与「显式设成空串」: 前者读回 EXEName (C3 旧口径,
+   单文件编译没有 .vbp), 后者读回空串 (VB6: `App.Title = ""` 之后就是空题头)。 */
+static BSTR g_vb6AppTitle = NULL;
+static int  g_vb6AppTitleSet = 0;
+
+void vb6_SetAppTitle(const wchar_t* title) {
+    if (g_vb6AppTitle) { SysFreeString(g_vb6AppTitle); g_vb6AppTitle = NULL; }
+    g_vb6AppTitleSet = 1;
+    if (title && *title) g_vb6AppTitle = vb6_BSTR_FromStr(title);
+}
+
+BSTR vb6_App_Title(void) {
+    if (!g_vb6AppTitleSet) return vb6_App_EXEName();
+    return vb6_BSTR_FromStr(g_vb6AppTitle ? g_vb6AppTitle : L"");
+}
+
+const wchar_t* vb6_AppTitleBorrow(void) {
+    return g_vb6AppTitle;
+}
+
 /* App.hInstance: 返回模块实例句柄
  * Fix 179: 返回类型必须是**指针宽度**。此前返回 int32_t, 把 64 位镜像基址
  * (如 0x7FF7A6580000) 截成 0xA6580000, 写进 WNDCLASSEX.hInstance / CreateWindowEx

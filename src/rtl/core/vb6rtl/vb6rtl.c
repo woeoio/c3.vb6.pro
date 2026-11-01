@@ -122,8 +122,10 @@ double vb6_Pow(double base, double exp) {
 static LONG CALLBACK vb6_CrashTraceVEH(PEXCEPTION_POINTERS ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     /* 账 #181: 记轨迹本身会再触发异常 (栈溢出时 fprintf 拿 CRT 锁 /
-     * CaptureStackBackTrace 再读同一批页) ⇒ 每进程只记第一次。 */
-    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_STDERR)) return EXCEPTION_CONTINUE_SEARCH;
+     * CaptureStackBackTrace 再读同一批页) ⇒ 同一个故障地址只记一次
+     * (账 #305 第三百十五刀: 旧口径是"每进程只记一次", 会把另一发不同的 AV 一起挡掉)。 */
+    if (!vb6_CrashTraceClaim(VB6_CRASH_CLAIM_STDERR, ep->ExceptionRecord->ExceptionAddress))
+        return EXCEPTION_CONTINUE_SEARCH;
     // 账 #257 第十八层诊断: 堆损坏 (STATUS_HEAP_CORRUPTION 0xC0000374 / 0xC000037D) 默认不进
     // 这里 ⇒ stderr 一片空白, 只能拿到一个无栈的退出码。把它也纳入打印集合, 至少能把
     // 现场帧打出来 (CaptureStackBackTrace 拿不到应用侧帧时, 下面 x86/x64 栈线性扫描兜底)。
@@ -438,7 +440,8 @@ BSTR vb6_DecimalToBSTR(vb6_VARIANT v) {
     VARIANT src;
     VariantInit(&src);
     if (!vb6_DecimalAsVariant(v, &src)) return vb6_BSTR_FromStr(L"");
-    if (SUCCEEDED(VariantChangeType(&src, &src, 0, VT_BSTR))
+    /* 账 #305 §B224: 目的档 VT_BSTR 的换算走唯一出口(布尔答 True/False，不是 Automation 的 -1)。 */
+    if (SUCCEEDED(vb6_ComChangeType(&src, &src, VT_BSTR))
             && src.vt == VT_BSTR && src.bstrVal) {
         BSTR r = src.bstrVal;   /* 把权抄给调用方(与其它 CStr 出口同口径), 所以不能 VariantClear */
         src.bstrVal = NULL;
@@ -986,10 +989,24 @@ void vb6_RaiseError(int32_t errNum, BSTR description) {
     exit(errNum);
 }
 
-// 账 #181: 见 vb6rtl_runtime.h 里那条注释 —— 三个出口每进程各记一次。
-static volatile long vb6_crashClaim[4] = { 0, 0, 0, 0 };
+// 账 #181: 见 vb6rtl_crash.h 里那条注释 —— 三个出口各记一次。
+// 账 #305 §B218 第三百十五刀: 「一次」改成「每个不同的故障地址一次」(定长小表, 按地址去重,
+// 口径照 §B188 的 vb6_TermErrClaim)。挡住的是同一个地址的重放 (处理器套处理器 / 同一份递归栈
+// 写 4 遍), 不再连带把另一发不同的 AV 一起吃掉。表满 = 不再记, 轨迹文件不许无界长。
+#define VB6_CRASH_CLAIM_MAX 12
+static const void* volatile vb6_crashClaim[4][VB6_CRASH_CLAIM_MAX];
 
-int vb6_CrashTraceClaim(int slot) {
+int vb6_CrashTraceClaim(int slot, const void* faultAddress) {
+    int i;
     if (slot < 0 || slot >= 4) return 1;           /* 未知槽位不拦 (宁可多记一份) */
-    return InterlockedCompareExchange(&vb6_crashClaim[slot], 1, 0) == 0;
+    if (!faultAddress) faultAddress = (const void*)&vb6_crashClaim[slot];  /* 无地址 = 旧口径: 每槽一次 */
+    for (i = 0; i < VB6_CRASH_CLAIM_MAX; i++) {
+        const void* cur = vb6_crashClaim[slot][i];
+        if (cur == faultAddress) return 0;          /* 这一处已经记过了 */
+        if (cur == NULL &&
+            InterlockedCompareExchangePointer((void* volatile*)&vb6_crashClaim[slot][i],
+                                              (void*)faultAddress, NULL) == NULL)
+            return 1;
+    }
+    return 0;
 }

@@ -22,8 +22,16 @@ param(
     [switch]$Verbose,
     [int]$Jobs = 1,        # >1 时并行跑语法段用例 (每 worker 独立输出目录); 默认 1 = 今天的串行行为
     [int]$Shard = 0,       # 分片当前编号 (1..ShardTotal); 0 = 不分片整队跑 (供 CI 多 runner 并行)
-    [int]$ShardTotal = 1   # 分片总数
+    [int]$ShardTotal = 1,  # 分片总数
+    [switch]$Incremental   # 打开时给 C3 传 --incremental (见下面的 $IncArg; 默认关 = 今天的行为)
 )
+
+# ai/030 T30-B: 只有 -Incremental 时才有的实参, 口径与 tests\run_tests.ps1 一致。
+# --incremental 让 C3 走内容寻址的 obj store (%LOCALAPPDATA%\C3\objcache), 键含
+# {架构, 工具串, RTL 源内容} ⇒ 每个 runner 只有头一例真编那 65 个 RTL .c, 其余直接取 obj;
+# 错配的 obj 只会没命中, 绝不会被用错 (不会把"编译能过"变成"编译能过但是错的")。
+# 关掉时实参为空 ⇒ 调用命令行与今天逐字相同。
+if ($Incremental) { $IncArg = @('--incremental') } else { $IncArg = @() }
 
 $ErrorActionPreference = "SilentlyContinue"
 # <shared-shard>: 分片算法在 shard.ps1 (三个门禁脚本共用, 不要在这里再抄一遍)
@@ -156,7 +164,7 @@ if (($ShardTotal -gt 1) -and ($Shard -ne 1)) {
     Write-Host "  [SKIP] smoke (无 MSVC 环境)" -ForegroundColor Yellow
 } else {
     Write-Host -NoNewline "  [SMOKE] compile ... "
-    $smokeOut = & $C3Path $smokeSrc --output-dir $OutDir 2>&1
+    $smokeOut = & $C3Path $smokeSrc --output-dir $OutDir @IncArg 2>&1
     if ($LASTEXITCODE -ne 0) {
         $script:fail++
         Write-Host "FAIL (compile)" -ForegroundColor Red

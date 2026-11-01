@@ -267,6 +267,7 @@ private:
     // ============================================================
     ExprPtr parseExpression();
     ExprPtr parseExpression(int minBp);        // Pratt 核心: 最小绑定力
+    ExprPtr parseExpressionRest(ExprPtr left, int minBp);  // 从已解析的左值继续 Pratt
     ExprPtr parseNullDenotation();             // 前缀/原子表达式
     ExprPtr parseLeftDenotation(ExprPtr left, int& minBp);  // 中缀/后缀
 

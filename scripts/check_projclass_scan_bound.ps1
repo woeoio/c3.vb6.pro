@@ -11,15 +11,18 @@
 # 2026-10-22 第一百七十一刀 (新账 #407 / §B190) 接上了第一枚读者, 红声按原话起过作用:
 # 台账那两条读数读完的答案是走 (b) 档 —— 视图进装箱站按指针查身份 vb6_VariantFromProjectInstance。
 # 它只读登记腿本来就发的那一档 (P5 的 isDll_ 夹一个字没动), 所以这张表从今天起不再是
-# 「写了没人读」。 (b) 档原话还配一句「注销腿」, 至今没有: 表是弱映射, 实例释放后地址留在表里
-# —— 读者为 0 时那条是惰性缺陷, 读者为 1 起它是活风险, 欠项已回台账记着。
+# 「写了没人读」。 (b) 档原话配的那句「注销腿」已由账 #481 (第一百八十二刀) 补上:
+# RTL 新增 vb6_UnregisterProjectClassInstance (实例拆掉前撤登记、空位留给登记复用),
+# codegen 在 ..._Destroy 里紧贴 vb6_Free(me) 发一行、与登记腿同一道 isDll_ 闸 (P6 钉住)。
 #
 # 规则 (改坏了会红, 不是装饰):
-#   P1  两圈扫描都问 vb6_ProjClassScanLimit(), 且那个形状在文件里恰好 2 处。
+#   P1  三圈扫描 (登记 / 查表 / 注销) 都问 vb6_ProjClassScanLimit(), 且那个形状在文件里恰好 3 处。
 #   P2  任何 for 条件都不许再直接拿 g_vb6_projClassCount 当边界 (代码里 0 处)。
 #   P3  那枚夹界出口: 定义恰好 1 处; VB6_PROJCLASS_MAX 在代码里恰好 5 处(住在 4 行上:
 #       #define / 数组尺寸 / 出口里那行夹界(同一行点了它两次) / 放弃登记那一句), 后者恰好 1 处。
 #   P5  登记腿只许 ActiveX 那一档发: cgen_com.cpp 里恰好 1 处, 且它上面一行就是 if (isDll_) {
+#   P6  注销腿与登记腿配对 (账 #481): .c 定义 1 处 / .h 声明 1 处 / cgen_com.cpp 发码 1 处,
+#       发码那一处上一行必须是 if (isDll_) {, 且它必须排在 vb6_Free(me) 前两行 (= 先撤登记再释放)。
 #   P4  读者普查: vb6_FindProjectClassDesc( 在 .c 的代码里恰好 3 处 (定义 + ...Raw 的转调 +
 #       第一百七十一刀那枚真读者)、在 .h 里至多 1 处 (就那一枚声明); vb6_ProjClassVerify 在代码里 0 处 (它不存在,
 #       只许住在注释里)。
@@ -62,8 +65,8 @@ $bad = @()
 # ---- P1: 两圈都问那一枚出口 ----
 $loopRx = 'for \(i = 0; i < vb6_ProjClassScanLimit\(\); i\+\+\)'
 $loops = @([regex]::Matches($objCode, $loopRx)).Count
-if ($loops -ne 2) {
-    $bad += ("P1 scan loops that ask vb6_ProjClassScanLimit() = " + $loops + " (want exactly 2: register + lookup)")
+if ($loops -ne 3) {
+    $bad += ("P1 scan loops that ask vb6_ProjClassScanLimit() = " + $loops + " (want exactly 3: register + lookup + unregister)")
 }
 
 # ---- P2: 边界不许再直接问计数 ----
@@ -125,9 +128,36 @@ if (-not (Test-Path -LiteralPath $cgen)) {
     }
 }
 
+# ---- P6 (账 #481 = 第一百八十二刀): 注销腿与登记腿配对 ----
+# 表是弱映射, 实例拆掉前必须撤登记; 而它只许在 ActiveX 那一档发 (与 P5 同一道闸)。
+# 三处: .c 定义 1 / .h 声明 1 / cgen_com.cpp 里发码 1 处且上一行是 if (isDll_) { 。
+$unregDef = @([regex]::Matches($objCode, 'void vb6_UnregisterProjectClassInstance\(void\* inst\) \{')).Count
+if ($unregDef -ne 1) { $bad += ("P6 vb6_UnregisterProjectClassInstance definitions = " + $unregDef + " (want 1)") }
+$unregDecl = @([regex]::Matches($hdrCode, 'void vb6_UnregisterProjectClassInstance\(')).Count
+if ($unregDecl -ne 1) { $bad += ("P6 vb6_UnregisterProjectClassInstance declarations = " + $unregDecl + " (want 1)") }
+if (-not (Test-Path -LiteralPath $cgen)) {
+    # 已在 P5 记过缺失, 这里不重复报
+} else {
+    $unregSite = @([regex]::Matches($cgenAll, 'vb6_UnregisterProjectClassInstance')).Count
+    if ($unregSite -ne 1) { $bad += ("P6 unregister-emit sites = " + $unregSite + " (want exactly 1)") }
+    $ul = @($cgenAll -split "`n")
+    $uat = -1
+    for ($j = 0; $j -lt $ul.Count; $j++) { if ($ul[$j] -match 'vb6_UnregisterProjectClassInstance') { $uat = $j; break } }
+    if ($uat -ge 1 -and -not ($ul[$uat - 1] -match 'if \(isDll_\) \{')) {
+        $bad += ("P6 the unregister leg is not gated by the single project-type answer (want if (isDll_) { on the line above) - reads: " + $ul[$uat - 1].Trim())
+    }
+    # 落点: 必须紧挨在 vb6_Free(me) 那一发之前 (先撤登记再释放, 别让地址留在表里)
+    $freeAt = -1
+    for ($j = 0; $j -lt $ul.Count; $j++) { if ($ul[$j] -match '"vb6_Free\(me\);') { $freeAt = $j; break } }
+    if ($freeAt -lt 2 -or $ul[$freeAt - 2] -notmatch 'vb6_UnregisterProjectClassInstance') {
+        $bad += ("P6 the unregister emit is not the statement two lines above vb6_Free(me) (want: emit unregister, then closing brace, then emit free)")
+    }
+}
+
 if ($bad.Count -gt 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) }
     exit 1
 }
-Write-Host ("PASS check_projclass_scan_bound: loops=2 raw-bound=0 helper=1 cap=5/4lines bail=1 c-mentions=3(readers=1) verify-in-code=0 reg-site=1 gated=isDll_")
+Write-Host ("PASS check_projclass_scan_bound: loops=3 raw-bound=0 helper=1 cap=5/4lines bail=1 c-mentions=3(readers=1) verify-in-code=0 reg-site=1 gated=isDll_ unreg-def=1 decl=1 site=1 pair-before-free=1")
 exit 0
+

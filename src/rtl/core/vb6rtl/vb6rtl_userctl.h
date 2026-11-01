@@ -33,6 +33,23 @@ typedef struct vb6_ComIface_Font {
     int16_t Strikethrough;
     int32_t Weight;
     int32_t Charset;
+    /* 账 #305 第二百七十六刀: VB6 的 IFont 还答一枚 `hFont` (= 这八档折算出来的
+       GDI 句柄; 靶工程 Common/Common.bas:1012 的 CreateGDIFontFromOLEFont 就靠它,
+       它 GetObjectAPI(Font.hFont, LenB(LF), LF) 把 LOGFONT 抄出来再自己 CreateFontIndirect)。
+       句柄是**派生量**, 而写侧没有钩子 —— `vb6_UC_FontField` 交的是字段地址、cgen 也
+       直接发 `f->Bold = x`、`vb6_UC_FontAssign` 逐档覆写, 三条写路都不通知任何人 ——
+       所以缓存自带一份八档快照: 每次被问先比快照, 不一致才作废重建。
+       刻意不叫 hFont: 那会让用户代码的 `Font.hFont` 有被发成结构体字段直读的风险
+       (那条路上句柄格还没被填过)。所有权见 vb6_UC_FontHFont 的注释。 */
+    void*   hFontCache;        /* HFONT, NULL = 还没造过 */
+    float   hFontSigSize;      /* 造出 hFontCache 时那八档的快照 (名字存副本, 不借指针) */
+    int16_t hFontSigBold;
+    int16_t hFontSigItalic;
+    int16_t hFontSigUnderline;
+    int16_t hFontSigStrike;
+    int32_t hFontSigWeight;
+    int32_t hFontSigCharset;
+    wchar_t hFontSigFace[32];  /* 32 = LF_FACESIZE; 本头不含 wingdi.h, 故写死这一枚常量 */
 } vb6_ComIface_Font;
 
 // 旧名保留 (Fix 105 引入), 供既有生成代码/注释引用.
@@ -132,6 +149,10 @@ double vb6_ScaleUnitY(double y, int32_t fromScale, int32_t toScale);
 void   vb6_UserControl_AsyncRead(BSTR url, int32_t asyncType, BSTR propertyName,
                                  int32_t flags);
 void   vb6_UserControl_PropertyChanged(BSTR propName);
+/* 账 #305 第二百八十五刀: 容器侧的那一位主人 —— `UserControl.PropertyChanged <名>` 交进来,
+   只有 `Value` 这一发、且**这一枚自己现在答真**时才去撤同容器同型的单选兄弟。
+   声明在本头是因为发方 (vb6rtl_com.c 的薄壳) 与实现 (uc_host.c) 不同 TU、而两头都 include 本头。 */
+void   vb6_UC_ValueGroupNotify(const wchar_t* propName);
 
 // Fix 133u: czUI.ctl 用到的其余 UserControl 宿主成员.
 //   UserControl.hWnd    → extern void*  (控件自身窗口句柄, push 时填充)
@@ -262,6 +283,11 @@ extern struct vb6_UserControl_Extender_Type vb6_UserControl_Extender;
    b6_UC_ExtenderField 的兜底一致。kind 约定 0=BSTR / 2=int16 / 3=int32。 */
 void* vb6_UC_GetExtenderMemberObj(const wchar_t* name);
 void vb6_UC_SetExtenderMember(const wchar_t* name, void* value);
+/* 账 #305 第二百九十二刀: `UserControl.AutoRedraw = v` 的代码生成侧入口 —— 建/拆
+   常驻离屏表面 (VB6 里 AutoRedraw=True 之后 UserControl.hDC 就是那张位图)。 */
+void vb6_UC_SetAutoRedraw(void* value);
+/* 同上: 窗体第一帧之前把 TabStrip 宿主沉到父窗口最底 (VB6 实测 z 序)。 */
+void vb6_UC_SinkTabBackdrops(void* parentHwnd);
 int32_t vb6_UC_GetExtenderMemberNum(const wchar_t* name);
 BSTR    vb6_UC_GetExtenderMemberStr(const wchar_t* name);
 

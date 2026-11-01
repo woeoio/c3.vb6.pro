@@ -85,6 +85,13 @@
                                 "  /* Extender.<prop> = v (per-instance) */");
                     return;
                 }
+                /* 账 #305 第二百九十二刀: AutoRedraw 要建/拆常驻离屏表面, 不是单纯写全局。
+                   与 Extender 那条通道同一个理由 —— 裸写全局进不去 vb6_UCRec。*/
+                if (tgtHp == "vb6_UserControl_AutoRedraw") {
+                    c_.emitLine("vb6_UC_SetAutoRedraw((void*)(intptr_t)" + valHp +
+                                ");  /* UserControl.AutoRedraw = v (持久表面) */");
+                    return;
+                }
                 c_.emitLine(tgtHp + " = " + valHp + ";  /* <host pseudo>.<prop> = v */");
                 return;
             }

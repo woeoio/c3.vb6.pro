@@ -607,6 +607,47 @@ Sub W37NDPreserveShrink()
     Erase mNDLng445
 End Sub
 
+' ==== 账 #305 §B218 (甲) 腿②″ (第三百十四刀) = 泛对象档的**返回槽**从没主人 ====
+' 靶那一形: 模块级泛对象槽里那一枚由这一格握着, `Set <返回槽> = <那一格>` 以前发成裸拷贝 =
+' 交出去的是**一枚借用**; 原主紧接着 `Set <那一格> = Nothing` 当场把唯一那一枚退掉,
+' 调用方接手的就是已回收的指针 (ComCtlsDemo Builds/ImageList/ImageList.ctl:562 + 563
+' = Command2 一点就 0xC0000005, 写进 ole32 的 GetIDsOfNames)。
+' 修后: 返回槽取走一枚 ⇒ 原主放手之后调用方手里那一枚还活着 = 本窗口 terms 差 0 枚。
+Public mSlot38 As Object
+
+Public Function HandOff38() As Object
+    Set HandOff38 = mSlot38
+    Set mSlot38 = Nothing
+End Function
+
+Sub W38GenericReturnSlot()
+    Dim g38 As Object
+    Dim t0 As Long
+    Set mSlot38 = New C445
+    t0 = Terms
+    Set g38 = HandOff38()
+    Debug.Print "W38-alive-terms=" & (Terms - t0)
+End Sub
+
+' W39 = 反面证人 (只钉发码形状, 行为面今天量不出差别): 右值是**本过程的局部**对象格时,
+'       那一枚引用今天靠裸拷贝移交 (C3 不在过程出口放手局部对象格 = §B164 那族在册账),
+'       返回槽再 claim 就是每调用净 +1 且永远没人退 (实测 Common.bas PictureFromHandle:
+'       每发一张图漏一只 IPicture) ⇒ 这一形必须继续落裸拷贝。
+'       行为两态都答 terms=0 ⇒ 判据是下面那条 Test-EmitcAbsent 的发码针, 不是这里的打印。
+Public Function PassThru39() As Object
+    Dim l39 As Object
+    Set l39 = New C445
+    Set PassThru39 = l39
+End Function
+
+Sub W39LocalRhsStaysBare()
+    Dim g39 As Object
+    Dim t0 As Long
+    t0 = Terms
+    Set g39 = PassThru39()
+    Debug.Print "W39-terms=" & (Terms - t0) & " null=" & (g39 Is Nothing)
+End Sub
+
 Sub Main()
     W1SetNothing
     W2Alias
@@ -645,5 +686,7 @@ Sub Main()
     W35PreserveShrink
     W36LocalArrayScope
     W37NDPreserveShrink
+    W38GenericReturnSlot
+    W39LocalRhsStaysBare
     Debug.Print "B445-DONE"
 End Sub

@@ -1,0 +1,4 @@
+Type=Exe
+Module=B239k; B239k.bas
+Startup="Sub Main"
+ExeName32="B239k.exe"

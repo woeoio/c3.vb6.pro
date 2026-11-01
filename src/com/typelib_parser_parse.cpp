@@ -263,6 +263,9 @@ std::unique_ptr<ComCoClassInfo> TypeLibParser::parseCoClass(void* pTypeInfo,
 
     cc->clsidStr = iidToString((const uint8_t*)&pTypeAttr->guid);
 
+    // VB6 全局对象 (appobject): TYPEFLAG_FAPPOBJECT —— 裸类名即进程级单例
+    cc->isAppObject = (pTypeAttr->wTypeFlags & TYPEFLAG_FAPPOBJECT) != 0;
+
     // 查找默认接口 (IMPLTYPEFLAG_FDEFAULT)
     for (UINT i = 0; i < pTypeAttr->cImplTypes; i++) {
         INT implFlags = 0;

@@ -344,6 +344,12 @@
     // Fix 010o: 过程局部变量名集合 (小写) — Dim声明的局部变量 + For/ForEach循环变量
     // 用于在IdentifierExpr中避免对局部变量错误添加 me-> 前缀
     std::unordered_set<std::string> knownLocalVars_;
+    // 账 #305 第二百四十九刀: 「**本过程**里这一枚名字声明成**非数组**的局部」—— 与
+    // knownLocalVars_ 同一条生命周期 (每过程开头清一次, 见 cgen_decl_proc/func/prop 三处)。
+    // 为什么需要单列一张: knownArrays_ **从不 clear** (cgen_decl.cpp 那条注释: 清了会丢模块级
+    // UDT 数组的元素类型注册) ⇒ 它是跨过程累积的, 于是「同一模块另一过程里 `Dim Count(0 To 1)
+    // As Long`」会把本过程那枚 `Dim Count As Long` 也答成数组。多一个读者就多一处 AV。
+    std::unordered_set<std::string> procNonArrayLocalVars_;
     std::unordered_set<std::string> knownByRefParams_;  // Fix 081g: ByRef params (lowercase)
 
     // UDT变量名集合 (小写var名 → UDT类型C标识符, 如 "p" → "vb6_type_Point")
@@ -518,6 +524,12 @@
     // 读上下文 (普通表达式里的 `Me.f.Level`) 不受影响, 照旧派发。
     bool suppressVirtDispatch_ = false;
 
+    // 链中对象求值旗标: visit(MemberAccessExpr) 的 generic_access 在 emitExpr(对象)
+    // 期间置 true —— 自类型过程作链中接收者 (frmMain.RibbonBar.FindTab) 的那几处
+    // 发码分支据此把 comMemberName_ 留空 (对象值已就绪, 成员名其实是被调函数名,
+    // 不能再交给 resolveComValue 解一层); 左值/成员读上下文保持原名。
+    bool inMemberObjectEmit_ = false;
+
     // 类模块标志
     bool isClassModule_ = false;
     bool isFormModule_ = false;
@@ -607,6 +619,11 @@
 
     // P7.9: Window control name mapping (lowercase -> original casing for HWND vars)
     std::unordered_map<std::string, std::string> knownFormControlOriginalNames_;
+
+    // 控件名 (小写) → 设计期类型名 (如 "DockingPaneManager" → "XtremeDockingPane.DockingPane")。
+    // 控件变量名与 typelib coclass 名不一定同名 (CommandBars 同名, DockingPaneManager 不同名),
+    // 晚绑定"成员是方法还是属性"的判据必须先按类型名找回 coclass。
+    std::unordered_map<std::string, std::string> knownFormControlTypeNames_;
 
     // P20-36: 菜单项ID映射 (小写菜单名 → menuId, 与emitMenuItem/emitMenuClickDispatch一致)
     std::unordered_map<std::string, int> knownMenuIds_;
@@ -1104,6 +1121,11 @@
     // driver_codegen_voidfield_scan.inc)。
     const std::unordered_set<std::string>* projImplementedNames_ = nullptr;
 
+    // 账 #305 第320刀 (账 #592): .vbp 的 Title（空则 Name）—— 生成的入口点把它播种进
+    // RTL 那一格运行期真值（`vb6_SetAppTitle(L"...")`），MsgBox 的默认题头与
+    // `App.Title` 读取都只问那一格。单文件编译（无 .vbp）时为空 ⇒ 入口点一行不发。
+    std::string projectTitle_;
+
     // CoClass 身份 (tB, ai/022 B13b): stage 2.7 Pass E 求出的唯一出口 (coclassIds_)。
     // 只有 generateDllEntry 读它 —— 产品里的 CLSID / 默认接口 IID / 组名 ProgID 一律
     // 从这里取，prelude 里那两枚 lambda 退成"读不到块的类"的兜底路径。
@@ -1142,6 +1164,13 @@
     // 发送侧是 `onOpenEditor(handler, (*Editor))` ⇒ Editor.Caption 取到 NULL
     // ⇒ av read 0x0 (_vb6_frmMain_ucPerspective1_OpenEditor+0x19)。
     std::set<std::string> ucEventHandlers_;
+
+    // 账 #305 第二百五十六刀: 处理器名(小写) -> **每一位形参**要不要保住 ByRef。
+    // 上面那条"一律 ByVal"对**没写 ByRef** 的形参是对的 (play78 那条实证就在这一档)，
+    // 但事件声明里明写 `ByRef Text As String` 的那几位是**出参**，翻成 ByVal 就把写回丢了。
+    // 由 cgen_form_prelude 经 prepareEventHandlerProc 登记 (那里才看得见事件的形参表)，
+    // applyEventHandlerAbi 读 —— 声明侧与定义侧同读这一张表，与上面那条同源。
+    std::map<std::string, std::vector<char>> ucEventHandlerByAddr_;
 
     // Fix <vbeclipse> rev18: 本模块发出去的 UserControl 自有属性桥条数。
     // emitFormFramework 末尾 (cgen_form_uc_props.inc) 算表时写入, emitDesignerControlDecls

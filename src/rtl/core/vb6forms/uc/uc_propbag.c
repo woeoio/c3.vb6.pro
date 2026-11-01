@@ -232,6 +232,40 @@ static BSTR vb6_bag_text_from_utf16le(const uint8_t* p, uint32_t n) {
 #endif
 }
 
+/* 「这一块像不像 AND 掩码」用证据回答, 不靠 biSizeImage 猜:
+   真掩码不会擦掉画出来的像素 (调色板档里 index!=0 的格), 而把同一块错位一行当对照时
+   擦除率会跳上去。靶工程三枚 ImageList 的实测 (整块错位一行 / 七行):
+     ImageList1 16x16  对齐 1/256 = 0.4%   错位 6.2% / 19.5%   (头把掩码算进 biSizeImage)
+     ImageList3 32x32  对齐 1/1024 = 0.1%  错位 1.7% / 7.6%    (头只数色行 => 旧实现不接掩码,
+                                                                症状 = 大图标整圈黑底)
+     ImageList2 8x7    对齐 3/56 = 5.4%    (imgH=7 时错 7 行等于不错位, 对照退化)
+   判据 = 对齐的擦除率既要在绝对上限内, 也要明显好于错一行那档; 两条都成立才用这块掩码。
+   返回 1 = 可以当掩码用; 0 = 不像 (那就退回按 biSizeImage 的旧读法)。 */
+static int IlMaskPlausible(const uint8_t* src, uint32_t stride, const uint8_t* msk,
+                           uint32_t mstride, uint32_t w, uint32_t imgH, uint32_t bits) {
+    if (imgH < 2u || !msk) return 0;
+    uint32_t per = 8u / bits;                 /* 1/4/8bpp 都整除 */
+    uint32_t mask = (1u << bits) - 1u;
+    uint32_t drawn = 0, eraseAligned = 0, eraseShift = 0;
+    for (uint32_t r = 0; r < imgH; r++) {
+        const uint8_t* line = src + (size_t)r * stride;
+        const uint8_t* m0 = msk + (size_t)r * mstride;
+        const uint8_t* m1 = msk + (size_t)((r + 1u) % imgH) * mstride;
+        for (uint32_t x = 0; x < w; x++) {
+            uint32_t idx = (uint32_t)((line[x / per] >> (7u - (x % per) * bits)) & mask);
+            if (idx == 0u) continue;          /* 只问"画出来的格"被不被擦 */
+            drawn++;
+            if ((m0[x / 8] >> (7u - (x % 8))) & 1u) eraseAligned++;
+            if ((m1[x / 8] >> (7u - (x % 8))) & 1u) eraseShift++;
+        }
+    }
+    if (!drawn) return 0;
+    /* 上限 8%: 三枚实测最高 5.4%, 而「把图自己下半截当掩码」这种误读会擦掉大半 */
+    if (eraseAligned * 100u > drawn * 8u) return 0;
+    if (eraseShift <= eraseAligned) return 0;   /* 错位不比对齐差 => 这块不是掩码的形状 */
+    return 1;
+}
+
 /* VT_DISPATCH 项 = OLE 图片流 (StdPicture 的序列化):
  *   [CLSID StdPicture (16B)][DWORD key='lt' (0x746C)][…头部…][DIB / ICON 数据]
  * 头部各字段的语义未逐个逆向 —— 直接**扫 BITMAPINFOHEADER**
@@ -276,10 +310,16 @@ static void* vb6_bag_make_picture(const uint8_t* p, uint32_t n) {
      * 旧实现直接拿 biHeight 当图高建 DIB ⇒ 图被拉成两倍高、掩码字节被当颜色解出来,
      * 症状是图标挤在格子底部、其余全黑 (ComCtlsDemo 的 ImageList1/2/3 全线:
      * Toolbar / TabStrip / TreeView / ListView / ImageCombo 的图标)。
-     * 三种布局都用 biSizeImage 自证 (字节数互不相同), 不猜:
-     *   ① stride*absH                    —— 纯 DIB, 图高 = biHeight
-     *   ② stride*(absH/2) + maskStride*(absH/2) —— DDB 带 AND 掩码 (ImageList1/2)
-     *   ③ stride*(absH/2)                —— 只存色行、头高度仍翻倍 (ImageList3 的 32x32)
+     * 三种布局都用 biSizeImage 自证, 但**它只数颜色那一半**, 不当「有没有掩码」的证据:
+     *   ① stride*absH                    —— 纯 DIB, 图高 = biHeight (ImageList2 那枚 8x14 也长这样)
+     *   ② stride*(absH/2) + maskStride*(absH/2) —— DDB 带 AND 掩码 (ImageList1 的 16x16)
+     *   ③ stride*(absH/2)                —— DDB, 掩码**照旧跟在后面**只是没被计进 biSizeImage
+     *                                          (ImageList3 的 32x32 —— 症状 = 大图标整圈黑底)
+     * ③ 的判据是头自己算出来的账: biHeight 说这块有 absH 行, 而 biSizeImage 只够 absH/2 行,
+     * 那它就不可能是纯 DIB ⇒ 第二半只能是掩码, 于是**看流里还剩多少字节**决定用不用它,
+     * 不看 biSizeImage。实测两枚掩码的自证 (拿整块错位一行/七行当对照):
+     * ImageList1 对齐时 1/256 格「擦掉画出来的像素」= 0.4% (错位 6.2%/19.5%),
+     * ImageList3 对齐时 1/1024 = 0.1% (错位 1.7%/7.6%) —— 都是真掩码。
      * 行序一律是 BMP 那套自下而上, 所以**保持 biHeight 为正**建 DIB 就不必翻转。 */
     uint32_t plainBytes = stride * absH;
     uint32_t half = (absH % 2u) ? 0u : absH / 2u;
@@ -287,10 +327,24 @@ static void* vb6_bag_make_picture(const uint8_t* p, uint32_t n) {
     uint32_t ddbBytes = half ? (colourHalf + maskStride * half) : 0u;
     uint32_t imgH = absH;
     int halfHeight = 0, hasMask = 0;
-    if (bits <= 8 && imgSize != plainBytes && half) {
+    if (bits <= 8 && half) {
         /* 只有调色板图才可能是 DDB —— 下面的位操作按每字节 8/bits 个像素算, 16bpp 以上不成立 */
-        if (ddbBytes && imgSize == ddbBytes) { imgH = half; halfHeight = 1; hasMask = 1; }
-        else if (colourHalf && imgSize == colourHalf) { imgH = half; halfHeight = 1; }
+        const uint8_t* colour = dib + hdrTotal;
+        int roomForMask = (avail >= ddbBytes);
+        if (imgSize != plainBytes && imgSize == ddbBytes) {
+            imgH = half; halfHeight = 1; hasMask = 1;      /* 头把掩码算进 biSizeImage 了 */
+        } else if (imgSize != plainBytes && imgSize == colourHalf) {
+            /* 头只数色行 (ImageList3 的 32x32) —— 掩码在不在看流里剩的字节 + 它自己像不像 */
+            imgH = half; halfHeight = 1;
+            hasMask = roomForMask && IlMaskPlausible(colour, stride, colour + colourHalf,
+                                                     maskStride, (uint32_t)w, half, bits);
+        } else if (roomForMask && IlMaskPlausible(colour, stride, colour + colourHalf,
+                                                  maskStride, (uint32_t)w, half, bits)) {
+            /* biSizeImage 报的是「整块纯色」, 而头的高度仍是翻倍的 —— 两种读法算出同一个数
+               (ImageList2 那枚 8x7: 色 28 + 掩 28 == 纯色 8x14 == 56), 头分不开,
+               让掩码自己表态。声明档 (MainForm.frm 的 ImageHeight = 7) 站在 DDB 这一边。 */
+            imgH = half; halfHeight = 1; hasMask = 1;
+        }
     }
 
     void* bitsPtr = NULL;

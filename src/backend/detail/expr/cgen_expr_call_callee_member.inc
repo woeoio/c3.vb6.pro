@@ -2,6 +2,147 @@
 // 由 src/backend/expr/cgen_expr_call.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 806~1009 行，逐行未改。
 
+    // 账 (Outlook2013): **自类型过程/局部 COM 变量作链基的多级调用** —
+    //   同窗体:  `RibbonBar.RedrawBar` / `RibbonBar.Controls.Add(...)` (frmMain:1421)
+    //   跨窗体:  `frmMain.RibbonBar.FindTab(12000)` (frmShortcutBar:83)
+    //   PropertyGet: `CalendarControl.Options.SetScale2TimeZone tzi` (frmTimeZone:216)
+    // 基 = 过程名与返回的 typelib 类同名 (符号表同键, 类型符号被遮蔽 —— 必须问
+    // lookupModuleByKind, 全表 lookup 先命中 ComClass) 或**本窗体无同名局部变量的**
+    // 自类型过程, 或局部 COM 对象变量。中间成员逐层 vb6_ComGetObjectProp,
+    // 尾方法 vb6_ComCallObject。此前落 Fix 037 fallback 拼成结构体文本 (C2224)。
+    if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr
+        && node.named.empty()) {
+        // 收集链: chain[0]=最外层(方法), ... chain[n-1]=贴着基的成员
+        std::vector<const MemberAccessExpr*> chainSt;
+        const Expr* curSt = node.callee.get();
+        while (curSt && curSt->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& maC = static_cast<const MemberAccessExpr&>(*curSt);
+            chainSt.push_back(&maC);
+            curSt = maC.object.get();
+        }
+        std::string recvSt;
+        bool haveSt0 = false;
+        int stArmSt = 0;
+        if (curSt && curSt->kind == ASTNodeKind::IdentifierExpr && !chainSt.empty()) {
+            auto& oidSt0 = static_cast<const IdentifierExpr&>(*curSt);
+            std::string oLowerSt0 = Symbol::toLower(oidSt0.name);
+            bool otherSt0 = knownClassVars_.count(oLowerSt0)
+                || knownUdtVars_.count(oLowerSt0) || knownIfaceVars_.count(oLowerSt0)
+                || knownNewVars_.count(oLowerSt0);
+            if (!otherSt0) {
+                // (A) 同模块自类型过程 (无同名局部变量/对象变量/控件时)
+                if (!knownLocalVars_.count(oLowerSt0)
+                    && !knownObjectVars_.count(oLowerSt0)
+                    && !knownTypedComVars_.count(oLowerSt0)
+                    && knownFormControls_.count(oLowerSt0) == 0
+                    && !(currentProc_ && Symbol::toLower(currentProc_->name) == oLowerSt0)) {
+                    Symbol* stSym0 = symTab_.lookupModuleByKind(oidSt0.name, SymbolKind::Function);
+                    if (!stSym0) stSym0 = symTab_.lookupModuleByKind(oidSt0.name, SymbolKind::PropertyGet);
+                    if (stSym0
+                        && !stSym0->variableTypeName.empty()
+                        && Symbol::toLower(stSym0->variableTypeName) == oLowerSt0) {
+                        std::string stName0 = stSym0->name;
+                        if (stSym0->kind == SymbolKind::PropertyGet)
+                            stName0 = "prop_get_" + stName0;
+                        std::string stMod0 = stSym0->isExternal ? stSym0->sourceModule : moduleName_;
+                        recvSt = cProcName(stName0, stSym0->access, stMod0)
+                               + (isClassModule_ ? "((void*)me)" : "()");
+                        haveSt0 = true;
+                        stArmSt = 1;
+                    }
+                }
+                // (B) 跨窗体: 基是已知外部窗体名。**控件优先** —— 控件名与 typelib
+                // 类同名时 (frmMain.CommandBars: 控件 XtremeCommandBars.CommandBars
+                // vs 库里同名的 coclass) 必须发控件句柄访问器, 发过程调用 = LNK2019
+                // (该窗体根本没有那个过程)。控件不是再问自类型过程/限定键过程。
+                if (!haveSt0 && chainSt.size() >= 2
+                    && oLowerSt0 != Symbol::toLower(moduleName_)
+                    && knownFormModuleNames_.count(oLowerSt0)) {
+                    const std::string& midName0 = chainSt[chainSt.size() - 1]->memberName;
+                    std::string midLower0 = Symbol::toLower(midName0);
+                    const FrmControl* extCtrlB = findExternalFormControl(oidSt0.name, midName0);
+                    if (extCtrlB) {
+                        std::string accB = "vb6_form_ctrl_" + cIdent(oidSt0.name)
+                                         + "_" + cIdent(midName0);
+                        if (extCtrlB->controlType == FrmControlType::TreeView)
+                            externalTreeViewAccs_[accB] = accB;
+                        // 控件数组: 访问器带 (int32_t idx), 下标由外层 IndexOrCallExpr 补。
+                        recvSt = (extCtrlB->index >= 0) ? accB : (accB + "()");
+                        haveSt0 = true;
+                        stArmSt = 2;
+                    } else {
+                        bool otherMid0 = knownLocalVars_.count(midLower0)
+                            || knownFormControls_.count(midLower0);
+                        Symbol* midCls0 = symTab_.lookup(midName0);
+                        Symbol* midQk0 = symTab_.moduleScope()
+                            ? symTab_.moduleScope()->lookupLocal(oLowerSt0 + "_" + midLower0)
+                            : nullptr;
+                        if (!otherMid0
+                            && ((midCls0 && midCls0->kind == SymbolKind::ComClass
+                                 && Symbol::toLower(midCls0->name) == midLower0)
+                                || (midQk0 && midQk0->isExternal
+                                    && midQk0->kind == SymbolKind::Function))) {
+                            recvSt = cProcName(midName0, AccessLevel::Public, oidSt0.name) + "()";
+                            haveSt0 = true;
+                            stArmSt = 2;
+                        }
+                    }
+                }
+                // (C) 局部 COM 对象变量 (Dim rb As <typelib 类> 类型解析失败成 void*)
+                // **只接多级链** (chainSt.size() >= 2)。单级 `d.Exists("K")` 不归这一支管:
+                // 它落到本文件末尾那条通用晚绑定出口, 发的是交回 VARIANT 的 `vb6_ComCall`,
+                // 值语境/条件语境才能接 `vb6_ComResultToBool` / `vb6_VariantTo*`。
+                // 这一支只交对象出口 (`vb6_ComCallObject`) —— 单级也走它的话, 条件里的
+                // `If d.Exists(k)` 就成了 `if (指针)` 恒真 (test_late_cond / test_com_* 实测)。
+                if (!haveSt0 && chainSt.size() >= 2 && knownLocalVars_.count(oLowerSt0)
+                    && (knownObjectVars_.count(oLowerSt0)
+                        || knownTypedComVars_.count(oLowerSt0)
+                        || knownVariantVars_.count(oLowerSt0))) {
+                    // 账 (Outlook2013 / b216_slot_arm_answers): **Variant 槽不是指针**。
+                    // C 侧 v1 是 `vb6_VARIANT` 结构体, 直接当接收者交出去就是
+                    // `vb6_ComCallObject(v1, L"Twice", …)` ⇒ C2172 (实参不是指针) ×2。
+                    // 与 comObjectRefFromCallExpr 的兜底同一句口径: 从 Variant 取对象指针
+                    // 只走 vb6_VariantToObjectVal 这一位主人。
+                    recvSt = knownVariantVars_.count(oLowerSt0)
+                           ? ("vb6_VariantToObjectVal(" + cIdent(oidSt0.name) + ")")
+                           : cIdent(oidSt0.name);
+                    haveSt0 = true;
+                    stArmSt = 1;
+                }
+            }
+        }
+        if (haveSt0) {
+            // 中间成员逐层 GetObjectProp。链序: chain[0]=最外层(方法) ...
+            // chain[n-1]=贴基成员。(A)/(C): 贴基那位也是普通成员 → 从 n-1 起;
+            // (B): 贴基那位已被过程调用替代 → 从 n-2 起。
+            size_t midFromSt = (stArmSt == 2) ? chainSt.size() - 2 : chainSt.size() - 1;
+            std::string objSt = recvSt;
+            for (size_t i = midFromSt; i >= 1; i--) {
+                objSt = "vb6_ComGetObjectProp(" + objSt + ", L\""
+                      + escapeWideCString(chainSt[i]->memberName) + "\")";
+            }
+            std::vector<std::string> packedSt0;
+            for (size_t i = 0; i < node.positional.size(); i++) {
+                std::string packFnSt0 = comPackExpr(*node.positional[i]);
+                emitExpr(*node.positional[i]);
+                { std::string rSt0 = resolveComMarkerForPack(packFnSt0);
+                  if (!rSt0.empty()) lastExpr_ = rSt0; }
+                packedSt0.push_back(packArgValue(packFnSt0, lastExpr_));
+            }
+            std::string argsArrSt0 = "(void*[]){";
+            for (size_t i = 0; i < packedSt0.size(); i++) {
+                if (i > 0) argsArrSt0 += ", ";
+                argsArrSt0 += packedSt0[i];
+            }
+            argsArrSt0 += "}";
+            lastExpr_ = "vb6_ComCallObject(" + objSt + ", L\""
+                      + escapeWideCString(chainSt[0]->memberName) + "\", "
+                      + (packedSt0.empty() ? std::string("NULL") : argsArrSt0) + ", "
+                      + std::to_string(packedSt0.size()) + ")";
+            return;
+        }
+    }
+
     // Fix 245c: `<返回 Object/Variant 的无参 Function>.方法(args)` —— 后期绑定调用。
     // ComCtlsDemo Pager.ctl:1249 `PropBuddyControl.Move PropBuddyControl.Left,
     // PropBuddyControl.Top, …` (Pager.ctl:1203 `Private Function PropBuddyControl()
@@ -228,6 +369,21 @@
                     //   `RichTextBox1.Move 0, ToolBar1.Height, .ScaleWidth, .ScaleHeight - ToolBar1.Height`
                     if (isComMarker_) {
                         lastExpr_ = resolveComValue("Double");
+                    } else {
+                        // 账 (Outlook2013 frmInbox:224/227): Move 实参是**未声明类型的
+                        // 隐式变量** (nTop = IIf(...)) — C 侧 vb6_VARIANT 槽裸传
+                        // vb6_ControlMove 的 double 形参 (C2440 ×2)。裸标识符
+                        // (无括号/无成员链) + Variant 档 → 折 Double。
+                        const std::string& aMVarg = lastExpr_;
+                        bool bareIdentMV = !aMVarg.empty()
+                            && aMVarg.find('(') == std::string::npos
+                            && aMVarg.find('-') == std::string::npos
+                            && aMVarg.find('.') == std::string::npos
+                            && aMVarg.find('>') == std::string::npos;
+                        if (bareIdentMV
+                            && inferExprType(*node.positional[i]) == Vb6Type::Variant) {
+                            lastExpr_ = "vb6_VariantToDouble(" + aMVarg + ")";
+                        }
                     }
                     aMV[i] = std::move(lastExpr_);
                 }

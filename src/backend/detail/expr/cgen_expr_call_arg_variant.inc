@@ -84,6 +84,15 @@
             Vb6Type paramBase = static_cast<Vb6Type>(
                 static_cast<uint16_t>(calleeParams[i].type)
                 & ~static_cast<uint16_t>(Vb6Type::Array));
+            // 账 #305 第二百四十九刀: 形参按**值**要这一发 (非 Object 档), 而它走的是交回对象的
+            // 出口 —— 对象出口交回 IDispatch 指针 (那枚 VARIANT 结构体在它内部已释放), 对非对象档
+            // 又压根交回 NULL (实测 VariantChangeType(VT_I4 → VT_DISPATCH) = 0x80020005,
+            // 见 cgen_util_com.cpp 那位主人的注释) ⇒ `IFont.hFont` 这类句柄档属性读恒 0。
+            // 先换成同元的通用出口, 下面按档提取照旧。Object 形参那一头刻意不动 (在册)。
+            if (paramBase != Vb6Type::Object) {
+                std::string twin249 = comValueTwinForObjectReadExpr(argVal);
+                if (!twin249.empty()) argVal = twin249;
+            }
             bool argIsVariantArr = false;
             bool argIsVariant = isDefinitelyVariantExpr(*node.positional[i], &argIsVariantArr);
             // Fix 038b-2: 字符串级 Variant 检测回退 — 补充 isDefinitelyVariantExpr
@@ -91,8 +100,8 @@
             if (!argIsVariant && !argIsVariantArr) {
                 argIsVariant = cExprIsVariant(argVal);
             }
-            // Fix 113i: 形参是**具体类型** (String/数值/对象) 而实参是**裸 COM 结果**
-            // (vb6_ComCall / vb6_ComGetProp / vb6_ComGetObjectProp 返回 void*,
+            // Fix 113i: 形参是**具体类型** (String/数值) 而实参是**裸 COM 结果**
+            // (vb6_ComCall / vb6_ComCallByDispid / vb6_ComGetProp 返回 void*,
             // 承载一个 COM VARIANT*) — 语义即 Variant, 必须判为 Variant 才能触发
             // 下方按 paramBase 的提取 (VariantToString / VariantToLong ...).
             // 否则 void* 被裸传给 BSTR 形参, GDI+ 把垃圾指针当字符串 → 全落空,
@@ -105,11 +114,12 @@
             // vb6_ComCall( 从 cExprIsVariant 前缀表回退后, 需要在两条实参发射
             // 路径上都补回该判断 —— 本条补的是"已知形参类型"这条路径.
             if (!argIsVariant && !argIsVariantArr) {
+                // 账 #305 第二百四十九刀: 名单里撤掉那一枚交回对象指针的出口 —— 上面已经把它
+                // 换成通用出口那枚孪生; 在这一问上手抄第二份名单正是第二百四十六刀的形状。
                 bool argIsComRes113i =
                     (argVal.compare(0, 12, "vb6_ComCall(") == 0)
                     || (argVal.compare(0, 20, "vb6_ComCallByDispid(") == 0)
-                    || (argVal.compare(0, 15, "vb6_ComGetProp(") == 0)
-                    || (argVal.compare(0, 21, "vb6_ComGetObjectProp(") == 0);
+                    || (argVal.compare(0, 15, "vb6_ComGetProp(") == 0);
                 if (argIsComRes113i) argIsVariant = true;
             }
             if (argIsVariant || argIsVariantArr) {
@@ -117,11 +127,12 @@
                 // Variant — 提取前先 vb6_VariantFromComResult (同 090c0).
                 // cLogs MakeLogContent: Join(CacheDatas(i), Span) 的 CacheDatas(i)
                 // = vb6_ComCall(...) → 原生成 VariantToSafeArray1D(ComCall) C2440.
+                // 账 #305 第二百四十九刀: 同一份撤除 —— 走到这里对象出口那枚已被换成孪生的
+                // 通用出口, 再把它列进「裸 VARIANT 结果」就是把同一个问题回答两遍。
                 bool isComResultVal2 =
                     (argVal.find("vb6_ComCall(") == 0)
                     || (argVal.find("vb6_ComCallByDispid(") == 0)
-                    || (argVal.find("vb6_ComGetProp(") == 0)
-                    || (argVal.find("vb6_ComGetObjectProp(") == 0);
+                    || (argVal.find("vb6_ComGetProp(") == 0);
                 if (isComResultVal2) {
                     argVal = "vb6_VariantFromComResult(" + argVal + ")";
                 }
@@ -338,6 +349,14 @@
                 // 口径 = §B147「改道吃 AST ∪ 文本」: 下面那三枚手抄 (COM 前缀 / knownVariantVars_
                 // / Fix 089i 符号返回档) 全是 AST 那一位已覆盖的子集, 刻意**留着**当并集的另一半,
                 // 撤它们要另一格读数 (089i 对模块 Function 的 Unknown 档比 AST 宽)。
+                // 账 #305 第二百四十九刀: 这一臂与上面那条「形参类型已知」的臂同问一件事 ——
+                // 形参按**值**要这一发而它走的是交回对象的出口 ⇒ 先换成同元的通用出口 (理由与
+                // 那位主人都在 cgen_util_com.cpp)。这一臂的「形参是不是对象指针」问的是 C 档:
+                // 那张运行时签名表里唯一交回对象的是 `void*` (vb6_UnloadForm), 它照旧收裸指针。
+                if (rtParamType != "void*") {
+                    std::string twin249b = comValueTwinForObjectReadExpr(argVal);
+                    if (!twin249b.empty()) argVal = twin249b;
+                }
                 bool argIsVariant = isDefinitelyVariantExpr(*node.positional[i])
                                     || cExprIsVariant(argVal);
                 // Fix 113c: 实参是裸 COM 结果 (void* 承载 COM VARIANT*) 时, 语义即
@@ -346,17 +365,18 @@
                 // 给 BSTR/String 形参 (如 UserControl.TextWidth(cAxisItem.Item(i)))
                 // 在 C 层 void*→BSTR 隐式转换, 运行时把垃圾指针喂给
                 // GetTextExtentPoint32W 崩溃 (Charts 2020 ucChartBar_DrawVertical).
-                // 注意: 仅裸 vb6_ComCall/ComGetProp/ComGetObjectProp (返回 void*);
+                // 注意: 仅裸 vb6_ComCall/ComGetProp/ComCallByDispid (返回 void*, 承载堆上 VARIANT);
                 // vb6_ComCallInt/BSTR/Double/Object 返回具体类型, 前缀不会匹配.
                 // 此检测刻意不进 cExprIsVariant (Fix 113 已回退): 那样会让
                 // vb6_ComCall 在 ByVal Variant 打包分支 (Fix 086) 被误判为"已装箱
                 // vb6_VARIANT", 跳过 vb6_VariantFromValue 导致 void*→vb6_VARIANT C2440.
                 if (!argIsVariant) {
+                    // 账 #305 第二百四十九刀: 名单里撤掉交回对象指针的那枚出口 —— 上面已把它
+                    // 换成通用出口那枚孪生 (void* 形参那一臂压根不换, 它也不该被当成堆 VARIANT).
                     bool argIsComRes113 =
                         (argVal.compare(0, 12, "vb6_ComCall(") == 0)
                         || (argVal.compare(0, 20, "vb6_ComCallByDispid(") == 0)
-                        || (argVal.compare(0, 15, "vb6_ComGetProp(") == 0)
-                        || (argVal.compare(0, 21, "vb6_ComGetObjectProp(") == 0);
+                        || (argVal.compare(0, 15, "vb6_ComGetProp(") == 0);
                     if (argIsComRes113) argIsVariant = true;
                 }
                 // 也检查已知 Variant 变量
@@ -433,12 +453,14 @@
                     // 是 Variant 数组 → 原生成 VariantToSafeArray1D(vb6_ComCall(...))
                     // → C2440 (无法从 void* 转换为 vb6_VARIANT).
                     // 精确前缀避免误伤 vb6_ComCallInt( (返回 int32) /
-                    // vb6_ComGetStringProp( (返回 BSTR) / vb6_ComCallObject( (对象).
+                    // vb6_ComGetStringProp( (返回 BSTR).
+                    // 账 #305 第二百四十九刀: 同一份撤除的第二处 —— 交回对象指针的那枚出口既
+                    // 已在上面换成孪生的通用出口 (非 void* 形参), 就再不可能以它的原形走到这里;
+                    // 而 void* 形参那一臂要的正是那枚裸指针, 把它当堆 VARIANT 解 = 二次错读。
                     bool isComResultVal =
                         (argVal.find("vb6_ComCall(") == 0)
                         || (argVal.find("vb6_ComCallByDispid(") == 0)
-                        || (argVal.find("vb6_ComGetProp(") == 0)
-                        || (argVal.find("vb6_ComGetObjectProp(") == 0);
+                        || (argVal.find("vb6_ComGetProp(") == 0);
                     if (isComResultVal) {
                         argVal = "vb6_VariantFromComResult(" + argVal + ")";
                     }
@@ -495,7 +517,20 @@
                             argVal = "vb6_VariantToString(" + argVal + ")";
                         }
                     } else if (rtParamType == "void*") {
-                        argVal = "vb6_VariantToObjectVal(" + argVal + ")";
+                        // 账 (Outlook2013): `Unload <外部窗体名>` 的实参站在 call_arg_emit
+                        // 已交出 vb6_form_hwnd_X() (裸 HWND 指针, 非 Variant 槽); 实参名是
+                        // 窗体符号会被 argIsVariant 判真 → 旧路再包 vb6_VariantToObjectVal
+                        // ⇒ void* 进 vb6_VARIANT* 形参 (C2440, frmMain:1504 ×3)。
+                        bool formArg264u = false;
+                        if (node.positional[i]
+                            && node.positional[i]->kind == ASTNodeKind::IdentifierExpr
+                            && (callee == "vb6_UnloadForm" || callee == "vb6_LoadForm")) {
+                            formArg264u = knownFormModuleNames_.count(Symbol::toLower(
+                                static_cast<IdentifierExpr&>(*node.positional[i]).name)) != 0;
+                        }
+                        if (!formArg264u) {
+                            argVal = "vb6_VariantToObjectVal(" + argVal + ")";
+                        }
                     } else if (rtParamType == "vb6_SafeArray1D*") {
                         argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
                     }

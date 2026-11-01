@@ -19,10 +19,17 @@
     // MsgBox(prompt) -> vb6_MsgBox1(prompt)
     // MsgBox(prompt, buttons) -> vb6_MsgBox(prompt, buttons, NULL)
     if (callee == "vb6_MsgBox") {
+        // 账 #490 §B178: RTL 原型从三参扩到五参 (prompt, buttons, title, helpfile, context),
+        //   所以这里按 VB 实参个数把**缺位补齐** —— 递多递少都是 UB, 而多递那一侧
+        //   本机 cl 不报。四参形 (给了 helpfile 没给 context) 补 0, 五参形原样。
         if (node.positional.size() == 1) {
             callee = "vb6_MsgBox1";
         } else if (node.positional.size() == 2) {
-            argList += ", NULL";
+            argList += ", NULL, NULL, 0";
+        } else if (node.positional.size() == 3) {
+            argList += ", NULL, 0";
+        } else if (node.positional.size() == 4) {
+            argList += ", 0";
         }
     }
     // P26: Format 第一个参数需要包装为 vb6_VARIANT

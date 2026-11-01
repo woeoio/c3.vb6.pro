@@ -56,6 +56,24 @@ static Vb6Type cgenTypeForShadowedBuiltin(const std::string& idName) {
     return builtinFuncReturnTypeForShadowedProp(n);
 }
 
+// 账 #231: "`对象.成员` 的成员是什么类型" 的唯一出口。控件身份判定 (ctrlTypeOfMemberObject)
+// 与类型表 (controlPropType) 各只被这里问一次 —— 两个调用点 (inferExprTypeImpl 与
+// isDefinitelyVariantExpr) 都走这一格，别再各自问表。
+//
+// 宿主可以是窗体上的内建控件（单枚 / 控件数组元素），也可以是**跨模块窗体的默认实例**
+// (`frmMain.hWnd`)：后者不是控件，但它的属性同样出自 controlPropType 那张表。少了这一腿，
+// `hWnd` 会掉进"按裸成员名查模块符号"的兜底并答 Variant ⇒ 比较面把 HWND 装箱成
+// VariantObject ⇒ vb6_VarCmpLongEq 答 0 ⇒ `focused` 恒为 False ⇒ VBWolf 吞掉所有按键。
+bool CCodeGen::ctrlMemberPropType(const Expr* obj, const std::string& memberName,
+                                  Vb6Type& outType) const {
+    FrmControlType ctlType = FrmControlType::Unknown;
+    if (!ctrlTypeOfMemberObject(obj, ctlType)) return false;
+    Vb6Type pt = controlPropType(ctlType, memberName);
+    if (pt == Vb6Type::Unknown) return false;
+    outType = pt;
+    return true;
+}
+
 // --- cgen_util_type.cpp: 表达式类型推断 + Variant 判定 + 运行时参数 C 类型 ---
 
 
@@ -384,11 +402,8 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             // 以前根本不进这条规则, 掉进同一个坑 (账 #229)。
             // 只认内建控件类型: 工程内 .ctl 宿主同名属性由它自己的符号表说话 (表内那道闸)。
             {
-                FrmControlType ctlType = FrmControlType::Unknown;
-                if (ctrlTypeOfMemberObject(ma.object.get(), ctlType)) {
-                    Vb6Type pt = controlPropType(ctlType, ma.memberName);
-                    if (pt != Vb6Type::Unknown) return pt;
-                }
+                Vb6Type pt = Vb6Type::Unknown;
+                if (ctrlMemberPropType(ma.object.get(), ma.memberName, pt)) return pt;
             }
             // P24-12: Err对象特殊处理
             if (ma.object && ma.object->kind == ASTNodeKind::IdentifierExpr) {
@@ -816,6 +831,16 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                 }
             }
             // 符号表查找成员 (Property/Function)
+            // Same table as inferExprType: a built-in control, or a cross-module form
+            // default instance (`frmMain.hWnd`). Without this the bare-member-name
+            // fallback below answers Variant for `hWnd`, the compare boxes the HWND as
+            // VariantObject and vb6_VarCmpLongEq yields 0 -> `focused` is always False
+            // -> every KeyHit is swallowed (VBWolf title screen ignores the keyboard).
+            {
+                Vb6Type pt = Vb6Type::Unknown;
+                if (ctrlMemberPropType(ma.object.get(), ma.memberName, pt))
+                    return pt == Vb6Type::Variant;
+            }
             auto* memSym = symTab_.lookupModule(ma.memberName);
             // 关键差异: memSym==null (UDT 字段访问或外部类成员) 视为非 Variant
             return checkSym(memSym);
@@ -1004,7 +1029,9 @@ std::string CCodeGen::builtinNoParamTableFormalCType(const std::string& callee, 
         {"vb6_SaveSetting",   {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key, setting)
         {"vb6_DeleteSetting", {"BSTR", "BSTR", "BSTR"}},           // (app, section[, key])
         {"vb6_GetAllSettings", {"BSTR", "BSTR"}},                  // (app[, section])
-        {"vb6_MsgBox",        {"BSTR", "int32_t", "BSTR"}},        // 1 = buttons; helpfile/context
+        {"vb6_MsgBox",        {"BSTR", "int32_t", "BSTR", "BSTR", "int32_t"}},  // 账 #490 §B178:
+                                                                    //   1 = buttons; 3/4 = helpfile/context
+                                                                    //   (原型已收满五参, 缺位由 conv_output 补)
                                                                     //   两形 C 出口不收 (MsgBox1)
         {"vb6_InputBox",      {"BSTR", "BSTR", "BSTR", "int32_t", "int32_t", "BSTR", "int32_t"}},
         {"vb6_SendKeys",      {"BSTR", "int32_t"}},                // 1 = wait
@@ -1116,6 +1143,44 @@ bool CCodeGen::cExprIsVariantSlotFieldRead(const std::string& cExpr) const {
     static const std::string tail = " field variant */";
     return cExpr.size() >= tail.size()
         && cExpr.compare(cExpr.size() - tail.size(), tail.size(), tail) == 0;
+}
+
+// 账 #305 第二百四十四刀: 「这发交回的 C 是不是裸晚绑定调用的结果」—— 唯一主人。
+//   口径 = 位置 0 的严格前缀 (不剥外层括号, 见 cgen_helpers.inc 那两条声明的理由)。
+// 账 #305 第二百四十六刀: 名单从四条缩成三条 —— 撤掉属性读那枚交回**对象指针**的出口。
+//   理由不是新决定的: 「哪个 COM 出口交回的是 calloc 出来的 VARIANT 包装、哪个交回的是对象本身」
+//   这一问在账 #255 就有一位主人 (comObjectRefFromCallExpr, 它的注释直接写着那两个交回对象的
+//   出口「不在清单里, 再套一层就错」)。本名单与它必须同答: 把交回对象指针的那一枚递进
+//   vb6_ComResultToBool = 拿 IDispatch* 当 VARIANT* 解引用, 还顺手 free 一个 COM 指针。
+//   ⚠ 哨兵 R3 钉住这一点: 名单里恰好三条带引号的前缀, 属性读那一枚出现即红。
+bool CCodeGen::cExprIsBareComResult(const std::string& cExpr) const {
+    static const char* const kLateCallResults[] = {
+        "vb6_ComCall(",
+        "vb6_ComCallByDispid(",
+        "vb6_ComGetProp(",
+    };
+    for (size_t i = 0; i < sizeof(kLateCallResults) / sizeof(kLateCallResults[0]); ++i) {
+        std::string lit(kLateCallResults[i]);
+        if (cExpr.size() >= lit.size() && cExpr.compare(0, lit.size(), lit) == 0) return true;
+    }
+    return false;
+}
+
+// 账 #305 第二百四十四刀: 「把这条 C 表达式折成 VB6 的真值测试」的唯一主人。
+//   落地前只有装箱那一站 (boxToVariant) 认得「裸晚绑定调用」这一档; 条件那一族问的是
+//   cExprIsVariant (认「是不是槽」), 而那一头发出去的是指针 ⇒ 答否 ⇒ 一行都不包 ⇒
+//   if (ptr) 恒真 (真语料按产物 82 处 / 27 份文件, 读数见账 #305 第二百四十三刀)。
+std::string CCodeGen::conditionTruthExpr(const std::string& cExpr, Expr* cond) const {
+    if (cExprIsBareComResult(cExpr)) return "vb6_ComResultToBool(" + cExpr + ")";
+    bool isVar = cExprIsVariant(cExpr);
+    if (!isVar && cond && cond->kind == ASTNodeKind::IdentifierExpr) {
+        std::string low = Symbol::toLower(static_cast<IdentifierExpr&>(*cond).name);
+        if (knownVariantVars_.count(low)) isVar = true;
+    }
+    if (isVar && cExpr.find("vb6_VariantToBool(") == std::string::npos) {
+        return "vb6_VariantToBool(" + cExpr + ")";
+    }
+    return cExpr;
 }
 
 bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
@@ -1555,6 +1620,20 @@ bool CCodeGen::isWholeArrayRef(const Expr* e) const {
         std::string bareLower = Symbol::toLower(bare.name);
         if (knownVariantVars_.count(bareLower) || knownObjectVars_.count(bareLower))
             return false;
+        // 账 #305 第二百四十九刀: 名册是按**名字**收集的、且跨过程不清空 ⇒ 同一模块里
+        //   另一过程的同名数组会把**本过程这一枚标量**也答成数组。整枚数组那一形问的是
+        //   「这一枚槽的 C 是不是一枚载体指针」, 所以「本过程这一枚声明成什么」排在名册之前。
+        //   实测 ComCtlsDemo Builds/ToolBar/ToolBar.ctl —— 同一文件里两处同名:
+        //     1058 UserControl_WriteProperties 内 `Dim Count(0 To 1) As Long`   (定长数组)
+        //     1185 UserControl_Resize         内 `Dim dwStyle As Long, Count As Long`  (标量)
+        //   ⇒ 1195 `Count = CLng(SendMessage(ToolBarHandle, TB_BUTTONCOUNT, 0, ByVal 0&))`
+        //   发成 `Count = vb6_ArrayAssign1D(NULL, vb6_CLng(...))` —— 一枚 int32_t 收一枚
+        //   载体指针, 而第二实参是**按钮数那个整数** ⇒ RTL 里按 SafeArray1D* 解它
+        //   = `av read target=0x9` 当场崩 (栈: TbrButtons_Add → FButtonsAdd →
+        //   UserControl_Resize → vb6_ArrayAssign1D, 主窗体创建途中, 窗口根本没出来)。
+        //   只否决「本过程明确声明它是非数组」这一种, 不新增第三种答案: 名册那条路一字不变
+        //   (模块级数组 / 形参数组 / 没走 Dim 的循环变量都还从 knownArrays_ 那一问走)。
+        if (procNonArrayLocalVars_.count(bareLower)) return false;
         if (knownArrays_.count(bareLower)) return true;
         Symbol* bsym = symTab_.lookupModule(bare.name);
         return bsym && bsym->kind == SymbolKind::Variable && bsym->isArray;
@@ -1585,6 +1664,53 @@ bool CCodeGen::isArrayCarrierArgName(const std::string& lowerName,
     if (arrayClassElemTypes_.count(lowerName)) return false;
     if (cExprIsVariant(cExpr)) return false;
     return true;
+}
+
+// 账 #305 §B164 (第二百五十三刀): 「这一枚实参文本是不是『形参那一档的确切元素左值』」收成一处。
+// `VB6_SA_AT(<T>, arr, i)` / `VB6_SA_ND_AT2(<T>, arr, i, j)` 展开就是 `(*(T*)元素指针)` ——
+// 元素**自己**是可寻址左值, 该把那一格的地址交出去。在这一问存在之前, 本仓只认「元素后面还挂
+// 字段」那一形 (Fix 113f), 裸元素于是落进复合字面量: 递出去的是元素**当前值的副本指针**, 而被调方
+// 按 ByRef 退旧 (`vb6_BSTR_Assign(&(*p), …)` = 先 free 旧值再存新) 退掉的就是数组元素自己那一枚
+// ⇒ 写回落进没人看的临时量 (VB6 该填进 `StrArr(r,c)`) + 元素指针原地被 free ⇒ 下次读它
+// use-after-free、下次写它双放 = 堆损坏同形。实测靶工程 VBFlexGrid.ctl 那一族 BSTR 档 48 处、
+// int32_t 档 2 处 (五份整工程产物数出来的)。
+// 只许在「元素档逐字等于形参那一档」时答是 —— 否则 & 出来是一枚错型指针。挂字段那一形归 Fix 113f。
+std::string CCodeGen::byRefElementAddressExpr(const std::string& argText,
+                                              const std::string& formalCType) const {
+    if (argText.empty() || formalCType.empty()) return std::string();
+    static const char* const kElemMacros[] = {
+        "VB6_SA_AT(", "VB6_SA_ND_AT2(", "VB6_SA_ND_AT3(", "VB6_SA_ND_AT4("
+    };
+    const size_t nMacros = sizeof(kElemMacros) / sizeof(kElemMacros[0]);
+    for (size_t m = 0; m < nMacros; ++m) {
+        const std::string head(kElemMacros[m]);
+        if (argText.compare(0, head.size(), head) != 0) continue;
+        // 元素档 = 宏头之后到第一个**顶层**逗号; 右括号必须正好收在整枚文本末尾。
+        int depth = 1;                       // head 末尾那枚 '(' 已经吃进去
+        size_t comma = std::string::npos;
+        size_t close = std::string::npos;
+        for (size_t i = head.size(); i < argText.size(); ++i) {
+            const char ch = argText[i];
+            if (ch == '(') {
+                ++depth;
+            } else if (ch == ')') {
+                --depth;
+                if (depth == 0) { close = i; break; }
+            } else if (ch == ',' && depth == 1 && comma == std::string::npos) {
+                comma = i;
+            }
+        }
+        if (comma == std::string::npos || close == std::string::npos) return std::string();
+        if (close + 1 != argText.size()) return std::string();
+        std::string elem = argText.substr(head.size(), comma - head.size());
+        const size_t b = elem.find_first_not_of(" \t");
+        const size_t e = elem.find_last_not_of(" \t");
+        if (b == std::string::npos) return std::string();
+        elem = elem.substr(b, e - b + 1);
+        if (elem != formalCType) return std::string();
+        return "&(" + argText + ")";
+    }
+    return std::string();
 }
 
 // Fix 178: callee 是「UDT 的动态数组成员」(`.Cols` / `Default.Cols`) 时返回 true,

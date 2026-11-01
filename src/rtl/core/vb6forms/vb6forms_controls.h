@@ -110,11 +110,43 @@ void* vb6_AxContainer_CreateExtender(void* hwndForm, const wchar_t* ctrlName);
 // BeginPaint/EndPaint 之间调用 (IViewObject::Draw).
 void vb6_OcxHost_PaintAll(void* hwndForm, void* hdc);
 
+// 账 (Outlook2013): 容器 Extender 的账 —— VB6 的 `控件.Visible / .Left/.Top/.Width/
+// Height / .Move` 落在控件**窗口**上, 但 C3 生成码把它们当"原生控件"发给拿 HWND 的
+// RTL 出口, 实参却是控件对象 (IDispatch*) ⇒ IsWindow() 判假、静默不动作。
+// 下面三位按控件对象反查站点:
+//   vb6_OcxHost_WindowOf   → 控件激活后的窗口 (windowless 返回 NULL);
+//   vb6_OcxHost_GetVisible → 1 = 是托管控件 (结果写 *outVisible);
+//   vb6_OcxHost_SetVisible → 1 = 已按容器语义处理 (ShowWindow / 站点标记)。
+//   vb6_OcxHost_SyncRects  → 把控件窗口**当前**矩形补发给 IOleInPlaceObject::
+//                            SetObjectRects (OCX 依它重排客户区); 1 = 是托管控件。
+//   vb6_OcxHost_GetRect / SetRect → windowless 控件没有窗口, 容器的几何账落在站点
+//                            的 rcCtrl (像素, 相对 hwndForm 客户区); 1 = 命中。
+void* vb6_OcxHost_WindowOf(void* ctlDisp);
+// 按 (窗体, 实例名) 反查托管控件对象 (容器 Extender 的几何/Move 用); 没有返回 NULL
+void* vb6_OcxHost_DispByName(void* hwndForm, const wchar_t* name);
+// 反向: 窗口(含 Codejock 内部子窗口/外层容器) → 宿主托管控件 IDispatch; 不是控件的窗口返回 NULL
+void* vb6_OcxHost_DispatchOf(void* hwndOrCtl);
+// 把该窗体上**无窗口**的站点控件对象补进 Controls 集合 (有窗的已由窗口枚举覆盖); 返回补入个数
+int32_t vb6_OcxHost_CollectWindowless(void* hwndForm, void** out, int32_t max);
+// 控件类名 (站点创建时按 CLSID 的注册 ProgID 记下); 1 = 确实是本宿主托管的 OCX 控件
+int32_t vb6_OcxHost_TypeNameOf(void* hwndOrCtl, wchar_t* out, int32_t cch);
+int32_t vb6_OcxHost_GetVisible(void* ctlDisp, int32_t* outVisible);
+int32_t vb6_OcxHost_SetVisible(void* ctlDisp, int32_t visible);
+int32_t vb6_OcxHost_SyncRects(void* ctlDisp);
+int32_t vb6_OcxHost_GetRect(void* ctlDisp, int32_t out[4], void** outForm);
+// windowless 那条路的几何出口: 站点账本(像素)按容器 ScaleMode 折成用户单位; slot = VB6_GEOM_*
+int32_t vb6_OcxHost_GetUserCoord(void* ctlDisp, int32_t slot);
+int32_t vb6_OcxHost_SetRect(void* ctlDisp, int32_t x, int32_t y, int32_t w, int32_t h, int32_t mask);
+
 // Fix <vbeclipse> 2026-10-07: 窗体 AutoRedraw=True 时, 把记忆 DC (VB6_AutoRedrawDC)
 // 整块 BitBlt 到屏幕 DC — VB6 语义: AutoRedraw 窗体的所有 GDI 绘制先落记忆位图,
 // WM_PAINT 再把记忆位图刷上屏 (见 3DMenu: 每 10ms 把环形图标合成进 Me.hdc, 靠窗体
 // WM_PAINT 镜像可见)。无 ARDC 时不动作 (非 AutoRedraw 窗体走原生直绘)。
 void vb6_FormPaintBlitAutoRedraw(void* hwndForm, void* hdc);
+
+// 账 #305 第二百八十刀: 窗体自己的 WndProc 答「这枚窗口现在用什么字体」那一问。
+// 答案住在 vb6forms_ctrl.c 那位只读主人里（自注册的窗口类答不了；DefWindowProc 也不记，见探针实测）。
+void* vb6_FormAnswerGetFont(void* hwnd);
 
 // ============================================================
 // Fix 112: in-project UserControl (.ctl) instance host + form/control host object model
@@ -233,6 +265,16 @@ typedef struct vb6_UserControlDesc {
     // 没有这一槽时 .ctl 里的 UserControl_Click 是死码 —— Charts 六枚 UC 的
     // `RaiseEvent Click` 全写在那里, 于是容器侧的 ucX_Click 一条都收不到。
     void      (*click)(void* me);
+
+    // ---- BackStyle = 0 'Transparent' (只许追加到末尾) ----
+    // VB6 里 `.ctl` 声明 `Windowless = -1` + `BackStyle = 0` 时, 控件没有自己的
+    // 窗口, 画面直接叠在容器上 ⇒ 兄弟控件 (Charts 2020 的白色卡片) 从文字底下
+    // 透出来。C3 的 UC 恒是真子窗口 (WS_CLIPSIBLINGS), 兄弟窗口不会画进本窗
+    // 矩形, 所以宿主得自己在离屏 DIB 里补下层: 先铺 ambient 底色, 再按 z 序把
+    // 位于本窗之下且相交的兄弟窗口用 WM_PRINTCLIENT 画进来, 最后才跑
+    // UserControl_Paint。0 = Opaque (VB6 缺省: 旧 cgen 不发此槽 ⇒ 补 0 ⇒ 行为
+    // 与改动前逐字节一致), 1 = Transparent。
+    int32_t     transparent;
 } vb6_UserControlDesc;
 
 // .ctl module self-registration (type name case-insensitive, duplicate ignored)
@@ -264,6 +306,8 @@ void vb6_UC_RefreshCurrent(void);
 void vb6_HostObj_Register(void* hwnd, const char* name, const char* vbTypeName,
                           int32_t isForm, int32_t index);
 int32_t vb6_Host_IsHostObject(void* obj);
+// 账 #305 第二百六十二刀 (丙): 宿主模型「不认识的成员」计数 (见 uc_hostmodel.c)。
+int32_t vb6_Host_UnknownMemberCount(void);
 const wchar_t* vb6_Host_TypeNameOf(void* obj);
 int32_t vb6_Host_GetProp(void* obj, const wchar_t* name, void* outVariant);
 int32_t vb6_Host_SetProp(void* obj, const wchar_t* name, const void* inVariant);
@@ -276,6 +320,8 @@ void  vb6_UC_SetPendingFont(void* f);
 // UserControl_InitProperties —— 见 uc_host.c 的说明。置位方 = 窗体创建代码;
 // ucHostInit 入口消费(读后清零), 由 cgen 生成的 ucHostInit 读取。
 void  vb6_UC_SetSkipInitProps(int v);
+/* 账 #305 第二百五十八刀: UserControl.InvisibleAtRuntime —— 置 1 时宿主记录照建, 但一个窗口都不建 */
+void  vb6_UC_SetWindowless(int v);
 int   vb6_UC_SkipInitPropsConsume(void);
 // Fix <vbeclipse> 第十二层: 加载路径的 Show/Resize 推迟到 ReadProperties 之后再补齐
 // (VB6 顺序 Initialize → ReadProperties → Show/Resize)。窗体创建代码在 UC_ReadProps
@@ -316,9 +362,29 @@ void  vb6_UC_BagPutBin(void* bag, const wchar_t* name, const char* bytes, int32_
 // Fix 125: 字体对象身份判定 + 字段定位 (供 COM 属性读写层直接操作字体字段)
 int32_t vb6_UC_IsFont(const void* p);
 void*   vb6_UC_FontField(void* p, const wchar_t* name, int32_t* kind);
+/* 账 #305 第二百七十六刀: 「八档 → LOGFONT」唯一主人 (fontFields = 那八档结构体本身,
+   不是代理; dpi/quality 由调用方递) + `Font.hFont` 的那枚缓存句柄 (代理或八档皆可问)。
+   vb6rtl_com.c 那位调用方不 include 本头, 就地 extern (与 vb6_ScalePxToUser 同款)。 */
+void    vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut);
+/* 账 #305 第二百七十七刀: 「磅 → 像素」(lfHeight) 那一问的唯一主人, 三处调用方都问它。 */
+int32_t vb6_UC_FontHeightPx(double pt, int32_t dpiY);
+/* 账 #305 第二百七十八刀: 把一枚字体的答案发到窗口上 (UC 宿主窗口 / 窗体顶层创建期那两站)。
+   fontFields = NULL 就是 VB6 的默认档; 真正的发 / 存 / 删在 vb6forms_ctrl.c 那一位主人里。 */
+void    vb6_UC_ApplyFontToWindow(void* hwnd, const void* fontFields);
+void*   vb6_UC_FontHFont(void* p);
 // Fix 168: Extender 结构体同上 (With UserControl.Extender 的 Width/Height/Align)
 int32_t vb6_UC_IsExtender(const void* p);
 void*   vb6_UC_ExtenderField(void* p, const wchar_t* name, int32_t* kind);
+/* 账 #305 第二百八十七刀: 存完这一格之后, 「要落到宿主窗口上」由这一位主人答 (两处写手共用一条)。
+   它不出现在生成代码里, 所以 §B202 那张按名点名的名单不涉及它。 */
+void    vb6_UC_ExtenderVisibleApplied(void);
+/* 账 #305 第二百九十二刀: Extender 几何的写手 (属性形; 方法形 `.Extender.Move` 仍刻意未接)。 */
+void    vb6_UC_ExtenderGeomApplied(const wchar_t* name);
+
+/* 账 #305 第二百八十九刀: vbContainerPosition(9)/vbContainerSize(10) 那两档要问容器的
+   ScaleMode —— 交回这一位 (uc_controls.c), 问不到答 0 由调用方保留原档。
+   这个名字不发进用户 TU ⇒ §B202 那张按名点名的名单不涉及它。 */
+int32_t vb6_UC_ContainerScaleModeCurrent(void);
 // Fix 128: 原地把 src 字体的字段拷进 dst 字体 (用于 Property Set 型字体属性,
 // 避免调用其 Set 实现体里的 Refresh 破坏图表状态)
 void    vb6_UC_FontAssign(void* dst, void* src);
@@ -342,6 +408,11 @@ void* vb6_UC_ControlsItem(void* coll, int32_t index);
 void* vb6_UC_Controls(void);
 void* vb6_UC_ControlsEnumInit(void* coll);
 int32_t vb6_UC_ControlsEnumNext(void* enumPtr, void* outVariant);
+// 账 #305 第二百六十四刀: 同上一条的病, 在 ParentControls 这一枚上复发过一次 —— 它的声明
+// 只进了内部头 vb6forms_uc_internal.h, 而生成代码经 vb6forms.h 伞头看不见那一份。
+// 实测 = ComCtlsDemo 6 份产物 TU 各报一声 C4013, 交回的单例地址被按 int 折成 32 位再符号
+// 扩展 (崩溃日志 av read target=0xfffffffff8cc8958, 低 32 位落在 .data) ⇒ 野接收者进晚绑定出口。
+void* vb6_UC_ParentControls(void);
 // Windows VARIANT <-> vb6_VARIANT conversion + cleanup (used inside vb6com_* hooks)
 void vb6_Host_ToWinVariant(const void* inV, void* outV);
 void vb6_Host_FromWinVariant(const void* inV, void* outV);

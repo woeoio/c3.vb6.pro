@@ -83,11 +83,29 @@
             if (!projectModNames.count(nm)) externalModules.push_back(nm);
         }
 
+        // 账 #305 第318刀 (账 #594): 与 cProcName 同一条条件 —— externalModules 为空
+        //   （本工程只有这一枚发码模块）且不是类模块时，本模块的函数发**裸名** vb6_<proc>；
+        //   预扫描只登记了 vb6_<模块>_<proc> / vb6_pv_<proc> 两形，裸名这一支从没进过
+        //   variantReturnFuncs ⇒ 单模块工程的 Variant 函数被 cExprIsVariant 当裸标量：
+        //   `Select Case TagVal()` 发 `BSTR v = vb6_TagVal();`（cl C2440），
+        //   `l = VariantFn()` 少一次解包（§B148 同形）。
+        if (externalModules.empty() && !module->isClassModule) {
+            auto bareIt = variantBareProcNames.find(module->moduleName);
+            if (bareIt != variantBareProcNames.end()) {
+                for (const auto& bareProc : bareIt->second) {
+                    variantReturnFuncs.insert("vb6_" + bareProc);
+                }
+            }
+        }
+
         // 调用C代码生成器
         // Fix 023: 传入 void* 字段表供 cgen_expr.cpp fallback 路径查询
         CCodeGen cgen(*diag_, analyzer->symbolTable(), analyzer->typeSystem(),
                       &classVoidFieldMap, &classTypedFieldMap, &variantReturnFuncs, options.verbose);
         cgen.setFormModuleNames(formModuleNames);  // Fix 086: 跨模块窗体默认实例引用
+        // 账 #305 第320刀 (账 #592): App.Title 真值 = .vbp 的 Title（空则工程 Name）。
+        // 单文件编译（无 .vbp）时为空 ⇒ 入口点一行不发，读取侧退 EXEName（旧口径）。
+        cgen.setProjectTitle(!verTitle_.empty() ? verTitle_ : vbpProjectName_);
         cgen.setStartupObject(startupObject);      // Fix 142: 启动对象 (入口点归属模块)
         cgen.setModulePublicConsts(&modulePublicConsts);  // Fix 086: 跨模块常量内联
         cgen.setDesignerFiles(&frmFiles_);  // Fix 112: 工程内 UserControl 设计器描述

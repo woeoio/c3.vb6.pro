@@ -25,6 +25,7 @@ constexpr std::uint32_t kOrdinalPrefix     = 0x0000FFFFu;  // LOWORD==0xFFFF ⇒
 constexpr std::size_t   kMinHeaderSize     = 32;
 
 constexpr std::uint16_t kRtManifest            = 24;
+constexpr std::uint16_t kRtGroupIcon           = 14;
 constexpr std::uint16_t kManifestAsApp         = 1;
 constexpr std::uint16_t kManifestIsolated      = 2;
 
@@ -87,6 +88,7 @@ bool ResFileProbe::scan(const std::uint8_t* data, std::size_t size) {
             if      (nameOrd == kManifestAsApp)    hasAppManifest = true;
             else if (nameOrd == kManifestIsolated) hasIsolatedManifest = true;
         }
+        if (typeIsOrd && typeOrd == kRtGroupIcon) hasIconGroup = true;
 
         if (dataSize == kDirOrStringMarker) { pos = cur; continue; }   // 目录项无数据
         if (dataSize > size - cur) { why = "数据长度越过文件尾"; return false; }

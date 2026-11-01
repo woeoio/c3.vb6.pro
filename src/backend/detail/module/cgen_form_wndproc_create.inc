@@ -19,7 +19,10 @@
     // Fix <vbeclipse> 2026-10-07: AutoRedraw=True 的窗体, GDI 合成 (Form.hdc) 全部落进
     // 记忆 DC, WM_PAINT 必须先把记忆位图刷上屏 (VB6 语义; 3DMenu 每 10ms 旋转合成一次
     // Me.hdc, 缺这步画面恒为零)。非 AutoRedraw 窗体无 ARDC, helper 直接 no-op。
-    c_.emitLine("vb6_FormPaintBlitAutoRedraw((void*)hwnd, (void*)_vb6_hdc);  /* Fix <vbeclipse>: AutoRedraw 记忆 DC 上屏 */");
+    c_.emitLine("vb6_FormPaintBlitAutoRedraw((void*)hwnd, (void*)_vb6_hdc);  /* Fix <vbeclipse>: AutoRedraw 记忆 DC 上屏 */");    // 账 #305 第二百九十二刀: VB6 实测 z 序 —— TabStrip 永远在页控件 (Picture3 那一层)
+    // 下面。C3 按创建顺序排, TabStrip 的宿主窗口压在 Picture3 上, 整页控件被白底盖掉
+    // (ComCtlsDemo 第二页整块空白)。helper 每个窗体只沉一次。
+    c_.emitLine("vb6_UC_SinkTabBackdrops((void*)hwnd);  /* TabStrip 沉底 (VB6 z 序) */");
     if (std::getenv("C3_OCX_NO_PAINT") == nullptr) {
         c_.emitLine("vb6_OcxHost_PaintAll((void*)hwnd, (void*)_vb6_hdc);  /* Fix 143d: 无窗口/窗口化 OCX 绘制 */");
     }
@@ -38,6 +41,16 @@
     c_.emitLine("break;");
     c_.dedent();
     c_.emitLine("}");
+    c_.dedent();
+
+    // 账 #305 第二百八十刀: 窗体顶层本人答字体那一问 —— 参考那台 ThunderRT6FormDC 答
+    // -13/MS Sans Serif，我们这枚从前只有第二百七十八刀存下的那一格、没人答（探针实测
+    // DefWindowProc 不记 WM_SETFONT）。答案走唯一那位只读主人，发码这边不自己读那一格。
+    c_.indent();
+    c_.emitLine("case WM_GETFONT:");
+    c_.indent();
+    c_.emitLine("return (LRESULT)(INT_PTR)vb6_FormAnswerGetFont((void*)hwnd);");
+    c_.dedent();
     c_.dedent();
 
     // WM_CREATE: 创建控件
@@ -272,7 +285,13 @@
         c_.emitLine("vb6_formLoaded_" + cIdent(formName) + " = 1;");
         {
             std::string resizeFnLoad = cProcName("Form_Resize", AccessLevel::Private);
-            if (symTab_.lookup(formName + "_Resize") || symTab_.lookup("Form_Resize")) {
+            // 守卫只认**本模块自有**的处理器 (与 show/dispatch 两处同批) ——
+            // 裸名 lookup 命中跨模块注入的别家 Form_Resize ⇒ LNK2019。
+            auto hasOwnResizeCr = [&](const char* nm) -> bool {
+                Symbol* sCr = symTab_.lookupModule(nm);
+                return sCr && !sCr->isExternal;
+            };
+            if (hasOwnResizeCr((formName + "_Resize").c_str()) || hasOwnResizeCr("Form_Resize")) {
                 c_.emitLine("{ extern void " + resizeFnLoad + "(); " + resizeFnLoad + "(); }");
             }
         }
@@ -527,22 +546,40 @@
     }
     // Fix 142: 容器(Frame/PictureBox)内子控件 — ID 从 200 起, DFS 顺序与
     // cgen_form_frame_menu.inc 的创建循环完全一致 (跳过 Menu 与无 Win32 类控件).
+    //
+    // 账 #305 第三百六刀 (第二格): 这一趟的「谁算容器 / 谁占一个号」必须与创建那一趟
+    // **逐格对齐**, 否则 id 会错位、UC 容器里的按钮干脆没有派发。实测 ComCtlsDemo
+    // MainForm 的 CoolBar1 是**工程内 UserControl 容器**, 里面的原生按钮 Command4
+    // ("Pager Demo") 由创建侧照常给了 id=201, 而这里原来只认 Frame/PictureBox/SSTab
+    // ⇒ 既不进 CoolBar1, 也不给 UC 子控件占号 ⇒ Command4_Click 定义了却无人调用,
+    // 点下去什么也不发生 (参考那台弹 "Pager Demo")。
+    // 口径与创建侧同源 (账 #167 那条): 容器 = controlIsContainerType || findUserControlSpec;
+    // 占号 = UC 子控件也占 (创建侧同样 childCtrlId++)。
     {
+        auto isContainerLike306 = [&](const FrmControl& c) {
+            return controlIsContainerType(c) || findUserControlSpec(c.controlTypeName) != nullptr;
+        };
         int childCmdId142 = 200;
         auto walkCmdChildren142 = [&](auto&& self, const FrmControl& container) -> void {
             for (const auto& child : container.children) {
                 if (child.controlType == FrmControlType::Menu) continue;
+                // 工程内 UserControl 子控件: 创建侧占号, 事件走 UC 自己那条 sink。
+                if (findUserControlSpec(child.controlTypeName)) {
+                    childCmdId142++;
+                    if (!child.children.empty()) self(self, child);
+                    continue;
+                }
                 const char* childClass142 = FrmParser::controlTypeToWin32Class(child.controlType);
                 if (!childClass142) continue;
                 emitCommandDispatch142(child, childCmdId142);
                 childCmdId142++;
-                if (!child.children.empty() && controlIsContainerType(child)) {   // 账 #167: 原来少认 SSTab
+                if (!child.children.empty() && isContainerLike306(child)) {   // 账 #167: 原来少认 SSTab
                     self(self, child);
                 }
             }
         };
         for (const auto& ctrl : frmDesc.formControl.children) {
-            if (!ctrl.children.empty() && controlIsContainerType(ctrl)) {   // 账 #167: 原来少认 SSTab
+            if (!ctrl.children.empty() && isContainerLike306(ctrl)) {   // 账 #167/#305-306: 含 UC 容器
                 walkCmdChildren142(walkCmdChildren142, ctrl);
             }
         }

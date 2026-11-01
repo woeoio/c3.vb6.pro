@@ -82,6 +82,13 @@
     void emitVariantSlotAssign(const std::string& target, Expr* rhs,
                                const std::string& value, bool udtFieldSlot);
 
+    // 账 #305 §B164 形⑤ 站③ (第一百八十四刀): 「这一发赋值的目标是不是一枚 Variant 槽」——
+    // AssignmentStmt 与 LetStmt 两站共用这一位主人 (原先只在 AssignmentStmt 里内联了一份)。
+    // 判据依序 = 裸名/本模块类成员表 / 目标标识符名 / `VB6_SA_*(vb6_VARIANT, …)` 下标宏 /
+    // UDT 的 Variant 字段 / `<对象>.<类的公共 Variant 字段>`; 命中 `udtField` 时交回 true
+    // (调用方据此选深拷贝槽位语义)。false = 不是槽, 调用方维持自己原来的路。
+    bool variantSlotTargetOf(const Expr* target, const std::string& targetText, bool& udtField);
+
     // 账 #305 §B166 (第五十六刀): 「这一次调用现造的 ParamArray 数组, 出口该销毁」收成这一枚 ——
     // Sub/Function/Property 三个过程出口各调一次, 站点不许再各自抄那三行。
     void emitParamArrayReclaim(const std::vector<std::unique_ptr<ParameterDecl>>& params);
@@ -186,7 +193,10 @@
     std::string makeProcSignature(SubDecl& node);
     // 账 #222: 事件处理器的 ABI 与"这枚处理器的首形参是不是元素号"两处判断的唯一实现。
     void applyEventHandlerAbi(SubDecl& node);
-    bool prepareEventHandlerProc(Module& mod, const std::string& loweredName);
+    // 账 #305 256: evtByAddr = 事件声明里每一位形参要不要保住 ByRef（emitEventSink/thunk/
+    // 处理器三处同问 src/common/event_param_abi.hpp 那一位主人）
+    bool prepareEventHandlerProc(Module& mod, const std::string& loweredName,
+                                 const std::vector<char>& evtByAddr);
     std::string makeProcSignature(FunctionDecl& node);
 
     // ai/vb-asm-extension-spec: 过程体 = 单个 Asm 块时降级为独立 MASM 过程 (v1: x64/ml64)。
@@ -374,6 +384,13 @@
     void scanLocalArrayEscapes(const StmtList& body);
     void emitIvrefScopeRelease();                     // B05: 过程出口发 Release
     std::string ivrefCType(const std::string& typeName);   // 空串 = 不是新式接口
+    // 账 #305 第二百零四刀: 「一枚**工程类实例**怎么交进视图槽」那一发形状的唯一主人
+    // (`&(实例)->__iv_<I>`)。今天问同一件事的三站 = Set 覆写那一站 (cgen_setlet_set_rhs.inc)、
+    // Set 按名那一站 (cgen_setlet_set_prop.inc)、ByRef 视图形参的实参站 (deliverToClassSlot)，
+    // 三站都调它 = 同一个答案；谁再自己拼一遍 `->__iv_`，就是同一形状的第二位作者
+    // (哨兵 check_iface_view_authority 钉这一发的作者数)。
+    std::string ivrefInstanceViewExpr(const std::string& ifaceName,
+                                      const std::string& instExpr, bool nullable) const;
     const IfaceView* ivLookupIface(const std::string& written);
     // 账 #305 §B221/#449 (§B222): 「这一枚表达式的值**已经是接口视图薄指针**
     // (vb6_ivref_<I>*)了吗」 —— 这一问只许住在这里。答「是」时给接口名，答「不是」
@@ -388,6 +405,10 @@
     // 账 #305 新账 #471 (第一百七十四刀): 同一次查表的**带名字**那一档 (不是视图 ⇒ 空串)。
     // 上面那句问句是这一句的投影 ⇒ 名册只这一处读。For Each 那一站 (站A) 是唯一要名字的读者。
     std::string slotLegacyIfaceViewName(const std::string& nameLower) const;
+    // 账 #305 第二百一十七刀: 「一枚值结构体槽怎么清成空」那一发的唯一主人 (整枚零化，不退旧)。
+    // 两位消费者 = 类工厂字段初始化 (注: 不写 note，发的是它今天那一条) 与 Set 置空那一站。
+    void emitValueStructSlotClear(const std::string& slotExpr,
+                                  const std::string& note = std::string());
     // 账 #305 新账 #407 第一百七十一刀: 视图值进 Variant 装箱站该发的那一句 (唯一出口)。
     // 不是视图 ⇒ 空串。调用者只有两位 = wrapVariantValue 与 boxToVariant，别添第三位。
     std::string legacyViewBoxExpr(const ASTNode* expr, const std::string& cExpr) const;
@@ -404,13 +425,27 @@
     std::string legacyViewGetterReadExpr(const std::string& objExpr, const std::string& memberName,
                                          const std::string& lateCall);
     // 账 #305 新账 #474 站F (写侧, 前置 = 新账 #489): 视图接收者的**属性写**那一发。站点把自己那一发
-    // 的**目标档** (写方向形参的 C 类型) 与值实参一起交进来; 那一席是 `put_<裸名>` 且 retType=void
-    // 且形参恰好一枚且类型同型 ⇒ 换成 `.vtbl-><槽>(….obj, 值)` (形状仍由上面那位主人答)。
-    // 任何不合 ⇒ 空串, 站点保留自己那一发 (Set 档 / 多入口参数那形 / 类型不合, 照旧 = 不掩盖)。
+    // 的**目标档** (写方向形参的 C 类型) 与值实参一起交进来; 那一席是 `put_<裸名>`/`putref_<裸名>`
+    // (按 setKind 选档) 且 retType=void 且形参恰好一枚且类型同型 ⇒ 换成 `.vtbl-><槽>(….obj, 值)`
+    // (形状仍由上面那位主人答)。任何不合 ⇒ 空串, 站点保留自己那一发 (多入口参数那形 / 类型不合, 照旧 = 不掩盖)。
+    // 第一百八十五刀把 `Set <视图>.<属性> = …` (putref_ 档) 接进同一枚 —— 值实参那一头交 `void*`。
+    // prefixArgs = 多入口参数那一形的下标实参 (第一百八十六刀): 槽形参数必须 = 前缀数 + 1,
+    // 且末段类型逐字节等于 wantParamCType; 空 vector = 老的单入口形。
     std::string legacyViewSetterCallExpr(const std::string& objExpr, const std::string& memberName,
-                                         const std::string& valExpr, const std::string& wantParamCType);
+                                         const std::string& valExpr, const std::string& wantParamCType,
+                                         ProcKind setKind,
+                                         const std::vector<std::string>& prefixArgs = {});
+    // 同一张槽表的**只读查询** (第一百八十六刀): 「这一席写槽的末形参是什么 C 类型」。
+    // 站点在发码**之前**用它把「值那一头与槽同型吗」问出来 (同型才换路, 不然原样落回)。
+    // 空串 = 没这一席 / 不是 void 返回 / 形参数 ≠ argCount + 1。
+    std::string legacyViewSetterLastParamCType(const std::string& objExpr, const std::string& memberName,
+                                               ProcKind setKind, size_t argCount);
     // B04 那条 vtable 发射 (`x->vt-><slot>(x, args)`) 的唯一作者：com_bind 与
     // 「接收者是视图值的调用」那一站都调它 (账 #305 §B221 形②)。槽名解析不出来返回空串。
+    // 账 #305 第二百一十刀 S1: 视图属性读那一问的文本投影 + 新式臂（定义在 cgen_iface_vtbl.cpp）
+    std::string slotIvrefViewName(const std::string& nameLower);
+    std::string ivrefViewGetterReadExpr(const std::string& objExpr, const std::string& memberName,
+                                         const std::string& lateCall);
     std::string ivrefVtableCall(const std::string& ifaceName, const std::string& member,
                                 const std::string& recv,
                                 const std::vector<std::string>& args);
@@ -418,6 +453,11 @@
     // 由按名那一臂与 §B221 的调用表达式那一臂共用。
     // 账 #305 §B218 第一百三十四刀: 多收一个 rhsTransferred = 「右值那枚临时量自带对价」，
     // 真就当场把接管来的那一枚交回 (只在这一位主人里交, 站点不许自己补一行)。
+    // 账 #305 第二百零三刀 (1): B05「存旧 → 覆盖 → AddRef 新 → Release 旧」那一发的唯一主人。
+    // 站点原先内联这八行；提出来是为了让字段档也能用同一位主人（本件 = 零行为改动，
+    // 判据 = 产物逐字节不动）。skipAddRef = 右值自带移交引用（New 那一形）。
+    void emitIvrefRefSet(const std::string& target, const std::string& ifaceName,
+                         const std::string& ivPtr, bool skipAddRef);
     void emitIvrefQiSet(const std::string& target, const std::string& ifaceName,
                         const std::string& valueExpr, bool rhsTransferred);
     // 账 #305 §B218 (甲): 工程类形参登记的一处出口 (按名表 + 本过程形参名册)。
@@ -431,6 +471,19 @@
     void emitClassSlotRefSet(const std::string& target, const std::string& className,
                              const std::string& valueExpr, bool rhsTransferred, bool outSlot,
                              const std::string& slotElemType = std::string());
+    // 账 #305 §B218 第三百十四刀: 「这格 C 存储是不是一枚**指针形**对象槽」= 第二百七十一刀那枚
+    // 站点内 lambda 的原文提到成员位, 当唯一问句 (两位读者: ByRef 对象出参的取址闸 + 下面那位
+    // 泛对象返回槽的主人)。vb6_VARIANT / vb6_ivref_X 两档**值**结构体刻意不算 (原判语照搬)。
+    bool ctypeIsObjectSlotPtr(const std::string& t) const;
+    // 账 #305 §B218 (甲) 腿②″: 「覆写一枚**泛对象**槽」的一位主人。工程类那一档由上面 腿② 铸
+    // `vb6_cls_<X>_AddRef`、视图那一档由 emitIvref* 接手, 剩下 C 档 = void* 这一族从没主人 ⇒
+    // 被调方交出去的指针**不带对价**, 而调用方按契约 (见 rhsTransfersProjectRef 那段) 认定它自带
+    // 一枚、不再 claim ⇒ 两下都不取 ⇒ 原主 `Set x = Nothing` 一退就散 (= 靶工程 Command2 的 AV)。
+    // 只 claim、不退旧值 = 与 腿②' 同一条口径: 这一族今天整个在计数系统外, 退它 = 多退一次。
+    void emitLateSlotRefClaim(const std::string& target, const std::string& valueExpr);
+    // 账 #305 §B218 (甲) 腿②″ 的第二问: 右值那一格是不是**本过程的局部** (它的引用今天靠裸拷贝
+    // 交出去, 站点不许再取; 模块级槽 / me-> 字段那一档计数系统自己会放手 ⇒ 必须 claim)。
+    bool localSlotHandsOverRef(const std::string& rhsText, const ASTNode* rhs) const;
     // 账 #305 §B218 (甲) 刀3: 「这一发右值是不是**已经带着一枚移交过来的引用**」—— 上面那位
     // 主人手上「不 claim」那条臂的全部成因共用这一条问句（**三形**：裸名调用 / 成员调用 /
     // 无括号的属性读；`New <类>` 那一发仍由调用点自己答）。问句只此一位，别在别处再答一遍。
@@ -509,6 +562,20 @@
     std::string ctrlArrWriteCalleeArgs(const std::string& writeFn,
                                        const std::string& arrOrigName,
                                        const std::string& idxArg) const;
+    // 账 #305 第三百零九刀: 「这条 callee 是不是窗体 Show 转发子、它还欠哪几枚形参」的
+    //   唯一作者。原型住在 cgen_form_ctrl_registry.inc —— 两参 (void* hMDIClient, int modal)。
+    //   两条发码路交出的 callee 都已自带 hMDIClient: 半成品 `vb6_form_show_<F>(NULL)`
+    //   (cgen_expr_with.cpp 的 With 体内 / cgen_expr_member_form_builtin.inc 的外部窗体),
+    //   以及被 cgen_expr_call_com_bind.inc 拆包后剩下的裸名 `vb6_form_show_<F>` (NULL 进了
+    //   classMethodObjArg)。两种形状都问得到同一个答案, 所以键按前缀认, 不看尾巴。
+    //   交回的表**只列还欠的那一枚** (mode) ⇒ 省略时由 opt_pad 补 0、写多了由 named_args
+    //   的 Fix 041b 截断, 两头都不再有各自的特判。
+    //   VB 的 Form.Show(Mode, OwnerForm) 里 OwnerForm 没有槽 —— 窗体归属从没建模,
+    //   多写那一发按形参表丢掉 (实测 VBFlexGridDemo MainForm.frm:846/861/1138
+    //   `.Show vbModal, Me`; 丢掉之前它被一并追加 ⇒ 三参打二参原型, runner 那台新 cl
+    //   报 C2197 参数太多, 门红 FlexGridX86)。
+    bool formShowForwarderParams(const std::string& calleeText,
+                                 std::vector<ParameterInfo>& out) const;
     // Fix <vbeclipse>: 在其他窗体的设计器描述里找控件 (frmViewViews.tvwViews)。
     // 命中返回该控件描述, 否则 nullptr。designerFiles_ 未设 / 非窗体名都返回 nullptr。
     const FrmControl* findExternalFormControl(const std::string& formName,
@@ -667,6 +734,10 @@
     // 账 #229: `对象.成员` 的对象位是不是窗体控件（单枚 / 数组元素两形同归），
     // 定义与实测症状在 cgen_util_ctrl.cpp。
     bool ctrlTypeOfMemberObject(const Expr* obj, FrmControlType& outType) const;
+    // 账 #231 的唯一问话口：`对象.成员` 若是窗体控件（或跨模块窗体默认实例）的属性，
+    // 答出 controlPropType 表里的类型。定义在 cgen_util_type.cpp —— 那里是它唯一的调用者，
+    // 表本身（controlPropType）与控件身份判定（ctrlTypeOfMemberObject）各自只留这一处调用。
+    bool ctrlMemberPropType(const Expr* obj, const std::string& memberName, Vb6Type& outType) const;
     // C29-SL-g: 同理，但排除的是**焦点**通知（TextBox/ComboBox/ListBox/命令按钮那六类的
     // GotFocus/LostFocus 由父窗的 WM_COMMAND 码供，见 cgen_form_wndproc_dispatch.inc 开头）。
     // 三处使用点：发 arm（subclass）、装子类化（frame_menu）、拆子类化（dispatch）——
@@ -699,6 +770,14 @@
     Vb6Type inferExprTypeImpl(Expr& expr) const;
     static void bumpInferEpoch();
 
+    // 账 #305 第311刀: 「一条 Select Case 的 Case 标签落在哪一档」的**唯一**回答处
+    // （主语静态答 Variant 时，承载档由这里回答，见 cgen_select.cpp 的契约注释）。
+    // 一个标签都不许漏：`Case Is` 的右操作数、`Case a To b` 的两端都算标签；`Case Else`
+    // 不在这张表里（它在 SelectCaseStmt::elseCase）。空表答 NoString —— 没有标签就没有证据。
+    // 第319刀多一档：Mixed = 至少一枚 String 且并非全是 ⇒ 主语是槽时逐项 VarCmp。
+    enum class SelectCaseLabelClass { AllString, Mixed, NoString };
+    SelectCaseLabelClass selectCaseLabelClass(SelectCaseStmt& node) const;
+
     // ai/009 §5.10 (P3): 给**窄整型目标**的赋值右值套上溢出检查 (vb6_ChkByte/
     // ChkInt/ChkLong), 越界即 run-time error 6。原先这类赋值是裸 `t = v;`, 由 C
     // 静默截断 (`a As Byte: a = -1` ⇒ a=255)。
@@ -730,6 +809,10 @@
     // 账 #255: COM 调用交回的 VARIANT* 当对象引用用时唯一的解封点 (cgen_util_com.cpp)。
     static std::string comObjectRefFromCallExpr(const std::string& expr);
 
+    // 账 #305 第二百四十九刀: 上面那一问的反向 —— 值语境吃到「交回对象的那一枚出口」时,
+    // 换成同元的通用出口 (对象出口对非对象档压根交回 NULL, 见定义处注释)。空串 = 不管。
+    std::string comValueTwinForObjectReadExpr(const std::string& cExpr) const;
+
     // Fix 029: 严格 Variant 推断 — 仅当表达式"明确"为 Variant/Variant 数组时返回 true.
     // 与 inferExprType 不同: inferExprType 对内置函数/Udt 字段访问等无法识别的情况
     // 会回退到 Variant (默认值), 此处不认为那些是 Variant, 避免误用 vb6_VariantToXxx 包装.
@@ -747,6 +830,20 @@
     // (如 vb6_VariantArrayGet, vb6_VariantFromComResult 等) 时, 判定为 Variant.
     // 仅检查顶层表达式 (去除前导括号后), 避免对子表达式误判.
     bool cExprIsVariant(const std::string& cExpr) const;
+
+    // 账 #305 第二百四十四刀: 「这发交回的 C 是不是裸晚绑定调用的结果」—— 那四枚 RTL 出口
+    //   (vb6_ComCall / vb6_ComCallByDispid / vb6_ComGetProp / vb6_ComGetObjectProp) 的签名都
+    //   返回 void* 承载一枚堆上 VARIANT*。只认这四枚: vb6_ComCallInt/BSTR/Double/Object 与
+    //   vb6_ComGet*Prop 那些带类型的出口交回的已经是具体 C 档, 算进来就是二次解包。
+    //   按位置 0 的严格前缀认, 不剥外层括号 —— 剥了就分不清「一整发裸调用」和「(裸调用 & 裸调用)」
+    //   那种已经折过的式子, 后者交进真值出口会把整只式子当槽读。
+    bool cExprIsBareComResult(const std::string& cExpr) const;
+
+    // 账 #305 第二百四十四刀: 「把这条 C 表达式折成 VB6 的真值测试」的唯一主人 —— 条件那一族
+    //   七站 (If / ElseIf / Do While / Do Until / Loop While / Loop Until / While Wend) 都问它。
+    //   裸晚绑定调用走 vb6_ComResultToBool; 整只槽走 vb6_VariantToBool (Fix 090ag 那条老答案,
+    //   逐字沿用); 其余原样交回。
+    std::string conditionTruthExpr(const std::string& cExpr, Expr* cond) const;
 
     // 账 #305 §B171 (第六十二刀): 「这一枚 C 文本是不是**类字段里那枚 Variant 槽的读**」——
     // cExprIsVariant 的一条来源, 单独成一枚是因为它是**唯一可寻址**的那一档: 装箱站对
@@ -874,14 +971,34 @@
     // 只认 vb6_cls_ / vb6_ivref_ 两档：legacy 接口的 vb6_iface_<I>（非指针）和 COM 的
     // vb6_ComIface_X* 一律返回空串 = 维持本改动之前的行为，不在这里顺手扩大。
     std::string cParamClassPtrType(const ParameterInfo& p);
+    // 账 #305 §B219 (第二百二十刀): 这一枚形参的**入站声明档** —— 「服务端该把递进来的 VARIANT
+    // 换算成哪一档，好让上面那条读臂取到的联合体成员就是答案」。交回 VARTYPE 的 C 字面量
+    // (`VT_I4`/`VT_R8`/`VT_BSTR`/`VT_DISPATCH`) 或 `VB6_ARGVT_SKIP`(= 这一格本刀不问)。
+    // 唯一一条规矩：**只认读臂已经证明取的是哪一格的那些档**。ByRef 那一臂交的是格子的**地址**
+    // (换算等于把写回丢掉，要的是另一座桥)、Variant/数组那一臂交的是整槽(§B159/§B160 的主人)、
+    // 兜底那一臂(枚举/UDT/Date/Currency/Decimal/LongPtr/…)的 C 存储还没量过 ⇒ 一律 SKIP，
+    // 猜一档就是再造第二套口径。判据按读臂同一串 if-链抄在**这一处**，别处不许再数一遍。
+    std::string cDispatchArgVt(const ParameterInfo& p);
     // 账 #305 §B218 (甲) 腿⑤ 第二格 (第一百三十七刀): cParamClassPtrType 交回来的那个 C 类型名
     // 装的是**视图薄指针**还是工程类实例 —— 前缀名单只住在上面那位主人出生的那份文件里,
     // 站点与所有权主人都不许再抄一遍视图那一档的前缀 (check_iface_view_authority ③ 钉的就是这张名单)。
-    bool clsPtrIsViewSlot(const std::string& clsPtr);
+    bool clsPtrIsViewSlot(const std::string& clsPtr) const;
+    // 账 #305 第二百零四刀: 上面那一问的**带名字**那一档 —— 「这一档 C 类型是哪张接口的视图
+    // 薄指针」(交回 `vb6_ivref_<I>` 里那个已 cIdent 过的名, 认不出 = 空串)。与 `legacyIfaceNameOfCType`
+    // 同形；前缀知识照旧只住 cgen_base_type.cpp，站点再写一遍 `substr(10, find('*', 10))`
+    // 就是把「谁认得 vb6_ivref_」这张名单扩大。
+    std::string ivrefNameOfCType(const std::string& cType) const;
     // 账 #305 第一百七十二刀 站B: 上面那位主人**不认**的那一档 —— legacy 接口的 `vb6_iface_<I>`
     // 值结构形参槽 (交回 VB 声明名, 认不出 = 空串)。与 clsPtrIsViewSlot 同住 cgen_base_type.cpp,
     // `vb6_iface_` 这串前缀别处不许再抄 (哨兵 check_legacy_view_arg_owners V1 钉的就是这一处)。
     std::string cParamLegacyIfaceSlotName(const ParameterInfo& p);
+    // 账 #305 第一百八十八刀: 返回槽那两问 —— ① 这一档返回类型是不是值聚合 (`vb6_type_` ∪
+    // `vb6_iface_` ⇒ 零初始化必须 `{0}`, 不许 `= 0`); ② 是视图的话交回接口名 (否则空串,
+    // 调用方据此把返回槽登进 knownIfaceVars_)。前缀比较只住 cgen_base_type.cpp。
+    bool cTypeIsValueAggregate(const std::string& cType);
+    std::string legacyIfaceNameOfCType(const std::string& cType);
+    // 账 #305 第一百八十九刀: 表达式接收者的按值适配器名 (铸 + 问同一出口)。
+    std::string legacyIfaceSlotCallFn(const std::string& ifaceName, const std::string& field) const;
     // 账 #305 §B218 第一百四十刀: 「这枚目标表达式是不是可寻址的数组元素槽」= VB6_SA_AT 那一形，
     // 交回元素 C 档 (认不出 = 空串)。与上面那位前缀主人同住 cgen_base_type.cpp。
     std::string classArraySlotElemType(const std::string& target);
@@ -910,7 +1027,11 @@
     // <vbeclipse>: 配套 cParamClassPtrType 的**交付**侧：实参要放进那个类槽时该怎么发。
     // clsPtr 为空 (= 不是类槽) 时原样返回，所以调用点写成 argVal = deliverToClassSlot(...)
     // 是不分支的一句，不必每个站点各写一遍"是类槽就跳过装箱"。
-    std::string deliverToClassSlot(const std::string& clsPtr, const std::string& argVal) const;
+    // 账 #305 第二百零四刀补第三个入参 = **实参那棵 AST**：槽装的是视图薄指针时，交付侧
+    // 必须知道右值是不是一枚自己交出引用的实例 (`New <类>`) 才铸视图。站点没有 AST 可交
+    // (= 缺省 nullptr) 时这一臂压根不成立 ⇒ 发码与今天一字相同，本刀只放开两位有 AST 的读者。
+    std::string deliverToClassSlot(const std::string& clsPtr, const std::string& argVal,
+                                   const ASTNode* actual = nullptr) const;
 
     // 账 #305 §B187 第四腿: 与 cParamClassPtrType 对称的另一档 —— 形参声明的是**泛对象槽**
     // (VB 写 `As Object`, C 侧是 void* 里装 IDispatch*) 时返回 "void*", 其余返回空串。
@@ -1001,6 +1122,10 @@
     // 推断COM参数的封装函数: 根据表达式类型选择vb6_ComPackBSTR/Int/Double/Object
     std::string comPackExpr(Expr& expr);
 
+    // 账 #305 §B224 第二半 (第二百三十九刀): 「这枚实参该不该按引用发」(空 = 按值)。
+    // 口径见实现处注释: 简单 lvalue + 数值/布尔五档, 按 C 存储宽度选 VT_BYREF|<型>。
+    std::string comByRefArgExpr(Expr& expr, const std::string& argText);
+
     // 账 #256: 「这枚裸控件名会不会被折成默认属性读数、折出来是什么 VB 型」只此一处回答。
     // 两个消费点共用它：标识符发码那条路拿 readFn/prop/ctrlType 去发 `readFn(句柄)`，
     // 晚绑定实参的打包档只问 valueType。以前打包档只听 inferExprType —— 它对控件名答
@@ -1023,6 +1148,10 @@
     // Vb6Type → 打包函数名。comPackExpr 的类型分支与上面那条折叠共用这一张映射；
     // 空串 = 这一型在这里答不了，交回调用方兜底（不擅自换默认档）。
     static std::string comPackFnForVbType(Vb6Type vt);
+    // 反向那一问（账 #305 第一百八十一刀）：**这枚打包器吃哪一型**。与正向同一张表
+    // (kComPackTiers) 扫出来，不在别处抄第二份。false = 这一族没有单一对应，调用方交回原路。
+    // Integer 与 Long 正向同答 ComPackInt ⇒ 反向按表序只回 Long（那枚 RTL 原型收的就是 int32_t）。
+    static bool comVbTypeForPackFn(const std::string& packFn, Vb6Type& out);
 
     // Fix 177b: 创建 coclass 实例的表达式 (New / Dim As New 自动实例化共用).
     // 默认 vb6_NewObject(L"<ProgID>") — 运行期按 ProgID 走 CoCreateInstance.
@@ -1139,6 +1268,16 @@
                                     const std::string& memberName) const;
     bool hostPseudoIsObject(const std::string& name) const;
 
+    // 账 #305 第二百六十一刀「甲」: With 接收者是宿主伪对象时, 「哪两档成员的答案住在
+    // 宿主伪对象通道、发码侧应当改道」这两问的唯一出口 (消费点只有一处:
+    // visit(WithMemberExpr&))。判据与理由都写在 cgen_util_com.cpp 的定义上。
+    bool hostPseudoExtenderObjExpr(const std::string& pseudoObj,
+                                   const std::string& memberName,
+                                   std::string& outExpr) const;
+    bool hostPseudoScaleCall(const std::string& pseudoObj,
+                             const std::string& memberName,
+                             std::string& outCallee) const;
+
     // 账 #159 = C29-CH-d: 上面那条规范化与下面三个问题, 全部由 cgen_util_com.cpp
     // 里 kHostPseudoRows 这**一张表**回答 (成员名清单只此一处, 别处再抄就是回归):
     //   hostPseudoBareName   — .ctl/.pag 里裸写的成员要不要接、接成哪个 RTL 符号
@@ -1167,6 +1306,12 @@
     // 返回**数值与字符串两个入口之一**而不是一个 void*: 读要参与算术和字符串表达式,
     // 单一 void* getter 会把每个调用点都变成强制转换, 比原来更脏。
     std::string extenderMemberReadExpr(const std::string& rtlSymbol) const;
+
+    // 账 #305 第二百九十二刀: `With <宿主伪对象>` 体内那个成员属不属于"表里答得出
+    // 的可写标量" (不含方法/码头/Unknown)。With 体内的属性写据此改道 RTL 全局,
+    // 不再发 vb6_ComSetProp (接收者是 hWnd, 晚绑定必然落空)。
+    bool hostPseudoHasScalarRow(const std::string& pseudoObj,
+                                const std::string& memberName) const;
 
     // 账 #257 第十九层: `With UserControl` 体内 `.成员` 的**内建**判定。
     //
@@ -1208,6 +1353,14 @@
     // Fix 185: 非 const — String 分支复用 wrapToBSTR (非 const 成员).
     std::string packLetValueArg(const ParameterInfo& lastP, Expr* valueExpr,
                                 const std::string& val);
+
+    // 账 #305 第一百九十七刀: Pattern C/D2 (prop_get_ 字符串级改写) 那一发**属性写的值实参
+    // 发哪一档**的唯一主人 —— Let 臂 (Fix 090w/156-B) 与 Set 臂 (Fix 268) 都只许调这一条，
+    // 别处不许再抄第二份。判据按**定义侧那份 C 槽型**排三档：类槽原样 / vb6_VARIANT 装箱 /
+    // 具体槽解箱 (那张表只此一份)。定义与逐条实测读数见 cgen_util_comwrite.cpp 注释。
+    // writeDirResolved = 写方向形参表是不是真解析成功 (Fix 156-B 的护栏，失败时解箱臂不许动)。
+    std::string writeValArgForParamSlot(const ParameterInfo& lastP, bool writeDirResolved,
+                                        Expr* valueExpr, const std::string& value);
 
     // Fix 159-B: VB6 隐式 CStr 的实参类型清单 — 日期/数值标量赋给 ByVal String 形参
     // 时按 CStr 转换 (vb6_CStrDate/CStrDbl/CStrLong), 见 wrapToBSTR.
@@ -1534,6 +1687,11 @@
     //   cExprIsVariant       表达式已经是槽
     bool isArrayCarrierArgName(const std::string& lowerName,
                                const std::string& cExpr) const;
+    // 账 #305 §B164 (第二百五十三刀): ByRef 形参 ← 「形参那一档的确切数组元素」时直递那一格的地址
+    // (写成 (&(元素)) 而非复合字面量副本)。答不出 = 空串 = 调用方保持原样。两位消费者 (位置实参站 /
+    // 命名实参站) 问同一位主人, 判据 = 宏名 + 元素档逐字等于 mapType(形参档) + 整枚文本就是那个宏。
+    std::string byRefElementAddressExpr(const std::string& argText,
+                                        const std::string& formalCType) const;
     // Fix 178: callee 是 UDT 的动态数组成员 (`.Cols()`) 时为 true, 顺带取元素 UDT
     bool isDynamicArrayMemberCallee(const Expr* callee, std::string* elemUdt) const;
     // Fix 170: 整体数组赋值右侧收口 —— 新建载体直接赋, 其余深拷贝避免别名

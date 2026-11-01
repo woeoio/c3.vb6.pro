@@ -91,6 +91,49 @@ void* vb6_ComPackObjectRef(void** ppObj) {
     return (void*)pv;
 }
 
+// 账 #305 §B224 第二半 (第二百三十九刀): 标量实参的**按引用**打包。
+// 真 VB6 客户端实测 (`Dim o As Object` + `o.Bump(x)`，x As Long ⇒ Bump: x=11 r=11)：
+// 晚绑定对**带型变量**递的是 VT_BYREF|<该型>，服务端的写回直接落在调用方变量上；
+// VBScript 的 Variant 实参递 VT_BYREF|VT_VARIANT，被 VB6 服务端判类型不匹配 —— 差别在
+// 实参带不带型，所以这一族必须按 C 存储的真实宽度选标签 (Integer/Boolean 都是 2 字节,
+// 用 I4 打写回会越界写 4 字节)。指针直接指调用方变量; VARIANT 本身由调用方 epilogue 回收
+// (VT_BYREF 档 VariantClear 不释放任何东西)。
+void* vb6_ComPackIntRef(int32_t* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_I4;
+    pv->plVal = (LONG*)p;
+    return (void*)pv;
+}
+void* vb6_ComPackIntegerRef(int16_t* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_I2;
+    pv->piVal = (SHORT*)p;
+    return (void*)pv;
+}
+void* vb6_ComPackBoolRef(int16_t* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_BOOL;
+    pv->pboolVal = (VARIANT_BOOL*)p;
+    return (void*)pv;
+}
+void* vb6_ComPackSingleRef(float* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_R4;
+    pv->pfltVal = (FLOAT*)p;
+    return (void*)pv;
+}
+void* vb6_ComPackDoubleRef(double* p) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_R8;
+    pv->pdblVal = (DOUBLE*)p;
+    return (void*)pv;
+}
+
 // Fix 104: 将"省略的实参"封装为 VARIANT (VT_ERROR + DISP_E_PARAMNOTFOUND).
 // VB6 对 IDispatch 调用省略实参时 (obj.Method a, , c) 传的正是该值, 接收方据此
 // 把"未提供"与"显式传 0/空串"区分开. 直接丢弃省略实参会让后续实参前移 (参数错位).
@@ -120,7 +163,7 @@ wchar_t* vb6_ComUnpackBSTR(void* variant) {
     if (pv->vt != VT_EMPTY && pv->vt != VT_NULL) {
         VARIANT vBstr;
         VariantInit(&vBstr);
-        if (SUCCEEDED(VariantChangeType(&vBstr, pv, 0, VT_BSTR))) {
+        if (SUCCEEDED(vb6_ComChangeType(&vBstr, pv, VT_BSTR))) {
             BSTR tmp = SysAllocString(vBstr.bstrVal);
             VariantClear(&vBstr);
             return tmp;

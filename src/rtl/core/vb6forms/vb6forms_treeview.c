@@ -57,6 +57,15 @@
 #ifndef TVM_GETINDENT
 #define TVM_GETINDENT      (WM_USER + 6)
 #endif
+#ifndef TVM_SETIMAGELIST
+#define TVM_SETIMAGELIST   (WM_USER + 9)
+#endif
+#ifndef TVM_GETIMAGELIST
+#define TVM_GETIMAGELIST   (WM_USER + 8)
+#endif
+#ifndef TVSIL_NORMAL
+#define TVSIL_NORMAL       0
+#endif
 
 // TVM_SETINDENT 的合法域是 0..50 像素 (超界由控件钳掉), 缇换算后按同一上限钳,
 // 免得"钳位"发生在控件里而 VB6 侧读数与显示不一致。
@@ -150,6 +159,61 @@ int32_t vb6_TreeView_GetIndentation(void* hwnd) {
     int px = (int)(INT_PTR)SendMessageW((HWND)hwnd, TVM_GETINDENT, 0, 0);
     int dpi = vb6_DpiX();
     return dpi > 0 ? (int32_t)MulDiv(px, 1440, dpi) : 0;
+}
+
+// ---------------- IconSize ----------------
+// XtremeSuiteControls.TreeView 的扩展属性 (像素)。原生 SysTreeView32 没有"图标尺寸"这一格:
+// 决定"文字从哪里起排"的是**挂没挂 ImageList**, 而不是某个尺寸属性 —— 挂了图列之后 comctl32
+// 让每个条目的文字都从图宽之后起排 (即使 iImage = -1, 那一列也照留), 所以"预留图标列"的
+// 唯一做法就是挂一张空图列。参考 exe 里 `tree.Icons = ...` + `tree.IconSize = 16` 留下的
+// 正是这 16px 的空白列 (Outlook2013 左面板 "My Calendars" 树)。
+//
+// 图列按尺寸缓存: 空图列不含任何位图, 一张表可以被任意多棵树共用。
+static const wchar_t kTvIconSize[] = L"VB6_TV_IconSize";
+
+#define VB6_TV_ICON_CACHE 4
+static HIMAGELIST g_tvIconList[VB6_TV_ICON_CACHE];
+static int        g_tvIconPx[VB6_TV_ICON_CACHE];
+static int        g_tvIconCount = 0;
+
+static HIMAGELIST vb6_TvEmptyImageList(int px) {
+    for (int i = 0; i < g_tvIconCount; i++)
+        if (g_tvIconPx[i] == px) return g_tvIconList[i];
+    if (g_tvIconCount >= VB6_TV_ICON_CACHE) return NULL;
+    HIMAGELIST himl = ImageList_Create(px, px, ILC_COLOR32 | ILC_MASK, 1, 1);
+    if (!himl) return NULL;
+    g_tvIconPx[g_tvIconCount] = px;
+    g_tvIconList[g_tvIconCount] = himl;
+    g_tvIconCount++;
+    return himl;
+}
+
+void vb6_TreeView_SetIconSize(void* hwnd, int32_t px) {
+    if (!hwnd) return;
+    if (px <= 0) px = 16;          // VB6 / Codejock 的默认
+    if (px > 64) px = 64;
+    SetPropW((HWND)hwnd, kTvIconSize, (HANDLE)(INT_PTR)(px + 1));
+    // 已经挂了图列 (例如运行期先 Set Icons) 就不换 —— 那列宽度由控件自己说了算。
+    HIMAGELIST himl = (HIMAGELIST)SendMessageW((HWND)hwnd, TVM_GETIMAGELIST, TVSIL_NORMAL, 0);
+    if (!himl) himl = vb6_TvEmptyImageList(px);
+    if (himl) {
+        SendMessageW((HWND)hwnd, TVM_SETIMAGELIST, TVSIL_NORMAL, (LPARAM)himl);
+        // 换图列改的是每个条目的文字起点: 与样式位那几条同样要重排重画。
+        InvalidateRect((HWND)hwnd, NULL, TRUE);
+    }
+}
+
+int32_t vb6_TreeView_GetIconSize(void* hwnd) {
+    if (!hwnd) return 16;
+    HANDLE stored = GetPropW((HWND)hwnd, kTvIconSize);
+    if (stored) return (int32_t)(INT_PTR)stored - 1;
+    HIMAGELIST himl = (HIMAGELIST)SendMessageW((HWND)hwnd, TVM_GETIMAGELIST, TVSIL_NORMAL, 0);
+    if (himl) {
+        int cx = 0, cy = 0;
+        ImageList_GetIconSize(himl, &cx, &cy);
+        if (cx > 0) return (int32_t)cx;
+    }
+    return 16;
 }
 
 // ---------------- 设计期初值 ----------------

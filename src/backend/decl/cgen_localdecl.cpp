@@ -560,6 +560,10 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 std::string lower = var.name;
                 std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                 knownLocalVars_.insert(lower);
+                // 账 #305 第二百四十九刀: 这一枚就是「本过程声明成非数组的局部」—— 走到这里
+                // 的都不是数组/动态数组 (那两档在上面各自 return/break 前已登记 knownArrays_),
+                // 所以这张表不需要第二处写入点, 也不需要"是不是数组"的再判断。
+                procNonArrayLocalVars_.insert(lower);
             }
 
             if (var.initializer) {
