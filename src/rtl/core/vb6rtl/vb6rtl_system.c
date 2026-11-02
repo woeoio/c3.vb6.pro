@@ -220,12 +220,41 @@ BSTR vb6_Command(void) {
 // P14.3.4: App全局对象属性
 // ============================================================
 
-/* App.Path: 返回EXE所在目录 (去掉文件名部分) */
+/* 账 #305 第330刀 (账 #605): 「这枚产物自己住在哪」—— App.Path 与 App.EXEName 的唯一主人。
+   改前两处都问 GetModuleFileNameW(NULL, …)，那是**宿主进程**那枚 EXE。VB6 实测 (宿主 = 32 位
+   cscript，见 ai/probes/app_title_dll/client_out.txt)：一枚编译好的 ActiveX DLL 里 P3 答
+   [AppTitleProbe]（DLL 自己的模块名，不是 cscript）、P4 答 DLL 所在目录 ⇒ App 那一族问的是
+   "执行这段代码的那枚模块"，不是进程。真语料 48 份 Type=OleDll 里 App.Path 读 79 行、
+   App.EXEName 23 行 ⇒ 不是纸面缺口 (OCX 挂在宿主里按相对路径找文件，找的会是宿主的目录)。
+   取法 = GetModuleHandleExW(FROM_ADDRESS, &本机地址)：静态链进 Exe 时它答 Exe ⇒ 与改前逐字节
+   同值 (Exe 那一族零回归)，静态链进 DLL/OCX 时才换答案。句柄问一次就缓存；事后 FreeLibrary
+   会减掉**自己**这枚模块的引用 (正在执行中的模块被卸 = 崩)，所以宁可留那一枚自引用。
+   ⚠ App.hInstance / App.PrevInstance 仍问进程 (账 #605 在册) —— 那两档没有 VB6 读数，不猜。 */
+static const wchar_t* vb6_SelfModulePath(void) {
+    static wchar_t s_path[1024];
+    static int s_filled = 0;
+    if (!s_filled) {
+        HMODULE hMod = NULL;
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                               (LPCWSTR)&vb6_SelfModulePath, &hMod)
+            && GetModuleFileNameW(hMod, s_path, 1024) != 0) {
+            s_path[1023] = L'\0';
+            s_filled = 1;
+        }
+    }
+    return s_filled ? s_path : NULL;
+}
+
+/* App.Path: 返回本产物所在目录 (去掉文件名部分) —— 值取自 vb6_SelfModulePath */
 BSTR vb6_App_Path(void) {
     wchar_t buf[1024];
-    DWORD len = GetModuleFileNameW(NULL, buf, 1024);
-    if (len == 0) return vb6_BSTR_FromStr(L".");
-    for (DWORD i = len; i > 0; i--) {
+    const wchar_t* self = vb6_SelfModulePath();
+    if (!self) return vb6_BSTR_FromStr(L".");
+    size_t len = wcslen(self);
+    if (len >= 1024) len = 1023;
+    for (size_t i = 0; i < len; i++) buf[i] = self[i];
+    buf[len] = L'\0';
+    for (size_t i = len; i > 0; i--) {
         if (buf[i-1] == L'\\' || buf[i-1] == L'/') {
             buf[i-1] = L'\0';
             return vb6_BSTR_FromStr(buf);
@@ -234,13 +263,17 @@ BSTR vb6_App_Path(void) {
     return vb6_BSTR_FromStr(L".");
 }
 
-/* App.EXEName: 返回EXE文件名(不含路径和扩展名) */
+/* App.EXEName: 返回本产物文件名(不含路径和扩展名) —— 值取自 vb6_SelfModulePath */
 BSTR vb6_App_EXEName(void) {
     wchar_t buf[1024];
-    DWORD len = GetModuleFileNameW(NULL, buf, 1024);
-    if (len == 0) return vb6_BSTR_Empty();
+    const wchar_t* self = vb6_SelfModulePath();
+    if (!self) return vb6_BSTR_Empty();
+    size_t len = wcslen(self);
+    if (len >= 1024) len = 1023;
+    for (size_t i = 0; i < len; i++) buf[i] = self[i];
+    buf[len] = L'\0';
     wchar_t* fname = buf;
-    for (DWORD i = 0; i < len; i++) {
+    for (size_t i = 0; i < len; i++) {
         if (buf[i] == L'\\' || buf[i] == L'/') fname = &buf[i+1];
     }
     wchar_t* dot = wcsrchr(fname, L'.');

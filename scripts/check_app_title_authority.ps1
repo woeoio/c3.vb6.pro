@@ -18,7 +18,11 @@
 #   R6 读侧折叠恰一处, 旧的 EXE 名形已撤 (EXEName 自己那一臂仍在);
 #   R7 写侧拦截恰一处, 且局部同名优先 (knownLocalVars_ 同一判据);
 #   R8 认这枚名字的六份 BSTR 返回名单一份都没漏;
-#   R9 夹具 / 期望 / 发码针 / 本哨兵自己都已在 run_tests.ps1 登记。
+#   R9 夹具 / 期望 / 发码针 / 本哨兵自己都已在 run_tests.ps1 登记;
+# 账 #305 第330刀 (账 #605) 又给这条线加了两腿 (VB6 实测在 ActiveX DLL 里 App 答的是这枚产物
+# 自己 —— 宿主 = 32 位 cscript: P1 答本工程 Title、P3 答 DLL 模块名、P4 答 DLL 目录):
+#   R10 播种那一站在 DLL 入口也得有 (Exe 五站之外), 且种子算法只许 appTitleSeed() 一处;
+#   R11 App.Path / App.EXEName 问「这枚产物住在哪」只许一位主人, 不许再问宿主进程。
 # 输出 ASCII (控制台 GBK, 中文读数重定向后不可 grep)。文件必须 UTF-8 BOM + CRLF。
 #
 # 用法: powershell -File scripts\check_app_title_authority.ps1 [-RepoRoot <树根>]   (PASS = exit 0)
@@ -59,9 +63,15 @@ $DRV  = Load 'src/driver/detail/driver_codegen_module_loop.inc'
 $STATE = Load 'src/backend/detail/util/cgen_state.inc'
 $API  = Load 'src/backend/detail/util/cgen_api.inc'
 $RUN  = Load 'tests/run_tests.ps1'
+$DI   = Load 'tests/disp_invoke.ps1'
+$HPP  = Load 'src/driver/driver.hpp'
+$DLLE = Load 'src/backend/detail/util/cgen_util_dllentry_exports.inc'
+$DLLT = Load 'src/driver/detail/driver_codegen_dll_typelib.inc'
 $FX1  = Load 'tests/b592_apptitle/APT.bas'
 $FX2  = Load 'tests/b592_apptitle_fallback.bas'
 $FX3  = Load 'tests/b592_apptitle/B592.vbp'
+$FX4  = Load 'tests/b605_dllapp/B605k.vbp'
+$FX5  = Load 'tests/b605_dllapp/Probe.cls'
 
 # ---- R1 出口三枚: RTL 定义各一次, 伞头声明各一次 ----
 Want 'R1 setter definition' (C 'void vb6_SetAppTitle(const wchar_t* title) {' $SYS) 1 'App.Title 的写侧出口只许有一处定义'
@@ -97,10 +107,25 @@ $nInit = C 'c_.emitLine("vb6_Init();");' $ENT
 $nSeed = C 'emitAppTitleInit();' $ENT
 if ($nInit -lt 1) { $fail += 'R4 scan floor: no vb6_Init() line in the entry template (模板被搬走或改名了)' }
 Want 'R4 seed called per entry' $nSeed $nInit '每个入口模板都要在 vb6_Init() 之后播种一次 (少一处 = 那条入口的 App.Title 永远是 EXE 名)'
+# 账 #605: ActiveX DLL 那条路压根不进上面这五个入口模板 —— 它的入口是 dll_entry.c 的 DllMain。
+Want 'R4 dll seed guard' (C 'if (!projectTitle_.empty()) {' $DLLE) 1 'DLL 入口的播种也要「种子为空就不发」那道闸 (无 .vbp 时零回归)'
+Want 'R4 dll seed emits setter' (C 'entry.emitLine("vb6_SetAppTitle(L\"' $DLLE) 1 'DLL 入口只许拼一处播种行 (与 Exe 同形, 不另立第二枚 setter)'
+Want 'R4 dll init kept' (C 'entry.emitLine("vb6_Init();");' $DLLE) 1 'DllMain 里 vb6_Init() 那一行必须在 (播种的相对位置靠它)'
+$iInit = $DLLE.IndexOf('entry.emitLine("vb6_Init();");')
+$iSeed = $DLLE.IndexOf('entry.emitLine("vb6_SetAppTitle(L\"')
+$iDetach = $DLLE.IndexOf('DLL_PROCESS_DETACH')
+if ($iInit -lt 0 -or $iSeed -lt 0 -or $iDetach -lt 0 -or -not ($iInit -lt $iSeed -and $iSeed -lt $iDetach)) {
+    $fail += ('R4 dll seed order: init=' + $iInit + ' seed=' + $iSeed + ' detach=' + $iDetach +
+              ' (播种必须发在 vb6_Init() 之后、PROCESS_DETACH 之前)')
+}
 
 # ---- R5 驱动那一问 ----
 Want 'R5 driver seeds once' (C 'cgen.setProjectTitle(' $DRV) 1 '工程标题只许递进去一处'
-Want 'R5 Title first Name fallback' (C 'cgen.setProjectTitle(!verTitle_.empty() ? verTitle_ : vbpProjectName_);' $DRV) 1 '口径 = .vbp 的 Title, 空则 Name (VB6 的默认题头同理)'
+Want 'R5 seed algorithm once' (C 'std::string appTitleSeed() const { return !verTitle_.empty() ? verTitle_ : vbpProjectName_; }' $HPP) 1 '「Title 优先、Name 兜底」只许一处算法 (账 #605: Exe 与 DLL 分抄就会分家)'
+Want 'R5 station exe' (C 'cgen.setProjectTitle(appTitleSeed());' $DRV) 1 'Exe 那一路逐模块 cgen 递种子'
+Want 'R5 station dll' (C 'dllCgen.setProjectTitle(appTitleSeed());' $DLLT) 1 'DLL 那一路也递同一枚种子 —— 账 #605 的本体'
+Want 'R5 old inline fold gone exe' (C 'setProjectTitle(!verTitle_.empty()' $DRV) 0 '就地抄那句口径不许回潮 (Exe 路)'
+Want 'R5 old inline fold gone dll' (C 'setProjectTitle(!verTitle_.empty()' $DLLT) 0 '就地抄那句口径不许回潮 (DLL 路)'
 Want 'R5 title field once' (C 'std::string projectTitle_;' $STATE) 1 '携带位只许有一枚'
 Want 'R5 setter api once' (C 'void setProjectTitle(std::string t) { projectTitle_ = std::move(t); }' $API) 1 'API 只许有一处, 不许各自写字段'
 
@@ -131,6 +156,17 @@ foreach ($k in $lists.Keys) {
 }
 Want 'R8 list total' $listSum 5 '五处名单站都要认这枚名字'
 
+# ---- R10 DLL 入口那一站 (账 #605 的脸①) ----  (腿在 R4 里, 这里只钉「两站同形」)
+Want 'R10 two seed stations' ((C 'vb6_SetAppTitle(L\"' $ENT) + (C 'vb6_SetAppTitle(L\"' $DLLE)) 2 'Exe 入口模板与 DLL 入口各一枚, 多一枚就是另立形状'
+
+# ---- R11 App.Path / App.EXEName 答这枚产物自己 (账 #605 的脸②) ----
+Want 'R11 owner defined once' (C 'static const wchar_t* vb6_SelfModulePath(void) {' $SYS) 1 '「这枚产物住在哪个模块」只许一处实现'
+Want 'R11 owner asks its own module' (C 'GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,' $SYS) 1 '取法 = 从自己的地址问模块 (静态链进谁就答谁)'
+Want 'R11 stations' (C 'vb6_SelfModulePath()' $SYS) 2 'App.Path 与 App.EXEName 各问一次 (第三处 = 有人另立主人)'
+Want 'R11 host fold gone' (C 'GetModuleFileNameW(NULL, buf, 1024)' $SYS) 1 '只剩 App.PrevInstance 还问进程 (无 VB6 读数, 刻意在册)'
+Want 'R11 hInstance kept' (C 'return (intptr_t)(uintptr_t)GetModuleHandleW(NULL);' $SYS) 1 'App.hInstance 本刀刻意不动 (同上没有读数)'
+Want 'R11 never frees self' (C 'FreeLibrary(' $SYS) 0 '给自己那枚模块调 FreeLibrary = 正在执行中的模块被卸 (崩)'
+
 # ---- R9 登记面 ----
 Want 'R9 sentinel registered' (C 'check_app_title_authority.ps1' $RUN) 1 '本哨兵在 run_tests.ps1 里被引用一次'
 Want 'R9 sentinel function' (C 'function Test-AppTitleAuthority' $RUN) 1 '那道静态检查自己有一处定义'
@@ -146,6 +182,15 @@ Want 'R9 vbp needle empty' (C '"APT-empty=[]"' $RUN) 1 '期望表里要钉「显
 Want 'R9 fallback needle' (C '"APT-fallback=b592_apptitle_fallback"' $RUN) 1 '单文件编译的旧口径 (退 EXEName) 要在期望表里'
 Want 'R9 seed needle shape' (C 'vb6_SetAppTitle(L"B592 Title");' $RUN) 1 '发码正针要钉播种那一行'
 Want 'R9 lesion needle shape' ([regex]::Matches($RUN, '(?m)^\s+' + [regex]::Escape($SQ + 'vb6_App_EXEName() = ' + $SQ) + '\s*$').Count) 1 '发码反针要钉旧左值形'
+# 账 #605 那一格: 形状 (dll_entry.c) 与行为 (进程内一点) 同趟编译各读一次, 尺住在 disp_invoke.ps1。
+Want 'R9 dll harness defined' (C 'function Test-DllAppSelf' $DI) 1 '那把进程内的尺有一处定义'
+Want 'R9 dll case registered' (C 'Test-DllAppSelf "b605_dll_app_self"' $RUN) 1 'b605 那一格在 runner 里登记'
+Want 'R9 dll seed needle' (C 'vb6_SetAppTitle(L"B605 Dll Title");' $RUN) 1 '那一格要钉 dll_entry.c 的播种行'
+Want 'R9 dll title needle' (C '"READ_ANS=605-title=[B605 Dll Title]",' $RUN) 1 '期望里要钉运行期读到的 Title (注释 + 针)'
+Want 'R9 dll exe needle' (C '"exe=[B605k]",' $RUN) 1 '期望里要钉 DLL 自己的模块名'
+Want 'R9 dll path needle' (C '"tailOk=True") @(' $RUN) 1 '期望里要钉 App.Path 落在 DLL 自己那个目录'
+Want 'R9 dll absent host' (C '"exe=[disp_probe",' $RUN) 1 '反面证人: 宿主名字顶回来 = 又退回 GetModuleFileNameW(NULL) (注释 + 针)'
+Want 'R9 dll absent half' (C '"title=[B605k]")' $RUN) 1 '反面证人: 只修读取那一脸、播种没落也过不了'
 
 # ---- 夹具本体 ----
 Want 'FX vbp Title' (C 'Title="B592 Title"' $FX3) 1 '夹具的 .vbp 要有 Title (否则播种那一行根本不发)'
@@ -154,6 +199,12 @@ Want 'FX read/write' (C 'App.Title' $FX1) 5 '夹具要覆盖 读(3 处) + 写(2 
 Want 'FX write set' (C 'App.Title = "renamed"' $FX1) 1 '夹具要覆盖运行期改写'
 Want 'FX write empty' (C 'App.Title = ""' $FX1) 1 '夹具要覆盖显式空串'
 Want 'FX single-file read' (C 'App.Title' $FX2) 1 '单文件夹具要读 (证未播种时退 EXEName)'
+Want 'FX605 vbp Type' (C 'Type=OleDll' $FX4) 1 '夹具必须是 ActiveX DLL —— 本刀那一路的入口'
+Want 'FX605 vbp Title' (C 'Title="B605 Dll Title"' $FX4) 1 '播种值要有来处 (与运行期读数同源)'
+Want 'FX605 vbp ExeName32' (C 'ExeName32="B605k.dll"' $FX4) 1 '产物名按 ExeName32 找 (账 #166 那条口径)'
+Want 'FX605 read title' (C '& App.Title &' $FX5) 1 '夹具要在 DLL 里读 App.Title'
+Want 'FX605 read exename' (C '& App.EXEName &' $FX5) 1 '夹具要读 App.EXEName (答 DLL 还是宿主的那一问)'
+Want 'FX605 read path' (C 'App.Path, "b605_self"' $FX5) 1 '夹具要拿 App.Path 与 DLL 自己的目录标记对表'
 
 if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Output ('FAIL ' + $m) }
@@ -164,5 +215,7 @@ Write-Output ('PASS check_app_title_authority: entry seed ' + $nSeed + '/' + $nI
     ' lists=' + $listSum + ' cells=' + (C 'Test-Vbp "b592_app_title' $RUN) +
     ' read=' + (C 'if (memLower == "title") { lastExpr_ = "vb6_App_Title()"; return; }' $MEM) +
     ' write=' + (C 'vb6_SetAppTitle(" + rhsAt + ");' $ASG) +
-    ' msgbox=' + (C 'vb6_AppTitleBorrow()' $CONV))
+    ' msgbox=' + (C 'vb6_AppTitleBorrow()' $CONV) +
+    ' dllseed=' + (C 'vb6_SetAppTitle(L\"' $DLLE) +
+    ' selfmod=' + (C 'vb6_SelfModulePath()' $SYS))
 exit 0

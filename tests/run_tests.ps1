@@ -8687,6 +8687,20 @@ if ($Category -in @("all", "run", "vbp")) {
         "const vb6_CoClassDesc g_vb6_coclasses[]", '"TestAXDLL.Calc"',
         '"{D84F362F-8EF1-D16D-8814-C16ADB700BAB}"',
         "DllGetClassObject", "DllRegisterServer") -Arch "x86"
+    # 账 #305 第330刀 (账 #605): 一枚自己会读 App.* 的 ActiveX DLL —— 形状 (dll_entry.c 里播种那
+    # 一行) 与行为 (进程内一点拿到的答案) 在同一趟编译里各读一次。改前三条一起答**宿主**：
+    #   BASE  READ_ANS=605-title=[disp_probe]     exe=[disp_probe]  tailOk=False
+    #   本刀  READ_ANS=605-title=[B605 Dll Title] exe=[B605k]       tailOk=True
+    # 后两条 absent 各挡一种退路：宿主的名字顶回来 = 又回到 GetModuleFileNameW(NULL)；
+    # title=[B605k] = 播种没落但读取改了模块名 —— 两脸只修了一半也算不过。
+    Test-DllAppSelf "b605_dll_app_self" "$Tests\b605_dllapp\B605k.vbp" "B605k" `
+        "{11112222-3333-4444-5555-66667777B605}" "ReadApp" `
+        'vb6_SetAppTitle(L"B605 Dll Title");' @(
+        "READ_ANS=605-title=[B605 Dll Title]",
+        "exe=[B605k]",
+        "tailOk=True") @(
+        "exe=[disp_probe",
+        "title=[B605k]")
     # B13b: the two identity channels are merged for the DLL product. This case used to
     # PIN THE FORK (needle 0x0AD9CBC7 / absent CoDll.PG); flipping it is the batch's
     # acceptance evidence, so the needles are now exactly the other way round:

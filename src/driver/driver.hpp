@@ -335,6 +335,13 @@ private:
     // 这两位只在这里存原样 —— 链接期一次解析，别在第二处再问一次 .vbp。
     std::string iconFormName_;        // VBP IconForm="Form1"（窗体名；Startup 那一位 = startupObject_，Fix 142）
 
+    // 账 #305 第330刀 (账 #605): 「App.Title 的种子 = 什么」这一问的唯一算法。
+    // 第320刀把这句就地抄在 Exe 的逐模块 cgen 上；本刀 ActiveX DLL 的 dllCgen 也要同一个值 ——
+    // 两处各抄一遍，「Title 与 Name 谁优先」就会在 Exe 与 DLL 之间分家 (VB6 实测答甲 = 本工程
+    // 自己的 Title，见 ai/probes/app_title_dll/client_out.txt 的 P1)。单文件编译两位都空 ⇒
+    // 种子为空，两个入口都不发播种行，读取侧仍退 App.EXEName (旧口径)。
+    std::string appTitleSeed() const { return !verTitle_.empty() ? verTitle_ : vbpProjectName_; }
+
     // TypeLib解析器 (P6.3, COM类型导入)
     std::unique_ptr<TypeLibParser> typelibParser_;
 

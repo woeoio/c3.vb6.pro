@@ -75,6 +75,16 @@
     entry.indent();
     entry.emitLine("DisableThreadLibraryCalls(hinstDLL);");
     entry.emitLine("vb6_Init();");
+    // 账 #305 第330刀 (账 #605): ActiveX DLL 也得自己播种 App.Title。VB6 实测 (宿主 = 32 位
+    // cscript，见 ai/probes/app_title_dll/client_out.txt)：编译好的 DLL 里读 App.Title 答的是
+    // **本工程**的 Title (P1)，运行期写它 err=0 (P5) —— 既不是宿主进程的标题，也没有「只读」这一档。
+    // 第320刀只把播种发在 Exe 的五个入口模板里，Type=OleDll 工程一条都不进 ⇒ 真语料 48 份 DLL
+    // 工程 (37 份带非空 Title) 里那 82 行 App.Title 全落「没播种」那一档，交回宿主 EXE 的名字。
+    // 形状与 Exe 那一份逐字节同 (`vb6_SetAppTitle(L"…")`) —— 一位主人、两个入口，不另设第二枚 setter。
+    if (!projectTitle_.empty()) {
+        entry.emitLine("vb6_SetAppTitle(L\"" + escapeWideCString(projectTitle_)
+                    + "\");  /* 账 #592/#605: App.Title = .vbp 的 Title */");
+    }
     entry.dedent();
     entry.emitLine("} else if (fdwReason == DLL_PROCESS_DETACH) {");
     entry.indent();
