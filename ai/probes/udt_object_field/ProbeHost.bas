@@ -1,4 +1,4 @@
-Attribute VB_Name = "Main"
+Attribute VB_Name = "ProbeHost"
 Option Explicit
 
 ' ai/probes/udt_object_field - C3 账 #600 的运行期读数（只需 VB6，或 twinBASIC 也可，注明即可）。

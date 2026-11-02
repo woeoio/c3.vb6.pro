@@ -10,13 +10,13 @@ Attribute VB_Exposed = False
 Option Explicit
 
 ' ai/probes/udt_object_field - this class exists only to make "who still holds this object"
-' visible: every instance prints one INIT line (from Main.NewH) and one TERM line here.
+' visible: every instance prints one INIT line (from ProbeHost.NewH) and one TERM line here.
 ' The reading C3 account #600 needs is the ORDER of those lines against the numbered
 ' markers, not their content.
 
 Public Tag As Long
 
 Private Sub Class_Terminate()
-    Main.gTerm = Main.gTerm + 1
-    Main.Say "TERM " & Me.Tag
+    ProbeHost.gTerm = ProbeHost.gTerm + 1
+    ProbeHost.Say "TERM " & Me.Tag
 End Sub

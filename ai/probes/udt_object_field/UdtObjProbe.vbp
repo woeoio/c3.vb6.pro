@@ -1,5 +1,5 @@
 Type=Exe
-Module=Main; Main.bas
+Module=ProbeHost; ProbeHost.bas
 Class=Holder; Holder.cls
 Startup="Sub Main"
 Command32=""

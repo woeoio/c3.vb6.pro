@@ -7,6 +7,12 @@ C3 现在把整枚 UDT 赋值（`t2 = t1`）发成逐字节 `memcpy`（`vb6_udtc
 
 这一份就是去问那一句的。请**照实贴回顺序**，不用解释。
 
+## 回收状态（2026-11-02）
+
+- **`copy/` 那一份 = VB6 已答**（用户代跑，原文见文末「VB6 实测」）：主问落定 —— 整枚 UDT 赋值对对象字段**自己持有一枚引用**、覆写**先退旧**、出过程**真清**、三种声明档同形、数组元素与嵌套同形、`init=7 term=7` 配平。⇒ 四格链（装订 / 覆写退旧 / 出厂真清 / getter 带对价）按「VB6 做全套」那一支做。
+- **上一级那一份（字段级）第一次跑不起来，原因钉在这儿**：模块名与入口过程同名 —— VB6 弹窗**「主程序不能是模块、类型、工程或窗体名」**，twinBASIC 报 **`TB5073: 'Main' is ambiguous`**（`UdtObjProbe.Main.Main` 过程 vs `UdtObjProbe.Main` 模块）。已把模块改名 `ProbeHost`（`Sub Main` 那句不动、`Startup="Sub Main"` 不动、`Holder.cls` 里改问 `ProbeHost.gTerm` / `ProbeHost.Say`）⇒ **请重跑这一份**。
+- `copy/RejectCases.bas` 按设计**没入工程**（编不过的那几格会把整份拖倒）⇒ 想问 R1~R4 就在 IDE 里Project → Add File **一次加一格**、编译、把原话抄在编号上。
+
 ## 为什么是两个工程
 
 `copy/` 那一份问的正是 `t2 = t1`（含对象字段的整枚赋值）—— 这一句在 VB6 里**有可能根本不许编译**，
@@ -105,3 +111,50 @@ COM/VB 对象型 39 块（`StdPicture` 38、`IPictureDisp` 18、`Collection` 15�
 `ShadowPanelStruct.Picture As IPictureDisp`（同一文件 `:374` 的 `InitPanelStruct` 也带一枚），
 `VBFlexGrid.ctl:875 TCELLFMTG.Picture` 同理 —— 也就是说这些结构体是真的会被整枚赋值、
 真的会出过程、真的会被 `Erase`，不是纸面形状。
+
+## 附二：VB6 实测读数（`copy/UdtCopyProbe.vbp`，2026-11-02 用户代跑，原文照贴）
+
+```
+P0-begin
+INIT 1
+A2-after-copy sameIs=True
+A3-after-source-clear
+TERM 1
+A4-after-sub
+INIT 2
+INIT 3
+A5-both-set
+TERM 3
+A6-after-struct-overwrite
+TERM 2
+A7-after-sub
+INIT 4
+G2-sameIs=True
+G3-after-source-clear
+TERM 4
+G6-after-sub
+INIT 5
+G4-sameIs=True
+G5-after-source-clear
+TERM 5
+G7-after-sub
+F1-b-string=AAA
+F2-after-sub
+INIT 6
+I1-copied-nested
+TERM 6
+I2-after-sub
+INIT 7
+E2-element-copy sameIs=True
+E3-after-clear-element-zero
+TERM 7
+E4-after-sub
+Z-COUNT init=7 term=7
+Z-DONE
+```
+
+逐条读法与它把 C3 定成哪一支：
+
+| 读数 | VB6 答的 | C3 该怎么 |
+|---|---|---|| `t2 = t1` 编译通过 | 这句**合法**（我原先准备的「可能不许编译」那一支不成立）| 整枚赋值必须自己处理对象字段，不能推给「拒绝编译」|| `A3` 打在 `TERM 1` **之前** | 源放手时目标仍持有 ⇒ **拷贝时 AddRef** | 装订那一格要做（现在发 memcpy ⇒ 零引用）|| `TERM 1` 落在 `A4-after-sub` **之前** | 出过程真放 | 出厂那一格要做（现在什么都不放 ⇒ 泄漏）|| `sameIs=True` | 交的是同一枚实例，不是克隆 | 装订 = AddRef，**不是**深拷贝对象|| `A5-both-set` → `TERM 3` → `A6` | 整枚覆写**先退目标自己那一枚** | 覆写退旧那一格要做（现在裸 memcpy ⇒ 目标旧的没人放）|| `A6` 之后到 `A7` 之间只有 `TERM 2` 一条 | `a.O` 与 `b.O` 同指 #2，出过程各放一次、只有归零那次打 TERM | 计数要真配平：**不能**只在覆写时退、也不能出过程退两次|| `G2/G3`（`As Holder`）、`G4/G5`（`As Variant`）与 A 档逐条同形 | 三种声明档**一套口径** | 发码不必按声明档分叉（但 Variant 那一格要按 Variant 的放法走 `VariantClear`）|| `F1-b-string=AAA` | 字符串字段深拷贝 | C3 这一半本来就对，不动 || `I1` → `TERM 6` → `I2` | **嵌套 UDT**（对象在内层）同一条链 | 拷贝要递归到内层，不能只看一层字段表|| `E2`/`E3` → `TERM 7` → `E4` | 数组元素之间整枚赋值同形 | `arr(1) = arr(0)` 那一支也要走同一位主人|| `Z-COUNT init=7 term=7` | 全程零泄漏、零双放 | 改完之后同一份夹具要读到**同一个数**（我方现在 7/0）|
+对照我方正面的读数（`ai/probes/udt_object_field/README.md` 附一节，修完账 #608 才跑得出来）= `init=7 term=0`、`A3`/`A4`/`A6`/`A7` 前后**一条 TERM 都没有** ⇒ 上面四格一格都没做，且从不双放（所以是纯泄漏，不是崩溃）。
