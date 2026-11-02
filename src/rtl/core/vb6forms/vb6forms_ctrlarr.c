@@ -294,6 +294,20 @@ static BOOL CALLBACK vb6_mdi_band_cb(HWND h, LPARAM lp) {
 }
 
 struct Ctx352 { HWND paneMgr; };
+struct Ctx367 { HWND form, client; };
+
+static BOOL CALLBACK vb6_mdi_zorder_cb367(HWND h, LPARAM lp) {
+    struct Ctx367* c = (struct Ctx367*)lp;
+    wchar_t cls[64] = {0};
+    GetClassNameW(h, cls, 63);
+    if ((wcsncmp(cls, L"XTPDockBar", 10) == 0 || wcsncmp(cls, L"XTPStatusBar", 12) == 0
+        || wcsncmp(cls, L"XTPToolBar", 10) == 0) && GetParent(h) == c->form) {
+        SetWindowPos(h, HWND_TOP, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+    return TRUE;
+}
+
 static BOOL CALLBACK vb6_mdi_panemgr_cb352(HWND h, LPARAM lp) {
     wchar_t cls[64] = {0};
     GetClassNameW(h, cls, 63);
@@ -355,12 +369,21 @@ void vb6_MDI_RelayoutClient(void* hMDIForm) {
                              MAKELPARAM(rc.right, rc.bottom));
             }
             vb6_OcxHost_InvokeAll(hForm, L"RecalcLayout");
+            /* 第三百六十七刀: z 序 —— 停靠带/工具栏/状态栏 (窗体子窗) 提到
+             * MDIClient 之上。此前写反 hInsertAfter 语义 (插其后 = 压其下)。
+             * 停靠带窗口其实已是全宽正确位置, 只是整个被 MDIClient 压住
+             * (实测: 枚举 1542x81 @0,23 全宽正确, 屏上却只见文档)。 */
+            {
+                struct Ctx367 { HWND form, client; } c367 = { hForm, hClient };
+                EnumChildWindows(hForm, vb6_mdi_zorder_cb367, (LPARAM)&c367);
+            }
         /* 第三百五十五刀: 真正的回流驱动 —— 无窗口 OCX (Codejock 一族) 的窗口
          * 消息靠容器**转发** (IOleInPlaceObjectWindowless::OnWindowMessage),
          * 而转发站 (vb6_OcxHost_ForwardMessage) 此前没有任何调用者 ⇒ 它们永远
          * 收不到 WM_SIZE, 停靠带/窗格全冻结在激活那一刻的尺寸。这里补发。 */
-        vb6_OcxHost_ForwardMessage(hForm, WM_SIZE, SIZE_RESTORED,
-            MAKELPARAM(rc.right, rc.bottom), NULL);
+        /* 第三百六十八刀: ForwardMessage(WM_SIZE) 撤下 —— 它让 Codejock 重排
+         * 时把 MDIClient 拉回 (0,0) 全客户区, 与带内摆位打乒乓 (实测: 摆到
+         * y=81 又被拉回 y=0, 菜单带永远被盖)。 */
             /* nudge 链是同步的 —— Codejock 重排完可能把 MDIClient 挪回顶部
              * 盖住菜单带 (实测)。链尾重申一次带内位置与 z 序。 */
             RECT rcNow; GetWindowRect(hClient, &rcNow);
