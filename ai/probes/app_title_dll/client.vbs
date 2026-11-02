@@ -11,5 +11,8 @@ WScript.Echo o.P2()
 WScript.Echo o.P3()
 WScript.Echo o.P4()
 WScript.Echo o.P5()
+WScript.Echo o.P6()
+WScript.Echo o.P7()
+WScript.Echo o.P8()
 
 Set o = Nothing
