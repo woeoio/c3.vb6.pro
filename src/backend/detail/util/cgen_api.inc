@@ -150,6 +150,9 @@
     std::string wrapConstArgForByRef(const std::string& argVal, Vb6Type paramVb6Type) const;
     // Fix 189: 当前函数的 ByRef 具体类型形参作为 ByRef Variant 实参 → 字段式 VARIANT 包装
     std::string wrapByRefVariantParamArg(const std::string& paramName, Vb6Type curParamType) const;
+    // 账 #608: Print # 与 Write # 那句「这枚实参是不是已经是一枚 BSTR」收成一位主人
+    // (原先两条语句各抄一份名单+闸门，两份都只问**局部**那张表)。
+    bool fileOutArgIsBstr(const std::string& expr, Expr& argNode) const;
     void visit(OpenStmt& node) override;
     void visit(CloseStmt& node) override;
     void visit(PrintStmt& node) override;

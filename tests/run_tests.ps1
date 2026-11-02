@@ -760,6 +760,23 @@ function Test-FormIconCensus {
     }
 }
 
+# 账 #305 第329刀 (账 #608): Print # / Write # 那句「这枚实参是不是 BSTR」只有一位主人。
+# 修前那两道闸门在同一个文件里抄了两份、而且只问局部那张表 => 模块级 String 落进数值兜底，
+# 文件里只剩一枚指针数。形状细节见 scripts/check_fileout_bstr_gate.ps1 头注释。
+function Test-FileOutBstrGateCensus {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] fileout_bstr_gate ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_fileout_bstr_gate.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 # 账 #159: 宿主伪成员只有一张表 (名字 / 类型 / 可否裸写 / 赋值拆数值)。哨兵逐行把
 # 表与 src/rtl/core/vb6rtl/vb6rtl_userctl.h 的 extern 声明对照, 并禁止那五份旧清单
 # 回潮 (成员名字面量再出现在消费点 = 抄了第二份)。
@@ -4929,6 +4946,10 @@ if ($Category -in @("all", "run", "bas")) {
     # (把返回值 1 当指针 → 段错误)。读数全 ASCII, 两架构应一致。
     Add-BasTest "test_text_compare" "$Tests\test_text_compare.bas" @("TC-instr-b=0", "TC-instr-t=7", "TC-instr4-t=20", "TC-instr4-b=0", "TC-rep-b=[-A-A]", "TC-rep-t=[----]", "TC-split-b-ub=0", "TC-split-t-ub=2 [a|b|c]", "TC-filter-b-ub=0", "TC-filter-t-ub=1 [abc|ABD]", "TC-sc-b=1", "TC-sc-t=-1", "TC-sc-eq=0", "TC-DONE")
     Add-BasTest "test_fileio" "$Tests\test_fileio.bas"
+    # <vbeclipse> 账 #608 (第329刀): 模块级 Public String 交进 Print # / Write # 的那一格。
+    # 修前实测回读是 -884158216 (BSTR 指针被 (int32_t) 折成数)；判据一律从文件回读拿，
+    # 608-num 是负控 (数值兜底那条口径不许被带动)，608-local / 608-concat 是存在性正控。
+    Add-BasTest "test_fileio_modstr" "$Tests\test_fileio_modstr.bas" @("608-modstr=[ModLevel-String-608] ok=True", "608-local=[Local-String-608] ok=True", "608-num=[4242] ok=True", "608-concat=[ModLevel-String-608!] ok=True", "608-fixstr-not-digits ok=True", "608-write-quoted ok=True", "608-DONE")
     # --- Fix 197: RTL 文件 I/O 在非 ASCII 路径下必须工作 ---
     # 源码纯 ASCII, 中文文件名在运行时用 ChrW 拼出, 检查 9 项 MkDir/Print#/Line Input/
     # Write#/FileCopy/Kill/Name/ChDir/RmDir 全过 (缺一即 FAIL: 断言 needle 缺失)。
@@ -10488,6 +10509,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-UcScaleUnitsCensus }
     if (Enter-StaticShard) { Test-FormIconCensus }
     if (Enter-StaticShard) { Test-HostPseudoTableCensus }
+    if (Enter-StaticShard) { Test-FileOutBstrGateCensus }
     if (Enter-StaticShard) { Test-AddressOfThunkSites }
     if (Enter-StaticShard) { Test-FloatLiteralShape }
     if (Enter-StaticShard) { Test-IntLiteralShape }

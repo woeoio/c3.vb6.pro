@@ -56,8 +56,20 @@ void CCodeGen::visit(CloseStmt& node) {
     }
 }
 
-void CCodeGen::visit(PrintStmt& node) {
-    // M22-Issue6: BSTR expression detection shared by both Print modes
+// 账 #608: 「这一枚实参是不是已经是一枚 BSTR」的那道闸门，Print # 与 Write # 各抄过一份
+// （名单 + 查表，两份一字一样），而且两份都只问**局部**那张表 ——
+// `knownBstrVars_` 在每个过程入口被 clear 后只由局部声明与形参重新填
+// (cgen_decl_proc.cpp:51 / cgen_decl_func.cpp:47)，所以模块级那句 `Public gAll As String`
+// 压根不在里面 ⇒ `Print #f, gAll` 落进下面的数值兜底，发出来是
+// `vb6_Print(fn, vb6_Str((int32_t)(gAll)))`：把 BSTR 指针当数打印，产物文件里只有一枚指针数
+// (实测 probe_out.txt = "710757560")。真语料 D:\vb_yqt4qPac 里这一族有 48 处
+// （Print#/Write# 共 2158 行，实参是裸标识符的 245 行，其中同名在**本文件列 0** 声明成
+// `As String` 的 48 行）。
+//
+// 修法沿用账 #113 那把尺：只对**裸标识符**补问一次符号表（inferExprType 的 IdentifierExpr
+// 分支认得模块级变量），成员/控件属性/数组元素那一族的既有通道一个都不碰 —— 它们各自另有主人。
+// 数值兜底那条口径（`(int32_t)` 折成串）保持不变。
+bool CCodeGen::fileOutArgIsBstr(const std::string& expr, Expr& argNode) const {
     static const std::vector<std::string> bstrFuncs = {
         "vb6_BSTR_FromStr", "vb6_Left", "vb6_Right", "vb6_Mid",
         "vb6_UCase", "vb6_LCase", "vb6_UCase_str", "vb6_LCase_str",
@@ -66,18 +78,20 @@ void CCodeGen::visit(PrintStmt& node) {
         "vb6_Replace", "vb6_Space", "vb6_String", "vb6_StrReverse",
         "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_Title", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption"
     };
-    auto isBstrExpr = [&](const std::string& expr) -> bool {
-        for (auto& prefix : bstrFuncs) {
-            if (expr.compare(0, prefix.size(), prefix) == 0) return true;
-        }
-        if (expr.compare(0, 8, "vb6_BSTR") == 0) return true;
-        if (expr.find("VB6_SA_AT(BSTR,") != std::string::npos) return true;
-        std::string lower = expr;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (knownBstrVars_.count(lower)) return true;
-        return false;
-    };
+    for (auto& prefix : bstrFuncs) {
+        if (expr.compare(0, prefix.size(), prefix) == 0) return true;
+    }
+    if (expr.compare(0, 8, "vb6_BSTR") == 0) return true;
+    if (expr.find("VB6_SA_AT(BSTR,") != std::string::npos) return true;
+    std::string lower = expr;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (knownBstrVars_.count(lower)) return true;
+    if (argNode.kind == ASTNodeKind::IdentifierExpr &&
+        inferExprType(argNode) == Vb6Type::String) return true;
+    return false;
+}
 
+void CCodeGen::visit(PrintStmt& node) {
     if (node.isFormPrint) {
         // M22-Issue6: Form surface Print - "Print expr" in form module
         // Generate: vb6_Form_Print(formHwnd, bstrExpr) for each output item
@@ -85,7 +99,7 @@ void CCodeGen::visit(PrintStmt& node) {
         for (auto& expr : node.outputList) {
             emitExpr(*expr);
             std::string val = lastExpr_;
-            if (isBstrExpr(val)) {
+            if (fileOutArgIsBstr(val, *expr)) {
                 c_.emitLine("vb6_Form_Print(" + formHwnd + ", " + val + ");");
             } else {
                 // Use wrapToBSTR for proper type conversion (Date→CStrDate, etc.)
@@ -106,7 +120,7 @@ void CCodeGen::visit(PrintStmt& node) {
         for (auto& expr : node.outputList) {
             emitExpr(*expr);
             std::string val = lastExpr_;
-            if (isBstrExpr(val)) {
+            if (fileOutArgIsBstr(val, *expr)) {
                 // 已经是BSTR, 直接传给vb6_Print
                 c_.emitLine("vb6_Print(" + fnum + ", " + val + ");");
             } else {
@@ -121,33 +135,13 @@ void CCodeGen::visit(WriteStmt& node) {
     emitExpr(*node.fileNumber);
     std::string fnum = std::move(lastExpr_);
 
-    static const std::vector<std::string> bstrFuncs = {
-        "vb6_BSTR_FromStr", "vb6_Left", "vb6_Right", "vb6_Mid",
-        "vb6_UCase", "vb6_LCase", "vb6_UCase_str", "vb6_LCase_str",
-        "vb6_Trim", "vb6_LTrim", "vb6_RTrim", "vb6_Chr",
-        "vb6_Str", "vb6_CStr", "vb6_Format", "vb6_Hex", "vb6_Oct",
-        "vb6_Replace", "vb6_Space", "vb6_String", "vb6_StrReverse",
-        "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_Title", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption"
-    };
-    auto isBstrExpr = [&](const std::string& expr) -> bool {
-        for (auto& prefix : bstrFuncs) {
-            if (expr.compare(0, prefix.size(), prefix) == 0) return true;
-        }
-        if (expr.compare(0, 8, "vb6_BSTR") == 0) return true;
-        if (expr.find("VB6_SA_AT(BSTR,") != std::string::npos) return true;
-        std::string lower = expr;
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (knownBstrVars_.count(lower)) return true;
-        return false;
-    };
-
     if (node.outputList.empty()) {
         c_.emitLine("vb6_Write(" + fnum + ", NULL);");
     } else {
         for (auto& expr : node.outputList) {
             emitExpr(*expr);
             std::string val = lastExpr_;
-            if (isBstrExpr(val)) {
+            if (fileOutArgIsBstr(val, *expr)) {
                 c_.emitLine("vb6_Write(" + fnum + ", " + val + ");");
             } else {
                 c_.emitLine("vb6_Write(" + fnum + ", vb6_Str((int32_t)(" + val + ")));");
