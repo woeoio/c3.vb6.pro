@@ -1,10 +1,11 @@
-Attribute VB_Name = "T608"
+﻿Attribute VB_Name = "T608"
 Option Explicit
 
 ' 账 #608: Print # 与 Write # 对**模块级** String 实参认不认得。修前发成
 ' vb6_Print(fn, vb6_Str((int32_t)(gAll))) —— 把 BSTR 指针当数打印，文件里只剩一枚指针数
 ' (根因 = knownBstrVars_ 每过程入口 clear 后只由局部声明与形参重新填，模块级那句进不了表)。
-' 判据一律从**文件回读**拿；模块级 Long 那一行是负控，数值兜底口径不许被带动。
+' 判据一律从**文件回读**拿；模块级 Long 那一行是**数值档中立性证人** —— 第331刀把那条 int32 兜底
+' 撤了 (改走 wrapToBSTR 按档分诊)，这一枚钉的是「Long 档的读数一字不变」，带动它就算回归。
 ' 载荷全 ASCII ⇒ 结果与码页无关 (ai/029 的 ASCII 载荷纪律)。
 
 Public gAll As String

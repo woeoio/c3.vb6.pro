@@ -153,6 +153,8 @@
     // 账 #608: Print # 与 Write # 那句「这枚实参是不是已经是一枚 BSTR」收成一位主人
     // (原先两条语句各抄一份名单+闸门，两份都只问**局部**那张表)。
     bool fileOutArgIsBstr(const std::string& expr, Expr& argNode) const;
+    // 账 #305 第331刀: 上面那道闸 + 非 BSTR 那半的取值出口，合起来是「实参形状」这一问的主人。
+    std::string fileOutArgBstrExpr(const std::string& expr, Expr& argNode);
     void visit(OpenStmt& node) override;
     void visit(CloseStmt& node) override;
     void visit(PrintStmt& node) override;

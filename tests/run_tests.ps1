@@ -760,9 +760,10 @@ function Test-FormIconCensus {
     }
 }
 
-# 账 #305 第329刀 (账 #608): Print # / Write # 那句「这枚实参是不是 BSTR」只有一位主人。
-# 修前那两道闸门在同一个文件里抄了两份、而且只问局部那张表 => 模块级 String 落进数值兜底，
-# 文件里只剩一枚指针数。形状细节见 scripts/check_fileout_bstr_gate.ps1 头注释。
+# 账 #305 第329+331刀 (账 #608/#609): Print # / Write # 的两问各收成一位主人 ——
+# 「这枚实参是不是 BSTR」(第329刀：闸门原先抄两份且只问局部那张表 ⇒ 模块级 String 落进兜底，
+# 文件里只剩一枚指针数) 与「该以什么形状交给出口」(第331刀：非 BSTR 那半原先自留一条 int32 兜底，
+# 一次塌三档，现与窗体面 Print 同走 wrapToBSTR)。形状细节见 scripts/check_fileout_bstr_gate.ps1 头注释。
 function Test-FileOutBstrGateCensus {
     $script:total++
     Write-Host -NoNewline "  [STATIC] fileout_bstr_gate ... "
@@ -4950,6 +4951,24 @@ if ($Category -in @("all", "run", "bas")) {
     # 修前实测回读是 -884158216 (BSTR 指针被 (int32_t) 折成数)；判据一律从文件回读拿，
     # 608-num 是负控 (数值兜底那条口径不许被带动)，608-local / 608-concat 是存在性正控。
     Add-BasTest "test_fileio_modstr" "$Tests\test_fileio_modstr.bas" @("608-modstr=[ModLevel-String-608] ok=True", "608-local=[Local-String-608] ok=True", "608-num=[4242] ok=True", "608-concat=[ModLevel-String-608!] ok=True", "608-fixstr-not-digits ok=True", "608-write-quoted ok=True", "608-DONE")
+    # <vbeclipse> 账 #609 (第331刀 / 台账 §B11): Print # / Write # 的**非 BSTR 那半**改走窗体面
+    # Print 早已在用的那位主人 (wrapToBSTR 按档分诊)。修前那半自留一条 `vb6_Str((int32_t)(val))`，
+    # 一次塌三档 —— 返回 String 的工程函数打成指针数 (§B11 那一格)、返回 Variant 的**整棵工程编不过**
+    # (实测 C2440: 无法从 vb6_VARIANT 转换到 int32_t)、Date/Double/Boolean 被折成整数。判据两头：
+    # 夹具真跑按**文件回读**拿读数 (611-num 是数值档中立性证人，带动它就算回归)，发码形状针钉分诊
+    # 结果 + 那条兜底不许回潮。
+    Add-BasTest "b611_printfn" "$Tests\b611_printfn.bas" @("611-strfn=[StrFn-611] ok=True", "611-strfn-bare ok=True", "611-varfn=[7] ok=True", "611-num=[4242] neutral=True", "611-dbl-not-truncated ok=True", "611-bool=[True] ok=True", "611-date-in-year ok=True", "611-date-not-serial ok=True", "611-write-quoted ok=True", "611-DONE")
+    Test-EmitcShape 'b611_printfn_shape' @("$Tests\b611_printfn.bas") @(
+        'vb6_Print(fn, vb6_VariantToString(vb6_VarFn()));',
+        'vb6_Print(fn, vb6_CStrLong(vb6_NumFn()));',
+        'vb6_Print(fn, vb6_CStrDbl(vb6_DblFn()));',
+        'vb6_Print(fn, vb6_CStrBool(vb6_BoolFn()));',
+        'vb6_Print(fn, vb6_CStrDate(vb6_DateFn()));',
+        'vb6_Write(fn, vb6_StrFn());'
+    )
+    Test-EmitcAbsent 'b611_printfn_no_int32_fallback' @("$Tests\b611_printfn.bas") @(
+        'vb6_Str((int32_t)('
+    )
     # --- Fix 197: RTL 文件 I/O 在非 ASCII 路径下必须工作 ---
     # 源码纯 ASCII, 中文文件名在运行时用 ChrW 拼出, 检查 9 项 MkDir/Print#/Line Input/
     # Write#/FileCopy/Kill/Name/ChDir/RmDir 全过 (缺一即 FAIL: 断言 needle 缺失)。
