@@ -114,13 +114,13 @@ Want 'R7 write intercept once' (C 'vb6_SetAppTitle(" + rhsAt + ");' $ASG) 1 'App
 Want 'R7 intercept guard' (C 'objAt == "app" && memAt == "title" && !knownLocalVars_.count(objAt)' $ASG) 1 '局部同名变量优先 (与读取侧同一判据)'
 Want 'R7 rhs wraps to BSTR' (C 'wrapToBSTR(std::move(lastExpr_), *node.value)' $ASG) 1 '右值按 BSTR 交给 setter (数值/串各走既有折算)'
 
-# ---- R8 六份 BSTR 返回名单 ----
+# ---- R8 五份 BSTR 返回名单 ---- (第329刀: cgen_file_io.cpp 的两份名单抄本收成一位主人 ⇒ 这里从 6 改 5)
 $lists = [ordered]@{
     'src/backend/detail/expr/cgen_expr_call_builtin_pre.inc' = 1
     'src/backend/expr/cgen_expr_binary.cpp'                  = 1
     'src/backend/expr/cgen_expr_binary_util.cpp'             = 1
     'src/backend/stmt/cgen_call.cpp'                         = 1
-    'src/backend/stmt/cgen_file_io.cpp'                      = 2
+    'src/backend/stmt/cgen_file_io.cpp'                      = 1
 }
 $listSum = 0
 foreach ($k in $lists.Keys) {
@@ -129,7 +129,7 @@ foreach ($k in $lists.Keys) {
     Want ('R8 list ' + [IO.Path]::GetFileName($k)) $got $lists[$k] ('这份 BSTR 返回名单漏了 App.Title (没登记的出口 = 每调用漏一枚 BSTR / 拼接形状错)')
     $listSum += $got
 }
-Want 'R8 list total' $listSum 6 '六处名单站都要认这枚名字'
+Want 'R8 list total' $listSum 5 '五处名单站都要认这枚名字'
 
 # ---- R9 登记面 ----
 Want 'R9 sentinel registered' (C 'check_app_title_authority.ps1' $RUN) 1 '本哨兵在 run_tests.ps1 里被引用一次'
