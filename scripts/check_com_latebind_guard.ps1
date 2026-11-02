@@ -134,7 +134,7 @@ function Index-Of262([string[]]$body, [string]$needle) {
     return -1
 }
 
-$missing = @($invPath, $comH, $clsH, $hostC, $ctrlH, $incCall, $incGet, $incSet, $rtPath, $ucC, $rtlC, $formsC, $ctrlC, $hostWinC, $ucCreateC, $formWpInc) |
+$missing = @($invPath, $comH, $clsH, $hostC, $ctrlH, $incCall, $incGet, $incSet, $rtPath, $ucC, $rtlC, $formsC, $ctrlC, $hostWinC, $ucCreateC, $ucHostC, $formWpInc) |
            Where-Object { -not (Test-Path $_) }
 if ($missing) {
     foreach ($m in $missing) { $fail += ("missing file " + $m) }
@@ -453,6 +453,20 @@ if ($nASet -ne 0) {
     $fail += ("R11 hand-written WM_SETFONT senders in uc_controls.c = " + $nASet +
               " (want 0) - 发信人要抄第二份, 作废那本账就有人对不上")
 }
+# 账 #305 第332刀 (账 #611 / 台账 §B12): `.ctl` 设计面那批 EDIT 也是这位发信人的住户 —— 从前这一站
+# 自己 `GetStockObject(DEFAULT_GUI_FONT)` + WM_SETFONT，交出去的是**这台机器的 GDI 缺省** (本机实测
+# SimSun -12)，而同一棵窗口树里它的宿主早就问这位主人拿了 MS Sans Serif -11 ⇒ 一棵树两套字体。
+$designEditCode = Strip-Comments262 ((Read-Lines262 $ucHostC) -join "`n")
+$nADesign = ([regex]::Matches($designEditCode, 'vb6_UC_ApplyFontToWindow\(edit, NULL\)')).Count
+if ($nADesign -ne 1) {
+    $fail += ("R11 design-edit send site (VB6 default arm) = " + $nADesign +
+              " (want 1 in uc_host.c) - 那一户退回 stock 默认字体就是第二套答案 (同树两套字体)")
+}
+$nASetHost = ([regex]::Matches($designEditCode, 'WM_SETFONT')).Count
+if ($nASetHost -ne 0) {
+    $fail += ("R11 hand-written WM_SETFONT senders in uc_host.c = " + $nASetHost +
+              " (want 0) - 发信人要抄第二份, 作废那本账就有人对不上")
+}
 
 # ---- R12: 第二百八十刀那一档 (窗体顶层**本人**答字体那一问) 的形状 ----
 # 第二百七十九刀让自注册的 UC 宿主类本人答，这一刀管**发码发出来的**那枚窗体顶层。规矩同一条:
@@ -648,5 +662,5 @@ if ($fail.Count -gt 0) {
     foreach ($f in $fail) { Write-Host ("FAIL " + $f) }
     exit 1
 }
-Write-Host ("PASS check_com_latebind_guard: exits=7 guarded=7 pseudo-exempt=3 order=pseudo-first guard=behavior-preserving counter-outlets=2 host-sibling=3 runner-sites=3 inline-counters=2 negative-control=2 hfont-owner=1 hfont-kind5=2 height-owner=1 height-consumers=3 name-default=ms-sans-serif apply-owner=1 apply-senders=2 self-registered=1") form-ans-owner=1 form-ans-body=1 form-ans-decl=1 form-ans-emit=1 windowless-owner=1 windowless-outlets=2 windowless-arms=2 mask-owner=1 mask-arms=2 vg-owner=1 vg-decl=1 vg-outlet=1 vg-radio-gate=3 vg-truth-guard=1 vg-sibling-setter=1 vis-owner=1 vis-window=1 vis-decl=1 vis-outlets=2 vis-zero-guard=1 vis-old-drop=0 geom-mask=3 geom-read=1 geom-units=5 geom-route=2 geom-cdecl=1 geom-cdef=1 geom-nowindow=0 geom-writes=3 geom-method=3 latebind-drop=4 call-flags=1 flag-owner=1 invoke-func-only=1 propget-hedge=1 blanket-flags=2 narrow-def=1 narrow-call=1 narrow-before-copy=1 himetric-typedef=1 ti-lcid0=1
+Write-Host ("PASS check_com_latebind_guard: exits=7 guarded=7 pseudo-exempt=3 order=pseudo-first guard=behavior-preserving counter-outlets=2 host-sibling=3 runner-sites=3 inline-counters=2 negative-control=2 hfont-owner=1 hfont-kind5=2 height-owner=1 height-consumers=3 name-default=ms-sans-serif apply-owner=1 apply-senders=3 self-registered=1") form-ans-owner=1 form-ans-body=1 form-ans-decl=1 form-ans-emit=1 windowless-owner=1 windowless-outlets=2 windowless-arms=2 mask-owner=1 mask-arms=2 vg-owner=1 vg-decl=1 vg-outlet=1 vg-radio-gate=3 vg-truth-guard=1 vg-sibling-setter=1 vis-owner=1 vis-window=1 vis-decl=1 vis-outlets=2 vis-zero-guard=1 vis-old-drop=0 geom-mask=3 geom-read=1 geom-units=5 geom-route=2 geom-cdecl=1 geom-cdef=1 geom-nowindow=0 geom-writes=3 geom-method=3 latebind-drop=4 call-flags=1 flag-owner=1 invoke-func-only=1 propget-hedge=1 blanket-flags=2 narrow-def=1 narrow-call=1 narrow-before-copy=1 himetric-typedef=1 ti-lcid0=1
 exit 0

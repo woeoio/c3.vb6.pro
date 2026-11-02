@@ -487,6 +487,31 @@ if (Test-Path -LiteralPath $draw) {
     }
 } else { $bad += ("D13 missing " + $drawRel) }
 
+# ---- D14: 设计面 EDIT 的字体也问那位主人 (账 #305 第332刀 / 账 #611 / 台账 §B12) ----
+# `.ctl` 设计面上的 TextBox 每实例建一枚真 EDIT (vb6_UC_CreateDesignEdit)。从前这一站自己
+# `GetStockObject(DEFAULT_GUI_FONT)` + WM_SETFONT —— 交出去的是**这台机器的 GDI 缺省**
+# (本机实测 SimSun -12，而文档上那句「Segoe UI 9pt」在 zh-CN 那台上压根不成立)，同一个 UC 的
+# 宿主窗口却由第278刀那位主人发过 MS Sans Serif 8.25pt (实测 -11) ⇒ 一棵窗口树两套字体，
+# 设计面里那格文字按错的口径量、排、画。钉三件: 站内必须问主人 (恰 1)、站内不许再碰 stock (0)、
+# 全 src/rtl 那条 stock 只许剩主人自己的兜底 (1) —— 第二户就是这么长出来的。
+$dEditAsk = @($rtl | Where-Object { $_.File -eq 'uc_host.c' -and $_.Text.Contains('vb6_UC_ApplyFontToWindow(edit, NULL)') })
+if ($dEditAsk.Count -ne 1) {
+    $bad += ('D14 设计面 EDIT 问主人的站点 = ' + $dEditAsk.Count + ' (want exactly 1 - 站内不许再自己造字体) -> ' +
+             (($dEditAsk | ForEach-Object { $_.File + ':' + $_.Line }) -join ' | '))
+}
+$dEditStock = @($rtl | Where-Object { $_.File -eq 'uc_host.c' -and $_.Text.Contains('GetStockObject(DEFAULT_GUI_FONT)') })
+if ($dEditStock.Count -ne 0) {
+    $bad += ('D14 uc_host.c 里自己取 stock 默认字体 = ' + $dEditStock.Count +
+             ' 处 (want 0 - 那是这台机器的 GDI 缺省，不是 VB6 的控件默认字体) -> ' +
+             (($dEditStock | ForEach-Object { $_.File + ':' + $_.Line }) -join ' | '))
+}
+$stockAll = @($rtl | Where-Object { $_.Text.Contains('GetStockObject(DEFAULT_GUI_FONT)') })
+if ($stockAll.Count -ne 1) {
+    $bad += ('D14 全 src/rtl 里 stock 默认字体 = ' + $stockAll.Count +
+             ' 处 (want exactly 1 = 主人 vb6_Vb6DefaultGuiFont 的兜底那一行) -> ' +
+             (($stockAll | ForEach-Object { $_.File + ':' + $_.Line }) -join ' | '))
+}
+
 if ($bad.Count -eq 0) {
     Write-Host ("PASS Control drawing DC: 定义 " + $defs.Count + " / 调用 " + $calls.Count +
                 " / 出口 " + $exitDef.Count + " / 槽位写 " + $wr.Count + " 归还 " + $rel.Count +

@@ -771,8 +771,14 @@ void* vb6_UC_CreateDesignEdit(int32_t left, int32_t top, int32_t width, int32_t 
                                 vb6_TwipToX(width), vb6_TwipToY(height),
                                 parent, NULL, hInst, NULL);
     if (edit) {
-        HFONT f = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        SendMessageW(edit, WM_SETFONT, (WPARAM)f, TRUE);
+        // 账 #305 第332刀 (台账 §B12): 设计面 EDIT 的字体从此问那位主人，不再自己
+        // `GetStockObject(DEFAULT_GUI_FONT)` —— VB6 的控件默认字体是 MS Sans Serif 8.25pt
+        // (第278刀那一站的 fontFields=NULL 那一档)，而 stock 对象在这台机器上答回来的是
+        // **SimSun -12** (实测 czFormDemo 的 11 枚设计面 EDIT 全 -12，而它们的宿主那 11 枚
+        // 早就问主人拿了 -11/MS Sans Serif —— 同一棵窗口树两套字体，就是这个缺口的形状)。
+        // 走主人顺带拿到它那份所有权账：Create/WM_SETFONT/存/删旧都在 `vb6_SetControlFontFromLogFont`
+        // 一处，不许把缓存句柄递给 WM_SETFONT 那条禁令也一起生效。
+        vb6_UC_ApplyFontToWindow(edit, NULL);
         vb6_GeomOwnerStamp(edit, parent);   /* 账 #305 299 */
     }
     return edit;
