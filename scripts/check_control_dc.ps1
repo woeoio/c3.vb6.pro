@@ -22,6 +22,10 @@
 #       且 src/backend 里手拼发码 `"vb6_GetControlHDC(` = 0 (表交的是名字, 别处不许再拼一遍)
 #   D13 vb6forms_draw.c 不许自己开 DC (账 #234: 那份重复的"先问 VB6_PaintDC 否则 GetDC"撤掉了,
 #       它现在只许问权威 D1 那一处; D2 的调用点数因此从 5 涨到 6)
+#   D14 `.ctl` 设计面那批 EDIT (vb6_UC_CreateDesignEdit) 也问那位把字体发到窗口上的主人
+#       (账 #305 第332刀: 从前它自己 GetStockObject(DEFAULT_GUI_FONT)，交出去的是这台机器的 GDI
+#       缺省 —— 本机实测 SimSun -12，而同树的宿主是 MS Sans Serif -11 = 一棵树两套字体)。
+#       站内问主人恰 1 / 站内 stock 0 / 全 src/rtl 那条 stock 只剩主人自己的兜底 1
 #
 # 用法:  pwsh -File scripts\check_control_dc.ps1
 # 退出码: 0 = 全绿; 1 = 红
