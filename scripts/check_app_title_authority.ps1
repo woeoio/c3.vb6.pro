@@ -172,7 +172,14 @@ foreach ($k in $lists.Keys) {
 }
 Want 'R8 list total' $listSum 4 '四处仍在的名单站都要认这枚名字 (file_io 那两处已删)'
 # R8b: 删表之后 App.Title 走字符串路径的**运行期**证据 (类型由 inferExprType 答 String)
-Want 'R8b file_io asks type' (C 'inferExprType(e) == Vb6Type::String' (Load 'src/backend/stmt/cgen_file_io.cpp')) 2 '两处分流都必须先问类型 (不是名字)'
+# 第三刀 (账 #608/第331刀) 把「这枚实参是不是 BSTR」收成一位主人 fileOutArgIsBstr:
+# 类型那一问只许在主人里出现一次; 两条分流 (Print#/Write#) 与窗体面 Print 必须都转调它 ——
+# 它们各自留一份拷贝就是第二个判据 (名字/形状会重新变成主判据)。
+$FIO = Load 'src/backend/stmt/cgen_file_io.cpp'
+Want 'R8b file_io owner defined' (C 'bool CCodeGen::fileOutArgIsBstr(const std::string& expr, Expr& argNode) const {' $FIO) 1 '「这枚实参是不是 BSTR」只许一位主人'
+Want 'R8b file_io asks type once' (C 'inferExprType(argNode) == Vb6Type::String' $FIO) 1 '类型那一问只住主人里 (两处各抄一份 = 名字判据回潮)'
+Want 'R8b file_io both sites call owner' (C 'if (fileOutArgIsBstr(val, *expr)) {' $FIO) 2 'Print# 与 Write# 都必须转调主人'
+Want 'R8b file_io form print owner' (C 'fileOutArgBstrExpr(val, *expr)' $FIO) 1 '窗体面 Print 也必须转调同一主人'
 Want 'R8b b600 prints App.Title' (C 'Print #f, App.Title' (Load 'tests/b600_print_string_dispatch/B600Main.bas')) 1 'B600 必须有一条 App.Title 的 Print #'
 Want 'R8b b600 title seeded' (C 'Title="B600 Title"' (Load 'tests/b600_print_string_dispatch/B600.vbp')) 1 'B600 的 .vbp 要有 Title (否则读回 EXE 名, 与类型路径无关)'
 Want 'R8b b600 needle' (C '"[B600 Title]"' $RUN) 1 '期望表里要钉 App.Title 写盘行 (数值路径会写成指针整数)'
