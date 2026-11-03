@@ -154,14 +154,34 @@
         if (mask18) vb6_ControlMove(obj, L18, T18, W18, H18, mask18);
         return 1;
     }
-    if (_wcsicmp(name, L"Show") == 0) { ShowWindow((HWND)obj, SW_SHOW); return 1; }
+    /* 账 #xxx: 窗体的 `Show` 不是裸 ShowWindow —— VB6 里它还要排 Form_Load、
+     * 激活、置前, MDI 子窗体更要把自己置为**活动子窗体** (ActiveForm 随即指向它)。
+     * 实测 (IdChild: `Set c = New IdChild` + `c.Show` 走晚绑定这一臂) 只 ShowWindow
+     * ⇒ 子窗体可见、标题可读, 但 WM_MDIGETACTIVE 恒 0、ActiveForm 静默 Empty。
+     * 过窗体的 Show 一律交给 vb6_ShowForm (与生成代码 vb6_form_show_X 同一个出口)。 */
+    if (_wcsicmp(name, L"Show") == 0) {
+        vb6_HostObjRec* hShowA = vb6_ho_find((void*)obj);
+        if (hShowA && hShowA->isForm) { vb6_ShowForm((void*)obj, 0); return 1; }
+        ShowWindow((HWND)obj, SW_SHOW); return 1;
+    }
     if (_wcsicmp(name, L"Hide") == 0) { ShowWindow((HWND)obj, SW_HIDE); return 1; }
-    if (_wcsicmp(name, L"ZOrder") == 0 ||
-        _wcsicmp(name, L"Print") == 0 || _wcsicmp(name, L"Line") == 0) {
+    /* 账 #305 第三百五十一刀: ZOrder 真重排 (position 0=前, 1=后)。
+       relative 那枚本刀不接 —— GUISample 只出现 0/1 两档, 留到下一批。 */
+    if (_wcsicmp(name, L"ZOrder") == 0) {
+        int32_t pos = (argc >= 1 && argv[0])
+                    ? vb6_ho_variantToLong((vb6_VARIANT*)argv[0]) : 0;
+        SetWindowPos((HWND)obj, pos ? HWND_BOTTOM : HWND_TOP, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        return 1;
+    }
+    if (_wcsicmp(name, L"Print") == 0 || _wcsicmp(name, L"Line") == 0) {
         return 1;
     }
     /* 账 #305 第二百六十二刀 (丙): 走到这里 = 宿主模型**不认识**这个成员。
        以前直接 return 1 (静默答「已处理」) ⇒ 调用方拿到 Empty, 看不出漏了谁。
-       现在数出来并报一行 (C3_HOST_MEMBER_MISS); 行为不变 (仍 return 1)。 */
-    vb6_ho_reportUnknown(L"Call", name, obj);
-    return 1;   // 宿主对象: 未知方法一律空实现
+       现在单独报一行 [C3_HOST_438] (与真缺口另计)。
+       账 (438 语义刀): 返回值改答 **-1 = 成员不存在** (与 getprop 同口径), 由
+       vb6_ComCallRcv 的宿主分支按 VB6 语义抛 438, 交 On Error Resume Next 吞掉。
+       认得的成员仍在上面各臂 return 1, 行为不变。 */
+    vb6_ho_report438(L"Call", name, obj);
+    return -1;  // 宿主对象: 成员不存在 (调用方按 VB6 语义抛 438)

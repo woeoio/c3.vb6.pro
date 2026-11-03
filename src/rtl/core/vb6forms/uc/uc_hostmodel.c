@@ -6,6 +6,7 @@
 #include "vb6forms_uc_internal.h"
 #include "vb6forms_prop.h"      // 账 #247: 控件几何的唯一出口 (vb6_Get/SetControlLeft|Top|Width|Height)
 #include "vb6forms_prop_ctrl.h"   // Fix 143: vb6_AddItem/RemoveItem/ClearList (原生列表 COM 晚绑定)
+extern void vb6_ShowForm(void* hwnd, int modal);  /* 窗体 Show 的唯一出口 (vb6forms.c) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,6 +20,15 @@ extern "C" {
 static int32_t g_host_unknown_member = 0;
 
 int32_t vb6_Host_UnknownMemberCount(void) { return g_host_unknown_member; }
+
+/* 账 (438 语义刀): 读侧 (GetProp / Call) 不认识的名字不再算「缺口」——
+ * VB6 在这里抛 438, 由 On Error Resume Next 吞掉, 引擎侧的行为是**对的**。
+ * 它们单独记一枚计数器与一行 [C3_HOST_438], 与真缺口 (SetProp 等仍未实现、
+ * 静默返回 1 的名字) 分开计数: GUISample 实测 = 274 条 GetProp "rtfText"
+ * (frmDocument 没有该成员) + 3 条 SetProp "Icons" (真缺口)。 */
+static int32_t g_host_438_member = 0;
+
+int32_t vb6_Host_Error438Count(void) { return g_host_438_member; }
 
 // ============================================================
 // 窗体/控件登记 (供宿主对象分派)
@@ -361,6 +371,23 @@ static void vb6_ho_reportUnknown(const wchar_t* site, const wchar_t* name, void*
                  (long)g_host_unknown_member, site, name ? name : L"(null)", obj,
                  (h && IsWindow(h)) ? 1 : 0, cls, pcls);
     }
+    fflush(stderr);
+}
+
+/* 账 (438 语义刀): 读侧成员不存在 = VB6 的 error 438, 不是缺口。单独一行标记,
+ * 便于把「被 On Error Resume Next 吞掉的 438」与真缺口分开数。 */
+static void vb6_ho_report438(const wchar_t* site, const wchar_t* name, void* obj) {
+    g_host_438_member++;
+    wchar_t cls[128] = L"-", pcls[128] = L"-";
+    HWND h = (HWND)obj;
+    if (h && IsWindow(h)) {
+        GetClassNameW(h, cls, 128);
+        HWND p = GetParent(h);
+        if (p) GetClassNameW(p, pcls, 128);
+    }
+    fwprintf(stderr, L"[C3_HOST_438 #%ld] site=%ls name=\"%ls\" obj=%p isWin=%d cls=%ls parent=%ls\n",
+             (long)g_host_438_member, site, name ? name : L"(null)", obj,
+             (h && IsWindow(h)) ? 1 : 0, cls, pcls);
     fflush(stderr);
 }
 

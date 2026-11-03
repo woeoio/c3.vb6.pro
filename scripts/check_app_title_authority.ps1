@@ -14,10 +14,12 @@
 #   R2 那一格的语义四件: setter 先退旧 / 标记"已播种" / 未播种退 EXEName / 显式空串答空;
 #   R3 MsgBox 的默认题头借那一格 (省略 title 不再递空串);
 #   R4 播种 lambda 定义一次, 每个入口模板各调一次 (调用数 == vb6_Init() 数);
-#   R5 驱动按 Title 优先、Name 兜底的读法只有一处, 字段与 setter 各一枚;
+#   R5 驱动按 Title 优先、exe 名兜底、最后才是工程 Name 的读法只有一处, 字段与 setter 各一枚;
 #   R6 读侧折叠恰一处, 旧的 EXE 名形已撤 (EXEName 自己那一臂仍在);
 #   R7 写侧拦截恰一处, 且局部同名优先 (knownLocalVars_ 同一判据);
-#   R8 认这枚名字的六份 BSTR 返回名单一份都没漏;
+#   R8 认这枚名字的 BSTR 返回名单一份都没漏 —— 第二步之后 Print#/Write# 那两份
+#      **已删**（分流改问 inferExprType）；本刀把"App.Title 仍是字符串路径"改由
+#      B600 运行断言兜住（R8b），名单总数随之 6 -> 4。
 #   R9 夹具 / 期望 / 发码针 / 本哨兵自己都已在 run_tests.ps1 登记;
 # 账 #305 第330刀 (账 #605) 又给这条线加了两腿 (VB6 实测在 ActiveX DLL 里 App 答的是这枚产物
 # 自己 —— 宿主 = 32 位 cscript: P1 答本工程 Title、P3 答 DLL 模块名、P4 答 DLL 目录):
@@ -121,11 +123,22 @@ if ($iInit -lt 0 -or $iSeed -lt 0 -or $iDetach -lt 0 -or -not ($iInit -lt $iSeed
 
 # ---- R5 驱动那一问 ----
 Want 'R5 driver seeds once' (C 'cgen.setProjectTitle(' $DRV) 1 '工程标题只许递进去一处'
-Want 'R5 seed algorithm once' (C 'std::string appTitleSeed() const { return !verTitle_.empty() ? verTitle_ : vbpProjectName_; }' $HPP) 1 '「Title 优先、Name 兜底」只许一处算法 (账 #605: Exe 与 DLL 分抄就会分家)'
+# 账 #305 第三百五十九刀改的是**口径**不是调用数: 无 Title= 时先退 exe 名 (ExeName32 的 stem),
+# 再退工程 Name。产物侧为什么现在是对的 —— 参考二进制的持久化键实测就是 exe 名:
+#   .vbp: ExeName32="GUISample.exe", Name="Project1", 无 Title=;
+#   参考运行写下的 HKCU\Software\VB and VBA Program Settings\GUISample\Settings 还在
+#   (MainLeft/MainTop/MainWidth/MainHeight 四项), 键名 = GUISample = exe 名, 不是 Project1。
+# 账 #605 (第330刀) 又把这句算法收进 appTitleSeed() 一处 (Exe 与 DLL 递同一枚种子)。
+# 所以本哨兵钉「算法体内的三档次序」(空白/换行不敏感), 而不是钉调用点的字面量:
+# 谁把 exe 名那一档撤掉/挪到 Name 之后, 这里就红; 旧两档/就地抄形回潮各单独钉 0。
+$r5ThreeTier = '(?s)std::string appTitleSeed\(\) const \{\s*return !verTitle_\.empty\(\)\s*?\?\s*verTitle_\s*:\s*\(' +
+                '\s*!projectBaseName_\.empty\(\)\s*?\?\s*projectBaseName_\s*:\s*vbpProjectName_\s*\)\s*;\s*\}'
+Want 'R5 Title then exe name then Name' ([regex]::Matches($HPP, $r5ThreeTier).Count) 1 '口径 = .vbp 的 Title, 空则 exe 名 (ExeName32 stem, 参考持久化键), 最后才是工程 Name'
 Want 'R5 station exe' (C 'cgen.setProjectTitle(appTitleSeed());' $DRV) 1 'Exe 那一路逐模块 cgen 递种子'
 Want 'R5 station dll' (C 'dllCgen.setProjectTitle(appTitleSeed());' $DLLT) 1 'DLL 那一路也递同一枚种子 —— 账 #605 的本体'
-Want 'R5 old inline fold gone exe' (C 'setProjectTitle(!verTitle_.empty()' $DRV) 0 '就地抄那句口径不许回潮 (Exe 路)'
-Want 'R5 old inline fold gone dll' (C 'setProjectTitle(!verTitle_.empty()' $DLLT) 0 '就地抄那句口径不许回潮 (DLL 路)'
+$r5OldTwoTier = '(?s)setProjectTitle\(!verTitle_\.empty\(\)'
+Want 'R5 old inline fold gone exe' ([regex]::Matches($DRV, $r5OldTwoTier).Count) 0 '就地抄那句口径不许回潮 (Exe 路)'
+Want 'R5 old inline fold gone dll' ([regex]::Matches($DLLT, $r5OldTwoTier).Count) 0 '就地抄那句口径不许回潮 (DLL 路)'
 Want 'R5 title field once' (C 'std::string projectTitle_;' $STATE) 1 '携带位只许有一枚'
 Want 'R5 setter api once' (C 'void setProjectTitle(std::string t) { projectTitle_ = std::move(t); }' $API) 1 'API 只许有一处, 不许各自写字段'
 
@@ -139,13 +152,16 @@ Want 'R7 write intercept once' (C 'vb6_SetAppTitle(" + rhsAt + ");' $ASG) 1 'App
 Want 'R7 intercept guard' (C 'objAt == "app" && memAt == "title" && !knownLocalVars_.count(objAt)' $ASG) 1 '局部同名变量优先 (与读取侧同一判据)'
 Want 'R7 rhs wraps to BSTR' (C 'wrapToBSTR(std::move(lastExpr_), *node.value)' $ASG) 1 '右值按 BSTR 交给 setter (数值/串各走既有折算)'
 
-# ---- R8 五份 BSTR 返回名单 ---- (第329刀: cgen_file_io.cpp 的两份名单抄本收成一位主人 ⇒ 这里从 6 改 5)
+# ---- R8 BSTR 返回名单 (第二步后 6 -> 4) ----
+# Print#/Write# 的两份名字表已删，分流改问 inferExprType；那两处不再需要认 App.Title。
+# 剩下四处（拼接/调用/builtin 前置）仍按名字认，继续钉。
 $lists = [ordered]@{
     'src/backend/detail/expr/cgen_expr_call_builtin_pre.inc' = 1
     'src/backend/expr/cgen_expr_binary.cpp'                  = 1
     'src/backend/expr/cgen_expr_binary_util.cpp'             = 1
     'src/backend/stmt/cgen_call.cpp'                         = 1
-    'src/backend/stmt/cgen_file_io.cpp'                      = 1
+    # 第二步已删：cgen_file_io.cpp 的两份 bstrFuncs 名单（此处登记 0，回潮即红）
+    'src/backend/stmt/cgen_file_io.cpp'                      = 0
 }
 $listSum = 0
 foreach ($k in $lists.Keys) {
@@ -154,7 +170,12 @@ foreach ($k in $lists.Keys) {
     Want ('R8 list ' + [IO.Path]::GetFileName($k)) $got $lists[$k] ('这份 BSTR 返回名单漏了 App.Title (没登记的出口 = 每调用漏一枚 BSTR / 拼接形状错)')
     $listSum += $got
 }
-Want 'R8 list total' $listSum 5 '五处名单站都要认这枚名字'
+Want 'R8 list total' $listSum 4 '四处仍在的名单站都要认这枚名字 (file_io 那两处已删)'
+# R8b: 删表之后 App.Title 走字符串路径的**运行期**证据 (类型由 inferExprType 答 String)
+Want 'R8b file_io asks type' (C 'inferExprType(e) == Vb6Type::String' (Load 'src/backend/stmt/cgen_file_io.cpp')) 2 '两处分流都必须先问类型 (不是名字)'
+Want 'R8b b600 prints App.Title' (C 'Print #f, App.Title' (Load 'tests/b600_print_string_dispatch/B600Main.bas')) 1 'B600 必须有一条 App.Title 的 Print #'
+Want 'R8b b600 title seeded' (C 'Title="B600 Title"' (Load 'tests/b600_print_string_dispatch/B600.vbp')) 1 'B600 的 .vbp 要有 Title (否则读回 EXE 名, 与类型路径无关)'
+Want 'R8b b600 needle' (C '"[B600 Title]"' $RUN) 1 '期望表里要钉 App.Title 写盘行 (数值路径会写成指针整数)'
 
 # ---- R10 DLL 入口那一站 (账 #605 的脸①) ----  (腿在 R4 里, 这里只钉「两站同形」)
 Want 'R10 two seed stations' ((C 'vb6_SetAppTitle(L\"' $ENT) + (C 'vb6_SetAppTitle(L\"' $DLLE)) 2 'Exe 入口模板与 DLL 入口各一枚, 多一枚就是另立形状'

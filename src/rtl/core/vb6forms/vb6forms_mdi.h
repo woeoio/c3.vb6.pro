@@ -31,6 +31,18 @@ void* vb6_GetMDIClient(void* hMDIForm);
 /* 账 #305 第三百四十六刀: MDIClient 收进 Codejock 停靠条的空余带 (WM_SIZE 钩) */
 void vb6_MDI_RelayoutClient(void* hMDIForm);
 
+/* 账 (MDI 布局刀): MDI 父窗体 Show 之后补放子窗的设计期 WindowState。
+ * 子窗在 MDIForm_Load 里 Show 时父窗体还没上屏, MDICLIENT 的 WM_MDIMAXIMIZE
+ * 对"客户区不可见"的子窗不做事 —— 那时只把目标状态记在子窗属性上, 由这里落地。 */
+void vb6_MDIApplyPendingChildStates(void* hMDIClient);
+
+/* 账 (frmDocument 最大化): `CommandBars.ShowTabWorkspace(True)` 在 VB6 下返回真的
+ * TabWorkspace, 活动 MDI 子窗被工作区铺满; C3 下 OCX 回空指针 (实测 pdisp=0)。
+ * vb6com 的晚绑定出口在方法名 == ShowTabWorkspace 且结果为空时打这个标记,
+ * vb6_ShowForm 据此按"工作区行为"把活动子窗最大化 —— 这是**替代路径**。 */
+void vb6_MDI_NoteTabWorkspaceMissing(void);
+int  vb6_MDI_TabWorkspaceMissing(void);
+
 // MDI消息循环 (处理TranslateMDISysAccel)
 int vb6_MDIMessageLoop(void* hAccelTable);
 

@@ -167,6 +167,52 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # M1 基线（2026-11-02 新增）: 三条最小路径 —— 控制台 .bas / .frm 工程 / ActiveX DLL ——
+  # 用**与本地完全相同的那一份** tests/baseline.ps1 跑；本 job 只负责取 build 的工件并调用它。
+  # 脚本退出码: 0 全过 / 1 有 FAIL / 2 环境缺失（无 MSVC 或组件装不上）。2 在这里报
+  # ::warning:: 并绿灯 —— 环境没装既不许降级成 PASS，也不许把整条流水线染红。
+  baseline:
+    name: Baseline (M1)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      C3_VCVARSALL: ""
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download C3.exe artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: c3-exe
+          path: .build/
+
+      - name: Run M1 baseline (same script as local)
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/baseline.ps1 -Verbose
+          $rc = $LASTEXITCODE
+          if ($rc -eq 2) {
+            Write-Host "::warning::M1 baseline SKIP — 环境缺失 (MSVC / 组件)；详见上面的日志，未按 PASS 计"
+            exit 0
+          }
+          exit $rc
+
+      - name: Upload baseline logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: baseline-logs
+          path: |
+            output/baseline/**/compile.log
+            output/baseline/**/run.out
+            output/baseline/**/run.err
+            output/baseline/**/btnfocus.log
+          if-no-files-found: warn
+          retention-days: 14
+
   # 账 #245 (§B73): 发码形状的**神谕必须来自产物那一台工具链**。同一笔提交用不同 MSVC 编出来的 C3.exe
   # 会在语料上分家（实测 788 份捕获里 14 份不同，全在 Charts 2020 的 UC 工程，形状只有一种：With 目标上
   # 的 COM 成员读走「带类型出口」还是「泛型出口」）—— 而门里 Build 与 Tests 用的是同一枚工件，这种漂移

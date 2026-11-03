@@ -28,6 +28,14 @@
         InvalidateRect((HWND)obj, NULL, TRUE);
         return 1;
     }
+    /* 账 #305 第三百五十一刀: Tag —— 与 cgen 的直接路径共用**同一份存储**
+       (vb6forms_style.c 的 VB6_Tag 窗口属性)。以前晚绑定走宿主模型 ⇒ 落到
+       reportUnknown, 而直接路径 `控件.Tag` 早就写得进; 两条路读同一枚控件得到
+       两个答案。这里只把那条存储接进来, 不另立第二份表。 */
+    if (_wcsicmp(name, L"Tag") == 0) {
+        vb6_SetControlTag(obj, (void*)vb6_ho_variantToBstr(v));
+        return 1;
+    }
     if (_wcsicmp(name, L"Visible") == 0) { ShowWindow((HWND)obj, vb6_ho_variantToLong(v) ? SW_SHOW : SW_HIDE); return 1; }
     if (_wcsicmp(name, L"Enabled") == 0) { EnableWindow((HWND)obj, vb6_ho_variantToLong(v) ? TRUE : FALSE); return 1; }
     // 账 #247: 与读侧同一个出口 —— 四档各写自己那一档 (单位 = 所在容器的 ScaleMode,
@@ -38,6 +46,20 @@
     if (_wcsicmp(name, L"Top") == 0)    { vb6_SetControlTop(obj, vb6_ho_variantToLong(v)); return 1; }
     if (_wcsicmp(name, L"Width") == 0)  { vb6_SetControlWidth(obj, vb6_ho_variantToLong(v)); return 1; }
     if (_wcsicmp(name, L"Height") == 0) { vb6_SetControlHeight(obj, vb6_ho_variantToLong(v)); return 1; }
+    /* 账 #305 第三百五十一刀: RichTextBox.RightMargin (VB6 侧缇)。
+       RichEdit 的 EM_SETMARGINS 以缇计右边距; 标准 Edit 没有 VB6 这一格,
+       所以只认 RICHEDIT 类。同值重写也返回 1 (与样式位那批同一口径)。 */
+    if (_wcsicmp(name, L"RightMargin") == 0) {
+        wchar_t rcls[64] = {0};
+        GetClassNameW((HWND)obj, rcls, 63);
+        if (_wcsnicmp(rcls, L"RICHEDIT", 8) == 0) {
+            int32_t tw = vb6_ho_variantToLong(v);
+            if (tw < 0) tw = 0;
+            SendMessageW((HWND)obj, EM_SETMARGINS, EC_RIGHTMARGIN,
+                         (LPARAM)(((LPARAM)tw & 0xFFFF) << 16));
+            return 1;
+        }
+    }
     // Fix <vbeclipse> rev18: 内建成员都没命中 → 写**本 UserControl 的自有 Property**
     // (ucFolder.LeftPos = … 这类)。注意必须放在内建档之后: `Visible`/`Caption` 等同名
     // 内建属性仍是窗口层语义。
@@ -50,38 +72,64 @@
 #ifndef TVS_EDITLABELS
 #define TVS_EDITLABELS  0x0008
 #endif
-    /* 账 #305 第三百五十刀: 原生 **TreeView** 的外观属性写 (GUISample 的
-     * SetTreeTheme/Icons 一族)。ShowLines/LineStyle 真改样式位 (TVS_HASLINES/
-     * TVS_LINESATROOT); Icons/Appearance/ShowBorder 等收下不响 (视觉无实义的
-     * 先不造假答案, 与 memberobj 名单的取舍同一口径)。 */
+    /* 账 #305 第三百五十一刀: 原生 **TreeView** 的外观属性写。
+       ShowLines / LineStyle / LabelEdit / ShowBorder -> GWL_STYLE 真样式位;
+       Appearance -> GWL_EXSTYLE 的 WS_EX_CLIENTEDGE (3D 凹边);
+       CheckBoxes/HotTracking/HideSelection/Indentation 转 RTL 的既有 setter,
+       不再"收下不响"。Icons 暂缓 —— 需要把 ImageList 对象可靠映射成 HIMAGELIST
+       (OCX 内部状态), 本刀不做假动作, 让它继续落 reportUnknown 保持可见。 */
     {
         wchar_t cls350[64] = {0};
         GetClassNameW((HWND)obj, cls350, 63);
-        if (wcsncmp(cls350, L"SysTreeView32", 13) == 0) {
+        if (_wcsicmp(cls350, L"SysTreeView32") == 0) {
+            int32_t lv = vb6_ho_variantToLong(v);
             LONG st = GetWindowLongW((HWND)obj, GWL_STYLE);
-            LONG nv = st;
-            if (_wcsicmp(name, L"ShowLines") == 0)
-                nv = (vb6_ho_variantToLong(v) != 0) ? (st | TVS_HASLINES)
-                                                    : (st & ~TVS_HASLINES);
-            else if (_wcsicmp(name, L"LineStyle") == 0)
-                nv = (vb6_ho_variantToLong(v) == 0) ? (st | TVS_LINESATROOT)
-                                                    : (st & ~TVS_LINESATROOT);
-            else if (_wcsicmp(name, L"LabelEdit") == 0)
-                nv = (vb6_ho_variantToLong(v) == 0) ? (st | TVS_EDITLABELS)
-                                                    : (st & ~TVS_EDITLABELS);
-            if (nv != st) {
-                SetWindowLongW((HWND)obj, GWL_STYLE, nv);
-                SetWindowPos((HWND)obj, NULL, 0, 0, 0, 0,
-                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
-                             | SWP_FRAMECHANGED);
+            LONG ex = GetWindowLongW((HWND)obj, GWL_EXSTYLE);
+            LONG nv = st, nex = ex;
+            int handled = 0;
+            if (_wcsicmp(name, L"ShowLines") == 0) {
+                nv = lv ? (st | TVS_HASLINES) : (st & ~TVS_HASLINES);
+                handled = 1;
+            } else if (_wcsicmp(name, L"LineStyle") == 0) {
+                /* 与 vb6_TreeView_SetLineStyle 同一口径: 两种取值都立 HASLINES,
+                   LINESATROOT 只在非 0 时立住 (以前这里写反了)。 */
+                nv = lv ? (st | TVS_HASLINES | TVS_LINESATROOT)
+                        : ((st | TVS_HASLINES) & ~TVS_LINESATROOT);
+                handled = 1;
+            } else if (_wcsicmp(name, L"LabelEdit") == 0) {
+                nv = (lv == 0) ? (st | TVS_EDITLABELS) : (st & ~TVS_EDITLABELS);
+                handled = 1;
+            } else if (_wcsicmp(name, L"ShowBorder") == 0) {
+                nv = lv ? (st | WS_BORDER) : (st & ~WS_BORDER);
+                handled = 1;
+            } else if (_wcsicmp(name, L"Appearance") == 0) {
+                nex = lv ? (ex | WS_EX_CLIENTEDGE) : (ex & ~WS_EX_CLIENTEDGE);
+                handled = 1;
+            } else if (_wcsicmp(name, L"CheckBoxes") == 0) {
+                vb6_TreeView_SetCheckBoxes(obj, lv); handled = 1;
+            } else if (_wcsicmp(name, L"HotTracking") == 0) {
+                vb6_TreeView_SetHotTracking(obj, lv); handled = 1;
+            } else if (_wcsicmp(name, L"HideSelection") == 0) {
+                vb6_TreeView_SetHideSelection(obj, lv); handled = 1;
+            } else if (_wcsicmp(name, L"Indentation") == 0) {
+                vb6_TreeView_SetIndentation(obj, lv); handled = 1;
+            }
+            if (handled) {
+                /* 同值重写也必须认账: 以前只在样式位有变化时 return 1,
+                   `ShowLines` 值已等于当前状态就掉进 reportUnknown 误报 miss。 */
+                if (nv != st) SetWindowLongW((HWND)obj, GWL_STYLE, nv);
+                if (nex != ex) SetWindowLongW((HWND)obj, GWL_EXSTYLE, nex);
+                if (nv != st || nex != ex) {
+                    SetWindowPos((HWND)obj, NULL, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+                                 | SWP_FRAMECHANGED);
+                    InvalidateRect((HWND)obj, NULL, TRUE);
+                }
                 return 1;
             }
-            /* 树已知的其余属性 (Icons/Appearance/ShowBorder/CheckBoxes/
-             * Sorted/HotTracking/HideSelection/SingleSel): 收下不报。 */
+            /* 树见过但本刀还没实现的名字, 先保持原样收下; Icons 刻意不在其中。 */
             static const wchar_t* const kTvKnown[] = {
-                L"Icons", L"Appearance", L"ShowBorder", L"CheckBoxes",
-                L"Sorted", L"HotTracking", L"HideSelection", L"SingleSel",
-                L"Indentation", L"FullRowSelect", L"Scroll", NULL };
+                L"Sorted", L"SingleSel", L"FullRowSelect", L"Scroll", NULL };
             for (const wchar_t* const* k = kTvKnown; *k; ++k)
                 if (_wcsicmp(name, *k) == 0) return 1;
         }

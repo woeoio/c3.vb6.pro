@@ -1,0 +1,27 @@
+<Viewbox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Stretch="Uniform">
+	<Canvas Width="32" Height="32" Canvas.Left="0" Canvas.Top="0">
+		<Canvas>
+			<Rectangle Canvas.Left="0" Canvas.Top="0" Width="32" Height="32" Stroke='{x:Static Theme.Colors.ExternalBorderSelected}'/>
+			<Border Canvas.Left="1" Canvas.Top="1" Width="30" Height="30">
+				<Border.Background>
+					<LinearGradientBrush StartPoint="0, 0" EndPoint="0,1">
+						<GradientStop Offset="0" Color='{x:Static Theme.Colors.ExternalFillGradientASelected}'/>
+						<GradientStop Offset="1" Color='{x:Static Theme.Colors.ExternalFillGradientBSelected}'/>
+					</LinearGradientBrush>
+				</Border.Background>
+			</Border>
+			<Border Canvas.Left="16" Canvas.Top="7"  Width="11" Height="20">
+				<Border.Background>
+					<LinearGradientBrush StartPoint="0, 0" EndPoint="0,1">
+						<GradientStop Offset="0" Color='{x:Static Theme.Colors.InternalFillGradientASelected}'/>
+						<GradientStop Offset="1" Color='{x:Static Theme.Colors.InternalFillGradientBSelected}'/>
+					</LinearGradientBrush>
+				</Border.Background>
+			</Border>
+			<Rectangle Canvas.Left="16" Canvas.Top="4" Width="12" Height="24" StrokeThickness="1" Stroke='{x:Static Theme.Colors.InternalBorderSelected}'/>
+			<Rectangle Canvas.Left="16" Canvas.Top="4" Width="12" Height="3"  StrokeThickness="2" Stroke='{x:Static Theme.Colors.InternalBorderSelected}'/>
+			<Path Data="M 6,12 6,20 10,16" Fill='{x:Static Theme.Colors.ArrowBorderSelected}'/>
+			<Path Data="M 6,13 6,19 9,16" Fill='{x:Static Theme.Colors.ArrowFillSelected}'/>
+		</Canvas>
+	</Canvas>
+</Viewbox>

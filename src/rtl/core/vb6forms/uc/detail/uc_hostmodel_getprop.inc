@@ -2,6 +2,9 @@
 // 内容 = 拆分前 vb6forms_uc.c 第 1304~1387 行，逐行未改
 // 在函数体内 #include；路径一律用 basename
 
+#ifndef TVS_HASLINES
+#define TVS_HASLINES    0x0002
+#endif
     obj = vb6_UC_UnwrapHost(obj);  // czUI fix: 包装器透明解包
     vb6_VARIANT* out = (vb6_VARIANT*)outV;
     if (!obj || !name) return 0;
@@ -74,6 +77,11 @@
     if (_wcsicmp(name, L"Index") == 0) {
         vb6_ho_setVariantLong(out, h ? h->index : (r ? r->index : -1)); return 1;
     }
+    /* 账 #305 第三百五十一刀: Tag 与写侧同一份存储 (VB6_Tag 窗口属性),
+       所以晚绑定读、cgen 直接读 (`控件.Tag`) 得到的是同一个串。 */
+    if (_wcsicmp(name, L"Tag") == 0) {
+        vb6_ho_setVariantBstr(out, vb6_GetControlTag(obj)); return 1;
+    }
     if (_wcsicmp(name, L"ScaleMode") == 0) { vb6_ho_setVariantLong(out, scaleMode); return 1; }
     /* 账 #247: Left/Top/Width/Height 在这一层**没有第二份实现** —— 读写都问
        vb6forms_ctrl.c 那四个出口 (容器 ScaleMode 的单位 + VB 侧读数缓存)。
@@ -108,6 +116,32 @@
         vb6_ho_setVariantLong(out, (st & WS_VISIBLE) ? -1 : 0); return 1;
     }
     if (_wcsicmp(name, L"Enabled") == 0)  { vb6_ho_setVariantLong(out, IsWindowEnabled((HWND)obj) ? -1 : 0); return 1; }
+    /* 账 #305 第三百五十一刀: TreeView / RichTextBox 的读侧与写侧同问**窗口本身**。
+       ShowLines / ShowBorder 读 GWL_STYLE 的位, Appearance 读 GWL_EXSTYLE 的
+       WS_EX_CLIENTEDGE, RightMargin 读 EM_GETMARGINS —— 不另存第二份表,
+       所以"读回对"就等于"窗口真变成那样", 不是表里自洽。 */
+    {
+        wchar_t cls351[64] = {0};
+        GetClassNameW((HWND)obj, cls351, 63);
+        if (_wcsicmp(cls351, L"SysTreeView32") == 0) {
+            LONG st351 = GetWindowLongW((HWND)obj, GWL_STYLE);
+            LONG ex351 = GetWindowLongW((HWND)obj, GWL_EXSTYLE);
+            if (_wcsicmp(name, L"ShowLines") == 0) {
+                vb6_ho_setVariantLong(out, (st351 & TVS_HASLINES) ? -1 : 0); return 1;
+            }
+            if (_wcsicmp(name, L"ShowBorder") == 0) {
+                vb6_ho_setVariantLong(out, (st351 & WS_BORDER) ? -1 : 0); return 1;
+            }
+            if (_wcsicmp(name, L"Appearance") == 0) {
+                vb6_ho_setVariantLong(out, (ex351 & WS_EX_CLIENTEDGE) ? 1 : 0); return 1;
+            }
+        }
+        if (_wcsicmp(name, L"RightMargin") == 0 &&
+            _wcsnicmp(cls351, L"RICHEDIT", 8) == 0) {
+            LRESULT mg = SendMessageW((HWND)obj, EM_GETMARGINS, 0, 0);
+            vb6_ho_setVariantLong(out, (int32_t)((mg >> 16) & 0xFFFF)); return 1;
+        }
+    }
     if (_wcsicmp(name, L"hDC") == 0)      { vb6_ho_setVariantLong(out, (int32_t)(intptr_t)GetDC((HWND)obj)); return 1; }
     /* 账 #254: VB6 的 `Form.Count` = 这枚窗体上的子控件枚数，与 `Controls.Count` 同一件事，
        所以数法转调集合那一条出口，不在这里填常数。以前这一档硬填 0 —— #250 把 Controls
@@ -222,6 +256,11 @@
        一路答 Empty ⇒ CBEM_SETIMAGELIST 收 0, 条目有字无图。 */
     if (r && r->me && r->me != obj && vb6_UC_OwnPropGet(r->me, name, out)) return 1;
 
-    /* 账 #305 第二百六十二刀 (丙): 同 Call 那条 —— 不认识的属性名以前静默答 Empty。 */
-    vb6_ho_reportUnknown(L"GetProp", name, obj);
-    return 1;   // 宿主对象: 未知属性一律返回 Empty (不崩)
+    /* 账 (438 语义刀): 不认识的属性名以前静默答 Empty (return 1) —— 调用方
+       (vb6_ComGetPropRcv 的宿主分支) 分不出「认得但没值」与「根本没有这个成员」,
+       于是 VB6 里该抛 438 的 `frmDocument.rtfText` 变成一条 Empty, 再让链上的
+       `.SelLength` 落成 [C3_LATEBIND_MISS] (GUISample 实测 274 条噪声)。
+       这里改答 **-1 = 成员不存在**: 宿主模型的出口按 VB6 语义抛 error 438, 由
+       `On Error Resume Next` 吞掉。已知成员仍走上面的 return 1 (行为不变)。 */
+    vb6_ho_report438(L"GetProp", name, obj);
+    return -1;   // 宿主对象: 成员不存在 (调用方按 VB6 语义抛 438)

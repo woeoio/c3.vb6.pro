@@ -1655,6 +1655,49 @@ void vb6_ShowForm(void* hwnd, int modal) {
     ShowWindow((HWND)hwnd, SW_SHOWDEFAULT);
     UpdateWindow((HWND)hwnd);
 
+    /* 账 (MDI 布局刀): 设计期 WindowState 在上屏**之后**落地 (MDI 子窗必须如此;
+     * 晚绑定的 `c.Show` 经宿主模型直接走这里, 绕过 cgen 的 Show 尾巴)。 */
+    vb6_ApplyDesignWindowState(hwnd);
+
+    /* 账 (MDI 布局刀): MDI 父窗体上屏之后, 补放子窗在 Form_Load 里挂起的
+     * 设计期 WindowState (子窗那时设 Maximized, MDICLIENT 还看不见客户区, 不认)。 */
+    {
+        void* hcl = (void*)GetPropW((HWND)hwnd, L"VB6_MDIClient");
+        if (hcl) vb6_MDIApplyPendingChildStates(hcl);
+    }
+
+    /* 账 #xxx: VB6 的 `MDIChild.Show` 把子窗体置为**活动子窗体** (`ActiveForm`
+     * 随即指向它)。Win32 侧 MDICLIENT 只在子窗被 MDI 激活流程点名时才记 active,
+     * 而 MDIForm_Load 里 `frmD.Show` 发生在 MDI 框架 ShowWindow 之前 —— 实测
+     * 子窗建好、标题可读, 但 WM_MDIGETACTIVE 恒答 0 (ActiveForm 静默 Empty)。
+     * 这里照 VB6 语义: 父窗是 MDICLIENT 的窗体 Show 之后显式激活自己。 */
+    {
+        HWND hPar = GetParent((HWND)hwnd);
+        wchar_t clsPar[32] = {0};
+        if (hPar) GetClassNameW(hPar, clsPar, 31);
+        if (hPar && _wcsicmp(clsPar, L"MDICLIENT") == 0) {
+            /* WM_MDIACTIVATE 是**发给 MDICLIENT** 的: wParam = 要失活的子窗,
+               lParam = 要激活的子窗 (WM_MDIACTIVATE 两份文档口径都是这么写的;
+               早先发到子窗自身 / wParam 塞子窗都是错的, MDICLIENT 一律不认)。 */
+            HWND hPrev = (HWND)SendMessageW(hPar, WM_MDIGETACTIVE, 0, 0);
+            SendMessageW(hPar, WM_MDIACTIVATE,
+                         (WPARAM)(hPrev == (HWND)hwnd ? (HWND)NULL : hPrev),
+                         (LPARAM)(HWND)hwnd);
+            /* 账 (frmDocument 最大化, 替代路径): 脚本调过 ShowTabWorkspace(True) 而 OCX
+             * 回空指针 (见 vb6_MDI_NoteTabWorkspaceMissing) 时, 按"工作区接管"的行为把
+             * 活动子窗铺满文档区。VB6 实测: 子窗 1092x625@222,134 恰好填满 MDIClient
+             * 1100x655@218,108 且**没有** WS_MAXIMIZE 位 (工作区自己摆位);
+             * 真 TabWorkspace 的标签接管仍需 OCX 那条链, 这里明确是替代。
+             * MDICLIENT 在父窗体上屏前"看不见", WM_MDIMAXIMIZE 会被忽略 —— 所以既试一次,
+             * 也用既有的 VB6_PendingWindowState 挂在父窗体 Show 之后补放。 */
+            if (vb6_MDI_TabWorkspaceMissing()) {
+                SendMessageW(hPar, WM_MDIMAXIMIZE, (WPARAM)(HWND)hwnd, 0);
+                if (!(GetWindowLongW((HWND)hwnd, GWL_STYLE) & WS_MAXIMIZE))
+                    SetPropW((HWND)hwnd, L"VB6_PendingWindowState", (HANDLE)(intptr_t)(2 + 1));
+            }
+        }
+    }
+
     // 账 #305: 首次显示时窗体背景从未被擦除过 —— Charts 2020 Form2 (BackColor &H00E5E5E5&)
     // 的卡片是子控件画的白底, 卡片**之间**的空隙第一次上屏时无人填, 于是留白;
     // VB6 下这些空隙是窗体底色 229,229,229。这里在首次 Show 之后显式擦一次背景

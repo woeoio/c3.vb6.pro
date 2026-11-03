@@ -121,7 +121,14 @@
             c_.emitLine("vb6_SetMinButton((void*)hwnd, 0);");
         }
         auto wsIt = frmDesc.formControl.properties.find("WindowState");
-        if (wsIt != frmDesc.formControl.properties.end() && wsIt->second.intValue != 0) {
+        /* 账 (MDI 布局刀): MDI 子窗的设计期 WindowState 只**登记**, 由 vb6_ShowForm
+         * 在子窗上屏之后落地 —— 这一趟是 WM_CREATE, 子窗此刻还没归入 MDICLIENT
+         * (WM_MDICREATE 尚未返回), ShowWindow(SW_SHOWMAXIMIZED) 只会把它变成 0×0
+         * (夹具 tests/guisample/mdimax 实测)。非 MDI 窗体保持原有的建窗即发。 */
+        if (isMDIChild) {
+            if (wsIt != frmDesc.formControl.properties.end() && wsIt->second.intValue != 0)
+                c_.emitLine("vb6_SetDesignWindowState((void*)hwnd, " + std::to_string((int)wsIt->second.intValue) + ");");
+        } else if (wsIt != frmDesc.formControl.properties.end() && wsIt->second.intValue != 0) {
             c_.emitLine("vb6_SetWindowState((void*)hwnd, " + std::to_string((int)wsIt->second.intValue) + ");");
         }
         // 账 #197: 窗体自己那一档走同一个出口 —— `ScaleMode = 3  'Pixel` 的窗体里控件几何、
