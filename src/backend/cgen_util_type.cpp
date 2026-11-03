@@ -1210,7 +1210,11 @@ std::string CCodeGen::conditionTruthExpr(const std::string& cExpr, Expr* cond) c
     return cExpr;
 }
 
-bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
+// P1.2 三问之二: 「C 侧这段文本是不是**整只 vb6_VARIANT 槽**」(而不是槽的地址/指针)。
+// 文本那一半逐字沿用 Fix 038b/045 以来的判据 (下面整段注释与名单); AST 那一半只在
+// 文本回答不了时兜底 (§B147 的口径: 发码改道 = AST ∪ 文本)。既有调用点仍走
+// cExprIsVariant (文本投影), 所以本刀产物逐字节不变。
+bool CCodeGen::isVariantSlot(const std::string& cExpr, const Expr* ast) const {
     // 去除前导空白和括号
     size_t start = 0;
     while (start < cExpr.size()) {
@@ -1289,7 +1293,14 @@ bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
     // 检查 (&(vb6_VARIANT){...}) 复合字面量 — 也是 VARIANT 类型
     // 但这种形式通常作为 ByRef 参数传递, 不需要再转换, 故不检测.
 
-    return false;
+    // 文本那一半没认出来, 才问 AST 那一半 (数组本体不算槽, 由 variantOperandAST 排除)。
+    return variantOperandAST(ast);
+}
+
+// 旧名 = isVariantSlot 的文本投影 (ast=nullptr)。既有调用点全部走这一形, 结果与改动前
+// 逐字一致; P1.3 才逐站替换成带 AST 的命名接口。
+bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
+    return isVariantSlot(cExpr, nullptr);
 }
 
 // 账 #305 §B147: 「这枚表达式交出来的 C 是不是整只槽」的 AST 那一半 (另一半天然是
@@ -1305,6 +1316,14 @@ bool CCodeGen::variantOperandAST(const Expr* e) const {
     return isDefinitelyVariantExpr(const_cast<Expr&>(*e), &isArr) && !isArr;
 }
 
+// P1.2 三问之一: 「这枚表达式的 VB 类型是不是 Variant」—— 只吃 AST。
+// 为什么不看 isArrOut: 问的是**VB 类型**, `Variant()` 数组的类型仍然是 Variant;
+// 「是不是整只槽」是另一个问句 (isVariantSlot), 由它排除数组本体。
+bool CCodeGen::isVariantType(const Expr* e) const {
+    if (!e) return false;
+    return isDefinitelyVariantExpr(const_cast<Expr&>(*e));
+}
+
 // ============================================================
 // <vbeclipse>: C 表达式是否**已经是 SafeArray1D\* 载体**
 // ============================================================
@@ -1314,7 +1333,9 @@ bool CCodeGen::variantOperandAST(const Expr* e) const {
 // C2440 (vb6_SafeArray1D\* → vb6_VARIANT) —— 实测这三条形全中:
 //   Join(Split(s, ","), "|") / UBound(Split(s, ",")) / Join(Filter(a, "x"), "|")
 // 与 Fix 092g 的 _arr_N 特例同源、同解法, 区别只是这里包的是内置函数调用。
-bool CCodeGen::cExprIsSafeArrayCarrier(const std::string& cExpr) const {
+// P1.2 三问之三: 「这段 C 是不是 vb6_SafeArray1D* 载体」。判据本体原样搬到这里,
+// cExprIsSafeArrayCarrier 只作既有调用点的投影 (不保留第二份清单)。
+bool CCodeGen::isSafeArrayCarrier(const std::string& cExpr) const {
     size_t start = 0;
     while (start < cExpr.size()) {
         char c = cExpr[start];
@@ -1351,6 +1372,11 @@ bool CCodeGen::cExprIsSafeArrayCarrier(const std::string& cExpr) const {
         if (cExpr.compare(start, prefix.size(), prefix) == 0) return true;
     }
     return false;
+}
+
+// 旧名 = isSafeArrayCarrier 的投影; 既有调用点不动 (P1.3 再逐站换名)。
+bool CCodeGen::cExprIsSafeArrayCarrier(const std::string& cExpr) const {
+    return isSafeArrayCarrier(cExpr);
 }
 
 

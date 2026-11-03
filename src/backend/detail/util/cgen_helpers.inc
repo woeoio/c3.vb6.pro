@@ -935,6 +935,24 @@
     // 否则 C2440 (载体指针 → vb6_VARIANT)。见 cgen_util_type.cpp 的定义。
     bool cExprIsSafeArrayCarrier(const std::string& cExpr) const;
 
+    // ============================================================
+    // P1.2: 「Variant 槽」的三问命名接口
+    // ============================================================
+    // 只立接口, **不改任何调用点** (86 站替换属 P1.3), 所以产物逐字节不变:
+    //   isVariantType(ast)       —— 这枚表达式的 **VB 类型**是不是 Variant (只吃 AST;
+    //                              Variant() 数组的 VB 类型仍是 Variant, 故不排除数组);
+    //   isVariantSlot(text,ast)  —— C 侧这段文本是不是**整只槽** (而不是槽的地址/指针)。
+    //                              文本那一半 = cExprIsVariant 的既有判据, AST 那一半
+    //                              = variantOperandAST (§B147: 改道 = AST ∪ 文本);
+    //   isSafeArrayCarrier(text) —— 这段 C 是不是 vb6_SafeArray1D* 载体 (vb6_Split/Filter/
+    //                              ArrayCreate 那一族 + _arr_N 匿名临时量)。
+    // 等价性: cExprIsVariant(text) == isVariantSlot(text, nullptr),
+    //         cExprIsSafeArrayCarrier(text) == isSafeArrayCarrier(text) ——
+    // 旧名只是既有站点的投影, 判据各只有一份 (定义见 cgen_util_type.cpp)。
+    bool isVariantType(const Expr* e) const;
+    bool isVariantSlot(const std::string& text, const Expr* ast) const;
+    bool isSafeArrayCarrier(const std::string& text) const;
+
     // <vbeclipse>: 装箱权威用它判断"这个 C 表达式顶层已经是 vb6_VARIANT 了"。
     // 必须结构化判 (顶层 vb6_Variant* 且不是 vb6_VariantTo*), 不能靠 ctor 名字清单 ——
     // 清单漏一枚 (vb6_VariantByte / 新增的 VariantSingle / VariantDate) 就会把
