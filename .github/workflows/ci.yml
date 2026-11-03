@@ -492,6 +492,24 @@ jobs:
           $clean = New-Object System.Collections.Generic.List[string]
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/run_tests.ps1 -Category ${{ matrix.category }} -Jobs 20 ${{ matrix.shardArgs }} -Incremental -Verbose *>&1 | ForEach-Object { $s = [string]$_; Write-Host $s; $clean.Add(($s -replace $ansi, "")) } | Out-Null
           $rc = $LASTEXITCODE
+          # exit 2 = 只有 SKIP、没有 FAIL（口径在 tests/run_tests.ps1 末尾）: 本轮唯一来源是
+          # guisample 缺 Codejock 类型库（仓库不含这批商用 OCX，见 Test-VbpBuild -RequiresCodejock）。
+          # 与 Baseline (M1) 相同: 既不许降级成 PASS，也不许染红 —— 只出 ::warning:: 并绿。
+          # 但必须点名「跳了谁、缺什么」（SKIP 行的括号里就是 LibID/文件名/期望版本），
+          # 一条 SKIP 行都对不上就说明这条通道与 harness 排版脱节 ⇒ 照旧红，不许静默放过。
+          if ($rc -eq 2) {
+            $rxSkip = [regex] "^\s*\[(.+?)\]\s+(.+?)\s*\.\.\.\s*SKIP\s*\((.*)\)\s*$"
+            $skips = @($clean | ForEach-Object {
+                $ms = $rxSkip.Match($_)
+                if ($ms.Success) { "[" + $ms.Groups[1].Value.Trim() + "] " + $ms.Groups[2].Value.Trim() + " ... SKIP (" + $ms.Groups[3].Value.Trim() + ")" }
+            })
+            if ($skips.Count -eq 0) {
+              Write-Host ("::error::run_tests exit code 2 but no SKIP line matched -- skip reporting is out of sync with the harness")
+              exit 2
+            }
+            foreach ($sk in @($skips | Select-Object -First 20)) { Write-Host ("::warning::" + $sk) }
+            exit 0
+          }
           # 只在红的时候点名：绿轮里这条通道一声不出。前缀行是 -NoNewline 写的，万一被别人的换行截断，
           # 「不是 PASS 就算失败」会在绿轮凭空点出名字来 —— 把这条限制钉死，注解面就只剩「红」这一种输入。
           if ($rc -eq 0) { exit 0 }

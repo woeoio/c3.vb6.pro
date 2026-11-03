@@ -6,6 +6,8 @@
 #   compile - 编译测试 (c3 .bas -> .exe, 只编译不运行)
 #   run     - 运行测试 (编译+链接后运行, 校验输出是否符合预期)
 #   syntax  - 语法测试 (仅 --syntax-only, 不生成可执行文件)
+#   gui     - 只跑 GUI 表 (M2 数据驱动用例)
+#   guisample - 只跑 GUISample 的真编+真跑 (**本机验收夹具**, 不入 CI 判据; 见文件末尾那段)
 #   all     - 全部测试 (编译+链接+运行所有分类)
 
 param(
@@ -418,6 +420,10 @@ $LateBindMissAllow = @{
     'B190' = 8
     'czFormDemo' = 3 # 控件的 Font 伪对象还没实现 => txtEmbed.Font 为空 (kind=null)
     'Proyecto1' = 67 # VB6 内建运行时对象没有 IDispatch 包器: 45 x Collection.Add + 22 x StdFont.Size (kind=null)
+    # GUISample 本机验收 (-Category guisample, 不入 CI 判据) 首次进 harness 的实测基线:
+    # 3 处, 都是 kind=null 的同一类缺口 (与上面两行同根), 本批不修。精确 3 条 —— 多一条少一条都红。
+    #   ① CommandBars.EnableGroups (ComCall) ② 全局设置 .Flags (ComSetProp) ③ CommandBars.RefreshColors (ComCall)
+    'guisample' = 3
 }
 
 function Get-LateBindMissExpected {
@@ -3803,11 +3809,115 @@ function Show-BuildErrorLog {
     if ($bad.Count -eq 0) { foreach ($ln in ($lines | Select-Object -Last 15)) { Write-Host ("      " + $ln) -ForegroundColor DarkGray } }
 }
 
+# === Codejock 资产探测 (vbp#7 guisample; 2026-11-04) ===
+# 三档口径 (用户拍板):
+#   资产**可用**   → 必须编, 任何失败都是 FAIL;
+#   资产**缺失**   → SKIP (harness exit 2, CI 侧只出 ::warning:: 不上红);
+#   探测**抛异常** → FAIL —— "探测出错"不许被当成"缺资产"。
+#
+# "可用"照 C3 真实的取用路径 (src\driver\driver_compile.cpp 对 Object= 的处理), 两条各算数:
+#   ① .vbp 目录下有同名 OCX 文件 —— C3 对已存在的 Object 文件直接按路径 LoadTypeLib;
+#   ② 或 HKCR\TypeLib\{LibID} 里有一条 Win32 路径且该文件真实存在 —— C3 走 loadByClsid 的注册表查。
+# 期望版本**只用于报"缺什么"**, 不作为可用判据: 本机实测注册键是 14.3 而文件名是 v20.3.0,
+# C3 并不按 .vbp 的 #20.3# 钉 TypeLib 版本 —— 拿它当门禁会在有资产的机器上误红。
+function Get-CodejockVbpRefs {
+    param([string]$VbpFile)
+    $refs = @()
+    foreach ($ln in @(Get-Content -LiteralPath $VbpFile -ErrorAction Stop)) {
+        if ($ln -match '^\s*Object=(\{[0-9A-Fa-f\-]+\})#([^#]+)#\d+;\s*(.+?)\s*$') {
+            if ($Matches[3] -like 'Codejock.*') {
+                $refs += [pscustomobject]@{ LibId = $Matches[1]; Ver = $Matches[2]; File = $Matches[3] }
+            }
+        }
+    }
+    return $refs
+}
+
+function Test-TypeLibRegistered {
+    param([string]$LibId)
+    $root = 'Registry::HKEY_CLASSES_ROOT\TypeLib\' + $LibId
+    if (-not (Test-Path -LiteralPath $root)) { return $false }
+    foreach ($v in @(Get-ChildItem -LiteralPath $root -ErrorAction Stop)) {
+        $p32 = Join-Path $v.PSPath '0\Win32'
+        if (Test-Path -LiteralPath $p32) {
+            $val = [string](Get-Item -LiteralPath $p32 -ErrorAction Stop).GetValue('')
+            if ($val -and (Test-Path -LiteralPath $val)) { return $true }
+        }
+    }
+    return $false
+}
+
+function Test-CodejockAssets {
+    param([string]$VbpFile)
+    try {
+        $refs = @(Get-CodejockVbpRefs -VbpFile $VbpFile)
+        if ($refs.Count -eq 0) {
+            return @{ State = "error"; Detail = ("在 " + $VbpFile + " 里没解析到任何 Codejock Object= 行 (工程变了? 探测口径要跟着改)") }
+        }
+        $srcDir = Split-Path -Parent $VbpFile
+        $missing = @()
+        foreach ($r in $refs) {
+            $hasFile = Test-Path -LiteralPath (Join-Path $srcDir $r.File)
+            $hasReg = Test-TypeLibRegistered -LibId $r.LibId
+            if (-not $hasFile -and -not $hasReg) {
+                $missing += ("{0} / {1} (期望 {2}): 文件不在 {3}, 且 HKCR\TypeLib 无指向存在文件的注册" -f $r.LibId, $r.File, $r.Ver, $srcDir)
+            }
+        }
+        if ($missing.Count -gt 0) {
+            return @{ State = "missing"; Detail = ("缺 " + $missing.Count + "/" + $refs.Count + " 个 Codejock 类型库: " + ($missing -join "; ")) }
+        }
+        return @{ State = "available"; Detail = ("OK (" + $refs.Count + " 个 Codejock 类型库可用)") }
+    } catch {
+        return @{ State = "error"; Detail = ("资产探测抛异常: " + $_.Exception.Message) }
+    }
+}
+
+$script:CodejockProbe = $null
+$script:CodejockSkipped = $false
+
+# 反向守卫: SKIP 只允许发生在"探测确认缺失"时。资产可用 / 探测异常却出现 SKIP = 红。
+# 它读的是探测那一刻记下的状态与 SKIP 标记，不依赖 skip 分支怎么写 —— 以后有人把
+# SKIP 条件写宽 (例如"编不过也跳过")，这条会立刻红。
+function Assert-CodejockSkipInvariant {
+    if (-not $script:CodejockProbe) { return }   # 本分片没跑到 guisample, 不判
+    $script:total++
+    Write-Host -NoNewline "  [GUARD] codejock_skip_invariant ... "
+    $state = [string]$script:CodejockProbe.State
+    if ($state -eq "missing" -and -not $script:CodejockSkipped) {
+        $script:fail++
+        Write-Host "FAIL (探测说缺失, 却没有 SKIP —— 缺失口径与 skip 分支脱节)" -ForegroundColor Red
+        return
+    }
+    if ($state -ne "missing" -and $script:CodejockSkipped) {
+        $script:fail++
+        Write-Host ("FAIL (资产状态 " + $state + " 却走了 SKIP: " + $script:CodejockProbe.Detail + ")") -ForegroundColor Red
+        return
+    }
+    $script:pass++
+    Write-Host ("PASS (state=" + $state + ")") -ForegroundColor Green
+}
+
 function Test-VbpBuild {
-    param([string]$Name, [string]$VbpFile, [string]$Arch = "")
+    param([string]$Name, [string]$VbpFile, [string]$Arch = "", [switch]$RequiresCodejock)
     $script:total++
     if (-not (Enter-VbpShard)) { return }
     Write-Host -NoNewline "  [VBP-BUILD] $Name ... "
+    if ($RequiresCodejock) {
+        # 判定放在任何副作用 (清目录 / 真编译) 之前: 缺资产时不留半截 build_ 目录。
+        $probe = Test-CodejockAssets -VbpFile $VbpFile
+        $script:CodejockProbe = $probe
+        if ($probe.State -eq "error") {
+            $script:fail++
+            Write-Host ("FAIL (" + $probe.Detail + ")") -ForegroundColor Red
+            return
+        }
+        if ($probe.State -eq "missing") {
+            $script:skip++
+            $script:CodejockSkipped = $true
+            Write-Host ("SKIP (" + $probe.Detail + ")") -ForegroundColor Yellow
+            return
+        }
+    }
     $buildDir = Join-Path $OutDir ("build_" + $Name)
     if (Test-Path $buildDir) { Remove-Item -Recurse -Force $buildDir }
     New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
@@ -5926,6 +6036,34 @@ function Test-VbpDll {
 if ($Category -eq "gui") {
     Write-Host "--- GUI VBP Tests (M2) ---" -ForegroundColor Yellow
     Invoke-GuiVbpTable
+}
+
+# GUISample 的本机验收夹具 (-Category guisample): 真编 + 真跑。
+# **不进 CI 判据** —— CI 那格 (vbp#7) 只做"编得过", 缺 Codejock 资产时 SKIP (见 Test-VbpBuild
+# -RequiresCodejock); 本机有 OCX/注册, 才跑这条把"能起窗、控件建得出来、关得掉、退出码 0"验完。
+# 断言沿用 GUI 表的既有三条: 窗口存活 >= MinWindowMs / 检查点齐全 / 退出码 0。
+# 检查点 = 窗口标题 "Visual Studio Sample" + 子窗口数 >= 10 (Codejock 控件树真建出来了);
+# RequiresFiles 同时钉 6 个 OCX 在工程目录, 缺一个就 SKIP 并写明文件名 (不冒充 PASS)。
+# Arch=x86 是必须的: 这批 Codejock 是 32 位 OCX, 64 位宿主加载不了。
+if ($Category -eq "guisample") {
+    Write-Host "--- GUISample 本机验收 (真编 + 真跑) ---" -ForegroundColor Yellow
+    Test-GuiVbpCase @{
+        Name = "guisample"
+        Vbp = "$Tests\guisample\GUISample.vbp"
+        Arch = "x86"
+        Mode = "close"
+        WindowTitle = "Visual Studio Sample"
+        MinWindowMs = 2000
+        MinChildWindows = 10
+        RequiresFiles = @(
+            "Codejock.CommandBars.v20.3.ocx"
+            "Codejock.DockingPane.v20.3.ocx"
+            "Codejock.PropertyGrid.v20.3.ocx"
+            "Codejock.Controls.v20.3.ocx"
+            "Codejock.TaskPanel.v20.3.ocx"
+            "Codejock.SyntaxEdit.v20.3.ocx"
+        )
+    }
 }
 
 if ($Category -in @("all", "run", "vbp")) {
@@ -8979,10 +9117,14 @@ if ($Category -in @("all", "run", "vbp")) {
     # ucProgressCircular **刻意不列** —— 它今天还红着 (B29③④)，列进来就是把已知的红当门禁基线；
     # 等编过之后再加，那一加就是"这个工程从此不许退回编不过"。ucTreeMaps 原本也在这条黑名单里，
     # 账 #201 手写三枚 DI 桩之后它编得过、链得出 exe ⇒ 移到下面那组去了。
-    # 取证夹具里**能编过**的那四枚 (口径: 能确定编得过就必须进 Test-VbpBuild, 哪怕要跑
-    # 得先在本机注册 Codejock —— 那只是"不跑", 不是"不编")。本轮实测四枚 rc=0。
-    # 跑不进的 (需要 OCX 注册/真实窗口) 由 tests\guisample 的取证脚本在本机单独跑, 不进 CI 门禁。
-    Test-VbpBuild "guisample"          "$Tests\guisample\GUISample.vbp"
+    # 取证夹具里能编过的那几枚 (口径: 能确定编得过就必须进 Test-VbpBuild)。
+    # guisample 例外地要 Codejock 类型库才能编: 仓库里没有这批商用 OCX (tests/guisample/*.ocx 被
+    # .gitignore 忽略), CI 上不存在 ⇒ 编不过不是代码的错。所以改成**条件化**: 资产可用就照常
+    # 必须编 (失败即 FAIL), 缺失则 SKIP 并写明缺哪个 LibID/文件/期望版本 —— 既不当 PASS, 也不染红。
+    # 紧随其后的 Assert-CodejockSkipInvariant 是反向守卫: 资产可用却 SKIP、或探测异常都判红。
+    # 真跑 (编 + 起窗 + 窗口存活 + 检查点 + 退出码) 走本机验收入口 -Category guisample, 不入 CI 判据。
+    Test-VbpBuild "guisample"          "$Tests\guisample\GUISample.vbp" -RequiresCodejock
+    Assert-CodejockSkipInvariant
     Test-VbpBuild "guisample_err438"   "$Tests\guisample\err438\E438App.vbp"
     Test-VbpBuild "guisample_mdimax"   "$Tests\guisample\mdimax\MaxApp.vbp"
     Test-VbpBuild "ctlident_idapp"     "$Tests\ctlident\IdApp.vbp"
@@ -12358,4 +12500,8 @@ Write-Host "  Results: PASS=$script:pass FAIL=$script:fail SKIP=$script:skip TOT
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
-if ($script:fail -gt 0) { exit 1 } else { exit 0 }
+# 退出码口径: 0 = 全 PASS/SKIP 之外无异常; 1 = 有 FAIL; **2 = 只有 SKIP、没有 FAIL**。
+# 2 是给"资产缺失"这一种情形用的 (本批: Codejock 类型库): 既不许把缺资产当 PASS 混过去,
+# 也不许把 CI 染红 —— .github/workflows/ci.yml 的 run 步骤见到 2 只出 ::warning:: 并 exit 0
+# (与 Baseline (M1) 的 exit 2 口径一致)。SKIP 之外还有 FAIL 时仍是 1, 不进这条通道。
+if ($script:fail -gt 0) { exit 1 } elseif ($script:skip -gt 0) { exit 2 } else { exit 0 }
