@@ -132,15 +132,22 @@ $fileIoCpp = Join-Path $Root 'src\backend\stmt\cgen_file_io.cpp'
 if (-not (Test-Path -LiteralPath $fileIoCpp)) { Write-Host ('FAIL R6: 读不到 ' + $fileIoCpp); exit 1 }
 $fileIo = Strip-CComments ([IO.File]::ReadAllText($fileIoCpp))
 if ($fileIo -match 'bstrFuncs|isBstrExpr') { $viol += 'R6 名字名单回潮: cgen_file_io.cpp 里又出现了 bstrFuncs / isBstrExpr（第二步已删；分流只许走两问）' }
+# 第三刀 (账 #608/第331刀) 把两份 visitor 的 lambda 收成一位主人 fileOutArgIsBstr:
+#   ① 语义类型 (inferExprType==String) 是主判据，形状只作补充，knownBstrVars_ 只兜底裸标识符;
+#   ② 两条 visitor (Print#/Write#) 与窗体面 Print 必须都转调这一位主人 —— 各自再抄一份就是
+#      第二个判据，名字/形状会重新变成主判据。
+$ownerHits = [regex]::Matches($fileIo, 'bool\s+CCodeGen::fileOutArgIsBstr\(').Count
+if ($ownerHits -ne 1) { $viol += ('R7 「这枚实参是不是 BSTR」的主人应为 1 枚，实测 ' + $ownerHits) }
 $isStringItemHits = [regex]::Matches($fileIo, 'auto\s+isStringItem\s*=').Count
-if ($isStringItemHits -lt 2) { $viol += ('R7 Print#/Write# 两个 visitor 的 isStringItem 只数出 ' + $isStringItemHits + ' 处 (<2) —— 分流口被挪走或合并，扫描读空') }
-foreach ($m in [regex]::Matches($fileIo, '(?s)auto\s+isStringItem\s*=.*?\};')) {
-    $body = $m.Value
-    if ($body -notmatch 'inferExprType') { $viol += 'R7 isStringItem 不再问 inferExprType（类型那一问被拆掉，只剩形状猜测）' }
-    foreach ($needle in @('vb6_BSTR', 'vb6_IIfBSTR', 'VB6_SA_AT(BSTR,', 'knownBstrVars_')) {
-        if ($body -notmatch [regex]::Escape($needle)) { $viol += ('R7 isStringItem 缺发射形状判据: ' + $needle) }
-    }
+if ($isStringItemHits -ne 0) { $viol += ('R7 isStringItem 抄本回潮: ' + $isStringItemHits + ' 处 (分流口只许住 fileOutArgIsBstr)') }
+if ($fileIo -notmatch 'inferExprType\(argNode\)\s*==\s*Vb6Type::String') { $viol += 'R7 主人不再问 inferExprType（类型那一问被拆掉，只剩形状猜测）' }
+foreach ($needle in @('vb6_BSTR', 'vb6_IIfBSTR', 'VB6_SA_AT(BSTR,', 'knownBstrVars_')) {
+    if ($fileIo -notmatch [regex]::Escape($needle)) { $viol += ('R7 主人缺发射形状判据: ' + $needle) }
 }
+$siteHits = [regex]::Matches($fileIo, 'fileOutArgIsBstr\(val,\s*\*expr\)').Count
+if ($siteHits -ne 2) { $viol += ('R7 Print#/Write# 转调主人的站点应为 2 处，实测 ' + $siteHits) }
+$formHits = [regex]::Matches($fileIo, 'fileOutArgBstrExpr\(val,\s*\*expr\)').Count
+if ($formHits -ne 1) { $viol += ('R7 窗体面 Print 转调主人的站点应为 1 处，实测 ' + $formHits) }
 
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
