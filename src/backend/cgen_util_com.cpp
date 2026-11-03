@@ -1016,7 +1016,37 @@ std::string CCodeGen::comUnpackForPack(const std::string& packFn,
 }
 
 std::string CCodeGen::packArgValue(const std::string& packFn,
-                                   const std::string& expr) const {
+                                   const std::string& expr,
+                                   const ASTNode* argAst) const {
+    // B5: 带型本工程类实例**变量**当晚绑定 COM 实参. 变量槽里是裸 vb6_cls_X*
+    // (`Set h = New X` 对 typed 槽发的是 X_New() 的裸指针), 而 ComPackValue 的
+    // _Generic 把它当 VT_DISPATCH 原样交出去, 对端 AddRef 时把结构体首字段
+    // __comObj 当 vtable ⇒ 0xC0000005 (实测 B5b: `Dim h As bHello: d.Add "x", h`
+    // → exit 0xC0000005, 崩在 Add 那一句).
+    // 出口**不能**复用 `New` 实参那条 vb6_ComPack_<类>: 那一条经 FromInstance,
+    // 把实例销毁权一起交给 VARIANT; 变量还活着, 对端释放后再用就是 UAF.
+    // 借用型: FromBorrowedInstance 加一枚引用交给 VARIANT, 宿主销毁权不动.
+    // 闸门: "裸标识符 (局部/模块级变量、ByVal 形参)" 或 "ByRef 形参的解引用形态
+    // `(*obj)`", 且类型占 coclass 表. 表外类 (§B187 EXE 不登记 / Private) 交回原路.
+    // ByRef 传参语义: 晚绑定对端拿到的是**当时的引用** (AddRef 后存进 VARIANT),
+    // 不会反向改写宿主槽; 形参自身被 `Set obj = ...` 改写时写的是宿主槽, 与已
+    // 交给对端的那枚引用无关 —— 故先解一层再借用打包是安全的 (§B5 同源缺口).
+    if (argAst && argAst->kind == ASTNodeKind::IdentifierExpr
+        && (packFn == "vb6_ComPackValue" || packFn == "vb6_ComPackObject")) {
+        auto& id5 = static_cast<const IdentifierExpr&>(*argAst);
+        const std::string lower5 = Symbol::toLower(id5.name);
+        const bool bareIdent5 = expr == id5.name && !expr.empty()
+            && (std::isalpha((unsigned char)expr[0]) || expr[0] == '_')
+            && std::all_of(expr.begin() + 1, expr.end(), [](char ch) {
+                   return std::isalnum((unsigned char)ch) || ch == '_'; });
+        const bool isByRef5 = knownByRefParams_.count(lower5) > 0;
+        const bool derefByRef5 = isByRef5 && expr == "(*" + id5.name + ")";
+        if ((bareIdent5 && !isByRef5) || derefByRef5) {
+            const std::string cls5 = inferClassTypeOfExpr(*argAst);
+            if (!cls5.empty() && classHasCoClassDesc(cls5))
+                return "vb6_ComPackVB6InstanceBorrowed(\"" + cls5 + "\", " + expr + ")";
+        }
+    }
     // ⚠ 长度字面量必须与整串长度相等 —— `std::string::compare(pos, count, str)` 拿
     // [pos, pos+count) 去比**整条** str, count 小于 str.size() 时恒不相等 (静默恒假)。
     // 这里直接用 rfind(..., 0) 前缀判定, 不数长度。

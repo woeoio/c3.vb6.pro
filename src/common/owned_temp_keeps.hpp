@@ -224,6 +224,12 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_DecimalToBSTR",
         "vb6_Dir",
         "vb6_Environ",
+        // Print#/Write# 的格式化族（交出去的都是新造的 BSTR，归调用方所有）
+        "vb6_FileBoolText",
+        "vb6_FileDateText",
+        "vb6_FileLongText",
+        "vb6_FileNumText",
+        "vb6_FileVariantText",
         "vb6_FormatCurrency",
         "vb6_FormatDateTime",
         "vb6_FormatNumber",

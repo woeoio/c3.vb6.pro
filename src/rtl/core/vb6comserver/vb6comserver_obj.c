@@ -830,6 +830,35 @@ void* vb6_ComPackVB6InstanceRaw(const char* classVariable, void* instance) {
     return (void*)pv;
 }
 
+// B5: 带型工程类实例**变量**作为晚绑定 COM 实参 (宿主仍握有销毁权).
+// 与上面的 Raw 同一形状, 唯一差别是 FromBorrowedInstance: 它加一枚引用交给
+// VARIANT, 释放到 0 时只回收包装器、不销毁宿主实例. 用 Raw 的 FromInstance
+// 会把变量的实例所有权一起转移给 VARIANT, 对端释放后变量再用就是 use-after-free.
+void* vb6_ComPackVB6InstanceBorrowed(const char* classVariable, void* instance) {
+    const vb6_CoClassDesc* desc;
+    vb6_ComObject* obj;
+    VARIANT* pv;
+
+    if (!instance) return NULL;
+    desc = vb6_FindCoClassDesc(classVariable);
+    // 未进 coclass 表 (Private / 非 MultiUse|SingleUse) 的类没有 IDispatch
+    // 方法表, 与 Raw 同一口径: 返回 NULL (等效 VB6 传 Nothing), 不冒充对象.
+    if (!desc) return NULL;
+
+    pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    if (!pv) return NULL;
+    obj = vb6_ComObject_FromBorrowedInstance(desc, instance);
+    if (!obj) {
+        free(pv);
+        return NULL;
+    }
+    VariantInit(pv);
+    pv->vt = VT_DISPATCH;
+    pv->pdispVal = (IDispatch*)obj;  /* 引用已由 FromBorrowedInstance 提供, 转移给 VARIANT */
+    return (void*)pv;
+}
+
+
 /* 账 #305 新账 #407 / §B190 第一百七十一刀 = 「视图那一档怎么进 Variant」的唯一出口。
  * 为什么要按**指针**问身份: 视图 (vb6_iface_<I>) 是值结构体、静态类型是接口，实现类只有运行期
  * 才知道，而兄弟 vb6_ComPackVB6InstanceRaw (本文件 :726) 问的是**类名** —— 这一站手里没有名字。

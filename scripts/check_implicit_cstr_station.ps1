@@ -15,7 +15,10 @@
 # 判据（任何一条不齐就红）：
 #   R1 站点唯一：typeTakesImplicitCStr 的**调用点**恰好 1 处，且住在 cgen_expr_call_arg_emit.inc
 #      （声明 cgen_helpers.inc + 定义 cgen_util_type.cpp 各 1 处，是同一枚问句的两半，不算调用）。
-#   R2 位号表唯一：builtinNoParamTableStringSlot 同一条，也必须恰好一处调用、同一文件。
+#   R2 位号表唯一：builtinNoParamTableStringSlot 是**同一枚问句的两个读者**，两处都必须住在
+#      cgen_expr_call_arg_emit.inc：一处答「数值实参折串」(Fix 175 的 strSlot175)，一处答
+#      「Variant 实参按当前子类型折串」(Fix 330 的 `vb6_VariantToString`)。这不是第二位主人 ——
+#      两腿都问同一枚档表，没有各自重写一遍位号；多出第三处即红。
 #   R3 旧名单不许回来：strArgPos108c 在 src/ 里 0 处。
 #   R4 那一站不再发形状：cgen_expr_call_builtin_argtype.inc 的**代码**里不许出现 vb6_CStr。
 #   R5 名单自己的 cast 形状不许在别处重现：vb6_CStrLong((int32_t)( 在 src/backend 里 0 处。
@@ -112,17 +115,27 @@ function Get-CallSites([string]$name) {
 $viol = @()
 
 # ---- R1 / R2 ----
-foreach ($pair in @(@('typeTakesImplicitCStr', 'cgen_expr_call_arg_emit.inc'),
-                    @('builtinNoParamTableStringSlot', 'cgen_expr_call_arg_emit.inc'))) {
-    $nm = $pair[0]
-    $want = $pair[1]
-    $sites = @(Get-CallSites $nm)
-    if ($sites.Count -ne 1) {
-        $viol += ('R1/R2 ' + $nm + ' 的调用点数应为 1, 实为 ' + $sites.Count +
+# 每条问句登记**允许的读者数**: typeTakesImplicitCStr 只该有一个读者; 位号那一问该有两个
+# (标量腿 + Variant 腿, 见头部 R2 的说明)。读者全部不许搬出 cgen_expr_call_arg_emit.inc。
+foreach ($r in @(@{ N = 'typeTakesImplicitCStr'; Want = 1 },
+                 @{ N = 'builtinNoParamTableStringSlot'; Want = 2 })) {
+    $sites = @(Get-CallSites $r.N)
+    if ($sites.Count -ne $r.Want) {
+        $viol += ('R1/R2 ' + $r.N + ' 的调用点数应为 ' + $r.Want + ', 实为 ' + $sites.Count +
                   ' (' + (($sites | Sort-Object -Unique) -join ', ') +
-                  ') —— 这条规则又长出第二位主人了')
-    } elseif ($sites[0] -ne $want) {
-        $viol += ('R1/R2 ' + $nm + ' 的唯一调用点应在 ' + $want + ', 现在在 ' + $sites[0])
+                  ') —— 读者数变了: 要么又长出第二位主人, 要么有一条腿被撤掉')
+    } elseif (@($sites | Where-Object { $_ -ne 'cgen_expr_call_arg_emit.inc' }).Count -gt 0) {
+        $viol += ('R1/R2 ' + $r.N + ' 的读者搬出了 cgen_expr_call_arg_emit.inc: ' +
+                  (($sites | Sort-Object -Unique) -join ', '))
+    }
+}
+# 两腿的形状逐一钉住: 少一条 = 那一档实参又裸交; 多一条 = 有人在同一个文件里抄了第三份位号判断。
+foreach ($shape in @('strSlot175 = builtinNoParamTableStringSlot(',
+                     'if (builtinNoParamTableStringSlot(callee, node.positional.size(), i, first330v)) {')) {
+    $n = @([regex]::Matches($emit, [regex]::Escape($shape))).Count
+    if ($n -ne 1) {
+        $viol += ('R1/R2 位号问句的已知形状 "' + $shape + '" 出现 ' + $n + ' 次, 应为 1 次 —— ' +
+                  'Fix 175 (标量) 与 Fix 330 (Variant) 两腿各只许留在自己那一站')
     }
 }
 

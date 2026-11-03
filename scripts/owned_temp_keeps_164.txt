@@ -76,6 +76,7 @@ vb6_FileCopy|0	0	handoff-reads:vb6_path_from	U	open	BSTR
 vb6_FileCopy|1	0	handoff-reads:vb6_path_from	U	open	BSTR
 vb6_FileDateTime|0	0		0	open	BSTR
 vb6_FileLen|0	0		0	open	BSTR
+vb6_FileVariantText|0	0	handoff-to-plain:vb6_FileBoolText	0	open	VARIANT
 vb6_Filter|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_Format|0	0		0	open	VARIANT
 vb6_Format|1	0		0	open	BSTR
@@ -151,6 +152,7 @@ vb6_Open|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_PA_SetBSTR|2	0		0	open	BSTR
 vb6_Print|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_Printer_Print|0	0		0	open	BSTR
+vb6_PrintText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_RaiseError|1	1	store	0	open	BSTR
 vb6_Replace|0	0	handoff-to-plain:vb6_BSTR_FromStr	0	open	BSTR
 vb6_Replace|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
@@ -224,6 +226,7 @@ vb6_VarSubV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarSubV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarType|0	0		0	open	VARIANT
 vb6_Write|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 # --- 借用轴（返回侧）：这一枚出口交出去的指针是借来的，不归调用方所有 ⇒ 不许放它 ---
 [borrow] vb6_ErrDescription
 [borrow] vb6_ErrSource
@@ -232,6 +235,7 @@ vb6_Write|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_App_EXEName BSTR
 [own] vb6_App_HelpFile BSTR
 [own] vb6_App_Path BSTR
+[own] vb6_App_Title BSTR
 [own] vb6_BSTR_Concat BSTR
 [own] vb6_BSTR_ConcatFree BSTR
 [own] vb6_BSTR_Empty BSTR
@@ -272,6 +276,11 @@ vb6_Write|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_DecimalToBSTR BSTR
 [own] vb6_Dir BSTR
 [own] vb6_Environ BSTR
+[own] vb6_FileBoolText BSTR
+[own] vb6_FileDateText BSTR
+[own] vb6_FileLongText BSTR
+[own] vb6_FileNumText BSTR
+[own] vb6_FileVariantText BSTR
 [own] vb6_FormatCurrency BSTR
 [own] vb6_FormatDateTime BSTR
 [own] vb6_FormatNumber BSTR

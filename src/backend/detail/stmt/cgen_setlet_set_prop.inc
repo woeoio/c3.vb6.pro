@@ -590,7 +590,7 @@
     // 于是下方 isComMarker_ 为假, 自然落到本函数末尾那条通用的 `target = value;`
     // 路径, 发出的就是 `vb6_UserControl_Picture = vb6_ComGetObjectProp(...)`。
     // 刻意不再调 emitSetObjectRhs: scripts/check_set_rhs_object_context.ps1 钉着
-    // "emitSetObjectRhs 调用点恰好 7 处", 新增一处即红 (实测踩到过)。
+    // "emitSetObjectRhs 总站点 9 处 = 声明 + 定义 + 7 个发码点", 新增一处即红 (实测踩到过)。
 
     // COM属性SetRef: Set obj.Property = objRef → vb6_ComSetRef(obj, L"Property", objRef)
     if (isComMarker_) {

@@ -81,7 +81,7 @@ bool CCodeGen::tryEmitChainedComWrite(Expr* targetNode, Expr* valueNode) {
             std::string packFn25 = comPackExpr(*ic.positional[j]);
             emitExpr(*ic.positional[j]);
             { std::string r25 = resolveComMarkerForPack(packFn25); if (!r25.empty()) lastExpr_ = r25; }
-            out.push_back(packArgValue(packFn25, lastExpr_));
+            out.push_back(packArgValue(packFn25, lastExpr_, ic.positional[j].get()));
         }
         return (int32_t)ic.positional.size();
     };

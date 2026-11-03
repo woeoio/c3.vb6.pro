@@ -210,6 +210,11 @@ const char* vb6_ComObject_ClassNameA(void* v);
 // (Private / 非 MultiUse|SingleUse) 时返回 NULL, 等效 VB6 的 Nothing.
 void* vb6_ComPackVB6InstanceRaw(const char* classVariable, void* instance);
 
+// B5: 带型工程类实例**变量**当晚绑定 COM 实参 —— 与 Raw 同形, 但走
+// FromBorrowedInstance (加一枚引用, 不接管销毁权). 变量在调用后还活着,
+// 用 Raw 会把它的实例所有权一起交给 VARIANT ⇒ 对端释放后再用是 UAF.
+void* vb6_ComPackVB6InstanceBorrowed(const char* classVariable, void* instance);
+
 // ============================================================
 // Class Factory (IClassFactory实现)
 // ============================================================

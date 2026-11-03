@@ -34,7 +34,7 @@
                         std::string packFn = comPackExpr(*callTarget.positional[i]);
                         emitExpr(*callTarget.positional[i]);
                         { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
-                        packedIdxArgs.push_back(packArgValue(packFn, lastExpr_));
+                        packedIdxArgs.push_back(packArgValue(packFn, lastExpr_, callTarget.positional[i].get()));
                     }
                     int32_t idxArgc = (int32_t)packedIdxArgs.size();
                     std::string idxArgsArray = "(void*[]){";

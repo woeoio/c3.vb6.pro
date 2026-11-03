@@ -144,7 +144,7 @@
                 emitExpr(*node.positional[i]);
                 { std::string rSt0 = resolveComMarkerForPack(packFnSt0);
                   if (!rSt0.empty()) lastExpr_ = rSt0; }
-                packedSt0.push_back(packArgValue(packFnSt0, lastExpr_));
+                packedSt0.push_back(packArgValue(packFnSt0, lastExpr_, node.positional[i].get()));
             }
             std::string argsArrSt0 = "(void*[]){";
             for (size_t i = 0; i < packedSt0.size(); i++) {
@@ -202,7 +202,7 @@
                             // 的可能是**无型** VARIANT ⇒ 交 packArgValue 一处收口
                             // (Pager.ctl:1249 `PropBuddyControl.Move .Left, .Top` 的两个
                             //  vb6_ComPackDouble(vb6_VARIANT) 就是这里发出的)。
-                            packed245c.push_back(packArgValue(packFn245c, lastExpr_));
+                            packed245c.push_back(packArgValue(packFn245c, lastExpr_, node.positional[i].get()));
                         }
                         int32_t argc245c = (int32_t)packed245c.size();
                         std::string argsArr245c = "(void*[]){";
@@ -438,7 +438,7 @@
                 emitExpr(*node.positional[i]);
                 { std::string resolvedPar = resolveComMarkerForPack(packFnPar);
                   if (!resolvedPar.empty()) lastExpr_ = resolvedPar; }
-                packedPar.push_back(packArgValue(packFnPar, lastExpr_));
+                packedPar.push_back(packArgValue(packFnPar, lastExpr_, node.positional[i].get()));
             }
             int32_t argcPar = (int32_t)packedPar.size();
             std::string argsArrayPar = "NULL";
@@ -563,7 +563,7 @@
                                         emitExpr(*node.positional[i]);
                                         { std::string resolved = resolveComMarkerForPack(packFn);
                                           if (!resolved.empty()) lastExpr_ = resolved; }
-                                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                                        packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
                                     }
                                     int32_t argc = (int32_t)packedArgs.size();
                                     std::string argsArray = "(void*[]){";
@@ -699,7 +699,7 @@
                                 emitExpr(*node.positional[i]);
                                 { std::string resolved = resolveComMarkerForPack(packFn);
                                   if (!resolved.empty()) lastExpr_ = resolved; }
-                                packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                                packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
                             }
                             int32_t argc = (int32_t)packedArgs.size();
                             std::string argsArray = "(void*[]){";
@@ -733,7 +733,7 @@
 
                                             { std::string resolved = resolveComMarkerForPack(packFn);
                                               if (!resolved.empty()) lastExpr_ = resolved; }
-                                            packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                                            packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
                                         }
                                         int32_t argc = (int32_t)packedArgs.size();
                                         std::string argsArray = "(void*[]){";

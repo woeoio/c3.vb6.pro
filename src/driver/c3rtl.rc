@@ -688,6 +688,11 @@
  *   「DECIMAL 住在 VARIANT 的哪一字节」收成 vb6_DecimalPtrFromVariant (vb6rtl.c)。
  *   touch 本文件 = 让 125 份 RCDATA 重嵌一次 (§B99② 那道哨兵盯的就是这一格)。 */
 
+/* 账 #305 第三百五十一刀 (M3 首批 OCX 宿主属性): uc_hostmodel_getprop.inc /
+ *   uc_hostmodel_setprop.inc / uc_hostmodel_call.inc 三份 RTL 片段都动了
+ *   (Tag / ShowLines / ShowBorder / Appearance / RightMargin / ZOrder)。
+ *   touch 本文件 = 让 rc.exe 重跑, 把新的这三份 RCDATA 嵌进 C3.exe。 */
+
 /* 账 #305 §B150 (2026-10-11 第四十刀): 晚绑定槽的多维元素读写。
  *   vb6rtl_com.c 把「这枚数组槽的第 off 格是什么档」那张表从 vb6_VariantArrayGet 的体里提出来
  *   (vb6_VariantElemFromSlotData) 并新发两枚出口 vb6_VariantArrayGetND / SetND；vb6rtl_array.c 的

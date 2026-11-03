@@ -534,6 +534,11 @@
     // M22: 将非BSTR表达式包装为BSTR (用于字符串连接运算)
     std::string wrapToBSTR(const std::string& expr, Expr& node);
 
+    // B11 第三批: Print # / Write # 的**单项文本**出口 (按真 VB6 实测字节)。
+    // writeMode=false → " " + CStr + " " (Print #); true → Str 去前导 0/空格 (Write #)。
+    // 返回的 C 表达式是 BSTR; 类型判不准时回退旧数值路径 (vb6_Str(int32_t))。
+    std::string printWriteTextExpr(Expr& expr, const std::string& val, bool writeMode);
+
     // Fix 194: 字符串型控件属性写入的**唯一**取值入口。RTL 的
     // vb6_SetControlText(hwnd, void* bstr) / vb6_SetMenuCaption 第二参是 BSTR 指针,
     // RHS 若是数值就会被当成指针 —— 必须在此统一转 BSTR, 否则每个属性写入点都得
@@ -1208,7 +1213,8 @@
     // 为什么要收成一处: 组装 `packFn(expr)` 的站点在 com_bind / callee_member /
     // callee_ident 三个片段里共 8 处, 只堵一处就等于没堵 (实测 Pager.c 2079/2080
     // 走的是另一个站点)。
-    std::string packArgValue(const std::string& packFn, const std::string& expr) const;
+    std::string packArgValue(const std::string& packFn, const std::string& expr,
+                             const ASTNode* argAst = nullptr) const;
 
     // 账 #245/§B94: `Symbol::comMethods` 的**唯一读出口**。这张表以前在后端被读五遍
     // （四份文件），每份自己写一遍「按 mapType(returnType) 挑哪一条 vb6_Com*」，其中两处还把

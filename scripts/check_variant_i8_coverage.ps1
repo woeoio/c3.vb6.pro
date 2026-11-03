@@ -65,7 +65,10 @@ $must = @(
     # 放宽扫描后它进了 census，两档都答(§B142 第三十四刀补的 Decimal + Task #44 补的 I8)。
     "vb6_ComVariantIntoSlot", "vb6_Format",
     # 账 #305 §B171: UC 属性包反序列化那张表(见上面同名的注释)
-    "vb6_bag_deserialize"
+    "vb6_bag_deserialize",
+    # Print#/Write# 的 Variant 档: 数值 Variant (I8/Decimal/SByte/UInteger...) 必须按数值写盘,
+    # 落 default 会静默写空串 (见 docs/print_write_numeric.md §5.1)
+    "vb6_FileVariantText"
 )
 $exempt = @{
     "vb6_CDec" = "两架构读数本来就相同（CStr(CDec(整数)) 今天就是空串），缺的不是这一档 -> 另立 §B141"
@@ -86,7 +89,9 @@ $decMust = @(
     # 账 #305 §B142 (第五十三刀): 往里读那一枚核 + Format 那张分诊表(见上面 I8 名单同两条的理由)。
     "vb6_ComVariantIntoSlot", "vb6_Format",
     # 账 #305 §B171: 同上 —— 属性包那张表两档都答
-    "vb6_bag_deserialize"
+    "vb6_bag_deserialize",
+    # Print#/Write# 的 Variant 档: Decimal 走 vb6_vtDecimal 那一臂(见 vb6_FileVariantText)
+    "vb6_FileVariantText"
 )
 $decExempt = @{
     # 账 #305 §B145: 这一格撤掉——那张 vt 表整个搬进 vb6_VariantPackBorrow(它现在两档都答)，
@@ -110,7 +115,9 @@ $decExempt = @{
 $smMust = @(
     "vb6_VariantToLong", "vb6_VariantToLongPtr", "vb6_VariantToBool", "vb6_VariantToDouble",
     "vb6_TypeNameScalar", "vb6_IsNumeric", "vb6_VarToDouble_internal", "vb6_VariantPackBorrow",
-    "vb6_ComVariantIntoSlot", "vb6_Format", "memVariantToI4", "vb6_ho_variantToLong", "vb6_ho_variantToDouble"
+    "vb6_ComVariantIntoSlot", "vb6_Format", "memVariantToI4", "vb6_ho_variantToLong", "vb6_ho_variantToDouble",
+    # Print#/Write# 的 Variant 档: VT_I1 / VT_UI2 各有独立一臂(不再被 _Generic 接成 VT_I4)
+    "vb6_FileVariantText"
 )
 $smExempt = @{
     "vb6_CDec"            = "造 Decimal 的那一档不是读表；补它等于把同一个问题抄第二遍（与 decExempt 同理由）"

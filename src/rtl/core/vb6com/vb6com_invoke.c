@@ -90,6 +90,13 @@ int32_t vb6_ComIsDispatchable(const void* disp) {
  * UC 实例) 由各自的岔口应答, 不算漏 —— 判据是 vb6_ComLateBindIsPseudo。 */
 static int32_t g_com_latebind_miss = 0;
 
+/* 账 (438 语义刀): 宿主模型答「成员不存在」时抛 438 之后, 链上的下一枚成员访问
+ * (`rtfText.SelLength`) 仍会被生成代码照常求值 —— 接收者是那枚空值 ⇒ 再记一条
+ * [C3_LATEBIND_MISS]。VB6 语义是**整条语句在 438 处终止**, 那条后续访问根本不存在。
+ * 这里用一位「刚抛过 438」的标记把那一次链尾 miss 吸收掉 (只吸收一枚; 遇到非空
+ * 接收者就先清标记, 后续真缺口照记)。 */
+static int32_t g_com_438_dangling = 0;
+
 int32_t vb6_ComLateBindMissCount(void) { return g_com_latebind_miss; }
 
 /* 这枚接收者是不是「宿主伪对象」? 不是 IDispatch, 但宿主模型会应答。 */
@@ -101,10 +108,41 @@ static int32_t vb6_ComLateBindIsPseudo(const void* disp) {
     return 0;
 }
 
-/* 护栏的唯一判据: 既不是真 IDispatch, 也不是宿主伪对象。 */
+/* 账 (438 语义刀): 刚抛过 438 的那条语句在链上留下的**空接收者**不算漏 —— VB6 里整条
+ * 语句在 438 处终止, 链尾那一次成员访问根本不存在。标记只吸收一枚; 走到这里时接收者
+ * 不是空档 (链已走完) 就先清标记, 后续真缺口照记。
+ * 这一格住在判定谓词里而**不在**护栏里: 护栏是纯报告出口 (void、不带控制流),
+ * 见 scripts/check_com_latebind_guard.ps1 的 R3。 */
+static int32_t vb6_ComAbsorb438(const void* disp) {
+    if (!g_com_438_dangling) return 0;
+    g_com_438_dangling = 0;
+    return disp ? 0 : 1;
+}
+
+/* 护栏的唯一判据: 既不是「刚被 438 吞掉的链尾」, 也不是宿主伪对象, 又不是真 IDispatch。 */
 static int32_t vb6_ComLateBindIsMiss(const void* disp) {
+    if (vb6_ComAbsorb438(disp)) return 0;
     if (vb6_ComLateBindIsPseudo(disp)) return 0;
     return !vb6_ComIsDispatchable(disp);
+}
+
+/* 账 (状态栏/Output 面板刀): `C3_COM_TRACE=1` 时把三条 Rcv 的「成员名 + 接收者身份」打一行。
+ * 为什么需要它: 同一个 `x.Text = "..."`
+ *   · 走窗口语义 (SetWindowTextW 打在 OCX 的外壳窗上) 与
+ *   · 走 OCX 自己的 IDispatch (FlatEdit 内层子窗才会变) 
+ * 从外面看都「没报错」, 只有这一行能分出是哪一层接的。同理 `AddPane` 走宿主模型
+ * 还是真 IDispatch、`StatusBar` 是不是被宿主臂截走, 都靠它。默认关闭, 零成本。 */
+static void vb6_ComTraceRcv(const char* site, void* disp, const wchar_t* name) {
+    static int on = -1;
+    if (on < 0) on = GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0;
+    if (!on) return;
+    wchar_t cls[96]; cls[0] = 0;
+    int isWin = (disp && IsWindow((HWND)disp)) ? 1 : 0;
+    if (isWin) GetClassNameW((HWND)disp, cls, 96);
+    fwprintf(stderr, L"[C3_COM_T] %hs '%ls' rcv=%p isWin=%d host=%d cls=%ls\n",
+             site, name ? name : L"", disp, isWin,
+             (disp && vb6_Host_IsHostObject(disp)) ? 1 : 0, cls);
+    fflush(stderr);
 }
 
 static void vb6_ComLateBindMiss(const wchar_t* site, const wchar_t* name, void* disp) {
@@ -446,6 +484,7 @@ static void vb6_ComNarrowArgs(IDispatch* pDisp, DISPID dispid, VARIANT** args, i
 static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
                             void* args_void, int32_t argc) {
     VARIANT** args = (VARIANT**)args_void;
+    vb6_ComTraceRcv("ComCall", disp, methodName);
     /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
     if (vb6_ComLateBindIsMiss(disp)) {
         vb6_ComLateBindMiss(L"ComCall", methodName, disp);
@@ -455,9 +494,21 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
      * 直接解引用 lpVtbl 会 AV. 用 Win32 语义的宿主分派应答. */
     if (vb6_Host_IsHostObject(disp)) {
         char hout[64];   /* vb6_VARIANT (vb6com 单元用 Windows VARIANT, 不见 vb6_VARIANT 类型) */
-        vb6_Host_Call(disp, methodName, argc, args_void, hout);
+        int32_t hhandled = vb6_Host_Call(disp, methodName, argc, args_void, hout);
         if (args) {
             for (int32_t hi = 0; hi < argc; hi++) { if (args[hi]) free(args[hi]); }
+        }
+        /* 账 (438 语义刀): -1 = 宿主模型没有这个成员 (uc_hostmodel_call.inc 末尾)。
+           `v = Me.rtfText` 这类读在 cgen 里发的是 **Call** 站 (不是 GetProp),
+           以前这里无条件答 Empty ⇒ 夹具里 Err.Number 读到 0、反向用例走不到错误分支。
+           VB6 在这里抛 438 "Object doesn't support this property or method"。
+           与 GetProp 岔口同口径: 抛完仍交一枚空 VARIANT, 让调用方继续 (Resume Next 语义)。 */
+        if (hhandled < 0) {
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+            vb6_Host_ClearVariant(&hout);
+            VARIANT* hempty = (VARIANT*)calloc(1, sizeof(VARIANT));
+            return (void*)hempty;
         }
         VARIANT* hres = (VARIANT*)calloc(1, sizeof(VARIANT));
         vb6_Host_ToWinVariant(&hout, hres);
@@ -623,8 +674,9 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
             if (result->vt == VT_I4) val = result->lVal;
             else if (result->vt == VT_BOOL) val = result->boolVal;
         }
-        fprintf(stderr, "[C3_COM] Call '%ls' hr=0x%08lX vt=%d val=%ld\n",
-                methodName, (unsigned long)hr, result ? result->vt : -1, val);
+        fprintf(stderr, "[C3_COM] Call '%ls' hr=0x%08lX vt=%d val=%ld pdisp=%p\n",
+                methodName, (unsigned long)hr, result ? result->vt : -1, val,
+                (result && result->vt == VT_DISPATCH) ? (void*)result->pdispVal : NULL);
         if (wcscmp(methodName, L"SetScrollBars") == 0) {
             for (int32_t ai = 0; ai < argc; ai++)
                 fprintf(stderr, "[C3_COM]   arg[%ld] vt=%d val=%ld\n", (long)ai,
@@ -847,9 +899,45 @@ void* vb6_ComObjectTypeCast(void* obj, const wchar_t* typeName) {
     return obj;
 }
 
+/* 账 (B3 StatusBar.Visible): VB6 对"带窗口的对象"用的是**宿主 Extender 语义** ——
+ * `Visible` 读写的就是窗口可见性本身, 不是 OCX 内部标志。
+ * 实测 (vb6_vc6 参照, 1 次启动): `CommandBars.StatusBar` 的 hWnd=3474498,
+ * Visible=True/False 与 IsWindowVisible=1/0 逐次同步 (`sb2.Visible=False` 之后窗口
+ * 真的隐藏, 回读 False; 再置 True 窗口恢复)。
+ * 而同一份调用在 C3 下 (c3_vc6) `put_Visible` 回 S_OK 却不改 OCX 标志, get 恒 False。
+ * 该对象在类型库里只有 IStatusBar.hWnd (memid=-515), 没有 Visible 成员 ——
+ * 故宿主侧按 hWnd 的真窗口状态应答, 与 VB6 同语义。
+ * 只对**非宿主控件**生效: 宿主控件的 Visible 由 vb6_OcxHost_* 先答 (上面的岔口)。 */
+static int32_t vb6_ComObjWindow(void* disp, HWND* out) {
+    *out = NULL;
+    if (!disp || !vb6_ComIsDispatchable(disp)) return 0;
+    DISPID did = vb6_getDispid((IDispatch*)disp, L"hWnd");
+    if (did == DISPID_UNKNOWN) return 0;
+    DISPPARAMS dp;
+    memset(&dp, 0, sizeof(dp));
+    VARIANT v;
+    VariantInit(&v);
+    EXCEPINFO ex;
+    memset(&ex, 0, sizeof(ex));
+    UINT ae = 0;
+    HRESULT hr = vb6_ComInvoke((IDispatch*)disp, did,
+                               (DISPATCH_METHOD | DISPATCH_PROPERTYGET), &dp, &v, &ex, &ae);
+    intptr_t h = 0;
+    if (SUCCEEDED(hr)) {
+        if (v.vt == VT_I4) h = v.lVal;
+        else if (v.vt == VT_I8) h = (intptr_t)v.llVal;
+        else if (v.vt == VT_INT) h = v.intVal;
+    }
+    VariantClear(&v);
+    if (!h || !IsWindow((HWND)h)) return 0;
+    *out = (HWND)h;
+    return 1;
+}
+
 // COM属性Get (返回VARIANT*)
 static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
     /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    vb6_ComTraceRcv("ComGetProp", disp, propName);
     if (vb6_ComLateBindIsMiss(disp)) {
         vb6_ComLateBindMiss(L"ComGetProp", propName, disp);
     }
@@ -867,6 +955,20 @@ static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
                 vres->boolVal = vis ? VARIANT_TRUE : VARIANT_FALSE;
             }
             return (void*)vres;
+        }
+        /* 账 (B3): 非宿主控件、但对象自带 hWnd → 读该窗口自己的可见位 (VB6 语义)。
+           用 WS_VISIBLE 而不是 IsWindowVisible: 后者连带祖先链, 在 Form_Load 阶段
+           父窗还没 ShowWindow 时会读成 False, 与 VB6 的逐控件标志口径不符
+           (VB6 参照在 Form_Load 内回读 True)。 */
+        HWND owh = NULL;
+        if (vb6_ComObjWindow(disp, &owh)) {
+            LONG st = GetWindowLongW(owh, GWL_STYLE);
+            VARIANT* wres = (VARIANT*)calloc(1, sizeof(VARIANT));
+            if (wres) {
+                wres->vt = VT_BOOL;
+                wres->boolVal = (st & WS_VISIBLE) ? VARIANT_TRUE : VARIANT_FALSE;
+            }
+            return (void*)wres;
         }
     }
     /* Fix 164z2-dbg: C3_COM_TRACE 入口日志 */
@@ -925,7 +1027,17 @@ static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
     /* Fix 112: 宿主对象分派 (见 vb6_ComCall 注释) */
     if (vb6_Host_IsHostObject(disp)) {
         char hout[64];
-        vb6_Host_GetProp(disp, propName, hout);
+        int32_t hgot = vb6_Host_GetProp(disp, propName, hout);
+        /* 账 (438 语义刀): -1 = 宿主模型没有这个成员 (uc_hostmodel_getprop.inc 末尾)。
+           VB6 在这里抛 **438 "Object doesn't support this property or method"**,
+           由 On Error Resume Next 吞掉; 以前答 Empty 后链上 `.SelLength` 再记一条
+           latebind miss ⇒ GUISample 里 rtfText/SelLength 成对噪声 (274×2)。 */
+        if (hgot < 0) {
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+            VARIANT* hempty = (VARIANT*)calloc(1, sizeof(VARIANT));
+            return (void*)hempty;
+        }
         VARIANT* hres = (VARIANT*)calloc(1, sizeof(VARIANT));
         vb6_Host_ToWinVariant(&hout, hres);
         vb6_Host_ClearVariant(&hout);
@@ -1041,19 +1153,9 @@ static void* vb6_ComGetPropArgRcv(void* disp, const wchar_t* propName,
 // COM属性Set (值类型)
 static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_void) {
     /* 账 #305 第二百六十二刀 (丙): 非 IDispatch 接收者 —— 响亮 + 计数 (行为不变) */
+    vb6_ComTraceRcv("ComSetProp", disp, propName);
     if (vb6_ComLateBindIsMiss(disp)) {
         vb6_ComLateBindMiss(L"ComSetProp", propName, disp);
-    }
-    {   /* 临时排查 (Outlook2013 Form_Load Error 13): 失败时打印属性名与值类型 */
-        static int dbgSP = -1;
-        if (dbgSP < 0) dbgSP = GetEnvironmentVariableW(L"C3_DBG_SETPROP", NULL, 0) > 0;
-        if (dbgSP && value_void) {
-            wchar_t msg[160];
-            swprintf(msg, 160, L"[C3_SETPROP] %ls vt=%d\n", propName, (int)((VARIANT*)value_void)->vt);
-            OutputDebugStringW(msg);
-            fwprintf(stderr, L"%ls", msg);
-            fflush(stderr);
-        }
     }
     /* 账 (Outlook2013 主区 Report 盖住 Calendar): `控件.Visible = v` 是**容器
        Extender** 的账。此处 disp 是控件对象 (IDispatch*), 交给控件自身只会改它
@@ -1062,6 +1164,14 @@ static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_v
     if (disp && propName && _wcsicmp(propName, L"Visible") == 0 && value_void) {
         int32_t vis = (int32_t)vb6_VariantToDouble(*(VARIANT*)value_void);
         if (vb6_OcxHost_SetVisible(disp, vis)) {
+            free(value_void);
+            return;
+        }
+        /* 账 (B3): 非宿主控件、自带 hWnd → 落窗口可见性 (VB6 Extender 语义)。
+           实测 VB6 参照 `sb2.Visible=False` 之后窗口 IsWindowVisible=0。 */
+        HWND owh = NULL;
+        if (vb6_ComObjWindow(disp, &owh)) {
+            ShowWindow(owh, vis ? SW_SHOW : SW_HIDE);
             free(value_void);
             return;
         }
@@ -1303,11 +1413,32 @@ static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) 
  * (vb6_ComDispViewIn 的判据与代价见文件头)。原函数体改名 ...Rcv 后原样保留;
  * 这一层只做「进来换视图 / 出去还引用」, 不改任何出口自己的语义。
  * ============================================================ */
+/* 账 (frmDocument 最大化/替代路径): vb6forms_mdi.h 的两枚出口; vb6com 与
+ * vb6forms 的依赖方向相反, 这里只前置声明, 不改 include 关系。 */
+extern void vb6_MDI_NoteTabWorkspaceMissing(void);
+
 void* vb6_ComCall(void* disp, const wchar_t* methodName,
                   void* args_void, int32_t argc) {
     void* owned = NULL;
     void* r = vb6_ComCallRcv(vb6_ComDispViewIn(disp, &owned), methodName, args_void, argc);
     vb6_ComDispViewOut(owned);
+    /* 实测 (c3_vc6 / c3_vs2015 两侧): `CommandBars.ShowTabWorkspace(True)` 由 OCX
+     * 回 S_OK + 空指针 ⇒ 脚本的 Workspace 恒 Nothing, 活动 MDI 子窗停在设计尺寸
+     * (VB6 同调用拿到真对象 ⇒ 子窗铺满文档区)。这里只**打标记**, 由 vb6_ShowForm
+     * 按工作区行为把活动子窗最大化 —— 替代路径, 不是把 OCX 那条链补齐。 */
+    /* 账 (B4): 返回的是 VARIANT* (VT_DISPATCH + pdispVal=NULL 也算"没给出对象") ——
+       实测 CallObject 走的是这一出口, r 本身非空, 只看 `!r` 永远不成立。 */
+    if (methodName && wcscmp(methodName, L"ShowTabWorkspace") == 0) {
+        int empty = !r;
+        if (r) {
+            VARIANT* vr = (VARIANT*)r;
+            if (vr->vt == VT_EMPTY || vr->vt == VT_NULL
+                || (vr->vt == VT_DISPATCH && vr->pdispVal == NULL)
+                || (vr->vt == VT_UNKNOWN && vr->punkVal == NULL))
+                empty = 1;
+        }
+        if (empty) vb6_MDI_NoteTabWorkspaceMissing();
+    }
     return r;
 }
 

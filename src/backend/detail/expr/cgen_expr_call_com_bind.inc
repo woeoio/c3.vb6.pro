@@ -210,7 +210,7 @@
                 std::string packFn = comPackExpr(*node.positional[i]);
                 emitExpr(*node.positional[i]);
                 { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
-                packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
             }
             int32_t argc = (int32_t)packedArgs.size();
             std::string argsArray = "(void*[]){";
@@ -695,7 +695,7 @@
                         && isKnownObjectVarName(lastExpr_)) {
                         packedArgs.push_back("vb6_ComPackObjectRef((void**)&" + lastExpr_ + ")");
                     } else {
-                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                        packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
                     }
                 }
                 for (auto& named : node.named) {
@@ -711,7 +711,7 @@
                         && isKnownObjectVarName(lastExpr_)) {
                         packedArgs.push_back("vb6_ComPackObjectRef((void**)&" + lastExpr_ + ")");
                     } else {
-                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                        packedArgs.push_back(packArgValue(packFn, lastExpr_, named.value.get()));
                     }
                 }
                 int32_t argc = (int32_t)packedArgs.size();
@@ -776,7 +776,7 @@
                 if (argIsVariantPtr && packFn == "vb6_ComPackObject") {
                     packedArgs.push_back(lastExpr_);   // 已是 VARIANT*, 直接作实参 (ComCall 会 VariantClear+free)
                 } else {
-                    packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                    packedArgs.push_back(packArgValue(packFn, lastExpr_, argExpr.get()));
                 }
             };
             for (size_t pos = 0; pos < node.positional.size(); pos++) {
@@ -1101,7 +1101,7 @@
                     std::string packFn86 = comPackExpr(*node.positional[i]);
                     emitExpr(*node.positional[i]);
                     { std::string resolved86 = resolveComMarkerForPack(packFn86); if (!resolved86.empty()) lastExpr_ = resolved86; }
-                    packedArgs86.push_back(packArgValue(packFn86, lastExpr_));
+                    packedArgs86.push_back(packArgValue(packFn86, lastExpr_, node.positional[i].get()));
                 }
                 int32_t argc86 = (int32_t)packedArgs86.size();
                 std::string argsArray86 = "(void*[]){";
