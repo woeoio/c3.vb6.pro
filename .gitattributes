@@ -15,6 +15,14 @@
 *.ctx binary
 *.pgx binary
 
+# emit-manifest.expected.txt 的行尾口径: compare_emit_manifest.ps1 -Bless 按 "BOM + 纯 CRLF"
+# 写盘 (该脚本里写明了为什么不能交给 Set-Content), check_manifest_coverage.ps1 的 K2 也按
+# 同一口径校验。不钉的话 checkout 结果随机器而定 —— 本机 core.autocrlf=true 会把索引里的
+# LF 检成 CRLF, 而工作区一旦被别的工具写成 LF, git 就报 "M" 而 diff 为空 (clean 过滤后
+# 两边都是 LF, 判不出内容差异)。钉死 eol=crlf ⇒ 任何机器 checkout 都与登记写盘同形,
+# 这个文件的状态只反映"内容变没变"。
+emit-manifest.expected.txt text eol=crlf
+
 # ai/028 V1: 反引号原始串的行界/编码变体夹具 —— **字节本身就是被测对象**。
 # core.autocrlf=true 会把 *.bas 统统按 LF 存进索引 (实测 i/lf)，于是 checkout 时
 # 存成 CRLF 的那两份与存成 LF 的那两份在 CI 上变成同一份文件，"同一内容四种源
