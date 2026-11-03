@@ -149,6 +149,46 @@ if ($siteHits -ne 2) { $viol += ('R7 Print#/Write# 转调主人的站点应为 2
 $formHits = [regex]::Matches($fileIo, 'fileOutArgBstrExpr\(val,\s*\*expr\)').Count
 if ($formHits -ne 1) { $viol += ('R7 窗体面 Print 转调主人的站点应为 1 处，实测 ' + $formHits) }
 
+# ---- 7) R8..R11: P1.4 三问各一组正反用例 ----
+# 这三条刻意**各问各的事**, 不许三条都只测同一件:
+#   R8  = 生成物与 RTL 派生同源 (手改 .inc 或改了 RTL 没重跑 gen 脚本 ⇒ 红)
+#   R9  = 问句①「C 文本是不是整只槽」: 表里要有真槽出口(正), 地址出口不许进表(反),
+#         AST 那一半必须排除 Variant 数组本体(反)
+#   R10 = 问句③「VB 类型是不是 Variant」: 只吃 AST(正), **不许**排除数组本体(反) ——
+#         这一条与 R9 相反, 两条同时绿才证明「类型」与「整只槽」真是两个问句
+#   R11 = 问句②「是不是 SafeArray 载体」: 名单命中 vb6_Split( (正), 标量出口不许命中(反),
+#         _arr_ 特例仍在(正)
+$genScript = Join-Path $PSScriptRoot 'gen_variant_slot_prefixes.ps1'
+if (-not (Test-Path -LiteralPath $genScript)) {
+    $viol += ('R8 找不到派生脚本 ' + $genScript)
+} else {
+    $genOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $genScript -Check 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        $viol += ('R8 派生不一致: checked-in .inc 与从 RTL 重新派生的结果不同 (手改 .inc, 或改了 RTL 没重跑 gen 脚本) —— ' + $genOut.Trim())
+    }
+}
+
+$typeSrc = Strip-CComments ([IO.File]::ReadAllText($typeCpp))
+$astM = [regex]::Match($typeSrc, '(?s)bool CCodeGen::variantOperandAST\(const Expr\* e\) const \{(?<b>.*?)\r?\n\}')
+$typeM = [regex]::Match($typeSrc, '(?s)bool CCodeGen::isVariantType\(const Expr\* e\) const \{(?<b>.*?)\r?\n\}')
+$carM = [regex]::Match($typeSrc, '(?s)bool CCodeGen::isSafeArrayCarrier\(const std::string& cExpr\) const \{(?<b>.*?)\r?\n\}')
+if (-not $astM.Success -or -not $typeM.Success -or -not $carM.Success) {
+    $viol += 'R9-R11 三问的函数体没找全 (改名/换签名了? 这一组正反用例会静默失效)'
+} else {
+    $astBody = $astM.Groups['b'].Value
+    $typeBody = $typeM.Groups['b'].Value
+    $carBody = $carM.Groups['b'].Value
+    if (-not $tbl.ContainsKey('vb6_VariantFromValue')) { $viol += 'R9 槽问句正例缺失: 表里没有 vb6_VariantFromValue' }
+    if ($tbl.ContainsKey('vb6_VariantArrayElemPtr')) { $viol += 'R9 槽问句反例失败: vb6_VariantArrayElemPtr 交回的是**地址**不是槽, 却进了槽表' }
+    if ($astBody -notmatch 'isDefinitelyVariantExpr\([\s\S]*?&isArr') { $viol += 'R9 槽问句反例失败: variantOperandAST 没向 isDefinitelyVariantExpr 要 isArr' }
+    if ($astBody -notmatch '!\s*isArr') { $viol += 'R9 槽问句反例失败: variantOperandAST 没排除 Variant 数组本体 (!isArr)' }
+    if ($typeBody -notmatch 'isDefinitelyVariantExpr\(') { $viol += 'R10 类型问句正例缺失: isVariantType 不调 isDefinitelyVariantExpr' }
+    if ($typeBody -match '!\s*isArr') { $viol += 'R10 类型问句反例失败: isVariantType 也排除数组本体 —— 两个问句又合成一个' }
+    if ($carBody -notmatch '"vb6_Split\("') { $viol += 'R11 载体问句正例缺失: 名单里没有 vb6_Split(' }
+    if ($carBody -match '"vb6_ChkLong\("') { $viol += 'R11 载体问句反例失败: 标量出口 vb6_ChkLong( 进了载体名单' }
+    if ($carBody -notmatch '"_arr_"') { $viol += 'R11 载体问句正例缺失: _arr_ 特例不见了 (Fix 092g)' }
+}
+
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
             ' emittedNames=' + $emitted.Keys.Count +
@@ -160,5 +200,5 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_slot_returns: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL 对账 (补名/撤名), 不是往白名单里加名字; 真要走例外请连带写清理由并重跑 §B146 那把 400 份 A/B')
     exit 1
 }
-Write-Host 'PASS builtin_slot_returns (R1..R7)'
+Write-Host 'PASS builtin_slot_returns (R1..R11)'
 exit 0
