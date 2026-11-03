@@ -872,7 +872,7 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
                 // ExpireCookie: With Cookie(Key)). 仅当 C 级确认实参是
                 // vb6_VARIANT (cExprIsVariant / 已知 Variant 变量/字段) 时
                 // 走 VariantToObjectVal, 否则按对象指针 (void*) 直转.
-                bool withIsVariantVal090e = cExprIsVariant(lastExpr_);
+                bool withIsVariantVal090e = isVariantSlot(lastExpr_, nullptr);  // P1.3: ast 不可得 (文本来自 lastExpr_)
                 if (!withIsVariantVal090e) {
                     std::string lower090e = lastExpr_;
                     std::transform(lower090e.begin(), lower090e.end(),
@@ -909,7 +909,7 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
                 // `void* _vb6_with_N = (void*)l_ucFolder`). isDefinitelyVariantExpr
                 // 入口处也可能被 lookupModule 的同名符号误导 (Fix 049b 同款陷阱),
                 // 故与上方 090e 同口径: knownVariantVars_ 裸名 + me-> classVariantMembers_。
-                bool withIsVariantVal092j = cExprIsVariant(lastExpr_);
+                bool withIsVariantVal092j = isVariantSlot(lastExpr_, nullptr);  // P1.3: ast 不可得 (文本来自 lastExpr_)
                 if (!withIsVariantVal092j) {
                     std::string lower092j = lastExpr_;
                     std::transform(lower092j.begin(), lower092j.end(),

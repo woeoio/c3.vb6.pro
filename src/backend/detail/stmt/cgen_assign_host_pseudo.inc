@@ -67,7 +67,7 @@
                 const std::string tgtHp = hostPseudoRtlSymbol(objNameHp, maHp->memberName);
                 // 账 #159: 要不要拆数值由那张表答 (目标槽是整数才拆; 句柄/对象/字符串
                 // 成员按原样直传)。此前这里是又一份成员名清单 kNumericHostMembers。
-                if (cExprIsVariant(valHp) && hostPseudoIsNumeric(objLowerHp, maHp->memberName)) {
+                if (isVariantSlot(valHp, nullptr) && hostPseudoIsNumeric(objLowerHp, maHp->memberName)) {  // P1.3: ast 不可得 (valHp 距 emitExpr 超 5 行)
                     valHp = "vb6_VariantToLong(" + valHp + ")";
                 }
                 /* Fix 294 / 3a: 目标是 vb6_Extender_* 全局时换通道, 别发裸赋值。
@@ -77,7 +77,7 @@
                    判据用发射出去的符号名, 不用 hostPseudoBareName(它不覆盖 Extender 成员)。 */
                 if (tgtHp.rfind("vb6_Extender_", 0) == 0) {
                     std::string a3 = valHp;
-                    if (hostPseudoIsNumeric("Extender", maHp->memberName) && cExprIsVariant(a3)) {
+                    if (hostPseudoIsNumeric("Extender", maHp->memberName) && isVariantSlot(a3, nullptr)) {  // P1.3: ast 不可得 (a3 为 valHp 局部副本)
                         a3 = "vb6_VariantToLong(" + a3 + ")";
                     }
                     c_.emitLine("vb6_UC_SetExtenderMember(L\"" +

@@ -101,7 +101,7 @@
         // Fix 038b-4: 字符串级 Variant 检测 — 如果是 C 级 Variant 表达式,
         // 也跳过 VariantFromValue 包装 (vb6_CStr 直接接 VARIANT)
         if (!argIsDefVariant) {
-            argIsDefVariant = cExprIsVariant(args[0]);
+            argIsDefVariant = isVariantSlot(args[0], nullptr);  // P1.3: ast 不可得 (args 为局部缓存)
         }
         if (!argIsDefVariant) {
             // Fix 121b: 同 Fix 121 — 裸 COM 结果必须解引用 (VariantFromComResult),

@@ -80,7 +80,7 @@
     }
 
     {
-        bool valueIsVariant = cExprIsVariant(value);
+        bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
             auto& id = static_cast<IdentifierExpr&>(*node.value);
             std::string idLower = id.name;

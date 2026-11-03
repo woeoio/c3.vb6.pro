@@ -137,7 +137,7 @@ void CCodeGen::visit(RaiseEventStmt& node) {
                 prm256->asType ? mapTypeRef(prm256->asType.get()) : std::string("vb6_VARIANT");
             const Vb6Type argTy308 = inferExprType(*node.args[i]);
             if (prmBase256 == "vb6_VARIANT" && argTy308 != Vb6Type::Variant &&
-                !cExprIsVariant(argVal)) {
+                !isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                 const std::string src308 = argVal;
                 const std::string box308 = "_evt_box_" + std::to_string(i);
                 evtRefTemps256.push_back("vb6_VARIANT " + box308 + " = vb6_VariantEmpty();");
@@ -194,7 +194,7 @@ void CCodeGen::visit(RaiseEventStmt& node) {
             //  及其余同形处, 共约 47 条)。
             // 判据刻意收窄到"必然编译报错"的那一格 (形参类指针 ∧ 实参 VARIANT 值),
             // 故不会改变任何当前能编过的组合。
-            else if (pCType.rfind("vb6_cls_", 0) == 0 && cExprIsVariant(argVal)) {
+            else if (pCType.rfind("vb6_cls_", 0) == 0 && isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                 argVal = "(" + pCType + ")vb6_VariantToObjectVal(" + argVal + ")";
             }
             // Fix 267: 事件实参槽是**具体标量**而实参是**无型**的晚绑定 COM 调用
@@ -289,7 +289,7 @@ void CCodeGen::visit(RaiseEventStmt& node) {
                     // 不能包 vb6_VariantToString — 那会把 C4047 警告升级为 C2440 错误,
                     // 因此只用 cExprIsVariant + knownVariantVars_ 判定, 不用 inferExprType
                     // (其 Variant 判定对 UDT 字段/对象变量不可靠).
-                    bool evtArgIsVariant = cExprIsVariant(lastExpr_);
+                    bool evtArgIsVariant = isVariantSlot(lastExpr_, nullptr);  // P1.3: ast 不可得 (文本来自 lastExpr_)
                     if (!evtArgIsVariant && i < node.args.size()
                         && node.args[i]->kind == ASTNodeKind::IdentifierExpr) {
                         auto& idArg = static_cast<IdentifierExpr&>(*node.args[i]);

@@ -89,7 +89,7 @@
                 std::string ojLower = Symbol::toLower(ojTrim);
                 if (knownVariantVars_.count(ojLower)) {
                     objExpr = "vb6_VariantToObject(&" + objExpr + ")";
-                } else if (cExprIsVariant(objExpr)) {
+                } else if (isVariantSlot(objExpr, nullptr)) {  // P1.3: ast 不可得 (objExpr 为成员/局部缓存)
                     objExpr = "vb6_VariantToObjectVal(" + objExpr + ")";
                 }
             }
@@ -267,7 +267,7 @@
             // vb6_VariantFromComResult(vb6_ComGetProp(...)) 等), 直接交给
             // vb6_BSTR_ToANSI(BSTR) → C2440 "无法从 vb6_VARIANT 转换为 BSTR"
             // (Charts 2020 PropPagLP.c 256: CreateWindowEx(..., LabelPlus1.Caption, ...)).
-            if (cExprIsVariant(argVal)) {
+            if (isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                 argVal = "vb6_VariantToString(" + argVal + ")";
             }
             c_.emitLine("char* " + ansiVar + " = vb6_BSTR_ToANSI_cap(" + argVal + ");  /* Fix 161b: ByVal String 作可写缓冲, 按 BSTR 全长转 (含内嵌 NUL) */");
@@ -278,7 +278,7 @@
             // 临时表达式 (如 String$(256,0)) 在 VB6 里也收不到回写, 保持一致。
             // 容量取实参当前字符串长度 (VB6 缓冲语义的近似; cap<=0 则由 NUL 定长)。
             if (i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
-                && !cExprIsVariant(argVal) && isCLvalueExpr161c(argVal)) {
+                && !isVariantSlot(argVal, nullptr) && isCLvalueExpr161c(argVal)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                 // 回写目标须是 BSTR 左值 (交给 vb6_BSTR_Assign 的 BSTR*)
                 ansiOutParams_.push_back({ansiVar, argVal, "0"});  // cap=0: 由 NUL 定长
             }
@@ -311,7 +311,7 @@
         //     「pathName 非空 ⇒ IPersistFile::Load(拿 "0" 当文件名)」/「空 ⇒ GetActiveObject」
         //     (vb6com/vb6com.c:705) ⇒ 折一下正好挑错那一支。本刀的闸把它改回 `0L`。
         // 省略位到底该交 NULL 还是 vb6_BSTR_Empty() 是 §B149 那张缺省表那一格的事, 本刀不动。
-        if (!isDeclareAnsiCall && node.positional[i] && !cExprIsVariant(argVal)
+        if (!isDeclareAnsiCall && node.positional[i] && !isVariantSlot(argVal, nullptr)  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
             && !node.omittedArgs.count(i)) {
             bool strSlot175 = false;
             if (i < calleeParams.size()) {
@@ -333,7 +333,7 @@
         // 裸传 vb6_Clipboard_SetText(BSTR) → C2440 (GUISample frmMain:574/576
         // Clipboard.SetText ActiveForm.rtfText.SelRTF)。VB6 语义按当前子类型转
         // 字符串; 上面的 Fix 175 闸被 cExprIsVariant 挡住进不来, 这里单独收。
-        if (!isDeclareAnsiCall && node.positional[i] && cExprIsVariant(argVal)
+        if (!isDeclareAnsiCall && node.positional[i] && isVariantSlot(argVal, nullptr)  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
             && calleeParams.empty() && !node.omittedArgs.count(i)) {
             const Vb6Type first330v = node.positional[0]
                 ? inferExprType(*node.positional[0]) : Vb6Type::Empty;
@@ -368,7 +368,7 @@
             // 命中) → "void*", 认工程类 → "vb6_cls_X*" —— 只有前者才是 Variant 槽。
             && (calleeParams[i].typeRefName.empty()
                 || cTypeForDeclaredTypeName(calleeParams[i].typeRefName) == "vb6_VARIANT")
-            && !cExprIsVariant(argVal)) {
+            && !isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
             // 装箱一律走 boxToVariant 这一处权威 (按 VB 声明类型选 ctor)。
             // 直接手写 vb6_VariantFromValue 是让 C 的 _Generic 猜类型: VB 的 Boolean
             // 在 C 侧是 int32_t/int16_t, 于是 VarType(True) 报 3(Long) 而不是 11
@@ -387,12 +387,12 @@
             && node.byvalOverrides.count(i) == 0) {
             std::string ansiVarR = "_ansi_" + std::to_string(ansiCounter_++);
             std::string srcExpr = argVal;
-            if (cExprIsVariant(srcExpr)) srcExpr = "vb6_VariantToString(" + srcExpr + ")";
+            if (isVariantSlot(srcExpr, nullptr)) srcExpr = "vb6_VariantToString(" + srcExpr + ")";  // P1.3: ast 不可得 (srcExpr=argVal, 距 emitExpr 超 5 行)
             c_.emitLine("char* " + ansiVarR + " = vb6_BSTR_ToANSI_cap(" + srcExpr + ");  /* Fix 161b: ByRef String 可写缓冲, 按 BSTR 全长转 */");
             ansiTempsToFree_.push_back(ansiVarR);
             // 登记回写: 目标为原左值 (仅当可赋值且非 Variant)
             if (i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
-                && !cExprIsVariant(argVal) && isCLvalueExpr161c(argVal)) {
+                && !isVariantSlot(argVal, nullptr) && isCLvalueExpr161c(argVal)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                 ansiOutParams_.push_back({ansiVarR, argVal, "0"});
             }
             argVal = ansiVarR;  // 已是 char* —— 正是 A 版 API 要的 LPSTR (见下方 isByRef 抑制)
@@ -764,7 +764,7 @@
                         // vb6_VariantArrayElemPtr(数组, 下标) 取底层槽位地址 — dest/src
                         // 都指向真实元素, VariantCopy 读写落位正确.
                         argVal = variantSlotElemAddrRead(argVal);
-                    } else if (isDefinitelyVariantExpr(*node.positional[i]) || cExprIsVariant(argVal)) {
+                    } else if (isDefinitelyVariantExpr(*node.positional[i]) || isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                         // Fix 158g: Variant 值 (Variant 属性读取函数返回) 作为 As Any
                         // ByRef 实参 — VBFlexGrid.ctl: VariantCopy Cell, .CellTag
                         // (CellTag As Variant → vb6_VBFlexGrid_prop_get_CellTag(me)
@@ -779,7 +779,7 @@
                         // 本文件其它分支要么用指定初始化器 (.vt=VT_BSTR,.bstrVal=…)
                         // 要么用 {0}, 只有此处漏了。改走 Fix 090q 的成熟套路:
                         // 求值到已声明临时再取址, 声明行挂 pending 保证先于引用。
-                        if (cExprIsVariant(argVal)) {
+                        if (isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                             std::string tmpVar160h = "_vb6_vartmp" + std::to_string(tempCounter_++);
                             c_.addPending("vb6_VARIANT " + tmpVar160h + " = " + argVal + ";");
                             argVal = "(void*)&" + tmpVar160h;
@@ -825,7 +825,7 @@
                                 ccType = "float";
                             }
                             argVal = "(void*)&(" + ccType + "){" + argVal + "}";
-                        } else if (cExprIsVariant(argVal)) {
+                        } else if (isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                             // Fix 160w: Variant 值 (COM 属性读取 vb6_VariantFromComResult 等)
                             // 作为 As Any ByRef 实参的非左值兜底 — (void*)(intptr_t)(struct)
                             // → C2440, 裸传 → C2172 (MainForm.c OleCreatePropertyFrame 参 8
@@ -872,7 +872,7 @@
                     // C2440 "无法从 vb6_VARIANT 转换到 long", 且按位强转也丢指针.
                     // pElems 底层是 Long 载荷的指针值 (IFontDisp** 数组头), 用
                     // vb6_VariantToLongPtr 取整型载荷再按原样压回 void* 实参.
-                    if (cExprIsVariant(argVal)) {
+                    if (isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                         argVal = "(void*)(intptr_t)vb6_VariantToLongPtr(" + argVal + ")";
                     } else {
                         argVal = "(void*)(intptr_t)(" + argVal + ")";
@@ -1126,7 +1126,7 @@
                                 // BASE(8c3e981) 发的是 `&Value` (形参本身可寻址), 这里补上
                                 // knownVariantVars_ 判据后正好回到那条 else 分支。
                                 if ((isObjVar92y || !argCls92y.empty())
-                                    && !cExprIsVariant(argVal)
+                                    && !isVariantSlot(argVal, nullptr)  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                                     && !knownVariantVars_.count(argLs92y)) {
                                     // 落一个**具名** Variant 临时再传址 ——
                                     // 不能用复合字面量 `(vb6_VARIANT){vb6_VariantFromValue(x)}`:
@@ -1176,7 +1176,7 @@
                                && !(static_cast<uint16_t>(calleeParams[i].type) & static_cast<uint16_t>(Vb6Type::Array))
                                && argVal.size() > 1 && argVal[0] != '_'
                                && (std::isalpha(static_cast<unsigned char>(argVal[0])))
-                               && (cExprIsVariant(argVal)
+                               && (isVariantSlot(argVal, nullptr)  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                                    || knownVariantVars_.count(Symbol::toLower(argVal)) > 0)) {
                         // Fix 133: Variant 变量作为 Declare 标量 ByRef 出参
                         // (Dim hFont: GdipCreateFont(..., hFont), hFont 是 Variant)。
@@ -1322,7 +1322,7 @@
                         && calleeParams[i].type == Vb6Type::Variant
                         && cParamClassPtrType(calleeParams[i]).empty()
                         && i < node.positional.size()
-                        && !cExprIsVariant(argVal)) {
+                        && !isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                         const std::string tmpLvVar092t =
                             "_vb6_argvar" + std::to_string(tempCounter_++);
                         c_.addPending("vb6_VARIANT " + tmpLvVar092t + " = "
@@ -1485,7 +1485,7 @@
                                     //   静默压成串 ([8|7], VB6 交 [3|7])、回写整个丢 (Mutate 之后再读还是
                                     //   旧值)。地址那一档三样都保住, 且与 Variant 变量作实参同形 (&w)。
                                     argVal = "&(" + argVal + ")";
-                                } else if (cExprIsVariant(argVal)) {
+                                } else if (isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                                     argVal = "(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(" + argVal + ")})";
                                 } else if (argVal.compare(0, 12, "vb6_ComCall(") == 0
                                            || argVal.compare(0, 20, "vb6_ComCallByDispid(") == 0
@@ -1518,7 +1518,7 @@
                         //     cHttpServerResponse File: ComputeETag(fileInfo.DateLastModified,
                         //     ...) (COM 属性 → vb6_VariantFromComResult(...) vb6_VARIANT).
                         bool aVarSym090d = isDefinitelyVariantExpr(*node.positional[i]);
-                        bool aVarCex090d = cExprIsVariant(argVal);
+                        bool aVarCex090d = isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                         bool argIsVariant090d = aVarSym090d || aVarCex090d;
                         // Fix <vbeclipse> rev7: 类槽已交付 (&temp) —— 整段 Variant 提取
                         // 跳过。cType 此时是 vb6_cls_X* / vb6_ivref_X*, 上面的 case 都不

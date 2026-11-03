@@ -71,7 +71,7 @@ void CCodeGen::visit(ForStmt& node) {
     // 引发 C2440 (cToolsHttp 等以 Variant 做循环变量的模块).
     bool forVarIsVariant = knownVariantVars_.count(lower022)
         || (forVarIsClassMember && classVariantMembers_.count(lower022))
-        || cExprIsVariant(varAcc);
+        || isVariantSlot(varAcc, nullptr);  // P1.3: ast 不可得 (varAcc 由变量名拼接)
     if (forVarIsVariant) {
         // Fix 090o: 收集本 For body 内定义的标签, 供 GoTo 后缀配对判定
         forSplitLabelStack_.push_back({});
@@ -292,7 +292,7 @@ void CCodeGen::visit(ForEachStmt& node) {
         std::string elemCType = mapSaElemCType(collElemType);
         bool feVarIsVariant = knownVariantVars_.count(lower022fe)
             || (forEachVarIsClassMember && classVariantMembers_.count(lower022fe))
-            || cExprIsVariant(varAcc);
+            || isVariantSlot(varAcc, nullptr);  // P1.3: ast 不可得 (varAcc 由变量名拼接)
         if (isPA092q) {
             // Fix 092q: ParamArray 元素用 SafeArrayGetElement 直取 (索引与
             // vb6_PA_LBound/UBound 同域), 按循环变量/元素类型选择解包函数.
@@ -411,7 +411,7 @@ void CCodeGen::visit(ForEachStmt& node) {
         }
         // Fix 040c: vb6_ForEach_Init expects void* (IDispatch*). If the collection
         // expression is a Variant (vb6_VARIANT struct), extract the object pointer.
-        if (!collIsObjPtr091q && !collIsProjectClass247 && cExprIsVariant(collExpr)) {
+        if (!collIsObjPtr091q && !collIsProjectClass247 && isVariantSlot(collExpr, nullptr)) {  // P1.3: ast 不可得 (collExpr 为局部缓存)
             collExpr = "vb6_VariantToObjectVal(" + collExpr + ")";
         } else if (!collIsProjectClass247
                    && node.collection && node.collection->kind == ASTNodeKind::IdentifierExpr) {

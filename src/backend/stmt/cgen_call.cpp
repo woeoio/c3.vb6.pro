@@ -138,7 +138,7 @@ void CCodeGen::visit(CallStmt& node) {
                             // vb6_VariantFromStackVARIANT 后 Debug.Print x →
                             // DebugWriteLong((int32_t)(x)) C2440 (vb6_VARIANT→int32_t).
                             auto isVariantVal091r = [&](const std::string& e) -> bool {
-                                if (cExprIsVariant(e)) return true;
+                                if (isVariantSlot(e, nullptr)) return true;  // P1.3: ast 不可得 (lambda 形参)
                                 std::string n091r = e;
                                 std::string suffix091r;
                                 size_t cmt091r = n091r.find("/*");

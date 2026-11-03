@@ -2385,7 +2385,7 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
                                  std::string value, const std::string& fixedLen) {
     // Fix 038b-6: BSTR 目标 + Variant 值 → 先提取 BSTR
     // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-    bool valueIsVariant = cExprIsVariant(value);
+    bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
     if (!valueIsVariant && rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
         auto& id = static_cast<IdentifierExpr&>(*rhs);
         std::string idLower = id.name;
@@ -2916,7 +2916,7 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
     // vb6_VariantFromComResult(vb6_ComCall(...))) 会被 switch 抢先包装
     // 成 vb6_VariantLong(vb6_VARIANT) → C2440 (cHttpServerResponse File
     // 内 fileSize = fileInfo.Size, fileSize As Variant).
-    if (cExprIsVariant(cExpr)) {
+    if (isVariantSlot(cExpr, nullptr)) {  // P1.3: ast 不可得 (cExpr 为形参)
         return cExpr;
     }
 
@@ -3025,7 +3025,7 @@ static bool cExprIsVariantCarrierStr(const std::string& cExpr) {
 }
 
 bool CCodeGen::cExprIsVariantCarrier(const std::string& cExpr) const {
-    return cExprIsVariant(cExpr) || cExprIsVariantCarrierStr(cExpr);
+    return isVariantSlot(cExpr, nullptr) || cExprIsVariantCarrierStr(cExpr);  // P1.3: ast 不可得 (cExpr 为形参)
 }
 
 // Fix 198 + <vbeclipse>: **装箱的唯一权威**。按 VB 声明类型选档, 只在类型确实与

@@ -66,7 +66,7 @@
             // is selected but an arg is a Variant, extract the concrete value.
             auto iifArgIsVariant = [&](int idx) -> bool {
                 const std::string& val = (idx == 1) ? trueVal : falseVal;
-                if (cExprIsVariant(val)) return true;
+                if (isVariantSlot(val, nullptr)) return true;  // P1.3: ast 不可得 (val 取自 trueVal/falseVal 局部文本)
                 auto& arg = node.positional[idx];
                 if (arg->kind == ASTNodeKind::IdentifierExpr) {
                     auto& idArg = static_cast<IdentifierExpr&>(*arg);
@@ -299,7 +299,7 @@
                     // SetBSTR/SetDouble 设置, 这些函数期望具体类型. 当实参是 Variant
                     // (如 vb6_VariantArrayGet, Variant 变量等) 时, 需要先提取具体值.
                     // 仅使用 cExprIsVariant (C 字符串级) 和 knownVariantVars_ 检测.
-                    bool argIsVariant = cExprIsVariant(argExpr);
+                    bool argIsVariant = isVariantSlot(argExpr, nullptr);  // P1.3: ast 不可得 (argExpr 距 emitExpr 超 5 行)
                     if (!argIsVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
                         auto& idArg = static_cast<IdentifierExpr&>(*node.positional[i]);
                         std::string argLower = idArg.name;

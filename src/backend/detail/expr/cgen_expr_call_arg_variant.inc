@@ -12,7 +12,7 @@
         // vb6_VariantToLongPtr 提取再压回 void* 实参.
         if (!isByRef && i < calleeParams.size()
             && calleeParams[i].type == Vb6Type::Unknown
-            && argHasByValOverride && cExprIsVariant(argVal)) {
+            && argHasByValOverride && isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
             argVal = "(void*)(intptr_t)vb6_VariantToLongPtr(" + argVal + ")";
         }
 
@@ -98,7 +98,7 @@
             // Fix 038b-2: 字符串级 Variant 检测回退 — 补充 isDefinitelyVariantExpr
             // 无法识别的 C 级 Variant 表达式 (vb6_VariantArrayGet, vb6_VariantFromComResult 等)
             if (!argIsVariant && !argIsVariantArr) {
-                argIsVariant = cExprIsVariant(argVal);
+                argIsVariant = isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
             }
             // Fix 113i: 形参是**具体类型** (String/数值) 而实参是**裸 COM 结果**
             // (vb6_ComCall / vb6_ComCallByDispid / vb6_ComGetProp 返回 void*,
@@ -160,7 +160,7 @@
                 // <vbeclipse>: 同一条边界扩到"内置函数调用已经返回载体"那一形
                 // (Split/Filter/ArrayCreate...), 判定收进 cExprIsSafeArrayCarrier:
                 //   Join(Split(s, ","), "|") → C2440 (实测三条全中, 含 UBound(Split(...)))
-                bool argIsCarrier092g = cExprIsSafeArrayCarrier(argVal);
+                bool argIsCarrier092g = isSafeArrayCarrier(argVal);
                 if (paramIsArray && !argIsPA091k && !argIsCarrier092g
                     && (paramBase == Vb6Type::Variant || paramBase == Vb6Type::Byte
                     || paramBase == Vb6Type::String || paramBase == Vb6Type::Long)) {
@@ -225,7 +225,7 @@
                     // 只有实参确实是 VARIANT **值** (后期绑定读 / Variant 变量) 才需要那层解盒。
                     // 判据刻意保守: 只把"能确证是项目类实例"的那一档摘出来直传, 其余形状维持原行为,
                     // 以免引入新的 directions 错误。
-                    bool argIsVariantVal227 = cExprIsVariant(argVal);
+                    bool argIsVariantVal227 = isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                     bool argIsClassInst227 =
                         !argIsVariantVal227 && !inferClassTypeOfExpr(*node.positional[i]).empty();
                     if (argIsClassInst227) {
@@ -248,7 +248,7 @@
             // 看 mapTypeRef 那份 C 类型是不是 vb6_VARIANT, 不是才不装。
             && (calleeParams[i].typeRefName.empty()
                 || cTypeForDeclaredTypeName(calleeParams[i].typeRefName) == "vb6_VARIANT")) {
-            bool alreadyVariant = cExprIsVariant(argVal);
+            bool alreadyVariant = isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
             if (!alreadyVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
                 auto& idArg86 = static_cast<IdentifierExpr&>(*node.positional[i]);
                 if (knownVariantVars_.count(Symbol::toLower(idArg86.name))) alreadyVariant = true;
@@ -358,7 +358,7 @@
                     if (!twin249b.empty()) argVal = twin249b;
                 }
                 bool argIsVariant = isDefinitelyVariantExpr(*node.positional[i])
-                                    || cExprIsVariant(argVal);
+                                    || isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                 // Fix 113c: 实参是裸 COM 结果 (void* 承载 COM VARIANT*) 时, 语义即
                 // Variant — 必须判为 Variant 才能触发下方 Variant→具体类型提取
                 // (vb6_VariantFromComResult + 按 rtParamType 提取). 否则 void* 裸传

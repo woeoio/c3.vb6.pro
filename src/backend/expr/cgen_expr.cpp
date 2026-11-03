@@ -296,7 +296,7 @@ void CCodeGen::visit(UnaryExpr& node) {
                 lastExpr_ = "(((intptr_t)(" + operand + ") != 0) ? 0 : -1)";
                 break;
             }
-            if (cExprIsVariant(operand)) {
+            if (isVariantSlot(operand, nullptr)) {  // P1.3: ast 不可得 (operand 距 emitExpr 超 5 行)
                 lastExpr_ = "(~vb6_VariantToLong(" + operand + "))";
             } else if (node.operand && node.operand->kind == ASTNodeKind::IdentifierExpr) {
                 auto& ident = static_cast<IdentifierExpr&>(*node.operand);
@@ -516,7 +516,7 @@ void CCodeGen::visit(TypeOfExpr& node) {
     }
     // Fix 040b: vb6_TypeOf expects void* (IDispatch*). If the operand is a
     // Variant (vb6_VARIANT struct), extract the object pointer first.
-    if (cExprIsVariant(obj)) {
+    if (isVariantSlot(obj, nullptr)) {  // P1.3: ast 不可得 (obj 距 emitExpr 超 5 行)
         obj = "vb6_VariantToObjectVal(" + obj + ")";
     } else if (node.object && node.object->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(*node.object);

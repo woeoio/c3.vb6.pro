@@ -34,7 +34,7 @@
             }
             // Fix 038b-4: 字符串级 Variant 检测回退 — 捕获 vb6_VariantArrayGet 等表达式
             if (!firstArgIsVariant && !args.empty()) {
-                firstArgIsVariant = cExprIsVariant(args[0]);
+                firstArgIsVariant = isVariantSlot(args[0], nullptr);  // P1.3: ast 不可得 (args 为局部缓存)
             }
         }
         if (firstArgIsVariant) {

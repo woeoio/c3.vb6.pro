@@ -135,7 +135,7 @@
                     std::string midValue = std::move(lastExpr_);
                     // Fix 086: 与 visit(MidStmt) 的 Fix 084b 一致 — Variant值
                     // (vb6_VariantArrayGet 等) 需转 BSTR, 否则 C2440
-                    if (cExprIsVariant(midValue)) {
+                    if (isVariantSlot(midValue, node.value.get())) {
                         midValue = "vb6_VariantToString(" + midValue + ")";
                     }
                     c_.emitLine("vb6_MidSet(&" + midTarget + ", " + midStart + ", " + midLen + ", " + midValue + ");  /* Mid$ statement */");
@@ -607,7 +607,7 @@
                                 emitExpr(*node.value);
                                 std::string val084o = std::move(lastExpr_);
                                 Vb6Type valT084o = inferExprType(*node.value);
-                                if ((valT084o == Vb6Type::Variant) || cExprIsVariant(val084o))
+                                if ((valT084o == Vb6Type::Variant) || isVariantSlot(val084o, node.value.get()))
                                     val084o = "vb6_VariantToString(" + val084o + ")";
                                 c_.emitLine(let084o + "((void*)" + currentReturnVar_ + ", "
                                             + val084o + ");  /* FnRetCls prop_let." + maExpr.memberName + " */");
@@ -631,7 +631,7 @@
                     emitExpr(*node.value);
                     std::string valExpr084o = std::move(lastExpr_);
                     Vb6Type valType084o = inferExprType(*node.value);
-                    bool valIsVariant084o = (valType084o == Vb6Type::Variant) || cExprIsVariant(valExpr084o);
+                    bool valIsVariant084o = (valType084o == Vb6Type::Variant) || isVariantSlot(valExpr084o, node.value.get());
                     switch (fldType084o) {
                         case Vb6Type::String:
                             if (valIsVariant084o) valExpr084o = "vb6_VariantToString(" + valExpr084o + ")";

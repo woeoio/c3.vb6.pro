@@ -111,7 +111,7 @@ void CCodeGen::visit(SelectCaseStmt& node) {
 
     // 测试表达式是不是**槽**（两档：C 表达式本身 + 按名表）。
     // Fix 038b-6 的既有口径，第319刀把它提到承载档选择之前 —— 混合档只在主语真是槽时成立。
-    bool testIsVariant = cExprIsVariant(testVar);
+    bool testIsVariant = isVariantSlot(testVar, nullptr);  // P1.3: ast 不可得 (testVar 经 extenderMemberReadExpr 变换)
     if (!testIsVariant && node.testExpr && node.testExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& id = static_cast<IdentifierExpr&>(*node.testExpr);
         std::string idLower = id.name;

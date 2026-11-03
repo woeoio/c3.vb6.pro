@@ -1061,7 +1061,7 @@ std::string CCodeGen::packArgValue(const std::string& packFn,
     // 又一次在编译期替运行期选数值档，正是 §B145 要消灭的那件事 (实测拆成 Double 会
     // 静默把 Decimal 的 0.1+0.2 交成 0.29999999999999998，而 3.5 交成 3)。
     // 只接管「打包器要标量」那四档；ComPackValue/ComPackVariant/ComPackObject 原样不动。
-    if (cExprIsVariant(expr) && (packFn == "vb6_ComPackDouble" || packFn == "vb6_ComPackInt"
+    if (isVariantSlot(expr, nullptr) && (packFn == "vb6_ComPackDouble" || packFn == "vb6_ComPackInt"  // P1.3: ast 不可得 (expr 为形参)
                                  || packFn == "vb6_ComPackBool" || packFn == "vb6_ComPackBSTR")) {
         return "vb6_ComPackValue(" + expr + ")";
     }

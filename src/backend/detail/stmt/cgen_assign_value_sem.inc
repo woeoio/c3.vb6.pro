@@ -158,7 +158,7 @@
         if (lp091c != std::string::npos && rp091c != std::string::npos && rp091c > lp091c) {
             std::string args091c = target.substr(lp091c + 1, rp091c - lp091c - 1);
             std::string kind091c = target.substr(10, lp091c - 10);  // "Long"/"Double"/"BSTR"/...
-            bool valIsVar091c = cExprIsVariant(value);
+            bool valIsVar091c = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
             if (!valIsVar091c && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
                 auto& id091c = static_cast<IdentifierExpr&>(*node.value);
                 std::string idLower091c = id091c.name;
@@ -221,7 +221,7 @@
         //       VB6_SA_AT(BSTR, arr, i) = func() (func 返回 Variant)
         //       int32_t_var = vb6_VariantArrayGet(...)
         // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-        bool valueIsVariant = cExprIsVariant(value);
+        bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
             auto& id = static_cast<IdentifierExpr&>(*node.value);
             std::string idLower = id.name;
@@ -583,7 +583,7 @@
             bool tgtIsVariant091l = knownVariantVars_.count(tgtLower091l)
                                     || classVariantMembers_.count(tgtLower091l);
             if (!tgtIsVariant091l && !valueIsVariant) {
-                tgtIsVariant091l = cExprIsVariant(target);
+                tgtIsVariant091l = isVariantSlot(target, nullptr);  // P1.3: ast 不可得 (target 为局部文本)
             }
             if (tgtIsVariant091l && !valueIsVariant && !value.empty()) {
                 // Fix 198: 布尔值装箱走 VT_BOOL 而不是 _Generic 的 short 分支.

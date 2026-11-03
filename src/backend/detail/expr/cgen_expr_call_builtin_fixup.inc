@@ -152,7 +152,7 @@
             // <vbeclipse>: 同一条边界 —— 首参若是"已经返回载体"的内置调用
             // (`UBound(Split(s, ","))`) 再包一层就是 C2440, 用 carrier 判定跳过。
             if (!args.empty() && node.positional.size() >= 1
-                && !cExprIsSafeArrayCarrier(args[0])) {
+                && !isSafeArrayCarrier(args[0])) {
                 bool arrFlag090n = false;
                 bool vFlag090n = isDefinitelyVariantExpr(*node.positional[0], &arrFlag090n);
                 if (vFlag090n) {

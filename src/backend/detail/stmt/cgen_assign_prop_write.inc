@@ -231,7 +231,7 @@
                                     // 值已是 Variant 表达式 (后期绑定读 / Variant 变量) 时
                                     // 无需再装箱 (boxToVariant 的 _Generic 恒等档虽安全,
                                     // 但少一层少一处形状漂移)。
-                                    if (!cExprIsVariant(valExpr)) arrCarrier091n = true;
+                                    if (!isVariantSlot(valExpr, nullptr)) arrCarrier091n = true;  // P1.3: ast 不可得 (valExpr 距 emitExpr 超 5 行)
                                 }
                                 if (arrCarrier091n) {
                                     valExpr = packLetValueArg(lastP091n, node.value.get(), valExpr);
@@ -245,7 +245,7 @@
                                 // → C2440. VB6 这里把 Date/数值隐式转字符串 (CStr 规则).
                                 // 对数值/日期类 RHS 同样 wrapToBSTR (wrapToBSTR 按类型
                                 // 用 vb6_CStrDate/CStrDbl/CStrLong 等).
-                                if (cExprIsVariant(valExpr)) {
+                                if (isVariantSlot(valExpr, nullptr)) {  // P1.3: ast 不可得 (valExpr 距 emitExpr 超 5 行)
                                     valExpr = wrapToBSTR(valExpr, *node.value);
                                 } else if (node.value) {
                                     const Vb6Type vt160w = inferExprType(*node.value);
@@ -538,7 +538,7 @@
                 && hostPseudoHasScalarRow(info.hostPseudoObj, wmExpr.memberName)) {
                 emitExpr(*node.value);
                 std::string valHp = std::move(lastExpr_);
-                if (cExprIsVariant(valHp)) valHp = "vb6_VariantToLong(" + valHp + ")";
+                if (isVariantSlot(valHp, node.value.get())) valHp = "vb6_VariantToLong(" + valHp + ")";
                 const std::string tgtHp = hostPseudoRtlSymbol(info.hostPseudoObj, wmExpr.memberName);
                 if (tgtHp == "vb6_UserControl_AutoRedraw") {
                     c_.emitLine("vb6_UC_SetAutoRedraw((void*)(intptr_t)" + valHp +

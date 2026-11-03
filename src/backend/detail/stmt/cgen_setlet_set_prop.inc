@@ -465,7 +465,7 @@
                 // storageKey 命中到别的同名符号, 其 params.back().type 不可信 —
                 // prop_set_DataSource(me, void* Value) 曾被误包成
                 // vb6_VariantFromValue(Value) → C2172 实参不是指针 ×3。
-                bool _valIsVar159 = cExprIsVariant(_valE)
+                bool _valIsVar159 = isVariantSlot(_valE, nullptr)  // P1.3: ast 不可得 (_valE 距 emitSetObjectRhs 超 5 行)
                     || (node.value && node.value->kind == ASTNodeKind::IdentifierExpr
                         && knownVariantVars_.count(Symbol::toLower(
                                static_cast<IdentifierExpr&>(*node.value).name)));
@@ -632,7 +632,7 @@
             vTrim = vTrim.substr(1, vTrim.size() - 2);
         if (knownVariantVars_.count(Symbol::toLower(vTrim))) {
             value = "vb6_VariantToObject(&" + value + ")";
-        } else if (cExprIsVariant(value)) {
+        } else if (isVariantSlot(value, nullptr)) {  // P1.3: ast 不可得 (value 距 emitExpr 超 5 行)
             value = "vb6_VariantToObjectVal(" + value + ")";
         }
     }
@@ -976,7 +976,7 @@
                     //   vb6_iface_IFoo_wrap_<Impl>((vb6_cls_Impl*)vb6_VariantToObjectVal(<var>))
                     // 生成的串已含 "vb6_VariantToObjectVal", Fix 038b-6 下方守卫会跳过,
                     // 不会二次转换. 无唯一实现类时无法推断 → 报编译错误 (绝不静默误编).
-                    bool rhsIsVariant = cExprIsVariant(value);
+                    bool rhsIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 距 emitExpr 超 5 行)
                     // ByRef Variant 参数解引用形式 "(*vName)": cExprIsVariant 剥掉前导
                     // '(' 检测不到 ("*vName)" 无前缀命中). 用 AST 标识符兜底判定.
                     if (!rhsIsVariant && node.value

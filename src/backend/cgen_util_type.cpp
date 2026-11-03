@@ -115,7 +115,7 @@ Vb6Type CCodeGen::narrowIntTypeOfCType(const std::string& cType) {
 std::string CCodeGen::asUnsignedOperand(const std::string& cExpr, const Expr& astExpr,
                                         const char* ctype) const {
     bool isVar = isDefinitelyVariantExpr(const_cast<Expr&>(astExpr));
-    if (!isVar) isVar = cExprIsVariant(cExpr);
+    if (!isVar) isVar = isVariantSlot(cExpr, nullptr);  // P1.3: ast 不可得 (cExpr 为形参)
     if (isVar) {
         return "(" + std::string(ctype) + ")vb6_VariantToLongPtr(" + cExpr + ")";
     }
@@ -1199,7 +1199,7 @@ bool CCodeGen::cExprIsBareComResult(const std::string& cExpr) const {
 //   if (ptr) 恒真 (真语料按产物 82 处 / 27 份文件, 读数见账 #305 第二百四十三刀)。
 std::string CCodeGen::conditionTruthExpr(const std::string& cExpr, Expr* cond) const {
     if (cExprIsBareComResult(cExpr)) return "vb6_ComResultToBool(" + cExpr + ")";
-    bool isVar = cExprIsVariant(cExpr);
+    bool isVar = isVariantSlot(cExpr, nullptr);  // P1.3: ast 不可得 (cExpr 为形参)
     if (!isVar && cond && cond->kind == ASTNodeKind::IdentifierExpr) {
         std::string low = Symbol::toLower(static_cast<IdentifierExpr&>(*cond).name);
         if (knownVariantVars_.count(low)) isVar = true;
@@ -1647,7 +1647,7 @@ bool CCodeGen::isArrayCarrierArgName(const std::string& lowerName,
     if (knownObjectVars_.count(lowerName)) return false;
     if (knownVariantVars_.count(lowerName)) return false;
     if (arrayClassElemTypes_.count(lowerName)) return false;
-    if (cExprIsVariant(cExpr)) return false;
+    if (isVariantSlot(cExpr, nullptr)) return false;  // P1.3: ast 不可得 (cExpr 为形参)
     return true;
 }
 

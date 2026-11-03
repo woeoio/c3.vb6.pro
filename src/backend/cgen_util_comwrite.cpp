@@ -613,7 +613,7 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
         //   解箱档位与 cgen_expr_call_arg_variant.inc 的 Fix 092q/090r/049b 同口径
         //   (Long 档含 Integer/Byte/Boolean, Double 档含 Single/Date/Currency)。
         if (lastP.isByVal) {
-            if (!cExprIsVariant(val)) return val;
+            if (!isVariantSlot(val, nullptr)) return val;  // P1.3: ast 不可得 (val 为形参)
             switch (lastP.type) {
                 case Vb6Type::String:
                     return "vb6_VariantToString(" + val + ")";
@@ -636,7 +636,7 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
         }
         switch (lastP.type) {
             case Vb6Type::String:
-                if (valueExpr && cExprIsVariant(val)) {
+                if (valueExpr && isVariantSlot(val, nullptr)) {  // P1.3: ast 不可得 (val 为形参)
                     return "(&(BSTR){(" + wrapToBSTR(val, *valueExpr) + ")})";
                 }
                 return "(&(BSTR){(" + val + ")})";
@@ -685,7 +685,7 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
             //   的 UDT 槽那一格同一条)。次序反了就会掉进下面那条 vb6_VariantToString:
             //   串值照样对, 但数值槽被静默压成串、回写整个丢 (实测读数在台账)。
             if (cExprIsVariantSlotFieldRead(val)) return "&(" + val + ")";
-            if (cExprIsVariant(val)) {
+            if (isVariantSlot(val, nullptr)) {  // P1.3: ast 不可得 (val 为形参)
                 return "(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString("
                        + val + ")})";
             }
@@ -731,7 +731,7 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
     const bool slotIsLateObj = (slotC == "void*");
     if (!writeDirResolved || lastP.type == Vb6Type::Empty) return value;
     // RHS 是不是整只 vb6_VARIANT —— 文本前缀表 + 已知 Variant 变量 (Fix 156-B 原判据)
-    bool valIsVar = cExprIsVariant(value);
+    bool valIsVar = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
     if (!valIsVar && valueExpr && valueExpr->kind == ASTNodeKind::IdentifierExpr) {
         std::string vl = Symbol::toLower(static_cast<IdentifierExpr&>(*valueExpr).name);
         if (knownVariantVars_.count(vl)) valIsVar = true;

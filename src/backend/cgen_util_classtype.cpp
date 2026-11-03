@@ -556,7 +556,7 @@ std::string CCodeGen::legacyViewSetterLastParamCType(const std::string& objExpr,
 
 // Fix 219: Variant 载体判定 —— 见 cgen_helpers.inc 的声明注释。
 bool CCodeGen::isVariantCarrierExpr(const std::string& cExpr) const {
-    return cExprIsVariant(cExpr) || cExpr.rfind("vb6_List_", 0) == 0;
+    return isVariantSlot(cExpr, nullptr) || cExpr.rfind("vb6_List_", 0) == 0;  // P1.3: ast 不可得 (cExpr 为形参)
 }
 
 // Fix 219: Variant 载体上的成员访问 = 后期绑定的属性读。
@@ -1044,7 +1044,7 @@ std::string CCodeGen::appendUdtObjFieldMarker(const std::string& objExpr,
 
 // Fix 084o: 需要 int32_t 上下文中的 Variant 表达式 → vb6_VariantToLong 包装
 std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astExpr) {
-    if (cExprIsVariant(cExpr)) return "vb6_VariantToLong(" + cExpr + ")";
+    if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLong(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;
@@ -1064,7 +1064,7 @@ std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astE
 // 与 toLongIfVariant 同构 (整除 \ 已在 Fix 084o 用同款处理), 仅提取函数换成
 // vb6_VariantToDouble. 未判为 Variant 时原样返回, 故对今天能编译的表达式零影响.
 std::string CCodeGen::toDoubleIfVariant(const std::string& cExpr, const Expr* astExpr) {
-    if (cExprIsVariant(cExpr)) return "vb6_VariantToDouble(" + cExpr + ")";
+    if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToDouble(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;

@@ -54,7 +54,7 @@ std::string CCodeGen::printWriteTextExpr(Expr& expr, const std::string& val, boo
             // 证据) 才按整只槽发; 其余 (IIf/Choose/Switch 的兜底答案、UDT 字段
             // 失配、外部类成员 …) 判不准, 保持旧路径, 不猜。
             // 形态清单与在 tests 语料里的频度见 docs/print_write_numeric.md。
-            if (cExprIsVariant(val))
+            if (isVariantSlot(val, nullptr))  // P1.3: ast 不可得 (val 为形参)
                 return "vb6_FileVariantText(" + val + ", " + mode + ")";
             return "vb6_Str((int32_t)(" + val + "))";
         default:

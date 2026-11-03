@@ -497,7 +497,7 @@ std::string CCodeGen::deliverToClassSlot(const std::string& clsPtr,
         }
         return argVal;   // 借来的**视图** (视图变量) 值本来就是那枚薄指针，原样交
     }
-    if (!clsPtr.empty() && clsPtr.compare(0, 8, "vb6_cls_") == 0 && cExprIsVariant(argVal)) {
+    if (!clsPtr.empty() && clsPtr.compare(0, 8, "vb6_cls_") == 0 && isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 为形参)
         return "(" + clsPtr + ")vb6_ComObject_GetInstance("
                "vb6_VariantToObjectVal(" + argVal + "))";
     }
@@ -636,7 +636,7 @@ std::string CCodeGen::boxIntoLateSlot(const std::string& argVal, const ASTNode* 
     const bool valueAlreadyUnboxed =
         argVal.find("vb6_VariantToObjectVal") != std::string::npos
         || argVal.find("vb6_ComObject_GetInstance") != std::string::npos;
-    if (valueIsHostHandle || valueAlreadyUnboxed || cExprIsVariant(argVal)) return argVal;
+    if (valueIsHostHandle || valueAlreadyUnboxed || isVariantSlot(argVal, nullptr)) return argVal;  // P1.3: ast 不可得 (argVal 为形参)
     const std::string boxCls = !newCls.empty() ? newCls : inferClassTypeOfExpr(*argAst);
     if (boxCls.empty()) return argVal;
     // 表外那一档 (工程类不占运行期 coclass 表那行) 交**原样** —— 两臂现在连这一档也是同一个答案,
