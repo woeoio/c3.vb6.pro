@@ -498,10 +498,16 @@ jobs:
           # 但必须点名「跳了谁、缺什么」（SKIP 行的括号里就是 LibID/文件名/期望版本），
           # 一条 SKIP 行都对不上就说明这条通道与 harness 排版脱节 ⇒ 照旧红，不许静默放过。
           if ($rc -eq 2) {
-            $rxSkip = [regex] "^\s*\[(.+?)\]\s+(.+?)\s*\.\.\.\s*SKIP\s*\((.*)\)\s*$"
+            # 两种 SKIP 排版都要认: 「  [GUI] x ... SKIP (…)" 与裸的「  SKIP (…)"(如 COM 未注册那格)。
+            # 只认前者会让"别的合法 SKIP"把这一步打成 ::error:: —— 那是拿新通道误伤老用例。
+            $rxSkip = [regex] "^\s*(?:\[(.+?)\]\s+(.+?)\s*\.\.\.\s*)?SKIP\s*\((.*)\)\s*$"
             $skips = @($clean | ForEach-Object {
                 $ms = $rxSkip.Match($_)
-                if ($ms.Success) { "[" + $ms.Groups[1].Value.Trim() + "] " + $ms.Groups[2].Value.Trim() + " ... SKIP (" + $ms.Groups[3].Value.Trim() + ")" }
+                if ($ms.Success) {
+                    $head = ""
+                    if ($ms.Groups[2].Success) { $head = "[" + $ms.Groups[1].Value.Trim() + "] " + $ms.Groups[2].Value.Trim() + " ... " }
+                    $head + "SKIP (" + $ms.Groups[3].Value.Trim() + ")"
+                }
             })
             if ($skips.Count -eq 0) {
               Write-Host ("::error::run_tests exit code 2 but no SKIP line matched -- skip reporting is out of sync with the harness")
