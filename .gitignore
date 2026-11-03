@@ -113,6 +113,28 @@ _bak
 !src/rtl/lib/*.lib
 !src/rtl/lib/x86/*.lib
 
+# crashprobe 取证工具: 两个位宽的可执行文件入库 (用户已同意; 源码 crashprobe.cpp
+# 与 build.bat 同目录, 产物不接 CI)。上面 `*.exe` 的整体忽略挡在这里, 需逐名反忽略。
+!tools/crashprobe/crashprobe.exe
+!tools/crashprobe/crashprobe32.exe
+
+# GUISample / ctlident 夹具: **源码**入库, 采集产物不入库。
+# 第三方控件 (Codejock / RICHTX32) 与 .lic 是厂商分发物, 只在本机取证时存在, 不进仓。
+tests/guisample/*.ocx
+tests/guisample/*.lic
+tests/guisample/out_*/
+tests/guisample/vb6ref/out/
+tests/guisample/*.exe
+tests/ctlident/*.out
+tests/ctlident/*.err
+tests/ctlident/*.exe
+tests/ctlident/*.map
+tests/ctlident/c3_crash.txt
+
+# 本地工具与协作目录 (个人环境产物, 不入库)
+/.local/
+/.workbuddy-ai/
+
 # ---------- 专项修复小工程 (fix_tool.ps1) ----------
 archive/vbman/src/_fix/
 archive/vbman/src/FIX_*.vbp
