@@ -545,5 +545,11 @@ jobs:
             output/**/*.txt
             output/**/*.dat
             output/**/scores.txt
+            # 诊断可见性: 编译/链接失败时 C3 落在 <output>/c3-error.log（driver_compile.cpp 的
+            # writeErrorLog），而 run_tests 只把 "FAIL rc=1 exe=False" 打进 job 日志 —— 没有这一行
+            # 就只能看见「失败」看不见「为什么失败」（本次 guisample 的形态）。.log 一并收，
+            # 覆盖构建失败时的其它日志。只动 artifact，不改任何判据。
+            output/**/c3-error.log
+            output/**/*.log
           if-no-files-found: warn
           retention-days: 14
