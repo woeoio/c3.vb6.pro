@@ -604,7 +604,10 @@ function Resolve-VbpExeBase {
 
 # ---------------------------------------------------------------------------
 # M2 (2026-11-02): GUI 用例数据驱动 + 三条固定断言
-#   ① 窗口存活: WindowWaitMs 内出现主窗口, 且出现后存活 >= MinWindowMs
+#   ① 窗口起了: WindowWaitMs 内出现主窗口, 且进程结束前**采样到过窗口** —— 检测到后按
+#                GuiSampleMs(20ms) 采样, 连续 GuiSampleNeed(3) 次可见才算"起来过", 可观测
+#                跨度还要 >= GuiMinObserveMs(30ms)。不再断言"存活 >= 某个贴边数字"。
+#                HoldWindowMs 只表示关窗前的驻留时间 (给初始化/绘制留余量), 不参与判定。
 #   ② 检查点  : Needles 全中, 且 (可选) WindowTitle 命中 —— 两种来源至少要有一种
 #   ③ 退出码  : Mode=self/close 必须 0; Mode=auto 里若进程由 CloseMainWindow 收尾也必须是 0;
 #              只有"窗口拒绝关闭、只能 Kill"这一档拿不到退出码, 结果里记 killed=true (报告里单列)
@@ -708,26 +711,28 @@ $guiTsNeedles = @(
 )
 $script:GuiCases = @(
     @{ Name = "VbQRCodegen";      Vbp = "$Tests\VbQRCodegen-master\test\Project1.vbp"; Mode = "close";
-       WindowTitle = "Form1"; MinWindowMs = 1000 },
+       WindowTitle = "Form1"; HoldWindowMs = 1000 },
     @{ Name = "BalloonTooltips";  Vbp = "$Tests\BalloonTooltips\prjBalloonTooltips.vbp"; ExeName = "BalloonTooltips";
-       Mode = "close"; WindowTitle = "Balloon Tooltips"; MinWindowMs = 1000; ShardGroup = "balloon" },
+       Mode = "close"; WindowTitle = "Balloon Tooltips"; HoldWindowMs = 1000; ShardGroup = "balloon" },
     @{ Name = "Charts2020";       Vbp = "$Tests\Charts 2020\Proyecto1.vbp"; Arch = "x86"; Mode = "auto";
-       AutoExitSec = 3; MinWindowMs = 1000; WindowTitle = "Form2"; DumpMinColors = 40 },
+       AutoExitSec = 3; HoldWindowMs = 1000; WindowTitle = "Form2"; DumpMinColors = 40 },
     @{ Name = "czUI";             Vbp = "$Tests\czUI-main\czFormDemo.vbp"; Arch = "x86"; Mode = "auto";
-       AutoExitSec = 3; MinWindowMs = 1000; WindowTitle = "czForm Demo" },
+       AutoExitSec = 3; HoldWindowMs = 1000; WindowTitle = "czForm Demo" },
     @{ Name = "FlexGridX86";      Vbp = "$Tests\VBFlexGridDemo\VBFlexGridDemo.vbp"; Arch = "x86"; Mode = "auto";
-       AutoExitSec = 3; MinWindowMs = 1000; WindowTitle = "VBFlexGrid Demo" },
+       AutoExitSec = 3; HoldWindowMs = 1000; WindowTitle = "VBFlexGrid Demo" },
     # NewTab 是无边框窗体: 主窗口标题实测为空 (Caption 不进顶层窗), 因此检查点改用
     # 「主窗口真的有子窗」—— 控件建不出来时 GW_CHILD 恒为 0。
     @{ Name = "NewTab";           Vbp = "$Tests\NewTab-test\Test.vbp"; Arch = "x86"; Mode = "auto";
-       AutoExitSec = 3; MinWindowMs = 1000; MinChildWindows = 1;
+       AutoExitSec = 3; HoldWindowMs = 1000; MinChildWindows = 1;
        RequiresFiles = @("NewTab01.ocx") },
     @{ Name = "ExtShow";          Vbp = "$Tests\ext_show_test\test_ext_show.vbp"; Mode = "auto";
-       AutoExitSec = 3; MinWindowMs = 1000; WindowTitle = "ExtShow" },
-    # 自退用例: 窗口一出现就装上 100ms 的 tmrCheck (TS25..TS36 全在那一拍里), 所以存活门槛
-    # 取 100ms —— 它同时被 39 条检查点独立兜住 (早退就印不出 TS36/CTRLSSTAB-DONE)。
+       AutoExitSec = 3; HoldWindowMs = 1000; WindowTitle = "ExtShow" },
+    # 自退用例: 窗口起来后 tmrCheck 一拍 (100ms) 印完 TS25..TS36 就退。它不需要驻留时间,
+    # 判据交给采样 (连续 3 次可见) + 39 条检查点 (早退就印不出 TS36/CTRLSSTAB-DONE)。
+    # 旧版在这里写 MinWindowMs=100 并断言存活 >=100ms: 实测首轮 98ms 就红、重跑 438ms 绿,
+    # 差两毫秒与正确性无关, 量到的是调度抖动 —— 所以改成"采样确认真的起来过"。
     @{ Name = "ctrlsstab";        Vbp = "$Tests\ctrlsstab\CtrlSSTab.vbp"; Mode = "self";
-       MinWindowMs = 100; WindowTitle = "CtrlSSTab"; Needles = $guiTsNeedles }
+       WindowTitle = "CtrlSSTab"; Needles = $guiTsNeedles }
 )
 
 # 子进程 stdout/stderr 的编码 = 它实际写出的那条代码页。
@@ -755,6 +760,35 @@ function Get-C3ChildEncoding {
     return $enc
 }
 $script:C3ChildOutEnc = Get-C3ChildEncoding
+
+# --- 窗口判据的采样口径 ---
+# 旧版断言"窗口出现后存活 >= MinWindowMs": ctrlsstab 取 100ms, 而实测首轮 98ms 就红、
+# 重跑 438ms 绿 —— 两毫秒之差量到的是调度抖动, 不是正确性。改成"采样确认窗口真的起来过":
+# 检测到主窗口后按 20ms 固定间隔采样, 连续 3 次可见即算起来过 (3 次 = 至少跨 40ms,
+# 足够把"闪一下就退"与"确实起过窗"分开); 进程结束时再校验采样记录确实命中过。
+# GuiMinObserveMs=30 是最小可观测跨度 (两次采样间隔的下限): 一条连续可见段的
+# 首末时刻之差低于它就说明采样本身没能覆盖住窗口, 判红; 它不再是"存活时长门槛"。
+$script:GuiSampleMs = 20
+$script:GuiSampleNeed = 3
+$script:GuiMinObserveMs = 30
+
+# 采样一次并累加状态。判定必须用 Refresh 之后的主窗口句柄 (刷新前是缓存值);
+# 进程已退出时句柄归零, 于是连续计数归零, 但 MaxConsec/首末时刻保留下来供退出后校验。
+function Update-WinSample {
+    param($Proc, $Sw, $State)
+    try { $Proc.Refresh() } catch { }
+    $vis = $false
+    try { $vis = (-not $Proc.HasExited) -and ($Proc.MainWindowHandle -ne [IntPtr]::Zero) } catch { }
+    if ($vis) {
+        $State.Consec++
+        if ($State.Consec -gt $State.MaxConsec) { $State.MaxConsec = $State.Consec }
+        if ($State.FirstMs -lt 0) { $State.FirstMs = $Sw.ElapsedMilliseconds }
+        $State.LastMs = $Sw.ElapsedMilliseconds
+    } else {
+        $State.Consec = 0
+    }
+    return $vis
+}
 
 function Test-GuiVbpCase {
     param([hashtable]$Case)
@@ -841,8 +875,9 @@ function Test-GuiVbpCase {
 
     $windowWaitMs = 10000
     if ($Case.ContainsKey("WindowWaitMs")) { $windowWaitMs = [int]$Case.WindowWaitMs }
-    $minWindowMs = 1000
-    if ($Case.ContainsKey("MinWindowMs")) { $minWindowMs = [int]$Case.MinWindowMs }
+    # 驻留时间 (关窗/自退前的观察窗口), 只影响"什么时候关", 不参与判据。
+    $holdWindowMs = 1000
+    if ($Case.ContainsKey("HoldWindowMs")) { $holdWindowMs = [int]$Case.HoldWindowMs }
     $minChildWindows = 0
     if ($Case.ContainsKey("MinChildWindows")) { $minChildWindows = [int]$Case.MinChildWindows }
     $mode = "close"
@@ -875,6 +910,10 @@ function Test-GuiVbpCase {
     $killed = $false
     $exitCode = $null
     $aliveMs = 0
+    $obsSpanMs = 0
+    $maxConsec = 0
+    # 采样状态: Consec=当前连续可见次数, MaxConsec=历史最大, FirstMs/LastMs=可见段的首末时刻。
+    $samp = @{ Consec = 0; MaxConsec = 0; FirstMs = -1; LastMs = 0 }
     $issues = @()
     $miss = @()
     $hit = 0
@@ -899,18 +938,17 @@ function Test-GuiVbpCase {
         $se = $proc.StandardError.ReadToEndAsync()
         $sw = [Diagnostics.Stopwatch]::StartNew()
 
-        # ① 等主窗口出现
+        # ① 等主窗口出现 (20ms 采样; 首次可见后继续在下面的等待循环里采样)
         while ($sw.ElapsedMilliseconds -lt $windowWaitMs) {
-            $proc.Refresh()
-            if ($proc.HasExited) { break }
-            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+            $vis = Update-WinSample -Proc $proc -Sw $sw -State $samp
+            if ($vis -and -not $seen) {
                 $seen = $true
                 $winMs = $sw.ElapsedMilliseconds
                 try { $winTitle = [string]$proc.MainWindowTitle } catch { }
                 try { $childCount = Get-ChildWindowCount $proc.MainWindowHandle } catch { }
-                break
             }
-            Start-Sleep -Milliseconds 50
+            if ($seen -or $proc.HasExited) { break }
+            Start-Sleep -Milliseconds $script:GuiSampleMs
         }
         if (-not $seen -and -not $proc.HasExited) {
             try { $proc.Kill() } catch { }
@@ -921,8 +959,8 @@ function Test-GuiVbpCase {
         if ($seen) {
             if ($mode -eq "self") {
                 while (-not $proc.HasExited -and $sw.ElapsedMilliseconds -lt ($RunTimeoutSec * 1000)) {
-                    Start-Sleep -Milliseconds 50
-                    $proc.Refresh()
+                    Start-Sleep -Milliseconds $script:GuiSampleMs
+                    $null = Update-WinSample -Proc $proc -Sw $sw -State $samp
                 }
                 if (-not $proc.HasExited) {
                     try { $proc.Kill() } catch { }
@@ -930,10 +968,10 @@ function Test-GuiVbpCase {
                     $proc.WaitForExit(5000) | Out-Null
                 }
             } elseif ($mode -eq "auto") {
-                $until = [Math]::Max(($autoExitSec * 1000), ($winMs + $minWindowMs))
+                $until = [Math]::Max(($autoExitSec * 1000), ($winMs + $holdWindowMs))
                 while (-not $proc.HasExited -and $sw.ElapsedMilliseconds -lt $until) {
-                    Start-Sleep -Milliseconds 50
-                    $proc.Refresh()
+                    Start-Sleep -Milliseconds $script:GuiSampleMs
+                    $null = Update-WinSample -Proc $proc -Sw $sw -State $samp
                 }
                 # 收尾: 先请求关闭 (能拿到 0 退出码), 关不掉才 Kill
                 if (-not $proc.HasExited) {
@@ -952,10 +990,10 @@ function Test-GuiVbpCase {
                     $proc.WaitForExit(5000) | Out-Null
                 }
             } else {
-                # close: 先证窗口活了 MinWindowMs, 再走正常关闭
-                while (-not $proc.HasExited -and (($sw.ElapsedMilliseconds - $winMs) -lt $minWindowMs)) {
-                    Start-Sleep -Milliseconds 50
-                    $proc.Refresh()
+                # close: 先驻留 HoldWindowMs (给初始化/绘制留余量), 再走正常关闭
+                while (-not $proc.HasExited -and (($sw.ElapsedMilliseconds - $winMs) -lt $holdWindowMs)) {
+                    Start-Sleep -Milliseconds $script:GuiSampleMs
+                    $null = Update-WinSample -Proc $proc -Sw $sw -State $samp
                 }
                 if (-not $proc.HasExited) {
                     $proc.Refresh()
@@ -984,7 +1022,13 @@ function Test-GuiVbpCase {
         try { [System.IO.File]::WriteAllText($guiErr, $err, (New-Object System.Text.UTF8Encoding($false))) } catch { }
         $proc.Refresh()
         if ($proc.HasExited) { try { $exitCode = $proc.ExitCode } catch { } }
-        if ($seen) { $aliveMs = $sw.ElapsedMilliseconds - $winMs }
+        if ($seen) {
+            $aliveMs = $sw.ElapsedMilliseconds - $winMs
+            $maxConsec = [int]$samp.MaxConsec
+            if ($samp.FirstMs -ge 0 -and $samp.LastMs -ge $samp.FirstMs) {
+                $obsSpanMs = [int]($samp.LastMs - $samp.FirstMs)
+            }
+        }
 
         # ② 检查点
         $allText = $out + "`r`n" + $err
@@ -1029,8 +1073,10 @@ function Test-GuiVbpCase {
             } else {
                 $issues += ("窗口在 ${windowWaitMs}ms 内未出现 (超时后已 Kill)")
             }
-        } elseif ($aliveMs -lt $minWindowMs) {
-            $issues += ("窗口存活 ${aliveMs}ms < MinWindowMs=${minWindowMs}ms")
+        } elseif ($maxConsec -lt $script:GuiSampleNeed) {
+            $issues += ("窗口未确认起来过: 连续可见仅 ${maxConsec} 次 (需 >= " + $script:GuiSampleNeed + " 次, 每 " + $script:GuiSampleMs + "ms 采样)")
+        } elseif ($obsSpanMs -lt $script:GuiMinObserveMs) {
+            $issues += ("窗口可观测跨度 ${obsSpanMs}ms < " + $script:GuiMinObserveMs + "ms (采样下限)")
         }
 
         # 账 #175: 每控件的绘制缓冲真画了东西 (>=MinColors)
@@ -1051,6 +1097,7 @@ function Test-GuiVbpCase {
         $data = @{
             mode = $mode; arch = $arch; exitCode = $exitCode; killed = $killed
             windowSeen = $seen; windowTitle = $winTitle; windowMs = $winMs; aliveMs = $aliveMs
+            maxConsec = $maxConsec; obsSpanMs = $obsSpanMs
             childWindows = $childCount; checkpoints = $cpText; missing = ($miss -join ", "); requiresFiles = ($requires -join ",")
             compileLog = $compileLog; mtExe = $script:GuiMtExe
         }
@@ -1068,7 +1115,7 @@ function Test-GuiVbpCase {
             $childText = if ($minChildWindows -gt 0) { " children=$childCount" } else { "" }
             Write-GuiResult -Dir $guiOut -Name $name -Status "PASS" -Data $data
             $script:pass++
-            Write-Host ("PASS (window=${winMs}ms alive>=${minWindowMs}ms checkpoints=$cpText$childText $codeText)") -ForegroundColor Green
+            Write-Host ("PASS (window=${winMs}ms samples=${maxConsec}/$($script:GuiSampleNeed) span=${obsSpanMs}ms checkpoints=$cpText$childText $codeText)") -ForegroundColor Green
         }
     } catch {
         $script:fail++
@@ -6041,7 +6088,7 @@ if ($Category -eq "gui") {
 # GUISample 的本机验收夹具 (-Category guisample): 真编 + 真跑。
 # **不进 CI 判据** —— CI 那格 (vbp#7) 只做"编得过", 缺 Codejock 资产时 SKIP (见 Test-VbpBuild
 # -RequiresCodejock); 本机有 OCX/注册, 才跑这条把"能起窗、控件建得出来、关得掉、退出码 0"验完。
-# 断言沿用 GUI 表的既有三条: 窗口存活 >= MinWindowMs / 检查点齐全 / 退出码 0。
+# 断言沿用 GUI 表的三条: 窗口确认起来过 (20ms 采样, 连续 3 次可见) / 检查点齐全 / 退出码 0。
 # 检查点 = 窗口标题 "Visual Studio Sample" + 子窗口数 >= 10 (Codejock 控件树真建出来了);
 # RequiresFiles 同时钉 6 个 OCX 在工程目录, 缺一个就 SKIP 并写明文件名 (不冒充 PASS)。
 # Arch=x86 是必须的: 这批 Codejock 是 32 位 OCX, 64 位宿主加载不了。
@@ -6053,7 +6100,7 @@ if ($Category -eq "guisample") {
         Arch = "x86"
         Mode = "close"
         WindowTitle = "Visual Studio Sample"
-        MinWindowMs = 2000
+        HoldWindowMs = 2000
         MinChildWindows = 10
         RequiresFiles = @(
             "Codejock.CommandBars.v20.3.ocx"
@@ -8192,7 +8239,7 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp "modulemethod" "$Tests\test_modulemethod.vbp" @("30", "21")
 
     # --- M2: GUI 用例改为数据驱动表 (表在文件上方 $script:GuiCases) ---
-    # 每条固定三条断言: 窗口存活 >= MinWindowMs / 检查点齐全 / 退出码 0。
+    # 每条固定三条断言: 窗口确认起来过 (采样) / 检查点齐全 / 退出码 0。
     # 七个历史用例的参数原样搬进表: Charts2020 的绘制缓冲(>=40色)、czUI/FlexGrid/NewTab
     # 的 x86 位数、NewTab 的 NewTab01.ocx 依赖都在那条目里声明; 新增用例只加一行。
     Invoke-GuiVbpTable
