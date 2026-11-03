@@ -1,4 +1,4 @@
-# emit-manifest.expected.txt - 全语料发码形状的期望清单（账 #245 / #267 那一格落成的一句可判红的话）
+﻿# emit-manifest.expected.txt - 全语料发码形状的期望清单（账 #245 / #267 那一格落成的一句可判红的话）
 #
 # 每行 = 一份输入的哈希行：sha256=<归一化全文> ascii256=<纯 ASCII 行> rc=<退出码> bytes=<归一化字节> <relpath>。
 # 由 CI 的 Emit manifest 作业（门 #960、head 5363a956、pe-lnk=14.51）产出，与本机 14.29 那台**逐行相同**：
