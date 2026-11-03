@@ -8943,6 +8943,14 @@ if ($Category -in @("all", "run", "vbp")) {
     # ucProgressCircular **刻意不列** —— 它今天还红着 (B29③④)，列进来就是把已知的红当门禁基线；
     # 等编过之后再加，那一加就是"这个工程从此不许退回编不过"。ucTreeMaps 原本也在这条黑名单里，
     # 账 #201 手写三枚 DI 桩之后它编得过、链得出 exe ⇒ 移到下面那组去了。
+    # 取证夹具里**能编过**的那四枚 (口径: 能确定编得过就必须进 Test-VbpBuild, 哪怕要跑
+    # 得先在本机注册 Codejock —— 那只是"不跑", 不是"不编")。本轮实测四枚 rc=0。
+    # 跑不进的 (需要 OCX 注册/真实窗口) 由 tests\guisample 的取证脚本在本机单独跑, 不进 CI 门禁。
+    Test-VbpBuild "guisample"          "$Tests\guisample\GUISample.vbp"
+    Test-VbpBuild "guisample_err438"   "$Tests\guisample\err438\E438App.vbp"
+    Test-VbpBuild "guisample_mdimax"   "$Tests\guisample\mdimax\MaxApp.vbp"
+    Test-VbpBuild "ctlident_idapp"     "$Tests\ctlident\IdApp.vbp"
+
     Test-VbpBuild "charts_ucChartBar"  "$Tests\Charts 2020\ucChartBar\Proyecto1.vbp"
     Test-VbpBuild "charts_ucChartBar_x86" "$Tests\Charts 2020\ucChartBar\Proyecto1.vbp" -Arch "x86"
     Test-VbpBuild "charts_ucChartArea"  "$Tests\Charts 2020\ucChartArea\Proyecto1.vbp"
