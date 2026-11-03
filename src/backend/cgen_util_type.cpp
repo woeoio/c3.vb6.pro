@@ -21,6 +21,8 @@ namespace vb6c3 {
 // 返回类型按 VB6 内置函数语义给: 字符串类答 String, 整数类答 Long, 其余答 Variant
 // (Variant 是既有兜底, 不会引入新的硬错)。
 #include "backend/detail/expr/cgen_expr_ident_builtin_table.inc"
+// 内置函数返回档的后端兜底表 (只覆盖语义层没有符号的那 16 枚, 见该文件头注释)。
+#include "backend/detail/expr/cgen_builtin_return_type_table.inc"
 
 static Vb6Type builtinFuncReturnTypeForShadowedProp(const std::string& nameLower) {
     static const std::unordered_set<std::string> kStrFuncs = {
@@ -382,6 +384,14 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                     return cgenTypeForShadowedBuiltin(id.name);
                 }
                 if (sym) return sym->type;
+                // 语义层 builtin_funcs.inc 没登记、但 cgen 发射表里有名字的那一族
+                // (LenB / InStrB / LeftB / TypeOf / LoadRes* …)。没有这一问时它们一律
+                // 落到函数末尾的 Variant 兜底, 消费点会把标量/串按整只槽处理。见
+                // cgen_builtin_return_type_table.inc 的逐名依据与移除前提。
+                {
+                    Vb6Type fb = builtinReturnTypeFallback(id.name);
+                    if (fb != Vb6Type::Unknown) return fb;
+                }
             }
             // P26: 类实例方法调用 a.Method(args) → callee是MemberAccessExpr
             // 需要查询成员函数的返回类型, 而非直接fallback到Variant
@@ -417,6 +427,17 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                     if (memLower == "description" || memLower == "source") return Vb6Type::String;
                     if (memLower == "helppath" || memLower == "helpfile" || memLower == "helpcontext") return Vb6Type::String;
                     if (memLower == "lastdllerror") return Vb6Type::Long;
+                }
+                // 第二步: App 的四个 BSTR 成员 —— 删掉 C 出口名表之后, 读侧折叠
+                // (cgen_expr_member_form_builtin.inc 折成 vb6_App_Title() 等) 的类型
+                // 必须由这里答 String, 否则 Print #/Write # 会把 BSTR 指针当数值截断。
+                // 权威 = src/rtl/core/vb6rtl/vb6rtl_system.c 的 vb6_App_Title/EXEName/Path/HelpFile
+                // (四个出口都返回 BSTR); 不是按名字猜。
+                if (objLower == "app") {
+                    std::string memLower = ma.memberName;
+                    std::transform(memLower.begin(), memLower.end(), memLower.begin(), ::tolower);
+                    if (memLower == "title" || memLower == "exename" ||
+                        memLower == "path" || memLower == "helpfile") return Vb6Type::String;
                 }
             }
             // 账 #159: 限定形态的宿主伪成员 (<UserControl|PropertyPage|Extender|
@@ -1222,99 +1243,31 @@ bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
     //   `vb6_VARIANT: vb6_VariantIdentity` 档); vb6_CDbl / vb6_CInt / vb6_LenB / vb6_InStr 那一族
     //   宏交的是标量, 按名字登记会一律答错, 所以它们不进表。
     //   指针返回也不进表: vb6_VariantArrayElemPtr 交回 vb6_VARIANT*(槽的地址), 不是槽。
-    static const std::vector<std::string> variantPrefixes = {
-        "vb6_VariantArrayGet(",
-        // 账 #305 §B150: 秩 ≥ 2 的晚绑定槽元素读走这一枚新出口 (variantSlotElemRead 按实参
-        //   个数二选一)。不登记 = 表只认识单下标那一形, 新出口发出去下游按裸标量读它。
-        "vb6_VariantArrayGetND(",
-        // 账 #305 新账 #407 第一百七十一刀: 视图/裸实例进对象档的那枚新出口交回的也是整只槽
-        //   (RTL 签名 vb6_VARIANT vb6_VariantFromProjectInstance(void*))。不登记 = 站点第二次拿到
-        //   同一枚 AST 时按裸值发码, 实测就是 `FromProjectInstance((void*)(FromProjectInstance(...)).obj)`
-        //   这种自套 (cl C2039「obj 不是 vb6_VARIANT 的成员」)。
-        "vb6_VariantFromProjectInstance(",
-        "vb6_VariantFromComResult(",
-        "vb6_VariantFromStackVARIANT(",
-        "vb6_VariantFromValue(",
-        "vb6_VariantEmpty(",
-        "vb6_VariantLong(",
-        "vb6_VariantDouble(",
-        "vb6_VariantString(",
-        "vb6_VariantBool(",
-        "vb6_VariantArray(",
-        "vb6_VariantObject(",
-        "vb6_VariantNull(",
-        "vb6_LoadResData(",       // Fix 090bz: VBA LoadResData → vb6_VARIANT;
-                                 //   Dim D() As Byte: D = LoadResData(...) 赋值
-                                 //   需 VariantToSafeArray1D 提取 (cLang LoadData/LoadInfo C2440).
-        // vbeclipse: LoadResPicture 与 LoadResData 同族, RTL 签名都是
-        //   vb6_VARIANT vb6_LoadResPicture(vb6_VARIANT, vb6_VARIANT) (vb6rtl_runtime.h).
-        //   不登记会让 `Function getResourceIcon(...) As IPictureDisp` 的
-        //   `Set getResourceIcon = LoadResPicture(...)` 直接 `vb6_ret_X =
-        //   vb6_LoadResPicture(...)` → C2440 (modResources.c 22/24/33). 登记后走
-        //   Set 的 Fix 038b-6 分支包 vb6_VariantToObjectVal 提取对象指针.
-        // Fix <vbeclipse> (2026-10-06): LoadRes 实参/返回全面 Variant 化 (2026-10-05
-        //   实测 LoadResData("BIN1","CUSTOM") 的 BSTR 实参被截进 int32 形参), 三函数
-        //   返回都是 vb6_VARIANT — LoadResString 也一样, 不登记则 `s = LoadResString(1)`
-        //   发 vb6_BSTR_Assign 直收 Variant → C2440.
-        "vb6_LoadResPicture(",
-        "vb6_LoadResString(",
-        // ⚠ 这一名**不是** RTL 出口, 是全表唯一的例外, 所以「从 RTL 派生」的那把 census
-        //   看不见它 —— 它来自语料自己的工程: mdQRCodegen.bas:1407 写着
-        //   `Private Function DispCallByVtbl(...) As Variant`, 而单文件 (非多模块) 发码时工程
-        //   过程的名是裸的 `vb6_<proc>` (cProcName: 只有多模块才拼模块名), 于是
-        //   variantReturnFuncs_ 也够不着 (那张集合里只有 `vb6_<模块>_<proc>` 和 `vb6_pv_<proc>`)。
-        //   实测撤掉这一行: mdQRCodegen 五处 `hResult = DispCallByVtbl(...)` 少掉
-        //   vb6_VariantToLong 提取, 整只槽进 vb6_ChkLong(int64_t) —— 这是 400 份 A/B 里唯一
-        //   一条归因不到的移动。同形缺口 (工程的 Variant 函数直接赋给非 Variant 目标, 单模块)
-        //   两台 BASE/NEW 都还发 `vb6_ChkLong(vb6_MakeDec())`, 另立 §B148。
-        "vb6_DispCallByVtbl(",  // Fix 068: DispCallByVtbl returns Variant
-        // Fix 110w: VB6 CallByName 返回 vb6_VARIANT (见 vb6rtl_class_com.h) —
-        // 参与算术/关系运算或需 BSTR 时必须按 Variant 处理, 否则 C2088
-        // ("*" 对于 struct 非法; Charts 2020 ClsResizer.cls:142/148
-        //  CallByName(oCtrl, ..., VbGet) * 100).
-        "vb6_CallByName(",
-        // Fix <vbeclipse> rev37: ParamArray 元素按**声明类型**解包 (rev37 前一律
-        //   GetLong ⇒ String 实参静默读成 0)。Variant 元素的解包函数返回整只
-        //   VARIANT, 必须登记成 Variant 表达式, 否则下游 BSTR/Variant 目标
-        //   不会走 vb6_VariantToString / wrapVariantValue, 直接 C2440
-        //   (ClsResizer.AddControlFont 的 `.PropFont = PropFont(i)`)。
-        "vb6_PA_GetVariant(",
-        // 账 #305 §B145: Variant 参与 + - * / 的四枚运行期出口（vb6rtl_com.c），返回整只
-        //   vb6_VARIANT。不登记在这里 = 下游的解包/装箱/比较全按「C 原生标量」发
-        //   (int32_t)(...) ⇒ C2440/C2088；登记之后它们一律走 Variant 那一条路。
-        "vb6_VarAddV(",
-        "vb6_VarSubV(",
-        "vb6_VarMulV(",
-        "vb6_VarDivV(",
-        // 账 #305 §B146: 下面这十名都是「RTL 声明返回 vb6_VARIANT、后端确实会 emit」而表里漏着的
-        // (派生自 src/rtl/** 的声明逐名核过; 前两版 census 各错过一次: 一把漏认 `static inline`
-        //  前缀、一把把 `vb6_VARIANT *f(...)` 的指针返回当成槽 —— 所以 vb6_VariantArrayElemPtr
-        //  刻意**不进**这张表, 它交回的是槽的地址而不是槽)。
-        "vb6_CDec(",                // CDec: 唯一能造出精确 Decimal 的内置出口 (vb6rtl_misc.c:271)
-        "vb6_CVErr(",              // CVErr -> vb6_VARIANT (vt=10, vb6rtl_conv.c:389)
-        "vb6_GetAllSettings(",     // 注册表一组值 -> vb6_VARIANT (vb6rtl_registry.c:113)
-        "vb6_IIfVariant(",         // IIf 的两个分支都是槽时选中的那一族
-        "vb6_VariantArrayGetVal(", // 晚绑定数组元素读值 (vb6rtl_com.c:698)
-"vb6_VariantByte(",
-          "vb6_VariantInt(",
-          "vb6_VariantSingle(",
-          "vb6_VariantDate(",
-          "vb6_VariantIdentity(",
-          // ai/032 §6.6 / §6.9: C3 扩展的整数族装箱出口。boxToVariant 现在**点名**调它们
-          //   (SByte / UInteger / ULong / ULongLong / LongLong 五档), 所以每一枚都得登记 ——
-          //   登记的含义是「消费点按 Variant 接」, 漏一枚就是消费点按裸标量发码 (C2440/C2088)。
-          //   ⚠ 这五枚以前全靠 boxToVariant 的 default→vb6_VariantFromValue 的 _Generic 猜,
-          //   猜不中 SByte/UInteger (char:/wchar_t: 两档都装成 VT_I4), 丢的是类型身份。见 §6.9。
-          "vb6_VariantLongLong(",
-          "vb6_VariantULong(",
-          "vb6_VariantULongLong(",
-          "vb6_VariantSByte(",
-          "vb6_VariantUInteger(",
-        //   ↑ 上面五枚是构造器 (vb6rtl_variant.h 的 static inline)。表里本来就有 Empty/Long/
-        //     Double/String/Bool/Null/Object/Array 那一批, 缺的正是这五档 ——
-        //     cgen_util_ctrl.cpp:2419 早就写着「vb6_VariantByte( 不在 cExprIsVariant 的清单里」
-        //     并为此另立了第二份名单 (cExprIsVariantCarrierStr); 今天把名补进权威这张表。
-    };
+    // 名单本体已移到生成物 cgen_variant_slot_prefixes.inc (由
+    // scripts/gen_variant_slot_prefixes.ps1 从 RTL 声明派生; 例外/排除的逐条理由写在脚本里)。
+    // 这里只消费它, 不再手写名字 —— 手写清单与 RTL 走散的两个方向都贵 (§B146)。
+    //
+    // 逐名归因 (名单本体见 .inc; 这里保留每条的历史实物, 改 RTL 时对照用):
+    //   VariantArrayGet / VariantArrayGetND      · §B150 秩≥2 晚绑定槽元素读
+    //   vb6_VariantFromProjectInstance           · #407 视图/裸实例进对象档 (自套 C2039)
+    //   FromComResult / FromStackVARIANT / FromValue / Empty / Long / Double / String /
+    //   Bool / Array / Object / Null             · 槽构造族 (FromValue 是 _Generic 宏, 每档都交槽)
+    //   LoadResData                              · Fix 090bz (需 VariantToSafeArray1D 提取)
+    //   LoadResPicture / LoadResString           · vbeclipse: LoadRes 实参/返回全面 Variant 化
+    //   DispCallByVtbl                           · Fix 068; **全表唯一的非 RTL 名** —— 语料
+    //                                              mdQRCodegen 的工程过程在单模块下发成裸
+    //                                              vb6_<proc>, variantReturnFuncs_ 够不着 (§B146)
+    //   CallByName                               · Fix 110w (参与算术/关系运算, 否则 C2088)
+    //   PA_GetVariant                            · rev37 ParamArray 按声明类型解包
+    //   VarAddV / VarSubV / VarMulV / VarDivV    · §B145 Variant 四则
+    //   CDec / CVErr / GetAllSettings / IIfVariant / VariantArrayGetVal
+    //                                            · §B146 census 补漏 (misc.c:271 / conv.c:389 /
+    //                                              registry.c:113 / com.c:698)
+    //   VariantByte / Int / Single / Date / Identity + LongLong / ULong / ULongLong / SByte /
+    //   UInteger                                 · ai/032 §6.6/§6.9 装箱出口五档 + rev20 补齐
+    //                                              (「另立第二份名单」的教训)
+    #include "backend/detail/expr/cgen_variant_slot_prefixes.inc"
+
     for (const auto& prefix : variantPrefixes) {
         if (cExpr.compare(start, prefix.size(), prefix) == 0) return true;
     }
