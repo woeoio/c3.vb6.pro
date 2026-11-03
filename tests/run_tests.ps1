@@ -604,10 +604,12 @@ function Resolve-VbpExeBase {
 
 # ---------------------------------------------------------------------------
 # M2 (2026-11-02): GUI 用例数据驱动 + 三条固定断言
-#   ① 窗口起了: WindowWaitMs 内出现主窗口, 且进程结束前**采样到过窗口** —— 检测到后按
-#                GuiSampleMs(20ms) 采样, 连续 GuiSampleNeed(3) 次可见才算"起来过", 可观测
-#                跨度还要 >= GuiMinObserveMs(30ms)。不再断言"存活 >= 某个贴边数字"。
-#                HoldWindowMs 只表示关窗前的驻留时间 (给初始化/绘制留余量), 不参与判定。
+#   ① 窗口起了: WindowWaitMs 内出现主窗口, 且进程结束前**至少采样到过它一次**。
+#                PASS/FAIL 只由三要素组成: 采样命中过窗口 + 检查点齐全 + 退出码 0。
+#                GuiSampleMs(20ms) 的采样次数 / 可观测跨度只作读数进日志, 不参与判定 ——
+#                窗口寿命由被测程序自己决定 (ctrlsstab 是 tmrCheck.Interval=100 那一拍才
+#                Unload), 拿"次数"或"毫秒门槛"去量寿命都会贴边。HoldWindowMs 只表示
+#                关窗前的驻留时间 (给初始化/绘制留余量), 同样不参与判定。
 #   ② 检查点  : Needles 全中, 且 (可选) WindowTitle 命中 —— 两种来源至少要有一种
 #   ③ 退出码  : Mode=self/close 必须 0; Mode=auto 里若进程由 CloseMainWindow 收尾也必须是 0;
 #              只有"窗口拒绝关闭、只能 Kill"这一档拿不到退出码, 结果里记 killed=true (报告里单列)
@@ -727,10 +729,9 @@ $script:GuiCases = @(
        RequiresFiles = @("NewTab01.ocx") },
     @{ Name = "ExtShow";          Vbp = "$Tests\ext_show_test\test_ext_show.vbp"; Mode = "auto";
        AutoExitSec = 3; HoldWindowMs = 1000; WindowTitle = "ExtShow" },
-    # 自退用例: 窗口起来后 tmrCheck 一拍 (100ms) 印完 TS25..TS36 就退。它不需要驻留时间,
-    # 判据交给采样 (连续 3 次可见) + 39 条检查点 (早退就印不出 TS36/CTRLSSTAB-DONE)。
-    # 旧版在这里写 MinWindowMs=100 并断言存活 >=100ms: 实测首轮 98ms 就红、重跑 438ms 绿,
-    # 差两毫秒与正确性无关, 量到的是调度抖动 —— 所以改成"采样确认真的起来过"。
+    # 自退用例: 窗口起来后 tmrCheck 一拍 (100ms) 印完 TS25..TS36 就退。判据是"采样命中过窗口
+    # + 39 条检查点全中 + 退出码 0" —— 检查点必须等 100ms 的 tick 才印得出, 它们本身就是
+    # "窗口活过并转过消息循环"的证据; 不要再用采样次数/存活时长当寿命判据 (会贴边)。
     @{ Name = "ctrlsstab";        Vbp = "$Tests\ctrlsstab\CtrlSSTab.vbp"; Mode = "self";
        WindowTitle = "CtrlSSTab"; Needles = $guiTsNeedles }
 )
@@ -762,18 +763,19 @@ function Get-C3ChildEncoding {
 $script:C3ChildOutEnc = Get-C3ChildEncoding
 
 # --- 窗口判据的采样口径 ---
-# 旧版断言"窗口出现后存活 >= MinWindowMs": ctrlsstab 取 100ms, 而实测首轮 98ms 就红、
-# 重跑 438ms 绿 —— 两毫秒之差量到的是调度抖动, 不是正确性。改成"采样确认窗口真的起来过":
-# 检测到主窗口后按 20ms 固定间隔采样, 连续 3 次可见即算起来过 (3 次 = 至少跨 40ms,
-# 足够把"闪一下就退"与"确实起过窗"分开); 进程结束时再校验采样记录确实命中过。
-# GuiMinObserveMs=30 是最小可观测跨度 (两次采样间隔的下限): 一条连续可见段的
-# 首末时刻之差低于它就说明采样本身没能覆盖住窗口, 判红; 它不再是"存活时长门槛"。
+# 为什么不再断言"窗口出现后存活 >= 某个值"或"连续 N 次可见":
+#   ① 旧版 ctrlsstab 取 MinWindowMs=100ms, 实测首轮 98ms 就红、重跑 438ms 绿 —— 两毫秒之差
+#      量到的是调度抖动, 不是正确性;
+#   ② 改成"连续 3 次可见"同样贴边: ctrlsstab 的窗口寿命由 tmrCheck.Interval=100 决定
+#      (tick 里跑完 TS25..TS36 就 Unload Me, 实测约 100ms), 而 CI runner 上 20ms 的
+#      Start-Sleep 会被并行负载拉长, 100ms 窗口里塞不下 3 次 (GA 实测只拿到 2 次)。
+# 所以采样只承担"观测到过窗口"这一件事, 次数/跨度是读数; "窗口确实活过并转过消息循环"
+# 由检查点自己证明 —— ctrlsstab 的 40 条检查点必须等 100ms 的 timer tick 才印得出来。
+# 真需要"窗要活够久"的用例, 在用例条目里显式声明 (HoldWindowMs 的驻留), 默认不加时长门槛。
 $script:GuiSampleMs = 20
-$script:GuiSampleNeed = 3
-$script:GuiMinObserveMs = 30
 
 # 采样一次并累加状态。判定必须用 Refresh 之后的主窗口句柄 (刷新前是缓存值);
-# 进程已退出时句柄归零, 于是连续计数归零, 但 MaxConsec/首末时刻保留下来供退出后校验。
+# 进程已退出时句柄归零, 于是连续计数归零, 但 MaxConsec/首末时刻保留下来供读数。
 function Update-WinSample {
     param($Proc, $Sw, $State)
     try { $Proc.Refresh() } catch { }
@@ -1055,7 +1057,8 @@ function Test-GuiVbpCase {
         if ($miss.Count -gt 0) { $issues += ("检查点缺失 " + $miss.Count + "/" + $needles.Count + ": " + ($miss -join ", ")) }
         if ($titleWant -and $seen -and -not $titleHit) { $issues += ("窗口标题 '" + $winTitle + "' 不含 '" + $titleWant + "'") }
 
-        # ① 窗口存活
+        # ① 窗口起来过: 采样命中过窗口即可。判据只有三要素 —— 命中过 + 检查点齐全 + 退出码 0。
+        # samples/obsSpan 只是读数, 不参与判定 (理由见文件上方"窗口判据的采样口径")。
         if (-not $seen) {
             $tail = (@((([string]$err) -split "`r?`n") | Where-Object { $_ }) | Select-Object -Last 6) -join " | "
             $loadPat = 'DllGetClassObject|LoadLibrary|C3_COM|C3_HOST_MEMBER|class not registered|0x80040154|0xC0000135|0xC0000142|SideBySide|SxS|manifest'
@@ -1073,10 +1076,6 @@ function Test-GuiVbpCase {
             } else {
                 $issues += ("窗口在 ${windowWaitMs}ms 内未出现 (超时后已 Kill)")
             }
-        } elseif ($maxConsec -lt $script:GuiSampleNeed) {
-            $issues += ("窗口未确认起来过: 连续可见仅 ${maxConsec} 次 (需 >= " + $script:GuiSampleNeed + " 次, 每 " + $script:GuiSampleMs + "ms 采样)")
-        } elseif ($obsSpanMs -lt $script:GuiMinObserveMs) {
-            $issues += ("窗口可观测跨度 ${obsSpanMs}ms < " + $script:GuiMinObserveMs + "ms (采样下限)")
         }
 
         # 账 #175: 每控件的绘制缓冲真画了东西 (>=MinColors)
@@ -1115,7 +1114,7 @@ function Test-GuiVbpCase {
             $childText = if ($minChildWindows -gt 0) { " children=$childCount" } else { "" }
             Write-GuiResult -Dir $guiOut -Name $name -Status "PASS" -Data $data
             $script:pass++
-            Write-Host ("PASS (window=${winMs}ms samples=${maxConsec}/$($script:GuiSampleNeed) span=${obsSpanMs}ms checkpoints=$cpText$childText $codeText)") -ForegroundColor Green
+            Write-Host ("PASS (window=${winMs}ms samples=${maxConsec} span=${obsSpanMs}ms checkpoints=$cpText$childText $codeText)") -ForegroundColor Green
         }
     } catch {
         $script:fail++
