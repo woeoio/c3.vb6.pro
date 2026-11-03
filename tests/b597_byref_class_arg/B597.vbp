@@ -1,0 +1,5 @@
+Type=Exe
+Class=bHello; bHello.cls
+Module=B597Main; B597Main.bas
+Startup="Sub Main"
+ExeName32="B597.exe"

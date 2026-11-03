@@ -47,6 +47,46 @@
             return;
         }
     }
+    // 账 #305 第M刀: typed COM 变量 + **标量 RHS** 的默认属性 Let。
+    // 上面那格只接 `Item = Item + 6`(二目 +); GUISample frmPropertyGrid:72 的
+    // `Item = "2.0.0"` 仍落普通赋值 ⇒ `Item = vb6_BSTR_FromStr(L"2.0.0")`
+    // 把 `vb6_ComIface_IPropertyGridItem*` 指针覆盖成 BSTR 指针, 下游
+    // `Item.Parent` / `Item.Tag` / `Item.Parent.Caption` 全部变成
+    // kind=notdispatchable / null 的晚绑定 miss(实测 out_before: 4 发)。
+    // VB6 语义: 无 Set 的对象变量赋值就是写 DISPID 0 默认成员
+    // (PropertyGridItem 的默认成员 = Value)。RHS 若也是带默认成员的 typed COM
+    // 裸名, 先折默认属性读, 否则按普通表达式发, 统一装箱回写。
+    if (node.target->kind == ASTNodeKind::IdentifierExpr) {
+        auto& tgtScalar = static_cast<IdentifierExpr&>(*node.target);
+        std::string tgtLowerScalar = Symbol::toLower(tgtScalar.name);
+        bool isRetSlotScalar = currentProc_
+                               && Symbol::toLower(currentProc_->name) == tgtLowerScalar;
+        auto itDefScalar = knownTypedComVars_.find(tgtLowerScalar);
+        if (!isRetSlotScalar && itDefScalar != knownTypedComVars_.end()
+            && itDefScalar->second
+            && !itDefScalar->second->comDefaultMemberRealName.empty()) {
+            std::string rhsScalar;
+            if (node.value->kind == ASTNodeKind::IdentifierExpr) {
+                auto& rhsId = static_cast<IdentifierExpr&>(*node.value);
+                auto itRhs = knownTypedComVars_.find(Symbol::toLower(rhsId.name));
+                if (itRhs != knownTypedComVars_.end() && itRhs->second
+                    && !itRhs->second->comDefaultMemberRealName.empty()) {
+                    rhsScalar = "vb6_VariantFromComResult(vb6_ComGetProp((void*)"
+                              + cIdent(rhsId.name) + ", L\""
+                              + itRhs->second->comDefaultMemberRealName + "\"))";
+                }
+            }
+            if (rhsScalar.empty()) {
+                emitExpr(*node.value);
+                rhsScalar = "vb6_VariantFromValue(" + std::move(lastExpr_) + ")";
+            }
+            c_.emitLine("vb6_ComSetProp((void*)" + cIdent(tgtScalar.name) + ", L\""
+                        + itDefScalar->second->comDefaultMemberRealName
+                        + "\", vb6_ComPackVariant(" + rhsScalar
+                        + "));  /* default prop let (obj scalar) */");
+            return;
+        }
+    }
     // P22: Date$/Time$ statement interception (Date$ = "12-31-2025" / Time$ = "23:59:59")
     if (node.target->kind == ASTNodeKind::IdentifierExpr) {
         auto& _tgtId22 = static_cast<IdentifierExpr&>(*node.target);
@@ -710,6 +750,37 @@
                                     + "\", " + packAs + "(" + valAs + "));  /* appobject SetProp */");
                         return;
                     }
+                }
+                // 账 #305 第M刀: MDIForm 的裸 `ActiveForm.Caption = v` 写侧。
+                // 读侧 (cgen_expr_member_form_builtin / cgen_expr_ident_symbol) 已按
+                // Me.ActiveForm 发 COM 读, 写侧这里此前落到 Module.var 回退,
+                // 发出 `vb6_ActiveForm_Caption = ...` (C2065 未声明标识符, 实测
+                // tests\ctlident 编译失败)。与读侧同一判定 (currentFormIsMDI_ +
+                // 局部变量遮蔽闸), 接收者取当前窗体 HWND, 成员走 COM SetProp。
+                if (currentFormIsMDI_ && objLower == "activeform"
+                    && !knownLocalVars_.count(objLower)) {
+                    std::string formHwndLhs = "vb6_hwnd_" + moduleName_;
+                    auto itOrigLhs = knownFormControlOriginalNames_.find(knownFormName_);
+                    if (itOrigLhs != knownFormControlOriginalNames_.end())
+                        formHwndLhs = "vb6_hwnd_" + cIdent(itOrigLhs->second);
+                    emitExpr(*node.value);
+                    std::string valLhs = std::move(lastExpr_);
+                    Vb6Type valTLhs = inferExprType(*node.value);
+                    std::string packLhs = "vb6_ComPackValue";
+                    if (valTLhs == Vb6Type::String) {
+                        packLhs = "vb6_ComPackBSTR";
+                    } else if (valTLhs == Vb6Type::Long || valTLhs == Vb6Type::Integer
+                            || valTLhs == Vb6Type::Boolean) {
+                        packLhs = "vb6_ComPackInt";
+                    } else if (valTLhs == Vb6Type::Double || valTLhs == Vb6Type::Single
+                            || valTLhs == Vb6Type::Date) {
+                        packLhs = "vb6_ComPackDouble";
+                    }
+                    valLhs = comUnpackForPack(packLhs, valLhs);
+                    c_.emitLine("vb6_ComSetProp((void*)vb6_ComGetObjectProp(" + formHwndLhs
+                                + ", L\"ActiveForm\"), L\"" + maExpr.memberName + "\", "
+                                + packLhs + "(" + valLhs + "));  /* MDIForm.ActiveForm SetProp */");
+                    return;
                 }
                 // Module.varName = expr
                 // When module is #included, use unprefixed name

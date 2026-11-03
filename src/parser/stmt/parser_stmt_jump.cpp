@@ -29,11 +29,37 @@ StmtPtr Parser::parseOnStmt() {
     if (next_.kind == TokenKind::GoSub) {
         return parseOnGoSubStmt();
     }
+    // B7: `On <expr> GoTo 100, 200` / `On <expr> GoSub 100, 200` —— 计算跳转的入口分派。
+    // 以前入口只看 On 后的**第一枚** token (Error/GoTo/GoSub/local)，而真文法里
+    // GoTo/GoSub 出现在索引表达式**之后**；本仓前瞻只有两枚 (peek()=cur_ / peek2()=next_)，
+    // 看不见第三枚 ⇒ 识别挪到读完索引表达式之后 (parseOnComputedJumpStmt)。
+    // 走到这里 still 是 `On <expr> ...`：VB6 的 On 语句只有 Error 与计算跳转两种。
+    return parseOnComputedJumpStmt();
+}
 
-    diag_.error(DiagnosticID::ParseUnexpectedToken, currentLoc(),
-        "expected 'Error GoTo', 'Error Resume', 'GoTo', or 'GoSub' after 'On'");
-    advance();
-    return nullptr;
+// B7: `On <expr> GoSub/GoTo label[, label...]` —— 两分支只差节点类型与一枚 token,
+// 所以先读索引再按 cur_ 分派，不再让两个 parseOnXxx 各自 advance/parseExpression。
+StmtPtr Parser::parseOnComputedJumpStmt() {
+    auto loc = currentLoc();
+    advance(); // consume 'On'
+    auto index = parseExpression();
+    if (cur_.kind != TokenKind::GoTo && cur_.kind != TokenKind::GoSub) {
+        diag_.error(DiagnosticID::ParseExpectedToken, currentLoc(),
+            "expected 'GoTo' or 'GoSub' after 'On' <expression>");
+        advance();
+        return nullptr;
+    }
+    bool isGoSub = (cur_.kind == TokenKind::GoSub);
+    advance(); // consume GoTo / GoSub
+    std::vector<std::string> labels;
+    labels.push_back(expectLabelTarget("expected label"));
+    while (match(TokenKind::Comma)) {
+        labels.push_back(expectLabelTarget("expected label"));
+    }
+    if (isGoSub) {
+        return std::make_unique<OnGoSubStmt>(loc, std::move(index), std::move(labels));
+    }
+    return std::make_unique<OnGoToStmt>(loc, std::move(index), std::move(labels));
 }
 
 std::unique_ptr<OnErrorStmt> Parser::parseOnErrorStmt() {

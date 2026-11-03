@@ -472,6 +472,7 @@ StmtPtr ASTCloner::cloneStmt(const Stmt* s) {
         auto o = std::make_unique<PrintStmt>(x.loc, cloneExprInner(x.fileNumber.get()),
                                              cloneExprVec(x.outputList));
         o->isFormPrint = x.isFormPrint;
+        o->separators = x.separators;
         out = std::move(o); break;
     }
     case ASTNodeKind::WriteStmt: {
