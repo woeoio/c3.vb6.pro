@@ -412,7 +412,10 @@ $LateBindMissAllow = @{
     # 下面三行是**已知缺口**的精确条数 (不是「可以随便漏」的白名单) ——
     # 每一行都要写清是哪个缺口、哪几处、为什么这一刀不修。
     # 条数一变就红 ⇒ 逼着人回来改数字并说明 (门 #40495973903 四条红的归因)。
-    'B190' = 4        # 账 #412: 工程类实例经 As Object 形参 => 无 IDispatch (kind=notdispatchable)
+    # 账 #412: 工程类实例经 As Object 形参 => 无 IDispatch (kind=notdispatchable)。
+    # 4 处缺口, 每处各响两行 (DispView 那一档 + ComGetProp 那一档) ⇒ 精确 8 行。
+    # 旧值 4 是「缺口处数」, 后来 RTL 把接收者视图那半也打了标记, 行数翻倍而表没跟。
+    'B190' = 8
     'czFormDemo' = 3 # 控件的 Font 伪对象还没实现 => txtEmbed.Font 为空 (kind=null)
     'Proyecto1' = 67 # VB6 内建运行时对象没有 IDispatch 包器: 45 x Collection.Add + 22 x StdFont.Size (kind=null)
 }
@@ -5344,21 +5347,27 @@ if ($Category -in @("all", "run", "bas")) {
     # <vbeclipse> 账 #608 (第329刀): 模块级 Public String 交进 Print # / Write # 的那一格。
     # 修前实测回读是 -884158216 (BSTR 指针被 (int32_t) 折成数)；判据一律从文件回读拿，
     # 608-num 是负控 (数值兜底那条口径不许被带动)，608-local / 608-concat 是存在性正控。
-    Add-BasTest "test_fileio_modstr" "$Tests\test_fileio_modstr.bas" @("608-modstr=[ModLevel-String-608] ok=True", "608-local=[Local-String-608] ok=True", "608-num=[4242] ok=True", "608-concat=[ModLevel-String-608!] ok=True", "608-fixstr-not-digits ok=True", "608-write-quoted ok=True", "608-DONE")
+    # Print # 数值按 VB6 Str 语义写盘 (前导/尾空格), 见 .temp/m4/vb6num/p05_long_var.txt
+    # = " 123456 " —— 故回读显示行是 [ 4242 ] (断言内用 Trim, 原意「数值不变」仍守住)。
+    Add-BasTest "test_fileio_modstr" "$Tests\test_fileio_modstr.bas" @("608-modstr=[ModLevel-String-608] ok=True", "608-local=[Local-String-608] ok=True", "608-num=[ 4242 ] ok=True", "608-concat=[ModLevel-String-608!] ok=True", "608-fixstr-not-digits ok=True", "608-write-quoted ok=True", "608-DONE")
     # <vbeclipse> 账 #609 (第331刀 / 台账 §B11): Print # / Write # 的**非 BSTR 那半**改走窗体面
     # Print 早已在用的那位主人 (wrapToBSTR 按档分诊)。修前那半自留一条 `vb6_Str((int32_t)(val))`，
     # 一次塌三档 —— 返回 String 的工程函数打成指针数 (§B11 那一格)、返回 Variant 的**整棵工程编不过**
     # (实测 C2440: 无法从 vb6_VARIANT 转换到 int32_t)、Date/Double/Boolean 被折成整数。判据两头：
     # 夹具真跑按**文件回读**拿读数 (611-num 是数值档中立性证人，带动它就算回归)，发码形状针钉分诊
     # 结果 + 那条兜底不许回潮。
-    Add-BasTest "b611_printfn" "$Tests\b611_printfn.bas" @("611-strfn=[StrFn-611] ok=True", "611-strfn-bare ok=True", "611-varfn=[7] ok=True", "611-num=[4242] neutral=True", "611-dbl-not-truncated ok=True", "611-bool=[True] ok=True", "611-date-in-year ok=True", "611-date-not-serial ok=True", "611-write-quoted ok=True", "611-DONE")
+    # 776d20ef 把出口从 vb6_Print+vb6_CStr* 换成「按 VB6 Str 语义产文本」的
+    # vb6_PrintText + vb6_File*Text, 但这两组期望停在 09be08f0 的形状/读数上没跟着走:
+    #   读数 —— Print # 数值在 VB6 里是 " 4242 " (Str 语义), 故 [ 7 ] / [ 4242 ];
+    #   形状 —— 分诊仍按档钉住 (Variant/Long/Double/Bool/Date 各走 File*Text, 串走 WriteText)。
+    Add-BasTest "b611_printfn" "$Tests\b611_printfn.bas" @("611-strfn=[StrFn-611] ok=True", "611-strfn-bare ok=True", "611-varfn=[ 7 ] ok=True", "611-num=[ 4242 ] neutral=True", "611-dbl-not-truncated ok=True", "611-bool=[True] ok=True", "611-date-in-year ok=True", "611-date-not-serial ok=True", "611-write-quoted ok=True", "611-DONE")
     Test-EmitcShape 'b611_printfn_shape' @("$Tests\b611_printfn.bas") @(
-        'vb6_Print(fn, vb6_VariantToString(vb6_VarFn()));',
-        'vb6_Print(fn, vb6_CStrLong(vb6_NumFn()));',
-        'vb6_Print(fn, vb6_CStrDbl(vb6_DblFn()));',
-        'vb6_Print(fn, vb6_CStrBool(vb6_BoolFn()));',
-        'vb6_Print(fn, vb6_CStrDate(vb6_DateFn()));',
-        'vb6_Write(fn, vb6_StrFn());'
+        'vb6_PrintText(fn, vb6_FileVariantText(vb6_VarFn(), 0), 0);',
+        'vb6_PrintText(fn, vb6_FileLongText((int64_t)(vb6_NumFn()), 0), 0);',
+        'vb6_PrintText(fn, vb6_FileNumText((double)(vb6_DblFn()), 0, 0), 0);',
+        'vb6_PrintText(fn, vb6_FileBoolText((int32_t)(vb6_BoolFn()), 0), 0);',
+        'vb6_PrintText(fn, vb6_FileDateText((double)(vb6_DateFn()), 0), 0);',
+        'vb6_WriteText(fn, vb6_StrFn(), 1, 0);'
     )
     Test-EmitcAbsent 'b611_printfn_no_int32_fallback' @("$Tests\b611_printfn.bas") @(
         'vb6_Str((int32_t)('
@@ -9080,11 +9089,26 @@ if ($Category -in @("all", "run", "vbp")) {
     # registered, so nothing in the regression had ever LINKED a .dll -- every claim on
     # the COM server side was unmeasured. These three cases make that surface observable
     # (product + exports + the generated coclass table) without changing compiler code.
+    # 账 #305 第330刀 (账 #605) 第三档的钉子: .vbp 无 Title= 且无 ExeName32 时, 播的是**可执行名**
+    # (= 产物文件名 = .vbp 文件名 stem), 不是工程 Name="TestAXDLL"。取证四条:
+    #   ① 本夹具 dll_entry.c 实测 `vb6_SetAppTitle(L"test_activex_dll");` (--keep-for-debug 指到的
+    #      会话目录, 不是 --emit-c 的 stdout —— 那一份压根不含 dll_entry.c);
+    #   ② GUISample (Name="Project1" / ExeName32="GUISample.exe" / 无 Title=) 的参考运行把
+    #      App.Title 记成 "GUISample": 空白 Title 跟的是**可执行名**, 不是工程名 (第359刀的依据);
+    #   ③ 真语料 画地图.vbp (Name="工程1" / 无 ExeName32 / 无 Title=) 的 VB6 产物叫 画地图.exe:
+    #      没有 ExeName32 时, 可执行名的默认值就是 .vbp 文件名 ⇒ 第三档 = 文件 stem, 与产物同名。
+    #   ④ **DLL 侧 VB6 实测** (2026-11-03, VB6Mini /make, 探针留在 .temp\vb6dllprobe 不入语料):
+    #      Vb6Fallback.vbp (Name="Vb6FallbackName", 无 Title=, 无 ExeName32) /make 产出
+    #      **Vb6Fallback.dll** (vbp 文件名 stem), 在 DLL 内读 App.Title = "Vb6Fallback"、
+    #      App.EXEName = "Vb6Fallback" —— 不是工程名 Vb6FallbackName ⇒ DLL 不是特例,
+    #      与第二档同口径。故「DLL 无 ExeName32 回退到工程 Name」被实测否掉。
+    # 因此 appTitleSeed() 不改 (「回退到工程 Name」这一猜测被 ②③④ 否掉, 见 ai/probes/app_title_dll)。
     Test-VbpDll "ax_dll_calc" "$Tests\test_activex_dll\test_activex_dll.vbp" @(
         "const vb6_CoClassDesc g_vb6_coclasses[]",
         '"TestAXDLL.Calc"',
         '"{D84F362F-8EF1-D16D-8814-C16ADB700BAB}"',
         'L"SetValue", 1, 1',
+        'vb6_SetAppTitle(L"test_activex_dll");',
         "DllGetClassObject", "DllRegisterServer")
     Test-VbpDll "ax_dll_event" "$Tests\test_activex_dll\test_event_dll.vbp" @(
         '"EventCalc"', '"{E1F2A3B4-C5D6-7890-ABCD-123456789ABC}"',
@@ -10759,7 +10783,9 @@ if ($Category -in @("all", "run", "vbp")) {
     # 修复前实测 b596_out.txt 里 ByRef String 形参写成 -1092513192 (BSTR 指针被
     # `(int32_t)` 截断); 字面量/拼接/Format$ 当时在名单内, 一并钉住. 数字 12345 是
     # 反向用例: 必须按数值写盘. 断言走"写盘后逐行读回", 行内容逐字写死.
-    $b596Expected = @("[LIT]", "[AB]", "[CD]", "[EF]", "[1234.50]", "[12345]",
+    # Print # 数值按 VB6 Str 语义写盘 (前导/尾空格), 见 .temp/m4/vb6num/p05_long_var.txt
+    # = " 123456 " ⇒ 12345 那行读回是 " 12345 ", 不是 "12345"。
+    $b596Expected = @("[LIT]", "[AB]", "[CD]", "[EF]", "[1234.50]", "[ 12345 ]",
                       "COUNT=6", "DONE")
     Test-Vbp 'b596_print_string' "$Tests\b596_print_string\B596.vbp" $b596Expected -ExpectExitCode 0
 

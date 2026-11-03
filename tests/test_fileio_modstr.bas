@@ -35,7 +35,10 @@ Sub Main()
     ' 逐行只数到第 n 行 (第 6 行是 Write 那一枚，带引号，故意不回读)
     Debug.Print "608-modstr=[" & ReadLine(1) & "] ok=" & (ReadLine(1) = gAll)
     Debug.Print "608-local=[" & ReadLine(2) & "] ok=" & (ReadLine(2) = loc)
-    Debug.Print "608-num=[" & ReadLine(3) & "] ok=" & (ReadLine(3) = CStr(gNum))
+    ' Print # 数值按 VB6 Str 语义写盘 (正数一个前导空格、恒一个尾空格), 见
+    ' .temp/m4/vb6num/p05_long_var.txt = " 123456 " —— 故回读比对用 Trim, 那一枚仍是
+    ' 「数值读数不变」的证人 (4242 不许被折成指针数)。
+    Debug.Print "608-num=[" & ReadLine(3) & "] ok=" & (Trim(ReadLine(3)) = CStr(gNum))
     Debug.Print "608-concat=[" & ReadLine(4) & "] ok=" & (ReadLine(4) = gAll & "!")
     Debug.Print "608-fixstr-not-digits ok=" & Not IsDigits(Trim(ReadLine(5)))
 

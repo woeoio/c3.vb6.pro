@@ -65,9 +65,18 @@ Sub Main()
     Else
         Debug.Print "DATE_ONLY=FAIL"
     End If
-    ' 只有时间的 Date: Print # 只写时间([0,1) 那一档), 而 CStr 会带上 1899-12-30 的日期。
-    ' 用"CStr(整个) 去掉 CStr(1899-12-30) 那段前缀"取时间, 跨 locale 都成立。
-    If lns(14) = Mid$(lns(15), Len(CStr(DateSerial(1899, 12, 30))) + 2) & " " Then
+    ' 只有时间的 Date: Print # 只写时间([0,1) 那一档), 不写 1899-12-30 的日期前缀, 恒一个尾空格。
+    ' 判据不再用"CStr(整个) 去掉 CStr(1899-12-30) 前缀"那种按长度做算术的写法 —— 前缀长度
+    ' 随 locale 的日期段长度/分隔符而变, 且一旦 Print # 那侧读到的是活动时钟, 跨秒就会漂。
+    ' 改成三条同 locale 的结构断言 (仍守原意「这一行 = 该 Date 的时间文本 + 一个尾空格」):
+    '   ① 尾恒一个空格 (RTrim 后加回一个); ② 行内不得出现 CStr(1899-12-30) 那段日期前缀;
+    '   ③ 去掉尾空格的时间文本, 必须原样出现在 lns(15)=CStr(dt) 里 (由同一进程、同一 dt 写出)。
+    Dim t14 As String
+    t14 = RTrim$(lns(14))
+    If (lns(14) = t14 & " ") _
+       And (InStr(lns(14), CStr(DateSerial(1899, 12, 30))) = 0) _
+       And (Len(t14) > 0) _
+       And (InStr(lns(15), t14) > 0) Then
         Debug.Print "TIME_ONLY=OK"
     Else
         Debug.Print "TIME_ONLY=FAIL"
