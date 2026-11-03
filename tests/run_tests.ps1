@@ -724,6 +724,32 @@ $script:GuiCases = @(
        MinWindowMs = 100; WindowTitle = "CtrlSSTab"; Needles = $guiTsNeedles }
 )
 
+# 子进程 stdout/stderr 的编码 = 它实际写出的那条代码页。
+# 依据 RTL 的写出路径 (src\rtl\core\vb6rtl\vb6rtl_conv.c: vb6_ConWriteHandle):
+#   ① 不是在控制台上写 ⇒ cp = GetConsoleOutputCP(), 取不到 (0) 才退回 GetACP();
+#   ② 这条 cp 装不下该串 (WideCharToMultiByte 报 usedDefault) ⇒ 整串退回 UTF-8。
+# 于是采集端照抄同一条规则:
+#   · cp = ACP。子进程是 CreateNoWindow + 重定向起的, **没有控制台**, 实测 (本机控制台
+#     CP=65001 时子进程仍写 GBK "常规" = B3 A3 B9 E6) ⇒ GetConsoleOutputCP() 恒 0, 走 ACP;
+#   · 用这条 CP 试写 "常规": 能原样往返 ⇒ 子进程发的就是这条 CP 的字节; 写不出 (1252/437)
+#     ⇒ 子进程已按 ② 退回 UTF-8, 采集端也用 UTF-8。
+# 旧版钉死 936: 本机 ACP=936 恰好对, 而 CI runner 的 ACP 装不下中文 ⇒ 子进程发 UTF-8,
+# 采集端按 GBK 解 ⇒ TS18/TS19 的 "常规/改过" 恒被读成 "甯歌/鏀硅繃"(artifact 里就是这个)。
+# 也不能钉 65001: ACP=936 的机器(如本机)发的 GBK 会被解成 U+FFFD。必须跟着机器算。
+function Get-C3ChildEncoding {
+    if (-not ('C3Util.Acp' -as [type])) {
+        Add-Type -Namespace C3Util -Name Acp -MemberDefinition `
+            '[DllImport("kernel32.dll")] public static extern uint GetACP(); [DllImport("kernel32.dll")] public static extern uint GetConsoleOutputCP();' -ErrorAction SilentlyContinue
+    }
+    $cp = [int][C3Util.Acp]::GetACP()
+    $enc = [System.Text.Encoding]::GetEncoding($cp)
+    # 往返探针 = RTL ② 分支的等价判定 (装不下时 .NET 给 '?' , 也就往返不回来)
+    $probe = [string]$enc.GetString($enc.GetBytes("常规"))
+    if ($probe -ne "常规") { return [System.Text.Encoding]::UTF8 }
+    return $enc
+}
+$script:C3ChildOutEnc = Get-C3ChildEncoding
+
 function Test-GuiVbpCase {
     param([hashtable]$Case)
     $name = [string]$Case.Name
@@ -856,11 +882,12 @@ function Test-GuiVbpCase {
         $psi.CreateNoWindow = $true
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
-        # C3 的 Debug.Print / RTL 按 ANSI 写 stdout (实测 TS18 的原始字节是 B3 A3 B9 E6 = GBK "常规"),
-        # 而 ProcessStartInfo 不指定编码时跟**控制台**代码页走 —— 终端若是 UTF-8 (65001),
-        # 中文检查点就会被解成非法字节而恒不命中。显式钉 936 让本地与 CI (默认 1252) 一致。
-        $psi.StandardOutputEncoding = [System.Text.Encoding]::GetEncoding(936)
-        $psi.StandardErrorEncoding = [System.Text.Encoding]::GetEncoding(936)
+        # C3 的 Debug.Print / RTL 把宽串按 **ACP** 转窄字节写 stdout：本机 ACP=936 交 GBK
+        # ("常规" = B3 A3 B9 E6)，CI runner ACP=65001 交 UTF-8 (E7 8E B7 E6 ...)。
+        # 采集端必须与子进程同用 ACP —— 旧版钉死 936，在 ACP=65001 的 runner 上把 UTF-8
+        # 字节按 GBK 解，于是 TS18/TS19 的 "常规/改过" 恒被读成 "甯歌/鏀硅繃"。
+        $psi.StandardOutputEncoding = $script:C3ChildOutEnc
+        $psi.StandardErrorEncoding = $script:C3ChildOutEnc
         $proc = [System.Diagnostics.Process]::Start($psi)
         $so = $proc.StandardOutput.ReadToEndAsync()
         $se = $proc.StandardError.ReadToEndAsync()
