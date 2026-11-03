@@ -8,6 +8,61 @@ namespace vb6c3 {
 
 // --- cgen_file_io.cpp: 文件 I/O 语句生成 (Open/Close/Print/Write/Input/Get/Put...) ---
 
+// Print # / Write # 的单项文本出口。**类型优先**: 静态类型能答准就走实测 VB6 的
+// 格式化 (vb6_File*Text); 只有类型信息不可得 (inferExprType 仍答 Unknown/ Object)
+// 才回退旧 vb6_Str(int32_t)。String 那一档的分流由两个 visitor 里的 isStringItem 答:
+// ① 语义类型是 String ② 发射形状本身证明是 BSTR 槽 (见下方的注释)。旧的名字兜底表
+// (bstrFuncs / isBstrExpr) 已删; 删表前提与剩余边界见 docs/print_write_numeric.md §6.4/§7。
+std::string CCodeGen::printWriteTextExpr(Expr& expr, const std::string& val, bool writeMode) {
+    const std::string mode = writeMode ? "1" : "0";
+    // Null/Empty 字面量与「明确是 Variant」的表达式必须走 Variant 档:
+    // inferExprType 对 Null 字面量会答成整数型 (符号表里它没有独立类型), 若按数值发码
+    // 就会把 vb6_VariantNull() 结构体强转成 int64 (实测编译错 C2440)。判据不猜:
+    // ① 明确 Variant (isDefinitelyVariantExpr) ② 发射形状就是 RTL 的 Null/Empty 构造。
+    if (isDefinitelyVariantExpr(expr) ||
+        val == "vb6_VariantNull()" || val == "vb6_VariantEmpty()")
+        return "vb6_FileVariantText(" + val + ", " + mode + ")";
+    switch (inferExprType(expr)) {
+        case Vb6Type::Byte:
+        case Vb6Type::Integer:
+        case Vb6Type::Long:
+        case Vb6Type::SByte:
+        case Vb6Type::UInteger:
+        case Vb6Type::ULong:
+        case Vb6Type::LongLong:
+        case Vb6Type::ULongLong:
+        case Vb6Type::LongPtr:
+            return "vb6_FileLongText((int64_t)(" + val + "), " + mode + ")";
+        case Vb6Type::Single:
+            return "vb6_FileNumText((double)(" + val + "), 1, " + mode + ")";
+        case Vb6Type::Double:
+        case Vb6Type::Currency:
+            return "vb6_FileNumText((double)(" + val + "), 0, " + mode + ")";
+        case Vb6Type::Date:
+            return "vb6_FileDateText((double)(" + val + "), " + mode + ")";
+        case Vb6Type::Boolean:
+            return "vb6_FileBoolText((int32_t)(" + val + "), " + mode + ")";
+        case Vb6Type::Decimal:
+            // Decimal 在 C 侧就是整只 vb6_VARIANT (cgen_base_type.cpp:56)。
+            return "vb6_FileVariantText(" + val + ", " + mode + ")";
+        case Vb6Type::Empty:
+        case Vb6Type::Null:
+        case Vb6Type::Variant:
+            // "Variant" 是 inferExprType 的**兜底答案**, 不是断言: 走到这里说明
+            // 开头那两问 (明确 Variant / RTL 的 Null/Empty 构造) 都没命中。只有
+            // 发射形状本身是 RTL 里返回 vb6_VARIANT 的出口 (cExprIsVariant, 静态
+            // 证据) 才按整只槽发; 其余 (IIf/Choose/Switch 的兜底答案、UDT 字段
+            // 失配、外部类成员 …) 判不准, 保持旧路径, 不猜。
+            // 形态清单与在 tests 语料里的频度见 docs/print_write_numeric.md。
+            if (cExprIsVariant(val))
+                return "vb6_FileVariantText(" + val + ", " + mode + ")";
+            return "vb6_Str((int32_t)(" + val + "))";
+        default:
+            // 判不准的形态一律保持旧路径 (不猜); 清单见 docs/print_write_numeric.md。
+            return "vb6_Str((int32_t)(" + val + "))";
+    }
+}
+
 void CCodeGen::visit(OpenStmt& node) {
     // VB6: Open pathname For Mode [Access access] As #filenumber
     // C:   vb6_Open(pathname, mode, access, filenumber)
@@ -56,71 +111,24 @@ void CCodeGen::visit(CloseStmt& node) {
     }
 }
 
-// 账 #608: 「这一枚实参是不是已经是一枚 BSTR」的那道闸门，Print # 与 Write # 各抄过一份
-// （名单 + 查表，两份一字一样），而且两份都只问**局部**那张表 ——
-// `knownBstrVars_` 在每个过程入口被 clear 后只由局部声明与形参重新填
-// (cgen_decl_proc.cpp:51 / cgen_decl_func.cpp:47)，所以模块级那句 `Public gAll As String`
-// 压根不在里面 ⇒ `Print #f, gAll` 落进下面的数值兜底，发出来是
-// `vb6_Print(fn, vb6_Str((int32_t)(gAll)))`：把 BSTR 指针当数打印，产物文件里只有一枚指针数
-// (实测 probe_out.txt = "710757560")。真语料 D:\vb_yqt4qPac 里这一族有 48 处
-// （Print#/Write# 共 2158 行，实参是裸标识符的 245 行，其中同名在**本文件列 0** 声明成
-// `As String` 的 48 行）。
-//
-// 修法沿用账 #113 那把尺：只对**裸标识符**补问一次符号表（inferExprType 的 IdentifierExpr
-// 分支认得模块级变量），成员/控件属性/数组元素那一族的既有通道一个都不碰 —— 它们各自另有主人。
-// 数值兜底那条口径（`(int32_t)` 折成串）保持不变。
-bool CCodeGen::fileOutArgIsBstr(const std::string& expr, Expr& argNode) const {
-    static const std::vector<std::string> bstrFuncs = {
-        "vb6_BSTR_FromStr", "vb6_Left", "vb6_Right", "vb6_Mid",
-        "vb6_UCase", "vb6_LCase", "vb6_UCase_str", "vb6_LCase_str",
-        "vb6_Trim", "vb6_LTrim", "vb6_RTrim", "vb6_Chr",
-        "vb6_Str", "vb6_CStr", "vb6_Format", "vb6_Hex", "vb6_Oct",
-        "vb6_Replace", "vb6_Space", "vb6_String", "vb6_StrReverse",
-        "vb6_BSTR_Concat", "vb6_BSTR_Empty", "vb6_App_Path", "vb6_App_EXEName", "vb6_App_Title", "vb6_App_HelpFile", "vb6_Command", "vb6_CurDir", "vb6_Environ", "vb6_Dir", "vb6_IIfBSTR", "vb6_GetControlText", "vb6_GetControlCaption"
-    };
-    // 账 #305 第331刀: 名单匹配从「裸前缀」收成「顶层函数名精确」—— 与 Fix 100a/100b/100d
-    // 同一族修法，裸前缀会把**工程自己的函数**蒙进来：`Direction() As Double` 发成
-    // `vb6_Direction()` 命中名单里的 `vb6_Dir`、`Stripped() As Long` 命中 `vb6_Str`，
-    // 明明是数值却按 BSTR 直通 ⇒ 改前实测 `Print #f, Direction()` 直接
-    // C2440「无法从 double 转换为 BSTR」(整棵工程编不过，不是读数错)。
-    // 反向也一样：返回 String 的工程函数只有**撞名** (`StrFn` 命中 `vb6_Str`) 才蒙对，
-    // 没撞名 (`MakeStr`) 就落进那条 int32 兜底 —— §B11 那一格真正的成因。
-    const size_t pOpen = expr.find('(');
-    const std::string fnName = (pOpen == std::string::npos) ? std::string() : expr.substr(0, pOpen);
-    if (!fnName.empty()) {
-        for (auto& name : bstrFuncs) {
-            if (fnName == name) return true;
-        }
-    }
-    if (expr.compare(0, 8, "vb6_BSTR") == 0) return true;
-    if (expr.find("VB6_SA_AT(BSTR,") != std::string::npos) return true;
-    std::string lower = expr;
-    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-    if (knownBstrVars_.count(lower)) return true;
-    if (argNode.kind == ASTNodeKind::IdentifierExpr &&
-        inferExprType(argNode) == Vb6Type::String) return true;
-    return false;
-}
-
-// 账 #305 第331刀 (台账 §B11): 「这一发实参该以什么形状交给写文件的出口」—— 三户同一条。
-// 上一刀把「是不是已经是 BSTR」收成一位主人，但**非 BSTR 那半**两份抄本各走各的：
-// Form Print 走 `wrapToBSTR`（按类型分档：Variant→解包、Date→CStrDate、Double→CStrDbl、
-// 整数→CStrLong、返回 String 的工程函数→原样直通），而 `Print #` / `Write #` 自留一条
-// `vb6_Str((int32_t)(val))`。那一条同时塌了三档，实测（`.local/k611/`）：
-//   ① `Print #f, MakeStr()`（`Public Function MakeStr() As String`）⇒ BSTR 指针被截成 int32
-//      打成数（§B11 那格；同一句写成不带括号 `Print #f, MakeStr` 反倒是对的 —— 因为它走
-//      IdentifierExpr 那一问，两条写法本该答同一个数）；
-//   ② `Print #f, MakeVar()`（`As Variant`）⇒ **C2440 编不过**：`无法从 vb6_VARIANT 转换到 int32_t`
-//      （c3-error.log 里就是这一句，整棵工程编不出来，不是读数错）；
-//   ③ `As Date` / `As Double` / `As Boolean` 的返回档被 `(int32_t)` 截掉 —— 日期打成序列数、
-//      小数打成就整数。
-// 修法 = 非 BSTR 那半也走 Form Print 那位主人（`wrapToBSTR`），三户一条口。
-std::string CCodeGen::fileOutArgBstrExpr(const std::string& expr, Expr& argNode) {
-    if (fileOutArgIsBstr(expr, argNode)) return expr;
-    return wrapToBSTR(expr, argNode);
-}
-
 void CCodeGen::visit(PrintStmt& node) {
+    // 第二步（账 #305 §B146 收口）：删掉 34 名 C 出口名兜底表 —— 分流只看**两问**：
+    //   ① 语义类型是 String（inferExprType；builtin 返回档由
+    //      cgen_builtin_return_type_table.inc 答出，表本身查 RTL 声明）；
+    //   ② 发射形状本身证明是 BSTR 槽（不是名字名单）：BSTR 构造/读取族、
+    //      String 数组元素、IIf 选中串支、静态 String 变量。
+    // 名字表不再存在：类型答不出时**不许猜**。
+    auto isStringItem = [&](Expr& e, const std::string& emitted) -> bool {
+        if (inferExprType(e) == Vb6Type::String) return true;
+        // ② 发射形状：类型是 BSTR 的那些表达式在 C 侧的字面形状
+        if (emitted.compare(0, 8, "vb6_BSTR") == 0) return true;
+        if (emitted.compare(0, 11, "vb6_IIfBSTR") == 0) return true;
+        if (emitted.find("VB6_SA_AT(BSTR,") != std::string::npos) return true;
+        std::string lower = emitted;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        return knownBstrVars_.count(lower) != 0;
+    };
+
     if (node.isFormPrint) {
         // M22-Issue6: Form surface Print - "Print expr" in form module
         // Generate: vb6_Form_Print(formHwnd, bstrExpr) for each output item
@@ -128,9 +136,13 @@ void CCodeGen::visit(PrintStmt& node) {
         for (auto& expr : node.outputList) {
             emitExpr(*expr);
             std::string val = lastExpr_;
-            // 账 #305 第331刀: 两问收进一位主人，本户的形状一字未动。
-            c_.emitLine("vb6_Form_Print(" + formHwnd + ", "
-                        + fileOutArgBstrExpr(val, *expr) + ");");
+            if (isStringItem(*expr, val)) {
+                c_.emitLine("vb6_Form_Print(" + formHwnd + ", " + val + ");");
+            } else {
+                // Use wrapToBSTR for proper type conversion (Date→CStrDate, etc.)
+                std::string bstrVal = wrapToBSTR(val, *expr);
+                c_.emitLine("vb6_Form_Print(" + formHwnd + ", " + bstrVal + ");");
+            }
         }
         return;
     }
@@ -140,15 +152,26 @@ void CCodeGen::visit(PrintStmt& node) {
     std::string fnum = std::move(lastExpr_);
 
     if (node.outputList.empty()) {
-        c_.emitLine("vb6_Print(" + fnum + ", NULL);");
+        c_.emitLine("vb6_PrintText(" + fnum + ", NULL, 0);");
     } else {
-        for (auto& expr : node.outputList) {
+        for (size_t i = 0; i < node.outputList.size(); ++i) {
+            auto& expr = node.outputList[i];
             emitExpr(*expr);
             std::string val = lastExpr_;
-            // 账 #305 第331刀 (台账 §B11): 原来非 BSTR 那支自留 `vb6_Str((int32_t)(val))`，
-            // 把「返回 String 的工程函数」的指针当数打、把「返回 Variant 的」直接编不过 (C2440)、
-            // 把 Date/Double 截成整数。现在与 Form Print 同一条口 (wrapToBSTR 按档分诊)。
-            c_.emitLine("vb6_Print(" + fnum + ", " + fileOutArgBstrExpr(val, *expr) + ");");
+            // 分隔符: 0=行尾, 1=';', 2=',' (AST 里逐项记录; 旧路径没有这个信息时按行尾)
+            int sep = 0;
+            if (i < node.separators.size()) {
+                if (node.separators[i] == ';') sep = 1;
+                else if (node.separators[i] == ',') sep = 2;
+            }
+            if (isStringItem(*expr, val)) {
+                c_.emitLine("vb6_PrintText(" + fnum + ", " + val + ", " + std::to_string(sep) + ");");
+            } else {
+                // 数值/日期/布尔/Empty/Null: 按**实测 VB6 字节**产文本 (见 vb6rtl_file.c)。
+                c_.emitLine("vb6_PrintText(" + fnum + ", " +
+                            printWriteTextExpr(*expr, val, false) + ", " +
+                            std::to_string(sep) + ");");
+            }
         }
     }
 }
@@ -157,14 +180,34 @@ void CCodeGen::visit(WriteStmt& node) {
     emitExpr(*node.fileNumber);
     std::string fnum = std::move(lastExpr_);
 
+    // 第二步：与 PrintStmt 同一判据（两问，无名字名单；见上面的注释）
+    auto isStringItem = [&](Expr& e, const std::string& emitted) -> bool {
+        if (inferExprType(e) == Vb6Type::String) return true;
+        if (emitted.compare(0, 8, "vb6_BSTR") == 0) return true;
+        if (emitted.compare(0, 11, "vb6_IIfBSTR") == 0) return true;
+        if (emitted.find("VB6_SA_AT(BSTR,") != std::string::npos) return true;
+        std::string lower = emitted;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        return knownBstrVars_.count(lower) != 0;
+    };
+
     if (node.outputList.empty()) {
-        c_.emitLine("vb6_Write(" + fnum + ", NULL);");
+        c_.emitLine("vb6_WriteText(" + fnum + ", NULL, 0, 0);");
     } else {
-        for (auto& expr : node.outputList) {
+        for (size_t i = 0; i < node.outputList.size(); ++i) {
+            auto& expr = node.outputList[i];
             emitExpr(*expr);
             std::string val = lastExpr_;
-            // 账 #305 第331刀: 与 Print # 同一句病灶（Write # 那支抄的是同一条 int32 兜底）。
-            c_.emitLine("vb6_Write(" + fnum + ", " + fileOutArgBstrExpr(val, *expr) + ");");
+            // Write # 项间恒为逗号 (实测: 源码里写 ';' 也输出 ','), 整条语句末尾一个 CRLF。
+            int sep = (i + 1 < node.outputList.size()) ? 2 : 0;
+            if (isStringItem(*expr, val)) {
+                c_.emitLine("vb6_WriteText(" + fnum + ", " + val + ", 1, " +
+                            std::to_string(sep) + ");");
+            } else {
+                c_.emitLine("vb6_WriteText(" + fnum + ", " +
+                            printWriteTextExpr(*expr, val, true) + ", 0, " +
+                            std::to_string(sep) + ");");
+            }
         }
     }
 }

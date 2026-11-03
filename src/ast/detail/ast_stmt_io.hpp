@@ -77,6 +77,10 @@ public:
     ExprPtr fileNumber;
     std::vector<ExprPtr> outputList;
     bool isFormPrint = false;  // M22-Issue6: true=Print to form surface, false=Print # to file
+    // B11 第二批: 文件 Print 的分隔符, 与 outputList 一一对应 —— 0=语句尾, ';'=不换行,
+    // ','=下一个 14 列区。VB6 的 Print # 数值/日期尾部空格与分隔符共同决定写盘字节,
+    // 旧 AST 只留表达式、丢掉分隔符 ⇒ 多表达式语句只能"每项一行", 与 VB6 不符。
+    std::vector<char> separators;
 
     PrintStmt(SourceLocation loc, ExprPtr fn, std::vector<ExprPtr> output)
         : Stmt(ASTNodeKind::PrintStmt, loc),

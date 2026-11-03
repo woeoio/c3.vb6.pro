@@ -593,110 +593,466 @@ function Resolve-VbpExeBase {
     return $stem
 }
 
-# GUI smoke: require a visible main window, then close only the process we launch.
-# This checks startup, not screenshot correctness or QR decoding.
-function Test-GuiVbp {
-    param([string]$Name, [string]$VbpFile, [string]$ExeName = "", [string]$Arch = "", [int]$AutoExitSec = 0, [string]$ShardGroup = "", [int]$DumpMinColors = 0)
-    # vbp 分片: 本片不跑这例 —— 闸门必须在任何副作用之前 (建目录/起进程)。
-    if (-not (Enter-VbpShard -Group $ShardGroup)) { return }
-    $script:total++
-    Write-Host -NoNewline "  [GUI] $Name ... "
-    $guiOut = Join-Path $OutDir $Name
-    New-Item -ItemType Directory -Path $guiOut -Force | Out-Null
-    if ($Arch) {
-        $compileResult = & $C3 $VbpFile --arch $Arch --output-dir $guiOut @IncArg 2>&1
-    } else {
-        $compileResult = & $C3 $VbpFile --output-dir $guiOut @IncArg 2>&1
+# ---------------------------------------------------------------------------
+# M2 (2026-11-02): GUI 用例数据驱动 + 三条固定断言
+#   ① 窗口存活: WindowWaitMs 内出现主窗口, 且出现后存活 >= MinWindowMs
+#   ② 检查点  : Needles 全中, 且 (可选) WindowTitle 命中 —— 两种来源至少要有一种
+#   ③ 退出码  : Mode=self/close 必须 0; Mode=auto 里若进程由 CloseMainWindow 收尾也必须是 0;
+#              只有"窗口拒绝关闭、只能 Kill"这一档拿不到退出码, 结果里记 killed=true (报告里单列)
+# 每条都留下 compile.log / <Name>.out / <Name>.err / <Name>.result.json, 便于回归定位。
+#
+# 免注册 COM: 被测 OCX/DLL 由 harness 复制到 exe 旁, 走 C3 RTL 已有的
+# LoadLibrary+DllGetClassObject 直加载路径 (不依赖 regsvr32)。mt.exe 存在与否只作读数记录;
+# 本轮不注入 SxS manifest —— 拿不到 OCX 的 assemblyIdentity 就注入, 反而会把原本能起窗的
+# 用例改成 SxS 加载失败。组件缺失 / 位数不符 / 加载失败一律 SKIP 并写明缺什么, 绝不降级成 PASS。
+function Get-PeMachine {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return "" }
+    $fs = $null
+    try {
+        $fs = [System.IO.File]::OpenRead($Path)
+        if ($fs.Length -lt 0x40) { return "" }
+        $br = New-Object System.IO.BinaryReader($fs)
+        $fs.Position = 0x3C
+        $peOff = $br.ReadInt32()
+        if ($peOff -le 0 -or ($peOff + 6) -gt $fs.Length) { return "" }
+        $fs.Position = $peOff + 4
+        $machine = $br.ReadUInt16()
+        return ("0x{0:X4}" -f $machine)
+    } catch {
+        return ""
+    } finally {
+        if ($fs) { $fs.Dispose() }
     }
-    if ($LASTEXITCODE -ne 0) {
+}
+
+function Get-MtExe {
+    # 只认能在本机跑的 mt.exe。Windows SDK 里同一目录树带 arm64/arm/x86/x64 多份,
+    # Get-ChildItem -Recurse 会先摸到 arm64 那份 (x64 Windows 上根本起不来) ——
+    # 实测本机首个命中就是 bin\10.0.19041.0\arm64\mt.exe。按 PE machine 过滤成 x64。
+    $c = Get-Command mt.exe -ErrorAction SilentlyContinue
+    if ($c -and (Get-PeMachine $c.Source) -eq "0x8664") { return $c.Source }
+    $roots = @()
+    if (${env:ProgramFiles(x86)}) { $roots += (Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin") }
+    if ($env:ProgramFiles) { $roots += (Join-Path $env:ProgramFiles "Windows Kits\10\bin") }
+    $roots += "D:\Windows Kits\10\bin"
+    foreach ($r in $roots) {
+        if (-not (Test-Path -LiteralPath $r)) { continue }
+        $f = Get-ChildItem -LiteralPath $r -Recurse -Filter mt.exe -ErrorAction SilentlyContinue |
+            Where-Object { (Get-PeMachine $_.FullName) -eq "0x8664" } | Select-Object -First 1
+        if ($f) { return $f.FullName }
+    }
+    return ""
+}
+
+# 主窗口的子窗口数: 没有 stdout/标题契约的 GUI 用例 (NewTab 的无边框窗体) 用它当
+# "控件真的建出来了" 的检查点。GetWindow(GW_CHILD) 拿首个子窗, GW_HWNDNEXT 走兄弟链。
+function Get-ChildWindowCount {
+    param([IntPtr]$Hwnd)
+    if ($Hwnd -eq [IntPtr]::Zero) { return 0 }
+    if (-not ("C3GuiWin32" -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class C3GuiWin32 {
+    [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hWnd, int uCmd);
+}
+"@
+    }
+    $n = 0
+    $child = [C3GuiWin32]::GetWindow($Hwnd, 5)   # GW_CHILD
+    while ($child -ne [IntPtr]::Zero -and $n -lt 4096) {
+        $n++
+        $child = [C3GuiWin32]::GetWindow($child, 2)   # GW_HWNDNEXT
+    }
+    return $n
+}
+
+function Write-GuiResult {
+    param([string]$Dir, [string]$Name, [string]$Status, [hashtable]$Data)
+    $obj = [ordered]@{ case = $Name; status = $Status }
+    foreach ($k in $Data.Keys) { $obj[$k] = $Data[$k] }
+    try {
+        [System.IO.File]::WriteAllText((Join-Path $Dir ($Name + ".result.json")),
+            (($obj | ConvertTo-Json -Depth 4) + "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+    } catch { }
+}
+
+# ---------------------------------------------------------------------------
+# GUI 用例表: 新增用例 = 加一行, 不改 runner 主体。
+# CtrlSSTab 的 TS0..TS36 是样板: 它的检查点全部来自 stdout (Debug.Print)。
+# 其余工程没有 stdout 契约, 检查点用窗口标题 (Caption) 作为**可观测输出**。
+# ---------------------------------------------------------------------------
+$guiTsNeedles = @(
+    "TS1-TABS=3", "TS2-TAB=1", "TS3-ORIENT=0", "TS4-STYLE=0", "TS5-PERROW=3",
+    "TS6-WRAP=False", "TS7-SET0=0", "TS8-SET2=2", "TS9-OOR=2", "TS10-ORIENT=1",
+    "TS11-STYLE=1", "TS12-PERROW=4", "TS13-WRAP=True", "TS14-TABS5=5",
+    "TS15-TABAFTERGROW=2", "TS16-TABS2=2", "TS17-TABAFTERSHRINK=1",
+    "TS18-CAP0=常规", "TS19-CAP0B=改过", "TS20-VIS1=-1", "TS21-VIS1B=0",
+    "TS22-P0LEFT=240", "TS23-P1LEFT=240", "TS24-P2LEFT=240",
+    "TS31-TIP0=tip0", "TS32-TIP2=tip2", "TS33-TIP1=",
+    "TS25-TABVIS=True", "TS26-AT0-P0VIS=True P1VIS=False P2VIS=False",
+    "TS27-AT1-P0VIS=False P1VIS=True P2VIS=False", "TS28-AT2-P0VIS=False P1VIS=False P2VIS=True",
+    "TS29-SETTAB2=2", "TS29B-SETTAB0=0", "TS34=True/Boolean/11",
+    "TS35-ARM-TAB=1/0", "TS36-ARM-FRAME=0/1",
+    "CTRLSSTAB-DONE", "CTRLSSTAB-VISDONE", "CTRLSSTAB-CLICKDONE"
+)
+$script:GuiCases = @(
+    @{ Name = "VbQRCodegen";      Vbp = "$Tests\VbQRCodegen-master\test\Project1.vbp"; Mode = "close";
+       WindowTitle = "Form1"; MinWindowMs = 1000 },
+    @{ Name = "BalloonTooltips";  Vbp = "$Tests\BalloonTooltips\prjBalloonTooltips.vbp"; ExeName = "BalloonTooltips";
+       Mode = "close"; WindowTitle = "Balloon Tooltips"; MinWindowMs = 1000; ShardGroup = "balloon" },
+    @{ Name = "Charts2020";       Vbp = "$Tests\Charts 2020\Proyecto1.vbp"; Arch = "x86"; Mode = "auto";
+       AutoExitSec = 3; MinWindowMs = 1000; WindowTitle = "Form2"; DumpMinColors = 40 },
+    @{ Name = "czUI";             Vbp = "$Tests\czUI-main\czFormDemo.vbp"; Arch = "x86"; Mode = "auto";
+       AutoExitSec = 3; MinWindowMs = 1000; WindowTitle = "czForm Demo" },
+    @{ Name = "FlexGridX86";      Vbp = "$Tests\VBFlexGridDemo\VBFlexGridDemo.vbp"; Arch = "x86"; Mode = "auto";
+       AutoExitSec = 3; MinWindowMs = 1000; WindowTitle = "VBFlexGrid Demo" },
+    # NewTab 是无边框窗体: 主窗口标题实测为空 (Caption 不进顶层窗), 因此检查点改用
+    # 「主窗口真的有子窗」—— 控件建不出来时 GW_CHILD 恒为 0。
+    @{ Name = "NewTab";           Vbp = "$Tests\NewTab-test\Test.vbp"; Arch = "x86"; Mode = "auto";
+       AutoExitSec = 3; MinWindowMs = 1000; MinChildWindows = 1;
+       RequiresFiles = @("NewTab01.ocx") },
+    @{ Name = "ExtShow";          Vbp = "$Tests\ext_show_test\test_ext_show.vbp"; Mode = "auto";
+       AutoExitSec = 3; MinWindowMs = 1000; WindowTitle = "ExtShow" },
+    # 自退用例: 窗口一出现就装上 100ms 的 tmrCheck (TS25..TS36 全在那一拍里), 所以存活门槛
+    # 取 100ms —— 它同时被 39 条检查点独立兜住 (早退就印不出 TS36/CTRLSSTAB-DONE)。
+    @{ Name = "ctrlsstab";        Vbp = "$Tests\ctrlsstab\CtrlSSTab.vbp"; Mode = "self";
+       MinWindowMs = 100; WindowTitle = "CtrlSSTab"; Needles = $guiTsNeedles }
+)
+
+function Test-GuiVbpCase {
+    param([hashtable]$Case)
+    $name = [string]$Case.Name
+    $group = ""
+    if ($Case.ContainsKey("ShardGroup")) { $group = [string]$Case.ShardGroup }
+    # vbp 分片: 本片不跑这例 —— 闸门必须在任何副作用之前 (建目录/起进程)。
+    if (-not (Enter-VbpShard -Group $group)) { return }
+    $script:total++
+    Write-Host -NoNewline "  [GUI] $name ... "
+
+    $guiOut = Join-Path $OutDir $name
+    New-Item -ItemType Directory -Path $guiOut -Force | Out-Null
+    $vbp = [string]$Case.Vbp
+    $arch = ""
+    if ($Case.ContainsKey("Arch")) { $arch = [string]$Case.Arch }
+    $exeName = ""
+    if ($Case.ContainsKey("ExeName")) { $exeName = [string]$Case.ExeName }
+
+    if ($arch) {
+        $compileResult = & $C3 $vbp --arch $arch --output-dir $guiOut @IncArg 2>&1
+    } else {
+        $compileResult = & $C3 $vbp --output-dir $guiOut @IncArg 2>&1
+    }
+    $rc = $LASTEXITCODE
+    $compileLog = Join-Path $guiOut "compile.log"
+    try {
+        $ctext = (@($compileResult | ForEach-Object { [string]$_ }) -join "`r`n")
+        [System.IO.File]::WriteAllText($compileLog, $ctext, (New-Object System.Text.UTF8Encoding($true)))
+    } catch { }
+    if ($rc -ne 0) {
         $script:fail++
+        Write-GuiResult -Dir $guiOut -Name $name -Status "FAIL" -Data @{ exitCode = $rc; detail = "compile rc=$rc"; compileLog = $compileLog }
         Write-Host "FAIL (compile)" -ForegroundColor Red
-        if ($Verbose) { Write-Host ($compileResult | Out-String) }
+        if ($Verbose) { Write-Host ([string]$compileResult | Out-String) }
         return
     }
+
     # 自动把工程目录下的原生依赖 (OCX/DLL/TLB) 复制到 exe 所在目录 (与产物同目录),
-    # 以支持免注册便携部署: 如第三方 OCX 控件无需本机注册即可 LoadLibrary 加载
-    $srcDir = Split-Path $VbpFile -Parent
-    if (Test-Path $srcDir) {
+    # 以支持免注册便携部署: 第三方 OCX 控件无需本机注册即可 LoadLibrary 加载
+    $srcDir = Split-Path $vbp -Parent
+    if (Test-Path -LiteralPath $srcDir) {
         Get-ChildItem $srcDir -File | Where-Object { $_.Extension -match '\.(ocx|dll|tlb)$' } | ForEach-Object {
             Copy-Item -Force $_.FullName $guiOut | Out-Null
         }
     }
+
+    # 免注册预检: 组件文件缺失 / 位数不符 -> SKIP 并写明缺什么 (不跑、不算 PASS)
+    $requires = @()
+    if ($Case.ContainsKey("RequiresFiles")) { $requires = @($Case.RequiresFiles) }
+    $missingReq = @()
+    foreach ($rf in $requires) {
+        $p = Join-Path $srcDir ([string]$rf)
+        if (-not (Test-Path -LiteralPath $p)) { $missingReq += ([string]$rf + " (文件缺失)"); continue }
+        $expect = ""
+        if ($arch -eq "x86") { $expect = "0x014C" } elseif ($arch -eq "x64") { $expect = "0x8664" }
+        $m = Get-PeMachine $p
+        if ($expect -and $m -and $m -ne $expect) { $missingReq += ([string]$rf + " (位数不匹配: " + $m + " != " + $expect + ")") }
+    }
+    if ($missingReq.Count -gt 0) {
+        $reason = "组件不可用: " + ($missingReq -join " / ")
+        $script:skip++
+        Write-GuiResult -Dir $guiOut -Name $name -Status "SKIP" -Data @{ detail = $reason; requiresFiles = ($requires -join ","); arch = $arch }
+        Write-Host ("SKIP (" + $reason + ")") -ForegroundColor Yellow
+        return
+    }
+
     # 账 #166: 名字走单一权威 `Resolve-VbpExeBase`（读 .vbp 的 ExeName32），不再各算各的。
-    $exeBase = Resolve-VbpExeBase -VbpFile $VbpFile -ExeName $ExeName
+    $exeBase = Resolve-VbpExeBase -VbpFile $vbp -ExeName $exeName
     $exe = Join-Path $guiOut ($exeBase + ".exe")
-    # 晚绑定护栏 (账 #305 第二百六十二刀 丙) 要读 stderr —— GUI 这一支以前**不重定向**
-    # stderr, 护栏就成了空判据。Start-Process 用了重定向以后 PS 5.1 读不到 ExitCode
-    # (已知坑: 不摸一次 Handle 就只有一个空串) ⇒ 摸一把 Handle 把它留住。
-    $guiErr = Join-Path $guiOut "$Name.err"
+    if (-not (Test-Path -LiteralPath $exe)) {
+        $script:fail++
+        Write-GuiResult -Dir $guiOut -Name $name -Status "FAIL" -Data @{ detail = "no exe: $exe"; compileLog = $compileLog }
+        Write-Host "FAIL (no exe: $exe)" -ForegroundColor Red
+        return
+    }
+    if ($arch -eq "x86" -and (Get-PeMachine $exe) -ne "0x014C") {
+        $msg = "产物位数不是 x86: " + (Get-PeMachine $exe)
+        $script:fail++
+        Write-GuiResult -Dir $guiOut -Name $name -Status "FAIL" -Data @{ detail = $msg }
+        Write-Host ("FAIL (" + $msg + ")") -ForegroundColor Red
+        return
+    }
+
+    $windowWaitMs = 10000
+    if ($Case.ContainsKey("WindowWaitMs")) { $windowWaitMs = [int]$Case.WindowWaitMs }
+    $minWindowMs = 1000
+    if ($Case.ContainsKey("MinWindowMs")) { $minWindowMs = [int]$Case.MinWindowMs }
+    $minChildWindows = 0
+    if ($Case.ContainsKey("MinChildWindows")) { $minChildWindows = [int]$Case.MinChildWindows }
+    $mode = "close"
+    if ($Case.ContainsKey("Mode")) { $mode = [string]$Case.Mode }
+    $autoExitSec = 0
+    if ($Case.ContainsKey("AutoExitSec")) { $autoExitSec = [int]$Case.AutoExitSec }
+    $titleWant = ""
+    if ($Case.ContainsKey("WindowTitle")) { $titleWant = [string]$Case.WindowTitle }
+    $needles = @()
+    if ($Case.ContainsKey("Needles")) { $needles = @($Case.Needles) }
+    if (-not $titleWant -and $needles.Count -eq 0 -and $minChildWindows -le 0) {
+        $script:fail++
+        Write-GuiResult -Dir $guiOut -Name $name -Status "FAIL" -Data @{ detail = "用例没有检查点来源 (Needles/WindowTitle/MinChildWindows 都空)" }
+        Write-Host "FAIL (no checkpoint source)" -ForegroundColor Red
+        return
+    }
+    $dumpDir = ""
+    if ($Case.ContainsKey("DumpMinColors") -and [int]$Case.DumpMinColors -gt 0) {
+        $dumpDir = Join-Path $guiOut "ucdump"
+        New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
+        $env:C3_UC_DUMPDIR = $dumpDir
+    }
+
+    $guiErr = Join-Path $guiOut ($name + ".err")
+    $guiOutFile = Join-Path $guiOut ($name + ".out")
     $proc = $null
+    $seen = $false
+    $winMs = 0
+    $winTitle = ""
+    $killed = $false
+    $exitCode = $null
+    $aliveMs = 0
+    $issues = @()
+    $miss = @()
+    $hit = 0
+    $cpText = "0/0"
+    $childCount = 0
     try {
-        # 账 #175: 子进程继承本进程环境 ⇒ 用前先设、finally 里清, 不漏给后面的用例
-        $dumpDir = ""
-        if ($DumpMinColors -gt 0) {
-            $dumpDir = Join-Path $guiOut "ucdump"
-            New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
-            $env:C3_UC_DUMPDIR = $dumpDir
-        }
-        $proc = Start-Process -FilePath $exe -WorkingDirectory $guiOut -PassThru -RedirectStandardError $guiErr -ErrorAction Stop
-        $null = $proc.Handle
-        $watch = [Diagnostics.Stopwatch]::StartNew()
-        $windowSeen = $false
-        while ($watch.ElapsedMilliseconds -lt 5000) {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $exe
+        $psi.WorkingDirectory = $guiOut
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        # C3 的 Debug.Print / RTL 按 ANSI 写 stdout (实测 TS18 的原始字节是 B3 A3 B9 E6 = GBK "常规"),
+        # 而 ProcessStartInfo 不指定编码时跟**控制台**代码页走 —— 终端若是 UTF-8 (65001),
+        # 中文检查点就会被解成非法字节而恒不命中。显式钉 936 让本地与 CI (默认 1252) 一致。
+        $psi.StandardOutputEncoding = [System.Text.Encoding]::GetEncoding(936)
+        $psi.StandardErrorEncoding = [System.Text.Encoding]::GetEncoding(936)
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $so = $proc.StandardOutput.ReadToEndAsync()
+        $se = $proc.StandardError.ReadToEndAsync()
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+
+        # ① 等主窗口出现
+        while ($sw.ElapsedMilliseconds -lt $windowWaitMs) {
             $proc.Refresh()
             if ($proc.HasExited) { break }
-            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) { $windowSeen = $true; break }
-            Start-Sleep -Milliseconds 100
-        }
-        if (-not $windowSeen) { throw "Main window not available within 5s" }
-        # 三条 PASS 文案收成变量, 判定 (含晚绑定护栏) 收成**一处** —— 以前每条 PASS
-        # 各自 pass++ 各自打印, 护栏要塞进来就得在三处各抄一遍。
-        $passMsg = ''
-        if ($AutoExitSec -gt 0) {
-            # GUI demo with no clean-exit contract: window shown is enough;
-            # auto-kill after the timeout so the suite never hangs.
-            # Fix 189: 但"它自己先退了"不是我们让它退的。旧代码在这里无条件
-            # pass++ 且不读退出码, 于是运行期崩溃 (实测窗口出现后 18s 的
-            # 0xC0000005) 也算 PASS —— 只有超时兜底那条路径才该免检。
-            $watch = [Diagnostics.Stopwatch]::StartNew()
-            while ($watch.ElapsedMilliseconds -lt $AutoExitSec * 1000) {
-                $proc.Refresh()
-                if ($proc.HasExited) { break }
-                Start-Sleep -Milliseconds 100
+            if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+                $seen = $true
+                $winMs = $sw.ElapsedMilliseconds
+                try { $winTitle = [string]$proc.MainWindowTitle } catch { }
+                try { $childCount = Get-ChildWindowCount $proc.MainWindowHandle } catch { }
+                break
             }
-            $proc.Refresh()
-            if ($proc.HasExited) {
-                $selfSec = [int]($watch.ElapsedMilliseconds / 1000)
-                $code = $proc.ExitCode
-                if ($code -ne 0) {
-                    throw ("exited on its own at ~{0}s with code 0x{1:X8}" -f $selfSec, $code)
+            Start-Sleep -Milliseconds 50
+        }
+        if (-not $seen -and -not $proc.HasExited) {
+            try { $proc.Kill() } catch { }
+            $killed = $true
+            $proc.WaitForExit(5000) | Out-Null
+        }
+
+        if ($seen) {
+            if ($mode -eq "self") {
+                while (-not $proc.HasExited -and $sw.ElapsedMilliseconds -lt ($RunTimeoutSec * 1000)) {
+                    Start-Sleep -Milliseconds 50
+                    $proc.Refresh()
                 }
-                $passMsg = "PASS (compile, window, self-exit at ~${selfSec}s, code 0)"
+                if (-not $proc.HasExited) {
+                    try { $proc.Kill() } catch { }
+                    $killed = $true
+                    $proc.WaitForExit(5000) | Out-Null
+                }
+            } elseif ($mode -eq "auto") {
+                $until = [Math]::Max(($autoExitSec * 1000), ($winMs + $minWindowMs))
+                while (-not $proc.HasExited -and $sw.ElapsedMilliseconds -lt $until) {
+                    Start-Sleep -Milliseconds 50
+                    $proc.Refresh()
+                }
+                # 收尾: 先请求关闭 (能拿到 0 退出码), 关不掉才 Kill
+                if (-not $proc.HasExited) {
+                    $proc.Refresh()
+                    try { $childCount = [Math]::Max($childCount, (Get-ChildWindowCount $proc.MainWindowHandle)) } catch { }
+                    try { [void]$proc.CloseMainWindow() } catch { }
+                }
+                $closeSw = [Diagnostics.Stopwatch]::StartNew()
+                while (-not $proc.HasExited -and $closeSw.ElapsedMilliseconds -lt 3000) {
+                    Start-Sleep -Milliseconds 50
+                    $proc.Refresh()
+                }
+                if (-not $proc.HasExited) {
+                    try { $proc.Kill() } catch { }
+                    $killed = $true
+                    $proc.WaitForExit(5000) | Out-Null
+                }
             } else {
-                $proc.Kill(); $proc.WaitForExit(5000) | Out-Null
-                if ($DumpMinColors -gt 0) { Assert-UcDumpPainted -Dir $dumpDir -MinColors $DumpMinColors }
-                $passMsg = "PASS (compile, window, auto-exit after ${AutoExitSec}s)"
+                # close: 先证窗口活了 MinWindowMs, 再走正常关闭
+                while (-not $proc.HasExited -and (($sw.ElapsedMilliseconds - $winMs) -lt $minWindowMs)) {
+                    Start-Sleep -Milliseconds 50
+                    $proc.Refresh()
+                }
+                if (-not $proc.HasExited) {
+                    $proc.Refresh()
+                    try { $childCount = [Math]::Max($childCount, (Get-ChildWindowCount $proc.MainWindowHandle)) } catch { }
+                    if (-not $proc.CloseMainWindow()) { $issues += "Main window refused close" }
+                }
+                $closeSw = [Diagnostics.Stopwatch]::StartNew()
+                while (-not $proc.HasExited -and $closeSw.ElapsedMilliseconds -lt 5000) {
+                    Start-Sleep -Milliseconds 50
+                    $proc.Refresh()
+                }
+                if (-not $proc.HasExited) {
+                    try { $proc.Kill() } catch { }
+                    $killed = $true
+                    $proc.WaitForExit(5000) | Out-Null
+                }
+            }
+        }
+
+        # 进程退出后 pipes 才关闭, 这时读得到完整输出
+        $out = ""
+        $err = ""
+        try { if ($so.Wait(3000)) { $out = [string]$so.Result } } catch { }
+        try { if ($se.Wait(3000)) { $err = [string]$se.Result } } catch { }
+        try { [System.IO.File]::WriteAllText($guiOutFile, $out, (New-Object System.Text.UTF8Encoding($false))) } catch { }
+        try { [System.IO.File]::WriteAllText($guiErr, $err, (New-Object System.Text.UTF8Encoding($false))) } catch { }
+        $proc.Refresh()
+        if ($proc.HasExited) { try { $exitCode = $proc.ExitCode } catch { } }
+        if ($seen) { $aliveMs = $sw.ElapsedMilliseconds - $winMs }
+
+        # ② 检查点
+        $allText = $out + "`r`n" + $err
+        foreach ($n in $needles) {
+            if ($allText.IndexOf([string]$n, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $hit++ } else { $miss += [string]$n }
+        }
+        $titleHit = $false
+        if ($titleWant -and $seen) {
+            if ($winTitle.IndexOf($titleWant, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $titleHit = $true }
+        }
+        $cpTotal = $needles.Count
+        if ($titleWant) { $cpTotal++ }
+        if ($minChildWindows -gt 0) { $cpTotal++ }
+        $cpHit = $hit
+        if ($titleHit) { $cpHit++ }
+        if ($minChildWindows -gt 0) {
+            if ($seen -and $childCount -ge $minChildWindows) {
+                $cpHit++
+            } else {
+                $issues += ("子窗口数 " + $childCount + " < MinChildWindows=" + $minChildWindows + " (控件未建出)")
+            }
+        }
+        $cpText = "$cpHit/$cpTotal"
+        if ($miss.Count -gt 0) { $issues += ("检查点缺失 " + $miss.Count + "/" + $needles.Count + ": " + ($miss -join ", ")) }
+        if ($titleWant -and $seen -and -not $titleHit) { $issues += ("窗口标题 '" + $winTitle + "' 不含 '" + $titleWant + "'") }
+
+        # ① 窗口存活
+        if (-not $seen) {
+            $tail = (@((([string]$err) -split "`r?`n") | Where-Object { $_ }) | Select-Object -Last 6) -join " | "
+            $loadPat = 'DllGetClassObject|LoadLibrary|C3_COM|C3_HOST_MEMBER|class not registered|0x80040154|0xC0000135|0xC0000142|SideBySide|SxS|manifest'
+            if ($err -match $loadPat) {
+                $script:skip++
+                Write-GuiResult -Dir $guiOut -Name $name -Status "SKIP" -Data @{
+                    detail = "组件加载失败: $tail"; exitCode = $exitCode; killed = $killed
+                    requiresFiles = ($requires -join ","); arch = $arch
+                }
+                Write-Host ("SKIP (组件加载失败: " + $tail + ")") -ForegroundColor Yellow
+                return
+            }
+            if ($exitCode -ne $null -and -not $killed) {
+                $issues += ("窗口未出现就退出 (exit=$exitCode): " + $tail)
+            } else {
+                $issues += ("窗口在 ${windowWaitMs}ms 内未出现 (超时后已 Kill)")
+            }
+        } elseif ($aliveMs -lt $minWindowMs) {
+            $issues += ("窗口存活 ${aliveMs}ms < MinWindowMs=${minWindowMs}ms")
+        }
+
+        # 账 #175: 每控件的绘制缓冲真画了东西 (>=MinColors)
+        if ($dumpDir -and $seen) {
+            try { Assert-UcDumpPainted -Dir $dumpDir -MinColors ([int]$Case.DumpMinColors) }
+            catch { $issues += $_.Exception.Message }
+        }
+
+        # 晚绑定护栏 (账 #305 第二百六十二刀 丙): 跑完数一遍 stderr 里的漏, 期望 0
+        $lbDetail = Get-LateBindMissDetail -Name $exeBase -StderrFile $guiErr
+        if ($lbDetail) { $issues += $lbDetail }
+
+        # ③ 退出码: 只有"关不掉被 Kill"这一档拿不到
+        if (-not $killed -and $exitCode -ne 0 -and $exitCode -ne $null) {
+            $issues += ("退出码 $exitCode (期望 0)")
+        }
+
+        $data = @{
+            mode = $mode; arch = $arch; exitCode = $exitCode; killed = $killed
+            windowSeen = $seen; windowTitle = $winTitle; windowMs = $winMs; aliveMs = $aliveMs
+            childWindows = $childCount; checkpoints = $cpText; missing = ($miss -join ", "); requiresFiles = ($requires -join ",")
+            compileLog = $compileLog; mtExe = $script:GuiMtExe
+        }
+        if ($issues.Count -gt 0) {
+            $data.detail = ($issues -join "; ")
+            $script:fail++
+            Write-GuiResult -Dir $guiOut -Name $name -Status "FAIL" -Data $data
+            Write-Host ("FAIL (" + ($issues -join "; ") + ")") -ForegroundColor Red
+            if ($Verbose) {
+                Write-Host ("    compile.log=" + $compileLog) -ForegroundColor DarkGray
+                Write-Host ("    out/err=" + $guiOutFile + " | " + $guiErr) -ForegroundColor DarkGray
             }
         } else {
-            if (-not $proc.CloseMainWindow()) { throw "Main window refused close" }
-            if (-not $proc.WaitForExit(2000)) { throw "Application did not exit after close" }
-            $proc.Refresh()
-            if ($proc.ExitCode -ne 0) { throw "Exit code $($proc.ExitCode)" }
-            $passMsg = "PASS (compile, window, clean exit)"
+            $codeText = if ($killed) { "killed after ${autoExitSec}s" } else { "code=0" }
+            $childText = if ($minChildWindows -gt 0) { " children=$childCount" } else { "" }
+            Write-GuiResult -Dir $guiOut -Name $name -Status "PASS" -Data $data
+            $script:pass++
+            Write-Host ("PASS (window=${winMs}ms alive>=${minWindowMs}ms checkpoints=$cpText$childText $codeText)") -ForegroundColor Green
         }
-        # 晚绑定护栏 (账 #305 第二百六十二刀 丙): 跑完数一遍 stderr 里的漏。
-        # 期望 0 (负控那枚在表里写死条数) —— 漏了必须响亮, 不许静默过去。
-        $lbDetail = Get-LateBindMissDetail -Name $exeBase -StderrFile $guiErr
-        if ($lbDetail) { throw $lbDetail }
-        Write-Host $passMsg -ForegroundColor Green
-        $script:pass++
     } catch {
         $script:fail++
-        Write-Host "FAIL ($($_.Exception.Message))" -ForegroundColor Red
+        try { Write-GuiResult -Dir $guiOut -Name $name -Status "FAIL" -Data @{ detail = $_.Exception.Message; mode = $mode; arch = $arch } } catch { }
+        Write-Host ("FAIL (" + $_.Exception.Message + ")") -ForegroundColor Red
+        if ($Verbose) { Write-Host ($_.ScriptStackTrace) -ForegroundColor DarkGray }
     } finally {
-        if ($DumpMinColors -gt 0) { Remove-Item Env:\C3_UC_DUMPDIR -ErrorAction SilentlyContinue }
-        if ($proc -and -not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit() }
+        if ($dumpDir) { Remove-Item Env:\C3_UC_DUMPDIR -ErrorAction SilentlyContinue }
+        if ($proc -and -not $proc.HasExited) { try { $proc.Kill(); $proc.WaitForExit(5000) | Out-Null } catch { } }
     }
+}
+
+function Invoke-GuiVbpTable {
+    $script:GuiMtExe = Get-MtExe
+    if ($script:GuiMtExe) {
+        Write-Host ("  regfree: mt.exe=" + $script:GuiMtExe + " (本轮不注入 SxS manifest)") -ForegroundColor DarkGray
+    } else {
+        Write-Host "  regfree: mt.exe 未找到 -> 用 C3 直加载 (LoadLibrary+DllGetClassObject), 不注入 manifest" -ForegroundColor DarkGray
+    }
+    foreach ($c in $script:GuiCases) { Test-GuiVbpCase -Case $c }
 }
 
 # 账 #175: 读 C3_UC_DUMPDIR 落下的每控件绘制缓冲, 数**不同颜色**个数。
@@ -2663,8 +3019,12 @@ function Test-Vbp {
         [string]$Arch = "",           # 可选架构参数 (x86/x64)
         [string]$RequiresCom = "",    # 依赖的 COM ProgId (未注册则 SKIP, 否则 FAIL)
         [string]$Env = "",            # 可选环境变量, "K1=V1;K2=V2" (跑 exe 前设, 跑完还原)
-        [string]$ShardGroup = ""      # vbp 分片组名 (见 Enter-VbpShard): 与别的用例靠 $OutDir 里的
+        [int]$MaxHostMiss = -1,       # >=0 时: stderr 里 C3_HOST_MEMBER_MISS 的条数上限
+                                      # (-1 = 不检查, 保持所有既有用例的行为逐字不变)
+        [string]$ShardGroup = "",    # vbp 分片组名 (见 Enter-VbpShard): 与别的用例靠 $OutDir 里的
                                       # 文件接续时, 同组用例必须落同一片, 否则后一条报 "no exe"
+        [int]$ExpectExitCode = -1     # >=0 时: 进程退出码必须等于该值 (0 = 断言"没崩"),
+                                      # -1 = 不检查, 保持所有既有用例的行为逐字不变
     )
     # vbp 分片: 本片不跑这例 —— 闸门必须在任何副作用之前 (建目录/起进程)。
     if (-not (Enter-VbpShard -Group $ShardGroup)) { return }
@@ -2743,6 +3103,40 @@ function Test-Vbp {
         return
     }
     $runOutput = $run.Output
+
+    # 退出码断言: 只在显式给了 -ExpectExitCode 的用例生效 (-1 = 不查, 存量用例逐字不变)。
+    # 判据必须是退出码, 不能拿"输出里还有后续行"替代 —— 崩在最后一行之后时输出仍齐全。
+    if ($ExpectExitCode -ge 0 -and $run.ExitCode -ne $ExpectExitCode) {
+        $script:fail++
+        Write-Host ("FAIL (exit code $($run.ExitCode) != $ExpectExitCode)") -ForegroundColor Red
+        return
+    }
+
+    # 账 #305 第三百五十一刀: 宿主属性面的**响度**判据。stdout 的 needle 只说"值读得回",
+    # 说不出一件事: 那些"以前不认识所以报 miss、现在认得了"的名字是不是真的不报了。
+    # 所以这里数 stderr 的 C3_HOST_MEMBER_MISS (与 C3_LATEBIND_MISS 同族, 也在 stderr)。
+    # 只对显式给了 -MaxHostMiss 的用例生效 (-1 = 不查), 既有 300 多条用例逐字不变。
+    if ($MaxHostMiss -ge 0) {
+        # 与 Invoke-TestExe 的落盘口径一致: -LogName = 用例名, 目录 = $OutDir。
+        $hmFile = Join-Path $OutDir ($Name + ".err")
+        $hmCount = 0
+        if (Test-Path $hmFile) {
+            foreach ($l in @(Get-Content $hmFile -ErrorAction SilentlyContinue)) {
+                if ([string]$l -match '\[C3_HOST_MEMBER_MISS #') { $hmCount++ }
+            }
+        }
+        if ($hmCount -gt $MaxHostMiss) {
+            $script:fail++
+            Write-Host ("FAIL (host-miss $hmCount > $MaxHostMiss)") -ForegroundColor Red
+            if ($Verbose) {
+                $hmNames = @(Get-Content $hmFile -ErrorAction SilentlyContinue |
+                             Where-Object { $_ -match '\[C3_HOST_MEMBER_MISS #' } |
+                             ForEach-Object { if ($_ -match 'name="([^"]*)"') { $Matches[1] } })
+                Write-Host ("  host-miss names: " + ($hmNames -join ", ")) -ForegroundColor DarkGray
+            }
+            return
+        }
+    }
 
     # 编译失败提示
     if ($ExpectedOutputs -and $ExpectedOutputs.Count -gt 0) {
@@ -5491,6 +5885,13 @@ function Test-VbpDll {
     Write-Host "PASS" -ForegroundColor Green
 }
 
+# M2: GUI 表的独立入口 (-Category gui)。CI 仍按 vbp 分片覆盖 (那段会调用同一个
+# Invoke-GuiVbpTable)，这里只是给本地一个"只跑 GUI 表"的快捷方式, 不另起测试体系。
+if ($Category -eq "gui") {
+    Write-Host "--- GUI VBP Tests (M2) ---" -ForegroundColor Yellow
+    Invoke-GuiVbpTable
+}
+
 if ($Category -in @("all", "run", "vbp")) {
     # --- VBP 工程测试 (P5) --- (串行)
     Write-Host "--- VBP Project Tests (P5) ---" -ForegroundColor Yellow
@@ -5875,6 +6276,15 @@ if ($Category -in @("all", "run", "vbp")) {
     $tvNeedles += @("TV38=True/False/Boolean")
     Test-Vbp "ctrltreeview" "$Tests\ctrltreeview\TvfApp.vbp" $tvNeedles
     Test-Vbp "ctrltreeview_x86" "$Tests\ctrltreeview\TvfApp.vbp" $tvNeedles -Arch "x86"
+    # 账 #305 第三百五十一刀 (M3 首批 OCX 宿主属性): 晚绑定宿主通道的属性/方法面。
+    # 靶子 = 宿主模型 SetProp/Call 那三份 .inc (uc_hostmodel_{getprop,setprop,call}.inc),
+    # 夹具对每条属性都问**两个证人**: 晚绑定读回 (o.X) 与原生窗口读数
+    # (GetWindowLongW 的样式位 / EM_GETMARGINS / GetWindowTextW) —— 两条一致才算过。
+    # -MaxHostMiss 0 钉的是"认得之后不再报 C3_HOST_MEMBER_MISS"; 同值重写那条
+    # (HM6) 以前只在样式位没变时掉进 reportUnknown ⇒ stdout 看不出来, 必须数 stderr。
+    $hmNeedles = @("HM-LOAD-DONE", "HM-DONE") + (1..21 | ForEach-Object { "HM$_=Y" })
+    Test-Vbp "ctlhostm3" "$Tests\ctlhostm3\HmApp.vbp" $hmNeedles -MaxHostMiss 0
+    Test-Vbp "ctlhostm3_x86" "$Tests\ctlhostm3\HmApp.vbp" $hmNeedles -Arch "x86" -MaxHostMiss 0
     # 发码面两面都钉：设计期 Init 逐参数钉（含 -999 那条哨兵：VB6 的 True 就是 -1，
     # 用 -1 当"未写"等于设计期永远勾不上复选框），创建样式位钉 TVS_HASLINES|WS_BORDER，
     # 反面断这枚控件的属性不许再走 COM 兜底、工程里不许再出现 CoCreateInstance。
@@ -7353,28 +7763,12 @@ if ($Category -in @("all", "run", "vbp")) {
     )
 
     # --- P20-42: SSTab (SysTabControl32 复刻) ---
-    # 期望串取自夹具真实输出 (别缩写标签)。TS25..TS28 是切页显隐: vb6_GetControlVisible
-    # 走 IsWindowVisible 沿父链传播, 所以断言放在 Timer 里 (窗体已显示之后)。
-    # 账 #124 起这几条打 True/False —— `.Visible` 在类型 oracle 里归 Boolean (VB6 口径),
-    # 以前按 Long 打 -1/0。TS20/TS21 (TabVisible) 与 TS25B (Tabs) 不受影响: 它们是 int 属性。
-    # TS30 是 Click(PreviousTab), 由 RTL 在程序化改 Tab 时补发的 TCN_SELCHANGE 触发。
-    Test-Vbp "ctrlsstab" "$Tests\ctrlsstab\CtrlSSTab.vbp" @(
-        "TS1-TABS=3", "TS2-TAB=1", "TS3-ORIENT=0", "TS4-STYLE=0", "TS5-PERROW=3",
-        "TS6-WRAP=False", "TS7-SET0=0", "TS8-SET2=2", "TS9-OOR=2", "TS10-ORIENT=1",
-        "TS11-STYLE=1", "TS12-PERROW=4", "TS13-WRAP=True", "TS14-TABS5=5",
-        "TS15-TABAFTERGROW=2", "TS16-TABS2=2", "TS17-TABAFTERSHRINK=1",
-        "TS18-CAP0=常规", "TS19-CAP0B=改过", "TS20-VIS1=-1", "TS21-VIS1B=0",
-        "TS22-P0LEFT=240", "TS23-P1LEFT=240", "TS24-P2LEFT=240",
-        "TS31-TIP0=tip0", "TS32-TIP2=tip2", "TS33-TIP1=",
-        "TS25-TABVIS=True", "TS26-AT0-P0VIS=True P1VIS=False P2VIS=False",
-        "TS27-AT1-P0VIS=False P1VIS=True P2VIS=False", "TS28-AT2-P0VIS=False P1VIS=False P2VIS=True",
-        "TS29-SETTAB2=2", "TS29B-SETTAB0=0",
-        "TS34=True/Boolean/11",
-        # 账 #167：容器清单收成**一处权威**之前的读数 —— BASE 上两步都是 `0/0`（容器子控件在
-        # 创建侧与派发侧数到不同的 id，BN_SETFOCUS 带的那个号找不到自己的 arm）。两步反向都钉，
-        # 免得「全指到同一枚」那种假绿蒙过去。
-        "TS35-ARM-TAB=1/0", "TS36-ARM-FRAME=0/1",
-        "CTRLSSTAB-DONE", "CTRLSSTAB-VISDONE", "CTRLSSTAB-CLICKDONE")
+    # M2 起 ctrlsstab 已并入 GUI 数据表 ($script:GuiCases 的 "ctrlsstab" 条目):
+    # 用 Mode=self 等它 Timer 自关, 同一串 TS1..TS36 检查点全部来自 stdout, 另外还断言
+    # "窗口真的出现过" + "退出码 0" —— 比原来只做 stdout 针多两条。
+    # TS25..TS28 是切页显隐: vb6_GetControlVisible 走 IsWindowVisible 沿父链传播, 所以断言
+    # 放在 Timer 里 (窗体已显示之后)。TS30 是 Click(PreviousTab), 由 RTL 在程序化改 Tab 时
+    # 补发的 TCN_SELCHANGE 触发。TS35/TS36 是账 #167 容器 arm 的两个反向证人。
 
     # --- P20-43/44: 窗体事件面 + OLE 拖放 (目标侧 Drop + 源侧 OLEDrag) ---
     # **要 -Env**: OLE 的那几条断言靠 C3_OLEDDB_TEST=1 驱动 —— 无头环境没法真拖
@@ -7623,33 +8017,18 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp "M6Test" "$Tests\M6Test.vbp" @("M6A:OK", "M6B:OK", "M6C:OK", "M6D:OK", "M6 PASSED")
     Test-Vbp "modulemethod" "$Tests\test_modulemethod.vbp" @("30", "21")
 
-    # QR code project (tests\VbQRCodegen-master): form loads, sets Image1.Picture via Stretch
-    Test-GuiVbp "VbQRCodegen" "$Tests\VbQRCodegen-master\test\Project1.vbp"
-    # BalloonTooltips: form loads with controls + creates its common-controls tooltip windows (x64).
-    Test-GuiVbp "BalloonTooltips" "$Tests\BalloonTooltips\prjBalloonTooltips.vbp" -ExeName "BalloonTooltips" -ShardGroup "balloon"
+    # --- M2: GUI 用例改为数据驱动表 (表在文件上方 $script:GuiCases) ---
+    # 每条固定三条断言: 窗口存活 >= MinWindowMs / 检查点齐全 / 退出码 0。
+    # 七个历史用例的参数原样搬进表: Charts2020 的绘制缓冲(>=40色)、czUI/FlexGrid/NewTab
+    # 的 x86 位数、NewTab 的 NewTab01.ocx 依赖都在那条目里声明; 新增用例只加一行。
+    Invoke-GuiVbpTable
     # 第328刀: 窗体图标落在**产物的资源目录**里 —— 判据只能真链接之后读 .rsrc。
     Test-FormIconResources
     Test-ProductManifest "balloon_manifest_is_user_supplied" "$OutDir\BalloonTooltips\BalloonTooltips.exe" 1 "dpiAware" -ShardGroup "balloon"
-    # Charts 2020 demo (3rd-party UserControl charts): windowless chart controls (x86 first;
-    # x64 after LongPtr port of API pointers/handles in the .ctl/.cls sources).
-    # 账 #175: 除"起窗口 + 退出码 0"外, 再验每控件的绘制缓冲真画了东西 (>=40 色)
-    Test-GuiVbp "Charts2020" "$Tests\Charts 2020\Proyecto1.vbp" -Arch "x86" -AutoExitSec 3 -DumpMinColors 40
-    # czUI (czForm): 自定义 GDI+ UserControl (.ctl) 无边框窗体 demo, 需 -Arch x86 (32 位)
-    Test-GuiVbp "czUI" "$Tests\czUI-main\czFormDemo.vbp" -Arch "x86" -AutoExitSec 3
-    # 账 #184 / B23: 这份 demo 每枚网格都经 comctl32 的 SetWindowSubclass 装了 SUBCLASSPROC,
-    # 而那个指针以前是 __cdecl 本体地址 ⇒ x86 起窗期堆损坏 (改前本地 3/4 崩、改后 14/14 起窗)。
-    # B23 当时记的是"这份 demo 完全在门禁之外 ⇒ 缺陷藏了很久", 修好之后就按它说的挂上来。
-    Test-GuiVbp "FlexGridX86" "$Tests\VBFlexGridDemo\VBFlexGridDemo.vbp" -Arch "x86" -AutoExitSec 3
-    # NewTab: 第三方 OCX 控件 (NewTab01.ocx, 32 位) 真宿主验证. 免注册便携部署 (OCX 在工程目录, 由 harness 复制到 exe 旁, 不依赖本机注册);
-    # 无边框窗体无关闭按钮/无自动退出逻辑, 用 -AutoExitSec 3 收尾避免阻塞后续测试
-    Test-GuiVbp "NewTab" "$Tests\NewTab-test\Test.vbp" -Arch "x86" -AutoExitSec 3
     # axcontrolsadd: 运行期 Me.Controls.Add 免注册创建第三方 OCX 控件 (NewTabCtl.NewTab), 验证
     # Object= 免注册表在运行时路径被查询 (regfree hit); OCX 在工程目录, 由 harness 复制到 exe 旁,
     # 不依赖本机注册。断言 ADD=OK (实例化+激活不崩)。x86: NewTab01.ocx 是 32 位, 必须与 32 位 exe 同架构。
     Test-Vbp "axcontrolsadd" "$Tests\axcontrolsadd\AxAdd.vbp" @("ADD=OK") -Arch "x86"
-    # ExtShow: 跨模块窗体默认实例"无参" Show (Fix 146 回归靶, 2026-09-20 vbman C2198):
-    # .bas caller 调 Form2.Show, 定义侧签名 (hMDIClient, modal) 后调用侧须补 modal=0
-    Test-GuiVbp "ExtShow" "$Tests\ext_show_test\test_ext_show.vbp" -AutoExitSec 3
     Write-Host ""
 
     Test-Vbp "test_implements" "$Tests\test_implements.vbp" @("IMPL1:OK", "IMPL2:OK", "Implements test PASSED")
@@ -10348,6 +10727,74 @@ if ($Category -in @("all", "run", "vbp")) {
     $b446Expected = @("B446-coll=0", "B446-ping=pong", "B446-DONE")
     Test-Vbp 'b446_latebind_guard' "$Tests\b446_latebind\B446.vbp" $b446Expected
     Test-Vbp 'b446_latebind_guard_x86' "$Tests\b446_latebind\B446.vbp" $b446Expected -Arch "x86"
+
+    # B7 回归: `On <expr> GoTo/GoSub 100, 200` —— 计算跳转的数字标签入口分派。
+    # 前缀一直是 `On <expr> GoTo …` 时仅认 On 后第一枚 token (Error/GoTo/GoSub/local) ⇒ 报
+    # "expected 'Error GoTo'…"，两枚前瞻 (cur_/next_) 看不到表达式后的 GoTo。入口改在读完索引
+    # 表达式后按 cur_ 分派 (parseOnComputedJumpStmt)。断言写死 VB6 语义:
+    #   k=1/2 命中对应标签；k=0 与 k=3 (越界) 落 On 的下一条；GoSub 返回后继续。
+    $b594Expected = @("L100", "L300", "F0", "F3",
+                      "SUB900", "AFTER-SUB1", "SUB1000", "AFTER-SUB2",
+                      "HITS=2", "DONE")
+    Test-Vbp 'b594_ongoto_numeric' "$Tests\b594_ongoto_numeric\B594.vbp" $b594Expected -ExpectExitCode 0
+
+    # B5 回归: 本工程类实例**变量**传进晚绑定 COM 实参 (Dictionary.Add).
+    # 修复前实测 `Dim h As bHello: d.Add "x", h` → 0xC0000005 (裸 vb6_cls_bHello*
+    # 被当作 VT_DISPATCH, 对端 AddRef 读首字段 __comObj 当 vtable).
+    # 断言钉死借用语义: d.Remove 之后 h.Ping 仍可调 —— 若误用 FromInstance
+    # (所有权转移), Remove 就会销毁实例, 这里必崩.
+    $b595Expected = @("ADD-OK", "REMOVED", "PING", "HOST-ALIVE",
+                      "ADD2-OK", "ECHO=echo:ok", "PING", "HOST2-ALIVE", "DONE")
+    Test-Vbp 'b595_b5_classarg' "$Tests\b595_b5_classarg\B595.vbp" $b595Expected -ExpectExitCode 0
+
+    # B11 回归: Print # 的 String 判定改为**表达式类型**优先 (旧判据是发射形状名单).
+    # 修复前实测 b596_out.txt 里 ByRef String 形参写成 -1092513192 (BSTR 指针被
+    # `(int32_t)` 截断); 字面量/拼接/Format$ 当时在名单内, 一并钉住. 数字 12345 是
+    # 反向用例: 必须按数值写盘. 断言走"写盘后逐行读回", 行内容逐字写死.
+    $b596Expected = @("[LIT]", "[AB]", "[CD]", "[EF]", "[1234.50]", "[12345]",
+                      "COUNT=6", "DONE")
+    Test-Vbp 'b596_print_string' "$Tests\b596_print_string\B596.vbp" $b596Expected -ExpectExitCode 0
+
+    # ByRef 工程类形参 (C 侧 `vb6_cls_bHello**`) 作为晚绑定 COM 实参.
+    # 修复前实测 d.Add 处 0xC0000005: OLEAUT32.dll +0x9FF30, 故障读地址 0x8
+    # (裸 `(*obj)` 当 VT_DISPATCH, 对端 AddRef 读首字段 __comObj 当 vtable).
+    # 修复 = 解一层后借用打包; 断言钉死 Remove 后宿主槽仍可 Ping (所有权未转移).
+    $b597Expected = @("S1 before call", "S2 after add", "S3 got object", "PING",
+                      "S4 after remove", "PING", "DONE")
+    Test-Vbp 'b597_byref_class_arg' "$Tests\b597_byref_class_arg\B597.vbp" $b597Expected -ExpectExitCode 0
+
+    # Print # 数值语义 (VB6 实测口径, 参照工程 .temp/m4/vb6num):
+    #   非负一个前导空格、负数由 '-' 占位、尾部恒一个空格; Single 7 位/Double 15 位有效数字;
+    #   定点 [1e-15,1e15) 之外用大写 E 指数; Date 是本地化 CStr + 尾空格 ([0,1) 只有时间);
+    #   Boolean True/False; Empty 空行; Null "Null"; ';' 直接续写, ',' 补到下一 14 列区。
+    # 修复前实测 3.25 → "3"、1E+20 → "-2147483648"、Date → "43832"、True → "-1"。
+    # 方括号包住读回行, 前导/尾随空格一眼可见。
+    $b598Expected = @("[ 123 ]", "[-123 ]", "[ 0 ]", "[ 3.25 ]", "[ 3.1415926535 ]",
+                      "[ 1.2345 ]", "[ 3.25 ]", "[ 1E+20 ]", "[ 1E-20 ]",
+                      "DATE_TIME=OK", "DATE_ONLY=OK", "TIME_ONLY=OK",
+                      "[True]", "[False]", "[]", "[Null]", "[ 1  2 ]",
+                      "[ 1             2 ]", "COUNT=21", "DONE")
+    Test-Vbp 'b598_print_numeric' "$Tests\b598_print_numeric\B598.vbp" $b598Expected -ExpectExitCode 0
+
+    # Write # 是独立的一套语义 (不与 Print # 共用格式化):
+    #   数值去 Str 前导空格、|x|<1 去前导 0 (.25 / -.25); Date 恒 "#YYYY-MM-DD HH:MM:SS#"
+    #   (只有时间时落在 1899-12-30); Boolean #TRUE#/#FALSE#; Null #NULL#; Empty 写空;
+    #   字符串加引号且内部 " 双写; 项间恒逗号 (源码里 ';' 也输出 ','); 语句末一个 CRLF。
+    # 修复前实测 "3", (带引号/逗号, 且没有 CRLF)。
+    $b599Expected = @("[123]", "[-123]", "[3.25]", "[.25]", "[-.25]",
+                      "[.333333333333333]", "[1E+20]", "[#2020-01-02 15:04:05#]",
+                      "[#1899-12-30 15:04:05#]", "[#TRUE#]", "[#NULL#]", "[]",
+                      '["A""B"]', '[1,"x"]', "COUNT=14", "DONE")
+    Test-Vbp 'b599_write_numeric' "$Tests\b599_write_numeric\B599.vbp" $b599Expected -ExpectExitCode 0
+
+    # 第二步 (删 34 名 C 出口名表) 的回归: 曾经靠名字兜底的 builtin 逐个走字符串路径,
+    # 末尾两项是反用例 (数值实参仍走数值路径, 保留 Str 的前导/尾随空格)。
+    $b600Expected = @("[AB]", "[DE]", "[BC]", "[ABC]", "[abc]", "[x]", "[x]", "[x]",
+                      "[A]", "[3.25]", "[123]", "[1234.50]", "[FF]", "[10]", "[aXc]",
+                      "[   ]", "[xxx]", "[cba]", "[yes]", "[B600 Title]", "[ 123 ]", "[ 3.25 ]",
+                      "COUNT=22", "DONE")
+    Test-Vbp 'b600_print_string_dispatch' "$Tests\b600_print_string_dispatch\B600.vbp" $b600Expected -ExpectExitCode 0
+
 
 
     # 账 #305 SB186 第二头: VB 客户那一头　「口径」的唯一读数面　—— 探针是 C 客户, 它只能读 hr;

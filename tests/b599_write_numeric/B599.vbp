@@ -1,0 +1,4 @@
+Type=Exe
+Module=B599Main; B599Main.bas
+Startup="Sub Main"
+ExeName32="B599.exe"
