@@ -1,4 +1,4 @@
-# emit-manifest.expected.txt - 全语料发码形状的期望清单（账 #245 / #267 那一格落成的一句可判红的话）
+﻿# emit-manifest.expected.txt - 全语料发码形状的期望清单（账 #245 / #267 那一格落成的一句可判红的话）
 #
 # 每行 = 一份输入的哈希行：sha256=<归一化全文> ascii256=<纯 ASCII 行> rc=<退出码> bytes=<归一化字节> <relpath>。
 # 由 CI 的 Emit manifest 作业（门 #960、head 5363a956、pe-lnk=14.51）产出，与本机 14.29 那台**逐行相同**：
@@ -596,15 +596,15 @@ sha256=4b7c39ac219b87a758a812a4a25b4a93435c71e018cee994828d06b320a07f1b ascii256
 sha256=3c0293ff9013f135c8579cadc50818df8d46e830063b3c97b649fcce4cd99070 ascii256=d388aea374d7d3e1947360a5a1a675732b7eea16edb387c4e811bbe5e7cf33d3 rc=0 bytes=18566 tests/ctlhostm3/HmApp.vbp
 sha256=06931a1a52d40979cae0ebb12afc12044d0e885dbfa3667a94aafaac1ac01cd2 ascii256=7ed968bdfc57920c58e8472d6addb872f49dae55116a94080f345a397d1b7da8 rc=0 bytes=16844 tests/ctlident/IdApp.vbp
 sha256=52b9cc3198321665820f091cb3cccb2569b49bb1839ed299d3ef8a7c576bae1a ascii256=276a32f4e2310bbd6b9991d788aad436dae19fc3d94f267acd10406ce8a45999 rc=0 bytes=16714 tests/guisample/Definitions.bas
-sha256=a1bdc84cc3c16e8a631e1ae0fc6c6c7946fc941d8a6ea2c6757f52e271a9ebb4 ascii256=d337d2315af917deb5b2eb404cd55aa365815f20e7b01366e3a1bce2ca173550 rc=0 bytes=306067 tests/guisample/GUISample.vbp
+sha256=b3e0bb5740ba5215f1feea5c461082686b3606f6cad563ba2f5addbdcdaa6e77 ascii256=f1a6739214e825ad45e94c016cccc892ce25d0439d5d0e3e9a8b8d335007ea45 rc=0 bytes=277253 tests/guisample/GUISample.vbp
 sha256=8811bf3790beb25c9e0aed59803902613de27c236e453ccd3a61244d5873e928 ascii256=babec7c8f8367f5dcfb9f9929efc18a80fb13bc2a81ed1e5a686df89b8b00af4 rc=0 bytes=1568 tests/guisample/Module.bas
 sha256=2b7a4454bf74c737b147546edf1403c1293f60d5771dc55486854cba48b3672a ascii256=fffb8bd449987eadae3e9e1065254610f114a639cab3f43b45e62c702031136f rc=0 bytes=12530 tests/guisample/mdimax/MaxApp.vbp
 sha256=50f931ef8967e3f7cbb8a604748623f26265564670a00acbd307fb70e82971d1 ascii256=b037dfa4e991b750d37a815c9297abde46bb8fb05ae7ee9bd21f2d351390df42 rc=0 bytes=7426 tests/guisample/err438/E438App.vbp
 sha256=52b9cc3198321665820f091cb3cccb2569b49bb1839ed299d3ef8a7c576bae1a ascii256=276a32f4e2310bbd6b9991d788aad436dae19fc3d94f267acd10406ce8a45999 rc=0 bytes=16714 tests/guisample/vb6ref/src/vc6/Definitions.bas
-sha256=d36ca4a7247f40ae3077d37cd95876c9313921db2fccbb52560eec3a1bddb537 ascii256=a37a2903d789efb55689f00574a0220e5a2e7d5141a727c063d1635eb300915c rc=0 bytes=288642 tests/guisample/vb6ref/src/vc6/GUISample.vbp
+sha256=066663a7812becae361ce5a0bafa9229d1c9992d34fd2f29c513b79d4ab20fe1 ascii256=910c5f9d3262041446e0f46f62290aaa3297837f1d0b2ec043fe2a35e0a3c881 rc=0 bytes=284774 tests/guisample/vb6ref/src/vc6/GUISample.vbp
 sha256=8811bf3790beb25c9e0aed59803902613de27c236e453ccd3a61244d5873e928 ascii256=babec7c8f8367f5dcfb9f9929efc18a80fb13bc2a81ed1e5a686df89b8b00af4 rc=0 bytes=1568 tests/guisample/vb6ref/src/vc6/Module.bas
 sha256=52b9cc3198321665820f091cb3cccb2569b49bb1839ed299d3ef8a7c576bae1a ascii256=276a32f4e2310bbd6b9991d788aad436dae19fc3d94f267acd10406ce8a45999 rc=0 bytes=16714 tests/guisample/vb6ref/src/vs2015/Definitions.bas
-sha256=c427cd6e5f0e5ee73cea8e69de6515d4ad9243312077cb28ab7f2d9696ef6813 ascii256=dc334c6b3a04e63c8bd5a7e986ede16637dc74438f7dfba718fc70a6fb1130a4 rc=0 bytes=287287 tests/guisample/vb6ref/src/vs2015/GUISample.vbp
+sha256=93fb4b11edbe8ed38768f2aab1490534767d2d4f351c84bc235c365aac704806 ascii256=fcd04039655e5a9cd64cb544145d5f61d9c41fa785fd17a99be0830b833ca46a rc=0 bytes=283461 tests/guisample/vb6ref/src/vs2015/GUISample.vbp
 sha256=7a95c3b768523ee298f1094a2feef7c09d10567280ff6a7ec563368a748f8d12 ascii256=fe097b2560e54e147d2409770146dd8d73e013c429dcdb6719d4d3e33c01d811 rc=0 bytes=5830 tests/b594_ongoto_numeric/B594.vbp
 sha256=ed88df82ef93c7281da848f4045c899452d1c438eec248f64a324c1da038fe6b ascii256=fe097b2560e54e147d2409770146dd8d73e013c429dcdb6719d4d3e33c01d811 rc=0 bytes=5755 tests/b594_ongoto_numeric/B594Main.bas
 sha256=8811bf3790beb25c9e0aed59803902613de27c236e453ccd3a61244d5873e928 ascii256=babec7c8f8367f5dcfb9f9929efc18a80fb13bc2a81ed1e5a686df89b8b00af4 rc=0 bytes=1568 tests/guisample/vb6ref/src/vs2015/Module.bas
@@ -951,10 +951,15 @@ sha256=63dbce104f037d8cc35446added0d57214a95050c7d4fd438af477b416dbfb6d ascii256
 #    B5 (3 行) guisample/GUISample.vbp + guisample/vb6ref/src/vc6/GUISample.vbp + .../src/vs2015/GUISample.vbp
 #       —— 按 CI artifact(man416) 登记, 理由: 本机 Debug 构建能解析到 vendor OCX, CI 解析不到, 同一 HEAD 下
 #       exp=282294 / ci=276938 / loc=305752; CI 侧才是判据, 因此这 3 行取 CI 的数。
-#       本机复核会剩这 3 行差异, 属环境差, 不是发码差。
+#       本机复核会剩这 3 行差异, 属**机器侧**差(本机可解析 vendor OCX/typelib, runner 不可), 不是发码差。
 #    复核命令: pwsh scripts/compare_emit_manifest.ps1 -Manifest .temp/manloc/emit-manifest.txt  (应只剩 guisample 3 行)
 # 2026-11-04 手工登记 (P2, 未用 -Bless): 新增夹具 tests/p2_array_variant 两行, 来源 = 本机 .build\C3.exe(P2) 对全语料 --emit-c (rc=0)。
-# 存量 585 行用 P2 改前/改后两台 C3 逐文件重发码比对: 582 行同, 剩余 3 行 = 上面 B5 的 guisample 环境差(本机 loc=305752, 与 CI 276938 不同), 改前改后**逐字节相同** => 与 P2 无关, 按 B5 口径保留 CI 的数, 不重登记。
+# 存量 585 行用 P2 改前/改后两台 C3 逐文件重发码比对: 582 行同, 剩余 3 行 = 上面 B5 的 guisample 机器侧差(本机 loc=305752, 与 CI 276938 不同), 改前改后**逐字节相同** => 与 P2 无关, 按 B5 口径保留 CI 的数, 不重登记。
 # 2026-11-04 registration (P4 crash fix + three semantic gaps, no -Bless): rows rewritten = 27, appended = 2; source = local C3.exe over the whole corpus (--emit-c).
 # 27 rewritten rows explained per file: 13 show up in ascii256 (Set target = vb6_VariantSetCopyChecked / Is Nothing = vb6_VariantIsNothingChecked / For Each tail = vb6_VariantClearWin; all diff lines are pure ASCII);
 # the other 14 differ in sha256 only because the touched line carries a non-ASCII comment (excluded from ascii256). A/B of pre vs post C3 on each input shows the same token substitutions and no structural additions/removals.
+# 2026-11-04 恢复 B5 三行 (未 -Bless, 未全量重登记): P4 那轮"27 行按本机 C3 重写"把 B5 的 3 行一并写成本机值, GA 因此报这 3 行。
+#   现按 B5 口径写回 CI 侧读数: GUISample.vbp b3e0bb57/277253 · vc6 066663a7/284774 · vs2015 93fb4b11/283461 (ascii256 同步: f1a67392 · 910c5f9d · fcd04039)。
+#   本机读数 306067 / 288642 / 287287。差开: 主工程 +24,884 = tests/guisample 下被 gitignore 的 vendor OCX 参与发码 (移走 26 份 .ocx/.lic 后同机复算 = 281,183); 另 ~3,930 三行共有 = 本机可解析 vendor typelib、runner 不可。
+#   判据: 同目录 Definitions.bas(52b9cc31/16714) 与 Module.bas(8811bf37/1568) 两侧逐字节相同 ⇒ 差只落在窗体/控件段, 不是发码主体; CI artifact 的 C3.exe 在本机对同输入复算 = 本机值 ⇒ 与工具链无关。
+#   复核命令: pwsh .build\emit_norm.ps1 -Exe .build\C3.exe -Root . -Inputs <vbp 绝对路径>; 本机应只剩这 3 行与期望不同。
