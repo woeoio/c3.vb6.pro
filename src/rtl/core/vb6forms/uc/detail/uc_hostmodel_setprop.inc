@@ -76,8 +76,8 @@
        ShowLines / LineStyle / LabelEdit / ShowBorder -> GWL_STYLE 真样式位;
        Appearance -> GWL_EXSTYLE 的 WS_EX_CLIENTEDGE (3D 凹边);
        CheckBoxes/HotTracking/HideSelection/Indentation 转 RTL 的既有 setter,
-       不再"收下不响"。Icons 暂缓 —— 需要把 ImageList 对象可靠映射成 HIMAGELIST
-       (OCX 内部状态), 本刀不做假动作, 让它继续落 reportUnknown 保持可见。 */
+       不再"收下不响"。Icons 走 vb6_TreeView_SetIcons: OCX 不交 HIMAGELIST,
+       按命令号 GetImage/Handle 取 HICON 自建图列 (见 vb6forms_treeview.c)。 */
     {
         wchar_t cls350[64] = {0};
         GetClassNameW((HWND)obj, cls350, 63);
@@ -113,6 +113,10 @@
                 vb6_TreeView_SetHideSelection(obj, lv); handled = 1;
             } else if (_wcsicmp(name, L"Indentation") == 0) {
                 vb6_TreeView_SetIndentation(obj, lv); handled = 1;
+            } else if (_wcsicmp(name, L"Icons") == 0) {
+                /* vt 9 = VT_DISPATCH / 13 = VT_UNKNOWN, 两者联合槽都是 pdispVal。 */
+                void* pIcons = (v->vt == 9 || v->vt == 13) ? v->pdispVal : NULL;
+                vb6_TreeView_SetIcons(obj, pIcons); handled = 1;
             }
             if (handled) {
                 /* 同值重写也必须认账: 以前只在样式位有变化时 return 1,

@@ -530,6 +530,10 @@ void    vb6_TreeView_SetIndentation(void* hwnd, int32_t twips);
 // 每个条目的文字都从图宽之后起排, 即使 iImage=-1"，于是这一格等价于"预留图标列"。
 int32_t vb6_TreeView_GetIconSize(void* hwnd);
 void    vb6_TreeView_SetIconSize(void* hwnd, int32_t px);
+// Icons: Codejock IImageManagerIcons (IDispatch)。OCX 不暴露 HIMAGELIST, 本实现按
+// 命令号调 GetImage(Command, Width) 取 IImageManagerIcon.Handle() 的 HICON, 自建图列;
+// Node.Image 本身就是命令号, 由 vb6_TvApplyImage 翻成 iImage。取不到图就不装 (不造假)。
+void    vb6_TreeView_SetIcons(void* hwnd, void* pIcons);
 
 // ===================== Toolbar (ai/029 C29-5a) =====================
 //   VB6 Toolbar 的窗口 + 标量属性 + 设计期按钮，原生 ToolbarWindow32（不加载 OCX）。

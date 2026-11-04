@@ -25,10 +25,14 @@
 #define NOMINMAX
 #include <windows.h>
 #include <commctrl.h>
+#include <stdlib.h>   /* calloc/free: GetImage 两个实参的 VARIANT 壳 */
 #endif
 
 #include "vb6forms.h"
 #include "vb6forms_internal.h"
+#include "vb6com.h"            /* vb6_ComCallObject / vb6_ComCallInt (Icons.GetImage) */
+#include "vb6rtl_variant.h"    /* vb6_VARIANT: vb6rtl_class_com.h 的前置类型 */
+#include "vb6rtl_class_com.h"  /* vb6_ReleaseObject / vb6_ComAddRefDispatch */
 
 #ifdef _WIN32
 
@@ -252,6 +256,15 @@ void vb6_TreeView_Init(void* hwnd, int32_t lineStyle, int32_t indentation,
 #ifndef TVM_INSERTITEMW
 #define TVM_INSERTITEMW   (WM_USER + 50)
 #endif
+#ifndef TVM_SETITEMW
+#define TVM_SETITEMW      (WM_USER + 63)
+#endif
+#ifndef TVIF_IMAGE
+#define TVIF_IMAGE        0x0002
+#endif
+#ifndef TVIF_SELECTEDIMAGE
+#define TVIF_SELECTEDIMAGE 0x0020
+#endif
 #ifndef TVM_DELETEITEM
 #define TVM_DELETEITEM    (WM_USER + 1)
 #endif
@@ -306,6 +319,7 @@ void vb6_TreeView_Init(void* hwnd, int32_t lineStyle, int32_t indentation,
 
 #define VB6_TV_NODE_MAX 256
 #define VB6_TV_MAX      16      /* 一窗体里的 TreeView 枚数 */
+#define VB6_TV_ICONCMD_MAX 256  /* 一条树内不同命令号的条数上限 (不是命令号本身的上限) */
 
 typedef struct {
     HTREEITEM h;
@@ -315,6 +329,7 @@ typedef struct {
     int       bold;
     int       image;       // 图索引 (未关联 ImageList 时只是存着, 不显形)
     int       selImage;
+    int       imgApplied;  // 已把命令号真翻成 iImage 并写进控件 (0 = 待解析)
     int       used;
 } Vb6TvNode;
 
@@ -322,6 +337,18 @@ typedef struct {
     HWND      hwnd;
     int       count;       // 在册条数
     Vb6TvNode n[VB6_TV_NODE_MAX];
+    /* C29-8b Icons: Codejock IImageManagerIcons (Set Icons 收到的 IDispatch, 持一份引用)
+     * → 本树自己的 HIMAGELIST。命令号→图索引缓存 (0 = 尚未解析)。 */
+    void*     icons;
+    HIMAGELIST himl;
+    int       himlOwned;   // 1 = 本表自己建的 (SetIconSize 的空图列是共享的, 不能 Destroy)
+    int       iconPx;
+    /* 命令号是 OCX 命令 ID (实测 501/504/505/506/508…), **不能当下标** ——
+     * 以前按 256 张表索引, 所有 500 段命令都被当场判非法、静默丢图。
+     * 这里改成 (命令号, 图索引) 对表 + 线性查, 规模 = 一条树里实际用到的命令数。 */
+    int       cmdKey[VB6_TV_ICONCMD_MAX];
+    int       cmdIndex[VB6_TV_ICONCMD_MAX];
+    int       cmdCount;
 } Vb6TvTree;
 
 static Vb6TvTree g_tvt[VB6_TV_MAX];
@@ -370,6 +397,227 @@ static int vb6_TvLiveCount(Vb6TvTree* t) {
     int c = 0;
     for (int i = 0; i < VB6_TV_NODE_MAX; i++) if (t->n[i].used) c++;
     return c;
+}
+
+/* ---------------- Icons: IImageManagerIcons → HIMAGELIST ----------------
+ * OCX 类型库 (.build\tlb_image.txt) 里 IImageManagerIcons 只给
+ *   GetImage(Command, Width) -> IImageManagerIcon
+ *   ImageManagerIcon.Handle() -> OLE_HANDLE(HICON)
+ * **没有** 交 HIMAGELIST 的成员, 所以只能按命令号逐枚取 HICON、自己重建图列,
+ * 再靠命令号→图索引缓存把 Node.Image (在 Codejock 里就是命令号) 翻成 iImage。
+ * 取不到就**不装图标**, 不拿空图冒充 (图列里 0 号是空白, 装上等于静默丢图)。 */
+
+/* ImageManagerIcon.Handle 在自动化层返回的是**同一个常量** (实测 8 个命令全等、
+ * FromHandle 得到 0x0 的图标) —— 不是每个图标的 HICON, 这条路不通。
+ * 可靠通路是 IImageManagerIcon.Draw(hDC, x, y, cx, cy, state): 把它画进我们自己
+ * 的 32bpp DIB, 再用 CreateIconIndirect 包成 HICON (alpha 保留), 交给 ImageList。
+ * x86 的 HDC 是 32 位可塞 VT_I4; x64 必须用 VT_I8 才不截断。 */
+static HICON vb6_TvIconFromManager(void* icon, int px) {
+    if (!icon || px <= 0 || px > 256) return NULL;
+    HDC dc = CreateCompatibleDC(NULL);
+    if (!dc) return NULL;
+    BITMAPINFO bi;
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = px;
+    bi.bmiHeader.biHeight = px;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = NULL;
+    HBITMAP hbm = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (!hbm || !bits) { if (hbm) DeleteObject(hbm); DeleteDC(dc); return NULL; }
+    ZeroMemory(bits, (size_t)px * px * 4);
+    HGDIOBJ old = SelectObject(dc, hbm);
+    VARIANT* a[6];
+    int okAlloc = 1;
+    for (int i = 0; i < 6; i++) {
+        a[i] = (VARIANT*)calloc(1, sizeof(VARIANT));
+        if (!a[i]) { okAlloc = 0; break; }
+        VariantInit(a[i]);
+    }
+    if (okAlloc) {
+        /* 参数顺序 hDC, x, y, cx, cy, state (vb6_ComCall 按 VB 顺序给) */
+        a[0]->vt = (VARTYPE)(sizeof(void*) == 8 ? VT_I8 : VT_I4);
+        if (sizeof(void*) == 8) a[0]->llVal = (LONGLONG)(INT_PTR)dc;
+        else a[0]->lVal = (LONG)(INT_PTR)dc;
+        a[1]->vt = VT_I4; a[1]->lVal = 0;
+        a[2]->vt = VT_I4; a[2]->lVal = 0;
+        a[3]->vt = VT_I4; a[3]->lVal = px;
+        a[4]->vt = VT_I4; a[4]->lVal = px;
+        a[5]->vt = VT_I4; a[5]->lVal = 0;   /* xtpImageNormal */
+        vb6_ComCall(icon, L"Draw", a, 6);
+        GdiFlush();
+    } else {
+        for (int i = 0; i < 6; i++) if (a[i]) free(a[i]);
+    }
+    SelectObject(dc, old);
+    DeleteDC(dc);
+    /* 透明通路 (黑底根因): 旧版 mask 是 CreateBitmap(px, px, 1, 1, NULL) —— 位全零
+       等于"整块不透明", ImageList 于是把 DIB 的 (0,0,0) 背景当实色存下来, 树上出现
+       16x16 黑方块。ImageManagerIcon.Draw 是 GDI 图标绘制: 带 alpha 的图会写 alpha,
+       不带 alpha 的透明区停在 ZeroMemory 的 0 —— 统一按 alpha==0 判透明; 全无 alpha
+       时再兜一层"与左下角同色"的键色 (Codejock 这批位图图标是键色透明)。
+       不透明像素 alpha 写满, mask 位清零; 透明像素像素清零, mask 位置 1。 */
+    unsigned char* pb = (unsigned char*)bits;
+    int anyAlpha = 0;
+    for (int i = 0; i < px * px; i++)
+        if (pb[i * 4 + 3] != 0) { anyAlpha = 1; break; }
+    unsigned char keyB = pb[0], keyG = pb[1], keyR = pb[2];
+    int mstride = ((px + 31) / 32) * 4;
+    unsigned char* mb = (unsigned char*)calloc((size_t)mstride * px, 1);
+    if (!mb) { DeleteObject(hbm); return NULL; }
+    int drawn = 0;
+    for (int y = 0; y < px; y++) {
+        for (int x = 0; x < px; x++) {
+            unsigned char* p = pb + (y * px + x) * 4;
+            int transparent = anyAlpha ? (p[3] == 0)
+                                       : (p[0] == keyB && p[1] == keyG && p[2] == keyR);
+            if (transparent) {
+                p[0] = p[1] = p[2] = p[3] = 0;
+                mb[(px - 1 - y) * mstride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
+            } else {
+                p[3] = 255;
+                drawn = 1;
+            }
+        }
+    }
+    if (!drawn) { free(mb); DeleteObject(hbm); return NULL; }
+    HBITMAP hmask = CreateBitmap(px, px, 1, 1, mb);
+    free(mb);
+    ICONINFO ii;
+    ZeroMemory(&ii, sizeof(ii));
+    ii.fIcon = TRUE;
+    ii.hbmMask = hmask;
+    ii.hbmColor = hbm;
+    HICON hicon = CreateIconIndirect(&ii);
+    DeleteObject(hbm);
+    if (hmask) DeleteObject(hmask);
+    return hicon;
+}
+
+static int vb6_TvResolveCmd(Vb6TvTree* t, int cmd) {
+    if (!t || !t->icons || !t->himl || cmd <= 0) return -1;
+    for (int i = 0; i < t->cmdCount; i++)
+        if (t->cmdKey[i] == cmd) return t->cmdIndex[i];
+    VARIANT* a[2] = { NULL, NULL };
+    a[0] = (VARIANT*)calloc(1, sizeof(VARIANT));   /* VB 第 1 参 Command */
+    a[1] = (VARIANT*)calloc(1, sizeof(VARIANT));   /* VB 第 2 参 Width   */
+    if (!a[0] || !a[1]) { free(a[0]); free(a[1]); return -1; }
+    VariantInit(a[0]); a[0]->vt = VT_I4; a[0]->lVal = cmd;
+    VariantInit(a[1]); a[1]->vt = VT_I4; a[1]->lVal = t->iconPx > 0 ? t->iconPx : 16;
+    /* vb6_ComCall 内部已把 args[0] 抄到 rgvarg[argc-1] (COM 逆序), 所以这里按 VB 顺序给。 */
+    void* icon = vb6_ComCallObject(t->icons, L"GetImage", a, 2);
+    if (!icon) return -1;
+    HICON hicon = vb6_TvIconFromManager(icon, t->iconPx > 0 ? t->iconPx : 16);
+    vb6_ReleaseObject(&icon);
+    if (!hicon) return -1;
+    int idx = ImageList_AddIcon(t->himl, hicon);
+    DestroyIcon(hicon);
+    if (idx < 0) return -1;
+    if (t->cmdCount < VB6_TV_ICONCMD_MAX) {
+        t->cmdKey[t->cmdCount] = cmd;
+        t->cmdIndex[t->cmdCount] = idx;
+        t->cmdCount++;
+    }
+    return idx;
+}
+
+static void vb6_TvApplyImage(Vb6TvTree* t, Vb6TvNode* nd) {
+    if (!t || !nd || !nd->used || nd->image <= 0) return;
+    int idx = vb6_TvResolveCmd(t, nd->image);
+    if (idx < 0) return;
+    int sel = (nd->selImage > 0) ? vb6_TvResolveCmd(t, nd->selImage) : idx;
+    if (sel < 0) sel = idx;
+    TVITEMW it;
+    ZeroMemory(&it, sizeof(it));
+    it.mask = TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+    it.hItem = nd->h;
+    it.iImage = idx;
+    it.iSelectedImage = sel;
+    SendMessageW(t->hwnd, TVM_SETITEMW, 0, (LPARAM)&it);
+    nd->imgApplied = 1;
+}
+
+/* 图列是**运行期**才灌进 Codejock 的 (`GlobalSettings.Icons.LoadBitmap` 在窗体的
+ * 一次主题刷新里跑), 而窗体 Load 里 Set Icons / Nodes.Add 往往早于那一刀 —— 实测
+ * 那时 GetImage 成功返回但 pdisp 是 NULL (VT_DISPATCH 空指针)。VB6 的节点存的是
+ * 命令号, 绘画时才向图列要图, 所以这里同样**推迟到第一次 WM_PAINT** 再解析:
+ * 还没解析的节点在每次绘制前重试一次, 成功后置 imgApplied, 不再走 COM。 */
+static void vb6_TvApplyPending(Vb6TvTree* t) {
+    if (!t || !t->icons || !t->himl) return;
+    for (int i = 0; i < VB6_TV_NODE_MAX; i++) {
+        Vb6TvNode* nd = &t->n[i];
+        if (nd->used && nd->image > 0 && !nd->imgApplied) vb6_TvApplyImage(t, nd);
+    }
+}
+
+/* SetWindowSubclass 叠加 (与 vb6forms_widget.c 的 Fix 142 同一条动态入口, 不依赖
+ * 链接期 comctl32 导入), 只拦 WM_PAINT 之前补图, 其余原样交回 DefSubclassProc。 */
+typedef LRESULT (CALLBACK *VB6_TVSUBCLASSPROC)(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
+typedef LRESULT (CALLBACK *VB6_TVDEFSUBCLASSPROC)(HWND, UINT, WPARAM, LPARAM);
+typedef BOOL    (WINAPI   *VB6_TVSETSUBCLASS)(HWND, VB6_TVSUBCLASSPROC, UINT_PTR, DWORD_PTR);
+static VB6_TVDEFSUBCLASSPROC g_tvDefSubclass = NULL;
+static VB6_TVSETSUBCLASS  g_tvSetSubclass = NULL;
+
+static LRESULT CALLBACK vb6_TvPaintSub(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+                                       UINT_PTR idSub, DWORD_PTR refData) {
+    (void)idSub; (void)refData;
+    if (msg == WM_PAINT) {
+        for (int i = 0; i < g_tvtCount; i++) {
+            if (g_tvt[i].hwnd == hwnd) { vb6_TvApplyPending(&g_tvt[i]); break; }
+        }
+    }
+    if (g_tvDefSubclass) return g_tvDefSubclass(hwnd, msg, wp, lp);
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static void vb6_TvInstallPaintHook(HWND h) {
+    if (!h) return;
+    if (!g_tvSetSubclass) {
+        HMODULE m = GetModuleHandleW(L"comctl32.dll");
+        if (!m) m = LoadLibraryW(L"comctl32.dll");
+        if (!m) return;
+        g_tvSetSubclass = (VB6_TVSETSUBCLASS)GetProcAddress(m, (LPCSTR)410);
+        if (!g_tvSetSubclass) g_tvSetSubclass = (VB6_TVSETSUBCLASS)GetProcAddress(m, "SetWindowSubclass");
+        g_tvDefSubclass = (VB6_TVDEFSUBCLASSPROC)GetProcAddress(m, (LPCSTR)413);
+        if (!g_tvDefSubclass) g_tvDefSubclass = (VB6_TVDEFSUBCLASSPROC)GetProcAddress(m, "DefSubclassProc");
+    }
+    if (g_tvSetSubclass) g_tvSetSubclass(h, vb6_TvPaintSub, 0x5456504E /* 'TVPN' */, 0);
+}
+
+void vb6_TreeView_SetIcons(void* hwnd, void* pIcons) {
+    if (!hwnd) return;
+    Vb6TvTree* t = vb6_TvTree((HWND)hwnd);
+    if (!t) return;
+    if (t->icons) vb6_ReleaseObject(&t->icons);
+    ZeroMemory(t->cmdKey, sizeof(t->cmdKey));
+    ZeroMemory(t->cmdIndex, sizeof(t->cmdIndex));
+    t->cmdCount = 0;
+    if (!pIcons) return;
+    t->icons = pIcons;
+    vb6_ComAddRefDispatch(pIcons);
+    int px = vb6_TreeView_GetIconSize(hwnd);
+    if (px <= 0) px = 16;
+    t->iconPx = px;
+    /* SetIconSize 装的是共享空图列; 这里换成每树一张**自有**表 (不能 Destroy 共享那张)。 */
+    if (!t->himl || t->himlOwned == 0) {
+        HIMAGELIST himl = ImageList_Create(px, px, ILC_COLOR32 | ILC_MASK, 8, 8);
+        if (himl) {
+            t->himl = himl;
+            t->himlOwned = 1;
+            SendMessageW((HWND)hwnd, TVM_SETIMAGELIST, TVSIL_NORMAL, (LPARAM)himl);
+        }
+    }
+    if (!t->himl) return;
+    /* 换了图列 ⇒ 旧索引全失效, 所有节点回「待解析」。 */
+    for (int i = 0; i < VB6_TV_NODE_MAX; i++) t->n[i].imgApplied = 0;
+    vb6_TvInstallPaintHook((HWND)hwnd);
+    /* Icons 可能在 Nodes.Add 之后才 Set: 已有节点按存的命令号先补一遍;
+     * 此刻图列若还没灌, 剩下的由 WM_PAINT 钩子继续补。 */
+    for (int i = 0; i < VB6_TV_NODE_MAX; i++)
+        if (t->n[i].used) vb6_TvApplyImage(t, &t->n[i]);
+    InvalidateRect((HWND)hwnd, NULL, TRUE);
 }
 
 // 原生侧的兄弟/父子关系查询 (0 = 没有)
@@ -464,6 +712,7 @@ int32_t vb6_TreeView_AddNode(void* hwnd, int32_t relative, int32_t relationship,
     Vb6TvNode* nd = &t->n[slot];
     nd->h = h; nd->key = vb6_TvStr(key); nd->text = vb6_TvStr(txtBuf); nd->tag = NULL;
     nd->bold = 0; nd->image = (int)image; nd->selImage = (int)selImage; nd->used = 1;
+    vb6_TvApplyImage(t, nd);   // 已 Set Icons: 命令号当场翻成 iImage
     t->count++;
     // 集合序 = 插入序，槽位取"最小空位"⇒ 新条目前面那些槽必然全满，
     // 它的集合序就是 slot+1。别拿在册条数当返回值：删过项之后两者会分叉。
