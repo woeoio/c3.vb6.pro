@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <assemblyIdentity type="win32" name="C3.FixtureCom.Client" version="1.0.0.0" processorArchitecture="amd64"/>
+  <file name="test_activex_dll.dll" hashalg="SHA1">
+    <comClass clsid="{D84F362F-8EF1-D16D-8814-C16ADB700BAB}" threadingModel="Apartment" progid="TestAXDLL.Calc" description="Calc"></comClass>
+  </file>
+</assembly>
