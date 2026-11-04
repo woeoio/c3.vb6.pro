@@ -129,6 +129,47 @@ src/backend/detail/module/cgen_form_create_controls.inc
 9. 回归 `scripts\baseline.ps1`（3/0/0）、`scripts\test.bat gui|syntax|compile`（8/0/0）；免注册 COM 两路径（`LoadLibrary+DllGetClassObject`、SxS manifest）不得回归。
 10. 分功能提交 → 快进推 `github`+`origin` 的 `dev`（不 force）→ 跑 GA 至全绿。
 
+## 7.5 本轮续跑进展（夹具化 + 像素/rect 对照）
+
+已落：夹具 `tests\ucSegmentedControl\`（`.vbp/.vbw` 除外 `.vbw` 被 ignore、`Form1.frm/.frx`、
+`Form2.frm/.frx`、`ucSegmentedControl.ctl/.ctx`、`PropPagSC.pag`、`mIOleInPlaceActivate.bas`、
+`image.jpg`、`Manifest.RES`），**不依赖 D: 盘**。CI 口径下 `*.res` 默认被忽略，按仓库已有先例
+（`tests\BalloonTooltips\BalloonTooltips.res` 等）用 `git add -f` 强制登记厂商清单；它是进程
+清单（`#1`），不进 SxS 装配路径。
+
+新增判据 `tests\guisample\segmented_px.ps1`（已单跑 PASS，rc=0）：
+
+```
+main class=VB6_Form_Form1 title=[Form1]; window=766x558 client=751x520
+hosts visible=12 hidden=1
+  0,0 751x49 | 0,48 217x209 | 16,304 185x33 | 216,320 104x41 | 224,368 193x41 | 224,56 261x41
+  400,104 272x33 | 464,432 113x33 | 512,144 73x265 | 592,432 145x33 | 72,416 362x41 | 8,464 137x41
+  hidden: 216,104 217x209 (ucSegmentedControl5, Visible=False)
+buttons: 600,224 73x25 [<-- ItemVisible]
+uc2 vivid=145 blue=138; uc3 vivid=1185 blue=625; uc4 vivid=1734 blue=1734
+uc11 vivid=970 blue=209; uc1 vivid=802 blue=161
+accent 0078D7=10715 CE00EF=400
+```
+
+⇒ **12 个可见 UC 宿主的 rect 全部等于 `Form1.frm` 的设计期 twips/15**（逐条核对），也就是
+"设计期布局被原样复现"；真 VB6 参考的窗口/客户区读数与之完全相同。
+
+像素对照（客户区 751x520，同处 96dpi 虚拟化空间）：
+
+```
+真 VB6 参考 (SegmentedControl.exe) vs C3 (Project1.exe)
+MEAN_ABS_DIFF_PER_PIXEL = 3.967 / 765   (改前含图标缺失/白底方块时明显更大)
+强调色: 0078D7 参考 10670 / C3 10715   CE00EF 参考 554 / C3 400
+```
+
+仍有残差（已肉眼+裁剪逐区核对，**尚未修**，故未写进断言）：
+
+1. 顶部 CheckBar 第 3 项：真 VB6 是 **Disabled 灰显**，C3 仍可点（Enabled 语义/属性包差异）。
+2. "Reporto" 项的图标映射不同（参考为柱状图图标，C3 为文档图标）。
+3. `CtrlType=1` 小条与底部翻页条上的 PUA 符号字形（Segoe UI Symbol）在两产物上取字不同
+   （参考 4 个图标 vs C3 的 "K/d/=" 三个）。
+4. 少量文字 pen 位置相差 1–2px（字体度量）。
+
 ## 8. 风险 / 注意
 
 - `Manifest.RES` 是**进程清单**（非运行期 SxS manifest）；夹具化时不要把它塞进 SxS 装配路径，否则与两条免注册 COM 路径互相干扰。

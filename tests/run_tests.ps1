@@ -748,7 +748,17 @@ $script:GuiCases = @(
        Arch = "x86"; Mode = "close"; WindowTitle = "Chart appearance"; HoldWindowMs = 2000;
        MinChildWindows = 8; RequiresFiles = @("TeeChart5.ocx");
        FailIfAssetPresentAndLoadFails = $true;
-       PixelAssert = @("guisample\teechart_display_px.ps1") }
+       PixelAssert = @("guisample\teechart_display_px.ps1") },
+    # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
+    # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
+    # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
+    # windowless (无独立 HWND), C3 用 VB6_UserControlHost 承载 ⇒ 子窗个数不同属实现差异,
+    # 断言只看"宿主 rect 是否等于设计期布局"与像素读数 (见 segmented_px.ps1 头部对照表)。
+    # .ctl 时代码走 GDI+ 自绘 + 设计期 .frx 二进制属性 (image_N 图标) 回灌, 无外部 OCX。
+    @{ Name = "ucSegmentedControl"; Vbp = "$Tests\ucSegmentedControl\SegmentedControl.vbp";
+       Arch = "x86"; Mode = "close"; WindowTitle = "Form1"; HoldWindowMs = 2000;
+       MinChildWindows = 13;
+       PixelAssert = @("guisample\segmented_px.ps1") }
 )
 
 # 子进程 stdout/stderr 的编码 = 它实际写出的那条代码页。

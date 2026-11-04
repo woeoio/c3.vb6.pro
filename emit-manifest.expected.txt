@@ -964,3 +964,6 @@ sha256=6261b0fa46bb21368331149c0b67cb53142ed7b499d4cbc3b4939da72268ec7c ascii256
 #   本机读数 306067 / 288642 / 287287。差开: 主工程 +24,884 = tests/guisample 下被 gitignore 的 vendor OCX 参与发码 (移走 26 份 .ocx/.lic 后同机复算 = 281,183); 另 ~3,930 三行共有 = 本机可解析 vendor typelib、runner 不可。
 #   判据: 同目录 Definitions.bas(52b9cc31/16714) 与 Module.bas(8811bf37/1568) 两侧逐字节相同 ⇒ 差只落在窗体/控件段, 不是发码主体; CI artifact 的 C3.exe 在本机对同输入复算 = 本机值 ⇒ 与工具链无关。
 #   复核命令: pwsh .build\emit_norm.ps1 -Exe .build\C3.exe -Root . -Inputs <vbp 绝对路径>; 本机应只剩这 3 行与期望不同。
+# 2026-11-05 新夹具 tests/ucSegmentedControl 两行 (本机 .build\C3.exe 现算, 未 -Bless):
+sha256=a09057e393d66505760cfff7915045dcbcd9997954b93cbeed28e0116b0d7ce6 ascii256=335c53caeed08848a4318ab50e135c5275b57ecc11cd126d5da5868ef466490a rc=0 bytes=32814 tests/ucSegmentedControl/mIOleInPlaceActivate.bas
+sha256=f65bc37abac9a46f5fd57689ae095e439eb62a0b0a1fdc16f2db846d59fd6762 ascii256=8f0102436d02801fa4f8d8ab95841aed08fd1c5b4197a0d8ee1c831bc77c4f45 rc=0 bytes=961279 tests/ucSegmentedControl/SegmentedControl.vbp
