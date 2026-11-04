@@ -538,7 +538,16 @@ $packDef = @([regex]::Matches($vCom, '(?m)^static void\s+vb6_ComPackArrayOut\s*\
 $packAll = @([regex]::Matches($vCom, 'vb6_ComPackArrayOut\s*\(')).Count
 if ($packDef -ne 1) { $bad += ("A19 造真数组那枚出口的定义 = " + $packDef + " (恰好 1)") }
 if ($packAll - $packDef -ne 2) { $bad += ("A19 调用它的地方 = " + ($packAll - $packDef) + " 处 (恰好 2：PackBorrow 的数组那一臂 + 数组形参的出站回写；再多 = 第三个人也开始现造真数组)") }
-$tagAsk = @([regex]::Matches($vCom, 'if\s*\(\s*v\.vt\s*&\s*vb6_vtArray\s*\)')).Count
+# P3 缺口 (2026-11-04): 同一文件里新增了 vb6_VariantToObjectValChecked / vb6_VariantSetCopyChecked
+# 两枚出口, 它们也按 `if (v.vt & vb6_vtArray)` 问阵列位（形态与 PackBorrow 那一问逐字相同）。
+# 本判据问的是「**PackBorrow 里**恰好一问」⇒ 先把函数体切出来再数, 否则新出口会把计数
+# 从 1 撞成 3；同理下面那对锚点也必须取函数体内那一份（全文件 IndexOf 会命中更早的新出口，
+# 位置比较就永远成立 = 判据断电）。
+$iPack = $vCom.IndexOf('void vb6_VariantPackBorrow')
+$iPackEnd = if ($iPack -ge 0) { $vCom.IndexOf('' + [char]10 + '}', $iPack) } else { -1 }
+$packTxt = if ($iPack -ge 0 -and $iPackEnd -gt $iPack) { $vCom.Substring($iPack, $iPackEnd - $iPack) } else { '' }
+if ($iPackEnd -lt 0) { $bad += "A19 PackBorrow 函数体锚点找不到（void vb6_VariantPackBorrow 或列 0 的收尾 } 被改形）" }
+$tagAsk = @([regex]::Matches($packTxt, 'if\s*\(\s*v\.vt\s*&\s*vb6_vtArray\s*\)')).Count
 if ($tagAsk -ne 1) { $bad += ("A19 PackBorrow 里数组那一问 = " + $tagAsk + " 处 (恰好 1；0 = 数组又落 default 静默交 VT_EMPTY)") }
 $inDef = @([regex]::Matches($vCom, '(?m)^static void\s+vb6_VariantArrayIntoSlot\s*\(')).Count
 $inAll = @([regex]::Matches($vCom, 'vb6_VariantArrayIntoSlot\s*\(')).Count
@@ -548,9 +557,8 @@ $relDef = @([regex]::Matches($vCom, '(?m)^void\s+vb6_VariantSlotRelease\s*\(')).
 $relSrv = @([regex]::Matches((Get-Content -Raw (Join-Path $root 'src\rtl\core\vb6comserver\vb6comserver_obj.c')), 'vb6_VariantSlotRelease\s*\(')).Count
 if ($relDef -ne 1) { $bad += ("A19 回收出口的定义 = " + $relDef + " (恰好 1)") }
 if ($relSrv -ne 1) { $bad += ("A19 服务端调回收出口 = " + $relSrv + " 处 (恰好 1；0 = 入站那一臂造的描述符每调一次漏一枚)") }
-$iAsk = $vCom.IndexOf('if (v.vt & vb6_vtArray)')
-$iSw  = $vCom.IndexOf('void vb6_VariantPackBorrow')
-$iSw  = $vCom.IndexOf('switch (v.vt)', $iSw)
+$iAsk = $packTxt.IndexOf('if (v.vt & vb6_vtArray)')
+$iSw  = $packTxt.IndexOf('switch (v.vt)')
 if ($iAsk -lt 0 -or $iSw -lt 0) { $bad += "A19 锚点找不到（数组那一问或那张 switch 被改形了）" }
 elseif ($iAsk -gt $iSw) { $bad += "A19 数组那一问跑到那张 switch 之后了 —— 标签对不上任何 case，它会静默落 default" }
 # A18: 数组 -> ByRef Variant 形参的装箱只许一处答, 且必须问在分档 switch 之前 (账 #305 §B161, 第四十九刀)

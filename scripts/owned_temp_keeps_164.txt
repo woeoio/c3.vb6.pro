@@ -211,6 +211,7 @@ vb6_VariantAssign|1	1	write	0	open	VARIANT
 vb6_VariantConvNum|0	0	handoff-reads:vb6_NumVal	0	open	VARIANT
 vb6_VariantIdentity|0	1	ret	0	open	VARIANT
 vb6_VariantPackBorrow|0	0	handoff-to-plain:vb6_ComPackArrayOut	0	open	VARIANT
+vb6_VariantSetCopyChecked|0	1	ret	0	open	VARIANT
 vb6_VariantString|0	1	store	0	open	BSTR
 vb6_VariantToBool|0	1	store	0	open	VARIANT
 vb6_VariantToByteArray|0	0	handoff-reads:vb6_StringToByteArray	0	open	VARIANT
@@ -218,6 +219,7 @@ vb6_VariantToDouble|0	0	handoff-reads:vb6_Val	0	open	VARIANT
 vb6_VariantToLong|0	1	store	0	open	VARIANT
 vb6_VariantToLongPtr|0	1	write	0	open	VARIANT
 vb6_VariantToObjectVal|0	0		0	open	VARIANT
+vb6_VariantToObjectValChecked|0	0	handoff-reads:vb6_VariantToObjectVal	0	open	VARIANT
 vb6_VariantToSafeArray1D|0	0		0	open	VARIANT
 vb6_VariantToString|0	0	handoff-reads:vb6_CStr	0	open	VARIANT
 vb6_VarMulV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
@@ -362,6 +364,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_VariantFromStackVARIANT VARIANT
 [alias] vb6_VariantIdentity VARIANT
 [alias] vb6_VariantObject VARIANT
+[alias] vb6_VariantSetCopyChecked VARIANT
 [alias] vb6_VariantString VARIANT
 # --- 消费轴（账 #463 §B164 研究新增）：消费者**自己放掉**自己的形参的那几格 ---
 # 字段: 出口名|形参序号 <TAB> 条件性(0/1) <TAB> 放掉它的调用 <TAB> 形参名

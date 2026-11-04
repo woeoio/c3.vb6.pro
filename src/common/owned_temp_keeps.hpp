@@ -41,7 +41,9 @@ struct OwnedTempException {
 };
 
 // 例外行：**只有**这些不许提名（其余的出口默认 keeps_pointer=0 ⇒ 提名面内）。
-// 26 枚 KEEPS=1 + 1 枚 U（vb6_DecSetTag 第 0 格）—— 与台账 §B227 的表逐行对齐。
+// 27 枚 KEEPS=1 + 1 枚 U（vb6_DecSetTag 第 0 格）—— 与台账 §B227 的表逐行对齐。
+// 2026-11-04 P3: 新增 vb6_VariantSetCopyChecked（RTL 里 `return v` ⇒ 推导给 '1'/'ret'，
+//   与 scripts/owned_temp_keeps_164.txt 的 K5/K12 双向对账同源；登记为例外 = 不提名，不放宽）。
 inline const OwnedTempException* ownedTempExceptions() {
     static const OwnedTempException kRows[] = {
         { "vb6_ArraySetVariant",  2, '1', "write" },
@@ -67,6 +69,7 @@ inline const OwnedTempException* ownedTempExceptions() {
         { "vb6_VariantArraySet",  2, '1', "write" },
         { "vb6_VariantAssign",    1, '1', "write" },
         { "vb6_VariantIdentity",  0, '1', "ret" },
+        { "vb6_VariantSetCopyChecked",0, '1', "ret" },
         { "vb6_VariantString",    0, '1', "store" },
         { "vb6_VariantToBool",    0, '1', "store" },
         { "vb6_VariantToLong",    0, '1', "store" },
