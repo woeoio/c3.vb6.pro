@@ -33,7 +33,7 @@ param(
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not $C3)  { $C3 = Join-Path $root '.build\C3.exe' }
-if (-not $OutDir) { $OutDir = Join-Path $PSScriptRoot 'out' }
+if (-not $OutDir) { $OutDir = Join-Path $PSScriptRoot 'output' }
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $runTag = (Get-Date -Format 'yyyyMMddHHmmssfff')
 $base = Join-Path $OutDir ("run-$runTag")
@@ -82,8 +82,74 @@ function New-CaseDir($name) {
     return $d
 }
 
+# Module sources are generated into the (git-ignored, corpus-excluded) output dir
+# instead of living in tests/*.bas: every .bas under tests/ is a registered input
+# of the emit-manifest shape oracle, and new fixture modules would red-gate it as
+# "added rows" without a CI-produced hash.
+$ModuleCreate = @'
+Attribute VB_Name = "Module1"
+Option Explicit
+
+Sub Main()
+    Dim d As Object
+    On Error Resume Next
+    Set d = CreateObject("TestAXDLL.Calc")
+    If Err.Number = 0 Then
+        Debug.Print "manifest-create=OK"
+    Else
+        Debug.Print "manifest-create=FAIL"
+    End If
+End Sub
+'@
+
+$ModuleDirect = @'
+Attribute VB_Name = "ModuleDirect"
+Option Explicit
+
+Sub Main()
+    Dim d As Object
+    On Error Resume Next
+    Set d = CreateObject("TestAXDLL.Calc")
+    If Err.Number = 0 Then
+        Debug.Print "direct-create=OK"
+    Else
+        Debug.Print "direct-create=FAIL"
+    End If
+End Sub
+'@
+
+$ModuleExt = @'
+Attribute VB_Name = "ModuleExt"
+Option Explicit
+
+' External per-file manifest reuse: the ProgID below exists ONLY in the
+' <component>.manifest block that the runtime composer pulls in. It is not in
+' the ComLib= table, so this call must go through SxS or fail.
+Sub Main()
+    Dim d As Object
+    On Error Resume Next
+    Set d = CreateObject("ExtManifest.Calc")
+    If Err.Number = 0 Then
+        Debug.Print "ext-manifest-create=OK"
+    Else
+        Debug.Print "ext-manifest-create=FAIL"
+    End If
+End Sub
+'@
+
+function Write-Module($dir, $module) {
+    $src = switch ($module) {
+        'Module1.bas'      { $ModuleCreate }
+        'ModuleDirect.bas' { $ModuleDirect }
+        'ModuleExt.bas'    { $ModuleExt }
+        default            { $null }
+    }
+    if (-not $src) { throw "unknown module $module" }
+    Set-Content -Path (Join-Path $dir $module) -Encoding ASCII -Value $src
+}
+
 function Setup-Project($dir, $module, $exeName, $comLib) {
-    Copy-Item (Join-Path $PSScriptRoot $module) $dir -Force
+    Write-Module $dir $module
     $vbp = Join-Path $dir 'Case.vbp'
     $lines = @('Type=Exe', ("Module={0}; {0}" -f [System.IO.Path]::GetFileNameWithoutExtension($module)),
                'Startup="Sub Main"', ('ExeName32="{0}"' -f $exeName))
