@@ -170,6 +170,19 @@ MEAN_ABS_DIFF_PER_PIXEL = 3.967 / 765   (改前含图标缺失/白底方块时�
    （参考 4 个图标 vs C3 的 "K/d/=" 三个）。
 4. 少量文字 pen 位置相差 1–2px（字体度量）。
 
+## 7.6 GA 收口修复（同一轮）
+
+- `[STATIC] builtin_slot_returns` 红在 GA：RTL 新增 `vb6_VariantFromParamArray`，checked-in 的
+  `src\backend\detail\expr\cgen_variant_slot_prefixes.inc` 少一名（derived=41 / current=40）。
+  修法是重跑派生脚本而不是加白名单：`pwsh scripts\gen_variant_slot_prefixes.ps1` ⇒ 41 名，
+  复跑 `check_builtin_slot_returns.ps1` = PASS。
+- `Emit manifest` 红的 7 份：d71875a4 的 codegen 改动（`Me`→NULL 收窄、UDT 返回值落临时）确实
+  改了发码形状。按仓库口径取 CI 权威清单 `git fetch github ci/emit-manifest`（head=d71875a4）
+  的对应行逐行登记，未用 `-Bless`。
+- 注意：本机 emit 结果与 CI 在 4 份输入上不同（`tests/TeeChartChartDisplay/DisplayProject.vbp`、
+  `tests/guisample/GUISample.vbp`、`tests/guisample/vb6ref/src/{vs2015,vc6}/GUISample.vbp`）——
+  这 4 份依赖外部 OCX/typelib 的解析，**登记必须以 CI 那台为准**，不要拿本机哈希覆盖。
+
 ## 8. 风险 / 注意
 
 - `Manifest.RES` 是**进程清单**（非运行期 SxS manifest）；夹具化时不要把它塞进 SxS 装配路径，否则与两条免注册 COM 路径互相干扰。
