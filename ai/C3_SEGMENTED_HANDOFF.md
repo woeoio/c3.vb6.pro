@@ -341,7 +341,7 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
 - `check_manifest_coverage.ps1`、`check_builtin_slot_returns.ps1`、
   `check_builtin_opt_defaults.ps1`、`check_owned_temp_keeps.ps1` 本机 PASS。
 
-## 7.10 把 `Tests (vbp #2)` 的像素判据改成宿主无关（本机已验，待 GA）
+## 7.10 把 `Tests (vbp #2)` 的像素判据改成宿主无关（GA 41933733275 全绿）
 
 上一跑 41929711664（head `c3867290`）只剩 `Tests (vbp #2)` 红，且性质已从"编不过"变成"判据在 CI 上不成立"：
 6 条 `C2197` 已消失（`compile.log` 无 error C），失败只有三条：
@@ -372,6 +372,22 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
 读数与本轮修前相同（`uc2 145/138, uc3 1185/625, uc4 1734/1734, uc11 970/209, uc1 802/161`；
 `highlight=#0078D7(10715)`、`CE00EF=400 magenta=403 bbox=392,115-492,118 101x4`；
 `expect_outer=767x559` vs 实测 `766x558`）。
+
+### GA 复核（run 41933733275，head `0c171e9d`）
+
+- **21/21 job 全 success**（Build / Baseline / Emit manifest / smoke / compile ×2 / bas ×2 /
+  syntax / asm / vbp ×12）；`Tests (vbp #2)` 由红转绿：
+  `Results: PASS=45 FAIL=0 SKIP=0 TOTAL=68`，`[GUI] ucSegmentedControl ... PASS`。
+- CI 自己交回的读数（正是本轮改判据的依据，不是猜的）：
+  `window=767x559 client=751x520 expect_outer=767x559`（与运行期度量一致，差 0）；
+  `accent highlight=#0078D4(10935)` —— CI 的系统高亮色确实是 `#0078D4`（本机 `#0078D7`），
+  硬编码时才会数到 0；
+  `CE00EF=237 magenta=240 bbox=314,92-393,94 80x3` —— 指示条在 CI 上是 80x3，
+  本机是 101x4（`nScale`/字体度量不同），结构判据（厚度 2..6、跨度 >= 40）通过。
+- 其它 job 无回归；`Emit manifest (shape oracle)` 仍绿（本轮只动 `segmented_px.ps1` 与本文档，
+  发码与清单都没变）。
+- 平台差异归因（本轮实测确认，不再只是假设）：系统高亮色档位（`COLOR_HIGHLIGHT`）、
+  非客户区取整（+1px）、字体回退导致 `nScale`/TextW 不同（图标更大、Tab 更窄）。
 
 ## 8. 风险 / 注意
 
