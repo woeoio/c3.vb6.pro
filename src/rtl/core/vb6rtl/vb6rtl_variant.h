@@ -265,6 +265,12 @@ static inline vb6_VARIANT vb6_VariantIdentity(vb6_VARIANT v) { return v; }
 //   用途: 当 C3 的 inferExprType 把标量/LenB(...)误判为 Variant 时,
 //         temp 变量声明 "vb6_VARIANT _vcmp_N = scalar;" 会触发 C2440.
 //         改用 vb6_VariantFromValue(scalar) 让编译器按实类型自动包装, 消除 C2440.
+// P4 崩溃取证 (2026-11-04): 两个 SafeArray 描述符是**两套结构**, _Generic 只列了 1D 那一档,
+// 于是 Nd 指针落 default: vb6_VariantObject ⇒ vt=VT_DISPATCH 而 pdispVal 是描述符地址。
+// 后果不是"读错值"而是**假对象**: `v = a`(2D) 的 VarType 答 9, IsArray 答 False;
+// 再交给 For Each / 成员访问时运行期把它当 IDispatch 解引用 ⇒ 0xC0000005 (读 +0x16)。
+// 修法在**装箱口**补这一档, 与 1D 同一枚 vb6_VariantArray (它自己问描述符要 vt)。
+struct vb6_SafeArrayND; // forward declaration (1D 的那一枚在 vb6rtl_builtin.h)
 #ifdef _MSC_VER
 // Fix 092u: MSVC 中 char 默认等价于 signed char, _Generic 关联列表同时出现
 // char:/signed char: 被视为重复关联 (error C7700, "char 与之前的 char 不兼容").
@@ -285,6 +291,7 @@ static inline vb6_VARIANT vb6_VariantIdentity(vb6_VARIANT v) { return v; }
     double:               vb6_VariantDouble, \
     wchar_t*:             vb6_VariantString, \
     struct vb6_SafeArray1D*: vb6_VariantArray, \
+    struct vb6_SafeArrayND*: vb6_VariantArray, \
     vb6_VARIANT:          vb6_VariantIdentity, \
     default:              vb6_VariantObject \
 )((x))
@@ -306,6 +313,7 @@ static inline vb6_VARIANT vb6_VariantIdentity(vb6_VARIANT v) { return v; }
     double:               vb6_VariantDouble, \
     wchar_t*:             vb6_VariantString, \
     struct vb6_SafeArray1D*: vb6_VariantArray, \
+    struct vb6_SafeArrayND*: vb6_VariantArray, \
     vb6_VARIANT:          vb6_VariantIdentity, \
     default:              vb6_VariantObject \
 )((x))
@@ -431,6 +439,14 @@ struct vb6_SafeArray1D* vb6_VariantToByteArray(vb6_VARIANT v);
 // 与 vb6_VariantToObject(vb6_VARIANT*) 互补; 后者要求实参是左值 (取地址),
 // 但 IndexOrCallExpr 调用点包装的实参可能是函数返回的右值, 无法取址.
 void* vb6_VariantToObjectVal(vb6_VARIANT v);
+
+// P3 缺口① / ③: Set / With / `Is Nothing` 的阵列判据 (判据只看运行期 vt 的阵列位)。
+// 非阵列档原样转调上面的 vb6_VariantToObjectVal / vb6_VariantToObject, 既有行为不动;
+// 阵列档分别报 VB6 实测错误号 424 (目标 Object) / 13 (目标 Variant) / 424 (Is Nothing)。
+// 读数出处: .build/vb6base/READINGS.md (P1 表 T1–T4、P3 表 A/E/I/J/K/L)。
+void* vb6_VariantToObjectValChecked(vb6_VARIANT v);
+vb6_VARIANT vb6_VariantSetCopyChecked(vb6_VARIANT v);
+int32_t vb6_VariantIsNothingChecked(vb6_VARIANT* v);
 
 // P8.4: Variant清理(释放内含BSTR等资源)
 void vb6_VariantClear(vb6_VARIANT* v);

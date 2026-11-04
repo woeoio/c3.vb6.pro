@@ -277,6 +277,11 @@ void* vb6_ForEach_Init(void* disp);       // Call _NewEnum, return IEnumVARIANT*
 // 账 #257 第十五层: 集合是**工程类实例**时 (不是 IDispatch) 用它的 NewEnum 接口直接建枚举
 void* vb6_ForEach_InitFromEnumIface(void* pEnumRaw);
 
+// P3 缺口②: `For Each x In <Variant 数组本体>` —— 传入 VARIANT* 的地址;
+// 整只 VARIANT 里是 SafeArray 时按 VB6 的线性序/元素类型枚举, 否则与
+// `vb6_ForEach_Init(vb6_VariantToObjectVal(v))` 逐字同义 (实现见 vb6rtl_array.c)。
+void* vb6_ForEach_InitVariant(void* vp);
+
 // For Each Form In Forms: RTL 窗体注册表 (vb6_Forms_Register) 的合成枚举器。
 // 元素 = 窗体 HWND 的宿主包装 (真 IDispatch, .Controls 走宿主 Controls 应答)。
 void* vb6_ForEach_InitForms(void);

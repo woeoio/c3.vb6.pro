@@ -189,6 +189,16 @@ int32_t vb6_ForEach_Next(void* enumPtr, VARIANT* outVar) {
     if (*((void**)enumPtr) == (void*)&g_vb6_formsEnumTag) {
         return vb6_ForEach_NextForms(enumPtr, outVar);
     }
+    /* P3 缺口②: `For Each x In <Variant 数组本体>` 的合成枚举器 (vb6rtl_array.c)。
+       判据排在最前 —— 首槽是与 Forms 同一套 "char tag 地址", 不能拿给下面那两位
+       Controls/Collection 判据解引用 (它们会把本状态当集合指针)。 */
+    {
+        extern int vb6_ForEach_IsArrayEnum(void* enumPtr);
+        extern int32_t vb6_ForEach_NextArray(void* enumPtr, VARIANT* outVar);
+        if (vb6_ForEach_IsArrayEnum(enumPtr)) {
+            return vb6_ForEach_NextArray(enumPtr, outVar);
+        }
+    }
     /* Fix 112: 宿主 Controls 集合的原生枚举器 (vb6_ForEach_Init 的宿主分支) */
     if (vb6_UC_ControlsIsCollection(*((void**)enumPtr))) {
         char hv[64];
@@ -243,6 +253,15 @@ void vb6_ForEach_Release(void* enumPtr) {
     if (*((void**)enumPtr) == (void*)&g_vb6_formsEnumTag) {
         free(enumPtr);
         return;
+    }
+    /* P3 缺口②: 数组合成枚举器 —— 数组本体归源 Variant 所有, 这里只放状态壳 */
+    {
+        extern int vb6_ForEach_IsArrayEnum(void* enumPtr);
+        extern void vb6_ForEach_ReleaseArray(void* enumPtr);
+        if (vb6_ForEach_IsArrayEnum(enumPtr)) {
+            vb6_ForEach_ReleaseArray(enumPtr);
+            return;
+        }
     }
     /* Fix 112/112c: 宿主枚举句柄 (Controls 集合 / 内建 Collection) 不是 vb6_ForEachState
      * —— 首元素是集合指针而非 IEnumVARIANT*, 当 state->pEnum 解引用会取到结构体自身

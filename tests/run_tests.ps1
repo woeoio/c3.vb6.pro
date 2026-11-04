@@ -9177,6 +9177,10 @@ if ($Category -in @("all", "run", "vbp")) {
     # P2 夹具: 「Variant 类型但非整只槽」(Array/Split/Filter, VarType=8204) 那几格。
     # 只编不跑 —— 运行期会走到 VB6 的 Type Mismatch 分支, 那不是本夹具要钉的东西。
     Test-VbpBuild "p2_array_variant"   "$Tests\p2_array_variant\p2_array_variant.vbp"
+    # P4 取证回归 (2026-11-04): Variant() 数组里装 C3 伪对象 (内建 Collection), 整只装进 Variant 再
+    # For Each —— 改前循环尾清栈上 VARIANT 走 OLEAUT32 VariantClear, 把伪对象身份标记当 vtable
+    # 解引用 ⇒ exit=0xC0000005; 改后 exit=0 且输出齐全。必须**真跑** (编译过不代表不崩)。
+    Test-Vbp "p4_coll_array_foreach"   "$Tests\p4_coll_array_foreach\p4_coll_array_foreach.vbp" @("P4 count=2", "P4 types=Date;Collection;", "DONE") -ExpectExitCode 0
 
     Test-VbpBuild "charts_ucChartBar"  "$Tests\Charts 2020\ucChartBar\Proyecto1.vbp"
     Test-VbpBuild "charts_ucChartBar_x86" "$Tests\Charts 2020\ucChartBar\Proyecto1.vbp" -Arch "x86"
