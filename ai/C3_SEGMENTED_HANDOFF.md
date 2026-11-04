@@ -253,6 +253,10 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
 被内置 `vb6_GetObject` 遮蔽）。修完还要重跑 `test.bat gui`（10/0/0）、重登记发码变化
 （用 CI 的 `ci/emit-manifest`）、再推 GA。
 
+> 进展更新：GA run **41919273594**（head=bf288a31，即上面 K13 修复之后）**只剩
+> `Tests (vbp #2)` 一个红**——就是本节这两条；`compile #1/#2`、`Emit manifest`、其余
+> vbp 分片、bas/syntax/asm/smoke 全绿。⇒ 收敛点已经很清楚：只差这两个发码缺陷。
+
 **两个本机陷阱（下一轮开头先处理，否则复现全是假象）：**
 
 1. `scripts\build.bat` 在本机 checkout 里是 **LF-only**（CI 那边是 CRLF），cmd 会把
