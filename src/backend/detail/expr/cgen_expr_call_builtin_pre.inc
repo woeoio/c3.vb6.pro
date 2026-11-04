@@ -215,7 +215,7 @@
             std::string tnCls88 = inferClassTypeOfExpr(*node.positional[0]);
             std::string tnSpell88 = tnCls88.empty() ? std::string() : projectClassNameOf(tnCls88);
             if (!tnSpell88.empty() && !classUsedAsInterface(tnCls88)
-                && !variantOperandAST(node.positional[0].get())) {
+                && !isVariantType(node.positional[0].get())) {
                 std::string tnKeep88 = lastExpr_;
                 emitExpr(*node.positional[0]);
                 std::string tnArg88 = lastExpr_;

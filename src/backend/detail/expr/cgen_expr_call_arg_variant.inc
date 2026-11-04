@@ -93,12 +93,13 @@
                 std::string twin249 = comValueTwinForObjectReadExpr(argVal);
                 if (!twin249.empty()) argVal = twin249;
             }
+            // P2 (A6): 主问句是「实参的 C 值是不是整只槽」(下面按 paramBase 的提取函数
+            // 全部收 vb6_VARIANT)。数组本体 (isArrOut) 不是槽, 单列为 argIsVariantArr
+            // 供 092g/091k 的载体护栏那一支用。
             bool argIsVariantArr = false;
-            bool argIsVariant = isDefinitelyVariantExpr(*node.positional[i], &argIsVariantArr);
-            // Fix 038b-2: 字符串级 Variant 检测回退 — 补充 isDefinitelyVariantExpr
-            // 无法识别的 C 级 Variant 表达式 (vb6_VariantArrayGet, vb6_VariantFromComResult 等)
-            if (!argIsVariant && !argIsVariantArr) {
-                argIsVariant = isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
+            bool argIsVariant = isVariantSlot(argVal, node.positional[i].get());
+            if (!argIsVariant) {
+                argIsVariant = isDefinitelyVariantExpr(*node.positional[i], &argIsVariantArr);
             }
             // Fix 113i: 形参是**具体类型** (String/数值) 而实参是**裸 COM 结果**
             // (vb6_ComCall / vb6_ComCallByDispid / vb6_ComGetProp 返回 void*,
@@ -357,8 +358,8 @@
                     std::string twin249b = comValueTwinForObjectReadExpr(argVal);
                     if (!twin249b.empty()) argVal = twin249b;
                 }
-                bool argIsVariant = isDefinitelyVariantExpr(*node.positional[i])
-                                    || isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
+                // P2 (A7): 本臂的提取/退让只对整只槽成立 (数组本体由 !isArr 排除)。
+                bool argIsVariant = isVariantSlot(argVal, node.positional[i].get());
                 // Fix 113c: 实参是裸 COM 结果 (void* 承载 COM VARIANT*) 时, 语义即
                 // Variant — 必须判为 Variant 才能触发下方 Variant→具体类型提取
                 // (vb6_VariantFromComResult + 按 rtParamType 提取). 否则 void* 裸传

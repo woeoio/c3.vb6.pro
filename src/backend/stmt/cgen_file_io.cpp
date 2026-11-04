@@ -15,13 +15,16 @@ namespace vb6c3 {
 // (34 名 C 出口名名单与旧 lambda) 已删; 删表前提与剩余边界见 docs/print_write_numeric.md §6.4/§7。
 std::string CCodeGen::printWriteTextExpr(Expr& expr, const std::string& val, bool writeMode) {
     const std::string mode = writeMode ? "1" : "0";
-    // Null/Empty 字面量与「明确是 Variant」的表达式必须走 Variant 档:
-    // inferExprType 对 Null 字面量会答成整数型 (符号表里它没有独立类型), 若按数值发码
-    // 就会把 vb6_VariantNull() 结构体强转成 int64 (实测编译错 C2440)。判据不猜:
-    // ① 明确 Variant (isDefinitelyVariantExpr) ② 发射形状就是 RTL 的 Null/Empty 构造。
-    if (isDefinitelyVariantExpr(expr) ||
-        val == "vb6_VariantNull()" || val == "vb6_VariantEmpty()")
-        return "vb6_FileVariantText(" + val + ", " + mode + ")";
+    // P2 (C1): 开头这一问是 **VB 类型** —— Array/Split/Filter (VarType = 8204) 与
+    // Variant() 返回都算 Variant, 必须走 Variant 档。它们的 C 值是 SafeArray 载体,
+    // 不是整只槽, 所以进档前要按 vb6_VariantFromValue 的 SafeArray 臂装箱。
+    if (isVariantType(&expr) ||
+        val == "vb6_VariantNull()" || val == "vb6_VariantEmpty()") {
+        std::string fv = val;
+        if (!isVariantSlot(val, &expr))
+            fv = "vb6_VariantFromValue(" + fv + ")";
+        return "vb6_FileVariantText(" + fv + ", " + mode + ")";
+    }
     switch (inferExprType(expr)) {
         case Vb6Type::Byte:
         case Vb6Type::Integer:

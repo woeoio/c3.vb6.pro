@@ -328,11 +328,11 @@ void CCodeGen::visit(BinaryExpr& node) {
     // 账 #305 §B147: **改道那一问**吃「AST ∪ 文本」，而上面的 isVariantOperand86 刻意维持
     // 「文本 ∪ 已知变量」不变 —— 它还供着 Fix 086 那条提取 (vb6_VariantToLong(...))，那一档
     // 只能对**真的是槽**的 C 文本出手，把 AST 的宽答案灌进去就是 vb6_VariantToLong(裸 double)
-    // = C2440。方向性是这一格的要点：Div 的类型 oracle 只吃 variantOperandAST，这里吃它的
+    // = C2440。方向性是这一格的要点：Div 的类型 oracle 吃 isVariantType，这里吃它的
     // 超集 ⇒「oracle 答 Variant」必然蕴含「改道接走了、交出的是整只槽」，§B147 那一族
     // (oracle 说是槽、发码给裸标量 ⇒ 消费点既不提取也不取整) 就此按构造消失。
     auto routeOperand86 = [&](const std::string& cExpr, const Expr* astExpr) -> bool {
-        return isVariantOperand86(cExpr, astExpr) || variantOperandAST(astExpr);
+        return isVariantOperand86(cExpr, astExpr) || isVariantType(astExpr);
     };
 
     // 账 #305 §B145: Variant 参与 + - * / 时**不再替运行期猜档**。
@@ -716,8 +716,10 @@ void CCodeGen::visit(BinaryExpr& node) {
         // isDefinitelyVariantExpr (AST 语义表: knownVariantVars_/符号表 Variant 返回)
         // 补充升级; 对上面的类型化 getter 返回 false, 不会回滚 P25 的降级修正.
         auto isVariantOperand158m = [&](const std::string& c, Expr* ast) -> bool {
-            if (isVariantSlot(c, nullptr)) return true;  // P1.3: ast 不可得 (lambda 形参)
-            return ast && isDefinitelyVariantExpr(*ast);
+            if (isVariantSlot(c, nullptr)) return true;
+            // P2 (A4): 升级成 vb6_VarCmp* 的前提是「C 值确实是整只槽」——
+            // 数组本体不是槽, 由 variantOperandAST 的 !isArr 排除。
+            return ast && variantOperandAST(ast);
         };
         if (lt != Vb6Type::Variant && isVariantOperand158m(left, node.left.get())) lt = Vb6Type::Variant;
         if (rt != Vb6Type::Variant && isVariantOperand158m(right, node.right.get())) rt = Vb6Type::Variant;

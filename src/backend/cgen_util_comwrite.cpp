@@ -754,10 +754,11 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
         }
     }
     // 泛对象槽那一档再补问 AST：RHS 是工程内过程的返回 (`GetV()` As Variant) 时文本前缀表
-    // 按定义答不出来，只有读声明的那张 oracle 认得。刻意只在 void* 槽上补，其余档维持文本
-    // 判据 —— 全语料清单的 Let 臂零移动是这一刀的护栏。
+    // 按定义答不出来，只有读声明的那张 oracle 认得。
+    // P2 (A12): 下面的出口是 vb6_VariantToObjectVal (收 vb6_VARIANT)，所以补问的必须是
+    // **槽**而不是类型 —— 数组本体 (Variant() 返回的 SafeArray 载体) 由 !isArr 排除。
     if (slotIsLateObj && !valIsVar && valueExpr
-        && isDefinitelyVariantExpr(*valueExpr)) {
+        && variantOperandAST(valueExpr)) {
         valIsVar = true;
     }
     if (!valIsVar) {

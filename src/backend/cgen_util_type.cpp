@@ -114,10 +114,18 @@ Vb6Type CCodeGen::narrowIntTypeOfCType(const std::string& cType) {
 // VT_I4 家族, 对 VT_I8/VT_UI8 会答 0 (vb6_Shl 那一族同理, 见 cgen_expr_binary.cpp)。
 std::string CCodeGen::asUnsignedOperand(const std::string& cExpr, const Expr& astExpr,
                                         const char* ctype) const {
-    bool isVar = isDefinitelyVariantExpr(const_cast<Expr&>(astExpr));
-    if (!isVar) isVar = isVariantSlot(cExpr, nullptr);  // P1.3: ast 不可得 (cExpr 为形参)
-    if (isVar) {
+    // P2 (A2): 真问句是「这段 C 是不是整只槽」—— 解包函数 vb6_VariantToLongPtr 只收
+    // vb6_VARIANT。数组本体 (Array/Split/Filter 的 vb6_SafeArray1D*) 的 VB 类型虽是
+    // Variant, 但不是槽: 先按类型问句判出来, 走 vb6_VariantFromValue 的 SafeArray 臂装箱,
+    // 再解包；不许把载体直接递给收 vb6_VARIANT 的出口 (C2440)。
+    bool isSlot = variantOperandAST(&astExpr);
+    if (!isSlot) isSlot = isVariantSlot(cExpr, nullptr);
+    if (isSlot) {
         return "(" + std::string(ctype) + ")vb6_VariantToLongPtr(" + cExpr + ")";
+    }
+    if (isVariantType(&astExpr)) {
+        return "(" + std::string(ctype) + ")vb6_VariantToLongPtr(vb6_VariantFromValue("
+             + cExpr + "))";
     }
     return "(" + std::string(ctype) + ")(" + cExpr + ")";
 }
@@ -292,8 +300,12 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             // Screen_TwipsPerPixelY）压根没改道，却被这条 oracle 答成 Variant ⇒ 消费点不提取
             // 也不取整 ⇒ 浮点进窄整型目标静默截断。改吃 AST 那一半之后方向性是构造性的：
             // 改道 = AST ∪ 文本 ⊇ oracle = AST。
+            // P2 (A1): 这一问是「操作数的 **VB 类型**是不是 Variant」—— 数组本体也算
+            // (Array/Split/Filter、Variant() 返回)。改道站 (cgen_expr_binary.cpp 的
+            // routeOperand86) 必须吃它的超集 (文本 ∪ 已知变量 ∪ isVariantType)，于是
+            // 「oracle 答 Variant」仍然蕴含「改道接走了、两侧都装箱成交出的槽」。
             if (bin.op == BinaryOp::Div) {
-                if (variantOperandAST(bin.left.get()) || variantOperandAST(bin.right.get()))
+                if (isVariantType(bin.left.get()) || isVariantType(bin.right.get()))
                     return Vb6Type::Variant;
                 return Vb6Type::Double;
             }
@@ -788,6 +800,14 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                 // 处理; 此表只含具类型内置, 返回非 Variant.
                 std::string bname = Symbol::toLower(cid.name);
                 if (!bname.empty() && bname.back() == '$') bname.pop_back();
+                // P2 (C1): Array/Split/Filter 的 VB 类型是 Variant —— VarType(Array(1,2)) = 8204
+                // (vbVariant + vbArray), Split/Filter 同理。它们的 C 返回值是 vb6_SafeArray1D*
+                // (数组本体), 所以：**类型问句答 true**, 但槽问句 (variantOperandAST) 因
+                // `isArrOut` 为真仍答 false —— 这两句必须分开, 不许合并。
+                if (bname == "array" || bname == "split" || bname == "filter") {
+                    if (isArrOut) *isArrOut = true;
+                    return true;
+                }
                 if (kBuiltinFuncNames.count(bname)) return false;
                 // 关键差异: sym==null (内置函数) 视为非 Variant
                 return checkSym(sym);
@@ -1012,7 +1032,9 @@ bool CCodeGen::builtinWantsRawSlotFromVariant(const std::string& callee, size_t 
                                               Expr& actual) const {
     if (callee != "vb6_StrPtr") return false;
     if (argc != 1 || pos != 0) return false;
-    return isDefinitelyVariantExpr(actual);
+    // P2 (A3): 问句是「实参是不是整只槽」—— StrPtr 的裸槽出口收 vb6_VARIANT，
+    // 数组本体 (SafeArray 载体) 不在其列, 由 variantOperandAST 的 !isArr 排除。
+    return variantOperandAST(&actual);
 }
 
 std::string CCodeGen::builtinNoParamTableFormalCType(const std::string& callee, size_t argc,

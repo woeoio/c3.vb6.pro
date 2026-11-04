@@ -29,12 +29,20 @@
                 else if (knownBstrVars_.count(argLower)) firstArgIsBstr = true;
             }
             // Fix 036: 非标识符 Variant 表达式 (函数返回 Variant 的调用/类方法等) 也需 V 后缀
-            if (!firstArgIsVariant) {
-                firstArgIsVariant = isDefinitelyVariantExpr(*firstArg);
-            }
-            // Fix 038b-4: 字符串级 Variant 检测回退 — 捕获 vb6_VariantArrayGet 等表达式
-            if (!firstArgIsVariant && !args.empty()) {
-                firstArgIsVariant = isVariantSlot(args[0], nullptr);  // P1.3: ast 不可得 (args 为局部缓存)
+            // P2 (A11): V 后缀函数收整只槽 (vb6_VARIANT), 所以这里问的是槽, 不是类型。
+            // 类型是 Variant 但 C 是数组本体 (Array/Split/Filter、Variant() 返回) 时,
+            // 先按 SafeArray 臂装箱再进 V 后缀 —— 不许把载体直接递给 vb6_VARIANT 形参。
+            bool firstArgIsSlot = false;
+            if (!args.empty()) firstArgIsSlot = isVariantSlot(args[0], firstArg.get());
+            if (!firstArgIsVariant) firstArgIsVariant = firstArgIsSlot;
+            if (!firstArgIsVariant && isVariantType(firstArg.get()) && !args.empty()) {
+                args[0] = "vb6_VariantFromValue(" + args[0] + ")";
+                argList.clear();
+                for (size_t i = 0; i < args.size(); i++) {
+                    if (i > 0) argList += ", ";
+                    argList += args[i];
+                }
+                firstArgIsVariant = true;
             }
         }
         if (firstArgIsVariant) {

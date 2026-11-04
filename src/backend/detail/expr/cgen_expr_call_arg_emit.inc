@@ -727,6 +727,9 @@
                             }
                         }
                     }
+                    // P2 (A8): 「这段 C 是不是整只槽」只在这里问一次, 供进入判定与
+                    // 取址方式 (临时变量 vs 复合字面量) 共用, 免得两半各问一套。
+                    bool argIsSlot160h = false;
                     bool isLValue = (isSimpleIdent || isUdtFieldChain || isSaAt || argValLv.find("me->") == 0
                         || (argValLv.size() > 4 && argValLv[0] == '(' && argValLv[1] == '*' && argValLv.back() == ')')
                         || isDerefFieldChain)
@@ -764,7 +767,13 @@
                         // vb6_VariantArrayElemPtr(数组, 下标) 取底层槽位地址 — dest/src
                         // 都指向真实元素, VariantCopy 读写落位正确.
                         argVal = variantSlotElemAddrRead(argVal);
-                    } else if (isDefinitelyVariantExpr(*node.positional[i]) || isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
+                    } else if ((argIsSlot160h = isVariantSlot(argVal, node.positional[i].get()))) {
+                        // P2 (A8): 问句是「这段 C 是不是整只槽」。改前的两半各自为政：
+                        // 进这一支问的是 isDefinitelyVariantExpr (类型), 决定取址方式问的
+                        // 却是文本前缀表 isVariantSlot(argVal, nullptr) —— 裸 Variant 局部
+                        // (`Dim v: v = Array(1,2,3)`) 的类型答 true、文本答 false, 于是落进
+                        // 复合字面量 `(&(vb6_VARIANT){v})`, 用 v 去初始化首个成员 `.vt`
+                        // ⇒ C2440。现在两半共用同一个带 AST 的槽问句。
                         // Fix 158g: Variant 值 (Variant 属性读取函数返回) 作为 As Any
                         // ByRef 实参 — VBFlexGrid.ctl: VariantCopy Cell, .CellTag
                         // (CellTag As Variant → vb6_VBFlexGrid_prop_get_CellTag(me)
@@ -779,9 +788,18 @@
                         // 本文件其它分支要么用指定初始化器 (.vt=VT_BSTR,.bstrVal=…)
                         // 要么用 {0}, 只有此处漏了。改走 Fix 090q 的成熟套路:
                         // 求值到已声明临时再取址, 声明行挂 pending 保证先于引用。
-                        if (isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
+                        if (argIsSlot160h) {
                             std::string tmpVar160h = "_vb6_vartmp" + std::to_string(tempCounter_++);
                             c_.addPending("vb6_VARIANT " + tmpVar160h + " = " + argVal + ";");
+                            argVal = "(void*)&" + tmpVar160h;
+                        } else if (node.positional.size() > i
+                                   && isVariantType(node.positional[i].get())) {
+                            // P2 (A8/C1): 类型是 Variant 但 C 是数组本体 (Array/Split/Filter、
+                            // Variant() 返回) —— 不是槽, 不能位置初始化, 也不能把载体当
+                            // void* 传。按 SafeArray 臂装箱到临时, 再把那个槽的地址交出去。
+                            std::string tmpVar160h = "_vb6_vartmp" + std::to_string(tempCounter_++);
+                            c_.addPending("vb6_VARIANT " + tmpVar160h + " = vb6_VariantFromValue("
+                                          + argVal + ");");
                             argVal = "(void*)&" + tmpVar160h;
                         } else {
                             argVal = "(&(vb6_VARIANT){" + argVal + "})";
@@ -1517,9 +1535,10 @@
                         //     vb6_cHttpServerCookieAttr_prop_get_Expires 返回 vb6_VARIANT);
                         //     cHttpServerResponse File: ComputeETag(fileInfo.DateLastModified,
                         //     ...) (COM 属性 → vb6_VariantFromComResult(...) vb6_VARIANT).
-                        bool aVarSym090d = isDefinitelyVariantExpr(*node.positional[i]);
-                        bool aVarCex090d = isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
-                        bool argIsVariant090d = aVarSym090d || aVarCex090d;
+                        // P2 (A9): 下面的提取全部以「argVal 是整只槽」为前提
+                        // (vb6_VariantToDouble/String/Long/SafeArray1D 都收 vb6_VARIANT)。
+                        // 数组本体不是槽, 由 isVariantSlot 的 !isArr 那一半排除。
+                        bool argIsVariant090d = isVariantSlot(argVal, node.positional[i].get());
                         // Fix <vbeclipse> rev7: 类槽已交付 (&temp) —— 整段 Variant 提取
                         // 跳过。cType 此时是 vb6_cls_X* / vb6_ivref_X*, 上面的 case 都不
                         // 匹配, 但留显式护栏: 将来若给类指针加 case 也不会静默吃掉它。
