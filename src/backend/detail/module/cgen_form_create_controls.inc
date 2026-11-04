@@ -611,12 +611,23 @@
                                 if (pbB114.found) {
                                     emitFrxBagBlob(litName, pbB114.bytes);
                                 } else {
+                                // 图片等二进制属性 (`image_N`): DocProperty 块负载是
+                                // PNG/JPEG/BMP…, 必须按**原始字节**进属性包 —— VB6 里
+                                // `ReadProperty("image_N", 0)` 交回 Byte(), .ctl 的
+                                // `ItemImage(i) = b` 才拿得到图。此前落到 readDocString,
+                                // 二进制过不了"UTF-16 可打印"校验 ⇒ 属性缺失 ⇒ 控件只剩文字。
+                                FrxBlobBytes dbB114 = FrxReader::readDocBlobBytes(kvb.second.frxOffset);
+                                if (dbB114.found && FrxReader::detectFormat(dbB114.bytes.data(), dbB114.bytes.size())
+                                        != FrxImageFormat::Unknown) {
+                                    emitFrxBagBlob(litName, dbB114.bytes);
+                                } else {
                                 FrxTextData dsB114 = FrxReader::readDocString(kvb.second.frxOffset);
                                 if (!dsB114.text.empty()) {
                                     std::string tvB = dsB114.text;
                                     if (tvB.size() >= 2 && tvB.front() == '"' && tvB.back() == '"')
                                         tvB = tvB.substr(1, tvB.size() - 2);
                                     c_.emitLine("vb6_UC_BagPutStr(_bag, " + litName + ", L\"" + escapeWideCString(tvB) + "\");");
+                                }
                                 }
                                 }
                             }

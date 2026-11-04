@@ -77,6 +77,15 @@
                    判据用发射出去的符号名, 不用 hostPseudoBareName(它不覆盖 Extender 成员)。 */
                 if (tgtHp.rfind("vb6_Extender_", 0) == 0) {
                     std::string a3 = valHp;
+                    // ucSegmentedControl.ctl 的 `Property Let Tag(ByVal New_Value As Variant)`
+                    // 体内是 `Extender.Tag = New_Value`：目标槽是 BSTR (kind 0)，而 valHp 是
+                    // vb6_VARIANT 结构体 ⇒ `(void*)(intptr_t)New_Value` = C2440。字符串成员
+                    // 先按 VB6 隐式转换取 BSTR，再搬指针。
+                    Vb6Type extType3 = Vb6Type::Unknown;
+                    if (hostPseudoValueType("Extender", maHp->memberName, extType3, false)
+                        && extType3 == Vb6Type::String && isVariantType(node.value.get())) {
+                        a3 = "vb6_VariantToString(" + a3 + ")";
+                    }
                     if (hostPseudoIsNumeric("Extender", maHp->memberName) && isVariantSlot(a3, nullptr)) {  // P1.3: ast 不可得 (a3 为 valHp 局部副本)
                         a3 = "vb6_VariantToLong(" + a3 + ")";
                     }

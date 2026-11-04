@@ -643,6 +643,24 @@
                 argVal = tmpArg136;
             }
         }
+        /* 站点: .ctl 里 `Call mIOleInPlaceActivate.InitIPAO(m_uIPAO, Me)` /
+           `SetIPAO(m_uIPAO, Me)` (ucSegmentedControl.ctl:1807/1851)。
+           C3 的进程内 UserControl 宿主模型里, `me` 是**裸实例结构体** (首字段 __comObj
+           恒为 NULL), 没有 OLE 身份对象; 真实 VB6 这一格交的是控件自己的 IUnknown。
+           把裸结构体递给 `As Object` 形参 ⇒ 下游 `ObjPtr(Ctrl)` 交回结构体地址 ⇒
+           DispCallFunc 把首字段当 vtable 解引用 ⇒ AV read at 0 (实测 C3 产物启动即崩)。
+           按宿主模型既有口径: 无 OLE 身份 ⇒ 交 NULL。mIOleInPlaceActivate 的两个入口
+           都用 `If pInterface <> 0&` 守着, 于是这段 IPAO 钩子成为 no-op —— 它只服务于
+           "把容器加速键转发进来", 与 UC 的绘制/命中/生命周期无关 (无容器 EXE 模式)。
+           只认**设计器模块里整枚 `Me` 作实参**这一格 (C 文本恰为 me / &me), 不碰
+           `Me.成员` 与其它实参 —— `me->x` 那种形态的 C 文本是 me->x, 不会命中。 */
+        if (isDesignerModule_ && (argVal == "me" || argVal == "&me")) {
+            /* ByRef 那一档必须交**指向 NULL 的槽**而不能交裸 0 —— 被调方 `Ctrl` 是
+               void**, 函数体里 `ObjPtr(Ctrl)` 发成 `vb6_ObjPtr((*Ctrl))`, 交 0 就成了
+               解引用空指针 (实测 av read 0)。交 &(void*){0} 时 (*Ctrl) == NULL ⇒
+               ObjPtr 答 0 ⇒ Invoke 的 `If pInterface <> 0&` 整段跳过。 */
+            argVal = isByRef ? "&(void*){0}" : "(void*)0";
+        }
         args.push_back(std::move(argVal));
     }
 

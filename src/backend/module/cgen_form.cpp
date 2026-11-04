@@ -2,6 +2,7 @@
 #include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
 #include "common/event_param_abi.hpp"
 #include "common/invisible_at_runtime.hpp"   // 账 #305 258: InvisibleAtRuntime 的唯一判据  // 账 #305 第二百五十六刀: 事件形参按不按地址的单一主人
+#include "common/frm_code_scan.hpp"          // .frm 过程定义判据 (注释行不算)
 #include <cstdio>
 #include <cstdlib>
 #include "project/frx_reader.hpp"

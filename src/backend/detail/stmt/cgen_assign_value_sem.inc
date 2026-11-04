@@ -390,6 +390,7 @@
         if (valueIsVariant) {
             // 检查目标类型
             std::string convertedValue = value;
+            bool udtFieldIsArray114 = false;
             if (target.find("VB6_SA_AT(BSTR,") != std::string::npos
                 || target.find("VB6_SA_ND_AT2(BSTR,") != std::string::npos) {
                 convertedValue = "vb6_VariantToString(" + value + ")";
@@ -438,8 +439,12 @@
                 // Fix 084n: UDT 字段目标 — 按字段 Vb6Type 转换 Variant RHS
                 // (如 cZipArchive 的 .FileName As String ← vb6_VariantArrayGet(...)
                 //  → vb6_VariantToString; uBuf.MaxMatch As Long ← At() → vb6_VariantToLong)
-                Vb6Type udtFieldT = inferUdtFieldVb6Type(node.target.get());
-                if (udtFieldT == Vb6Type::String) {
+                Vb6Type udtFieldT = inferUdtFieldVb6Type(node.target.get(), &udtFieldIsArray114);
+                if (udtFieldIsArray114) {
+                    // UDT 动态数组成员 (= 元素类型) ← Variant: 必须取回载体, 不能按
+                    // 元素档压成 Long。`m_Items(Index).ImgArr = SrcImg` 实测。
+                    convertedValue = "vb6_VariantToSafeArray1D(" + value + ")";
+                } else if (udtFieldT == Vb6Type::String) {
                     convertedValue = "vb6_VariantToString(" + value + ")";
                 } else if (udtFieldT == Vb6Type::LongPtr) {
                     convertedValue = "vb6_VariantToLongPtr(" + value + ")";

@@ -602,6 +602,14 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 std::string lower = Symbol::toLower(id.name);
                 auto it = arrayUdtElemTypes_.find(lower);
                 if (it != arrayUdtElemTypes_.end()) return it->second;
+                // 直接调用的**函数返回 UDT** — VarPtr(Str2Guid(...)) 这类取临时地址的站点。
+                // semantic_analyzer_decl 已把返回类型名写进 variableTypeName (与变量同一格)。
+                Symbol* fnSym = symTab_.lookupModule(id.name);
+                if (fnSym && fnSym->kind == SymbolKind::Function && !fnSym->variableTypeName.empty()) {
+                    Symbol* udtSym = symTab_.lookupModule(fnSym->variableTypeName);
+                    if (udtSym && udtSym->kind == SymbolKind::UserDefinedType)
+                        return "vb6_type_" + cIdent(fnSym->variableTypeName);
+                }
             }
             // Fix 110c: UDT 数组的**成员**数组 — m_Serie(i).Rects(j).
             // callee 是 MemberAccessExpr(父对象, 成员名), 成员本身是 UDT 数组
@@ -1044,6 +1052,10 @@ std::string CCodeGen::appendUdtObjFieldMarker(const std::string& objExpr,
 
 // Fix 084o: 需要 int32_t 上下文中的 Variant 表达式 → vb6_VariantToLong 包装
 std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astExpr) {
+    // 无类型 COM 属性读 (vb6_ComGetProp) 的静态 C 类型是 void* (指向 VARIANT)，
+    // 参与算术/整除前必须先按 VB6 语义取值 (与 unwrapBareComCall108 同口径)。
+    if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
+        return "vb6_VariantToLong(vb6_VariantFromComResult(" + cExpr + "))";
     if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLong(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
@@ -1064,6 +1076,9 @@ std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astE
 // 与 toLongIfVariant 同构 (整除 \ 已在 Fix 084o 用同款处理), 仅提取函数换成
 // vb6_VariantToDouble. 未判为 Variant 时原样返回, 故对今天能编译的表达式零影响.
 std::string CCodeGen::toDoubleIfVariant(const std::string& cExpr, const Expr* astExpr) {
+    // 同上 (Fix 156 的配套): 无类型 COM 属性读参与浮点除法时先解包成数值。
+    if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
+        return "vb6_VariantToDouble(vb6_VariantFromComResult(" + cExpr + "))";
     if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToDouble(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));

@@ -233,6 +233,11 @@ static inline vb6_VARIANT vb6_VariantUInteger(uint16_t val) {
 // 共用 vb6_ComIsDispatchable 判据)。此处前向声明, 避免 vb6rtl_variant.h 反向依赖 vb6com.h。
 void vb6_ComAddRefDispatch(void* p);
 
+/* ParamArray (Windows SAFEARRAY of VT_VARIANT) → vb6_VARIANT 的那一趟:
+   `varParam = arrParam` 曾落进 _Generic default ⇒ 假 VT_DISPATCH ⇒ UBound 错误 9。
+   定义在 vb6rtl_com.c (与 vb6_ComVariantIntoSlot 同一 TU)。源数组只读。 */
+vb6_VARIANT vb6_VariantFromParamArray(SAFEARRAY* psa);
+
 // Fix 024: Variant containing a COM object pointer (VT_DISPATCH)
 // Fix <vbeclipse>: **必须 AddRef** —— vb6_VariantClear() 对 vb6_vtDispatch 会调
 // vb6_ReleaseObject, 构造侧不取引用而析构侧释放 = 过度释放 → 0xC0000374 堆损坏
@@ -292,6 +297,7 @@ struct vb6_SafeArrayND; // forward declaration (1D 的那一枚在 vb6rtl_builti
     wchar_t*:             vb6_VariantString, \
     struct vb6_SafeArray1D*: vb6_VariantArray, \
     struct vb6_SafeArrayND*: vb6_VariantArray, \
+    struct tagSAFEARRAY*:  vb6_VariantFromParamArray, \
     vb6_VARIANT:          vb6_VariantIdentity, \
     default:              vb6_VariantObject \
 )((x))
@@ -314,6 +320,7 @@ struct vb6_SafeArrayND; // forward declaration (1D 的那一枚在 vb6rtl_builti
     wchar_t*:             vb6_VariantString, \
     struct vb6_SafeArray1D*: vb6_VariantArray, \
     struct vb6_SafeArrayND*: vb6_VariantArray, \
+    struct tagSAFEARRAY*:  vb6_VariantFromParamArray, \
     vb6_VARIANT:          vb6_VariantIdentity, \
     default:              vb6_VariantObject \
 )((x))

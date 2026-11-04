@@ -166,6 +166,12 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
     if (!adc) vb6_uc_selectOwnFont(dib.memDC, hwnd);  /* 账 #305 300: 同上, 非 AutoRedraw 那一档 */
     const int useDib = (dib.memDC && dib.bits);
     HDC dc = adc ? adc : (useDib ? dib.memDC : target);
+    /* VB6 的 UserControl.hDC 交出去时 BK 模式是 TRANSPARENT —— 控件里直接
+       `DrawTextW UserControl.hDC, ...` 画标题时，参考产物(真 VB6)里字后面是
+       控件自己的底色；C3 这儿沿用 GDI 默认 OPAQUE + 白 BKCOLOR，实测
+       ucSegmentedControl 的 "Encendido" 等段名后面多出一个白方块。
+       一个站点设一次，三条 DC 路径 (AutoRedraw / DIB / 目标) 都吃到。 */
+    SetBkMode(dc, TRANSPARENT);
 
     if (!adc) {
         if (transparent && composeBelow) {

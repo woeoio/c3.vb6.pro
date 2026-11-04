@@ -2,13 +2,13 @@
 //
 // Win32 forwarding stubs for VB6 `Declare ... Lib "gdiplus"` (Fix 076 scheme).
 //
-// Family: gdiplus/image   (routed by object domain, see Get-GdiplusSub)   stubs: 107
+// Family: gdiplus/image   (routed by object domain, see Get-GdiplusSub)   stubs: 70
 //
 // Each stub reproduces C3's own generated prototype verbatim and forwards 1:1 to
 // the real flat API through a function-pointer cast (gdiplus.h is C++-only, so the
 // flat API is resolved by name at first use via the loader below).
 //
-// date: 2026-10-28 16:45
+// date: 2026-11-05 03:23
 
 #include <windows.h>
 #include <stdint.h>
@@ -20,25 +20,116 @@ static void* vb6_di_gdiplus_proc(const char* name) {
     return (mod != NULL) ? (void*)GetProcAddress(mod, name) : NULL;
 }
 
-/* GdipLoadImageFromFile */
-intptr_t __stdcall vb6_di_GdipLoadImageFromFile(intptr_t filename, int32_t* image) {
-    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipLoadImageFromFile");
+/* GdipLoadImageFromStream */
+intptr_t __stdcall vb6_di_GdipLoadImageFromStream(void* Stream, int32_t* Image) {
+    intptr_t (WINAPI *fn)(void*, int32_t*) = (intptr_t (WINAPI *)(void*, int32_t*))vb6_di_gdiplus_proc("GdipLoadImageFromStream");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(filename, image);
+    return fn(Stream, Image);
 }
 
-/* GdipGetImageWidth */
-intptr_t __stdcall vb6_di_GdipGetImageWidth(intptr_t image, int32_t* width) {
-    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipGetImageWidth");
+/* GdipCreateBitmapFromHICON */
+intptr_t __stdcall vb6_di_GdipCreateBitmapFromHICON(intptr_t mHicon, int32_t* mBitmap) {
+    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateBitmapFromHICON");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(image, width);
+    return fn(mHicon, mBitmap);
+}
+
+/* GdipCloneImage */
+intptr_t __stdcall vb6_di_GdipCloneImage(intptr_t mImage, int32_t* mCloneImage) {
+    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCloneImage");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mImage, mCloneImage);
+}
+
+/* GdipDisposeImage */
+intptr_t __stdcall vb6_di_GdipDisposeImage(intptr_t Image) {
+    intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipDisposeImage");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(Image);
+}
+
+/* GdipDrawImageRectRectI */
+intptr_t __stdcall vb6_di_GdipDrawImageRectRectI(intptr_t mGraphics, intptr_t hImage, intptr_t DstX, intptr_t DstY, intptr_t DstWidth, intptr_t DstHeight, intptr_t SrcX, intptr_t SrcY, intptr_t SrcWidth, intptr_t SrcHeight, intptr_t srcUnit, intptr_t imageAttributes, intptr_t Callback, intptr_t callbackData) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipDrawImageRectRectI");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mGraphics, hImage, DstX, DstY, DstWidth, DstHeight, SrcX, SrcY, SrcWidth, SrcHeight, srcUnit, imageAttributes, Callback, callbackData);
+}
+
+/* GdipDisposeImageAttributes */
+intptr_t __stdcall vb6_di_GdipDisposeImageAttributes(intptr_t imageattr) {
+    intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipDisposeImageAttributes");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(imageattr);
+}
+
+/* GdipCreateImageAttributes */
+intptr_t __stdcall vb6_di_GdipCreateImageAttributes(int32_t* imageattr) {
+    intptr_t (WINAPI *fn)(int32_t*) = (intptr_t (WINAPI *)(int32_t*))vb6_di_gdiplus_proc("GdipCreateImageAttributes");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(imageattr);
+}
+
+/* GdipSetImageAttributesColorMatrix */
+intptr_t __stdcall vb6_di_GdipSetImageAttributesColorMatrix(intptr_t imageattr, intptr_t ColorAdjust, int16_t EnableFlag, void* MatrixColor, void* MatrixGray, intptr_t Flags) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t, int16_t, void*, void*, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, int16_t, void*, void*, intptr_t))vb6_di_gdiplus_proc("GdipSetImageAttributesColorMatrix");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(imageattr, ColorAdjust, EnableFlag, MatrixColor, MatrixGray, Flags);
+}
+
+/* GdipImageRotateFlip */
+intptr_t __stdcall vb6_di_GdipImageRotateFlip(intptr_t Image, intptr_t rfType) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipImageRotateFlip");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(Image, rfType);
+}
+
+/* GdipLoadImageFromFile */
+intptr_t __stdcall vb6_di_GdipLoadImageFromFile(int32_t* mFilename, int32_t* mImage) {
+    intptr_t (WINAPI *fn)(int32_t*, int32_t*) = (intptr_t (WINAPI *)(int32_t*, int32_t*))vb6_di_gdiplus_proc("GdipLoadImageFromFile");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mFilename, mImage);
 }
 
 /* GdipGetImageHeight */
-intptr_t __stdcall vb6_di_GdipGetImageHeight(intptr_t image, int32_t* height) {
+intptr_t __stdcall vb6_di_GdipGetImageHeight(intptr_t mImage, int32_t* mHeight) {
     intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipGetImageHeight");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(image, height);
+    return fn(mImage, mHeight);
+}
+
+/* GdipGetImageWidth */
+intptr_t __stdcall vb6_di_GdipGetImageWidth(intptr_t mImage, int32_t* mWidth) {
+    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipGetImageWidth");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mImage, mWidth);
+}
+
+/* GdipCreateBitmapFromHBITMAP */
+intptr_t __stdcall vb6_di_GdipCreateBitmapFromHBITMAP(intptr_t mHbm, intptr_t mhPal, int32_t* mBitmap) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateBitmapFromHBITMAP");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mHbm, mhPal, mBitmap);
+}
+
+/* GdipCreateBitmapFromScan0 */
+intptr_t __stdcall vb6_di_GdipCreateBitmapFromScan0(intptr_t Width, intptr_t Height, intptr_t stride, intptr_t Format, void* Scan0, int32_t* BITMAP) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t, intptr_t, void*, int32_t*) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, int32_t*))vb6_di_gdiplus_proc("GdipCreateBitmapFromScan0");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(Width, Height, stride, Format, Scan0, BITMAP);
+}
+
+/* GdipGetImageGraphicsContext */
+intptr_t __stdcall vb6_di_GdipGetImageGraphicsContext(intptr_t Image, int32_t* hGraphics) {
+    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipGetImageGraphicsContext");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(Image, hGraphics);
+}
+
+/* GdipSaveImageToStream */
+intptr_t __stdcall vb6_di_GdipSaveImageToStream(intptr_t Image, void* Stream, void* clsidEncoder, void* encoderParams) {
+    intptr_t (WINAPI *fn)(intptr_t, void*, void*, void*) = (intptr_t (WINAPI *)(intptr_t, void*, void*, void*))vb6_di_gdiplus_proc("GdipSaveImageToStream");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(Image, Stream, clsidEncoder, encoderParams);
 }
 
 /* GdipBitmapGetPixel */
@@ -47,14 +138,6 @@ intptr_t __stdcall vb6_di_GdipBitmapGetPixel(intptr_t bitmap, intptr_t x, intptr
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(bitmap, x, y, color);
 }
-
-/* GdipDisposeImage */
-intptr_t __stdcall vb6_di_GdipDisposeImage(intptr_t image) {
-    intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipDisposeImage");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(image);
-}
-
 /* GdipBitmapLockBits */
 intptr_t __stdcall vb6_di_GdipBitmapLockBits(intptr_t mBitmap, void* mRect, int32_t mFlags, intptr_t mPixelFormat, void* mLockedBitmapData) {
     intptr_t (WINAPI *fn)(intptr_t, void*, int32_t, intptr_t, void*) = (intptr_t (WINAPI *)(intptr_t, void*, int32_t, intptr_t, void*))vb6_di_gdiplus_proc("GdipBitmapLockBits");
@@ -66,18 +149,6 @@ intptr_t __stdcall vb6_di_GdipBitmapUnlockBits(intptr_t mBitmap, void* mLockedBi
     intptr_t (WINAPI *fn)(intptr_t, void*) = (intptr_t (WINAPI *)(intptr_t, void*))vb6_di_gdiplus_proc("GdipBitmapUnlockBits");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(mBitmap, mLockedBitmapData);
-}
-/* GdipCreateBitmapFromHBITMAP */
-intptr_t __stdcall vb6_di_GdipCreateBitmapFromHBITMAP(intptr_t mHbm, intptr_t mhPal, int32_t* mBitmap) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateBitmapFromHBITMAP");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(mHbm, mhPal, mBitmap);
-}
-/* GdipCreateBitmapFromScan0 */
-intptr_t __stdcall vb6_di_GdipCreateBitmapFromScan0(intptr_t mWidth, intptr_t mHeight, intptr_t mStride, intptr_t mPixelFormat, intptr_t mScan0, int32_t* mBitmap) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateBitmapFromScan0");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(mWidth, mHeight, mStride, mPixelFormat, mScan0, mBitmap);
 }
 /* GdipCreateBitmapFromStream */
 intptr_t __stdcall vb6_di_GdipCreateBitmapFromStream(intptr_t pStream, int32_t* pBitmap) {
@@ -91,23 +162,11 @@ intptr_t __stdcall vb6_di_GdipCreateEffect(intptr_t dwCid1, intptr_t dwCid2, int
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(dwCid1, dwCid2, dwCid3, dwCid4, Effect);
 }
-/* GdipCreateImageAttributes */
-intptr_t __stdcall vb6_di_GdipCreateImageAttributes(int32_t* imageattr) {
-    intptr_t (WINAPI *fn)(int32_t*) = (intptr_t (WINAPI *)(int32_t*))vb6_di_gdiplus_proc("GdipCreateImageAttributes");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(imageattr);
-}
 /* GdipDeleteEffect */
 intptr_t __stdcall vb6_di_GdipDeleteEffect(intptr_t Effect) {
     intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipDeleteEffect");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(Effect);
-}
-/* GdipDisposeImageAttributes */
-intptr_t __stdcall vb6_di_GdipDisposeImageAttributes(intptr_t imageattr) {
-    intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipDisposeImageAttributes");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(imageattr);
 }
 /* GdipDrawImageFX */
 intptr_t __stdcall vb6_di_GdipDrawImageFX(intptr_t graphics, intptr_t Image, void* Source, intptr_t xForm, intptr_t Effect, intptr_t imageAttributes, intptr_t srcUnit) {
@@ -121,39 +180,9 @@ intptr_t __stdcall vb6_di_GdipDrawImageRectI(intptr_t mGraphics, intptr_t mImage
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(mGraphics, mImage, mX, mY, mWidth, mHeight);
 }
-/* GdipDrawImageRectRectI */
-intptr_t __stdcall vb6_di_GdipDrawImageRectRectI(intptr_t hGraphics, intptr_t hImage, intptr_t DstX, intptr_t DstY, intptr_t DstWidth, intptr_t DstHeight, intptr_t SrcX, intptr_t SrcY, intptr_t SrcWidth, intptr_t SrcHeight, intptr_t srcUnit, intptr_t imageAttributes, intptr_t Callback, intptr_t callbackData) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipDrawImageRectRectI");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(hGraphics, hImage, DstX, DstY, DstWidth, DstHeight, SrcX, SrcY, SrcWidth, SrcHeight, srcUnit, imageAttributes, Callback, callbackData);
-}
-/* GdipGetImageGraphicsContext */
-intptr_t __stdcall vb6_di_GdipGetImageGraphicsContext(intptr_t Image, int32_t* hGraphics) {
-    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipGetImageGraphicsContext");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(Image, hGraphics);
-}
-/* GdipImageRotateFlip */
-intptr_t __stdcall vb6_di_GdipImageRotateFlip(intptr_t Image, intptr_t rfType) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipImageRotateFlip");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(Image, rfType);
-}
-/* GdipLoadImageFromStream */
-intptr_t __stdcall vb6_di_GdipLoadImageFromStream(void* Stream, int32_t* Image) {
-    intptr_t (WINAPI *fn)(void*, int32_t*) = (intptr_t (WINAPI *)(void*, int32_t*))vb6_di_gdiplus_proc("GdipLoadImageFromStream");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(Stream, Image);
-}
 /* GdipSetEffectParameters */
 intptr_t __stdcall vb6_di_GdipSetEffectParameters(intptr_t Effect, void* params, intptr_t Size) {
     intptr_t (WINAPI *fn)(intptr_t, void*, intptr_t) = (intptr_t (WINAPI *)(intptr_t, void*, intptr_t))vb6_di_gdiplus_proc("GdipSetEffectParameters");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(Effect, params, Size);
-}
-/* GdipSetImageAttributesColorMatrix */
-intptr_t __stdcall vb6_di_GdipSetImageAttributesColorMatrix(intptr_t imageattr, intptr_t ColorAdjust, int16_t EnableFlag, void* MatrixColor, void* MatrixGray, intptr_t flags) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t, int16_t, void*, void*, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, int16_t, void*, void*, intptr_t))vb6_di_gdiplus_proc("GdipSetImageAttributesColorMatrix");
-    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(imageattr, ColorAdjust, EnableFlag, MatrixColor, MatrixGray, flags);
 }

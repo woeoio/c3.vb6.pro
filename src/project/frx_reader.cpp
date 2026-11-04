@@ -371,6 +371,26 @@ FrxOleBlob FrxReader::readOleBlob(size_t offset) {
 }
 
 // ============================================================
+// DocProperty 字节块 (§ FrxBlobBytes)
+//   [DWORD cbSize][1B 00][GUID 16B][WORD 00][WORD 01][DWORD nBytes][4B 0][payload]
+//   payload 起点 = offset+32, cbSize == 28 + nBytes。
+//   (字符串属性的 payload 是 UTF-16 文本, 这一支只给"按字节交给属性包"的用途)
+// ============================================================
+FrxBlobBytes FrxReader::readDocBlobBytes(size_t offset) {
+    FrxBlobBytes out;
+    if (offset + 32 > fileData_.size()) return out;
+    uint32_t cbSize = readLE32(fileData_.data() + offset);
+    if (cbSize < 28 + 2) return out;
+    uint32_t nBytes = readLE32(fileData_.data() + offset + 24);
+    if (nBytes == 0 || (size_t)cbSize != 28 + (size_t)nBytes) return out;
+    if (offset + 32 + (size_t)nBytes > fileData_.size()) return out;
+    out.found = true;
+    out.bytes.assign(fileData_.data() + offset + 32,
+                     fileData_.data() + offset + 32 + nBytes);
+    return out;
+}
+
+// ============================================================
 // GBK -> UTF-8 转换
 // ============================================================
 std::string FrxReader::gbkToUtf8(const std::string& gbk) {

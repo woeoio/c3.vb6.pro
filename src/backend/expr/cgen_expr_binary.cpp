@@ -997,7 +997,8 @@ void CCodeGen::visit(BinaryExpr& node) {
     if (node.op != BinaryOp::Is) {
         auto unwrapBareComCall108 = [](const std::string& cExpr) -> std::string {
             if (cExpr.compare(0, 12, "vb6_ComCall(") == 0
-                || cExpr.compare(0, 20, "vb6_ComCallByDispid(") == 0) {
+                || cExpr.compare(0, 20, "vb6_ComCallByDispid(") == 0
+                || cExpr.compare(0, 15, "vb6_ComGetProp(") == 0) {
                 return "vb6_VariantToDouble(vb6_VariantFromComResult(" + cExpr + "))";
             }
             return cExpr;

@@ -260,6 +260,12 @@ void vb6_Extender_Drag(vb6_VARIANT* Action, int _has_Action);
 void vb6_Extender_SetFocus(void);
 void vb6_UserControl_SetFocus(void);
 void vb6_Extender_ZOrder(vb6_VARIANT* Position, int _has_Position);
+// ucSegmentedControl.ctl `Public Function Move(Left As Single, Optional Top, Optional Width,
+// Optional Height)` 体内按可选参数个数分四档调用 `Extender.Move ...`。生成侧形参形状为
+// (float* Left, vb6_VARIANT* Top, vb6_VARIANT* Width, vb6_VARIANT* Height, 三个 _has_N)。
+// 单位是 twips (ScaleMode=3)，实现把它换算成像素后 SetWindowPos 到宿主窗口。
+void vb6_Extender_Move(float* Left, vb6_VARIANT* Top, vb6_VARIANT* Width, vb6_VARIANT* Height,
+                       int _has_Top, int _has_Width, int _has_Height);
 
 // Fix 133u: czUI.ctl 用到 Extender 的 Visible / Height
 //   (UserControl.Extender.Visible 赋值 + 判断, .Height 读取).
@@ -276,6 +282,9 @@ struct vb6_UserControl_Extender_Type {
     int16_t Visible;      // -1=可见 0=隐藏 (czUI 置位保存; 实际由宿主/property 配合)
     int32_t Height;       // 容器提供的控件外接高度 (twips/pixels 随 ScaleMode)
     int16_t DataChanged;  // Fix 221: 容器是否要重读控件的绑定数据 (运行期恒不活动)
+    // ucSegmentedControl.ctl: `UserControl.Extender.ToolTipText = ...` 直接落在这枚
+    // 结构体的字段上 (SetExtenderMember 那张表只覆盖 Tag/Visible/... 不含它)。
+    BSTR ToolTipText;
 };
 extern struct vb6_UserControl_Extender_Type vb6_UserControl_Extender;
 /* Fix 294 / 3a: Extender.<成员> = v 的实例感知写入口(代码生成侧调用)。

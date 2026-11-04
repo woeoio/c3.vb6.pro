@@ -221,6 +221,16 @@
     // 第三个字段), 取地址即对象指针, 不是 <dock>() 那种函数调用形态, 故单独一支。
     // Pager.ctl:481 `Set ControlsExtender = Extender` / FontCombo.ctl 的
     // `ControlEnum == Extender` 走这里; 不保留就落"发射裸标识符"兜底 ⇒ C2065。
+    // 窗体模块里**裸写**的 `Controls`：VB6 里它等价于 `Me.Controls`，是宿主窗口的
+    // 合成集合。ucSegmentedControl 的 Form1.frm 用它 `For Each Ctrl In Controls`
+    // 统一刷 Enabled；此前落到末尾"发射裸标识符"兜底 ⇒ C2065 (Controls 未声明)。
+    // 与 .ctl/.pag 的 CHANNEL 同一码头：vb6_ComGetObjectProp → vb6_Host_GetProp →
+    // vb6_uc_newControls(窗体 hwnd)，vb6com_foreach 按子窗口枚举。
+    if (isFormModule_ && !isDesignerModule_ && lower == "controls"
+        && !knownLocalVars_.count(lower)) {
+        lastExpr_ = "vb6_ComGetObjectProp(vb6_hwnd_" + moduleName_ + ", L\"Controls\")";
+        return;
+    }
     const bool reservedHostObj = reservedHostChannel || (lower == "extender");
     if (isDesignerModule_ && !knownLocalVars_.count(lower)
         && (!sym || reservedHostObj)) {

@@ -234,8 +234,10 @@
                 // "sub vbflexgrid1_scrolltip(...)" 误判为存在 "vbflexgrid1_scroll"
                 // (MainForm VBFlexGrid1 无 Scroll 处理但 c3 为其声明 thunk →
                 // MainForm.c C2129 "静态函数已声明但未定义"). 匹配到 '(' 才算定义.
-                if (frmLowCode.find("sub " + handlerLower + "(") == std::string::npos
-                    && frmLowCode.find("sub " + handlerLower + " (") == std::string::npos) continue;
+                // ucSegmentedControl: Form1.frm 里的 ItemMouseEnter/MouseEnter 处理器
+                // 整段是**注释掉**的 ('Private Sub ...)，旧 find 仍会命中注释 ⇒ 发 thunk
+                // 引用不存在的处理函数 ⇒ LNK2019。这里要求命中行首非注释、且过程名后接 '('/'  ('。
+                if (!frmHasSubDefinition(frmLowCode, handlerLower)) continue;
                 anyHandler = true;
                 // Fix <vbeclipse> rev17: 登记"这条过程是事件处理器" —— visit(SubDecl&)
                 // 据此把形参按事件 ABI (ByVal) 发, 与下面 thunk 的 arg 类型、

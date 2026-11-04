@@ -444,9 +444,15 @@ bool CCodeGen::ctypeIsObjectSlotPtr(const std::string& t) const {
 // claim 走 vb6_ComAddRefDispatch 而不是裸 AddRef: 它内含 vb6_ComIsDispatchable 那道闸, 对裸工程类实例
 // (`vb6_cls_X*`, 首格是 __comObj 而非 vtable) 与 HWND 一律判否 ⇒ 与退那一头同一个安全口径, 不会新造野调用。
 void CCodeGen::emitLateSlotRefClaim(const std::string& target, const std::string& valueExpr) {
+    // ucSegmentedControl.ctl: `Public Property Get Object() As Object: Set Object = UserControl.Extender`.
+    // `UserControl.Extender` 的 C 实体是结构体单例 vb6_UserControl_Extender（裸 `Extender`
+    // 那条路已经按 Fix 221 取地址），直接赋给 void* 槽是 C2440。这里补同一条口径：
+    // 这枚单例的**地址**就是 Extender 伪对象身份（vb6_UC_IsExtender 只认它）。
+    std::string claimed = (valueExpr == "vb6_UserControl_Extender")
+        ? "(&vb6_UserControl_Extender)" : valueExpr;
     c_.emitLine("{  /* 账 #305 (甲) 腿②″: Set 泛对象槽 " + target + " */");
     c_.indent();
-    c_.emitLine(target + " = " + valueExpr + ";");
+    c_.emitLine(target + " = " + claimed + ";");
     c_.emitLine("vb6_ComAddRefDispatch((void*)" + target + ");");
     c_.dedent();
     c_.emitLine("}");

@@ -164,6 +164,11 @@ bool SymbolTable::define(std::unique_ptr<Symbol> sym) {
             && !sym->isBuiltin
             && (sym->kind == SymbolKind::Sub
                 || sym->kind == SymbolKind::Function
+                // 用户控件 ucSegmentedControl.ctl: `Private Declare Function GetObject Lib "gdi32"
+                // Alias "GetObjectA"` 与内置 GetObject 同名。真 VB6 允许 Declare 遮蔽内置函数
+                // (与 Sub/Function 同一条规则), 这里必须同样让位, 否则整个工程编不过。
+                || sym->kind == SymbolKind::DeclareFunc
+                || sym->kind == SymbolKind::DeclareSub
                 || sym->kind == SymbolKind::Variable
                 || sym->kind == SymbolKind::Constant
                 || sym->kind == SymbolKind::EnumMember

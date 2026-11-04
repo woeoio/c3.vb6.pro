@@ -18,6 +18,9 @@ extern "C" {
 SAFEARRAY* vb6_PA_Create(int32_t count);
 void vb6_PA_Destroy(SAFEARRAY* psa);
 void vb6_PA_SetVariant(SAFEARRAY* psa, int32_t index, VARIANT* pv);
+/* ParamArray 转发: 把整个数组当 VT_ARRAY|VT_VARIANT 元素递出去 (VB6 语义),
+   而不是 PA_SetLong 把 SAFEARRAY* 截成 VT_I4 (接收端 UBound 得 NULL → 错误 9)。 */
+void vb6_PA_SetSafeArray(SAFEARRAY* psa, int32_t index, SAFEARRAY* src);
 void vb6_PA_SetLong(SAFEARRAY* psa, int32_t index, int32_t val);
 void vb6_PA_SetLongPtr(SAFEARRAY* psa, int32_t index, intptr_t val);  /* Fix 082: x64-safe VarPtr parameter */
 void vb6_PA_SetDouble(SAFEARRAY* psa, int32_t index, double val);

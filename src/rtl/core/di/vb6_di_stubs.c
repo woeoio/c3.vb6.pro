@@ -510,6 +510,19 @@ void __stdcall vb6_di_PutMemPtr(intptr_t Address, intptr_t Value) {
  * 序数导出, 按序号动态解析 (shell32.lib 不导出该符号名)。
  * 第 5 参是生成的 vb6_ComIface_IDataObject**, 此处收 void** (ABI 兼容; 链接只看
  * 符号名与调用约定)。解析不到时回 0, 调用方自行判。 */
+/* ============================================================
+ * IsEqualGUID (guiddef.h 内联/宏, ole32 并未导出该名) 原生实现
+ * ------------------------------------------------------------
+ * ucSegmentedControl 语料 mIOleInPlaceActivate.bas:135:
+ *   Private Declare Function IsEqualGUID Lib "ole32" (iid1 As GUID, iid2 As GUID) As Long
+ * 两个形参都是 ByRef GUID ⇒ 生成端递进来的就是两枚指向 GUID 的指针 (void*).
+ * 真 DLL 里没有这个导出符号 (它是 SDK 头里的 inline), 转发桩会在 cl 阶段找
+ * 不到标识符 (实测 C2065), 故这里按 VB6 的 Boolean/Long 口径原生比较:
+ * 相等回 -1 (VB True), 不等回 0。GUID 16 字节逐字节比。 */
+intptr_t __stdcall vb6_di_IsEqualGUID(void* iid1, void* iid2) {
+    return (iid1 && iid2 && memcmp(iid1, iid2, 16) == 0) ? -1 : 0;
+}
+
 typedef intptr_t (WINAPI* vb6_di_SHCreateFileDataObject_fn)(intptr_t, intptr_t, intptr_t, void*, void**);
 intptr_t __stdcall vb6_di_ord_740(intptr_t pIDLFolder, intptr_t cIDL, intptr_t apIDL, void* pDataInner, void** ppDataObject) {
     static vb6_di_SHCreateFileDataObject_fn pfn = NULL;

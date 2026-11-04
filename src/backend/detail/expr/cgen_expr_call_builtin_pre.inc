@@ -146,7 +146,19 @@
                 return;
             }
             if (vpIsCall && !vpIsLvalue092s) {
-                lastExpr_ = "(intptr_t)&(void*){" + lastExpr_ + "}";
+                // ucSegmentedControl 的 mIOleInPlaceActivate.bas:
+                //   `Invoke(..., QueryInterface, VarPtr(Str2Guid(IID_IOleInPlaceActiveObject)), ...)`
+                // Str2Guid 返回 GUID (用户 UDT)。MSVC C 模式不支持把结构体 rvalue 塞进
+                // `(T){expr}` 复合字面量 (会被当成首成员初始化 → C2440)，所以先落一枚
+                // 块作用域临时再取址；标量 (void*/intptr_t 返回) 仍走原复合字面量。
+                std::string vpUdt = node.positional[0] ? inferUdtTypeOfExpr(*node.positional[0]) : std::string();
+                if (!vpUdt.empty()) {
+                    std::string vpTemp = "_vp_" + std::to_string(varPtrTempCounter_++);
+                    c_.emitLine(vpUdt + " " + vpTemp + " = " + lastExpr_ + ";  /* VarPtr(UDT 临时) */");
+                    lastExpr_ = "(intptr_t)&" + vpTemp;
+                } else {
+                    lastExpr_ = "(intptr_t)&(void*){" + lastExpr_ + "}";
+                }
             } else if (!lastExpr_.empty() && (std::isdigit(static_cast<unsigned char>(lastExpr_[0])) || lastExpr_[0] == '(')) {
                 if (lastExpr_.size() > 1 && lastExpr_[0] == '(' && lastExpr_[1] == '*') {
                     // Fix 090h: (*name) / (*name).field / (*name)[idx] — ByRef 参数解引用是左值

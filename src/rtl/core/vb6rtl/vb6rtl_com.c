@@ -513,6 +513,22 @@ vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv) {
     return vb6_ComVariantIntoSlot(pv, 0);
 }
 
+/* 站点: ParamArray (Windows SAFEARRAY of VT_VARIANT) 当作值参与 Variant 赋值 ——
+   ucSegmentedControl 的 mIOleInPlaceActivate OleInvoke 里 `varParam = arrParam`。
+   以前 `vb6_VariantFromValue(arrParam)` 的 _Generic 把 SAFEARRAY* 落进 default
+   ⇒ vt=VT_DISPATCH / pdispVal=描述符地址 (假对象): IsArray 答 False, 随后
+   `UBound(varParam, 1)` 拿到 NULL 描述符 ⇒ 运行期错误 9 (实测启动即崩)。
+   这里按 VT_ARRAY|VT_VARIANT 走既有那一趟转换 (vb6_ComVariantIntoSlot, steal=0),
+   得到真 vb6_SafeArray1D; 源数组只读、不转移所有权。 */
+vb6_VARIANT vb6_VariantFromParamArray(SAFEARRAY* psa) {
+    VARIANT v;
+    VariantInit(&v);
+    if (psa) { v.vt = VT_ARRAY | VT_VARIANT; v.parray = psa; }
+    vb6_VARIANT r = vb6_ComVariantIntoSlot(&v, 0);
+    v.parray = NULL;   /* IntoSlot 已深拷元素; 清指针格以免后续 clear 动到源数组 */
+    return r;
+}
+
 /* P4 取证 (2026-11-04, 用户报的 "内存不能 read"): For Each 循环尾清栈上 VARIANT 用的是
  * OLEAUT32 的 VariantClear, 它对 VT_DISPATCH 一律 `pdispVal->lpVtbl->Release`。可 C3 的
  * 伪对象 (内建 Collection = vb6forms 的 vb6_CollRec, 首字段是身份标记 0xC01C01C0,
@@ -1604,7 +1620,7 @@ int16_t vb6_Extender_Cancel  = 0;
 // --- Fix 133u: Extender.Visible/Height (czUI.ctl) ---
 // Fix 221: 第三格 DataChanged (ComCtlsDemo 的 `UserControl.Extender.DataChanged = True`,
 // 32 处). 运行期容器不活动 ⇒ 只写不读, 保留可写字段。
-struct vb6_UserControl_Extender_Type vb6_UserControl_Extender = { -1, 0, 0 };
+struct vb6_UserControl_Extender_Type vb6_UserControl_Extender = { -1, 0, 0, 0 };
 
 // Fix 221: UserControl.EventsFrozen —— .ctl 里只出现在读位置 (见 vb6rtl_userctl.h
 // 的注释), VB6 运行期恒 False ⇒ 恒 0 的槽位就是正确值。
@@ -1847,6 +1863,25 @@ void vb6_UserControl_SetFocus(void) {
 void vb6_Extender_ZOrder(vb6_VARIANT* Position, int _has_Position) {
     (void)Position; (void)_has_Position;
     (void)0;
+}
+
+// ucSegmentedControl.ctl 的 `Move` 属性: 按可选参数档位调用 `Extender.Move`。
+// 容器不活动时这一步由我们直接落到控件自己的宿主窗口上 (twips → 像素)。
+void vb6_Extender_Move(float* Left, vb6_VARIANT* Top, vb6_VARIANT* Width, vb6_VARIANT* Height,
+                       int _has_Top, int _has_Width, int _has_Height) {
+    HWND hwnd = (HWND)vb6_UserControl_hWnd;
+    RECT rc;
+    int tpx, tpy, x, y, w, h;
+    if (!hwnd || !Left) return;
+    tpx = vb6_Screen_TwipsPerPixelX(); if (tpx <= 0) tpx = 15;
+    tpy = vb6_Screen_TwipsPerPixelY(); if (tpy <= 0) tpy = 15;
+    GetWindowRect(hwnd, &rc);
+    MapWindowPoints(HWND_DESKTOP, GetParent(hwnd), (POINT*)&rc, 2);
+    x = (int)(*Left / (float)tpx);
+    y = (_has_Top && Top) ? (int)(vb6_VariantToLong(*Top) / tpy) : rc.top;
+    w = (_has_Width && Width) ? (int)(vb6_VariantToLong(*Width) / tpx) : (rc.right - rc.left);
+    h = (_has_Height && Height) ? (int)(vb6_VariantToLong(*Height) / tpy) : (rc.bottom - rc.top);
+    SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 // ============================================================

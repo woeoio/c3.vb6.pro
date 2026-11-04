@@ -1645,6 +1645,17 @@ bool CCodeGen::isWholeArrayRef(const Expr* e) const {
         Symbol* bsym = symTab_.lookupModule(bare.name);
         return bsym && bsym->kind == SymbolKind::Variable && bsym->isArray;
     }
+    // UDT 动态数组成员 (`m_Items(Index).ImgArr`): 语义层把数组标志记在
+    // `mi.isArrayDynamic`/`mi.arraySize` 上, `mi.type` 只是元素档 —— 这里必须走
+    // inferUdtFieldVb6Type 的 outIsArray, 否则整枚赋值退化成标量路径:
+    //   `m_Items(Index).ImgArr = SrcImg` (SrcImg As Variant 里是 Byte())
+    //   ⇒ 发 `vb6_VariantToLong(...)` = 0 ⇒ ImgArr 空 ⇒ LoadImageFromArray 早退
+    //   ⇒ 用户控件所有图标都画不出来 (ucSegmentedControl 实测)。
+    if (e->kind == ASTNodeKind::MemberAccessExpr || e->kind == ASTNodeKind::WithMemberExpr) {
+        bool isArr = false;
+        inferUdtFieldVb6Type(e, &isArr);
+        return isArr;
+    }
     if (e->kind != ASTNodeKind::IndexOrCallExpr) return false;
     auto& n = static_cast<const IndexOrCallExpr&>(*e);
     if (!n.positional.empty() || !n.named.empty()) return false;

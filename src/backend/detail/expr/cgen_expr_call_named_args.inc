@@ -374,7 +374,32 @@
                                       paArgExpr.find("vb6_ComIface_") != std::string::npos);
                     }
 
-                    if (isLongArg) {
+                    /* 站点: ParamArray 整体转发 —— mIOleInPlaceActivate.bas 的
+                       `Invoke = OleInvoke(pInterface, eFunction, arrParam)`。
+                       实参是当前过程的 ParamArray 形参本身 (C 侧类型 SAFEARRAY*),
+                       VB6 语义是把它当作一个 VT_ARRAY|VT_VARIANT 元素递出去;
+                       落到 PA_SetLong 会把指针截成 VT_I4, 接收端 `UBound(varParam)`
+                       拿到 NULL 描述符 ⇒ 运行期错误 9 (实测启动即崩)。 */
+                    bool isParamArrayVarArg = false;
+                    if (argIdx < (int)node.positional.size() && node.positional[argIdx]
+                        && node.positional[argIdx]->kind == ASTNodeKind::IdentifierExpr
+                        && currentProc_) {
+                        auto& paIdent = static_cast<IdentifierExpr&>(*node.positional[argIdx]);
+                        std::string paIdentLow = Symbol::toLower(paIdent.name);
+                        for (auto& curP : currentProc_->params) {
+                            if (curP.isParamArray
+                                && Symbol::toLower(curP.name) == paIdentLow) {
+                                isParamArrayVarArg = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (isParamArrayVarArg) {
+
+                        c_.emitLine("vb6_PA_SetSafeArray(" + paVar + ", " + std::to_string(i) + ", " + paArgExpr + ");");
+
+                    } else if (isLongArg) {
 
                         c_.emitLine("vb6_PA_SetLong(" + paVar + ", " + std::to_string(i) + ", " + paArgExpr + ");");
 

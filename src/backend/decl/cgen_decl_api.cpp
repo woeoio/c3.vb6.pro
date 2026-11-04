@@ -52,6 +52,31 @@ void CCodeGen::visit(DeclareDecl& node) {
     std::string retType = (node.procKind == ProcKind::Function)
         ? mapDeclareType(node.returnType.get()) : "void";
 
+    // 同一 DLL 导出在本模块里被声明成两种 VB 形态 (Sub + Function) 时, DI extern 的
+    // 返回类型必须统一到"非 void": 否则先发的 void 原型会让后一条 Function 的包装
+    // `_r = vb6_di_X(...)` 触发 C2120 (实测 ucSegmentedControl.ctl 的
+    // CreateStreamOnHGlobal2 Alias "CreateStreamOnHGlobal" + CreateStreamOnHGlobal As Long)。
+    // stdcall 的返回类型不参与符号装饰, void 调用端丢弃返回值即可, 不影响既有站点。
+    if (currentModule_ && declarePrescanModule_ != currentModule_) {
+        declarePrescanModule_ = currentModule_;
+        for (auto& d : currentModule_->declarations) {
+            if (d->kind != ASTNodeKind::DeclareDecl) continue;
+            auto& dd = static_cast<DeclareDecl&>(*d);
+            if (dd.procKind != ProcKind::Function || !dd.returnType) continue;
+            std::string lib2 = stripQuotes(dd.libName);
+            if (lib2.size() > 4 && (lib2.compare(lib2.size()-4, 4, ".dll") == 0
+                                    || lib2.compare(lib2.size()-4, 4, ".DLL") == 0)) {
+                lib2 = lib2.substr(0, lib2.size()-4);
+            }
+            std::string exp2 = stripQuotes(dd.aliasName);
+            if (exp2.empty()) exp2 = dd.name;
+            std::string key2 = lib2 + "|" + exp2;
+            std::transform(key2.begin(), key2.end(), key2.begin(), ::tolower);
+            declareNonVoidExports_.insert(key2);
+        }
+    }
+    std::string externRetType = retType;
+
     std::string params = makeParamList(node.params, true, isStaticDecl);
 
     // 调用约定
@@ -66,6 +91,13 @@ void CCodeGen::visit(DeclareDecl& node) {
     // 导出名: Alias优先, 否则用VB6函数名
     // 注意: Windows API函数名是大小写敏感的, 需要保持原始大小写
     std::string exportedName = aliasName.empty() ? node.name : aliasName;
+
+    // 冲突导出的 void 声明 → intptr_t extern (见上方预扫说明)。
+    if (retType == "void") {
+        std::string key = libName + "|" + exportedName;
+        std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+        if (declareNonVoidExports_.count(key)) externRetType = "intptr_t";
+    }
 
     // Fix 187: VB6 对 Declare 的 `ByVal <x> As String` **一律按 ANSI 编组**，与 API
     // 名字是否以 'A' 结尾无关（VB6 没有宽字符编组，`As String` 出参永远是 LPSTR）。
@@ -278,7 +310,7 @@ void CCodeGen::visit(DeclareDecl& node) {
     // extern and provide forwarding stubs in vb6rtl.c that bridge vb6_di_Xxx → real API.
     // ai/024 T02: 静态路这条 extern 就是**真实归档符号**本身, 无桩可桥 —— 引用符号
     // 由编译器按 callConv 生成 (x86 stdcall 得 `_MyAdd@16`), 与归档成员名一致即解析成功。
-    h_.emitLine("extern " + retType + " " + callConv + " " + cExportedIdent + "(" + params + ");");
+    h_.emitLine("extern " + externRetType + " " + callConv + " " + cExportedIdent + "(" + params + ");");
 
     // === Fix <vbeclipse> 2026-10-06: Err.LastDllError 快照包装 ===
     // 必须在 extern vb6_di_X 之后 emit (包装体要调用它)。

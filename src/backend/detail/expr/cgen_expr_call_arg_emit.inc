@@ -262,6 +262,13 @@
         // 生成临时char*变量, 调用后释放, 无内存泄露
         if (isDeclareAnsiCall && i < calleeParams.size() && calleeParams[i].isByVal
             && calleeParams[i].type == Vb6Type::String) {
+          if (isVariantSlot(argVal, node.positional[i].get())) {
+            // ucSegmentedControl.ctl `ItemLoadImage(..., SrcImg As Variant)` 里
+            // `PathIsURL(SrcImg)`: 形参的 C 类型是 BSTR (makeParamCType: String→BSTR,
+            // A/W 由 RTL 转发桩处理)。旧路先 char* 再被 BSTR 化 = C2440 + 双重转码
+            // (`_ansi_N` 还得靠 vb6_VariantToString(char*) 收场)。Variant 实参直接解包成 BSTR。
+            argVal = "vb6_VariantToString(" + argVal + ")";
+          } else {
             std::string ansiVar = "_ansi_" + std::to_string(ansiCounter_++);
             // Fix 110x: BSTR 形参的实参若是 Variant 表达式 (后期绑定控件属性读
             // vb6_VariantFromComResult(vb6_ComGetProp(...)) 等), 直接交给
@@ -283,6 +290,7 @@
                 ansiOutParams_.push_back({ansiVar, argVal, "0"});  // cap=0: 由 NUL 定长
             }
             argVal = ansiVar;
+          }
         }
 
         // Fix 175: 用户 Sub/Function/Property 的 **ByVal String 形参**收到数值/日期实参

@@ -62,6 +62,24 @@ void vb6_PA_SetVariant(SAFEARRAY* psa, int32_t index, VARIANT* pv) {
     SafeArrayPutElement(psa, &idx, pv);
 }
 
+/* 站点: ParamArray 转发 (mIOleInPlaceActivate.bas 的 `Invoke = OleInvoke(pInterface, eFunction, arrParam)`)。
+   VB6 语义: 把**整个 ParamArray 数组**当作一个 Variant 元素递给下一个 ParamArray 形参, 即该元素是
+   VT_ARRAY|VT_VARIANT。此前这里落进 vb6_PA_SetLong ⇒ SAFEARRAY* 被截成 VT_I4, 接收端
+   `UBound(varParam)` 拿到 NULL 描述符 ⇒ 运行期 "错误 9 下标越界" (实测 C3 产物启动即崩)。
+   SafeArrayPutElement 对 VT_VARIANT 元素做 VariantCopy ⇒ VT_ARRAY 那一档 SafeArrayCopy,
+   所以递过去的是内容副本; 本函数不改写源数组, 也不接管其所有权。 */
+void vb6_PA_SetSafeArray(SAFEARRAY* psa, int32_t index, SAFEARRAY* src) {
+    if (!psa || !src) return;
+    VARIANT v;
+    VariantInit(&v);
+    v.vt = VT_ARRAY | VT_VARIANT;
+    v.parray = src;
+    long idx = (long)index;
+    SafeArrayPutElement(psa, &idx, &v);
+    /* put 已复制; 这里只是把临时 VARIANT 的指针格清空, 免得任何后续 clear 动到源数组 */
+    v.parray = NULL;
+}
+
 void vb6_PA_SetLong(SAFEARRAY* psa, int32_t index, int32_t val) {
     if (!psa) return;
     VARIANT v;
