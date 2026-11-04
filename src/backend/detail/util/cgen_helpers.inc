@@ -634,6 +634,12 @@
 
     long controlContainerExStyleBit(const FrmControl& ctrl) const;
 
+    // 账 (TeeChart 夹具): 窗体树里有没有「程序化赋值会派发事件」的控件 ——
+    // CheckBox/OptionButton 的 Value 真变化发 Click，H/VScrollBar 的 Value 真变化发 Change
+    // （口径见 RTL 的 vb6_Form_SetLoading 注释）。有这类控件才需要在 CreateControls 外面
+    // 挂/摘 loading 闸；没有就一行都不发，免得把每一张只有按钮/文本框的窗体也改出形状差异。
+    bool formTreeHasEventLoadingUsers(const FrmControl& root) const;
+
     // 账 #158（按钮那一半）: BUTTON 类的焦点通知（`BN_SETFOCUS=6` / `BN_KILLFOCUS=7`）只有创建时
     // 挂了 `BS_NOTIFY` 才会往父窗发（裸码实测 `.build/bnnotify/bnnotify.c`，两枚按钮只差这一位）。
     // 两条创建路共用这一处判断（顶层 + 容器子控件）。`BN_CLICKED` 不需要这一位，

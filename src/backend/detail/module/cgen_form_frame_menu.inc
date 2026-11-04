@@ -658,6 +658,9 @@
     }
 
     c_.emitLine("vb6_formLoading_" + cIdent(formName) + " = 0;  /* allow events after form init */");
+    if (formTreeHasEventLoadingUsers(frmDesc.formControl)) {
+        c_.emitLine("vb6_Form_SetLoading((void*)hwnd, 0);  /* 建控件结束：运行期赋值才派发事件 */");
+    }
     c_.dedent();
     c_.emitLine("}");  // CreateControls
     c_.emitBlank();

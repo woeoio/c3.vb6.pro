@@ -125,6 +125,9 @@ tests/guisample/*.lic
 tests/guisample/out_*/
 tests/guisample/vb6ref/out/
 tests/guisample/*.exe
+# TeeChart Pro v5 商业 OCX: 夹具源码入库, 资产只在有授权的机器上放 (CI 缺资产走 requiresFiles SKIP)
+tests/TeeChartChartDisplay/*.ocx
+tests/TeeChartChartDisplay/*.lic
 tests/ctlident/*.out
 tests/ctlident/*.err
 tests/ctlident/*.exe

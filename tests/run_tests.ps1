@@ -736,7 +736,19 @@ $script:GuiCases = @(
     # + 39 条检查点全中 + 退出码 0" —— 检查点必须等 100ms 的 tick 才印得出, 它们本身就是
     # "窗口活过并转过消息循环"的证据; 不要再用采样次数/存活时长当寿命判据 (会贴边)。
     @{ Name = "ctrlsstab";        Vbp = "$Tests\ctrlsstab\CtrlSSTab.vbp"; Mode = "self";
-       WindowTitle = "CtrlSSTab"; Needles = $guiTsNeedles }
+       WindowTitle = "CtrlSSTab"; Needles = $guiTsNeedles },
+    # TeeChart Pro v5 官方示例 (厂商源码已复制进 tests\TeeChartChartDisplay, 不依赖本机安装路径)。
+    # OCX 是 32 位 ⇒ 整工程只能 --arch x86 (出 x64 产物会链不上 32 位 OCX)。
+    # 示例无 timer 自退, 窗口起来后由 harness 关; 数据用 Delphi Random 填充 ⇒ 判据只能钉结构
+    # (标题中心/图例框/轴线行), 见 PixelAssert 脚本头部录制的真 VB6 对照读数。
+    # 商业 OCX 不入库 (tests\TeeChartChartDisplay\*.ocx 走 .gitignore): CI 缺资产时只有
+    # RequiresFiles 这一道 SKIP; FailIfAssetPresentAndLoadFails 保证"资产齐了却起不来"
+    # 判红而不是被下面的组件加载失败兜底 SKIP 吞掉。
+    @{ Name = "TeeChartChartDisplay"; Vbp = "$Tests\TeeChartChartDisplay\DisplayProject.vbp";
+       Arch = "x86"; Mode = "close"; WindowTitle = "Chart appearance"; HoldWindowMs = 2000;
+       MinChildWindows = 8; RequiresFiles = @("TeeChart5.ocx");
+       FailIfAssetPresentAndLoadFails = $true;
+       PixelAssert = @("guisample\teechart_display_px.ps1") }
 )
 
 # 子进程 stdout/stderr 的编码 = 它实际写出的那条代码页。
@@ -789,6 +801,14 @@ function Update-WinSample {
         if ($State.Consec -gt $State.MaxConsec) { $State.MaxConsec = $State.Consec }
         if ($State.FirstMs -lt 0) { $State.FirstMs = $Sw.ElapsedMilliseconds }
         $State.LastMs = $Sw.ElapsedMilliseconds
+        # 账 (TeeChart 夹具): 主窗句柄一出现就可见, 但 Caption 可能还没落地 ——
+        # TeeChart 走 OLE 就地激活 (LoadLibrary + PersistStream.Load + DoVerb),
+        # 首次采样 (20ms) 时窗体是可看见的空标题, 标题几百毫秒后才由 CreateControls/
+        # SetWindowText 写上。原来只在"首次可见"那一刻读一次, 于是恒读到 ''。
+        # 这里改成**采样期间持续记第一个非空标题**, 判据本身不变 (仍要求标题对上)。
+        if (-not $State.Title) {
+            try { $t = [string]$Proc.MainWindowTitle; if ($t) { $State.Title = $t } } catch { }
+        }
     } else {
         $State.Consec = 0
     }
@@ -927,7 +947,7 @@ function Test-GuiVbpCase {
     $obsSpanMs = 0
     $maxConsec = 0
     # 采样状态: Consec=当前连续可见次数, MaxConsec=历史最大, FirstMs/LastMs=可见段的首末时刻。
-    $samp = @{ Consec = 0; MaxConsec = 0; FirstMs = -1; LastMs = 0 }
+    $samp = @{ Consec = 0; MaxConsec = 0; FirstMs = -1; LastMs = 0; Title = "" }
     $issues = @()
     $miss = @()
     $hit = 0
@@ -1046,6 +1066,8 @@ function Test-GuiVbpCase {
 
         # ② 检查点
         $allText = $out + "`r`n" + $err
+        # 首次可见时读到空标题的用例 (见 Update-WinSample 的注释): 用采样期间补记的第一个非空标题。
+        if (-not $winTitle -and $samp.Title) { $winTitle = [string]$samp.Title }
         foreach ($n in $needles) {
             if ($allText.IndexOf([string]$n, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $hit++ } else { $miss += [string]$n }
         }
@@ -1074,7 +1096,13 @@ function Test-GuiVbpCase {
         if (-not $seen) {
             $tail = (@((([string]$err) -split "`r?`n") | Where-Object { $_ }) | Select-Object -Last 6) -join " | "
             $loadPat = 'DllGetClassObject|LoadLibrary|C3_COM|C3_HOST_MEMBER|class not registered|0x80040154|0xC0000135|0xC0000142|SideBySide|SxS|manifest'
-            if ($err -match $loadPat) {
+            # 账 (TeeChart 夹具): 「资产可用却 SKIP」必须判红。RequiresFiles 全在 (+位数对) 时,
+            # 组件加载失败就是真缺口, 不许走下面这条"缺资产"兜底 SKIP; 用例条目显式声明
+            # FailIfAssetPresentAndLoadFails 才收紧 (默认行为不变, 老用例零影响)。
+            $strictAsset = $false
+            if ($Case.ContainsKey("FailIfAssetPresentAndLoadFails")) { $strictAsset = [bool]$Case.FailIfAssetPresentAndLoadFails }
+            $assetsPresent = ($requires.Count -gt 0 -and $missingReq.Count -eq 0)
+            if (($err -match $loadPat) -and -not ($strictAsset -and $assetsPresent)) {
                 $script:skip++
                 Write-GuiResult -Dir $guiOut -Name $name -Status "SKIP" -Data @{
                     detail = "组件加载失败: $tail"; exitCode = $exitCode; killed = $killed

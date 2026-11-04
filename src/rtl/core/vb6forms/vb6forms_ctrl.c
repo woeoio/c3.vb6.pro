@@ -72,6 +72,26 @@ void vb6_SetControlText(void* hwnd, void* bstr) {
     }
 }
 
+// 账 (C3 事件语义): 「正在建控件」的闸（声明见 vb6forms_prop.h）。
+// 生成码在 CreateControls 起/止各发一次；这里只认**根窗**（控件在 Frame 里也查得到窗体）。
+static const wchar_t* kFormLoadingProp = L"VB6_Form_Loading";
+
+void vb6_Form_SetLoading(void* hwndForm, int loading) {
+    if (!hwndForm) return;
+    SetPropW((HWND)hwndForm, kFormLoadingProp, (HANDLE)(INT_PTR)(loading ? 2 : 1));
+}
+
+int vb6_Form_IsLoading(void* hwndAny) {
+    HWND w = (HWND)hwndAny;
+    HANDLE h;
+    if (!w || !IsWindow(w)) return 0;
+    w = GetAncestor(w, GA_ROOT);
+    if (!w) return 0;
+    h = GetPropW(w, kFormLoadingProp);
+    if (!h) return 0;                 /* 没标记 = 运行期 */
+    return (INT_PTR)h == 2;
+}
+
 int vb6_GetCheckValue(void* hwnd) {
     if (!hwnd) return 0;
     LRESULT state = SendMessageW((HWND)hwnd, BM_GETCHECK, 0, 0);
@@ -80,7 +100,18 @@ int vb6_GetCheckValue(void* hwnd) {
 
 void vb6_SetCheckValue(void* hwnd, int value) {
     if (!hwnd) return;
-    SendMessageW((HWND)hwnd, BM_SETCHECK, (WPARAM)value, 0);
+    HWND hw = (HWND)hwnd;
+    int oldState = (int)SendMessageW(hw, BM_GETCHECK, 0, 0);
+    SendMessageW(hw, BM_SETCHECK, (WPARAM)value, 0);
+    /* 实测（.temp/evprobe，真 VB6）：CheckBox 的 Click 只在 Value **真变化**时发
+       （0→1、1→2 都发），同值赋值静默；设计期灌值也不发（vb6_Form_IsLoading 闸）。
+       通知走原生通道：给父窗发 WM_COMMAND/BN_CLICKED，id 取创建时的 hMenu。 */
+    if (oldState != value && !vb6_Form_IsLoading(hw)) {
+        HWND parent = GetParent(hw);
+        if (parent)
+            SendMessageW(parent, WM_COMMAND,
+                         MAKEWPARAM((WORD)GetDlgCtrlID(hw), BN_CLICKED), (LPARAM)hw);
+    }
 }
 
 // 账 #128-b: OptionButton 的 Value 在 VB6 是 **Boolean**，而 CheckBox 的是 **三态 Integer**
@@ -95,7 +126,18 @@ int vb6_GetOptionValue(void* hwnd) {
 
 void vb6_SetOptionValue(void* hwnd, int value) {
     if (!hwnd) return;
-    SendMessageW((HWND)hwnd, BM_SETCHECK, (WPARAM)(value ? BST_CHECKED : BST_UNCHECKED), 0);
+    HWND hw = (HWND)hwnd;
+    int oldOn = (SendMessageW(hw, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    int newOn = value ? 1 : 0;
+    SendMessageW(hw, BM_SETCHECK, (WPARAM)(newOn ? BST_CHECKED : BST_UNCHECKED), 0);
+    /* 实测（.temp/evprobe，真 VB6）：OptionButton 只在 False→True 这一跳发 Click；
+       True→True 与 True→False 都不发（与 CheckBox「任何真变化都发」不同）。 */
+    if (newOn && !oldOn && !vb6_Form_IsLoading(hw)) {
+        HWND parent = GetParent(hw);
+        if (parent)
+            SendMessageW(parent, WM_COMMAND,
+                         MAKEWPARAM((WORD)GetDlgCtrlID(hw), BN_CLICKED), (LPARAM)hw);
+    }
 }
 
 int vb6_GetControlVisible(void* hwnd) {

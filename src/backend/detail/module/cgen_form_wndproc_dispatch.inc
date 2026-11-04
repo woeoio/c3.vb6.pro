@@ -587,13 +587,35 @@
     c_.emitLine("case WM_HSCROLL:");
     c_.emitLine("case WM_VSCROLL: {");
     c_.indent();
-    bool hasScrollBar = false;
-    for (const auto& ctrl : frmDesc.formControl.children) {
-        if (ctrl.controlType == FrmControlType::HScrollBar || ctrl.controlType == FrmControlType::VScrollBar) { hasScrollBar = true; break; }
-        // C29-SL-c: Slider 走的就是这一条通道（实测：横杆发 WM_HSCROLL、竖杆发 WM_VSCROLL，
-        // lParam = 控件句柄）⇒ 同一扇门，认来源的写法也照抄 ScrollBar 那一套。
-        if (ctrl.controlType == FrmControlType::Slider) { hasScrollBar = true; break; }
+    // 账 (TeeChart Chart display 夹具): HScroll/VScroll/Slider 可以住在 Frame/PictureBox
+    // 里（.frm 的 Begin 嵌套）。原来只扫 frmDesc.formControl.children 的顶层 ⇒ 本例
+    // HScroll4 在 Frame8 里，生成出来的 case 是**空的**，程序化 Value 的 Change 一条
+    // 也派发不出去（实测：Panel.MarginRight 丢失 → 图表整体右移 12px）。这里与 WM_COMMAND
+    // 那趟同样递归（含 UC 容器的子控件，但 UC 子控件的句柄/事件在 .ctl 模块，跳过）。
+    std::vector<const FrmControl*> scrollCtrlsM3;
+    {
+        auto collectM3 = [&](auto&& self, const FrmControl& container) -> void {
+            for (const auto& child : container.children) {
+                if (child.controlType == FrmControlType::Menu) continue;
+                if (findUserControlSpec(child.controlTypeName)) continue;
+                if (child.controlType == FrmControlType::HScrollBar
+                    || child.controlType == FrmControlType::VScrollBar
+                    || child.controlType == FrmControlType::Slider)
+                    scrollCtrlsM3.push_back(&child);
+                if (!child.children.empty() && controlIsContainerType(child))
+                    self(self, child);
+            }
+        };
+        for (const auto& ctrl : frmDesc.formControl.children) {
+            if (ctrl.controlType == FrmControlType::HScrollBar
+                || ctrl.controlType == FrmControlType::VScrollBar
+                || ctrl.controlType == FrmControlType::Slider)
+                scrollCtrlsM3.push_back(&ctrl);
+            if (!ctrl.children.empty() && controlIsContainerType(ctrl))
+                collectM3(collectM3, ctrl);
+        }
     }
+    bool hasScrollBar = !scrollCtrlsM3.empty();
     if (hasScrollBar) {
     c_.emitLine("{ void* scrollHwnd = (void*)lParam; int scrollCode = LOWORD(wParam);");
     // C29-SL-k: VB6 的 Slider 在拖滑块时把那颗气泡摆出来（ISlider.Text = 0x0010 就是气泡里那句
@@ -602,12 +624,13 @@
     // 这一条**只发一次、不按控件展开**：RTL 里按窗口类名把 ScrollBar 筛掉。值取 wParam 高字
     // （实测 4/5 两档带新值、8 那档为 0 ⇒ 传 0 时 RTL 自己现问 TBM_GETPOS）。
     bool hasSlider = false;
-    for (const auto& ctrl : frmDesc.formControl.children) {
-        if (ctrl.controlType == FrmControlType::Slider) { hasSlider = true; break; }
+    for (const FrmControl* sl : scrollCtrlsM3) {
+        if (sl->controlType == FrmControlType::Slider) { hasSlider = true; break; }
     }
     if (hasSlider)
         c_.emitLine("vb6_Slider_BubbleNotify(scrollHwnd, scrollCode, HIWORD(wParam));");
-    for (const auto& ctrl : frmDesc.formControl.children) {
+    for (const FrmControl* ctrlPtr : scrollCtrlsM3) {
+        const FrmControl& ctrl = *ctrlPtr;
         if (ctrl.controlType == FrmControlType::HScrollBar || ctrl.controlType == FrmControlType::VScrollBar) {
             std::string ctrlHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
             std::string scrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");
@@ -617,7 +640,13 @@
             c_.emitLine("if (scrollHwnd == (void*)" + ctrlHwnd + ") {");
             c_.indent();
             if (hasScroll) c_.emitLine("if (scrollCode == 5 || scrollCode == 4) { extern void " + scrollFn + "(); " + scrollFn + "(); }");
-            if (hasChange) c_.emitLine("else { extern void " + changeFn + "(); " + changeFn + "(); }");
+            // 账 (TeeChart 夹具): 没挂 _Scroll 时不能发射裸 else（同 C2181）。原来只对顶层控件
+            // 展开，只要顶层每一枚都恰好有 _Scroll 就看不出来；递归进 Frame 后本例 8 枚
+            // 只有 _Change ⇒ 从前的写法当场编译失败。无 _Scroll 就无条件调 _Change。
+            if (hasChange) {
+                if (hasScroll) c_.emitLine("else { extern void " + changeFn + "(); " + changeFn + "(); }");
+                else c_.emitLine("{ extern void " + changeFn + "(); " + changeFn + "(); }");
+            }
             c_.dedent();
             c_.emitLine("}");
         }
@@ -626,7 +655,8 @@
     // 两条分法都在 RTL 那边定（029 §C29-SL-c 有实测理由）：Change 问"值真的变了没"
     // （`vb6_Slider_FireChange` 自带基准，拖拽中那串 TB_THUMBTRACK 因此连续触发），
     // Scroll 只认滑块那两档（4/5），与上面 ScrollBar 已发货的口径同一档。
-    for (const auto& ctrl : frmDesc.formControl.children) {
+    for (const FrmControl* ctrlPtr : scrollCtrlsM3) {
+        const FrmControl& ctrl = *ctrlPtr;
         if (ctrl.controlType != FrmControlType::Slider) continue;
         std::string slHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
         std::string slScrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");

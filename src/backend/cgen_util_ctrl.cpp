@@ -1253,6 +1253,33 @@ void CCodeGen::emitDesignerStateProps(const FrmControl& ctrl, const std::string&
             c_.emitLine("vb6_SetOptionValue(" + hw + ", 1);  /* design Value=True(账 #128-b 专桩) */");
         }
     }
+
+    // 账 (TeeChart Chart display 夹具): HScrollBar/VScrollBar 的设计期 Min/Max/Value 在
+    // 两条创建路上都**一条不发** —— 控件窗口的量程停在默认 0..0，运行期
+    // `HScroll4.Value = 32` 被 SetScrollPos 夹回 0（实测 C3_EVTRACE：old=0 new=0），
+    // 于是 VB6 里必然发生的 Change 一声也没有，Panel.MarginRight 整条丢失。
+    // 顺序必须是 Min → Max → Value（量程立不起来之前写 Value 无意义）。
+    // 只在非默认值时发，与上面 Value 的"反面才发"同一条纪律。
+    if (ctrl.controlType == FrmControlType::HScrollBar || ctrl.controlType == FrmControlType::VScrollBar) {
+        auto mnIt = ctrl.properties.find("Min");
+        if (mnIt != ctrl.properties.end() && mnIt->second.type == FrmValueType::Integer
+            && mnIt->second.intValue != 0) {
+            c_.emitLine("vb6_SetScrollMin(" + hw + ", " + std::to_string(mnIt->second.intValue)
+                        + ");  /* design Min */");
+        }
+        auto mxIt = ctrl.properties.find("Max");
+        if (mxIt != ctrl.properties.end() && mxIt->second.type == FrmValueType::Integer
+            && mxIt->second.intValue != 32767) {
+            c_.emitLine("vb6_SetScrollMax(" + hw + ", " + std::to_string(mxIt->second.intValue)
+                        + ");  /* design Max */");
+        }
+        auto vaIt2 = ctrl.properties.find("Value");
+        if (vaIt2 != ctrl.properties.end() && vaIt2->second.type == FrmValueType::Integer
+            && vaIt2->second.intValue != 0) {
+            c_.emitLine("vb6_SetScrollValue(" + hw + ", " + std::to_string(vaIt2->second.intValue)
+                        + ");  /* design Value */");
+        }
+    }
 }
 
 // 账 #142: 设计期的 `ToolTipText` / `Tag` 此前**两条创建路都没发**（实测：`.frm` 里写了
@@ -1834,6 +1861,23 @@ bool CCodeGen::controlIsContainerType(const FrmControl& ctrl) const {
     default:
         return false;
     }
+}
+
+bool CCodeGen::formTreeHasEventLoadingUsers(const FrmControl& root) const {
+    for (const auto& child : root.children) {
+        switch (child.controlType) {
+        case FrmControlType::CheckBox:
+        case FrmControlType::OptionButton:
+        case FrmControlType::HScrollBar:
+        case FrmControlType::VScrollBar:
+            return true;
+        default:
+            break;
+        }
+        // 容器里的子控件也算（TeeChart 示例 8 枚 HScrollBar 全在 Frame8 里）。
+        if (!child.children.empty() && formTreeHasEventLoadingUsers(child)) return true;
+    }
+    return false;
 }
 
 long CCodeGen::controlContainerExStyleBit(const FrmControl& ctrl) const {

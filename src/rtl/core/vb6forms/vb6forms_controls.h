@@ -90,11 +90,17 @@ typedef struct Vb6OcxProp {
 //   x/y/w/h   像素矩形
 //   ctrlName  控件实例名 (调试/Extender.Name 用)
 //   props     设计期属性表 (经 IPersistPropertyBag::Load 灌入; 可 NULL)
+//   persistBlob 设计期 OleObjectBlob 负载 (.frx 24B 包装头之后的内容; 可 NULL)
+//              → 激活前经 IPersistStreamInit::Load 灌回控件 (TeeChart 的 Series/Axis
+//                等设计期成员都在这里面, 不灌则 Series(0) 空指针)
 // 加载顺序: <exe目录>\<文件名> (便携) → ocxPath (绝对) → CoCreateInstance (已注册) → 裸文件名.
-// 激活: SetClientSite → SetExtent → PropertyBag → DoVerb(INPLACEACTIVATE|SHOW) → SetObjectRects.
+// 激活: SetClientSite → SetHostNames → Advise → PersistStream(Load) → SetExtent → GetExtent
+//       → PropertyBag → SetObjectRects → DoVerb(INPLACEACTIVATE|SHOW) → SetObjectRects.
+//       （Load 必须在 SetExtent 之前：TPF0 流带着控件自己的设计期尺寸，后报会按旧尺寸布局。）
 void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t* altClsidStr,
                          const wchar_t* ocxPath, int x, int y, int w, int h,
-                         const wchar_t* ctrlName, const Vb6OcxProp* props, int propCount);
+                         const wchar_t* ctrlName, const Vb6OcxProp* props, int propCount,
+                         const unsigned char* persistBlob, int persistSize);
 
 // Fix 143d: 把窗体消息转发给该窗体上的无窗口 OCX 控件 (WM_PAINT/鼠标/键盘).
 // 返回 1 = 有控件处理 (调用方用 *plResult 作为 WndProc 返回值).

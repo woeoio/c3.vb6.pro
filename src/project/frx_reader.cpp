@@ -352,6 +352,25 @@ FrxPropBagBlob FrxReader::readPropBagBlob(size_t offset) {
 }
 
 // ============================================================
+// OleObjectBlob (设计器 OCX 持久化数据)
+//   实测布局: [4B "LB" + WORD 版本][DWORD cbPayload][Left][Top][Width][Height]
+//             [cbPayload 字节负载]
+//   负载是控件自己的 IPersistStream 数据 (TeeChart/Delphi = "TPF0" 流)。
+//   只交负载; 包装头里的几何/.frm 已单独给出, 不重复。
+// ============================================================
+FrxOleBlob FrxReader::readOleBlob(size_t offset) {
+    FrxOleBlob out;
+    if (offset + 24 > fileData_.size()) return out;
+    const uint8_t* base = fileData_.data() + offset;
+    if (!(base[0] == 'L' && base[1] == 'B')) return out;
+    uint32_t cbPayload = readLE32(base + 4);
+    if (cbPayload == 0 || offset + 24 + (size_t)cbPayload > fileData_.size()) return out;
+    out.found = true;
+    out.bytes.assign(base + 24, base + 24 + cbPayload);
+    return out;
+}
+
+// ============================================================
 // GBK -> UTF-8 转换
 // ============================================================
 std::string FrxReader::gbkToUtf8(const std::string& gbk) {

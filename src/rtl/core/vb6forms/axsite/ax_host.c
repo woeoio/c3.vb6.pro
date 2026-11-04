@@ -685,7 +685,8 @@ static void axDiagChildren(const char* step, HWND form) {
 
 void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t* altClsidStr,
                          const wchar_t* ocxPath, int x, int y, int w, int h,
-                         const wchar_t* ctrlName, const Vb6OcxProp* props, int propCount) {
+                         const wchar_t* ctrlName, const Vb6OcxProp* props, int propCount,
+                         const unsigned char* persistBlob, int persistSize) {
     if (!hwndForm || !clsidStr) return NULL;
 
     /* C3_OCX_TRACE=1: 打印实例化/激活各步 HRESULT (诊断宿主问题) */
@@ -797,6 +798,41 @@ void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t*
             if (ocxTrace && ctrlName && wcscmp(ctrlName, L"cmdSearch") == 0)
                 axDiagChildren("aftersetclient", (HWND)hwndForm);
         }
+        /* 5b. 设计期 OleObjectBlob → IPersistStreamInit::Load
+         * VB6 的次序是 OleLoad(即 PersistStream::Load) 之后再 SetExtent/SetObjectRects:
+         * .frx 的 TPF0 流里带着控件自己的设计期尺寸, Load 会把它恢复成 6195 缇
+         * 而不是 .frm 的 6015 —— 必须先 Load 再报设计期尺寸, 否则控件内部按
+         * 旧尺寸布局 (实测图表整体右移 12px、标题中心 +6px).
+         * TeeChart 的 TPF0 流里才有设计期建好的 Series/Axis/Title/Legend —— 不灌的话
+         * TChart1.Series(0) 直接读空指针崩溃 (实测 0xC0000005 av read 0x0).
+         * 生成码只传 24B VB 包装头之后的负载. */
+        if (persistBlob && persistSize > 0) {
+            IPersistStreamInit* pPSI = NULL;
+            HRESULT hrQI = pDisp->lpVtbl->QueryInterface(pDisp, &IID_IPersistStreamInit, (void**)&pPSI);
+            if (ocxTrace) fprintf(stderr, "[C3_OCX]   QI(IPersistStreamInit) hr=0x%08lX p=%p size=%d\n",
+                                  (unsigned long)hrQI, (void*)pPSI, persistSize);
+            if (SUCCEEDED(hrQI) && pPSI) {
+                HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)persistSize);
+                if (hg) {
+                    void* dst = GlobalLock(hg);
+                    if (dst) {
+                        memcpy(dst, persistBlob, (size_t)persistSize);
+                        GlobalUnlock(hg);
+                    }
+                    IStream* st = NULL;
+                    if (SUCCEEDED(CreateStreamOnHGlobal(hg, TRUE, &st)) && st) {
+                        HRESULT hrLoad = pPSI->lpVtbl->Load(pPSI, st);
+                        if (ocxTrace) fprintf(stderr, "[C3_OCX]   PersistStream::Load hr=0x%08lX ctrl='%ls'\n",
+                                              (unsigned long)hrLoad, ctrlName ? ctrlName : L"");
+                        st->lpVtbl->Release(st);
+                    } else if (ocxTrace) {
+                        fprintf(stderr, "[C3_OCX]   CreateStreamOnHGlobal failed\n");
+                    }
+                }
+                pPSI->lpVtbl->Release(pPSI);
+            }
+        }
+
         /* 4. 设计期大小 (HIMETRIC) */
         SIZEL sz = { vb6_twipsToHimetric(w * 15), vb6_twipsToHimetric(h * 15) };
         pOleObj->lpVtbl->SetExtent(pOleObj, DVASPECT_CONTENT, &sz);

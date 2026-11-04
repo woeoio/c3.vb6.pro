@@ -99,7 +99,21 @@ void vb6_SetScrollValue(void* hwnd, int value) {
     WCHAR className[256] = {0};
     GetClassNameW(hw, className, 256);
     if (wcsicmp(className, L"SCROLLBAR") == 0) {
+        int oldWin = GetScrollPos(hw, SB_CTL);
         SetScrollPos(hw, SB_CTL, winPos, TRUE);
+        int newWin = GetScrollPos(hw, SB_CTL);
+        /* 实测（.temp/evprobe，真 VB6）：Value **真变化**只发 Change（不发 Scroll），
+           同值赋值静默；设计期灌值不发（vb6_Form_IsLoading 闸，见 vb6forms_prop.h）。
+           发 SB_ENDSCROLL(8)：窗体 WndProc 把 4/5 之外的码一律当 Change 派发，
+           与用户拖拽/点轨道那条原生通道同一分法。 */
+        if (newWin != oldWin && !vb6_Form_IsLoading(hw)) {
+            HWND parent = GetParent(hw);
+            if (parent)
+                SendMessageW(parent,
+                             (GetWindowLongW(hw, GWL_STYLE) & SBS_VERT) ? WM_VSCROLL : WM_HSCROLL,
+                             MAKEWPARAM(SB_ENDSCROLL, (WORD)(SHORT)(newWin + min)),
+                             (LPARAM)hw);
+        }
     }
 }
 

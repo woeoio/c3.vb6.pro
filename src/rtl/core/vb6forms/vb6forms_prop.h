@@ -61,6 +61,17 @@ void vb6_FormZOrder(void* hwnd, int position);
 // 复选框取消勾选是一次正经 `Click`，不能跟着筛。返回 0 = 这条通知不许升成 `Click`。
 int vb6_RadioClickCounts(void* hwndFrom);
 
+// 账 (C3 事件语义 / TeeChart 示例): 「正在建控件」这道门。
+// 实测口径（真 VB6 探针 .temp/evprobe，Form_Load 里逐句记日志）：
+//   · CheckBox 的 Value **真变化**（0→1、1→2）发 Click，同值赋值静默；
+//   · OptionButton 只在 False→True 这一跳发 Click（True→True / True→False 都不发）；
+//   · HScrollBar/VScrollBar 的 Value 真变化只发 Change（不发 Scroll），同值静默。
+// VB6 在**设计期属性灌入**（CreateControls 里的 Value/Min/Max）时一声都不发；
+// 生成码原有模块内静态 vb6_formLoading_<form> 只挡 WM_COMMAND，WM_HSCROLL 没有门。
+// 这里把同一件事记到窗体窗口属性上（值 1/2，SetPropW(…,0)=删属性），两族共用。
+void vb6_Form_SetLoading(void* hwndForm, int loading);
+int  vb6_Form_IsLoading(void* hwndAny);
+
 // P11.8: Position/Size attributes (all visible controls, in pixels)
 // VB6 uses twips internally, but Win32 uses pixels; RTL handles conversion
 int vb6_GetControlLeft(void* hwnd);

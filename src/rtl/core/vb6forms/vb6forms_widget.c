@@ -90,10 +90,15 @@ static LRESULT CALLBACK vb6_CmdForwardSubclass142(HWND hwnd, UINT msg, WPARAM wp
                                                   LPARAM lp, UINT_PTR idSub,
                                                   DWORD_PTR refData) {
     (void)idSub; (void)refData;
-    if (msg == WM_COMMAND) {
+    /* 账 (C3 事件语义 / TeeChart 示例): 与 WM_COMMAND 同一条理由 —— VB6 的
+       HScrollBar/VScrollBar Change 是在**窗体模块**里声明的，而控件在 Frame 里时
+       原生通知只到 Frame。原来的转发只认 WM_COMMAND，于是程序化 `Value = 32`
+       （vb6_SetScrollValue 发 SB_ENDSCROLL）到 Frame 就停住，Panel.MarginRight 等
+       副作用整条丢失（实测：图表整体右移 12px、标题中心 +6px）。两族通知走同一扇门。 */
+    if (msg == WM_COMMAND || msg == WM_HSCROLL || msg == WM_VSCROLL) {
         HWND root = GetAncestor(hwnd, GA_ROOT);
         if (root && root != hwnd) {
-            SendMessageW(root, WM_COMMAND, wp, lp);
+            SendMessageW(root, msg, wp, lp);
         }
     }
     if (g_defSubclassProc142) return g_defSubclassProc142(hwnd, msg, wp, lp);

@@ -8,6 +8,11 @@
     c_.indent();
     c_.emitLine("(void)hwnd; (void)hInstance;");
     c_.emitLine("vb6_formLoading_" + cIdent(formName) + " = 1;  /* block events during form init */");
+    // 账 (TeeChart 夹具): 只有存在「程序化赋值会派发事件」的控件时才挂闸（判定见
+    // formTreeHasEventLoadingUsers）—— 别的窗体一行不发，发码形状不动。
+    if (formTreeHasEventLoadingUsers(frmDesc.formControl)) {
+        c_.emitLine("vb6_Form_SetLoading((void*)hwnd, 1);  /* 设计期灌入期间不触发 Change/Click */");
+    }
     c_.emitLine("vb6_ResetControlId();");
     c_.emitBlank();
 
@@ -1018,12 +1023,34 @@
                         bagArr143 = arrName143;
                         bagCnt143 = std::to_string(bagLines143.size());
                     }
+                    // 设计期 OleObjectBlob: VB6 建完控件后用 IPersistStreamInit::Load
+                    // 把 .frx 里控件自己的持久化数据灌回去 (TeeChart 是 TPF0 流,
+                    // 里面才有设计期建好的 Series/Axis/Title)。只交包装头之后的负载。
+                    std::string blobArr143 = "NULL";
+                    std::string blobSize143 = "0";
+                    if (frxLoaded) {
+                        auto blobIt143 = ctrl.properties.find("OleObjectBlob");
+                        if (blobIt143 != ctrl.properties.end()
+                            && blobIt143->second.type == FrmValueType::FrxReference) {
+                            auto blob143 = FrxReader::readOleBlob(blobIt143->second.frxOffset);
+                            if (blob143.found && !blob143.bytes.empty()) {
+                                std::string blobName143 = "vb6_frx_oleblob_" + cIdent(ctrl.controlName);
+                                if (ctrl.index >= 0) blobName143 += "_" + std::to_string(ctrl.index);
+                                frxArrayDefs_.push_back(bytesToHexArray(
+                                    blob143.bytes.data(), blob143.bytes.size(), blobName143));
+                                h_.emitLine(bytesToHexArrayDecl(blobName143));
+                                blobArr143 = blobName143;
+                                blobSize143 = blobName143 + "_size";
+                            }
+                        }
+                    }
                     std::string call143 = "vb6_OcxHost_Create((void*)hwnd, L\"" + clsid143
                               + "\", " + altArg143 + ", " + ocxArg143 + ", "
                               + std::to_string(l143 / 15) + ", " + std::to_string(t143 / 15) + ", "
                               + std::to_string(w143 / 15) + ", " + std::to_string(h143 / 15)
                               + ", L\"" + escapeWideCString(ctrl.controlName) + "\", "
-                              + bagArr143 + ", " + bagCnt143 + ")";
+                              + bagArr143 + ", " + bagCnt143 + ", "
+                              + blobArr143 + ", " + blobSize143 + ")";
                     if (knownControlArrays_.count(Symbol::toLower(ctrl.controlName))) {
                         int idx143 = ctrl.index >= 0 ? ctrl.index : 0;
                         c_.emitLine("{ void* vb6_ocx_h = " + call143 + ";");

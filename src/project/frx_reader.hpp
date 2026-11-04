@@ -61,6 +61,16 @@ struct FrxPropBagBlob {
     std::vector<uint8_t> bytes;         // 块负载 (cbSize 字节, 含 28B 前缀)
 };
 
+// .frx 里的 `OleObjectBlob` (设计器 OCX 的持久化数据)
+//   布局实测: [4B "LB" + WORD 版本][DWORD 负载长度][DWORD Left][DWORD Top]
+//             [DWORD Width][DWORD Height][负载 = 控件 IPersistStream 数据]
+//   TeeChart 的负载是 Delphi VCL 的 TPF0 流; VB6 建完控件后用
+//   IPersistStreamInit::Load 把**负载**灌回去 (24B 包装头不进流)。
+struct FrxOleBlob {
+    bool found = false;                 // 该偏移处是否为 LB 包装的 OleObjectBlob
+    std::vector<uint8_t> bytes;         // 包装头之后的持久化负载 (交给 OCX)
+};
+
 // ============================================================
 // FrxReader: 读取 .frx 文件
 // ============================================================
@@ -92,6 +102,9 @@ public:
     //   该判据在实测的 InitPanels/InitBands/InitButtons/InitListImages/InitTabs
     //   上逐一命中, 且不会误伤 DocString / 图片块。
     static FrxPropBagBlob readPropBagBlob(size_t offset);
+
+    // 读取设计器 OCX 的 `OleObjectBlob` (见上面 FrxOleBlob 注释)
+    static FrxOleBlob readOleBlob(size_t offset);
 
     // 读取整数列表 (ListBox.ItemData)
     static FrxIntListData readIntList(size_t offset);
