@@ -183,6 +183,88 @@ MEAN_ABS_DIFF_PER_PIXEL = 3.967 / 765   (改前含图标缺失/白底方块时�
   `tests/guisample/GUISample.vbp`、`tests/guisample/vb6ref/src/{vs2015,vc6}/GUISample.vbp`）——
   这 4 份依赖外部 OCX/typelib 的解析，**登记必须以 CI 那台为准**，不要拿本机哈希覆盖。
 
+## 7.7 GA 仍红：夹具在 CI 上 `FAIL (compile)` —— 两个 C3 能力缺口（未修，接手从这里开始）
+
+证据：GA run **41916340378**（head=fc8b5b9d）产物 `test-logs-vbp-2` 里的
+`ucSegmentedControl\c3-error.log`（81927 B）与 `compile.log`：
+
+```
+ucSegmentedControl.c(3326): error C2197: 'vb6_SafeArray1D *vb6_Split(BSTR,BSTR,int32_t,int32_t)':
+                            too many arguments for call        (×4)
+ucSegmentedControl.c(3353): error C2197: 'void *vb6_GetObject(const wchar_t*, const wchar_t*)':
+                            too many arguments for call
+ucSegmentedControl.c(3365): error C2197: 同上
+```
+
+本机 `--emit-c`（`.build\C3.exe`）对同两处发出的形态：
+
+```c
+/* .ctl:2166  Base64Decode Split(SrcImg, ",")(1), DataArr */
+vb6_ucSegmentedControl_Base64Decode((void*)me,
+    vb6_Split(vb6_VariantToString((*SrcImg)), vb6_BSTR_FromStr(L","), -1, 0, 1, NULL, -1, 0), &DataArr);
+/* ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 8 个实参, 而 RTL 声明只有 4 个:
+   vb6rtl_array.h:116  vb6_Split(BSTR expr, BSTR delimiter, int32_t limit, int32_t compare) */
+
+/* .ctl:2195  If GetObject(SrcImg, Len(tBmp), tBmp) Then  /  2211  Call GetObject(hBmp, ...) */
+if (vb6_GetObject(vb6_VariantToLong((*SrcImg)), ((int32_t)sizeof(tBmp)), (void*)&(tBmp))) { ... }
+/*   ^^ 3 个实参, 而内置 vb6_GetObject 只有 2 个; 源里是 mIOleInPlaceActivate.bas:104
+     Private Declare Function GetObject Lib "gdi32.dll" Alias "GetObjectA"(hObject, nCount, lpObject) */
+```
+
+归因（两条，均需改 C3 而不是改夹具）：
+
+- **A. 省略实参补档补错了括号层**：`Split(SrcImg, ",")(1)` 的 AST 里内层调用与外层
+  `Base64Decode` 的缺档补丁（`cgen_expr_call_builtin_fixup.inc:326 kOD_Split`）叠在一起，
+  结果外侧 `Base64Decode` 的缺省尾巴 `1, NULL, -1, 0` 被拼进了**内层 `vb6_Split(...)` 的
+  实参表**。判据是那 4 枚恰好是外侧调用的缺省档而 `kOD_Split` 只有 4 档。
+- **B. 模块级 `Declare` 被同名的内置出口遮蔽**：`GetObject` 在 VB6 里是 gdi32 的 API
+  （本模块自己 Declare 了），C3 却按内置 `vb6_GetObject(pathName, progId)` 发。VB6 语义：
+  **本模块的 Declare 优先于同名内置**（`Split` 那份内置表在
+  `cgen_expr_ident_builtin_table.inc:131`，遮蔽闸门要加在同一处）。
+
+⚠ **本机 `.build\C3.exe` 是旧产物（04:52 构建，其内嵌 RTL 的 `vb6_Split` 是 8 形参），
+所以本机编译能过、CI 新编出来的过不了。接手第一步必须 `scripts\build.bat` 重建，否则一切
+本机复现都是假象。**
+
+下一步（按顺序）：
+1. `scripts\build.bat` 重建 → 本机复跑 `C3 tests\ucSegmentedControl\SegmentedControl.vbp --arch x86`
+   应出现同样 6 条 C2197（否则说明还有别的差异，先查 RTL 头）。
+2. 修 A：把缺档补丁改成在**实参列表层**拼接（不要对渲染后的字符串做括号定位）。
+3. 修 B：在 `cgen_expr_ident_builtin_table.inc` 命中前先查"本模块/本工程同名 Declare 或过程"。
+4. 回归：`test.bat gui` 10/0/0 + `check_builtin_opt_defaults.ps1` / `check_builtin_slot_returns.ps1`
+   / `check_manifest_coverage.ps1` 三个哨兵绿；再提交、双远端快进、GA 全绿。
+5. 修完 codegen 一定又会让若干份输入的发码形状变化 ⇒ 按 §7.6 的口径用 CI 的
+   `ci/emit-manifest` 逐行登记（**不要**拿本机哈希覆盖那 4 份依赖外部 OCX/typelib 的输入）。
+
+## 7.8 本轮收口状态（停点）
+
+GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`builtin_slot_returns`）；
+`Tests (compile #2)` 红在 `[STATIC] owned_temp_keeps`（K13c：RTL 新 mint 了
+`vb6_VariantFromParamArray`，发码侧 `src\common\owned_temp_keeps.hpp` 的 `kOwned` /
+`kOwnedVariant` 两张名单没有它）；`Tests (vbp #2)` 红在 `[GUI] ucSegmentedControl ... FAIL (compile)`
+（就是 §7.7 的 Split/GetObject 两条）。K13 本轮已修并本机 PASS：
+
+- `src\common\owned_temp_keeps.hpp`：两张名单各补一行 `vb6_VariantFromParamArray`（VARIANT 档）；
+- `scripts\owned_temp_keeps_164.txt`：`[own]` 节补同名一行（双向对账）。
+- 本机复跑 `check_owned_temp_keeps.ps1` = PASS（owned 115 / alias 17 / U 5，nomin 184）。
+
+**未完成（下一轮从这里继续）：** §7.7 的 A（`Split(s, d)(1)` 的省略实参补档多出 4 枚，
+`vb6_Split` 实际只剩 4 形参）与 B（模块内 `Declare Function GetObject ... Alias "GetObjectA"`
+被内置 `vb6_GetObject` 遮蔽）。修完还要重跑 `test.bat gui`（10/0/0）、重登记发码变化
+（用 CI 的 `ci/emit-manifest`）、再推 GA。
+
+**两个本机陷阱（下一轮开头先处理，否则复现全是假象）：**
+
+1. `scripts\build.bat` 在本机 checkout 里是 **LF-only**（CI 那边是 CRLF），cmd 会把
+   `if errorlevel` / `echo` 这类行啃掉首字符 ⇒ 必须复制成 CRLF 副本再用
+   `Start-Process -FilePath $env:ComSpec -ArgumentList '/c','<crlf 副本>'` 跑（并设
+   `C3_PROJECT_DIR` + `C3_VCVARSALL`）。
+2. `build.bat` **不重建** `.build\pre\src\driver\c3rtl.rc`（它停在 11-04 13:51，而
+   `src\driver\c3rtl.rc` 是 11-04 19:54）⇒ 本机 `C3.exe` 内嵌的仍是**旧 RTL**
+   （那个旧 RTL 的 `vb6_Split` 是 8 形参），所以本机能编过、CI 新编的编不过。
+   判断"本机产物是否可信"的唯一口径：`--emit-c` 出来的 `vb6_Split(` 形态与
+   `src\rtl\core\vb6rtl\vb6rtl_array.h:116` 的形参数是否一致。
+
 ## 8. 风险 / 注意
 
 - `Manifest.RES` 是**进程清单**（非运行期 SxS manifest）；夹具化时不要把它塞进 SxS 装配路径，否则与两条免注册 COM 路径互相干扰。
