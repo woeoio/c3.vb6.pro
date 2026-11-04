@@ -1190,6 +1190,18 @@ std::string CCodeGen::udtDeepCopyAssign(const Expr& targetNode, const std::strin
     if (valUdt != tgtUdt) return "";             // 异型 UDT / 非 UDT → 维持原路径
     if (!udtHasOwnedMembers(tgtUdt)) return "";
     requestUdtCopy(tgtUdt, false);
+    // RHS 是**函数调用** (UDT 返回值): `&fn(...)` 不是左值 → C2102。
+    // VB6 里 `Seg(0) = MakeBytes(ba)` 合法, C 侧要落一格临时再取址。
+    // 数组元素/成员访问 (`VB6_SA_AT(...)`、`x->y`) 是可取址的左值, 不走这一支。
+    bool rhsIsCall = (valueNode->kind == ASTNodeKind::IndexOrCallExpr
+                      && value.find("VB6_SA_") != 0 && value.back() == ')');
+    if (rhsIsCall) {
+        static int udtTmpSeq = 0;
+        std::string tmp = "_vb6_udt_tmp" + std::to_string(++udtTmpSeq);
+        return "{ " + tgtUdt + " " + tmp + " = " + value + "; vb6_udtcpy_"
+               + udtNameOfCType(tgtUdt) + "(&" + target + ", &" + tmp
+               + "); }  /* Fix 178+UDT 返回临时 */";
+    }
     return "vb6_udtcpy_" + udtNameOfCType(tgtUdt) + "(&" + target + ", &" + value
            + ");  /* Fix 178: UDT 深拷贝 */";
 }

@@ -654,7 +654,18 @@
            "把容器加速键转发进来", 与 UC 的绘制/命中/生命周期无关 (无容器 EXE 模式)。
            只认**设计器模块里整枚 `Me` 作实参**这一格 (C 文本恰为 me / &me), 不碰
            `Me.成员` 与其它实参 —— `me->x` 那种形态的 C 文本是 me->x, 不会命中。 */
-        if (isDesignerModule_ && (argVal == "me" || argVal == "&me")) {
+        /* 只认 IPAO 钩子的两个入口 (InitIPAO / SetIPAO) —— 必须按**被调名**钉住。
+           早先按"整枚 Me 作实参"裸判, 把 VBFlexGridDemo 里其它 `Something(Me)`
+           也一并交成 NULL, 该工程启动即 0xC000041D (实测 A/B)。 */
+        std::string ipalow;
+        if (node.callee) {
+            if (node.callee->kind == ASTNodeKind::IdentifierExpr)
+                ipalow = Symbol::toLower(static_cast<IdentifierExpr&>(*node.callee).name);
+            else if (node.callee->kind == ASTNodeKind::MemberAccessExpr)
+                ipalow = Symbol::toLower(static_cast<MemberAccessExpr&>(*node.callee).memberName);
+        }
+        const bool isIpaoHook = (ipalow == "initipao" || ipalow == "setipao");
+        if (isDesignerModule_ && isIpaoHook && (argVal == "me" || argVal == "&me")) {
             /* ByRef 那一档必须交**指向 NULL 的槽**而不能交裸 0 —— 被调方 `Ctrl` 是
                void**, 函数体里 `ObjPtr(Ctrl)` 发成 `vb6_ObjPtr((*Ctrl))`, 交 0 就成了
                解引用空指针 (实测 av read 0)。交 &(void*){0} 时 (*Ctrl) == NULL ⇒
