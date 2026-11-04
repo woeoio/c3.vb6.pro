@@ -158,6 +158,8 @@ if ($formHits -ne 1) { $viol += ('R7 窗体面 Print 转调主人的站点应为
 #         这一条与 R9 相反, 两条同时绿才证明「类型」与「整只槽」真是两个问句
 #   R11 = 问句②「是不是 SafeArray 载体」: 名单命中 vb6_Split( (正), 标量出口不许命中(反),
 #         _arr_ 特例仍在(正)
+#   R12 = 数组本体 (Array/Split/Filter, VarType=8204) 的分歧: isDefinitelyVariantExpr 必须
+#         答 Variant 且置 isArrOut=true ⇒ 类型问句 true / 槽问句 false (P2 的 C1)
 $genScript = Join-Path $PSScriptRoot 'gen_variant_slot_prefixes.ps1'
 if (-not (Test-Path -LiteralPath $genScript)) {
     $viol += ('R8 找不到派生脚本 ' + $genScript)
@@ -189,6 +191,28 @@ if (-not $astM.Success -or -not $typeM.Success -or -not $carM.Success) {
     if ($carBody -notmatch '"_arr_"') { $viol += 'R11 载体问句正例缺失: _arr_ 特例不见了 (Fix 092g)' }
 }
 
+# ---- R12: Array/Split/Filter 是「类型 Variant、不是整只槽」的实物分歧 ----
+# 判据（P2，C1）：VB6 里 VarType(Array(1,2)) = 8204 (vbVariant + vbArray)，Split/Filter 同理。
+# 所以 isDefinitelyVariantExpr 必须把这三枚**当 Variant**（类型 true），同时置 isArrOut=true，
+# 让 variantOperandAST 的 !isArr 把它们从「槽」里排除。这句分歧是两张问句分开的最强证据:
+# 同一枚 `Array(1,2,3)` 上 isVariantType 必须答 true、isVariantSlot 必须答 false。
+# 只查源结构（不起 cl）: 三枚名字 + 那条 isArrOut 赋值 + 不许落回 kBuiltinFuncNames 的拒绝。
+$defM = [regex]::Match($typeSrc, '(?s)bool CCodeGen::isDefinitelyVariantExpr\((?<sig>[^\n]*)\{(?<b>.*?)\r?\n\}')
+if (-not $defM.Success) {
+    $viol += 'R12 找不到 isDefinitelyVariantExpr 的函数体 (改名/换签名了? 这条断言会静默失效)'
+} else {
+    $defBody = $defM.Groups['b'].Value
+    foreach ($bn in @('"array"', '"split"', '"filter"')) {
+        if ($defBody -notmatch [regex]::Escape($bn)) {
+            $viol += ('R12 类型问句正例缺失: isDefinitelyVariantExpr 里没有数组本体内置 ' + $bn +
+                      ' —— VarType=8204 的那一族会被当成「非 Variant」')
+        }
+    }
+    if ($defBody -notmatch '\*isArrOut\s*=\s*true') {
+        $viol += 'R12 槽问句反例缺失: 数组本体内置没置 isArrOut=true —— 它们会同时被当成整只槽'
+    }
+}
+
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
             ' emittedNames=' + $emitted.Keys.Count +
@@ -200,5 +224,5 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_slot_returns: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL 对账 (补名/撤名), 不是往白名单里加名字; 真要走例外请连带写清理由并重跑 §B146 那把 400 份 A/B')
     exit 1
 }
-Write-Host 'PASS builtin_slot_returns (R1..R11)'
+Write-Host 'PASS builtin_slot_returns (R1..R12)'
 exit 0
