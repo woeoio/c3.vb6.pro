@@ -295,6 +295,7 @@ set(C3RTL_EMBEDDED_FILES
     # vb6com
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_manifest.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_internal.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_invoke.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_pack.c

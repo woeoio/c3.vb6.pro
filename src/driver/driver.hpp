@@ -73,6 +73,10 @@ struct CompileOptions {
     std::vector<std::string> typelibRefs;    // TypeLib路径或ProgID列表
     bool autoTypelib = true;                 // 自动从源码中提取COM类型并加载TypeLib
 
+    // 免注册 COM 运行期模式 (2026-11-04): 空 = 未指定（不注入任何行，行为与改动前一致）
+    std::string comMode;                     // direct | manifest | auto
+    std::string comManifest;                 // 客户端 manifest 路径（manifest/auto 用）
+
     // ActiveX DLL (P6.6)
     bool isDll = false;                      // 编译为ActiveX DLL (而非EXE)
     std::string dllProgId;                   // DLL的ProgID前缀 (如 "MyLib")

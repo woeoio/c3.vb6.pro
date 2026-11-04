@@ -434,6 +434,9 @@
     // Fix 160: vbp ComLib= 免注册 COM 组件表 {ProgID, CLSID, coclass名, 相对exe路径}.
     // 入口点生成时烘焙成 static 表 + vb6_ComLibRegister 调用; 表空则一行不发.
     void setComLibRefs(const std::vector<std::array<std::string, 4>>* v) { comLibRefs_ = v; }
+    // 免注册 COM 运行期模式（-ComMode）；空串 = 未指定（不注入任何行）
+    void setComMode(const std::string& m) { comMode_ = m; }
+    void setComManifest(const std::string& p) { comManifest_ = p; }
 
     // Fix <vbeclipse> 2026-10-06: vbp Object= OCX 免注册表 {ProgID, CLSID, coclass名, 相对exe路径}.
     // 入口点生成时烘焙成 static 表 + vb6_OcxRefRegister 调用; 表空则一行不发.

@@ -52,6 +52,10 @@ typedef struct Vb6OcxRef {
 // 注册运行期 OCX 免注册表 (cgen 生成, 入口点调用一次). count 超过 256 截断并打 stderr 警告.
 void vb6_OcxRefRegister(const Vb6OcxRef* libs, int count);
 
+// 免注册 COM manifest 模式的诊断用：只读地拿到这张表的指针/条数（不改表）。
+// 返回条数；*out 为表首地址（可为 NULL）。
+int vb6_OcxRefGetTable(const Vb6OcxRef** out);
+
 // ============================================================
 // Fix 143: 第三方 OCX 控件真宿主 (设计期 Begin NewTabCtl.NewTab 等)
 // ============================================================

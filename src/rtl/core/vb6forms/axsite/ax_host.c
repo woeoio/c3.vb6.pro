@@ -93,6 +93,11 @@ void vb6_OcxRefRegister(const Vb6OcxRef* libs, int count) {
     g_ocxRefCount = count;
 }
 
+int vb6_OcxRefGetTable(const Vb6OcxRef** out) {
+    if (out) *out = g_ocxRefs;
+    return g_ocxRefCount;
+}
+
 /* 按 ProgID 或 CLSID 字符串查免注册表; 返回 NULL = 未命中. */
 static const Vb6OcxRef* vb6_OcxRefLookup(const wchar_t* progId, const wchar_t* clsidStr) {
     if (g_ocxRefCount == 0) return NULL;

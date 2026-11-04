@@ -147,6 +147,22 @@ std::pair<CompileOptions, int> Driver::parseArgs(int argc, char* argv[]) {
         else if (arg == "--compat-check") {
             opts.compatCheck = true;
         }
+        else if ((arg == "-ComMode" || arg == "--com-mode") && i + 1 < argc) {
+            // 免注册 COM 运行期模式。direct = 既有直加载（逐字不变）；
+            // manifest = ActCtx（缺 identity/无内嵌清单即明确失败，不回退）；
+            // auto = 默认（能建就建，否则 direct 并在 stderr 说明）。
+            std::string mode = argv[++i];
+            if (mode != "direct" && mode != "manifest" && mode != "auto") {
+                std::cerr << "C3: -ComMode 取值必须是 direct|manifest|auto (收到: " << mode << ")\n";
+                resultCode = 1;
+            } else {
+                opts.comMode = mode;
+            }
+        }
+        else if ((arg == "-ComManifest" || arg == "--com-manifest") && i + 1 < argc) {
+            // 客户端 manifest 路径（manifest/auto 模式读取；也可用 C3_COM_MANIFEST 环境变量）
+            opts.comManifest = argv[++i];
+        }
         else if (arg == "--no-warn" && i + 1 < argc) {
             // 抑制指定ID的警告, 逗号分隔 (如 --no-warn 3001,3003)
             std::string list = argv[++i];
@@ -238,6 +254,9 @@ void Driver::printHelp() {
               << "  --no-auto-typelib   禁用自动TypeLib加载\n"
               << "  --progid <前缀>     ActiveX DLL的ProgID前缀\n"
               << "  --libid <字符串>    显式指定TypeLib的LibID\n"
+              << "  -ComMode <模式>     免注册COM运行期模式: direct(既有直加载) | manifest(ActCtx,\n"
+              << "                      缺 identity/无内嵌清单即失败) | auto(默认, 可回退并记录)\n"
+              << "  -ComManifest <文件> 客户端 manifest 路径 (manifest/auto 用; 亦可 C3_COM_MANIFEST)\n"
               << "\n"
               << "性能/杂项选项:\n"
               << "  --incremental       增量编译 (obj级缓存, 跳过未变化的.c)\n"

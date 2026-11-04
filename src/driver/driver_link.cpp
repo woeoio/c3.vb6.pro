@@ -808,6 +808,9 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6rtl_com.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6rtl_registry.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com.c");
+    // 2026-11-04 免注册 COM 运行期批次: 组件内嵌 assembly manifest 取证 + ActCtx 原语
+    // (vb6com.c 的模式策略层调用它；不链这枚会 LNK2019)
+    msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_manifest.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_invoke.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_pack.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_wrap.c");

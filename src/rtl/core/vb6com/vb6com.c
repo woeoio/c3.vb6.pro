@@ -3,6 +3,10 @@
 
 #include "vb6com.h"
 #include "vb6com_internal.h"
+#include "vb6forms_controls.h"   /* Vb6OcxRef + vb6_OcxRefGetTable (manifest 诊断用)
+                                     * 注: 产物编译时 RTL 源是平铺在同一 rtl 目录的（见 c3rtl.rc
+                                     * 155 / rtl_embedded.cpp 的 RTL_VB6FORMS_CONTROLS_H），
+                                     * 故这里用平铺名而不是树内的 ../vb6forms/ 相对路径。 */
 #include <stdio.h>
 
 #include <stdlib.h>
@@ -362,12 +366,22 @@ ULONG vb6_UnknownRelease(void* obj) {
 // COM初始化/退出
 // ============================================================
 
+// 模式策略（实现在下方 ComLib 表之后：需要读组件的内嵌 manifest）
+static void vb6_ComActCtxEnter(void);
+static void vb6_ComActCtxLeave(void);
+
 void vb6_ComInit(void) {
+    // 免注册 COM 的 ActCtx 必须**先于** CoInitializeEx（因而也先于 OleInitialize 与
+    // 任何 CoCreateInstance）就位；direct 模式下这一行是空操作，直加载逐字不变。
+    vb6_ComActCtxEnter();
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 }
 
 void vb6_ComExit(void) {
     CoUninitialize();
+    // ActCtx 句柄的唯一释放点：进程退出的正常路径（vb6_Exit → 这里）。
+    // 非正常退出 (ExitProcess/崩溃) 由操作系统回收，不存在泄漏口径问题。
+    vb6_ComActCtxLeave();
 }
 
 // ============================================================
@@ -511,6 +525,467 @@ void vb6_ComLibRegister(const Vb6ComLib* libs, int count) {
             if (comLibTraceEnabled() && g_comLibs[i].dispIface)
                 fwprintf(stderr, L"[C3_COM]   cached dispIface for %ls\n", g_comLibs[i].progId);
         }
+    }
+}
+
+// ============================================================
+// 免注册 COM 运行期模式：direct | manifest | auto
+// ------------------------------------------------------------
+// 纪律（本批的硬约束）：
+//   * direct  = 既有 LoadLibrary + DllGetClassObject 直加载 —— 一条判定都不改；
+//   * manifest = 建 ActCtx；identity 缺失 / 组件无内嵌 assembly manifest ⇒ **明确失败**
+//                （打印缺项并退出，绝不静默回退直加载）；
+//   * auto    = 默认；能用 manifest 就用，不能用就走 direct 并在 stderr 说明原因/哪条。
+// 注入：cgen 只在显式给 -ComMode 时于入口点发 vb6_ComSetMode()（未给 ⇒ 一行不发，
+// 产物逐字节不变）；另支持 C3_COM_MODE / C3_COM_MANIFEST 环境变量（等价注入方式，
+// 便于同一枚产物在不重编的情况下做正反用例）。
+// ============================================================
+static int      g_comMode = VB6_COM_MODE_AUTO;
+static int      g_comModeExplicit = 0;          /* 程序里显式设过 = 环境变量不覆盖 */
+static wchar_t  g_comManifestPath[MAX_PATH * 2] = L"";
+
+void vb6_ComSetMode(int mode) {
+    if (mode >= VB6_COM_MODE_AUTO && mode <= VB6_COM_MODE_MANIFEST) {
+        g_comMode = mode;
+        g_comModeExplicit = 1;
+    }
+}
+
+void vb6_ComSetManifest(const wchar_t* path) {
+    if (!path) { g_comManifestPath[0] = 0; return; }
+    wcsncpy(g_comManifestPath, path, MAX_PATH * 2 - 1);
+    g_comManifestPath[MAX_PATH * 2 - 1] = 0;
+}
+
+int vb6_ComMode(void) {
+    if (g_comModeExplicit) return g_comMode;
+    static int envMode = -1;
+    if (envMode < 0) {
+        envMode = VB6_COM_MODE_AUTO;
+        wchar_t buf[64];
+        DWORD n = GetEnvironmentVariableW(L"C3_COM_MODE", buf, 64);
+        if (n > 0 && n < 64) {
+            if (_wcsicmp(buf, L"direct") == 0)        envMode = VB6_COM_MODE_DIRECT;
+            else if (_wcsicmp(buf, L"manifest") == 0) envMode = VB6_COM_MODE_MANIFEST;
+            else if (_wcsicmp(buf, L"auto") == 0)     envMode = VB6_COM_MODE_AUTO;
+            /* 其它取值保持 auto（不猜） */
+        }
+    }
+    return envMode;
+}
+
+/* 客户端 manifest 路径：显式 > C3_COM_MANIFEST > <exe>.manifest。
+ * 返回 1 = 有路径可试（不代表文件存在，存在性由校验函数回答）。 */
+static int comManifestPathResolve(wchar_t* out, int cch) {
+    out[0] = 0;
+    if (g_comManifestPath[0]) {
+        wcsncpy(out, g_comManifestPath, (size_t)cch - 1);
+        out[cch - 1] = 0;
+        return 1;
+    }
+    static wchar_t envPath[MAX_PATH * 2];
+    static int envGot = -1;
+    if (envGot < 0)
+        envGot = (GetEnvironmentVariableW(L"C3_COM_MANIFEST", envPath, MAX_PATH * 2) > 0) ? 1 : 0;
+    if (envGot) {
+        wcsncpy(out, envPath, (size_t)cch - 1);
+        out[cch - 1] = 0;
+        return 1;
+    }
+    wchar_t exe[MAX_PATH];
+    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return 0;
+    wchar_t* dot = wcsrchr(exe, L'.');
+    if (dot) *dot = 0;
+    _snwprintf(out, (size_t)cch - 1, L"%ls.manifest", exe);
+    out[cch - 1] = 0;
+    return 1;
+}
+
+/* 组件文件路径 → 绝对路径：先按 <exe目录>\<相对路径>，再按原样（与直加载候选同序）。
+ * 只为诊断服务（读 RT_MANIFEST 用，不执行组件代码）。 */
+static const wchar_t* comComponentPath(const wchar_t* fileName, wchar_t* out, int cch) {
+    out[0] = 0;
+    if (!fileName || !*fileName) return out;
+    int isAbs = (wcschr(fileName, L':') != NULL) || (fileName[0] == L'\\');
+    if (!isAbs) {
+        wchar_t exeDir[MAX_PATH];
+        DWORD n = GetModuleFileNameW(NULL, exeDir, MAX_PATH);
+        if (n > 0 && n < MAX_PATH) {
+            wchar_t* es = wcsrchr(exeDir, L'\\');
+            if (es) {
+                es[1] = 0;
+                _snwprintf(out, (size_t)cch - 1, L"%ls%ls", exeDir, fileName);
+                out[cch - 1] = 0;
+                if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return out;
+            }
+        }
+    }
+    wcsncpy(out, fileName, (size_t)cch - 1);
+    out[cch - 1] = 0;
+    return out;
+}
+
+/* 缺项拼接：多条缺项用 "; " 串起来（诊断口径与 vb6com_manifest.c 的 missing 一致）。 */
+static void comMissingJoin(wchar_t* out, int cch, const wchar_t* item) {
+    if (!out || cch <= 0 || !item) return;
+    if (out[0]) {
+        size_t used = wcslen(out);
+        if (used + 3 < (size_t)cch) wcscat(out, L"; ");
+    }
+    size_t used = wcslen(out);
+    if (used + wcslen(item) >= (size_t)cch) return;
+    wcscat(out, item);
+}
+
+/* ------------------------------------------------------------------
+ * manifest 聚合（工具包口径，实测结论）：
+ *   SxS 认的是**进程级清单**里的 <file name="x.ocx"> + <comClass clsid=...>，
+ *   **不需要**厂商 identity（实测无 identity 的清单 CreateActCtx 成功且能建对象）；
+ *   而外挂的 <组件文件名>.manifest 单放不收（实测 CoCreateInstance = 0x80040154），
+ *   它只是素材 —— 必须并进进程清单才生效（工具包用 .res 把清单嵌进 EXE，同理）。
+ *   <file name> 必须是**相对清单所在目录**的路径（绝对路径实测 14001）。
+ *   因此 manifest 模式：逐组件（优先复用现成 <组件文件名>.manifest 的 <file> 块，
+ *   没有则按表里的 progid/clsid/相对路径合成），把全部块聚合成一份清单写到 exe 目录旁，
+ *   再 CreateActCtx 激活。注：外部清单按 ASCII 处理（工具包与厂商清单都是 ASCII）。
+ * ------------------------------------------------------------------ */
+static wchar_t g_comComposedManifest[MAX_PATH * 2] = L"";   /* 合成清单，退出时删 */
+
+static int comComponentCount(void) {
+    const Vb6OcxRef* tbl = NULL;
+    int ocxCount = vb6_OcxRefGetTable(&tbl);
+    return g_comLibCount + (ocxCount > 0 ? ocxCount : 0);
+}
+
+static int comExeDir(wchar_t* out, int cch) {
+    DWORD n = GetModuleFileNameW(NULL, out, (DWORD)cch);
+    if (n == 0 || n >= (DWORD)cch) return 0;
+    wchar_t* slash = wcsrchr(out, L'\\');
+    if (!slash) return 0;
+    slash[1] = 0;
+    return 1;
+}
+
+/* 表里的 fileName 本来就相对 exe 目录；绝对路径只有在 exe 目录之下才压得成相对。 */
+static int comRelName(const wchar_t* fileName, const wchar_t* exeDir,
+                      wchar_t* out, int cch) {
+    out[0] = 0;
+    if (!fileName || !*fileName) return 0;
+    int isAbs = (wcschr(fileName, L':') != NULL) || (fileName[0] == L'\\');
+    if (!isAbs) {
+        wcsncpy(out, fileName, (size_t)cch - 1);
+        out[cch - 1] = 0;
+        return 1;
+    }
+    size_t dl = wcslen(exeDir);
+    /* exeDir 带尾反斜杠；只有不带尾分隔符时才要求 fileName 在这里再有一个分隔符。 */
+    int needSep = (dl > 0 && exeDir[dl - 1] != L'\\' && exeDir[dl - 1] != L'/');
+    if (_wcsnicmp(fileName, exeDir, dl) == 0 &&
+        (!needSep || fileName[dl] == L'\\' || fileName[dl] == L'/')) {
+        const wchar_t* r = fileName + dl;
+        if (*r == L'\\' || *r == L'/') r++;
+        wcsncpy(out, r, (size_t)cch - 1);
+        out[cch - 1] = 0;
+        return 1;
+    }
+    return 0;
+}
+
+static int comAppend(wchar_t* buf, int cch, const wchar_t* text, int* used) {
+    size_t n = wcslen(text);
+    if (*used + (int)n >= cch) return 0;
+    memcpy(buf + *used, text, (n + 1) * sizeof(wchar_t));
+    *used += (int)n;
+    return 1;
+}
+
+/* 把 <file ...> 开标签里的 name="..." 改成 rel（SxS 只吃相对路径）。 */
+static int comRewriteNameAttr(wchar_t* block, int cch, const wchar_t* rel) {
+    wchar_t* tagEnd = wcschr(block, L'>');
+    if (!tagEnd) return 0;
+    for (wchar_t* p = block; p < tagEnd; p++) {
+        if ((p[0] == L'n' || p[0] == L'N') && _wcsnicmp(p, L"name", 4) == 0) {
+            wchar_t* q = p + 4;
+            while (q < tagEnd && (*q == L' ' || *q == L'\t')) q++;
+            if (q >= tagEnd || *q != L'=') continue;
+            q++;
+            while (q < tagEnd && (*q == L' ' || *q == L'\t')) q++;
+            if (q >= tagEnd || *q != L'"') return 0;
+            q++;
+            wchar_t* e = wcschr(q, L'"');
+            if (!e) return 0;
+            size_t relLen = wcslen(rel);
+            size_t tail = wcslen(e);
+            if (q + relLen >= block + cch - 1) return 0;
+            memmove(q + relLen, e, (tail + 1) * sizeof(wchar_t));
+            memcpy(q, rel, relLen * sizeof(wchar_t));
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int comAppendComClass(wchar_t* buf, int cch, const wchar_t* clsid,
+                             const wchar_t* progId, int* used) {
+    wchar_t blk[2048];
+    if (progId && *progId) {
+        _snwprintf(blk, 2047,
+                   L"<comClass clsid=\"%ls\" threadingModel=\"Apartment\" progid=\"%ls\"></comClass>",
+                   clsid, progId);
+    } else {
+        _snwprintf(blk, 2047,
+                   L"<comClass clsid=\"%ls\" threadingModel=\"Apartment\"></comClass>",
+                   clsid);
+    }
+    blk[2047] = 0;
+    return comAppend(buf, cch, blk, used);
+}
+
+/* 聚合组件清单 → outPath（exe 目录旁的 c3com.<pid>.<tick>.manifest）。
+ * 返回 1 = 已写出；0 = 失败，problems 写清每个组件的具体缺项。 */
+#define VB6_COM_COMPOSE_MAX (64 * 1024)
+static int comComposeManifest(wchar_t* outPath, int pathCch,
+                              wchar_t* problems, int probCch) {
+    outPath[0] = 0;
+    wchar_t exeDir[MAX_PATH];
+    if (!comExeDir(exeDir, MAX_PATH)) {
+        comMissingJoin(problems, probCch, L"无法确定 exe 目录");
+        return 0;
+    }
+    wchar_t* buf = (wchar_t*)malloc(VB6_COM_COMPOSE_MAX * sizeof(wchar_t));
+    if (!buf) { comMissingJoin(problems, probCch, L"内存不足"); return 0; }
+    int used = 0;
+    comAppend(buf, VB6_COM_COMPOSE_MAX,
+              L"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n"
+              L"<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\r\n",
+              &used);
+
+    const Vb6OcxRef* tbl = NULL;
+    int ocxCount = vb6_OcxRefGetTable(&tbl);
+    if (!tbl) ocxCount = 0;
+    int total = g_comLibCount + ocxCount;
+    const wchar_t** uniq = (const wchar_t**)calloc((size_t)total + 1, sizeof(wchar_t*));
+    wchar_t item[1024];
+    if (!uniq) { comMissingJoin(problems, probCch, L"内存不足"); free(buf); return 0; }
+    int uniqCount = 0;
+    int emitted = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        int count = (pass == 0) ? g_comLibCount : ocxCount;
+        for (int i = 0; i < count; i++) {
+            const wchar_t* fileName = (pass == 0) ? g_comLibs[i].fileName : tbl[i].fileName;
+            if (!fileName || !*fileName) {
+                _snwprintf(item, 1023, L"组件表第 %d 条没有文件名，无法写 <file name>", i);
+                item[1023] = 0;
+                comMissingJoin(problems, probCch, item);
+                continue;
+            }
+            int dup = 0;
+            for (int k = 0; k < uniqCount; k++)
+                if (_wcsicmp(uniq[k], fileName) == 0) { dup = 1; break; }
+            if (!dup) uniq[uniqCount++] = fileName;
+        }
+    }
+
+    /* 同一 DLL 声明多个 coclass ⇒ 只能有**一个** <file>，comClass 都挂在它下面
+     * （实测重复 <file name> 块会让整份清单解析不出 ProgID 映射）。 */
+    for (int u = 0; u < uniqCount; u++) {
+        const wchar_t* fileName = uniq[u];
+        wchar_t rel[MAX_PATH * 2], abs[MAX_PATH * 2];
+        if (!comRelName(fileName, exeDir, rel, MAX_PATH * 2)) {
+            _snwprintf(item, 1023, L"%ls: 组件不在 exe 目录下，写不成相对 <file name>", fileName);
+            item[1023] = 0;
+            comMissingJoin(problems, probCch, item);
+            continue;
+        }
+        const wchar_t* p = comComponentPath(fileName, abs, MAX_PATH * 2);
+        if (GetFileAttributesW(p) == INVALID_FILE_ATTRIBUTES) {
+            _snwprintf(item, 1023, L"%ls: 组件文件不存在 (%ls)", rel, p);
+            item[1023] = 0;
+            comMissingJoin(problems, probCch, item);
+            continue;
+        }
+        /* 优先：现成的 <组件文件名>.manifest（工具包 per-file 清单） */
+        wchar_t ext[MAX_PATH * 2 + 16];
+        _snwprintf(ext, MAX_PATH * 2 + 15, L"%ls.manifest", p);
+        ext[MAX_PATH * 2 + 15] = 0;
+        if (GetFileAttributesW(ext) != INVALID_FILE_ATTRIBUTES) {
+            wchar_t* block = (wchar_t*)malloc(8192 * sizeof(wchar_t));
+            if (block) {
+                int got = vb6_ComManifestExtractFileBlock(ext, block, 8192);
+                int appended = got && comRewriteNameAttr(block, 8192, rel) &&
+                               comAppend(buf, VB6_COM_COMPOSE_MAX, block, &used);
+                free(block);
+                if (appended) { emitted++; continue; }
+                /* 抽到但改写/追加失败 → 退回合成 */
+            }
+        }
+        wchar_t head[2048];
+        _snwprintf(head, 2047, L"<file name=\"%ls\" hashalg=\"SHA1\">", rel);
+        head[2047] = 0;
+        if (!comAppend(buf, VB6_COM_COMPOSE_MAX, head, &used)) {
+            comMissingJoin(problems, probCch, L"聚合清单超出 64KB 缓冲上限");
+            free(uniq); free(buf);
+            return 0;
+        }
+        for (int pass = 0; pass < 2; pass++) {
+            int count = (pass == 0) ? g_comLibCount : ocxCount;
+            for (int i = 0; i < count; i++) {
+                const wchar_t* fn     = (pass == 0) ? g_comLibs[i].fileName : tbl[i].fileName;
+                const wchar_t* clsid  = (pass == 0) ? g_comLibs[i].clsidStr : tbl[i].clsidStr;
+                const wchar_t* progId = (pass == 0) ? g_comLibs[i].progId   : tbl[i].progId;
+                if (!fn || _wcsicmp(fn, fileName) != 0) continue;
+                if (!clsid || !*clsid) {
+                    _snwprintf(item, 1023, L"%ls: 缺 CLSID（类型库导入没给出），无法合成 <comClass>", rel);
+                    item[1023] = 0;
+                    comMissingJoin(problems, probCch, item);
+                    continue;
+                }
+                if (!comAppendComClass(buf, VB6_COM_COMPOSE_MAX, clsid, progId, &used)) {
+                    comMissingJoin(problems, probCch, L"聚合清单超出 64KB 缓冲上限");
+                    free(uniq); free(buf);
+                    return 0;
+                }
+            }
+        }
+        if (!comAppend(buf, VB6_COM_COMPOSE_MAX, L"</file>", &used)) {
+            comMissingJoin(problems, probCch, L"聚合清单超出 64KB 缓冲上限");
+            free(uniq); free(buf);
+            return 0;
+        }
+        emitted++;
+    }
+    free(uniq);
+    if (emitted == 0) {
+        /* 一份只能解析出 0 个 <file> 的合成清单没有意义 —— 明确失败，不建空 ActCtx。 */
+        comMissingJoin(problems, probCch, L"没有任何组件能写进清单");
+        free(buf);
+        return 0;
+    }
+    comAppend(buf, VB6_COM_COMPOSE_MAX, L"</assembly>\r\n", &used);
+
+    wchar_t name[96];
+    _snwprintf(name, 95, L"c3com.%lu.%I64u.manifest",
+               (unsigned long)GetCurrentProcessId(), (unsigned __int64)GetTickCount64());
+    name[95] = 0;
+    _snwprintf(outPath, (size_t)pathCch - 1, L"%ls%ls", exeDir, name);
+    outPath[pathCch - 1] = 0;
+
+    HANDLE hf = CreateFileW(outPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hf == INVALID_HANDLE_VALUE) {
+        _snwprintf(item, 1023, L"合成清单写不出去 (目录只读?): %ls", outPath);
+        item[1023] = 0;
+        comMissingJoin(problems, probCch, item);
+        free(buf);
+        return 0;
+    }
+    int ok = 0;
+    char* utf8 = (char*)malloc(VB6_COM_COMPOSE_MAX);
+    if (utf8) {
+        int bytes = WideCharToMultiByte(CP_UTF8, 0, buf, used, utf8,
+                                        VB6_COM_COMPOSE_MAX, NULL, NULL);
+        if (bytes > 0) {
+            DWORD wrote = 0;
+            ok = WriteFile(hf, utf8, (DWORD)bytes, &wrote, NULL) && wrote == (DWORD)bytes;
+        }
+        free(utf8);
+    }
+    CloseHandle(hf);
+    free(buf);
+    if (!ok) {
+        DeleteFileW(outPath);
+        outPath[0] = 0;
+        comMissingJoin(problems, probCch, L"合成清单写入失败");
+        return 0;
+    }
+    wcsncpy(g_comComposedManifest, outPath, MAX_PATH * 2 - 1);
+    g_comComposedManifest[MAX_PATH * 2 - 1] = 0;
+    return 1;
+}
+
+/* manifest 模式的"明确失败"：打印**具体缺什么**并终止进程。
+ * 为什么不继续跑：继续 = 静默回退直加载，正是本模式明令禁止的那条。
+ * 退出码 1 由夹具/脚本断言；direct 模式不受影响。 */
+static void comManifestFatal(const wchar_t* what) {
+    // 诊断刻意用 ASCII: 控制台/重定向文件里中文随代码页变成乱码, 夹具要能 grep 到具体缺项
+    fwprintf(stderr, L"[C3_COM] manifest mode FAILED -- missing: %ls\n", what ? what : L"(unknown)");
+    fwprintf(stderr, L"[C3_COM] manifest mode does NOT fall back to direct; use -ComMode direct explicitly\n");
+    ExitProcess(1);
+}
+
+static void vb6_ComActCtxEnter(void) {
+    int mode = vb6_ComMode();
+    if (mode == VB6_COM_MODE_DIRECT) {
+        if (comLibTraceEnabled())
+            fprintf(stderr, "[C3_COM] mode=direct: 直加载 (LoadLibrary+DllGetClassObject), 不建 ActCtx\n");
+        return;
+    }
+
+    /* 1) 显式清单（-ComManifest / C3_COM_MANIFEST）优先；2) exe 旁 <exe>.manifest；
+     * 3) 都没有且声明了组件 ⇒ 按工具包口径合成聚合清单。 */
+    wchar_t manifest[MAX_PATH * 2];
+    int hasManifest = 0;
+    if (g_comManifestPath[0]) {
+        wcsncpy(manifest, g_comManifestPath, MAX_PATH * 2 - 1);
+        manifest[MAX_PATH * 2 - 1] = 0;
+        hasManifest = 1;
+    } else if (GetEnvironmentVariableW(L"C3_COM_MANIFEST", manifest, MAX_PATH * 2) > 0) {
+        hasManifest = 1;
+    }
+    if (!hasManifest) {
+        wchar_t guessed[MAX_PATH * 2];
+        if (comManifestPathResolve(guessed, MAX_PATH * 2) &&
+            GetFileAttributesW(guessed) != INVALID_FILE_ATTRIBUTES) {
+            wcsncpy(manifest, guessed, MAX_PATH * 2 - 1);
+            manifest[MAX_PATH * 2 - 1] = 0;
+            hasManifest = 1;
+        }
+    }
+
+    wchar_t missing[2048];
+    missing[0] = 0;
+    if (hasManifest) {
+        if (!vb6_ComManifestValidateClient(manifest, missing, 2048))
+            goto unusable;
+    } else {
+        if (comComponentCount() <= 0) {
+            if (mode == VB6_COM_MODE_MANIFEST)
+                fprintf(stderr, "[C3_COM] manifest mode: no ComLib/OCX components declared; nothing to activate\n");
+            return;   /* 没有组件可覆盖：不建空 ActCtx，也不改直加载行为 */
+        }
+        if (mode != VB6_COM_MODE_MANIFEST) {
+            /* auto 且没人显式给清单：保持既有行为（走直加载），不主动合成 ——
+             * 默认模式对存量产物必须零行为变化，合成留给显式的 -ComMode manifest。 */
+            if (comLibTraceEnabled())
+                fprintf(stderr, "[C3_COM] auto: no explicit manifest; direct path only\n");
+            return;
+        }
+        if (!comComposeManifest(manifest, MAX_PATH * 2, missing, 2048))
+            goto unusable;
+    }
+
+    wchar_t err[512];
+    if (!vb6_ComActCtxCreate(manifest, err, 512)) {
+        if (mode == VB6_COM_MODE_MANIFEST) comManifestFatal(err);
+        fwprintf(stderr, L"[C3_COM] auto: fallback to direct -- %ls\n", err);
+        return;
+    }
+    if (comLibTraceEnabled() || hasManifest)
+        fwprintf(stderr, L"[C3_COM] using manifest (ActCtx activated): %ls\n", manifest);
+    return;
+
+unusable:
+    if (mode == VB6_COM_MODE_MANIFEST) comManifestFatal(missing);
+    fwprintf(stderr, L"[C3_COM] auto: fallback to direct -- manifest unusable: %ls\n", missing);
+}
+
+static void vb6_ComActCtxLeave(void) {
+    vb6_ComActCtxRelease();
+    if (g_comComposedManifest[0]) {
+        /* C3_COM_KEEP_MANIFEST=1 保留合成清单，便于人工核对（默认退出即删）。 */
+        if (GetEnvironmentVariableW(L"C3_COM_KEEP_MANIFEST", NULL, 0) == 0)
+            DeleteFileW(g_comComposedManifest);
+        g_comComposedManifest[0] = 0;
     }
 }
 

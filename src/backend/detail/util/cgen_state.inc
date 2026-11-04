@@ -1195,6 +1195,10 @@
 
     // Fix 160: vbp ComLib= 免注册 COM 组件表 {ProgID, CLSID, coclass名, 相对exe路径}
     const std::vector<std::array<std::string, 4>>* comLibRefs_ = nullptr;
+    // 2026-11-04 免注册 COM 运行期模式: 由 -ComMode / -ComManifest 注入, 空 = 未指定
+    // (未指定 ⇒ 入口点一行不发, 产物逐字节不变; 运行期默认 auto)。
+    std::string comMode_;
+    std::string comManifest_;
 
     // Fix <vbeclipse> 2026-10-06: vbp Object= OCX 免注册表 {ProgID, CLSID, coclass名, 相对exe路径}
     const std::vector<std::array<std::string, 4>>* ocxLibRefs_ = nullptr;

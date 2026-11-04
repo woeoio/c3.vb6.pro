@@ -109,6 +109,7 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6RTL_C,             "vb6rtl.c" },
     { RTL_VB6COM_H,             "vb6com.h" },
     { RTL_VB6COM_C,             "vb6com.c" },
+    { RTL_VB6COM_MANIFEST_C,    "vb6com_manifest.c" },
     { RTL_VB6COMSERVER_H,       "vb6comserver.h" },
     { RTL_VB6COMSERVER_C,       "vb6comserver.c" },
     { RTL_VB6FORMS_H,           "vb6forms.h" },

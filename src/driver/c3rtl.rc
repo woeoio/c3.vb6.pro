@@ -452,6 +452,9 @@
 // Application icon (multi-size: 16/24/32/48/256, 32-bit ARGB)
 1 ICON "c3.ico"
 
+// 2026-11-04 免注册 COM 运行期批次: 新增 vb6com_manifest.c（取证/诊断 + ActCtx 原语）
+225 RCDATA "../rtl/core/vb6com/vb6com_manifest.c"
+
 // Headers (needed for #include in generated code) + sources — arch-neutral
 100 RCDATA "../rtl/core/vb6rtl/vb6rtl.h"
 101 RCDATA "../rtl/core/vb6rtl/vb6rtl.c"
