@@ -169,6 +169,42 @@ int vb6_RegisterMDIFormClass(const char* className, void* wndProc, void* hInstan
     return (atom != 0) ? 0 : -1;
 }
 
+/* 账 (TabWorkspace 刀): MDICLIENT 必须先于**控件**建出来。
+ *
+ * MDI 父窗的 WM_CREATE 里按 .frm 控件表逐个建控件 (cgen_form_wndproc_create.inc),
+ * Codejock CommandBars/DockingPaneManager 就在那一趟实例化, 并当场问
+ * IOleInPlaceSite::GetWindowContext。旧顺序是 CreateWindowExW 返回之后才建 MDICLIENT,
+ * 于是控件看到的是 fMDIApp=FALSE、hwndMDIClient=NULL, 把这个"非 MDI 框架"记进它自己的
+ * 缓存; 之后 `ShowTabWorkspace(True)` 恒回空指针 (C3_OCX_TRACE 实测:
+ *   IPSW.GetWindowContext ... mdiclient=00000000 fMDIApp=0
+ *   -> [C3_MDI] CreateMDIFormWindow ... client=00E704AA
+ *   -> Call 'ShowTabWorkspace' pdisp=00000000)。
+ * 现在由发码侧在 WM_CREATE 开头先调 vb6_MDI_CreateClientEarly, 包装层
+ * vb6_CreateMDIFormWindow 只认这一枚, 不再建第二枚。 */
+static HWND vb6_MDICreateClientImpl(HWND hwnd, HINSTANCE hInst) {
+    CLIENTCREATESTRUCT ccs = {0};
+    ccs.hWindowMenu = NULL;   /* P7.8菜单系统实现后填充 */
+    ccs.idFirstChild = 1000;  /* MDI子窗体ID起始值 */
+    HWND hMDIClient = CreateWindowExW(
+        0, L"MDICLIENT", NULL,
+        WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL | WS_HSCROLL | MDIS_ALLCHILDSTYLES,
+        0, 0, 0, 0,
+        hwnd, (HMENU)0xCAC,   /* MDI客户窗口控件ID */
+        hInst, &ccs);
+    if (!hMDIClient) return NULL;
+    ShowWindow(hMDIClient, SW_SHOW);
+    SetPropW(hwnd, L"VB6_MDIClient", hMDIClient);
+    return hMDIClient;
+}
+
+void* vb6_MDI_CreateClientEarly(void* hForm, void* hInstance) {
+    HWND hwnd = (HWND)hForm;
+    if (!hwnd || !IsWindow(hwnd)) return NULL;
+    HWND had = (HWND)GetPropW(hwnd, L"VB6_MDIClient");
+    if (had) return (void*)had;
+    return (void*)vb6_MDICreateClientImpl(hwnd, (HINSTANCE)hInstance);
+}
+
 void* vb6_CreateMDIFormWindow(const char* className, const char* formName,
     int x, int y, int width, int height, void* hInstance) {
     int pw = vb6_TwipToX(width);
@@ -202,25 +238,19 @@ void* vb6_CreateMDIFormWindow(const char* className, const char* formName,
     free(wtitleM);
     if (!hwnd) return NULL;
 
-    /* 创建MDI客户窗口 */
-    CLIENTCREATESTRUCT ccs = {0};
-    ccs.hWindowMenu = NULL;   /* P7.8菜单系统实现后填充 */
-    ccs.idFirstChild = 1000;  /* MDI子窗体ID起始值 */
-
-    HWND hMDIClient = CreateWindowExW(
-        0, L"MDICLIENT", NULL,
-        WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL | WS_HSCROLL | MDIS_ALLCHILDSTYLES,
-        0, 0, 0, 0,
-        hwnd, (HMENU)0xCAC,   /* MDI客户窗口控件ID */
-        (HINSTANCE)hInstance, &ccs);
+    /* 创建MDI客户窗口 —— 若 WM_CREATE 里已先建 (vb6_MDI_CreateClientEarly), 复用那一枚 */
+    HWND hMDIClient = (HWND)GetPropW(hwnd, L"VB6_MDIClient");
+    if (!hMDIClient) hMDIClient = vb6_MDICreateClientImpl(hwnd, (HINSTANCE)hInstance);
     if (!hMDIClient) {
         DestroyWindow(hwnd);
         return NULL;
     }
-    ShowWindow(hMDIClient, SW_SHOW);
-
-    /* 保存MDI客户窗口句柄到父窗体属性 */
-    SetPropW(hwnd, L"VB6_MDIClient", hMDIClient);
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_MDI] CreateMDIFormWindow class='%s' name='%s' form=%p client=%p readback=%p\n",
+                className, formName, (void*)hwnd, (void*)hMDIClient,
+                (void*)GetPropW(hwnd, L"VB6_MDIClient"));
+        fflush(stderr);
+    }
 
     return (void*)hwnd;
 }
@@ -374,6 +404,50 @@ static BOOL CALLBACK vb6_mdi_dockpane_cb(HWND h, LPARAM lp) {
     return TRUE;
 }
 
+/* 账 (4px splitter 刀): 停靠容器与 MDIClient 之间还夹着一条
+ * XTPDockingPaneSplitter (左/右竖条与底横条各 4~5px)。只按容器边缘算内缩时
+ * MDIClient 会把 splitter 整条吃进去: 实测 C3 1108x659@214,108 vs VB6
+ * 1100x655@218,108 (+8 宽 / +4 高 / x-4)。
+ *
+ * 判据 = **贴边**: 竖条的左缘贴着 dctx.left (左停靠) 或右缘贴着
+ * rcl.right-dctx.right (右停靠); 横条的底缘贴着 rcl.bottom-dctx.bottom 且跨过半宽。
+ * 三个条件各自还要求"该侧确有停靠容器" (left/right/bottom > 0), 于是右侧栏内部的
+ * 上下分隔条 (实测 263x5) 既不贴底也不跨半宽, 不会被当成外边距。 */
+static BOOL CALLBACK vb6_mdi_splitter_cb(HWND h, LPARAM lp) {
+    struct VB6_MdiDockCtx* c = (struct VB6_MdiDockCtx*)lp;
+    wchar_t cls[64] = {0};
+    GetClassNameW(h, cls, 63);
+    if (GetParent(h) != c->form) return TRUE;
+    if (wcsncmp(cls, L"XTPDockingPaneSplitter", 22) != 0) return TRUE;
+    if (!IsWindowVisible(h)) return TRUE;
+    RECT rc; GetWindowRect(h, &rc);
+    MapWindowPoints(NULL, c->form, (POINT*)&rc, 2);
+    RECT rcl; GetClientRect(c->form, &rcl);
+    int sw = rc.right - rc.left, sh = rc.bottom - rc.top;
+    if (sw <= 0 || sh <= 0) return TRUE;
+    if (sw <= sh) {
+        /* 竖条: 左停靠的外边距 */
+        if (c->left > 0 && rc.left >= c->left - 2 && rc.left <= c->left + 2
+            && rc.right > c->left)
+            c->left = rc.right;
+        /* 竖条: 右停靠的外边距 */
+        if (c->right > 0) {
+            int edge = rcl.right - c->right;
+            if (rc.right >= edge - 2 && rc.right <= edge + 2 && rc.left < edge)
+                c->right = rcl.right - rc.left;
+        }
+    } else {
+        /* 底停靠的外边距; 跨半宽一条把内侧分隔条排除在外 */
+        if (c->bottom > 0) {
+            int edge = rcl.bottom - c->bottom;
+            if (rc.bottom >= edge - 2 && rc.bottom <= edge + 2 && rc.top < edge
+                && sw >= rcl.right / 2)
+                c->bottom = rcl.bottom - rc.top;
+        }
+    }
+    return TRUE;
+}
+
 void vb6_MDI_RelayoutClient(void* hMDIForm) {
     HWND hForm = (HWND)hMDIForm;
     if (!hForm || !IsWindow(hForm)) return;
@@ -390,6 +464,9 @@ void vb6_MDI_RelayoutClient(void* hMDIForm) {
      * 无 pane manager / 无停靠窗格时三个内缩全 0, 与旧行为一致 (原生 MDI 工程零影响)。 */
     struct VB6_MdiDockCtx dctx = { hForm, 0, 0, 0 };
     EnumChildWindows(hForm, vb6_mdi_dockpane_cb, (LPARAM)&dctx);
+    /* 容器那一遍之后再把贴边的 XTPDockingPaneSplitter 收进内缩 (必须后做:
+     * splitter 的贴边判据要拿容器的 left/right/bottom 当基准)。 */
+    EnumChildWindows(hForm, vb6_mdi_splitter_cb, (LPARAM)&dctx);
     struct Ctx352 pmc = { NULL };
     EnumChildWindows(hForm, vb6_mdi_panemgr_cb352, (LPARAM)&pmc);
     if (dctx.bottom > ctx.bottom) ctx.bottom = dctx.bottom;   /* 底带取高者 */

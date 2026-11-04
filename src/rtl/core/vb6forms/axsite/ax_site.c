@@ -126,6 +126,14 @@ static HRESULT STDMETHODCALLTYPE axSite_IPS_GetWindowContext(IOleInPlaceSite* Th
     *ppFrame = (IOleInPlaceFrame*)&s->lpVtblInPlaceFrame;
     s->ref++; /* AddRef for the out param */
     *ppDoc = NULL;
+    /* MDIClient 真值: 属性由 vb6_CreateMDIFormWindow 挂在框架句柄上 (ctrlarr.c);
+       属性没赶上时按**子窗口类名**再查一遍 —— 不能因为一个记账属性没到就把
+       "宿主是 MDI"谎报成 FALSE (Codejock 的 TabWorkspace 只认 fMDIApp=TRUE 才继续)。
+       注: OLEINPLACEFRAMEINFO (oleidl.h tagOIFI) **没有 hwndMDIClient 成员**,
+       只有 cb/fMDIApp/hwndFrame/haccel/cAccelEntries —— MDI 身份只能经 fMDIApp 交代;
+       OCX 拿到 TRUE 之后自己按 MDICLIENT 类名找客户窗 (我们已把属性挂在框架上)。 */
+    HWND hcl = (HWND)GetPropW(s->hwndForm, L"VB6_MDIClient");
+    if (!hcl) hcl = FindWindowExW(s->hwndForm, NULL, L"MDIClient", NULL);
     /* Fix 143: 用控件真实矩形, 不再硬编码 400x300 */
     RECT rFallback; rFallback.left=0; rFallback.top=0; rFallback.right=400; rFallback.bottom=300;
     const RECT* rc = (s->rcCtrl.right > s->rcCtrl.left) ? &s->rcCtrl : &rFallback;
@@ -135,8 +143,17 @@ static HRESULT STDMETHODCALLTYPE axSite_IPS_GetWindowContext(IOleInPlaceSite* Th
      * 的 CommandBars/DockingPaneManager 靠它进 MDI 布局模式 (接管 MDI 客体,
      * 随窗体 resize 回流窗格); 恒 FALSE 便退化为普通窗体, maximize 后窗格
      * 不回流 (GUISample 实测)。 */
-    lpFrameInfo->fMDIApp = (GetPropW(s->hwndForm, L"VB6_MDIClient") != NULL);
+    lpFrameInfo->cb = sizeof(OLEINPLACEFRAMEINFO);   /* 与 olecon 同口径 */
+    lpFrameInfo->fMDIApp = (hcl != NULL);
     lpFrameInfo->hwndFrame=s->hwndForm; lpFrameInfo->haccel=0; lpFrameInfo->cAccelEntries=0; }
+    if (axTrace()) {   /* TabWorkspace 取证: OCX 到底有没有来问过 frame */
+        wchar_t cls[128] = {0}; GetClassNameW(s->hwndForm, cls, 127);
+        fprintf(stderr, "[C3_OCX] IPS.GetWindowContext ctrl='%ls' class='%ls' form=%p mdiclient=%p fMDIApp=%d rc=%ld,%ld,%ld,%ld\n",
+                s->ctrlName, cls, (void*)s->hwndForm, (void*)hcl,
+                lpFrameInfo ? (int)lpFrameInfo->fMDIApp : -1,
+                (long)rc->left, (long)rc->top, (long)rc->right, (long)rc->bottom);
+        fflush(stderr);
+    }
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE axSite_IPS_Scroll(IOleInPlaceSite* This, SIZE s) { return S_OK; }
@@ -171,14 +188,33 @@ static ULONG STDMETHODCALLTYPE axSite_IPF_Release(IOleInPlaceFrame* This) {
     return axSite_CS_Release((IOleClientSite*)SITE_OF(This, lpVtblInPlaceFrame));
 }
 static HRESULT STDMETHODCALLTYPE axSite_IPF_GetWindow(IOleInPlaceFrame* This, HWND* phwnd) {
-    Vb6AxSite* s = SITE_OF(This, lpVtblInPlaceFrame); *phwnd = s->hwndForm; return S_OK;
+    Vb6AxSite* s = SITE_OF(This, lpVtblInPlaceFrame); *phwnd = s->hwndForm;
+    if (axTrace()) {
+        fprintf(stderr, "[C3_OCX] IPF.GetWindow ctrl='%ls' -> %p\n", s->ctrlName, (void*)s->hwndForm);
+        fflush(stderr);
+    }
+    return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE axSite_IPF_ContextSensitiveHelp(IOleInPlaceFrame* This, BOOL f) { return S_OK; }
-static HRESULT STDMETHODCALLTYPE axSite_IPF_GetBorder(IOleInPlaceFrame* This, LPRECT lprc) { return E_NOTIMPL; }
-static HRESULT STDMETHODCALLTYPE axSite_IPF_RequestBorderSpace(IOleInPlaceFrame* This, LPCBORDERWIDTHS lpbw) { return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE axSite_IPF_GetBorder(IOleInPlaceFrame* This, LPRECT lprc) {
+    if (axTrace()) { fprintf(stderr, "[C3_OCX] IPF.GetBorder -> E_NOTIMPL\n"); fflush(stderr); }
+    return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE axSite_IPF_RequestBorderSpace(IOleInPlaceFrame* This, LPCBORDERWIDTHS lpbw) {
+    if (axTrace()) {
+        fprintf(stderr, "[C3_OCX] IPF.RequestBorderSpace l=%ld t=%ld r=%ld b=%ld -> E_NOTIMPL\n",
+                lpbw ? (long)lpbw->left : -1, lpbw ? (long)lpbw->top : -1,
+                lpbw ? (long)lpbw->right : -1, lpbw ? (long)lpbw->bottom : -1);
+        fflush(stderr);
+    }
+    return E_NOTIMPL;
+}
 static HRESULT STDMETHODCALLTYPE axSite_IPF_SetBorderSpace(IOleInPlaceFrame* This, LPCBORDERWIDTHS lpbw) { return S_OK; }
 static HRESULT STDMETHODCALLTYPE axSite_IPF_SetActiveObject(IOleInPlaceFrame* This, IOleInPlaceActiveObject* pObj, LPCOLESTR pszObj) { return S_OK; }
-static HRESULT STDMETHODCALLTYPE axSite_IPF_InsertMenus(IOleInPlaceFrame* This, HMENU hShared, LPOLEMENUGROUPWIDTHS mw) { return E_NOTIMPL; }
+static HRESULT STDMETHODCALLTYPE axSite_IPF_InsertMenus(IOleInPlaceFrame* This, HMENU hShared, LPOLEMENUGROUPWIDTHS mw) {
+    if (axTrace()) { fprintf(stderr, "[C3_OCX] IPF.InsertMenus -> E_NOTIMPL\n"); fflush(stderr); }
+    return E_NOTIMPL;
+}
 static HRESULT STDMETHODCALLTYPE axSite_IPF_SetMenu(IOleInPlaceFrame* This, HMENU hShared, HOLEMENU hOLEMenu, HWND hwndActiveObj) { return S_OK; }
 static HRESULT STDMETHODCALLTYPE axSite_IPF_RemoveMenus(IOleInPlaceFrame* This, HMENU hShared) { return S_OK; }
 static HRESULT STDMETHODCALLTYPE axSite_IPF_SetStatusText(IOleInPlaceFrame* This, LPCOLESTR psz) { return S_OK; }

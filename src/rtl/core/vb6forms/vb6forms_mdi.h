@@ -22,6 +22,11 @@ int vb6_RegisterMDIFormClass(const char* className, void* wndProc, void* hInstan
 void* vb6_CreateMDIFormWindow(const char* className, const char* formName,
     int x, int y, int width, int height, void* hInstance);
 
+// MDICLIENT 提前到 WM_CREATE 第一步 (在控件之前); 已存在则原样返回。
+// 必须早于 OCX 控件: 否则 CommandBars 在 GetWindowContext 里看到 fMDIApp=FALSE,
+// 之后 ShowTabWorkspace 恒回空指针 (见 vb6forms_ctrlarr.c 的实现注释)。
+void* vb6_MDI_CreateClientEarly(void* hForm, void* hInstance);
+
 // 创建MDI子窗体
 void* vb6_CreateMDIChildWindow(const char* className, const char* formName,
     int x, int y, int width, int height, void* hMDIClient, void* hInstance);

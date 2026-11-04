@@ -58,6 +58,12 @@
     c_.emitLine("case WM_CREATE: {");
     c_.indent();
     c_.emitLine("CREATESTRUCTA* cs = (CREATESTRUCTA*)lParam;");
+    // 账 (TabWorkspace 刀): MDI 父窗必须在建控件**之前**就有 MDICLIENT —— CommandBars/
+    // DockingPaneManager 在 WM_CREATE 里实例化时立刻问 IOleInPlaceSite::GetWindowContext,
+    // 那时没有客户窗就把"非 MDI 框架"缓存下来, ShowTabWorkspace 永远回 NULL。
+    if (isMDIForm) {
+        c_.emitLine("vb6_MDI_CreateClientEarly((void*)hwnd, (void*)cs->hInstance);  /* MDICLIENT 先于控件 */");
+    }
     c_.emitLine(createFn + "((void*)hwnd, (void*)cs->hInstance);");
     // 账 #257: 登记窗体时把 VB 模块名一起交进去。窗体自身的 `.Name` 以前两条读法都答
     // 空串（这一处恒传 NULL 登记），于是 Charts 排版器那句
