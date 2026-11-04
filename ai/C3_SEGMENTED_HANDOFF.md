@@ -1,0 +1,140 @@
+# C3 / ucSegmentedControl 断点续跑交接（2026-11-05）
+
+## 0. 结论一句话
+
+**编译已通（x86，PE32）→ 能启动、窗口与 15 个子窗都建出来、GDI+ 自绘已跑 → 效果与真 VB6 参考仍有明显差**：
+图标全缺（只剩文字）、文字基线/位置偏移。当前正在补“设计期 `.frx` 二进制属性（`image_N`）进属性包”这一站点，补丁已写、**尚未编译验证**。
+
+## 1. 目标与基准
+
+- 源码：`D:\vb_yqt4qPac\ucSegmentedControl-source`（VB6 用户控件工程，核心 `ucSegmentedControl.ctl` 90KB）
+- 参考产物：同目录 `SegmentedControl.exe`（339,968 B，2026/11/5 2:40:27，32 位 PE）
+- 参考图：同目录 `SegmentedControl.png` = **949x689**；实测参考 exe 运行窗口 = **766x558**，**不是 1:1** ⇒ 按用户要求，以“真 VB6 exe 运行采集”为基准：
+  `.temp\ref_run.png`（766x558，由 `.temp\probe_ref.ps1` 采集）
+
+## 2. 实测读数（已确认）
+
+参考 exe（VB6 真产物）：
+
+```
+ALIVE pid=13528 mainwnd=14746614 title=[LabelPlus]
+TOPCOUNT=8
+TOP 766x558@205,205 client=751x520 org=212,235 class=ThunderRT6FormDC title=[Form1]
+TOP 0x0@768,480 class=ThunderRT6Main title=[LabelPlus]          (隐藏的 app 对象窗)
+TOP 1x1@0,0 class=GDI+ Hook Window Class / VBMsoStdCompMgr / MSCTFIME UI / IME
+MAIN 766x558@205,205 client=751x520 org=212,235 class=ThunderRT6FormDC title=[Form1]
+KIDS=2
+  VBFocusRT6              0x0@212,235 (vis=False)
+  ThunderRT6CommandButton 73x25@812,459 client=72x24 text=[<-- ItemVisible]
+```
+
+C3 产物（上一轮采集，`.temp\c3_run.png`，766x558）：
+
+```
+MAIN 766x558@128,128 client=751x520 class=VB6_Form_Form1 title=[Form1]
+KIDS=15：1×Button(73x25@735,382 text=<-- ItemVisible) / 12×VB6_UserControlHost / 1×Static(177x17@159,438 "CtrlType = 1 - CheckBar")
+```
+
+⇒ 窗口尺寸/客户区与参考 **完全一致**（766x558 / 751x520）。
+⇒ 子窗口数量不同：VB6 里 UserControl 是 **windowless（无独立 HWND）**，C3 用 `VB6_UserControlHost` 承载（12 个），这属实现差异，**不是像素残差**；像素对照以位图为准。
+
+## 3. 编译真实结果与失败分类（按发生顺序，全部已按站点修）
+
+| # | 现象 | 归类 | 根因 | 修复文件 |
+|---|------|------|------|----------|
+| 1 | `C2065 'IsEqualGUID': undeclared identifier`（生成的 DI 桩里引用了 SDK 内联名） | cl 编译失败 | ole32 无该导出，guiddef.h 里是内联/宏 | `src/rtl/core/di/vb6_di_stubs.c` 手写 `vb6_di_IsEqualGUID`（memcmp 16B） |
+| 2 | 启动即 `Unhandled error 9: Subscript out of range`，VEH `rva=0x21d14` → `vb6_UBound` | 运行期错误 | `mIOleInPlaceActivate.c:332`：ParamArray 转发时 `vb6_PA_SetLong` 把 `SAFEARRAY*` 截成 VT_I4；`varParam = arrParam` 的 `_Generic` 落 default 成假 VT_DISPATCH | `vb6rtl_paramarray.c`（`vb6_PA_SetSafeArray`）、`vb6rtl_com.c`（`vb6_VariantFromParamArray`）、`vb6rtl_variant.h`（`_Generic` 两支）、`vb6rtl_runtime.h`、`cgen_expr_call_named_args.inc` |
+| 3 | `0xc0000005 av read 0` @ oleaut32 `DispCallFunc` ← `OleInvoke` ← `InitIPAO` | 运行期崩溃 | `.ctl` 把 `Me` 当 `As Object` 实参传给 `InitIPAO/SetIPAO`；C3 进程内 UC 宿主模型里 `me` 是裸实例结构体、`__comObj` 恒 NULL，`ObjPtr(me)` 交回实例地址 ⇒ `DispCallFunc` 把首字段当 vtable | `cgen_expr_call_arg_variant.inc`：设计器模块整枚 `Me` 作实参时 ByRef 交 `&(void*){0}`、ByVal 交 `(void*)0` |
+| 4 | 交裸 `0` 后新崩溃 `InitIPAO+0x82 av read 0` | 运行期崩溃 | 被调方 `ObjPtr(Ctrl)` 生成 `vb6_ObjPtr((*Ctrl))`，`Ctrl=0` 解引用空指针 | 同上（改交 `&(void*){0}`） |
+
+**当前编译状态：cl + link 全通过（exit 0）**，产物 `Project1.exe` 662,016 B，PE 实测 `machine=0x014C`（x86）、`optmagic=0x010B`（PE32）、`subsystem=2`（GUI）。
+
+编译告警（不判失败，如实记录）：`VB4001` `stdole2.tlb` 路径缺失；`VB3003` `.ctl(2063)` Byte 隐式转换；`VB3001` `Form1.frm(83/101)` 裸 `Controls`（codegen 已发 `vb6_ComGetObjectProp(vb6_hwnd_Form1, L"Controls")`，语义层仍报未声明）。
+
+## 4. 效果差异（参考 vs C3，肉眼+图像）
+
+| 站点 | 参考 exe | C3 | 状态 |
+|------|----------|----|------|
+| 窗口/客户区 | 766x558 / 751x520 | 766x558 / 751x520 | ✅ 一致 |
+| 圆角/边框/选中态底色 | 有 | 有（GDI+ 已跑） | ✅ 大体一致 |
+| 分隔线 | 有 | 有 | ✅ |
+| **分段项图标** | 每项左侧有 PNG 图标 | **全缺，只剩文字** | ❌ 正在修 |
+| **文字位置/基线** | 图标右侧、垂直居中 | 偏左/偏上（图标位空缺导致） | ❌ 随图标修复再对齐 |
+| 顶部条 4 项（CheckBar） | 图标 + New Item | 仅 New Item | ❌ 同上 |
+| `CtrlType=1` 小条 | 4 个图标 | 显示 “昵/d/=” 等文字（Segoe UI Symbol 字形） | ⚠️ 字体字形差异，需单列 |
+
+## 5. 根因（图标缺失）与已写补丁
+
+`.frm` 里 `image_N = "Form1.frx":xxxx` 是 **DocProperty 二进制块**：
+
+```
+[DWORD cbSize][1B 00][GUID 16B][WORD 00][WORD 01][DWORD nBytes][4B 0][payload]
+payload 起点 = offset+32，cbSize == 28 + nBytes
+例：0x00BE → cbSize 0x254，nBytes 0x238，payload = PNG（89 50 4E 47 …）
+```
+
+原 codegen 的 `FrxReference` 分支只试 `readPropBagBlob`（识别 UserControl 属性包块）→ 失败后退 `readDocString`；PNG 二进制过不了“UTF-16 全部可打印”校验 ⇒ **`image_N` 根本没进属性包** ⇒ `ReadProperty("image_N", 0)` 回默认 0 ⇒ `ItemImage(i)` 空 ⇒ 无图标。
+
+已写（**未编译验证**）：
+
+- `src/project/frx_reader.hpp`：新增 `struct FrxBlobBytes` + `readDocBlobBytes(size_t)`
+- `src/project/frx_reader.cpp`：实现（固定偏移 24 取 nBytes，校验 `cbSize == 28+nBytes`、边界）
+- `src/backend/detail/module/cgen_form_create_controls.inc`：`FrxReference` 分支在 DocString 之前插一级 `readDocBlobBytes` + `detectFormat != Unknown` ⇒ `emitFrxBagBlob`（走 `vb6_UC_BagPutBin`，RTL 侧变成 `VT_ARRAY|VT_UI1`）
+
+⚠️ **同类站点还有一处未改**：`src/backend/detail/module/cgen_form_frame_menu.inc`（约 L298-310）有同样的 `FrxReference` 三段逻辑，需同步加同一级（否则从另一条创建路径进来的 UC 仍丢图）。
+
+## 6. 已改动文件清单（相对 `github`/`origin` 的 `dev`）
+
+上一轮（已通过编译验证）：
+
+```
+src/semantics/symbol_table.cpp
+src/backend/decl/cgen_decl_api.cpp
+src/backend/detail/util/cgen_state.inc
+src/backend/detail/expr/cgen_expr_call_builtin_pre.inc
+src/backend/cgen_util_classtype.cpp
+src/backend/expr/cgen_expr_binary.cpp
+src/backend/detail/expr/cgen_expr_ident_builtin.inc
+src/backend/module/cgen_com.cpp
+src/backend/detail/stmt/cgen_assign_host_pseudo.inc
+src/backend/detail/expr/cgen_expr_call_arg_emit.inc
+src/backend/detail/module/cgen_form_prelude.inc + 新增 src/common/frm_code_scan.hpp
+src/backend/module/cgen_form.cpp
+src/rtl/core/vb6rtl/vb6rtl_userctl.h  /  vb6rtl_com.c（Extender ToolTipText / vb6_Extender_Move）
+src/rtl/core/di/vb6_di_stubs.c（IsEqualGUID）
+src/rtl/core/vb6rtl/{vb6rtl_paramarray.c,vb6rtl_com.c,vb6rtl_variant.h,vb6rtl_runtime.h}
+src/backend/detail/expr/cgen_expr_call_named_args.inc
+src/backend/detail/expr/cgen_expr_call_arg_variant.inc
+src/rtl/core/di/**（批量重新生成后的桩文件改动，随构建脚本产生）
+```
+
+本轮新改（未验证）：
+
+```
+src/project/frx_reader.hpp
+src/project/frx_reader.cpp
+src/backend/detail/module/cgen_form_create_controls.inc
+```
+
+## 7. 下一步动作清单（按顺序，单步验证）
+
+1. `build.bat` 重建 C3（x86），确认新增 `readDocBlobBytes` 编过（本机 MSVC `/std:c11`）。
+2. 重编夹具工程到 `.temp\ref\` 平行目录，`--arch x86`，PE 断言 `machine=0x014C`。
+3. `.temp\probe_ref.ps1` 同参数跑 C3 产物 → 截 `.temp\c3_run2.png`，确认图标出现。
+4. 若图标出现但位置/尺寸不对 ⇒ 查 `DrawImage` / `ImageListDraw` / `m_IconsSize*nScale` / DPI（`GetWindowsDPI`）。
+5. 同步 `cgen_form_frame_menu.inc` 的同类分支。
+6. 逐像素/rect 对照：窗口与客户区、12 个 UC rect、分段按钮边界、文字基线、选中态/悬停配色、分隔线、圆角、边缘像素 ⇒ 记录改前/改后/差值。
+7. 建夹具 `tests\ucSegmentedControl\`（复制 `.vbp/.frm/.frx/.ctl/.ctx/.bas/.pag/image.jpg`，**不依赖 D: 盘**），新增断言：PE `machine=0x014C` + 32 位进程 + 窗口 766x558/751x520 + 关键像素（图标区非空、选中态色、分隔线）。
+8. 登记 `tests\run_tests.ps1` 用例表、`check_vbp_fixture_census.ps1`、`emit-manifest.expected.txt`（按 CI 实际清单，**禁 `-Bless`**）。
+9. 回归 `scripts\baseline.ps1`（3/0/0）、`scripts\test.bat gui|syntax|compile`（8/0/0）；免注册 COM 两路径（`LoadLibrary+DllGetClassObject`、SxS manifest）不得回归。
+10. 分功能提交 → 快进推 `github`+`origin` 的 `dev`（不 force）→ 跑 GA 至全绿。
+
+## 8. 风险 / 注意
+
+- `Manifest.RES` 是**进程清单**（非运行期 SxS manifest）；夹具化时不要把它塞进 SxS 装配路径，否则与两条免注册 COM 路径互相干扰。
+- `PropPagSC.pag` 只服务设计器属性页，**不影响运行期**，夹具登记时可只保源码不参与构建。
+- `Form1.frx` 157KB 里既有 DocString 也有 PNG 图片块；新增 `readDocBlobBytes` 用 `detectFormat` 做闸门，**不得**把普通字符串属性误判成二进制。
+- C3 成功编译会删除 `%TEMP%\C3C\<hash>_<pid>` 中间目录；要看生成 C 必须用 `--emit-c`，别当成缓存。
+- 参考 exe 主窗 `Title=[LabelPlus]` 来自 `.vbp` 的 `Title`；C3 产物 `Title=[Form1]` 来自 `Form1.frm` 的 `Caption`。**以窗体 Caption 为准**（参考的可视窗也是 `[Form1]`）。
+- 本机 exe 安全警告靠仓库根 Medium 完整性标签解决，**不要再加低完整性标签**；脚本用 `Start-Process -RedirectStandardOutput/-RedirectStandardError -NoNewWindow`。
+- 采集脚本坑：委托（`EnumProc`）里的 `Write-Output` 不进管道 → 必须先收集到 `ArrayList` 再统一输出（`.temp\probe_ref.ps1` 已按此写法）。
