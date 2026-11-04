@@ -4378,6 +4378,17 @@ BASE（dev 头 `4e9d05ff`，不含本刀）在 `For Each` 那一形 **一次都�
    （`b` 保持旧值），C3 的 `Resume Next` 只置 Err 不弃句，所以 `b = (v Is Nothing)` 仍会收到一个值（当前给 1/True）；
    要补的是「语句放弃」机制，越出本轮三条缺口。反向三类（普通对象 Nothing / `Object`=Nothing / Variant 装对象指针）读数逐字未变。
 
+**本批首次 GA 的两道红 = 哨兵/表滞后于实现，不是行为回归**（GA `41795203064`，head `90e54e1c`）：
+`sa_access` A19 把新出口 `vb6_VariantToObjectValChecked` / `vb6_VariantSetCopyChecked` 的
+`if (v.vt & vb6_vtArray)` 也数进「PackBorrow 里恰好一问」（1 → 3）；`owned_temp_keeps` K5/K12 则是这两枚新出口
+没进 KEEPS 表/发码侧头。处置（提交 `53685ff8`）：A19 先把 PackBorrow 函数体切出来再数，锚点也取体内那一份
+（全文件 `IndexOf` 会命中更早的新出口 ⇒ 位置比较永远成立、判据断电）；K5 按推导登记
+`vb6_VariantSetCopyChecked|0`（`1 / ret`）与 `vb6_VariantToObjectValChecked|0`（`0 / handoff-reads`）；
+K12 在 `src/common/owned_temp_keeps.hpp` 的 kRows 补对应例外行（27 枚 KEEPS=1 + 1 枚 U）。
+guisample 3 行的期望改成 CI 自己交回来的数（`ci/emit-manifest`@`3078e10d`，head=`90e54e1c`）：
+sha256/bytes 变而 **ascii256 逐字不变** ⇒ 只是新出口那条注释的文字变化（+210 B/份），发码形状未变。
+
+
 **改前 / 改后读数（同一份 `tests/p2_array_variant/P2Main.bas`，两台 C3 各发一次码）**
 
 | 站点 | 改前（`--emit-c` 原文） | 改后 |
