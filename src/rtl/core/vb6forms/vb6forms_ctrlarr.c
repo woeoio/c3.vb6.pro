@@ -185,9 +185,17 @@ static HWND vb6_MDICreateClientImpl(HWND hwnd, HINSTANCE hInst) {
     CLIENTCREATESTRUCT ccs = {0};
     ccs.hWindowMenu = NULL;   /* P7.8菜单系统实现后填充 */
     ccs.idFirstChild = 1000;  /* MDI子窗体ID起始值 */
+    /* 账 (GUISample 黑线/滚动条刀): 样式/扩展样式逐位对齐**真 VB6 运行期实测值**
+     * (vs2015 与 vc6 两档一致, GetWindowLong 读回): style=0x56000001 =
+     * WS_CHILD|WS_CLIPSIBLINGS|WS_CLIPCHILDREN|MDIS_ALLCHILDSTYLES,
+     * ex=0x00000200 = WS_EX_CLIENTEDGE。此前用 WS_VSCROLL|WS_HSCROLL 且无
+     * WS_EX_CLIENTEDGE, 实测该窗的**客户区相对窗口外扩**: win 1403x843@259,125
+     * 而 client 1407x847@256,123 (client 原点跑到窗口左上方)。Codejock 的
+     * TabWorkspace 按这个客户区摆 MDI 子窗 ⇒ 文档窗落在 256,151 1403x814,
+     * 右侧/底部各留 3px 缝露出 MDIClient 底色 —— 就是用户报的"黑色框线"。 */
     HWND hMDIClient = CreateWindowExW(
-        0, L"MDICLIENT", NULL,
-        WS_CHILD | WS_CLIPCHILDREN | WS_VSCROLL | WS_HSCROLL | MDIS_ALLCHILDSTYLES,
+        WS_EX_CLIENTEDGE, L"MDICLIENT", NULL,
+        WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | MDIS_ALLCHILDSTYLES,
         0, 0, 0, 0,
         hwnd, (HMENU)0xCAC,   /* MDI客户窗口控件ID */
         hInst, &ccs);

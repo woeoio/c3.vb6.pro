@@ -1111,8 +1111,10 @@ function Test-GuiVbpCase {
         $pxStatus = ""
         $pxDetail = ""
         if ($seen -and $Case.ContainsKey("PixelAssert")) {
-            $pxScript = Join-Path $Tests ([string]$Case.PixelAssert)
             $pxDir = Join-Path $guiOut "pixels"
+            # 支持多个夹具 (字符串或数组): 每个夹具自己起一枚产物实例。汇总口径
+            # FAIL > SKIP > PASS (任一件红即红; 全过才算过; 有 SKIP 无 FAIL 记 SKIP)。
+            $pxAll = @()
             # 像素夹具自己起一枚产物实例; 本用例那枚还活着时两个实例抢同一个单实例主窗,
             # 后起的那枚不给可见主窗 ⇒ 夹具如实 SKIP (实测 2026-11-04: 同一产物手动单跑
             # 是 PASS icons=9, 而套件里跑成 SKIP 主窗未找到)。先收掉本用例进程再跑夹具。
@@ -1120,18 +1122,33 @@ function Test-GuiVbpCase {
                 try { $proc.Kill(); $proc.WaitForExit(5000) | Out-Null } catch { }
                 Start-Sleep -Milliseconds 300
             }
-            try {
-                $pxText = (& powershell -NoProfile -ExecutionPolicy Bypass -File $pxScript -Exe $exe -OutDir $pxDir -Sec 10 2>&1 | Out-String).Trim()
-                $pxRc = $LASTEXITCODE
-                $pxDetail = $pxText
-                if ($pxRc -eq 0) { $pxStatus = "PASS" }
-                elseif ($pxRc -eq 2) { $pxStatus = "SKIP"; Write-Host ("    pixels: " + $pxText) -ForegroundColor Yellow }
-                else { $pxStatus = "FAIL"; $issues += ("树图标像素判据: " + $pxText) }
-            } catch {
-                $pxStatus = "FAIL"
-                $issues += ("树图标像素判据异常: " + $_.Exception.Message)
+            foreach ($pxRel in @($Case.PixelAssert)) {
+                $pxScript = Join-Path $Tests ([string]$pxRel)
+                $pxTag = [System.IO.Path]::GetFileName([string]$pxRel)
+                $pxText = ""
+                $pxRc = 1
+                try {
+                    $pxText = (& powershell -NoProfile -ExecutionPolicy Bypass -File $pxScript -Exe $exe -OutDir $pxDir -Sec 10 2>&1 | Out-String).Trim()
+                    $pxRc = $LASTEXITCODE
+                } catch {
+                    $pxText = "夹具异常: " + $_.Exception.Message
+                    $pxRc = 1
+                }
+                if ($pxRc -eq 0) {
+                    $pxAll += ("PASS " + $pxTag + ": " + $pxText)
+                    Write-Host ("    pixels: " + $pxText) -ForegroundColor DarkGray
+                } elseif ($pxRc -eq 2) {
+                    $pxAll += ("SKIP " + $pxTag + ": " + $pxText)
+                    Write-Host ("    pixels: " + $pxText) -ForegroundColor Yellow
+                } else {
+                    $pxAll += ("FAIL " + $pxTag + ": " + $pxText)
+                    $issues += ("像素判据 [" + $pxTag + "]: " + $pxText)
+                }
             }
-            if ($pxStatus -eq "PASS") { Write-Host ("    pixels: " + $pxDetail) -ForegroundColor DarkGray }
+            if ($pxAll | Where-Object { $_ -like "FAIL*" }) { $pxStatus = "FAIL" }
+            elseif ($pxAll | Where-Object { $_ -like "SKIP*" }) { $pxStatus = "SKIP" }
+            else { $pxStatus = "PASS" }
+            $pxDetail = ($pxAll -join " | ")
         }
 
         $data = @{
@@ -6145,7 +6162,9 @@ if ($Category -eq "guisample") {
         MinChildWindows = 10
         DataFiles = @("SampleFrm.txt", "StartPageSample.xaml", "GUISample.exe.manifest")
         # 图标判据 (改前读数: 图标列 20x380 内黑像素 11 = 4.45%; 改后 0)
-        PixelAssert = "guisample\tree_icons_px.ps1"
+        # 编辑器右/底缘判据 (改前: 右 2px/底 2px 纯黑黑线 + 两枚滚动条被编辑器整块盖住;
+        # 改后: 文档窗 1403x814@259,154 = VB6 vs2015 逐像素同, 滚动条 21px 在 Z 序顶层, 黑像素 0)
+        PixelAssert = @("guisample\tree_icons_px.ps1", "guisample\editor_scroll_px.ps1")
         RequiresFiles = @(
             "Codejock.CommandBars.v20.3.ocx"
             "Codejock.DockingPane.v20.3.ocx"

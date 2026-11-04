@@ -414,6 +414,71 @@
         }
     }
 
+    // ============================================================
+    // n`: X.ZOrder [position] —— VB6 语言级方法 (控件/窗体通用)。
+    // `.frm` 里 `ScrollBarVertical.ZOrder 0` / `ScrollBarHorizontal.ZOrder 0`
+    // (GUISample frmDocument) 此前落通用晚绑定: 发成
+    //   vb6_ComCallObject(vb6_ComGetObjectProp(hwnd, L"ZOrder"), NULL, …)
+    // —— HWND 与 OCX Extender 上都没有名为 "ZOrder" 的对象可取, 第一步回 NULL,
+    // 第二步静默不动作。后果 (实测像素): 两枚 Codejock ScrollBar 被 SyntaxEdit
+    // 整块盖住, 本应是竖直滚动条的 x=1600..1667 列恒为编辑器底色 #F6F6F6。
+    // position 0 = 提到最前 (缺省), 1 = 压到最后; RTL 侧 vb6_ControlZOrder。
+    // ============================================================
+    if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maZO = static_cast<MemberAccessExpr&>(*node.callee);
+        if (Symbol::toLower(maZO.memberName) == "zorder" && node.named.empty()
+            && node.positional.size() <= 1 && maZO.object) {
+            std::string hwndZO;
+            if (maZO.object->kind == ASTNodeKind::IdentifierExpr) {
+                auto& objIdZO = static_cast<IdentifierExpr&>(*maZO.object);
+                std::string objLowerZO = Symbol::toLower(objIdZO.name);
+                auto itCtlZO = knownFormControls_.find(objLowerZO);
+                if (itCtlZO != knownFormControls_.end()) {
+                    hwndZO = makeCtrlHwndArg(objLowerZO, itCtlZO->second);
+                } else if (listViewSlotVars_.count(objLowerZO)) {
+                    hwndZO = objLowerZO;   /* 槽变量本身就是 HWND */
+                } else if (objLowerZO == "me") {
+                    auto itOrigZO = knownFormControlOriginalNames_.find(knownFormName_);
+                    hwndZO = "vb6_hwnd_" + (itOrigZO != knownFormControlOriginalNames_.end()
+                                            ? cIdent(itOrigZO->second) : moduleName_);
+                }
+            } else if (maZO.object->kind == ASTNodeKind::MeExpr
+                       && isFormModule_ && !knownFormName_.empty()) {
+                auto itOrigZO = knownFormControlOriginalNames_.find(knownFormName_);
+                hwndZO = "vb6_hwnd_" + (itOrigZO != knownFormControlOriginalNames_.end()
+                                        ? cIdent(itOrigZO->second) : moduleName_);
+            }
+            if (!hwndZO.empty()) {
+                std::string posZO = "0";
+                // 实参是值上下文 —— 与 Move 分支同一处理由 (Fix 261)。
+                bool savedCcZO = asCallCallee_;
+                asCallCallee_ = false;
+                if (node.positional.size() == 1) {
+                    emitExpr(*node.positional[0]);
+                    if (isComMarker_) {
+                        lastExpr_ = resolveComValue("Long");
+                    } else {
+                        const std::string& aZO = lastExpr_;
+                        bool bareIdentZO = !aZO.empty()
+                            && aZO.find('(') == std::string::npos
+                            && aZO.find('-') == std::string::npos
+                            && aZO.find('.') == std::string::npos
+                            && aZO.find('>') == std::string::npos;
+                        if (bareIdentZO
+                            && inferExprType(*node.positional[0]) == Vb6Type::Variant) {
+                            lastExpr_ = "vb6_VariantToLong(" + aZO + ")";
+                        }
+                    }
+                    posZO = std::move(lastExpr_);
+                }
+                asCallCallee_ = savedCcZO;
+                lastExpr_ = "{ vb6_ControlZOrder(" + hwndZO + ", (int)(" + posZO
+                          + ")); (void)0; }";
+                return;
+            }
+        }
+    }
+
     // Fix <vbeclipse>: UserControl 的隐式 `Parent` 伪对象 (VB6 声明 As Object) 上的
     // 成员调用必须走**后期绑定**, 不能按"模块名.成员"做全工程按名查找 ——
     //   ucFolder.ctl:338  Parent.EventRaise "RemoveFolder", FolderId, ViewId

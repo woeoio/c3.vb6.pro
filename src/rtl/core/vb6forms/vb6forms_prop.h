@@ -79,6 +79,10 @@ void vb6_GeomCacheWrite(void* hwnd, int slot, int value, int32_t mode);
 int  vb6_GeomCacheRead(void* hwnd, int slot, int actualPx, int32_t mode, int fallback);
 // Fix 162a: obj.Move l[,t[,w[,h]]] —— twips 进; mask 位 1=L 2=T 4=W 8=H, 缺失位不变
 void vb6_ControlMove(void* hwnd, double l, double t, double w, double h, int mask);
+// `obj.ZOrder [position]` —— 控件/窗体语言级方法, 0=置顶(缺省) 1=置底。
+// 与 vb6_FormZOrder 同一口径 (SetWindowPos, 不激活/不移动/不改尺寸); 入参可以是
+// OCX 控件对象 (vb6_hwnd_<name>), 内部换回该控件在窗体里的顶层代表窗。
+void vb6_ControlZOrder(void* hwnd, int position);
 
 // P11.8: hWnd attribute (read-only, returns the Win32 HWND as pointer)
 void* vb6_GetControlHwnd(void* hwnd);

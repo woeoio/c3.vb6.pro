@@ -148,6 +148,27 @@ void vb6_FormZOrder(void* hwnd, int position) {
                  0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
+// 控件/窗体语言级方法 `obj.ZOrder [position]`（0=置顶，缺省；1=置底）。
+// 与 vb6_FormZOrder 同一口径：只动 z 序，不激活、不移动、不改尺寸。
+// 入参可能是 **OCX 控件对象**（生成码里的 `vb6_hwnd_<name>` 对 OCX 是 IDispatch*，
+// IsWindow 判假）—— 与 vb6_ControlMove 一样先换回代表窗，再按兄弟窗排序。
+// 账 (GUISample 滚动条刀)：`ScrollBarVertical.ZOrder 0` / `ScrollBarHorizontal.ZOrder 0`
+// 此前落通用晚绑定（vb6_ComGetObjectProp(hwnd, L"ZOrder") 在 HWND/Extender 上都取不到
+// 对象 → vb6_ComCallObject(NULL, …) 静默不动作），于是两枚 Codejock ScrollBar 一直被
+// SyntaxEdit 整块盖住（实测像素：编辑器底 #F6F6F6 铺满本应是滚动条的 x=1600..1667 列）。
+void vb6_ControlZOrder(void* hwnd, int position) {
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        /* windowless OCX: 站点没有独立窗口可抬 —— 交给站点账本（真 VB6 这里靠
+           IDeferredCommand/z 序属性，本项目暂无 windowless 的 z 序需求，交回不打补丁） */
+        (void)ctlObj;
+        return;
+    }
+    SetWindowPos((HWND)hwnd, position == 1 ? HWND_BOTTOM : HWND_TOP,
+                 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
 /* 账 #171（C29-FS-h）：单选钮的 `Click` 只在「这一枚真被选中」时才算数。见 vb6forms_prop.h 的注释。
    非单选钮一律放行 —— 这一处是那条口径的**唯一**落点，发码侧只对 OptionButton 的 arm 调它。 */
 int vb6_RadioClickCounts(void* hwndFrom) {
