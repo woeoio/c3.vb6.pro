@@ -4364,13 +4364,19 @@ BASE（dev 头 `4e9d05ff`，不含本刀）在 `For Each` 那一形 **一次都�
 `cgen_util_comwrite.cpp`（泛对象槽的 AST 补充）、`cgen_expr_call_builtin_pre.inc`（TypeName 折叠抑制）、
 `cgen_file_io.cpp`（Print# 的 Variant 档先装箱）。
 
-**已知缺口（本轮不做，不改代码注释当 TODO）**
-1. `Set x = Array(...)` / `With Array(...)`：VB6 是 **424 Object required**，不是装箱。C3 现在发 C2440
-   （编译期就红，属于「响」的失败，不是静默误编）；改成运行期 424 属于发错误语义，越出本期。
-2. `For Each x In v`（`v` 是装着数组的 Variant）：静态类型只有 Variant，站点看不见 VarType；
-   换任何问句都不翻读数，只能加运行期 `VT_ARRAY` 分支（动 RTL）。本轮不碰。
-3. `Is Nothing` 的数组本体（`Array(...) Is Nothing`）应恒为 True，当前送 `VariantToObject(&rvalue)` 仍会红；
-   发「常量 True」属另一条语义，待夹具定。
+**三条缺口：已修复（2026-11-04，判据一律取 `.build/vb6base/READINGS.md` 的真 VB6 读数）**
+1. `Set/With` 的 Variant-数组 RHS：目标 `Object` 走 `vb6_VariantToObjectValChecked` ⇒ **运行期 424**；
+   目标 `Variant` 走 `vb6_VariantSetCopyChecked` ⇒ **13 Type mismatch**。VB6 基准 P1 表：T1 `Set x`(Variant)=v ⇒ 13，
+   T3 `Set ob`(Object)=v ⇒ 424，T5/T6 `With v` 仅入口 ⇒ 0 / 进体 ⇒ 424（W1/W2 与之一致）。
+   （原先写的「一律 424」是把 T1 的读数记串了；以 READINGS 为准。）
+2. `For Each x In v`（`v` 装数组）：RTL 枚举器加 `VT_ARRAY` 分支（`vb6_VariantArray` 臂按 SafeArray 内存序发元素），
+   `vb6_SaElemToVariant` 的 `vb6_sa_variant` 臂改 `vb6_VariantCopy`、`vb6_sa_ptr` 臂补 `vb6_ComAddRefDispatch`。
+   VB6 基准 P2 表：一维按 11,21,12,22,13,23 的**内存序**（不是行列序遍历），元素类型 Date⇒VT=7、Object⇒VT=9；
+   空数组 0 枚；`Split`/`Filter` 同型。探针 F1–F5 逐项对齐（F5 count=2）。
+3. `Is Nothing` 的 Variant-数组本体：`vb6_VariantIsNothingChecked` ⇒ **424**（VB6 基准 P3 表 A/E/I/J/K/L 全是 424），
+   不是原先推断的「恒 True」。**残留差异（记录，不在本轮修）**：VB6 的 `Resume Next` 在 424 处**放弃整条语句**
+   （`b` 保持旧值），C3 的 `Resume Next` 只置 Err 不弃句，所以 `b = (v Is Nothing)` 仍会收到一个值（当前给 1/True）；
+   要补的是「语句放弃」机制，越出本轮三条缺口。反向三类（普通对象 Nothing / `Object`=Nothing / Variant 装对象指针）读数逐字未变。
 
 **改前 / 改后读数（同一份 `tests/p2_array_variant/P2Main.bas`，两台 C3 各发一次码）**
 
@@ -4490,6 +4496,32 @@ UC 与标准模块走的是同一批序言发射器（`PushInstance` 就在同�
 
 **开工家底**：登记点 `semantic_analyzer_expr.cpp:163` + `symbol_table.hpp:546-564`（`implicitVars_`，键是 `<mod>` + 模块名小写 + `$` + 过程名小写）；
 发射点三处同形（`cgen_decl_func.cpp:441` / `cgen_decl_proc.cpp:355` / `cgen_decl_prop.cpp:322`）—— **三处**正是本仓一贯要收成的那一处。
+
+## P4 — `P4.exe`「内存不能 read」= C3 伪对象被 OLEAUT32 按 COM 协议解引用（2026-11-04）
+
+**定位**：用户截图 `0x774BCF77` 处指令读 `0xC01C01C4`（32 位进程）。`0x774BCF77` = `OLEAUT32 + 0x1CF77`（`VariantCopy` 读 AddRef 槽）；
+RTL 把拷贝换成自家 `vb6_VariantCopy` 之后，PC 移到 `OLEAUT32 + 0x1FA5D`（`VariantClear` 读 Release 槽），读地址 `0xC01C01C8`。
+**读地址不是垃圾指针**：`0xC01C01C0` 是 `VB6_UC_COLL_TAG` —— C3 内建 Collection（`vb6forms` 的 `vb6_CollRec`）的身份标记，**它不是 vtable**；
+`+4 / +8` 正好是 OLEAUT32 按 `IDispatch` 取 AddRef / Release 的槽位。⇒ **伪对象被 COM 协议解引用**。
+不是引用计数被减到 0，也不是释放后重用：插桩 `[SEVFE] idx=1 p=... vtbl=C01C01C0`（首 dword 就是标记），且全过程**一次**
+`coll_AddRef/coll_Release` 都没出现过（那个对象根本不是 COM 对象，没有计数）。出现时机也是这条的旁证 ——
+stdout 打完 `F5[2]` 才崩，因为崩点在循环尾的栈 VARIANT 清理，不在取值或打印。
+
+**归因**：**既有缺陷**（For Each 循环尾从 P24-03 起就用 OLEAUT32 `VariantClear`），被本轮新的「For Each 遍历装数组 Variant」分支
+打开了可达路径。既不是 P2 的 SafeArray 装箱回归（那条 `vt` 已改成 `VT_ARRAY`，见 P2 节），也不是夹具/环境问题
+（同一份 `.bas` 在 x86、x64 两套 RTL 下崩法一致，且与用户截图同址同偏移）。
+
+**处置**：`cgen_control.cpp` 循环尾改成 RTL 出口 `vb6_VariantClearWin(&_fe_var)` —— 对象档走 `vb6_ReleaseObject` 的判据
+（真 COM 对象照 Release、伪对象/句柄跳过），其余档（BSTR/数组/数值/日期）原样交回 OLEAUT32 `VariantClear`，与改前逐字同义。
+**夹具** `tests/p4_coll_array_foreach`（**真跑**，登记在 `run_tests.ps1` 的 `Test-Vbp`，`-ExpectExitCode 0`）。
+
+| 读数（x86） | 改前（缺口版 C3，未含本次清理修复） | 改后 |
+|---|---|---|
+| `P4.exe` | `faultAddr=0xC01C01C8`、PC=`OLEAUT32+0x1FA5D`、exit=`0xC0000005`、stdout 停在 `F5[2]` | exit=0，`F5 count=2` + `DONE` |
+| `P9.exe`（同型 Collection 单点存取） | 同上崩法（`C[2]` 之后） | exit=0，`C count=2` + `DONE` |
+| 夹具 `p4_coll_array_foreach` | 同上崩法 | `P4 count=2` / `P4 types=Date;Collection;` / `DONE`，exit=0 |
+
+改后 emit 只多一处 token：`VariantClear(&_fe_var)` → `vb6_VariantClearWin(&_fe_var)`（全语料 27 份输入，登记口径见 P2 节末）。
 
 ## C. 仍在生效的口径与工具事实（与本文档等长的一半价值在这里；完整版见记忆库）
 
