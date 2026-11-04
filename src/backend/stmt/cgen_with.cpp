@@ -811,7 +811,21 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         }
         // Fix 038: C2440 修复 — UDT 同类型转换和 UDT/VARIANT → void* 转换
         bool isUdtTempType = (tempType.rfind("vb6_type_", 0) == 0);
-        if (!viewIface177.empty()) {
+        // P3 缺口① (§D 已修复条): `With <Variant 数组本体>` —— VB6 在**成员访问**处给
+        // 424 Object required (READINGS P1 表 T8; T5 证明 With 入口本身不报)。C3 的 With
+        // 体必然含成员访问, 所以在取 With 引用这一句报错 (位置比 VB6 早一句, 错误号/描述
+        // 一致; 空体 With 的差异只在"多报一次", 存量语料里没有空体 With)。
+        // 只认**静态可证**的数组本体 (Array/Split/Filter/`Variant()` 符号);
+        // 普通 Variant 变量走下面那个运行期判据。
+        bool withSubjArrP3 = false;
+        if (node.object) {
+            bool isArrP3 = false;
+            if (isDefinitelyVariantExpr(*node.object, &isArrP3) && isArrP3) withSubjArrP3 = true;
+        }
+        if (withSubjArrP3) {
+            c_.emitLine("vb6_RaiseError(424, vb6_BSTR_FromStr(L\"Object required\"))  /* P3: With <Variant array> = VB6 424 */;");
+            c_.emitLine(tempType + " " + tempVar + " = (void*)0  /* With object ref (VB6 424) */;");
+        } else if (!viewIface177.empty()) {
             // 视图是一枚**借来的值** ⇒ 临时量就是同型值拷贝: 不取址、不强转、不退旧
             // (退旧那半句与第一百七十二刀站B 一字口径 —— With 没接管所有权)。
             // 从前这一格发的是 `void* _vb6_with_N = (void*)视图` = cl **C2440**（探针实测），
@@ -887,7 +901,9 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
                     }
                 }
                 if (withIsVariantVal090e) {
-                    c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectVal(" + lastExpr_ + ")  /* With object ref */;");
+                    // P3 缺口①: 运行期判据 —— 整只 VARIANT 里是 SafeArray ⇒ 424; 其余原样转调
+                    // (读形参的既有行为一字不动; 见 vb6_VariantToObjectValChecked)。
+                    c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectValChecked(" + lastExpr_ + ")  /* With object ref */;");
                 } else {
                     // 账 #255: 上面那两条只管「表达式是 VARIANT **值**」；COM 调用交回的
                     // 是 VARIANT*，(void*) 硬转会把结构体地址当对象用 ⇒ With 体内每一档属性
@@ -924,7 +940,9 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
                     }
                 }
                 if (withIsVariantVal092j) {
-                    c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectVal(" + lastExpr_ + ")  /* With object ref */;");
+                    // P3 缺口①: 运行期判据 —— 整只 VARIANT 里是 SafeArray ⇒ 424; 其余原样转调
+                    // (读形参的既有行为一字不动; 见 vb6_VariantToObjectValChecked)。
+                    c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectValChecked(" + lastExpr_ + ")  /* With object ref */;");
                 } else {
                     // 账 #255: 同 090e 那一档 —— COM 调用交回的是 VARIANT*，裸转把结构体地址当对象。
                     c_.emitLine(tempType + " " + tempVar + " = (" + tempType + ")"

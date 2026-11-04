@@ -115,13 +115,13 @@
             auto itCls = knownClassVars_.find(setLhsLower);
             if (itCls != knownClassVars_.end() && !itCls->second.empty()) {
                 value = "(vb6_cls_" + cIdent(itCls->second) + "*)vb6_ComObject_GetInstance("
-                        "vb6_VariantToObjectVal(" + value + "))";
+                        "vb6_VariantToObjectValChecked(" + value + "))";
             } else if (!currentReturnVar_.empty() && target == currentReturnVar_
                        && currentReturnCType_.compare(0, 8, "vb6_cls_") == 0) {
                 value = "(" + currentReturnCType_ + ")vb6_ComObject_GetInstance("
-                        "vb6_VariantToObjectVal(" + value + "))";
+                        "vb6_VariantToObjectValChecked(" + value + "))";
             } else {
-                value = "vb6_VariantToObjectVal(" + value + ")";
+                value = "vb6_VariantToObjectValChecked(" + value + ")";
             }
         }
     }
@@ -160,12 +160,35 @@
     //   - vb6_VARIANT → vb6_VariantIdentity (no-op, 安全)
     // 因此始终包装是安全的, 只需避免对已包装的表达式双重包装.
     // Fix 090af: targetIsVariant 判定上移共用 (含 Variant 数组元素 LHS).
+    // P3 缺口①: 目标是 **Variant 槽** 时 VB6 给 13 Type mismatch (READINGS P1 表
+    // T1/T3/T10/T15/T17)。与上面那半 (目标 Object ⇒ 424) 是同一个 RHS 的两种落点。
+    // 判据取自**改前**的 C 文本 (装箱前问, 免得 vb6_VariantFromValue 把名字改掉);
+    // 非阵列档 helper 原样返回那一枚, 既有行为一字不动。
+    bool setValIsVariantP3 = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
+    if (!setValIsVariantP3 && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
+        std::string idLowerP3 = static_cast<IdentifierExpr&>(*node.value).name;
+        std::transform(idLowerP3.begin(), idLowerP3.end(), idLowerP3.begin(), ::tolower);
+        if (knownVariantVars_.count(idLowerP3)) setValIsVariantP3 = true;
+    }
     if (targetIsVariant
         && value.find("vb6_VariantFromValue(") != 0
         && value.find("vb6_VariantFromComResult(") != 0
         && value.find("vb6_VariantBool(") != 0) {
         // 装箱走 boxToVariant 这一权威 (按 VB 类型选档; 未知才让 _Generic 猜)
         value = boxToVariant(node.value.get(), value);
+    }
+    // 静态可证的数组本体 (Array/Split/Filter/`Variant()` 符号): Variant 目标走同一个
+    // 运行期 helper; Object 目标没有"整只 VARIANT"可传, 直接在赋值表达式里报 424
+    // (`0` 是空指针常量, 对任何对象目标类型都合法; `On Error GoTo` 下 longjmp 走不到它).
+    bool setValIsArrStaticP3 = false;
+    if (node.value) {
+        bool isArrP3 = false;
+        if (isDefinitelyVariantExpr(*node.value, &isArrP3) && isArrP3) setValIsArrStaticP3 = true;
+    }
+    if (targetIsVariant && (setValIsVariantP3 || setValIsArrStaticP3)) {
+        value = "vb6_VariantSetCopyChecked(" + value + ")";
+    } else if (!targetIsVariant && setValIsArrStaticP3) {
+        value = "(vb6_RaiseError(424, vb6_BSTR_FromStr(L\"Object required\")), 0)";
     }
 
     // Fix 098: Set 左值是函数调用表达式 → 非左值 (C2106), 且多半缺参 (C2198).

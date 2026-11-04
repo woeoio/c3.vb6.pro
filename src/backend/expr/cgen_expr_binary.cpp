@@ -654,9 +654,12 @@ void CCodeGen::visit(BinaryExpr& node) {
                           + ")) && (void*)vb6_VariantToObject(" + la
                           + ") == (void*)vb6_VariantToObject(" + ra + "))";
             } else if (lv158n && isNothingSentinel158n(right)) {
-                lastExpr_ = "(vb6_IsNothing(vb6_VariantToObject(" + variantAddr158n(left, node.left.get()) + ")))";
+                // P3 缺口③ (§D 已修复条): `Array(...) Is Nothing` —— VB6 实测 **424
+                // Object required** (`.build/vb6base/READINGS.md` P3 表 A/E/I/J/K/L),
+                // 而不是 True。判据只看运行期 vt 的阵列位, 非阵列档与改前逐字同义。
+                lastExpr_ = "vb6_VariantIsNothingChecked(" + variantAddr158n(left, node.left.get()) + ")";
             } else if (rv158n && isNothingSentinel158n(left)) {
-                lastExpr_ = "(vb6_IsNothing(vb6_VariantToObject(" + variantAddr158n(right, node.right.get()) + ")))";
+                lastExpr_ = "vb6_VariantIsNothingChecked(" + variantAddr158n(right, node.right.get()) + ")";
             } else if (lv158n) {
                 // Fix: `<Variant> Is <对象/指针>` —— VB6 的 `Is` 问的是**对象同一性**
                 // (指针相等), 不是值相等。旧发码
