@@ -9174,6 +9174,9 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-VbpBuild "guisample_err438"   "$Tests\guisample\err438\E438App.vbp"
     Test-VbpBuild "guisample_mdimax"   "$Tests\guisample\mdimax\MaxApp.vbp"
     Test-VbpBuild "ctlident_idapp"     "$Tests\ctlident\IdApp.vbp"
+    # P2 夹具: 「Variant 类型但非整只槽」(Array/Split/Filter, VarType=8204) 那几格。
+    # 只编不跑 —— 运行期会走到 VB6 的 Type Mismatch 分支, 那不是本夹具要钉的东西。
+    Test-VbpBuild "p2_array_variant"   "$Tests\p2_array_variant\p2_array_variant.vbp"
 
     Test-VbpBuild "charts_ucChartBar"  "$Tests\Charts 2020\ucChartBar\Proyecto1.vbp"
     Test-VbpBuild "charts_ucChartBar_x86" "$Tests\Charts 2020\ucChartBar\Proyecto1.vbp" -Arch "x86"
