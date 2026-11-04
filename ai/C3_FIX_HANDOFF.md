@@ -4348,6 +4348,30 @@ BASE（dev 头 `4e9d05ff`，不含本刀）在 `For Each` 那一形 **一次都�
 那一族（语句路 vs 表达式路）的第四次同问，**该在语义层带上下文，不该在发码侧猜**。
 量到的现成家底：登记点 `symbol_table.hpp:546-564`（`implicitVars_`，键 `<mod>`+模块小写+`$`+过程小写）；
 发射点三处同形（`cgen_decl_func.cpp:441` / `cgen_decl_proc.cpp:355` / `cgen_decl_prop.cpp:322`）。
+
+## P2 — 「VB 类型是不是 Variant」与「这段 C 是不是整只槽」分开（2026-11-04）
+
+**两句判据（不许合并）**
+- `isVariantType(const Expr*)`：问 **VB 类型**，数组本体算 Variant（`Array/Split/Filter` 的 VarType = 8204）。
+- `isVariantSlot(text, ast)`：问 **整只槽**，数组本体（SafeArray 载体）不算槽（`variantOperandAST` 的 `!isArr`）。
+- 同一枚 `Array(1,2,3)`：类型问句 true、槽问句 false —— 这是两张问句必须分开的实物证据。
+  夹具 `tests/p2_array_variant`；结构断言 `scripts/check_builtin_slot_returns.ps1` R12。
+
+**已按此口径改动的站点**：`cgen_util_type.cpp`（`asUnsignedOperand` 装箱、Div oracle、`builtinWantsRawSlotFromVariant`）、
+`cgen_expr_binary.cpp`（`routeOperand86`、`isVariantOperand158m`）、`cgen_expr_call_builtin_fixup.inc`（UBound/LBound 首参）、
+`cgen_expr_call_arg_variant.inc`（两臂）、`cgen_expr_call_arg_emit.inc`（As Any / ByRef 具体形参）、
+`cgen_expr_call_conv_output.inc` / `cgen_expr_call_conv_numeric.inc`（V 后缀与装箱同口径）、
+`cgen_util_comwrite.cpp`（泛对象槽的 AST 补充）、`cgen_expr_call_builtin_pre.inc`（TypeName 折叠抑制）、
+`cgen_file_io.cpp`（Print# 的 Variant 档先装箱）。
+
+**已知缺口（本轮不做，不改代码注释当 TODO）**
+1. `Set x = Array(...)` / `With Array(...)`：VB6 是 **424 Object required**，不是装箱。C3 现在发 C2440
+   （编译期就红，属于「响」的失败，不是静默误编）；改成运行期 424 属于发错误语义，越出本期。
+2. `For Each x In v`（`v` 是装着数组的 Variant）：静态类型只有 Variant，站点看不见 VarType；
+   换任何问句都不翻读数，只能加运行期 `VT_ARRAY` 分支（动 RTL）。本轮不碰。
+3. `Is Nothing` 的数组本体（`Array(...) Is Nothing`）应恒为 True，当前送 `VariantToObject(&rvalue)` 仍会红；
+   发「常量 True」属另一条语义，待夹具定。
+
 另：census 顺带证实 `Count` 那两处只在 Charts 的两份输入里（`Proyecto1.vbp` 与 `ucProgressCircular/Proyecto1.vbp`），
 不是全仓蔓延 —— 所以最后那 2 处若要"改源码笔误"也是可控的小改（要用户点头才动别人的 `.ctl`）。
 
