@@ -420,10 +420,13 @@ $LateBindMissAllow = @{
     'B190' = 8
     'czFormDemo' = 3 # 控件的 Font 伪对象还没实现 => txtEmbed.Font 为空 (kind=null)
     'Proyecto1' = 67 # VB6 内建运行时对象没有 IDispatch 包器: 45 x Collection.Add + 22 x StdFont.Size (kind=null)
-    # GUISample 本机验收 (-Category guisample, 不入 CI 判据) 首次进 harness 的实测基线:
-    # 3 处, 都是 kind=null 的同一类缺口 (与上面两行同根), 本批不修。精确 3 条 —— 多一条少一条都红。
-    #   ① CommandBars.EnableGroups (ComCall) ② 全局设置 .Flags (ComSetProp) ③ CommandBars.RefreshColors (ComCall)
-    'guisample' = 3
+    # GUISample 本机验收 (-Category guisample, 不入 CI 判据) 实测基线。
+    # 旧值 3: ① CommandBars.EnableGroups ② 全局 Workspace.Flags ③ CommandBars.RefreshColors。
+    # 2026-11-04 TabWorkspace 那条接通后 (ShowTabWorkspace 返回真对象, 不再是 Nothing),
+    # ①/② 两处**不再落空** —— frmMain.frm:363-364 拿到的是真 TabWorkspace,
+    # 只剩 ③ frmDocument.Form_Activate 里的 RefreshColors (form 自身方法经 Object 调用,
+    # 与 B190/czFormDemo 同根); 条数 3 -> 1 是缺口缩小, 不是放宽判据。
+    'guisample' = 1
 }
 
 function Get-LateBindMissExpected {
@@ -837,6 +840,15 @@ function Test-GuiVbpCase {
             Copy-Item -Force $_.FullName $guiOut | Out-Null
         }
     }
+    # 工程数据文件: TabWorkspace 接通后启动链会真的创建 frmDocument, 它按 App.Path 读
+    # SampleFrm.txt / StartPageSample.xaml —— 没带过去就是 VB 错误 53 (File not found),
+    # 窗口还没起就退 (实测 exit=53)。
+    if ($Case.ContainsKey("DataFiles")) {
+        foreach ($df in @($Case.DataFiles)) {
+            $dp = Join-Path $srcDir ([string]$df)
+            if (Test-Path -LiteralPath $dp) { Copy-Item -Force $dp $guiOut | Out-Null }
+        }
+    }
 
     # 免注册预检: 组件文件缺失 / 位数不符 -> SKIP 并写明缺什么 (不跑、不算 PASS)
     $requires = @()
@@ -1093,12 +1105,42 @@ function Test-GuiVbpCase {
             $issues += ("退出码 $exitCode (期望 0)")
         }
 
+        # ④ 可选像素夹具 (本机验收): "图标周围像素 = 树底色", 不许纯黑方底。
+        # 判据落在 tests\guisample\tree_icons_px.ps1 (CopyFromScreen 真桌面捕获;
+        # 取不到桌面时它自己输出 SKIP, 这里如实记为 SKIP 而不是 PASS/FAIL)。
+        $pxStatus = ""
+        $pxDetail = ""
+        if ($seen -and $Case.ContainsKey("PixelAssert")) {
+            $pxScript = Join-Path $Tests ([string]$Case.PixelAssert)
+            $pxDir = Join-Path $guiOut "pixels"
+            # 像素夹具自己起一枚产物实例; 本用例那枚还活着时两个实例抢同一个单实例主窗,
+            # 后起的那枚不给可见主窗 ⇒ 夹具如实 SKIP (实测 2026-11-04: 同一产物手动单跑
+            # 是 PASS icons=9, 而套件里跑成 SKIP 主窗未找到)。先收掉本用例进程再跑夹具。
+            if ($proc -and -not $proc.HasExited) {
+                try { $proc.Kill(); $proc.WaitForExit(5000) | Out-Null } catch { }
+                Start-Sleep -Milliseconds 300
+            }
+            try {
+                $pxText = (& powershell -NoProfile -ExecutionPolicy Bypass -File $pxScript -Exe $exe -OutDir $pxDir -Sec 10 2>&1 | Out-String).Trim()
+                $pxRc = $LASTEXITCODE
+                $pxDetail = $pxText
+                if ($pxRc -eq 0) { $pxStatus = "PASS" }
+                elseif ($pxRc -eq 2) { $pxStatus = "SKIP"; Write-Host ("    pixels: " + $pxText) -ForegroundColor Yellow }
+                else { $pxStatus = "FAIL"; $issues += ("树图标像素判据: " + $pxText) }
+            } catch {
+                $pxStatus = "FAIL"
+                $issues += ("树图标像素判据异常: " + $_.Exception.Message)
+            }
+            if ($pxStatus -eq "PASS") { Write-Host ("    pixels: " + $pxDetail) -ForegroundColor DarkGray }
+        }
+
         $data = @{
             mode = $mode; arch = $arch; exitCode = $exitCode; killed = $killed
             windowSeen = $seen; windowTitle = $winTitle; windowMs = $winMs; aliveMs = $aliveMs
             maxConsec = $maxConsec; obsSpanMs = $obsSpanMs
             childWindows = $childCount; checkpoints = $cpText; missing = ($miss -join ", "); requiresFiles = ($requires -join ",")
             compileLog = $compileLog; mtExe = $script:GuiMtExe
+            pixelCheck = $pxStatus; pixelDetail = $pxDetail
         }
         if ($issues.Count -gt 0) {
             $data.detail = ($issues -join "; ")
@@ -6101,6 +6143,9 @@ if ($Category -eq "guisample") {
         WindowTitle = "Visual Studio Sample"
         HoldWindowMs = 2000
         MinChildWindows = 10
+        DataFiles = @("SampleFrm.txt", "StartPageSample.xaml", "GUISample.exe.manifest")
+        # 图标判据 (改前读数: 图标列 20x380 内黑像素 11 = 4.45%; 改后 0)
+        PixelAssert = "guisample\tree_icons_px.ps1"
         RequiresFiles = @(
             "Codejock.CommandBars.v20.3.ocx"
             "Codejock.DockingPane.v20.3.ocx"
