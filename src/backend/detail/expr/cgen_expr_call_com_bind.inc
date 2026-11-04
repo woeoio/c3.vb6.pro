@@ -903,6 +903,40 @@
         return;
     }
 
+    // 交接 §7.8 缺陷 A: **调用结果再下标** —— `Split(s, ",")(1)` / `Filter(a, "x")(i)` /
+    // `Array(...)(i)` 的外层括号是**对返回数组的下标**, 不是内层调用的实参。
+    // 判据落在括号层级 (= "谁拥有这层实参"): callee 已是 SafeArray1D* 载体调用
+    // (isSafeArrayCarrier 那一张权威名单) ⇒ 外层实参归属外层下标, 绝不并入内层实参表。
+    // 修前 P6.5 的拆分把外层实参接到内层调用尾部, 内置补档再按内层名补齐 ⇒
+    // `vb6_Split(src, delim, -1, 0, 1, NULL, -1, 0)` 收 8 个实参 (C2197)。
+    // 元素档随载体: Split/Filter 交 BSTR 数组; Array(...) 的 _arr_N 交 Variant 数组。
+    // 其余载体 (Create1D / ReDim 族) 不作表达式下标使用, 保持原路。
+    if (node.positional.size() == 1 && node.named.empty()) {
+        static const struct { const char* prefix; size_t len; const char* cType; } kCarrierElem[] = {
+            { "vb6_Split(",       10, "BSTR" },
+            { "vb6_Filter(",      11, "BSTR" },
+            { "vb6_ArrayCreate(", 16, "vb6_VARIANT" },
+            { "_arr_",             5, "vb6_VARIANT" },
+        };
+        size_t cs = callee.find_first_not_of(" \t\r\n(");
+        std::string carrierElem;
+        if (cs != std::string::npos) {
+            for (const auto& ce : kCarrierElem) {
+                if (callee.compare(cs, ce.len, ce.prefix) == 0) {
+                    carrierElem = ce.cType;
+                    break;
+                }
+            }
+        }
+        if (!carrierElem.empty()) {
+            std::string innerCall = callee;
+            emitExpr(*node.positional[0]);
+            std::string outerIdx = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
+            lastExpr_ = "VB6_SA_AT(" + carrierElem + ", " + innerCall + ", " + outerIdx + ")";
+            return;
+        }
+    }
+
     // P6.5修复: 如果callee已经是func(obj)形式(如类方法调用 vb6_Button_SetCaption(btn)),
     // 且IndexOrCallExpr有额外参数, 需要拆开重组为func(obj, userArgs...),
     // 避免生成 func(obj)(userArgs) 双重括号

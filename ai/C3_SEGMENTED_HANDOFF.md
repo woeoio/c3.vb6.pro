@@ -269,6 +269,78 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
    判断"本机产物是否可信"的唯一口径：`--emit-c` 出来的 `vb6_Split(` 形态与
    `src\rtl\core\vb6rtl\vb6rtl_array.h:116` 的形参数是否一致。
 
+## 7.9 §7.8 的两个缺陷已修（本机闭环），待推送 + GA
+
+### 缺陷 A：调用结果再下标被并进内层实参表
+
+- 根因：P6.5 那段"callee 已经是 `func(obj)`"的**通用拆分**（
+  `src/backend/detail/expr/cgen_expr_call_com_bind.inc`，`callee.back() == ')'`
+  且外层有 positional）对**任何**以 `)` 结尾的 callee 都生效。`Split(SrcImg, ",")(1)`
+  的 callee 是内层 Split 的完整调用，于是外层的 `1` 被接到内层实参尾部；随后
+  内置补档按 `vb6_Split` 名再补 `NULL, -1, 0` ⇒ 8 实参（C2197）。
+  这是**括号层级/实参归属**问题：外层括号是下标，不属于内层调用。
+- 修法：在同一处加一条**先于** P6.5 的括号层级闸 —— callee 已是 SafeArray1D* 载体
+  调用（`isSafeArrayCarrier` 名单内的 `vb6_Split(` / `vb6_Filter(` /
+  `vb6_ArrayCreate(` / 匿名临时量 `_arr_`）时，外层实参交给 `VB6_SA_AT(<elem>, <内层调用>, <下标>)`，
+  **绝不**并入内层实参表。元素档随载体（Split/Filter→BSTR，Array→vb6_VARIANT）。
+  没有在内层按形参个数特判。
+- 发码对照（`tests/ucSegmentedControl/ucSegmentedControl.ctl:2166`）：
+  修前 `vb6_Split(src, delim, -1, 0, 1, NULL, -1, 0)`（8 实参）
+  → 修后 `VB6_SA_AT(BSTR, vb6_Split(src, delim, -1, 0), 1)`；
+  RTL `src/rtl/core/vb6rtl/vb6rtl_array.h:116` 声明
+  `vb6_Split(BSTR, BSTR, int32_t, int32_t)`（4 形参）⇒ 两侧一致。
+  `--emit-c` 全量 diff 只有这 3 个站点的 6 行（其它"调用结果再下标/再成员"形状未受影响；
+  `Array(...)(i)` 同族也确认按新规则发码）。
+
+### 缺陷 B：显式 Declare 被内置同名遮蔽
+
+- 根因：`src/backend/detail/expr/cgen_expr_ident_builtin.inc` 的**静态内置名表**
+  在符号表查询**之前**命中，`{"getobject","vb6_GetObject"}` 把模块级
+  `Private Declare Function GetObject Lib "gdi32.dll" Alias "GetObjectA"(3 参)`
+  顶掉 ⇒ 3 个实参落进 2 形参的内置出口（C2197）。`symbol_table.cpp` 的 `define()`
+  已经让内置符号整体让位（Fix 048 那条），但这里没问符号表。
+- 修法：命中内置名时先问本模块作用域 —— 有 `DeclareSub/DeclareFunc` 且带形参表
+  （存在性 + 参数形状；Lib/Alias 由 Declare 符号本身携带，发射侧登记在
+  `declareAliasMap_`）⇒ **Declare 赢**，落回原有别名转发桩。闸只在"真有 Declare"，
+  没有 Declare 的同名站点（如 `GetObject(, "Excel.Application")`）照旧走内置。
+- 发码对照（`ucSegmentedControl.ctl:2195/2211`）：修前
+  `vb6_GetObject(vb6_VariantToLong((*SrcImg)), sizeof(tBmp), &tBmp)`（3 实参）
+  → 修后 `vb6_lwa_GetObjectA(0L, ((int32_t)sizeof(bmp)), (void*)&(bmp))`。
+
+### 两个独立回归夹具（不只靠 segmented 兜底）
+
+- `tests/test_split_result_subscript.bas`：`Split("a,b,c", ",")(1)` + `Array(10,20,30)(1)`。
+  探针 `Test-CodegenNote "split_result_subscript"` 两头钉：
+  needle `VB6_SA_AT(BSTR, vb6_Split(..., -1, 0), 1)`（绑定层）、
+  absent `..., -1, 0, 1` / `-1, 0, 1, NULL` / `_arr_0(1)`（实参个数与旧合并形状）。
+- `tests/test_declare_shadows_builtin.bas`：3 参 Declare GetObject。
+  探针 `Test-CodegenNote "declare_shadows_builtin"` needle `vb6_lwa_GetObjectA(...)`、
+  absent `vb6_GetObject(`；对照针 `"getobject_builtin_kept"`
+  （`test_p24_04b/test_getobject.bas`）证明真内置站点没有被顺带改掉。
+
+### 重建 RTL 嵌入 / 真跑
+
+- `.build\Release\c3rtl.res` 06:08 重新生成（`src/driver/c3rtl.rc` 吃当前 RTL 头）；
+  本机 segmented 编译 **rc=0**，`output/ucSegmentedControl/compile.log` 无
+  `c3-error.log` ⇒ CI 上那 6 条 `C2197` 消失。
+- `tests/run_tests.ps1 -Category gui`：**PASS=10 FAIL=0 SKIP=0**。
+  ucSegmentedControl `window=766x558 client=751x520 hosts=12+1`，
+  `uc2 145/138, uc3 1185/625, uc4 1734/1734, uc11 970/209, uc1 802/161`，
+  `#0078D7=10715`、`#CE00EF=400` —— 与本轮修前**逐项相同**；
+  `output/ucSegmentedControl/pixels/segmented_c3.png` 与修前
+  `.temp/segpx/segmented_c3.png` **字节相同**（sha256 `4484B813…`）⇒ 对参考的
+  `MEAN_ABS_DIFF 3.967/765` 不变（不是重算，是图没动）。
+
+### 发码清单重登记（未用 `-Bless`）
+
+- `emit-manifest.expected.txt` 本机现算：
+  新增 `tests/test_split_result_subscript.bas`、`tests/test_declare_shadows_builtin.bas`；
+  更新 `tests/ucSegmentedControl/SegmentedControl.vbp`（`sha256=e1f248b1…`）。
+- 其余 4 份仍是**本机与 CI 不同**的既有条目（TeeChart 与 GUISample×3，依赖外部
+  OCX/typelib 解析），保持 CI 值不动；最终以 CI 的 `ci/emit-manifest` 复核。
+- `check_manifest_coverage.ps1`、`check_builtin_slot_returns.ps1`、
+  `check_builtin_opt_defaults.ps1`、`check_owned_temp_keeps.ps1` 本机 PASS。
+
 ## 8. 风险 / 注意
 
 - `Manifest.RES` 是**进程清单**（非运行期 SxS manifest）；夹具化时不要把它塞进 SxS 装配路径，否则与两条免注册 COM 路径互相干扰。

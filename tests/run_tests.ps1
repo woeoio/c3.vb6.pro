@@ -12051,6 +12051,29 @@ if ($Category -in @("all", "syntax")) {
         "vb6_VarCmpGt(&v, &d)",
         "vb6_VarCmpLt(&d, &v)")
 
+    # 交接 §7.8 缺陷 A 的两头针: `Split(s, ",")(1)` 的外层括号是**对返回数组的下标**，
+    # 不是内层 Split 的第 5 个实参。Needles 钉"外层下标落在内层调用之外"（绑定层），
+    # Absent 钉修前那一条**8 实参**形状（实参个数）—— 两条都是拿改前 emit 逐字取回的，
+    # 所以这枚针两头都能红。第三条 Absent 是同族的 `Array(...)(i)` 不许并进 ArrayCreate。
+    Test-CodegenNote "split_result_subscript" @("$Tests\test_split_result_subscript.bas") @(
+        'VB6_SA_AT(BSTR, vb6_Split(vb6_BSTR_FromStr(L"a,b,c"), vb6_BSTR_FromStr(L","), -1, 0), 1)',
+        'VB6_SA_AT(BSTR, vb6_Split(vb6_BSTR_FromStr(L"x,y"), vb6_BSTR_FromStr(L","), -1, 0), 0)',
+        'VB6_SA_AT(vb6_VARIANT, _arr_0, 1)') @(
+        'vb6_Split(vb6_BSTR_FromStr(L"a,b,c"), vb6_BSTR_FromStr(L","), -1, 0, 1',
+        'vb6_Split(vb6_BSTR_FromStr(L"x,y"), vb6_BSTR_FromStr(L","), -1, 0, 0',
+        '-1, 0, 1, NULL',
+        '_arr_0(1)')
+
+    # 交接 §7.8 缺陷 B 的两头针: 同名内置 + 显式 Declare ⇒ Declare 赢（存在性 + 形参表 +
+    # Lib/Alias 三件齐）。Absent 钉的就是修前落进内置出口的那一形（3 个实参 ⇒ C2197）。
+    # 紧接着那条对照针证明**真内置站点没有被顺带改掉**：没有 Declare 的
+    # `GetObject(, "Excel.Application")` 必须继续走 vb6_GetObject。
+    Test-CodegenNote "declare_shadows_builtin" @("$Tests\test_declare_shadows_builtin.bas") @(
+        "vb6_lwa_GetObjectA(0L, ((int32_t)sizeof(bmp)), (void*)&(bmp))") @(
+        "vb6_GetObject(")
+    Test-CodegenNote "getobject_builtin_kept" @("$Tests\test_p24_04b\test_getobject.bas") @(
+        "vb6_GetObject(0L, ")
+
     # 账 #248 的发码形状针: 浮点→整数目标的**四条来路**都必须穿那一份取整出口 ——
     # 变量源 / 字面量源 / 除法表达式源 / **Single 变量源** (最后这一条以前连溢出检查都进不
     # 去: cgenIntBits(Single)=32 与 Long 目标"装得下"就放过，截得更彻底)。必须不出现的那几条
