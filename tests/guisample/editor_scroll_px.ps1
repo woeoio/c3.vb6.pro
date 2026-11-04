@@ -174,21 +174,24 @@ if ($order.ContainsKey("hbar") -and $order.ContainsKey("vbar") -and $order.Conta
     if ($order["hbar"] -ge $order["vbar"]) { $issues.Add("水平滚动条不在竖直滚动条之上 (z: h=" + $order["hbar"] + " v=" + $order["vbar"] + ")") }
 }
 
-# ---------- D. 真桌面像素: 右侧/底部 22px 带内不许出现黑 ----------
+# ---------- D. 真桌面像素: 右/底 22px 带 + 窗**外** 4px 环内不许出现黑 ----------
+# 改前黑线实测在 x=1659..1660 / y=965..966, 而当时文档窗右/底缘是 1659/965 ⇒ 黑线
+# **落在窗矩形之外**的 3px 缝里。所以采样既要覆盖窗内 22px 色带 (滚动条), 也要向
+# 外多取 4px (缝 + 拆分器), 否则改前的读数取不到那 2px #000000。
 $blackCount = 0
 $minLum = 255
+$pad = 4
 try {
-    $bw = [int]($dw[2] - $dw[0]); $bh = [int]($dw[3] - $dw[1])
-    $bmp = New-Object System.Drawing.Bitmap -ArgumentList $bw, $bh
+    $dwW = [int]($dw[2] - $dw[0]); $dwH = [int]($dw[3] - $dw[1])
+    $bmp = New-Object System.Drawing.Bitmap -ArgumentList ([int]($dwW + $pad)), ([int]($dwH + $pad))
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($dw[0], $dw[1], 0, 0, $bmp.Size)
     $g.Dispose()
-    $rw = $bmp.Width; $rh = $bmp.Height
-    # 右侧: 8 条等距水平线, x 覆盖右 22px; 底部: 8 条等距竖直线, y 覆盖底 22px
+    # 窗口内采样上界 (含窗缘外 pad px)
     for ($i = 1; $i -le 8; $i++) {
-        $y = [int]($rh * $i / 9)
-        for ($x = $rw - 22; $x -lt $rw; $x++) {
-            if ($x -lt 0) { continue }
+        $y = [int]($dwH * $i / 9)
+        for ($x = $dwW - 22; $x -lt ($dwW + $pad); $x++) {
+            if ($x -lt 0 -or $y -lt 0) { continue }
             $c = $bmp.GetPixel($x, $y)
             $mx = [Math]::Max($c.R, [Math]::Max($c.G, $c.B))
             if ($mx -lt $minLum) { $minLum = $mx }
@@ -196,16 +199,16 @@ try {
         }
     }
     for ($i = 1; $i -le 8; $i++) {
-        $x = [int]($rw * $i / 9)
-        for ($y = $rh - 22; $y -lt $rh; $y++) {
-            if ($y -lt 0) { continue }
+        $x = [int]($dwW * $i / 9)
+        for ($y = $dwH - 22; $y -lt ($dwH + $pad); $y++) {
+            if ($y -lt 0 -or $x -lt 0) { continue }
             $c = $bmp.GetPixel($x, $y)
             $mx = [Math]::Max($c.R, [Math]::Max($c.G, $c.B))
             if ($mx -lt $minLum) { $minLum = $mx }
             if ($mx -lt 0x30) { $blackCount++ }
         }
     }
-    if ($blackCount -gt 0) { $issues.Add("右/底 22px 带内近黑像素 " + $blackCount + " (改前: 右 2px 与底 2px 纯黑 = 黑线)") }
+    if ($blackCount -gt 0) { $issues.Add("右/底 22px 带 + 窗外 4px 环内近黑像素 " + $blackCount + " (改前: 右 2px 与底 2px 纯黑 = 黑线)") }
     if ($OutDir) {
         $png = Join-Path $OutDir "editor_scroll_c3.png"
         $bmp.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
