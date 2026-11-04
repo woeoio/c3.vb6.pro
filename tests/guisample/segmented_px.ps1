@@ -9,7 +9,10 @@
 # dpiAware 清单 ⇒ 系统把它们虚拟化到 96dpi。本脚本刻意**不调用 SetProcessDPIAware**,
 # 并用 BitBlt 抓主窗客户区自己的 DC —— 与 tests\guisample\vb6ref\capture.ps1 同处一个
 # 96dpi 空间。字体光栅化在 CI runner 上必然与本机不同, 故只钉与字体无关的结构量:
-#   · 窗体 766x558 / 客户区 751x520 (真 VB6 参考 exe 实测同一组读数);
+#   · 客户区 751x520 精确 (= Form1.frm 设计期 11265x7800 twips / 15); 外框尺寸**不写死**,
+#     按运行期 GetSystemMetrics 现算 (客户区 + 2*(SM_CXSIZEFRAME+SM_CXPADDEDBORDER) + SM_CYCAPTION),
+#     容差 1px: 本机 120dpi 虚拟化会在这个非客户区的取整上差 1 (本机 766x558, CI 767x559,
+#     两者都等于各自系统度量 ±1)。写死 766x558 = 把本机取整当产品判据, CI 会误红;
 #   · 12 个可见 VB6_UserControlHost 的客户区 rect —— 全部等于 Form1.frm 设计期 twips/15
 #     (见下 expected 列表), 也就是说"设计期布局被原样复现"这件事本身是断言;
 #   · 隐藏的 ucSegmentedControl5 也建出了宿主 (217x209@216,104, Visible=False);
@@ -24,7 +27,14 @@
 #          ucSegmentedControl1  (顶部条)     488/161         802/161      vivid>=400
 #     注: uc2 的 vivid 在真 VB6 上更高 (参考的条目标题滚动/悬停态在参考进程里更"彩"),
 #     这里取 C3 实测 145 作下限 —— 图标一旦缺失该值会掉到 0 附近, 这才是要防的回归。
-#   · 全图强调色计数: #0078D7 (选中段底色) >= 8000; #CE00EF (TAB2 品红) >= 250。
+#   · 全图选中段底色: 取运行期 GetSysColor(COLOR_HIGHLIGHT=13) —— 控件画的就是 vbHighlight
+#     (ucSegmentedControl.ctl:1864 m_SelectedBackColor = vbHighlight), 系统高亮色随宿主变
+#     (本机 #0078D7 / 参考 VB6 10670px; CI 是另一档, 修前硬编码 #0078D7 在 CI 上数到 0),
+#     判据 = 该运行期颜色 >= 8000px (本机读数与硬编码时同为 10715)。
+#   · TAB2 品红 #CE00EF 指示条 (TabIndicatorColor, 见 .ctl:362-368/739-742): 指示条宽度 =
+#     选中项宽 - Radius, 而项宽 = TextWidth + Padding*2 ⇒ **随宿主字体度量变** (本机 101x4=400px,
+#     CI 只有 237px)。所以不钉绝对像素数, 改钉结构: 品红族像素 >= 150 且是高度 2..6 的横条
+#     (名义厚度 TabIndicatorSize=4)、水平跨度 >= 40px; "没画出来/画成竖条色块"仍会红。
 #
 # 已核对但**暂不钉**的残差 (见 ai\C3_SEGMENTED_HANDOFF.md, 属未收口的语义差异, 不是本脚本
 # 放水): 顶部第 3 项在真 VB6 里是 Disabled 灰显 / C3 仍可点; "Reporto" 项的图标映射不同;
@@ -52,6 +62,8 @@ public class SegPx {
   [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
   [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
   [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr d, int x, int y, int w, int h, IntPtr s, int sx, int sy, int rop);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
+  [DllImport("user32.dll")] public static extern uint GetSysColor(int i);
   [DllImport("kernel32.dll")] public static extern bool IsWow64Process(IntPtr h, out bool wow64);
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int X, Y; }
@@ -128,10 +140,19 @@ $cr = New-Object SegPx+RECT; [SegPx]::GetClientRect($main, [ref]$cr) | Out-Null
 $ww = $wr.R - $wr.L; $wh = $wr.B - $wr.T
 $cw = $cr.R - $cr.L; $ch = $cr.B - $cr.T
 $pt = New-Object SegPx+POINT; [SegPx]::ClientToScreen($main, [ref]$pt) | Out-Null
-Add-Read ("window=${ww}x${wh} client=${cw}x${ch}")
-# 真 VB6 参考 exe 实测: window=766x558 client=751x520 (同一套 96dpi 虚拟化口径)。
-if ($ww -ne 766 -or $wh -ne 558) { Add-Fail ("窗尺寸 ${ww}x${wh} != 766x558 (真 VB6 参考读数)") }
-if ($cw -ne 751 -or $ch -ne 520) { Add-Fail ("客户区 ${cw}x${ch} != 751x520 (真 VB6 参考读数)") }
+# 客户区是设计期尺寸 (11265x7800 twips / 15 = 751x520), 与宿主无关, 精确钉死。
+if ($cw -ne 751 -or $ch -ne 520) { Add-Fail ("客户区 ${cw}x${ch} != 751x520 (Form1.frm 设计期 11265x7800 twips/15)") }
+# 外框**不写死**: 用本机系统的非客户区度量现算 (Form 是默认的 Sizable 边框 + 标题栏)。
+# 120dpi 虚拟化在非客户区会差 1px 取整 (本机 766x558, CI 767x559), 故容差 1 ——
+# 这不是放水: 客户区仍精确, 外框只要不是"设计尺寸 + 标准边框"就会差出远多于 1px。
+$mFrameX = [SegPx]::GetSystemMetrics(32) + [SegPx]::GetSystemMetrics(92)   # SM_CXSIZEFRAME + SM_CXPADDEDBORDER
+$mFrameY = [SegPx]::GetSystemMetrics(33) + [SegPx]::GetSystemMetrics(92)   # SM_CYSIZEFRAME + SM_CXPADDEDBORDER
+$mCap    = [SegPx]::GetSystemMetrics(4)                                    # SM_CYCAPTION
+$expWW = $cw + 2 * $mFrameX; $expWH = $ch + 2 * $mFrameY + $mCap
+Add-Read ("window=${ww}x${wh} client=${cw}x${ch} expect_outer=${expWW}x${expWH} frame=${mFrameX}/${mFrameY} caption=${mCap}")
+if ([Math]::Abs($ww - $expWW) -gt 1 -or [Math]::Abs($wh - $expWH) -gt 1) {
+    Add-Fail ("窗尺寸 ${ww}x${wh} != 客户区 ${cw}x${ch} + 系统非客户区 ${expWW}x${expWH} (容差 1px)")
+}
 
 # --- 子窗: 12 个可见 UC 宿主 + 1 个隐藏宿主 + 命令按钮 ---
 $hosts = New-Object System.Collections.ArrayList
@@ -223,15 +244,33 @@ $s = $stat["uc11"]; if ($s.vivid -lt 800 -or $s.blue -lt 150) { Add-Fail ("uc11(
 $s = $stat["uc1"];  if ($s.vivid -lt 400) { Add-Fail ("uc1(顶部条) vivid=" + $s.vivid + " < 400 (四个段的彩色图标没了?)") }
 
 # --- 全图强调色计数 ---
-$nBlue = 0; $nMag = 0
+# 选中段底色 = vbHighlight = GetSysColor(COLOR_HIGHLIGHT) (ucSegmentedControl.ctl:1864/1991),
+# 所以判据取**运行期**的系统高亮色, 不写死 #0078D7 (写死会在另一档系统高亮色的宿主上数到 0)。
+$hl = [SegPx]::GetSysColor(13)
+$hlR = $hl -band 0xFF; $hlG = ($hl -shr 8) -band 0xFF; $hlB = ($hl -shr 16) -band 0xFF
+$hlHex = ('{0:X2}{1:X2}{2:X2}' -f $hlR, $hlG, $hlB)
+$nBlue = 0; $nMag = 0; $nMagExact = 0
+$mMinX = [int]::MaxValue; $mMinY = [int]::MaxValue; $mMaxX = -1; $mMaxY = -1
 for ($y = 0; $y -lt $ch; $y++) { for ($x = 0; $x -lt $cw; $x++) {
     $c = $bmp.GetPixel($x, $y)
-    if ($c.R -eq 0x00 -and $c.G -eq 0x78 -and $c.B -eq 0xD7) { $nBlue++ }
-    if ($c.R -eq 0xCE -and $c.G -eq 0x00 -and $c.B -eq 0xEF) { $nMag++ } } }
-Add-Read ("accent 0078D7=$nBlue CE00EF=$nMag")
-# 真 VB6 参考: 0078D7=10670, CE00EF=554; C3 实测 10715 / 400。
-if ($nBlue -lt 8000) { Add-Fail ("选中段底色 #0078D7 只有 $nBlue 像素 (<8000, 选中态没画出来)") }
-if ($nMag -lt 250) { Add-Fail ("TAB2 强调色 #CE00EF 只有 $nMag 像素 (<250)") }
+    if ($c.R -eq $hlR -and $c.G -eq $hlG -and $c.B -eq $hlB) { $nBlue++ }
+    if ($c.R -eq 0xCE -and $c.G -eq 0x00 -and $c.B -eq 0xEF) { $nMagExact++ }
+    # 品红族 (容许指示条两端圆角/抗锯齿的过渡色): R 高、G 低、B 高。
+    if ($c.R -ge 180 -and $c.G -le 60 -and $c.B -ge 200) {
+        $nMag++
+        if ($x -lt $mMinX) { $mMinX = $x }; if ($x -gt $mMaxX) { $mMaxX = $x }
+        if ($y -lt $mMinY) { $mMinY = $y }; if ($y -gt $mMaxY) { $mMaxY = $y }
+    } } }
+$magW = 0; $magH = 0
+if ($nMag -gt 0) { $magW = $mMaxX - $mMinX + 1; $magH = $mMaxY - $mMinY + 1 }
+Add-Read ("accent highlight=#$hlHex($nBlue) CE00EF=$nMagExact magenta=$nMag bbox=${mMinX},${mMinY}-${mMaxX},${mMaxY} ${magW}x${magH}")
+# 真 VB6 参考: #0078D7=10670; 本机 C3 10715 (同一颜色, 故与硬编码时读数一致)。
+if ($nBlue -lt 8000) { Add-Fail ("选中段底色 #$hlHex (运行期系统高亮色) 只有 $nBlue 像素 (<8000, 选中态没画出来)") }
+# TAB2 指示条: 项宽随宿主字体度量变 (TextW + Padding*2), 故钉结构而不是某个宿主上的像素数:
+# 本机 400px@101x4, CI(Arial Narrow 回退) 237px; 没画/画歪/画成色块都会掉出下面这组边界。
+if ($nMag -lt 150) { Add-Fail ("TAB2 强调色 #CE00EF 品红族只有 $nMag 像素 (<150)") }
+if ($magH -lt 2 -or $magH -gt 6) { Add-Fail ("TAB2 指示条厚度 ${magH}px 不在 2..6 (TabIndicatorSize=4)") }
+if ($magW -lt 40) { Add-Fail ("TAB2 指示条水平跨度 ${magW}px < 40 (选中项指示条没画出来)") }
 $bmp.Dispose()
 
 try { if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(3000) | Out-Null } } catch { }

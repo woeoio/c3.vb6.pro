@@ -341,6 +341,38 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
 - `check_manifest_coverage.ps1`、`check_builtin_slot_returns.ps1`、
   `check_builtin_opt_defaults.ps1`、`check_owned_temp_keeps.ps1` 本机 PASS。
 
+## 7.10 把 `Tests (vbp #2)` 的像素判据改成宿主无关（本机已验，待 GA）
+
+上一跑 41929711664（head `c3867290`）只剩 `Tests (vbp #2)` 红，且性质已从"编不过"变成"判据在 CI 上不成立"：
+6 条 `C2197` 已消失（`compile.log` 无 error C），失败只有三条：
+
+- `window=767x559 != 766x558`（CI 客户区仍是 751x520，只差非客户区 1px）；
+- `#0078D7` 数到 **0**（<8000）——CI 宿主的系统高亮色不是本机这一档；
+- `#CE00EF` **237**（<250）。
+
+三处都改在 `tests/guisample/segmented_px.ps1`，判据语义不变、不再依赖本机：
+
+1. **外框**：客户区 `751x520` 仍精确钉死（= Form1.frm 11265x7800 twips/15）；
+   外框改为运行期 `GetSystemMetrics` 现算
+   `client + 2*(SM_CXSIZEFRAME+SM_CXPADDEDBORDER) + SM_CYCAPTION`，容差 1px
+   （120dpi 虚拟化在非客户区取整）。本机实测 `766x558` vs 现算 `767x559`（差 1，PASS），
+   CI 实测 `767x559` 与现算一致（差 0，PASS）。旧断言把本机的 1px 取整当产品判据。
+2. **选中段底色**：控件画的是 `vbHighlight`（`ucSegmentedControl.ctl:1864`/`:1991`），
+   判据改为数**运行期** `GetSysColor(COLOR_HIGHLIGHT=13)` 的颜色像素，仍要求 >= 8000。
+   本机该值就是 `#0078D7`，读数 `highlight=#0078D7(10715)` 与硬编码时**一致**（不是放水）；
+   CI 换一档系统高亮色时按它自己那档计数。
+3. **TAB2 品红指示条**：色彩来源是 `TabIndicatorColor=15663310`（= `#CE00EF`），
+   指示条宽度 = 选中项宽 - Radius，而项宽 = `TextWidth + Padding*2`
+   （`ucSegmentedControl.ctl:362-368` / `:739-742`）⇒ **像素总量随宿主字体度量变**
+   （本机 101x4=400，CI 字体回退后 237）。所以不再钉绝对像素数，改钉结构：
+   品红族像素 >= 150 且 bbox 高度 2..6（`TabIndicatorSize=4` 名义厚度）、水平跨度 >= 40。
+   "没画/画成竖条色块"仍红；读数行同时保留精确 `CE00EF=400` 与族计数/bbox。
+
+本机复跑 `tests\run_tests.ps1 -Category gui`：**PASS=10 FAIL=0 SKIP=0**，
+读数与本轮修前相同（`uc2 145/138, uc3 1185/625, uc4 1734/1734, uc11 970/209, uc1 802/161`；
+`highlight=#0078D7(10715)`、`CE00EF=400 magenta=403 bbox=392,115-492,118 101x4`；
+`expect_outer=767x559` vs 实测 `766x558`）。
+
 ## 8. 风险 / 注意
 
 - `Manifest.RES` 是**进程清单**（非运行期 SxS manifest）；夹具化时不要把它塞进 SxS 装配路径，否则与两条免注册 COM 路径互相干扰。
