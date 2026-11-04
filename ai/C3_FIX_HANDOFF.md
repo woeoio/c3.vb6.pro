@@ -4372,6 +4372,19 @@ BASE（dev 头 `4e9d05ff`，不含本刀）在 `For Each` 那一形 **一次都�
 3. `Is Nothing` 的数组本体（`Array(...) Is Nothing`）应恒为 True，当前送 `VariantToObject(&rvalue)` 仍会红；
    发「常量 True」属另一条语义，待夹具定。
 
+**改前 / 改后读数（同一份 `tests/p2_array_variant/P2Main.bas`，两台 C3 各发一次码）**
+
+| 站点 | 改前（`--emit-c` 原文） | 改后 |
+|---|---|---|
+| `Print #1, Array(1,2,3)`（`cgen_file_io.cpp:22`） | `vb6_PrintText(1, vb6_FileVariantText(_arr_4, 0), 0);` ⇒ cl 报 `M.c(50): error C2440: "函数": 无法从"vb6_SafeArray1D *"转换为"vb6_VARIANT"`，无 exe | `vb6_PrintText(1, vb6_FileVariantText(vb6_VariantFromValue(_arr_4), 0), 0);` ⇒ 链接出 `probe.exe`（544768 B），无错误日志 |
+| `Print #1, ArrV()`（返回 Variant 的 Function） | `vb6_FileVariantText(vb6_ArrV(), 0)`（未翻） | 同（返回槽，本来就对） |
+
+**全语料（585 份存量 + 2 份新夹具）**：`emit-p2.txt` 与期望 587/587 行集合相等，584 行逐字节相同；
+剩下的 3 行是 `tests/guisample/GUISample{.vbp,/vb6ref/src/vc6/GUISample.vbp,/vb6ref/src/vs2015/GUISample.vbp}` ——
+本机 305752/284459/283146，CI（`ci/emit-manifest`@`0b0d4139`，head=`77639df7`）276938/…，
+**用 P2 改前与改后两台 C3 对这 3 份重发码，输出逐字节相同** ⇒ 与本期改动无关，按既有 B5 口径（本机能解析 vendor OCX、
+CI 不能，判据取 CI 的数）不重登记。`b596`/`b598` 两族 4 行在 584 行内，未变。
+
 另：census 顺带证实 `Count` 那两处只在 Charts 的两份输入里（`Proyecto1.vbp` 与 `ucProgressCircular/Proyecto1.vbp`），
 不是全仓蔓延 —— 所以最后那 2 处若要"改源码笔误"也是可控的小改（要用户点头才动别人的 `.ctl`）。
 

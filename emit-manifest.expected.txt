@@ -950,3 +950,8 @@ sha256=347dfb3b6990e6e410d3b2775ed630fa905c4827b12bd4af235f4dd209499385 ascii256
 #       exp=282294 / ci=276938 / loc=305752; CI 侧才是判据, 因此这 3 行取 CI 的数。
 #       本机复核会剩这 3 行差异, 属环境差, 不是发码差。
 #    复核命令: pwsh scripts/compare_emit_manifest.ps1 -Manifest .temp/manloc/emit-manifest.txt  (应只剩 guisample 3 行)
+
+# 2026-11-04 手工登记 (P2, 未用 -Bless): 新增夹具 tests/p2_array_variant 两行, 来源 = 本机 .build\C3.exe(P2) 对全语料 --emit-c (rc=0)。
+# 存量 585 行用 P2 改前/改后两台 C3 逐文件重发码比对: 582 行同, 剩余 3 行 = 上面 B5 的 guisample 环境差(本机 loc=305752, 与 CI 276938 不同), 改前改后**逐字节相同** => 与 P2 无关, 按 B5 口径保留 CI 的数, 不重登记。
+sha256=120aebe1dd8ba054bc0071aa71708ee99faa06245c13fe462ab4468cd8807ba6 ascii256=21326b8161a10ee82914e5a7b138ed3fc40aac86a409746439e1814d01736826 rc=0 bytes=3860 tests/p2_array_variant/p2_array_variant.vbp
+sha256=eb2ab835bd96c7fa496f9e139ee4bdf9ae217fe250a78b203d97c16bdeaf9abf ascii256=21326b8161a10ee82914e5a7b138ed3fc40aac86a409746439e1814d01736826 rc=0 bytes=3787 tests/p2_array_variant/P2Main.bas
