@@ -4385,6 +4385,14 @@ BASE（dev 头 `4e9d05ff`，不含本刀）在 `For Each` 那一形 **一次都�
 **用 P2 改前与改后两台 C3 对这 3 份重发码，输出逐字节相同** ⇒ 与本期改动无关，按既有 B5 口径（本机能解析 vendor OCX、
 CI 不能，判据取 CI 的数）不重登记。`b596`/`b598` 两族 4 行在 584 行内，未变。
 
+**三条 CI 红是「哨兵名字滞后于实现」，不是行为回归**（GA `41773637863`）：`object_slot_boxing` 的 B10 把折叠
+那一问钉在 `variantOperandAST` 的 1 处调用上、`variant_slot_store` 的 R10 把两条臂钉在 `isDefinitelyVariantExpr`
+的出现次数上 —— P2 按裁决换问句（该问类型）后，这两组数字自然对不上；`vbp_fixture_census` 则是新夹具没入册。
+处置：B10 改成钉「该站点恰好 1 处 `isVariantType`、0 处槽问句、0 处判据本体抄本，且 `variantOperandAST`
+全仓仍恰好 1 处定义」；R10 改成钉**结构**（两臂按锚点定位、先槽后类型且类型问句必须在 `if (!argIsVariant)`
+否定分支里、禁止 `||` 合并、类型问点总数 1/1）；新夹具按「能编就编」登记进 `run_tests.ps1` 的 `Test-VbpBuild`。
+下次换问句时应当同步更哨兵，而不是把数字改成实际值。
+
 另：census 顺带证实 `Count` 那两处只在 Charts 的两份输入里（`Proyecto1.vbp` 与 `ucProgressCircular/Proyecto1.vbp`），
 不是全仓蔓延 —— 所以最后那 2 处若要"改源码笔误"也是可控的小改（要用户点头才动别人的 `.ctl`）。
 

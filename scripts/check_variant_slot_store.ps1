@@ -378,33 +378,108 @@ foreach ($k in $stationByFile172.Keys) {
 $stationTotal172 = 0
 foreach ($v in $stationByFile172.Values) { $stationTotal172 += $v }
 
-# ---- R10 (账 #305 §B173 第六十四刀): 「整枚槽交进具体档形参」那两条臂都必须先问 AST ----
-# cgen_expr_call_arg_variant.inc 里同一句决定抄了两遍: 上面那条臂 (Fix 029, 形参类型已知) 问
-# AST ∪ 文本, 下面那条臂 (Fix 038b-2, 内置/运行时形参表为空或档为 Variant) 此前只问文本 ——
-# 于是同一枚 UDT 的 Variant 成员 `u.UV` 在 Left/Len/Replace/Val (带类型化形参表) 那里被解包,
-# 在 InStr (只登记返回档) 那里裸交 vb6_VARIANT 进 BSTR 形参 = cl C2440 (两台都没 exe)。
-# 口径 = §B147「改道吃 AST ∪ 文本」: 两条臂各问一次, 总数钉在 2。掉回 1 = 那条臂又只认文本了。
-$WantAstAsk173 = [ordered]@{ 'cgen_expr_call_arg_variant.inc' = 2; 'cgen_expr_call_arg_emit.inc' = 2 }
-$astByFile173 = @{}
+# ---- R10 (账 #305 §B173 第六十四刀; P2 后重钉成「结构」而不是「计数」) ----
+# P2 之前这一问是一枚布尔: isDefinitelyVariantExpr 一路答到底 (整只槽与 VB 类型混为一谈)。
+# P2 起拆成两个问句、按优先级排: 先问「这段 C 是不是整只槽」(isVariantSlot); 不是槽时, 才在
+# 它的**否定分支**里问「VB 类型是不是 Variant」(isVariantType; 带 isArrOut 的实现是
+# isDefinitelyVariantExpr)。数组本体 (Array/Split/Filter, VarType=8204) 正好落在「类型 true /
+# 槽 false」那一格, 所以「形参已知」那臂两问都必须在。
+# 钉三件事 (都不许放宽):
+#   R10a 两臂按锚点定位 —— 每臂恰好 1 处 isVariantSlot; 「形参已知」臂还恰好 1 处类型问句且
+#        必须挂在 `if (!argIsVariant)` 的否定分支里 (先槽后类型, 次序不许倒); 「形参未知」臂
+#        只问槽 (0 处类型问句)。只数全文件总分会把「两处变一处」当绿 —— 那正是上一版失效的原因。
+#   R10b 反向守卫: 任何一处把两问合并成一个布尔 (同一行两者都出现, 或 isVariantSlot … ||
+#        isVariantType/isDefinitelyVariantExpr) 一律红 —— 合并正是 P2 要消灭的写法。
+#   R10c 名单外新增「按类型分派」的站点红: 两份文件的类型问句总数 = 1/1 (槽问句另有既有护栏
+#        站点, 不在本判据的臂上 —— 数全文件槽总数会变成一条永远偏大的假判据, 这正是上一版
+#        用「全文件计数」失效的同一类病)。
+$totWant173 = @{
+    'cgen_expr_call_arg_variant.inc' = 1
+    'cgen_expr_call_arg_emit.inc'    = 1
+}
+$armWant173 = [ordered]@{
+    'cgen_expr_call_arg_variant.inc' = @(
+        @{ Name = '形参已知'; Anchor = 'bool argIsVariantArr = false;';    Slot = 1; Type = 1; Guard = 'if (!argIsVariant)'; Span = 8 },
+        @{ Name = '形参未知'; Anchor = 'P2 (A7)';                          Slot = 1; Type = 0; Guard = '';                  Span = 12 }
+    )
+    'cgen_expr_call_arg_emit.inc' = @(
+        @{ Name = 'As Any ByRef'; Anchor = 'argIsSlot160h = isVariantSlot('; Slot = 1; Type = 1; Guard = '} else if';       Span = 45 }
+    )
+}
+$slotTok173 = 'isVariantSlot\s*\('
+$typeTok173 = 'isVariantType\s*\(|isDefinitelyVariantExpr\s*\('
+function Get-Lines173([string]$path) {
+    $raw = New-Object 'System.Collections.Generic.List[string]'
+    $code = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($ln in ([System.IO.File]::ReadAllText($path) -split "`r?`n")) {
+        [void]$raw.Add($ln)
+        $ci = $ln.IndexOf('//')
+        if ($ci -ge 0) { [void]$code.Add($ln.Substring(0, $ci)) } else { [void]$code.Add($ln) }
+    }
+    return @{ Raw = $raw; Code = $code }
+}
+$byLeaf173 = @{}
 foreach ($f in $srcFiles168) {
-    $t173 = [System.IO.File]::ReadAllText($f.FullName)
-    $n173 = [regex]::Matches($t173, 'isDefinitelyVariantExpr\(\s*\*node\.positional\[i\]').Count
-    if ($n173 -gt 0) { $astByFile173[(Split-Path $f.FullName -Leaf)] = $n173 }
-}
-foreach ($k in $WantAstAsk173.Keys) {
-    $g173 = 0
-    if ($astByFile173.ContainsKey($k)) { $g173 = $astByFile173[$k] }
-    if ($g173 -ne $WantAstAsk173[$k]) {
-        $bad += ('R10 ' + $k + ' 问 isDefinitelyVariantExpr ' + $g173 + ' 处, 名单钉的是 ' + $WantAstAsk173[$k] + ' (形参已知/形参未知两条臂都要吃 AST)')
+    $leaf173 = Split-Path $f.FullName -Leaf
+    if ($armWant173.Contains($leaf173) -and -not $byLeaf173.ContainsKey($leaf173)) {
+        $byLeaf173[$leaf173] = Get-Lines173 $f.FullName
     }
 }
-foreach ($k in $astByFile173.Keys) {
-    if (-not $WantAstAsk173.Contains($k)) {
-        $bad += ('R10 名单外的新问点 ' + $k + ' x' + $astByFile173[$k] + ' —— 「实参是不是整枚槽」那一问又长了第五处地方')
+$slotTotal173 = 0; $typeTotal173 = 0
+foreach ($k in $armWant173.Keys) {
+    if (-not $byLeaf173.ContainsKey($k)) { $bad += ('R10 找不到 ' + $k + ' —— 两臂的判据失去对象'); continue }
+    $raw173 = $byLeaf173[$k].Raw; $code173 = $byLeaf173[$k].Code
+    $nSAll = 0; $nTAll = 0
+    for ($i = 0; $i -lt $code173.Count; $i++) {
+        $ls = @([regex]::Matches($code173[$i], $slotTok173)).Count
+        $lt = @([regex]::Matches($code173[$i], $typeTok173)).Count
+        if ($ls -gt 0) { $nSAll += $ls }
+        if ($lt -gt 0) { $nTAll += $lt }
+        if ($ls -gt 0 -and $lt -gt 0) {
+            $bad += ('R10b ' + $k + ' 第 ' + ($i + 1) + ' 行把槽问句与类型问句写在同一处 —— 两个问句又被合并了')
+        }
+    }
+    if ([regex]::IsMatch(($code173 -join "`n"), '(?s)isVariantSlot[\s\S]{0,200}\|\|[\s\S]{0,120}(isVariantType|isDefinitelyVariantExpr)')) {
+        $bad += ('R10b ' + $k + ' 出现 isVariantSlot … || isVariantType/isDefinitelyVariantExpr 的合并写法 —— 两个问句又被合并了')
+    }
+    $slotTotal173 += $nSAll; $typeTotal173 += $nTAll
+    if ($nTAll -ne $totWant173[$k]) {
+        $bad += ('R10c ' + $k + ' 类型问句总数 = ' + $nTAll + ' (要 ' + $totWant173[$k] + ': 名单外又开了一个按类型分派的站点; 槽问句另有既有护栏站点, 不在此列)')
+    }
+    foreach ($arm in $armWant173[$k]) {
+        $ai173 = -1
+        for ($i = 0; $i -lt $raw173.Count; $i++) {
+            if ($raw173[$i].Contains($arm.Anchor)) { $ai173 = $i; break }
+        }
+        if ($ai173 -lt 0) {
+            $bad += ('R10a ' + $k + ' / ' + $arm.Name + ' 找不到锚点「' + $arm.Anchor + '」 —— 那条臂被挪走/删掉了')
+            continue
+        }
+        $nS = 0; $nT = 0; $tIdx = -1
+        $end173 = [Math]::Min($ai173 + $arm.Span, $code173.Count - 1)
+        for ($i = $ai173; $i -le $end173; $i++) {
+            if ([regex]::IsMatch($code173[$i], $slotTok173)) { $nS++ }
+            if ([regex]::IsMatch($code173[$i], $typeTok173)) { $nT++; $tIdx = $i }
+        }
+        if ($nS -ne $arm.Slot) { $bad += ('R10a ' + $k + ' / ' + $arm.Name + ' 槽问句 = ' + $nS + ' 处 (要 ' + $arm.Slot + ')') }
+        if ($nT -ne $arm.Type) {
+            $bad += ('R10a ' + $k + ' / ' + $arm.Name + ' 类型问句 = ' + $nT + ' 处 (要 ' + $arm.Type + ': 数组本体只在「类型 true / 槽 false」那一格看得见, 少了它这一臂就把数组本体当普通 Variant)')
+        }
+        if ($arm.Guard -ne '' -and $tIdx -ge 0) {
+            $okGuard173 = $false
+            if ($code173[$tIdx].Contains($arm.Guard)) { $okGuard173 = $true }
+            for ($i = $tIdx - 1; $i -ge 0; $i--) {
+                if ($code173[$i].Trim() -eq '') { continue }
+                if ($code173[$i].Contains($arm.Guard)) { $okGuard173 = $true }
+                break
+            }
+            if (-not $okGuard173) {
+                $bad += ('R10a ' + $k + ' / ' + $arm.Name + ' 类型问句不在「' + $arm.Guard + '」否定分支里 (前一行: ' + $code173[[Math]::Max($tIdx - 1, 0)].Trim() + ') —— 先槽后类型的次序被倒了')
+            }
+        }
     }
 }
-$astTotal173 = 0
-foreach ($v in $astByFile173.Values) { $astTotal173 += $v }
+$astTotal173 = $typeTotal173
 
 $wordTotal171 = 0
 foreach ($v in $wordByFile171.Values) { $wordTotal171 += $v }
