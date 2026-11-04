@@ -47,6 +47,37 @@ ITypeInfo* vb6_ComLibLookupTypeInfo(void* disp);
 // 注册组件表 (cgen 生成, 入口点调用一次). count 超过 256 截断并打 stderr 警告.
 void vb6_ComLibRegister(const Vb6ComLib* libs, int count);
 
+// ============================================================
+// 免注册 COM 运行期模式：-ComMode direct|manifest|auto（cgen 只在显式给旗时发一行）
+// ============================================================
+// 硬约束：direct = 既有 LoadLibrary + DllGetClassObject 直加载，**逐字不变**；
+// manifest = 走 ActCtx：优先显式清单，其次 exe 旁 <exe>.manifest，再次按工具包口径
+// 运行期合成聚合清单（<file>+<comClass>，不需要 identity）；清单不可用/合成失败/SxS
+// 拒绝时明确失败并点名，**不许静默回退**；auto = 默认（有显式清单才走 ActCtx，否则直加载
+// 并在 stderr 说明原因；不主动合成，保证存量产物零行为变化）。
+#define VB6_COM_MODE_AUTO      0
+#define VB6_COM_MODE_DIRECT    1
+#define VB6_COM_MODE_MANIFEST  2
+
+void vb6_ComSetMode(int mode);                 // 入口点/环境注入（C3_COM_MODE 亦可）
+void vb6_ComSetManifest(const wchar_t* path);  // 客户端 manifest（C3_COM_MANIFEST 亦可）
+int  vb6_ComMode(void);
+
+// 取证/诊断（vb6com_manifest.c；tests\tools\com_manifest_probe.c 复用同一份判据）
+//   返回 1 = 组件内嵌 RT_MANIFEST 的 <assemblyIdentity> 完整；0 = 不可用，missing 写清缺项。
+int vb6_ComManifestInspect(const wchar_t* filePath, wchar_t* ident, int identCch,
+                           wchar_t* missing, int missCch);
+//   返回 1 = 客户端 manifest 可用（两种口径：<file>+<comClass> 或 <dependentAssembly>）。
+int vb6_ComManifestValidateClient(const wchar_t* manifestPath,
+                                  wchar_t* missing, int missCch);
+//   从外部组件清单（<组件文件名>.manifest）抽出 <file ...>...</file> 块；1 = 抽到。
+int vb6_ComManifestExtractFileBlock(const wchar_t* path, wchar_t* out, int cch);
+
+// ActCtx 原语（进程级单例）。成功返回 1，失败 0 并把原因写进 err。
+int  vb6_ComActCtxCreate(const wchar_t* manifestPath, wchar_t* err, int errCch);
+void vb6_ComActCtxRelease(void);   // vb6_ComExit() 里释放（进程退出路径）
+int  vb6_ComActCtxActive(void);
+
 // IsNothing(obj) - 检查对象引用是否为Nothing
 int32_t vb6_IsNothing(void* obj);
 
