@@ -627,6 +627,8 @@ sha256=eb2ab835bd96c7fa496f9e139ee4bdf9ae217fe250a78b203d97c16bdeaf9abf ascii256
 sha256=891f1e03264ad5f147f10d01b0737264ac80cf6eca742f3a3049db59d1ba1c6c ascii256=59526ce5325f5b5570d17faa9297dc8d0c176a4849bb9d981f7531129071c05d rc=0 bytes=3010 tests/p4_coll_array_foreach/p4_coll_array_foreach.vbp
 sha256=63dbce104f037d8cc35446added0d57214a95050c7d4fd438af477b416dbfb6d ascii256=59526ce5325f5b5570d17faa9297dc8d0c176a4849bb9d981f7531129071c05d rc=0 bytes=2936 tests/p4_coll_array_foreach/P4Main.bas
 sha256=6261b0fa46bb21368331149c0b67cb53142ed7b499d4cbc3b4939da72268ec7c ascii256=ec82ea7b395f1071630578a5393ef38d221bd08084a0fb9c8841c12a7f79a2ef rc=0 bytes=79204 tests/TeeChartChartDisplay/DisplayProject.vbp
+sha256=a09057e393d66505760cfff7915045dcbcd9997954b93cbeed28e0116b0d7ce6 ascii256=335c53caeed08848a4318ab50e135c5275b57ecc11cd126d5da5868ef466490a rc=0 bytes=32814 tests/ucSegmentedControl/mIOleInPlaceActivate.bas
+sha256=74a4c3bd171c3e87bd79b9316441adb609ffdd870ac92056db538483c4ef2a92 ascii256=8444bf76c48a51a56e3c25d97790e7464f5d0a0813f06ef3f365e4bec88f6d87 rc=0 bytes=961456 tests/ucSegmentedControl/SegmentedControl.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
@@ -967,5 +969,3 @@ sha256=6261b0fa46bb21368331149c0b67cb53142ed7b499d4cbc3b4939da72268ec7c ascii256
 #   判据: 同目录 Definitions.bas(52b9cc31/16714) 与 Module.bas(8811bf37/1568) 两侧逐字节相同 ⇒ 差只落在窗体/控件段, 不是发码主体; CI artifact 的 C3.exe 在本机对同输入复算 = 本机值 ⇒ 与工具链无关。
 #   复核命令: pwsh .build\emit_norm.ps1 -Exe .build\C3.exe -Root . -Inputs <vbp 绝对路径>; 本机应只剩这 3 行与期望不同。
 # 2026-11-05 新夹具 tests/ucSegmentedControl 两行 (本机 .build\C3.exe 现算, 未 -Bless):
-sha256=a09057e393d66505760cfff7915045dcbcd9997954b93cbeed28e0116b0d7ce6 ascii256=335c53caeed08848a4318ab50e135c5275b57ecc11cd126d5da5868ef466490a rc=0 bytes=32814 tests/ucSegmentedControl/mIOleInPlaceActivate.bas
-sha256=e1f248b192757f41d5ec7017722bb12ecda807e8067ff0acf563b4dd62bf41c4 ascii256=6a911d20112c4fb9933973fe60227c188607958426c7b099ddf8bd54b3898227 rc=0 bytes=961293 tests/ucSegmentedControl/SegmentedControl.vbp
