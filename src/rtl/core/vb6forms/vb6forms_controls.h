@@ -330,6 +330,10 @@ int32_t vb6_Host_GetProp(void* obj, const wchar_t* name, void* outVariant);
 int32_t vb6_Host_SetProp(void* obj, const wchar_t* name, const void* inVariant);
 int32_t vb6_Host_Call(void* obj, const wchar_t* name, int32_t argc,
                       void** argv, void* outVariant);
+// 账 <438>: 窗体/图片框内建方法 PaintPicture —— cgen 直接发到本入口
+// (宿主模型 getprop 不认方法名, 走通用晚绑定形会抛 Run-time error '438')。
+// argv 与 vb6_Host_Call 同一形: vb6_VARIANT* 数组 (顺序参数)。
+void vb6_FormPaintPictureAt(void* hwnd, int argc, void** argv);
 void* vb6_UC_NewFont(void);
 // Fix 119: 在 vb6_UC_HostCreate 之前设定该实例的字体 (.frm BeginProperty Font 块)
 void  vb6_UC_SetPendingFont(void* f);

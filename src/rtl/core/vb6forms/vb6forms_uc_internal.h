@@ -367,6 +367,14 @@ void    vb6_Collection_Item(void* coll, int32_t idx1, void* outV);
 int32_t vb6_Collection_ItemByKey(void* coll, const wchar_t* key, void* outV);
 int32_t vb6_Collection_Count(void* coll);
 
+// --- 窗体 AutoRedraw 持久表面上的 PaintPicture/Image/Picture (vb6forms_picture_prop.c) ---
+// VB6: 窗体的 PaintPicture 画进 AutoRedraw 记忆位图; Image 把该位图当 StdPicture 交出;
+// Picture 设背景图 (AutoRedraw 时同样落进记忆位图, 0,0 原尺寸)。
+void vb6_FormSetAutoRedraw(void* hwnd, int32_t val);
+void vb6_FormPaintPictureAt(void* hwnd, int argc, void** argv);
+void vb6_FormSetPictureProp(void* hwnd, const void* variant);
+void* vb6_FormGetImagePicture(void* hwnd);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

@@ -34,6 +34,14 @@
     // `vb6_cls_X*`, 而下面整条内建链只认 HWND, 以前一律落到末尾返回 Empty。
     { void* h18 = vb6_UC_HwndOf(obj); if (h18) obj = h18; }
 
+    /* 账 <438>: 窗体 Image —— AutoRedraw 记忆位图的 StdPicture 视图 (VB6 语义)。
+       以前这一臂不存在 ⇒ `Me.Picture = Me.Image` 在 PaintPicture 之后又抛一次 438。 */
+    if (_wcsicmp(name, L"Image") == 0 && IsWindow((HWND)obj)) {
+        void* pImg = vb6_FormGetImagePicture(obj);
+        if (pImg) { vb6_ho_setVariantObject(out, pImg); return 1; }
+        return 1;
+    }
+
     vb6_UCRec* r = vb6_uc_findByHwnd(obj);
     vb6_HostObjRec* h = vb6_ho_find(obj);
     /* 账 #305 第二百八十二刀: 无窗宿主 (第二百五十八刀那户 InvisibleAtRuntime) 递进来的

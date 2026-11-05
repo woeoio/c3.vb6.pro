@@ -29,6 +29,38 @@
                 return;
             }
         }
+        // 账 <438>: 窗体/图片框的内建方法 PaintPicture —— 必须抢在下面
+        // `axSlotObj` 那一支 ("取成员对象 + Item 默认成员调用") **之前**:
+        // 那条形会先发 vb6_ComGetObjectProp(hwnd, L"PaintPicture") 去拿成员,
+        // 而宿主模型的 getprop 只答属性不答方法名 ⇒ 运行期 438
+        // (ucSegmentedControl11_ItemClick 的 Solid/Transparent 整段被截断)。
+        // VB6 这里是明确的内建方法, 直接发 RTL 入口 (argv 与宿主 call 臂同形:
+        // vb6_VARIANT* 顺序参数)。
+        if (comObjExpr_.find("vb6_hwnd_") == 0
+            && Symbol::toLower(comMemberName_) == "paintpicture"
+            && !node.positional.empty()) {
+            // 先把接收者摘下来、把 marker 消费掉, 再求值实参 —— 否则递归访问
+            // 实参里的调用 (LoadPicture/App.Path) 会读到这套陈旧的 marker 状态,
+            // 把自己也拼成 PaintPicture (实测生成语法错位)。
+            std::string ppObj = comObjExpr_;
+            isComMarker_ = false;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            std::vector<std::string> ppArgs;
+            for (size_t i = 0; i < node.positional.size(); i++) {
+                std::string packFn = comPackExpr(*node.positional[i]);
+                emitExpr(*node.positional[i]);
+                { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
+                ppArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
+            }
+            int32_t ppArgc = (int32_t)ppArgs.size();
+            std::string ppArray = "(void*[]){";
+            for (int32_t i = 0; i < ppArgc; i++) { if (i > 0) ppArray += ", "; ppArray += ppArgs[i]; }
+            ppArray += "}";
+            lastExpr_ = "vb6_FormPaintPictureAt((void*)" + ppObj + ", "
+                      + std::to_string(ppArgc) + ", " + ppArray + ")";
+            return;
+        }
         // ActiveX控件COM属性: 先获取属性对象, 再用Item(idx)索引
         // comObjExpr_以"vb6_com_"开头 = ActiveX控件变量
         // C29-7: ListView 是**真窗口** (`vb6_hwnd_X`), 而 ImageList 是 `vb6_com_X` ——

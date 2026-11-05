@@ -53,6 +53,22 @@
         }
         return 1;
     }
+    /* VB6: 对象.PaintPicture picture, x, y[, width, height, ...] —— 窗体/控件内建方法。
+       账 <438>: 此前 RTL 完全没有这一臂, cgen 发 vb6_ComGetObjectProp(hwnd, L"PaintPicture")
+       拿不到成员 ⇒ 运行期 Run-time error '438' 打断 ucSegmentedControl11_ItemClick
+       (Solid/Transparent 的背景图与 BackColorOpacity 全部没执行)。 */
+    if (_wcsicmp(name, L"PaintPicture") == 0 && argc >= 1) {
+        vb6_FormPaintPictureAt(obj, argc, argv);
+        return 1;
+    }
+    /* 账 <438>: `Me.Picture = Me.Image` —— Image 是窗体 AutoRedraw 记忆位图的
+       StdPicture 视图 (VB6 语义)。cgen 对 Me.Image 发 vb6_ComCall(hwnd, L"Image"),
+       以前这里不认这个名字 ⇒ 第二次 438 (PaintPicture 之后语句继续不下去)。 */
+    if (_wcsicmp(name, L"Image") == 0 && IsWindow((HWND)obj)) {
+        void* pImg = vb6_FormGetImagePicture(obj);
+        if (pImg) vb6_ho_setVariantObject(out, pImg);
+        return 1;
+    }
     if (vb6_uc_isControls(obj)) {
         // Fix <vbeclipse> rev14: UserControl.Controls 的真实集合语义。
         // 后端的裸 `Controls.Item/Add/Remove` 会被发射成 vb6_ComCall*(vb6_UC_Controls(), ...),

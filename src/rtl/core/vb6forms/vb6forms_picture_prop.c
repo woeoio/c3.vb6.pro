@@ -18,6 +18,7 @@
 #include <stdlib.h>   /* malloc, free */
 #include <oleauto.h>  /* SysAllocString, BSTR */
 #include <olectl.h>   /* IPicture, OleLoadPicture, OLE_HANDLE */
+#include "vb6rtl_variant.h"   /* 账 <438>: vb6_VARIANT (窗体 PaintPicture 形参) */
 
 /* Fix P-BMP-3D: vb6rtl_com.c 提供的 Picture 注册表。不直接 include
  * vb6rtl_class_com.h (本 TU 无 vb6rtl_variant.h 依赖链), 签名只涉及
@@ -28,6 +29,22 @@ extern void vb6_AutoRedrawRefit(void* hwnd);   /* vb6forms_widget_prop.c (Fix c3
 
 
 static void vb6_ImagePaintHelper(HWND hwnd, HDC hdc);
+
+/* 账 <transparency>: 这枚窗口是不是**窗体** (生成类名 "VB6_Form_<name>")。
+   窗体的 Picture 有自己的上屏路径 —— 生成的 WM_PAINT 把 VB6_AutoRedrawDC 整块
+   BitBlt 出来 (vb6_FormPaintBlitAutoRedraw), 而 `Me.Picture = Me.Image` 交进来的
+   Picture 包的就是这张 AutoRedraw 位图本身。以前这里一视同仁地装 Image 控件子类:
+   ① 子类吞掉 WM_PAINT, 生成的 AutoRedraw 上屏分支永不执行;
+   ② 子类按 RGBA 透明口径画位图 —— GDI 造的位图 alpha 字节是 0, 整幅被画成透明;
+   ③ 紧接着 vb6_MirrorPictureToAutoRedraw 把这张位图**画回它自己**, 内容被抹掉。
+   实测 (ucSegmentedControl 的 uc11 Transparent): 点完 SetPicture done 后再无
+   `[FPP] WM_PAINT`, 背景恒白。窗体必须留在生成代码那条绘制链上。 */
+static int vb6_IsFormHostWindow(HWND hw) {
+    WCHAR cls[64] = {0};
+    if (!hw) return 0;
+    GetClassNameW(hw, cls, 64);
+    return wcsncmp(cls, L"VB6_Form_", 9) == 0;
+}
 
 /* Fix P-BMP-3D (AutoRedraw 后备): PictureBox 设 AutoRedraw=True 时, 图片必须
  * 同步渲染进 VB6_AutoRedrawDC 记忆位图 —— 否则 `.hdc` (vb6_ControlDrawDC 交的
@@ -43,7 +60,17 @@ static void vb6_MirrorPictureToAutoRedraw(HWND hw) {
 void vb6_FormPaintBlitAutoRedraw(void* hwndForm, void* hdc) {
     if (!hwndForm || !hdc) return;
     HDC ar = (HDC)GetPropW((HWND)hwndForm, L"VB6_AutoRedrawDC");
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] WM_PAINT hwnd=%p ar=%p\n", hwndForm, (void*)ar);
+        fflush(stderr);
+    }
     if (!ar) return;
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] BlitAR dc=%p hdc=%p px00=%06X pxmid=%06X\n", (void*)ar, hdc,
+                (unsigned)(GetPixel(ar, 0, 0) & 0xFFFFFF),
+                (unsigned)(GetPixel(ar, 500, 300) & 0xFFFFFF));
+        fflush(stderr);
+    }
     RECT rc;
     if (!GetClientRect((HWND)hwndForm, &rc)) return;
     BitBlt((HDC)hdc, 0, 0, rc.right, rc.bottom, ar, 0, 0, SRCCOPY);
@@ -310,10 +337,19 @@ void vb6_SetControlPictureFromCom(void* hwnd, void* pPictureDisp) {
 
     /* All COM picture types route through the Image subclass for rendering.
      * Remove the default STATIC bitmap/icon/emf rendering styles so WM_PAINT is
-     * fully owned by our subclass. */
-    LONG style = GetWindowLongW(hw, GWL_STYLE);
-    style &= ~(SS_BITMAP | SS_ICON | SS_ENHMETAFILE | SS_CENTERIMAGE);
-    SetWindowLongW(hw, GWL_STYLE, style);
+     * fully owned by our subclass.
+     * 账 <transparency>: **窗体不是 STATIC**, 子类会吞掉生成 WM_PAINT 的
+     * AutoRedraw 上屏分支 (见 vb6_IsFormHostWindow 注释)。只在窗体确实有
+     * AutoRedraw 记忆表面时跳过; 没有表面 (AutoRedraw=False) 的窗体仍走老的
+     * 子类上屏路径, 否则 `Form.Picture = LoadPicture(...)` 会被静默丢掉。 */
+    int fIsFormHost = vb6_IsFormHostWindow(hw);
+    int fFormAutoRedraw = fIsFormHost
+        && GetPropW(hw, L"VB6_AutoRedrawDC") != NULL;
+    if (!fFormAutoRedraw) {
+        LONG style = GetWindowLongW(hw, GWL_STYLE);
+        style &= ~(SS_BITMAP | SS_ICON | SS_ENHMETAFILE | SS_CENTERIMAGE);
+        SetWindowLongW(hw, GWL_STYLE, style);
+    }
 
     /* AutoSize (Fix P-BMP-3D): 与原始句柄路径同口径 —— PictureBox/Image 设
      * AutoSize=True 时, 指派图片后控件缩放到图片本征尺寸 (VB6 行为)。 */
@@ -326,7 +362,7 @@ void vb6_SetControlPictureFromCom(void* hwnd, void* pPictureDisp) {
         }
     }
 
-vb6_InstallImageSubclass(hwnd);
+    if (!fFormAutoRedraw) vb6_InstallImageSubclass(hwnd);
     InvalidateRect(hw, NULL, TRUE);
 
     /* Fix <c3-menu3d>: COM 路径的 AutoRedraw 镜像缺位。PictureBox 设 Visible=False
@@ -334,8 +370,11 @@ vb6_InstallImageSubclass(hwnd);
      * 子类里的 arMirror 分支 (WM_PAINT 尾部) 没机会跑, 而 RuotaMenu 用
      * ImgMenu(Num).hdc (= VB6_AutoRedrawDC) 作 TransBltNow 源 → 合成出来恒空。
      * 原句柄路径 (vb6_SetControlPicture) 第 110 行已调用本镜像; COM 路径在装完
-     * 子类后同样主动画一遍进记忆 DC。屏上路径 (WM_PAINT/WM_PRINTCLIENT) 照旧。 */
-vb6_MirrorPictureToAutoRedraw(hw);
+     * 子类后同样主动画一遍进记忆 DC。屏上路径 (WM_PAINT/WM_PRINTCLIENT) 照旧。
+     * 账 <transparency>: 窗体上这张 Picture 往往就是 AutoRedraw 位图本身, 镜像是把
+     * 位图画回自己 (整幅被 BackColor 盖掉再自绘) —— 窗体路径由 vb6_FormSetPictureProp
+     * 单步渲染进 ARDC, 这里必须跳过。 */
+    if (!fFormAutoRedraw) vb6_MirrorPictureToAutoRedraw(hw);
     {   HDC arDbg = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
         IPicture* pDbg = (IPicture*)GetPropW(hw, L"VB6_IPicture");
         
@@ -678,3 +717,174 @@ void vb6_InstallImageSubclass(void* hwnd) {
         fprintf(stderr, "[C3_F187] InstallImageSubclass hwnd=%p orig=%p installed=%d\r\n",
                 (void*)hw, (void*)origProc, origProc ? 1 : 0);
 }
+
+// ============================================================
+// 窗体 AutoRedraw 持久表面: PaintPicture / Image / Picture (VB6 语义)
+// ------------------------------------------------------------
+// 账 <438>: ucSegmentedControl11_ItemClick 里 `Me.PaintPicture ...` 是窗体内建方法,
+// 但宿主模型原本没有这一臂 ⇒ 每次点 Solid/Transparent 都抛 Run-time error '438',
+// 后面的 `Me.Picture = Me.Image` 与 BackColorOpacity 全部没执行 (背景图不出现)。
+// 这里按 VB6 语义补齐: 画进 AutoRedraw 记忆位图 -> Image 把该位图当 StdPicture 交出。
+// ============================================================
+
+/* 从 VARIANT 里取出 IPicture (VB6 传进来的是 StdPicture = IPictureDisp)。 */
+static IPicture* vb6_FPP_picFromVar(const vb6_VARIANT* v) {
+    IUnknown* pUnk;
+    IPicture* pPic = NULL;
+    if (!v) return NULL;
+    if (v->vt != vb6_vtDispatch) return NULL;
+    pUnk = (IUnknown*)v->pdispVal;
+    if (!pUnk) return NULL;
+    if (FAILED(pUnk->lpVtbl->QueryInterface(pUnk, &IID_IPicture, (void**)&pPic))) return NULL;
+    return pPic;
+}
+
+/* VARIANT -> Long (PaintPicture 的坐标参数)。 */
+static int32_t vb6_FPP_varLong(const vb6_VARIANT* v) {
+    if (!v) return 0;
+    switch (v->vt) {
+    case vb6_vtLong:     return v->lVal;
+    case vb6_vtInteger:  return (int32_t)v->iVal;
+    case vb6_vtDouble:   return (int32_t)v->dblVal;
+    case vb6_vtSingle:   return (int32_t)v->fltVal;
+    case vb6_vtBoolean:  return v->boolVal ? -1 : 0;
+    case vb6_vtCurrency: return (int32_t)(v->cyVal / 10000);
+    case vb6_vtEmpty:
+    case vb6_vtNull:     return 0;
+    default:             return 0;
+    }
+}
+
+/* Twip (1440/英寸) -> 目标 DC 上的像素; 用 DC 的 DPI 才能和 vb6 缩放口径一致。 */
+static int vb6_FPP_twipToPxOnDc(int32_t tw, HDC dc, int vertical) {
+    int dpi = GetDeviceCaps(dc, vertical ? LOGPIXELSY : LOGPIXELSX);
+    if (dpi <= 0) dpi = 96;
+    return (int)(((int64_t)tw * dpi) / 1440);
+}
+
+/* 把 IPicture 按 (x,y,w,h) 渲染到 dc; 宽度/高度为 0 时用图片自然尺寸。 */
+static void vb6_FPP_render(IPicture* pPic, HDC dc, int x, int y, int w, int h) {
+    OLE_XSIZE_HIMETRIC hmW = 0;
+    OLE_YSIZE_HIMETRIC hmH = 0;
+    int natW, natH;
+    pPic->lpVtbl->get_Width(pPic, &hmW);
+    pPic->lpVtbl->get_Height(pPic, &hmH);
+    natW = vb6_HimetricToPxOnDc((int)hmW, GetDeviceCaps(dc, LOGPIXELSX));
+    natH = vb6_HimetricToPxOnDc((int)hmH, GetDeviceCaps(dc, LOGPIXELSY));
+    if (w <= 0) w = natW;
+    if (h <= 0) h = natH;
+    if (w <= 0 || h <= 0) return;
+    /* HIMETRIC 的 y 向上, 源矩形要翻转: (0, hmH, hmW, -hmH)。 */
+    pPic->lpVtbl->Render(pPic, dc, x, y, w, h, 0, hmH, hmW, -hmH, NULL);
+}
+
+void vb6_FormSetAutoRedraw(void* hwnd, int32_t val) {
+    if (!hwnd) return;
+    vb6_SetAutoRedraw(hwnd, val);
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] SetAutoRedraw hwnd=%p val=%d ardc=%p\n", hwnd,
+                (int)val, (void*)GetPropW((HWND)hwnd, L"VB6_AutoRedrawDC"));
+        fflush(stderr);
+    }
+    InvalidateRect((HWND)hwnd, NULL, TRUE);
+}
+
+void vb6_FormPaintPictureAt(void* hwnd, int argc, void** argv) {
+    HWND hw = (HWND)hwnd;
+    IPicture* pPic;
+    HDC dc;
+    int ownDc = 0;
+    int x, y, w, h;
+    if (!hw || argc < 1 || !argv) return;
+    pPic = vb6_FPP_picFromVar((const vb6_VARIANT*)argv[0]);
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] PaintPicture argc=%d pic=%p argv0=%p vt=%d\n",
+                (int)argc, (void*)pPic, argv[0],
+                argv[0] ? ((const vb6_VARIANT*)argv[0])->vt : -1);
+        fflush(stderr);
+    }
+    if (!pPic) return;
+    /* AutoRedraw=True 时画进记忆位图 (WM_PAINT 会 BitBlt 出来, 才能持久);
+       否则只能画到窗口 DC, 下一条重绘消息后就没了 (与 VB6 同)。 */
+    dc = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+    if (!dc) { dc = GetDC(hw); ownDc = 1; }
+    x = (argc > 1) ? vb6_FPP_twipToPxOnDc(vb6_FPP_varLong((const vb6_VARIANT*)argv[1]), dc, 0) : 0;
+    y = (argc > 2) ? vb6_FPP_twipToPxOnDc(vb6_FPP_varLong((const vb6_VARIANT*)argv[2]), dc, 1) : 0;
+    w = (argc > 3) ? vb6_FPP_twipToPxOnDc(vb6_FPP_varLong((const vb6_VARIANT*)argv[3]), dc, 0) : 0;
+    h = (argc > 4) ? vb6_FPP_twipToPxOnDc(vb6_FPP_varLong((const vb6_VARIANT*)argv[4]), dc, 1) : 0;
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] PaintPicture dc=%p own=%d x=%d y=%d w=%d h=%d argc=%d a3=%d a4=%d\n",
+                (void*)dc, ownDc, x, y, w, h, (int)argc,
+                argc > 3 ? vb6_FPP_varLong((const vb6_VARIANT*)argv[3]) : 0,
+                argc > 4 ? vb6_FPP_varLong((const vb6_VARIANT*)argv[4]) : 0);
+        fflush(stderr);
+    }
+    vb6_FPP_render(pPic, dc, x, y, w, h);
+    if (ownDc) ReleaseDC(hw, dc);
+    InvalidateRect(hw, NULL, TRUE);
+}
+
+/* Form.Picture = <StdPicture> / Nothing —— VB6 把它作为背景图铺在 (0,0) 原尺寸;
+   AutoRedraw=True 时实际落在记忆位图上, 所以这里同步画进 AutoRedraw DC。 */
+void vb6_FormSetPictureProp(void* hwnd, const void* variant) {
+    HWND hw = (HWND)hwnd;
+    IPicture* pPic;
+    HDC dc;
+    if (!hw) return;
+    pPic = vb6_FPP_picFromVar((const vb6_VARIANT*)variant);
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] SetPicture enter hw=%p pic=%p\n", hw, (void*)pPic);
+        fflush(stderr);
+    }
+    /* 用控件那套 Picture 存储 + 失效 (属性读回、Picture=Nothing 的清理都走它)。 */
+    vb6_SetControlPictureFromCom(hwnd, pPic ? (void*)pPic : NULL);
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] SetPicture stored\n");
+        fflush(stderr);
+    }
+    dc = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+    if (dc) {
+        RECT rc;
+        GetClientRect(hw, &rc);
+        if (pPic) {
+            vb6_FPP_render(pPic, dc, 0, 0, 0, 0);
+        } else {
+            /* Picture=Nothing: 记忆位图回到 BackColor, 与窗体一起清空。 */
+            COLORREF bg = (COLORREF)vb6_GetControlBackColor(hw);
+            HBRUSH br;
+            if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
+            br = CreateSolidBrush(bg);
+            FillRect(dc, &rc, br);
+            DeleteObject(br);
+        }
+    }
+    if (pPic) pPic->lpVtbl->Release(pPic);
+    InvalidateRect(hw, NULL, TRUE);
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] SetPicture done\n");
+        fflush(stderr);
+    }
+}
+
+/* Form.Image —— AutoRedraw 记忆位图的 StdPicture 视图 (fOwn=FALSE: 位图仍归窗体)。 */
+void* vb6_FormGetImagePicture(void* hwnd) {
+    HWND hw = (HWND)hwnd;
+    HBITMAP hbm;
+    PICTDESC pd;
+    IPicture* pPic = NULL;
+    if (!hw) return NULL;
+    hbm = (HBITMAP)GetPropW(hw, L"VB6_AutoRedrawBmp");
+    if (getenv("C3_FPP_TRACE")) {
+        fprintf(stderr, "[FPP] GetImage hw=%p bmp=%p\n", hw, (void*)hbm);
+        fflush(stderr);
+    }
+    if (!hbm) return NULL;
+    ZeroMemory(&pd, sizeof(pd));
+    pd.cbSizeofstruct = sizeof(pd);
+    pd.picType = PICTYPE_BITMAP;
+    pd.bmp.hbitmap = hbm;
+    pd.bmp.hpal = NULL;
+    if (FAILED(OleCreatePictureIndirect(&pd, &IID_IPicture, FALSE, (void**)&pPic))) return NULL;
+    return (void*)pPic;
+}
+

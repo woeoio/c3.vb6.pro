@@ -1,4 +1,12 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-05 (账 <transparency>): vb6forms_picture_prop.c —— vb6_SetControlPictureFromCom
+//   不再给**窗体**窗口 (类名 VB6_Form_*) 装 Image 控件子类, 也不做 AutoRedraw 镜像。
+//   实测 ucSegmentedControl 的 uc11 Transparent: `Me.Picture = Me.Image` 之后
+//   SetPicture done 就再无 [FPP] WM_PAINT, 背景恒白 —— 子类吞掉生成 WM_PAINT 的
+//   AutoRedraw 上屏分支, 又按 RGBA 口径把 GDI 位图 (alpha 全 0) 画成透明, 镜像再把
+//   位图画回自己。窗体留在生成绘制链上后 [FPP] WM_PAINT 恢复、ARDC 整幅上屏。
+//   This touch exists only so rc.exe re-embeds src/rtl/** into C3.exe --
+//   check_rtl_embedded R1 catches the stale embed.
 // 2026-10-31 (ledger #305, knife 317): vb6com_invoke.c gained the late-binding
 //   receiver view switch -- a receiver that is a *different interface view* of a
 //   real COM object (measured: IPicture obtained from OleCreatePictureIndirect with
@@ -1041,6 +1049,11 @@
    满了 `vb6_UC_Register` 静默 return ⇒ `vb6_uc_findDesc` 找不到 ⇒ HostCreate 交 NULL ⇒
    发码侧那发 `((cls*)vb6_UC_InstanceOf(hwnd))->events = …` 写 NULL+0x88 (0xC000041D)。
    vb6forms_uc_internal.h。touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 <438>/<font-color>/<transparency>: 窗体 PaintPicture/AutoRedraw/Picture/Image 四个宿主成员
+   落地 (vb6forms_picture_prop.c + uc_hostmodel_call/setprop/getprop.inc)，UserControl.ForeColor
+   改为写进当前 paint DC 的文本色 (uc_host_window.c: vb6_UC_SetForeColor)，透明 UC 的离屏 DIB
+   先铺父窗体 AutoRedraw 表面。touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
 
 /* 账 #305 第320刀 (账 #592): App.Title 的运行期真值 = .vbp 的 Title（空则 Name）——
    vb6rtl_system.c 新增 vb6_SetAppTitle / vb6_App_Title / vb6_AppTitleBorrow 三个出口：

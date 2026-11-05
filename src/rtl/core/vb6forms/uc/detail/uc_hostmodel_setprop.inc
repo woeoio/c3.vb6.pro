@@ -46,6 +46,12 @@
     if (_wcsicmp(name, L"Top") == 0)    { vb6_SetControlTop(obj, vb6_ho_variantToLong(v)); return 1; }
     if (_wcsicmp(name, L"Width") == 0)  { vb6_SetControlWidth(obj, vb6_ho_variantToLong(v)); return 1; }
     if (_wcsicmp(name, L"Height") == 0) { vb6_SetControlHeight(obj, vb6_ho_variantToLong(v)); return 1; }
+    /* 账 <438>: 窗体 AutoRedraw / Picture —— 此前整条内建档里没有这两个名字,
+       `Me.AutoRedraw = True` 与 `Me.Picture = Me.Image` 都被静默吞掉 (sink 返回 0 前
+       不报 438 是因为写侧本来就忽略未知属性), 于是 AutoRedraw 记忆位图从未建立,
+       PaintPicture 无处可画。 */
+    if (_wcsicmp(name, L"AutoRedraw") == 0) { vb6_FormSetAutoRedraw(obj, vb6_ho_variantToLong(v)); return 1; }
+    if (_wcsicmp(name, L"Picture") == 0) { vb6_FormSetPictureProp(obj, v); return 1; }
     /* 账 #305 第三百五十一刀: RichTextBox.RightMargin (VB6 侧缇)。
        RichEdit 的 EM_SETMARGINS 以缇计右边距; 标准 Edit 没有 VB6 这一格,
        所以只认 RICHEDIT 类。同值重写也返回 1 (与样式位那批同一口径)。 */
