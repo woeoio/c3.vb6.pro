@@ -390,3 +390,42 @@ ucTreeViewPlus.ctl(1347,5): warning VB3001: 未声明的标识符: 'Cls' (可能
 
 **下一轮第一条**：查 `THE IMAGE: N DON'T EXIST` 的加载路径（App.Path/img 与 LoadPicture
 调用点），确认节点不绘制是否与之同因；再查树区背景色/选中高亮的画刷来源。
+
+## 18. 第五轮：先清 GA 红（compile #1/#2 五条静态哨兵），2026-11-06 04:3x
+
+主控调整优先级：树区功能修复之前，先把 GA 红清零。三个 run 的结论：
+
+| run | head | 结论 | 红在哪 |
+|---|---|---|---|
+| `42065548065` | 8cedb604 | failure | compile #1/#2 + Emit manifest（另有当时的夹具/manifest 未登记） |
+| `42066368425` | 92892724 | failure | compile #1/#2 + Emit manifest |
+| `42068532400` | 82907ac3 | failure | compile #1/#2（Emit manifest 已绿） |
+
+五条红的归属 = **本轮前两刀（5e428b2b / 841c1d3c）自己引入的真实回退**，不是判据过紧：
+
+1. `host_pseudo_table_census` — `cgen_expr_ident_builtin.inc` 问装配出口 2 次（要 1）。
+   修：`hpRtl` 提前算一次，裸名/裸写方法两档共用。
+2. `uc_instance_exit` U1 — `cgen_expr_call_arg_emit.inc` 手拼 `vb6_UC_InstanceOf`。
+   修：新出口 `CCodeGen::ucInstanceThisPtrExpr`（住 `cgen_util_classcall.cpp`），
+   expr/ 里 0 处手拼。
+3. `object_slot_boxing` B7 — `src/rtl` 的 `vb6_ComObject_IsBoxed` 9 处（要 4）。
+   修：低层身份闸拆名 `vb6_ComObject_IsVb6Wrapper`；类名 BSTR/ANSI 两档仍只叫
+   `IsBoxed`，集合计数改叫新名字。计数回 4。
+4. `com_latebind_guard` R9 — `vb6rtl_com.c` 又出现八档→LOGFONT 就地抄写（`lfWeight`=1）。
+   修：叠在 `vb6_ComIface_Font` 副本上，再交唯一主人 `vb6_UC_FontLogFont`；`lfWeight`=0。
+5. `variant_slot_store` R5d/R9c —
+   - `src/backend/module/cgen_com.cpp:10` 注释里引用了 `class var .` 原句（R5d 按先例
+     改写成不点名说法，白名单条目保持 0）；
+   - `cgen_expr_member_voidptr_com.inc` 新增一档成员读发文站（调 `classFieldReadExpr`，
+     不是手拼尾注）—— R9c 白名单由三处登记为四处（**登记同步**，非放宽）。
+
+**重编与内嵌**：`.temp\build_c3.bat` 通过；`c3rtl.rc.res` 2890196 B @ 04:02:50；
+`check_rtl_embedded`：126 个 RTL 资源与磁盘逐字节一致、无孤儿 id；
+`vb6_ComObject_IsVb6Wrapper` 已出现在 exe 字符串。
+**定向编译**：`C3 --arch x86 tests\ucTreeView\Proyecto1.vbp` 成功，`Proyecto1.exe` 820224 B。
+**提交**：`fc7e38f6`（双远端 dev）。
+**GA**：`42100365008`（head fc7e38f6）**22/22 success，0 failure，0 skipped**。
+
+**下一轮第一条（回到主线）**：编译并运行 `.temp\probe_coll.bas`（Collection 的 Variant
+索引取值），再用 `SetForegroundWindow` 重拍 `output\ucTreeView` 截图，分离
+「图像失败 → 节点不绘制」与第二条原因。
