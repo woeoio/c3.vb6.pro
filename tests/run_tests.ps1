@@ -4041,7 +4041,8 @@ function Assert-CodejockSkipInvariant {
 }
 
 function Test-VbpBuild {
-    param([string]$Name, [string]$VbpFile, [string]$Arch = "", [switch]$RequiresCodejock)
+    param([string]$Name, [string]$VbpFile, [string]$Arch = "", [switch]$RequiresCodejock,
+          [string]$AssetDir = "", [string[]]$PixelAssert = @())
     $script:total++
     if (-not (Enter-VbpShard)) { return }
     Write-Host -NoNewline "  [VBP-BUILD] $Name ... "
@@ -4071,8 +4072,46 @@ function Test-VbpBuild {
     $rc = $LASTEXITCODE
     $exePath = Join-Path $buildDir ((Resolve-VbpExeBase -VbpFile $VbpFile) + ".exe")
     if ($rc -eq 0 -and (Test-Path $exePath)) {
+        # 工程目录下的资产子目录 (如 ucTreeView 的 img\) 要跟着产物走: 像素夹具跑的是
+        # 产物自己的 App.Path\img, 不拷就一个图标都取不到 (那不是代码缺陷, 是夹具缺资产)。
+        if ($AssetDir -ne "") {
+            $aSrc = Join-Path (Split-Path $VbpFile -Parent) $AssetDir
+            $aDst = Join-Path $buildDir $AssetDir
+            if (Test-Path $aSrc) {
+                if (Test-Path $aDst) { Remove-Item -Recurse -Force $aDst }
+                Copy-Item -Recurse -Force $aSrc $aDst
+            }
+        }
         $script:pass++
         Write-Host ("PASS (" + (Get-Item $exePath).Length + " bytes)") -ForegroundColor Green
+        # 可选像素判据 (口径与 $Cases 里的 PixelAssert 一致: rc 0=PASS 2=SKIP 其余=FAIL;
+        # 旧行为必须红 —— 判据脚本自己不认"整块灰底"为通过)。
+        if ($PixelAssert.Count -gt 0) {
+            $pxDir = Join-Path $buildDir "pixels"
+            foreach ($pxRel in $PixelAssert) {
+                $pxScript = Join-Path $Tests ([string]$pxRel)
+                $pxTag = [System.IO.Path]::GetFileName([string]$pxRel)
+                $pxRc = 1; $pxText = ""
+                try {
+                    $pxText = (& powershell -NoProfile -ExecutionPolicy Bypass -File $pxScript -Exe $exePath -OutDir $pxDir -Sec 10 2>&1 | Out-String).Trim()
+                    $pxRc = $LASTEXITCODE
+                } catch {
+                    $pxText = "夹具异常: " + $_.Exception.Message
+                    $pxRc = 1
+                }
+                if ($pxRc -eq 0) {
+                    Write-Host ("    pixels: " + $pxText) -ForegroundColor DarkGray
+                } elseif ($pxRc -eq 2) {
+                    $script:pass--
+                    $script:skip++
+                    Write-Host ("    pixels SKIP: " + $pxText) -ForegroundColor Yellow
+                } else {
+                    $script:pass--
+                    $script:fail++
+                    Write-Host ("    pixels FAIL [" + $pxTag + "]: " + $pxText) -ForegroundColor Red
+                }
+            }
+        }
     } else {
         $script:fail++
         Write-Host ("FAIL rc=" + $rc + " exe=" + (Test-Path $exePath)) -ForegroundColor Red
@@ -9300,9 +9339,11 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-VbpBuild "charts_ucTreeMaps_x86" "$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp" -Arch "x86"
 
     # ucTreeView 示例工程 (2026-11-06): 本任务的 1:1 还原对象，口径是 **x86 锚点**
-    # (PE machine=0x014C)，故只登记 x86 一档。它跑起来是真 GUI (Form1)，CI 上只判
-    # "编得过、链得出 exe"；像素对照走本机 tests\guisample\uctreeview_px.ps1。
-    Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86"
+    # (PE machine=0x014C)，故只登记 x86 一档。像素判据 = tests\guisample\uctreeview_px.ps1
+    # (真桌面 CopyFromScreen; 树区白底占比/文本行/选中高亮/图标彩色像素)。旧行为(hdc=0)
+    # 实测 white=0 bg240=100% darkRows=0 hl=0 vivid=0 ⇒ 必红; 现在 PASS。
+    Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86" `
+        -AssetDir "img" -PixelAssert @("guisample\uctreeview_px.ps1")
 
     # <vbeclipse> 回归夹子 (dbgdlg) 2026-10-06: 「Alias 名与 VB 名相同」这条路上**真调用**过
     # DI 包装的那一份夹具 —— 只要求"编得过、链得出 exe"，不跑 (它是 GUI 工程，跑起来要人点)。

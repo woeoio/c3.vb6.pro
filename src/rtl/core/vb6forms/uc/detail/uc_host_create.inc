@@ -85,6 +85,11 @@
     vb6_UC_ApplyFontToWindow(hwnd, r->font);
     }
     r->hwnd = hwnd;
+    /* .ctl 头部 `AutoRedraw = -1 'True`: VB6 在控件创建时就把 UserControl.AutoRedraw
+       置 True ⇒ hDC 从第一帧起就是常驻离屏位图。必须在这里**立刻**建好表面 ——
+       vb6_uc_push 只在 `r->adSurf.memDC` 已存在时才交 adSurf, 晚建的话第一帧
+       (UserControl_Initialize/Resize 里的 Update) 仍拿到 NULL (ucTreeView 树区空白)。*/
+    if (desc->autoRedraw) vb6_uc_autoRedrawSet(r, 1);
     /* 账 #305 第299刀: UC 实例也要被戳 (它可能是 `.frm` 嵌进 OCX 块那一族)。无窗宿主
        (windowless, 第二百五十八刀) 时 hwnd 为 NULL ⇒ vb6_GeomOwnerStamp 自己早退。 */
     vb6_GeomOwnerStamp(hwnd, vb6_GeomAuthoredOwner(hParent));

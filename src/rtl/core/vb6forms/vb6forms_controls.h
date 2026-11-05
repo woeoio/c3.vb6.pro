@@ -290,6 +290,15 @@ typedef struct vb6_UserControlDesc {
     // UserControl_Paint。0 = Opaque (VB6 缺省: 旧 cgen 不发此槽 ⇒ 补 0 ⇒ 行为
     // 与改动前逐字节一致), 1 = Transparent。
     int32_t     transparent;
+
+    // ---- .ctl 设计期 `AutoRedraw` (只许追加到末尾) ----
+    // VB6 的 UserControl 设计器在 .ctl 头部写 `AutoRedraw = -1 'True` 时, 该控件
+    // **从创建起** UserControl.AutoRedraw 就是 True ⇒ UserControl.hDC 是常驻离屏位图,
+    // 控件在 Resize/Show 里画的像素靠这张位图留到下一次 WM_PAINT。
+    // C3 此前只认 VB 代码里写的 `.AutoRedraw = True` (vb6_UC_SetAutoRedraw), 设计期
+    // 头部那一行整个被丢弃 ⇒ ucTreeViewPlus 的 Update/Draw 在 `hdc` 拿到 NULL,
+    // GDI+ 画到空 DC, 屏幕上只剩宿主铺的灰底 (实测 nodes=3 但树区全 240)。
+    int32_t     autoRedraw;
 } vb6_UserControlDesc;
 
 // .ctl module self-registration (type name case-insensitive, duplicate ignored)

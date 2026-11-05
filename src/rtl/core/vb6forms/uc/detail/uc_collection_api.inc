@@ -48,10 +48,32 @@ static void vb6_coll_push(void* coll, const vb6_VARIANT* v, const wchar_t* key) 
     c->count++;
 }
 
+// 实参是 Windows VARIANT* (vb6_ComPackXxx 打包), 转成 RTL 形式后存入。
+// VB6 的 Collection.Add 存**值拷贝**, 但 cgen 对标量局部变量实参发的是
+// vb6_ComPackIntRef(&v) (VT_BYREF|VT_I4, 与 VB6 默认 ByRef 传参一致), 而
+// vb6_Host_FromWinVariant 刻意把 ByRef 折成 Empty ⇒ `c.Add 局部变量` 之后
+// 按索引取回恒为 0 (ucTreeView 实测: ImageListCount=3, 但 `cImageList(1..3)`
+// 全 0 ⇒ 节点图标画不出)。这里在入库前先解引用 —— 值语义与 VB6 一致,
+// 且不影响 vb6_Host_FromWinVariant 自身"ByRef 不收"的既有口径。
+static void vb6_coll_fromWin(const void* winVar, vb6_VARIANT* out) {
+    const VARIANT* wv = (const VARIANT*)winVar;
+    if (wv && (wv->vt & VT_BYREF)) {
+        VARIANT tmp;
+        VariantInit(&tmp);
+        if (SUCCEEDED(VariantCopyInd(&tmp, wv))) {
+            vb6_Host_FromWinVariant(&tmp, out);
+            VariantClear(&tmp);
+            return;
+        }
+        VariantClear(&tmp);
+    }
+    vb6_Host_FromWinVariant(winVar, out);
+}
+
 // 实参是 Windows VARIANT* (vb6_ComPackXxx 打包), 转成 RTL 形式后存入
 void vb6_Collection_Add(void* coll, const void* winVar) {
     vb6_VARIANT hv;
-    vb6_Host_FromWinVariant(winVar, &hv);
+    vb6_coll_fromWin(winVar, &hv);
     vb6_coll_push(coll, &hv, NULL);
     vb6_Host_ClearVariant(&hv);
 }
@@ -68,7 +90,7 @@ void vb6_Collection_AddKeyed(void* coll, const void* winVar, const wchar_t* key)
         }
     }
     vb6_VARIANT hv;
-    vb6_Host_FromWinVariant(winVar, &hv);
+    vb6_coll_fromWin(winVar, &hv);
     vb6_coll_push(coll, &hv, key);
     vb6_Host_ClearVariant(&hv);
 }

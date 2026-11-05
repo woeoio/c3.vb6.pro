@@ -438,6 +438,15 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         if (bksIt != frmDesc.formControl.properties.end() && (int)bksIt->second.intValue == 0)
             ucTransparent = 1;
 
+        // `.ctl` 头部的设计期 `AutoRedraw = -1 'True` —— VB6 在控件创建时就把
+        // UserControl.AutoRedraw 置 True (hDC = 常驻离屏位图), 与 VB 代码里写
+        // `.AutoRedraw = True` 同效。此前这一行被整个丢弃, 控件 Update/Draw 里
+        // 拿到的 UserControl.hDC 恒为 NULL (ucTreeView 树区空白的直接原因)。
+        int ucAutoRedraw = 0;
+        auto arIt = frmDesc.formControl.properties.find("AutoRedraw");
+        if (arIt != frmDesc.formControl.properties.end() && (int)arIt->second.intValue != 0)
+            ucAutoRedraw = 1;
+
         // czUI fix: 鼠标事件封装 — 宿主 wndproc 收到鼠标消息后经由 desc 钩子
         // 调用 UserControl_MouseDown/Up/Move/DblClick (此前无转发, 控件无法交互)。
         // 注意生成的处理器的 Integer/Single 形参按指针发射。
@@ -515,7 +524,10 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         // (布局式初始化, 错位一个指针宽就是运行期 AV, 见结构体 rev22 那段教训)。
         c_.emitLine("    vb6_" + ctl + "_ucHostClick,  /* 账 #226: UserControl_Click */");
         c_.emitLine("    " + std::to_string(ucTransparent)
-                    + "  /* 账 #492: .ctl BackStyle=0 'Transparent' ⇒ 宿主合成下层 */");
+                    + ",  /* 账 #492: .ctl BackStyle=0 'Transparent' ⇒ 宿主合成下层 */");
+        // .ctl 头部设计期 AutoRedraw 的末槽 (结构体字段顺序必须逐字一致, 同上)。
+        c_.emitLine("    " + std::to_string(ucAutoRedraw)
+                    + "  /* .ctl 设计期 AutoRedraw ⇒ 创建即有常驻 hDC */");
         c_.emitLine("};");
         c_.emitLine("void vb6_" + ctl + "_RegisterHost(void) { vb6_UC_Register(&vb6_" + ctl + "_ucHostDesc); }");
         // Fix <vbeclipse> rev14: 让每个 .ctl 在**本模块的 init 函数**里自注册宿主描述。
