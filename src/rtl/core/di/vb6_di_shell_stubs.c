@@ -12,7 +12,7 @@
 // types while preserving the register/memory passing class of every argument.
 //
 // generated from: a C3 compile session (pass -SessionDir to regenerate)
-// date: 2026-11-05 22:47
+// date: 2026-11-05 03:23
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.
@@ -53,26 +53,6 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "imagehlp.lib")
 #pragma comment(lib, "comdlg32.lib")
-
-/* SHGetFileInfoA */
-intptr_t __stdcall vb6_di_SHGetFileInfoA(BSTR pszPath, intptr_t dwFileAttributes, void* psfi, intptr_t cbFileInfo, intptr_t uFlags) {
-    return ((intptr_t (WINAPI *)(BSTR, intptr_t, void*, intptr_t, intptr_t))SHGetFileInfoA)(pszPath, dwFileAttributes, psfi, cbFileInfo, uFlags);
-}
-
-/* SHGetPathFromIDListA */
-intptr_t __stdcall vb6_di_SHGetPathFromIDListA(intptr_t pidl, BSTR pszPath) {
-    return ((intptr_t (WINAPI *)(intptr_t, BSTR))SHGetPathFromIDListA)(pidl, pszPath);
-}
-
-/* SHGetSpecialFolderLocation */
-intptr_t __stdcall vb6_di_SHGetSpecialFolderLocation(intptr_t hwndOwner, intptr_t nFolder, void* pidl) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*))SHGetSpecialFolderLocation)(hwndOwner, nFolder, pidl);
-}
-
-/* PathIsDirectoryA */
-intptr_t __stdcall vb6_di_PathIsDirectoryA(BSTR pszPath) {
-    return ((intptr_t (WINAPI *)(BSTR))PathIsDirectoryA)(pszPath);
-}
 
 /* PathIsURLA */
 intptr_t __stdcall vb6_di_PathIsURLA(BSTR pszPath) {
@@ -139,6 +119,10 @@ intptr_t __stdcall vb6_di_ShellExecuteA(intptr_t hwnd, BSTR lpOperation, BSTR lp
 intptr_t __stdcall vb6_di_SHGetFolderLocation(intptr_t hWndOwner, intptr_t nFolder, intptr_t hToken, intptr_t dwReserved, intptr_t* lpIDList) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t*))SHGetFolderLocation)(hWndOwner, nFolder, hToken, dwReserved, lpIDList);
 }
+/* SHGetPathFromIDListA */
+intptr_t __stdcall vb6_di_SHGetPathFromIDListA(intptr_t pidl, BSTR pszPath) {
+    return ((intptr_t (WINAPI *)(intptr_t, BSTR))SHGetPathFromIDListA)(pidl, pszPath);
+}
 /* SHGetPathFromIDListW */
 intptr_t __stdcall vb6_di_SHGetPathFromIDListW(intptr_t lpIDList, intptr_t lpBuffer) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t))SHGetPathFromIDListW)(lpIDList, lpBuffer);
@@ -146,4 +130,16 @@ intptr_t __stdcall vb6_di_SHGetPathFromIDListW(intptr_t lpIDList, intptr_t lpBuf
 /* StrCmpLogicalW */
 intptr_t __stdcall vb6_di_StrCmpLogicalW(intptr_t lpString1, intptr_t lpString2) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t))StrCmpLogicalW)(lpString1, lpString2);
+}
+/* SHGetFileInfoA — ClsTreeExplorer.cls；原型取自 C3 生成头（实测） */
+intptr_t __stdcall vb6_di_SHGetFileInfoA(BSTR pszPath, intptr_t dwFileAttributes, void* psfi, intptr_t cbFileInfo, intptr_t uFlags) {
+    return ((intptr_t (WINAPI *)(BSTR, intptr_t, void*, intptr_t, intptr_t))SHGetFileInfoA)(pszPath, dwFileAttributes, psfi, cbFileInfo, uFlags);
+}
+/* SHGetSpecialFolderLocation */
+intptr_t __stdcall vb6_di_SHGetSpecialFolderLocation(intptr_t hwndOwner, intptr_t nFolder, void* pidl) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*))SHGetSpecialFolderLocation)(hwndOwner, nFolder, pidl);
+}
+/* PathIsDirectoryA */
+intptr_t __stdcall vb6_di_PathIsDirectoryA(BSTR pszPath) {
+    return ((intptr_t (WINAPI *)(BSTR))PathIsDirectoryA)(pszPath);
 }

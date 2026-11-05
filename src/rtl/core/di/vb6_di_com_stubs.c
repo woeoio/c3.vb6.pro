@@ -3,7 +3,7 @@
 // Win32 forwarding stubs for VB6 `Declare ... Lib "x"` (Fix 076 scheme: C3 emits
 // `extern <ret> __stdcall vb6_di_<alias>(...)` and the RTL implements it).
 //
-// Family: com   (libs: ole32, oleaut32, advapi32, comdlg32)   stubs: 269
+// Family: com   (libs: ole32, oleaut32, advapi32, comdlg32)   stubs: 263
 //
 // Each stub reproduces C3's own generated prototype verbatim (that is the ABI the
 // caller uses: ByVal Long is widened to intptr_t, ByVal Single stays float, ByRef
@@ -12,7 +12,7 @@
 // types while preserving the register/memory passing class of every argument.
 //
 // generated from: a C3 compile session (pass -SessionDir to regenerate)
-// date: 2026-11-05 22:47
+// date: 2026-11-05 03:23
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.
@@ -55,16 +55,54 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "comdlg32.lib")
 
-/* ChooseColorA */
-intptr_t __stdcall vb6_di_ChooseColorA(void* pChoosecolor) {
-    return ((intptr_t (WINAPI *)(void*))ChooseColorA)(pChoosecolor);
+/* CoTaskMemFree */
+void __stdcall vb6_di_CoTaskMemFree(intptr_t hMem) {
+    ((void (WINAPI *)(intptr_t))CoTaskMemFree)(hMem);
+}
+
+/* StringFromCLSID */
+intptr_t __stdcall vb6_di_StringFromCLSID(void* pCLSID, int32_t* lpszProgID) {
+    return ((intptr_t (WINAPI *)(void*, int32_t*))StringFromCLSID)(pCLSID, lpszProgID);
+}
+
+/* CLSIDFromString */
+intptr_t __stdcall vb6_di_CLSIDFromString(intptr_t pstring, void* pCLSID) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*))CLSIDFromString)(pstring, pCLSID);
+}
+
+/* GetOpenFileNameA */
+intptr_t __stdcall vb6_di_GetOpenFileNameA(void* file) {
+    return ((intptr_t (WINAPI *)(void*))GetOpenFileNameA)(file);
+}
+
+/* OleTranslateColor */
+intptr_t __stdcall vb6_di_OleTranslateColor(intptr_t lOleColor, intptr_t lHPalette, intptr_t lColorRef) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))OleTranslateColor)(lOleColor, lHPalette, lColorRef);
 }
 
 /* CreateStreamOnHGlobal */
-void __stdcall vb6_di_CreateStreamOnHGlobal(void* hGlobal, intptr_t fDeleteOnRelease, void* ppstm) {
-    ((void (WINAPI *)(void*, intptr_t, void*))CreateStreamOnHGlobal)(hGlobal, fDeleteOnRelease, ppstm);
+intptr_t __stdcall vb6_di_CreateStreamOnHGlobal(void* hGlobal, intptr_t fDeleteOnRelease, void* ppstm) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t, void*))CreateStreamOnHGlobal)(hGlobal, fDeleteOnRelease, ppstm);
 }
 
+/* GetHGlobalFromStream */
+intptr_t __stdcall vb6_di_GetHGlobalFromStream(intptr_t ppstm, int32_t* hGlobal) {
+    return ((intptr_t (WINAPI *)(intptr_t, int32_t*))GetHGlobalFromStream)(ppstm, hGlobal);
+}
+
+/* === 恢复 dev@69845a9 有、本批重生成 di 桩时丢掉的定义 ===
+ * 生成器是按"那次跑它时的引用面"发桩的, 换一个会话重生成就会**静默丢掉**上一个会话
+ * 引用过的桩 (实测丢 9 个: comdlg32/winspool 那一族 + ChooseColorA/GetUserNameW/WinHelpA,
+ * Charts 2020 的 vb6_di_ChooseColorA 因此 LNK2019)。这里按 dev 原文补回。
+ *
+ * 2026-10-06: 生成器的结转 (2c 节, add-only) 原先靠"独占一行的杠星注释"定位块, 而本段这些
+ * 手工补回的桩带的是说明性注释 (形如 "杠星 ChooseFontA 破折号 Task #44 ... 星杠"), 于是整段
+ * 对结转**不可见** —— 实测全 622 个定义里只有 570 个能被旧口径认出, 52 个每次重生成都会
+ * 再丢一次 (上面那句"要改成全语料并集"说的就是它)。现已把定位改成按**函数定义行**
+ * (__stdcall vb6_di_X 左括号) 匹配, 并在其上吸收紧邻注释块; 同一会话重跑实测 622→626, 零丢失。 */
+intptr_t __stdcall vb6_di_ChooseColorA(void* pChoosecolor) {
+    return ((intptr_t (WINAPI *)(void*))ChooseColorA)(pChoosecolor);
+}
 /* ChooseColorW */
 intptr_t __stdcall vb6_di_ChooseColorW(void* lpChooseColor) {
     return ((intptr_t (WINAPI *)(void*))ChooseColorW)(lpChooseColor);
@@ -77,10 +115,6 @@ intptr_t __stdcall vb6_di_ChooseFontA(void* pChoosefont) {
 intptr_t __stdcall vb6_di_ChooseFontW(void* lpChooseFont) {
     return ((intptr_t (WINAPI *)(void*))ChooseFontW)(lpChooseFont);
 }
-/* CLSIDFromString */
-intptr_t __stdcall vb6_di_CLSIDFromString(intptr_t pstring, void* pCLSID) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*))CLSIDFromString)(pstring, pCLSID);
-}
 /* CoCreateInstance */
 intptr_t __stdcall vb6_di_CoCreateInstance(void* rclsid, intptr_t pUnkOuter, intptr_t dwClsContext, void* riid, void** ppv) {
     return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t, void*, void**))CoCreateInstance)(rclsid, pUnkOuter, dwClsContext, riid, ppv);
@@ -92,10 +126,6 @@ intptr_t __stdcall vb6_di_CommDlgExtendedError() {
 /* CoTaskMemAlloc */
 intptr_t __stdcall vb6_di_CoTaskMemAlloc(intptr_t cBytes) {
     return ((intptr_t (WINAPI *)(intptr_t))CoTaskMemAlloc)(cBytes);
-}
-/* CoTaskMemFree */
-void __stdcall vb6_di_CoTaskMemFree(intptr_t hMem) {
-    ((void (WINAPI *)(intptr_t))CoTaskMemFree)(hMem);
 }
 /* CryptAcquireContextA */
 intptr_t __stdcall vb6_di_CryptAcquireContextA(int32_t* phProv, BSTR pszContainer, BSTR pszProvider, intptr_t dwProvType, intptr_t dwFlags) {
@@ -169,14 +199,6 @@ intptr_t __stdcall vb6_di_FindTextW(void* lpFindReplace) {
 intptr_t __stdcall vb6_di_GetFileTitleA(BSTR szFile, BSTR szTitle, intptr_t cbBuf) {
     return ((intptr_t (WINAPI *)(BSTR, BSTR, intptr_t))GetFileTitleA)(szFile, szTitle, cbBuf);
 }
-/* GetHGlobalFromStream */
-intptr_t __stdcall vb6_di_GetHGlobalFromStream(intptr_t ppstm, int32_t* hGlobal) {
-    return ((intptr_t (WINAPI *)(intptr_t, int32_t*))GetHGlobalFromStream)(ppstm, hGlobal);
-}
-/* GetOpenFileNameA */
-intptr_t __stdcall vb6_di_GetOpenFileNameA(void* file) {
-    return ((intptr_t (WINAPI *)(void*))GetOpenFileNameA)(file);
-}
 /* GetOpenFileNameW */
 intptr_t __stdcall vb6_di_GetOpenFileNameW(void* lpOpenFileName) {
     return ((intptr_t (WINAPI *)(void*))GetOpenFileNameW)(lpOpenFileName);
@@ -220,10 +242,6 @@ intptr_t __stdcall vb6_di_OleLoadPicturePath(intptr_t lpszPath, intptr_t pUnkCal
 /* OleSetContainedObject */
 intptr_t __stdcall vb6_di_OleSetContainedObject(void* pUnknown, intptr_t fContained) {
     return ((intptr_t (WINAPI *)(void*, intptr_t))OleSetContainedObject)(pUnknown, fContained);
-}
-/* OleTranslateColor */
-intptr_t __stdcall vb6_di_OleTranslateColor(intptr_t lOleColor, intptr_t lHPalette, intptr_t lColorRef) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t))OleTranslateColor)(lOleColor, lHPalette, lColorRef);
 }
 /* PageSetupDlgA — dbgdlg/cDlg.cls:196 (`Lib "COMDLG32" Alias "PageSetupDlgA"`, As Boolean
  * ⇒ int16_t; 唯一形参是 VB6 UDT 指针 T_PAGESETUPDLG*, 按生成器既定规则折成 void*)。
@@ -275,10 +293,6 @@ intptr_t __stdcall vb6_di_RevokeDragDrop(intptr_t hWnd) {
 /* StgCreateDocfile */
 intptr_t __stdcall vb6_di_StgCreateDocfile(intptr_t pwcsName, intptr_t grfMode, intptr_t Reserved, void** ppStgOpen) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void**))StgCreateDocfile)(pwcsName, grfMode, Reserved, ppStgOpen);
-}
-/* StringFromCLSID */
-intptr_t __stdcall vb6_di_StringFromCLSID(void* pCLSID, int32_t* lpszProgID) {
-    return ((intptr_t (WINAPI *)(void*, int32_t*))StringFromCLSID)(pCLSID, lpszProgID);
 }
 /* SysAllocString */
 intptr_t __stdcall vb6_di_SysAllocString(intptr_t lpString) {
