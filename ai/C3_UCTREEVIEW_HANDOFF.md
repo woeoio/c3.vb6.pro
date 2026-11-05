@@ -335,3 +335,29 @@ ucTreeViewPlus.ctl(1347,5): warning VB3001: 未声明的标识符: 'Cls' (可能
 
 **下一轮第一条**：逐格读 GA 静态门禁 diff（第 14 节第 2 条那 7 个），再登记
 `tests\run_tests.ps1` 与 `emit-manifest.expected.txt`；随后写 `uctreeview_px.ps1` 与真 VB6 截图对照。
+
+## 16. 第三轮：目标类（Extender 成员 + FontBold/FontUnderline）现状核实（2026-11-06 00:35）
+
+本轮指令要求清 `Extender.Parent/Top/Left/ZOrder/Name` 结构体缺成员 + RTL 缺
+`FontBold/FontUnderline` 共 14 条。**实测该类的 cl 错误数已经是 0** —— 这类在前几轮
+（5e428b2b 生成器收口 + 03c89a73/ffc3fe59 RTL）已经清掉，不是剩余项。
+
+实测（本轮 00:34，`C3 --arch x86` 全量重编 ucTreeView）：
+- cl 错误条数 **0 → 0**，退出码 0；产物 `.temp\o_uctv_check\Proyecto1.exe` 生成。
+- 仅剩 2 条非致命 warning（VB3003 / VB3001，见第 11 节），按口径不算失败。
+- 因此本轮无该类代码改动、未重建 RTL（`c3rtl.rc.res` 仍是 00:28:56 那版，新符号已核对过）。
+
+当前真实状态（供下一轮直接接手）：
+- 已修并已提交：编译器 cl 类全部（含 Extender 成员 / FontBold / FontUnderline / 字符串
+  字面量反斜杠），LNK2019 类全部，启动期 AV 两层，czUI DEP，bas Declare 出参。
+  dev 顶端 = `8cedb604`（+ 本轮 docs 提交）。
+- 未提交的本地改动：`tests\run_tests.ps1` 已加 `Test-VbpBuild "ucTreeView" ... -Arch "x86"`
+  （vbp_fixture_census 实测已因此转绿），但 `emit-manifest.expected.txt` 仍缺
+  `tests/ucTreeView/Proyecto1.vbp` 那一行 ⇒ manifest_coverage 仍红。
+- 剩余待办（按类）：① 静态门禁 7 格 diff 分类（第 14 节第 2 条）；② emit-manifest 逐行
+  现算登记（本地全量已起算，输出在 `.temp\emit-manifest.new.txt`，禁 `-Bless`）；
+  ③ `[C3_HOST_MEMBER_MISS] SetProp Font (cls=Edit)` 影响面核实；④ `uctreeview_px.ps1` +
+  真 VB6 截图对照；⑤ 交付与回调。
+
+**下一轮第一条**：`tests\run_tests.ps1` 的 ucTreeView 登记 + `emit-manifest.expected.txt` 新行
+（同一类：登记），提交推 GA；之后再按类读静态门禁 diff。
