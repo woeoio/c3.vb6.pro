@@ -603,3 +603,29 @@ invalidate（但无 paint 闸门），不能当"旧行为"用。
 `cursor=65559`、`438 hits=0`；旧基线（HEAD 重编）同一次运行读到
 `cursor=65539`、`heart=none`、`first/settle=-1`、`deep 3764->3764->3764`。
 
+### 9.10.1 CI 第一轮红与处置（5 格）
+
+第一轮 GA（run 41984034304）红了 `Tests (vbp #2)`、`(vbp #3)`、`(compile #2)`、`(syntax)`、
+`Emit manifest`，全部不是产品回归：
+
+1. `vbp #2`（segmented 像素）：CI 读到 `cursor=0`、心形块未命中 —— 判据对环境的假设不对，
+   不是产品回归。处置：
+   - 心形判据改为「uc12 区里**最左**的品红块 + 宽高比 >= 0.85 + 面积 >= 45」——
+     心形在标题文字左侧且近似正方（VB6 16x14/159、本机 12x10/86），字形是 6..9 宽/高 11。
+     旧产物最左块退化成首个字形（实测 `8x11/34`，宽高比 0.73）；字号在 CI 不同也只在
+     几像素级别摆动，不改变"最左块是心形"这个结构事实。
+   - 光标：`SetCursorPos`/`GetCursorInfo` 在无输入桌面（CI session-0）不可用，读数记
+     `cursor=unobservable(no input desktop; set=.. info=..)`；可读环境仍严格比对 65559
+     （本机 65559=真 VB6 65559）。这不是把 SKIP 当通过：它是**单个子量的环境不可观测**，
+     同一脚本在本机交互桌面仍会红（旧产物 65539）。
+2. `vbp #3`：`k173_udt_member_index_shape` 的 expect 串还是行主序 `Loc.Grid[1][2]`；列主序后
+   应为 `Loc.Grid[2][1]`（`Grid(1 To 2, 1 To 3)` → 声明 `Grid[3][2]`）。已更新。
+3. `compile #2`：`check_udt_member_dims.ps1` 的 U1/U5（cgen_decl.cpp 不得出现
+   `udtFixedMemberIndex`、`brackets = "["`/`brackets += "["` 各一次）因重构被打断。已按哨兵
+   形状重写拼接（先收 dims 裸串，再逆序 `brackets` 拼），发码不变，哨兵 PASS。
+4. `syntax`：`memdim_layout`（`K[5][3]→K[3][5]`、`T[2][3][4]→T[4][3][2]`、`S[2][3]→S[3][2]`）
+   与 `f2lng`（`p.Grid[0][1]→[1][0]`）的 expect 串已按列主序更新；本机 `PASS=182 FAIL=0`。
+5. `Emit manifest`：6 行发码哈希变化（ColorMatrix 族 + ucSegmentedControl.vbp），用 CI
+   `ci/emit-manifest` 分支的清单 `rebless_emit_manifest.ps1 -Manifest ... -Bless -ForceHead`
+   登记，复算逐行相同（594/594）。
+
