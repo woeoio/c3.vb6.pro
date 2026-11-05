@@ -525,5 +525,28 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
 
 ### 9.9 收口记录
 
-（填：提交哈希、双远端推送、GA run 结论。）
+- 提交（按功能拆分，`dev`）：
+  - `4532a1db` fix(rtl): 窗体 PaintPicture/AutoRedraw/Picture/Image 落地，消除运行期 438
+  - `dc1db6cb` fix(rtl): UserControl.ForeColor 写进当前绘制 DC，修标题/图例字色
+  - `255e64de` fix(project): frx DocString 按 DocProperty 精确定位，修 CheckBar 图标回退成 PUA 字形
+  - `bd877887` chore(diag): C3_LATEBIND_MISS 下打印 COM 晚绑定 438 站点
+  - `63aa1056` test(gui): segmented 补 438/字色/ItemVisible/Solid-Transparent/CheckBar 图标交互断言
+  - `0e6c1490` docs(handoff): 记录五缺陷闭环与旧/新对照读数
+- 本地：`tests\run_tests.ps1 -Category gui` → **PASS=10 FAIL=0 SKIP=0 TOTAL=10**（2026-11-05 11:29，
+  含 ucSegmentedControl 全部新断言：`darkPx=581` / `textPx=165` / `whitePx=639` / `back=0` / `hits=0`）。
+- 双远端 `github`/`origin` 的 `dev` 均已快进到上述提交（无 force）。
+
+**GA #41962953828（第一次）：FAIL** — `Tests (vbp #2)` 的唯一红是
+`点 Solid 后背景图未撤掉 (变化率 0.9898 > 0.02)`，同一次读数里 438 hits=0、其余断言全绿。
+- 证据：该 job 的 `ucSegmentedControl/pixels/segmented.err`（artifact `test-logs-vbp-2`）是
+  `Unhandled VB6 Error #53: File not found` + 调用栈，不是 438。
+- 根因：`ucSegmentedControl11_ItemClick` 里写的是
+  `Me.PaintPicture LoadPicture(App.Path & "\image.jpg"), …`，CI 的干净输出目录没有 `image.jpg`
+  （本地 `output\ucSegmentedControl\image.jpg` 是早先手工拷的）⇒ 第一次点 Transparent 就 #53
+  退出进程 ⇒ 后续截图全是死窗残影，`back` 与 `image` 都停在 0.988–0.989。
+- 修复（测试侧，0.5 行）：`segmented_px.ps1` 启动前把夹具 `tests\ucSegmentedControl\image.jpg`
+  放到 exe 同目录（夹具也缺才 FAIL，不 SKIP）。另加"可见宿主 rect 连续两次采样一致"的
+  布局稳定等待（本地首跑曾读到 `0,0 609x49` 的未完成 Form_Resize，会让宿主 rect 假红）。
+- 复测：在**干净目录**（只放 exe、不给 image.jpg）连跑两次均 PASS（`back=0`、`hits=0`）。
+  第二次 GA 结果见下一条。
 

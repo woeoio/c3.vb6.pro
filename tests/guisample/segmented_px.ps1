@@ -95,6 +95,17 @@ if ($peMachine -ne 0x014C) {
     exit 1
 }
 $wd = Split-Path $exePath
+# 缺陷4 前置资产: ucSegmentedControl11_ItemClick 里是
+# `Me.PaintPicture LoadPicture(App.Path & "\image.jpg"), ...`, 所以 exe 同目录必须有 image.jpg。
+# 本地 output 目录曾被手工补齐过, CI 的干净目录没有 ⇒ 第一次点 Transparent 就
+# Unhandled VB6 Error #53 (File not found), 进程随即退出, 后台图与后续读数全部失真
+# (GA 曾因此把 Solid 误判成"背景图未撤掉")。这里从夹具目录补齐; 夹具也缺才报 FAIL (不 SKIP)。
+$imgSrc = Join-Path (Split-Path $PSScriptRoot) "ucSegmentedControl\image.jpg"
+$imgDst = Join-Path $wd "image.jpg"
+if (-not (Test-Path $imgDst)) {
+    if (Test-Path $imgSrc) { Copy-Item $imgSrc $imgDst }
+    else { Write-Output ("FAIL 缺夹具资产 image.jpg ($imgSrc 不存在)"); exit 1 }
+}
 if (-not $OutDir) { $OutDir = Join-Path $wd "segmented_px" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $pngPath = Join-Path $OutDir "segmented_c3.png"
@@ -162,6 +173,25 @@ if ([Math]::Abs($ww - $expWW) -gt 1 -or [Math]::Abs($wh - $expWH) -gt 1) {
 }
 
 # --- 子窗: 12 个可见 UC 宿主 + 1 个隐藏宿主 + 命令按钮 ---
+# 先等布局稳定: uc1 (顶部条) 的宽度由 Form_Resize 拉到客户区宽, 首跑可能还没跑完 ——
+# 实测本地首跑读到 `0,0 609x49`、复跑 `0,0 751x49`, 会让下面的宿主 rect 断言假红。
+# 判据 = 可见宿主 rect 连续两次采样 (间隔 250ms) 完全一致, 最多等 2s。
+function GetHostRectSig {
+    $arr = New-Object System.Collections.ArrayList
+    $cbf = [SegPx+EnumProc]{ param($h,$l)
+        if ([SegPx]::Cls($h) -eq "VB6_UserControlHost" -and [SegPx]::IsWindowVisible($h)) {
+            $r = New-Object SegPx+RECT; [SegPx]::GetWindowRect($h, [ref]$r) | Out-Null
+            [void]$arr.Add("" + ($r.L - $pt.X) + "," + ($r.T - $pt.Y) + " " + ($r.R - $r.L) + "x" + ($r.B - $r.T))
+        }
+        return $true }
+    [SegPx]::EnumChildWindows($main, $cbf, [IntPtr]::Zero) | Out-Null
+    return (@($arr | Sort-Object) -join ";")
+}
+$sigPrev = ""; $sigNow = GetHostRectSig
+$tEnd = (Get-Date).AddSeconds(2)
+while ($sigNow -ne $sigPrev -and (Get-Date) -lt $tEnd) {
+    Start-Sleep -Milliseconds 250; $sigPrev = $sigNow; $sigNow = GetHostRectSig
+}
 $hosts = New-Object System.Collections.ArrayList
 $btns = New-Object System.Collections.ArrayList
 $cb2 = [SegPx+EnumProc]{ param($h,$l)
