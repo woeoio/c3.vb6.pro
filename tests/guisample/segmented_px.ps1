@@ -65,6 +65,10 @@ public class SegPx {
   [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
   [DllImport("user32.dll")] public static extern uint GetSysColor(int i);
   [DllImport("kernel32.dll")] public static extern bool IsWow64Process(IntPtr h, out bool wow64);
+  [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
+  [DllImport("user32.dll")] public static extern IntPtr ChildWindowFromPointEx(IntPtr h, POINT p, int flags);
+  [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int X, Y; }
   public static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, 256); return sb.ToString(); }
@@ -97,6 +101,9 @@ $pngPath = Join-Path $OutDir "segmented_c3.png"
 $logOut = Join-Path $OutDir "segmented.out"
 $logErr = Join-Path $OutDir "segmented.err"
 
+# 让 vb6com 在"COM 晚绑定成员解析失败(真 438)"时打印 [C3_438]; 宿主属性/方法解析失败则由
+# uc_hostmodel 无条件打印 [C3_HOST_438 #n] (HEAD 既有格式, 见 uc_hostmodel.c)。两者都算 438。
+$env:C3_LATEBIND_MISS = "1"
 $proc = Start-Process -FilePath $exePath -WorkingDirectory $wd `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr -NoNewWindow -PassThru
 if (-not $proc) { Write-Output "FAIL 无法启动 $exePath"; exit 1 }
@@ -251,6 +258,7 @@ $hlR = $hl -band 0xFF; $hlG = ($hl -shr 8) -band 0xFF; $hlB = ($hl -shr 16) -ban
 $hlHex = ('{0:X2}{1:X2}{2:X2}' -f $hlR, $hlG, $hlB)
 $nBlue = 0; $nMag = 0; $nMagExact = 0
 $mMinX = [int]::MaxValue; $mMinY = [int]::MaxValue; $mMaxX = -1; $mMaxY = -1
+$rowMag = @{}
 for ($y = 0; $y -lt $ch; $y++) { for ($x = 0; $x -lt $cw; $x++) {
     $c = $bmp.GetPixel($x, $y)
     if ($c.R -eq $hlR -and $c.G -eq $hlG -and $c.B -eq $hlB) { $nBlue++ }
@@ -258,20 +266,156 @@ for ($y = 0; $y -lt $ch; $y++) { for ($x = 0; $x -lt $cw; $x++) {
     # 品红族 (容许指示条两端圆角/抗锯齿的过渡色): R 高、G 低、B 高。
     if ($c.R -ge 180 -and $c.G -le 60 -and $c.B -ge 200) {
         $nMag++
+        if ($rowMag.ContainsKey($y)) { $rowMag[$y]++ } else { $rowMag[$y] = 1 }
         if ($x -lt $mMinX) { $mMinX = $x }; if ($x -gt $mMaxX) { $mMaxX = $x }
         if ($y -lt $mMinY) { $mMinY = $y }; if ($y -gt $mMaxY) { $mMaxY = $y }
     } } }
 $magW = 0; $magH = 0
 if ($nMag -gt 0) { $magW = $mMaxX - $mMinX + 1; $magH = $mMaxY - $mMinY + 1 }
+# 选中页签标题也是品红 (SelectedForeColor), 整块 bbox 高度会含字形; 指示条本身是"整行铺满"
+# 的横条, 故按行计数取铺满行来量厚度/跨度, 判据 (厚度 2..6、跨度 >=40) 不变。
+$barRows = @(); foreach ($k in $rowMag.Keys) { if ($rowMag[$k] -ge [Math]::Max(20, $magW * 0.8)) { $barRows += $k } }
+$barH = $barRows.Count; $barW = 0
+if ($barH -gt 0) { $barW = ($barRows | ForEach-Object { $rowMag[$_] } | Measure-Object -Maximum).Maximum }
 Add-Read ("accent highlight=#$hlHex($nBlue) CE00EF=$nMagExact magenta=$nMag bbox=${mMinX},${mMinY}-${mMaxX},${mMaxY} ${magW}x${magH}")
 # 真 VB6 参考: #0078D7=10670; 本机 C3 10715 (同一颜色, 故与硬编码时读数一致)。
 if ($nBlue -lt 8000) { Add-Fail ("选中段底色 #$hlHex (运行期系统高亮色) 只有 $nBlue 像素 (<8000, 选中态没画出来)") }
 # TAB2 指示条: 项宽随宿主字体度量变 (TextW + Padding*2), 故钉结构而不是某个宿主上的像素数:
 # 本机 400px@101x4, CI(Arial Narrow 回退) 237px; 没画/画歪/画成色块都会掉出下面这组边界。
 if ($nMag -lt 150) { Add-Fail ("TAB2 强调色 #CE00EF 品红族只有 $nMag 像素 (<150)") }
-if ($magH -lt 2 -or $magH -gt 6) { Add-Fail ("TAB2 指示条厚度 ${magH}px 不在 2..6 (TabIndicatorSize=4)") }
-if ($magW -lt 40) { Add-Fail ("TAB2 指示条水平跨度 ${magW}px < 40 (选中项指示条没画出来)") }
+if ($barH -lt 2 -or $barH -gt 6) { Add-Fail ("TAB2 指示条铺满行数 ${barH} 不在 2..6 (TabIndicatorSize=4)") }
+if ($barW -lt 40) { Add-Fail ("TAB2 指示条水平跨度 ${barW}px < 40 (选中项指示条没画出来)") }
 $bmp.Dispose()
+
+# ================= 交互回归: 438 / ItemVisible / Solid·Transparent / 标题与图例字色 =================
+# 上面的结构判据用 96dpi 虚拟坐标; 这里切到物理像素坐标系 (线程 DPI context -4),
+# 按 *设计期坐标 × 运行期缩放* 点击与测量 —— 既不改动上面的读数, 也不会在 125% 宿主上点偏。
+$prevCtx = [SegPx]::SetThreadDpiAwarenessContext([IntPtr](-4))
+Start-Sleep -Milliseconds 250
+$pr = New-Object SegPx+RECT; [SegPx]::GetClientRect($main, [ref]$pr) | Out-Null
+$pw = $pr.R - $pr.L; $ph = $pr.B - $pr.T
+$k = $pw / 751.0
+Add-Read ("interactive physical client=${pw}x${ph} scale=$([Math]::Round($k, 3))")
+
+function ShotP([string]$p) {
+    [SegPx]::RedrawWindow($main, [IntPtr]::Zero, [IntPtr]::Zero, 0x0185) | Out-Null
+    Start-Sleep -Milliseconds 350
+    $b = New-Object System.Drawing.Bitmap($pw, $ph)
+    $gg = [System.Drawing.Graphics]::FromImage($b)
+    $d = $gg.GetHdc(); $sdc = [SegPx]::GetDC($main)
+    [SegPx]::BitBlt($d, 0, 0, $pw, $ph, $sdc, 0, 0, 0x00CC0020) | Out-Null
+    [SegPx]::ReleaseDC($main, $sdc) | Out-Null
+    $gg.ReleaseHdc($d); $gg.Dispose()
+    try { $b.Save($p, [System.Drawing.Imaging.ImageFormat]::Png) } catch { }
+    return $b
+}
+# 设计期坐标 -> 该控件客户坐标, 投递一条完整的 左键 消息序列 (真实用户点击的同一路径)。
+function ClickDesign([int]$dx, [int]$dy) {
+    $pt = New-Object SegPx+POINT; $pt.X = [int]($dx * $k); $pt.Y = [int]($dy * $k)
+    $tgt = $main
+    while ($true) {
+        $chd = [SegPx]::ChildWindowFromPointEx($tgt, $pt, 0)
+        if ($chd -eq [IntPtr]::Zero -or $chd -eq $tgt) { break }
+        $sp = New-Object SegPx+POINT; $sp.X = $pt.X; $sp.Y = $pt.Y
+        [SegPx]::ClientToScreen($tgt, [ref]$sp) | Out-Null
+        [SegPx]::ScreenToClient($chd, [ref]$sp) | Out-Null
+        $tgt = $chd; $pt = $sp
+    }
+    $lp = [IntPtr](($pt.Y -shl 16) -bor ($pt.X -band 0xFFFF))
+    [SegPx]::PostMessage($tgt, 0x0200, [IntPtr]0, $lp) | Out-Null; Start-Sleep -Milliseconds 60
+    [SegPx]::PostMessage($tgt, 0x0201, [IntPtr]1, $lp) | Out-Null; Start-Sleep -Milliseconds 50
+    [SegPx]::PostMessage($tgt, 0x0202, [IntPtr]0, $lp) | Out-Null
+    Start-Sleep -Milliseconds 650
+}
+# 区域变化率 (每 step 像素抽样, 三通道差 > 12 记为变化)。旧行为下目标区域不变 => 0。
+function DiffPct($a, $b, [int]$x, [int]$y, [int]$w, [int]$h, [int]$step) {
+    $n = 0; $t = 0
+    $x1 = [Math]::Min($x + $w, $a.Width); $y1 = [Math]::Min($y + $h, $a.Height)
+    for ($yy = $y; $yy -lt $y1; $yy += $step) { for ($xx = $x; $xx -lt $x1; $xx += $step) {
+        $t++
+        $c1 = $a.GetPixel($xx, $yy); $c2 = $b.GetPixel($xx, $yy)
+        if (([Math]::Abs($c1.R - $c2.R) + [Math]::Abs($c1.G - $c2.G) + [Math]::Abs($c1.B - $c2.B)) -gt 12) { $n++ } } }
+    if ($t -eq 0) { return 0 }
+    return [Math]::Round($n / $t, 4)
+}
+
+$b0 = ShotP (Join-Path $OutDir "segmented_inter_0.png")
+# 标题字色: uc12 选中页签 "Tab 2" = SelectedForeColor #CE00EF (设计期 line 362-368)。
+$r12x = [int](224 * $k); $r12y = [int](56 * $k); $r12w = [int](261 * $k); $r12h = [int](41 * $k)
+$rowM = @{}; $maxRow = 0
+for ($yy = $r12y; $yy -lt $r12y + $r12h; $yy++) { for ($xx = $r12x; $xx -lt $r12x + $r12w; $xx++) {
+    $c = $b0.GetPixel($xx, $yy)
+    if ($c.R -eq 0xCE -and $c.G -eq 0 -and $c.B -eq 0xEF) {
+        if ($rowM.ContainsKey($yy)) { $rowM[$yy]++ } else { $rowM[$yy] = 1 } } } }
+foreach ($v in $rowM.Values) { if ($v -gt $maxRow) { $maxRow = $v } }
+$textMag = 0
+foreach ($yy in $rowM.Keys) { if ($rowM[$yy] -lt ($maxRow * 0.6)) { $textMag += $rowM[$yy] } }
+Add-Read ("tab2 title magenta=#$('CE00EF') textPx=$textMag barRowMax=$maxRow")
+if ($textMag -lt 60) { Add-Fail ("Tab 2 标题不是品红 (#CE00EF 字形像素 $textMag < 60, 被画成黑字?)") }
+# 图例字色: uc9 "OPEN EDITOR" ForeColor=vbHighlightText (白) 压在 #FF6BFF 胶囊底上。
+$r9x = [int](8 * $k); $r9y = [int](464 * $k); $r9w = [int](137 * $k); $r9h = [int](41 * $k)
+$white9 = 0
+for ($yy = $r9y; $yy -lt $r9y + $r9h; $yy++) { for ($xx = $r9x; $xx -lt $r9x + $r9w; $xx++) {
+    $c = $b0.GetPixel($xx, $yy)
+    if ($c.R -eq 255 -and $c.G -eq 255 -and $c.B -eq 255) { $white9++ } } }
+Add-Read ("openEditor whitePx=$white9")
+if ($white9 -lt 100) { Add-Fail ("'OPEN EDITOR' 图例不是白字 (纯白像素 $white9 < 100, 被画成黑字?)") }
+
+# 缺陷5: uc6 (CtrlType=1 CheckBar, 设计期 16,304 185x33) 下方四个图标必须是 .frx 的图片,
+# 不是 Segoe UI Symbol 的 PUA 字形回退。判据 = 深色像素数 (三通道 < 80; 选中格的蓝底不计):
+# 真图标 (纸夹/软盘/地球/相机) 笔画粗、覆盖大, 字形回退只有细笔画。
+# 实测物理像素: 旧产物 (frx 扫描式定位) 230; 新产物 (DocProperty 精确定位) 581 ⇒ 阈值 400。
+$r6x = [int](16 * $k); $r6y = [int](304 * $k); $r6w = [int](185 * $k); $r6h = [int](33 * $k)
+$dark6 = 0
+for ($yy = $r6y; $yy -lt $r6y + $r6h; $yy++) { for ($xx = $r6x; $xx -lt $r6x + $r6w; $xx++) {
+    $c = $b0.GetPixel($xx, $yy)
+    if ($c.R -lt 80 -and $c.G -lt 80 -and $c.B -lt 80) { $dark6++ } } }
+Add-Read ("checkbar icons uc6 darkPx=$dark6")
+if ($dark6 -lt 400) { Add-Fail ("CheckBar 四个图标没画成图片 (uc6 深色像素 $dark6 < 400, 退回 Segoe UI Symbol 字形?)") }
+
+# 缺陷3: <-- ItemVisible 按钮应显示/隐藏 uc4 的 Ok 图标。
+$r4x = [int](512 * $k); $r4y = [int](144 * $k); $r4w = [int](73 * $k); $r4h = [int](265 * $k)
+ClickDesign 636 236
+$b1 = ShotP (Join-Path $OutDir "segmented_inter_1.png")
+$d1 = DiffPct $b0 $b1 $r4x $r4y $r4w $r4h 2
+ClickDesign 636 236
+$b2 = ShotP (Join-Path $OutDir "segmented_inter_2.png")
+$d2 = DiffPct $b0 $b2 $r4x $r4y $r4w $r4h 2
+Add-Read ("itemVisible uc4 diff hide=$d1 restore=$d2")
+if ($d1 -lt 0.08) { Add-Fail ("点 '<-- ItemVisible' 后 uc4 右竖列几乎没变 (变化率 $d1 < 0.08, ItemVisible 不生效?)") }
+if ($d2 -gt 0.01) { Add-Fail ("再次点 '<-- ItemVisible' 未恢复原样 (变化率 $d2 > 0.01)") }
+
+# 缺陷4: uc11 第 1 项 Transparent 应显示背景图 image.jpg, 第 0 项 Solid 应恢复。
+ClickDesign 700 448
+$b3 = ShotP (Join-Path $OutDir "segmented_inter_3.png")
+$d3 = DiffPct $b0 $b3 0 0 $pw $ph 3
+ClickDesign 628 448
+$b4 = ShotP (Join-Path $OutDir "segmented_inter_4.png")
+$d4 = DiffPct $b0 $b4 0 0 $pw $ph 3
+Add-Read ("solidTransparent diff image=$d3 back=$d4")
+if ($d3 -lt 0.40) { Add-Fail ("点 Transparent 后背景图没上屏 (全客户区变化率 $d3 < 0.40, Picture/PaintPicture 不生效?)") }
+if ($d4 -gt 0.02) { Add-Fail ("点 Solid 后背景图未撤掉 (变化率 $d4 > 0.02)") }
+
+# 缺陷1: 全程不得出现真实 438 (宿主/COM 成员解析失败) 或错误对话框。
+# 两套标签都收: HEAD 既有 [C3_HOST_438 #n] (uc_hostmodel.c, 无条件) 与 [C3_438] (vb6com,
+# 受 C3_LATEBIND_MISS 门控)。只匹配前者以外的那一种曾让"旧行为下变红"失效 —— 旧产物报的
+# 正是 [C3_HOST_438 #1] site=GetProp name="PaintPicture"。
+$n438 = 0
+if (Test-Path $logErr) {
+    $n438 = (Select-String -Path $logErr -Pattern '\[C3_HOST_438|\[C3_438\]' -ErrorAction SilentlyContinue).Count
+}
+Add-Read ("error438 hits=$n438")
+if ($n438 -ne 0) { Add-Fail ("交互期间出现 $n438 次 438 日志 (宿主/COM 属性方法解析失败, 见 segmented.err)") }
+$dlg = [IntPtr]::Zero
+$cbD = [SegPx+EnumProc]{ param($h, $l)
+    $pp = 0; [SegPx]::GetWindowThreadProcessId($h, [ref]$pp) | Out-Null
+    if ($pp -eq $proc.Id -and [SegPx]::IsWindowVisible($h) -and [SegPx]::Cls($h) -eq "#32770") { $script:dlg = $h }
+    return $true }
+[SegPx]::EnumWindows($cbD, [IntPtr]::Zero) | Out-Null
+if ($dlg -ne [IntPtr]::Zero) { Add-Fail ("交互后弹出错误对话框: '" + [SegPx]::Txt($dlg) + "' (疑似 Run-time error 438)") }
+
+foreach ($bb in @($b0, $b1, $b2, $b3, $b4)) { $bb.Dispose() }
+try { [SegPx]::SetThreadDpiAwarenessContext($prevCtx) | Out-Null } catch { }
 
 try { if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(3000) | Out-Null } } catch { }
 
