@@ -429,3 +429,116 @@ ucTreeViewPlus.ctl(1347,5): warning VB3001: 未声明的标识符: 'Cls' (可能
 **下一轮第一条（回到主线）**：编译并运行 `.temp\probe_coll.bas`（Collection 的 Variant
 索引取值），再用 `SetForegroundWindow` 重拍 `output\ucTreeView` 截图，分离
 「图像失败 → 节点不绘制」与第二条原因。
+
+## 19. 树区空白 = 两条独立因果（2026-11-06，已修完并 GA 22/22）
+
+### 19.1 分离验证的两个结果（都不是猜的）
+
+- **结果 A「有节点无图」**：没有出现。把 `ImageListDraw` 在函数头直接
+  `ImageListDraw = True : Exit Function` 短路（其余不动），SetForegroundWindow +
+  SetWindowPos(TOPMOST) + CopyFromScreen 重拍：树区（UC 宿主）**仍全 240 灰**，
+  `white=0 bg240=77703/77703 dark=0 darkRows=0 hl=0` ⇒ 节点也没画。
+- **结果 B「仍然无节点」**：成立。⇒ 修图标不可能让树出图；必须另找一条。
+
+### 19.2 因果链一：`cImageList(index)` 返 0（图标 / 「THE IMAGE: n DON'T EXIST」）
+
+插桩副本（`.temp\ucview_probe`，只动副本）输出（`.temp\probe4b.out`）：
+
+```
+IMG_ADD path=...\out_probe4\img\facebook.png h=49357968 size=20x20 vt=8
+IMG_ADDED uc=16356176 coll=16328896 count=1 err=0
+IMG_CHK now=0 addrh=15724776          <-- 同一帧、hImage 还活着，取回已经是 0
+...
+ILD1 uc=16356176 coll=16328896 err=0  <-- 同一个 UC 实例
+ILD2 count=3 err=0                    <-- 集合里确有 3 项
+ILD3 idx=1 vt=3 err=0                 <-- 索引是 VT_I4 = 1
+ILD4 img=0 err=0 desc=
+THE IMAGE: 1 DON'T EXIST
+```
+
+⇒ 不是实例不一致、不是 key/索引语义、不是 Add 没成功、也没有被 `On Error Resume Next`
+吞掉任何错误。最小复现（`.temp\probe_coll2.bas`，实测
+`.temp\probe_coll2c.out`）：
+
+```
+BYREF_PARAM=111     ' c.Add p   (形参, cgen 发 vb6_ComPackInt 按值)  -> 取回 111
+LOCAL_VAR=0         ' c.Add t   (局部变量, cgen 发 vb6_ComPackIntRef 按引用) -> 取回 0
+```
+
+根因：`ImageListAddImage` 里的 `hImage` 是**局部变量**，cgen 按 VB6 默认 ByRef 发
+`vb6_ComPackIntRef(&hImage)`（`VT_BYREF|VT_I4`，形状本身没错），而
+`uc_hostmodel.c` 的 `vb6_Host_FromWinVariant` 把 `VT_BYREF` **刻意折成 Empty**
+（原注释「归 §B144 的另一问」）⇒ 集合里存的是空值，取回恒 0。
+修法：`uc_collection_api.inc` 在入库前先 `VariantCopyInd` 解引用（VB6 的 Collection
+本来就是存值拷贝），`vb6_Host_FromWinVariant` 自身口径不动。
+
+### 19.3 因果链二：`hdc = 0`（真正的「树区空白」）
+
+在 `Update`/`Draw`/`RecursiveDraw` 插桩后（`.temp\probe5.out`）：
+
+```
+UPD font=NOTHING (exit)      ' Initialize 第一帧, m_Font 还没 ReadProps
+DRAW enter hdc=0 nodes=0 ... ' Resize
+UC_SHOW
+DRAW enter hdc=0 nodes=0 ...
+IMG_ADD ...                  ' Form_Load 加图
+UPD enter
+DRAW enter hdc=0 nodes=3 ... ' 节点确实有 3 个, Draw 真的跑了, 但 hdc=0
+```
+
+⇒ 节点构建没问题（`Nodes=3`、`RD childs=3`），是 **`UserControl.hdc` 为 NULL**：
+GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只剩宿主铺的 240。
+
+根因：`.ctl` 头部 `AutoRedraw = -1  'True` 是**设计期**属性，VB6 在创建 UserControl 时
+就置 `AutoRedraw=True`（hDC = 常驻离屏位图）；C3 只认 VB 代码里的
+`UserControl.AutoRedraw = True`，`.ctl` 头部这一行**整个被丢弃**（句柄链
+`vb6_uc_push` 里 `r->hdc ? … : (adSurf.memDC ? autoRedrawDC : NULL)` ⇒ NULL）。
+
+修改站点（4 处 + 判据）：
+1. `src/rtl/core/vb6forms/vb6forms_controls.h`：`vb6_UserControlDesc` **末尾追加**
+   `int32_t autoRedraw`（只许追加，保持前缀字段序一致）。
+2. `src/backend/module/cgen_form.cpp`：从 `formControl.properties` 读 `AutoRedraw`
+   并把新槽作为 desc 初值**最后一行**输出（注意前一行要补逗号）。
+3. `src/rtl/core/vb6forms/uc/detail/uc_host_create.inc`：建窗后
+   `if (desc->autoRedraw) vb6_uc_autoRedrawSet(r, 1);`（必须**当场**建表面：
+   `vb6_uc_push` 只在 `adSurf.memDC` 已存在时才交 adSurf）。
+4. `src/rtl/core/vb6forms/uc/detail/uc_collection_api.inc`：`vb6_coll_fromWin` 先解
+   `VT_BYREF`（`VariantCopyInd`），`vb6_Collection_Add/AddKeyed` 走它。
+5. `tests/guisample/uctreeview_px.ps1`（新增）+ `tests/run_tests.ps1` 的
+   `Test-VbpBuild -AssetDir img -PixelAssert …`：真桌面 `CopyFromScreen`；
+   判 5 条（白底占比≥15%、240 灰底≤40%、深色行≥10、`255,180,180`≥50、彩色像素≥300）。
+
+### 19.4 改前 / 改后读数（同一台机、同一抓法、同一区域）
+
+| 读数 | 改前（hdc=0） | 改后 |
+|---|---|---|
+| 树区白底 `255,255,255` | 0 | 48052（≈61% 面积） |
+| 宿主灰底 `240,240,240` | 77703（100%） | 5446（7%） |
+| 深色像素 / 文本行 | 0 / 0 | 15607 / 445 |
+| 选中高亮 `255,180,180` | 0 | 2521 |
+| 图标彩色像素（max-min≥60） | 0 | 3559 |
+| `THE IMAGE: n DON'T EXIST` | 3 条 | 0 条 |
+
+`tests/guisample/uctreeview_px.ps1` 已经两向验过：旧产物
+（`.temp\out_probe4\Proyecto1.exe`，hdc=0）**FAIL rc=1**；新产物 **PASS rc=0**。
+
+### 19.5 产物 / 提交 / GA
+
+- `C3 --arch x86 tests\ucTreeView\Proyecto1.vbp --output-dir output\ucTreeView`
+  ⇒ `output\ucTreeView\Proyecto1.exe` **820224 B**；`img\` 已随产物。
+- `c3rtl.rc.res` 重建（2292xxx B 级），`check_rtl_embedded` 126 项逐字节一致。
+- 提交：`a70c8b75`（cgen+RTL+判据）、`40a091a2`（emit-manifest 登记 11 行），双远端 dev。
+- GA：`42113452221`（head 40a091a2）**22/22 success，0 failure，0 skipped**；
+  前一枚 `42111911172` 只红「Emit manifest (shape oracle)」= 形状登记未同步（11 行）。
+
+### 19.6 本轮未做、已登记的真实缺陷（别当成已修）
+
+1. **`Debug.Print <默认成员调用>` 打印的是返回 VARIANT 的指针**：
+   `.temp\probe_coll.bas` 里 `c.Add 111` 后 `Debug.Print c(1)` 印出 `7953936`
+   （`(int32_t)(vb6_ComCallByDispid(...))` 直接强转指针），而 `n = c(v)` 正常。
+   生成码侧 `Debug.Print` 实参转换需要按 Variant 取值，不是本轮树区因果链。
+2. `ucTreeViewPlus.ctl(1347,5): warning VB3001: 未声明的标识符: 'Cls'`：
+   `UserControl.Cls` 未解析。当前 Draw 自己会填满背景，单帧看不出问题，
+   但连续重绘可能残留旧像素 —— 与 1:1 目标仍有差，待单独查。
+3. `ucTreeViewPlus.ctl` 里 `youtube/mensajero/tik-tok` 三张图两套 `img` 目录都真缺，
+   真 VB6 同样取不到 ⇒ 不是缺陷，别去补假图。
