@@ -129,7 +129,17 @@ typedef struct vb6_UCRec {
     // 控件 (ComCtlsDemo 的 FrameW) 永远是白板。adOn = VB 代码写过 .AutoRedraw = True。
     vb6_UCDib adSurf;
     int32_t   adOn;
+    // 缺陷 1 (禁用项光标): `UserControl.MousePointer = v` 是**每实例**状态 ——
+    // 之前只会写裸全局 vb6_UserControl_MousePointer, 宿主窗口从不读它,
+    // 于是 .ctl 里给 Disabled 项设的 vbNoDrop(12) 一直不生效。
+    int32_t   mousePointer;
 } vb6_UCRec;
+
+// 缺陷 3: Refresh 的重入闸门。WM_PAINT/WM_PRINTCLIENT 进出时加减; Refresh 只在
+// depth==0 时才 invalidate+update (否则 PAINT→Refresh→PAINT 死循环)。
+void vb6_UC_PaintEnter(void);
+void vb6_UC_PaintLeave(void);
+int32_t vb6_UC_PaintDepth(void);
 
 // UserControl 宿主状态快照（push/pop 用）
 typedef struct vb6_UCSaved {

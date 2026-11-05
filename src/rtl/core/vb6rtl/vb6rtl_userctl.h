@@ -298,6 +298,9 @@ void vb6_UC_SetAutoRedraw(void* value);
 /* 账 <font-color>: `UserControl.ForeColor = v` 的代码生成侧入口 —— 写全局 + 立刻
    设当前 paint DC 的文本色 (VB6 的 UserControl.hDC 吃这个色)。 */
 void vb6_UC_SetForeColor(int32_t ole);
+/* 缺陷 1: `UserControl.MousePointer = v` 的代码生成侧入口 —— 存进本实例记录并
+   把光标应用到宿主窗口 (vbNoDrop => IDC_NO 等系统光标)。 */
+void vb6_UC_SetMousePointer(int32_t pointer);
 /* 同上: 窗体第一帧之前把 TabStrip 宿主沉到父窗口最底 (VB6 实测 z 序)。 */
 void vb6_UC_SinkTabBackdrops(void* parentHwnd);
 int32_t vb6_UC_GetExtenderMemberNum(const wchar_t* name);

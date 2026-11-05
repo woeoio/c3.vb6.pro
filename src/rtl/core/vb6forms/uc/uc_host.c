@@ -385,12 +385,19 @@ void vb6_UC_PopInstance(void) {
 }
 
 void vb6_UC_RefreshCurrent(void) {
-    // czUI fix: 不能 invalidate+update — UserControl_Paint/RedrawControl 末尾的
-    // `If AutoRedraw Then UserControl.Refresh` 会在 WM_PAINT 内强制同步重绘,
+    // czUI fix: WM_PAINT 内**不能** invalidate+update — UserControl_Paint/RedrawControl
+    // 末尾的 `If AutoRedraw Then UserControl.Refresh` 会在 WM_PAINT 里强制同步重绘,
     // 形成 PAINT→Refresh→PAINT 无限循环 (czFormDemo 顶部 ~110fps 闪烁)。
-    // RTL 绘制是立即模式 (直接画到窗口 DC, 无 AutoRedraw 离屏位图),
-    // WM_PAINT 本身已完成全量绘制, Refresh 在此架构下无事可做。
-    (void)0;
+    // 但反过来"什么都不做"也不对 (缺陷 3): .ctl 的自定义属性 Let (ItemVisible 等)
+    // 只调 Refresh, 没有别处 invalidate ⇒ 属性改了窗口却不失效, 实测点击后 22.7s
+    // 内一次重绘都没有 (参考 VB6 同操作 140ms 首帧 / 340ms 稳定)。所以这里:
+    //   绘制中(depth>0) → 短路 (保留上面那条防环); 否则 → 失效 + 同步重绘,
+    //   与 VB6 Refresh 的"立即上屏"语义一致。
+    if (vb6_UC_PaintDepth() > 0) return;
+    vb6_UCRec* r = vb6_ucCurrent;
+    if (!r || !r->hwnd) return;
+    InvalidateRect(r->hwnd, NULL, FALSE);
+    UpdateWindow(r->hwnd);
 }
 
 // Fix 133u: UserControl.Cls — 清空控件的客户区背景, 下一轮 WM_PAINT 重绘.

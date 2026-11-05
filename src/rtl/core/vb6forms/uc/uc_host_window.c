@@ -115,6 +115,57 @@ void vb6_UC_SetForeColor(int32_t ole) {
     }
 }
 
+/* ---------------------------------------------------------------------------
+   缺陷 1 (禁用项光标): `UserControl.MousePointer = v` 的落地点。
+   .ctl 在 MouseMove 里对 Disabled 项设 vbNoDrop(12)、对可用项设 vbCustom(99),
+   之后自备 hCur 时再 SetCursor。C3 以前只把值写进裸全局、宿主窗口从不读,
+   于是禁用项悬停仍是箭头 (实测 VB6 参考 IDC_NO=65559, C3 = 箭头)。
+   现在: 存进**本实例**记录, 并立即把光标应用到宿主窗口。
+   映射按 VB6 MousePointerConstants (1..15 是系统光标, 99=vbCustom 不映射)。
+   --------------------------------------------------------------------------- */
+static int32_t vb6_ucPaintDepth = 0;
+void vb6_UC_PaintEnter(void) { vb6_ucPaintDepth++; }
+void vb6_UC_PaintLeave(void) { if (vb6_ucPaintDepth > 0) vb6_ucPaintDepth--; }
+int32_t vb6_UC_PaintDepth(void) { return vb6_ucPaintDepth; }
+
+static LPCWSTR vb6_uc_cursorName(int32_t mp) {
+    switch (mp) {
+    case 1:  return (LPCWSTR)(intptr_t)32512; /* IDC_ARROW        vbArrow        */
+    case 2:  return (LPCWSTR)(intptr_t)32515; /* IDC_CROSS        vbCrosshair    */
+    case 3:  return (LPCWSTR)(intptr_t)32513; /* IDC_IBEAM        vbIbeam        */
+    case 4:  return (LPCWSTR)(intptr_t)32641; /* IDC_ICON         vbIconPointer  */
+    case 5:  return (LPCWSTR)(intptr_t)32646; /* IDC_SIZEALL      vbSizePointer  */
+    case 6:  return (LPCWSTR)(intptr_t)32643; /* IDC_SIZENESW     vbSizeNESW     */
+    case 7:  return (LPCWSTR)(intptr_t)32645; /* IDC_SIZENS       vbSizeNS       */
+    case 8:  return (LPCWSTR)(intptr_t)32642; /* IDC_SIZENWSE     vbSizeNWSE     */
+    case 9:  return (LPCWSTR)(intptr_t)32644; /* IDC_SIZEWE       vbSizeEW       */
+    case 10: return (LPCWSTR)(intptr_t)32516; /* IDC_UPARROW      vbUpArrow      */
+    case 11: return (LPCWSTR)(intptr_t)32514; /* IDC_WAIT         vbHourglass    */
+    case 12: return (LPCWSTR)(intptr_t)32648; /* IDC_NO           vbNoDrop       */
+    case 13: return (LPCWSTR)(intptr_t)32650; /* IDC_APPSTARTING  vbArrowHourglass */
+    case 14: return (LPCWSTR)(intptr_t)32651; /* IDC_HELP         vbArrowQuestion */
+    case 15: return (LPCWSTR)(intptr_t)32646; /* IDC_SIZEALL      vbSizeAll      */
+    default: return NULL;                     /* 0=vbDefault / 99=vbCustom      */
+    }
+}
+
+void vb6_UC_SetMousePointer(int32_t pointer) {
+    vb6_UserControl_MousePointer = pointer;
+    vb6_UCRec* r = vb6_ucCurrent;
+    if (!r) return;
+    r->mousePointer = pointer;
+    LPCWSTR nm = vb6_uc_cursorName(pointer);
+    if (!nm || !r->hwnd) return;
+    /* 只在指针确实停在本控件的客户区时才立刻改光标 (VB6 的语义), 否则交给
+       WM_SETCURSOR 在鼠标移进来时应用。 */
+    POINT pt;
+    if (!GetCursorPos(&pt)) return;
+    RECT rc;
+    if (!GetWindowRect(r->hwnd, &rc)) return;
+    if (!PtInRect(&rc, pt)) return;
+    SetCursor(LoadCursorW(NULL, nm));
+}
+
 static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch) {
     HWND sibs[64];
     int sibCount = 0;
@@ -327,6 +378,15 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 vb6_uc_pop(&saved);
             }
             return 0;
+        case WM_SETCURSOR:
+            /* 缺陷 1: .ctl 在 MouseMove 里设 UserControl.MousePointer (Disabled 项
+               = vbNoDrop/IDC_NO)。此前那颗全局没人读 ⇒ 光标永远是箭头。这里按本实例
+               记录回答: 命中客户区时用映射出的系统光标, 其余交回 DefWindowProc。 */
+            if (r && r->ready && (int32_t)(lParam & 0xFFFF) == 1 /* HTCLIENT */) {
+                LPCWSTR nm = vb6_uc_cursorName(r->mousePointer);
+                if (nm) { SetCursor(LoadCursorW(NULL, nm)); return TRUE; }
+            }
+            break;
         case WM_LBUTTONDOWN:
         case WM_RBUTTONDOWN:
         case WM_LBUTTONUP:
@@ -411,9 +471,11 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             HDC hdc = BeginPaint(hwnd, &ps);
             RECT crc;
             GetClientRect(hwnd, &crc);
+            vb6_UC_PaintEnter();
             vb6_uc_paintInto(hwnd, r, hdc,
                              (int32_t)(crc.right - crc.left),
                              (int32_t)(crc.bottom - crc.top), 1);
+            vb6_UC_PaintLeave();
             EndPaint(hwnd, &ps);
             return 0;
         }
@@ -423,9 +485,11 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             if (!r || !r->ready || !r->desc || !r->desc->paint) break;
             RECT crc;
             GetClientRect(hwnd, &crc);
+            vb6_UC_PaintEnter();
             vb6_uc_paintInto(hwnd, r, (HDC)wParam,
                              (int32_t)(crc.right - crc.left),
                              (int32_t)(crc.bottom - crc.top), 0);
+            vb6_UC_PaintLeave();
             return 0;
         }
         case WM_ERASEBKGND:

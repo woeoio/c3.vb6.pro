@@ -109,6 +109,13 @@
                                 ");  /* UserControl.ForeColor = v (DC 文本色) */");
                     return;
                 }
+                /* 缺陷 1: MousePointer 也要落进实例记录并应用到宿主窗口。以前裸写全局,
+                   宿主窗口从不读 => .ctl 给 Disabled 项设的 vbNoDrop 不生效。 */
+                if (tgtHp == "vb6_UserControl_MousePointer") {
+                    c_.emitLine("vb6_UC_SetMousePointer((int32_t)(intptr_t)" + valHp +
+                                ");  /* UserControl.MousePointer = v (光标) */");
+                    return;
+                }
                 c_.emitLine(tgtHp + " = " + valHp + ";  /* <host pseudo>.<prop> = v */");
                 return;
             }
