@@ -521,8 +521,15 @@ void CCodeGen::visit(ForEachStmt& node) {
                 // Fix 090aa: 项目类变量 (vb6_cls_X*) 作 For Each 元素 — 元素是
                 // COM VARIANT(IDispatch*), 提取后 cast 到类指针. 此前漏查 knownClassVars_
                 // → 走 Variant 分支 oClient = vb6_VARIANT → C2440.
+                // ucTreeView: pdispVal 是 **vb6_ComObject 包装器**（vb6comserver.h 布局:
+                // x86 偏移 12 才是 vb6Instance）。直接当 vb6_cls_X* 读字段实测 AV
+                // (RecurCalcTreeWidth 的 N->SubText, av read target=0x650060)。还原必须
+                // **定点**放这里: vb6_ComUnpackObject 保持原语义(交 IDispatch), 否则接口视图
+                // /As Object 那一族拿不到可 QI 的指针 (k174_vieweach_station_a sum 303→0)。
+                const std::string boxClass = "_vb6_fe_box_" + std::to_string(tmpIdx);
+                c_.emitLine("void* " + boxClass + " = vb6_ComUnpackObject(&" + feVar + ");");
                 c_.emitLine(varAcc + " = (vb6_cls_" + cIdent(knownClassVars_[lower])
-                            + "*)vb6_ComUnpackObject(&" + feVar + ");  /* P24-05: For Each 项目类: VARIANT→IDispatch*→类指针 */");
+                            + "*)vb6_ComObject_UnboxVb6Instance(" + boxClass + ");  /* P24-05: For Each 项目类: 包装器→实例 */");
             } else {
                 emitVariantSlotStore(varAcc, "vb6_VariantFromStackVARIANT(&" + feVar + ")", true);  /* §B164 站③ COM 集合: 栈 VARIANT 带权副本 = 自己持有(改前只赋不清, 每元素漏 81/71 B) */
             }

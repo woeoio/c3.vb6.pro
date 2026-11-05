@@ -230,6 +230,17 @@ stdout 的 `THE IMAGE: n DON'T EXIST` 是夹具自己的 `Debug.Print`（`ucTree
 —— 宿主成员分派对原生 Edit 的 `Font` 赋值还没有应答臂；像素对照前要确认它是否影响文字度量
 （下一轮先查 `vb6_uc_hostmodel_setprop` 的 Font 臂）。
 
+**回归与定点化（GA 首轮 22→21 后修）**：全局在 `vb6_ComUnpackObject` 里解包实例打断了
+`k174_vieweach_station_a`（`K174-sum=303/skipped=2` → `0/4`：接口视图分支必须拿到
+**IDispatch 包装器**才能问 `ClassNameA` 选实现类）。最终形态：
+- `vb6_ComUnpackObject` **保持原语义**（只做宿主包装器解包，交 IDispatch）；
+- 新增 `vb6_ComObject_UnboxVb6Instance()`（`vb6comserver_obj.c`，与 `IsBoxed` 同闸；
+  非包装器/未绑实例原样交回）；
+- 只在 `cgen_control.cpp` 的 **For Each 项目类**分支（`knownClassVars_`）发射
+  `void* _vb6_fe_box_N = vb6_ComUnpackObject(&v); x = (vb6_cls_X*)vb6_ComObject_UnboxVb6Instance(_vb6_fe_box_N);`。
+- 本地实测（23:54）：`K174-sum=303 / K174-skipped=2 / K174-DONE` ✓；
+  ucTreeView 重编后仍 `ALIVE title=Form1`、无 `[C3_CRASH]`/`[C3_HOST_438]` ✓。
+
 ## 11. 剩余 2 条 warning 的口径
 
 ```

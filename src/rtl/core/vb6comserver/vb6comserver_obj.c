@@ -762,6 +762,18 @@ int32_t vb6_ComObject_IsBoxed(void* v) {
     return ((vb6_ComObject*)v)->vtable == &g_ComObjectVtable;
 }
 
+/* ucTreeView: For Each 项目类要把集合/COM 交回来的 vb6_ComObject **包装器**还原成
+ * 实例指针 —— 生成码随后按 `vb6_cls_X*` 读字段 (包装器布局 x86 偏移 12 才是实例,
+ * 当类指针解引用实测 av read target=0x650060)。IsBoxed 有 IsWindow/可读闸 ⇒
+ * 外部 IDispatch / 裸 HWND 原样交回; 包装器尚未绑实例时也原样交回 (旧行为)。
+ * **不要**把它并进 vb6_ComUnpackObject: 接口视图/`As Object` 那一族要的是
+ * IDispatch (k174_vieweach_station_a 的 QI 判据)。 */
+void* vb6_ComObject_UnboxVb6Instance(void* v) {
+    if (!vb6_ComObject_IsBoxed(v)) return v;
+    void* inst = vb6_ComObject_GetInstance(v);
+    return inst ? inst : v;
+}
+
 /* 账 #305 §B189 第一档: 见 vb6comserver.h 声明处的论证。char*→BSTR 走 CP_ACP 那一条,
  * 与本文件上方 progId / 类名那几处同一口径 (VB 的类模块名允许非 ASCII 标识符)。
  * 认不出 (不是我们的包装器 / desc 缺 / 名为空) 一律 NULL —— 调用方那一路要交回原答案。 */

@@ -188,6 +188,11 @@ void* vb6_ComObject_GetInstance(void* pdisp);
 // (IsWindow / IsBadReadPtr / 首字段可读), 最后一闸换成**身份**: 首字段 == g_ComObjectVtable。
 int32_t vb6_ComObject_IsBoxed(void* v);
 
+// ucTreeView: 包装器→实例的**定点**还原 (For Each 项目类分支专用)。与上面 IsBoxed
+// 同闸 (IsWindow / 可读 / vtable 身份), 非包装器原样交回; 不要并进 vb6_ComUnpackObject
+// —— 接口视图/As Object 那一族要的是 IDispatch (k174_vieweach_station_a)。
+void* vb6_ComObject_UnboxVb6Instance(void* v);
+
 // 账 #305 §B189 第一档: 「这枚包装器是哪一枚工程类」—— 交类模块名 (VB6 的 TypeName 对
 // 工程内类实例答的就是类模块名)。只认 vb6_ComObject_IsBoxed 说"是"的值, 其余一律 NULL:
 // 调用方 (vb6rtl_conv.c 的 vb6_TypeName) 拿 NULL 就继续走它原来的答案, 本刀不改标签也不改档。
