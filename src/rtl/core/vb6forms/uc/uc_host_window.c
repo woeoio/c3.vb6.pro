@@ -101,6 +101,20 @@ void vb6_uc_autoRedrawCls(vb6_UCRec* r) {
     vb6_uc_fillAmbient(r->adSurf.memDC, r->adSurf.w, r->adSurf.h);
 }
 
+/* 当前正在绘制的 UC 目标 DC (NULL = 不在绘制中)。见 vb6_UC_SetForeColor。 */
+static HDC vb6_uc_activePaintDC = NULL;
+
+/* 账 <font-color>: 真 VB6 的 `UserControl.ForeColor = v` 立即改变 UserControl.hDC
+   的文本色 (控件随后 DrawTextW 画的标题/图例就吃这个色)。cgen 把这条赋值发到本函数
+   (见 cgen_assign_host_pseudo.inc), 不再只写全局变量。 */
+void vb6_UC_SetForeColor(int32_t ole) {
+    vb6_UserControl_ForeColor = ole;
+    if (vb6_uc_activePaintDC) {
+        COLORREF cr = (((uint32_t)ole & 0x80000000u) != 0) ? GetSysColor(ole & 0xFF) : (COLORREF)ole;
+        SetTextColor(vb6_uc_activePaintDC, cr);
+    }
+}
+
 static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch) {
     HWND sibs[64];
     int sibCount = 0;
@@ -108,6 +122,23 @@ static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch) {
 
     vb6_uc_fillAmbient(memDC, cw, ch);
     if (!ClientToScreen(hwnd, &self)) return;
+
+    /* 账 <transparency>: 真 VB6 的 UserControl 是 windowless, 控件的半透明填充
+       (BackColorOpacity=60) 直接叠在**窗体背景**上 —— 背景图/Form.Picture 能透过来。
+       C3 的 UC 是子窗口 + 离屏 DIB, DIB 以前只铺 ambient BackColor, 于是半透明只能
+       和白色混 (Solid/Transparent 点了以后各控件仍是白板)。这里先把父窗体的
+       AutoRedraw 持久表面 (= 窗体当前背景, 含 PaintPicture 画进去的 image.jpg)
+       对应区域铺进 DIB, 再合成兄弟; 与 VB6 的累积绘制顺序一致。 */
+    {
+        HWND parent = GetParent(hwnd);
+        HDC pdc = parent ? (HDC)GetPropW(parent, L"VB6_AutoRedrawDC") : NULL;
+        if (pdc) {
+            POINT pp = { 0, 0 };
+            pp.x = self.x; pp.y = self.y;
+            if (ScreenToClient(parent, &pp))
+                BitBlt(memDC, 0, 0, cw, ch, pdc, pp.x, pp.y, SRCCOPY);
+        }
+    }
 
     /* GW_HWNDNEXT 走"本窗之下"的同层兄弟; 收集后**倒序**绘制 (最底下的先画)。*/
     for (HWND s = GetWindow(hwnd, GW_HWNDNEXT); s && sibCount < 64;
@@ -173,6 +204,22 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
        一个站点设一次，三条 DC 路径 (AutoRedraw / DIB / 目标) 都吃到。 */
     SetBkMode(dc, TRANSPARENT);
 
+    /* 账 <font-color>: 真 VB6 里 `UserControl.ForeColor = v` 会落到 hDC 的文本色,
+       控件里的 `DrawTextW UserControl.hDC, ...` 因此吃 ForeColor / SelectedForeColor。
+       C3 以前只把它写进 vb6_UserControl_ForeColor 全局, DC 文本色永远是黑的 ——
+       实测 uc12 选中页签标题 (SelectedForeColor=#CE00EF 品红) 与 uc9 "OPEN EDITOR"
+       (ForeColor=vbHighlightText 白) 全被画成黑字 (问题 1)。这里每条 DC 路径都先
+       按全局值设一次, 控件随后的赋值 (vb6_UC_SetForeColor) 再逐段覆盖。 */
+    {
+        int32_t fc = vb6_UserControl_ForeColor;
+        COLORREF cr = (((uint32_t)fc & 0x80000000u) != 0) ? GetSysColor(fc & 0xFF) : (COLORREF)fc;
+        SetTextColor(dc, cr);
+    }
+    /* 嵌套绘制 (透明 UC 的 composeBelow 会给兄弟发 WM_PRINTCLIENT) 会进到这里:
+       保存外层 DC, 回来后还原, 否则外层控件随后的 ForeColor 赋值落不到自己的 DC。 */
+    HDC prevPaintDC = vb6_uc_activePaintDC;
+    vb6_uc_activePaintDC = dc;
+
     if (!adc) {
         if (transparent && composeBelow) {
             if (useDib) vb6_uc_composeBelow(hwnd, dc, cw, ch);
@@ -213,6 +260,7 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
         vb6_uc_dibDestroy(&dib);
     }
     r->hdc = NULL;
+    vb6_uc_activePaintDC = prevPaintDC;
 }
 
 static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {

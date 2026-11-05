@@ -295,6 +295,9 @@ void vb6_UC_SetExtenderMember(const wchar_t* name, void* value);
 /* 账 #305 第二百九十二刀: `UserControl.AutoRedraw = v` 的代码生成侧入口 —— 建/拆
    常驻离屏表面 (VB6 里 AutoRedraw=True 之后 UserControl.hDC 就是那张位图)。 */
 void vb6_UC_SetAutoRedraw(void* value);
+/* 账 <font-color>: `UserControl.ForeColor = v` 的代码生成侧入口 —— 写全局 + 立刻
+   设当前 paint DC 的文本色 (VB6 的 UserControl.hDC 吃这个色)。 */
+void vb6_UC_SetForeColor(int32_t ole);
 /* 同上: 窗体第一帧之前把 TabStrip 宿主沉到父窗口最底 (VB6 实测 z 序)。 */
 void vb6_UC_SinkTabBackdrops(void* parentHwnd);
 int32_t vb6_UC_GetExtenderMemberNum(const wchar_t* name);

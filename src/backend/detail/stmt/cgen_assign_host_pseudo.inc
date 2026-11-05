@@ -101,6 +101,14 @@
                                 ");  /* UserControl.AutoRedraw = v (持久表面) */");
                     return;
                 }
+                /* 账 <font-color>: ForeColor 不是单纯写全局 —— 真 VB6 里
+                   `UserControl.ForeColor = v` 立刻改变 hDC 的文本色, 控件随后的
+                   DrawTextW 才吃得到 (标题/图例全被画成黑字就是漏了这一格)。 */
+                if (tgtHp == "vb6_UserControl_ForeColor") {
+                    c_.emitLine("vb6_UC_SetForeColor((int32_t)(intptr_t)" + valHp +
+                                ");  /* UserControl.ForeColor = v (DC 文本色) */");
+                    return;
+                }
                 c_.emitLine(tgtHp + " = " + valHp + ";  /* <host pseudo>.<prop> = v */");
                 return;
             }
