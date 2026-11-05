@@ -36,10 +36,15 @@
 #     CI 只有 237px)。所以不钉绝对像素数, 改钉结构: 品红族像素 >= 150 且是高度 2..6 的横条
 #     (名义厚度 TabIndicatorSize=4)、水平跨度 >= 40px; "没画出来/画成竖条色块"仍会红。
 #
-# 已核对但**暂不钉**的残差 (见 ai\C3_SEGMENTED_HANDOFF.md, 属未收口的语义差异, 不是本脚本
-# 放水): 顶部第 3 项在真 VB6 里是 Disabled 灰显 / C3 仍可点; "Reporto" 项的图标映射不同;
-# CtrlType=1 小条与底部翻页条的 PUA 符号字形 (Segoe UI Symbol) 在两产物上取字不同。
-# 这些一旦修好应再补断言, 不要让本条变成"永远只验旧口径"。
+# 已钉住的四条残差 (见 ai\C3_SEGMENTED_HANDOFF.md §9; 旧产物逐条必红):
+#   · 悬停 uc1 的 Disabled 项 -> 光标必须是 IDC_NO(32648) —— 旧产物只写裸全局没人读, 恒为箭头;
+#   · uc12 "Tab 2" 心形图标 -> 必须是 #CE00EF 品红连通块 (16x14/159px, 与真 VB6 同读数);
+#     旧产物因定长二维数组按 C 行主序布局, 色矩阵平移列落进被丢弃的第 5 列 => 心形纯黑;
+#   · "<-- ItemVisible" 点击 -> 首帧/稳定耗时 (真 VB6 140/340ms; 旧产物 Refresh 空实现 => 永不重绘);
+#   · uc10 Flat/Gradient -> uc3 选中段深蓝 #系统高亮色 必须在点 Gradient 后消失、点 Flat 后回来
+#     (旧产物兄弟控件不重绘 => 一直深蓝)。
+# 仍未钉: "Reporto" 项的图标映射不同; CtrlType=1 小条与底部翻页条的 PUA 符号字形
+# (Segoe UI Symbol) 在两产物上取字不同 —— 属未收口的语义差异, 不是本脚本放水。
 #
 # SKIP 口径 (rc=2): 仅当取不到交互桌面 (GetDC/BitBlt 全黑, 如 session 0) 时 —— 那是环境不足,
 # 不是用例失败。其余任何不符一律 FAIL(rc=1)。
@@ -69,8 +74,12 @@ public class SegPx {
   [DllImport("user32.dll")] public static extern IntPtr ChildWindowFromPointEx(IntPtr h, POINT p, int flags);
   [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern IntPtr LoadCursor(IntPtr inst, IntPtr name);
+  [DllImport("user32.dll")] public static extern bool GetCursorInfo(ref CURSORINFO ci);
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)] public struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
   public static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, 256); return sb.ToString(); }
   public static string Txt(IntPtr h) { var sb = new StringBuilder(512); GetWindowText(h, sb, 512); return sb.ToString(); }
   public static int Ar(IntPtr h) { RECT r; GetWindowRect(h, out r); return (r.R-r.L)*(r.B-r.T); }
@@ -368,8 +377,114 @@ function DiffPct($a, $b, [int]$x, [int]$y, [int]$w, [int]$h, [int]$step) {
     if ($t -eq 0) { return 0 }
     return [Math]::Round($n / $t, 4)
 }
+# 小区域快照 (只 BitBlt 一个矩形), 给"点击 -> 首帧/稳定"的高精度计时用。
+function GrabRegion([int]$x, [int]$y, [int]$w, [int]$h) {
+    $b = New-Object System.Drawing.Bitmap($w, $h)
+    $gg = [System.Drawing.Graphics]::FromImage($b)
+    $d = $gg.GetHdc(); $sdc = [SegPx]::GetDC($main)
+    [SegPx]::BitBlt($d, 0, 0, $w, $h, $sdc, $x, $y, 0x00CC0020) | Out-Null
+    [SegPx]::ReleaseDC($main, $sdc) | Out-Null
+    $gg.ReleaseHdc($d); $gg.Dispose()
+    return $b
+}
+function SigOf($bmp, [int]$step) {
+    $sb = New-Object System.Text.StringBuilder
+    for ($yy = 0; $yy -lt $bmp.Height; $yy += $step) { for ($xx = 0; $xx -lt $bmp.Width; $xx += $step) {
+        $c = $bmp.GetPixel($xx, $yy); [void]$sb.Append(('{0:X2}{1:X2}{2:X2}' -f $c.R, $c.G, $c.B)) } }
+    return $sb.ToString()
+}
+# 点击 -> 目标区域首帧变化 + 稳定 (连续 3 次采样一致) 的毫秒读数; 超时返回 -1 (旧行为)。
+function ClickMeasure([int]$dx, [int]$dy, [int]$rx, [int]$ry, [int]$rw, [int]$rh) {
+    $pt = New-Object SegPx+POINT; $pt.X = [int]($dx * $k); $pt.Y = [int]($dy * $k)
+    $tgt = $main
+    while ($true) {
+        $chd = [SegPx]::ChildWindowFromPointEx($tgt, $pt, 0)
+        if ($chd -eq [IntPtr]::Zero -or $chd -eq $tgt) { break }
+        $sp = New-Object SegPx+POINT; $sp.X = $pt.X; $sp.Y = $pt.Y
+        [SegPx]::ClientToScreen($tgt, [ref]$sp) | Out-Null
+        [SegPx]::ScreenToClient($chd, [ref]$sp) | Out-Null
+        $tgt = $chd; $pt = $sp
+    }
+    $lp = [IntPtr](($pt.Y -shl 16) -bor ($pt.X -band 0xFFFF))
+    [SegPx]::PostMessage($tgt, 0x0200, [IntPtr]0, $lp) | Out-Null; Start-Sleep -Milliseconds 40
+    # 悬停本身会触发一次重绘 (MouseMove -> 高亮项), 基线必须取在悬停**稳定之后**, 否则
+    # "首帧"读的是悬停而不是点击 (实测会把 37ms 的悬停当成点击响应, 掩盖点击路径)。
+    Start-Sleep -Milliseconds 250
+    $bh = GrabRegion $rx $ry $rw $rh; $sig0 = SigOf $bh 6; $bh.Dispose()
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    [SegPx]::PostMessage($tgt, 0x0201, [IntPtr]1, $lp) | Out-Null
+    [SegPx]::PostMessage($tgt, 0x0202, [IntPtr]0, $lp) | Out-Null
+    $first = -1; $settle = -1; $last = ""; $stable = 0
+    while ($sw.ElapsedMilliseconds -lt 6000) {
+        Start-Sleep -Milliseconds 20
+        $c = GrabRegion $rx $ry $rw $rh; $sig = SigOf $c 6; $c.Dispose()
+        if ($first -lt 0) {
+            if ($sig -ne $sig0) { $first = [int]$sw.ElapsedMilliseconds; $last = $sig; $stable = 1 }
+        } elseif ($sig -eq $last) {
+            $stable++
+            if ($stable -ge 3) { $settle = [int]$sw.ElapsedMilliseconds; break }
+        } else { $last = $sig; $stable = 1 }
+    }
+    $sw.Stop()
+    return @($first, $settle)
+}
+# 在矩形里找 #CE00EF 的 4 连通块, 取尺寸/面积符合"图标"的那个 (文字字形宽 < 10 且面积 <= 48、
+# 指示条高 < 10, 都被下面的 bw/bh/area 判据排除)。
+function FindMagentaBlob($bmp, [int]$x0, [int]$y0, [int]$w, [int]$h, [int]$minArea) {
+    $mask = New-Object 'bool[,]' $w, $h
+    for ($yy = 0; $yy -lt $h; $yy++) { for ($xx = 0; $xx -lt $w; $xx++) {
+        $c = $bmp.GetPixel($x0 + $xx, $y0 + $yy)
+        if ($c.R -eq 0xCE -and $c.G -eq 0 -and $c.B -eq 0xEF) { $mask[$xx, $yy] = $true } } }
+    $seen = New-Object 'bool[,]' $w, $h
+    $best = $null
+    for ($yy = 0; $yy -lt $h; $yy++) { for ($xx = 0; $xx -lt $w; $xx++) {
+        if (-not $mask[$xx, $yy] -or $seen[$xx, $yy]) { continue }
+        $stack = New-Object System.Collections.Stack; $stack.Push(@($xx, $yy)); $seen[$xx, $yy] = $true
+        $n = 0; $bx0 = $xx; $bx1 = $xx; $by0 = $yy; $by1 = $yy
+        while ($stack.Count -gt 0) {
+            $p2 = $stack.Pop(); $px = $p2[0]; $py = $p2[1]; $n++
+            if ($px -lt $bx0) { $bx0 = $px }; if ($px -gt $bx1) { $bx1 = $px }
+            if ($py -lt $by0) { $by0 = $py }; if ($py -gt $by1) { $by1 = $py }
+            foreach ($d in @(@(1, 0), @(-1, 0), @(0, 1), @(0, -1))) {
+                $nx = $px + $d[0]; $ny = $py + $d[1]
+                if ($nx -lt 0 -or $ny -lt 0 -or $nx -ge $w -or $ny -ge $h) { continue }
+                if ($mask[$nx, $ny] -and -not $seen[$nx, $ny]) { $seen[$nx, $ny] = $true; $stack.Push(@($nx, $ny)) }
+            }
+        }
+        $bw = $bx1 - $bx0 + 1; $bh = $by1 - $by0 + 1
+        if ($bw -ge 10 -and $bw -le 32 -and $bh -ge 10 -and $bh -le 32 -and $n -ge $minArea) {
+            if ($null -eq $best -or $n -gt $best.n) {
+                $best = [pscustomobject]@{ n = $n; x = $x0 + $bx0; y = $y0 + $by0; w = $bw; h = $bh }
+            }
+        }
+    } }
+    return $best
+}
+# 某区域的"运行期高亮色"像素数 (uc3 选中段深蓝底)。
+function HlCount($bmp, [int]$x, [int]$y, [int]$w, [int]$h) {
+    $n = 0; $x1 = [Math]::Min($x + $w, $bmp.Width); $y1 = [Math]::Min($y + $h, $bmp.Height)
+    for ($yy = $y; $yy -lt $y1; $yy++) { for ($xx = $x; $xx -lt $x1; $xx++) {
+        $c = $bmp.GetPixel($xx, $yy)
+        if ($c.R -eq $hlR -and $c.G -eq $hlG -and $c.B -eq $hlB) { $n++ } } }
+    return $n
+}
 
 $b0 = ShotP (Join-Path $OutDir "segmented_inter_0.png")
+# 缺陷: uc1 顶部条第 3 项 Disabled=True (Form1.frm 的 Disabled_2=-1)。悬停该项时光标必须是
+# IDC_NO(32648) —— .ctl 的 MouseMove 里 `UserControl.MousePointer = vbNoDrop`, 宿主窗口的
+# WM_SETCURSOR 必须真的去读它。旧产物: 只写裸全局没人读 => 恒为 IDC_ARROW(32512)。
+$po = New-Object SegPx+POINT; [SegPx]::ClientToScreen($main, [ref]$po) | Out-Null
+$hNo = [SegPx]::LoadCursor([IntPtr]::Zero, [IntPtr]32648)
+[SegPx]::SetCursorPos($po.X + [int](375 * $k), $po.Y + [int](24 * $k)) | Out-Null
+Start-Sleep -Milliseconds 350
+$ci = New-Object SegPx+CURSORINFO
+$ci.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($ci)
+[SegPx]::GetCursorInfo([ref]$ci) | Out-Null
+Add-Read ("disabled hover cursor=$($ci.hCursor) idcNo=$hNo")
+if ($ci.hCursor -ne $hNo) { Add-Fail ("悬停 uc1 禁用项的光标不是 IDC_NO (得到 $($ci.hCursor), 期望 $hNo)") }
+# 移开真实光标, 免得残留悬停态影响后面的点击读数
+[SegPx]::SetCursorPos($po.X + [int](740 * $k), $po.Y + [int](505 * $k)) | Out-Null
+Start-Sleep -Milliseconds 250
 # 标题字色: uc12 选中页签 "Tab 2" = SelectedForeColor #CE00EF (设计期 line 362-368)。
 $r12x = [int](224 * $k); $r12y = [int](56 * $k); $r12w = [int](261 * $k); $r12h = [int](41 * $k)
 $rowM = @{}; $maxRow = 0
@@ -382,6 +497,17 @@ $textMag = 0
 foreach ($yy in $rowM.Keys) { if ($rowM[$yy] -lt ($maxRow * 0.6)) { $textMag += $rowM[$yy] } }
 Add-Read ("tab2 title magenta=#$('CE00EF') textPx=$textMag barRowMax=$maxRow")
 if ($textMag -lt 60) { Add-Fail ("Tab 2 标题不是品红 (#CE00EF 字形像素 $textMag < 60, 被画成黑字?)") }
+# 缺陷: Tab 2 的心形图标是 image_1 (48x48 纯黑+alpha 的 PNG), 靠 GDI+ 色矩阵上色成
+# m_SelectedForeColor #CE00EF。判据 = uc12 区里存在 10..32 见方、面积 >= 60 的品红连通块
+# (整窗物理抓图 16x14/159px, 与真 VB6 同读数; 本测试的客户区 96dpi 抓图 12x10/86px)。
+# 文字字形宽 <= 9、面积 <= 48, 指示条高 4, 都被尺寸判据排除; 旧产物 (定长二维数组按 C 行
+# 主序布局, ColorMatrix 平移列落进被丢掉的第 5 列) 心形是纯黑 => 找不到连通块。
+$heart = FindMagentaBlob $b0 $r12x $r12y $r12w $r12h 60
+if ($null -eq $heart) {
+    Add-Fail ("uc12 心形图标不是品红 #CE00EF (选中页的心形画成了黑色? 色矩阵没上色)")
+} else {
+    Add-Read ("tab2 heart magenta blob=$($heart.w)x$($heart.h) area=$($heart.n) at=$($heart.x),$($heart.y)")
+}
 # 图例字色: uc9 "OPEN EDITOR" ForeColor=vbHighlightText (白) 压在 #FF6BFF 胶囊底上。
 $r9x = [int](8 * $k); $r9y = [int](464 * $k); $r9w = [int](137 * $k); $r9h = [int](41 * $k)
 $white9 = 0
@@ -404,14 +530,24 @@ Add-Read ("checkbar icons uc6 darkPx=$dark6")
 if ($dark6 -lt 400) { Add-Fail ("CheckBar 四个图标没画成图片 (uc6 深色像素 $dark6 < 400, 退回 Segoe UI Symbol 字形?)") }
 
 # 缺陷3: <-- ItemVisible 按钮应显示/隐藏 uc4 的 Ok 图标。
+# 性能判据: 点击 -> uc4 区域首帧变化 + 稳定 (连续 3 次 20ms 采样一致)。真 VB6 实测
+# 140/340ms, 修后 C3 194/386ms; 旧产物 (Refresh 空实现) 6s 内一次都不重绘。
+# 阈值取 VB6 的 ~7 倍 (1500/2500ms) —— CI 慢也不会误红, 旧行为必红。
 $r4x = [int](512 * $k); $r4y = [int](144 * $k); $r4w = [int](73 * $k); $r4h = [int](265 * $k)
-ClickDesign 636 236
+$tm = ClickMeasure 636 236 $r4x $r4y $r4w $r4h
+$firstMs = $tm[0]; $settleMs = $tm[1]
 $b1 = ShotP (Join-Path $OutDir "segmented_inter_1.png")
 $d1 = DiffPct $b0 $b1 $r4x $r4y $r4w $r4h 2
 ClickDesign 636 236
 $b2 = ShotP (Join-Path $OutDir "segmented_inter_2.png")
 $d2 = DiffPct $b0 $b2 $r4x $r4y $r4w $r4h 2
-Add-Read ("itemVisible uc4 diff hide=$d1 restore=$d2")
+Add-Read ("itemVisible uc4 diff hide=$d1 restore=$d2 firstMs=$firstMs settleMs=$settleMs")
+if ($firstMs -lt 0 -or $settleMs -lt 0) {
+    Add-Fail ("点 '<-- ItemVisible' 后 6s 内 uc4 没有稳定重绘 (first=$firstMs settle=$settleMs, Refresh 没落地?)")
+} else {
+    if ($firstMs -gt 1500) { Add-Fail ("'<-- ItemVisible' 首帧响应 ${firstMs}ms > 1500ms (真 VB6 140ms)") }
+    if ($settleMs -gt 2500) { Add-Fail ("'<-- ItemVisible' 稳定耗时 ${settleMs}ms > 2500ms (真 VB6 340ms)") }
+}
 if ($d1 -lt 0.08) { Add-Fail ("点 '<-- ItemVisible' 后 uc4 右竖列几乎没变 (变化率 $d1 < 0.08, ItemVisible 不生效?)") }
 if ($d2 -gt 0.01) { Add-Fail ("再次点 '<-- ItemVisible' 未恢复原样 (变化率 $d2 > 0.01)") }
 
@@ -425,6 +561,41 @@ $d4 = DiffPct $b0 $b4 0 0 $pw $ph 3
 Add-Read ("solidTransparent diff image=$d3 back=$d4")
 if ($d3 -lt 0.40) { Add-Fail ("点 Transparent 后背景图没上屏 (全客户区变化率 $d3 < 0.40, Picture/PaintPicture 不生效?)") }
 if ($d4 -gt 0.02) { Add-Fail ("点 Solid 后背景图未撤掉 (变化率 $d4 > 0.02)") }
+
+# 缺陷4: uc10 (设计期 464,432 113x33) 的两个按钮 Flat=0 / Gradient=1 —— Form1.frm 的
+# ItemClick 把 `Ctrl.Gradient = (Index = 1)` 写回**所有** ucSegmentedControl。每个控件的
+# Gradient Property Let 都会 Refresh 自己, 所以兄弟控件的选中段底色必须在
+# 深蓝 (运行期系统高亮色, 本机 #0078D7 3764px) 与浅蓝 (梯度刷, 本机 #73B5E9 1673px) 间切换。
+# 真 VB6 同口径: uc3 深蓝 3896 -> 0 (Gradient) -> 3896 (Flat)。旧产物: Refresh 空实现 =>
+# 兄弟控件不重绘, 深蓝 3764 -> 3764 纹丝不动 (用户看到的"一直深蓝")。
+# 读数**不能用 ShotP**: 它先 RedrawWindow(RDW_INVALIDATE|ERASE|ALLCHILDREN|UPDATENOW) 强制全部子窗
+# 重绘, 会把"属性改了但没人 invalidate"的旧行为掩盖成"已切换"。这里改 GrabRegion 被动抓取
+# uc3 区域 (不强制重绘), 旧产物读到的仍是点击前的像素。
+$uc3x = [int](400 * $k); $uc3y = [int](104 * $k); $uc3w = [int](272 * $k); $uc3h = [int](33 * $k)
+$g4 = GrabRegion $uc3x $uc3y $uc3w $uc3h
+$deep0 = HlCount $g4 0 0 $uc3w $uc3h
+$sx = -1; $sy = -1
+for ($yy = 0; $yy -lt $uc3h -and $sx -lt 0; $yy++) { for ($xx = 0; $xx -lt $uc3w; $xx++) {
+    $c = $g4.GetPixel($xx, $yy)
+    if ($c.R -eq $hlR -and $c.G -eq $hlG -and $c.B -eq $hlB) { $sx = $xx; $sy = $yy; break } } }
+ClickDesign 549 448   # Gradient
+$g5 = GrabRegion $uc3x $uc3y $uc3w $uc3h
+$deep1 = HlCount $g5 0 0 $uc3w $uc3h
+ClickDesign 492 448   # Flat
+$g6 = GrabRegion $uc3x $uc3y $uc3w $uc3h
+$deep2 = HlCount $g6 0 0 $uc3w $uc3h
+$diffG = DiffPct $g4 $g5 0 0 $uc3w $uc3h 2
+$c0 = $null; $c1 = $null
+if ($sx -ge 0) { $c0 = $g4.GetPixel($sx, $sy); $c1 = $g5.GetPixel($sx, $sy) }
+$rgb0 = "#(deep)"; $rgb1 = "#(deep)"
+if ($null -ne $c0) { $rgb0 = ('{0:X2}{1:X2}{2:X2}' -f $c0.R, $c0.G, $c0.B); $rgb1 = ('{0:X2}{1:X2}{2:X2}' -f $c1.R, $c1.G, $c1.B) }
+$b5 = ShotP (Join-Path $OutDir "segmented_inter_5.png")
+$b6 = ShotP (Join-Path $OutDir "segmented_inter_6.png")
+Add-Read ("flatGradient uc3 deep=$deep0->$deep1->$deep2 diff(grad)=$diffG sample #$rgb0->#$rgb1 at=$([int]($sx+$uc3x)),$([int]($sy+$uc3y))")
+if ($deep0 -lt 1200) { Add-Fail ("uc3 选中段的深蓝底基线只有 $deep0 像素 (<1200, 前提不成立)") }
+if ($deep1 -gt [int]($deep0 * 0.15)) { Add-Fail ("点 Gradient 后 uc3 深蓝底没消失 (深蓝 $deep0 -> $deep1, Gradient 属性没落到绘制 DC / 没重绘?)") }
+if ($diffG -lt 0.20) { Add-Fail ("点 Gradient 后 uc3 区域变化率 $diffG < 0.20 (兄弟控件完全没重绘)") }
+if ($deep2 -lt [int]($deep0 * 0.6)) { Add-Fail ("点 Flat 后 uc3 深蓝底没回来 (深蓝 $deep1 -> $deep2, 期望 >= $([int]($deep0*0.6)))") }
 
 # 缺陷1: 全程不得出现真实 438 (宿主/COM 成员解析失败) 或错误对话框。
 # 两套标签都收: HEAD 既有 [C3_HOST_438 #n] (uc_hostmodel.c, 无条件) 与 [C3_438] (vb6com,
@@ -444,7 +615,7 @@ $cbD = [SegPx+EnumProc]{ param($h, $l)
 [SegPx]::EnumWindows($cbD, [IntPtr]::Zero) | Out-Null
 if ($dlg -ne [IntPtr]::Zero) { Add-Fail ("交互后弹出错误对话框: '" + [SegPx]::Txt($dlg) + "' (疑似 Run-time error 438)") }
 
-foreach ($bb in @($b0, $b1, $b2, $b3, $b4)) { $bb.Dispose() }
+foreach ($bb in @($b0, $b1, $b2, $b3, $b4, $b5, $b6, $g4, $g5, $g6)) { $bb.Dispose() }
 try { [SegPx]::SetThreadDpiAwarenessContext($prevCtx) | Out-Null } catch { }
 
 try { if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(3000) | Out-Null } } catch { }
