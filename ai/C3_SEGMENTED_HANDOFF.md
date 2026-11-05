@@ -576,3 +576,30 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
 **GA #41968620825（第四次）：SUCCESS** — 22/22 jobs 全绿（含 `Tests (compile #1..#2)`、`Tests (vbp #1..#5)`
 与 `Emit manifest` 的 expect-check），`dev` = `81e8807d`，双远端一致。
 
+## 9.10 接手轮 2：四条残差（禁用项光标 / 选中页心形上色 / ItemVisible 响应 / Flat·Gradient 蓝底）
+
+口径同 9.8：每条先录旧行为读数（negative control），再录真 VB6 同操作，再改，再用同一脚本断言。
+旧行为基线用 **HEAD（cdf6ea2c）重编的产物**（`.temp\oldbase\Project1.exe`，工作区改动 stash 掉后
+`cmake --build` 重编 `C3.exe` 再编译夹具）。注意 11:37/12:47 那两个中间产物已经带 Refresh 的
+invalidate（但无 paint 闸门），不能当"旧行为"用。
+
+| 项 | 根因 | 修改站点 | 旧行为读数 | 真 VB6 | 修后读数 |
+|---|---|---|---|---|---|
+| 1 禁用项灰显+光标 | `UserControl.MousePointer` 只写裸全局 `vb6_UserControl_MousePointer`，宿主 WndProc 从不读；.ctl 在 MouseMove 里给 Disabled 项设 `vbNoDrop(12)` 全部丢失 | `cgen_assign_host_pseudo.inc` 特判发 `vb6_UC_SetMousePointer`；`uc_host_window.c` 增 per-instance 映射 + `WM_SETCURSOR`；`vb6forms_uc_internal.h` 增 `mousePointer`；`vb6rtl_userctl.h` 声明 | `cursor=65539(IDC_ARROW)` | `cursor=65559(IDC_NO)`、灰字 `#CCCCCC=140`(AA 残差 `#9B9B9B…`) | `cursor=65559`、灰字 `#CCCCCC=140`，与 VB6 **逐值相同**(`.temp\probe_gray.ps1`) |
+| 2 选中页心形保持品红 | VB6 多维定长数组是**列主序**、C 是行主序。.ctl 的 ColorMatrix `.m(0,4)/(1,4)/(2,4)`(平移) 在 VB6 offset 20/21/22；C3 行主序落到 offset 4/9/14（GDI+ 丢弃的第 5 列）⇒ 平移无效 ⇒ 心形纯黑。叠加 gdiplus 桩把 `BOOL` 参数当 `int16_t`（x86 stdcall 参数错位 2 字节） | `cgen_util_classtype.cpp` 成员下标逆序拼接；`cgen_decl.cpp` 定长数组维度逆序；`vb6_di_gdiplus_image_stubs.c` 的 `EnableFlag`/函数指针改 32 位；`gen_di_stubs.ps1` 对 gdiplus 家族 `int16_t→int32_t`（防再生成回退） | uc12 区无品红连通块（心形纯黑）；标题 `textPx=165` | 心形 `16x14/159px #CE00EF`（整窗物理抓图，probe7） | 心形 `12x10/86px #CE00EF`（客户区 96dpi 抓图，同形同色）；标题 `textPx=251` |
+| 3 `<-- ItemVisible` 响应十几秒 | `vb6_UC_RefreshCurrent` 是空实现（`(void)0;`）。.ctl 的自定义属性 Let 只调 `Refresh` ⇒ 属性改了窗口永不失效（旧记录 22.7s 内 0 次重绘） | `uc_host.c`：绘制中(depth>0) 短路，否则 `InvalidateRect+UpdateWindow`；`uc_host_window.c` 在 WM_PAINT/WM_PRINTCLIENT 首尾 `vb6_UC_PaintEnter/Leave`；`vb6forms_uc_internal.h` 声明闸门 | `ClickMeasure` 6000ms 超时 `first=-1 settle=-1` | `first=140ms / settle=340ms` | `first=43ms / settle=114ms`（阈值 1500/2500ms） |
+| 4 Flat/Gradient 蓝底不切换 | 同上 Refresh 空实现（uc3 自己的 Gradient Let 也无法让自己重绘）。**另一层是测量污染**：`ShotP` 先 `RedrawWindow(RDW_INVALIDATE|ERASE|ALLCHILDREN|UPDATENOW)`，会把"没人 invalidate"的旧行为强行重绘成已切换 ⇒ 旧产物也能假绿 | 同 3（Refresh 落地）+ `segmented_px.ps1` 改用 `GrabRegion` 被动抓 uc3 区域（不强制重绘） | `deep=3764→3764→3764 diff=0 sample #0078D7→#0078D7`（用户看到的"一直深蓝"） | `3896→0(Grad)→3896(Flat)`，浅蓝 `#73B5E9` | `3764→0→3764 diff(grad)=0.277`，采样 `#0078D7→#93C6EE`（渐变区间内；采样点/DPR 与参考不同，面积差 3.5%） |
+
+新增/收紧断言（`tests\guisample\segmented_px.ps1`，旧产物逐条红）：
+- `cursor == LoadCursor(NULL,32648)` 且悬停点移开复位；灰字由 `probe_gray.ps1` 离线同口径对照（不入 CI 用例）。
+- `FindMagentaBlob` 取 10..32 见方、面积 >= 60 的 `#CE00EF` 连通块（文字字形宽 <= 9/面积 <= 48、
+  指示条高 4，均被尺寸判据排除）；整窗 159px / 客户区 86px 都落进区间。
+- `ClickMeasure` 基线取在**悬停稳定之后**（先 WM_MOUSEMOVE + 290ms 再计时），`first <= 1500ms`、
+  `settle <= 2500ms` 且 `-1` 算失败；同时保留原 `diff hide >= 0.08 / restore <= 0.01`。
+- Flat/Gradient：基线 `deep >= 1200`；Gradient 后 `deep <= 15%` 且区域 `diff >= 0.20`；
+  Flat 后 `deep >= 60%` 基线。截图仍用 `ShotP`（只作证据，不参与读数）。
+
+修后本机全绿：`itemVisible first=43 settle=114`、`heart 12x10/86`、`deep 3764->0->3764`、
+`cursor=65559`、`438 hits=0`；旧基线（HEAD 重编）同一次运行读到
+`cursor=65539`、`heart=none`、`first/settle=-1`、`deep 3764->3764->3764`。
+
