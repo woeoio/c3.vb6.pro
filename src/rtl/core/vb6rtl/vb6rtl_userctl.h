@@ -285,6 +285,15 @@ struct vb6_UserControl_Extender_Type {
     // ucSegmentedControl.ctl: `UserControl.Extender.ToolTipText = ...` 直接落在这枚
     // 结构体的字段上 (SetExtenderMember 那张表只覆盖 Tag/Visible/... 不含它)。
     BSTR ToolTipText;
+    // ucTreeView: ucScrollbar.ctl 的 Property Get/Set Parent/Top/Left/Name 直接读写
+    // `UserControl.Extender.<成员>`. 这些值本来就是**每实例一份**的设计期位置,
+    // push 时从 vb6_UCRec 灌进来 (见 uc_host.c), pop 由 vb6_UCSaved.ext 快照还原。
+    void*   Parent;       // Extender.Parent = 容器对象 (此处即容器窗体 HWND)
+    int32_t Top;          // 设计期 Top (twips)
+    int32_t Left;         // 设计期 Left (twips)
+    BSTR    Name;         // 控件实例名 (Ambient.DisplayName 同一份缓存)
+    // `UserControl.Extender.ZOrder v` 生成成员函数调用形态 (2 实参: 值 + has 标记)。
+    void  (*ZOrder)(int32_t* value, int32_t hasValue);
 };
 extern struct vb6_UserControl_Extender_Type vb6_UserControl_Extender;
 /* Fix 294 / 3a: Extender.<成员> = v 的实例感知写入口(代码生成侧调用)。
@@ -301,6 +310,17 @@ void vb6_UC_SetForeColor(int32_t ole);
 /* 缺陷 1: `UserControl.MousePointer = v` 的代码生成侧入口 —— 存进本实例记录并
    把光标应用到宿主窗口 (vbNoDrop => IDC_NO 等系统光标)。 */
 void vb6_UC_SetMousePointer(int32_t pointer);
+/* ucTreeView: `UserControl.FontBold` / `UserControl.FontUnderline` 的持久值。
+   见 vb6rtl_com.c 定义; push/pop 按实例存取, 绘制/TextWidth 时叠加到
+   vb6_UserControl_Font 之上 (VB6 里这两个属性就是 Font 对象的 Bold/Underline)。 */
+extern int16_t vb6_UserControl_FontBold;
+extern int16_t vb6_UserControl_FontUnderline;
+/* `Set UserControl.Font = v` / `UserControl.FontBold = v` 的代码生成侧入口:
+   写全局并立刻把派生 HFONT 选进当前 paint DC (VB6 的 hDC 立即吃新字体)。 */
+void vb6_UC_SetFont(void* font);
+void vb6_UC_SetFontFlag(int32_t which, int32_t value);   /* which: 0=Bold 1=Underline */
+/* `UserControl.Extender.ZOrder v` 的实现 (HWND_TOP / HWND_BOTTOM)。 */
+void vb6_UC_ExtenderZOrder(int32_t* value, int32_t hasValue);
 /* 同上: 窗体第一帧之前把 TabStrip 宿主沉到父窗口最底 (VB6 实测 z 序)。 */
 void vb6_UC_SinkTabBackdrops(void* parentHwnd);
 int32_t vb6_UC_GetExtenderMemberNum(const wchar_t* name);

@@ -54,6 +54,97 @@ static void vb6_uc_selectOwnFont(HDC dc, HWND hwnd) {
     if (hf) SelectObject(dc, hf);
 }
 
+// ---------------------------------------------------------------------------
+// ucTreeView: `UserControl.Font` / `.FontBold` / `.FontUnderline` 落到当前 paint DC
+//
+// VB6 里这三者是 UserControl.Font 对象 (FontBold/FontUnderline 就是它的 Bold/Underline),
+// 生成 C 里却是裸全局赋值 (`vb6_UserControl_Font = ...`) —— 没有任何站点把它们选进
+// hDC。ucTreeViewPlus.ctl 的 Draw 里逐节点 `Set UserControl.Font = m_SubTextFont` /
+// `UserControl.FontBold = ...` 之后立刻 `DrawTextW hdc`, 所以必须**当场**改 DC 字体,
+// 否则全部节点都用 ambient 字体画 (子文字不变小、粗体不粗)。
+//
+// HFONT 由 (字体对象, bold, underline, Size) 缓存: 一次 paint 只有两三枚字体,
+// CreateFontIndirect 的次数也就两三次; 缓存里的 HFONT 不销毁 (数量被工程里的
+// Font 对象数封顶, 逐个 DeleteObject 反而会撞"对象还选在 DC 里")。
+// ---------------------------------------------------------------------------
+typedef struct vb6_UCHfCacheEnt {
+    const void* font;
+    float       size;
+    int16_t     bold;
+    int16_t     underline;
+    HFONT       hf;
+} vb6_UCHfCacheEnt;
+#define VB6_UC_HF_CACHE_MAX 16
+static vb6_UCHfCacheEnt vb6_ucHfCache[VB6_UC_HF_CACHE_MAX];
+static int32_t vb6_ucHfCacheN = 0;
+
+static HFONT vb6_uc_fontHFontFor(const void* fontPtr, int16_t bold, int16_t underline) {
+    const vb6_ComIface_Font* f = (const vb6_ComIface_Font*)fontPtr;
+    LOGFONTW lf;
+    int32_t i;
+    vb6_ComIface_Font scratch;
+    if (!f) return NULL;
+    for (i = 0; i < vb6_ucHfCacheN; i++) {
+        if (vb6_ucHfCache[i].font == fontPtr && vb6_ucHfCache[i].size == f->Size
+            && vb6_ucHfCache[i].bold == bold && vb6_ucHfCache[i].underline == underline)
+            return vb6_ucHfCache[i].hf;
+    }
+    scratch = *f;                      /* 只改两档, 不污染共享 Font 对象 */
+    scratch.Bold = bold ? -1 : 0;
+    scratch.Underline = underline ? -1 : 0;
+    vb6_UC_FontLogFont(&scratch, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    {
+        HFONT hf = CreateFontIndirectW(&lf);
+        if (hf && vb6_ucHfCacheN < VB6_UC_HF_CACHE_MAX) {
+            vb6_UCHfCacheEnt* e = &vb6_ucHfCache[vb6_ucHfCacheN++];
+            e->font = fontPtr; e->size = f->Size;
+            e->bold = bold; e->underline = underline; e->hf = hf;
+        }
+        return hf;
+    }
+}
+
+/* 把当前 UserControl.Font + 两个标志选进活动 paint DC (没有 paint 上下文则不动)。 */
+static void vb6_uc_applyFontNow(void) {
+    HFONT hf;
+    HDC dc;
+    if (!vb6_ucCurrent || !vb6_ucCurrent->hdc) return;
+    if (vb6_UserControl_Font != vb6_ucCurrent->font) {
+        /* `Set UserControl.Font` 换成本实例的另一枚字体对象时, 同步进记录,
+           下一次 push 才不会把它退回 ambient 字体。 */
+        vb6_ucCurrent->font = (vb6_ComIface_Font*)vb6_UserControl_Font;
+    }
+    hf = vb6_uc_fontHFontFor(vb6_UserControl_Font, vb6_UserControl_FontBold,
+                             vb6_UserControl_FontUnderline);
+    dc = vb6_ucCurrent->hdc;
+    if (hf && dc) SelectObject(dc, hf);
+}
+
+void vb6_UC_SetFont(void* font) {
+    vb6_UserControl_Font = (vb6_ComIface_Font*)font;
+    vb6_uc_applyFontNow();
+}
+
+void vb6_UC_SetFontFlag(int32_t which, int32_t value) {
+    if (which == 0) {
+        vb6_UserControl_FontBold = value ? -1 : 0;
+        if (vb6_ucCurrent) vb6_ucCurrent->fontBold = vb6_UserControl_FontBold;
+    } else {
+        vb6_UserControl_FontUnderline = value ? -1 : 0;
+        if (vb6_ucCurrent) vb6_ucCurrent->fontUnderline = vb6_UserControl_FontUnderline;
+    }
+    vb6_uc_applyFontNow();
+}
+
+/* `UserControl.Extender.ZOrder v` (结构体成员函数指针的落点)。
+   VB6 ZOrder: 0 = 提到最前, 1 = 送到最后。 */
+void vb6_UC_ExtenderZOrder(int32_t* value, int32_t hasValue) {
+    HWND hwnd = vb6_ucCurrent ? vb6_ucCurrent->hwnd : NULL;
+    if (!hwnd || !IsWindow(hwnd)) return;
+    SetWindowPos(hwnd, (value && hasValue && *value == 1) ? HWND_BOTTOM : HWND_TOP,
+                 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
 // ============================================================
 // 账 #305 第二百九十二刀: AutoRedraw 持久表面
 //

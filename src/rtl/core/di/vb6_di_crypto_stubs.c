@@ -12,7 +12,7 @@
 // types while preserving the register/memory passing class of every argument.
 //
 // generated from: a C3 compile session (pass -SessionDir to regenerate)
-// date: 2026-11-05 03:23
+// date: 2026-11-05 22:47
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.

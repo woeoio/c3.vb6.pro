@@ -1620,7 +1620,14 @@ int16_t vb6_Extender_Cancel  = 0;
 // --- Fix 133u: Extender.Visible/Height (czUI.ctl) ---
 // Fix 221: 第三格 DataChanged (ComCtlsDemo 的 `UserControl.Extender.DataChanged = True`,
 // 32 处). 运行期容器不活动 ⇒ 只写不读, 保留可写字段。
-struct vb6_UserControl_Extender_Type vb6_UserControl_Extender = { -1, 0, 0, 0 };
+struct vb6_UserControl_Extender_Type vb6_UserControl_Extender =
+    { -1, 0, 0, 0, NULL, 0, 0, NULL, vb6_UC_ExtenderZOrder };
+
+// ucTreeView: `UserControl.FontBold` / `UserControl.FontUnderline` 的持久值。
+// 生成 C 里是裸全局读写 (push/pop 按实例存取, 见 uc_host.c)。绘制与 TextWidth
+// 的落点见 vb6_UC_SetFontFlag / vb6_uc_measureText。
+int16_t vb6_UserControl_FontBold = 0;
+int16_t vb6_UserControl_FontUnderline = 0;
 
 // Fix 221: UserControl.EventsFrozen —— .ctl 里只出现在读位置 (见 vb6rtl_userctl.h
 // 的注释), VB6 运行期恒 False ⇒ 恒 0 的槽位就是正确值。
@@ -1685,6 +1692,10 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
         extern void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut);
         LOGFONTW lf;
         vb6_UC_FontLogFont(vb6_UserControl_Font, 96, 0, &lf);
+        // ucTreeView: UserControl.FontBold/FontUnderline 叠加 (VB6 里它们是 Font 的
+        // Bold/Underline, TextWidth 必须同样变宽)。
+        if (vb6_UserControl_FontBold) lf.lfWeight = FW_BOLD;
+        if (vb6_UserControl_FontUnderline) lf.lfUnderline = 1;
         hNew = CreateFontIndirectW(&lf);
         if (hNew) hOld = (HFONT)SelectObject(hdc, hNew);
     }

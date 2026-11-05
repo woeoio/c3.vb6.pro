@@ -32,6 +32,12 @@ static void vb6_coll_push(void* coll, const vb6_VARIANT* v, const wchar_t* key) 
        存进来就是**别人那 16 字节的指针**，取回时早悬空(实测读回 2066035336255469780997 那一类
        数)。存值口径问那唯一一枚出口，与 vb6_Host_ClearVariant 的放那一对配平。 */
     vb6_VariantValueCopy(dst, v);
+    /* 对象档: VB6 的 Collection.Add 复制的是**引用** —— 集合自己持有一份。
+       此前这里借用不计数, 打包方那次 VariantClear 就把 vb6_ComObject 包装器
+       free 掉了, 集合里的 pdispVal 随即悬空: ucTreeView 的 For Each 读回
+       vb6Instance=NULL, 实测 rva=0x117CE av read target=0x84
+       (RecursiveDraw 里 N->Height)。加引用与 Remove 的释放配对。 */
+    if (dst->vt == vb6_vtDispatch && dst->pdispVal) vb6_ComAddRefDispatch(dst->pdispVal);
     if (c->keys) c->keys[c->count] = key ? SysAllocString(key) : NULL;
     c->count++;
 }
@@ -117,6 +123,11 @@ void vb6_Collection_Remove(void* coll, int32_t idx1) {
     vb6_VARIANT* items = (vb6_VARIANT*)c->items;
     vb6_VARIANT* v = &items[idx1 - 1];
     vb6_VariantValueFree(v);   /* 账 #305 §B165: 释放口径与 vb6_coll_push 同源(对象档照旧不动) */
+    /* 与 coll_push 的 AddRef 配对: 集合自己那一份引用在这里放掉。 */
+    if (v->vt == vb6_vtDispatch && v->pdispVal) {
+        vb6_ReleaseObject(&v->pdispVal);
+        v->pdispVal = NULL;
+    }
     if (c->keys) {
         if (c->keys[idx1 - 1]) SysFreeString(c->keys[idx1 - 1]);
         memmove(&c->keys[idx1 - 1], &c->keys[idx1], sizeof(wchar_t*) * (size_t)(c->count - idx1));
@@ -141,6 +152,9 @@ void vb6_Collection_RemoveByKey(void* coll, const wchar_t* key) {
 static void vb6_coll_itemCopy(const vb6_VARIANT* src, vb6_VARIANT* out) {
     memset(out, 0, sizeof(*out));
     vb6_VariantValueCopy(out, src);   /* 账 #305 §B165: 与 vb6_coll_push 同一枚出口 */
+    /* 取回的那一格自己持有一份 (见下方 Item 注释): 掌管道随后按同一口径放掉,
+       所以对象档必须在这里加引用, 否则放掉的是集合自己那一份。 */
+    if (out->vt == vb6_vtDispatch && out->pdispVal) vb6_ComAddRefDispatch(out->pdispVal);
 }
 
 void vb6_Collection_Item(void* coll, int32_t idx1, void* outV) {

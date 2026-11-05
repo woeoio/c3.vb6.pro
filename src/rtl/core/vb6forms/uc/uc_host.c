@@ -237,6 +237,8 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     saved->hWnd = vb6_UserControl_hWnd;
     saved->autoRedraw = vb6_UserControl_AutoRedraw;
     saved->ext = vb6_UserControl_Extender;
+    saved->fontBold = vb6_UserControl_FontBold;
+    saved->fontUnderline = vb6_UserControl_FontUnderline;
     saved->current = vb6_ucCurrent;
     saved->displayName = (void*)vb6_Ambient_DisplayName;
 
@@ -274,6 +276,17 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     vb6_UserControl_AutoRedraw = 1;                 // Fix 133u: 事件驱动重绘
     vb6_UserControl_Extender.Visible = -1;          // Fix 133u: 默认可见
     vb6_UserControl_Extender.Height = r->scaleHeight; // Fix 133u
+    /* ucTreeView: `UserControl.Extender.<成员>` 的设计期位置/名字/容器, 每实例一份。
+       ucScrollbar.ctl 的 Parent/Top/Left/Name 属性直接读写这几枚字段。
+       ZOrder 是方法形态 (`vb6_UserControl_Extender.ZOrder(LonValue, 1)`), 函数指针
+       固定指向实现; 结构体初值也置了同一枚 (vb6rtl_com.c), 这里再兜一次。 */
+    vb6_UserControl_Extender.Parent = r->parent;
+    vb6_UserControl_Extender.Top = r->extTop;
+    vb6_UserControl_Extender.Left = r->extLeft;
+    vb6_UserControl_Extender.Name = r->displayNameBstr;
+    vb6_UserControl_Extender.ZOrder = vb6_UC_ExtenderZOrder;
+    vb6_UserControl_FontBold = r->fontBold;
+    vb6_UserControl_FontUnderline = r->fontUnderline;
     vb6_ucCurrent = r;
 
     // Fix 116: Ambient.DisplayName = 控件实例名 (VB6 语义)。
@@ -305,6 +318,8 @@ void vb6_uc_pop(const vb6_UCSaved* saved) {
     vb6_UserControl_hWnd = saved->hWnd;              // Fix 133u
     vb6_UserControl_AutoRedraw = saved->autoRedraw;  // Fix 133u
     vb6_UserControl_Extender = saved->ext;           // Fix 133u
+    vb6_UserControl_FontBold = saved->fontBold;
+    vb6_UserControl_FontUnderline = saved->fontUnderline;
     vb6_ucCurrent = saved->current;
     vb6_Ambient_DisplayName = (BSTR)saved->displayName;   // Fix 116
     vb6_uc_syncParentControls();

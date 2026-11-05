@@ -2,13 +2,13 @@
 //
 // Win32 forwarding stubs for VB6 `Declare ... Lib "gdiplus"` (Fix 076 scheme).
 //
-// Family: gdiplus/brush   (routed by object domain, see Get-GdiplusSub)   stubs: 83
+// Family: gdiplus/brush   (routed by object domain, see Get-GdiplusSub)   stubs: 89
 //
 // Each stub reproduces C3's own generated prototype verbatim and forwards 1:1 to
 // the real flat API through a function-pointer cast (gdiplus.h is C++-only, so the
 // flat API is resolved by name at first use via the loader below).
 //
-// date: 2026-11-05 03:23
+// date: 2026-11-05 22:47
 
 #include <windows.h>
 #include <stdint.h>
@@ -20,11 +20,11 @@ static void* vb6_di_gdiplus_proc(const char* name) {
     return (mod != NULL) ? (void*)GetProcAddress(mod, name) : NULL;
 }
 
-/* GdipCreateSolidFill */
-intptr_t __stdcall vb6_di_GdipCreateSolidFill(intptr_t argb, int32_t* Brush) {
-    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateSolidFill");
+/* GdipDeletePen */
+intptr_t __stdcall vb6_di_GdipDeletePen(intptr_t mPen) {
+    intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipDeletePen");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(argb, Brush);
+    return fn(mPen);
 }
 
 /* GdipDeleteBrush */
@@ -41,18 +41,18 @@ intptr_t __stdcall vb6_di_GdipCreatePen1(intptr_t mColor, float mWidth, intptr_t
     return fn(mColor, mWidth, mUnit, mPen);
 }
 
-/* GdipDeletePen */
-intptr_t __stdcall vb6_di_GdipDeletePen(intptr_t mPen) {
-    intptr_t (WINAPI *fn)(intptr_t) = (intptr_t (WINAPI *)(intptr_t))vb6_di_gdiplus_proc("GdipDeletePen");
+/* GdipCreateSolidFill */
+intptr_t __stdcall vb6_di_GdipCreateSolidFill(intptr_t ARGB, int32_t* Brush) {
+    intptr_t (WINAPI *fn)(intptr_t, int32_t*) = (intptr_t (WINAPI *)(intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateSolidFill");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(mPen);
+    return fn(ARGB, Brush);
 }
 
-/* GdipCreateLineBrushFromRectWithAngleI */
-intptr_t __stdcall vb6_di_GdipCreateLineBrushFromRectWithAngleI(void* mRect, intptr_t mColor1, intptr_t mColor2, float mAngle, intptr_t mIsAngleScalable, intptr_t mWrapMode, int32_t* mLineGradient) {
-    intptr_t (WINAPI *fn)(void*, intptr_t, intptr_t, float, intptr_t, intptr_t, int32_t*) = (intptr_t (WINAPI *)(void*, intptr_t, intptr_t, float, intptr_t, intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateLineBrushFromRectWithAngleI");
+/* GdipSetPenDashStyle */
+intptr_t __stdcall vb6_di_GdipSetPenDashStyle(intptr_t mPen, int32_t mDashStyle) {
+    intptr_t (WINAPI *fn)(intptr_t, int32_t) = (intptr_t (WINAPI *)(intptr_t, int32_t))vb6_di_gdiplus_proc("GdipSetPenDashStyle");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
-    return fn(mRect, mColor1, mColor2, mAngle, mIsAngleScalable, mWrapMode, mLineGradient);
+    return fn(mPen, mDashStyle);
 }
 
 /* GdipCreateLineBrushFromRect */
@@ -60,6 +60,12 @@ intptr_t __stdcall vb6_di_GdipCreateLineBrushFromRect(void* rect, intptr_t color
     intptr_t (WINAPI *fn)(void*, intptr_t, intptr_t, intptr_t, intptr_t, int32_t*) = (intptr_t (WINAPI *)(void*, intptr_t, intptr_t, intptr_t, intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateLineBrushFromRect");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(rect, color1, color2, Mode, wrapMode, lineGradient);
+}
+/* GdipCreateLineBrushFromRectWithAngleI */
+intptr_t __stdcall vb6_di_GdipCreateLineBrushFromRectWithAngleI(void* mRect, intptr_t mColor1, intptr_t mColor2, float mAngle, intptr_t mIsAngleScalable, intptr_t mWrapMode, int32_t* mLineGradient) {
+    intptr_t (WINAPI *fn)(void*, intptr_t, intptr_t, float, intptr_t, intptr_t, int32_t*) = (intptr_t (WINAPI *)(void*, intptr_t, intptr_t, float, intptr_t, intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateLineBrushFromRectWithAngleI");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mRect, mColor1, mColor2, mAngle, mIsAngleScalable, mWrapMode, mLineGradient);
 }
 /* GdipCreateLineBrushI */
 intptr_t __stdcall vb6_di_GdipCreateLineBrushI(void* mPoint1, void* mPoint2, intptr_t mColor1, intptr_t mColor2, int32_t mWrapMode, intptr_t* mLineGradient) {

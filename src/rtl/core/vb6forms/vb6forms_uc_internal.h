@@ -133,6 +133,11 @@ typedef struct vb6_UCRec {
     // 之前只会写裸全局 vb6_UserControl_MousePointer, 宿主窗口从不读它,
     // 于是 .ctl 里给 Disabled 项设的 vbNoDrop(12) 一直不生效。
     int32_t   mousePointer;
+    // ucTreeView: `UserControl.FontBold/FontUnderline` 也是每实例状态 (VB6 里就是
+    // UserControl.Font 对象的 Bold/Underline)。生成码只写裸全局, 故 push 时从这里
+    // 灌入、SetFontFlag 时同步回这里, 否则下一次 paint 的 push 会把值清回默认。
+    int16_t   fontBold;
+    int16_t   fontUnderline;
 } vb6_UCRec;
 
 // 缺陷 3: Refresh 的重入闸门。WM_PAINT/WM_PRINTCLIENT 进出时加减; Refresh 只在
@@ -165,6 +170,8 @@ typedef struct vb6_UCSaved {
     void*   hWnd;                 // Fix 133u: UserControl.hWnd
     int16_t autoRedraw;           // Fix 133u: UserControl.AutoRedraw
     struct vb6_UserControl_Extender_Type ext; // Fix 133u: Extender.Visible/Height
+    int16_t fontBold;             // ucTreeView: UserControl.FontBold 存档
+    int16_t fontUnderline;        // ucTreeView: UserControl.FontUnderline 存档
     vb6_UCRec* current;
     void*   displayName;          // Fix 116: Ambient.DisplayName (BSTR)
 } vb6_UCSaved;

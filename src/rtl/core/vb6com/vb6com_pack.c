@@ -253,7 +253,21 @@ void* vb6_ComUnpackObject(void* variant) {
         // 等伪对象按结构体字段直接访问 (vb6_ComIface_Font*), 拿到包装器会
         // 全部失效 (Charts2020 图表标题/百分比文字缺失的根因)
         extern void* vb6_UC_UnwrapHost(void* obj);
-        return vb6_UC_UnwrapHost((void*)pv->pdispVal);
+        extern int32_t vb6_ComObject_IsBoxed(void* v);      /* vb6comserver_obj.c */
+        extern void* vb6_ComObject_GetInstance(void* p);    /* vb6comserver_obj.c */
+        void* obj = vb6_UC_UnwrapHost((void*)pv->pdispVal);
+        /* ucTreeView: 工程类实例经 vb6_ComPackVB6InstanceBorrowed 入集合/回传时,
+         * pdispVal 是 vb6_ComObject **包装器**(vtable/refCount/desc/vb6Instance),
+         * 而本函数的调用点一律把它当 `vb6_cls_X*` 按字段访问 (For Each 项目类:
+         *   N = (vb6_cls_Node*)vb6_ComUnpackObject(&v);  N->SubText …)。
+         * 不还原实例 ⇒ 字段读到包装器尾外(vb6comserver.h 布局:x86 偏移 12 才起
+         * vb6Instance), 实测 av read target=0x650060, 栈 = vb6_Len ← RecurCalcTreeWidth。
+         * 只认自家包装器(IsBoxed 带 IsWindow/可读闸), 外部 IDispatch 原样返回。 */
+        if (vb6_ComObject_IsBoxed(obj)) {
+            void* inst = vb6_ComObject_GetInstance(obj);
+            if (inst) obj = inst;
+        }
+        return obj;
     }
     if (pv->vt == VT_UNKNOWN) return (void*)pv->punkVal;
     return NULL;
