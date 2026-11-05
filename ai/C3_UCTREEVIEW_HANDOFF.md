@@ -361,3 +361,32 @@ ucTreeViewPlus.ctl(1347,5): warning VB3001: 未声明的标识符: 'Cls' (可能
 
 **下一轮第一条**：`tests\run_tests.ps1` 的 ucTreeView 登记 + `emit-manifest.expected.txt` 新行
 （同一类：登记），提交推 GA；之后再按类读静态门禁 diff。
+
+## 17. 第四轮：夹具登记 + 首份测量读数（2026-11-06 01:05）
+
+**A. 登记（已收口）**
+- `tests\run_tests.ps1:9305` 新增 `Test-VbpBuild "ucTreeView" ... -Arch "x86"`；语法 ParseFile 通过。
+- `emit-manifest.expected.txt`：新增 `tests/ucTreeView/Proyecto1.vbp`
+  （sha256=172f9c3a… ascii256=e4470177… rc=0 bytes=923835，本机 `.build\C3.exe` 现算，
+  与 CI artifact 同值）。
+- 本机全量现算**不可用**（单输入 >1 分钟，两个并发作业互相拖慢，已终止）；改用既定先例：
+  CI run `42065548065`（head 8cedb604）的 `emit-manifest` artifact 登记 11 行存量。
+  其中 5 行（czFormDemo / VBFlexGridDemo / Units / B445 / SegmentedControl）ascii256 变，
+  6 行 `Charts 2020` 家族（带空格路径，正则 `(\S+)$` 会截断，必须用 `(.+)$`）。
+- 本地门禁实测：`compare_emit_manifest` **595/595 逐行相同**；`check_manifest_coverage`
+  `inputs=595 registered=595 集合相等` OK；`check_vbp_fixture_census` `220/214+6基线` OK。
+
+**B. 首份 1:1 测量（只测不改）**
+- C3 产物：`output\ucTreeView\Proyecto1.exe`，820224 B，PE `machine=0x014C`，
+  进程 Wow64=True（32 位），主窗 `Form1`。
+- 窗口/客户区：C3 `767x498` / 客户端 `752x460`；VB6 `767x498` / `752x460` —— **完全一致**。
+- 子窗相对窗口原点（两边逐项相同）：UC 宿主 `(15,38) 177x445`；`AllowEdit (215,206) 161x17`；
+  `Contact List (215,232) 217x177`；按钮/复选框等坐标两边一致。
+- 像素：整窗差异 61.6%；树区域（rel 15,38 177x445）差异显著 —— C3 主色 `240,240,240`
+  与 `38,38,38` 文字，缺 VB6 的 `255,255,255` 底与 `255,180,180` 选中高亮（1323 采样点）。
+- 肉眼对照：VB6 左树有节点（Facebook/Meta/Instagram/WhatsApp）与图标；**C3 左树区域空白**。
+- 运行日志实测（C3）：`THE IMAGE: 1 DON'T EXIST`（另有数条）—— 图像列表加载失败；
+  另有已知 `[C3_HOST_MEMBER_MISS] site=SetProp name="Font" obj=… cls=Edit`。
+
+**下一轮第一条**：查 `THE IMAGE: N DON'T EXIST` 的加载路径（App.Path/img 与 LoadPicture
+调用点），确认节点不绘制是否与之同因；再查树区背景色/选中高亮的画刷来源。

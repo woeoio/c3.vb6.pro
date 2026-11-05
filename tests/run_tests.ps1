@@ -9299,6 +9299,11 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-VbpBuild "charts_ucTreeMaps"  "$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp"
     Test-VbpBuild "charts_ucTreeMaps_x86" "$Tests\Charts 2020\ucTreeMaps\Proyecto1.vbp" -Arch "x86"
 
+    # ucTreeView 示例工程 (2026-11-06): 本任务的 1:1 还原对象，口径是 **x86 锚点**
+    # (PE machine=0x014C)，故只登记 x86 一档。它跑起来是真 GUI (Form1)，CI 上只判
+    # "编得过、链得出 exe"；像素对照走本机 tests\guisample\uctreeview_px.ps1。
+    Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86"
+
     # <vbeclipse> 回归夹子 (dbgdlg) 2026-10-06: 「Alias 名与 VB 名相同」这条路上**真调用**过
     # DI 包装的那一份夹具 —— 只要求"编得过、链得出 exe"，不跑 (它是 GUI 工程，跑起来要人点)。
     # 缺口是什么：cDlg.cls:196 `Declare Function PageSetupDlg Lib "COMDLG32" Alias "PageSetupDlgA"...`,
