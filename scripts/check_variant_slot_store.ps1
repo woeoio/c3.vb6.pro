@@ -355,8 +355,11 @@ foreach ($k in $askByFile171.Keys) {
         $bad += ('R9 名单外的新问点 ' + $k + ' x' + $askByFile171[$k] + ' —— 这一问又有人自己抄一份')
     }
 }
-# ---- R9c (第六十三刀 §B172): 成员读发文站三处, 每一处都只许调那条唯一出口 ----
-$WantStation172 = [ordered]@{ 'cgen_expr_member_class_fallback.inc' = 2; 'cgen_expr_with.cpp' = 1 }
+# ---- R9c (第六十三刀 §B172): 成员读发文站四处, 每一处都只许调那条唯一出口 ----
+# 第四站 = ucTreeView 的链式类字段读 (cgen_expr_member_voidptr_com.inc): 复合成员
+# (`oParent->Parent->Childs`) 此后也带 voidptr 尾注, 否则外层 .Count/.Add 直发结构体成员。
+$WantStation172 = [ordered]@{ 'cgen_expr_member_class_fallback.inc' = 2; 'cgen_expr_with.cpp' = 1;
+                              'cgen_expr_member_voidptr_com.inc' = 1 }
 $stationByFile172 = @{}
 foreach ($f in $srcFiles168) {
     $t172 = [System.IO.File]::ReadAllText($f.FullName)

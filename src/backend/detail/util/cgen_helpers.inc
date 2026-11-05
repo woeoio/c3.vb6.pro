@@ -730,6 +730,9 @@
     // 单枚控件与控件数组元素两条路只差这一个串。命中返回 true (已填 lastExpr_/pendingChainObj_)。
     bool emitUcInstanceMemberExpr(const std::string& ucClass, const std::string& member,
                                   const std::string& recvExpr);
+    // 账 #191 续: 「宿主句柄 → UC 类实例指针」这一形也只住在本文件 —— ByRef 实参要的是
+    // **可寻址**的左值 (外层再取地址), 不是成员调用结果; expr/ 里不再手拼 vb6_UC_InstanceOf。
+    std::string ucInstanceThisPtrExpr(const std::string& clsPtr, const std::string& recvExpr);
     bool controlNeedsSubclass(const FrmControl& ctrl) const;
 
     // C29-SL-o（账 #83 的 Slider 半边）: Slider 的**设计期值面**下发。

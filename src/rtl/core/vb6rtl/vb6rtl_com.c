@@ -1691,11 +1691,18 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
            故就地 extern (与上面 vb6_ScalePxToUser 同款)。 */
         extern void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut);
         LOGFONTW lf;
-        vb6_UC_FontLogFont(vb6_UserControl_Font, 96, 0, &lf);
-        // ucTreeView: UserControl.FontBold/FontUnderline 叠加 (VB6 里它们是 Font 的
-        // Bold/Underline, TextWidth 必须同样变宽)。
-        if (vb6_UserControl_FontBold) lf.lfWeight = FW_BOLD;
-        if (vb6_UserControl_FontUnderline) lf.lfUnderline = 1;
+        // ucTreeView: UserControl.FontBold/FontUnderline 在 VB6 里就是 Font 的
+        // Bold/Underline。叠在**八档副本**上再问唯一主人 —— 本文件不许再抄一遍
+        // 「八档 → LOGFONT」(com_latebind_guard R9 的负控)。
+        if (vb6_UserControl_Font
+            && (vb6_UserControl_FontBold || vb6_UserControl_FontUnderline)) {
+            vb6_ComIface_Font scratch = *vb6_UserControl_Font;
+            if (vb6_UserControl_FontBold) scratch.Bold = -1;
+            if (vb6_UserControl_FontUnderline) scratch.Underline = -1;
+            vb6_UC_FontLogFont(&scratch, 96, 0, &lf);
+        } else {
+            vb6_UC_FontLogFont(vb6_UserControl_Font, 96, 0, &lf);
+        }
         hNew = CreateFontIndirectW(&lf);
         if (hNew) hOld = (HFONT)SelectObject(hdc, hNew);
     }

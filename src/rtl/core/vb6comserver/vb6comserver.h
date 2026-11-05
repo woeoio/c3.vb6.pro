@@ -186,6 +186,11 @@ void* vb6_ComObject_GetInstance(void* pdisp);
 // 而 GetInstance 头一句就是 obj->vtable 的**裸读** (vb6com_foreach.c 顶部那条
 // "读 0x20404 撞 NULL+0x404" 的崩记录就是同一形状)。⇒ 三闸照抄 vb6_ComIsDispatchable
 // (IsWindow / IsBadReadPtr / 首字段可读), 最后一闸换成**身份**: 首字段 == g_ComObjectVtable。
+// 同一枚「值自己说明自己」问题的**低层闸**: 集合的引用计数 (uc_collection_api.inc)
+// 与类名那两档共用这条身份判据, 但各自用不同的名字 —— 类名那一问的消费口径只钉
+// vb6_ComObject_IsBoxed, 所有权那一问走这一枚 (object_slot_boxing B7)。
+int32_t vb6_ComObject_IsVb6Wrapper(void* v);
+
 int32_t vb6_ComObject_IsBoxed(void* v);
 
 // ucTreeView: 包装器→实例的**定点**还原 (For Each 项目类分支专用)。与上面 IsBoxed

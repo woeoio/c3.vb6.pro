@@ -755,11 +755,17 @@ void* vb6_ComObject_GetInstance(void* pdisp) {
 
 /* 账 #305 §B187 第五腿: 「这枚值是不是我们那族包装器」—— deref 之前先证明可读,
  * 论证见 vb6comserver.h 声明处。命中 ⇒ 交回身份判据真; 其余一律 0 (原样交回调用点)。 */
-int32_t vb6_ComObject_IsBoxed(void* v) {
+int32_t vb6_ComObject_IsVb6Wrapper(void* v) {
     if (!v) return 0;
     if (IsWindow((HWND)v)) return 0;
     if (IsBadReadPtr(v, sizeof(void*))) return 0;
     return ((vb6_ComObject*)v)->vtable == &g_ComObjectVtable;
+}
+
+/* 类名那一问 (BSTR / ANSI 两档) 的消费口径仍钉在这一枚名字上 (object_slot_boxing B7);
+ * 集合引用计数那一问走上面的低层闸, 两件事不再借同一个名字说话。 */
+int32_t vb6_ComObject_IsBoxed(void* v) {
+    return vb6_ComObject_IsVb6Wrapper(v);
 }
 
 /* ucTreeView: For Each 项目类要把集合/COM 交回来的 vb6_ComObject **包装器**还原成
@@ -769,7 +775,7 @@ int32_t vb6_ComObject_IsBoxed(void* v) {
  * **不要**把它并进 vb6_ComUnpackObject: 接口视图/`As Object` 那一族要的是
  * IDispatch (k174_vieweach_station_a 的 QI 判据)。 */
 void* vb6_ComObject_UnboxVb6Instance(void* v) {
-    if (!vb6_ComObject_IsBoxed(v)) return v;
+    if (!vb6_ComObject_IsVb6Wrapper(v)) return v;
     void* inst = vb6_ComObject_GetInstance(v);
     return inst ? inst : v;
 }

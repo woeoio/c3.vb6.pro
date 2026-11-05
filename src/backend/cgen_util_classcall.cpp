@@ -752,6 +752,11 @@ bool CCodeGen::classMemberReturnsAsObject(const std::string& className,
 // `vb6_CtrlArr_GetAt(&vb6_arr_<名>, <idx>)`）—— 两条路只差这一个串。
 // 命中并把 lastExpr_ / pendingChainObj_ 填好时返回 true；成员不在这个 .ctl 上返回 false
 // （调用方据此继续走它自己的兜底）。
+std::string CCodeGen::ucInstanceThisPtrExpr(const std::string& clsPtr,
+                                            const std::string& recvExpr) {
+    return "(" + clsPtr + ")vb6_UC_InstanceOf(" + recvExpr + ")";
+}
+
 bool CCodeGen::emitUcInstanceMemberExpr(const std::string& ucClass,
                                         const std::string& member,
                                         const std::string& recvExpr) {

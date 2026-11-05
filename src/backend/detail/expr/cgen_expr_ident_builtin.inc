@@ -265,16 +265,19 @@
         }
         std::string rtlHp;
         const std::string hostObjHp = isPropertyPageDesigner_ ? "PropertyPage" : "UserControl";
+        /* 装配出口全文件只许问一次 (host_pseudo_table 的 ASSEMBLY-SITE 钉的就是这条):
+           裸名与裸写方法两档共用同一个符号, 不再各拼一遍。 */
+        const std::string hpRtl = hostPseudoRtlSymbol(hostObjHp, lower);
         if (hostPseudoBareName(hostObjHp, lower, rtlHp)) {
             // 账 #278 §B120: 装配交回唯一出口 (对象那一段与成员那一段都出自那张表)。
-            lastExpr_ = hostPseudoRtlSymbol(hostObjHp, lower);
+            lastExpr_ = hpRtl;
             return;
         }
         // ucTreeView: 裸写的方法 (只带 HPF_METHOD, 如 .ctl 里的 `Cls`) 旧代码落"发射裸
         // 标识符"兜底 ⇒ `Cls()` ⇒ LNK2019 `_Cls`。调用点补 `(` 与实参, 值上下文补 `()`。
         std::string rtlMethodHp;
         if (hostPseudoMethodRtlName(hostObjHp, lower, rtlMethodHp)) {
-            lastExpr_ = hostPseudoRtlSymbol(hostObjHp, lower) + (asCallCallee_ ? "" : "()");
+            lastExpr_ = hpRtl + (asCallCallee_ ? "" : "()");
             return;
         }
     }

@@ -1314,9 +1314,9 @@
                                 if (clsPtr.empty()) clsPtr = "vb6_cls_" + itUcv->second + "*";
                             }
                             if (!clsPtr.empty() && itUcv != knownUserControlCtrlVars_.end()) {
-                                argVal = "&((" + clsPtr + "){ (" + clsPtr
-                                       + ")vb6_UC_InstanceOf(vb6_hwnd_"
-                                       + cIdent(lvName) + ") })";
+                                argVal = "&((" + clsPtr + "){ "
+                                       + ucInstanceThisPtrExpr(clsPtr, "vb6_hwnd_" + cIdent(lvName))
+                                       + " })";
                                 goto byrefArgDone1259;
                             }
                         }

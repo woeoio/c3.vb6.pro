@@ -7,7 +7,7 @@
 
 namespace vb6c3 {
 
-// target 文本可能自带 `/* ... */` 注记 (如 "cNode->Parent  /* class var .Parent field */");
+// target 文本可能自带 `/* ... */` 类字段注记 (如 cNode->Parent 后面那一段尾部注记);
 // 把它整段嵌进本文件的块注释 ⇒ C 注释不可嵌套, 内层 `*/` 提前闭合外层, 后续代码裸露成
 // 语法错误 (ucTreeView Node.c:460 / Form4.c:384/395/404 实证)。注释文本里只保留纯表达式。
 static std::string commentStripBlockComments(const std::string& s) {
