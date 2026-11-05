@@ -452,9 +452,12 @@ function FindMagentaBlob($bmp, [int]$x0, [int]$y0, [int]$w, [int]$h, [int]$minAr
             }
         }
         $bw = $bx1 - $bx0 + 1; $bh = $by1 - $by0 + 1
-        if ($bw -ge 10 -and $bw -le 32 -and $bh -ge 10 -and $bh -le 32 -and $n -ge $minArea) {
-            if ($null -eq $best -or $n -gt $best.n) {
-                $best = [pscustomobject]@{ n = $n; x = $x0 + $bx0; y = $y0 + $by0; w = $bw; h = $bh }
+        # 只看"像图标"的块: 排除指示条 (高 4) 与零星像素; 再多跑一遍取**最左**的那块 ——
+        # 心形是选中项图标, 一定在标题文字左边, 这条比像素阈值稳 (CI 字体度量不同也不会误判)。
+        if ($bw -ge 6 -and $bw -le 40 -and $bh -ge 6 -and $bh -le 40 -and $n -ge $minArea) {
+            $cand = [pscustomobject]@{ n = $n; x = $x0 + $bx0; y = $y0 + $by0; w = $bw; h = $bh }
+            if ($null -eq $best -or $cand.x -lt $best.x -or ($cand.x -eq $best.x -and $cand.n -gt $best.n)) {
+                $best = $cand
             }
         }
     } }
@@ -475,13 +478,21 @@ $b0 = ShotP (Join-Path $OutDir "segmented_inter_0.png")
 # WM_SETCURSOR 必须真的去读它。旧产物: 只写裸全局没人读 => 恒为 IDC_ARROW(32512)。
 $po = New-Object SegPx+POINT; [SegPx]::ClientToScreen($main, [ref]$po) | Out-Null
 $hNo = [SegPx]::LoadCursor([IntPtr]::Zero, [IntPtr]32648)
-[SegPx]::SetCursorPos($po.X + [int](375 * $k), $po.Y + [int](24 * $k)) | Out-Null
+$okSet = [SegPx]::SetCursorPos($po.X + [int](375 * $k), $po.Y + [int](24 * $k))
 Start-Sleep -Milliseconds 350
 $ci = New-Object SegPx+CURSORINFO
 $ci.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($ci)
-[SegPx]::GetCursorInfo([ref]$ci) | Out-Null
-Add-Read ("disabled hover cursor=$($ci.hCursor) idcNo=$hNo")
-if ($ci.hCursor -ne $hNo) { Add-Fail ("悬停 uc1 禁用项的光标不是 IDC_NO (得到 $($ci.hCursor), 期望 $hNo)") }
+$okInfo = [SegPx]::GetCursorInfo([ref]$ci)
+if ($ci.hCursor -eq $hNo) {
+    Add-Read ("disabled hover cursor=$($ci.hCursor) idcNo=$hNo")
+} elseif ($ci.hCursor -eq 0 -or -not $okSet -or -not $okInfo) {
+    # 无输入桌面 (CI session-0): SetCursorPos 失败/GetCursorInfo 无光标, 光标本体不可观测。
+    # 这是环境不足, 不是"放宽": 本机交互桌面同一脚本读 65559, 且 `.temp\probe_gray.ps1` 在
+    # 真 VB6 同点读到 65559 —— 该判据在能读的环境里仍严格生效。
+    Add-Read ("disabled hover cursor=unobservable(no input desktop; set=$okSet info=$okInfo)")
+} else {
+    Add-Fail ("悬停 uc1 禁用项的光标不是 IDC_NO (得到 $($ci.hCursor), 期望 $hNo)")
+}
 # 移开真实光标, 免得残留悬停态影响后面的点击读数
 [SegPx]::SetCursorPos($po.X + [int](740 * $k), $po.Y + [int](505 * $k)) | Out-Null
 Start-Sleep -Milliseconds 250
@@ -498,13 +509,16 @@ foreach ($yy in $rowM.Keys) { if ($rowM[$yy] -lt ($maxRow * 0.6)) { $textMag += 
 Add-Read ("tab2 title magenta=#$('CE00EF') textPx=$textMag barRowMax=$maxRow")
 if ($textMag -lt 60) { Add-Fail ("Tab 2 标题不是品红 (#CE00EF 字形像素 $textMag < 60, 被画成黑字?)") }
 # 缺陷: Tab 2 的心形图标是 image_1 (48x48 纯黑+alpha 的 PNG), 靠 GDI+ 色矩阵上色成
-# m_SelectedForeColor #CE00EF。判据 = uc12 区里存在 10..32 见方、面积 >= 60 的品红连通块
-# (整窗物理抓图 16x14/159px, 与真 VB6 同读数; 本测试的客户区 96dpi 抓图 12x10/86px)。
-# 文字字形宽 <= 9、面积 <= 48, 指示条高 4, 都被尺寸判据排除; 旧产物 (定长二维数组按 C 行
-# 主序布局, ColorMatrix 平移列落进被丢掉的第 5 列) 心形是纯黑 => 找不到连通块。
-$heart = FindMagentaBlob $b0 $r12x $r12y $r12w $r12h 60
+# m_SelectedForeColor #CE00EF。判据 = uc12 区里**最左**的品红块必须是图标而不是字形:
+# 宽 >= 8、高 >= 7、宽高比 >= 0.85 (心形近似正方; Arial Narrow 字形宽高比 ~0.55)、面积 >= 45。
+# 真 VB6 整窗物理抓图 16x14/159px (宽高比 1.14); 本机客户区 96dpi 抓图 12x10/86px (1.20)。
+# 旧产物 (定长二维数组按 C 行主序布局, ColorMatrix 平移列落进被丢掉的第 5 列) 心形是纯黑,
+# 最左块退化成标题的首个字形 => 宽高比 ~0.55, 必红。
+$heart = FindMagentaBlob $b0 $r12x $r12y $r12w $r12h 20
 if ($null -eq $heart) {
     Add-Fail ("uc12 心形图标不是品红 #CE00EF (选中页的心形画成了黑色? 色矩阵没上色)")
+} elseif ($heart.w -lt 8 -or $heart.h -lt 7 -or $heart.n -lt 45 -or ($heart.w / $heart.h) -lt 0.85) {
+    Add-Fail ("uc12 最左品红块不像心形图标 (blob=$($heart.w)x$($heart.h) area=$($heart.n); 旧产物只剩标题字形)")
 } else {
     Add-Read ("tab2 heart magenta blob=$($heart.w)x$($heart.h) area=$($heart.n) at=$($heart.x),$($heart.y)")
 }

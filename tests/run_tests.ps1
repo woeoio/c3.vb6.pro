@@ -8655,7 +8655,9 @@ if ($Category -in @("all", "run", "vbp")) {
     # 那一形不许在任何一站复活。
     Test-EmitcShape "k173_udt_member_index_shape" @("$Tests\k173_udtmem\K173.vbp") @(
         "me->Loc.Coord[1] = a;",
-        "me->Loc.Grid[1][2] = (a * 10);",
+        # 账 #477: VB6 多维是列主序, 所以 `Grid(1 To 2, 1 To 3)` 声明成 `Grid[3][2]`,
+        # `Grid(1, 2)` 发成 `[2][1]` (第一维最快变); 方形的 M 形状不变。
+        "me->Loc.Grid[2][1] = (a * 10);",
         "o.Inner.Row[2] = 8;",
         "_vb6_with_0->Coord[2] = vb6_ChkLong((_vb6_with_0->Coord[2] + 1));",
         "VB6_SA_AT(int32_t, b.Items, 2) = 21;",
@@ -12106,7 +12108,7 @@ if ($Category -in @("all", "syntax")) {
         # 是两个格子（#262 之前它们是一格，那条取整针根本分不开"会舍"和"会并"）。
         # 反过来，成员数组的**整体**赋值仍必须裸形（见上面那两条 Absent）。
         "p.Pixels[0] = vb6_ChkByte(vb6_FltToLng(6.7300000000000004));",
-        "p.Grid[0][1] = vb6_ChkByte(vb6_FltToLng(6.7300000000000004));",
+        "p.Grid[1][0] = vb6_ChkByte(vb6_FltToLng(6.7300000000000004));",
         "p.Grid[0][0] = vb6_ChkByte(vb6_FltToLng(2.3999999999999999));") @(
         "vb6_ChkLong(d);",
         "vb6_ChkLong(s);",
@@ -12121,7 +12123,7 @@ if ($Category -in @("all", "syntax")) {
         "p.Nums = vb6_ChkLong(vb6_ArrayAssign1D(p.Nums, src3));",
         # 账 #262 之前那三形的残留必须一个不剩: 元素裸存 (截断)、多维被折成一格、结构体少维。
         # `uint8_t Grid[2];` 与 `p.Grid[0] = 6.73…` 都是**整串**比 (结尾的 `;` 不一样)，
-        # 所以它们不会误伤 `Grid[2][2]` / `Grid[0][1]` 那两条正确形。
+        # 所以它们不会误伤 `Grid[2][2]` / `Grid[1][0]` 那两条正确形。
         "p.Pixels[0] = 6.7300000000000004;",
         "p.Grid[0] = 6.7300000000000004;",
         "uint8_t Grid[2];")
@@ -12130,11 +12132,12 @@ if ($Category -in @("all", "syntax")) {
     # `M(0 To 4, 0 To 4) As Single` —— 以前那枚结构体只有 20 字节而 GDI+ 从里面读 100 字节。
     Test-CodegenNote "memdim_layout" @("$Tests\test_memdim.bas") @(
         # 布局: 每维自己折一档，几维就几层括号 (步长归 C 算，不留第二份"每行几格"的表)。
-        "int32_t M[4][4];", "float K[5][3];", "int32_t T[2][3][4];", "BSTR S[2][3];",
+        "int32_t M[4][4];", "float K[3][5];", "int32_t T[4][3][2];", "BSTR S[3][2];",
         # 两条下标路（obj.M(i, j) 与 With 里的 .M(i, j)）都问同一个出口，必须答同一串下标。
-        "m.M[0][1] = 11;", "m.M[0][2] = 22;", "s.K[1][2] = 222;", "t.T[0][0][3] = 3;",
-        "_vb6_with_0->M[0][2] = 77;", "g_m.M[0][1] = 44;",
-        'w.S[0][1] = vb6_BSTR_FromStr(L"ab");',
+        # 账 #477: 列主序 ⇒ `M(0,1)` 是 `M[1][0]`、`T(0,0,3)` 是 `T[3][0][0]`。
+        "m.M[1][0] = 11;", "m.M[2][0] = 22;", "s.K[2][1] = 222;", "t.T[3][0][0] = 3;",
+        "_vb6_with_0->M[2][0] = 77;", "g_m.M[1][0] = 44;",
+        'w.S[1][0] = vb6_BSTR_FromStr(L"ab");',
         # 账 #263: 含所有权元素的定长成员数组逐格走扁平元素指针 —— 先声明 _i 才用它，
         # 格数由 C 按元素类型算，与秩无关。
         "int32_t _i; int32_t _n = (int32_t)(sizeof(d->S) / sizeof(*_dp));") @(
