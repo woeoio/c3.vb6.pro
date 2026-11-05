@@ -760,10 +760,17 @@ Vb6Type CCodeGen::inferUdtFieldVb6Type(const ASTNode* target, bool* outIsArray) 
 // 账 #262: 定长成员数组的下标折算 —— 秩在这里，层数就只在这里定。
 // 发码形态是 C 的多维数组 (`float M[5][5]`)，所以每层一个括号、步长归 C 算，
 // 不需要另开一张"每行几格"的表 (那张表迟早和 cgen_decl.cpp 的折尺寸分家)。
+// 账 #477: **VB6 多维数组是列主序** (SAFEARRAY 惯例: 第一维最快变, 见
+// vb6_SafeArrayND_Offset 的 stride 递推), 而 C 多维数组是行主序 —— 直接
+// `field[i][j]` 会把 `.M(0,4)` 写进 C 的第 4 格而不是 VB6 的第 20 格。给 GDI+
+// 这类"按声明形状吃裸内存"的 API 时整张矩阵会被转置 (uc12 心形色矩阵的
+// 平移列落到被丢弃的第 5 列 ⇒ 上色静默失效, 品红退化成纯黑)。声明侧已按
+// 列主序发 (cgen_decl.cpp 同级反向), 这里下标同样反向: `field[j][i]`。
 std::string CCodeGen::udtFixedMemberIndex(const std::string& fieldExpr,
                                           const std::vector<ExprPtr>& args, int32_t rank) {
     int32_t layers = rank < 1 ? 1 : rank;
-    std::string out = fieldExpr;
+    std::vector<std::string> idxs;
+    idxs.reserve((size_t)layers);
     for (int32_t k = 0; k < layers; k++) {
         std::string idx;
         if (k < (int32_t)args.size() && args[k]) {
@@ -773,8 +780,10 @@ std::string CCodeGen::udtFixedMemberIndex(const std::string& fieldExpr,
         } else {
             idx = "0";            // 缺的那层 (含省略实参): 给一个确定的在范围内的格子 (VB6 此处报下标越界)
         }
-        out += "[" + idx + "]";
+        idxs.push_back(std::move(idx));
     }
+    std::string out = fieldExpr;
+    for (int32_t k = layers - 1; k >= 0; k--) out += "[" + idxs[(size_t)k] + "]";
     return out;
 }
 

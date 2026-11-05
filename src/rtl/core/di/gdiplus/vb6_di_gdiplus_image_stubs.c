@@ -69,9 +69,12 @@ intptr_t __stdcall vb6_di_GdipCreateImageAttributes(int32_t* imageattr) {
     return fn(imageattr);
 }
 
-/* GdipSetImageAttributesColorMatrix */
-intptr_t __stdcall vb6_di_GdipSetImageAttributesColorMatrix(intptr_t imageattr, intptr_t ColorAdjust, int16_t EnableFlag, void* MatrixColor, void* MatrixGray, intptr_t Flags) {
-    intptr_t (WINAPI *fn)(intptr_t, intptr_t, int16_t, void*, void*, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, int16_t, void*, void*, intptr_t))vb6_di_gdiplus_proc("GdipSetImageAttributesColorMatrix");
+/* GdipSetImageAttributesColorMatrix
+ * EnableFlag 是 GDI+ 的 BOOL = 32 位, **不是** WORD: x86 stdcall 下按 int16_t 传会把
+ * 后面 MatrixColor/MatrixGray/Flags 整体挪 2 字节, GDI+ 读到的 MatrixColor 是野指针
+ * ⇒ 返回 InvalidParameter、色矩阵静默不生效。 */
+intptr_t __stdcall vb6_di_GdipSetImageAttributesColorMatrix(intptr_t imageattr, intptr_t ColorAdjust, int32_t EnableFlag, void* MatrixColor, void* MatrixGray, intptr_t Flags) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t, int32_t, void*, void*, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t, int32_t, void*, void*, intptr_t))vb6_di_gdiplus_proc("GdipSetImageAttributesColorMatrix");
     if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
     return fn(imageattr, ColorAdjust, EnableFlag, MatrixColor, MatrixGray, Flags);
 }
