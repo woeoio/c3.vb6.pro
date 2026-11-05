@@ -2,6 +2,11 @@
 // 内容 = 拆分前 vb6forms_uc.c 第 989~1185 行，逐行未改
 // 在函数体内 #include；路径一律用 basename
 
+// ucTreeView: 只对**工程类**包装器 (vb6_ComObject) 计引用。宿主包装器
+// (Vb6HostWrap / 裸 HWND) 的寿命由宿主环管，按 COM 协议再计数会双份
+// (czUI 的 GUI 门禁实测: 加计数后 exit 0xC000041D + latebind-miss 0/3)。
+extern int32_t vb6_ComObject_IsBoxed(void* v);   /* vb6comserver_obj.c */
+
 void* vb6_Collection_New(void) {
     vb6_CollRec* c = (vb6_CollRec*)calloc(1, sizeof(vb6_CollRec));
     if (c) c->tag = VB6_UC_COLL_TAG;
@@ -37,7 +42,8 @@ static void vb6_coll_push(void* coll, const vb6_VARIANT* v, const wchar_t* key) 
        free 掉了, 集合里的 pdispVal 随即悬空: ucTreeView 的 For Each 读回
        vb6Instance=NULL, 实测 rva=0x117CE av read target=0x84
        (RecursiveDraw 里 N->Height)。加引用与 Remove 的释放配对。 */
-    if (dst->vt == vb6_vtDispatch && dst->pdispVal) vb6_ComAddRefDispatch(dst->pdispVal);
+    if (dst->vt == vb6_vtDispatch && dst->pdispVal && vb6_ComObject_IsBoxed(dst->pdispVal))
+        vb6_ComAddRefDispatch(dst->pdispVal);
     if (c->keys) c->keys[c->count] = key ? SysAllocString(key) : NULL;
     c->count++;
 }
@@ -124,7 +130,7 @@ void vb6_Collection_Remove(void* coll, int32_t idx1) {
     vb6_VARIANT* v = &items[idx1 - 1];
     vb6_VariantValueFree(v);   /* 账 #305 §B165: 释放口径与 vb6_coll_push 同源(对象档照旧不动) */
     /* 与 coll_push 的 AddRef 配对: 集合自己那一份引用在这里放掉。 */
-    if (v->vt == vb6_vtDispatch && v->pdispVal) {
+    if (v->vt == vb6_vtDispatch && v->pdispVal && vb6_ComObject_IsBoxed(v->pdispVal)) {
         vb6_ReleaseObject(&v->pdispVal);
         v->pdispVal = NULL;
     }
@@ -154,7 +160,8 @@ static void vb6_coll_itemCopy(const vb6_VARIANT* src, vb6_VARIANT* out) {
     vb6_VariantValueCopy(out, src);   /* 账 #305 §B165: 与 vb6_coll_push 同一枚出口 */
     /* 取回的那一格自己持有一份 (见下方 Item 注释): 掌管道随后按同一口径放掉,
        所以对象档必须在这里加引用, 否则放掉的是集合自己那一份。 */
-    if (out->vt == vb6_vtDispatch && out->pdispVal) vb6_ComAddRefDispatch(out->pdispVal);
+    if (out->vt == vb6_vtDispatch && out->pdispVal && vb6_ComObject_IsBoxed(out->pdispVal))
+        vb6_ComAddRefDispatch(out->pdispVal);
 }
 
 void vb6_Collection_Item(void* coll, int32_t idx1, void* outV) {

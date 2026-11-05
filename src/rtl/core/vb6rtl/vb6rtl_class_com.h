@@ -153,6 +153,11 @@ void* vb6_ComUnpackObject(void* variant);
 void vb6_ComVarClear(void* variant);
 void vb6_ComVarFree(void* variant);
 
+// ucTreeView: `Me.Image` 的 StdPicture 视图 (宿主模型/cgen 发射；定义在
+// vb6forms_picture_prop.c)。伞头里必须有原型 —— emit-declared 静态门禁要求
+// 每个被发射且有 RTL 定义的符号都能从伞头看见声明。
+void* vb6_FormGetImagePicture(void* hwnd);
+
 // 一体化COM辅助函数 (内部处理临时vb6_VARIANT清理)
 void* vb6_ComCallObject(void* disp, const wchar_t* methodName,
                         void* args, int32_t argc);
