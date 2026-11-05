@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <images Width="24" Height="24">
+		<image src="img/home.png" key="home"/>
+		<image src="img/modules.png" key="modules"/>
+		<image src="img/users.png" key="users"/>
+		<image src="img/inventory.png" key="inventory"/>
+		<image src="img/payments.png" key="payments"/>
+		<image src="img/customer.png" key="customer"/>
+		<image src="img/reports.png" key="reports"/>
+        <image src="img/settings.png" key="settings"/>
+        <image src="img/language.png" key="language"/>
+        <image src="img/theme.png" key="theme"/>
+        <image src="img/resolution.png" key="resolution"/>
+        <image src="img/notifications.png" key="notifications"/>
+		<image src="img/extension.png" key="extension"/>
+		<image src="img/help.png" key="help"/>
+		<image src="img/link.png" key="link"/>
+    </images>
+    <nodes>
+		<n Text="Home" FontBold="True" BackColor="#e1e4ff" HideCheck="true" Image="home"/>
+		<n Text="Modules" FontBold="True" BackColor="#c4f9fd" HideCheck="true" Image="modules" Expanded="True">
+<n Text="User Management" HideCheck="true" image="users" SubText="Manages user access, roles, and permissions." Badge="430" BadgeBackColor="#51b453"/>
+<n Text="Inventory" HideCheck="true" image="inventory" SubText="Manages products, materials, and licenses."/>
+<n Text="Billing and Payments" HideCheck="true" image="payments" SubText="Handles invoicing and payment tracking." Badge="▼ 2%" BadgeBackColor="#ff6961" />
+<n Text="Customer Management (CRM)" HideCheck="true" image="customer" SubText="Manages customer interactions and sales."/>
+<n Text="Reports" HideCheck="true" image="reports" SubText="Generates financial and sales reports."/>
+
+		</n>
+        <n Text="Setting" FontBold="True" BackColor="#fefda6" HideCheck="true" Image="settings">
+			<n Text="Language" HideCheck="true" Image="language" RadioStyle="true">
+				<n Text="English" Checked="true"/>
+				<n Text="Spanish"/>
+				<n Text="French"/>
+			</n>
+			<n Text="Theme" HideCheck="true" Image="theme" RadioStyle="true">
+				<n Text="Dark" />
+				<n Text="Light" Checked="true"/>
+			</n>
+			<n Text="Resolution" HideCheck="true" Image="resolution" RadioStyle="true">
+				<n Text="1280x720 (HD)"/>
+				<n Text="1600x900 (HD+)" Checked="true"/>
+				<n Text="2560x1440 (QHD o 2K)"/>
+				<n Text="3840x2160 (4K UHD)"/>
+			</n>
+			<n Text="Notifications" HideCheck="true" Image="notifications" >
+				<n Text="play sound" Checked="true"/>
+				<n Text="vibrate Screen" Checked="true"/>
+			</n>
+		</n>
+		
+        <n Text="Extensions" FontBold="True" BackColor="#e1f8d8" HideCheck="true" Image="extension" Checked="true">
+			<n Text="Kontakt.dll" Checked="true"/>
+			<n Text="Serum.dll" Checked="true"/>
+			<n Text="Massive.dll" Checked="true"/>
+			<n Text="Sylenth1.dll (missing)" Disabled="True"/>
+		</n>
+		
+        <n Text="Help" FontBold="True" BackColor="#ffe8e5" HideCheck="true" Image="help">
+			<n Text="FAQ's" HideCheck="true" FontBold="True" TextColor="#1b4275" LinkStyle="True" Image="link"/>
+			<n Text="Submit a Ticket" HideCheck="true" TextColor="#315c93" LinkStyle="True" Image="link"/>
+			<n Text="Network Status" HideCheck="true" TextColor="#315c93" LinkStyle="True" Image="link"/>
+			<n Text="Migrate" HideCheck="true" TextColor="#315c93" LinkStyle="True" Image="link"/>
+		</n>
+
+    </nodes>
+</root>
+

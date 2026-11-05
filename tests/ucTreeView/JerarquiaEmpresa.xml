@@ -1,0 +1,62 @@
+<root>
+    <images Width="40" Height="40" Radius="38">
+        <image src="https://randomuser.me/api/portraits/men/1.jpg" key="John_Perez"/>
+        <image src="https://randomuser.me/api/portraits/women/2.jpg" key="Maria_Gomez"/>
+        <image src="https://randomuser.me/api/portraits/women/3.jpg" key="Lucy_Rodriguez"/>
+        <image src="https://randomuser.me/api/portraits/men/8.jpg" key="Diego_Martinez"/>
+        <image src="https://randomuser.me/api/portraits/women/9.jpg" key="Ana_Torres"/>
+        <image src="https://randomuser.me/api/portraits/men/4.jpg" key="Carlos_Sanchez"/>
+        <image src="https://randomuser.me/api/portraits/men/5.jpg" key="Javier_Lopez"/>
+        <image src="https://randomuser.me/api/portraits/women/10.jpg" key="Sara_Nunez"/>
+        <image src="https://randomuser.me/api/portraits/women/11.jpg" key="Laura_Castillo"/>
+        <image src="https://randomuser.me/api/portraits/men/12.jpg" key="Jose_Ramirez"/>
+        <image src="https://randomuser.me/api/portraits/men/13.jpg" key="Michael_Torres"/>
+        <image src="https://randomuser.me/api/portraits/women/6.jpg" key="Andrea_Fernandez"/>
+        <image src="https://randomuser.me/api/portraits/men/7.jpg" key="Gabriel_Ruiz"/>
+        <image src="https://randomuser.me/api/portraits/women/14.jpg" key="Sofia_Rivas"/>
+        <image src="https://randomuser.me/api/portraits/women/15.jpg" key="Paula_Mendoza"/>
+    </images>
+    <nodes>
+        <n Text="General Management" FontBold="True">
+            <n Text="John Perez" SubText="CEO" Image="John_Perez" BorderWidth="1" BorderColor="#22aa55"/>
+            <n Text="Human Resources" FontBold="True">
+                <n Text="Maria Gomez" SubText="HR Manager" Image="Maria_Gomez" BorderWidth="1" BorderColor="#22aa55"/>
+                <n Text="Recruitment" FontBold="True">
+                    <n Text="Lucy Rodriguez" SubText="Recruitment Specialist" Image="Lucy_Rodriguez" BorderWidth="1" BorderColor="#22aa55"/>
+                    <n Text="Diego Martinez" SubText="Recruitment Assistant" Image="Diego_Martinez" BorderWidth="1" BorderColor="#22aa55"/>
+                </n>
+                <n Text="Labor Relations" FontBold="True">
+                    <n Text="Ana Torres" SubText="Labor Relations Coordinator" Image="Ana_Torres" BorderWidth="1" BorderColor="#22aa55"/>
+                </n>
+            </n>
+            <n Text="Technology" FontBold="True">
+                <n Text="Carlos Sanchez" SubText="CTO" Image="Carlos_Sanchez" BorderWidth="1" BorderColor="#22aa55"/>
+                <n Text="Software Development" FontBold="True">
+                    <n Text="Javier Lopez" SubText="Senior Developer" Image="Javier_Lopez" BorderWidth="1" BorderColor="#22aa55"/>
+                    <n Text="Sara Nunez" SubText="Frontend Developer" Image="Sara_Nunez" BorderWidth="1" BorderColor="#22aa55"/>
+                    <n Text="QA and Testing" FontBold="True">
+                        <n Text="Laura Castillo" SubText="QA Engineer" Image="Laura_Castillo" BorderWidth="1" BorderColor="#22aa55"/>
+                    </n>
+                </n>
+                <n Text="Infrastructure" FontBold="True">
+                    <n Text="Jose Ramirez" SubText="Systems Administrator" Image="Jose_Ramirez" BorderWidth="1" BorderColor="#22aa55"/>
+                    <n Text="Networks and Security" FontBold="True">
+                        <n Text="Michael Torres" SubText="Security Specialist" Image="Michael_Torres" BorderWidth="1" BorderColor="#22aa55"/>
+                    </n>
+                </n>
+            </n>
+            <n Text="Marketing" FontBold="True">
+                <n Text="Andrea Fernandez" SubText="CMO" Image="Andrea_Fernandez" BorderWidth="1" BorderColor="#22aa55"/>
+                <n Text="Advertising" FontBold="True">
+                    <n Text="Gabriel Ruiz" SubText="Marketing Analyst" Image="Gabriel_Ruiz" BorderWidth="1" BorderColor="#22aa55"/>
+                </n>
+                <n Text="Social Media" FontBold="True">
+                    <n Text="Sofia Rivas" SubText="Community Manager" Image="Sofia_Rivas" BorderWidth="1" BorderColor="#22aa55"/>
+                    <n Text="Content" FontBold="True">
+                        <n Text="Paula Mendoza" SubText="Content Specialist" Image="Paula_Mendoza" BorderWidth="1" BorderColor="#22aa55"/>
+                    </n>
+                </n>
+            </n>
+        </n>
+    </nodes>
+</root>
