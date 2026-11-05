@@ -532,6 +532,9 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
   - `bd877887` chore(diag): C3_LATEBIND_MISS 下打印 COM 晚绑定 438 站点
   - `63aa1056` test(gui): segmented 补 438/字色/ItemVisible/Solid-Transparent/CheckBar 图标交互断言
   - `0e6c1490` docs(handoff): 记录五缺陷闭环与旧/新对照读数
+  - `fec8f092` test(gui): segmented 启动前补齐 image.jpg 并等布局稳定
+  - `53bc98a0` fix(rtl): PaintPicture 参数转换走权威表，自然尺寸折算收敛到一处
+  - `81e8807d` chore(manifest): 登记发码形状（ucSegmentedControl: PaintPicture 直发 + ForeColor 落 DC）
 - 本地：`tests\run_tests.ps1 -Category gui` → **PASS=10 FAIL=0 SKIP=0 TOTAL=10**（2026-11-05 11:29，
   含 ucSegmentedControl 全部新断言：`darkPx=581` / `textPx=165` / `whitePx=639` / `back=0` / `hits=0`）。
 - 双远端 `github`/`origin` 的 `dev` 均已快进到上述提交（无 force）。
@@ -559,4 +562,17 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
 - 本地复跑：`variant_i8_coverage` PASS（switches 20）、`statusbar_panel_hm` PASS（`pp=2`）；
   另跑 24 条相关静态哨兵（host_pseudo/com_marker/com_latebind/uc_scale/control_dc/rtl_resource_ids/
   rtl_embedded/subclass_slots/rtl_proto_arity/rtl_naked_names/vbp_fixture_census/test_helper_integrity…）全绿。
+
+**GA #41966348042（第三次）：FAIL** — 只剩 `Emit manifest (shape oracle)`：
+- 清单 594 份里 **1 份**哈希不同（正是 `tests/ucSegmentedControl/SegmentedControl.vbp`），属预期内的
+  cgen 形状变化（本轮改的两处：PaintPicture 直发 + ForeColor 落 DC）。
+- 逐行核对（本地 `--emit-c` 样本，`.build\emit-samples`）：`AutoRedraw` 仍走 ComSetProp、
+  `PaintPicture` 变 `vb6_FormPaintPictureAt` 直发、`Picture = Me.Image` 仍走 ComCall(Image)、
+  `Picture = Nothing` 走 ComSetProp —— 全部是本轮想要的形状；本地重发的 sha256
+  `74a4c3bd…` 与 CI 报的实得值**逐字节相同**（跨机器一致，非本机假绿）。
+- 处置：`rebless_emit_manifest.ps1 -Bless` 只改写这一份文件的 1 条数据行（594 行中改写 1 / 新增 0 / 退场 0），
+  复算 `期望 594 / 实得 594 / 相同 594`，`check_manifest_coverage` K1..K3 绿。
+
+**GA #41968620825（第四次）：SUCCESS** — 22/22 jobs 全绿（含 `Tests (compile #1..#2)`、`Tests (vbp #1..#5)`
+与 `Emit manifest` 的 expect-check），`dev` = `81e8807d`，双远端一致。
 
