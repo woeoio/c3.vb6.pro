@@ -24,7 +24,9 @@
 #          ucSegmentedControl3  (CheckBar 段)1178/617       1185/625     vivid>=900, blue>=400
 #          ucSegmentedControl4  (右竖列)    1665/1664       1734/1734    vivid>=1400, blue>=1400
 #          ucSegmentedControl11 (Chrome 段)  970/209         970/209      vivid>=800, blue>=150
-#          ucSegmentedControl1  (顶部条)     488/161         802/161      vivid>=400
+#          ucSegmentedControl1  (顶部条)     488/161         488/161      vivid>=260*k^2
+#     注: uc1 的 400 是 120dpi 下标定的; 96dpi 的 CI 只有 302 (面积 ~1/k^2), 真 VB6 同环境
+#         同比例 (488*0.62≈302), 所以按 k^2 缩放 (本机 406, CI 260) —— 语义仍是"图标在不在"。
 #     注: uc2 的 vivid 在真 VB6 上更高 (参考的条目标题滚动/悬停态在参考进程里更"彩"),
 #     这里取 C3 实测 145 作下限 —— 图标一旦缺失该值会掉到 0 附近, 这才是要防的回归。
 #   · 全图选中段底色: 取运行期 GetSysColor(COLOR_HIGHLIGHT=13) —— 控件画的就是 vbHighlight
@@ -37,9 +39,11 @@
 #     (名义厚度 TabIndicatorSize=4)、水平跨度 >= 40px; "没画出来/画成竖条色块"仍会红。
 #
 # 已钉住的四条残差 (见 ai\C3_SEGMENTED_HANDOFF.md §9; 旧产物逐条必红):
-#   · 悬停 uc1 的 Disabled 项 -> 光标必须是 IDC_NO(32648) —— 旧产物只写裸全局没人读, 恒为箭头;
-#   · uc12 "Tab 2" 心形图标 -> 必须是 #CE00EF 品红连通块 (16x14/159px, 与真 VB6 同读数);
-#     旧产物因定长二维数组按 C 行主序布局, 色矩阵平移列落进被丢弃的第 5 列 => 心形纯黑;
+#   · 悬停 uc1 的 Disabled 项 -> 光标必须是 IDC_NO(32648); 无输入桌面 (CI session-0) 读不到
+#     真光标本体时记 unobservable, 不降级成"通过"(见 9.10.1);
+#   · uc12 "Tab 2" 心形图标 -> 必须是 #CE00EF 的最左品红块且宽高比 >= 0.85 (真 VB6 16x14/159,
+#     本机 12x10/86, CI 10x7/44); 旧产物因定长二维数组按 C 行主序布局, 色矩阵平移列落进被
+#     丢弃的第 5 列 => 心形纯黑, 最左块退化成标题字形 (宽高比 ~0.6);
 #   · "<-- ItemVisible" 点击 -> 首帧/稳定耗时 (真 VB6 140/340ms; 旧产物 Refresh 空实现 => 永不重绘);
 #   · uc10 Flat/Gradient -> uc3 选中段深蓝 #系统高亮色 必须在点 Gradient 后消失、点 Flat 后回来
 #     (旧产物兄弟控件不重绘 => 一直深蓝)。
@@ -287,7 +291,7 @@ $s = $stat["uc2"];  if ($s.vivid -lt 100) { Add-Fail ("uc2(左大面板) vivid="
 $s = $stat["uc3"];  if ($s.vivid -lt 900 -or $s.blue -lt 400) { Add-Fail ("uc3(CheckBar 段) vivid=" + $s.vivid + "/blue=" + $s.blue + " 低于 900/400") }
 $s = $stat["uc4"];  if ($s.vivid -lt 1400 -or $s.blue -lt 1400) { Add-Fail ("uc4(右竖列) vivid=" + $s.vivid + "/blue=" + $s.blue + " 低于 1400/1400") }
 $s = $stat["uc11"]; if ($s.vivid -lt 800 -or $s.blue -lt 150) { Add-Fail ("uc11(Chrome 段) vivid=" + $s.vivid + "/blue=" + $s.blue + " 低于 800/150") }
-$s = $stat["uc1"];  if ($s.vivid -lt 400) { Add-Fail ("uc1(顶部条) vivid=" + $s.vivid + " < 400 (四个段的彩色图标没了?)") }
+$s = $stat["uc1"];  $uc1Min = [int](260 * $k * $k); if ($s.vivid -lt $uc1Min) { Add-Fail ("uc1(顶部条) vivid=" + $s.vivid + " < $uc1Min (四个段的彩色图标没了?)") }
 
 # --- 全图强调色计数 ---
 # 选中段底色 = vbHighlight = GetSysColor(COLOR_HIGHLIGHT) (ucSegmentedControl.ctl:1864/1991),
@@ -510,14 +514,15 @@ Add-Read ("tab2 title magenta=#$('CE00EF') textPx=$textMag barRowMax=$maxRow")
 if ($textMag -lt 60) { Add-Fail ("Tab 2 标题不是品红 (#CE00EF 字形像素 $textMag < 60, 被画成黑字?)") }
 # 缺陷: Tab 2 的心形图标是 image_1 (48x48 纯黑+alpha 的 PNG), 靠 GDI+ 色矩阵上色成
 # m_SelectedForeColor #CE00EF。判据 = uc12 区里**最左**的品红块必须是图标而不是字形:
-# 宽 >= 8、高 >= 7、宽高比 >= 0.85 (心形近似正方; Arial Narrow 字形宽高比 ~0.55)、面积 >= 45。
-# 真 VB6 整窗物理抓图 16x14/159px (宽高比 1.14); 本机客户区 96dpi 抓图 12x10/86px (1.20)。
+# 宽 >= 8、高 >= 6、宽高比 >= 0.85 (心形近似正方; Arial Narrow 字形宽高比 ~0.55)、面积 >= 30。
+# 真 VB6 整窗物理抓图 16x14/159px (宽高比 1.14); 本机客户区 96dpi 抓图 12x10/86px (1.20),
+# CI 96dpi 实测 10x7/44 (1.43) —— 都由宽高比判别, 不靠面积门限。
 # 旧产物 (定长二维数组按 C 行主序布局, ColorMatrix 平移列落进被丢掉的第 5 列) 心形是纯黑,
-# 最左块退化成标题的首个字形 => 宽高比 ~0.55, 必红。
+# 最左块退化成标题的首个字形 => 宽高比 0.55~0.73, 必红。
 $heart = FindMagentaBlob $b0 $r12x $r12y $r12w $r12h 20
 if ($null -eq $heart) {
     Add-Fail ("uc12 心形图标不是品红 #CE00EF (选中页的心形画成了黑色? 色矩阵没上色)")
-} elseif ($heart.w -lt 8 -or $heart.h -lt 7 -or $heart.n -lt 45 -or ($heart.w / $heart.h) -lt 0.85) {
+} elseif ($heart.w -lt 8 -or $heart.h -lt 6 -or $heart.n -lt 30 -or ($heart.w / $heart.h) -lt 0.85) {
     Add-Fail ("uc12 最左品红块不像心形图标 (blob=$($heart.w)x$($heart.h) area=$($heart.n); 旧产物只剩标题字形)")
 } else {
     Add-Read ("tab2 heart magenta blob=$($heart.w)x$($heart.h) area=$($heart.n) at=$($heart.x),$($heart.y)")
