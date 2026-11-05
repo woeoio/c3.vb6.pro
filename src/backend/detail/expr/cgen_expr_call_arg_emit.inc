@@ -182,7 +182,10 @@
                     // (ucTreeView ClsTreeExplorer.c:249 实证)。只有变量类符号才是左值。
                     auto* ie = static_cast<IdentifierExpr*>(pa);
                     const Symbol* is = symTab_.lookup(ie->name);
-                    if (!is) return false;
+                    /* 局部变量/形参不在全局符号表 (symTab_) 里 —— 查不到时按旧行为当左值。
+                       此前 return false 误伤了 Declare 的 ByRef String 出参:
+                       `GetUserNameB buf, n` 的 buf 收不到回写 (bas #2 实测 name=[] / ok=N)。 */
+                    if (!is) return true;
                     switch (is->kind) {
                         case SymbolKind::Constant:
                         case SymbolKind::EnumMember:

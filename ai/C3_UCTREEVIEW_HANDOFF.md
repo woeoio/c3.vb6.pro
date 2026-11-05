@@ -274,3 +274,64 @@ ucTreeViewPlus.ctl(1347,5): warning VB3001: 未声明的标识符: 'Cls' (可能
 - 本机只有 `157615014017600_7680` 这一个失败 session 目录（22:59:35），生成码行号可能比当前生成器晚一版，
   但 `RecurCalcTreeWidth` 等函数体未受本轮生成器修复影响。
 - map 符号化：`Rva+Base − 0x400000` 才是与 VEH 打印 `rva` 同口径的偏移；`0001:` 段偏移会差 0x1000。
+
+## 14. GA 记录与下一轮第一条（2026-11-06 00:05）
+
+**run 42059617000 (dev=daa595cd) = FAIL**，逐格：
+- `Emit manifest (shape oracle)`：新夹具 `tests/ucTreeView/Proyecto1.vbp` 未登记哈希 +
+  存量 **15 份**发码哈希变（本轮生成器改动所致：UC 方法桥 / Property 动词 / VBA.Left$ / 裸 Cls /
+  For Each 项目类）。处置：先不带 `-Bless` 跑 `scripts/rebless_emit_manifest.ps1` 看逐行 diff，
+  确认形状再登记（**不许拿 -Bless 当通过**）。
+- `Tests (compile #1)`：`emitted_declared` 红 = `vb6_FormGetImagePicture` 有 RTL 定义、伞头无原型
+  → **已在 03c89a73 补进 `vb6rtl_class_com.h`**。另 `host_pseudo_table_census` / `uc_instance_exit` /
+  `object_slot_boxing` 红，待逐条看差异（多为预期形状变更，必须核对后再同步断言）。
+- `Tests (compile #2)`：`vbp_fixture_census` / `manifest_coverage` 红 = 新夹具未登记
+  `tests\run_tests.ps1` 的 vbp/GUI 表 + 清单；`com_latebind_guard` / `variant_slot_store` 红，待查。
+- `Tests (vbp #8)`：`czUI` FAIL（`exit=-1073740771`，`latebind-miss 期望 3 实到 0`）。
+  根因：Collection 的 AddRef/Release 对**宿主包装器**也计数 ⇒ 双份寿命。
+  **已在 03c89a73 收窄为 `vb6_ComObject_IsBoxed` 为真才计数**（待 GA 复验）。
+- `Tests (bas #2)`：`test_declare_byref_string_out` / `test_declare_byval_string_out`
+  `output mismatch` —— **下一轮第一条**要查（先本地跑该两条 bas，逐字对比期望输出，
+  再决定是本轮哪一处生成/RTL 改动引起）。
+
+本地复验（03c89a73 之前一次构建，00:02）：`K174-sum=303 / skipped=2 / DONE` ✓；
+`output\ucTreeView\Proyecto1.exe` `ALIVE title=Form1` ✓。
+
+**下一轮执行顺序**：
+1. 本地跑 bas 两条 string-out 用例，定位 output mismatch；
+2. 逐格读 compile #1/#2 的静态门禁 diff（`host_pseudo_table_census`、`uc_instance_exit`、
+   `object_slot_boxing`、`com_latebind_guard`、`variant_slot_store`、`vbp_fixture_census`、
+   `manifest_coverage`），区分"预期形状变更"与"真回归"；
+3. 登记 `tests\run_tests.ps1` 的 ucTreeView 条目 + `emit-manifest.expected.txt`（逐行现算）；
+4. 写 `tests\guisample\uctreeview_px.ps1`；真 VB6 截图对照；交付。
+
+## 15. 续跑第二轮：di 桩回退收口 + bas 出参修复（2026-11-06 00:30）
+
+**A. `src/rtl/core/di` 回退 + 19 条桩增量补回**
+- 回退：`git checkout 841c1d3c^ -- src/rtl/core/di`（841c1d3c 的生成器整篇改写把既有桩改坏，
+  实测 czUI `av EXECUTE(DEP) target=0xffff0559`，帧 `vb6_di_SetWindowRgn`）。回退后 czUI
+  `ALIVE title=czForm Demo`。
+- 回退的副作用（本轮实测复现）：ucTreeView 链接 19 条 `LNK2019`。原型**不是猜的** —— 从失败
+  session `C:\Users\ADMINI~1\AppData\Local\Temp\C3C\162810628553000_12952\*.h` 逐条取 C3 生成头
+  的 `extern ... vb6_di_<name>(...)`，按 `841c1d3c` 的原域放置、**只追加不改既有**：
+  - `gdiplus/vb6_di_gdiplus_path_stubs.c`：`GdipAddPathPolygon` / `GdipGetPathWorldBoundsI` / `GdipTransformPath`
+  - `gdiplus/vb6_di_gdiplus_image_stubs.c`：`GdipGetImagePixelFormat` / `GdipGetImageDimension`
+  - `gdiplus/vb6_di_gdiplus_draw_stubs.c`：`GdipCreateMatrix` / `GdipTranslateMatrix` / `GdipRotateMatrix`
+  - `gdiplus/vb6_di_gdiplus_brush_stubs.c`：`GdipSetPenDashStyle`
+  - `vb6_di_user32_stubs.c`：`SetRectEmpty` / `GetCurrentThemeName` / `GetThemeDocumentationProperty` / `InitCommonControls`
+  - `vb6_di_shell_stubs.c`：`SHGetFileInfoA` / `SHGetSpecialFolderLocation` / `PathIsDirectoryA`
+  - `vb6_di_win32_stubs.c`：`FindFirstFileA` / `FindNextFileA` / `GetLogicalDriveStringsA`
+- 重编实测（00:28）：`c3rtl.rc.res` 2889120 B @ 0:28:56、`C3.exe` 15388160 B @ 0:28:57；
+  内嵌符号逐条核实为 True（`vb6_di_GdipAddPathPolygon` / `GdipSetPenDashStyle` / `SetRectEmpty` /
+  `GetCurrentThemeName` / `SHGetFileInfoA` / `FindFirstFileA` / `InitCommonControls` /
+  `vb6_ComObject_UnboxVb6Instance`）。
+- ucTreeView：`C3 --arch x86` 退出码 0（无 LNK2019），启动 **`ALIVE title=Form1 hwnd=2883614`** ✓。
+
+**B. `Tests (bas #2)` 两条 Declare String 出参**
+- 根因已定位（见第 4 节第 4 条）：`cgen_expr_call_arg_emit.inc` 的 `isAssignableOutTarget161b`
+  裸标识符臂 `if (!is) return false;` 误伤局部变量（不在全局 `symTab_`）。
+- 修：`if (!is) return true;`。重编后本地实测（00:24/00:25）：
+  `len=14 / name=[Administrator] / byref-name-ok=Y`、`byval-name-ok=Y` ✓。
+
+**下一轮第一条**：逐格读 GA 静态门禁 diff（第 14 节第 2 条那 7 个），再登记
+`tests\run_tests.ps1` 与 `emit-manifest.expected.txt`；随后写 `uctreeview_px.ps1` 与真 VB6 截图对照。
