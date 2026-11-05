@@ -398,3 +398,132 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
 - 参考 exe 主窗 `Title=[LabelPlus]` 来自 `.vbp` 的 `Title`；C3 产物 `Title=[Form1]` 来自 `Form1.frm` 的 `Caption`。**以窗体 Caption 为准**（参考的可视窗也是 `[Form1]`）。
 - 本机 exe 安全警告靠仓库根 Medium 完整性标签解决，**不要再加低完整性标签**；脚本用 `Start-Process -RedirectStandardOutput/-RedirectStandardError -NoNewWindow`。
 - 采集脚本坑：委托（`EnumProc`）里的 `Write-Output` 不进管道 → 必须先收集到 `ArrayList` 再统一输出（`.temp\probe_ref.ps1` 已按此写法）。
+
+## 9. 接手轮：五缺陷闭环（438 / 标题图例字色 / ItemVisible / Solid·Transparent / CtrlType=1 图标）
+
+> 上一会话在 10:28 已把改动编成 C3 + 夹具（但最后一版误编成 x64，启动即 `Error #6 Overflow`；
+> 那是我方探针自己跑错架构，不是源码回归 —— 按 x86 重编后正常）。本轮在 x86 上复测并收口。
+
+### 9.1 运行期 438 的对象与触发路径（最优先）
+
+- **目标对象**：`Form1` 主窗自身（`Me`），不是子控件；`disp` 即主窗 HWND。
+- **成员名**：
+  - `PaintPicture` —— **Call 站**（`Me.PaintPicture Picture, 0, 0, Me.ScaleWidth, Me.ScaleHeight`）；
+  - `Image` —— **GetProp 站**（`Me.Picture = Me.Image`）。
+- **触发路径**：`ucSegmentedControl11_ItemClick` 的 Solid/Transparent 段：
+  - `Index=1`：`Me.AutoRedraw = True` → `Picture = LoadPicture(App.Path & "\image.jpg")` →
+    `Me.PaintPicture ...` → `Me.Picture = Me.Image`；
+  - `Index=0`：`Me.Picture = Nothing`。启动不报，**第一次点 Solid/Transparent 才报**。
+- **根因（HEAD 产物）**：cgen 把 `Me.PaintPicture` 当 COM 晚绑定发 `vb6_ComCall(hwnd, "PaintPicture")`，
+  宿主模型没有该成员 ⇒ `hhandled=-1` ⇒ `vb6_RaiseError(438)`；随后 `Me.Image` 同因缺 GetProp 臂再抛一次。
+  `Me.AutoRedraw`/`Me.Picture` 写侧本来就忽略未知属性，不报错但被**静默吞掉** ⇒ 记忆位图从未建立，
+  PaintPicture 也无处可画。HEAD 静态核对：cgen 里 `PaintPicture` 0 处、getprop `"Image"` 0 处、
+  setprop `AutoRedraw|"Picture"` 0 处、`vb6_FormPaintPictureAt` 0 处。
+- **修**：
+  - `cgen_expr_call_com_bind.inc`：接收者是 `vb6_hwnd_*` 且成员 `PaintPicture` 时直发
+    `vb6_FormPaintPictureAt(obj, argc, argv)`（不经 438 路径）；
+  - `uc_hostmodel_setprop.inc`：补 `AutoRedraw` / `Picture` 臂；
+  - `uc_hostmodel_getprop.inc`：补 `Image` 臂（AutoRedraw 位图的 StdPicture 视图）；
+  - `uc_hostmodel_call.inc`：补 `PaintPicture` / `Image` 臂；
+  - `vb6forms_picture_prop.c`：新增 `vb6_FormSetAutoRedraw` / `vb6_FormGetImagePicture` /
+    `vb6_FormPaintPictureAt` / `vb6_FormSetPictureProp`。
+- **本机读数**：`C3_FPP_TRACE` 顺序 = `SetAutoRedraw(val=65535) → PaintPicture(939x650) → GetImage(bmp≠0)
+  → SetPicture(pic≠0)`，再点 Solid 出现 `SetPicture(pic=0)`；`segmented.err` 中 `[C3_438] hits=0`，
+  全程无 `#32770` 错误框。真 VB6 参考 exe 走同一路径不报错（同一 `image.jpg` 上屏）。
+
+### 9.2 标题与图例字色
+
+- **是哪两处**：uc12 选中页签标题 `Tab 2`（`SelectedForeColor=#CE00EF` 品红）；uc9 `OPEN EDITOR`
+  图例（`ForeColor=vbHighlightText` 白，压在 `#FF6BFF` 胶囊底上）。修前两处都是黑字。
+- **根因**：`UserControl.ForeColor = v` 只写了全局 `vb6_UserControl_ForeColor`，没有
+  `SetTextColor` 到本控件**当前正在绘制**的 DC，所以本帧字形仍是旧色。
+- **修**：`uc_host_window.c` 在 `vb6_uc_paintInto` 里记录 `vb6_uc_activePaintDC`（并保存/还原外层值，
+  防止嵌套 `composeBelow` 把兄弟的 DC 覆盖后置空）；`cgen_assign_host_pseudo.inc` 发
+  `vb6_UC_SetForeColor(...)` 同时改全局与当前 DC；RTL 新增 `vb6_UC_SetForeColor`。
+- **本机读数**（物理像素）：`Tab 2` 精确 `#CE00EF` 字形像素 165（120dpi 参考 294）；
+  `OPEN EDITOR` 纯白 639（修前 0）；胶囊底 `#FF6BFF` 1177。
+
+### 9.3 `<-- ItemVisible` 按钮
+
+- 点击 `600,224+36,12`（设计期坐标）后 uc4 右竖列区域变化率 **0.3807**，再点恢复 **0**（Ok 图标消失/重现）。
+- C3 侧本轮**没有**对应的 RTL/cgen 改动（`ItemVisible` 是 `.ctl` 自己的属性，走 UC 的 IDispatch 存根）。
+  即：在当前产物上它是生效的；旧产物是否失效见 §9.8 的对照结论。
+
+### 9.4 `Solid/Transparent` 按钮
+
+- uc11 第 1 项（设计期 `700,448`）= Transparent：全客户区变化率 **0.9667**（`image.jpg` 上屏）；
+  第 0 项（`628,448`）= Solid：变化率 **0**（背景图撤掉）。修前该路径必 438（§9.1），图片不上屏。
+
+### 9.5 `CtrlType=1`（checkbar）下方控件图标
+
+- **根因**：`Form1.frx` 的 DocString 属性块里有 PUA 私有区字符，`readDocString` 的**扫描式**定位
+  （按 `cbSize` 逐个试）会被 PUA 片段带偏，`Items` 串错位/截断 ⇒ checkbar 项没有图片、只剩字形。
+- **修**：`frx_reader.cpp::readDocString` 先按 DocProperty GUID + `cbSize == 28 + nBytes` + 编码校验做
+  **精确定位**，失败再回落原扫描路径（不动其它 FRX 块）。
+- **本机读数**：checkbar 4 项（回形针/蓝色软盘/地球/相机）为真图片，与参考一致；
+  uc3 `vivid=1185 blue=625`（阈值 900/400）。
+- **旧/新实物对照（物理像素截图，同一 uc6 rect 20,380 231x41）**：旧产物是字形回退
+  （Segoe UI Symbol 的 PUA 串画成 "昵 / d / =" 三个歪字），深色像素 230；新产物是 4 枚真图标
+  （纸夹 / 软盘白底蓝格 / 地球 / 相机），深色像素 581。⇒ 判据取"深色像素 ≥400"（见 §9.6）。
+- 注：结构读数用的那张 751x520 截图里，内容实际是 **1.25 倍物理像素**的左上裁切（旧判据按设计
+  坐标取区域，uc6 那一排在图上位于 20,380 而非 16,304）；新增的交互/图标断言一律在
+  `SetThreadDpiAwarenessContext(-4)` 后的物理坐标系里做，不受该偏移影响。既有结构读数口径未动。
+
+### 9.6 新增回归断言（`tests\guisample\segmented_px.ps1`）
+
+原有结构判据（客户区 751x520、12 宿主 rect、`#0078D7` 运行期高亮、品红族）**未改口径**；新增段
+切到物理像素坐标系（线程 DPI context `-4`），按 `设计期坐标 × 运行期缩放 k` 点击/测量：
+
+| 断言 | 阈值 | 本机读数 | 旧行为为何会红 |
+|---|---|---|---|
+| Tab2 标题为 `#CE00EF` | 字形像素 ≥60 | 165 | 旧=黑字→0 |
+| `OPEN EDITOR` 为白字 | 纯白像素 ≥100 | 639 | 旧=黑字→0 |
+| CheckBar 图标为图片（uc6 物理 20,380 231x41） | 深色像素 ≥400 | 581 | 旧=字形回退→230 |
+| ItemVisible 隐藏 Ok | uc4 区域变化率 ≥0.08 | 0.3807 | 属性不落地→0 |
+| ItemVisible 恢复 | 变化率 ≤0.01 | 0 | — |
+| Transparent 上屏 | 全客户区变化率 ≥0.40 | 0.9667 | 438 框→0 |
+| Solid 撤图 | 变化率 ≤0.02 | 0 | — |
+| 全程无 438 | `[C3_HOST_438`/`[C3_438]` 计数 = 0 且无 `#32770` | 0 / 无 | 旧=1 (见 §9.8) |
+
+另：TAB2 指示条厚度判据由"整块品红 bbox 高度"改为"**铺满行**行数"（标题字变品红后整块 bbox 高 29
+会误红），判据值仍是 2..6 行、水平跨度 ≥40px，语义不变。
+
+### 9.7 本机复测
+
+- 重建 C3（`cmake --build .build --target c3`，用 vcvarsall 环境；`build.bat` 本地 LF 会解析失败）后，
+  C3.exe 内嵌新 RTL（按新注释串校验命中）。
+- 夹具 x86：`C3.exe tests\ucSegmentedControl\SegmentedControl.vbp --arch x86 --output-dir output\ucSegmentedControl`。
+- `segmented_px.ps1`：`PASS`，读数见 §9.6；`-Category gui` 见 §9.9。
+
+### 9.8 旧行为对照（negative control，本轮实跑）
+
+方法：`git stash push -- src/` → 重建 HEAD C3 → 用同一份 `segmented_px.ps1`（新断言）跑 HEAD 产物
+→ `git stash pop` → 重建工作树 → 再跑一次。两次读数（`.temp\neg_old`、`.temp\neg_new`）：
+
+| 读数 | OLD（HEAD） | NEW（工作树） |
+|---|---|---|
+| tab2 标题品红字形像素 | **0**（红色：黑字） | 165 |
+| barRowMax / 指示条 | 101 / bbox `392,115-492,118 101x4` | 101 / `392,90-492,118 101x29` |
+| `OPEN EDITOR` 纯白 | **0**（红色：黑字） | 639 |
+| ItemVisible hide / restore | 0.3819 / 0 | 0.3807 / 0 |
+| Solid/Transparent image / back | **0.9887 / 0.9887**（红：Solid 没撤图） | 0.9667 / 0 |
+| 438 日志计数（两套标签都收） | **1**（红） | 0 |
+| 结论 | FAIL（4 条红） | PASS |
+
+- 旧产物 stderr 原文（根因证据，取自 `.temp\neg_old\segmented.err`）：
+  `[C3_HOST_MEMBER_MISS #1] site=SetProp name="AutoRedraw" ... cls=VB6_Form_Form1`、
+  `[C3_HOST_438 #1] site=GetProp name="PaintPicture" obj=00BE05A6 isWin=1 cls=VB6_Form_Form1`、
+  `Unhandled VB6 Error #438: Object doesn't support this property or method`（随后进程终止 ⇒
+  Solid 那次点击根本没执行，back 变化率停在 0.9887）。
+- 断言口径修正（本轮）：起初 438 断言只匹配工作树新加的 `[C3_438]`（受 `C3_LATEBIND_MISS` 门控），
+  而 HEAD 既有上报是 `[C3_HOST_438 #n]`（`uc_hostmodel.c`，无条件）⇒ 旧产物读成 hits=0，
+  "旧行为下必红"失效。现改成正则 `\[C3_HOST_438|\[C3_438\]`，旧产物读数变 1（上表）。
+- §9.3 的 ItemVisible 在 OLD 上也同样生效（0.3819/0）⇒ **该项确属 HEAD 已实现**，C3 侧本轮
+  无对应改动；其"旧行为会红"的断言无法成立，如实记录（未用假改动凑绿）。
+- CtrlType=1 图标：本轮补了真断言（§9.6 的"深色像素 ≥400"）。同一张物理截图里 OLD=230
+  （字形回退 "昵 / d / ="）、NEW=581（4 枚真图标）；OLD 侧会红，NEW 绿。
+
+### 9.9 收口记录
+
+（填：提交哈希、双远端推送、GA run 结论。）
+
