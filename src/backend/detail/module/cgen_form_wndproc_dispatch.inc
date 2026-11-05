@@ -633,19 +633,27 @@
         const FrmControl& ctrl = *ctrlPtr;
         if (ctrl.controlType == FrmControlType::HScrollBar || ctrl.controlType == FrmControlType::VScrollBar) {
             std::string ctrlHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
+            // 控件数组: 没有 `vb6_hwnd_VScroll1` 这一枚, 句柄在 `vb6_arr_VScroll1` 里按元素取;
+            // `_Scroll/_Change` 处理器首形参是 Index (Form1.frm:1305), 调用必须带元素下标。
+            const bool sbIsArr = knownControlArrays_.count(Symbol::toLower(ctrl.controlName)) > 0;
+            if (sbIsArr) {
+                const int sbIdx = ctrl.index >= 0 ? ctrl.index : 0;
+                ctrlHwnd = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", "
+                         + std::to_string(sbIdx) + ")";
+            }
             std::string scrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");
             std::string changeFn = eventHandlerFn(ctrl.controlName, "_Change");
             bool hasScroll = symTab_.lookup(ctrl.controlName + "_Scroll") != nullptr;
             bool hasChange = symTab_.lookup(ctrl.controlName + "_Change") != nullptr;
             c_.emitLine("if (scrollHwnd == (void*)" + ctrlHwnd + ") {");
             c_.indent();
-            if (hasScroll) c_.emitLine("if (scrollCode == 5 || scrollCode == 4) { extern void " + scrollFn + "(); " + scrollFn + "(); }");
+            if (hasScroll) c_.emitLine("if (scrollCode == 5 || scrollCode == 4) " + vb6CtrlEvCallText(scrollFn, sbIsArr, ctrl.index));
             // 账 (TeeChart 夹具): 没挂 _Scroll 时不能发射裸 else（同 C2181）。原来只对顶层控件
             // 展开，只要顶层每一枚都恰好有 _Scroll 就看不出来；递归进 Frame 后本例 8 枚
             // 只有 _Change ⇒ 从前的写法当场编译失败。无 _Scroll 就无条件调 _Change。
             if (hasChange) {
-                if (hasScroll) c_.emitLine("else { extern void " + changeFn + "(); " + changeFn + "(); }");
-                else c_.emitLine("{ extern void " + changeFn + "(); " + changeFn + "(); }");
+                if (hasScroll) c_.emitLine("else " + vb6CtrlEvCallText(changeFn, sbIsArr, ctrl.index));
+                else c_.emitLine(vb6CtrlEvCallText(changeFn, sbIsArr, ctrl.index));
             }
             c_.dedent();
             c_.emitLine("}");

@@ -3,6 +3,17 @@
 // 内容 = 原文件第 598~921 行，逐行未改。
 
     // WndProc
+    // 控件数组的事件处理器带 `Index As Integer` 首形参 (ucTreeView Form1.frm:1271
+    // `Private Sub Text1_Change(index As Integer)` / :1305 `VScroll1_Change(index)`):
+    // 派发站必须把**元素下标**实参化, 一律 0 参调用是 C2198。
+    // 本函数(emitFormFramework)的前后半片段共用这一枚文本生成器。
+    auto vb6CtrlEvCallText = [&](const std::string& fn, bool isArr, int idx) -> std::string {
+        if (!isArr) return "{ extern void " + fn + "(); " + fn + "(); }";
+        const int i = idx >= 0 ? idx : 0;
+        const std::string iv = "vb6_evidx_" + std::to_string(i);
+        return "{ int16_t " + iv + " = " + std::to_string(i) + "; extern void " + fn
+             + "(int16_t*); " + fn + "(&" + iv + "); }";
+    };
     c_.emitLine("// === " + formName + " WndProc ===");
     c_.emitLine("LRESULT CALLBACK " + wndProc + "(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {");
     c_.indent();
@@ -369,7 +380,7 @@
                 std::string changeFn = eventHandlerFn(ctrl.controlName, "_Change");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 768) {");
                 c_.indent();
-                c_.emitLine("{ extern void " + changeFn + "(); " + changeFn + "(); }");
+                c_.emitLine(vb6CtrlEvCallText(changeFn, isArrayCtrl, ctrl.index));
                 c_.dedent();
                 c_.emitLine("}");
             }

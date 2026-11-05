@@ -50,6 +50,27 @@
     //   (与定义侧同一份 mapTypeRef 映射), 不另立第二套尺。
     std::string defaultValueForParam(const ParameterInfo& p) const;
 
+    // ucTreeView: 按 (类名, 成员名) 判一枚字段是不是 COM 对象指针 (void* / "COM:" 前缀)。
+    // 与 cgen_expr_member_class_fallback.inc 内联查的那两问同源, 供 Fix 088c 的 AST
+    // 推断臂复用 —— 否则 `oParent->Parent->Childs.Count` 里的中段 Childs 不带
+    // "voidptr" 尾注, 外层 .Count/.Add/.Remove 直发结构体成员 (C2224)。
+    bool classFieldIsComPtr(const std::string& clsName, const std::string& memberName) const;
+
+    // ucTreeView: `As DataObject` 形参作为 RTL 首参时的取值形态。C 侧形参类型随
+    // 传值方式变化 —— ByVal 是 `void*` (直接给名字), ByRef 是 `void**` (给 `(*name)`)。
+    // 以前三处硬写 `(void*)(*name)`, 遇到 `ByVal Data As DataObject`
+    // (Form4.c:422 `vb6_oleDD_SetText((void*)(*Data), …)`) 就是 C2100。
+    std::string dataObjectArgExpr(const std::string& name) const;
+
+    // ucTreeView: ByRef 实参是一枚 UC 控件实例名时给出可寻址的临时槽表达式;
+    // 不是 UC 控件则返回空串 (调用方保持原路径)。控件在生成 C 里只有 vb6_hwnd_<名>。
+    std::string ucInstanceByRefArgExpr(const std::string& name) const;
+
+    // ucTreeView: 语句级调用串里若出现 `&<UC控件名>` / `&(<UC控件名>)`, 重写成
+    // `&((vb6_cls_X*){ (vb6_cls_X*)vb6_UC_InstanceOf(vb6_hwnd_<名>) })`。
+    // 控件在生成 C 里没有同名变量, 取址必是 C2065 (Form2.c:240 `cTE.Init TVP, …`)。
+    void fixUCInstanceAddrInExpr(std::string& expr) const;
+
     // ---- 标识符命名 ----
 
     // VB6标识符 → 安全C标识符 (处理关键字冲突、特殊字符)
@@ -1324,6 +1345,10 @@
     // 由 scripts/check_host_pseudo_table.ps1 逐行钉 (含负控)。
     bool hostPseudoBareName(const std::string& pseudoObj, const std::string& memberName,
                             std::string& outRtlName) const;
+    // 裸写的方法行 (只带 HPF_METHOD, 如 Cls/Refresh/OLEDrag): 名字同上, 但**不加**调用的括号
+    // —— 由调用点补 (, 值上下文才补 () —— 见 cgen_util_com.cpp 的注释。
+    bool hostPseudoMethodRtlName(const std::string& pseudoObj, const std::string& memberName,
+                                 std::string& outRtlName) const;
     bool hostPseudoValueType(const std::string& pseudoObj, const std::string& memberName,
                              Vb6Type& outType, bool requireBare) const;
     bool hostPseudoIsNumeric(const std::string& pseudoObj,

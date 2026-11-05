@@ -11,6 +11,12 @@
 
 namespace vb6c3 {
 
+// ucTreeView: `VBA.Left$(Path, 1)` (Node.cls) 出现在**调用位置**时, 符号表里没有
+// 名为 "Left" 的 Symbol, precheck 的 VBA 分支落空 → M22 模块限定回退发出
+// `vb6_VBA_Left_` ($ 被 cIdent 变成 _) ⇒ LNK2019。内置表只被裸 `Left$` 那一路用到,
+// 这里搬进来给 VBA 分支做兜底 (内部链接, 各 TU 各持一份副本)。
+#include "backend/detail/expr/cgen_expr_ident_builtin_table.inc"
+
 // --- cgen_expr_member.cpp: MemberAccessExpr 求值（类成员 / COM / UDT 字段访问） ---
 // 2026-09-17 拆分：原 1496 行单文件（CCodeGen::visit(MemberAccessExpr&) 函数体 1481 行）拆为
 //   本文件（伞文件）                          —— include + namespace + 函数签名

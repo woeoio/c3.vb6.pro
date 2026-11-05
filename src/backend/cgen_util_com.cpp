@@ -177,7 +177,7 @@ std::string CCodeGen::resolveComValue(const std::string& unpackType) {
         if (ddSym && !ddSym->srcTypeName.empty()
             && Symbol::toLower(ddSym->srcTypeName) == "dataobject") {
             std::string memDD = Symbol::toLower(memberName);
-            std::string ddArg = "(void*)(*" + objExpr + ")";
+            std::string ddArg = dataObjectArgExpr(objExpr);
             if (memDD == "gettext")      { lastExpr_ = "vb6_oleDD_GetText(" + ddArg + ")"; isComMarker_ = false; return lastExpr_; }
             if (memDD == "getfilecount") { lastExpr_ = "vb6_oleDD_GetFileCount(" + ddArg + ")"; isComMarker_ = false; return lastExpr_; }
         }
@@ -619,6 +619,19 @@ bool CCodeGen::hostPseudoBareName(const std::string& pseudoObj,
     return true;
 }
 
+// .ctl/.pag 里**裸写**的宿主伪对象方法 (Cls / Refresh / OLEDrag / Size …)。
+// 表里这些行只带 HPF_METHOD —— 裸名那一路 (hostPseudoBareName) 要求 HPF_BARE,
+// 于是旧代码落到"发射裸标识符"兜底 ⇒ `Cls()` ⇒ LNK2019 `_Cls`
+// (ucTreeView ucTreeViewPlus.ctl:1408 `Cls`)。名字仍出自同一张表, 不另抄清单。
+bool CCodeGen::hostPseudoMethodRtlName(const std::string& pseudoObj,
+                                       const std::string& memberName,
+                                       std::string& outRtlName) const {
+    const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
+    if (!r || !(r->flags & HPF_METHOD) || (r->flags & HPF_BARE)) return false;
+    outRtlName = r->rtl;
+    return true;
+}
+
 // 按值读时的类型答案。requireBare=true 用于**裸名**那一路 —— 必须与发射侧同口径
 // (都认 HPF_BARE), 否则类型 oracle 会给一个发射时根本解析不出宿主符号的名字,
 // 那正是"两条路答不一样"的起源。方法成员与对象成员 (Unknown) 一律不答。
@@ -878,6 +891,12 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
     auto& id = static_cast<const IdentifierExpr&>(expr);
     std::string lower = Symbol::toLower(id.name);
     if (knownVariantVars_.count(lower) || knownObjectVars_.count(lower)) return "";
+    // 常量 (Const / Enum 成员) 在 C 侧是 `#define 文本`, `&CONST` 是 C2101 "constant &"
+    // (ucTreeView ucScrollbar.c:2612/2617 `vb6_ComPackIntRef(&VALUE_DEF)` 实证);
+    // 常量天然不能被写回, 保持按值打包。
+    if (const Symbol* cs = symTab_.lookup(id.name)) {
+        if (cs->kind == SymbolKind::Constant || cs->kind == SymbolKind::EnumMember) return "";
+    }
     if (isArrayCarrierArgName(lower, id.name)) return "";
     std::string fn;
     // Integer 必须问专属表: inferExprType 对 Integer 局部/形参答 Long (VB6 表达式提升),
@@ -1123,7 +1142,7 @@ std::string CCodeGen::resolveComMarkerForPack(const std::string& packFnHint) {
         if (ddSym && !ddSym->srcTypeName.empty()
             && Symbol::toLower(ddSym->srcTypeName) == "dataobject") {
             std::string memDD = Symbol::toLower(memName);
-            std::string ddArg = "(void*)(*" + objExpr + ")";
+            std::string ddArg = dataObjectArgExpr(objExpr);
             if (memDD == "gettext")      return "vb6_oleDD_GetText(" + ddArg + ")";
             if (memDD == "getfilecount") return "vb6_oleDD_GetFileCount(" + ddArg + ")";
         }

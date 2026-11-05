@@ -282,8 +282,12 @@ void CCodeGen::visit(PropertyDecl& node) {
     // Property Get: 设置返回值变量 (与Function相同语义)
     if (node.propKind == ProcKind::PropertyGet) {
         currentReturnVar_ = "vb6_ret_" + cIdent(node.name);
-        if (node.returnType) {
-            std::string retType = mapTypeRef(node.returnType.get());
+        {
+            // 未写 `As <型>` 的 Property Get 在 VB6 里返回 Variant —— 必须照默认型发返回槽,
+            // 否则整段 returnType 分支被跳过, 函数体内 `vb6_ret_X = ...` 全是 C2065
+            // (ucTreeView ucScrollbar.ctl:1907 `Public Property Get TargetValue()` 实证)。
+            std::string retType = node.returnType ? mapTypeRef(node.returnType.get())
+                                                  : std::string("vb6_VARIANT");
             // Fix 160-F: 与 cgen_decl_func.cpp:168 对齐 — Property Get 与 Function
             // 的"给函数名赋值"语义相同, 但此字段从未设置, 使 Fix 092f 的
             // 按返回类型解包 Variant 分支 (cgen_assign_value_sem.inc:265) 在
@@ -294,11 +298,11 @@ void CCodeGen::visit(PropertyDecl& node) {
             currentReturnCType_ = retType;
             // 账 #116 同族 (与 cgen_decl_func.cpp 那处一字一样): 定长串返回类型的节点是
             // FixedStringTypeRef, 按 SimpleTypeRef 读 name 就是把指针当字符串 ⇒ 天文数字的分配。
-            Vb6Type retVb6Type = Vb6Type::Unknown;   // 数组等复合形: '0' 就是它的空值
-            if (node.returnType->kind == ASTNodeKind::SimpleTypeRef) {
+            Vb6Type retVb6Type = node.returnType ? Vb6Type::Unknown : Vb6Type::Variant;   // 数组等复合形: '0' 就是它的空值
+            if (node.returnType && node.returnType->kind == ASTNodeKind::SimpleTypeRef) {
                 retVb6Type = typeSys_.resolveTypeName(
                     static_cast<SimpleTypeRef*>(node.returnType.get())->name);
-            } else if (node.returnType->kind == ASTNodeKind::FixedStringTypeRef) {
+            } else if (node.returnType && node.returnType->kind == ASTNodeKind::FixedStringTypeRef) {
                 retVb6Type = Vb6Type::String;
             }
             // Fix 038/054: UDT 返回值不能用 = 0 初始化 (C2440), 改用 {0}
@@ -333,7 +337,7 @@ void CCodeGen::visit(PropertyDecl& node) {
             // 账 #118 ①: 定长串返回类型 (`Property Get P() As String * 5`) —— 与
             // cgen_decl_func.cpp 那处同款同口径 (两处都得记, 漏一处就少一种落点)。
             // 长度表在**这个 if (node.returnType) 块内**才拿得到 returnType。
-            if (node.returnType->kind == ASTNodeKind::FixedStringTypeRef) {
+            if (node.returnType && node.returnType->kind == ASTNodeKind::FixedStringTypeRef) {
                 emitExpr(*static_cast<FixedStringTypeRef&>(*node.returnType).length);
                 if (!lastExpr_.empty()) {
                     knownFixedStringLen_[Symbol::toLower(node.name)] = lastExpr_;

@@ -15,6 +15,11 @@
     // Used to distinguish "params not looked up" from "looked up with 0 params" (e.g., Property Get
     // with no params) — needed for arg truncation when args > params.
     bool calleeParamsFound = false;
+    // VB6: 0 参 Function/PropertyGet 返回 Variant 时, `F(i)` 的 (i) 是**对返回数组的下标**
+    // (真 VB6 实测 /make 通过: ucTreeView ClsTreeExplorer.cls:317 `GetDrive(i)`)。
+    // 标记后由 argtype 收口处换发 vb6_VariantArrayGetVal(F(), i), 绝不并入调用实参表
+    // (否则发成 `vb6_GetDrive(1)` 而 C 原型 `vb6_VARIANT vb6_GetDrive(void)` ⇒ C2197)。
+    bool calleeZeroArgVariantSubscript = false;
     // 从IdentifierExpr或MemberAccessExpr获取被调用函数名, 在符号表中查找
     // Fix 027: 加入 DeclareSub / DeclareFunc — 否则 WinAPI Declare 的 ByRef 参数无法 emit &,
     //          导致 ByRef UDT/SafeArray/标量 全部按值传递 (例如 SOCKADDR_IN → SOCKADDR_IN* 错误).
@@ -58,6 +63,14 @@
             calleeParams = funcSym->params;
             calleeIsBuiltin = funcSym->isBuiltin;
             calleeParamsFound = true;
+            // 0 参 Variant 返回值的下标形态 (见 calleeZeroArgVariantSubscript 注释)。
+            if (calleeParams.empty() && !calleeIsBuiltin
+                && (funcSym->kind == SymbolKind::Function
+                    || funcSym->kind == SymbolKind::PropertyGet)
+                && funcSym->type == Vb6Type::Variant
+                && node.positional.size() == 1 && node.named.empty()) {
+                calleeZeroArgVariantSubscript = true;
+            }
             // Fix 042a: Track Declare functions for _has_ flag suppression
             if (funcSym->kind == SymbolKind::DeclareSub || funcSym->kind == SymbolKind::DeclareFunc) {
                 calleeIsDeclare = true;

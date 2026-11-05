@@ -341,8 +341,15 @@
                 //   vb6_VARIANT 递给 BSTR 形参 = C2440 (两台实测)。现在与上面那一站同出口、
                 //   同尾注、同 variant 词。voidptr 那一问刻意仍交 false: 本刀只补"认槽",
                 //   不顺手改 COM 指针字段的链式路由 (那是另一问, 台账 §B172 记着)。
+                /* ucTreeView: 这一臂此前一律传 false —— `oParent->Parent->Childs`
+                   (Node.cls 的 Childs As Collection) 于是不带 "voidptr" 尾注, 外层
+                   `.Count` / `.Add` / `.Remove` 直发结构体成员 (C2224)。
+                   单级 `DestNode->Childs` 已带尾注且 COM 分派正常 (Form4.c:390 是正例),
+                   这里补同一份判据即可对齐。 */
                 lastExpr_ = classFieldReadExpr(obj, clsFromAst, node.memberName,
-                                               /*isVoidPtr=*/false, "class var");
+                                               classFieldIsComPtr(clsFromAst,
+                                                                  node.memberName),
+                                               "class var");
                 return;
             }
             // Fix 085: 更深嵌套的 UDT 链末端字段访问 (Fix 031 只覆盖直接 UDT 变量).

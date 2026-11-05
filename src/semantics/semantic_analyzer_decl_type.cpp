@@ -177,6 +177,22 @@ void SemanticAnalyzer::visit(EnumDecl& node) {
             memberSym->constIntValue = nextValue;
             nextValue++;
 
+            // 方括号转义名 `[sGoogle]` 与裸名 `sGoogle` 在 VB6 是同一个常量。声明侧 AST 名带
+            // 方括号, 引用侧裸名查不到该符号 ⇒ 静默退化成隐式 Variant 变量 (ucTreeView
+            // ucScrollbar.c:2619 实证)。两种形态都登记, 值相同。
+            const std::string rawName = member->name;
+            if (rawName.size() >= 2 && rawName.front() == '[' && rawName.back() == ']') {
+                const int64_t value = memberSym->constIntValue;
+                auto alias = std::make_unique<Symbol>(
+                    SymbolKind::EnumMember, rawName.substr(1, rawName.size() - 2),
+                    Vb6Type::Long, member->loc, node.access
+                );
+                alias->hasConstValue = true;
+                alias->constType = Vb6Type::Long;
+                alias->constIntValue = value;
+                symTab_.define(std::move(alias));
+            }
+
             symTab_.define(std::move(memberSym));
         }
     }

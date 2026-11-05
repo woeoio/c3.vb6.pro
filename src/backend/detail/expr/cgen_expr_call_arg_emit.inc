@@ -176,7 +176,31 @@
         auto isAssignableOutTarget161b = [&](Expr* pa) -> bool {
             if (!pa) return false;
             switch (pa->kind) {
-                case ASTNodeKind::IdentifierExpr:
+                case ASTNodeKind::IdentifierExpr: {
+                    // 裸标识符也可能是 Const / Enum 成员 (C 侧是 `#define` 文本, 是常量,
+                    // 不能取地址写入): `&(TOOLTIPS_CLASS)` → C2102 "&"要求左值
+                    // (ucTreeView ClsTreeExplorer.c:249 实证)。只有变量类符号才是左值。
+                    auto* ie = static_cast<IdentifierExpr*>(pa);
+                    const Symbol* is = symTab_.lookup(ie->name);
+                    if (!is) return false;
+                    switch (is->kind) {
+                        case SymbolKind::Constant:
+                        case SymbolKind::EnumMember:
+                        case SymbolKind::Sub:
+                        case SymbolKind::Function:
+                        case SymbolKind::DeclareSub:
+                        case SymbolKind::DeclareFunc:
+                        case SymbolKind::PropertyGet:
+                        case SymbolKind::PropertyLet:
+                        case SymbolKind::PropertySet:
+                        case SymbolKind::ComClass:
+                        case SymbolKind::ComInterface:
+                        case SymbolKind::ComModule:
+                            return false;
+                        default:
+                            return true;
+                    }
+                }
                 case ASTNodeKind::MemberAccessExpr:
                 case ASTNodeKind::WithMemberExpr:
                     return true;
@@ -1236,8 +1260,66 @@
                             bridgeByRefLateSlotArg(calleeParams[i], argVal,
                                                    node.positional[i].get());
                         }
+                        /* ucTreeView: 实参是一枚**用户控件**实例名, 而它在生成的 C 里
+                           根本没有同名变量 (控件以 vb6_hwnd_<名> 句柄表示)。此前直接
+                           `&TVP` ⇒ C2065 (Form2.c:240 `cTE.Init TVP`)。这里按被调方
+                           形参的类指针类型 (cParamClassPtrType) 造一个复合字面量临时槽,
+                           其值取该控件实例指针。 */
+                        {
+                            std::string lvName = argVal;
+                            const size_t sp = lvName.find("  /*");
+                            if (sp != std::string::npos) lvName = lvName.substr(0, sp);
+                            bool bareIdent = !lvName.empty()
+                                && (std::isalpha((unsigned char)lvName[0]) || lvName[0] == '_')
+                                && lvName.find_first_of(".(>[") == std::string::npos;
+                            std::string clsPtr = (i < calleeParams.size())
+                                ? cParamClassPtrType(calleeParams[i]) : std::string();
+                            auto itUcv = bareIdent
+                                ? knownUserControlCtrlVars_.find(Symbol::toLower(lvName))
+                                : knownUserControlCtrlVars_.end();
+                            /* 成员调用 (`cTE.Init TVP, …`) 的形参表可能不在 calleeParams
+                               里 (那条路单独解析), 这里按 callee 的类成员再查一遍。
+                               仍拿不到时, 只要实参确实是 UC 实例名就按控件注册表里的
+                               .ctl 类名拼 vb6_cls_<类名>* —— 控件在 C 侧没有同名变量,
+                               除「本类实例指针」外没有别的正确形态 (发 `&TVP` 必然 C2065)。 */
+                            if (itUcv != knownUserControlCtrlVars_.end()) {
+                                std::vector<ParameterInfo> mp092;
+                                bool mb092 = false;
+                                if (clsPtr.empty() && node.callee
+                                    && node.callee->kind == ASTNodeKind::MemberAccessExpr) {
+                                    auto& ma092 = static_cast<MemberAccessExpr&>(*node.callee);
+                                    std::string mcls092 = ma092.object
+                                        ? inferClassTypeOfExpr(*ma092.object) : std::string();
+                                    if (!mcls092.empty()
+                                        && findClassMemberCallParams(mcls092, ma092.memberName,
+                                                                     mp092, mb092)
+                                        && i < mp092.size()) {
+                                        clsPtr = cParamClassPtrType(mp092[i]);
+                                        if (clsPtr.empty() && !mp092[i].typeRefName.empty()
+                                            && Symbol::toLower(mp092[i].typeRefName)
+                                                   == Symbol::toLower(itUcv->second)) {
+                                            clsPtr = "vb6_cls_" + itUcv->second + "*";
+                                        }
+                                    }
+                                }
+                                if (clsPtr.empty() && i < calleeParams.size()
+                                    && !calleeParams[i].typeRefName.empty()
+                                    && Symbol::toLower(calleeParams[i].typeRefName)
+                                           == Symbol::toLower(itUcv->second)) {
+                                    clsPtr = "vb6_cls_" + itUcv->second + "*";
+                                }
+                                if (clsPtr.empty()) clsPtr = "vb6_cls_" + itUcv->second + "*";
+                            }
+                            if (!clsPtr.empty() && itUcv != knownUserControlCtrlVars_.end()) {
+                                argVal = "&((" + clsPtr + "){ (" + clsPtr
+                                       + ")vb6_UC_InstanceOf(vb6_hwnd_"
+                                       + cIdent(lvName) + ") })";
+                                goto byrefArgDone1259;
+                            }
+                        }
                         argVal = "&" + argVal;
                     }
+                    byrefArgDone1259:;
                 } else {
                     // Fix 092z: 左值字段链 (With对象 _vb6_with_N->字段 / me->字段 /
                     // 虚UDT字段) 也是可寻址左值 → 生成 &(字段) 而非复合字面量.

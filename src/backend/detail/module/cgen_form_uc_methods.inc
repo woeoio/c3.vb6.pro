@@ -26,7 +26,7 @@
 //   `.ctl` 走的是 `else if (frmDesc) emitDesignerControlDecls(*frmDesc)` 分支。
 //
 // 判据（保守, 缺席即保持改动前行为 = 静默丢弃, 不会更糟）:
-//   - 只收 `SymbolKind::Sub` 且 `access == Public`、`isExternal == false`（本模块自有）。
+//   - 只收 `SymbolKind::Sub` / **无显式返回类型的 `Function`**（返回 Variant）。
 //     Event（MouseDown/Click/…）由 desc 里既有的 mouseDown/… 槽转发, 不在此表。
 //   - 形参必须**逐个**满足: ByVal + 标量（String/Long/Integer/Boolean/Double/
 //     Single/Byte/LongPtr/Date）**或 rev31 新增的对象类**（Picture / Object /
@@ -43,6 +43,7 @@
     struct UcMethPick {
         std::string name;
         std::string fn;                                       // 生成的 thunk 名
+        bool        isFn = false;                             // 无类型 Function (返回 Variant)
         std::vector<std::string> paramVb;                     // 每形参的 VB6 标量类型名
         std::vector<std::string> paramC;                      // 每形参的 C 拆箱表达式类型
     };
@@ -134,15 +135,30 @@
         for (auto& kv : symTab_.moduleScope()->symbols()) {
             Symbol* ps = kv.second.get();
             if (!ps) continue;
-            if (ps->kind != SymbolKind::Sub) continue;
+            if (ps->kind != SymbolKind::Sub && ps->kind != SymbolKind::Function) continue;
             if (ps->access != AccessLevel::Public) continue;
             // 同 props 桥: moduleScope 里混着 driver_crossmod 注入的外部副本,
             // 收了会给别的模块的方法发 thunk → LNK2019。
             if (ps->isExternal) continue;
-            // 形参全 ByVal 标量才发（判据见文件头）。上限 4 个。
-            if (ps->params.empty() || ps->params.size() > 4) continue;
+            // 内置符号 (VBA.Array / VBA.CallByName 等预注册 Function) 不是本控件自己的
+            // 方法, 它们的原生名是 `vb6_<名字>` 而非 `vb6_<ctl>_<名字>` —— 收进来会发
+            // 出不存在/签名不符的调用 (实测 C2440: int → vb6_VARIANT)。
+            // 旧判据的"空形参表一律不发"恰好挡住了它们, 放开零参后必须显式排除。
+            if (ps->isBuiltin) continue;
+            // ucTreeView: ucScrollbar.ctl `Public Function TrackMouseWheelOnHwndStop()`
+            // 被 ucTreeViewPlus.ctl 的 `With ucScrollbar1: .TrackMouseWheelOnHwndStop`
+            // 晚绑定调用; 旧判据只收 Sub ⇒ 未桥接 ⇒ 宿主模型回 438。
+            // 只收**无显式返回类型**的 Function (VB6 默认 Variant) —— thunk 把原生
+            // 返回的 vb6_VARIANT 原样写进 outRet; 有显式类型的返回值要按类型装箱,
+            // 不发 (缺席 = 旧行为, 不会更糟)。
+            const bool isFnPick = (ps->kind == SymbolKind::Function);
+            if (isFnPick && ps->type != Vb6Type::Variant) continue;
+            // 形参全 ByVal 标量才发（判据见文件头）。上限 4 个；0 个形参同样发
+            // (旧判据把空形参表排除掉, 于是零参方法一条都进不了表)。
+            if (ps->params.size() > 4) continue;
             UcMethPick pick;
             pick.name = ps->name;
+            pick.isFn = isFnPick;
             bool ok = true;
             std::vector<bool> isOpt;
             for (const ParameterInfo& pi : ps->params) {
@@ -210,7 +226,11 @@
         c_.emitLine("static int32_t " + m.fn + "(void* inst, int32_t argc, const void* argv[], void* outRet) {");
         c_.emitLine("    (void)argc; (void)outRet;");
         c_.emitLine("    vb6_cls_" + ctl + "* me = (vb6_cls_" + ctl + "*)inst;");
-        c_.emitLine("    if (!me || !argv) return 0;");
+        // 零参方法: 调用点发的 argv 就是 NULL (vb6_ComCall(..., NULL, 0)) ——
+        // 旧护栏 `!argv ⇒ 0` 会把它们一律判成"没命中", 宿主模型随后回 438
+        // (ucTreeView: `With ucScrollbar1: .TrackMouseWheelOnHwndStop`)。
+        c_.emitLine("    if (!me) return 0;");
+        c_.emitLine("    if (argc > 0 && !argv) return 0;");
         // 逐形参拆箱。Optional 形参: 实参没给到这一位就落 VB6 缺省值。
         // 引擎已按 md->argc == 形参总数匹配, 所以 argv 一定够长。
         for (int32_t i = 0; i < n; i++) {
@@ -256,7 +276,15 @@
             }
         }
         call += ");";
-        c_.emitLine("    " + call);
+        // ucTreeView: 无类型 Function 的返回值 (VB6 默认 Variant) —— 原生函数返回
+        // vb6_VARIANT, 原样写进 outRet (引擎那边是 vb6_VARIANT*; 多数调用点丢掉返回值,
+        // 走的是 vb6_ComVarFree 的路径, 与真 VB6 的临时值同生命周期)。
+        if (m.isFn) {
+            c_.emitLine("    vb6_VARIANT retMeth = " + call);
+            c_.emitLine("    if (outRet) *(vb6_VARIANT*)outRet = retMeth;");
+        } else {
+            c_.emitLine("    " + call);
+        }
         c_.emitLine("    return 1;");
         c_.emitLine("}");
     }

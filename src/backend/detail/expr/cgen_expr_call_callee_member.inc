@@ -280,7 +280,7 @@
             std::string memLowerDD = Symbol::toLower(maDD.memberName);
             // ① DataObject 形参方法
             if (dataObjectParams_.count(objLowerDD)) {
-                std::string ddArg = "(void*)(*" + objIdDD.name + ")";
+                std::string ddArg = dataObjectArgExpr(objIdDD.name);
                 if (memLowerDD == "setdata" && node.positional.size() == 1) {
                     emitExpr(*node.positional[0]);
                     lastExpr_ = "{ vb6_oleDD_SetText(" + ddArg + ", "

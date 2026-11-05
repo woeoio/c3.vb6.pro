@@ -141,7 +141,14 @@
                         // Fix 010n: 记录UDT类型成员变量 (用于With块类型检测)
                         if (var.asType->kind == ASTNodeKind::SimpleTypeRef) {
                             auto& simple = static_cast<SimpleTypeRef&>(*var.asType);
-                            auto* udtSym = lookupDotted(simple.name);
+                            // `Private Rect As Rect` (变量名 == 类型名) 时 lookupDotted 先命中
+                            // 变量自身 (SymbolKind::Variable), 整枚 UDT 成员被漏登记 ⇒
+                            // `Rect.Top = ...` 落到工程类属性分派 (ucScrollbar.prop_let_Top)
+                            // → C2440 31 条 (ucTreeViewPlus.c)。先按类型名查 UDT, 再回落点查。
+                            const Symbol* udtSym = lookupTypeSymbol(simple.name);
+                            if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) {
+                                udtSym = lookupDotted(simple.name);
+                            }
                             if (udtSym && udtSym->kind == SymbolKind::UserDefinedType) {
                                 std::string udtCType = "vb6_type_" + cIdent(simple.name);
                                 classUdtMembers_[oLower] = udtCType;
@@ -201,7 +208,11 @@
                 auto& var = static_cast<VariableDecl&>(*decl);
                 if (var.asType && var.asType->kind == ASTNodeKind::SimpleTypeRef) {
                     auto& simple = static_cast<SimpleTypeRef&>(*var.asType);
-                    auto* udtSym = lookupDotted(simple.name);
+                    // 同 class 侧: 变量名 == UDT 类型名时 lookupDotted 被变量遮蔽, 先查类型名.
+                    const Symbol* udtSym = lookupTypeSymbol(simple.name);
+                    if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) {
+                        udtSym = lookupDotted(simple.name);
+                    }
                     if (udtSym && udtSym->kind == SymbolKind::UserDefinedType) {
                         std::string oLower = var.name;
                         std::transform(oLower.begin(), oLower.end(), oLower.begin(), ::tolower);

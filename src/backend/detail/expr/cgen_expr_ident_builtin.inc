@@ -270,6 +270,13 @@
             lastExpr_ = hostPseudoRtlSymbol(hostObjHp, lower);
             return;
         }
+        // ucTreeView: 裸写的方法 (只带 HPF_METHOD, 如 .ctl 里的 `Cls`) 旧代码落"发射裸
+        // 标识符"兜底 ⇒ `Cls()` ⇒ LNK2019 `_Cls`。调用点补 `(` 与实参, 值上下文补 `()`。
+        std::string rtlMethodHp;
+        if (hostPseudoMethodRtlName(hostObjHp, lower, rtlMethodHp)) {
+            lastExpr_ = hostPseudoRtlSymbol(hostObjHp, lower) + (asCallCallee_ ? "" : "()");
+            return;
+        }
     }
 
     // 账 #196 第三条: 窗体模块 / 属性页模块里**裸写**的 `ScaleX(...)` / `ScaleY(...)`。

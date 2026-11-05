@@ -435,7 +435,24 @@
                 // 返回 NULL, `ListView1.Sorted = True` 这类写入会静默丢失。
                 const bool isUC292 = knownUserControlCtrlVars_.find(objLower)
                                      != knownUserControlCtrlVars_.end();
-                std::string writeFn = isUC292
+                /* ucTreeView: 原先把**所有** UC 承载控件的写入都置空 writeFn, 于是
+                   `ucTreeViewPlus1.Height = ...` (UC 并未声明 Height 可写成员) 落到
+                   后续晚绑定路径, LHS 被发成 vb6_GetControlHeight(hwnd) = v (C2106,
+                   Form1.c:987 / Form2.c:249)。只有当 .ctl 类**自己**声明了同名可写
+                   成员时才让位给实例路径; 否则仍用控件属性写表。 */
+                bool ucOwnsMember292 = false;
+                if (isUC292) {
+                    auto itUc292 = knownUserControlCtrlVars_.find(objLower);
+                    if (itUc292 != knownUserControlCtrlVars_.end()) {
+                        std::vector<ParameterInfo> wpUc292;
+                        ucOwnsMember292 =
+                            findClassMemberWriteParams(itUc292->second, maExpr.memberName,
+                                                       false, wpUc292)
+                            || findClassMemberWriteParams(itUc292->second, maExpr.memberName,
+                                                          true, wpUc292);
+                    }
+                }
+                std::string writeFn = (isUC292 && ucOwnsMember292)
                     ? std::string()
                     : getControlPropWriteFn(itCtrl->second, maExpr.memberName);
                 if (!writeFn.empty()) {

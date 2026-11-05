@@ -116,6 +116,27 @@
                                 ");  /* UserControl.MousePointer = v (光标) */");
                     return;
                 }
+                /* ucTreeView: FontBold/FontUnderline 是 UserControl.Font 的两档, 真 VB6 里
+                   赋值立刻改活动 hDC 的字体选择。裸写全局时没有任何站点把它选进 DC ⇒
+                   节点粗体/链接下划线全静默失效 (ucTreeViewPlus.ctl Draw)。 */
+                if (tgtHp == "vb6_UserControl_FontBold"
+                    || tgtHp == "vb6_UserControl_FontUnderline") {
+                    if (isVariantSlot(valHp, nullptr)) {  // P1.3: ast 不可得
+                        valHp = "vb6_VariantToLong(" + valHp + ")";
+                    }
+                    c_.emitLine("vb6_UC_SetFontFlag("
+                                + std::string(tgtHp == "vb6_UserControl_FontBold" ? "0" : "1")
+                                + ", (int32_t)(intptr_t)" + valHp
+                                + ");  /* UserControl.FontBold/Underline (DC 字体) */");
+                    return;
+                }
+                /* `Set UserControl.Font = x` 走 SetStmt (cgen_setlet_set_rhs.inc) 那条路,
+                   那里已接 vb6_UC_SetFont; 这里的裸赋值形态 (若有) 一并走同一入口。 */
+                if (tgtHp == "vb6_UserControl_Font") {
+                    c_.emitLine("vb6_UC_SetFont((void*)" + valHp
+                                + ");  /* UserControl.Font = v (DC 字体) */");
+                    return;
+                }
                 c_.emitLine(tgtHp + " = " + valHp + ";  /* <host pseudo>.<prop> = v */");
                 return;
             }

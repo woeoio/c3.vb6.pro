@@ -525,6 +525,12 @@
                             + ", L\"" + comTypeCheckSym->name + "\"); if (_vb6_chk) "
                             + target + " = (vb6_ComIface_" + cIdent(ifaceNmTC)
                             + "*)_vb6_chk; }  /* Set: 类型不符 = 错误 13 (被 On Error Resume Next 吞掉) */");
+            } else if (target == "vb6_UserControl_Font") {
+                /* ucTreeView: `Set UserControl.Font = x` 必须当场落进活动 paint DC。
+                   裸写全局时没有任何站点把它选进 hDC ⇒ ucTreeViewPlus.ctl 的
+                   子文字（小一号字体）与粗体/下划线全静默失效。 */
+                c_.emitLine("vb6_UC_SetFont((void*)" + value
+                            + ");  /* Set UserControl.Font (DC 字体) */");
             } else {
                 c_.emitLine(target + " = " + value + ";  /* Set */");
             }

@@ -437,6 +437,11 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         if (propLower == "autoredraw") return "vb6_GetAutoRedraw";
         if (propLower == "caption") return "vb6_GetControlText";
         if (propLower == "picture") return "vb6_GetControlPicture";
+        /* ucTreeView: PictureBox.Image (AutoRedraw 记忆位图的 StdPicture 视图)。
+           读表缺这一枚时 `.Image` 落到 With 块兜底 `_vb6_with_N.Image` —— HWND 是
+           结构体指针 ⇒ C2231 (Form6.c:463)。RTL 侧 vb6_FormGetImagePicture 早就有
+           (与窗体 Image 同一实现, 按 VB6_AutoRedrawBmp 窗口属性取图)。 */
+        if (propLower == "image") return "vb6_FormGetImagePicture";
         if (propLower == "autosize") return "vb6_GetPictureAutoSize";
         if (propLower == "align") return "vb6_GetControlAlign";  // P13.5b: 停靠
         if (propLower == "visible") return "vb6_GetControlVisible";

@@ -267,6 +267,10 @@ void CCodeGen::visit(CallStmt& node) {
         // 语句级调用: 确保表达式被求值(即使是void调用)
         // 如果结果是函数名(不含括号), 自动添加()调用
         std::string callExpr = lastExpr_;
+        /* ucTreeView: `cTE.Init TVP, "*.*"` 这类语句级调用里, 实参 TVP 是 UC 控件
+           实例名, 生成 C 只有 vb6_hwnd_TVP。有些发射路径直接发 `&TVP` ⇒ C2065
+           (Form2.c:240)。这里对整条调用串做一次收敛改写 (幂等)。 */
+        fixUCInstanceAddrInExpr(callExpr);
 
         // Fix 150 (Fix 146 回归补全 / T2 ExtShow): 无括号无参语句 `Frm.Show` —
         // parser 对行尾无参数的成员调用直接交付 CallStmt(callee=MemberAccessExpr)
@@ -592,13 +596,17 @@ void CCodeGen::visit(CallStmt& node) {
                     if (param.hasDefaultValue && !param.defaultValueExpr.empty()) {
                         defVal = param.defaultValueExpr;
                     } else {
-                        defVal = defaultValue(param.type);
+                        // ucTreeView: 类形参 (typeRefName 有值、type 已折成 Variant) 省略时
+                        // VB6 语义是 Nothing ⇒ 调用侧该给 NULL; defaultValue(Variant) 会给
+                        // vb6_VariantEmpty() ⇒ C2440 (Form3.c:149/156, Form6.c:432)。
+                        defVal = defaultValueForParam(param);
                     }
                     if (param.isByVal) {
                         bareArgList += defVal;
                     } else {
                         // ByRef: pass address of compound literal
-                        std::string cType = mapType(param.type);
+                        std::string cPt = cParamClassPtrType(param);
+                        std::string cType = cPt.empty() ? mapType(param.type) : cPt;
                         if (param.type == Vb6Type::Variant || param.type == Vb6Type::Empty ||
                             param.type == Vb6Type::Null || param.type == Vb6Type::Object) {
                             bareArgList += "&(" + cType + "){0}";
@@ -702,12 +710,14 @@ void CCodeGen::visit(CallStmt& node) {
                             if (prm090g.hasDefaultValue && !prm090g.defaultValueExpr.empty()) {
                                 defVal090g = prm090g.defaultValueExpr;
                             } else {
-                                defVal090g = defaultValue(prm090g.type);
+                                // 同上: 类形参省略 = Nothing (NULL), 不是 vb6_VariantEmpty()
+                                defVal090g = defaultValueForParam(prm090g);
                             }
                             if (prm090g.isByVal) {
                                 fullArg090g += ", " + defVal090g;
                             } else {
-                                std::string cT090g = mapType(prm090g.type);
+                                std::string cPl090g = cParamClassPtrType(prm090g);
+                                std::string cT090g = cPl090g.empty() ? mapType(prm090g.type) : cPl090g;
                                 if (prm090g.type == Vb6Type::Variant
                                     || prm090g.type == Vb6Type::Empty
                                     || prm090g.type == Vb6Type::Null

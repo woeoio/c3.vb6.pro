@@ -130,7 +130,13 @@
                         // 先付一枚 (copy-in) + 调用行之后交回 —— 与位置实参那两臂问同一位主人。
                         const std::string clsSlotNo = (pi < calleeParams.size())
                             ? cParamClassPtrType(calleeParams[pi]) : std::string();
-                        if (!clsSlotNo.empty() && !argHoldsProjectRefInOwnSlot(argVal, clsSlotNo)) {
+                        /* ucTreeView: ByRef 实参是 UC 控件实例名 (`cTE.Init TVP, "*.*"`)
+                           —— C 侧没有同名变量, 发 `&TVP` 必是 C2065 (Form2.c:240)。
+                           按控件注册表里的 .ctl 类名造复合字面量临时槽。 */
+                        const std::string ucRefNo = ucInstanceByRefArgExpr(argVal);
+                        if (!ucRefNo.empty()) {
+                            argVal = ucRefNo;
+                        } else if (!clsSlotNo.empty() && !argHoldsProjectRefInOwnSlot(argVal, clsSlotNo)) {
                             const std::string tmpNo = classSlotTempName(clsSlotNo, tempCounter_++);
                             c_.addPending(clsSlotNo + " " + tmpNo + " = "
                                           + deliverToClassSlot(clsSlotNo, argVal) + ";");

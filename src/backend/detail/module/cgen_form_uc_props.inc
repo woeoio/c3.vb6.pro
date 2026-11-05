@@ -33,7 +33,7 @@
 //         崩溃的最终根因在**调用点侧**的实参打包, 尚未定位 —— 见下方说明。
 
 {
-    struct UcPropPick { std::string name; std::string vbType; std::string getFn; std::string setFn; std::string objCType; };
+    struct UcPropPick { std::string name; std::string vbType; std::string getFn; std::string setFn; std::string objCType; std::string setSeg; };
     std::vector<UcPropPick> ucProps;
     ucHostPropCount_ = 0;
 
@@ -156,6 +156,11 @@
                     if (pick.objCType.empty()) continue;
                 }
                 pick.setFn = "vb6_" + ctl + "_ucPropSet_" + cIdent(ps->name);
+                // ucTreeView: VB6 源里这条是 `Public Property Let SelNode(TheNode As Node)`
+                // (对象形参用 Let 赋值), 原生函数名是 prop_let_SelNode; 桥旧代码固定发
+                // prop_set_SelNode ⇒ LNK2019 `_vb6_ucTreeViewPlus_prop_set_SelNode`。
+                // 按符号种类记下真实动词, 发射时照抄。
+                pick.setSeg = (ps->kind == SymbolKind::PropertyLet) ? "prop_let_" : "prop_set_";
             } else {
                 continue;
             }
@@ -171,6 +176,7 @@
                 if (Symbol::toLower(m.name) == Symbol::toLower(p.name)) {
                     if (!p.getFn.empty()) m.getFn = p.getFn;
                     if (!p.setFn.empty()) m.setFn = p.setFn;
+                    if (!p.setSeg.empty()) m.setSeg = p.setSeg;
                     if (!p.vbType.empty()) m.vbType = p.vbType;
                     if (!p.objCType.empty()) m.objCType = p.objCType;
                     hit = true;
@@ -249,13 +255,13 @@
                 c_.emitLine("static int32_t " + p.setFn + "(void* inst, const void* inV) {");
                 c_.emitLine("    " + p.objCType + " _o = (" + p.objCType
                             + ")vb6_VariantToObjectVal(*(const vb6_VARIANT*)inV);");
-                c_.emitLine("    vb6_" + ctl + "_" + propFnSegment("prop_set_", p.name)
+                c_.emitLine("    vb6_" + ctl + "_" + propFnSegment(p.setSeg.empty() ? "prop_set_" : p.setSeg, p.name)
                             + "((vb6_cls_" + ctl + "*)inst, &_o);");
                 c_.emitLine("    return 1;");
                 c_.emitLine("}");
             } else {
             c_.emitLine("static int32_t " + p.setFn + "(void* inst, const void* inV) {");
-            c_.emitLine("    vb6_" + ctl + "_" + propFnSegment("prop_let_", p.name)
+            c_.emitLine("    vb6_" + ctl + "_" + propFnSegment(p.setSeg.empty() ? "prop_let_" : p.setSeg, p.name)
                         + "((vb6_cls_" + ctl
                         + "*)inst, "
                         + unboxUcSetter(p.vbType, "(*(const vb6_VARIANT*)inV)") + ");");
