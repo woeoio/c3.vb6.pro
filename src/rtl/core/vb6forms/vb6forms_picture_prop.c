@@ -526,6 +526,21 @@ int vb6_DrawBitmapAlpha(void* hdcV, void* hBmpV, int dstX, int dstY, int dstW, i
     return drawn ? 1 : 0;
 }
 
+/* 图片自然尺寸 (px): HIMETRIC -> 目标 DC 的像素。折算公式只住在 vb6_HimetricToPxOnDc
+ * (本文件里就这两枚调用), 非 Stretch 的 Picture 绘制与窗体 PaintPicture 的默认宽高共用 —
+ * 后者以前自己再抄一遍, check_statusbar_panel_hm 的 R9-PICTURE-ONDCC 会数成 4 枚。 */
+static void vb6_FPP_naturalSizeOnDc(IPicture* pPic, HDC dc, int* outW, int* outH) {
+    OLE_XSIZE_HIMETRIC hmW = 0;
+    OLE_YSIZE_HIMETRIC hmH = 0;
+    if (outW) *outW = 0;
+    if (outH) *outH = 0;
+    if (!pPic || !dc) return;
+    pPic->lpVtbl->get_Width(pPic, &hmW);
+    pPic->lpVtbl->get_Height(pPic, &hmH);
+    if (outW) *outW = vb6_HimetricToPxOnDc((int)hmW, GetDeviceCaps(dc, LOGPIXELSX));
+    if (outH) *outH = vb6_HimetricToPxOnDc((int)hmH, GetDeviceCaps(dc, LOGPIXELSY));
+}
+
 /* Shared painting for WM_PAINT and WM_PRINTCLIENT.
  * Draws the retained COM IPicture (metafile/bitmap/icon) or a raw
  * HBITMAP/HICON/HENHMETAFILE handle, honoring the Stretch property.
@@ -565,12 +580,9 @@ static void vb6_ImagePaintHelper(HWND hwnd, HDC hdc) {
         } else {
             /* Non-stretch: draw at the picture's natural pixel size. The conversion
              * formula lives in exactly one place now (vb6_HimetricToPxOnDc, zhang 298);
-             * this call site keeps feeding it the **DC's** DPI, not the screen's --
-             * a picture drawn into a printer/VM DC scales with that DC. */
-            int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
-            int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
-            dstW = vb6_HimetricToPxOnDc((int)hmW, dpiX);
-            dstH = vb6_HimetricToPxOnDc((int)hmH, dpiY);
+             * vb6_FPP_naturalSizeOnDc 喂给它的是**这个 DC** 的 DPI, 不是屏幕的 --
+             * 画到 printer/VM DC 的图片随该 DC 缩放。 */
+            vb6_FPP_naturalSizeOnDc(pPic, hdc, &dstW, &dstH);
             if (dstW <= 0) dstW = rc.right;
             if (dstH <= 0) dstH = rc.bottom;
         }
@@ -739,20 +751,11 @@ static IPicture* vb6_FPP_picFromVar(const vb6_VARIANT* v) {
     return pPic;
 }
 
-/* VARIANT -> Long (PaintPicture 的坐标参数)。 */
+/* VARIANT -> Long (PaintPicture 的坐标参数)。转问权威转换表 vb6_VariantToLong
+ * (variant_i8_coverage 的 must 名单, I8/Decimal/Date 都答), 不再本地抄一张漏档的分档表。 */
 static int32_t vb6_FPP_varLong(const vb6_VARIANT* v) {
     if (!v) return 0;
-    switch (v->vt) {
-    case vb6_vtLong:     return v->lVal;
-    case vb6_vtInteger:  return (int32_t)v->iVal;
-    case vb6_vtDouble:   return (int32_t)v->dblVal;
-    case vb6_vtSingle:   return (int32_t)v->fltVal;
-    case vb6_vtBoolean:  return v->boolVal ? -1 : 0;
-    case vb6_vtCurrency: return (int32_t)(v->cyVal / 10000);
-    case vb6_vtEmpty:
-    case vb6_vtNull:     return 0;
-    default:             return 0;
-    }
+    return vb6_VariantToLong(*(vb6_VARIANT*)v);
 }
 
 /* Twip (1440/英寸) -> 目标 DC 上的像素; 用 DC 的 DPI 才能和 vb6 缩放口径一致。 */
@@ -766,11 +769,10 @@ static int vb6_FPP_twipToPxOnDc(int32_t tw, HDC dc, int vertical) {
 static void vb6_FPP_render(IPicture* pPic, HDC dc, int x, int y, int w, int h) {
     OLE_XSIZE_HIMETRIC hmW = 0;
     OLE_YSIZE_HIMETRIC hmH = 0;
-    int natW, natH;
+    int natW = 0, natH = 0;
     pPic->lpVtbl->get_Width(pPic, &hmW);
     pPic->lpVtbl->get_Height(pPic, &hmH);
-    natW = vb6_HimetricToPxOnDc((int)hmW, GetDeviceCaps(dc, LOGPIXELSX));
-    natH = vb6_HimetricToPxOnDc((int)hmH, GetDeviceCaps(dc, LOGPIXELSY));
+    vb6_FPP_naturalSizeOnDc(pPic, dc, &natW, &natH);
     if (w <= 0) w = natW;
     if (h <= 0) h = natH;
     if (w <= 0 || h <= 0) return;

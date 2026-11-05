@@ -548,5 +548,15 @@ GA run **41917073251**（head=75c61f4a）：`Tests (compile #1)` 已绿（`built
   放到 exe 同目录（夹具也缺才 FAIL，不 SKIP）。另加"可见宿主 rect 连续两次采样一致"的
   布局稳定等待（本地首跑曾读到 `0,0 609x49` 的未完成 Form_Resize，会让宿主 rect 假红）。
 - 复测：在**干净目录**（只放 exe、不给 image.jpg）连跑两次均 PASS（`back=0`、`hits=0`）。
-  第二次 GA 结果见下一条。
+
+**GA #41964155116（第二次）：FAIL** — `Tests (compile #1)` 的两条静态哨兵红，均由本轮新增代码引起
+（功能与像素断言在同一次 GA 里全绿；本地 `-Category gui` 也全绿，之前只跑了 gui 没跑静态）：
+- `variant_i8_coverage`：新写的 `vb6_FPP_varLong` 被 census 认成一张 vt 分档表，且它漏 I8/Decimal
+  ⇒ 撤掉本地表，改转问权威 `vb6_VariantToLong`（must 名单里那张）。
+- `statusbar_panel_hm` 的 `R9-PICTURE-ONDCC`：`vb6_FPP_render` 又抄了 2 枚 `vb6_HimetricToPxOnDc`
+  （读数从 2 变 4）⇒ 抽出 `vb6_FPP_naturalSizeOnDc`（本文件内仍只有 2 枚折算调用），非 Stretch 的
+  Picture 绘制与 `PaintPicture` 默认宽高共用。
+- 本地复跑：`variant_i8_coverage` PASS（switches 20）、`statusbar_panel_hm` PASS（`pp=2`）；
+  另跑 24 条相关静态哨兵（host_pseudo/com_marker/com_latebind/uc_scale/control_dc/rtl_resource_ids/
+  rtl_embedded/subclass_slots/rtl_proto_arity/rtl_naked_names/vbp_fixture_census/test_helper_integrity…）全绿。
 
