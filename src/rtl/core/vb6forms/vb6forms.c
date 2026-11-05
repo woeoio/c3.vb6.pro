@@ -636,6 +636,18 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
        SetPropW(…, 0) 等于删属性（账 #107 那一课）。 */
     if (hwnd) SetPropW(hwnd, L"VB6_TabStop", (HANDLE)(DWORD_PTR)((style & WS_TABSTOP) ? 1 : 2));
 
+    /* VB6 Label 的默认底色 = 按钮面 (COLOR_BTNFACE, 240), 不是 STATIC 窗口类的
+       类背景刷 COLOR_WINDOW (纯白)。VB6 里 Label 是轻量控件 (无 HWND, 由窗体直接
+       绘制), 默认 BackColor = &H8000000F&; C3 落成真 STATIC 窗口后必须把这个默认值
+       显式落到窗口属性上, 否则未写 BackColor 的 Label 只能听 DefWindowProcW 的类刷
+       摆布 (父窗/容器 WndProc 的 CTLCOLOR 臂一旦不接管就是 255 白)。ucTreeView 里
+       Label 恰好被容器臂兜住看似正常, 但那是巧合, 不是契约。
+       PictureBox/Image 同为 STATIC 但带 SS_BITMAP(0x0E), 由 vb6_ImageSubclassProc
+       自绘, 这里排除。显式写了 BackColor 的控件随后由设计期发射覆盖本值。 */
+    if (hwnd && _stricmp(win32Class, "STATIC") == 0 && ((DWORD)style & 0x1FL) != 0x0EL) {
+        vb6_SetControlBackColor(hwnd, (int)GetSysColor(COLOR_BTNFACE));
+    }
+
     /* 账 #305 第299刀: hParent = 这枚控件 authored 的那一层容器 (窗体 / 窗体上的容器控件 /
        .ctl 的宿主窗口)。VB6 的几何单位跟的就是**这一层**, 运行期谁把 HWND 搬走都不改它,
        所以在这里留住 (窗体自己那发 hParent 为空 => 不戳)。嵌进 OCX 实例 Begin 块的那一族

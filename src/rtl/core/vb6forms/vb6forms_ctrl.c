@@ -965,9 +965,23 @@ LRESULT vb6_ApplyCtlColorStatic(HDC hdc, HWND child) {
         SetBkMode(hdc, TRANSPARENT);
         return (LRESULT)GetStockObject(HOLLOW_BRUSH);
     }
+    // Fix 187b: CheckBox/OptionButton 的底色请求走 **WM_CTLCOLORSTATIC**, 不是
+    // WM_CTLCOLORBTN (后者只对命令按钮/owner-draw 生效)。VB6 里它们的 BackColor
+    // 默认 = &H8000000F& (按钮面 240), 所以即使没显式 Set 也必须接管; 否则落到
+    // DefWindowProcW 的类背景刷 (COLOR_WINDOW = 纯白) —— ucTreeView 顶排 CheckBox
+    // 整块 255 白 (161x21 @ (269,48)), 参考图是 240。
+    // 只认 BUTTON 窗口类 + BS_CHECKBOX/AUTOCHECKBOX/RADIOBUTTON/3STATE/
+    // AUTO3STATE/AUTORADIOBUTTON 六个 style 值; STATIC(Label) 的低位同名值不进来。
+    LONG_PTR st187 = GetWindowLongPtrW(child, GWL_STYLE);
+    LONG_PTR kind187 = st187 & 0x0000000FL;
+    wchar_t cls187[16] = {0};
+    GetClassNameW(child, cls187, 16);
+    int isCheck187 = (_wcsicmp(cls187, L"Button") == 0 &&
+                      (kind187 == 2 || kind187 == 3 || kind187 == 4 ||
+                       kind187 == 5 || kind187 == 6 || kind187 == 9));
     // Fix 187: 只看 Set 哨兵, 不看值 — color=0 (黑) 的值属性是 NULL, 但它是合法色。
-    if (!GetPropW(child, L"VB6_BackColorSet")) return 0;  // 未显式设色 → 调用方走默认绘制
-    COLORREF bg = (COLORREF)(INT_PTR)GetPropW(child, L"VB6_BackColor");
+    if (!GetPropW(child, L"VB6_BackColorSet") && !isCheck187) return 0;  // 未显式设色且非复选类 → 调用方走默认绘制
+    COLORREF bg = (COLORREF)vb6_GetControlBackColor((void*)child);
     COLORREF fg = (COLORREF)vb6_GetControlForeColor((void*)child);
     if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
     SetTextColor(hdc, fg);

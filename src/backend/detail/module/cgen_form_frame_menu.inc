@@ -506,6 +506,23 @@
                 emitDesignerFontProps(child, childHwndRead(child));    // 账 #154: 同上（字体两条也两路都发）
                 emitDesignerTabIndexProp(child, childHwndRead(child), childTi);  // 账 #160: 第二条创建路同样要发这一句
                 emitDesignerScaleModeProp(child, childHwndRead(child));  // 账 #197: 第二条创建路同样要发这一句
+                // Fix 187 的第二条创建路: 设计期 ForeColor/BackColor 此前只在**顶层**发
+                // (cgen_form_ctrl_style_apply.inc), 容器(Frame/PictureBox/SSTab)里的子控件
+                // 一条不发 ⇒ 9 枚 Picture2 色块 (&H00FFE8CC& 等) 全落成 BTNFACE 灰。
+                // 口径与顶层逐条相同: 只在 .frm 显式写过且类型为整数时发; 0x8000000n 系统色
+                // 原样传负值, 由 RTL 的 GetSysColor 分支解析。
+                {
+                    auto bcIt187c = child.properties.find("BackColor");
+                    if (bcIt187c != child.properties.end() && bcIt187c->second.type == FrmValueType::Integer) {
+                        c_.emitLine("vb6_SetControlBackColor((void*)" + childHwndRead(child) + ", "
+                                    + std::to_string((int)(unsigned int)bcIt187c->second.intValue) + ");  /* design BackColor */");
+                    }
+                    auto fcIt187c = child.properties.find("ForeColor");
+                    if (fcIt187c != child.properties.end() && fcIt187c->second.type == FrmValueType::Integer) {
+                        c_.emitLine("vb6_SetControlForeColor((void*)" + childHwndRead(child) + ", "
+                                    + std::to_string((int)(unsigned int)fcIt187c->second.intValue) + ");  /* design ForeColor */");
+                    }
+                }
                 emitControlFrxProps(child);  // Fix 182: 容器子控件同样加载 .frx 设计期图片/文本/列表
                 // C29-SL-o（账 #83 的 Slider 半边）: 设计期值面以前只在顶层那条路发 ——
                 // Frame 里的 Slider 光有窗口，Min/Max/Value 那一批整条丢掉。共用同一个出口，

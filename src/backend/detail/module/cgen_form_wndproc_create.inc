@@ -262,7 +262,11 @@
     c_.emitLine("case WM_CTLCOLORSTATIC: {");
     c_.indent();
     c_.emitLine("HWND vb6_clrchld = (HWND)lParam;");
-    c_.emitLine("if (vb6_clrchld && (GetPropW(vb6_clrchld, L\"VB6_BackColorSet\") || GetPropW(vb6_clrchld, L\"VB6_BackStyle0\"))) {");
+    // Fix 187b: 放行判据移到 RTL (vb6_ApplyCtlColorStatic)。CheckBox/OptionButton
+    // 要底色时走的是 **WM_CTLCOLORSTATIC**(不是 CTLCOLORBTN) 且默认 BackColor =
+    // &H8000000F& 按钮面 240 —— 生成侧看不到"默认值"这件事, 只按哨兵放行会把
+    // 它们全部漏掉 (ucTreeView 顶排 CheckBox 白块 255 vs 参考 240)。
+    c_.emitLine("if (vb6_clrchld) {");
     c_.indent();
     c_.emitLine("LRESULT vb6_br187 = vb6_ApplyCtlColorStatic((HDC)wParam, vb6_clrchld);");
     c_.emitLine("if (vb6_br187) return vb6_br187;");

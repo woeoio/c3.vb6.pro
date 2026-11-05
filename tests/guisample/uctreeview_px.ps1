@@ -66,6 +66,35 @@ public class UP {
     }, IntPtr.Zero);
     return best;
   }
+  // 判据 #1/#2 的取样点来自真实子窗口坐标 (不用硬编码像素位置), 这样 96dpi/125dpi
+  // 两种 CI 桌面上都能取到控件本体。
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int n);
+  public static IntPtr FindChildByText(IntPtr parent, string text) {
+    IntPtr found = IntPtr.Zero;
+    EnumChildWindows(parent, (h, l) => {
+      var sb = new StringBuilder(256); GetWindowText(h, sb, 256);
+      if (sb.ToString() == text) { found = h; return false; }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+  public static IntPtr[] FindSwatches(IntPtr parent) {
+    var list = new System.Collections.Generic.List<IntPtr>();
+    EnumChildWindows(parent, (h, l) => {
+      if (!IsWindowVisible(h)) return true;
+      if (Cls(h) != "Static") return true;
+      RECT r; GetWindowRect(h, out r);
+      int w = r.R - r.L, hgt = r.B - r.T;
+      if (hgt >= 15 && hgt <= 45 && w == hgt) list.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    var arr = list.ToArray();
+    System.Array.Sort(arr, (a, b) => {
+      RECT ra, rb; GetWindowRect(a, out ra); GetWindowRect(b, out rb);
+      return ra.T.CompareTo(rb.T);
+    });
+    return arr;
+  }
 }
 "@
 [UP]::SetProcessDPIAware() | Out-Null
@@ -169,6 +198,63 @@ if ($blank) {
     exit 2
 }
 
+# --- 设计期背景色判据 (残差 #1/#2) ---
+# 口径: 取样点来自运行时**真实子窗口坐标** (EnumChildWindows), 不写死像素位置,
+#   96dpi / 125dpi 桌面都成立。色块 = 9 枚近正方形 STATIC (25x25 逻辑), 按屏幕 Y 排序;
+#   期望色 = Form1.frm 设计期 BackColor 的 BBGGRR 换算 (&H80000005/0A 走 GetSysColor)。
+$swatchExpect = @(
+    @(255,255,255), @(180,180,180), @(99,99,255), @(0,0,0), @(99,99,255),
+    @(204,204,204), @(0,0,0), @(204,204,204), @(204,232,255)
+)
+$swatchBad = @()
+$swatchRead = @()
+$swHwnds = [UP]::FindSwatches($main)
+if ($swHwnds.Length -ne 9) { $swatchBad += "色块控件数 $($swHwnds.Length) != 9" }
+for ($si = 0; $si -lt [Math]::Min(9, $swHwnds.Length); $si++) {
+    $r = New-Object UP+RECT; [UP]::GetWindowRect($swHwnds[$si], [ref]$r) | Out-Null
+    $px = [int](($r.L + $r.R) / 2 - $wr.L); $py = [int](($r.T + $r.B) / 2 - $wr.T)
+    $c = $bmp.GetPixel($px, $py)
+    $swatchRead += "$($c.R),$($c.G),$($c.B)"
+    $e = $swatchExpect[$si]
+    if ([Math]::Abs($c.R - $e[0]) -gt 3 -or [Math]::Abs($c.G - $e[1]) -gt 3 -or [Math]::Abs($c.B - $e[2]) -gt 3) {
+        $swatchBad += ("swatch[$si]=$($c.R),$($c.G),$($c.B) != $($e[0]),$($e[1]),$($e[2])")
+    }
+}
+# 判据一: 8 枚 CheckBox 的控件矩形。VB6 里 CheckBox 的默认 BackColor =
+#   &H8000000F& (按钮面 240) 且不透明; 修复前 C3 走 DefWindowProcW 的类刷,
+#   整块 255 白 (旧产物实测: 240 占比 0%, 纯白 84.7%)。
+$chkCaptions = @(
+    "AlternateNodeColors", "ShowTreeLines", "ShowPlusMinus", "CheckBoxes",
+    "FullRowSelect", "PlusMinusStyle = 1 - TVP_PlusMinus", "PlusMinusAlignRight", "AllowEdit"
+)
+# 判据二: Label 控件矩形 (真 Label, 不是 CheckBox): 左列 6 条 + 右列 1 条。
+$labelCaptions = @("BorderRadius", "BorderWidth", "Margin", "NodeSpacing", "ToggleIconSize", "MarginBottom", "SelectionColor")
+function Measure-Hwnds([IntPtr[]]$hwnds, [System.Drawing.Bitmap]$bmp) {
+    $a = 0; $c240 = 0; $c255 = 0
+    foreach ($h in $hwnds) {
+        if ($h -eq [IntPtr]::Zero) { continue }
+        $r = New-Object UP+RECT; [UP]::GetWindowRect($h, [ref]$r) | Out-Null
+        $x0 = [Math]::Max(0, $r.L - $wr.L + 1); $x1 = [Math]::Min($ww, $r.R - $wr.L - 1)
+        $y0 = [Math]::Max(0, $r.T - $wr.T + 1); $y1 = [Math]::Min($wh, $r.B - $wr.T - 1)
+        for ($yy = $y0; $yy -lt $y1; $yy++) {
+            for ($xx = $x0; $xx -lt $x1; $xx++) {
+                $c = $bmp.GetPixel($xx, $yy)
+                $a++
+                if ([Math]::Abs($c.R-240) -le 1 -and [Math]::Abs($c.G-240) -le 1 -and [Math]::Abs($c.B-240) -le 1) { $c240++ }
+                if ($c.R -eq 255 -and $c.G -eq 255 -and $c.B -eq 255) { $c255++ }
+            }
+        }
+    }
+    if ($a -le 0) { return @(0, 1) }
+    return @(($c240 / $a), ($c255 / $a))
+}
+$chkHwnds = @(); foreach ($t in $chkCaptions) { $chkHwnds += [UP]::FindChildByText($main, $t) }
+$labHwnds = @(); foreach ($t in $labelCaptions) { $labHwnds += [UP]::FindChildByText($main, $t) }
+$chkMissing = @($chkHwnds | Where-Object { $_ -eq [IntPtr]::Zero }).Count
+$labMissing = @($labHwnds | Where-Object { $_ -eq [IntPtr]::Zero }).Count
+$chk240, $chkWhite = Measure-Hwnds $chkHwnds $bmp
+$labelRatio, $labelWhiteRatio = Measure-Hwnds $labHwnds $bmp
+
 # --- 树区 (UC 宿主客户区, 坐标相对整幅窗体) ---
 $x0 = [Math]::Max(0, $ur.L - $wr.L); $y0 = [Math]::Max(0, $ur.T - $wr.T)
 $tw = [Math]::Min($ur.R - $ur.L, $ww - $x0); $th = [Math]::Min($ur.B - $ur.T, $wh - $y0)
@@ -213,8 +299,16 @@ if (($bg240 / $area) -gt 0.40) { $bad += "宿主灰底占比 $([Math]::Round(100
 if ($darkRows -lt 10) { $bad += "节点文本行数 $darkRows < 10" }
 if ($hl -lt 50) { $bad += "选中高亮采样 $hl < 50" }
 if ($vivid -lt 300) { $bad += "图标彩色像素 $vivid < 300" }
+if ($swatchBad.Count -gt 0) { $bad += ("色块中心色不符 (" + ($swatchBad -join ", ") + ")") }
+if ($chkMissing -gt 0) { $bad += "CheckBox 定位失败 $chkMissing/8" }
+if ($labMissing -gt 0) { $bad += "Label 定位失败 $labMissing/7" }
+if ($chk240 -lt 0.60) { $bad += "CheckBox 区 240 占比 $([Math]::Round(100*$chk240,1))% < 60%" }
+if ($chkWhite -gt 0.05) { $bad += "CheckBox 区纯白占比 $([Math]::Round(100*$chkWhite,1))% > 5%" }
+if ($labelRatio -lt 0.80) { $bad += "Label 区 240 占比 $([Math]::Round(100*$labelRatio,1))% < 80%" }
+if ($labelWhiteRatio -gt 0.02) { $bad += "Label 区纯白占比 $([Math]::Round(100*$labelWhiteRatio,1))% > 2%" }
 
 $readout = "tree=${tw}x${th} white=$white bg240=$bg240 dark=$dark darkRows=$darkRows hl=$hl vivid=$vivid"
+$readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
 if ($bad.Count -gt 0) {
     Write-Output ("FAIL " + ($bad -join "; ") + " | " + $readout + " | png=$pngPath")
     try { $p.Kill() } catch {}

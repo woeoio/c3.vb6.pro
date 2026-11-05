@@ -684,6 +684,20 @@ static LRESULT CALLBACK vb6_ImageSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LP
         HDC hdc = (HDC)wp;
         if (hdc) vb6_ImagePaintHelper(hwnd, hdc);
         return 0;
+    } else if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLOREDIT) {
+        /* PictureBox 也是 STATIC 窗口类 ⇒ 它同时是**容器**: 放在里面的 Label/TextBox
+           的 WM_CTLCOLOR* 先发给它, 不是发给窗体。此前这一臂不接, 一路转给原始
+           STATIC WndProc → DefWindowProcW 的类刷 (COLOR_WINDOW = 纯白) ——
+           ucTreeView 的左列 Label2 / 右列 Label1 在这种 Picture1/Picture3 容器里
+           实测全是白底 (255×2805), 而 VB6 轻量 Label 默认是按钮面 240。
+           口径与窗体 WndProc / sstabSubclassProc 完全一致: 统一交给
+           vb6_ApplyCtlColorStatic, 由它按"显式 BackColorSet / CheckBox 默认 240"
+           判定, 不适用的返回 0 再转回原 WndProc。 */
+        HWND child = (HWND)lp;
+        if (child) {
+            LRESULT br187 = vb6_ApplyCtlColorStatic((HDC)wp, child);
+            if (br187) return br187;
+        }
     } else if (msg == WM_DESTROY) {
         /* Capture the original WndProc BEFORE removing props, then forward the
          * message to it. The old code removed the prop and then looked it up

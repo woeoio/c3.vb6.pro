@@ -542,3 +542,57 @@ GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只
    但连续重绘可能残留旧像素 —— 与 1:1 目标仍有差，待单独查。
 3. `ucTreeViewPlus.ctl` 里 `youtube/mensajero/tik-tok` 三张图两套 `img` 目录都真缺，
    真 VB6 同样取不到 ⇒ 不是缺陷，别去补假图。
+
+## 20. 设计期背景色这一族（2026-11-06 本轮）
+
+### 20.1 口径更正（重要，别再按旧结论查）
+
+- 之前记的「**Label 白底 255**」实测取样点其实是 **CheckBox** 的控件矩形
+  (顶排 `AlternateNodeColors/ShowTreeLines/ShowPlusMinus/CheckBoxes/FullRowSelect/
+  PlusMinusStyle/PlusMinusAlignRight/AllowEdit`，x≈269 起、y≈48 起、行距 30)。
+  真 Label (`BorderRadius…MarginBottom`/`SelectionColor`) 在这份夹具里**本来就是 240**。
+- 所以残差 #2 的真身是「**CheckBox 白底**」：VB6 里 CheckBox 默认 BackColor =
+  `&H8000000F&`(按钮面 240) 且不透明；C3 落成真 BUTTON 窗口后向父窗要底色时走的
+  是 **WM_CTLCOLORSTATIC**（不是 `WM_CTLCOLORBTN`，后者只对命令按钮/owner-draw 生效）。
+
+### 20.2 三条根因与修改站点
+
+1. **9 枚色块（Picture2.BackColor）根本没发**：`emitDesignerStyleProps` 的设计期
+   ForeColor/BackColor 只在**顶层控件创建路**发（`cgen_form_ctrl_style_apply.inc`），
+   容器（Frame/PictureBox/SSTab）里的子控件那条路（`cgen_form_frame_menu.inc`）一条不发。
+   Picture2 全在 Picture1 里 ⇒ 9 个 BackColor(`&H00FFE8CC&` 等) 全丢。
+   修：在 frame_menu 那条路补 `vb6_SetControlBackColor/ForeColor`，口径与顶层逐条相同
+   （只发显式写过且类型为 Integer 的；`0x8000000n` 系统色原样传负值，RTL 再 GetSysColor）。
+2. **Label 默认底色**：VB6 轻量 Label 默认 `&H8000000F&`(240)，C3 落成 STATIC 窗口后
+   类刷是 `COLOR_WINDOW`(255)。修：`vb6_CreateControl` 里对 `STATIC` 且
+   `(style & 0x1F) != SS_BITMAP(0x0E)` 的控件在创建时写 `VB6_BackColor = COLOR_BTNFACE`
+   （PictureBox/Image 走 `SS_BITMAP` 自绘，排除）。
+3. **PictureBox 容器不接子控件的 CTLCOLOR**：Label/CheckBox 在 Picture1/Picture3 里时
+   `WM_CTLCOLORSTATIC` 发给 PictureBox（同样是 STATIC 类），`vb6_ImageSubclassProc`
+   此前不接 ⇒ 转给原 STATIC WndProc → 白。修：加 `WM_CTLCOLORSTATIC/EDIT` 一臂，
+   统一交 `vb6_ApplyCtlColorStatic`。
+4. 放行判据从"生成侧看 `VB6_BackColorSet` 哨兵"改成"**RTL 判定**"：
+   `vb6_ApplyCtlColorStatic` 在无哨兵时也接管 `Button` 类的 6 个复选 style
+   (2/3/4/5/6/9)，默认取 `vb6_GetControlBackColor`(=BTNFACE 240)。
+   生成侧三处（主窗体 WndProc、PictureBox 子类、sstab 子类）都改成无条件调，
+   由 RTL 返回 0 表示"不接管"。
+
+### 20.3 实测读数（125% DPI，959×623 整窗，VB6 实拍为基准）
+
+- 9 格中心色逐格一致（C3 = VB6 = `255,255,255 / 180,180,180 / 99,99,255 / 0,0,0 /
+  99,99,255 / 204,204,204 / 0,0,0 / 204,204,204 / 204,232,255`）。
+- CheckBox 区 240 占比 **83.4%**、白 0%（改前 0% / 83.4% 白）。
+- Label 区 240 占比 **90.9%**、白 0%（改前同值；本来就没坏）。
+- 整窗 diff：**12.37% → 7.74%**（46258/597457）。分区：左控件列 26.08→12.4%、
+  右色块/面板 19.18→10.59%、左边框 11.25→6.29%、右条 5.31→2.22%；
+  树区 6.23%、底部按钮 12.79% 未动；底条 16.06→27.84% 属 DWM 圆角/阴影随屏幕背景变化。
+
+### 20.4 判据 / 构建 / 提交
+
+- `tests\guisample\uctreeview_px.ps1` 新增：9 格中心 RGB（±3）；8 枚 CheckBox 与
+  7 条 Label 的 240/纯白占比；取样点全部来自运行时 `EnumChildWindows` 真实控件矩形
+  （不写死像素坐标，96/125 DPI 都成立）。旧产物必 FAIL（已用 `.temp\old_uctv\Proyecto1.exe` 验过）。
+- C3 重建后 `c3rtl.rc.res` 2894996 B、`C3.exe` 15449088 B；产物 820224 B、`machine=0x014C`。
+- 陷阱：`.inc` 改动**不会**触发 `cgen_form.cpp` 重编（依赖跟踪漏），改了
+  `detail/module/*.inc` 必须 touch `src\backend\module\cgen_form.cpp` 再 build，
+  否则生成码还是旧的（本轮踩过一次）。
