@@ -504,6 +504,11 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
            VB6 在这里抛 438 "Object doesn't support this property or method"。
            与 GetProp 岔口同口径: 抛完仍交一枚空 VARIANT, 让调用方继续 (Resume Next 语义)。 */
         if (hhandled < 0) {
+            if (getenv("C3_LATEBIND_MISS")) {
+                fprintf(stderr, "[C3_438] site=Call name=\"%ls\" disp=%p\n",
+                        methodName ? methodName : L"<null>", disp);
+                fflush(stderr);
+            }
             g_com_438_dangling = 1;
             vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
             vb6_Host_ClearVariant(&hout);
@@ -1033,6 +1038,11 @@ static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
            由 On Error Resume Next 吞掉; 以前答 Empty 后链上 `.SelLength` 再记一条
            latebind miss ⇒ GUISample 里 rtfText/SelLength 成对噪声 (274×2)。 */
         if (hgot < 0) {
+            if (getenv("C3_LATEBIND_MISS")) {
+                fprintf(stderr, "[C3_438] site=GetProp name=\"%ls\" disp=%p\n",
+                        propName ? propName : L"<null>", disp);
+                fflush(stderr);
+            }
             g_com_438_dangling = 1;
             vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
             VARIANT* hempty = (VARIANT*)calloc(1, sizeof(VARIANT));
