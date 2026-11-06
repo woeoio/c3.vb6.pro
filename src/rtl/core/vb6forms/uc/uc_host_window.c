@@ -53,16 +53,16 @@ static COLORREF vb6_uc_resolve_color(int32_t ole) {
     return (((uint32_t)ole & 0x80000000u) != 0) ? GetSysColor(ole & 0xFF) : (COLORREF)ole;
 }
 
-/* UC 自己的字体 (UserControl.Font, 已经 SetFont 同步到 r->font) 优先;
-   没有记录时才退回宿主窗口存的那枚 (ambient)。 */
+/* 只读宿主窗口那一格存储 (WM_GETFONT 同源)。**不能**优先用 vb6_ucCurrent->font:
+   这里可能是任意一枚 r 的 DC —— 非 AutoRedraw 的临时 DIB 在 vb6_uc_push **之前**
+   就要选字体, 而 vb6_ucCurrent 还停在上一个 UC 上, 它的 font 可能是别的实例 /
+   别的时刻留下的 (实测 ucSegmentedControl 的 CheckBar 因此拿到 MS Sans Serif,
+   PUA 字形 (U+E16C..) 全部不画)。控件自己 `Set UserControl.Font = ...` 的逐段
+   换字体走 vb6_uc_applyFontNow (那里 hdc 已经指向本实例的绘制 DC)。 */
 static void vb6_uc_selectOwnFont(HDC dc, HWND hwnd) {
-    HFONT hf = NULL;
+    HFONT hf;
     if (!dc || !hwnd) return;
-    if (vb6_ucCurrent && vb6_ucCurrent->font) {
-        hf = vb6_uc_fontHFontFor(vb6_ucCurrent->font, vb6_UserControl_FontBold,
-                                 vb6_UserControl_FontUnderline);
-    }
-    if (!hf) hf = vb6_ControlFontStored(hwnd);   /* 只读那一格存储: 宿主窗口 WM_GETFONT 本就走这一格, 不进消息面 */
+    hf = vb6_ControlFontStored(hwnd);
     if (hf) SelectObject(dc, hf);
 }
 
@@ -183,7 +183,6 @@ static void vb6_uc_adEnsure(vb6_UCRec* r) {
            少这一步就会把每个字画成白底方块。 */
         SetBkMode(r->adSurf.memDC, TRANSPARENT);
         SetTextColor(r->adSurf.memDC, vb6_uc_resolve_color(vb6_UserControl_ForeColor));
-        vb6_uc_selectOwnFont(r->adSurf.memDC, r->hwnd);
     }
     if (getenv("C3_AD_TRACE")) {
         fprintf(stderr, "[AD-ensure] type=%s w=%d h=%d\n",
