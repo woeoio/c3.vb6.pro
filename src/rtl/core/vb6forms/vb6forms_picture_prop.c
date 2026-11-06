@@ -554,8 +554,7 @@ static void vb6_ImagePaintHelper(HWND hwnd, HDC hdc) {
      * 后绘制路径读不到, 色块永远不变色。无属性时回落 BTNFACE (Image 默认)。 */
     int stretch = (int)(INT_PTR)GetPropW(hwnd, L"VB6_Stretch");
     {
-        COLORREF bg187 = (COLORREF)vb6_GetControlBackColor(hwnd);
-        if (bg187 & 0x80000000L) bg187 = GetSysColor(bg187 & 0xFF);
+        COLORREF bg187 = vb6_ColorToColorRef(vb6_GetControlBackColor(hwnd));
         HBRUSH hBg = CreateSolidBrush(bg187);
         FillRect(hdc, &rc, hBg);
         DeleteObject(hBg);
@@ -866,9 +865,8 @@ void vb6_FormSetPictureProp(void* hwnd, const void* variant) {
             vb6_FPP_render(pPic, dc, 0, 0, 0, 0);
         } else {
             /* Picture=Nothing: 记忆位图回到 BackColor, 与窗体一起清空。 */
-            COLORREF bg = (COLORREF)vb6_GetControlBackColor(hw);
+            COLORREF bg = vb6_ColorToColorRef(vb6_GetControlBackColor(hw));
             HBRUSH br;
-            if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
             br = CreateSolidBrush(bg);
             FillRect(dc, &rc, br);
             DeleteObject(br);

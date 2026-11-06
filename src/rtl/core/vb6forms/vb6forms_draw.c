@@ -108,7 +108,7 @@ static void vb6_DrawSetCurY(HWND hw, int32_t v) { vb6_SetCurrentY((void*)hw, (fl
 // 两边默认档本来就是同一个数 (未设 → 0 → vbBlack), 所以合并不引入 Fix 187 那类"0 与没设过
 // 同构"的误判 —— 那条坑属于 BackColor (它默认是 BTNFACE 而不是黑, 才要 VB6_BackColorSet 哨兵)。
 static COLORREF vb6_DrawForeColor(void* hwnd) {
-    return (COLORREF)vb6_GetControlForeColor(hwnd);
+    return vb6_ColorToColorRef(vb6_GetControlForeColor(hwnd));
 }
 
 // ============================================================
@@ -214,7 +214,7 @@ void vb6_Form_PSet(void* hwnd, int32_t step, int32_t hasXY,
     if (!d.dc) return;
     double dx = vb6_DrawUserToPx(hwnd, px, 0);
     double dy = vb6_DrawUserToPx(hwnd, py, 1);
-    COLORREF c = hasColor ? (COLORREF)color : vb6_DrawForeColor(hwnd);
+    COLORREF c = hasColor ? vb6_ColorToColorRef(color) : vb6_DrawForeColor(hwnd);
     SetPixelV(d.dc, (int)dx, (int)dy, c);
     vb6_DrawRelease(&d, hwnd);
 }
@@ -268,7 +268,7 @@ void vb6_Form_Line(void* hwnd,
     double pbx = vb6_DrawUserToPx(hwnd, bx, 0);
     double pby = vb6_DrawUserToPx(hwnd, by, 1);
 
-    COLORREF c = hasColor ? (COLORREF)color : vb6_DrawForeColor(hwnd);
+    COLORREF c = hasColor ? vb6_ColorToColorRef(color) : vb6_DrawForeColor(hwnd);
     int w = vb6_DrawGetI(hw, L"VB6_DrawWidth", 1);
     if (w < 1) w = 1;
     HPEN pen = CreatePen(PS_SOLID | (w > 1 ? PS_ENDCAP_ROUND : 0), w, c);
@@ -357,7 +357,7 @@ void vb6_Form_Circle(void* hwnd,
     int right  = (int)(dcx + r);
     int bottom = (int)(dcy + ry);
 
-    COLORREF c = hasColor ? (COLORREF)color : vb6_DrawForeColor(hwnd);
+    COLORREF c = hasColor ? vb6_ColorToColorRef(color) : vb6_DrawForeColor(hwnd);
     int w = vb6_DrawGetI(hw, L"VB6_DrawWidth", 1);
     if (w < 1) w = 1;
     HPEN pen = CreatePen(PS_SOLID, w, c);
@@ -421,7 +421,7 @@ void vb6_Form_Cls(void* hwnd) {
     if (ar) {
         RECT rcA;
         GetClientRect(hw, &rcA);
-        HBRUSH brA = CreateSolidBrush((COLORREF)vb6_GetControlBackColor(hwnd));
+        HBRUSH brA = CreateSolidBrush(vb6_ColorToColorRef(vb6_GetControlBackColor(hwnd)));
         if (brA) { FillRect(ar, &rcA, brA); DeleteObject(brA); }
         vb6_Cls_RestoreFormPicture(ar, hw);   // Cls 不清 Picture (VB6 语义)
         InvalidateRect(hw, NULL, FALSE);   // 上屏交给泵 (与 .hDC 那条同口径, 不擦底)
@@ -438,7 +438,7 @@ void vb6_Form_Cls(void* hwnd) {
     // 按值判空会把 BackColor = vbBlack 读成"未设置"而回落成按钮面 (实测控件那户
     // Cls 之后取像素 0 对 15790320)。账 #239: 控件的 Cls 现在转调这里，所以这一问
     // 两边共用；Form 自己那一路还到不了 (Me.Cls 落 COM 兜底，见账 #232)。
-    HBRUSH br = CreateSolidBrush((COLORREF)vb6_GetControlBackColor(hwnd));
+    HBRUSH br = CreateSolidBrush(vb6_ColorToColorRef(vb6_GetControlBackColor(hwnd)));
     if (br) { FillRect(d.dc, &rc, br); DeleteObject(br); }
     vb6_Cls_RestoreFormPicture(d.dc, hw);     // 同上: Cls 不清 Picture
     vb6_DrawRelease(&d, hwnd);
@@ -526,8 +526,8 @@ void vb6_Printer_PSet(int32_t step, int32_t hasXY, double x, double y,
     if (step) { px += g_prnDrawX; py += g_prnDrawY; }
     g_prnDrawX = hasXY ? px : g_prnDrawX;
     g_prnDrawY = hasXY ? py : g_prnDrawY;
-    COLORREF c = hasColor ? (COLORREF)color
-                          : (g_prnDrawFg >= 0 ? (COLORREF)g_prnDrawFg : RGB(0, 0, 0));
+    COLORREF c = hasColor ? vb6_ColorToColorRef(color)
+                          : (g_prnDrawFg != -1 ? vb6_ColorToColorRef(g_prnDrawFg) : RGB(0, 0, 0));
     SetPixelV(dc, px, py, c);
 }
 
@@ -551,8 +551,8 @@ void vb6_Printer_Line(int32_t step1, int32_t has1, double x1, double y1,
     if (step2) { bx += g_prnDrawX; by += g_prnDrawY; }
     g_prnDrawX = has2 ? bx : ax;
     g_prnDrawY = has2 ? by : ay;
-    COLORREF c = hasColor ? (COLORREF)color
-                          : (g_prnDrawFg >= 0 ? (COLORREF)g_prnDrawFg : RGB(0, 0, 0));
+    COLORREF c = hasColor ? vb6_ColorToColorRef(color)
+                          : (g_prnDrawFg != -1 ? vb6_ColorToColorRef(g_prnDrawFg) : RGB(0, 0, 0));
     int w = g_prnDrawWidth < 1 ? 1 : g_prnDrawWidth;
     HPEN pen = CreatePen(PS_SOLID, w, c);
     HGDIOBJ oldPen = pen ? SelectObject(dc, pen) : NULL;
@@ -583,8 +583,8 @@ void vb6_Printer_Circle(int32_t step, int32_t hasXY, double x, double y,
     if (step) { ccx += g_prnDrawX; ccy += g_prnDrawY; }
     g_prnDrawX = ccx; g_prnDrawY = ccy;
     if (radius < 0) radius = -radius;
-    COLORREF c = hasColor ? (COLORREF)color
-                          : (g_prnDrawFg >= 0 ? (COLORREF)g_prnDrawFg : RGB(0, 0, 0));
+    COLORREF c = hasColor ? vb6_ColorToColorRef(color)
+                          : (g_prnDrawFg != -1 ? vb6_ColorToColorRef(g_prnDrawFg) : RGB(0, 0, 0));
     int w = g_prnDrawWidth < 1 ? 1 : g_prnDrawWidth;
     double ry = (hasAspect && aspect > 0) ? radius / aspect : radius;
     HPEN pen = CreatePen(PS_SOLID, w, c);

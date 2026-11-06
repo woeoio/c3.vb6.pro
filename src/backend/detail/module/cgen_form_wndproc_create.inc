@@ -164,7 +164,7 @@
         if (fbcIt != frmDesc.formControl.properties.end()
             && fbcIt->second.type == FrmValueType::Integer) {
             c_.emitLine("vb6_SetControlBackColor((void*)hwnd, "
-                        + std::to_string((int)(unsigned int)fbcIt->second.intValue)
+                        + std::to_string(frmValueToVbLong(fbcIt->second.intValue))
                         + ");  /* design Form.BackColor */");
         }
     }

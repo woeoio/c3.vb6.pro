@@ -516,12 +516,12 @@
                     auto bcIt187c = child.properties.find("BackColor");
                     if (bcIt187c != child.properties.end() && bcIt187c->second.type == FrmValueType::Integer) {
                         c_.emitLine("vb6_SetControlBackColor((void*)" + childHwndRead(child) + ", "
-                                    + std::to_string((int)(unsigned int)bcIt187c->second.intValue) + ");  /* design BackColor */");
+                                    + std::to_string(frmValueToVbLong(bcIt187c->second.intValue)) + ");  /* design BackColor */");
                     }
                     auto fcIt187c = child.properties.find("ForeColor");
                     if (fcIt187c != child.properties.end() && fcIt187c->second.type == FrmValueType::Integer) {
                         c_.emitLine("vb6_SetControlForeColor((void*)" + childHwndRead(child) + ", "
-                                    + std::to_string((int)(unsigned int)fcIt187c->second.intValue) + ");  /* design ForeColor */");
+                                    + std::to_string(frmValueToVbLong(fcIt187c->second.intValue)) + ");  /* design ForeColor */");
                     }
                 }
                 emitControlFrxProps(child);  // Fix 182: 容器子控件同样加载 .frx 设计期图片/文本/列表

@@ -1545,6 +1545,19 @@ function Test-ControlDC {
         $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
     }
 }
+function Test-ColorRefAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] color_ref_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_color_ref_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 function Test-SaAccess {
     $script:total++
     Write-Host -NoNewline "  [STATIC] sa_access ... "
@@ -8160,6 +8173,12 @@ if ($Category -in @("all", "run", "vbp")) {
         "PB01-PAINT px=255", "PB02-PIC-MDOWN x=20", "PB03-PIC-MUP", "PB04-PIC-CLICK",
         "PB05-IMG-CLICK", "PB06-LB-MDOWN",
         "PB-CNT mdown=1 mup=1 click=1 img=1 lb=1 paint_ok=1", "PB-WAIT done=True") -Arch "x86"
+    # 账 <VB 系统色>: 31 枚系统色 (0..30) × 顶层控件 / 容器子控件 两条创建路 + 非系统色反例。
+    # 旧产物 (裸 (COLORREF) 造刷) 必红; 白/黑/负非系统色那三条证明不是"凡负值都当系统色"。
+    Test-Vbp "syscolor" "$Tests\syscolor\SysColor.vbp" @(
+        "SC-TOP ok=31/31", "SC-CHILD ok=31/31", "SC-NONSYS ok=3/3", "SC-DONE")
+    Test-Vbp "syscolor_x86" "$Tests\syscolor\SysColor.vbp" @(
+        "SC-TOP ok=31/31", "SC-CHILD ok=31/31", "SC-NONSYS ok=3/3", "SC-DONE") -Arch "x86"
 
     # --- P20-46: 控件字符串全程 W / 支持多国语言（用户要求）的源码面反例断言 ---
     # 判据两条:
@@ -11421,6 +11440,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-B425DateserialDomain }
     if (Enter-StaticShard) { Test-B424DatedPartParams }
     if (Enter-StaticShard) { Test-ControlDC }
+    if (Enter-StaticShard) { Test-ColorRefAuthority }
     if (Enter-StaticShard) { Test-SaAccess }
     if (Enter-StaticShard) { Test-BitwiseAuthority }
     if (Enter-StaticShard) { Test-BodyDeclShape }

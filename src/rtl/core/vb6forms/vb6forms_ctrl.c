@@ -865,6 +865,32 @@ void vb6_SetControlFontStrikethrough(void* hwnd, int strike) {
 // P13.2: ForeColor/BackColor
 // ============================================================
 
+/* ============================================================
+   **VB6 颜色值 → 实际 COLORREF 的唯一出口**（声明见 vb6forms_prop.h）。
+
+   为什么必须收成一处：VB6 的系统色是 32 位 Long 的负值 `&H80000000& Or n`
+   (n = COLOR_SCROLLBAR(0) .. COLOR_MENUBAR(30))，VB6 交回它的**种类**而不是当时色值；
+   非系统色则是 0x00BBGGRR 的 COLORREF。这两件事在数值上无法用"正负"一句分辨干净：
+     · 只判 `v < 0` 会把 &HFF00000D 这种负 COLORREF 误当系统色；
+     · 只判低字节 n<=30 会把 &HFF00000D 误翻成 GetSysColor(13)。
+   所以判据是**逐位吻合**：高 24 位恒为 0x80、低 8 位 0..30 才是系统色。
+   本缺陷（VBFlexGridDemo 的 Picture2 "Drag/drop me" 黑块）就是绘制层各站点把
+   `vb6_GetControlBackColor()` 的原始负值裸转 `(COLORREF)` 造刷 ——
+   CreateSolidBrush(0x8000000D) 把 R=0x0D 之外全吃掉，得到 RGB(13,0,0) 暗红黑，
+   而正确值是 GetSysColor(13) = 当前主题的 COLOR_HIGHLIGHT。
+
+   ⚠ 新增消费点必须转调本函数；禁止在别处再抄一份 `& 0x80000000 / GetSysColor(...)`
+   (静态哨兵 scripts/check_color_ref_authority.ps1 会拦)。
+   ============================================================ */
+COLORREF vb6_ColorToColorRef(int vbColor) {
+    const uint32_t v = (uint32_t)vbColor;
+    /* 系统色: &H80000000& Or n —— 高 24 位必须是 0x80, 低 8 位 n ∈ [0..30]。 */
+    if ((v & 0xFFFFFF00u) == 0x80000000u && (v & 0xFFu) <= 30u)
+        return GetSysColor((int)(v & 0xFFu));
+    /* 其余按 COLORREF: 只取低 24 位 (0x00BBGGRR)。 */
+    return (COLORREF)(v & 0x00FFFFFFu);
+}
+
 /* 原生 SysTreeView32 不看 VB6_BackColor/VB6_ForeColor 窗口属性 (那两位只有 RTL
    自绘与 WM_CTLCOLOR 族消费), 它的底色/文字色只认 TVM_SETBKCOLOR /
    TVM_SETTEXTCOLOR —— 不发给它, tree.BackColor / tree.ForeColor 在原生树上恒为
@@ -874,8 +900,7 @@ static void vb6_NativeTreeColorMsg(void* hwnd, UINT msg, int color) {
     wchar_t cls[64];
     if (!GetClassNameW((HWND)hwnd, cls, 64)) return;
     if (_wcsicmp(cls, L"SysTreeView32") != 0) return;
-    COLORREF c = (COLORREF)(color & 0xFFFFFF);
-    if (color & 0x80000000) c = GetSysColor(color & 0xFF);
+    COLORREF c = vb6_ColorToColorRef(color);
     SendMessageW((HWND)hwnd, msg, 0, (LPARAM)c);
 }
 
@@ -959,8 +984,7 @@ LRESULT vb6_ApplyCtlColorStatic(HDC hdc, HWND child) {
     // ⚠ 必须排在下面的 VB6_BackColorSet 检查**之前**: BackStyle=0 的 Label 通常
     // 压根没写 BackColor (3DMenu 的 Label3/LblSub 都是), 落到下面直接 return 0。
     if (GetPropW(child, L"VB6_BackStyle0")) {
-        COLORREF tfg = (COLORREF)vb6_GetControlForeColor((void*)child);
-        if (tfg & 0x80000000L) tfg = GetSysColor(tfg & 0xFF);
+        COLORREF tfg = vb6_ColorToColorRef(vb6_GetControlForeColor((void*)child));
         SetTextColor(hdc, tfg);
         SetBkMode(hdc, TRANSPARENT);
         return (LRESULT)GetStockObject(HOLLOW_BRUSH);
@@ -981,9 +1005,8 @@ LRESULT vb6_ApplyCtlColorStatic(HDC hdc, HWND child) {
                        kind187 == 5 || kind187 == 6 || kind187 == 9));
     // Fix 187: 只看 Set 哨兵, 不看值 — color=0 (黑) 的值属性是 NULL, 但它是合法色。
     if (!GetPropW(child, L"VB6_BackColorSet") && !isCheck187) return 0;  // 未显式设色且非复选类 → 调用方走默认绘制
-    COLORREF bg = (COLORREF)vb6_GetControlBackColor((void*)child);
-    COLORREF fg = (COLORREF)vb6_GetControlForeColor((void*)child);
-    if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
+    COLORREF bg = vb6_ColorToColorRef(vb6_GetControlBackColor((void*)child));
+    COLORREF fg = vb6_ColorToColorRef(vb6_GetControlForeColor((void*)child));
     SetTextColor(hdc, fg);
     SetBkColor(hdc, bg);
     HBRUSH br = (HBRUSH)GetPropW(child, L"VB6_BgBrush");
@@ -1015,9 +1038,8 @@ LRESULT vb6_CtlColorBtnBrush(HWND child, HWND parent) {
         return (LRESULT)GetStockObject(HOLLOW_BRUSH);
     }
     // groupbox: 标题底 = 父窗 BackColor (未显式设色时回落 BTNFACE = 240 灰)。
-    COLORREF bg = parent ? (COLORREF)vb6_GetControlBackColor((void*)parent)
+    COLORREF bg = parent ? vb6_ColorToColorRef(vb6_GetControlBackColor((void*)parent))
                          : GetSysColor(COLOR_BTNFACE);
-    if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
     HBRUSH br = (HBRUSH)GetPropW(child, L"VB6_GbCapBrush");
     if (br) {
         // 缓存命中: 若父窗底色已变, 需要重建 (色值存在 VB6_GbCapColor 上)。

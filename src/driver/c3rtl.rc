@@ -1062,3 +1062,9 @@
    所有权约定）。vb6rtl_conv.c 的 vb6_MsgBox 在 title 省略时借用那一格 —— 改前交空串，
    所以 MsgBox 的默认题头一直是空的（ComCtlsDemo Command3 的现场）。
    touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 <VB 系统色>: RTL 颜色翻译收成唯一出口 vb6_ColorToColorRef (vb6forms_ctrl.c) ——
+   VB6 的 `&H80000000& Or n` (n=0..30) 一律按 GetSysColor(n) 解析, 非系统色按 COLORREF
+   低 24 位。此前绘制层 4 份 inline 判据各自为政、还有裸 (COLORREF) 强转把系统色负值
+   当 COLORREF 造刷 (VBFlexGridDemo Picture2 `BackColor=&H8000000D&` 画成 RGB(13,0,0))。
+   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */

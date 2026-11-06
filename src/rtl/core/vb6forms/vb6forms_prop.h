@@ -124,11 +124,21 @@ int vb6_GetControlFontStrikethrough(void* hwnd);
 void vb6_SetControlFontStrikethrough(void* hwnd, int strike);
 
 // P13.2: ForeColor/BackColor (all visible controls)
-// Returns OLE color (VB6 Long), 0x00BBGGRR format
+// getter/setter 存的、读的恒是 **VB6 Long 原值** (0x00BBGGRR；系统色 = 0x80000000|n 的
+// 32 位负值)，本对出口**不做翻译** —— VB 代码读回必须仍是那个负值。
 int vb6_GetControlForeColor(void* hwnd);
 void vb6_SetControlForeColor(void* hwnd, int color);
 int vb6_GetControlBackColor(void* hwnd);
 void vb6_SetControlBackColor(void* hwnd, int color);
+
+// ============================================================
+// 唯一出口: **VB6 颜色值 → 实际 COLORREF**
+//   · 系统色 `&H80000000& Or n` (n ∈ [0..30]) → GetSysColor(n)；
+//   · 其余（含非系统色的正/负值）按 COLORREF 语义取低 24 位 (0x00BBGGRR)。
+// RTL 内**不许**再出现第二份符号/系统色判据：任何要拿 COLORREF 造刷/设 DC 色的地方
+// 一律转调本函数（测地表见 scripts/check_color_ref_authority.ps1）。
+// ============================================================
+COLORREF vb6_ColorToColorRef(int vbColor);
 
 // Fix 187: WM_CTLCOLORSTATIC 统一应用 — 子控件 Set 过 VB6_BackColor 时
 // 应用 Fore/Back 色并返回背景刷; 未设色返回 0 (调用方走 DefWindowProcW)。

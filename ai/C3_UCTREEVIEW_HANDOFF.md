@@ -1003,3 +1003,105 @@ ambient 继承到 `Arial Narrow -16`，窗体自己却退回 `MS Sans Serif -13`
   见 24.7）+ `tests (vbp #11)`（`'Menu / Tools' 行数 2 != 参考 1`，CI 字体替换所致，见 24.6）。
 - GA run **42176788091**（head `a3e55adb`）：**22/22 全绿**。
 
+## §25 VB 系统色 `&H80000000& Or n` 被当 COLORREF（2026-11-06）
+
+### 25.1 现象与工程
+
+`tests\VBFlexGridDemo\MainForm.frm`（仓库内唯一一份 VBFlexGridDemo，无第二候选）：
+
+```
+30:      Begin VB.PictureBox Picture2
+31:         BackColor       =   &H8000000D&      ' COLOR_HIGHLIGHT (系统色)
+32:         ForeColor       =   &H8000000E&
+...
+658:Private Sub Picture2_Paint()
+659:Picture2.Cls
+660:Picture2.Print "Drag/drop me"
+```
+
+设计器里该值是 `&H8000000D&`，运行后控件背景是黑（实测 `RGB(13,0,0)`，见 25.2）。
+
+### 25.2 四档链路实测（120dpi / 当前主题）
+
+| 档 | 读数 | 位置 |
+|---|---|---|
+| ① 解析/存储 | `frm_parser_util.cpp:70` `stoull` 得 **2147483661**（无符号 32 位），以 `long long` 存进属性表；**没有**在此折符号 | `frm_parser_util.cpp:69-75` |
+| ② 发射 | `.temp\sc\emit.c`（`--emit-c` 夹具原文）两条创建路都发 `-2147483635`：<br>`694: vb6_SetControlBackColor((void*)vb6_hwnd_T13, -2147483635);`（顶层）<br>`938: vb6_SetControlBackColor((void*)vb6_hwnd_C13, -2147483635);`（容器子控件）<br>VBFlexGridDemo: `vb6_SetControlBackColor((void*)vb6_hwnd_Picture2, -2147483635);` | `cgen_form_ctrl_style_apply.inc:410/415`（顶层）、`cgen_form_frame_menu.inc:519/524`（容器子）、`cgen_form_wndproc_create.inc:167`（窗体自身） |
+| ③ 属性/RTL 落地 | 旧读法：`vb6_GetControlBackColor() = 0x8000000D (-2147483635)`（保号正确）。旧绘制层裸 `(COLORREF)` 造刷 = `CreateSolidBrush(0x8000000D)`；新唯一出口 `vb6_ColorToColorRef(-2147483635)` → `GetSysColor(13) = 0x00D77800` | `vb6forms_ctrl.c:885` |
+| ④ 像素 | 旧产物 `pixel=RGB(0,0,13)`（探针按 BGR 打印，实际 `#0D0000`）；新产物 `pixel=RGB(215,120,0)`，与同一行 `GetSysColor(13)=0xD77800 = RGB(215,120,0)` **逐值相等**（实际 `#0078D7`） | `.temp\pic2probe.before.txt` / `after.txt`，采样点控件客户区 (6,6)（避开中心文字） |
+
+**根因**：`Picture2_Paint` 的 `Cls` 落到 `vb6_Form_Cls`（`vb6forms_draw.c`），该处及全仓另有
+3 份 inline 判据各写各的，但**绘制层多条站点点压根不判**：直接把 `vb6_GetControlBackColor()`
+的原始 VB 负值裸转 `(COLORREF)` 造刷。`CreateSolidBrush(0x8000000D)` 取低 24 位（`#0D0000`）
+—— 系统色索引被当成红色分量。
+
+### 25.3 修法：唯一出口
+
+新增 `vb6_ColorToColorRef(int vbColor)`（`vb6forms_ctrl.c:885`，声明 `vb6forms_prop.h`）：
+
+* 判据**逐位吻合**：`(v & 0xFFFFFF00u) == 0x80000000u && (v & 0xFFu) <= 30u` → `GetSysColor(n)`；
+* 其余（含非系统负值）→ `(COLORREF)(v & 0x00FFFFFFu)`。
+
+特意不采用 `v < 0`（会把 `&HFF00000D&` 误当系统色）或"只判低字节 n<=30"（会把
+`&HFFFFFF00&` 误翻 `GetSysColor(0)`）。夹具里的 `N=&HFFFFFF00&` 就是这条反例。
+
+所有要 COLORREF 的站点改为转调它（**不再有第二份符号判据**）：
+
+* `vb6forms_ctrl.c`：`vb6_NativeTreeColorMsg`、`WM_CTLCOLORSTATIC` 子控件文字色/背景色、
+  GroupBox 标题条背景；
+* `vb6forms_draw.c`：`vb6_DrawForeColor`、PSet/Line/Circle 的 `color` 实参、
+  AutoRedraw 位图填充、`Form_Cls` 填充、Printer 三条（`g_prnDrawFg` 的"未设"哨兵从
+  `>= 0` 改为 `!= -1`，否则系统色负值会被当成未设）；
+* `vb6forms.c`：窗体类背景刷、GroupBox 标题背景；
+* `vb6forms_widget_prop.c`：`SetAutoRedraw` 初始位图；
+* `vb6forms_picture_prop.c`：两处 Picture 背景刷；
+* `vb6forms_shape.c`：Shape/Line 的 BorderColor/FillColor；
+* `uc_host_window.c`：`vb6_uc_resolve_color`（直接转调）、ambient 背景刷两处、
+  UserControl 前景/子控件文字色。
+
+getter/setter 仍存/答 **VB6 Long 原值**（`&H8000000D&` 读回仍是 `-2147483635`）。
+
+### 25.4 代码生成侧唯一符号折回出口
+
+`frm_parser.hpp:69` 新增 `frmValueToVbLong(long long)`：纯算术（`unsigned long long` 掩码
+`0xFFFFFFFF` + 减 `0x100000000`）把无符号 32 位位型折回负 Long；三个 `.inc` 的 5 个设计期
+颜色发射站全部改调它，删掉 `(int)(unsigned int)` 双强转。`frm_parser_util.cpp` 的注释同步
+改成"解析保留无符号位型，符号由发射侧折回"。
+
+### 25.5 哨兵与运行时断言
+
+* 静态：`scripts/check_color_ref_authority.ps1`（挂进 `tests\run_tests.ps1` 的静态 census 段，
+  `Test-ColorRefAuthority`），5 条规则：
+  C1 唯一出口恰好一处且三档判据齐全；C2 禁止裸 `(COLORREF)vb6_GetControl*Color`；
+  C3 除唯一出口函数体那一行外禁止任何 `GetSysColor(<含 & 的表达式>)`；
+  C4 `src/backend|project|driver` 禁止 `(int)(unsigned int)`；
+  C5 5 个设计期颜色发射站必须含 `frmValueToVbLong`。
+  白名单只两条，均带理由注释：W1 = `vb6forms_ctrl.c` 的
+  `return GetSysColor((int)(v & 0xFFu));`（唯一出口本体）；W2 = `frm_parser.hpp` 的
+  `frmValueToVbLong`（代码生成侧唯一折回出口，纯算术）。
+* 运行时：`tests\syscolor\SysColor.vbp` / `SysColorForm.frm`
+  * 31 枚系统色（0..30）走**顶层控件** `T0..T30`，另 31 枚走**容器子控件** `C0..C30`
+    （父 = PictureBox `Panel`）；
+  * 反例：`W=&H00FFFFFF&`（白）、`K=&H00000000&`（黑）、`N=&HFFFFFF00&`（负值但非系统色）；
+  * Timer 第一拍逐枚 `Cls`（走 `vb6_Form_Cls` 的 BackColor 填充），第三拍 `GetDC/GetPixel(4,4)`
+    与 `GetSysColor(idx)` 逐条比对，打印 `SC-TOP ok=31/31` / `SC-CHILD ok=31/31` /
+    `SC-NONSYS ok=3/3` / `SC-DONE`；
+  * 注册两例（x64/x86）：`Test-Vbp "syscolor"` / `"syscolor_x86"`。
+
+### 25.6 回归
+
+* 旧产物（`.temp\VBFlexGridDemo.old.exe`，改前编译器产出）跑探针：`pixel=RGB(0,0,13)`（红）。
+* 新产物（`output\VBFlexGridDemo\VBFlexGridDemo.exe`）：`pixel=RGB(215,120,0)` =
+  `GetSysColor(13)`（绿）。
+* 新夹具 x64 / x86 实跑：`SC-TOP 31/31`、`SC-CHILD 31/31`、`SC-NONSYS 3/3`、`SC-DONE`。
+* GUISample（9 格色块 + CheckBox/Label 同族回归面）：`-Category guisample` PASS
+  （`samples=55`、`checkpoints=2/2`、`tree_icons_px` / `mdi` 全 PASS）。
+* RTL 改动已重包 `c3rtl.res`（`c3rtl.rc` 追加账注释触发重编）；
+  `scripts\check_rtl_embedded.ps1` PASS（内嵌资源与磁盘逐一相同），
+  `C3.exe` 内已含新符号 `vb6_ColorToColorRef`。
+
+### 25.7 提交 / GA
+
+- （待填）
+
+

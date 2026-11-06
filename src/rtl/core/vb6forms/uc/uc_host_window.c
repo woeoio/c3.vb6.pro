@@ -29,9 +29,7 @@ extern "C" {
 // ---------------------------------------------------------------------------
 static void vb6_uc_fillAmbient(HDC dc, int32_t w, int32_t h) {
     RECT full = { 0, 0, w, h };
-    COLORREF cref = (vb6_Ambient_BackColor & 0x80000000L)
-                        ? GetSysColor(vb6_Ambient_BackColor & 0xFF)
-                        : (COLORREF)vb6_Ambient_BackColor;
+    COLORREF cref = vb6_ColorToColorRef(vb6_Ambient_BackColor);
     HBRUSH b = CreateSolidBrush(cref);
     FillRect(dc, &full, b);
     DeleteObject(b);
@@ -50,7 +48,7 @@ static void vb6_uc_fillAmbient(HDC dc, int32_t w, int32_t h) {
 static HFONT vb6_uc_fontHFontFor(const void* fontPtr, int16_t bold, int16_t underline);
 
 static COLORREF vb6_uc_resolve_color(int32_t ole) {
-    return (((uint32_t)ole & 0x80000000u) != 0) ? GetSysColor(ole & 0xFF) : (COLORREF)ole;
+    return vb6_ColorToColorRef(ole);
 }
 
 /* 只读宿主窗口那一格存储 (WM_GETFONT 同源)。**不能**优先用 vb6_ucCurrent->font:
@@ -374,7 +372,7 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
        按全局值设一次, 控件随后的赋值 (vb6_UC_SetForeColor) 再逐段覆盖。 */
     {
         int32_t fc = vb6_UserControl_ForeColor;
-        COLORREF cr = (((uint32_t)fc & 0x80000000u) != 0) ? GetSysColor(fc & 0xFF) : (COLORREF)fc;
+        COLORREF cr = vb6_ColorToColorRef(fc);
         SetTextColor(dc, cr);
     }
     /* 嵌套绘制 (透明 UC 的 composeBelow 会给兄弟发 WM_PRINTCLIENT) 会进到这里:
@@ -610,9 +608,7 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 if (!r->desc || !r->desc->transparent) {
                     // 用容器底色填充, 避免重绘闪烁 (固定白色会在深色 UI 上闪白)
                     RECT rc; GetClientRect(hwnd, &rc);
-                    COLORREF cref = (vb6_Ambient_BackColor & 0x80000000L)
-                                        ? GetSysColor(vb6_Ambient_BackColor & 0xFF)
-                                        : (COLORREF)vb6_Ambient_BackColor;
+                    COLORREF cref = vb6_ColorToColorRef(vb6_Ambient_BackColor);
                     HBRUSH b = CreateSolidBrush(cref);
                     FillRect((HDC)wParam, &rc, b);
                     DeleteObject(b);
@@ -627,9 +623,8 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             HWND child = (HWND)lParam;
             if (!child) break;
             HDC hdc = (HDC)wParam;
-            COLORREF fg = (COLORREF)vb6_GetControlForeColor((void*)child);
-            COLORREF bg = (COLORREF)vb6_GetControlBackColor((void*)child);
-            if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
+            COLORREF fg = vb6_ColorToColorRef(vb6_GetControlForeColor((void*)child));
+            COLORREF bg = vb6_ColorToColorRef(vb6_GetControlBackColor((void*)child));
             SetTextColor(hdc, fg);
             SetBkColor(hdc, bg);
             // 刷子缓存进窗口属性, 避免每条消息泄漏 GDI 句柄

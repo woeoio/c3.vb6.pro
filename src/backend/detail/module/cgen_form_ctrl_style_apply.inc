@@ -407,12 +407,12 @@
                 auto bcIt187 = ctrl.properties.find("BackColor");
                 if (bcIt187 != ctrl.properties.end() && bcIt187->second.type == FrmValueType::Integer) {
                     c_.emitLine("vb6_SetControlBackColor((void*)" + dsHwnd + ", "
-                                + std::to_string((int)(unsigned int)bcIt187->second.intValue) + ");  /* design BackColor */");
+                                + std::to_string(frmValueToVbLong(bcIt187->second.intValue)) + ");  /* design BackColor */");
                 }
                 auto fcIt187 = ctrl.properties.find("ForeColor");
                 if (fcIt187 != ctrl.properties.end() && fcIt187->second.type == FrmValueType::Integer) {
                     c_.emitLine("vb6_SetControlForeColor((void*)" + dsHwnd + ", "
-                                + std::to_string((int)(unsigned int)fcIt187->second.intValue) + ");  /* design ForeColor */");
+                                + std::to_string(frmValueToVbLong(fcIt187->second.intValue)) + ");  /* design ForeColor */");
                 }
             }
         }

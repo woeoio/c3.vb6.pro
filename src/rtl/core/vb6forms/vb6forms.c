@@ -321,9 +321,7 @@ int vb6_RegisterFormClassBg(const char* className, void* wndProc, void* hInstanc
     // 合法表单色). 系统色 (&H800000xx, 高位置位 → 32 位有符号为负, 如 -2147483643)
     // 是**合法值**, 必须放行到下面的 GetSysColor 翻译, 不能因 <0 被当未指定.
     if (backColor != -1) {
-        COLORREF cref = (backColor & 0x80000000L)
-                            ? GetSysColor(backColor & 0xFF)
-                            : (COLORREF)backColor;
+        COLORREF cref = vb6_ColorToColorRef(backColor);
         wc.hbrBackground = CreateSolidBrush(cref);
         vb6_formClassBg_set(className, (int)cref);
     } else {
@@ -504,9 +502,8 @@ static int vb6_GBoxBorderStyle(HWND hwnd) {
 // Fix 162f-extlist: 取 groupbox 的标题底色 (父窗 BackColor, 未设回落 BTNFACE)。
 static COLORREF vb6_GBoxTitleBg(HWND hwnd) {
     HWND parent = GetParent(hwnd);
-    COLORREF bg = parent ? (COLORREF)vb6_GetControlBackColor((void*)parent)
+    COLORREF bg = parent ? vb6_ColorToColorRef(vb6_GetControlBackColor((void*)parent))
                          : GetSysColor(COLOR_BTNFACE);
-    if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
     return bg;
 }
 

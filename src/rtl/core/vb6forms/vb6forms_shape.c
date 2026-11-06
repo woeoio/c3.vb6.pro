@@ -53,13 +53,13 @@ static LRESULT CALLBACK vb6_ShapeWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         else if (borderS == 5) penStyle = PS_DASHDOTDOT;
         else if (borderS == 6) penStyle = PS_INSIDEFRAME;
 
-        COLORREF bcr = borderC ? (COLORREF)borderC : RGB(0,0,0);
+        COLORREF bcr = borderC ? vb6_ColorToColorRef(borderC) : RGB(0,0,0);
         HPEN hPen = CreatePen(penStyle, borderW, bcr);
         HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
 
         /* 画刷: fillS映射 VB6: 0=Solid,1=Transparent,2=HorizontalLine,3=VerticalLine,4=UpwardDiagonal,5=DownwardDiagonal,6=Cross,7=DiagonalCross */
         HBRUSH hBr;
-        COLORREF fcr = fillC ? (COLORREF)fillC : RGB(0,0,0);
+        COLORREF fcr = fillC ? vb6_ColorToColorRef(fillC) : RGB(0,0,0);
         if (fillS == 1 || fillS == 0) {
             /* 0=Solid fill, 1=Transparent */
             hBr = (fillS == 1) ? (HBRUSH)GetStockObject(NULL_BRUSH) : CreateSolidBrush(fcr);
@@ -155,7 +155,7 @@ static LRESULT CALLBACK vb6_LineWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
         else if (borderS == 4) penStyle = PS_DASHDOT;
         else if (borderS == 5) penStyle = PS_DASHDOTDOT;
 
-        COLORREF cr = borderC ? (COLORREF)borderC : RGB(0,0,0);
+        COLORREF cr = borderC ? vb6_ColorToColorRef(borderC) : RGB(0,0,0);
         HPEN hPen = CreatePen(penStyle, borderW, cr);
         HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
 
