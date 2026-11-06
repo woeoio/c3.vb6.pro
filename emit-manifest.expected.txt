@@ -630,6 +630,7 @@ sha256=d625af53fac4ebd4efdaf0d9efaa3472ef203fd32b3c005cbbe3f022670670d0 ascii256
 sha256=a09057e393d66505760cfff7915045dcbcd9997954b93cbeed28e0116b0d7ce6 ascii256=335c53caeed08848a4318ab50e135c5275b57ecc11cd126d5da5868ef466490a rc=0 bytes=32814 tests/ucSegmentedControl/mIOleInPlaceActivate.bas
 sha256=ba67cf9a2059b85a8c7e1aa8d242be2aced2c0eecd369c7ba5d4a15f73639914 ascii256=bd5a79ee6588887f2dd5f61823530b13d9fb4f2cb2ab678547ffaf30c19e6fe3 rc=0 bytes=971268 tests/ucSegmentedControl/SegmentedControl.vbp
 sha256=f3c066b0a98d87d84a4e6e0502ecfb28523606b8b69e7e8bc6e5943557a15e06 ascii256=06bd0de2658829e7213ade33aaf3f3fd55bfec33adade5f1e667e19eef85820d rc=0 bytes=944278 tests/ucTreeView/Proyecto1.vbp
+sha256=22f269205bbfb08ebaf5ee0514895e2ea19e99c31b2d76f69fd129ad64d5b75c ascii256=6c456f751e84d307f843f7646e2ca5bd1250642d42b75e4922452d7ecc233e07 rc=0 bytes=71478 tests/syscolor/SysColor.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
@@ -974,3 +975,6 @@ sha256=f3c066b0a98d87d84a4e6e0502ecfb28523606b8b69e7e8bc6e5943557a15e06 ascii256
 # 2026-11-06 登记 5 行存量 (来源 = CI run 42065548065 head 8cedb604 的 emit-manifest artifact, 未 -Bless):
 #   czUI-main/czFormDemo · VBFlexGridDemo · ve_units/Units · b445_refcount/B445 · ucSegmentedControl/SegmentedControl;
 #   5 行的 ascii256 均变 = 发码真形状变更, 归因于已提交的 UC 方法桥/属性动词/For Each 定点解包那几刀 (存量测试格仍绿), 故按新形状登记。
+# 2026-11-06 新夹具 tests/syscolor/SysColor.vbp 一行 (来源 = github/ci/emit-manifest 的 head=1aa6ebd8 清单, -Bless 登记):
+#   该清单与期望 595 行**逐行相同**(哈希不同 0 / 缺席 0), 只多 syscolor 这一份 ⇒ 登记只追加 1 行、改写 0 行。
+#   未用本机全量清单登记的理由(与 B5 同一条): 本机可解析 vendor OCX/typelib, 复算会剩 guisample×3 + TeeChartChartDisplay 4 行机器侧差, 那 4 行必须留 CI 的数。
