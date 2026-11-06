@@ -1134,3 +1134,168 @@ getter/setter 仍存/答 **VB6 Long 原值**（`&H8000000D&` 读回仍是 `-2147
     `Get-C3ChildEncoding`），GA 该两格绿。
 
 
+
+
+## §26 BalloonTooltips 家族 — 工具提示的"主题皮"：StrPtr 空串口径（2026-11-06）
+
+### §26.1 夹具与"原始行"
+
+夹具落在 `tests\BalloonTooltips`（自包含 10 件；源工程 `D:\vb_yqt4qPac\BalloonTooltips`，
+参考产物 `BalloonTooltips.exe` 原样在该目录运行）。
+
+**`.frm` / `.vbp` 里没有任何 `BeginProperty ToolTip*` 块** —— 每个控件的 tooltip 颜色/标题
+是 `Form_Load` 里 `cTT.CreateToolTip` 的实参（末两位 = 前景色, 背景色；空 = 默认）：
+
+```
+frmBalloonTooltips.frm
+149: cTT.CreateToolTip cmbBalloonTooltip, "...", cmbBalloonTooltip.List(0), TTI_INFO
+150: cTT.CreateToolTip cmdBalloonTooltip, "...", cmdBalloonTooltip.Caption, TTI_WARNING_LARGE, vbRed, vbCyan, True
+151: cTT.CreateToolTip cmdButtonInPic, "...", cmdButtonInPic.Caption, TTI_WARNING_LARGE, vbMagenta, vbGreen, True
+152: cTT.CreateToolTip txtBalloonTooltip, "Help, I'm being repressed!", txtBalloonTooltip, TTI_ERROR_LARGE, vbBlue, vbYellow, True
+153: cTT.CreateToolTip lblBalloonTooltip, "...", lblBalloonTooltip, TTI_WARNING
+154: cTT.CreateToolTip lblInFrame, "...", lblInFrame, TTI_INFO
+139: (按钮改色后) cTT.CreateToolTip txtBalloonTooltip, "...", "Changed TextBox Tooltip", TTI_INFO_LARGE, vbBlack, &HE1FFFF, True, False
+140: (按钮改色后) cTT.CreateToolTip lblBalloonTooltip, "...", "Changed Label Tooltip", TTI_INFO_LARGE, , , True, False
+```
+
+窗体 `Font` 块是 `Microsoft Sans Serif / Size=12`，只喂窗体与控件，**不喂 tooltip**。
+
+根因两行在 `cTT.cls`：
+
+```
+107: lToolTipStyle = TTS_ALWAYSTIP Or TTS_NOPREFIX: If bBalloon Then lToolTipStyle = lToolTipStyle Or TTS_BALLOON
+108: hWndTT = CreateWindowExW(WS_EX_TOPMOST, StrPtr(TOOLTIPS_CLASS), 0, lToolTipStyle, ...)
+109: SetWindowTheme hWndTT, StrPtr(sEmpty), StrPtr(sEmpty)      ' sEmpty As String = ""
+139: If lForeColor > -1 Then SendMessageW hWndTT, TTM_SETTIPTEXTCOLOR, lForeColor, 0
+140: If lBackColor > -1 Then SendMessageW hWndTT, TTM_SETTIPBKCOLOR, lBackColor, 0
+```
+
+### §26.2 VB6 vs C3 逐组读数（`.temp\ttprobe.ps1`，120dpi，1920x1200）
+
+探针口径：`EnumWindows` 抓本进程可见 `tooltips_class32` → `GetWindowLongW(GWL_STYLE/EXSTYLE)`
+→ `TTM_GETTIPBKCOLOR/TTM_GETTIPTEXTCOLOR/TTM_GETMAXTIPWIDTH` → `WM_GETFONT` + `GetObjectW(LOGFONTW)`
+→ 字体上 `GetTextExtentPoint32W("Ag")` 当 TextHeight；像素主色用 **tooltip 自身 DC + BitBlt**
+（不受遮挡/主题外框影响，采样内部 1/3..边界避开标题与边框）。
+
+| # | 控件 (VB6 / C3 class) | 期望背色 | VB6 像素 / bk | C3 改前 像素 | C3 改后 像素 / bk | VB6 尺寸 | 改前 | 改后 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | PictureBox / Static（含 cmdButtonInPic） | #00FF00 | #00FF00 / 65280 | #FFFFFF | #00FF00 / 65280 | 291x99 | 294x107 | 291x99 |
+| 2 | CommandButton "Enable/Disable Tooltip" | #00FF00 | #00FF00 / 65280 | #FFFFFF | #00FF00 / 65280 | 291x99 | 294x107 | 291x99 |
+| 3 | Frame / Button（空标题） | #FFFFE1 | #FFFFE1 / 14811135 | #FFFFFF | #FFFFE1 / 14811135 | 298x99 | 298x107 | 298x99 |
+| 4 | Label In Frame / Static（VB6 无窗口） | #FFFFE1 | — | #FFFFFF | #FFFFE1 / 14811135 | — | 298x107 | 298x99 |
+| 5 | ComboBox | #FFFFE1 | #FFFFE1 / 14811135 | #FFFFFF | #FFFFE1 / 14811135 | 274x99 | 274x107 | 274x99 |
+| 6 | TextBox / Edit | #FFFF00 | #FFFF00 / 65535 | #FFFFFF | #FFFF00 / 65535 | 273x78 | 273x87 | 273x78 |
+| 7 | CommandButton "Change TextBox Tooltip" | #00FFFF | #00FFFF / 16776960 | #FFFFFF | #00FFFF / 16776960 | 327x99 | 327x107 | 327x99 |
+| 8 | Label "Label Tooltip" / Static（VB6 无窗口） | #FFFFE1 | — | #FFFFFF | #FFFFE1 / 14811135 | — | 262x107 | 262x99 |
+
+共同读数（VB6 / C3 改前 / C3 改后 三者**完全相同**的项）：
+
+- `style=0x94000043`（含 `TTS_ALWAYSTIP|TTS_NOPREFIX|TTS_BALLOON = 0x43`），`exstyle=0x8`，`TTM_GETMAXTIPWIDTH=200`
+- 字体 = 运行期 `NONCLIENTMETRICS.lfStatusFont`：**Microsoft YaHei UI / lfHeight -15 / weight 400 / charset 1**；`TextHeight("Ag")=20`
+- `TTM_GETTIPBKCOLOR` / `TTM_GETTIPTEXTCOLOR` 三者逐组相同（VB6 与 C3 的 UDT 参数一直是对的）
+
+唯一不同：`lfQuality` 改前 = **5**(ClearType, 主题皮) → 改后 = **0**；像素改前全白、客户区高 +8/宽 +3。
+
+### §26.3 根因（实测闭环，不猜）
+
+C3 旧 `vb6_StrPtr` 按 `SysStringLen` 判空 ⇒ `StrPtr("")` 答 0 ⇒
+`SetWindowTheme(hWndTT, NULL, NULL)`。对 uxtheme 来说 `NULL, NULL` 是"**清空主题名**"而不是
+"关视觉样式" ⇒ comctl32 v6 继续用主题皮 ⇒ 白底、客户区 +8/+9px、ClearType。
+VB6 的 `StrPtr("")` 是非 0（唯一答 0 的是 `vbNullString`）⇒ uxtheme 真的关样式 ⇒ 经典气泡，
+底色就是 `TTM_SETTIPBKCOLOR`。
+
+决定性控制实验（`.temp\tt_space.txt`）：只把夹具副本的 `sEmpty` 改成非空 1 字符串
+（`Const sEmpty As String = "1"`），C3 立刻与 VB6 **逐组全等**（颜色/尺寸/quality/字体），
+不碰 RTL。⇒ 差异机制就是这一枚指针，不是 UDT、不是 TTM 没调、不是字体、不是 DPI 折算。
+
+### §26.4 修改站点
+
+| 文件 | 改动 |
+|---|---|
+| `src/rtl/core/vb6rtl/vb6rtl_compat.c` | `vb6_StrPtr` 改直通 `return (void*)s;`；删掉"按长度判空"，注释写清 VB6 口径 |
+| `src/backend/cgen_base_naming.cpp` | `defaultValue(Vb6Type::String)` 由 `vb6_BSTR_Empty()` 改 `NULL`（未赋值 String / 返回槽 / Optional 省略位 = 空指针） |
+| `src/backend/detail/expr/cgen_expr_ident_dispatch.inc` | `vbnullstring` 字面量 → `NULL` |
+| `src/rtl/core/vb6rtl/vb6rtl_builtin.h` | `vb6_StrPtr` 声明注释同步 |
+| `src/backend/module/cgen_com_events.cpp` | `evtArgIsLvalue` 显式排除 `NULL/true/false/nullptr`（新语义在 `RaiseEvent` 省略位暴露 `&(NULL)` → C2101，见 §26.9） |
+| `scripts/owned_temp_keeps_164.txt` | `vb6_StrPtr` 的"为什么"栏随函数体变空（值仍 0） |
+| `emit-manifest.expected.txt` | 形状登记（253 行 + 4 行，见 §26.9） |
+
+### §26.5 guard（先落，先红后绿）
+
+`scripts/check_tooltip_authority.ps1`（挂在 `run_tests.ps1` 静态 census 段，`Test-ToolTipAuthority`）：
+
+| 规则 | 判据 |
+|---|---|
+| T1 | `vb6_StrPtr` **恰好 1 处定义**、函数体必须 `return (void*)s;`、不得出现长度判据（`SysStringLen`/`vb6_BSTR_Len`/`L` 前缀） |
+| T2 | `vb6_StrPtrVar` 必须转调 T1 的出口（不许自己解引用/判空） |
+| T3 | tooltip 底色/字色只许 `vb6_ToolTipApplyVisual` 一家发 `TTM_SETTIPBKCOLOR/TTM_SETTIPTEXTCOLOR`，且该函数内必须经 `vb6_ColorToColorRef`（系统色常量同一解析） |
+| T4 | tooltip 的 `WM_SETFONT` 同口径，只许 `vb6_ToolTipApplyVisual` |
+| T5 | `SetWindowTheme` 只许 DI 桩（测试注入）且**原样透传**两个指针，不许在 RTL 侧改判空 |
+| T6 | tooltip 宿主恰好 2 站：`vb6forms_style.c` + `vb6forms_slider.c`（新增第 3 站即红） |
+
+- 现状：T3/T4 散点 = **0**，白名单为空（无需豁免）；T5 桩 1 站；T6 宿主 2 站
+- **改前状态**（6e31fbdf 那棵树）：`FAIL T1 vb6_StrPtr reintroduced a length test…` ⇒ **红**（RC=1）
+- **改后**：`PASS tooltip authority: StrPtr 唯一出口 1 / tooltip 颜色散点 0 / tooltip 字体散点 0 / SetWindowTheme 站 1 / 宿主 2`（RC=0）
+
+### §26.6 断言
+
+`tests\guisample\balloontips_px.ps1`（UTF-8 BOM；`run_tests.ps1` 的 `$GuiCases` 里 BalloonTooltips
+用例已 `Arch="x86"` + `PixelAssert=@("guisample\balloontips_px.ps1")`）：
+
+- 8 组悬停（§26.2 的 8 行）+ 点 "Change TextBox Tooltip" 后重测 2 组（TextBox/Label → #FFFFE1）
+- 每组：`mode=#xxxxxx` 逐通道 **±3**；`TTM_GETTIPBKCOLOR == COLORREF(期望)`（精确）；
+  `style & 0x43 == 0x43`；字体面名 == 运行期 `lfStatusFont.face`；`|lfHeight - 参考| <= 1`
+- **旧产物红**：`output\BalloonTooltips_x86\BalloonTooltips.exe`（18:53，改前 x86）→ **rc=1**，
+  6/6 可悬停组都是 `mode=#FFFFFF` + 尺寸 107 高 + `quality=5`
+- **新产物绿**：`output\BalloonTooltips\BalloonTooltips.exe` → **rc=0**，8/8 全中
+- 首轮偶发不弹：3 轮"移开 → 回位抖 1px → WM_MOUSEMOVE"重试；3 轮都不弹仍 **FAIL**（不放宽）
+- 无交互桌面（屏幕 BitBlt 全黑 / 无可见窗口）→ **rc=2 SKIP**，harness 记 `PixelCheck=SKIP`
+
+### §26.7 构建 / 内嵌 RTL / 产物
+
+- `build.bat`（Ninja/Debug，VS2019 14.29 + SDK 10.0.19041）重建；`c3rtl.rc.res` 与 `C3.exe` 同批时间戳
+- `scripts\check_rtl_embedded.ps1`：内嵌 126 个资源与磁盘对象**逐字节一致** ⇒ 新 `vb6_StrPtr` 已进 `C3.exe`
+- `C3 --arch x86 tests\BalloonTooltips\prjBalloonTooltips.vbp --output-dir output\BalloonTooltips`；
+  PE machine = **0x014C**（与参考 VB6 产物同档）
+
+### §26.8 提交 / GA
+
+| 提交 | 内容 | GA |
+|---|---|---|
+| `6e31fbdf` | test(tooltip): T1..T6 哨兵 + 像素判据 + b180 新口径（改前 T1 红） | — |
+| `47093781` | fix(rtl): StrPtr 直通 + `defaultValue(String)=NULL` + `vbnullstring=NULL` | 42218842311（3 红） |
+| `d5410248` | fix(cgen): `evtArgIsLvalue` 排除 NULL 等常量（C2101） | 42225830556（1 红） |
+| `780316a6` | 登记：emit-manifest 4 行吃 CI 清单 | 42227322947 **22/22** |
+
+### §26.9 红项逐条归因（未放宽阈值、未删用例）
+
+**Round 1 — run 42218842311（head 47093781）3 红：**
+
+1. `Tests (compile #2)` `[STATIC] owned_temp_keeps`：K5 快照漂移 1 行 `~vb6_StrPtr|0`。
+   `keeps_pointer` 仍是 **0**（没变），变的只是"为什么"栏：旧函数体调 `vb6_BSTR_Len`
+   ⇒ 记 `handoff-reads:vb6_BSTR_Len`；新函数体无任何调用 ⇒ 空。`-Bless` 只改这一栏。
+2. `Tests (vbp #11)` `FlexGridX86 FAIL (compile)`：`VBFlexGrid.c` 的 `onBeforeClipboardAction`
+   省略位发出 `&(NULL)` ⇒ cl `error C2101: '&' on constant`。这是 `defaultValue(String)=NULL`
+   暴露的既有左值判定漏洞（`evtArgIsLvalue` 把 `NULL` 当标识符）。修 cgen（d5410248）后本地
+   x86 重编绿。
+3. `Emit manifest`：252/596 行形状变化 —— `defaultValue(String)` 由 `vb6_BSTR_Empty()` 改 `NULL`，
+   正是本次想要的形状；逐行登记。
+
+**Round 2 — run 42225830556（head d5410248）1 红：**
+
+- `Emit manifest`：596 行里 **4 行**与本机不同（`tests/guisample/GUISample.vbp` ×3 +
+  `TeeChartChartDisplay/DisplayProject.vbp`）。这 4 个夹具的发码含外部引用/路径形，
+  本机解析 ≠ runner。按脚本既定口径（`git fetch ci/emit-manifest` 取 CI 自己交回的数）
+  重登记（780316a6）。复算 596/596 相同，`check_manifest_coverage` K1..K3 绿。
+
+**Round 3 — run 42227322947（head 780316a6）：22/22。**
+
+### §26.10 与用户前提的两处实测校正（须记）
+
+1. `.frm` / `.vbp` 里**没有** tooltip 属性块 —— 每个控件的颜色来自 `cTT.CreateToolTip` 实参
+   （§26.1 行号）。而且用户记的 "change TextBox #00FFFF" 实测是 **"Change TextBox Tooltip"
+   按钮**的背色；TextBox 自己是 **#FFFF00**。
+2. 字体/字号**没有差**：VB6 与 C3（改前/改后）的 tooltip 字体都是
+   `Microsoft YaHei UI / lfHeight -15 / weight 400 / charset 1`，`TextHeight("Ag")=20`。
+   用户看到的"字号差异"实际是主题皮把气泡高度从 99 撑到 107（字号未变）。
+   窗体 Font 的 `Microsoft Sans Serif / 12` 不上 tooltip。
