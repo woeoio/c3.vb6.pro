@@ -39,6 +39,34 @@ public class UP {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern int GetWindowLongW(IntPtr h, int idx);
+  // 残差 #7: 按钮换行的期望行数必须按**该按钮自己的字体**在**当前 DPI** 下量出来 ——
+  // 固定写 120dpi 参考值在 96dpi CI 上会红 (MS Sans Serif 光栅档在 96dpi 的宽度
+  // 不是 120dpi 的 0.8 倍: Tree Explorer=63/Menu / Tools=64, 阈值恰好分开这两枚)。
+  [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr h);
+  [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr h, IntPtr dc);
+  [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
+  [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr o);
+  [DllImport("gdi32.dll")] public static extern int GetObjectW(IntPtr h, int n, ref LOGFONTW lf);
+  [DllImport("gdi32.dll")] public static extern IntPtr CreateFontIndirectW(ref LOGFONTW lf);
+  [DllImport("gdi32.dll", CharSet=CharSet.Unicode)] public static extern bool GetTextExtentPoint32W(IntPtr dc, string s, int n, out SIZE sz);
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] public struct LOGFONTW {
+    public int lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight;
+    public byte lfItalic, lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision, lfClipPrecision, lfQuality, lfPitchAndFamily;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string lfFaceName;
+  }
+  [StructLayout(LayoutKind.Sequential)] public struct SIZE { public int cx, cy; }
+  // 按钮自己的 caption 宽 (与系统按钮绘制同一字体/同一 DPI)
+  public static int TextWidthOf(IntPtr btn, string cap) {
+    IntPtr hf = SendMessageW(btn, 0x0031, IntPtr.Zero, IntPtr.Zero);   // WM_GETFONT
+    if (hf == IntPtr.Zero) return -1;
+    var lf = new LOGFONTW(); if (GetObjectW(hf, 92, ref lf) <= 0) return -1;
+    IntPtr dc = GetDC(IntPtr.Zero); IntPtr nf = CreateFontIndirectW(ref lf);
+    IntPtr old = SelectObject(dc, nf);
+    SIZE sz; GetTextExtentPoint32W(dc, cap, cap.Length, out sz);
+    SelectObject(dc, old); DeleteObject(nf); ReleaseDC(IntPtr.Zero, dc);
+    return sz.cx;
+  }
   public struct RECT { public int L, T, R, B; }
   public static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, 256); return sb.ToString(); }
   // 枚举放 C# 侧: PS 5.1 的 scriptblock 委托回调查不到调用方 pid (会误报"主窗未找到")
@@ -339,23 +367,24 @@ if ($sbArea -gt 0) { $sbR240 = $sb240 / $sbArea; $sbRWhite = $sbWhite / $sbArea 
 $btnDpi = [UP]::GetDpiForWindow($main)
 if ($btnDpi -lt 96) { $btnDpi = 96 }
 $expTwoLine = [int][Math]::Round(26 * $btnDpi / 120)
-$btnExpect = @(
-    @("Tree Explorer", 2),
-    @("Corporate Hierarchy", 2),
-    @("Drag and Drop", 2),
-    @("Menu / Tools", 1),
-    @("Contact  List", 1)
-)
+$btnCaps = @("Tree Explorer", "Corporate Hierarchy", "Drag and Drop", "Menu / Tools", "Contact  List")
 $btnMissing = 0; $btnBad = @(); $btnRead = @()
-foreach ($be in $btnExpect) {
-    $cap = [string]$be[0]; $wantLines = [int]$be[1]
+foreach ($cap in $btnCaps) {
     $bhw = [UP]::FindChildByText($main, $cap)
     if ($bhw -eq [IntPtr]::Zero) { $btnMissing++; continue }
     $br = New-Object UP+RECT; [UP]::GetWindowRect($bhw, [ref]$br) | Out-Null
+    $cr = New-Object UP+RECT; [UP]::GetClientRect($bhw, [ref]$cr) | Out-Null
     $bx0 = [Math]::Max(0, $br.L - $wr.L); $by0 = [Math]::Max(0, $br.T - $wr.T)
     $bx1 = [Math]::Min($ww, $br.R - $wr.L); $by1 = [Math]::Min($wh, $br.B - $wr.T)
     $bw = $bx1 - $bx0; $bht = $by1 - $by0
     if ($bw -le 0 -or $bht -le 0) { $btnMissing++; continue }
+    # 系统原生 push 按钮的文本区 = 客户宽 - 3px(每边) ⇒ 换行判定就是这个阈值。
+    # 用**按钮自己的字体**(WM_GETFONT → LOGFONT → 本地重建)在当前 DPI 下量, 而不是
+    # 写死 120dpi 的参考行数 —— 96dpi 的 MS Sans Serif 光栅档不是 120dpi 的等比缩放。
+    $capW = [UP]::TextWidthOf($bhw, $cap)
+    $clientW = $cr.R - $cr.L
+    $wantLines = 1
+    if ($capW -gt ($clientW - 6)) { $wantLines = 2 }
     $brows = New-Object int[] $bht
     $bMinY = 99999; $bMaxY = -1
     for ($yy = 0; $yy -lt $bht; $yy++) {
@@ -379,11 +408,11 @@ foreach ($be in $btnExpect) {
     if ($bMaxY -ge 0) { $inkH = $bMaxY - $bMinY + 1 }
     $st = [UP]::GetWindowLongW($bhw, -16)
     if (($st -band 0x2000) -eq 0) { $btnBad += "'$cap' 缺 BS_MULTILINE (style=0x$('{0:X8}' -f $st))" }
-    if ($bands -ne $wantLines) { $btnBad += "'$cap' 行数 $bands != $wantLines" }
+    if ($bands -ne $wantLines) { $btnBad += "'$cap' 行数 $bands != $wantLines (ext=$capW/客户宽 $clientW)" }
     if ($wantLines -eq 2 -and $inkH -lt $expTwoLine) {
         $btnBad += "'$cap' 墨迹高 ${inkH}px < 两行下限 ${expTwoLine}px"
     }
-    $btnRead += ("$cap=${bands}L/${inkH}px")
+    $btnRead += ("$cap=${bands}L/${inkH}px/ext$capW")
 }
 if ($btnMissing -gt 0) { $btnBad += "底部 push 按钮定位失败 $btnMissing/5" }
 
