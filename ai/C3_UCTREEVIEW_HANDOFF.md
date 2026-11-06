@@ -685,3 +685,94 @@ GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只
   `42136304681` 的三红（Emit manifest / `[STATIC] control_dc` 调用 3 处 /
   `ucSegmentedControl` uc6 darkPx=54）三条都已消除。
 
+
+## 22. 残差 #5/#6：TextBox 3D 内凹 + VScrollBar 自绘（2026-11-06）
+
+### 22.1 残差 #5 根因：`WS_BORDER` 换成了主题的 `EDGE_ETCHED` 深框
+
+- VB6 `ThunderRT6TextBox` 实测（`GetWindowLong`）：
+  `style=0x540108C1`（**无** `WS_BORDER`/`WS_EX_CLIENTEDGE` 之外的边位）、`ex=0x204`
+  （`WS_EX_CLIENTEDGE`(0x200) | `WS_EX_NOPARENTNOTIFY`(0x4)）；
+  `GetClientRect`=87x29，即**每边 2px** 内凹。
+  取样像素：左/上 = 236(1px) + 254(1px)，下/右 = 254(1px) + **131**(1px)，内部 255。
+- C3 改前：`style=0x50810080`（含 `WS_BORDER` 0x00800000）、`ex=0`；主题 EDIT 把
+  `WS_BORDER` 画成 1px `COLOR_WINDOWFRAME = 0x646464`(100,100,100) ⇒ 91x33 周长 244px
+  深框、顶行整行深色（旧产物实测 `edFrameDark=1464` / `edTopDark=546`，6 枚）。
+- 修法：**两半**。① `cgen_form_ctrl_style_apply.inc` 的 TextBox 去 `kWsBorder`；
+  ② `cgen_util_ctrl.cpp::controlContainerExStyleBit` 给 TextBox 返回
+  `WS_EX_CLIENTEDGE=0x00000200`（顶层路与容器子控件路共用这一个出口，
+  `cgen_form_frame_menu.inc:445` 也吃它）。VB6 的 `NOPARENTNOTIFY` 只影响父窗通知，不立。
+- 改后实测（同一坐标、逐点比对）：左 x399=`236` / x400=`254` / x401=`255`，
+  上 y298=`236` / y299=`254`，下 y329=`254` / y330=`131` —— **与 VB6 逐像素相等**。
+  `edFrameDark=0` / `edTopDark=0` / `edEdge236=726`（6 枚合计，单枚 ≈121~244）。
+
+### 22.2 残差 #6 根因（三层，缺一层都不出图）
+
+1. **缺 `SBS_VERT`**：C3 发码给 VScrollBar 的 style 是 `0x50010000`（无方向位）；
+   VB6 `ThunderRT6VScrollBar` = `0x54010001`。已在两条创建路补 `0x1`，改后 `0x50010001`。
+2. **33x31 根本放不下原生箭头**：@120dpi `SM_CYVSCROLL=21`、`SM_CXVSCROLL=21`，
+   竖排两根箭头要 2*21=42 > 31 ⇒ 原生 SCROLLBAR 只走 `WM_ERASEBKGND`，用类背景刷
+   （`COLOR_SCROLLBAR`=白）铺满 ⇒ 1023/1023 纯白。对照实验：同一控件拉到 33x200 /
+   100x31 就正常画出箭头与槽 ⇒ 不是"没实现"，是"这个尺寸下系统就不画"。
+   VB6 这个尺寸也不画箭头（6 枚实测全是 `240,240,240 = 960` + `255,255,255 = 63`，
+   `whiteRows=[15]`），所以 C3 也照 VB6 **自绘观感**而不是画箭头：
+   `src/rtl/core/vb6forms/vb6forms_scroll.c` 新增
+   `vb6_ScrollBarPaintTo`（`FillRect` 240 全底 + 左边 1px 白 + `mid=top+(bottom-top)/2` 处 1px 白；
+   横向无 VB6 样本，镜像成上边 1px + 宽/2 处 1px）+ `vb6_ScrollBarSubclassProc`
+  （接管 `WM_ERASEBKGND`/`WM_PAINT`/`WM_PRINTCLIENT`/`WM_PRINT`，原过程存 `VB6_SBar_OrigProc` 属性）
+   + `vb6_InstallScrollBarSubclass`（`GWLP_WNDPROC` + `SetPropW` + `InvalidateRect`）。
+3. **z-order 反转 + 缺 `WS_CLIPSIBLINGS`**：VB6 的 .frm 里"先列出的控件在兄弟最上"
+   （`Form1.frm` Picture3 下先 `VScroll1`(85 行) 再 `Text1`(95 行)）。C3 逐枚
+   `CreateWindowExW`，新窗默认插到兄弟顶部 ⇒ 顺序整体反过来，`Text1` 的白底盖住 `VScroll1`
+   （决定性证据：把 Edit 隐藏后同一区立刻变成 960/63）。修法：设计期创建后
+   `SetWindowPos(hwnd, HWND_BOTTOM, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)`；
+   并给每枚子控件补 `style |= WS_CLIPSIBLINGS`（VB6 每枚都有；缺位时**下层**控件
+   可越过 z-order 画进上层兄弟的窗口区）。修后兄弟序
+   `z[0]=ScrollBar z[1]=Edit z[2]=Static`。
+
+### 22.3 断言（`tests/guisample/uctreeview_px.ps1`）
+
+- TextBox：`edFrameDark(100±2) == 0`；顶行无深色（`edTopDark == 0`）；
+  **每枚都有 236±2 亮边**（`edEdgeOk == 枚数`）—— 只判"深框没了"会漏掉
+  "连 3D 内凹一起没有"这种假绿。
+- VScrollBar：`240±1` 占比 ≥ 85%；纯白占比 3%~10%；6 枚各自"存在一整行 ≥90% 白"
+  与"存在一整列 ≥90% 白"（不写死第 15 行：`GetWindowRect` 与桌面像素常差 1px）。
+- 新产物：`edFrameDark=0 edTopDark=0 edEdge236=726/6 sb240=93.8% sbWhite=6.2% sbMid=6/6 sbLeft=6/6` → PASS。
+- 旧产物 `.temp\old_uctv\Proyecto1.exe`：`深框 1464px > 0; 顶行深色 546px > 0;
+  236 亮边缺失 (0/6, 共 0px); VScrollBar 240 占比 0% < 85%; 纯白占比 97.9% 不在 3%~10%` → FAIL。
+
+### 22.4 当前产物 vs 真 VB6 实拍（959x623，Δ=`|ΔR|+|ΔG|+|ΔB|>=6`）
+
+口径 `.temp\diffreg.ps1`（与上轮 `diff2png.ps1` 同一判据，首轮 ±3px 平移扫描确认
+最佳偏移 =(0,0)，无整体错位）。
+
+| 分区 | rect (x,y,w,h) | 改前 | 改后 |
+|---|---|---|---|
+| title      | 0,0,959,32     | 5.99% | 5.09% |
+| leftEdge   | 0,32,20,591    | 46.07% | 46.03% |
+| treePanel  | 20,32,232,591  | 5.41% | 5.41% |
+| optChecks  | 252,32,278,258 | 8.32% | 8.32% |
+| labelEdits | 252,290,278,250| 16.30% | **6.25%** |
+| swatchCol  | 530,32,250,383 | 8.44% | 8.44% |
+| dotsCol    | 780,32,179,383 | 5.03% | 5.03% |
+| bottomBar  | 252,540,458,83 | 19.70% | 19.70% |
+| rightMid   | 530,415,180,125| 0.00% | 0.00% |
+| rightBlank | 710,415,249,208| 7.84% | 7.83% |
+| **整窗**   | 959x623        | **9.23%** (55133px) | **8.00%** (47807px) |
+| **客户区** | 10,32,940,582  | **6.24%** | **4.96%** (27114px) |
+
+- 整窗读数受**非客户区状态**影响：同一二进制 4 次抓屏 6.13%~8.06%，差全部落在
+  `title`+`leftEdge`（外框激活态 38 vs 59 灰、底部桌面渗入）；`leftEdge` 那 46%
+  本质是窗口最外 9px 边框条，不是窗体内容。
+- **客户区四次抓屏 4.96% / 4.96% / 4.96% / 4.99%**（27114~27138px，σ≈0.02pp）——
+  这是可复现的那一半；对 VB6 的净改善 = 6.24% → 4.96%（-1.28pp / -6986px）。
+- 上轮记录的 7.74% 与本轮 8.00% 同脚本同参考图，+0.26pp 即上述外框态差异，
+  客户区口径不受它影响。
+
+### 22.5 收口
+
+- 提交：`371e677b`（两条残差的 RTL/发码/断言）；随后 `emit-manifest.expected.txt`
+  重新登记 22 行（吃 CI 那台二进制回传的清单：`git fetch github ci/emit-manifest`）。
+- GA：run `42157587845`（head `371e677b`）首跑 **Emit manifest 红**（预期：发码形状变了），
+  登记后二次推送转绿。
+- 提醒仍然有效：改 `detail/module/*.inc` 必须 touch `src\backend\module\cgen_form.cpp` 再 build。
