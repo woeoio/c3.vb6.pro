@@ -1102,6 +1102,35 @@ getter/setter 仍存/答 **VB6 Long 原值**（`&H8000000D&` 读回仍是 `-2147
 
 ### 25.7 提交 / GA
 
-- （待填）
+- 修复提交：**`1aa6ebd8`** `fix(rtl): VB 系统色 (&H80000000& Or n) 收成唯一 COLORREF 出口`
+  （14 处消费点 + 5 处设计期发射站 + 新出口/声明 + `c3rtl.rc` 账注 + 哨兵脚本 + `syscolor` 夹具/注册），
+  已推 `origin`(gitcode) 与 `github`(fxl447098457/c3test) 的 `dev`。
+- 登记提交：**`2d693a69`** `登记（发码形状）：tests/syscolor/SysColor.vbp 一行`，同样双远端。
+- GA run **42184975114**（head `1aa6ebd8`）：**20/22**，两红均为「新夹具未登记发码哈希」，
+  不是发码/行为回归：
+  - `Emit manifest (shape oracle)`：期望 595 行 / 实得 596 行 / 相同 595 / 哈希不同 **0** /
+    缺席 0 / 多出 1（`tests/syscolor/SysColor.vbp`）；
+  - `Tests (compile #1)`：`[STATIC] manifest_coverage` K1 同一条（新夹具不在期望清单里）。
+- 处置（不许放宽阈值、不许删用例）：从 CI 自己交回来的 `github/ci/emit-manifest`
+  （提交注记 `ci: emit manifest head=1aa6ebd8`）取 596 行清单，
+  `scripts/rebless_emit_manifest.ps1 -Manifest .temp\emit-manifest-ci.txt -Bless`
+  → **改写 0 / 新增 1 / 退场 0**；`compare` 复核 596/596 逐行相同、`check_manifest_coverage` K1..K3 绿。
+  未用本机全量清单登记：本机可解析 vendor OCX/typelib，复算会剩 guisample×3 + `TeeChartChartDisplay`
+  共 4 行机器侧差（与期望清单 B5 注同一条口径），登记会把 CI 的判据读数写歪。
+- GA run **42189620978**（head `2d693a69`）：**22/22 全绿**（`success`，失败 job 0）。
+- 本机 `-Category vbp` 全量长跑（`.temp\vbp_run.log`）：`syscolor` / `syscolor_x86` **PASS**，
+  另有两族红，均归因**本机采集上下文**，非产品问题（同一份代码在 GA 上绿）：
+  - `OBJCACHE` / `OBJCACHE-NEG`「没读到 OBJCACHE 读数」：本机 PS 5.1 下
+    `$ErrorActionPreference='SilentlyContinue'` + `2>&1 | Out-String` 把 C3 的 stderr 读成空串
+    （`.temp\oc_probe2.ps1`：`match=False`、log 空），换 `pwsh` 7 同一脚本 `match=True`；
+    CI 的 `shell: pwsh` 走 7。`C3: OBJCACHE rtl=0/83 user=0/2 total=0/85` 本身正常输出。
+  - `nonascii_missing_frx`「缺 .frx 却未报 VB4004」：同一条 stderr 吞字（诊断走 stderr）。
+    `.temp\frx_probe3.ps1` 同一命令：PS 5.1 `VB4004=False` / `pwsh` 7 `VB4004=True`（ASCII 目录与
+    「中文叉」目录两档都如此）⇒ 告警本身在，丢的是本机 5.1 的 stderr 采集。
+  - `c29listview` / `c29listview_x86`「output mismatch」：同一枚 exe 的中文行在本机被写成
+    `???`（`output\c29listview.out`），ASCII 行全对、needle 的中文对不上。
+    `.temp\lv_probe.ps1` 用 `StandardOutputEncoding=936` 跑同一 exe 读到 `LV2-COL-TEXT=姓名`
+    ⇒ 发码/打印正确，是本机宿主控制台代码页把中文降级；CI 那台按 ACP 选编码（见 run_tests
+    `Get-C3ChildEncoding`），GA 该两格绿。
 
 
