@@ -177,7 +177,7 @@ vb6_StrComp|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_StrConv|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_StrConvToByteArray|0	0	handoff-reads:vb6_StringToByteArray	0	open	BSTR
 vb6_StringToByteArray|0	0		0	open	BSTR
-vb6_StrPtr|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_StrPtr|0	0		0	open	BSTR
 vb6_StrPtrVar|0	0	handoff-reads:vb6_StrPtr	0	open	VARIANT
 vb6_StrReverse|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_TextFind|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR

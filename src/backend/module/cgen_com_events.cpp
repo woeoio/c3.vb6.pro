@@ -12,6 +12,10 @@ namespace {
 // 尾随一层下标 `[…]`；其余（带括号的调用、逗号、字面量、类型转换…）一律答否，
 // 由调用方落一枚临时量。刻意保守：答否只是少一次直递，答错才会发出非法 C。
 bool evtArgIsLvalue(const std::string& s) {
+    // C 常量不是左值: 省略位 / 默认值发 NULL(true/false/nullptr 同理) 时不能取地址,
+    // `&(NULL)` 会被 cl 判 C2101 ('&' on constant)。这一格是 defaultValue(String)=NULL
+    // 之后冒出来的 (VBFlexGrid.ctl 的 RaiseEvent 省略位, x86 C2101)。
+    if (s == "NULL" || s == "true" || s == "false" || s == "nullptr") return false;
     size_t p = 0;
     auto eatChar = [&s, &p](bool first) {
         if (p >= s.size()) return false;
