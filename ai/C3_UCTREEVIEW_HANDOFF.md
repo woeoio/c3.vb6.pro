@@ -883,3 +883,123 @@ GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只
 - 旧产物仍红：`style=0x54014000` 缺 BS_MULTILINE、三条 `1L/13px < 26px`。
 - 提交：`d6957a8c`（`tests/guisample/uctreeview_px.ps1`）；GA run **42164731930**
   = **22/22 全绿**（head `d6957a8c`）。
+
+## §24 残差 #8：窗体级 `BeginProperty Font` 没落到窗口 + 子控件不走 ambient 继承
+
+§23.2 末尾已经把这族留作入口（"窗体级 `BeginProperty Font` 未落到窗体窗口"）。本节
+把它拆成两条独立缺陷，分开取证、分开修，并给出改后与真 VB6 的 LOGFONT 逐项对照。
+
+### 24.1 取证（改前，120dpi 本机）
+
+- `.frm` 数据（`tests/ucTreeView/Form1.frm`）：窗体级块 `Name="Arial Narrow" / Size=9.75 /
+  Charset=0 / Weight=400`；底部 5 枚 `CommandButton`、`Check1`(AllowEdit)、`Label1`
+  **没有**自己的 Font 块（按 VB6 规则应继承 ambient）；`Picture1/Picture2` 部分元素与
+  `Command2` 数组自带 `MS Sans Serif 8.25`；`Text1(0)` 自带 `Arial Narrow 11.25`。
+- 生成码（`--emit-c`）：Form1 的窗体级 Font 块**一处都没发射**；整个产物的
+  `vb6_UC_ApplyFontToWindow` 调用 0 处。核到 `FrmControl::propertyBlocks` 里的 Font
+  块只有两条路径会用（UC 实例 / 带 setter 的控件），**窗体自己的块没人读**。
+- 实测（`.temp\fontprobe2_before.txt`）：
+  - 窗体 `WM_GETFONT` = 一枚真实 HFONT，但读回 `MS Sans Serif / lfHeight=-13 /
+    weight=400 / charset=1` —— 这是 `vb6_Vb6DefaultGuiFont()` 的默认档，不是 0。
+  - 全部子控件各自一枚 `MS Sans Serif -13` 的 HFONT，与父窗口字体无关。
+- 真 VB6（`D:\vb_yqt4qPac\ucTreeView\Proyecto1.exe` @120dpi，`.temp\fontprobe2_vb6.txt`）：
+  - 窗体 = `Arial Narrow / lfHeight=-16 / weight=400 / charset=0 / quality=0`。
+  - 所有**没有自带 Font 块**的子控件（5 枚按钮 + `Check1`）**共用同一枚** HFONT
+    （handle 1560942434）—— 这就是 ambient 继承的直接证据。
+  - 自带 `MS Sans Serif 8.25` 的 `Command2` 系列 = `MS Sans Serif / -14 / 400 / 0`
+    （VB6 对 8.25pt@120dpi 取整到 -14，C3 截断到 -13，属既有 1px 残差，不在本节范围）。
+
+### 24.2 两条独立根因
+
+| # | 层 | 根因 | 判据 |
+|---|---|---|---|
+| A | 发射层 | 窗体级 `BeginProperty Font` 从未生成码 | `--emit-c` 里 0 处 `vb6_UC_ApplyFontToWindow`；窗体 `WM_GETFONT` = 默认档 |
+| B | RTL 层 | `vb6_CreateControl` 恒发 `vb6_Vb6DefaultGuiFont()`，不读父窗口字体 | 每个子控件各自一枚 `MS Sans Serif -13`，与窗体不同的字体 |
+
+**时序坑（改后第一版仍读默认档的原因）**：`vb6_form_create_Form1` 是在
+`CreateWindowExW` **同步**执行的 `WM_CREATE` 里跑（那一刻创建全部子控件），而
+`vb6_CreateFormWindowB` 末尾才执行 `vb6_UC_ApplyFontToWindow(hwnd, NULL)` —— 无条件发
+NULL 会把刚落下的设计期字体当场覆盖回 8.25pt。实测症状很能说明问题：**子控件已按
+ambient 继承到 `Arial Narrow -16`，窗体自己却退回 `MS Sans Serif -13`**。
+
+### 24.3 修改站点
+
+| 文件 | 位置 | 做什么 |
+|---|---|---|
+| `cgen_form_create_controls.inc` | `emitFrmFontBlock`（136）+ 窗体级发射（152） | 新增 Font 块发射器；在**任何子控件创建之前**把窗体块落到窗体窗（`vb6_UC_ApplyFontToWindow(hwnd, _vb6_fblk)`） |
+| `cgen_form_ctrl_style_apply.inc` | 顶层控件路径 | 控件自己带 `BeginProperty Font` 的块也发射（此前静默丢弃） |
+| `cgen_form_frame_menu.inc` | 容器子控件路径 | 同上，Frame / PictureBox 内的子控件 |
+| `vb6forms.c` | `vb6_CreateControl`（701–733） | 子控件字体改为**按父窗口已落的 LOGFONT 复制一份**（ambient 继承），父无字体才退默认档；必须是复制而非共享句柄（换字体时会 `DeleteObject` 旧句柄） |
+| `vb6forms.c` | `vb6_CreateFormWindowB`（469–474） | 默认档兜底加门控 `if (!vb6_ControlFontStored(hwnd))`，不再覆盖 WM_CREATE 里落的设计期字体 |
+| `uc/uc_controls.c` | `vb6_UC_FontLogFont` | `Charset` 是设计期数据：0 就是 ANSI_CHARSET，`f ? f->Charset : DEFAULT_CHARSET`（旧的把 0 当"没填"换成 1） |
+
+改后 `--emit-c` 里 Form1 的窗体块出现在**全部子控件创建之前**（第 15358 行），全产物
+32 处 `vb6_UC_ApplyFontToWindow`（此前 0 处）。
+
+### 24.4 改后实测（120dpi，`.temp\fontmetrics_c3.txt` vs `.temp\fontmetrics_vb6.txt`）
+
+| 对象 | C3 LOGFONT | VB6 LOGFONT | TextHeight | TextWidth |
+|---|---|---|---|---|
+| 窗体 | `Arial Narrow -16 400 charset=0` | 同 | 20 | 82 ("Tree Explorer") |
+| Button `Tree Explorer` | `Arial Narrow -16 400 0` | 同 | 20 | 82 |
+| CheckBox `AllowEdit` | `Arial Narrow -16 400 0` | 同 | 20 | 55 |
+| Label `MarginBottom`（父 Picture3 无块） | `Arial Narrow -16 400 0` | 同（VB6 Label 无窗口，按同 LOGFONT 等价） | 20 | — |
+| Label `SelectionColor`（父 Picture1 自带 8.25 块） | `MS Sans Serif -13 400 0` | 同 | — | — |
+
+- 最后一行是**反证**：它必须继承 Picture1 的 8.25 档，而不是窗体的 Arial Narrow。
+  只测前四行的话，"子控件都在继承窗体字体"与"子控件都无视容器字体"这两种实现都会判绿。
+- VB6 的 `Label` 是 windowless 控件（`EnumChildWindows` 里看不到），所以 Label 的对照
+  用"同一枚 LOGFONT ⇒ 同一套度量"作等价证明；TextHeight/TextWidth 由测试进程按
+  LOGFONT 本地重建字体后量（跨进程 `SelectObject` 到自家 DC 不可靠，会读到测试进程
+  的默认字体）。
+- 墨迹 bbox（`.temp\inkbtn2.ps1`，`.temp\vb6_pw.png` vs `.temp\px11\uctreeview_c3.png`）
+  5 枚逐像素同：`50x34@(277,558)`、`57x34@(363,558)`、`52x34@(456,558)`、
+  `76x11@(534,568)`、`71x11@(627,568)`；两行按钮的 lineBands 也是 `558..571 / 578..591`。
+  墨迹点数 VB6 218 vs C3 197 是 AA quality（VB6=0 DEFAULT，C3=3 NONANTIALIASED）的差别。
+
+### 24.5 分区 diff（口径 `.temp\diffreg.ps1` / `.temp\r1.ps1`，959x623，`|Δ|三方和>=6`）
+
+| 分区 | rect (x,y,w,h) | 改前(post-#7) | 改后 |
+|---|---|---|---|
+| bottomBar 客户区行 540..613 | 252,540,458,74 | 9.06% | **7.69%** |
+| 5 枚按钮含边框整块 | 5×(86,51) | 14.01% | **10.77%** |
+| **整窗** | 959x623 | 7.96% (47532px) | **7.67%** (45813px) |
+| **客户区** | 10,32,940,582 | 4.91% (26845px) | **4.59%** (25126px) |
+
+逐枚按钮：`Tree Explorer` 13.43%→12.54%，`Corporate Hierarchy` 20.75%→**13.47%**，
+`Drag and Drop` 14.98%→13.11%，`Menu / Tools` 10.74%→**8.66%**，`Contact  List`
+10.15%→**6.09%**。两枚单行按钮这次也动了 —— 上一轮它们没变是因为字体还是默认档，
+现在 caption 的墨迹位置/宽度终于与 VB6 同档；`bottomBarRefDiff` 18.92%→**17.70%**。
+
+### 24.6 断言（`tests/guisample/uctreeview_px.ps1`）
+
+1. 窗体：`WM_GETFONT` 非 0，且面名 = `Arial Narrow`、`lfHeight = -(9.75*dpi/72)`（120dpi
+   -16 / 96dpi -13）、`charset = 0`、`weight = 400`。
+2. 子控件继承：Button / CheckBox / Label(MarginBottom) 必须与窗体同面名同高同 charset；
+   Label(SelectionColor) 必须继承容器的 `MS Sans Serif`（反证）。STATIC 不答
+   `WM_GETFONT`，改读 RTL 存在窗口属性 `VB6_CtrlFont`（`GetPropW`）。
+3. 按钮行数：`$wantLines`（用按钮自己的字体实测）+ VB6 参考 `2/2/2/1/1`。参考那条
+   **门控在 Arial Narrow 是否已安装**：CI（windows-latest）没有这枚 Office 附带字体，
+   GDI 把它替换成 Arial（-13 实测 77/115/83/75/74，两枚短标题因此翻成两行）；VB6 在同机
+   也会做同样替换，所以那条参考判据在 CI 上不成立 —— 记 `faceInstalled=no(...SKIP)`
+   并写进读数，字体自洽判据照常执行。
+4. 旧产物仍红（`.temp\out_probe4\Proyecto1.exe` 复跑 FAIL）。
+
+### 24.7 回归与夹具归因
+
+| 夹具 | 结果 | 归因 |
+|---|---|---|
+| `uctreeview_px` | PASS（本机 120dpi：`ext82/119/87/78/72`、`2L/2L/2L/1L/1L`；CI 96dpi：`ext77/115/83/75/74`、全 2 行 = Arial 替换） | 本族正主 |
+| `segmented_px` | 悬停光标 `IDC_NO` 那条红（本机 120dpi） | **与本族无关**：用 `git checkout HEAD~1 -- src/` 造出改前二进制复跑，读数除计时外逐字相同、同样红 ⇒ 120dpi 本机现象；CI（96dpi）绿 |
+| `teechart_display_px` | PASS | 该夹具 96dpi（不感知 DPI，被虚拟化），字体块发射后读数不变 |
+| `tree_icons_px` / `editor_scroll_px` | PASS | 同上，无像素移动 |
+| 发码形状门（595 语料） | 9 份哈希变化 | 逐份 diff 只有字体块脚手架（每块 +11 行 + 1 行 `vb6_UC_ApplyFontToWindow`）与新增调用，**无其它形状变化**；据此 `-Bless` 登记 |
+
+### 24.8 提交 / GA
+
+- `ca2796e3`：RTL 两站 + 三个 cgen `.inc` + px 测试断言。
+- `a3e55adb`：96dpi 参考行数按字体可用性门控 + `emit-manifest.expected.txt` 登记 9 行。
+- GA run **42174516241**（head `ca2796e3`）：**失败 2 格** —— 发码形状门（9 份哈希，
+  见 24.7）+ `tests (vbp #11)`（`'Menu / Tools' 行数 2 != 参考 1`，CI 字体替换所致，见 24.6）。
+- GA run **42176788091**（head `a3e55adb`）：**22/22 全绿**。
+
