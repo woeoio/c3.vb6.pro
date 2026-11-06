@@ -506,7 +506,10 @@ BSTR   vb6_StrConvFromByteArray(struct vb6_SafeArray1D* arr, int32_t conversion,
 BSTR   vb6_ByteArrayToString(struct vb6_SafeArray1D* arr);
 void*  vb6_SafeArrayDataPtr(struct vb6_SafeArray1D* arr);
 struct vb6_SafeArray1D* vb6_Filter(struct vb6_SafeArray1D* source, BSTR match, int32_t include, int32_t compare);
-void*    vb6_StrPtr(BSTR s);          // StrPtr: address of string data
+// StrPtr: BSTR 的数据地址。只有 NULL(vbNullString) 答 0; 零长但真实的 BSTR (`s = ""`) 答非 0
+// —— VB6 里 `StrPtr(vbNullString)=0, StrPtr("")!=0` 是唯一区分"空串/null 串"的手段
+// (BalloonTooltips: `SetWindowTheme hTT, StrPtr(sEmpty), StrPtr(sEmpty)` 靠它关视觉样式).
+void*    vb6_StrPtr(BSTR s);
 // 账 #305 §B180 (第六十九刀): StrPtr 收**整枚槽**那一档 —— vt 已是串时**借**槽里那枚 BSTR，
 // 不再像 `vb6_StrPtr(vb6_VariantToString(v))` 那样每调用现造一枚没人回收的临时串。
 // 发码侧由 arg_variant (撤回解包) 与 builtin_fixup (改 callee 名) 两站同归一处新问句决定，

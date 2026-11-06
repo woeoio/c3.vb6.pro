@@ -28,7 +28,12 @@ std::string CCodeGen::defaultValue(Vb6Type type) const {
         case Vb6Type::Currency:
             return "0.0";   // Fix 126: Currency 值语义 (double)
         case Vb6Type::String:
-            return "vb6_BSTR_Empty()";
+            // VB6 里"未赋值的 String" 是 vbNullString (空指针), 不是一枚零长 BSTR:
+            // StrPtr 对前者答 0、对后者 (`s = ""`) 答非 0 —— 这是 VB6 唯一区分
+            // 空串/null 串的公开手段 (见 vb6rtl_compat.c 的 vb6_StrPtr 注释与
+            // BalloonTooltips 的 SetWindowTheme(hTT, StrPtr(""), StrPtr("")) 实测)。
+            // 发 NULL 同时覆盖: 局部/模块变量、函数返回槽、Optional 省略位。
+            return "NULL";
         case Vb6Type::Object:
             return "NULL";
         case Vb6Type::Variant:

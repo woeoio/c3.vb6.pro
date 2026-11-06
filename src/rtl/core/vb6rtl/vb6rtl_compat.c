@@ -347,18 +347,33 @@ struct vb6_SafeArray1D* vb6_Filter(struct vb6_SafeArray1D* source, BSTR match, i
     return result;
 }
 
-// 账 #257 第十三层: StrPtr 的空串口径。
-// VB6 里"空串"的 StrPtr 答 **0** —— 未赋值的 String、`vbNullString`、`""` 一律如此。
-// 这不是实现细节而是 VB6 明文语义, 生态里两处标准写法都靠它:
-//   · `If StrPtr(s) = 0 Then` 判"可选字符串省略了 / InputBox 被取消";
-//   · Declare 侧 `If StrPtr(FileName) = NULL_PTR Then <用默认> Else <LoadLibrary(StrPtr)>`
-//     (ComCtlsDemo Animation.LoadRes 实测就是这一处: 单参调用 `LoadRes ResID` 走了
-//      LoadLibrary 分支 ⇒ NULL ⇒ Err.Raise 53)。
-// ⚠ 判空**不能**看首字符: `String$(n, vbNullChar)` 首字符就是 NUL 但长度非 0, StrPtr 必须非 0。
-// 一律按 BSTR 的**长度**判 (SysStringLen), 它同时也把 NULL 与"显式零长 BSTR"统一成同一档。
+// StrPtr 的空串口径 (BalloonTooltips 家族修正; 原"按长度判空"推翻).
+//
+// VB6 的 StrPtr **不是**按长度判的: 它答的是 BSTR 的数据地址, 唯一答 0 的是
+// vbNullString (空指针)。空串 `""` 是一枚真的零长 BSTR ⇒ 答**非 0**地址。
+// 官方文档与 VB6 生态唯一的"区分空串/null 串"手段就是它:
+//   StrPtr(vbNullString) = 0, StrPtr("") != 0
+//   (Microsoft "Chapter 6: Strings"; classicvb.net 的 VarPtr/StrPtr/ObjPtr 文档:
+//    "StrPtr is also the only way to tell the different between an empty string (\"\")
+//     and a null string (vbNullString)")
+//
+// 为什么这条必须改 (实测, 不许猜):
+//   BalloonTooltips 夹具的 cTT.cls 建完 tooltip 有
+//       SetWindowTheme hWndTT, StrPtr(sEmpty), StrPtr(sEmpty)
+//   其中 sEmpty 是 `Const sEmpty As String = ""`。参考 VB6 产物里这一句让 uxtheme
+//   **关掉**视觉样式 ⇒ 气泡按经典程序画, 底色就是 TTM_SETTIPBKCOLOR 设的值
+//   (#FFFFE1/#00FFFF/#FFFF00/#00FF00)。C3 若把零长 BSTR 折成 NULL, 实际调用是
+//   SetWindowTheme(hTT, NULL, NULL) ⇒ comctl32 v6 保留视觉样式 ⇒ 白底、尺寸 +8px、
+//   lfQuality=5(ClearType); 同进程读 TTM_GETTIPBKCOLOR/GETTIPTEXTCOLOR/WM_GETFONT
+//   两产物**完全相同**, 唯一差的就是这张主题皮。
+//
+// 配套口径 (同一刀): 未赋值的 String / `vbNullString` 现在由发码侧答 NULL
+// (defaultValue(String) 与 vbnullstring 字面量都发 NULL), `s = ""` 是赋值 ⇒ 仍是
+// 非 0 的零长 BSTR。这样 `If StrPtr(s) = 0` 判"省略/未赋值"的老写法照旧成立。
+// ⚠ 判空**不能**看首字符: `String$(n, vbNullChar)` 首字符就是 NUL 但长度非 0, StrPtr 必须非 0
+//   —— 本实现根本不看内容, 天然成立。
 void* vb6_StrPtr(BSTR s) {
-    if (vb6_BSTR_Len(s) == 0) return NULL;
-    return (void*)s;  // BSTR points directly to string data
+    return (void*)s;  // 只有 NULL(vbNullString) 答 0; BSTR 指针本身就是数据地址
 }
 
 // 账 #305 §B180 (第六十九刀): StrPtr 收 **Variant** 时借槽里那枚 BSTR。
