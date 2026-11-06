@@ -778,3 +778,108 @@ GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只
 - GA：run `42157587845`（head `371e677b`）= 21/22（唯一红是 Emit manifest，预期）；
   run `42158448470`（head `ae11dcc8`）= **22/22 全绿**。
 - 提醒仍然有效：改 `detail/module/*.inc` 必须 touch `src\backend\module\cgen_form.cpp` 再 build。
+
+## 23. 残差 #7：底部按钮长标题不换行（BS_MULTILINE）
+
+### 23.1 根因（实测，不是猜）
+
+- **VB6 侧**：`ThunderRT6CommandButton` 实测 `style=0x54012000`（WS_CHILD|WS_VISIBLE|
+  WS_CLIPSIBLINGS|WS_TABSTOP|**BS_MULTILINE=0x2000**）、`ex=0x4`；窗口 86x51 @120dpi，
+  client 与 rect 同尺寸（无边框内缩）。caption：`Tree Explorer` / `Corporate Hierarchy` /
+  `Drag and Drop` / `Menu / Tools` / `Contact  List`（双空格）。
+- **C3 侧**：原生 `BUTTON`，改前 `style=0x54014000`（只有 `BS_NOTIFY=0x4000`，**无 0x2000**）、
+  `ex=0`。系统在没有 BS_MULTILINE 时把 caption 强制单行绘制；有了这一位才按**空格**
+  word-wrap（不是按 `\n`、也不是按控件宽硬断）。
+- **断行阈值证据**（同 DPI 内存 DC，`GetTextExtentPoint32`，字体档与绘制一致）：
+
+  | caption | VB6 字体 Arial Narrow -16 | C3 字体 MS Sans Serif -13 | VB6 行数 |
+  |---|---|---|---|
+  | Tree Explorer        | 82  | 82  | 2（Tree / Explorer） |
+  | Corporate Hierarchy  | 119 | 121 | 2（Corporate / Hierarchy） |
+  | Drag and Drop        | 87  | 89  | 2（Drag and / Drop） |
+  | Menu / Tools         | 78  | 78  | 1 |
+  | Contact  List        | 72  | 71  | 1 |
+
+  按钮宽 86，系统文本区 = 80（每边 3px）⇒ 阈值落在 [78,82)：前三枚过线、后两枚不过线。
+  两套字体档在该阈值下 5/5 一致 —— 所以**换行决策与字体档无关**，只差行距（见 23.2 末）。
+- **系统能力确认**：不重编、只在已运行的原生产物上 `SetWindowLong(GWL_STYLE, style|0x2000)`
+  并重绘，三枚立刻变两行且断行位置与 VB6 相同 ⇒ **不需要自绘 caption**，也不需要用
+  owner-draw 伪造；竖直居中由系统按钮自己按多行块算。
+- 改前墨迹（参考图同坐标）：C3 `80x13 / 78x13 / 80x13` 单行 @ y568-580；
+  VB6 `50x34 / 57x34 / 52x34` @ y558-591（bands `[558..568][578..591]`，行距 20）；
+  `Menu / Tools` 76x11、`Contact  List` 71x11 两边本来就一致。
+
+### 23.2 修改站点
+
+- `src/rtl/core/vb6forms/vb6forms.c::vb6_CreateControl`（唯一创建站点），
+  `CreateWindowExW` 之前：`win32Class == "BUTTON"` 且 `style & 0xF` ∈
+  `{BS_PUSHBUTTON(0), BS_DEFPUSHBUTTON(1)}` ⇒ `style |= 0x2000L`。
+  只补 push 型：check/radio/group 的 0x2000 是另一层语义（文字/图标换行），不动。
+- 改为后 C3 按钮实测 `style=0x54016000`（= 旧 `0x54014000` | 0x2000）。
+- 改后墨迹：`49x29 / 58x29 / 54x29`（bands `[560..569][576..588]`），
+  后两枚仍 `76x12 / 70x10` 单行 —— **行数逐枚与参考一致**。
+- 行距差：VB6 = 20（`TextHeight` = Arial Narrow 9.75pt 的 tmHeight=20，来自窗体级
+  `BeginProperty Font` 的 ambient 继承），C3 = 16（默认 MS Sans Serif 8.25 的 tmHeight=16）。
+  即整块上沿 +2px、下沿 -3px。这是**字体继承**残差（C3 的窗体级 Font 块没落到窗体窗口，
+  子控件也无从继承），与换行规则是两件事，单独记一笔。
+
+### 23.3 断言（`tests/guisample/uctreeview_px.ps1`）
+
+- 5 枚 push 按钮按 caption 定位，各判：`style & 0x2000` 必须非 0；
+  墨迹行带数 == 参考（`2/2/2/1/1`）；两行的三枚墨迹 bbox 高 >= `26 * dpi/120`
+  （参考 VB6 34px@120dpi、C3 字体档实测 29px、单行 ≤13px，26 是"至少两行"的下限，
+  同时不把字体档差异误判）。
+- `bottomBar` 对真 VB6 实拍的 diff 上限 20%（只在 `$env:UCTV_VB6_REF` 给了同尺寸
+  参考图时计算，CI 无参考图 ⇒ 该子项 SKIP）。
+- 新产物（3 次连跑一致）：`btns=[Tree Explorer=2L/29px | Corporate Hierarchy=2L/29px |
+  Drag and Drop=2L/29px | Menu / Tools=1L/12px | Contact  List=1L/10px] twoLine=26
+  bottomBarRefDiff=18.92%` → PASS。
+- 旧产物 `.temp\out_probe4\Proyecto1.exe`：`'Tree Explorer' 缺 BS_MULTILINE
+  (style=0x54014000); 行数 1 != 2; 墨迹高 13px < 26px`（三枚同） → FAIL。
+
+### 23.4 分区 diff（口径 `.temp\diffreg.ps1`，959x623，`|ΔR|+|ΔG|+|ΔB|>=6`）
+
+| 分区 | rect (x,y,w,h) | 改前(cap6) | 改后(cap7) |
+|---|---|---|---|
+| leftEdge   | 0,32,20,591    | 46.07% | 46.07% |
+| bottomBar  | 252,540,458,83 | 19.70% | **18.92%** |
+| bottomBar 客户区行 540..613 | 252,540,458,74 | 9.93% | **9.06%** |
+| 5 枚按钮含边框整块 | 259/349/439/529/619,548,86,51 | 15.34% | **14.01%** |
+| **整窗**   | 959x623        | 8.00% (47825px) | **7.96%** (47532px) |
+| **客户区** | 10,32,940,582  | 4.96% (27138px) | **4.91%** (26845px) |
+
+- 逐枚按钮：`Tree Explorer` 15.89%→13.43%，`Corporate Hierarchy` 22.50%→20.75%，
+  `Drag and Drop` 17.44%→14.98%；两枚单行按钮 `Menu / Tools` 10.74%、`Contact  List`
+  10.15% **一点没变** ⇒ 本刀的收益确实在 caption 侧，剩余 10~20% 是按钮面（主题 vs
+  VB6 经典 bezel）的另一族残差。
+- **leftEdge 46.07% 的定性（本刀顺带钉住）**：窗口最外 9px 条 `x0..8` 逐像素 100%
+  不同（C3 `59,59,59` vs VB6 `38,38,38`，激活态边框色）；把这条非客户区排掉，客户区
+  等价读数 = `x10..19` 的 diff **1.83%**（108/5910px）。所以 leftEdge 不需要再处理。
+
+### 23.5 断言的 96dpi 修正（第二次提交）
+
+首版把 VB6 120dpi 参考的行数写死成 `2/2/2/1/1`，CI（96dpi）判红：
+`'Tree Explorer' 行数 1 != 2` / `'Menu / Tools' 行数 2 != 1`（GA run 42163469487）。
+
+- 根因：期望值必须由**该系统/该 DPI 下按钮的真实字体**推出来，而不是抄 120dpi 参考。
+  - 120dpi（本机 120dpi 桌面）：`MS Sans Serif -13` extent = 82/121/89/78/71，
+    客户宽 86 ⇒ 阈值 80 ⇒ 2/2/2/1/1，与 VB6 逐枚一致。
+  - 96dpi（CI）：同一逻辑的 font 档 = `MS Sans Serif -11`（光栅档，`lfHeight` 不是
+    120dpi 的等比 0.8），extent = 63/94/70/64/59，客户宽 69 ⇒ 阈值 63 ⇒
+    **1/2/2/2/1** —— Tree 恰好 63 不过线、Menu 恰好 64 过线。
+- 改法：`UP::TextWidthOf(btn, cap)` = `WM_GETFONT → GetObjectW(LOGFONTW) →
+  CreateFontIndirectW → GetTextExtentPoint32W`（测试进程屏幕 DC，与按钮同 DPI）；
+  `wantLines = (capW > clientW - 6) ? 2 : 1`。两行墨迹高下限仍按 DPI 折算
+  （`26 * dpi/120`）。顺带修 `GetDC/ReleaseDC` 的 DLL 归属（`gdi32 → user32`，
+  写错时 `EntryPointNotFoundException` 让 `ext` 恒 -1、断言退化成全单行）。
+- 96dpi 下 C3 与 VB6 的换行结果**确实不同**（VB6 96dpi 的 `Arial Narrow -13` 是
+  67/62 ⇒ 2/1），那是 23.2 末的**字体继承残差**（窗体级 `BeginProperty Font` 没落到
+  窗体窗口、子控件不继承），本刀不动它；断言因此在 96dpi 用"自身字体/自身 DPI"的自洽
+  期望，120dpi 下仍 5/5 与参考一致。
+- 本机复跑（120dpi，带 `UCTV_VB6_REF=.temp\vb6_pw.png`）：
+  `btns=[Tree Explorer=2L/29px/ext82 | Corporate Hierarchy=2L/29px/ext121 |
+  Drag and Drop=2L/29px/ext89 | Menu / Tools=1L/12px/ext78 |
+  Contact  List=1L/10px/ext71] twoLine=26 bottomBarRefDiff=18.92%` → PASS。
+- 旧产物仍红：`style=0x54014000` 缺 BS_MULTILINE、三条 `1L/13px < 26px`。
+- 提交：`d6957a8c`（`tests/guisample/uctreeview_px.ps1`）；GA run **42164731930**
+  = **22/22 全绿**（head `d6957a8c`）。
