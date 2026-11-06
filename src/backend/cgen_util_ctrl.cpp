@@ -2445,7 +2445,9 @@ void CCodeGen::emitVariantSlotStore(const std::string& target, const std::string
     };
     const bool hoistTarget = needsAddrTemp(target);
     std::string tgt = target;
-    std::string clearArg = "(&" + target + ")";
+    // 非提存路**逐字节不变**: 就是 `vb6_VariantClear(&<target>)` —— 多处发码形状针
+    // (b164_slot_store_shape / b169_class_field_store_shape) 按原文逐字核这一行。
+    std::string clearArg = "&" + target;
     if (hoistTarget) {
         const std::string tp = "_vtg_" + std::to_string(tempCounter_++);
         c_.emitLine("{ vb6_VARIANT* " + tp + " = &(" + target + ");");

@@ -93,6 +93,40 @@ public class UP {
     System.Threading.Thread.Sleep(40);
     mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
   }
+  // --- 双击的两条路 (CI 96dpi 上 mouse_event 那一路实测不生效: 两次读数 33/33 无变化) ---
+  // 口径: PostMessage 合成 DOWN/UP + DBLCLK 到**光标下那个窗口** (换算出客户区坐标),
+  // 不依赖前台/焦点; 台面上鼠标那一路只作兜底。两路都打不动才算"展开不生效"。
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+  public static IntPtr HwndAt(int x, int y) { return WindowFromPoint(new POINT { X = x, Y = y }); }
+  public static string AtInfo(int x, int y) {
+    IntPtr h = WindowFromPoint(new POINT { X = x, Y = y });
+    if (h == IntPtr.Zero) return "none";
+    return Cls(h) + "|" + WText(h);
+  }
+  // 返回 true = 消息已投出; 换算失败 (点不在该窗口里) 返回 false 交给兜底那一路。
+  // ⚠ 必须先 SetCursorPos: 这枚控件 (ucTreeViewPlus.ctl:1228) 的 UserControl_DblClick
+  // 是**用 GetCursorPos 自己取点**, 不读 lParam —— 只投消息不动光标, 命中行永远是旧位置。
+  public static bool DblClickPost(IntPtr h, int sx, int sy) {
+    if (h == IntPtr.Zero) return false;
+    SetCursorPos(sx, sy);
+    System.Threading.Thread.Sleep(30);
+    var pt = new POINT { X = sx, Y = sy };
+    if (!ScreenToClient(h, ref pt)) return false;
+    IntPtr lp = (IntPtr)((pt.Y << 16) | (pt.X & 0xFFFF));
+    PostMessageW(h, 0x0200, IntPtr.Zero, lp);        // WM_MOUSEMOVE
+    System.Threading.Thread.Sleep(50);
+    PostMessageW(h, 0x0201, (IntPtr)1, lp);          // WM_LBUTTONDOWN
+    System.Threading.Thread.Sleep(60);
+    PostMessageW(h, 0x0202, IntPtr.Zero, lp);        // WM_LBUTTONUP
+    System.Threading.Thread.Sleep(60);
+    PostMessageW(h, 0x0203, (IntPtr)1, lp);          // WM_LBUTTONDBLCLK
+    System.Threading.Thread.Sleep(60);
+    PostMessageW(h, 0x0202, IntPtr.Zero, lp);        // WM_LBUTTONUP
+    return true;
+  }
   // 除主窗以外**可见**的 VB6_Form_* (底部五按钮各自要弹一枚)
   public static IntPtr FindOtherForm(uint pid, IntPtr main) {
     IntPtr f = IntPtr.Zero;
@@ -731,25 +765,61 @@ if ($p.HasExited) {
     $actBad += "交互前进程已退出 (崩溃/自退, 交互判据无法取样)"
 } else {
     # ---- 缺陷1: 双击首行 Facebook (有 3 个子项) 收起再展开, 两态各量一次 ----
+    # 输入可靠性 (CI 96dpi 实测): mouse_event 那一路两次读数都是 33/33 —— 不是树没展开, 是
+    # 合成点击没进窗口。故先按"光标下那个窗口 + 客户区坐标"走 PostMessage 的
+    # DOWN/UP/DBLCLK (不依赖前台/焦点), 打不动再退回台面鼠标; 纵向最多试 4 个候选行。
+    # 全程有界 (4 行 x 2 路 x 800ms), 不引入任何无界等待, 判据阈值一字未动。
     if ($hlMaxY -gt $hlMinY) {
         $preV, $preD, $preR, $preH = Measure-TreePx $x0 $y0 $tw $th
-        $dcx = $wr.L + $x0 + $hlMinX + 30
-        $dcy = $wr.T + $y0 + $hlMinY + [int]($hlH / 2)
-        [UP]::SetForegroundWindow($main) | Out-Null
-        Start-Sleep -Milliseconds 300
-        [UP]::DoubleClickAt($dcx, $dcy)
-        Start-Sleep -Milliseconds 900
-        $v1, $d1, $r1, $h1 = Measure-TreePx $x0 $y0 $tw $th
-        [UP]::DoubleClickAt($dcx, $dcy)
-        Start-Sleep -Milliseconds 900
-        $v2, $d2, $r2, $h2 = Measure-TreePx $x0 $y0 $tw $th
-        $actRead += "expand pre=$preR/$preV t1=$r1/$v1 t2=$r2/$v2"
-        if ($r1 -lt $r2) { $expR = $r2; $expV = $v2; $colR = $r1; $colV = $v1 }
-        elseif ($r2 -lt $r1) { $expR = $r1; $expV = $v1; $colR = $r2; $colV = $v2 }
-        else { $expR = 0; $expV = 0; $colR = 0; $colV = 0 }
-        if ($expR -eq 0) {
-            $actBad += "展开/收起无差异 (两次双击后可见行数都是 $r1/$r2, 双击未命中或展开不生效)"
+        $step = if ($pitch -gt 0) { $pitch } else { $expPitch }
+        if ($step -le 0) { $step = 32 }
+        $rows2try = @()
+        for ($k = 0; $k -lt 4; $k++) {
+            $yy = $wr.T + $y0 + $hlMinY + [int]($hlH / 2) + ($k * $step)
+            if ($yy -ge ($wr.T + $y0 + $th - 4)) { break }
+            $rows2try += ,@(($wr.L + $x0 + $hlMinX + 30), $yy)
+        }
+        $hitCls = @(); $toggle = $null
+        foreach ($mode in @('post', 'mouse')) {
+            if ($toggle) { break }
+            foreach ($pt in $rows2try) {
+                $px = $pt[0]; $py = $pt[1]
+                [UP]::SetForegroundWindow($main) | Out-Null
+                if ($mode -eq 'post') {
+                    $hitCls += ([UP]::AtInfo($px, $py))
+                    # 目标优先级: 已定位的 UC 宿主 (不依赖 z 序/前台) → 光标下那个窗口
+                    $thw = $uc
+                    if ($thw -eq [IntPtr]::Zero) { $thw = [UP]::HwndAt($px, $py) }
+                    [UP]::DblClickPost($thw, $px, $py) | Out-Null
+                } else {
+                    [UP]::DoubleClickAt($px, $py)
+                }
+                Start-Sleep -Milliseconds 800
+                $aV, $aD, $aR, $aH = Measure-TreePx $x0 $y0 $tw $th
+                # 只有"可见节点行"真的变 (>=3 行) 才算命中: 选中/焦点重绘会让 vivid 抖几个像素
+                # (实测 1005→998), 拿它当命中信号会在第一行就误判成"已切换"。
+                if ([Math]::Abs($aR - $preR) -ge 3) {
+                    # 命中一个可展开节点: 再点同一处收回, 两态成对
+                    if ($mode -eq 'post') {
+                        [UP]::DblClickPost($thw, $px, $py) | Out-Null
+                    } else {
+                        [UP]::DoubleClickAt($px, $py)
+                    }
+                    Start-Sleep -Milliseconds 800
+                    $bV, $bD, $bR, $bH = Measure-TreePx $x0 $y0 $tw $th
+                    $toggle = @($aV, $aR, $bV, $bR, $px, $py, $mode)
+                    break
+                }
+            }
+        }
+        if (-not $toggle) {
+            $actRead += ("expand pre=$preR/$preV hit=[" + ($hitCls -join ';') + "] 无变化")
+            $actBad += "展开/收起无差异 (4 行 x 2 路合成点击后可见行数都停在 $preR, 双击未进窗口或展开不生效)"
         } else {
+            $av = $toggle[0]; $ar = $toggle[1]; $bv = $toggle[2]; $br = $toggle[3]
+            if ($ar -ge $br) { $expR = $ar; $expV = $av; $colR = $br; $colV = $bv }
+            else { $expR = $br; $expV = $bv; $colR = $ar; $colV = $av }
+            $actRead += ("expand pre=$preR/$preV a=$ar/$av b=$br/$bv at=$($toggle[4]),$($toggle[5]) via=$($toggle[6]) hit=[" + ($hitCls -join ';') + "]")
             if ($expR -lt ($colR + 3)) { $actBad += "展开后可见节点行 $expR < 收起态 $colR + 3" }
             if ($expV -lt ($colV + 20)) { $actBad += "展开后图标彩色像素 $expV 未随子项增加 (收起态 $colV, 展开丢图标)" }
         }

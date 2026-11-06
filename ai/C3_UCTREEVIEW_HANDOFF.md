@@ -1505,3 +1505,37 @@ BSTR 装箱且不依赖 `boxTempsToClear_` 的第三站。
 - `check_builtin_slot_returns.ps1` PASS（`table=42`）
 - `check_box_temp_reclaim.ps1` PASS（`push=2 drain=1`，阈值未放宽）
 - `check_rtl_embedded.ps1` PASS（126 资源逐字节一致；本轮无 RTL 改动，未重建 `c3rtl.res`）
+
+### 27.11 GA 42262126054（head 35119006）红格归因与处置
+
+**红格清单（5 格 / 22）与原文证据**
+
+| job | 失败步骤 | 关键原文 | 归类 |
+|---|---|---|---|
+| Emit manifest (shape oracle) | 清单对表 | `发码清单比较: 期望 596 行 / 实得 596 行 / 相同 490 / 哈希不同 106 / 缺席 0 / 多出 0`；`处置… pwsh scripts/rebless_emit_manifest.ps1 -Bless` | **登记类**（含 1 条真形状修正：见下） |
+| Tests (compile #1) | STATIC | `[STATIC] variant_slot_store ... FAIL`：`R1 出口本体有 9 枚 emitLine (要恰好 6)` | **真形状变化**（本轮 hoist 提存加了 3 行）→ 哨兵按新形状重钉（未放宽：新增 `_vtg_` 存在性判据） |
+| Tests (compile #1) | STATIC | `[STATIC] owned_temp_keeps ... FAIL`：`K13c 推导出来的 owned 1 枚发码侧那份里没有: vb6_VariantMissing` | **登记类**（`src/common/owned_temp_keeps.hpp` 手写清单补 1 行） |
+| Tests (bas #1) | EMITC-SHAPE | `[EMITC-SHAPE] b164_slot_store_shape ... missing: vb6_VariantClear(&e);` | **真回归**（`clearArg` 被写成 `(&e)`）→ 改回逐字节旧形 `&<target>` |
+| Tests (bas #2) | EMITC-SHAPE | `[EMITC-SHAPE] b169_class_field_store_shape ... missing: vb6_VariantClear(&_vb6_with_0->PV)` | 同上（同一个 `clearArg` 根因） |
+| Tests (vbp #1) | `[VBP-BUILD] ucTreeView` 像素断言 | `FAIL 交互: 展开/收起无差异 (两次双击后可见行数都是 33/33…)`；读数 `dpi=96 … faceInstalled=Arial Narrow:no` | **环境/采集侧**（合成双击未进窗口）→ 修脚本可靠性 |
+
+**为什么 `&e` 那条是真回归**：本地复算 `C3.exe tests\test_fe_slot_leak.bas --emit-c` 曾见
+`vb6_VariantClear((&e))`（多一层括号），是 hoist 提存改造里把非提存路也包进 `"(&" + target + ")"`；
+改回 `"&" + target` 后逐字命中 `vb6_VariantClear(&e);`，b169 同批复算命中
+`vb6_VariantClear(&_vb6_with_0->PV);`。
+
+**双击那条为什么是采集侧而非业务**：`ucTreeViewPlus.ctl:1228` 的 `UserControl_DblClick`
+用 `GetCursorPos` + `ScreenToClient(UserControl.hwnd)` **自己取点**，不读 lParam；旧的
+`mouse_event` 在 CI 96dpi 桌面上没把两条消息送进宿主（两次读数 33/33），本地 120dpi 恰好能中。
+处置：改成「SetCursorPos + 向 UC 宿主 PostMessage MOVE/DOWN/UP/DBLCLK/UP」为主路
+（不依赖前台/焦点），台面鼠标为兜底；候选行最多 4 个、每步 800ms 有界；判据阈值未动。
+
+**同一提交的本地复算（修后）**
+- `check_variant_slot_store.ps1` PASS（`def 1 | calls 11 | violations 0`）
+- `check_owned_temp_keeps.ps1` PASS（`K13/K13b/K13c two-way`）
+- `uctreeview_px.ps1` PASS：`act=[expand pre=57/1005 a=84/1715 b=56/998 at=121,140 via=post | xml …
+  | colorDialog='颜色' colorClosed=True | 五窗体 close=True]`
+- `check_box_temp_reclaim.ps1` / `check_uctreeview_authority.ps1` 仍绿（收尾复跑见 §27.12）
+
+**补记**：上一次运行 `42257818768`（head `99053716`）同样是这 6 格红（Emit manifest / vbp #1 /
+bas #1 / bas #2 / compile #1 / compile #2），并非"只剩两格"——§27.9 的 D 段以此为准。
