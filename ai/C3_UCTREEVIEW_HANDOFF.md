@@ -659,3 +659,29 @@ GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只
   含 `vb6_UC_BagPutFont`、无 `C3_T1879`，`scripts\check_rtl_embedded.ps1` 126/126 一致。
 - 提醒仍然有效：改 `detail/module/*.inc` 必须 touch `src\backend\module\cgen_form.cpp`
   再 build（本轮又踩了一次）。
+
+### 21.6 收口：`vb6_uc_selectOwnFont` 只能用窗口那一格 + 取证清理（2026-11-06）
+
+- **教训（写死）**：`vb6_uc_selectOwnFont` **不能**优先 `vb6_ucCurrent->font`。
+  非 AutoRedraw UC 的临时 DIB 是在 `vb6_uc_push` **之前**选字体，此刻
+  `vb6_ucCurrent` 还停在上一个 UC（或更早实例的陈旧字体）⇒ ucSegmentedControl 的
+  CheckBar 拿到 MS Sans Serif，PUA 字形（U+E16C..）整片不画
+  （`segmented_px.ps1` 实测 `uc6 darkPx=54 < 400`）。回退为单一来源
+  `vb6_ControlFontStored(hwnd)` 后恢复到 581。逐段 `Set UserControl.Font` 仍由
+  `vb6_uc_applyFontNow` 落到本实例的绘制 DC（那里 hdc 已经指向正确的 DC）。
+- 同时删掉 `vb6_uc_adEnsure` 里多出来的第三次 `vb6_uc_selectOwnFont` 调用：
+  静态哨兵 `scripts\check_control_dc.ps1` 钉 1 定义 + 2 调用（对外发 DC 的
+  `vb6_uc_autoRedrawDC` + 非 AutoRedraw 的 `vb6_uc_paintInto` 那档）。
+- 取证清理：`C3_TMP_SF`（`vb6_UC_SetFont` 里的字体指针打印）与 `C3_TMP_DT`
+  （`vb6_di_DrawTextW` 里的 GetTextColor/GetBkMode/LOGFONT/TEXTMETRIC 打印）全部删除；
+  重编后 `findstr` 核对 `.build\C3.exe`：`vb6_UC_BagPutFont` 在、`C3_TMP_` 无。
+- **本机残红（非本轮回归，已 A/B）**：`悬停 uc1 禁用项的光标 IDC_NO (65539 vs 65559)`。
+  用上一轮 `publish\C3.exe` 编同一夹具（`.temp\seg_pre\`）复现**同一读数**，
+  且该条在上一轮 GA（96dpi runner）上是绿的 ⇒ 与本轮改动无关，属本机
+  125% DPI 光标主题句柄差异；CI 面按 96dpi 判定。
+- 提交：`a4d4ae6d`（selectOwnFont 回退 + 哨兵 + 取证清理）、`1876366c`
+  （登记 7 份 UC 工程发码形状：字体块进 bag）。
+- **GA**：run `42140484128`（head `1876366c`）= **22/22 全绿**；此前 run
+  `42136304681` 的三红（Emit manifest / `[STATIC] control_dc` 调用 3 处 /
+  `ucSegmentedControl` uc6 darkPx=54）三条都已消除。
+
