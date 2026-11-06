@@ -384,10 +384,20 @@ $btnDpi = [UP]::GetDpiForWindow($main)
 if ($btnDpi -lt 96) { $btnDpi = 96 }
 $expTwoLine = [int][Math]::Round(26 * $btnDpi / 120)
 $btnCaps = @("Tree Explorer", "Corporate Hierarchy", "Drag and Drop", "Menu / Tools", "Contact  List")
-# 参考行数: 真 VB6 在这 5 枚上是 2/2/2/1/1 (82/119/87/78/72 @Arial Narrow 9.75pt vs 文本区 80)。
-# 残差 #8 修好后 C3 的字体与 VB6 同档 (ambient Arial Narrow 9.75pt), 所以 96dpi 与
-# 120dpi 都必须给出同一组行数 —— 这条是**参考**判据, 下面的 $wantLines 是字体自洽判据,
-# 两边都要过 (只对一边就说明"字体对了但断行不对"或"断行对了但字体不对")。
+# 参考行数: 真 VB6 在这 5 枚上是 2/2/2/1/1 —— 120dpi (Arial Narrow -16: 82/119/87/78/72 vs
+# 文本区 80) 与 96dpi (Arial Narrow -13: 67/98/72/62/56 vs 文本区 63) 都是这一组。
+# 前置条件: Arial Narrow 必须**真的装在这台机器上**。它属 Office 附带的字体, 不在 Windows
+# 基础字体集里 —— CI 的 windows-latest 只有 Arial, 于是 GDI 把 "Arial Narrow" 替换成 Arial
+# (-13 实测 77/75/74, 后两枚就翻成两行)。替换发生时 VB6 在同一台机器上也会做同样的替换
+# (行数 2/2/2/2/2), 所以拿本机 (有 Arial Narrow) 录的参考行数去判它是**判据失效**,
+# 不是产品缺陷: 这一条按"字体缺失"记 SKIP 并在读数里写明, 字体自洽判据 ($wantLines,
+# 用按钮自己的字体实测) 仍然照常执行 —— 断行逻辑本身的回归仍能抓到。
+$faceInstalled = $false
+try {
+    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+    $faceInstalled = @((New-Object System.Drawing.Text.InstalledFontCollection).Families |
+        Where-Object { $_.Name -eq "Arial Narrow" }).Count -gt 0
+} catch { }
 $btnRefLines = @(2, 2, 2, 1, 1); $btnIdx = 0
 $btnMissing = 0; $btnBad = @(); $btnRead = @()
 foreach ($cap in $btnCaps) {
@@ -428,9 +438,9 @@ foreach ($cap in $btnCaps) {
     $inkH = 0
     if ($bMaxY -ge 0) { $inkH = $bMaxY - $bMinY + 1 }
     $st = [UP]::GetWindowLongW($bhw, -16)
-    $wlRef = $btnRefLines[$btnIdx]; $btnIdx++
+    $wlRef = if ($faceInstalled) { $btnRefLines[$btnIdx] } else { -1 }; $btnIdx++
     if (($st -band 0x2000) -eq 0) { $btnBad += "'$cap' 缺 BS_MULTILINE (style=0x$('{0:X8}' -f $st))" }
-    if ($bands -ne $wlRef) { $btnBad += "'$cap' 行数 $bands != 参考 $wlRef" }
+    if ($wlRef -ge 0 -and $bands -ne $wlRef) { $btnBad += "'$cap' 行数 $bands != 参考 $wlRef" }
     if ($bands -ne $wantLines) { $btnBad += "'$cap' 行数 $bands != $wantLines (ext=$capW/客户宽 $clientW)" }
     if ($wantLines -eq 2 -and $inkH -lt $expTwoLine) {
         $btnBad += "'$cap' 墨迹高 ${inkH}px < 两行下限 ${expTwoLine}px"
@@ -676,7 +686,7 @@ $readout += " selWhite=$selWhite selDark=$selDark selBlack=$selBlack hlH=${hlH}@
 $readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
 $readout += " edFrameDark=$edFrameDark edTopDark=$edTopDark edEdge236=$edEdge236/$($editHwnds.Length) sb240=$([Math]::Round(100*$sbR240,1))% sbWhite=$([Math]::Round(100*$sbRWhite,1))% sbMid=$sbMidOk/$sbCount sbLeft=$sbLeftOk/$sbCount"
 $readout += " btns=[" + ($btnRead -join " | ") + "] twoLine=$expTwoLine bottomBarRefDiff=$refDiff"
-$readout += " font=[" + ($fontRead -join " | ") + "] expFontH=$expFontH"
+$readout += " font=[" + ($fontRead -join " | ") + "] expFontH=$expFontH faceInstalled=$expFace" + $(if ($faceInstalled) { ":yes" } else { ":no(参考行数判据 SKIP)" })
 if ($bad.Count -gt 0) {
     Write-Output ("FAIL " + ($bad -join "; ") + " | " + $readout + " | png=$pngPath")
     try { $p.Kill() } catch {}
