@@ -1610,3 +1610,90 @@ OK check_manifest_coverage: K1..K3 (inputs=596 [.vbp=221 .bas=375], registered=5
 本地复跑（改后，120dpi，新产物）：`PASS … act=[expand pre=56/1005 a=84/1715 b=56/998 at=121,140
 via=post | xml rows=56->12 chk=73->0 hl=0->0 dark=122 try=1 cls=Button en=True vis=True cap=Load from
 custom XML | colorDialog='颜色' | colorClosed=True | 五窗体 close=True] · px_rc=0`。
+
+### 27.13 「合成鼠标输入之后第一次点击是否被吞」单发探针（2026-11-07）
+
+**探针**：`.temp\probe_click_once.ps1`（`-Mode c3|vb6`、`-Sc A,B,C,D,E,F,G,H`）。
+每个场景**只对目标按钮点一次**（无重试、无阈值放宽）；前序合成输入与这次点击分开记录。
+
+口径：
+- 画面读数 = `PrintWindow(PW_RENDERFULLCONTENT=2)` 离屏量树区 `hl`（严格 (255,180,180)）与 `dark`（lum<110），
+  与桌面上有没有窗口遮挡无关；
+- 捕获/焦点 = `GetGUIThreadInfo(线程id)` 与 `AttachThreadInput + GetCapture/GetFocus/GetActiveWindow` 双路；
+- 消息是否进 WndProc = 单发 `SendMessageTimeoutW(BM_CLICK, SMTO_ABORTIFHUNG=2, 3000ms)`，
+  返回非零即"按钮窗口过程已把这条消息处理完"，`sync=ok:<ms>`。
+
+**探针自身两处错误（先记，避免把工具读数当产品结论）**
+
+1. `TidOf` 曾返回 `GetWindowThreadProcessId` 的 **out 参数（进程 id）**，不是函数返回值（线程 id）
+   ⇒ `GetGUIThreadInfo` 恒 `err=87`、`AttachThreadInput` 恒 False。改成返回函数返回值后两条均正常
+   （本节所有 `cap/focus` 都是修后读数；§27.12 里"捕获/焦点采集不可用"的备注作废）。
+2. `HlPoint` 首版把落点存成数组，打印成 `pt=,`、落点退化为盲点 ⇒ 合成双击一次都没展开（`exp == fresh`）。
+   改为标量 `$px/$py`（粉底首点 +24,+6）后 `exp` 真正变化（`hl 6865→0, dark 671→1079`），
+   前序"合成输入"状态才真正成立。
+
+**C3 读数**（`.temp\uctv_new3\Proyecto1.exe`，本机 120dpi；每行 = 独立启动一次进程）
+
+原始行（`…` 处是重复的 `cap/focus/act` 字段，只做省略；B 场景复跑一次为 `HIT t=247`，其余数值同上）：
+```
+SC=A HIT t=272 fresh=[hl=6865 dark=671] exp=[na] mid=[hl=6865 dark=671] after=[hl=0 dark=122] tid=8556 cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1 | attach=True cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=B HIT t=254 fresh=[hl=6865 dark=671] exp=[hl=0 dark=1079] mid=[hl=0 dark=636] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=C HIT t=246 fresh=[hl=6865 dark=671] exp=[hl=0 dark=1079] mid=[hl=0 dark=636] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=D HIT t=268 fresh=[hl=6865 dark=671] exp=[hl=0 dark=1107] mid=[hl=0 dark=1107] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=E HIT t=274 fresh=[hl=6865 dark=671] exp=[hl=6865 dark=671] mid=[hl=6865 dark=671] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=F HIT t=269 fresh=[hl=6865 dark=671] exp=[hl=0 dark=1079] mid=[hl=0 dark=670] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=G HIT t=284 … mid=[hl=0 dark=636] after=[hl=0 dark=122] … dbg=… sync=ok:100
+SC=H STABLE 8s fresh=[hl=6865 dark=671] exp=[hl=0 dark=1079] mid=[hl=0 dark=636] after=[hl=0 dark=636] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+```
+
+| 场景 | 前序合成输入 | 单次点击 | 读数 | cap/focus/act |
+|---|---|---|---|---|
+| A 基线 | 无 | PostMessage BM_CLICK ×1 | **HIT t=272**，`6865/671 → 0/122` | `cap=`空 / `focus=Button\|AlternateNodeColors` / `act=VB6_Form_Form1\|Form1` |
+| B | Post 双击展开→双击收起→光标移出树区 | 同上 ×1 | **HIT t=254**，`mid 0/636 → after 0/122` | 同上 |
+| C | 同 B，但**光标留在树区**（复现 CI 失败态） | 同上 ×1 | **HIT t=246**，`mid 0/636 → after 0/122` | 同上 |
+| D | 只投一对 DOWN/UP（无 DBLCLK） | 同上 ×1 | **HIT t=268**，`mid 0/1107 → after 0/122` | 同上 |
+| E | `mouse_event` 真实输入队列双击 | 同上 ×1 | **HIT t=274**；但 `exp==fresh`（真实双击没进树，见下） | 同上 |
+| F | Post 双击后，单发**真实鼠标单击**按钮中心 | 真实单击 ×1 | **HIT t=269**，`mid 0/670 → after 0/122` | 同上 |
+| G | Post 双击后，单发**同步** BM_CLICK | 同步 ×1 | **HIT t=284**，`sync=ok:100`（消息 100ms 内被窗口过程处理完） | 同上 |
+| H 对照 | 同 B 的合成输入，**完全不点** | 无 | **STABLE 8s**，`after == mid == 0/636` | 同上 |
+
+E 的口径限制：本机 `SetForegroundWindow` 没能把进程提到真前台时，`mouse_event` 的真实双击
+不落在树上（`exp` 与 `fresh` 一模一样），所以 E 只能当"真实输入之后的再一次点击仍 HIT"，
+不能当"真实双击确实展开了树"的证据；该证据由 B/C/D 的 Post 路径提供。
+
+**真 VB6 对照读数**（`.temp\vb6probe\Probe.exe`：Form1 "Probe"、Go 按钮 = `Caption="CLICKED"`、
+Dbl 按钮 = `Caption="DBLCLK"`，VB6 `/make` 产物；同一探针只点一次）
+
+```
+SC=A HIT t=169 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Go  act=ThunderRT6FormDC|Probe
+SC=B HIT t=155 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+SC=C HIT t=159 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+SC=D HIT t=161 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Go  act=ThunderRT6FormDC|Probe
+SC=E HIT t=171 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Go  act=ThunderRT6FormDC|Probe
+SC=F HIT t=515 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+SC=G HIT t=170 sync=ok:7 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+SC=H STABLE 8s cap='Probe' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+```
+
+**结论（明确口径）**
+
+1. **C3 不吞**：A/B/C/D/F/G **六个**场景（前序输入确已生效的）+ E（真实输入后的一次点击）里，
+   合成输入之后**唯一的那一次**点击都生效（HIT），包括把光标留在树区的 C 场景。H 对照组 8s 内
+   画面零变化（`after == mid`），证明 B/C 的 `636→122` 不能由"后台自己刷屏"解释，只能归因给那次点击。
+2. **捕获已释放**：所有 C3 读数 `cap=`（空），即点击发生前目标线程**没有鼠标捕获**；
+   `focus` 停在另一枚按钮、`act` 是主窗体。`uc_host_window.c:518-519` 的
+   `WM_LBUTTONDOWN→SetCapture` / `WM_LBUTTONUP→ReleaseCapture` 成对，双击序列的两次 UP
+   都把捕获放掉了 —— "捕获未释放"这一假设被实测否定。
+3. **消息确实进 WndProc**：G 场景单发同步 BM_CLICK，C3 `sync=ok:100`（VB6 `ok:7`），
+   且随后画面变成 `0/122`。不是"消息没进队列/窗口过程"，也不是"进了但事件没跑"。
+4. **真 VB6 同语义**：VB6 在 A..G 七个场景同样**全部 HIT**（`cap=` 空同样成立），H 稳定。
+   即"合成鼠标输入之后的第一次点击"在 Windows 上本来就该生效；没有任何 VB6 吞点击的行为可对照。
+5. 因此**结论 = 【重试是正当的】**：上一轮 CI 那次 XML 点击不落地，属**脚本时序/采集侧**
+   （同一提交的下一轮 `try=1` 一次点中即通过，§27.12 已记），不是 C3 消息处理的缺陷；
+   px 脚本的"最多 3 次 + 同步 BM_CLICK"是**对不可控桌面时序的容错**，不是掩盖产品缺陷。
+   判据阈值仍按原口径（`hl<=100`、`chk<=5`、`|rowsΔ|>=5`、`dark>=30`），未放宽、未删用例。
+
+**探针的局限（须记）**：本机 120dpi、有交互桌面；CI 是 96dpi，坐标/时序不可逐位复用，
+故本探针只在本机跑（未进 CI shard）。它回答的是"语义层"（C3 与 VB6 是否吞点击），
+不回答"CI 那台桌面在那一瞬的窗口是否被别的窗口抢焦点"——后者由 px 脚本的有界重试兜住。
+
