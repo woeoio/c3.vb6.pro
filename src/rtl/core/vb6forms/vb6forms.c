@@ -616,6 +616,14 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
     vb6_u8ToWideBuf(win32Class, wcls, 128);
     wchar_t* wname = vb6_u8ToWideDup(controlName);
 
+    /* 残差 #6(b): VB6 给每一枚子控件都立 WS_CLIPSIBLINGS（实测 TextBox
+       style=0x540108C1、VScrollBar style=0x54010001 都含 0x04000000）。缺这一位时
+       **下层**控件可以越过 z-order 画到上层兄弟的窗口区上：ucTreeView 的 Text1 与
+       VScroll1 设计期就重叠 33px（TextBox 91 宽、VScrollBar 贴在它右侧），Text1 的
+       白底于是把 z-order 更高的 VScrollBar 整块抹白（隐藏 Edit 后同一像素区立刻恢复
+       成 VB6 的 960×240 + 63×255）。 */
+    style |= WS_CLIPSIBLINGS;
+
     HWND hwnd = CreateWindowExW(
         (DWORD)exStyle,
         wcls,
@@ -735,6 +743,25 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
         if (_stricmp(win32Class, "STATIC") == 0
             && ((style & 0x0000000FL) == 0x0000000EL)) {  // SS_BITMAP
             vb6_InstallImageSubclass(hwnd);
+        }
+
+        /* 残差 #6: VB6 的 VScrollBar/HScrollBar 是自绘的 ThunderRT6*ScrollBar（240 底 +
+           左边 1px 白 + 中线 1px 白，实测 6 枚 33x31 全等）。原生 SCROLLBAR 在 33x31 时
+           连箭头都放不下（@120dpi 两根竖箭头要 2x21=42px > 31px）⇒ 只擦背景、
+           类背景刷 COLOR_SCROLLBAR 是纯白 ⇒ 整块 1023px 纯白。这里接管绘制。 */
+        if (_stricmp(win32Class, "SCROLLBAR") == 0) {
+            vb6_InstallScrollBarSubclass(hwnd);
+        }
+
+        /* 残差 #6 的真根因: VB6 的 .frm 里"先列出的控件在 z-order 最上"（实测 Picture3
+           下先列 VScroll1、再 Text1 ⇒ 运行时 VScrollBar 盖住 TextBox 右侧 33px）。
+           C3 以前直接 CreateWindowExW，每建一枚就插到兄弟 z-order 顶部 ⇒ 整个顺序
+           反过来：Text1 的白底把 VScroll1 整块盖掉（同一像素区把 Edit 隐藏后立刻
+           变成 VB6 的 960×240 + 63×255，可见控件本身画得对，是被盖住了）。
+           设计期逐枚灌入时把新控件落到兄弟 z-order 底部，等价于 VB6 的顺序。 */
+        if (vb6_Form_IsLoading(hwnd)) {
+            SetWindowPos((HWND)hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
 

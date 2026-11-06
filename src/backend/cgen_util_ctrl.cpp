@@ -1891,7 +1891,14 @@ long CCodeGen::controlContainerExStyleBit(const FrmControl& ctrl) const {
     //   手抄成了后者 ⇒ 那两轮的读数只证明"想发的数落到窗口上了"，证不了"那是管理器认的那一位"。
     //   通用式：**手抄常量一律去 SDK 头对值**（或直接引符号），证人行打印符号对应的值。
     constexpr long kWsExControlParent = 0x00010000L;  // WS_EX_CONTROLPARENT（winuser.h 实测值）
-    return controlIsContainerType(ctrl) ? kWsExControlParent : 0L;
+    // 残差 #5 的另一半：VB6 的 ThunderRT6TextBox 实测 ex=0x204（WS_EX_CLIENTEDGE | NOPARENTNOTIFY），
+    // 边框是**有 3D 内凹**的（左/上 236 亮边 + 下/右 131 暗边、客户区 87x29 比控件小 2px/边）；只去掉
+    // WS_BORDER 会连这条内凹一起丢掉，于是「深框没了、浅边也没了」。WS_EX_CLIENTEDGE=0x200（winuser.h）。
+    // NOPARENTNOTIFY 只影响父窗通知、与外形无关，这里不立（少一位就少一条看不见的副作用）。
+    constexpr long kWsExClientEdge = 0x00000200L;     // WS_EX_CLIENTEDGE（winuser.h）
+    if (controlIsContainerType(ctrl)) return kWsExControlParent;
+    if (ctrl.controlType == FrmControlType::TextBox) return kWsExClientEdge;
+    return 0L;
 }
 
 // 账 #157: 为什么这一份留在发码期算，声明处的注释有交代。这里只做**选择**，并把选中那枚的句柄
@@ -1971,7 +1978,9 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
             break;
         }
         case FrmControlType::TextBox: {
-            style |= kWsBorder | kEsAutoH;
+            // VB6 ThunderRT6TextBox: style 无 WS_BORDER、ex 有 WS_EX_CLIENTEDGE；
+            // 原生 EDIT 立 WS_BORDER 会被主题 EDIT 画成 1px `100,100,100` 深框 (见顶层同处)
+            style |= kEsAutoH;
             auto mlIt = ctrl.properties.find("MultiLine");
             if (mlIt != ctrl.properties.end() && mlIt->second.intValue != 0) style |= kEsMulti | kEsAutoV;
             auto sbIt = ctrl.properties.find("ScrollBars");
@@ -1985,6 +1994,14 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
             }
             break;
         }
+        case FrmControlType::VScrollBar: {
+            // SBS_VERT：缺这个方向位时 SCROLLBAR 默认走 SBS_HORZ(=0)，微调按钮区整块空白
+            // （实测 33x31 区 992/1023 纯白、无箭头）；VB6 VScrollBar 实测含此位。
+            style |= 0x0001L;
+            break;
+        }
+        case FrmControlType::HScrollBar:
+            break;  // SBS_HORZ = 0
         // C29-RT-a: 与顶层那条创建样式**同一口径**（容器子控件走的就是这条路，账 #83）。
         // 枚举按 VB6 文档：0 无 / 1 水平 / 2 垂直 / 3 两者 —— 与上面的 TextBox 那一格现在一致
         // （账 #108 之前 TextBox 把 1/2 用反了，两条控件同名不同向）。

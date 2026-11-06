@@ -50,7 +50,11 @@
                 }
                 break;
             case FrmControlType::TextBox:
-                style |= kWsBorder | kEsAutoH;
+                // VB6 的 TextBox 是 ThunderRT6TextBox（`GetWindowLong` 实测 style=0x540108C1
+                // 无 WS_BORDER、ex=0x204 有 WS_EX_CLIENTEDGE），边框由 VB 自己画成 1px 淡边；
+                // 以前这里给原生 EDIT 立 WS_BORDER ⇒ 主题 EDIT 自己画 1px `100,100,100`
+                // (COLOR_WINDOWFRAME) 深框，与 VB6 不符。这里只留 ES_*，不立 WS_BORDER。
+                style |= kEsAutoH;
                 // Bug3-Fix: 不在CreateControl中传初始文本，避免EN_CHANGE在句柄赋值前触发
                 // createCaption will be set to "" below; text set after hwnd assignment
                 {
@@ -71,6 +75,14 @@
                     }
                 }
                 break;
+            case FrmControlType::VScrollBar:
+                // SBS_VERT=0x0001: 以前两条创建路都没给 SCROLLBAR 立方向位 ⇒ 默认
+                // SBS_HORZ(=0)，微调按钮整块空白（33x31 区 992/1023 纯白、无箭头）。
+                // VB6 的 VScrollBar（ThunderRT6VScrollBar）实测 style=0x54010001 含此位。
+                style |= 0x0001L;
+                break;
+            case FrmControlType::HScrollBar:
+                break;  // SBS_HORZ = 0，无需额外位
             case FrmControlType::Label:
                 // VB6 Label 有 Click/MouseDown 事件且是 tooltip 目标, 必须 SS_NOTIFY,
                 // 否则 STATIC 对鼠标返回 HTTRANSPARENT, TTF_SUBCLASS 的 tooltip 永远不弹。

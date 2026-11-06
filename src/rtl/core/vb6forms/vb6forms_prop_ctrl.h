@@ -119,6 +119,9 @@ int vb6_GetLargeChange(void* hwnd);
 void vb6_SetLargeChange(void* hwnd, int change);
 int vb6_GetSmallChange(void* hwnd);
 void vb6_SetSmallChange(void* hwnd, int change);
+// 残差 #6: 给 SCROLLBAR 子类化，按 VB6 ThunderRT6*ScrollBar 的实测观感自绘
+//（240 底 + 左边 1px 白 + 中线 1px 白）。原生控件在 33x31 放不下两根箭头，一个像素都不画。
+void vb6_InstallScrollBarSubclass(void* hwnd);
 
 // P13.11b: ProgressBar properties (VB6 ProgressBar / msctls_progress32)
 // Min/Max/Value: VB6 默认 0 / 100 / 0

@@ -79,6 +79,16 @@ public class UP {
     }, IntPtr.Zero);
     return found;
   }
+  public static IntPtr[] FindByClass(IntPtr parent, string cls) {
+    var list = new System.Collections.Generic.List<IntPtr>();
+    EnumChildWindows(parent, (h, l) => {
+      if (!IsWindowVisible(h)) return true;
+      if (Cls(h) != cls) return true;
+      list.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return list.ToArray();
+  }
   public static IntPtr[] FindSwatches(IntPtr parent) {
     var list = new System.Collections.Generic.List<IntPtr>();
     EnumChildWindows(parent, (h, l) => {
@@ -256,6 +266,67 @@ $labMissing = @($labHwnds | Where-Object { $_ -eq [IntPtr]::Zero }).Count
 $chk240, $chkWhite = Measure-Hwnds $chkHwnds $bmp
 $labelRatio, $labelWhiteRatio = Measure-Hwnds $labHwnds $bmp
 
+# --- 残差 #5/#6: TextBox 深框 + VScrollBar 自绘 (必须在 $bmp.Dispose() 之前量) ---
+# 参考值来自真 VB6 运行产物 (同一 Form1.frm, 120dpi; 见 ai/C3_UCTREEVIEW_HANDOFF.md §22):
+#   TextBox(Edit) 91x33: 周圈 (100,100,100) 深框像素 = 0 (旧产物 244/枚 = 周长),
+#     顶行也没有深色像素 (旧产物 91/枚)。VB6 的 TextBox 自己画 1px 淡边 (236)。
+#   VScrollBar 33x31: 240,240,240 = 960 + 255,255,255 = 63 (6 枚全等); 左边 1 列白 +
+#     高/2 处 1 行白; **没有箭头/3D 边** —— VB6 这个尺寸下就不画箭头, 所以这里断言的是
+#     "240 底 + 左列白 + 中线白" 三条实测特征, 不是箭头。(改前 C3: 1023/1023 纯白)
+$editHwnds = [UP]::FindByClass($main, "Edit")
+$sbHwnds = [UP]::FindByClass($main, "ScrollBar")
+$edFrameDark = 0; $edTopDark = 0; $edEdge236 = 0; $edEdgeOk = 0
+foreach ($h in $editHwnds) {
+    $r = New-Object UP+RECT; [UP]::GetWindowRect($h, [ref]$r) | Out-Null
+    $ex0 = [Math]::Max(0, $r.L - $wr.L); $ex1 = [Math]::Min($ww, $r.R - $wr.L)
+    $ey0 = [Math]::Max(0, $r.T - $wr.T); $ey1 = [Math]::Min($wh, $r.B - $wr.T)
+    $this236 = 0
+    for ($yy = $ey0; $yy -lt $ey1; $yy++) {
+        for ($xx = $ex0; $xx -lt $ex1; $xx++) {
+            $c = $bmp.GetPixel($xx, $yy)
+            if ([Math]::Abs($c.R-100) -le 2 -and [Math]::Abs($c.G-100) -le 2 -and [Math]::Abs($c.B-100) -le 2) { $edFrameDark++ }
+            # VB6 ThunderRT6TextBox (ex=0x204=WS_EX_CLIENTEDGE) 的 3D 内凹: 上/左 1px 236 + 内 1px 254,
+            # 下/右 1px 131; 客户区比控件每边小 2px. 这条 236 亮边是"深框已去掉"的正面证据。
+            if ([Math]::Abs($c.R-236) -le 2 -and [Math]::Abs($c.G-236) -le 2 -and [Math]::Abs($c.B-236) -le 2) { $edEdge236++; $this236++ }
+            if ($yy -eq $ey0) {
+                $lum = 0.299*$c.R + 0.587*$c.G + 0.114*$c.B
+                if ($lum -lt 200) { $edTopDark++ }
+            }
+        }
+    }
+    if ($this236 -ge 60) { $edEdgeOk++ }   # 单枚 91x33 实测 ~244px (周长), 阈值取 1/4
+}
+$sbArea = 0; $sb240 = 0; $sbWhite = 0; $sbCount = 0; $sbMidOk = 0; $sbLeftOk = 0
+foreach ($h in $sbHwnds) {
+    $r = New-Object UP+RECT; [UP]::GetWindowRect($h, [ref]$r) | Out-Null
+    $sx0 = [Math]::Max(0, $r.L - $wr.L); $sx1 = [Math]::Min($ww, $r.R - $wr.L)
+    $sy0 = [Math]::Max(0, $r.T - $wr.T); $sy1 = [Math]::Min($wh, $r.B - $wr.T)
+    $sw = $sx1 - $sx0; $sh = $sy1 - $sy0
+    if ($sw -le 0 -or $sh -le 0) { continue }
+    $sbCount++
+    # 不写死"第 15 行": GetWindowRect 与桌面像素偶尔差 1px, 所以判"存在一整行白 +
+    # 存在一整列白" (VB6 实测就是 1 行 + 1 列, 共 63px)。
+    $rowWhite = New-Object int[] $sh
+    $colWhite = New-Object int[] $sw
+    for ($yy = $sy0; $yy -lt $sy1; $yy++) {
+        for ($xx = $sx0; $xx -lt $sx1; $xx++) {
+            $c = $bmp.GetPixel($xx, $yy); $sbArea++
+            if ([Math]::Abs($c.R-240) -le 1 -and [Math]::Abs($c.G-240) -le 1 -and [Math]::Abs($c.B-240) -le 1) { $sb240++ }
+            if ($c.R -eq 255 -and $c.G -eq 255 -and $c.B -eq 255) {
+                $sbWhite++
+                $rowWhite[$yy - $sy0]++
+                $colWhite[$xx - $sx0]++
+            }
+        }
+    }
+    $hasRow = $false; foreach ($n in $rowWhite) { if ($n -ge [Math]::Ceiling($sw * 0.9)) { $hasRow = $true } }
+    $hasCol = $false; foreach ($n in $colWhite) { if ($n -ge [Math]::Ceiling($sh * 0.9)) { $hasCol = $true } }
+    if ($hasRow) { $sbMidOk++ }
+    if ($hasCol) { $sbLeftOk++ }
+}
+$sbR240 = 0; $sbRWhite = 0
+if ($sbArea -gt 0) { $sbR240 = $sb240 / $sbArea; $sbRWhite = $sbWhite / $sbArea }
+
 # --- 树区 (UC 宿主客户区, 坐标相对整幅窗体) ---
 $x0 = [Math]::Max(0, $ur.L - $wr.L); $y0 = [Math]::Max(0, $ur.T - $wr.T)
 $tw = [Math]::Min($ur.R - $ur.L, $ww - $x0); $th = [Math]::Min($ur.B - $ur.T, $wh - $y0)
@@ -369,6 +440,19 @@ if ($chk240 -lt 0.60) { $bad += "CheckBox 区 240 占比 $([Math]::Round(100*$ch
 if ($chkWhite -gt 0.05) { $bad += "CheckBox 区纯白占比 $([Math]::Round(100*$chkWhite,1))% > 5%" }
 if ($labelRatio -lt 0.80) { $bad += "Label 区 240 占比 $([Math]::Round(100*$labelRatio,1))% < 80%" }
 if ($labelWhiteRatio -gt 0.02) { $bad += "Label 区纯白占比 $([Math]::Round(100*$labelWhiteRatio,1))% > 2%" }
+# 残差 #5: TextBox 周圈不能有 (100,100,100) 深框 (VB6 自己画 1px 淡边 236)
+if ($editHwnds.Length -lt 6) { $bad += "TextBox 定位失败 $($editHwnds.Length)/6" }
+if ($edFrameDark -gt 0) { $bad += "TextBox 深灰边框(100,100,100) ${edFrameDark}px > 0" }
+if ($edTopDark -gt 0) { $bad += "TextBox 顶行深色 ${edTopDark}px > 0" }
+# 另一面: 深框去掉之后必须**还留着** WS_EX_CLIENTEDGE 的 3D 内凹 (上/左 236 亮边),
+# 否则"没深框"是靠"连边一起没有"换来的 —— 那是把 VB6 的 2px 内凹一起丢了。
+if ($edEdgeOk -lt $editHwnds.Length) { $bad += "TextBox 236 亮边缺失 ($edEdgeOk/$($editHwnds.Length) 枚, 共 ${edEdge236}px)" }
+# 残差 #6: VScrollBar 必须是 VB6 的 240 底 + 左列白 + 中线白 (不是 1023px 纯白)
+if ($sbHwnds.Length -lt 6) { $bad += "VScrollBar 定位失败 $($sbHwnds.Length)/6" }
+if ($sbR240 -lt 0.85) { $bad += "VScrollBar 240 占比 $([Math]::Round(100*$sbR240,1))% < 85%" }
+if ($sbRWhite -lt 0.03 -or $sbRWhite -gt 0.10) { $bad += "VScrollBar 纯白占比 $([Math]::Round(100*$sbRWhite,1))% 不在 3%~10%" }
+if ($sbMidOk -lt $sbCount) { $bad += "VScrollBar 中线白线缺失 ($sbMidOk/$sbCount)" }
+if ($sbLeftOk -lt $sbCount) { $bad += "VScrollBar 左边白线缺失 ($sbLeftOk/$sbCount)" }
 # 残差 #3: 选中行文字色/白底 —— VB6 是白字透明底, C3 改前是黑字 + Opaque 白底块
 if ($hlH -le 0) { $bad += "选中高亮未找到" }
 else {
@@ -387,6 +471,7 @@ else {
 $readout = "tree=${tw}x${th} white=$white bg240=$bg240 dark=$dark darkRows=$darkRows hl=$hl vivid=$vivid"
 $readout += " selWhite=$selWhite selDark=$selDark selBlack=$selBlack hlH=${hlH}@${expHl} pitch=${pitch}@${expPitch} dpi=$expDpi"
 $readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
+$readout += " edFrameDark=$edFrameDark edTopDark=$edTopDark edEdge236=$edEdge236/$($editHwnds.Length) sb240=$([Math]::Round(100*$sbR240,1))% sbWhite=$([Math]::Round(100*$sbRWhite,1))% sbMid=$sbMidOk/$sbCount sbLeft=$sbLeftOk/$sbCount"
 if ($bad.Count -gt 0) {
     Write-Output ("FAIL " + ($bad -join "; ") + " | " + $readout + " | png=$pngPath")
     try { $p.Kill() } catch {}

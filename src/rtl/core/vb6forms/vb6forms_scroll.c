@@ -19,6 +19,86 @@
 #include <olectl.h>   /* IPicture, OleLoadPicture, OLE_HANDLE */
 
 // ============================================================
+// 残差 #6: VScrollBar/HScrollBar 按 VB6 观感自绘
+// ============================================================
+// VB6 的 VScrollBar 不是原生 SCROLLBAR，而是 ThunderRT6VScrollBar（VB 自绘）。实测
+// (.temp/sb_all.ps1：真 VB6 运行起来后对 6 枚 33x31 控件逐个 PrintWindow)：
+//   240,240,240 = 960 / 255,255,255 = 63 / whiteRows=[15]（6 枚全等，且与 Value 无关）
+//   ⇒ 240(COLOR_BTNFACE) 底 + 左边 1px 白 + 高/2 处一整行白线。
+// C3 这边的原生 SCROLLBAR 在 33x31 时**一个像素都不画**：@120dpi 系统箭头高
+// SM_CYVSCROLL=21，竖排两根箭头要 42px > 31px ⇒ 系统认为放不下按钮，只走
+// WM_ERASEBKGND，用类背景刷（COLOR_SCROLLBAR=纯白）铺满 ⇒ 33x31 区 1023/1023 纯白、
+// 无箭头、无 3D 边。同一枚控件拉到 33x200 能正常画出箭头/槽、拉到 100x31 也正常
+// （.temp/sb_size.ps1 对照），所以根因是"尺寸不足 + 类背景刷是白"，不是 z-order/
+// Enable/Value/range（range 改成 0..100/page10 也照样纯白，.temp/sb_range.ps1）。
+// 处理：创建后子类化，按上面的实测观感自绘（不改尺寸、不改事件通道）。
+
+static void vb6_ScrollBarPaintTo(HDC dc, HWND hwnd) {
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    HBRUSH bg = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+    FillRect(dc, &rc, bg);
+    DeleteObject(bg);
+    HBRUSH wh = (HBRUSH)GetStockObject(WHITE_BRUSH);
+    if (GetWindowLongW(hwnd, GWL_STYLE) & SBS_VERT) {
+        RECT left  = { rc.left, rc.top, rc.left + 1, rc.bottom };      /* 左边 1px 白 */
+        int  mid   = rc.top + (rc.bottom - rc.top) / 2;
+        RECT wline = { rc.left + 1, mid, rc.right, mid + 1 };           /* 中线 1px 白 */
+        FillRect(dc, &left, wh);
+        FillRect(dc, &wline, wh);
+    } else {
+        /* 横向没有真 VB6 样本，按竖向那枚的镜像落笔（上边 1px + 宽/2 处 1px） */
+        RECT top   = { rc.left, rc.top, rc.right, rc.top + 1 };
+        int  mid   = rc.left + (rc.right - rc.left) / 2;
+        RECT wline = { mid, rc.top + 1, mid + 1, rc.bottom };
+        FillRect(dc, &top, wh);
+        FillRect(dc, &wline, wh);
+    }
+}
+
+static LRESULT CALLBACK vb6_ScrollBarSubclassProc(HWND hwnd, UINT msg,
+                                                 WPARAM wp, LPARAM lp) {
+    WNDPROC orig = (WNDPROC)GetPropW(hwnd, L"VB6_SBar_OrigProc");
+    switch (msg) {
+    case WM_ERASEBKGND: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH bg = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+        FillRect((HDC)wp, &rc, bg);
+        DeleteObject(bg);
+        return 1;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hwnd, &ps);
+        vb6_ScrollBarPaintTo(dc, hwnd);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_PRINTCLIENT:
+        vb6_ScrollBarPaintTo((HDC)wp, hwnd);
+        return 0;
+    case WM_PRINT:
+        if (lp & PRF_CLIENT) vb6_ScrollBarPaintTo((HDC)wp, hwnd);
+        return 0;
+    default:
+        break;
+    }
+    return orig ? CallWindowProcW(orig, hwnd, msg, wp, lp)
+                : DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void vb6_InstallScrollBarSubclass(void* hwnd) {
+    if (!hwnd) return;
+    HWND hw = (HWND)hwnd;
+    if (GetPropW(hw, L"VB6_SBar_OrigProc")) return;
+    WNDPROC orig = (WNDPROC)SetWindowLongPtrW(hw, GWLP_WNDPROC,
+                                              (LONG_PTR)vb6_ScrollBarSubclassProc);
+    if (orig) SetPropW(hw, L"VB6_SBar_OrigProc", (HANDLE)orig);
+    InvalidateRect(hw, NULL, TRUE);
+}
+
+// ============================================================
 // P13.11: ScrollBar properties (HScrollBar/VScrollBar)
 // ============================================================
 
