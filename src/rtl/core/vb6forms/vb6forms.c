@@ -624,6 +624,21 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
        成 VB6 的 960×240 + 63×255）。 */
     style |= WS_CLIPSIBLINGS;
 
+    /* 残差 #7: VB6 的 ThunderRT6CommandButton 实测 style=0x54012000 —— 含
+       **BS_MULTILINE(0x2000)**; C3 原生 BUTTON 此前是 0x54014000 (只有 BS_NOTIFY),
+       缺这一位时系统把 caption 强制单行绘制 (ucTreeView 底部三枚长标题因此单行,
+       bottomBar 区 diff 19.70%)。实测把 0x2000 现场补到已有按钮上并重绘, 系统
+       立刻按**空格 word-wrap**、竖直居中 —— 断行结果与 VB6 逐枚一致
+       (Tree Explorer / Corporate Hierarchy / Drag and Drop 两行, Menu / Tools /
+       Contact  List 单行), 所以**不需要自绘 caption**。
+       只补 push 型 (BS_TYPEMASK 0x0F = BS_PUSHBUTTON 0 / BS_DEFPUSHBUTTON 1):
+       check/radio/group 的 0x2000 是另一层语义 (文字/图标换行), 不在这里动。 */
+    if (_stricmp(win32Class, "BUTTON") == 0) {
+        DWORD btnType = (DWORD)style & 0x0000000FL;
+        if (btnType == BS_PUSHBUTTON || btnType == BS_DEFPUSHBUTTON)
+            style |= 0x00002000L;   /* BS_MULTILINE (winuser.h) */
+    }
+
     HWND hwnd = CreateWindowExW(
         (DWORD)exStyle,
         wcls,

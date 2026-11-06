@@ -38,6 +38,7 @@ public class UP {
   [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr h, IntPtr r, IntPtr rgn, int flags);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern int GetWindowLongW(IntPtr h, int idx);
   public struct RECT { public int L, T, R, B; }
   public static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, 256); return sb.ToString(); }
   // 枚举放 C# 侧: PS 5.1 的 scriptblock 委托回调查不到调用方 pid (会误报"主窗未找到")
@@ -327,6 +328,65 @@ foreach ($h in $sbHwnds) {
 $sbR240 = 0; $sbRWhite = 0
 if ($sbArea -gt 0) { $sbR240 = $sb240 / $sbArea; $sbRWhite = $sbWhite / $sbArea }
 
+# --- 残差 #7: 底部 5 枚 push 按钮的 caption 多行 (BS_MULTILINE + 系统按空格 word-wrap) ---
+# 真 VB6 的 ThunderRT6CommandButton 实测 style=0x54012000 (含 BS_MULTILINE 0x2000),
+# 按**空格** word-wrap、行距 = TextHeight、整块竖直居中; C3 是原生 BUTTON, 缺这一位
+# 时系统强制单行 (改前: 前三条 80x13/78x13/80x13 单行墨迹)。补上之后断行位置与 VB6
+# 逐枚一致: "Tree Explorer" / "Corporate Hierarchy" / "Drag and Drop" 两行,
+# "Menu / Tools" / "Contact  List" 单行 (参考墨迹 50x34 / 57x34 / 52x34 @y558-591)。
+# 两行墨迹高度下限按 dpi 折算 = 26px@120dpi: 参考 VB6 = 34px, C3 字体档两行实测 29px,
+# 单行最多 ~13px ⇒ 26 这条线既能抓住"退回单行", 又不会把字体档差异判红。
+$btnDpi = [UP]::GetDpiForWindow($main)
+if ($btnDpi -lt 96) { $btnDpi = 96 }
+$expTwoLine = [int][Math]::Round(26 * $btnDpi / 120)
+$btnExpect = @(
+    @("Tree Explorer", 2),
+    @("Corporate Hierarchy", 2),
+    @("Drag and Drop", 2),
+    @("Menu / Tools", 1),
+    @("Contact  List", 1)
+)
+$btnMissing = 0; $btnBad = @(); $btnRead = @()
+foreach ($be in $btnExpect) {
+    $cap = [string]$be[0]; $wantLines = [int]$be[1]
+    $bhw = [UP]::FindChildByText($main, $cap)
+    if ($bhw -eq [IntPtr]::Zero) { $btnMissing++; continue }
+    $br = New-Object UP+RECT; [UP]::GetWindowRect($bhw, [ref]$br) | Out-Null
+    $bx0 = [Math]::Max(0, $br.L - $wr.L); $by0 = [Math]::Max(0, $br.T - $wr.T)
+    $bx1 = [Math]::Min($ww, $br.R - $wr.L); $by1 = [Math]::Min($wh, $br.B - $wr.T)
+    $bw = $bx1 - $bx0; $bht = $by1 - $by0
+    if ($bw -le 0 -or $bht -le 0) { $btnMissing++; continue }
+    $brows = New-Object int[] $bht
+    $bMinY = 99999; $bMaxY = -1
+    for ($yy = 0; $yy -lt $bht; $yy++) {
+        for ($xx = 0; $xx -lt $bw; $xx++) {
+            $c = $bmp.GetPixel($bx0 + $xx, $by0 + $yy)
+            $lum = 0.299*$c.R + 0.587*$c.G + 0.114*$c.B
+            if ($lum -lt 110) {
+                $brows[$yy]++
+                if ($yy -lt $bMinY) { $bMinY = $yy }
+                if ($yy -gt $bMaxY) { $bMaxY = $yy }
+            }
+        }
+    }
+    $bands = 0; $on = $false
+    for ($yy = 0; $yy -lt $bht; $yy++) {
+        $cur = $brows[$yy] -gt 0
+        if ($cur -and -not $on) { $bands++; $on = $true }
+        elseif (-not $cur -and $on) { $on = $false }
+    }
+    $inkH = 0
+    if ($bMaxY -ge 0) { $inkH = $bMaxY - $bMinY + 1 }
+    $st = [UP]::GetWindowLongW($bhw, -16)
+    if (($st -band 0x2000) -eq 0) { $btnBad += "'$cap' 缺 BS_MULTILINE (style=0x$('{0:X8}' -f $st))" }
+    if ($bands -ne $wantLines) { $btnBad += "'$cap' 行数 $bands != $wantLines" }
+    if ($wantLines -eq 2 -and $inkH -lt $expTwoLine) {
+        $btnBad += "'$cap' 墨迹高 ${inkH}px < 两行下限 ${expTwoLine}px"
+    }
+    $btnRead += ("$cap=${bands}L/${inkH}px")
+}
+if ($btnMissing -gt 0) { $btnBad += "底部 push 按钮定位失败 $btnMissing/5" }
+
 # --- 树区 (UC 宿主客户区, 坐标相对整幅窗体) ---
 $x0 = [Math]::Max(0, $ur.L - $wr.L); $y0 = [Math]::Max(0, $ur.T - $wr.T)
 $tw = [Math]::Min($ur.R - $ur.L, $ww - $x0); $th = [Math]::Min($ur.B - $ur.T, $wh - $y0)
@@ -344,6 +404,43 @@ $buf = New-Object byte[] $len
 [System.Runtime.InteropServices.Marshal]::Copy($ptr, $buf, 0, $len)
 $bmp.UnlockBits($bd)
 $bmp.Dispose()
+
+# --- 残差 #7 的分区 diff 读数/上限: bottomBar 对**真 VB6 实拍**的同口径 diff ---
+# CI 桌面没有真 VB6 参考图 ⇒ 这条在 CI 是 SKIP; 本机跑:
+#   $env:UCTV_VB6_REF = <VB6 实拍 png (同尺寸)>
+# 口径与收口用的 diffreg 一致: |ΔR|+|ΔG|+|ΔB| >= 6 记 1px。
+# 改后整区实测 18.92% (改前 19.70%); 客户区行 540..613 口径改前 9.93% → 改后 9.06%
+# (5 枚按钮内含边框整块 15.34% → 14.01%)。
+$refPng = $env:UCTV_VB6_REF
+$refDiff = "SKIP(无参考图)"
+$refBad = @()
+if ($refPng -and (Test-Path $refPng)) {
+    $rb = $null; $cb2 = $null
+    try { $rb = [System.Drawing.Bitmap]::FromFile((Resolve-Path $refPng).Path) } catch { $rb = $null }
+    try { $cb2 = [System.Drawing.Bitmap]::FromFile($pngPath) } catch { $cb2 = $null }
+    if ($rb -eq $null -or $cb2 -eq $null) {
+        $refDiff = "SKIP(读不出)"
+    } elseif ($rb.Width -ne $ww -or $rb.Height -ne $wh) {
+        $refDiff = "SKIP(参考尺寸 $($rb.Width)x$($rb.Height) != ${ww}x${wh})"
+    } else {
+        $rd = 0L; $rn = 0L
+        for ($yy = 540; $yy -lt [Math]::Min($wh, 623); $yy++) {
+            for ($xx = 252; $xx -lt [Math]::Min($ww, 710); $xx++) {
+                $ca = $rb.GetPixel($xx, $yy); $cb3 = $cb2.GetPixel($xx, $yy); $rn++
+                $d = [Math]::Abs($ca.R-$cb3.R) + [Math]::Abs($ca.G-$cb3.G) + [Math]::Abs($ca.B-$cb3.B)
+                if ($d -ge 6) { $rd++ }
+            }
+        }
+        $refPct = 100.0 * $rd / [Math]::Max(1, $rn)
+        $refDiff = ("{0:F2}%" -f $refPct)
+        # 上限 20%: 改后实测 18.92% (改前 19.70%), 其中 ~11pp 是窗口底部非客户区
+        # 在两次抓屏里的桌面渗入差 —— 不是按钮 caption; caption 侧剩余差 = 字体档
+        # (VB6 继承窗体 ambient Arial Narrow 9.75pt/tmH20 vs C3 默认 MS Sans Serif/tmH16)。
+        if ($refPct -gt 20.0) { $refBad += ("bottomBar diff {0:F2}% > 20.0%" -f $refPct) }
+    }
+    if ($rb -ne $null) { $rb.Dispose() }
+    if ($cb2 -ne $null) { $cb2.Dispose() }
+}
 
 $area = $tw * $th
 $white = 0; $bg240 = 0; $dark = 0; $hl = 0; $vivid = 0
@@ -453,6 +550,9 @@ if ($sbR240 -lt 0.85) { $bad += "VScrollBar 240 占比 $([Math]::Round(100*$sbR2
 if ($sbRWhite -lt 0.03 -or $sbRWhite -gt 0.10) { $bad += "VScrollBar 纯白占比 $([Math]::Round(100*$sbRWhite,1))% 不在 3%~10%" }
 if ($sbMidOk -lt $sbCount) { $bad += "VScrollBar 中线白线缺失 ($sbMidOk/$sbCount)" }
 if ($sbLeftOk -lt $sbCount) { $bad += "VScrollBar 左边白线缺失 ($sbLeftOk/$sbCount)" }
+# 残差 #7: 底部 5 枚 push 按钮 —— BS_MULTILINE 在位 + 行数与参考一致 + 两行墨迹高度下限
+if ($btnBad.Count -gt 0) { $bad += ("底部按钮: " + ($btnBad -join "; ")) }
+if ($refBad.Count -gt 0) { $bad += ($refBad -join "; ") }
 # 残差 #3: 选中行文字色/白底 —— VB6 是白字透明底, C3 改前是黑字 + Opaque 白底块
 if ($hlH -le 0) { $bad += "选中高亮未找到" }
 else {
@@ -472,6 +572,7 @@ $readout = "tree=${tw}x${th} white=$white bg240=$bg240 dark=$dark darkRows=$dark
 $readout += " selWhite=$selWhite selDark=$selDark selBlack=$selBlack hlH=${hlH}@${expHl} pitch=${pitch}@${expPitch} dpi=$expDpi"
 $readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
 $readout += " edFrameDark=$edFrameDark edTopDark=$edTopDark edEdge236=$edEdge236/$($editHwnds.Length) sb240=$([Math]::Round(100*$sbR240,1))% sbWhite=$([Math]::Round(100*$sbRWhite,1))% sbMid=$sbMidOk/$sbCount sbLeft=$sbLeftOk/$sbCount"
+$readout += " btns=[" + ($btnRead -join " | ") + "] twoLine=$expTwoLine bottomBarRefDiff=$refDiff"
 if ($bad.Count -gt 0) {
     Write-Output ("FAIL " + ($bad -join "; ") + " | " + $readout + " | png=$pngPath")
     try { $p.Kill() } catch {}
