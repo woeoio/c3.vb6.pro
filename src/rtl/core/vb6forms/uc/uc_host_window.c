@@ -47,10 +47,22 @@ static void vb6_uc_fillAmbient(HDC dc, int32_t w, int32_t h) {
    后者要 SendMessage(WM_GETFONT), 而本站是从 vb6_uc_push/paint 里进来的 —— 实发过一发,
    进程当场 0xC0000409 (fastfail)。那两格答案本来就同源 (宿主窗口的 WM_GETFONT 只答这一格)。
    没交字体 (答空) 时不动 DC, 老行为不变。 */
+static HFONT vb6_uc_fontHFontFor(const void* fontPtr, int16_t bold, int16_t underline);
+
+static COLORREF vb6_uc_resolve_color(int32_t ole) {
+    return (((uint32_t)ole & 0x80000000u) != 0) ? GetSysColor(ole & 0xFF) : (COLORREF)ole;
+}
+
+/* UC 自己的字体 (UserControl.Font, 已经 SetFont 同步到 r->font) 优先;
+   没有记录时才退回宿主窗口存的那枚 (ambient)。 */
 static void vb6_uc_selectOwnFont(HDC dc, HWND hwnd) {
-    HFONT hf;
+    HFONT hf = NULL;
     if (!dc || !hwnd) return;
-    hf = vb6_ControlFontStored(hwnd);   /* 只读那一格存储: 宿主窗口 WM_GETFONT 本就走这一格, 不进消息面 */
+    if (vb6_ucCurrent && vb6_ucCurrent->font) {
+        hf = vb6_uc_fontHFontFor(vb6_ucCurrent->font, vb6_UserControl_FontBold,
+                                 vb6_UserControl_FontUnderline);
+    }
+    if (!hf) hf = vb6_ControlFontStored(hwnd);   /* 只读那一格存储: 宿主窗口 WM_GETFONT 本就走这一格, 不进消息面 */
     if (hf) SelectObject(dc, hf);
 }
 
@@ -104,19 +116,20 @@ static HFONT vb6_uc_fontHFontFor(const void* fontPtr, int16_t bold, int16_t unde
     }
 }
 
-/* 把当前 UserControl.Font + 两个标志选进活动 paint DC (没有 paint 上下文则不动)。 */
+/* 把当前 UserControl.Font + 两个标志选进**当前**绘图 DC:
+   WM_PAINT 里是 r->hdc; 事件/度量里是 AutoRedraw 持久表面 (UserControl.hDC 就是它)。
+   两处都必须落到, 否则 `Set UserControl.Font` 只在 paint 里生效 —— 而 ucTreeView
+   的 Draw/度量全发生在事件里, 于是主文本/子文本一直用 ambient 字体。 */
 static void vb6_uc_applyFontNow(void) {
     HFONT hf;
     HDC dc;
-    if (!vb6_ucCurrent || !vb6_ucCurrent->hdc) return;
-    if (vb6_UserControl_Font != vb6_ucCurrent->font) {
-        /* `Set UserControl.Font` 换成本实例的另一枚字体对象时, 同步进记录,
-           下一次 push 才不会把它退回 ambient 字体。 */
+    if (!vb6_ucCurrent) return;
+    /* Font 属性是持久的: 事件外赋值也要写回实例记录, 下一次 push 才不会被退回 ambient。 */
+    if (vb6_UserControl_Font != vb6_ucCurrent->font)
         vb6_ucCurrent->font = (vb6_ComIface_Font*)vb6_UserControl_Font;
-    }
+    dc = vb6_ucCurrent->hdc ? vb6_ucCurrent->hdc : vb6_ucCurrent->adSurf.memDC;
     hf = vb6_uc_fontHFontFor(vb6_UserControl_Font, vb6_UserControl_FontBold,
                              vb6_UserControl_FontUnderline);
-    dc = vb6_ucCurrent->hdc;
     if (hf && dc) SelectObject(dc, hf);
 }
 
@@ -163,7 +176,15 @@ static void vb6_uc_adEnsure(vb6_UCRec* r) {
     if (r->adSurf.memDC && r->adSurf.w == w && r->adSurf.h == h) return;
     vb6_uc_dibDestroy(&r->adSurf);
     vb6_uc_dibCreate(&r->adSurf, NULL, w, h);
-    if (r->adSurf.memDC) vb6_uc_fillAmbient(r->adSurf.memDC, w, h);
+    if (r->adSurf.memDC) {
+        vb6_uc_fillAmbient(r->adSurf.memDC, w, h);
+        /* VB6 的 hDC 默认 TRANSPARENT (GDI 新 DC 的默认是 OPAQUE + 白底), 且文本色
+           跟着 UserControl.ForeColor。AutoRedraw 的绘制全发生在这张持久表面上,
+           少这一步就会把每个字画成白底方块。 */
+        SetBkMode(r->adSurf.memDC, TRANSPARENT);
+        SetTextColor(r->adSurf.memDC, vb6_uc_resolve_color(vb6_UserControl_ForeColor));
+        vb6_uc_selectOwnFont(r->adSurf.memDC, r->hwnd);
+    }
     if (getenv("C3_AD_TRACE")) {
         fprintf(stderr, "[AD-ensure] type=%s w=%d h=%d\n",
                 r->desc ? r->desc->typeName : "?", (int)w, (int)h);
@@ -200,10 +221,10 @@ static HDC vb6_uc_activePaintDC = NULL;
    (见 cgen_assign_host_pseudo.inc), 不再只写全局变量。 */
 void vb6_UC_SetForeColor(int32_t ole) {
     vb6_UserControl_ForeColor = ole;
-    if (vb6_uc_activePaintDC) {
-        COLORREF cr = (((uint32_t)ole & 0x80000000u) != 0) ? GetSysColor(ole & 0xFF) : (COLORREF)ole;
-        SetTextColor(vb6_uc_activePaintDC, cr);
-    }
+    /* 目标 DC 不止 paint 那一档: ucTreeView 的 Draw 发生在事件里, 画在 AutoRedraw
+       持久表面 (UserControl.hDC) 上, 那才是此刻要改色的 DC。 */
+    HDC dc = vb6_uc_activePaintDC ? vb6_uc_activePaintDC : (HDC)vb6_UserControl_hDC;
+    if (dc) SetTextColor(dc, vb6_uc_resolve_color(ole));
 }
 
 /* ---------------------------------------------------------------------------

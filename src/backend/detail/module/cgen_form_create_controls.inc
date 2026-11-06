@@ -632,6 +632,29 @@
                                 }
                             }
                         }
+                        // 设计期字体块 (`BeginProperty Font` / `SubTextFont` /
+                        // `Caption1_Font` ...) 也必须进 bag: .ctl 的 ReadProperties 用
+                        //   Set m_Font       = .ReadProperty("Font", Ambient.Font)
+                        //   Set m_SubTextFont = .ReadProperty("SubTextFont", Ambient.Font)
+                        // 读回它们。bag 里缺这一项 ⇒ ReadProperty 交回默认值 Ambient.Font,
+                        // 把上面 prop_let 回放过的 9pt SubTextFont 覆盖成 8.25, 且 m_Font 与
+                        // m_SubTextFont 变成**同一枚**对象 (ucTreeView 行高因此少算子文本字号)。
+                        for (const auto& blk : ctrl.propertyBlocks) {
+                            std::string bnLow = Symbol::toLower(blk.blockName);
+                            bool fontBlk = (bnLow == "font")
+                                || (bnLow.size() >= 4
+                                    && bnLow.compare(bnLow.size() - 4, 4, "font") == 0);
+                            if (!fontBlk) continue;
+                            if (!ucRpCodeLower.empty()
+                                && ucRpCodeLower.find(".readproperty(\"" + bnLow + "\"")
+                                       == std::string::npos) {
+                                continue;   /* ReadProperties 不读它 ⇒ 不塞, 保持面不变 */
+                            }
+                            emitFrmFontObj(blk, "_vb6_f120");
+                            c_.emitLine("    vb6_UC_BagPutFont(_bag, L\""
+                                      + escapeWideCString(blk.blockName) + "\", (void*)_vb6_f120);");
+                            c_.emitLine("  } }");
+                        }
                         c_.emitLine("vb6_" + cIdent(ctlClass) + "_UC_ReadProps((vb6_cls_" + cIdent(ctlClass)
                                   + "*)vb6_UC_InstanceOf(" + hwndExpr + "), &_bag);");
                         c_.emitLine("vb6_UC_PropBagFree(_bag); }");

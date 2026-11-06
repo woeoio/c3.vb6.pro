@@ -37,6 +37,7 @@ public class UP {
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, int flags);
   [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr h, IntPtr r, IntPtr rgn, int flags);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
   public struct RECT { public int L, T, R, B; }
   public static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, 256); return sb.ToString(); }
   // 枚举放 C# 侧: PS 5.1 的 scriptblock 委托回调查不到调用方 pid (会误报"主窗未找到")
@@ -293,6 +294,68 @@ for ($y = 0; $y -lt $th; $y++) {
 $darkRows = 0
 for ($y = 0; $y -lt $th; $y++) { if ($rowsArr[$y] -ge 3) { $darkRows++ } }
 
+# --- 残差 #3/#4: 选中行文字色/白底 + 高亮高度/行距 (对照 VB6 参考) ---
+# 参考 (VB6 真机 125% DPI, 同一 Form1.frm):
+#   高亮 205x41, 行距 47/44; 选中行文字=白 (纯黑 ~10 / dark ~21 只在图标边缘);
+#   粉底上的纯白只在文字笔画上 (~258px), SubText 204 灰; 无 Opaque 文字底块。
+# 改前 C3 (2026-11-06, 选中粉底 206x35): inner white=968..1410 (白底块),
+#   pureblack=224 / dark=240 (黑字), 行距 38/38.
+# 改后 (字体块进 bag + applyFontNow/SetForeColor 落 AutoRedraw DC):
+#   inner white=355 (只剩白字笔画+复选框), pureblack=12 / dark=28, 高亮 206x39, 行距 42.
+# 高亮 bbox 用**精确**粉 (255,180,180 = SelectionColor #FFB4B4): 带容差会把圆角
+# 阴影 (255,217,217) 也算进来, bbox 下沿会压到下一行文字 ⇒ selDark 假高。
+$hlMinX = 99999; $hlMinY = 99999; $hlMaxX = -1; $hlMaxY = -1
+for ($y = 0; $y -lt $th; $y++) {
+    $off = $y * [Math]::Abs($stride)
+    for ($x = 0; $x -lt $tw; $x++) {
+        $i = $off + $x * 4
+        $b = $buf[$i]; $gg = $buf[$i+1]; $r = $buf[$i+2]
+        if ($r -eq 255 -and $gg -eq 180 -and $b -eq 180) {
+            if ($x -lt $hlMinX) { $hlMinX = $x }
+            if ($x -gt $hlMaxX) { $hlMaxX = $x }
+            if ($y -lt $hlMinY) { $hlMinY = $y }
+            if ($y -gt $hlMaxY) { $hlMaxY = $y }
+        }
+    }
+}
+$selWhite = 0; $selDark = 0; $selBlack = 0
+$hlH = 0
+if ($hlMaxX -gt $hlMinX -and $hlMaxY -gt $hlMinY) {
+    $hlH = $hlMaxY - $hlMinY + 1
+    for ($y = $hlMinY + 2; $y -le $hlMaxY - 2; $y++) {
+        $off = $y * [Math]::Abs($stride)
+        for ($x = $hlMinX + 2; $x -le $hlMaxX - 2; $x++) {
+            $i = $off + $x * 4
+            $b = $buf[$i]; $gg = $buf[$i+1]; $r = $buf[$i+2]
+            if ($r -eq 255 -and $gg -eq 255 -and $b -eq 255) { $selWhite++ }
+            if ((0.299*$r + 0.587*$gg + 0.114*$b) -lt 110) { $selDark++ }
+            if (($r + $gg + $b) -lt 20) { $selBlack++ }
+        }
+    }
+}
+# 行距 = 高亮以下两条 "墨迹带" 起点的差。带 = 该行 (r+g+b)<450 的像素 >0
+# (文字/图标都算); 这个阈值跟我方 C# 分析脚本同一口径, 图标行不会把间距切碎。
+$rowsInk = New-Object int[] $th
+for ($y = 0; $y -lt $th; $y++) {
+    $off = $y * [Math]::Abs($stride)
+    for ($x = 0; $x -lt $tw; $x++) {
+        $i = $off + $x * 4
+        $b = $buf[$i]; $gg = $buf[$i+1]; $r = $buf[$i+2]
+        if (($r + $gg + $b) -lt 450) { $rowsInk[$y]++ }
+    }
+}
+$bandStarts = @()
+for ($y = 0; $y -lt $th; $y++) {
+    if ($rowsInk[$y] -gt 0 -and ($y -eq 0 -or $rowsInk[$y-1] -eq 0)) { $bandStarts += $y }
+}
+$pitch = 0
+$outside = @($bandStarts | Where-Object { $_ -gt $hlMaxY + 2 })
+if ($outside.Count -ge 2) { $pitch = $outside[1] - $outside[0] }
+$expDpi = [UP]::GetDpiForWindow($main)
+if ($expDpi -lt 96) { $expDpi = 96 }
+$expHl = [int][Math]::Round(41 * $expDpi / 120)
+$expPitch = [int][Math]::Round(44 * $expDpi / 120)
+
 $bad = @()
 if (($white / $area) -lt 0.15) { $bad += "白底占比 $([Math]::Round(100*$white/$area,1))% < 15%" }
 if (($bg240 / $area) -gt 0.40) { $bad += "宿主灰底占比 $([Math]::Round(100*$bg240/$area,1))% > 40%" }
@@ -306,8 +369,23 @@ if ($chk240 -lt 0.60) { $bad += "CheckBox 区 240 占比 $([Math]::Round(100*$ch
 if ($chkWhite -gt 0.05) { $bad += "CheckBox 区纯白占比 $([Math]::Round(100*$chkWhite,1))% > 5%" }
 if ($labelRatio -lt 0.80) { $bad += "Label 区 240 占比 $([Math]::Round(100*$labelRatio,1))% < 80%" }
 if ($labelWhiteRatio -gt 0.02) { $bad += "Label 区纯白占比 $([Math]::Round(100*$labelWhiteRatio,1))% > 2%" }
+# 残差 #3: 选中行文字色/白底 —— VB6 是白字透明底, C3 改前是黑字 + Opaque 白底块
+if ($hlH -le 0) { $bad += "选中高亮未找到" }
+else {
+    if ($selWhite -gt 600) { $bad += "粉底上纯白像素 $selWhite > 600 (Opaque 文字底块)" }
+    # 文字色判据用**纯黑** (r+g+b<20): 选中行里的图标本身也是深色 (Facebook 蓝 lum~101),
+    # 用 lum 阈值会把图标算成"黑字"。
+    if ($selBlack -gt 30) { $bad += "选中行纯黑像素 $selBlack > 30 (应为白字)" }
+    if ($selWhite -lt 100) { $bad += "选中行白字笔画 $selWhite < 100 (文字色不是白)" }
+    # 残差 #4: 高亮 bbox 高度 / 行距 与 VB6 参考 ±2px (按 DPI 折算)
+    if ([Math]::Abs($hlH - $expHl) -gt 2) { $bad += "高亮高度 ${hlH}px 偏离参考 ${expHl}px 超过 ±2" }
+    if ($pitch -gt 0 -and [Math]::Abs($pitch - $expPitch) -gt 2) {
+        $bad += "行距 ${pitch}px 偏离参考 ${expPitch}px 超过 ±2"
+    }
+}
 
 $readout = "tree=${tw}x${th} white=$white bg240=$bg240 dark=$dark darkRows=$darkRows hl=$hl vivid=$vivid"
+$readout += " selWhite=$selWhite selDark=$selDark selBlack=$selBlack hlH=${hlH}@${expHl} pitch=${pitch}@${expPitch} dpi=$expDpi"
 $readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
 if ($bad.Count -gt 0) {
     Write-Output ("FAIL " + ($bad -join "; ") + " | " + $readout + " | png=$pngPath")

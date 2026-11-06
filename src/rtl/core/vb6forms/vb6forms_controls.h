@@ -384,6 +384,14 @@ void  vb6_UC_BagPutStr(void* bag, const wchar_t* name, const wchar_t* value);
 void  vb6_UC_BagPutInt(void* bag, const wchar_t* name, int32_t value);
 void  vb6_UC_BagPutDbl(void* bag, const wchar_t* name, double value);
 void  vb6_UC_BagPutBool(void* bag, const wchar_t* name, int32_t value);
+/* 设计期字体块 (`BeginProperty Font` / `SubTextFont` ...) 进 bag 的对象槽。
+   VB6 的 UserControl_ReadProperties 用
+     Set m_Font       = .ReadProperty("Font", Ambient.Font)
+     Set m_SubTextFont = .ReadProperty("SubTextFont", Ambient.Font)
+   读回设计期字体; 缺项时 ReadProperty 交回**默认值** (Ambient.Font), 会把
+   前面 prop_let 回放过的 9pt SubTextFont 覆盖成 ambient 8.25 (两者还会变成
+   同一枚对象)。font 是 vb6_UC_NewFont 造的那枚八档结构体。 */
+void  vb6_UC_BagPutFont(void* bag, const wchar_t* name, void* font);
 // Fix: 二进制 blob (字节数组) 槽 —— .frx 里 UserControl 的持久化 PropertyBag 块
 // (InitPanels/InitBands/InitButtons/InitListImages/InitTabs...) 以原始字节喂给外层包,
 // 运行期 `PropBag.Contents = <该字节数组>` 时由 uc_propbag.c 解析成扁平的

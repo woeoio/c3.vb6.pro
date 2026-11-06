@@ -659,6 +659,23 @@ void vb6_UC_BagPutBool(void* bag, const wchar_t* name, int32_t value) {
     VariantClear(&v);
 }
 
+/* 字体块 (Font / SubTextFont / Caption1_Font ...) 进对象槽。
+   字体结构体不是 COM 对象 (首字段是 BSTR); 直接装 VT_DISPATCH 会让
+   VariantCopy/VariantClear 把名字指针当 vtable 调 AddRef/Release。
+   vb6_ComPackObject 对宿主伪对象 (vb6_uc_isFont) 会包一层真 IDispatch,
+   ReadProperty → vb6_ComCallObject 再解包回原八档指针, 与 .ctl 的
+   `Set m_X = .ReadProperty(...)` 语义一致。 */
+extern void* vb6_ComPackObject(void* obj);
+
+void vb6_UC_BagPutFont(void* bag, const wchar_t* name, void* font) {
+    if (!bag || !name || !font) return;
+    VARIANT* pv = (VARIANT*)vb6_ComPackObject(font);
+    if (!pv) return;
+    vb6_BagPut((Vb6PropBag*)bag, name, pv);   /* 项表自己 VariantCopy 持一份引用 */
+    VariantClear(pv);                         /* 释放本函数这一份 */
+    free(pv);
+}
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

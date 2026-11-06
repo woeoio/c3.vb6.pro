@@ -596,3 +596,66 @@ GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只
 - 陷阱：`.inc` 改动**不会**触发 `cgen_form.cpp` 重编（依赖跟踪漏），改了
   `detail/module/*.inc` 必须 touch `src\backend\module\cgen_form.cpp` 再 build，
   否则生成码还是旧的（本轮踩过一次）。
+
+## 21. 残差 #3/#4：选中行文字色/白底 + 行高偏小（2026-11-06 本轮）
+
+### 21.1 根因 1：`Set UserControl.ForeColor` 落不到绘制的 DC + AutoRedraw 表面默认 OPAQUE
+
+- `.ctl:1646-1693` 每段 DrawText 前都 `UserControl.ForeColor = N.TextColor`（选中行 16777215 白、
+  SubText 13421772 灰、普通行 0）。但这些 Draw/度量全发生在**事件**里（不是 WM_PAINT），
+  目标 DC 是 `UserControl.hDC` = AutoRedraw 的持久 DIB 表面 (`r->adSurf.memDC`)。
+- 改前 `vb6_UC_SetForeColor` 只写 `vb6_uc_activePaintDC`，而事件里该变量恒 NULL
+  （取证：6 次 `[T1879 fg-nodc] ole=16777215/13421772/0`，SetForeColor 全丢）；
+  `vb6_uc_applyFontNow` 同样 `if (!hdc) return`，`Set UserControl.Font` 也全丢。
+- 新建 DIB DC 的 GDI 默认是 `BkMode=OPAQUE(2)` + 白 BKCOLOR + 黑 TEXTCOLOR ⇒ Tahoma 文字
+  被画成**黑字+白底块**：选中粉底内实测 pureblack=224、纯白 968..1410（VB6 参考：白字、
+  纯黑 ~10、白只有笔画 ~258）。
+- 修：`vb6_uc_adEnsure` 建表面时补 `SetBkMode(memDC, TRANSPARENT)`、
+  `SetTextColor(memDC, resolve(ForeColor))`、选入 UC 自己的字体；
+  `vb6_UC_SetForeColor` 回落到 `vb6_UserControl_hDC`；`vb6_uc_applyFontNow` 两档都落
+  （paint 用 `r->hdc`，事件/度量用 `adSurf.memDC`）；`vb6_uc_selectOwnFont` 改为 UC 字体优先。
+
+### 21.2 根因 2：字体块没进 UC 的 PropertyBag ⇒ `m_SubTextFont` 被默认值覆盖成 8.25
+
+- 生成侧（`cgen_form_create_controls.inc`）对 `BeginProperty Font/SubTextFont` 是
+  **prop_let 直接回放**，而 `UserControl_ReadProperties` 收到的 bag 只装了标量属性
+  （CheckBoxes/MinNodeHeight/... 7 项），**没有 Font/SubTextFont**。
+- `.ctl:6992/7006`（生成码）`Set m_Font = .ReadProperty("Font", Ambient.Font)` /
+  `Set m_SubTextFont = .ReadProperty("SubTextFont", Ambient.Font)` 缺项 ⇒ 都返回**默认值**
+  `vb6_Ambient_Font` ⇒ 前面回放的 9pt 被覆盖成 8.25，且两枚字段指向**同一个对象**。
+- 取证（改前 `[T1879 calc]` 6 次全为）：`lfH=-13 face=Arial Narrow tmH=16 extL=0`
+  （= 8.25pt@120，子文本也是它）⇒ DT_CALCRECT 高 16，N.Height=16+16+6=38。
+- 修：字体块也进 bag —— 新增 `vb6_UC_BagPutFont`（`vb6_ComPackObject` 包成 VT_DISPATCH，
+  `ReadProperty` 再解包回八档指针）；emit 侧对 `propertyBlocks` 里名字以 `font` 结尾、
+  且 `ReadProperties` 真读过 `.ReadProperty("<name>"` 的块，补 `vb6_UC_BagPutFont`。
+- 取证（改后）：主文本 `lfH=-13 tmH=16`、子文本 `lfH=-15 tmH=20`（均 Arial Narrow @120，
+  extL=0）⇒ N.Height=16+20+6=42。
+
+### 21.3 改前/改后读数（125% DPI，959×623，同一夹具）
+
+| 项 | 改前 C3 | 改后 C3 | VB6 参考 |
+|---|---|---|---|
+| 选中高亮 bbox | 206×35 (y56..90) | **206×39 (y56..94)** | 205×41 (y56..96) |
+| 选中行纯白像素 | 968（白底块） | **355（只剩白字笔画+复选框）** | ~258（白字） |
+| 选中行纯黑像素 | 224 | **12** | ~10 |
+| 行距（行 2→3） | 38 | **42** | 44 |
+| 子文本 LOGFONT | 无（与主文本同 8.25） | **9pt → lfH -15 / tmH 20** | - |
+
+整窗 diff（对上一轮产物）：**3.80%**（22702/597457）。
+
+### 21.4 判据（`tests\guisample\uctreeview_px.ps1` 新增）
+
+- 粉底上纯白 ≤ 600（改前 968 红 / 改后 355 绿）；选中行纯黑 ≤ 30（224 红 / 12 绿）；
+  选中行白字笔画 ≥ 100。
+  （"深色≈0" 只用**纯黑**判：选中行里的 Facebook 图标本身是深蓝 lum≈101，用 lum 阈值会假红。）
+- 高亮 bbox 高度 = 41*(dpi/120) ±2；行距 = 44*(dpi/120) ±2（行距按 `(r+g+b)<450` 的
+  墨迹带起点算，避开图标/复选框切带）。
+- 旧产物 `.temp\old_uctv\Proyecto1.exe` 已验 **FAIL**（4 条新判据全红）。
+
+### 21.5 其它
+
+- `.temp` 里的 `C3_T1879` 取证代码已全部移除（`uc_host_window.c` dump/打印、
+  `vb6_di_user32_stubs.c` 的 include 与 DT_CALCRECT 分支）；`C3.exe` 内嵌 RTL 已核对
+  含 `vb6_UC_BagPutFont`、无 `C3_T1879`，`scripts\check_rtl_embedded.ps1` 126/126 一致。
+- 提醒仍然有效：改 `detail/module/*.inc` 必须 touch `src\backend\module\cgen_form.cpp`
+  再 build（本轮又踩了一次）。
