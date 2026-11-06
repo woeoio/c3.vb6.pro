@@ -2,6 +2,7 @@
 // 由 vb6comserver.c 按 COM 接口家族拆分而来 (纯搬移, 零行为改动)
 
 #include <string.h>
+#include <stdio.h>   /* ucTreeView: vb6_UCEventMiss 的 stderr 行 */
 #define COBJMACROS  /* Enable C COM macros (ITypeLib_Release etc.) */
 #include "vb6comserver.h"
 #include "vb6comserver_internal.h"
@@ -244,3 +245,21 @@ void vb6_FireEvent(vb6_ComObject* comObj, int32_t dispid, VARIANT* args, int arg
         }
     }
 }
+
+/* ucTreeView (2026-11-06): RaiseEvent 的可见 miss —— 见 vb6comserver.h 说明。
+ * 唯一出口: 计数 + 可选 trace, 不改分发语义。 */
+static int vb6_ucEventMiss = 0;
+
+void vb6_UCEventMiss(const wchar_t* evtName) {
+    static int vb6_traceOn = -1;
+    vb6_ucEventMiss++;
+    if (vb6_traceOn < 0) {
+        vb6_traceOn = (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) ? 1 : 0;
+    }
+    if (vb6_traceOn) {
+        fprintf(stderr, "[C3_EVT_MISS] #%d event='%ls' (events sink or handler absent)\n",
+                vb6_ucEventMiss, evtName ? evtName : L"?");
+    }
+}
+
+int vb6_UCEventMissCount(void) { return vb6_ucEventMiss; }

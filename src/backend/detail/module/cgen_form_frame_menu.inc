@@ -616,7 +616,17 @@
             if (controlIsContainerType(ctrl) && !ctrl.children.empty()) {   // 账 #167
                 std::string nmLower = ctrl.controlName;
                 std::transform(nmLower.begin(), nmLower.end(), nmLower.begin(), ::tolower);
-                if (!knownControlArrays_.count(nmLower)) {
+                if (knownControlArrays_.count(nmLower)) {
+                    // ucTreeView (2026-11-06): 控件数组的容器以前在这里**被整个跳过**
+                    // (因为声明侧没有 `vb6_hwnd_<名>`), 于是住在数组容器里的子按钮
+                    // (Form1 的 Picture1(0..8) 里放 Command2(0..8) 三点按钮) 的
+                    // WM_COMMAND 停在 PictureBox 的 WndProc, 永远到不了窗体 ⇒
+                    // Command2_Click 不触发 (用户实测"三点按钮点了不弹色选对话框")。
+                    // 逐个元素安装, 与上面子类化那一站同一形态。
+                    c_.emitLine("{ int vb6_fw; for (vb6_fw = 0; vb6_fw < VB6_CTRLARR_MAX; vb6_fw++) {");
+                    c_.emitLine("  void* vb6_fw_hwnd = vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", vb6_fw);");
+                    c_.emitLine("  if (vb6_fw_hwnd) vb6_ForwardChildCommands(vb6_fw_hwnd); } }");
+                } else {
                     c_.emitLine("vb6_ForwardChildCommands((void*)vb6_hwnd_" + cIdent(ctrl.controlName) + ");");
                 }
             }

@@ -1299,3 +1299,120 @@ VB6 的 `StrPtr("")` 是非 0（唯一答 0 的是 `vbNullString`）⇒ uxtheme 
    `Microsoft YaHei UI / lfHeight -15 / weight 400 / charset 1`，`TextHeight("Ag")=20`。
    用户看到的"字号差异"实际是主题皮把气泡高度从 99 撑到 107（字号未变）。
    窗体 Font 的 `Microsoft Sans Serif / 12` 不上 tooltip。
+
+## §27 ucTreeView 四条缺陷 — guard 落地与续跑基线（2026-11-06）
+
+### 27.1 guard 哨兵（已落盘、已跑）
+- 文件：`scripts/check_uctreeview_authority.ps1`（**UTF-8 BOM**，PowerShell 5 无 BOM 会把中文行断成语法错误）。
+- 注册：`tests/run_tests.ps1` → `Test-UcTreeViewAuthority`，STATIC shard，紧跟 `Test-ToolTipAuthority`。
+- 判据：T1 事件分派 miss 可观测 / T2 模态与对话框唯一出口 / T3 TreeView 槽位三件套 / T4 多窗体统一入口 + 控件数组容器转发。
+- 白名单：W1 夹具 `Form1.frm` 的用户 Declare（不扫 tests，天然不命中）；W2 `vb6forms_ctrl.c` 的 `vb6_CdShowColor`（ColorDialog/CommonShowColor 的唯一出口，放行但断言仍在）。
+- **实跑（当前工作树）：PASS**；**基线与 HEAD 956ce26c 的 worktree：FAIL 11 红**（T1×2、T3×7、T4×1），T2 全绿。
+- 改前/改后散点：RaiseEvent 静默分发 1→0；`vb6_VariantMissing` 0→1；`Is` 身份拆箱 0→2；槽位目标提存 0→1；数组容器转发 0→1；后端 `ShowWindow` 恒 0；`ChooseColor` 7 站全在 DI 桩 + 1 站唯一出口。
+
+### 27.2 四条缺陷各自状态
+1. **展开丢 icon（已确认根因/已改/已重编/已视觉验证绿，px 断言未加）**：省略 `Optional As Variant` 实参被填 `vb6_VariantEmpty()`，VB6 语义应为 **Missing**（`vt=10`,`0x80020004`）。改 `vb6rtl_variant.h` + `cgen_base_naming.cpp`。
+   - **子项不能切换（同属第 1 条，独立成因，已改/已验证）**：`Is` 生成裸 `==`，类实例 vs `vb6_ComCall` 的 VARIANT* 恒不等 ⇒ `RadioStyle` 单选恒清空。改 `cgen_expr_binary.cpp` + `vb6com_pack.c`（`vb6_ComResultIdentity`/`vb6_ComObjectUnbox`）。实测 `RADIO N=... eq=0` 全假 → 修后 Mostrar→Ocultar→(Disabled 不响应)→Mostrar 三态可达。
+   - **附带第 3 成因（已改/已验证）**：`With ... .Add(...).Image = 1` 的 `vb6_Node_Add` 被求值两次 ⇒ 多插一行（4 行 vs VB6 3 行）。改 `cgen_util_ctrl.cpp` 的 `emitVariantSlotStore`（`_vtg_` 提存）。
+2. **三点按钮不弹色选（已确认根因/已改/已重编/新绿旧红）**：`Picture1` 是**控件数组容器**，转发安装块 `if (!knownControlArrays_.count())` 整类跳过 ⇒ `Command2` 的 WM_COMMAND 留在 PictureBox。改 `cgen_form_frame_menu.inc` 逐元素 `vb6_fw` 转发。实测：新产物 `#32770 '颜色'` 弹出并 `WM_CLOSE` 后 `IsWindow=false`、主窗 `WM_NULL` 有响应；旧产物 `DIALOG=` 空。
+3. **LoadFromCustomXML 无效果（已确认根因/已改，px 断言未加）**：产物目录缺 `ejemplo.xml`，`xmlDoc.Load` 返回 False（`vt=11`,`parseError 0x800C0006`）。已在 `run_tests.ps1` 的 ucTreeView 注册加 `-AssetFile ejemplo.xml`；新产物点击后出现 `library` 根节点，旧产物无。
+4. **底部五按钮（部分定位，未闭合）**：id 101..105 逐一 PostMessage 均**进了事件**，`vb6_form_show_FormX` 的 modal=0 一致；
+   - Form3/Form5：`Form_Load` 内 `LoadFromXML App.Path\JerarquiaEmpresa.xml`、`menu.xml` 缺资产 ⇒ ctl 弹 `XML Load Error`（`#32770` 阻塞、窗体停在隐藏态）。资产在 `tests\ucTreeView` 里，只是没随 `-AssetFile` 复制。
+   - Form6（`Contact  List`）：**进程崩溃 = 0xC0000005（AV，不是干净退出）**。取证口径：
+     `$p.WaitForExit(8000)` → `ExitCode=-1073741819`；WER `Application` 日志
+     `异常代码 0xc0000005 / 错误偏移 0x0007cea0 / 模块 Proyecto1.exe`（偏移稳定可复现）。
+     早先记的"exit 0"是 PowerShell `$p.ExitCode` 为 `$null` 的读数假象。
+     插桩点：`enter → imagelist init → 67 张图 → nodes done`，随后在 `ExpandAllNodes` 内崩，
+     `update done` 未打印；`C3_NO_QUIT_IN_DOEVENTS=1` 仍崩；Form1 的 `WM_CLOSE/WM_DESTROY`
+     均未触发（`[F1DBG]` 无输出）。真 VB6 参考产物（`D:\vb_yqt4qPac\ucTreeView\Proyecto1.exe`）
+     同操作 Form6 **可见**。
+   - 确定性代码错（已定位未改）：Form6 把 `StdPicture` 返回值塞进 `VT_BSTR / .bstrVal=<IPicture*>` 传给 `ImageListAddImage(SrcImg As Variant)`（C4133）；插桩改成 `VT_DISPATCH` 后图像循环可跑完。
+
+### 27.3 已改但尚未验证/RTL 重建状态
+- RTL：`vb6rtl_variant.h`、`vb6com_pack.c`、`vb6comserver.h`、`vb6comserver_cp.c`（本轮新增 `vb6_UCEventMiss` 计数）—— **`c3rtl.res` 未重建**（必须先重跑 build，再 `scripts\check_rtl_embedded.ps1` 核对内嵌符号）。
+- cgen：`cgen_base_naming.cpp`、`cgen_expr_binary.cpp`、`cgen_util_ctrl.cpp`、`cgen_form_frame_menu.inc`、`cgen_com_events.cpp`（miss else 臂）。
+- tests：`run_tests.ps1`（ucTreeView 注册 `-AssetFile ejemplo.xml` + sentinel）。
+- 未验证项：本轮所有 cgen/RTL 改动的最终产物（`output\ucTreeView`）尚未重编；`uctreeview_px.ps1` 的四条新断言尚未扩；`c3rtl.res` 未重建。
+
+### 27.4 工作树
+- HEAD = `956ce26c`，**尚无提交**（本轮全部改动在工作树）。
+- 未提交：上述 RTL/cgen/tests + `scripts/check_uctreeview_authority.ps1`。
+- 诊断物（勿提交）：`.temp/uctv_dbg_sess`（插桩会话）、`.temp/relink_form1.ps1`（已扩 Form6.c + vb6rtl_system.c）、`.temp/uctv_f6_exit.ps1`、`.temp/uctv_clickcap.ps1`、`.temp/uctv_f4_ids.ps1`、`.temp/uctv_f4_all.ps1`、`.temp/uctv_forms.ps1`、`.temp/uctv_base`（基线 worktree）。
+- 另：不要提交未跟踪的 `.zcodeignore`。
+
+### 27.5 续跑顺序
+1. 定位 Form6 的 **AV（0xC0000005 @ 0x0007cea0）**（优先用**正式构建链**插桩；调试会话里
+   RTL 的 `[FDBG] Register/Unregister` 一条未出 ⇒ 该 obj 未必真正链入，结论不可靠）。
+2. 修 `IPicture* → Variant` 装箱（cgen：对象值必须 `VT_DISPATCH`），并重跑 Form6。
+3. 五按钮资产：`-AssetFile` 补 `JerarquiaEmpresa.xml`、`menu.xml`，并同步 `output\ucTreeView`。
+4. 扩 `tests/guisample/uctreeview_px.ps1`：icon 计数、三态切换、色选模态（`#32770` + `WM_CLOSE` + 10s 看门狗）、XML 节点数、五窗体标题；旧红新绿、无桌面 SKIP。
+5. `C3 --arch x86` 重编 → 重建 `c3rtl.res` → `check_rtl_embedded.ps1` → 产物到 `output\ucTreeView`。
+6. 双远端提交 + GA 22/22（红项逐条归因），补本文件读数。
+### 27.6 本次续跑落地读数（2026-11-06，接 §27 继续）
+
+**guard 实跑**：`scripts\check_uctreeview_authority.ps1` → 当前树 **PASS（0 红）**；
+基线 worktree `956ce26c` → **FAIL 11 红**（T1×2 / T3×7 / T4×1），T2 全绿；SKIP=0。
+判据落点：T2 的唯一出口断言收在 `vb6_ShowForm(` + `SW_SHOWDEFAULT` + `vb6_CdShowColor`（W2 白名单），
+T3 的"只求值一次"收在 `emitVariantSlotStore` 的 `_vtg_` 提存。
+
+**四条各自定位结论（本轮实测）**：
+1. 展开丢 icon + 子项不能切换：**两个成因均已改并视觉验证绿**；`uctreeview_px.ps1` 断言尚未扩。
+2. 三点按钮色选：**已改、旧红新绿**（新产物 `#32770 '颜色'` → `WM_CLOSE` → `IsWindow=false`）。
+3. LoadFromCustomXML：**已改、旧红新绿**（资产 `ejemplo.xml` 后出现 `library` 根节点）。
+4. 底部五按钮：**未闭合**。id 101..105 全部进事件且 `modal=0`；
+   Form3/Form5 缺 `JerarquiaEmpresa.xml` / `menu.xml`（`XML Load Error` 模态框阻塞 Form_Load）；
+   Form6 为 **AV 0xC0000005 @ 0x0007cea0**（WER 实证），崩点在 `ExpandAllNodes` 内。
+
+**Form6 的确定性代码错（生成码实证）**：
+`.temp\uctv_dbg_sess\Form6.c:425`
+`vb6_ucTreeViewPlus_ImageListAddImage(..., (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_Form6_GetContactImgProfile(...)}), &(vb6_VARIANT){0}, 0);`
+实参是 `As StdPicture` 的函数返回值（C 侧 `vb6_ComIface_Picture*`），被**当 BSTR 装箱**。
+发射站点 = `src/backend/detail/expr/cgen_expr_call_arg_emit.inc` 的 ByRef-Variant 复合字面量开关
+（`cType == "vb6_VARIANT"`，`switch (inferExprType(...))`，`default:` 末尾兜底发 `VT_BSTR`）。
+RTL 侧正确出口已存在：`vb6_VariantFromValue` 对任意指针走 `default: vb6_VariantObject`
+（`src/rtl/core/vb6rtl/vb6rtl_variant.h:263`，置 `vb6_vtDispatch` 且 `vb6_ComAddRefDispatch`）。
+
+**下一步（按此顺序，每步落盘）**：
+1. 修上述装箱站：对象/未知指针实参不得发 `VT_BSTR`（改发 `vb6_VariantFromValue(<expr>)` 或
+   `VT_DISPATCH + .pdispVal`），只对**确证是 BSTR** 的实参保留 `VT_BSTR`。
+2. 重编夹具 → 重跑 Form6：期望不再 AV；若 `ExpandAllNodes` 仍崩，再用正式构建链插桩定位。
+3. `-AssetFile` 补 `JerarquiaEmpresa.xml`、`menu.xml`；重跑 id 101..105，五个窗体逐一对账。
+4. 扩 `tests\guisample\uctreeview_px.ps1` 四条断言（含模态收口 + 10s 看门狗）。
+5. `C3 --arch x86` 重编 → 重建 `c3rtl.res` → `check_rtl_embedded.ps1` → 双远端提交 + GA 22/22。
+### 27.7 第 4 条闭合读数（2026-11-06 续跑）
+
+**根因（两处，均为生成侧，均有实测对照）**
+
+1. `As StdPicture` 返回值当 BSTR 装箱（AV 的直接前因）。
+   - 发射站：`src/backend/detail/expr/cgen_expr_call_arg_emit.inc` 的 ByRef-Variant 复合字面量
+     开关里 `default:` 之前（新增 `case Vb6Type::Object`）。
+   - 改前生成码（`.temp\uctv_new2\Form6.c:411`）：
+     `(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_Form6_GetContactImgProfile(...)})`
+   - 改后：`vb6_VARIANT _vb6_vararg_N = vb6_VariantFromValue((void*)(...));` 传 `&_vb6_vararg_N`
+     （`_Generic` default 臂 → `vb6_VariantObject`：`vt=VT_DISPATCH` + `vb6_ComAddRefDispatch`）。
+     工程类实例仍先经 `vb6_ComObject_FromInstance`（防 `VariantClear` 把裸结构体首字段当 vtable）。
+   - 读数：改前 WER `0xC0000005 / 偏移 0x0007cea0`；改后 AV 消失。
+
+2. UC 自有 Public 方法的按名桥**丢掉了 ByRef 标量形参**（438 的直接前因）。
+   - 发射站：`src/backend/detail/module/cgen_form_uc_methods.inc`。旧判据 `if (!pi.isByVal) ok=false`
+     把 `ucScrollbar.ctl:2222 Public Function TrackMouseWheelOnHwnd(lHwnd&)` 整条跳过
+     ⇒ 生成的 `vb6_ucScrollbar_ucMethods[]` 只有 7 项、无 `TrackMouseWheelOnHwnd`
+     ⇒ `ucTreeViewPlus.Update` 的 `With ucScrollbar1: .TrackMouseWheelOnHwnd UserControl.hwnd`
+     落进 `uc_hostmodel_call.inc` 末尾 ⇒ `[C3_HOST_438]` + `[C3_438] site=Call name="TrackMouseWheelOnHwnd"`
+     ⇒ **Run-time error '438'** 打断 Form_Load ⇒ Form6 停在隐藏态。
+   - 改法：ByRef **标量**形参加桥（局部临时量取址；引擎实参本来就是打包值，无可回写地址，
+     与 VB6 对非左值实参给临时量同义）；ByRef 对象/Variant/UDT/数组仍不发。
+     改后 ucMethods 表含 `{ L"TrackMouseWheelOnHwnd", 1, ... }`。
+
+**五窗体实测（新产物 `.temp\uctv_new3\Proyecto1.exe`，资产 3 份 XML + img）**
+`Corporate Hierarchy → VB6_Form_Form3 vis=True`；`Menu / Tools → Form5 vis=True`；
+`Contact  List → Form6 'Agenda tema oscuro' vis=True`；`Tree Explorer → Form2 vis=True`；
+`Drag and Drop → Form4 'Drag & Drop' vis=True`；全程无 `#32770`、进程存活。
+（Form6 改前：`vis=False` + `#32770 'VB6 Runtime Error' 438`；更早：AV 0xC0000005。）
+
+**嵌入 RTL**：`scripts\check_rtl_embedded.ps1` → PASS，126 个资源逐字节一致（`c3rtl.res` 已随
+`scripts\build.bat` 重建；本轮之后再改 RTL 需重跑同一脚本）。
+
+**残留（非第 4 条，另记）**：Form6 运行时 stderr 打 `THE IMAGE: 1..7 DON'T EXIST`
+（`ucTreeViewPlus.ctl:985` 的 `cImageList(index)=0` 分支）⇒ 联系人头像未进 ImageList。
+属于第 1 条 icon 家族的**另一实例**（key/索引口径），未在本轮闭合。

@@ -225,6 +225,13 @@ void CCodeGen::visit(RaiseEventStmt& node) {
     c_.emitLine(call);
     for (const auto& p308 : evtPostCall308) c_.emitLine(p308);
     c_.dedent();
+    /* ucTreeView (2026-11-06): sink 未挂 / 处理器未接时**必须留痕**。
+     * 以前这里只有 then 臂 —— 事件整条静默消失, 与"点了没反应"同现象。
+     * else 臂只计数 (+ C3_OCX_TRACE 一行), 不改分发语义。 */
+    c_.emitLine("} else {");
+    c_.indent();
+    c_.emitLine("vb6_UCEventMiss(L\"" + node.eventName + "\");");
+    c_.dedent();
     c_.emitLine("}");
 
     // P6.6.3: DLL模式 - 广播事件给COM连接的接收器

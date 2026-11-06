@@ -277,3 +277,29 @@ void vb6_ComVarFree(void* variant) {
     if (!variant) return;
     free(variant);  // 不调用VariantClear, 对象引用已转移给调用方
 }
+
+/* ucTreeView (2026-11-06): `X Is <晚绑定调用结果>` 的身份出口。
+ * vb6_ComCall / vb6_ComCallByDispid 交回的是**堆上 VARIANT*** (VT_DISPATCH),
+ * 里面装的是 vb6_ComObject 包装器; 而 `Is` 的另一侧是裸实例指针。两档地址直接
+ * `==` 恒假 (实测 Node.cls 单选段 4 条判断全 eq=0)。
+ * 这里做三件事, 顺序不可换:
+ *   ① vb6_ComUnpackObject: 宿主包装器 (字体/集合/UC 实例) 还原成宿主对象;
+ *   ② vb6_ComObject_UnboxVb6Instance: 工程类包装器还原成裸实例 (非包装器原样交回);
+ *   ③ 收回调用结果那枚堆块 (VariantClear 放掉它持有的那一个引用, 集合仍持有自己那份)。
+ * 用函数而不用宏: 三条的顺序与"只做一次"必须由 RTL 钉住。 */
+void* vb6_ComResultIdentity(void* variant) {
+    extern void* vb6_ComObject_UnboxVb6Instance(void* v);
+    void* obj;
+    if (!variant) return NULL;
+    obj = vb6_ComUnpackObject(variant);
+    obj = vb6_ComObject_UnboxVb6Instance(obj);
+    vb6_ComVarClear(variant);
+    return obj;
+}
+
+/* 已拆封的 object 视图 (vb6_ComCallObject / vb6_ComGetObjectProp 的结果) 只差
+ * "工程类包装器 → 裸实例"这一步; 堆块与引用由调用点自己管, 这里不收回。 */
+void* vb6_ComObjectUnbox(void* obj) {
+    extern void* vb6_ComObject_UnboxVb6Instance(void* v);
+    return vb6_ComObject_UnboxVb6Instance(obj);
+}

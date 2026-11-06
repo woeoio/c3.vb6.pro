@@ -152,6 +152,11 @@ double vb6_ComUnpackDouble(void* variant);
 void* vb6_ComUnpackObject(void* variant);
 void vb6_ComVarClear(void* variant);
 void vb6_ComVarFree(void* variant);
+// ucTreeView (2026-11-06): `X Is <晚绑定调用结果>` 的身份出口 —— 见 vb6com_pack.c 的
+// 定义处论证。vb6_ComResultIdentity 收下 vb6_ComCall 的堆 VARIANT* (拆包装 + 收回);
+// vb6_ComObjectUnbox 只做"工程类包装器 → 裸实例"这一步 (输入已是拆封的 object)。
+void* vb6_ComResultIdentity(void* variant);
+void* vb6_ComObjectUnbox(void* obj);
 
 // ucTreeView: `Me.Image` 的 StdPicture 视图 (宿主模型/cgen 发射；定义在
 // vb6forms_picture_prop.c)。伞头里必须有原型 —— emit-declared 静态门禁要求

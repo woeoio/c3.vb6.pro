@@ -46,6 +46,7 @@
         bool        isFn = false;                             // 无类型 Function (返回 Variant)
         std::vector<std::string> paramVb;                     // 每形参的 VB6 标量类型名
         std::vector<std::string> paramC;                      // 每形参的 C 拆箱表达式类型
+        std::vector<bool> byRef;                              // 每形参是否 ByRef (ucTreeView)
     };
     std::vector<UcMethPick> ucMeths;
     ucHostMethodCount_ = 0;
@@ -162,7 +163,16 @@
             bool ok = true;
             std::vector<bool> isOpt;
             for (const ParameterInfo& pi : ps->params) {
-                if (!pi.isByVal) { ok = false; break; }        // ByRef 还原不了
+                // ucTreeView (2026-11-06): ByRef **标量**形参也发桥。
+                // 实证 ucScrollbar.ctl `Public Function TrackMouseWheelOnHwnd(lHwnd&)`:
+                // 旧判据"ByRef 还原不了"整条跳过 ⇒ 表里没有它 ⇒ ucTreeViewPlus.Update 的
+                // `With ucScrollbar1: .TrackMouseWheelOnHwnd UserControl.hwnd` 落进宿主模型
+                // 末尾 ⇒ **Run-time error '438'** 打断 Form_Load ⇒ Form6 停在隐藏态(看着像
+                // "按钮没反应")。引擎侧 vb6_ComCall 的实参本来就是**打包成值**的 VARIANT,
+                // 没有可回写的地址; VB6 对非左值实参(这里是 `UserControl.hwnd`)同样只给
+                // 临时量 ⇒ thunk 传一枚局部临时量的地址, 回写按 VB6 语义丢弃。
+                // 仍然不发: ByRef 对象/Variant/UDT/数组 (C 侧签名是 `T**` 或值传递, 临时量
+                // 还原不了)。
                 if (pi.isParamArray) { ok = false; break; }
                 std::string vt = vbScalarOfName(pi.typeRefName);
                 if (vt.empty()) vt = vbScalarOfType(pi.type);
@@ -187,7 +197,10 @@
                     }
                 }
                 if (vt.empty() || (cTypeOfVbScalar(vt).empty() && vt != "object")) { ok = false; break; }
+                // ucTreeView: ByRef 只收标量 —— 对象位的 C 签名多一层指针, 临时量还原不了
+                if (!pi.isByVal && vt == "object") { ok = false; break; }
                 pick.paramVb.push_back(vt);
+                pick.byRef.push_back(!pi.isByVal);
                 isOpt.push_back(pi.isOptional);
             }
             if (!ok) continue;
@@ -245,7 +258,10 @@
         }
         std::string call = "vb6_" + ctl + "_" + cIdent(m.name) + "(me";
         for (int32_t i = 0; i < n; i++) {
-            call += (i == 0 ? ", " : ", ") + std::string("a") + std::to_string(i);
+            // ucTreeView: ByRef 标量位传局部临时量的地址 (回写丢弃, 见上面判据处注释)
+            const bool byRefI = (i < static_cast<int32_t>(m.byRef.size())) && m.byRef[i];
+            call += std::string(i == 0 ? ", " : ", ")
+                  + std::string(byRefI ? "&" : "") + std::string("a") + std::to_string(i);
         }
         // Fix <vbeclipse> rev33: Optional 形参的 `_has_<name>` 标记**统一追加到参数表
         // 末尾**, 不是紧跟各自的形参。

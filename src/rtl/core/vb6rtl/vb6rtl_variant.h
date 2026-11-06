@@ -125,6 +125,21 @@ static inline vb6_VARIANT vb6_VariantNull(void) {
     return v;
 }
 
+/* ucTreeView (2026-11-06): VB6 的 **Missing** —— `Optional As Variant` 实参省略时由
+ * 调用方交进来。VarType(Missing) = vbError(10), 槽里是 DISP_E_PARAMNOTFOUND。
+ * 这是 VB6 代码区分"实参没给"与"给了个空值 (Empty/Null)"的**唯一公开手段**:
+ *   If Not VarType(N.Image) = vbError Then ...      ' 有图标才画
+ * 生成侧以前在省略位填 vb6_VariantEmpty() ⇒ 上面那条判断在 C3 里整族翻面
+ * (ucTreeViewPlus 展开时拿 SelectedImage 作画 ⇒ icon 丢失; 文本宽度也少算
+ * ImageList 宽 ⇒ 文字被裁)。lVal 与 Windows VARIANT 的 scode 是同一格。 */
+static inline vb6_VARIANT vb6_VariantMissing(void) {
+    vb6_VARIANT v;
+    memset(&v, 0, sizeof(v));
+    v.vt = vb6_vtError;
+    v.lVal = (int32_t)0x80020004;   /* DISP_E_PARAMNOTFOUND */
+    return v;
+}
+
 static inline vb6_VARIANT vb6_VariantInt(int16_t val) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
     v.vt = vb6_vtInteger; v.iVal = val; return v;

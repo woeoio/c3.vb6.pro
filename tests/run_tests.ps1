@@ -1574,6 +1574,21 @@ function Test-ToolTipAuthority {
         $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
     }
 }
+function Test-UcTreeViewAuthority {
+    # ucTreeView (2026-11-06): 事件分派 miss / 模态唯一出口 / TreeView 槽位 / 多窗体。
+    # 用户口径: 先落哨兵钉住"改前状态", 不许放宽阈值收尾; 红线见脚本头注释。
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] uctreeview_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_uctreeview_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 function Test-SaAccess {
     $script:total++
     Write-Host -NoNewline "  [STATIC] sa_access ... "
@@ -4071,7 +4086,7 @@ function Assert-CodejockSkipInvariant {
 
 function Test-VbpBuild {
     param([string]$Name, [string]$VbpFile, [string]$Arch = "", [switch]$RequiresCodejock,
-          [string]$AssetDir = "", [string[]]$PixelAssert = @())
+          [string]$AssetDir = "", [string[]]$AssetFile = @(), [string[]]$PixelAssert = @())
     $script:total++
     if (-not (Enter-VbpShard)) { return }
     Write-Host -NoNewline "  [VBP-BUILD] $Name ... "
@@ -4109,6 +4124,15 @@ function Test-VbpBuild {
             if (Test-Path $aSrc) {
                 if (Test-Path $aDst) { Remove-Item -Recurse -Force $aDst }
                 Copy-Item -Recurse -Force $aSrc $aDst
+            }
+        }
+        # 单文件资产 (如 ucTreeView 的 ejemplo.xml): 代码里按 App.Path & "\<名>" 读,
+        # 产物目录没有它 ⇒ Load 返回 False ⇒ 点了按钮什么也不发生 (夹具缺资产, 不是代码缺陷)。
+        foreach ($af in $AssetFile) {
+            if ($af -ne "") {
+                $fSrc = Join-Path (Split-Path $VbpFile -Parent) $af
+                $fDst = Join-Path $buildDir $af
+                if (Test-Path $fSrc) { Copy-Item -Force $fSrc $fDst }
             }
         }
         $script:pass++
@@ -9381,8 +9405,14 @@ if ($Category -in @("all", "run", "vbp")) {
     # (PE machine=0x014C)，故只登记 x86 一档。像素判据 = tests\guisample\uctreeview_px.ps1
     # (真桌面 CopyFromScreen; 树区白底占比/文本行/选中高亮/图标彩色像素)。旧行为(hdc=0)
     # 实测 white=0 bg240=100% darkRows=0 hl=0 vivid=0 ⇒ 必红; 现在 PASS。
+    # ejemplo.xml: Command1_Click 用 App.Path & "\ejemplo.xml" 读它 (缺这个文件时
+    # MSXML Load 返回 False, 按钮"点了没反应"是夹具缺资产); 必须跟着产物走。
+    # ucTreeView (2026-11-06): 底部五按钮那一族同样按 App.Path 找 XML ——
+    # Form3 读 JerarquiaEmpresa.xml、Form5 读 menu.xml；缺资产时 ctl 的 LoadFromXML
+    # 会弹 "XML Load Error" (#32770) 并卡在 Form_Load（窗体停在隐藏态 ⇒ 看着像"没反应"）。
     Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86" `
-        -AssetDir "img" -PixelAssert @("guisample\uctreeview_px.ps1")
+        -AssetDir "img" -AssetFile @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml") `
+        -PixelAssert @("guisample\uctreeview_px.ps1")
 
     # <vbeclipse> 回归夹子 (dbgdlg) 2026-10-06: 「Alias 名与 VB 名相同」这条路上**真调用**过
     # DI 包装的那一份夹具 —— 只要求"编得过、链得出 exe"，不跑 (它是 GUI 工程，跑起来要人点)。
@@ -11462,6 +11492,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-ControlDC }
     if (Enter-StaticShard) { Test-ColorRefAuthority }
     if (Enter-StaticShard) { Test-ToolTipAuthority }
+    if (Enter-StaticShard) { Test-UcTreeViewAuthority }
     if (Enter-StaticShard) { Test-SaAccess }
     if (Enter-StaticShard) { Test-BitwiseAuthority }
     if (Enter-StaticShard) { Test-BodyDeclShape }

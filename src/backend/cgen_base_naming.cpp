@@ -62,6 +62,15 @@ std::string CCodeGen::defaultValueForParam(const ParameterInfo& p) const {
     // 与 cgen_base_naming.cpp 里既有的同款 const_cast 先例一致。
     const std::string clsPtr = const_cast<CCodeGen*>(this)->cParamClassPtrType(p);
     if (!clsPtr.empty()) return "NULL";
+    // ucTreeView (2026-11-06): `Optional ByVal x As Variant` 省略时, VB6 交进来的是
+    // **Missing** (VarType=vbError, scode=DISP_E_PARAMNOTFOUND), 不是 Empty。
+    // VB6 代码用它区分"实参没给"与"给了个空值" (`VarType(N.Image) = vbError`) ——
+    // 填 Empty 会让整族判断翻面 (实测: ucTreeViewPlus 展开时按 SelectedImage 作画,
+    // 根节点 icon 消失; 文本宽度也按"有图标"让位 ⇒ 文字被裁)。
+    // 只动"显式默认值也没有"的这一档; Optional = <expr> 仍走调用点的 defaultValueExpr。
+    if (p.type == Vb6Type::Variant && p.isOptional && !p.hasDefaultValue) {
+        return "vb6_VariantMissing()";
+    }
     return defaultValue(p.type);
 }
 

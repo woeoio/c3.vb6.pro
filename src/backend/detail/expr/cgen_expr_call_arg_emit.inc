@@ -1576,6 +1576,34 @@
                             case Vb6Type::Date:
                                 argVal = "(&(vb6_VARIANT){.vt=VT_DATE, .dblVal=(double)(" + argVal + ")})";
                                 break;
+                            case Vb6Type::Object: {
+                                // ucTreeView (2026-11-06): **对象档实参不许按 BSTR 装箱**。
+                                // 实证 Form6.frm:113 `ucTreeViewPlus1.ImageListAddImage
+                                // GetContactImgProfile(ArrContacts(i), lColor)`，被调方形参是
+                                // `SrcImg As Variant`（ByRef ⇒ vb6_VARIANT*），而返回值是
+                                // `As StdPicture`（语义层 Fix 040a 判 Object ⇒ C 侧 void*）。
+                                // 改前发 (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=<IPicture*>})，
+                                // 被调方拿图片指针当 BSTR 解引用 ⇒ 0xC0000005。
+                                // 口径与上面 default 里「工程类实例必须经 FromInstance 包装」一字相同：
+                                // 晚绑定/内建对象（void* = IDispatch*）走 _Generic 的 default 臂
+                                // (vb6_VariantObject: vt=VT_DISPATCH 且 vb6_ComAddRefDispatch)；
+                                // 工程类实例的裸结构体指针必须先包成真 IDispatch，否则
+                                // vb6_VariantClear 会把首字段当 vtable 解引用（堆损坏）。
+                                // 装箱多取的那一枚登记给语句末收回（与 §B217 同一条道）。
+                                const std::string argClsObj =
+                                    inferClassTypeOfExpr(*node.positional[i]);
+                                const std::string boxedObj = argClsObj.empty()
+                                    ? ("(void*)(" + argVal + ")")
+                                    : ("(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc(\""
+                                       + argClsObj + "\"), (void*)(" + argVal + "))");
+                                const std::string tmpObj = "_vb6_vararg_"
+                                    + std::to_string(ansiCounter_++);
+                                c_.addPending("vb6_VARIANT " + tmpObj + " = vb6_VariantFromValue("
+                                              + boxedObj + ");  /* ucTreeView: ByRef Variant 对象实参装箱 */");
+                                boxTempsToClear_.push_back({tmpObj, c_.indentLevel()});
+                                argVal = "&" + tmpObj;
+                                break;
+                            }
                             default:
                                 // Fix 054: Variant 或未知类型
                                 // 1. 实参是 UDT 的 Variant 字段 (With 成员如 .SourceFile,

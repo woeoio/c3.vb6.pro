@@ -2431,15 +2431,38 @@ void CCodeGen::emitVariantSlotStore(const std::string& target, const std::string
         c_.emitLine("vb6_VariantAssign(&" + target + ", " + expr + ");");
         return;
     }
+    // ucTreeView (2026-11-06): `With 链`里写字段的目标**带副作用** —— 典型
+    //   With ucTreeViewPlus1.Nodes.Add("Facebook") : .Add("Ocultar").Image = 1
+    // 目标发成 `vb6_Node_Add(...)->Image`。下面两半句 (Clear / 赋值) 各写一次目标文本 ⇒
+    // 每写一枚字段就多调一次 Add (实测 C3 树比 VB6 多一行: "Ocultar" 出现两次)。
+    // 判据: 目标文本在**最后一级成员之前**出现过 '(' (函数调用/宏)。命中就把**地址**
+    // 提成具名临时量, 两半句都读它 ⇒ 目标恰好求值一次。纯左值形态 emit 逐字节不变。
+    auto needsAddrTemp = [](const std::string& t) -> bool {
+        size_t mem = t.rfind("->");
+        if (mem == std::string::npos) return false;
+        size_t lp = t.find('(');
+        return lp != std::string::npos && lp < mem;
+    };
+    const bool hoistTarget = needsAddrTemp(target);
+    std::string tgt = target;
+    std::string clearArg = "(&" + target + ")";
+    if (hoistTarget) {
+        const std::string tp = "_vtg_" + std::to_string(tempCounter_++);
+        c_.emitLine("{ vb6_VARIANT* " + tp + " = &(" + target + ");");
+        tgt = "*" + tp;
+        clearArg = tp;
+    }
     if (viaTemp) {
         const std::string tmp = "_vc_" + std::to_string(tempCounter_++);
         c_.emitLine("{ vb6_VARIANT " + tmp + " = " + expr + ";");
-        c_.emitLine("  vb6_VariantClear(&" + target + ");");
-        c_.emitLine("  " + target + " = " + tmp + "; }");
+        c_.emitLine("  vb6_VariantClear(" + clearArg + ");");
+        c_.emitLine("  " + tgt + " = " + tmp + "; }");
+        if (hoistTarget) c_.emitLine("}");
         return;
     }
-    c_.emitLine("vb6_VariantClear(&" + target + ");");
-    c_.emitLine(target + " = " + expr + ";");
+    c_.emitLine("vb6_VariantClear(" + clearArg + ");");
+    c_.emitLine(tgt + " = " + expr + ";");
+    if (hoistTarget) c_.emitLine("}");
 }
 
 // 账 #305 §B169 (第六十刀): 「把这枚右值收进一处 BSTR 槽」收成这一枚出口 —— 原先这段

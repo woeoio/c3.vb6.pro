@@ -889,6 +889,31 @@ void CCodeGen::visit(BinaryExpr& node) {
         }
     }
 
+    // ucTreeView (2026-11-06): `X Is <晚绑定调用的结果>` —— 右侧发成 `vb6_ComCall(...)`,
+    // 交回的是一枚**堆上 VARIANT*** (VT_DISPATCH, 里面装的是 vb6_ComObject 包装器),
+    // 而左侧 X 是裸实例指针 (vb6_cls_Node*)。原样 `==` 是拿两种不同档的地址比 ⇒
+    // **恒假**。实测 Node.cls 的单选段 (RecurCalcNodeCheckBox 的 4 条
+    // `N Is TheNode.Childs(i)`) 全 eq=0 ⇒ 每次点选都把整组 Checked 清空。
+    // 出口两档:
+    //   · 堆 VARIANT 形态 (vb6_ComCall/ByDispid) ⇒ vb6_ComResultIdentity: 拆宿主包装 →
+    //     拆工程类包装 (UnboxVb6Instance) → 交出裸实例, 顺手收回那枚堆块;
+    //   · 已拆封的 object 视图 (vb6_ComCallObject / ComGetObjectProp) ⇒ 只拆工程类包装。
+    // 非调用形态 (裸实例 / Nothing / 宿主对象) 逐字不变。
+    if (node.op == BinaryOp::Is) {
+        auto identIsOperand = [](const std::string& e) -> std::string {
+            if (e.rfind("vb6_ComCall(", 0) == 0
+                || e.rfind("vb6_ComCallByDispid(", 0) == 0)
+                return "vb6_ComResultIdentity(" + e + ")";
+            if (e.rfind("vb6_ComCallObject(", 0) == 0
+                || e.rfind("vb6_ComCallObjectDefault(", 0) == 0
+                || e.rfind("vb6_ComGetObjectProp(", 0) == 0)
+                return "vb6_ComObjectUnbox(" + e + ")";
+            return e;
+        };
+        left = identIsOperand(left);
+        right = identIsOperand(right);
+    }
+
     std::string op = mapBinaryOp(node.op);
 
     // Fix 039: VB6 And/Or/Xor are bitwise operators that require integer operands.

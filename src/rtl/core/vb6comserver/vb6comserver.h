@@ -330,6 +330,15 @@ vb6_ConnectionPointContainer* vb6_CPC_Create(vb6_ComObject* comObj);
 
 // 通过COM对象触发事件 (由RaiseEvent调用)
 void vb6_FireEvent(vb6_ComObject* comObj, int32_t dispid, VARIANT* args, int argc);
+
+/* ucTreeView (2026-11-06): RaiseEvent 的**可观测 miss**。
+ * 分发形状是 `if (me->events && me->events->onX) {...}` —— sink 没挂上 / 处理器没接
+ * 时整条事件被**静默吞掉**, 这与"用户点了但没反应"在现象上不可区分 (本夹具的四条
+ * 缺陷全部落在这一类)。cgen 现在在每个 RaiseEvent 的分发 else 臂上调本函数:
+ * 只做计数 + (C3_OCX_TRACE 时) 一行 stderr, **不改语义**。px 脚本据此断言
+ * NodeClick/Expand/Collapse 一族不是被静默丢掉的。 */
+void vb6_UCEventMiss(const wchar_t* evtName);
+int vb6_UCEventMissCount(void);
 // ============================================================
 // P6.6: IProvideClassInfo2 实现
 // VBScript通过此接口发现事件源dispinterface
