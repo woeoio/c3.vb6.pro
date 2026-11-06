@@ -748,7 +748,7 @@ GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只
 
 | 分区 | rect (x,y,w,h) | 改前 | 改后 |
 |---|---|---|---|
-| title      | 0,0,959,32     | 5.99% | 5.09% |
+| title      | 0,0,959,32     | 6.19% | 5.09% |
 | leftEdge   | 0,32,20,591    | 46.07% | 46.03% |
 | treePanel  | 20,32,232,591  | 5.41% | 5.41% |
 | optChecks  | 252,32,278,258 | 8.32% | 8.32% |
@@ -764,15 +764,17 @@ GDI+ `GdipCreateFromHDC 0` 画进空 DC，`DrawText` 同样落空，屏幕上只
 - 整窗读数受**非客户区状态**影响：同一二进制 4 次抓屏 6.13%~8.06%，差全部落在
   `title`+`leftEdge`（外框激活态 38 vs 59 灰、底部桌面渗入）；`leftEdge` 那 46%
   本质是窗口最外 9px 边框条，不是窗体内容。
-- **客户区四次抓屏 4.96% / 4.96% / 4.96% / 4.99%**（27114~27138px，σ≈0.02pp）——
+- **客户区四次抓屏 4.96% / 4.96% / 4.96% / 4.96%**（27114~27138px，σ≈0.02pp）——
   这是可复现的那一半；对 VB6 的净改善 = 6.24% → 4.96%（-1.28pp / -6986px）。
 - 上轮记录的 7.74% 与本轮 8.00% 同脚本同参考图，+0.26pp 即上述外框态差异，
   客户区口径不受它影响。
 
 ### 22.5 收口
 
-- 提交：`371e677b`（两条残差的 RTL/发码/断言）；随后 `emit-manifest.expected.txt`
-  重新登记 22 行（吃 CI 那台二进制回传的清单：`git fetch github ci/emit-manifest`）。
-- GA：run `42157587845`（head `371e677b`）首跑 **Emit manifest 红**（预期：发码形状变了），
-  登记后二次推送转绿。
+- 提交：`371e677b`（两条残差的 RTL/发码/断言）；随后 `ae11dcc8` 把
+  `emit-manifest.expected.txt` 重新登记 22 行（吃 CI 那台二进制回传的清单：
+  `git fetch github ci/emit-manifest`，本机 3 份 guisample 的差异是**本机 OCX/typelib 态**，
+  CI 清单里那 3 份与期望一致，不能拿本机输出登记）。
+- GA：run `42157587845`（head `371e677b`）= 21/22（唯一红是 Emit manifest，预期）；
+  run `42158448470`（head `ae11dcc8`）= **22/22 全绿**。
 - 提醒仍然有效：改 `detail/module/*.inc` 必须 touch `src\backend\module\cgen_form.cpp` 再 build。
