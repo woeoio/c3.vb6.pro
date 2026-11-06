@@ -130,6 +130,27 @@
         c_.emitLine("    " + varName + "->Strikethrough = " + std::to_string(bStrike) + ";");
     };
 
+    // 控件自己的设计期 `BeginProperty Font` —— 与窗体那块同一套字段、同一个发射器。
+    // VB6 里这是"控件自带的字体", 优先于 ambient 继承 (继承那一张在创建时已经发过了);
+    // 顶层控件与 Frame/PictureBox 子控件两路都要发, 否则容器里的控件永远只有继承字体。
+    auto emitFrmFontBlock = [&](const FrmControl& ctrl, const std::string& hwndExpr) -> void {
+        for (const auto& blk : ctrl.propertyBlocks) {
+            if (_stricmp(blk.blockName.c_str(), "Font") != 0) continue;
+            emitFrmFontObj(blk, "_vb6_fblk");
+            c_.emitLine("    vb6_UC_ApplyFontToWindow(" + hwndExpr + ", (void*)_vb6_fblk);");
+            c_.emitLine("  } }");
+        }
+    };
+
+    // 残差 #8: 窗体级 `BeginProperty Font` —— 此前**从未发射过**:
+    // vb6_CreateFormWindowB 只发 NULL (默认 MS Sans Serif 8.25pt), 生成码里没有任何
+    // 一处把窗体自己的设计期字体发到窗口上 —— 实测窗体 WM_GETFONT 得到 MS Sans
+    // Serif lfHeight=-13, 而 Form1.frm 写的是 Arial Narrow 9.75pt (= -16 @120dpi)。
+    // 这里在任何子控件创建之前先把窗体字体落窗; 子控件随后在 vb6_CreateControl 里
+    // 按 ambient 继承它 (VB6 的规则: 控件 Font 默认取父窗体 Font)。
+    // 用与子控件同一个发射器, 两处字体的字段口径就不会分家。
+    emitFrmFontBlock(frmDesc.formControl, "(void*)hwnd");
+
     // Fix 182: .frx 设计期属性发射（主控件循环与容器子控件共用）。
     // 原先这段内联在 cgen_form_ctrl_style_apply.inc 的 P24 块里, 只有顶层控件走得到;
     // Frame/PictureBox 的子控件由 cgen_form_frame_menu.inc 的 emitChildControls 另起一条精简路径,

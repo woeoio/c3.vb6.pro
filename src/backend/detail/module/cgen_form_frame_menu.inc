@@ -504,6 +504,7 @@
                 }
 
                 emitDesignerFontProps(child, childHwndRead(child));    // 账 #154: 同上（字体两条也两路都发）
+                emitFrmFontBlock(child, childHwndRead(child));         // 残差 #8: 容器子控件的 BeginProperty Font
                 emitDesignerTabIndexProp(child, childHwndRead(child), childTi);  // 账 #160: 第二条创建路同样要发这一句
                 emitDesignerScaleModeProp(child, childHwndRead(child));  // 账 #197: 第二条创建路同样要发这一句
                 // Fix 187 的第二条创建路: 设计期 ForeColor/BackColor 此前只在**顶层**发

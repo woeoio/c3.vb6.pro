@@ -465,8 +465,13 @@ void* vb6_CreateFormWindowB(const char* className, const char* formName,
     free(wtitle);
     /* 账 #305 第二百七十八刀: 参考的顶层窗体自己答字体 (-13/MS Sans Serif), C3 的 VB6_Form_* 顶层
      * 从没被发过 => 窗体上 Print/TextWidth 那一族按 DC 默认字体量。交 NULL = VB6 默认档;
-     * 窗体若带设计期字体, 后面那条 setter 会再来发一张 (那一站自带作废)。 */
-    vb6_UC_ApplyFontToWindow(hwnd, NULL);
+     * 窗体若带设计期字体, 后面那条 setter 会再来发一张 (那一站自带作废)。
+     * 残差 #8 补一刀: 那条 setter 是在 WM_CREATE 里 (CreateControls 开头) 发的, 而
+     * CreateWindowExW **同步**跑完 WM_CREATE 才回到这里 —— 无条件发 NULL 会把设计期字体
+     * 当场覆盖回 8.25pt (实测: 子控件已按 ambient 继承到 Arial Narrow -16, 窗体自己却
+     * 退回 MS Sans Serif -13)。所以只给"还没人发过字体"的窗体补默认档。 */
+    if (!vb6_ControlFontStored((HWND)hwnd))
+        vb6_UC_ApplyFontToWindow(hwnd, NULL);
     vb6_formApplyDefaultIcon(hwnd, hInstance);
     return (void*)hwnd;
 }
@@ -693,11 +698,26 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
         vb6_GeomCacheWrite(hwnd, VB6_GEOM_HEIGHT, height, 1);
     }
 
-    // 设置默认字体 (VB6使用MS Sans Serif 8.25pt)
+    // 设置默认字体: VB6 子控件的 Font **默认取 ambient** —— 也就是创建那一刻父容器
+    // (窗体 / Frame / PictureBox / UC 宿主) 已经落下的那份字体。父窗口有字体就按它的
+    // LOGFONT 再 CreateFontIndirect 一份; 父窗口没有 (裸 Win32 容器 / 尚未落字体) 才
+    // 退到 VB6 的 MS Sans Serif 8.25pt。
+    // ⚠ 必须是"复制一份"而不是共享句柄, 理由见 vb6_Vb6DefaultGuiFont 上面那段:
+    // vb6_SetControlFontFromLogFont 换字体时无条件 DeleteObject(旧句柄), 共享会被
+    // 某个改 Font 的兄弟控件删掉, 其余控件随即拿着已销毁/被复用的句柄。
+    // 设计期自带 `BeginProperty Font` 的控件由生成码随后覆写这一张。
     if (hwnd) {
         // Fix 181: 原先直接用 GetStockObject(DEFAULT_GUI_FONT) —— 现代 Windows 上
         // 那是 Segoe UI 9pt, 比 VB6 的 MS Sans Serif 8.25pt 宽, 控件标题被截字。
-        HFONT hFont = vb6_Vb6DefaultGuiFont();
+        HFONT hFont = NULL;
+        HFONT hParentFont = hParent ? vb6_ControlFontStored((HWND)hParent) : NULL;
+        if (!hParentFont && hParent) hParentFont = vb6_ControlFont((HWND)hParent);
+        if (hParentFont) {
+            LOGFONTW lfParent;
+            if (GetObjectW(hParentFont, sizeof(lfParent), &lfParent) > 0)
+                hFont = CreateFontIndirectW(&lfParent);
+        }
+        if (!hFont) hFont = vb6_Vb6DefaultGuiFont();
         if (!hFont) {
             hFont = CreateFontW(
                 -11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,

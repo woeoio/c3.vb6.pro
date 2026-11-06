@@ -68,6 +68,22 @@ public class UP {
     return sz.cx;
   }
   public struct RECT { public int L, T, R, B; }
+  // 残差 #8: WM_GETFONT → LOGFONT 一行读数 "面名|高度|字符集|字重"; 无字体返回 ""
+  public static string LogFontOf(IntPtr h) {
+    IntPtr hf = SendMessageW(h, 0x0031, IntPtr.Zero, IntPtr.Zero);   // WM_GETFONT
+    if (hf == IntPtr.Zero) return "";
+    var lf = new LOGFONTW(); if (GetObjectW(hf, 92, ref lf) <= 0) return "";
+    return lf.lfFaceName + "|" + lf.lfHeight + "|" + lf.lfCharSet + "|" + lf.lfWeight;
+  }
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr GetPropW(IntPtr h, string n);
+  // STATIC/Label 不答 WM_GETFONT (VB6 也一样), 但 RTL 把实际字体存进了窗口属性
+  // (vb6_ControlFontStore → SetPropW "VB6_CtrlFont"), 读那一格才是"实际生效的字体"。
+  public static string PropLogFontOf(IntPtr h) {
+    IntPtr hf = GetPropW(h, "VB6_CtrlFont");
+    if (hf == IntPtr.Zero) return "";
+    var lf = new LOGFONTW(); if (GetObjectW(hf, 92, ref lf) <= 0) return "";
+    return lf.lfFaceName + "|" + lf.lfHeight + "|" + lf.lfCharSet + "|" + lf.lfWeight;
+  }
   public static string Cls(IntPtr h) { var sb = new StringBuilder(256); GetClassName(h, sb, 256); return sb.ToString(); }
   // 枚举放 C# 侧: PS 5.1 的 scriptblock 委托回调查不到调用方 pid (会误报"主窗未找到")
   public static IntPtr FindMain(uint pid) {
@@ -368,6 +384,11 @@ $btnDpi = [UP]::GetDpiForWindow($main)
 if ($btnDpi -lt 96) { $btnDpi = 96 }
 $expTwoLine = [int][Math]::Round(26 * $btnDpi / 120)
 $btnCaps = @("Tree Explorer", "Corporate Hierarchy", "Drag and Drop", "Menu / Tools", "Contact  List")
+# 参考行数: 真 VB6 在这 5 枚上是 2/2/2/1/1 (82/119/87/78/72 @Arial Narrow 9.75pt vs 文本区 80)。
+# 残差 #8 修好后 C3 的字体与 VB6 同档 (ambient Arial Narrow 9.75pt), 所以 96dpi 与
+# 120dpi 都必须给出同一组行数 —— 这条是**参考**判据, 下面的 $wantLines 是字体自洽判据,
+# 两边都要过 (只对一边就说明"字体对了但断行不对"或"断行对了但字体不对")。
+$btnRefLines = @(2, 2, 2, 1, 1); $btnIdx = 0
 $btnMissing = 0; $btnBad = @(); $btnRead = @()
 foreach ($cap in $btnCaps) {
     $bhw = [UP]::FindChildByText($main, $cap)
@@ -407,7 +428,9 @@ foreach ($cap in $btnCaps) {
     $inkH = 0
     if ($bMaxY -ge 0) { $inkH = $bMaxY - $bMinY + 1 }
     $st = [UP]::GetWindowLongW($bhw, -16)
+    $wlRef = $btnRefLines[$btnIdx]; $btnIdx++
     if (($st -band 0x2000) -eq 0) { $btnBad += "'$cap' 缺 BS_MULTILINE (style=0x$('{0:X8}' -f $st))" }
+    if ($bands -ne $wlRef) { $btnBad += "'$cap' 行数 $bands != 参考 $wlRef" }
     if ($bands -ne $wantLines) { $btnBad += "'$cap' 行数 $bands != $wantLines (ext=$capW/客户宽 $clientW)" }
     if ($wantLines -eq 2 -and $inkH -lt $expTwoLine) {
         $btnBad += "'$cap' 墨迹高 ${inkH}px < 两行下限 ${expTwoLine}px"
@@ -415,6 +438,55 @@ foreach ($cap in $btnCaps) {
     $btnRead += ("$cap=${bands}L/${inkH}px/ext$capW")
 }
 if ($btnMissing -gt 0) { $btnBad += "底部 push 按钮定位失败 $btnMissing/5" }
+
+# --- 残差 #8: 窗体级设计期 Font 落地 + 子控件 ambient 继承 ---
+# 真 VB6 实测: 窗体与"没有自带 Font 块"的子控件共用同一枚 HFONT =
+# Arial Narrow 9.75pt => lfHeight -16 @120dpi / -13 @96dpi, charset=0 (ANSI, 与 .frm 里
+# `Charset = 0` 同值), weight=400。
+# Form1.frm 的窗体级块正是 Arial Narrow 9.75pt; 底部 5 枚按钮 / Check1 / Label1 都没有
+# 自己的 Font 块, 所以它们必须与窗体同档 —— 这一条既抓"窗体块没落地", 也抓"没走继承"。
+$expFace = "Arial Narrow"
+$expFontH = -[int](9.75 * $btnDpi / 72.0)      # 与 RTL vb6_UC_FontHeightPx 同一算式
+$fontBad = @()
+$formLf = [UP]::LogFontOf($main)
+if ($formLf -eq "") {
+    $fontBad += "窗体 WM_GETFONT=0 (设计期字体没落到窗口)"
+} else {
+    $ff = $formLf -split '\|'
+    if ($ff[0] -ne $expFace) { $fontBad += "窗体面名 '$($ff[0])' != '$expFace'" }
+    if ([int]$ff[1] -ne $expFontH) { $fontBad += "窗体 lfHeight $($ff[1]) != $expFontH" }
+    if ([int]$ff[2] -ne 0) { $fontBad += "窗体 charset $($ff[2]) != 0" }
+    if ([int]$ff[3] -ne 400) { $fontBad += "窗体 weight $($ff[3]) != 400" }
+}
+# 四个探针各证一条链: 前三个的父容器都没有自带 Font 块 (窗体 / Picture3 / 窗体),
+# 必须继承窗体那档; 最后一个是**反证** —— Label1 住在 Picture1 里, 而 Picture1 自带
+# `BeginProperty Font MS Sans Serif 8.25`, 所以它必须继承 8.25 那档而不是窗体的
+# Arial Narrow。少了这条, "子控件都在继承窗体字体"与"子控件都无视容器字体"这两种
+# 实现都会被判绿。
+# 最后一个只查面名: 8.25pt@120dpi 的 lfHeight 差 1px (VB6 取整到 -14, C3 截断到 -13)
+# 是既有残差, 与本族（窗体级字体/继承链）无关, 记录在读数里但不在这里判。
+$inheritProbes = @(
+    @("Button",   "Tree Explorer",  $expFace,       $expFontH),
+    @("CheckBox", "AllowEdit",      $expFace,       $expFontH),
+    @("Label",    "MarginBottom",   $expFace,       $expFontH),
+    @("Label",    "SelectionColor", "MS Sans Serif", $null)
+)
+$fontRead = @("form=" + $formLf)
+foreach ($pr in $inheritProbes) {
+    $h = [UP]::FindChildByText($main, $pr[1])
+    if ($h -eq [IntPtr]::Zero) { $fontBad += "$($pr[0]) '$($pr[1])' 定位失败"; continue }
+    $lf = [UP]::LogFontOf($h)
+    if ($lf -eq "") { $lf = [UP]::PropLogFontOf($h) }   # STATIC 不答 WM_GETFONT, 读 RTL 存的那一格
+    $fontRead += ($pr[0] + "=" + $lf)
+    if ($lf -eq "") { $fontBad += "$($pr[0]) 读不到 LOGFONT"; continue }
+    $g = $lf -split '\|'
+    if ($g[0] -ne $pr[2]) {
+        $fontBad += "$($pr[0]) '$($pr[1])' 面名 '$($g[0])' != '$($pr[2])' (继承链断)"
+    }
+    if ($pr[3] -ne $null -and ([int]$g[1] -ne $pr[3] -or [int]$g[2] -ne 0)) {
+        $fontBad += "$($pr[0]) '$($pr[1])' 未继承窗体字体 ($lf)"
+    }
+}
 
 # --- 树区 (UC 宿主客户区, 坐标相对整幅窗体) ---
 $x0 = [Math]::Max(0, $ur.L - $wr.L); $y0 = [Math]::Max(0, $ur.T - $wr.T)
@@ -581,6 +653,8 @@ if ($sbMidOk -lt $sbCount) { $bad += "VScrollBar 中线白线缺失 ($sbMidOk/$s
 if ($sbLeftOk -lt $sbCount) { $bad += "VScrollBar 左边白线缺失 ($sbLeftOk/$sbCount)" }
 # 残差 #7: 底部 5 枚 push 按钮 —— BS_MULTILINE 在位 + 行数与参考一致 + 两行墨迹高度下限
 if ($btnBad.Count -gt 0) { $bad += ("底部按钮: " + ($btnBad -join "; ")) }
+# 残差 #8: 窗体设计期字体 + 子控件 ambient 继承
+if ($fontBad.Count -gt 0) { $bad += ("字体继承: " + ($fontBad -join "; ")) }
 if ($refBad.Count -gt 0) { $bad += ($refBad -join "; ") }
 # 残差 #3: 选中行文字色/白底 —— VB6 是白字透明底, C3 改前是黑字 + Opaque 白底块
 if ($hlH -le 0) { $bad += "选中高亮未找到" }
@@ -602,6 +676,7 @@ $readout += " selWhite=$selWhite selDark=$selDark selBlack=$selBlack hlH=${hlH}@
 $readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
 $readout += " edFrameDark=$edFrameDark edTopDark=$edTopDark edEdge236=$edEdge236/$($editHwnds.Length) sb240=$([Math]::Round(100*$sbR240,1))% sbWhite=$([Math]::Round(100*$sbRWhite,1))% sbMid=$sbMidOk/$sbCount sbLeft=$sbLeftOk/$sbCount"
 $readout += " btns=[" + ($btnRead -join " | ") + "] twoLine=$expTwoLine bottomBarRefDiff=$refDiff"
+$readout += " font=[" + ($fontRead -join " | ") + "] expFontH=$expFontH"
 if ($bad.Count -gt 0) {
     Write-Output ("FAIL " + ($bad -join "; ") + " | " + $readout + " | png=$pngPath")
     try { $p.Kill() } catch {}

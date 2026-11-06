@@ -395,6 +395,7 @@
             emitDesignerStateProps(ctrl, dsHwnd);  // 账 #125: Enabled / Visible / Value
             emitDesignerStringProps(ctrl, dsHwnd);  // 账 #142: ToolTipText / Tag（非空才发）
             emitDesignerFontProps(ctrl, dsHwnd);    // 账 #154: FontName / FontSize（写过才发）
+            emitFrmFontBlock(ctrl, dsHwnd);         // 残差 #8: 控件自己的 BeginProperty Font
             emitDesignerTabIndexProp(ctrl, dsHwnd, tabIndexFallback);  // 账 #160: 设计期 TabIndex（顶层这条路）
             emitDesignerScaleModeProp(ctrl, dsHwnd);  // 账 #197: 设计期 ScaleMode（顶层这条路）
 
