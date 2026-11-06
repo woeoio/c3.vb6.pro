@@ -75,6 +75,44 @@ public class UP {
     var lf = new LOGFONTW(); if (GetObjectW(hf, 92, ref lf) <= 0) return "";
     return lf.lfFaceName + "|" + lf.lfHeight + "|" + lf.lfCharSet + "|" + lf.lfWeight;
   }
+  // --- ucTreeView 交互判据 (2026-11-06 缺陷 1/2/3/4) ---
+  // 口径: 所有"等窗口"都有上限 (调用方给 3s), 模态盒 (#32770) 一律 WM_CLOSE 收口并校验
+  // IsWindow=false; 主窗恢复响应用 SendMessageTimeout(WM_NULL, 2s) 单证。
+  [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder sb, int n);
+  [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr res);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, IntPtr e);
+  public static string WText(IntPtr h) { var sb = new System.Text.StringBuilder(512); GetWindowTextW(h, sb, 512); return sb.ToString(); }
+  public static void Click(IntPtr h) { PostMessageW(h, 0x00F5, IntPtr.Zero, IntPtr.Zero); }   // BM_CLICK
+  public static void CloseWin(IntPtr h) { PostMessageW(h, 0x0010, IntPtr.Zero, IntPtr.Zero); } // WM_CLOSE
+  public static void DoubleClickAt(int x, int y) {
+    SetCursorPos(x, y);
+    mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+    System.Threading.Thread.Sleep(40);
+    mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+  }
+  // 除主窗以外**可见**的 VB6_Form_* (底部五按钮各自要弹一枚)
+  public static IntPtr FindOtherForm(uint pid, IntPtr main) {
+    IntPtr f = IntPtr.Zero;
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);
+      if (p == pid && h != main && IsWindowVisible(h) && Cls(h).StartsWith("VB6_Form_")) { f = h; return false; }
+      return true; }, IntPtr.Zero);
+    return f;
+  }
+  public static IntPtr FindDialog(uint pid) {
+    IntPtr f = IntPtr.Zero;
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);
+      if (p == pid && IsWindowVisible(h) && Cls(h) == "#32770") { f = h; return false; }
+      return true; }, IntPtr.Zero);
+    return f;
+  }
+  public static bool Responds(IntPtr h) {
+    IntPtr res = IntPtr.Zero;
+    IntPtr ok = SendMessageTimeoutW(h, 0x0000, IntPtr.Zero, IntPtr.Zero, 0x0002, 2000, out res);  // SMTO_ABORTIFHUNG
+    return ok != IntPtr.Zero;
+  }
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr GetPropW(IntPtr h, string n);
   // STATIC/Label 不答 WM_GETFONT (VB6 也一样), 但 RTL 把实际字体存进了窗口属性
   // (vb6_ControlFontStore → SetPropW "VB6_CtrlFont"), 读那一格才是"实际生效的字体"。
@@ -635,6 +673,164 @@ if ($expDpi -lt 96) { $expDpi = 96 }
 $expHl = [int][Math]::Round(41 * $expDpi / 120)
 $expPitch = [int][Math]::Round(44 * $expDpi / 120)
 
+# ============================================================
+# 交互判据 (2026-11-06 四条实测缺陷; 本机验收, CI 桌面无交互则本段自然红)
+#   缺陷1: 展开后 icon 不能丢 + 子项可独立切换 -> 双击首行(展开/收起)量 vivid/darkRows
+#   缺陷3: Load from custom XML 后树被重建     -> 高亮消失 + 可见节点行骤减
+#   缺陷4: 底部五按钮各自弹出目标窗体         -> 逐个 BM_CLICK + 找新可见 VB6_Form_* + WM_CLOSE 收口
+#   缺陷2: 三点按钮弹色选对话框               -> 等 #32770 (上限 3s) + WM_CLOSE + IsWindow=false
+# 模态收口口径: 一切等待均有上限 (3s); 关不掉就 FAIL 并记读数, 绝不无界等待; 兜底由套件
+# 看门狗 (/RunTimeoutSec + 进程 Kill) 收尾。
+# ============================================================
+$actBad = @(); $actRead = @()
+
+function Measure-TreePx([int]$rx0, [int]$ry0, [int]$rtw, [int]$rth) {
+    $bb = New-Object System.Drawing.Bitmap($rtw, $rth)
+    $gg = [System.Drawing.Graphics]::FromImage($bb)
+    $gg.CopyFromScreen($wr.L + $rx0, $wr.T + $ry0, 0, 0, (New-Object System.Drawing.Size($rtw, $rth)))
+    $gg.Dispose()
+    $v = 0; $dk = 0; $hlp = 0; $ck = 0
+    $rows = New-Object int[] $rth
+    for ($yy = 0; $yy -lt $rth; $yy++) {
+        for ($xx = 0; $xx -lt $rtw; $xx++) {
+            $c = $bb.GetPixel($xx, $yy)
+            $mx = [Math]::Max($c.R, [Math]::Max($c.G, $c.B)); $mn = [Math]::Min($c.R, [Math]::Min($c.G, $c.B))
+            # "vivid" 只收**低饱和排除后**的彩色: 选中行的粉底 (255,180,180) 不是图标,
+            # 它一消失就会把"图标还在"的读数整个吃掉 (改前实测 7922 里 6898 是粉底)。
+            $pastel = ($c.R -ge 240) -and ($c.G -ge 160) -and ($c.B -ge 160) -and ([Math]::Abs($c.G - $c.B) -le 25)
+            if (($mx - $mn) -ge 60 -and -not $pastel) { $v++ }
+            if ((0.299*$c.R + 0.587*$c.G + 0.114*$c.B) -lt 110) { $dk++; $rows[$yy]++ }
+            if ($c.R -eq 255 -and $c.G -eq 180 -and $c.B -eq 180) { $hlp++ }
+            if ($c.R -eq 99 -and $c.G -eq 99 -and $c.B -eq 255) { $ck++ }   # 勾选框蓝
+        }
+    }
+    $dr = 0
+    for ($yy = 0; $yy -lt $rth; $yy++) { if ($rows[$yy] -ge 3) { $dr++ } }
+    $bb.Dispose()
+    return @($v, $dk, $dr, $hlp, $ck)
+}
+function Wait-Until([scriptblock]$probe, [int]$ms) {
+    $end = (Get-Date).AddMilliseconds($ms)
+    while ((Get-Date) -lt $end) {
+        $h = & $probe
+        if ($h -ne [IntPtr]::Zero) { return $h }
+        Start-Sleep -Milliseconds 100
+    }
+    return [IntPtr]::Zero
+}
+function Wait-Gone([IntPtr]$h, [int]$ms) {
+    $end = (Get-Date).AddMilliseconds($ms)
+    while ((Get-Date) -lt $end) {
+        if (-not [UP]::IsWindow($h)) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+    return (-not [UP]::IsWindow($h))
+}
+
+if ($p.HasExited) {
+    $actBad += "交互前进程已退出 (崩溃/自退, 交互判据无法取样)"
+} else {
+    # ---- 缺陷1: 双击首行 Facebook (有 3 个子项) 收起再展开, 两态各量一次 ----
+    if ($hlMaxY -gt $hlMinY) {
+        $preV, $preD, $preR, $preH = Measure-TreePx $x0 $y0 $tw $th
+        $dcx = $wr.L + $x0 + $hlMinX + 30
+        $dcy = $wr.T + $y0 + $hlMinY + [int]($hlH / 2)
+        [UP]::SetForegroundWindow($main) | Out-Null
+        Start-Sleep -Milliseconds 300
+        [UP]::DoubleClickAt($dcx, $dcy)
+        Start-Sleep -Milliseconds 900
+        $v1, $d1, $r1, $h1 = Measure-TreePx $x0 $y0 $tw $th
+        [UP]::DoubleClickAt($dcx, $dcy)
+        Start-Sleep -Milliseconds 900
+        $v2, $d2, $r2, $h2 = Measure-TreePx $x0 $y0 $tw $th
+        $actRead += "expand pre=$preR/$preV t1=$r1/$v1 t2=$r2/$v2"
+        if ($r1 -lt $r2) { $expR = $r2; $expV = $v2; $colR = $r1; $colV = $v1 }
+        elseif ($r2 -lt $r1) { $expR = $r1; $expV = $v1; $colR = $r2; $colV = $v2 }
+        else { $expR = 0; $expV = 0; $colR = 0; $colV = 0 }
+        if ($expR -eq 0) {
+            $actBad += "展开/收起无差异 (两次双击后可见行数都是 $r1/$r2, 双击未命中或展开不生效)"
+        } else {
+            if ($expR -lt ($colR + 3)) { $actBad += "展开后可见节点行 $expR < 收起态 $colR + 3" }
+            if ($expV -lt ($colV + 20)) { $actBad += "展开后图标彩色像素 $expV 未随子项增加 (收起态 $colV, 展开丢图标)" }
+        }
+    } else {
+        $actBad += "首行高亮未定位, 展开判据无法取样"
+    }
+
+    # ---- 缺陷3: Load from custom XML (按钮体里 Nodes.Clear + CheckBoxes=False + 递归重填) ----
+    # 可测量口径: ①旧选中高亮清零 (Clear 生效) ②勾选框蓝(99,99,255)清零 (CheckBoxes=False 生效)
+    # ③可见节点行数明显改变 (树被 XML 重填) ④无 #32770 解析错误框
+    $xmlBtn = [UP]::FindChildByText($main, "Load from custom XML")
+    if ($xmlBtn -eq [IntPtr]::Zero) {
+        $actBad += "找不到按钮 'Load from custom XML'"
+    } else {
+        $xbV, $xbD, $xbR, $xbH, $xbCk = Measure-TreePx $x0 $y0 $tw $th
+        [UP]::Click($xmlBtn)
+        Start-Sleep -Milliseconds 1200
+        $xd = [UP]::FindDialog([uint32]$p.Id)
+        if ($xd -ne [IntPtr]::Zero) {
+            $actBad += ("XML 载入弹了模态框 '" + [UP]::WText($xd) + "'")
+            [UP]::CloseWin($xd)
+            [UP]::IsWindow($xd) | Out-Null
+            Start-Sleep -Milliseconds 800
+        }
+        $xv, $xd2, $xr, $xhl, $xck = Measure-TreePx $x0 $y0 $tw $th
+        $actRead += "xml rows=$xbR->$xr chk=$xbCk->$xck hl=$xbH->$xhl dark=$xd2"
+        if ($xd2 -lt 30) { $actBad += "XML 载入后树区深色像素 $xd2 < 30 (连节点文字都没画)" }
+        if ($xhl -gt 100) { $actBad += "XML 载入后仍有旧选中高亮 $xhl (Nodes.Clear 未生效)" }
+        if ($xbCk -gt 20 -and $xck -gt 5) { $actBad += "XML 载入后勾选框蓝仍在 $xck (CheckBoxes=False 未生效)" }
+        if ([Math]::Abs($xr - $xbR) -lt 5) { $actBad += "XML 载入前后可见节点行 $xbR->$xr 几乎没变 (树没被 XML 重填)" }
+    }
+
+    # ---- 缺陷2: 三点按钮 -> 色选对话框 (#32770), 探测/收口各有上限 ----
+    $dotBtn = [UP]::FindChildByText($main, "...")
+    if ($dotBtn -eq [IntPtr]::Zero) {
+        $actBad += "找不到 '...' 按钮"
+    } else {
+        [UP]::Click($dotBtn)
+        $dlg = Wait-Until { [UP]::FindDialog([uint32]$p.Id) } 3000
+        if ($dlg -eq [IntPtr]::Zero) {
+            $actBad += "三点按钮未弹色选对话框 (#32770 3s 内未出现)"
+            $actRead += "colorDialog=none"
+        } else {
+            $dt = [UP]::WText($dlg)
+            $actRead += "colorDialog='" + $dt + "'"
+            [UP]::SetForegroundWindow($dlg) | Out-Null
+            [UP]::CloseWin($dlg)
+            $gone = Wait-Gone $dlg 3000
+            if (-not $gone) {
+                [UP]::PostMessageW($dlg, 0x0111, [IntPtr]2, [IntPtr]::Zero) | Out-Null   # WM_COMMAND IDCANCEL
+                $gone = Wait-Gone $dlg 3000
+            }
+            $actRead += "colorClosed=$gone"
+            if (-not $gone) { $actBad += "色选对话框 3s+3s 内关不掉 (模态框未收口)" }
+            if (-not [UP]::Responds($main)) { $actBad += "色选关闭后主窗不响应 (WM_NULL 2s 超时)" }
+        }
+    }
+
+    # ---- 缺陷4: 底部五按钮各弹一枚窗体 (非模态: WM_CLOSE 逐一收口) ----
+    $formCaps = @("Tree Explorer", "Corporate Hierarchy", "Drag and Drop", "Menu / Tools", "Contact  List")
+    foreach ($cap in $formCaps) {
+        $fb = [UP]::FindChildByText($main, $cap)
+        if ($fb -eq [IntPtr]::Zero) { $actBad += "找不到按钮 '$cap'"; continue }
+        [UP]::Click($fb)
+        $fw = Wait-Until { [UP]::FindOtherForm([uint32]$p.Id, $main) } 3000
+        if ($fw -eq [IntPtr]::Zero) {
+            $actRead += ("form[$cap]=none")
+            $actBad += "'$cap' 3s 内没有弹出可见窗体"
+            continue
+        }
+        $ft = [UP]::WText($fw)
+        $actRead += ("form[$cap]='" + $ft + "'")
+        [UP]::CloseWin($fw)
+        $fgone = Wait-Gone $fw 3000
+        $actRead += ("close=" + $fgone)
+        if (-not $fgone) { $actBad += "'$cap' 弹窗 3s 内关不掉" }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not [UP]::Responds($main)) { $actBad += "五窗体走完主窗不响应" }
+}
+
 $bad = @()
 if (($white / $area) -lt 0.15) { $bad += "白底占比 $([Math]::Round(100*$white/$area,1))% < 15%" }
 if (($bg240 / $area) -gt 0.40) { $bad += "宿主灰底占比 $([Math]::Round(100*$bg240/$area,1))% > 40%" }
@@ -681,12 +877,16 @@ else {
     }
 }
 
+# 交互判据 (缺陷 1/2/3/4) 的红项并入同一条 FAIL 通道, 不另开"软失败"
+if ($actBad.Count -gt 0) { $bad += ("交互: " + ($actBad -join "; ")) }
+
 $readout = "tree=${tw}x${th} white=$white bg240=$bg240 dark=$dark darkRows=$darkRows hl=$hl vivid=$vivid"
 $readout += " selWhite=$selWhite selDark=$selDark selBlack=$selBlack hlH=${hlH}@${expHl} pitch=${pitch}@${expPitch} dpi=$expDpi"
 $readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
 $readout += " edFrameDark=$edFrameDark edTopDark=$edTopDark edEdge236=$edEdge236/$($editHwnds.Length) sb240=$([Math]::Round(100*$sbR240,1))% sbWhite=$([Math]::Round(100*$sbRWhite,1))% sbMid=$sbMidOk/$sbCount sbLeft=$sbLeftOk/$sbCount"
 $readout += " btns=[" + ($btnRead -join " | ") + "] twoLine=$expTwoLine bottomBarRefDiff=$refDiff"
 $readout += " font=[" + ($fontRead -join " | ") + "] expFontH=$expFontH faceInstalled=$expFace" + $(if ($faceInstalled) { ":yes" } else { ":no(参考行数判据 SKIP)" })
+$readout += " act=[" + ($actRead -join " | ") + "]"
 if ($bad.Count -gt 0) {
     Write-Output ("FAIL " + ($bad -join "; ") + " | " + $readout + " | png=$pngPath")
     try { $p.Kill() } catch {}

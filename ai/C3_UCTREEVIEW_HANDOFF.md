@@ -1416,3 +1416,26 @@ RTL 侧正确出口已存在：`vb6_VariantFromValue` 对任意指针走 `defaul
 **残留（非第 4 条，另记）**：Form6 运行时 stderr 打 `THE IMAGE: 1..7 DON'T EXIST`
 （`ucTreeViewPlus.ctl:985` 的 `cImageList(index)=0` 分支）⇒ 联系人头像未进 ImageList。
 属于第 1 条 icon 家族的**另一实例**（key/索引口径），未在本轮闭合。
+### 27.8 断言扩写与旧红新绿读数（2026-11-06 续跑，缺陷 1/2/3/4 逐条）
+
+`tests\guisample\uctreeview_px.ps1` 追加**交互判据**段（缺陷 1/2/3/4 各自独立取样，红项并入
+同一条 FAIL 通道，不另开"软失败"）：
+
+| 判据 | 操作 | 阈值（不放宽） | 新产物实测 | 旧产物实测 |
+|---|---|---|---|---|
+| 1a 展开不丢图标 | 双击首行 Facebook 收起→展开，各量一次树区 | 展开态可见行 ≥ 收起态 + 3；**图标彩色像素**展开态 ≥ 收起态 + 20（粉底 255,180,180 已从 vivid 剔除） | t1=84 行/1715、t2=56 行/998 → 过 | 76/1552 vs 56/998 → 过（该旧产物已含缺陷 1 修复） |
+| 2 三点按钮 | BM_CLICK 第一个 `...` | `#32770` 3s 内出现；`WM_CLOSE` 后 `IsWindow=false`（3s，再 IDCANCEL 3s 兜底）；主窗 `WM_NULL` 2s 内应 | `'颜色'` 出现且 `close=True` | `colorDialog=none` → **红** |
+| 3 LoadFromCustomXML | 点击 `Load from custom XML` | ①无 `#32770` ②旧高亮 ≤100 ③勾选蓝(99,99,255) 从 >20 降到 ≤5 ④可见行数变化 ≥5 | `rows 56->12, chk 73->0, hl 0->0, dark 123` | 同口径过（该旧产物已含缺陷 3 修复） |
+| 4 底部五按钮 | 逐个 BM_CLICK 五个 caption | 每枚 3s 内出现**可见** `VB6_Form_*` 且 `WM_CLOSE` 3s 内消失；主窗 2s 内应 | Tree Explorer / Form3 / Drag & Drop / Form5 / Agenda tema oscuro 全过，五枚 close=True | `Corporate Hierarchy` 3s 无窗体，后续 caption 找不到，主窗不响应 → **红** |
+
+收口口径落实：所有"等窗口"上限 3s（`Wait-Until`/`Wait-Gone`），模态盒探测用
+`EnumWindows` 找 `#32770` 且要求 `IsWindowVisible`，关闭 = `PostMessage(WM_CLOSE)` →
+`IsWindow=false` 校验 → 失败再 `WM_COMMAND IDCANCEL` 3s；**无任何无界等待**。
+看门狗兜底仍由套件 `-RunTimeoutSec`（默认 60s，超时杀进程 + 诊断）。
+
+产物与哨兵：`output\ucTreeView\Proyecto1.exe`（833536 B，2026-11-07 00:58）→ px **PASS**；
+`scripts\check_uctreeview_authority.ps1` → PASS（RaiseEvent 1 / ChooseColor 7 / ShowWindow 散点 0）。
+`output\ucTreeView\` 同时补 `img\` + `ejemplo.xml` + `JerarquiaEmpresa.xml` + `menu.xml`。
+
+未闭合（不在四条口径内，另记）：Form6 的 `THE IMAGE: 1..7 DON'T EXIST`（联系人头像未进
+ImageList，`ucTreeViewPlus.ctl:985` 的 `cImageList(index)=0` 分支）。
