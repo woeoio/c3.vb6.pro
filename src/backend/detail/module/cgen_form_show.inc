@@ -102,7 +102,7 @@
     // Form_Resize 内部自己 Move 子控件是**在同一个 hwnd 上**的第二次 Move,
     // 由 `sizeChanged` 判据保证只在真变化时再进一层 ⇒ 收敛。
     {
-        std::string resizeFn29 = cProcName("Form_Resize", AccessLevel::Private);
+        std::string resizeFn29 = cProcName(std::string(formEvtBase334) + "_Resize", AccessLevel::Private);
         // 守卫只认**本模块自有**的处理器 —— 裸名 lookup 会命中跨模块注入的别家
         // Form_Resize (Outlook2013: 仅 frmInbox 有 Form_Resize, 其余 5 家的 load
         // 转发被别家注入的符号误触发 ⇒ LNK2019 ×6)。
@@ -110,7 +110,8 @@
             Symbol* s29 = symTab_.lookupModule(nm);
             return s29 && !s29->isExternal;
         };
-        if (hasOwnResize29((formName + "_Resize").c_str()) || hasOwnResize29("Form_Resize")) {
+        if (hasOwnResize29((formName + "_Resize").c_str()) || hasOwnResize29("Form_Resize")
+            || hasOwnResize29((std::string(formEvtBase334) + "_Resize").c_str())) {
             c_.emitLine("{ extern void " + resizeFn29 + "(); vb6_RegisterFormResize(vb6_hwnd_"
                         + cIdent(formName) + ", (void*)" + resizeFn29 + "); }  /* Fix <vbeclipse> rev29 */");
         }

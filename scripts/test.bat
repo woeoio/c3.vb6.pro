@@ -1,12 +1,14 @@
 @echo off
 REM ============================================================
 REM  test.bat - 运行回归测试
-REM  用法: test [all|run|compile|syntax|smoke] [verbose]
+REM  用法: test [all|run|compile|syntax|smoke|gui] [verbose]
 REM    test          = 全部测试
 REM    test run      = 仅运行测试(编译+运行+输出校验)
 REM    test compile  = 仅编译测试
 REM    test syntax   = 仅语法测试
 REM    test smoke    = 仅冒烟测试(tests\smoke.bas, 构建后快速验证产物可用)
+REM    test gui      = 仅 GUI 表 (M2 数据驱动用例, 同样会随 vbp 分类在 CI 里跑)
+REM  一键基线(M1, 同时被 CI 调用): powershell -File tests\baseline.ps1
 REM ============================================================
 
 REM 路径由脚本自身位置推导, 不依赖固定盘符

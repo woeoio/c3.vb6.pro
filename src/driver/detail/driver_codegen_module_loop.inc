@@ -105,7 +105,12 @@
         cgen.setFormModuleNames(formModuleNames);  // Fix 086: 跨模块窗体默认实例引用
         // 账 #305 第320刀 (账 #592): App.Title 真值 = .vbp 的 Title（空则工程 Name）。
         // 单文件编译（无 .vbp）时为空 ⇒ 入口点一行不发，读取侧退 EXEName（旧口径）。
-        cgen.setProjectTitle(!verTitle_.empty() ? verTitle_ : vbpProjectName_);
+        // 第330刀 (账 #605) + 第三百五十九刀: 算法仍只住 appTitleSeed() 一处 (DLL 的
+        // dllCgen 要同一个值, 两处各抄一遍就会在「Title 与 Name 谁优先」上分家)。
+        // 359 刀把「无 Title=」那一档从工程 Name 改成 **exe 名** (ExeName32 的 stem):
+        // 参考二进制 (Codejock GUISample.exe) 的 SaveSetting(App.Title, ...) 键就是
+        // exe 名, 编译产物要与参考运行的持久化状态同键才能表现一致。
+        cgen.setProjectTitle(appTitleSeed());
         cgen.setStartupObject(startupObject);      // Fix 142: 启动对象 (入口点归属模块)
         cgen.setModulePublicConsts(&modulePublicConsts);  // Fix 086: 跨模块常量内联
         cgen.setDesignerFiles(&frmFiles_);  // Fix 112: 工程内 UserControl 设计器描述
@@ -113,6 +118,9 @@
         cgen.setOcxRefs(&ocxRefs);          // Fix 143b: 实例化 CLSID 以 vbp Object= 为准
         cgen.setComLibRefs(&comLibRefs);    // Fix 160: ComLib= 免注册组件表 (入口点烘焙)
         cgen.setOcxLibRefs(&ocxLibRefs);    // Fix <vbeclipse>: Object= OCX 免注册表 (入口点烘焙)
+        // 2026-11-04 免注册 COM 运行期模式: 空串 = 未指定 ⇒ 入口点零注入（产物逐字节不变）
+        cgen.setComMode(options.comMode);
+        cgen.setComManifest(options.comManifest);
         cgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static
         cgen.setInterfaceImplementers(&ifaceImplementersMap);  // P6.4+: 接口唯一实现类映射
         cgen.setInterfaceAllImplementers(&ifaceAllImplementersMap);  // Fix <vbeclipse>: 接口全部实现类 (桩分派用)

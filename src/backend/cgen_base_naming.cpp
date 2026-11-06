@@ -5,6 +5,7 @@
 #include "backend/cgen.hpp"
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cctype>
 #include <iostream>
 #include <functional>
@@ -57,6 +58,113 @@ std::string CCodeGen::defaultValueForParam(const ParameterInfo& p) const {
     const std::string clsPtr = const_cast<CCodeGen*>(this)->cParamClassPtrType(p);
     if (!clsPtr.empty()) return "NULL";
     return defaultValue(p.type);
+}
+
+// ucTreeView: (类名, 成员名) → 这枚字段是不是 COM 对象指针。
+// 判据与 cgen_expr_member_class_fallback.inc 里那两段内联查同源:
+//   ① classVoidFieldMap_ 命中 (void* / As Object / As New 字段)
+//   ② classTypedFieldMap_ 值带 "COM:" 前缀 (内置 COM 接口字段)
+// 键按类名大小写不敏感兜底 (AST 推断来的类名与预扫描表的拼法未必逐字相同)。
+template <typename MapT>
+static typename MapT::const_iterator ciFindClassKey(const MapT& m, const std::string& key) {
+    auto it = m.find(key);
+    if (it != m.end()) return it;
+    std::string kl = key;
+    for (auto& c : kl) c = (char)std::tolower((unsigned char)c);
+    for (auto i = m.begin(); i != m.end(); ++i) {
+        std::string k2 = i->first;
+        for (auto& c : k2) c = (char)std::tolower((unsigned char)c);
+        if (k2 == kl) return i;
+    }
+    return m.end();
+}
+
+bool CCodeGen::classFieldIsComPtr(const std::string& clsName,
+                                  const std::string& memberName) const {
+    if (clsName.empty() || memberName.empty()) return false;
+    std::string memLower = memberName;
+    for (auto& c : memLower) c = (char)std::tolower((unsigned char)c);
+    if (classVoidFieldMap_) {
+        auto it = ciFindClassKey(*classVoidFieldMap_, clsName);
+        if (it != classVoidFieldMap_->end()
+            && (it->second.count(memLower) || it->second.count("m_" + memLower)))
+            return true;
+    }
+    if (classTypedFieldMap_) {
+        auto it = ciFindClassKey(*classTypedFieldMap_, clsName);
+        if (it != classTypedFieldMap_->end()) {
+            auto f = it->second.find(memLower);
+            if (f == it->second.end()) f = it->second.find("m_" + memLower);
+            if (f != it->second.end() && f->second.compare(0, 4, "COM:") == 0)
+                return true;
+        }
+    }
+    return false;
+}
+
+// ucTreeView: 语句级调用串里的 `&<UC控件名>` → 复合字面量实例指针槽。
+void CCodeGen::fixUCInstanceAddrInExpr(std::string& expr) const {
+    if (knownUserControlCtrlVars_.empty()) return;
+    size_t pos = 0;
+    while ((pos = expr.find('&', pos)) != std::string::npos) {
+        size_t start, end;
+        bool paren = false;
+        if (pos + 1 < expr.size() && expr[pos + 1] == '(') {
+            /* `&(TVP)` 形态: 括号里必须是一条裸标识符 */
+            pos += 2;
+            start = pos;
+            while (pos < expr.size() && (std::isalnum((unsigned char)expr[pos]) || expr[pos] == '_'))
+                pos++;
+            end = pos;
+            if (end == start || (end < expr.size() && expr[end] == ')')) paren = (end < expr.size());
+            else { pos++; continue; }
+        } else {
+            pos += 1;
+            start = pos;
+            while (pos < expr.size() && (std::isalnum((unsigned char)expr[pos]) || expr[pos] == '_'))
+                pos++;
+            end = pos;
+            if (end == start) { pos++; continue; }
+        }
+        const std::string nm = expr.substr(start, end - start);
+        const std::string low = Symbol::toLower(nm);
+        if (knownLocalVars_.count(low)) continue;
+        auto it = knownUserControlCtrlVars_.find(low);
+        if (it == knownUserControlCtrlVars_.end()) continue;
+        const std::string t = "vb6_cls_" + it->second + "*";
+        std::string rep = "&((" + t + "){ (" + t + ")vb6_UC_InstanceOf(vb6_hwnd_"
+                          + cIdent(nm) + ") })";
+        const size_t replStart = paren ? start - 2 : start - 1;
+        const size_t replLen = (end - replStart) + (paren ? 1 : 0);
+        expr.replace(replStart, replLen, rep);
+        pos = replStart + rep.size();
+    }
+}
+
+// ucTreeView: ByRef 的 UC 控件实例名 → 复合字面量临时槽。
+std::string CCodeGen::ucInstanceByRefArgExpr(const std::string& name) const {
+    std::string lv = name;
+    size_t sp = lv.find("  /*");
+    if (sp != std::string::npos) lv = lv.substr(0, sp);
+    if (lv.empty() || !(std::isalpha((unsigned char)lv[0]) || lv[0] == '_')
+        || lv.find_first_of(".(>[") != std::string::npos)
+        return std::string();
+    auto it = knownUserControlCtrlVars_.find(Symbol::toLower(lv));
+    if (it == knownUserControlCtrlVars_.end()) return std::string();
+    const std::string t = "vb6_cls_" + it->second + "*";
+    return "&((" + t + "){ (" + t + ")vb6_UC_InstanceOf(vb6_hwnd_" + cIdent(lv) + ") })";
+}
+
+// ucTreeView: DataObject 形参的 C 形态 —— ByVal ⇒ void* (直给), ByRef ⇒ void** (*name)。
+std::string CCodeGen::dataObjectArgExpr(const std::string& name) const {
+    if (currentProc_) {
+        const std::string want = Symbol::toLower(name);
+        for (const auto& p : currentProc_->params) {
+            if (Symbol::toLower(p.name) == want)
+                return p.isByVal ? ("(void*)" + name) : ("(void*)(*" + name + ")");
+        }
+    }
+    return "(void*)(*" + name + ")";  // 查不到形参时维持历史口径
 }
 
 std::string CCodeGen::defaultArgForParam(Vb6Type type, bool isByVal,

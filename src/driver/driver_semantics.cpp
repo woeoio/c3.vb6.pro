@@ -571,6 +571,26 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                                 }
                                 msym->constIntValue = nextValue;
                                 nextValue++;
+                                // 方括号转义名与裸名同值同物 (同 semantic_analyzer_decl_type.cpp 那处):
+                                // 跨模块裸名引用 `sGoogle` 必须能解析, 否则退化为隐式 Variant 变量。
+                                const std::string rawName = member->name;
+                                if (rawName.size() >= 2 && rawName.front() == '['
+                                    && rawName.back() == ']') {
+                                    const std::string plainName =
+                                        rawName.substr(1, rawName.size() - 2);
+                                    if (!analyzer->symbolTable().lookupModule(Symbol::toLower(plainName))) {
+                                        auto alias = std::make_unique<Symbol>(
+                                            SymbolKind::EnumMember, plainName,
+                                            Vb6Type::Long, member->loc, AccessLevel::Public
+                                        );
+                                        alias->isExternal = true;
+                                        alias->sourceModule = otherModule->moduleName;
+                                        alias->hasConstValue = true;
+                                        alias->constType = Vb6Type::Long;
+                                        alias->constIntValue = msym->constIntValue;
+                                        analyzer->symbolTable().defineExternal(std::move(alias));
+                                    }
+                                }
                                 analyzer->symbolTable().defineExternal(std::move(msym));
                             }
                         }

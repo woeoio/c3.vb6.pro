@@ -3,7 +3,7 @@
 // Win32 forwarding stubs for VB6 `Declare ... Lib "x"` (Fix 076 scheme: C3 emits
 // `extern <ret> __stdcall vb6_di_<alias>(...)` and the RTL implements it).
 //
-// Family: crypto   (libs: crypt32, bcrypt, ncrypt)   stubs: 38
+// Family: crypto   (libs: crypt32, bcrypt, ncrypt)   stubs: 153
 //
 // Each stub reproduces C3's own generated prototype verbatim (that is the ABI the
 // caller uses: ByVal Long is widened to intptr_t, ByVal Single stays float, ByRef
@@ -12,7 +12,7 @@
 // types while preserving the register/memory passing class of every argument.
 //
 // generated from: a C3 compile session (pass -SessionDir to regenerate)
-// date: 2026-09-20 07:16
+// date: 2026-11-05 03:23
 //
 // Hand-maintained special cases stay in vb6_di_stubs.c (ordinals, msvbvm60 runtime,
 // dynamically loaded DLLs). Re-run the generator after a build exposes new symbols.
@@ -54,192 +54,160 @@ void WINAPI RtlZeroMemory(void*, size_t);
 #pragma comment(lib, "ncrypt.lib")
 #pragma comment(lib, "comdlg32.lib")
 
-/* CryptDecodeObjectEx */
-intptr_t __stdcall vb6_di_CryptDecodeObjectEx(intptr_t dwCertEncodingType, void* lpszStructType, void* pbEncoded, intptr_t cbEncoded, intptr_t dwFlags, intptr_t pDecodePara, void* pvStructInfo, int32_t* pcbStructInfo) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*, void*, intptr_t, intptr_t, intptr_t, void*, int32_t*))CryptDecodeObjectEx)(dwCertEncodingType, lpszStructType, pbEncoded, cbEncoded, dwFlags, pDecodePara, pvStructInfo, pcbStructInfo);
-}
-
-/* CryptEncodeObjectEx */
-intptr_t __stdcall vb6_di_CryptEncodeObjectEx(intptr_t dwCertEncodingType, void* lpszStructType, void* pvStructInfo, intptr_t dwFlags, intptr_t pEncodePara, void* pvEncoded, int32_t* pcbEncoded) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*, void*, intptr_t, intptr_t, void*, int32_t*))CryptEncodeObjectEx)(dwCertEncodingType, lpszStructType, pvStructInfo, dwFlags, pEncodePara, pvEncoded, pcbEncoded);
-}
-
-/* CryptAcquireCertificatePrivateKey */
-intptr_t __stdcall vb6_di_CryptAcquireCertificatePrivateKey(intptr_t pCert, intptr_t dwFlags, intptr_t pvParameters, int32_t* phCryptProvOrNCryptKey, int32_t* pdwKeySpec, int32_t* pfCallerFreeProvOrNCryptKey) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, int32_t*, int32_t*, int32_t*))CryptAcquireCertificatePrivateKey)(pCert, dwFlags, pvParameters, phCryptProvOrNCryptKey, pdwKeySpec, pfCallerFreeProvOrNCryptKey);
-}
-
-/* PFXImportCertStore */
-intptr_t __stdcall vb6_di_PFXImportCertStore(void* pPFX, intptr_t szPassword, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t))PFXImportCertStore)(pPFX, szPassword, dwFlags);
-}
-
-/* CertFreeCertificateContext */
-intptr_t __stdcall vb6_di_CertFreeCertificateContext(intptr_t pCertContext) {
-    return ((intptr_t (WINAPI *)(intptr_t))CertFreeCertificateContext)(pCertContext);
-}
-
-/* CertEnumCertificatesInStore */
-intptr_t __stdcall vb6_di_CertEnumCertificatesInStore(intptr_t hCertStore, intptr_t pPrevCertContext) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))CertEnumCertificatesInStore)(hCertStore, pPrevCertContext);
-}
-
-/* CertGetCertificateContextProperty */
-intptr_t __stdcall vb6_di_CertGetCertificateContextProperty(intptr_t pCertContext, intptr_t dwPropId, void* pvData, int32_t* pcbData) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, int32_t*))CertGetCertificateContextProperty)(pCertContext, dwPropId, pvData, pcbData);
-}
-
-/* CertStrToNameW */
-intptr_t __stdcall vb6_di_CertStrToNameW(intptr_t dwCertEncodingType, intptr_t pszX500, intptr_t dwStrType, intptr_t pvReserved, void* pbEncoded, int32_t* pcbEncoded, intptr_t ppszError) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, int32_t*, intptr_t))CertStrToNameW)(dwCertEncodingType, pszX500, dwStrType, pvReserved, pbEncoded, pcbEncoded, ppszError);
-}
-
-/* CertCreateSelfSignCertificate */
-intptr_t __stdcall vb6_di_CertCreateSelfSignCertificate(intptr_t hCryptProvOrNCryptKey, void* pSubjectIssuerBlob, intptr_t dwFlags, void* pKeyProvInfo, intptr_t pSignatureAlgorithm, void* pStartTime, void* pEndTime, intptr_t pExtensions) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, void*, intptr_t, void*, void*, intptr_t))CertCreateSelfSignCertificate)(hCryptProvOrNCryptKey, pSubjectIssuerBlob, dwFlags, pKeyProvInfo, pSignatureAlgorithm, pStartTime, pEndTime, pExtensions);
-}
-
-/* CertOpenStore */
-intptr_t __stdcall vb6_di_CertOpenStore(intptr_t lpszStoreProvider, intptr_t dwEncodingType, intptr_t hCryptProv, intptr_t dwFlags, intptr_t pvPara) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))CertOpenStore)(lpszStoreProvider, dwEncodingType, hCryptProv, dwFlags, pvPara);
-}
-
-/* CertCloseStore */
-intptr_t __stdcall vb6_di_CertCloseStore(intptr_t hCertStore, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))CertCloseStore)(hCertStore, dwFlags);
-}
-
-/* CertAddEncodedCertificateToStore */
-intptr_t __stdcall vb6_di_CertAddEncodedCertificateToStore(intptr_t hCertStore, intptr_t dwCertEncodingType, void* pbCertEncoded, intptr_t cbCertEncoded, intptr_t dwAddDisposition, void* ppCertContext) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, intptr_t, intptr_t, void*))CertAddEncodedCertificateToStore)(hCertStore, dwCertEncodingType, pbCertEncoded, cbCertEncoded, dwAddDisposition, ppCertContext);
-}
-
-/* CertCreateCertificateChainEngine */
-intptr_t __stdcall vb6_di_CertCreateCertificateChainEngine(void* pConfig, int32_t* phChainEngine) {
-    return ((intptr_t (WINAPI *)(void*, int32_t*))CertCreateCertificateChainEngine)(pConfig, phChainEngine);
-}
-
-/* CertFreeCertificateChainEngine */
-intptr_t __stdcall vb6_di_CertFreeCertificateChainEngine(intptr_t hChainEngine) {
-    return ((intptr_t (WINAPI *)(intptr_t))CertFreeCertificateChainEngine)(hChainEngine);
-}
-
-/* CertGetCertificateChain */
-intptr_t __stdcall vb6_di_CertGetCertificateChain(intptr_t hChainEngine, intptr_t pCertContext, intptr_t pTime, intptr_t hAdditionalStore, void* pChainPara, intptr_t dwFlags, intptr_t pvReserved, int32_t* ppChainContext) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, intptr_t, intptr_t, int32_t*))CertGetCertificateChain)(hChainEngine, pCertContext, pTime, hAdditionalStore, pChainPara, dwFlags, pvReserved, ppChainContext);
-}
-
-/* CertFreeCertificateChain */
-intptr_t __stdcall vb6_di_CertFreeCertificateChain(intptr_t pChainContext) {
-    return ((intptr_t (WINAPI *)(intptr_t))CertFreeCertificateChain)(pChainContext);
-}
-
-/* CertFindExtension */
-intptr_t __stdcall vb6_di_CertFindExtension(BSTR pszObjId, intptr_t cExtensions, intptr_t rgExtensions) {
-    return ((intptr_t (WINAPI *)(BSTR, intptr_t, intptr_t))CertFindExtension)(pszObjId, cExtensions, rgExtensions);
-}
-
-/* CertFindCertificateInStore */
-intptr_t __stdcall vb6_di_CertFindCertificateInStore(intptr_t hCertStore, intptr_t dwCertEncodingType, intptr_t dwFindFlags, intptr_t dwFindType, void* pvFindPara, intptr_t pPrevCertContext) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, intptr_t))CertFindCertificateInStore)(hCertStore, dwCertEncodingType, dwFindFlags, dwFindType, pvFindPara, pPrevCertContext);
-}
-
-/* CertSetCertificateContextProperty */
-intptr_t __stdcall vb6_di_CertSetCertificateContextProperty(intptr_t pCertContext, intptr_t dwPropId, intptr_t dwFlags, void* pvData) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void*))CertSetCertificateContextProperty)(pCertContext, dwPropId, dwFlags, pvData);
-}
-
-/* CertAddCertificateContextToStore */
-intptr_t __stdcall vb6_di_CertAddCertificateContextToStore(intptr_t hCertStore, intptr_t pCertContext, intptr_t dwAddDisposition, void* ppStoreContext) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void*))CertAddCertificateContextToStore)(hCertStore, pCertContext, dwAddDisposition, ppStoreContext);
-}
-
-/* NCryptFreeObject */
-intptr_t __stdcall vb6_di_NCryptFreeObject(intptr_t hKey) {
-    return ((intptr_t (WINAPI *)(intptr_t))NCryptFreeObject)(hKey);
-}
-
-/* NCryptGetProperty */
-intptr_t __stdcall vb6_di_NCryptGetProperty(intptr_t hObject, intptr_t pszProperty, void* pbOutput, intptr_t cbOutput, int32_t* pcbResult, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, intptr_t, int32_t*, intptr_t))NCryptGetProperty)(hObject, pszProperty, pbOutput, cbOutput, pcbResult, dwFlags);
-}
-
-/* BCryptOpenAlgorithmProvider */
-intptr_t __stdcall vb6_di_BCryptOpenAlgorithmProvider(int32_t* hAlgorithm, intptr_t pszAlgId, intptr_t pszImplementation, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(int32_t*, intptr_t, intptr_t, intptr_t))BCryptOpenAlgorithmProvider)(hAlgorithm, pszAlgId, pszImplementation, dwFlags);
+/* CryptStringToBinaryA */
+intptr_t __stdcall vb6_di_CryptStringToBinaryA(BSTR pszString, intptr_t cchString, intptr_t dwFlags, intptr_t pbBinary, intptr_t pcbBinary, intptr_t pdwSkip, intptr_t pdwFlags) {
+    return ((intptr_t (WINAPI *)(BSTR, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))CryptStringToBinaryA)(pszString, cchString, dwFlags, pbBinary, pcbBinary, pdwSkip, pdwFlags);
 }
 
 /* BCryptCloseAlgorithmProvider */
 intptr_t __stdcall vb6_di_BCryptCloseAlgorithmProvider(intptr_t hAlgorithm, intptr_t dwFlags) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t))BCryptCloseAlgorithmProvider)(hAlgorithm, dwFlags);
 }
-
-/* BCryptGetProperty */
-intptr_t __stdcall vb6_di_BCryptGetProperty(intptr_t hObject, intptr_t pszProperty, void* pbOutput, intptr_t cbOutput, int32_t* cbResult, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, intptr_t, int32_t*, intptr_t))BCryptGetProperty)(hObject, pszProperty, pbOutput, cbOutput, cbResult, dwFlags);
-}
-
-/* BCryptSetProperty */
-intptr_t __stdcall vb6_di_BCryptSetProperty(intptr_t hObject, intptr_t pszProperty, intptr_t pbInput, intptr_t cbInput, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))BCryptSetProperty)(hObject, pszProperty, pbInput, cbInput, dwFlags);
-}
-
-/* BCryptGenerateSymmetricKey */
-intptr_t __stdcall vb6_di_BCryptGenerateSymmetricKey(intptr_t hAlgorithm, int32_t* phKey, void* pbKeyObject, intptr_t cbKeyObject, void* pbSecret, intptr_t cbSecret, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(intptr_t, int32_t*, void*, intptr_t, void*, intptr_t, intptr_t))BCryptGenerateSymmetricKey)(hAlgorithm, phKey, pbKeyObject, cbKeyObject, pbSecret, cbSecret, dwFlags);
-}
-
-/* BCryptDestroyKey */
-intptr_t __stdcall vb6_di_BCryptDestroyKey(intptr_t hKey) {
-    return ((intptr_t (WINAPI *)(intptr_t))BCryptDestroyKey)(hKey);
-}
-
-/* BCryptDeriveKeyPBKDF2 */
-intptr_t __stdcall vb6_di_BCryptDeriveKeyPBKDF2(intptr_t hPrf, void* pbPassword, intptr_t cbPassword, void* pbSalt, intptr_t cbSalt, double cIterations, void* pbDerivedKey, intptr_t cbDerivedKey, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, void*, intptr_t, double, void*, intptr_t, intptr_t))BCryptDeriveKeyPBKDF2)(hPrf, pbPassword, cbPassword, pbSalt, cbSalt, cIterations, pbDerivedKey, cbDerivedKey, dwFlags);
-}
-
 /* BCryptDecrypt */
 intptr_t __stdcall vb6_di_BCryptDecrypt(intptr_t hKey, void* pbInput, intptr_t cbInput, intptr_t pPaddingInfo, void* pbIV, intptr_t cbIV, void* pbOutput, intptr_t cbOutput, int32_t* cbResult, intptr_t dwFlags) {
     return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, intptr_t, void*, intptr_t, void*, intptr_t, int32_t*, intptr_t))BCryptDecrypt)(hKey, pbInput, cbInput, pPaddingInfo, pbIV, cbIV, pbOutput, cbOutput, cbResult, dwFlags);
 }
-
-/* CryptBinaryToStringW */
-intptr_t __stdcall vb6_di_CryptBinaryToStringW(intptr_t pbBinary, intptr_t cbBinary, intptr_t dwFlags, intptr_t pszString, int32_t* pcchString) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, int32_t*))CryptBinaryToStringW)(pbBinary, cbBinary, dwFlags, pszString, pcchString);
+/* BCryptDeriveKeyPBKDF2 */
+intptr_t __stdcall vb6_di_BCryptDeriveKeyPBKDF2(intptr_t hPrf, void* pbPassword, intptr_t cbPassword, void* pbSalt, intptr_t cbSalt, double cIterations, void* pbDerivedKey, intptr_t cbDerivedKey, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, void*, intptr_t, double, void*, intptr_t, intptr_t))BCryptDeriveKeyPBKDF2)(hPrf, pbPassword, cbPassword, pbSalt, cbSalt, cIterations, pbDerivedKey, cbDerivedKey, dwFlags);
 }
-
-/* CryptStringToBinaryW */
-intptr_t __stdcall vb6_di_CryptStringToBinaryW(intptr_t pszString, intptr_t cchString, intptr_t dwFlags, intptr_t pbBinary, int32_t* pcbBinary, int32_t* pdwSkip, int32_t* pdwFlags) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, int32_t*, int32_t*, int32_t*))CryptStringToBinaryW)(pszString, cchString, dwFlags, pbBinary, pcbBinary, pdwSkip, pdwFlags);
+/* BCryptDestroyKey */
+intptr_t __stdcall vb6_di_BCryptDestroyKey(intptr_t hKey) {
+    return ((intptr_t (WINAPI *)(intptr_t))BCryptDestroyKey)(hKey);
 }
-
-/* CryptImportPublicKeyInfo */
-intptr_t __stdcall vb6_di_CryptImportPublicKeyInfo(intptr_t hCryptProv, intptr_t dwCertEncodingType, void* pInfo, int32_t* phKey) {
-    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, int32_t*))CryptImportPublicKeyInfo)(hCryptProv, dwCertEncodingType, pInfo, phKey);
+/* BCryptGenerateSymmetricKey */
+intptr_t __stdcall vb6_di_BCryptGenerateSymmetricKey(intptr_t hAlgorithm, int32_t* phKey, void* pbKeyObject, intptr_t cbKeyObject, void* pbSecret, intptr_t cbSecret, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, int32_t*, void*, intptr_t, void*, intptr_t, intptr_t))BCryptGenerateSymmetricKey)(hAlgorithm, phKey, pbKeyObject, cbKeyObject, pbSecret, cbSecret, dwFlags);
 }
-
+/* BCryptGetProperty */
+intptr_t __stdcall vb6_di_BCryptGetProperty(intptr_t hObject, intptr_t pszProperty, void* pbOutput, intptr_t cbOutput, int32_t* cbResult, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, intptr_t, int32_t*, intptr_t))BCryptGetProperty)(hObject, pszProperty, pbOutput, cbOutput, cbResult, dwFlags);
+}
+/* BCryptOpenAlgorithmProvider */
+intptr_t __stdcall vb6_di_BCryptOpenAlgorithmProvider(int32_t* hAlgorithm, intptr_t pszAlgId, intptr_t pszImplementation, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(int32_t*, intptr_t, intptr_t, intptr_t))BCryptOpenAlgorithmProvider)(hAlgorithm, pszAlgId, pszImplementation, dwFlags);
+}
+/* BCryptSetProperty */
+intptr_t __stdcall vb6_di_BCryptSetProperty(intptr_t hObject, intptr_t pszProperty, intptr_t pbInput, intptr_t cbInput, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))BCryptSetProperty)(hObject, pszProperty, pbInput, cbInput, dwFlags);
+}
+/* CertAddCertificateContextToStore */
+intptr_t __stdcall vb6_di_CertAddCertificateContextToStore(intptr_t hCertStore, intptr_t pCertContext, intptr_t dwAddDisposition, void* ppStoreContext) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void*))CertAddCertificateContextToStore)(hCertStore, pCertContext, dwAddDisposition, ppStoreContext);
+}
+/* CertAddEncodedCertificateToStore */
+intptr_t __stdcall vb6_di_CertAddEncodedCertificateToStore(intptr_t hCertStore, intptr_t dwCertEncodingType, void* pbCertEncoded, intptr_t cbCertEncoded, intptr_t dwAddDisposition, void* ppCertContext) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, intptr_t, intptr_t, void*))CertAddEncodedCertificateToStore)(hCertStore, dwCertEncodingType, pbCertEncoded, cbCertEncoded, dwAddDisposition, ppCertContext);
+}
+/* CertCloseStore */
+intptr_t __stdcall vb6_di_CertCloseStore(intptr_t hCertStore, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))CertCloseStore)(hCertStore, dwFlags);
+}
+/* CertCreateCertificateChainEngine */
+intptr_t __stdcall vb6_di_CertCreateCertificateChainEngine(void* pConfig, int32_t* phChainEngine) {
+    return ((intptr_t (WINAPI *)(void*, int32_t*))CertCreateCertificateChainEngine)(pConfig, phChainEngine);
+}
 /* CertCreateCertificateContext */
 intptr_t __stdcall vb6_di_CertCreateCertificateContext(intptr_t dwCertEncodingType, void* pbCertEncoded, intptr_t cbCertEncoded) {
     return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t))CertCreateCertificateContext)(dwCertEncodingType, pbCertEncoded, cbCertEncoded);
 }
-
-/* NCryptOpenStorageProvider */
-intptr_t __stdcall vb6_di_NCryptOpenStorageProvider(int32_t* phProvider, intptr_t pszProviderName, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(int32_t*, intptr_t, intptr_t))NCryptOpenStorageProvider)(phProvider, pszProviderName, dwFlags);
+/* CertCreateSelfSignCertificate */
+intptr_t __stdcall vb6_di_CertCreateSelfSignCertificate(intptr_t hCryptProvOrNCryptKey, void* pSubjectIssuerBlob, intptr_t dwFlags, void* pKeyProvInfo, intptr_t pSignatureAlgorithm, void* pStartTime, void* pEndTime, intptr_t pExtensions) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, void*, intptr_t, void*, void*, intptr_t))CertCreateSelfSignCertificate)(hCryptProvOrNCryptKey, pSubjectIssuerBlob, dwFlags, pKeyProvInfo, pSignatureAlgorithm, pStartTime, pEndTime, pExtensions);
 }
-
+/* CertEnumCertificatesInStore */
+intptr_t __stdcall vb6_di_CertEnumCertificatesInStore(intptr_t hCertStore, intptr_t pPrevCertContext) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))CertEnumCertificatesInStore)(hCertStore, pPrevCertContext);
+}
+/* CertFindCertificateInStore */
+intptr_t __stdcall vb6_di_CertFindCertificateInStore(intptr_t hCertStore, intptr_t dwCertEncodingType, intptr_t dwFindFlags, intptr_t dwFindType, void* pvFindPara, intptr_t pPrevCertContext) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, intptr_t))CertFindCertificateInStore)(hCertStore, dwCertEncodingType, dwFindFlags, dwFindType, pvFindPara, pPrevCertContext);
+}
+/* CertFindExtension */
+intptr_t __stdcall vb6_di_CertFindExtension(BSTR pszObjId, intptr_t cExtensions, intptr_t rgExtensions) {
+    return ((intptr_t (WINAPI *)(BSTR, intptr_t, intptr_t))CertFindExtension)(pszObjId, cExtensions, rgExtensions);
+}
+/* CertFreeCertificateChain */
+intptr_t __stdcall vb6_di_CertFreeCertificateChain(intptr_t pChainContext) {
+    return ((intptr_t (WINAPI *)(intptr_t))CertFreeCertificateChain)(pChainContext);
+}
+/* CertFreeCertificateChainEngine */
+intptr_t __stdcall vb6_di_CertFreeCertificateChainEngine(intptr_t hChainEngine) {
+    return ((intptr_t (WINAPI *)(intptr_t))CertFreeCertificateChainEngine)(hChainEngine);
+}
+/* CertFreeCertificateContext */
+intptr_t __stdcall vb6_di_CertFreeCertificateContext(intptr_t pCertContext) {
+    return ((intptr_t (WINAPI *)(intptr_t))CertFreeCertificateContext)(pCertContext);
+}
+/* CertGetCertificateChain */
+intptr_t __stdcall vb6_di_CertGetCertificateChain(intptr_t hChainEngine, intptr_t pCertContext, intptr_t pTime, intptr_t hAdditionalStore, void* pChainPara, intptr_t dwFlags, intptr_t pvReserved, int32_t* ppChainContext) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, intptr_t, intptr_t, int32_t*))CertGetCertificateChain)(hChainEngine, pCertContext, pTime, hAdditionalStore, pChainPara, dwFlags, pvReserved, ppChainContext);
+}
+/* CertGetCertificateContextProperty */
+intptr_t __stdcall vb6_di_CertGetCertificateContextProperty(intptr_t pCertContext, intptr_t dwPropId, void* pvData, int32_t* pcbData) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, int32_t*))CertGetCertificateContextProperty)(pCertContext, dwPropId, pvData, pcbData);
+}
+/* CertOpenStore */
+intptr_t __stdcall vb6_di_CertOpenStore(intptr_t lpszStoreProvider, intptr_t dwEncodingType, intptr_t hCryptProv, intptr_t dwFlags, intptr_t pvPara) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, intptr_t))CertOpenStore)(lpszStoreProvider, dwEncodingType, hCryptProv, dwFlags, pvPara);
+}
+/* CertSetCertificateContextProperty */
+intptr_t __stdcall vb6_di_CertSetCertificateContextProperty(intptr_t pCertContext, intptr_t dwPropId, intptr_t dwFlags, void* pvData) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, void*))CertSetCertificateContextProperty)(pCertContext, dwPropId, dwFlags, pvData);
+}
+/* CertStrToNameW */
+intptr_t __stdcall vb6_di_CertStrToNameW(intptr_t dwCertEncodingType, intptr_t pszX500, intptr_t dwStrType, intptr_t pvReserved, void* pbEncoded, int32_t* pcbEncoded, intptr_t ppszError) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, void*, int32_t*, intptr_t))CertStrToNameW)(dwCertEncodingType, pszX500, dwStrType, pvReserved, pbEncoded, pcbEncoded, ppszError);
+}
+/* CryptAcquireCertificatePrivateKey */
+intptr_t __stdcall vb6_di_CryptAcquireCertificatePrivateKey(intptr_t pCert, intptr_t dwFlags, intptr_t pvParameters, int32_t* phCryptProvOrNCryptKey, int32_t* pdwKeySpec, int32_t* pfCallerFreeProvOrNCryptKey) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, int32_t*, int32_t*, int32_t*))CryptAcquireCertificatePrivateKey)(pCert, dwFlags, pvParameters, phCryptProvOrNCryptKey, pdwKeySpec, pfCallerFreeProvOrNCryptKey);
+}
+/* CryptBinaryToStringW */
+intptr_t __stdcall vb6_di_CryptBinaryToStringW(intptr_t pbBinary, intptr_t cbBinary, intptr_t dwFlags, intptr_t pszString, int32_t* pcchString) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, int32_t*))CryptBinaryToStringW)(pbBinary, cbBinary, dwFlags, pszString, pcchString);
+}
+/* CryptDecodeObjectEx */
+intptr_t __stdcall vb6_di_CryptDecodeObjectEx(intptr_t dwCertEncodingType, void* lpszStructType, void* pbEncoded, intptr_t cbEncoded, intptr_t dwFlags, intptr_t pDecodePara, void* pvStructInfo, int32_t* pcbStructInfo) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*, void*, intptr_t, intptr_t, intptr_t, void*, int32_t*))CryptDecodeObjectEx)(dwCertEncodingType, lpszStructType, pbEncoded, cbEncoded, dwFlags, pDecodePara, pvStructInfo, pcbStructInfo);
+}
+/* CryptEncodeObjectEx */
+intptr_t __stdcall vb6_di_CryptEncodeObjectEx(intptr_t dwCertEncodingType, void* lpszStructType, void* pvStructInfo, intptr_t dwFlags, intptr_t pEncodePara, void* pvEncoded, int32_t* pcbEncoded) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*, void*, intptr_t, intptr_t, void*, int32_t*))CryptEncodeObjectEx)(dwCertEncodingType, lpszStructType, pvStructInfo, dwFlags, pEncodePara, pvEncoded, pcbEncoded);
+}
+/* CryptImportPublicKeyInfo */
+intptr_t __stdcall vb6_di_CryptImportPublicKeyInfo(intptr_t hCryptProv, intptr_t dwCertEncodingType, void* pInfo, int32_t* phKey) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, int32_t*))CryptImportPublicKeyInfo)(hCryptProv, dwCertEncodingType, pInfo, phKey);
+}
+/* CryptStringToBinaryW */
+intptr_t __stdcall vb6_di_CryptStringToBinaryW(intptr_t pszString, intptr_t cchString, intptr_t dwFlags, intptr_t pbBinary, int32_t* pcbBinary, int32_t* pdwSkip, int32_t* pdwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, intptr_t, intptr_t, int32_t*, int32_t*, int32_t*))CryptStringToBinaryW)(pszString, cchString, dwFlags, pbBinary, pcbBinary, pdwSkip, pdwFlags);
+}
+/* NCryptDecrypt */
+intptr_t __stdcall vb6_di_NCryptDecrypt(intptr_t hKey, void* pbInput, intptr_t cbInput, intptr_t pPaddingInfo, void* pbOutput, intptr_t cbOutput, int32_t* pcbResult, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, intptr_t, void*, intptr_t, int32_t*, intptr_t))NCryptDecrypt)(hKey, pbInput, cbInput, pPaddingInfo, pbOutput, cbOutput, pcbResult, dwFlags);
+}
+/* NCryptFreeObject */
+intptr_t __stdcall vb6_di_NCryptFreeObject(intptr_t hKey) {
+    return ((intptr_t (WINAPI *)(intptr_t))NCryptFreeObject)(hKey);
+}
+/* NCryptGetProperty */
+intptr_t __stdcall vb6_di_NCryptGetProperty(intptr_t hObject, intptr_t pszProperty, void* pbOutput, intptr_t cbOutput, int32_t* pcbResult, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, intptr_t, int32_t*, intptr_t))NCryptGetProperty)(hObject, pszProperty, pbOutput, cbOutput, pcbResult, dwFlags);
+}
 /* NCryptOpenKey */
 intptr_t __stdcall vb6_di_NCryptOpenKey(intptr_t hProvider, int32_t* phKey, intptr_t pszKeyName, intptr_t dwLegacyKeySpec, intptr_t dwFlags) {
     return ((intptr_t (WINAPI *)(intptr_t, int32_t*, intptr_t, intptr_t, intptr_t))NCryptOpenKey)(hProvider, phKey, pszKeyName, dwLegacyKeySpec, dwFlags);
 }
-
+/* NCryptOpenStorageProvider */
+intptr_t __stdcall vb6_di_NCryptOpenStorageProvider(int32_t* phProvider, intptr_t pszProviderName, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(int32_t*, intptr_t, intptr_t))NCryptOpenStorageProvider)(phProvider, pszProviderName, dwFlags);
+}
 /* NCryptSignHash */
 intptr_t __stdcall vb6_di_NCryptSignHash(intptr_t hKey, intptr_t pPaddingInfo, void* pbHashValue, intptr_t cbHashValue, void* pbSignature, intptr_t cbSignature, int32_t* pcbResult, intptr_t dwFlags) {
     return ((intptr_t (WINAPI *)(intptr_t, intptr_t, void*, intptr_t, void*, intptr_t, int32_t*, intptr_t))NCryptSignHash)(hKey, pPaddingInfo, pbHashValue, cbHashValue, pbSignature, cbSignature, pcbResult, dwFlags);
 }
-
-/* NCryptDecrypt */
-intptr_t __stdcall vb6_di_NCryptDecrypt(intptr_t hKey, void* pbInput, intptr_t cbInput, intptr_t pPaddingInfo, void* pbOutput, intptr_t cbOutput, int32_t* pcbResult, intptr_t dwFlags) {
-    return ((intptr_t (WINAPI *)(intptr_t, void*, intptr_t, intptr_t, void*, intptr_t, int32_t*, intptr_t))NCryptDecrypt)(hKey, pbInput, cbInput, pPaddingInfo, pbOutput, cbOutput, pcbResult, dwFlags);
+/* PFXImportCertStore */
+intptr_t __stdcall vb6_di_PFXImportCertStore(void* pPFX, intptr_t szPassword, intptr_t dwFlags) {
+    return ((intptr_t (WINAPI *)(void*, intptr_t, intptr_t))PFXImportCertStore)(pPFX, szPassword, dwFlags);
 }

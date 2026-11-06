@@ -50,7 +50,11 @@
                 }
                 break;
             case FrmControlType::TextBox:
-                style |= kWsBorder | kEsAutoH;
+                // VB6 的 TextBox 是 ThunderRT6TextBox（`GetWindowLong` 实测 style=0x540108C1
+                // 无 WS_BORDER、ex=0x204 有 WS_EX_CLIENTEDGE），边框由 VB 自己画成 1px 淡边；
+                // 以前这里给原生 EDIT 立 WS_BORDER ⇒ 主题 EDIT 自己画 1px `100,100,100`
+                // (COLOR_WINDOWFRAME) 深框，与 VB6 不符。这里只留 ES_*，不立 WS_BORDER。
+                style |= kEsAutoH;
                 // Bug3-Fix: 不在CreateControl中传初始文本，避免EN_CHANGE在句柄赋值前触发
                 // createCaption will be set to "" below; text set after hwnd assignment
                 {
@@ -71,6 +75,14 @@
                     }
                 }
                 break;
+            case FrmControlType::VScrollBar:
+                // SBS_VERT=0x0001: 以前两条创建路都没给 SCROLLBAR 立方向位 ⇒ 默认
+                // SBS_HORZ(=0)，微调按钮整块空白（33x31 区 992/1023 纯白、无箭头）。
+                // VB6 的 VScrollBar（ThunderRT6VScrollBar）实测 style=0x54010001 含此位。
+                style |= 0x0001L;
+                break;
+            case FrmControlType::HScrollBar:
+                break;  // SBS_HORZ = 0，无需额外位
             case FrmControlType::Label:
                 // VB6 Label 有 Click/MouseDown 事件且是 tooltip 目标, 必须 SS_NOTIFY,
                 // 否则 STATIC 对鼠标返回 HTTRANSPARENT, TTF_SUBCLASS 的 tooltip 永远不弹。
@@ -383,6 +395,7 @@
             emitDesignerStateProps(ctrl, dsHwnd);  // 账 #125: Enabled / Visible / Value
             emitDesignerStringProps(ctrl, dsHwnd);  // 账 #142: ToolTipText / Tag（非空才发）
             emitDesignerFontProps(ctrl, dsHwnd);    // 账 #154: FontName / FontSize（写过才发）
+            emitFrmFontBlock(ctrl, dsHwnd);         // 残差 #8: 控件自己的 BeginProperty Font
             emitDesignerTabIndexProp(ctrl, dsHwnd, tabIndexFallback);  // 账 #160: 设计期 TabIndex（顶层这条路）
             emitDesignerScaleModeProp(ctrl, dsHwnd);  // 账 #197: 设计期 ScaleMode（顶层这条路）
 
@@ -394,12 +407,12 @@
                 auto bcIt187 = ctrl.properties.find("BackColor");
                 if (bcIt187 != ctrl.properties.end() && bcIt187->second.type == FrmValueType::Integer) {
                     c_.emitLine("vb6_SetControlBackColor((void*)" + dsHwnd + ", "
-                                + std::to_string((int)(unsigned int)bcIt187->second.intValue) + ");  /* design BackColor */");
+                                + std::to_string(frmValueToVbLong(bcIt187->second.intValue)) + ");  /* design BackColor */");
                 }
                 auto fcIt187 = ctrl.properties.find("ForeColor");
                 if (fcIt187 != ctrl.properties.end() && fcIt187->second.type == FrmValueType::Integer) {
                     c_.emitLine("vb6_SetControlForeColor((void*)" + dsHwnd + ", "
-                                + std::to_string((int)(unsigned int)fcIt187->second.intValue) + ");  /* design ForeColor */");
+                                + std::to_string(frmValueToVbLong(fcIt187->second.intValue)) + ");  /* design ForeColor */");
                 }
             }
         }

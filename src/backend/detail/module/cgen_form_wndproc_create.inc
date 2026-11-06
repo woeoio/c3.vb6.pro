@@ -3,6 +3,17 @@
 // 内容 = 原文件第 598~921 行，逐行未改。
 
     // WndProc
+    // 控件数组的事件处理器带 `Index As Integer` 首形参 (ucTreeView Form1.frm:1271
+    // `Private Sub Text1_Change(index As Integer)` / :1305 `VScroll1_Change(index)`):
+    // 派发站必须把**元素下标**实参化, 一律 0 参调用是 C2198。
+    // 本函数(emitFormFramework)的前后半片段共用这一枚文本生成器。
+    auto vb6CtrlEvCallText = [&](const std::string& fn, bool isArr, int idx) -> std::string {
+        if (!isArr) return "{ extern void " + fn + "(); " + fn + "(); }";
+        const int i = idx >= 0 ? idx : 0;
+        const std::string iv = "vb6_evidx_" + std::to_string(i);
+        return "{ int16_t " + iv + " = " + std::to_string(i) + "; extern void " + fn
+             + "(int16_t*); " + fn + "(&" + iv + "); }";
+    };
     c_.emitLine("// === " + formName + " WndProc ===");
     c_.emitLine("LRESULT CALLBACK " + wndProc + "(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {");
     c_.indent();
@@ -58,6 +69,12 @@
     c_.emitLine("case WM_CREATE: {");
     c_.indent();
     c_.emitLine("CREATESTRUCTA* cs = (CREATESTRUCTA*)lParam;");
+    // 账 (TabWorkspace 刀): MDI 父窗必须在建控件**之前**就有 MDICLIENT —— CommandBars/
+    // DockingPaneManager 在 WM_CREATE 里实例化时立刻问 IOleInPlaceSite::GetWindowContext,
+    // 那时没有客户窗就把"非 MDI 框架"缓存下来, ShowTabWorkspace 永远回 NULL。
+    if (isMDIForm) {
+        c_.emitLine("vb6_MDI_CreateClientEarly((void*)hwnd, (void*)cs->hInstance);  /* MDICLIENT 先于控件 */");
+    }
     c_.emitLine(createFn + "((void*)hwnd, (void*)cs->hInstance);");
     // 账 #257: 登记窗体时把 VB 模块名一起交进去。窗体自身的 `.Name` 以前两条读法都答
     // 空串（这一处恒传 NULL 登记），于是 Charts 排版器那句
@@ -121,7 +138,14 @@
             c_.emitLine("vb6_SetMinButton((void*)hwnd, 0);");
         }
         auto wsIt = frmDesc.formControl.properties.find("WindowState");
-        if (wsIt != frmDesc.formControl.properties.end() && wsIt->second.intValue != 0) {
+        /* 账 (MDI 布局刀): MDI 子窗的设计期 WindowState 只**登记**, 由 vb6_ShowForm
+         * 在子窗上屏之后落地 —— 这一趟是 WM_CREATE, 子窗此刻还没归入 MDICLIENT
+         * (WM_MDICREATE 尚未返回), ShowWindow(SW_SHOWMAXIMIZED) 只会把它变成 0×0
+         * (夹具 tests/guisample/mdimax 实测)。非 MDI 窗体保持原有的建窗即发。 */
+        if (isMDIChild) {
+            if (wsIt != frmDesc.formControl.properties.end() && wsIt->second.intValue != 0)
+                c_.emitLine("vb6_SetDesignWindowState((void*)hwnd, " + std::to_string((int)wsIt->second.intValue) + ");");
+        } else if (wsIt != frmDesc.formControl.properties.end() && wsIt->second.intValue != 0) {
             c_.emitLine("vb6_SetWindowState((void*)hwnd, " + std::to_string((int)wsIt->second.intValue) + ");");
         }
         // 账 #197: 窗体自己那一档走同一个出口 —— `ScaleMode = 3  'Pixel` 的窗体里控件几何、
@@ -140,7 +164,7 @@
         if (fbcIt != frmDesc.formControl.properties.end()
             && fbcIt->second.type == FrmValueType::Integer) {
             c_.emitLine("vb6_SetControlBackColor((void*)hwnd, "
-                        + std::to_string((int)(unsigned int)fbcIt->second.intValue)
+                        + std::to_string(frmValueToVbLong(fbcIt->second.intValue))
                         + ");  /* design Form.BackColor */");
         }
     }
@@ -153,8 +177,8 @@
     // Fix 058: Form_Load 用 PostMessage 延迟执行, 避免在 WM_CREATE 中
     // 执行 COM 操作 (如 Controls.Add) 导致消息死锁
     // 调用VB6 Form_Load事件 (仅当存在时调用)
-    std::string formLoadFn = cProcName("Form_Load", AccessLevel::Private);
-    auto* formLoadSym = symTab_.lookup("Form_Load");
+    std::string formLoadFn = cProcName(std::string(formEvtBase334) + "_Load", AccessLevel::Private);
+    auto* formLoadSym = symTab_.lookup(std::string(formEvtBase334) + "_Load");
     if (formLoadSym) {
         c_.emitLine("PostMessageW(hwnd, 0x7FF0, 0, 0);  /* defer Form_Load */");
     }
@@ -238,7 +262,11 @@
     c_.emitLine("case WM_CTLCOLORSTATIC: {");
     c_.indent();
     c_.emitLine("HWND vb6_clrchld = (HWND)lParam;");
-    c_.emitLine("if (vb6_clrchld && (GetPropW(vb6_clrchld, L\"VB6_BackColorSet\") || GetPropW(vb6_clrchld, L\"VB6_BackStyle0\"))) {");
+    // Fix 187b: 放行判据移到 RTL (vb6_ApplyCtlColorStatic)。CheckBox/OptionButton
+    // 要底色时走的是 **WM_CTLCOLORSTATIC**(不是 CTLCOLORBTN) 且默认 BackColor =
+    // &H8000000F& 按钮面 240 —— 生成侧看不到"默认值"这件事, 只按哨兵放行会把
+    // 它们全部漏掉 (ucTreeView 顶排 CheckBox 白块 255 vs 参考 240)。
+    c_.emitLine("if (vb6_clrchld) {");
     c_.indent();
     c_.emitLine("LRESULT vb6_br187 = vb6_ApplyCtlColorStatic((HDC)wParam, vb6_clrchld);");
     c_.emitLine("if (vb6_br187) return vb6_br187;");
@@ -268,7 +296,7 @@
         // 用 static 标志保证整个进程只走一次 (0x7FF0 理论上只会到一次, 保险起见)。
         {
             auto* initSym43 = symTab_.lookup(formName + "_Initialize");
-            if (!initSym43) initSym43 = symTab_.lookup("Form_Initialize");
+            if (!initSym43) initSym43 = symTab_.lookup(std::string(formEvtBase334) + "_Initialize");
             if (initSym43) {
                 std::string initFn = cProcName(initSym43->name, AccessLevel::Private);
                 c_.emitLine("static int vb6_formInited_" + cIdent(formName) + " = 0;");
@@ -284,14 +312,15 @@
         // Fix 112: Load 完成后再触发首次 Form_Resize (与 VB6 的 Load→Resize 顺序一致)
         c_.emitLine("vb6_formLoaded_" + cIdent(formName) + " = 1;");
         {
-            std::string resizeFnLoad = cProcName("Form_Resize", AccessLevel::Private);
+            std::string resizeFnLoad = cProcName(std::string(formEvtBase334) + "_Resize", AccessLevel::Private);
             // 守卫只认**本模块自有**的处理器 (与 show/dispatch 两处同批) ——
             // 裸名 lookup 命中跨模块注入的别家 Form_Resize ⇒ LNK2019。
             auto hasOwnResizeCr = [&](const char* nm) -> bool {
                 Symbol* sCr = symTab_.lookupModule(nm);
                 return sCr && !sCr->isExternal;
             };
-            if (hasOwnResizeCr((formName + "_Resize").c_str()) || hasOwnResizeCr("Form_Resize")) {
+            if (hasOwnResizeCr((formName + "_Resize").c_str()) || hasOwnResizeCr("Form_Resize")
+                || hasOwnResizeCr((std::string(formEvtBase334) + "_Resize").c_str())) {
                 c_.emitLine("{ extern void " + resizeFnLoad + "(); " + resizeFnLoad + "(); }");
             }
         }
@@ -355,7 +384,7 @@
                 std::string changeFn = eventHandlerFn(ctrl.controlName, "_Change");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 768) {");
                 c_.indent();
-                c_.emitLine("{ extern void " + changeFn + "(); " + changeFn + "(); }");
+                c_.emitLine(vb6CtrlEvCallText(changeFn, isArrayCtrl, ctrl.index));
                 c_.dedent();
                 c_.emitLine("}");
             }

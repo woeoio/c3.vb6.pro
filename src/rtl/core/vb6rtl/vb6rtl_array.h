@@ -383,6 +383,18 @@ void vb6_Width(int32_t filenumber, int32_t width);
 
 void vb6_Print(int32_t filenumber, BSTR s);
 void vb6_Write(int32_t filenumber, BSTR s);
+
+// Print # / Write # 的数值/分隔语义 (按真 VB6 实测字节对齐; 见 vb6rtl_file.c 顶注)。
+// sep: 0=语句尾 (CRLF), 1=';' (不换行), 2=',' (Print 补 14 列区 / Write 写逗号)。
+// mode: 0=Print # 文本, 1=Write # 文本。
+BSTR vb6_FileNumText(double v, int32_t isSingle, int32_t mode);
+BSTR vb6_FileLongText(int64_t v, int32_t mode);
+BSTR vb6_FileBoolText(int32_t v, int32_t mode);
+BSTR vb6_FileDateText(double v, int32_t mode);
+BSTR vb6_FileVariantText(vb6_VARIANT v, int32_t mode);
+void vb6_PrintText(int32_t filenumber, BSTR s, int32_t sep);
+void vb6_WriteText(int32_t filenumber, BSTR s, int32_t isString, int32_t sep);
+
 BSTR vb6_LineInput(int32_t filenumber);
 int32_t vb6_Input(int32_t filenumber, BSTR* outVar);
 BSTR vb6_InputString(int32_t count, int32_t filenumber);  // P15.4: Input function — Fix <vbeclipse>: 形参序 = VB6 源码序 (count, filenumber), 旧序从未读到过东西

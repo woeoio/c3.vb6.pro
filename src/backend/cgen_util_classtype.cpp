@@ -556,7 +556,7 @@ std::string CCodeGen::legacyViewSetterLastParamCType(const std::string& objExpr,
 
 // Fix 219: Variant 载体判定 —— 见 cgen_helpers.inc 的声明注释。
 bool CCodeGen::isVariantCarrierExpr(const std::string& cExpr) const {
-    return cExprIsVariant(cExpr) || cExpr.rfind("vb6_List_", 0) == 0;
+    return isVariantSlot(cExpr, nullptr) || cExpr.rfind("vb6_List_", 0) == 0;  // P1.3: ast 不可得 (cExpr 为形参)
 }
 
 // Fix 219: Variant 载体上的成员访问 = 后期绑定的属性读。
@@ -602,6 +602,14 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 std::string lower = Symbol::toLower(id.name);
                 auto it = arrayUdtElemTypes_.find(lower);
                 if (it != arrayUdtElemTypes_.end()) return it->second;
+                // 直接调用的**函数返回 UDT** — VarPtr(Str2Guid(...)) 这类取临时地址的站点。
+                // semantic_analyzer_decl 已把返回类型名写进 variableTypeName (与变量同一格)。
+                Symbol* fnSym = symTab_.lookupModule(id.name);
+                if (fnSym && fnSym->kind == SymbolKind::Function && !fnSym->variableTypeName.empty()) {
+                    Symbol* udtSym = symTab_.lookupModule(fnSym->variableTypeName);
+                    if (udtSym && udtSym->kind == SymbolKind::UserDefinedType)
+                        return "vb6_type_" + cIdent(fnSym->variableTypeName);
+                }
             }
             // Fix 110c: UDT 数组的**成员**数组 — m_Serie(i).Rects(j).
             // callee 是 MemberAccessExpr(父对象, 成员名), 成员本身是 UDT 数组
@@ -752,10 +760,17 @@ Vb6Type CCodeGen::inferUdtFieldVb6Type(const ASTNode* target, bool* outIsArray) 
 // 账 #262: 定长成员数组的下标折算 —— 秩在这里，层数就只在这里定。
 // 发码形态是 C 的多维数组 (`float M[5][5]`)，所以每层一个括号、步长归 C 算，
 // 不需要另开一张"每行几格"的表 (那张表迟早和 cgen_decl.cpp 的折尺寸分家)。
+// 账 #477: **VB6 多维数组是列主序** (SAFEARRAY 惯例: 第一维最快变, 见
+// vb6_SafeArrayND_Offset 的 stride 递推), 而 C 多维数组是行主序 —— 直接
+// `field[i][j]` 会把 `.M(0,4)` 写进 C 的第 4 格而不是 VB6 的第 20 格。给 GDI+
+// 这类"按声明形状吃裸内存"的 API 时整张矩阵会被转置 (uc12 心形色矩阵的
+// 平移列落到被丢弃的第 5 列 ⇒ 上色静默失效, 品红退化成纯黑)。声明侧已按
+// 列主序发 (cgen_decl.cpp 同级反向), 这里下标同样反向: `field[j][i]`。
 std::string CCodeGen::udtFixedMemberIndex(const std::string& fieldExpr,
                                           const std::vector<ExprPtr>& args, int32_t rank) {
     int32_t layers = rank < 1 ? 1 : rank;
-    std::string out = fieldExpr;
+    std::vector<std::string> idxs;
+    idxs.reserve((size_t)layers);
     for (int32_t k = 0; k < layers; k++) {
         std::string idx;
         if (k < (int32_t)args.size() && args[k]) {
@@ -765,8 +780,10 @@ std::string CCodeGen::udtFixedMemberIndex(const std::string& fieldExpr,
         } else {
             idx = "0";            // 缺的那层 (含省略实参): 给一个确定的在范围内的格子 (VB6 此处报下标越界)
         }
-        out += "[" + idx + "]";
+        idxs.push_back(std::move(idx));
     }
+    std::string out = fieldExpr;
+    for (int32_t k = layers - 1; k >= 0; k--) out += "[" + idxs[(size_t)k] + "]";
     return out;
 }
 
@@ -1044,7 +1061,11 @@ std::string CCodeGen::appendUdtObjFieldMarker(const std::string& objExpr,
 
 // Fix 084o: 需要 int32_t 上下文中的 Variant 表达式 → vb6_VariantToLong 包装
 std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astExpr) {
-    if (cExprIsVariant(cExpr)) return "vb6_VariantToLong(" + cExpr + ")";
+    // 无类型 COM 属性读 (vb6_ComGetProp) 的静态 C 类型是 void* (指向 VARIANT)，
+    // 参与算术/整除前必须先按 VB6 语义取值 (与 unwrapBareComCall108 同口径)。
+    if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
+        return "vb6_VariantToLong(vb6_VariantFromComResult(" + cExpr + "))";
+    if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLong(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;
@@ -1064,7 +1085,10 @@ std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astE
 // 与 toLongIfVariant 同构 (整除 \ 已在 Fix 084o 用同款处理), 仅提取函数换成
 // vb6_VariantToDouble. 未判为 Variant 时原样返回, 故对今天能编译的表达式零影响.
 std::string CCodeGen::toDoubleIfVariant(const std::string& cExpr, const Expr* astExpr) {
-    if (cExprIsVariant(cExpr)) return "vb6_VariantToDouble(" + cExpr + ")";
+    // 同上 (Fix 156 的配套): 无类型 COM 属性读参与浮点除法时先解包成数值。
+    if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
+        return "vb6_VariantToDouble(vb6_VariantFromComResult(" + cExpr + "))";
+    if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToDouble(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;
@@ -1175,6 +1199,18 @@ std::string CCodeGen::udtDeepCopyAssign(const Expr& targetNode, const std::strin
     if (valUdt != tgtUdt) return "";             // 异型 UDT / 非 UDT → 维持原路径
     if (!udtHasOwnedMembers(tgtUdt)) return "";
     requestUdtCopy(tgtUdt, false);
+    // RHS 是**函数调用** (UDT 返回值): `&fn(...)` 不是左值 → C2102。
+    // VB6 里 `Seg(0) = MakeBytes(ba)` 合法, C 侧要落一格临时再取址。
+    // 数组元素/成员访问 (`VB6_SA_AT(...)`、`x->y`) 是可取址的左值, 不走这一支。
+    bool rhsIsCall = (valueNode->kind == ASTNodeKind::IndexOrCallExpr
+                      && value.find("VB6_SA_") != 0 && value.back() == ')');
+    if (rhsIsCall) {
+        static int udtTmpSeq = 0;
+        std::string tmp = "_vb6_udt_tmp" + std::to_string(++udtTmpSeq);
+        return "{ " + tgtUdt + " " + tmp + " = " + value + "; vb6_udtcpy_"
+               + udtNameOfCType(tgtUdt) + "(&" + target + ", &" + tmp
+               + "); }  /* Fix 178+UDT 返回临时 */";
+    }
     return "vb6_udtcpy_" + udtNameOfCType(tgtUdt) + "(&" + target + ", &" + value
            + ");  /* Fix 178: UDT 深拷贝 */";
 }

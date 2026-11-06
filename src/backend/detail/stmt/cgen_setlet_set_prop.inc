@@ -465,7 +465,7 @@
                 // storageKey 命中到别的同名符号, 其 params.back().type 不可信 —
                 // prop_set_DataSource(me, void* Value) 曾被误包成
                 // vb6_VariantFromValue(Value) → C2172 实参不是指针 ×3。
-                bool _valIsVar159 = cExprIsVariant(_valE)
+                bool _valIsVar159 = isVariantSlot(_valE, nullptr)  // P1.3: ast 不可得 (_valE 距 emitSetObjectRhs 超 5 行)
                     || (node.value && node.value->kind == ASTNodeKind::IdentifierExpr
                         && knownVariantVars_.count(Symbol::toLower(
                                static_cast<IdentifierExpr&>(*node.value).name)));
@@ -570,18 +570,50 @@
     suppressVirtDispatch_ = savedVirtLhs;
     std::string target = std::move(lastExpr_);
 
+    // 账 #305 第三百三十五刀: `Set <裸对象变量> = ...` 的目标发射 (typed COM 变量
+    // → 裸名) 不立也不清 COM marker; 但**前文残留**的 marker (With 目标求值
+    // `_vb6_with_N = GetObjectProp(obj, L"Member")` / 上一条链式语句) 会让
+    // isComMarker_ 此处仍为真 ⇒ 把普通对象引用赋值误发成
+    // `vb6_ComSetRef(<残留接收者>, <残留成员名>, value)` —— GUISample frmMain
+    // `Set ControlNew = .Add(...)` (With ControlFile.CommandBar 块内首条) 实测:
+    // 接收者=With 目标、成员=残留的 "Controls" ⇒ Codejock 答 0x80020005 ⇒
+    // 未处理错误 13 启动即崩。Set 语义 = 对象引用赋给变量, 永不走默认属性写,
+    // 裸标识符目标下的 marker 必然是残留, 直接清。
+    if (node.target->kind == ASTNodeKind::IdentifierExpr && isComMarker_) {
+        isComMarker_ = false;
+        comObjExpr_.clear();
+        comMemberName_.clear();
+    }
+
     // 账 #257 第十九层 · 注: `Set .Picture = .Image` 这一形**不在这里另开分支** ——
     // 上面 WithMemberExpr 的读取已经把 target 交成内建全局 (且不打 COM 标记),
     // 于是下方 isComMarker_ 为假, 自然落到本函数末尾那条通用的 `target = value;`
     // 路径, 发出的就是 `vb6_UserControl_Picture = vb6_ComGetObjectProp(...)`。
     // 刻意不再调 emitSetObjectRhs: scripts/check_set_rhs_object_context.ps1 钉着
-    // "emitSetObjectRhs 调用点恰好 7 处", 新增一处即红 (实测踩到过)。
+    // "emitSetObjectRhs 总站点 9 处 = 声明 + 定义 + 7 个发码点", 新增一处即红 (实测踩到过)。
 
     // COM属性SetRef: Set obj.Property = objRef → vb6_ComSetRef(obj, L"Property", objRef)
     if (isComMarker_) {
         isComMarker_ = false;
         std::string objExpr = std::move(comObjExpr_);
         std::string memberName = std::move(comMemberName_);
+        /* 账 #305 第三百四十四刀: 窗体接收者上的 **Public 变量写** (GUISample
+         * frmMain:973 `Set frmD.fMain = Me`, frmDocument 声明 Public fMain As frmMain)。
+         * 窗体 Public 变量的 C 存储是**裸全局** (frmDocument.c `void* fMain`),
+         * 直接赋值; 走 COM SetRef 是拿窗体 HWND 当 IDispatch 派发 —— 宿主 miss
+         * 静默丢, 事后对空/garbage 的成员链把进程带走 (实测)。 */
+        {
+            Symbol* pvVar344 = symTab_.lookupModule(memberName);
+            if (!pvVar344) pvVar344 = symTab_.lookup(memberName);
+            if (pvVar344 && pvVar344->kind == SymbolKind::Variable && pvVar344->isExternal
+                && knownFormModuleNames_.count(Symbol::toLower(pvVar344->sourceModule))) {
+                emitSetObjectRhs(node.value);
+                if (isComMarker_) resolveComValue("Object");
+                std::string v344 = std::move(lastExpr_);
+                c_.emitLine(cIdent(pvVar344->name) + " = (void*)" + v344 + ";  /* form Public var Set */");
+                return;
+            }
+        }
     emitSetObjectRhs(node.value);
     // COM属性值: 如果右侧是COM属性, 解析为值
     // 账 (Outlook2013 frmMain:830): Set 的右值是**对象** —— 默认档 String 会发
@@ -600,7 +632,7 @@
             vTrim = vTrim.substr(1, vTrim.size() - 2);
         if (knownVariantVars_.count(Symbol::toLower(vTrim))) {
             value = "vb6_VariantToObject(&" + value + ")";
-        } else if (cExprIsVariant(value)) {
+        } else if (isVariantSlot(value, nullptr)) {  // P1.3: ast 不可得 (value 距 emitExpr 超 5 行)
             value = "vb6_VariantToObjectVal(" + value + ")";
         }
     }
@@ -944,7 +976,7 @@
                     //   vb6_iface_IFoo_wrap_<Impl>((vb6_cls_Impl*)vb6_VariantToObjectVal(<var>))
                     // 生成的串已含 "vb6_VariantToObjectVal", Fix 038b-6 下方守卫会跳过,
                     // 不会二次转换. 无唯一实现类时无法推断 → 报编译错误 (绝不静默误编).
-                    bool rhsIsVariant = cExprIsVariant(value);
+                    bool rhsIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 距 emitExpr 超 5 行)
                     // ByRef Variant 参数解引用形式 "(*vName)": cExprIsVariant 剥掉前导
                     // '(' 检测不到 ("*vName)" 无前缀命中). 用 AST 标识符兜底判定.
                     if (!rhsIsVariant && node.value

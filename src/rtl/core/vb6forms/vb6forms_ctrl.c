@@ -72,6 +72,26 @@ void vb6_SetControlText(void* hwnd, void* bstr) {
     }
 }
 
+// 账 (C3 事件语义): 「正在建控件」的闸（声明见 vb6forms_prop.h）。
+// 生成码在 CreateControls 起/止各发一次；这里只认**根窗**（控件在 Frame 里也查得到窗体）。
+static const wchar_t* kFormLoadingProp = L"VB6_Form_Loading";
+
+void vb6_Form_SetLoading(void* hwndForm, int loading) {
+    if (!hwndForm) return;
+    SetPropW((HWND)hwndForm, kFormLoadingProp, (HANDLE)(INT_PTR)(loading ? 2 : 1));
+}
+
+int vb6_Form_IsLoading(void* hwndAny) {
+    HWND w = (HWND)hwndAny;
+    HANDLE h;
+    if (!w || !IsWindow(w)) return 0;
+    w = GetAncestor(w, GA_ROOT);
+    if (!w) return 0;
+    h = GetPropW(w, kFormLoadingProp);
+    if (!h) return 0;                 /* 没标记 = 运行期 */
+    return (INT_PTR)h == 2;
+}
+
 int vb6_GetCheckValue(void* hwnd) {
     if (!hwnd) return 0;
     LRESULT state = SendMessageW((HWND)hwnd, BM_GETCHECK, 0, 0);
@@ -80,7 +100,18 @@ int vb6_GetCheckValue(void* hwnd) {
 
 void vb6_SetCheckValue(void* hwnd, int value) {
     if (!hwnd) return;
-    SendMessageW((HWND)hwnd, BM_SETCHECK, (WPARAM)value, 0);
+    HWND hw = (HWND)hwnd;
+    int oldState = (int)SendMessageW(hw, BM_GETCHECK, 0, 0);
+    SendMessageW(hw, BM_SETCHECK, (WPARAM)value, 0);
+    /* 实测（.temp/evprobe，真 VB6）：CheckBox 的 Click 只在 Value **真变化**时发
+       （0→1、1→2 都发），同值赋值静默；设计期灌值也不发（vb6_Form_IsLoading 闸）。
+       通知走原生通道：给父窗发 WM_COMMAND/BN_CLICKED，id 取创建时的 hMenu。 */
+    if (oldState != value && !vb6_Form_IsLoading(hw)) {
+        HWND parent = GetParent(hw);
+        if (parent)
+            SendMessageW(parent, WM_COMMAND,
+                         MAKEWPARAM((WORD)GetDlgCtrlID(hw), BN_CLICKED), (LPARAM)hw);
+    }
 }
 
 // 账 #128-b: OptionButton 的 Value 在 VB6 是 **Boolean**，而 CheckBox 的是 **三态 Integer**
@@ -95,7 +126,18 @@ int vb6_GetOptionValue(void* hwnd) {
 
 void vb6_SetOptionValue(void* hwnd, int value) {
     if (!hwnd) return;
-    SendMessageW((HWND)hwnd, BM_SETCHECK, (WPARAM)(value ? BST_CHECKED : BST_UNCHECKED), 0);
+    HWND hw = (HWND)hwnd;
+    int oldOn = (SendMessageW(hw, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    int newOn = value ? 1 : 0;
+    SendMessageW(hw, BM_SETCHECK, (WPARAM)(newOn ? BST_CHECKED : BST_UNCHECKED), 0);
+    /* 实测（.temp/evprobe，真 VB6）：OptionButton 只在 False→True 这一跳发 Click；
+       True→True 与 True→False 都不发（与 CheckBox「任何真变化都发」不同）。 */
+    if (newOn && !oldOn && !vb6_Form_IsLoading(hw)) {
+        HWND parent = GetParent(hw);
+        if (parent)
+            SendMessageW(parent, WM_COMMAND,
+                         MAKEWPARAM((WORD)GetDlgCtrlID(hw), BN_CLICKED), (LPARAM)hw);
+    }
 }
 
 int vb6_GetControlVisible(void* hwnd) {
@@ -144,6 +186,27 @@ void vb6_SetControlFocus(void* hwnd) {
 // 不提窗体的激活态 —— VB6 的 Form.ZOrder 也不改变焦点。
 void vb6_FormZOrder(void* hwnd, int position) {
     if (!hwnd) return;
+    SetWindowPos((HWND)hwnd, position == 1 ? HWND_BOTTOM : HWND_TOP,
+                 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+// 控件/窗体语言级方法 `obj.ZOrder [position]`（0=置顶，缺省；1=置底）。
+// 与 vb6_FormZOrder 同一口径：只动 z 序，不激活、不移动、不改尺寸。
+// 入参可能是 **OCX 控件对象**（生成码里的 `vb6_hwnd_<name>` 对 OCX 是 IDispatch*，
+// IsWindow 判假）—— 与 vb6_ControlMove 一样先换回代表窗，再按兄弟窗排序。
+// 账 (GUISample 滚动条刀)：`ScrollBarVertical.ZOrder 0` / `ScrollBarHorizontal.ZOrder 0`
+// 此前落通用晚绑定（vb6_ComGetObjectProp(hwnd, L"ZOrder") 在 HWND/Extender 上都取不到
+// 对象 → vb6_ComCallObject(NULL, …) 静默不动作），于是两枚 Codejock ScrollBar 一直被
+// SyntaxEdit 整块盖住（实测像素：编辑器底 #F6F6F6 铺满本应是滚动条的 x=1600..1667 列）。
+void vb6_ControlZOrder(void* hwnd, int position) {
+    void* ctlObj = hwnd;
+    hwnd = vb6_CtlWin(hwnd);
+    if (!hwnd) {
+        /* windowless OCX: 站点没有独立窗口可抬 —— 交给站点账本（真 VB6 这里靠
+           IDeferredCommand/z 序属性，本项目暂无 windowless 的 z 序需求，交回不打补丁） */
+        (void)ctlObj;
+        return;
+    }
     SetWindowPos((HWND)hwnd, position == 1 ? HWND_BOTTOM : HWND_TOP,
                  0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
@@ -802,6 +865,32 @@ void vb6_SetControlFontStrikethrough(void* hwnd, int strike) {
 // P13.2: ForeColor/BackColor
 // ============================================================
 
+/* ============================================================
+   **VB6 颜色值 → 实际 COLORREF 的唯一出口**（声明见 vb6forms_prop.h）。
+
+   为什么必须收成一处：VB6 的系统色是 32 位 Long 的负值 `&H80000000& Or n`
+   (n = COLOR_SCROLLBAR(0) .. COLOR_MENUBAR(30))，VB6 交回它的**种类**而不是当时色值；
+   非系统色则是 0x00BBGGRR 的 COLORREF。这两件事在数值上无法用"正负"一句分辨干净：
+     · 只判 `v < 0` 会把 &HFF00000D 这种负 COLORREF 误当系统色；
+     · 只判低字节 n<=30 会把 &HFF00000D 误翻成 GetSysColor(13)。
+   所以判据是**逐位吻合**：高 24 位恒为 0x80、低 8 位 0..30 才是系统色。
+   本缺陷（VBFlexGridDemo 的 Picture2 "Drag/drop me" 黑块）就是绘制层各站点把
+   `vb6_GetControlBackColor()` 的原始负值裸转 `(COLORREF)` 造刷 ——
+   CreateSolidBrush(0x8000000D) 把 R=0x0D 之外全吃掉，得到 RGB(13,0,0) 暗红黑，
+   而正确值是 GetSysColor(13) = 当前主题的 COLOR_HIGHLIGHT。
+
+   ⚠ 新增消费点必须转调本函数；禁止在别处再抄一份 `& 0x80000000 / GetSysColor(...)`
+   (静态哨兵 scripts/check_color_ref_authority.ps1 会拦)。
+   ============================================================ */
+COLORREF vb6_ColorToColorRef(int vbColor) {
+    const uint32_t v = (uint32_t)vbColor;
+    /* 系统色: &H80000000& Or n —— 高 24 位必须是 0x80, 低 8 位 n ∈ [0..30]。 */
+    if ((v & 0xFFFFFF00u) == 0x80000000u && (v & 0xFFu) <= 30u)
+        return GetSysColor((int)(v & 0xFFu));
+    /* 其余按 COLORREF: 只取低 24 位 (0x00BBGGRR)。 */
+    return (COLORREF)(v & 0x00FFFFFFu);
+}
+
 /* 原生 SysTreeView32 不看 VB6_BackColor/VB6_ForeColor 窗口属性 (那两位只有 RTL
    自绘与 WM_CTLCOLOR 族消费), 它的底色/文字色只认 TVM_SETBKCOLOR /
    TVM_SETTEXTCOLOR —— 不发给它, tree.BackColor / tree.ForeColor 在原生树上恒为
@@ -811,8 +900,7 @@ static void vb6_NativeTreeColorMsg(void* hwnd, UINT msg, int color) {
     wchar_t cls[64];
     if (!GetClassNameW((HWND)hwnd, cls, 64)) return;
     if (_wcsicmp(cls, L"SysTreeView32") != 0) return;
-    COLORREF c = (COLORREF)(color & 0xFFFFFF);
-    if (color & 0x80000000) c = GetSysColor(color & 0xFF);
+    COLORREF c = vb6_ColorToColorRef(color);
     SendMessageW((HWND)hwnd, msg, 0, (LPARAM)c);
 }
 
@@ -896,17 +984,29 @@ LRESULT vb6_ApplyCtlColorStatic(HDC hdc, HWND child) {
     // ⚠ 必须排在下面的 VB6_BackColorSet 检查**之前**: BackStyle=0 的 Label 通常
     // 压根没写 BackColor (3DMenu 的 Label3/LblSub 都是), 落到下面直接 return 0。
     if (GetPropW(child, L"VB6_BackStyle0")) {
-        COLORREF tfg = (COLORREF)vb6_GetControlForeColor((void*)child);
-        if (tfg & 0x80000000L) tfg = GetSysColor(tfg & 0xFF);
+        COLORREF tfg = vb6_ColorToColorRef(vb6_GetControlForeColor((void*)child));
         SetTextColor(hdc, tfg);
         SetBkMode(hdc, TRANSPARENT);
         return (LRESULT)GetStockObject(HOLLOW_BRUSH);
     }
+    // Fix 187b: CheckBox/OptionButton 的底色请求走 **WM_CTLCOLORSTATIC**, 不是
+    // WM_CTLCOLORBTN (后者只对命令按钮/owner-draw 生效)。VB6 里它们的 BackColor
+    // 默认 = &H8000000F& (按钮面 240), 所以即使没显式 Set 也必须接管; 否则落到
+    // DefWindowProcW 的类背景刷 (COLOR_WINDOW = 纯白) —— ucTreeView 顶排 CheckBox
+    // 整块 255 白 (161x21 @ (269,48)), 参考图是 240。
+    // 只认 BUTTON 窗口类 + BS_CHECKBOX/AUTOCHECKBOX/RADIOBUTTON/3STATE/
+    // AUTO3STATE/AUTORADIOBUTTON 六个 style 值; STATIC(Label) 的低位同名值不进来。
+    LONG_PTR st187 = GetWindowLongPtrW(child, GWL_STYLE);
+    LONG_PTR kind187 = st187 & 0x0000000FL;
+    wchar_t cls187[16] = {0};
+    GetClassNameW(child, cls187, 16);
+    int isCheck187 = (_wcsicmp(cls187, L"Button") == 0 &&
+                      (kind187 == 2 || kind187 == 3 || kind187 == 4 ||
+                       kind187 == 5 || kind187 == 6 || kind187 == 9));
     // Fix 187: 只看 Set 哨兵, 不看值 — color=0 (黑) 的值属性是 NULL, 但它是合法色。
-    if (!GetPropW(child, L"VB6_BackColorSet")) return 0;  // 未显式设色 → 调用方走默认绘制
-    COLORREF bg = (COLORREF)(INT_PTR)GetPropW(child, L"VB6_BackColor");
-    COLORREF fg = (COLORREF)vb6_GetControlForeColor((void*)child);
-    if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
+    if (!GetPropW(child, L"VB6_BackColorSet") && !isCheck187) return 0;  // 未显式设色且非复选类 → 调用方走默认绘制
+    COLORREF bg = vb6_ColorToColorRef(vb6_GetControlBackColor((void*)child));
+    COLORREF fg = vb6_ColorToColorRef(vb6_GetControlForeColor((void*)child));
     SetTextColor(hdc, fg);
     SetBkColor(hdc, bg);
     HBRUSH br = (HBRUSH)GetPropW(child, L"VB6_BgBrush");
@@ -938,9 +1038,8 @@ LRESULT vb6_CtlColorBtnBrush(HWND child, HWND parent) {
         return (LRESULT)GetStockObject(HOLLOW_BRUSH);
     }
     // groupbox: 标题底 = 父窗 BackColor (未显式设色时回落 BTNFACE = 240 灰)。
-    COLORREF bg = parent ? (COLORREF)vb6_GetControlBackColor((void*)parent)
+    COLORREF bg = parent ? vb6_ColorToColorRef(vb6_GetControlBackColor((void*)parent))
                          : GetSysColor(COLOR_BTNFACE);
-    if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
     HBRUSH br = (HBRUSH)GetPropW(child, L"VB6_GbCapBrush");
     if (br) {
         // 缓存命中: 若父窗底色已变, 需要重建 (色值存在 VB6_GbCapColor 上)。

@@ -513,6 +513,44 @@ vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv) {
     return vb6_ComVariantIntoSlot(pv, 0);
 }
 
+/* 站点: ParamArray (Windows SAFEARRAY of VT_VARIANT) 当作值参与 Variant 赋值 ——
+   ucSegmentedControl 的 mIOleInPlaceActivate OleInvoke 里 `varParam = arrParam`。
+   以前 `vb6_VariantFromValue(arrParam)` 的 _Generic 把 SAFEARRAY* 落进 default
+   ⇒ vt=VT_DISPATCH / pdispVal=描述符地址 (假对象): IsArray 答 False, 随后
+   `UBound(varParam, 1)` 拿到 NULL 描述符 ⇒ 运行期错误 9 (实测启动即崩)。
+   这里按 VT_ARRAY|VT_VARIANT 走既有那一趟转换 (vb6_ComVariantIntoSlot, steal=0),
+   得到真 vb6_SafeArray1D; 源数组只读、不转移所有权。 */
+vb6_VARIANT vb6_VariantFromParamArray(SAFEARRAY* psa) {
+    VARIANT v;
+    VariantInit(&v);
+    if (psa) { v.vt = VT_ARRAY | VT_VARIANT; v.parray = psa; }
+    vb6_VARIANT r = vb6_ComVariantIntoSlot(&v, 0);
+    v.parray = NULL;   /* IntoSlot 已深拷元素; 清指针格以免后续 clear 动到源数组 */
+    return r;
+}
+
+/* P4 取证 (2026-11-04, 用户报的 "内存不能 read"): For Each 循环尾清栈上 VARIANT 用的是
+ * OLEAUT32 的 VariantClear, 它对 VT_DISPATCH 一律 `pdispVal->lpVtbl->Release`。可 C3 的
+ * 伪对象 (内建 Collection = vb6forms 的 vb6_CollRec, 首字段是身份标记 0xC01C01C0,
+ * **不是 vtable**) 按全仓既有惯例就存在 VT_DISPATCH 槽里 —— OLEAUT32 把标记当 vtable
+ * 去读第 1/2 槽 ⇒ 0xC0000005。实测两处同一枚:
+ *   用户截图            instr 774BCF77 (= OLEAUT32+0x1CF77, VariantCopy 读 AddRef) 读 0xC01C01C4
+ *   crashprobe(P9/P4)   instr 774BFA5D (= OLEAUT32+0x1FA5D, VariantClear 读 Release) 读 0xC01C01C8
+ * 两枚读地址都是 VB6_UC_COLL_TAG(0xC01C01C0) + 槽偏移 ⇒ 是**伪对象被 COM 协议解引用**,
+ * 不是引用计数被谁减成 0, 也不是"释放后重用"。
+ * 所以这一枚出口只把**对象那一档**换成与 vb6_ReleaseObject 同一判据的释放
+ * (真 COM 对象照 Release, 伪对象/句柄跳过), 其余档 (BSTR / 数组 / 数值 / 日期)
+ * 原样交回 OLEAUT32 —— 与改前逐字同义。 */
+void vb6_VariantClearWin(VARIANT* pv) {
+    if (!pv) return;
+    if (pv->vt == VT_DISPATCH) {
+        vb6_ReleaseObject((void**)&pv->pdispVal);
+        pv->vt = VT_EMPTY;
+        return;
+    }
+    VariantClear(pv);
+}
+
 /* P24-04: Extract IDispatch pointer from Variant for COM late-binding */
 /* When vb6_VARIANT holds an object (vt==vb6_vtDispatch), return its pdispVal; */
 /* otherwise return NULL. Used when Variant-typed vars access COM members. */
@@ -520,6 +558,52 @@ void* vb6_VariantToObject(vb6_VARIANT* v) {
     if (!v) return NULL;
     if (v->vt == vb6_vtDispatch) return v->pdispVal;
     return NULL;
+}
+
+/* P3 缺口① (§D 已修复条): `Set <对象> = <整只 VARIANT 里是 SafeArray>` —— VB6 实测 424
+ * Object required (见 .build/vb6base/READINGS.md P1 表 T2/T4/T9)。
+ * 判据只看**运行期** vt 的阵列位, 所以 `Set x = <普通 Variant>` 的既有行为一字不动;
+ * 非阵列档原样转调 vb6_VariantToObjectVal (与改前同一个出口)。
+ * 与改前唯一的形态差: 调用点名多一个 Checked 后缀。 */
+void* vb6_VariantToObjectValChecked(vb6_VARIANT v) {
+    extern void vb6_RaiseError(int32_t errNum, BSTR description);
+    if (v.vt & vb6_vtArray) {
+        vb6_RaiseError(424, vb6_BSTR_FromStr(L"Object required"));
+        return NULL;   /* On Error Resume Next 下 vb6_RaiseError 返回, 目标槽保持 NULL */
+    }
+    return vb6_VariantToObjectVal(v);
+}
+
+/* P3 缺口① 的另一半: 目标是 **Variant 槽** 时 VB6 给的是 13 Type mismatch
+ * (READINGS.md P1 表 T1/T3/T10/T15/T17 —— 同一个 RHS 换目标类型就换错误号)。
+ * 非阵列档原样**浅拷贝** (与改前 `x = value` 同语义); 阵列档报错并交回 Empty
+ * (VB6 在 Resume Next 下整条语句被放弃, 槽里仍是原来的 Empty)。 */
+vb6_VARIANT vb6_VariantSetCopyChecked(vb6_VARIANT v) {
+    extern void vb6_RaiseError(int32_t errNum, BSTR description);
+    if (v.vt & vb6_vtArray) {
+        vb6_RaiseError(13, vb6_BSTR_FromStr(L"Type mismatch"));
+        vb6_VARIANT e;
+        VariantInit(&e);
+        return e;
+    }
+    return v;
+}
+
+/* P3 缺口③: `Array(...) Is Nothing` —— VB6 实测 **424 Object required**
+ * (READINGS.md P3 表 A/E/I/J/K/L), 不是 True。
+ * 非阵列档原样转调 vb6_IsNothing(vb6_VariantToObject) (与改前逐字同义)。
+ * 报错后交回 1: `On Error Resume Next` 下 VB6 放弃整条语句、既不产生值也不打印,
+ * C3 的 Resume Next 是"置 Err 后继续", 交回 1 (= 用户预期的 True) 是两种口径之间
+ * 唯一不引入新错值的落点; `On Error GoTo` 走 longjmp, 永远到不了这个返回值。 */
+int32_t vb6_VariantIsNothingChecked(vb6_VARIANT* v) {
+    extern void vb6_RaiseError(int32_t errNum, BSTR description);
+    extern int32_t vb6_IsNothing(void* obj);
+    if (!v) return 1;
+    if (v->vt & vb6_vtArray) {
+        vb6_RaiseError(424, vb6_BSTR_FromStr(L"Object required"));
+        return 1;
+    }
+    return vb6_IsNothing(vb6_VariantToObject(v));
 }
 
 /* 账 #305 §B159 (第五十刀): 「这一档元素许不许原样交给对端」。可搬的判据只有一条: 我们那一格的
@@ -1536,7 +1620,14 @@ int16_t vb6_Extender_Cancel  = 0;
 // --- Fix 133u: Extender.Visible/Height (czUI.ctl) ---
 // Fix 221: 第三格 DataChanged (ComCtlsDemo 的 `UserControl.Extender.DataChanged = True`,
 // 32 处). 运行期容器不活动 ⇒ 只写不读, 保留可写字段。
-struct vb6_UserControl_Extender_Type vb6_UserControl_Extender = { -1, 0, 0 };
+struct vb6_UserControl_Extender_Type vb6_UserControl_Extender =
+    { -1, 0, 0, 0, NULL, 0, 0, NULL, vb6_UC_ExtenderZOrder };
+
+// ucTreeView: `UserControl.FontBold` / `UserControl.FontUnderline` 的持久值。
+// 生成 C 里是裸全局读写 (push/pop 按实例存取, 见 uc_host.c)。绘制与 TextWidth
+// 的落点见 vb6_UC_SetFontFlag / vb6_uc_measureText。
+int16_t vb6_UserControl_FontBold = 0;
+int16_t vb6_UserControl_FontUnderline = 0;
 
 // Fix 221: UserControl.EventsFrozen —— .ctl 里只出现在读位置 (见 vb6rtl_userctl.h
 // 的注释), VB6 运行期恒 False ⇒ 恒 0 的槽位就是正确值。
@@ -1600,7 +1691,18 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
            故就地 extern (与上面 vb6_ScalePxToUser 同款)。 */
         extern void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut);
         LOGFONTW lf;
-        vb6_UC_FontLogFont(vb6_UserControl_Font, 96, 0, &lf);
+        // ucTreeView: UserControl.FontBold/FontUnderline 在 VB6 里就是 Font 的
+        // Bold/Underline。叠在**八档副本**上再问唯一主人 —— 本文件不许再抄一遍
+        // 「八档 → LOGFONT」(com_latebind_guard R9 的负控)。
+        if (vb6_UserControl_Font
+            && (vb6_UserControl_FontBold || vb6_UserControl_FontUnderline)) {
+            vb6_ComIface_Font scratch = *vb6_UserControl_Font;
+            if (vb6_UserControl_FontBold) scratch.Bold = -1;
+            if (vb6_UserControl_FontUnderline) scratch.Underline = -1;
+            vb6_UC_FontLogFont(&scratch, 96, 0, &lf);
+        } else {
+            vb6_UC_FontLogFont(vb6_UserControl_Font, 96, 0, &lf);
+        }
         hNew = CreateFontIndirectW(&lf);
         if (hNew) hOld = (HFONT)SelectObject(hdc, hNew);
     }
@@ -1779,6 +1881,25 @@ void vb6_UserControl_SetFocus(void) {
 void vb6_Extender_ZOrder(vb6_VARIANT* Position, int _has_Position) {
     (void)Position; (void)_has_Position;
     (void)0;
+}
+
+// ucSegmentedControl.ctl 的 `Move` 属性: 按可选参数档位调用 `Extender.Move`。
+// 容器不活动时这一步由我们直接落到控件自己的宿主窗口上 (twips → 像素)。
+void vb6_Extender_Move(float* Left, vb6_VARIANT* Top, vb6_VARIANT* Width, vb6_VARIANT* Height,
+                       int _has_Top, int _has_Width, int _has_Height) {
+    HWND hwnd = (HWND)vb6_UserControl_hWnd;
+    RECT rc;
+    int tpx, tpy, x, y, w, h;
+    if (!hwnd || !Left) return;
+    tpx = vb6_Screen_TwipsPerPixelX(); if (tpx <= 0) tpx = 15;
+    tpy = vb6_Screen_TwipsPerPixelY(); if (tpy <= 0) tpy = 15;
+    GetWindowRect(hwnd, &rc);
+    MapWindowPoints(HWND_DESKTOP, GetParent(hwnd), (POINT*)&rc, 2);
+    x = (int)(*Left / (float)tpx);
+    y = (_has_Top && Top) ? (int)(vb6_VariantToLong(*Top) / tpy) : rc.top;
+    w = (_has_Width && Width) ? (int)(vb6_VariantToLong(*Width) / tpx) : (rc.right - rc.left);
+    h = (_has_Height && Height) ? (int)(vb6_VariantToLong(*Height) / tpy) : (rc.bottom - rc.top);
+    SetWindowPos(hwnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 // ============================================================

@@ -152,10 +152,11 @@
             // <vbeclipse>: 同一条边界 —— 首参若是"已经返回载体"的内置调用
             // (`UBound(Split(s, ","))`) 再包一层就是 C2440, 用 carrier 判定跳过。
             if (!args.empty() && node.positional.size() >= 1
-                && !cExprIsSafeArrayCarrier(args[0])) {
-                bool arrFlag090n = false;
-                bool vFlag090n = isDefinitelyVariantExpr(*node.positional[0], &arrFlag090n);
-                if (vFlag090n) {
+                && !isSafeArrayCarrier(args[0])) {
+                // P2 (A5): 问句是「首参的 C 值是不是整只槽」—— 提取函数
+                // vb6_VariantToSafeArray1D 只收 vb6_VARIANT; 数组本体 (Variant() 返回 /
+                // Array/Split/Filter 的载体) 不是槽, 由 isVariantSlot 的 !isArr 那一半排除。
+                if (isVariantSlot(args[0], node.positional[0].get())) {
                     args[0] = "vb6_VariantToSafeArray1D(&" + args[0] + ")";
                 }
             }

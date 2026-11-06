@@ -412,6 +412,258 @@ void vb6_Write(int32_t filenumber, BSTR s) {
     fflush(f);
 }
 
+// ============================================================
+// Print # / Write # —— 数值与分隔语义 (按真 VB6 实测写盘字节对齐)
+// ============================================================
+// 口径来源 = .temp/m4/vb6num (VB6.EXE /make 编出的参照工程, 逐文件 dump 字节)。
+// 实测结论 (与文档不一致处以实测为准):
+//   Print #  数值 = Str 语义: **非负**一个前导空格, 负数由 '-' 占位 (实测 "-123 "),
+//            尾部恒一个空格。Single 7 位有效数字 / Double 15 位;
+//            定点区间 [1e-15, 1e15), 超出用指数 "1E+20" (大写 E, 与 %g 的小写 e 不同)。
+//   Write #  数值 = 去掉 Str 前导空格的文本, 且 |x|<1 时**去掉前导 0** (0.25 → ".25")。
+//   Print #  Date    = 本地化 CStr(日期) + 尾空格, 无前导空格;[0,1) 只有时间 "H:MM:SS "。
+//   Write #  Date    = "#YYYY-MM-DD HH:MM:SS#"。
+//   Boolean: Print "True"/"False"; Write "#TRUE#"/"#FALSE#"。
+//   Empty:   两者都写空; Null: Print "Null", Write "#NULL#"。
+//   Write #  字符串带引号 (内部 " 双写), 项间恒为逗号 (与源码里 ; 还是 , 无关),
+//            整条语句末尾一个 CRLF。
+//   Print #  ';' 不换行, ',' 补到下一 14 列区, 语句末尾 CRLF。
+// 本函数族只产出**文本**; 分隔/换行由 vb6_PrintText / vb6_WriteText 统一负责,
+// 避免把两套格式写进同一段代码 (上一刀 B11 的教训: Print/Write 是两种语义)。
+
+// VB6 的「通用数值」文本: 定点/指数选择按**有效位数**决定, 不按固定阈值。
+// 实测边界: Double 1e-15 定点 (15 位小数), 1.234e-15 指数 (需 18 位小数 > 15);
+// 1e15 指数 (整数位 16 > 15); 999999999999999 定点。
+static void vb6_file_fmt_number(char* nbuf, size_t cap, double v, int isSingle) {
+    if (v != v) { nbuf[0] = '\0'; return; }
+    int maxPrec = isSingle ? 7 : 15;
+    double av = fabs(v);
+    snprintf(nbuf, cap, "0");
+    for (int prec = 1; prec <= maxPrec; prec++) {
+        int exp10 = (av > 0.0) ? (int)floor(log10(av)) : 0;
+        int fixedOk = (exp10 >= 0) ? (exp10 + 1 <= maxPrec)
+                                   : (-exp10 + prec - 1 <= maxPrec);
+        if (fixedOk) {
+            int dec = prec - 1 - exp10;
+            if (dec < 0) dec = 0;
+            if (dec > 20) dec = 20;
+            snprintf(nbuf, cap, "%.*f", dec, v);
+        } else {
+            snprintf(nbuf, cap, "%.*g", prec, v);
+        }
+        for (char* p = nbuf; *p; ++p) if (*p == 'e') *p = 'E';
+        double back = strtod(nbuf, NULL);
+        if (isSingle) { if ((float)back == (float)v) break; }
+        else          { if (back == v) break; }
+    }
+}
+
+static BSTR vb6_file_bstr_from_narrow(const char* s) {
+    wchar_t wbuf[128];
+    MultiByteToWideChar(CP_ACP, 0, s, -1, wbuf, 128);
+    return vb6_BSTR_FromStr(wbuf);
+}
+
+// mode: 0 = Print #, 1 = Write #
+BSTR vb6_FileNumText(double v, int32_t isSingle, int32_t mode) {
+    char nbuf[64];
+    vb6_file_fmt_number(nbuf, sizeof(nbuf), v, isSingle ? 1 : 0);
+    char out[80];
+    if (mode == 1) {
+        // Write #: 去掉前导 0 (0.25 → .25, -0.25 → -.25); 这些数字已无前导空格。
+        if (nbuf[0] == '-' && nbuf[1] == '0' && nbuf[2] == '.')
+            snprintf(out, sizeof(out), "-%s", nbuf + 2);
+        else if (nbuf[0] == '0' && nbuf[1] == '.')
+            snprintf(out, sizeof(out), "%s", nbuf + 1);
+        else
+            snprintf(out, sizeof(out), "%s", nbuf);
+    } else {
+        // Print #: Str 语义 —— **非负**才留前导空格, 负数由 '-' 自己占那一格
+        // (实测 " -123 " 不成立; 正确是 "-123 "), 尾部恒有一个空格。
+        if (nbuf[0] == '-') snprintf(out, sizeof(out), "%s ", nbuf);
+        else                snprintf(out, sizeof(out), " %s ", nbuf);
+    }
+    return vb6_file_bstr_from_narrow(out);
+}
+
+BSTR vb6_FileLongText(int64_t v, int32_t mode) {
+    char out[48];
+    if (mode == 1) snprintf(out, sizeof(out), "%lld", (long long)v);
+    else           snprintf(out, sizeof(out), v < 0 ? "%lld " : " %lld ", (long long)v);
+    return vb6_file_bstr_from_narrow(out);
+}
+
+BSTR vb6_FileBoolText(int32_t v, int32_t mode) {
+    const wchar_t* t;
+    if (mode == 1) t = v ? L"#TRUE#" : L"#FALSE#";
+    else           t = v ? L"True" : L"False";
+    return vb6_BSTR_FromStr(t);
+}
+
+BSTR vb6_FileDateText(double v, int32_t mode) {
+    wchar_t wbuf[96];
+    if (mode == 1) {
+        SYSTEMTIME st;
+        if (!VariantTimeToSystemTime(v, &st)) return vb6_BSTR_FromStr(L"#1899-12-30 00:00:00#");
+        swprintf(wbuf, 96, L"#%04d-%02d-%02d %02d:%02d:%02d#",
+                 st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        return vb6_BSTR_FromStr(wbuf);
+    }
+    // P21 实测修正: 序列值在 [0,1) (只有时间部分) 时 VB6 只输出 "H:MM:SS ",
+    // 不带 1899/12/30; 实测 "15:04:05 " 与 "0:00:00 " (小时不补零)。负序列是
+    // 1899-12-30 之前的日期, 仍按日期输出, 故条件必须 >= 0 且 < 1。
+    if (v >= 0.0 && v < 1.0) {
+        int32_t sec = (int32_t)(v * 86400.0 + 0.5);
+        if (sec >= 86400) sec = 86399;
+        swprintf(wbuf, 96, L"%d:%02d:%02d ", sec / 3600, (sec / 60) % 60, sec % 60);
+        return vb6_BSTR_FromStr(wbuf);
+    }
+    BSTR d = vb6_CStrDate(v);
+    int32_t n = d ? vb6_BSTR_Len(d) : 0;
+    if (n > 90) n = 90;
+    for (int32_t i = 0; i < n; i++) wbuf[i] = (wchar_t)d[i];
+    wbuf[n] = L' ';
+    wbuf[n + 1] = L'\0';
+    return vb6_BSTR_FromStr(wbuf);
+}
+
+// Variant 档 (Empty/Null/Decimal/运行期类型变化的表达式)。
+// 只处理**值语义**: 字符串原样交回 (Write 的引号由调用点按静态类型决定),
+// 对象档不在本格范围 (VB6 Print 对对象本身也有自己的一套, 与本刀无关)。
+BSTR vb6_FileVariantText(vb6_VARIANT v, int32_t mode) {
+    wchar_t wbuf[128];
+    switch (v.vt) {
+    case vb6_vtEmpty:
+        return vb6_BSTR_FromStr(L"");
+    case vb6_vtNull:
+        return vb6_BSTR_FromStr(mode == 1 ? L"#NULL#" : L"Null");
+    case vb6_vtBoolean:
+        return vb6_FileBoolText(v.boolVal ? 1 : 0, mode);
+    case vb6_vtBSTR:
+        return vb6_BSTR_FromStr(v.bstrVal ? v.bstrVal : L"");
+    case vb6_vtDate:
+        return vb6_FileDateText(v.dblVal, mode);
+    case vb6_vtDecimal: {
+#ifndef _WIN64
+        if (!v.pdecVal) return vb6_BSTR_FromStr(L"");
+#endif
+        BSTR b = NULL;
+        DECIMAL* pd = &vb6_VARIANT_DECVAL(v);
+        if (VarBstrFromDec(pd, LOCALE_USER_DEFAULT, 0, &b) != S_OK || !b)
+            return vb6_BSTR_FromStr(L"");
+        int32_t n = vb6_BSTR_Len(b);
+        if (n > 120) n = 120;
+        if (mode == 1) {
+            // Write #: 去前导 0 (0.25 → .25, -0.25 → -.25)
+            int32_t i = 0, k = 0;
+            if (n > 2 && b[0] == L'-' && b[1] == L'0' && b[2] == L'.') {
+                wbuf[i++] = L'-'; k = 2;
+            } else if (n > 1 && b[0] == L'0' && b[1] == L'.') {
+                k = 1;
+            }
+            for (; k < n; k++) wbuf[i++] = (wchar_t)b[k];
+            wbuf[i] = L'\0';
+        } else {
+            // Print #: 与 vb6_FileNumText 同一规则 —— **非负**才有前导空格,
+            // 负数由 '-' 自己占位; 尾部恒一个空格 (实测 " 3.25 " / "-0.25 ")。
+            int32_t i = 0;
+            if (n == 0 || b[0] != L'-') wbuf[i++] = L' ';
+            for (int32_t k = 0; k < n; k++) wbuf[i++] = (wchar_t)b[k];
+            wbuf[i] = L' ';
+            wbuf[i + 1] = L'\0';
+        }
+        SysFreeString(b);
+        return vb6_BSTR_FromStr(wbuf);
+    }
+    case vb6_vtInteger:
+        return vb6_FileLongText((int64_t)v.iVal, mode);
+    case vb6_vtByte:  /* = VT_UI1: 必须读 bVal, iVal 是 2 字节槽 */
+        return vb6_FileLongText((int64_t)v.bVal, mode);
+    case vb6_vtLong:
+        return vb6_FileLongText((int64_t)v.lVal, mode);
+    /* 账 #305 §B155/B171 同族：Variant 装 I8 / SByte / UInteger / ULong / ULongLong 时
+     * 同样要按数值格式写盘，不能落 default 静默交空串。 */
+    case (vb6_vartype)VT_I8:
+        return vb6_FileLongText(v.llVal, mode);
+    case (vb6_vartype)VT_I1:
+        return vb6_FileLongText((int64_t)v.sbVal, mode);
+    case (vb6_vartype)VT_UI2:
+        return vb6_FileLongText((int64_t)v.usVal, mode);
+    case (vb6_vartype)VT_UI4:
+        return vb6_FileLongText((int64_t)v.ulVal, mode);
+    case (vb6_vartype)VT_UI8:
+        return vb6_FileLongText((int64_t)v.ullVal, mode);
+    case vb6_vtSingle:
+        return vb6_FileNumText((double)v.fltVal, 1, mode);
+    case vb6_vtDouble:
+        return vb6_FileNumText(v.dblVal, 0, mode);
+    case vb6_vtCurrency:
+        return vb6_FileNumText((double)v.cyVal / 10000.0, 0, mode);
+    default:
+        return vb6_BSTR_FromStr(L"");
+    }
+}
+
+// Print # 单项: 写文本 + 分隔。sep: 0=行尾, 1=';' (不换行), 2=',' (补到 14 列区)
+void vb6_PrintText(int32_t filenumber, BSTR s, int32_t sep) {
+    if (filenumber < 1 || filenumber >= VB6_MAX_FILES || !vb6_file_table[filenumber]) return;
+    FILE* f = vb6_file_table[filenumber];
+    int32_t w = vb6_width_table[filenumber];
+    if (s) {
+        int32_t len = vb6_BSTR_Len(s);
+        for (int32_t i = 0; i < len; i++) {
+            wchar_t ch = (wchar_t)s[i];
+            if (ch == L'\r' || ch == L'\n') {
+                vb6_text_putc(f, ch);
+                vb6_col_table[filenumber] = 0;
+            } else {
+                if (w > 0 && vb6_col_table[filenumber] >= w) {
+                    vb6_text_putc(f, L'\r');
+                    vb6_text_putc(f, L'\n');
+                    vb6_col_table[filenumber] = 0;
+                }
+                vb6_text_putc(f, ch);
+                vb6_col_table[filenumber]++;
+            }
+        }
+    }
+    if (sep == 2) {
+        do {
+            vb6_text_putc(f, L' ');
+            vb6_col_table[filenumber]++;
+        } while (vb6_col_table[filenumber] % 14 != 0);
+    } else if (sep == 0) {
+        vb6_text_putc(f, L'\r');
+        vb6_text_putc(f, L'\n');
+        vb6_col_table[filenumber] = 0;
+    }
+    fflush(f);
+}
+
+// Write # 单项: isString=1 时加引号并把内部 " 双写; sep 与 Print 同义, 但 Write 项间恒为逗号。
+void vb6_WriteText(int32_t filenumber, BSTR s, int32_t isString, int32_t sep) {
+    if (filenumber < 1 || filenumber >= VB6_MAX_FILES || !vb6_file_table[filenumber]) return;
+    FILE* f = vb6_file_table[filenumber];
+    if (isString) {
+        fputc('"', f);
+        if (s) {
+            int32_t len = vb6_BSTR_Len(s);
+            for (int32_t i = 0; i < len; i++) {
+                wchar_t ch = (wchar_t)s[i];
+                if (ch == L'"') { vb6_text_putc(f, L'"'); vb6_text_putc(f, L'"'); }
+                else            { vb6_text_putc(f, ch); }
+            }
+        }
+        fputc('"', f);
+    } else if (s) {
+        int32_t len = vb6_BSTR_Len(s);
+        for (int32_t i = 0; i < len; i++) vb6_text_putc(f, (wchar_t)s[i]);
+    }
+    if (sep == 2) fputc(',', f);
+    else if (sep == 0) { fputc('\r', f); fputc('\n', f); }
+    fflush(f);
+}
+
 BSTR vb6_LineInput(int32_t filenumber) {
     if (filenumber < 1 || filenumber >= VB6_MAX_FILES || !vb6_file_table[filenumber])
         return vb6_BSTR_Empty();

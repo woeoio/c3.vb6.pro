@@ -6,8 +6,8 @@
 
     // Form_Unload trampoline (如果存在Form_Unload)
     {
-        std::string formUnloadFn = cProcName("Form_Unload", AccessLevel::Private);
-        auto* unloadSym = symTab_.lookup("Form_Unload");
+        std::string formUnloadFn = cProcName(std::string(formEvtBase334) + "_Unload", AccessLevel::Private);
+        auto* unloadSym = symTab_.lookup(std::string(formEvtBase334) + "_Unload");
         if (unloadSym) {
             c_.emitLine("// Form_Unload trampoline: bridge callback int(*)(void) to void(int16_t*)");
             c_.emitLine("static int " + formUnloadFn + "_trampoline(void) {");

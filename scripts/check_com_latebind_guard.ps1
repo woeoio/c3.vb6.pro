@@ -134,7 +134,7 @@ function Index-Of262([string[]]$body, [string]$needle) {
     return -1
 }
 
-$missing = @($invPath, $comH, $clsH, $hostC, $ctrlH, $incCall, $incGet, $incSet, $rtPath, $ucC, $rtlC, $formsC, $ctrlC, $hostWinC, $ucCreateC, $formWpInc) |
+$missing = @($invPath, $comH, $clsH, $hostC, $ctrlH, $incCall, $incGet, $incSet, $rtPath, $ucC, $rtlC, $formsC, $ctrlC, $hostWinC, $ucCreateC, $ucHostC, $formWpInc) |
            Where-Object { -not (Test-Path $_) }
 if ($missing) {
     foreach ($m in $missing) { $fail += ("missing file " + $m) }
@@ -249,6 +249,26 @@ else {
         $fail += ("R2 vb6_ComLateBindIsMiss asks dispatchability before the pseudo predicate (pseudo at " + $iPseudo +
                   ", dispatchable at " + $iDisp + ") - 顺序反了会把合法宿主对象判成漏")
     }
+    # 账 (438 语义刀): 被 On Error Resume Next 吞掉的 438 之后, 链尾那一发是在**空接收者**上
+    # 求值 —— VB6 不求值它, 也就不该记 [C3_LATEBIND_MISS]。吸收这一格只许住在判定谓词里
+    # (护栏 R3 要求是纯 void 出口, 不许带 return), 且必须**先于**伪对象豁免问:
+    # 顺序反了不影响结果, 但先问伪对象会让「空接收者」永远走不到吸收那一格。
+    $iAbsorb = $missText.IndexOf('vb6_ComAbsorb438(')
+    if ($iAbsorb -lt 0) {
+        $fail += 'R2 the swallowed-438 tail (empty receiver) must be absorbed inside vb6_ComLateBindIsMiss - 少了这一格, GUISample 每读一次 ActiveForm.rtfText 就多一条假漏'
+    } elseif ($iAbsorb -gt $iPseudo) {
+        $fail += ("R2 the 438-absorption leg must come before the pseudo-exempt question (absorb at " + $iAbsorb + ", pseudo at " + $iPseudo + ")")
+    }
+}
+$absorbBody = Get-Body262 $invLines '^static int32_t vb6_ComAbsorb438\s*\('
+if ($absorbBody.Count -lt 3) { $fail += 'R2 cannot locate vb6_ComAbsorb438' }
+else {
+    $nReset = Count-In262 $absorbBody 'g_com_438_dangling = 0;'
+    if ($nReset -ne 1) { $fail += ('R2 the 438 flag must be cleared exactly once inside the absorb leg (' + $nReset + ') - 不清就不会只吸收一枚') }
+    $nAbsUses = ([regex]::Matches($invCode, 'vb6_ComAbsorb438\s*\(')).Count
+    if ($nAbsUses -ne 2) { $fail += ('R2 vb6_ComAbsorb438 sites (1 def + 1 call) = ' + $nAbsUses + ' (want 2) - 第二处调用就是第二份「谁算漏」的口径') }
+    $nFlagDef = ([regex]::Matches($invCode, 'static int32_t g_com_438_dangling\s*=')).Count
+    if ($nFlagDef -ne 1) { $fail += ('R2 definitions of g_com_438_dangling = ' + $nFlagDef + ' (want 1)') }
 }
 
 # ---- R3: 护栏不改行为 ----
@@ -302,13 +322,41 @@ if ($nHostDec -ne 1) { $fail += ("R5 declaration of vb6_Host_UnknownMemberCount 
 $nReporter = ([regex]::Matches($hostCode, 'static\s+void\s+vb6_ho_reportUnknown\s*\(')).Count
 if ($nReporter -ne 1) { $fail += ("R5 definitions of vb6_ho_reportUnknown = " + $nReporter + " (want exactly 1)") }
 $markerAll = ([regex]::Matches($hostCode, '\[C3_HOST_MEMBER_MISS #')).Count
-$wantSites = @{ $incCall = 2; $incGet = 2; $incSet = 2 }
+# 账 (438 语义刀): 各 .inc **尾部**那一处「不认识的成员」从 reportUnknown 改答 -1 + report438
+# (VB6 语义: 读侧成员不存在 = error 438, 交 On Error Resume Next 吞掉), 于是真缺口
+# 只剩原来那几处: Call=字体臂 1 / GetProp=hFont 那一臂 1 / SetProp=2 (写侧本刀未接 438,
+# 那 3 发 Icons 仍按真缺口记账)。
+# ⚠ 改这几个数必须同时改这里与台账: 「少了一处报告」= 又回到静默丢, 正是这块要防的形状。
+$wantSites = @{ $incCall = 1; $incGet = 1; $incSet = 2 }
 foreach ($inc in @($incCall, $incGet, $incSet)) {
     $ic = Strip-Comments262 ((Read-Lines262 $inc) -join "`n")
     $markerAll += ([regex]::Matches($ic, '\[C3_HOST_MEMBER_MISS #')).Count
     $n = ([regex]::Matches($ic, 'vb6_ho_reportUnknown\s*\(')).Count
     if ($n -ne $wantSites[$inc]) {
         $fail += ("R5 calls of vb6_ho_reportUnknown in " + (Split-Path -Leaf $inc) + " = " + $n + " (want " + $wantSites[$inc] + ")")
+    }
+}
+# 438 那一档的格式同样只许有一位主人, 且站点钉死 (Call / GetProp 各 1; SetProp 本刀未接 = 0)。
+# 少一枚 = 438 又变成静默 Empty; 多一枚 = 有人把真缺口也改记成 438 把缺口藏起来。
+$nRep438 = ([regex]::Matches($hostCode, 'static\s+void\s+vb6_ho_report438\s*\(')).Count
+if ($nRep438 -ne 1) { $fail += ("R5 definitions of vb6_ho_report438 = " + $nRep438 + " (want exactly 1)") }
+$marker438 = ([regex]::Matches($hostCode, '\[C3_HOST_438 #')).Count
+$want438 = @{ $incCall = 1; $incGet = 1; $incSet = 0 }
+foreach ($inc in @($incCall, $incGet, $incSet)) {
+    $ic2 = Strip-Comments262 ((Read-Lines262 $inc) -join "`n")
+    $marker438 += ([regex]::Matches($ic2, '\[C3_HOST_438 #')).Count
+    $n2 = ([regex]::Matches($ic2, 'vb6_ho_report438\s*\(')).Count
+    if ($n2 -ne $want438[$inc]) {
+        $fail += ("R5 calls of vb6_ho_report438 in " + (Split-Path -Leaf $inc) + " = " + $n2 + " (want " + $want438[$inc] + ")")
+    }
+}
+if ($marker438 -ne 1) { $fail += ("R5 the [C3_HOST_438 #] marker across uc_hostmodel.c + the three .inc = " + $marker438 + " (want exactly 1 -- the format has one owner)") }
+# 读侧那两处「成员不存在」的**返回口径**必须是 -1 (宿主模型出口据此抛 438); 仍答 1 就退化成
+# 本刀之前的「静默 Empty + 链尾假漏」。
+foreach ($inc in @($incCall, $incGet)) {
+    $ic3 = Strip-Comments262 ((Read-Lines262 $inc) -join "`n")
+    if (-not $ic3.Contains('return -1;')) {
+        $fail += ("R5 " + (Split-Path -Leaf $inc) + " no longer answers -1 for an unknown member - 调用方就分不出「认得但没值」与「没这个成员」")
     }
 }
 if ($markerAll -ne 1) { $fail += ("R5 the [C3_HOST_MEMBER_MISS #] marker across uc_hostmodel.c + the three .inc = " + $markerAll + " (want exactly 1 -- the format has one owner)") }
@@ -451,6 +499,20 @@ if ($nAForm -ne 1) {
 $nASet = ([regex]::Matches($ucCode, 'WM_SETFONT')).Count
 if ($nASet -ne 0) {
     $fail += ("R11 hand-written WM_SETFONT senders in uc_controls.c = " + $nASet +
+              " (want 0) - 发信人要抄第二份, 作废那本账就有人对不上")
+}
+# 账 #305 第332刀 (账 #611 / 台账 §B12): `.ctl` 设计面那批 EDIT 也是这位发信人的住户 —— 从前这一站
+# 自己 `GetStockObject(DEFAULT_GUI_FONT)` + WM_SETFONT，交出去的是**这台机器的 GDI 缺省** (本机实测
+# SimSun -12)，而同一棵窗口树里它的宿主早就问这位主人拿了 MS Sans Serif -11 ⇒ 一棵树两套字体。
+$designEditCode = Strip-Comments262 ((Read-Lines262 $ucHostC) -join "`n")
+$nADesign = ([regex]::Matches($designEditCode, 'vb6_UC_ApplyFontToWindow\(edit, NULL\)')).Count
+if ($nADesign -ne 1) {
+    $fail += ("R11 design-edit send site (VB6 default arm) = " + $nADesign +
+              " (want 1 in uc_host.c) - 那一户退回 stock 默认字体就是第二套答案 (同树两套字体)")
+}
+$nASetHost = ([regex]::Matches($designEditCode, 'WM_SETFONT')).Count
+if ($nASetHost -ne 0) {
+    $fail += ("R11 hand-written WM_SETFONT senders in uc_host.c = " + $nASetHost +
               " (want 0) - 发信人要抄第二份, 作废那本账就有人对不上")
 }
 
@@ -648,5 +710,5 @@ if ($fail.Count -gt 0) {
     foreach ($f in $fail) { Write-Host ("FAIL " + $f) }
     exit 1
 }
-Write-Host ("PASS check_com_latebind_guard: exits=7 guarded=7 pseudo-exempt=3 order=pseudo-first guard=behavior-preserving counter-outlets=2 host-sibling=3 runner-sites=3 inline-counters=2 negative-control=2 hfont-owner=1 hfont-kind5=2 height-owner=1 height-consumers=3 name-default=ms-sans-serif apply-owner=1 apply-senders=2 self-registered=1") form-ans-owner=1 form-ans-body=1 form-ans-decl=1 form-ans-emit=1 windowless-owner=1 windowless-outlets=2 windowless-arms=2 mask-owner=1 mask-arms=2 vg-owner=1 vg-decl=1 vg-outlet=1 vg-radio-gate=3 vg-truth-guard=1 vg-sibling-setter=1 vis-owner=1 vis-window=1 vis-decl=1 vis-outlets=2 vis-zero-guard=1 vis-old-drop=0 geom-mask=3 geom-read=1 geom-units=5 geom-route=2 geom-cdecl=1 geom-cdef=1 geom-nowindow=0 geom-writes=3 geom-method=3 latebind-drop=4 call-flags=1 flag-owner=1 invoke-func-only=1 propget-hedge=1 blanket-flags=2 narrow-def=1 narrow-call=1 narrow-before-copy=1 himetric-typedef=1 ti-lcid0=1
+Write-Host ("PASS check_com_latebind_guard: exits=7 guarded=7 pseudo-exempt=3 order=pseudo-first guard=behavior-preserving counter-outlets=2 host-sibling=3 runner-sites=3 inline-counters=2 negative-control=2 hfont-owner=1 hfont-kind5=2 height-owner=1 height-consumers=3 name-default=ms-sans-serif apply-owner=1 apply-senders=3 self-registered=1") form-ans-owner=1 form-ans-body=1 form-ans-decl=1 form-ans-emit=1 windowless-owner=1 windowless-outlets=2 windowless-arms=2 mask-owner=1 mask-arms=2 vg-owner=1 vg-decl=1 vg-outlet=1 vg-radio-gate=3 vg-truth-guard=1 vg-sibling-setter=1 vis-owner=1 vis-window=1 vis-decl=1 vis-outlets=2 vis-zero-guard=1 vis-old-drop=0 geom-mask=3 geom-read=1 geom-units=5 geom-route=2 geom-cdecl=1 geom-cdef=1 geom-nowindow=0 geom-writes=3 geom-method=3 latebind-drop=4 call-flags=1 flag-owner=1 invoke-func-only=1 propget-hedge=1 blanket-flags=2 narrow-def=1 narrow-call=1 narrow-before-copy=1 himetric-typedef=1 ti-lcid0=1
 exit 0

@@ -1,0 +1,5 @@
+Type=Exe
+Module=B600Main; B600Main.bas
+Startup="Sub Main"
+Title="B600 Title"
+ExeName32="B600.exe"

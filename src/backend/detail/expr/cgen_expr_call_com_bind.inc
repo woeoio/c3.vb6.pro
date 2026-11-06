@@ -29,6 +29,38 @@
                 return;
             }
         }
+        // 账 <438>: 窗体/图片框的内建方法 PaintPicture —— 必须抢在下面
+        // `axSlotObj` 那一支 ("取成员对象 + Item 默认成员调用") **之前**:
+        // 那条形会先发 vb6_ComGetObjectProp(hwnd, L"PaintPicture") 去拿成员,
+        // 而宿主模型的 getprop 只答属性不答方法名 ⇒ 运行期 438
+        // (ucSegmentedControl11_ItemClick 的 Solid/Transparent 整段被截断)。
+        // VB6 这里是明确的内建方法, 直接发 RTL 入口 (argv 与宿主 call 臂同形:
+        // vb6_VARIANT* 顺序参数)。
+        if (comObjExpr_.find("vb6_hwnd_") == 0
+            && Symbol::toLower(comMemberName_) == "paintpicture"
+            && !node.positional.empty()) {
+            // 先把接收者摘下来、把 marker 消费掉, 再求值实参 —— 否则递归访问
+            // 实参里的调用 (LoadPicture/App.Path) 会读到这套陈旧的 marker 状态,
+            // 把自己也拼成 PaintPicture (实测生成语法错位)。
+            std::string ppObj = comObjExpr_;
+            isComMarker_ = false;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            std::vector<std::string> ppArgs;
+            for (size_t i = 0; i < node.positional.size(); i++) {
+                std::string packFn = comPackExpr(*node.positional[i]);
+                emitExpr(*node.positional[i]);
+                { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
+                ppArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
+            }
+            int32_t ppArgc = (int32_t)ppArgs.size();
+            std::string ppArray = "(void*[]){";
+            for (int32_t i = 0; i < ppArgc; i++) { if (i > 0) ppArray += ", "; ppArray += ppArgs[i]; }
+            ppArray += "}";
+            lastExpr_ = "vb6_FormPaintPictureAt((void*)" + ppObj + ", "
+                      + std::to_string(ppArgc) + ", " + ppArray + ")";
+            return;
+        }
         // ActiveX控件COM属性: 先获取属性对象, 再用Item(idx)索引
         // comObjExpr_以"vb6_com_"开头 = ActiveX控件变量
         // C29-7: ListView 是**真窗口** (`vb6_hwnd_X`), 而 ImageList 是 `vb6_com_X` ——
@@ -210,7 +242,7 @@
                 std::string packFn = comPackExpr(*node.positional[i]);
                 emitExpr(*node.positional[i]);
                 { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
-                packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
             }
             int32_t argc = (int32_t)packedArgs.size();
             std::string argsArray = "(void*[]){";
@@ -695,7 +727,7 @@
                         && isKnownObjectVarName(lastExpr_)) {
                         packedArgs.push_back("vb6_ComPackObjectRef((void**)&" + lastExpr_ + ")");
                     } else {
-                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                        packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
                     }
                 }
                 for (auto& named : node.named) {
@@ -711,7 +743,7 @@
                         && isKnownObjectVarName(lastExpr_)) {
                         packedArgs.push_back("vb6_ComPackObjectRef((void**)&" + lastExpr_ + ")");
                     } else {
-                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                        packedArgs.push_back(packArgValue(packFn, lastExpr_, named.value.get()));
                     }
                 }
                 int32_t argc = (int32_t)packedArgs.size();
@@ -776,7 +808,7 @@
                 if (argIsVariantPtr && packFn == "vb6_ComPackObject") {
                     packedArgs.push_back(lastExpr_);   // 已是 VARIANT*, 直接作实参 (ComCall 会 VariantClear+free)
                 } else {
-                    packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                    packedArgs.push_back(packArgValue(packFn, lastExpr_, argExpr.get()));
                 }
             };
             for (size_t pos = 0; pos < node.positional.size(); pos++) {
@@ -901,6 +933,40 @@
         outerIdx = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
         lastExpr_ = "vb6_VariantArrayGetVal(" + innerCall + ", " + outerIdx + ")";
         return;
+    }
+
+    // 交接 §7.8 缺陷 A: **调用结果再下标** —— `Split(s, ",")(1)` / `Filter(a, "x")(i)` /
+    // `Array(...)(i)` 的外层括号是**对返回数组的下标**, 不是内层调用的实参。
+    // 判据落在括号层级 (= "谁拥有这层实参"): callee 已是 SafeArray1D* 载体调用
+    // (isSafeArrayCarrier 那一张权威名单) ⇒ 外层实参归属外层下标, 绝不并入内层实参表。
+    // 修前 P6.5 的拆分把外层实参接到内层调用尾部, 内置补档再按内层名补齐 ⇒
+    // `vb6_Split(src, delim, -1, 0, 1, NULL, -1, 0)` 收 8 个实参 (C2197)。
+    // 元素档随载体: Split/Filter 交 BSTR 数组; Array(...) 的 _arr_N 交 Variant 数组。
+    // 其余载体 (Create1D / ReDim 族) 不作表达式下标使用, 保持原路。
+    if (node.positional.size() == 1 && node.named.empty()) {
+        static const struct { const char* prefix; size_t len; const char* cType; } kCarrierElem[] = {
+            { "vb6_Split(",       10, "BSTR" },
+            { "vb6_Filter(",      11, "BSTR" },
+            { "vb6_ArrayCreate(", 16, "vb6_VARIANT" },
+            { "_arr_",             5, "vb6_VARIANT" },
+        };
+        size_t cs = callee.find_first_not_of(" \t\r\n(");
+        std::string carrierElem;
+        if (cs != std::string::npos) {
+            for (const auto& ce : kCarrierElem) {
+                if (callee.compare(cs, ce.len, ce.prefix) == 0) {
+                    carrierElem = ce.cType;
+                    break;
+                }
+            }
+        }
+        if (!carrierElem.empty()) {
+            std::string innerCall = callee;
+            emitExpr(*node.positional[0]);
+            std::string outerIdx = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
+            lastExpr_ = "VB6_SA_AT(" + carrierElem + ", " + innerCall + ", " + outerIdx + ")";
+            return;
+        }
     }
 
     // P6.5修复: 如果callee已经是func(obj)形式(如类方法调用 vb6_Button_SetCaption(btn)),
@@ -1101,7 +1167,7 @@
                     std::string packFn86 = comPackExpr(*node.positional[i]);
                     emitExpr(*node.positional[i]);
                     { std::string resolved86 = resolveComMarkerForPack(packFn86); if (!resolved86.empty()) lastExpr_ = resolved86; }
-                    packedArgs86.push_back(packArgValue(packFn86, lastExpr_));
+                    packedArgs86.push_back(packArgValue(packFn86, lastExpr_, node.positional[i].get()));
                 }
                 int32_t argc86 = (int32_t)packedArgs86.size();
                 std::string argsArray86 = "(void*[]){";

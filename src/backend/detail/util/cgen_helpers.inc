@@ -50,6 +50,27 @@
     //   (与定义侧同一份 mapTypeRef 映射), 不另立第二套尺。
     std::string defaultValueForParam(const ParameterInfo& p) const;
 
+    // ucTreeView: 按 (类名, 成员名) 判一枚字段是不是 COM 对象指针 (void* / "COM:" 前缀)。
+    // 与 cgen_expr_member_class_fallback.inc 内联查的那两问同源, 供 Fix 088c 的 AST
+    // 推断臂复用 —— 否则 `oParent->Parent->Childs.Count` 里的中段 Childs 不带
+    // "voidptr" 尾注, 外层 .Count/.Add/.Remove 直发结构体成员 (C2224)。
+    bool classFieldIsComPtr(const std::string& clsName, const std::string& memberName) const;
+
+    // ucTreeView: `As DataObject` 形参作为 RTL 首参时的取值形态。C 侧形参类型随
+    // 传值方式变化 —— ByVal 是 `void*` (直接给名字), ByRef 是 `void**` (给 `(*name)`)。
+    // 以前三处硬写 `(void*)(*name)`, 遇到 `ByVal Data As DataObject`
+    // (Form4.c:422 `vb6_oleDD_SetText((void*)(*Data), …)`) 就是 C2100。
+    std::string dataObjectArgExpr(const std::string& name) const;
+
+    // ucTreeView: ByRef 实参是一枚 UC 控件实例名时给出可寻址的临时槽表达式;
+    // 不是 UC 控件则返回空串 (调用方保持原路径)。控件在生成 C 里只有 vb6_hwnd_<名>。
+    std::string ucInstanceByRefArgExpr(const std::string& name) const;
+
+    // ucTreeView: 语句级调用串里若出现 `&<UC控件名>` / `&(<UC控件名>)`, 重写成
+    // `&((vb6_cls_X*){ (vb6_cls_X*)vb6_UC_InstanceOf(vb6_hwnd_<名>) })`。
+    // 控件在生成 C 里没有同名变量, 取址必是 C2065 (Form2.c:240 `cTE.Init TVP, …`)。
+    void fixUCInstanceAddrInExpr(std::string& expr) const;
+
     // ---- 标识符命名 ----
 
     // VB6标识符 → 安全C标识符 (处理关键字冲突、特殊字符)
@@ -534,6 +555,11 @@
     // M22: 将非BSTR表达式包装为BSTR (用于字符串连接运算)
     std::string wrapToBSTR(const std::string& expr, Expr& node);
 
+    // B11 第三批: Print # / Write # 的**单项文本**出口 (按真 VB6 实测字节)。
+    // writeMode=false → " " + CStr + " " (Print #); true → Str 去前导 0/空格 (Write #)。
+    // 返回的 C 表达式是 BSTR; 类型判不准时回退旧数值路径 (vb6_Str(int32_t))。
+    std::string printWriteTextExpr(Expr& expr, const std::string& val, bool writeMode);
+
     // Fix 194: 字符串型控件属性写入的**唯一**取值入口。RTL 的
     // vb6_SetControlText(hwnd, void* bstr) / vb6_SetMenuCaption 第二参是 BSTR 指针,
     // RHS 若是数值就会被当成指针 —— 必须在此统一转 BSTR, 否则每个属性写入点都得
@@ -629,6 +655,12 @@
 
     long controlContainerExStyleBit(const FrmControl& ctrl) const;
 
+    // 账 (TeeChart 夹具): 窗体树里有没有「程序化赋值会派发事件」的控件 ——
+    // CheckBox/OptionButton 的 Value 真变化发 Click，H/VScrollBar 的 Value 真变化发 Change
+    // （口径见 RTL 的 vb6_Form_SetLoading 注释）。有这类控件才需要在 CreateControls 外面
+    // 挂/摘 loading 闸；没有就一行都不发，免得把每一张只有按钮/文本框的窗体也改出形状差异。
+    bool formTreeHasEventLoadingUsers(const FrmControl& root) const;
+
     // 账 #158（按钮那一半）: BUTTON 类的焦点通知（`BN_SETFOCUS=6` / `BN_KILLFOCUS=7`）只有创建时
     // 挂了 `BS_NOTIFY` 才会往父窗发（裸码实测 `.build/bnnotify/bnnotify.c`，两枚按钮只差这一位）。
     // 两条创建路共用这一处判断（顶层 + 容器子控件）。`BN_CLICKED` 不需要这一位，
@@ -698,6 +730,9 @@
     // 单枚控件与控件数组元素两条路只差这一个串。命中返回 true (已填 lastExpr_/pendingChainObj_)。
     bool emitUcInstanceMemberExpr(const std::string& ucClass, const std::string& member,
                                   const std::string& recvExpr);
+    // 账 #191 续: 「宿主句柄 → UC 类实例指针」这一形也只住在本文件 —— ByRef 实参要的是
+    // **可寻址**的左值 (外层再取地址), 不是成员调用结果; expr/ 里不再手拼 vb6_UC_InstanceOf。
+    std::string ucInstanceThisPtrExpr(const std::string& clsPtr, const std::string& recvExpr);
     bool controlNeedsSubclass(const FrmControl& ctrl) const;
 
     // C29-SL-o（账 #83 的 Slider 半边）: Slider 的**设计期值面**下发。
@@ -776,7 +811,10 @@
     // 不在这张表里（它在 SelectCaseStmt::elseCase）。空表答 NoString —— 没有标签就没有证据。
     // 第319刀多一档：Mixed = 至少一枚 String 且并非全是 ⇒ 主语是槽时逐项 VarCmp。
     enum class SelectCaseLabelClass { AllString, Mixed, NoString };
-    SelectCaseLabelClass selectCaseLabelClass(SelectCaseStmt& node) const;
+    // 账 #305 第324刀: 同一次遍历顺带回答「有没有一枚标签**本身就是整枚 Variant 槽**」。
+    // 传 *outSlotLabel 即写；不开第二处问句 —— 承载档由标签回答这条口径只有一个主人。
+    SelectCaseLabelClass selectCaseLabelClass(SelectCaseStmt& node,
+                                              bool* outSlotLabel = nullptr) const;
 
     // ai/009 §5.10 (P3): 给**窄整型目标**的赋值右值套上溢出检查 (vb6_ChkByte/
     // ChkInt/ChkLong), 越界即 run-time error 6。原先这类赋值是裸 `t = v;`, 由 C
@@ -926,6 +964,24 @@
     // 匿名临时量)。数组槽实参的 vb6_VariantToSafeArray1D 提取对这类表达式必须跳过,
     // 否则 C2440 (载体指针 → vb6_VARIANT)。见 cgen_util_type.cpp 的定义。
     bool cExprIsSafeArrayCarrier(const std::string& cExpr) const;
+
+    // ============================================================
+    // P1.2: 「Variant 槽」的三问命名接口
+    // ============================================================
+    // 只立接口, **不改任何调用点** (86 站替换属 P1.3), 所以产物逐字节不变:
+    //   isVariantType(ast)       —— 这枚表达式的 **VB 类型**是不是 Variant (只吃 AST;
+    //                              Variant() 数组的 VB 类型仍是 Variant, 故不排除数组);
+    //   isVariantSlot(text,ast)  —— C 侧这段文本是不是**整只槽** (而不是槽的地址/指针)。
+    //                              文本那一半 = cExprIsVariant 的既有判据, AST 那一半
+    //                              = variantOperandAST (§B147: 改道 = AST ∪ 文本);
+    //   isSafeArrayCarrier(text) —— 这段 C 是不是 vb6_SafeArray1D* 载体 (vb6_Split/Filter/
+    //                              ArrayCreate 那一族 + _arr_N 匿名临时量)。
+    // 等价性: cExprIsVariant(text) == isVariantSlot(text, nullptr),
+    //         cExprIsSafeArrayCarrier(text) == isSafeArrayCarrier(text) ——
+    // 旧名只是既有站点的投影, 判据各只有一份 (定义见 cgen_util_type.cpp)。
+    bool isVariantType(const Expr* e) const;
+    bool isVariantSlot(const std::string& text, const Expr* ast) const;
+    bool isSafeArrayCarrier(const std::string& text) const;
 
     // <vbeclipse>: 装箱权威用它判断"这个 C 表达式顶层已经是 vb6_VARIANT 了"。
     // 必须结构化判 (顶层 vb6_Variant* 且不是 vb6_VariantTo*), 不能靠 ctor 名字清单 ——
@@ -1088,6 +1144,10 @@
     std::set<const ASTNode*> hoistedLocalDeclSet_;
     // Fix 086: 工程内窗体模块名集合 (小写), driver预扫描填充
     std::unordered_set<std::string> knownFormModuleNames_;
+    // 账 #305 第三百三十一刀: As <窗体类型> 的变量 (小写变量名 → 窗体名, 原大小写)。
+    // `Public fMainForm As frmMain` 这类跨模块窗体引用变量 —— C3 单实例模型下
+    // 即窗体默认实例, 成员访问/裸值引用改道 form_builtin 的外部窗体支。
+    std::unordered_map<std::string, std::string> knownFormTypeVars_;
     // Fix 086: For方向拆分的循环体副本索引 (0=首份, 1=第二份); Label/GoTo配对加后缀
     int labelCopyIdx_ = 0;
     // Fix 090o: For方向拆分期间各被拆 body 内定义的标签名栈 (嵌套层)。
@@ -1201,7 +1261,8 @@
     // 为什么要收成一处: 组装 `packFn(expr)` 的站点在 com_bind / callee_member /
     // callee_ident 三个片段里共 8 处, 只堵一处就等于没堵 (实测 Pager.c 2079/2080
     // 走的是另一个站点)。
-    std::string packArgValue(const std::string& packFn, const std::string& expr) const;
+    std::string packArgValue(const std::string& packFn, const std::string& expr,
+                             const ASTNode* argAst = nullptr) const;
 
     // 账 #245/§B94: `Symbol::comMethods` 的**唯一读出口**。这张表以前在后端被读五遍
     // （四份文件），每份自己写一遍「按 mapType(returnType) 挑哪一条 vb6_Com*」，其中两处还把
@@ -1287,6 +1348,10 @@
     // 由 scripts/check_host_pseudo_table.ps1 逐行钉 (含负控)。
     bool hostPseudoBareName(const std::string& pseudoObj, const std::string& memberName,
                             std::string& outRtlName) const;
+    // 裸写的方法行 (只带 HPF_METHOD, 如 Cls/Refresh/OLEDrag): 名字同上, 但**不加**调用的括号
+    // —— 由调用点补 (, 值上下文才补 () —— 见 cgen_util_com.cpp 的注释。
+    bool hostPseudoMethodRtlName(const std::string& pseudoObj, const std::string& memberName,
+                                 std::string& outRtlName) const;
     bool hostPseudoValueType(const std::string& pseudoObj, const std::string& memberName,
                              Vb6Type& outType, bool requireBare) const;
     bool hostPseudoIsNumeric(const std::string& pseudoObj,

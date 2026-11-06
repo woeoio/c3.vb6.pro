@@ -391,7 +391,13 @@ void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* l
     lf->lfItalic    = (BYTE)((f && f->Italic) ? 1 : 0);
     lf->lfUnderline = (BYTE)((f && f->Underline) ? 1 : 0);
     lf->lfStrikeOut = (BYTE)((f && f->Strikethrough) ? 1 : 0);
-    lf->lfCharSet   = (BYTE)((f && f->Charset) ? f->Charset : DEFAULT_CHARSET);
+    /* 残差 #8: Charset 是**设计期数据**, 0 就是 VB6 的 ANSI_CHARSET, 不是"没填"。
+     * 真 VB6 实测 (Form1 窗体级 Font Charset=0): GetObject 读回 lfCharSet=0。
+     * 旧的 `f->Charset ? ... : DEFAULT_CHARSET` 把 0 当成缺省替换成 1, 于是 C3 的
+     * LOGFONT 与 VB6 差一个字符集位 (渲染同族、度量相同, 但 GetObject 对不上,
+     * `Font.hFont` 那一族 API 的读数也会跟着偏)。只有**没有 Font 对象**时才用默认档
+     * (那是 Fix 190 的 CJK 字体链接兜底, 路径未变)。 */
+    lf->lfCharSet   = (BYTE)(f ? f->Charset : DEFAULT_CHARSET);
     lf->lfQuality   = (BYTE)quality;
     /* 名字那一档把**零长串**也算"没有名字" (f->Name 非 NULL 但内容空)。
      * 依据两条: ① VB6 的 StdFont.Name 不允许是空串, 所以这八档里出现空名字只能是

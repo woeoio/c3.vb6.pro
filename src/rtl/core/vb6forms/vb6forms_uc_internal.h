@@ -129,7 +129,22 @@ typedef struct vb6_UCRec {
     // 控件 (ComCtlsDemo 的 FrameW) 永远是白板。adOn = VB 代码写过 .AutoRedraw = True。
     vb6_UCDib adSurf;
     int32_t   adOn;
+    // 缺陷 1 (禁用项光标): `UserControl.MousePointer = v` 是**每实例**状态 ——
+    // 之前只会写裸全局 vb6_UserControl_MousePointer, 宿主窗口从不读它,
+    // 于是 .ctl 里给 Disabled 项设的 vbNoDrop(12) 一直不生效。
+    int32_t   mousePointer;
+    // ucTreeView: `UserControl.FontBold/FontUnderline` 也是每实例状态 (VB6 里就是
+    // UserControl.Font 对象的 Bold/Underline)。生成码只写裸全局, 故 push 时从这里
+    // 灌入、SetFontFlag 时同步回这里, 否则下一次 paint 的 push 会把值清回默认。
+    int16_t   fontBold;
+    int16_t   fontUnderline;
 } vb6_UCRec;
+
+// 缺陷 3: Refresh 的重入闸门。WM_PAINT/WM_PRINTCLIENT 进出时加减; Refresh 只在
+// depth==0 时才 invalidate+update (否则 PAINT→Refresh→PAINT 死循环)。
+void vb6_UC_PaintEnter(void);
+void vb6_UC_PaintLeave(void);
+int32_t vb6_UC_PaintDepth(void);
 
 // UserControl 宿主状态快照（push/pop 用）
 typedef struct vb6_UCSaved {
@@ -155,6 +170,8 @@ typedef struct vb6_UCSaved {
     void*   hWnd;                 // Fix 133u: UserControl.hWnd
     int16_t autoRedraw;           // Fix 133u: UserControl.AutoRedraw
     struct vb6_UserControl_Extender_Type ext; // Fix 133u: Extender.Visible/Height
+    int16_t fontBold;             // ucTreeView: UserControl.FontBold 存档
+    int16_t fontUnderline;        // ucTreeView: UserControl.FontUnderline 存档
     vb6_UCRec* current;
     void*   displayName;          // Fix 116: Ambient.DisplayName (BSTR)
 } vb6_UCSaved;
@@ -366,6 +383,14 @@ void    vb6_Collection_RemoveByKey(void* coll, const wchar_t* key);
 void    vb6_Collection_Item(void* coll, int32_t idx1, void* outV);
 int32_t vb6_Collection_ItemByKey(void* coll, const wchar_t* key, void* outV);
 int32_t vb6_Collection_Count(void* coll);
+
+// --- 窗体 AutoRedraw 持久表面上的 PaintPicture/Image/Picture (vb6forms_picture_prop.c) ---
+// VB6: 窗体的 PaintPicture 画进 AutoRedraw 记忆位图; Image 把该位图当 StdPicture 交出;
+// Picture 设背景图 (AutoRedraw 时同样落进记忆位图, 0,0 原尺寸)。
+void vb6_FormSetAutoRedraw(void* hwnd, int32_t val);
+void vb6_FormPaintPictureAt(void* hwnd, int argc, void** argv);
+void vb6_FormSetPictureProp(void* hwnd, const void* variant);
+void* vb6_FormGetImagePicture(void* hwnd);
 
 #ifdef __cplusplus
 } // extern "C"

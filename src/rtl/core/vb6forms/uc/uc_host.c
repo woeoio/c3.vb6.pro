@@ -237,6 +237,8 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     saved->hWnd = vb6_UserControl_hWnd;
     saved->autoRedraw = vb6_UserControl_AutoRedraw;
     saved->ext = vb6_UserControl_Extender;
+    saved->fontBold = vb6_UserControl_FontBold;
+    saved->fontUnderline = vb6_UserControl_FontUnderline;
     saved->current = vb6_ucCurrent;
     saved->displayName = (void*)vb6_Ambient_DisplayName;
 
@@ -274,6 +276,17 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     vb6_UserControl_AutoRedraw = 1;                 // Fix 133u: 事件驱动重绘
     vb6_UserControl_Extender.Visible = -1;          // Fix 133u: 默认可见
     vb6_UserControl_Extender.Height = r->scaleHeight; // Fix 133u
+    /* ucTreeView: `UserControl.Extender.<成员>` 的设计期位置/名字/容器, 每实例一份。
+       ucScrollbar.ctl 的 Parent/Top/Left/Name 属性直接读写这几枚字段。
+       ZOrder 是方法形态 (`vb6_UserControl_Extender.ZOrder(LonValue, 1)`), 函数指针
+       固定指向实现; 结构体初值也置了同一枚 (vb6rtl_com.c), 这里再兜一次。 */
+    vb6_UserControl_Extender.Parent = r->parent;
+    vb6_UserControl_Extender.Top = r->extTop;
+    vb6_UserControl_Extender.Left = r->extLeft;
+    vb6_UserControl_Extender.Name = r->displayNameBstr;
+    vb6_UserControl_Extender.ZOrder = vb6_UC_ExtenderZOrder;
+    vb6_UserControl_FontBold = r->fontBold;
+    vb6_UserControl_FontUnderline = r->fontUnderline;
     vb6_ucCurrent = r;
 
     // Fix 116: Ambient.DisplayName = 控件实例名 (VB6 语义)。
@@ -305,6 +318,8 @@ void vb6_uc_pop(const vb6_UCSaved* saved) {
     vb6_UserControl_hWnd = saved->hWnd;              // Fix 133u
     vb6_UserControl_AutoRedraw = saved->autoRedraw;  // Fix 133u
     vb6_UserControl_Extender = saved->ext;           // Fix 133u
+    vb6_UserControl_FontBold = saved->fontBold;
+    vb6_UserControl_FontUnderline = saved->fontUnderline;
     vb6_ucCurrent = saved->current;
     vb6_Ambient_DisplayName = (BSTR)saved->displayName;   // Fix 116
     vb6_uc_syncParentControls();
@@ -385,12 +400,19 @@ void vb6_UC_PopInstance(void) {
 }
 
 void vb6_UC_RefreshCurrent(void) {
-    // czUI fix: 不能 invalidate+update — UserControl_Paint/RedrawControl 末尾的
-    // `If AutoRedraw Then UserControl.Refresh` 会在 WM_PAINT 内强制同步重绘,
+    // czUI fix: WM_PAINT 内**不能** invalidate+update — UserControl_Paint/RedrawControl
+    // 末尾的 `If AutoRedraw Then UserControl.Refresh` 会在 WM_PAINT 里强制同步重绘,
     // 形成 PAINT→Refresh→PAINT 无限循环 (czFormDemo 顶部 ~110fps 闪烁)。
-    // RTL 绘制是立即模式 (直接画到窗口 DC, 无 AutoRedraw 离屏位图),
-    // WM_PAINT 本身已完成全量绘制, Refresh 在此架构下无事可做。
-    (void)0;
+    // 但反过来"什么都不做"也不对 (缺陷 3): .ctl 的自定义属性 Let (ItemVisible 等)
+    // 只调 Refresh, 没有别处 invalidate ⇒ 属性改了窗口却不失效, 实测点击后 22.7s
+    // 内一次重绘都没有 (参考 VB6 同操作 140ms 首帧 / 340ms 稳定)。所以这里:
+    //   绘制中(depth>0) → 短路 (保留上面那条防环); 否则 → 失效 + 同步重绘,
+    //   与 VB6 Refresh 的"立即上屏"语义一致。
+    if (vb6_UC_PaintDepth() > 0) return;
+    vb6_UCRec* r = vb6_ucCurrent;
+    if (!r || !r->hwnd) return;
+    InvalidateRect(r->hwnd, NULL, FALSE);
+    UpdateWindow(r->hwnd);
 }
 
 // Fix 133u: UserControl.Cls — 清空控件的客户区背景, 下一轮 WM_PAINT 重绘.
@@ -771,8 +793,14 @@ void* vb6_UC_CreateDesignEdit(int32_t left, int32_t top, int32_t width, int32_t 
                                 vb6_TwipToX(width), vb6_TwipToY(height),
                                 parent, NULL, hInst, NULL);
     if (edit) {
-        HFONT f = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-        SendMessageW(edit, WM_SETFONT, (WPARAM)f, TRUE);
+        // 账 #305 第332刀 (台账 §B12): 设计面 EDIT 的字体从此问那位主人，不再自己
+        // `GetStockObject(DEFAULT_GUI_FONT)` —— VB6 的控件默认字体是 MS Sans Serif 8.25pt
+        // (第278刀那一站的 fontFields=NULL 那一档)，而 stock 对象在这台机器上答回来的是
+        // **SimSun -12** (实测 czFormDemo 的 11 枚设计面 EDIT 全 -12，而它们的宿主那 11 枚
+        // 早就问主人拿了 -11/MS Sans Serif —— 同一棵窗口树两套字体，就是这个缺口的形状)。
+        // 走主人顺带拿到它那份所有权账：Create/WM_SETFONT/存/删旧都在 `vb6_SetControlFontFromLogFont`
+        // 一处，不许把缓存句柄递给 WM_SETFONT 那条禁令也一起生效。
+        vb6_UC_ApplyFontToWindow(edit, NULL);
         vb6_GeomOwnerStamp(edit, parent);   /* 账 #305 299 */
     }
     return edit;

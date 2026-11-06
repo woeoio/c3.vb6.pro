@@ -158,7 +158,7 @@
         if (lp091c != std::string::npos && rp091c != std::string::npos && rp091c > lp091c) {
             std::string args091c = target.substr(lp091c + 1, rp091c - lp091c - 1);
             std::string kind091c = target.substr(10, lp091c - 10);  // "Long"/"Double"/"BSTR"/...
-            bool valIsVar091c = cExprIsVariant(value);
+            bool valIsVar091c = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
             if (!valIsVar091c && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
                 auto& id091c = static_cast<IdentifierExpr&>(*node.value);
                 std::string idLower091c = id091c.name;
@@ -221,7 +221,7 @@
         //       VB6_SA_AT(BSTR, arr, i) = func() (func 返回 Variant)
         //       int32_t_var = vb6_VariantArrayGet(...)
         // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-        bool valueIsVariant = cExprIsVariant(value);
+        bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
             auto& id = static_cast<IdentifierExpr&>(*node.value);
             std::string idLower = id.name;
@@ -390,6 +390,7 @@
         if (valueIsVariant) {
             // 检查目标类型
             std::string convertedValue = value;
+            bool udtFieldIsArray114 = false;
             if (target.find("VB6_SA_AT(BSTR,") != std::string::npos
                 || target.find("VB6_SA_ND_AT2(BSTR,") != std::string::npos) {
                 convertedValue = "vb6_VariantToString(" + value + ")";
@@ -438,8 +439,12 @@
                 // Fix 084n: UDT 字段目标 — 按字段 Vb6Type 转换 Variant RHS
                 // (如 cZipArchive 的 .FileName As String ← vb6_VariantArrayGet(...)
                 //  → vb6_VariantToString; uBuf.MaxMatch As Long ← At() → vb6_VariantToLong)
-                Vb6Type udtFieldT = inferUdtFieldVb6Type(node.target.get());
-                if (udtFieldT == Vb6Type::String) {
+                Vb6Type udtFieldT = inferUdtFieldVb6Type(node.target.get(), &udtFieldIsArray114);
+                if (udtFieldIsArray114) {
+                    // UDT 动态数组成员 (= 元素类型) ← Variant: 必须取回载体, 不能按
+                    // 元素档压成 Long。`m_Items(Index).ImgArr = SrcImg` 实测。
+                    convertedValue = "vb6_VariantToSafeArray1D(" + value + ")";
+                } else if (udtFieldT == Vb6Type::String) {
                     convertedValue = "vb6_VariantToString(" + value + ")";
                 } else if (udtFieldT == Vb6Type::LongPtr) {
                     convertedValue = "vb6_VariantToLongPtr(" + value + ")";
@@ -583,7 +588,7 @@
             bool tgtIsVariant091l = knownVariantVars_.count(tgtLower091l)
                                     || classVariantMembers_.count(tgtLower091l);
             if (!tgtIsVariant091l && !valueIsVariant) {
-                tgtIsVariant091l = cExprIsVariant(target);
+                tgtIsVariant091l = isVariantSlot(target, nullptr);  // P1.3: ast 不可得 (target 为局部文本)
             }
             if (tgtIsVariant091l && !valueIsVariant && !value.empty()) {
                 // Fix 198: 布尔值装箱走 VT_BOOL 而不是 _Generic 的 short 分支.

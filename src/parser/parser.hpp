@@ -204,6 +204,7 @@ private:
 
     // 单行语句
     StmtPtr parseOnStmt();
+    StmtPtr parseOnComputedJumpStmt();  // B7: On <expr> GoTo/GoSub
     std::unique_ptr<OnErrorStmt> parseOnErrorStmt();
     std::unique_ptr<ResumeStmt> parseResumeStmt();
     std::unique_ptr<ErrorStmt> parseErrorStmt();

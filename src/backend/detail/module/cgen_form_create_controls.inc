@@ -8,6 +8,11 @@
     c_.indent();
     c_.emitLine("(void)hwnd; (void)hInstance;");
     c_.emitLine("vb6_formLoading_" + cIdent(formName) + " = 1;  /* block events during form init */");
+    // 账 (TeeChart 夹具): 只有存在「程序化赋值会派发事件」的控件时才挂闸（判定见
+    // formTreeHasEventLoadingUsers）—— 别的窗体一行不发，发码形状不动。
+    if (formTreeHasEventLoadingUsers(frmDesc.formControl)) {
+        c_.emitLine("vb6_Form_SetLoading((void*)hwnd, 1);  /* 设计期灌入期间不触发 Change/Click */");
+    }
     c_.emitLine("vb6_ResetControlId();");
     c_.emitBlank();
 
@@ -124,6 +129,27 @@
         c_.emitLine("    " + varName + "->Underline = " + std::to_string(bUnder) + ";");
         c_.emitLine("    " + varName + "->Strikethrough = " + std::to_string(bStrike) + ";");
     };
+
+    // 控件自己的设计期 `BeginProperty Font` —— 与窗体那块同一套字段、同一个发射器。
+    // VB6 里这是"控件自带的字体", 优先于 ambient 继承 (继承那一张在创建时已经发过了);
+    // 顶层控件与 Frame/PictureBox 子控件两路都要发, 否则容器里的控件永远只有继承字体。
+    auto emitFrmFontBlock = [&](const FrmControl& ctrl, const std::string& hwndExpr) -> void {
+        for (const auto& blk : ctrl.propertyBlocks) {
+            if (_stricmp(blk.blockName.c_str(), "Font") != 0) continue;
+            emitFrmFontObj(blk, "_vb6_fblk");
+            c_.emitLine("    vb6_UC_ApplyFontToWindow(" + hwndExpr + ", (void*)_vb6_fblk);");
+            c_.emitLine("  } }");
+        }
+    };
+
+    // 残差 #8: 窗体级 `BeginProperty Font` —— 此前**从未发射过**:
+    // vb6_CreateFormWindowB 只发 NULL (默认 MS Sans Serif 8.25pt), 生成码里没有任何
+    // 一处把窗体自己的设计期字体发到窗口上 —— 实测窗体 WM_GETFONT 得到 MS Sans
+    // Serif lfHeight=-13, 而 Form1.frm 写的是 Arial Narrow 9.75pt (= -16 @120dpi)。
+    // 这里在任何子控件创建之前先把窗体字体落窗; 子控件随后在 vb6_CreateControl 里
+    // 按 ambient 继承它 (VB6 的规则: 控件 Font 默认取父窗体 Font)。
+    // 用与子控件同一个发射器, 两处字体的字段口径就不会分家。
+    emitFrmFontBlock(frmDesc.formControl, "(void*)hwnd");
 
     // Fix 182: .frx 设计期属性发射（主控件循环与容器子控件共用）。
     // 原先这段内联在 cgen_form_ctrl_style_apply.inc 的 P24 块里, 只有顶层控件走得到;
@@ -606,6 +632,16 @@
                                 if (pbB114.found) {
                                     emitFrxBagBlob(litName, pbB114.bytes);
                                 } else {
+                                // 图片等二进制属性 (`image_N`): DocProperty 块负载是
+                                // PNG/JPEG/BMP…, 必须按**原始字节**进属性包 —— VB6 里
+                                // `ReadProperty("image_N", 0)` 交回 Byte(), .ctl 的
+                                // `ItemImage(i) = b` 才拿得到图。此前落到 readDocString,
+                                // 二进制过不了"UTF-16 可打印"校验 ⇒ 属性缺失 ⇒ 控件只剩文字。
+                                FrxBlobBytes dbB114 = FrxReader::readDocBlobBytes(kvb.second.frxOffset);
+                                if (dbB114.found && FrxReader::detectFormat(dbB114.bytes.data(), dbB114.bytes.size())
+                                        != FrxImageFormat::Unknown) {
+                                    emitFrxBagBlob(litName, dbB114.bytes);
+                                } else {
                                 FrxTextData dsB114 = FrxReader::readDocString(kvb.second.frxOffset);
                                 if (!dsB114.text.empty()) {
                                     std::string tvB = dsB114.text;
@@ -614,7 +650,31 @@
                                     c_.emitLine("vb6_UC_BagPutStr(_bag, " + litName + ", L\"" + escapeWideCString(tvB) + "\");");
                                 }
                                 }
+                                }
                             }
+                        }
+                        // 设计期字体块 (`BeginProperty Font` / `SubTextFont` /
+                        // `Caption1_Font` ...) 也必须进 bag: .ctl 的 ReadProperties 用
+                        //   Set m_Font       = .ReadProperty("Font", Ambient.Font)
+                        //   Set m_SubTextFont = .ReadProperty("SubTextFont", Ambient.Font)
+                        // 读回它们。bag 里缺这一项 ⇒ ReadProperty 交回默认值 Ambient.Font,
+                        // 把上面 prop_let 回放过的 9pt SubTextFont 覆盖成 8.25, 且 m_Font 与
+                        // m_SubTextFont 变成**同一枚**对象 (ucTreeView 行高因此少算子文本字号)。
+                        for (const auto& blk : ctrl.propertyBlocks) {
+                            std::string bnLow = Symbol::toLower(blk.blockName);
+                            bool fontBlk = (bnLow == "font")
+                                || (bnLow.size() >= 4
+                                    && bnLow.compare(bnLow.size() - 4, 4, "font") == 0);
+                            if (!fontBlk) continue;
+                            if (!ucRpCodeLower.empty()
+                                && ucRpCodeLower.find(".readproperty(\"" + bnLow + "\"")
+                                       == std::string::npos) {
+                                continue;   /* ReadProperties 不读它 ⇒ 不塞, 保持面不变 */
+                            }
+                            emitFrmFontObj(blk, "_vb6_f120");
+                            c_.emitLine("    vb6_UC_BagPutFont(_bag, L\""
+                                      + escapeWideCString(blk.blockName) + "\", (void*)_vb6_f120);");
+                            c_.emitLine("  } }");
                         }
                         c_.emitLine("vb6_" + cIdent(ctlClass) + "_UC_ReadProps((vb6_cls_" + cIdent(ctlClass)
                                   + "*)vb6_UC_InstanceOf(" + hwndExpr + "), &_bag);");
@@ -1018,12 +1078,34 @@
                         bagArr143 = arrName143;
                         bagCnt143 = std::to_string(bagLines143.size());
                     }
+                    // 设计期 OleObjectBlob: VB6 建完控件后用 IPersistStreamInit::Load
+                    // 把 .frx 里控件自己的持久化数据灌回去 (TeeChart 是 TPF0 流,
+                    // 里面才有设计期建好的 Series/Axis/Title)。只交包装头之后的负载。
+                    std::string blobArr143 = "NULL";
+                    std::string blobSize143 = "0";
+                    if (frxLoaded) {
+                        auto blobIt143 = ctrl.properties.find("OleObjectBlob");
+                        if (blobIt143 != ctrl.properties.end()
+                            && blobIt143->second.type == FrmValueType::FrxReference) {
+                            auto blob143 = FrxReader::readOleBlob(blobIt143->second.frxOffset);
+                            if (blob143.found && !blob143.bytes.empty()) {
+                                std::string blobName143 = "vb6_frx_oleblob_" + cIdent(ctrl.controlName);
+                                if (ctrl.index >= 0) blobName143 += "_" + std::to_string(ctrl.index);
+                                frxArrayDefs_.push_back(bytesToHexArray(
+                                    blob143.bytes.data(), blob143.bytes.size(), blobName143));
+                                h_.emitLine(bytesToHexArrayDecl(blobName143));
+                                blobArr143 = blobName143;
+                                blobSize143 = blobName143 + "_size";
+                            }
+                        }
+                    }
                     std::string call143 = "vb6_OcxHost_Create((void*)hwnd, L\"" + clsid143
                               + "\", " + altArg143 + ", " + ocxArg143 + ", "
                               + std::to_string(l143 / 15) + ", " + std::to_string(t143 / 15) + ", "
                               + std::to_string(w143 / 15) + ", " + std::to_string(h143 / 15)
                               + ", L\"" + escapeWideCString(ctrl.controlName) + "\", "
-                              + bagArr143 + ", " + bagCnt143 + ")";
+                              + bagArr143 + ", " + bagCnt143 + ", "
+                              + blobArr143 + ", " + blobSize143 + ")";
                     if (knownControlArrays_.count(Symbol::toLower(ctrl.controlName))) {
                         int idx143 = ctrl.index >= 0 ? ctrl.index : 0;
                         c_.emitLine("{ void* vb6_ocx_h = " + call143 + ";");

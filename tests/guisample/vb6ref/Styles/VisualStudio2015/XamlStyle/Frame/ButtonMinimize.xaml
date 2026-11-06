@@ -1,0 +1,6 @@
+<Grid xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
+	<Border x:Name='Border' Background='#FFFFFFFF' />
+	<Canvas x:Name='Canvas' HorizontalAlignment='Center' VerticalAlignment='Center' Height='9'>
+		<Rectangle x:Name='Fill' Margin='0,6,0,0' Width='9' Height='2' StrokeThickness='0' Fill='#FF000000' />
+	</Canvas>
+</Grid>

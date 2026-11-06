@@ -1,0 +1,4 @@
+Type=Exe
+Module=B594Main; B594Main.bas
+Startup="Sub Main"
+ExeName32="B594.exe"

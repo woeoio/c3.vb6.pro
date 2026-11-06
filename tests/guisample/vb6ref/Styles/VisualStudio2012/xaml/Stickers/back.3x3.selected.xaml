@@ -1,0 +1,11 @@
+<Viewbox xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Stretch="Uniform">
+	<Canvas Width="112" Height="112" Canvas.Left="0" Canvas.Top="0">
+		<Canvas>
+			<Polyline SmoothingMode="None" StrokeThickness="1" Stroke='{x:Static Theme.Colors.BackBorderSelected}'>
+				<Polyline.Points>
+					36 0,  75 0,  75 25,  86 36,  111 36,  111 75,  86 75,   75 86,  75 111,  36 111,  36 86,  25 75,  0 75, 0 36,  25 36,  36 25, 36 0
+				</Polyline.Points>
+			</Polyline>
+		</Canvas>
+	</Canvas>
+</Viewbox>

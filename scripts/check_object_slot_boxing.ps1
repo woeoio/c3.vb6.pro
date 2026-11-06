@@ -67,8 +67,10 @@
 #       发射点 '!= NULL) ? vb6_BSTR_FromStr(L' 在 src/backend 恰好 1 处, 且它那一行必须排在闸门之后
 #       (先问视图、后折名字, 倒了就是把接口名当对象名)。控件那一路的两枚文本闸 (vb6_hwnd_ /
 #       vb6_form_ctrl_) 必须都还在: 控件的答案属于宿主那一问, 不属声明档。第四道闸 = 实参是整枚槽
-#       ⇒ 那是运行期的问句, 只许问 §B147 那条权威 variantOperandAST (折叠那一问的文件里恰好 1 处),
-#       不许自己抄 isDefinitelyVariantExpr (0 处) —— 实物是 A/B 上唯一一处真语料移动:
+#       ⇒ 那是运行期的问句; P2 起这里问的是**VB 类型** (`Array/Split/Filter` 的 VarType=8204,
+#       是 Variant 类型但**不是**整只槽) ⇒ 折叠那一问的文件里恰好 1 处 `isVariantType`、
+#       0 处槽问句 `variantOperandAST`; 槽那条权威 (§B147) 全 src\backend 仍只许 1 处定义。
+#       实物是 A/B 上唯一一处真语料移动:
 #       VBFlexGrid.ctl 的 `ByVal Value As Variant` 被另一过程同名的 `As IVBFlexDataSource` 漏过来折成了
 #       常量, 把 `TypeName(Value) = "ImageList"` 那一支变成恒假 (行为改动, 不是外观改动)。
 #
@@ -342,13 +344,22 @@ foreach ($guard in @("vb6_hwnd_", "vb6_form_ctrl_")) {
     $c = @([regex]::Matches((Text-Of $foldRel), [regex]::Escape($guard))).Count
     if ($c -lt 1) { $script:bad += ("B10 折叠那一问缺控件那一路的文本闸 " + $guard + " (控件的答案属于宿主那一问)") }
 }
-# 第四道闸: 实参是整枚槽 ⇒ 运行期的问句, 不许按声明档折。这一问只许问那一条权威 (§B147 收成的
-# variantOperandAST), 在本文件里恰好 1 处; 直接抄 isDefinitelyVariantExpr 就是第二份判据, 0 处。
+# 第四道闸: 实参是整枚槽 / 数组本体 ⇒ 运行期的问句, 不许按声明档折。P2 裁决: 这里问的是
+# **VB 类型**, 不是整只槽 (`Array/Split/Filter` 的 VarType=8204, 类型是 Variant 但 C 侧只是载体)。
+#   - 该站点恰好 1 处 `isVariantType` (唯一入口);
+#   - 该站点 0 处槽问句 `variantOperandAST` —— 此处问的是 VB 类型, 不是整只槽;
+#     若这里出现槽问句, 说明「类型」与「整只槽」两个问句又被合并了;
+#   - 0 处 `isDefinitelyVariantExpr` (直接抄判据本体 = 绕开唯一入口的影子第二份);
+#   - 槽那条权威本身全 src\backend 仍只许 1 处定义 (§B147 那条唯一出口, 数它, 不数空)。
 $foldText = Text-Of $foldRel
-$nSlotAsk = @([regex]::Matches($foldText, "variantOperandAST")).Count
-if ($nSlotAsk -ne 1) { $script:bad += ("B10 折叠那一问问槽的权威 variantOperandAST = $nSlotAsk 处 (要 1: 那一问只许走 §B147 那一条)") }
-$nSlotCopy = @([regex]::Matches($foldText, "isDefinitelyVariantExpr")).Count
-if ($nSlotCopy -ne 0) { $script:bad += ("B10 折叠那一问自己抄了槽判据 isDefinitelyVariantExpr = $nSlotCopy 处 (要 0: 权威是 variantOperandAST)") }
+$nTypeAsk10 = @([regex]::Matches($foldText, "isVariantType\s*\(")).Count
+if ($nTypeAsk10 -ne 1) { $script:bad += ("B10 折叠那一问必须问 VB 类型 isVariantType = $nTypeAsk10 处 (要 1: 问的是类型, 不是整只槽; 数组本体只有在类型问句里才看得见)") }
+$nSlotAsk10 = @([regex]::Matches($foldText, "variantOperandAST")).Count
+if ($nSlotAsk10 -ne 0) { $script:bad += ("B10 折叠那一问问槽的权威 variantOperandAST = $nSlotAsk10 处 (要 0: 此处问的是 VB 类型, 不是整只槽; 若这里出现槽问句, 说明两个问句又被合并了)") }
+$nSlotCopy10 = @([regex]::Matches($foldText, "isDefinitelyVariantExpr")).Count
+if ($nSlotCopy10 -ne 0) { $script:bad += ("B10 折叠那一问自己抄了类型判据 isDefinitelyVariantExpr = $nSlotCopy10 处 (要 0: 唯一入口是 isVariantType)") }
+$nSlotAuth10 = Count-InFiles "src\backend" $srcExts "bool CCodeGen::variantOperandAST"
+if ($nSlotAuth10 -ne 1) { $script:bad += ("B10 「整只槽」的权威定义 bool CCodeGen::variantOperandAST 全 src\backend = $nSlotAuth10 处 (要 1: §B147 那条唯一出口; 数它, 别数空)") }
 
 # B11 - 形参作用域 (#408, 第八十九刀): 按名那张类表的遮蔽只许两族站点, 且读侧否决要排在两条退路之前。
 $ctRel11 = "src\backend\cgen_util_classtype.cpp"

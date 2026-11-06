@@ -321,9 +321,7 @@ int vb6_RegisterFormClassBg(const char* className, void* wndProc, void* hInstanc
     // 合法表单色). 系统色 (&H800000xx, 高位置位 → 32 位有符号为负, 如 -2147483643)
     // 是**合法值**, 必须放行到下面的 GetSysColor 翻译, 不能因 <0 被当未指定.
     if (backColor != -1) {
-        COLORREF cref = (backColor & 0x80000000L)
-                            ? GetSysColor(backColor & 0xFF)
-                            : (COLORREF)backColor;
+        COLORREF cref = vb6_ColorToColorRef(backColor);
         wc.hbrBackground = CreateSolidBrush(cref);
         vb6_formClassBg_set(className, (int)cref);
     } else {
@@ -465,8 +463,13 @@ void* vb6_CreateFormWindowB(const char* className, const char* formName,
     free(wtitle);
     /* 账 #305 第二百七十八刀: 参考的顶层窗体自己答字体 (-13/MS Sans Serif), C3 的 VB6_Form_* 顶层
      * 从没被发过 => 窗体上 Print/TextWidth 那一族按 DC 默认字体量。交 NULL = VB6 默认档;
-     * 窗体若带设计期字体, 后面那条 setter 会再来发一张 (那一站自带作废)。 */
-    vb6_UC_ApplyFontToWindow(hwnd, NULL);
+     * 窗体若带设计期字体, 后面那条 setter 会再来发一张 (那一站自带作废)。
+     * 残差 #8 补一刀: 那条 setter 是在 WM_CREATE 里 (CreateControls 开头) 发的, 而
+     * CreateWindowExW **同步**跑完 WM_CREATE 才回到这里 —— 无条件发 NULL 会把设计期字体
+     * 当场覆盖回 8.25pt (实测: 子控件已按 ambient 继承到 Arial Narrow -16, 窗体自己却
+     * 退回 MS Sans Serif -13)。所以只给"还没人发过字体"的窗体补默认档。 */
+    if (!vb6_ControlFontStored((HWND)hwnd))
+        vb6_UC_ApplyFontToWindow(hwnd, NULL);
     vb6_formApplyDefaultIcon(hwnd, hInstance);
     return (void*)hwnd;
 }
@@ -499,9 +502,8 @@ static int vb6_GBoxBorderStyle(HWND hwnd) {
 // Fix 162f-extlist: 取 groupbox 的标题底色 (父窗 BackColor, 未设回落 BTNFACE)。
 static COLORREF vb6_GBoxTitleBg(HWND hwnd) {
     HWND parent = GetParent(hwnd);
-    COLORREF bg = parent ? (COLORREF)vb6_GetControlBackColor((void*)parent)
+    COLORREF bg = parent ? vb6_ColorToColorRef(vb6_GetControlBackColor((void*)parent))
                          : GetSysColor(COLOR_BTNFACE);
-    if (bg & 0x80000000L) bg = GetSysColor(bg & 0xFF);
     return bg;
 }
 
@@ -616,6 +618,29 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
     vb6_u8ToWideBuf(win32Class, wcls, 128);
     wchar_t* wname = vb6_u8ToWideDup(controlName);
 
+    /* 残差 #6(b): VB6 给每一枚子控件都立 WS_CLIPSIBLINGS（实测 TextBox
+       style=0x540108C1、VScrollBar style=0x54010001 都含 0x04000000）。缺这一位时
+       **下层**控件可以越过 z-order 画到上层兄弟的窗口区上：ucTreeView 的 Text1 与
+       VScroll1 设计期就重叠 33px（TextBox 91 宽、VScrollBar 贴在它右侧），Text1 的
+       白底于是把 z-order 更高的 VScrollBar 整块抹白（隐藏 Edit 后同一像素区立刻恢复
+       成 VB6 的 960×240 + 63×255）。 */
+    style |= WS_CLIPSIBLINGS;
+
+    /* 残差 #7: VB6 的 ThunderRT6CommandButton 实测 style=0x54012000 —— 含
+       **BS_MULTILINE(0x2000)**; C3 原生 BUTTON 此前是 0x54014000 (只有 BS_NOTIFY),
+       缺这一位时系统把 caption 强制单行绘制 (ucTreeView 底部三枚长标题因此单行,
+       bottomBar 区 diff 19.70%)。实测把 0x2000 现场补到已有按钮上并重绘, 系统
+       立刻按**空格 word-wrap**、竖直居中 —— 断行结果与 VB6 逐枚一致
+       (Tree Explorer / Corporate Hierarchy / Drag and Drop 两行, Menu / Tools /
+       Contact  List 单行), 所以**不需要自绘 caption**。
+       只补 push 型 (BS_TYPEMASK 0x0F = BS_PUSHBUTTON 0 / BS_DEFPUSHBUTTON 1):
+       check/radio/group 的 0x2000 是另一层语义 (文字/图标换行), 不在这里动。 */
+    if (_stricmp(win32Class, "BUTTON") == 0) {
+        DWORD btnType = (DWORD)style & 0x0000000FL;
+        if (btnType == BS_PUSHBUTTON || btnType == BS_DEFPUSHBUTTON)
+            style |= 0x00002000L;   /* BS_MULTILINE (winuser.h) */
+    }
+
     HWND hwnd = CreateWindowExW(
         (DWORD)exStyle,
         wcls,
@@ -635,6 +660,18 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
        运行期不改 ⇒ 「谁是站」必须以创建时那一份为准。值写 1/2 而不是 1/0：
        SetPropW(…, 0) 等于删属性（账 #107 那一课）。 */
     if (hwnd) SetPropW(hwnd, L"VB6_TabStop", (HANDLE)(DWORD_PTR)((style & WS_TABSTOP) ? 1 : 2));
+
+    /* VB6 Label 的默认底色 = 按钮面 (COLOR_BTNFACE, 240), 不是 STATIC 窗口类的
+       类背景刷 COLOR_WINDOW (纯白)。VB6 里 Label 是轻量控件 (无 HWND, 由窗体直接
+       绘制), 默认 BackColor = &H8000000F&; C3 落成真 STATIC 窗口后必须把这个默认值
+       显式落到窗口属性上, 否则未写 BackColor 的 Label 只能听 DefWindowProcW 的类刷
+       摆布 (父窗/容器 WndProc 的 CTLCOLOR 臂一旦不接管就是 255 白)。ucTreeView 里
+       Label 恰好被容器臂兜住看似正常, 但那是巧合, 不是契约。
+       PictureBox/Image 同为 STATIC 但带 SS_BITMAP(0x0E), 由 vb6_ImageSubclassProc
+       自绘, 这里排除。显式写了 BackColor 的控件随后由设计期发射覆盖本值。 */
+    if (hwnd && _stricmp(win32Class, "STATIC") == 0 && ((DWORD)style & 0x1FL) != 0x0EL) {
+        vb6_SetControlBackColor(hwnd, (int)GetSysColor(COLOR_BTNFACE));
+    }
 
     /* 账 #305 第299刀: hParent = 这枚控件 authored 的那一层容器 (窗体 / 窗体上的容器控件 /
        .ctl 的宿主窗口)。VB6 的几何单位跟的就是**这一层**, 运行期谁把 HWND 搬走都不改它,
@@ -658,11 +695,26 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
         vb6_GeomCacheWrite(hwnd, VB6_GEOM_HEIGHT, height, 1);
     }
 
-    // 设置默认字体 (VB6使用MS Sans Serif 8.25pt)
+    // 设置默认字体: VB6 子控件的 Font **默认取 ambient** —— 也就是创建那一刻父容器
+    // (窗体 / Frame / PictureBox / UC 宿主) 已经落下的那份字体。父窗口有字体就按它的
+    // LOGFONT 再 CreateFontIndirect 一份; 父窗口没有 (裸 Win32 容器 / 尚未落字体) 才
+    // 退到 VB6 的 MS Sans Serif 8.25pt。
+    // ⚠ 必须是"复制一份"而不是共享句柄, 理由见 vb6_Vb6DefaultGuiFont 上面那段:
+    // vb6_SetControlFontFromLogFont 换字体时无条件 DeleteObject(旧句柄), 共享会被
+    // 某个改 Font 的兄弟控件删掉, 其余控件随即拿着已销毁/被复用的句柄。
+    // 设计期自带 `BeginProperty Font` 的控件由生成码随后覆写这一张。
     if (hwnd) {
         // Fix 181: 原先直接用 GetStockObject(DEFAULT_GUI_FONT) —— 现代 Windows 上
         // 那是 Segoe UI 9pt, 比 VB6 的 MS Sans Serif 8.25pt 宽, 控件标题被截字。
-        HFONT hFont = vb6_Vb6DefaultGuiFont();
+        HFONT hFont = NULL;
+        HFONT hParentFont = hParent ? vb6_ControlFontStored((HWND)hParent) : NULL;
+        if (!hParentFont && hParent) hParentFont = vb6_ControlFont((HWND)hParent);
+        if (hParentFont) {
+            LOGFONTW lfParent;
+            if (GetObjectW(hParentFont, sizeof(lfParent), &lfParent) > 0)
+                hFont = CreateFontIndirectW(&lfParent);
+        }
+        if (!hFont) hFont = vb6_Vb6DefaultGuiFont();
         if (!hFont) {
             hFont = CreateFontW(
                 -11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -723,6 +775,25 @@ void* vb6_CreateControl(const char* win32Class, const char* controlName,
         if (_stricmp(win32Class, "STATIC") == 0
             && ((style & 0x0000000FL) == 0x0000000EL)) {  // SS_BITMAP
             vb6_InstallImageSubclass(hwnd);
+        }
+
+        /* 残差 #6: VB6 的 VScrollBar/HScrollBar 是自绘的 ThunderRT6*ScrollBar（240 底 +
+           左边 1px 白 + 中线 1px 白，实测 6 枚 33x31 全等）。原生 SCROLLBAR 在 33x31 时
+           连箭头都放不下（@120dpi 两根竖箭头要 2x21=42px > 31px）⇒ 只擦背景、
+           类背景刷 COLOR_SCROLLBAR 是纯白 ⇒ 整块 1023px 纯白。这里接管绘制。 */
+        if (_stricmp(win32Class, "SCROLLBAR") == 0) {
+            vb6_InstallScrollBarSubclass(hwnd);
+        }
+
+        /* 残差 #6 的真根因: VB6 的 .frm 里"先列出的控件在 z-order 最上"（实测 Picture3
+           下先列 VScroll1、再 Text1 ⇒ 运行时 VScrollBar 盖住 TextBox 右侧 33px）。
+           C3 以前直接 CreateWindowExW，每建一枚就插到兄弟 z-order 顶部 ⇒ 整个顺序
+           反过来：Text1 的白底把 VScroll1 整块盖掉（同一像素区把 Edit 隐藏后立刻
+           变成 VB6 的 960×240 + 63×255，可见控件本身画得对，是被盖住了）。
+           设计期逐枚灌入时把新控件落到兄弟 z-order 底部，等价于 VB6 的顺序。 */
+        if (vb6_Form_IsLoading(hwnd)) {
+            SetWindowPos((HWND)hwnd, HWND_BOTTOM, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
 
@@ -1654,6 +1725,49 @@ void vb6_ShowForm(void* hwnd, int modal) {
 
     ShowWindow((HWND)hwnd, SW_SHOWDEFAULT);
     UpdateWindow((HWND)hwnd);
+
+    /* 账 (MDI 布局刀): 设计期 WindowState 在上屏**之后**落地 (MDI 子窗必须如此;
+     * 晚绑定的 `c.Show` 经宿主模型直接走这里, 绕过 cgen 的 Show 尾巴)。 */
+    vb6_ApplyDesignWindowState(hwnd);
+
+    /* 账 (MDI 布局刀): MDI 父窗体上屏之后, 补放子窗在 Form_Load 里挂起的
+     * 设计期 WindowState (子窗那时设 Maximized, MDICLIENT 还看不见客户区, 不认)。 */
+    {
+        void* hcl = (void*)GetPropW((HWND)hwnd, L"VB6_MDIClient");
+        if (hcl) vb6_MDIApplyPendingChildStates(hcl);
+    }
+
+    /* 账 #xxx: VB6 的 `MDIChild.Show` 把子窗体置为**活动子窗体** (`ActiveForm`
+     * 随即指向它)。Win32 侧 MDICLIENT 只在子窗被 MDI 激活流程点名时才记 active,
+     * 而 MDIForm_Load 里 `frmD.Show` 发生在 MDI 框架 ShowWindow 之前 —— 实测
+     * 子窗建好、标题可读, 但 WM_MDIGETACTIVE 恒答 0 (ActiveForm 静默 Empty)。
+     * 这里照 VB6 语义: 父窗是 MDICLIENT 的窗体 Show 之后显式激活自己。 */
+    {
+        HWND hPar = GetParent((HWND)hwnd);
+        wchar_t clsPar[32] = {0};
+        if (hPar) GetClassNameW(hPar, clsPar, 31);
+        if (hPar && _wcsicmp(clsPar, L"MDICLIENT") == 0) {
+            /* WM_MDIACTIVATE 是**发给 MDICLIENT** 的: wParam = 要失活的子窗,
+               lParam = 要激活的子窗 (WM_MDIACTIVATE 两份文档口径都是这么写的;
+               早先发到子窗自身 / wParam 塞子窗都是错的, MDICLIENT 一律不认)。 */
+            HWND hPrev = (HWND)SendMessageW(hPar, WM_MDIGETACTIVE, 0, 0);
+            SendMessageW(hPar, WM_MDIACTIVATE,
+                         (WPARAM)(hPrev == (HWND)hwnd ? (HWND)NULL : hPrev),
+                         (LPARAM)(HWND)hwnd);
+            /* 账 (frmDocument 最大化, 替代路径): 脚本调过 ShowTabWorkspace(True) 而 OCX
+             * 回空指针 (见 vb6_MDI_NoteTabWorkspaceMissing) 时, 按"工作区接管"的行为把
+             * 活动子窗铺满文档区。VB6 实测: 子窗 1092x625@222,134 恰好填满 MDIClient
+             * 1100x655@218,108 且**没有** WS_MAXIMIZE 位 (工作区自己摆位);
+             * 真 TabWorkspace 的标签接管仍需 OCX 那条链, 这里明确是替代。
+             * MDICLIENT 在父窗体上屏前"看不见", WM_MDIMAXIMIZE 会被忽略 —— 所以既试一次,
+             * 也用既有的 VB6_PendingWindowState 挂在父窗体 Show 之后补放。 */
+            if (vb6_MDI_TabWorkspaceMissing()) {
+                SendMessageW(hPar, WM_MDIMAXIMIZE, (WPARAM)(HWND)hwnd, 0);
+                if (!(GetWindowLongW((HWND)hwnd, GWL_STYLE) & WS_MAXIMIZE))
+                    SetPropW((HWND)hwnd, L"VB6_PendingWindowState", (HANDLE)(intptr_t)(2 + 1));
+            }
+        }
+    }
 
     // 账 #305: 首次显示时窗体背景从未被擦除过 —— Charts 2020 Form2 (BackColor &H00E5E5E5&)
     // 的卡片是子控件画的白底, 卡片**之间**的空隙第一次上屏时无人填, 于是留白;

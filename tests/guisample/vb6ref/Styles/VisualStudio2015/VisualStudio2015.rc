@@ -1,0 +1,105 @@
+// Office 2013 style resource file
+//
+// (c)1998-2022 Codejock Software, All Rights Reserved.
+//
+// THIS SOURCE FILE IS THE PROPERTY OF CODEJOCK SOFTWARE AND IS NOT TO BE
+// RE-DISTRIBUTED BY ANY MEANS WHATSOEVER WITHOUT THE EXPRESSED WRITTEN
+// CONSENT OF CODEJOCK SOFTWARE.
+//
+// THIS SOURCE CODE CAN ONLY BE USED UNDER THE TERMS AND CONDITIONS OUTLINED
+// IN THE XTREME TOOLKIT PRO LICENSE AGREEMENT. CODEJOCK SOFTWARE GRANTS TO
+// YOU (ONE SOFTWARE DEVELOPER) THE LIMITED RIGHT TO USE THIS SOFTWARE ON A
+// SINGLE COMPUTER.
+//
+// CONTACT INFORMATION:
+// support@codejock.com
+// http://www.codejock.com
+//
+/////////////////////////////////////////////////////////////////////////////
+
+#include "afxres.h"
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// INI
+//
+
+VISUALSTUDIO2015BLUE_INI      TEXTFILE MOVEABLE PURE "Styles/VisualStudio2015/VisualStudio2015Blue.ini"
+VISUALSTUDIO2015LIGHT_INI     TEXTFILE MOVEABLE PURE "Styles/VisualStudio2015/VisualStudio2015Light.ini"
+VISUALSTUDIO2015DARK_INI      TEXTFILE MOVEABLE PURE "Styles/VisualStudio2015/VisualStudio2015Dark.ini"
+
+#if !defined(_XTP_NO_BINARY_RESOURCES)
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// ZIP
+//
+
+XAML_STYLE STYLE DISCARDABLE "Styles/VisualStudio2015/XamlStyle.zip"
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// PNG
+//
+
+VISUALSTUDIO2015TIMELINEVIEWAPPOINTMENTICON_100  PNG  MOVEABLE PURE "Styles/VisualStudio2015/res/TimeLineViewAppointmentIcon_100.png"
+VISUALSTUDIO2015TIMELINEVIEWAPPOINTMENTICON_125  PNG  MOVEABLE PURE "Styles/VisualStudio2015/res/TimeLineViewAppointmentIcon_125.png"
+VISUALSTUDIO2015TIMELINEVIEWAPPOINTMENTICON_150  PNG  MOVEABLE PURE "Styles/VisualStudio2015/res/TimeLineViewAppointmentIcon_150.png"
+VISUALSTUDIO2015TIMELINEVIEWAPPOINTMENTICON_200  PNG  MOVEABLE PURE "Styles/VisualStudio2015/res/TimeLineViewAppointmentIcon_200.png"
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Bitmap
+//
+
+VISUALSTUDIO2015CALENDAREVENTGLYPHS_100     BITMAP MOVEABLE PURE "Styles/VisualStudio2015/res/CalendarEventGlyphs_100.bmp"
+VISUALSTUDIO2015CALENDAREVENTGLYPHS_125     BITMAP MOVEABLE PURE "Styles/VisualStudio2015/res/CalendarEventGlyphs_125.bmp"
+VISUALSTUDIO2015CALENDAREVENTGLYPHS_150     BITMAP MOVEABLE PURE "Styles/VisualStudio2015/res/CalendarEventGlyphs_150.bmp"
+VISUALSTUDIO2015CALENDAREVENTGLYPHS_200     BITMAP MOVEABLE PURE "Styles/VisualStudio2015/res/CalendarEventGlyphs_200.bmp"
+
+#endif // !defined(_XTP_NO_BINARY_RESOURCES)
+
+#ifdef _XTP_INCLUDE_VERSION
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// Version
+//
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 20,3,0,0
+ PRODUCTVERSION 20,3,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x4L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "Comments", "February 22, 2022\0"
+            VALUE "CompanyName", "Codejock Software\0"
+            VALUE "FileDescription", "Visual Studio 2015 Theme Resource DLL\0"
+            VALUE "FileVersion", "20, 3, 0, 0\0"
+            VALUE "InternalName", "VisualStudio2015.dll\0"
+            VALUE "LegalTrademarks", "\0"
+            VALUE "OriginalFilename", "VisualStudio2015.dll\0"
+            VALUE "PrivateBuild", "\0"
+            VALUE "ProductName", "Visual Studio 2015 Theme Resource DLL\0"
+            VALUE "ProductVersion", "20, 3, 0, 0\0"
+            VALUE "SpecialBuild", "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+#endif    // _XTP_INCLUDE_VERSION

@@ -255,7 +255,7 @@ std::string CCodeGen::controlPropValueExpr(const std::string& writeFn,
     // `Set imgA.Picture = LoadResPicture(...)` — LoadRes* 实装后返回 vb6_VARIANT)
     // 时按对象解包, 与赋值路 (Fix 038b-6 名单) 同口径; 否则 C2172 "实参不是指针"。
     if (writeFn == "vb6_SetControlPicture" || writeFn == "vb6_SetControlPictureFromCom") {
-        if (cExprIsVariant(valExpr)) {
+        if (isVariantSlot(valExpr, nullptr)) {  // P1.3: ast 不可得 (valExpr 为形参, 与 valueNode 对应关系非本地可见)
             return "vb6_VariantToObjectVal(" + valExpr + ")";
         }
     }
@@ -267,6 +267,17 @@ std::string CCodeGen::controlPropValueExpr(const std::string& writeFn,
     // inferExprType 对 IIf/GetCheckValue 这类也答 Variant, 但它们的发码是
     // vb6_IIfLong/vb6_GetCheckValue (交 int32_t), 折 vb6_VariantToBool 反而
     // C2440 (frmEditEvent:465 实测)。
+    // 账 #305 第三百四十五刀: 数值几何写 (Left/Top/Width/Height, 缇) 的右值是
+    // **Variant 回值内置函数** (GetSetting 返回 BSTR) —— BSTR 指针被当地址/坐标
+    // 直传 (GUISample `Me.Width = GetSetting(...)` → x=32767 屏外, 用户看不到窗口)。
+    // VariantToLong 的 BSTR 档走 vb6_Val 解析, 与 VB6 的 CLng 同语义。
+    if (writeFn == "vb6_SetControlLeft" || writeFn == "vb6_SetControlTop"
+        || writeFn == "vb6_SetControlWidth" || writeFn == "vb6_SetControlHeight") {
+        if (inferExprType(valueNode) == Vb6Type::Variant || isVariantSlot(valExpr, nullptr)  // P1.3: ast 不可得 (valExpr 为形参)
+            || valExpr.compare(0, 15, "vb6_GetSetting(") == 0) {
+            return "vb6_VariantToLong(vb6_VariantFromValue(" + valExpr + "))";
+        }
+    }
     if (writeFn == "vb6_SetControlEnabled" || writeFn == "vb6_SetControlVisible") {
         const std::string modProcPrefix = "vb6_" + cIdent(moduleName_) + "_";
         if (inferExprType(valueNode) == Vb6Type::Variant

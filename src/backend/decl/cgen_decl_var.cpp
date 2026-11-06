@@ -272,6 +272,19 @@ void CCodeGen::visit(VariableDecl& node) {
     if (cType == "void*") {  // Object类型映射为void*
         std::string lower = node.name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        // 账 #305 第三百三十一刀: As <工程窗体类型> 的变量 (Public fMainForm As frmMain)
+        // —— 窗体模块不注册 Class 符号, mapTypeRef 坍成 void* 后此前落进
+        // knownObjectVars_, 成员访问发 vb6_ComCall(void* 全局, L"Show") —— 对窗体
+        // HWND 派发运行期落空 (Show 没人接, GUISample 主窗体黑屏)。登记进
+        // knownFormTypeVars_ 后成员访问/裸值改道 form_builtin 外部窗体支
+        // (vb6_form_show_<F> / vb6_form_hwnd_<F>)。
+        if (node.asType && node.asType->kind == ASTNodeKind::SimpleTypeRef) {
+            std::string ftvName = static_cast<SimpleTypeRef&>(*node.asType).name;
+            std::string ftvLower = Symbol::toLower(ftvName);
+            if (knownFormModuleNames_.count(ftvLower)) {
+                knownFormTypeVars_[lower] = ftvName;
+            }
+        }
         // 项目类实例 (Dim b As Button / Dim WithEvents b As Button) 的 C 类型同样是 void*,
         // 但它并非 COM 后期绑定对象, 方法调用必须走直接分发 (vb6_Button_DoClick(...)).
         // 若误注册进 knownObjectVars_, cgen_expr 的"优先级1"会把它当 IDispatch 处理,

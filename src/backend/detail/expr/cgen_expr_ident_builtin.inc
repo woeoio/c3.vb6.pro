@@ -12,8 +12,29 @@
     if (!lookupName.empty() && lookupName.back() == '$') {
         lookupName.pop_back();
     }
+    // 交接 §7.8 缺陷 B: 显式 Declare 优先于内置同名 —— 真 VB6 里
+    //   `Private Declare Function GetObject Lib "gdi32.dll" Alias "GetObjectA"(ByVal hObject As Long,
+    //    ByVal nCount As Long, lpObject As Any) As Long`
+    // 与内置 GetObject 同名时, 调用点指的是**声明的那个 API**。symbol_table.cpp 的 define()
+    // (Fix 048 那条) 已经让内置符号整体让位, 但本段的内置名表是静态名单, 命中在符号表之前
+    // ⇒ 内置出口 vb6_GetObject(const wchar_t*, const wchar_t*) 又把声明顶掉; 3 个实参的
+    // 调用落进去就是 C2197。
+    // 判据三件齐: (1) 存在性 = 本模块作用域确有该名的 Declare 符号; (2) 参数形状 =
+    // 声明自己带形参表 (SDK 边界, 与内置 0/1/n 参不同形 —— GetObject 3 参 vs 内置 2 参);
+    // (3) Lib/Alias = Declare 符号本就由 `Declare ... Lib "x" [Alias "..."]` 建出, 发射侧
+    // 登记在 declareAliasMap_ (别名路) / 裸名宏 (非别名路)。
+    // 闸只在 (1)+(2): 没有 Declare 的同名站点照旧走内置 (真内置 GetObject 不受影响)。
     auto it = builtinFuncs.find(lookupName);
+    bool explicitDeclareWins = false;
     if (it != builtinFuncs.end()) {
+        Symbol* dsym = symTab_.lookupModule(node.name);
+        if (dsym && (dsym->kind == SymbolKind::DeclareSub
+                     || dsym->kind == SymbolKind::DeclareFunc)
+            && !dsym->params.empty()) {
+            explicitDeclareWins = true;
+        }
+    }
+    if (it != builtinFuncs.end() && !explicitDeclareWins) {
         // 无参内置函数: VB6允许省略括号(如 Now, Date, Time)
         // 当IdentifierExpr引用这些函数时，必须生成调用(带括号)
         static const std::unordered_set<std::string> zeroArgBuiltinFuncs = {
@@ -221,6 +242,16 @@
     // 第三个字段), 取地址即对象指针, 不是 <dock>() 那种函数调用形态, 故单独一支。
     // Pager.ctl:481 `Set ControlsExtender = Extender` / FontCombo.ctl 的
     // `ControlEnum == Extender` 走这里; 不保留就落"发射裸标识符"兜底 ⇒ C2065。
+    // 窗体模块里**裸写**的 `Controls`：VB6 里它等价于 `Me.Controls`，是宿主窗口的
+    // 合成集合。ucSegmentedControl 的 Form1.frm 用它 `For Each Ctrl In Controls`
+    // 统一刷 Enabled；此前落到末尾"发射裸标识符"兜底 ⇒ C2065 (Controls 未声明)。
+    // 与 .ctl/.pag 的 CHANNEL 同一码头：vb6_ComGetObjectProp → vb6_Host_GetProp →
+    // vb6_uc_newControls(窗体 hwnd)，vb6com_foreach 按子窗口枚举。
+    if (isFormModule_ && !isDesignerModule_ && lower == "controls"
+        && !knownLocalVars_.count(lower)) {
+        lastExpr_ = "vb6_ComGetObjectProp(vb6_hwnd_" + moduleName_ + ", L\"Controls\")";
+        return;
+    }
     const bool reservedHostObj = reservedHostChannel || (lower == "extender");
     if (isDesignerModule_ && !knownLocalVars_.count(lower)
         && (!sym || reservedHostObj)) {
@@ -234,9 +265,19 @@
         }
         std::string rtlHp;
         const std::string hostObjHp = isPropertyPageDesigner_ ? "PropertyPage" : "UserControl";
+        /* 装配出口全文件只许问一次 (host_pseudo_table 的 ASSEMBLY-SITE 钉的就是这条):
+           裸名与裸写方法两档共用同一个符号, 不再各拼一遍。 */
+        const std::string hpRtl = hostPseudoRtlSymbol(hostObjHp, lower);
         if (hostPseudoBareName(hostObjHp, lower, rtlHp)) {
             // 账 #278 §B120: 装配交回唯一出口 (对象那一段与成员那一段都出自那张表)。
-            lastExpr_ = hostPseudoRtlSymbol(hostObjHp, lower);
+            lastExpr_ = hpRtl;
+            return;
+        }
+        // ucTreeView: 裸写的方法 (只带 HPF_METHOD, 如 .ctl 里的 `Cls`) 旧代码落"发射裸
+        // 标识符"兜底 ⇒ `Cls()` ⇒ LNK2019 `_Cls`。调用点补 `(` 与实参, 值上下文补 `()`。
+        std::string rtlMethodHp;
+        if (hostPseudoMethodRtlName(hostObjHp, lower, rtlMethodHp)) {
+            lastExpr_ = hpRtl + (asCallCallee_ ? "" : "()");
             return;
         }
     }

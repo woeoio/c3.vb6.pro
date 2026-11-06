@@ -93,6 +93,11 @@ void vb6_OcxRefRegister(const Vb6OcxRef* libs, int count) {
     g_ocxRefCount = count;
 }
 
+int vb6_OcxRefGetTable(const Vb6OcxRef** out) {
+    if (out) *out = g_ocxRefs;
+    return g_ocxRefCount;
+}
+
 /* 按 ProgID 或 CLSID 字符串查免注册表; 返回 NULL = 未命中. */
 static const Vb6OcxRef* vb6_OcxRefLookup(const wchar_t* progId, const wchar_t* clsidStr) {
     if (g_ocxRefCount == 0) return NULL;
@@ -526,6 +531,67 @@ int32_t vb6_OcxHost_SyncRects(void* ctlDisp) {
     return 0;
 }
 
+/* 账 #305 第三百五十三刀: 对本窗体上每个 OCX 站点尝试晚绑定调用一个无参方法
+ * (GUISample: CommandBars.RecalcLayout —— 它的停靠带宽度由这个重算, maximize
+ * 后窗格/菜单带不回流就是没人调它)。调用失败的静默 (绝大多数控件没有该方法)。 */
+void vb6_OcxHost_InvokeAll(void* hwndForm, const wchar_t* method) {
+    if (!hwndForm || !method || !method[0]) return;
+    for (int i = vb6_axSiteCount - 1; i >= 0; i--) {
+        Vb6AxSite* s = g_axSites[i];
+        if (!s || s->hwndForm != (HWND)hwndForm || !s->pDisp) continue;
+        IDispatch* pD = (IDispatch*)s->pDisp;
+        DISPID dispid = DISPID_UNKNOWN;
+        OLECHAR* nm = (OLECHAR*)method;
+        if (FAILED(pD->lpVtbl->GetIDsOfNames(pD, &IID_NULL, &nm, 1,
+                       GetUserDefaultLCID(), &dispid)) || dispid == DISPID_UNKNOWN)
+            continue;
+        if (GetEnvironmentVariableA("C3_CRASH_TRACE", NULL, 0) > 0) {
+            fprintf(stderr, "[C3_INVOK] site=%ls method=%ls dispid=%ld\n",
+                    s->ctrlName, method, (long)dispid); fflush(stderr);
+        }
+        DISPPARAMS dp; memset(&dp, 0, sizeof(dp));
+        VARIANT res; VariantInit(&res);
+        pD->lpVtbl->Invoke(pD, dispid, &IID_NULL, GetUserDefaultLCID(),
+            DISPATCH_METHOD | DISPATCH_PROPERTYGET, &dp, &res, NULL, NULL);
+        VariantClear(&res);
+    }
+}
+
+/* 账 #305 第三百四十八刀: 见 vb6forms_controls.h 的声明 —— MDIForm 尺寸变化
+ * 后给所有 windowless 站点补发 SetObjectRects(全客户区)。有窗口的控件不归这里
+ * (它们有自己的设计矩形, 由 vb6_ControlMove 那条路管)。 */
+void vb6_OcxHost_FormResized(void* hwndForm, int w, int h) {
+    int touched = 0;
+    int dbg348 = GetEnvironmentVariableA("C3_CRASH_TRACE", NULL, 0) > 0;
+    for (int i = vb6_axSiteCount - 1; i >= 0; i--) {
+        Vb6AxSite* s = g_axSites[i];
+        if (!s || s->hwndForm != (HWND)hwndForm) continue;
+        if (s->hwndCtrl && IsWindow(s->hwndCtrl)) continue;
+        if (dbg348) {
+            fprintf(stderr, "[C3_FR] site=%ls form=%p rect=(%ld,%ld)-(%ld,%ld)\n",
+                    s->ctrlName, (void*)s->hwndForm,
+                    (long)s->rcCtrl.left, (long)s->rcCtrl.top,
+                    (long)s->rcCtrl.right, (long)s->rcCtrl.bottom);
+            fflush(stderr);
+        }
+        RECT r = {0, 0, w, h};
+        s->rcCtrl = r;
+        if (s->pInPlaceObj) {
+            IOleInPlaceObjectWindowless* p = (IOleInPlaceObjectWindowless*)s->pInPlaceObj;
+            p->lpVtbl->SetObjectRects(p, &r, &r);
+            touched = 1;
+        } else if (s->pOleObj) {
+            IOleInPlaceObject* pIPO = NULL;
+            if (SUCCEEDED(s->pOleObj->lpVtbl->QueryInterface(s->pOleObj, &IID_IOleInPlaceObject, (void**)&pIPO)) && pIPO) {
+                pIPO->lpVtbl->SetObjectRects(pIPO, &r, &r);
+                pIPO->lpVtbl->Release(pIPO);
+                touched = 1;
+            }
+        }
+    }
+    if (touched) InvalidateRect((HWND)hwndForm, NULL, TRUE);
+}
+
 /* 账 (Outlook2013 左面板 My Calendars 树跑到顶端): **windowless** 控件没有窗口,
  * 但 VB6 的容器照样按 Extender 存着它的 Left/Top/Width/Height (frmPaneCalendar
  * 的 UpdateLayout 就读 ItemCaption.top/Height 来摆 tree)。站点里那份 rcCtrl 就是
@@ -619,7 +685,8 @@ static void axDiagChildren(const char* step, HWND form) {
 
 void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t* altClsidStr,
                          const wchar_t* ocxPath, int x, int y, int w, int h,
-                         const wchar_t* ctrlName, const Vb6OcxProp* props, int propCount) {
+                         const wchar_t* ctrlName, const Vb6OcxProp* props, int propCount,
+                         const unsigned char* persistBlob, int persistSize) {
     if (!hwndForm || !clsidStr) return NULL;
 
     /* C3_OCX_TRACE=1: 打印实例化/激活各步 HRESULT (诊断宿主问题) */
@@ -731,6 +798,41 @@ void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t*
             if (ocxTrace && ctrlName && wcscmp(ctrlName, L"cmdSearch") == 0)
                 axDiagChildren("aftersetclient", (HWND)hwndForm);
         }
+        /* 5b. 设计期 OleObjectBlob → IPersistStreamInit::Load
+         * VB6 的次序是 OleLoad(即 PersistStream::Load) 之后再 SetExtent/SetObjectRects:
+         * .frx 的 TPF0 流里带着控件自己的设计期尺寸, Load 会把它恢复成 6195 缇
+         * 而不是 .frm 的 6015 —— 必须先 Load 再报设计期尺寸, 否则控件内部按
+         * 旧尺寸布局 (实测图表整体右移 12px、标题中心 +6px).
+         * TeeChart 的 TPF0 流里才有设计期建好的 Series/Axis/Title/Legend —— 不灌的话
+         * TChart1.Series(0) 直接读空指针崩溃 (实测 0xC0000005 av read 0x0).
+         * 生成码只传 24B VB 包装头之后的负载. */
+        if (persistBlob && persistSize > 0) {
+            IPersistStreamInit* pPSI = NULL;
+            HRESULT hrQI = pDisp->lpVtbl->QueryInterface(pDisp, &IID_IPersistStreamInit, (void**)&pPSI);
+            if (ocxTrace) fprintf(stderr, "[C3_OCX]   QI(IPersistStreamInit) hr=0x%08lX p=%p size=%d\n",
+                                  (unsigned long)hrQI, (void*)pPSI, persistSize);
+            if (SUCCEEDED(hrQI) && pPSI) {
+                HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)persistSize);
+                if (hg) {
+                    void* dst = GlobalLock(hg);
+                    if (dst) {
+                        memcpy(dst, persistBlob, (size_t)persistSize);
+                        GlobalUnlock(hg);
+                    }
+                    IStream* st = NULL;
+                    if (SUCCEEDED(CreateStreamOnHGlobal(hg, TRUE, &st)) && st) {
+                        HRESULT hrLoad = pPSI->lpVtbl->Load(pPSI, st);
+                        if (ocxTrace) fprintf(stderr, "[C3_OCX]   PersistStream::Load hr=0x%08lX ctrl='%ls'\n",
+                                              (unsigned long)hrLoad, ctrlName ? ctrlName : L"");
+                        st->lpVtbl->Release(st);
+                    } else if (ocxTrace) {
+                        fprintf(stderr, "[C3_OCX]   CreateStreamOnHGlobal failed\n");
+                    }
+                }
+                pPSI->lpVtbl->Release(pPSI);
+            }
+        }
+
         /* 4. 设计期大小 (HIMETRIC) */
         SIZEL sz = { vb6_twipsToHimetric(w * 15), vb6_twipsToHimetric(h * 15) };
         pOleObj->lpVtbl->SetExtent(pOleObj, DVASPECT_CONTENT, &sz);

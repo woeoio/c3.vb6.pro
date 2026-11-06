@@ -16,7 +16,11 @@
             std::string argsArray = "(void*[]){";
             for (size_t i = 3; i < args.size(); i++) {
                 if (i > 3) argsArray += ", ";
-                argsArray += "vb6_ComPackValue(" + args[i] + ")";
+                // B5: 第 4 个起是方法实参; 带型本工程类实例变量按**借用型**打包
+                // (packArgValue 的 B5 格), 其余仍是 ComPackValue 原路.
+                argsArray += (i < node.positional.size())
+                    ? packArgValue("vb6_ComPackValue", args[i], node.positional[i].get())
+                    : ("vb6_ComPackValue(" + args[i] + ")");
             }
             argsArray += "}";
             int32_t extraArgc = (int32_t)args.size() - 3;

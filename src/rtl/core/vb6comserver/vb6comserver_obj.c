@@ -755,11 +755,29 @@ void* vb6_ComObject_GetInstance(void* pdisp) {
 
 /* 账 #305 §B187 第五腿: 「这枚值是不是我们那族包装器」—— deref 之前先证明可读,
  * 论证见 vb6comserver.h 声明处。命中 ⇒ 交回身份判据真; 其余一律 0 (原样交回调用点)。 */
-int32_t vb6_ComObject_IsBoxed(void* v) {
+int32_t vb6_ComObject_IsVb6Wrapper(void* v) {
     if (!v) return 0;
     if (IsWindow((HWND)v)) return 0;
     if (IsBadReadPtr(v, sizeof(void*))) return 0;
     return ((vb6_ComObject*)v)->vtable == &g_ComObjectVtable;
+}
+
+/* 类名那一问 (BSTR / ANSI 两档) 的消费口径仍钉在这一枚名字上 (object_slot_boxing B7);
+ * 集合引用计数那一问走上面的低层闸, 两件事不再借同一个名字说话。 */
+int32_t vb6_ComObject_IsBoxed(void* v) {
+    return vb6_ComObject_IsVb6Wrapper(v);
+}
+
+/* ucTreeView: For Each 项目类要把集合/COM 交回来的 vb6_ComObject **包装器**还原成
+ * 实例指针 —— 生成码随后按 `vb6_cls_X*` 读字段 (包装器布局 x86 偏移 12 才是实例,
+ * 当类指针解引用实测 av read target=0x650060)。IsBoxed 有 IsWindow/可读闸 ⇒
+ * 外部 IDispatch / 裸 HWND 原样交回; 包装器尚未绑实例时也原样交回 (旧行为)。
+ * **不要**把它并进 vb6_ComUnpackObject: 接口视图/`As Object` 那一族要的是
+ * IDispatch (k174_vieweach_station_a 的 QI 判据)。 */
+void* vb6_ComObject_UnboxVb6Instance(void* v) {
+    if (!vb6_ComObject_IsVb6Wrapper(v)) return v;
+    void* inst = vb6_ComObject_GetInstance(v);
+    return inst ? inst : v;
 }
 
 /* 账 #305 §B189 第一档: 见 vb6comserver.h 声明处的论证。char*→BSTR 走 CP_ACP 那一条,
@@ -829,6 +847,35 @@ void* vb6_ComPackVB6InstanceRaw(const char* classVariable, void* instance) {
     pv->pdispVal = (IDispatch*)obj;  /* 引用已由 FromInstance 提供, 所有权转移给 VARIANT */
     return (void*)pv;
 }
+
+// B5: 带型工程类实例**变量**作为晚绑定 COM 实参 (宿主仍握有销毁权).
+// 与上面的 Raw 同一形状, 唯一差别是 FromBorrowedInstance: 它加一枚引用交给
+// VARIANT, 释放到 0 时只回收包装器、不销毁宿主实例. 用 Raw 的 FromInstance
+// 会把变量的实例所有权一起转移给 VARIANT, 对端释放后变量再用就是 use-after-free.
+void* vb6_ComPackVB6InstanceBorrowed(const char* classVariable, void* instance) {
+    const vb6_CoClassDesc* desc;
+    vb6_ComObject* obj;
+    VARIANT* pv;
+
+    if (!instance) return NULL;
+    desc = vb6_FindCoClassDesc(classVariable);
+    // 未进 coclass 表 (Private / 非 MultiUse|SingleUse) 的类没有 IDispatch
+    // 方法表, 与 Raw 同一口径: 返回 NULL (等效 VB6 传 Nothing), 不冒充对象.
+    if (!desc) return NULL;
+
+    pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    if (!pv) return NULL;
+    obj = vb6_ComObject_FromBorrowedInstance(desc, instance);
+    if (!obj) {
+        free(pv);
+        return NULL;
+    }
+    VariantInit(pv);
+    pv->vt = VT_DISPATCH;
+    pv->pdispVal = (IDispatch*)obj;  /* 引用已由 FromBorrowedInstance 提供, 转移给 VARIANT */
+    return (void*)pv;
+}
+
 
 /* 账 #305 新账 #407 / §B190 第一百七十一刀 = 「视图那一档怎么进 Variant」的唯一出口。
  * 为什么要按**指针**问身份: 视图 (vb6_iface_<I>) 是值结构体、静态类型是接口，实现类只有运行期

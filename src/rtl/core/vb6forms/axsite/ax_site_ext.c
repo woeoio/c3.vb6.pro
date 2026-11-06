@@ -266,8 +266,24 @@ static HRESULT STDMETHODCALLTYPE axSite_IPSW_GetWindowContext(IOleInPlaceSiteWin
     const RECT* rc = (s->rcCtrl.right > s->rcCtrl.left) ? &s->rcCtrl : &rb;
     if (lprcPosRect)  memcpy(lprcPosRect, rc, sizeof(RECT));
     if (lprcClipRect) memcpy(lprcClipRect, rc, sizeof(RECT));
-    if (lpFrameInfo) { lpFrameInfo->fMDIApp=FALSE; lpFrameInfo->hwndFrame=s->hwndForm;
+    HWND hcl = (HWND)GetPropW(s->hwndForm, L"VB6_MDIClient");
+    if (!hcl) hcl = FindWindowExW(s->hwndForm, NULL, L"MDIClient", NULL);
+    if (lpFrameInfo) { /* 账 #305 第三百五十一刀: fMDIApp 按**宿主是否真有 MDIClient** 答 —— Codejock
+     * 的 CommandBars/DockingPaneManager 靠它进 MDI 布局模式 (接管 MDI 客体,
+     * 随窗体 resize 回流窗格); 恒 FALSE 便退化为普通窗体, maximize 后窗格
+     * 不回流 (GUISample 实测)。
+     * 注: OLEINPLACEFRAMEINFO 没有 hwndMDIClient 字段 (见 ax_site.c 同函数注释)。 */
+    lpFrameInfo->cb = sizeof(OLEINPLACEFRAMEINFO);
+    lpFrameInfo->fMDIApp = (hcl != NULL);
+    lpFrameInfo->hwndFrame=s->hwndForm;
                        lpFrameInfo->haccel=0; lpFrameInfo->cAccelEntries=0; }
+    if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
+        wchar_t cls[128] = {0}; GetClassNameW(s->hwndForm, cls, 127);
+        fprintf(stderr, "[C3_OCX] IPSW.GetWindowContext ctrl='%ls' class='%ls' form=%p mdiclient=%p fMDIApp=%d\n",
+                s->ctrlName, cls, (void*)s->hwndForm, (void*)hcl,
+                lpFrameInfo ? (int)lpFrameInfo->fMDIApp : -1);
+        fflush(stderr);
+    }
     return S_OK;
 }
 static HRESULT STDMETHODCALLTYPE axSite_IPSW_Scroll(IOleInPlaceSiteWindowless* This, SIZE sz) { (void)This; (void)sz; return S_OK; }

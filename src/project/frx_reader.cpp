@@ -272,6 +272,56 @@ FrxTextData FrxReader::readDocString(size_t offset) {
     const size_t kMaxLen = 0x4000;   // 16KB 上限, 防御性
     size_t scanEnd = std::min(fileData_.size(), offset + kScanWindow);
 
+    // 账(图标乱码): 上面那套"逐候选打分取最优"只认 ASCII —— 设计期串绝大多数是 ASCII
+    // 所以够用, 但 Segoe UI Symbol 的 **PUA 字形串** (U+E16C/E105/E128/E114, checkbar
+    // 那几个图标) 整条 ascii=0: 正确对齐 (ds=offset+32) 与错位一格 (ds=offset+31) 打平,
+    // 平局保留**先到**者 ⇒ 选中错位那一格, 每对字节读成 0xXX00 (U+6C00/U+0500/U+2800),
+    // 系统字体里没有这些码点, 图标就画成豆腐块/垃圾字形。
+    // DocProperty 布局是固定的, 不必猜: [0]=cbSize [5..20]=GUID [24]=nBytes [32]=UTF-16
+    // 且 cbSize == 28 + nBytes (实测 Form1.frx: 0x2E/0x26/0x1E 三条全中)。
+    // 命中就直出, 不命中再退回扫描 (旧版本填充差异仍由扫描兜底)。
+    if (offset + 32 <= fileData_.size()) {
+        static const uint8_t kDocPropGuid[16] = {
+            0x74, 0xE8, 0xB1, 0xF9, 0x01, 0xD0, 0x11, 0xB3,
+            0xDE, 0x00, 0xA0, 0xC9, 0x0F, 0x27, 0x31, 0x11
+        };
+        const uint8_t* rec = fileData_.data() + offset;
+        bool guidOk = true;
+        for (int gi = 0; gi < 16; ++gi) {
+            if (rec[5 + gi] != kDocPropGuid[gi]) { guidOk = false; break; }
+        }
+        if (guidOk) {
+            uint32_t cbSize = readLE32(rec);
+            uint32_t nBytes = readLE32(rec + 24);
+            if (nBytes >= 2 && nBytes <= kMaxLen && (nBytes & 1) == 0
+                && cbSize == 28 + nBytes && offset + 32 + nBytes <= fileData_.size()) {
+                const uint8_t* s = rec + 32;
+                bool ok = true;
+                for (uint32_t i = 0; i < nBytes; i += 2) {
+                    uint32_t cp = (uint32_t)s[i] | ((uint32_t)s[i + 1] << 8);
+                    if (cp == 0x0009 || cp == 0x000A || cp == 0x000D) continue;
+                    if (cp < 0x0020) { ok = false; break; }
+                }
+                if (ok) {
+                    FrxTextData exact;
+                    int wlen = (int)(nBytes / 2);
+#ifdef _WIN32
+                    std::wstring wstr((const wchar_t*)s, wlen);
+                    int ulen = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), wlen, NULL, 0, NULL, NULL);
+                    if (ulen > 0) {
+                        std::string utf8(ulen, 0);
+                        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), wlen, &utf8[0], ulen, NULL, NULL);
+                        exact.text = utf8;
+                    }
+#else
+                    exact.text.assign((const char*)s, nBytes);
+#endif
+                    if (!exact.text.empty()) return exact;
+                }
+            }
+        }
+    }
+
     // 以"数据起点"为主循环: 长度 dword 位于数据起点前 (4+pad) 字节 (pad=0..8),
     // 兼容 VB6 不同版本的填充差异 (实测 pad=3)。
     //
@@ -348,6 +398,45 @@ FrxPropBagBlob FrxReader::readPropBagBlob(size_t offset) {
         out.bytes.assign(blob, blob + cbSize);
         return out;
     }
+    return out;
+}
+
+// ============================================================
+// OleObjectBlob (设计器 OCX 持久化数据)
+//   实测布局: [4B "LB" + WORD 版本][DWORD cbPayload][Left][Top][Width][Height]
+//             [cbPayload 字节负载]
+//   负载是控件自己的 IPersistStream 数据 (TeeChart/Delphi = "TPF0" 流)。
+//   只交负载; 包装头里的几何/.frm 已单独给出, 不重复。
+// ============================================================
+FrxOleBlob FrxReader::readOleBlob(size_t offset) {
+    FrxOleBlob out;
+    if (offset + 24 > fileData_.size()) return out;
+    const uint8_t* base = fileData_.data() + offset;
+    if (!(base[0] == 'L' && base[1] == 'B')) return out;
+    uint32_t cbPayload = readLE32(base + 4);
+    if (cbPayload == 0 || offset + 24 + (size_t)cbPayload > fileData_.size()) return out;
+    out.found = true;
+    out.bytes.assign(base + 24, base + 24 + cbPayload);
+    return out;
+}
+
+// ============================================================
+// DocProperty 字节块 (§ FrxBlobBytes)
+//   [DWORD cbSize][1B 00][GUID 16B][WORD 00][WORD 01][DWORD nBytes][4B 0][payload]
+//   payload 起点 = offset+32, cbSize == 28 + nBytes。
+//   (字符串属性的 payload 是 UTF-16 文本, 这一支只给"按字节交给属性包"的用途)
+// ============================================================
+FrxBlobBytes FrxReader::readDocBlobBytes(size_t offset) {
+    FrxBlobBytes out;
+    if (offset + 32 > fileData_.size()) return out;
+    uint32_t cbSize = readLE32(fileData_.data() + offset);
+    if (cbSize < 28 + 2) return out;
+    uint32_t nBytes = readLE32(fileData_.data() + offset + 24);
+    if (nBytes == 0 || (size_t)cbSize != 28 + (size_t)nBytes) return out;
+    if (offset + 32 + (size_t)nBytes > fileData_.size()) return out;
+    out.found = true;
+    out.bytes.assign(fileData_.data() + offset + 32,
+                     fileData_.data() + offset + 32 + nBytes);
     return out;
 }
 

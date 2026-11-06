@@ -56,6 +56,11 @@ void* vb6_ComPackDouble(double val) {
 
 // 将void*(IDispatch*)封装为VARIANT (用于对象参数)
 void* vb6_ComPackObject(void* obj) {
+    if (obj && (uintptr_t)obj < 0x10000 && GetEnvironmentVariableA("C3_CRASH_TRACE", NULL, 0) > 0) {
+        HMODULE hb = GetModuleHandleA(NULL);
+        fprintf(stderr, "[C3_PACK] suspicious obj=%p rva=0x%lx\n", obj,
+                (unsigned long)((char*)_ReturnAddress() - (char*)hb)); fflush(stderr);
+    }
     VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
     VariantInit(pv);
     pv->vt = VT_DISPATCH;
@@ -71,8 +76,19 @@ void* vb6_ComPackObject(void* obj) {
         if (vb6_Host_IsHostObject(obj)) {
             pv->pdispVal = (IDispatch*)vb6_UC_WrapHostObject(obj);
             pv->vt = VT_DISPATCH;
-        } else {
+        } else if (vb6_ComIsDispatchable(obj)) {
             ((IDispatch*)obj)->lpVtbl->AddRef((IDispatch*)obj);
+        } else {
+            /* 账 #305 第三百四十一刀: 非可分派的垃圾 (BSTR/UDT/野指针) 被当对象
+             * 打包 —— 原样 AddRef 会把字符串头当 vtable 调槽 => AV (GUISample
+             * AttachPane 链实测 av read 0x2e0032)。不崩优先: 原样装箱 (调用点
+             * 反正错了, 空引用比野调用好查), 响亮报出来。 */
+            if (GetEnvironmentVariableA("C3_CRASH_TRACE", NULL, 0) > 0) {
+                HMODULE hb341 = GetModuleHandleA(NULL);
+                fprintf(stderr, "[C3_PACK] not-dispatchable obj=%p rva=0x%lx\n", obj,
+                        (unsigned long)((char*)_ReturnAddress() - (char*)hb341));
+                fflush(stderr);
+            }
         }
     }
     return (void*)pv;
@@ -237,6 +253,11 @@ void* vb6_ComUnpackObject(void* variant) {
         // 等伪对象按结构体字段直接访问 (vb6_ComIface_Font*), 拿到包装器会
         // 全部失效 (Charts2020 图表标题/百分比文字缺失的根因)
         extern void* vb6_UC_UnwrapHost(void* obj);
+        /* 这里**只**做宿主包装器解包: 工程类包装器 (vb6_ComObject) 的还原是
+         * 调用点的事 —— 接口视图/`As Object` 那一族必须拿到 IDispatch 才能 QI,
+         * 只有「按 vb6_cls_X* 读字段」的调用点才要实例 (见 cgen_control.cpp 的
+         * For Each 项目类分支 + vb6_ComObject_UnboxVb6Instance)。
+         * 全局还原会打断 k174_vieweach_station_a (sum 303→0)。 */
         return vb6_UC_UnwrapHost((void*)pv->pdispVal);
     }
     if (pv->vt == VT_UNKNOWN) return (void*)pv->punkVal;

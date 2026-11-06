@@ -1,0 +1,31 @@
+<html>
+<body>
+<pre>
+<h1>Build Log</h1>
+<h3>
+--------------------Configuration: VisualStudio2015 - Win32 Release--------------------
+</h3>
+<h3>Command Lines</h3>
+Creating command line "link.exe /nologo /dll /incremental:no /pdb:"Release/VisualStudio2015.pdb" /machine:I386 /nodefaultlib /out:"../VisualStudio2015.dll" /implib:"Release/VisualStudio2015.lib" /opt:nowin98 /noentry  .\Release\VisualStudio2015.res "
+Creating temporary file "C:\Users\ADMINI~1\AppData\Local\Temp\2\RSPA028.bat" with contents
+[
+@echo off
+if exist "\SVN\Branch\ToolkitPro\Source\Styles\VisualStudio2015.dll" if exist "../../../Workspace/*" copy "\SVN\Branch\ToolkitPro\Source\Styles\VisualStudio2015.dll" "../../../Bin/Styles"
+if exist "\SVN\Branch\ToolkitPro\Source\Styles\VisualStudio2015.dll" if exist "../../../Workspace/*" copy "\SVN\Branch\ToolkitPro\Source\Styles\VisualStudio2015.dll" "../../../Samples/ActiveX/Styles"
+if not exist "../../../Workspace/*" if exist "../../../Bin/Styles" rmdir /q "../../../Bin/Styles">nul
+if not exist "../../../Workspace/*" if exist "../../../Samples/ActiveX/Styles" rmdir /q "../../../Samples/ActiveX/Styles">nul && rmdir /q "../../../Samples/ActiveX">nul
+]
+Creating command line "C:\Users\ADMINI~1\AppData\Local\Temp\2\RSPA028.bat"
+Linking...
+<h3>Output Window</h3>
+Performing Custom Build Step on \SVN\Branch\ToolkitPro\Source\Styles\VisualStudio2015.dll
+        1 file(s) copied.
+        1 file(s) copied.
+
+
+
+<h3>Results</h3>
+VisualStudio2015.dll - 0 error(s), 0 warning(s)
+</pre>
+</body>
+</html>

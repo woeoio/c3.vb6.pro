@@ -972,3 +972,108 @@ int32_t vb6_LBoundND(vb6_SafeArrayND* arr, int32_t dimension) {
     return arr->bounds[dimension - 1].lBound;
 }
 
+// ============================================================
+// P3 缺口② (§D 已修复条): `For Each x In <整只 VARIANT 里是 SafeArray>`
+//
+// VB6 实测 (`.build/vb6base/READINGS.md` P2 表):
+//   · Array(1,2,3)        → 3 枚, 元素 VarType=2 (Integer)
+//   · Split("a,b,c")      → 元素 VarType=8 (String)
+//   · Array() 空数组      → 0 枚, 不报错
+//   · 2D Integer 数组     → 线性序 = **第 0 维变化最快** (11,21,12,22,13,23)
+// 而 C3 的 ND 描述符 offset 公式 `(i0-lb0)+(i1-lb1)*c0+…` 正好就是"第 0 维最快",
+// 所以**按 data 从前往后线性走**即 VB6 顺序, 不必再算下标。
+// 元素按数组自身的 elemType 交回一枚 VARIANT (VARIANT 元素交里面的那只)。
+// ============================================================
+typedef struct vb6_ArrayEnumState {
+    void*   tag;        /* 首槽 = &g_vb6_arrayEnumTag (与 Forms 枚举器同一套判别口径) */
+    void*   data;       /* 描述符自己的数据区, 不归本状态所有 */
+    int32_t index;      /* 0 基线性游标 */
+    int32_t count;      /* 1D: count; ND: totalElements */
+    int32_t elemSize;
+    int32_t elemType;   /* vb6_safearray_elemtype */
+} vb6_ArrayEnumState;
+
+static char g_vb6_arrayEnumTag = 0;
+
+static void vb6_SaElemToVariant(int32_t et, const void* p, VARIANT* out) {
+    VariantInit(out);
+    switch ((vb6_safearray_elemtype)et) {
+        case vb6_sa_variant: {
+            /* 必须走 RTL 自己的 vb6_VariantCopy, **不能**调 OLEAUT32 的 VariantCopy:
+             * 元素里的对象可能是 C3 的伪 IDispatch (工程内 Collection / 类实例),
+             * OLEAUT32 会在它的 vtable 上直接 AddRef ⇒ 0xC0000005 (P4 F5 实测
+             * faultAddr=C01C01C4 @ OLEAUT32+0x1CF77)。vb6_VariantCopy 用
+             * vb6_ComAddRefDispatch 先判可派发再取引用, 与槽位口径一致。 */
+            const vb6_VARIANT* src = (const vb6_VARIANT*)p;
+            vb6_VariantCopy((vb6_VARIANT*)out, src);
+            break;
+        }
+        case vb6_sa_bstr:
+            out->vt = VT_BSTR;
+            out->bstrVal = SysAllocString(*(BSTR*)p);
+            break;
+        case vb6_sa_bool:
+            out->vt = VT_BOOL;
+            out->boolVal = (*(int16_t*)p) ? VARIANT_TRUE : VARIANT_FALSE;
+            break;
+        case vb6_sa_byte:  out->vt = VT_UI1; out->bVal = *(uint8_t*)p; break;
+        case vb6_sa_int:   out->vt = VT_I2;  out->iVal = *(int16_t*)p; break;
+        case vb6_sa_long:  out->vt = VT_I4;  out->lVal = *(int32_t*)p; break;
+        case vb6_sa_single:out->vt = VT_R4;  out->fltVal = *(float*)p; break;
+        case vb6_sa_double:out->vt = VT_R8;  out->dblVal = *(double*)p; break;
+        case vb6_sa_currency: out->vt = VT_CY; out->cyVal.int64 = *(int64_t*)p; break;
+        case vb6_sa_ptr:
+            out->vt = VT_DISPATCH;
+            out->pdispVal = *(IDispatch**)p;
+            vb6_ComAddRefDispatch(out->pdispVal);   /* 调用方按 VARIANT 协议 Clear, 引用必须自己持一份 */
+            break;
+        default: break;   /* empty / udt: 交 VT_EMPTY, 不猜 */
+    }
+}
+
+void* vb6_ForEach_InitVariant(void* vp) {
+    extern void* vb6_ForEach_Init(void* disp);
+    const vb6_VARIANT* v = (const vb6_VARIANT*)vp;
+    if (!v) return NULL;
+    if ((v->vt & vb6_vtArray) && v->parray) {
+        const void* a = (const void*)v->parray;
+        vb6_ArrayEnumState* s = (vb6_ArrayEnumState*)calloc(1, sizeof(vb6_ArrayEnumState));
+        if (!s) return NULL;
+        s->tag = (void*)&g_vb6_arrayEnumTag;
+        if (vb6_SaIs1D(a)) {
+            const vb6_SafeArray1D* a1 = (const vb6_SafeArray1D*)a;
+            s->data = a1->data;
+            s->count = a1->count;
+            s->elemSize = a1->elemSize;
+            s->elemType = (int32_t)a1->elemType;
+        } else {
+            const vb6_SafeArrayND* an = (const vb6_SafeArrayND*)a;
+            s->data = an->data;
+            s->count = an->totalElements;
+            s->elemSize = an->elemSize;
+            s->elemType = (int32_t)an->elemType;
+        }
+        return s;
+    }
+    /* 非阵列档: 与改前 `vb6_ForEach_Init(vb6_VariantToObjectVal(v))` 逐字同义 */
+    return vb6_ForEach_Init(vb6_VariantToObjectVal(*v));
+}
+
+int vb6_ForEach_IsArrayEnum(void* enumPtr) {
+    return enumPtr != NULL && *((void**)enumPtr) == (void*)&g_vb6_arrayEnumTag;
+}
+
+int32_t vb6_ForEach_NextArray(void* enumPtr, VARIANT* outVar) {
+    vb6_ArrayEnumState* s = (vb6_ArrayEnumState*)enumPtr;
+    VariantInit(outVar);
+    if (!s || !s->data || s->index >= s->count) return 0;
+    const char* p = (const char*)s->data + (ptrdiff_t)s->index * (ptrdiff_t)s->elemSize;
+    s->index++;
+    vb6_SaElemToVariant(s->elemType, p, outVar);
+    return 1;
+}
+
+void vb6_ForEach_ReleaseArray(void* enumPtr) {
+    free(enumPtr);
+}
+

@@ -231,7 +231,7 @@
                                     // 值已是 Variant 表达式 (后期绑定读 / Variant 变量) 时
                                     // 无需再装箱 (boxToVariant 的 _Generic 恒等档虽安全,
                                     // 但少一层少一处形状漂移)。
-                                    if (!cExprIsVariant(valExpr)) arrCarrier091n = true;
+                                    if (!isVariantSlot(valExpr, nullptr)) arrCarrier091n = true;  // P1.3: ast 不可得 (valExpr 距 emitExpr 超 5 行)
                                 }
                                 if (arrCarrier091n) {
                                     valExpr = packLetValueArg(lastP091n, node.value.get(), valExpr);
@@ -245,7 +245,7 @@
                                 // → C2440. VB6 这里把 Date/数值隐式转字符串 (CStr 规则).
                                 // 对数值/日期类 RHS 同样 wrapToBSTR (wrapToBSTR 按类型
                                 // 用 vb6_CStrDate/CStrDbl/CStrLong 等).
-                                if (cExprIsVariant(valExpr)) {
+                                if (isVariantSlot(valExpr, nullptr)) {  // P1.3: ast 不可得 (valExpr 距 emitExpr 超 5 行)
                                     valExpr = wrapToBSTR(valExpr, *node.value);
                                 } else if (node.value) {
                                     const Vb6Type vt160w = inferExprType(*node.value);
@@ -425,6 +425,41 @@
                 }
             }
         }
+        // 账 #305 第三百二十九刀: 裸窗体内建属性写 (GUISample frmDocument Form_Load
+        // `Caption = "Document " & lDocumentCount`, 隐式 Me.Caption)。此前裸标识符目标
+        // 只认 PropertyLet/控件默认属性/WithEvents 三关 (全不中) → 穿透到通用路径,
+        // 左值被当右值发射 (Fix 056 读支把 Caption 发成 vb6_GetControlText(hwnd)) →
+        // `vb6_GetControlText(hwnd) = v` —— getter 函数调用做左值, C2106。
+        // 镜像 stmt_special M22 的写法: getControlPropWriteFn(Form, 名) 非空 →
+        // 发 writeFn(formHwnd, value)。上方各支先到先得 (局部/参数/PropertyLet/控件
+        // 都已拦截), 能走到这里说明目标名在 VB6 语义里只能是窗体自身属性
+        // (Form 写表只收 Caption/Visible/Enabled/坐标族); 函数返回值赋值
+        // (过程名 == 目标名) 不在此表内, 天然不受影响。
+        if (isFormModule_ && !knownFormName_.empty()
+            && !knownLocalVars_.count(tgtLower)) {
+            bool bareParamShadow329 = false;
+            if (currentProc_) {
+                for (const auto& p : currentProc_->params) {
+                    std::string pLower329 = p.name;
+                    std::transform(pLower329.begin(), pLower329.end(), pLower329.begin(), ::tolower);
+                    if (pLower329 == tgtLower) { bareParamShadow329 = true; break; }
+                }
+            }
+            if (!bareParamShadow329) {
+                std::string bareWriteFn = getControlPropWriteFn(FrmControlType::Form, tgtId.name);
+                if (!bareWriteFn.empty()) {
+                    std::string bareFormHwnd = "vb6_hwnd_" + moduleName_;
+                    auto bareOrigIt = knownFormControlOriginalNames_.find(knownFormName_);
+                    if (bareOrigIt != knownFormControlOriginalNames_.end())
+                        bareFormHwnd = "vb6_hwnd_" + cIdent(bareOrigIt->second);
+                    emitExpr(*node.value);
+                    std::string bareVal = std::move(lastExpr_);
+                    bareVal = controlPropValueExpr(bareWriteFn, bareVal, *node.value);
+                    c_.emitLine(bareWriteFn + "(" + bareFormHwnd + ", " + bareVal + ");  /* bare form prop: " + tgtId.name + " */");
+                    return;
+                }
+            }
+        }
         // P20-31: WithEvents控件变量默认属性写入
         if (node.target->kind == ASTNodeKind::IdentifierExpr) {
             auto& tgtId2 = static_cast<IdentifierExpr&>(*node.target);
@@ -503,7 +538,7 @@
                 && hostPseudoHasScalarRow(info.hostPseudoObj, wmExpr.memberName)) {
                 emitExpr(*node.value);
                 std::string valHp = std::move(lastExpr_);
-                if (cExprIsVariant(valHp)) valHp = "vb6_VariantToLong(" + valHp + ")";
+                if (isVariantSlot(valHp, node.value.get())) valHp = "vb6_VariantToLong(" + valHp + ")";
                 const std::string tgtHp = hostPseudoRtlSymbol(info.hostPseudoObj, wmExpr.memberName);
                 if (tgtHp == "vb6_UserControl_AutoRedraw") {
                     c_.emitLine("vb6_UC_SetAutoRedraw((void*)(intptr_t)" + valHp +

@@ -85,13 +85,19 @@ if ($hdrGroupId -ge 0 -and $rtlGroupId -ge 0 -and $hdrGroupId -ne $rtlGroupId) {
 }
 if ($hdrGroupId -ne 1) { $viol += ("R2 group id = " + $hdrGroupId + " (want 1: VB6 默认窗体图标)") }
 
-# --- 3) 链接后注入: 4 条资源 + 两处闸门, 只有一处调用 ---
+# --- 3) 链接后注入: 两处闸门 + 写资源只有两处站点 + 失败必回滚 ---
 if ($drv) {
-    $nDef = ([regex]::Matches($drv, "static bool embedDefaultFormIcon\(const std::string& exePath, bool verbose\)")).Count
-    if ($nDef -ne 1) { $viol += ("R3 driver_link.cpp: embedDefaultFormIcon 定义 = " + $nDef + " (want 1)") }
-    $nUse = ([regex]::Matches($drv, "embedDefaultFormIcon\(msvcOpts\.outputFile, options\.verbose\);")).Count
-    if ($nUse -ne 1) { $viol += ("R3 driver_link.cpp: embedDefaultFormIcon 调用 = " + $nUse + " (want 1)") }
-    # 两条 UpdateResourceW: 循环体里 RT_ICON(3) 那一发 + RT_GROUP_ICON(14) 那一发
+    # 第328刀把「注哪一份字节」与「怎么写资源」分开了：一条注入腿（两发 UpdateResourceW）+
+    # 两条来路（默认表 / 工程 .frx）。定义与调用各只许一处，否则第二位主人又长出来。
+    $nDef = ([regex]::Matches($drv, "static bool embedFormIcon\(const std::string& exePath, const std::string& iconFrmUtf8,")).Count
+    if ($nDef -ne 1) { $viol += ("R3 driver_link.cpp: embedFormIcon 定义 = " + $nDef + " (want 1)") }
+    $nUse = ([regex]::Matches($drv, "embedFormIcon\(msvcOpts\.outputFile, iconFrmUtf8, options\.verbose\);")).Count
+    if ($nUse -ne 1) { $viol += ("R3 driver_link.cpp: embedFormIcon 调用 = " + $nUse + " (want 1)") }
+    foreach ($pair in @("static void defaultFormIconParts", "static bool embedFormIconImages", "static bool embedFormIconGroup")) {
+        $n = ([regex]::Matches($drv, [regex]::Escape($pair))).Count
+        if ($n -ne 1) { $viol += ("R3 driver_link.cpp: " + $pair + " = " + $n + " (want 1)") }
+    }
+    # 两条 UpdateResourceW: RT_ICON(3) 那一发 + RT_GROUP_ICON(14) 那一发
     # (Begin/End 是同族名字, 这里按词界排除, 免得把开合两句算进去)
     $nUpd = ([regex]::Matches($drv, "(?<!Begin)(?<!End)UpdateResourceW\(")).Count
     if ($nUpd -ne 2) { $viol += ("R3 driver_link.cpp: UpdateResourceW = " + $nUpd + " (want 2: RT_ICON + RT_GROUP_ICON)") }
@@ -115,6 +121,47 @@ if ($inv) {
 }
 if ($invH -and -not [regex]::IsMatch($invH, "bool\s+hasIconGroup")) {
     $viol += "R4 res_inventory.hpp: 缺 hasIconGroup 字段"
+}
+
+# --- 5) 第328刀: 「工程自己带图标」那一问只许有一位主人 ---
+$pfhRel = "src/driver/project_form_icon.hpp"
+$pfcRel = "src/driver/project_form_icon.cpp"
+$cmRel = "CMakeLists.txt"
+$pfh = Read-Rel $pfhRel
+$pfc = Read-Rel $pfcRel
+$cm = Read-Rel $cmRel
+foreach ($pair in @(@($pfhRel,$pfh), @($pfcRel,$pfc), @($cmRel,$cm))) {
+    if ($null -eq $pair[1]) { $viol += ("MISSING " + $pair[0]) }
+}
+if ($pfc) {
+    foreach ($sig in @("bool loadFormIconFromFrm(", "bool buildFormIconResources(", "bool isControlBeginLine(")) {
+        $n = ([regex]::Matches($pfc, [regex]::Escape($sig))).Count
+        if ($n -ne 1) { $viol += ("R5 project_form_icon.cpp: " + $sig + " = " + $n + " (want 1)") }
+    }
+    # 帧号起始值只许问 default_form_icon.hpp 那一位权威（在 .cpp 里出现一次 = 没有第二处手抄 30001）
+    $nBase = ([regex]::Matches($pfc, "kFormIconImageIdBase")).Count
+    if ($nBase -ne 1) { $viol += ("R5 project_form_icon.cpp: kFormIconImageIdBase = " + $nBase + " (want 1)") }
+    # 停块规则必须真被扫描循环调用（前缀匹配会把 `BeginProperty` 当控件块 ⇒ 窗体自己的 Icon 永远读不到）
+    $nStop = ([regex]::Matches($pfc, "isControlBeginLine\(line, s\)")).Count
+    if ($nStop -ne 1) { $viol += ("R5 project_form_icon.cpp: 控件块停块那一站 = " + $nStop + " (want 1)") }
+}
+if ($hdr) {
+    $nId = ([regex]::Matches($hdr, "kFormIconImageIdBase\s*=\s*30001;")).Count
+    if ($nId -ne 1) { $viol += "R5 default_form_icon.hpp: 帧号起始值那一位权威不见了" }
+}
+if ($drv) {
+    $nLoad = ([regex]::Matches($drv, "loadFormIconFromFrm\(iconFrmUtf8, ico, why\)")).Count
+    if ($nLoad -ne 1) { $viol += ("R5 driver_link.cpp: 取图标那一站 = " + $nLoad + " (want 1)") }
+    $nBuild = ([regex]::Matches($drv, "buildFormIconResources\(ico, images, ids, group\)")).Count
+    if ($nBuild -ne 1) { $viol += ("R5 driver_link.cpp: 拍资源那一站 = " + $nBuild + " (want 1)") }
+    $nRead = ([regex]::Matches($drv, "!iconFormName_\.empty\(\) \? iconFormName_ : startupObject_")).Count
+    if ($nRead -ne 1) { $viol += ("R5 driver_link.cpp: IconForm 那一问的读者 = " + $nRead + " (want 1)") }
+}
+$nSet = ([regex]::Matches((Read-Rel "src/driver/driver_compile.cpp"), "iconFormName_ = project\.iconForm;")).Count
+if ($nSet -ne 1) { $viol += ("R5 driver_compile.cpp: iconFormName_ 的产地 = " + $nSet + " (want 1: 别在第二处再读 .vbp)") }
+if ($cm) {
+    $nSrc = ([regex]::Matches($cm, "src/driver/project_form_icon\.cpp")).Count
+    if ($nSrc -ne 1) { $viol += ("R5 CMakeLists.txt: project_form_icon.cpp 入册 = " + $nSrc + " (want 1: 不入册就静默不参与构建)") }
 }
 
 if ($viol.Count -gt 0) {

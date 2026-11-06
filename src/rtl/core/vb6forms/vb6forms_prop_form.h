@@ -14,6 +14,12 @@ int32_t vb6_GetKeyPreview(void* hwnd);
 void vb6_SetKeyPreview(void* hwnd, int32_t val);
 int32_t vb6_GetWindowState(void* hwnd);
 void vb6_SetWindowState(void* hwnd, int32_t val);
+/* 账 (MDI 布局刀): 设计期 WindowState (0/1/2) 的登记口 —— 创建时记下, 由
+ * vb6_ShowForm 在窗体上屏之后落地。MDI 子窗的 `c.Show` 走晚绑定, 经宿主模型
+ * 直接调 vb6_ShowForm, **绕过** cgen 的 `vb6_form_show_X` (夹具 mdimax 实测:
+ * 生成代码里那句 vb6_SetWindowState 根本没执行)。 */
+void vb6_SetDesignWindowState(void* hwnd, int32_t val);
+void vb6_ApplyDesignWindowState(void* hwnd);
 int32_t vb6_GetScaleWidth(void* hwnd);
 int32_t vb6_GetScaleHeight(void* hwnd);
 // 账 #305 第四/第五格: 与 ScaleWidth/ScaleHeight 同一套自定义坐标系的另外两个数。

@@ -1,4 +1,12 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-05 (账 <transparency>): vb6forms_picture_prop.c —— vb6_SetControlPictureFromCom
+//   不再给**窗体**窗口 (类名 VB6_Form_*) 装 Image 控件子类, 也不做 AutoRedraw 镜像。
+//   实测 ucSegmentedControl 的 uc11 Transparent: `Me.Picture = Me.Image` 之后
+//   SetPicture done 就再无 [FPP] WM_PAINT, 背景恒白 —— 子类吞掉生成 WM_PAINT 的
+//   AutoRedraw 上屏分支, 又按 RGBA 口径把 GDI 位图 (alpha 全 0) 画成透明, 镜像再把
+//   位图画回自己。窗体留在生成绘制链上后 [FPP] WM_PAINT 恢复、ARDC 整幅上屏。
+//   This touch exists only so rc.exe re-embeds src/rtl/** into C3.exe --
+//   check_rtl_embedded R1 catches the stale embed.
 // 2026-10-31 (ledger #305, knife 317): vb6com_invoke.c gained the late-binding
 //   receiver view switch -- a receiver that is a *different interface view* of a
 //   real COM object (measured: IPicture obtained from OleCreatePictureIndirect with
@@ -452,6 +460,9 @@
 // Application icon (multi-size: 16/24/32/48/256, 32-bit ARGB)
 1 ICON "c3.ico"
 
+// 2026-11-04 免注册 COM 运行期批次: 新增 vb6com_manifest.c（取证/诊断 + ActCtx 原语）
+225 RCDATA "../rtl/core/vb6com/vb6com_manifest.c"
+
 // Headers (needed for #include in generated code) + sources — arch-neutral
 100 RCDATA "../rtl/core/vb6rtl/vb6rtl.h"
 101 RCDATA "../rtl/core/vb6rtl/vb6rtl.c"
@@ -687,6 +698,11 @@
  *   vb6_VariantBorrowIntoSlot / vb6_VariantPackCopyInto (新在 vb6rtl_com.c)，另把
  *   「DECIMAL 住在 VARIANT 的哪一字节」收成 vb6_DecimalPtrFromVariant (vb6rtl.c)。
  *   touch 本文件 = 让 125 份 RCDATA 重嵌一次 (§B99② 那道哨兵盯的就是这一格)。 */
+
+/* 账 #305 第三百五十一刀 (M3 首批 OCX 宿主属性): uc_hostmodel_getprop.inc /
+ *   uc_hostmodel_setprop.inc / uc_hostmodel_call.inc 三份 RTL 片段都动了
+ *   (Tag / ShowLines / ShowBorder / Appearance / RightMargin / ZOrder)。
+ *   touch 本文件 = 让 rc.exe 重跑, 把新的这三份 RCDATA 嵌进 C3.exe。 */
 
 /* 账 #305 §B150 (2026-10-11 第四十刀): 晚绑定槽的多维元素读写。
  *   vb6rtl_com.c 把「这枚数组槽的第 off 格是什么档」那张表从 vb6_VariantArrayGet 的体里提出来
@@ -1034,10 +1050,21 @@
    发码侧那发 `((cls*)vb6_UC_InstanceOf(hwnd))->events = …` 写 NULL+0x88 (0xC000041D)。
    vb6forms_uc_internal.h。touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
 
+/* 账 <438>/<font-color>/<transparency>: 窗体 PaintPicture/AutoRedraw/Picture/Image 四个宿主成员
+   落地 (vb6forms_picture_prop.c + uc_hostmodel_call/setprop/getprop.inc)，UserControl.ForeColor
+   改为写进当前 paint DC 的文本色 (uc_host_window.c: vb6_UC_SetForeColor)，透明 UC 的离屏 DIB
+   先铺父窗体 AutoRedraw 表面。touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
 /* 账 #305 第320刀 (账 #592): App.Title 的运行期真值 = .vbp 的 Title（空则 Name）——
    vb6rtl_system.c 新增 vb6_SetAppTitle / vb6_App_Title / vb6_AppTitleBorrow 三个出口：
    生成的入口点在 vb6_Init 之后把工程标题播种进去；`App.Title = v`（VB6 允许运行期改，
    语料 17 行写、1181 处读，落在 13 份文件里）落同一枚 setter；读取交一份新副本（与 vb6_App_EXEName 同一
    所有权约定）。vb6rtl_conv.c 的 vb6_MsgBox 在 title 省略时借用那一格 —— 改前交空串，
    所以 MsgBox 的默认题头一直是空的（ComCtlsDemo Command3 的现场）。
+   touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */
+
+/* 账 <VB 系统色>: RTL 颜色翻译收成唯一出口 vb6_ColorToColorRef (vb6forms_ctrl.c) ——
+   VB6 的 `&H80000000& Or n` (n=0..30) 一律按 GetSysColor(n) 解析, 非系统色按 COLORREF
+   低 24 位。此前绘制层 4 份 inline 判据各自为政、还有裸 (COLORREF) 强转把系统色负值
+   当 COLORREF 造刷 (VBFlexGridDemo Picture2 `BackColor=&H8000000D&` 画成 RGB(13,0,0))。
    touch 本文件 = 让 RCDATA 重包一次 (§B99②)。 */

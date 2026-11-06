@@ -455,8 +455,8 @@
     c_.emitLine("case WM_CLOSE: {");
     c_.indent();
     {
-        std::string formUnloadFn = cProcName("Form_Unload", AccessLevel::Private);
-        auto* formUnloadSym2 = symTab_.lookup("Form_Unload");
+        std::string formUnloadFn = cProcName(std::string(formEvtBase334) + "_Unload", AccessLevel::Private);
+        auto* formUnloadSym2 = symTab_.lookup(std::string(formEvtBase334) + "_Unload");
         if (formUnloadSym2) {
             // 生成trampoline: 桥接 int(*)(void) 回调和 void(int16_t*) VB6签名
             std::string trampoline = formUnloadFn + "_trampoline";
@@ -467,8 +467,8 @@
             c_.emitLine("SetPropW(hwnd, L\"VB6_Unloading\", (HANDLE)1);");
             // P18-B: Form_QueryUnload - check if close is allowed before Unload
             {
-                std::string queryUnloadFn = cProcName("Form_QueryUnload", AccessLevel::Private);
-                auto* quSym = symTab_.lookup("Form_QueryUnload");
+                std::string queryUnloadFn = cProcName(std::string(formEvtBase334) + "_QueryUnload", AccessLevel::Private);
+                auto* quSym = symTab_.lookup(std::string(formEvtBase334) + "_QueryUnload");
                 if (quSym) {
                     c_.emitLine("{ int16_t vb6_cancel = 0; int16_t vb6_unloadmode = 0; /* 0=vbFormControlMenu */");
                     c_.emitLine("extern void " + queryUnloadFn + "(int16_t*, int16_t*); " + queryUnloadFn + "(&vb6_cancel, &vb6_unloadmode);");
@@ -587,13 +587,35 @@
     c_.emitLine("case WM_HSCROLL:");
     c_.emitLine("case WM_VSCROLL: {");
     c_.indent();
-    bool hasScrollBar = false;
-    for (const auto& ctrl : frmDesc.formControl.children) {
-        if (ctrl.controlType == FrmControlType::HScrollBar || ctrl.controlType == FrmControlType::VScrollBar) { hasScrollBar = true; break; }
-        // C29-SL-c: Slider 走的就是这一条通道（实测：横杆发 WM_HSCROLL、竖杆发 WM_VSCROLL，
-        // lParam = 控件句柄）⇒ 同一扇门，认来源的写法也照抄 ScrollBar 那一套。
-        if (ctrl.controlType == FrmControlType::Slider) { hasScrollBar = true; break; }
+    // 账 (TeeChart Chart display 夹具): HScroll/VScroll/Slider 可以住在 Frame/PictureBox
+    // 里（.frm 的 Begin 嵌套）。原来只扫 frmDesc.formControl.children 的顶层 ⇒ 本例
+    // HScroll4 在 Frame8 里，生成出来的 case 是**空的**，程序化 Value 的 Change 一条
+    // 也派发不出去（实测：Panel.MarginRight 丢失 → 图表整体右移 12px）。这里与 WM_COMMAND
+    // 那趟同样递归（含 UC 容器的子控件，但 UC 子控件的句柄/事件在 .ctl 模块，跳过）。
+    std::vector<const FrmControl*> scrollCtrlsM3;
+    {
+        auto collectM3 = [&](auto&& self, const FrmControl& container) -> void {
+            for (const auto& child : container.children) {
+                if (child.controlType == FrmControlType::Menu) continue;
+                if (findUserControlSpec(child.controlTypeName)) continue;
+                if (child.controlType == FrmControlType::HScrollBar
+                    || child.controlType == FrmControlType::VScrollBar
+                    || child.controlType == FrmControlType::Slider)
+                    scrollCtrlsM3.push_back(&child);
+                if (!child.children.empty() && controlIsContainerType(child))
+                    self(self, child);
+            }
+        };
+        for (const auto& ctrl : frmDesc.formControl.children) {
+            if (ctrl.controlType == FrmControlType::HScrollBar
+                || ctrl.controlType == FrmControlType::VScrollBar
+                || ctrl.controlType == FrmControlType::Slider)
+                scrollCtrlsM3.push_back(&ctrl);
+            if (!ctrl.children.empty() && controlIsContainerType(ctrl))
+                collectM3(collectM3, ctrl);
+        }
     }
+    bool hasScrollBar = !scrollCtrlsM3.empty();
     if (hasScrollBar) {
     c_.emitLine("{ void* scrollHwnd = (void*)lParam; int scrollCode = LOWORD(wParam);");
     // C29-SL-k: VB6 的 Slider 在拖滑块时把那颗气泡摆出来（ISlider.Text = 0x0010 就是气泡里那句
@@ -602,22 +624,37 @@
     // 这一条**只发一次、不按控件展开**：RTL 里按窗口类名把 ScrollBar 筛掉。值取 wParam 高字
     // （实测 4/5 两档带新值、8 那档为 0 ⇒ 传 0 时 RTL 自己现问 TBM_GETPOS）。
     bool hasSlider = false;
-    for (const auto& ctrl : frmDesc.formControl.children) {
-        if (ctrl.controlType == FrmControlType::Slider) { hasSlider = true; break; }
+    for (const FrmControl* sl : scrollCtrlsM3) {
+        if (sl->controlType == FrmControlType::Slider) { hasSlider = true; break; }
     }
     if (hasSlider)
         c_.emitLine("vb6_Slider_BubbleNotify(scrollHwnd, scrollCode, HIWORD(wParam));");
-    for (const auto& ctrl : frmDesc.formControl.children) {
+    for (const FrmControl* ctrlPtr : scrollCtrlsM3) {
+        const FrmControl& ctrl = *ctrlPtr;
         if (ctrl.controlType == FrmControlType::HScrollBar || ctrl.controlType == FrmControlType::VScrollBar) {
             std::string ctrlHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
+            // 控件数组: 没有 `vb6_hwnd_VScroll1` 这一枚, 句柄在 `vb6_arr_VScroll1` 里按元素取;
+            // `_Scroll/_Change` 处理器首形参是 Index (Form1.frm:1305), 调用必须带元素下标。
+            const bool sbIsArr = knownControlArrays_.count(Symbol::toLower(ctrl.controlName)) > 0;
+            if (sbIsArr) {
+                const int sbIdx = ctrl.index >= 0 ? ctrl.index : 0;
+                ctrlHwnd = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", "
+                         + std::to_string(sbIdx) + ")";
+            }
             std::string scrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");
             std::string changeFn = eventHandlerFn(ctrl.controlName, "_Change");
             bool hasScroll = symTab_.lookup(ctrl.controlName + "_Scroll") != nullptr;
             bool hasChange = symTab_.lookup(ctrl.controlName + "_Change") != nullptr;
             c_.emitLine("if (scrollHwnd == (void*)" + ctrlHwnd + ") {");
             c_.indent();
-            if (hasScroll) c_.emitLine("if (scrollCode == 5 || scrollCode == 4) { extern void " + scrollFn + "(); " + scrollFn + "(); }");
-            if (hasChange) c_.emitLine("else { extern void " + changeFn + "(); " + changeFn + "(); }");
+            if (hasScroll) c_.emitLine("if (scrollCode == 5 || scrollCode == 4) " + vb6CtrlEvCallText(scrollFn, sbIsArr, ctrl.index));
+            // 账 (TeeChart 夹具): 没挂 _Scroll 时不能发射裸 else（同 C2181）。原来只对顶层控件
+            // 展开，只要顶层每一枚都恰好有 _Scroll 就看不出来；递归进 Frame 后本例 8 枚
+            // 只有 _Change ⇒ 从前的写法当场编译失败。无 _Scroll 就无条件调 _Change。
+            if (hasChange) {
+                if (hasScroll) c_.emitLine("else " + vb6CtrlEvCallText(changeFn, sbIsArr, ctrl.index));
+                else c_.emitLine(vb6CtrlEvCallText(changeFn, sbIsArr, ctrl.index));
+            }
             c_.dedent();
             c_.emitLine("}");
         }
@@ -626,7 +663,8 @@
     // 两条分法都在 RTL 那边定（029 §C29-SL-c 有实测理由）：Change 问"值真的变了没"
     // （`vb6_Slider_FireChange` 自带基准，拖拽中那串 TB_THUMBTRACK 因此连续触发），
     // Scroll 只认滑块那两档（4/5），与上面 ScrollBar 已发货的口径同一档。
-    for (const auto& ctrl : frmDesc.formControl.children) {
+    for (const FrmControl* ctrlPtr : scrollCtrlsM3) {
+        const FrmControl& ctrl = *ctrlPtr;
         if (ctrl.controlType != FrmControlType::Slider) continue;
         std::string slHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
         std::string slScrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");
@@ -673,14 +711,15 @@
 
     // P14.4.1d: WM_SIZE -> Form_Resize() (仅当处理器存在时生成)
     {
-        std::string resizeFn = cProcName("Form_Resize", AccessLevel::Private);
+        std::string resizeFn = cProcName(std::string(formEvtBase334) + "_Resize", AccessLevel::Private);
         // 守卫只认**本模块自有**的处理器 (与 cgen_form_show.inc rev29 同批) ——
         // 裸名 lookup 会命中跨模块注入的别家 Form_Resize ⇒ LNK2019。
         auto hasOwnResizeWp = [&](const char* nm) -> bool {
             Symbol* sWp = symTab_.lookupModule(nm);
             return sWp && !sWp->isExternal;
         };
-        if (hasOwnResizeWp((formName + "_Resize").c_str()) || hasOwnResizeWp("Form_Resize")) {
+        if (hasOwnResizeWp((formName + "_Resize").c_str()) || hasOwnResizeWp("Form_Resize")
+            || hasOwnResizeWp((std::string(formEvtBase334) + "_Resize").c_str())) {
             c_.emitLine("case WM_SIZE: {");
             c_.indent();
             // Fix 112: Form_Load 由 PostMessage 延迟执行, 而首次 WM_SIZE 在
@@ -700,7 +739,7 @@
             // VB6 语义: Form_Resize 与 Form_Load **互相独立** —— 没有 Form_Load
             // 的窗体照样在每次尺寸变化时收到 Form_Resize。所以"等 Load 完成"这个
             // 前置条件只对**有 Load 可等**的窗体成立。
-            if (symTab_.lookup("Form_Load")) {
+            if (symTab_.lookup(std::string(formEvtBase334) + "_Load")) {
                 c_.emitLine("if (!vb6_formLoaded_" + cIdent(formName) + ") break;");
             }
             // Fix <vbeclipse> rev28: 排队到消息循环跑, 不同步跑。
@@ -941,6 +980,8 @@
     c_.emitLine("default:");
     c_.indent();
     if (isMDIForm) {
+        // 账 #305 第三百四十六刀: Codejock 停靠条共存 —— MDIClient 收进空余带
+        c_.emitLine("vb6_MDI_RelayoutClient((void*)hwnd);");
         c_.emitLine("return DefFrameProcW(hwnd, (HWND)vb6_GetMDIClient(hwnd), msg, wParam, lParam);");
     } else if (isMDIChild) {
         c_.emitLine("return DefMDIChildProcW(hwnd, msg, wParam, lParam);");

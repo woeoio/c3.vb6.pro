@@ -147,6 +147,7 @@ std::unique_ptr<PrintStmt> Parser::parsePrintStmt() {
     
     auto firstExpr = parseExpression();
     std::vector<ExprPtr> outputList;
+    std::vector<char> separators;
     ExprPtr fileNumber;
     bool isFormPrint = false;
     
@@ -156,7 +157,12 @@ std::unique_ptr<PrintStmt> Parser::parsePrintStmt() {
         if (match(TokenKind::Comma) || match(TokenKind::Semicolon)) {
             while (cur_.kind != TokenKind::NewLine && cur_.kind != TokenKind::EndOfFile) {
                 outputList.push_back(parseExpression());
-                if (!match(TokenKind::Comma) && !match(TokenKind::Semicolon)) break;
+                // 记录这一项**后面**的分隔符: ';'/'，' 或 0=语句尾。尾随分隔符
+                // (Print #f, 1;) 只影响行尾, 也必须留下, 否则会被当成 0 补 CRLF。
+                if (cur_.kind == TokenKind::Comma) { separators.push_back(','); advance(); }
+                else if (cur_.kind == TokenKind::Semicolon) { separators.push_back(';'); advance(); }
+                else { separators.push_back(0); break; }
+                if (cur_.kind == TokenKind::NewLine || cur_.kind == TokenKind::EndOfFile) break;
             }
         }
     } else {
@@ -172,6 +178,7 @@ std::unique_ptr<PrintStmt> Parser::parsePrintStmt() {
     
     auto stmt = std::make_unique<PrintStmt>(loc, std::move(fileNumber), std::move(outputList));
     stmt->isFormPrint = isFormPrint;
+    stmt->separators = std::move(separators);
     return stmt;
 }
 

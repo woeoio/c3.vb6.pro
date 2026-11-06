@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<library>
+    <section name="Fiction">
+        <shelf number="1">
+            <category name="Classic">
+                <book>
+                    <title>The Great Gatsby</title>
+                    <author>F. Scott Fitzgerald</author>
+                    <year>1925</year>
+                    <isbn>978-0-7432-7356-5</isbn>
+                </book>
+                <book>
+                    <title>To Kill a Mockingbird</title>
+                    <author>Harper Lee</author>
+                    <year>1960</year>
+                    <isbn>978-0-06-112008-4</isbn>
+                </book>
+            </category>
+            <category name="Modern">
+                <book>
+                    <title>Never Let Me Go</title>
+                    <author>Kazuo Ishiguro</author>
+                    <year>2005</year>
+                    <isbn>978-1-57131-841-3</isbn>
+                </book>
+                <book>
+                    <title>Life of Pi</title>
+                    <author>Yann Martel</author>
+                    <year>2001</year>
+                    <isbn>978-0-15-100811-7</isbn>
+                </book>
+            </category>
+        </shelf>
+        <shelf number="2">
+            <category name="Science Fiction">
+                <book>
+                    <title>Dune</title>
+                    <author>Frank Herbert</author>
+                    <year>1965</year>
+                    <isbn>978-0-441-17271-9</isbn>
+                </book>
+                <book>
+                    <title>Neuromancer</title>
+                    <author>William Gibson</author>
+                    <year>1984</year>
+                    <isbn>978-0-441-56959-1</isbn>
+                </book>
+            </category>
+        </shelf>
+    </section>
+    <section name="Non-Fiction">
+        <shelf number="1">
+            <category name="Biography">
+                <book>
+                    <title>Steve Jobs</title>
+                    <author>Walter Isaacson</author>
+                    <year>2011</year>
+                    <isbn>978-1-4516-4853-9</isbn>
+                </book>
+            </category>
+        </shelf>
+    </section>
+</library>

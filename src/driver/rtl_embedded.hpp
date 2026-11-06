@@ -195,6 +195,10 @@ enum RtlResourceID {
     // 账 #181: 崩溃轨迹每进程只记一次的闸 (零依赖头, 见文件头注释)
     RTL_VB6RTL_CRASH_H                     = 222,
 
+    // 2026-11-04 免注册 COM 运行期批次: 组件内嵌 assembly manifest 取证 + ActCtx 原语
+    // ⚠ id 必须与 src/driver/c3rtl.rc 的 225 对上。
+    RTL_VB6COM_MANIFEST_C                  = 225,
+
     // 2026-10-06: Form/Printer 绘图方法家族 (PSet/Line/Circle/Point/Cls)。
     // 此前 Form 级绘图面**完全缺失** —— 只有 Shape/Line 控件的自绘路径,
     // `Form_Paint` 里的 Me.PSet 等落进 COM dispatch 桩 (运行时 no-op)。

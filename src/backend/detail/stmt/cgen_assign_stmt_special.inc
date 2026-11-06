@@ -3,6 +3,90 @@
 // 内容 = 原文件第 12~405 行，逐行未改。
 
     if (!node.target || !node.value) return;
+    // 账 #305 第三百三十三刀: 对象变量默认属性 Let (GUISample frmPropertyGrid:60
+    // `Item = Item + 6`, Item 是 Dim As PropertyGridItem 的局部对象变量, 无 Set)。
+    // VB6 语义: 两端都走 DISPID 0 默认属性 —— Item.<Def> = Item.<Def> + 6。
+    // 此前裸发 C `Item = (Item + 6);` —— iface 指针只前向声明, 算术取 sizeof
+    // → C2036 (未知大小)。窄匹配: 目标是带默认成员名的 typed COM 变量且 RHS 是
+    // 二目 `+`; 两臂中"带默认成员的对象裸名"折 vb6_ComGetProp 默认读, 标量臂
+    // vb6_VariantFromValue 包; 求和 vb6_VarAddV, 回写 vb6_ComSetProp。
+    if (node.target->kind == ASTNodeKind::IdentifierExpr
+        && node.value->kind == ASTNodeKind::BinaryExpr) {
+        auto& tgtDef333 = static_cast<IdentifierExpr&>(*node.target);
+        std::string tgtLower333 = Symbol::toLower(tgtDef333.name);
+        bool isRetSlot333 = currentProc_
+                            && Symbol::toLower(currentProc_->name) == tgtLower333;
+        auto itDef333 = knownTypedComVars_.find(tgtLower333);
+        auto& bin333 = static_cast<BinaryExpr&>(*node.value);
+        if (!isRetSlot333 && itDef333 != knownTypedComVars_.end() && itDef333->second
+            && !itDef333->second->comDefaultMemberRealName.empty()) {
+            // 臂折叠: 裸名 typed COM 变量 (带默认成员) → 默认属性读; 返回空串 = 标量
+            auto armFold333 = [&](ASTNode* opNode) -> std::string {
+                if (!opNode) return "";
+                if (opNode->kind != ASTNodeKind::IdentifierExpr) return "";
+                auto& opId = static_cast<IdentifierExpr&>(*opNode);
+                auto itOp = knownTypedComVars_.find(Symbol::toLower(opId.name));
+                if (itOp == knownTypedComVars_.end() || !itOp->second
+                    || itOp->second->comDefaultMemberRealName.empty()) return "";
+                return "vb6_VariantFromComResult(vb6_ComGetProp((void*)" + cIdent(opId.name)
+                     + ", L\"" + itOp->second->comDefaultMemberRealName + "\"))";
+            };
+            std::string a333 = armFold333(bin333.left.get());
+            std::string b333 = armFold333(bin333.right.get());
+            if (a333.empty()) {
+                emitExpr(*bin333.left);
+                a333 = "vb6_VariantFromValue(" + std::move(lastExpr_) + ")";
+            }
+            if (b333.empty()) {
+                emitExpr(*bin333.right);
+                b333 = "vb6_VariantFromValue(" + std::move(lastExpr_) + ")";
+            }
+            c_.emitLine("vb6_ComSetProp((void*)" + cIdent(tgtDef333.name) + ", L\""
+                        + itDef333->second->comDefaultMemberRealName
+                        + "\", vb6_ComPackVariant(vb6_VarAddV(" + a333 + ", " + b333 + ")));  /* default prop let (obj arith) */");
+            return;
+        }
+    }
+    // 账 #305 第M刀: typed COM 变量 + **标量 RHS** 的默认属性 Let。
+    // 上面那格只接 `Item = Item + 6`(二目 +); GUISample frmPropertyGrid:72 的
+    // `Item = "2.0.0"` 仍落普通赋值 ⇒ `Item = vb6_BSTR_FromStr(L"2.0.0")`
+    // 把 `vb6_ComIface_IPropertyGridItem*` 指针覆盖成 BSTR 指针, 下游
+    // `Item.Parent` / `Item.Tag` / `Item.Parent.Caption` 全部变成
+    // kind=notdispatchable / null 的晚绑定 miss(实测 out_before: 4 发)。
+    // VB6 语义: 无 Set 的对象变量赋值就是写 DISPID 0 默认成员
+    // (PropertyGridItem 的默认成员 = Value)。RHS 若也是带默认成员的 typed COM
+    // 裸名, 先折默认属性读, 否则按普通表达式发, 统一装箱回写。
+    if (node.target->kind == ASTNodeKind::IdentifierExpr) {
+        auto& tgtScalar = static_cast<IdentifierExpr&>(*node.target);
+        std::string tgtLowerScalar = Symbol::toLower(tgtScalar.name);
+        bool isRetSlotScalar = currentProc_
+                               && Symbol::toLower(currentProc_->name) == tgtLowerScalar;
+        auto itDefScalar = knownTypedComVars_.find(tgtLowerScalar);
+        if (!isRetSlotScalar && itDefScalar != knownTypedComVars_.end()
+            && itDefScalar->second
+            && !itDefScalar->second->comDefaultMemberRealName.empty()) {
+            std::string rhsScalar;
+            if (node.value->kind == ASTNodeKind::IdentifierExpr) {
+                auto& rhsId = static_cast<IdentifierExpr&>(*node.value);
+                auto itRhs = knownTypedComVars_.find(Symbol::toLower(rhsId.name));
+                if (itRhs != knownTypedComVars_.end() && itRhs->second
+                    && !itRhs->second->comDefaultMemberRealName.empty()) {
+                    rhsScalar = "vb6_VariantFromComResult(vb6_ComGetProp((void*)"
+                              + cIdent(rhsId.name) + ", L\""
+                              + itRhs->second->comDefaultMemberRealName + "\"))";
+                }
+            }
+            if (rhsScalar.empty()) {
+                emitExpr(*node.value);
+                rhsScalar = "vb6_VariantFromValue(" + std::move(lastExpr_) + ")";
+            }
+            c_.emitLine("vb6_ComSetProp((void*)" + cIdent(tgtScalar.name) + ", L\""
+                        + itDefScalar->second->comDefaultMemberRealName
+                        + "\", vb6_ComPackVariant(" + rhsScalar
+                        + "));  /* default prop let (obj scalar) */");
+            return;
+        }
+    }
     // P22: Date$/Time$ statement interception (Date$ = "12-31-2025" / Time$ = "23:59:59")
     if (node.target->kind == ASTNodeKind::IdentifierExpr) {
         auto& _tgtId22 = static_cast<IdentifierExpr&>(*node.target);
@@ -51,7 +135,7 @@
                     std::string midValue = std::move(lastExpr_);
                     // Fix 086: 与 visit(MidStmt) 的 Fix 084b 一致 — Variant值
                     // (vb6_VariantArrayGet 等) 需转 BSTR, 否则 C2440
-                    if (cExprIsVariant(midValue)) {
+                    if (isVariantSlot(midValue, node.value.get())) {
                         midValue = "vb6_VariantToString(" + midValue + ")";
                     }
                     c_.emitLine("vb6_MidSet(&" + midTarget + ", " + midStart + ", " + midLen + ", " + midValue + ");  /* Mid$ statement */");
@@ -351,7 +435,24 @@
                 // 返回 NULL, `ListView1.Sorted = True` 这类写入会静默丢失。
                 const bool isUC292 = knownUserControlCtrlVars_.find(objLower)
                                      != knownUserControlCtrlVars_.end();
-                std::string writeFn = isUC292
+                /* ucTreeView: 原先把**所有** UC 承载控件的写入都置空 writeFn, 于是
+                   `ucTreeViewPlus1.Height = ...` (UC 并未声明 Height 可写成员) 落到
+                   后续晚绑定路径, LHS 被发成 vb6_GetControlHeight(hwnd) = v (C2106,
+                   Form1.c:987 / Form2.c:249)。只有当 .ctl 类**自己**声明了同名可写
+                   成员时才让位给实例路径; 否则仍用控件属性写表。 */
+                bool ucOwnsMember292 = false;
+                if (isUC292) {
+                    auto itUc292 = knownUserControlCtrlVars_.find(objLower);
+                    if (itUc292 != knownUserControlCtrlVars_.end()) {
+                        std::vector<ParameterInfo> wpUc292;
+                        ucOwnsMember292 =
+                            findClassMemberWriteParams(itUc292->second, maExpr.memberName,
+                                                       false, wpUc292)
+                            || findClassMemberWriteParams(itUc292->second, maExpr.memberName,
+                                                          true, wpUc292);
+                    }
+                }
+                std::string writeFn = (isUC292 && ucOwnsMember292)
                     ? std::string()
                     : getControlPropWriteFn(itCtrl->second, maExpr.memberName);
                 if (!writeFn.empty()) {
@@ -523,7 +624,7 @@
                                 emitExpr(*node.value);
                                 std::string val084o = std::move(lastExpr_);
                                 Vb6Type valT084o = inferExprType(*node.value);
-                                if ((valT084o == Vb6Type::Variant) || cExprIsVariant(val084o))
+                                if ((valT084o == Vb6Type::Variant) || isVariantSlot(val084o, node.value.get()))
                                     val084o = "vb6_VariantToString(" + val084o + ")";
                                 c_.emitLine(let084o + "((void*)" + currentReturnVar_ + ", "
                                             + val084o + ");  /* FnRetCls prop_let." + maExpr.memberName + " */");
@@ -547,7 +648,7 @@
                     emitExpr(*node.value);
                     std::string valExpr084o = std::move(lastExpr_);
                     Vb6Type valType084o = inferExprType(*node.value);
-                    bool valIsVariant084o = (valType084o == Vb6Type::Variant) || cExprIsVariant(valExpr084o);
+                    bool valIsVariant084o = (valType084o == Vb6Type::Variant) || isVariantSlot(valExpr084o, node.value.get());
                     switch (fldType084o) {
                         case Vb6Type::String:
                             if (valIsVariant084o) valExpr084o = "vb6_VariantToString(" + valExpr084o + ")";
@@ -666,6 +767,37 @@
                                     + "\", " + packAs + "(" + valAs + "));  /* appobject SetProp */");
                         return;
                     }
+                }
+                // 账 #305 第M刀: MDIForm 的裸 `ActiveForm.Caption = v` 写侧。
+                // 读侧 (cgen_expr_member_form_builtin / cgen_expr_ident_symbol) 已按
+                // Me.ActiveForm 发 COM 读, 写侧这里此前落到 Module.var 回退,
+                // 发出 `vb6_ActiveForm_Caption = ...` (C2065 未声明标识符, 实测
+                // tests\ctlident 编译失败)。与读侧同一判定 (currentFormIsMDI_ +
+                // 局部变量遮蔽闸), 接收者取当前窗体 HWND, 成员走 COM SetProp。
+                if (currentFormIsMDI_ && objLower == "activeform"
+                    && !knownLocalVars_.count(objLower)) {
+                    std::string formHwndLhs = "vb6_hwnd_" + moduleName_;
+                    auto itOrigLhs = knownFormControlOriginalNames_.find(knownFormName_);
+                    if (itOrigLhs != knownFormControlOriginalNames_.end())
+                        formHwndLhs = "vb6_hwnd_" + cIdent(itOrigLhs->second);
+                    emitExpr(*node.value);
+                    std::string valLhs = std::move(lastExpr_);
+                    Vb6Type valTLhs = inferExprType(*node.value);
+                    std::string packLhs = "vb6_ComPackValue";
+                    if (valTLhs == Vb6Type::String) {
+                        packLhs = "vb6_ComPackBSTR";
+                    } else if (valTLhs == Vb6Type::Long || valTLhs == Vb6Type::Integer
+                            || valTLhs == Vb6Type::Boolean) {
+                        packLhs = "vb6_ComPackInt";
+                    } else if (valTLhs == Vb6Type::Double || valTLhs == Vb6Type::Single
+                            || valTLhs == Vb6Type::Date) {
+                        packLhs = "vb6_ComPackDouble";
+                    }
+                    valLhs = comUnpackForPack(packLhs, valLhs);
+                    c_.emitLine("vb6_ComSetProp((void*)vb6_ComGetObjectProp(" + formHwndLhs
+                                + ", L\"ActiveForm\"), L\"" + maExpr.memberName + "\", "
+                                + packLhs + "(" + valLhs + "));  /* MDIForm.ActiveForm SetProp */");
+                    return;
                 }
                 // Module.varName = expr
                 // When module is #included, use unprefixed name

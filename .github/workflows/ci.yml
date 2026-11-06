@@ -167,6 +167,52 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # M1 基线（2026-11-02 新增）: 三条最小路径 —— 控制台 .bas / .frm 工程 / ActiveX DLL ——
+  # 用**与本地完全相同的那一份** tests/baseline.ps1 跑；本 job 只负责取 build 的工件并调用它。
+  # 脚本退出码: 0 全过 / 1 有 FAIL / 2 环境缺失（无 MSVC 或组件装不上）。2 在这里报
+  # ::warning:: 并绿灯 —— 环境没装既不许降级成 PASS，也不许把整条流水线染红。
+  baseline:
+    name: Baseline (M1)
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      C3_VCVARSALL: ""
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download C3.exe artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: c3-exe
+          path: .build/
+
+      - name: Run M1 baseline (same script as local)
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File tests/baseline.ps1 -Verbose
+          $rc = $LASTEXITCODE
+          if ($rc -eq 2) {
+            Write-Host "::warning::M1 baseline SKIP — 环境缺失 (MSVC / 组件)；详见上面的日志，未按 PASS 计"
+            exit 0
+          }
+          exit $rc
+
+      - name: Upload baseline logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: baseline-logs
+          path: |
+            output/baseline/**/compile.log
+            output/baseline/**/run.out
+            output/baseline/**/run.err
+            output/baseline/**/btnfocus.log
+          if-no-files-found: warn
+          retention-days: 14
+
   # 账 #245 (§B73): 发码形状的**神谕必须来自产物那一台工具链**。同一笔提交用不同 MSVC 编出来的 C3.exe
   # 会在语料上分家（实测 788 份捕获里 14 份不同，全在 Charts 2020 的 UC 工程，形状只有一种：With 目标上
   # 的 COM 成员读走「带类型出口」还是「泛型出口」）—— 而门里 Build 与 Tests 用的是同一枚工件，这种漂移
@@ -446,6 +492,30 @@ jobs:
           $clean = New-Object System.Collections.Generic.List[string]
           pwsh -NoProfile -ExecutionPolicy Bypass -File tests/run_tests.ps1 -Category ${{ matrix.category }} -Jobs 20 ${{ matrix.shardArgs }} -Incremental -Verbose *>&1 | ForEach-Object { $s = [string]$_; Write-Host $s; $clean.Add(($s -replace $ansi, "")) } | Out-Null
           $rc = $LASTEXITCODE
+          # exit 2 = 只有 SKIP、没有 FAIL（口径在 tests/run_tests.ps1 末尾）: 本轮唯一来源是
+          # guisample 缺 Codejock 类型库（仓库不含这批商用 OCX，见 Test-VbpBuild -RequiresCodejock）。
+          # 与 Baseline (M1) 相同: 既不许降级成 PASS，也不许染红 —— 只出 ::warning:: 并绿。
+          # 但必须点名「跳了谁、缺什么」（SKIP 行的括号里就是 LibID/文件名/期望版本），
+          # 一条 SKIP 行都对不上就说明这条通道与 harness 排版脱节 ⇒ 照旧红，不许静默放过。
+          if ($rc -eq 2) {
+            # 两种 SKIP 排版都要认: 「  [GUI] x ... SKIP (…)" 与裸的「  SKIP (…)"(如 COM 未注册那格)。
+            # 只认前者会让"别的合法 SKIP"把这一步打成 ::error:: —— 那是拿新通道误伤老用例。
+            $rxSkip = [regex] "^\s*(?:\[(.+?)\]\s+(.+?)\s*\.\.\.\s*)?SKIP\s*\((.*)\)\s*$"
+            $skips = @($clean | ForEach-Object {
+                $ms = $rxSkip.Match($_)
+                if ($ms.Success) {
+                    $head = ""
+                    if ($ms.Groups[2].Success) { $head = "[" + $ms.Groups[1].Value.Trim() + "] " + $ms.Groups[2].Value.Trim() + " ... " }
+                    $head + "SKIP (" + $ms.Groups[3].Value.Trim() + ")"
+                }
+            })
+            if ($skips.Count -eq 0) {
+              Write-Host ("::error::run_tests exit code 2 but no SKIP line matched -- skip reporting is out of sync with the harness")
+              exit 2
+            }
+            foreach ($sk in @($skips | Select-Object -First 20)) { Write-Host ("::warning::" + $sk) }
+            exit 0
+          }
           # 只在红的时候点名：绿轮里这条通道一声不出。前缀行是 -NoNewline 写的，万一被别人的换行截断，
           # 「不是 PASS 就算失败」会在绿轮凭空点出名字来 —— 把这条限制钉死，注解面就只剩「红」这一种输入。
           if ($rc -eq 0) { exit 0 }
@@ -499,5 +569,11 @@ jobs:
             output/**/*.txt
             output/**/*.dat
             output/**/scores.txt
+            # 诊断可见性: 编译/链接失败时 C3 落在 <output>/c3-error.log（driver_compile.cpp 的
+            # writeErrorLog），而 run_tests 只把 "FAIL rc=1 exe=False" 打进 job 日志 —— 没有这一行
+            # 就只能看见「失败」看不见「为什么失败」（本次 guisample 的形态）。.log 一并收，
+            # 覆盖构建失败时的其它日志。只动 artifact，不改任何判据。
+            output/**/c3-error.log
+            output/**/*.log
           if-no-files-found: warn
           retention-days: 14

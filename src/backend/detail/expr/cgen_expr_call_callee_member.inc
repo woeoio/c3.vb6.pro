@@ -55,14 +55,27 @@
                 // 类同名时 (frmMain.CommandBars: 控件 XtremeCommandBars.CommandBars
                 // vs 库里同名的 coclass) 必须发控件句柄访问器, 发过程调用 = LNK2019
                 // (该窗体根本没有那个过程)。控件不是再问自类型过程/限定键过程。
+                // 账 #305 第三百三十一刀: 基也可以是 **As <窗体类型> 的变量**
+                // (`fMainForm.ActiveForm.RefreshColors`, GUISample frmMain:766) ——
+                // C3 单实例模型下即窗体默认实例, 限定键/访问器一律按变量绑定的
+                // 窗体名取。贴基成员不是控件也不是该窗体的过程时, 当普通 COM
+                // 成员接在窗体默认实例上 (stArmSt=1, vb6_ComGetObjectProp 续链)。
                 if (!haveSt0 && chainSt.size() >= 2
                     && oLowerSt0 != Symbol::toLower(moduleName_)
-                    && knownFormModuleNames_.count(oLowerSt0)) {
+                    && (knownFormModuleNames_.count(oLowerSt0)
+                        || knownFormTypeVars_.count(oLowerSt0))) {
+                    std::string formNameB331 = oidSt0.name;
+                    {
+                        auto itFtvB331 = knownFormTypeVars_.find(oLowerSt0);
+                        if (itFtvB331 != knownFormTypeVars_.end())
+                            formNameB331 = itFtvB331->second;
+                    }
+                    const std::string formLowerB331 = Symbol::toLower(formNameB331);
                     const std::string& midName0 = chainSt[chainSt.size() - 1]->memberName;
                     std::string midLower0 = Symbol::toLower(midName0);
-                    const FrmControl* extCtrlB = findExternalFormControl(oidSt0.name, midName0);
+                    const FrmControl* extCtrlB = findExternalFormControl(formNameB331, midName0);
                     if (extCtrlB) {
-                        std::string accB = "vb6_form_ctrl_" + cIdent(oidSt0.name)
+                        std::string accB = "vb6_form_ctrl_" + cIdent(formNameB331)
                                          + "_" + cIdent(midName0);
                         if (extCtrlB->controlType == FrmControlType::TreeView)
                             externalTreeViewAccs_[accB] = accB;
@@ -75,16 +88,20 @@
                             || knownFormControls_.count(midLower0);
                         Symbol* midCls0 = symTab_.lookup(midName0);
                         Symbol* midQk0 = symTab_.moduleScope()
-                            ? symTab_.moduleScope()->lookupLocal(oLowerSt0 + "_" + midLower0)
+                            ? symTab_.moduleScope()->lookupLocal(formLowerB331 + "_" + midLower0)
                             : nullptr;
                         if (!otherMid0
                             && ((midCls0 && midCls0->kind == SymbolKind::ComClass
                                  && Symbol::toLower(midCls0->name) == midLower0)
                                 || (midQk0 && midQk0->isExternal
                                     && midQk0->kind == SymbolKind::Function))) {
-                            recvSt = cProcName(midName0, AccessLevel::Public, oidSt0.name) + "()";
+                            recvSt = cProcName(midName0, AccessLevel::Public, formNameB331) + "()";
                             haveSt0 = true;
                             stArmSt = 2;
+                        } else {
+                            recvSt = "vb6_form_hwnd_" + cIdent(formNameB331) + "()";
+                            haveSt0 = true;
+                            stArmSt = 1;
                         }
                     }
                 }
@@ -127,7 +144,7 @@
                 emitExpr(*node.positional[i]);
                 { std::string rSt0 = resolveComMarkerForPack(packFnSt0);
                   if (!rSt0.empty()) lastExpr_ = rSt0; }
-                packedSt0.push_back(packArgValue(packFnSt0, lastExpr_));
+                packedSt0.push_back(packArgValue(packFnSt0, lastExpr_, node.positional[i].get()));
             }
             std::string argsArrSt0 = "(void*[]){";
             for (size_t i = 0; i < packedSt0.size(); i++) {
@@ -185,7 +202,7 @@
                             // 的可能是**无型** VARIANT ⇒ 交 packArgValue 一处收口
                             // (Pager.ctl:1249 `PropBuddyControl.Move .Left, .Top` 的两个
                             //  vb6_ComPackDouble(vb6_VARIANT) 就是这里发出的)。
-                            packed245c.push_back(packArgValue(packFn245c, lastExpr_));
+                            packed245c.push_back(packArgValue(packFn245c, lastExpr_, node.positional[i].get()));
                         }
                         int32_t argc245c = (int32_t)packed245c.size();
                         std::string argsArr245c = "(void*[]){";
@@ -263,7 +280,7 @@
             std::string memLowerDD = Symbol::toLower(maDD.memberName);
             // ① DataObject 形参方法
             if (dataObjectParams_.count(objLowerDD)) {
-                std::string ddArg = "(void*)(*" + objIdDD.name + ")";
+                std::string ddArg = dataObjectArgExpr(objIdDD.name);
                 if (memLowerDD == "setdata" && node.positional.size() == 1) {
                     emitExpr(*node.positional[0]);
                     lastExpr_ = "{ vb6_oleDD_SetText(" + ddArg + ", "
@@ -397,6 +414,71 @@
         }
     }
 
+    // ============================================================
+    // n`: X.ZOrder [position] —— VB6 语言级方法 (控件/窗体通用)。
+    // `.frm` 里 `ScrollBarVertical.ZOrder 0` / `ScrollBarHorizontal.ZOrder 0`
+    // (GUISample frmDocument) 此前落通用晚绑定: 发成
+    //   vb6_ComCallObject(vb6_ComGetObjectProp(hwnd, L"ZOrder"), NULL, …)
+    // —— HWND 与 OCX Extender 上都没有名为 "ZOrder" 的对象可取, 第一步回 NULL,
+    // 第二步静默不动作。后果 (实测像素): 两枚 Codejock ScrollBar 被 SyntaxEdit
+    // 整块盖住, 本应是竖直滚动条的 x=1600..1667 列恒为编辑器底色 #F6F6F6。
+    // position 0 = 提到最前 (缺省), 1 = 压到最后; RTL 侧 vb6_ControlZOrder。
+    // ============================================================
+    if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maZO = static_cast<MemberAccessExpr&>(*node.callee);
+        if (Symbol::toLower(maZO.memberName) == "zorder" && node.named.empty()
+            && node.positional.size() <= 1 && maZO.object) {
+            std::string hwndZO;
+            if (maZO.object->kind == ASTNodeKind::IdentifierExpr) {
+                auto& objIdZO = static_cast<IdentifierExpr&>(*maZO.object);
+                std::string objLowerZO = Symbol::toLower(objIdZO.name);
+                auto itCtlZO = knownFormControls_.find(objLowerZO);
+                if (itCtlZO != knownFormControls_.end()) {
+                    hwndZO = makeCtrlHwndArg(objLowerZO, itCtlZO->second);
+                } else if (listViewSlotVars_.count(objLowerZO)) {
+                    hwndZO = objLowerZO;   /* 槽变量本身就是 HWND */
+                } else if (objLowerZO == "me") {
+                    auto itOrigZO = knownFormControlOriginalNames_.find(knownFormName_);
+                    hwndZO = "vb6_hwnd_" + (itOrigZO != knownFormControlOriginalNames_.end()
+                                            ? cIdent(itOrigZO->second) : moduleName_);
+                }
+            } else if (maZO.object->kind == ASTNodeKind::MeExpr
+                       && isFormModule_ && !knownFormName_.empty()) {
+                auto itOrigZO = knownFormControlOriginalNames_.find(knownFormName_);
+                hwndZO = "vb6_hwnd_" + (itOrigZO != knownFormControlOriginalNames_.end()
+                                        ? cIdent(itOrigZO->second) : moduleName_);
+            }
+            if (!hwndZO.empty()) {
+                std::string posZO = "0";
+                // 实参是值上下文 —— 与 Move 分支同一处理由 (Fix 261)。
+                bool savedCcZO = asCallCallee_;
+                asCallCallee_ = false;
+                if (node.positional.size() == 1) {
+                    emitExpr(*node.positional[0]);
+                    if (isComMarker_) {
+                        lastExpr_ = resolveComValue("Long");
+                    } else {
+                        const std::string& aZO = lastExpr_;
+                        bool bareIdentZO = !aZO.empty()
+                            && aZO.find('(') == std::string::npos
+                            && aZO.find('-') == std::string::npos
+                            && aZO.find('.') == std::string::npos
+                            && aZO.find('>') == std::string::npos;
+                        if (bareIdentZO
+                            && inferExprType(*node.positional[0]) == Vb6Type::Variant) {
+                            lastExpr_ = "vb6_VariantToLong(" + aZO + ")";
+                        }
+                    }
+                    posZO = std::move(lastExpr_);
+                }
+                asCallCallee_ = savedCcZO;
+                lastExpr_ = "{ vb6_ControlZOrder(" + hwndZO + ", (int)(" + posZO
+                          + ")); (void)0; }";
+                return;
+            }
+        }
+    }
+
     // Fix <vbeclipse>: UserControl 的隐式 `Parent` 伪对象 (VB6 声明 As Object) 上的
     // 成员调用必须走**后期绑定**, 不能按"模块名.成员"做全工程按名查找 ——
     //   ucFolder.ctl:338  Parent.EventRaise "RemoveFolder", FolderId, ViewId
@@ -421,7 +503,7 @@
                 emitExpr(*node.positional[i]);
                 { std::string resolvedPar = resolveComMarkerForPack(packFnPar);
                   if (!resolvedPar.empty()) lastExpr_ = resolvedPar; }
-                packedPar.push_back(packArgValue(packFnPar, lastExpr_));
+                packedPar.push_back(packArgValue(packFnPar, lastExpr_, node.positional[i].get()));
             }
             int32_t argcPar = (int32_t)packedPar.size();
             std::string argsArrayPar = "NULL";
@@ -546,7 +628,7 @@
                                         emitExpr(*node.positional[i]);
                                         { std::string resolved = resolveComMarkerForPack(packFn);
                                           if (!resolved.empty()) lastExpr_ = resolved; }
-                                        packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                                        packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
                                     }
                                     int32_t argc = (int32_t)packedArgs.size();
                                     std::string argsArray = "(void*[]){";
@@ -682,7 +764,7 @@
                                 emitExpr(*node.positional[i]);
                                 { std::string resolved = resolveComMarkerForPack(packFn);
                                   if (!resolved.empty()) lastExpr_ = resolved; }
-                                packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                                packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
                             }
                             int32_t argc = (int32_t)packedArgs.size();
                             std::string argsArray = "(void*[]){";
@@ -716,7 +798,7 @@
 
                                             { std::string resolved = resolveComMarkerForPack(packFn);
                                               if (!resolved.empty()) lastExpr_ = resolved; }
-                                            packedArgs.push_back(packArgValue(packFn, lastExpr_));
+                                            packedArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
                                         }
                                         int32_t argc = (int32_t)packedArgs.size();
                                         std::string argsArray = "(void*[]){";

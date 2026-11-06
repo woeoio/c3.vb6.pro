@@ -142,7 +142,7 @@
             //   (vb6_VariantIdentity), 故实际就是 vb6_CStr(<VARIANT>), 正确。
             // 口径与上方 54 行"参数是 Variant 变量 → 保留 vb6_CStr(VARIANT)"一致, 只是那条
             // 分支只对 IdentifierExpr 生效; 这里补的是 MemberAccess / WithMember 等非标识符形态。
-            if (!args.empty() && cExprIsVariant(args[0])) {
+            if (!args.empty() && isVariantSlot(args[0], nullptr)) {  // P1.3: ast 不可得 (args 为局部缓存)
                 callee = "vb6_CStr";
             }
         }

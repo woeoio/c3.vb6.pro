@@ -12,3 +12,5 @@ Charts 2020\ucProgressCircular\Proyecto1.vbp   # 刻意不列: 已知红 (B29③
 vbman_host\vbman_host.vbp                      # 别处已覆盖: tests\run_vbman_test.ps1 (由 .github\workflows\ci_vbman.yml 驱动)
 vbp_project\TestVBP.vbp                        # 别处已覆盖: tests\regress_all.ps1 (真 VB6 与 C3 双编译对照工程)
 vbp_project\TestVBP2.vbp                       # 别处已覆盖: tests\regress_all.ps1 (真 VB6 与 C3 双编译对照工程)
+guisample\vb6ref\src\vc6\GUISample.vbp          # 刻意不列: VB6 参照工程 (vb6ref 采集源), 不是 C3 夹具 —— C3 编它等于把参照物当被测物
+guisample\vb6ref\src\vs2015\GUISample.vbp       # 刻意不列: 同上 (vs2015 那一份参照工程)

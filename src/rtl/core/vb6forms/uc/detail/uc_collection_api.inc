@@ -2,6 +2,11 @@
 // 内容 = 拆分前 vb6forms_uc.c 第 989~1185 行，逐行未改
 // 在函数体内 #include；路径一律用 basename
 
+// ucTreeView: 只对**工程类**包装器 (vb6_ComObject) 计引用。宿主包装器
+// (Vb6HostWrap / 裸 HWND) 的寿命由宿主环管，按 COM 协议再计数会双份
+// (czUI 的 GUI 门禁实测: 加计数后 exit 0xC000041D + latebind-miss 0/3)。
+extern int32_t vb6_ComObject_IsVb6Wrapper(void* v);   /* vb6comserver_obj.c */
+
 void* vb6_Collection_New(void) {
     vb6_CollRec* c = (vb6_CollRec*)calloc(1, sizeof(vb6_CollRec));
     if (c) c->tag = VB6_UC_COLL_TAG;
@@ -32,14 +37,43 @@ static void vb6_coll_push(void* coll, const vb6_VARIANT* v, const wchar_t* key) 
        存进来就是**别人那 16 字节的指针**，取回时早悬空(实测读回 2066035336255469780997 那一类
        数)。存值口径问那唯一一枚出口，与 vb6_Host_ClearVariant 的放那一对配平。 */
     vb6_VariantValueCopy(dst, v);
+    /* 对象档: VB6 的 Collection.Add 复制的是**引用** —— 集合自己持有一份。
+       此前这里借用不计数, 打包方那次 VariantClear 就把 vb6_ComObject 包装器
+       free 掉了, 集合里的 pdispVal 随即悬空: ucTreeView 的 For Each 读回
+       vb6Instance=NULL, 实测 rva=0x117CE av read target=0x84
+       (RecursiveDraw 里 N->Height)。加引用与 Remove 的释放配对。 */
+    if (dst->vt == vb6_vtDispatch && dst->pdispVal && vb6_ComObject_IsVb6Wrapper(dst->pdispVal))
+        vb6_ComAddRefDispatch(dst->pdispVal);
     if (c->keys) c->keys[c->count] = key ? SysAllocString(key) : NULL;
     c->count++;
+}
+
+// 实参是 Windows VARIANT* (vb6_ComPackXxx 打包), 转成 RTL 形式后存入。
+// VB6 的 Collection.Add 存**值拷贝**, 但 cgen 对标量局部变量实参发的是
+// vb6_ComPackIntRef(&v) (VT_BYREF|VT_I4, 与 VB6 默认 ByRef 传参一致), 而
+// vb6_Host_FromWinVariant 刻意把 ByRef 折成 Empty ⇒ `c.Add 局部变量` 之后
+// 按索引取回恒为 0 (ucTreeView 实测: ImageListCount=3, 但 `cImageList(1..3)`
+// 全 0 ⇒ 节点图标画不出)。这里在入库前先解引用 —— 值语义与 VB6 一致,
+// 且不影响 vb6_Host_FromWinVariant 自身"ByRef 不收"的既有口径。
+static void vb6_coll_fromWin(const void* winVar, vb6_VARIANT* out) {
+    const VARIANT* wv = (const VARIANT*)winVar;
+    if (wv && (wv->vt & VT_BYREF)) {
+        VARIANT tmp;
+        VariantInit(&tmp);
+        if (SUCCEEDED(VariantCopyInd(&tmp, wv))) {
+            vb6_Host_FromWinVariant(&tmp, out);
+            VariantClear(&tmp);
+            return;
+        }
+        VariantClear(&tmp);
+    }
+    vb6_Host_FromWinVariant(winVar, out);
 }
 
 // 实参是 Windows VARIANT* (vb6_ComPackXxx 打包), 转成 RTL 形式后存入
 void vb6_Collection_Add(void* coll, const void* winVar) {
     vb6_VARIANT hv;
-    vb6_Host_FromWinVariant(winVar, &hv);
+    vb6_coll_fromWin(winVar, &hv);
     vb6_coll_push(coll, &hv, NULL);
     vb6_Host_ClearVariant(&hv);
 }
@@ -56,7 +90,7 @@ void vb6_Collection_AddKeyed(void* coll, const void* winVar, const wchar_t* key)
         }
     }
     vb6_VARIANT hv;
-    vb6_Host_FromWinVariant(winVar, &hv);
+    vb6_coll_fromWin(winVar, &hv);
     vb6_coll_push(coll, &hv, key);
     vb6_Host_ClearVariant(&hv);
 }
@@ -117,6 +151,11 @@ void vb6_Collection_Remove(void* coll, int32_t idx1) {
     vb6_VARIANT* items = (vb6_VARIANT*)c->items;
     vb6_VARIANT* v = &items[idx1 - 1];
     vb6_VariantValueFree(v);   /* 账 #305 §B165: 释放口径与 vb6_coll_push 同源(对象档照旧不动) */
+    /* 与 coll_push 的 AddRef 配对: 集合自己那一份引用在这里放掉。 */
+    if (v->vt == vb6_vtDispatch && v->pdispVal && vb6_ComObject_IsVb6Wrapper(v->pdispVal)) {
+        vb6_ReleaseObject(&v->pdispVal);
+        v->pdispVal = NULL;
+    }
     if (c->keys) {
         if (c->keys[idx1 - 1]) SysFreeString(c->keys[idx1 - 1]);
         memmove(&c->keys[idx1 - 1], &c->keys[idx1], sizeof(wchar_t*) * (size_t)(c->count - idx1));
@@ -141,6 +180,10 @@ void vb6_Collection_RemoveByKey(void* coll, const wchar_t* key) {
 static void vb6_coll_itemCopy(const vb6_VARIANT* src, vb6_VARIANT* out) {
     memset(out, 0, sizeof(*out));
     vb6_VariantValueCopy(out, src);   /* 账 #305 §B165: 与 vb6_coll_push 同一枚出口 */
+    /* 取回的那一格自己持有一份 (见下方 Item 注释): 掌管道随后按同一口径放掉,
+       所以对象档必须在这里加引用, 否则放掉的是集合自己那一份。 */
+    if (out->vt == vb6_vtDispatch && out->pdispVal && vb6_ComObject_IsVb6Wrapper(out->pdispVal))
+        vb6_ComAddRefDispatch(out->pdispVal);
 }
 
 void vb6_Collection_Item(void* coll, int32_t idx1, void* outV) {

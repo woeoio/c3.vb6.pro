@@ -34,7 +34,7 @@
                         std::string packFn = comPackExpr(*callTarget.positional[i]);
                         emitExpr(*callTarget.positional[i]);
                         { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
-                        packedIdxArgs.push_back(packArgValue(packFn, lastExpr_));
+                        packedIdxArgs.push_back(packArgValue(packFn, lastExpr_, callTarget.positional[i].get()));
                     }
                     int32_t idxArgc = (int32_t)packedIdxArgs.size();
                     std::string idxArgsArray = "(void*[]){";
@@ -180,7 +180,7 @@
                                             + argExpr + ");");
                                 one092u = "&" + tv;
                             }
-                        } else if (pi.type == Vb6Type::String && cExprIsVariant(argExpr)) {
+                        } else if (pi.type == Vb6Type::String && isVariantSlot(argExpr, nullptr)) {  // P1.3: ast 不可得 (argExpr 距 emitExpr 超 5 行)
                             one092u = wrapToBSTR(argExpr, *argNode);
                         } else if (!pi.isByVal) {
                             // ByRef 非 Variant 形参: 简单标识符直接取址; 函数结果 /
@@ -340,7 +340,7 @@
                                                 + boxToVariant(argNode, argExpr) + ";");
                                     oneDef = "&" + tv;
                                 }
-                            } else if (pi.type == Vb6Type::String && cExprIsVariant(argExpr)) {
+                            } else if (pi.type == Vb6Type::String && isVariantSlot(argExpr, nullptr)) {  // P1.3: ast 不可得 (argExpr 距 emitExpr 超 5 行)
                                 oneDef = wrapToBSTR(argExpr, *argNode);
                             } else if (pi.type == Vb6Type::String && pi.isByVal && argNode
                                        && isScalarImplicitStr159(inferExprType(*argNode))) {

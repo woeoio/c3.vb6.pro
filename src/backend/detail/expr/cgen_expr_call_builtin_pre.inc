@@ -66,7 +66,7 @@
             // is selected but an arg is a Variant, extract the concrete value.
             auto iifArgIsVariant = [&](int idx) -> bool {
                 const std::string& val = (idx == 1) ? trueVal : falseVal;
-                if (cExprIsVariant(val)) return true;
+                if (isVariantSlot(val, nullptr)) return true;  // P1.3: ast 不可得 (val 取自 trueVal/falseVal 局部文本)
                 auto& arg = node.positional[idx];
                 if (arg->kind == ASTNodeKind::IdentifierExpr) {
                     auto& idArg = static_cast<IdentifierExpr&>(*arg);
@@ -146,7 +146,19 @@
                 return;
             }
             if (vpIsCall && !vpIsLvalue092s) {
-                lastExpr_ = "(intptr_t)&(void*){" + lastExpr_ + "}";
+                // ucSegmentedControl 的 mIOleInPlaceActivate.bas:
+                //   `Invoke(..., QueryInterface, VarPtr(Str2Guid(IID_IOleInPlaceActiveObject)), ...)`
+                // Str2Guid 返回 GUID (用户 UDT)。MSVC C 模式不支持把结构体 rvalue 塞进
+                // `(T){expr}` 复合字面量 (会被当成首成员初始化 → C2440)，所以先落一枚
+                // 块作用域临时再取址；标量 (void*/intptr_t 返回) 仍走原复合字面量。
+                std::string vpUdt = node.positional[0] ? inferUdtTypeOfExpr(*node.positional[0]) : std::string();
+                if (!vpUdt.empty()) {
+                    std::string vpTemp = "_vp_" + std::to_string(varPtrTempCounter_++);
+                    c_.emitLine(vpUdt + " " + vpTemp + " = " + lastExpr_ + ";  /* VarPtr(UDT 临时) */");
+                    lastExpr_ = "(intptr_t)&" + vpTemp;
+                } else {
+                    lastExpr_ = "(intptr_t)&(void*){" + lastExpr_ + "}";
+                }
             } else if (!lastExpr_.empty() && (std::isdigit(static_cast<unsigned char>(lastExpr_[0])) || lastExpr_[0] == '(')) {
                 if (lastExpr_.size() > 1 && lastExpr_[0] == '(' && lastExpr_[1] == '*') {
                     // Fix 090h: (*name) / (*name).field / (*name)[idx] — ByRef 参数解引用是左值
@@ -215,7 +227,7 @@
             std::string tnCls88 = inferClassTypeOfExpr(*node.positional[0]);
             std::string tnSpell88 = tnCls88.empty() ? std::string() : projectClassNameOf(tnCls88);
             if (!tnSpell88.empty() && !classUsedAsInterface(tnCls88)
-                && !variantOperandAST(node.positional[0].get())) {
+                && !isVariantType(node.positional[0].get())) {
                 std::string tnKeep88 = lastExpr_;
                 emitExpr(*node.positional[0]);
                 std::string tnArg88 = lastExpr_;
@@ -299,7 +311,7 @@
                     // SetBSTR/SetDouble 设置, 这些函数期望具体类型. 当实参是 Variant
                     // (如 vb6_VariantArrayGet, Variant 变量等) 时, 需要先提取具体值.
                     // 仅使用 cExprIsVariant (C 字符串级) 和 knownVariantVars_ 检测.
-                    bool argIsVariant = cExprIsVariant(argExpr);
+                    bool argIsVariant = isVariantSlot(argExpr, nullptr);  // P1.3: ast 不可得 (argExpr 距 emitExpr 超 5 行)
                     if (!argIsVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
                         auto& idArg = static_cast<IdentifierExpr&>(*node.positional[i]);
                         std::string argLower = idArg.name;

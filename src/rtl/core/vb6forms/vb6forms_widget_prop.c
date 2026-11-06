@@ -238,7 +238,7 @@ void vb6_SetAutoRedraw(void* hwnd, int32_t val) {
         HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
         // 用背景色填充 (VB6 语义: 持久位图初始 = BackColor; 此前硬编码
         // COLOR_BTNFACE, 窗体设了 BackColor 时首帧闪一帧错的底色)
-        HBRUSH bgBrush = CreateSolidBrush((COLORREF)vb6_GetControlBackColor(hwnd));
+        HBRUSH bgBrush = CreateSolidBrush(vb6_ColorToColorRef(vb6_GetControlBackColor(hwnd)));
         if (bgBrush) { FillRect(memDC, &rc, bgBrush); DeleteObject(bgBrush); }
         // 存储
         SetPropW((HWND)hwnd, L"VB6_AutoRedrawDC", (HANDLE)memDC);

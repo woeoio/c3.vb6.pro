@@ -73,6 +73,10 @@ struct CompileOptions {
     std::vector<std::string> typelibRefs;    // TypeLib路径或ProgID列表
     bool autoTypelib = true;                 // 自动从源码中提取COM类型并加载TypeLib
 
+    // 免注册 COM 运行期模式 (2026-11-04): 空 = 未指定（不注入任何行，行为与改动前一致）
+    std::string comMode;                     // direct | manifest | auto
+    std::string comManifest;                 // 客户端 manifest 路径（manifest/auto 用）
+
     // ActiveX DLL (P6.6)
     bool isDll = false;                      // 编译为ActiveX DLL (而非EXE)
     std::string dllProgId;                   // DLL的ProgID前缀 (如 "MyLib")
@@ -330,6 +334,23 @@ private:
     std::string verOriginalFileName_;
     std::string verTitle_;
     std::string userResFile_;         // P23-03: VBP ResFile= .res path (absolute)
+    // 账 #305 第328刀: 应用图标的来处。VB6 按 IconForm= 找那枚窗体、没写才看 Startup=，
+    // 窗体 .frm 里的 `Icon = "<名>.frx":NNNN` 才是字节的家 (读法见 driver/project_form_icon.cpp)。
+    // 这两位只在这里存原样 —— 链接期一次解析，别在第二处再问一次 .vbp。
+    std::string iconFormName_;        // VBP IconForm="Form1"（窗体名；Startup 那一位 = startupObject_，Fix 142）
+
+    // 账 #305 第330刀 (账 #605): 「App.Title 的种子 = 什么」这一问的唯一算法。
+    // 第320刀把这句就地抄在 Exe 的逐模块 cgen 上；本刀 ActiveX DLL 的 dllCgen 也要同一个值 ——
+    // 两处各抄一遍，「Title 与 Name 谁优先」就会在 Exe 与 DLL 之间分家 (VB6 实测答甲 = 本工程
+    // 自己的 Title，见 ai/probes/app_title_dll/client_out.txt 的 P1)。单文件编译两位都空 ⇒
+    // 种子为空，两个入口都不发播种行，读取侧仍退 App.EXEName (旧口径)。
+    // 第三百五十九刀: 无 Title= 时用 **exe 名** (ExeName32 的 stem = projectBaseName_)。
+    // 参考二进制 (Codejock GUISample.exe) 的 SaveSetting(App.Title, ...) 键就是 exe 名;
+    // 工程 Name 是 Project1, 永远对不上。DLL 没有 exe 名时退回工程 Name (330 刀口径)。
+    std::string appTitleSeed() const {
+        return !verTitle_.empty() ? verTitle_
+               : (!projectBaseName_.empty() ? projectBaseName_ : vbpProjectName_);
+    }
 
     // TypeLib解析器 (P6.3, COM类型导入)
     std::unique_ptr<TypeLibParser> typelibParser_;

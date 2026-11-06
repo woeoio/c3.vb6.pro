@@ -23,6 +23,10 @@
     std::string showFn = "vb6_form_show_" + cIdent(formName);      // Show函数名
     int ctrlId = 0;  // P7.6: 控件ID计数器(在WM_COMMAND和CreateControls中复用)
     bool isMDIForm = (frmDesc.formControl.controlType == FrmControlType::MDIForm);  // P7.7
+    // 账 #305 第三百三十四刀: MDIForm 的事件过程名是 MDIForm_Load/Resize/Unload/QueryUnload
+    // (VB6 语法; 非 MDI 窗体是 Form_*)。此前全部站点只认 Form_* ⇒ MDIForm_Load 定义了
+    // 却永远没人调用 (GUISample frmMain 整个初始化都在 MDIForm_Load 里 ⇒ 空白窗口)。
+    const char* formEvtBase334 = isMDIForm ? "MDIForm" : "Form";
     bool isMDIChild = frmDesc.isMDIChild;  // P7.7
 
     // P20-36: 收集菜单项ID映射 (与emitMenuItem/emitMenuClickDispatch一致)
@@ -230,8 +234,10 @@
                 // "sub vbflexgrid1_scrolltip(...)" 误判为存在 "vbflexgrid1_scroll"
                 // (MainForm VBFlexGrid1 无 Scroll 处理但 c3 为其声明 thunk →
                 // MainForm.c C2129 "静态函数已声明但未定义"). 匹配到 '(' 才算定义.
-                if (frmLowCode.find("sub " + handlerLower + "(") == std::string::npos
-                    && frmLowCode.find("sub " + handlerLower + " (") == std::string::npos) continue;
+                // ucSegmentedControl: Form1.frm 里的 ItemMouseEnter/MouseEnter 处理器
+                // 整段是**注释掉**的 ('Private Sub ...)，旧 find 仍会命中注释 ⇒ 发 thunk
+                // 引用不存在的处理函数 ⇒ LNK2019。这里要求命中行首非注释、且过程名后接 '('/'  ('。
+                if (!frmHasSubDefinition(frmLowCode, handlerLower)) continue;
                 anyHandler = true;
                 // Fix <vbeclipse> rev17: 登记"这条过程是事件处理器" —— visit(SubDecl&)
                 // 据此把形参按事件 ABI (ByVal) 发, 与下面 thunk 的 arg 类型、

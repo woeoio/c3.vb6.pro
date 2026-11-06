@@ -511,20 +511,29 @@ void CCodeGen::visit(TypeDecl& node) {
             // (以前只发得出第一维，第二维整个不见)。折不动的维沿用旧形 `(expr) + 1`。
             // 下界与第一维同口径: 只留语法、折算按 0..upper (声明 1 To 4 会多空一格)。
             int64_t arrVal;
+            std::vector<std::string> dims;
             std::string brackets;
             if (tryEvalConstInt(member->arraySize.get(), arrVal)) {
-                brackets = "[" + std::to_string(arrVal + 1) + "]";
+                dims.push_back(std::to_string(arrVal + 1));
             } else {
                 emitExpr(*member->arraySize);
-                brackets = "[(" + lastExpr_ + ") + 1]";
+                dims.push_back("(" + lastExpr_ + ") + 1");
             }
             for (auto& md : member->moreDims) {
                 if (tryEvalConstInt(md.upper.get(), arrVal)) {
-                    brackets += "[" + std::to_string(arrVal + 1) + "]";
+                    dims.push_back(std::to_string(arrVal + 1));
                 } else {
                     emitExpr(*md.upper);
-                    brackets += "[(" + lastExpr_ + ") + 1]";
+                    dims.push_back("(" + lastExpr_ + ") + 1");
                 }
+            }
+            // 账 #477: VB6 多维数组是列主序 (SAFEARRAY: 第一维最快变), C 数组是行主序。
+            // 声明侧按列主序发 `T a[dN]...[d1]`, 与索引侧的折叠 `field[j][i]` 成对 ——
+            // 两者一并反向, 物理布局才等于 VB6 的 `(i1) + (i2)*d1 + ...`。
+            // 方形 (如 ColorMatrix 5x5) 形状不变, 非方形才看得出先后。
+            for (int32_t d = (int32_t)dims.size() - 1; d >= 0; d--) {
+                if (brackets.empty()) brackets = "[" + dims[(size_t)d] + "]";
+                else brackets += "[" + dims[(size_t)d] + "]";
             }
             h_.emitLine(memType + " " + memName + brackets + ";");
         } else if (member->isArrayDynamic) {

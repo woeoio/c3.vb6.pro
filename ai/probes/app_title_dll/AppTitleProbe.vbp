@@ -1,0 +1,11 @@
+Type=OleDll
+Class=Probe; ProbeCls.cls
+Module=ProbeHost; ProbeHost.bas
+Title="AppTitleProbe-Title"
+Name="AppTitleProbe"
+ExeName32="AppTitleProbe.dll"
+HelpFile=""
+VersionCompatible32="1.0"
+MajorVer=7
+MinorVer=3
+RevisionVer=11

@@ -125,6 +125,12 @@ static void fixupUserControlParentChain(std::string& line) {
         } else if (line.compare(after, 6, ".Move(") == 0) {
             line.replace(pos, kLen + 6, "vb6_UC_ParentMove(");
             pos += 20;
+        } else if (line.compare(after, 10, ".BackColor") == 0) {
+            // ucTreeView: ucScrollbar.ctl `UserControl.BackColor = UserControl.Parent.BackColor`
+            // 生成 `vb6_UserControl_BackColor = vb6_UC_ParentObject().BackColor;`.
+            // Parent 的 BackColor 就是容器的 ambient 底色 (RTL 已有这枚全局)。
+            line.replace(pos, kLen + 10, "vb6_Ambient_BackColor");
+            pos += 23;
         } else {
             line.replace(pos, kLen, "vb6_UC_ParentObject()");
             pos += 22;
@@ -132,6 +138,32 @@ static void fixupUserControlParentChain(std::string& line) {
         hit = true;
     }
     (void)hit;
+}
+
+// ucTreeView: ucScrollbar.ctl 里有
+//   Public Property Get Extender() As Object: Set Extender = UserControl.Extender
+//   ... RunMode = Extender.Parent.RunMode
+// 生成 C 把 `Extender` 发成 `vb6_ucScrollbar_prop_get_Extender((void*)me)`,
+// 再拼 `.Parent.RunMode` —— 函数调用结果后面接 `.Parent` 不是合法 C, 而且
+// Extender.Parent 的 RunMode 在运行期恒为 1 (vbFormRuntime)。RTL 的
+// vb6_Ambient_UserMode 正是这个值 (-1 = 运行期)。这里把整段改写过去。
+static void fixupExtenderParentRunMode(std::string& line) {
+    static const char kFn[] = "_prop_get_Extender(";
+    static const char kTail[] = ").Parent.RunMode";
+    size_t pos = 0;
+    while ((pos = line.find(kFn, pos)) != std::string::npos) {
+        size_t fnStart = pos;
+        while (fnStart > 0 &&
+               (std::isalnum(static_cast<unsigned char>(line[fnStart - 1])) ||
+                line[fnStart - 1] == '_')) {
+            fnStart--;
+        }
+        size_t tail = line.find(kTail, pos);
+        if (tail == std::string::npos) { pos += sizeof(kFn) - 1; continue; }
+        size_t end = tail + sizeof(kTail) - 1;
+        line.replace(fnStart, end - fnStart, "vb6_Ambient_UserMode");
+        pos = fnStart + 22;
+    }
 }
 
 void CodeEmitter::emitLine(const std::string& line) {
@@ -153,6 +185,11 @@ void CodeEmitter::emitLine(const std::string& line) {
         // Fix 133u: UserControl.Parent 链改写 (见上).
         std::string fixed = line;
         fixupUserControlParentChain(fixed);
+        oss_ << fixed << "\n";
+    } else if (line.find("_prop_get_Extender(") != std::string::npos &&
+               line.find(").Parent.RunMode") != std::string::npos) {
+        std::string fixed = line;
+        fixupExtenderParentRunMode(fixed);
         oss_ << fixed << "\n";
     } else {
         oss_ << line << "\n";

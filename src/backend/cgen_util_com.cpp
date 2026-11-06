@@ -177,7 +177,7 @@ std::string CCodeGen::resolveComValue(const std::string& unpackType) {
         if (ddSym && !ddSym->srcTypeName.empty()
             && Symbol::toLower(ddSym->srcTypeName) == "dataobject") {
             std::string memDD = Symbol::toLower(memberName);
-            std::string ddArg = "(void*)(*" + objExpr + ")";
+            std::string ddArg = dataObjectArgExpr(objExpr);
             if (memDD == "gettext")      { lastExpr_ = "vb6_oleDD_GetText(" + ddArg + ")"; isComMarker_ = false; return lastExpr_; }
             if (memDD == "getfilecount") { lastExpr_ = "vb6_oleDD_GetFileCount(" + ddArg + ")"; isComMarker_ = false; return lastExpr_; }
         }
@@ -619,6 +619,19 @@ bool CCodeGen::hostPseudoBareName(const std::string& pseudoObj,
     return true;
 }
 
+// .ctl/.pag 里**裸写**的宿主伪对象方法 (Cls / Refresh / OLEDrag / Size …)。
+// 表里这些行只带 HPF_METHOD —— 裸名那一路 (hostPseudoBareName) 要求 HPF_BARE,
+// 于是旧代码落到"发射裸标识符"兜底 ⇒ `Cls()` ⇒ LNK2019 `_Cls`
+// (ucTreeView ucTreeViewPlus.ctl:1408 `Cls`)。名字仍出自同一张表, 不另抄清单。
+bool CCodeGen::hostPseudoMethodRtlName(const std::string& pseudoObj,
+                                       const std::string& memberName,
+                                       std::string& outRtlName) const {
+    const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
+    if (!r || !(r->flags & HPF_METHOD) || (r->flags & HPF_BARE)) return false;
+    outRtlName = r->rtl;
+    return true;
+}
+
 // 按值读时的类型答案。requireBare=true 用于**裸名**那一路 —— 必须与发射侧同口径
 // (都认 HPF_BARE), 否则类型 oracle 会给一个发射时根本解析不出宿主符号的名字,
 // 那正是"两条路答不一样"的起源。方法成员与对象成员 (Unknown) 一律不答。
@@ -691,7 +704,11 @@ std::string CCodeGen::canonicalClassMemberName(const std::string& className,
 
 
 std::string CCodeGen::comPackExpr(Expr& expr) {
-    // Fix <vbeclipse>: **UDT (Type ... End Type) 实参**必须走字节数组编组。
+    if (std::getenv("C3_DBG_ST") && expr.kind == ASTNodeKind::IdentifierExpr
+        && (Symbol::toLower(static_cast<IdentifierExpr&>(expr).name) == "propertygridtheme"
+            || Symbol::toLower(static_cast<IdentifierExpr&>(expr).name) == "taskpaneltheme")) {
+        std::cerr << "[ST-PACK2] " << static_cast<IdentifierExpr&>(expr).name << std::endl;
+    }    // Fix <vbeclipse>: **UDT (Type ... End Type) 实参**必须走字节数组编组。
     // `m_Rect As RECT` 传给 COM 方法时, inferExprType 推不出标量类型 → 落
     // default 分支 → vb6_ComPackInt(me->m_Rect) → C2440 "无法从 vb6_type_RECT
     // 转换为 int32_t" (ucSplitBar.ctl:149 `.SplitterMouseDown UserControl.hWnd,
@@ -758,6 +775,37 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
             auto it50 = arrayDimCounts_.find(lower);
             if (it50 != arrayDimCounts_.end() && it50->second <= 1) return "vb6_ComPackValue";
         }
+        // 账 #305 第三百三十九刀: 跨模块注入的**标量全局** (Definitions.bas 的
+        // , 消费侧 frmMain) —— 前端在消费模块
+        // 没解析到 (警告 VB3001), 该名又不在任何 known*Vars_ 表里 ⇒ inferExprType
+        // 答 Object ⇒ 发 vb6_ComPackObject(int32 全局) ⇒ 运行期对整数 AddRef ⇒
+        // 0xD 处 AV (GUISample CommandBars_Update 事件里的
+        //  实测)。
+        // 按符号声明 的类型名打包。
+        {
+            Symbol* cmSym339 = symTab_.lookupModule(id.name);
+            if (!cmSym339) cmSym339 = symTab_.lookup(id.name);
+            if (std::getenv("C3_DBG_ST")) { if (cmSym339) std::cerr << "[ST-PACK3] " << id.name << " kind=" << (int)cmSym339->kind << " vtn=[" << cmSym339->variableTypeName << "] type=" << (int)cmSym339->type << std::endl; else std::cerr << "[ST-PACK3] " << id.name << " NOSYM" << std::endl; }
+            if (cmSym339 && cmSym339->kind == SymbolKind::Variable
+                && !cmSym339->variableTypeName.empty() && !cmSym339->isArray) {
+                const std::string vt339 = Symbol::toLower(cmSym339->variableTypeName);
+                if (vt339 == "long" || vt339 == "integer" || vt339 == "byte"
+                    || vt339 == "boolean") return "vb6_ComPackInt";
+                // typelib 枚举 (As XTPPropertyGridVisualTheme) —— VB6 枚举一律是
+                // 32 位值; 符号 type 被填成 Object (枚举类型名在前端不可解析), 但
+                // 声明侧 C 类型是 int32_t (Definitions.h extern int32_t)。查得到
+                // EnumType/枚举成员符号即按 Long 打包。
+                {
+                    Symbol* enSym339 = lookupModuleDotted(cmSym339->variableTypeName);
+                    if (!enSym339) enSym339 = symTab_.lookupModule(cmSym339->variableTypeName);
+                    if (!enSym339) enSym339 = symTab_.lookup(cmSym339->variableTypeName);
+                    if (std::getenv("C3_DBG_ST")) { std::cerr << "[ST-PACK4] enum " << cmSym339->variableTypeName << " -> " << (enSym339 ? (int)enSym339->kind : -1) << std::endl; }
+                    if (enSym339 && enSym339->kind == SymbolKind::EnumType) return "vb6_ComPackInt";
+                }
+                if (vt339 == "double" || vt339 == "single" || vt339 == "currency") return "vb6_ComPackDouble";
+                if (vt339 == "string") return "vb6_ComPackBSTR";
+            }
+
         // Fix 110v: knownVariantVars_ 先于 knownObjectVars_ 判定. `Dim Value As Variant`
         // 的局部变量在 For Each 语境下同时被登记进 knownObjectVars_ (旧代码把
         // For-Each 元素一律当对象), 使 Variant 变量走 vb6_ComPackObject →
@@ -770,6 +818,7 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
         if (knownBstrVars_.count(lower)) return "vb6_ComPackBSTR";
         if (knownDoubleVars_.count(lower)) return "vb6_ComPackDouble";
         if (knownLongVars_.count(lower)) return "vb6_ComPackInt";
+        }
     }
     // ExeComBridge 03: 本工程类的 `New <类>` 实参.
     //   cgen_expr.cpp visit(NewExpr) 对它生成裸实例指针 (vb6_cls_X_New()); 通用
@@ -842,6 +891,12 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
     auto& id = static_cast<const IdentifierExpr&>(expr);
     std::string lower = Symbol::toLower(id.name);
     if (knownVariantVars_.count(lower) || knownObjectVars_.count(lower)) return "";
+    // 常量 (Const / Enum 成员) 在 C 侧是 `#define 文本`, `&CONST` 是 C2101 "constant &"
+    // (ucTreeView ucScrollbar.c:2612/2617 `vb6_ComPackIntRef(&VALUE_DEF)` 实证);
+    // 常量天然不能被写回, 保持按值打包。
+    if (const Symbol* cs = symTab_.lookup(id.name)) {
+        if (cs->kind == SymbolKind::Constant || cs->kind == SymbolKind::EnumMember) return "";
+    }
     if (isArrayCarrierArgName(lower, id.name)) return "";
     std::string fn;
     // Integer 必须问专属表: inferExprType 对 Integer 局部/形参答 Long (VB6 表达式提升),
@@ -980,7 +1035,37 @@ std::string CCodeGen::comUnpackForPack(const std::string& packFn,
 }
 
 std::string CCodeGen::packArgValue(const std::string& packFn,
-                                   const std::string& expr) const {
+                                   const std::string& expr,
+                                   const ASTNode* argAst) const {
+    // B5: 带型本工程类实例**变量**当晚绑定 COM 实参. 变量槽里是裸 vb6_cls_X*
+    // (`Set h = New X` 对 typed 槽发的是 X_New() 的裸指针), 而 ComPackValue 的
+    // _Generic 把它当 VT_DISPATCH 原样交出去, 对端 AddRef 时把结构体首字段
+    // __comObj 当 vtable ⇒ 0xC0000005 (实测 B5b: `Dim h As bHello: d.Add "x", h`
+    // → exit 0xC0000005, 崩在 Add 那一句).
+    // 出口**不能**复用 `New` 实参那条 vb6_ComPack_<类>: 那一条经 FromInstance,
+    // 把实例销毁权一起交给 VARIANT; 变量还活着, 对端释放后再用就是 UAF.
+    // 借用型: FromBorrowedInstance 加一枚引用交给 VARIANT, 宿主销毁权不动.
+    // 闸门: "裸标识符 (局部/模块级变量、ByVal 形参)" 或 "ByRef 形参的解引用形态
+    // `(*obj)`", 且类型占 coclass 表. 表外类 (§B187 EXE 不登记 / Private) 交回原路.
+    // ByRef 传参语义: 晚绑定对端拿到的是**当时的引用** (AddRef 后存进 VARIANT),
+    // 不会反向改写宿主槽; 形参自身被 `Set obj = ...` 改写时写的是宿主槽, 与已
+    // 交给对端的那枚引用无关 —— 故先解一层再借用打包是安全的 (§B5 同源缺口).
+    if (argAst && argAst->kind == ASTNodeKind::IdentifierExpr
+        && (packFn == "vb6_ComPackValue" || packFn == "vb6_ComPackObject")) {
+        auto& id5 = static_cast<const IdentifierExpr&>(*argAst);
+        const std::string lower5 = Symbol::toLower(id5.name);
+        const bool bareIdent5 = expr == id5.name && !expr.empty()
+            && (std::isalpha((unsigned char)expr[0]) || expr[0] == '_')
+            && std::all_of(expr.begin() + 1, expr.end(), [](char ch) {
+                   return std::isalnum((unsigned char)ch) || ch == '_'; });
+        const bool isByRef5 = knownByRefParams_.count(lower5) > 0;
+        const bool derefByRef5 = isByRef5 && expr == "(*" + id5.name + ")";
+        if ((bareIdent5 && !isByRef5) || derefByRef5) {
+            const std::string cls5 = inferClassTypeOfExpr(*argAst);
+            if (!cls5.empty() && classHasCoClassDesc(cls5))
+                return "vb6_ComPackVB6InstanceBorrowed(\"" + cls5 + "\", " + expr + ")";
+        }
+    }
     // ⚠ 长度字面量必须与整串长度相等 —— `std::string::compare(pos, count, str)` 拿
     // [pos, pos+count) 去比**整条** str, count 小于 str.size() 时恒不相等 (静默恒假)。
     // 这里直接用 rfind(..., 0) 前缀判定, 不数长度。
@@ -995,7 +1080,7 @@ std::string CCodeGen::packArgValue(const std::string& packFn,
     // 又一次在编译期替运行期选数值档，正是 §B145 要消灭的那件事 (实测拆成 Double 会
     // 静默把 Decimal 的 0.1+0.2 交成 0.29999999999999998，而 3.5 交成 3)。
     // 只接管「打包器要标量」那四档；ComPackValue/ComPackVariant/ComPackObject 原样不动。
-    if (cExprIsVariant(expr) && (packFn == "vb6_ComPackDouble" || packFn == "vb6_ComPackInt"
+    if (isVariantSlot(expr, nullptr) && (packFn == "vb6_ComPackDouble" || packFn == "vb6_ComPackInt"  // P1.3: ast 不可得 (expr 为形参)
                                  || packFn == "vb6_ComPackBool" || packFn == "vb6_ComPackBSTR")) {
         return "vb6_ComPackValue(" + expr + ")";
     }
@@ -1057,7 +1142,7 @@ std::string CCodeGen::resolveComMarkerForPack(const std::string& packFnHint) {
         if (ddSym && !ddSym->srcTypeName.empty()
             && Symbol::toLower(ddSym->srcTypeName) == "dataobject") {
             std::string memDD = Symbol::toLower(memName);
-            std::string ddArg = "(void*)(*" + objExpr + ")";
+            std::string ddArg = dataObjectArgExpr(objExpr);
             if (memDD == "gettext")      return "vb6_oleDD_GetText(" + ddArg + ")";
             if (memDD == "getfilecount") return "vb6_oleDD_GetFileCount(" + ddArg + ")";
         }

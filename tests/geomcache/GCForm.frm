@@ -410,6 +410,11 @@ Private Sub tmrGC_Timer()
     ' itself with a NULL name, so "name = name" proved nothing. The arm now answers the
     ' same relation the Controls collection already uses for membership, so the gate
     ' means "this member is in this form's own set".
+    ' 81db5578 (账 #305 第343刀) 把 TypeName(窗体实例) 改成答**窗体类名**(模块名), 与 VB6 一致:
+    '   VB6 的 TypeName(Form1) = "Form1"; GUISample 的判据 `TypeName(ActiveForm) = "frmDocument"`
+    '   就是 VB6 原样跑出来的。GC24 原先按 `TypeName(oC.Container) = "Form"` 分类, 是 ledger 257
+    '   时代的旧口径; 实测本构建答 "GCForm", 故按 VB6 口径改成与 nmForm(=Me.Name) 相等比对。
+    '   (GC25 已独立钉住 nmTxt = nmForm = "GCForm"; 这里不放松任何一档, 只对齐类型名。)
     ' Both heads pinned. True head: every member of Me.Controls that has a window names
     ' THIS form, and the name is non-empty on both sides -- plus a witness only the real
     ' window can give (its caption, and its hWnd compared against Me.hwnd), so an arm
@@ -432,7 +437,7 @@ Private Sub tmrGC_Timer()
     nmForm = CStr(Me.Name)
     hSelf = CLng(Me.hwnd)
     For Each oC In Me.Controls
-        If TypeName(oC.Container) = "Form" Then
+        If TypeName(oC.Container) = nmForm Then
             If CStr(oC.Container.Name) = nmForm Then
                 cntForm = cntForm + 1
             Else

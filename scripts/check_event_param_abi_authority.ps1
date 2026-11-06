@@ -110,7 +110,7 @@ Expect 'R6 发码反面针' ([regex]::Matches($h, 'Test-EmitcAbsent "b256_evt_by
 # R7 —— 槽 vs 标量: 装箱那一问与它配套的三件事 (账 #305 第三百八刀)
 Expect 'R7 槽那一问只在一处' (Count-Pattern $cev 'prmBase256 == "vb6_VARIANT"') 1 '形参声明档是 vb6_VARIANT 才谈装箱'
 Expect 'R7 AST 那条槽判据'  (Count-Pattern $cev 'argTy308 != Vb6Type::Variant') 1 'inferExprType 答 Variant 就留在直递'
-Expect 'R7 文本槽判据两处'  (Count-Pattern $cev 'cExprIsVariant\(argVal\)') 2 '新臂一处 + Fix 228 按值臂一处'
+Expect 'R7 文本槽判据两处'  (Count-Pattern $cev 'isVariantSlot\(argVal, nullptr\)') 2 '新臂一处 + Fix 228 按值臂一处 (P1.3 后旧名 cExprIsVariant 已改走命名接口, 两站文本那一半仍是 nullptr)'
 Expect 'R7 装箱临时量一枚'  (Count-Pattern $cev '_evt_box_') 1 '那枚槽的名字只在这里拼'
 Expect 'R7 回写只住一处'    (Count-Pattern $cev 'evtVariantWriteBack') 2 '文件内定义 1 + 站点调用 1'
 Expect 'R7 装与撤成对 A'    (Count-Pattern $cev 'vb6_VariantAssign\(&') 1 '深拷贝进槽 (BSTR 另分配)'

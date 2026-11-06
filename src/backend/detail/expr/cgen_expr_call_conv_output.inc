@@ -94,15 +94,11 @@
     // 对某些 Variant 表达式展开可能产生逗号问题 → C2197, 故用 isDefinitelyVariantExpr
     // 跳过, 保留 vb6_CStr(variantExpr) 原样 (vb6_CStr 接 VARIANT, 直接可用).
     if (callee == "vb6_CStr" && !args.empty()) {
-        bool argIsDefVariant = false;
-        if (!node.positional.empty()) {
-            argIsDefVariant = isDefinitelyVariantExpr(*node.positional[0]);
-        }
-        // Fix 038b-4: 字符串级 Variant 检测 — 如果是 C 级 Variant 表达式,
-        // 也跳过 VariantFromValue 包装 (vb6_CStr 直接接 VARIANT)
-        if (!argIsDefVariant) {
-            argIsDefVariant = cExprIsVariant(args[0]);
-        }
+        // P2 (A10): 真问句是「这段 C 是不是整只槽」—— vb6_CStr 直接收 vb6_VARIANT。
+        // 类型是 Variant 但 C 是数组本体 (Array/Split/Filter、Variant() 返回) 时不算槽,
+        // 要落到下面的 boxToVariant (SafeArray 臂) 先装箱, 不许把载体递给 vb6_CStr。
+        bool argIsDefVariant = isVariantSlot(
+            args[0], node.positional.empty() ? nullptr : node.positional[0].get());
         if (!argIsDefVariant) {
             // Fix 121b: 同 Fix 121 — 裸 COM 结果必须解引用 (VariantFromComResult),
             // 否则 _Generic 按 void* 包装得到空 Variant。

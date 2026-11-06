@@ -190,3 +190,101 @@ function Test-InstanceLeak {
         Write-Host ("        " + $flat.Trim()) -ForegroundColor DarkGray
     }
 }
+
+# ------------------------------------------------------------
+# 账 #305 第330刀 (账 #605): 「一枚 ActiveX DLL 里的 App 对象答谁」—— 形状与行为在同一趟编译里各读一次。
+# VB6 实测三条 (ai/probes/app_title_dll/client_out.txt，宿主 = 32 位 cscript)：App.Title 答本工程
+# 的 Title (P1)、App.EXEName 答 DLL 自己的模块名 (P3)、App.Path 答 DLL 自己的目录 (P4)。改前 C3
+# 三条一起答**宿主那枚 EXE**：播种只发在 Exe 的五个入口模板里 (Type=OleDll 一条都不进)，而
+# App.Path / App.EXEName 问的是 GetModuleFileNameW(NULL, …)。
+# 两把尺缺一不可 —— dll_entry.c 的形状针只证「播种那一行在不在」，进程内那一点才证「读到的到底是谁」。
+# 目录坑：探针 exe 与产物 DLL 若同住一个目录，App.Path 改前改后同值、那一发根本不成立 ⇒ DLL 单独
+# 编进一个带 b605_self 标记的子目录，探针住在外面；标记在不在答案里就是「答 DLL / 答宿主」的判别位。
+# 两台读数 (同一枚夹具、同一枚探针)：
+#   改前 READ_ANS=605-title=[disp_probe]    exe=[disp_probe]    tailOk=False
+#   改后 READ_ANS=605-title=[B605 Dll Title]  exe=[B605k]       tailOk=True
+# ------------------------------------------------------------
+function Test-DllAppSelf {
+    param(
+        [string]$Name,
+        [string]$VbpFile,
+        [string]$DllName,
+        [string]$Clsid,
+        [string]$Member,             # 按名点的那一发零实参 Function (探针的 CALL= 那一臂)
+        [string]$SeedNeedle,         # dll_entry.c 里应当出现的播种那一行
+        [string[]]$Needles,
+        [string[]]$Absent = @()
+    )
+    # vbp 分片: 本片不跑这例 (闸门在 run_tests.ps1 里定义)。
+    if (-not (Enter-VbpShard)) { return }
+    $script:total++
+    Write-Host -NoNewline "  [DLLAPP] $Name ... "
+
+    $sub = Join-Path $OutDir "b605_self"
+    New-Item -ItemType Directory -Force -Path $sub | Out-Null
+    # dll_entry.c 不进 --emit-c 的 stdout，只活在驱动那句 "intermediates kept at: <dir>"
+    # 指到的临时目录里 —— 与 Test-VbpDll 用的是同一把手。
+    $out = & $C3 $VbpFile --output-dir $sub --keep-for-debug 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $script:fail++
+        Write-Host "FAIL (compile)" -ForegroundColor Red
+        if ($Verbose) { Write-Host (($out | Out-String) -replace '\s+', ' ') }
+        return
+    }
+    $dllPath = Join-Path $sub "$DllName.dll"
+    if (-not (Test-Path $dllPath)) {
+        $script:fail++
+        Write-Host "FAIL (no dll)" -ForegroundColor Red
+        return
+    }
+    $genDir = $null
+    foreach ($line in $out) {
+        $t = "$line"
+        $at = $t.IndexOf("intermediates kept at: ")
+        if ($at -ge 0) { $genDir = $t.Substring($at + 23).Trim(); break }
+    }
+    if (-not $genDir) {
+        $script:fail++
+        Write-Host "FAIL (no intermediates)" -ForegroundColor Red
+        return
+    }
+    $entryPath = Join-Path $genDir "dll_entry.c"
+    if (-not (Test-Path $entryPath)) {
+        $script:fail++
+        Write-Host "FAIL (no dll_entry.c)" -ForegroundColor Red
+        return
+    }
+    # Test-Path 认旧产物 (账 #c3-build-test 那一坑)：上一趟留下的同名 dll 会被当成这一趟的读数，
+    # 所以 $dllPath 那一步之前已经先验过 $LASTEXITCODE。
+    $entry = ((Get-Content $entryPath -Raw) -replace '\s+', ' ')
+
+    $probe = Get-DispProbeExe ""
+    if (-not $probe) {
+        $script:fail++
+        Write-Host "FAIL (no probe)" -ForegroundColor Red
+        return
+    }
+    $text = ((& $probe $dllPath $Clsid "CALL=$Member") | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        $script:fail++
+        Write-Host "FAIL (probe exit=$LASTEXITCODE)" -ForegroundColor Red
+        Write-Host (($text | Out-String) -replace '\s+', ' ') -ForegroundColor DarkGray
+        return
+    }
+    $flat = ($text -replace '\s+', ' ') + "|" + $entry
+
+    $detail = @()
+    if (-not $entry.Contains($SeedNeedle)) { $detail += ("dll_entry missing seed: " + $SeedNeedle) }
+    foreach ($n in $Needles) { if (-not $flat.Contains($n)) { $detail += "missing: $n" } }
+    foreach ($a in $Absent) { if ($flat.Contains($a)) { $detail += "unexpected: $a" } }
+    if ($detail.Count -eq 0) {
+        $script:pass++
+        Write-Host "PASS (App answers this product, not the host)" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        if ($Verbose) { foreach ($d in $detail) { Write-Host "        $d" -ForegroundColor DarkGray } }
+        else { Write-Host ("        " + ($detail -join '; ')) -ForegroundColor DarkGray }
+        Write-Host ("        " + $flat.Trim()) -ForegroundColor DarkGray
+    }
+}

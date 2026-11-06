@@ -12,7 +12,7 @@
         // vb6_VariantToLongPtr 提取再压回 void* 实参.
         if (!isByRef && i < calleeParams.size()
             && calleeParams[i].type == Vb6Type::Unknown
-            && argHasByValOverride && cExprIsVariant(argVal)) {
+            && argHasByValOverride && isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
             argVal = "(void*)(intptr_t)vb6_VariantToLongPtr(" + argVal + ")";
         }
 
@@ -93,12 +93,13 @@
                 std::string twin249 = comValueTwinForObjectReadExpr(argVal);
                 if (!twin249.empty()) argVal = twin249;
             }
+            // P2 (A6): 主问句是「实参的 C 值是不是整只槽」(下面按 paramBase 的提取函数
+            // 全部收 vb6_VARIANT)。数组本体 (isArrOut) 不是槽, 单列为 argIsVariantArr
+            // 供 092g/091k 的载体护栏那一支用。
             bool argIsVariantArr = false;
-            bool argIsVariant = isDefinitelyVariantExpr(*node.positional[i], &argIsVariantArr);
-            // Fix 038b-2: 字符串级 Variant 检测回退 — 补充 isDefinitelyVariantExpr
-            // 无法识别的 C 级 Variant 表达式 (vb6_VariantArrayGet, vb6_VariantFromComResult 等)
-            if (!argIsVariant && !argIsVariantArr) {
-                argIsVariant = cExprIsVariant(argVal);
+            bool argIsVariant = isVariantSlot(argVal, node.positional[i].get());
+            if (!argIsVariant) {
+                argIsVariant = isDefinitelyVariantExpr(*node.positional[i], &argIsVariantArr);
             }
             // Fix 113i: 形参是**具体类型** (String/数值) 而实参是**裸 COM 结果**
             // (vb6_ComCall / vb6_ComCallByDispid / vb6_ComGetProp 返回 void*,
@@ -160,7 +161,7 @@
                 // <vbeclipse>: 同一条边界扩到"内置函数调用已经返回载体"那一形
                 // (Split/Filter/ArrayCreate...), 判定收进 cExprIsSafeArrayCarrier:
                 //   Join(Split(s, ","), "|") → C2440 (实测三条全中, 含 UBound(Split(...)))
-                bool argIsCarrier092g = cExprIsSafeArrayCarrier(argVal);
+                bool argIsCarrier092g = isSafeArrayCarrier(argVal);
                 if (paramIsArray && !argIsPA091k && !argIsCarrier092g
                     && (paramBase == Vb6Type::Variant || paramBase == Vb6Type::Byte
                     || paramBase == Vb6Type::String || paramBase == Vb6Type::Long)) {
@@ -225,7 +226,7 @@
                     // 只有实参确实是 VARIANT **值** (后期绑定读 / Variant 变量) 才需要那层解盒。
                     // 判据刻意保守: 只把"能确证是项目类实例"的那一档摘出来直传, 其余形状维持原行为,
                     // 以免引入新的 directions 错误。
-                    bool argIsVariantVal227 = cExprIsVariant(argVal);
+                    bool argIsVariantVal227 = isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                     bool argIsClassInst227 =
                         !argIsVariantVal227 && !inferClassTypeOfExpr(*node.positional[i]).empty();
                     if (argIsClassInst227) {
@@ -248,7 +249,7 @@
             // 看 mapTypeRef 那份 C 类型是不是 vb6_VARIANT, 不是才不装。
             && (calleeParams[i].typeRefName.empty()
                 || cTypeForDeclaredTypeName(calleeParams[i].typeRefName) == "vb6_VARIANT")) {
-            bool alreadyVariant = cExprIsVariant(argVal);
+            bool alreadyVariant = isVariantSlot(argVal, nullptr);  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
             if (!alreadyVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
                 auto& idArg86 = static_cast<IdentifierExpr&>(*node.positional[i]);
                 if (knownVariantVars_.count(Symbol::toLower(idArg86.name))) alreadyVariant = true;
@@ -357,8 +358,8 @@
                     std::string twin249b = comValueTwinForObjectReadExpr(argVal);
                     if (!twin249b.empty()) argVal = twin249b;
                 }
-                bool argIsVariant = isDefinitelyVariantExpr(*node.positional[i])
-                                    || cExprIsVariant(argVal);
+                // P2 (A7): 本臂的提取/退让只对整只槽成立 (数组本体由 !isArr 排除)。
+                bool argIsVariant = isVariantSlot(argVal, node.positional[i].get());
                 // Fix 113c: 实参是裸 COM 结果 (void* 承载 COM VARIANT*) 时, 语义即
                 // Variant — 必须判为 Variant 才能触发下方 Variant→具体类型提取
                 // (vb6_VariantFromComResult + 按 rtParamType 提取). 否则 void* 裸传
@@ -641,6 +642,35 @@
                 registerClassArgRefHandback(clsArg136, tmpArg136);
                 argVal = tmpArg136;
             }
+        }
+        /* 站点: .ctl 里 `Call mIOleInPlaceActivate.InitIPAO(m_uIPAO, Me)` /
+           `SetIPAO(m_uIPAO, Me)` (ucSegmentedControl.ctl:1807/1851)。
+           C3 的进程内 UserControl 宿主模型里, `me` 是**裸实例结构体** (首字段 __comObj
+           恒为 NULL), 没有 OLE 身份对象; 真实 VB6 这一格交的是控件自己的 IUnknown。
+           把裸结构体递给 `As Object` 形参 ⇒ 下游 `ObjPtr(Ctrl)` 交回结构体地址 ⇒
+           DispCallFunc 把首字段当 vtable 解引用 ⇒ AV read at 0 (实测 C3 产物启动即崩)。
+           按宿主模型既有口径: 无 OLE 身份 ⇒ 交 NULL。mIOleInPlaceActivate 的两个入口
+           都用 `If pInterface <> 0&` 守着, 于是这段 IPAO 钩子成为 no-op —— 它只服务于
+           "把容器加速键转发进来", 与 UC 的绘制/命中/生命周期无关 (无容器 EXE 模式)。
+           只认**设计器模块里整枚 `Me` 作实参**这一格 (C 文本恰为 me / &me), 不碰
+           `Me.成员` 与其它实参 —— `me->x` 那种形态的 C 文本是 me->x, 不会命中。 */
+        /* 只认 IPAO 钩子的两个入口 (InitIPAO / SetIPAO) —— 必须按**被调名**钉住。
+           早先按"整枚 Me 作实参"裸判, 把 VBFlexGridDemo 里其它 `Something(Me)`
+           也一并交成 NULL, 该工程启动即 0xC000041D (实测 A/B)。 */
+        std::string ipalow;
+        if (node.callee) {
+            if (node.callee->kind == ASTNodeKind::IdentifierExpr)
+                ipalow = Symbol::toLower(static_cast<IdentifierExpr&>(*node.callee).name);
+            else if (node.callee->kind == ASTNodeKind::MemberAccessExpr)
+                ipalow = Symbol::toLower(static_cast<MemberAccessExpr&>(*node.callee).memberName);
+        }
+        const bool isIpaoHook = (ipalow == "initipao" || ipalow == "setipao");
+        if (isDesignerModule_ && isIpaoHook && (argVal == "me" || argVal == "&me")) {
+            /* ByRef 那一档必须交**指向 NULL 的槽**而不能交裸 0 —— 被调方 `Ctrl` 是
+               void**, 函数体里 `ObjPtr(Ctrl)` 发成 `vb6_ObjPtr((*Ctrl))`, 交 0 就成了
+               解引用空指针 (实测 av read 0)。交 &(void*){0} 时 (*Ctrl) == NULL ⇒
+               ObjPtr 答 0 ⇒ Invoke 的 `If pInterface <> 0&` 整段跳过。 */
+            argVal = isByRef ? "&(void*){0}" : "(void*)0";
         }
         args.push_back(std::move(argVal));
     }

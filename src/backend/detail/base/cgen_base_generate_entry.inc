@@ -23,11 +23,23 @@
                             + "\");  /* 账 #592: App.Title = .vbp 的 Title */");
             };
             bool hasMain = false;
+            // 2026-11-04 免注册 COM: -ComMode 注入。只在显式给旗时发一行，未给时**一行不发**
+            // ⇒ 所有既有产物的 C 文本逐字节不变（Emit manifest 585 份口径不动）。
+            // 语义: direct = 既有直加载；manifest = 建 ActCtx（缺 identity/无内嵌清单即明确失败）；
+            //       auto = 默认（能建就建，不能就走 direct 并在 stderr 说明原因）。
+            auto emitComMode = [&]() {
+                if (comMode_.empty()) return;
+                int m = (comMode_ == "direct") ? 1 : (comMode_ == "manifest") ? 2 : 0;
+                c_.emitLine("vb6_ComSetMode(" + std::to_string(m) + ");  /* -ComMode " + comMode_ + " */");
+                if (!comManifest_.empty())
+                    c_.emitLine("vb6_ComSetManifest(L\"" + escapeWideCString(comManifest_) + "\");");
+            };
             // Fix 160: ComLib= 免注册组件表烘焙 — 在 vb6_Init() 之前发出.
             // vb6_ComLibRegister 只填一张静态表, 与 vb6_Init 无顺序依赖, 但必须在任何
             // 用户代码 (vb6_CreateObject) 之前完成; 放入口点最前保证首次调用即就绪.
             // 表空 (未声明 ComLib=) 时一行不发 → 产物与改动前逐字节一致, 零回归.
             auto emitComLibReg = [&]() {
+                emitComMode();   // 模式先落定（与表是否为空无关），随后才是表
                 if (!comLibRefs_ || comLibRefs_->empty()) return;
                 c_.emitBlank();
                 c_.emitLine("/* Fix 160: ComLib= 免注册组件表 (vbp 声明; 路径相对 exe) */");

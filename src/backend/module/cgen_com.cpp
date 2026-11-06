@@ -7,6 +7,25 @@
 
 namespace vb6c3 {
 
+// target 文本可能自带 `/* ... */` 类字段注记 (如 cNode->Parent 后面那一段尾部注记);
+// 把它整段嵌进本文件的块注释 ⇒ C 注释不可嵌套, 内层 `*/` 提前闭合外层, 后续代码裸露成
+// 语法错误 (ucTreeView Node.c:460 / Form4.c:384/395/404 实证)。注释文本里只保留纯表达式。
+static std::string commentStripBlockComments(const std::string& s) {
+    std::string out;
+    size_t i = 0;
+    while (i < s.size()) {
+        if (s.compare(i, 2, "/*") == 0) {
+            size_t e = s.find("*/", i + 2);
+            if (e == std::string::npos) break;
+            i = e + 2;
+            continue;
+        }
+        out.push_back(s[i++]);
+    }
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
 // --- cgen_com.cpp: COM类工厂 + 接口vtable + RaiseEvent + 事件接收器 ---
 
 void CCodeGen::emitClassFactory(Module& module) {
@@ -376,7 +395,8 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
         // 腿②' = 写进一枚**活在本过程之外**的槽 (ByRef 出参那座桥的写回站)。这里的判断只有一条
         // 加法: 取走一枚引用。**不退旧值** —— 那种槽今天整个在计数系统外面, 退它 = 多退一次;
         // 「出参写回该不该放手旧值」与下标槽是同一格, 在册等腿⑤ 一起答。
-        c_.emitLine("{  /* 账 #305 (甲) 腿②': Set 出参槽 " + target + " */");
+        // 腿②': Set 出参槽
+        c_.emitLine("{  /* 账 #305 (甲) 腿②': Set 出参槽 " + commentStripBlockComments(target) + " */");
         c_.indent();
         c_.emitLine(target + " = " + valueExpr + ";");
         if (!rhsTransferred) {
@@ -395,7 +415,7 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
         // 悄悄改成 3 次：本机 VB-family 运行期对 `a(Bump())` 与 `a(Bump()+k-1)` 两形都答 1。
         const std::string addrSlot = "__clsaddr" + std::to_string(ivrefSetSeq_++);
         const std::string deref = "(*" + addrSlot + ")";
-        c_.emitLine("{  /* 账 #305 (甲) 腿" + legTag + ": Set 数组元素 " + target
+        c_.emitLine("{  /* 账 #305 (甲) 腿" + legTag + ": Set 数组元素 " + commentStripBlockComments(target)
                     + " (地址落一次, 下标算术只算一次) */");
         c_.indent();
         c_.emitLine(slotElemType + "* " + addrSlot + " = &(" + target + ");");
@@ -413,7 +433,7 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
         c_.emitLine("}");
         return;
     }
-    c_.emitLine("{  /* 账 #305 (甲) 腿" + legTag + ": Set " + target + " */");
+    c_.emitLine("{  /* 账 #305 (甲) 腿" + legTag + ": Set " + commentStripBlockComments(target) + " */");
     c_.indent();
     c_.emitLine(clsStruct + "* " + oldSlot + " = " + target + ";");
     if (!valueExpr.empty()) {
@@ -444,9 +464,15 @@ bool CCodeGen::ctypeIsObjectSlotPtr(const std::string& t) const {
 // claim 走 vb6_ComAddRefDispatch 而不是裸 AddRef: 它内含 vb6_ComIsDispatchable 那道闸, 对裸工程类实例
 // (`vb6_cls_X*`, 首格是 __comObj 而非 vtable) 与 HWND 一律判否 ⇒ 与退那一头同一个安全口径, 不会新造野调用。
 void CCodeGen::emitLateSlotRefClaim(const std::string& target, const std::string& valueExpr) {
+    // ucSegmentedControl.ctl: `Public Property Get Object() As Object: Set Object = UserControl.Extender`.
+    // `UserControl.Extender` 的 C 实体是结构体单例 vb6_UserControl_Extender（裸 `Extender`
+    // 那条路已经按 Fix 221 取地址），直接赋给 void* 槽是 C2440。这里补同一条口径：
+    // 这枚单例的**地址**就是 Extender 伪对象身份（vb6_UC_IsExtender 只认它）。
+    std::string claimed = (valueExpr == "vb6_UserControl_Extender")
+        ? "(&vb6_UserControl_Extender)" : valueExpr;
     c_.emitLine("{  /* 账 #305 (甲) 腿②″: Set 泛对象槽 " + target + " */");
     c_.indent();
-    c_.emitLine(target + " = " + valueExpr + ";");
+    c_.emitLine(target + " = " + claimed + ";");
     c_.emitLine("vb6_ComAddRefDispatch((void*)" + target + ");");
     c_.dedent();
     c_.emitLine("}");

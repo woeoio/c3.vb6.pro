@@ -61,6 +61,17 @@ void vb6_FormZOrder(void* hwnd, int position);
 // 复选框取消勾选是一次正经 `Click`，不能跟着筛。返回 0 = 这条通知不许升成 `Click`。
 int vb6_RadioClickCounts(void* hwndFrom);
 
+// 账 (C3 事件语义 / TeeChart 示例): 「正在建控件」这道门。
+// 实测口径（真 VB6 探针 .temp/evprobe，Form_Load 里逐句记日志）：
+//   · CheckBox 的 Value **真变化**（0→1、1→2）发 Click，同值赋值静默；
+//   · OptionButton 只在 False→True 这一跳发 Click（True→True / True→False 都不发）；
+//   · HScrollBar/VScrollBar 的 Value 真变化只发 Change（不发 Scroll），同值静默。
+// VB6 在**设计期属性灌入**（CreateControls 里的 Value/Min/Max）时一声都不发；
+// 生成码原有模块内静态 vb6_formLoading_<form> 只挡 WM_COMMAND，WM_HSCROLL 没有门。
+// 这里把同一件事记到窗体窗口属性上（值 1/2，SetPropW(…,0)=删属性），两族共用。
+void vb6_Form_SetLoading(void* hwndForm, int loading);
+int  vb6_Form_IsLoading(void* hwndAny);
+
 // P11.8: Position/Size attributes (all visible controls, in pixels)
 // VB6 uses twips internally, but Win32 uses pixels; RTL handles conversion
 int vb6_GetControlLeft(void* hwnd);
@@ -79,6 +90,10 @@ void vb6_GeomCacheWrite(void* hwnd, int slot, int value, int32_t mode);
 int  vb6_GeomCacheRead(void* hwnd, int slot, int actualPx, int32_t mode, int fallback);
 // Fix 162a: obj.Move l[,t[,w[,h]]] —— twips 进; mask 位 1=L 2=T 4=W 8=H, 缺失位不变
 void vb6_ControlMove(void* hwnd, double l, double t, double w, double h, int mask);
+// `obj.ZOrder [position]` —— 控件/窗体语言级方法, 0=置顶(缺省) 1=置底。
+// 与 vb6_FormZOrder 同一口径 (SetWindowPos, 不激活/不移动/不改尺寸); 入参可以是
+// OCX 控件对象 (vb6_hwnd_<name>), 内部换回该控件在窗体里的顶层代表窗。
+void vb6_ControlZOrder(void* hwnd, int position);
 
 // P11.8: hWnd attribute (read-only, returns the Win32 HWND as pointer)
 void* vb6_GetControlHwnd(void* hwnd);
@@ -109,11 +124,21 @@ int vb6_GetControlFontStrikethrough(void* hwnd);
 void vb6_SetControlFontStrikethrough(void* hwnd, int strike);
 
 // P13.2: ForeColor/BackColor (all visible controls)
-// Returns OLE color (VB6 Long), 0x00BBGGRR format
+// getter/setter 存的、读的恒是 **VB6 Long 原值** (0x00BBGGRR；系统色 = 0x80000000|n 的
+// 32 位负值)，本对出口**不做翻译** —— VB 代码读回必须仍是那个负值。
 int vb6_GetControlForeColor(void* hwnd);
 void vb6_SetControlForeColor(void* hwnd, int color);
 int vb6_GetControlBackColor(void* hwnd);
 void vb6_SetControlBackColor(void* hwnd, int color);
+
+// ============================================================
+// 唯一出口: **VB6 颜色值 → 实际 COLORREF**
+//   · 系统色 `&H80000000& Or n` (n ∈ [0..30]) → GetSysColor(n)；
+//   · 其余（含非系统色的正/负值）按 COLORREF 语义取低 24 位 (0x00BBGGRR)。
+// RTL 内**不许**再出现第二份符号/系统色判据：任何要拿 COLORREF 造刷/设 DC 色的地方
+// 一律转调本函数（测地表见 scripts/check_color_ref_authority.ps1）。
+// ============================================================
+COLORREF vb6_ColorToColorRef(int vbColor);
 
 // Fix 187: WM_CTLCOLORSTATIC 统一应用 — 子控件 Set 过 VB6_BackColor 时
 // 应用 Fore/Back 色并返回背景刷; 未设色返回 0 (调用方走 DefWindowProcW)。

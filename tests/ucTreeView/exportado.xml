@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <images Width="40" Height="40">
+        <image src="img\facebook.png"/>
+        <image src="https://img.icons8.com/ios/50/000000/cat.png"/>
+        <image src="https://img.icons8.com/ios/50/000000/hamster.png"/>
+        <image src="https://img.icons8.com/ios/50/000000/horse.png"/>
+        <image src="https://img.icons8.com/ios/50/000000/rabbit.png"/>
+    </images>
+    <nodes>
+        <n Text="Empresa" FontBold="True" BackColor="16777215" TextColor="0" RadioStyle="True" Checked="False">
+            <n Text="Juan Perez" Image="1" FontUnderline="True" Checked="True" Selected="True" SelectedImage="2"/>
+            <n Text="Roberto Garcia" FontBold="False" BackColor="65535" TextColor="255" HideCheck="True" Disabled="False"/>
+        </n>
+        <n Text="Departamento" FontBold="True" TextColor="128" Expanded="True">
+            <n Text="Ventas" FontUnderline="True" Checked="False" HideCheck="False"/>
+            <n Text="Marketing" FontBold="True" FontUnderline="False" Selected="False"/>
+        </n>
+        <n Text="Clientes" FontBold="False" BackColor="255" TextColor="0" RadioStyle="False" Expanded="True">
+            <n Text="Clientes VIP" Image="3" Checked="False"/>
+            <n Text="Clientes Nuevos" FontUnderline="True" Selected="True" SelectedImage="4"/>
+        </n>
+        <n Text="Proyectos" FontBold="True" TextColor="0" BackColor="65535" Expanded="True">
+            <n Text="Desarrollo" Image="1" FontBold="True"/>
+            <n Text="Investigación" Image="2" FontUnderline="True"/>
+        </n>
+        <n Text="Equipo" FontBold="False" BackColor="128" TextColor="255" RadioStyle="True">
+            <n Text="Desarrolladores" Image="4" Checked="True"/>
+            <n Text="Diseñadores" Image="5" HideCheck="True"/>
+        </n>
+    </nodes>
+</root>

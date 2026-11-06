@@ -1,0 +1,7 @@
+Type=OleDll
+Class=Probe; Probe.cls; {11112222-3333-4444-5555-66667777B605}
+Startup=""
+Command32=""
+Name="B605k"
+Title="B605 Dll Title"
+ExeName32="B605k.dll"

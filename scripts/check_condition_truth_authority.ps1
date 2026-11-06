@@ -119,8 +119,8 @@ foreach ($bad in @('vb6_ComCallInt', 'vb6_ComCallBSTR', 'vb6_ComCallDouble', 'vb
 }
 
 # R4 —— 站点不许自己再问「是不是槽」
-Expect 'R4 If 站不再自问'   (Count-Pattern $ifC   'cExprIsVariant\(lastExpr_\)') 0 '那一问归主人'
-Expect 'R4 循环站不再自问' (Count-Pattern $loopC 'cExprIsVariant\(lastExpr_\)') 0 '那一问归主人'
+Expect 'R4 If 站不再自问'   (Count-Pattern $ifC   'isVariantSlot\(lastExpr_, nullptr\)') 0 '那一问归主人'
+Expect 'R4 循环站不再自问' (Count-Pattern $loopC 'isVariantSlot\(lastExpr_, nullptr\)') 0 '那一问归主人'
 
 # R5 —— 判据面
 $h = [System.IO.File]::ReadAllText($harness)

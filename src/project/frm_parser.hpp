@@ -60,6 +60,17 @@ struct FrmValue {
     }
 };
 
+// .frm 整数属性值 → VB6 Long (32 位有符号)。
+// frm_parser_util.cpp 把 &H80000000..&HFFFFFFFF 读成**无符号** 32 位 (long long 里是
+// 2147483648..4294967295)，而 VB6 语义里它们是负 Long —— &H8000000D& 是 -2147483635
+// (系统色 COLOR_HIGHLIGHT)。设计期颜色/数值发射前一律过这一道: 它是代码生成侧
+// **唯一**的符号折回出口，取代散落的 `(int)(unsigned int)`（那种写法看着像丢符号，
+// 靠截断碰巧拿回负数，不是可审的口径）。纯算术实现，不经任何有符号窄化转换。
+inline long long frmValueToVbLong(long long v) {
+    const unsigned long long u = (unsigned long long)v & 0xFFFFFFFFull;
+    return (u >= 0x80000000ull) ? (long long)(u - 0x100000000ull) : (long long)u;
+}
+
 // ============================================================
 // 复合属性块 (BeginProperty ... EndProperty)
 // ============================================================

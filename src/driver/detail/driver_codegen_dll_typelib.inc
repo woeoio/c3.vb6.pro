@@ -27,6 +27,8 @@
         // 新式接口"（是则引用 vb6_iv_thin_<类>/vb6_iv_claim_<类>），判据与类模块自身发码
         // 时逐字相同（同一张 ivreg_）。
         dllCgen.setInterfaceRegistry(&ifaces_);
+        // 账 #305 第330刀 (账 #605): App.Title 的种子按 Exe 同一条闸递进来 (appTitleSeed 只此一家)。
+        dllCgen.setProjectTitle(appTitleSeed());
         // Collect all symbol tables for cross-module Property lookup
         std::vector<SymbolTable*> allSymTabs;
         for (auto& analyzer : analyzers_) {

@@ -298,7 +298,7 @@ void CCodeGen::visit(BinaryExpr& node) {
     // 四则运算的改道**共用这一条判据**（三条形状: 前缀表 / As Variant 名单 / (*name) 形参），
     // 以前这个形状内联在 extractVar86 里，现在不再抄第二遍。
     auto isVariantOperand86 = [&](const std::string& cExpr, const Expr* astExpr) -> bool {
-        if (cExprIsVariant(cExpr)) return true;
+        if (isVariantSlot(cExpr, nullptr)) return true;  // P1.3: ast 不可得 (lambda 形参)
         if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
             auto& id86 = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
             if (knownVariantVars_.count(Symbol::toLower(id86.name))) return true;
@@ -328,11 +328,11 @@ void CCodeGen::visit(BinaryExpr& node) {
     // 账 #305 §B147: **改道那一问**吃「AST ∪ 文本」，而上面的 isVariantOperand86 刻意维持
     // 「文本 ∪ 已知变量」不变 —— 它还供着 Fix 086 那条提取 (vb6_VariantToLong(...))，那一档
     // 只能对**真的是槽**的 C 文本出手，把 AST 的宽答案灌进去就是 vb6_VariantToLong(裸 double)
-    // = C2440。方向性是这一格的要点：Div 的类型 oracle 只吃 variantOperandAST，这里吃它的
+    // = C2440。方向性是这一格的要点：Div 的类型 oracle 吃 isVariantType，这里吃它的
     // 超集 ⇒「oracle 答 Variant」必然蕴含「改道接走了、交出的是整只槽」，§B147 那一族
     // (oracle 说是槽、发码给裸标量 ⇒ 消费点既不提取也不取整) 就此按构造消失。
     auto routeOperand86 = [&](const std::string& cExpr, const Expr* astExpr) -> bool {
-        return isVariantOperand86(cExpr, astExpr) || variantOperandAST(astExpr);
+        return isVariantOperand86(cExpr, astExpr) || isVariantType(astExpr);
     };
 
     // 账 #305 §B145: Variant 参与 + - * / 时**不再替运行期猜档**。
@@ -391,7 +391,7 @@ void CCodeGen::visit(BinaryExpr& node) {
                 const char* ctE = wideUE ? "uint64_t" : "uint32_t";
                 return "((" + std::string(ctE) + ")(" + cExpr + "))";
             }
-            if (cExprIsVariant(cExpr)) return "vb6_VariantToLong(" + cExpr + ")";
+            if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLong(" + cExpr + ")";  // P1.3: ast 不可得 (lambda 形参)
             if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
                 auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
                 std::string lower = ident.name;
@@ -416,7 +416,7 @@ void CCodeGen::visit(BinaryExpr& node) {
                 const char* ctI = wideUI ? "uint64_t" : "uint32_t";
                 return "((" + std::string(ctI) + ")(" + cExpr + "))";
             }
-            if (cExprIsVariant(cExpr)) return "vb6_VariantToLong(" + cExpr + ")";
+            if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLong(" + cExpr + ")";  // P1.3: ast 不可得 (lambda 形参)
             if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
                 auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
                 std::string lower = ident.name;
@@ -548,7 +548,7 @@ void CCodeGen::visit(BinaryExpr& node) {
                 && currentReturnCType_.compare(0, 8, "vb6_cls_") == 0) {
                 return false;
             }
-            if (cExprIsVariant(c)) return true;
+            if (isVariantSlot(c, nullptr)) return true;  // P1.3: ast 不可得 (lambda 形参)
             if (!ast) return false;
             if (ast->kind == ASTNodeKind::IdentifierExpr) {
                 // 局部/形参标识符: knownVariantVars_ 只在 `As Variant` 声明时登记
@@ -654,9 +654,12 @@ void CCodeGen::visit(BinaryExpr& node) {
                           + ")) && (void*)vb6_VariantToObject(" + la
                           + ") == (void*)vb6_VariantToObject(" + ra + "))";
             } else if (lv158n && isNothingSentinel158n(right)) {
-                lastExpr_ = "(vb6_IsNothing(vb6_VariantToObject(" + variantAddr158n(left, node.left.get()) + ")))";
+                // P3 缺口③ (§D 已修复条): `Array(...) Is Nothing` —— VB6 实测 **424
+                // Object required** (`.build/vb6base/READINGS.md` P3 表 A/E/I/J/K/L),
+                // 而不是 True。判据只看运行期 vt 的阵列位, 非阵列档与改前逐字同义。
+                lastExpr_ = "vb6_VariantIsNothingChecked(" + variantAddr158n(left, node.left.get()) + ")";
             } else if (rv158n && isNothingSentinel158n(left)) {
-                lastExpr_ = "(vb6_IsNothing(vb6_VariantToObject(" + variantAddr158n(right, node.right.get()) + ")))";
+                lastExpr_ = "vb6_VariantIsNothingChecked(" + variantAddr158n(right, node.right.get()) + ")";
             } else if (lv158n) {
                 // Fix: `<Variant> Is <对象/指针>` —— VB6 的 `Is` 问的是**对象同一性**
                 // (指针相等), 不是值相等。旧发码
@@ -716,8 +719,10 @@ void CCodeGen::visit(BinaryExpr& node) {
         // isDefinitelyVariantExpr (AST 语义表: knownVariantVars_/符号表 Variant 返回)
         // 补充升级; 对上面的类型化 getter 返回 false, 不会回滚 P25 的降级修正.
         auto isVariantOperand158m = [&](const std::string& c, Expr* ast) -> bool {
-            if (cExprIsVariant(c)) return true;
-            return ast && isDefinitelyVariantExpr(*ast);
+            if (isVariantSlot(c, nullptr)) return true;
+            // P2 (A4): 升级成 vb6_VarCmp* 的前提是「C 值确实是整只槽」——
+            // 数组本体不是槽, 由 variantOperandAST 的 !isArr 排除。
+            return ast && variantOperandAST(ast);
         };
         if (lt != Vb6Type::Variant && isVariantOperand158m(left, node.left.get())) lt = Vb6Type::Variant;
         if (rt != Vb6Type::Variant && isVariantOperand158m(right, node.right.get())) rt = Vb6Type::Variant;
@@ -919,7 +924,7 @@ void CCodeGen::visit(BinaryExpr& node) {
         auto castBitwise = [&](const std::string& cExpr, const Expr* astExpr) -> std::string {
             if (wideU64 || wideU32) {
                 const char* ctU = wideU64 ? "uint64_t" : "uint32_t";
-                bool isVarU = cExprIsVariant(cExpr);
+                bool isVarU = isVariantSlot(cExpr, nullptr);  // P1.3: ast 不可得 (lambda 形参)
                 if (!isVarU && astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
                     auto& idU = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
                     if (knownVariantVars_.count(Symbol::toLower(idU.name))) isVarU = true;
@@ -931,7 +936,7 @@ void CCodeGen::visit(BinaryExpr& node) {
             if (wide82) {
                 // Variant 提取用 vb6_VariantToLongPtr (返回 intptr_t) 而非
                 // vb6_VariantToLong (int32_t), 否则会先截断再拓宽.
-                if (cExprIsVariant(cExpr)) return "vb6_VariantToLongPtr(" + cExpr + ")";
+                if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLongPtr(" + cExpr + ")";  // P1.3: ast 不可得 (lambda 形参)
                 if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
                     auto& ident82 = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
                     if (knownVariantVars_.count(Symbol::toLower(ident82.name))) {
@@ -940,7 +945,7 @@ void CCodeGen::visit(BinaryExpr& node) {
                 }
                 return "((intptr_t)(" + cExpr + "))";
             }
-            if (cExprIsVariant(cExpr)) return "vb6_VariantToLong(" + cExpr + ")";
+            if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLong(" + cExpr + ")";  // P1.3: ast 不可得 (lambda 形参)
             // Fix 110m: 本函数返回变量 (vb6_ret_X, C 类型 vb6_VARIANT) 参与位运算.
             // VB6 中函数名即返回变量, 且返回值是 Variant —
             //   Function ARGB(...): ARGB = ARGB Or CLng(Red) * &H10000 Or ...
@@ -992,7 +997,8 @@ void CCodeGen::visit(BinaryExpr& node) {
     if (node.op != BinaryOp::Is) {
         auto unwrapBareComCall108 = [](const std::string& cExpr) -> std::string {
             if (cExpr.compare(0, 12, "vb6_ComCall(") == 0
-                || cExpr.compare(0, 20, "vb6_ComCallByDispid(") == 0) {
+                || cExpr.compare(0, 20, "vb6_ComCallByDispid(") == 0
+                || cExpr.compare(0, 15, "vb6_ComGetProp(") == 0) {
                 return "vb6_VariantToDouble(vb6_VariantFromComResult(" + cExpr + "))";
             }
             return cExpr;
@@ -1022,7 +1028,7 @@ void CCodeGen::visit(BinaryExpr& node) {
         // Variant 操作数不能直接进 (int64_t) 强转 —— 先取数值面。VB6 字面/变量混进
         // Variant 的写法太常见, 漏这一步就是 C 编译错而不是运行期错。
         auto shiftOperand = [&](std::string cExpr, const Expr* astExpr) -> std::string {
-            bool isVar = cExprIsVariant(cExpr);
+            bool isVar = isVariantSlot(cExpr, nullptr);  // P1.3: ast 不可得 (lambda 形参)
             if (!isVar && astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
                 auto& id = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
                 if (knownVariantVars_.count(Symbol::toLower(id.name))) isVar = true;

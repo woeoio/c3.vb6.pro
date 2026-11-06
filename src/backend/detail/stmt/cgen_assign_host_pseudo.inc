@@ -67,7 +67,7 @@
                 const std::string tgtHp = hostPseudoRtlSymbol(objNameHp, maHp->memberName);
                 // 账 #159: 要不要拆数值由那张表答 (目标槽是整数才拆; 句柄/对象/字符串
                 // 成员按原样直传)。此前这里是又一份成员名清单 kNumericHostMembers。
-                if (cExprIsVariant(valHp) && hostPseudoIsNumeric(objLowerHp, maHp->memberName)) {
+                if (isVariantSlot(valHp, nullptr) && hostPseudoIsNumeric(objLowerHp, maHp->memberName)) {  // P1.3: ast 不可得 (valHp 距 emitExpr 超 5 行)
                     valHp = "vb6_VariantToLong(" + valHp + ")";
                 }
                 /* Fix 294 / 3a: 目标是 vb6_Extender_* 全局时换通道, 别发裸赋值。
@@ -77,7 +77,16 @@
                    判据用发射出去的符号名, 不用 hostPseudoBareName(它不覆盖 Extender 成员)。 */
                 if (tgtHp.rfind("vb6_Extender_", 0) == 0) {
                     std::string a3 = valHp;
-                    if (hostPseudoIsNumeric("Extender", maHp->memberName) && cExprIsVariant(a3)) {
+                    // ucSegmentedControl.ctl 的 `Property Let Tag(ByVal New_Value As Variant)`
+                    // 体内是 `Extender.Tag = New_Value`：目标槽是 BSTR (kind 0)，而 valHp 是
+                    // vb6_VARIANT 结构体 ⇒ `(void*)(intptr_t)New_Value` = C2440。字符串成员
+                    // 先按 VB6 隐式转换取 BSTR，再搬指针。
+                    Vb6Type extType3 = Vb6Type::Unknown;
+                    if (hostPseudoValueType("Extender", maHp->memberName, extType3, false)
+                        && extType3 == Vb6Type::String && isVariantType(node.value.get())) {
+                        a3 = "vb6_VariantToString(" + a3 + ")";
+                    }
+                    if (hostPseudoIsNumeric("Extender", maHp->memberName) && isVariantSlot(a3, nullptr)) {  // P1.3: ast 不可得 (a3 为 valHp 局部副本)
                         a3 = "vb6_VariantToLong(" + a3 + ")";
                     }
                     c_.emitLine("vb6_UC_SetExtenderMember(L\"" +
@@ -90,6 +99,42 @@
                 if (tgtHp == "vb6_UserControl_AutoRedraw") {
                     c_.emitLine("vb6_UC_SetAutoRedraw((void*)(intptr_t)" + valHp +
                                 ");  /* UserControl.AutoRedraw = v (持久表面) */");
+                    return;
+                }
+                /* 账 <font-color>: ForeColor 不是单纯写全局 —— 真 VB6 里
+                   `UserControl.ForeColor = v` 立刻改变 hDC 的文本色, 控件随后的
+                   DrawTextW 才吃得到 (标题/图例全被画成黑字就是漏了这一格)。 */
+                if (tgtHp == "vb6_UserControl_ForeColor") {
+                    c_.emitLine("vb6_UC_SetForeColor((int32_t)(intptr_t)" + valHp +
+                                ");  /* UserControl.ForeColor = v (DC 文本色) */");
+                    return;
+                }
+                /* 缺陷 1: MousePointer 也要落进实例记录并应用到宿主窗口。以前裸写全局,
+                   宿主窗口从不读 => .ctl 给 Disabled 项设的 vbNoDrop 不生效。 */
+                if (tgtHp == "vb6_UserControl_MousePointer") {
+                    c_.emitLine("vb6_UC_SetMousePointer((int32_t)(intptr_t)" + valHp +
+                                ");  /* UserControl.MousePointer = v (光标) */");
+                    return;
+                }
+                /* ucTreeView: FontBold/FontUnderline 是 UserControl.Font 的两档, 真 VB6 里
+                   赋值立刻改活动 hDC 的字体选择。裸写全局时没有任何站点把它选进 DC ⇒
+                   节点粗体/链接下划线全静默失效 (ucTreeViewPlus.ctl Draw)。 */
+                if (tgtHp == "vb6_UserControl_FontBold"
+                    || tgtHp == "vb6_UserControl_FontUnderline") {
+                    if (isVariantSlot(valHp, nullptr)) {  // P1.3: ast 不可得
+                        valHp = "vb6_VariantToLong(" + valHp + ")";
+                    }
+                    c_.emitLine("vb6_UC_SetFontFlag("
+                                + std::string(tgtHp == "vb6_UserControl_FontBold" ? "0" : "1")
+                                + ", (int32_t)(intptr_t)" + valHp
+                                + ");  /* UserControl.FontBold/Underline (DC 字体) */");
+                    return;
+                }
+                /* `Set UserControl.Font = x` 走 SetStmt (cgen_setlet_set_rhs.inc) 那条路,
+                   那里已接 vb6_UC_SetFont; 这里的裸赋值形态 (若有) 一并走同一入口。 */
+                if (tgtHp == "vb6_UserControl_Font") {
+                    c_.emitLine("vb6_UC_SetFont((void*)" + valHp
+                                + ");  /* UserControl.Font = v (DC 字体) */");
                     return;
                 }
                 c_.emitLine(tgtHp + " = " + valHp + ";  /* <host pseudo>.<prop> = v */");

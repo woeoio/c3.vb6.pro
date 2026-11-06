@@ -21,6 +21,8 @@ namespace vb6c3 {
 // 返回类型按 VB6 内置函数语义给: 字符串类答 String, 整数类答 Long, 其余答 Variant
 // (Variant 是既有兜底, 不会引入新的硬错)。
 #include "backend/detail/expr/cgen_expr_ident_builtin_table.inc"
+// 内置函数返回档的后端兜底表 (只覆盖语义层没有符号的那 16 枚, 见该文件头注释)。
+#include "backend/detail/expr/cgen_builtin_return_type_table.inc"
 
 static Vb6Type builtinFuncReturnTypeForShadowedProp(const std::string& nameLower) {
     static const std::unordered_set<std::string> kStrFuncs = {
@@ -112,10 +114,18 @@ Vb6Type CCodeGen::narrowIntTypeOfCType(const std::string& cType) {
 // VT_I4 家族, 对 VT_I8/VT_UI8 会答 0 (vb6_Shl 那一族同理, 见 cgen_expr_binary.cpp)。
 std::string CCodeGen::asUnsignedOperand(const std::string& cExpr, const Expr& astExpr,
                                         const char* ctype) const {
-    bool isVar = isDefinitelyVariantExpr(const_cast<Expr&>(astExpr));
-    if (!isVar) isVar = cExprIsVariant(cExpr);
-    if (isVar) {
+    // P2 (A2): 真问句是「这段 C 是不是整只槽」—— 解包函数 vb6_VariantToLongPtr 只收
+    // vb6_VARIANT。数组本体 (Array/Split/Filter 的 vb6_SafeArray1D*) 的 VB 类型虽是
+    // Variant, 但不是槽: 先按类型问句判出来, 走 vb6_VariantFromValue 的 SafeArray 臂装箱,
+    // 再解包；不许把载体直接递给收 vb6_VARIANT 的出口 (C2440)。
+    bool isSlot = variantOperandAST(&astExpr);
+    if (!isSlot) isSlot = isVariantSlot(cExpr, nullptr);
+    if (isSlot) {
         return "(" + std::string(ctype) + ")vb6_VariantToLongPtr(" + cExpr + ")";
+    }
+    if (isVariantType(&astExpr)) {
+        return "(" + std::string(ctype) + ")vb6_VariantToLongPtr(vb6_VariantFromValue("
+             + cExpr + "))";
     }
     return "(" + std::string(ctype) + ")(" + cExpr + ")";
 }
@@ -290,8 +300,12 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             // Screen_TwipsPerPixelY）压根没改道，却被这条 oracle 答成 Variant ⇒ 消费点不提取
             // 也不取整 ⇒ 浮点进窄整型目标静默截断。改吃 AST 那一半之后方向性是构造性的：
             // 改道 = AST ∪ 文本 ⊇ oracle = AST。
+            // P2 (A1): 这一问是「操作数的 **VB 类型**是不是 Variant」—— 数组本体也算
+            // (Array/Split/Filter、Variant() 返回)。改道站 (cgen_expr_binary.cpp 的
+            // routeOperand86) 必须吃它的超集 (文本 ∪ 已知变量 ∪ isVariantType)，于是
+            // 「oracle 答 Variant」仍然蕴含「改道接走了、两侧都装箱成交出的槽」。
             if (bin.op == BinaryOp::Div) {
-                if (variantOperandAST(bin.left.get()) || variantOperandAST(bin.right.get()))
+                if (isVariantType(bin.left.get()) || isVariantType(bin.right.get()))
                     return Vb6Type::Variant;
                 return Vb6Type::Double;
             }
@@ -382,6 +396,14 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                     return cgenTypeForShadowedBuiltin(id.name);
                 }
                 if (sym) return sym->type;
+                // 语义层 builtin_funcs.inc 没登记、但 cgen 发射表里有名字的那一族
+                // (LenB / InStrB / LeftB / TypeOf / LoadRes* …)。没有这一问时它们一律
+                // 落到函数末尾的 Variant 兜底, 消费点会把标量/串按整只槽处理。见
+                // cgen_builtin_return_type_table.inc 的逐名依据与移除前提。
+                {
+                    Vb6Type fb = builtinReturnTypeFallback(id.name);
+                    if (fb != Vb6Type::Unknown) return fb;
+                }
             }
             // P26: 类实例方法调用 a.Method(args) → callee是MemberAccessExpr
             // 需要查询成员函数的返回类型, 而非直接fallback到Variant
@@ -417,6 +439,17 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                     if (memLower == "description" || memLower == "source") return Vb6Type::String;
                     if (memLower == "helppath" || memLower == "helpfile" || memLower == "helpcontext") return Vb6Type::String;
                     if (memLower == "lastdllerror") return Vb6Type::Long;
+                }
+                // 第二步: App 的四个 BSTR 成员 —— 删掉 C 出口名表之后, 读侧折叠
+                // (cgen_expr_member_form_builtin.inc 折成 vb6_App_Title() 等) 的类型
+                // 必须由这里答 String, 否则 Print #/Write # 会把 BSTR 指针当数值截断。
+                // 权威 = src/rtl/core/vb6rtl/vb6rtl_system.c 的 vb6_App_Title/EXEName/Path/HelpFile
+                // (四个出口都返回 BSTR); 不是按名字猜。
+                if (objLower == "app") {
+                    std::string memLower = ma.memberName;
+                    std::transform(memLower.begin(), memLower.end(), memLower.begin(), ::tolower);
+                    if (memLower == "title" || memLower == "exename" ||
+                        memLower == "path" || memLower == "helpfile") return Vb6Type::String;
                 }
             }
             // 账 #159: 限定形态的宿主伪成员 (<UserControl|PropertyPage|Extender|
@@ -767,6 +800,14 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                 // 处理; 此表只含具类型内置, 返回非 Variant.
                 std::string bname = Symbol::toLower(cid.name);
                 if (!bname.empty() && bname.back() == '$') bname.pop_back();
+                // P2 (C1): Array/Split/Filter 的 VB 类型是 Variant —— VarType(Array(1,2)) = 8204
+                // (vbVariant + vbArray), Split/Filter 同理。它们的 C 返回值是 vb6_SafeArray1D*
+                // (数组本体), 所以：**类型问句答 true**, 但槽问句 (variantOperandAST) 因
+                // `isArrOut` 为真仍答 false —— 这两句必须分开, 不许合并。
+                if (bname == "array" || bname == "split" || bname == "filter") {
+                    if (isArrOut) *isArrOut = true;
+                    return true;
+                }
                 if (kBuiltinFuncNames.count(bname)) return false;
                 // 关键差异: sym==null (内置函数) 视为非 Variant
                 return checkSym(sym);
@@ -991,7 +1032,9 @@ bool CCodeGen::builtinWantsRawSlotFromVariant(const std::string& callee, size_t 
                                               Expr& actual) const {
     if (callee != "vb6_StrPtr") return false;
     if (argc != 1 || pos != 0) return false;
-    return isDefinitelyVariantExpr(actual);
+    // P2 (A3): 问句是「实参是不是整只槽」—— StrPtr 的裸槽出口收 vb6_VARIANT，
+    // 数组本体 (SafeArray 载体) 不在其列, 由 variantOperandAST 的 !isArr 排除。
+    return variantOperandAST(&actual);
 }
 
 std::string CCodeGen::builtinNoParamTableFormalCType(const std::string& callee, size_t argc,
@@ -1025,6 +1068,12 @@ std::string CCodeGen::builtinNoParamTableFormalCType(const std::string& callee, 
     //   带类型化形参表的那一族 (InStrRev / Mid / Filter / Left / Right …) —— 它们不落这张表,
     //     Fix 175 与 arg_variant 那一站直接问 `calleeParams`。
     static const std::unordered_map<std::string, std::vector<std::string>> kNoTableFormalKinds176 = {
+        // 账 #305 第三百三十刀 (续): Clipboard.SetText 只收 BSTR (vb6rtl_builtin.h:393
+        // `void vb6_Clipboard_SetText(BSTR text)`)。链式 COM 读的实参
+        // (GUISample frmMain:574 `Clipboard.SetText ActiveForm.rtfText.SelRTF`)
+        // 交回 vb6_VARIANT —— Fix 175 闸按 cExprIsVariant 让位, 但本表此前没这
+        // 一行, VARIANT 那条提取臂也进不来 ⇒ C2440。VB6 语义按当前子类型折字符串。
+        {"vb6_Clipboard_SetText", {"BSTR"}},
         {"vb6_GetSetting",    {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key[, default])
         {"vb6_SaveSetting",   {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key, setting)
         {"vb6_DeleteSetting", {"BSTR", "BSTR", "BSTR"}},           // (app, section[, key])
@@ -1172,7 +1221,7 @@ bool CCodeGen::cExprIsBareComResult(const std::string& cExpr) const {
 //   if (ptr) 恒真 (真语料按产物 82 处 / 27 份文件, 读数见账 #305 第二百四十三刀)。
 std::string CCodeGen::conditionTruthExpr(const std::string& cExpr, Expr* cond) const {
     if (cExprIsBareComResult(cExpr)) return "vb6_ComResultToBool(" + cExpr + ")";
-    bool isVar = cExprIsVariant(cExpr);
+    bool isVar = isVariantSlot(cExpr, nullptr);  // P1.3: ast 不可得 (cExpr 为形参)
     if (!isVar && cond && cond->kind == ASTNodeKind::IdentifierExpr) {
         std::string low = Symbol::toLower(static_cast<IdentifierExpr&>(*cond).name);
         if (knownVariantVars_.count(low)) isVar = true;
@@ -1183,7 +1232,11 @@ std::string CCodeGen::conditionTruthExpr(const std::string& cExpr, Expr* cond) c
     return cExpr;
 }
 
-bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
+// P1.2 三问之二: 「C 侧这段文本是不是**整只 vb6_VARIANT 槽**」(而不是槽的地址/指针)。
+// 文本那一半逐字沿用 Fix 038b/045 以来的判据 (下面整段注释与名单); AST 那一半只在
+// 文本回答不了时兜底 (§B147 的口径: 发码改道 = AST ∪ 文本)。既有调用点仍走
+// cExprIsVariant (文本投影), 所以本刀产物逐字节不变。
+bool CCodeGen::isVariantSlot(const std::string& cExpr, const Expr* ast) const {
     // 去除前导空白和括号
     size_t start = 0;
     while (start < cExpr.size()) {
@@ -1216,99 +1269,31 @@ bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
     //   `vb6_VARIANT: vb6_VariantIdentity` 档); vb6_CDbl / vb6_CInt / vb6_LenB / vb6_InStr 那一族
     //   宏交的是标量, 按名字登记会一律答错, 所以它们不进表。
     //   指针返回也不进表: vb6_VariantArrayElemPtr 交回 vb6_VARIANT*(槽的地址), 不是槽。
-    static const std::vector<std::string> variantPrefixes = {
-        "vb6_VariantArrayGet(",
-        // 账 #305 §B150: 秩 ≥ 2 的晚绑定槽元素读走这一枚新出口 (variantSlotElemRead 按实参
-        //   个数二选一)。不登记 = 表只认识单下标那一形, 新出口发出去下游按裸标量读它。
-        "vb6_VariantArrayGetND(",
-        // 账 #305 新账 #407 第一百七十一刀: 视图/裸实例进对象档的那枚新出口交回的也是整只槽
-        //   (RTL 签名 vb6_VARIANT vb6_VariantFromProjectInstance(void*))。不登记 = 站点第二次拿到
-        //   同一枚 AST 时按裸值发码, 实测就是 `FromProjectInstance((void*)(FromProjectInstance(...)).obj)`
-        //   这种自套 (cl C2039「obj 不是 vb6_VARIANT 的成员」)。
-        "vb6_VariantFromProjectInstance(",
-        "vb6_VariantFromComResult(",
-        "vb6_VariantFromStackVARIANT(",
-        "vb6_VariantFromValue(",
-        "vb6_VariantEmpty(",
-        "vb6_VariantLong(",
-        "vb6_VariantDouble(",
-        "vb6_VariantString(",
-        "vb6_VariantBool(",
-        "vb6_VariantArray(",
-        "vb6_VariantObject(",
-        "vb6_VariantNull(",
-        "vb6_LoadResData(",       // Fix 090bz: VBA LoadResData → vb6_VARIANT;
-                                 //   Dim D() As Byte: D = LoadResData(...) 赋值
-                                 //   需 VariantToSafeArray1D 提取 (cLang LoadData/LoadInfo C2440).
-        // vbeclipse: LoadResPicture 与 LoadResData 同族, RTL 签名都是
-        //   vb6_VARIANT vb6_LoadResPicture(vb6_VARIANT, vb6_VARIANT) (vb6rtl_runtime.h).
-        //   不登记会让 `Function getResourceIcon(...) As IPictureDisp` 的
-        //   `Set getResourceIcon = LoadResPicture(...)` 直接 `vb6_ret_X =
-        //   vb6_LoadResPicture(...)` → C2440 (modResources.c 22/24/33). 登记后走
-        //   Set 的 Fix 038b-6 分支包 vb6_VariantToObjectVal 提取对象指针.
-        // Fix <vbeclipse> (2026-10-06): LoadRes 实参/返回全面 Variant 化 (2026-10-05
-        //   实测 LoadResData("BIN1","CUSTOM") 的 BSTR 实参被截进 int32 形参), 三函数
-        //   返回都是 vb6_VARIANT — LoadResString 也一样, 不登记则 `s = LoadResString(1)`
-        //   发 vb6_BSTR_Assign 直收 Variant → C2440.
-        "vb6_LoadResPicture(",
-        "vb6_LoadResString(",
-        // ⚠ 这一名**不是** RTL 出口, 是全表唯一的例外, 所以「从 RTL 派生」的那把 census
-        //   看不见它 —— 它来自语料自己的工程: mdQRCodegen.bas:1407 写着
-        //   `Private Function DispCallByVtbl(...) As Variant`, 而单文件 (非多模块) 发码时工程
-        //   过程的名是裸的 `vb6_<proc>` (cProcName: 只有多模块才拼模块名), 于是
-        //   variantReturnFuncs_ 也够不着 (那张集合里只有 `vb6_<模块>_<proc>` 和 `vb6_pv_<proc>`)。
-        //   实测撤掉这一行: mdQRCodegen 五处 `hResult = DispCallByVtbl(...)` 少掉
-        //   vb6_VariantToLong 提取, 整只槽进 vb6_ChkLong(int64_t) —— 这是 400 份 A/B 里唯一
-        //   一条归因不到的移动。同形缺口 (工程的 Variant 函数直接赋给非 Variant 目标, 单模块)
-        //   两台 BASE/NEW 都还发 `vb6_ChkLong(vb6_MakeDec())`, 另立 §B148。
-        "vb6_DispCallByVtbl(",  // Fix 068: DispCallByVtbl returns Variant
-        // Fix 110w: VB6 CallByName 返回 vb6_VARIANT (见 vb6rtl_class_com.h) —
-        // 参与算术/关系运算或需 BSTR 时必须按 Variant 处理, 否则 C2088
-        // ("*" 对于 struct 非法; Charts 2020 ClsResizer.cls:142/148
-        //  CallByName(oCtrl, ..., VbGet) * 100).
-        "vb6_CallByName(",
-        // Fix <vbeclipse> rev37: ParamArray 元素按**声明类型**解包 (rev37 前一律
-        //   GetLong ⇒ String 实参静默读成 0)。Variant 元素的解包函数返回整只
-        //   VARIANT, 必须登记成 Variant 表达式, 否则下游 BSTR/Variant 目标
-        //   不会走 vb6_VariantToString / wrapVariantValue, 直接 C2440
-        //   (ClsResizer.AddControlFont 的 `.PropFont = PropFont(i)`)。
-        "vb6_PA_GetVariant(",
-        // 账 #305 §B145: Variant 参与 + - * / 的四枚运行期出口（vb6rtl_com.c），返回整只
-        //   vb6_VARIANT。不登记在这里 = 下游的解包/装箱/比较全按「C 原生标量」发
-        //   (int32_t)(...) ⇒ C2440/C2088；登记之后它们一律走 Variant 那一条路。
-        "vb6_VarAddV(",
-        "vb6_VarSubV(",
-        "vb6_VarMulV(",
-        "vb6_VarDivV(",
-        // 账 #305 §B146: 下面这十名都是「RTL 声明返回 vb6_VARIANT、后端确实会 emit」而表里漏着的
-        // (派生自 src/rtl/** 的声明逐名核过; 前两版 census 各错过一次: 一把漏认 `static inline`
-        //  前缀、一把把 `vb6_VARIANT *f(...)` 的指针返回当成槽 —— 所以 vb6_VariantArrayElemPtr
-        //  刻意**不进**这张表, 它交回的是槽的地址而不是槽)。
-        "vb6_CDec(",                // CDec: 唯一能造出精确 Decimal 的内置出口 (vb6rtl_misc.c:271)
-        "vb6_CVErr(",              // CVErr -> vb6_VARIANT (vt=10, vb6rtl_conv.c:389)
-        "vb6_GetAllSettings(",     // 注册表一组值 -> vb6_VARIANT (vb6rtl_registry.c:113)
-        "vb6_IIfVariant(",         // IIf 的两个分支都是槽时选中的那一族
-        "vb6_VariantArrayGetVal(", // 晚绑定数组元素读值 (vb6rtl_com.c:698)
-"vb6_VariantByte(",
-          "vb6_VariantInt(",
-          "vb6_VariantSingle(",
-          "vb6_VariantDate(",
-          "vb6_VariantIdentity(",
-          // ai/032 §6.6 / §6.9: C3 扩展的整数族装箱出口。boxToVariant 现在**点名**调它们
-          //   (SByte / UInteger / ULong / ULongLong / LongLong 五档), 所以每一枚都得登记 ——
-          //   登记的含义是「消费点按 Variant 接」, 漏一枚就是消费点按裸标量发码 (C2440/C2088)。
-          //   ⚠ 这五枚以前全靠 boxToVariant 的 default→vb6_VariantFromValue 的 _Generic 猜,
-          //   猜不中 SByte/UInteger (char:/wchar_t: 两档都装成 VT_I4), 丢的是类型身份。见 §6.9。
-          "vb6_VariantLongLong(",
-          "vb6_VariantULong(",
-          "vb6_VariantULongLong(",
-          "vb6_VariantSByte(",
-          "vb6_VariantUInteger(",
-        //   ↑ 上面五枚是构造器 (vb6rtl_variant.h 的 static inline)。表里本来就有 Empty/Long/
-        //     Double/String/Bool/Null/Object/Array 那一批, 缺的正是这五档 ——
-        //     cgen_util_ctrl.cpp:2419 早就写着「vb6_VariantByte( 不在 cExprIsVariant 的清单里」
-        //     并为此另立了第二份名单 (cExprIsVariantCarrierStr); 今天把名补进权威这张表。
-    };
+    // 名单本体已移到生成物 cgen_variant_slot_prefixes.inc (由
+    // scripts/gen_variant_slot_prefixes.ps1 从 RTL 声明派生; 例外/排除的逐条理由写在脚本里)。
+    // 这里只消费它, 不再手写名字 —— 手写清单与 RTL 走散的两个方向都贵 (§B146)。
+    //
+    // 逐名归因 (名单本体见 .inc; 这里保留每条的历史实物, 改 RTL 时对照用):
+    //   VariantArrayGet / VariantArrayGetND      · §B150 秩≥2 晚绑定槽元素读
+    //   vb6_VariantFromProjectInstance           · #407 视图/裸实例进对象档 (自套 C2039)
+    //   FromComResult / FromStackVARIANT / FromValue / Empty / Long / Double / String /
+    //   Bool / Array / Object / Null             · 槽构造族 (FromValue 是 _Generic 宏, 每档都交槽)
+    //   LoadResData                              · Fix 090bz (需 VariantToSafeArray1D 提取)
+    //   LoadResPicture / LoadResString           · vbeclipse: LoadRes 实参/返回全面 Variant 化
+    //   DispCallByVtbl                           · Fix 068; **全表唯一的非 RTL 名** —— 语料
+    //                                              mdQRCodegen 的工程过程在单模块下发成裸
+    //                                              vb6_<proc>, variantReturnFuncs_ 够不着 (§B146)
+    //   CallByName                               · Fix 110w (参与算术/关系运算, 否则 C2088)
+    //   PA_GetVariant                            · rev37 ParamArray 按声明类型解包
+    //   VarAddV / VarSubV / VarMulV / VarDivV    · §B145 Variant 四则
+    //   CDec / CVErr / GetAllSettings / IIfVariant / VariantArrayGetVal
+    //                                            · §B146 census 补漏 (misc.c:271 / conv.c:389 /
+    //                                              registry.c:113 / com.c:698)
+    //   VariantByte / Int / Single / Date / Identity + LongLong / ULong / ULongLong / SByte /
+    //   UInteger                                 · ai/032 §6.6/§6.9 装箱出口五档 + rev20 补齐
+    //                                              (「另立第二份名单」的教训)
+    #include "backend/detail/expr/cgen_variant_slot_prefixes.inc"
+
     for (const auto& prefix : variantPrefixes) {
         if (cExpr.compare(start, prefix.size(), prefix) == 0) return true;
     }
@@ -1330,7 +1315,14 @@ bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
     // 检查 (&(vb6_VARIANT){...}) 复合字面量 — 也是 VARIANT 类型
     // 但这种形式通常作为 ByRef 参数传递, 不需要再转换, 故不检测.
 
-    return false;
+    // 文本那一半没认出来, 才问 AST 那一半 (数组本体不算槽, 由 variantOperandAST 排除)。
+    return variantOperandAST(ast);
+}
+
+// 旧名 = isVariantSlot 的文本投影 (ast=nullptr)。既有调用点全部走这一形, 结果与改动前
+// 逐字一致; P1.3 才逐站替换成带 AST 的命名接口。
+bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
+    return isVariantSlot(cExpr, nullptr);
 }
 
 // 账 #305 §B147: 「这枚表达式交出来的 C 是不是整只槽」的 AST 那一半 (另一半天然是
@@ -1346,6 +1338,14 @@ bool CCodeGen::variantOperandAST(const Expr* e) const {
     return isDefinitelyVariantExpr(const_cast<Expr&>(*e), &isArr) && !isArr;
 }
 
+// P1.2 三问之一: 「这枚表达式的 VB 类型是不是 Variant」—— 只吃 AST。
+// 为什么不看 isArrOut: 问的是**VB 类型**, `Variant()` 数组的类型仍然是 Variant;
+// 「是不是整只槽」是另一个问句 (isVariantSlot), 由它排除数组本体。
+bool CCodeGen::isVariantType(const Expr* e) const {
+    if (!e) return false;
+    return isDefinitelyVariantExpr(const_cast<Expr&>(*e));
+}
+
 // ============================================================
 // <vbeclipse>: C 表达式是否**已经是 SafeArray1D\* 载体**
 // ============================================================
@@ -1355,7 +1355,9 @@ bool CCodeGen::variantOperandAST(const Expr* e) const {
 // C2440 (vb6_SafeArray1D\* → vb6_VARIANT) —— 实测这三条形全中:
 //   Join(Split(s, ","), "|") / UBound(Split(s, ",")) / Join(Filter(a, "x"), "|")
 // 与 Fix 092g 的 _arr_N 特例同源、同解法, 区别只是这里包的是内置函数调用。
-bool CCodeGen::cExprIsSafeArrayCarrier(const std::string& cExpr) const {
+// P1.2 三问之三: 「这段 C 是不是 vb6_SafeArray1D* 载体」。判据本体原样搬到这里,
+// cExprIsSafeArrayCarrier 只作既有调用点的投影 (不保留第二份清单)。
+bool CCodeGen::isSafeArrayCarrier(const std::string& cExpr) const {
     size_t start = 0;
     while (start < cExpr.size()) {
         char c = cExpr[start];
@@ -1392,6 +1394,11 @@ bool CCodeGen::cExprIsSafeArrayCarrier(const std::string& cExpr) const {
         if (cExpr.compare(start, prefix.size(), prefix) == 0) return true;
     }
     return false;
+}
+
+// 旧名 = isSafeArrayCarrier 的投影; 既有调用点不动 (P1.3 再逐站换名)。
+bool CCodeGen::cExprIsSafeArrayCarrier(const std::string& cExpr) const {
+    return isSafeArrayCarrier(cExpr);
 }
 
 
@@ -1638,6 +1645,17 @@ bool CCodeGen::isWholeArrayRef(const Expr* e) const {
         Symbol* bsym = symTab_.lookupModule(bare.name);
         return bsym && bsym->kind == SymbolKind::Variable && bsym->isArray;
     }
+    // UDT 动态数组成员 (`m_Items(Index).ImgArr`): 语义层把数组标志记在
+    // `mi.isArrayDynamic`/`mi.arraySize` 上, `mi.type` 只是元素档 —— 这里必须走
+    // inferUdtFieldVb6Type 的 outIsArray, 否则整枚赋值退化成标量路径:
+    //   `m_Items(Index).ImgArr = SrcImg` (SrcImg As Variant 里是 Byte())
+    //   ⇒ 发 `vb6_VariantToLong(...)` = 0 ⇒ ImgArr 空 ⇒ LoadImageFromArray 早退
+    //   ⇒ 用户控件所有图标都画不出来 (ucSegmentedControl 实测)。
+    if (e->kind == ASTNodeKind::MemberAccessExpr || e->kind == ASTNodeKind::WithMemberExpr) {
+        bool isArr = false;
+        inferUdtFieldVb6Type(e, &isArr);
+        return isArr;
+    }
     if (e->kind != ASTNodeKind::IndexOrCallExpr) return false;
     auto& n = static_cast<const IndexOrCallExpr&>(*e);
     if (!n.positional.empty() || !n.named.empty()) return false;
@@ -1662,7 +1680,7 @@ bool CCodeGen::isArrayCarrierArgName(const std::string& lowerName,
     if (knownObjectVars_.count(lowerName)) return false;
     if (knownVariantVars_.count(lowerName)) return false;
     if (arrayClassElemTypes_.count(lowerName)) return false;
-    if (cExprIsVariant(cExpr)) return false;
+    if (isVariantSlot(cExpr, nullptr)) return false;  // P1.3: ast 不可得 (cExpr 为形参)
     return true;
 }
 

@@ -1,8 +1,9 @@
 ﻿# check_builtin_slot_returns.ps1 —— 「内置出口交出来的 C 是不是整只槽」这张表与 RTL 对账（账 #305 §B146，第三十九刀）
 #
-# 为什么要有这一道：src/backend/cgen_util_type.cpp 的 variantPrefixes 是一枚**手写清单**，
-# 而它回答的那个问句（「vb6_X(...) 交回来的是 vb6_VARIANT 槽还是裸标量」）的答案**住在 RTL 的
-# 声明里**。两份从不汇合 ⇒ 两个方向都会走散，且都贵：
+# 为什么要有这一道：variantPrefixes（名单本体在 checked-in 生成物
+# src/backend/detail/expr/cgen_variant_slot_prefixes.inc，由 scripts/gen_variant_slot_prefixes.ps1
+# 从 RTL 派生）回答的那个问句（「vb6_X(...) 交回来的是 vb6_VARIANT 槽还是裸标量」）的答案
+# **住在 RTL 的声明里**。这份表与 RTL 两个方向都会走散，且都贵：
 #   少一名 = 消费点按裸标量发码。实物（第三十九刀量到，BASE 真编译 6 条错）：
 #          `CDec(1234567) + 1` 发成 (int32_t)(vb6_CDec(...) + 1) => C2088「+ 对于 struct 非法」，
 #          `d = CDec("2.5")` => C2440。整条夹具编不过。
@@ -31,6 +32,9 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $typeCpp = Join-Path $Root 'src\backend\cgen_util_type.cpp'
 if (-not (Test-Path -LiteralPath $typeCpp)) { Write-Host ('FAIL: 读不到 ' + $typeCpp); exit 1 }
+# 名单本体已是 checked-in 生成物 (scripts/gen_variant_slot_prefixes.ps1 从 RTL 派生)。
+$tblInc = Join-Path $Root 'src\backend\detail\expr\cgen_variant_slot_prefixes.inc'
+if (-not (Test-Path -LiteralPath $tblInc)) { Write-Host ('FAIL: 读不到 ' + $tblInc); exit 1 }
 
 function Strip-CComments([string]$t) {
     $t = [regex]::Replace($t, '/\*[\s\S]*?\*/', ' ')
@@ -38,10 +42,10 @@ function Strip-CComments([string]$t) {
     return $t
 }
 
-# ---- 1) 那张手写的表 ----
-$srcRaw = [IO.File]::ReadAllText($typeCpp)
-$m = [regex]::Match($srcRaw, '(?s)static const std::vector<std::string> variantPrefixes = \{(?<body>.*?)\n    \};')
-if (-not $m.Success) { Write-Host 'FAIL: 在 cgen_util_type.cpp 里找不到 variantPrefixes 的初始化块（表被改名/挪走了？）'; exit 1 }
+# ---- 1) 那张表（生成物 .inc） ----
+$srcRaw = [IO.File]::ReadAllText($tblInc)
+$m = [regex]::Match($srcRaw, '(?s)static const std::vector<std::string> variantPrefixes = \{(?<body>.*?)\};')
+if (-not $m.Success) { Write-Host 'FAIL: 在 cgen_variant_slot_prefixes.inc 里找不到 variantPrefixes 的初始化块（表被改名/挪走了？）'; exit 1 }
 $tbl = @{}
 foreach ($q in [regex]::Matches($m.Groups['body'].Value, '"(vb6_[A-Za-z0-9_]+)\("')) { $tbl[$q.Groups[1].Value] = $true }
 $tableNames = @($tbl.Keys | Sort-Object)
@@ -104,9 +108,12 @@ foreach ($n in @($rtlPtr.Keys | Sort-Object)) {
 # ---- 5) R5: 槽元素读的「认文本」那一问只许住在权威那张文件里 ----
 $slotLit = 'vb6_VariantArray(?:Get|GetND|Set|SetND|ElemPtr|ElemPtrND)\('
 $typeFull = (Resolve-Path -LiteralPath $typeCpp).Path
+# 名单生成物 (.inc) 不是「第二份抄法」: 它只是槽前缀数据, 不回答「是不是元素读」那一问。
+$tblFull = (Resolve-Path -LiteralPath $tblInc).Path
 $authHits = 0
 $litRe = '"(?:[^"\\]|\\.)*"'
 foreach ($f in $beFiles) {
+    if ($f.FullName -eq $tblFull) { continue }
     $t = Strip-CComments ([IO.File]::ReadAllText($f.FullName))
     foreach ($lit in [regex]::Matches($t, $litRe)) {
         if (-not [regex]::IsMatch($lit.Value, $slotLit)) { continue }
@@ -116,6 +123,95 @@ foreach ($f in $beFiles) {
     }
 }
 if ($authHits -lt 3) { Write-Host ('FAIL R5: 权威文件里只数出 ' + $authHits + ' 处槽元素读字面量 (<3) —— 扫描读空, R5 是一条绿着的假判据'); exit 1 }
+
+# ---- 6) R6/R7: Print#/Write# 的字符串分流**不许再养名字名单**（第二步的删除不可回潮） ----
+# 旧实现是 34 名 C 出口名表 (bstrFuncs + isBstrExpr)，两份 visitor 各抄一遍。删掉之后
+# 判据只剩两问：inferExprType==String，以及发射形状（BSTR 槽/IIf 串支/数组元素/静态变量）。
+# 名字表一旦回来，类型推断再退化也不会红 —— 那正是本刀要防的回潮。
+$fileIoCpp = Join-Path $Root 'src\backend\stmt\cgen_file_io.cpp'
+if (-not (Test-Path -LiteralPath $fileIoCpp)) { Write-Host ('FAIL R6: 读不到 ' + $fileIoCpp); exit 1 }
+$fileIo = Strip-CComments ([IO.File]::ReadAllText($fileIoCpp))
+if ($fileIo -match 'bstrFuncs|isBstrExpr') { $viol += 'R6 名字名单回潮: cgen_file_io.cpp 里又出现了 bstrFuncs / isBstrExpr（第二步已删；分流只许走两问）' }
+# 第三刀 (账 #608/第331刀) 把两份 visitor 的 lambda 收成一位主人 fileOutArgIsBstr:
+#   ① 语义类型 (inferExprType==String) 是主判据，形状只作补充，knownBstrVars_ 只兜底裸标识符;
+#   ② 两条 visitor (Print#/Write#) 与窗体面 Print 必须都转调这一位主人 —— 各自再抄一份就是
+#      第二个判据，名字/形状会重新变成主判据。
+$ownerHits = [regex]::Matches($fileIo, 'bool\s+CCodeGen::fileOutArgIsBstr\(').Count
+if ($ownerHits -ne 1) { $viol += ('R7 「这枚实参是不是 BSTR」的主人应为 1 枚，实测 ' + $ownerHits) }
+$isStringItemHits = [regex]::Matches($fileIo, 'auto\s+isStringItem\s*=').Count
+if ($isStringItemHits -ne 0) { $viol += ('R7 isStringItem 抄本回潮: ' + $isStringItemHits + ' 处 (分流口只许住 fileOutArgIsBstr)') }
+if ($fileIo -notmatch 'inferExprType\(argNode\)\s*==\s*Vb6Type::String') { $viol += 'R7 主人不再问 inferExprType（类型那一问被拆掉，只剩形状猜测）' }
+foreach ($needle in @('vb6_BSTR', 'vb6_IIfBSTR', 'VB6_SA_AT(BSTR,', 'knownBstrVars_')) {
+    if ($fileIo -notmatch [regex]::Escape($needle)) { $viol += ('R7 主人缺发射形状判据: ' + $needle) }
+}
+$siteHits = [regex]::Matches($fileIo, 'fileOutArgIsBstr\(val,\s*\*expr\)').Count
+if ($siteHits -ne 2) { $viol += ('R7 Print#/Write# 转调主人的站点应为 2 处，实测 ' + $siteHits) }
+$formHits = [regex]::Matches($fileIo, 'fileOutArgBstrExpr\(val,\s*\*expr\)').Count
+if ($formHits -ne 1) { $viol += ('R7 窗体面 Print 转调主人的站点应为 1 处，实测 ' + $formHits) }
+
+# ---- 7) R8..R11: P1.4 三问各一组正反用例 ----
+# 这三条刻意**各问各的事**, 不许三条都只测同一件:
+#   R8  = 生成物与 RTL 派生同源 (手改 .inc 或改了 RTL 没重跑 gen 脚本 ⇒ 红)
+#   R9  = 问句①「C 文本是不是整只槽」: 表里要有真槽出口(正), 地址出口不许进表(反),
+#         AST 那一半必须排除 Variant 数组本体(反)
+#   R10 = 问句③「VB 类型是不是 Variant」: 只吃 AST(正), **不许**排除数组本体(反) ——
+#         这一条与 R9 相反, 两条同时绿才证明「类型」与「整只槽」真是两个问句
+#   R11 = 问句②「是不是 SafeArray 载体」: 名单命中 vb6_Split( (正), 标量出口不许命中(反),
+#         _arr_ 特例仍在(正)
+#   R12 = 数组本体 (Array/Split/Filter, VarType=8204) 的分歧: isDefinitelyVariantExpr 必须
+#         答 Variant 且置 isArrOut=true ⇒ 类型问句 true / 槽问句 false (P2 的 C1)
+$genScript = Join-Path $PSScriptRoot 'gen_variant_slot_prefixes.ps1'
+if (-not (Test-Path -LiteralPath $genScript)) {
+    $viol += ('R8 找不到派生脚本 ' + $genScript)
+} else {
+    $genOut = (& powershell -NoProfile -ExecutionPolicy Bypass -File $genScript -Check 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        $viol += ('R8 派生不一致: checked-in .inc 与从 RTL 重新派生的结果不同 (手改 .inc, 或改了 RTL 没重跑 gen 脚本) —— ' + $genOut.Trim())
+    }
+}
+
+$typeSrc = Strip-CComments ([IO.File]::ReadAllText($typeCpp))
+$astM = [regex]::Match($typeSrc, '(?s)bool CCodeGen::variantOperandAST\(const Expr\* e\) const \{(?<b>.*?)\r?\n\}')
+$typeM = [regex]::Match($typeSrc, '(?s)bool CCodeGen::isVariantType\(const Expr\* e\) const \{(?<b>.*?)\r?\n\}')
+$carM = [regex]::Match($typeSrc, '(?s)bool CCodeGen::isSafeArrayCarrier\(const std::string& cExpr\) const \{(?<b>.*?)\r?\n\}')
+if (-not $astM.Success -or -not $typeM.Success -or -not $carM.Success) {
+    $viol += 'R9-R11 三问的函数体没找全 (改名/换签名了? 这一组正反用例会静默失效)'
+} else {
+    $astBody = $astM.Groups['b'].Value
+    $typeBody = $typeM.Groups['b'].Value
+    $carBody = $carM.Groups['b'].Value
+    if (-not $tbl.ContainsKey('vb6_VariantFromValue')) { $viol += 'R9 槽问句正例缺失: 表里没有 vb6_VariantFromValue' }
+    if ($tbl.ContainsKey('vb6_VariantArrayElemPtr')) { $viol += 'R9 槽问句反例失败: vb6_VariantArrayElemPtr 交回的是**地址**不是槽, 却进了槽表' }
+    if ($astBody -notmatch 'isDefinitelyVariantExpr\([\s\S]*?&isArr') { $viol += 'R9 槽问句反例失败: variantOperandAST 没向 isDefinitelyVariantExpr 要 isArr' }
+    if ($astBody -notmatch '!\s*isArr') { $viol += 'R9 槽问句反例失败: variantOperandAST 没排除 Variant 数组本体 (!isArr)' }
+    if ($typeBody -notmatch 'isDefinitelyVariantExpr\(') { $viol += 'R10 类型问句正例缺失: isVariantType 不调 isDefinitelyVariantExpr' }
+    if ($typeBody -match '!\s*isArr') { $viol += 'R10 类型问句反例失败: isVariantType 也排除数组本体 —— 两个问句又合成一个' }
+    if ($carBody -notmatch '"vb6_Split\("') { $viol += 'R11 载体问句正例缺失: 名单里没有 vb6_Split(' }
+    if ($carBody -match '"vb6_ChkLong\("') { $viol += 'R11 载体问句反例失败: 标量出口 vb6_ChkLong( 进了载体名单' }
+    if ($carBody -notmatch '"_arr_"') { $viol += 'R11 载体问句正例缺失: _arr_ 特例不见了 (Fix 092g)' }
+}
+
+# ---- R12: Array/Split/Filter 是「类型 Variant、不是整只槽」的实物分歧 ----
+# 判据（P2，C1）：VB6 里 VarType(Array(1,2)) = 8204 (vbVariant + vbArray)，Split/Filter 同理。
+# 所以 isDefinitelyVariantExpr 必须把这三枚**当 Variant**（类型 true），同时置 isArrOut=true，
+# 让 variantOperandAST 的 !isArr 把它们从「槽」里排除。这句分歧是两张问句分开的最强证据:
+# 同一枚 `Array(1,2,3)` 上 isVariantType 必须答 true、isVariantSlot 必须答 false。
+# 只查源结构（不起 cl）: 三枚名字 + 那条 isArrOut 赋值 + 不许落回 kBuiltinFuncNames 的拒绝。
+$defM = [regex]::Match($typeSrc, '(?s)bool CCodeGen::isDefinitelyVariantExpr\((?<sig>[^\n]*)\{(?<b>.*?)\r?\n\}')
+if (-not $defM.Success) {
+    $viol += 'R12 找不到 isDefinitelyVariantExpr 的函数体 (改名/换签名了? 这条断言会静默失效)'
+} else {
+    $defBody = $defM.Groups['b'].Value
+    foreach ($bn in @('"array"', '"split"', '"filter"')) {
+        if ($defBody -notmatch [regex]::Escape($bn)) {
+            $viol += ('R12 类型问句正例缺失: isDefinitelyVariantExpr 里没有数组本体内置 ' + $bn +
+                      ' —— VarType=8204 的那一族会被当成「非 Variant」')
+        }
+    }
+    if ($defBody -notmatch '\*isArrOut\s*=\s*true') {
+        $viol += 'R12 槽问句反例缺失: 数组本体内置没置 isArrOut=true —— 它们会同时被当成整只槽'
+    }
+}
 
 Write-Host ('census: table=' + $tableNames.Count + ' rtlSlot=' + $rtlSlot.Keys.Count +
             ' rtlPtr=' + $rtlPtr.Keys.Count + ' rtlMacro=' + $rtlMacro.Keys.Count +
@@ -128,5 +224,5 @@ if ($viol.Count -gt 0) {
     Write-Host ('FAIL builtin_slot_returns: ' + $viol.Count + ' 条违规 —— 修法是把表与 RTL 对账 (补名/撤名), 不是往白名单里加名字; 真要走例外请连带写清理由并重跑 §B146 那把 400 份 A/B')
     exit 1
 }
-Write-Host 'PASS builtin_slot_returns (R1..R5)'
+Write-Host 'PASS builtin_slot_returns (R1..R12)'
 exit 0

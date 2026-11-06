@@ -528,11 +528,11 @@ if ($viewBoxQFiles.Count -ne 4) {
 }
 $viewBoxRtl = CountOf 'vb6_VariantFromProjectInstance'
 if ($viewBoxRtl -ne 7) {
-    $fail += ("view boxing rtl 出口 sites = " + $viewBoxRtl + " (want exactly 7: RTL 声明 + 定义 + 发码串 + 槽表那一行两处 + 第一百七十二刀两条注释)")
+    $fail += ("view boxing rtl 出口 sites = " + $viewBoxRtl + " (want exactly 7: RTL 声明 + 定义 + 发码串 + 生成物槽表一行 + cgen_util_type.cpp 的归因注释 + 第一百七十二刀两条注释)")
 }
 $viewBoxRtlFiles = @(FilesOf 'vb6_VariantFromProjectInstance')
-if ($viewBoxRtlFiles.Count -ne 6) {
-    $fail += ("view boxing rtl 出口 files = " + ($viewBoxRtlFiles -join ', ') + " (want exactly 4 files)")
+if ($viewBoxRtlFiles.Count -ne 7) {
+    $fail += ("view boxing rtl 出口 files = " + ($viewBoxRtlFiles -join ', ') + " (want exactly 7 files: RTL 声明 + 定义 + 发码串 + 生成物槽表 + cgen_util_type.cpp 归因注释 + 第一百七十二刀两条注释)")
 }
 $ctrlTxt171 = [IO.File]::ReadAllText((Join-Path $Root "src\backend\cgen_util_ctrl.cpp"))
 if ($ctrlTxt171.Contains('.obj)')) {
@@ -782,5 +782,5 @@ if ($fail.Count -gt 0) {
     foreach ($f in $fail) { Write-Host ("  - " + $f) }
     exit 1
 }
-Write-Host "CLASS-REFCOUNT-AUTHORITY OK (1 pair mint / 1 header / 2 leg consumers / 3+9 formals / 10 roster files / 6 literal files / 0 stale / 5 registry files + 2 registrants / 1+1 out-slot / 1+1 foreign-write drop / 1 field-teardown shape + file / 6 field-type questions (标量 + 数组两档) / 7 transfer-question sites in 2 files (第二百零三刀给字段槽那一臂加了第 4 处站点问句) / 1 view-leg hand-back + 2 QiSet calls / 1+2+1 transfer-arm questions / 3 static-gate sites in 1 file + 1 ivref registration / 1 arg-station hand-back + 4+4 helper sites in 4 files / 4+4 index-slot + project-class questions / 1 address-temp mint / 3 element-teardown sites + 4+4 carrier-destroy questions + 4 preserve-with-release sites in 4 files / 4+4 形A questions (out-slot class + owner pass) + 5 copy-in claim sites in 4 files / 3+4 carrier-destroy sites in 3 files / 8 hand-back stations (5 in cgen_redim.cpp + 过程出口) + 4 shape questions + 3 multidim export sites + 4+2 carrier-scope registrar + flag sites / 7+3 carrier-free flag + 5+5 escape pre-pass + 6 roster sites in 4 files + 1 LHS + 1 RHS exemption + 1 dst gate + 7+3 declaration-scope roster / 5 static gates / 4+3 ND Preserve-with-release export sites / 6 legacyViewBoxExpr sites in 4 files + 7 rtl-name sites in 6 files + 9 wrap-name sites in 6 files + 6 view-slot sites in 5 files (㉘㉚，第一百七十二刀三站) + 14 view-name sites in 9 files + 5 view_from-name sites + 3 mint sites + 1 name-ruler (㉛，第一百七十四刀站A) / 3+3 late-return-slot claim sites (站点在 cgen_setlet_set_rhs.inc) + 1 shape in cgen_com.cpp + 4+4 object-pointer-slot questions + 3+3 local-handover questions (㉜，第三百十四刀)"
+Write-Host "CLASS-REFCOUNT-AUTHORITY OK (1 pair mint / 1 header / 2 leg consumers / 3+9 formals / 10 roster files / 6 literal files / 0 stale / 5 registry files + 2 registrants / 1+1 out-slot / 1+1 foreign-write drop / 1 field-teardown shape + file / 6 field-type questions (标量 + 数组两档) / 7 transfer-question sites in 2 files (第二百零三刀给字段槽那一臂加了第 4 处站点问句) / 1 view-leg hand-back + 2 QiSet calls / 1+2+1 transfer-arm questions / 3 static-gate sites in 1 file + 1 ivref registration / 1 arg-station hand-back + 4+4 helper sites in 4 files / 4+4 index-slot + project-class questions / 1 address-temp mint / 3 element-teardown sites + 4+4 carrier-destroy questions + 4 preserve-with-release sites in 4 files / 4+4 形A questions (out-slot class + owner pass) + 5 copy-in claim sites in 4 files / 3+4 carrier-destroy sites in 3 files / 8 hand-back stations (5 in cgen_redim.cpp + 过程出口) + 4 shape questions + 3 multidim export sites + 4+2 carrier-scope registrar + flag sites / 7+3 carrier-free flag + 5+5 escape pre-pass + 6 roster sites in 4 files + 1 LHS + 1 RHS exemption + 1 dst gate + 7+3 declaration-scope roster / 5 static gates / 4+3 ND Preserve-with-release export sites / 6 legacyViewBoxExpr sites in 4 files + 7 rtl-name sites in 7 files (槽表已进生成物) + 9 wrap-name sites in 6 files + 6 view-slot sites in 5 files (㉘㉚，第一百七十二刀三站) + 14 view-name sites in 9 files + 5 view_from-name sites + 3 mint sites + 1 name-ruler (㉛，第一百七十四刀站A) / 3+3 late-return-slot claim sites (站点在 cgen_setlet_set_rhs.inc) + 1 shape in cgen_com.cpp + 4+4 object-pointer-slot questions + 3+3 local-handover questions (㉜，第三百十四刀)"
 exit 0

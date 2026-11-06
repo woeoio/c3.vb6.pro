@@ -173,6 +173,49 @@ static VARIANT mk_i4(LONG v) {
  * 按 ASCII 打出来。既有 call_member 只打 resultvt (VARIANT 标签) —— 这一格要看的正是**答案内容**:
  * "SatImpl"(表里查得到身份) 还是空(表已饱和, 那枚实例没登记进去)。只在命令行给了 CHURN=<n> 时才发,
  * 其余夹具的输出一个字节都不动。 */
+/* 账 #305 第330刀 (账 #605): CALL=<成员名> —— 按名点一发零实参的 Function，并把**答案本身**
+ * 按 ASCII 打出来。App.Title / App.EXEName / App.Path 在一枚 DLL 里答谁是运行期的事实，发码
+ * 形状针只能钉「播种那一行在不在」，钉不住「读到的到底是谁」；而这枚成员名各工程各叫各的，
+ * 所以名字从命令行进来。既有 call_member 只打 VARIANT 标签 (resultvt)，答案内容看不见 ——
+ * 照 call_churn 那一条先例另开一发。只在给了 CALL= 时才发，其余夹具的输出一个字节不动。
+ */
+static void call_readbyname(IDispatch *disp, const char *name) {
+    DISPID id = DISPID_UNKNOWN;
+    DISPPARAMS dp;
+    VARIANT res;
+    EXCEPINFO ei;
+    UINT err = 0;
+    LPOLESTR names[1];
+    wchar_t wname[64];
+    size_t i;
+    HRESULT hr;
+
+    for (i = 0; i + 1 < sizeof(wname) / sizeof(wname[0]) && name[i]; i++)
+        wname[i] = (wchar_t)(unsigned char)name[i];
+    wname[i] = 0;
+    names[0] = (LPOLESTR)wname;
+    VariantInit(&res);
+    memset(&ei, 0, sizeof(ei));
+    memset(&dp, 0, sizeof(dp));
+    hr = IDispatch_GetIDsOfNames(disp, &IID_NULL, names, 1, LOCALE_USER_DEFAULT, &id);
+    printf("READ_NAMES=%ls hr=0x%08lX dispid=%ld\n", wname, (unsigned long)hr, (long)id);
+    if (FAILED(hr)) return;
+    hr = IDispatch_Invoke(disp, id, &IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp,
+                          &res, &ei, &err);
+    printf("READ_CALL hr=0x%08lX vt=%u err=%u\n", (unsigned long)hr, (unsigned)res.vt,
+           (unsigned)err);
+    if (SUCCEEDED(hr) && res.vt == VT_BSTR && res.bstrVal) {
+        UINT len = SysStringLen(res.bstrVal), k;
+        printf("READ_ANS=");
+        for (k = 0; k < len; k++) putchar(res.bstrVal[k] < 128 ? (int)res.bstrVal[k] : '?');
+        printf("\n");
+    } else {
+        printf("READ_ANS=(not a BSTR)\n");
+    }
+    if (ei.bstrDescription) SysFreeString(ei.bstrDescription);
+    VariantClear(&res);
+}
+
 static void call_churn(IDispatch *disp, LONG n) {
     DISPID id = DISPID_UNKNOWN;
     DISPPARAMS dp;
@@ -751,6 +794,11 @@ int main(int argc, char **argv) {
         hr = IDispatch_GetIDsOfNames(disp, &IID_NULL, names, 1, LOCALE_USER_DEFAULT, &id);
         printf("NAMES=bogus hr=0x%08lX dispid=%ld\n", (unsigned long)hr, (long)id);
     }
+
+    /* 账 #305 第330刀 (账 #605): CALL=<成员名> —— 按名点一发并把答案打出来 (只在给了时发)。
+     * 排在 CHURN= 之前：两者读同一枚 disp，而 CHURN= 那一臂会先把名册灌满。 */
+    for (ai = 3; ai < argc; ai++)
+        if (strncmp(argv[ai], "CALL=", 5) == 0) call_readbyname(disp, argv[ai] + 5);
 
     /* 账 #481: 表饱和的运行时证人 (只在给了 CHURN=<n> 时发, 其余夹具输出不变). */
     for (ai = 3; ai < argc; ai++)

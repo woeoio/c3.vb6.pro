@@ -9,6 +9,9 @@
         knownFormName_ = formNameLower;
         knownFormControls_[formNameLower] = FrmControlType::Form;
         knownFormControlOriginalNames_[formNameLower] = formName;
+        // 账 #305 第三百三十刀: 记录 MDIForm 身份 (裸 ActiveForm 的放行闸)
+        if (frmDesc.formControl.controlType == FrmControlType::MDIForm)
+            currentFormIsMDI_ = true;
 
         // P7.6: 先扫描控件数组 (同名控件出现多次 = 数组)
         // Fix 086: 递归注册嵌套控件 (Menu子项如 Window > WindowTopMost).

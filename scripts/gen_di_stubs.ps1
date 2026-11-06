@@ -205,6 +205,11 @@ foreach ($s in $order) {
             $ptype = $pt
         }
         if ($ptype -eq '') { $ptype = 'intptr_t' }
+        # VB6 `As Boolean` (16 位) 在 C3 的原型里是 int16_t, 而 GDI+/Win32 的 BOOL 是 32 位:
+        # x86 stdcall 下按 16 位传会把后面的参数整体挪 2 字节 (GdipSetImageAttributesColorMatrix
+        # 实测: GDI+ 读到野的 MatrixColor 指针 -> InvalidParameter -> 色矩阵静默不生效)。
+        # 只在 gdiplus 家族加宽, 其余家族保持 1:1。
+        if ($famName -eq 'gdiplus' -and $ptype -eq 'int16_t') { $ptype = 'int32_t' }
         # VB UDTs / project interfaces / VARIANT (vb6_type_*, vb6_ivref_*, vb6_ComIface_*,
         # vb6_VARIANT*) are project-generated types the RTL cannot see. Every Declare passes
         # them by pointer, so void* is ABI-identical. A by-value vb6_* type is not representable

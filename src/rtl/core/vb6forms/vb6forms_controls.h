@@ -52,6 +52,10 @@ typedef struct Vb6OcxRef {
 // 注册运行期 OCX 免注册表 (cgen 生成, 入口点调用一次). count 超过 256 截断并打 stderr 警告.
 void vb6_OcxRefRegister(const Vb6OcxRef* libs, int count);
 
+// 免注册 COM manifest 模式的诊断用：只读地拿到这张表的指针/条数（不改表）。
+// 返回条数；*out 为表首地址（可为 NULL）。
+int vb6_OcxRefGetTable(const Vb6OcxRef** out);
+
 // ============================================================
 // Fix 143: 第三方 OCX 控件真宿主 (设计期 Begin NewTabCtl.NewTab 等)
 // ============================================================
@@ -86,11 +90,17 @@ typedef struct Vb6OcxProp {
 //   x/y/w/h   像素矩形
 //   ctrlName  控件实例名 (调试/Extender.Name 用)
 //   props     设计期属性表 (经 IPersistPropertyBag::Load 灌入; 可 NULL)
+//   persistBlob 设计期 OleObjectBlob 负载 (.frx 24B 包装头之后的内容; 可 NULL)
+//              → 激活前经 IPersistStreamInit::Load 灌回控件 (TeeChart 的 Series/Axis
+//                等设计期成员都在这里面, 不灌则 Series(0) 空指针)
 // 加载顺序: <exe目录>\<文件名> (便携) → ocxPath (绝对) → CoCreateInstance (已注册) → 裸文件名.
-// 激活: SetClientSite → SetExtent → PropertyBag → DoVerb(INPLACEACTIVATE|SHOW) → SetObjectRects.
+// 激活: SetClientSite → SetHostNames → Advise → PersistStream(Load) → SetExtent → GetExtent
+//       → PropertyBag → SetObjectRects → DoVerb(INPLACEACTIVATE|SHOW) → SetObjectRects.
+//       （Load 必须在 SetExtent 之前：TPF0 流带着控件自己的设计期尺寸，后报会按旧尺寸布局。）
 void* vb6_OcxHost_Create(void* hwndForm, const wchar_t* clsidStr, const wchar_t* altClsidStr,
                          const wchar_t* ocxPath, int x, int y, int w, int h,
-                         const wchar_t* ctrlName, const Vb6OcxProp* props, int propCount);
+                         const wchar_t* ctrlName, const Vb6OcxProp* props, int propCount,
+                         const unsigned char* persistBlob, int persistSize);
 
 // Fix 143d: 把窗体消息转发给该窗体上的无窗口 OCX 控件 (WM_PAINT/鼠标/键盘).
 // 返回 1 = 有控件处理 (调用方用 *plResult 作为 WndProc 返回值).
@@ -133,6 +143,11 @@ int32_t vb6_OcxHost_TypeNameOf(void* hwndOrCtl, wchar_t* out, int32_t cch);
 int32_t vb6_OcxHost_GetVisible(void* ctlDisp, int32_t* outVisible);
 int32_t vb6_OcxHost_SetVisible(void* ctlDisp, int32_t visible);
 int32_t vb6_OcxHost_SyncRects(void* ctlDisp);
+/* 账 #305 第三百四十八刀: MDIForm 尺寸变化后, 给该窗体上所有 **windowless OCX**
+ * (CommandBars/DockingPaneManager 这类隐形控件) 补发 SetObjectRects(全客户区)
+ * + 重绘 —— 它们的排布引擎按 site 矩形走, 缺了这一发停靠带停在旧宽度。 */
+void vb6_OcxHost_FormResized(void* hwndForm, int w, int h);
+void vb6_OcxHost_InvokeAll(void* hwndForm, const wchar_t* method);
 int32_t vb6_OcxHost_GetRect(void* ctlDisp, int32_t out[4], void** outForm);
 // windowless 那条路的几何出口: 站点账本(像素)按容器 ScaleMode 折成用户单位; slot = VB6_GEOM_*
 int32_t vb6_OcxHost_GetUserCoord(void* ctlDisp, int32_t slot);
@@ -275,6 +290,15 @@ typedef struct vb6_UserControlDesc {
     // UserControl_Paint。0 = Opaque (VB6 缺省: 旧 cgen 不发此槽 ⇒ 补 0 ⇒ 行为
     // 与改动前逐字节一致), 1 = Transparent。
     int32_t     transparent;
+
+    // ---- .ctl 设计期 `AutoRedraw` (只许追加到末尾) ----
+    // VB6 的 UserControl 设计器在 .ctl 头部写 `AutoRedraw = -1 'True` 时, 该控件
+    // **从创建起** UserControl.AutoRedraw 就是 True ⇒ UserControl.hDC 是常驻离屏位图,
+    // 控件在 Resize/Show 里画的像素靠这张位图留到下一次 WM_PAINT。
+    // C3 此前只认 VB 代码里写的 `.AutoRedraw = True` (vb6_UC_SetAutoRedraw), 设计期
+    // 头部那一行整个被丢弃 ⇒ ucTreeViewPlus 的 Update/Draw 在 `hdc` 拿到 NULL,
+    // GDI+ 画到空 DC, 屏幕上只剩宿主铺的灰底 (实测 nodes=3 但树区全 240)。
+    int32_t     autoRedraw;
 } vb6_UserControlDesc;
 
 // .ctl module self-registration (type name case-insensitive, duplicate ignored)
@@ -308,11 +332,17 @@ void vb6_HostObj_Register(void* hwnd, const char* name, const char* vbTypeName,
 int32_t vb6_Host_IsHostObject(void* obj);
 // 账 #305 第二百六十二刀 (丙): 宿主模型「不认识的成员」计数 (见 uc_hostmodel.c)。
 int32_t vb6_Host_UnknownMemberCount(void);
+// 账 (438 语义刀): 读侧成员不存在 → 抛 438 的次数 (与上面的「真缺口」分开计数)。
+int32_t vb6_Host_Error438Count(void);
 const wchar_t* vb6_Host_TypeNameOf(void* obj);
 int32_t vb6_Host_GetProp(void* obj, const wchar_t* name, void* outVariant);
 int32_t vb6_Host_SetProp(void* obj, const wchar_t* name, const void* inVariant);
 int32_t vb6_Host_Call(void* obj, const wchar_t* name, int32_t argc,
                       void** argv, void* outVariant);
+// 账 <438>: 窗体/图片框内建方法 PaintPicture —— cgen 直接发到本入口
+// (宿主模型 getprop 不认方法名, 走通用晚绑定形会抛 Run-time error '438')。
+// argv 与 vb6_Host_Call 同一形: vb6_VARIANT* 数组 (顺序参数)。
+void vb6_FormPaintPictureAt(void* hwnd, int argc, void** argv);
 void* vb6_UC_NewFont(void);
 // Fix 119: 在 vb6_UC_HostCreate 之前设定该实例的字体 (.frm BeginProperty Font 块)
 void  vb6_UC_SetPendingFont(void* f);
@@ -354,6 +384,14 @@ void  vb6_UC_BagPutStr(void* bag, const wchar_t* name, const wchar_t* value);
 void  vb6_UC_BagPutInt(void* bag, const wchar_t* name, int32_t value);
 void  vb6_UC_BagPutDbl(void* bag, const wchar_t* name, double value);
 void  vb6_UC_BagPutBool(void* bag, const wchar_t* name, int32_t value);
+/* 设计期字体块 (`BeginProperty Font` / `SubTextFont` ...) 进 bag 的对象槽。
+   VB6 的 UserControl_ReadProperties 用
+     Set m_Font       = .ReadProperty("Font", Ambient.Font)
+     Set m_SubTextFont = .ReadProperty("SubTextFont", Ambient.Font)
+   读回设计期字体; 缺项时 ReadProperty 交回**默认值** (Ambient.Font), 会把
+   前面 prop_let 回放过的 9pt SubTextFont 覆盖成 ambient 8.25 (两者还会变成
+   同一枚对象)。font 是 vb6_UC_NewFont 造的那枚八档结构体。 */
+void  vb6_UC_BagPutFont(void* bag, const wchar_t* name, void* font);
 // Fix: 二进制 blob (字节数组) 槽 —— .frx 里 UserControl 的持久化 PropertyBag 块
 // (InitPanels/InitBands/InitButtons/InitListImages/InitTabs...) 以原始字节喂给外层包,
 // 运行期 `PropBag.Contents = <该字节数组>` 时由 uc_propbag.c 解析成扁平的

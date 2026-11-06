@@ -43,6 +43,8 @@ BSTR vb6_Spc(int32_t count);
 void* vb6_ForEach_Init(void* disp);
 // 账 #257 第十五层: 集合是**工程类实例**时 (不是 IDispatch) 用它的 NewEnum 接口直接建枚举
 void* vb6_ForEach_InitFromEnumIface(void* pEnumRaw);
+// P3 缺口②: 整只 VARIANT 里的 SafeArray 枚举 (实现 vb6rtl_array.c)
+void* vb6_ForEach_InitVariant(void* vp);
 int32_t vb6_ForEach_Next(void* enumPtr, void* outVar);  // outVar is VARIANT*
 void vb6_ForEach_Release(void* enumPtr);
 
@@ -151,6 +153,11 @@ void* vb6_ComUnpackObject(void* variant);
 void vb6_ComVarClear(void* variant);
 void vb6_ComVarFree(void* variant);
 
+// ucTreeView: `Me.Image` 的 StdPicture 视图 (宿主模型/cgen 发射；定义在
+// vb6forms_picture_prop.c)。伞头里必须有原型 —— emit-declared 静态门禁要求
+// 每个被发射且有 RTL 定义的符号都能从伞头看见声明。
+void* vb6_FormGetImagePicture(void* hwnd);
+
 // 一体化COM辅助函数 (内部处理临时vb6_VARIANT清理)
 void* vb6_ComCallObject(void* disp, const wchar_t* methodName,
                         void* args, int32_t argc);
@@ -183,6 +190,9 @@ int16_t vb6_ComResultToBool(void* variant_ptr);
 // 从前发码把指针截成 int32 再取反 = 恒非零 ⇒ 「在场的键」那一头全答反。
 int32_t vb6_ComResultToNot(void* variant_ptr);
 vb6_VARIANT vb6_VariantFromStackVARIANT(VARIANT* pv);  /* P24-03: 栈上VARIANT转换(不释放) */
+/* P4 取证: For Each 循环尾清栈上 VARIANT 的唯一出口 —— 对象档走 vb6_ReleaseObject
+ * 的判据 (伪对象不按 COM 协议解引用 vtable), 其余档原样转 OLEAUT32 VariantClear。 */
+void vb6_VariantClearWin(VARIANT* pv);
 void* vb6_VariantToObject(vb6_VARIANT* v);  /* P24-04: Extract IDispatch from Variant for COM late-binding */
 void* vb6_ComPackVariant(vb6_VARIANT v);     /* P24-04: Pack vb6_VARIANT (by value) into Windows VARIANT */
 // Fix 030: 通用 COM 参数打包宏 — 路由任意 C 类型实参通过 _Generic 选择合适的

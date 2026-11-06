@@ -84,7 +84,7 @@
         auto* ddSym44 = symTab_.lookup(ddLower44);
         if (dataObjectParams_.count(ddLower44)) {
             std::string memDD44 = Symbol::toLower(node.memberName);
-            std::string ddArg44 = "(void*)(*" + ddObj44.name + ")";
+            std::string ddArg44 = dataObjectArgExpr(ddObj44.name);
             if (memDD44 == "gettext")      { lastExpr_ = "vb6_oleDD_GetText(" + ddArg44 + ")"; return; }
             if (memDD44 == "getfilecount") { lastExpr_ = "vb6_oleDD_GetFileCount(" + ddArg44 + ")"; return; }
             // Data.Files (非调用形态, 后面跟 .Count): 留尾部注释标记, 外层 MemberAccess
@@ -205,6 +205,17 @@
                 } else {
                     lastExpr_ = "vb6_" + cIdent(fnCanon);
                 }
+                return;
+            }
+            // ucTreeView: VBA.Left$ 这类**内置函数**没有注册成 Symbol (只有裸写 `Left$`
+            // 才走 IdentifierExpr 的内置表), 上一分支落空后旧代码继续走到 M22 的模块限定
+            // 回退 → `vb6_VBA_Left_` ($ 被 cIdent 变成 _) ⇒ LNK2019。
+            // 这里按内置表兜底, 名字与裸写 `Left$` 完全一致 (Rnd 特殊形照旧)。
+            std::string fnLowerFb = Symbol::toLower(fnName);
+            if (fnLowerFb == "rnd") { lastExpr_ = "vb6_Rnd(1)"; return; }
+            auto itBuiltinFb = builtinFuncs.find(fnLowerFb);
+            if (itBuiltinFb != builtinFuncs.end()) {
+                lastExpr_ = itBuiltinFb->second;
                 return;
             }
         }

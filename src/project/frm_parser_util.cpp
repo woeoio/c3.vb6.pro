@@ -68,7 +68,9 @@ FrmValue FrmParser::parseValue(const std::string& s) {
         }
         if (validHex) {
             long long v = (long long)std::stoull(hex, nullptr, base);
-            // &H80000000 及以上是 32 位负数 (VB6 Long)
+            // 这里保留**无符号 32 位位型** (&H8000000D& -> 2147483661), 不在此处折符号:
+            // VB6 Long 的负值语义统一由发射侧的 frmValueToVbLong (frm_parser.hpp) 折回,
+            // 那是代码生成侧唯一的符号出口。超过 32 位的按低 32 位截 (VB6 Long 语义)。
             if (v > 0xFFFFFFFFLL) v &= 0xFFFFFFFFLL;
             return FrmValue::fromInt(v, t);
         }

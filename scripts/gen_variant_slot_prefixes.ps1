@@ -1,0 +1,144 @@
+﻿# gen_variant_slot_prefixes.ps1 -- 派生「哪些 C 出口交回来的是整只 vb6_VARIANT 槽」
+#
+# 权威不是这张表, 是 RTL 声明本身。本脚本把权威推成一份 checked-in 数据:
+#   src/backend/detail/expr/cgen_variant_slot_prefixes.inc
+#
+# 派生 = { RTL 声明 `vb6_VARIANT f(...)` 且非指针返回 }
+#        ∪ AllowMacro   (_Generic 宏, 每一档变目都交槽; 逐条写理由)
+#        ∪ AllowNonRtl  (不是 RTL 出口的名字; 逐条写理由)
+#        − ExcludeInternal (RTL 内部辅助, 后端从不以调用形出现; 逐条写理由, 且有 0 出现守卫)
+#
+# 指针返回 (vb6_VARIANT *f(...)) 一律排除: 它交回的是槽的地址, 不是槽。
+#
+# 用法:
+#   powershell -File scripts/gen_variant_slot_prefixes.ps1            # 重写 .inc
+#   powershell -File scripts/gen_variant_slot_prefixes.ps1 -DryRun    # 只打名对名差异
+#   powershell -File scripts/gen_variant_slot_prefixes.ps1 -Check     # 与 .inc 比, 不一致 exit 1 (P1.4 哨兵用)
+#
+# 幂等: 同样的 RTL => 逐字节相同的 .inc。
+param(
+    [string]$Root = (Split-Path -Parent $PSScriptRoot),
+    [switch]$DryRun,
+    [switch]$Check
+)
+$ErrorActionPreference = 'Stop'
+$incRel = 'src\backend\detail\expr\cgen_variant_slot_prefixes.inc'
+$incPath = Join-Path $Root $incRel
+
+function Strip-CComments([string]$t) {
+    $t = [regex]::Replace($t, '/\*[\s\S]*?\*/', ' ')
+    $t = [regex]::Replace($t, '(?m)//.*$', ' ')
+    return $t
+}
+
+# 逐条写理由, 不许为了绿而加名。
+$AllowMacro = [ordered]@{
+    'vb6_VariantFromValue' = '_Generic 宏: 每一档变目都交槽 (含 vb6_VARIANT: vb6_VariantIdentity 档); 逐档核过, 不是猜'
+}
+$AllowNonRtl = [ordered]@{
+    'vb6_DispCallByVtbl' = '不是 RTL 出口 -- 语料 mdQRCodegen.bas 自己的 Private Function, 单模块模式下 C 名是裸 vb6_<proc>, variantReturnFuncs_ 够不着 (撤掉它会丢五处 vb6_VariantToLong 提取, 见 §B146)'
+}
+# RTL 内部辅助: 名字像槽, 但后端从不发 `vb6_X(...)` 调用形 (0 出现, 下面有守卫)。
+$ExcludeInternal = [ordered]@{
+    'vb6_ComVariantIntoSlot'     = 'RTL 内部把一枚槽写进另一枚槽的辅助 (COM 参数整理), 后端只经宏间接使用, 不发调用形'
+    'vb6_VarArith'               = 'RTL 内部 Variant 四则分派器本体; 后端发的是 vb6_VarAddV/SubV/MulV/DivV 四枚外壳'
+    'vb6_VariantElemFromSlotData'= 'RTL 内部从槽数据取元素的辅助 (SafeArray 解包), 后端不发调用形'
+    'vb6_VariantFromUdtBytes'    = 'RTL 内部 UDT 字节串 -> Variant 的装箱辅助, 后端走 vb6_VariantFromValue'
+}
+
+# ---- 1) RTL: 槽 / 指针 / 宏 ----
+$rtlSlot = @{}; $rtlPtr = @{}; $rtlMacro = @{}
+foreach ($f in @(Get-ChildItem -Path (Join-Path $Root 'src\rtl') -Recurse -File -Include *.c,*.h)) {
+    $t = Strip-CComments ([IO.File]::ReadAllText($f.FullName))
+    foreach ($k in [regex]::Matches($t, '(?m)^\s*#\s*define\s+(vb6_[A-Za-z0-9_]+)')) { $rtlMacro[$k.Groups[1].Value] = $true }
+    foreach ($k in [regex]::Matches($t, 'vb6_VARIANT\s*\*\s*(vb6_[A-Za-z0-9_]+)\s*\(')) { $rtlPtr[$k.Groups[1].Value] = $true }
+    foreach ($k in [regex]::Matches($t, 'vb6_VARIANT\s+(vb6_[A-Za-z0-9_]+)\s*\(')) {
+        $n = $k.Groups[1].Value
+        if (-not $rtlPtr.ContainsKey($n)) { $rtlSlot[$n] = $true }
+    }
+}
+if ($rtlSlot.Keys.Count -lt 25) { Write-Host ('ERROR: RTL 槽声明只数出 ' + $rtlSlot.Keys.Count + ' 枚 (<25) -- 扫描读空'); exit 2 }
+
+# ---- 1b) 排除名单的 0 出现守卫 (纯子串, 不靠字符串字面量解析) ----
+$backendText = New-Object System.Text.StringBuilder
+foreach ($f in @(Get-ChildItem -Path (Join-Path $Root 'src\backend') -Recurse -File -Include *.cpp,*.inc)) {
+    if ($f.FullName -eq $incPath) { continue }
+    [void]$backendText.AppendLine((Strip-CComments ([IO.File]::ReadAllText($f.FullName))))
+}
+$beText = $backendText.ToString()
+$badExc = @()
+foreach ($n in $ExcludeInternal.Keys) {
+    if ($beText.Contains($n + '(') -or $beText.Contains($n)) { $badExc += $n }
+}
+if ($badExc.Count -gt 0) {
+    Write-Host ('ERROR: 排除名单失效 -- 后端出现了这些名字, 不能排除: ' + ($badExc -join ', '))
+    exit 3
+}
+
+# ---- 2) 派生 ----
+$derived = @{}
+foreach ($n in $rtlSlot.Keys) { $derived[$n] = $true }
+foreach ($n in $AllowMacro.Keys) { if ($rtlMacro.ContainsKey($n)) { $derived[$n] = $true } }
+foreach ($n in $AllowNonRtl.Keys) { $derived[$n] = $true }
+foreach ($n in $ExcludeInternal.Keys) { [void]$derived.Remove($n) }
+foreach ($n in $rtlPtr.Keys) { [void]$derived.Remove($n) }   # 指针返回绝不进表
+$derivedNames = @($derived.Keys | Sort-Object)
+if ($derivedNames.Count -lt 30) { Write-Host ('ERROR: 派生只剩 ' + $derivedNames.Count + ' 条 (<30) -- 排除名单吃过头了'); exit 2 }
+
+# ---- 3) 现状 (名对名对照用) ----
+$current = @{}
+if (Test-Path -LiteralPath $incPath) {
+    foreach ($q in [regex]::Matches([IO.File]::ReadAllText($incPath), '"(vb6_[A-Za-z0-9_]+)\("')) { $current[$q.Groups[1].Value] = $true }
+} else {
+    $t = [IO.File]::ReadAllText((Join-Path $Root 'src\backend\cgen_util_type.cpp'))
+    $m = [regex]::Match($t, '(?s)static\s+const\s+std::vector<std::string>\s+variantPrefixes\s*=\s*\{.*?\};')
+    if ($m.Success) { foreach ($q in [regex]::Matches($m.Value, '"(vb6_[A-Za-z0-9_]+)\("')) { $current[$q.Groups[1].Value] = $true } }
+}
+$currentNames = @($current.Keys | Sort-Object)
+$added = @($derivedNames | Where-Object { -not $current.ContainsKey($_) })
+$removed = @($currentNames | Where-Object { -not $derived.ContainsKey($_) })
+
+# ---- 4) 生成 ----
+$sb = New-Object System.Text.StringBuilder
+[void]$sb.AppendLine('// ============================================================================')
+[void]$sb.AppendLine('// cgen_variant_slot_prefixes.inc -- GENERATED BY scripts/gen_variant_slot_prefixes.ps1')
+[void]$sb.AppendLine('// DO NOT EDIT BY HAND. 改 RTL 声明或改脚本里的例外表, 然后重跑脚本。')
+[void]$sb.AppendLine('//')
+[void]$sb.AppendLine('// 派生规则:')
+[void]$sb.AppendLine('//   { RTL 声明 vb6_VARIANT f(...) 且非指针返回 }')
+[void]$sb.AppendLine('//     ∪ AllowMacro (每一档变目都交槽的 _Generic 宏)')
+[void]$sb.AppendLine('//     ∪ AllowNonRtl (不是 RTL 出口的名字)')
+[void]$sb.AppendLine('//     − ExcludeInternal (RTL 内部辅助, 后端 0 出现)')
+[void]$sb.AppendLine('//   指针返回 (vb6_VARIANT *f(...)) 一律排除: 交回的是槽的地址, 不是槽。')
+[void]$sb.AppendLine('//')
+[void]$sb.AppendLine('// 例外 (+) 与排除 (-), 理由都住在脚本里:')
+foreach ($k in $AllowMacro.Keys)   { [void]$sb.AppendLine('//   + ' + $k + ' -- ' + $AllowMacro[$k]) }
+foreach ($k in $AllowNonRtl.Keys) { [void]$sb.AppendLine('//   + ' + $k + ' -- ' + $AllowNonRtl[$k]) }
+foreach ($k in $ExcludeInternal.Keys) { [void]$sb.AppendLine('//   - ' + $k + ' -- ' + $ExcludeInternal[$k]) }
+[void]$sb.AppendLine('//   - ' + (@($rtlPtr.Keys | Sort-Object) -join ', ') + ' -- 指针返回')
+[void]$sb.AppendLine('//')
+[void]$sb.AppendLine('// 条数: ' + $derivedNames.Count)
+[void]$sb.AppendLine('// ============================================================================')
+[void]$sb.AppendLine('static const std::vector<std::string> variantPrefixes = {')
+foreach ($n in $derivedNames) { [void]$sb.AppendLine('    "' + $n + '(",') }
+[void]$sb.AppendLine('};')
+$content = $sb.ToString().Replace("`r`n", "`n").Replace("`n", "`r`n")
+
+Write-Host ('derived=' + $derivedNames.Count + ' current=' + $currentNames.Count +
+            ' added=' + $added.Count + ' removed=' + $removed.Count)
+foreach ($n in $added)   { Write-Host ('  + ' + $n) }
+foreach ($n in $removed) { Write-Host ('  - ' + $n) }
+
+if ($Check) {
+    if (-not (Test-Path -LiteralPath $incPath)) { Write-Host ('FAIL: 缺 ' + $incRel); exit 1 }
+    $old = [IO.File]::ReadAllText($incPath).Replace("`r`n", "`n")
+    if ($old -ne $content.Replace("`r`n", "`n")) {
+        Write-Host 'FAIL: checked-in .inc 与 RTL 重新派生的结果不一致 -- 有人手改了 .inc, 或 RTL 变了没重跑脚本'
+        exit 1
+    }
+    Write-Host 'OK: .inc 与 RTL 派生结果一致'
+    exit 0
+}
+if ($DryRun) { Write-Host '(dry-run: no write)'; exit 0 }
+[IO.File]::WriteAllText($incPath, $content, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host ('wrote ' + $incRel + ' (' + $derivedNames.Count + ' names)')

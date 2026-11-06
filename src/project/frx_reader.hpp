@@ -61,6 +61,27 @@ struct FrxPropBagBlob {
     std::vector<uint8_t> bytes;         // 块负载 (cbSize 字节, 含 28B 前缀)
 };
 
+// .frx 里的 "DocProperty 字节块" (UserControl 设计期二进制属性, 如 `image_1`)
+//   布局: [DWORD cbSize][1B 00][GUID 16B][WORD 00][WORD 01][DWORD nBytes]
+//         [4B 0][nBytes 负载]  ——  payload 起点 = offset+32, cbSize = 28+nBytes
+//   Caption 这类字符串属性同一布局, 只是 payload 是 UTF-16 文本 (readDocString)。
+//   图片属性的 payload 是 PNG/JPEG/BMP…, 必须按**原始字节**交给属性包
+//   (VB6 里 `ReadProperty("image_N", 0)` 交回 Byte() ⇒ .ctl 的 ItemImage 才拿到图)。
+struct FrxBlobBytes {
+    bool found = false;
+    std::vector<uint8_t> bytes;
+};
+
+// .frx 里的 `OleObjectBlob` (设计器 OCX 的持久化数据)
+//   布局实测: [4B "LB" + WORD 版本][DWORD 负载长度][DWORD Left][DWORD Top]
+//             [DWORD Width][DWORD Height][负载 = 控件 IPersistStream 数据]
+//   TeeChart 的负载是 Delphi VCL 的 TPF0 流; VB6 建完控件后用
+//   IPersistStreamInit::Load 把**负载**灌回去 (24B 包装头不进流)。
+struct FrxOleBlob {
+    bool found = false;                 // 该偏移处是否为 LB 包装的 OleObjectBlob
+    std::vector<uint8_t> bytes;         // 包装头之后的持久化负载 (交给 OCX)
+};
+
 // ============================================================
 // FrxReader: 读取 .frx 文件
 // ============================================================
@@ -92,6 +113,13 @@ public:
     //   该判据在实测的 InitPanels/InitBands/InitButtons/InitListImages/InitTabs
     //   上逐一命中, 且不会误伤 DocString / 图片块。
     static FrxPropBagBlob readPropBagBlob(size_t offset);
+
+    // 读取设计器 OCX 的 `OleObjectBlob` (见上面 FrxOleBlob 注释)
+    static FrxOleBlob readOleBlob(size_t offset);
+
+    // 读取 DocProperty 字节块负载 (见 FrxBlobBytes 注释) —— 只做结构自洽校验,
+    // 是否真是图片由调用方 detectFormat 判断。
+    static FrxBlobBytes readDocBlobBytes(size_t offset);
 
     // 读取整数列表 (ListBox.ItemData)
     static FrxIntListData readIntList(size_t offset);

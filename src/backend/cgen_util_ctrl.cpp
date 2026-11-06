@@ -437,6 +437,11 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         if (propLower == "autoredraw") return "vb6_GetAutoRedraw";
         if (propLower == "caption") return "vb6_GetControlText";
         if (propLower == "picture") return "vb6_GetControlPicture";
+        /* ucTreeView: PictureBox.Image (AutoRedraw 记忆位图的 StdPicture 视图)。
+           读表缺这一枚时 `.Image` 落到 With 块兜底 `_vb6_with_N.Image` —— HWND 是
+           结构体指针 ⇒ C2231 (Form6.c:463)。RTL 侧 vb6_FormGetImagePicture 早就有
+           (与窗体 Image 同一实现, 按 VB6_AutoRedrawBmp 窗口属性取图)。 */
+        if (propLower == "image") return "vb6_FormGetImagePicture";
         if (propLower == "autosize") return "vb6_GetPictureAutoSize";
         if (propLower == "align") return "vb6_GetControlAlign";  // P13.5b: 停靠
         if (propLower == "visible") return "vb6_GetControlVisible";
@@ -1253,6 +1258,33 @@ void CCodeGen::emitDesignerStateProps(const FrmControl& ctrl, const std::string&
             c_.emitLine("vb6_SetOptionValue(" + hw + ", 1);  /* design Value=True(账 #128-b 专桩) */");
         }
     }
+
+    // 账 (TeeChart Chart display 夹具): HScrollBar/VScrollBar 的设计期 Min/Max/Value 在
+    // 两条创建路上都**一条不发** —— 控件窗口的量程停在默认 0..0，运行期
+    // `HScroll4.Value = 32` 被 SetScrollPos 夹回 0（实测 C3_EVTRACE：old=0 new=0），
+    // 于是 VB6 里必然发生的 Change 一声也没有，Panel.MarginRight 整条丢失。
+    // 顺序必须是 Min → Max → Value（量程立不起来之前写 Value 无意义）。
+    // 只在非默认值时发，与上面 Value 的"反面才发"同一条纪律。
+    if (ctrl.controlType == FrmControlType::HScrollBar || ctrl.controlType == FrmControlType::VScrollBar) {
+        auto mnIt = ctrl.properties.find("Min");
+        if (mnIt != ctrl.properties.end() && mnIt->second.type == FrmValueType::Integer
+            && mnIt->second.intValue != 0) {
+            c_.emitLine("vb6_SetScrollMin(" + hw + ", " + std::to_string(mnIt->second.intValue)
+                        + ");  /* design Min */");
+        }
+        auto mxIt = ctrl.properties.find("Max");
+        if (mxIt != ctrl.properties.end() && mxIt->second.type == FrmValueType::Integer
+            && mxIt->second.intValue != 32767) {
+            c_.emitLine("vb6_SetScrollMax(" + hw + ", " + std::to_string(mxIt->second.intValue)
+                        + ");  /* design Max */");
+        }
+        auto vaIt2 = ctrl.properties.find("Value");
+        if (vaIt2 != ctrl.properties.end() && vaIt2->second.type == FrmValueType::Integer
+            && vaIt2->second.intValue != 0) {
+            c_.emitLine("vb6_SetScrollValue(" + hw + ", " + std::to_string(vaIt2->second.intValue)
+                        + ");  /* design Value */");
+        }
+    }
 }
 
 // 账 #142: 设计期的 `ToolTipText` / `Tag` 此前**两条创建路都没发**（实测：`.frm` 里写了
@@ -1836,13 +1868,37 @@ bool CCodeGen::controlIsContainerType(const FrmControl& ctrl) const {
     }
 }
 
+bool CCodeGen::formTreeHasEventLoadingUsers(const FrmControl& root) const {
+    for (const auto& child : root.children) {
+        switch (child.controlType) {
+        case FrmControlType::CheckBox:
+        case FrmControlType::OptionButton:
+        case FrmControlType::HScrollBar:
+        case FrmControlType::VScrollBar:
+            return true;
+        default:
+            break;
+        }
+        // 容器里的子控件也算（TeeChart 示例 8 枚 HScrollBar 全在 Frame8 里）。
+        if (!child.children.empty() && formTreeHasEventLoadingUsers(child)) return true;
+    }
+    return false;
+}
+
 long CCodeGen::controlContainerExStyleBit(const FrmControl& ctrl) const {
     // ⚠ 账 #165 的根因就在这个数上：`WS_EX_CONTROLPARENT` 在 SDK 头里是 **0x00010000**
     //   （winuser.h:2855），而 0x00040000 是 `WS_EX_APPWINDOW`（同表往下 2857 行）。以前这里
     //   手抄成了后者 ⇒ 那两轮的读数只证明"想发的数落到窗口上了"，证不了"那是管理器认的那一位"。
     //   通用式：**手抄常量一律去 SDK 头对值**（或直接引符号），证人行打印符号对应的值。
     constexpr long kWsExControlParent = 0x00010000L;  // WS_EX_CONTROLPARENT（winuser.h 实测值）
-    return controlIsContainerType(ctrl) ? kWsExControlParent : 0L;
+    // 残差 #5 的另一半：VB6 的 ThunderRT6TextBox 实测 ex=0x204（WS_EX_CLIENTEDGE | NOPARENTNOTIFY），
+    // 边框是**有 3D 内凹**的（左/上 236 亮边 + 下/右 131 暗边、客户区 87x29 比控件小 2px/边）；只去掉
+    // WS_BORDER 会连这条内凹一起丢掉，于是「深框没了、浅边也没了」。WS_EX_CLIENTEDGE=0x200（winuser.h）。
+    // NOPARENTNOTIFY 只影响父窗通知、与外形无关，这里不立（少一位就少一条看不见的副作用）。
+    constexpr long kWsExClientEdge = 0x00000200L;     // WS_EX_CLIENTEDGE（winuser.h）
+    if (controlIsContainerType(ctrl)) return kWsExControlParent;
+    if (ctrl.controlType == FrmControlType::TextBox) return kWsExClientEdge;
+    return 0L;
 }
 
 // 账 #157: 为什么这一份留在发码期算，声明处的注释有交代。这里只做**选择**，并把选中那枚的句柄
@@ -1922,7 +1978,9 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
             break;
         }
         case FrmControlType::TextBox: {
-            style |= kWsBorder | kEsAutoH;
+            // VB6 ThunderRT6TextBox: style 无 WS_BORDER、ex 有 WS_EX_CLIENTEDGE；
+            // 原生 EDIT 立 WS_BORDER 会被主题 EDIT 画成 1px `100,100,100` 深框 (见顶层同处)
+            style |= kEsAutoH;
             auto mlIt = ctrl.properties.find("MultiLine");
             if (mlIt != ctrl.properties.end() && mlIt->second.intValue != 0) style |= kEsMulti | kEsAutoV;
             auto sbIt = ctrl.properties.find("ScrollBars");
@@ -1936,6 +1994,14 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
             }
             break;
         }
+        case FrmControlType::VScrollBar: {
+            // SBS_VERT：缺这个方向位时 SCROLLBAR 默认走 SBS_HORZ(=0)，微调按钮区整块空白
+            // （实测 33x31 区 992/1023 纯白、无箭头）；VB6 VScrollBar 实测含此位。
+            style |= 0x0001L;
+            break;
+        }
+        case FrmControlType::HScrollBar:
+            break;  // SBS_HORZ = 0
         // C29-RT-a: 与顶层那条创建样式**同一口径**（容器子控件走的就是这条路，账 #83）。
         // 枚举按 VB6 文档：0 无 / 1 水平 / 2 垂直 / 3 两者 —— 与上面的 TextBox 那一格现在一致
         // （账 #108 之前 TextBox 把 1/2 用反了，两条控件同名不同向）。
@@ -2385,7 +2451,7 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
                                  std::string value, const std::string& fixedLen) {
     // Fix 038b-6: BSTR 目标 + Variant 值 → 先提取 BSTR
     // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-    bool valueIsVariant = cExprIsVariant(value);
+    bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
     if (!valueIsVariant && rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
         auto& id = static_cast<IdentifierExpr&>(*rhs);
         std::string idLower = id.name;
@@ -2413,10 +2479,15 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     if (!valueIsVariant) {
         bool comResBstr = value.compare(0, 12, "vb6_ComCall(") == 0
             || value.compare(0, 20, "vb6_ComCallByDispid(") == 0
-            || value.compare(0, 15, "vb6_ComGetProp(") == 0
-            || value.compare(0, 21, "vb6_ComGetObjectProp(") == 0;
+            || value.compare(0, 15, "vb6_ComGetProp(") == 0;
         if (comResBstr) {
             value = "vb6_VariantToString(vb6_VariantFromComResult(" + value + "))";
+        } else if (value.compare(0, 21, "vb6_ComGetObjectProp(") == 0) {
+            // 账 (M3 身份刀): 对象读交回 IDispatch* 本体, 不能当堆上 VARIANT* 解引用。
+            // 换到同一成员的值孪生 (vb6_ComGetProp) 再按字符串提取 —— 成员名一字不动。
+            std::string twinObjStr = comValueTwinForObjectReadExpr(value);
+            if (!twinObjStr.empty())
+                value = "vb6_VariantToString(vb6_VariantFromComResult(" + twinObjStr + "))";
         }
     }
     // Fix 140: RHS 是 Byte() 数组 (类成员 m_Caption 或已知字节数组变量) 且目标是
@@ -2911,7 +2982,7 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
     // vb6_VariantFromComResult(vb6_ComCall(...))) 会被 switch 抢先包装
     // 成 vb6_VariantLong(vb6_VARIANT) → C2440 (cHttpServerResponse File
     // 内 fileSize = fileInfo.Size, fileSize As Variant).
-    if (cExprIsVariant(cExpr)) {
+    if (isVariantSlot(cExpr, nullptr)) {  // P1.3: ast 不可得 (cExpr 为形参)
         return cExpr;
     }
 
@@ -3020,7 +3091,7 @@ static bool cExprIsVariantCarrierStr(const std::string& cExpr) {
 }
 
 bool CCodeGen::cExprIsVariantCarrier(const std::string& cExpr) const {
-    return cExprIsVariant(cExpr) || cExprIsVariantCarrierStr(cExpr);
+    return isVariantSlot(cExpr, nullptr) || cExprIsVariantCarrierStr(cExpr);  // P1.3: ast 不可得 (cExpr 为形参)
 }
 
 // Fix 198 + <vbeclipse>: **装箱的唯一权威**。按 VB 声明类型选档, 只在类型确实与
@@ -3049,16 +3120,19 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // 与 conv_cstr (Fix 121) / arg_variant (Fix 113) 既有口径一致.
     {
         // 精确匹配裸 vb6_ComCall( / vb6_ComCallByDispid( / vb6_ComGetProp(
-        // / vb6_ComGetObjectProp( (12/20/15/21 字符含左括号);
-        // 不误伤 vb6_ComCallInt/BSTR/Double/Object。
+        // (12/20/15 字符含左括号); 不误伤 vb6_ComCallInt/BSTR/Double/Object。
+        // 账 (M3 身份刀): vb6_ComGetObjectProp 交回的是 **IDispatch* 本体** (vb6com_wrap.c:129),
+        // 不是堆上 VARIANT*; 把它喂给 vb6_VariantFromComResult 是类型混淆 (读 vtable 首字当
+        // vt、再把代码地址 free 掉)。实测 tests/ctlident 的 TypeName(ActiveForm) 即崩在此。
+        // 对象指针交给 vb6_VariantFromValue 的 _Generic default 档 = vb6_VariantObject
+        // (VT_DISPATCH, 且 vb6_ComIsDispatchable 对 HWND 判否, 安全)。
         size_t cs = 0;
         while (cs < cExpr.size()
                && (cExpr[cs] == '(' || cExpr[cs] == ' ' || cExpr[cs] == '\t'
                    || cExpr[cs] == '\n' || cExpr[cs] == '\r')) cs++;
         bool comRes = (cExpr.compare(cs, 12, "vb6_ComCall(") == 0)
                    || (cExpr.compare(cs, 20, "vb6_ComCallByDispid(") == 0)
-                   || (cExpr.compare(cs, 15, "vb6_ComGetProp(") == 0)
-                   || (cExpr.compare(cs, 21, "vb6_ComGetObjectProp(") == 0);
+                   || (cExpr.compare(cs, 15, "vb6_ComGetProp(") == 0);
         if (comRes) return "vb6_VariantFromComResult(" + cExpr + ")";
     }
     // 账 #305 新账 #407 第一百七十一刀: 与上面 wrapVariantValue 同一问、同一出口 (视图值进装箱站)。

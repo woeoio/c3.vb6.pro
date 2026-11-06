@@ -1,0 +1,6 @@
+<Grid xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
+	<Border x:Name='Background' Background='{x:Static Theme.Colors.FrameSystemMenuSelectedBackBrush}'>
+	</Border>
+
+	<TextBlock x:Name='Caption' HorizontalAlignment='Center' VerticalAlignment='Center' Foreground='{x:Static Theme.Colors.FrameSystemMenuSelectedTextBrush}'>Caption</TextBlock>
+</Grid>

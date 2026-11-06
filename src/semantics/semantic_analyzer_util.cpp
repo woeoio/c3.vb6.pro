@@ -314,7 +314,14 @@ void SemanticAnalyzer::checkCallArgs(Symbol* procSym, IndexOrCallExpr& callNode)
         }
     } else {
         size_t required = expectedParams - optionalParams;
-        if (providedArgs < required || providedArgs > expectedParams) {
+        // VB6: 0 参 Function/PropertyGet 返回 Variant 时, `F(i)` 里的 (i) 是**对返回数组的
+        // 下标**, 不是实参表 (真 VB6 实测 `/make` 通过: ucTreeView ClsTreeExplorer.cls:317
+        // `GetDrive(i)`, GetDrive 声明为 `Public Function GetDrive() As Variant`)。
+        // 只放行"恰好 1 个位置实参、无命名实参"这一形; 其余仍按实参数量报错。
+        bool variantRetSubscript = expectedParams == 0 && optionalParams == 0
+            && providedArgs == 1 && callNode.named.empty()
+            && procSym->type == Vb6Type::Variant;
+        if (!variantRetSubscript && (providedArgs < required || providedArgs > expectedParams)) {
             diag_.error(DiagnosticID::SemWrongNumberOfArguments, callNode.loc,
                 "参数数量错误: '" + procSym->name + "' 需要 " +
                 std::to_string(required) + "-" + std::to_string(expectedParams) +
@@ -443,7 +450,30 @@ std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type
                     std::string sInner = lit->rawText;
                     if (sInner.size() >= 2 && sInner.front() == '"' && sInner.back() == '"')
                         sInner = sInner.substr(1, sInner.size() - 2);
-                    return "vb6_BSTR_FromStr(L\"" + sInner + "\")";
+                    // rawText 是**VB 源码形态**, 不能直接抄进 C 宽字面量: 反斜杠不转义会得到
+                    // `L"\"` 未闭合字面量 (ucTreeView Node.c:479 `Optional PathSeparator As String = "\"`
+                    // → 常量中有换行符 + 后续 Path 全丢), VB 的 `""` 也要折成 `\"`。
+                    std::string esc;
+                    esc.reserve(sInner.size() + 8);
+                    for (size_t k = 0; k < sInner.size(); ++k) {
+                        const unsigned char ch = (unsigned char)sInner[k];
+                        if (ch == '"' && k + 1 < sInner.size() && sInner[k + 1] == '"') {
+                            esc += "\\\""; ++k;
+                        } else if (ch == '"') {
+                            esc += "\\\"";
+                        } else if (ch == '\\') {
+                            esc += "\\\\";
+                        } else if (ch == '\n') {
+                            esc += "\\n";
+                        } else if (ch == '\r') {
+                            esc += "\\r";
+                        } else if (ch == '\t') {
+                            esc += "\\t";
+                        } else {
+                            esc += (char)ch;
+                        }
+                    }
+                    return "vb6_BSTR_FromStr(L\"" + esc + "\")";
                 }
             case LiteralKind::Boolean:
                 // VB6 True = -1, False = 0

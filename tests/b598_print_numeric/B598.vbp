@@ -1,0 +1,4 @@
+Type=Exe
+Module=B598Main; B598Main.bas
+Startup="Sub Main"
+ExeName32="B598.exe"

@@ -718,6 +718,24 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         }
     }
 
+    // 账 #305 第三百三十七刀: With 目标链的**尾层成员**兜底解。
+    // `With ControlFile.CommandBar.Controls` —— emitExpr 只解到第一层
+    // (GetObjectProp(ControlFile, CommandBar)), 尾层 "Controls" 挂在 marker 里
+    // (generic_access 的链协议: 解一层留一员)。上面 #299 那格只认已知集合,
+    // 其余 (Codejock 的 CommandBarControls 等) 全漏 => With 体整个骑在错误对象上
+    // (菜单建不出来, .Add 全部 0x80020006), 尾层标记还漏进体内首条语句
+    // (Set ControlNew = .Add(...) 被发成 SetRef(<With 目标>, L"Controls", ...))。
+    // 这里把尚挂着的尾层成员解成对象值再继续。
+    if (std::getenv("C3_DBG_ST")) {
+        std::cerr << "[ST-WITH] marker=" << isComMarker_ << " obj=" << comObjExpr_ << " mem=" << comMemberName_ << " le=" << lastExpr_.substr(0,60) << std::endl;
+    }
+    if (isComMarker_ && !comMemberName_.empty()) {
+        resolveComValue("Object");
+        isComMarker_ = false;
+        comObjExpr_.clear();
+        comMemberName_.clear();
+    }
+
     // 账 #305 第三百六刀: 窗体那一格的 New 入口 (判定见上方 NewExpr 段)。
     // emitExpr(NewExpr) 对窗体名只会发 vb6_NewObject(L"<窗体>"), 这里换成窗体
     // 默认实例访问器 —— 首次引用即隐式 Load, 正是 VB6 `New <窗体>` 的语义。
@@ -793,7 +811,21 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
         }
         // Fix 038: C2440 修复 — UDT 同类型转换和 UDT/VARIANT → void* 转换
         bool isUdtTempType = (tempType.rfind("vb6_type_", 0) == 0);
-        if (!viewIface177.empty()) {
+        // P3 缺口① (§D 已修复条): `With <Variant 数组本体>` —— VB6 在**成员访问**处给
+        // 424 Object required (READINGS P1 表 T8; T5 证明 With 入口本身不报)。C3 的 With
+        // 体必然含成员访问, 所以在取 With 引用这一句报错 (位置比 VB6 早一句, 错误号/描述
+        // 一致; 空体 With 的差异只在"多报一次", 存量语料里没有空体 With)。
+        // 只认**静态可证**的数组本体 (Array/Split/Filter/`Variant()` 符号);
+        // 普通 Variant 变量走下面那个运行期判据。
+        bool withSubjArrP3 = false;
+        if (node.object) {
+            bool isArrP3 = false;
+            if (isDefinitelyVariantExpr(*node.object, &isArrP3) && isArrP3) withSubjArrP3 = true;
+        }
+        if (withSubjArrP3) {
+            c_.emitLine("vb6_RaiseError(424, vb6_BSTR_FromStr(L\"Object required\"))  /* P3: With <Variant array> = VB6 424 */;");
+            c_.emitLine(tempType + " " + tempVar + " = (void*)0  /* With object ref (VB6 424) */;");
+        } else if (!viewIface177.empty()) {
             // 视图是一枚**借来的值** ⇒ 临时量就是同型值拷贝: 不取址、不强转、不退旧
             // (退旧那半句与第一百七十二刀站B 一字口径 —— With 没接管所有权)。
             // 从前这一格发的是 `void* _vb6_with_N = (void*)视图` = cl **C2440**（探针实测），
@@ -854,7 +886,7 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
                 // ExpireCookie: With Cookie(Key)). 仅当 C 级确认实参是
                 // vb6_VARIANT (cExprIsVariant / 已知 Variant 变量/字段) 时
                 // 走 VariantToObjectVal, 否则按对象指针 (void*) 直转.
-                bool withIsVariantVal090e = cExprIsVariant(lastExpr_);
+                bool withIsVariantVal090e = isVariantSlot(lastExpr_, nullptr);  // P1.3: ast 不可得 (文本来自 lastExpr_)
                 if (!withIsVariantVal090e) {
                     std::string lower090e = lastExpr_;
                     std::transform(lower090e.begin(), lower090e.end(),
@@ -869,7 +901,9 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
                     }
                 }
                 if (withIsVariantVal090e) {
-                    c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectVal(" + lastExpr_ + ")  /* With object ref */;");
+                    // P3 缺口①: 运行期判据 —— 整只 VARIANT 里是 SafeArray ⇒ 424; 其余原样转调
+                    // (读形参的既有行为一字不动; 见 vb6_VariantToObjectValChecked)。
+                    c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectValChecked(" + lastExpr_ + ")  /* With object ref */;");
                 } else {
                     // 账 #255: 上面那两条只管「表达式是 VARIANT **值**」；COM 调用交回的
                     // 是 VARIANT*，(void*) 硬转会把结构体地址当对象用 ⇒ With 体内每一档属性
@@ -891,7 +925,7 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
                 // `void* _vb6_with_N = (void*)l_ucFolder`). isDefinitelyVariantExpr
                 // 入口处也可能被 lookupModule 的同名符号误导 (Fix 049b 同款陷阱),
                 // 故与上方 090e 同口径: knownVariantVars_ 裸名 + me-> classVariantMembers_。
-                bool withIsVariantVal092j = cExprIsVariant(lastExpr_);
+                bool withIsVariantVal092j = isVariantSlot(lastExpr_, nullptr);  // P1.3: ast 不可得 (文本来自 lastExpr_)
                 if (!withIsVariantVal092j) {
                     std::string lower092j = lastExpr_;
                     std::transform(lower092j.begin(), lower092j.end(),
@@ -906,7 +940,9 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
                     }
                 }
                 if (withIsVariantVal092j) {
-                    c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectVal(" + lastExpr_ + ")  /* With object ref */;");
+                    // P3 缺口①: 运行期判据 —— 整只 VARIANT 里是 SafeArray ⇒ 424; 其余原样转调
+                    // (读形参的既有行为一字不动; 见 vb6_VariantToObjectValChecked)。
+                    c_.emitLine(tempType + " " + tempVar + " = vb6_VariantToObjectValChecked(" + lastExpr_ + ")  /* With object ref */;");
                 } else {
                     // 账 #255: 同 090e 那一档 —— COM 调用交回的是 VARIANT*，裸转把结构体地址当对象。
                     c_.emitLine(tempType + " " + tempVar + " = (" + tempType + ")"

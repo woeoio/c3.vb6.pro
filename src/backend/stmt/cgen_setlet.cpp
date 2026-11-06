@@ -272,7 +272,7 @@ void CCodeGen::visit(LetStmt& node) {
     } else {
         // Fix 038b-6/045: 具体类型目标 + Variant 值 → 自动提取 (同 AssignmentStmt 路径)
         // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-        bool valueIsVariant = cExprIsVariant(value);
+        bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 距 emitExpr 超 5 行)
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
             auto& id = static_cast<IdentifierExpr&>(*node.value);
             std::string idLower = id.name;
@@ -350,7 +350,7 @@ void CCodeGen::visit(MidStmt& node) {
     // Fix 084b: Mid$(var, start, len) = VariantExpr (如 vSplit(i) 数组元素返回
     // vb6_VARIANT) → 需 vb6_VariantToString 转 BSTR, 否则 vb6_MidSet 第4参数
     // 类型不匹配触发 C2440.
-    if (cExprIsVariant(valueVar)) {
+    if (isVariantSlot(valueVar, node.value.get())) {
         valueVar = "vb6_VariantToString(" + valueVar + ")";
     }
     // Emit target variable address

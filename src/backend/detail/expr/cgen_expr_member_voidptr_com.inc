@@ -108,7 +108,13 @@
                 lastExpr_ = lateBoundReadOnVariantCarrier(objExpr, node.memberName);
                 return;
             }
-            lastExpr_ = objExpr + "->" + cIdent(node.memberName);
+            /* ucTreeView: 链式类字段的数据成员读也必须经唯一出口 classFieldReadExpr,
+               否则 `oParent->Parent->Childs` 不带 "voidptr" 尾注, 外层 `.Count/.Add/
+               .Remove` 直发结构体成员 (C2224: ucTreeViewPlus.c:2588 / Form4.c:382,410)。
+               单级 `DestNode->Childs` 走 class_fallback 那站已带尾注 (Form4.c:390 正例)。 */
+            lastExpr_ = classFieldReadExpr(objExpr, fieldCls, node.memberName,
+                                           classFieldIsComPtr(fieldCls, node.memberName),
+                                           "class var");
             return;
         }
         // 字段类型推断失败 → 按结构体数据字段访问

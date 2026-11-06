@@ -71,7 +71,7 @@ void CCodeGen::visit(ForStmt& node) {
     // 引发 C2440 (cToolsHttp 等以 Variant 做循环变量的模块).
     bool forVarIsVariant = knownVariantVars_.count(lower022)
         || (forVarIsClassMember && classVariantMembers_.count(lower022))
-        || cExprIsVariant(varAcc);
+        || isVariantSlot(varAcc, nullptr);  // P1.3: ast 不可得 (varAcc 由变量名拼接)
     if (forVarIsVariant) {
         // Fix 090o: 收集本 For body 内定义的标签, 供 GoTo 后缀配对判定
         forSplitLabelStack_.push_back({});
@@ -292,7 +292,7 @@ void CCodeGen::visit(ForEachStmt& node) {
         std::string elemCType = mapSaElemCType(collElemType);
         bool feVarIsVariant = knownVariantVars_.count(lower022fe)
             || (forEachVarIsClassMember && classVariantMembers_.count(lower022fe))
-            || cExprIsVariant(varAcc);
+            || isVariantSlot(varAcc, nullptr);  // P1.3: ast 不可得 (varAcc 由变量名拼接)
         if (isPA092q) {
             // Fix 092q: ParamArray 元素用 SafeArrayGetElement 直取 (索引与
             // vb6_PA_LBound/UBound 同域), 按循环变量/元素类型选择解包函数.
@@ -411,21 +411,24 @@ void CCodeGen::visit(ForEachStmt& node) {
         }
         // Fix 040c: vb6_ForEach_Init expects void* (IDispatch*). If the collection
         // expression is a Variant (vb6_VARIANT struct), extract the object pointer.
-        if (!collIsObjPtr091q && !collIsProjectClass247 && cExprIsVariant(collExpr)) {
-            collExpr = "vb6_VariantToObjectVal(" + collExpr + ")";
+        // P3 缺口② (§D 已修复条): 这里**只记"集合是 Variant 值"这件事**, 包裹推迟到
+        // feInitFn 定下来之后 —— 整只 VARIANT 要交给运行期判据 (vb6_ForEach_InitVariant),
+        // 让它按 vt 决定是"数组本体" (READINGS P2 的线性序/元素类型) 还是原路
+        // `vb6_ForEach_Init(vb6_VariantToObjectVal(v))`。真集合对象/工程类路径不受影响。
+        bool collIsVariantVal040c = false;
+        if (!collIsObjPtr091q && !collIsProjectClass247 && isVariantSlot(collExpr, nullptr)) {  // P1.3: ast 不可得 (collExpr 为局部缓存)
+            collIsVariantVal040c = true;
         } else if (!collIsProjectClass247
                    && node.collection && node.collection->kind == ASTNodeKind::IdentifierExpr) {
             auto& ident = static_cast<IdentifierExpr&>(*node.collection);
             std::string lower = ident.name;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-            if (knownVariantVars_.count(lower)) {
-                collExpr = "vb6_VariantToObjectVal(" + collExpr + ")";
-            }
+            if (knownVariantVars_.count(lower)) collIsVariantVal040c = true;
         }
         // Fix 040c: fallback — project class methods returning Variant (e.g. Dictionary.Keys)
         else if (!collIsObjPtr091q && !collIsProjectClass247
                  && node.collection && isDefinitelyVariantExpr(*node.collection)) {
-            collExpr = "vb6_VariantToObjectVal(" + collExpr + ")";
+            collIsVariantVal040c = true;
         }
         // 账 #257 第十五层: 集合表达式是**工程类实例**时, 它不是 IDispatch
         // (结构体首字段 `__comObj` 是 back-ptr 且常为 NULL) —— Fix 247 那句
@@ -450,6 +453,19 @@ void CCodeGen::visit(ForEachStmt& node) {
                 && !knownObjectVars_.count("forms") && !knownFormControls_.count("forms")) {
                 feInitFn = "vb6_ForEach_InitForms";
                 collExpr = "";
+            }
+        }
+        // P3 缺口② 落点: Variant 值的包裹在这里一次成型。
+        // 裸变量 (IdentifierExpr) 且没有别的枚举器接管 ⇒ 交**整只 VARIANT 的地址**给
+        // vb6_ForEach_InitVariant (运行期阵列判据); 其余形态照改前 `VariantToObjectVal(...)`
+        // 一字不动 (复杂右值取址在 C 里不合法, 不能硬换)。
+        if (collIsVariantVal040c) {
+            if (node.collection && node.collection->kind == ASTNodeKind::IdentifierExpr
+                && feInitFn == "vb6_ForEach_Init") {
+                feInitFn = "vb6_ForEach_InitVariant";
+                collExpr = "&" + collExpr;
+            } else {
+                collExpr = "vb6_VariantToObjectVal(" + collExpr + ")";
             }
         }
         if (collIsProjectClass247) {
@@ -505,14 +521,21 @@ void CCodeGen::visit(ForEachStmt& node) {
                 // Fix 090aa: 项目类变量 (vb6_cls_X*) 作 For Each 元素 — 元素是
                 // COM VARIANT(IDispatch*), 提取后 cast 到类指针. 此前漏查 knownClassVars_
                 // → 走 Variant 分支 oClient = vb6_VARIANT → C2440.
+                // ucTreeView: pdispVal 是 **vb6_ComObject 包装器**（vb6comserver.h 布局:
+                // x86 偏移 12 才是 vb6Instance）。直接当 vb6_cls_X* 读字段实测 AV
+                // (RecurCalcTreeWidth 的 N->SubText, av read target=0x650060)。还原必须
+                // **定点**放这里: vb6_ComUnpackObject 保持原语义(交 IDispatch), 否则接口视图
+                // /As Object 那一族拿不到可 QI 的指针 (k174_vieweach_station_a sum 303→0)。
+                const std::string boxClass = "_vb6_fe_box_" + std::to_string(tmpIdx);
+                c_.emitLine("void* " + boxClass + " = vb6_ComUnpackObject(&" + feVar + ");");
                 c_.emitLine(varAcc + " = (vb6_cls_" + cIdent(knownClassVars_[lower])
-                            + "*)vb6_ComUnpackObject(&" + feVar + ");  /* P24-05: For Each 项目类: VARIANT→IDispatch*→类指针 */");
+                            + "*)vb6_ComObject_UnboxVb6Instance(" + boxClass + ");  /* P24-05: For Each 项目类: 包装器→实例 */");
             } else {
                 emitVariantSlotStore(varAcc, "vb6_VariantFromStackVARIANT(&" + feVar + ")", true);  /* §B164 站③ COM 集合: 栈 VARIANT 带权副本 = 自己持有(改前只赋不清, 每元素漏 81/71 B) */
             }
         }
         emitStmtList(node.body);
-        c_.emitLine("VariantClear(&" + feVar + ");  /* P24-03: 栈VARIANT只清不清 */");
+        c_.emitLine("vb6_VariantClearWin(&" + feVar + ");  /* P24-03: 栈VARIANT只清不清 (对象档走 RTL 判据, 伪对象不按 COM 协议解引用) */");
         c_.dedent();
         c_.emitLine("}");
         c_.emitLine("vb6_ForEach_Release(" + enumVar + ");");

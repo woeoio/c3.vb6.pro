@@ -1,0 +1,37 @@
+P0-begin
+INIT 1
+A2-after-copy sameIs=True
+A3-after-source-clear
+TERM 1
+A4-after-sub
+INIT 2
+INIT 3
+A5-both-set
+TERM 3
+A6-after-struct-overwrite
+TERM 2
+A7-after-sub
+INIT 4
+G2-sameIs=True
+G3-after-source-clear
+TERM 4
+G6-after-sub
+INIT 5
+G4-sameIs=True
+G5-after-source-clear
+TERM 5
+G7-after-sub
+F1-b-string=AAA
+F2-after-sub
+INIT 6
+I1-copied-nested
+TERM 6
+I2-after-sub
+INIT 7
+E2-element-copy sameIs=True
+E3-after-clear-element-zero
+TERM 7
+E4-after-sub
+Z-COUNT init=7 term=7
+Z-DONE
+

@@ -119,6 +119,9 @@ int vb6_GetLargeChange(void* hwnd);
 void vb6_SetLargeChange(void* hwnd, int change);
 int vb6_GetSmallChange(void* hwnd);
 void vb6_SetSmallChange(void* hwnd, int change);
+// 残差 #6: 给 SCROLLBAR 子类化，按 VB6 ThunderRT6*ScrollBar 的实测观感自绘
+//（240 底 + 左边 1px 白 + 中线 1px 白）。原生控件在 33x31 放不下两根箭头，一个像素都不画。
+void vb6_InstallScrollBarSubclass(void* hwnd);
 
 // P13.11b: ProgressBar properties (VB6 ProgressBar / msctls_progress32)
 // Min/Max/Value: VB6 默认 0 / 100 / 0
@@ -530,6 +533,10 @@ void    vb6_TreeView_SetIndentation(void* hwnd, int32_t twips);
 // 每个条目的文字都从图宽之后起排, 即使 iImage=-1"，于是这一格等价于"预留图标列"。
 int32_t vb6_TreeView_GetIconSize(void* hwnd);
 void    vb6_TreeView_SetIconSize(void* hwnd, int32_t px);
+// Icons: Codejock IImageManagerIcons (IDispatch)。OCX 不暴露 HIMAGELIST, 本实现按
+// 命令号调 GetImage(Command, Width) 取 IImageManagerIcon.Handle() 的 HICON, 自建图列;
+// Node.Image 本身就是命令号, 由 vb6_TvApplyImage 翻成 iImage。取不到图就不装 (不造假)。
+void    vb6_TreeView_SetIcons(void* hwnd, void* pIcons);
 
 // ===================== Toolbar (ai/029 C29-5a) =====================
 //   VB6 Toolbar 的窗口 + 标量属性 + 设计期按钮，原生 ToolbarWindow32（不加载 OCX）。
@@ -568,6 +575,9 @@ void            vb6_TreeView_SetNodeKey(void* hwnd, int32_t idx, const wchar_t* 
 void            vb6_TreeView_SetNodeTag(void* hwnd, int32_t idx, const wchar_t* v);
 int32_t         vb6_TreeView_GetNodeChecked(void* hwnd, int32_t idx);
 void            vb6_TreeView_SetNodeChecked(void* hwnd, int32_t idx, int32_t v);
+/* 账 #305 第三百四十九刀: Node.Bold (原生 TVIS_BOLD) */
+int32_t         vb6_TreeView_GetNodeBold(void* hwnd, int32_t idx);
+void            vb6_TreeView_SetNodeBold(void* hwnd, int32_t idx, int32_t v);
 int32_t         vb6_TreeView_GetNodeExpanded(void* hwnd, int32_t idx);
 void            vb6_TreeView_SetNodeExpanded(void* hwnd, int32_t idx, int32_t v);
 int32_t         vb6_TreeView_GetNodeParent(void* hwnd, int32_t idx);

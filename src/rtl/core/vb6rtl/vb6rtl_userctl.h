@@ -260,6 +260,12 @@ void vb6_Extender_Drag(vb6_VARIANT* Action, int _has_Action);
 void vb6_Extender_SetFocus(void);
 void vb6_UserControl_SetFocus(void);
 void vb6_Extender_ZOrder(vb6_VARIANT* Position, int _has_Position);
+// ucSegmentedControl.ctl `Public Function Move(Left As Single, Optional Top, Optional Width,
+// Optional Height)` 体内按可选参数个数分四档调用 `Extender.Move ...`。生成侧形参形状为
+// (float* Left, vb6_VARIANT* Top, vb6_VARIANT* Width, vb6_VARIANT* Height, 三个 _has_N)。
+// 单位是 twips (ScaleMode=3)，实现把它换算成像素后 SetWindowPos 到宿主窗口。
+void vb6_Extender_Move(float* Left, vb6_VARIANT* Top, vb6_VARIANT* Width, vb6_VARIANT* Height,
+                       int _has_Top, int _has_Width, int _has_Height);
 
 // Fix 133u: czUI.ctl 用到 Extender 的 Visible / Height
 //   (UserControl.Extender.Visible 赋值 + 判断, .Height 读取).
@@ -276,6 +282,18 @@ struct vb6_UserControl_Extender_Type {
     int16_t Visible;      // -1=可见 0=隐藏 (czUI 置位保存; 实际由宿主/property 配合)
     int32_t Height;       // 容器提供的控件外接高度 (twips/pixels 随 ScaleMode)
     int16_t DataChanged;  // Fix 221: 容器是否要重读控件的绑定数据 (运行期恒不活动)
+    // ucSegmentedControl.ctl: `UserControl.Extender.ToolTipText = ...` 直接落在这枚
+    // 结构体的字段上 (SetExtenderMember 那张表只覆盖 Tag/Visible/... 不含它)。
+    BSTR ToolTipText;
+    // ucTreeView: ucScrollbar.ctl 的 Property Get/Set Parent/Top/Left/Name 直接读写
+    // `UserControl.Extender.<成员>`. 这些值本来就是**每实例一份**的设计期位置,
+    // push 时从 vb6_UCRec 灌进来 (见 uc_host.c), pop 由 vb6_UCSaved.ext 快照还原。
+    void*   Parent;       // Extender.Parent = 容器对象 (此处即容器窗体 HWND)
+    int32_t Top;          // 设计期 Top (twips)
+    int32_t Left;         // 设计期 Left (twips)
+    BSTR    Name;         // 控件实例名 (Ambient.DisplayName 同一份缓存)
+    // `UserControl.Extender.ZOrder v` 生成成员函数调用形态 (2 实参: 值 + has 标记)。
+    void  (*ZOrder)(int32_t* value, int32_t hasValue);
 };
 extern struct vb6_UserControl_Extender_Type vb6_UserControl_Extender;
 /* Fix 294 / 3a: Extender.<成员> = v 的实例感知写入口(代码生成侧调用)。
@@ -286,6 +304,23 @@ void vb6_UC_SetExtenderMember(const wchar_t* name, void* value);
 /* 账 #305 第二百九十二刀: `UserControl.AutoRedraw = v` 的代码生成侧入口 —— 建/拆
    常驻离屏表面 (VB6 里 AutoRedraw=True 之后 UserControl.hDC 就是那张位图)。 */
 void vb6_UC_SetAutoRedraw(void* value);
+/* 账 <font-color>: `UserControl.ForeColor = v` 的代码生成侧入口 —— 写全局 + 立刻
+   设当前 paint DC 的文本色 (VB6 的 UserControl.hDC 吃这个色)。 */
+void vb6_UC_SetForeColor(int32_t ole);
+/* 缺陷 1: `UserControl.MousePointer = v` 的代码生成侧入口 —— 存进本实例记录并
+   把光标应用到宿主窗口 (vbNoDrop => IDC_NO 等系统光标)。 */
+void vb6_UC_SetMousePointer(int32_t pointer);
+/* ucTreeView: `UserControl.FontBold` / `UserControl.FontUnderline` 的持久值。
+   见 vb6rtl_com.c 定义; push/pop 按实例存取, 绘制/TextWidth 时叠加到
+   vb6_UserControl_Font 之上 (VB6 里这两个属性就是 Font 对象的 Bold/Underline)。 */
+extern int16_t vb6_UserControl_FontBold;
+extern int16_t vb6_UserControl_FontUnderline;
+/* `Set UserControl.Font = v` / `UserControl.FontBold = v` 的代码生成侧入口:
+   写全局并立刻把派生 HFONT 选进当前 paint DC (VB6 的 hDC 立即吃新字体)。 */
+void vb6_UC_SetFont(void* font);
+void vb6_UC_SetFontFlag(int32_t which, int32_t value);   /* which: 0=Bold 1=Underline */
+/* `UserControl.Extender.ZOrder v` 的实现 (HWND_TOP / HWND_BOTTOM)。 */
+void vb6_UC_ExtenderZOrder(int32_t* value, int32_t hasValue);
 /* 同上: 窗体第一帧之前把 TabStrip 宿主沉到父窗口最底 (VB6 实测 z 序)。 */
 void vb6_UC_SinkTabBackdrops(void* parentHwnd);
 int32_t vb6_UC_GetExtenderMemberNum(const wchar_t* name);

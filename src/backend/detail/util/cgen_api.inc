@@ -150,6 +150,11 @@
     std::string wrapConstArgForByRef(const std::string& argVal, Vb6Type paramVb6Type) const;
     // Fix 189: 当前函数的 ByRef 具体类型形参作为 ByRef Variant 实参 → 字段式 VARIANT 包装
     std::string wrapByRefVariantParamArg(const std::string& paramName, Vb6Type curParamType) const;
+    // 账 #608: Print # 与 Write # 那句「这枚实参是不是已经是一枚 BSTR」收成一位主人
+    // (原先两条语句各抄一份名单+闸门，两份都只问**局部**那张表)。
+    bool fileOutArgIsBstr(const std::string& expr, Expr& argNode) const;
+    // 账 #305 第331刀: 上面那道闸 + 非 BSTR 那半的取值出口，合起来是「实参形状」这一问的主人。
+    std::string fileOutArgBstrExpr(const std::string& expr, Expr& argNode);
     void visit(OpenStmt& node) override;
     void visit(CloseStmt& node) override;
     void visit(PrintStmt& node) override;
@@ -429,6 +434,9 @@
     // Fix 160: vbp ComLib= 免注册 COM 组件表 {ProgID, CLSID, coclass名, 相对exe路径}.
     // 入口点生成时烘焙成 static 表 + vb6_ComLibRegister 调用; 表空则一行不发.
     void setComLibRefs(const std::vector<std::array<std::string, 4>>* v) { comLibRefs_ = v; }
+    // 免注册 COM 运行期模式（-ComMode）；空串 = 未指定（不注入任何行）
+    void setComMode(const std::string& m) { comMode_ = m; }
+    void setComManifest(const std::string& p) { comManifest_ = p; }
 
     // Fix <vbeclipse> 2026-10-06: vbp Object= OCX 免注册表 {ProgID, CLSID, coclass名, 相对exe路径}.
     // 入口点生成时烘焙成 static 表 + vb6_OcxRefRegister 调用; 表空则一行不发.

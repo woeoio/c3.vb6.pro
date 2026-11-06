@@ -1,0 +1,5 @@
+P1-title=[AppTitleProbe-Title]
+P2-len=19 eqEmpty=False
+P3-exename=[AppTitleProbe]
+P4-path=[D:\c3.vb6.pro\ai\probes\app_title_dll]
+P5-after-write=[written-by-probe] err=0

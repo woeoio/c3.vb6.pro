@@ -385,6 +385,19 @@
     // 判断: 函数名或Alias以'A'结尾 (如 GetWindowTextA, Alias "WritePrivateProfileStringA")
     std::unordered_set<std::string> knownDeclareAnsi_;
 
+    // 同一 DLL 导出被声明成两种 VB 形态时的返回类型统一表 (key = lib|export, 小写)。
+    // ucSegmentedControl.ctl 同时有
+    //   Private Declare Sub  CreateStreamOnHGlobal2 Lib "Ole32.dll" Alias "CreateStreamOnHGlobal"
+    //   Private Declare Function CreateStreamOnHGlobal Lib "ole32" (...) As Long
+    // 两条声明共享同一个 DI 导出原型; 若先发的 Sub 把 extern 写成 void, 后面 Function
+    // 包装里的 `_r = vb6_di_...()` 就是 C2120。这里预扫出"曾被声明为非 void"的导出,
+    // 让 void 那条也发 intptr_t extern (调用端丢弃返回值即可, stdcall 与返回类型无关)。
+    std::unordered_set<std::string> declareNonVoidExports_;
+    Module* declarePrescanModule_ = nullptr;
+    // VarPtr(<返回 UDT 的函数调用>) 需要先落一枚块作用域临时再取址 —— MSVC C 模式的
+    // 结构体复合字面量 `(T){expr}` 会把 expr 当成**首成员**初始化 (实测 C2440)。
+    std::size_t varPtrTempCounter_ = 0;
+
     // Fix 161b-decl-out: Declare VB名(小写) → Alias 导出名 (保留原大小写)。
     // 由来: VB6 `Declare Function GetUserName Lib "advapi32" Alias "GetUserNameA"`
     // 里 VB 名 GetUserName 恰好被 SDK WinBase.h `#define GetUserName GetUserNameW`
@@ -533,6 +546,9 @@
     // 类模块标志
     bool isClassModule_ = false;
     bool isFormModule_ = false;
+    // 账 #305 第三百三十刀: 当前窗体是否 VB.MDIForm (frmDesc.formControl.controlType)。
+    // 裸 ActiveForm 只在 MDIForm 模块里合法 (MDI 活动子窗体), 用它挡普通窗体误认。
+    bool currentFormIsMDI_ = false;
 
     // Fix 010: 类模块变量注册模式 — 只填充tracking set, 不生成变量声明(已在结构体中)
     bool trackOnly_ = false;
@@ -1192,6 +1208,10 @@
 
     // Fix 160: vbp ComLib= 免注册 COM 组件表 {ProgID, CLSID, coclass名, 相对exe路径}
     const std::vector<std::array<std::string, 4>>* comLibRefs_ = nullptr;
+    // 2026-11-04 免注册 COM 运行期模式: 由 -ComMode / -ComManifest 注入, 空 = 未指定
+    // (未指定 ⇒ 入口点一行不发, 产物逐字节不变; 运行期默认 auto)。
+    std::string comMode_;
+    std::string comManifest_;
 
     // Fix <vbeclipse> 2026-10-06: vbp Object= OCX 免注册表 {ProgID, CLSID, coclass名, 相对exe路径}
     const std::vector<std::array<std::string, 4>>* ocxLibRefs_ = nullptr;
