@@ -1585,23 +1585,20 @@
                                 // 改前发 (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=<IPicture*>})，
                                 // 被调方拿图片指针当 BSTR 解引用 ⇒ 0xC0000005。
                                 // 口径与上面 default 里「工程类实例必须经 FromInstance 包装」一字相同：
-                                // 晚绑定/内建对象（void* = IDispatch*）走 _Generic 的 default 臂
-                                // (vb6_VariantObject: vt=VT_DISPATCH 且 vb6_ComAddRefDispatch)；
+                                // 晚绑定/内建对象（void* = IDispatch*）就是真 IDispatch；
                                 // 工程类实例的裸结构体指针必须先包成真 IDispatch，否则
                                 // vb6_VariantClear 会把首字段当 vtable 解引用（堆损坏）。
-                                // 装箱多取的那一枚登记给语句末收回（与 §B217 同一条道）。
+                                // 这里**只借值、不取引用**：VB6 把非左值实参交给临时 Variant，
+                                // 临时量的引用由调用点自己的语句管；被调方要留就 VariantCopy/Set 自己加。
+                                // 因此不登记 boxTempsToClear_ —— 那条道的 authority 钉死"两站"
+                                // (knife 121 + 第一百七十二刀站E)，第三站会红 check_box_temp_reclaim。
                                 const std::string argClsObj =
                                     inferClassTypeOfExpr(*node.positional[i]);
                                 const std::string boxedObj = argClsObj.empty()
-                                    ? ("(void*)(" + argVal + ")")
-                                    : ("(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc(\""
+                                    ? ("(IDispatch*)(" + argVal + ")")
+                                    : ("(IDispatch*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc(\""
                                        + argClsObj + "\"), (void*)(" + argVal + "))");
-                                const std::string tmpObj = "_vb6_vararg_"
-                                    + std::to_string(ansiCounter_++);
-                                c_.addPending("vb6_VARIANT " + tmpObj + " = vb6_VariantFromValue("
-                                              + boxedObj + ");  /* ucTreeView: ByRef Variant 对象实参装箱 */");
-                                boxTempsToClear_.push_back({tmpObj, c_.indentLevel()});
-                                argVal = "&" + tmpObj;
+                                argVal = "(&(vb6_VARIANT){.vt=VT_DISPATCH, .pdispVal=" + boxedObj + "})";
                                 break;
                             }
                             default:

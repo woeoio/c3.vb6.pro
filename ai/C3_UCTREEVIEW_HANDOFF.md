@@ -1439,3 +1439,69 @@ RTL 侧正确出口已存在：`vb6_VariantFromValue` 对任意指针走 `defaul
 
 未闭合（不在四条口径内，另记）：Form6 的 `THE IMAGE: 1..7 DON'T EXIST`（联系人头像未进
 ImageList，`ucTreeViewPlus.ctl:985` 的 `cImageList(index)=0` 分支）。
+
+### 27.9 续跑状态快照（2026-11-07 01:15，中断点；可直接照此续跑）
+
+**A. guard 哨兵实际状态（三条，均本机实跑）**
+
+| 脚本 | 判据 | 实跑 | 读数 |
+|---|---|---|---|
+| `scripts\check_uctreeview_authority.ps1` | T1 RaiseEvent 事件分派 miss；T2 ChooseColor DI 出口唯一；T3 TreeView 槽位出口；T4 多窗体 + 控件数组转发；W2 白名单 | **PASS** | `RaiseEvent 分发 1`、`ChooseColor DI 站 7`、`后端 ShowWindow 散点 0`、`Missing+Is+槽位出口齐`、`数组容器转发齐`；白名单仅 `vb6_CdShowColor`（理由：ChooseColor 的 DI 桩，非后端散点）。基线 `956ce26c` 同一脚本 **FAIL 11 红**（T1×2 / T3×7 / T4×1）。 |
+| `scripts\check_box_temp_reclaim.ps1` | R1 登记站=2 / 声明=1 / 收回=1；R2 收回在同一语句尾；R3 缩进闸；R4 夹具 10 声明 / 9 收回 / 1 故意不收；R5 不重复释放、不用 VariantAssign | **PASS** | `decls=10 clears=9 unreclaimed=1 push=2 drain=1 guarded=1`（Object 分支改成不登记的复合字面量后回到 2 站）。 |
+| `scripts\check_builtin_slot_returns.ps1` | R2 漏登记；R8 派生对账 | **先 FAIL → 重跑 gen 后 PASS** | FAIL 时：`R2 漏登记 vb6_VariantMissing`、`R8 derived=42 current=41 added=1 removed=0`；重跑 `scripts\gen_variant_slot_prefixes.ps1` 后 `table=42` → PASS。 |
+
+`check_rtl_embedded.ps1` 上次为 **PASS 126 资源**（`c3rtl.res` 随 `scripts\build.bat` 重建）；
+本轮 RTL 源码**未再改**（`git status` 里只有两个 cgen 文件），故内嵌核对无需重跑即成立，
+重编后仍应复核一次。
+
+**B. 四条缺陷各自处在哪一步**
+
+| # | 缺陷 | 步骤状态 | 实测读数 |
+|---|---|---|---|
+| 1 | 展开丢图标 + 子项不能切换 | 已确认根因 / 已改代码 / 已重编 / 已跑断言（**绿**） | 三个独立成因：① `Optional As Variant` 省略实参填 `vb6_VariantEmpty()` 而非 `Missing` → ImageList key 口径失效；② `Is` 生成裸 `==`，工程类实例与 COM 包装指针不同层 ⇒ 单选恒 false；③ 槽位双求值多插一行。px：展开 `84 行 / 1715 vivid`，收起 `56 行 / 998 vivid`，断言 `≥+3 行 且 ≥+20 vivid`（粉底 255,180,180 已剔除）。 |
+| 2 | 三点按钮不弹色选 | 已确认根因 / 已改代码 / 已重编 / 已跑断言（**绿**） | 根因：`Picture1` 控件数组容器未逐元素转发 → `vb6_fw`。px：新产物 `#32770 '颜色'` 出现、`WM_CLOSE` 后 `colorClosed=True`；旧产物 `colorDialog=none`（红）。 |
+| 3 | LoadFromCustomXML 无效 | 已确认根因 / 已改代码 / 已重编 / 已跑断言（**绿**） | 根因：夹具缺 `ejemplo.xml` 资产 → `xmlDoc.Load` 失败。px：`rows 56->12`、`chk 73->0`、`hl 0->0`、`dark 123`、无 `#32770`。 |
+| 4 | 底部五按钮不弹窗体 | 已确认根因 / 已改代码 / 已重编 / 已跑断言（**绿**） | 两处生成侧根因：① `As StdPicture` 返值按 BSTR 装箱 → `0xC0000005 @ 0x0007cea0`；② 按名桥丢 ByRef 标量形参（`TrackMouseWheelOnHwnd`）→ `438`。px：五窗体 `vis=True` 且逐个可 `WM_CLOSE`；旧产物 `Corporate Hierarchy` 无窗体 + 主窗不响应（红）。 |
+
+**C. 本轮已改但尚未验证的文件（必须重编后才会生效）**
+
+| 文件 | 改了什么 | 是否已重编 |
+|---|---|---|
+| `src\backend\detail\expr\cgen_expr_call_arg_emit.inc` | `case Vb6Type::Object`：命名临时量 + `boxTempsToClear_` 登记 **改成** 不登记的复合字面量 `{...vt=VT_DISPATCH, .pdispVal=...}`（只为让 R1 回到 2 站） | **否**。`C3.exe` 时间 00:33，该文件 01:10 ⇒ 产物 `Proyecto1.exe`(00:58) 仍跑的是"命名临时量"版本，**该分支的运行时行为尚未验证**；重编后必须重跑 px 与五窗体判据。 |
+| `src\backend\detail\expr\cgen_variant_slot_prefixes.inc` | 重跑 gen 补 `vb6_VariantMissing`（41→42 名） | **否**（数据表，随 C3 重编生效）。 |
+| RTL（`vb6comserver*` / `vb6rtl_variant.h` / `vb6com_pack.c` / `c3rtl.res`） | 本轮未改；均为已提交内容 | `c3rtl.res` 已随上一次 build 重建；本次无 RTL 变更。 |
+
+**D. 工作树状态**
+
+- 已提交并已推 `origin dev` + `github dev`：`70267038`（四条修复 + 哨兵）、`99053716`（px 四条交互判据）。
+- 未提交：`src\backend\detail\expr\cgen_expr_call_arg_emit.inc`、`src\backend\detail\expr\cgen_variant_slot_prefixes.inc`（+10/-12）。
+- 未跟踪：`.zcodeignore`（**不提交**）。
+- GA 最近一次运行 `42257818768`：两格静态红（R8 派生不一致、R1 push=3），修法已落地待重编验证。
+
+**E. 下一步顺序（每完成一条落一次盘）**
+
+1. 重编 `C3.exe`（`.temp\build_crlf.bat` + `C3_VCVARSALL`）→ 确认 Object 分支能编译、`c3rtl.res` 重建；
+2. 重生成 `output\ucTreeView\Proyecto1.exe` → 重跑 `tests\guisample\uctreeview_px.ps1`（须仍 PASS：`act=[expand 84/1715 | xml 56->12 | colorDialog='颜色' close=True | 五窗体]`），若 Object 复合字面量版本破坏第 4 条则回退该分支并另找不改 R1 的写法；
+3. 重跑三条静态哨兵 + `check_rtl_embedded.ps1`；
+4. 提交（cgen 两文件 + 本节读数）→ 推双远端 → `gh run watch` 追 GA 到 22/22，红项逐条归因；
+5. 残留 `THE IMAGE: 1..7 DON'T EXIST` 不在四条口径内，待用户确认后再动。
+### 27.10 重编 + 两格静态红转绿（2026-11-07 01:30 落地读数）
+
+**重编**：`scripts/build.bat`（CRLF 副本 + `C3_VCVARSALL`）→ rc=0，`C3.exe` 时间 01:14:48。
+只重编两只 TU（`cgen_util_type.cpp` 含槽位表 `.inc`、`cgen_expr_call.cpp` 含实参发射 `.inc`），
+即两处改动都进二进制。重生成的 `output\ucTreeView\Proyecto1.exe` = 833536 B，01:26:09，
+PE x86；产物 C 里对象档实参已是 `(&(vb6_VARIANT){.vt=VT_DISPATCH, .pdispVal=(IDispatch*)...})`。
+
+**px 判据（新产物，实测 PASS）**：
+`act=[expand pre=56/1005 t1=84/1715 t2=56/998 | xml rows=56->12 chk=73->0 hl=0->0 dark=123 |
+colorDialog='颜色' colorClosed=True | form[Tree Explorer]='Tree Explorer' close=True |
+form[Corporate Hierarchy]='Form3' close=True | form[Drag and Drop]='Drag & Drop' close=True |
+form[Menu / Tools]='Form5' close=True | form[Contact  List]='Agenda tema oscuro' close=True]`
+⇒ 第 4 条（`Contact  List` → Form6）在**不登记**的复合字面量版本下仍绿，说明对象档不再按
+BSTR 装箱且不依赖 `boxTempsToClear_` 的第三站。
+
+**四条守卫（同一二进制，全绿）**
+- `check_uctreeview_authority.ps1` PASS
+- `check_builtin_slot_returns.ps1` PASS（`table=42`）
+- `check_box_temp_reclaim.ps1` PASS（`push=2 drain=1`，阈值未放宽）
+- `check_rtl_embedded.ps1` PASS（126 资源逐字节一致；本轮无 RTL 改动，未重建 `c3rtl.res`）
