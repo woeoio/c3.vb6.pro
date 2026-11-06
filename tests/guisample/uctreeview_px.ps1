@@ -101,6 +101,17 @@ public class UP {
   [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
   public static IntPtr HwndAt(int x, int y) { return WindowFromPoint(new POINT { X = x, Y = y }); }
+  [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
+  public static bool Enabled(IntPtr h) { return IsWindowEnabled(h); }
+  public static void Repaint(IntPtr h) { RedrawWindow(h, IntPtr.Zero, IntPtr.Zero, 0x0181); }
+  // 同步版 BM_CLICK: 直接等按钮窗口过程把这条消息处理完 (上限 3s, SMTO_ABORTIFHUNG)。
+  // 用来把「消息压根没进窗口过程/队列」与「进了但画面没变」分开 —— PostMessage 那一路
+  // 两者在读数上一模一样。返回 false = 3s 内没处理完 (窗口挂死或消息被丢弃)。
+  public static bool ClickSync(IntPtr h) {
+    IntPtr res = IntPtr.Zero;
+    IntPtr ok = SendMessageTimeoutW(h, 0x00F5, IntPtr.Zero, IntPtr.Zero, 0x0002, 3000, out res);
+    return ok != IntPtr.Zero;
+  }
   public static string AtInfo(int x, int y) {
     IntPtr h = WindowFromPoint(new POINT { X = x, Y = y });
     if (h == IntPtr.Zero) return "none";
@@ -827,6 +838,11 @@ if ($p.HasExited) {
         $actBad += "首行高亮未定位, 展开判据无法取样"
     }
 
+    # 交互块之间把光标收回中性位 (挪出树区)。CI 上实测: 合成双击之后紧接 BM_CLICK 的
+    # XML 按钮不生效 (上一轮同一脚本 XML 是 33->10 通的), 先按最小口径隔离掉这个嫌疑。
+    [UP]::SetCursorPos(($wr.L + 8), ($wr.T + 5)) | Out-Null
+    Start-Sleep -Milliseconds 200
+
     # ---- 缺陷3: Load from custom XML (按钮体里 Nodes.Clear + CheckBoxes=False + 递归重填) ----
     # 可测量口径: ①旧选中高亮清零 (Clear 生效) ②勾选框蓝(99,99,255)清零 (CheckBoxes=False 生效)
     # ③可见节点行数明显改变 (树被 XML 重填) ④无 #32770 解析错误框
@@ -835,17 +851,40 @@ if ($p.HasExited) {
         $actBad += "找不到按钮 'Load from custom XML'"
     } else {
         $xbV, $xbD, $xbR, $xbH, $xbCk = Measure-TreePx $x0 $y0 $tw $th
-        [UP]::Click($xmlBtn)
-        Start-Sleep -Milliseconds 1200
-        $xd = [UP]::FindDialog([uint32]$p.Id)
-        if ($xd -ne [IntPtr]::Zero) {
-            $actBad += ("XML 载入弹了模态框 '" + [UP]::WText($xd) + "'")
-            [UP]::CloseWin($xd)
-            [UP]::IsWindow($xd) | Out-Null
-            Start-Sleep -Milliseconds 800
+        # 点击最多 3 次 (1200ms/次, 每次重新定位按钮); 两次之间强制重绘一次, 把
+        # "改了没刷屏"与"根本没进事件"分开。诊断里带按钮的类/可用位/caption 与尝试次数。
+        $xdiag = ''
+        $xmlTry = 0; $xv = 0; $xd2 = 0; $xr = 0; $xhl = 0; $xck = 0
+        for ($ti = 1; $ti -le 3; $ti++) {
+            $b = $xmlBtn
+            if ($ti -gt 1) { $b = [UP]::FindChildByText($main, "Load from custom XML") }
+            if ($b -eq [IntPtr]::Zero) { $xdiag += 'gone;'; break }
+            if ($ti -eq 1) {
+                $xdiag = 'cls=' + [UP]::Cls($b) + ' en=' + [UP]::Enabled($b) +
+                    ' vis=' + [UP]::IsWindowVisible($b) + ' cap=' + [UP]::WText($b)
+            }
+            # 第 1 次走 PostMessage (与旧口径一致); 之后改走同步 BM_CLICK —— 同步版能确认
+            # 按钮窗口过程**真的处理过**这条消息 (3s 上限), 把"没进事件"从"没刷屏"里分出来。
+            if ($ti -eq 1) { [UP]::Click($b) }
+            else { if (-not [UP]::ClickSync($b)) { $xdiag += 'sync-timeout;' } }
+            Start-Sleep -Milliseconds 1200
+            $xd = [UP]::FindDialog([uint32]$p.Id)
+            if ($xd -ne [IntPtr]::Zero) {
+                $actBad += ("XML 载入弹了模态框 '" + [UP]::WText($xd) + "'")
+                [UP]::CloseWin($xd)
+                [UP]::IsWindow($xd) | Out-Null
+                Start-Sleep -Milliseconds 800
+                break
+            }
+            $xmlTry = $ti
+            $xv, $xd2, $xr, $xhl, $xck = Measure-TreePx $x0 $y0 $tw $th
+            if ([Math]::Abs($xr - $xbR) -ge 5) { break }
+            [UP]::Repaint($uc)
+            Start-Sleep -Milliseconds 300
+            $xv, $xd2, $xr, $xhl, $xck = Measure-TreePx $x0 $y0 $tw $th
+            if ([Math]::Abs($xr - $xbR) -ge 5) { $xdiag += 'repaint;'; break }
         }
-        $xv, $xd2, $xr, $xhl, $xck = Measure-TreePx $x0 $y0 $tw $th
-        $actRead += "xml rows=$xbR->$xr chk=$xbCk->$xck hl=$xbH->$xhl dark=$xd2"
+        $actRead += "xml rows=$xbR->$xr chk=$xbCk->$xck hl=$xbH->$xhl dark=$xd2 try=$xmlTry $xdiag"
         if ($xd2 -lt 30) { $actBad += "XML 载入后树区深色像素 $xd2 < 30 (连节点文字都没画)" }
         if ($xhl -gt 100) { $actBad += "XML 载入后仍有旧选中高亮 $xhl (Nodes.Clear 未生效)" }
         if ($xbCk -gt 20 -and $xck -gt 5) { $actBad += "XML 载入后勾选框蓝仍在 $xck (CheckBoxes=False 未生效)" }

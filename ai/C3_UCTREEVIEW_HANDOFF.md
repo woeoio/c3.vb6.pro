@@ -1539,3 +1539,74 @@ BSTR 装箱且不依赖 `boxTempsToClear_` 的第三站。
 
 **补记**：上一次运行 `42257818768`（head `99053716`）同样是这 6 格红（Emit manifest / vbp #1 /
 bas #1 / bas #2 / compile #1 / compile #2），并非"只剩两格"——§27.9 的 D 段以此为准。
+
+### 27.12 GA 42285817255（head 9a2d3648）红格清单、归因与登记（2026-11-07）
+
+**run 与 head 核对**：`gh run list --branch dev --limit 5` → `42285817255` 的 `headSha=9a2d3648`，与本机
+`git rev-parse HEAD` 逐字相同（就是被推上去的那一笔）。22 格里红 2 格，其余 20 格 success。
+
+| job | 失败步骤 | 关键原文 | 归类 |
+|---|---|---|---|
+| Emit manifest (shape oracle) | Hash the emitted C of every corpus input | `expectation-check=FAIL rc=1`；`发码清单比较: 期望 596 行 / 实得 596 行 / 相同 575 / 哈希不同 21 / 缺席 0 / 多出 0` | **登记类**（见下逐行归因） |
+| Tests (vbp #1) | Run regression (vbp #1) | `pixels FAIL [uctreeview_px.ps1]: FAIL 交互: XML 载入后仍有旧选中高亮 4446 (Nodes.Clear 未生效); XML 载入后勾选框蓝仍在 52 (CheckBoxes=False 未生效); XML 载入前后可见节点行 33->33 几乎没变 (树没被 XML 重填)` | **采集侧**（点击没进事件/没刷屏）→ 修脚本可靠性 |
+
+同一行的 `act=` 读数（原文摘录）：`expand pre=33/660 a=58/1000 b=33/659 at=157,200 via=post
+hit=[VB6_UserControlHost|;VB6_UserControlHost|] | xml rows=33->33 chk=52->52 hl=4446->4446 dark=496 |
+colorDialog='Color' | colorClosed=True | 五窗体 close=True`。
+⇒ 展开那一段这次是**通的**（33→58→33，`via=post`，合成双击已进窗口）；只有 XML 按钮那一次点击
+在读数上完全没落地（整块树一模一样：行数/勾/高亮都不动），而它之后的 `...` 按钮 BM_CLICK 又是通的
+（`colorDialog='Color'`）⇒ 不是 BM_CLICK 机制坏，是**紧跟在合成鼠标输入之后的第一次点击被吞**。
+
+**21 份哈希的逐条归因（用 CI 自己交回的清单，不吃本机全量重跑）**
+
+`git fetch github ci/emit-manifest` 的提交注记 `ci: emit manifest head=9a2d3648`（祖先链逐笔都在），
+把三份清单逐行对齐后读数：
+
+| 对照 | 不同的行 |
+|---|---|
+| expected vs `99053716` 那轮清单 | 106 |
+| `99053716` → `35119006`（对象档实参改复合字面量） | 3（`tests/ucTreeView/Proyecto1.vbp`、`tests/Charts 2020/ucTreeMaps/Proyecto1.vbp`、`tests/Charts 2020/Proyecto1.vbp`） |
+| `35119006` → `9a2d3648`（`clearArg` 还原 `&target`） | 98 |
+| `9a2d3648` vs expected 剩余 | **21** |
+
+即：21 = 本轮 ucTreeView 四条缺陷那笔 cgen 改动（UC 方法/事件/命名/二元表达式）留下的形状（106 里
+85 份被 `clearArg` 还原救回）里，再叠加 3 份对象档复合字面量。**都是有意改的形状，不是行为回归**：
+- 3 份对象档：`As StdPicture` 等实参现在发 `(&(vb6_VARIANT){.vt=VT_DISPATCH, .pdispVal=…})`，
+  不再登记 `boxTempsToClear_`（authority 钉死的两站不许有第三站）；
+- 其余 18 份：UC/COM/控件数组重工程（ucChart*/ucProgressCircular/ucSegmentedControl/guisample/
+  VBFlexGrid/ve_list/ctrlstate/dbgdlg/test_events/cls_inh 等），形状随那笔 cgen 改动变。
+
+**本机复算（同一二进制 `.build\C3.exe`，只取这 21 里 6 份做逐字节核对，不跑全量）**
+
+```
+rc= sha256=941074de… bytes=2196162 tests/Charts 2020/Proyecto1.vbp
+rc= sha256=4ff592bd… bytes=280776  tests/Charts 2020/ucChartArea/Proyecto1.vbp
+rc= sha256=51652f25… bytes=32918   tests/cls_inh/InhMain.bas
+rc= sha256=986488957… bytes=239040 tests/czUI-main/czFormDemo.vbp
+rc= sha256=0d641cdc… bytes=16648   tests/m7_test/M7Test.vbp
+rc= sha256=42dd2780… bytes=24401   tests/test_activex_dll/test_event_dll.vbp
+```
+6/6 与 CI 清单的新哈希**逐字相同**（归一化口径照 `emit_manifest.ps1`：头部 `<PATH>`、根 `<ROOT>`、
+Latin-1 往返）⇒ 这台二进制与 CI 那台对同一输入给同一份 C，登记的是"CI 交回来的数"而不是"我这台的数"。
+
+**登记读数**（`scripts\rebless_emit_manifest.ps1 -Manifest .temp\ci_manifest.txt -Bless`）
+```
+已登记 emit-manifest.expected.txt：注脚 384 行（头部 37 + 末尾 347）+ 数据行 596 行（改写 21 / 新增 0 / 退场 0）
+发码清单比较: 期望 596 行 / 实得 596 行 / 相同 596 / 哈希不同 0 / 缺席 0 / 多出 0
+OK check_manifest_coverage: K1..K3 (inputs=596 [.vbp=221 .bas=375], registered=596, sets equal)
+```
+
+**XML 那条的处置（只动脚本可靠性，阈值一字未动）**
+
+`tests\guisample\uctreeview_px.ps1` 的缺陷 3 段加了三层隔离：
+1. 展开块结束后把光标挪到窗体左上（`SetCursorPos(wr.L+8, wr.T+5)`）——把"合成鼠标输入残留"最小化；
+2. 点击最多 3 次（每次 1200ms、每次重新按 caption 定位按钮），两次之间 `RedrawWindow(uc, 0x0181)`，
+   把「进了事件但没刷屏」与「压根没进事件」分开；
+3. 第 2/3 次改走**同步** `SendMessageTimeoutW(BM_CLICK, SMTO_ABORTIFHUNG=2, 3000ms)`，超时记
+   `sync-timeout;` —— 这一步能证明按钮窗口过程到底有没有处理这条消息；诊断串同时带
+   `cls=/en=/vis=/cap=/try=`，以及 `gone;`（按钮中途被重建）。
+断言仍按原口径：`hl<=100`、`chk<=5`、`|rowsΔ|>=5`、`dark>=30`，没有放宽、没有删用例。
+
+本地复跑（改后，120dpi，新产物）：`PASS … act=[expand pre=56/1005 a=84/1715 b=56/998 at=121,140
+via=post | xml rows=56->12 chk=73->0 hl=0->0 dark=122 try=1 cls=Button en=True vis=True cap=Load from
+custom XML | colorDialog='颜色' | colorClosed=True | 五窗体 close=True] · px_rc=0`。
