@@ -717,8 +717,11 @@ $guiTsNeedles = @(
 $script:GuiCases = @(
     @{ Name = "VbQRCodegen";      Vbp = "$Tests\VbQRCodegen-master\test\Project1.vbp"; Mode = "close";
        WindowTitle = "Form1"; HoldWindowMs = 1000 },
+    # BalloonTooltips 家族 (2026-11-06): 工具提示的**颜色/字体**判据落在 PixelAssert。
+    # Arch=x86 与参考 VB6 产物同宽 (32 位 PE), 夹具只按这一档编。
     @{ Name = "BalloonTooltips";  Vbp = "$Tests\BalloonTooltips\prjBalloonTooltips.vbp"; ExeName = "BalloonTooltips";
-       Mode = "close"; WindowTitle = "Balloon Tooltips"; HoldWindowMs = 1000; ShardGroup = "balloon" },
+       Arch = "x86"; Mode = "close"; WindowTitle = "Balloon Tooltips"; HoldWindowMs = 1000;
+       ShardGroup = "balloon"; PixelAssert = @("guisample\balloontips_px.ps1") },
     @{ Name = "Charts2020";       Vbp = "$Tests\Charts 2020\Proyecto1.vbp"; Arch = "x86"; Mode = "auto";
        AutoExitSec = 3; HoldWindowMs = 1000; WindowTitle = "Form2"; DumpMinColors = 40 },
     @{ Name = "czUI";             Vbp = "$Tests\czUI-main\czFormDemo.vbp"; Arch = "x86"; Mode = "auto";
@@ -1549,6 +1552,19 @@ function Test-ColorRefAuthority {
     $script:total++
     Write-Host -NoNewline "  [STATIC] color_ref_authority ... "
     $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_color_ref_authority.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 8 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-ToolTipAuthority {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] tooltip_authority ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_tooltip_authority.ps1" 2>&1
     if ($LASTEXITCODE -eq 0) {
         $script:pass++
         Write-Host "PASS" -ForegroundColor Green
@@ -5405,8 +5421,12 @@ if ($Category -in @("all", "run", "bas")) {
     # 问句撤回解包 + `builtin_fixup` 改 callee 名（两站同归一处）。⚠ 这一问不许按位号无条件答槽：
     # 同一个 `vb6_StrPtr(` 在全语料 1720 处里只有 41 处是槽，其余 1679 处交的是普通 String 变量 / 数组元素 / 解引用（逐枚分解见台账 §B180 的订正条），无条件答槽会把它们全打成
     # C2440（读数 = `.build/k69_strptr_census.txt`）。非串那档仍 mint，那半归 §B164 形①。
-    $b180Needles = @("P1-var-string-nonzero=Y", "P2-empty-string=0",
-        "P3-variant-empty-string=0", "P4-var-numeric-nonzero=Y", "P5-stable=Y",
+    # BalloonTooltips 家族 (2026-11-06): P2/P3 由 "=0" 改为 "非 0" —— VB6 的 StrPtr 只对
+    # vbNullString 答 0, `e = ""` / Variant 装的 "" 是真零长 BSTR (参考 VB6 产物用
+    # `SetWindowTheme hTT, StrPtr(""), StrPtr("")` 关视觉样式即为证)。P6 钉"未赋值 = NULL"。
+    $b180Needles = @("P1-var-string-nonzero=Y", "P2-empty-string-nonzero=Y",
+        "P3-variant-empty-string-nonzero=Y", "P4-var-numeric-nonzero=Y", "P5-stable=Y",
+        "P6-unassigned-string-null=Y",
         "B180-apiBad=0", "B180-leak-ok=Y", "B180-acc=-1", "C3ProbeB180-DONE")
     Add-BasTest "b180_strptr_variant" "$Tests\b180_strptr_variant.bas" $b180Needles
     Add-BasTest "b180_strptr_variant_x86" "$Tests\b180_strptr_variant.bas" $b180Needles -Arch "x86"
@@ -11441,6 +11461,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-B424DatedPartParams }
     if (Enter-StaticShard) { Test-ControlDC }
     if (Enter-StaticShard) { Test-ColorRefAuthority }
+    if (Enter-StaticShard) { Test-ToolTipAuthority }
     if (Enter-StaticShard) { Test-SaAccess }
     if (Enter-StaticShard) { Test-BitwiseAuthority }
     if (Enter-StaticShard) { Test-BodyDeclShape }
