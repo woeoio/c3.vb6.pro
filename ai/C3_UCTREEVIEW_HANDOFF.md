@@ -3525,3 +3525,18 @@ Contact 修前 `vivid=6312 / white=280 / lightRows=7 / font=-13`，视觉阈值
 `vb6_UC_FontLogFont` 同时供 `vb6_uc_measureText` 量字，改后显式字体的量高多 1px；
 本轮 ucTreeView 五窗无回归（Form3/Form5 仍 10/15 行，lastTextY 565/497 与参考一致）。
 其它夹具（尤其 ComCtlsDemo）留给下一块 GA 全量观测。
+
+## §48 GA 登记类红（第 4 块收尾，2026-11-07）
+
+三处根因落地后复跑本地静态门，暴露的是**登记类**红（dev 从 19:57 那批提交起
+就已经红，与 §45~§47 的代码改动无关或只是同一条口径换代）：
+
+| 门 | 红 | 归因 / 处置 |
+| --- | --- | --- |
+| `check_host_pseudo_table.ps1` | AUTHORITY-ABSENT | 语义层放行从 `hostPseudoBareEligible` 扩成 `hostPseudoBareCallEligible`（.ctl/.pag 裸写宿主伪对象方法不报 VB3001）；表的消费点跟着改名，消费点仍只有语义层这一处 |
+| `check_com_latebind_guard.ps1` R10 | consumers=2 / owner=1 | Fix 432 让 `vb6_UC_FontHeightPx` 那一发从 `= vb6_UC_FontHeightPx(` 变成条件表达式；计数改成「ucCode 里出现数减定义」；第二条公式只许住 `vb6_uc_fontHeightPxRound`（def=1） |
+| 同上 R11 | UC-host send=0 | 宿主那一档早前改名叫 `vb6_UC_ApplyFontToHostWindow`（只换质量档，发信人仍是同一位）；针跟名，另加 def=1 |
+| `check_ps51_joinpath.ps1` | 解析失败 ×1 | `tests/guisample/uctv_open_cursor.ps1` 是 UTF-8 **无 BOM**：PS 5.1 按 ANSI 读中文注释会解析崩（`Unexpected token 'start]'`）。已转 UTF-8 BOM + CRLF，复扫 163 份 0 违规 |
+| `check_manifest_coverage.ps1` | 缺 4 行 | 2 行是早前新增语料（`strnul_drive/snd.vbp`、`varcmp_strnum/vcs.vbp`）没登记，2 行是本轮的两个 `.bas` 用例；按惯例吃 CI 自己交的 `ci/emit-manifest`（`rebless_emit_manifest.ps1 -Bless`） |
+
+`check_com_latebind_guard` / `check_host_pseudo_table` / `check_ps51_joinpath` 三条现均 PASS。

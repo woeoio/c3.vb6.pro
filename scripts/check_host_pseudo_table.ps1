@@ -184,7 +184,9 @@ $must = @(
     @{ File = "src\backend\detail\expr\cgen_expr_ident_builtin.inc"; Pat = 'hostPseudoBareName\(' },
     @{ File = "src\backend\detail\stmt\cgen_assign_host_pseudo.inc"; Pat = 'hostPseudoIsNumeric\(' },
     # 第五个消费点 (账 #219): 语义层的裸写放行必须问表，不许把成员名抄回 semantics。
-    @{ File = "src\semantics\semantic_analyzer_util.cpp"; Pat = 'hostPseudoBareEligible\(' },
+    # 2026-11-07: 该放行从 hostPseudoBareEligible 扩成 hostPseudoBareCallEligible
+    # （.ctl/.pag 里裸写宿主伪对象方法不再报 VB3001），消费点只在语义层这一处。
+    @{ File = "src\semantics\semantic_analyzer_util.cpp"; Pat = 'hostPseudoBareCallEligible\(' },
     # 账 #278 §B105: HPF_CHANNEL 那一档只经 hostPseudoChannel 出口流动 —— 语义层放行与发码
     # 选码头都问它；表里删掉这句 = 两头退回各自硬编码。
     @{ File = "src\common\host_pseudo.hpp"; Pat = 'inline bool hostPseudoChannel' },

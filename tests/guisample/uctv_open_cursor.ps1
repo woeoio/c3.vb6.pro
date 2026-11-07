@@ -1,4 +1,4 @@
-# uctv_open_cursor.ps1 - Tree Explorer「Open Cursors folder」用例（不许 SKIP）
+﻿# uctv_open_cursor.ps1 - Tree Explorer「Open Cursors folder」用例（不许 SKIP）
 #
 # 行为期望（用户口径，与真 VB6 一致）：
 #   点 Form2 的 Open Cursors folder → 展开 C:\Windows\ 到列表树，
