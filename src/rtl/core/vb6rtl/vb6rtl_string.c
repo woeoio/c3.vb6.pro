@@ -359,8 +359,16 @@ BSTR vb6_RTrim(BSTR s) {
 }
 
 BSTR vb6_Chr(int32_t code) {
-    wchar_t buf[2] = { (wchar_t)code, L'\0' };
-    return vb6_BSTR_FromStr(buf);
+    // 账 #118 续: Chr$(0) 在 VB6 里是**长度 1** 的字符串 (内容为 NUL), 不是空串。
+    // 原实现走 vb6_BSTR_FromStr → wcslen 见到首字符 NUL 就返回 0, 于是
+    // `Len(Chr$(0))=0`、`InStr(sPath, Chr$(0))` 命中空 needle 规则返回 1、
+    // `Left$(sPath, InStr(...)-1)` 得到 "" —— 真机 ClsTreeExplorer 的
+    // GetSpecialFolder 因此恒为 ""(NormalizePath 补成 "\"), 文件系统树全空。
+    BSTR r = SysAllocStringLen(NULL, 1);
+    if (!r) return vb6_BSTR_Empty();
+    r[0] = (wchar_t)code;
+    r[1] = L'\0';
+    return r;
 }
 
 int32_t vb6_Asc(BSTR s) {

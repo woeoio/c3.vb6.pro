@@ -1955,3 +1955,73 @@ RTL 有改 ⇒ `scripts\_tmp_c3_rebuild.bat`（EXIT=0）+ `scripts\check_rtl_emb
 （`R1..R3 OK, 126 RTL resources byte-identical, exe sha=b597e2af185d`）；
 夹具 `C3_NO_OBJCACHE=1` + `scripts\c3_build.ps1 -Extra "--arch x86"` ⇒ **835584B**（含 show defer）。
 本次 guard 全量读数：`.temp\px_s1.log`（EXIT=1，红项见 §27.14.7 + 本节）。
+
+### 28 现场快照（截断恢复，2026-11-07）
+
+#### 28.1 git 实况
+
+- HEAD `6cbecc78`（`fix(uctreeview): UserControl_Show 延迟到控件真正可见`，已推）。
+  其前：`97cd6c9a`（px 脚本 System.Drawing）、`807d5077`（设计期 StdFont）、`916b4a1a`（真 VB6 基准 + 账 #478 + 滚动条命中步进）。
+- 本轮未提交改动（9 个源文件，`git diff --stat` 125+/12-）：
+  `src/backend/decl/cgen_decl.cpp`、`src/backend/cgen_util_ctrl.cpp`、
+  `src/backend/detail/util/cgen_helpers.inc`、`src/backend/detail/stmt/cgen_assign_value_sem.inc`、
+  `src/backend/detail/expr/cgen_expr_call_arg_emit.inc`、`src/backend/stmt/cgen_stmt.cpp`、
+  `src/backend/expr/cgen_expr_binary_util.cpp`、
+  `src/rtl/core/vb6rtl/vb6rtl_bstr.h`、`src/rtl/core/vb6rtl/vb6rtl_string.c`。
+- 未跟踪：`.zcodeignore`（工具生成，未纳入）；`把`（0 字节误重定向产物，删后又被重现，待再删）。
+- stash：`stash@{0}` = WM_DESTROY 清槽（组 2，第 2 轮崩，未闭环）；`stash@{1}/{2}` 为历史无关项。
+
+#### 28.2 本轮已实测（全部来自实跑，未推断）
+
+1. **UDT 定长串 ABI（`As String * N` → `char[N]`）**
+   - 修前（`.temp\shtest.bas`，同一台机器）：`Len(tSHFI)=20`、`SHGetFileInfo ret=0`、`hIcon=0`。
+   - 修后：`Len=352`、`ret=1`、`hIcon≠0`、`name=[notepad.exe]`（flags `&H100 Or &H1 Or &H800 Or &H200`）。
+   - 发码：结构体侧 `char name[N]`；读侧 `vb6_FixedStrToBSTR`（`wrapToBSTR` 只认成员访问，
+     裸定长串仍走 BSTR 模型）；ByRef String 实参用 `&(BSTR){vb6_FixedStrToBSTR(...)}` 复合字面量；
+     写侧 `vb6_FixedStrAssign` / `vb6_FixedStrAssignFree`（`emitBstrSlotStore` 新增
+     `udtFixedField` 参数，仅 `value_sem` 传 true）。
+2. **`Chr$(0)` 语义**
+   - 修前（`.temp\chrtest.bas`）：`len(s)=4`、`lenchr=0`、`instr(s,Chr$(0))=1`。
+   - 修后：`len=5`、`lenchr=1`、`instr=4`。
+   - 动机：`ClsTreeExplorer.GetSpecialFolder = Left$(sPath, InStr(sPath, Chr$(0)) - 1)`；
+     `Chr$(0)` 为长度 1 的 NUL 串（原实现 `vb6_BSTR_FromStr` 经 `wcslen` 退化成空串）。
+3. **Declare 出参定长串整幅回写**（新 `vb6_BSTR_FromANSIBufFixed(buf, N)`，含尾部 NUL）
+   - 修前插桩：`GSF csidl=0 z=1 p=[]`（InStr 命中空 needle 规则返回 1）→ `INIT 1 f=[]` →
+     `SHGET ret=0 hIcon=0 len=20 path="\"`。
+   - 修后插桩（`.temp\fx_fs4`）：`GSF csidl=0/38/5 ret=1 n=512 z=31/23/33
+     p=[C:\Users\Administrator\Desktop]` 等；`SHGET ret=1 hIcon=5704179/5835251/73860413
+     len=352`。
+4. **guard 全量（`.temp\px_fs2.log`，EXIT=1，120dpi，`-RefJson .temp\vb6ref\ref_metrics.json`）**
+   - Tree Explorer：`textRows=4`(ref 5)、`firstTextW=79`、`vivid=562`、`photo=643`、
+     `avatar=314`、`dark=952`。修前 `firstTextW=7 / vivid=0 / photo=0 / avatar=0 / dark=168`。
+   - Corporate：`textRows=11`(ref 10)、`firstTextW=175`(ref 187)、`photo=0`、`avatar=58`、
+     `weight=400`(ref 700)。
+   - Drag & Drop：`textRows=5`、`firstTextW=99`、`dark=678`、`avatar=3089`；
+     `vivid=1334`(ref 2161)、`photo=1339`(ref 2484)。
+   - Menu/Tools：`textRows=5`(ref 15)、`firstTextW=42`(ref 77)、`weight=400`(ref 700)。
+   - Contract/Agenda：`vivid/photo/avatar=0`。
+   - 组 3（数值微调）：六枚 `up/dn` 各一轮 `pos/Value/Text1` 均联动（读数在日志）。
+   - 组 2（重复点击）：第 2 轮 5 个按钮全部 `OPEN-FAIL`；Menu/Tools 第 1 轮崩溃
+     `code=0xc0000005 rva=0x45dfc`，outTail 含 `THE IMAGE ... DON'T EXIST`。
+5. **构建口径**：`scripts\_tmp_c3_rebuild.bat` EXIT=0（含本轮 RTL/发码改动）；
+   夹具 `C3_NO_OBJCACHE=1` + `c3_build.ps1 -Extra "--arch x86"` EXIT=0；
+   `.temp\utv_fs2\Proyecto1.exe` 与 `.temp\fx_fs4` 均为本轮产线。
+
+#### 28.3 未验证（不补推断）
+
+- 未跑 `scripts\check_rtl_embedded.ps1`（RTL 已改）。
+- 未跑 GA，未核 `ci/emit-manifest`；未跑 tests 全量（`Chr$(0)`/定长串语义可能影响 golden）。
+- `GetDrive()` 实测 `GetDrivesCount drives=0`（UBound=0），盘符根未进树；未归因。
+- `Debug.Print ... & cInitialFolders.Count` 读出 `9039188`/`13836620` 这类指针值（Loop 上界走
+  `vb6_ComGetIntProp` 未受影响）；未归因。
+- `f = f & Chr$(0)` 后再 `InStr(f, Chr$(0))` = 0（定长串赋值/拼接路径丢 NUL）；未归因，fixture 不用此形态。
+- `c29listview` 中文 `???` 两条红未复核。
+- `.temp\fx_f4dbg` 为插桩副本（Latin1 保原编码），临时件不入库。
+
+#### 28.4 下一步
+
+1. 先跑 RTL 门禁 + GUI 10 例 + tests 全量，红项逐条归因；
+2. `GetDrive`/`Collection.Count`；Form3 头像与 `weight=700`、卡片右缘；Form5 `textRows=15` 与字体；
+   Contract 头像链；Drag & Drop `vivid/photo`；
+3. 组 2：先解 `stash@{0}` 的崩溃根因再重放 WM_DESTROY 清槽；
+4. 组 3 已绿，按 GA 结果确认后可关账。

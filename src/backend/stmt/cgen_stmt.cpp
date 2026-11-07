@@ -129,8 +129,12 @@ c_.emitLine("switch(vb6_gosub_stack[--vb6_gosub_sp]) {");
         // vb6_BSTR_ToANSI() 临时副本, 故在此把副本回写回原左值 —— 必须**先于**
         // FreeANSI (下面那段) 执行。目标为 BSTR 左值 → 用 vb6_BSTR_Assign(BSTR*, ...)。
         for (auto& op : ansiOutParams_) {
+            // 账 #118 续: capExpr 非 "0" ⇒ 实参是定长串 (String * N), VB6 语义是整幅
+            // N 字节回写 (含尾部 NUL); "0" ⇒ 普通 String, 按 NUL 定长即可。
+            const std::string fromFn = (op.capExpr == "0") ? "vb6_BSTR_FromANSIBuf"
+                                                          : "vb6_BSTR_FromANSIBufFixed";
             c_.emitLine("vb6_BSTR_Assign(&(" + op.targetExpr + "), "
-                        "vb6_BSTR_FromANSIBuf(" + op.tempVar + ", " + op.capExpr + "));");
+                        + fromFn + "(" + op.tempVar + ", " + op.capExpr + "));");
         }
         ansiOutParams_.clear();
 

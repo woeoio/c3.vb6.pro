@@ -2473,7 +2473,8 @@ void CCodeGen::emitVariantSlotStore(const std::string& target, const std::string
 // 定长串收口 / 清旧值+拷新值), 在那里再抄一遍就是第四份答案 (与 §B164 第五十五刀把槽位写入
 // 收成 emitVariantSlotStore 同一手法)。行为逐字节不变 —— 语料 emit A/B 钉这一条。
 void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
-                                 std::string value, const std::string& fixedLen) {
+                                 std::string value, const std::string& fixedLen,
+                                 bool udtFixedField) {
     // Fix 038b-6: BSTR 目标 + Variant 值 → 先提取 BSTR
     // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
     bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
@@ -2606,7 +2607,14 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         }
     }
     // #122 折出来的 `vb6_CStrXxx(...)` 是刚 alloc 的新块, 与字面量/拼接同属"自有"。
-    if (!fixedLen.empty()) {
+    if (!fixedLen.empty() && udtFixedField) {
+        // 账 #118 续: 目标是 UDT 定长串字段 (C 类型 char[N], VB6 ABI 内联 ANSI) ——
+        // 不能 &field 当 BSTR* 用。写侧按 N 右补空格/右截断 (与 LSet 同口径)。
+        // 自有临时串那一侧顺手释放 (与上面 vb6_LSetFree 的选择同一把尺)。
+        const std::string assignFn118u =
+            (valueOwned113 || wrapped122) ? "vb6_FixedStrAssignFree" : "vb6_FixedStrAssign";
+        c_.emitLine(assignFn118u + "(" + target + ", " + fixedLen + ", " + value + ");");
+    } else if (!fixedLen.empty()) {
         // 账 #118 ①: 定长串赋值的收口 —— 短则右侧补空格、长则截右 (VB6 手册 + 真机
         // CopyMemory 实测一致, 与 LSet 同口径)。必须先 fit 成一只**新** BSTR 再 move
         // 进目标: 先 Assign 再回头改长度会多留一只临时, 而裸赋值连长度都不对。

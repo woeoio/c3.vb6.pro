@@ -313,8 +313,14 @@
             // 容量取实参当前字符串长度 (VB6 缓冲语义的近似; cap<=0 则由 NUL 定长)。
             if (i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
                 && !isVariantSlot(argVal, nullptr) && isCLvalueExpr161c(argVal)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
-                // 回写目标须是 BSTR 左值 (交给 vb6_BSTR_Assign 的 BSTR*)
-                ansiOutParams_.push_back({ansiVar, argVal, "0"});  // cap=0: 由 NUL 定长
+                // 回写目标须是 BSTR 左值 (交给 vb6_BSTR_Assign 的 BSTR*)。
+                // 账 #118 续: 定长串实参 (`Dim sPath As String * 512`) 要整幅回写
+                // (含尾部 NUL), 否则 `InStr(sPath, Chr$(0))` 再也找不到终止符 ——
+                // ClsTreeExplorer.GetSpecialFolder 正是这样读的。
+                const std::string argFsLenPre = (i < node.positional.size() && node.positional[i])
+                    ? fixedStrLenOfExpr(*node.positional[i]) : std::string();
+                ansiOutParams_.push_back({ansiVar, argVal,
+                    argFsLenPre.empty() ? "0" : argFsLenPre});
             }
             argVal = ansiVar;
           }
@@ -413,11 +419,20 @@
                                   argVal);
         }
 
+        // 账 #118 续: UDT 定长串字段 (`tSHFI.szDisplayName`, char[N]) 的三条交接位。
+        // VB6 ABI 下它本身就是内联 ANSI 缓冲; 目标形参若是 String, 读/写各需换算。
+        const std::string argFsLen = (i < node.positional.size() && node.positional[i])
+            ? fixedStrLenOfExpr(*node.positional[i]) : std::string();
+        const bool argIsUdtFixedField = !argFsLen.empty() && i < node.positional.size()
+            && node.positional[i]
+            && (node.positional[i]->kind == ASTNodeKind::MemberAccessExpr
+                || node.positional[i]->kind == ASTNodeKind::WithMemberExpr);
         // ByVal String: 传 ANSI 缓冲的**地址**, 被调用方写入后按 NUL 截断回写。
         // C3 原先把 BSTR 变量的地址 (&buf, 即 BSTR*=wchar_t**) 直接交给期望 LPSTR
         // 的 A 版 API → 类型错配, 出参读不回来 (t5 实测 name=[)。这里改为生成
         // 临时 char* 缓冲 (先灌入原 BSTR 内容), 传其地址交给下面的 isByRef 加 &。
-        if (isDeclareAnsiCall && i < calleeParams.size() && !calleeParams[i].isByVal
+        if (isDeclareAnsiCall && !argIsUdtFixedField
+            && i < calleeParams.size() && !calleeParams[i].isByVal
             && !calleeParams[i].isParamArray && calleeParams[i].type == Vb6Type::String
             && node.byvalOverrides.count(i) == 0) {
             std::string ansiVarR = "_ansi_" + std::to_string(ansiCounter_++);
@@ -428,7 +443,8 @@
             // 登记回写: 目标为原左值 (仅当可赋值且非 Variant)
             if (i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
                 && !isVariantSlot(argVal, nullptr) && isCLvalueExpr161c(argVal)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
-                ansiOutParams_.push_back({ansiVarR, argVal, "0"});
+                ansiOutParams_.push_back({ansiVarR, argVal,
+                    argFsLen.empty() ? "0" : argFsLen});
             }
             argVal = ansiVarR;  // 已是 char* —— 正是 A 版 API 要的 LPSTR (见下方 isByRef 抑制)
         }
@@ -453,6 +469,18 @@
         }
         bool calleeParamIsArray = (i < calleeParams.size()
             && (static_cast<uint16_t>(calleeParams[i].type) & static_cast<uint16_t>(Vb6Type::Array)));
+        if (isByRef) {
+            // 账 #118 续: 工程内 `ByRef s As String` 形参收到 UDT 定长串字段
+            // (ClsTreeExplorer 的 `StripNulls(tSHFI.szDisplayName)`)。字段是
+            // char[N], 形参要 BSTR* —— 用复合字面量造一只临时 BSTR 指向字段内容
+            // (生存期覆盖本次调用, 与既有 &(vb6_VARIANT){...} 同族)。
+            if (!isDeclareAnsiCall && argIsUdtFixedField && i < calleeParams.size()
+                && calleeParams[i].type == Vb6Type::String
+                && !calleeParamIsArray) {
+                argVal = "&(BSTR){vb6_FixedStrToBSTR(" + argVal + ", " + argFsLen + ")}";
+                isByRef = false;
+            }
+        }
         if (isByRef) {
             // Fix 158b: ByRef **数组**形参 (C 形参 vb6_SafeArray1D**) 收到"整体数组引用"
             // 实参. 1 维 arr() (空括号) 在 prelude 生成 VB6_SA_AT(T, arr, 0) (元素左值);

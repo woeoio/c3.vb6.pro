@@ -144,7 +144,11 @@
         variantSlotTargetOf(node.target.get(), target, targetIsUdtVariantField232);
     if (targetIsBstr) {
         // 账 #305 §B169: 这一问只住 emitBstrSlotStore 一处 (With 块那一站共用同一枚)。
-        emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget);
+        // 账 #118 续: 定长串目标是 UDT 字段 (char[N]) 还是裸变量 (BSTR 模型) 要分开。
+        const bool fixedTgtIsUdtField = !fixedLenTarget.empty() && node.target
+            && (node.target->kind == ASTNodeKind::MemberAccessExpr
+                || node.target->kind == ASTNodeKind::WithMemberExpr);
+        emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget, fixedTgtIsUdtField);
     } else if (targetIsVariant) {
         // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
         emitVariantSlotAssign(target, node.value.get(), value, targetIsUdtVariantField232);

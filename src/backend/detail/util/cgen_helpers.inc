@@ -99,7 +99,7 @@
     // 发码形状不许有第二份。fixedLen 非空 = 定长串目标 (账 #118 那一档收口);
     // udtFieldSlot = 目标是 UDT 的 Variant 字段 (与数组元素同属长期槽, 走接管语义)。
     void emitBstrSlotStore(const std::string& target, Expr* rhs, std::string value,
-                           const std::string& fixedLen);
+                           const std::string& fixedLen, bool udtFixedField = false);
     void emitVariantSlotAssign(const std::string& target, Expr* rhs,
                                const std::string& value, bool udtFieldSlot);
 

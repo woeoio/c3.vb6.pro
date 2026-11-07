@@ -228,6 +228,48 @@ static inline BSTR vb6_BSTR_FromANSIBuf(const char* buf, int32_t cap) {
 #endif
 }
 
+// 账 #118 续: 定长串 (`As String * N`) 作为 Declare 出参的**整幅回写**。VB6 的定长串
+// 变量就是 N 字节内联 ANSI 缓冲, API 写入后尾部的 NUL 也是变量内容的一部分
+// (`Left$(sPath, InStr(sPath, Chr$(0)) - 1)` 正是这样读的)。FromANSIBuf 按 NUL
+// 截断会把尾部 NUL 丢掉, 这里按 n 字节原样转换 (含 NUL), 供定长串左值使用。
+static inline BSTR vb6_BSTR_FromANSIBufFixed(const char* buf, int32_t n) {
+    if (!buf || n <= 0) return vb6_BSTR_Empty();
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_ACP, 0, buf, n, NULL, 0);
+    if (wlen <= 0) return vb6_BSTR_Empty();
+    BSTR r = SysAllocStringLen(NULL, (UINT)wlen);
+    if (!r) return vb6_BSTR_Empty();
+    MultiByteToWideChar(CP_ACP, 0, buf, n, r, wlen);
+    r[wlen] = L'\0';
+    return r;
+#else
+    return vb6_BSTR_FromANSIBuf(buf, n);
+#endif
+}
+
+// 账 #118 续: UDT 定长串字段 (`As String * N`) 的 ABI 表示是内联 `char[N]`
+// (VB6 在 UDT 里存 ANSI 字节, 见 cgen_decl.cpp 结构体侧)。下面两枚是它与 BSTR
+// 之间的唯一换算出口: 读侧按 NUL 截到 cap 以内, 写侧按 N 右补空格/右截断。
+static inline BSTR vb6_FixedStrToBSTR(const char* buf, int32_t cap) {
+    return vb6_BSTR_FromANSIBuf(buf, cap);
+}
+static inline void vb6_FixedStrAssign(char* buf, int32_t cap, BSTR value) {
+    if (!buf || cap <= 0) return;
+    for (int32_t i = 0; i < cap; i++) buf[i] = ' ';
+    if (!value) return;
+    char* src = vb6_BSTR_ToANSI_cap(value);
+    if (!src) return;
+    int32_t n = 0;
+    while (n < cap && src[n] != '\0') n++;
+    if (n > 0) memcpy(buf, src, (size_t)n);
+    vb6_FreeANSI(src);
+}
+// 赋值右值是"自有临时串"时用这一枚: 写完顺手释放, 与 vb6_LSetFree 同一把尺。
+static inline void vb6_FixedStrAssignFree(char* buf, int32_t cap, BSTR value) {
+    vb6_FixedStrAssign(buf, cap, value);
+    vb6_BSTR_Free(value);
+}
+
 // BSTR赋值 (释放旧值, 复制新值, 防止悬垂指针和双重释放)
 static inline void vb6_BSTR_Assign(BSTR* target, BSTR source) {
     if (target) {

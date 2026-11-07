@@ -495,11 +495,19 @@ void CCodeGen::visit(TypeDecl& node) {
         // typeRefName 为空), 于是 `r.f = "ef"` 与 `Len(r.f)` 都无从知道该收口到 8。
         // 在这里按**声明**留一份 (键 = 结构体的 C 类型名), 供 fixedStrLenOfExpr 查。
         // 注意 emitExpr 会覆写 lastExpr_, 故先取长度再发字段行 (下面 mapTypeRef 已算完)。
-        if (member->type && member->type->kind == ASTNodeKind::FixedStringTypeRef) {
+        if (member->type && member->type->kind == ASTNodeKind::FixedStringTypeRef
+            && !member->arraySize && !member->isArrayDynamic) {
             auto& fsField = static_cast<FixedStringTypeRef&>(*member->type);
             emitExpr(*fsField.length);
             if (!lastExpr_.empty())
                 udtFixedStrFieldLen_["vb6_type_" + typeName][Symbol::toLower(member->name)] = lastExpr_;
+            // VB6 的 UDT 定长串在内存里是**内联 ANSI 字节** (String * 260 占 260 字节,
+            // 不是一只 BSTR 指针)。真 VB6 实测 SHFILEINFO 的 String * 260 / * 80 ⇒
+            // Len = 4+4+4+260+80 = 352; C3 原先发 BSTR ⇒ 20, SHGetFileInfoA 收
+            // cbFileInfo=20 直接返回 0 (hIcon=0) ⇒ Tree Explorer 图标全缺。
+            // 结构体侧必须按 ABI 发 char[N] (N 字节, 不含额外 NUL; VB6 亦如此)。
+            h_.emitLine("char " + memName + "[" + lastExpr_ + "];  /* fixed string (VB6 ABI: ANSI 内联) */");
+            continue;
         }
         // P15.2: 固定大小数组成员 (如 Buf(0 To 255) As Byte)
         if (member->arraySize) {

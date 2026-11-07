@@ -79,6 +79,17 @@ bool CCodeGen::isScalarImplicitStr159(Vb6Type t) {
 }
 
 std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
+    // 账 #118 续: UDT 定长串字段 (`Type T: f As String * N` 的 `r.f`) 的 C 类型
+    // 是 char[N] (VB6 ABI 内联 ANSI), 进 BSTR 上下文必须换算。裸定长串变量仍是
+    // BSTR 模型 (上方 knownFixedStringLen_), 不在此列 —— 只认成员访问。
+    if (node.kind == ASTNodeKind::MemberAccessExpr
+        || node.kind == ASTNodeKind::WithMemberExpr) {
+        const std::string fsLen = fixedStrLenOfExpr(node);
+        if (!fsLen.empty()
+            && expr.compare(0, 19, "vb6_FixedStrToBSTR(") != 0) {
+            return "vb6_FixedStrToBSTR(" + expr + ", " + fsLen + ")";
+        }
+    }
     // P24-01: 后期绑定COM调用返回VARIANT*, 需解包为BSTR(必须在vb6_BSTR检查之前)
     // P24-02: Variant数组索引返回vb6_VARIANT, 需转BSTR
     if (isVariantSlotElemRead(expr)) {
