@@ -60,6 +60,21 @@ static vb6_draw_dc_t vb6_DrawAcquire(void* hwndOrNull) {
     // VB6_PaintDC、否则 GetDC、fromPaint 那张不 Release, 这一整条口径的唯一权威是
     // vb6forms_ctrl.c 的 vb6_ControlDrawDC (账 #185/#196 收口)。以前这里另写了一份,
     // 而 check_control_dc.ps1 的名单扫不到本文件 ⇒ census 上开了一个洞。
+    //
+    // Fix <ucTreeView 五窗> 2026-11-07: AutoRedraw 控件/窗体的**唯一绘图面**是记忆位图
+    // (VB6 语义)。此前本函数只认 PaintDC/GetDC, 于是 `Picture1.Print` 落在屏幕 DC, 而
+    // `.Image` 交出去的是 VB6_AutoRedrawBmp —— 一张从没被画过的底图 (ucTreeView Agenda
+    // 66 枚头像全白、avatar 读数 0 的直接来源; 真 VB6 基准 9793)。与上面 Cls / .hDC
+    // 两条同口径: 记忆 DC 不算我们持有, 标 fromPaint 让 Release 跳过, 上屏交给泵。
+    {
+        HDC ard = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+        if (ard) {
+            out.dc = ard;
+            out.fromPaint = TRUE;          /* 借来的记忆 DC: 不 Release */
+            InvalidateRect(hw, NULL, FALSE);
+            return out;
+        }
+    }
     out.dc = vb6_ControlDrawDC(hw, &out.fromPaint);
     return out;
 }
@@ -410,6 +425,25 @@ static void vb6_Cls_RestoreFormPicture(HDC hdc, HWND hw) {
     DeleteDC(mcP);
 }
 
+// Fix <ucTreeView 五窗> 2026-11-07: AutoRedraw 表面是唯一绘图面 —— 改 BackColor 时
+// VB6 会把记忆位图重刷成新底色 (Picture 仍在时按 Cls 同口径补画回去)。此前 setter 只
+// 存属性 + Invalidate, 记忆位图停在创建时那一版 => `Picture1.BackColor = pastel` 之后
+// `Picture1.Print` 的底色仍是 F0F0F0, `.Image` 交出去的也是旧图 (Agenda 头像实测)。
+void vb6_AutoRedrawRepaintBackground(void* hwnd) {
+    HWND hw = (HWND)hwnd;
+    HDC ar;
+    RECT rc;
+    HBRUSH br;
+    if (!hw) return;
+    ar = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+    if (!ar) return;
+    GetClientRect(hw, &rc);
+    br = CreateSolidBrush(vb6_ColorToColorRef(vb6_GetControlBackColor(hwnd)));
+    if (br) { FillRect(ar, &rc, br); DeleteObject(br); }
+    vb6_Cls_RestoreFormPicture(ar, hw);
+    InvalidateRect(hw, NULL, FALSE);
+}
+
 void vb6_Form_Cls(void* hwnd) {
     HWND hw = (HWND)hwnd;
     if (!hw) return;
@@ -468,6 +502,14 @@ void vb6_Form_Print(void* hwnd, void* bstrText) {
     int len = text ? (int)SysStringLen(text) : 0;
     vb6_draw_dc_t d = vb6_DrawAcquire(hwnd);
     if (!d.dc) return;
+    if (getenv("C3_FPP_TRACE")) {
+        HDC ar = (HDC)GetPropW(hw, L"VB6_AutoRedrawDC");
+        fprintf(stderr, "[PRN] hw=%p dc=%p ar=%p fromPaint=%d pxDC=%08lx pxAR=%08lx\n",
+                (void*)hw, (void*)d.dc, (void*)ar, (int)d.fromPaint,
+                (unsigned long)GetPixel(d.dc, 5, 5),
+                ar ? (unsigned long)GetPixel(ar, 5, 5) : 0UL);
+        fflush(stderr);
+    }
     HFONT hFont = vb6_ControlFont(hw);
     HFONT hOld = hFont ? (HFONT)SelectObject(d.dc, hFont) : NULL;
     SetBkMode(d.dc, TRANSPARENT);

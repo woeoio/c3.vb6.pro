@@ -2826,6 +2826,72 @@ CI artifact（head `97c70bf4`，597 行）：
   **逐字节相同**，保持 §32.2 修正后的值；含坏形状的 `ci2`（head `8fc56916`）未使用。
 - `check_manifest_coverage` K1..K3：`inputs=597 [.vbp=221 .bas=376] registered=597`，sets equal。
 
+## 36. 五窗出图复验（第 1 块，2026-11-07）
+
+### 36.1 结论
+
+URL 图片链本身在 `d975da2e` 之后**已经全通**；本轮把"出图"剩下的两处缺口钉掉：
+
+| 缺口 | 站点 | 证据 |
+|------|------|------|
+| 对象实参装箱 | `cgen_expr_call_arg_emit.inc` `case Vb6Type::Object` | 生成码原样 `.vt=VT_DISPATCH`；夹具 `LoadPictureEx` 按 `VarType` 分派，`Case vbDataObject(13)` / `Case vbLong(3)` / `Case vbString(8)` 全不命中 ⇒ Agenda 66 枚头像 hImage1=0 |
+| AutoRedraw 绘图面 | `vb6forms_draw.c` `vb6_DrawAcquire` / `vb6forms_ctrl.c` `vb6_SetControlBackColor` | `[PRN]` 实测 `Picture1.Print` 的 `dc=…0CDC != ar=…0D90`（拿的是屏幕 DC），`pxAR=00F0F0F0`（记忆位图还是创建时那版底色） |
+
+### 36.2 逐步读数（诊断副本 `.temp\ucdiag*`，不入库；夹具原样未改）
+
+1. **URL 链**（Form3 `JerarquiaEmpresa.xml` 的 15 张 randomuser 图）：
+   `status=200` → `responseBody` `lb=0 ub=3597`（3598 B）→ `CreateStreamOnHGlobal` 非空 →
+   `GdipLoadImageFromStream rc=0` → `h1` 非 0 → `ImageListAddImage h` 非 0。逐项全绿。
+   本机 `Microsoft.XMLHTTP` 可用（PowerShell 侧独立复测 `status=200 len=3598`）。
+2. **Agenda 头像**：修前 `TRACE ILAI vt=9 h=0` ×73 —— 一条分支都没进。
+3. **对象档不能走 GDI+ 流**：把 `Case vbObject` 临时接上后 `GdipLoadImageFromStream(IPicture)` 直接
+   打崩进程（exit `0xC0000409`，连 `TRACE OBJ stream` 都没回来）。IPicture 不是 IStream。
+4. **默认属性口径**：改成 `.vt=VT_I4, .lVal=vb6_PictureHandleOf(...)` 后 `vt=3`、
+   `GetObjectType=7 (OBJ_BITMAP)`、`GdipCreateBitmapFromHBITMAP` 出图。
+   `run_tests.ps1:8222` 既有注记"VB6 对 Variant 形参取默认属性恰恰是对的"与拒绝 VB6 的
+   `Case vbLong 'StdPicture.handle` 一致 —— 这是实现缺口，不是夹具问题。
+5. **画上去之后仍是白圈**：`[PRN] dc!=ar` 证明 `Print` 没落记忆位图；`pxAR=00F0F0F0` 证明
+   `BackColor` 改了但记忆位图没重刷。两处修完，截图与 `ref_Contact__List.png` 目视同形
+   （独立 pastel 底 + 黑首字母）。
+
+### 36.3 五窗读数（`.temp\ucb4`，`-RefJson .temp\vb6ref\ref_metrics.json`，120dpi）
+
+| 窗口 | 指标 | C3 | 真 VB6 |
+|------|------|----|--------|
+| Tree Explorer | 文字行 / vivid / photo / avatar / dark | 4 / 562 / 643 / 314 / 952 | 5 / 2354 / 1608 / 1225 / 1542 |
+| Corporate Hierarchy (Form3) | 行 / vivid / photo / avatar | 9 / 17012 / 4080 / 2130 | 10 / 21768 / 9292 / 6498 |
+| Drag & Drop | vivid / photo / avatar | 1335 / 1340 / 70 | 2161 / 2484 / 927 |
+| Menu / Tools (Form5) | 行 / 首行墨迹宽 | 13 / 48px | 15 / 77px |
+| Agenda tema oscuro | vivid / photo / avatar | **4358 / 8107 / 8359** | 7120 / 10955 / 9793 |
+
+- Agenda 三档从 **0/0/0 → 4358/8107/8359**（本轮直接战果，截图目视一致）。
+- Form3 的 URL 头像**确实画出来了**（截图 5 枚头像齐全）；剩差在节点宽度/文字量：
+  文字截断成 `Joh` / `HR Ma` / `Lucy Rodrig` —— `TreeNodeTextWidth` 量宽偏小，
+  盒子跟着窄，photo/avatar 面积被压。与 Tree Explorer 的 `4<5`（节点枚举少了 C:/D: 两行，
+  第 4 行还重复"文档"且无图标）同属**下一层**，不在图片链上。
+
+### 36.4 本轮仍未绿（下一块/下一层）
+
+- 第 2 块：`MENU/TOOLS` 首轮 `0xc0000005`（本轮 run：`rva=0x6fa949ee base=00110000`、
+  `av read target=0x8b57ffbb`）+ 四条第 2 轮 `Show` 重建失败 —— 与"再次 Show 已销毁窗体"待取证。
+- 文本量宽偏小（Form3/Form5/Tree Explorer 行数），`ucTreeViewPlus.ctl(1347,5)`
+  `warning VB3001: 未声明的标识符 'Cls'`（UserControl.Cls 未实现）需另案。
+
+### 36.5 复现命令
+
+```powershell
+& .\.build\C3.exe tests\ucTreeView\Proyecto1.vbp --output-dir .temp\ucb4 --arch x86
+Copy-Item -Recurse -Force tests\ucTreeView\img .temp\ucb4\img
+Copy-Item -Force tests\ucTreeView\ejemplo.xml,tests\ucTreeView\JerarquiaEmpresa.xml,tests\ucTreeView\menu.xml .temp\ucb4
+$env:UCTV_SAVE_FORMS="1"
+pwsh -NoProfile -File tests\guisample\uctreeview_px.ps1 -Exe .temp\ucb4\Proyecto1.exe `
+     -OutDir .temp\ucb4\px -Sec 10 -RefJson .temp\vb6ref\ref_metrics.json
+```
+
+> RTL 改了 `vb6forms_draw.c` / `vb6forms_ctrl.c` 后**必须** `touch src\driver\c3rtl.rc` 再 build，
+> 否则 ninja 报 "no work to do"、`C3.exe` 时间戳不动（本轮踩过）。
+
+
 
 
 

@@ -1609,6 +1609,22 @@
                                 argVal = "(&(vb6_VARIANT){.vt=VT_DATE, .dblVal=(double)(" + argVal + ")})";
                                 break;
                             case Vb6Type::Object: {
+                                // 2026-11-07 (ucTreeView 五窗出图复验): VB6 的值语义 —— 对象表达式
+                                // 交给 Variant 形参时取该对象的**默认属性**。StdPicture 的默认成员
+                                // 是 Handle (OLE_HANDLE → Long), 所以这里必须交 vt=VT_I4:
+                                // 夹具的 LoadPictureEx 按 VarType 分派, `Case vbLong` 的注释就是
+                                // 'StdPicture.handle; vt=VT_DISPATCH(9) 落不进任何分支 ⇒ Agenda 的
+                                // 66 枚头像一张都不进 ImageList (真 VB6 基准 avatar=9793, C3 读 0)。
+                                // 也不能靠 VT_DISPATCH 走 GDI+ 流: IPicture 不是 IStream, 实测
+                                // GdipLoadImageFromStream 收到 IPicture 指针直接打崩进程 (0xC0000409)。
+                                if (lastExprIsComPicture_
+                                    && node.positional[i]
+                                    && node.positional[i]->kind == ASTNodeKind::IndexOrCallExpr) {
+                                    lastExprIsComPicture_ = false;  // consume the flag
+                                    argVal = "(&(vb6_VARIANT){.vt=VT_I4, .lVal=(int32_t)(intptr_t)"
+                                             "vb6_PictureHandleOf((void*)(" + argVal + "), (int32_t*)0)})";
+                                    break;
+                                }
                                 // ucTreeView (2026-11-06): **对象档实参不许按 BSTR 装箱**。
                                 // 实证 Form6.frm:113 `ucTreeViewPlus1.ImageListAddImage
                                 // GetContactImgProfile(ArrContacts(i), lColor)`，被调方形参是

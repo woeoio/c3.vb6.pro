@@ -159,6 +159,10 @@ int32_t vb6_OcxHost_SetRect(void* ctlDisp, int32_t x, int32_t y, int32_t w, int3
 // WM_PAINT 镜像可见)。无 ARDC 时不动作 (非 AutoRedraw 窗体走原生直绘)。
 void vb6_FormPaintBlitAutoRedraw(void* hwndForm, void* hdc);
 
+// Fix <ucTreeView 五窗> 2026-11-07: AutoRedraw 表面是唯一绘图面 —— 改 BackColor 时
+// 记忆位图要重刷成新底色 (否则 .Image/Print 读到的是创建时那版旧底色)。
+void vb6_AutoRedrawRepaintBackground(void* hwnd);
+
 // 账 #305 第二百八十刀: 窗体自己的 WndProc 答「这枚窗口现在用什么字体」那一问。
 // 答案住在 vb6forms_ctrl.c 那位只读主人里（自注册的窗口类答不了；DefWindowProc 也不记，见探针实测）。
 void* vb6_FormAnswerGetFont(void* hwnd);

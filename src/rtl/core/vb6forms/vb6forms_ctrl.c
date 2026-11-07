@@ -953,6 +953,10 @@ void vb6_SetControlBackColor(void* hwnd, int color) {
     if (GetEnvironmentVariableA("C3_FORMS_TRACE", NULL, 0) > 0)
         fprintf(stderr, "[C3_F187] SetBackColor hwnd=%p color=%06X\r\n",
                 hwnd, (unsigned)color & 0xFFFFFFu);
+    // Fix <ucTreeView 五窗> 2026-11-07: AutoRedraw 控件/窗体的记忆位图是唯一绘图面,
+    // 改底色必须把那张位图重刷成新底色 (VB6 语义); 否则随后 Print 的内容与 .Image
+    // 交出去的图都停在创建时那一版 (Agenda 66 枚头像底色全 F0F0F0 的直接来源)。
+    vb6_AutoRedrawRepaintBackground(hwnd);
     InvalidateRect((HWND)hwnd, NULL, TRUE);
 }
 
