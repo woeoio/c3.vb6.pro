@@ -3339,3 +3339,44 @@ GetHotNode()` 等），正是 §42.3 第 4 条"类槽收包装器"的受害者�
 
 脚本口径补充（与 §42.5 同一条）：抓图若只有 <=3 种颜色 → 顶到前台重试一次，仍不可用
 记 `[occluded]`；矩阵里目前没有触发，但保留该闸。
+
+## §44 重启状态固化 + 基线复核（2026-11-07，第 3 块）
+
+### 44.1 工作区分类（开工第一步）
+
+`git status` 只剩一处未提交：`tests/guisample/uctv_coldclick.ps1` 多了
+`SetProcessDpiAwarenessContext` 的 P/Invoke 声明、**没有任何调用点** —— 属半截编辑，
+按"不带残骸往下走"用 `git checkout --` 回退。`.zcodeignore` 是工作区外产物，
+未跟踪、不提交。回退后工作树 = HEAD 干净态（`2703d6d9`）。
+
+### 44.2 基线复核（HEAD 干净态）
+
+| 检查 | 命令 | 读数 |
+| --- | --- | --- |
+| 编译器与 HEAD 一致 | `.temp\build_c3.bat` | `ninja: no work to do.`（C3.exe 无待编） |
+| 内嵌 RTL 与磁盘一致 | `scripts\check_rtl_embedded.ps1` | R1..R3 全过，**126** 个 RTL 资源逐字节相同，exe sha=`c99e9aa09fdf` |
+| ucTreeView 可编出 exe | `.temp\build_uctv.bat` | exit 0，`output\ucTreeView\Proyecto1.exe` 843776 B（无嵌入 RTL 改动需补） |
+
+即：上一轮 `28aaf662`（RTL `vb6rtl_bstr.h`）已随 21:55 那次重编进了 `c3rtl.rc.res`，
+本次无需再补重建。§42/§43 的取证结论已在本文件落盘（崩溃地址与四级根因见 §42.2/42.3，
+冷启动矩阵读数见 §43），本节不重复，只作"重启基线"锚点。
+
+### 44.3 已排除的假设（别重复走）
+
+- 崩溃**不是** `DiagLog = DiagLog & ...` 的自赋值（那只是探针噪声），根因是
+  `GetNodePath` 收到 `SelNode = Nothing`（§42.2）。
+- 崩溃**不是** Shell 浏览对话框的 COM：对话框是 `MsgBox`（`#32770`），崩在展开链之后。
+- 路径读成 `C:\*` **不是** `FindFirstFile` 的搜索串拼错，是 `NormalizePath` 的
+  BSTR 自赋值悬垂把堆块内容改花（§42.3 第 5 条）。
+- 冷启动空白**不是**窗口被遮挡/抓屏失败：`PrintWindow(2)` 与独立进程两种口径都非空白，
+  且矩阵 3 轮稳定（§43）。
+- Form3/Form5 少一行**暂不判**"最后一行被裁"：现有 C3 截图（coldclick）因进程非 DPI
+  感知被虚拟化成 466x537/478x518，与参考 541x601/563x584 不同尺度，band 数不可比；
+  必须在物理像素下重抓再判。
+
+### 44.4 下一步（本块顺序）
+
+1. Form3 9≠10、Form5 14≠15：用**节点集合实际条数 + 物理像素可见行 bbox** 对照，
+   各自给读数后定因（裁切 / 没生成 / band 合并）。
+2. Contact `bg65=102676 < 106764`：判列表底 padding/行高 vs 窗体底色未铺满客户区。
+3. 两处绿后 GA 22/22（`ucTreeView` 像素例真过、不许 SKIP）。
