@@ -9421,7 +9421,9 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_hwnd_ucScrollbar2 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar2", 240, 3360, 4095, 135);',
         'vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar2, 0);',
         'vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar1, 0);',
-        'vb6_SetControlVisible((void*)vb6_hwnd_Text1, 0);'
+        'vb6_SetControlVisible((void*)vb6_hwnd_Text1, 0);',
+        'vb6_SetControlText((void*)vb6_hwnd_Text1, vb6_BSTR_FromStr(L"Text1"));  /* design Text */',
+        'vb6_ComSetProp(vb6_hwnd_ucScrollbar2, L"Orientation", vb6_ComPackInt(1));  /* design Orientation */'
     )
 
     Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86" `

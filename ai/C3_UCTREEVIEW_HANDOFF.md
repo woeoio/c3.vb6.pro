@@ -2351,3 +2351,88 @@ UC 子控件再补简单属性的 `prop_let`（`Orientation` 等），字体块�
 按纪律先加一条发码形状断言（期望 `CreateDesign*` 之后紧跟 `vb6_SetControlVisible(..., 0)`），
 先红后绿；旧产物必须红。
 
+
+---
+
+## §33 设计期属性第二批（Text / Orientation）与真 VB6 基准首轮读数
+
+#### 33.1 三条落地状态与顺序（`emit_design2.txt:2857-2869` 实测）
+
+```
+vb6_hwnd_Text1 = vb6_UC_CreateDesignEdit(360, 480, 1335, 495);
+vb6_SetControlVisible((void*)vb6_hwnd_Text1, 0);        /* design Visible=False */
+vb6_hwnd_ucScrollbar2 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar2", 240, 3360, 4095, 135);
+vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar2, 0);
+vb6_hwnd_ucScrollbar1 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar1", 4560, 120, 135, 3015);
+vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar1, 0);
+vb6_ucTreeViewPlus_UserControl_Initialize((vb6_cls_ucTreeViewPlus*)me);
+if (!vb6_uc_skipIP) vb6_ucTreeViewPlus_UserControl_InitProperties((vb6_cls_ucTreeViewPlus*)me);
+vb6_SetControlText((void*)vb6_hwnd_Text1, vb6_BSTR_FromStr(L"Text1"));       /* design Text */
+vb6_ComSetProp(vb6_hwnd_ucScrollbar2, L"Orientation", vb6_ComPackInt(1));    /* design Orientation */
+```
+
+三条的**位置**是刻意的：
+
+| 属性 | 位置 | 理由 |
+|---|---|---|
+| `Visible` | Initialize **之前** | VB6 语义就是设计值先于任何用户代码生效；`.ctl` 的 838/854/856/863/888 都直接读 `ucScrollbar1.Visible` |
+| `Text` | InitProperties **之后** | TextBox 的初值不参与 Initialize 的默认值计算，放后面无害且统一 |
+| `Orientation` | InitProperties **之后**（必须） | `ucScrollbar.ctl:2186` 的 `Let m_eOrientation = ORIENTATION_DEF` 在 `UserControl_Initialize` 里，**之前写会被冲掉**；`ucScrollbar.ctl:2290` 的 `ReadProperty("Orientation", …)` 在 `InitProperties` 里，而设计子控件**根本没有 PropertyBag**（bag 只给 .frm 里的 UC 实例）⇒ 取到的永远是默认值 `oVertical`。所以设计值只能由这一段补 |
+
+**`Orientation` 并不是"进 PropertyBag 落地"的那条路** —— 它是靠 `vb6_ComSetProp` 名字路由到
+`vb6_ucScrollbar_ucProps` 表（`emit_design2.txt:9967`
+`{ L"Orientation", vb6_ucScrollbar_ucPropGet_Orientation, vb6_ucScrollbar_ucPropSet_Orientation }`），
+在 `InitProperties` 之后补写。这一点必须与"bag 落地"区分开记。
+
+**运行期读值：未直接取证。** 现有证据只有三条间接的：①props 表有 Orientation 行；
+②发码顺序 = Initialize → InitProperties → 写 1；③`vb6_ComSetProp` 走 hostmodel 的名称路由。
+`C3_UC_TRACE` 只记生命周期（`uc_host.c:24-31`），不含属性值，故"运行期读到的 m_eOrientation 确实是 1"
+本轮**没有**实测；要坐实需插桩或加一条读回断言，列为下一轮待办。
+
+发码形状断言已扩到六枚针（`uctreeview_designkids_state`），旧产物（只发几何）必红。
+
+#### 33.2 三条读数分开记（真 VB6 基准 `331776 B / 24EAAFB2…CDFD`）
+
+本机 `tests/guisample/uctreeview_px.ps1 -RefExe .temp\vb6ref\ucTreeView\Proyecto1.exe`
+（C3 产物 `.temp/ucmeas/Proyecto1.exe` 837632 B）：
+
+| 项 | 基线（run 42344074260，无设计期属性） | 仅 `Visible=0`（head c6f01ddf） | +`Text`/`Orientation`（本机本次） | 真 VB6 |
+|---|---|---|---|---|
+| Tree Explorer 文字行 | 4 | 待 CI | **4** | 5 |
+| Tree Explorer firstTextW | — | — | **79** | 78 |
+| Tree Explorer vivid/photo/avatar/dark | — | — | **562 / 643 / 314 / 952** | 2354 / 1610 / 1225 / 1542 |
+| Form3 文字行 / firstTextW | 行数对不上 | 待 CI | **11 / 175** | 10 / 187 |
+| Form3 photo / avatar / dark | photo 0 | 待 CI | **0 / 58 / 1824** | 9292 / 6498 / 5155 |
+| Form3 字重 | — | — | **400** | 700 |
+| Form5 文字行 / firstTextW | 5 | 待 CI | **5 / 42** | 15 / 77 |
+| Form5 dark / 字重 | — | — | **1975 / 400** | 4778 / 700 |
+| Agenda vivid/photo/avatar | 全 0 | 待 CI | **0 / 0 / 0** | 7120 / 10955 / 9793 |
+| 第 2 轮重建 | 4 窗 OPEN-FAIL | 待 CI | **4 窗 OPEN-FAIL** | 全绿 |
+| Menu/Tools | 看门狗超时 + 0xC0000005 | 待 CI | **同左**（rva=0x1656c，av read 0x200024） | 绿 |
+
+**结论：这三条设计期属性对五窗像素读数没有可测影响**（Tree Explorer 4、Form5 5、Form3 photo 0 与改动前同值）。
+不能记成"变好了"。设计期属性这批的价值在**语义正确**（隐藏控件不再显示、横向滚动条按横向建），
+不在五窗收敛。
+
+#### 33.3 五窗内容缺失的真主因（本轮实测，需调整顺序）
+
+C3 进程 stdout 直接打出三条：
+
+```
+THE IMAGE: Lucy_Rodriguez DON'T EXIST
+THE IMAGE: Diego_Martinez DON'T EXIST
+THE IMAGE: Ana_Torres DON'T EXIST
+```
+
+`ucTreeViewPlus.ctl:985` 的这条消息只在 `cImageList(index) = 0` 时打印。对应数据来自
+`JerarquiaEmpresa.xml:5` 的 `<image src="https://randomuser.me/api/portraits/women/3.jpg" key="Lucy_Rodriguez"/>`，
+而 `LoadPictureEx`（同文件 2355-2410）对 `PathIsURL` 为真的分支走的是**远程流加载**（`GdipLoadImageFromStream`）。
+即：**URL 图片在 C3 里根本没拿到流** ⇒ `hImage=0` ⇒ 不入 Collection ⇒ 后续 `cImageList(key)` 取 0。
+Form3 `photo=0`、Agenda `vivid/photo/avatar` 全 0 全是这一条的下游。
+
+次要主因：Form3/Form5 的 `font="FormX.frx":…` 解析出来的字体**权重丢了**（C3 渲染 400，真 VB6 700），
+这是 frx 字体记录字段的问题，与设计期属性无关。
+
+⇒ **五窗要绿，必须先进 URL 图片加载这条**（原计划排在最后的 `GetDrive`/`Collection` 之后的第 4 段），
+否则 photo/avatar/vivid 三项永远追不上。建议顺序改为：URL 图片加载 → frx 字体权重 → 其余几何/文本。
+

@@ -5,6 +5,7 @@
 #include "common/frm_code_scan.hpp"          // .frm 过程定义判据 (注释行不算)
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 #include "project/frx_reader.hpp"
 #include <algorithm>
 #include <cctype>
@@ -350,6 +351,7 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         // 句柄把上一个实例的 edit 隐藏掉 (czTextBox1 空白的根因)。
         // Timer 等暂不实例化 (相关 API 对 NULL 安全)。
         const bool noKids = getenv("C3_NO_DESIGNKIDS") != nullptr;
+        std::vector<const FrmControl*> madeKids;
         for (const auto& child : frmDesc.formControl.children) {
             auto iprop = [&](const char* k, int defv) -> int {
                 auto itc = child.properties.find(k);
@@ -420,6 +422,7 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
             // (create_controls.inc:365 / ctrl_style_apply.inc:395)，不新增第二处口径。
             if (madeKid) {
                 emitDesignerStateProps(child, "vb6_hwnd_" + cIdent(child.controlName));
+                madeKids.push_back(&child);
             }
         }
         if (hasInit) c_.emitLine("    vb6_" + ctl + "_UserControl_Initialize((vb6_cls_" + ctl + "*)me);");
@@ -428,6 +431,42 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
             c_.emitLine("    if (!vb6_uc_skipIP) vb6_" + ctl + "_UserControl_InitProperties((vb6_cls_" + ctl + "*)me);");
         } else {
             c_.emitLine("    (void)vb6_uc_skipIP;");
+        }
+        // 账 #118 续 (第二批): 设计面子控件的**晚绑定**设计期属性 —— 必须排在
+        // Initialize/InitProperties **之后**。理由 (ucScrollbar.ctl 实测):
+        //   · 第 2186 行 `Let m_eOrientation = ORIENTATION_DEF` 在 UserControl_Initialize 里,
+        //     在它之前写 Orientation 会被这一句冲掉;
+        //   · 第 2290 行 `ReadProperty("Orientation", …)` 在 InitProperties 里, 而设计子控件
+        //     根本没有 PropertyBag (bag 只给 .frm 里的实例) ⇒ 取到的永远是默认值。
+        //   ⇒ 设计值只能由这里补, 且必须是最后一步。ucScrollbar2 的 Orientation=1
+        //   (横向, 4095×135) 缺了会按纵向建, m_eOrientation 停在 oVertical。
+        for (const FrmControl* pc : madeKids) {
+            const FrmControl& child = *pc;
+            const std::string dh = "vb6_hwnd_" + cIdent(child.controlName);
+            auto txIt = child.properties.find("Text");
+            if (txIt != child.properties.end() && txIt->second.type == FrmValueType::String) {
+                // .frm 的 rawText 带外层引号, 串内双引号写作 "" (与 style_apply:664 同口径)。
+                std::string raw = txIt->second.rawText;
+                std::string inner = raw;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"') {
+                    inner = raw.substr(1, raw.size() - 2);
+                }
+                std::string esc;
+                for (char ch : inner) {
+                    if (ch == '\\' || ch == '"') esc += '\\';
+                    esc += ch;
+                }
+                if (!esc.empty()) {
+                    c_.emitLine("    vb6_SetControlText((void*)" + dh + ", vb6_BSTR_FromStr(L\""
+                        + esc + "\"));  /* design Text */");
+                }
+            }
+            auto orIt = child.properties.find("Orientation");
+            if (orIt != child.properties.end() && orIt->second.type == FrmValueType::Integer
+                && child.controlType == FrmControlType::Unknown) {
+                c_.emitLine("    vb6_ComSetProp(" + dh + ", L\"Orientation\", vb6_ComPackInt("
+                    + std::to_string(orIt->second.intValue) + "));  /* design Orientation */");
+            }
         }
         c_.emitLine("}");
         c_.emitLine("static void vb6_" + ctl + "_ucHostPaint(void* me) {");
