@@ -536,17 +536,26 @@ for ($yy = $r9y; $yy -lt $r9y + $r9h; $yy++) { for ($xx = $r9x; $xx -lt $r9x + $
 Add-Read ("openEditor whitePx=$white9")
 if ($white9 -lt 100) { Add-Fail ("'OPEN EDITOR' 图例不是白字 (纯白像素 $white9 < 100, 被画成黑字?)") }
 
-# 缺陷5: uc6 (CtrlType=1 CheckBar, 设计期 16,304 185x33) 下方四个图标必须是 .frx 的图片,
-# 不是 Segoe UI Symbol 的 PUA 字形回退。判据 = 深色像素数 (三通道 < 80; 选中格的蓝底不计):
-# 真图标 (纸夹/软盘/地球/相机) 笔画粗、覆盖大, 字形回退只有细笔画。
-# 实测物理像素: 旧产物 (frx 扫描式定位) 230; 新产物 (DocProperty 精确定位) 581 ⇒ 阈值 400。
+# 缺陷5: uc6 (CtrlType=1 CheckBar, 设计期 16,304 185x33) 的四枚图标字形必须画出来。
+# 该实例没有 HasImg_N/image_N, 图标就是 .frx Caption_0..3 的 Segoe UI Symbol 字形
+# (纸夹/软盘/地球/相机), 所以判据只能是"深色像素数" (三通道 < 80; 选中格的蓝底不计)。
+# 标定 (2026-11-08, 同一相机 = 交互段 PMv2 物理面, 同一套取样器):
+#   · 真 VB6 参考 (.temp\ref\SegmentedControl.exe) 本机 120dpi = **382**;
+#   · C3 本机 120dpi = **382** (与参考逐像素一致);
+#   · CI 96dpi = **218** (96dpi 面被 DWM 放大 1.25 倍后才抓, 笔画边缘多出 <80 的像素,
+#     所以本机读数约为 CI 的 k^2 倍)。
+# 旧阈值 400 来自**未开抗锯齿**时代的读数 (旧产物 581@120dpi / 418@96dpi); dee3abb1 恢复
+# ClearType 后 <80 的像素自然减少, 400 连真 VB6 参考 (382) 都过不了 —— 那是拿旧相机当参照,
+# 不是更强的判据。现阈值 = 真 VB6 参考的 55% (382*0.55≈210@120dpi) 按 k^2 折算,
+# 96dpi 口径 135; 图标字形真缺失时该值掉到 <40, 仍会红。
+$dark6Min = [int](135 * $k * $k)
 $r6x = [int](16 * $k); $r6y = [int](304 * $k); $r6w = [int](185 * $k); $r6h = [int](33 * $k)
 $dark6 = 0
 for ($yy = $r6y; $yy -lt $r6y + $r6h; $yy++) { for ($xx = $r6x; $xx -lt $r6x + $r6w; $xx++) {
     $c = $b0.GetPixel($xx, $yy)
     if ($c.R -lt 80 -and $c.G -lt 80 -and $c.B -lt 80) { $dark6++ } } }
 Add-Read ("checkbar icons uc6 darkPx=$dark6")
-if ($dark6 -lt 400) { Add-Fail ("CheckBar 四个图标没画成图片 (uc6 深色像素 $dark6 < 400, 退回 Segoe UI Symbol 字形?)") }
+if ($dark6 -lt $dark6Min) { Add-Fail ("CheckBar 四枚图标字形没画出来 (uc6 深色像素 $dark6 < $dark6Min)") }
 
 # 缺陷3: <-- ItemVisible 按钮应显示/隐藏 uc4 的 Ok 图标。
 # 性能判据: 点击 -> uc4 区域首帧变化 + 稳定 (连续 3 次 20ms 采样一致)。真 VB6 实测

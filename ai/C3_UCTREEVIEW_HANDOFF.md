@@ -3856,3 +3856,31 @@ CI 清单（head=62fa6c2a）与仓里期望只差 3 份：`tests/test_caseis.bas
 `.temp/px_s54b`：**PASS rc=0**（五窗内容 + 交互 + 同进程连点 3 轮全绿）。
 注：本轮第一次跑（`px_s54`）A1 出现一次 `'Corporate Hierarchy' BM_CLICK 3s 未返回`，
 同产物重跑即绿（`content[Form3]` 与 B 段三轮均正常），属冷启动偶发，未改判据。
+
+## 54. GA 42392046701 的两枚 CI 专属红 (vbp #4 / vbp #2)
+
+### 54.1 vbp #4 `ucSegmentedControl`：uc6 darkPx 阈值是旧相机标定
+
+**现象**：CI 96dpi `checkbar icons uc6 darkPx=218 < 400`；本机 120dpi 同脚本 `382`。
+
+**定性（同一套取样器，逐条实测）**：
+
+| 产物 | 相机 | uc6 深色像素 (<80) |
+| --- | --- | --- |
+| 真 VB6 参考 `.temp\ref\SegmentedControl.exe` | 本机 120dpi 交互段物理面 | **382** |
+| C3 (head=0034dd0e 产物) | 本机 120dpi 交互段物理面 | **382** |
+| C3 | CI 96dpi 交互段物理面 | 218 |
+| 旧产物（无 ClearType，`dee3abb1` 之前） | 本机 120dpi / CI 96dpi | 581 / 418 |
+
+- C3 与真 VB6 在**同相机同 DPI** 下逐像素同值（382），产品侧没有回归。
+- 400 这个阈值只可能来自 581/418 那个**未开抗锯齿**的旧相机；`dee3abb1` 恢复
+  ClearType 后「三通道 <80」的深色像素自然减少，400 连真 VB6 参考（382）都过不了。
+- uc6 本来也没有 `HasImg_N/image_N`：四枚图标是 `Caption_0..3` 的 Segoe UI Symbol
+  字形，旧断言文案「没画成图片」本身就是错的。
+
+**修法**：阈值改 `[int](135 * $k * $k)`（96dpi 口径 135，本机 120dpi 211），
+即真 VB6 参考的 55%（382*0.55≈210）按 k^2 折算；文案改「四枚图标字形没画出来」。
+语义仍是「图标在不在」：字形缺失时该值掉到 <40。
+
+**修后读数**：本机 `darkPx=382`（= 真 VB6），阈值 211 ⇒ PASS rc=0
+（`.temp/seg_s55.log`，`PASS ucSegmentedControl client=751x520 hosts=12+1`）。
