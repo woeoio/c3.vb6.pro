@@ -473,6 +473,32 @@
         }
         bool calleeParamIsArray = (i < calleeParams.size()
             && (static_cast<uint16_t>(calleeParams[i].type) & static_cast<uint16_t>(Vb6Type::Array)));
+        // Fix 431: 隐式 String → 数值实参 (工程内过程的 ByVal 数值形参)。
+        // VB6 允许 `Foo "123"` / 把 String 变量交给 ByVal Long 形参, 运行期按 CLng
+        // 规则解析; C 侧 BSTR 是 wchar_t*, 裸交给 int32_t 只会把指针低位截断成数
+        // (实测 `Echo(s)` 得 -911689592 = 0xC9A5DE88, 无报错), 交给 double 则 C2440。
+        // ucTreeView 的 `RGBtoARGB(N.BadgeBackColor, 100)` (BadgeBackColor 声明为
+        // String) 因此把 #51b453/#ff6961 画成 (156,45,91)/(92,53,91) 的噪声色;
+        // 同类文字行 band 也因徽标区域出现杂色而被并/拆, 见 handoff §45。
+        // 只覆盖**工程内过程**: Declare 路上历史代码把 BSTR 当指针直交的写法不在
+        // VB6 语义内 (要指针应写 StrPtr), 不并入本条以缩小影响面。
+        if (!isByRef && !calleeIsDeclare && !calleeIsBuiltin
+            && i < calleeParams.size() && i < node.positional.size()
+            && node.positional[i] && !calleeParamIsArray
+            && inferExprType(*node.positional[i]) == Vb6Type::String) {
+            switch (calleeParams[i].type) {
+                case Vb6Type::Long:     argVal = "vb6_CLng(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Integer:  argVal = "vb6_CInt(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Byte:     argVal = "vb6_CByte(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Boolean:  argVal = "vb6_BoolVal(" + argVal + ")"; break;
+                case Vb6Type::Single:   argVal = "vb6_CSng(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Double:   argVal = "vb6_CDbl(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Currency: argVal = "vb6_CCur(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Date:     argVal = "vb6_DateVal(" + argVal + ")"; break;
+                case Vb6Type::LongLong: argVal = "vb6_CLngLng(vb6_NumVal(" + argVal + "))"; break;
+                default: break;
+            }
+        }
         if (isByRef) {
             // 账 #118 续: 工程内 `ByRef s As String` 形参收到 UDT 定长串字段
             // (ClsTreeExplorer 的 `StripNulls(tSHFI.szDisplayName)`)。字段是

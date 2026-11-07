@@ -3380,3 +3380,53 @@ GetHotNode()` 等），正是 §42.3 第 4 条"类槽收包装器"的受害者�
    各自给读数后定因（裁切 / 没生成 / band 合并）。
 2. Contact `bg65=102676 < 106764`：判列表底 padding/行高 vs 窗体底色未铺满客户区。
 3. 两处绿后 GA 22/22（`ucTreeView` 像素例真过、不许 SKIP）。
+
+## §45 根因一：隐式 String → 数值实参（Fix 431，2026-11-07，第 4 块）
+
+### 45.1 取证
+
+`tests/ucTreeView/Node.cls` 把徽标底色声明成串：
+
+```vb
+Public BadgeBackColor As String
+```
+
+而 `ucTreeViewPlus.ctl` 两头都是数值语义 —— 解析时
+`newNode.BadgeBackColor = HexToColor(xmlAttr.Text)`（Long → String 隐式转换），
+绘制时 `RGBtoARGB(N.BadgeBackColor, 100)`（String → Long 隐式转换）。C3 缺后者：
+把 BSTR 指针直接截断成 int32_t。
+
+小样复现（`.temp/s2l.bas`，Long 形参）：`s = 5485649: Echo(s)` 输出
+`impl=[-911689592]`（= 0xC9A5DE88，堆地址低 32 位）；换成 `EchoD(s)`（Double 形参）
+更进一步，C2440 直接编不过（BSTR 没有到 double 的隐式转换）。即"不崩但静默画错"
+与"编不过"是同一条缺口的两种表现。
+
+像素侧证据：Form5 每个有 SubText 的节点徽标底色被画成噪声色
+（(156,45,91)/(92,53,91) 一类），在行间隙制造 dark 像素 ⇒ `textRows` 少、`dark` 虚高。
+
+### 45.2 修法
+
+`cgen_expr_call_arg_emit.inc`：工程内过程、按值、形参为数值、实参静态类型为 String
+时，发射 `vb6_NumVal` / `vb6_BoolVal` / `vb6_DateVal` 转一手（按形参类型选
+`vb6_CLng` / `vb6_CInt` / `vb6_CByte` / `vb6_CSng` / `vb6_CDbl` / `vb6_CCur` /
+`vb6_CLngLng`）。**不覆盖** `Declare`（那一路是另一套生存期/口径）与内建函数，
+`ByRef`、数组形参也不动 —— 只在"VB6 本来就会隐式转换"的这一格补上。
+
+### 45.3 读数（`.temp/px_rows4`，Form5）
+
+| 指标 | 修前 | 修后 | 参考 |
+| --- | --- | --- | --- |
+| textRows | 13 | **15** | 15 |
+| dark | 4778→（噪声行） | **4778** | 4778 |
+| vivid | — | 41117 | 7120*0.9 以上 |
+| photo | — | 55051 | — |
+| avatar | — | 105961 | — |
+
+Form5 全绿（其余四窗当轮未动）。
+
+### 45.4 回归用例
+
+`tests/test_arg_string_to_long.bas` + `run_tests.ps1` 注册（x64 / x86 各一条）：
+`S2L-1=5485649`（String 变量 → ByVal Long）、`S2L-2=321`（字面量 → Integer）、
+`S2L-3=12`（字面量 → Double）、`S2L-4=5354579`（`Val("&H" & s)` → Long）、`S2L-DONE`。
+改前：`EchoD(s)` 编不过、`Echo(s)` 得 -911689592。

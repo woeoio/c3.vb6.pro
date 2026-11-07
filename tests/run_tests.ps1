@@ -6256,6 +6256,16 @@ if ($Category -in @("all", "run", "bas")) {
     Add-BasTest "test_byref_elem" "$Tests\test_byref_elem.bas" $b253Needles
     Add-BasTest "test_byref_elem_x86" "$Tests\test_byref_elem.bas" $b253Needles -Arch "x86"
 
+    # Fix 431: 隐式 String → 数值实参 (工程内过程 ByVal 数值形参)。VB6 允许
+    # `Echo "123"` / 把 String 变量交给 ByVal Long; 改前 C 侧把 BSTR 指针直接
+    # 截断成 int32_t (实测 Echo(s)= -911689592), Double 形参更是 C2440 编不过。
+    # ucTreeView 的徽标底色 (BadgeBackColor 声明为 String → RGBtoARGB(Long))
+    # 就是这条的受害者。两台各钉一头。
+    $b431Needles = @("S2L-1=5485649", "S2L-2=321", "S2L-3=12",
+                     "S2L-4=5354579", "S2L-DONE")
+    Add-BasTest "test_arg_string_to_long" "$Tests\test_arg_string_to_long.bas" $b431Needles
+    Add-BasTest "test_arg_string_to_long_x86" "$Tests\test_arg_string_to_long.bas" $b431Needles -Arch "x86"
+
     # ---- 注册表自检 (2026-09-30, 门 #233 的教训) --------------------------------
     # 为什么单开一道: `test_variant_boxing` 那条注册里 `\t` 被写成了**真 TAB**
     # (`"$Tests<TAB>est_variant_boxing.bas"`), PowerShell 把它原样传给了 C3 ⇒ 门里读到
