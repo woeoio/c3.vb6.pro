@@ -68,19 +68,17 @@ BSTR vb6_Left(BSTR s, int32_t n) {
     if (!s || n <= 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
-    wchar_t* buf = (wchar_t*)malloc((n + 1) * sizeof(wchar_t));
-    memcpy(buf, s, n * sizeof(wchar_t));
-    buf[n] = L'\0';
-    BSTR result = vb6_BSTR_FromStr(buf);
-    free(buf);
-    return result;
+    /* 账 §39 (C:/D: 少两行): 取子串必须按**定长**建结果 —— vb6_BSTR_FromStr 走
+       wcslen, 会把 VB6 串里的内嵌 NUL 当串尾。GetLogicalDriveStrings 写回
+       "C:\0D:\0" 之后 `Left$(s, 7)` 只剩 "C:\", Split 少一个盘符。 */
+    return vb6_BSTR_FromStrN(s, n);
 }
 
 BSTR vb6_Right(BSTR s, int32_t n) {
     if (!s || n <= 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
-    return vb6_BSTR_FromStr(s + len - n);
+    return vb6_BSTR_FromStrN(s + len - n, n);
 }
 
 BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
@@ -90,12 +88,7 @@ BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
     if (offset >= slen) return vb6_BSTR_Empty();
     // len < 0 是 cgen 对省略 length 参数 (Mid$(s, n)) 的哨兵 — 取到结尾
     if (len < 0 || offset + len > slen) len = slen - offset;
-    wchar_t* buf = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
-    memcpy(buf, s + offset, len * sizeof(wchar_t));
-    buf[len] = L'\0';
-    BSTR result = vb6_BSTR_FromStr(buf);
-    free(buf);
-    return result;
+    return vb6_BSTR_FromStrN(s + offset, len);
 }
 
 // ============================================================
@@ -107,23 +100,20 @@ BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
 // 真*2 字节偏移回值, 那是它自己的口径, 不影响这一族的取子串行为。
 // ============================================================
 
+// 账 §39: 与上面 Left/Right/Mid 同口径 —— 取子串按**定长**建结果, 不许走
+// vb6_BSTR_FromStr (wcslen 会把内嵌 NUL 当串尾)。
 BSTR vb6_LeftB(BSTR s, int32_t n) {
     if (!s || n <= 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
-    wchar_t* buf = (wchar_t*)malloc((n + 1) * sizeof(wchar_t));
-    memcpy(buf, s, n * sizeof(wchar_t));
-    buf[n] = L'\0';
-    BSTR result = vb6_BSTR_FromStr(buf);
-    free(buf);
-    return result;
+    return vb6_BSTR_FromStrN(s, n);
 }
 
 BSTR vb6_RightB(BSTR s, int32_t n) {
     if (!s || n <= 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
-    return vb6_BSTR_FromStr(s + len - n);
+    return vb6_BSTR_FromStrN(s + len - n, n);
 }
 
 BSTR vb6_MidB(BSTR s, int32_t start, int32_t len) {
@@ -133,12 +123,7 @@ BSTR vb6_MidB(BSTR s, int32_t start, int32_t len) {
     if (offset >= slen) return vb6_BSTR_Empty();
     // len < 0 是 cgen 对省略 length 参数 (MidB$(s, n)) 的哨兵 — 取到结尾
     if (len < 0 || offset + len > slen) len = slen - offset;
-    wchar_t* buf = (wchar_t*)malloc((len + 1) * sizeof(wchar_t));
-    memcpy(buf, s + offset, len * sizeof(wchar_t));
-    buf[len] = L'\0';
-    BSTR result = vb6_BSTR_FromStr(buf);
-    free(buf);
-    return result;
+    return vb6_BSTR_FromStrN(s + offset, len);
 }
 
 // ============================================================

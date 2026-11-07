@@ -146,4 +146,17 @@
     // 判据全部来自 src/common/owned_temp_keeps.hpp（表由 RTL 推导 ⇒ 哨兵双向对账）。
     hoistOwnedTempArgs(argList, callee);
 
+    // 账 §39 (C:/D: 少两行, 第 2 层): VB6 的 0 参 Function/PropertyGet 返回 Variant 时,
+    // `F(i)` 的 (i) 是**对返回数组的下标**, 不是调用实参 (真 VB6 实测 /make 通过:
+    // ucTreeView ClsTreeExplorer.cls:317 `GetDrive(i)`)。上面 Fix 041c 会把多出来的
+    // 实参按「超过形参个数」截掉 ⇒ 拿到整个数组 (探针实测 VarType=8200、GetDrive(0/1) 空)。
+    // 这里改发 vb6_VariantArrayGetVal(F(), i): F 收 0 个实参, 结果再取下标。
+    if (calleeZeroArgVariantSubscript && !node.positional.empty()) {
+        std::string selfCall = callee + "(" + argList + ")";
+        std::string idxExpr = args.empty() ? "0" : args[0];
+        lastExpr_ = "vb6_VariantArrayGetVal(" + selfCall + ", "
+                    + toLongIfVariant(idxExpr, node.positional[0].get()) + ")";
+        return;
+    }
+
     lastExpr_ = callee + "(" + argList + ")";

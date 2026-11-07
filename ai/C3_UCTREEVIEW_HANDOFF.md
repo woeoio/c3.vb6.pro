@@ -3022,6 +3022,76 @@ empty-eq0/empty-eqs/empty-lts/DONE`，真 VB6 与 C3 逐行一致。
 - Form5：`firstTextW` 48 → **77**（参考 78）。
 - 五窗全表见 §39.5（第 1、2 步合并复量）。
 
+## §39 C:/D: 少两行（与 §28「GetDrive 返回 0 个盘符」合并结案）
+
+### 39.1 真 VB6 与旧 C3 的实际读数（同一探针 `.temp\drvprobe`）
+
+| 读数 | 真 VB6 `/make` | 旧 C3 | 修后 C3 |
+|---|---|---|---|
+| `Count`（=`UBound(GetDrive)`） | **1** | **0** | **1** |
+| `GetDrive(0)` | `C:\` | `""` | `C:\` |
+| `VarType(GetDrive(0))` | **8**（vbString） | **8200**（数组） | **8** |
+| `GetDrive(1)` | `D:\` | `""` | `D:\` |
+| `Len(Left$(strDrives, 7))` | 7 | 3 | 7 |
+| `Left$(strDrives, 7)` | `C:\` + NUL + `D:\` | `C:\` | `C:\` + NUL + `D:\` |
+
+修后 C3 与真 VB6 的 `drv_out.txt` **逐字节一致**。
+
+### 39.2 两层成因
+
+1. **取子串按 NUL 截断**：`Dim strDrives As String * 255` 由
+   `GetLogicalDriveStrings` 写回 `"C:\0D:\0..."`。C3 侧
+   `Len(s)=255`、`Asc(Mid$(s,4,1))=0`、`InStr(s, Chr$(0))=4` 都正确，
+   但 `Left$` 出口走 `vb6_BSTR_FromStr`（`SysAllocString` → `wcslen`），
+   把 NUL 当串尾 ⇒ `Split` 只剩 `"C:\"`。
+2. **`GetDrive(i)` 不对返回数组做下标**：VB6 允许对**无参 Function 返回的 Variant 数组**
+   用 `f(i)` 取元素；cgen 把 `(i)` 当调用实参，按「超过形参个数」截掉
+   （`maxArgs=0`）⇒ 整个数组原样返回（VarType 8200）。这与第一层独立，
+   修完 `Left$` 也只能从 0 变 1 个盘符。
+
+### 39.3 修法
+
+- `src/rtl/core/vb6rtl/vb6rtl_string.c`：`vb6_Left/Right/Mid` 与
+  `vb6_LeftB/RightB/MidB` 六个出口统一改走 `vb6_BSTR_FromStrN(s+off, n)`
+  （`SysAllocStringLen`，不按 NUL 截断）。
+- `src/backend/detail/expr/cgen_expr_call_builtin_argtype.inc`：
+  「0 参且返回 Variant」的调用点，若带了 1 个实参，改发
+  `vb6_VariantArrayGetVal(callee(), i)`，不再把 `i` 塞进实参表。
+
+### 39.4 断言（真 VB6 逐行对齐）
+
+`tests\strnul_drive\`（`snd.vbp` + `snd_main.bas`）：
+`SND-nulcmp / leftlen / midlen / hasdrive / drive0 / drivevar / DONE`，
+真 VB6（写文件版探针）与 C3 的 `Debug.Print` 输出逐行一致。
+
+### 39.5 五窗复量（第 1、2 步合并后，对照真 VB6 `ref_metrics.json`）
+
+| 窗 | 文字行 C3/VB6 | firstTextW | vivid | photo | avatar | 其它 |
+|---|---|---|---|---|---|---|
+| Tree Explorer | **5 / 5 ✓**（§36.3 是 4） | 79 / 78 | 602 / 2354 ✗ | 653 / 1608 ✗ | 314 / 1225 ✗ | greenRim 0/0 ✓ |
+| Corporate Hierarchy (Form3) | 9 / 10 ✗ | 189 / 189 | 18045 / 21768 ✗ | 4080 / 9292 ✗ | 2130 / 6498 ✗ | greenRim 91/87 ✓ |
+| Drag & Drop | 5 / 5 ✓ | 99 / 99 | 1334 / 2161 ✗ | 1339 / 2484 ✗ | ✓ | — |
+| Menu / Tools (Form5) | 12 / 15 ✗ | 77 / 78 | ✓ | ✓ | ✓ | — |
+| Contact List | lightRows 7 / 8（容差内 ✓） | — | ✓ | ✓ | 8359 / 9793 ✗ | bg65 104318 / 118627 ✗ |
+
+- Tree Explorer 的 **C:/D: 两行已回来**（5 行），确认 §28 与 §39.2 是同一件事。
+- 仍红的共同形状是 `vivid/photo/avatar`（以及 Form3/Form5 行数、Contact 深底占比）：
+  都是**图像像素密度**类，与 §38/§39 的文字与盘符两层无关；下一步应单查
+  ImageList / 头像绘制的 alpha 与尺寸（真参考的 saturation 明显更高）。
+- 因此本轮**不宣布 GA**；像素例仍未真过。
+
+### 39.6 复现命令
+
+```powershell
+& .\.build\C3.exe .temp\drvprobe\c3\p.vbp --output-dir .temp\drvprobe\c3 --arch x86
+& .temp\drvprobe\c3\drv.exe            # 与 .temp\drvprobe\vb6\drv_out.txt 对照
+& .\.build\C3.exe .temp\sndref\p.vbp --output-dir .temp\sndref --arch x86   # 可选
+& .\.build\C3.exe tests\strnul_drive\snd.vbp --output-dir .temp\snd --arch x86
+& .\.build\C3.exe tests\ucTreeView\Proyecto1.vbp --output-dir .temp\ucb4 --arch x86
+pwsh -NoProfile -File tests\guisample\uctreeview_px.ps1 -Exe .temp\ucb4\Proyecto1.exe `
+  -RefJson .temp\vb6ref\ref_metrics.json -OutDir .temp\uctvpx
+```
+
 
 
 

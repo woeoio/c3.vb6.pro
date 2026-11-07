@@ -8698,6 +8698,15 @@ if ($Category -in @("all", "run", "vbp")) {
         Test-Vbp "varcmp_strnum" "$Tests\varcmp_strnum\vcs.vbp" $varCmpExpected
     }
 
+    # 账 §39: 定长串内嵌 NUL 的取子串 (Left$/Mid$/Right$ 不许走 wcslen 截断) +
+    # 0 参 Variant 函数返回数组的 `F(i)` 下标形态 (GetDrive(i) 真 VB6 /make 实测:
+    # Count=1、GetDrive(0)="C:\"、GetDrive(1)="D:\"、VarType=8)。
+    if (Test-Path "$Tests\strnul_drive\snd.vbp") {
+        $strNulExpected = @("SND-nulcmp=True", "SND-leftlen=True", "SND-midlen=True",
+            "SND-hasdrive=True", "SND-drive0=True", "SND-drivevar=True", "SND-DONE")
+        Test-Vbp "strnul_drive" "$Tests\strnul_drive\snd.vbp" $strNulExpected
+    }
+
     # <vbeclipse>: CC2 走 **ByRef 组名形参** (`Sub UseCircle(c As Circle)`), CC10 走
     # **真 ByRef Variant 形参** —— 同一个类实参、两种槽。这一对是"别过度修复"的夹子:
     # CC2 曾被装箱成 vb6_VARIANT* (与 `vb6_cls_ShapeAct**` 形参 ABI 不符 → 段错误),
