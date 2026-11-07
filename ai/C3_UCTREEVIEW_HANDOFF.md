@@ -3141,3 +3141,85 @@ VB6 里 `.ctl/.pag` 的 `Cls` / `Refresh` / `Size` / `TextWidth` / `TextHeight` 
 
 
 
+
+## 41 图像像素密度（vivid/photo/avatar 只有参考 40% 上下）
+
+### 41.1 单头像像素级对照（先读数定性，不看外观）
+
+Form3 第一张头像框（x108..141 / y75..114）与 `Human Resources` 文本带
+（x99..240 / y150..166），C3 vs 真 VB6 `ref_Corporate_Hierarchy.png`：
+
+| 读数 | 真 VB6 | C3（改前） |
+| --- | --- | --- |
+| 头像 bbox（photo 色域） | x79..219 y75..219 n=1034 | x81..190 y85..219 n=404 |
+| 头像框 `sat>=8` / `sat>=60` | 1277 / 90 | 1281 / 90 |
+| 文本带 sat 直方图（15 一档） | 1869,121,14,83,27,139,98,63,0,0,0 | 2414,0,0,0,0,0,0,0,0,0,0 |
+| 文本带 maxSat / 采样点 | 112 @(165,152)=(95,155,207) | 9 @(102,153)=(95,99,104) |
+| 全图 photo / avatar | 9292 / 6498 | 4080 / 2130 |
+
+`avatar` 框内两图的饱和像素数**完全相同**（1277/90 vs 1281/90），逐像素 diff
+`meanAbsSum=133.47` 但 `nearSame(<=6)=13.2%`（位移/插值差，不是密度差）⇒
+排除 (a) alpha 混白、(b) 缩放裁剪、(c) 调色板量化、(d) 没画满。
+缺口全部落在**文字**：C3 文本带 2414 个像素 sat 全 `<=14`（`maxSat=9`），
+真 VB6 有 321 个 `sat>=60`、彩边到 112 —— C3 文字是 1-bit 硬边，没有子像素抗锯齿。
+
+### 41.2 ImageList / 绘制调用核对（用户第 2 点）
+
+- 素材全是 **PNG**（`tests\ucTreeView\img\*.png`），不是 JPEG；加载走
+  `GdipLoadImageFromFile` + 32bppPARGB 合成，alpha 通道存在且原样保留。
+- `ucTreeViewPlus.ctl` 的头像是 **GDI+ 自绘**（`GdipCreateImageAttributes` +
+  ColorMatrix 正常档 `M(0,0)=M(1,1)=M(2,2)=M(3,3)=1`），alpha 不丢；
+  不是 comctl ImageList，也不存在"JPEG 无 alpha 却半透明"那条。
+- RTL 的 comctl ImageList：`vb6_ImageList_Create` 用 `ILC_COLOR32 | ILC_MASK`
+  （`vb6forms_imagelist.c`），TreeView 同名两处同标志；全 RTL 无
+  `ImageList_DrawEx` 调用点（图标交给 `TreeView_SetImageList`），
+  `DrawIconEx` 只在 `picture_prop` / `statusbar`，与头像无关。
+
+### 41.3 根因 A：UC 字体质量档被写死 NONANTIALIASED
+
+`vb6_uc_fontHFontFor`（`uc_host_window.c:105`）、`Font.hFont`
+（`uc_controls.c:466`）、UC 宿主窗口字体（`uc_host_create.inc:85`）三处都递
+`NONANTIALIASED_QUALITY`。MS Sans Serif 是点阵字体，质量位对它无影响；但 .ctl 用的
+Segoe UI 一类**可缩放**字族在 VB6 里走 `DEFAULT_QUALITY`（本机 ClearType）。
+
+修法：上述三处改 `DEFAULT_QUALITY`；`vb6forms.c:167` 的 MS Sans Serif 默认 GUI 字体
+保持不动。`vb6_UC_ApplyFontToWindow`（原生控件共用，`cgen_form_create_controls.inc:147`）
+**保持** NONANTIALIASED，另开 `vb6_UC_ApplyFontToHostWindow` 给 UC 宿主窗口 ——
+否则 Form1 那批 Arial Narrow 原生控件会一起变平滑，推翻 Label 240 / 按钮行数判据。
+
+复量（`uctreeview_px.ps1`，`-RefJson .temp\vb6ref\ref_metrics.json`）：
+
+| 窗 | vivid C3/参考 | photo | avatar |
+| --- | --- | --- | --- |
+| Tree Explorer | 2354 / 2354 | 1608 / 1608 | 1225 / 1225 |
+| Corporate Hierarchy | 20772 / 21768 | 8594 / 9292 | 6266 / 6498 |
+| Drag & Drop | 2152 / 2161 | 2479 / 2484 | 3733 / 3733 |
+| Menu / Tools | 41304 / 41664 | 56036 | 106034 |
+
+`Form5` 文字行 12 → 14（参考 15）。
+
+### 41.4 根因 B：Ambient.ForeColor 恒 0（深色窗体文字被画成黑色）
+
+Contact 复量仍 vivid=4367（参考 7120）。逐行取样 y=194：
+真 VB6 `(129,195,255) (255,255,196) …`（白字 + ClearType 彩边），
+C3 `(57,44,25) (0,0,14) …`（近黑字）。
+
+`.ctl` 的 `m_TextColor = .ReadProperty("TextColor", Ambient.ForeColor)` 发码成
+`vb6_Ambient_ForeColor`，RTL 全局初值 0；窗体设计期 `ForeColor` 以前只进类背景刷，
+没有进运行期，于是 Form6（ForeColor=白）上的 UC 把 TextColor 读成黑色。
+
+修法（与 BackColor 同一条路，一个根因一刀）：
+
+- `cgen_form_prelude.inc` 读窗体 `ForeColor`（缺省 -1）；
+  `cgen_form_show.inc` 三个分支发 `vb6_RegisterFormClassFore(类名, ForeColor)`。
+- `vb6forms.c` 的类色表由 `{bg}` 扩成 `{bg,fg}`，新增
+  `vb6_RegisterFormClassFore` / `vb6_Forms_QueryClassFore`；
+  `uc_host_create.inc` 用它填 `vb6_Ambient_ForeColor`（`fg >= 0` 才覆盖）。
+
+复量：Contact vivid 4367 → 22606、photo 8117 → 26811、avatar 8359 → 9935
+（参考 7120 / 10955 / 9793）。
+
+### 41.5 按用户要求留到下一刀
+
+- `Form3` 文字行 9 != 10、`Form5` 文字行 14 != 15。
+- Contact 深底 `bg65=102676 < 118627*0.9`。
