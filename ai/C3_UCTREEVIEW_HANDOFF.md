@@ -4021,3 +4021,23 @@ Results: PASS=47 FAIL=0 SKIP=0 TOTAL=68
 
 96dpi 的 8x6 / 6x5 正是 120dpi 参考 10x8 / 8x6 的 0.8 倍（DPI 折算），说明实现与判据同一套
 比例，没有为过门把阈值放宽。本轮提交 `10618fe1`，已 `git push github dev` + `git push origin dev`。
+
+### 55.7 连带的采集污染 (run 42410288905 的 vbp #2 红)
+
+docs 提交（`a9641af9`，只改 handoff）触发的 run **42410288905** 里 `Tests (vbp #2)` 红：
+
+```
+pixels FAIL [uctreeview_px.ps1]: FAIL TextBox 深灰边框(100,100,100) 25px > 0
+edFrameDark=25  sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0
+```
+
+不是 hover 判据红（它 6/6 绿），是**旧的 TextBox 深框判据被新画的三角误伤**：TextBox 的窗口
+矩形本来就被 VScrollBar 盖住右半边（Edit 91x33 @104,20 / ScrollBar 33x31 @149,21），三角色
+102,102,102 正落在 `|R-100| <= 2` 的深框判据窗口里。根因是基准抓屏时**没有管光标在哪**——
+光标恰好停在增减区上，这张"基准图"就带上了 hover 三角。旧代码没有 hover 绘制，所以这个
+前提从来没被打破过。
+
+修法（不是放宽判据）：抓屏前把光标停到窗体外面（`Get-ParkPoint`：优先窗体外左上 60px，
+窗体贴边时退到标题栏中央，保证不压任何子控件），让基准图固定是未悬停态。
+`edFrameDark > 0 ⇒ FAIL` 一字未改。本机复跑整门：
+`edFrameDark=0 … sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120` PASS。

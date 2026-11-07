@@ -402,6 +402,15 @@ function Get-SbArrowStats {
     return @{ top = $t; bot = $b; w = $Sw; h = $Sh; mid = $mid }
 }
 
+# 光标"停放点": 优先落在窗体外 (左上 60px); 窗体贴边时退到标题栏中央 ——
+# 两种情况都保证不压在任何子控件 (尤其是增减区) 上, 不会触发 hover 绘制。
+function Get-ParkPoint {
+    param($Rect)
+    $x = $Rect.L - 60; $y = $Rect.T - 60
+    if ($x -lt 0 -or $y -lt 0) { $x = [int](($Rect.L + $Rect.R) / 2); $y = $Rect.T + 6 }
+    return @($x, $y)
+}
+
 function Test-SbHoverGuard {
     param([IntPtr]$Main, [int]$Dpi)
     $bad = @(); $read = @()
@@ -414,7 +423,8 @@ function Test-SbHoverGuard {
     $hotW = [int][Math]::Round(10 * $k); $hotH = [int][Math]::Round(8 * $k)
     $nrmW = [int][Math]::Round(8 * $k);  $nrmH = [int][Math]::Round(6 * $k)
     $wr = Get-WinRect $Main
-    $parkX = [Math]::Max(0, $wr.L - 60); $parkY = [Math]::Max(0, $wr.T - 60)
+    $parkX, $parkY = Get-ParkPoint $wr
+    $parkX = [int]$parkX; $parkY = [int]$parkY
 
     # 1) 不悬停: 六枚都必须一个墨迹像素都没有
     [UP]::SetCursorPos($parkX, $parkY) | Out-Null
@@ -688,6 +698,13 @@ if ($ww -le 0 -or $wh -le 0) {
 # 抓屏前再抬一次, 避免终端/IDE 盖住主窗导致整幅读成遮挡窗口
 [UP]::SetWindowPos($main, [IntPtr](-1), 0, 0, 0, 0, 0x0003) | Out-Null
 Start-Sleep -Milliseconds 700
+# 残差 #9 配套: 增减区 hover 会画三角 (色值恰为 102,102,102), 而 TextBox 的窗口矩形与
+# VScrollBar 是**重叠**的 (TextBox 右侧被滚动条盖住) —— 光标若正好停在滚动条上, 三角就落进
+# TextBox 取样区, 被 "深灰边框 (100,100,100) ±2" 判据当成深框 (GA 42410288905: edFrameDark=25)。
+# 抓屏前必须把光标停到窗体外面, 让这张基准图固定是"未悬停"态。
+$parkX0, $parkY0 = Get-ParkPoint $wr
+[UP]::SetCursorPos($parkX0, $parkY0) | Out-Null
+Start-Sleep -Milliseconds 500
 [UP]::RedrawWindow($main, [IntPtr]::Zero, [IntPtr]::Zero, 0x0185) | Out-Null
 Start-Sleep -Milliseconds 400
 $bmp = New-Object System.Drawing.Bitmap($ww, $wh)
