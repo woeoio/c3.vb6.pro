@@ -508,7 +508,17 @@ std::string CCodeGen::deliverToClassSlot(const std::string& clsPtr,
     if (!clsPtr.empty() && clsPtr.compare(0, 8, "vb6_cls_") == 0 && varHoldsComWrapper(argVal)) {
         return "(" + clsPtr + ")" + unwrapComVarExpr(argVal);
     }
-    return argVal;
+    // 晚绑定取回来的**对象**交进类槽: `vb6_ComCall(…)` / `vb6_ComGetProp(…)` 交回的是
+    // 堆上 VARIANT*(变体结果), 原样落进 `vb6_cls_X*` 临时量 = 把整枚 VARIANT 当实例读
+    // (首字段当 vtable、Text 读成空、key 读成 Empty)。对象档孪生 (ComCallObject /
+    // ComUnpackObject) 实参表完全一致, 只多"剥出 IDispatch 再换实例"这一步。
+    // 换形交给 comObjectRefFromCallExpr —— 与 Set / With 那两站同一句口径, 这里不另抄名单。
+    // 实测 tests/ucTreeView ClsTreeExplorer.OpenPath:
+    //   `cTVP_NodeExpand N.Childs(i)` 的实参临时量收的是 `vb6_ComCall(…,"Item",…)`,
+    //   被调方 `GetPathFromIDList(Node.key)` 读到 Empty ⇒ FindFiles("") 直接退出,
+    //   `C:\` 节点一颗子节点都没长出来 ⇒ "Open Cursors folder" 只停根节点、对话框文本为空
+    //   (真 VB6 是展开 `C:\Windows\` 并给出 `C:\Windows\Cursors`)。
+    return comObjectRefFromCallExpr(argVal);
 }
 
 
