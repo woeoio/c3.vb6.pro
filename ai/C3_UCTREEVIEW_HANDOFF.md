@@ -4041,3 +4041,18 @@ edFrameDark=25  sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0
 窗体贴边时退到标题栏中央，保证不压任何子控件），让基准图固定是未悬停态。
 `edFrameDark > 0 ⇒ FAIL` 一字未改。本机复跑整门：
 `edFrameDark=0 … sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120` PASS。
+
+### 55.8 采集污染修复后的 GA 全量
+
+修复提交 `5b020d6a`（`test(px): 抓屏前把光标停到窗体外面…`）触发 run **42411044244**：
+**22/22 success**，0 failure / 0 skipped。
+
+`Tests (vbp #2)` 的 96dpi 读数（同一行里既有旧的深框判据、也有新的 hover 判据，两者同时绿）：
+
+```
+edFrameDark=0 edTopDark=0 edEdge236=582/6 sb240=92.3% sbMid=6/6 sbLeft=6/6
+sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0 dpi=96
+```
+
+即：悬停三角按 DPI 折算出 8x6/6x5（120dpi 参考 10x8/8x6 的 0.8 倍），park/leave 墨迹 0；
+`edFrameDark` 回到 0，修的是采集口径而不是判据。
