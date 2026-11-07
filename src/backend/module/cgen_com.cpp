@@ -391,6 +391,21 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
                                    const std::string& valueExpr, bool rhsTransferred, bool outSlot,
                                    const std::string& slotElemType) {
     const std::string clsStruct = "vb6_cls_" + cIdent(className);
+    // 账 <ucTreeView 展开链>: 「class 槽收的是实例还是包装器」只在**这一位主人**里答。
+    // COM 交回来的工程类对象是 `vb6_ComObject` **包装器** (vb6_ComCallObject /
+    // vb6_ComGetObjectProp / Collection.Item 都交这一枚), 而 `vb6_cls_X*` 槽按字段读 ——
+    // 包装器当实例用 = 把它的 vtable 当第一个字段读。实测 tests/ucTreeView Form2:
+    //   `Set N = N.Childs(i)` 发成裸 `N = vb6_ComCallObject(...)` ⇒ 随后 `N.Childs.Count`
+    //   读成 0 (包装器 x86 偏移 12 才是实例), 三级路径一次都不往下走;
+    //   `Set x = r.Childs(1)` 后 `x.Text` 读出 0x44004300 一类的垃圾, Len() = 1140851328,
+    //   过程出口 `vb6_cls_Node_Release(包装器)` 直接 0xC0000374 (heap corruption)。
+    // 实参那一站早就做了这件事 (cgen_expr_call_arg_emit.inc 的 腿⑤ IsBoxed 块), 槽这一站
+    // 一直漏着 —— 两处同一问句, 这里不再手抄 IsBoxed/GetInstance 两行: UnboxVb6Instance
+    // 自带 IsWindow/可读/vtable 身份三闸, 不是包装器的值 (裸实例 / 外部 IDispatch / HWND)
+    // 原样交回, 所以对 `New`、裸类变量、rhsTransferred 各档都无害。
+    auto slotValue = [&](const std::string& t) -> std::string {
+        return "(" + t + ")vb6_ComObject_UnboxVb6Instance((void*)(" + valueExpr + "))";
+    };
     if (outSlot) {
         // 腿②' = 写进一枚**活在本过程之外**的槽 (ByRef 出参那座桥的写回站)。这里的判断只有一条
         // 加法: 取走一枚引用。**不退旧值** —— 那种槽今天整个在计数系统外面, 退它 = 多退一次;
@@ -398,7 +413,7 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
         // 腿②': Set 出参槽
         c_.emitLine("{  /* 账 #305 (甲) 腿②': Set 出参槽 " + commentStripBlockComments(target) + " */");
         c_.indent();
-        c_.emitLine(target + " = " + valueExpr + ";");
+        c_.emitLine(target + " = " + slotValue("void*") + ";");
         if (!rhsTransferred) {
             c_.emitLine("if (" + target + ") " + clsStruct + "_AddRef(" + target + ");");
         }
@@ -421,7 +436,7 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
         c_.emitLine(slotElemType + "* " + addrSlot + " = &(" + target + ");");
         c_.emitLine(slotElemType + " " + oldSlot + " = " + deref + ";");
         if (!valueExpr.empty()) {
-            c_.emitLine(deref + " = " + valueExpr + ";");
+            c_.emitLine(deref + " = " + slotValue(slotElemType) + ";");
             if (!rhsTransferred) {
                 c_.emitLine("if (" + deref + ") " + clsStruct + "_AddRef(" + deref + ");");
             }
@@ -437,7 +452,7 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
     c_.indent();
     c_.emitLine(clsStruct + "* " + oldSlot + " = " + target + ";");
     if (!valueExpr.empty()) {
-        c_.emitLine(target + " = " + valueExpr + ";");
+        c_.emitLine(target + " = " + slotValue(clsStruct + "*") + ";");
         if (!rhsTransferred) {
             c_.emitLine("if (" + target + ") " + clsStruct + "_AddRef(" + target + ");");
         }
@@ -829,8 +844,17 @@ void CCodeGen::emitClassFieldAccessors(Module& module) {
             //     指针 (Dictionary/Collection 等), 直接传出, 不做包装.
             fe.getLines.push_back("r = vb6_VariantObject((void*)me->" + fld + ");");
             fe.letLines.push_back("me->" + fld + " = (value.vt == vb6_vtDispatch) ? value.pdispVal : NULL;");
+        } else if (fvt == Vb6Type::Variant && fieldCT == "vb6_VARIANT") {
+            // (f) Variant 字段 → 深拷贝进出. 真 VB6 把 `Public key As Variant` 同样暴露成
+            //     Property Get/Let, 值语义是副本. 以前这一档落进下面的空体存根: getter 恒答
+            //     Empty, setter 丢弃写入.
+            //     实测 tests/ucTreeView: ClsTreeExplorer.OpenPath 逐级比对
+            //     `ArrIDLIST(N.Childs(i).key)`, 读回 Empty → ArrIDLIST(0) → 三级全不匹配
+            //     → "Open Cursors folder" 既不展开也不选中(只剩根节点), 对话框文本为空.
+            fe.getLines.push_back("vb6_VariantCopy(&r, &me->" + fld + ");");
+            fe.letLines.push_back("vb6_VariantAssign(&me->" + fld + ", value);");
         }
-        // 说明: 判不出可映射 C 类型的字段 (UDT / 接口值类型 / Variant / 未知外部类型)
+        // 说明: 判不出可映射 C 类型的字段 (UDT / 接口值类型 / 未知外部类型)
         // 不跳过, 而是生成**空体存根** —— getter 返回 r 的初值 (Empty), setter 忽略
         // 写入. 必须生成定义的原因: dll_entry.c 在另一个编译单元里为 publicFieldNames
         // 无条件建桥接 (那边看不到这里的类型判定), 少一个定义就是 LNK2019 (实测 96 个).
