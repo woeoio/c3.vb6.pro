@@ -287,6 +287,7 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         const bool hasPaint = hasProc("UserControl_Paint");
         const bool hasShow = hasProc("UserControl_Show");
         const bool hasResize = hasProc("UserControl_Resize");
+        const bool hasTerminate = hasProc("UserControl_Terminate");
         // Fix 112d: InitProperties 负责成员数组的 ReDim/默认值 (如 ucProgressCircular
         // 的 m_PF_Colors). 运行期没有 PropertyBag, 按 VB6 语义 InitProperties 是
         // "无持久化数据时的属性初始化", 归入 init 一起调用, 否则 Draw 读未分配数组 → AV.
@@ -479,7 +480,16 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         if (hasResize) c_.emitLine("    vb6_" + ctl + "_UserControl_Resize((vb6_cls_" + ctl + "*)me);");
         c_.emitLine("}");
         c_.emitLine("static void vb6_" + ctl + "_ucHostTerminate(void* me) {");
-        c_.emitLine("    vb6_cls_" + ctl + "_Destroy((vb6_cls_" + ctl + "*)me);");
+        // 账 (ucTreeView 重复点击刀, 2026-11-07): 宿主销毁**不能**直接 Destroy 实例。
+        // 实例是引用计数的 (`vb6_cls_X_New` 记 1, 窗体代码 `Set cTE.cTVP = TVP` 再 +1),
+        // 宿主只持有其中一枚; 直接 Destroy 会把还被外部对象握着的指针连内存一起放掉 ——
+        // 下一次 `Set cTE = New ClsTreeExplorer` 释放旧对象 → Release 那枚已释放的
+        // UC 实例 ⇒ 0xC0000005 / 0xC0000374 (重复开 Form2 必现)。
+        // 正解 = 先发 UserControl_Terminate, 再交回宿主那一枚引用; 最后一个引用
+        // 放手时 Release 自己走 Destroy。
+        if (hasTerminate)
+            c_.emitLine("    vb6_" + ctl + "_UserControl_Terminate((vb6_cls_" + ctl + "*)me);");
+        c_.emitLine("    vb6_cls_" + ctl + "_Release(me);");
         c_.emitLine("}");
 
         int ucScaleMode = 1;

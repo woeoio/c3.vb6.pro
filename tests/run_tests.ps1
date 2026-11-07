@@ -9601,6 +9601,24 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_lwa_PathIsURLA(_own_'
     )
 
+    # 账 (2026-11-07, ucTreeView 重复点击刀): 「再次 Show 已销毁窗体」闭环的两条形状断言。
+    # 实测 (px 夹具 + 自建探针, 同一进程连续点五按钮 3 轮): 修前第 2/3 轮 5 窗全 OPEN-FAIL,
+    # 且被点窗体在两轮之间进程 0xC0000005 (Form5) / 0xC0000374 (Form2)。
+    # ① WM_DESTROY 必须把默认实例三槽复位 (否则 load 见 hwnd 非空直接早退, Show 打在死句柄上);
+    Test-EmitcShape "uctreeview_form_reload_reset" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'vb6_hwnd_Form5 = NULL;',
+        'vb6_formLoaded_Form5 = 0;',
+        'vb6_formLoading_Form5 = 0;'
+    )
+    # ② UC 宿主销毁只能交回**自己那一枚**引用 (实例是引用计数的; 直接 Destroy 会把还被
+    #    ClsTreeExplorer.cTVP 握着的实例连内存一起放掉 ⇒ 下次 Form_Load 释放旧对象时 AV)。
+    Test-EmitcShape "uctreeview_uc_host_terminate_release" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'vb6_cls_ucTreeViewPlus_Release(me);'
+    )
+    Test-EmitcAbsent "uctreeview_uc_host_terminate_no_force_destroy" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'vb6_cls_ucTreeViewPlus_Destroy((vb6_cls_ucTreeViewPlus*)me);'
+    )
+
     Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86" `
         -AssetDir "img" -AssetFile @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml") `
         -PixelAssert @("guisample\uctreeview_px.ps1")

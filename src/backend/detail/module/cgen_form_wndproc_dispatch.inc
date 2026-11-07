@@ -579,6 +579,17 @@
     // P20-44: 窗体销毁时撤销该窗体控件的 OLE 放置目标登记 (RevokeDragDrop 对
     // 已销毁的 hwnd 无害, 但不清表会留悬垂 hwnd 在 g_targets 里)。
     c_.emitLine("vb6_OLEDrop_RevokeAll();");
+    // 账 (ucTreeView 重复点击刀, 2026-11-07): 窗体销毁后必须把默认实例的三个槽
+    // 复位成「未加载」。此前不清 ⇒ 第二次 `F.Show` 拿到的是已销毁的 hwnd:
+    //   · `vb6_form_load_F` 见 hwnd 非空直接早退 (Form_Load 不重跑);
+    //   · `ShowWindow`/事件派发打在死句柄上 ⇒ 点了没反应 (OPEN-FAIL);
+    //   · 该 hwnd 值被系统复用给别的窗口时, 后续 WM_COMMAND 全打错对象。
+    // 实测 (UC 五窗夹具, 连续 3 轮): 第 1 轮 5 窗全开, 第 2/3 轮全部 OPEN-FAIL,
+    // 且销毁后读回 hwnd=0x1bf0bb8 / formLoaded=1。VB6 语义 = Unload 之后默认实例
+    // 回到未加载, 下次引用隐式重载 ⇒ 这里在 Form_Terminate 之后统一清空。
+    c_.emitLine("vb6_hwnd_" + cIdent(formName) + " = NULL;");
+    c_.emitLine("vb6_formLoaded_" + cIdent(formName) + " = 0;");
+    c_.emitLine("vb6_formLoading_" + cIdent(formName) + " = 0;");
     c_.emitLine("break;");
     c_.dedent();
     c_.emitLine("}");

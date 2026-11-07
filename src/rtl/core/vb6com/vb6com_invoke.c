@@ -163,57 +163,74 @@ static void vb6_ComLateBindMiss(const wchar_t* site, const wchar_t* name, void* 
  *   QI(IID_IDispatch) == p+0x10 (换指针!), 在该指针上 GetIDsOfNames("Handle")
  *   得 dispid=0, Invoke 得 65579 = 图标的 hIcon。
  *
- * 修法 = VB6 那条规则本身: 晚绑定前先换到 IDispatch 视图。逐调用一发 QI 太贵,
- * 而「同一 vtable ⇒ 同一布局 ⇒ 同一偏移」是 COM 的硬性质 ⇒ 按 **vtable** 缓存
- * 「本指针到它 IDispatch 视图的字节偏移」: 真 IDispatch 缓存 0 (原路零改动);
- * QI 不认的伪 vtable (VTableHandle 那种手写表) 缓存 -1 (同样原路, 不能把它们
- * 当野指针拒掉); 只有异视图才真付一次 QI。取出的视图 AddRef、用完 Release
- * (IUnknown 三槽在所有视图里同址), 所以调用期间视图一定活着。 */
-typedef struct { void* vtbl; int32_t off; } Vb6DispViewEnt;
+ * 修法 = VB6 那条规则本身: 晚绑定前先换到 IDispatch 视图。取出的视图由 QI 给出引用,
+ * 用完 Release (IUnknown 三槽在所有视图里同址), 所以调用期间视图一定活着。
+ *
+ * 账 (ucTreeView Form5 刀, 2026-11-07): 原实现按 **vtable** 缓存「到 IDispatch 视图
+ * 的字节偏移」, 前提是「同一 vtable ⇒ 同一布局 ⇒ 同一偏移」。MSXML6 的 DOM 节点把这个
+ * 前提打穿 —— 同一个 vtable (6FB52600) 的两个 IXMLDOMElement 实例, QI(IID_IDispatch)
+ * 实测分别给 +0x2cd8 与 +0x6048: 视图指针是**按实例**分配的 (同一实例上稳定, 跨实例
+ * 不共享偏移)。缓存命中旧偏移后 `disp+旧偏移` 当视图 AddRef ⇒ 读 [0x70+8] ⇒
+ * 0xC0000005 (av read 0x78)。触发条件 = 同一进程先开过载 XML 的窗体, 再开 Form5。
+ * 现在缓存**只沉淀类级结论**「QI 返回同一指针 / QI 不认」; 异视图一律当场 QI 并直接
+ * 持有那枚引用 —— 代码里不再有任何「预测偏移」的算术。 */
+typedef struct { void* vtbl; } Vb6DispViewEnt;   /* 只记「原路可用」的类 */
 #define VB6_DISPVIEW_CACHE 64
 static Vb6DispViewEnt g_dispView[VB6_DISPVIEW_CACHE];
 static int32_t g_dispViewCount = 0;
 static int32_t g_dispViewNext = 0;
 
-static int32_t vb6_ComDispViewOffset(void* disp) {
-    if (!disp) return -1;
-    if (!vb6_ComIsDispatchable(disp)) return -1;
-    void* vtbl = *(void**)disp;
+static int32_t vb6_ComDispViewKnown(void* vtbl) {
     for (int32_t i = 0; i < g_dispViewCount; i++)
-        if (g_dispView[i].vtbl == vtbl) return g_dispView[i].off;
-    int32_t off = -1;
-    void* d = NULL;
-    if (SUCCEEDED(((IUnknown*)disp)->lpVtbl->QueryInterface((IUnknown*)disp, &IID_IDispatch, &d)) && d) {
-        off = (int32_t)((char*)d - (char*)disp);
-        ((IUnknown*)d)->lpVtbl->Release((IUnknown*)d);
-        if (off < 0) off = -1;   /* 负偏移理论上不存在; 当「不动」处理 */
-    }
+        if (g_dispView[i].vtbl == vtbl) return 1;
+    return 0;
+}
+
+static void vb6_ComDispViewRemember(void* vtbl) {
     Vb6DispViewEnt ent;
-    ent.vtbl = vtbl; ent.off = off;
+    ent.vtbl = vtbl;
     if (g_dispViewCount < VB6_DISPVIEW_CACHE) g_dispView[g_dispViewCount++] = ent;
     else { g_dispView[g_dispViewNext] = ent;
            g_dispViewNext = (g_dispViewNext + 1) % VB6_DISPVIEW_CACHE; }
-    return off;
 }
 
 /* 交回本次调用该用的接收者; *owned 非空 = 借出的一枚引用, 用完交给 ...Out。 */
 static void* vb6_ComDispViewIn(void* disp, void** owned) {
+    void* vtbl;
+    void* d = NULL;
     *owned = NULL;
     /* 账 #305 第三百四十二刀: 非可分派接收者 (BSTR/UDT/野指针) 在这里就拦下 ——
-     * 原先 DispViewOffset 对它直接 QueryInterface, 间接调用字符串头冒充的
+     * 原先对它直接 QueryInterface, 间接调用字符串头冒充的
      * vtable 槽 => AV (GUISample AttachPane 链, av read 0x2e0032 实测)。
      * 拦下后原样交回, Rcv 的 getDispid 走 not-found 安全路 (与 ComCall 的
      * C3_LATEBIND_MISS 同口径, 响亮不崩)。 */
-    if (disp && !vb6_ComLateBindIsPseudo(disp) && !vb6_ComIsDispatchable(disp)) {
+    if (!disp) return disp;
+    /* 宿主伪对象 (字体/Extender/HWND/控件集合…): 不是 IDispatch, 首槽也不是 vtable,
+       **不能**在这里解引用 —— 原样交回, 由宿主模型应答。 */
+    if (vb6_ComLateBindIsPseudo(disp)) return disp;
+    if (!vb6_ComIsDispatchable(disp)) {
         vb6_ComLateBindMiss(L"DispView", L"(receiver)", disp);
         return disp;
     }
-    int32_t off = vb6_ComDispViewOffset(disp);
-    if (off <= 0) return disp;
-    void* d = (char*)disp + off;
-    ((IUnknown*)d)->lpVtbl->AddRef((IUnknown*)d);
-    *owned = d;
-    return d;
+    vtbl = *(void**)disp;
+    if (vb6_ComDispViewKnown(vtbl)) return disp;   /* 类级结论: 原路 (真 IDispatch / QI 不认) */
+    if (SUCCEEDED(((IUnknown*)disp)->lpVtbl->QueryInterface((IUnknown*)disp, &IID_IDispatch, &d)) && d) {
+        if (d == disp) {
+            ((IUnknown*)d)->lpVtbl->Release((IUnknown*)d);
+            vb6_ComDispViewRemember(vtbl);
+            return disp;
+        }
+        /* 异视图: 偏移按实例变, 不缓存; 直接持有 QI 给的这枚引用 */
+        if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+            fprintf(stderr, "[C3_COM] DispView alt vtbl=%p disp=%p view=%p\n", vtbl, disp, d);
+            fflush(stderr);
+        }
+        *owned = d;
+        return d;
+    }
+    /* QI 不认 (手写伪 vtable): 原路交回, 不能当野指针拒掉 */
+    vb6_ComDispViewRemember(vtbl);
+    return disp;
 }
 
 static void vb6_ComDispViewOut(void* owned) {

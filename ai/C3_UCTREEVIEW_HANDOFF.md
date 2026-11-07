@@ -2891,6 +2891,89 @@ pwsh -NoProfile -File tests\guisample\uctreeview_px.ps1 -Exe .temp\ucb4\Proyecto
 > RTL 改了 `vb6forms_draw.c` / `vb6forms_ctrl.c` 后**必须** `touch src\driver\c3rtl.rc` 再 build，
 > 否则 ninja 报 "no work to do"、`C3.exe` 时间戳不动（本轮踩过）。
 
+## 37. 重复点击 `0xc0000005` 闭环（第 2 块，2026-11-07）
+
+### 37.1 结论：不是一处，是三处
+
+| # | 现象 | 根因 | 落点 |
+|---|------|------|------|
+| A | `MENU/TOOLS` 首开 `0xc0000005`（`av read 0x740077`） | 晚绑定「IDispatch 视图偏移」按 **vtable** 缓存；MSXML6 的 DOM 节点偏移是**按实例**分配的（同一 vtable `6FB52600` 实测 `+0x2cd8` / `+0x6048`），命中旧偏移后 `disp+旧偏移` 直接 AddRef 野指针 | `vb6com_invoke.c` `vb6_ComDispViewIn` |
+| B | 第 2/3 轮 5 窗全 `OPEN-FAIL` | 窗体 WM_DESTROY **没清**默认实例槽；`vb6_form_load_X` 见 `hwnd` 非空直接早退，`ShowWindow` 打在死句柄上 | `cgen_form_wndproc_dispatch.inc` WM_DESTROY |
+| C | 重建第 2 轮 `0xC0000374`（page heap 下为 AV `read 0xbde2efc`） | UC 宿主销毁时**直接 `Destroy` 引用计数实例**，而 `ClsTreeExplorer.cTVP` 还握着它 ⇒ 下次 `Set cTE = New …` 释放旧对象时命中已释放内存 | `cgen_form.cpp` `vb6_<ctl>_ucHostTerminate` |
+
+### 37.2 取证（先红）
+
+探针 `.temp\probe_repeat.ps1`（不入库）按 `Form1!Command3(i)` 的 5 枚按钮同进程连点 3 轮，
+每步读 `Proyecto1.map` 里的 `_vb6_hwnd_/formLoaded_/formLoading_FormN` 三个静态槽（`ReadProcessMemory`）：
+
+```
+r1 Tree Explorer(Form2)  open=0x2a104fc 'Tree Explorer'   pre[hwnd=0x0 loaded=0 loading=0]
+      closed gone=True  post-close[hwnd=0x2a104fc loaded=1 loading=0]     <-- B: 销毁后槽没清
+r1 Corporate Hierarchy   open=... ok
+r1 Drag and Drop         open=... ok
+r1 Menu / Tools(Form5)   CLICK-ok=1 -> PROCESS-DIED                              <-- A
+```
+
+- **A 的读数**（`C3_COM_TRACE=1`）：崩溃前最后一条是
+  `[C3_COM] GetProp entry: name=childNodes`，接收者 `disp=05569F30`；
+  同一 vtable 的两个实例 QI 结果：
+  `DispViewQI vtbl=6FB52600 off=0x2cd8`（Form3 的 element，工作正常）vs
+  `off=0x6048`（Form5 的 element）。缓存命中的旧值 `0x2c30` 让
+  `05569F30+0x2c30=0556CB60`，其首 dword 是 `0x70` ⇒ AddRef 读 `[0x70+8]`
+  即 `av read target=0x78`，rva `0x46252`（`vb6_ComDispViewIn+0xf2`）。
+  把缓存关掉（临时 env `C3_COM_NOVIEWCACHE=1`）后 Form5 当场不再崩 —— 判据闭合。
+- **B 的读数**：如上 `post-close[hwnd=0x2a104fc loaded=1 loading=0]`；
+  第 2 轮 `Show` 走 `vb6_form_show_Form5+0x8` → `vb6_form_load_Form5+0x91`
+  （+0x91 已过 `if (vb6_hwnd_Form5) return;` 的早退，说明那次是真重建；
+  未修时这段根本不出现，直接 `OPEN-FAIL`）。
+- **C 的读数**：隔离跑 `-Only Form2`，第 2 次打开即死。
+  常规堆报 `0xC0000374`，检测点在 `vb6_BSTR_FromANSIBufFixed`（下一次分配）；
+  给 `Proyecto1.exe` 挂 IFEO page heap（`GlobalFlag=0x02000000`、`PageHeapFlags=0x3`，
+  用完已删）后立刻变成 **首次写入即 AV**，栈：
+  `vb6_cls_ucTreeViewPlus_Release ← vb6_cls_ClsTreeExplorer_Destroy+0x10b
+   ← vb6_cls_ClsTreeExplorer_Release+0x49 ← vb6_Form2_Form_Load+0x27`。
+
+### 37.3 修法
+
+1. `vb6_ComDispViewIn`：缓存只沉淀**类级结论**（"QI 返回同一指针" / "QI 不认"）；
+   异视图一律当场 QI 并直接持有那枚引用，删掉全部"预测偏移"算术。
+   宿主伪对象先于 `IsDispatchable` 拦下（首槽不是 vtable，不能解引用）。
+2. WM_DESTROY 末尾（在 `Form_Terminate` / `OLEDrop_RevokeAll` 之后）发
+   `vb6_hwnd_X = NULL; vb6_formLoaded_X = 0; vb6_formLoading_X = 0;`。
+3. `vb6_<ctl>_ucHostTerminate`：改成「先 `UserControl_Terminate`（若 .ctl 有），
+   再 `vb6_cls_<ctl>_Release(me)`」，宿主只交回自己那一枚引用。
+
+### 37.4 验证（后绿）
+
+- 探针 3 轮 × 5 窗 = **15/15 全开**，每个窗体 `post-close[hwnd=0x0 loaded=0]`，进程未死。
+- 像素夹具自带重复段（`tests\guisample\uctreeview_px.ps1`）：
+  `repeat[... 1/2/3]=open sync=True close=True` ×5 全 True。
+- 形状断言（`run_tests.ps1`，ucTreeView 段）：
+  `uctreeview_form_reload_reset`、`uctreeview_uc_host_terminate_release`、
+  `uctreeview_uc_host_terminate_no_force_destroy`。
+  旧产物红：旧编译器 `--emit-c` 三条复位行 0 命中、`…Destroy((vb6_cls_ucTreeViewPlus*)me)` 1 命中。
+- 像素读数与本轮 §36.3 逐项一致（Agenda `4358/8107/8359` 未回退）。
+
+### 37.5 遗留（不阻塞本块）
+
+- 销毁后窗体级类变量（`Form2.mExplorer`）仍留到下次 `Form_Load` 才释放 ⇒ 旧 UC 实例
+  多活一轮（只泄漏、不再崩）。要彻底对齐 VB6 的"Unload 即终止窗体实例"，
+  得给每个窗体生成 `vb6_form_terminate_X()` 统一释放模块级对象变量，另案。
+- 第 1 块的下一层（量宽偏小 / Tree Explorer 少 C:/D: 两行 / `UserControl.Cls`）
+  仍按 §36.4 挂账。
+
+### 37.6 复现命令
+
+```powershell
+& .\.build\C3.exe tests\ucTreeView\Proyecto1.vbp --output-dir .temp\ucb4 --arch x86
+pwsh -NoProfile -File .temp\probe_repeat.ps1                 # 3 轮 × 5 窗
+pwsh -NoProfile -File .temp\probe_repeat.ps1 -Only Form2     # 单窗隔离
+# page heap（仅诊断用，跑完删）：
+# HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\Proyecto1.exe
+#   GlobalFlag(REG_DWORD)=0x02000000, PageHeapFlags(REG_SZ)="0x3"
+```
+
+
 
 
 
