@@ -2074,3 +2074,63 @@ A/B 做法（脚本 `.temp\enc_ab.ps1`；两份均在 `.temp\vb6enc\` 新建，�
    不构成语义差异。
 5. 附注：`D:\` 目录今天 08:46 存在 `Proyecto1.exe`（331776 B），与基准补丁产物同尺寸；该 exe 的生成
    条件未在现场取证（`Form1.log`/`ucTreeViewPlus.log` 仍为失败内容），不作为基准证据。
+
+#### 29.3 真 VB6 基准登记（后续五窗对照一律用这枚）
+
+| 项 | 值 |
+|---|---|
+| 绝对路径 | `c:\Users\Administrator\Documents\c3.vb6.pro\.temp\vb6ref\ucTreeView\Proyecto1.exe` |
+| 大小 | 331776 B |
+| mtime | 2026-11-07 08:59:19 |
+| SHA256 | `24EAAFB2645C8C984D9D937494F703D3B993A870BFFD8FE73A8F04790E91CDFD` |
+| 来源 | `tests\ucTreeView` 原字节副本 + 仅把 `0,15`→`0.15`（`tests\guisample\uctv_vb6_baseline.ps1`） |
+
+### 30 夹具保真核对 + `0,15` 的 C3 语义（2026-11-07）
+
+#### 30.1 逐字节比对（`D:` 原件 vs `tests\ucTreeView` 夹具）
+
+方法（脚本 `.temp\cmp_fixture.ps1` / `.temp\nonascii_lines.ps1`）：把 `D:` 两份文件按 UTF-8 解码后
+**重编码为 cp1252**，与夹具原始字节逐字节比；再按行拆分比对文本。
+
+| 文件 | D 字节 | 夹具字节 | 差 | CRLF 行数 | 文本相等 | D→cp1252 后字节相等 |
+|---|---|---|---|---|---|---|
+| Form1.frm | 42417 | 42415 | +2 | 1313 / 1313 | **True** | **True** |
+| ucTreeViewPlus.ctl | 106567 | 106553 | +14 | 3003 / 3003 | **True** | **True** |
+
+差值来源逐字符清单（夹具 cp1252 偏移 / 行号 / 原文，全部是**西语注释**，无 UI 文案）：
+
+- Form1.frm（2 个）：`0x9143 'í'` 行 1139 `' Convertir el nodo raíz …`；`0x91DE 'ó'` 行 1145
+  `' Función recursiva …`。
+- ucTreeViewPlus.ctl（14 个）：`0xAAB4/0xAAC2 'ú/ó'` 行 1267；`0xAB1F/0xAB2E/0xAB43 'á/í/ú'` 行 1269；
+  `0xAB8F 'ú'` 行 1273；`0xABE8/0xABF6 'ú/ó'` 行 1276；`0xAC34/0xAC64 'í/ó'` 行 1279；
+  `0xACBD 'ú'` 行 1281；`0xB081 'á'` 行 1312；`0xB180 'ú'` 行 1321；`0xB999 'ú'` 行 1387。
+
+**结论**：`D:` 是夹具的**无损转码**（同文本、同行数，非 ASCII 字符单字节→双字节 UTF-8，恰好
++2/+14 字节）。**夹具没有转码损坏，也没有丢字符**（无"丢失/改字"项可还原），因此：
+不还原、不重编 C3、窗口文案不变；此前五窗的**文字差仍全部归编译器/RTL 侧**，不需要改归因。
+（唯一需要登记的更正：`D:` 与夹具"不等长"是编码造成的字节长度差，不是内容缺失。）
+
+#### 30.2 `=   0,15` 的解析实测（当前 `.build\C3.exe` 重新 `--emit-c`）
+
+取证：`.temp\emit_cur.ps1` → `--emit-c --arch x86`，`EXIT=0`，全文 `.temp\emit_cur.txt`（958418 B）。
+
+- `.ctl` 设计期子控件块（`ucTreeViewPlus.ctl:31/50` 两行 `SmoothScrollFactor=   0,15`）在发码里
+  **完全没有对应的值**；全文 `SmoothScrollFactor` 仅有两类：
+  1. `.temp\emit_cur.txt:7052/7057`：`vb6_ComSetProp(…, L"SmoothScrollFactor", vb6_ComPackInt(1))`
+     —— 来自源码 `UserControl_ReadProperties` 的 `ucScrollbar1/2.SmoothScrollFactor = 1`（运行期强制），
+     **不是**设计期值；
+  2. `.temp\emit_cur.txt:12196`：`me->m_SinSmoothScrollFactor = 0.14999999999999999;`
+     —— 来自 `ucScrollbar.ctl` 的 `Initialize` **代码**，同样不是设计期值。
+- 子 UC 的创建只有几何：`.temp\emit_cur.txt:2860/2861`
+  `vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", …, 240,3360,4095,135 / 4560,120,135,3015)`；
+  RTL 该函数签名也只收 `left/top/width/height`（`src\rtl\core\vb6forms\uc\uc_host.c:893`），无属性通道。
+  `L"Orientation"` 同理只出现在属性包读写默认值（`emit_cur.txt:12299/12349`），设计期值 `Orientation=1`
+  也没进发码。
+- 结论（C3 侧）：`0,15` **没有被解析成任何数**（既不是 `0`、不是 `15`、也不是 `0.15`），而是随整块
+  "设计期非几何属性"一起被**丢弃**；运行期实际生效值是 `1`（源码显式赋值）。
+- VB6 侧（实测）：原夹具 `/make` **exit=1**，`行 31/50 属性 SmoothScrollFactor 有无效值` ⇒ 本机 zh-CN
+  下 VB6 **不产生值**（逗号小数被拒）。逗号小数区域（作者环境）语义应为 `0.15`（`FixDec` 佐证），
+  但**无法用几何反推**：两侧运行期都会被 `ucTreeViewPlus` 的 `= 1` 覆盖。
+- 判定：这**不是 C3 的字面量（逗号小数）解析缺陷**（它根本没读该值），不需要为它单独立夹具；
+  真实差异是一条独立的"`.ctl` 设计期非几何属性不落地"缺口（Orientation/字体等同样受影响），
+  与五窗文字/字体差可能相关，登记待办，不在本轮混入五窗修复。
