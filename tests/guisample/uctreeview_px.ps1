@@ -28,7 +28,11 @@
 # 全都解析不出来)。因此 C# 段刻意**不用任何 System.Drawing 类型** —— 只留 P/Invoke +
 # byte[] 统计; 位图/抓屏/存 PNG 走 PowerShell 运行时 ([System.Drawing.Bitmap] 可直接用)。
 # 全流程统一 pwsh, 不再有 5.1 分支。
-Add-Type -AssemblyName System.Drawing.Common
+# CI runner 的 pwsh 里**没有** System.Drawing.Common 这个程序集名 (实测
+# ASSEMBLY_NOT_FOUND → 后面 [System.Drawing.Bitmap] 全 TypeNotFound), 而本机 7.6
+# 两个名字都能装。以 System.Drawing 为主(= 其它 px 脚本统一口径), 失败再退 Common。
+try { Add-Type -AssemblyName System.Drawing -ErrorAction Stop }
+catch { Add-Type -AssemblyName System.Drawing.Common }
 Add-Type @"
 using System; using System.Text; using System.Runtime.InteropServices;
 public class UP {
