@@ -33,6 +33,129 @@
 // Enable/Value/range（range 改成 0..100/page10 也照样纯白，.temp/sb_range.ps1）。
 // 处理：创建后子类化，按上面的实测观感自绘（不改尺寸、不改事件通道）。
 
+// 残差 #9: hover 时增减区浮现上下两枚三角 (2026-11-08 真 VB6 取证)
+// 实测 (.temp/vb6ref/shoot_hover.ps1 → .temp/vb6ref/shots/*_num_metrics.json, 120dpi, 33x31):
+//   光标不在控件上 (park) / 移开后 (leave): 全区只有 240 底 + 左边 1px 白 + 中线 1px 白, ink=0
+//   光标在控件上:  上下两枚三角**同时**出现;
+//     被悬停的那半 (hot)    = 底宽 10 / 高 8, 三角色 102,102,102
+//     另一半     (normal) = 底宽  8 / 高 6, 三角色 133,133,133
+//   几何 (33x31): 上三角 y4..11(hot)/y5..10(normal) 下三角 y20..27(hot)/y21..26(normal),
+//     各自在所在半区内水平居中、垂直居中; x12..21(hot)/x13..20(normal)。
+// 实现: 子类过程接 WM_MOUSEMOVE + TrackMouseEvent(TME_LEAVE) → WM_MOUSELEAVE, 把 hot 半区
+//       记在窗口属性上并重绘; 三角尺寸按上面的实测比例随 DPI 缩放 (96dpi ⇒ 8x6 / 6x5)。
+#define VB6_SBAR_TRACK_PROP L"VB6_SBar_Track"
+#define VB6_SBAR_HOT_PROP   L"VB6_SBar_Hot"
+
+static void vb6_ScrollBarTri(HDC dc, int x, int y, int w, int h, int dir, COLORREF col) {
+    /* dir: 0=上 1=下 2=左 3=右; (x,y,w,h) 是三角的**精确包围盒**。
+       逐行 FillRect 而不是 Polygon: GDI 的 Polygon 填充会吃掉最右/最下一像素,
+       实测 10x8 只能落 8x6 (真 VB6 是 10x8), 包围盒对不齐。 */
+    HBRUSH br = CreateSolidBrush(col);
+    HBRUSH old;
+    int i, span, off;
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    old = (HBRUSH)SelectObject(dc, br);
+    if (dir == 0 || dir == 1) {
+        for (i = 0; i < h; i++) {
+            RECT r;
+            int k = (dir == 0) ? i : (h - 1 - i);   /* k: 0=尖  h-1=底 */
+            span = (h > 1) ? (1 + (w - 1) * k / (h - 1)) : w;
+            if (span > w) span = w;
+            off = (w - span) / 2;
+            r.left = x + off; r.right = r.left + span;
+            r.top = y + i;    r.bottom = r.top + 1;
+            FillRect(dc, &r, br);
+        }
+    } else {
+        for (i = 0; i < w; i++) {
+            RECT r;
+            int k = (dir == 2) ? i : (w - 1 - i);   /* k: 0=尖  w-1=底 */
+            span = (w > 1) ? (1 + (h - 1) * k / (w - 1)) : h;
+            if (span > h) span = h;
+            off = (h - span) / 2;
+            r.top = y + off;  r.bottom = r.top + span;
+            r.left = x + i;   r.right = r.left + 1;
+            FillRect(dc, &r, br);
+        }
+    }
+    SelectObject(dc, old);
+    DeleteObject(br);
+}
+
+static void vb6_ScrollBarPaintArrows(HDC dc, HWND hwnd) {
+    int hot = (int)(INT_PTR)GetPropW(hwnd, VB6_SBAR_HOT_PROP);
+    RECT rc;
+    int dpi, hotW, hotH, nrmW, nrmH, vertical, size, mid;
+    if (hot == 0) return;
+    GetClientRect(hwnd, &rc);
+    dpi = GetDeviceCaps(dc, LOGPIXELSY);
+    if (dpi < 96) dpi = 96;
+    /* 120dpi: 10x8 / 8x6 —— 与真 VB6 实拍同尺寸; 其它 DPI 等比 (96dpi ⇒ 8x6 / 6x5) */
+    hotW = (10 * dpi + 60) / 120;
+    hotH = ( 8 * dpi + 60) / 120;
+    nrmW = ( 8 * dpi + 60) / 120;
+    nrmH = ( 6 * dpi + 60) / 120;
+    vertical = (GetWindowLongW(hwnd, GWL_STYLE) & SBS_VERT) != 0;
+    if (vertical) {
+        size = rc.bottom - rc.top;
+        if (size < 3) return;
+        mid = rc.top + size / 2;
+        if (mid - rc.top > 0) {                    /* 上半: 向上三角 */
+            int half = mid - rc.top;
+            int hh = (hot == 1) ? hotH : nrmH;
+            int ww = (hot == 1) ? hotW : nrmW;
+            int top, left;
+            if (hh > half) hh = half;
+            if (ww > rc.right - rc.left) ww = rc.right - rc.left;
+            top  = (rc.top + (mid - 1) + 2 - hh) / 2;   /* 半区内垂直居中 (实测同式) */
+            left = (rc.right - rc.left - ww + 1) / 2;
+            vb6_ScrollBarTri(dc, left, top, ww, hh, 0,
+                             (hot == 1) ? RGB(102,102,102) : RGB(133,133,133));
+        }
+        if (rc.bottom - mid - 1 > 0) {             /* 下半: 向下三角 */
+            int half = rc.bottom - mid - 1;
+            int hh = (hot == 2) ? hotH : nrmH;
+            int ww = (hot == 2) ? hotW : nrmW;
+            int top, left;
+            if (hh > half) hh = half;
+            if (ww > rc.right - rc.left) ww = rc.right - rc.left;
+            top  = ((mid + 1) + (rc.bottom - 1) + 2 - hh) / 2;
+            left = (rc.right - rc.left - ww + 1) / 2;
+            vb6_ScrollBarTri(dc, left, top, ww, hh, 1,
+                             (hot == 2) ? RGB(102,102,102) : RGB(133,133,133));
+        }
+    } else {
+        size = rc.right - rc.left;
+        if (size < 3) return;
+        mid = rc.left + size / 2;
+        if (mid - rc.left > 0) {                   /* 左半: 向左三角 (无 VB6 样本, 镜像) */
+            int half = mid - rc.left;
+            int ww = (hot == 1) ? hotW : nrmW;
+            int hh = (hot == 1) ? hotH : nrmH;
+            int left, top;
+            if (ww > half) ww = half;
+            if (hh > rc.bottom - rc.top) hh = rc.bottom - rc.top;
+            left = (rc.left + (mid - 1) + 2 - ww) / 2;
+            top  = (rc.bottom - rc.top - hh + 1) / 2;
+            vb6_ScrollBarTri(dc, left, top, ww, hh, 2,
+                             (hot == 1) ? RGB(102,102,102) : RGB(133,133,133));
+        }
+        if (rc.right - mid - 1 > 0) {              /* 右半: 向右三角 */
+            int half = rc.right - mid - 1;
+            int ww = (hot == 2) ? hotW : nrmW;
+            int hh = (hot == 2) ? hotH : nrmH;
+            int left, top;
+            if (ww > half) ww = half;
+            if (hh > rc.bottom - rc.top) hh = rc.bottom - rc.top;
+            left = ((mid + 1) + (rc.right - 1) + 2 - ww) / 2;
+            top  = (rc.bottom - rc.top - hh + 1) / 2;
+            vb6_ScrollBarTri(dc, left, top, ww, hh, 3,
+                             (hot == 2) ? RGB(102,102,102) : RGB(133,133,133));
+        }
+    }
+}
+
 static void vb6_ScrollBarPaintTo(HDC dc, HWND hwnd) {
     RECT rc;
     GetClientRect(hwnd, &rc);
@@ -54,6 +177,7 @@ static void vb6_ScrollBarPaintTo(HDC dc, HWND hwnd) {
         FillRect(dc, &top, wh);
         FillRect(dc, &wline, wh);
     }
+    vb6_ScrollBarPaintArrows(dc, hwnd);
 }
 
 // 残差 #7: 命中测试 —— 外观对了不等于交互通了。
@@ -107,6 +231,40 @@ static LRESULT CALLBACK vb6_ScrollBarSubclassProc(HWND hwnd, UINT msg,
         DeleteObject(bg);
         return 1;
     }
+    /* 残差 #9: 增减区 hover 才显三角 —— 进/出都要重绘。
+       WM_MOUSEMOVE 里首次进入时登记 TrackMouseEvent(TME_LEAVE), 由 WM_MOUSELEAVE 收尾;
+       离开不依赖"再收一条 mousemove 发现不在了", 那是拖到别的控件上才成立的假象。 */
+    case WM_MOUSEMOVE: {
+        RECT rc;
+        int vertical, size, p, hotNew, hotOld;
+        GetClientRect(hwnd, &rc);
+        vertical = (GetWindowLongW(hwnd, GWL_STYLE) & SBS_VERT) != 0;
+        p = vertical ? (int)(short)HIWORD(lp) : (int)(short)LOWORD(lp);
+        size = vertical ? (rc.bottom - rc.top) : (rc.right - rc.left);
+        hotNew = (p < size / 2) ? 1 : 2;
+        hotOld = (int)(INT_PTR)GetPropW(hwnd, VB6_SBAR_HOT_PROP);
+        if (hotNew != hotOld) {
+            SetPropW(hwnd, VB6_SBAR_HOT_PROP, (HANDLE)(INT_PTR)hotNew);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        if (!GetPropW(hwnd, VB6_SBAR_TRACK_PROP)) {
+            TRACKMOUSEEVENT tme;
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            tme.dwHoverTime = 0;
+            if (TrackMouseEvent(&tme))
+                SetPropW(hwnd, VB6_SBAR_TRACK_PROP, (HANDLE)(INT_PTR)1);
+        }
+        break;
+    }
+    case WM_MOUSELEAVE:
+        RemovePropW(hwnd, VB6_SBAR_TRACK_PROP);
+        if (GetPropW(hwnd, VB6_SBAR_HOT_PROP)) {
+            RemovePropW(hwnd, VB6_SBAR_HOT_PROP);
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(hwnd, &ps);

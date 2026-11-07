@@ -5,6 +5,9 @@
     [string]$RefExe = "",
     # 基准读数落盘/复用路径。给了 RefExe 就写; 只给这个文件就读现成的 (省一次 VB6 起停)。
     [string]$RefJson = "",
+    # 只跑「数值增减控件 hover 三角」这一条判据 (起窗 -> park/hover/leave -> 判定 -> 退出)。
+    # 用途: 旧产物必须红、真 VB6 参考 exe 必须绿 —— 两边用同一条断言, 不靠肉眼。
+    [switch]$HoverOnly,
     [int]$Sec = 10
 )
 # uctreeview_px.ps1 — ucTreeView 树区**上屏**判据 (本机验收夹具; -Category guisample 分片调用).
@@ -358,6 +361,132 @@ public class UP {
 "@
 [UP]::SetProcessDPIAware() | Out-Null
 
+# ============================================================
+# 残差 #9: 数值增减控件 (VB.VScrollBar) 的 hover 三角 —— 上屏像素判据
+# ============================================================
+# 真 VB6 取证 (.temp/vb6ref/shoot_hover.ps1, 120dpi, 6 枚 33x31 逐个悬停, 读数见
+# .temp/vb6ref/shots/ref_num_metrics.json): 六枚行为完全一致 ——
+#   光标不在控件上 (park) / 移开后 (leave): ink=0, 只剩 240 底 + 左边 1px 白 + 中线 1px 白
+#   悬停在该枚上: 上下两枚三角**同时**出现 (ink=86/枚);
+#     被悬停的那半 (hot) = bbox 10x8, 最暗 102,102,102
+#     另一半 (normal)     = bbox  8x6, 最暗 133,133,133
+#     (33 宽: hot x12..21, normal x13..20; 三角各自在所在半区内居中)
+# 判据 (不放宽): 不悬停 ink 必须=0; 悬停必须两枚三角同时出现, 尺寸/明暗/位置按 DPI 折算
+# 与参考对齐 (±2px)。C3 的 SCROLLBAR 是自绘 (vb6forms_scroll.c), 这条只能靠上屏像素判。
+function Get-SbArrowStats {
+    param([int]$Sx, [int]$Sy, [int]$Sw, [int]$Sh)
+    $bb = New-Object System.Drawing.Bitmap($Sw, $Sh)
+    $gg = [System.Drawing.Graphics]::FromImage($bb)
+    $gg.CopyFromScreen($Sx, $Sy, 0, 0, (New-Object System.Drawing.Size($Sw, $Sh)))
+    $gg.Dispose()
+    $mid = [int]($Sh / 2)
+    $t = @{ ink = 0; min = 999; x0 = 9999; x1 = -1; y0 = 9999; y1 = -1 }
+    $b = @{ ink = 0; min = 999; x0 = 9999; x1 = -1; y0 = 9999; y1 = -1 }
+    for ($yy = 0; $yy -lt $Sh; $yy++) {
+        for ($xx = 0; $xx -lt $Sw; $xx++) {
+            $c = $bb.GetPixel($xx, $yy)
+            $lum = [int](0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B)
+            $side = $null
+            if ($yy -lt $mid) { $side = $t } elseif ($yy -gt $mid) { $side = $b }
+            if ($null -ne $side -and $lum -lt 200) {
+                $side.ink++
+                if ($lum -lt $side.min) { $side.min = $lum }
+                if ($xx -lt $side.x0) { $side.x0 = $xx }
+                if ($xx -gt $side.x1) { $side.x1 = $xx }
+                if ($yy -lt $side.y0) { $side.y0 = $yy }
+                if ($yy -gt $side.y1) { $side.y1 = $yy }
+            }
+        }
+    }
+    $bb.Dispose()
+    return @{ top = $t; bot = $b; w = $Sw; h = $Sh; mid = $mid }
+}
+
+function Test-SbHoverGuard {
+    param([IntPtr]$Main, [int]$Dpi)
+    $bad = @(); $read = @()
+    $sbs = @([UP]::FindByClass($Main, "ScrollBar")) + @([UP]::FindByClass($Main, "ThunderRT6VScrollBar"))
+    if ($sbs.Length -lt 6) {
+        $bad += "数值增减控件定位失败 $($sbs.Length)/6 (ScrollBar|ThunderRT6VScrollBar)"
+        return @{ bad = $bad; read = $read }
+    }
+    $k = $Dpi / 120.0
+    $hotW = [int][Math]::Round(10 * $k); $hotH = [int][Math]::Round(8 * $k)
+    $nrmW = [int][Math]::Round(8 * $k);  $nrmH = [int][Math]::Round(6 * $k)
+    $wr = Get-WinRect $Main
+    $parkX = [Math]::Max(0, $wr.L - 60); $parkY = [Math]::Max(0, $wr.T - 60)
+
+    # 1) 不悬停: 六枚都必须一个墨迹像素都没有
+    [UP]::SetCursorPos($parkX, $parkY) | Out-Null
+    Start-Sleep -Milliseconds 550
+    $parkInk = 0
+    foreach ($h in $sbs) {
+        $r = Get-WinRect $h
+        $st = Get-SbArrowStats $r.L $r.T ($r.R - $r.L) ($r.B - $r.T)
+        $parkInk += ($st.top.ink + $st.bot.ink)
+    }
+    if ($parkInk -ne 0) { $bad += "未悬停时增减区出现墨迹 ${parkInk}px (参考 0: 只有 240 底+白线)" }
+
+    # 2) 逐枚悬停上半区: 上下三角必须同时出现, 且尺寸/明暗/位置对齐参考
+    $hoverOk = 0; $i = 0; $sample = ''
+    foreach ($h in $sbs) {
+        $r = Get-WinRect $h
+        $w = $r.R - $r.L; $hh = $r.B - $r.T
+        if ($w -le 4 -or $hh -le 4) { $bad += "增减控件#$i 矩形非法 ${w}x${hh}"; $i++; continue }
+        [UP]::SetCursorPos(($r.L + [int]($w / 2)), ($r.T + [int]($hh * 0.22))) | Out-Null
+        Start-Sleep -Milliseconds 450
+        $st = Get-SbArrowStats $r.L $r.T $w $hh
+        $t = $st.top; $b = $st.bot
+        $tw = $t.x1 - $t.x0 + 1; $th = $t.y1 - $t.y0 + 1
+        $bw = $b.x1 - $b.x0 + 1; $bh = $b.y1 - $b.y0 + 1
+        if ($t.ink -eq 0 -or $b.ink -eq 0) {
+            $bad += "增减控件#$i 悬停后三角缺失 topInk=$($t.ink) botInk=$($b.ink) (应两枚都在)"
+        } else {
+            $hoverOk++
+            if ([Math]::Abs($tw - $hotW) -gt 2 -or [Math]::Abs($th - $hotH) -gt 2) {
+                $bad += "增减控件#$i 悬停半区三角 ${tw}x${th} 偏离参考 ${hotW}x${hotH} 超过 ±2"
+            }
+            if ([Math]::Abs($bw - $nrmW) -gt 2 -or [Math]::Abs($bh - $nrmH) -gt 2) {
+                $bad += "增减控件#$i 另半区三角 ${bw}x${bh} 偏离参考 ${nrmW}x${nrmH} 超过 ±2"
+            }
+            if ($t.min -gt 120) { $bad += "增减控件#$i 悬停半区三角最暗 $($t.min) > 120 (参考 102)" }
+            if ($b.min -lt 121 -or $b.min -gt 180) { $bad += "增减控件#$i 另半区三角最暗 $($b.min) 不在 121..180 (参考 133)" }
+            if ([Math]::Abs(($t.x0 + $t.x1) - ($w - 1)) -gt 4) { $bad += "增减控件#$i 上三角未水平居中 x=$($t.x0)..$($t.x1)" }
+            if ([Math]::Abs(($b.x0 + $b.x1) - ($w - 1)) -gt 4) { $bad += "增减控件#$i 下三角未水平居中 x=$($b.x0)..$($b.x1)" }
+            if ($i -eq 0) { $sample = "hot=${tw}x${th}@$($t.min) nrm=${bw}x${bh}@$($b.min)" }
+        }
+        $i++
+    }
+
+    # 3) 悬停下半区: hot 必须翻到下半 (上半回到 normal)
+    $r0 = Get-WinRect $sbs[0]
+    $w0 = $r0.R - $r0.L; $h0 = $r0.B - $r0.T
+    [UP]::SetCursorPos(($r0.L + [int]($w0 / 2)), ($r0.T + [int]($h0 * 0.78))) | Out-Null
+    Start-Sleep -Milliseconds 450
+    $st = Get-SbArrowStats $r0.L $r0.T $w0 $h0
+    if ($st.bot.ink -eq 0 -or $st.top.ink -eq 0) {
+        $bad += "增减控件#0 下悬停三角缺失 topInk=$($st.top.ink) botInk=$($st.bot.ink)"
+    } else {
+        if ($st.bot.min -gt 120) { $bad += "增减控件#0 下悬停时下半区未变 hot (最暗 $($st.bot.min) > 120)" }
+        if ($st.top.min -lt 121) { $bad += "增减控件#0 下悬停时上半区仍为 hot (最暗 $($st.top.min))" }
+    }
+
+    # 4) 移开后必须回到 0 墨迹
+    [UP]::SetCursorPos($parkX, $parkY) | Out-Null
+    Start-Sleep -Milliseconds 550
+    $leaveInk = 0
+    foreach ($h in $sbs) {
+        $r = Get-WinRect $h
+        $st2 = Get-SbArrowStats $r.L $r.T ($r.R - $r.L) ($r.B - $r.T)
+        $leaveInk += ($st2.top.ink + $st2.bot.ink)
+    }
+    if ($leaveInk -ne 0) { $bad += "移开光标后增减区仍留墨迹 ${leaveInk}px (应 0)" }
+
+    $read += "sbHover=${hoverOk}/$($sbs.Length) $sample park=${parkInk} leave=${leaveInk} dpi=$Dpi"
+    return @{ bad = $bad; read = $read }
+}
+
+
 # --- 位图侧 (PowerShell): PrintWindow/CopyFromScreen -> Bitmap -> LockBits -> C# 统计 ---
 function Get-WinRect {
     param([IntPtr]$Hwnd)
@@ -524,6 +653,21 @@ if ([UP]::IsIconic($main)) { [UP]::ShowWindow($main, 9) | Out-Null; Start-Sleep 
 Start-Sleep -Milliseconds 900
 [UP]::RedrawWindow($main, [IntPtr]::Zero, [IntPtr]::Zero, 0x0185) | Out-Null
 Start-Sleep -Milliseconds 600
+
+# -HoverOnly: 只跑「增减区 hover 三角」这一条 (旧产物必须红 / 真 VB6 参考必须绿)
+# 放在 UC host 检查之前: 真 VB6 参考 exe 没有 VB6_UserControlHost, 但仍要能判这条。
+if ($HoverOnly) {
+    $hd = [UP]::GetDpiForWindow($main); if ($hd -lt 96) { $hd = 96 }
+    $hg = Test-SbHoverGuard $main $hd
+    if ($hg.bad.Count -gt 0) {
+        Write-Output ("FAIL " + ($hg.bad -join "; ") + " | " + ($hg.read -join " "))
+        try { $p.Kill() } catch {}
+        exit 1
+    }
+    Write-Output ("PASS " + ($hg.read -join " "))
+    try { $p.Kill() } catch {}
+    exit 0
+}
 
 $uc = [UP]::FindUcHost($main)
 if ($uc -eq [IntPtr]::Zero) {
@@ -1176,6 +1320,13 @@ if ($p.HasExited) {
             }
             if ($p.HasExited) { $actBad += "'$($ns.label)' 数值点击后进程崩溃"; Kill-ProcDiag $p "'$($ns.label)' 数值点击后进程退出" $logOut $logErr; break }
         }
+    }
+
+    # ---- 残差 #9: 数值增减控件 hover 三角 (与 -HoverOnly 同一条断言, 直接并进 FAIL 通道) ----
+    if (-not $p.HasExited -and -not $dead) {
+        $hv = Test-SbHoverGuard $main $expDpi
+        $actBad += $hv.bad
+        $actRead += $hv.read
     }
 
     # ---- 缺陷3: Load from custom XML (按钮体里 Nodes.Clear + CheckBoxes=False + 递归重填) ----

@@ -3925,3 +3925,85 @@ run **42394231898**（head=`e7c27aa7`，dev）：**22/22 success**，0 failure /
 
 本轮提交：`bb95c7bf`（segmented uc6 阈值重标定）、`e7c27aa7`（NodeSpacing 96dpi
 重绘复核）。已 `git push github dev` + `git push origin dev`（快进，无 force）。
+
+## 55. 主界面「数值增减」控件的 hover 三角
+
+### 55.1 控件类型与绘制归属
+
+不是自绘 UserControl，也不是内嵌 UpDown：Form1 上那 6 组（BorderRadius / BorderWidth /
+Margin / NodeSpacing / ToggleIconSize / MarginBottom）是 **`VB.VScrollBar`**——
+真 VB6 里窗口类 `ThunderRT6VScrollBar`，C3 里由 `vb6forms_scroll.c` 建原生 `SCROLLBAR`
+子类窗口（窗口类 `ScrollBar`）并**自绘**：`vb6_ScrollBarSubclassProc` 吃掉 WM_ERASEBKGND /
+WM_PAINT / WM_PRINTCLIENT / WM_PRINT，`vb6_ScrollBarPaintTo` 只画三样东西——
+240 底、左边 1px 白、中线 1px 白（缩到 25px 高时就是那条退化的滑杆）。
+
+所以「hover 出三角」既不是父窗体画的，也不是系统主题画的；改前 C3 的绘制里**根本没有任何
+hover 分支**（没有 WM_MOUSEMOVE / TrackMouseEvent），任何位置都只走「平底 + 白线」这一条，
+这就是没三角的直接原因。
+
+### 55.2 真 VB6 两态取证
+
+脚本 `.temp/vb6ref/shoot_hover.ps1`（`SetProcessDPIAware` + EnumChildWindows 按类名找 6 枚，
+逐枚 SetCursorPos 到该控件 22% / 78% 高度）；截图落 `.temp/vb6ref/shots/ref_num_*.png`
+（整窗）与 `ref_num_sb<i>_<state>.png`（8x 放大裁剪），读数落 `ref_num_metrics.json`，
+汇总 `.temp/vb6ref/num_hover_metrics.json`。120dpi、33x31（sb2/sb4 为 31x31）：
+
+| 状态 | 六枚墨迹 | 三角 |
+| --- | --- | --- |
+| 光标不在控件上 (park) | 0 px | 无；240 底 856px + 白 63px（左列+中线） |
+| 悬停在**上半区** | 该枚 86 px | 上 10x8 @(12,4) 最暗 **102**（hot）＋ 下 8x6 @(13,21) 最暗 **133**（normal） |
+| 悬停在**下半区** | 该枚 86 px | 上 8x6 @(13,5) @133（normal）＋ 下 10x8 @(12,20) @102（hot） |
+| 移开 (leave) | 0 px | 无（与 park 逐像素一致） |
+
+要点：**两枚三角同时出现**（不是只在指针那一半）；指针所在半区那枚更大更暗（10x8/102），
+另一半小一号且浅（8x6/133）；六枚行为完全一致；31 宽的控件三角整体左移 1px（x11/x12）。
+
+### 55.3 guard（先落判据，旧产物红 / 参考绿）
+
+判据进 `tests/guisample/uctreeview_px.ps1`：
+`Get-SbArrowStats`（逐像素读半区墨迹/包围盒/最暗）+ `Test-SbHoverGuard`（park → 逐枚悬停
+上半 → 悬停下半 → leave）。断言：park/leave 墨迹**必须 =0**；悬停必须两枚都在、bbox 按
+DPI 折算对齐 10x8 / 8x6（±2）、最暗 hot ≤120（参考 102）、normal 121..180（参考 133）、
+两枚都水平居中。**不放宽、不 SKIP**：找不到 6 枚直接红。
+
+接入两处：①交互段（数值点击之后）并进 `$actBad` / `$actRead`，CI 的 px 门直接判；
+②新增 `-HoverOnly` 开关（放在 UC host 检查之前，真 VB6 参考 exe 没有 UserControlHost
+也能判），用来做「旧产物红 / 参考绿」的双向取证。
+
+| 对象 | 结果 |
+| --- | --- |
+| 旧产物 `output\build_ucTreeView\Proyecto1.exe`（改前 00:57） | `FAIL 增减控件#0..#5 悬停后三角缺失 topInk=0 botInk=0 … sbHover=0/6 park=0 leave=0 dpi=120` |
+| 真 VB6 参考 `.temp\vb6ref\ucTreeView\Proyecto1.exe` | `PASS sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120` |
+
+### 55.4 实现
+
+`vb6forms_scroll.c` 的 SCROLLBAR 子类过程补两条消息：
+
+* `WM_MOUSEMOVE`：按客户区坐标判上/下半，把 hot 半区记进窗口属性 `VB6_SBar_Hot`；
+  首次进入时 `TrackMouseEvent(TME_LEAVE)`（属性 `VB6_SBar_Track` 防重入），状态变化就
+  `InvalidateRect(..., FALSE)`。
+* `WM_MOUSELEAVE`：清 `VB6_SBar_Hot` 并重绘 —— 不靠「下一条 mousemove 发现不在了」
+  （指针挪到别的控件上不会再有本窗口的 mousemove，那样三角会赖着不走）。
+
+绘制 `vb6_ScrollBarPaintArrows` 用**实测比例**随 DPI 缩放（120dpi ⇒ 10x8 / 8x6，
+96dpi ⇒ 8x6 / 6x5），位置按「半区内居中」的实测公式
+`top = (r0 + r1 + 2 - h) / 2` 落；颜色取实测 102/133。三角用**逐行 FillRect** 而不是
+Polygon：GDI Polygon 的填充会吃掉最右/最下一像素（实测 10x8 只落 8x6，对不上参考），
+FillRect 才能让 bbox 精确等于 10x8 / 8x6。HScrollBar 按同样比例镜像（左/右三角，
+无 VB6 样本，暂只保证几何一致）。
+
+### 55.5 修后读数与门
+
+本机 120dpi、同一枚 33x31 控件，`shoot_hover.ps1 -Tag c3` 复测：
+
+| 状态 | 改前 C3 | 改后 C3 | 真 VB6 |
+| --- | --- | --- | --- |
+| park / leave | ink=0 | ink=0 | ink=0 |
+| 悬停上半 | ink=0 | ink=66；上 **10x8 @(12,4) @102**，下 **8x6 @(13,21) @133** | ink=86；同 bbox/同色（多出的 20px 是边缘抗锯齿） |
+| 悬停下半 | ink=0 | ink=66；上 8x6 @(13,5) @133，下 10x8 @(12,20) @102 | 同 |
+
+六枚逐一悬停都只在该枚出现三角，其余五枚保持 0 墨迹；悬停下半 hot 正确翻转。
+
+px 门（本机 120dpi，`-RefJson .temp\vb6ref\ref_metrics.json`）：
+`PASS tree=221x556 … sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120`。
+Windows PowerShell 5.1（CI 实际解释器）复跑 `-HoverOnly` 同样 PASS。
