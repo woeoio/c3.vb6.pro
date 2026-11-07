@@ -345,6 +345,20 @@ int32_t vb6_UC_FontHeightPx(double pt, int32_t dpiY) {
     return -(int)(pt * (double)dpi / 72.0);   /* 截断, 不四舍五入 —— 照 VB6 的读数 */
 }
 
+/* Fix 432: **显式 StdFont**（.frm/.ctl 里 BeginProperty Font 那一档）的磅→像素是
+ * MulDiv 口径 —— 半值向上取整，不是截断。依据是真 VB6 的 ucTreeView 参考产物：
+ * Contact List 那个 UserControl 的 Font 声明为 Segoe UI Semibold 8.25pt，参考 exe
+ * 的 UC 宿主窗口 WM_GETFONT 读回 lfHeight=-14（8.25*120/72=13.75 → 14），而 C3
+ * 截断成 -13；那 1px 让主标题文字在行内下移 1px、ClearType 彩边整行搬家，Contact
+ * 的 vivid 因此比参考少 11%。
+ * 与二百七十七刀的截断口径不冲突：那条量的是**默认 GUI 字体**（ComCtlsDemo 69 枚
+ * 窗口 8.25pt MS Sans Serif → -13），走 vb6_Vb6DefaultGuiFont，那个调用点一字未动。
+ * 两种字体来源在 VB6 里本来就是两套创建路径，这里只把"显式 StdFont"这一套补回来。 */
+static int32_t vb6_uc_fontHeightPxRound(double pt, int32_t dpiY) {
+    int dpi = (dpiY > 0) ? dpiY : 96;
+    return -(int)(pt * (double)dpi / 72.0 + 0.5);
+}
+
 vb6_ComIface_Font* vb6_uc_fontOf(void* p) {
     if (p == &vb6_UserControl_FontObj) return &vb6_UserControl_FontObj;
     for (vb6_UCFontRec* f = vb6_ucFonts; f; f = f->next)
@@ -386,7 +400,10 @@ void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* l
     if (!lf) return;
     memset(lf, 0, sizeof(*lf));
     pt = (f && f->Size > 0) ? (double)f->Size : 8.25;
-    lf->lfHeight    = vb6_UC_FontHeightPx(pt, dpi);
+    /* Fix 432: 显式 StdFont 走 MulDiv 口径 (半值向上), 不是截断 —— 见上面
+     * vb6_uc_fontHeightPxRound 的取证。默认 GUI 字体那一档仍走截断。 */
+    lf->lfHeight    = (f && f->Size > 0) ? vb6_uc_fontHeightPxRound(pt, dpi)
+                                         : vb6_UC_FontHeightPx(pt, dpi);
     lf->lfWeight    = (f && f->Bold) ? 700 : ((f && f->Weight) ? f->Weight : 400);
     lf->lfItalic    = (BYTE)((f && f->Italic) ? 1 : 0);
     lf->lfUnderline = (BYTE)((f && f->Underline) ? 1 : 0);

@@ -3478,3 +3478,50 @@ Form3 全绿；Form5 同步从 14 → 15 行（与 §45 一起收敛到参考）
 `tests/test_round_banker.bas` + 注册（x64 / x86）：`RB-1=2`、`RB-2=4`、`RB-3=2`、
 `RB-4=4`、`RB-5=-2`、`RB-6=-4`、`RB-7=2`、`RB-8=4`、`RB-DONE`。
 改前实测 `3 / 4 / 3 / 4 / -3 / -4 / 3 / 4`（`test_round_banker` 已跑过红→绿）。
+
+## §47 根因三：显式 StdFont 的磅→像素是 MulDiv 口径（Fix 432，2026-11-07，第 4 块）
+
+### 47.1 取证
+
+Contact List 的 UserControl 在设计期写死 `Segoe UI Semibold 8.25pt`
+（`Form6.frm` 的 `BeginProperty Font`）。120 dpi 下 `8.25 * 120 / 72 = 13.75`：
+
+- 真 VB6 参考 exe 的 UC 宿主窗口 `WM_GETFONT` 读回 **lfHeight = -14**（MulDiv 口径，
+  半值向上）；`ref_metrics.json` 的 `font` 字段同样是 `-14`；
+- C3 走 `vb6_UC_FontHeightPx` 的截断口径，得 **-13**。
+
+差这 1px 不改变行高，但让**粗体主标题**在行内垂直居中时下移 1px：逐行 light 计数证明
+C3 的主标题文字带整体比参考低 1 行（ref y=64:70 vs c3 y=65:66，其余行一一对应），
+子文本行完全一致 —— ClearType 彩边整行搬家，Contact 的 `vivid` 因此少 11%。
+
+与账 #305 第二百七十七刀不冲突：那条量的是**默认 GUI 字体**（ComCtlsDemo 69 枚窗口
+8.25pt MS Sans Serif → -13），走 `vb6_Vb6DefaultGuiFont`；这里只补**显式 StdFont**
+这一套创建路径。`vb6_UC_FontLogFont` 是"八档 → LOGFONT"的唯一主人（量字 / `Font.hFont`
+缓存 / 应用到原生控件都走它），改在主人这一处即可。
+
+### 47.2 修法
+
+`uc_controls.c` 新增 `vb6_uc_fontHeightPxRound`（`-(int)(pt*dpi/72 + 0.5)`），
+`vb6_UC_FontLogFont` 只对**有 Font 对象且 Size > 0** 这一支用它；没有字体对象
+（8.25 兜底那支）仍走截断，`vb6_Vb6DefaultGuiFont` 与 `vb6_SetControlFontSize`
+的调用点一字未动。
+
+### 47.3 读数（`.temp/px_rows5`，五窗全量）
+
+| 窗 | dark | textRows | lightRows | vivid | white | photo | avatar | font |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Tree Explorer | 1542 | 5 | 1 | 2354 | 190596 | 1608 | 1225 | Segoe UI\|-16\|0\|400 |
+| Form3 | 5155 | 10 | 3 | 20947 | 289518 | 8997 | 6356 | Segoe UI\|-16\|0\|700 |
+| Drag & Drop | 529 | 5 | 1 | 2161 | 127090 | 2484 | 927 | Arial Narrow\|-16\|0\|400 |
+| Form5 | 4778 | 15 | 3 | 41117 | 169851 | 55051 | 105961 | Segoe UI\|-16\|0\|700 |
+| Contact | 146996 | 1 | 8 | **6453** | **419** | 10539 | 9950 | **Segoe UI Semibold\|-14\|0\|700** |
+
+Contact 修前 `vivid=6312 / white=280 / lightRows=7 / font=-13`，视觉阈值
+`7120*0.9 = 6408` 差 96 —— 修后 6453 过线，`white=419` 与参考逐值相同，
+`bg65=118862`（参考 118627）。五窗 **全绿**，`uctreeview_px.ps1` 首令牌 PASS。
+
+### 47.4 风险与观测
+
+`vb6_UC_FontLogFont` 同时供 `vb6_uc_measureText` 量字，改后显式字体的量高多 1px；
+本轮 ucTreeView 五窗无回归（Form3/Form5 仍 10/15 行，lastTextY 565/497 与参考一致）。
+其它夹具（尤其 ComCtlsDemo）留给下一块 GA 全量观测。
