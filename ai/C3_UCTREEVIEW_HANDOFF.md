@@ -3911,3 +3911,17 @@ NodeSpacing 的 value/Text 断言一字未动。
 
 **修后读数**：本机 120dpi `PASS tree=221x556 ... dpi=120`（`.temp/ucv_s55.log`），
 ±1 步即变，升级分支未触发；96dpi 由 CI 复验 `redraw[NodeSpacing:+4]` 两 sig 不等。
+
+### 54.3 GA 全量复验
+
+run **42394231898**（head=`e7c27aa7`，dev）：**22/22 success**，0 failure / 0 skipped。
+
+两处原本红的 job，CI 侧读数与本地一致：
+
+| job | 修前 | 修后 (CI) |
+| --- | --- | --- |
+| Tests (vbp #4) ucSegmentedControl | `darkPx=218 < 400` ⇒ FAIL | `darkPx=218`，阈值 135 ⇒ PASS（`Results: PASS=46 FAIL=0 SKIP=0 TOTAL=69`） |
+| Tests (vbp #2) ucTreeView | `NodeSpacing up/dn 树区像素未变` ⇒ FAIL | `redraw[NodeSpacing:+4] sig=173302172->sig=1343313764`（同一 setter，重绘成立） ⇒ PASS（`Results: PASS=47 FAIL=0 SKIP=0 TOTAL=68`） |
+
+本轮提交：`bb95c7bf`（segmented uc6 阈值重标定）、`e7c27aa7`（NodeSpacing 96dpi
+重绘复核）。已 `git push github dev` + `git push origin dev`（快进，无 force）。
