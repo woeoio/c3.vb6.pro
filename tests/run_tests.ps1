@@ -8683,6 +8683,21 @@ if ($Category -in @("all", "run", "vbp")) {
         Test-Vbp "optcmp_text_module" "$Tests\optcmp\oc_ok.vbp" $optCmpExpected
     }
 
+    # 账 §38: Variant 的 **String ↔ 数值** 混比 —— VB6 的次序是「数值侧恒小于字符串侧」,
+    # 与字符串内容能否转数无关 (真 VB6 /make 实测: "0"=0 为 False, "0">0 为 True,
+    # "1"<2 为 False, 0<"x" 为 True); Empty 随对方 (与数值比当 0, 与字符串比当 "")。
+    # 旧实现按 wcstod 折数 ⇒ ucTreeViewPlus.ctl:1487 `If N.Image > 0` (Image 是
+    # Variant 字符串键) 恒假 ⇒ Form3/Form5 行框丢掉图片宽度 ⇒ 员工姓名被截断。
+    # 同时钉住**类型化 String** 不适用本条 (那条路 cgen 不进 VarCmp*)。
+    if (Test-Path "$Tests\varcmp_strnum\vcs.vbp") {
+        $varCmpExpected = @("VCS-sgt0=True", "VCS-slt0=False", "VCS-seq0=False",
+            "VCS-sne0=True", "VCS-sge0=True", "VCS-sle0=False", "VCS-str1lt2=False",
+            "VCS-str10gt9=True", "VCS-n0lts=True", "VCS-long-gt=True", "VCS-long-eq=False",
+            "VCS-long-lt=True", "VCS-empty-eq0=True", "VCS-empty-eqs=False",
+            "VCS-empty-lts=True", "VCS-DONE")
+        Test-Vbp "varcmp_strnum" "$Tests\varcmp_strnum\vcs.vbp" $varCmpExpected
+    }
+
     # <vbeclipse>: CC2 走 **ByRef 组名形参** (`Sub UseCircle(c As Circle)`), CC10 走
     # **真 ByRef Variant 形参** —— 同一个类实参、两种槽。这一对是"别过度修复"的夹子:
     # CC2 曾被装箱成 vb6_VARIANT* (与 `vb6_cls_ShapeAct**` 形参 ABI 不符 → 段错误),

@@ -2973,6 +2973,55 @@ pwsh -NoProfile -File .temp\probe_repeat.ps1 -Only Form2     # 单窗隔离
 #   GlobalFlag(REG_DWORD)=0x02000000, PageHeapFlags(REG_SZ)="0x3"
 ```
 
+## §38 第 1 块的下一层：量宽偏小的真上游 = Variant 字符串/数值比较
+
+### 38.1 先钉 `TreeNodeTextWidth`：实测**不偏小**，原假设推翻
+
+同一字体（Segoe UI -16）、同一 DPI（120）下三路读数逐串一致：
+
+| 串 | DrawTextW(DT_CALCRECT) | GetTextExtentPoint32W | 独立 GDI 探针（CreateFontIndirect -16） |
+|---|---|---|---|
+| General Management | 165（单行 700） | 165 | 165 |
+| John Perez | 74 | 74 | 74 |
+| Maria Gomez | 93 | 93 | 93 |
+| Lucy Rodriguez | 107 | 107 | 107 |
+
+- 取数方式：临时在 `vb6_di_DrawTextW` 里加 `C3_DRAWTEXT_TRACE` 门控日志（env 指向文件），
+  记录 CALCRECT/DRAW、hdc、DC 当前 `LOGFONT`、rect 前后值、文本；跑完已**移除**
+  （`vb6_di_user32_stubs.c` 已回到 HEAD，无残留）。
+- 独立 GDI 探针（`.temp\gdi_textprobe.ps1`）不经过 C3，给出完全相同数值 ⇒
+  `TextWidth` 本身没有偏小，Form3/Form5 的截断另有上游。
+
+### 38.2 真上游：`If N.Image > 0`（Variant 字符串 vs 数值）
+
+- 真 VB6 `/make` 实测（`.temp\strnumcmp`）：`"John_Perez" > 0` = **True**、
+  `"0" = 0` = **False**、`"0" > 0` = True、`"1" < 2` = False、`0 < "x"` = True。
+  即 **Variant 的字符串侧与数值侧混比时，数值侧恒小于字符串侧**，与串内容能否转数无关。
+- 旧 C3：`vb6_VarCmp*` 走 `wcstod` 把串折成数 ⇒ `"John_Perez"` → 0 ⇒
+  `ucTreeViewPlus.ctl:1487` 的 `If N.Image > 0` 恒假 ⇒ `Rect.Right` 少加
+  `ImgLstWidth + lMargin` ⇒ 员工姓名被裁成 "Joh" / "HR Ma" / "Lucy Rodrig"。
+- 注意边界：类型化 `Dim s As String` 与数值比仍按数值转换（真机实测 `0 = s` 为 True），
+  那条路 cgen 不进 `VarCmp*`，本改动影响不到；`VT_EMPTY` 是「随对方」档。
+
+### 38.3 修法
+
+`src/rtl/core/vb6rtl/vb6rtl.c`：删掉六个比较函数各自的字符串/数值二分，新增
+`vb6_VarIsNumber` + `vb6_VarCmpOrder`，六个出口（Eq/Ne/Lt/Gt/Le/Ge）统一走这一份次序，
+不留第二条口径。
+
+### 38.4 断言（真 VB6 逐串对齐）
+
+`tests\varcmp_strnum\`（`vcs.vbp` + `vcs_main.bas`，`Debug.Print` 16 行）：
+`VCS-sgt0/slt0/seq0/sne0/sge0/sle0/str1lt2/str10gt9/n0lts/long-gt/long-eq/long-lt/
+empty-eq0/empty-eqs/empty-lts/DONE`，真 VB6 与 C3 逐行一致。
+
+### 38.5 后绿读数（局部）
+
+- Form3：John Perez / Maria Gomez / Lucy Rodriguez / Diego Martinez / Ana Torres 全部完整
+  （此前 "Joh"/"HR Ma"/"Lucy Rodrig"）。
+- Form5：`firstTextW` 48 → **77**（参考 78）。
+- 五窗全表见 §39.5（第 1、2 步合并复量）。
+
 
 
 
