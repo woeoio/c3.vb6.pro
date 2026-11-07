@@ -2323,3 +2323,31 @@ BSTR 数组元素被 `isVariantSlotElemRead` 判成 Variant，发成
 1. 提交守卫修复 + 本节，推 `github`/`origin` 的 `dev`；等 CI 在新 head 出清单后 `-Bless` 26 行并复算。
 2. 按 32.5 第 1 项开工：`.ctl` 设计面子控件非几何属性的落地通道（cgen_form.cpp:353-407 目前只发几何）。
 3. 五窗对照改用真 VB6 基准 `331776 B / 24EAAFB2…CDFD`（§29.3），每修一窗更新断言、旧产物必须红。
+
+#### 32.7 设计面子控件的落地缺口（实测发码，`emit_cur.txt:2857-2864`）
+
+`vb6_ucTreeViewPlus_ucHostInit` 目前**只有几何**：
+
+```
+vb6_hwnd_Text1        = vb6_UC_CreateDesignEdit(360, 480, 1335, 495);
+vb6_hwnd_ucScrollbar2 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar2", 240, 3360, 4095, 135);
+vb6_hwnd_ucScrollbar1 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar1", 4560, 120, 135, 3015);
+```
+
+对照夹具，被丢弃且**有可视后果**的四条：
+
+| 设计期属性 | 夹具 | C3 现状 | 后果 |
+|---|---|---|---|
+| `Visible = 0` | `Text1`、`ucScrollbar1/2` | 不发 | 隐藏的辅助 TextBox 与两条滚动条会**显示出来**；`.ctl` 代码满篇 `If ucScrollbar1.Visible`（838/854/856/863/888…），初值错 ⇒ `m_ClientWidth` 少减一条滚动条宽 ⇒ 树区宽度/换行/行数全偏 |
+| `Text = "Text1"` | `Text1` | 不发 | 辅助框内容为空 |
+| `Orientation = 1` | `ucScrollbar2` | 不发 | 横向滚动条按纵向建（`ucScrollbar.ctl` 的 Orientation 决定 TBS_VERT 样式位） |
+| `SmoothScrollFactor = 0,15` / `ThumbTooltipFont` | `ucScrollbar1/2` | 不发 | 平滑步长与缩略图字体取默认（运行期 `Initialize` 里 `m_SinSmoothScrollFactor = 0.1499…` 恰好兜住，可降级为低优先） |
+
+**修法（下一批，最小面）**：在 `cgen_form.cpp` 的设计子控件循环（353-407）里，每条 `CreateDesign*` 之后复用
+**已有唯一出口** `emitDesignerStateProps(child, "vb6_hwnd_" + cIdent(name))`
+（`cgen_util_ctrl.cpp:1225`，已覆盖 Enabled/Visible/Min/Max/Value，且是 `cgen_form_create_controls.inc:365`
+与 `cgen_form_ctrl_style_apply.inc:395` 两条创建路共用的那一份 ⇒ 不再新增第二处口径）；
+UC 子控件再补简单属性的 `prop_let`（`Orientation` 等），字体块复用 `emitFrmFontObj`。
+按纪律先加一条发码形状断言（期望 `CreateDesign*` 之后紧跟 `vb6_SetControlVisible(..., 0)`），
+先红后绿；旧产物必须红。
+
