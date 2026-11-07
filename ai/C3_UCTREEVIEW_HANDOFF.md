@@ -2215,3 +2215,111 @@ A/B 做法（脚本 `.temp\enc_ab.ps1`；两份均在 `.temp\vb6enc\` 新建，�
 1. 推送本修复 → 等 CI 22 job；
 2. CI 交回新 `ci/emit-manifest` 后逐行核对并登记（预期仍是上述 17 个输入，哈希按修复后重算）；
 3. `pixels` 五窗红按用户顺序放在 GA 之后收。
+
+---
+
+## §32 GA 第二轮收口：发码守卫长度缺陷（真缺陷）与 26 行登记口径
+
+#### 32.1 CI run 42344074260（head 8fc56916）读数
+
+- 22 job：**20 绿 / 2 红**。
+  - `compile #1` 已转绿（§31.1 的两处静态修复生效）。
+  - `Emit manifest (shape oracle)`：红。
+  - `Tests (vbp #1)`：红，但**唯一实质红项是 `pixels [uctreeview_px.ps1]`**
+    （`Results: PASS=44 FAIL=1 SKIP=0 TOTAL=67`）；同一 job 另有一条 harness 注解缺陷
+    （`harness tallied 1 failures but naming found only 0`）——计 1 条但命名 0 条，
+    属报告侧账目，不是新增失败。pixels 的逐条读数沿用 §31.3 的五窗红（Tree Explorer 节点行 4<5、
+    Corporate photo 0 / avatar 17 / greenRim 54、Form5 5<10、Contact photo 0、Agenda 字重 700≠600、
+    4 窗第 2 轮 OPEN-FAIL、Menu/Tools 看门狗超时 + 0xC0000005 rva=0x45fbc）。
+- 结论：**pixels 依赖五窗与设计期属性修复**，按用户排的顺序它只能后收；GA 22/22 待其后。
+
+#### 32.2 ci2 清单 19 行 → 抓到一枚真缺陷（`wrapToBSTR` 的 `VB6_SA_AT(BSTR,` 守卫）
+
+CI 交回清单（`.temp/ci_emit_manifest2.txt`，head=8fc56916）与 `emit-manifest.expected.txt`
+差 **19 行**；比首轮 17 行多出 `tests/test_array.bas`、`tests/test_redim_elem.bas`。
+差异定位到 `src/backend/expr/cgen_expr_binary_util.cpp` 的 `wrapToBSTR()`：
+
+```
+- if (expr.compare(0, 16, "VB6_SA_AT(BSTR,") == 0) return expr;   // 字面量只有 15 字符
++ if (expr.compare(0, 15, "VB6_SA_AT(BSTR,") == 0) return expr;
+```
+
+`std::string::compare(pos, n, s)` 在 MSVC 上**不会**把 n 截到 `size()-pos` 后再比长度，
+`n=16 > strlen(s)=15` ⇒ 恒返回非 0 ⇒ **这枚守卫从来没命中过**。旧路径之所以没暴露，
+是因为 `Debug.Print` 的字符串分支此前不统一过 `wrapToBSTR`；§31 把它统一之后，
+BSTR 数组元素被 `isVariantSlotElemRead` 判成 Variant，发成
+`vb6_CStr(vb6_VariantFromValue(VB6_SA_AT(BSTR, names, 1)))` —— 把 BSTR 槽当 Variant 解包。
+
+**A/B 实测**（同一台机、同一份源码，只改这一处；`tests/test_array.bas`）：
+
+| 守卫写法 | sha256 | bytes | 形状 |
+|---|---|---|---|
+| `compare(0,16,…)` | `5edb5298…` | 5407 | `vb6_CStr(vb6_VariantFromValue(VB6_SA_AT(…)))` |
+| `compare(0,15,…)` | `dc61cfa7…` | 5375 | `VB6_SA_AT(BSTR, names, 1)`（= 期望清单原值） |
+
+`tests/test_redim_elem.bas` 同步回到 `bafcd837…` / 22317（期望原值）。**这不是放宽阈值，是修缺陷。**
+
+#### 32.3 当前源码的全量清单：26 行，两族归因
+
+本机 `.build/C3.exe`（= 8fc56916 + 上述守卫修复）跑 `scripts/emit_manifest.ps1`，
+对 `emit-manifest.expected.txt` 差 **26 行**（596 输入 / 596 行，rc 全 0）：
+
+- **族 A（17 行，8fc56916 已含，CI 也看到）**：`Charts 2020` ×4、`tests/dbgdlg/dbgdlg.vbp`、
+  `tests/declare_out/declare_gmn_path_out.bas`、`tests/guisample` ×6、`tests/k173_udtmem` ×2、
+  `tests/test_fixedstr_decl.bas`、`tests/test_fixedstr_sem.bas`、`tests/ucTreeView/Proyecto1.vbp`。
+  成因见 §31.3（`Debug.Print` 统一过 `wrapToBSTR` + 定长串 ABI + `vb6_FixedStrToBSTR`）。
+- **族 B（9 行，由守卫修复新暴露）**：`tests/b190_memberarray/B190.vbp`、
+  `tests/b598_print_numeric/B598.vbp` + `B598Main.bas`、`tests/TeeChartChartDisplay/DisplayProject.vbp`、
+  `tests/test_byref_elem.bas`、`tests/ve_list/VeList.vbp` + `VeListMain.bas`、
+  `tests/VbQRCodegen-master` ×2。
+  全部同一形态：`VB6_SA_AT(BSTR,…)` 外层多裹了一层 `vb6_CStr(vb6_VariantFromValue(…))`，现回落到裸元素读。
+  逐项抽查（`b598` 18 行差、`b190` 6 行差）确认差异**只有**这一族 + `BSTR x = NULL;` 初始化形态，
+  无第二类漂移。
+- 字节数方向可自证：族 B 全是**变小**（去掉外裹），族 A 有增有减（新增定长串换算）。
+
+#### 32.4 登记口径（本轮不 -Bless）
+
+`ci_emit_manifest2.txt` 出自 head=8fc56916，**不含守卫修复**，其中
+`test_array`/`test_redim_elem` 两行是**坏形状**。若现在 `-Bless` 会把缺陷钉进期望，
+故本轮**不登记**：先推守卫修复，等 CI 在**新 head** 上重新交回清单，再
+`pwsh -File scripts/rebless_emit_manifest.ps1 -Manifest <新清单> -Bless` 并复算绿。
+
+#### 32.5 设计期非几何属性清单（第一版，`.temp/design_props.txt`）
+
+八份夹具（Form1~6 + ucScrollbar.ctl + ucTreeViewPlus.ctl）`Begin…End` 块内属性去重统计，
+按「当前 C3 是否落地」分档（证据见 `cgen_form.cpp`、`detail/module/cgen_form_create_controls.inc`、
+`cgen_util_ctrl.cpp`、`rtl/core/vb6forms/vb6forms_controls.h`）：
+
+| 属性 | 次数/文件 | C3 现状 | 影响的可视/行为结果 |
+|---|---|---|---|
+| `Left/Top/Width/Height` | 89/89/87/87 | 落地（几何） | 布局 |
+| `Name/Index/TabIndex` | 43/73/84 | 落地（身份/顺序） | 控件数组、Tab 顺序 |
+| `Caption`(45)、`Text`(7) | 45 / 7 | 落地（`ctrlCaption`/`ctrlText`，style_apply:41/347） | 窗体标题、静态文本 |
+| `Font` 的 `Name/Size/Charset/Weight/Underline/Italic/Strikethrough` | 43×7 | **落地**（`BeginProperty Font` 块 → `emitFrmFontObj` + `vb6_UC_SetPendingFont`，create_controls:282-287；实例侧走 `prop_let_Font`/bag） | 全部文字度量 |
+| `TextColor/BackColor/ForeColor/BorderColor/BorderStyle/BorderWidth` | 5/14/2/1/16 | 部分：宿主控件走 `cgen_util_ctrl.cpp` 的 style 表；**UC 实例属性只走 prop_let/bag** | 配色/边框 |
+| `PlusMinusColor/PlusMinusHotColor/SelectionColor/SubTextColor/ShowTreeLines/FullRowSelect/NodeSpacing/MinNodeHeight/MarginBottom/SubTextFont` | 6/6/2/1/2/3/3/1/1/2 | **走 UC 实例属性的 prop_let 直发或 bag**（create_controls:465-547 / 569-722） | 树线、加减号、行高、选择色 |
+| `_ExtentX/_ExtentY` | 8/8 | **丢弃**（在 `kSkip` 内，create_controls:376-381） | 设计器尺寸记录，运行期无影响 |
+| `ClientWidth/ClientHeight/ClientLeft/ClientTop`、`ScaleWidth/ScaleHeight/ScaleMode` | 8/8/8/8、33/33/4 | 部分：`.ctl` 顶层 `ScaleMode` → `desc.scaleMode`（cgen_form.cpp:429-431）；窗体 `Scale*` 用于换算 | 度量换算 |
+| `AutoRedraw` | 2 | 落地（`desc.autoRedraw`，cgen_form.cpp:445-448） | 离屏 DIB / hDC 是否常驻 |
+| `BackStyle=0` | — | 落地（`desc.transparent`，cgen_form.cpp:436-439） | 透明合成 |
+| `ControlContainer/Appearance/CanGetFocus/ClipControls/FillStyle/FontTransparent/ToolboxBitmap` | 各 1 | **丢弃**（不进 `vb6_UserControlDesc`；`CanGetFocus` 只在 `invisible_at_runtime.hpp` 表里影响建窗） | 焦点/填充样式（当前夹具未观察到差异） |
+| `StartUpPosition` | 6 | **丢弃** | 窗口初始位置（3 = Windows Default，恰好等价于现在的默认） |
+| `Visible` | 5 | **部分**：宿主控件有 `emitDesignerStateProps`；**`.ctl` 设计面子控件无出口**；`.ctl` 顶层实例属性走 prop_let | 隐藏的滚动条/文本框 |
+| `Enabled/Interval/Max/Min/Value/Locked` | 2/2/6/1/9/6 | 部分：Timer 的 `Interval`/`Enabled` 落地（cgen_form.cpp:370-373）；`Slider` 的 `Max/Min/Value` 落地（cgen_util_ctrl.cpp:1269-1288）；`Locked` 未见出口 | 数值控件初值 |
+| `Orientation` | 1 | **部分**：`Slider` 的样式位落地（cgen_util_ctrl.cpp:1491-1492）；**`.ctl` 设计面子控件（ucScrollbar2）的 `Orientation=1` 丢弃** | 滚动条方向 |
+| `SmoothScrollFactor` | 2 | **丢弃**（`.ctl` 设计面子控件属性整块不落地；运行期 `=1` 覆盖，实测 §30.2） | 平滑滚动步长 |
+| `ThumbTooltipFont`（BeginProperty 块） | 2 | **丢弃**（设计面子控件的 `BeginProperty` 块无出口） | 缩略图提示字体 |
+| `Picture/Stretch`、`ToolTipText`、`MousePointerHands`、`CheckBoxes/CheckBoxColor` | 1/1/1/2/1/1 | 部分（Picture 走 frx → bag；其余视控件族而定） | 图像/提示 |
+
+**按影响面排序（待修）**：
+1. `.ctl` 设计面子控件的**非几何属性**（`Orientation`、`SmoothScrollFactor`、`ThumbTooltipFont`、`Visible`、`Text`）——
+   影响 ucScrollbar 两条滚动条的方向/可见性/字体，是 `0,15` 症状所在。
+2. `.ctl` 顶层被丢弃属性（`Appearance/ClipControls/FillStyle/FontTransparent/CanGetFocus`）——
+   当前夹具无可见差，先记账不动。
+3. `StartUpPosition`（3 = Windows Default 与默认行为等价）、`Locked`、`_Extent*`——低优先。
+
+#### 32.6 下一步
+
+1. 提交守卫修复 + 本节，推 `github`/`origin` 的 `dev`；等 CI 在新 head 出清单后 `-Bless` 26 行并复算。
+2. 按 32.5 第 1 项开工：`.ctl` 设计面子控件非几何属性的落地通道（cgen_form.cpp:353-407 目前只发几何）。
+3. 五窗对照改用真 VB6 基准 `331776 B / 24EAAFB2…CDFD`（§29.3），每修一窗更新断言、旧产物必须红。
