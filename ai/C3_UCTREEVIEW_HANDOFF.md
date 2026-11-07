@@ -1900,3 +1900,58 @@ Form6  font=[Segoe UI Semibold|-13|0|700]  全部通过
   判据读到 `IDC_ARROW(65539)` 而不是 `IDC_NO(65559)`（`WindowFromPoint` 命中浏览器）。
   这不是产品回归：把 Firefox 最小化后，同一 exe 手工带 `C3_UC_DUMPDIR` 启动 =
   **27 张 bmp**（`.temp\chartprobe\ucdump`）。⇒ 本地跑 `test.bat gui` 前必须先最小化浏览器。
+
+### 27.16 UserControl_Show 延迟到"控件变可见"（Form4 整窗空白闭合，2026-11-07）
+
+#### 27.16.1 红项（修前，`guard_ref4.log` / `.temp\px_s1.log` 同口径）
+
+```
+Drag & Drop  textRows=0  firstTextW=0  vivid=0  photo=0  avatar=0  dark=0
+```
+即整窗空白（其余四窗已有内容，只有 Form4 全 0）。真 VB6 基准：`textRows=5 / firstTextW=98 /
+vivid=2161 / photo=2484 / avatar=927 / dark=529`（`.temp\vb6ref\ref_metrics.json`）。
+
+#### 27.16.2 根因（插桩实测，不猜）
+
+`C3_UC_TRACE` 插桩（`.temp\fx_f4dbg`，Latin1 字节级改副本，保原编码）逐条读数：
+
+- Form4 `Form_Load`：`F4LOAD → F4ADD×5 → F4DONE`（节点**确实**加进树里）；
+- `UserControl_Show` 触发的 `UPD/FONTOK/DRAW` **全部出现在 `F4LOAD` 之前** ——
+  此时 `m_Font` 尚未落地、树还空，`ucTreeViewPlus.Update` 开头 `If m_Font Is Nothing Then Exit Sub`
+  直接把绘制砍掉 ⇒ 整窗只剩背景。
+
+真 VB6 的事件顺序是 `Form_Load → 控件变可见 → UserControl_Show`；C3 原来在**建窗阶段**
+（父窗体还没 `Show`）就同步调 `desc->show`，顺序反了。
+
+#### 27.16.3 修（RTL 4 文件）
+
+- `vb6forms_uc_internal.h`：`vb6_UCRec` 新增 `int32_t pendingShow;`
+- `uc_host.c`：`vb6_uc_activate` 里 `desc->show` 段改为
+  `if (!IsWindowVisible(hwnd)) { r->pendingShow = 1; trace("show.defer") } else { 原地立即发 }`；
+  新增 `vb6_uc_fireShowCb`（`EnumChildWindows` 回调，逐控件 `pendingShow && ready && desc->show`
+  就 `vb6_uc_push → show → vb6_uc_pop → heap_probe`）；
+  `vb6_UC_FirePendingShows(parentHwnd)` 对外出口。
+- `vb6forms_controls.h`：声明 `void vb6_UC_FirePendingShows(void* parentHwnd);`
+- `vb6forms.c`：`vb6_ShowForm` 在**延迟 Form_Load 派发完**、`ShowWindow(SW_SHOWDEFAULT)` **之前**
+  调 `vb6_UC_FirePendingShows(hwnd)` ⇒ 对齐 VB6 的"Form_Load 先跑完，控件才变可见"。
+
+#### 27.16.4 绿（`.temp\px_s1.log`，本机 120dpi，真 VB6 读数作判据）
+
+| 窗 | 项 | 修前 | 修后 | 真 VB6 |
+|---|---|---|---|---|
+| Drag & Drop | textRows | 0 | **5** | 5 |
+| Drag & Drop | firstTextW | 0 | **99**（≥98−2） | 98 |
+| Drag & Drop | dark | 0 | **678**（≥529×0.9） | 529 |
+| Drag & Drop | avatar | 0 | **3089**（≥927×0.9） | 927 |
+
+插桩顺序也转正：`F4DONE` 之后才出现 `UPD/FONTOK/DRAW`。
+
+仍红（归 §27.17 图片/图标链路，与本修无关）：`vivid=1334 < 2161×0.9`、
+`photo=1339 < 2484×0.9`（Form4 的 `folderClose.png` 等 PNG 未上屏）。
+
+#### 27.16.5 构建口径
+
+RTL 有改 ⇒ `scripts\_tmp_c3_rebuild.bat`（EXIT=0）+ `scripts\check_rtl_embedded.ps1`
+（`R1..R3 OK, 126 RTL resources byte-identical, exe sha=b597e2af185d`）；
+夹具 `C3_NO_OBJCACHE=1` + `scripts\c3_build.ps1 -Extra "--arch x86"` ⇒ **835584B**（含 show defer）。
+本次 guard 全量读数：`.temp\px_s1.log`（EXIT=1，红项见 §27.14.7 + 本节）。

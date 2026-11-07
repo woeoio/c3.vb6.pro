@@ -1723,6 +1723,11 @@ void vb6_ShowForm(void* hwnd, int modal) {
         }
     }
 
+    /* UserControl_Show 是"控件变可见"事件: 建窗阶段被挂起 (父窗还没 Show),
+     * 在延迟 Form_Load 派发完(= Form_Load 已经跑过)之后、窗口可见之前补发。
+     * 实测 Form4 'Drag & Drop': 不补发时 UC 的 Update 停在空树, 整窗空白。 */
+    vb6_UC_FirePendingShows(hwnd);
+
     ShowWindow((HWND)hwnd, SW_SHOWDEFAULT);
     UpdateWindow((HWND)hwnd);
 

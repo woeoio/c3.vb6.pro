@@ -610,16 +610,48 @@ static void vb6_uc_activate(vb6_UCRec* r) {
         vb6_heap_probe("after-resize", desc->typeName);
     }
     if (desc->show) {
-        vb6_UCSaved saved;
-        vb6_uc_push(r, &saved);
-        vb6_uc_trace("show.begin", desc->typeName, r->me);
-        desc->show(r->me);
-        vb6_uc_trace("show.end", desc->typeName, r->me);
-        vb6_uc_pop(&saved);
-        vb6_heap_probe("after-show", desc->typeName);
+        // VB6 的 UserControl_Show 是"控件**变可见**"事件: 建窗阶段父窗体还没 Show,
+        // 此刻触发等于在 Form_Load 之前跑 (实测 Form4: Update 面对空树 → 整窗空白)。
+        // 父窗已可见(运行期动态加控件)才立即发; 否则挂起到 vb6_ShowForm 派发完
+        // 延迟 Form_Load 之后统一补发 (vb6_UC_FirePendingShows)。
+        if (!IsWindowVisible(hwnd)) {
+            r->pendingShow = 1;
+            vb6_uc_trace("show.defer", desc->typeName, r->me);
+        } else {
+            vb6_UCSaved saved;
+            vb6_uc_push(r, &saved);
+            vb6_uc_trace("show.begin", desc->typeName, r->me);
+            desc->show(r->me);
+            vb6_uc_trace("show.end", desc->typeName, r->me);
+            vb6_uc_pop(&saved);
+            vb6_heap_probe("after-show", desc->typeName);
+        }
     }
     vb6_uc_trace("create.end", desc ? desc->typeName : "?", r->me);
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+// 补发挂起的 UserControl_Show: 由 vb6_ShowForm 在延迟 Form_Load 派发完、
+// ShowWindow 之前调用 —— 与 VB6 的 "Form_Load → 控件变可见 → UserControl_Show" 对齐。
+static BOOL CALLBACK vb6_uc_fireShowCb(HWND h, LPARAM lp) {
+    (void)lp;
+    vb6_UCRec* r = vb6_uc_findByHwnd((void*)h);
+    if (r && r->pendingShow && r->ready && r->desc && r->desc->show) {
+        r->pendingShow = 0;
+        vb6_UCSaved saved;
+        vb6_uc_push(r, &saved);
+        vb6_uc_trace("show.begin", r->desc->typeName, r->me);
+        r->desc->show(r->me);
+        vb6_uc_trace("show.end", r->desc->typeName, r->me);
+        vb6_uc_pop(&saved);
+        vb6_heap_probe("after-show", r->desc->typeName);
+    }
+    return TRUE;
+}
+
+void vb6_UC_FirePendingShows(void* parentHwnd) {
+    if (!parentHwnd) return;
+    EnumChildWindows((HWND)parentHwnd, vb6_uc_fireShowCb, 0);
 }
 
 void vb6_UC_ActivateHost(void* hwnd) {

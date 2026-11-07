@@ -124,6 +124,9 @@ typedef struct vb6_UCRec {
     // (实测 czUI: m_ControlType 未恢复 = 0 = czTitleBar ⇒ 走错分支 ⇒ AV)。
     // 见 uc_host_create.inc 的 vb6_uc_activate 与 vb6_UC_ActivateHost。
     int32_t pendingActivate;
+    // VB6 的 UserControl_Show 是"控件变可见"事件: 建窗阶段父窗体还没显示 ⇒ 不发,
+    // 挂到 vb6_ShowForm 里延迟 Form_Load 派发完之后补发 (vb6_UC_FirePendingShows)。
+    int32_t pendingShow;
     // 账 #305 第二百九十二刀: VB6 `UserControl.AutoRedraw = True` 的持久表面。
     // 之前 hDC 只在 WM_PAINT 期间有效、Cls 恒空转 ⇒ 只在 Resize/Refresh 里画一次的
     // 控件 (ComCtlsDemo 的 FrameW) 永远是白板。adOn = VB 代码写过 .AutoRedraw = True。

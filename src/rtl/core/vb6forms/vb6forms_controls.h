@@ -357,6 +357,9 @@ int   vb6_UC_SkipInitPropsConsume(void);
 // (VB6 顺序 Initialize → ReadProperties → Show/Resize)。窗体创建代码在 UC_ReadProps
 // 之后调用它; 非加载路径的实例在 HostCreate 内部就已激活, 这里会直接返回。
 void  vb6_UC_ActivateHost(void* hwnd);
+// 窗体 Show 时补发挂起的 UserControl_Show (VB6: Form_Load 之后、窗口真正可见时)。
+// vb6_ShowForm 在派发完延迟 Form_Load、ShowWindow 之前调用。
+void  vb6_UC_FirePendingShows(void* parentHwnd);
 // ---- czUI fix: 设计器子控件实例化 (.ctl 设计面上的 TextBox 等属于每个实例) ----
 // 在 ucHostInit (宿主实例初始化) 期间调用, 以当前 UC 宿主窗口为父创建真实子窗口。
 // left/top/width/height 单位为缇。返回子窗口句柄 (NULL = 失败)。
