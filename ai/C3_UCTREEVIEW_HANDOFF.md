@@ -3770,3 +3770,89 @@ PASS ... repeatcontent[Contact  List 1] vivid=6453 avatar=9950
 
 A 段（每个窗体独立进程）旧产物本来就是绿的 —— 这个缺陷只在**同进程重复打开**
 时出现，与 §43 的"冷启动直点"矩阵不矛盾；B 段因此必须同进程连点。
+
+## §53 三处残差收口：行数差、`bg65`、字体口径（2026-11-07，第 5 块）
+
+### 53.1 残差 1：Form3 9→10 / Form5 14→15，差的那一行是什么
+
+先回答"判定是不是靠阈值凑的"：**不是**。两处都是
+
+```powershell
+if ($st['textRows'] -ne $rf['textRows']) { ... }      # tests/guisample/uctreeview_px.ps1:1461 附近
+```
+
+等值比较（参考 10 / 15），没有容差、没有 ±1。`dark`/`lastTextY` 也只是读数。
+
+差的那一行**不是空行，也不是被裁掉的最后一行**，两窗的成因不同（前两刀已提交）：
+
+- **Form3（Corporate Hierarchy）**：行高/底距的 DPI 半值。`ucTreeViewPlus.ctl` 的
+  `NSpacing = 34 * DpiFactor`（42.5）、`lMBottom = 10 * DpiFactor`（12.5）在
+  `round()`（半值远离零）下取成 43/13，把最后一行推出可视区；真 VB6 的
+  `42.5→42 / 12.5→12` 是银行家舍入。修在 `vb6rtl_conv.c::vb6_FltToLng`
+  （`3f814304`）。读数：`lastTextY 573→565`（参考 565），`textRows 9→10`。
+- **Form5（Menu / Tools）**：不是行高，是**行间噪声**。`Node.cls` 把
+  `BadgeBackColor` 声明成 `String`，`RGBtoARGB(N.BadgeBackColor, 100)` 的
+  String→Long 隐式转换在 C3 里被截成 BSTR 指针低 32 位，徽标底色画成噪声色，
+  在行间隙造出 dark 像素，相邻文字行被并成一条带 ⇒ `textRows` 少算。
+  修在 `cgen_expr_call_arg_emit.inc`（`07534a66`），保留参考的 15 行。
+
+本轮全量门（`.temp/px_s54b`，新产物，`--arch x86`）读数：
+
+| 窗口 | textRows | dark | lastTextY | 参考 textRows |
+| --- | --- | --- | --- | --- |
+| Form3 | 10 | 5155 | 565 | 10 |
+| Form5 | 15 | 4778 | 497 | 15 |
+| Tree Explorer | 5 | 1542 | 194 | 5 |
+| Drag & Drop | 5 | 529 | 193 | 5 |
+| Agenda tema oscuro | 1 | 146996 | 490 | 1 |
+
+### 53.2 残差 2：Contact `bg65` 判据没有被改松
+
+判据逐字未动：`uctreeview_px.ps1:1485` 仍是
+`$st['bg65'] -lt [int]($rf['bg65'] * 0.9)` = 106764（ref 118627）。
+`git diff` 这份脚本本轮只多了一段**采集侧**动作：A 段开始前把光标停到屏幕
+右下角（`SetCursorPos(GetSystemMetrics(0/1)-2)`），一个阈值都没碰。
+
+`102462` 的根因是**采集污染**不是产品回退：B 段最后一步在 (281,300) 做双击，
+光标留在那里；后面窗体恰好开在光标下时，ucTreeView 的 `m_HotItem` 行用
+`RGBtoARGB(m_SelectionColor, 70)` 铺满整行。该色实测 `(71,105,186)`，
+像素数 15568；`bg65 + 该行 = 118030 ≈ ref 118627`。真 VB6 参考帧是光标不在
+窗体上时抓的，所以这里只把"有没有 hover"与参考帧对齐。
+
+光标归位后本轮读数：`bg65=118862`（PrintWindow）/ `118852`（CopyFromScreen），
+判据 106764 ⇒ 真合上（差值来自 `RandomBetween` 头像底色与 1px 采集差，非判据放宽）。
+
+### 53.3 字体口径 Fix 434：`IFont.hFont` 磅→像素取截断
+
+CI `syntax` 格的 `com_byref_clone_font` 红在 `K276:height-trunc=True`（实际 False）。
+真 VB6 参考 exe 实测（`.temp/fontprobe.ps1`，120dpi）：窗体/原生控件 `WM_GETFONT`
+= -13（截断），UC 宿主窗口 = -14（半值向上）。据此把
+`uc_controls.c::vb6_uc_fontLogFontImpl` 拆出 `roundHalf` 参数：
+`vb6_UC_FontLogFont`（宿主创建路径）传 1，`vb6_uc_fontEnsureHFont`
+（`IFont.hFont`）传 0。本地 K271 夹具八条 K276 读数全 True。
+
+### 53.4 静态门随实现改档（不改判据口径）
+
+| 门 | 改动前要求 | 现在要求 |
+| --- | --- | --- |
+| `check_float_to_int_round` | `(int64_t)round(` 恰 1 处 | 半值取偶体 `((int64_t)f & 1) == 0` 恰 1 处且在 `vb6_FltToLng` 内；旧 `round(` 必须 0 处 |
+| `check_select_label_owner` | `vb6_VarCmp >= 3` | `vb6_VarCmp >= 1` 且 `vb6_VarSelCmp >= 2`（Fix 433 分档） |
+| `check_rtl_naked_names` | `hostPseudoBareEligible(` | `hostPseudoBare(?:Call)?Eligible(`（§40 改名） |
+| `check_variant_i8_coverage` | 三张表未含 `vb6_VarIsNumber` | 三张表登记 `vb6_VarIsNumber`（`9467654d` 已答 I8/DECIMAL/I1/UI2） |
+
+四个门本地复跑 rc=0；`run_tests.ps1` 的 b606 shape 针从
+`vb6_VarCmpGe(&_vb6_select_` 改为 `vb6_VarSelCmpGe(&_vb6_select_`（上界槽仍钉
+`vb6_VarCmpLe`）。本地 `--emit-c` 逐针验过。
+
+### 53.5 Emit manifest 登记
+
+CI 清单（head=62fa6c2a）与仓里期望只差 3 份：`tests/test_caseis.bas`、
+`tests/b604_select_label_owner.bas`、`tests/b606_slot_label.bas`。差异源为 Fix 433
+（`cgen_select.cpp` 里 Select Case 标签换档 `vb6_VarCmp*` → `vb6_VarSelCmp*`），
+逐行核对后 `rebless_emit_manifest.ps1 -Bless`，复算 603/603 逐行相同。
+
+### 53.6 全量门结果
+
+`.temp/px_s54b`：**PASS rc=0**（五窗内容 + 交互 + 同进程连点 3 轮全绿）。
+注：本轮第一次跑（`px_s54`）A1 出现一次 `'Corporate Hierarchy' BM_CLICK 3s 未返回`，
+同产物重跑即绿（`content[Form3]` 与 B 段三轮均正常），属冷启动偶发，未改判据。
