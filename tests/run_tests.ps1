@@ -6266,6 +6266,15 @@ if ($Category -in @("all", "run", "bas")) {
     Add-BasTest "test_arg_string_to_long" "$Tests\test_arg_string_to_long.bas" $b431Needles
     Add-BasTest "test_arg_string_to_long_x86" "$Tests\test_arg_string_to_long.bas" $b431Needles -Arch "x86"
 
+    # Fix 431 (RTL 侧): VB6 的浮点→整数是**银行家舍入** (四舍六入五取偶)。
+    # 改前 vb6_FltToLng 用 round() (半值远离零), 2.5→3 / -2.5→-3; 真 VB6 是
+    # 2 / -2。靶工程里 34*1.25=42.5、10*1.25=12.5 被取成 43/13, 树线整列偏 2~4px
+    # (参考 x=80/122/164, C3 旧为 82/125/168)。两台各钉一头。
+    $b431bNeedles = @("RB-1=2", "RB-2=4", "RB-3=2", "RB-4=4",
+                      "RB-5=-2", "RB-6=-4", "RB-7=2", "RB-8=4", "RB-DONE")
+    Add-BasTest "test_round_banker" "$Tests\test_round_banker.bas" $b431bNeedles
+    Add-BasTest "test_round_banker_x86" "$Tests\test_round_banker.bas" $b431bNeedles -Arch "x86"
+
     # ---- 注册表自检 (2026-09-30, 门 #233 的教训) --------------------------------
     # 为什么单开一道: `test_variant_boxing` 那条注册里 `\t` 被写成了**真 TAB**
     # (`"$Tests<TAB>est_variant_boxing.bas"`), PowerShell 把它原样传给了 C3 ⇒ 门里读到

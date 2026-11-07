@@ -3430,3 +3430,51 @@ Form5 全绿（其余四窗当轮未动）。
 `S2L-1=5485649`（String 变量 → ByVal Long）、`S2L-2=321`（字面量 → Integer）、
 `S2L-3=12`（字面量 → Double）、`S2L-4=5354579`（`Val("&H" & s)` → Long）、`S2L-DONE`。
 改前：`EchoD(s)` 编不过、`Echo(s)` 得 -911689592。
+
+## §46 根因二：浮点→整数是银行家舍入（Fix 431 RTL，2026-11-07，第 4 块）
+
+### 46.1 取证
+
+`ucTreeViewPlus.ctl` 的几何量在 DPI 缩放里恰好落在半值上：
+
+```vb
+m_NodeSpacing = 34 * DpiFactor      ' 34 * 1.25 = 42.5
+m_MarginBottom = 10 * DpiFactor     ' 10 * 1.25 = 12.5
+```
+
+真 VB6 参考图里树线列 x=80/122/164（行距 42、底距 12），C3 是 82/125/168
+（行距 43、底距 13）—— 差的正是半值那 1px。VB6 的浮点→整数赋值/CLng/CInt
+都是**银行家舍入**（四舍六入五取偶），不是 `round()` 的半值远离零。
+
+改前 `vb6_FltToLng` 是 `(int64_t)round(x)`：`CLng(2.5)=3`、`CLng(-2.5)=-3`。
+
+### 46.2 修法
+
+`src/rtl/core/vb6rtl/vb6rtl_conv.c` 的 `vb6_FltToLng` 改为地板 + 半值取偶：
+
+```c
+int64_t vb6_FltToLng(double x) {
+    double f = floor(x);
+    double d = x - f;
+    if (d > 0.5) return (int64_t)(f + 1);
+    if (d < 0.5) return (int64_t)f;
+    return (((int64_t)f & 1) == 0) ? (int64_t)f : (int64_t)(f + 1);
+}
+```
+
+### 46.3 读数（`.temp/px_rows4`，Form3）
+
+| 指标 | 修前 | 修后 | 参考 |
+| --- | --- | --- | --- |
+| textRows | 9 | **10** | 10 |
+| dark | 5161 | **5155** | 5155 |
+| lastTextY | 573 | **565** | 565 |
+| firstTextW | 187 | **187** | 187 |
+
+Form3 全绿；Form5 同步从 14 → 15 行（与 §45 一起收敛到参考）。
+
+### 46.4 回归用例
+
+`tests/test_round_banker.bas` + 注册（x64 / x86）：`RB-1=2`、`RB-2=4`、`RB-3=2`、
+`RB-4=4`、`RB-5=-2`、`RB-6=-4`、`RB-7=2`、`RB-8=4`、`RB-DONE`。
+改前实测 `3 / 4 / 3 / 4 / -3 / -4 / 3 / 4`（`test_round_banker` 已跑过红→绿）。
