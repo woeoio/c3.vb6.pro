@@ -4007,3 +4007,17 @@ FillRect 才能让 bbox 精确等于 10x8 / 8x6。HScrollBar 按同样比例镜�
 px 门（本机 120dpi，`-RefJson .temp\vb6ref\ref_metrics.json`）：
 `PASS tree=221x556 … sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120`。
 Windows PowerShell 5.1（CI 实际解释器）复跑 `-HoverOnly` 同样 PASS。
+
+### 55.6 GA 全量
+
+run **42409604121**（head=`10618fe1`，dev）：**22/22 success**，0 failure / 0 skipped。
+
+guisample 所在的 `Tests (vbp #2)` 日志里新判据按 96dpi 折算后全绿：
+
+```
+sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0 dpi=96
+Results: PASS=47 FAIL=0 SKIP=0 TOTAL=68
+```
+
+96dpi 的 8x6 / 6x5 正是 120dpi 参考 10x8 / 8x6 的 0.8 倍（DPI 折算），说明实现与判据同一套
+比例，没有为过门把阈值放宽。本轮提交 `10618fe1`，已 `git push github dev` + `git push origin dev`。
