@@ -107,6 +107,7 @@ public class UP {
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder sb, int n);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr res);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, IntPtr e);
   public static string WText(IntPtr h) { var sb = new System.Text.StringBuilder(512); GetWindowTextW(h, sb, 512); return sb.ToString(); }
   // 跨进程 GetWindowText 对 Edit **只回缓存标题**（2026-11-07 实测：_Change 早已把文本改掉，
@@ -1353,6 +1354,15 @@ if ($p.HasExited) {
     # vb6_formLoaded_FormN 都没清, 前几枚窗体的残留会把后面第 4/5 枚窗体的绘制带坏
     # (实测同一实例里 Form5/Form6 只画出窗口底色)。内容对照与重复点击是两条独立成因,
     # 所以内容段用一次性实例, 重复点击段单独再起一个实例连点 3 轮。
+    #
+    # 采集侧去污染 (2026-11-07): 交互段最后把光标停在 (281,300) 做双击, 后面的窗体若正好
+    # 开在光标底下, ucTreeView 的 hover 行会用 SelectionColor(alpha 70) 铺满整行 ——
+    # 真 VB6 参考帧是"光标不在窗体上"时抓的, 这一行会把 bg65 少算约 15.6k
+    # (Contact 实测 102462 vs 118030, 判据 0.9*ref=106764 因此偶发红)。判据一个都不动,
+    # 只把光标先停到屏幕右下角, 让"有没有 hover"与参考帧同条件 (也让本门不再随上一段
+    # 交互的落点漂: 同一份产物两次跑出过 118862 / 102462 两个数)。
+    [void][UP]::SetCursorPos(([UP]::GetSystemMetrics(0) - 2), ([UP]::GetSystemMetrics(1) - 2))
+    Start-Sleep -Milliseconds 300
     $ai = 0
     foreach ($sp in $formSpecs) {
         $ai++
