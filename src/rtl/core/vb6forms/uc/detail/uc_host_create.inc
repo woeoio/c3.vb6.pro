@@ -24,6 +24,13 @@
             vb6_wideToU8Buf(parentClassW, parentClass, (int)sizeof(parentClass));
             int bg = vb6_Forms_QueryClassBg(parentClass);
             if (bg >= 0) vb6_Ambient_BackColor = bg;
+            // 账 <ambient-fore>: Ambient.ForeColor = **容器**的 ForeColor。.ctl 里
+            // `m_TextColor = .ReadProperty("TextColor", Ambient.ForeColor)` 就吃这一条 ——
+            // 以前全局恒 0(黑), 深色主题 (Form6 ForeColor=白) 的节点文字被画成黑字:
+            // 实测 Contact 列表文字 REF=(255,255,255)+ClearType 彩边, C3=(0,0,14) 一团黑。
+            // 与 BackColor 同源: 容器窗体的设计期 ForeColor 由 cgen 登记在类名上。
+            int fg = vb6_Forms_QueryClassFore(parentClass);
+            if (fg >= 0) vb6_Ambient_ForeColor = fg;
         }
     }
 

@@ -352,27 +352,53 @@ int vb6_RegisterFormClass(const char* className, void* wndProc, void* hInstance,
     return vb6_RegisterFormClassBg(className, wndProc, hInstance, iconResId, -1);
 }
 
-// ---- 窗体类背景色登记 (供 UserControl Ambient.BackColor 查询) ----
+// ---- 窗体类前景/背景色登记 (供 UserControl Ambient.ForeColor/BackColor 查询) ----
 #define VB6_FORMBG_MAX 64
-static struct { char className[128]; int bg; } g_formBg[VB6_FORMBG_MAX];
+static struct { char className[128]; int bg; int fg; } g_formBg[VB6_FORMBG_MAX];
 static int g_formBgCount = 0;
 
-static void vb6_formClassBg_set(const char* className, int bg) {
+static int vb6_formClassBg_find(const char* className) {
     for (int i = 0; i < g_formBgCount; i++) {
-        if (strcmp(g_formBg[i].className, className) == 0) { g_formBg[i].bg = bg; return; }
+        if (strcmp(g_formBg[i].className, className) == 0) return i;
     }
-    if (g_formBgCount < VB6_FORMBG_MAX) {
-        snprintf(g_formBg[g_formBgCount].className, sizeof(g_formBg[0].className), "%s", className);
-        g_formBg[g_formBgCount].bg = bg;
-        g_formBgCount++;
-    }
+    return -1;
+}
+
+static int vb6_formClassBg_slot(const char* className) {
+    int i = vb6_formClassBg_find(className);
+    if (i >= 0) return i;
+    if (g_formBgCount >= VB6_FORMBG_MAX) return -1;
+    i = g_formBgCount++;
+    snprintf(g_formBg[i].className, sizeof(g_formBg[0].className), "%s", className);
+    g_formBg[i].bg = -1;
+    g_formBg[i].fg = -1;
+    return i;
+}
+
+static void vb6_formClassBg_set(const char* className, int bg) {
+    int i = vb6_formClassBg_slot(className);
+    if (i >= 0) g_formBg[i].bg = bg;
 }
 
 int vb6_Forms_QueryClassBg(const char* className) {
-    for (int i = 0; i < g_formBgCount; i++) {
-        if (strcmp(g_formBg[i].className, className) == 0) return g_formBg[i].bg;
-    }
-    return -1;
+    int i = vb6_formClassBg_find(className);
+    return i >= 0 ? g_formBg[i].bg : -1;
+}
+
+/* 窗体级 ForeColor 登记: Ambient.ForeColor 的唯一来源 (VB6 的 UC 环境属性 = 容器前景色).
+   .frm 的 ForeColor 是设计期属性, 运行期以前只进类背景刷(BackColor), 前景色整条丢失 ——
+   深色主题窗体 (ForeColor=白) 上的 UC 因此把 `ReadProperty("TextColor", Ambient.ForeColor)`
+   读成黑色, 节点文字全画成黑字。 */
+int vb6_RegisterFormClassFore(const char* className, int foreColor) {
+    int i = vb6_formClassBg_slot(className);
+    if (i < 0) return -1;
+    g_formBg[i].fg = foreColor;
+    return 0;
+}
+
+int vb6_Forms_QueryClassFore(const char* className) {
+    int i = vb6_formClassBg_find(className);
+    return i >= 0 ? g_formBg[i].fg : -1;
 }
 
 void* vb6_CreateFormWindowB(const char* className, const char* formName,

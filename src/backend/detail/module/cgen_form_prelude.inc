@@ -90,6 +90,11 @@
     int formBackColor = -1;
     it = frmDesc.formControl.properties.find("BackColor");
     if (it != frmDesc.formControl.properties.end()) formBackColor = (int)it->second.intValue;
+    // 窗体级 ForeColor (OLE 色) — Ambient.ForeColor 的唯一来源 (UserControl 的环境属性
+    // = 容器前景色); 未指定时 -1, UC 侧保持原全局值不动.
+    int formForeColor = -1;
+    it = frmDesc.formControl.properties.find("ForeColor");
+    if (it != frmDesc.formControl.properties.end()) formForeColor = (int)it->second.intValue;
     // czUI fix: BorderStyle (默认 2=Sizable)。0=None 时 RTL 创建无边框窗口,
     // 否则自绘标题栏 (BorderStyle=None 的 .ctl 窗体) 会叠在系统标题栏下面。
     int formBorderStyle = 2;

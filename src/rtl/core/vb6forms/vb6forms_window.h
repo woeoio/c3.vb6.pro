@@ -24,6 +24,10 @@ int vb6_RegisterFormClass(const char* className, void* wndProc, void* hInstance,
 int vb6_RegisterFormClassBg(const char* className, void* wndProc, void* hInstance, int iconResId, int backColor);
 // 查询已登记窗体类的背景色 (无登记返回 -1); 供 UserControl Ambient.BackColor 使用
 int vb6_Forms_QueryClassBg(const char* className);
+// 窗体级 .frm ForeColor 登记 (OLE 色); 供 UserControl Ambient.ForeColor 使用
+int vb6_RegisterFormClassFore(const char* className, int foreColor);
+// 查询已登记窗体类的前景色 (无登记返回 -1)
+int vb6_Forms_QueryClassFore(const char* className);
 
 // 创建窗体窗口
 // className: 已注册的窗口类名

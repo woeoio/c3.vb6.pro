@@ -47,6 +47,10 @@
         } else {
             c_.emitLine("vb6_RegisterFormClass(\"" + clsName + "\", (void*)" + wndProc + ", hInst, 0);");
         }
+        // Ambient.ForeColor 的来源: 容器窗体的设计期 ForeColor (见 RTL vb6_RegisterFormClassFore)
+        if (formForeColor != -1) {
+            c_.emitLine("vb6_RegisterFormClassFore(\"" + clsName + "\", " + std::to_string(formForeColor) + ");");
+        }
         c_.emitLine("vb6_hwnd_" + cIdent(formName) + " = vb6_CreateMDIChildWindow(");
         c_.indent();
         c_.emitLine("\"" + clsName + "\", \"" + caption + "\",");
@@ -66,6 +70,10 @@
             c_.emitLine("vb6_RegisterFormClassBg(\"" + clsName + "\", (void*)" + wndProc + ", hInst, 0, " + std::to_string(formBackColor) + ");");
         } else {
             c_.emitLine("vb6_RegisterFormClass(\"" + clsName + "\", (void*)" + wndProc + ", hInst, 0);");
+        }
+        // Ambient.ForeColor 的来源: 容器窗体的设计期 ForeColor (见 RTL vb6_RegisterFormClassFore)
+        if (formForeColor != -1) {
+            c_.emitLine("vb6_RegisterFormClassFore(\"" + clsName + "\", " + std::to_string(formForeColor) + ");");
         }
         c_.emitLine("vb6_hwnd_" + cIdent(formName) + " = vb6_CreateFormWindowB(");
         c_.indent();
