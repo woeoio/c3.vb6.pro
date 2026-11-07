@@ -196,7 +196,11 @@ void CCodeGen::visit(CallStmt& node) {
                                     // int32, 打印出 -150012728 这类垃圾数 (不是崩溃, 静默错)。
                                     // 补一条按 AST 的返回类型判定 (inferExprType 会查
                                     // symTab_ 里 Function 符号的返回类型)。
-                                    c_.emitLine("vb6_DebugWriteBSTR(" + val + ");");
+                                    // 账 #118 续: UDT 定长串字段 (r.f As String * N) 的 C 类型是
+                                    // char[N] (内联 ANSI), 直接塞进 BSTR 形参会把 ANSI 字节按 UTF-16
+                                    // 读 (test_fixedstr_decl 的 `Debug.Print r.f` 实测发成裸 r.f)。
+                                    // 统一过一次 wrapToBSTR —— 普通 BSTR 原样返回, 只有成员定长串被换算。
+                                    c_.emitLine("vb6_DebugWriteBSTR(" + wrapToBSTR(val, *call.positional[j]) + ");");
                                 } else if (inferExprType(*call.positional[j]) == Vb6Type::Date) {
                                     // Fix 175: Debug.Print d (d As Date) —— Date 变量同时
                                     // 登记在 knownDoubleVars_, isDoubleExpr 会抢先命中并

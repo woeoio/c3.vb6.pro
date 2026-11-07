@@ -130,7 +130,9 @@ static void vb6_uc_syncHostFont(HFONT hf) {
     HFONT hCur;
     if (!hwnd || !hf) return;
     if (!GetObjectW((HGDIOBJ)hf, sizeof(want), &want)) return;
-    hCur = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+    /* 只许读那一格存储 (vb6_ControlFontStored), 不许裸问 WM_GETFONT ——
+       本类自己答那一问 (case WM_GETFONT), 裸问等于第二处口径 (check_control_dc D11)。 */
+    hCur = vb6_ControlFontStored(hwnd);
     if (hCur && GetObjectW((HGDIOBJ)hCur, sizeof(cur), &cur)
         && cur.lfHeight == want.lfHeight && cur.lfWeight == want.lfWeight
         && cur.lfItalic == want.lfItalic && cur.lfUnderline == want.lfUnderline

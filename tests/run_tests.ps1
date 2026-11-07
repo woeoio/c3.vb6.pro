@@ -7301,12 +7301,15 @@ if ($Category -in @("all", "run", "vbp")) {
         'BSTR gT = NULL;',                              # 模块级：崩溃就崩在这一行发不出来
         'BSTR vb6_F(void) {',                           # Function 返回类型那一处
         'void vb6_S(BSTR x);',                          # 形参那一处
-        'BSTR f;',                                      # UDT 成员
+        'char f[8];',                                   # UDT 成员 (VB6 ABI: 内联 ANSI char[N])
         'BSTR lT = vb6_BSTR_FixedSTR(4);',              # 局部定长串初始化 (NUL 填充, 见 RTL 注释)
         # 账 #118: 赋值收口 —— 补/截都收在这一条上 (目标定长 8, 右侧补到 8)。
         # 用 LSetFree 而不是 LSet: RHS 是自有临时串 (字面量) 那一侧顺手释放, 否则每次赋值漏一块。
         'vb6_BSTR_AssignMove(&gT, vb6_LSetFree(vb6_BSTR_FromStr(L"ab"), 8));',
-        'vb6_BSTR_AssignMove(&r.f, vb6_LSetFree(vb6_BSTR_FromStr(L"ef"), 8));',   # UDT 定长字段同款
+        # UDT 定长字段是 char[N] (不是 BSTR 槽): 赋值走 FixedStrAssignFree (右补/截断 + 放右侧临时),
+        # 读回 BSTR 上下文走 FixedStrToBSTR (整幅 ANSI→UTF-16, 含尾部 NUL)。
+        'vb6_FixedStrAssignFree(r.f, 8, vb6_BSTR_FromStr(L"ef"));',
+        'vb6_DebugWriteBSTR(vb6_FixedStrToBSTR(r.f, 8));',
         'vb6_BSTR_AssignMove(&vb6_ret_F, vb6_LSetFree(vb6_BSTR_FromStr(L"ab"), 5));',  # 返回值槽
         'vb6_DebugWriteBSTR(x);',                       # 形参按**字符串**打 (账 #118 ③)
         'vb6_DebugWriteLong((int32_t)(((int32_t)(8))));'  # Len(模块级定长串) ≡ 声明长度 N

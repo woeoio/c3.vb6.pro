@@ -124,6 +124,7 @@ inline const OwnedTempConsumes* ownedTempConsumes() {
     static const OwnedTempConsumes kConsumes[] = {
         { "vb6_BSTR_ConcatFree", 0, '0' },
         { "vb6_BSTR_Free",       0, '0' },
+        { "vb6_FixedStrAssignFree", 2, '0' },
         { "vb6_IIfBSTR",         1, '1' },
         { "vb6_IIfBSTR",         2, '1' },
         { "vb6_IIfVariant",      1, '1' },
@@ -192,6 +193,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_BSTR_Empty",
         "vb6_BSTR_FixedSTR",
         "vb6_BSTR_FromANSIBuf",
+        "vb6_BSTR_FromANSIBufFixed",
         "vb6_BSTR_FromBSTR",
         "vb6_BSTR_FromStr",
         "vb6_BSTR_FromStrN",
@@ -233,6 +235,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_FileLongText",
         "vb6_FileNumText",
         "vb6_FileVariantText",
+        "vb6_FixedStrToBSTR",
         "vb6_FormatCurrency",
         "vb6_FormatDateTime",
         "vb6_FormatNumber",

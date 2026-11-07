@@ -2134,3 +2134,84 @@ A/B 做法（脚本 `.temp\enc_ab.ps1`；两份均在 `.temp\vb6enc\` 新建，�
 - 判定：这**不是 C3 的字面量（逗号小数）解析缺陷**（它根本没读该值），不需要为它单独立夹具；
   真实差异是一条独立的"`.ctl` 设计期非几何属性不落地"缺口（Orientation/字体等同样受影响），
   与五窗文字/字体差可能相关，登记待办，不在本轮混入五窗修复。
+
+### 31 GA 首轮红格归因与修复（run 42341942993 / 22 jobs，3 红）
+
+首轮 CI（HEAD `bfa56adf`，代码面 = `6d77c499`）22 个 job：19 绿，红 3 个：
+`Emit manifest (shape oracle)`、`Tests (compile #1)`、`Tests (vbp #1)`。逐条归因如下。
+
+#### 31.1 `Tests (compile #1)` = 2 条静态红
+
+**(a) `[STATIC] control_dc` D11 —— 真回归（已修）**
+
+- 红：`裸 WM_GETFONT 代码行 = 2（want 恰好 1）: vb6forms_ctrl.c:613 | uc_host_window.c:133`。
+- 归因：上一轮 UC 字体同步（`vb6_uc_syncHostFont`）用 `SendMessageW(hwnd, WM_GETFONT, …)`
+  问了**本类自己答**的那一问，等于第二处口径（该文件自己的注释也只许读 `vb6_ControlFontStored`）。
+- 修：`uc_host_window.c:133` 改为 `hCur = vb6_ControlFontStored(hwnd);`（读同一格存储）。
+- 复跑：`check_control_dc.ps1` **PASS**（定义 1 / 调用 3 / 出口 1 / 裸问 1 / 槽位写 1 读 1）。
+
+**(b) `[STATIC] owned_temp_keeps` K13/K13d/K5 —— 新 RTL 助手的权属登记（预期变化，已登记）**
+
+- 红：
+  - K13 missing-owned：`vb6_BSTR_FromANSIBufFixed`、`vb6_FixedStrToBSTR`（推导说它们返回**新造** BSTR，
+    `kOwnedBstrExports` 表里没有 ⇒ 发码侧可能把新造值当借用）；
+  - K13d missing-consumes：`vb6_FixedStrAssignFree|2`（第 3 参被函数内部放掉，表里没登记）；
+  - K5：表与快照漂移 2 行 `+vb6_FixedStrAssign|2, +vb6_FixedStrAssignFree|2`。
+- 修（`src\common\owned_temp_keeps.hpp`）：
+  - owned 表 +`vb6_BSTR_FromANSIBufFixed`（`FromANSIBuf` 与 `FromBSTR` 之间）、+`vb6_FixedStrToBSTR`
+    （`FileVariantText` 与 `FormatCurrency` 之间）；
+  - consumes 表 +`{ "vb6_FixedStrAssignFree", 2, '0' }`（0-based 第 3 参）；
+  - 快照经脚本 `-Bless` 重生成（`scripts\owned_temp_keeps_164.txt`，227 行）。
+- 复跑：`check_owned_temp_keeps.ps1` **PASS**（authority 24 / surface 227 / rows 227 / owned 118 /
+  alias 17 / consumes 9 格 / K13/K13b/K13c two-way / K14+K14b anchors 15）。
+
+#### 31.2 `Tests (vbp #1)` = 2 条红
+
+**(a) `[EMITC-SHAPE] fixedstr_emitc_decl` —— 预期形状变化 + 顺带修出一条真错发**
+
+- 预期形状（定长串 ABI 改动的直接结果）：UDT 成员由 `BSTR f;` 变为 `char f[8];`；
+  UDT 字段赋值由 `vb6_BSTR_AssignMove(&r.f, vb6_LSetFree(…, 8))` 变为
+  `vb6_FixedStrAssignFree(r.f, 8, vb6_BSTR_FromStr(L"ef"))`。
+- **真错发**（本轮新发现并修）：`Debug.Print r.f` 直接把 `char[8]` 塞进 `BSTR` 形参
+  （ANSI 字节会被按 UTF-16 读成垃圾）；修在
+  `src\backend\stmt\cgen_call.cpp`（`Debug.Print` 字符串分支统一过一次 `wrapToBSTR`）。
+  现发 `vb6_DebugWriteBSTR(vb6_FixedStrToBSTR(r.f, 8));`。
+- `tests\run_tests.ps1:7300-7316` 针更新：`char f[8];` / `FixedStrAssignFree(r.f, 8, …)` /
+  新增 `vb6_DebugWriteBSTR(vb6_FixedStrToBSTR(r.f, 8));`。
+- 本地 11 枚针复验：`MISS_COUNT=0`（`.temp\emit_fsdecl.txt` + `.temp\check_fsdecl_needles.ps1`）。
+
+**(b) `pixels FAIL [uctreeview_px.ps1]` —— 五窗已知红，按计划留到最后**
+
+- 内容与 §28.2/§27.15 同一批：Tree Explorer 部分指标、Drag&Drop vivid/photo、Corporate photo/weight、
+  Menu/Tools textRows/firstTextW、Contract/Agenda 全 0；属五窗期间的修，不在本轮。
+
+#### 31.3 `Emit manifest (shape oracle)` —— 17 行哈希变化（待 CI 下一轮清单登记）
+
+`ci/emit-manifest`（CI 交回，596 输入）与仓库 `emit-manifest.expected.txt` 逐行比：
+**17 个输入哈希变化**（其余 579 不变）：
+
+| # | 输入 | 与本轮改动的关联（源码里含 `As String *` / `Declare … String|As Any` / `Chr$(0)`） |
+|---|---|---|
+| 1-4 | `tests/Charts 2020/{Proyecto1, ucChartArea, ucProgressCircular, ucTreeMaps}/…vbp` | 各 UC `.ctl` 含定长串/Declare String（grep 命中 10 个模块） |
+| 5 | `tests/dbgdlg/dbgdlg.vbp` | `cDlg.cls` / `frmMain.frm` 含定长串/Declare String |
+| 6 | `tests/declare_out/declare_gmn_path_out.bas` | Declare 出参定长缓冲（整幅回写改动的直接夹具） |
+| 7-12 | `tests/guisample/{Definitions.bas,GUISample.vbp}` 及 `vb6ref/src/{vc6,vs2015}` 镜像 | `Definitions.bas` 含定长串/Declare String；镜像同源 |
+| 13-14 | `tests/k173_udtmem/{K173.vbp,K173Types.bas}` | UDT 定长串字段（`char[N]` ABI 改动的直接夹具） |
+| 15-16 | `tests/test_fixedstr_decl.bas`, `tests/test_fixedstr_sem.bas` | 定长串声明/语义直接夹具 |
+| 17 | `tests/ucTreeView/Proyecto1.vbp` | `SHFILEINFO` UDT 定长串 + `GetDrive` 出参 |
+
+- 处置：按纪律**不从本地手写**；等本轮修复推送后的 CI 新清单，逐行对照后由
+  `rebless_emit_manifest.ps1` 吃 CI 清单登记（禁手改 expected）。本轮先记 17 行归因。
+
+#### 31.4 本地门禁复跑（修复后）
+
+- `check_rtl_embedded.ps1`：**EXIT=0**，`126 RTL resources byte-identical`，exe sha `de9221544725`
+  （RTL 改 `uc_host_window.c` 后重建的 C3.exe）。
+- `check_control_dc.ps1` / `check_owned_temp_keeps.ps1`：PASS（见 31.1）。
+- `test_fixedstr_decl` 发码针：11/11 OK。
+
+#### 31.5 下一步
+
+1. 推送本修复 → 等 CI 22 job；
+2. CI 交回新 `ci/emit-manifest` 后逐行核对并登记（预期仍是上述 17 个输入，哈希按修复后重算）；
+3. `pixels` 五窗红按用户顺序放在 GA 之后收。
