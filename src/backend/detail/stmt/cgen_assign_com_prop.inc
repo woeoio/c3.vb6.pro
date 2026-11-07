@@ -618,6 +618,13 @@
         // 有一条按成员**裸名** lookupModule 的兜底 (cgen_util_type.cpp:354 的注释正警告
         // 它), 拿它当类字段的类型会被同名模块级/内置符号顶掉 ⇒ 这里刻意不收成员目标;
         // 成员字段那一族要接也该走 Fix 092m 的 classFieldComUnpackHint, 那是另一刀。
+        // 账 #xxx (2026-11-07): 整体数组目标 `A() = obj.Prop` —— 上面几轮类型推断都认不出
+        // 「数组目标」⇒ unpackHint 留空 ⇒ 默认档发成 vb6_ComGetStringProp (BSTR)。而
+        // MSXML 的 responseBody 返回的是 VT_ARRAY|VT_UI1: 被当 BSTR 解就是一根乱指针
+        // (实测 `.temp/urlprobe` S6b: lb=8 / ub=6619168, 元素读全错), 与 VB6 的
+        // `Byte() = obj.responseBody` 语义完全不是一回事。数组目标一律取整只 VARIANT,
+        // 交给值语义侧的 vb6_VariantToByteArray 按 VB6 语义解封 (数组→载体, 字符串→字节数组)。
+        if (unpackHint.empty() && tgtIsWholeArray170) unpackHint = "Variant";
         if (unpackHint.empty() && node.target
             && node.target->kind == ASTNodeKind::IdentifierExpr) {
             switch (inferExprType(*node.target)) {

@@ -289,13 +289,16 @@
         // 生成临时char*变量, 调用后释放, 无内存泄露
         if (isDeclareAnsiCall && i < calleeParams.size() && calleeParams[i].isByVal
             && calleeParams[i].type == Vb6Type::String) {
-          if (isVariantSlot(argVal, node.positional[i].get())) {
-            // ucSegmentedControl.ctl `ItemLoadImage(..., SrcImg As Variant)` 里
-            // `PathIsURL(SrcImg)`: 形参的 C 类型是 BSTR (makeParamCType: String→BSTR,
-            // A/W 由 RTL 转发桩处理)。旧路先 char* 再被 BSTR 化 = C2440 + 双重转码
-            // (`_ansi_N` 还得靠 vb6_VariantToString(char*) 收场)。Variant 实参直接解包成 BSTR。
+          // 账 #(2026-11-07): Variant 实参也必须编组成 ANSI, 不能只解包成 BSTR 就交给
+          // 转发桩。ucTreeViewPlus.ctl 的 `PathIsURL(SrcImg)` (SrcImg As Variant) 正是
+          // 这条: 旧路把 BSTR 原样递给 PathIsURLA (LPCSTR), 它看到的是 UTF-16 的
+          // 'h',0,'t',0… ⇒ 只认出一个字符 ⇒ 恒返回 0 ⇒ URL 分支永不进, 远程图片全丢。
+          // (RTL 的 shell 转发桩是 1:1 指针透传, 不做编码转换。)
+          const bool argIsVariantSlot = isVariantSlot(argVal, node.positional[i].get());
+          if (argIsVariantSlot) {
             argVal = "vb6_VariantToString(" + argVal + ")";
-          } else {
+          }
+          {
             std::string ansiVar = "_ansi_" + std::to_string(ansiCounter_++);
             // Fix 110x: BSTR 形参的实参若是 Variant 表达式 (后期绑定控件属性读
             // vb6_VariantFromComResult(vb6_ComGetProp(...)) 等), 直接交给
@@ -311,7 +314,8 @@
             // 正是靠这条)。仅当实参是**可赋值左值**(变量/数组元素)才回写 ——
             // 临时表达式 (如 String$(256,0)) 在 VB6 里也收不到回写, 保持一致。
             // 容量取实参当前字符串长度 (VB6 缓冲语义的近似; cap<=0 则由 NUL 定长)。
-            if (i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
+            // Variant 实参没有"可写 String 缓冲"语义 (它连 BSTR 左值都不是), 不回写。
+            if (!argIsVariantSlot && i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
                 && !isVariantSlot(argVal, nullptr) && isCLvalueExpr161c(argVal)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
                 // 回写目标须是 BSTR 左值 (交给 vb6_BSTR_Assign 的 BSTR*)。
                 // 账 #118 续: 定长串实参 (`Dim sPath As String * 512`) 要整幅回写

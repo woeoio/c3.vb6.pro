@@ -3039,6 +3039,118 @@ function Test-Run {
     }
 }
 
+# === URL 图片加载链 (账 #417) =====================================================
+# 链: CreateObject("Microsoft.XMLHTTP") -> .Open/.send -> readyState=4 -> Status=200
+#     -> .responseBody (VT_ARRAY|VT_UI1) -> Byte() 赋值。
+# urlpic_local: 起 127.0.0.1 loopback 最小服务 (tests/urlpic/serve.ps1), 真跑; 绑定失败
+#               记 SKIP(asset/local-http) 并写明, 不许当 PASS。
+# urlpic_net  : 打真 URL, 带 asset/network 门控 (目标 host:port 连不上 => SKIP 写明)。
+#               "探得通却跑失败" 一律 FAIL —— 资产在则不降级。
+function Test-UrlPicture {
+    param(
+        [string]$Name,
+        [string]$Url,
+        [string[]]$Needles = @(),
+        [switch]$LocalServer,
+        [int]$Port = 8765
+    )
+    $script:total++
+    Write-Host -NoNewline "  [RUN] $Name ... "
+    $outDir = Join-Path $OutDir ("urlpic_" + $Name)
+    New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+    $src = Join-Path $Tests "urlpic\UrlPicMain.bas"
+    $srv = $null
+
+    if ($LocalServer) {
+        $root = Join-Path $Tests "urlpic\www"
+        if (-not (Test-Path (Join-Path $root "probe.png"))) {
+            $script:fail++
+            Write-Host "FAIL (asset missing: tests\urlpic\www\probe.png)" -ForegroundColor Red
+            return
+        }
+        $hostExe = (Get-Command pwsh -ErrorAction SilentlyContinue)
+        if (-not $hostExe) { $hostExe = (Get-Command powershell -ErrorAction SilentlyContinue) }
+        if (-not $hostExe) {
+            $script:skip++
+            Write-Host "SKIP (asset/local-http: 找不到 pwsh/powershell 来起最小服务)" -ForegroundColor Yellow
+            return
+        }
+        $srv = Start-Process -FilePath $hostExe.Source -PassThru -WindowStyle Hidden `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Tests "urlpic\serve.ps1"), "-Port", "$Port", "-Root", $root)
+        $up = $false
+        for ($i = 0; $i -lt 40; $i++) {
+            Start-Sleep -Milliseconds 100
+            if ($srv.HasExited) { break }
+            try {
+                $tp = [System.Net.Sockets.TcpClient]::new()
+                $tp.Connect("127.0.0.1", $Port)
+                $tp.Close()
+                $up = $true
+                break
+            } catch { }
+        }
+        if (-not $up) {
+            if ($srv -and -not $srv.HasExited) { Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue }
+            $script:skip++
+            Write-Host ("SKIP (asset/local-http: 127.0.0.1:$Port 起不来 —— 端口被占或沙箱禁 listen)") -ForegroundColor Yellow
+            return
+        }
+    } else {
+        # 外网门控: 只认"真的连上了目标 host:port"; 连不上 => SKIP(asset/network)
+        try {
+            $u = [Uri]$Url
+            $tp = [System.Net.Sockets.TcpClient]::new()
+            $ar = $tp.BeginConnect($u.Host, $u.Port, $null, $null)
+            if (-not $ar.AsyncWaitHandle.WaitOne(3000)) { throw "connect timeout" }
+            $tp.EndConnect($ar)
+            $tp.Close()
+        } catch {
+            $script:skip++
+            Write-Host ("SKIP (asset/network: 连不上 $($u.Host):$($u.Port) —— " + $_.Exception.Message + ")") -ForegroundColor Yellow
+            return
+        }
+    }
+
+    try {
+        $cr = & $C3 $src --arch x86 --output-dir $outDir @IncArg 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $script:fail++
+            Write-Host "FAIL (compile)" -ForegroundColor Red
+            if ($Verbose) { Write-Host (($cr | Out-String).Trim()) }
+            return
+        }
+        $exe = Join-Path $outDir "UrlPicMain.exe"
+        if (-not (Test-Path $exe)) {
+            $script:fail++
+            Write-Host "FAIL (no exe)" -ForegroundColor Red
+            return
+        }
+        $stdout = Join-Path $outDir "run.out.txt"
+        $stderr = Join-Path $outDir "run.err.txt"
+        $p = Start-Process -FilePath $exe -ArgumentList @($Url) -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+        $lines = @()
+        if (Test-Path $stdout) { $lines = Get-Content $stdout }
+        $miss = @()
+        foreach ($n in $Needles) {
+            if (-not (Test-NeedleHit -Lines $lines -Needle $n)) { $miss += $n }
+        }
+        if ($miss.Count -eq 0) {
+            $script:pass++
+            Write-Host "PASS" -ForegroundColor Green
+        } else {
+            $script:fail++
+            Write-Host "FAIL (output mismatch)" -ForegroundColor Red
+            if ($Verbose) {
+                Write-Host ("  Miss: " + ($miss -join " | "))
+                Write-Host ("  Got : " + (($lines | Out-String).Trim()))
+            }
+        }
+    } finally {
+        if ($srv -and -not $srv.HasExited) { Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 # === 纯 .bas 用例串行执行 (默认路径; 与 Tests 逐个调用 Test-Run 等价) ===
 function Invoke-BasSetSerial {
     param([object[]]$Items)
@@ -6187,6 +6299,28 @@ if ($Category -in @("all", "run", "bas")) {
     }
     $basSw.Stop()
     Write-Host "  (bas tests took $([Math]::Round($basSw.Elapsed.TotalSeconds))s)"
+
+    # 账 #417: URL 图片加载链 —— 本地 loopback 真跑 (必须 PASS), 外网带 asset/network 门控。
+    # 读数钉到每一站: 对象 / readyState / Status / responseBody VarType / Byte() 边界 / 首 4 字节。
+    Write-Host "--- URL Picture Chain (账 #417) ---" -ForegroundColor Yellow
+    Test-UrlPicture "urlpic_local" "http://127.0.0.1:8765/probe.png" @(
+        "S1 create obj=1 err=0",
+        "S4 readyState=4",
+        "S5 status=200 err=0",
+        "S6a responseBody VarType=8209 e0=137 e1=80",
+        "S6b assign err=0 lb=0 ub=634",
+        "S7 b0=137 b1=80 b2=78 b3=71",
+        "S8 DONE"
+    ) -LocalServer
+    Test-UrlPicture "urlpic_net" "https://randomuser.me/api/portraits/women/3.jpg" @(
+        "S1 create obj=1 err=0",
+        "S4 readyState=4",
+        "S5 status=200 err=0",
+        "S6a responseBody VarType=8209 e0=255 e1=216",
+        "S6b assign err=0 lb=0",
+        "S7 b0=255 b1=216 b2=255 b3=224",
+        "S8 DONE"
+    )
 }
 
 # --- VBP 工程测试 (串行; GUI 窗口效果无法通过自动校验并行确认) ---
@@ -9437,6 +9571,25 @@ if ($Category -in @("all", "run", "vbp")) {
     )
     Test-EmitcAbsent "cbool_latebound_variant_numeric_bridge" @("$Tests\ucTreeView\Proyecto1.vbp") @(
         'vb6_CBool(vb6_VariantToDouble(vb6_VariantFromComResult('
+    )
+
+    # 账 #417 (2026-11-07): `Byte() = obj.responseBody` 必须走整只 VARIANT 再解封。
+    # 旧产物: 空 pack hint => vb6_ComGetStringProp(obj, L"responseBody") => 把
+    # VT_ARRAY|VT_UI1 当 BSTR 解 (实测 UBound=6619168, 元素读全错) => 树图标全灭
+    # ("THE IMAGE ... DON'T EXIST")。旧产物必红。
+    Test-EmitcShape "uctreeview_urlpic_responsebody" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'DataArr = vb6_ArrayAssign1D(DataArr, vb6_VariantToByteArray(vb6_VariantFromComResult(vb6_ComCall(oXMLHTTP, L"responseBody", NULL, 0))));'
+    )
+
+    # 账 #418 (2026-11-07): Declare 的 ByVal String 实参必须编组成 ANSI (Variant 来源也算)。
+    # 旧产物把 `PathIsURL(SrcImg)` 的 Variant 解包成 BSTR (`_own_N`) 直接递给 PathIsURLA
+    # (LPCSTR) => 它看到 UTF-16 'h',0,'t',0… => 只认出首字符 => 恒 0 => URL 分支永不进
+    # => 远程头像全丢 (实测 Form3 photo=0)。改后发 `_ansi_N`。旧产物两条都红。
+    Test-EmitcShape "declare_ansi_variant_arg" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'vb6_lwa_PathIsURLA(_ansi_'
+    )
+    Test-EmitcAbsent "declare_ansi_variant_arg_bstr" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'vb6_lwa_PathIsURLA(_own_'
     )
 
     Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86" `

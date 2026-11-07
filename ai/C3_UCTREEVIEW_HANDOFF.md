@@ -2531,3 +2531,167 @@ vb6_VariantClear(&_own_47);
 改后两行消失（剩 Tree Explorer 400 = 参考 400）。
 
 
+## §35 URL 图片加载链：两个实现缺口（不是环境不可达）（2026-11-07）
+
+真 VB6 基准 `photo=9292`（Form3）证明它确实把 `https://randomuser.me/...` 拉下来了。C3 侧断在
+**两处发码**，都已修；链上每一站的返回值都有独立夹具读数。
+
+### 35.1 最小夹具：逐步钉住返回值
+
+`tests/urlpic/UrlPicMain.bas`（`CreateObject("Microsoft.XMLHTTP")` → `.Open/.send` → `readyState`
+→ `.Status` → `.responseBody` → `Byte()` 赋值 → 前 4 字节；每站打印）＋
+`tests/urlpic/serve.ps1`（`TcpListener 127.0.0.1` 最小 HTTP，不需要管理员/URL ACL）＋
+`tests/urlpic/www/probe.png`（635 B，PNG 签名 137,80,78,71）。
+
+本地 loopback（真跑，必修）：
+
+```
+URL=http://127.0.0.1:8765/probe.png
+S1 create obj=1 err=0
+S2 open err=0
+S3 send err=0
+S4 readyState=4 polls=0 err=0
+S5 status=200 err=0
+S6a responseBody VarType=8209 e0=137 e1=80 err=0
+S6b assign err=0 lb=0 ub=634
+S7 b0=137 b1=80 b2=78 b3=71
+S8 DONE
+```
+
+真 URL（`https://randomuser.me/api/portraits/women/3.jpg`）同形：`S5 status=200`、
+`S6a VarType=8209 e0=255 e1=216`、`S6b lb=0 ub=6321`、`S7 255,216,255,224`。
+
+⇒ `CreateObject` 不是缺口（obj=1）；`responseBody` 不是缺口（VarType=8209）；断在 **`Byte() = obj.responseBody`**
+与 **`PathIsURL(SrcImg)`**。
+
+### 35.2 缺口①：`Byte() = obj.Prop` 被当 BSTR 解
+
+`src/backend/detail/stmt/cgen_assign_com_prop.inc`：整体数组目标（`DataArr() = ...`）此前几轮类型推断
+都认不出「数组目标」⇒ `unpackHint` 留空 ⇒ 默认档发 `vb6_ComGetStringProp`（BSTR）。
+MSXML 的 `responseBody` 是 `VT_ARRAY|VT_UI1`，当 BSTR 解就是一根乱指针（实测改前
+`lb=8 / ub=6619168`，元素读全 -999）。
+
+修法：数组目标一律取整只 VARIANT，交给值语义侧按 VB6 规则解封。
+
+改前：
+
+```
+DataArr = vb6_ComGetStringProp(oXMLHTTP, L"responseBody");
+```
+
+改后：
+
+```
+DataArr = vb6_ArrayAssign1D(DataArr,
+    vb6_VariantToByteArray(vb6_VariantFromComResult(vb6_ComCall(oXMLHTTP, L"responseBody", NULL, 0))));
+```
+
+### 35.3 缺口②：`PathIsURL(SrcImg)` 收到 UTF-16，恒返回 0（真根因）
+
+`PathIsURL` 声明 `Alias "PathIsURLA"`、`ByVal pszPath As String`。RTL 的 shell 转发桩是
+1:1 指针透传（`vb6_di_PathIsURLA(BSTR) → PathIsURLA((LPCSTR))`），不做编码转换，所以 C3 必须在
+调用点编组成 ANSI。
+
+旧发码在 `cgen_expr_call_arg_emit.inc` 里对 **Variant 实参**只做 `vb6_VariantToString(...)`（BSTR），
+随后 `cgen_expr_call_arg_variant.inc` 又把它按 String 形参包一层，最终：
+
+```
+BSTR _own_37 = vb6_VariantToString(_ansi_0);   /* 先把 ANSI 又转回 BSTR */
+if (vb6_lwa_PathIsURLA(_own_37)) { ... }        /* LPCSTR 看到 'h',0,'t',0… ⇒ 只认 "h" ⇒ 0 */
+```
+
+⇒ URL 分支永不进，全部远程头像落到 `GdipLoadImageFromFile("https://…")` 静默失败
+（改前 Form3 `photo=0`，日志是 `THE IMAGE: … DON'T EXIST`）。
+
+修法（两处配套）：
+
+1. `cgen_expr_call_arg_emit.inc`：Variant 实参也进 ANSI 编组（先 `vb6_VariantToString` 取 BSTR，
+   再 `vb6_BSTR_ToANSI_cap` 取 `_ansi_N`）；Variant 实参不做 out-param 回写（它没有可写 String 缓冲语义）。
+2. `cgen_expr_call_arg_variant.inc`：`isDeclareAnsiCall && calleeParams[i].isByVal && type==String`
+   时**原样保留** `arg_emit` 已编组的 `char*`，不再包 `vb6_VariantToString`。
+
+改后：
+
+```
+char* _ansi_0 = vb6_BSTR_ToANSI_cap(vb6_VariantToString((*SrcImg)));
+if (vb6_lwa_PathIsURLA(_ansi_0)) { ... }
+```
+
+### 35.4 真 App 读数（`tests/guisample/uctreeview_px.ps1`，同一份真 VB6 `ref_metrics.json`）
+
+临时插桩（已还原）在 `LoadPictureEx` / `LoadImageFromArray` 打点，Form3 的实际日志（节选）：
+
+```
+DBGIN vartype=8 s=https://randomuser.me/api/portraits/men/1.jpg
+DBGARR isDim=True stmNull=False
+DBGARR gs=0 h=60352128
+DBGURL status=200 ub=3597 h=60352128
+… 共 15 条 URL，全部 status=200 / gs=0 / h≠0
+```
+
+| 读数 | 改前 | 改后 | 真 VB6 |
+|---|---|---|---|
+| Form3 `photo` | **0** | **4080** | 9292（判据 ≥8363） |
+| Form3 `avatar` | 0 | 2130 | 6498（判据 ≥5848） |
+| Form3 文字行 | 10 | 9 | 10 |
+
+⇒ URL 图**已经加载并进入绘制**（photo 0→4080）；剩余差距是几何/列表尺寸与展开状态一类问题，
+不再是"图没拉到"。
+
+### 35.5 断言与门控
+
+`tests/run_tests.ps1`（VBP 段，紧接 `uctreeview_urlpic_responsebody`）：
+
+- `declare_ansi_variant_arg`（Shape）：必须出现 `vb6_lwa_PathIsURLA(_ansi_`。旧产物发 `_own_` ⇒ 红。
+- `declare_ansi_variant_arg_bstr`（Absent）：不得出现 `vb6_lwa_PathIsURLA(_own_`。旧产物必红。
+
+URL 夹具（`Test-UrlPicture`）：
+
+- `urlpic_local`：`-LocalServer`，真跑 loopback；**必须 PASS**。
+- `urlpic_net`：真 URL，先 3s 探 `host:port`；连不上记
+  `SKIP (asset/network: 连不上 …)`，**SKIP 不计入通过**；探得通但跑失败一律 FAIL。
+- 本地服务起不来记 `SKIP (asset/local-http: 127.0.0.1:8765 起不来)`，同样不算通过。
+
+本机实测：`urlpic_local` 与 `urlpic_net` 全部 needle 命中（见 35.1 两段日志）。
+
+### 35.6 `m_eOrientation` 运行期读回：**实测 == 1**（落地）
+
+发码侧（`ucTreeViewPlus` 生成码）在设计期子控件建好之后发：
+
+```
+vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar2", 240, 3360, 4095, 135);
+vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar2, 0);
+vb6_ComSetProp(vb6_hwnd_ucScrollbar2, L"Orientation", vb6_ComPackInt(1));  /* design Orientation */
+```
+
+临时探针（`ucScrollbar.ctl` 的 `InitProperties` / `ReadProperties` / `Property Let Orientation` /
+`Property Get Orientation` / `UserControl_Paint`，**已还原，`git diff` 0 差异**）在 Form3 进程里拿到：
+
+```
+DBGORI let=1      w=4095 h=135      ← 设计期 Orientation=1 到的是横向那个实例 (4095×135)
+DBGORI readback=1 w=4095 h=135      ← m_eOrientation 赋值后的读回 == 1
+DBGORI let=1      w=4095 h=135
+DBGORI readback=1 w=4095 h=135
+DBGORI paint=0    w=135  h=3015     ← 上屏的是纵向滚动条 (135×3015)，它没有 Orientation ⇒ 0 正确
+```
+
+⇒ `m_eOrientation == 1` 有直接证据（`readback=1`），且用尺寸区分了实例：`paint=0` 的那个是
+`ucScrollbar1`（纵向，设计期无 Orientation），不是失败。这条**落地**。
+
+（过程记录：第一次只打 `paint=` 没带尺寸，误判成「未落地」；补上 `w/h` 后实例身份明确，结论更正为落地。）
+
+
+### 35.7 本轮已知红 / 遗留
+
+- `manifest_coverage` K1 红：新夹具 `tests/urlpic/UrlPicMain.bas` 还没登记进
+  `emit-manifest.expected.txt`。按纪律**不手写**，等本次 head 的 CI `ci/emit-manifest` 产物回来逐行核对后登记。
+- `conv_strict_parse` R4：本轮一度因 §34 新增一个 `convIsBool` 引用而报 3（want 2）；
+  已把该处改成等价的 `callee == "vb6_CBool"`（该点尚未改写 callee），哨兵保持 2，未改阈值。
+- Form3 `photo=4080`（真 VB6 9292）、`textRows=9`（真 10）：URL 图已加载上屏，剩余是几何/展开态差异，
+  归入五窗阶段，不在本条继续扩大。
+- `Menu / Tools` 第 2 轮 `OPEN-FAIL` + `0xc0000005 av read target=0x4`：第 1 轮正常出图，
+  崩在重复 `Show` 重建路径，与本条改动无关（改前同形），单独记。
+
+
+
+

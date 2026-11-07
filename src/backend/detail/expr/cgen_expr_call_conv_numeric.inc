@@ -41,7 +41,7 @@
             //  Form3/Form5 字重 400, 真 VB6 700)。这里把 double 包装剥回去, 让内层整只槽
             // 走 V 后缀 (下面的 extractPrefixes 会按同一口径收尾)。只对 Boolean 那一档做 ——
             // 数值族问的是另一句话, 不在本条改动范围。
-            if (!firstArgIsSlot && convIsBool && !args.empty()) {
+            if (!firstArgIsSlot && callee == "vb6_CBool" && !args.empty()) {
                 static const char* kVarToDbl = "vb6_VariantToDouble(";
                 size_t pl = strlen(kVarToDbl);
                 if (args[0].size() > pl && args[0].compare(0, pl, kVarToDbl) == 0
