@@ -257,6 +257,21 @@
                                     }
                                 }
                             }
+                            // 属性写方向的**值实参**声明成工程类时 (`Property Let SelNode(TheNode As Node)`,
+                            // VB6 参数默认 ByRef), C 形参是 `vb6_cls_X**`, 而下面统一出口按**值**递裸指针。
+                            // 被调方 `Set m_SelItem = *TheNode` 解引用到的是实例首字段 `__comObj`(未装箱恒 NULL)
+                            // ⇒ 属性永远存空; 再读出来就是 Nothing。实测 ucTreeView:
+                            //   `cTVP.SelNode = N` → `TVP.SelNode` 为 Nothing → `GetNodePath(Nothing)`
+                            //   读 `N+0x10` 崩 0xC0000005 (Open Cursors folder)。
+                            // 交付形状与调用实参那一站 (cgen_expr_call_arg_emit.inc 的 092r 臂) 同模板:
+                            // 复合字面量取址 = 一个自动存储期的指针槽, 所有权不增不减 (被调方自己 AddRef)。
+                            {
+                                const std::string clsSlotW = cParamClassPtrType(lastP091n);
+                                if (!clsSlotW.empty() && !lastP091n.isByVal
+                                    && !clsPtrIsViewSlot(clsSlotW)) {
+                                    valExpr = "&(" + clsSlotW + "){" + valExpr + "}";
+                                }
+                            }
                         }
                         // Fix 158h: 属性 Let/Set 写方向的**入口参数** (Optional ByRef
                         // After 等前置参数) 缺失 → 生成的 prop_let_ 调用 C2198 参数太少
