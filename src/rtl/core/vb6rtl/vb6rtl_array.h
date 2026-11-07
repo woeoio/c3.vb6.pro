@@ -421,6 +421,14 @@ int32_t vb6_VarCmpLt(vb6_VARIANT* a, vb6_VARIANT* b);
 int32_t vb6_VarCmpGt(vb6_VARIANT* a, vb6_VARIANT* b);
 int32_t vb6_VarCmpLe(vb6_VARIANT* a, vb6_VARIANT* b);
 int32_t vb6_VarCmpGe(vb6_VARIANT* a, vb6_VARIANT* b);
+// Select Case 专用 (2026-11-07): 标签是静态类型的字面量时, 主语先换成标签那一档再比。
+// 二进制比较仍走 vb6_VarCmp* (那一档是「数值恒小于字符串」)。
+int32_t vb6_VarSelCmpEq(vb6_VARIANT* a, vb6_VARIANT* b);
+int32_t vb6_VarSelCmpNe(vb6_VARIANT* a, vb6_VARIANT* b);
+int32_t vb6_VarSelCmpLt(vb6_VARIANT* a, vb6_VARIANT* b);
+int32_t vb6_VarSelCmpGt(vb6_VARIANT* a, vb6_VARIANT* b);
+int32_t vb6_VarSelCmpLe(vb6_VARIANT* a, vb6_VARIANT* b);
+int32_t vb6_VarSelCmpGe(vb6_VARIANT* a, vb6_VARIANT* b);
 int32_t vb6_VarCmpLongEq(vb6_VARIANT* a, int32_t b);
 int32_t vb6_VarCmpLongLt(vb6_VARIANT* a, int32_t b);
 int32_t vb6_VarCmpLongGt(vb6_VARIANT* a, int32_t b);

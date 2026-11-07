@@ -927,6 +927,34 @@ int32_t vb6_VarCmpGt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a,
 int32_t vb6_VarCmpLe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) <= 0 ? -1 : 0; }
 int32_t vb6_VarCmpGe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) >= 0 ? -1 : 0; }
 
+/* Select Case 专用次序: 标签是**静态类型**的字面量时, 真 VB6 把主语先换成标签那一档再比
+   —— 与二进制比较那套"数值恒小于字符串"是两条口径 (实测 VB6 /make, 2026-11-07):
+     主语 7  + Case "07"  → 不命中 (CStr(7)="7" 与 "07" 串比)
+     主语 "07" + Case 7   → 命中   (主语换成数 7)
+     主语 7  + Case "abc" → 不命中, 不报错 (CStr(7) vs "abc")
+     主语 "s" + Case 7    → 不命中, 不报错 ("s"→0 数比)
+   所以标签箱是 BSTR 就串比, 否则数比。只给 cgen_select 的类型化标签那一支用;
+   标签本身是 Variant 槽时仍走 vb6_VarCmp* (那是 Variant-Variant 那一档)。 */
+static int vb6_VarSelOrderTyped(vb6_VARIANT* a, vb6_VARIANT* b) {
+    if (b && b->vt == (vb6_vartype)VT_BSTR) {
+        BSTR sa = vb6_CStr(*a);
+        const wchar_t* lb = b->bstrVal ? b->bstrVal : L"";
+        int c = wcscmp(sa ? sa : L"", lb);
+        if (sa) SysFreeString(sa);
+        return c < 0 ? -1 : (c > 0 ? 1 : 0);
+    }
+    double da = vb6_VarToDouble_internal(a);
+    double db = vb6_VarToDouble_internal(b);
+    return da < db ? -1 : (da > db ? 1 : 0);
+}
+
+int32_t vb6_VarSelCmpEq(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) == 0 ? -1 : 0; }
+int32_t vb6_VarSelCmpNe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) != 0 ? -1 : 0; }
+int32_t vb6_VarSelCmpLt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) <  0 ? -1 : 0; }
+int32_t vb6_VarSelCmpGt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) >  0 ? -1 : 0; }
+int32_t vb6_VarSelCmpLe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) <= 0 ? -1 : 0; }
+int32_t vb6_VarSelCmpGe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) >= 0 ? -1 : 0; }
+
 // Variant vs Long (常见场景: If v > 0 Then)
 int32_t vb6_VarCmpLongEq(vb6_VARIANT* a, int32_t b) { vb6_VARIANT vb; memset(&vb, 0, sizeof(vb)); vb.vt = (vb6_vartype)VT_I4; vb.lVal = b; return vb6_VarCmpEq(a, &vb); }
 int32_t vb6_VarCmpLongNe(vb6_VARIANT* a, int32_t b) { vb6_VARIANT vb; memset(&vb, 0, sizeof(vb)); vb.vt = (vb6_vartype)VT_I4; vb.lVal = b; return vb6_VarCmpNe(a, &vb); }

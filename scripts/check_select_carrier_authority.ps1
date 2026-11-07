@@ -136,20 +136,26 @@ $handPackN = 0
 foreach ($fx in @('vb6_VariantLong', 'vb6_VariantString', 'vb6_VariantDouble')) {
     $handPackN += @([regex]::Matches($select, '"' + [regex]::Escape($fx) + '\("')).Count
 }
-$eqN = @([regex]::Matches($select, 'vb6_VarCmpEq\(')).Count
-$geN = @([regex]::Matches($select, 'vb6_VarCmpGe\(')).Count
-$leN = @([regex]::Matches($select, 'vb6_VarCmpLe\(')).Count
-$dynN = @([regex]::Matches($select, '"vb6_VarCmp"\s*\+')).Count
+# 2026-11-07: 比较出口多了一档 —— 标签是**静态类型**的字面量时主语换成标签那一档
+# （vb6_VarSelCmp*，真 VB6 /make 实测），标签是 Variant 槽时仍是 vb6_VarCmp*。
+# 选择只许有**一处**（cmpPrefix），四条出口（Is / 范围两端 / 精确）都从它取名。
+$selN = @([regex]::Matches($select, '"vb6_VarSelCmp"')).Count
+$fallN = @([regex]::Matches($select, '"vb6_VarCmp"')).Count
+$prefixN = @([regex]::Matches($select, 'cmpPrefix\(')).Count
+$hardN = 0
+foreach ($fn in @('vb6_VarCmpEq(', 'vb6_VarCmpGe(', 'vb6_VarCmpLe(', 'vb6_VarCmpGt(')) {
+    $hardN += @([regex]::Matches($select, [regex]::Escape($fn))).Count
+}
 $boolN = @([regex]::Matches($select, '"vb6_VariantToBool\("')).Count
 $mixDecN = @([regex]::Matches($select, 'labelClass == SelectCaseLabelClass::Mixed')).Count
 $wantN = @([regex]::Matches($select, 'wantVariantCarrier')).Count
 if ($carrierN -ne 1) { $bad += ('R6 mixed carrier type tempType = "vb6_VARIANT" = ' + $carrierN + ' (want exactly 1)') }
 if ($packCallN -ne 1) { $bad += ('R6 label packer wrapVariantValue(ast, expr) = ' + $packCallN + ' (want exactly 1: one reuse of the shared packer)') }
 if ($handPackN -ne 0) { $bad += ('R6 cgen_select.cpp hand-rolls a Variant packer (quoted VariantLong/String/Double = ' + $handPackN + '; want 0 - reuse wrapVariantValue)') }
-if ($eqN -ne 1) { $bad += ('R6 quoted vb6_VarCmpEq( emit = ' + $eqN + ' (want exactly 1: exact-match item)') }
-if ($geN -ne 1) { $bad += ('R6 quoted vb6_VarCmpGe( emit = ' + $geN + ' (want exactly 1: range lower end)') }
-if ($leN -ne 1) { $bad += ('R6 quoted vb6_VarCmpLe( emit = ' + $leN + ' (want exactly 1: range upper end)') }
-if ($dynN -ne 1) { $bad += ('R6 quoted "vb6_VarCmp" + dynamic suffix = ' + $dynN + ' (want exactly 1: Case Is item)') }
+if ($hardN -ne 0) { $bad += ('R6 hard-coded binary cmp names in the carrier arm = ' + $hardN + ' (want 0: 走 cmpPrefix 那一处)') }
+if ($selN -ne 1) { $bad += ('R6 "vb6_VarSelCmp" prefix literal = ' + $selN + ' (want exactly 1: typed-label arm)') }
+if ($fallN -ne 1) { $bad += ('R6 "vb6_VarCmp" prefix literal = ' + $fallN + ' (want exactly 1: Variant-slot label arm)') }
+if ($prefixN -ne 4) { $bad += ('R6 cmpPrefix( use sites = ' + $prefixN + ' (want exactly 4: Case Is / range low / range high / exact))') }
 if ($boolN -ne 1) { $bad += ('R6 quoted vb6_VariantToBool( emit = ' + $boolN + ' (want exactly 1: the bare Case Is arm)') }
 if ($mixDecN -ne 1) { $bad += ('R6 the carrier decision asks SelectCaseLabelClass::Mixed = ' + $mixDecN + ' times (want exactly 1)') }
 if ($wantN -ne 3) { $bad += ('R6 wantVariantCarrier sites = ' + $wantN + ' (want exactly 3: declaration + resolveComValue branch + isVariantSelect gate)') }

@@ -187,6 +187,14 @@ void CCodeGen::visit(SelectCaseStmt& node) {
         };
         std::vector<std::string> clauseConds;
         std::vector<std::string> labelDecls;
+        /* 比较出口的选择（唯一一处）：标签是**静态类型**的字面量 ⇒ 主语换成标签那一档再比
+           （vb6_VarSelCmp*）；标签本身是 Variant 槽 ⇒ Variant-Variant 那一档（vb6_VarCmp*）。
+           依据是真 VB6 /make 实测（2026-11-07）：主语 7 + Case "07" 不命中（串比），
+           主语 "07" + Case 7 命中（数比）—— 二进制比较那条「数值恒小于字符串」在这里不成立。 */
+        auto cmpPrefix = [&](Expr* lbl) -> std::string {
+            if (lbl && inferExprType(*lbl) != Vb6Type::Variant) return "vb6_VarSelCmp";
+            return "vb6_VarCmp";
+        };
         // 账 #604: 「这枚标签箱收下了所有权没有」只问 variantRhsOwnsValue 一处（§B164/§B167
         // 那位主人）—— 它说 owns 的（字面量 / 现造的调用 / 对象档取了引用）在 if 链尾部
         // vb6_VariantClear 放掉；它说 borrowed 的（裸串变量、Variant 槽的浅别名）**一个都不许清**
@@ -209,7 +217,7 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                     if (cv.hasRelOp && cv.value) {
                         emitExpr(*cv.value);
                         std::string rightVal = std::move(lastExpr_);
-                        cond = "vb6_VarCmp" + cmpSuffix(cv.relOp) + "(" + subjAddr + ", "
+                        cond = cmpPrefix(cv.value.get()) + cmpSuffix(cv.relOp) + "(" + subjAddr + ", "
                              + labelVariantAddr(cv.value.get(), rightVal) + ")";
                     } else {
                         // 无比较符的 `Case Is`：与下方非槽档同义 —— 非零/非空
@@ -224,11 +232,12 @@ void CCodeGen::visit(SelectCaseStmt& node) {
                     // 未指定, 声明顺序会跟着编译器漂 (发码字节要稳定)
                     std::string loAddr = labelVariantAddr(cv.value.get(), lo);
                     std::string hiAddr = labelVariantAddr(cv.toValue.get(), hi);
-                    cond = "vb6_VarCmpGe(" + subjAddr + ", " + loAddr + ") && vb6_VarCmpLe("
+                    cond = cmpPrefix(cv.value.get()) + "Ge(" + subjAddr + ", " + loAddr + ") && "
+                         + cmpPrefix(cv.toValue.get()) + "Le("
                          + subjAddr + ", " + hiAddr + ")";
                 } else {
                     emitExpr(*cv.value);
-                    cond = "vb6_VarCmpEq(" + subjAddr + ", "
+                    cond = cmpPrefix(cv.value.get()) + "Eq(" + subjAddr + ", "
                          + labelVariantAddr(cv.value.get(), lastExpr_) + ")";
                 }
                 if (!combinedCond.empty()) combinedCond += " || ";

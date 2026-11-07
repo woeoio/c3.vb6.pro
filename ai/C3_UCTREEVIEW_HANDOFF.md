@@ -3540,3 +3540,56 @@ Contact 修前 `vivid=6312 / white=280 / lightRows=7 / font=-13`，视觉阈值
 | `check_manifest_coverage.ps1` | 缺 4 行 | 2 行是早前新增语料（`strnul_drive/snd.vbp`、`varcmp_strnum/vcs.vbp`）没登记，2 行是本轮的两个 `.bas` 用例；按惯例吃 CI 自己交的 `ci/emit-manifest`（`rebless_emit_manifest.ps1 -Bless`） |
 
 `check_com_latebind_guard` / `check_host_pseudo_table` / `check_ps51_joinpath` 三条现均 PASS。
+
+## §49 根因四：Select Case 的**类型化标签**换档（Fix 433，2026-11-07，第 4 块）
+
+### 49.1 取证（真 VB6 /make）
+
+`tests/test_caseis.bas` 在 dev 上从 19:57 那批（§38 的 `9467654d`：Variant 字符串/数值
+混比改成「数值侧恒小于字符串侧」）起就红：`CI-mixrng=else/nrng/else`、`CI-mixis=gt100/lo/lo`，
+与穴里的 `srng/nrng/else`、`gt100/ge5/lo` 相反。两条读数不可能同时按一套二进制比较成立，
+于是用本机 VB6（`C:\Program Files (x86)\VB6Mini\bin\VB6.EXE /make`）做了隔离探针
+（`.temp/caseis_vb6/`，每条结果单独 flush 到 out.txt）：
+
+```
+mixrng_7=srng      mixrng_25=nrng    mixrng_1=else
+mixis_200=gt100    mixis_50=ge5      mixis_1=lo
+bytag_b=bbb        bytag_bb=bbb      bytag_a=aaa       bytag_z=else
+mixtag_s=str       mixtag_7=num
+numrng_7=nrng5     numrng_25=nrng20  numrng_1=else     numrng_s7=nrng5
+selstr_num7=num7   selstr_str7=str7  selnum_abc=else   sel07_num7=num7
+sel7_str07=else    sels_num7=else
+cmp_0eqs0=True     cmp_0ltx=True     cmp_s1lt2=True    err 全 0
+```
+
+结论是**一条**规则：Type 化的 Case 标签决定比较档，主语先换成标签那一档再比 ——
+
+- 主语 7 + `Case "07"` → 不命中：`CStr(7)="7"` 与 `"07"` **串比**；
+- 主语 "07" + `Case 7` → 命中：主语换成数 7；
+- 主语 7 + `Case "5" To "9"` → 命中（`"7"` 在串序区间里，同时也解释 `Case Is >= "5"`）；
+- 主语 7 + `Case "abc"`、主语 "s" + `Case 7` → 不命中且**不报错**（串比 / "s"→0）。
+
+这与二进制比较那条「数值恒小于字符串」并行不悖：那条只在**两边都是 Variant** 时成立
+（§38 的 `y="1" < x=2 → False`），而 `("1" < 2)` 是 Type 化字面量，实测 True。
+
+### 49.2 修法
+
+- RTL：`vb6_VarSelOrderTyped` + `vb6_VarSelCmpEq/Ne/Lt/Gt/Le/Ge`（标签箱是 BSTR 走
+  `vb6_CStr(主语)` + `wcscmp`，否则两边 `vb6_VarToDouble_internal` 数比）。二进制
+  `vb6_VarCmp*` 与「数值 < 字符串」一字未动。
+- 码：`cgen_select.cpp` 的 carrier 分支加**唯一一处** `cmpPrefix` —— 标签
+  `inferExprType != Variant` 取 `vb6_VarSelCmp`，标签是 Variant 槽仍取 `vb6_VarCmp`。
+  `Case Is` / 范围两端 / 精确四条出口都从它取名（`check_select_carrier_authority.ps1`
+  R6 改成钉这一个入口：prefix 字面量各 1、`cmpPrefix(` 4 处、硬编码二进制名 0 处）。
+- 用例：`test_caseis.bas` 增 `SelType07/SelTypeNum`，钉 `CI-seltype=else/num7/else`；
+  发码形状断言改 `vb6_VarSelCmp*`；`b606_slot_label`（Variant 槽标签）读数不变，
+  仍是 `vb6_VarCmp*`。
+
+### 49.3 读数
+
+- `CI-mixed=big/big/two/rest`、`CI-vartag=bbb/bbb/aaa/else`、`CI-mixtag=str/num`、
+  `CI-mixrng=srng/nrng/else`、`CI-mixis=gt100/ge5/lo`、`CI-seltype=else/num7/else`、`CI-DONE` —— 全绿。
+- `check_select_carrier_authority`：`PASS ... mix=carrier1 pack1 cmp4 slot=1x1 box=1 own=3`。
+- ucTreeView 五窗复量（`.temp/px_rows6`）：与 §47 逐值相同（Form3 dark=5155/textRows=10、
+  Form5 4778/15、Contact vivid=6453/white=419/lightRows=8），首令牌 PASS。
+- `check_rtl_embedded`：126 资源一致，exe sha=`1a5827eeefd8`。

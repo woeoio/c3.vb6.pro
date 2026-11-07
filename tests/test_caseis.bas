@@ -143,6 +143,29 @@ Private Function MixIs(v As Variant) As String
     End Select
 End Function
 
+' 2026-11-07 真 VB6 /make 实测：Select Case 的**类型化标签**会把主语换成标签那一档再比
+' （与二进制比较「数值恒小于字符串」不是同一口径）：
+'   主语 7   + Case "07" → else（CStr(7)="7" 与 "07" 串比）
+'   主语 "07" + Case 7   → num7（主语换成数 7）
+'   主语 "s"  + Case 7   → else（"s"→0，不报错）
+Private Function SelType07(v As Variant) As String
+    Select Case v
+        Case "07"
+            SelType07 = "str07"
+        Case Else
+            SelType07 = "else"
+    End Select
+End Function
+
+Private Function SelTypeNum(v As Variant) As String
+    Select Case v
+        Case 7
+            SelTypeNum = "num7"
+        Case Else
+            SelTypeNum = "else"
+    End Select
+End Function
+
 Public Sub Main()
     Debug.Print "CI-rel=" & Rel(3) & "/" & Rel(5) & "/" & Rel(6) & "/" & Rel(9) & "/" & Rel(7) & "/" & Rel(8)
     Debug.Print "CI-ne=" & Ne(4) & "/" & Ne(5)
@@ -155,5 +178,6 @@ Public Sub Main()
     Debug.Print "CI-mixtag=" & MixedTag("s") & "/" & MixedTag(7)
     Debug.Print "CI-mixrng=" & MixRange(7) & "/" & MixRange(25) & "/" & MixRange(1)
     Debug.Print "CI-mixis=" & MixIs(200) & "/" & MixIs(50) & "/" & MixIs(1)
+    Debug.Print "CI-seltype=" & SelType07(7) & "/" & SelTypeNum("07") & "/" & SelTypeNum("s")
     Debug.Print "CI-DONE"
 End Sub
