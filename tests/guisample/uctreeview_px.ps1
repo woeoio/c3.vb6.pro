@@ -1448,6 +1448,10 @@ if ($p.HasExited) {
             } else {
                 $sc = $expDpi / 96.0
                 $sc2 = $sc * $sc
+                # 设计值口径里与 DPI 线性同缩的读数 (行距/边条) 用 120dpi 基准折算:
+                # 参考读数与两个硬阈都是 120dpi 量的, 96dpi 的 CI 上必须跟着缩,
+                # 否则 54 会被 5 判成「裁切」、7 会被 9 判成「行不足」。
+                $sc120 = $expDpi / 120.0
                 # 基准优先级: 有真 VB6 实拍读数就逐项对读数 (强口径); 没有才退回设计值口径。
                 $rf = $ref[$sp.cap]
                 if ($rf -ne $null -and $rf.ContainsKey('w')) {
@@ -1517,8 +1521,10 @@ if ($p.HasExited) {
                         if ($st['photo'] -lt [int](400 * $sc2)) {
                             $actBad += "Corporate 头像照片像素 $($st['photo']) < 400*scale2 (5 张头像缺失)"
                         }
-                        if ($st['greenRim'] -gt 5) {
-                            $actBad += "Corporate 卡片右缘被裁切 greenRim=$($st['greenRim']) > 5"
+                        # 绿卡右缘本身就是一条绿边: 120dpi 正常读数 ~91px, 96dpi ~54px。
+                        # 判据 = 明显超过这条边应有的量 (线性缩), 不是「不许有绿」。
+                        if ($st['greenRim'] -gt [int](120 * $sc120)) {
+                            $actBad += "Corporate 卡片右缘被裁切 greenRim=$($st['greenRim']) > $([int](120 * $sc120))"
                         }
                     }
                     'Drag & Drop' {
@@ -1538,8 +1544,9 @@ if ($p.HasExited) {
                         if ($st['avatar'] -lt [int](3000 * $sc2)) {
                             $actBad += "Contact 头像像素 $($st['avatar']) < 3000*scale2 (头像全缺)"
                         }
-                        if ($st['lightRows'] -lt 9) {
-                            $actBad += "Contact 浅色文字行 $($st['lightRows']) < 9 (姓名/邮箱行不足)"
+                        # 120dpi 实拍是 8 行 (ref lightRows=8), 这档阈值按行距线性缩。
+                        if ($st['lightRows'] -lt [int](8 * $sc120)) {
+                            $actBad += "Contact 浅色文字行 $($st['lightRows']) < $([int](8 * $sc120)) (姓名/邮箱行不足)"
                         }
                         $bgMin = [int]($st['w'] * $st['h'] * 0.25)
                         if ($st['bg65'] -lt $bgMin) {

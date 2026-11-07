@@ -3593,3 +3593,49 @@ cmp_0eqs0=True     cmp_0ltx=True     cmp_s1lt2=True    err 全 0
 - ucTreeView 五窗复量（`.temp/px_rows6`）：与 §47 逐值相同（Form3 dark=5155/textRows=10、
   Form5 4778/15、Contact vivid=6453/white=419/lightRows=8），首令牌 PASS。
 - `check_rtl_embedded`：126 资源一致，exe sha=`1a5827eeefd8`。
+
+## §50 GA 门随口径（第 4 块收尾补，2026-11-07）
+
+上一轮末尾被步数上限截断，工作区留下两处**完整**改动（本轮先逐条验证再提交，未回退）：
+
+### 50.1 EMITC-SHAPE 针跟 `8f4e4b24` 的类槽解包形状
+
+`8f4e4b24` 把类槽赋值统一成"先解包再落槽"，发码从
+
+```c
+t = vb6_C445H_prop_get_NewOne16((void*)me);
+mi = (vb6_cls_K165Impl_New());
+```
+
+变成整句 `... = (vb6_cls_X*)vb6_ComObject_UnboxVb6Instance((void*)(<原表达式>));`。
+旧针钉的是**半句**，于是 CI 的 `vbp #2 / vbp #9` 报 EMITC-SHAPE 红（形状其实正确）。
+处置：`tests/run_tests.ps1` 里 b445 三条（`NewOne16` / `Make17` / `prop_get_Next18`）
+与 b165 一条（`mi = ...K165Impl_New()`）换成含解包的整句。
+本机取证（`--emit-c` 直接对两份 vbp，逐句 `Contains`）：**missing=0 / 0**。
+
+### 50.2 96 dpi CI 上的"设计值口径"阈按 120 折算
+
+`uctreeview_px.ps1` 在没有 `ref_metrics.json` 时走设计值口径，其中两阈是按 **120 dpi**
+实拍写死的：`greenRim > 5`（Corporate 卡片右缘）与 `lightRows < 9`（Contact 姓名/邮箱行）。
+CI runner 是 96 dpi：同一份构建的读数是 `greenRim=54`、`lightRows=7`
+（120 dpi 本机分别 91 / 8），被 5 / 9 判成"裁切 / 行不足"——**是阈没跟着 DPI 缩**。
+
+修法：新增 `$sc120 = $expDpi / 120.0`，两阈改为 `[int](120 * $sc120)` 与 `[int](8 * $sc120)`：
+
+| DPI | greenRim 阈 | 实拍 | lightRows 阈 | 实拍 |
+| --- | --- | --- | --- | --- |
+| 120（本机） | 120（`[int](120*1.0)`） | 91 | 8 | 8 |
+| 96（CI） | 96 | 54 | 6 | 7 |
+
+120 dpi 口径**不变**（绿色的那条右缘本来就允许存在 120px 量级），96 dpi 只是按行距/边条
+线性缩放；这不是放宽判据，是让设计值口径跟着它自己量的那个 DPI 走。
+本机复核：`uctreeview_px.ps1` 解析 0 错（BOM 在，PS 5.1 可读），
+`check_ps51_joinpath` 163 份 0 违规。
+
+### 50.3 下一块（问题 2 主线换更短的复现）
+
+问题 2 改用用户给的更短路径：**同一按钮连点两次**（`Menu / Tools` 第一次正常、
+第二次空白）。待查"只初始化一次"的三条链——`Form_Load` 早退闸、UC 的
+`UserControl_Initialize/InitProperties/ReadProperties`、共享集合/ImageList 是否在
+第一次 `Form_Unload` 时被清空未重建。取证口径：第二次开窗的 HWND 是新建还是复用，
+并与第一次逐项对比 `textRows/vivid/photo/avatar`。

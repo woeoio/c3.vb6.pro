@@ -10617,11 +10617,13 @@ if ($Category -in @("all", "run", "vbp")) {
         'if ((*p)) vb6_cls_C445_AddRef((*p));',
         '(void*)&(borrowed)',
         'if (me->mInner12) vb6_cls_C445_Release(me->mInner12);',
-        't = vb6_C445H_prop_get_NewOne16((void*)me);',
+        # 8f4e4b24: 类槽赋值的三个臂统一过 vb6_ComObject_UnboxVb6Instance
+        # （对裸实例/外部 IDispatch/HWND 原样交回），形状针跟着换成整句。
+        't = (vb6_cls_C445*)vb6_ComObject_UnboxVb6Instance((void*)(vb6_C445H_prop_get_NewOne16((void*)me)));',
         # 刀4 的两形: 正证人 = 这两格确实发成一次调用 (反面针才有东西可钉);
         #   W19 = 数据字段那一档 (那一枚别人还握着) ⇒ claim 必须继续在, 两态同值。
-        'c17 = vb6_C445H_Make17(hh17);',
-        'c18 = vb6_C445H_prop_get_Next18(hh18);',
+        'c17 = (vb6_cls_C445*)vb6_ComObject_UnboxVb6Instance((void*)(vb6_C445H_Make17(hh17)));',
+        'c18 = (vb6_cls_C445*)vb6_ComObject_UnboxVb6Instance((void*)(vb6_C445H_prop_get_Next18(hh18)));',
         'if (f19) vb6_cls_C445_AddRef(f19);')
     # 反面针 (腿⑤ 的边界): As Object 那一格是 void*, As Variant 那一格是槽 —— 两档都答不出
     #   工程类, 出厂这一站不许碰。钉形状 (mLate15 = 专属名) 而不是钉名字, 与门 #764 那条同口径。
@@ -11025,7 +11027,8 @@ if ($Category -in @("all", "run", "vbp")) {
         'memset(&mv, 0, sizeof(mv));  /* Set Nothing (接口视图空形) */',
         'mv.vtbl->Bar(mv.obj, 3)',
         'vb6_cls_K165Impl* __clsold',
-        'mi = (vb6_cls_K165Impl_New());',
+        # 8f4e4b24: 类槽那一支统一过解包（裸实例原样交回），形状针跟着换整句。
+        'mi = (vb6_cls_K165Impl*)vb6_ComObject_UnboxVb6Instance((void*)((vb6_cls_K165Impl_New())));',
         'vb6_cls_K165Impl_Release(__clsold')
     Test-EmitcShape 'b165_view_slot_set_and_clear_take_the_view_shapes' @(
         "$Tests\k165_iface_slot\K165Slot.vbp") $b165Shapes
