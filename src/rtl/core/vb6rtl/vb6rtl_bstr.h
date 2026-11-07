@@ -290,7 +290,13 @@ BSTR vb6_BSTR_ConcatFree(BSTR a, BSTR b);
 // 用于Concat等返回新BSTR的赋值场景, source是返回的新BSTR不存在共享引用
 static inline void vb6_BSTR_AssignMove(BSTR* target, BSTR source) {
     if (target) {
-        vb6_BSTR_Free(*target);
+        // 自赋值 (`x = IIf(cond, x, x & "\")` 的 cond 分支, 生成器按"所有权转移"发
+        // AssignMove, 可 IIf 直接把 x 交回来) 时 source == *target。原样先 Free 再存回
+        // = 把一枚已释放的 BSTR 留在槽里, 下一次分配就会复用那块内存并把内容改掉。
+        // 实测 tests/ucTreeView ClsTreeExplorer.NormalizePath("C:\"): sDir 变悬垂,
+        // 随后 FindFirstFile 分配 "C:\*" 恰好复用该块 -> sDir 读成 "C:\*", 子节点
+        // 全部登记成 "C:\*Program Files" 这类假路径, Open cursor folder 三级比对恒不等。
+        if (*target != source) vb6_BSTR_Free(*target);
         *target = source;
     }
 }
