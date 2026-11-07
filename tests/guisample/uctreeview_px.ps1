@@ -1143,7 +1143,7 @@ if ($p.HasExited) {
             if (($pos0 - $pos1) -ne 1) { $actBad += "'$($ns.label)' 上箭头 Value $v0->$($pos1+$ns.min) 未 -1 (SmallChange 未生效)" }
             $expTxt1 = [string]($ns.max - $pos1)
             if ($txt1 -ne $expTxt1) { $actBad += "'$($ns.label)' 上箭头后 Text='$txt1' != '$expTxt1' (Change 未发/未联动)" }
-            if ($sig1 -eq $sig0) { $actBad += "'$($ns.label)' 上箭头后树区像素未变 (未重绘)" }
+            if ($sig1 -eq $sig0) { $upSame = $true } else { $upSame = $false }
             [UP]::ClickAtClient($sb, [int]($sw/2), ($sh - 4))
             Start-Sleep -Milliseconds 700
             $pos2 = [UP]::GetScrollPos($sb, 2); $txt2 = [UP]::WTextReal($ed)
@@ -1153,7 +1153,27 @@ if ($p.HasExited) {
             if (($pos2 - $pos1) -ne 1) { $actBad += "'$($ns.label)' 下箭头 Value $($pos1+$ns.min)->$($pos2+$ns.min) 未 +1 (SmallChange 未生效)" }
             $expTxt2 = [string]($ns.max - $pos2)
             if ($txt2 -ne $expTxt2) { $actBad += "'$($ns.label)' 下箭头后 Text='$txt2' != '$expTxt2' (Change 未发/未联动)" }
-            if ($sig2 -eq $sig1) { $actBad += "'$($ns.label)' 下箭头后树区像素未变 (未重绘)" }
+            if ($sig2 -eq $sig1) { $dnSame = $true } else { $dnSame = $false }
+            # 像素重绘判据: 默认 ±1 步就该动。唯一例外是 NodeSpacing 在 96dpi (DpiFactor=1) 下的
+            # 半像素落地 —— 行内缩进 = Ident*NSpacing + NSpacing/2, 16->17 时根级 8.0->8.5 经
+            # CInt 半值取偶仍是 8 (真 VB6 同口径); 若此刻可见行全是根级 (Ident=0), 整屏几何上
+            # 不可能有差异。这不是"未重绘": value/Text 已逐条严格断言。此时改用 +4 步
+            # (16->20, 根级缩进 8->10, 必然可见) 复核**同一个 setter**, 再走回原值。
+            if ($upSame -or $dnSame) {
+                if ($ns.label -ne 'NodeSpacing') {
+                    if ($upSame) { $actBad += "'$($ns.label)' 上箭头后树区像素未变 (未重绘)" }
+                    if ($dnSame) { $actBad += "'$($ns.label)' 下箭头后树区像素未变 (未重绘)" }
+                } else {
+                    $sigA = Get-UcSigPair $uc
+                    for ($q = 0; $q -lt 4; $q++) { [UP]::ClickAtClient($sb, [int]($sw/2), 3); Start-Sleep -Milliseconds 250 }
+                    Start-Sleep -Milliseconds 500
+                    $sigB = Get-UcSigPair $uc
+                    $actRead += "redraw[$($ns.label):+4] $sigA->$sigB;"
+                    if ($sigB -eq $sigA) { $actBad += "'$($ns.label)' +4 步后树区像素仍未变 (setter 没重绘)" }
+                    for ($q = 0; $q -lt 4; $q++) { [UP]::ClickAtClient($sb, [int]($sw/2), ($sh - 4)); Start-Sleep -Milliseconds 250 }
+                    Start-Sleep -Milliseconds 300
+                }
+            }
             if ($p.HasExited) { $actBad += "'$($ns.label)' 数值点击后进程崩溃"; Kill-ProcDiag $p "'$($ns.label)' 数值点击后进程退出" $logOut $logErr; break }
         }
     }

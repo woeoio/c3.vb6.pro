@@ -3884,3 +3884,30 @@ CI 清单（head=62fa6c2a）与仓里期望只差 3 份：`tests/test_caseis.bas
 
 **修后读数**：本机 `darkPx=382`（= 真 VB6），阈值 211 ⇒ PASS rc=0
 （`.temp/seg_s55.log`，`PASS ucSegmentedControl client=751x520 hosts=12+1`）。
+
+### 54.2 vbp #2 `NodeSpacing` 在 96dpi 的 ±1 步几何不可见
+
+**现象**：CI 96dpi 下 `num[NodeSpacing] up/dn` 的 `px`（screen/PrintWindow 双路 sig）
+完全不变，连 800ms 复采也不变；同一脚本本机 120dpi 每次都变（`.temp/px_s53.log`、
+`.temp/ucv_s55.log` 均无 `redraw[NodeSpacing:+4]` 升级记录）。
+
+**定性**：`ucTreeViewPlus.ctl:1476` 的行内缩进是
+`Ident * NSpacing + NSpacing / 2`（`NSpacing = m_NodeSpacing * DpiFactor`）。
+
+| DPI | DpiFactor | 16→17 的 NSpacing | 根级(Ident=0) x | 子级(Ident=1) x |
+| --- | --- | --- | --- | --- |
+| 96 (CI) | 1 | 16→17 | 8.0→8.5，CInt 半值取偶 ⇒ **8→8（不动）** | 24→25（+1） |
+| 120 (本机) | 1.25 | 20→21 | 10.0→10.5 ⇒ 10→10（不动） | 30→31（+1） |
+
+所以 ±1 步是否可见完全取决于「此刻可见行里有没有子级行」。CI 该时刻的可见行全是
+根级（`pre=33/1155`，行高 35px），几何上不可能有像素差 —— 这不是「setter 没重绘」：
+同一循环里 `Value`（`GetScrollPos`）与 `Text1.Text` 仍逐次严格断言，且另外五枚属性
+在 96dpi 都照常变 sig。
+
+**修法（不是放宽）**：±1 步像素不变时，对 NodeSpacing 追加 **+4 步强刺激**
+（16→20：根级 8→10，必然可见）复核同一个 setter 的重绘路径，再四下走回 16；
+报告里记 `redraw[NodeSpacing:+4] <sigA>-><sigB>`。其余五枚属性仍按 ±1 判，
+NodeSpacing 的 value/Text 断言一字未动。
+
+**修后读数**：本机 120dpi `PASS tree=221x556 ... dpi=120`（`.temp/ucv_s55.log`），
+±1 步即变，升级分支未触发；96dpi 由 CI 复验 `redraw[NodeSpacing:+4]` 两 sig 不等。
