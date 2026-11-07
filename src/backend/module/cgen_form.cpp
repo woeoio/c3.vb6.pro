@@ -355,10 +355,12 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
                 auto itc = child.properties.find(k);
                 return itc != child.properties.end() ? (int)itc->second.intValue : defv;
             };
+            bool madeKid = false;
             if (!noKids && child.controlType == FrmControlType::TextBox) {
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignEdit("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 400)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::Timer) {
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignTimer("
                     + "vb6_" + ctl + "_ucTimerThunk_" + cIdent(child.controlName) + ", me);");
@@ -371,12 +373,14 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
                     + std::to_string(iprop("Interval", 60000)) + ");");
                 c_.emitLine("    vb6_SetTimerEnabled(vb6_hwnd_" + cIdent(child.controlName) + ", "
                     + std::to_string(iprop("Enabled", 0)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::PictureBox) {
                 // Fix <vbeclipse>: ucFolder.ViewArea 等 PictureBox 设计子控件 → STATIC 子窗,
                 // 视图窗体靠 SetParent 挂进它。旧循环不建 → ViewArea 恒 NULL → 面板全空。
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignPicture("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::Label) {
                 // Fix <vbeclipse> rev32: 设计子控件里的 **VB.Label** (ucTab.lblCaption)。
                 // 此前这个种类不在发射循环里 ⇒ ucTab 的设计面一个子控件都没建
@@ -386,11 +390,13 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignLabel("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 400)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::Image) {
                 // 同上: **VB.Image** (ucTab.imgIcon)。`ucTab.Icon` setter 写它。
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignImage("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::Unknown
                        && child.controlTypeName.find('.') != std::string::npos) {
                 // Fix <vbeclipse>: 设计子控件里"工程内 UserControl" (parseControlType 认不出的
@@ -403,6 +409,17 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
                     + "\"" + tn + "\", \"" + child.controlName + "\", "
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
+                madeKid = true;
+            }
+            // 账 #118 续: 设计面子控件的**设计期状态属性**此前整块丢弃 (只发了几何)。
+            // 实测 ucTreeViewPlus.ctl: Text1 / ucScrollbar1 / ucScrollbar2 三条都写着
+            // `Visible = 0`，一条都不发 ⇒ `.ctl` 代码里满篇 `If ucScrollbar1.Visible`
+            // (838/854/856/863/888…) 初值变 True ⇒ m_ClientWidth 少减一条滚动条宽，
+            // 树区宽度/换行/行数全偏；隐藏的辅助 TextBox 也会显示出来。
+            // 出口只有一个: 与 .frm 两条创建路共用 emitDesignerStateProps
+            // (create_controls.inc:365 / ctrl_style_apply.inc:395)，不新增第二处口径。
+            if (madeKid) {
+                emitDesignerStateProps(child, "vb6_hwnd_" + cIdent(child.controlName));
             }
         }
         if (hasInit) c_.emitLine("    vb6_" + ctl + "_UserControl_Initialize((vb6_cls_" + ctl + "*)me);");

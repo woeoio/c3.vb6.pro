@@ -9413,6 +9413,17 @@ if ($Category -in @("all", "run", "vbp")) {
     # ucTreeView (2026-11-06): 底部五按钮那一族同样按 App.Path 找 XML ——
     # Form3 读 JerarquiaEmpresa.xml、Form5 读 menu.xml；缺资产时 ctl 的 LoadFromXML
     # 会弹 "XML Load Error" (#32770) 并卡在 Form_Load（窗体停在隐藏态 ⇒ 看着像"没反应"）。
+    # 账 #118 续 (2026-11-07): 设计面子控件的**设计期状态属性**必须落地。
+    # 旧产物 (只发几何) 必红: ucTreeViewPlus.ctl 的 Text1 / ucScrollbar1 / ucScrollbar2
+    # 三条都写着 `Visible = 0`，一条都不发 ⇒ `.ctl` 里 `If ucScrollbar1.Visible`
+    # 初值变 True ⇒ m_ClientWidth 少减一条滚动条宽，树区宽度/换行/行数全偏。
+    Test-EmitcShape "uctreeview_designkids_state" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'vb6_hwnd_ucScrollbar2 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar2", 240, 3360, 4095, 135);',
+        'vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar2, 0);',
+        'vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar1, 0);',
+        'vb6_SetControlVisible((void*)vb6_hwnd_Text1, 0);'
+    )
+
     Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86" `
         -AssetDir "img" -AssetFile @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml") `
         -PixelAssert @("guisample\uctreeview_px.ps1")
