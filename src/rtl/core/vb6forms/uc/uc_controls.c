@@ -220,16 +220,22 @@ void* vb6_UC_ControlsItemObjByName(void* coll, const wchar_t* name) {
     return inst ? inst : hw;
 }
 
-// 把宿主窗口从 vb6_ucHo / vb6_ucRecs 摘除 (Remove 时调用)。
+// 把宿主窗口从 vb6_ucHo / vb6_ucRecs 摘除 (Remove 与宿主 WM_DESTROY 时调用)。
 // 采用"末位填补"压缩数组; vb6_ucCurrent 若正好是被摘除项, 置 NULL (调用方
 // Remove 的必然是别的控件, 不会摘到自身, 故正常情况下不发生)。
-static void vb6_uc_releaseHost(void* hwnd) {
+//
+// 为什么 WM_DESTROY 也必须摘: 旧记录常驻时会挡住新实例 —— 窗体关闭后 UC 实例内存
+// 被释放, 下次打开时堆复用同一地址, vb6_uc_findByInstance 从头扫, 先命中的是旧记录
+// (hwnd 已销毁、adSurf 是死表面), 于是新实例的 Draw/Cls 全画到死窗口上 ⇒ 空白。
+// 见 handoff §51/§52 (Contact List 第二次打开丢数据)。
+void vb6_uc_releaseHost(void* hwnd) {
     if (!hwnd) return;
     for (int32_t i = 0; i < vb6_ucHoCount; i++) {
         if (vb6_ucHo[i].hwnd == hwnd) { vb6_ucHo[i] = vb6_ucHo[--vb6_ucHoCount]; break; }
     }
     for (int32_t i = 0; i < vb6_ucRecCount; i++) {
         if ((void*)vb6_ucRecs[i].hwnd == hwnd) {
+            if (vb6_ucRecs[i].adSurf.memDC) vb6_uc_dibDestroy(&vb6_ucRecs[i].adSurf);
             if (vb6_ucCurrent == &vb6_ucRecs[i]) vb6_ucCurrent = NULL;
             vb6_ucRecs[i] = vb6_ucRecs[--vb6_ucRecCount];
             break;

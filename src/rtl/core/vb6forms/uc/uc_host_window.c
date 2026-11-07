@@ -198,7 +198,18 @@ void vb6_UC_ExtenderZOrder(int32_t* value, int32_t hasValue) {
 static void vb6_uc_adEnsure(vb6_UCRec* r) {
     if (!r || !r->hwnd) return;
     RECT rc;
-    GetClientRect(r->hwnd, &rc);
+    /* 宿主窗口销毁后 GetClientRect 失败而 rc 保持未初始化 —— 拿它当尺寸去
+       dibDestroy/dibCreate, 会把最后一次 Draw 画好的持久表面换成一张垃圾表面,
+       此后再怎么 Refresh 都是空白 (见 handoff §51: Contact List 第二次打开)。 */
+    if (!IsWindow((HWND)r->hwnd) || !GetClientRect((HWND)r->hwnd, &rc)) {
+        if (getenv("C3_AD_TRACE")) {
+            fprintf(stderr, "[AD-skip] type=%s hwnd=%p win=%d\n",
+                    r->desc ? r->desc->typeName : "?", (void*)r->hwnd,
+                    (int)IsWindow((HWND)r->hwnd));
+            fflush(stderr);
+        }
+        return;
+    }
     int32_t w = rc.right - rc.left, h = rc.bottom - rc.top;
     if (w <= 0 || h <= 0) return;
     if (r->adSurf.memDC && r->adSurf.w == w && r->adSurf.h == h) return;
@@ -213,8 +224,8 @@ static void vb6_uc_adEnsure(vb6_UCRec* r) {
         SetTextColor(r->adSurf.memDC, vb6_uc_resolve_color(vb6_UserControl_ForeColor));
     }
     if (getenv("C3_AD_TRACE")) {
-        fprintf(stderr, "[AD-ensure] type=%s w=%d h=%d\n",
-                r->desc ? r->desc->typeName : "?", (int)w, (int)h);
+        fprintf(stderr, "[AD-ensure] type=%s hwnd=%p w=%d h=%d\n",
+                r->desc ? r->desc->typeName : "?", (void*)r->hwnd, (int)w, (int)h);
         fflush(stderr);
     }
 }
@@ -689,6 +700,9 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 r->desc->terminate(r->me);
                 vb6_uc_pop(&saved);
             }
+            // §51: 宿主销毁后替身记录必须摘掉 —— 留着会被 vb6_uc_findByInstance
+            // 在下次打开时先扫到 (堆地址复用), 新实例的画全落到这张死表面上。
+            if (r) vb6_uc_releaseHost((void*)hwnd);
             break;
         default:
             break;

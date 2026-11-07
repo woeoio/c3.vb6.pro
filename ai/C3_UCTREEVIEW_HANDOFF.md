@@ -3690,3 +3690,83 @@ WM_PAINT 贴出的就是空表面；之后 `adSurf.w/h` 又被设成垃圾尺寸
 `Controls.Remove` 调），窗体关闭后旧记录常驻；`vb6_uc_findByHwnd` 取**头一个命中**，
 HWND 复用时光标就会落到旧记录（旧 `adSurf` / 旧 `me`）。下一步在 trace 里加
 `hwnd / IsWindow / 记录下标` 钉死是哪一条记录、在哪个时机带着失效 hwnd 进来。
+
+## §52 问题 2 根因与修复：宿主销毁不摘替身记录（2026-11-07）
+
+### 52.1 根因
+
+`vb6_uc_findByInstance(inst)` 从头扫 `vb6_ucRecs` 取**第一个 `me == inst`**。而
+UC 宿主窗口销毁时没人摘记录（`vb6_uc_releaseHost` 只有一个调用点
+`Controls.Remove`），于是：
+
+1. Form6 关闭 → 宿主 HWND 销毁，但 `vb6_ucRecs` 里的记录还在（`hwnd` 已失效、
+   `adSurf.memDC` 还是死窗口那张持久表面）；
+2. 再点 `Contact List` → C3 释放旧 Form6/UC 实例，新实例的 `me` 由堆分配器
+   **复用同一地址**；
+3. `vb6_uc_findByInstance(新 me)` 先命中**旧记录** → push 换进来的 `hDC` 是死表面；
+4. `Draw` 的 `Cls` + GDI+ 全画到那张死表面上 → 新窗只有 ambient 底色 +
+   滚动条（滚动条是独立子窗），**整块空白**；强制 `RedrawWindow` 也没用
+   （贴的仍是空表面）。
+
+trace 实证（修复前，6 轮连点）：
+
+```
+[UC-find] inst=010DE2C8 -> #6  hwnd=02A20BDA win=0   × 801
+[UC-find] inst=01129E88 -> #12 hwnd=010E0A2A win=0   × 576
+[UC-pushDead] type=ucTreeViewPlus hwnd=02A20BDA ...  × 1377
+```
+
+`win=0` = `IsWindow(hwnd)` 为假。地址复用是概率事件，所以空白是间歇的
+（同一份产物 6 轮里中 2 轮）；一旦撞上，从该轮起后续窗口也一起空白。
+
+### 52.2 修复（`src/rtl/core/vb6forms/uc/`）
+
+1. `uc_host_window.c`：宿主 `WM_DESTROY` 里 `terminate` + `pop` 之后调
+   `vb6_uc_releaseHost((void*)hwnd)` —— 把记录连同 `adSurf` 一起摘掉，
+   不让死记录留在表里参与"头一个命中"。
+2. `uc_controls.c`：`vb6_uc_releaseHost` 去 `static`，并在摘记录时
+   `vb6_uc_dibDestroy(&r->adSurf)`（Controls.Remove 路径也不再漏 DIB）。
+3. `vb6_uc_internal.h`：导出该函数。
+4. `uc_host_window.c::vb6_uc_adEnsure`：`GetClientRect` 失败时**直接返回**。
+   修复前 `r->hwnd` 失效时 `rc` 是栈上垃圾，代码拿它当尺寸 `dibDestroy` 掉
+   正常表面再建一张垃圾 DIB（trace 里 `w=7333836 h=935983433`），
+   属于同一条链上的第二个坑。
+5. `tests/guisample/uctreeview_px.ps1` B 段（同进程连点 3 轮）补**内容判据**：
+   等连续 2 帧读数一致后，通用要求 `vivid >= 800`（空白态是个位数），
+   Contact 另加 `avatar >= 3000*scale²`。这是把已报告的缺陷纳入门，不是放宽。
+
+### 52.3 修复后读数（同一按钮连点，等画面稳定再采）
+
+`Contact  List`（`.temp/sameclick.ps1`，连续 3 帧读数一致、≥600ms）：
+
+| 轮次 | HWND | avatar | photo | vivid | bg65 |
+| --- | --- | --- | --- | --- | --- |
+| open1 | 0xFB0AD2 | 9950 | 10539 | 6466 | 118862 |
+| open2 | 0xFC0AD2 | 8579 | 9272 | 4239 | 118858 |
+| open3 | 0xFD0AD2 | 8739 | 9502 | 7231 | 118862 |
+| open4 | 0xFE0AD2 | 9105 | 10189 | 8797 | 118855 |
+
+（vivid/photo/avatar 的轮间差异来自 `RandomBetween` 的随机头像底色，非丢数据。）
+
+### 52.4 `uctreeview_px.ps1`：旧产物红 / 新产物绿
+
+旧产物 = 修复前 RTL 编出的 `Proyecto1.exe`（`.temp/uct_old`，`--arch x86`）：
+
+```
+FAIL 交互: 'Corporate Hierarchy' 第 1 轮内容空白 (vivid=0 < 800);
+           'Drag and Drop' 第 3 轮内容空白 (vivid=0 < 800);
+           'Menu / Tools' 第 1/2/3 轮内容空白 (vivid=0 < 800);
+           'Contact  List' 第 1/2/3 轮内容空白 (vivid=0) 且头像全缺 (avatar=0)
+```
+
+新产物（当前 HEAD + 本修复）：
+
+```
+PASS ... repeatcontent[Contact  List 1] vivid=6453 avatar=9950
+       repeatcontent[Contact  List 2] vivid=4226 avatar=8579
+       repeatcontent[Contact  List 3] vivid=7218 avatar=8739
+       repeatcontent[Menu / Tools 1/2/3] vivid=41117 avatar=105961 ×3
+```
+
+A 段（每个窗体独立进程）旧产物本来就是绿的 —— 这个缺陷只在**同进程重复打开**
+时出现，与 §43 的"冷启动直点"矩阵不矛盾；B 段因此必须同进程连点。

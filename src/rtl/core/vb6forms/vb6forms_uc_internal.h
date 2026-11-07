@@ -246,6 +246,8 @@ extern vb6_ComIface_Font vb6_UserControl_FontObj;
 void vb6_uc_trace(const char* phase, const char* type, void* me);
 vb6_UCRec* vb6_uc_findByHwnd(const void* hwnd);
 vb6_UCRec* vb6_uc_findByInstance(const void* inst);
+// 宿主窗口销毁时摘掉替身记录 (否则旧记录会挡住地址复用的新实例, 见 §51)
+void vb6_uc_releaseHost(void* hwnd);
 
 // Fix <vbeclipse> rev18: UserControl 自有 Property 的按名桥 (晚绑定访问)。
 // obj 收 UC 实例指针或宿主 HWND; 命中返回 1。见 vb6forms_controls.h 的 vb6_UcPropDesc。

@@ -1631,6 +1631,40 @@ if ($p.HasExited) {
                     [UP]::CloseWin($dlgB) | Out-Null
                     [void](Wait-Gone $dlgB 3000)
                 }
+                # §51 (2026-11-07): **同一按钮连点** 每次都必须有内容。旧产物 (UC 替身记录
+                # 宿主销毁后不摘) 在第 2/3 次会把 Draw/Cls 落到已销毁窗口的持久表面上:
+                # 窗照样弹出来, 但整块空白 (Contact 实测 vivid=13 avatar=0 photo=0)。
+                # 口径: 等连续 2 帧读数一致再判; 通用底线 vivid>=800 (空白态是个位数),
+                # Contact 另加头像面积 >= 3000*scale2 (与 A 段同阈)。
+                $buc = [UP]::FindUcHost($fw)
+                if ($buc -eq [IntPtr]::Zero) {
+                    $actBad += "'$($sp.btn)' 第 $round 轮窗体里找不到 UC 宿主子窗"
+                } else {
+                    $bst = ''; $bprev = ''
+                    for ($bi = 0; $bi -lt 20; $bi++) {
+                        $bst = Get-StatsPrint $buc
+                        if ($bst -eq $bprev) { break }
+                        $bprev = $bst
+                        Start-Sleep -Milliseconds 150
+                    }
+                    $bm = @{}
+                    foreach ($tok in ($bst -split ' ')) {
+                        $kv = $tok -split '='
+                        if ($kv.Count -eq 2 -and $kv[0] -ne 'mode' -and $kv[0] -ne 'c') { $bm[$kv[0]] = [int64]$kv[1] }
+                    }
+                    $bv  = if ($bm.ContainsKey('vivid'))  { $bm['vivid'] }  else { -1 }
+                    $bav = if ($bm.ContainsKey('avatar')) { $bm['avatar'] } else { -1 }
+                    $actRead += "repeatcontent[$($sp.btn) $round] vivid=$bv avatar=$bav"
+                    if ($bv -lt 800) {
+                        $actBad += "'$($sp.btn)' 第 $round 轮内容空白 (vivid=$bv < 800)"
+                    }
+                    if ($sp.btn -eq 'Contact  List') {
+                        $bsc = [UP]::GetDpiForWindow($mb) / 96.0
+                        if ($bav -lt [int](3000 * $bsc * $bsc)) {
+                            $actBad += "'$($sp.btn)' 第 $round 轮头像全缺 (avatar=$bav < $([int](3000 * $bsc * $bsc)))"
+                        }
+                    }
+                }
                 [UP]::CloseWin($fw) | Out-Null
                 $fgB = Wait-Gone $fw 3000
                 if (-not $fgB) {
