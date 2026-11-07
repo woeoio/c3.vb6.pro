@@ -398,7 +398,16 @@ int32_t vb6_UC_IsFont(const void* p) {
  *   或用户代码写 Bold ⇒ 后者正是本刀要它生效的那一种。
  * 参数按**void*** 收 (本头不含 wingdi.h 的调用方也能递栈上的 LOGFONTW), dpi/quality
  *   由调用方决定 —— 与账 #298 §B129 那条「公式只住一枚, DPI 从外面递进来」同口径。 */
-void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut) {
+/* Fix 434: 磅→像素的**第三位口径** —— `IFont.hFont` 这一格是截断。
+ * 同一个真 VB6 进程里量到两套 (2026-11-07, .temp/fontprobe.ps1 对参考 exe):
+ *   窗体/原生控件 WM_GETFONT  = -13 (8.25pt @120dpi, 13.75 截断);
+ *   UC 宿主窗口 WM_GETFONT    = -14 (13.75 半值向上, Fix 432 的那条);
+ *   `Font.hFont` (stdole IFont 自己那枚 GDI 句柄, 账 #305 276/277 的尺) = 截断。
+ * K276 夹具 (tests/combyref271, 8.75pt @120dpi = 14.58) 钉的就是最后这一格:
+ * 参考答 -14, 按 Fix 432 的 MulDiv 挡会答 -15。所以这里按**入口**分档:
+ * host window / 原生控件那两站仍走 half-up (caller 传 roundHalf=1),
+ * vb6_uc_fontEnsureHFont (hFont 缓存) 传 0 = 截断。 */
+static void vb6_uc_fontLogFontImpl(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut, int roundHalf) {
     const vb6_ComIface_Font* f = (const vb6_ComIface_Font*)fontFields;
     LOGFONTW* lf = (LOGFONTW*)lfOut;
     double pt;
@@ -408,8 +417,8 @@ void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* l
     pt = (f && f->Size > 0) ? (double)f->Size : 8.25;
     /* Fix 432: 显式 StdFont 走 MulDiv 口径 (半值向上), 不是截断 —— 见上面
      * vb6_uc_fontHeightPxRound 的取证。默认 GUI 字体那一档仍走截断。 */
-    lf->lfHeight    = (f && f->Size > 0) ? vb6_uc_fontHeightPxRound(pt, dpi)
-                                         : vb6_UC_FontHeightPx(pt, dpi);
+    lf->lfHeight    = ((f && f->Size > 0) && roundHalf) ? vb6_uc_fontHeightPxRound(pt, dpi)
+                                                       : vb6_UC_FontHeightPx(pt, dpi);
     lf->lfWeight    = (f && f->Bold) ? 700 : ((f && f->Weight) ? f->Weight : 400);
     lf->lfItalic    = (BYTE)((f && f->Italic) ? 1 : 0);
     lf->lfUnderline = (BYTE)((f && f->Underline) ? 1 : 0);
@@ -437,6 +446,10 @@ void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* l
     } else {
         wcscpy(lf->lfFaceName, L"MS Sans Serif");
     }
+}
+
+void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut) {
+    vb6_uc_fontLogFontImpl(fontFields, dpiY, quality, lfOut, 1);
 }
 
 /* 快照与当前八档是否一致 (一致 = 缓存里那枚 HFONT 还代表这八档, 不用重造)。
@@ -486,8 +499,10 @@ static void* vb6_uc_fontEnsureHFont(vb6_ComIface_Font* f) {
     if (!f) return NULL;
     if (f->hFontCache && vb6_uc_fontSigSame(f)) return f->hFontCache;
     if (f->hFontCache) { DeleteObject((HFONT)f->hFontCache); f->hFontCache = NULL; }
-    /* DEFAULT_QUALITY: 与 vb6rtl_com.c 那条 Font.hFont (quality=0) 及 VB6 的 StdFont 同口径。 */
-    vb6_UC_FontLogFont(f, vb6_DpiY(), DEFAULT_QUALITY, &lf);
+    /* DEFAULT_QUALITY: 与 vb6rtl_com.c 那条 Font.hFont (quality=0) 及 VB6 的 StdFont 同口径。
+       Fix 434: 这一格 (IFont.hFont) 的磅→像素是**截断** (K276: 8.75pt@120dpi 参考答 -14),
+       与 Fix 432 给 UC 宿主窗口的 MulDiv 半值向上是两条创建路径, 故传 roundHalf=0。 */
+    vb6_uc_fontLogFontImpl(f, vb6_DpiY(), DEFAULT_QUALITY, &lf, 0);
     h = CreateFontIndirectW(&lf);
     if (!h) return NULL;
     vb6_uc_fontSigTake(f);

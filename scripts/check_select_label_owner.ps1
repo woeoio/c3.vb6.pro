@@ -17,7 +17,7 @@
 #   R3 两位放箱主人各只一处(标签箱=账 #604 / 主语承载箱=账 #606), 整份文件 VariantClear 恰两枚;
 #   R4 本文件里不许出现自己的串/变体打包器或 BSTR 释放器 (那会把 borrowed 档一起放掉);
 #   R5 位置序: 声明 -> if 链 -> 清收 (清收落进 Case 体就等于没清);
-#   R6 扫描地板 (文件长度 + VarCmp 站点数), 扫描瞎了不许报干净;
+#   R6 扫描地板 (文件长度 + 两档比较出口的站点数: 混合档 vb6_VarCmp / 类型档 vb6_VarSelCmp), 扫描瞎了不许报干净;
 #   R7 夹具 / 期望 / 本哨兵自己都已在 run_tests.ps1 登记。
 # 本文件里不写反斜杠字面量: 路径走 [IO.Path]::DirectorySeparatorChar。
 # 输出 ASCII (控制台 GBK, 中文读数重定向后不可 grep)。文件必须 UTF-8 BOM + CRLF。
@@ -100,7 +100,11 @@ Before 'for (auto& lblClear : labelClears) {' 'c_.emitLine("vb6_VariantClear(&" 
 
 # ---- R6 扫描地板 ----
 if ($SEL.Length -lt 8000) { $fail += ('R6 scan floor: cgen_select.cpp is ' + $SEL.Length + ' chars (want >=8000) -- 扫描瞎了却报干净') }
-if ((C 'vb6_VarCmp' $COD) -lt 3) { $fail += ('R6 VarCmp floor: ' + (C 'vb6_VarCmp' $COD) + ' site(s) (want >=3) -- 混合档比较出口被搬走或改名了') }
+# Fix 433: 出口按标签静态类型分两档 —— 槽 (Variant) 仍走 vb6_VarCmp*, 类型化字面量走 vb6_VarSelCmp*。
+# 这里只钉"两档出口都还在本文件里", 不再要求单一名出现三次 (那是分档前的形状, 已随 433 退役)。
+if ((C '"vb6_VarCmp"' $COD) -lt 1 -or (C 'vb6_VarSelCmp' $COD) -lt 2) {
+    $fail += ('R6 compare exits: b_vb6_VarCmp=' + (C '"vb6_VarCmp"' $COD) + ' VarSelCmp=' + (C 'vb6_VarSelCmp' $COD) +
+              ' (want >=1 and >=2) -- 混合档/类型档比较出口被搬走或改名了') }
 if ((C 'selectCaseLabelClass' $COD) -lt 2) { $fail += 'R6 label-class authority: selectCaseLabelClass 的定义与调用都要在' }
 
 # ---- R7 登记面 ----

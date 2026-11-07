@@ -5546,7 +5546,9 @@ if ($Category -in @("all", "run", "bas")) {
         'vb6_VarCmpEq(&_vb6_select_',
         'vb6_VariantFromValue((*w))',
         'vb6_VarCmpGt(&_vb6_select_',
-        'vb6_VarCmpGe(&_vb6_select_',
+        # Fix 433: `Case 1 To w` 的下界是**类型化字面量** 1 ⇒ 打类型档 vb6_VarSelCmpGe;
+        # 上界 w 是槽 ⇒ 仍打混合档 vb6_VarCmpLe (下面那一针)。分档前这里两枚都是 VarCmp。
+        'vb6_VarSelCmpGe(&_vb6_select_',
         'vb6_VarCmpLe(&_vb6_select_'
     )
     Test-EmitcAbsent "b606_slot_label_no_fold" @("$Tests\b606_slot_label.bas") @(

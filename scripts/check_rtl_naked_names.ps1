@@ -152,7 +152,9 @@ $bareDef = @([regex]::Matches($semUtil, 'bool SemanticAnalyzer::isDocumentBarePs
 $bareDec = @([regex]::Matches($semHdr, 'bool isDocumentBarePseudoMember')).Count
 $bareUse = @([regex]::Matches($semExpr, 'isDocumentBarePseudoMember\(node\.name\)')).Count
 $bareGate = @([regex]::Matches($semExpr, '!memberObjCtx_\s*&&\s*isDocumentBarePseudoMember')).Count
-$bareTbl = @([regex]::Matches($semUtil, 'hostPseudoBareEligible\(')).Count
+# §40: 谓词按读/写分了两枚 (hostPseudoBareEligible / hostPseudoBareCallEligible),
+# 这里只钉"语义层问过一次表"，不钉具体是哪一枚。
+$bareTbl = @([regex]::Matches($semUtil, 'hostPseudoBare(?:Call)?Eligible\(')).Count
 $bareName = 0
 foreach ($t in @($semUtil, $semHdr, $semExpr)) { $bareName += @([regex]::Matches($t, 
     '"(changed|hdc|hwnd|scalewidth|scaleheight|scalemode|containerhwnd|enabled|autoredraw)"')).Count }
