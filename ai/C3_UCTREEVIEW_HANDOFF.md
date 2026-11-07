@@ -3639,3 +3639,54 @@ CI runner 是 96 dpi：同一份构建的读数是 `greenRim=54`、`lightRows=7`
 `UserControl_Initialize/InitProperties/ReadProperties`、共享集合/ImageList 是否在
 第一次 `Form_Unload` 时被清空未重建。取证口径：第二次开窗的 HWND 是新建还是复用，
 并与第一次逐项对比 `textRows/vivid/photo/avatar`。
+
+## §51 问题 2 主线：Contact List 第二次打开丢数据（2026-11-07）
+
+### 51.1 稳定复现（读数与用户给的逐值一致）
+
+探针 `.temp/sameclick.ps1`（不入库）：同一按钮 `PostMessage(BM_CLICK)` → 等窗 →
+**等画面连续 3 帧读数完全一样**（且 ≥600ms）才采样 → `PrintWindow(2)` 抓整窗 →
+`WM_CLOSE` 关窗 → 再点。`Menu / Tools` 连点 5 轮全绿；`Contact  List`
+（`Agenda tema oscuro`）连点 5 轮里 2~3 轮空白，且**一旦空白，强制
+`RedrawWindow` 也不会恢复**：
+
+| 轮次 | avatar | photo | vivid | bg65 | white | 结论 |
+| --- | --- | --- | --- | --- | --- | --- |
+| open1 | 9950 | 10539 | 6466 | 118862 | 47572 | 正常 |
+| open2 | 0 | 0 | 13 | 5176 | 34065 | 空白 |
+| open3 | 8739 | 9502 | 7231 | 118862 | 46144 | 正常 |
+| open4 | 0 | 0 | 13 | 5176 | 34065 | 空白 |
+| open5 | 0 | 0 | 13 | 5176 | 34065 | 空白 |
+
+### 51.2 已排除
+
+- **不是窗口复用**：每次打开都是新 HWND（`0x1A50B6A → 0x1A60B6A → …`）。
+- **不是 `Form_Load` 早退**：带日志的副本（`.temp/uc6dbg`，不入库）在
+  `Form6_Load` 首尾写文件，空白那次仍打印 `F6Load exit nodes=21`；`vb6_formLoaded_Form6`
+  在 `WM_DESTROY` 已复位（发码 `0x7FF0` 分支每次 show 都重跑）。
+- **不是 ImageList/节点没重建**：两次 `nodes=21`，`ImageListAddImage` 都执行；
+  `UserControl_Initialize` 每次都重建 `cImageList` 并重启 GDI+。
+- **不是采样过早**：探针改成连续 3 帧稳定才收，空白是**稳态**，不是首帧。
+
+### 51.3 关键线索：`AD-ensure` 用了未初始化的 RECT
+
+`C3_AD_TRACE=1` 的 trace 里出现：
+
+```
+[AD-ensure] type=ucTreeViewPlus w=7333836 h=935983433
+[AD-ensure] type=ucTreeViewPlus w=7333568 h=915104156
+[AD-ensure] type=ucTreeViewPlus w=331 h=491        ← 真实尺寸
+```
+
+`uc_host_window.c::vb6_uc_adEnsure` 只判了 `GetClientRect` 的**入参**，没判返回值：
+`r->hwnd` 已不是窗口时 `rc` 保持栈上垃圾值，于是 `dibDestroy` 掉正常表面、再按
+垃圾尺寸建一张（或建失败），**在最后一次 `Draw` 之后把持久表面换掉** ⇒ 下一帧
+WM_PAINT 贴出的就是空表面；之后 `adSurf.w/h` 又被设成垃圾尺寸，后续 `Refresh`
+也救不回来。这解释了"空白稳定且重绘无效"。
+
+### 51.4 待查（下一步）
+
+`vb6_ucRecs` 里已销毁宿主的替身记录没人释放（`vb6_uc_releaseHost` 只被
+`Controls.Remove` 调），窗体关闭后旧记录常驻；`vb6_uc_findByHwnd` 取**头一个命中**，
+HWND 复用时光标就会落到旧记录（旧 `adSurf` / 旧 `me`）。下一步在 trace 里加
+`hwnd / IsWindow / 记录下标` 钉死是哪一条记录、在哪个时机带着失效 hwnd 进来。
