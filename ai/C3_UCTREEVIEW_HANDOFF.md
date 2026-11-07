@@ -2777,6 +2777,55 @@ CI head `fd9f47a0` 的 vbp #7 里出现两条**新**红：
 按真 VB6 运行期值改为 700，并在表头写明「口径 = WM_GETFONT 的 lfWeight，不是 .frx 设计值」。
 判据没有放宽：旧产物（400）在这三条上反而必红，正是要求的「旧产物必红」。
 
+### 35.12 当前 HEAD 的 GA 状态与 26 行清单登记（2026-11-07 收尾核对）
+
+**提交链**（`github/dev` 与 `origin/dev` 均含，快进）：
+
+| commit | 内容 |
+|---|---|
+| `6be8fce3` | 字重根因修复：`CBool(<晚绑定>)` → `vb6_CBoolV`（§34），含两条旧产物必红的针 |
+| `d975da2e` | URL 链两处发码缺口（§35.1–35.7） |
+| `97c70bf4` | `Test-EmitcShape` odd-literal 判据修正 + `Form1.frm` 转 UTF-8（§35.8/35.9） |
+| `fd9f47a0` | 登记发码清单（CI artifact，30 条：新增 1 + 变更 29，§35.10） |
+| `9e0bb774` | `uctreeview_px.ps1` 兜底字重表 400/600 → 700（§35.11） |
+
+**GA 状态**：
+
+- head `9e0bb774`：run `42357614748` 刚入队（写作时 `queued`），结果未出。
+- head `fd9f47a0`：run `42356614425` = **21/22**，唯一红格 **vbp #7**，且红的就是
+  `[GUI] ucTreeView`（`uctreeview_px.ps1`）这一例。残留项（逐字取自 CI）：
+
+```
+'Tree Explorer' 节点文字行 4 < 5 (设计节点数)
+Corporate 卡片右缘被裁切 greenRim=54 > 5
+Contact 头像像素 0 < 3000*scale2 (头像全缺)
+'Tree Explorer' / 'Corporate Hierarchy' / 'Drag and Drop' 第 2 轮 3s 内没有弹出可见窗体
+'Menu / Tools' 第 1 轮 3s 内没有弹出可见窗体
+看门狗: 'Menu / Tools' 第 1 轮弹窗超时且主窗不响应 | crash 0xc0000005 av read target=0x740077 rva=0x4639c
+```
+
+  三条字重红（`700 != 400` / `700 != 600`）已在 `9e0bb774` 校正，新 run 应消失。
+
+  这条红**不是本轮改动引入的**：head `0a5843bf`（§34 之前）run `42349260232` 的 vbp #2 里同一例
+  就在红，残留族同形（头像 0 / greenRim / 第 2 轮 OPEN-FAIL / 看门狗 0xc0000005）。所以它属于
+  **五窗阶段**的待修项（重复 `Show` 重建 + URL 头像在 CI 无网环境下缺失），不阻塞本轮五条。
+
+**26 行清单（§32.3：族 A 17 + 族 B 9）登记状态**：已随 `fd9f47a0` 全部登记，口径为
+CI artifact（head `97c70bf4`，597 行）：
+
+- 29 条哈希变更的精确对账（旧期望 → CI 新清单）：
+  - **25 条**落在 §32.3 的 26 行清单内（族 A/族 B）；
+  - **4 条**是 §34/§35 新波及的：`tests/czUI-main/czFormDemo.vbp`、
+    `tests/declare_out/declare_cwex_lit_com.bas`、`tests/test_variant_boxing.bas`、
+    `tests/ucSegmentedControl/SegmentedControl.vbp`（`CBool` 数值桥 + `Declare` 的 ANSI 变体实参）；
+  - 26 行清单里 **`tests/TeeChartChartDisplay/DisplayProject.vbp` 在新 head 上哈希未再变**，
+    保持原登记值（不是漏登：它本就不在 29 条变更里）。
+- 1 条新增 = `tests/urlpic/UrlPicMain.bas`。
+- **坏形状两行没登记**：`tests/test_array.bas`（`dc61cfa7…` / 5375 B）与
+  `tests/test_redim_elem.bas`（`bafcd837…` / 22317 B）在新 head 的 CI 清单里与旧期望
+  **逐字节相同**，保持 §32.2 修正后的值；含坏形状的 `ci2`（head `8fc56916`）未使用。
+- `check_manifest_coverage` K1..K3：`inputs=597 [.vbp=221 .bas=376] registered=597`，sets equal。
+
 
 
 
