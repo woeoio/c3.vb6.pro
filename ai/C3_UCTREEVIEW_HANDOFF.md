@@ -3223,3 +3223,88 @@ C3 `(57,44,25) (0,0,14) …`（近黑字）。
 
 - `Form3` 文字行 9 != 10、`Form5` 文字行 14 != 15。
 - Contact 深底 `bg65=102676 < 118627*0.9`。
+
+## §42 Tree Explorer "Open cursor folder" 三级展开闭环（2026-11-07，第 1 块）
+
+### 42.1 状态固化（本轮开工先做）
+
+干净的 HEAD 基线 = `ffaef057`（SelNode ByRef 一修）。上一轮结尾被步数上限截断，
+工作区里留下的三处**都是完整改动**，逐一验证编译后按"一因一提交"落盘：
+
+| 提交 | 文件 | 根因 |
+| --- | --- | --- |
+| `91cbc76f` | `src/backend/cgen_base_type.cpp` | ByRef 类实参交 `vb6_ComCall` 而非对象档 |
+| `c893cc66` | `src/backend/detail/expr/cgen_expr_call_prelude.inc` | 数组下标里的晚绑定读被外层偷换 |
+| `8f4e4b24` | `src/backend/module/cgen_com.cpp` | 类槽收包装器；Public Variant 字段空体存根 |
+| `28aaf662` | `src/rtl/core/vb6rtl/vb6rtl_bstr.h` | BSTR 自赋值先释放后存回 |
+
+`cgen_expr_call_prelude.inc` 里那两处临时 `fprintf` 调试输出已删（属半截编辑，
+未留在提交里）。`.zcodeignore` 是工作区外产物，未跟踪、未提交。
+
+### 42.2 崩溃取证（先取证后改）
+
+- 崩溃：`0xC0000005`，模块 `Proyecto1.exe` 偏移 `0x000236E2`，落在
+  `vb6_ClsTreeExplorer_GetNodePath`：`N` 为 NULL 时读 `N+0x10` 的 `key`。
+  调用点 `Form2.Command1_Click` 的 `MsgBox cTE.GetNodePath(TVP.SelNode)`。
+- 结论：崩在**展开链之后**（`SelNode` 恒 Nothing），不是 Shell 浏览对话框的 COM。
+  对话框是 `MsgBox`（`#32770`，按钮"确定"，静态文本 = 路径）。
+
+### 42.3 四个下游根因（同一个"工程类对象经 IDispatch 往返"家族）
+
+1. **ByRef 类形参**（`ffaef057` 之前）：`cTVP.SelNode = N` 按值递裸指针，
+   `Set m_SelItem = *TheNode` 取到 `__comObj`（恒 NULL）⇒ SelNode 恒 Nothing。
+2. **Variant 公共字段**：Fix 099 对 `Public key As Variant` 生成空体存根 ⇒
+   `.key` 读回 Empty ⇒ `ArrIDLIST(0)`。
+3. **数组下标里的成员读**：`ArrIDLIST(N.Childs(i).key)` 整段被外层改写成
+   `ComGetStringProp(Item(i), "key")`，数组访问消失。
+4. **类槽收包装器**：`Set N = vb6_ComCallObject(...)` 落的是 `vb6_ComObject`
+   包装器，按 `vb6_cls_Node*` 读字段 ⇒ `N.Childs.Count` = 0；`Set x = 集合(1)`
+   后 `x.Text` 读到 0x44004300 一类的垃圾，`Len()=1140851328`，出口
+   `Release(包装器)` 直接 `0xC0000374`。
+5. **BSTR 自赋值**（RTL）：`NormalizePath` 的
+   `sData = IIf(Right$(sData,1)="\", sData, sData & "\")` 走 Self 分支时
+   `AssignMove` 先 Free 再存回 ⇒ 悬垂；随后 `FindFirstFile` 分配的 `"C:\*"`
+   复用该块 ⇒ 路径读成 `C:\*`，子节点登记成 `C:\*Program Files` 这类假路径，
+   三级比对恒不等。
+
+### 42.4 读数（`tests/ucTreeView` 真夹具 + 探针）
+
+修前：`HEAP_CORRUPTION 0xC0000374`；`afterSet=0`；`EX sp=C:\*`、`AFT=0`；
+j1 逐项 `C:\*PROGRAM FILES` / `C:\*WINDOWS`（无 HIT）；对话框静态文本为空。
+
+修后（`.temp/ucb13`，真夹具，未加任何探针）：
+
+```
+[dlg] #32770 title=Proyecto1
+[dlg-child] Static:C:\Windows\Cursors
+[path] OK contains C:\Windows\Cursors
+[close] dialog closed=True alive=True
+```
+
+探针读数（`.temp/ucprobe3u`）：
+
+```
+j0 HIT C:\        -> 展开 4 项: C:\Program Files / (x86) / C:\Users / C:\Windows
+j1 HIT C:\WINDOWS -> 展开项含 C:\Windows\Cursors（第 23 项）
+EX sp=C:\; L=3; txt=Win 11 x64 (C:); kidl=4; AFT=4; afterSet=4
+```
+
+文件系统对照：`C:\Windows` 共 101 项、首项 `appcompat`；树里第一项同为
+`C:\Windows\appcompat`。真 VB6 同序（`ref_*` 截图里展开同一目录）。
+
+### 42.5 脚本口径（写进 `tests/guisample` 注释，别再人工判断）
+
+`editor_scroll_px` 那次红是**抓屏被资源管理器窗口压住**导致 `PrintWindow` 交回
+一张不可用位图，重跑即 PASS。凡抓屏例统一加一条处置：
+
+- 抓图后抽样统计像素（每 97 像素取一点），若 `distinct <= 3` 或整幅同色
+  ⇒ 判定"被遮挡/抓屏不可用"；
+- `SetForegroundWindow` + `BringWindowToTop` 后重试**一次**；
+- 仍不可用则记 `[occluded]` 并继续（不当作像素判据的失败，但必须写进日志）。
+  这一条不豁免任何用例：像素判据仍要真跑。
+
+### 42.6 未做（下一块）
+
+- 问题 2：冷启动直点后 4 个按钮的 5×5 矩阵（每组合独立进程）尚未跑。
+- `Form3` 9≠10、`Form5` 14≠15、Contact `bg65=102676`。
+- GA 22/22（像素例真过、不许 SKIP）。
