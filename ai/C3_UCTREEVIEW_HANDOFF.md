@@ -2692,6 +2692,38 @@ DBGORI paint=0    w=135  h=3015     ← 上屏的是纵向滚动条 (135×3015)�
 - `Menu / Tools` 第 2 轮 `OPEN-FAIL` + `0xc0000005 av read target=0x4`：第 1 轮正常出图，
   崩在重复 `Show` 重建路径，与本条改动无关（改前同形），单独记。
 
+### 35.8 `Test-EmitcShape` 的 odd-literal 计数把 `L"\\"` 收尾引号误判成转义（判据 bug，已修）
+
+CI head `6be8fce3` 的三处红里有两条 `missing:` 为空、只报 `odd-literal-lines=19`：
+
+- `[EMITC-SHAPE] uctreeview_designkids_state`
+- `[EMITC-SHAPE] cbool_latebound_variant`
+
+不是发码坏，是**计数启发式**坏：旧写法 `(?<!\\)"` 把 `L"\\"` 的收尾引号也当成被转义
+（它前面确实有一个 `\`），于是只要产物里出现路径分隔符字面量，就恒有 19 行被判 odd。
+改成「引号前连续反斜杠个数为偶数才算字符串边界」。本机同一份产物（`.build\C3.exe
+tests\ucTreeView\Proyecto1.vbp --emit-c`，exit=0，18999 行）复算：
+
+```
+odd_old=19   ← 与 CI 读数逐字一致, 复现了那条红
+odd_new=0    ← 修正后
+```
+
+判据语义未放宽：真正漏进 C 源码的未转义换行（把字面量劈成两行）依然会红。
+
+### 35.9 夹具编码：`Form1.frm` 转 UTF-8（与 `ucTreeViewPlus.ctl` 同口径）
+
+`ucTreeViewPlus.ctl` 已在 `d975da2e` 转为 UTF-8（无 BOM）；`Form1.frm` 此前仍是 CP1252，
+两行西班牙语注释（`raíz` / `Función`）按 UTF-8 读是 U+FFFD。现已同样转为 UTF-8（无 BOM，
+CRLF 1313 不变，`git diff` 仅那 2 行）：
+
+```
+1139: ' Convertir el nodo raíz del XML en un nodo de tu clase
+1145: ' Función recursiva para convertir un nodo XML en un nodo de la clase Node
+```
+
+转换后 `--emit-c` exit=0（18999 行），夹具解析未受影响。
+
 
 
 

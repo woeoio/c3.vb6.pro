@@ -3652,7 +3652,16 @@ function Test-EmitcShape {
     $odd = 0
     foreach ($ln in ($raw -split "`r?`n")) {
         if ($ln.Contains('vb6_BSTR_FromStr(')) {
-            if (([regex]::Matches($ln, '(?<!\\)"')).Count % 2 -ne 0) { $odd++ }
+            # 账 #419 (2026-11-07): 只数**未转义**的引号。旧写法 (?<!\\)" 把
+            # `L"\\"` 的收尾引号也当成被转义（前面确实有一个 `\`），于是只要产物里有
+            # 路径分隔符字面量就恒 odd=19 —— head 6be8fce3 的 CI 就是这么红的
+            # (missing: 空, odd-literal-lines=19)。正确口径：引号前连续反斜杠个数为
+            # 偶数才是字符串边界。
+            $n = 0
+            foreach ($qm in [regex]::Matches($ln, '(\\*)"')) {
+                if (($qm.Groups[1].Value.Length % 2) -eq 0) { $n++ }
+            }
+            if ($n % 2 -ne 0) { $odd++ }
         }
     }
     if ($code -eq 0 -and $bad.Count -eq 0 -and $odd -eq 0) {
