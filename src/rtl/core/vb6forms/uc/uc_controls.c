@@ -453,17 +453,18 @@ static void vb6_uc_fontSigTake(vb6_ComIface_Font* f) {
  * ⚠ 不许把它交给 WM_SETFONT —— vb6forms_ctrl.c 的 vb6_SetControlFontFromLogFont
  *   换字体后无条件 DeleteObject(旧句柄) (vb6forms.c:147 那条注释记的就是这一格),
  *   递出去就等于把缓存换成悬空句柄。本 RTL 无任何调用点这么做。
- * 质量档 = NONANTIALIASED_QUALITY, 与 vb6_Vb6DefaultGuiFont 为窗口字体定下的那条
- * 「VB6 的 MS Sans Serif 是点阵字体, 从不抗锯齿」同口径 (量字那一位调用方维持它
- * 一直以来的 0, 不跟着动 —— Fix 113k 记过: 给 TextWidth/TextHeight 换字体度量会把
- * Charts 的图例/轴标签排布推坏)。 */
+ * 质量档 = DEFAULT_QUALITY (与 vb6rtl_com.c 的 Font.hFont 及 VB6 的 StdFont 同口径)。
+ * 以前写死 NONANTIALIASED 是照 vb6_Vb6DefaultGuiFont 那条「MS Sans Serif 是点阵字体」
+ * 一刀切, 但用户自定义的 Segoe UI 一类可缩放字族在 VB6 里是会平滑的 —— 实测真 VB6
+ * 节点文字带 ClearType 彩边, C3 全是硬边。MS Sans Serif 本身仍走点阵档, 质量位对它无效。 */
 static void* vb6_uc_fontEnsureHFont(vb6_ComIface_Font* f) {
     LOGFONTW lf;
     HFONT h;
     if (!f) return NULL;
     if (f->hFontCache && vb6_uc_fontSigSame(f)) return f->hFontCache;
     if (f->hFontCache) { DeleteObject((HFONT)f->hFontCache); f->hFontCache = NULL; }
-    vb6_UC_FontLogFont(f, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    /* DEFAULT_QUALITY: 与 vb6rtl_com.c 那条 Font.hFont (quality=0) 及 VB6 的 StdFont 同口径。 */
+    vb6_UC_FontLogFont(f, vb6_DpiY(), DEFAULT_QUALITY, &lf);
     h = CreateFontIndirectW(&lf);
     if (!h) return NULL;
     vb6_uc_fontSigTake(f);
@@ -481,14 +482,29 @@ void* vb6_UC_FontHFont(void* p) {
  * + 顶层 VB6_Form_*) 在同一把时间无关的尺上读回**空** —— 从没发过。发过之后它们的文字量、owner-draw
  * 与 .FontName 那一族读数才落在 VB6 那枚字体上, 不是 DC 默认字体。
  * 本站只拼答案: 八档 (fontFields = NULL 即 VB6 的默认档 8.25pt / MS Sans Serif / 400) 问第二百七十六刀
- * 那位主人, DPI 递真屏、质量档递 NONANTIALIASED (与窗口字体同口径); 发出去 / 自存 / 删旧 交给
+ * 那位主人, DPI 递真屏, 质量档由两个入口分别给 (原生控件 NONANTIALIASED / UC 宿主 DEFAULT); 发出去 / 自存 / 删旧 交给
  * vb6forms_ctrl.c 里那一位既有主人 —— 那一站自带「只删我们自己造的那张」的账, 不抄第二份。
  * ⚠ 也别顺手把第二百七十六刀那枚缓存句柄交出去: WM_SETFONT 的接手方换字体时 DeleteObject 旧句柄。 */
-void vb6_UC_ApplyFontToWindow(void* hwnd, const void* fontFields) {
+static void vb6_uc_applyFontToWindowQ(void* hwnd, const void* fontFields, int32_t quality) {
     LOGFONTW lf;
     if (!hwnd) return;
-    vb6_UC_FontLogFont((void*)fontFields, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    vb6_UC_FontLogFont((void*)fontFields, vb6_DpiY(), quality, &lf);
     vb6_SetControlFontFromLogFont((HWND)hwnd, &lf);
+}
+
+void vb6_UC_ApplyFontToWindow(void* hwnd, const void* fontFields) {
+    /* 这里**保持** NONANTIALIASED: 同一入口也被 cgen 用来给窗体上的原生控件
+       (Label/Button/CheckBox, cgen_form_create_controls.inc:147) 发设计期字体 ——
+       改这一档会让 Form1 那批 Arial Narrow 文字一起变平滑, 与本刀（UC 节点文字）
+       无关, 且会推翻 px 夹具按旧硬边标定的 Label 240 / 按钮行数判据。 */
+    vb6_uc_applyFontToWindowQ(hwnd, fontFields, NONANTIALIASED_QUALITY);
+}
+
+/* UC 宿主窗口 (ThunderRT6UserControl 那一户) 的 ambient 字体: VB6 的 StdFont 在 GDI 里
+   走默认质量档, 可缩放字族会按系统设置平滑。这一档**不能**并进上面那条 ——
+   上面那条还被原生控件共用。见 uc_host_create.inc:85 (AutoRedraw DC 的默认字体)。 */
+void vb6_UC_ApplyFontToHostWindow(void* hwnd, const void* fontFields) {
+    vb6_uc_applyFontToWindowQ(hwnd, fontFields, DEFAULT_QUALITY);
 }
 
 

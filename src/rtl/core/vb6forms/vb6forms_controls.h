@@ -416,6 +416,8 @@ int32_t vb6_UC_FontHeightPx(double pt, int32_t dpiY);
 /* 账 #305 第二百七十八刀: 把一枚字体的答案发到窗口上 (UC 宿主窗口 / 窗体顶层创建期那两站)。
    fontFields = NULL 就是 VB6 的默认档; 真正的发 / 存 / 删在 vb6forms_ctrl.c 那一位主人里。 */
 void    vb6_UC_ApplyFontToWindow(void* hwnd, const void* fontFields);
+/* UC 宿主窗口专用: 同一枚字体块, 质量档走 DEFAULT_QUALITY (StdFont 语义, 允许平滑)。 */
+void    vb6_UC_ApplyFontToHostWindow(void* hwnd, const void* fontFields);
 void*   vb6_UC_FontHFont(void* p);
 // Fix 168: Extender 结构体同上 (With UserControl.Extender 的 Width/Height/Align)
 int32_t vb6_UC_IsExtender(const void* p);

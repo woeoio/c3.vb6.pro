@@ -102,7 +102,11 @@ static HFONT vb6_uc_fontHFontFor(const void* fontPtr, int16_t bold, int16_t unde
     scratch = *f;                      /* 只改两档, 不污染共享 Font 对象 */
     scratch.Bold = bold ? -1 : 0;
     scratch.Underline = underline ? -1 : 0;
-    vb6_UC_FontLogFont(&scratch, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    /* 质量档 = DEFAULT_QUALITY: VB6 的 `UserControl.Font` 是普通 StdFont, 交给 GDI 按
+       系统设置平滑 (本机 ClearType)。以前这里写死 NONANTIALIASED ⇒ 节点文字是全硬边
+       (实测真 VB6 "Human Resources" 一带 sat>=60 有 321 px、maxSat=112, C3 全是
+       sat<=14、maxSat=9), 五窗 vivid/photo/avatar 因此系统性偏少。 */
+    vb6_UC_FontLogFont(&scratch, vb6_DpiY(), DEFAULT_QUALITY, &lf);
     {
         HFONT hf = CreateFontIndirectW(&lf);
         if (hf && vb6_ucHfCacheN < VB6_UC_HF_CACHE_MAX) {
