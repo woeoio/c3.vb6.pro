@@ -1697,3 +1697,151 @@ SC=H STABLE 8s cap='Probe' … cap=| focus=ThunderRT6CommandButton|Dbl act=Thund
 故本探针只在本机跑（未进 CI shard）。它回答的是"语义层"（C3 与 VB6 是否吞点击），
 不回答"CI 那台桌面在那一瞬的窗口是否被别的窗口抢焦点"——后者由 px 脚本的有界重试兜住。
 
+### 27.14 编码取证 + 真 VB6 基准升级 + 构建口径（2026-11-07）
+
+**全流程 pwsh 7**：本节所有采集/测试脚本一律 `pwsh -NoProfile -File …` 执行（不再有 5.1 分支）。
+
+#### 27.14.1 字节级取证（不推断）
+
+| 文件 | `D:\vb_yqt4qPac\ucTreeView\`（用户已转 UTF-8） | `tests\ucTreeView\`（仓库夹具） | 判定 |
+|---|---|---|---|
+| Form1.frm | 42417 B，无 BOM，**合法 UTF-8** | 42415 B，无 BOM，**非 UTF-8**；按 cp1252 合法（`ED 7A`=í、`F1`=ñ） | 仓库=原西语编码 |
+| ucTreeViewPlus.ctl | 106567 B，无 BOM，合法 UTF-8 | 106553 B，非 UTF-8；cp1252 合法（`FA 6C`=úl、`F3 6E`=ón） | 仓库=原西语编码 |
+| ucScrollbar.ctl | 145062 B，**纯 ASCII** | 145062 B，纯 ASCII | 两处**逐字节相同** |
+| Form2..6 / Cls / Node | — | 无 BOM、cp1252（Form6 含 `F1`） | 同上 |
+
+结论：**仓库夹具本身就是原编码（cp1252），不存在"夹具被转码"的保真缺陷**，不需要修夹具；
+用户 `D:\` 那份才是被转成 UTF-8 的副本。
+
+#### 27.14.2 `/make` 编码 A/B 对照（pwsh，VB6Mini `C:\Program Files (x86)\VB6Mini\bin\VB6.EXE`）
+
+| 模式 | 做法 | 退出码 | 日志原文（关键行） | 产物 |
+|---|---|---|---|---|
+| ansi | 原字节复制，0 字未改 | **1** | `Form1.log` 行 416 `不能加载控件 ucTreeViewPlus1`；`ucTreeViewPlus.log` 行 31 `属性 SmoothScrollFactor在 ucScrollbar2 中有无效值。` / 行 50 `…ucScrollbar1…` | 无 |
+| utf8 | Form1.frm + ucTreeViewPlus.ctl 解 cp1252 后写 UTF-8（无 BOM） | **1** | 与 ansi **逐字相同** | 无 |
+
+结论：**编码不是变量**（两种编码的失败日志一模一样）；根因是 `SmoothScrollFactor = 0,15` 的
+**逗号小数**（作者西语环境；本机 zh-CN 小数分隔符是 `.`，VB6 解析 `0,15` 为无效值）。
+VB6 IDE 把它当警告、命令行 `/make` 当致命错误 —— 与用户现场一致。
+
+#### 27.14.3 SmoothScrollFactor 合法性/等价性（先从 .ctl 查清，未猜）
+
+- `ucScrollbar.ctl`：`Public Property Get/Let SmoothScrollFactor() As Single`；
+  `PropBag.ReadProperty/WriteProperty("SmoothScrollFactor", 0.3)`（**默认 0.3**）；
+  `Initialize` 里写 `0.15`；`FixDec(S) = Val(Replace(S, ",", "."))` ⇒ 作者本意就是 **0.15**；
+  `If factor > 1 Then … / 100` ⇒ **1 = 关闭平滑**。
+- `ucTreeViewPlus.ctl` `UserControl_ReadProperties`（2705/2710 行）运行期强制
+  `ucScrollbar1/2.SmoothScrollFactor = 1` ⇒ 设计期 `0.15`→`0.15` **对行为中性**（被父 UC 覆盖）。
+- 基准副本：`.temp\vb6ref\ucTreeView`（原夹具复制），**字节级**把 `=   0,15` 改成 `=   0.15`
+  （ASCII 定位替换，非 ASCII 字节逐字节保留，不解码不重编码）。脚本：
+  `tests\guisample\uctv_vb6_baseline.ps1`。
+- 实测：`patched(bytes, 0,15->0.15): ucTreeViewPlus.ctl`；`vb6 exit=0 exe=True`；
+  产物 `.temp\vb6ref\ucTreeView\Proyecto1.exe` **331776 字节**（真 VB6 基准，x86 无关）。
+
+#### 27.14.4 C3 侧登记（同一份原编码夹具）
+
+- frm 解析把 `0,15` 判成 ident（`FrmValue::fromIdent`）；**嵌套 UC 的设计期非标准属性根本不 emit**
+  （只 emit `vb6_UC_CreateDesignUserControl(type,name,x,y,w,h)` 几何）⇒ **静默丢弃**：不警告、不报错。
+- 运行期回落 `ReadProperty("SmoothScrollFactor", 0.3)`，随后被父 UC 强制 `= 1` ⇒ 与 VB6 运行时等价；
+  **不会**把无效值当 0/负数用。
+- C3 读夹具走 `SourceBuffer::readAndConvertToUtf8`（GBK/UTF-8 均可），本轮 C3 编的正是仓库**原编码**
+  文件，`C3 exit=0`。⇒ 不存在"VB6 只吃原编码 / C3 只吃 UTF-8"的夹具层坑。
+
+#### 27.14.5 构建口径（必须记）
+
+- `.build\C3.exe` 是 **x64 宿主**，默认 `--arch x64` 产物启动即 `0xC0000409`（已知问题）；
+  **本夹具必须 `--arch x86`**：产物 833536→834048 字节、machine=0x14C、可正常启动。
+- 关闭 objcache 全量重编：`$env:C3_NO_OBJCACHE='1'` + `scripts\c3_build.ps1 -Extra "--arch x86"`。
+- RTL 有改 ⇒ 必须先 `scripts\_tmp_c3_rebuild.bat`（vcvars+cmake）重编 C3，再跑
+  `scripts\check_rtl_embedded.ps1`，最后编夹具。
+
+#### 27.14.6 真 VB6 基准读数（`.temp\vb6ref\ref_metrics.json`，UC 子窗 PrintWindow）
+
+| 窗 | w×h | textRows | firstTextW | vivid | photo | avatar | dark | 其它 | 字体 |
+|---|---|---|---|---|---|---|---|---|---|
+| Tree Explorer | 321×615 | 5 | 78 | 2354 | 1608 | 1225 | 1542 | white=191527 | Segoe UI -16 400 |
+| Form3 (Corporate) | 541×601 | 10 | 187 | 21768 | 9292 | 6498 | 5155 | greenRim=87 / green=13790 | Segoe UI -16 700 |
+| Drag & Drop | 301×441 | 5 | 98 | 2161 | 2484 | 927 | 529 | white=127827 | Arial Narrow -16 400 |
+| Form5 (Menu/Tools) | 563×584 | 15 | 77 | 41664 | 56127 | 108113 | 4778 | lightGreen=11285 | Segoe UI -16 700 |
+| Agenda tema oscuro | 331×491 | 1 | 331 | 7120 | 10955 | 9793 | 147049 | bg65=118627 | Segoe UI Semibold -14 700 |
+
+#### 27.14.7 C3 对真基准的红项（本轮 `.temp\guard_ref4.log`，EXIT=1）
+
+- **组 1（内容级，全部按真 VB6 读数判）**
+  - Tree：textRows 6≠5；firstTextW 7 < 78-2；vivid/photo/avatar 全 0；dark 168 < 1388。
+  - Form3：textRows 9≠10；firstTextW 127 < 185；vivid 13436 < 19591；photo 0 < 8363；avatar 54 < 5848；
+    dark 1448 < 4640；字体 `MS Sans Serif|-13|400` ≠ `Segoe UI|-16|700`。
+  - Drag & Drop：textRows/首行/四个颜色判据全 0（整窗空白）。
+  - Form5：textRows 5≠15；firstTextW 22 < 75；vivid 36728 < 37498；dark 1814 < 4300；字体同上错。
+  - Agenda：avatar 0 < 8814；字重 600 ≠ 700（face/字高已对）。
+- **组 2**：第 2 轮后进程崩溃 `code=0xc0000005 rva=0x19385`（av read 0x8d8a2），
+  同时 `THE IMAGE: 4/5/6 DON'T EXIST`（`outTail`）。WM_DESTROY 三行清理已加，尚未证明覆盖 UC 宿主/子窗销毁路径。
+- **组 3**：六枚 `pos`/`Value` 已随点击 ±1，`Text1` 也**真联动**（`guard_ref5.log`：
+  `num[BorderRadius] up: txt='5'->'6'` … 六枚全部 `txt` 与 `Max-Value+Min` 一致）。
+  ⚠ 上一轮判"txt 不联动"是**采集缺陷**：跨进程 `GetWindowText` 对 Edit 只回缓存标题，
+  `_Change` 早已把文本改掉也读不到；已改成 `WM_GETTEXT`（`[UP]::WTextReal`），与
+  `OBJCACHE` 那组"PS 5.1 吞 stderr"同类 —— 属采集侧，不是产品。
+  ~~真剩下的红只有 `NodeSpacing`/`MarginBottom` 两项树区像素未变 ⇒ setter 没触发重绘~~
+  **（2026-11-07 实测已推翻）** 用 `.temp\probe_ns2.ps1`（`WM_SETTEXT` 走
+  `Text1(i)._Change` 真路径 + `PrintWindow(2)` 打 UC 宿主，与遮挡无关）逐项 A/B：
+  - `MarginBottom` 0→1：C3 `ucDiff=4269` / 真 VB6 `4718` ⇒ 两边都重绘，只是真 VB6 的
+    `sig`（采集口径）没反映出来 —— 那半条是**采集侧**，判据改用逐字节 diff。
+  - `NodeSpacing` 16→17：C3 `ucDiff=0` / 真 VB6 `8732` ⇒ **真产品缺陷**，已定位修复（见 27.14.9）。
+    原因是 `Rect.Left = <Double 表达式>` 在 UDT 字段上被编成裸存（C 截断），真 VB6 是
+    取整：16/2=8 vs 17/2=8.5→9。`NS->18` 起 C3 也能变（截断把 8.5 吞成 8）。
+
+#### 27.14.8 pwsh 与 c29listview
+
+- `OBJCACHE`/`OBJCACHE-NEG`/`nonascii_missing_frx` 三项**待用 pwsh 重验**；若转绿须在此记明
+  "之前的红是 PS 5.1 采集缺陷，不是产品"。
+- `c29listview` 中文 `???`：该夹具 `C29ListView.frm` 是**无 BOM 合法 UTF-8**，与 ucTreeView 的
+  编码成因**不同源**，需单独归因（本轮未动）。
+
+#### 27.14.9 账 #478：UDT 字段赋浮点表达式被 C 截断（真 VB6 取整）
+
+**症状**：`NodeSpacing` 16→17 树区 `ucDiff=0`，真 VB6 `8732`（同一取样器、同一 `WM_SETTEXT`
+路径、同一 `PrintWindow(2)` 口径）。其余五枚数值控件两边都变。
+
+**最小复现**（`.temp\udtprobe\`，3 个文件，`--emit-c` 即可，不用 VB6）：
+```
+' TestCls.cls
+Private Type Rect
+    Left As Long
+End Type
+Private Rect As Rect          ' ← 变量名与类型名同名
+Private lLocal As Long
+Public Sub Test()
+    Rect.Left = 7 / 2         ' 修前: me->Rect.Left = vb6_Num_Div(7,2)      → 3 (截断)
+    lLocal = 7 / 2            ' 修前: me->lLocal = ChkLong(FltToLng(...))    → 4 (取整)
+End Sub
+```
+修后两条都发成 `vb6_ChkLong(vb6_FltToLng(vb6_Num_Div(7,2)))`。
+
+**根因**：`narrowTargetTypeOf → inferUdtFieldVb6Type` 用 `symTab_.lookupModule(udtName)`
+查 UDT 符号。`Private Rect As Rect` 这种**变量名 == 类型名**时，`lookupLocal("Rect")` 先命中
+变量（`SymbolKind::Variable`），`kind != UserDefinedType` ⇒ 整个 UDT 字段分支落空 ⇒
+`narrowCheckAssign` 答 Unknown，赋值走裸存。注意 `cgen_base_generate_state_scan.inc:144`
+早就为同一个同名坑在**登记侧**加了 `lookupTypeSymbol` 回退，**推断侧**漏了。
+
+**修复**（`src/backend/cgen_util_classtype.cpp`，5 处全改 `lookupTypeSymbol`）：
+- `inferUdtFieldVb6Type`（字段类型推断主路）
+- `inferUdtTypeOfExpr` 的 `MemberAccessExpr` / `WithMemberExpr` 分支（含嵌套 UDT 的 `refSym`）
+- `udtFieldTypeRefNameOfTarget`、`udtFieldObjCType`
+（`lookupTypeSymbol` 内含 `<name>$ty` 回退 + 按 kind 的模块/本地查找，是同名遮蔽下唯一能拿到
+`UserDefinedType` 的路。）
+
+**验证**（C3 vs 真 VB6，`.temp\probe_ns2.ps1` 扫 `NodeSpacing`，`ucDiff` 逐字节）：
+| 16→ | C3 修前 | C3 修后 | 真 VB6 |
+|---|---|---|---|
+| 17 | 0 | 7484 | 8732 |
+| 18 | 7484 | 7667 | 8732 |
+| 19 | 7667 | 7667 | 10005 |
+| 20 | 7667 | 8586 | 10511 |
+| 40 | 11884 | 11884 | — |
+两边量化相位一致（17≡18、19≡20 的成对关系对上），绝对字节数差异来自渲染/抗锯齿，属预期。
+`MarginBottom` 0→1：C3 4269 / VB6 4718，两边都重绘（原 `sig` 判据是采集侧）。
+
+**回归口径**：C3 重建（`scripts\_tmp_c3_rebuild.bat`，EXIT=0）；RTL 未动，无需
+`check_rtl_embedded.ps1`；夹具 `--arch x86` + `C3_NO_OBJCACHE=1` 重编 = 834560 字节。
+
+

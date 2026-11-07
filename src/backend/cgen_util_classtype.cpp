@@ -606,7 +606,7 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 // semantic_analyzer_decl 已把返回类型名写进 variableTypeName (与变量同一格)。
                 Symbol* fnSym = symTab_.lookupModule(id.name);
                 if (fnSym && fnSym->kind == SymbolKind::Function && !fnSym->variableTypeName.empty()) {
-                    Symbol* udtSym = symTab_.lookupModule(fnSym->variableTypeName);
+                    Symbol* udtSym = lookupTypeSymbol(fnSym->variableTypeName);
                     if (udtSym && udtSym->kind == SymbolKind::UserDefinedType)
                         return "vb6_type_" + cIdent(fnSym->variableTypeName);
                 }
@@ -641,14 +641,14 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
             if (parentUdtCType.size() <= prefix.size()
                 || parentUdtCType.compare(0, prefix.size(), prefix) != 0) return "";
             std::string udtName = parentUdtCType.substr(prefix.size());
-            Symbol* udtSym = symTab_.lookupModule(udtName);
+            Symbol* udtSym = lookupTypeSymbol(udtName);
             if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return "";
             std::string memLower = Symbol::toLower(ma.memberName);
             for (auto& mi : udtSym->udtMembers) {
                 if (Symbol::toLower(mi.name) == memLower) {
                     // 若该成员本身是 UDT (typeRefName 非空且能查到 UserDefinedType 符号)
                     if (!mi.typeRefName.empty()) {
-                        Symbol* refSym = symTab_.lookupModule(mi.typeRefName);
+                        Symbol* refSym = lookupTypeSymbol(mi.typeRefName);
                         if (refSym && refSym->kind == SymbolKind::UserDefinedType) {
                             return "vb6_type_" + cIdent(mi.typeRefName);
                         }
@@ -680,14 +680,14 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
             if (parentUdtCType.size() <= prefix.size()
                 || parentUdtCType.compare(0, prefix.size(), prefix) != 0) return "";
             std::string udtName = parentUdtCType.substr(prefix.size());
-            Symbol* udtSym = symTab_.lookupModule(udtName);
+            Symbol* udtSym = lookupTypeSymbol(udtName);
             if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return "";
             auto& wm = static_cast<const WithMemberExpr&>(expr);
             std::string memLower = Symbol::toLower(wm.memberName);
             for (auto& mi : udtSym->udtMembers) {
                 if (Symbol::toLower(mi.name) == memLower) {
                     if (!mi.typeRefName.empty()) {
-                        Symbol* refSym = symTab_.lookupModule(mi.typeRefName);
+                        Symbol* refSym = lookupTypeSymbol(mi.typeRefName);
                         if (refSym && refSym->kind == SymbolKind::UserDefinedType) {
                             return "vb6_type_" + cIdent(mi.typeRefName);
                         }
@@ -745,7 +745,11 @@ Vb6Type CCodeGen::inferUdtFieldVb6Type(const ASTNode* target, bool* outIsArray) 
     if (udtCType.size() <= prefix.size() || udtCType.compare(0, prefix.size(), prefix) != 0)
         return Vb6Type::Unknown;
     std::string udtName = udtCType.substr(prefix.size());
-    Symbol* udtSym = symTab_.lookupModule(udtName);
+    // 账 #478: 类型名与变量同名时 (`Private Rect As Rect`) `lookupModule` 先命中**变量**
+    // (SymbolKind::Variable) ⇒ 整个 UDT 字段分支落空: `Rect.Left = 7 / 2` 发成裸存
+    // (C 截断得 3), 真 VB6 走取整得 4。改问 lookupTypeSymbol —— 它内含 `$ty` 回退与
+    // 按 kind 的模块/本地查找, 是同名遮蔽下唯一能拿到 UserDefinedType 的那条路。
+    Symbol* udtSym = lookupTypeSymbol(udtName);
     if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return Vb6Type::Unknown;
     std::string memLower = Symbol::toLower(memName);
     for (auto& mi : udtSym->udtMembers) {
@@ -818,7 +822,7 @@ std::string CCodeGen::udtFieldTypeRefNameOfTarget(const ASTNode* target) const {
         || udtCType.compare(0, prefix.size(), prefix) != 0)
         return std::string();
     std::string udtName = udtCType.substr(prefix.size());
-    Symbol* udtSym = symTab_.lookupModule(udtName);
+    Symbol* udtSym = lookupTypeSymbol(udtName);
     if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return std::string();
     std::string memLower = Symbol::toLower(memName);
     for (auto& mi : udtSym->udtMembers) {
@@ -869,7 +873,7 @@ std::string CCodeGen::udtFieldObjCType(const std::string& udtCType,
     if (udtCType.size() <= prefix.size() || udtCType.compare(0, prefix.size(), prefix) != 0)
         return "";
     std::string udtName = udtCType.substr(prefix.size());
-    Symbol* udtSym = symTab_.lookupModule(udtName);
+    Symbol* udtSym = lookupTypeSymbol(udtName);
     if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return "";
     std::string memLower = Symbol::toLower(memberLower);
     for (const auto& mi : udtSym->udtMembers) {

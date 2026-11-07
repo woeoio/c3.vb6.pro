@@ -56,10 +56,49 @@ static void vb6_ScrollBarPaintTo(HDC dc, HWND hwnd) {
     }
 }
 
+// 残差 #7: 命中测试 —— 外观对了不等于交互通了。
+// 原生 SCROLLBAR 在 33x31 下系统判定"放不下两根 21px 箭头"(SM_CYVSCROLL@120dpi=21),
+// 于是既不画箭头、也不建 thumb; 它自己的命中测试因此**整块无热区**, 点下去什么都不发
+// (实测 6 枚控件的 GetScrollPos 在点击前后一模一样, Text1/_Change/重绘三项全无变化)。
+// VB6 的 VScrollBar 是自绘控件: 上下半区各算一个箭头, 点一次 Value ±SmallChange。
+// 这里在子类过程里直接接管命中, 更新原生 pos 后向**父窗**发 WM_VSCROLL —— 事件通道
+// 与用户拖拽走的那条完全相同 (生成的 WndProc 仍按 LOWORD(wp) 派发 _Change)。
+static void vb6_ScrollBarStep(HWND hw, int dir) {
+    int min = vb6_GetScrollMin(hw);
+    int max = vb6_GetScrollMax(hw);
+    /* 变量名别用 small: rpcndr.h 里有 `#define small char` (Windows 头的老坑) */
+    int step = vb6_GetSmallChange(hw);
+    if (step <= 0) step = 1;
+    int oldPos = GetScrollPos(hw, SB_CTL);
+    int winMax = max - min;
+    if (winMax < 0) winMax = 0;
+    int newPos = oldPos + dir * step;
+    if (newPos < 0) newPos = 0;
+    if (newPos > winMax) newPos = winMax;
+    if (newPos == oldPos) return;          /* 到头了: VB6 也不发 Change */
+    SetScrollPos(hw, SB_CTL, newPos, TRUE);
+    HWND parent = GetParent(hw);
+    if (parent && !vb6_Form_IsLoading(hw))
+        SendMessageW(parent, WM_VSCROLL,
+                     MAKEWPARAM(dir < 0 ? SB_LINEUP : SB_LINEDOWN,
+                                (WORD)(SHORT)(newPos + min)),
+                     (LPARAM)hw);
+}
+
 static LRESULT CALLBACK vb6_ScrollBarSubclassProc(HWND hwnd, UINT msg,
                                                  WPARAM wp, LPARAM lp) {
     WNDPROC orig = (WNDPROC)GetPropW(hwnd, L"VB6_SBar_OrigProc");
     switch (msg) {
+    case WM_LBUTTONDOWN: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        int vertical = (GetWindowLongW(hwnd, GWL_STYLE) & SBS_VERT) != 0;
+        int pos  = vertical ? (int)(short)HIWORD(lp) : (int)(short)LOWORD(lp);
+        int size = vertical ? (rc.bottom - rc.top) : (rc.right - rc.left);
+        SetFocus(hwnd);
+        vb6_ScrollBarStep(hwnd, pos < size / 2 ? -1 : +1);
+        return 0;   /* 吞掉: 别让原生 proc 进"无箭头空转"的 tracking loop */
+    }
     case WM_ERASEBKGND: {
         RECT rc;
         GetClientRect(hwnd, &rc);
