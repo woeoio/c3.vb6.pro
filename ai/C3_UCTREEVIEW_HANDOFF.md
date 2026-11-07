@@ -2025,3 +2025,52 @@ RTL 有改 ⇒ `scripts\_tmp_c3_rebuild.bat`（EXIT=0）+ `scripts\check_rtl_emb
    Contract 头像链；Drag & Drop `vivid/photo`；
 3. 组 2：先解 `stash@{0}` 的崩溃根因再重放 WM_DESTROY 清槽；
 4. 组 3 已绿，按 GA 结果确认后可关账。
+
+### 29 门禁实跑 + `/make` 编码 A/B 取证（2026-11-07）
+
+#### 29.1 门禁（本轮实跑）
+
+| 门禁 | 结果 | 证据 |
+|---|---|---|
+| `scripts\check_rtl_embedded.ps1` | **EXIT=0** | `R1..R3`；`126 RTL resources byte-identical`；`exe sha=b95d5637f72b` |
+| `tests\run_tests.ps1 -Category gui`（pwsh） | **PASS=10 FAIL=0 SKIP=0 TOTAL=10** | `.temp\gui_1.log`；含 Charts2020 / ucSegmentedControl |
+| `tests\run_tests.ps1 -Category all`（pwsh） | **进行中**（600s 超时转后台，日志 `.temp\all_1.log`），结果未取回 | 见下一节回填 |
+
+注：RTL 126 项与 GUI 10 例均为**改后新产物**读数；GUI 10/10 全绿，未出现定长串/`Chr$(0)` 引起的红。
+
+#### 29.2 `/make` 编码 A/B（pwsh 7，VB6Mini `C:\Program Files (x86)\VB6Mini\bin\VB6.EXE`）
+
+原件（`D:\vb_yqt4qPac\ucTreeView\`，**未改动**）与仓库副本（`tests\ucTreeView\`）的字节形态：
+
+| 文件 | 位置 | 长度 | BOM | 合法 UTF-8 | mtime |
+|---|---|---|---|---|---|
+| Form1.frm | `D:\vb_yqt4qPac\ucTreeView\` | 42417 | 无 | **是** | 2026-11-07 08:45:11 |
+| ucTreeViewPlus.ctl | `D:\vb_yqt4qPac\ucTreeView\` | 106567 | 无 | **是** | 2026-11-07 08:43:38 |
+| Form1.frm | `tests\ucTreeView\` | 42415 | 无 | **否**（cp1252/西语原编码） | 2024-09-10 |
+| ucTreeViewPlus.ctl | `tests\ucTreeView\` | 106553 | 无 | **否**（cp1252/西语原编码） | 2025-12-03 |
+
+A/B 做法（脚本 `.temp\enc_ab.ps1`；两份均在 `.temp\vb6enc\` 新建，源 = `tests\ucTreeView` 全量复制，
+无任何 `0,15` 补丁）：
+
+- `orig`：原字节（cp1252，无 BOM）；
+- `utf8`：同一副本仅把 `Form1.frm` + `ucTreeViewPlus.ctl` 由 cp1252 解成文本后写 **UTF-8 无 BOM**
+  （复现 `D:\` 现状：42417 / 106567，无 BOM，utf8valid=True）。
+
+| 模式 | 退出码 | 产出 exe | 日志（逐字相同） |
+|---|---|---|---|
+| orig（原编码） | **1** | **否** | `Form1.log` 行 416 `不能加载控件 ucTreeViewPlus1。`；`ucTreeViewPlus.log` 行 31 属性 SmoothScrollFactor在 ucScrollbar2 中有无效值。/ 行 50 …ucScrollbar1… |
+| utf8（UTF-8 无 BOM） | **1** | **否** | 与 orig 逐字相同（同上三行） |
+
+**结论（决定五窗基准可行性）**：
+
+1. **编码不是变量**：两种编码同样 `exit=1`、同样无 exe、同样两条 `SmoothScrollFactor` 无效值 +
+   `行 416` 不能加载控件。不存在"改成 UTF-8 才出现该错误日志"的差异（本机 VB6Mini 实测逐字一致）。
+2. 阻断点是 `ucScrollbar.ctl`/`ucTreeViewPlus.ctl` 里 **`=   0,15` 的逗号小数**：本机 zh-CN 小数分隔符为
+   `.`，VB6 命令行 `/make` 把 `Single` 的 `0,15` 判为无效值（IDE 只警告）。作者原意是 `0.15`
+   （`FixDec = Val(Replace(S, ",", "."))` 佐证），且运行期被父 UC 强制为 `1`（§27.14.3）。
+3. 因此**五窗可以用真 VB6 实拍当基准**：基准副本按字节把 `0,15`→`0.15` 后 `/make` 已 `exit=0`、
+   `Proyecto1.exe` 331776 B（§27.14.3，`tests\guisample\uctv_vb6_baseline.ps1`）；原夹具源码不动。
+4. C3 侧输入仍是原编码夹具（`tests\ucTreeView`），与真 VB6 基准只差一个逗号小数的**序列化**，
+   不构成语义差异。
+5. 附注：`D:\` 目录今天 08:46 存在 `Proyecto1.exe`（331776 B），与基准补丁产物同尺寸；该 exe 的生成
+   条件未在现场取证（`Form1.log`/`ucTreeViewPlus.log` 仍为失败内容），不作为基准证据。
