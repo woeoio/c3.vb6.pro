@@ -83,6 +83,27 @@
     // VB6 里每个控件实例都持有自己的 Font 对象, 且控件 InitProperties 常以
     // UserControl.Font 为基准 (如 TitleFont.Size = Font.Size + 8); 此前字体块被
     // 整体跳过, 所有控件都退回默认字体 → 字号/文字测量/整体布局全错。
+    // 2026-11-07: 字段发射独立成 emitFontObjFields —— `.frm` 的 `font = "x.frx":0000`
+    // (火 frx 序列化的 StdFont) 也要走同一套形状, 只换字段来源 (FrxReader::readFont)。
+    auto emitFontObjFields = [&](const std::string& nm, double sz, long weight, long charset,
+                                 long bBold, long bItalic, long bUnder, long bStrike,
+                                 const std::string& varName) {
+        c_.emitLine("{ vb6_ComIface_Font* " + varName
+                  + " = (vb6_ComIface_Font*)vb6_UC_NewFont();");
+        c_.emitLine("  if (" + varName + ") {");
+        c_.emitLine("    " + varName + "->Name = vb6_BSTR_FromStr(L\"" + escapeWideCString(nm) + "\");");
+        // 账 #188: 这里以前自己 snprintf("%.4g") 再拼 "f" —— 整数字号 (12/14/16…) 拼出来就是
+        // C 里的非法 token `12f` (C2059 bad suffix on number)。VB6 默认字号 8.25 带小数点,
+        // 所以门禁里一直看不见; 带设计期整数字号的工程 (Charts 2020 的 ucChartBar/ucProgressCircular)
+        // 直接编不过。形状归 common/float_literal.hpp 一处, 位数照旧 4 位 (8.25 的写法不变)。
+        c_.emitLine("    " + varName + "->Size = " + floatSingleLiteral(sz, 4) + ";");
+        c_.emitLine("    " + varName + "->Weight = " + std::to_string(weight) + ";");
+        c_.emitLine("    " + varName + "->Charset = " + std::to_string(charset) + ";");
+        c_.emitLine("    " + varName + "->Bold = " + std::to_string(bBold) + ";");
+        c_.emitLine("    " + varName + "->Italic = " + std::to_string(bItalic) + ";");
+        c_.emitLine("    " + varName + "->Underline = " + std::to_string(bUnder) + ";");
+        c_.emitLine("    " + varName + "->Strikethrough = " + std::to_string(bStrike) + ";");
+    };
     auto emitFrmFontObj = [&](const FrmPropertyBlock& blk, const std::string& varName) {
         std::string nm = "MS Sans Serif";
         double sz = 8.25;
@@ -113,21 +134,7 @@
         // 常规字重(400) 时 VB6 的 Bold 由 Weight>=700 推导
         if (weight >= 700) bBold = -1;
 
-        c_.emitLine("{ vb6_ComIface_Font* " + varName
-                  + " = (vb6_ComIface_Font*)vb6_UC_NewFont();");
-        c_.emitLine("  if (" + varName + ") {");
-        c_.emitLine("    " + varName + "->Name = vb6_BSTR_FromStr(L\"" + escapeWideCString(nm) + "\");");
-        // 账 #188: 这里以前自己 snprintf("%.4g") 再拼 "f" —— 整数字号 (12/14/16…) 拼出来就是
-        // C 里的非法 token `12f` (C2059 bad suffix on number)。VB6 默认字号 8.25 带小数点,
-        // 所以门禁里一直看不见; 带设计期整数字号的工程 (Charts 2020 的 ucChartBar/ucProgressCircular)
-        // 直接编不过。形状归 common/float_literal.hpp 一处, 位数照旧 4 位 (8.25 的写法不变)。
-        c_.emitLine("    " + varName + "->Size = " + floatSingleLiteral(sz, 4) + ";");
-        c_.emitLine("    " + varName + "->Weight = " + std::to_string(weight) + ";");
-        c_.emitLine("    " + varName + "->Charset = " + std::to_string(charset) + ";");
-        c_.emitLine("    " + varName + "->Bold = " + std::to_string(bBold) + ";");
-        c_.emitLine("    " + varName + "->Italic = " + std::to_string(bItalic) + ";");
-        c_.emitLine("    " + varName + "->Underline = " + std::to_string(bUnder) + ";");
-        c_.emitLine("    " + varName + "->Strikethrough = " + std::to_string(bStrike) + ";");
+        emitFontObjFields(nm, sz, weight, charset, bBold, bItalic, bUnder, bStrike, varName);
     };
 
     // 控件自己的设计期 `BeginProperty Font` —— 与窗体那块同一套字段、同一个发射器。
@@ -610,6 +617,16 @@
                             const std::string& pn114 = kvb.first;
                             bool skip114 = false;
                             for (const char* sk : kSkip) if (_stricmp(pn114.c_str(), sk) == 0) { skip114 = true; break; }
+                            // kSkip 里的 Font/IconFont/... 是给 BeginProperty 复合块让路用的;
+                            // 但设计期 StdFont 也可能以 `.frx` 引用出现 (`font = "Form3.frx":0000`),
+                            // 这时没有 propertyBlock, 再不放进 bag 就整块丢了。按 StdFont GUID 精确识别。
+                            if (skip114 && kvb.second.type == FrmValueType::FrxReference && frxLoaded) {
+                                std::string pl120 = Symbol::toLower(pn114);
+                                bool f120 = (pl120 == "font")
+                                    || (pl120.size() >= 4
+                                        && pl120.compare(pl120.size() - 4, 4, "font") == 0);
+                                if (f120 && FrxReader::readFont(kvb.second.frxOffset).found) skip114 = false;
+                            }
                             if (skip114) continue;
                             std::string litName = "L\"" + escapeWideCString(pn114) + "\"";
                             if (kvb.second.type == FrmValueType::Integer) {
@@ -626,6 +643,29 @@
                                 if (idl == "true")  c_.emitLine("vb6_UC_BagPutBool(_bag, " + litName + ", -1);");
                                 else if (idl == "false") c_.emitLine("vb6_UC_BagPutBool(_bag, " + litName + ", 0);");
                             } else if (kvb.second.type == FrmValueType::FrxReference && frxLoaded) {
+                                // 2026-11-07: 设计期 StdFont 也可能序列化在 .frx 里
+                                // (Form3/Form5 的 `font = "x.frx":0000` / `subtextfont = ...`)。
+                                // 它不是 DocString 也不是 PropertyBag 块; 之前落到 readDocString
+                                // 只拿到 "Segoe UI" 字符串, bag 里成了 VT_BSTR ⇒ .ctl 的
+                                // `Set m_Font = .ReadProperty("Font", Ambient.Font)` 拿不到 IFont,
+                                // 整窗退回 ambient 8.25pt MS Sans Serif。按 GUID 精确识别后走字体槽。
+                                std::string pnLow120 = Symbol::toLower(pn114);
+                                bool fontish120 = (pnLow120 == "font")
+                                    || (pnLow120.size() >= 4
+                                        && pnLow120.compare(pnLow120.size() - 4, 4, "font") == 0);
+                                if (fontish120) {
+                                    FrxFontData fx120 = FrxReader::readFont(kvb.second.frxOffset);
+                                    if (fx120.found) {
+                                        long fw120 = fx120.weight;
+                                        emitFontObjFields(fx120.name, fx120.size, fw120, 0,
+                                                          fw120 >= 700 ? -1 : 0, 0, 0, 0,
+                                                          "_vb6_f120x");
+                                        c_.emitLine("    vb6_UC_BagPutFont(_bag, " + litName
+                                                  + ", (void*)_vb6_f120x);");
+                                        c_.emitLine("  } }");
+                                        continue;
+                                    }
+                                }
                                 // Fix: 先试"属性包块" (UserControl 持久化 PropertyBag) —— 交原始字节;
                                 // 不是属性包块时退回原来的 DocString 路径 (Caption 等字符串常存于 .frx)。
                                 FrxPropBagBlob pbB114 = FrxReader::readPropBagBlob(kvb.second.frxOffset);

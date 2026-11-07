@@ -118,6 +118,29 @@ static HFONT vb6_uc_fontHFontFor(const void* fontPtr, int16_t bold, int16_t unde
    WM_PAINT 里是 r->hdc; 事件/度量里是 AutoRedraw 持久表面 (UserControl.hDC 就是它)。
    两处都必须落到, 否则 `Set UserControl.Font` 只在 paint 里生效 —— 而 ucTreeView
    的 Draw/度量全发生在事件里, 于是主文本/子文本一直用 ambient 字体。 */
+/* VB6 的 `UserControl.Font` / `FontBold` 改的是**控件窗口**的字体 (WM_GETFONT 读回的
+   就是它); C3 以前只把字体选进绘图 DC, 窗口字体一直停在创建时的设计值 —— 参考产物
+   Form3/Form5 读回 Segoe UI/-16/700 (最后一次 Draw 的 FontBold 状态), C3 却读回
+   ambient 8.25pt/400。这里把同一份字体发到窗口; 句柄所有权仍交既有的
+   `vb6_SetControlFontFromLogFont` (它自带「只删我们自己造的那张」的账, 不能把缓存
+   句柄直接递给 WM_SETFONT)。相同字体不重复发 —— 否则每个节点一次 InvalidateRect。 */
+static void vb6_uc_syncHostFont(HFONT hf) {
+    HWND hwnd = vb6_ucCurrent ? (HWND)vb6_ucCurrent->hwnd : NULL;
+    LOGFONTW want, cur;
+    HFONT hCur;
+    if (!hwnd || !hf) return;
+    if (!GetObjectW((HGDIOBJ)hf, sizeof(want), &want)) return;
+    hCur = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+    if (hCur && GetObjectW((HGDIOBJ)hCur, sizeof(cur), &cur)
+        && cur.lfHeight == want.lfHeight && cur.lfWeight == want.lfWeight
+        && cur.lfItalic == want.lfItalic && cur.lfUnderline == want.lfUnderline
+        && cur.lfCharSet == want.lfCharSet
+        && wcscmp(cur.lfFaceName, want.lfFaceName) == 0) {
+        return;
+    }
+    vb6_SetControlFontFromLogFont(hwnd, &want);
+}
+
 static void vb6_uc_applyFontNow(void) {
     HFONT hf;
     HDC dc;
@@ -129,6 +152,7 @@ static void vb6_uc_applyFontNow(void) {
     hf = vb6_uc_fontHFontFor(vb6_UserControl_Font, vb6_UserControl_FontBold,
                              vb6_UserControl_FontUnderline);
     if (hf && dc) SelectObject(dc, hf);
+    vb6_uc_syncHostFont(hf);
 }
 
 void vb6_UC_SetFont(void* font) {

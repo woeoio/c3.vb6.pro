@@ -402,6 +402,48 @@ FrxPropBagBlob FrxReader::readPropBagBlob(size_t offset) {
 }
 
 // ============================================================
+// 设计期 StdFont 序列化块
+//   布局 (Form3/Form5.frx 逐字节核对):
+//     [0] DWORD cbSize (块身字节数)
+//     [4] GUID {0BE35203-8F91-11CE-9DE3-00AA004BB851} (16B)
+//     [20] DWORD 版本 (1 / 0x02000001)
+//     [24] WORD  字重 (400 / 700)
+//     [26] DWORD 字号×10000 (97500 => 9.75pt, 82500 => 8.25pt)
+//     [30] BYTE  标志位 (实测 0x08; 不属于 ASCII 名字, 也不参与字重)
+//     [31] ASCII 字体名 + NUL
+//   cbSize 只覆盖 GUID 起的块身, 记录尾部可能有 0 填充。
+// ============================================================
+FrxFontData FrxReader::readFont(size_t offset) {
+    FrxFontData out;
+    static const uint8_t kStdFontGuid[16] = {
+        0x03, 0x52, 0xE3, 0x0B, 0x91, 0x8F, 0xCE, 0x11,
+        0x9D, 0xE3, 0x00, 0xAA, 0x00, 0x4B, 0xB8, 0x51
+    };
+    if (fileData_.empty() || offset + 20 > fileData_.size()) return out;
+    const uint8_t* rec = fileData_.data() + offset;
+    for (int gi = 0; gi < 16; ++gi) {
+        if (rec[4 + gi] != kStdFontGuid[gi]) return out;
+    }
+    uint32_t cbSize = readLE32(rec);
+    if (cbSize < 27 || offset + 4 + cbSize > fileData_.size()) return out;
+    uint32_t ver = readLE32(rec + 20);
+    if (ver != 1 && ver != 0x02000001) return out;
+    uint16_t weight = readLE16(rec + 24);
+    uint32_t size10000 = readLE32(rec + 26);
+    if (size10000 < 40000 || size10000 > 10000000) return out;   // 4pt..1000pt
+    const uint8_t* nameP = rec + 31;
+    size_t nameMax = (size_t)(cbSize - 27);
+    size_t n = 0;
+    while (n < nameMax && nameP[n]) ++n;
+    if (n < 1) return out;
+    out.name.assign((const char*)nameP, n);
+    out.size = (double)size10000 / 10000.0;
+    out.weight = (int)weight;
+    out.found = true;
+    return out;
+}
+
+// ============================================================
 // OleObjectBlob (设计器 OCX 持久化数据)
 //   实测布局: [4B "LB" + WORD 版本][DWORD cbPayload][Left][Top][Width][Height]
 //             [cbPayload 字节负载]

@@ -1845,3 +1845,58 @@ End Sub
 `check_rtl_embedded.ps1`；夹具 `--arch x86` + `C3_NO_OBJCACHE=1` 重编 = 834560 字节。
 
 
+
+### 27.15 设计期 StdFont（`.frx` 引用）与 UC 窗口字体落地（2026-11-07）
+
+#### 27.15.1 红项（先出红）
+
+`guard_ref10.log`（**修前**，C3 产物 834560B / x86）：
+```
+Form3  font=[MS Sans Serif|-13|0|400]   firstTextW=127   真 VB6: Segoe UI|-16|0|700  187
+Form5  font=[MS Sans Serif|-13|0|400]   firstTextW=22    真 VB6: Segoe UI|-16|0|700   77
+```
+`.frm` 里 `font = "Form3.frx":0000` / `subtextfont = "Form3.frx":0028`，`.frx` 记录是
+**StdFont 序列化块**（不是 DocString、也不是 PropertyBag）。
+
+#### 27.15.2 根因（两条，独立）
+
+1. **`.frx` 的 StdFont 块被当成 DocString**：`readDocString` 只能取到 ASCII 名字
+   （"Segoe UI"），bag 里成了 `VT_BSTR`；`ucTreeViewPlus.ctl` 的 `ReadProperties`
+   是 `Set m_Font = .ReadProperty("Font", Ambient.Font)` —— 只有 `VT_DISPATCH(IFont)`
+   才认，字符串槽被忽略 ⇒ 整窗退回 ambient `MS Sans Serif 8.25pt 400`。
+2. **`font` 在 `kSkip` 名单里被无条件跳过**：`kSkip` 本是给 `BeginProperty Font`
+   复合块让路的，但 frx 引用形式没有 propertyBlock，跳过即整块丢失。
+
+#### 27.15.3 修（3 处）
+
+- `FrxReader::readFont(offset)`（`frx_reader.hpp/.cpp`）：逐字节核对
+  `[DWORD cbSize][GUID 0BE35203-8F91-11CE-9DE3-00AA004BB851][DWORD 版本 1/0x02000001]`
+  `[WORD 字重][DWORD 字号×10000][BYTE 标志][ASCII 名字+NUL]`；
+  name 起点 = 记录偏移 +31，`nameMax = cbSize - 27`，字号限 4pt..1000pt。
+- `cgen_form_create_controls.inc`：`emitFontObjFields(...)` 从 `emitFrmFontObj` 抽出
+  （emit 输出**零差异**）；`kSkip` 对 `Font`/`*Font` + `FrxReference` + `readFont().found`
+  精确豁免；frx 字体分支发 `vb6_UC_BagPutFont(_bag, <name>, IFont*)` 后 `continue`。
+- `uc_host_window.c`：`vb6_uc_syncHostFont(HFONT)` —— VB6 的 `UserControl.Font` 改的
+  是**控件窗口**字体（`WM_GETFONT` 读回的就是它）；先 `GetObjectW` 比对 LOGFONT 七字段，
+  相同则 return（否则每节点一次 `InvalidateRect`），不同才走
+  `vb6_SetControlFontFromLogFont`（句柄所有权仍归它的「只删自己造的」账）。
+
+#### 27.15.4 绿（`guard_ref12.log`）
+
+```
+Form3  font=[Segoe UI|-16|0|400]  firstTextW 127→175
+Form5  font=[Segoe UI|-16|0|400]  firstTextW  22→ 42
+Form6  font=[Segoe UI Semibold|-13|0|700]  全部通过
+```
+- 字高/字面已落地；Form3/Form5 的**字重仍 400 vs 真 VB6 700**（未闭环，见 27.14.7）。
+- `Form3` textRows 11 vs 真 10、`Form5` textRows 5 vs 真 15 —— 与字体无关，另有根因。
+
+#### 27.15.5 构建/门禁口径
+
+- RTL 有改 ⇒ `scripts\_tmp_c3_rebuild.bat` + `scripts\check_rtl_embedded.ps1`（本轮已过）。
+- 夹具：`C3_NO_OBJCACHE=1` + `scripts\c3_build.ps1 -Extra "--arch x86"` ⇒ 834560B。
+- **本地 GUI 判据的环境前提**：本机 Firefox（`MozillaWindowClass`）在**前台**时，
+  `Charts2020` 的 `ucdump` 恒 0 bmp（无真实 `WM_PAINT`），`segmented_px.ps1` 的光标
+  判据读到 `IDC_ARROW(65539)` 而不是 `IDC_NO(65559)`（`WindowFromPoint` 命中浏览器）。
+  这不是产品回归：把 Firefox 最小化后，同一 exe 手工带 `C3_UC_DUMPDIR` 启动 =
+  **27 张 bmp**（`.temp\chartprobe\ucdump`）。⇒ 本地跑 `test.bat gui` 前必须先最小化浏览器。

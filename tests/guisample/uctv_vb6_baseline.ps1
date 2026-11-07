@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Fixture = "c:\Users\Administrator\Documents\c3.vb6.pro\tests\ucTreeView\Proyecto1.vbp",
     [string]$OutDir  = "c:\Users\Administrator\Documents\c3.vb6.pro\.temp\vb6ref\ucTreeView",
     [string]$VB6     = "C:\Program Files (x86)\VB6Mini\bin\VB6.EXE"
