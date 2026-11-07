@@ -9643,6 +9643,17 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_cls_ucTreeViewPlus_Destroy((vb6_cls_ucTreeViewPlus*)me);'
     )
 
+    # 账 §40 (2026-11-07): .ctl 里**裸写**的宿主伪对象方法 `Cls` 等价于 `UserControl.Cls`。
+    # 旧语义层只放行 HPF_BARE ⇒ 这一行在 Option Explicit 下配 VB3001「未声明的标识符: 'Cls'」
+    # (发码侧补括号那一支其实一直是对的, 只是被假诊断盖住)。
+    Test-EmitcShape "uctreeview_usercontrol_cls_bare" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'vb6_UserControl_Cls();'
+    )
+    # 旧产物在这一条上必红: 语义层认不得裸 `Cls`, 每条都配「未声明的标识符: 'Cls'」。
+    Test-EmitcAbsent "uctreeview_usercontrol_cls_no_vb3001" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        "未声明的标识符: 'Cls'"
+    )
+
     Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86" `
         -AssetDir "img" -AssetFile @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml") `
         -PixelAssert @("guisample\uctreeview_px.ps1")

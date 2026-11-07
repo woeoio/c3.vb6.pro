@@ -928,7 +928,9 @@ bool SemanticAnalyzer::isDocumentBarePseudoMember(const std::string& name) const
         case DocumentKind::PropertyPage: obj = "PropertyPage"; break;
         default: return false;   // 标准模块 / 窗体没有这一族隐式文档成员
     }
-    return hostPseudoBareEligible(obj, name);
+    // 账 §40: 裸写的 HPF_METHOD (如 .ctl 里的 `Cls`) 与 HPF_BARE 同批放行 ——
+    // VB6 里它就是 `UserControl.Cls`。发码侧对这两档各有出口, 这里只停 VB3001。
+    return hostPseudoBareCallEligible(obj, name);
 }
 
 

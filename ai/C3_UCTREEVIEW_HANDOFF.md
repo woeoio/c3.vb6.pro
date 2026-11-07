@@ -3092,6 +3092,50 @@ pwsh -NoProfile -File tests\guisample\uctreeview_px.ps1 -Exe .temp\ucb4\Proyecto
   -RefJson .temp\vb6ref\ref_metrics.json -OutDir .temp\uctvpx
 ```
 
+## §40 `UserControl.Cls`：裸写宿主伪对象方法（VB3001）
+
+### 40.1 症状与落点
+
+- `Option Explicit` 下 `ucTreeViewPlus.ctl` 的裸 `Cls`（实体第 **1408** 行；用户报的 1347
+  是 .ctl 头部/编码口径的行号偏差）配一条
+  `VB3001: 未声明的标识符: 'Cls'`。
+- 这是**语言/宿主能力**缺失，不是 RTL 缺符号：发码侧
+  `cgen_expr_ident_builtin.inc` 的 `hostPseudoMethodRtlName` 一直发得对
+  （`vb6_UserControl_Cls()`），只是被假诊断盖住。
+
+### 40.2 成因（单权威在表里）
+
+`src/common/host_pseudo.hpp` 的 UserControl 行 `{"UserControl","cls","Cls",Unknown,HPF_METHOD}`
+只有 `HPF_METHOD`，而语义层 `isDocumentBarePseudoMember` 只问
+`hostPseudoBareEligible`（只认 `HPF_BARE`）⇒ 裸 `Cls` 被判「未声明」。
+VB6 里 `.ctl/.pag` 的 `Cls` / `Refresh` / `Size` / `TextWidth` / `TextHeight` /
+`OLEDrag` / `CancelAsyncRead` 都可裸写，等价于 `<宿主对象>.<方法>`。
+
+### 40.3 修法
+
+- `host_pseudo.hpp`：新增 `hostPseudoBareCallEligible`（`HPF_BARE | HPF_METHOD`），
+  与 `hostPseudoBareEligible` 并列，注释写清两档只是发码形状不同。
+- `semantic_analyzer_util.cpp`：`isDocumentBarePseudoMember` 改问新助手。
+  语义层只停假诊断，发码拓扑零改动（`hostPseudoBareName` / `hostPseudoMethodRtlName`
+  仍各走各的出口）。
+
+### 40.4 断言（旧产物必红）
+
+`tests/run_tests.ps1` 的 ucTreeView 形状组：
+
+- 正：`Test-EmitcShape "uctreeview_usercontrol_cls_bare"` 命中 `vb6_UserControl_Cls();`
+- 负：`Test-EmitcAbsent "uctreeview_usercontrol_cls_no_vb3001"` 禁止
+  `未声明的标识符: 'Cls'` —— 旧产物在这条上必红。
+
+实测：`--emit-c` 18300 行、无 `VB3001`、`vb6_UserControl_Cls();` 恰 1 处；
+全量构建产出 `Proyecto1.exe`（841216 字节），链接通过（RTL 侧符号存在）。
+
+### 40.5 编码纪律（用户注）
+
+`tests\ucTreeView\Form1.frm` 与 `tests\ucTreeView\ucTreeViewPlus.ctl` 保持
+**UTF-8 无 BOM、CRLF**；否则真 VB6 `/make` 拿不到上面那份错误日志。
+
+
 
 
 

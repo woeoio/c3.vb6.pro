@@ -218,6 +218,16 @@ inline bool hostPseudoBareEligible(const std::string& pseudoObj, const std::stri
     return r != nullptr && (r->flags & HPF_BARE) != 0;
 }
 
+// 账 §40: 裸写的**方法**成员 (HPF_METHOD) 在 .ctl/.pag 里同样合法 —— VB6 里
+// `Cls` / `Refresh` / `Size` 等价于 `<对象>.<方法>`。旧语义层只认 HPF_BARE ⇒
+// ucTreeViewPlus.ctl:1408 的裸 `Cls` 配 VB3001「未声明标识符」，而发码侧那条
+// 补括号的路 (hostPseudoMethodRtlName) 本来是对的。两档的区别只在发码形状,
+// 语义放行是同一批名字。
+inline bool hostPseudoBareCallEligible(const std::string& pseudoObj, const std::string& memberName) {
+    const HostPseudoRow* r = hostPseudoFind(pseudoObj, memberName);
+    return r != nullptr && (r->flags & (HPF_BARE | HPF_METHOD)) != 0;
+}
+
 // 账 #305 第二百九十二刀: 这一档能不能当"可写的标量全局"用 (With 体内的属性写
 // `.AutoRedraw = v` 这类)。答 true 的才改写成 RTL 全局赋值/专用入口 —— 答不出类型
 // (Unknown) 或本身是方法/码头的一律维持原 COM 晚绑定, 不猜。
