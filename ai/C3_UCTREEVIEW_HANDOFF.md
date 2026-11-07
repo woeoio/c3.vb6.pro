@@ -2757,6 +2757,26 @@ check_manifest_coverage: K1..K3 inputs=597 [.vbp=221 .bas=376] registered=597 se
 
 ⇒ `manifest_coverage` K1 这条红可以销账：登记数 = 语料数（597），不是靠删行/放宽。
 
+### 35.11 `uctreeview_px.ps1` 的「设计值口径」字重表按真 VB6 校正（400/600 → 700）
+
+CI head `fd9f47a0` 的 vbp #7 里出现两条**新**红：
+
+```
+'Form3' 字重 700 != 400
+'Form5' 字重 700 != 400
+'Agenda tema oscuro' 字重 700 != 600
+```
+
+不是发码回退，是脚本的**兜底口径过期**：脚本有两条字重判据 ——
+
+- 有 `-RefJson` 时按真 VB6 读数比（`.temp\vb6ref\ref_metrics.json`：Form3 `700`、Form5 `700`、
+  Agenda `700`、Tree Explorer `400`、Drag & Drop `400`），本机走这条，§34 之后是绿的；
+- CI 没有 ref 文件 ⇒ `ref=none(退回设计值口径)`，比的是 `$formSpecs[].weight` 里写死的
+  400/400/600 —— 那是**修 §34 之前** C3 的读数，自洽但已过时。
+
+按真 VB6 运行期值改为 700，并在表头写明「口径 = WM_GETFONT 的 lfWeight，不是 .frx 设计值」。
+判据没有放宽：旧产物（400）在这三条上反而必红，正是要求的「旧产物必红」。
+
 
 
 

@@ -1237,12 +1237,16 @@ if ($p.HasExited) {
     #   B) 一个进程里同一按钮连点 3 轮, 每轮必须关干净 → 钉住重复点击缺陷。
     # 内容基准 = .frm/.frx 设计值(节点数/字体/边框色/头像) + 参考图内容清单;
     # 参考图只用于确认"该有什么", 像素阈值按本机 DPI 折算, 不做 1:1 像素比对。
+    # weight 口径 = 真 VB6 运行期 WM_GETFONT 的 lfWeight (ref_metrics.json), 不是 .frx 设计值。
+    # Form3/Form5 设计期是 400, 运行期 UserControl 的 `FontBold = True` 把它顶到 700 ——
+    # 这条链在 §34 修好之前 C3 也报 400(所以旧表写 400 自洽), 修好后必须按真 VB6 的 700 判,
+    # 否则"修对了反而红"。Agenda 的 Semibold 同理: LOGFONT 是 700 而非 600。
     $formSpecs = @(
         @{ btn='Tree Explorer';       cap='Tree Explorer';     face='Segoe UI';          pt=9.75; weight=400; firstW=20 },
-        @{ btn='Corporate Hierarchy'; cap='Form3';             face='Segoe UI';          pt=9.75; weight=400; firstW=80 },
+        @{ btn='Corporate Hierarchy'; cap='Form3';             face='Segoe UI';          pt=9.75; weight=700; firstW=80 },
         @{ btn='Drag and Drop';       cap='Drag & Drop';       face='Arial Narrow';      pt=9.75; weight=400; firstW=30 },
-        @{ btn='Menu / Tools';        cap='Form5';             face='Segoe UI';          pt=9.75; weight=400; firstW=25 },
-        @{ btn='Contact  List';       cap='Agenda tema oscuro'; face='Segoe UI Semibold'; pt=8.25; weight=600; firstW=0 }
+        @{ btn='Menu / Tools';        cap='Form5';             face='Segoe UI';          pt=9.75; weight=700; firstW=25 },
+        @{ btn='Contact  List';       cap='Agenda tema oscuro'; face='Segoe UI Semibold'; pt=8.25; weight=700; firstW=0 }
     )
     $driveCount = @([System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -ne 'NoRootDirectory' }).Count
     $expRows = @{ 'Tree Explorer' = 3 + $driveCount; 'Form3' = 9; 'Drag & Drop' = 5; 'Form5' = 10 }
