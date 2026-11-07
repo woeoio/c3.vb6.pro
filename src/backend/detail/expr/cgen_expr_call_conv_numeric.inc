@@ -34,6 +34,22 @@
             // 先按 SafeArray 臂装箱再进 V 后缀 —— 不许把载体直接递给 vb6_VARIANT 形参。
             bool firstArgIsSlot = false;
             if (!args.empty()) firstArgIsSlot = isVariantSlot(args[0], firstArg.get());
+            // 账 #416 续 (2026-11-07): CBool 的 C 形参是 double, 晚绑定属性读 (Object.Prop)
+            // 在实参适配那一站已被包成 vb6_VariantToDouble(...) —— 那一步对 "True"/"False"
+            // 答 0 (vb6_Val 不认布尔话), 于是 CBool(xmlAttr.Text) 永远 False
+            // (实物: ucTreeViewPlus.ctl 的 FontBold/Expanded/Checked 共 10 处, 旧产物
+            //  Form3/Form5 字重 400, 真 VB6 700)。这里把 double 包装剥回去, 让内层整只槽
+            // 走 V 后缀 (下面的 extractPrefixes 会按同一口径收尾)。只对 Boolean 那一档做 ——
+            // 数值族问的是另一句话, 不在本条改动范围。
+            if (!firstArgIsSlot && convIsBool && !args.empty()) {
+                static const char* kVarToDbl = "vb6_VariantToDouble(";
+                size_t pl = strlen(kVarToDbl);
+                if (args[0].size() > pl && args[0].compare(0, pl, kVarToDbl) == 0
+                    && args[0].back() == ')') {
+                    std::string inner = args[0].substr(pl, args[0].size() - pl - 1);
+                    if (isVariantSlot(inner, firstArg.get())) firstArgIsSlot = true;
+                }
+            }
             if (!firstArgIsVariant) firstArgIsVariant = firstArgIsSlot;
             if (!firstArgIsVariant && isVariantType(firstArg.get()) && !args.empty()) {
                 args[0] = "vb6_VariantFromValue(" + args[0] + ")";

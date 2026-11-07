@@ -2433,6 +2433,101 @@ Form3 `photo=0`、Agenda `vivid/photo/avatar` 全 0 全是这一条的下游。
 次要主因：Form3/Form5 的 `font="FormX.frx":…` 解析出来的字体**权重丢了**（C3 渲染 400，真 VB6 700），
 这是 frx 字体记录字段的问题，与设计期属性无关。
 
+> **§34 更正**：这句诊断是错的。frx 字体记录里 Weight 就是 **400**（字节实证见 §34.1），
+> `font=` 引用解析并没有丢字重；运行期 700 是 `UserControl.FontBold = True` 这条运行期赋值的结果，
+> 而它在 C3 里被 `CBool(晚绑定属性)` 的数值桥吞成了 False。改法是 §34.2，不在 frx_reader。
+
 ⇒ **五窗要绿，必须先进 URL 图片加载这条**（原计划排在最后的 `GetDrive`/`Collection` 之后的第 4 段），
 否则 photo/avatar/vivid 三项永远追不上。建议顺序改为：URL 图片加载 → frx 字体权重 → 其余几何/文本。
+（顺序已按用户 2026-11-07 的批准改为：字重 → URL 图片 → CI 门控 → Orientation 实测 → GA 22/22 → 五窗。）
+
+## §34 frx 字重这条：实测是 `CBool(晚绑定属性)` 的数值桥，不是 frx 解析（2026-11-07）
+
+### 34.1 先钉事实：frx 记录里的 Weight 就是 400
+
+`Form3.frm` / `Form5.frm` 的控件字体是 `font = "Form3.frx":0000` 这种**引用**，不是 `BeginProperty`。
+`readFont`（`src/project/frx_reader.cpp`）按 `GUID 03005203-…` 认记录，字段偏移 = cbSize[0..3] / GUID[4..19] /
+ver[20..23] / **weight[24..25]** / size[26..29] / charset[30] / name[31..]。
+
+实测字节（本机 `[IO.File]::ReadAllBytes`）：
+
+| 文件 | 记录偏移 | cbSize | weight@+24 | size@+26 | name |
+|---|---|---|---|---|---|
+| `Form3.frx` | 0x0000 | 0x24 | **0x0190 = 400** | 97500 (9.75pt) | Segoe UI |
+| `Form5.frx` | 0x0000 | 0x24 | **0x0190 = 400** | 97500 (9.75pt) | Segoe UI |
+| `Form3.frx` | 0x0028 | 0x26 | **0x0190 = 400** | 90000 (9.0pt) | Segoe UI |
+
+全 `tests\` 下所有 `.frx` 字体记录扫一遍：**没有一条非 400**。C3 发码同样是 400：
+
+```
+_vb6_f120->Name = vb6_BSTR_FromStr(L"Arial Narrow");
+_vb6_f120->Size = 8.25f;
+_vb6_f120->Weight = 400;
+vb6_UC_BagPutFont(_bag, L"Font", (void*)_vb6_f120);
+```
+
+⇒ `font=` 引用解析 **Name/Size/Weight 三字段都落地**。真 VB6 的 `lfWeight=700` 不是设计值。
+
+### 34.2 真根因：`CBool(xmlAttr.Text)` 恒 False
+
+`ucTreeViewPlus.ctl` 的 `LoadFromXML` 用 `CBool(xmlAttr.Text)` 读 `FontBold/Expanded/Checked/
+FontUnderline/PlusButton/RadioStyle/HideCheck/Disabled` 共 10 处。C3 旧发码（10 行全同形）：
+
+```
+newNode->FontBold  /* class var .FontBold field */ =
+    vb6_CBool(vb6_VariantToDouble(vb6_VariantFromComResult(vb6_ComGetProp(xmlAttr, L"Text"))));
+```
+
+链路：`CBool` 的 C 形参是 `double` ⇒ 实参适配站把 `Object.Prop` 的 Variant 包成
+`vb6_VariantToDouble(...)` ⇒ `"True"` 走 `vb6_Val` 答 **0** ⇒ `CBool` 恒 False。
+真 VB6 `CBool("True") = True`（-1）。所以 `UserControl.FontBold` 永远没被置 True，
+Form3/Form5 的树节点字重停在 400。
+
+修法（`src/backend/detail/expr/cgen_expr_call_conv_numeric.inc`，只动 Boolean 那一档）：
+`convIsBool` 时若 `args[0]` 是 `vb6_VariantToDouble(<整只槽>)`，把 double 包装剥回去，
+让既有的 V 后缀机制接管 ⇒ 发 `vb6_CBoolV(<槽>)`（`vb6_CBoolV` 的 vtBSTR 分支走 `vb6_BoolVal`，
+认 `"True"/"False"`）。数值族（CInt/CLng/…）不动：它们问的是另一句话，不在本条范围。
+
+改后发码（完整 10 处同形，带 `_own_N` 临时量与语句末 `VariantClear`）：
+
+```
+vb6_VARIANT _own_47 = vb6_VariantFromComResult(vb6_ComGetProp(xmlAttr, L"Text"));
+newNode->FontBold  /* class var .FontBold field */ = vb6_CBoolV(_own_47);
+vb6_VariantClear(&_own_47);
+```
+
+### 34.3 改前/改后读数（本机同一脚本、同一真 VB6 基准 `331776 B / 24EAAFB2…CDFD`）
+
+`tests/guisample/uctreeview_px.ps1 -RefJson .temp/ucmeas/ref.json`（基准读数复用，不重跑 VB6）：
+
+| 读数 | 改前（`.temp/ucmeas/Proyecto1.exe` 837632 B） | 改后（`.temp/ucmeas2/Proyecto1.exe` 838144 B） | 真 VB6 |
+|---|---|---|---|
+| **Form3 `LOGFONT.lfWeight`** | **400** | **700** | 700 |
+| **Form5 `LOGFONT.lfWeight`** | **400** | **700** | 700 |
+| Tree Explorer `lfWeight` | 400 | 400（不变，应为 400） | 400 |
+| Form3 文字行 | 11 | **10** | 10 |
+| Form3 首行文本墨迹宽 | 175px | **189px** | 187px |
+| Form3 dark | 1824 | **2885** | 5155 |
+| Form5 文字行 | 5 | **12** | 15 |
+| Form5 首行文本墨迹宽 | 42px | **48px** | 77px |
+| Form5 dark | 1975 | **6378**（已过 4778*0.9） | 4778 |
+| Form5 vivid | 36686 | **38573**（已过 41664*0.9） | 41664 |
+
+⇒ 字重这条**有可测的文字墨迹变化**（不是"变好了"一句话）：Form3 行数 11→10 与参考一致、
+首行墨迹 175→189 越过 187-2 阈值；Form5 行数 5→12、dark 1975→6378、vivid 越过阈值。
+
+### 34.4 独立断言（旧产物必红）
+
+`tests/run_tests.ps1`（紧接 `uctreeview_designkids_state` 之后）：
+
+- `cbool_latebound_variant`（Test-EmitcShape）：必须出现
+  `newNode->FontBold  /* class var .FontBold field */ = vb6_CBoolV(`。
+  **旧产物实测 shape=False（红）**，改后 True。
+- `cbool_latebound_variant_numeric_bridge`（Test-EmitcAbsent）：不得出现
+  `vb6_CBool(vb6_VariantToDouble(vb6_VariantFromComResult(`。
+  **旧产物实测 absent_ok=False（红，10 处）**，改后 True。
+
+另：`uctreeview_px.ps1` 的 `字重` 判据本来就是拿真 VB6 基准比 `lfWeight`，改前 Form3/Form5 两行都在 FAIL 列表里，
+改后两行消失（剩 Tree Explorer 400 = 参考 400）。
+
 

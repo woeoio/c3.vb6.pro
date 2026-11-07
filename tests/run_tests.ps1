@@ -9426,6 +9426,19 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_ComSetProp(vb6_hwnd_ucScrollbar2, L"Orientation", vb6_ComPackInt(1));  /* design Orientation */'
     )
 
+    # 账 #416 续 (2026-11-07): CBool(晚绑定属性读) 必须问布尔主人, 不许过数值桥。
+    # 根因: CBool 的 C 形参是 double ⇒ Object.Prop 的 Variant 在实参适配站被包成
+    # vb6_VariantToDouble(...) ⇒ "True" 经 vb6_Val 答 0 ⇒ CBool 恒 False。
+    # 实物: ucTreeViewPlus.ctl 的 FontBold/Expanded/Checked/Disabled 等 10 处;
+    # 旧产物 10 行全是 vb6_CBool(vb6_VariantToDouble(vb6_VariantFromComResult(...)))
+    # ⇒ FontBold 恒 0 ⇒ Form3/Form5 字重 400 (真 VB6 700)。旧产物必红。
+    Test-EmitcShape "cbool_latebound_variant" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'newNode->FontBold  /* class var .FontBold field */ = vb6_CBoolV('
+    )
+    Test-EmitcAbsent "cbool_latebound_variant_numeric_bridge" @("$Tests\ucTreeView\Proyecto1.vbp") @(
+        'vb6_CBool(vb6_VariantToDouble(vb6_VariantFromComResult('
+    )
+
     Test-VbpBuild "ucTreeView" "$Tests\ucTreeView\Proyecto1.vbp" -Arch "x86" `
         -AssetDir "img" -AssetFile @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml") `
         -PixelAssert @("guisample\uctreeview_px.ps1")
