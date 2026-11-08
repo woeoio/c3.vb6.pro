@@ -16,9 +16,10 @@
 # 名单不许悄悄变长: 新登记一枚有参内在函数而不给它档位答案，R4 就红。
 #
 # 规则: R1 表里 vb6_FormatDateTime 那一行恰好一行、两档 = double,int32_t (三种写坏的形状各钉 0);
-#       R2 那张表本身良构 (行数 22、键唯一、键一律 vb6_ 前缀、FormatDateTime 那一行 arity 2);
+#       R2 那张表本身良构 (行数 24、键唯一、键一律 vb6_ 前缀、FormatDateTime 那一行 arity 2);
 #          行数 = 10 枚通用 (GetSetting..Format) + FormatDateTime (§B206) + 10 枚日期形参 (§B207)
-#          + Clipboard_SetText (Fix 330: vb6rtl_builtin.h 的 void vb6_Clipboard_SetText(BSTR text))。
+#          + Clipboard_SetText (Fix 330) + UserControl.TextWidth / TextHeight (2026-11-08：
+#          ucSlider.ctl 首编前置修复 —— 两枚的内在函数形参是 BSTR，不登记就发码里裸交 VARIANT)。
 #          Clipboard_SetText 那一行是 GUISample frmMain:574 `Clipboard.SetText ActiveForm.rtfText.SelRTF`
 #          的 VARIANT→BSTR 折算处, 产物侧现在编得过; 它单独钉住, 防止行数再随时间漂。
 #       R3 站点次序仍是「先问那张表、答不出才回落」，且回落只此一处;
@@ -87,7 +88,7 @@ foreach ($r in $rows) {
 }
 $dups = 0
 foreach ($kk in $keys.Keys) { if ($keys[$kk] -gt 1) { $dups++ } }
-Want 'R2 row count' $rows.Count 22 '那张表现有 22 行 (10 通用 + FormatDateTime + 账 #433 §B207 补的 10 枚日期形参 + 账 #305 第三百三十刀补的 Clipboard_SetText); 加了人就来这里把计数与台账一起改 (减人更要改)'
+Want 'R2 row count' $rows.Count 24 '那张表现有 24 行 (10 通用 + FormatDateTime + 账 #433 §B207 补的 10 枚日期形参 + 账 #305 第三百三十刀补的 Clipboard_SetText + 2026-11-08 补的 UserControl.TextWidth/TextHeight); 加了人就来这里把计数与台账一起改 (减人更要改)'
 Want 'R2 Clipboard_SetText row as shipped' (C '{"vb6_Clipboard_SetText", {"BSTR"}}' $B176) 1 '这一行必须是 BSTR: RTL 原型是 void vb6_Clipboard_SetText(BSTR text); 撤掉 = GUISample 的 Clipboard.SetText 实参又裸交 vb6_VARIANT (cl C2440)'
 Want 'R2 duplicate keys' $dups 0 '同一枚 callee 登记两行 = 后一行没人读，前一行骗人'
 Want 'R2 vb6_ prefix' $badPrefix 0 '键是发码里的 callee 名，裸名当键永远答不出'
