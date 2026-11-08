@@ -201,7 +201,6 @@ $s4vX1 = [int][Math]::Round((456 + 113) * $scale); $s4vY1 = [int][Math]::Round((
 $s4v = @($s4vX0, $s4vY0, $s4vX1, $s4vY1)
 
 $preBmp = Grab "ucslider_predrag"
-$park = New-Object UcsPx+POINT; [UcsPx]::GetCursorPos([ref]$park) | Out-Null
 
 $pressX = $pt.X + [int][Math]::Round((456 + 113 / 2.0) * $scale)
 $pressY = $pt.Y + [int][Math]::Round((32 + 329) * $scale) - [int][Math]::Round(30 * $scale)
