@@ -299,12 +299,25 @@
                             if (pbB114.found) {
                                 emitFrxBagBlob(litName, pbB114.bytes);
                             } else {
+                            /* Fix ucSlider 2026-11-08: 容器内子控件的二进制属性 (`arrimgknob`
+                               这类图片槽) 走的是 .frx 的 **DocProperty** 块, 负载是 PNG/JPEG
+                               原始字节。此前这一路只试 DocString, 二进制过不了"UTF-16 可打印"
+                               校验 ⇒ 落到 BagPutStr 发成 `L"\uE874\uF9B1…"` 乱码 ⇒ 图片旋钮
+                               加载失败 (Picture1 里那颗 ucSlider 的旋钮变白色占位块)。与顶层
+                               同类分支 (cgen_form_create_controls.inc 的 dbB114) 同一判据:
+                               只有 detectFormat 认出图片格式才按原始字节进 bag。 */
+                            FrxBlobBytes dbB114 = FrxReader::readDocBlobBytes(kvb.second.frxOffset);
+                            if (dbB114.found && FrxReader::detectFormat(dbB114.bytes.data(), dbB114.bytes.size())
+                                    != FrxImageFormat::Unknown) {
+                                emitFrxBagBlob(litName, dbB114.bytes);
+                            } else {
                             FrxTextData dsB114 = FrxReader::readDocString(kvb.second.frxOffset);
                             if (!dsB114.text.empty()) {
                                 std::string tvB = dsB114.text;
                                 if (tvB.size() >= 2 && tvB.front() == '"' && tvB.back() == '"')
                                     tvB = tvB.substr(1, tvB.size() - 2);
                                 c_.emitLine("vb6_UC_BagPutStr(_bag, " + litName + ", L\"" + escapeWideCString(tvB) + "\");");
+                            }
                             }
                             }
                         }

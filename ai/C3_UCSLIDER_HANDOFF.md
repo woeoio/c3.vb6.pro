@@ -127,12 +127,18 @@ powershell -NoProfile -File tests\guisample\ucslider_px.ps1 `
 （`OBJCACHE rtl=83/83`），exe 里还是旧 `uc_host.o`，读数纹丝不动（0.349）。绕开办法：
 `C3_NO_OBJCACHE=1`（或 `--clean-first`）。长期应把 objcache 键扩到内嵌 RTL 全量哈希，另立账。
 
-### A2｜旋钮没画 `.frx` PNG（待修）
+### A2｜旋钮没画 `.frx` PNG（已收口 2026-11-08）
 
-已定位：`Form1.c` 里 Picture1 内的 `ucSlider1(5)` 发的是
-`vb6_UC_BagPutStr(_bag, L"arrimgknob", L"\uE874\uF9B1…")` —— 把 `.frx` 二进制当 DocString 发成乱码；
-顶层那几颗走的是正确的 `vb6_UC_BagPutBin(_bag, L"arrimgknob", <PNG 字节>)`。
-缺口在容器（Picture1/Frame）内控件属性包的发射路径（`cgen_form_frame_menu.inc`）缺 DocProperty 二进制分支。
+- 定位：`Form1.c` 里 Picture1 内的 `ucSlider1(5)` 发的是
+  `vb6_UC_BagPutStr(_bag, L"arrimgknob", L"\uE874\uF9B1…")` —— 把 `.frx` 二进制当 DocString 发成乱码；
+  顶层那几颗走的是正确的 `vb6_UC_BagPutBin(_bag, L"arrimgknob", <PNG 字节>)`。
+- 根因：容器（Picture1/Frame）内子控件的发射路径 `emitUserControlChild`（`cgen_form_frame_menu.inc`）
+  的 bag 块只有 PropertyBag 块 + DocString 两支，**缺 DocProperty 二进制支**；顶层
+  `cgen_form_create_controls.inc` 有（`readDocBlobBytes` + `detectFormat`）。
+- 修复：在该路径补同一判据的 `FrxBlobBytes` 支 —— `readDocBlobBytes` 命中且 `detectFormat`
+  认出 PNG/JPEG/BMP 才按原始字节 `vb6_UC_BagPutBin` 进 bag，其余仍退回 DocString。生成码已核对：
+  `vb6_UC_BagPutBin(_bag, L"arrimgknob", "\211PNG…", 604)`。
+- 读数：`A2.knobPngBlue` 0 → **1135**（真 VB6 也是 1135，判据 `>= 400`，绿）；`A1.bg` 0.899 仍绿。
 
 ### B｜ucSlider1(4) 多一条纯黑实心条（待定位）
 
