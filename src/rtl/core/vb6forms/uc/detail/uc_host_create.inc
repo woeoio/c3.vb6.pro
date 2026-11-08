@@ -23,6 +23,15 @@
             char parentClass[256] = {0};
             vb6_wideToU8Buf(parentClassW, parentClass, (int)sizeof(parentClass));
             int bg = vb6_Forms_QueryClassBg(parentClass);
+            /* Fix ucSlider 2026-11-08: 类背景表只登记**窗体**(cgen 按窗体设计期 BackColor
+               登记), 容器控件 (PictureBox/Frame) 的类名不在表里 —— 只查类名必然 bg=-1,
+               ambient 于是保留上一次的窗体底色 (f0f0f0)。Picture1(#393939) 里那颗透明
+               UC (BackStyle=0) 就是被刷成 f0f0f0 (实测 #393939 占比 0.349, VB6 0.881)。
+               VB6 的 Ambient.BackColor 语义是"容器底色" ⇒ 类名查不到时回退取父窗口自身
+               的 BackColor; 只有它**没 Set 过**才维持旧值 (未设色的容器 = 系统 BTNFACE,
+               与类名路径同源)。 */
+            if (bg < 0 && GetPropW((HWND)hParent, L"VB6_BackColorSet"))
+                bg = vb6_GetControlBackColor((void*)hParent);
             if (bg >= 0) vb6_Ambient_BackColor = bg;
             // 账 <ambient-fore>: Ambient.ForeColor = **容器**的 ForeColor。.ctl 里
             // `m_TextColor = .ReadProperty("TextColor", Ambient.ForeColor)` 就吃这一条 ——

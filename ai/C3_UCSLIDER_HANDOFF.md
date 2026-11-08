@@ -106,3 +106,35 @@ powershell -NoProfile -File tests\guisample\ucslider_px.ps1 `
 - `clsSubClass` 的 vtable 探针在 C3 产物上恒返回 0（§3.4 护栏副作用）⇒ 子类化不生效、`WM_MOUSEWHEEL`
   不转发。滚轮行为暂不可对齐；不得用伪造/补洞方式让它「看起来能跑」，如需支持应另立账做真实 thunk。
 - `LabelPlus` 默认 `Visible=False`，主界面不出现；hover 状态需现场跑真 VB6 取证后再加用例。
+- objcache 键未覆盖内嵌 RTL 的 `.inc` 改动（§7 那条坑），改了 `.inc` 的夹具构建必须
+  `C3_NO_OBJCACHE=1`，否则读数是旧运行时的。
+
+## 7. 差异收口进度
+
+### A1｜Picture1 内 UC 背景被刷成窗体底色（已收口 2026-11-08）
+
+- 修复点：`uc_host_create.inc` 的 ambient BackColor 取值。原来只 `vb6_Forms_QueryClassBg(父类名)`；
+  `VB.PictureBox` 的类名不在类背景表里（那张表只登记窗体）⇒ `bg = -1`，ambient 保留上一次窗体底色。
+  现改为：类名查不到时，若父窗口自己 Set 过 BackColor（`VB6_BackColorSet` 哨兵）就取
+  `vb6_GetControlBackColor(父窗口)` —— 与 VB6「Ambient.BackColor = 容器底色」语义一致。
+  实测 Picture1 生成码确实 `vb6_SetControlBackColor(Picture1, 3750201 /* 0x393939 */)`，哨兵在位。
+- 读数：`A1.bg` 0.349 → **0.926**（真 VB6 0.881，判据 `>= 0.80`，绿）。
+- 夹具回归命令（**必须带 `C3_NO_OBJCACHE=1`**，见 §6 末条）：
+  `$env:C3_NO_OBJCACHE="1"; powershell -File scripts\c3_build.ps1 -Vbp tests\ucSlider_2022\Proyecto1.vbp -OutDir <out> -Extra "--arch x86"`
+
+**坑（本轮踩到）**：改 `src/rtl/**` 的 `.inc` 后，`build.bat` 会正确重跑 `rc.exe`
+（`check_rtl_embedded.ps1` R1..R3 全绿，126 条逐字节一致），但夹具构建的 objcache 全命中
+（`OBJCACHE rtl=83/83`），exe 里还是旧 `uc_host.o`，读数纹丝不动（0.349）。绕开办法：
+`C3_NO_OBJCACHE=1`（或 `--clean-first`）。长期应把 objcache 键扩到内嵌 RTL 全量哈希，另立账。
+
+### A2｜旋钮没画 `.frx` PNG（待修）
+
+已定位：`Form1.c` 里 Picture1 内的 `ucSlider1(5)` 发的是
+`vb6_UC_BagPutStr(_bag, L"arrimgknob", L"\uE874\uF9B1…")` —— 把 `.frx` 二进制当 DocString 发成乱码；
+顶层那几颗走的是正确的 `vb6_UC_BagPutBin(_bag, L"arrimgknob", <PNG 字节>)`。
+缺口在容器（Picture1/Frame）内控件属性包的发射路径（`cgen_form_frame_menu.inc`）缺 DocProperty 二进制分支。
+
+### B｜ucSlider1(4) 多一条纯黑实心条（待定位）
+
+仍未钉到具体调用点；候选仍是透明 UC 的 `WM_PRINTCLIENT`（composeBelow=0）分支：不铺底却新建
+离屏 DIB（零初始化=纯黑）再整块 BitBlt 给兄弟 DIB。留到下一轮。
