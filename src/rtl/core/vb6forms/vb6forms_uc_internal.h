@@ -141,6 +141,11 @@ typedef struct vb6_UCRec {
     // 灌入、SetFontFlag 时同步回这里, 否则下一次 paint 的 push 会把值清回默认。
     int16_t   fontBold;
     int16_t   fontUnderline;
+    // Fix ucSlider 2026-11-08: Ambient.BackColor 是**每实例**的容器底色, 不能只留
+    // 裸全局 vb6_Ambient_BackColor —— 那只在创建时写一次, 后建的控件 (Picture1 里
+    // ambient=#393939) 会把先建控件的后续重绘底色一起改掉 (实测 ucSlider1(4) 的
+    // 73 DIP 里整片被刷成 #393939, 参考 VB6 是窗体色 f0f0f0)。创建时定死, 重绘只读本格。
+    int32_t   ambientBack;
 } vb6_UCRec;
 
 // 缺陷 3: Refresh 的重入闸门。WM_PAINT/WM_PRINTCLIENT 进出时加减; Refresh 只在

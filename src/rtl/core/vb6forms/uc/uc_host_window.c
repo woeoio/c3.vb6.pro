@@ -27,9 +27,9 @@ extern "C" {
 // 实测 (tests/Charts 2020): LabelPlus3 的 BackColorOpacity=0 只画文字, 之前宿主
 // 拿 ambient 灰 (Form2.BackColor=E5E5E5) 铺满整块 ⇒ 白色卡片 LabelPlus2 被盖成灰。
 // ---------------------------------------------------------------------------
-static void vb6_uc_fillAmbient(HDC dc, int32_t w, int32_t h) {
+static void vb6_uc_fillAmbient(HDC dc, int32_t w, int32_t h, int32_t oleAmbient) {
     RECT full = { 0, 0, w, h };
-    COLORREF cref = vb6_ColorToColorRef(vb6_Ambient_BackColor);
+    COLORREF cref = vb6_ColorToColorRef(oleAmbient);
     HBRUSH b = CreateSolidBrush(cref);
     FillRect(dc, &full, b);
     DeleteObject(b);
@@ -216,7 +216,7 @@ static void vb6_uc_adEnsure(vb6_UCRec* r) {
     vb6_uc_dibDestroy(&r->adSurf);
     vb6_uc_dibCreate(&r->adSurf, NULL, w, h);
     if (r->adSurf.memDC) {
-        vb6_uc_fillAmbient(r->adSurf.memDC, w, h);
+        vb6_uc_fillAmbient(r->adSurf.memDC, w, h, r->ambientBack);
         /* VB6 的 hDC 默认 TRANSPARENT (GDI 新 DC 的默认是 OPAQUE + 白底), 且文本色
            跟着 UserControl.ForeColor。AutoRedraw 的绘制全发生在这张持久表面上,
            少这一步就会把每个字画成白底方块。 */
@@ -248,7 +248,7 @@ void vb6_uc_autoRedrawSet(vb6_UCRec* r, int32_t on) {
 
 void vb6_uc_autoRedrawCls(vb6_UCRec* r) {
     if (!r || !r->adSurf.memDC) return;
-    vb6_uc_fillAmbient(r->adSurf.memDC, r->adSurf.w, r->adSurf.h);
+    vb6_uc_fillAmbient(r->adSurf.memDC, r->adSurf.w, r->adSurf.h, r->ambientBack);
 }
 
 /* 当前正在绘制的 UC 目标 DC (NULL = 不在绘制中)。见 vb6_UC_SetForeColor。 */
@@ -316,12 +316,12 @@ void vb6_UC_SetMousePointer(int32_t pointer) {
     SetCursor(LoadCursorW(NULL, nm));
 }
 
-static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch) {
+static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch, int32_t ambient) {
     HWND sibs[64];
     int sibCount = 0;
     POINT self = { 0, 0 };
 
-    vb6_uc_fillAmbient(memDC, cw, ch);
+    vb6_uc_fillAmbient(memDC, cw, ch, ambient);
     if (!ClientToScreen(hwnd, &self)) return;
 
     /* 账 <transparency>: 真 VB6 的 UserControl 是 windowless, 控件的半透明填充
@@ -423,9 +423,9 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
 
     if (!adc) {
         if (transparent && composeBelow) {
-            if (useDib) vb6_uc_composeBelow(hwnd, dc, cw, ch);
+            if (useDib) vb6_uc_composeBelow(hwnd, dc, cw, ch, r->ambientBack);
         } else if (!transparent) {
-            vb6_uc_fillAmbient(dc, cw, ch);
+            vb6_uc_fillAmbient(dc, cw, ch, r->ambientBack);
         }
         /* 停写 AutoRedraw 之后那张位图当底图贴回去 (VB6 用 Picture=.Image 达到同一效果)。*/
         if (r->adSurf.memDC)
@@ -649,7 +649,7 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 if (!r->desc || !r->desc->transparent) {
                     // 用容器底色填充, 避免重绘闪烁 (固定白色会在深色 UI 上闪白)
                     RECT rc; GetClientRect(hwnd, &rc);
-                    COLORREF cref = vb6_ColorToColorRef(vb6_Ambient_BackColor);
+                    COLORREF cref = vb6_ColorToColorRef(r->ambientBack);
                     HBRUSH b = CreateSolidBrush(cref);
                     FillRect((HDC)wParam, &rc, b);
                     DeleteObject(b);

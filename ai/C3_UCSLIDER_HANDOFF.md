@@ -127,6 +127,19 @@ powershell -NoProfile -File tests\guisample\ucslider_px.ps1 `
 （`OBJCACHE rtl=83/83`），exe 里还是旧 `uc_host.o`，读数纹丝不动（0.349）。绕开办法：
 `C3_NO_OBJCACHE=1`（或 `--clean-first`）。长期应把 objcache 键扩到内嵌 RTL 全量哈希，另立账。
 
+### A1 收尾：Ambient.BackColor 改成每实例（2026-11-08，随 A1 一起收口）
+
+- 起因：A1 改完后 guard 三条里 A1 绿了，但逐像素复核发现 `ucSlider1(4)`（窗体上，不是 Picture1 里）
+  整片 73 DIP 被刷成 `#393939`（参考 VB6 是 f0f0f0）。根因是 `vb6_Ambient_BackColor` 是**裸全局**：
+  创建时写一次，后创建的 Picture1 内那颗 UC 把它改成 `#393939` ⇒ 先创建的控件**后续重绘**读到的是
+  别人的容器底色。`uc_host_window.c` 的 4 个铺底站点（composeBelow / paint / AutoRedraw ×2 /
+  WM_ERASEBKGND）全吃这一条。
+- 修复：`vb6_UCRec` 加 `ambientBack`，HostCreate 时定格（类名路径取不到就沿用当时的全局值）；
+  `vb6_uc_fillAmbient` 加 `oleAmbient` 形参，4 个站点全部改读 `r->ambientBack`。全局仍照写
+  （`Ambient.BackColor` 的生成码读它，且只在创建期读）。
+- 复核：新旧截图逐像素比，**只有** rows 71..269 / x 791..931（Picture1 内那枚 UC 的矩形）发生变化，
+  其余 0 px 变动 ⇒ 没有副作用面。读数 `A1=0.899 A2=1135 B=4641(黑条仍在，见下)`。
+
 ### A2｜旋钮没画 `.frx` PNG（已收口 2026-11-08）
 
 - 定位：`Form1.c` 里 Picture1 内的 `ucSlider1(5)` 发的是
@@ -140,7 +153,20 @@ powershell -NoProfile -File tests\guisample\ucslider_px.ps1 `
   `vb6_UC_BagPutBin(_bag, L"arrimgknob", "\211PNG…", 604)`。
 - 读数：`A2.knobPngBlue` 0 → **1135**（真 VB6 也是 1135，判据 `>= 400`，绿）；`A1.bg` 0.899 仍绿。
 
-### B｜ucSlider1(4) 多一条纯黑实心条（待定位）
+### B｜ucSlider1(4) 顶部多一条 221x21 纯黑条（已定位，未修）
 
-仍未钉到具体调用点；候选仍是透明 UC 的 `WM_PRINTCLIENT`（composeBelow=0）分支：不铺底却新建
-离屏 DIB（零初始化=纯黑）再整块 BitBlt 给兄弟 DIB。留到下一轮。
+定位结论（本轮只报不修）：
+
+1. 形状：黑条在客户区 `(760..981) x (380..400)`；宽度=控件宽，高度 21 px。上层兄弟宿主
+   （`VB6_UserControlHost`，客户区 `750..991 x 320..401`）与 slider4 矩形 `750..981 x 380..471`
+   的交集正好是 `221 x 21`。
+2. 机制：`vb6_uc_paintInto`（[uc_host_window.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/uc_host_window.c)
+   的 `vb6_uc_dibCreate` 无条件建一张零初始化 DIB（`memset` ⇒ 纯黑）；当本控件是**透明 UC 且
+   composeBelow==0**（正被别人 `WM_PRINTCLIENT` 合成，即上面那个兄弟）时，两个 `if` 都不进
+   （`transparent && composeBelow` 假、`!transparent` 假）⇒ DIB 一个像素都不铺，控件也只画自己
+   那点内容；末尾 `BitBlt(target, 0,0, dib.w,dib.h, dib.memDC, ...)` 把整张 DIB **连没画过的黑底**
+   盖回 target ⇒ 兄弟合成时把这 221x21 黑块叠进 slider4 的 DIB。
+3. 修法候选（下一轮）：`composeBelow==0` 那一路**不建 DIB**，直接把 `dc = target`（target 里已是
+   合成好的下层，调用方也已按兄弟矩形裁剪），其余路径不变。
+4. 风险面：动的是所有透明 UC 的合成路径 ⇒ 必须整轮 GA + 逐控件肉眼回归，不能只靠这条 guard。
+   本轮的 `B.slider4PureBlack=4641` 就是这个已知缺陷的读数（红，预期）。

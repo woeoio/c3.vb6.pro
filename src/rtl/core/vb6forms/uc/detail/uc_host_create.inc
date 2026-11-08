@@ -6,6 +6,7 @@
     // 最前面**取: 后面 desc->init 内部还会为设计子控件再走一次 HostCreate, 那些实例要按
     // 原行为立即 Show/Resize (它们没有 bag, 也就没有"之后再激活"的机会)。
     int deferActivate = vb6_uc_deferActivateTake();
+    int ambientBackForInst = -1;   // Fix ucSlider 2026-11-08: 本实例的容器底色 (见下)
 
     vb6_uc_trace("create.begin", typeName, NULL);
     const vb6_UserControlDesc* desc = vb6_uc_findDesc(typeName);
@@ -32,7 +33,8 @@
                与类名路径同源)。 */
             if (bg < 0 && GetPropW((HWND)hParent, L"VB6_BackColorSet"))
                 bg = vb6_GetControlBackColor((void*)hParent);
-            if (bg >= 0) vb6_Ambient_BackColor = bg;
+            if (bg >= 0) { vb6_Ambient_BackColor = bg; ambientBackForInst = bg; }
+            if (ambientBackForInst < 0) ambientBackForInst = vb6_Ambient_BackColor;
             // 账 <ambient-fore>: Ambient.ForeColor = **容器**的 ForeColor。.ctl 里
             // `m_TextColor = .ReadProperty("TextColor", Ambient.ForeColor)` 就吃这一条 ——
             // 以前全局恒 0(黑), 深色主题 (Form6 ForeColor=白) 的节点文字被画成黑字:
@@ -50,6 +52,7 @@
     memset(r, 0, sizeof(*r));
     r->desc = desc;
     r->parent = (HWND)hParent;
+    r->ambientBack = ambientBackForInst;   // Fix ucSlider 2026-11-08: 底色随实例定格
     r->enabled = -1;
     r->index = index;
     // Fix 119: 装入 cgen 预先设定的实例字体 (.frm BeginProperty Font)
