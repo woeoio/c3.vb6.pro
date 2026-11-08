@@ -639,7 +639,7 @@ sha256=7209655a72ac00f3bfa98609ab6cc2ecfefd22ff2af10948eb98f95c736412bc ascii256
 sha256=e7f55f0a581dba46f5b008d823014098460f6e3aaf7a95c51facc96325812ad4 ascii256=8e08f9e5876d9aa5a48085a6e961010739f5c8177e7f626d239fccfa00c4e40d rc=0 bytes=5084 tests/varcmp_strnum/vcs_main.bas
 sha256=c5e72f11e39d2fa9f282418be4659452af4b8758f2f7eb665fb315de7534cf5a ascii256=8e08f9e5876d9aa5a48085a6e961010739f5c8177e7f626d239fccfa00c4e40d rc=0 bytes=5158 tests/varcmp_strnum/vcs.vbp
 sha256=b50389afaabb5ccd4ce56c75f4d423ae99e5debdef9d6b6a19c9f45b5cc3b30d ascii256=945ed84e88150c109dd766010fcdd705b02aba09f8d1cd59aa301a2b00d821c4 rc=0 bytes=27091 tests/ucSlider_2022/modIOleInPlaceActiveObject.bas
-sha256=e3b20a63d55de0948c004bba8ccaf39fa0b238016e6f83826f4c168ce3887d8a ascii256=900bd5dc346973c760860e4175223fa098460af70cecfbecea17a76bbb6eca72 rc=0 bytes=834906 tests/ucSlider_2022/Proyecto1.vbp
+sha256=a0a58fa5eb64455424656b536dc929f48fef22714148423bfd4e2726ef434ac2 ascii256=a0fbd67f5c13a962714857dde6d19426a0c4fc7564578ac4ff09338155600f46 rc=0 bytes=835020 tests/ucSlider_2022/Proyecto1.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
