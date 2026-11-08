@@ -387,6 +387,37 @@ void CCodeGen::emitClassFactory(Module& module) {
 // 先放旧会让 `Set a = a` 在自己还没换掉之前把自己拆掉。
 // rhsTransferred = 右侧那枚引用**已经带着对价交给这一格了**: 两种成因 (`New <类>` 与工程内过程
 // 的调用, 见 rhsTransfersProjectRef) ⇒ 移交、不 claim。
+// <ucSlider 双击崩溃>: 右值是**设计期放在窗体上的工程内 UserControl** 时, 它在生成 C 里
+// 没有同名实例变量, 只有宿主句柄槽 (`vb6_hwnd_<名>`) 或控件数组元素
+// (`vb6_CtrlArr_GetAt(&vb6_arr_<名>, idx)`)。这两种形态交回的都是 HWND, 而
+// vb6_ComObject_UnboxVb6Instance 对 HWND 是「原样交回」⇒ 下游 `vb6_cls_X_AddRef(HWND)`
+// 把窗口内存当引用计数写 = 0xC0000005 (ucSliderDemo 双击后鼠标移入控件即崩, 见 handoff)。
+// 按控件注册表 (knownUserControlCtrlVars_ = 控件名 → .ctl 自己的 VB_Name) 认名字, 认出来
+// 才换成 `vb6_UC_InstanceOf(句柄)` —— 与 ucInstanceThisPtrExpr 同一口径。
+static bool isUcCtrlHwndExprForClass(
+        const std::string& valueExpr, const std::string& className,
+        const std::unordered_map<std::string, std::string>& ucCtrlVars) {
+    if (valueExpr.empty() || ucCtrlVars.empty()) return false;
+    std::string core = valueExpr;
+    const size_t cm = core.find("  /*");
+    if (cm != std::string::npos) core = core.substr(0, cm);
+    const std::string hwndPfx = "vb6_hwnd_";
+    const std::string arrPfx = "vb6_CtrlArr_GetAt(&vb6_arr_";
+    std::string ctrlName;
+    if (core.compare(0, hwndPfx.size(), hwndPfx) == 0) {
+        ctrlName = core.substr(hwndPfx.size());
+    } else if (core.compare(0, arrPfx.size(), arrPfx) == 0) {
+        const size_t e = core.find_first_of(",)", arrPfx.size());
+        if (e == std::string::npos) return false;
+        ctrlName = core.substr(arrPfx.size(), e - arrPfx.size());
+    } else {
+        return false;
+    }
+    auto it = ucCtrlVars.find(Symbol::toLower(ctrlName));
+    if (it == ucCtrlVars.end()) return false;
+    return className.empty() || Symbol::toLower(it->second) == Symbol::toLower(className);
+}
+
 void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string& className,
                                    const std::string& valueExpr, bool rhsTransferred, bool outSlot,
                                    const std::string& slotElemType) {
@@ -403,7 +434,15 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
     // 一直漏着 —— 两处同一问句, 这里不再手抄 IsBoxed/GetInstance 两行: UnboxVb6Instance
     // 自带 IsWindow/可读/vtable 身份三闸, 不是包装器的值 (裸实例 / 外部 IDispatch / HWND)
     // 原样交回, 所以对 `New`、裸类变量、rhsTransferred 各档都无害。
+    // 唯一的例外是**工程内 UserControl 的宿主句柄** (见下面 isUcCtrlHwndExprForClass):
+    // 它既不是包装器也不是实例, 必须先把句柄反查成实例再进 AddRef。
+    const bool ucHwndRhs = isUcCtrlHwndExprForClass(valueExpr, className,
+                                                   knownUserControlCtrlVars_);
     auto slotValue = [&](const std::string& t) -> std::string {
+        if (ucHwndRhs) {
+            return "(" + t + ")vb6_ComObject_UnboxVb6Instance((void*)((" + clsStruct
+                 + "*)vb6_UC_InstanceOf(" + valueExpr + ")))";
+        }
         return "(" + t + ")vb6_ComObject_UnboxVb6Instance((void*)(" + valueExpr + "))";
     };
     if (outSlot) {

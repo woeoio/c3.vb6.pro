@@ -39,12 +39,47 @@ public class UcsPx {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
 }
 "@
 
-$p = Start-Process -FilePath $Exe -PassThru
+# ---- 双击等价启动（用户 2026-11-09 报「双击后自己就关了」的回归闸）----
+# 三条等价条件：
+#   ① 工作目录 = exe 所在目录（Start-Process 默认继承父进程 cwd，那不是双击形态）；
+#   ② 环境里没有本仓库/CI 注入的变量（C3_* 等），只留 OS 必需的最小集合；
+#   ③ exe 旁边没有源工程的 img\/xml —— 先拷进一枚空目录再跑，任何「靠 cwd 找文件」
+#      的依赖在裸目录里都会现形（缺文件必须红）。
+$script:work = Join-Path ([IO.Path]::GetTempPath()) ("ucslider_dbl_" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
+New-Item -ItemType Directory -Path $script:work -Force | Out-Null
+$runExe = Join-Path $script:work (Split-Path -Leaf $Exe)
+Copy-Item -LiteralPath $Exe -Destination $runExe -Force
+
+$psi = New-Object Diagnostics.ProcessStartInfo
+$psi.FileName = $runExe
+$psi.WorkingDirectory = $script:work
+$psi.UseShellExecute = $false
+$psi.EnvironmentVariables.Clear()
+$minEnv = @{
+    'SystemRoot' = $env:SystemRoot; 'windir' = $env:windir; 'SystemDrive' = $env:SystemDrive
+    'TEMP' = $env:TEMP; 'TMP' = $env:TMP; 'PATH' = $env:PATH; 'COMSPEC' = $env:COMSPEC
+    'PATHEXT' = $env:PATHEXT; 'USERPROFILE' = $env:USERPROFILE; 'APPDATA' = $env:APPDATA
+    'LOCALAPPDATA' = $env:LOCALAPPDATA; 'ProgramData' = $env:ProgramData
+    'ALLUSERSPROFILE' = $env:ALLUSERSPROFILE
+}
+foreach ($k in $minEnv.Keys) {
+    if ($minEnv[$k]) { $psi.EnvironmentVariables[$k] = [string]$minEnv[$k] }
+}
+function Stop-App {
+    try { if ($script:appProc -and -not $script:appProc.HasExited) { Stop-Process -Id $script:appProc.Id -Force -ErrorAction SilentlyContinue } } catch { }
+    try { Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+}
+$p = [Diagnostics.Process]::Start($psi)
+$script:appProc = $p
+$script:appStart = $p.StartTime
 [UcsPx]::SetProcessDPIAware() | Out-Null
 
 $hwnd = [IntPtr]::Zero
@@ -71,8 +106,43 @@ while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 100
 }
 if ($hwnd -eq [IntPtr]::Zero) {
-    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    Stop-App
     Write-Output "NO-WINDOW ($Exe)"
+    exit 1
+}
+
+# ---- 双击后用户一定会**移动鼠标**：扫过客户区（60px 网格）触发每个 ucSlider 的 MouseEnter。
+# 修前这条路径直接 0xC0000005（AddRef 写窗口内存），所以扫完必须还活着；再观察满启动后 20s
+# （实测未修版的崩溃窗口 5~18s，MouseEnter 那一路是立刻崩）。期间每 250ms 探活，早退也是红。
+[UcsPx]::SetForegroundWindow($hwnd) | Out-Null
+Start-Sleep -Milliseconds 500
+$cr0 = New-Object UcsPx+RECT; [UcsPx]::GetClientRect($hwnd, [ref]$cr0) | Out-Null
+$pt0 = New-Object UcsPx+POINT; [UcsPx]::ClientToScreen($hwnd, [ref]$pt0) | Out-Null
+$cw0 = $cr0.R - $cr0.L; $ch0 = $cr0.B - $cr0.T
+if ($cw0 -gt 0 -and $ch0 -gt 0) {
+    $saved = New-Object UcsPx+POINT; [UcsPx]::GetCursorPos([ref]$saved) | Out-Null
+    for ($gy = 4; $gy -lt $ch0; $gy += 60) {
+        for ($gx = 4; $gx -lt $cw0; $gx += 60) {
+            [UcsPx]::SetCursorPos($pt0.X + $gx, $pt0.Y + $gy) | Out-Null
+            Start-Sleep -Milliseconds 25
+        }
+    }
+    [UcsPx]::SetCursorPos($saved.X, $saved.Y) | Out-Null
+}
+while (((Get-Date) - $script:appStart).TotalSeconds -lt 20) {
+    if ($p.HasExited) { break }
+    Start-Sleep -Milliseconds 250
+}
+if ($p.HasExited) {
+    $codeTxt = "?"
+    try {
+        # PS 的 [uint32](-1073741819) 会抛转换异常 (按十进制字符串转), 手工补 2^32。
+        $code = [int64]$p.ExitCode
+        if ($code -lt 0) { $code += 0x100000000 }
+        $codeTxt = ("0x{0:X8}" -f [int64]$code)
+    } catch { }
+    Stop-App
+    Write-Output ("CRASH exit=${codeTxt} (双击等价启动后 20s 内进程自己退出)")
     exit 1
 }
 
@@ -83,7 +153,7 @@ $cr = New-Object UcsPx+RECT; [UcsPx]::GetClientRect($hwnd, [ref]$cr) | Out-Null
 $pt = New-Object UcsPx+POINT; [UcsPx]::ClientToScreen($hwnd, [ref]$pt) | Out-Null
 $cw = $cr.R - $cr.L; $ch = $cr.B - $cr.T
 if ($cw -le 0 -or $ch -le 0) {
-    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    Stop-App
     Write-Output "BAD-CLIENT ${cw}x${ch}"
     exit 1
 }
@@ -96,10 +166,15 @@ if ($cw -le 0 -or $ch -le 0) {
 $scaleProbe = [double]$cw / 816.0
 $expectCh = [int][Math]::Round(431.0 * $scaleProbe)
 if ($cw -lt 816 -or $ch -ge 576 -or [Math]::Abs($ch - $expectCh) -gt 1) {
-    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    Stop-App
     Write-Output ("CAPTURE-CONTRACT cw=${cw} ch=${ch} (期望 816x431 DIP 的客户区等比 => ch≈${expectCh}, 且 <576)")
     exit 1
 }
+
+# 采集前置顶：桌面其它窗口（资源管理器等）压在上面会抓到别人的像素（实测过
+# A1=0.005 / 主色 #191919 的假读数）。只改 Z 序，不改窗口几何。
+[UcsPx]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x43) | Out-Null
+Start-Sleep -Milliseconds 200
 
 $bmp = New-Object Drawing.Bitmap $cw, $ch
 $g = [Drawing.Graphics]::FromImage($bmp)
@@ -108,7 +183,7 @@ $g.Dispose()
 if ($OutDir -ne "" -and (Test-Path $OutDir)) {
     $bmp.Save((Join-Path $OutDir "ucslider_client.png"), [Drawing.Imaging.ImageFormat]::Png)
 }
-Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+Stop-App
 
 # 设计期几何（twips / 15 = DIP），再按客户区像素/816 缩放
 $scale = [double]$cw / 816.0

@@ -221,3 +221,55 @@ if (!adc && !directTarget) vb6_uc_dibCreate(&dib, target, cw, ch);
 `Tests (vbp #3)` 首次在 CI 上通过（`pixels: ucslider cw=816x431 scale=1
 A1.bg=0.865 A2.knobPngBlue=1135 B.slider4PureBlack=0 PASS`）。两个 DPI 的读数对齐：
 CI 96% `0.865 / 1135 / 0`，本机 125% `0.899 / 1135 / 0`（A1 那点差是缩放取整，判据 `>=0.80` 两处都绿）。
+
+## 9. 双击启动后自行退出（0xC0000005）—— 2026-11-09
+
+**复现（与手工双击等价）**：把 exe 拷进一枚空目录，`UseShellExecute=false` +
+`WorkingDirectory=` exe 所在目录 + 环境只留 OS 必需变量；窗口出现后**移动鼠标扫过客户区**，
+进程在第一次进入任一 `ucSlider` 时立刻消失。不移动鼠标时进程可以一直活着（静置实测 5~18s
+偶发自行退出，与窗口初始位置是否压在光标下有关）。正常 `WM_CLOSE` 退出码 0，不是
+`Form_Unload` / `Sub Main` 提前返回，也不缺任何运行期文件。
+
+**退出原因**（`tools/crashprobe/crashprobe32.exe`，用户指定的既有工具）：
+
+```
+EXIT_CODE=0xC0000005
+EXCEPTION code=0xC0000005 firstChance=1 addr=00422817 accessType=0 faultAddr=03AD050A
+FAULT_MODULE=...\ucSliderDemo.exe  base=00420000  offset=0x2817
+```
+
+栈（模块被 ASLR 重定位到 0x420000，preferred 0x400000 ⇒ 帧地址先减 0x20000 再查 .map）：
+
+```
+_vb6_cls_ucSlider_AddRef+0x17        <- ucSlider.obj
+_vb6_Form1_ucSlider1_MouseEnter+0x41 <- Form1.obj
+_vb6_ctrl_subproc_ucSlider1@16+0x44  <- Form1.obj
+_vb6_MessageLoop+0x17d
+_WinMain@16+0x56
+```
+
+**真因**：`Set mCtlSlider = ucSlider1(INDEX)` / `= ucSlider4` 这两个**类槽覆写**站点发出的右值是
+控件**宿主句柄**（`vb6_CtrlArr_GetAt(&vb6_arr_ucSlider1, INDEX)` / `vb6_hwnd_ucSlider4`），
+而 `emitClassSlotRefSet` 的 slotValue 只做了 `vb6_ComObject_UnboxVb6Instance` —— 它对 HWND 是
+「原样交回」（`IsWindow` 那一闸直接判否），于是下游 `vb6_cls_ucSlider_AddRef(HWND)` 把**窗口内存**
+当 `__refcount` 写 ⇒ 0xC0000005。控件在 C 里没有同名实例变量，同文件其它正确的站点都写成
+`(vb6_cls_ucSlider*)vb6_UC_InstanceOf(vb6_hwnd_ucSlider4)`，只有「Set 进类槽」这一路漏了。
+
+**修法**（[cgen_com.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/module/cgen_com.cpp#L390-L419)）：
+在 `emitClassSlotRefSet` 里按控件注册表 `knownUserControlCtrlVars_` 认右值的两种句柄形态，
+认出来（且类名对得上）就先 `vb6_UC_InstanceOf(...)` 反查成实例再进 Unbox/AddRef；其余右值一字不动。
+
+```c
+mCtlSlider = (vb6_cls_ucSlider*)vb6_ComObject_UnboxVb6Instance((void*)((vb6_cls_ucSlider*)vb6_UC_InstanceOf(vb6_hwnd_ucSlider4)));
+mCtlSlider = (vb6_cls_ucSlider*)vb6_ComObject_UnboxVb6Instance((void*)((vb6_cls_ucSlider*)vb6_UC_InstanceOf(vb6_CtrlArr_GetAt(&vb6_arr_ucSlider1, INDEX))));
+```
+
+**双击验证**：修后用同一路启动 + 鼠标扫过全部控件 + 观察满启动后 20s，进程存活，
+`A1.bg=0.899 / A2.knobPngBlue=1135 / B.slider4PureBlack=0`。
+
+**guard**（[ucslider_px.ps1](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/guisample/ucslider_px.ps1)）：
+启动改成双击等价三条件（cwd=exe 目录、环境清空只留 OS 必需项、exe 单独拷进空目录跑，缺文件即红）；
+窗口出现后 60px 网格扫过客户区触发每个滑块的 MouseEnter，再观察满启动后 20s，任一早退报
+`CRASH exit=0x…` 并 rc=1；采集前置 `HWND_TOPMOST`（防资源管理器遮挡采集，实测过 A1=0.005 的假读数）。
+**双向已验**：把修复临时关掉重编的差产物 `.temp\uc_pre\ucSliderDemo.exe` → `CRASH exit=0xC0000005`（rc 1）；
+修复后产物 PASS（rc 0）。
