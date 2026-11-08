@@ -87,10 +87,17 @@ if ($cw -le 0 -or $ch -le 0) {
     Write-Output "BAD-CLIENT ${cw}x${ch}"
     exit 1
 }
-# 采集口径硬闸：只允许客户区，且高度必须 < 576，杜绝桌面壁纸污染。
-if ($ch -ge 576 -or $ch -ne 539) {
+# 采集口径硬闸：
+#   1) 只允许客户区（本脚本只有 GetClientRect 一条采集路径），高度必须 < 576 —— 桌面壁纸
+#      那条污染进不来（这是采集侧的约束，不是靠放宽阈值绕）。
+#   2) 还要核「这是 816x431 DIP 那张窗体的客户区」：按 cw 反推 scale，ch 必须等于
+#      431*scale ±1。**不许写死 539**：本机是 125%(1020x539)，CI runner 是 96%(816x431)，
+#      写死本机读数会让正确的判据在别的机器上"看起来红"。
+$scaleProbe = [double]$cw / 816.0
+$expectCh = [int][Math]::Round(431.0 * $scaleProbe)
+if ($cw -lt 816 -or $ch -ge 576 -or [Math]::Abs($ch - $expectCh) -gt 1) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-    Write-Output "CAPTURE-CONTRACT ch=${ch} (期望 539 客户区, 且 <576)"
+    Write-Output ("CAPTURE-CONTRACT cw=${cw} ch=${ch} (期望 816x431 DIP 的客户区等比 => ch≈${expectCh}, 且 <576)")
     exit 1
 }
 

@@ -4282,7 +4282,10 @@ function Test-VbpBuild {
                 } else {
                     $script:pass--
                     $script:fail++
-                    Write-Host ("    pixels FAIL [" + $pxTag + "]: " + $pxText) -ForegroundColor Red
+                    # 用例行格式 ([类别] 名 ... 读数) 是 ci.yml 那个命名 matcher 唯一的入口;
+                    # 以前这行写的是 "    pixels FAIL [x]: ..." —— 不在 matcher 里, 于是 vbp #3
+                    # 明明 tally 到 1 个 FAIL, 注解却报 "naming found only 0"。改成用例行本身。
+                    Write-Host ("  [PIXELS] " + $pxTag + " ... FAIL (" + $pxText + ")") -ForegroundColor Red
                 }
             }
         }

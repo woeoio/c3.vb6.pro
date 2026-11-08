@@ -190,3 +190,29 @@ if (!adc && !directTarget) vb6_uc_dibCreate(&dib, target, cw, ch);
   `Tree Explorer / Corporate Hierarchy / Drag and Drop / Menu·Tools / Contact  List` 五窗的
   `scr`/`content` 读数、hover、数字微调、XML 重载、`chk240=82.9% / label240=90.6% / sb240=93.8%`
   等判据全绿，与 `ai/C3_UCTREEVIEW_HANDOFF.md` 的基线一致。
+
+## 8. GA 22 job 收口（2026-11-09）
+
+首跑（head `bf0874f8` = A2 收口后）红 4 格：`Emit manifest` / `Tests (compile #1)` /
+`Tests (compile #2)` / `Tests (vbp #3)`。逐格归因与修法：
+
+1. **vbp #3｜guard 在 CI 上 CAPTURE-CONTRACT ch=431**。CI runner 是 96 DPI（客户区 `816x431`），
+   上一轮把采集闸写死成 `ch == 539`（本机 125% 的读数）—— **判据对、契约错**。改成：
+   `ch < 576` 保留（壁纸那条照样进不来），另加 `ch == round(431 * cw/816) ± 1` 认定「这是
+   816x431 DIP 那张窗体的客户区」，不再写死任何机器读数。同时把 pixel FAIL 的输出从
+   `    pixels FAIL [x]: …` 改成用例行 `[PIXELS] <script> ... FAIL (…)`：`ci.yml` 的命名 matcher
+   只认用例行，原来 tally 到 1 个 FAIL、注解却报 “naming found only 0”，自相矛盾。
+2. **compile #1/#2｜两份静态 census 的计数没跟上上一轮已收口改动**（判据仍 exact，只改数字+注释）：
+   - `check_com_marker_write_sites.ps1`：7 → **8**（第 6 个写侧 = `With class .unknown COM SetProp`
+     的写，正是 §3.1 那刀补的 `comMarkerValueForWrite`）。
+   - `check_formatdatetime_args.ps1`：22 → **24**（新增 `vb6_UserControl_TextWidth` /
+     `TextHeight` 两行，正是 §2「首编前置」那刀把 UC 的 `TextWidth/TextHeight` 形参改成 BSTR）。
+3. **Emit manifest｜605 行，改写 6 / 新增 2**。新增 2 = 新夹具
+   `tests/ucSlider_2022/{Proyecto1.vbp, modIOleInPlaceActiveObject.bas}`（上一轮加了夹具没登记）。
+   改写 6 用「**旧编译器**」逐行核过（取 CI 为最后一个绿 head `b689a88d` 交的 `c3-exe` 工件当 A/B，
+   `--emit-c` 对 6 份工程逐行 diff），只有上一轮那三种形状，没有第四种变化：
+   `With class .unknown COM SetProp` 由 `vb6_ComPackValue((*New_Font))` 改成读回值
+   `vb6_ComGetStringProp/ComGetDoubleProp(...)`；String ByRef 写实参多出 `&(BSTR){}`；
+   控件数组默认属性从 `vb6_GetControlText(vb6_CtrlArr_GetAt(...))` 改成直接取元素值。
+   登记后本机复算：`期望 605 / 实得 605 / 相同 605 / 哈希不同 0 / 缺席 0 / 多出 0`，
+   `check_manifest_coverage` K1..K3 绿。
