@@ -273,3 +273,59 @@ mCtlSlider = (vb6_cls_ucSlider*)vb6_ComObject_UnboxVb6Instance((void*)((vb6_cls_
 `CRASH exit=0x…` 并 rc=1；采集前置 `HWND_TOPMOST`（防资源管理器遮挡采集，实测过 A1=0.005 的假读数）。
 **双向已验**：把修复临时关掉重编的差产物 `.temp\uc_pre\ucSliderDemo.exe` → `CRASH exit=0xC0000005`（rc 1）；
 修复后产物 PASS（rc 0）。
+
+## 10. 旋钮拖不动（WM_MOUSEMOVE 的 Button 恒 0）—— 2026-11-09
+
+**结论先行**：拖动链**不走** `clsSubClass` 子类化。`ucSlider` 的拖动全在标准
+`UserControl_MouseDown / MouseMove / MouseUp` 里（[ucSlider.ctl](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/ucSlider_2022/ucSlider.ctl#L1438-L1495)），
+事件源是 UC **宿主窗口**的鼠标消息转调（[uc_host_window.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/uc_host_window.c#L548-L590)）。
+`clsSubClass` 只承担窗体级 `WM_MOUSEWHEEL`（§6 的 vtable 探针恒 0 是另一笔旧账），与拖动无关。
+
+**真 VB6 取证**（`D:\vb_yqt4qPac\ucSlider_2022\ucSliderDemo.exe`，双击等价启动 + 空环境；
+ucSlider4 竖向 456,32,113,329 DIP，Value=0 时旋钮贴底）：
+
+| 阶段 | ucSlider4 矩形内轨道绿 RGB(57,140,0) 像素 | 绿区顶边 y |
+|---|---|---|
+| 按下前 | 0 | — |
+| 按住旋钮上拖 150 DIP（未松手） | 1781 | 256 |
+| 松手后 | 1781 | 256 |
+
+即：**按住期间** Value 就跟着走（轨道绿条从底部缩到 y=256），不是松手才跳。
+对照旧 C3 产物：同一动作 拖中/拖后 **0 / 0**（旋钮纹丝不动）。
+差一证据：旧产物**点轨道**（只走 MouseDown，那里会直接调一次 `UserControl_MouseMove Button=1`）
+→ 绿 1616 → 坐标换算、Value 更新、重绘全通，唯独按住拖动死。
+
+**真因**：宿主 `WM_MOUSEMOVE` 转调时把 `Button` 硬写成 0：
+
+```c
+case WM_MOUSEMOVE:   hook = r->desc->mouseMove;  button = 0; break;
+```
+
+而 VB6 的 `MouseMove(Button, …)` 形参是「当前按住的键状态」（1=左 2=右 4=中），
+`.ctl` 里正是 `If Button = vbLeftButton Then …` 才算 `mPercent`/`m_Value`。
+Button 恒 0 ⇒ 整段拖动逻辑永不执行。`MouseDown` 恒传 1 所以「点轨道跳值」正常，
+这也是这条 bug 一直没被当成事件转发缺失的原因。
+
+**修法**：`WM_MOUSEMOVE` 按 `wParam` 的 `MK_LBUTTON/MK_RBUTTON/MK_MBUTTON` 映射成
+VB6 的 1/2/4，其余消息分支不动。
+
+**guard**（[ucslider_px.ps1](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/guisample/ucslider_px.ps1)，
+仍走双击等价启动 + 空环境，采集前 `HWND_TOPMOST`）新增 D 门，判据取自真 VB6 读数、不放宽：
+
+| 断言 | 判据 | 真 VB6 | 旧产物 | 修复后 |
+|---|---|---|---|---|
+| D0 拖动前轨道绿 | `== 0` | 0 | 0 | 0 |
+| D1 **按住期间**轨道绿 | `>= 400` | 1781 | 0 | 1781 |
+| D2 松手后轨道绿 | `>= 400` | 1781 | 0 | 1781 |
+| D3 松手后绿区顶边 | `<= 300` | 256 | —（0 枚） | 256 |
+
+必须抓 mid（按住期间）而不是只判松手后：只判终态的话，`MouseDown` 里的轨道跳值也能装成拖动。
+
+**双向已验**：把修复临时改回 `button = 0` 重编的产物跑 guard →
+`D.dragGreen=0->0 top=99999 FAIL: D1/D2/D3`（rc 1）；修复后 PASS（rc 0）；
+真 VB6 参考 exe 同一相机 PASS（rc 0）。
+
+**共享路径回归**：UC 宿主鼠标转调是所有 UC 共用的（`ucTreeView` 的 `.ctl` 也在 MouseMove 里
+设 MousePointer）。五窗像素门整套重跑 **PASS**（rc 0），读数与 `ai/C3_UCTREEVIEW_HANDOFF.md`
+基线一致（`chk240=82.9% / label240=90.6% / sb240=93.8%`，五窗 `scr`/`content` 签名全等）。
+

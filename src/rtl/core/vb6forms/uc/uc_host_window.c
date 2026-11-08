@@ -560,7 +560,20 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 case WM_RBUTTONDOWN: hook = r->desc->mouseDown;  button = 2; break;
                 case WM_LBUTTONUP:   hook = r->desc->mouseUp;    button = 1; break;
                 case WM_RBUTTONUP:   hook = r->desc->mouseUp;    button = 2; break;
-                case WM_MOUSEMOVE:   hook = r->desc->mouseMove;  button = 0; break;
+                /* 账 #609: MouseMove 的 Button 形参在 VB6 里是"当前按住的键状态"
+                 * (1=左 2=右 4=中), 不是"哪个键触发了本条消息"。这里原来写死 0,
+                 * 于是 `If Button = vbLeftButton Then` 形态的拖动代码 (ucSlider 的
+                 * UserControl_MouseMove) 永远进不去 —— 按在轨道上能跳值 (MouseDown
+                 * 里直接调了一次 MouseMove, Button=1), 按住旋钮拖却纹丝不动
+                 * (实测: 真 VB6 拖 150px 旋钮上移 187px, 旧 C3 产物 0px)。
+                 * wParam 的 MK_* 就是这个状态, 直接映射。*/
+                case WM_MOUSEMOVE: {
+                    hook = r->desc->mouseMove;
+                    if (wParam & MK_LBUTTON) button |= 1;
+                    if (wParam & MK_RBUTTON) button |= 2;
+                    if (wParam & MK_MBUTTON) button |= 4;
+                    break;
+                }
             }
             if (!hook) break;
             // 捕获鼠标, 保证按下后拖出窗口仍能收到 UP/MOVE (VB6 隐式行为)

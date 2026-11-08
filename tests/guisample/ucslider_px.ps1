@@ -42,6 +42,7 @@ public class UcsPx {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, IntPtr extra);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
 }
@@ -176,17 +177,54 @@ if ($cw -lt 816 -or $ch -ge 576 -or [Math]::Abs($ch - $expectCh) -gt 1) {
 [UcsPx]::SetWindowPos($hwnd, [IntPtr](-1), 0, 0, 0, 0, 0x43) | Out-Null
 Start-Sleep -Milliseconds 200
 
-$bmp = New-Object Drawing.Bitmap $cw, $ch
-$g = [Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($pt.X, $pt.Y, 0, 0, (New-Object Drawing.Size $cw, $ch))
-$g.Dispose()
-if ($OutDir -ne "" -and (Test-Path $OutDir)) {
-    $bmp.Save((Join-Path $OutDir "ucslider_client.png"), [Drawing.Imaging.ImageFormat]::Png)
+function Grab([string]$name) {
+    $b2 = New-Object Drawing.Bitmap $cw, $ch
+    $g2 = [Drawing.Graphics]::FromImage($b2)
+    $g2.CopyFromScreen($pt.X, $pt.Y, 0, 0, (New-Object Drawing.Size $cw, $ch))
+    $g2.Dispose()
+    if ($OutDir -ne "" -and (Test-Path $OutDir)) {
+        $b2.Save((Join-Path $OutDir ($name + ".png")), [Drawing.Imaging.ImageFormat]::Png)
+    }
+    return $b2
 }
+
+$scale = [double]$cw / 816.0
+
+# ---- D｜拖动门（ucSlider4 竖向: 456,32,113,329 DIP，Value=0 时旋钮贴底）----
+# 判据取自真 VB6 exe 现场取证（同相机 125% 下 drag 150 DIP）：
+#   拖动中/松手后 ucSlider4 矩形内的轨道绿 (57,140,0) 像素 = 1781，顶边 y=256；
+#   Value=0 时 = 0。旧 C3 产物把 WM_MOUSEMOVE 的 Button 硬写成 0 ⇒
+#   `UserControl_MouseMove` 里 `If Button = vbLeftButton` 永不成立 ⇒ 拖完仍是 0。
+# 必须抓**按住期间**的 mid：只判松手后的话，MouseDown 里的轨道跳值也能装成拖动。
+$s4vX0 = [int][Math]::Round(456 * $scale); $s4vY0 = [int][Math]::Round(32 * $scale)
+$s4vX1 = [int][Math]::Round((456 + 113) * $scale); $s4vY1 = [int][Math]::Round((32 + 329) * $scale)
+$s4v = @($s4vX0, $s4vY0, $s4vX1, $s4vY1)
+
+$preBmp = Grab "ucslider_predrag"
+$park = New-Object UcsPx+POINT; [UcsPx]::GetCursorPos([ref]$park) | Out-Null
+
+$pressX = $pt.X + [int][Math]::Round((456 + 113 / 2.0) * $scale)
+$pressY = $pt.Y + [int][Math]::Round((32 + 329) * $scale) - [int][Math]::Round(30 * $scale)
+[UcsPx]::SetCursorPos($pressX, $pressY) | Out-Null
+Start-Sleep -Milliseconds 200
+[UcsPx]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)      # LEFTDOWN
+Start-Sleep -Milliseconds 150
+for ($di = 1; $di -le 12; $di++) {
+    $yy = $pressY - [int][Math]::Round(150 * $scale * $di / 12)
+    [UcsPx]::SetCursorPos($pressX, $yy) | Out-Null
+    Start-Sleep -Milliseconds 50
+}
+Start-Sleep -Milliseconds 200
+$midBmp = Grab "ucslider_midrag"
+[UcsPx]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)      # LEFTUP
+Start-Sleep -Milliseconds 300
+# 光标挪到窗体空白处，让 LabelPlus 气泡收起来再做 A1/A2/B 采集
+[UcsPx]::SetCursorPos($pt.X + 4, $pt.Y + ($ch - 4)) | Out-Null
+Start-Sleep -Milliseconds 700
+$bmp = Grab "ucslider_client"
 Stop-App
 
 # 设计期几何（twips / 15 = DIP），再按客户区像素/816 缩放
-$scale = [double]$cw / 816.0
 function RectPx([double]$l, [double]$t, [double]$w, [double]$h) {
     return @([int][Math]::Round($l * $script:scale), [int][Math]::Round($t * $script:scale),
              [int][Math]::Round(($l + $w) * $script:scale), [int][Math]::Round(($t + $h) * $script:scale))
@@ -197,7 +235,7 @@ $slider4 = RectPx 608 304 177 73                             # ucSlider1(4) (912
 function Stats([int[]]$rc) {
     $x0, $y0, $x1, $y1 = $rc
     $x1 = [Math]::Min($x1, $script:cw); $y1 = [Math]::Min($y1, $script:ch)
-    $tot = 0; $bg = 0; $blue = 0; $black = 0
+    $tot = 0; $bg = 0; $blue = 0; $black = 0; $green = 0; $greenTop = 99999
     for ($y = $y0; $y -lt $y1; $y++) {
         for ($x = $x0; $x -lt $x1; $x++) {
             $c = $script:bmp.GetPixel($x, $y); $tot++
@@ -205,22 +243,34 @@ function Stats([int[]]$rc) {
             if ([Math]::Abs($r - 57) -le 5 -and [Math]::Abs($gg - 57) -le 5 -and [Math]::Abs($b - 57) -le 5) { $bg++ }
             if ($b -lt 140 -and $r -lt 90 -and $b -ge ($r + 6) -and $b -ge ($gg + 3)) { $blue++ }
             if ($r -eq 0 -and $gg -eq 0 -and $b -eq 0) { $black++ }
+            # 轨道正向前景色: ucSlider4 = 35897 = 0x8C39 -> RGB(57,140,0)
+            if ($gg -gt 90 -and $r -lt 110 -and $b -lt 80 -and $gg -gt ($r + 40)) {
+                $green++; if ($y -lt $greenTop) { $greenTop = $y }
+            }
         }
     }
-    return @{ Tot = $tot; Bg = $bg; Blue = $blue; Black = $black }
+    return @{ Tot = $tot; Bg = $bg; Blue = $blue; Black = $black; Green = $green; GreenTop = $greenTop }
 }
 
 $script:bmp = $bmp; $script:cw = $cw; $script:ch = $ch; $script:scale = $scale
 $s1 = Stats $pic1
 $s4 = Stats $slider4
+$sPre = $null; $sMid = $null; $sDrag = $null
+$script:bmp = $preBmp; $sPre = Stats $s4v
+$script:bmp = $midBmp; $sMid = Stats $s4v
+$script:bmp = $bmp;    $sDrag = Stats $s4v
 $frac = if ($s1.Tot -gt 0) { [Math]::Round($s1.Bg / $s1.Tot, 3) } else { 0 }
 
 $fail = @()
 if (-not ($frac -ge 0.80))  { $fail += ("A1 bg393939=$frac (<0.80, ref 0.881)") }
 if (-not ($s1.Blue -ge 400)) { $fail += ("A2 knobPngBlue=" + $s1.Blue + " (<400, ref 1135)") }
 if (-not ($s4.Black -eq 0))  { $fail += ("B slider4PureBlack=" + $s4.Black + " (must be 0)") }
+if (-not ($sPre.Green -eq 0)) { $fail += ("D0 predragGreen=" + $sPre.Green + " (must be 0)") }
+if (-not ($sMid.Green -ge 400)) { $fail += ("D1 midDragGreen=" + $sMid.Green + " (<400, ref 1781)") }
+if (-not ($sDrag.Green -ge 400)) { $fail += ("D2 afterDragGreen=" + $sDrag.Green + " (<400, ref 1781)") }
+if (-not ($sDrag.GreenTop -le 300)) { $fail += ("D3 afterDragGreenTop=" + $sDrag.GreenTop + " (>300, ref 256)") }
 
-$line = ("ucslider cw={0}x{1} scale={2} A1.bg={3} A2.knobPngBlue={4} B.slider4PureBlack={5}" -f $cw, $ch, $scale, $frac, $s1.Blue, $s4.Black)
+$line = ("ucslider cw={0}x{1} scale={2} A1.bg={3} A2.knobPngBlue={4} B.slider4PureBlack={5} D.dragGreen={6}->{7} top={8}" -f $cw, $ch, $scale, $frac, $s1.Blue, $s4.Black, $sMid.Green, $sDrag.Green, $sDrag.GreenTop)
 if ($Baseline) { Write-Output ("BASELINE " + $line); exit 0 }
 if ($fail.Count -gt 0) { Write-Output ($line + " FAIL: " + ($fail -join "; ")); exit 1 }
 Write-Output ($line + " PASS")
