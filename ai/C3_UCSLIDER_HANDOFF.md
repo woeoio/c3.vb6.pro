@@ -216,3 +216,8 @@ if (!adc && !directTarget) vb6_uc_dibCreate(&dib, target, cw, ch);
    控件数组默认属性从 `vb6_GetControlText(vb6_CtrlArr_GetAt(...))` 改成直接取元素值。
    登记后本机复算：`期望 605 / 实得 605 / 相同 605 / 哈希不同 0 / 缺席 0 / 多出 0`，
    `check_manifest_coverage` K1..K3 绿。
+
+**终态**：CI run `42500149518`（head `d7acc4e4`）**22/22 job 全绿**，本工程的
+`Tests (vbp #3)` 首次在 CI 上通过（`pixels: ucslider cw=816x431 scale=1
+A1.bg=0.865 A2.knobPngBlue=1135 B.slider4PureBlack=0 PASS`）。两个 DPI 的读数对齐：
+CI 96% `0.865 / 1135 / 0`，本机 125% `0.899 / 1135 / 0`（A1 那点差是缩放取整，判据 `>=0.80` 两处都绿）。
