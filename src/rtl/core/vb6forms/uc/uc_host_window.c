@@ -394,7 +394,15 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
 
     vb6_UCDib dib;
     memset(&dib, 0, sizeof(dib));
-    if (!adc) vb6_uc_dibCreate(&dib, target, cw, ch);
+    /* Fix B 2026-11-09: 「透明 UC 且 composeBelow==0」(正被别人 WM_PRINTCLIENT 合成) 这一路
+       **不建离屏 DIB**。那张 DIB 是零初始化的纯黑, 而本控件在这一路只画自己那点内容
+       (两个铺底 if 都不进), 末尾 `BitBlt(target, 0,0, dib.w,dib.h, dib.memDC, ...)` 就会把
+       没画过的黑底整块盖回 target —— 实测 ucSlider1(4) 顶部 221x21 纯黑条 = 上层兄弟宿主
+       (客户区 750..991 x 320..401) 与本控件 (750..981 x 380..471) 的交集, 正是兄弟合成时
+       把这枚透明 UC 画进自己 DIB 的那一路。target 里已经是合成好的下层 (调用方也已按本窗
+       矩形设好 viewport/clip), 直接画进去就是 VB6 windowless 的语义。 */
+    const int directTarget = (transparent && !composeBelow);
+    if (!adc && !directTarget) vb6_uc_dibCreate(&dib, target, cw, ch);
     if (!adc) vb6_uc_selectOwnFont(dib.memDC, hwnd);  /* 账 #305 300: 同上, 非 AutoRedraw 那一档 */
     const int useDib = (dib.memDC && dib.bits);
     HDC dc = adc ? adc : (useDib ? dib.memDC : target);

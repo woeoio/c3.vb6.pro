@@ -153,20 +153,40 @@ powershell -NoProfile -File tests\guisample\ucslider_px.ps1 `
   `vb6_UC_BagPutBin(_bag, L"arrimgknob", "\211PNG…", 604)`。
 - 读数：`A2.knobPngBlue` 0 → **1135**（真 VB6 也是 1135，判据 `>= 400`，绿）；`A1.bg` 0.899 仍绿。
 
-### B｜ucSlider1(4) 顶部多一条 221x21 纯黑条（已定位，未修）
+### B｜ucSlider1(4) 顶部多一条 221x21 纯黑条（已收口 2026-11-09）
 
-定位结论（本轮只报不修）：
+定位（上一轮已报，本轮落地）：
 
 1. 形状：黑条在客户区 `(760..981) x (380..400)`；宽度=控件宽，高度 21 px。上层兄弟宿主
    （`VB6_UserControlHost`，客户区 `750..991 x 320..401`）与 slider4 矩形 `750..981 x 380..471`
    的交集正好是 `221 x 21`。
-2. 机制：`vb6_uc_paintInto`（[uc_host_window.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/uc_host_window.c)
-   的 `vb6_uc_dibCreate` 无条件建一张零初始化 DIB（`memset` ⇒ 纯黑）；当本控件是**透明 UC 且
-   composeBelow==0**（正被别人 `WM_PRINTCLIENT` 合成，即上面那个兄弟）时，两个 `if` 都不进
+2. 机制：`vb6_uc_paintInto` 里 `vb6_uc_dibCreate` **无条件**建一张零初始化 DIB（纯黑）；当本控件是
+   **透明 UC 且 composeBelow==0**（正被别人 `WM_PRINTCLIENT` 合成）时，两个铺底分支都不进
    （`transparent && composeBelow` 假、`!transparent` 假）⇒ DIB 一个像素都不铺，控件也只画自己
    那点内容；末尾 `BitBlt(target, 0,0, dib.w,dib.h, dib.memDC, ...)` 把整张 DIB **连没画过的黑底**
-   盖回 target ⇒ 兄弟合成时把这 221x21 黑块叠进 slider4 的 DIB。
-3. 修法候选（下一轮）：`composeBelow==0` 那一路**不建 DIB**，直接把 `dc = target`（target 里已是
-   合成好的下层，调用方也已按兄弟矩形裁剪），其余路径不变。
-4. 风险面：动的是所有透明 UC 的合成路径 ⇒ 必须整轮 GA + 逐控件肉眼回归，不能只靠这条 guard。
-   本轮的 `B.slider4PureBlack=4641` 就是这个已知缺陷的读数（红，预期）。
+   盖回 target ⇒ 兄弟合成时这 221x21 黑块被叠进 slider4 的 DIB。
+
+修法（[uc_host_window.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/uc_host_window.c)）：
+
+```c
+const int directTarget = (transparent && !composeBelow);
+if (!adc && !directTarget) vb6_uc_dibCreate(&dib, target, cw, ch);
+```
+
+即这条路径**不建 DIB**，`dc` 直接落到 `target`（target 里已是合成好的下层，调用方也已按本窗矩形
+设好 viewport/clip —— 与 VB6 windowless 语义一致）。没有保留「建 DIB 但保证铺底」的分支：
+要保证铺底就得把下层内容也复制进来，代价比直接画高，且现有 `useDib==0` 的兜底路径本来就支持
+直画 target，行为面最小。AutoRedraw（`adc`）与非透明 UC 两条路径完全未动。
+
+验证：
+
+- guard 四门全绿：`A1.bg=0.899 A2.knobPngBlue=1135 B.slider4PureBlack=0`（rc 0）。
+  旧产物（`.temp\ucslider_gen`，HEAD 前产物）仍红：`0.349 / 0 / 4641`（rc 1），双向能力保留。
+- **逐像素证据**（`b_out` 截图 vs 上一轮 `a1b_out` 截图，同相机 1020x539，阈值通道差和 >24）：
+  变化 4651 px，其中 **4641 px = rows 380..400 / x 760..980，正是那条黑条**（纯黑→f0f0f0）；
+  余 10 px 全部落在 `(1017..1019) x (534..538)` 右下角尺寸抓手，**同一 exe 连拍两张也会在这 10 px
+  上变**（semi-transparent 抓手透出桌面），属采集噪声，不是画面差异。
+- 其它透明 UC 合成未被画坏：ucTreeView 五窗像素门整套重跑 **PASS**（rc 0）——
+  `Tree Explorer / Corporate Hierarchy / Drag and Drop / Menu·Tools / Contact  List` 五窗的
+  `scr`/`content` 读数、hover、数字微调、XML 重载、`chk240=82.9% / label240=90.6% / sb240=93.8%`
+  等判据全绿，与 `ai/C3_UCTREEVIEW_HANDOFF.md` 的基线一致。
