@@ -329,3 +329,10 @@ VB6 的 1/2/4，其余消息分支不动。
 设 MousePointer）。五窗像素门整套重跑 **PASS**（rc 0），读数与 `ai/C3_UCTREEVIEW_HANDOFF.md`
 基线一致（`chk240=82.9% / label240=90.6% / sb240=93.8%`，五窗 `scr`/`content` 签名全等）。
 
+**GA**：全量 22 job 全绿（run `42510490853`，head `86425114`）。CI 是 96 DPI，同一 D 门读数
+`cw=816x431 scale=1 D.dragGreen=1363->1363 top=204 PASS` —— 判据不依赖本机 DPI。
+另外本笔顺手补了上一轮漏登记的 shape oracle：`7a58d70c` 的 class-slot `InstanceOf` 修复让
+`tests/ucSlider_2022/Proyecto1.vbp` 的发码哈希变了一行，已按 CI 那台的清单重新登记
+（`218a02b6`，只动 `emit-manifest.expected.txt` 一行）。
+
+
