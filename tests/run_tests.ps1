@@ -9680,6 +9680,14 @@ if ($Category -in @("all", "run", "vbp")) {
         -AssetDir "img" -AssetFile @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml") `
         -PixelAssert @("guisample\uctreeview_px.ps1")
 
+    # ucSlider_2022 (2026-11-08): C3 x86 首版已能启动；像素判据 = tests\guisample\ucslider_px.ps1
+    # (只抓客户区 1020x539, 采集侧排除 y>=576 桌面壁纸)。三条读数双向验证:
+    #   真 VB6 参考 exe:  A1.bg=0.881  A2.knobPngBlue=1135  B.slider4PureBlack=0   => PASS
+    #   旧 C3 产物(HEAD): A1.bg=0.349  A2.knobPngBlue=0     B.slider4PureBlack=4641 => FAIL
+    # 对应三处差异: Picture1 内 UC 背景被刷成窗体底色 / 旋钮没画 .frx PNG / ucSlider1(4) 多一条黑条。
+    Test-VbpBuild "ucSlider_2022" "$Tests\ucSlider_2022\Proyecto1.vbp" -Arch "x86" `
+        -PixelAssert @("guisample\ucslider_px.ps1")
+
     # <vbeclipse> 回归夹子 (dbgdlg) 2026-10-06: 「Alias 名与 VB 名相同」这条路上**真调用**过
     # DI 包装的那一份夹具 —— 只要求"编得过、链得出 exe"，不跑 (它是 GUI 工程，跑起来要人点)。
     # 缺口是什么：cDlg.cls:196 `Declare Function PageSetupDlg Lib "COMDLG32" Alias "PageSetupDlgA"...`,

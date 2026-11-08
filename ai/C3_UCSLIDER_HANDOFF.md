@@ -77,10 +77,29 @@ GDI+ `Declare`/`.frx` 取证也统一在 x86 口径下做，**编译一律 `--ar
 - B：透明 UC 的 `WM_PRINTCLIENT`（composeBelow=0）分支既没铺底、又照常新建离屏 DIB，DIB 零初始化
   为纯黑，随后整块 BitBlt 到目标 ⇒ 兄弟控件合成时把黑块盖到下层。
 
-## 5. Guard
+## 5. Guard（已落地）
 
-待落：`tests/guisample/ucslider_2022_px.ps1` + 真 VB6 基线脚本，挂进 `tests/run_tests.ps1`；
-先验证「旧 C3 产物红、真 VB6 绿」再改实现。
+`tests/guisample/ucslider_px.ps1`（已挂进 `tests/run_tests.ps1` 的 `Test-VbpBuild -PixelAssert`）。
+采集侧只抓**客户区** 1020x539（`GetClientRect + ClientToScreen`），并硬性校验 `ch == 539 && ch < 576`，
+桌面壁纸那条污染进不来（没有靠放宽阈值绕过）。
+
+判据与双向实测（同一脚本、同一相机）：
+
+| 断言 | 判据 | 真 VB6 参考 exe | 旧 C3 产物（HEAD） |
+|---|---|---|---|
+| A1 Picture1 内 `#393939` 占比 | `>= 0.80` | 0.881（绿） | 0.349（红） |
+| A2 PNG 旋钮蓝灰体像素数 | `>= 400` | 1135（绿） | 0（红） |
+| B ucSlider1(4) 纯黑像素数 | `== 0` | 0（绿） | 4641（红） |
+
+A2 抓的是 `(11,12,15)/(31,35,46)/(54,65,85)` 这一族蓝灰（PNG 旋钮实体），
+只判「非白」会把旧产物的白色占位圆角块判绿，因此不采用。
+基线重测命令（换机器/换 DPI 时先跑这条）：
+
+```powershell
+powershell -NoProfile -File tests\guisample\ucslider_px.ps1 `
+  -Exe "D:\vb_yqt4qPac\ucSlider_2022\ucSliderDemo.exe" -Baseline
+# BASELINE ucslider cw=1020x539 scale=1.25 A1.bg=0.881 A2.knobPngBlue=1135 B.slider4PureBlack=0
+```
 
 ## 6. 已知缺口
 
