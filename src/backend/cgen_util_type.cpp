@@ -1074,6 +1074,11 @@ std::string CCodeGen::builtinNoParamTableFormalCType(const std::string& callee, 
         // 交回 vb6_VARIANT —— Fix 175 闸按 cExprIsVariant 让位, 但本表此前没这
         // 一行, VARIANT 那条提取臂也进不来 ⇒ C2440。VB6 语义按当前子类型折字符串。
         {"vb6_Clipboard_SetText", {"BSTR"}},
+        // ucSlider (Proyecto1.vbp): `UserControl.TextWidth(i + Min)` —— TextWidth 的原型是
+        // `vb6_UC_TextWidthOf((void*)me, BSTR)`, 数值实参在 VB6 里按 CStr 隐式折算;
+        // 此前这一位没有登记 ⇒ 裸送 float ⇒ C2440 (ucSlider.c TextW = ...)。
+        {"vb6_UserControl_TextWidth", {"BSTR"}},
+        {"vb6_UserControl_TextHeight", {"BSTR"}},
         {"vb6_GetSetting",    {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key[, default])
         {"vb6_SaveSetting",   {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key, setting)
         {"vb6_DeleteSetting", {"BSTR", "BSTR", "BSTR"}},           // (app, section[, key])

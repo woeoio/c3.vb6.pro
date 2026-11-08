@@ -163,6 +163,7 @@ typedef struct vb6_UCSaved {
        那套存取整个拆掉之后, 这个借位就断了(pop 读到已删除的字段 -> 整个 RTL 编译不过)。
        UserControl.<Member> 自己那两枚发码读了 1450 处, 必须自己存档, 所以单列。 */
     int32_t userWidth, userHeight;
+    int32_t drawWidth;            // ucSlider: UserControl.DrawWidth (与 scaleWidth 同族)
     /* Fix 296 / 3b: 这里曾有 15 个 ext* 字段(Left/Top/Width/Height/Align/Visible/
        DragMode/HelpContextID/WhatsThisHelpID/vb6_Default/Cancel/Tag/ToolTipText/
        Container/DragIcon), 用来在 push/pop 之间存取那 15 枚 vb6_Extender_* 全局。

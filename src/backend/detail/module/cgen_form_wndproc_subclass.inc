@@ -184,7 +184,9 @@
             // 事件转发调用文本: 控件**数组**的事件处理器带 `Index As Integer` 首形参
             // (btnTab_GotFocus(Index As Integer), Outlook2013 pageBackstageSend:528),
             // 转发站必须把数组下标实参化 —— 此前一律 0 参调用 (C2198)。
-            auto evCallWithIndex = [&](const char* suffix) -> std::string {
+            // 「发一次事件」的语句块 (不带 if 前缀)。控件数组且处理器写了 Index 首形参时
+            // 把数组下标实参化; 否则按 0 参调用。
+            auto evCallBlock = [&](const char* suffix) -> std::string {
                 Symbol* evSym = symTab_.lookup(info.ctrlName + suffix);
                 std::string fn = eventHandlerFn(info.ctrlName, suffix);
                 if (evSym && !evSym->params.empty() && info.arrayIndex >= 0) {
@@ -193,17 +195,16 @@
                 }
                 return "{ extern void " + fn + "(); " + fn + "(); }";
             };
-
             // GotFocus (WM_SETFOCUS)
             if (info.hasGotFocus) {
-                c_.emitLine("if (msg == WM_SETFOCUS) " + evCallWithIndex("_GotFocus"));
+                c_.emitLine("if (msg == WM_SETFOCUS) " + evCallBlock("_GotFocus"));
             }
             // LostFocus (WM_KILLFOCUS)
             if (info.hasLostFocus) {
                 if (info.hasValidate) {
-                c_.emitLine("if (msg == WM_KILLFOCUS && !GetPropW(hwnd, L\"VB6_ValidateCancel\")) " + evCallWithIndex("_LostFocus"));
+                c_.emitLine("if (msg == WM_KILLFOCUS && !GetPropW(hwnd, L\"VB6_ValidateCancel\")) " + evCallBlock("_LostFocus"));
             } else {
-                c_.emitLine("if (msg == WM_KILLFOCUS) " + evCallWithIndex("_LostFocus"));
+                c_.emitLine("if (msg == WM_KILLFOCUS) " + evCallBlock("_LostFocus"));
             }
             }
             // P20-12: Validate event (WM_KILLFOCUS with CausesValidation + Cancel)
@@ -240,9 +241,20 @@
                 c_.indent();
                 c_.emitLine("SetPropW(hwnd, L\"VB6_MouseTracked\", (HANDLE)1);");
                 c_.emitLine("vb6_StartMouseTracking((void*)hwnd);");
+                // ucSlider: UC 的 MouseEnter/MouseLeave 处理器由 prepareEventHandlerProc
+                // 按事件 ABI 翻成 **ByVal 下标** (与上面 sink thunk 同形: fn(3)); 不能套用
+                // GotFocus/Click 那条 ByRef(&idx) 档, 否则原型冲突 + 处理器内数组下标悬空.
+                auto evCallBlockUcByVal = [&](const char* suffix) -> std::string {
+                    Symbol* evSym = symTab_.lookup(info.ctrlName + suffix);
+                    std::string fn = eventHandlerFn(info.ctrlName, suffix);
+                    if (evSym && !evSym->params.empty() && info.arrayIndex >= 0) {
+                        return "{ extern void " + fn + "(int16_t); " + fn + "("
+                             + std::to_string(info.arrayIndex) + "); }";
+                    }
+                    return "{ extern void " + fn + "(); " + fn + "(); }";
+                };
                 if (info.hasMouseEnter) {
-                    std::string fn = eventHandlerFn(info.ctrlName, "_MouseEnter");
-                    c_.emitLine("{ extern void " + fn + "(); " + fn + "(); }");
+                    c_.emitLine(evCallBlockUcByVal("_MouseEnter"));
                 }
                 c_.dedent();
                 c_.emitLine("}");
@@ -261,8 +273,7 @@
                 c_.indent();
                 c_.emitLine("RemovePropW(hwnd, L\"VB6_MouseTracked\");");
                 if (info.hasMouseLeave) {
-                    std::string fn = eventHandlerFn(info.ctrlName, "_MouseLeave");
-                    c_.emitLine("{ extern void " + fn + "(); " + fn + "(); }");
+                    c_.emitLine(evCallBlockUcByVal("_MouseLeave"));  // 控件数组: ByVal 下标
                 }
                 c_.dedent();
                 c_.emitLine("}");
@@ -375,7 +386,7 @@
             // 只发给**没有原生 Click 来源**的控件（那批由 BN_CLICKED / *_SELCHANGE /
             // TCN_SELCHANGE 供，见 controlClickFromNativeNotify），否则一次点击双发。
             if (info.hasClick) {
-                c_.emitLine("if (msg == WM_LBUTTONUP) " + evCallWithIndex("_Click"));
+                c_.emitLine("if (msg == WM_LBUTTONUP) " + evCallBlock("_Click"));
             }
 
             // P20-12: WM_VB6_RESTOREFOCUS - restore focus after Validate cancel

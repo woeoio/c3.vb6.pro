@@ -51,6 +51,22 @@ void CCodeGen::visit(IndexOrCallExpr& node) {
     }
     std::chrono::steady_clock::time_point _c3sCall = std::chrono::steady_clock::now();
 #include "backend/detail/expr/cgen_expr_call_prelude.inc"
+    // ucSlider (Proyecto1.vbp): 控件数组元素作表达式 (`Set mCtlSlider = ucSlider1(INDEX)`)
+    // 不能按普通函数调用发 —— 旧行为发裸 `ucSlider1(INDEX)` ⇒ LNK2019。命中控件数组
+    // 登记表即改发同一载体 vb6_CtrlArr_GetAt(&vb6_arr_<原名>, idx) (与属性写/句柄同源)。
+    if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr) {
+        auto& idCA = static_cast<IdentifierExpr&>(*node.callee);
+        std::string caLower = Symbol::toLower(idCA.name);
+        if (knownControlArrays_.count(caLower)) {
+            std::string origCA = idCA.name;
+            auto itOCA = knownFormControlOriginalNames_.find(caLower);
+            if (itOCA != knownFormControlOriginalNames_.end()) origCA = itOCA->second;
+            std::string idxCA = "0";
+            if (!node.positional.empty()) { emitExpr(*node.positional[0]); idxCA = lastExpr_; }
+            lastExpr_ = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(origCA) + ", " + idxCA + ")";
+            return;
+        }
+    }
 #include "backend/detail/expr/cgen_expr_call_builtin_pre.inc"
     c3StatSplit(8, _c3sCall);   // ai/030 续: call:prelude+builtin_pre
 #include "backend/detail/expr/cgen_expr_call_callee_ident.inc"

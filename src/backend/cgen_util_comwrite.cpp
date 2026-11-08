@@ -587,6 +587,18 @@ bool CCodeGen::tryRewriteCOMLvalue(const std::string& target, const std::string&
 // ============================================================
 std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExpr,
                                       const std::string& val) {
+    // ucSlider (Proyecto1.vbp): 形参写的是工程内 Public Enum (`As PictureAlignmentH`) 时,
+    // 符号层只留下枚举名、语义档折成 Variant, 但 C 形参是 int32_t; 照 Variant 装箱会
+    // 发 vb6_VariantFromValue(1) ⇒ C2440 (vb6_VARIANT → int32_t, PropPagLP.c 281/282).
+    // 枚举在 C 侧一律按 Long 槽装配.
+    if (lastP.type == Vb6Type::Variant && !lastP.typeRefName.empty()) {
+        Symbol* esP = symTab_.lookup(lastP.typeRefName);
+        if (!esP) esP = symTab_.lookupModule(lastP.typeRefName);
+        if (esP && esP->kind == SymbolKind::EnumType) {
+            if (lastP.isByVal) return "(int32_t)(" + val + ")";
+            return "(&(int32_t){(" + val + ")})";
+        }
+    }
     if (lastP.type != Vb6Type::Variant) {
         // Fix 185: ByRef 值类型形参 (Property Let v As String/Boolean/Long/...)
         // 的 C 侧是 <T>* (BSTR* / int16_t* / int32_t*) — VB6 默认 ByRef.

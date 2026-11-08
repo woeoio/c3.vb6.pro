@@ -81,6 +81,10 @@
         // 体内 `.成员` 是 VB6 的**内建**成员, 与控件自己声明的同名公开属性是两个东西
         // (见 CCodeGen::withHostPseudoIntrinsic)。
         std::string hostPseudoObj;
+        // ucSlider (Proyecto1.vbp): `.pag` 上设计期放置的工程内 UserControl 作 With 目标时,
+        // 记下控件名 —— 类实例档解析不到的成员 (Width/Height/Top/Left/Visible …) 是 VB6 的
+        // **Extender(控件)属性**, 必须改走 form_pseudo 读表并取 vb6_hwnd_<控件名> 宿主槽.
+        std::string designerCtrlName;
     };
     std::vector<WithObjInfo> withObjectInfoStack_;
     bool suppressDefaultProp_ = false;  // P17.1: With对象表达式时抑制默认属性读取

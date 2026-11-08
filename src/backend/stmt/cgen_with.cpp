@@ -146,9 +146,11 @@ void CCodeGen::visit(WithStmt& node) {
 
         // --- IdentifierExpr: 标识符With对象 ---
         std::string objNameLower;
+        std::string objOrigName;  // ucSlider: 设计期宏名保原始大小写 (vb6_hwnd_<Name>)
         if (node.object->kind == ASTNodeKind::IdentifierExpr) {
             auto& idExpr = static_cast<IdentifierExpr&>(*node.object);
             objNameLower = idExpr.name;
+            objOrigName = idExpr.name;
             std::transform(objNameLower.begin(), objNameLower.end(), objNameLower.begin(), ::tolower);
         }
 
@@ -212,6 +214,25 @@ void CCodeGen::visit(WithStmt& node) {
                         withInfo.className = cIdent(itUCw->second);
                         withInfo.ctrlOrigName = withInfo.className;
                         tempType = "vb6_cls_" + withInfo.className + "*";
+                    }
+                    // ucSlider (Proyecto1.vbp): `.pag` 设计期放的工程内 UserControl 也走上面
+                    // 同一档 —— 但 emitDesignerControlDecls 没把它登记进 knownUserControlCtrlVars_
+                    // (那份登记只在 .frm 的注册表里做)。于是 `With ucSlider1` 的 tempType 停在
+                    // HWND, 体内 `.KnobWidth = ...` / `.LoadImgKnob ...` 全发成 `HWND.X = ...`
+                    // (C2039 "KnobWidth 不是 HWND__ 的成员")。这里按控件类型名查 .ctl 规格补上类实例档.
+                    if (isPropertyPageDesigner_ && withInfo.kind == WithObjKind::FormControl) {
+                        auto itTN = knownFormControlTypeNames_.find(objNameLower);
+                        if (itTN != knownFormControlTypeNames_.end()) {
+                            if (const FrmFile* ucSpec = findUserControlSpec(itTN->second)) {
+                                if (!ucSpec->form.formName.empty()) {
+                                    withInfo.kind = WithObjKind::ClassInstance;
+                                    withInfo.className = cIdent(ucSpec->form.formName);
+                                    withInfo.ctrlOrigName = withInfo.className;
+                                    withInfo.designerCtrlName = cIdent(objOrigName);
+                                    tempType = "vb6_cls_" + withInfo.className + "*";
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -758,6 +779,11 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
             // 用 ctrlOrigName 拼), 这里必须显式取 hwnd 实参再反查实例.
             lastExpr_ = "(vb6_cls_" + cIdent(itUCw2->second) + "*)vb6_UC_InstanceOf("
                       + makeCtrlHwndArg(Symbol::toLower(idW.name), withInfo.ctrlType) + ")";
+        } else if (isPropertyPageDesigner_ && !withInfo.designerCtrlName.empty()) {
+            // ucSlider (Proyecto1.vbp): `.pag` 上的工程内 UC —— emitExpr(IdentifierExpr) 发的是
+            // `me->ucSlider1` (设计期子控件字段), 但类实例 With 要的是实例指针; .pag 的槽就是
+            // `vb6_hwnd_<控件名>` (见 designer 框架 vb6_UC_DesignSlotOf), 直接按类指针落地.
+            lastExpr_ = "(vb6_cls_" + withInfo.className + "*)vb6_hwnd_" + withInfo.designerCtrlName;
         }
     }
 

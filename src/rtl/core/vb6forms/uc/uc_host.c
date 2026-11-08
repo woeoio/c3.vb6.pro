@@ -228,6 +228,7 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     saved->ambientFont = vb6_Ambient_Font;
     saved->userWidth = vb6_UserControl_Width;
     saved->userHeight = vb6_UserControl_Height;
+    saved->drawWidth = vb6_UserControl_DrawWidth;
     /* Fix 296 / 3b: Extender 那 15 枚全局**刻意不**存取。发码侧全部走实例通道
        (vb6_UC_GetExtenderMemberNum/Str/Obj + vb6_UC_SetExtenderMember, 内部统一经
        vb6_UC_ExtenderField 落到当前实例记录 vb6_UCRec.ext*), 生成码里已经**一处**都
@@ -315,6 +316,7 @@ void vb6_uc_pop(const vb6_UCSaved* saved) {
        与 Extender 无关, 保留。 */
     vb6_UserControl_Width = saved->userWidth;        // Fix 162
     vb6_UserControl_Height = saved->userHeight;      // Fix 162
+    vb6_UserControl_DrawWidth = saved->drawWidth;    // ucSlider
     vb6_UserControl_hWnd = saved->hWnd;              // Fix 133u
     vb6_UserControl_AutoRedraw = saved->autoRedraw;  // Fix 133u
     vb6_UserControl_Extender = saved->ext;           // Fix 133u

@@ -437,15 +437,33 @@ static HRESULT STDMETHODCALLTYPE ComObj_Invoke(vb6_ComObject* self, DISPID dispI
 }
 
 // IDispatch vtable instance
-static const vb6_IDispatchVtable g_ComObjectVtable = {
-    ComObj_QueryInterface,
-    ComObj_AddRef,
-    ComObj_Release,
-    ComObj_GetTypeInfoCount,
-    ComObj_GetTypeInfo,
-    ComObj_GetIDsOfNames,
-    ComObj_Invoke,
+//
+// 账 #<ucSlider> 探针护栏: LaVolpe 式 clsSubClass 的 zAddressOf 用
+//   `RtlMoveMemory VarPtr(nAddr), ObjPtr(oCallback), 4` 取"vtable 指针", 再拿
+//   nAddr+&H1C / +&H6F8 / +&H710 / +&H7A4 各扫 8 个 DWORD, 把每个非零 DWORD 当
+//   **代码指针**读首字节 (期望 0x33 native / 0xE9 pcode)。VB6 的 vtable 有上千字节,
+//   我们这份只有 7 项 (0x1C 字节), +0x1C 之后就是 .rdata 里挨着的别的数据 ——
+//   ucSlider_2022 实测那里是一枚 0x65725f5f 的值, 解引用 ⇒ 0xC0000005 (Form_Load)。
+// 护栏口径: 在 vtable 后面垫一整片 0 槽 (结构体成员保证**紧邻**, 静态数组不保证),
+//   让全部探针都读 0 并提前返回 False ⇒ zAddressOf 交 0 ⇒ 调用方 zError 后正常退出。
+//   这不是"把崩溃挪走": 探针的所有读地址都落在这片自有存储里, 不再触到无关数据。
+typedef struct {
+    vb6_IDispatchVtable vt;
+    void* pad[512];   /* 0x800 字节, 覆盖最大探针偏移 0x7A4 + 32 */
+} vb6_PaddedComVtable;
+static const vb6_PaddedComVtable g_ComObjectVtablePadded = {
+    {
+        ComObj_QueryInterface,
+        ComObj_AddRef,
+        ComObj_Release,
+        ComObj_GetTypeInfoCount,
+        ComObj_GetTypeInfo,
+        ComObj_GetIDsOfNames,
+        ComObj_Invoke,
+    },
+    { 0 },
 };
+#define g_ComObjectVtable g_ComObjectVtablePadded.vt
 
 // Create VB6 COM object
 vb6_ComObject* vb6_ComObject_Create(const vb6_CoClassDesc* desc, HRESULT* pFailHr) {

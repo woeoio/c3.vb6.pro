@@ -1553,6 +1553,9 @@ vb6_ComIface_Font vb6_UserControl_FontObj = { NULL, 8.25f, 0, 0, 0, 0, 400, 0 };
 int32_t vb6_UserControl_ScaleWidth  = 0;
 int32_t vb6_UserControl_ScaleHeight = 0;
 int32_t vb6_UserControl_ScaleMode   = 1;     // Twip (VB6 default)
+// ucSlider (Proyecto1.vbp): `UserControl.DrawWidth = nScale` —— VB6 的 DrawWidth 缺省 1,
+// 与 ScaleWidth 同族 (进程级宿主状态, 由 uc_push/pop 按实例存取).
+int32_t vb6_UserControl_DrawWidth   = 1;
 void*   vb6_UserControl_hDC          = NULL;
 void*   vb6_UserControl_ContainerHwnd = NULL;  // 账 #180: 句柄成员按指针宽度存
 int16_t vb6_UserControl_Enabled     = -1;

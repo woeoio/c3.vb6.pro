@@ -272,6 +272,16 @@
                                     valExpr = "&(" + clsSlotW + "){" + valExpr + "}";
                                 }
                             }
+                            /* 写方向 String 形参**默认 ByRef** (VB6 参数缺省 ByRef ⇒ C 形参 BSTR*),
+                               调用点必须交一枚自动存储期的 BSTR 槽。实测 ucSlider_2022
+                               Form1.frm:298 `LP1.Caption = ucSlider6.Value` 发成
+                               vb6_LabelPlus_prop_let_Caption(inst, vb6_CStrLong(...)) —— 把 BSTR
+                               值当 BSTR* 传, 被调方 `(*New_Caption)` 把首字符 (wchar_t) 解成指针
+                               再进 vb6_StringToByteArray 的 SysStringLen ⇒ OLEAUT32 AV
+                               0xC0000005 (启动即崩)。与上面工程类指针槽同模板: 复合字面量取址。 */
+                            if (!lastP091n.isByVal && lastP091n.type == Vb6Type::String) {
+                                valExpr = "&(BSTR){" + valExpr + "}";
+                            }
                         }
                         // Fix 158h: 属性 Let/Set 写方向的**入口参数** (Optional ByRef
                         // After 等前置参数) 缺失 → 生成的 prop_let_ 调用 C2198 参数太少
@@ -919,6 +929,14 @@
             emitExpr(*node.value);
             std::string valExpr = std::move(lastExpr_);
             std::string packFn = comPackExpr(*node.value);
+            // 与上面「Input 字段写」同一出口 (Fix 092m / 账 #260): 右值整枚是
+            // COM/typed-COM 成员读时必须先消费 COM 标记 —— 否则 lastExpr_ 只含
+            // 对象本体, 属性名整体丢失 = 编译通过但语义错, 且标记泄漏到下一条语句。
+            // 实测 ucSlider.ctl `Property Set Font`: `With UserControl.Font` 的
+            // `.Name = New_Font.Name` 被发成 `vb6_ComPackValue((*New_Font))` —
+            // UserControl.Font.Name 被写成对象指针, 随后 vb6_uc_fontLogFontImpl 的
+            // `wcslen(f->Name)` 崩溃 (0xC000041D)。
+            valExpr = comMarkerValueForWrite(packFn, valExpr);
             // Fix <vbeclipse> 2026-10-12: 同 `/* COM SetProp */` 那一支 —— 右值是
             // COM 调用结果时先拆堆 VARIANT* (见 comUnpackForPack)。
             valExpr = comUnpackForPack(packFn, valExpr);

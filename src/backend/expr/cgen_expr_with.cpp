@@ -397,6 +397,18 @@ void CCodeGen::visit(WithMemberExpr& node) {
                 }
                 return;
             }
+            // ucSlider (Proyecto1.vbp): `.pag` 上设计期工程内 UserControl 作 With 目标时,
+            // `Width`/`Height`/`Top`/`Left`/`Visible` … 在 VB6 是 **Extender(控件)属性**,
+            // 类实例里没有同名字段; 查 form_pseudo 读表并用 .pag 的宿主槽落地
+            // (曾发 `_vb6_with->Width` ⇒ C2039 "Width 不是 LabelPlus 的成员")。
+            if (!info.designerCtrlName.empty()) {
+                std::string readFnPw = getControlPropReadFn(info.ctrlType, node.memberName);
+                if (!readFnPw.empty()) {
+                    lastExpr_ = readFnPw + "(vb6_hwnd_" + info.designerCtrlName
+                              + ")  /* With pag ctrl .Property (Extender) */";
+                    return;
+                }
+            }
             // 未找到方法/属性 → 假设是数据字段: tempVar->member
             // (此时tempVar类型为 vb6_cls_<className>*, ->访问正确编译)
             // 账 #305 §B171 (第六十二刀) → §B172 (第六十三刀): 尾注由唯一出口 classFieldReadExpr
