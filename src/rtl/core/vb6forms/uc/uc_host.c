@@ -704,6 +704,22 @@ int32_t vb6_UC_IsHostHwnd(void* hwnd) {
     return vb6_uc_findByHwnd(hwnd) != NULL;
 }
 
+/* 账 (ucSwitch_2022 / ucSwitch8): 设计期 `Enabled = 0` 由 cgen 发成
+ * `vb6_SetControlEnabled` —— 那一枚只做 EnableWindow, 而 `UserControl.Enabled`
+ * 读的是**本实例记录** r->enabled (vb6_uc_push: vb6_UserControl_Enabled = r->enabled),
+ * 那一位从来没人写过, 恒 -1。于是绘制里 `If UserControl.Enabled = False Then
+ * BkColor = &HD6D6D6` 永远不成立: 开关确实点不动 (窗口禁了), off 却画成默认红
+ * (m_TrackColorOff = vbRed) 而不是禁用灰。
+ * 窗口 Enabled 与 UserControl.Enabled 必须由同一位主人一起改。 */
+void vb6_UC_SetHostEnabled(void* hwnd, int enabled) {
+    if (!hwnd) return;
+    vb6_UCRec* r = vb6_uc_findByHwnd(hwnd);
+    /* 无窗宿主 (Windowless=-1) 交回的是实例指针而不是 HWND; 只有**不是窗口**
+     * 时才按实例回查, 免得某个真实 HWND 的数值碰巧等于别的实例的指针。 */
+    if (!r && !IsWindow((HWND)hwnd)) r = vb6_uc_findByInstance(hwnd);
+    if (r) r->enabled = enabled ? -1 : 0;
+}
+
 // Fix <vbeclipse> rev18: UserControl **自有 Property 的按名桥** (晚绑定访问用)。
 // 见 vb6forms_controls.h 里 vb6_UcPropDesc 的说明。obj 可以是 UC 实例指针, 也可以是
 // 宿主 HWND (两种形态的调用点都有); thunk 一律拿**实例**调用 (desc->props[i].get/set 的
