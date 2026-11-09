@@ -23,8 +23,8 @@
 # 改后实测 (设计期 AutoRedraw + Collection ByRef 两刀): white=48052 bg240=5446
 #            dark=15607 darkRows=445 hl=2521 vivid=3559
 #
-# 口径: 只有**缺产物 / 位宽不符 / 缺 img 资产 / 桌面捕获为空图**才 SKIP;
-# "窗口起了但树区没画" 一律 FAIL (那就是本判据要红的东西).
+# 口径: 只有**缺产物 / 位宽不符 / 缺资产(img 夹具或 XML 源文件不在) / 桌面捕获为空图**才 SKIP;
+# "窗口起了但树区没画"、"夹具在而产物少资产(图片或 XML)" 一律 FAIL (那就是本判据要红的东西).
 
 # pwsh 7.6 (.NET 10) 把 System.Drawing 拆成多个程序集, 且 **Add-Type 引不住它**:
 # 显式 -ReferencedAssemblies 会覆盖默认引用集 (CS0234/CS1069: Thread/Collections/Bitmap
@@ -615,8 +615,47 @@ $peOff = [BitConverter]::ToInt32($peBytes, 0x3C)
 $machine = [BitConverter]::ToUInt16($peBytes, $peOff + 4)
 if ($machine -eq 0x8664 -and [IntPtr]::Size -eq 4) { Write-Output "SKIP 位宽不符 (64 位产物, 32 位宿主)"; exit 2 }
 
-# 缺资产: App.Path\img 不在 exe 目录时, 图标必然取不到 —— 那是环境缺件
-if (-not (Test-Path (Join-Path $wd "img"))) { Write-Output "SKIP 缺资产 ($wd 下没有 img 目录)"; exit 2 }
+# 资产前置闸: 比对前先对账 App.Path 下的**运行期数据文件集合** = img\ 图片 + 各 XML。
+# 为什么必须前置 (2026-11-10): 产物目录少了 15 张 avatar 时, 五窗 photo/avatar/dark
+# 全掉, 读数看上去像"产品侧渲染缺口", 白查了一轮; 同一天又踩到 XML: 只核图片时,
+# 产物缺 ejemplo.xml 也报 "asset=36/36 ok", 直到弹框才暴露。缺资产下的读数没有意义 ——
+# 缺就立刻红, 不做比对 (按**文件名集合**比, 不比像素)。
+#   夹具目录缺失  = 源资产不在 ⇒ SKIP(缺资产才许 SKIP)
+#   夹具在、产物少 = 构建拷贝漏了 ⇒ FAIL(资产在却失败判红)
+#
+# 数据文件清单来源 = 夹具源码里真实的 App.Path 读取点 (不凭记忆):
+#   Form1.frm:1128  xmlDoc.Load    App.Path & "\ejemplo.xml"           按钮 "Load from custom XML"
+#   Form3.frm:48    .LoadFromXML   App.Path & "\JerarquiaEmpresa.xml"  按钮 "Corporate Hierarchy"
+#   Form5.frm:63    .LoadFromXML   App.Path & "\menu.xml"              按钮 "Menu / Tools"
+# exportado.xml **不在此列**: 夹具里没有任何代码读它 (它是导出产物, 不是运行期输入)。
+$fxRoot = Join-Path (Split-Path -Parent $PSScriptRoot) "ucTreeView"
+if (-not (Test-Path $fxRoot)) { Write-Output "SKIP 缺资产 (夹具 $fxRoot 不存在)"; exit 2 }
+$fxImg = Join-Path $fxRoot "img"
+if (-not (Test-Path $fxImg)) { Write-Output "SKIP 缺资产 (夹具 $fxImg 不存在)"; exit 2 }
+$fxNames = @(Get-ChildItem $fxImg -File | Select-Object -ExpandProperty Name)
+$pdImg = Join-Path $wd "img"
+$pdNames = @()
+if (Test-Path $pdImg) { $pdNames = @(Get-ChildItem $pdImg -File | Select-Object -ExpandProperty Name) }
+$assetMissing = @($fxNames | Where-Object { $pdNames -notcontains $_ })
+if ($assetMissing.Count -gt 0) {
+    $missShow = ($assetMissing | Select-Object -First 8) -join ', '
+    if ($assetMissing.Count -gt 8) { $missShow += " ...(共 $($assetMissing.Count) 张)" }
+    Write-Output ("FAIL 产物资产缺失，请重跑构建拷贝 (img: 夹具 $($fxNames.Count) 张 / 产物 $($pdNames.Count) 张 / 缺 $($assetMissing.Count) 张: $missShow)")
+    exit 1
+}
+# 数据文件: 夹具里没有这一份 = 源资产不在 ⇒ SKIP; 夹具有而产物没有 ⇒ FAIL 并点名。
+$reqData = @("ejemplo.xml", "JerarquiaEmpresa.xml", "menu.xml")
+$fxDataMissing = @($reqData | Where-Object { -not (Test-Path (Join-Path $fxRoot $_)) })
+if ($fxDataMissing.Count -gt 0) {
+    Write-Output ("SKIP 缺资产 (夹具 tests\ucTreeView 里没有: " + ($fxDataMissing -join ', ') + ")")
+    exit 2
+}
+$dataMissing = @($reqData | Where-Object { -not (Test-Path (Join-Path $wd $_)) })
+if ($dataMissing.Count -gt 0) {
+    Write-Output ("FAIL 产物数据文件缺失，请重跑构建拷贝 (数据文件: 夹具 $($reqData.Count) 份 / 产物 $($reqData.Count - $dataMissing.Count) 份 / 缺: " + ($dataMissing -join ', ') + ")")
+    exit 1
+}
+$assetRead = "asset=$($pdNames.Count)/$($fxNames.Count) img + $($reqData.Count)/$($reqData.Count) data ok"
 
 if (-not $OutDir) { $OutDir = Join-Path $wd "uctreeview_px" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -1905,7 +1944,7 @@ else {
 # 交互判据 (缺陷 1/2/3/4) 的红项并入同一条 FAIL 通道, 不另开"软失败"
 if ($actBad.Count -gt 0) { $bad += ("交互: " + ($actBad -join "; ")) }
 
-$readout = "tree=${tw}x${th} white=$white bg240=$bg240 dark=$dark darkRows=$darkRows hl=$hl vivid=$vivid"
+$readout = "tree=${tw}x${th} $assetRead white=$white bg240=$bg240 dark=$dark darkRows=$darkRows hl=$hl vivid=$vivid"
 $readout += " selWhite=$selWhite selDark=$selDark selBlack=$selBlack hlH=${hlH}@${expHl} pitch=${pitch}@${expPitch} dpi=$expDpi"
 $readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
 $readout += " edFrameDark=$edFrameDark edTopDark=$edTopDark edEdge236=$edEdge236/$($editHwnds.Length) sb240=$([Math]::Round(100*$sbR240,1))% sbWhite=$([Math]::Round(100*$sbRWhite,1))% sbMid=$sbMidOk/$sbCount sbLeft=$sbLeftOk/$sbCount"
