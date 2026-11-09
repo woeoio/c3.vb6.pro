@@ -102,13 +102,55 @@ $ git diff --stat
 - 单文件 `--emit-c` 代价实测（`Modules\GDIPlus.bas`，243 KB）：**4.2 s / 63.4 MB**，stdout 0.3 MB，stderr 134 行**全部是 VB3001**（跨模块符号缺上下文导致的噪声，无真实缺口）。
 - 结论：按文件跑 `--syntax-only` 已无法产出用户要的五类分布（预计全工程都是 0 语法错）；单文件 `--emit-c` 又被跨模块 VB3001 噪声淹没。**要拿到控件属性/方法、类型、内置缺失这三类真实缺口，必须带工程上下文（`PhotoDemon.vbp`）跑一次 `--emit-c` 或真编译**，这是下一步需要拍板的口径。
 
-## 4. 下一步（待用户拍板）
+## 4. CI 探针：PhotoDemon x86 emit（分支 `probe/photodemon-emit`）
 
-1. **拍板口径**（三选一）：
-   - (A) 带工程上下文跑一次 `PhotoDemon.vbp --emit-c`（单进程；先测内存，异常立即停）→ 能产出控件属性/方法、类型、内置缺失三类真实缺口；
-   - (B) 继续按 5–10 份/批跑 `--syntax-only`（预计全工程 0 语法错，只能证明解析器已覆盖 PhotoDemon 的句式）；
-   - (C) 按文件跑 `--emit-c` 并过滤 VB3001 跨模块噪声（单文件代价约 4 s / 63 MB，但只能抓到文件内自洽的语义问题，产量低）。
-2. 任一进程内存异常（如 >500 MB 或耗时 >30 s）立即停下上报，不继续堆。
-3. 记录回归基线：现有测试套件结果 + GA 现状（全绿才算基线确认）。
-4. 之后按「影响面小、复用度高」逐类补，每类一提交、写回本文件。
-5. 全部扫完后按**根因**聚类出缺口清单（每类标影响面与修法难点），不按文件罗列。
+- 用户拍板：**整工程 emit 不在本地跑，改由 GitHub Actions 跑**，本地只取结果。`dev` 与 22 job 主链路未改动。
+- 源码入仓：`tests/photodemon/`，**643 文件 / 18.5 MB**（排除 `Support\` 支持工具与重复的 `Resources\Assets\PD_icons.RES`；保留 vbp 引用的 `Resources\PD_icons.RES`，用 `git add -f` 入库）。vbp 外部引用原本是 `..\..\Windows\SysWOW64\...` 相对路径，在 CI 无法解析（报 2 条 VB4001），已把夹具里的两条 `Reference=` 改成 `C:\Windows\SysWOW64\...` 绝对路径（仅夹具适配，不动编译器）。
+- workflow：`.github/workflows/pd_emit_probe.yml`，单 job（不拆矩阵），复用主链路的 VS 环境导出 + cmake/ninja 构建，然后 `C3.exe tests/photodemon/PhotoDemon.vbp --arch x86 --emit-c`，stdout/stderr 全量落盘并上传 artifact `photodemon-emit-logs`，job summary 输出按诊断码的归总计数。
+- 触发：`workflow_dispatch` 可用，但 GitHub 要求 workflow 已存在于默认分支；本文件只在探针分支，故另加**仅限本分支**的 push 触发（不挂进 ci.yml）。
+- **run 42581367618**：全部步骤绿，总耗时 **26m10s**；emit 本身 **1457.6 s（24m18s）**，stdout **49,057,097 字节**（生成的 C），stderr **4405 行**，**EXIT=0**。artifact：`photodemon-emit-logs`。
+
+### 4.1 诊断归总（run 42581367618）
+
+| 诊断码 | 级别 | 条数 | 原文样例 |
+| --- | --- | --- | --- |
+| VB3001 | warning | 3693 | `未声明的标识符: 'g_Language' (可能来自其他模块)` |
+| VB3003 | warning | 548 | `assignment: 无法将 Integer 隐式转换为 ?` |
+| VB3044 | warning | 19 | `Implements: interface 'ISubclass' not found` |
+| VB4001 | warning | 2 | `TypeLib reference path not found: ...\..\..\Windows\SysWOW64\shell32.dll` |
+| 非诊断行 | info | 143 | `C3: CoClass '<name>' identity: CLSID=...`（身份提示，不是错误） |
+
+- **error 0 条**：整工程 emit 已能跑完并产出 49 MB C 源码；缺口的形态是「warning + 类型退化为 `?`」，不是硬报错。
+
+### 4.2 按根因聚类（含最小复现）
+
+探针固定夹具：`.build\pd_probe\repro\`（`Probe.vbp` + `Entry.bas` + `IThing.cls` + `Impl.cls`，4 文件，单进程 <1 s），复现输出：
+
+```
+Impl.cls(16,1): warning VB3044: Implements: interface 'IThing' not found
+Entry.bas(12,5): warning VB3003: assignment: 无法将 Byte 隐式转换为 ?
+Entry.bas(17,5): warning VB3003: assignment: 无法将 Integer 隐式转换为 ?
+Entry.bas(26,5): warning VB3003: assignment: 无法将 ? 隐式转换为 Byte
+```
+
+| 编号 | 根因 | 影响面 | 证据 | 候选修法难点 |
+| --- | --- | --- | --- | --- |
+| **R1** | 跨模块 `Public` 全局变量不可见（模块级公共变量进不了项目符号表/或解析顺序不成立） | **最大**：3693 条（占全部诊断 87%）；top 标识符 `g_Language` 1266、`workingDIB` 691、`curDIBValues` 508、`g_WindowManager` 319、`g_Themer` 226；涉及 90+ 文件（Toolbar_ToolSelect.frm 94、Interface.bas 90、Processor.bas 87） | vbp 已含 `Module=Public_Variables; Modules\PublicVars.bas`，其中 `Public g_Language As pdTranslate`；`workingDIB` 在 `EffectPrep.bas:29` | 需在项目级把各 `.bas` 的 Public 变量登记进全局作用域并让后续模块解析时可见；难点是解析顺序与「同名遮蔽」，还要避免把真未声明标识符一并静音 |
+| **R2** | 函数返回数组类型 `As Byte()` 丢失，调用表达式类型退化为 `?` | 中：`cZipArchive.cls` 中 `pvToOemString(...) As Byte()` 的调用处成批告警（Byte→? / ?→Byte / Integer→?） | 探针 `MakeArr() As Byte()` 赋值给函数名报 Byte→?；`b = MakeArr()` 报 ?→Byte | 类型系统需为数组返回类型保留元素类型（VB6 数组赋值为整体拷贝）；难点是数组表达式在赋值/参数传递/ReDim 三条路径上都要保持元素类型，且不能影响现有数组 ABI |
+| **R3** | `ByRef` 数组参数的元素类型丢失（`dst(i)` 类型为 `?`），`ReDim` 后亦然 | 中：`Palettes.bas` 154 条（`dstDitherTable() As Byte`、`srcPalette() As RGBQuad`）、`DibSupport.bas` 等 | 探针 `FillArr(ByRef dst() As Byte): ReDim dst(0 To 3): dst(0) = 7` 报 Integer→? | 需让数组形参符号携带「元素类型 + 维度」，下标表达式按元素类型定类型；难点是与 R2 共用数组类型表示，改动会波及数组下标/UBound/指针取址等既有站点 |
+| **R4** | 空方法体的「接口类」无法被 `Implements` 解析 | 小：19 条（clsMenuImage、pdClipboard、pdEditBoxW、pdFlyout、pdFocusDetector、pdInputKeyboard 等） | `ISubclass.cls` 存在且 vbp 已登记 `Class=ISubclass; Classes\ISubclass.cls`；探针 `IThing.cls`（`Public Function ... End Function` 空体）+ `Impl.cls`（`Implements IThing`）稳定复现 | 需把「只有签名、无实现体」的类识别为接口类型并允许 `Implements` 绑定；难点是接口成员表与实现类方法名前缀（`IThing_DoWork`）的绑定规则，以及不影响普通空体函数（VB6 里空体函数在普通类里也是合法的） |
+| **R5** | vbp 用相对路径引用 shell32/stdole2，CI 无法解析 | 小（夹具问题，非编译器）：2 条 | `TypeLib reference path not found: D:\a\c3test\c3test\tests\photodemon\..\..\Windows\SysWOW64\shell32.dll` | 已把夹具两条 `Reference=` 改为 `C:\Windows\SysWOW64\...` 绝对路径，待下一次 CI 复跑确认 VB4001 归零 |
+
+### 4.3 优先级建议（供拍板）
+
+1. **R3/R2 合并成一类做**（数组类型表示）：二者同源，修好数组元素/返回类型后能一次清掉 VB3003 的大头，且不影响 22 job 判据的概率较低。
+2. **R4**（Implements 空体接口）：面小、边界清晰，适合先做一个独立闭环。
+3. **R1**（跨模块 Public 变量）：条数最大，但改项目符号表构建顺序，回归面最广，建议放在数组类型之后、并有 22 job 全绿兜底再做。
+4. R5 已修夹具，复跑确认即可。
+
+## 5. 下一步
+
+1. 复跑 CI 验证 R5 归零（改夹具 vbp 后自动触发）；顺手把 artifact 里 `pd_emit.err` 分类结果回填本节。
+2. 记录回归基线：现有测试套件结果 + GA 22 job 现状（全绿才算基线确认）。
+3. 按 4.3 顺序逐类补，每类一提交（含最小复现用例），并写回本文件。
+4. 之后的目标是 `--arch x86` 真编译（emit 之后跑 cl/link），届时再看控件属性/方法缺失类缺口。
