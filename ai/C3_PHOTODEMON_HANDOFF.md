@@ -148,9 +148,56 @@ Entry.bas(26,5): warning VB3003: assignment: 无法将 ? 隐式转换为 Byte
 3. **R1**（跨模块 Public 变量）：条数最大，但改项目符号表构建顺序，回归面最广，建议放在数组类型之后、并有 22 job 全绿兜底再做。
 4. R5 已修夹具，复跑确认即可。
 
-## 5. 下一步
+## 5. R5 复跑（run 42584803572）
 
-1. 复跑 CI 验证 R5 归零（改夹具 vbp 后自动触发）；顺手把 artifact 里 `pd_emit.err` 分类结果回填本节。
-2. 记录回归基线：现有测试套件结果 + GA 22 job 现状（全绿才算基线确认）。
-3. 按 4.3 顺序逐类补，每类一提交（含最小复现用例），并写回本文件。
+- 夹具 vbp 两条 `Reference=` 改绝对路径后自动触发：全部步骤绿，stderr 4405 → **4403 行**，`VB4001` **0 条**（R5 关闭）。
+- 该 run 同时作为 R2/R3 修复前的基线：`VB3001` 3693、`VB3003` **548**、`VB3044` 19。
+
+## 6. R2 + R3 收口：数组类型（`--arch x86`）
+
+### 6.1 根因（改前钉死）
+
+`Vb6Type::Array` 是**位标记**（`元素类型 | Array`），但"数组性"历史上记在两处，互相不认：
+
+| 声明形态 | 符号类型 | `Symbol::isArray` |
+| --- | --- | --- |
+| `Dim a() As Byte`（局部/模块动态数组） | `Byte`（只有元素类型） | true |
+| `Function F() As Byte()`（返回数组） | `Byte|Array` | 未设置 |
+| `Sub S(ByRef dst() As Byte)`（数组形参） | `Byte|Array` | 未设置 |
+
+两处消费点各只认一半，于是同一个数组在两个表达式里显示出不同的类型：
+
+1. `semantic_analyzer_expr.cpp` 标识符取值直接给 `sym->type` ⇒ 局部数组读出来是**裸元素类型**（R2：`MakeArr = a` 报 `Byte → ?`）；
+2. 同一文件数组下标分支只判 `sym->isArray` ⇒ 形参数组下标不脱 Array 位，返回**数组类型本身**（R3：`dst(0) = 7` 报 `Integer → ?`）。
+
+`typeToString` 不认 Array 位，复合值一律打印成 `?` —— 这就是 548 条 VB3003 里 499 条带 `?` 的来源。
+
+### 6.2 修法（一处归一，两行落地）
+
+- `src/semantics/type_system.hpp`：新增三个纯位运算小工具 `isArrayType` / `arrayElemType` / `makeArrayType`，只服务语义层的表达式类型。
+- `src/semantics/semantic_analyzer_expr.cpp`：
+  - 标识符取值：`sym->isArray` 时把 Array 位补进**表达式类型**（符号类型不动，发码层照旧按符号读）；
+  - 数组下标：判据从 `sym->isArray` 放宽为 `sym->isArray || isArrayType(sym->type)`，元素类型统一走 `arrayElemType`。
+- **未改** `canImplicitConvert`：两侧都归一成 `元素|Array` 后，既有的"相同类型即相容"已足够；额外放宽会掩盖真错。
+
+### 6.3 探针与判据
+
+- 夹具 `tests/pd_arrtype/p01_array_elem.bas`（1279 B）：函数返回数组、整体数组赋值、ByRef 数组形参下标、UDT 数组元素四种形态。
+- 已接进 `tests/run_tests.ps1` 的 `pd_arrtype_element_type`（`all`/`syntax` 段）：
+  - 反向：stderr 不许出现 `VB3003`；
+  - 正向：发码签名必须仍是 `vb6_SafeArray1D* vb6_MakeArr(void);` 与 `void vb6_FillArr(vb6_SafeArray1D** dst);`（防"靠退化发码消告警"）。
+- 双向读数：修前 **EXIT=0、3 条 VB3003**（`Byte → ?`、`Integer → ?`、`? → Byte`）→ 修后 **EXIT=0、0 条**，签名不变。
+- 回归：`tests/run_tests.ps1 -Category syntax` **PASS=183 FAIL=0 SKIP=0**（含本用例）。
+
+### 6.4 构建安全参数（用户硬规则）
+
+- 一律 `CMAKE_BUILD_PARALLEL_LEVEL=2`，不依赖 ninja 默认并行。
+- 本次改动含 `type_system.hpp`（被广泛包含）⇒ 全量重编 77 目标，峰值并发按 2 封顶；随后复验为 `ninja: no work to do`（空闲内存 12.3 GB / 16.1 GB）。
+- 以后改这类头文件要**攒批一次验证**，不反复重编。
+
+## 7. 下一步
+
+1. 记录回归基线：现有测试套件结果 + GA 22 job 现状（全绿才算基线确认）。
+2. 按 4.3 顺序继续：R4（Implements 空体接口）→ R1（跨模块 Public 变量）。
+3. 每次改动后复跑 CI emit 探针，观察 `VB3001` / `VB3003` / `VB3044` 计数变化，作为影响面证据。
 4. 之后的目标是 `--arch x86` 真编译（emit 之后跑 cl/link），届时再看控件属性/方法缺失类缺口。

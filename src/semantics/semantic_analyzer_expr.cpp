@@ -132,6 +132,11 @@ void SemanticAnalyzer::visit(IdentifierExpr& node) {
                                    node.name));
         }
         lastExprType_ = sym->type;
+        // R2/R3 (PhotoDemon): 数组性在两处各记一半 —— 局部/模块动态数组记在 Symbol::isArray
+        // (类型只有元素类型), 形参 `dst() As Byte` / 函数返回 `As Byte()` 记在类型 Array 位上。
+        // 表达式类型统一把 Array 位补齐, 让"数组整体赋值"两侧都是数组类型 (否则一侧是裸元素
+        // 类型, 相容性判不成, 诊断打印成 `?`)。符号本身的类型不动 —— 发码层按符号读。
+        if (sym->isArray) lastExprType_ = TypeSystem::makeArrayType(lastExprType_);
     } else {
         // 未找到标识符
         // <vbeclipse>: 但"工程级已经有这个名字"不算未找到 —— 标准模块的 Public 过程
@@ -423,11 +428,11 @@ void SemanticAnalyzer::visit(IndexOrCallExpr& node) {
                 // Sub作为表达式调用 (VB6允许, 返回Variant)
                 calleeType = Vb6Type::Variant;
                 checkCallArgs(sym, node);
-            } else if (sym->isArray) {
-                // 数组索引: 元素类型
-                uint16_t baseType = static_cast<uint16_t>(sym->type) &
-                                    ~static_cast<uint16_t>(Vb6Type::Array);
-                calleeType = static_cast<Vb6Type>(baseType);
+            } else if (sym->isArray || TypeSystem::isArrayType(sym->type)) {
+                // 数组索引: 元素类型。数组性可能记在符号上 (局部/模块数组, 类型只有元素类型),
+                // 也可能只在类型 Array 位上 (ByRef 形参 `dst() As Byte`) —— R3 (PhotoDemon):
+                // 改前只认前者, 形参下标因此退回**数组类型本身**, 每处都报一条假 VB3003。
+                calleeType = TypeSystem::arrayElemType(sym->type);
             } else {
                 calleeType = sym->type;
             }

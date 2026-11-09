@@ -12238,6 +12238,13 @@ if ($Category -in @("all", "syntax")) {
         "vb6_PropertyPage_Changed = (-1);") @("VB3001")
     Test-CodegenNote "dochost_bare_typo_still_reported" @("$Tests\dochost\dhTypo.pag") @(
         "'Changd'") @("'Changed'", "vb6_PropertyPage_Changed")
+    # PhotoDemon R2/R3 探针: 数组类型的"数组性"以前记在三处不同地方 ——
+    # 局部动态数组只记符号 isArray、函数返回 `As Byte()` 与 ByRef 形参 `dst() As Byte`
+    # 记在类型 Array 位上。两类表达式相遇时赋值相容性判成"元素类型 vs 数组"(打印成 `?`)，
+    # 于是真代码里出现成批假告警 (PhotoDemon 全工程 548 条 VB3003 里 499 条带 `?`)。
+    # 夹具钉的是: 数组整体赋值(函数返回/整体拷贝)与数组下标取元素都不许再报 VB3003。
+    Test-CodegenNote "pd_arrtype_element_type" @("$Tests\pd_arrtype\p01_array_elem.bas") @(
+        "vb6_SafeArray1D* vb6_MakeArr(void);", "void vb6_FillArr(vb6_SafeArray1D** dst);") @("VB3003")
     # 账 #184 的形状面: 被 AddressOf 取址的过程 → Private 的发 static 桩、Public 的发外链桩,
     # 桩体逐字转调本体 (参数个数/宽度/顺序与本体一致, 只有约定不同); AddressOf 站点取桩地址;
     # 本体**保持 cdecl** (直接调用那条路与 RTL 的 cdecl 登记面都不受牵连)。

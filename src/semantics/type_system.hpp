@@ -26,6 +26,24 @@ public:
     // Vb6Type转字符串
     static const char* typeToString(Vb6Type t);
 
+    // ---- 数组类型 (R2/R3, PhotoDemon) ----
+    // 数组在类型里是 `元素类型 | Array 位` 的复合值。历史上"数组性"有两套记法:
+    // 局部/模块动态数组把数组性记在 Symbol::isArray 上 (Symbol::type 只有元素类型),
+    // 而 ByRef 形参 `dst() As Byte` 与函数返回 `As Byte()` 把 Array 位记在类型里。
+    // 三个小工具只做位运算, 供语义层把两套记法归一; 发码层的 `param.type & Array`
+    // 判据不受影响 (符号里的类型保持原样, 只在**表达式类型**上补齐)。
+    static bool isArrayType(Vb6Type t) {
+        return (static_cast<uint16_t>(t) & static_cast<uint16_t>(Vb6Type::Array)) != 0;
+    }
+    static Vb6Type arrayElemType(Vb6Type t) {
+        return static_cast<Vb6Type>(static_cast<uint16_t>(t) &
+                                    ~static_cast<uint16_t>(Vb6Type::Array));
+    }
+    static Vb6Type makeArrayType(Vb6Type t) {
+        return static_cast<Vb6Type>(static_cast<uint16_t>(t) |
+                                    static_cast<uint16_t>(Vb6Type::Array));
+    }
+
     // 类型是否为数值型
     static bool isNumeric(Vb6Type t);
 
