@@ -311,6 +311,33 @@ void CCodeGen::visit(WithMemberExpr& node) {
                 }
             }
         }
+        // 账 #305 (R4 收口): 同一问的**新式**那一臂 —— 临时量在 knownIvrefVars_ 里时,
+        // `.Has` 是薄指针槽读, 不是 IDispatch。只认读档 (裸名 Function / `get_`), 形参
+        // 必须为空; 不合就落下面 COM 兜底 (不掩盖)。
+        // 左值语境 (suppressVirtDispatch_，见 cgen_setlet_set_prop 置空那站) 不换发:
+        // 那里要的是「目标 + COM 标记」，由写读者接手，不是把 getter 当左值。
+        if (!asCallCallee_ && !suppressVirtDispatch_) {
+            const std::string ifaceIVW = slotIvrefViewName(Symbol::toLower(tempVar));
+            if (!ifaceIVW.empty()) {
+                const IfaceView* ivW = ivLookupIface(ifaceIVW);
+                if (ivW) {
+                    const std::string keyW = ivSlotKeyForMember(*ivW, node.memberName);
+                    const bool isReadW = !keyW.empty()
+                        && (keyW == Symbol::toLower(node.memberName) || keyW.compare(0, 4, "get_") == 0);
+                    if (isReadW) {
+                        for (const IfaceSlotView& sW : ivW->slots) {
+                            if (sW.key != keyW) continue;
+                            if (!ivParamDeclsRef(sW.sig).empty()) break;
+                            if (ivSlotRetType(sW.sig) == "void") break;
+                            lastExpr_ = ivrefVtableCall(ifaceIVW, sW.key, tempVar,
+                                                        std::vector<std::string>());
+                            isComMarker_ = false;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // .Property → 设置COM标记，让下游(IndexOrCallExpr/AssignmentStmt)处理
         comObjExpr_ = tempVar;
         comMemberName_ = node.memberName;

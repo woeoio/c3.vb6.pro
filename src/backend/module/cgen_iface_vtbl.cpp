@@ -1156,6 +1156,56 @@ std::string CCodeGen::ivrefVtableCall(const std::string& ifaceName, const std::s
     return call;
 }
 
+// 账 #305 (R4 收口): 新式视图的**属性写**那一发 —— `legacyViewSetterCallExpr` 的新式对应物。
+// R4 让可创建的空体接口类也进 ivreg_ 之后，同一枚 `Dim x As IK489` 的 C 值从值结构体
+// (`vb6_iface_<I>`，有 .vtbl/.obj) 变成薄指针 (`vb6_ivref_<I>*`，只有 ->vt)。站点若仍按
+// legacy 那位问，必然答空 ⇒ 落回 `vb6_<I>_prop_let_<M>(x, v)`，首参形参是 `vb6_cls_<I>*`
+// 而 x 是 `vb6_ivref_<I>*` ⇒ cl C2440（k489 实测）。
+// 三问都问既有主人，不另立判据：
+//   ① 接收者在名册里是新式视图吗 (slotIvrefViewName);
+//   ② 那一席是**写**那一档吗 (ifaceSlotKeyNamed + ifacePropSlotPrefix，读档 get_ 不参与);
+//   ③ 形参恰好 = 前缀 + 1 且 retType=void —— 不合就交空串，站点保留自己那一发。
+// 形状仍交唯一作者 ivrefVtableCall (哨兵①钉着 `->vt->` 只许一处发射)。
+std::string CCodeGen::ivrefViewSetterCallExpr(const std::string& objExpr, const std::string& memberName,
+                                              const std::string& valExpr, ProcKind setKind,
+                                              const std::vector<std::string>& prefixArgs,
+                                              Expr* valueNode) {
+    if (objExpr.empty() || valExpr.empty()) return std::string();
+    const std::string ifaceName = slotIvrefViewName(ifaceLower(objExpr));
+    if (ifaceName.empty()) return std::string();
+    const IfaceView* v = ivLookupIface(ifaceName);
+    if (!v) return std::string();
+    const std::string want = ifaceSlotKeyNamed(ifaceLower(memberName), ASTNodeKind::PropertyDecl, setKind);
+    if (want.empty()) return std::string();
+    for (const IfaceSlotView& s : v->slots) {
+        if (s.key != want) continue;
+        if (ivSlotRetType(s.sig) != "void") return std::string();
+        std::vector<std::unique_ptr<ParameterDecl>>* ps =
+            s.sig ? ivParamsOf(*const_cast<Decl*>(s.sig)) : nullptr;
+        const size_t n = ps ? ps->size() : 0;
+        if (n != prefixArgs.size() + 1) return std::string();
+        std::string val = valExpr;
+        // 值那一头与槽形参同型吗: 槽是 BSTR 而站点交来 Variant/数值时按 RTL 的 CStr 规则换算
+        // (与 cgen_assign_prop_write 里 Fix 091n 那一站同口径)。
+        if (valueNode && !ps->empty() && makeParamCType(ps->back().get(), false) == "BSTR") {
+            if (isVariantSlot(val, valueNode)) {
+                val = wrapToBSTR(val, *valueNode);
+            } else {
+                const Vb6Type vt = inferExprType(*valueNode);
+                if (vt == Vb6Type::Double || vt == Vb6Type::Single || vt == Vb6Type::Date
+                    || vt == Vb6Type::Currency || vt == Vb6Type::Long || vt == Vb6Type::Integer
+                    || vt == Vb6Type::Boolean || vt == Vb6Type::Byte) {
+                    val = wrapToBSTR(val, *valueNode);
+                }
+            }
+        }
+        std::vector<std::string> callArgs = prefixArgs;
+        callArgs.push_back(val);
+        return ivrefVtableCall(ifaceName, s.key, objExpr, callArgs);
+    }
+    return std::string();
+}
+
 // 账 #305 §B221: B06a 那条视图→视图的 QueryInterface 发射挪成一位主人 —— 原来这段
 // 内联在 cgen_setlet_set_prop.inc 的按名臂里，而 RHS 是「返回工程内接口的调用」那一形
 // (#448 的形①) 也要同一条腿；留在站点里就会长出第二个答案。

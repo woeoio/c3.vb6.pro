@@ -331,6 +331,13 @@
                             ? std::string()
                             : legacyViewSetterCallExpr(objExpr, maExpr.memberName, valExpr, wantLet091n,
                                                        ProcKind::PropertyLet);
+                        // 账 #305 (R4 收口): legacy 那位答空时问新式那一臂 —— R4 之后同一枚
+                        // 接口变量是薄指针 (vb6_ivref_<I>*)，legacy 名册永远答空，不补这一问就
+                        // 落回 `vb6_<I>_prop_let_<M>(x, v)` (C2440)。
+                        if (vSet091n.empty()) {
+                            vSet091n = ivrefViewSetterCallExpr(objExpr, maExpr.memberName, valExpr,
+                                                               ProcKind::PropertyLet, {}, node.value.get());
+                        }
                         if (!vSet091n.empty()) {
                             c_.emitLine(vSet091n + ";  /* Property Let (视图直槽) */");
                         } else {
@@ -592,10 +599,16 @@
             // 不合（非视图 / 那一席没有 / Set 档 / 类型不同型 / 打包器无单一对应）就保留
             // 下面那一发原样 = 仍红，不掩盖。
             Vb6Type tier181 = Vb6Type::Empty;
-            const std::string vWith181 = comVbTypeForPackFn(packFn, tier181)
+            std::string vWith181 = comVbTypeForPackFn(packFn, tier181)
                 ? legacyViewSetterCallExpr(tempVar, wmExpr.memberName, valExpr, mapType(tier181),
                                                   ProcKind::PropertyLet)
                 : std::string();
+            // 账 #305 (R4 收口): With 载体的新式那一档 —— 临时量已按视图登记进
+            // knownIvrefVars_ (cgen_with.cpp)，这里问同一张名册。
+            if (vWith181.empty()) {
+                vWith181 = ivrefViewSetterCallExpr(tempVar, wmExpr.memberName, valExpr,
+                                                   ProcKind::PropertyLet, {}, node.value.get());
+            }
             if (!vWith181.empty()) {
                 c_.emitLine(vWith181 + ";  /* Property Let (视图直槽, With) */");
                 return;

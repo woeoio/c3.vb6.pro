@@ -943,3 +943,87 @@ lastExpr_ = "vb6_" + cIdent(fnCanon);   // 修前
 - **修前**（把该分支临时换回旧写法重建）：`--emit-c` 出现 `vb6_vb6_Int`；真编 `error LNK2019: 无法解析的外部符号 vb6_vb6_Int，函数 vb6_Main 中引用了该符号`，exit=1。
 - **修后**：`--emit-c` 出 `vb6_Int(1.7)` / `vb6_Int((-1.7))` / `vb6_Fix((-1.7))`，无 `vb6_vb6_`；真编 exit=0，运行读数 `VI-POS=1 VI-NEG=-2 VF-POS=1 VF-NEG=-1 BI-NEG=-2 BF-NEG=-1 VA-ABS=3 VA-PASS`，与 16.2 的真 VB6 逐行相同。
 - 夹具 [test_vbaint_qual.bas](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/test_vbaint_qual.bas) + 三条 cell（`test_vbaint_qual` 真跑 / `vbaint_emitc_rtl_names` 形状 / `vbaint_no_double_prefix` 缺席）。
+
+## 17. 冻结与固化（2026-11-10）：k489/k2947 的 canonical 四形收口
+
+### 17.1 固化前工作区（原样）
+
+`git status --short`：
+
+```
+ M src/backend/cgen_util_classtype.cpp
+ M src/backend/decl/cgen_decl_prop.cpp
+ M src/backend/detail/expr/cgen_expr_member_class_fallback.inc
+ M src/backend/detail/expr/cgen_expr_member_class_module.inc
+ M src/backend/detail/expr/cgen_expr_member_voidptr_com.inc
+ M src/backend/detail/stmt/cgen_assign_prop_write.inc
+ M src/backend/detail/stmt/cgen_assign_stmt_special.inc
+ M src/backend/detail/stmt/cgen_setlet_set_prop.inc
+ M src/backend/detail/util/cgen_helpers.inc
+ M src/backend/expr/cgen_expr_member.cpp
+ M src/backend/expr/cgen_expr_with.cpp
+ M src/backend/module/cgen_iface_vtbl.cpp
+ M src/backend/stmt/cgen_with.cpp
+ M tests/run_tests.ps1
+?? .zcodeignore
+?? Form1.frm
+```
+
+`git diff --stat`：14 files changed, 377 insertions(+), 55 deletions(-)。
+
+- `Form1.frm` 是 **0 字节**的编译残留（2026-11-09 21:28），已删除。
+- `.zcodeignore` 是 2026-10-31 的本地工具文件，早于本刀、与本刀无关，保留未跟踪、不入库。
+
+### 17.2 逐文件判定
+
+| 文件 | 判定 | 依据 |
+| --- | --- | --- |
+| cgen_expr_member.cpp | **完整** | 入口拦「视图接收者的零参读」是 j/k 的根治刀；k2947 真编真跑 16/16 |
+| cgen_util_classtype.cpp | **完整** | `ifaceViewOfExpr` 补 IndexOrCall(callee=MA) + WithMemberExpr 两形；k 行依赖后者 |
+| cgen_decl_prop.cpp | **完整** | 带参桩转发 `ivForwardArgs`；k2947-i `get_item(x, 3)` 依赖 |
+| cgen_with.cpp | **完整** | `With MakeI()` / `With h.OwnView` 的薄指针临时量；k2947-m/n |
+| cgen_expr_with.cpp | **完整** | With 内 `.Owner` / `.Has` canonical 读写；k2947-m/n/w0 |
+| cgen_assign_prop_write.inc | **完整** | Let 与 With Let 的新式二臂；k489 |
+| cgen_assign_stmt_special.inc | **完整** | 带下标属性写 `x.Item(3)=v` + `knownIvrefVars_` 认作变量；k2947-i / k489 |
+| cgen_setlet_set_prop.inc | **完整** | Set / Set Nothing / With Set 三站新式臂；k2947-o/b/p |
+| cgen_helpers.inc / cgen_iface_vtbl.cpp | **完整** | `ivrefViewSetterCallExpr` 声明与实现（写档专用，不复用读档键序） |
+| tests/run_tests.ps1 | **完整** | k489 + k2947 两套 oracle 换 canonical；16+9 正针、15+6 负针机检 0 缺 0 多 |
+
+**整刀回退（半截/死分支）**：
+
+| 文件 | 为什么退回 |
+| --- | --- |
+| cgen_expr_member_class_fallback.inc | 只有一条 `DBG2947-FB` 调试打印，该分支实测从未命中 |
+| cgen_expr_member_class_module.inc | ivRead210 扩读档是**试改**：`DBG2947` 打印证明它被更早的 `memSym` 闸挡住、从未执行；根治改在入口拦，此扩属死码 |
+| cgen_expr_member_voidptr_com.inc | 同上：`DBG2947-VP` 一条未出现，承载 j 的路径不在该分支；保留只会误导下一位 |
+
+调试插桩（`DBG2947` / `-S` / `b` / `c` / `-FB` / `-VP`）已从保留的两个文件里删净。
+
+### 17.3 根因与修法（k2947-j / k2947-k）
+
+- **现象**：`h.OwnView.Has`（无括号）与 `With Me: .OwnView.Has` 运行值恒 0；带括号的 `h.OwnView.Has()` 正常。
+- **根因**：接收者是薄指针视图时，这两形落进「类实例成员」那站，按 `resolveClassMemberCall(接口名, 成员)` 发 `vb6_IK2947_Has((void*)<视图>)`。接口模块函数的首形参契约是**实例**，`vb6_iv_thin_of_*` 每枚实现者都试不中 ⇒ 恒 0。
+- **修法**：在 [cgen_expr_member.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/expr/cgen_expr_member.cpp) 的 visit 入口先拦：`!asCallCallee_ && !suppressVirtDispatch_` + `ifaceViewOfExpr(接收者)` 非空 + 槽是**读**档（裸名或 `get_`）且零参非 void ⇒ 接收者求值一次（裸标识符直接复用文本；复合表达式落 `__ivrecvN`，因为视图属性自带 AddRef）⇒ 形状仍交唯一作者 `ivrefVtableCall`。`ifaceViewOfExpr` 补 `WithMemberExpr` 一臂（`With Me` 的基类在 With 栈上）。
+- **修前**：`K2947-j=0 K2947-k=0`（其余 14 行正确）；**修后**：`K2947-j=1 K2947-k=1`，16/16 与 oracle 逐字一致。
+- **回归冒烟**：k489 / k165 / k172 / k174 / k175 / k177 / k178 全部真编真跑通过；k489 的 `vb6_BSTR_Assign(&s, x->vt->get_label(x));` 与 `n = x->vt->get_num(x);` 两针特意保住（裸标识符接收者不落临时量）。
+
+### 17.4 CI 主链路 22 job（run `42651946234`，head `99d94762`）
+
+| # | job | 状态 | 分类 |
+| --- | --- | --- | --- |
+| 1 | Build C3.exe | success | — |
+| 2 | Baseline (M1) | success | — |
+| 3 | Emit manifest (shape oracle) | failure | **记账**（10 份新输入未登记 + 21 份存量哈希变化） |
+| 4 | Tests (bas #1) | failure | 产品/夹具（含 k2947 旧 oracle 与 j/k 值） |
+| 5 | Tests (bas #2) | failure | 产品/夹具 |
+| 6 | Tests (smoke) | success | — |
+| 7 | Tests (syntax) | success | — |
+| 8 | Tests (asm) | success | — |
+| 9 | Tests (compile #1) | failure | **记账**（`[STATIC]`：builtin_opt_defaults / manifest_coverage / iface_view_authority） |
+| 10 | Tests (compile #2) | failure | **记账**（`[STATIC]`：legacy_view_arg_owners / box_temp_reclaim / class_refcount_authority） |
+| 11-20 | Tests (vbp #1 #2 #3 #4 #5 #6 #7 #8 #11 #12) | failure | 产品/夹具（k489/k166/iface_wrap/BalloonTooltips/iface_multi 一族） |
+| 21-22 | Tests (vbp #9 #10) | success | — |
+
+- **7 success / 15 failure**，失败集与 `c0d57af4` 逐字一致 ⇒ 上轮 5 个解析器/loopKind 提交**零新增红点**；`smoke` / `syntax` / `asm` / `Baseline` 全绿 ⇒ 最底层路径未带崩。
+- **记账清单（不修、留账）**：`Emit manifest` 1 枚；`compile #1/#2` 共 6 条 `[STATIC]`。
+- **尚未被任何 CI 验证的提交**：`d4a25a1c`（`[skip ci]`，仅文档）、`574f0029`、`30a099e3`、`3ebb656c`、以及本刀提交 —— run `42651946234` 的 head 停在 `99d94762`。本刀未手工触发 `workflow_dispatch`（按用户口径：文档/注释类不空跑；本刀是 src 改动，应由下一次 dev push 正常触发）。

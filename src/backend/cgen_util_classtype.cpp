@@ -359,6 +359,35 @@ std::string CCodeGen::ifaceViewOfExpr(const ASTNode& expr) {
                 return fs221->variableTypeName;
             }
         }
+        // 账 #305 (R4 收口): 接收者是**类成员属性**的那一形 (`h.OwnView`，解析器把零实参属性
+        // 读也铸成 IndexOrCallExpr)。按接收者的类问成员返回类型, 只有当返回类型是 canonical
+        // 视图时才认 (与上面形①③同一条判据: ivrefCType 非空)。此前这一形落到
+        // inferClassTypeOfExpr 的类兜底, 答成宿主类 (实测 n=[H2947]) ⇒ `.Has` 按类实例发。
+        if (call221.callee && call221.callee->kind == ASTNodeKind::MemberAccessExpr) {
+            const auto& maC221 = static_cast<const MemberAccessExpr&>(*call221.callee);
+            if (maC221.object) {
+                const std::string baseC221 = inferClassTypeOfExpr(*maC221.object);
+                if (!baseC221.empty()) {
+                    const std::string retC221 =
+                        getClassMethodReturnType(baseC221, maC221.memberName);
+                    if (!retC221.empty() && !ivrefCType(retC221).empty()) return retC221;
+                }
+            }
+        }
+    }
+    if (expr.kind == ASTNodeKind::WithMemberExpr) {
+        // 账 #305 (R4 收口): `With <类实例>: .View.Has` 里 `.View` 是 WithMemberExpr
+        // (无 object, 基类在 With 栈上)。成员返回 canonical 视图时认这一形 ——
+        // 此前落到 inferClassTypeOfExpr 的 With 类兜底 (答成宿主类 H2947) ⇒ `.Has`
+        // 按类实例发 `vb6_<I>_Has((void*)<视图>)`, 恒 0 (k2947-k 实测)。
+        if (!withObjectInfoStack_.empty()) {
+            const WithObjInfo& wiW = withObjectInfoStack_.back();
+            if (wiW.kind == WithObjKind::ClassInstance && !wiW.className.empty()) {
+                const std::string retW = getClassMethodReturnType(
+                    wiW.className, static_cast<const WithMemberExpr&>(expr).memberName);
+                if (!retW.empty() && !ivrefCType(retW).empty()) return retW;
+            }
+        }
     }
     std::string n = inferClassTypeOfExpr(expr);
     if (n.empty()) return std::string();

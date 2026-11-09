@@ -3,6 +3,41 @@
 // 内容 = 原文件第 12~405 行，逐行未改。
 
     if (!node.target || !node.value) return;
+    // 账 #305 (R4 收口): 新式视图上的**带下标属性写** —— `x.Item(3) = v`。
+    // 目标形 = IndexOrCallExpr(callee = MemberAccessExpr(对象为裸标识符))。通用路把目标
+    // 当表达式发 ⇒ ivSlotKeyForMember 先问裸名、再问 `get_`，于是写成
+    // `x->vt->get_item(x, 3) = ...` = 把 getter 当左值 (k2947 实测 cl C2106)。
+    // 这里只问写那一档 (put_/putref_) 且形参数恰好对上才改道，否则原样下传。
+    if (node.target->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& icWr = static_cast<IndexOrCallExpr&>(*node.target);
+        if (icWr.callee && icWr.callee->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& maWr = static_cast<MemberAccessExpr&>(*icWr.callee);
+            if (maWr.object && maWr.object->kind == ASTNodeKind::IdentifierExpr) {
+                auto& oidWr = static_cast<IdentifierExpr&>(*maWr.object);
+                const std::string objWr = cIdent(oidWr.name);
+                if (!slotIvrefViewName(Symbol::toLower(objWr)).empty()) {
+                    bool argsOkWr = true;
+                    std::vector<std::string> idxWr;
+                    for (auto& aWr : icWr.positional) {
+                        if (!aWr) { argsOkWr = false; break; }
+                        emitExpr(*aWr);
+                        idxWr.push_back(std::move(lastExpr_));
+                    }
+                    if (argsOkWr) {
+                        emitExpr(*node.value);
+                        std::string valWr = std::move(lastExpr_);
+                        const std::string callWr = ivrefViewSetterCallExpr(
+                            objWr, maWr.memberName, valWr, ProcKind::PropertyLet, idxWr,
+                            node.value.get());
+                        if (!callWr.empty()) {
+                            c_.emitLine(callWr + ";  /* view property put (indexed) */");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // 账 #305 第三百三十三刀: 对象变量默认属性 Let (GUISample frmPropertyGrid:60
     // `Item = Item + 6`, Item 是 Dim As PropertyGridItem 的局部对象变量, 无 Set)。
     // VB6 语义: 两端都走 DISPID 0 默认属性 —— Item.<Def> = Item.<Def> + 6。
@@ -530,6 +565,10 @@
             if (!isVarName && knownObjectVars_.count(objLower)) isVarName = true;
             if (!isVarName && knownTypedComVars_.count(objLower)) isVarName = true;
             if (!isVarName && knownIfaceVars_.count(objLower)) isVarName = true;
+            // 账 #305 (R4 收口): 新式接口视图 (vb6_ivref_<I>*) 与 legacy 视图是同一句
+            // 「这枚裸名是对象、不是模块名」。此前只认 legacy 那张名册 ⇒ `x.Label = v`
+            // 落 Module.var 回退发 `vb6_x_Label` (k489 实测 C2065 ×2)。
+            if (!isVarName && knownIvrefVars_.count(objLower)) isVarName = true;
             // 自类型过程作赋值目标 (`RibbonBar.Minimized = ...` / `RibbonBar.FontHeight = n`,
             // frmMain:426/434/1042 — `Public Function RibbonBar() As RibbonBar` 过程名=
             // 返回的 typelib 类名)。先调过程得 IDispatch, 属性按 COM SetProp 写。

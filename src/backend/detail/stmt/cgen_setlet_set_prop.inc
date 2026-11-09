@@ -100,6 +100,16 @@
                     comMemberName_.clear();
                     return;
                 }
+                // 账 #305 (R4 收口): 同一问的新式那一臂 (薄指针 + putref_)。
+                const std::string vSetNothingR4 = ivrefViewSetterCallExpr(
+                    comObjExpr_, comMemberName_, "NULL", ProcKind::PropertySet, {},
+                    node.value.get());
+                if (!vSetNothingR4.empty()) {
+                    c_.emitLine(vSetNothingR4 + ";  /* Property Set Nothing (视图直槽) */");
+                    comObjExpr_.clear();
+                    comMemberName_.clear();
+                    return;
+                }
                 c_.emitLine("vb6_ComSetRef(" + comObjExpr_ + ", L\"" + comMemberName_ + "\", NULL);  /* COM SetRef Nothing */");
                 comObjExpr_.clear();
                 comMemberName_.clear();
@@ -542,8 +552,14 @@
                 // 视图是值结构体 `vb6_iface_<I>`, 拼出来的 `vb6_<I>_prop_set_<m>(视图, …)`
                 // 首形参是 `vb6_cls_<I>*` ⇒ C2440。不合(非视图/没那一席/类型不同型)交空串,
                 // 下面那一发原样 = 不掩盖。
-                const std::string _vSetView185 = legacyViewSetterCallExpr(
+                std::string _vSetView185 = legacyViewSetterCallExpr(
                     _objE, _ma.memberName, _arg2, "void*", ProcKind::PropertySet);
+                // 账 #305 (R4 收口): legacy 那位答空时问新式那一臂 (薄指针 + putref_)。
+                if (_vSetView185.empty()) {
+                    _vSetView185 = ivrefViewSetterCallExpr(_objE, _ma.memberName, _arg2,
+                                                           ProcKind::PropertySet, {},
+                                                           node.value.get());
+                }
                 if (!_vSetView185.empty()) {
                     c_.emitLine(_vSetView185 + ";  /* Set Property (视图直槽) */");
                     return;
@@ -642,6 +658,15 @@
         if (!vSetView.empty()) {
             c_.emitLine(vSetView + ";  /* Property Set (视图直槽) */");
             return;
+        }
+        // 账 #305 (R4 收口): With 载体是新式视图时同一问 (临时量已登记 knownIvrefVars_)。
+        {
+            const std::string vSetViewR4 = ivrefViewSetterCallExpr(
+                objExpr, memberName, value, ProcKind::PropertySet, {}, node.value.get());
+            if (!vSetViewR4.empty()) {
+                c_.emitLine(vSetViewR4 + ";  /* Property Set (视图直槽) */");
+                return;
+            }
         }
         c_.emitLine("vb6_ComSetRef(" + objExpr + ", L\"" + memberName + "\", " + value + ");  /* COM SetRef */");
         return;

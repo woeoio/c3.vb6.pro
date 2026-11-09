@@ -297,7 +297,7 @@
     void emitIfaceMemberStub(const FunctionDecl& node, const std::string& sig, bool returnsValue);
     void emitIfaceMemberStub(const PropertyDecl& node, const std::string& sig, bool returnsValue);
     void emitIfaceStubBody(const std::string& sig, const std::string& retType,
-                           const std::string& slotKey, bool takesArgs);
+                           const std::string& slotKey, Decl* d);
 
     // 生成类工厂函数 (New/Destroy)
     void emitClassFactory(Module& module);
@@ -474,6 +474,13 @@
     std::string slotIvrefViewName(const std::string& nameLower);
     std::string ivrefViewGetterReadExpr(const std::string& objExpr, const std::string& memberName,
                                          const std::string& lateCall);
+    // 账 #305 (R4 收口): 新式视图的**属性写** —— `legacyViewSetterCallExpr` 的新式对应物。
+    // 名册问 slotIvrefViewName, 槽档问 ifaceSlotKeyNamed (put_/putref_)，形状交 ivrefVtableCall。
+    // 形参恰好 = prefixArgs + 1 且 retType=void 才换路；不合 ⇒ 空串，站点保留自己那一发。
+    std::string ivrefViewSetterCallExpr(const std::string& objExpr, const std::string& memberName,
+                                        const std::string& valExpr, ProcKind setKind,
+                                        const std::vector<std::string>& prefixArgs = {},
+                                        Expr* valueNode = nullptr);
     std::string ivrefVtableCall(const std::string& ifaceName, const std::string& member,
                                 const std::string& recv,
                                 const std::vector<std::string>& args);

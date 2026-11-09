@@ -4983,26 +4983,27 @@ if ($Category -in @("all", "run", "bas")) {
     $setViewNeedles = @("K2947-a=1", "K2947-o=False", "K2947-b=0", "K2947-p=True", "K2947-i=3:a", "K2947-w=False", "K2947-w0=True", "K2947-f=1", "K2947-g=1", "K2947-h=1", "K2947-j=1", "K2947-k=1", "K2947-l=False", "K2947-m=1", "K2947-n=1", "K2947-DONE")
     Add-BasTest "k2947_set_view" "$Tests\k2947_setview\K2947.vbp" $setViewNeedles
     Add-BasTest "k2947_set_view_x86" "$Tests\k2947_setview\K2947.vbp" $setViewNeedles -Arch "x86"
+    # 正针已换 canonical 视图 (ivtbl 槽表 + ivref 薄指针 + iimpl 实现表):
+    # `x.Vtbl->M(x.obj, …)` 那族 legacy 形是 R4 之前的产物, 保留它们等于把回归钉在旧路上。
+    # 末两针 (j/k) 钉的是「裸读属性 (无括号) 也走视图槽」—— 此前发
+    # `vb6_IK2947_Has((void*)<视图>)` (接口模块函数首形参是**实例**), 运行值恒 0。
     Test-EmitcShape "k2947_set_view_shape" @("$Tests\k2947_setview\K2947.vbp") @(
-        'x.vtbl->Owner_putref(x.obj, (vb6_cls_O2947_New()));',
-        'x.vtbl->Owner_putref(x.obj, NULL);',
-        'x.vtbl->Item_put(x.obj, 3, vb6_BSTR_FromStr(L"a"));',
-        'vb6_BSTR_Assign(&s, x.vtbl->Item(x.obj, 3));',
-        'o = x.vtbl->Owner(x.obj);',
-        'o = _vb6_with_0.vtbl->Owner(_vb6_with_0.obj);',
-        'vb6_iface_IK2947 vb6_ret_MakeI = {0};',
-        'vb6_ret_MakeI = t;',
-        'vb6_iface_IK2947 vb6_ret_OwnView = {0};',
-        'vb6_ret_OwnView = vb6_iface_IK2947_wrap_H2947(me);',
-        'static inline int32_t vb6_iface_IK2947_call_Has(vb6_iface_IK2947 _v)',
-        'vb6_iface_IK2947 __vbvrecv',
-        'vb6_iface_IK2947_call_Has(__vbvrecv',
-        'vb6_iface_IK2947 __vbvread',
-        'vb6_iface_IK2947_call_Has(__vbvread',
-        'vb6_cls_H2947* _vb6_with_',
-        'vb6_H2947_prop_get_OwnView(_vb6_with_',
-        'vb6_iface_IK2947 _vb6_with_',
-        'vb6_iface_IK2947_call_Has(_vb6_with_'
+        'void (__stdcall *putref_owner)(vb6_ivref_IK2947* self, void* o);',
+        'BSTR (__stdcall *get_item)(vb6_ivref_IK2947* self, int32_t i);',
+        'vb6_iimpl_H2947_IK2947_putref_owner,',
+        'vb6_iimpl_H2947_IK2947_get_item',
+        'x->vt->putref_owner(x, (vb6_cls_O2947_New()));',
+        'x->vt->putref_owner(x, NULL);',
+        'x->vt->put_item(x, 3, vb6_BSTR_FromStr(L"a"));',
+        'vb6_BSTR_Assign(&s, x->vt->get_item(x, 3));',
+        'o = _vb6_with_0->vt->get_owner(_vb6_with_0);',
+        'vb6_ivref_IK2947* vb6_ret_OwnView = 0;',
+        'vb6_ret_OwnView = ((me) ? &(me)->__iv_IK2947 : NULL);',
+        'vb6_ivref_IK2947* _vb6_with_1 = vb6_mdl2947_MakeI()',
+        'vb6_ivref_IK2947* _vb6_with_2 = vb6_H2947_prop_get_OwnView(h)',
+        'vb6_ret_ViaMe = __ivrecv',
+        'vb6_ivref_IK2947* __ivrecv',
+        '->vt->has(__ivrecv'
     )
     Test-EmitcAbsent "k2947_set_view_lesion" @("$Tests\k2947_setview\K2947.vbp") @(
         'prop_set_Owner(x,',
@@ -5010,14 +5011,16 @@ if ($Category -in @("all", "run", "bas")) {
         'x.vtbl->Item(x.obj, 3) = ',
         'prop_let_Item(x,',
         'vb6_ComGetObjectProp(x, L"Owner")',
-        'vb6_ret_MakeI = 0;',
-        'vb6_ret_OwnView = 0;',
+        'vb6_iface_IK2947 vb6_ret_MakeI',
+        'vb6_iface_IK2947 vb6_ret_OwnView',
         'vb6_ret_OwnView = me;',
         'vb6_ret_MakeI = (vb6_cls_H2947_New());',
         'vb6_IK2947_Has((void*)vb6_H2947_prop_get_OwnView(h))',
         'vb6_ComGetObjectProp(_vb6_with_',
         '(void*)vb6_mdl2947_MakeI()',
-        'vb6_ComGetStringProp(_vb6_with_'
+        'vb6_ComGetStringProp(_vb6_with_',
+        'vb6_iface_IK2947_call_Has',
+        'x.vtbl->'
     )
     Test-EmitcShape "let_variant_slot_shape" @("$Tests\test_let_variant_slot.bas") @(
         'gv = vb6_VariantString(vb6_BSTR_FromStr(L"abc"));',
@@ -9434,23 +9437,28 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k489_slot_dir_let_first' "$Tests\k489_slot_dir\K489.vbp" $k489Expected
     Test-Vbp 'k489_slot_dir_let_first_x86' "$Tests\k489_slot_dir\K489.vbp" $k489Expected -Arch "x86"
     Test-EmitcShape "k489_slot_dir_shape" @("$Tests\k489_slot_dir\K489.vbp") @(
-        'void (*Label_put)(void* me, BSTR v);',
-        'BSTR (*Label)(void* me);',
-        '.Label_put = (void (*)(void*, BSTR v))vb6_K489Holder_prop_let_IK489_Label,',
-        '.Label = (BSTR (*)(void*))vb6_K489Holder_prop_get_IK489_Label,',
-        'vb6_BSTR_Assign(&s, x.vtbl->Label(x.obj));',
-        'n = x.vtbl->Num(x.obj);',
-        'x.vtbl->Label_put(x.obj, vb6_BSTR_FromStr(L"abc"));',
-        'x.vtbl->Label_put(x.obj, vb6_BSTR_FromStr(L"zzz"));',
-        '_vb6_with_0.vtbl->Label_put(_vb6_with_0.obj, vb6_BSTR_FromStr(L"www"));')
+        'void (__stdcall *put_label)(vb6_ivref_IK489* self, BSTR v);',
+        'BSTR (__stdcall *get_label)(vb6_ivref_IK489* self);',
+        'vb6_iimpl_K489Holder_IK489_put_label,',
+        'vb6_iimpl_K489Holder_IK489_get_label,',
+        'vb6_BSTR_Assign(&s, x->vt->get_label(x));',
+        'n = x->vt->get_num(x);',
+        'x->vt->put_label(x, vb6_BSTR_FromStr(L"abc"));',
+        'x->vt->put_label(x, vb6_BSTR_FromStr(L"zzz"));',
+        '_vb6_with_0->vt->put_label(_vb6_with_0, vb6_BSTR_FromStr(L"www"));')
     # 三条负针逐字节抄自**改前那台的真实产物**: 前两条 = Let-first 探针 .build/k2739_emit2.txt
     # (表里那一席裸名 + 属性读落回 helper); 第三条 = 写侧改前那台的真产物 .build/k2778_emit.txt
     # (站点按「接收者的类名」现场拼出口, 把整枚视图交给接口模块自己的 `vb6_cls_IK489*` 形参)。
+    # 第四条 = R4 让 IK489 走 canonical 之后、写侧还没接上那一刀的真产物 (mdlK489.c:21/22,
+    # `x.Label = v` 落 Module.var 回退 ⇒ cl C2065)。legacy 的 `.vtbl` 形状也一并钉住: R4 之后
+    # 同一枚接口变量是薄指针, 谁把 `.vtbl->Label_put(...obj...)` 写回来就是退了档。
     Test-EmitcAbsent "k489_slot_dir_bare_slot_gone" @("$Tests\k489_slot_dir\K489.vbp") @(
         'void (*Label)(void* me, BSTR v);',
         'vb6_BSTR_Assign(&s, vb6_ComGetStringProp(x, L"Label"));',
         'vb6_IK489_prop_let_Label(x, vb6_BSTR_FromStr(L"abc"));  /* Property Let */',
-        'vb6_ComSetProp(_vb6_with_0, L"Label", vb6_ComPackBSTR(vb6_BSTR_FromStr(L"www")));  /* With COM SetProp */')
+        'vb6_ComSetProp(_vb6_with_0, L"Label", vb6_ComPackBSTR(vb6_BSTR_FromStr(L"www")));  /* With COM SetProp */',
+        'vb6_x_Label = vb6_BSTR_FromStr(L"abc");  /* Module.Label */',
+        'x.vtbl->Label_put(x.obj, vb6_BSTR_FromStr(L"abc"));')
     # <vbeclipse> 回归夹子 (b174_numstrarg, 账 #305 §B174 第六十五刀): 数值实参交进内在函数的
     # BSTR 形参。修前 InStr 那一路把 int32_t / double / int16_t 裸交给 wchar_t* —— cl 只给 C4047
     # (在 -W3 之外) ⇒ **编得过**, 而 BASE 那一台在别处 (Mid$(1.1,...) 那类) 拿的是 C2440, 本机

@@ -58,7 +58,15 @@ void CCodeGen::visit(WithStmt& node) {
                     // 临时量是**值拷贝**, 体内成员交给视图那几位主人 (临时量自身登记进名册)。
                     viewIface177 = clsSym->name;
                     withInfo.kind = WithObjKind::COMObject;
-                    tempType = "vb6_iface_" + cIdent(clsSym->name);
+                    // 账 #305 (R4 收口): 同一枚接口若在 canonical 视图表 (ivreg_) 里, 值就是
+                    // 薄指针 —— 照 legacy 的 `vb6_iface_<I>` 声明会拿到一枚**未定义**的类型名
+                    // (k2947 的 `With MakeI()` / `With h.OwnView` 实测 C2065)。
+                    if (ivLookupIface(clsSym->name)) {
+                        viewIvrefR4 = true;
+                        tempType = "vb6_ivref_" + cIdent(clsSym->name) + "*";
+                    } else {
+                        tempType = "vb6_iface_" + cIdent(clsSym->name);
+                    }
                 }
             }
         }

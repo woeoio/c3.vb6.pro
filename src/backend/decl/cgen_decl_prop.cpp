@@ -539,9 +539,9 @@ void CCodeGen::emitIfaceMemberStub(const SubDecl&, const std::string& sig, bool 
 void CCodeGen::emitIfaceMemberStub(const FunctionDecl& fn, const std::string& sig, bool) {
     const std::string ret = fn.returnType ? mapTypeRef(fn.returnType.get()) : "vb6_VARIANT";
     // Function 的槽键就是裸成员名 (小写), 不带 get_/put_ 前缀 (见 interfaces_registry.hpp
-    // 的槽键规范)。有形参则不分派 —— 见 emitIfaceStubBody 里的理由。
-    const bool takesArgs = !fn.params.empty();
-    emitIfaceStubBody(sig, ret, ifaceLower(fn.name), takesArgs);
+    // 的槽键规范)。有形参也照样分派 —— 实参按 ivForwardArgs 逐个重建 (账 #305 R4 收口:
+    // k2947 的 `get_item(h_)` 少传下标 = cl C2198)。
+    emitIfaceStubBody(sig, ret, ifaceLower(fn.name), const_cast<FunctionDecl*>(&fn));
 }
 
 void CCodeGen::emitIfaceMemberStub(const PropertyDecl& pn, const std::string& sig, bool) {
@@ -549,15 +549,12 @@ void CCodeGen::emitIfaceMemberStub(const PropertyDecl& pn, const std::string& si
                         : pn.propKind == ProcKind::PropertyLet ? "put_"
                                                                 : "putref_";
     const std::string slot = std::string(prefix) + ifaceLower(pn.name);
-    // Property Get 的形参在 VB6 里只能是索引 (Variant/变参), 本次不分派;
-    // Let/Set 恒有一个 New_Value 形参, 同样不分派 (落零值/空操作, 与修复前一致)。
-    const bool takesArgs = pn.propKind != ProcKind::PropertyGet;
     if (pn.propKind != ProcKind::PropertyGet) {  // Let/Set 无返回值 → 分派后空操作
-        emitIfaceStubBody(sig, "void", slot, takesArgs);
+        emitIfaceStubBody(sig, "void", slot, const_cast<PropertyDecl*>(&pn));
         return;
     }
     const std::string ret = pn.returnType ? mapTypeRef(pn.returnType.get()) : "vb6_VARIANT";
-    emitIfaceStubBody(sig, ret, slot, takesArgs);
+    emitIfaceStubBody(sig, ret, slot, const_cast<PropertyDecl*>(&pn));
 }
 
 // 返回类型零值: 标量/指针统一 `return 0;` (C 里 0 是合法空指针常量);
@@ -574,7 +571,7 @@ void CCodeGen::emitIfaceMemberStub(const PropertyDecl& pn, const std::string& si
 // 三个守卫缺一不可: thin_of_* 对非本类实例返回 NULL; 槽位可能是 NULL 占位 (契约
 // 缺失时发码留的 NULL, 见 cgen_iface_vtbl.cpp 的 slotFns.push_back("NULL"))。
 void CCodeGen::emitIfaceStubBody(const std::string& sig, const std::string& retType,
-                                 const std::string& slotKey, bool takesArgs) {
+                                 const std::string& slotKey, Decl* d) {
     const bool isVoid = (retType == "void");
     const bool isStruct = (retType == "vb6_VARIANT" || retType.compare(0, 7, "struct ") == 0);
     const std::string ifaceId = cIdent(moduleName_);
@@ -585,13 +582,12 @@ void CCodeGen::emitIfaceStubBody(const std::string& sig, const std::string& retT
     // 实现类名单由 driver 预扫描注入 (接口小写名 → 全部实现类)。空 = 该接口没有
     // 实现类 (或表未注入) → 直接落零值, 与本次修复前的行为完全一致。
     //
-    // 只对**无参**槽分派: 槽签名除 self 外还有形参时, 转发要按槽声明逐个重建实参
-    // (ByRef 指针、Optional 的 _has_ 尾标记), 那是 ivForwardArgs 的活。本次针对的
-    // 是 Property Get (IScheme 全是这类 —— 实测 m_Scheme.BackColor /
-    // .EditorAreaBackColor / .FrameColor 都读成 0), 它们都无参; 有参槽仍走零值,
-    // 与修复前一致, 不引入新的错误转发。
-    const std::vector<std::string> impls =
-        takesArgs ? std::vector<std::string>() : allImplementationClasses(moduleName_);
+    // 有参槽也分派: 实参按 ivForwardArgs 逐个重建 —— 它与 ivParamDecls 同源 (前者
+    // 给槽表声明、后者给桩体形参)，顺序/ByRef/Optional 的 `_has_` 尾标记严格一致。
+    // 账 #305 (R4 收口): k2947 的 `vb6_IK2947_prop_get_Item(me, i)` 桩此前只发
+    // `get_item(h_)`，少传下标 ⇒ cl C2198。
+    const std::vector<std::string> impls = allImplementationClasses(moduleName_);
+    const std::string fwd = d ? ivForwardArgs(*d) : std::string();
     if (!slotKey.empty() && !impls.empty()) {
         // 槽键 → C 标识符 (槽表字段名, 如 get_backcolor)。契约里没有这一席就不分派:
         // 编出来的 vt->get_xxx 名字不存在, 会在链接期炸。
@@ -612,10 +608,10 @@ void CCodeGen::emitIfaceStubBody(const std::string& sig, const std::string& retT
             }
             c_.emitLine("        if (h_ && h_->vt && h_->vt->" + field + ") {");
             if (isVoid) {
-                c_.emitLine("            h_->vt->" + field + "(h_);");
+                c_.emitLine("            h_->vt->" + field + "(h_" + fwd + ");");
                 c_.emitLine("            return;");
             } else {
-                c_.emitLine("            return h_->vt->" + field + "(h_);");
+                c_.emitLine("            return h_->vt->" + field + "(h_" + fwd + ");");
             }
             c_.emitLine("        }");
             c_.emitLine("    }");
