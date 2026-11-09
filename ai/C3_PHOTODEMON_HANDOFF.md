@@ -542,11 +542,29 @@ Text1(隐藏)    -16|w700|cs0|q0|Segoe UI           (与 UC 宿主窗口逐字�
 - **C3 现状复核（`.build\C3.exe`，最小探针）**：`Math.Sin/Log/Abs/Cos/Round/Sqr` 六种调用 `rc=0`、无 finding（`84a74b69` 生效）。两处小残差（未改代码）：① 白名单里的 `fix`/`int` 会走到 `vb6_vb6_Fix` / `vb6_vb6_Int`，`LNK2019` 失败而不是像 VB6 那样给「未找到方法或数据成员」；② `Dim m As VBA.Math` 在 C3 下能过，真 VB6 报「不支持自动化类型」。两条都不影响 PhotoDemon 的 18 处。
 - 修法（与已有 `VBA.<成员>` 折叠同一条通路，零新语法）：
   1. [semantic_analyzer_util.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_util.cpp#L789-L794)：`isDocumentHostObject` 认 `math`，**仅限定位**（与 `vba` 同款；值位的裸 `Math` 仍报 VB3001）。
-  2. [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc#L186-L194)：`Math.<成员>` 并入 `VBA.<成员>` 那一支，成员白名单 = `abs/atn/cos/exp/fix/int/log/rnd/round/sgn/sin/sqr/tan`（拼错的成员不会因前缀是 `Math` 就变合法）。
+  2. [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc#L186-L194)：`Math.<成员>` 并入 `VBA.<成员>` 那一支，成员白名单 = `abs/atn/cos/exp/fix/int/log/rnd/round/sgn/sin/sqr/tan`（拼错的成员不会因前缀是 `Math` 就变合法；其中 `fix`/`int` 已在 §10.4.1 收紧删除）。
 - 读数：修前 6 条 VB3001（`Math`）+ `vb6_Math_Log/Abs/Cos/Sin/Sqr/Round`（RTL 无此符号，真编译必 C2065）；修后 stderr 0 行，产物 `vb6_Log(1.0)` / `vb6_Abs((-4.5))` / `vb6_Cos(0.0)` / `vb6_Sin(0.0)` / `vb6_Sqr(9.0)` / `vb6_Round(2.6000000000000001, 0)`。
 - 运行读数（真编译）：`VM-LOG=0` / `VM-ABS=4.5` / `VM-COS=1` / `VM-SIN=0` / `VM-SQR=3` / `VM-ROUND=3`。
 - 断言：`test_vbamath`（Compile+Run 7 行读数）+ `vbamath_emitc_folds_to_builtins` 形状钉 + `vbamath_no_module_symbol` 反向钉；负控 `vbamath_bare_is_undeclared`（值位 `Set m = Math` 必须仍报 VB3001）。
 - 记账：两个新夹具按同一口径延后登记 emit-manifest。
+
+#### 10.4.1 收紧两处「过宽」（2026-11-09 夜）
+
+- 变更（都是**收紧**，方向与上面的「补能力」相反）：
+  1. 新增 [vba_math.hpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/common/vba_math.hpp)：`VBA.Math` 真实成员 11 个 + VBA 标准模块 8 个，两张名单只此一处；发码层 [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc#L202-L209) 改问它，并删掉 `fix` / `int`。
+  2. [semantic_analyzer_expr.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_expr.cpp#L203-L216)：`Math.<成员>` 非真成员 → `VB3045`「未找到方法或数据成员」（语义层，错误级，不发 C）。接收者同名符号/模块在场时不判。
+  3. [semantic_analyzer_typeref.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_typeref.cpp#L36-L51)：`As` 位置出现 VBA 标准模块 → `VB3046`「Visual Basic 中不支持自动化类型」。限定写法（`VBA.Math`）一律判；裸名（`Math`）仅当工程无同名类型时判。**没有**禁整个 `VBA.*` 前缀：`VBA.ErrObject` / `VBA.Collection` 等类名照旧。
+- 真 VB6 oracle（本轮补测）：`Dim m As Math` 与 `Dim m As VBA.Math` 同报「Visual Basic 中不支持自动化类型」；`VBA.Fix(1.7)` / `VBA.Int(1.7)` **合法**（`/make` 生成 exe）；工程里建 `Math.cls` 被 VB6 拒绝（「不能加载」，与库名冲突）⇒ 不存在用户类同名 Math 的合法场景。
+- A/B 读数（同一夹具，仅换 C3 产物；`--emit-c`）：
+  - `Math.Fix(1.7)` + `Math.Int(1.7)`：修前 `rc=0`、无 VB3045、C 里出现 `vb6_vb6_Int`；修后 `rc=1`、VB3045 ×2、C 里无 `vb6_vb6_Fix` / `vb6_vb6_Int`。
+  - `Dim m As VBA.Math` + `Dim m As Math`：修前 `rc=0`、照常出 C；修后 `rc=1`、VB3046 ×2、不出 C。
+  - `--syntax-only` 同报 VB3045 / VB3046 ⇒ 锁定在语义阶段，不是发码期报错。
+  - 正向对照：`test_vbamath.bas` `rc=0`，`vb6_Log(1.0)` 仍在、`vb6_Math_` 仍无，7 行运行读数不变；同夹具新增 `Dim xForm As Form` / `Dim xErr As VBA.ErrObject` 也通过。
+- 引用点核查：全仓 `vb6_vb6_` 只出现在注释里（无真实符号）；删名单后 `Math.Fix` / `Math.Int` 不再进入发码。
+- 断言（`tests/run_tests.ps1`）：`vbamath_fixint_semantic_stage`（阶段+错误码）、`vbamath_fixint_not_found`（错误码 + 两处文案 + 反向钉 `vb6_vb6_Fix`/`vb6_vb6_Int`）、`vbamath_typeuse_semantic_stage`、`vbamath_typeuse_module_as_type`。`Test-CompileFail` 扩了可选 `-Absent`、`-Needles` 收数组（既有调用点兼容）。
+- **新残差（未修，方向相反 = 欠）**：`VBA.Int(1.7)` 仍发 `vb6_vb6_Int` → `LNK2019`；真 VB6 接受该写法（exe 生成），`VBA.Fix` 则正常发 `vb6_Fix`。根因未定位（`Int` 的符号解析与 `Fix` 不对称），单独记账，不在本刀范围。
+- 记录：新的 `Test-SyntaxFail` 未新增（复用既有 [run_tests.ps1](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/run_tests.ps1#L3803-L3818) 那枚）；`check_test_helper_integrity`（H1..H7）与 `check_diag_id_exclusivity` 均 OK。
+
 
 ### 10.5 过程级 `Dim/Const`（4 条）：`Do` 体声明在 `Loop While` 条件里
 

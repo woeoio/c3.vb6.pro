@@ -3580,17 +3580,20 @@ function Invoke-CodegenProj {
 }
 
 function Test-CompileFail {
-    param([string]$Name, [array]$Sources, [string]$Needle)
+    param([string]$Name, [array]$Sources, [array]$Needles, [array]$Absent = @())
     $script:total++
     Write-Host -NoNewline "  [COMPILE-FAIL] $Name ... "
     $text = Invoke-CodegenProj $Sources
-    if ($script:codegenProjExit -ne 0 -and $text.Contains($Needle)) {
+    $bad = @($Needles | Where-Object { -not $text.Contains($_) })
+    $hit = @($Absent | Where-Object { $text.Contains($_) })
+    if ($script:codegenProjExit -ne 0 -and $bad.Count -eq 0 -and $hit.Count -eq 0) {
         $script:pass++
         Write-Host "PASS" -ForegroundColor Green
     } else {
         $script:fail++
         Write-Host "FAIL" -ForegroundColor Red
-        Write-Host "  expected failing codegen containing: $Needle" -ForegroundColor DarkGray
+        Write-Host ("  expected failing codegen containing: " + ($Needles -join ' | ') +
+                    "  unexpected: " + ($hit -join ' | ')) -ForegroundColor DarkGray
         if ($Verbose) { Write-Host $text }
     }
 }
@@ -6154,6 +6157,24 @@ if ($Category -in @("all", "run", "bas")) {
     # 负控: 值位的裸 `Math` 不是合法名字，必须照旧报 VB3001（只放限定符位）。
     Test-CodegenNote "vbamath_bare_is_undeclared" @("$Tests\test_vbamath_bad.bas") @(
         "未声明的标识符: 'Math'")
+    # 收紧①（PhotoDemon Math 定案 §10.4）: Fix/Int 是全局内建函数，不是 VBA.Math 的成员。
+    # 真 VB6 在这里是**编译期**「未找到方法或数据成员」。判据钉阶段 + 错误码 + 不发码：
+    #   ① --syntax-only 就报 VB3045（退码非 0）—— 证明诊断落在语义阶段，不是发码期；
+    #   ② --emit-c 同样报 VB3045（错误级），两处成员各一条；
+    #   ③ --emit-c 的输出里不得出现修前的坏形状 vb6_vb6_Fix / vb6_vb6_Int（否则就是发了 C
+    #      再去链接期 LNK2019 收场）。
+    Test-SyntaxFail "vbamath_fixint_semantic_stage" "$Tests\test_vbamath_members_bad.bas" "VB3045"
+    Test-CompileFail "vbamath_fixint_not_found" @("$Tests\test_vbamath_members_bad.bas") @(
+        "VB3045", "未找到方法或数据成员: 'Math.Fix'", "未找到方法或数据成员: 'Math.Int'") @(
+        "vb6_vb6_Fix", "vb6_vb6_Int")
+    # 收紧②（同一定案）: 标准模块不能当类型用。真 VB6 对 `Dim m As VBA.Math` / `Dim m As Math`
+    # 报「Visual Basic 中不支持自动化类型」，修前 C3 静默当 Variant 编过。
+    # 正向对照（test_vbamath.bas）: `Dim x As Form` 与 `Dim e As VBA.ErrObject` 必须照旧通过
+    # —— 判据是"标准模块"，不是整个 VBA.* 前缀。
+    Test-SyntaxFail "vbamath_typeuse_semantic_stage" "$Tests\test_vbamath_typeuse_bad.bas" "VB3046"
+    Test-CompileFail "vbamath_typeuse_module_as_type" @("$Tests\test_vbamath_typeuse_bad.bas") @(
+        "VB3046", "Visual Basic 中不支持自动化类型: 'VBA.Math'",
+        "Visual Basic 中不支持自动化类型: 'Math'") @()
     # 过程级作用域：Do 体里的 Dim/Const 可以在 `Loop While` 条件里用（VB6 的 Dim/Const
     # 是整个过程级的）。修前语义层先分析条件再分析体 ⇒ 假 VB3001。PhotoDemon
     # pdXCF.cls / UserControl_Support.bas 的 4 条都是这一形。

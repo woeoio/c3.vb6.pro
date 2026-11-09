@@ -1,6 +1,7 @@
 #include "backend/cgen.hpp"
 #include "common/canvas_drawing.hpp"  // 账 #232①: 画布动词表 (Printer 成员那一路问它要名字)
 #include "common/host_pseudo.hpp"     // Fix 255: precheck 里限定形式的宿主集合 (PropertyPage.Controls.X) 问那张表
+#include "common/vba_math.hpp"        // VBA.Math 成员名单的唯一出口 (语义层同一张表)
 #include <algorithm>
 #include <cctype>
 #include <iostream>

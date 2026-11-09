@@ -6,6 +6,9 @@ Option Explicit
 
 Public Sub Main()
     Dim d As Double
+    ' 正向对照（Math 定案的收紧不得误伤）：内建对象类型与 VBA 前缀下的普通类型照旧通过。
+    Dim xForm As Form
+    Dim xErr As VBA.ErrObject
 
     d = Math.Log(1#)
     Debug.Print "VM-LOG=" & d

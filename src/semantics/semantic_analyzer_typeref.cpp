@@ -1,4 +1,5 @@
 #include "semantics/semantic_analyzer.hpp"
+#include "common/vba_math.hpp"  // VBA 标准模块名单: 模块不能当类型用 (Math 定案 §10.4)
 #include <algorithm>
 #include <cctype>
 #include <tuple>
@@ -32,6 +33,22 @@ Vb6Type SemanticAnalyzer::resolveTypeRef(ASTNode* typeRef) {
     switch (typeRef->kind) {
         case ASTNodeKind::SimpleTypeRef: {
             auto& simple = static_cast<SimpleTypeRef&>(*typeRef);
+            // VBA 标准模块不能当类型用（真 VB6: 「Visual Basic 中不支持自动化类型」）。
+            // 限定写法（`VBA.Math` / `VBA.Strings` …）一律按标准模块判；裸名（`Math`）
+            // 只在工程里没有同名类型时才判 —— 用户自己定义的 `Class Math` 仍按用户类型解析。
+            // 名单在 common/vba_math.hpp（与发码层同一张表）。
+            {
+                const std::string lowerType = Symbol::toLower(simple.name);
+                const bool vbaQual = lowerType.size() > 4
+                                     && lowerType.compare(0, 4, "vba.") == 0;
+                if (isVbaStandardModuleName(lowerType)
+                    && (vbaQual || !symTab_.lookupModule(lowerType))) {
+                    diag_.error(DiagnosticID::SemModuleAsType, typeRef->loc,
+                        "Visual Basic 中不支持自动化类型: '" + simple.name +
+                        "' (标准模块不能当类型用)");
+                    return Vb6Type::Object;
+                }
+            }
             // ai/023 S04: 非导出包类作类型名 (Dim x As HiddenCls / 参数 / 返回值)
             // → VB7006。不拦的话类型退化成 Object/void*, 与后期绑定 COM 同一结局。
             reportIfPackageClassBlocked(simple.name, typeRef->loc);

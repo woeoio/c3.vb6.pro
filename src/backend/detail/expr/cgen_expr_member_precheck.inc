@@ -202,13 +202,11 @@
         // 如 VBA.Mid$ → vb6_Mid), 由外层 IndexOrCallExpr 的 Fix 033 回退
         // (lookupModule + lookup 全表) 解析参数表并填充 Optional 默认值.
         // VBA.Math 是 VB6 自带 VBA 类型库里的真实模块（PhotoDemon 的 Math.Log/Abs/Cos）。
-        // 成员是同一批内建函数的限定写法 ⇒ m 走与 VBA.<成员> 同一条折叠；但只放行 VBA.Math
-        // 真实成员的名单，拼错的成员不该因为前缀是 Math 就变成"合法"。
-        static const std::unordered_set<std::string> vbaMathMembers = {
-            "abs", "atn", "cos", "exp", "fix", "int", "log", "rnd", "round",
-            "sgn", "sin", "sqr", "tan"
-        };
-        const bool isVbaMath = (_objLower == "math" && vbaMathMembers.count(_memLower) != 0);
+        // 成员是同一批内建函数的限定写法 ⇒ 走与 VBA.<成员> 同一条折叠；成员名单的唯一出口
+        // 在 common/vba_math.hpp（语义层用同一张表拦"未找到方法或数据成员"）。
+        // 名单里刻意没有 fix/int：真 VB6 对 `Math.Fix` 报编译期错误，不是内建折叠。
+        const bool isVbaMath = (_objLower == "math"
+                                && vbaMathMemberNames().count(_memLower) != 0);
         if (_objLower == "vba" || _objLower == "vba5" || isVbaMath) {
             static const std::unordered_map<std::string, std::string> vbaConsts = {
                 {"vbcr", "13"}, {"vblf", "10"}, {"vbtab", "9"},
