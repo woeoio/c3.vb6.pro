@@ -413,9 +413,45 @@ oracle 工程 `.build/oracle/parent/`（`PdParentSem.vbp` + `Form1.frm` + `UCPro
 
 断言：`run_tests.ps1` 新增 `pd_parentsem`（`Test-Vbp`，27 条 needle）+ `pd_parentsem_emitc`（4 条发码形状：`ComGetStringProp/ComGetIntProp((void*)vb6_UC_ParentObject(), …)` 与内层控件 `ComGetObjectProp(vb6_hwnd_Label1, L"Parent")`）+ `pd_parentsem_emitc_absent`（`vb6_Parent_Name/Caption/BackColor` 不得出现）。`Parent.Controls` 的 7 条仍由 10.3 的 `pd_parent_controls_ctl` 与负控 `pd_parent_typo_still_reported` 覆盖。
 
-回归：`check_rtl_embedded.ps1` / `check_rtl_proto_arity.ps1` OK；ucSlider 像素门 **PASS**（A1=0.899 ≥0.80、A2=1135、B=0、D stable）；ucTreeView 五窗像素读数全绿（white=110072 / bg240=803 / dark=586 / hl=6849 / vivid=8497，五窗 open+sync），但该脚本末尾 `Corporate Hierarchy` 的 BM_CLICK 同步检查在 **HEAD 与本次改动上同样失败**（`C3_HOST_MEMBER_MISS site=SetProp name="Font"` + `clickSync=false`）⇒ 既有问题，非本刀回归（同一夹具在 HEAD 复跑得到逐字相同的报错）。
+回归：`check_rtl_embedded.ps1` / `check_rtl_proto_arity.ps1` OK；ucSlider 像素门 **PASS**（A1=0.899 ≥0.80、A2=1135、B=0、D stable）；ucTreeView 五窗像素门 **PASS**（2026-11-09 深夜整跑 `EXIT=0`，读数与本刀之前记录逐项一致：white=110072 / bg240=803 / dark=586 / hl=6849 / vivid=8497 / chk240=82.9% / label240=90.6% / sb240=93.8% / sbHover=6/6 / Contact `bg65=118852`；五窗 open+sync 与三轮重复点击 `sync=True` 全过）。
+
+> 本节初稿把「`Corporate Hierarchy` clickSync 失败」记为「既有问题、非本刀回归」，**判法与结论都已作废**（HEAD 上复现只排除 `c9f35cda`，排除不了 R1/R2/R3/R4/Randomize）。重做的归因见 §10.3.2。
 
 已知缺口（本刀不碰）：`vb6_TypeOf` 仍是恒 0 的桩 ⇒ 夹具没断言 `TypeOf Parent Is Form/Frame`；标准控件自身的 `.Name` 仍答空串（宿主表未登记普通控件），故 Container 一侧只用 `.Caption` 钉。
+
+#### 10.3.2 `Corporate Hierarchy` clickSync 失败的二分归因（2026-11-09 深夜）
+
+口径：每点 `git checkout <sha> -- src` → `ninja -C .build c3`（`CMAKE_BUILD_PARALLEL_LEVEL=2`、串行）→ **用这枚新 C3** 重编 `tests\ucTreeView\Proyecto1.vbp`（`--arch x86`）→ 只跑 `Corporate Hierarchy` 一条（`.build\bisect\clickprobe.ps1`，与门同一条 `SendMessageTimeout(BM_CLICK, 3000, SMTO_ABORTIFHUNG)`）。
+
+| 提交 | 夹具 exe | 读数 |
+| --- | --- | --- |
+| `ba4ed971`（PhotoDemon 开工前，用户记为全绿点） | 849408 | **红** `clickSync=false 3013ms`（冷网络） |
+| `43528bb8`（R4 回归修复刀） | 849408 | 绿 `clickSync=true 327ms` |
+| `fbc26f64`（Randomize/Rnd） | 849408 | 绿 `324ms` |
+| `3b47cc96`/`c9f35cda`（HEAD） | 850432 | 冷网络 `3016ms` 红；暖缓存 `327ms` 绿；**五窗像素门整跑 PASS** |
+
+同一 HEAD 二进制、同一夹具，**只动 `JerarquiaEmpresa.xml` 一处**：
+
+| 条件 | 读数 |
+| --- | --- |
+| 原 15 条 `src`（WinINET 命中缓存） | `true` 327ms |
+| 同一 URL 加 `?cb=<随机>` 破缓存（强制回源） | **`false` 3015ms** |
+| `src` 换成产物内本地 `img\customer.png`（不走网络） | `true` 258ms |
+| 删掉整个 `<images>` 段 | `true` 320ms |
+| 其余四枚按钮（均无远程图） | `true` 51–253ms |
+
+成因（插桩实测；`.build\bisect\dbg` 是带 `TraceLog` 的夹具副本，不入库）：`Corporate Hierarchy` → `Form3.Show` → `Form3_Load` → `LoadFromXML(App.Path & "\JerarquiaEmpresa.xml")` → `CargarImagenes` → `ImageListAddImage` → `LoadPictureEx`（[ucTreeViewPlus.ctl](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/ucTreeView/ucTreeViewPlus.ctl#L2365-L2383)）→ **15 条 `https://randomuser.me/...` 头像**：`Microsoft.XMLHTTP` 异步 GET + `While readyState <> 4: DoEvents: Wend`。trace 逐图 `X1 → X2(rs=1) → X5(rs=4, st=200) → X6(ub=…) → X7` 共 15 组，末尾 `F4 after loadxml` / `F5 done`：暖缓存整段 **0.35s**、冷缓存 **3.55s**、网络打嗝时 **>30s**（有一次 30s 连 Form3 窗口都没出来）。BM_CLICK 的窗口过程就卡在这个 `DoEvents` 自旋里，3s 上限一到便报「事件没到按钮过程」——**是网络抖动，不是编译器语义**。
+
+结论：
+
+1. **区间内没有「首个变红的提交」**。反证提交 `ba4ed971`（早于 `7495c8ff`）用同一夹具、同一判据复现同一条报错（`contentA2 ... BM_CLICK 3s 未返回` + 同样的 MISS 行），且与 HEAD 在同等网络条件下逐字相同。
+2. 该判据**天生依赖外网**（15 张头像串行下载），3s 预算贴着实测 0.35–3.55s 的分布 ⇒ 是**抖动的门**，不是稳定的绿/红。
+3. `C3_HOST_MEMBER_MISS site=SetProp name="Font"` 是**另一件事**（boot 期就有、五窗各 2 行、与点击无关，`ba4ed971` 同样有）：[ucTreeViewPlus.ctl:2744](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/ucTreeView/ucTreeViewPlus.ctl#L2744) 的 `Set Text1.Font = Me.Font`（`UserControl_ReadProperties`）走 `vb6_ComSetProp(hEdit, L"Font", …)`；[uc_hostmodel_setprop.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/detail/uc_hostmodel_setprop.inc) 只对 `vb6_uc_isFont(obj)` 那一支按「字体对象改 Size/Bold/…」处理，对**控件**的 `Font` 没有臂，于是落到 `vb6_ho_reportUnknown(L"SetProp", …)` 打一行 MISS 并**忽略写入**。`Text1` 是 `Visible=0` 的量字盒，不影响像素读数；属存量缺口。
+
+处置计划（本轮不落地）：
+
+- 门侧（主）：15 张头像落到 `tests\ucTreeView\img\`，`JerarquiaEmpresa.xml` 的 `src` 改本地相对路径 —— 判据一条不动，只去掉抖源。
+- 产品侧（次，单独一刀）：`uc_hostmodel_setprop.inc` 补 `Font` 臂（`Set ctl.Font = f` 按 `f` 的 LOGFONT 落 `WM_SETFONT`；共享 StdFont 别名/回写另记）。
 
 ### 10.4 `Math` 18 条：不是 tB 专有，是 VB6 自带 VBA 类型库的 `VBA.Math`
 
