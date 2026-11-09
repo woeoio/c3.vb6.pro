@@ -458,10 +458,54 @@ oracle 工程 `.build/oracle/parent/`（`PdParentSem.vbp` + `Form1.frm` + `UCPro
 2. 该判据**天生依赖外网**（15 张头像串行下载），3s 预算贴着实测 0.35–3.55s 的分布 ⇒ 是**抖动的门**，不是稳定的绿/红。
 3. `C3_HOST_MEMBER_MISS site=SetProp name="Font"` 是**另一件事**（boot 期就有、五窗各 2 行、与点击无关，`ba4ed971` 同样有）：[ucTreeViewPlus.ctl:2744](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/ucTreeView/ucTreeViewPlus.ctl#L2744) 的 `Set Text1.Font = Me.Font`（`UserControl_ReadProperties`）走 `vb6_ComSetProp(hEdit, L"Font", …)`；[uc_hostmodel_setprop.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/detail/uc_hostmodel_setprop.inc) 只对 `vb6_uc_isFont(obj)` 那一支按「字体对象改 Size/Bold/…」处理，对**控件**的 `Font` 没有臂，于是落到 `vb6_ho_reportUnknown(L"SetProp", …)` 打一行 MISS 并**忽略写入**。`Text1` 是 `Visible=0` 的量字盒，不影响像素读数；属存量缺口。
 
-处置计划（本轮不落地）：
+处置计划（门侧已落地，见 §10.3.3；产品侧单列）：
 
-- 门侧（主）：15 张头像落到 `tests\ucTreeView\img\`，`JerarquiaEmpresa.xml` 的 `src` 改本地相对路径 —— 判据一条不动，只去掉抖源。
+- 门侧（主）：15 张头像落到 `tests\ucTreeView\img\`，`JerarquiaEmpresa.xml` 的 `src` 改本地相对路径 —— 改动 + 重拍参考，见 §10.3.3。
 - 产品侧（次，单独一刀）：`uc_hostmodel_setprop.inc` 补 `Font` 臂（`Set ctl.Font = f` 按 `f` 的 LOGFONT 落 `WM_SETFONT`；共享 StdFont 别名/回写另记）。
+
+#### 10.3.3 夹具脱网 + 参考重拍（2026-11-09 深夜）
+
+改动（非 src，`[skip ci]`）：
+
+- 15 张头像固定到 [tests/ucTreeView/img](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/ucTreeView/img)：`avatar_<key>.jpg`（与 `JerarquiaEmpresa.xml` 的 15 个 `key` 一一对应，文件名 ASCII）。
+- [JerarquiaEmpresa.xml](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/ucTreeView/JerarquiaEmpresa.xml) 的 `src` 由 `https://randomuser.me/api/portraits/...` 改为 `img\avatar_<key>.jpg`（相对路径；`LoadPictureEx` 的本地分支走 `GdipLoadImageFromFile`，相对 CWD 解析，三个入口都以 exe 目录为 CWD）。`tests/` 下其余联网夹具见 §10.3.4。
+
+重拍流程（旧参考保留，不覆盖）：
+
+1. 真 VB6 重编改后夹具：`uctv_vb6_baseline.ps1 -OutDir .temp\vb6ref_fixed\ucTreeView`（exit=0，`Proyecto1.exe` 新产物）。
+2. C3（HEAD 产物 `.build\C3.exe`，src 未变）重编同一夹具 → `.temp\uc_fixed\out`，并把 `img/`、`ejemplo.xml`、`JerarquiaEmpresa.xml`、`menu.xml` 拷进产物目录（与 `Test-VbpBuild` 同口径）。
+3. 重拍参考：`UCTV_SAVE_FORMS=1 uctreeview_px.ps1 -Exe <C3产物> -OutDir .temp\vb6ref_fixed\px -RefExe <新VB6> -RefJson .temp\vb6ref_fixed\ref_metrics.json`（EXIT=0）。
+
+旧参考值 → 新参考值（`ref_metrics.json` 全字段逐项比对，**0 处差异**）：
+
+| 窗（cap） | textRows | vivid | photo | avatar | green | greenRim | firstTextW |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Form3（Corporate Hierarchy） | 10 → 10 | 21768 → 21768 | 9292 → 9292 | 6498 → 6498 | 13790 → 13790 | 87 → 87 | 187 → 187 |
+| Form5（Menu / Tools） | 15 → 15 | 41664 → 41664 | 56127 → 56127 | 108113 → 108113 | — | — | 77 → 77 |
+| Agenda tema oscuro（Contact） | 1 → 1 | 7120 → 7120 | 10955 → 10955 | 9793 → 9793 | — | — | 331 → 331 |
+| Drag & Drop | 5 → 5 | 2161 → 2161 | 2484 → 2484 | 927 → 927 | — | — | 98 → 98 |
+| Tree Explorer | 5 → 5 | 2354 → 2354 | 1608 → 1608 | 1225 → 1225 | — | — | 78 → 78 |
+
+参考 PNG 也做了字节级对照（旧 `.temp\vb6ref\shots` vs 新 `.temp\vb6ref_fixed\px`）：`Corporate Hierarchy`、`Contact`、`Menu/Tools`、`Drag & Drop` 四张 **SHA256 相同**；`Tree Explorer` 差 7 字节（该窗无头像，属截图时序，不是图片内容）。
+
+结论（与「randomuser 每次返回不同人像」的前提相反，有据可查）：`https://randomuser.me/api/portraits/<gender>/<n>.jpg` 是**每个 URL 固定的一张图**，不是每次随机。证据：① 重拍读数与旧参考一字不差（若内容变，photo/avatar/vivid 必漂）；② 四张参考 PNG 字节相同。此前 `repeatcontent[Contact]` 三轮 9950/8579/8739 的波动换成本地图后**仍在**（`9950 → 8579 → 8739`），说明那是 C3 重复开窗的绘制状态（既有、非本刀），与夹具联网无关；该判据阈值 3000，三轮都过。
+
+判据改动：**0 条**。语义照旧（textRows/vivid/bg65/avatar/photo/green/greenRim），阈值不放松；参考读数未变，故无基线可调。像素级不变量原样不变（`chk240=82.9%`、`label240=90.6%`、`sb240=93.8%`、`sbHover=6/6`、`sbMid=6/6`、`sbLeft=6/6`、`white=110072`、`bg240=803`、`dark=586`、`hl=6849`、`vivid=8497`）。
+
+稳定性：CI 同款调用（不带 `-RefJson`）连跑 3 次，79/79/80s，三次读数逐字相同、`rc=0`、`PASS` 全过。
+
+#### 10.3.4 `tests/` 联网夹具清单（只查不改）
+
+| 夹具 | 何时联网 | 进 CI | 失败形态 |
+| --- | --- | --- | --- |
+| `tests\ucTreeView\JerarquiaEmpresa.xml` + `LoadPictureEx`（XMLHTTP） | Form3 `Load` 启动即拉 15 张 | **是**（vbp 分片 → `Test-VbpBuild ucTreeView -PixelAssert`） | 卡 3s → 像素门红（本次抖动的源；已按 §10.3.3 脱网） |
+| `tests\urlpic\UrlPicMain.bas` + `run_tests.ps1` 的 `urlpic_net`（randomuser `women/3.jpg`） | 真跑真 GET | **是**（`bas` 分片） | 3s TCP 探不通 → SKIP；探通但 429/内容变 → FAIL |
+| `tests\urlpic` 的 `urlpic_local`（`127.0.0.1:8765` + 本地 `serve.ps1`） | 仅 loopback | 是 | 端口占用 → SKIP |
+| `tests\test_com_events_winhttp\Form1.frm:37`（WinHTTP 访问 `www.example.com`） | 仅运行 exe | 否（只 `Test-VbpBuild`，不跑） | 不触发 |
+| `tests\ucSegmentedControl\ucSegmentedControl.ctl` 的 XMLHTTP 分支 | 代码在，工程内无远程 `src` | 是（GUI 表），但不触发 | 不触发 |
+| `tests\ucTreeView\exportado.xml`（4×icons8） | 无 Form 加载、不在 `-AssetFile` 名单 | 否 | 死资产 |
+
+待处理：`urlpic_net` 是下一处同类隐患（DEFAULT 情况下网络不通会 SKIP 而不是红，但内容/限流变化会红）；按同一口径改成固定本地图或固定字节回放后再处理。
 
 ### 10.4 `Math` 18 条：不是 tB 专有，是 VB6 自带 VBA 类型库的 `VBA.Math`
 
