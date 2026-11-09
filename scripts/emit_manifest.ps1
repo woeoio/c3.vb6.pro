@@ -38,9 +38,15 @@ $Root = (Resolve-Path $Root).Path
 if (-not $Out) { $Out = Join-Path $Root "emit-manifest.txt" }
 
 # 语料枚举（-ListInputs 的唯一出口；下面出清单也吃这一份）。
+#
+# tests/photodemon/ 是**第三方工程的 vendored 副本**（PhotoDemon 592 份源码里挑出的源集），
+# 用来做 `--arch x86` emit 探针的缺口取证，不是编译器夹具：它的 115 份 .bas/.vbp 每轮都会让
+# 形状门多跑 115 次 emit（约 +8 分钟），而它们既不进"程序行为"判定，也不该为别人的代码背发码形状。
+# 排除口径就这一处（唯一权威），要恢复只删掉下面那一个 -notmatch 即可，无需改别处。
 $inputs = Get-ChildItem -Path (Join-Path $Root "tests") -Recurse -File |
     Where-Object { $_.Extension -match '^\.(vbp|bas)$' } |
     Where-Object { $_.FullName -notmatch '\\(bin|obj|output)\\' } |
+    Where-Object { $_.FullName -notmatch '\\tests\\photodemon\\' } |
     Sort-Object FullName
 if ($ListInputs) {
     foreach ($it in $inputs) {
