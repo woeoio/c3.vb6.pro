@@ -95,12 +95,14 @@ public class UP {
     return sz.cx;
   }
   public struct RECT { public int L, T, R, B; }
-  // 残差 #8: WM_GETFONT → LOGFONT 一行读数 "面名|高度|字符集|字重"; 无字体返回 ""
+  // 残差 #8: WM_GETFONT → LOGFONT 一行读数 "面名|高度|字符集|字重|质量"; 无字体返回 ""。
+  // 2026-11-10: 第 5 字段 lfQuality 是这轮加上的 —— 字体名/高/重相同而渲染仍差时,
+  // 唯一还剩的字体侧变量就是 AA 质量档 (0=default/1=draft/2=proof/3=antialiased/4=cleartype)。
   public static string LogFontOf(IntPtr h) {
     IntPtr hf = SendMessageW(h, 0x0031, IntPtr.Zero, IntPtr.Zero);   // WM_GETFONT
     if (hf == IntPtr.Zero) return "";
     var lf = new LOGFONTW(); if (GetObjectW(hf, 92, ref lf) <= 0) return "";
-    return lf.lfFaceName + "|" + lf.lfHeight + "|" + lf.lfCharSet + "|" + lf.lfWeight;
+    return lf.lfFaceName + "|" + lf.lfHeight + "|" + lf.lfCharSet + "|" + lf.lfWeight + "|" + lf.lfQuality;
   }
   // --- ucTreeView 交互判据 (2026-11-06 缺陷 1/2/3/4) ---
   // 口径: 所有"等窗口"都有上限 (调用方给 3s), 模态盒 (#32770) 一律 WM_CLOSE 收口并校验
@@ -866,9 +868,11 @@ $btnCaps = @("Tree Explorer", "Corporate Hierarchy", "Drag and Drop", "Menu / To
 # (行数 2/2/2/2/2), 所以拿本机 (有 Arial Narrow) 录的参考行数去判它是**判据失效**,
 # 不是产品缺陷: 这一条按"字体缺失"记 SKIP 并在读数里写明, 字体自洽判据 ($wantLines,
 # 用按钮自己的字体实测) 仍然照常执行 —— 断行逻辑本身的回归仍能抓到。
+# 2026-11-10: 这里原来写的是 `Add-Type -AssemblyName $dwAsm`，而 $dwAsm 在整个 tests/
+# 里从未定义 ⇒ 每次都抛、被空 catch 吞掉 ⇒ faceInstalled 恒 false（11-09 PASS 与 11-10 FAIL
+# 两份日志都打 no，但那台机器四条注册表记录都在）。System.Drawing 在脚本顶部已加载，直接用。
 $faceInstalled = $false
 try {
-    Add-Type -AssemblyName $dwAsm -ErrorAction Stop
     $faceInstalled = @((New-Object System.Drawing.Text.InstalledFontCollection).Families |
         Where-Object { $_.Name -eq "Arial Narrow" }).Count -gt 0
 } catch { }
@@ -1454,16 +1458,26 @@ if ($p.HasExited) {
     # 参考图从此只用于"内容该有什么"的视觉确认, 不参与阈值。
     # 注: 真 VB6 产物必须在 zh-CN 下把 .ctl/.frm 的 "0,15" 归一成 "0.15" 才能 /make
     #     (见 uctv_vb6_baseline.ps1), 该归一不改变 Single 值。
+    # 2026-11-10 用户拍板: **基准只能有一个**。内容判据一律对真 VB6 实拍读数;
+    # 没给 -RefJson/-RefExe 时默认读脚本同目录的 uctreeview_ref.json; 两者都没有 ⇒ 红,
+    # 不再退回"设计值口径"。11-09 22:49 那次 PASS 是 ref=none(设计值口径) 跑的,
+    # 与今天 FAIL(ref=json) 不是同一把尺子 ⇒ 该 PASS **不代表对齐, 效力作废**。
+    if ($RefJson -eq '' -and $RefExe -eq '') {
+        $RefJson = Join-Path $PSScriptRoot 'uctreeview_ref.json'
+    }
     $ref = @{}
+    $refDpi = 0
     if ($RefJson -ne '' -and (Test-Path $RefJson)) {
         try {
             $raw = Get-Content $RefJson -Raw | ConvertFrom-Json
+            if ($null -ne $raw.PSObject.Properties['_dpi']) { $refDpi = [int]$raw._dpi }
             foreach ($k in $raw.PSObject.Properties.Name) {
+                if ($k -eq '_dpi') { continue }
                 $h = @{}
                 foreach ($q in $raw.$k.PSObject.Properties) { $h[$q.Name] = $q.Value }
                 $ref[$k] = $h
             }
-            $actRead += "ref=json:$RefJson"
+            $actRead += "ref=json:$RefJson dpi=$refDpi"
         } catch { $actBad += "REF 读数文件解析失败 ($RefJson): $_" }
     }
     if ($ref.Count -eq 0 -and $RefExe -ne '') {
@@ -1652,7 +1666,10 @@ if ($p.HasExited) {
                 $sc120 = $expDpi / 120.0
                 # 基准优先级: 有真 VB6 实拍读数就逐项对读数 (强口径); 没有才退回设计值口径。
                 $rf = $ref[$sp.cap]
-                if ($rf -ne $null -and $rf.ContainsKey('w')) {
+                if ($refDpi -gt 0 -and $expDpi -ne $refDpi) {
+                    # 基准读数只在录它的 DPI 下有效。这里**不换尺子**: 记 SKIP, 不用设计值顶替。
+                    $actRead += "content[$($sp.cap)]=SKIP(基准dpi=$refDpi 本机dpi=$expDpi)"
+                } elseif ($rf -ne $null -and $rf.ContainsKey('w')) {
                     if ($rf['w'] -ne $st['w'] -or $rf['h'] -ne $st['h']) {
                         $actBad += "'$($sp.cap)' 树控件 $($st['w'])x$($st['h']) != 真 VB6 $($rf['w'])x$($rf['h'])"
                     }
@@ -1696,61 +1713,9 @@ if ($p.HasExited) {
                         $actBad += "'$($sp.cap)' 基准字体读数缺失 (REF font='$($rf['font'])')"
                     }
                 } else {
-                if ($sp.cap -ne 'Agenda tema oscuro') {
-                    $rowsExp = $expRows[$sp.cap]
-                    if ($st['textRows'] -lt $rowsExp) {
-                        $actBad += "'$($sp.cap)' 节点文字行 $($st['textRows']) < $rowsExp (设计节点数)"
-                    }
-                    $firstMin = [int][Math]::Round($sp.firstW * $sc)
-                    if ($st['firstTextW'] -lt $firstMin) {
-                        $actBad += "'$($sp.cap)' 首行文本墨迹宽 $($st['firstTextW'])px < ${firstMin}px (文字缺失/截断)"
-                    }
-                }
-                switch ($sp.cap) {
-                    'Tree Explorer' {
-                        if ($st['vivid'] -lt [int](200 * $sc2)) {
-                            $actBad += "Tree Explorer 图标彩色像素 $($st['vivid']) < 200*scale2 (文件夹/驱动器彩色图标缺失)"
-                        }
-                    }
-                    'Form3' {
-                        if ($st['green'] -lt [int](800 * $sc2)) {
-                            $actBad += "Corporate 绿边框像素 $($st['green']) < 800*scale2"
-                        }
-                        if ($st['photo'] -lt [int](400 * $sc2)) {
-                            $actBad += "Corporate 头像照片像素 $($st['photo']) < 400*scale2 (5 张头像缺失)"
-                        }
-                        # 绿卡右缘本身就是一条绿边: 120dpi 正常读数 ~91px, 96dpi ~54px。
-                        # 判据 = 明显超过这条边应有的量 (线性缩), 不是「不许有绿」。
-                        if ($st['greenRim'] -gt [int](120 * $sc120)) {
-                            $actBad += "Corporate 卡片右缘被裁切 greenRim=$($st['greenRim']) > $([int](120 * $sc120))"
-                        }
-                    }
-                    'Drag & Drop' {
-                        if ($st['vivid'] -lt [int](100 * $sc2)) {
-                            $actBad += "Drag 文件夹图标彩色像素 $($st['vivid']) < 100*scale2"
-                        }
-                    }
-                    'Form5' {
-                        if ($st['lightGreen'] -lt [int](800 * $sc2)) {
-                            $actBad += "Menu 浅绿边框像素 $($st['lightGreen']) < 800*scale2"
-                        }
-                        if ($st['lastTextY'] -lt [int]($st['h'] * 0.55)) {
-                            $actBad += "Menu 最后文字行 y=$($st['lastTextY']) < 55% 高度 (10 行未铺满)"
-                        }
-                    }
-                    'Agenda tema oscuro' {
-                        if ($st['avatar'] -lt [int](3000 * $sc2)) {
-                            $actBad += "Contact 头像像素 $($st['avatar']) < 3000*scale2 (头像全缺)"
-                        }
-                        # 120dpi 实拍是 8 行 (ref lightRows=8), 这档阈值按行距线性缩。
-                        if ($st['lightRows'] -lt [int](8 * $sc120)) {
-                            $actBad += "Contact 浅色文字行 $($st['lightRows']) < $([int](8 * $sc120)) (姓名/邮箱行不足)"
-                        }
-                        $bgMin = [int]($st['w'] * $st['h'] * 0.25)
-                        if ($st['bg65'] -lt $bgMin) {
-                            $actBad += "Contact 深底 bg65=$($st['bg65']) < 25% 面积"
-                        }
-                    }
+                # 2026-11-10: 这一段原来叫"设计值口径"(ref=none 时用), 已删除 ——
+                # 同一判定不许有两把尺子。没有真 VB6 读数就是红, 不拿更松的阈值顶上。
+                $actBad += "'$($sp.cap)' 基准缺读数 (ref json 无该窗口) —— 不退回设计值口径"
                 }
                 $lfParts = $lf -split '\|'
                 if ($lfParts.Count -lt 4) {
@@ -1768,7 +1733,6 @@ if ($p.HasExited) {
                 }
                 }
             }
-        }
         [UP]::CloseWin($fw) | Out-Null
         $fgA = Wait-Gone $fw 3000
         if (-not $fgA) {

@@ -204,7 +204,26 @@ void CCodeGen::visit(CallStmt& node) {
                                     // char[N] (内联 ANSI), 直接塞进 BSTR 形参会把 ANSI 字节按 UTF-16
                                     // 读 (test_fixedstr_decl 的 `Debug.Print r.f` 实测发成裸 r.f)。
                                     // 统一过一次 wrapToBSTR —— 普通 BSTR 原样返回, 只有成员定长串被换算。
-                                    c_.emitLine("vb6_DebugWriteBSTR(" + wrapToBSTR(val, *call.positional[j]) + ");");
+                                    //
+                                    // 2026-11-10 (k178 形状针): `Debug.Print x.Label` 走视图/getter 读时,
+                                    // 形参拿到的是**刚刚分配**的 BSTR (vb6_*_prop_get_* 里 FromStr/ConcatFree
+                                    // 的结果, 所有权在 caller)。vb6_DebugWriteBSTR 不吃所有权 (只读不 free),
+                                    // 旧形在 isComMarker_ 那一路是显式 Free 的, 这里漏了 ⇒ 每打一行泄漏一只。
+                                    // 只对这一族"会新分配"的读点补 Free; 变量/字面量不走这条, 免得误放别名。
+                                    std::string dbgB = wrapToBSTR(val, *call.positional[j]);
+                                    bool dbgOwned = dbgB.find("->vt->get_") != std::string::npos
+                                                 || dbgB.find("_prop_get_") != std::string::npos;
+                                    if (dbgOwned) {
+                                        c_.emitLine("{");
+                                        c_.indent();
+                                        c_.emitLine("wchar_t* _dbg_owned_bstr = " + dbgB + ";");
+                                        c_.emitLine("vb6_DebugWriteBSTR(_dbg_owned_bstr);");
+                                        c_.emitLine("vb6_BSTR_Free(_dbg_owned_bstr);");
+                                        c_.dedent();
+                                        c_.emitLine("}");
+                                    } else {
+                                        c_.emitLine("vb6_DebugWriteBSTR(" + dbgB + ");");
+                                    }
                                 } else if (inferExprType(*call.positional[j]) == Vb6Type::Date) {
                                     // Fix 175: Debug.Print d (d As Date) —— Date 变量同时
                                     // 登记在 knownDoubleVars_, isDoubleExpr 会抢先命中并

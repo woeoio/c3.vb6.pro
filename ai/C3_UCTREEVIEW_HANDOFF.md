@@ -4056,3 +4056,41 @@ sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0 dpi=96
 
 即：悬停三角按 DPI 折算出 8x6/6x5（120dpi 参考 10x8/8x6 的 0.8 倍），park/leave 墨迹 0；
 `edFrameDark` 回到 0，修的是采集口径而不是判据。
+
+## §56 2026-11-10 像素门 FAIL 结案：不是字体、不是前台，是产物旁边缺头像资产
+
+11-10 02:17 那份 FAIL（`'Form3' 文字行 17 != 真 VB6 10; vivid=17913 < 21768*0.9; photo=4917 < 9292*0.9;
+avatar=4284 < 6498*0.9; dark=2239 < 5155*0.9`）的三项指控逐个查完：
+
+1. **字体（无罪）**：本机装了 Arial Narrow（注册表 4 条 + 4 个 TTF）；两边 LOGFONT 逐字段相同
+   （本轮给 `LogFontOf` 加了第 5 字段 lfQuality）：
+   `ref[Form3]=Segoe UI|-16|0|700|0` / `c3[Form3]=Segoe UI|-16|0|700|0`，
+   `ref[Drag&Drop]=Arial Narrow|-16|0|400|0` / C3 同。差别不在字体。
+2. **前台（无罪）**：同一次运行 5 窗 `fg ok=True try=1`，且 `scr[...]` 与 `content[...]` 每个读数
+   逐项相同 —— PrintWindow 采集本身不依赖前台。抢前台那条仍然保留，但它不是这次的原因。
+3. **真因**：产物目录 `output\build_ucTreeView\img\` 里 **0 张 `avatar_*.jpg`**（夹具里有 15 张），
+   Form3 的 5 张头像全没加载 ⇒ 照片/彩色/深色像素同时掉，`textRows` 从 10 变 17 是因为照片本来
+   把「姓名+职位」两行连成一条深色带。把 `tests\ucTreeView\img\` 整目录补进产物后，同一条命令
+   **PASS**，且 Form3 读数与 11-09 22:49 那次逐项相同（`dark=5155 textRows=10 vivid=20947
+   photo=8997 avatar=6356 sig=1631839419`）。
+   结论：`run_tests.ps1` 的 `-AssetDir img` 拷贝本身是全目录拷贝（15 张都会带），这份产物目录是
+   手工留下的旧目录 —— 不是产品缺口，也不是夹具判据问题；**别再拿"字体缺失"解释这条红**。
+
+同轮修掉的两个脚本真 bug：
+
+- `faceInstalled` 恒 false：原句 `Add-Type -AssemblyName $dwAsm`，`$dwAsm` 在 `tests/` 里从未定义，
+  异常被空 `catch` 吞掉。改用脚本顶部已加载的 `System.Drawing` 后，5.1 实跑打印
+  `faceInstalled=Arial Narrow:yes`。
+- **两把尺子**：11-09 22:49 的 PASS 是 `ref=none`（设计值口径），11-10 FAIL 是 `ref=json`（真 VB6 实拍）。
+  现在内容判据**只认真 VB6 读数**：默认读 `tests/guisample/uctreeview_ref.json`（`_dpi=120`），
+  没有读数直接红；`ref=none` 的设计值分支已删除。**11-09 那次 PASS 按宽松尺子跑出，不代表对齐，效力作废**
+  （但它与今天补资产后的实拍逐项相同，所以数值本身仍可当交叉证据）。
+  基准 DPI 与本机不同时记 `SKIP(基准dpi=… 本机dpi=…)`，不拿设计值顶替。
+
+连跑读数（同一 exe，补资产后）：pwsh 3 次 + Windows PowerShell 5.1 1 次，全部 rc=0，
+五窗读数逐项相同；`Contact List` 的 `repeatcontent` 第 2/3 次仍抖（6453/4226/7218，既有图像解码
+时序问题），主判据取第一份，不受影响。
+
+k178 形状针（同轮）：`vb6_DebugWriteBSTR(BSTR)` 只读不 free，COM getter 返回的 BSTR 所有权在
+caller（旧形有显式 `vb6_BSTR_Free`）。视图读点漏了 free ⇒ 产品补回（`cgen_call.cpp` 的
+`isBstrExpr` 分支只对 `->vt->get_` / `_prop_get_` 这一族新分配的读点加 brace+Free），**针不动**。
