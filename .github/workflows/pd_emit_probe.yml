@@ -1,0 +1,120 @@
+name: PhotoDemon x86 emit probe
+
+# 独立探针 workflow：只构建 C3 并对 tests/photodemon/PhotoDemon.vbp 跑 x86 --emit-c，
+# 把完整 stdout/stderr 作为 artifact 上交。**不参与** ci.yml 的 22 job 主链路。
+#
+# 触发方式：workflow_dispatch 手动触发为主；另加一条**仅限本探针分支**的 push 触发
+# （workflow_dispatch 要求 workflow 已存在于默认分支，而本文件只在探针分支上，
+#  因此首次用分支 push 触发；后续可用 gh workflow run 指定 ref）。
+on:
+  workflow_dispatch:
+  push:
+    branches: [probe/photodemon-emit]
+    paths:
+      - '.github/workflows/pd_emit_probe.yml'
+      - 'tests/photodemon/**'
+
+jobs:
+  emit:
+    name: PhotoDemon x86 emit
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sanity — MSVC present
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere missing" }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+          if (-not $vsPath) { throw "No MSVC C++ tools found" }
+          Write-Host "MSVC install: $vsPath"
+          cmake --version
+          ninja --version
+
+      - name: Build C3.exe from source
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+          if (-not $vsPath) { throw "No MSVC install" }
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+          $envLines = & cmd /c "call `"$vcvars`" x64 >nul 2>&1 && set" 2>$null
+          foreach ($line in $envLines) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+            }
+          }
+          $buildDir = Join-Path $env:RUNNER_TEMP "c3build"
+          cmake -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+          cmake --build $buildDir
+          if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
+          New-Item -ItemType Directory -Force -Path .build | Out-Null
+          Copy-Item (Join-Path $buildDir "C3.exe") .build\C3.exe -Force
+          & .build\C3.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "C3.exe smoke check failed" }
+
+      - name: Run PhotoDemon emit-c (x86)
+        id: emit
+        continue-on-error: true
+        run: |
+          New-Item -ItemType Directory -Force -Path .build | Out-Null
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          & .build\C3.exe tests/photodemon/PhotoDemon.vbp --arch x86 --emit-c 1> .build\pd_emit.out 2> .build\pd_emit.err
+          $code = $LASTEXITCODE
+          $sw.Stop()
+          "EMIT_EXIT=$code" | Tee-Object -FilePath .build\pd_emit.meta -Append
+          "EMIT_SECONDS=$([math]::Round($sw.Elapsed.TotalSeconds,1))" | Tee-Object -FilePath .build\pd_emit.meta -Append
+          "STDOUT_BYTES=$((Get-Item .build\pd_emit.out).Length)" | Tee-Object -FilePath .build\pd_emit.meta -Append
+          "STDERR_LINES=$((Get-Content .build\pd_emit.err -ErrorAction SilentlyContinue).Count)" | Tee-Object -FilePath .build\pd_emit.meta -Append
+          Write-Host "emit exit=$code"
+
+      - name: Classify diagnostics into job summary
+        if: always()
+        run: |
+          $err = Get-Content .build\pd_emit.err -ErrorAction SilentlyContinue
+          $diag = @($err | Select-String -Pattern '^(.*?):\s*(error|warning)\s+(VB\d+)\s*(?::|：)\s*(.*)$' | ForEach-Object {
+            [pscustomobject]@{ File = $_.Matches[0].Groups[1].Value; Kind = $_.Matches[0].Groups[2].Value; Id = $_.Matches[0].Groups[3].Value; Msg = $_.Matches[0].Groups[4].Value }
+          })
+          $ea = 'Continue'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## PhotoDemon x86 emit — diagnostics"
+          foreach ($l in (Get-Content .build\pd_emit.meta -ErrorAction SilentlyContinue)) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- $l"
+          }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### 按诊断码归总"
+          if ($diag.Count -eq 0) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "_No error/warning lines matched._"
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| 诊断码 | 级别 | 条数 | 首个样例 |"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "| --- | --- | --- | --- |"
+            $diag | Group-Object Id | Sort-Object Count -Descending | ForEach-Object {
+              $first = $_.Group[0]
+              $sample = ("{0}({1})" -f (Split-Path $first.File -Leaf), $first.Msg) -replace '\|','\|'
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("| {0} | {1} | {2} | {3} |" -f $_.Name, $first.Kind, $_.Count, $sample)
+            }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("**合计**: {0} 条（error {1} / warning {2}）" -f $diag.Count, (@($diag | Where-Object Kind -eq 'error')).Count, (@($diag | Where-Object Kind -eq 'warning')).Count)
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ""
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### 前 30 条原始诊断"
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+            foreach ($d in ($diag | Select-Object -First 30)) {
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ("{0}: {1} {2}: {3}" -f $d.File, $d.Kind, $d.Id, $d.Msg)
+            }
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+          }
+
+      - name: Upload emit logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: photodemon-emit-logs
+          path: |
+            .build/pd_emit.out
+            .build/pd_emit.err
+            .build/pd_emit.meta
+          if-no-files-found: error
+          retention-days: 7
