@@ -216,9 +216,9 @@ void CCodeGen::visit(CallStmt& node) {
                                     if (dbgOwned) {
                                         c_.emitLine("{");
                                         c_.indent();
-                                        c_.emitLine("wchar_t* _dbg_owned_bstr = " + dbgB + ";");
-                                        c_.emitLine("vb6_DebugWriteBSTR(_dbg_owned_bstr);");
-                                        c_.emitLine("vb6_BSTR_Free(_dbg_owned_bstr);");
+                                        c_.emitLine("wchar_t* _dbg_com_bstr = " + dbgB + ";");
+                                        c_.emitLine("vb6_DebugWriteBSTR(_dbg_com_bstr);");
+                                        c_.emitLine("vb6_BSTR_Free(_dbg_com_bstr);");
                                         c_.dedent();
                                         c_.emitLine("}");
                                     } else {
