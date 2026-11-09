@@ -320,13 +320,21 @@ Token Lexer::scanComment() {
     std::string text;
     text += advance(); // 消费 '
 
-    // 注释到行尾
-    while (offset_ < content_.size() && peek() != '\n') {
-        text += advance();
+    // 注释到行尾。VB6 允许注释行以「空白 + _」结尾时把注释延续到下一行
+    // (PhotoDemon 里有 `'Public Declare ... ( _` 紧跟 `ByVal x As Long) As Long` 的写法，
+    //  真 VB6 能编译，整段属于同一条注释)。要求 _ 前必须是空白，避免 `foo_bar` 误判。
+    for (;;) {
+        while (offset_ < content_.size() && peek() != '\n') {
+            text += advance();
+        }
+        size_t end = text.size();
+        while (end > 1 && (text[end - 1] == ' ' || text[end - 1] == '\t')) end--;
+        const bool continued = end > 1 && text[end - 1] == '_' &&
+                               (text[end - 2] == ' ' || text[end - 2] == '\t');
+        if (!continued || offset_ >= content_.size()) break;
+        text += advance();                                    // 吞掉 '\r' 或 '\n'
+        if (text.back() == '\r' && peek() == '\n') text += advance();  // CRLF
     }
-
-    // 检查行尾是否有行续接符 _
-    // 在注释中的行续接在VB6中无效, 但我们仍记录
     return makeToken(TokenKind::Comment, text, startLine, startCol);
 }
 

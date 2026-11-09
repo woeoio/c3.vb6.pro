@@ -163,7 +163,27 @@ std::unique_ptr<ReDimStmt> Parser::parseReDimStmt() {
     if (match(TokenKind::Preserve)) {
         preserve = true;
     }
+    return parseReDimEntry(loc, preserve);
+}
 
+// ReDim 可一次声明多个数组 (VB6 允许 `ReDim a(0 To n) As Long, b(0 To n) As Long`)。
+// 逐项解析后包成 Block, 后续每个条目不再带 ReDim 关键字。
+StmtPtr Parser::parseReDimStmtList() {
+    auto loc = currentLoc();
+    auto first = parseReDimStmt();
+    if (cur_.kind != TokenKind::Comma) {
+        return first;
+    }
+    StmtList stmts;
+    stmts.push_back(std::move(first));
+    while (match(TokenKind::Comma)) {
+        stmts.push_back(parseReDimEntry(loc, false));
+    }
+    return std::make_unique<Block>(loc, std::move(stmts));
+}
+
+// 解析单个 ReDim 条目 (ReDim / Preserve 已由调用方消费)。
+std::unique_ptr<ReDimStmt> Parser::parseReDimEntry(SourceLocation loc, bool preserve) {
     // 解析变量名, 支持点访问: uOutput.Buffer 和 With块: .Member
     std::string varName;
     if (match(TokenKind::Dot)) {
@@ -240,7 +260,11 @@ std::unique_ptr<ReDimStmt> Parser::parseReDimStmt() {
             Token memTok = expectName("expected member name in ReDim target");
             targetExpr = std::make_unique<MemberAccessExpr>(
                 loc, std::move(targetExpr), memTok.text);
-            if (cur_.kind != TokenKind::LeftParen) break;
+            if (cur_.kind != TokenKind::LeftParen) {
+                // 成员链可以继续不带括号: ReDim a(i).b.c(n)
+                if (cur_.kind == TokenKind::Dot) continue;
+                break;
+            }
             advance();  // consume '('
             auto next = parseParenList();
             expect(TokenKind::RightParen, DiagnosticID::ParseExpectedToken,

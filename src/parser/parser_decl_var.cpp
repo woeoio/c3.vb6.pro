@@ -465,8 +465,12 @@ TypeRefPtr Parser::parseTypeRef() {
         }
 
         // 定长字符串: String * N
+        // 长度只允许算术表达式: VB6 里 `Const X As String * 3 = "pdm"` 的 `=`
+        // 是常量赋值的分隔符, 若不设下界 Pratt 会把 `3 = "pdm"` 当成相等比较吃掉,
+        // 于是 Const 解析报 "expected '=' ... got NewLine"。用 minBp 10 排除 8 级的
+        // 比较运算符 (Plus/Mul 等仍可取)。
         if (tok.kind == TokenKind::String && match(TokenKind::Star)) {
-            auto len = parseExpression();
+            auto len = parseExpression(10);
             return std::make_unique<FixedStringTypeRef>(loc, std::move(len));
         }
 
