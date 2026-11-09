@@ -9564,6 +9564,39 @@ if ($Category -in @("all", "run", "vbp")) {
         'o = vb6_GetControlText(vb6_hwnd_Text1)  /* default prop: .Text */;  /* Set */',
         'v = vb6_VariantFromValue(vb6_GetCheckValue(vb6_hwnd_Check1)  /* default prop: .Value */);  /* Set */')
 
+    # PD-Parent 语义刀: `Parent` 的三层语义, 全部由真 VB6 6.00.9782 探针钉死
+    # (oracle 工程 = .build/oracle/parent, 与 tests/pd_parentsem 同形):
+    #   ① 普通控件/容器控件/UC Extender 的 Parent = **顶层窗体** —— 摆在 Frame/PictureBox
+    #      里的控件也一样 (`Command1.Parent.Name` = "Form1"); "直接父容器"那一问叫 Container。
+    #   ② UserControl 内部裸 `Parent` = 顶层窗体 (UC 摆在 Frame 里也是 Form, 不是 Frame)。
+    #   ③ UC **内层控件**的 `Parent` = 该 UserControl 对象本身: `Is Me` = True,
+    #      `.Name` = 设计器类名 ("UCProbe", 不是实例名 "ucP1")。
+    # 修前: ③ 的那几个成员发成未声明符号 vb6_Parent_Name/Caption/BackColor (C2065 ×3);
+    # 只修发码不修 RTL 时: ① 答 Frame1/Pic1、③ 答 Is Me=False / Name="" / TypeName=Object。
+    $pdParentSemExpected = @(
+        "PS-CMD2-PARENT-NAME=Form1", "PS-CMD2-PARENT-CAPTION=HostForm",
+        "PS-CMD2-PARENT-TYPENAME=Form1", "PS-LABEL2-PARENT-NAME=Form1",
+        "PS-CMD1-PARENT-NAME=Form1", "PS-CMD1-PARENT-TYPENAME=Form1",
+        "PS-CMD1-CONTAINER-CAPTION=FrameOne", "PS-CMD3-PARENT-NAME=Form1",
+        "PS-UCP1-PARENT-NAME=Form1", "PS-UCP1-NAME=ucP1",
+        "PS-UCP2-PARENT-NAME=Form1", "PS-UCP2-CONTAINER-CAPTION=FrameTwo",
+        "P1-PARENT-NAME=Form1", "P1-PARENT-CAPTION=HostForm", "P1-PARENT-TYPENAME=Form1",
+        "P1-INNER-PARENT-IS-ME=True", "P1-INNER-PARENT-NAME=UCProbe",
+        "P1-INNER-PARENT-TYPENAME=UCProbe", "P1-PARENT-BACKCOLOR-IS-INNER=True",
+        "P2-PARENT-NAME=Form1", "P2-PARENT-CAPTION=HostForm", "P2-PARENT-TYPENAME=Form1",
+        "P2-INNER-PARENT-IS-ME=True", "P2-INNER-PARENT-NAME=UCProbe",
+        "P2-INNER-PARENT-TYPENAME=UCProbe", "P2-PARENT-BACKCOLOR-IS-INNER=True",
+        "PS-DONE")
+    Test-Vbp "pd_parentsem" "$Tests\pd_parentsem\PdParentSem.vbp" $pdParentSemExpected
+    # 发码形状面: UC 内部各成员走宿主模型 (不再是模块限定符拼名), 内层控件 Parent 仍交对象。
+    Test-EmitcShape "pd_parentsem_emitc" @("$Tests\pd_parentsem\PdParentSem.vbp") @(
+        'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Name")',
+        'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Caption")',
+        'vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"BackColor")',
+        'vb6_ComGetStringProp(vb6_ComGetObjectProp(vb6_hwnd_Label1, L"Parent"), L"Name")')
+    Test-EmitcAbsent "pd_parentsem_emitc_absent" @("$Tests\pd_parentsem\PdParentSem.vbp") @(
+        "vb6_Parent_Name", "vb6_Parent_Caption", "vb6_Parent_BackColor")
+
     # <vbeclipse> 回归夹子 (evtcase) 账 #190: 控件事件臂调用的函数名必须按 **Sub 自己的拼写** 发。
     # VB6 的标识符大小写不敏感、C 敏感: 以前臂里那个名字是拿控件的设计期拼写现拼的, 于是
     # "改了控件名没改过程名" (VB6 完全合法) 就变成引用一个没人定义的函数 —— 链接期 LNK2019。

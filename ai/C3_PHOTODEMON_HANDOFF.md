@@ -354,7 +354,7 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 
 ### 10.3 `Parent` 内建成员（7 条）
 
-- **语义定案**：VB6 `UserControl.Parent` 返回**宿主容器对象**（窗体 / 容器控件），**不是容器窗口句柄**；`Parent.Controls` 就是父容器的控件集合，与 `UserControl.ParentControls` 是同一件事。RTL 一侧的答案因此是 `vb6_UC_ParentObject()`（值位）与 `vb6_UC_ParentControls`（集合），不是 `hWnd`。
+- **语义定案（后被 10.3.1 的真 VB6 探针推翻，保留原文以便对照）**：当时按文档推断 `VB6 UserControl.Parent` 返回**宿主容器对象**（窗体 / 容器控件），**不是容器窗口句柄**；`Parent.Controls` 就是父容器的控件集合，与 `UserControl.ParentControls` 是同一件事。RTL 一侧的答案因此是 `vb6_UC_ParentObject()`（值位）与 `vb6_UC_ParentControls`（集合），不是 `hWnd`。
 - 语料形态：PhotoDemon `pdCommandBar.ctl` 7 处全是 `For Each eControl In Parent.Controls`，循环变量 `As Object`。
 - 根因：`Parent` 是 UserControl 的内建名，但不在 host-pseudo 表里（RTL 没有 `vb6_UserControl_Parent` 全局，表里刻意不收）；语义层 `isDocumentHostObject` 不认它 ⇒ 假 VB3001；发码层裸 `Parent` 被拼成 `vb6_Parent_Controls`（未声明符号）。
 - 修法（三处，均在既有单一答案源上扩展，未新增第二权威）：
@@ -367,6 +367,55 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
   - 链式成员 sanity：`Parent.Controls.Count` → `vb6_ComGetStringProp((void*)vb6_UC_ParentControls(), L"Count")`。
 - 断言：`pd_parent_controls_ctl`（正向两条 + 反向 `VB3001`/`vb6_Parent_Controls`）；负控 `pd_parent_typo_still_reported`（`Paren` 必须照旧报 VB3001，证明只精确放行这一枚名字）。
 - 记账：两个新夹具（`PdParentCtl.vbp` / `PdParentTypo.vbp`）同样未登记 emit-manifest，按同一口径延后。
+
+#### 10.3.1 真 VB6 语义复核（2026-11-09 晚）—— 上面「Parent = 宿主容器」被探针推翻
+
+oracle 工程 `.build/oracle/parent/`（`PdParentSem.vbp` + `Form1.frm` + `UCProbe.ctl` + `Module1.bas`，不入库）：Form1 直挂 `Command2`/`Label2`/`ucP1`，`Frame1` 内 `Command1`，`Frame2` 内 `ucP2`，`Pic1` 内 `Command3`；`UCProbe` 内一枚 `Label1`。VB6 6.00.9782 `/make` 后运行，读数写 `%TEMP%\pdparent_build\parent_sem.txt`。
+
+| 问法 | 真 VB6 答案 | oracle 键 |
+| --- | --- | --- |
+| `Command2.Parent.Name`（Form 直挂） | `Form1` | F-CMD2-PARENT-NAME |
+| `Command1.Parent.Name`（Frame 里） | **`Form1`**，不是 `Frame1` | F-CMD1-PARENT-NAME / F-CMD1-PARENT-IS-FRAME=False |
+| `Command3.Parent.Name`（PictureBox 里） | `Form1` | F-CMD3-PARENT-NAME |
+| `ucP2.Parent.Name`（UC 摆在 Frame 里） | `Form1` | F-UCP2-PARENT-NAME |
+| 直接父容器（对照项） | 叫 **`Container`**：`Command1.Container.Name=Frame1` / `.Caption=FrameOne`、`Command3.Container.Name=Pic1`、`ucP2.Container.Name=Frame2` / `.Caption=FrameTwo` | F-*-CONTAINER-* |
+| UC 内部裸 `Parent`（`ucP1`、`ucP2` 各一份） | `Form1`；`.Caption=HostForm`；`TypeName=Form1` | P1/P2-PARENT-* |
+| `Label1.Parent Is Me`（UC 内层控件） | `True` | P1-INNER-PARENT-IS-ME |
+| `Label1.Parent.Name` | **`UCProbe`**（设计器类名，不是实例名 `ucP1`） | P1-INNER-PARENT-NAME |
+| `TypeName(Label1.Parent)` | `UCProbe` | P1-INNER-PARENT-TYPENAME |
+| `Parent` 的静态类型 | `Object`（`Set f As Form = Parent` 过编译；Form 宿主 err 0、Frame 宿主 err 13） | P1-PARENT-AS-* |
+| 窗体自己 | `Form1.Parent` = Nothing（err 91） | 探针单独验过，未入表 |
+
+三层语义（定案）：
+
+1. **普通控件 / 容器控件 / UC Extender 的 `Parent` = 顶层窗体** —— 与挂在 Frame/PictureBox 里无关；"直接父容器"那一问是 `Container`。
+2. **UC 内部裸 `Parent` = 顶层窗体**（UC 摆在 Frame 里也答 Form）。既有 `vb6_UC_ParentObject()` 的 GA_ROOT 口径**本来就对，不动**。
+3. **UC 内层控件的 `Parent` = 该 UserControl 对象本身**（`Is Me` True）；对它问 `.Name` 得设计器类名，问 `.BackColor` 等属性照常可读。
+
+实现（五处，全部落在既有单一答案源上）：
+
+| 文件 | 改动 |
+| --- | --- |
+| [uc_hostmodel_getprop.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/detail/uc_hostmodel_getprop.inc) | ① 原 `Container \|\| Parent` 合并臂拆开：`Container` 保持原逻辑（直接父容器；父是 UC 则交 Extender），新增独立 `Parent` 臂（父窗口是 UC 宿主 → 交 `r->me`；否则 `GetAncestor(GA_ROOT)`；窗体自己 → Empty）。② 新增 UC **实例**的 `Name` 臂，必须排在「实例指针归一成宿主 HWND」**之前**（归一后就分不出 `ucP1.Name` 与 `Label1.Parent.Name`），只认 `rn->hwnd` 非空的有窗实例。③ 新增 `BackColor`/`ForeColor` 臂（原答 438）。 |
+| [uc_hostmodel.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/uc_hostmodel.c) | `vb6_Host_TypeNameOf` 在 `findByHwnd` 之后补 `findByInstance`（`!IsWindow` 防撞车）：`vb6_ho_findInstance` 只认无窗宿主，有窗 UC 的实例指针原先答 `Object`。 |
+| [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc) | `.ctl` 里裸 `Parent.<其它成员>`（`Name`/`Caption`/`BackColor`/`hWnd`…）立 COM 标记，作用于 `vb6_UC_ParentObject()`（晚绑定，静态类型 Object）；排在 `Parent.Controls` 那一支之后。修前这些会落到 m22 兜底拼成 `vb6_Parent_Name` 等未声明符号。 |
+| [Form1.frm](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/Form1.frm) / [UCProbe.ctl](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/UCProbe.ctl) / [PdParentSem.vbp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/PdParentSem.vbp) | 新夹具，与 oracle 同形，26 行读数。 |
+
+修前 / 中间态 / 修后：
+
+- **修前红**（旧 `C3.exe` 编 `tests/pd_parentsem`）：3 条 `error C2065`——`vb6_Parent_Name` / `vb6_Parent_Caption` / `vb6_Parent_BackColor` 未声明，整个 exe 编不出。
+- **中间态**（只修发码、RTL 回退到 HEAD）：
+  - `PS-CMD1-PARENT-NAME=Frame1`、`PS-CMD1-PARENT-TYPENAME=Frame`（应为 Form1）
+  - `PS-CMD3-PARENT-NAME=Pic1`、`PS-UCP2-PARENT-NAME=Frame2`（应为 Form1）
+  - `P1-INNER-PARENT-IS-ME=False`、`P1-INNER-PARENT-NAME=`（空串）、`P1-INNER-PARENT-TYPENAME=Object`（应为 True/UCProbe/UCProbe）
+  - 且进程在 `P1-PARENT-BACKCOLOR` 处提前结束（只出 18 行，缺 P2 与 `PS-DONE`）——`Parent.BackColor` 在旧宿主模型里答 438。
+- **修后绿**：26 行逐字命中，与 oracle 可比子集**一一相同**（`PS-*` ↔ `F-*`、`P1/P2-*` ↔ `P1/P2-*`）。颜色只断言「窗体 BackColor = UC 宿主 BackColor」（VB6 两者都是 `-2147483633`；C3 同一语义用 `15790320` 表示，故不钉字面值）。
+
+断言：`run_tests.ps1` 新增 `pd_parentsem`（`Test-Vbp`，26 条 needle）+ `pd_parentsem_emitc`（4 条发码形状：`ComGetStringProp/ComGetIntProp((void*)vb6_UC_ParentObject(), …)` 与内层控件 `ComGetObjectProp(vb6_hwnd_Label1, L"Parent")`）+ `pd_parentsem_emitc_absent`（`vb6_Parent_Name/Caption/BackColor` 不得出现）。`Parent.Controls` 的 7 条仍由 10.3 的 `pd_parent_controls_ctl` 与负控 `pd_parent_typo_still_reported` 覆盖。
+
+回归：`check_rtl_embedded.ps1` / `check_rtl_proto_arity.ps1` OK；ucSlider 像素门 **PASS**（A1=0.899 ≥0.80、A2=1135、B=0、D stable）；ucTreeView 五窗像素读数全绿（white=110072 / bg240=803 / dark=586 / hl=6849 / vivid=8497，五窗 open+sync），但该脚本末尾 `Corporate Hierarchy` 的 BM_CLICK 同步检查在 **HEAD 与本次改动上同样失败**（`C3_HOST_MEMBER_MISS site=SetProp name="Font"` + `clickSync=false`）⇒ 既有问题，非本刀回归（同一夹具在 HEAD 复跑得到逐字相同的报错）。
+
+已知缺口（本刀不碰）：`vb6_TypeOf` 仍是恒 0 的桩 ⇒ 夹具没断言 `TypeOf Parent Is Form/Frame`；标准控件自身的 `.Name` 仍答空串（宿主表未登记普通控件），故 Container 一侧只用 `.Caption` 钉。
 
 ### 10.4 `Math` 18 条：不是 tB 专有，是 VB6 自带 VBA 类型库的 `VBA.Math`
 

@@ -132,6 +132,11 @@ const wchar_t* vb6_Host_TypeNameOf(void* obj) {
         return h->isForm ? L"Form" : L"Control";
     }
     vb6_UCRec* r = vb6_uc_findByHwnd(obj);
+    /* PD-Parent 语义刀: 递进来的可能是 UC 的**实例指针** —— UserControl 内层控件的
+       `.Parent` 交回的就是它 (`Label1.Parent Is Me` = True)。有窗宿主在 ho 表里带 hwnd,
+       而 vb6_ho_findInstance 刻意只认无窗那一档 ⇒ 这里按实例补齐一问, 答案与 hwnd
+       那一档同一个类名 ("UCProbe")。`!IsWindow` 是防 HWND 与实例指针数值撞车。 */
+    if (!r && !IsWindow((HWND)obj)) r = vb6_uc_findByInstance(obj);
     if (r && r->desc && r->desc->typeName) {
         const char* dot = strrchr(r->desc->typeName, '.');
         static wchar_t buf[VB6_UC_NAME_LEN];

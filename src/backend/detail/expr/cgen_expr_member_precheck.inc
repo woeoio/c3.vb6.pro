@@ -36,6 +36,24 @@
         lastExpr_ = "vb6_UserControl_ParentControls";
         return;
     }
+    // PD-Parent 语义刀: .ctl 里裸 `Parent` 的**其余成员** (`Parent.Name` /
+    // `Parent.Caption` / `Parent.BackColor` / `Parent.hWnd` …)。
+    // VB6 里 `Parent` 的静态类型是 **Object**(晚绑定), 且真值是**顶层窗体对象** ——
+    // 不是"直接父容器"(那是 `Container`), 也不是 UC 窗口。RTL 那枚
+    // vb6_UC_ParentObject() 交的正是这个口径(GA_ROOT), 宿主模型按名答属性。
+    // 不立这一支的话, 通用路径会把这句当"模块名限定符"拼成 `vb6_Parent_Name`
+    // (RTL 里没有这枚符号 ⇒ C2065), 与 `Parent.Controls` 修前同病。
+    // 放在 `Parent.Controls` 之后: 集合那一支交的是已同步的兼容全局, 不能再解一层。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "parent") {
+        comObjExpr_ = "(void*)vb6_UC_ParentObject()";
+        comMemberName_ = node.memberName;
+        isComMarker_ = true;
+        isEarlyBoundCom_ = false;
+        earlyBoundSym_ = nullptr;
+        lastExpr_ = "(void*)vb6_UC_ParentObject()";
+        return;
+    }
     // Fix 255: 上一支的**限定写法** —— `PropertyPage.Controls.Add(...)` /
     // `UserControl.Controls.Item(k)`. 上面的判据要求 node.object 是裸 `Controls`
     // 标识符, 而这里 node.object 是 MemberAccessExpr(`PropertyPage`.`Controls`),

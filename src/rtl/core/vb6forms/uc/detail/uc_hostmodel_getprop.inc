@@ -29,6 +29,31 @@
         return 1;
     }
 
+    /* PD-Parent 语义刀: `内层控件.Parent` 交回的是 **UserControl 对象本身**
+       (真 VB6 6.00.9782 实测 `Label1.Parent Is Me` = True), 不是宿主窗口。
+       对那枚对象问 `.Name`, VB6 答的是**设计器类名** ("UCProbe" = TypeName), 而不是
+       实例名 ("ucP1" —— 后者是 Extender.Name / 宿主侧 `ucP1.Name` 的答案)。
+       这一档必须排在下面 :35 的归一之前: 一旦实例指针被换成宿主 HWND, 这两问就再也
+       分不开了 (同一个 HWND 既代表"宿主侧那枚控件"也代表"UC 对象")。
+       只认**有窗**的实例 (rn->hwnd): 无窗宿主 (InvisibleAtRuntime) 的槽变量里存的
+       就是实例指针, 那一路的 `.Name` 仍是 Extender 语义, 不能被本档抢走。 */
+    if (_wcsicmp(name, L"Name") == 0) {
+        vb6_UCRec* rn = vb6_uc_findByInstance(obj);
+        if (rn && rn->hwnd && !IsWindow((HWND)obj)
+            && rn->desc && rn->desc->typeName) {
+            const char* cn = rn->desc->typeName;
+            const char* dot = strrchr(cn, '.');
+            if (dot) cn = dot + 1;
+            wchar_t wn[VB6_UC_NAME_LEN];
+            size_t wi = 0;
+            for (; cn[wi] && wi < VB6_UC_NAME_LEN - 1; wi++)
+                wn[wi] = (wchar_t)(unsigned char)cn[wi];
+            wn[wi] = 0;
+            vb6_ho_setVariantBstr(out, vb6_BSTR_FromStr(wn));
+            return 1;
+        }
+    }
+
     // Fix <vbeclipse> rev18: UC **实例指针**归一成宿主 HWND —— 晚绑定属性读
     // (`Dim x As Variant: Set x = Controls.Item(id)` 之后 `x.LeftPos`) 传进来的是
     // `vb6_cls_X*`, 而下面整条内建链只认 HWND, 以前一律落到末尾返回 Empty。
@@ -216,7 +241,7 @@
        顶层窗体自己没有父 ⇒ 交回空值（VB6 里 Form 无 Container）。
        另一层同名答案记下：`vb6forms_axcontainer.c:195` 那档是 OCX 扩展器对象（自己一套
        合成 IDispatch，记录里只有 hwndForm），问的不是这一条链，本刀刻意不动它。 */
-    if (_wcsicmp(name, L"Container") == 0 || _wcsicmp(name, L"Parent") == 0) {
+    if (_wcsicmp(name, L"Container") == 0) {
         void* parentHwnd = (void*)GetParent((HWND)obj);
         if (!parentHwnd) { vb6_ho_setVariantEmpty(out); return 1; }
         /* 账 #271: **父是 UserControl** 时, VB6 的 Container 交回的是**该 UserControl
@@ -235,6 +260,38 @@
             return 1;
         }
         vb6_ho_setVariantObject(out, parentHwnd); return 1;
+    }
+    /* PD-Parent 语义刀 (真 VB6 6.00.9782 探针钉死, 与"直接父容器"的直觉相反):
+         · 普通控件 / 容器控件 / UC Extender 的 `Parent` 一律是**顶层窗体** ——
+           摆在 Frame1 里的 Command1, `Command1.Parent.Name` = "Form1"
+           (`Command1.Parent Is Frame1` = False), PictureBox 里的控件同理;
+           "直接父容器"那一问在 VB6 里叫 **Container**, 是上面那一臂。
+         · UserControl **内层控件**的 `Parent` 是**该 UserControl 对象本身** ——
+           `Label1.Parent Is Me` = True, `.Name` = 设计器类名 ("UCProbe")。
+           所以这里先问"父窗口是不是一枚 UC 宿主": 是就交 `r->me`;
+           否则一律交顶层窗体 (GA_ROOT), 不是 GetParent 的那一格。
+         · 窗体自己没有 Parent ⇒ Nothing (VB6: `Form1.Parent` 抛 91, 即 Nothing)。
+       交对象仍走 #250 立的那条唯一出口; `Is Me` 那头拿到的就是 `r->me` 本身
+       (vb6_ComObjectUnbox 对非包装器原样交回)。 */
+    if (_wcsicmp(name, L"Parent") == 0) {
+        if (h && h->isForm) { vb6_ho_setVariantEmpty(out); return 1; }
+        if (!IsWindow((HWND)obj)) { vb6_ho_setVariantEmpty(out); return 1; }
+        HWND parentW = GetParent((HWND)obj);
+        if (!parentW) { vb6_ho_setVariantEmpty(out); return 1; }
+        vb6_UCRec* rp = vb6_uc_findByHwnd((void*)parentW);
+        if (rp && rp->me) { vb6_ho_setVariantObject(out, rp->me); return 1; }
+        HWND rootW = GetAncestor((HWND)obj, GA_ROOT);
+        vb6_ho_setVariantObject(out, (void*)(rootW ? rootW : parentW));
+        return 1;
+    }
+    /* PD-Parent 语义刀: `Parent.BackColor` / `Parent.ForeColor` (以及任何宿主对象
+       的这两档) —— VB6 的对象属性面里它们一直都在, 而宿主模型以前不认 ⇒ 438。
+       与 cgen 直发路径共用同一份存储 (vb6forms_ctrl.c 那一对出入口), 不另立第二份。 */
+    if (_wcsicmp(name, L"BackColor") == 0) {
+        vb6_ho_setVariantLong(out, vb6_GetControlBackColor(obj)); return 1;
+    }
+    if (_wcsicmp(name, L"ForeColor") == 0) {
+        vb6_ho_setVariantLong(out, vb6_GetControlForeColor(obj)); return 1;
     }
     if (_wcsicmp(name, L"Caption") == 0 || _wcsicmp(name, L"Text") == 0) {
         // Fix 190: 窗口层是 Unicode —— 必须 GetWindowTextW。旧代码用 GetWindowTextA
