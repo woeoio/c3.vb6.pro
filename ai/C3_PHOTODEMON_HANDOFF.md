@@ -226,7 +226,7 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 
 | 名字 | 条数 | 判定 |
 | --- | --- | --- |
-| `Math` | 18 | `Modules\ComplexNumbers.bas` 的 `Math.Log/Abs/Cos`。工程内没有 `Math` 模块/类，VB6 原生也没有这个对象 ⇒ **疑似 tB-only 写法**；下一轮先确认 PhotoDemon.exe 的 VB6 构建是否真编这份文件，再决定是补内置表还是按条件编译处理 |
+| `Math` | 18 | `Modules\ComplexNumbers.bas` 与 `Forms\Effects_Distort_Droste.frm` 的 `Math.Log/Abs/Cos/Sin`。**旧判定「疑似 tB-only」已作废**：真 VB6 探针确认内建 `VBA.Math` 模块，18 处本来就是合法 VB6；已在 `84a74b69` 收口，见 §10.4 |
 | `Parent` | 7 | `Controls\pdCommandBar.ctl` 里裸写 `Parent.Controls`（等价 `UserControl.Parent`）⇒ **UserControl 内建成员在裸名位未登记** |
 | `vbCFFiles` | 7 | `pdClipboardMain.cls` 的 `Data.GetFormat(vbCFFiles)` ⇒ 内建常量表缺项（`vbCFText` / `vbCFBitmap` 都在，只漏这一个） |
 | `ldResult` / `ERR_BUFF_TOO_SMALL` | 2 | `pdXCF.cls` 在 `Do ... Loop` 体内 `Dim` / `Const`，`Loop While` 条件里再用 ⇒ **块内声明未按 VB6 的过程级作用域处理** |
@@ -268,7 +268,7 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 
 ## 8. 下一步
 
-1. `VB3001` 剩余 38 条按 6.5 的分类逐类收口（内建常量表缺项 / UserControl 内建成员 / 块内声明的过程级作用域 / `Randomize` 语句形态）；`Math` 18 条先定口径再动。
+1. `VB3001` 剩余 38 条按 6.5 的分类逐类收口（内建常量表缺项 / UserControl 内建成员 / 块内声明的过程级作用域 / `Randomize` 语句形态）；`Math` 18 条已定案为合法 VB6 并在 `84a74b69` 收口（§10.4）。
 2. `VB3003` 剩余 57 条的隐式转换判据。
 3. `--arch x86` 真编译（emit 后跑 cl/link），按编译错误反推下一批缺口。
 4. 控件属性 / 方法缺失类缺口（需先有一份可编译的产物才能暴露）。
@@ -529,12 +529,17 @@ Text1(隐藏)    -16|w700|cs0|q0|Segoe UI           (与 UC 宿主窗口逐字�
 - 效果：C3 侧 Text1 `WM_GETFONT = -16|w400|cs0|q0|Segoe UI`（改前是设计期默认 `MS Sans Serif`）；字面/字号/字符集/质量档与 oracle 一致。
 - 无回归：五窗像素门 `PASS`，读数与改前逐项相同（`chk240=82.9% label240=90.6% sb240=93.8% sbHover=6/6`，Form3 `avatar=6356 photo=8997 green=13150 greenRim=91`，Contact `avatar=9950 bg65=118862`）。
 
-**已知残差（单列，不在本刀）**：VB6 的 StdFont 是**共享对象**（`FontBold`/`FontUnderline` 直接改那枚对象的 Bold/Underline），C3 把 `FontBold`/`FontUnderline` 建模为独立标志位（`vb6_UserControl_FontBold`，绘制时与字体对象合成），所以赋值那一刻的拷贝不会跟着后续 Bold 翻转走 —— 稳态下 C3 的 Text1 是 w400，真 VB6 是 w700。只影响就地编辑框的字重（`Text1` 为 `Visible=0` 的量字/编辑盒，当前判据不覆盖像素），不影响树区绘制。要完全对齐得把 `FontBold` 回写到字体对象（或给字体对象加绑定窗口表），会动到所有 UC 的绘制路径，另开一刀并重跑五窗。
+**已知残差（单列，不在本刀；对象模型级缺口）**：VB6 的 StdFont 是**共享对象**（`FontBold`/`FontUnderline` 直接改那枚对象的 Bold/Underline），C3 把 `FontBold`/`FontUnderline` 建模为独立标志位（`vb6_UserControl_FontBold`，绘制时与字体对象合成），所以赋值那一刻的拷贝不会跟着后续 Bold 翻转走 —— 稳态下 C3 的 Text1 是 w400，真 VB6 是 w700。只影响就地编辑框的字重（`Text1` 为 `Visible=0` 的量字/编辑盒，当前判据不覆盖像素），不影响树区绘制。要完全对齐得把 `FontBold` 回写到字体对象（或给字体对象加绑定窗口表），会动到所有 UC 的绘制路径，另开一刀并重跑五窗。
 
 ### 10.4 `Math` 18 条：不是 tB 专有，是 VB6 自带 VBA 类型库的 `VBA.Math`
 
-- **定案（推翻旧记的「疑似 tB-only」）**：`Math` 是 VBA 类型库里真实存在的模块（`Element of VBA.Math`：`Log` / `Rnd` / `Round` …），VB6 引用 VBA6 库即拥有它；PhotoDemon 的 `INSTALL.md` 明确是「把 `.vbp` 载入 VB6 IDE 编译」，`Math.Log` 等 18 处因此本来就是合法 VB6。twinBASIC 的 `Math` 模块只是同一族（`docs.twinbasic.com/tB/Modules/Math`），不是来源。
-- 语料形态：`Modules\ComplexNumbers.bas` 5 行 / 18 个限定成员（`Math.Log` / `Math.Abs` / `Math.Cos` / `Math.Sin` / `Math.Sqr` / `Math.Round`）。
+- **定案（推翻旧记的「疑似 tB-only」）**：`Math` 是 VBA 类型库里真实存在的**标准模块**（不是类/对象），VB6 隐式引用 VBA 库即拥有它；PhotoDemon 的 `INSTALL.md` 明确是「把 `.vbp` 载入 VB6 IDE 编译」，18 处因此本来就是合法 VB6。twinBASIC 的 `Math` 模块只是同一族，不是来源。
+- 语料形态（复核计数）：`Modules\ComplexNumbers.bas` + `Forms\Effects_Distort_Droste.frm`，**代码位 18 处**（`Math.` 合计 22，含 3 处注释）：`Log` 9 / `Abs` 4 / `Cos` 4 / `Sin` 1。全部是静态限定调用，没有 `Set m = New Math` / `Dim m As Math`；`PhotoDemon.vbp` 里只有 shell32 与 stdole2 两条 `Reference=`，工程内无 `Math.bas` / `Math.cls`。旧记里写的 `Sqr` / `Round` 来自 C3 的测试夹具，不是 PhotoDemon 语料。
+- **真 VB6 探针（2026-11-09，最小 BAS 工程逐个 `/make`）**：
+  - `Math.Sin` / `Math.Cos` / `Math.Log` / `Math.Abs` / `Math.Round` / `Math.Sqr` **都能编过**（`VBA.Math.Sin` 也能）。
+  - 成员矩阵：`Abs/Atn/Cos/Exp/Log/Rnd/Round/Sgn/Sin/Sqr/Tan` 存在；`Math.Int` / `Math.Fix` / `Math.Randomize(1)` **不存在**（「未找到方法或数据成员」）；`Math.NoSuchMember` 同样报未找到 ⇒ 说明编译器是在**真切解析**这个模块，不是忽略限定前缀。
+  - `Dim m As VBA.Math` → 「Visual Basic 中不支持自动化类型」⇒ 它是模块，不是可实例化的类，也不能 `New`。
+- **C3 现状复核（`.build\C3.exe`，最小探针）**：`Math.Sin/Log/Abs/Cos/Round/Sqr` 六种调用 `rc=0`、无 finding（`84a74b69` 生效）。两处小残差（未改代码）：① 白名单里的 `fix`/`int` 会走到 `vb6_vb6_Fix` / `vb6_vb6_Int`，`LNK2019` 失败而不是像 VB6 那样给「未找到方法或数据成员」；② `Dim m As VBA.Math` 在 C3 下能过，真 VB6 报「不支持自动化类型」。两条都不影响 PhotoDemon 的 18 处。
 - 修法（与已有 `VBA.<成员>` 折叠同一条通路，零新语法）：
   1. [semantic_analyzer_util.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_util.cpp#L789-L794)：`isDocumentHostObject` 认 `math`，**仅限定位**（与 `vba` 同款；值位的裸 `Math` 仍报 VB3001）。
   2. [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc#L186-L194)：`Math.<成员>` 并入 `VBA.<成员>` 那一支，成员白名单 = `abs/atn/cos/exp/fix/int/log/rnd/round/sgn/sin/sqr/tan`（拼错的成员不会因前缀是 `Math` 就变合法）。
