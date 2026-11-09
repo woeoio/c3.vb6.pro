@@ -665,6 +665,39 @@ Text1(隐藏)    -16|w700|cs0|q0|Segoe UI           (与 UC 宿主窗口逐字�
 
 **这 4 条不是工程源码问题**：真 VB6 接受同形写法（S1/S3/S11 均 `/make` 出 exe 并运行出预期读数）。局限说明：未对 `PhotoDemon.vbp` 整工程跑真 VB6 `/make`，「接受」由同形最小探针背书。
 
+### 10.8 分支收敛与 Do 循环分流（2026-11-09 夜）
+
+#### 10.8.1 候选 B 落地：`Do` 循环按 `loopKind` 分流
+
+- 改动：[semantic_analyzer_stmt.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_stmt.cpp) 的 `visit(DoLoopStmt&)` 一处 —— 只有 `DoLoopWhile` / `DoLoopUntil`（回边形）先体后条件；`DoWhileLoop` / `DoUntilLoop`（前置形）保持条件先。不碰 `SymbolTable`、不碰发码。
+- 提交 `84ab0e00`。
+- 读数：正向 P1/P2/P3/P4/P1b/P9 与 `test_procscope_loopdim` 全 0 条 `VB3001`（P1b 真跑 `P1b=0,1600,False`）；负控 `test_procscope_dowhile_bad`（D1）与 `test_procscope_condref_bad`（While/Wend、If、Do While 三处）均报 `VB3001`，不再静默通过。
+
+#### 10.8.2 dev ↔ probe 解析器状态收敛
+
+probe 分支上那批解析器补口原本压在**一个** WIP 提交 `5b01143a`（6 文件、无测试）。在 dev 上按主题拆成 4 个提交，每个带自己的夹具与断言：
+
+| # | 补口 | dev 提交 | 夹具 | 修前读数 | 修后读数 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 注释行以「空白 + `_`」结尾时延续到下一物理行 | `720132fe` | `tests\test_comment_continuation.bas` | `--syntax-only` rc=1：`VB2002 unexpected token at module level: ByVal` | rc=0，真编真跑 `CC=1` |
+| 2 | `Option Compare Binary` | `3fc84ba8` | `tests\test_opt_compare_binary.bas` | rc=1：`VB2001 expected 'Text' or 'Binary'` + `VB2003` | rc=0，真跑 `OCB=False,3`（真 VB6 S12 同读数 `eq=False len=3`） |
+| 3 | 定长字符串 `String * N`（长度表达式降到算术级） | `2d738304` | `tests\test_fixed_string_const.bas` | rc=1：`VB2001 expected '=' in Const declaration` + `VB2004` | rc=0，真跑 `FSC=3,pdm`（真 VB6 S13 同读数 `len=3 val=pdm`） |
+| 4 | `ReDim` 多数组 + 无括号成员链 | `99d94762` | `tests\test_redim_shapes.bas` | 多数组第二项不认；成员链在 `.lMask` 处断 ⇒ `VB2003` | rc=0，真跑 `RS=7,9,42` |
+
+`pdXCF.cls` 在 dev 上现在的状态（本地真实副本，134853 B）：
+
+- `--syntax-only`：**rc=0**、0 条诊断；
+- `--emit-c`：**rc=0**、0 条 `error`、342 行 **0 条**诊断（单文件口径仍有 154 条跨模块 `VB3001` 噪声，属既有的无工程上下文噪声）；
+- ⇒ **可解析**，§10.7.6 第 1 项的分支漂移已消除。
+
+`dev..probe` 的 `src/parser`、`src/lexer` 差异现在只剩「probe 基于旧 dev」造成的历史噪声（probe 缺 dev 近期的 Math / Parent / R2R3 / R4 等改动），**4 个补口的内容已全部落在 dev**。
+
+真 VB6 本轮新增两条 oracle：S12（`Option Compare Binary` 合法，Binary 下 `"abc" = "ABC"` 为 False）、S13（`Public Const X As String * 3 = "pdm"` 合法，`Len=3`、值 `pdm`，即 PhotoDemon `PublicConstants.bas:28` 的真实写法）。
+
+回归：`-Category syntax` → **PASS=187 FAIL=0 SKIP=0**。
+
+未动（排队）：`VBA.Int` 残差（下一轮第一件）、S7 定长数组 `ReDim` 过宽、未声明名的 warning/error 等级差异。
+
 ## 11. 步数截断与固化（2026-11-09）
 
 ### 11.1 截断点
