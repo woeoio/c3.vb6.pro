@@ -9504,7 +9504,10 @@ if ($Category -in @("all", "run", "vbp")) {
     # projectClassNameOf 短路放在符号真值之前, 把这路劫成裸 `vb6_cls_IFoo*` ⇒ 与 Set 侧
     # `vb6_iface_IFoo_wrap(...)` 对不上 → C2440 整工程编译红。`Set f = v` (Variant 往返)
     # 是 BalloonTooltips mdlSubclass.SubclassWnd 的原形态, Bar() 走接口 vtable 钉住运行期。
-    $ifaceWrapExpected = @("IFACE-CALL-OK", "IFACE-DONE")
+    # 负控三针 (真 VB6 探针 .temp/vb6probe_neg): 未实现类 / 外部对象 = 运行期 13,
+    # 且失败后接口变量保持原值 (`IFACE-NEG-KEEP=7` 是前面 Set f = v 装进去的那枚 Impl)。
+    $ifaceWrapExpected = @("IFACE-CALL-OK", "IFACE-NEG-KIND=13", "IFACE-NEG-EXT=13",
+                           "IFACE-NEG-KEEP=7", "IFACE-DONE")
     Test-Vbp "iface_wrap" "$Tests\iface_wrap\IfaceWrap.vbp" $ifaceWrapExpected
     Test-Vbp "iface_wrap_x86" "$Tests\iface_wrap\IfaceWrap.vbp" $ifaceWrapExpected -Arch "x86"
     # <vbeclipse> 回归夹子 (iface_multi) = 新账 #464 / 第一百六十六刀: 一枚 legacy 接口被**两枚**类

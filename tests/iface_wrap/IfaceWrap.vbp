@@ -3,4 +3,5 @@ Name="IfaceWrapApp"
 Module=mdlMain; mdlMain.bas
 Class=IFoo; IFoo.cls
 Class=Impl; Impl.cls
+Class=Other; Other.cls
 Startup="Sub Main"

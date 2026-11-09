@@ -1127,8 +1127,8 @@ v Variant 往返 `Impl`）与 `BalloonTooltips`（`Set Subclass = vSubclass`，B
 （`emitIvrefIfaceViewFrom`，与 For Each 视图站同一发）。裸标识符目标走
 `emitIvrefRefSet`（新 AddRef / 旧 Release），`me->` 字段沿用 B04 纯赋值口径。
 `As Object` 的裸标识符同档（`knownObjectVars_`），包装器指针直接用。
-认不出（外部对象 / 宿主句柄 / 非本族包装器）= NULL 视图 = Nothing —— 这是把原
-VB4001（编译期）降成运行期「给 Nothing」，**方向是少报错**，真值待 VB6 探针钉（见 §21）。
+认不出 / 这枚实例没实现该接口 ⇒ **运行期 13 Type mismatch**（`vb6_RaiseError(13, ...)`），
+整条 Set 被放弃、目标槽保持原值 —— 真值见 §21 的 VB6 探针（不是静默 Nothing）。
 
 **生成码形状**（iface_wrap）：
 
@@ -1158,3 +1158,26 @@ const char* __ivname1 = vb6_ComObject_ClassNameA(__ivbox1);
 - `cTT.cls(154,31): warning VB3003: If条件应为Boolean, 实际为 Object`
 
 **范围**：新分支只落在原 `VB4001` 的 `else` 末尾、错误之前 ⇒ 此前能编过的形状一字未动。
+
+## 21. 负控真值：`Set <接口变量> = <Variant/Object>` 认不出时是「运行期 13」
+
+**探针**：`.temp/vb6probe_neg`（VB6Mini `C:\Program Files (x86)\VB6Mini\bin\VB6.EXE` `/make` 真编，
+Sub Main 把 `Err.Number` 写 `neg.txt`；`IFoo` 可创建、`Impl` 实现、`Other` 不实现）：
+
+| 用例 | VB6 真值 |
+| --- | --- |
+| A `As Object` ← `New Impl` | 0；`f.Ping()=42` |
+| B `Variant` ← `New Impl` | 0 |
+| C `Variant` ← `New Other`（未实现） | **13**，且 `f Is Nothing=False`（原值保留） |
+| D `Variant` ← `CreateObject("Scripting.Dictionary")` | **13**，`f Is Nothing=False` |
+| E `As Object` ← 外部 Dictionary | **13** |
+| F `Set f = Nothing` | 0 |
+
+结论：VB6 **从不静默给 Nothing**，一律 13 且放弃整条 Set、目标保持原值。C3 按此落地：
+视图算完为空 → `vb6_RaiseError(13, vb6_BSTR_FromStr(L"Type mismatch"))`，不走赋值。
+（`vb6_RaiseError` 在 `On Error Resume Next` 下会返回，所以赋值必须显式放进 `else`。）
+
+**断言**（`tests/iface_wrap`，双架构，`run_tests.ps1` 9503-9512）：
+`IFACE-CALL-OK`、`IFACE-NEG-KIND=13`、`IFACE-NEG-EXT=13`、`IFACE-NEG-KEEP=7`、`IFACE-DONE`。
+`IFACE-NEG-KEEP=7` 钉住「13 之后旧值还在」（旧值 = 前面 `Set f = v` 装进去的那枚 `Impl`，
+`Impl.IFoo_Bar()=7`；若被清成 Nothing 这里会先 91 再打印空/0）。

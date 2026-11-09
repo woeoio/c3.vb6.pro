@@ -932,7 +932,11 @@
                     // (ByVal Variant 形参)。
                     // 次序是判据: 先问类名 (ClassNameA 内部走 IsBoxed 三闸, 对裸 HWND /
                     // 外部 IDispatch 安全), 名字非空才敢 GetInstance (它头一句是 obj->vtable 裸读)。
-                    // 认不出 = NULL 视图 (= Nothing; 在册欠项 = 这一形 VB6 报 13)。
+                    // 认不出 / 不动这一族接口 = **运行期 13 Type mismatch**, 目标槽保持原值 ——
+                    // 真 VB6 探针 (.temp/vb6probe_neg, VB6Mini 编) 四条读数:
+                    //   实现类实例(Variant/Object)=0 / 未实现类(Variant)=13 / 外部
+                    //   CreateObject("Scripting.Dictionary")(Variant/Object)=13 / Nothing=0;
+                    // 探针里 13 之后 `f Is Nothing=False` ⇒ 整条语句被放弃, 不是清空。
                     if (node.value && !allImplementationClasses(v->name).empty()) {
                         bool rhsVariant = isDefinitelyVariantExpr(*node.value);
                         bool rhsObject = false;
@@ -944,6 +948,7 @@
                             const std::string ivSeq = std::to_string(ivrefSetSeq_++);
                             const std::string ivBox = "__ivbox" + ivSeq;
                             const std::string ivName = "__ivname" + ivSeq;
+                            const std::string ivViewVar = "__ivview" + ivSeq;
                             const std::string ivView = ivrefIfaceViewFromFn(v->name) + "("
                                 + ivName + " ? vb6_ComObject_GetInstance(" + ivBox
                                 + ") : (void*)0, " + ivName + ")";
@@ -953,11 +958,21 @@
                                 + " 里的对象 */");
                             c_.emitLine("const char* " + ivName
                                 + " = vb6_ComObject_ClassNameA(" + ivBox + ");");
+                            c_.emitLine("vb6_ivref_" + cIdent(v->name) + "* " + ivViewVar
+                                + " = " + ivView + ";");
+                            c_.emitLine("if (!" + ivViewVar + ") {  /* VB6 真值: 非实现者/外部对象 = 13 */");
+                            c_.indent();
+                            c_.emitLine("vb6_RaiseError(13, vb6_BSTR_FromStr(L\"Type mismatch\"));");
+                            c_.dedent();
+                            c_.emitLine("} else {");
+                            c_.indent();
                             if (plainIvTarget) {
-                                emitIvrefRefSet(target, v->name, ivView, false);
+                                emitIvrefRefSet(target, v->name, ivViewVar, false);
                             } else {
-                                c_.emitLine(target + " = " + ivView + ";  /* 视图直槽 (B04 口径) */");
+                                c_.emitLine(target + " = " + ivViewVar + ";  /* 视图直槽 (B04 口径) */");
                             }
+                            c_.dedent();
+                            c_.emitLine("}");
                             return;
                         }
                     }
