@@ -174,6 +174,10 @@ void CCodeGen::visit(CallStmt& node) {
                                     // 交给站F 那位读者判「接收者是视图且这一席同型吗」，不合就留原发。
                                     std::string dbgLate = "vb6_ComGetStringProp(" + comObjExpr_ + ", L\"" + comMemberName_ + "\")";
                                     std::string dbgView = legacyViewGetterReadExpr(comObjExpr_, comMemberName_, dbgLate);
+                                    // 账 #305 (R4 收口): 同一个接收者的**新式**档 (薄指针) —— 与
+                                    // cgen_util_com.cpp:414 那一位的次序一字不差, 只补这处漏问的站点。
+                                    if (dbgView.empty())
+                                        dbgView = ivrefViewGetterReadExpr(comObjExpr_, comMemberName_, dbgLate);
                                     std::string comPropCall = dbgView.empty() ? dbgLate : std::move(dbgView);
                                     c_.emitLine("{");
                                     c_.indent();
@@ -446,6 +450,22 @@ void CCodeGen::visit(CallStmt& node) {
                     comMemberName_.clear();
                     c_.emitLine(viewCallS + ";  /* 视图.vtbl->方法 (站D 零实参裸形) */");
                     return;
+                }
+            }
+            // 账 #305 (R4 收口) 同一站的**新式**档: 接收者是薄指针 `vb6_ivref_<I>*` 时同上,
+            // 那一发也不许进 COM 兜底 (对一枚不是 IDispatch 的薄指针发 Invoke: 编得过、
+            // 跑起来一声不响 —— k175/k177 实测)。形状仍问那位唯一主人 ivrefVtableCall。
+            {
+                const std::string ifaceR4s = slotIvrefViewName(Symbol::toLower(comObjExpr_));
+                if (!ifaceR4s.empty()) {
+                    const std::string callR4 =
+                        ivrefVtableCall(ifaceR4s, comMemberName_, comObjExpr_, {});
+                    if (!callR4.empty()) {
+                        comObjExpr_.clear();
+                        comMemberName_.clear();
+                        c_.emitLine(callR4 + ";  /* 新式视图 ->vt->方法 (站D 零实参裸形) */");
+                        return;
+                    }
                 }
             }
             // 无括号的COM方法调用: obj.Method → vb6_ComCall(obj, L"Method", NULL, 0)

@@ -193,6 +193,11 @@ void CCodeGen::visit(FunctionDecl& node) {
             auto* pSym2 = symTab_.lookup(pLookup161f);
             if (pSym2 && pSym2->kind == SymbolKind::Class && pSym2->isInterface) {
                 knownIfaceVars_[pLower] = pSym2->name;
+                // 账 #305: 同一枚形参在**新式**那张名册里也要有名字。接口被 A2 归一之后它的
+                // C 类型是薄指针 `vb6_ivref_<I>*`, 没有 `.vtbl` / `.obj` 两格; 只登 legacy
+                // 名册会让 `target.Value()` 落成 `target.vtbl->Value(target.obj)` ⇒ cl C2039
+                // (k172_viewarg 实测, R4 放宽 A2 之后)。判据只问形状主人 ivrefCType, 不另立名单。
+                if (!ivrefCType(pSym2->name).empty()) knownIvrefVars_[pLower] = pSym2->name;
             }
             // Fix 161f: `Sub RefillList(lv As ListView)` —— 形参类型名就是内置
             // ListView 控件 (含 ComctlLib.ListView 这种限定写法, 与

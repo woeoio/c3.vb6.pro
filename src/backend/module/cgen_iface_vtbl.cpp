@@ -603,6 +603,46 @@ void CCodeGen::emitLegacyIfaceViewFrom(Module& module) {
     c_.emitLine("}");
 }
 
+// 账 #305 (R4 收口): 上面那一发的**新式**兄弟。R4 去掉 `VB_Creatable` 闸之后, 可创建的空体
+// 接口类也进 ivreg_, 同一份夹具 (k174_vieweach) 的循环变量从值结构体 `vb6_iface_<I>` 变成
+// 薄指针 `vb6_ivref_<I>*`; 元素仍是集合交回来的包装器, 「哪一枚实现类」仍只有运行期知道。
+// 视图怎么造不在这里另立一份: 实现类自己那发 `vb6_iv_thin_of_<C>` (见本文件 :813) 已经把
+// 「实例 → 本接口薄指针 (本类没实现 = NULL)」答完了, 这里只按类名选中那一发。
+std::string CCodeGen::ivrefIfaceViewFromFn(const std::string& ifaceName) const {
+    return "vb6_ivref_" + cIdent(ifaceName) + "_from_class";
+}
+
+void CCodeGen::emitIvrefIfaceViewFrom(Module& module) {
+    const std::string ifaceName = module.moduleName;
+    if (!ivLookupIface(ifaceName)) return;          // 不是新式接口 ⇒ 零输出
+    const std::vector<std::string> impls = allImplementationClasses(ifaceName);
+    if (impls.empty()) return;
+
+    const std::string ifaceId = cIdent(ifaceName);
+    const std::string ifaceType = "vb6_ivref_" + ifaceId + "*";
+    const std::string fn = ivrefIfaceViewFromFn(ifaceName);
+
+    h_.emitBlank();
+    h_.emitLine(ifaceType + " " + fn + "(void* instance, const char* className);");
+
+    c_.emitBlank();
+    c_.emitLine("// === 账 #305 (R4 收口): 运行期那一枚元素 → " + ifaceName + " 的薄指针视图 (For Each 那一站) ===");
+    // 这几发铸在实现类自己那份 TU (静态槽表在那边 ⇒ 只有那边能认类), 声明跟着类头走;
+    // 接口自己这份 .c 未必 include 它们, 所以就地再声明一次 (与类头那份一字的原型)。
+    for (const std::string& impl : impls)
+        c_.emitLine("void* vb6_iv_thin_of_" + cIdent(impl) + "(void* instance);");
+    c_.emitLine(ifaceType + " " + fn + "(void* instance, const char* className) {");
+    c_.indent();
+    c_.emitLine("if (!instance || !className) return NULL;");
+    for (const std::string& impl : impls) {
+        c_.emitLine("if (_stricmp(className, \"" + impl + "\") == 0)"
+                    " return (vb6_ivref_" + ifaceId + "*)vb6_iv_thin_of_" + cIdent(impl) + "(instance);");
+    }
+    c_.emitLine("return NULL;  /* 认不出 = Nothing; 在册欠项 = 这一形 VB6 报 13 */");
+    c_.dedent();
+    c_.emitLine("}");
+}
+
 // ============================================================
 // 类结构体字段 + _New 初始化
 // ============================================================

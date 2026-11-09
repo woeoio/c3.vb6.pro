@@ -358,6 +358,10 @@
     // 与铸那一发 (声明跟着表类型走, 定义铸在接口自己那份 .c)。站点只问这一处: For Each 那一站。
     std::string legacyIfaceViewFromFn(const std::string& ifaceName) const;
     void emitLegacyIfaceViewFrom(Module& module);     // .h 声明 + .c 定义, 都在接口自己那份 TU
+    // 账 #305 (R4 收口): 上面那一位的**新式**兄弟 —— 同一站 (For Each 循环变量是视图),
+    // 只是视图是薄指针 `vb6_ivref_<I>*`。名字唯一出口 + 铸那一发 (同样在接口自己那份 TU)。
+    std::string ivrefIfaceViewFromFn(const std::string& ifaceName) const;
+    void emitIvrefIfaceViewFrom(Module& module);
     void emitIfaceClassFields(Module& module);        // .h: 类结构体里的 __iv_<I> 字段
     void emitIfaceImplTables(Module& module);         // .c: 适配器 + 类侧槽表实例
     void emitIfaceNewInit(Module& module);            // .c: _New() 里回填 vt
@@ -433,6 +437,9 @@
     // 账 #305 新账 #407 第一百七十一刀: 视图值进 Variant 装箱站该发的那一句 (唯一出口)。
     // 不是视图 ⇒ 空串。调用者只有两位 = wrapVariantValue 与 boxToVariant，别添第三位。
     std::string legacyViewBoxExpr(const ASTNode* expr, const std::string& cExpr) const;
+    // 账 #305 (R4 收口): 同一站的**新式**那一档 —— 视图是薄指针 `vb6_ivref_<I>*` (没有 `.obj`
+    // 这一格)。身份仍按指针问 (与 legacy 同一句答案)。不是新式视图 ⇒ 空串。
+    std::string ivrefViewBoxExpr(ASTNode* expr, const std::string& cExpr);
     // 账 #305 新账 #471 站D (第一百七十五刀): 「接收者是一枚视图时那一发方法调用怎么拼」的唯一出口
     // (`x.vtbl-><成员>(x.obj, 实参…)`)。两位消费者 = 表达式路 (cgen_expr_call_com_bind.inc 的 P6.4，
     // 换主人不换形状) 与语句路 (cgen_call.cpp 落在 COM 兜底之前)。不是视图 ⇒ 空串，站点按原路走。

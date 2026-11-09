@@ -273,3 +273,54 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 3. `--arch x86` 真编译（emit 后跑 cl/link），按编译错误反推下一批缺口。
 4. 控件属性 / 方法缺失类缺口（需先有一份可编译的产物才能暴露）。
 
+## 9. R4 回归修复与 sha256 二分归因（2026-11-09）
+
+### 9.1 二分表：唯一引入点是 R4
+
+对 6 条 `EMITC-SHAPE` 差异（`k165_iface_slot` / `k172_viewarg` / `k174_vieweach` / `k175_viewstmt` / `k177_viewwith` / `k178_viewprop`），在 R1 前的 `91de0a68` 与当前 head 之间逐个提交重跑形状 oracle：
+
+| 提交 | 内容 | 6 条形状 |
+| --- | --- | --- |
+| `fa56b9e2` | R2/R3 之前 | 全部 **SAME** |
+| `a7fc9137` | R2+R3（数组类型） | 全部 **SAME** |
+| `fdbd29e5` | R4（可创建空体接口） | 全部 **DIFF** |
+| `91de0a68` | R1 之前（语料排除） | 全部 **DIFF** |
+| `a3541e9a` | R1 之后 HEAD | 全部 **DIFF** |
+
+结论：**R4 是唯一引入点，R2/R3 与 R1 对产物零影响**。这也把 §6.6 里「尚未归因」的那笔账结清：不是 R1，也不是数组归一。
+
+### 9.2 逐条判定：没有一条是「预期内形状变化」
+
+| 夹具 | 判定 | 现象 | 根因 | 修法 |
+| --- | --- | --- | --- | --- |
+| `k172_viewarg` | **真回归** | cl C2039 + `boxtype=46832` | 形参归一后是薄指针，但没登新式名册 ⇒ 按 legacy 形状发 `.vtbl`/`.obj`；ByRef Variant 实参把 `vb6_ivref_IK172**` 当 `vb6_VARIANT*` | `cgen_decl_func.cpp` / `cgen_decl_prop.cpp` 归一后同时登 `knownIvrefVars_`；新增 `ivrefViewBoxExpr`，ByRef Variant 站发临时 `vb6_VARIANT`（`vb6_VariantFromProjectInstance`）并在 `boxTempsToClear_` 里清 |
+| `k174_vieweach` | **真回归** | C2440（Variant 直接赋薄指针） | For Each 落最后一臂 `vb6_VariantFromStackVARIANT` | `cgen_control.cpp` 加 canonical 分支：解包对象 → 取类名 → `vb6_ivref_<I>_from_class` 派发 |
+| `k175_viewstmt` | **真回归（静默）** | 语句位成员调用落 COM 兜底，读数错 | 语句位零实参调用只认 legacy 视图 | `cgen_call.cpp` 站D 补 `slotIvrefViewName` → `ivrefVtableCall(...)` |
+| `k177_viewwith` | **真回归（静默）** | With 内调用落 COM 兜底，读数错 | P6.4 只认 legacy；With 接收者未登新式名册 | `cgen_expr_call_com_bind.inc` P6.4 二选一；`cgen_with.cpp` 接收者判定 + 名册登记/注销 |
+| `k178_viewprop` | **真回归** | `rc=2/rn=3`（期望 4/2） | `Debug.Print x.Label` 走 COM getter；With 接收者同上 | Debug.Print 实参站补 `ivrefViewGetterReadExpr`；With 同 k177 |
+| `k165_iface_slot` | **预期内形状变化** | 产物语义等价（`mi=16`） | R4 让该接口走 canonical | 只更新形状断言（`__iv_K165Iface` 系列） |
+
+### 9.3 新增公共站（For Each / 视图赋值共用的唯一入口）
+
+- `ivrefIfaceViewFromFn(iface)` → `vb6_ivref_<I>_from_class`；`emitIvrefIfaceViewFrom(module)` 在接口模块里发：
+  `vb6_ivref_<I>* vb6_ivref_<I>_from_class(void* instance, const char* className)`，按类名 `_stricmp` 派发到 `vb6_iv_thin_of_<C>(instance)`，认不出返回 `NULL`（= Nothing）。
+- 由 `cgen_base_generate_body_pass.inc` 在 `emitLegacyIfaceViewFrom` 之后调用，仅限接口类模块。
+
+### 9.4 修后读数（本机，`CMAKE_BUILD_PARALLEL_LEVEL=2`）
+
+- k172 `pushA=101/pushB=202/view2view=101/is-diff=0/is-same=1/nothing=1/after=0/boxtype=0/DONE`
+- k174 `sum=303/skipped=2/DONE`；k175 `alpha=2/beta=10/t=15/f=1100/fb=1200/fc=1100/DONE`
+- k177 `alpha=2/beta=10/t1=6/t2=15/DONE`；k178 `s=B1/n=501/rc=4/rn=2/beta=1/betan=1/w=8/let=0/DONE`；k165 `mi=16/DONE=1`
+- 6 夹具 need/absent 形状自检：`need_missing=0 bad_present=0`
+- `tests/run_tests.ps1 -Category syntax` → **PASS=185 FAIL=0 SKIP=0**
+- `scripts/check_project_const_visibility.ps1`（S3 单点哨兵）→ **PASS**
+
+### 9.5 形状门记账（按用户口径挂账，不逐行改）
+
+本地跑 `scripts/emit_manifest.ps1` → `.build\r4_manifest.txt`（610 行，`rc!=0` 88 行属存量）；与 `emit-manifest.expected.txt` 比对 **changed=24 / only-in-exp=0**：
+
+- 6 行 = 上述 R4 夹具；
+- 18 行 = 含 canonical 接口的工程，因新增 `from_class` 派发器而多一段函数。
+
+处置：延后统一 re-bless（`scripts/rebless_emit_manifest.ps1 -Bless` 或取 CI `ci/emit-manifest` 的 artifact），不在本轮逐行手改哈希。
+

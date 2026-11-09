@@ -8965,18 +8965,23 @@ if ($Category -in @("all", "run", "vbp")) {
         "Inner.Row(2)",
         "_vb6_with_0->Coord(2)",
         "b.Items(2)")
-    # <vbeclipse> 回归夹子 (k172_viewarg, 账 #305 第一百七十二刀): legacy 接口的**视图**
-    # (vb6_iface_<I> = 值结构体 {vtbl; obj}) 站在**被接收**那一头的三站, 三站各问一位在册主人,
-    # 没长第二种答案 —— 站B 实例递进视图形参问 legacyIfaceWrapFn (第一百六十六刀);
-    # 站C 视图参与 Is 问 slotIsLegacyIfaceView (第一百六十五刀), 同一性就是 .obj 那一格;
-    # 站E 视图递进 ByRef Variant 形参问 legacyViewBoxExpr (第一百七十一刀, 身份按指针查)。
+    # <vbeclipse> 回归夹子 (k172_viewarg, 账 #305 第一百七十二刀): 接口的**视图**站在
+    # **被接收**那一头的三站, 三站各问一位在册主人, 没长第二种答案。
+    # 形状在 R4 (fdbd29e5) 前后是**两种, 都是预期内的**:
+    #   R4 前 IK172 被 A2 的 `VB_Creatable` 闸挡在接口表外 ⇒ legacy 视图 (值结构体
+    #     vb6_iface_IK172 {vtbl;obj}): 站B 问 legacyIfaceWrapFn、站C 比 `.obj`、
+    #     站E 问 legacyViewBoxExpr (`(void*)(v).obj`);
+    #   R4 起 IK172 进 ivreg_ ⇒ 新式 tB 视图 (薄指针 vb6_ivref_IK172*): 站B 交
+    #     `&me->__iv_IK172`、站C 直接比指针、站E 问 ivrefViewBoxExpr (`(void*)(v)`)。
+    # R4 之后这一投影还补了一刀: 归一后的接口形参同时登 knownIvrefVars_ (站B 的目标调用
+    # 才发 `->vt->`), 否则 cl C2039 (`target.vtbl` 不是薄指针的成员)。
     # BASE(= 第一百七十三刀收线那台) 编这份夹具 = 4 发 C2088 + 2 发 C2440、**没有 exe**
     # (.build/k2392_base_err.txt)；而站E 那一形在 BASE 上是**静默**的: 发的是
-    # `vb6_mdlK172_BoxValue(&v)`, 把 16 字节的视图描述符当 24 字节的 vb6_VARIANT 读 (越界读),
+    # `vb6_mdlK172_BoxValue(&v)`, 把视图描述符当 vb6_VARIANT 读 (越界读),
     # C 侧只是不兼容指针警告 ⇒ 只有门上的针看得见。两台读数一字相同 (.build/k2390_k172_run.txt)。
     #   K172-pushA=101 / pushB=202   同一枚形参收两枚不同实现类的 Me ⇒ 各拿自己那份 vtbl;
-    #   K172-view2view=101           视图→视图形参 = 值结构体直传, 不许再套一层 wrap (反面证人);
-    #   K172-is-diff=0 / is-same=1   比的是 .obj: 不同实例 False、同一实例 True;
+    #   K172-view2view=101           视图→视图形参 = 视图值直传, 不许再包一层 wrap (反面证人);
+    #   K172-is-diff=0 / is-same=1   同一性: 不同实例 False、同一实例 True (legacy 比 .obj, 新式比薄指针);
     #   K172-nothing=1 / after=0     Is Nothing 认未赋值那一格, 接管值后翻面;
     #   K172-boxtype=0               ⚠ 这一条是**已知欠项的读数**, 不是 VB6 那一面的正确答案:
     #                                Exe 工程里工程类登记表恒空 (登记腿被 isDll_ 夹着, 账 #407 的
@@ -8995,19 +9000,19 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k172_view_arg_wrap' "$Tests\k172_viewarg\K172.vbp" $k172Expected
     Test-Vbp 'k172_view_arg_wrap_x86' "$Tests\k172_viewarg\K172.vbp" $k172Expected -Arch "x86"
     Test-EmitcShape "k172_view_arg_shape" @("$Tests\k172_viewarg\K172.vbp") @(
-        "vb6_ret_PushInto = vb6_mdlK172_ViewValue(vb6_iface_IK172_wrap_K172Alpha(me));",
-        "vb6_ret_PushInto = vb6_mdlK172_ViewValue(vb6_iface_IK172_wrap_K172Beta(me));",
-        "if (((v).obj == (w).obj)) {",
-        "if (((v).obj == (u).obj)) {",
-        "if (((nVar).obj == NULL)) {",
-        "vb6_VARIANT _vb6_vararg_0 = vb6_VariantFromProjectInstance((void*)(v).obj);",
+        "vb6_ret_PushInto = vb6_mdlK172_ViewValue((vb6_ivref_IK172*)&((me)->__iv_IK172));",
+        "if ((-(v == w))) {",
+        "if ((-(v == u))) {",
+        "if ((-(nVar == NULL))) {",
+        "vb6_VARIANT _vb6_vararg_0 = vb6_VariantFromProjectInstance((void*)(v));",
         "vb6_VariantClear(&_vb6_vararg_0);")
     Test-EmitcAbsent "k172_view_arg_bare_shapes_gone" @("$Tests\k172_viewarg\K172.vbp") @(
         "vb6_mdlK172_ViewValue(me);",
         "vb6_mdlK172_BoxValue(&v);",
-        "(v == w)",
-        "(v == u)",
-        "(nVar == NULL)")
+        "(v).obj",
+        "(w).obj",
+        "(nVar).obj",
+        "vb6_iface_IK172")
     # <vbeclipse> 回归夹子 (k174_vieweach, 账 #305 第一百七十四刀 = 新账 #471 站A): For Each 的循环变量是一枚
     # legacy 接口的**视图** (值结构体 vb6_iface_<I>) —— 上一刀之前这一站发的是 `o = vb6_VariantFromStackVARIANT(&_fe_var_N)`
     # (把元素按泛对象槽存) ⇒ cl C2440, 语料 Ray.vbp 里 14 站全撞这一发。修法不新立答案: 集合交回来的元素是本族
@@ -9029,12 +9034,13 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k174_vieweach_station_a' "$Tests\k174_vieweach\K174.vbp" $k174Expected
     Test-Vbp 'k174_vieweach_station_a_x86' "$Tests\k174_vieweach\K174.vbp" $k174Expected -Arch "x86"
     Test-EmitcShape "k174_vieweach_shape" @("$Tests\k174_vieweach\K174.vbp") @(
-        'vb6_iface_IK174 vb6_iface_IK174_view_from(void* instance, const char* className);',
-        'if (_stricmp(className, "K174Alpha") == 0) return vb6_iface_IK174_wrap_K174Alpha((vb6_cls_K174Alpha*)instance);',
-        'if (_stricmp(className, "K174Beta") == 0) return vb6_iface_IK174_wrap_K174Beta((vb6_cls_K174Beta*)instance);',
+        'vb6_ivref_IK174* vb6_ivref_IK174_from_class(void* instance, const char* className);',
+        'if (_stricmp(className, "K174Alpha") == 0) return (vb6_ivref_IK174*)vb6_iv_thin_of_K174Alpha(instance);',
+        'if (_stricmp(className, "K174Beta") == 0) return (vb6_ivref_IK174*)vb6_iv_thin_of_K174Beta(instance);',
         'void* _vb6_fe_box_0 = vb6_ComUnpackObject(&_fe_var_0);',
         'const char* _vb6_fe_name_0 = vb6_ComObject_ClassNameA(_vb6_fe_box_0);',
-        'o = vb6_iface_IK174_view_from(_vb6_fe_name_0 ? vb6_ComObject_GetInstance(_vb6_fe_box_0) : (void*)0, _vb6_fe_name_0);')
+        'o = vb6_ivref_IK174_from_class(_vb6_fe_name_0 ? vb6_ComObject_GetInstance(_vb6_fe_box_0) : (void*)0, _vb6_fe_name_0);',
+        'if (o) o->vt->AddRef(o);')
     Test-EmitcAbsent "k174_vieweach_variant_store_gone" @("$Tests\k174_vieweach\K174.vbp") @(
         'o = vb6_VariantFromStackVARIANT(&_fe_var_0);',
         'vb6_VariantClear(&o);')
@@ -9067,18 +9073,16 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k175_viewstmt_station_d' "$Tests\k175_viewstmt\K175.vbp" $k175Expected
     Test-Vbp 'k175_viewstmt_station_d_x86' "$Tests\k175_viewstmt\K175.vbp" $k175Expected -Arch "x86"
     Test-EmitcShape "k175_viewstmt_shape" @("$Tests\k175_viewstmt\K175.vbp") @(
-        'x.vtbl->Ping(x.obj);',
-        't = x.vtbl->Twice(x.obj, 5);',
-        'me->m_lv = vb6_iface_IK175_wrap_K175Alpha((vb6_cls_K175Alpha_New()));  /* Set */',
-        'vb6_ret_NumViaField = me->m_lv.vtbl->Num(me->m_lv.obj);',
-        'memset(&me->m_lv, 0, sizeof(me->m_lv));',
-        'memset(&me->m_lv, 0, sizeof(me->m_lv));  /* Set Nothing (接口视图空形) */')
+        'x->vt->ping(x);',
+        't = x->vt->twice(x, 5);',
+        'me->m_lv = &((vb6_cls_K175Alpha_New()))->__iv_IK175;',
+        'vb6_ret_NumViaField = me->m_lv->vt->get_num(me->m_lv);',
+        'me->m_lv = NULL;')
     Test-EmitcAbsent "k175_viewstmt_com_fallback_gone" @("$Tests\k175_viewstmt\K175.vbp") @(
         'vb6_ComCall(x, L"Ping", NULL, 0)',
         'vb6_ComVarFree((void*)vb6_ComCall(x',
         'me->m_lv = (vb6_cls_K175Alpha_New());  /* Set */',
         'vb6_ComGetIntProp(me->m_lv, L"Num")',
-        'me->m_lv = NULL;',
         'vb6_ReleaseObject((void**)&me->m_lv)')
     # <vbeclipse> 回归夹子 (k177_viewwith, 账 #305 第一百七十七刀 = 新账 #471 站D′): With 的**接收者**是一枚视图。
     # 改前那一格发 "void* _vb6_with_0 = (void*)x" —— 整枚值结构体 vb6_iface_<I> 进 void* 槽 = cl **C2440**，
@@ -9100,10 +9104,10 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k177_viewwith_station_d_prime' "$Tests\k177_viewwith\K177.vbp" $k177Expected
     Test-Vbp 'k177_viewwith_station_d_prime_x86' "$Tests\k177_viewwith\K177.vbp" $k177Expected -Arch "x86"
     Test-EmitcShape "k177_viewwith_shape" @("$Tests\k177_viewwith\K177.vbp") @(
-        'vb6_iface_IK177 _vb6_with_0 = x',
-        '_vb6_with_0.vtbl->Ping(_vb6_with_0.obj);',
-        't1 = vb6_ChkLong(_vb6_with_0.vtbl->Twice(_vb6_with_0.obj, 3));',
-        '_vb6_with_1.vtbl->Ping(_vb6_with_1.obj);')
+        'vb6_ivref_IK177* _vb6_with_0 = x',
+        '_vb6_with_0->vt->ping(_vb6_with_0);',
+        't1 = vb6_ChkLong(_vb6_with_0->vt->twice(_vb6_with_0, 3));',
+        '_vb6_with_1->vt->ping(_vb6_with_1);')
     Test-EmitcAbsent "k177_viewwith_void_temp_gone" @("$Tests\k177_viewwith\K177.vbp") @(
         'void* _vb6_with_0 = (void*)x',
         'vb6_ComCall(_vb6_with_0, L"Ping", NULL, 0)')
@@ -9263,16 +9267,16 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k178_viewprop_station_f_read' "$Tests\k178_viewprop\K178.vbp" $k178Expected
     Test-Vbp 'k178_viewprop_station_f_read_x86' "$Tests\k178_viewprop\K178.vbp" $k178Expected -Arch "x86"
     Test-EmitcShape "k178_viewprop_shape" @("$Tests\k178_viewprop\K178.vbp") @(
-        '.Label = (BSTR (*)(void*))vb6_K178Alpha_prop_get_IK178_Label,',
-        '.Label_put = (void (*)(void*, BSTR v))vb6_K178Alpha_prop_let_IK178_Label,',
-        '.Label = (BSTR (*)(void*))vb6_K178Beta_prop_get_IK178_Label,',
-        '.Label_put = (void (*)(void*, BSTR v))vb6_K178Beta_prop_let_IK178_Label,',
-        'vb6_BSTR_Assign(&s, x.vtbl->Label(x.obj));',
-        'n = x.vtbl->Num(x.obj);',
-        'wchar_t* _dbg_com_bstr = x.vtbl->Label(x.obj);',
-        'vb6_BSTR_Assign(&s, _vb6_with_0.vtbl->Label(_vb6_with_0.obj));',
-        'n = _vb6_with_0.vtbl->Num(_vb6_with_0.obj);',
-        'w = x.vtbl->Twice(x.obj, 4);')
+        'vb6_iimpl_K178Alpha_IK178_get_label,',
+        'vb6_iimpl_K178Alpha_IK178_put_label,',
+        'vb6_iimpl_K178Beta_IK178_get_label,',
+        'vb6_iimpl_K178Beta_IK178_put_label,',
+        'vb6_BSTR_Assign(&s, x->vt->get_label(x));',
+        'n = x->vt->get_num(x);',
+        'wchar_t* _dbg_com_bstr = x->vt->get_label(x);',
+        'vb6_BSTR_Assign(&s, _vb6_with_0->vt->get_label(_vb6_with_0));',
+        'n = _vb6_with_0->vt->get_num(_vb6_with_0);',
+        'w = x->vt->twice(x, 4);')
     # 四条负针抄自**改前那台的真实产物** (同一批语句, 探针 `.local/k2690_sd3` = `.build/k2691_emit.txt` 与
     # Let-first 探针 `.build/k2739_emit2.txt`, 变量名与成员名与本夹具一字相同): 这一族从此不再走 helper,
     # 而 Get 的函数也从此不再被硬套进 setter 的形状那一格 (新账 #489 的那枚静默错绑)。
@@ -11031,14 +11035,14 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'b165_iface_view_slot' "$Tests\k165_iface_slot\K165Slot.vbp" $b165Expected
     Test-Vbp 'b165_iface_view_slot_x86' "$Tests\k165_iface_slot\K165Slot.vbp" $b165Expected -Arch "x86"
     $b165Shapes = @(
-        'mv = vb6_iface_K165Iface_wrap_K165Impl((vb6_cls_K165Impl_New()));  /* Set */',
-        'mv = vb6_iface_K165Iface_wrap_K165Impl(mi);  /* Set */',
-        'lv = vb6_iface_K165Iface_wrap_K165Impl((vb6_cls_K165Impl_New()));  /* Set */',
+        'mv = &((vb6_cls_K165Impl_New()))->__iv_K165Iface;',
+        'mv = ((mi) ? &(mi)->__iv_K165Iface : NULL);',
+        'lv = &((vb6_cls_K165Impl_New()))->__iv_K165Iface;',
         # 账 #305 第二百一十七刀: 视图槽的置空从前发 `vb6_ReleaseObject((void**)&mv)` —— 那把整枚
         # 值结构体的地址交给一枚 IUnknown** 槽 (它读的首字段是那张函数指针表)。现在的正答案 =
         # 整枚零化；`mv = NULL;` 那枚反面针早在第一百六十五刀就在册 (值结构体没有 NULL 这一形)。
-        'memset(&mv, 0, sizeof(mv));  /* Set Nothing (接口视图空形) */',
-        'mv.vtbl->Bar(mv.obj, 3)',
+        'mv = NULL;  /* Set Nothing (tB Interface 值) */',
+        'mv->vt->bar(mv, 3)',
         'vb6_cls_K165Impl* __clsold',
         # 8f4e4b24: 类槽那一支统一过解包（裸实例原样交回），形状针跟着换整句。
         'mi = (vb6_cls_K165Impl*)vb6_ComObject_UnboxVb6Instance((void*)((vb6_cls_K165Impl_New())));',
@@ -11049,7 +11053,7 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_cls_K165Iface* __clsold',
         'vb6_cls_K165Iface_AddRef(mv)',
         'vb6_cls_K165Iface_Release(__clsold',
-        'mv = NULL;',
+        'memset(&mv, 0, sizeof(mv));',        # R4 收口: 薄指针档不许退回结构体零化
         'vb6_ReleaseObject((void**)&mv)')   # 第二百一十七刀的病灶 (结构体地址进 IUnknown** 槽)
     Test-EmitcAbsent 'b165_no_phantom_class_holder_for_a_view_slot' @(
         "$Tests\k165_iface_slot\K165Slot.vbp") $b165Absent

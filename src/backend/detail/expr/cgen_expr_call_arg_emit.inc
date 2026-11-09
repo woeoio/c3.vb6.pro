@@ -1201,6 +1201,18 @@
                                         argVal = "&" + tmp172e;
                                         break;
                                     }
+                                    // 账 #305 (R4 收口): 同一站的**新式**视图档 (薄指针)。
+                                    const std::string viewBoxR4 =
+                                        ivrefViewBoxExpr(node.positional[i].get(), argVal);
+                                    if (!viewBoxR4.empty()) {
+                                        const std::string tmpR4 = "_vb6_vararg_"
+                                            + std::to_string(ansiCounter_++);
+                                        c_.emitLine("vb6_VARIANT " + tmpR4 + " = " + viewBoxR4
+                                                    + ";  /* Fix <vbeclipse>: ByRef Variant 实参装箱 */");
+                                        boxTempsToClear_.push_back({tmpR4, c_.indentLevel()});
+                                        argVal = "&" + tmpR4;
+                                        break;
+                                    }
                                 }
                                 std::string argCls92y =
                                     isObjVar92y ? std::string()

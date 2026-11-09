@@ -424,6 +424,19 @@ std::string CCodeGen::legacyViewBoxExpr(const ASTNode* expr, const std::string& 
     return "vb6_VariantFromProjectInstance((void*)(" + cExpr + ").obj)";
 }
 
+// 账 #305 (R4 收口): 上面那一站的**新式**那一档。R4 去掉 `VB_Creatable` 闸之后, 可创建的
+// 空体接口类也进 ivreg_, 同一枚 `Dim v As IK172` 的 C 值从值结构体 (`vb6_iface_<I>`) 变成
+// 薄指针 (`vb6_ivref_<I>*`, 没有 `.obj` / `.vtbl` 两格)。装箱站不认这一档就把
+// `vb6_ivref_<I>**` 当 `vb6_VARIANT*` 交出去 —— k172_viewarg 站E 实测: 编得过, VarType
+// 读成 46832 (把指针的低 16 位当 vt)。身份仍按指针问, 与 legacy 那一臂同一句答案;
+// 哪一枚是视图只问既有主人 ifaceViewOfExpr, 不在这里另立名单。
+std::string CCodeGen::ivrefViewBoxExpr(ASTNode* expr, const std::string& cExpr) {
+    if (!expr || cExpr.empty()) return std::string();
+    if (cExprIsVariantCarrier(cExpr)) return std::string();
+    if (ifaceViewOfExpr(*expr).empty()) return std::string();
+    return "vb6_VariantFromProjectInstance((void*)(" + cExpr + "))";
+}
+
 // 账 #305 新账 #471 站D (第一百七十五刀): 「接收者是一枚视图，它的方法那一发怎么发」收成一处。
 // 从前这一发只在表达式路现场拼 (P6.4)，语句路（不写括号的零实参那一形）直接落 `vb6_ComCall(视图, …)`
 // —— 整枚结构体进 `void*` 槽 = cl C2172（探针实测，外部真语料 24 行 / 去重 8 份文件）。

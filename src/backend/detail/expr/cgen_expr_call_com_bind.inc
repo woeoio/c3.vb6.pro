@@ -609,7 +609,14 @@
         {
             std::string objLower = objExpr;
             std::transform(objLower.begin(), objLower.end(), objLower.begin(), ::tolower);
-            if (slotIsLegacyIfaceView(objLower) && !isEarlyBoundCom_) {
+            const bool isLegacyView454 = slotIsLegacyIfaceView(objLower);
+            // 账 #305 (R4 收口): 同一站的新式档 (薄指针 vb6_ivref_<I>*)。R4 之后可创建的空体
+            // 接口类也进 ivreg_, k177 的 `x.Twice(5)` / With 里的 `.Twice(3)` 就从值结构体
+            // 变成薄指针; 不认这一档就落 DispView/ComCall 兜底 —— 运行期 notdispatchable
+            // (编得过、读数全空)。形状仍交唯一主人 ivrefVtableCall, 这里只多问一次名册。
+            const std::string ifaceR4454 =
+                isLegacyView454 ? std::string() : slotIvrefViewName(objLower);
+            if ((isLegacyView454 || !ifaceR4454.empty()) && !isEarlyBoundCom_) {
                 // 生成参数列表
                 std::vector<std::string> callArgs;
                 for (size_t i = 0; i < node.positional.size(); i++) {
@@ -620,7 +627,9 @@
                     emitExpr(*named.value);
                     callArgs.push_back(lastExpr_);
                 }
-                const std::string p64Call = legacyViewCallExpr(objExpr, memberName, callArgs);
+                const std::string p64Call = isLegacyView454
+                    ? legacyViewCallExpr(objExpr, memberName, callArgs)
+                    : ivrefVtableCall(ifaceR4454, memberName, objExpr, callArgs);
                 if (!p64Call.empty()) {
                     lastExpr_ = p64Call;
                     return;

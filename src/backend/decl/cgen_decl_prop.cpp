@@ -165,6 +165,9 @@ void CCodeGen::visit(PropertyDecl& node) {
             auto* pSym2 = symTab_.lookup(simpleP.name);
             if (pSym2 && pSym2->kind == SymbolKind::Class && pSym2->isInterface) {
                 knownIfaceVars_[pLower] = pSym2->name;
+                // 账 #305: 与 cgen_decl_func.cpp 同一条 —— 归一后的接口形参是薄指针,
+                // 新式名册里没有名字就会按 legacy 形状发 `.vtbl` / `.obj` ⇒ cl C2039。
+                if (!ivrefCType(pSym2->name).empty()) knownIvrefVars_[pLower] = pSym2->name;
             }
             // Fix 161f: `lv As ListView` 形参槽就是 HWND —— 同 cgen_decl_func.cpp。
             if (Symbol::toLower(simpleP.name).find("listview") != std::string::npos)
