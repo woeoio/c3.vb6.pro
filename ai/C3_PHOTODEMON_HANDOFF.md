@@ -488,3 +488,75 @@ CI（run `42617564259`，HEAD `cb1a68f1`）的 `Emit manifest (shape oracle)` **
 
 未发现未修的真回归；25 行 DIFF 全部可归因、7 行多出均为新夹具。形状门仍按用户口径挂账，待统一 re-bless（`scripts/rebless_emit_manifest.ps1 -Bless`，或取 CI `emit-manifest` artifact）。
 
+## 13. CI 触发规则 + 内建常量 oracle 复核（2026-11-09）
+
+### 13.1 非 src 改动不触发 GA（`.github/workflows/ci.yml` 的 `on.paths` 白名单）
+
+22 个 job 只证明「编译器没坏 / 判据还能判别」，与文档排版无关。自本日起 `ci.yml` 的 `push` / `pull_request`（均限 `dev`）加 `paths` 白名单，未命中的提交 **不触发**、不产生 run：
+
+| 白名单条目 | 为什么必须跑 |
+| --- | --- |
+| `src/**` | 编译器本体；实质改动一律要跑 |
+| `tests/**` | 改判据 / 夹具 / 像素门会改变**验证能力本身**，必须证明改完仍能红能绿 |
+| `scripts/**` | 形状门 / 哨兵 / 测试驱动，同样属于验证能力 |
+| `cmake/**`、`CMakeLists.txt`、`build.bat`、`build.sh` | 构建口径变了，产物可能跟着变 |
+| `.github/workflows/**` | 工作流自身改动；跑一次才知道新配置是否真能起 |
+| `emit-manifest.expected.txt` | 形状门的期望基线 |
+
+配套约定（写在这里就是为了防止「没跑 CI = 绿」的误读）：
+
+1. **「没跑 CI」≠「绿」**。skip 只表示该提交按规则不进入验证，**不**表示已验证通过。release / 对账 / 合并前必须有一次真实 run 的绿，或显式补跑。
+2. `src/**` 内纯注释 / 纯格式 / 零语义改动：提交信息带 **`[skip ci]`**（GitHub Actions 原生识别，`[ci skip]` / `[no ci]` 同义）。带了这个标记就**没有**验证，别拿它当已验证。
+3. `tests/**` 内的纯注释/排版同理可带 `[skip ci]`；但只要动了判据、夹具、像素门，就**不许**带。
+4. 需要强制跑一次：`gh workflow run ci.yml --ref dev`（`workflow_dispatch` 不受 `paths` 限制）。
+5. `ai/**`、`docs/**`、`www/**`、`pic/**` 等非源码目录不在白名单 ⇒ 纯文档/交接提交天然 skip。
+
+另外两个 workflow 不受影响：`ci_t0.yml`（tag `github-test-*` / 夜间 cron / dispatch）与 `ci_vbman.yml`（`workflow_run` 联动 ci_t0 / tag / dispatch）都不监听 push，无需改。
+
+**本条规则自身的落地提交带 `[skip ci]`**：改动只有 `ci.yml` 的 `on:` 过滤与本文档，22 个 job 的行为未变，按新规则不跑。
+
+### 13.2 内建常量表（38 条中的 8 条）：用真 VB6 取 oracle 复核
+
+上一轮已在 `2e19c556` 补表并收口（`vbCFFiles` 7 处 + `vbAsyncStatusCodeEndDownloadData` 1 处 = 8 条 VB3001）。本轮按要求补做**值本身的 oracle 证明**——不是从文档抄数，而是拿真 VB6 编译探针 exe，把常量的运行时值打印出来当基准：
+
+- 编译器：`C:\Program Files (x86)\VB6Mini\bin\VB6.EXE`，版本 **6.00.9782**，`VB6.OLB` 296466 字节。
+- 探针工程（中间产物，不入库）：`.build\oracle\cf\Probe.vbp`（Clipboard 全族）、`.build\oracle\async\Probe2.vbp`（`StatusCode` 单枚）。两者分开是因为一枚常量若不被识别会让整编失败，混在一起会连累另一枚的证据。
+- 编译/运行：`VB6.EXE /make Probe.vbp /outdir <temp>` → `Probe.exe`（16384 字节）→ 运行写 `probe_out.txt`。
+- **注意**：`/out <单文件路径>` 会报「权限被拒绝」，必须用 `/outdir <目录>`；且工程要复制到 `%TEMP%` 下再编，在仓库 `.build` 下直接编也可能失败。
+
+`Probe.exe` 的实际输出（本轮重跑，逐字）：
+
+```
+vbCFFiles=15
+vbCFText=1
+vbCFBitmap=2
+vbCFMetafile=3
+vbCFDIB=8
+vbCFPalette=9
+vbCFEMetafile=14
+vbCFRTF=-16639
+```
+
+```
+vbAsyncStatusCodeEndDownloadData=6
+```
+
+与 [builtin_consts_ext.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/builtin/builtin_consts_ext.inc#L194-L204) 表内值逐项比对：
+
+| 常量 | 表内值 | VB6 oracle | 结论 |
+| --- | --- | --- | --- |
+| `vbCFFiles` | 15 | 15 | 一致（**8 条缺口的 7 条**） |
+| `vbCFText` | 1 | 1 | 一致 |
+| `vbCFBitmap` | 2 | 2 | 一致 |
+| `vbCFMetafile` | 3 | 3 | 一致（本轮补测，此前未取值） |
+| `vbCFDIB` | 8 | 8 | 一致 |
+| `vbCFPalette` | 9 | 9 | 一致（本轮补测，此前未取值） |
+| `vbCFEMetafile` | 14 | 14 | 一致 |
+| `vbCFRTF` | −16639 | −16639 | 一致 |
+| `vbAsyncStatusCodeEndDownloadData` | 6 | 6 | 一致（**8 条缺口的 1 条**） |
+
+- **无法验证项：无**。9 枚全部有真 VB6 输出背书，本轮未改动任何数值（表中值本来就对）。
+- 修前/修后计数（已在 `2e19c556` 记账）：夹具 `tests\test_builtin_const_ext.bas` 在旧二进制上 2 条 `VB3001`（两枚常量各 1）→ 新二进制 0 条；PhotoDemon 探针口径 VB3001 8 处 → 0 处（该提交后探针 VB3001 总账 3693→0 的最后一截）。
+- 断言侧：`run_tests.ps1` 的 `test_builtin_const_ext`（Compile+Run，读数 `BCE-CF=15` / `BCE-ASYNC=6`）+ `bce_emitc_reads_are_literals`（发码必须是字面量）+ `test_intrinsic_consts` 的 `IC-CF-FILES=15` / `IC-ASYNC-END=6`。这些断言证明的是**值本身**，不是「能编译」。
+- 本轮**无新提交**：常量项已在 `2e19c556` 完成，本节的产出只是 oracle 复核记录。
+
