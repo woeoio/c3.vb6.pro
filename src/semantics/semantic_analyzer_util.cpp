@@ -800,6 +800,11 @@ bool SemanticAnalyzer::isDocumentHostObject(const std::string& name, bool qualif
     if (lk == "usercontrol") return k == DocumentKind::UserControl;
     if (lk == "propertypage") return k == DocumentKind::PropertyPage;
     if (lk == "extender" || lk == "ambient") return k == DocumentKind::UserControl && qualifierPos;
+    // VB6 UserControl 内建 `Parent`：值是**宿主容器对象**（窗体 / 容器控件），不是容器
+    // 窗口句柄。两个位都合法（`Set p = Parent` / `Parent.Controls`），发码侧由
+    // vb6_UC_ParentObject() / vb6_UC_ParentControls() 两条码头回答（见 cgen 的 133u 与
+    // PD-Parent 那一支）。PhotoDemon pdCommandBar.ctl 的 7 处都是 `Parent.Controls`。
+    if (lk == "parent") return k == DocumentKind::UserControl;
     return false;
 }
 

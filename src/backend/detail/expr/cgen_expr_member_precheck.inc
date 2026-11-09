@@ -19,6 +19,23 @@
         lastExpr_ = "(void*)vb6_UC_Controls()";
         return;
     }
+    // PD-Parent: .ctl 里的裸 `Parent.Controls` —— VB6 的 `Parent` 是宿主容器对象，
+    // `.Controls` 就是**父容器的**控件集合（与 UserControl.ParentControls 同一件事，
+    // 同一枚码头 vb6_UC_ParentControls）。PhotoDemon pdCommandBar.ctl 7 处
+    // `For Each eControl In Parent.Controls`；此前通用路径把裸 `Parent` 拼成
+    // `vb6_Parent_Controls`（未声明符号）并配一条假 VB3001。
+    // 放在裸 `Controls` 那一支之后、其余类感知解析之前，理由与它相同。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "parent"
+        && Symbol::toLower(node.memberName) == "controls") {
+        // 与限定写法同形：交出那枚已同步的兼容全局（host init 里 vb6_uc_syncParentControls
+        // 每轮同步），For Each 发 `vb6_ForEach_Init(vb6_UserControl_ParentControls)`，
+        // `.Count` 一类链式成员由 generic_access 的 ParentControls 那一支换真实访问器。
+        // 不立 COM 标记 —— 集合对象已就绪，再解一层会发出 `...ComGetObjectProp(…, L"Controls")`。
+        isComMarker_ = false;
+        lastExpr_ = "vb6_UserControl_ParentControls";
+        return;
+    }
     // Fix 255: 上一支的**限定写法** —— `PropertyPage.Controls.Add(...)` /
     // `UserControl.Controls.Item(k)`. 上面的判据要求 node.object 是裸 `Controls`
     // 标识符, 而这里 node.object 是 MemberAccessExpr(`PropertyPage`.`Controls`),

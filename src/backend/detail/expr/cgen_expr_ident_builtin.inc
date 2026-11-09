@@ -263,6 +263,14 @@
             lastExpr_ = "(&vb6_UserControl_Extender)";
             return;
         }
+        // VB6 UserControl 内建 `Parent`（宿主容器对象，不是容器窗口）：RTL 没有对应
+        // 全局，唯一答复是 vb6_UC_ParentObject()（Fix 133u 那条文本改写对裸符号也是
+        // 这个答案，这里先在 AST 侧落定，免得 `Parent.<成员>` 链拼出未声明的符号）。
+        // PhotoDemon pdCommandBar.ctl 的 7 处 `Parent.Controls` 由 member precheck 拦截。
+        if (lower == "parent") {
+            lastExpr_ = "vb6_UC_ParentObject()";
+            return;
+        }
         std::string rtlHp;
         const std::string hostObjHp = isPropertyPageDesigner_ ? "PropertyPage" : "UserControl";
         /* 装配出口全文件只许问一次 (host_pseudo_table 的 ASSEMBLY-SITE 钉的就是这条):

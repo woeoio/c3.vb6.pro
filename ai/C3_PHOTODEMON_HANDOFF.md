@@ -352,3 +352,19 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 - 断言：`tests/test_randomize_stmt.bas`（Compile+Run，`RZ-OK=True`：同种子两次投放首值一致，负种同样生效）+ `rz_emitc_forms` 形状钉 + `rz_emitc_no_binary_sub` 反向钉。
 - 回归：`-Category syntax` **PASS=185 FAIL=0**。
 
+### 10.3 `Parent` 内建成员（7 条）
+
+- **语义定案**：VB6 `UserControl.Parent` 返回**宿主容器对象**（窗体 / 容器控件），**不是容器窗口句柄**；`Parent.Controls` 就是父容器的控件集合，与 `UserControl.ParentControls` 是同一件事。RTL 一侧的答案因此是 `vb6_UC_ParentObject()`（值位）与 `vb6_UC_ParentControls`（集合），不是 `hWnd`。
+- 语料形态：PhotoDemon `pdCommandBar.ctl` 7 处全是 `For Each eControl In Parent.Controls`，循环变量 `As Object`。
+- 根因：`Parent` 是 UserControl 的内建名，但不在 host-pseudo 表里（RTL 没有 `vb6_UserControl_Parent` 全局，表里刻意不收）；语义层 `isDocumentHostObject` 不认它 ⇒ 假 VB3001；发码层裸 `Parent` 被拼成 `vb6_Parent_Controls`（未声明符号）。
+- 修法（三处，均在既有单一答案源上扩展，未新增第二权威）：
+  1. [semantic_analyzer_util.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_util.cpp)：`isDocumentHostObject` 认 `parent`，仅 `DocumentKind::UserControl`，值位/限定位都合法。
+  2. [cgen_expr_ident_builtin.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_ident_builtin.inc)：裸 `Parent` 落 `vb6_UC_ParentObject()`（与 Fix 133u 对 `UserControl.Parent` 的答复同一枚）。
+  3. [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc)：`Parent.Controls` 交出已同步的 `vb6_UserControl_ParentControls`（与限定写法同形；**不**立 COM 标记，否则会多解一层成 `ComGetObjectProp(..., L"Controls")`）。
+- 修前 / 修后读数（`tests/pd_parentctl/PdParentCtl.vbp`）：
+  - 修前：`warning VB3001: 未声明的标识符: 'Parent'`，产物 `vb6_ForEach_Init(vb6_Parent_Controls)`。
+  - 修后：stderr 0 行；`hostObj = vb6_UC_ParentObject();` + `void* _fe_enum_0 = vb6_ForEach_Init(vb6_UserControl_ParentControls);`（与 `For Each c In UserControl.ParentControls` 的既有产出一字不差）。
+  - 链式成员 sanity：`Parent.Controls.Count` → `vb6_ComGetStringProp((void*)vb6_UC_ParentControls(), L"Count")`。
+- 断言：`pd_parent_controls_ctl`（正向两条 + 反向 `VB3001`/`vb6_Parent_Controls`）；负控 `pd_parent_typo_still_reported`（`Paren` 必须照旧报 VB3001，证明只精确放行这一枚名字）。
+- 记账：两个新夹具（`PdParentCtl.vbp` / `PdParentTypo.vbp`）同样未登记 emit-manifest，按同一口径延后。
+

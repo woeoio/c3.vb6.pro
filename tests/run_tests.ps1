@@ -12280,6 +12280,16 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_iface\IThing.cls", "$Tests\pd_iface\Impl.cls", "$Tests\pd_iface\Entry.bas") @(
         "typedef struct vb6_ivtbl_IThing {",
         "static const vb6_ivtbl_IThing vb6_ivtbl_IThing_for_Impl = {") @("VB3044")
+    # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
+    # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
+    # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
+    # 修前通用路径把裸 `Parent` 拼成未声明符号 `vb6_Parent_Controls` 并配一条假 VB3001。
+    Test-CodegenNote "pd_parent_controls_ctl" @("$Tests\pd_parentctl\PdParentCtl.vbp") @(
+        "vb6_ForEach_Init(vb6_UserControl_ParentControls)",
+        "vb6_UC_ParentObject()") @("VB3001", "vb6_Parent_Controls")
+    # 负控: 只放行 `Parent` 这一枚。`Paren` 拼错必须照旧报 VB3001 (精确匹配, 不做前缀放宽)。
+    Test-CodegenNote "pd_parent_typo_still_reported" @("$Tests\pd_parentctl\PdParentTypo.vbp") @(
+        "未声明的标识符: 'Paren'") @("vb6_UC_ParentObject()")
     # 账 #184 的形状面: 被 AddressOf 取址的过程 → Private 的发 static 桩、Public 的发外链桩,
     # 桩体逐字转调本体 (参数个数/宽度/顺序与本体一致, 只有约定不同); AddressOf 站点取桩地址;
     # 本体**保持 cdecl** (直接调用那条路与 RTL 的 cdecl 登记面都不受牵连)。
