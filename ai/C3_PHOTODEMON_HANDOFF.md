@@ -1027,3 +1027,62 @@ lastExpr_ = "vb6_" + cIdent(fnCanon);   // 修前
 - **7 success / 15 failure**，失败集与 `c0d57af4` 逐字一致 ⇒ 上轮 5 个解析器/loopKind 提交**零新增红点**；`smoke` / `syntax` / `asm` / `Baseline` 全绿 ⇒ 最底层路径未带崩。
 - **记账清单（不修、留账）**：`Emit manifest` 1 枚；`compile #1/#2` 共 6 条 `[STATIC]`。
 - **尚未被任何 CI 验证的提交**：`d4a25a1c`（`[skip ci]`，仅文档）、`574f0029`、`30a099e3`、`3ebb656c`、以及本刀提交 —— run `42651946234` 的 head 停在 `99d94762`。本刀未手工触发 `workflow_dispatch`（按用户口径：文档/注释类不空跑；本刀是 src 改动，应由下一次 dev push 正常触发）。
+
+## 18. `VB_Creatable` 交代：R4 保持不动（结论 b）
+
+### 18.1 为什么会动它（如实）
+
+不是 CI 先红，是我把 R4 之后的 vbp 红**误当成 R4 拆过宽**：
+
+1. `d4a25a1c` 收 R4（`Fix 214`：去掉「显式 `VB_Creatable` 必须为 False」这条）；
+2. 随后 vbp #1/#2/#3/#7/#11/#12 红，我没有先定位就回滚整刀（`574f0029`）；
+3. 回滚后同一批 job **红得更狠**（缺 `vb6_ivref_IK174*` / `__iv_K165Iface` / `vb6_iv_thin_of_`），
+   才查到 `43528bb8` 已经补齐「形参 / For Each / 语句位 / With 接收者」四形；
+4. `3ebb656c` 撤销回滚，dev 回到 R4 + `43528bb8` 的正确组合。
+
+截断前那次「恢复 `VB_Creatable` 校验」属于上面第 2 步的延续（选项 a），**没有留下任何 diff**
+（工作区已确认 `src/driver/driver_interface.cpp` 无改动）。
+
+### 18.2 拿真 VB6 说话（探针 + 读数）
+
+探针：`.temp/vbcreatable/vb6/{Probe.vbp, IThing.cls, ThingImpl.cls, BasMain.bas}`，
+VB6 `/make` 编译后运行，读数在 `readings.txt`：
+
+```
+IFACE_DISPATCH=42
+IFACE_TAG=impl
+CREATABLE_DEFAULT=0
+CREATABLE_TAG=[]
+```
+
+- `IThing`：`MultiUse = -1`、`Attribute VB_Creatable = True`、`VB_Exposed = False`，
+  `Ping() As Long` / `Tag() As String` **全空体**。
+- `ThingImpl`：`Implements IThing`，`IThing_Ping = 42`、`IThing_Tag = "impl"`。
+- `Dim i As IThing: Set i = t` ⇒ 派发到实现者（42 / "impl"）。
+- `Set i = New IThing` ⇒ 合法，得到默认空体实例（0 / 空串）。
+
+交叉证据（上一轮留下的 `.temp/procdim/vb6/S14_partialiface`）：同一枚 `VB_Creatable = True`
+的空体 `IMul` 被 `Beta` 只实现 2/3 时，VB6 直接报
+`类模块需要实现 'Three' 为接口 'IMul'` ⇒ VB6 确实把它当**接口契约**在逐成员校验。
+
+**结论**：`VB_Creatable` 只管 `New X` 能不能建，与 `Implements X` 无关；VB6 允许一个
+**可创建 + 全空体** 的类同时充当接口宿主。C3 的 R4 与该语义一致。
+
+### 18.3 三条路的取舍
+
+- **(a) 回退 R4：不采用。** 与 18.2 的 VB6 读数相反；且实测回滚会把 vbp #1/#2/#3/#7/#11/#12
+  打红（`3ebb656c` 已撤销）。
+- **(b) 保持 R4 不变、改用例：采用。** R4 之后剩下的红不是登记判据错：
+  - k489 / k2947 的 oracle 钉的是 `.vtbl` / `.obj` legacy 形状（R4 之前的表示）⇒ **断言写错**，
+    已在本刀换 canonical；
+  - k2947 的 j/k 恒 0 是**真产品错**（视图接收者裸读被喂给实例形参）⇒ 已修（§17.3）。
+- **(c) 收窄：不采用。** 探针表明 `VB_Creatable` 对 `Implements` 无任何影响，加前置条件没有
+  VB6 依据；安全性已由第 1 条判据兜底（只有被 `Implements` 指到的名字才进表，
+  `driver_interface.cpp` 的 `wanted` 集合），不需要再加闸。
+
+### 18.4 本刀之后仍未完成（只留账，不在本轮开活）
+
+- k166：两条发码 oracle 仍钉 legacy 形状。
+- iface_wrap / BalloonTooltips：`Set <接口变量> = <Variant/Object>` 的拆箱与类名传递。
+- iface_multi：夹具本身不合法（真 VB6 也拒绝，见 S14），应改成「部分实现 ⇒ VB3012」负控。
+- 记账类：`Emit manifest` 1 枚 + `compile #1/#2` 的 6 条 `[STATIC]`。
