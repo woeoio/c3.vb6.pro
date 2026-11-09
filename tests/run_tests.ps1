@@ -6195,6 +6195,9 @@ if ($Category -in @("all", "run", "bas")) {
     # 注释行以「空白 + _」结尾时延续到下一物理行（PhotoDemon 的 `'Public Declare ... ( _`
     # 紧跟 `ByVal x As Long) As Long` 就是这一形）。修前那第二行会被当成代码 ⇒ VB2002。
     Add-BasTest "test_comment_continuation" "$Tests\test_comment_continuation.bas" @("CC=1")
+    # `Option Compare Binary`：词法把 "binary" 统一归 TokenKind::Binary，parseOption 修前只认
+    # Binary2 ⇒ VB2001。真 VB6 在 Binary 下 "abc" = "ABC" 为 False，读数同钉。
+    Add-BasTest "test_opt_compare_binary" "$Tests\test_opt_compare_binary.bas" @("OCB=False,3")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,
