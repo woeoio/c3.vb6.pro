@@ -13,6 +13,11 @@
 - 仓库根完整性必须 Medium（否则启动弹"打开文件 - 安全警告"）；测试启动用 redirect/`-NoNewWindow`。
 - `SmoothScrollFactor` 无效值只告警不致命（与 VB6 一致），不得为消警告改夹具。
 - 流程：小步提交，推 `github`/`origin` 的 `dev`（快进、不 force），GA 22/22 全绿再进下一步。
+- **提交纪律（2026-11-10 起，两条线共用同一工作区，硬性）**：
+  - 一律按显式路径 `git add <具体文件>...`；**禁用** `git add -A` / `git add .` / `git commit -a`。
+  - `git add` 之后、`git commit` 之前必须 `git diff --cached --name-only` 逐条过目，只许出现本刀文件。
+  - `git status` 里出现不属于本刀的文件（哪怕别人未提交的在途改动）⇒ **停下报告，不得顺手带进去**。
+  - 起因见 §57.7：`tests/photodemon/*` 643 份被一次 `git add` 连带扫入 `7230557e`。
 
 ## 1. 已落盘修复（RTL 侧，已重建并验证内嵌）
 
@@ -4171,5 +4176,39 @@ App 自己报的错（脚本化点击实测，`EnumChildWindows` 读 Static 文�
 
 > 记账：提交 7230557e 的暂存区里原本就有 643 个 `tests\photodemon\*`（另一条工作线的未提交
 > 文件），被这次 `git add` 一起带进了提交。内容未改、只是"提前入库"，但违反了"一条一提交"，
-> 已在会话里向用户说明；因已双推，未做 force-push 改写历史。
+> 已在会话里向用户说明；因已双推，未做 force-push 改写历史。详见 §57.7。
+
+### 57.7 事故复盘：`7230557e` 连带 643 份 PhotoDemon 夹具
+
+**谁扫进去的**：本线（ucTreeView / XML 资产闸）。`git add tests\guisample\uctreeview_px.ps1
+ai\C3_UCTREEVIEW_HANDOFF.md` 之前，暂存区里已经躺着 PhotoDemon 线未提交的 643 个
+`tests/photodemon/*`；`git add <path>` 不会清理既有暂存内容，于是 `git commit` 把它们一并写进了提交。
+
+**范围（`git show --name-status 7230557e` 全量核对）**：除上述 643 份外，只有本刀的
+`ai/C3_UCTREEVIEW_HANDOFF.md`(M) 与 `tests/guisample/uctreeview_px.ps1`(M)。
+**没有第三条线的文件**：`src/**` 零命中（PhotoDemon 线在途的 15 个 `src` 改动全部仍是
+工作区的未提交状态，未被带进去）。
+
+**内容有无变化（逐文件比对，不是看描述）**：
+
+```
+commit 内 tests/photodemon 文件数 = 643
+git diff HEAD -- tests/photodemon            → 0 行
+git status --porcelain -- tests/photodemon   → 0 行
+逐文件 git rev-parse 7230557e:<f> vs git hash-object <f> → mismatch = 0 / 643
+零字节文件 = 0；合计 19,444,856 B
+```
+
+即：643 份**逐字节完全一致**，无改坏、无截断；只是"提前入库"。
+
+**为什么两条线会撞**：两个会话共用一个工作区（`c:\Users\Administrator\Documents\c3.vb6.pro`），
+PhotoDemon 线把 643 份新夹具 `git add` 后尚未 commit，本线在同一索引上提交。
+
+**为什么选择不改写历史**：`7230557e` 已双推 `github`/`origin`（`dev`）；force-push 会改写公共
+分支、影响另一条线已拉取的状态，风险大于"一个提交里混了两件事"的代价。改为：
+① 本文件 §0 与 `ai/C3_PHOTODEMON_HANDOFF.md` §0 都落"显式路径 / 提交前查 status / 见异即停"的硬规则；
+② 连带后果 `vbp_fixture_census`（`photodemon\PhotoDemon.vbp` 未登记）归 PhotoDemon 线记账。
+
+**核对时的在途状态（说明为何 `src/**` 未入提交）**：`git status` 彼时与本轮均显示 15 个
+`src/**` + `tests/run_tests.ps1` 处于未提交修改，属 PhotoDemon 线在途改动，本线一律未 touch。
 
