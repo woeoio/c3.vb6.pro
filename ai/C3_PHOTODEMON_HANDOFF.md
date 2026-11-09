@@ -236,6 +236,15 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 
 即：R1 之后 `VB3001` 已从"刷屏"降到 38 条，且**每一条都能指到具体的一类缺口**，不再有"跨模块全局变量"这一族。
 
+### 6.6 回归与既有红的分界
+
+- 本地：`-Category syntax` PASS=185；`pd_globals` 探针正面 0 条、三条负控各 1 条；`check_project_const_visibility` PASS；`check_manifest_coverage` → `inputs=610 … sets equal`。
+- CI `42599592249`（R1 本体）：探针绿，计数见 6.5。
+- CI `42602700528`（`de54cd09`）：`Tests (compile #1)` **success**。这是 R1 **唯一**引入的回归，已修：新分支在 driver 里又抄了一遍 `packageBlockedNames_` 查询，把 S3「全仓只许一处问」钉红；改为每个标准模块进声明循环前查一次、变量/常量/过程三支共用同一个只读指针，语义不变。
+- 其余红与 R1 无关（可证据化）：`Tests (bas #2)` 的失败用例集合在 `91de0a68`（R1 前）与 `de54cd09` 逐条相同，**54 vs 54、零差**；`Tests (vbp #1..#12)`、`bas #1`、`Emit manifest` 在 R1 前的 run `42598038994` 里已红。
+  - 记账型：`Emit manifest` 报 6 条 sha256 差（`k165_iface_slot` / `k172_viewarg` / `k174_vieweach` / `k175_viewstmt` / `k177_viewwith` / `k178_viewprop`），按用户口径暂挂。
+  - 产品型：上述 6 个 k 用例与大量 `EMITC-SHAPE` / `EMITC-ABSENT` 是同一批既有债务（数十条），**是否由 R2/R3/R4 引入尚未归因**——下一轮第一件事是拿 R2 之前的提交跑一次同名 job 做二分，别把它记到 R1 账上。
+
 ## 7. 暂缓项清单（记账型红灯，用户已授权可挂）
 
 口径（2026-11-09）：emit manifest / 覆盖率 / census 计数这类非源码性质的记账型红可以暂缓；产品正确性类红必须修。逐条留账，不静默忽略。
