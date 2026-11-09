@@ -195,9 +195,66 @@ Entry.bas(26,5): warning VB3003: assignment: 无法将 ? 隐式转换为 Byte
 - 本次改动含 `type_system.hpp`（被广泛包含）⇒ 全量重编 77 目标，峰值并发按 2 封顶；随后复验为 `ninja: no work to do`（空闲内存 12.3 GB / 16.1 GB）。
 - 以后改这类头文件要**攒批一次验证**，不反复重编。
 
-## 7. 下一步
+## 6.5 R2/R3 的 CI 实测影响面（run 42590998643，提交 `4f10e519`）
 
-1. 记录回归基线：现有测试套件结果 + GA 22 job 现状（全绿才算基线确认）。
-2. 按 4.3 顺序继续：R4（Implements 空体接口）→ R1（跨模块 Public 变量）。
-3. 每次改动后复跑 CI emit 探针，观察 `VB3001` / `VB3003` / `VB3044` 计数变化，作为影响面证据。
-4. 之后的目标是 `--arch x86` 真编译（emit 之后跑 cl/link），届时再看控件属性/方法缺失类缺口。
+| 诊断 | 修复前（run 42584803572） | 修复后 | 变化 |
+| --- | --- | --- | --- |
+| `VB3003` | 548 | **57** | **−491** |
+| `VB3001` | 3693 | 3693 | 0（R1 未动） |
+| `VB3044` | 19 | 19 | 0（R4 未动） |
+| stderr 行数 | 4403 | 3912 | −491 |
+
+归因：掉掉的 491 条全部是类型打印成 `?` 的那一族；`typeToString` 不认 Array 位，归一后不再出现。剩余 57 条属**另一类根因**（`Integer/Double/String → Object`、`String → Date` 的隐式转换判据），不在 R2/R3 范围内。
+
+## 7. R4 收口：可创建的空体接口类（`VB_Creatable = True`）
+
+### 7.1 根因（探针钉死）
+
+`Implements` 的接口识别在 `src/driver/driver_interface.cpp` 的 **Pass A2**，判据四条，其中第三条是"显式写了 `Attribute VB_Creatable` 就必须为 False"。PhotoDemon 的 `Classes\ISubclass.cls` 是 `VB_Creatable = True` + 全空体签名 + 被 35 个类 `Implements`，于是被挡在接口登记表外：
+
+- 语义层退回 legacy 路径（`semantic_analyzer.cpp` 的 `lookupModule` + `kind==Class` 那一支），只发 `VB3044` warning；
+- 发码层 `ivLookupIface("ISubclass")` 恒 nullptr ⇒ 每个实现类各发一份同名 vtable（C2011 撞名风险）。
+
+`VB_Creatable` 在 VB6 里只管 `New X` 能不能建，**与 `Implements X` 无关**：可创建的类照样能被别人当接口实现。
+
+三组探针对照（`.build\pd_probe\repro`，vbp = IThing.cls + Impl.cls + Entry.bas）：
+
+| 探针 | 接口宿主形态 | 旧产物 | 新产物 |
+| --- | --- | --- | --- |
+| repro | `VB_Creatable = True` + 全空体 | `VB3044` ×1 | **0**，且发出 canonical `vb6_ivtbl_IThing` + `vb6_ivtbl_IThing_for_Impl` |
+| r4a | `VB_Creatable = False` + 全空体 | 0（对照组：旧判据只认这一种） | 0 |
+| r4b | `VB_Creatable = True` + **带实现体** | `VB3044` ×1 | **1**（负控：`allMembersBodyless` 这条仍拦得住，不会把普通类当接口） |
+
+### 7.2 修法
+
+`src/driver/driver_interface.cpp` Pass A2：删掉 `VB_Creatable` 那条闸（连同只服务于它的 `attrLiteral` lambda），判据收敛为三条：被 `Implements` 指到 + 是 .cls 且无 tB Interface 块 + 全成员无体签名。安全性由第一条兜底——只有真被 `Implements` 指到的名字才进表。
+
+### 7.3 探针用例
+
+`tests/pd_iface/`（`IThing.cls` 可创建空体接口 + `Impl.cls` 实现 + `Entry.bas` 调用）已接进 `tests/run_tests.ps1` 的 `pd_iface_creatable_host`：
+
+- 反向：不许出现 `VB3044`；
+- 正向：必须发出 `typedef struct vb6_ivtbl_IThing {` 与 `static const vb6_ivtbl_IThing vb6_ivtbl_IThing_for_Impl = {`（证明走的是 canonical 面，不是 legacy 各发一份）。
+
+回归：`tests/run_tests.ps1 -Category syntax` → **PASS=184 FAIL=0 SKIP=0**（184 = 上一轮 183 + 本用例）。
+
+构建：只动 `driver_interface.cpp`（非头文件），`CMAKE_BUILD_PARALLEL_LEVEL=2` 下 91 目标，峰值 `cl.exe` ≤ 2，构建前空闲内存 10.3 GB。
+
+## 8. 暂缓项清单（记账型红灯，用户已授权可挂）
+
+口径（用户 2026-11-09 定）：**emit manifest / 覆盖率 / census 计数这类非源码性质的记账型红可以暂缓，产品正确性类红必须修**。这里逐条留账，不静默忽略。
+
+| # | run / job | 现象 | 为什么是记账型 | 将来怎么处理 |
+| --- | --- | --- | --- | --- |
+| A1 | run 42590924685 · `Emit manifest (shape oracle)` | 报红：语料新增输入未登记哈希 | 比较器只比"哈希表行集合"，与程序行为无关；差异全部是"新增行" | 用 CI 自己那份 `ci/emit-manifest` 的读数登记（`scripts/rebless_emit_manifest.ps1`），**不在本机造哈希**：本机 MSVC 14.29 与 CI 工具集的注释编码可能不同，`sha256` 会假差 |
+| A2 | run 42590924685 · `Tests (compile #1)`（`[STATIC] manifest_coverage`） | K1 报 **115** 份语料输入不在 `emit-manifest.expected.txt` | 同上，是 A1 的本地哨兵版；`tests/photodemon/` 的探针语料是上一轮入仓的，尚未登记 | 同 A1，一次登记把 115 行 + 本轮新增的 `tests/pd_arrtype/p01_array_elem.bas`、`tests/pd_iface/Entry.bas` 一起补上 |
+| A3 | 待观测 | — | — | — |
+
+注意 A1/A2 的**影响面**：`tests/photodemon/` 的 `.bas`/`.vbp` 进了语料枚举（`emit_manifest.ps1` 的枚举口径是 `tests/**.vbp|.bas`），所以 shape oracle 那一步会多跑 115 次 emit（约 +8 分钟 CI 时间）。是否要把探针语料从形状门的语料里排除，是要改主链路判据的决定，**留给用户拍板**，本轮不动。
+
+## 9. 下一步
+
+1. 等本轮 CI（dev 22 job + 探针）跑完：核对 `VB3044` 是否 19 → 0，并把 A1/A2 的记账型红按上表口径记入。
+2. 登记 A1/A2：从 `ci/emit-manifest` 取 CI 自己的清单读数补行，一次提交。
+3. 继续 R1（跨模块 `Public` 变量不可见，3693 条）；之后再处理 VB3003 剩余 57 条的隐式转换判据。
+4. 之后的目标是 `--arch x86` 真编译（emit 后跑 cl/link），届时再看控件属性/方法缺失类缺口。

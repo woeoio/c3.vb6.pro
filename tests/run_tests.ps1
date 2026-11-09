@@ -12245,6 +12245,15 @@ if ($Category -in @("all", "syntax")) {
     # 夹具钉的是: 数组整体赋值(函数返回/整体拷贝)与数组下标取元素都不许再报 VB3003。
     Test-CodegenNote "pd_arrtype_element_type" @("$Tests\pd_arrtype\p01_array_elem.bas") @(
         "vb6_SafeArray1D* vb6_MakeArr(void);", "void vb6_FillArr(vb6_SafeArray1D** dst);") @("VB3003")
+    # PhotoDemon R4 探针: 接口宿主是**可创建**的类 (VB_Creatable = True) 时,
+    # Pass A2 过去只认 VB_Creatable = False, 于是 ISubclass 这类「空体签名 + 被 Implements」
+    # 的宿主不进接口登记表 ⇒ 语义层退回 legacy 只发 VB3044 warn, 发码层每个实现类各发一份
+    # 同名 vtable (C2011 撞名)。`VB_Creatable` 只管 `New X` 能不能建, 与 `Implements X` 无关。
+    # 判据: 不许再报 VB3044, 且发码必须走 tB 那条 canonical 面 (接口自己的槽表 + 每实现一张表)。
+    Test-CodegenNote "pd_iface_creatable_host" @(
+        "$Tests\pd_iface\IThing.cls", "$Tests\pd_iface\Impl.cls", "$Tests\pd_iface\Entry.bas") @(
+        "typedef struct vb6_ivtbl_IThing {",
+        "static const vb6_ivtbl_IThing vb6_ivtbl_IThing_for_Impl = {") @("VB3044")
     # 账 #184 的形状面: 被 AddressOf 取址的过程 → Private 的发 static 桩、Public 的发外链桩,
     # 桩体逐字转调本体 (参数个数/宽度/顺序与本体一致, 只有约定不同); AddressOf 站点取桩地址;
     # 本体**保持 cdecl** (直接调用那条路与 RTL 的 cdecl 登记面都不受牵连)。

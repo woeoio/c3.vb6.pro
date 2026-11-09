@@ -103,12 +103,18 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
     // 一个接口只发一份表, 槽序由接口自己说了算, 与实现类怎么排无关。
     //
     // 判据收紧到"只有真接口进表": 误把普通类认成接口, 会让 Implements 校验变严、动态派发
-    // 行为变掉, 比不管更糟。四条都要过:
+    // 行为变掉, 比不管更糟。三条都要过:
     //   1) 被某个模块 `Implements` 按名字指到 (VB6 里只有接口会被 Implements);
     //   2) 是 .cls 类模块, 且自己**没有** tB Interface 块 (有的话 Pass A 已登记);
-    //   3) 显式写了 `Attribute VB_Creatable` 就必须为 False; 没写不拦, 靠第 4 条兜;
-    //   4) 全部 Sub/Function/Property 成员都是**无体**签名 —— 这是 VB6 接口类的定义性特征,
+    //   3) 全部 Sub/Function/Property 成员都是**无体**签名 —— 这是 VB6 接口类的定义性特征,
     //      只要有一个带实现体就说明它是普通类, 不认。
+    //
+    // Fix 214: 去掉过去第 3 条 "显式写了 `Attribute VB_Creatable` 就必须为 False"。
+    // `VB_Creatable` 只管 `New X` 能不能建, 与 `Implements X` 无关: VB6 允许一个
+    // **可创建** 的类被别人当接口实现。PhotoDemon 的 `ISubclass.cls` 就是
+    // `VB_Creatable = True` + 全空体成员 + 被 35 个类 `Implements`, 旧判据把它挡在
+    // 表外 ⇒ 语义层退回 legacy 只 warn, 发码层各实现类各发一份同名 vtable。
+    // 安全性由第 1 条兜底: 只有真被 `Implements` 指到的名字才会走到这里。
     {
         std::set<std::string> wanted;
         for (const auto& mod : modules_) {
@@ -119,16 +125,6 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
         std::unordered_map<std::string, Module*> byName;
         for (auto& mod : modules_) byName.emplace(ifaceLower(mod->moduleName), mod.get());
 
-        // `Attribute X = False/0` 读法与本文件 Pass E 的 boolLiteral 同一口径
-        auto attrLiteral = [](const Module& m, const char* want, std::string& out) -> bool {
-            for (const auto& a : m.attributes) {
-                if (!a || ifaceLower(a->attrName) != want) continue;
-                if (!a->value || a->value->kind != ASTNodeKind::LiteralExpr) return false;
-                out = static_cast<const LiteralExpr&>(*a->value).rawText;
-                return true;
-            }
-            return false;
-        };
         // 全部成员都是无体签名 => 是接口类.
         //
         // Fix 213: "空体" 的判据不能只看 `body->empty()`. VB6 接口宿主的每个成员都带
@@ -174,11 +170,6 @@ bool Driver::runInterfacePrepass(const CompileOptions& options) {
             if (it == byName.end()) continue;    // 工程里没有同名模块
             Module* host = it->second;
             if (!host->isClassModule || !host->interfaces.empty()) continue;
-            std::string creatable;
-            if (attrLiteral(*host, "vb_creatable", creatable)) {
-                // 显式写了 VB_Creatable 就必须为 False
-                if (creatable != "False" && creatable != "false" && creatable != "0") continue;
-            }
             if (!allMembersBodyless(*host)) continue;
             auto res = ifaces_.emplace(want, IfaceView{});
             if (!res.second) continue;
