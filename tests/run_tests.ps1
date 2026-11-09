@@ -6120,6 +6120,13 @@ if ($Category -in @("all", "run", "bas")) {
     # 负控: 值位的裸 `Math` 不是合法名字，必须照旧报 VB3001（只放限定符位）。
     Test-CodegenNote "vbamath_bare_is_undeclared" @("$Tests\test_vbamath_bad.bas") @(
         "未声明的标识符: 'Math'")
+    # 过程级作用域：Do 体里的 Dim/Const 可以在 `Loop While` 条件里用（VB6 的 Dim/Const
+    # 是整个过程级的）。修前语义层先分析条件再分析体 ⇒ 假 VB3001。PhotoDemon
+    # pdXCF.cls / UserControl_Support.bas 的 4 条都是这一形。
+    Add-BasTest "test_procscope_loopdim" "$Tests\test_procscope_loopdim.bas" @(
+        "PS-LOOP=3,6,6")
+    Test-EmitcAbsent "procscope_loopdim_no_vb3001" @("$Tests\test_procscope_loopdim.bas") @(
+        "VB3001", "未声明的标识符")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,

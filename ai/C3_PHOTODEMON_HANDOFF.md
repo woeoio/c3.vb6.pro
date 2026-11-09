@@ -380,7 +380,28 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 - 断言：`test_vbamath`（Compile+Run 7 行读数）+ `vbamath_emitc_folds_to_builtins` 形状钉 + `vbamath_no_module_symbol` 反向钉；负控 `vbamath_bare_is_undeclared`（值位 `Set m = Math` 必须仍报 VB3001）。
 - 记账：两个新夹具按同一口径延后登记 emit-manifest。
 
-### 10.5 VB3001 剩余 4 条（过程级 `Dim/Const`）—— 下一项
+### 10.5 过程级 `Dim/Const`（4 条）：`Do` 体声明在 `Loop While` 条件里
 
-38 − 8（10.1）− 1（10.2）− 7（10.3）− 18（10.4）= **4**，与用户给的分类一致；这一类涉及块内声明的过程级作用域，影响面最大，单独一刀，不并入本节。
+- 语料形态（4 条，两个文件同一形）：
+  - `Classes\pdXCF.cls`：`Do` 体内 `Const ERR_BUFF_TOO_SMALL` / `Dim ldResult`，`Loop While (ldResult = ERR_BUFF_TOO_SMALL) ...`。
+  - `Modules\UserControl_Support.bas`：`Dim positionFailed` / `Dim failsafePosition` 在 `Do` 体内，`Loop While positionFailed And (Not failsafePosition)`。
+- 根因：语义层 [visit(DoLoopStmt)](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_stmt.cpp#L126-L136) **先分析条件、后分析体**；而 `Dim`/`Const` 是 visit 到声明语句时才 `define` 进当前（过程级）作用域 ⇒ 回边条件里两个名字查不到。VB6 的 `Dim`/`Const` 写进任何块都算整个过程的声明，条件里引用它们是合法的。
+- 修法：两行换序（先 `analyzeStmtList(node.body)`，后 `analyzeExpr(*node.condition)`）。**只改分析顺序**，不动 AST、不动发码、不动作用域结构。
+- 读数（`tests\test_procscope_loopdim.bas`，`Dim inner` + `Const TOO_SMALL` 都在 Do 体、条件里各用一次）：修前 2 条 VB3001（`TOO_SMALL` / `inner`）→ 修后 0 条；真编译运行 `PS-LOOP=3,6,6`（3 轮后退出，读数符合手算）。
+- 断言：`test_procscope_loopdim`（Compile+Run）+ `procscope_loopdim_no_vb3001`（反向钉 `VB3001` / `未声明的标识符`）。
+- 回归：`-Category syntax` **PASS=187 FAIL=0**。
+- 剩下未动的邻近形态（**已知、未报**）：`While <cond>`（`Wend`）与 `If <cond>` 仍是先条件后体；VB6 同样把后置声明当过程级，若后续语料出现同形再按本条处理，不在本轮扩大。
+
+### 10.6 本轮 38 条的收口读数（等 CI 复核）
+
+| 类 | 条数 | 提交 |
+| --- | --- | --- |
+| 内建常量表（`vbCFFiles` 7 + `vbAsyncStatusCodeEndDownloadData` 1） | 8 | `2e19c556` |
+| `Randomize -1` | 1 | `2600664d` |
+| UserControl 内建 `Parent`（`Parent.Controls` ×7） | 7 | `e21b5b5c` |
+| `VBA.Math`（`Math.*` ×18） | 18 | `84a74b69` |
+| 过程级 `Dim/Const`（Do 体 → `Loop While`） | 4 | 本提交 |
+| **合计** | **38** | |
+
+预期下一次探针 `VB3001 = 0`（若仍有残留，只能是本轮之外的第三形态）。`VB3003` / `VB3044` 仍按各自账走。
 

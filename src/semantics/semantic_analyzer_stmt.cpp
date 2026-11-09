@@ -124,10 +124,15 @@ void SemanticAnalyzer::visit(ForEachStmt& node) {
 }
 
 void SemanticAnalyzer::visit(DoLoopStmt& node) {
+    // VB6 的 Dim/Const 是**过程级**声明（写进哪个块都算整个过程的），所以块内的
+    // 声明可以被 `Loop While/Until <条件>` 引用。这里必须先走体再走条件：条件是
+    // 回边上的表达式，其依赖通常写在体里（PhotoDemon pdXCF.cls 的 ldResult /
+    // ERR_BUFF_TOO_SMALL、UserControl_Support.bas 的 positionFailed /
+    // failsafePosition 全是这一形）。顺序只是分析顺序，不改 AST、不改发码。
+    analyzeStmtList(node.body);
     if (node.condition) {
         Vb6Type condType = analyzeExpr(*node.condition);
     }
-    analyzeStmtList(node.body);
 }
 
 void SemanticAnalyzer::visit(WhileWendStmt& node) {
