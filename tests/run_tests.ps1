@@ -1,4 +1,4 @@
-# c3 编译器自动化测试框架
+﻿# c3 编译器自动化测试框架
 # 用途: .\run_tests.ps1 [-Category <all|compile|run|syntax>] [-Verbose]
 #
 # 参数说明:
@@ -12413,17 +12413,14 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_globals\ModA.bas", "$Tests\pd_globals\ModB.bas", "$Tests\pd_globals\ModC.bas") @(
         "未声明的标识符: 'gXX'", "未声明的标识符: 'pvLocal'", "未声明的标识符: 'fFr'") @(
         "未声明的标识符: 'gX'", "未声明的标识符: 'gArr'", "未声明的标识符: 'gColor'")
-    # 账 #477 (R4 回滚): `VB_Creatable = True` + 全空体签名的一档**维持 legacy 表示**。
-    # Fix 214 (R4) 曾把它抬进 canonical 接口表 (依据: VB_Creatable 与 Implements 无关),
-    # 但发码层的 canonical 路还没接待「写侧 / With 临时量 / Variant→接口 Set」这三形,
-    # 15 个 CI job 当场红 (k489/k2947/iface_wrap/iface_multi/BalloonTooltips…)。回滚后
-    # 这里钉住的是 legacy 形状: wrap 在、canonical `vb6_ivtbl_*` 不在。等三形补齐再翻面。
+    # Pass A2 过去只认 VB_Creatable = False, 于是 ISubclass 这类「空体签名 + 被 Implements」
+    # 的宿主不进接口登记表 ⇒ 语义层退回 legacy 只发 VB3044 warn, 发码层每个实现类各发一份
+    # 同名 vtable (C2011 撞名)。`VB_Creatable` 只管 `New X` 能不能建, 与 `Implements X` 无关。
+    # 判据: 不许再报 VB3044, 且发码必须走 tB 那条 canonical 面 (接口自己的槽表 + 每实现一张表)。
     Test-CodegenNote "pd_iface_creatable_host" @(
         "$Tests\pd_iface\IThing.cls", "$Tests\pd_iface\Impl.cls", "$Tests\pd_iface\Entry.bas") @(
-        "typedef struct vb6_iface_IThing {",
-        "vb6_iface_IThing vb6_iface_IThing_wrap_Impl(vb6_cls_Impl* obj);") @(
         "typedef struct vb6_ivtbl_IThing {",
-        "static const vb6_ivtbl_IThing vb6_ivtbl_IThing_for_Impl = {")
+        "static const vb6_ivtbl_IThing vb6_ivtbl_IThing_for_Impl = {") @("VB3044")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
