@@ -900,3 +900,47 @@ oracle 不是文档抄的，是两条独立证据：
 - **修后绿**：同一夹具真编真跑，输出与 VB6 oracle **29/29 行逐字相同**（`Compare-Object` 无差异）。`run_tests.ps1` 的 30 条期望串全部命中；发码形状门 5 条在场、3 条不在场（`vb6_Rnd(1, ` / `vb6_Randomize(0.0)` / `(vb6_Randomize - 1)`）。
 - 裸 `Randomize` 只能验 `RZ-BARE-RANGE=True`（Timer 播种天然不可复现），已在夹具里注明。
 
+## 15. dev 主链路 CI 对账 + R4 回滚（2026-11-10）
+
+### 15.1 对账口径
+
+- run `42651946234` / head `99d94762`（含上一轮 loopKind 分流 + 四个解析器补口共 5 个提交），22 job 全跑完。
+- 与 `c0d57af4`（run `42647385967`）及更早 4 个 run 对比：**失败 job 集合逐字一致**，本轮 5 个提交没有新增任何红点。
+
+| 状态 | job |
+| --- | --- |
+| success (7) | `Build C3.exe`、`Baseline (M1)`、`Tests (smoke)`、`Tests (syntax)`、`Tests (asm)`、`Tests (vbp #9)`、`Tests (vbp #10)` |
+| failure (15) | `Emit manifest (shape oracle)`、`Tests (bas #1)`、`Tests (bas #2)`、`Tests (compile #1)`、`Tests (compile #2)`、`Tests (vbp #1)`、`#2`、`#3`、`#4`、`#5`、`#6`、`#7`、`#8`、`#11`、`#12` |
+
+**用户点名的四条最底层路径：`Tests (smoke/syntax/asm)` 全绿、`Baseline (M1)` 全绿** —— 解析器补口与 loopKind 分流没有带崩底层。`Emit manifest` 与 `vbp #1..#12` 的红是**存量**（见 15.2 归因），不是本轮引入。
+
+### 15.2 二分归因：唯一根因是 R4（`fdbd29e5`）
+
+| 提交 | 失败 job 数 |
+| --- | --- |
+| `a7fc9137`（R2+R3，R4 之前） | 2（`Emit manifest`、`Tests (compile #1)`） |
+| `fdbd29e5`（R4「可创建的空体接口类也能被 Implements 解析」） | 15 |
+
+R4 只改了 [driver_interface.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_interface.cpp) 的接口登记判据（删掉「显式 `VB_Creatable = True` 一律不进表」那一条），却把一整族「`VB_Creatable=True` + 全空体签名」的夹具从 **legacy 接口表示** 抬进了 **canonical 接口表**。发码层 canonical 路只覆盖了读侧，写侧 / `With` 临时量 / `Variant→接口 Set` / 接口自身桩 四形没接待，于是：
+
+- `Tests (bas #1/#2)` `k2947_set_view`：`x.Item(3) = "a"` 发成 `x->vt->get_item(x, 3) = ...`（C2106）；`With MakeI()` 声明成 legacy 的 `vb6_iface_IK2947`（C2065）；`IK2947.c` 的接口桩 `get_item(h_)` 少传下标（C2198）。
+- `Tests (vbp #1/#2)` `iface_multi`：`Beta` 少实现 `IMul_Three` ⇒ 新判据触发 `VB3012`。
+- `Tests (vbp #3)` `k166_emitc_shape`、`Tests (vbp #4)` `k166_emitc_absent_old_shape`：形状门钉的正是 legacy 的「一条表 + 每实现者 wrap + 438 桩」。
+- `Tests (vbp #5/#6/#7)` `k489_slot_dir*`：`x.Label = ...` 落成 `vb6_x_Label`（当成模块变量，C2065）；`With` 写侧走 `vb6_ComSetProp`。
+- `Tests (vbp #8)` `BalloonTooltips`：`ISubclass` 同样是 `VB_Creatable=True` 空体类。
+- `Tests (vbp #11/#12)` `iface_wrap`：`Set f = v`（`v As Variant` 持对象）无 canonical 路 ⇒ `VB4001`。
+
+**R4 的两个前提都已过时**：① 它说「legacy 每个实现类各发一份同名 vtable（C2011）」——这条账 #464 早已修好，legacy 现在是「接口自定一条表 + 每实现者一枚 wrap + 缺席发 438 桩」；② 它只用 `-Category syntax` 验证过，没跑发码/运行。真 VB6 语义上 R4 那句话没错（`VB_Creatable` 与 `Implements` 无关），但**表示层没准备好就开始翻面**，代价是 15 个 job。
+
+### 15.3 修法：回滚 R4 的登记判据（保留 canonical 路不动）
+
+- [driver_interface.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_interface.cpp)：Pass A2 恢复第 3 条「显式写了 `Attribute VB_Creatable` 就必须为 `False`；没写不拦」。显式 `VB_Creatable = False` 与「没写属性」的空体类仍可进 canonical 表（`pd_iface` 之外的一档不受影响）。
+- [run_tests.ps1](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/run_tests.ps1)：`pd_iface_creatable_host` 由「钉 canonical 形状 + 禁 VB3044」改为「钉 **回滚后的 legacy 形状**（wrap 在、`vb6_ivtbl_*` 不在）」，作为这一档的口径负控。
+- PhotoDemon `ISubclass` 回到 legacy + `VB3044` warning —— **与 R4 之前完全一致，不构成回归**（warning 不红 CI）。
+
+改后本机复验：`k2947_set_view` / `k489_slot_dir` / `iface_wrap` / `iface_multi` 四个 vbp 全部 `exit=0` 真编；`k2947` 13 条、`k489` 5 条、`k166` 6 条形状 needle 全部命中，`k166` 3 条「旧形状不在场」全部不在场；`BalloonTooltips` `exit=0`。
+
+### 15.4 记账类留账清单（按用户口径挂，不在本轮修）
+
+- `Emit manifest (shape oracle)`：存量哈希变化 + 新夹具未登记，待统一 `scripts/rebless_emit_manifest.ps1 -Bless`（§12.2 已列构成）。
+- `[STATIC]` 口径（`compile #1/#2`）：`builtin_opt_defaults`、`manifest_coverage`、`iface_view_authority`（#1）；`legacy_view_arg_owners`、`box_temp_reclaim`、`class_refcount_authority`（#2）。回滚后随 R4 消失的条目待下一次 CI 复跑确认。
