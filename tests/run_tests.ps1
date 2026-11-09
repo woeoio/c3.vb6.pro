@@ -349,6 +349,32 @@ function Test-Compile {
     }
 }
 
+# === 负控编译: 必须报指定诊断, 且不得产出 exe ===
+# 用于「真 VB6 也拒绝」的夹具 (如 Implements 少写成员): 判据是编译器**拒**,
+# 不是夹具能编过。三条同时成立才算绿: exit != 0 / 输出含 needle / 无 exe。
+function Test-CompileFails {
+    param([string]$Name, [string]$Source, [string]$Needle)
+    $script:total++
+    Write-Host -NoNewline "  [COMPILE-FAIL] $Name ... "
+    $negOut = Join-Path $OutDir ("neg_" + $Name)
+    $result = & $C3 $Source --output-dir $negOut @IncArg 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = ($result | Out-String)
+    $hit = $text.IndexOf($Needle, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $exe = Get-ChildItem $negOut -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($exitCode -ne 0 -and $hit -and -not $exe) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        if ($Verbose) {
+            Write-Host ("exit=$exitCode needle=$hit exe=" + [bool]$exe)
+            Write-Host $text
+        }
+    }
+}
+
 # 判据匹配器 —— 进程内路径的单一出口, 按**字面**子串比 (忽略大小写, 与 -like 原本的
 # 大小写行为一致, 只去掉通配语义)。
 # 旧代码在 4 个点各自写 -like 通配匹配, 而 [ ] * ? 在 needle 里会被当成通配符:
@@ -9523,25 +9549,30 @@ if ($Category -in @("all", "run", "vbp")) {
     # 两台实测都答 Empty: Exe 工程连工程类登记都不发 (§B187 第二格那条按工程类型分档的口径),
     # 所以按指针问身份那一张表是空的 ⇒ 本刀只保证「发码编得过 + 不冒充对象」;
     # 行为面 (VB6 答实现类名) 欠的是一枚 per-interface 的静态身份 resolver, 已另记在册。
+    # 真 VB6 对「只实现 2/3 成员」直接拒 (`类模块需要实现 'Three' 为接口 'IMul'`) —— 本夹具
+    # 从前被当成**合法**跑: C3 也已按真值拒 (VB3012), 于是它一直是 4 个 vbp 分片里的红。
+    # 现在把判据改对: tests\iface_multi = **负控** (必须 VB3012 + 无 exe);
+    # tests\iface_multi_full = 完整 3/3 的**正向**夹具 (k166 的槽序/单表/wrap 读数都搬去那边)。
+    Test-CompileFails "iface_multi_incomplete_negcontrol" "$Tests\iface_multi\IfaceMulti.vbp" "VB3012"
     $ifaceMultiExpected = @("A-ONE=11", "A-TWO=12", "A-THREE=13", "B-ONE=21", "B-TWO=22",
-                            "B-THREE-ERR=438", "A-TNAME=Empty", "B-TNAME=Empty", "MULTI-DONE")
-    Test-Vbp "iface_multi" "$Tests\iface_multi\IfaceMulti.vbp" $ifaceMultiExpected
-    Test-Vbp "iface_multi_x86" "$Tests\iface_multi\IfaceMulti.vbp" $ifaceMultiExpected -Arch "x86"
-    Test-EmitcShape "k166_emitc_shape" @("$Tests\iface_multi\IfaceMulti.vbp") @(
-        "#ifndef VB6_IFACE_IMUL_TBL",
-        "    int32_t (*One)(void* me);",
-        "    int32_t (*Three)(void* me);",
-        "static vb6_vtbl_IMul vb6_vtbl_IMul_for_Alpha = {",
-        "    .One = (int32_t (*)(void*))vb6_Alpha_IMul_One,",
-        "static vb6_vtbl_IMul vb6_vtbl_IMul_for_Beta = {",
-        "static int32_t vb6_iface_IMul_unimpl_Three_Beta(void* me) {",
-        "    vb6_RaiseError(438, NULL);",
-        "    .Three = (int32_t (*)(void*))vb6_iface_IMul_unimpl_Three_Beta",
-        "vb6_iface_IMul vb6_iface_IMul_wrap_Alpha(vb6_cls_Alpha* obj);",
-        "vb6_iface_IMul vb6_iface_IMul_wrap_Beta(vb6_cls_Beta* obj);")
+                            "B-THREE=23", "A-TNAME=Object", "B-TNAME=Object", "MULTI-DONE")
+    Test-Vbp "iface_multi_full" "$Tests\iface_multi_full\IfaceMulti.vbp" $ifaceMultiExpected
+    Test-Vbp "iface_multi_full_x86" "$Tests\iface_multi_full\IfaceMulti.vbp" $ifaceMultiExpected -Arch "x86"
+    # k166 两条 oracle 已按当前发码面改写: IMul 现在走 **tB 薄视图** (vb6_ivtbl_IMul /
+    # vb6_ivref_IMul / _from_class), 不再是 legacy `vb6_iface_IMul` 胖对。旧针保留的语义
+    # 只剩「槽序归接口」(Alpha 倒序声明)、「每实现类一张表」、「工程级唯一 from_class」。
+    Test-EmitcShape "k166_emitc_shape" @("$Tests\iface_multi_full\IfaceMulti.vbp") @(
+        "#ifndef VB6_IVTBL_IMUL",
+        "    int32_t (__stdcall *one)(vb6_ivref_IMul* self);",
+        "    int32_t (__stdcall *three)(vb6_ivref_IMul* self);",
+        "static const vb6_ivtbl_IMul vb6_ivtbl_IMul_for_Alpha = {",
+        "static const vb6_ivtbl_IMul vb6_ivtbl_IMul_for_Beta = {",
+        "vb6_ivref_IMul* vb6_ivref_IMul_from_class(void* instance, const char* className);",
+        "if (_stricmp(className, `"Alpha`") == 0) return (vb6_ivref_IMul*)vb6_iv_thin_of_Alpha(instance);",
+        "if (_stricmp(className, `"Beta`") == 0) return (vb6_ivref_IMul*)vb6_iv_thin_of_Beta(instance);")
     # 反面针: 旧形状三发都必须绝迹 —— 表类型不再由实现类发 (那句注释 / 带类名的 me 槽)、
-    # wrap 不再发无实现者后缀的那一份。
-    Test-EmitcAbsent "k166_emitc_absent_old_shape" @("$Tests\iface_multi\IfaceMulti.vbp") @(
+    # legacy wrap 不再发无实现者后缀的那一份。
+    Test-EmitcAbsent "k166_emitc_absent_old_shape" @("$Tests\iface_multi_full\IfaceMulti.vbp") @(
         "// Interface vtable: IMul",
         "(*Three)(vb6_cls_",
         "vb6_iface_IMul_wrap(")

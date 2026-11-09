@@ -1,0 +1,7 @@
+Type=Exe
+Name="IfaceMultiApp"
+Module=mdlMain; mdlMain.bas
+Class=IMul; IMul.cls
+Class=Alpha; Alpha.cls
+Class=Beta; Beta.cls
+Startup="Sub Main"

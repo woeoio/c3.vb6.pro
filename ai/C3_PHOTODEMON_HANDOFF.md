@@ -1181,3 +1181,31 @@ Sub Main 把 `Err.Number` 写 `neg.txt`；`IFoo` 可创建、`Impl` 实现、`Ot
 `IFACE-CALL-OK`、`IFACE-NEG-KIND=13`、`IFACE-NEG-EXT=13`、`IFACE-NEG-KEEP=7`、`IFACE-DONE`。
 `IFACE-NEG-KEEP=7` 钉住「13 之后旧值还在」（旧值 = 前面 `Set f = v` 装进去的那枚 `Impl`，
 `Impl.IFoo_Bar()=7`；若被清成 Nothing 这里会先 91 再打印空/0）。
+
+## 22. `iface_multi` 判据纠正：非法当合法 → 改负控 + 补 3/3 正向
+
+真 VB6 对「`Implements IMul` 只写 2/3 成员」**编译期直接拒**（`类模块需要实现 'Three' 为接口 'IMul'`）。
+C3 语义层早已按真值报 `VB3012`，但夹具仍按「能编过 + `B-THREE-ERR=438`」注册 ⇒ 4 个 vbp 分片常红。
+本轮把判据改对，不是删用例：
+
+- `tests/iface_multi`（Beta 少写 Three）→ **负控** `iface_multi_incomplete_negcontrol`：
+  新增 `Test-CompileFails`，三条同时成立才绿 —— `exit != 0` / 输出含 `VB3012` / **无 exe**。
+- `tests/iface_multi_full`（Beta 补 `IMul_Three=23`）→ **正向** `iface_multi_full` + `_x86`：
+  `A-ONE/TWO/THREE=11/12/13`、`B-…=21/22/23`、`MULTI-DONE`；新增读数 `A-TNAME=Object` /
+  `B-TNAME=Object`（TypeName 对接口视图仍答 `Object` 而非类名 —— 在册欠项，不是本刀引入）。
+- k166 两条 oracle 同步改到 `iface_multi_full` 并按**当前**发码面改写（IMul 已走 tB 薄视图）：
+  正面针 = `VB6_IVTBL_IMUL` / `__stdcall *one` / `*three` / 每类一张 `vb6_ivtbl_IMul_for_*` /
+  工程级 `vb6_ivref_IMul_from_class` / 两条 `_stricmp` 分支；反面针不变（legacy 三发绝迹）。
+  旧的 `vb6_iface_IMul_unimpl_Three_Beta` + `RaiseError(438)` 两针随非法夹具退场（该代码路径已不可达）。
+
+## 23. `check_rtl_proto_arity` 1438 → 1454 的账（记录作废，不是"口径更正"）
+
+- 脚本自 `1e168609`（2026-10-10）**未再改动** ⇒ 统计口径没变。
+- 计数只是 `src/rtl` 的纯函数；逐树实测：
+  - dev `d7410cc3` = **1454**
+  - 刀前 `.temp/preknife` (`3ebb656c`) = **1454**
+  - `fbc26f64`（11-09 21:20）= **1454**
+  - `c69cbbba`（11-09 更早）= **1453**
+  - `9be0a411`（11-09 UC 批前）= **1453**
+- 结论：**1438 在任何可复现的树上都测不出来**；它早于 11-09 的 RTL 批次，属旧树读数。
+  按用户口径：**原记录作废，原因未明**（不是我们之前记错口径）。当前真值 = 1454 对，exit 0。
