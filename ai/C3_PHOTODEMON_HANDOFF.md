@@ -343,3 +343,12 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 - 哨兵：`scripts/check_builtin_const_authority.ps1` → `OK ... table=555 numeric-folds=56 expr-folds=11 rtl-vb-defines=0`（表 +2，折叠计数未变 ⇒ 没有长出第二答案源）。
 - 记账：新夹具 `tests/test_builtin_const_ext.bas` 尚未登记 emit-manifest（形状门/coverage 按用户口径暂缓，后期统一 re-bless/补登）。
 
+### 10.2 `Randomize` 语句形态（1 条）
+
+- 现象：`pdPaletteChild.cls` 的 `Randomize -1` 报假 `VB3001`，产物是 `(vb6_Randomize - 1);`（把 `-` 绑成中缀减法，函数没被调用）。
+- 根因：`Randomize` 是软关键字，语句入口没有专属分派，落进通用「表达式 / 无括号调用」路径；**裸调用与正种**碰巧能成（`Randomize`→`vb6_Randomize(0.0)`、`Randomize 5`→`vb6_Randomize(5)`），**负种**被表达式层先吃成减法。
+- 修法：[parser_stmt.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/parser/stmt/parser_stmt.cpp#L284-L309) 增加 `case TokenKind::Randomize`，与 `MsgBox` 同款语句形态：紧跟 `=`/`(`/`.`/`:` 时仍判为标识符走通用路径（软关键字可作变量名），否则按 `Randomize [seed]` 构造 `CallStmt`。
+- 读数：修前探针 `Randomize`/`Randomize 5`/`Randomize -1` → `(vb6_Randomize - 1)` + 2 条 VB3001；修后 `vb6_Randomize(0.0);` / `vb6_Randomize(5);` / `vb6_Randomize((-1));`，stderr 0 行。`Randomize Timer` 仍发 `vb6_Randomize(vb6_Timer());`（Charts 2020 语料在用的形态）。
+- 断言：`tests/test_randomize_stmt.bas`（Compile+Run，`RZ-OK=True`：同种子两次投放首值一致，负种同样生效）+ `rz_emitc_forms` 形状钉 + `rz_emitc_no_binary_sub` 反向钉。
+- 回归：`-Category syntax` **PASS=185 FAIL=0**。
+

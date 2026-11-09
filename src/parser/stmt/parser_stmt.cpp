@@ -281,6 +281,33 @@ return parseLineInputStmt();
             return std::make_unique<CallStmt>(loc, std::move(callExpr));
         }
 
+        // Randomize [seed] 是 VB6 语句（也是软关键字，可作变量名）。
+        // 必须在这里收口：`Randomize -1` 交给通用语句路径时，表达式层把 `-` 绑成
+        // 中缀减法 ⇒ `(vb6_Randomize - 1)` + 一条假 VB3001（PhotoDemon
+        // pdPaletteChild.cls 实测）。赋值/带括号形式仍走通用路径。
+        case TokenKind::Randomize: {
+            if (next_.kind == TokenKind::Equals ||
+                next_.kind == TokenKind::LeftParen ||
+                next_.kind == TokenKind::Dot ||
+                next_.kind == TokenKind::Colon) {
+                return parseLabelOrAssignmentOrCall();
+            }
+            auto loc = currentLoc();
+            advance();  // consume Randomize
+            std::vector<ExprPtr> args;
+            if (cur_.kind != TokenKind::NewLine && cur_.kind != TokenKind::Colon &&
+                cur_.kind != TokenKind::EndOfFile) {
+                args.push_back(parseExpression());
+                while (match(TokenKind::Comma)) {
+                    args.push_back(parseExpression());
+                }
+            }
+            auto callExpr = std::make_unique<IndexOrCallExpr>(loc,
+                std::make_unique<IdentifierExpr>(loc, "Randomize"));
+            callExpr->positional = std::move(args);
+            return std::make_unique<CallStmt>(loc, std::move(callExpr));
+        }
+
         // P22: LSet/RSet statement form (LSet strVar = strExpr / RSet objVar = objExpr)
         // Fix 082: LHS 可以是数组元素或成员 (VB6 允许 LSet arr(i) = arr(i+1) /
         // LSet obj.Sub = obj2), 故复用通用左值解析而不是只接受裸标识符.

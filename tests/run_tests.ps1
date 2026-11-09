@@ -6103,6 +6103,13 @@ if ($Category -in @("all", "run", "bas")) {
         "BCE-CF=15", "BCE-ASYNC=6", "BCE PASS")
     Test-EmitcShape "bce_emitc_reads_are_literals" @("$Tests\test_builtin_const_ext.bas") @(
         "f = 15;", "s = 6;")
+    # Randomize 语句（PhotoDemon pdPaletteChild.cls: `Randomize -1`）。修前通用语句路径
+    # 把 `-` 绑成中缀减法 ⇒ 假 VB3001 + `(vb6_Randomize - 1)`。
+    Add-BasTest "test_randomize_stmt" "$Tests\test_randomize_stmt.bas" @("RZ-OK=True")
+    Test-EmitcShape "rz_emitc_forms" @("$Tests\test_randomize_stmt.bas") @(
+        "vb6_Randomize(5);", "vb6_Randomize((-1));")
+    Test-EmitcAbsent "rz_emitc_no_binary_sub" @("$Tests\test_randomize_stmt.bas") @(
+        "(vb6_Randomize - 1)")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,
