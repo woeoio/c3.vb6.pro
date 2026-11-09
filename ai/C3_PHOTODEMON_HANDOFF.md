@@ -423,12 +423,22 @@ oracle 工程 `.build/oracle/parent/`（`PdParentSem.vbp` + `Form1.frm` + `UCPro
 
 口径：每点 `git checkout <sha> -- src` → `ninja -C .build c3`（`CMAKE_BUILD_PARALLEL_LEVEL=2`、串行）→ **用这枚新 C3** 重编 `tests\ucTreeView\Proyecto1.vbp`（`--arch x86`）→ 只跑 `Corporate Hierarchy` 一条（`.build\bisect\clickprobe.ps1`，与门同一条 `SendMessageTimeout(BM_CLICK, 3000, SMTO_ABORTIFHUNG)`）。
 
-| 提交 | 夹具 exe | 读数 |
+| 提交 | 夹具 exe | 读数（同一判据 `BM_CLICK` 3s 同步） |
 | --- | --- | --- |
-| `ba4ed971`（PhotoDemon 开工前，用户记为全绿点） | 849408 | **红** `clickSync=false 3013ms`（冷网络） |
-| `43528bb8`（R4 回归修复刀） | 849408 | 绿 `clickSync=true 327ms` |
+| `ba4ed971`（PhotoDemon 开工前，区间下界） | 849408 | **红** `clickSync=false 3013ms`（**冷网络**；同一点暖缓存驱动的复跑为绿） |
+| `7495c8ff` | 849408 | 绿 `278ms` |
+| `a7fc9137`（R2+R3 数组类型） | 849408 | 绿 `298ms` |
+| `fdbd29e5`（R4 可创建接口） | 849408 | 绿 `308ms` |
+| `46e22ed1`（R1 工程级 Public 变量） | 849408 | 绿 `396ms` |
+| `de54cd09`（R1 包边界） | 849408 | 绿 `306ms` |
+| `43528bb8`（R4 回归修复） | 849408 | 绿 `327ms` |
+| `2e19c556`（内建常量 8 条） | 849408 | 绿 `373ms` |
+| `2600664d`（Randomize 语句形态） | 849408 | 绿 `314ms` |
+| `e21b5b5c`（UC 内建 Parent 首刀） | 849408 | 绿 `294ms` |
+| `84a74b69`（VBA.Math） | 849408 | 绿 `319ms` |
+| `d680b4d2`（Do 体 Dim/Const） | 849408 | 绿 `308ms` |
 | `fbc26f64`（Randomize/Rnd） | 849408 | 绿 `324ms` |
-| `3b47cc96`/`c9f35cda`（HEAD） | 850432 | 冷网络 `3016ms` 红；暖缓存 `327ms` 绿；**五窗像素门整跑 PASS** |
+| `c9f35cda` / `3b47cc96`（HEAD） | 850432 | 绿 `291–327ms`；冷网络下 `3016ms` 红；**五窗像素门整跑 PASS** |
 
 同一 HEAD 二进制、同一夹具，**只动 `JerarquiaEmpresa.xml` 一处**：
 
