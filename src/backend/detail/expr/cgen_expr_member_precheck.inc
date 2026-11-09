@@ -241,6 +241,14 @@
                 std::string fnLower86 = Symbol::toLower(fnCanon);
                 if (fnLower86 == "rnd") {
                     lastExpr_ = "vb6_Rnd(1)";
+                } else if (auto itB86 = builtinFuncs.find(fnLower86); itB86 != builtinFuncs.end()) {
+                    // 账 #478: RTL 名一律问内置表, 不再用 `"vb6_" + cIdent(...)` **现拼**。
+                    // `Int` 是 C 关键字 (cgen_base_naming.cpp 的 cKeywords), cIdent("Int") 先
+                    // 转成 `vb6_Int`, 再被这里拼一次前缀 ⇒ `vb6_vb6_Int` ⇒ `VBA.Int(1.7)`
+                    // LNK2019。`VBA.Fix` 只是恰好因为 "Fix" 不是关键字、cIdent 原样返回才名对。
+                    // 表里其余名字两种拼法逐字节相同, 所以这一改只动 Int 一格。
+                    lastExpr_ = itB86->second;
+                    if (vbaZeroArgFns.count(fnLower86)) lastExpr_ += "()";
                 } else if (vbaZeroArgFns.count(fnLower86)) {
                     lastExpr_ = "vb6_" + cIdent(fnCanon) + "()";
                 } else {

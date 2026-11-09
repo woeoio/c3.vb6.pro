@@ -944,3 +944,47 @@ R4 只改了 [driver_interface.cpp](file:///c:/Users/Administrator/Documents/c3.
 
 - `Emit manifest (shape oracle)`：存量哈希变化 + 新夹具未登记，待统一 `scripts/rebless_emit_manifest.ps1 -Bless`（§12.2 已列构成）。
 - `[STATIC]` 口径（`compile #1/#2`）：`builtin_opt_defaults`、`manifest_coverage`、`iface_view_authority`（#1）；`legacy_view_arg_owners`、`box_temp_reclaim`、`class_refcount_authority`（#2）。回滚后随 R4 消失的条目待下一次 CI 复跑确认。
+
+## 16. `VBA.Int` 根因 + 修（账 #478）
+
+### 16.1 根因：限定内建名被「cIdent 转义 + 再拼前缀」拼两次
+
+`VBA.Int(1.7)` → `vb6_vb6_Int` → `LNK2019`；同一处的 `VBA.Fix(1.7)` → `vb6_Fix` 正常。差别不在白名单缺项，而在 [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc) 的 `_objLower == "vba"` 折叠分支：
+
+```cpp
+lastExpr_ = "vb6_" + cIdent(fnCanon);   // 修前
+```
+
+`Int` 是 **C 关键字**（[cgen_base_naming.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/cgen_base_naming.cpp) 的 cKeywords 含 `int`），`cIdent("Int")` 先返回 `vb6_Int`，这里再拼一次 `vb6_` ⇒ `vb6_vb6_Int`。`Fix` 不是关键字，`cIdent("Fix")` 原样返回 `"Fix"`，拼出来恰好等于 RTL 的 `vb6_Fix` —— **纯属巧合**。所以不是「白名单少了 Int」，而是这一格用错命名函数（该问内置表，不该现拼）。
+
+### 16.2 真 VB6 四形态（6.00.9782 探针）
+
+探针 `.temp/vbaint/vb6/{ProbeMain.bas,VbaIntProbe.vbp}`（CRLF + ASCII），`/make` 后跑 exe 写读数：
+
+| 写法 | 真 VB6 |
+| --- | --- |
+| `VBA.Int(1.7)` / `VBA.Int(-1.7)` | 编过；`1` / `-2` |
+| `VBA.Fix(1.7)` / `VBA.Fix(-1.7)` | 编过；`1` / `-1` |
+| 裸 `Int(-1.7)` / `Fix(-1.7)` | 编过；`-2` / `-1` |
+| `Math.Int` / `Math.Fix` | **不存在**（「未找到方法或数据成员」，C3 报 VB3045，负控已在 §10.4） |
+
+**重要更正（用户口径）**：`Int(1.7)` 的真值是 **1，不是 2**。VB6 的 `Int` 是「向下取整（向 -∞）」，对正数 1.7 取整结果与 `Fix` 相同；`Int` 与 `Fix` 只在**负数**上分界（`-2` vs `-1`），`Int` 不是向上取整。断言据此钉：正例 `1`、负例 `-2`，分界必须落负例。
+
+### 16.3 修法
+
+`else if` 链里把「RTL 名」交给内置表，不再现拼；`rnd` 特殊形与零参 `()` 原样保留：
+
+```cpp
+} else if (auto itB86 = builtinFuncs.find(fnLower86); itB86 != builtinFuncs.end()) {
+    lastExpr_ = itB86->second;
+    if (vbaZeroArgFns.count(fnLower86)) lastExpr_ += "()";
+} else if (vbaZeroArgFns.count(fnLower86)) { ... }
+```
+
+表里其余名字两种拼法逐字节相同（只有 `int` 撞 C 关键字），所以这一改只动 `Int` 一格。
+
+### 16.4 修前红 / 修后绿
+
+- **修前**（把该分支临时换回旧写法重建）：`--emit-c` 出现 `vb6_vb6_Int`；真编 `error LNK2019: 无法解析的外部符号 vb6_vb6_Int，函数 vb6_Main 中引用了该符号`，exit=1。
+- **修后**：`--emit-c` 出 `vb6_Int(1.7)` / `vb6_Int((-1.7))` / `vb6_Fix((-1.7))`，无 `vb6_vb6_`；真编 exit=0，运行读数 `VI-POS=1 VI-NEG=-2 VF-POS=1 VF-NEG=-1 BI-NEG=-2 BF-NEG=-1 VA-ABS=3 VA-PASS`，与 16.2 的真 VB6 逐行相同。
+- 夹具 [test_vbaint_qual.bas](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/test_vbaint_qual.bas) + 三条 cell（`test_vbaint_qual` 真跑 / `vbaint_emitc_rtl_names` 形状 / `vbaint_no_double_prefix` 缺席）。

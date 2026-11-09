@@ -6175,6 +6175,19 @@ if ($Category -in @("all", "run", "bas")) {
     Test-CompileFail "vbamath_typeuse_module_as_type" @("$Tests\test_vbamath_typeuse_bad.bas") @(
         "VB3046", "Visual Basic 中不支持自动化类型: 'VBA.Math'",
         "Visual Basic 中不支持自动化类型: 'Math'") @()
+    # 账 #478: `VBA.Int` / `VBA.Fix` 是内建函数的限定写法, 必须发**裸 RTL 名**。
+    # 修前 `VBA.Int` 发 `vb6_vb6_Int` (Int 是 C 关键字, cIdent 先转 vb6_Int, 发码点又拼
+    # 一次 vb6_) ⇒ LNK2019; `VBA.Fix` 只是恰好因为 "Fix" 非关键字才名对。
+    # 取值是真 VB6 6.00.9782 探针读数 (.temp/vbaint/vb6_readings.txt):
+    #   Int(1.7)=1 Int(-1.7)=-2 | Fix(1.7)=1 Fix(-1.7)=-1
+    # 正数方向 Int 与 Fix **相同**, 分界只在负数 —— 断言必须落负例。
+    Add-BasTest "test_vbaint_qual" "$Tests\test_vbaint_qual.bas" @(
+        "VI-POS=1", "VI-NEG=-2", "VF-POS=1", "VF-NEG=-1",
+        "BI-NEG=-2", "BF-NEG=-1", "VA-ABS=3", "VA-PASS")
+    Test-EmitcShape "vbaint_emitc_rtl_names" @("$Tests\test_vbaint_qual.bas") @(
+        "vb6_Int(1.7)", "vb6_Int((-1.7))", "vb6_Fix((-1.7))")
+    Test-EmitcAbsent "vbaint_no_double_prefix" @("$Tests\test_vbaint_qual.bas") @(
+        "vb6_vb6_Int", "vb6_vb6_Fix")
     # 过程级作用域：Do 体里的 Dim/Const 可以在 `Loop While` 条件里用（VB6 的 Dim/Const
     # 是整个过程级的）。修前语义层先分析条件再分析体 ⇒ 假 VB3001。PhotoDemon
     # pdXCF.cls / UserControl_Support.bas 的 4 条都是这一形。
