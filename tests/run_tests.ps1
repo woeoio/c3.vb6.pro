@@ -6182,6 +6182,16 @@ if ($Category -in @("all", "run", "bas")) {
         "PS-LOOP=3,6,6")
     Test-EmitcAbsent "procscope_loopdim_no_vb3001" @("$Tests\test_procscope_loopdim.bas") @(
         "VB3001", "未声明的标识符")
+    # 上一格只钉了「回边条件可以引用体内声明」。反过来那半边同样要钉死：VB6 是单遍文本序，
+    # `Do While <条件>` 是**前置**条件（文本上先于体），条件里引用体内声明真 VB6 报
+    # 「变量未定义」。`d680b4d2` 当时是无条件换序 ⇒ 这一形被一起放宽（调查里的 D1）。
+    # 现在按 loopKind 分流：只有 DoLoopWhile/DoLoopUntil 先体后条件。
+    # 只钉"有没有报"，warning/error 的等级差异不在判据内。
+    Test-CodegenNote "procscope_dowhile_cond_bad" @("$Tests\test_procscope_dowhile_bad.bas") @(
+        "VB3001", "'stopFlag'")
+    # 同一条文本序的另外两处：While ... Wend 与 If ... Then 的条件都在体之前。
+    Test-CodegenNote "procscope_condref_bad" @("$Tests\test_procscope_condref_bad.bas") @(
+        "VB3001", "'LIMIT_WEND'", "'ON_VAL_IF'", "'DONE_FLAG'")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,
