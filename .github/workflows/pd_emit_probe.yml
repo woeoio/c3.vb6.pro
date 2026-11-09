@@ -13,6 +13,7 @@ on:
     paths:
       - '.github/workflows/pd_emit_probe.yml'
       - 'tests/photodemon/**'
+      - 'src/**'
 
 jobs:
   emit:
