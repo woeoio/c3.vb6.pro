@@ -399,7 +399,7 @@ oracle 工程 `.build/oracle/parent/`（`PdParentSem.vbp` + `Form1.frm` + `UCPro
 | [uc_hostmodel_getprop.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/detail/uc_hostmodel_getprop.inc) | ① 原 `Container \|\| Parent` 合并臂拆开：`Container` 保持原逻辑（直接父容器；父是 UC 则交 Extender），新增独立 `Parent` 臂（父窗口是 UC 宿主 → 交 `r->me`；否则 `GetAncestor(GA_ROOT)`；窗体自己 → Empty）。② 新增 UC **实例**的 `Name` 臂，必须排在「实例指针归一成宿主 HWND」**之前**（归一后就分不出 `ucP1.Name` 与 `Label1.Parent.Name`），只认 `rn->hwnd` 非空的有窗实例。③ 新增 `BackColor`/`ForeColor` 臂（原答 438）。 |
 | [uc_hostmodel.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/uc_hostmodel.c) | `vb6_Host_TypeNameOf` 在 `findByHwnd` 之后补 `findByInstance`（`!IsWindow` 防撞车）：`vb6_ho_findInstance` 只认无窗宿主，有窗 UC 的实例指针原先答 `Object`。 |
 | [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc) | `.ctl` 里裸 `Parent.<其它成员>`（`Name`/`Caption`/`BackColor`/`hWnd`…）立 COM 标记，作用于 `vb6_UC_ParentObject()`（晚绑定，静态类型 Object）；排在 `Parent.Controls` 那一支之后。修前这些会落到 m22 兜底拼成 `vb6_Parent_Name` 等未声明符号。 |
-| [Form1.frm](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/Form1.frm) / [UCProbe.ctl](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/UCProbe.ctl) / [PdParentSem.vbp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/PdParentSem.vbp) | 新夹具，与 oracle 同形，26 行读数。 |
+| [Form1.frm](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/Form1.frm) / [UCProbe.ctl](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/UCProbe.ctl) / [PdParentSem.vbp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/tests/pd_parentsem/PdParentSem.vbp) | 新夹具，与 oracle 同形，27 行读数（12 宿主侧 + 7+7 UC 侧 + PS-DONE）。 |
 
 修前 / 中间态 / 修后：
 
@@ -409,9 +409,9 @@ oracle 工程 `.build/oracle/parent/`（`PdParentSem.vbp` + `Form1.frm` + `UCPro
   - `PS-CMD3-PARENT-NAME=Pic1`、`PS-UCP2-PARENT-NAME=Frame2`（应为 Form1）
   - `P1-INNER-PARENT-IS-ME=False`、`P1-INNER-PARENT-NAME=`（空串）、`P1-INNER-PARENT-TYPENAME=Object`（应为 True/UCProbe/UCProbe）
   - 且进程在 `P1-PARENT-BACKCOLOR` 处提前结束（只出 18 行，缺 P2 与 `PS-DONE`）——`Parent.BackColor` 在旧宿主模型里答 438。
-- **修后绿**：26 行逐字命中，与 oracle 可比子集**一一相同**（`PS-*` ↔ `F-*`、`P1/P2-*` ↔ `P1/P2-*`）。颜色只断言「窗体 BackColor = UC 宿主 BackColor」（VB6 两者都是 `-2147483633`；C3 同一语义用 `15790320` 表示，故不钉字面值）。
+- **修后绿**：27 行逐字命中，与 oracle 可比子集**一一相同**（`PS-*` ↔ `F-*`、`P1/P2-*` ↔ `P1/P2-*`）。颜色只断言「窗体 BackColor = UC 宿主 BackColor」（VB6 两者都是 `-2147483633`；C3 同一语义用 `15790320` 表示，故不钉字面值）。
 
-断言：`run_tests.ps1` 新增 `pd_parentsem`（`Test-Vbp`，26 条 needle）+ `pd_parentsem_emitc`（4 条发码形状：`ComGetStringProp/ComGetIntProp((void*)vb6_UC_ParentObject(), …)` 与内层控件 `ComGetObjectProp(vb6_hwnd_Label1, L"Parent")`）+ `pd_parentsem_emitc_absent`（`vb6_Parent_Name/Caption/BackColor` 不得出现）。`Parent.Controls` 的 7 条仍由 10.3 的 `pd_parent_controls_ctl` 与负控 `pd_parent_typo_still_reported` 覆盖。
+断言：`run_tests.ps1` 新增 `pd_parentsem`（`Test-Vbp`，27 条 needle）+ `pd_parentsem_emitc`（4 条发码形状：`ComGetStringProp/ComGetIntProp((void*)vb6_UC_ParentObject(), …)` 与内层控件 `ComGetObjectProp(vb6_hwnd_Label1, L"Parent")`）+ `pd_parentsem_emitc_absent`（`vb6_Parent_Name/Caption/BackColor` 不得出现）。`Parent.Controls` 的 7 条仍由 10.3 的 `pd_parent_controls_ctl` 与负控 `pd_parent_typo_still_reported` 覆盖。
 
 回归：`check_rtl_embedded.ps1` / `check_rtl_proto_arity.ps1` OK；ucSlider 像素门 **PASS**（A1=0.899 ≥0.80、A2=1135、B=0、D stable）；ucTreeView 五窗像素读数全绿（white=110072 / bg240=803 / dark=586 / hl=6849 / vivid=8497，五窗 open+sync），但该脚本末尾 `Corporate Hierarchy` 的 BM_CLICK 同步检查在 **HEAD 与本次改动上同样失败**（`C3_HOST_MEMBER_MISS site=SetProp name="Font"` + `clickSync=false`）⇒ 既有问题，非本刀回归（同一夹具在 HEAD 复跑得到逐字相同的报错）。
 
