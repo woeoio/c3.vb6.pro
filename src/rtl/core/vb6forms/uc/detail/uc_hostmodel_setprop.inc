@@ -22,6 +22,23 @@
 
     if (!vb6_ho_find(obj) && !vb6_uc_findByHwnd(obj) && !IsWindow((HWND)obj)) return 0;
 
+    /* 账 #305 第三百五十二刀: 控件 `Font` 属性 —— `Set Text1.Font = Me.Font`
+       (StdFont 对象赋值)。以前没有这一臂 ⇒ 认成未知属性、写入被忽略
+       (C3_HOST_MEMBER_MISS site=SetProp name="Font"), 设计面的量字盒停在
+       设计期默认字体。
+       真 VB6 oracle (Proyecto1 参考 exe, Form3, 120dpi):
+         UC 宿主窗口 WM_GETFONT = -16|w700|cs0|q0|Segoe UI
+         Text1(隐藏)  WM_GETFONT = -16|w700|cs0|q0|Segoe UI  (逐字相同)
+       ⇒ 字面/字号/字重/字符集一起跟随, 质量档 DEFAULT (q0);
+       `Me.Font` 是 UC 自己的 Font 属性 (Form3.frx 里那枚设计期字体),
+       不是窗体 Ambient (Form3 自己是 MS Sans Serif 8.25/-13)。
+       质量档用 HostWindow 那一版(DEFAULT_QUALITY), 与 oracle 的 q0 对齐。 */
+    if (_wcsicmp(name, L"Font") == 0) {
+        void* fobj = NULL;
+        if (v && (v->vt == 9 || v->vt == 13)) fobj = vb6_UC_UnwrapHost((void*)v->pdispVal);
+        vb6_ComIface_Font* f = vb6_uc_fontOf(fobj);
+        if (f) { vb6_UC_ApplyFontToHostWindow((void*)obj, f); return 1; }
+    }
     if (_wcsicmp(name, L"Caption") == 0 || _wcsicmp(name, L"Text") == 0) {
         BSTR s = vb6_ho_variantToBstr(v);
         if (s) SetWindowTextW((HWND)obj, s);

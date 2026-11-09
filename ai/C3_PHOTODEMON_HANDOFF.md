@@ -507,6 +507,30 @@ oracle 工程 `.build/oracle/parent/`（`PdParentSem.vbp` + `Form1.frm` + `UCPro
 
 待处理：`urlpic_net` 是下一处同类隐患（DEFAULT 情况下网络不通会 SKIP 而不是红，但内容/限流变化会红）；按同一口径改成固定本地图或固定字节回放后再处理。
 
+#### 10.3.5 `C3_HOST_MEMBER_MISS site=SetProp name="Font"` 单刀
+
+**oracle（真 VB6 参考 exe，Form3 `Corporate Hierarchy`，120dpi，`WM_GETFONT`+`GetObject` 读 LOGFONT）**：
+
+```
+Form3 窗体     -13|w400|cs1|q0|MS Sans Serif      (窗体 Ambient 默认)
+UC 宿主窗口    -16|w700|cs0|q0|Segoe UI           (m_Font，见 Form3.frx 的 font 属性)
+Text1(隐藏)    -16|w700|cs0|q0|Segoe UI           (与 UC 宿主窗口逐字相同)
+```
+
+⇒ `Set Text1.Font = Me.Font` 的效果：**字面/字号/字重/字符集全部跟随**，质量档 DEFAULT（q0）；`Me.Font` 是 UC 自己的 `Font` 属性（`UserControl_ReadProperties` 里 `ReadProperty("Font", Ambient.Font)`，本夹具由 `Form3.frx`:0000 那枚设计期 StdFont 覆盖），不是窗体 Ambient。
+
+**frx 证据**：`Form3.frx` 偏移 0 的 36 字节 StdFont 块里 Weight=400；真 VB6 稳态读回 700，是因为 VB6 的 `Set` 共享**同一枚 StdFont 对象**，之后 `UserControl.FontBold = N.FontBold`（`ucTreeViewPlus.ctl:1665-1669`，每个粗体节点一次）改的就是这枚对象的 Bold，Text1 跟着变。
+
+**实现**（[uc_hostmodel_setprop.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/uc/detail/uc_hostmodel_setprop.inc) 第三百五十二刀）：宿主模型 `SetProp` 补 `Font` 臂 —— 值按 `vt=9/13` 解包取字体对象，`vb6_UC_ApplyFontToHostWindow`（`DEFAULT_QUALITY`，对齐 oracle 的 q0）落到目标 HWND 的 `WM_SETFONT`；取不到字体对象时仍走原来的 `reportUnknown`。
+
+**取证**：
+
+- MISS 消失：同一夹具 clickprobe 的 stderr 里已无 `C3_HOST_MEMBER_MISS site=SetProp name="Font"`（改前每个 UC 实例 boot 期各 2 行）。
+- 效果：C3 侧 Text1 `WM_GETFONT = -16|w400|cs0|q0|Segoe UI`（改前是设计期默认 `MS Sans Serif`）；字面/字号/字符集/质量档与 oracle 一致。
+- 无回归：五窗像素门 `PASS`，读数与改前逐项相同（`chk240=82.9% label240=90.6% sb240=93.8% sbHover=6/6`，Form3 `avatar=6356 photo=8997 green=13150 greenRim=91`，Contact `avatar=9950 bg65=118862`）。
+
+**已知残差（单列，不在本刀）**：VB6 的 StdFont 是**共享对象**（`FontBold`/`FontUnderline` 直接改那枚对象的 Bold/Underline），C3 把 `FontBold`/`FontUnderline` 建模为独立标志位（`vb6_UserControl_FontBold`，绘制时与字体对象合成），所以赋值那一刻的拷贝不会跟着后续 Bold 翻转走 —— 稳态下 C3 的 Text1 是 w400，真 VB6 是 w700。只影响就地编辑框的字重（`Text1` 为 `Visible=0` 的量字/编辑盒，当前判据不覆盖像素），不影响树区绘制。要完全对齐得把 `FontBold` 回写到字体对象（或给字体对象加绑定窗口表），会动到所有 UC 的绘制路径，另开一刀并重跑五窗。
+
 ### 10.4 `Math` 18 条：不是 tB 专有，是 VB6 自带 VBA 类型库的 `VBA.Math`
 
 - **定案（推翻旧记的「疑似 tB-only」）**：`Math` 是 VBA 类型库里真实存在的模块（`Element of VBA.Math`：`Log` / `Rnd` / `Round` …），VB6 引用 VBA6 库即拥有它；PhotoDemon 的 `INSTALL.md` 明确是「把 `.vbp` 载入 VB6 IDE 编译」，`Math.Log` 等 18 处因此本来就是合法 VB6。twinBASIC 的 `Math` 模块只是同一族（`docs.twinbasic.com/tB/Modules/Math`），不是来源。
