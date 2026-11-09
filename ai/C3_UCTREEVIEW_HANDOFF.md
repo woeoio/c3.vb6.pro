@@ -4158,3 +4158,18 @@ App 自己报的错（脚本化点击实测，`EnumChildWindows` 读 Static 文�
 
 两者都不是"运行期读外部文件"，当前登记（ucSlider 无 `-AssetDir`、FlexGrid 走 `$Cases`）正确。
 
+### 57.6 GA（run 42711515912，提交 7230557e）
+
+`Tests (vbp #2)` **success**，CI 96dpi 上资产闸按新口径报：
+`asset=36/36 img + 3/3 data ok`（同时 `edFrameDark=0`、`sbHover=6/6 hot=8x6@102 nrm=6x5@133`）。
+
+22 格里 20 绿、`Tests (compile #1/#2)` 红，红的是**另一条在途工作线**的 4 条 STATIC
+（`vbp_fixture_census`：`photodemon\PhotoDemon.vbp` 未登记；`legacy_view_arg_owners`、
+`box_temp_reclaim`、`class_refcount_authority`），与本次资产闸无关 ——
+同一批红在上一提交 `5e596225` 的 run 42683890189 里就已存在（另有 manifest 红，本轮已绿）。
+本轮只动了 `tests\guisample\uctreeview_px.ps1` 的资产段与本文件，不触碰那 4 条判据。
+
+> 记账：提交 7230557e 的暂存区里原本就有 643 个 `tests\photodemon\*`（另一条工作线的未提交
+> 文件），被这次 `git add` 一起带进了提交。内容未改、只是"提前入库"，但违反了"一条一提交"，
+> 已在会话里向用户说明；因已双推，未做 force-push 改写历史。
+
