@@ -1086,3 +1086,30 @@ CREATABLE_TAG=[]
 - iface_wrap / BalloonTooltips：`Set <接口变量> = <Variant/Object>` 的拆箱与类名传递。
 - iface_multi：夹具本身不合法（真 VB6 也拒绝，见 S14），应改成「部分实现 ⇒ VB3012」负控。
 - 记账类：`Emit manifest` 1 枚 + `compile #1/#2` 的 6 条 `[STATIC]`。
+
+## 19. CI 对账更正（以 `gh run list` 实际数据为准）
+
+§17.4 那张表是 run `42651946234`（head `99d94762`）的，**不是最新**。补两条并更正：
+
+| run | head | 状态 | 结果 |
+| --- | --- | --- | --- |
+| 42651946234 | 99d94762 | completed | 7 success / 15 failure（旧表） |
+| 42660526229 | 30a099e3 | completed | **13 success / 9 failure** |
+| 42669065145 | 650b7bac | **in flight** | Build / smoke 已 success，其余进行中 |
+
+run `42660526229`（`30a099e3`）的 22 job：
+
+- success（13）：Build C3.exe、Baseline (M1)、Emit? 否、Tests (smoke/syntax/asm)、bas #1、bas #2、
+  vbp #4、#5、#6、#8、#9、#10。
+- failure（9）：Emit manifest、compile #1、compile #2、vbp #1、#2、#3、#7、#11、#12。
+
+**关键**：`30a099e3` 处在 `574f0029`（R4 回滚）**仍然生效**的窗口里，所以那一轮的 bas（含 k2947）
+是绿的（legacy 路径下 j/k 本来就对），而 vbp #1/#2/#3/#7/#11/#12 红正是**回滚本身**造成的
+缺符号（`vb6_ivref_IK174*` / `__iv_K165Iface` / `vb6_iv_thin_of_`）。
+
+因此：
+
+1. 「已被 CI 验证」的提交：`99d94762`、`30a099e3`；
+2. **尚未被任何 CI 验证**：`d4a25a1c`、`574f0029`（回滚）、`3ebb656c`（撤销回滚）、
+   `650b7bac`（本刀 src）、`e4f75a7e`（本刀文档）——其中 `650b7bac` 的 run `42669065145` 正在跑；
+3. §17.4 里「未能验证 30a099e3」一句作废，以本节为准。
