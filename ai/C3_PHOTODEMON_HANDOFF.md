@@ -102,13 +102,44 @@ $ git diff --stat
 - 单文件 `--emit-c` 代价实测（`Modules\GDIPlus.bas`，243 KB）：**4.2 s / 63.4 MB**，stdout 0.3 MB，stderr 134 行**全部是 VB3001**（跨模块符号缺上下文导致的噪声，无真实缺口）。
 - 结论：按文件跑 `--syntax-only` 已无法产出用户要的五类分布（预计全工程都是 0 语法错）；单文件 `--emit-c` 又被跨模块 VB3001 噪声淹没。**要拿到控件属性/方法、类型、内置缺失这三类真实缺口，必须带工程上下文（`PhotoDemon.vbp`）跑一次 `--emit-c` 或真编译**，这是下一步需要拍板的口径。
 
-## 4. 下一步（待用户拍板）
+## 4. R2 + R3 收口：数组类型（2026-11-09）
 
-1. **拍板口径**（三选一）：
-   - (A) 带工程上下文跑一次 `PhotoDemon.vbp --emit-c`（单进程；先测内存，异常立即停）→ 能产出控件属性/方法、类型、内置缺失三类真实缺口；
-   - (B) 继续按 5–10 份/批跑 `--syntax-only`（预计全工程 0 语法错，只能证明解析器已覆盖 PhotoDemon 的句式）；
-   - (C) 按文件跑 `--emit-c` 并过滤 VB3001 跨模块噪声（单文件代价约 4 s / 63 MB，但只能抓到文件内自洽的语义问题，产量低）。
-2. 任一进程内存异常（如 >500 MB 或耗时 >30 s）立即停下上报，不继续堆。
-3. 记录回归基线：现有测试套件结果 + GA 现状（全绿才算基线确认）。
-4. 之后按「影响面小、复用度高」逐类补，每类一提交、写回本文件。
-5. 全部扫完后按**根因**聚类出缺口清单（每类标影响面与修法难点），不按文件罗列。
+口径已拍板：整工程 emit 不在本机跑，由 GitHub Actions 探针分支（`probe/photodemon-emit`）执行，本地只取 artifact。探针结论与本节的完整版记录在该分支的同名文件里；`dev` 只保留代码修复与本摘要。
+
+### 4.1 根因
+
+`Vb6Type::Array` 是**位标记**（`元素类型 | Array`），但"数组性"历史上记在两处，互相不认：
+
+| 声明形态 | 符号类型 | `Symbol::isArray` |
+| --- | --- | --- |
+| `Dim a() As Byte`（局部/模块动态数组） | `Byte`（只有元素类型） | true |
+| `Function F() As Byte()`（返回数组） | `Byte|Array` | 未设置 |
+| `Sub S(ByRef dst() As Byte)`（数组形参） | `Byte|Array` | 未设置 |
+
+两处消费点各只认一半：
+
+1. `semantic_analyzer_expr.cpp` 标识符取值直接给 `sym->type` ⇒ 局部数组读成**裸元素类型**（R2：`MakeArr = a` 报 `Byte → ?`）；
+2. 同文件数组下标分支只判 `sym->isArray` ⇒ 形参数组下标不脱 Array 位，返回**数组类型本身**（R3：`dst(0) = 7` 报 `Integer → ?`）。
+
+`typeToString` 不认 Array 位，复合值一律打印成 `?` —— PhotoDemon 全工程 548 条 VB3003 里 499 条带 `?` 即由此而来。
+
+### 4.2 修法
+
+- `src/semantics/type_system.hpp`：新增 `isArrayType` / `arrayElemType` / `makeArrayType` 三个纯位运算工具（只服务语义层表达式类型）。
+- `src/semantics/semantic_analyzer_expr.cpp`：标识符取值在 `sym->isArray` 时把 Array 位补进**表达式类型**（符号类型不动，发码层照旧按符号读）；数组下标判据放宽为 `sym->isArray || isArrayType(sym->type)`，元素类型统一走 `arrayElemType`。
+- **未改** `canImplicitConvert`：两侧归一后既有的"相同类型即相容"已足够，放宽会掩盖真错。
+
+### 4.3 探针与回归
+
+- 夹具 `tests/pd_arrtype/p01_array_elem.bas`（1279 B，函数返回数组 / 整体赋值 / ByRef 数组形参下标 / UDT 数组元素）。
+- 已接进 `tests/run_tests.ps1` 的 `pd_arrtype_element_type`（`all`/`syntax` 段）：反向钉 `VB3003` 不出现；正向钉发码签名仍为 `vb6_SafeArray1D* vb6_MakeArr(void);` 与 `void vb6_FillArr(vb6_SafeArray1D** dst);`（防"靠退化发码消告警"）。
+- 双向读数：修前 EXIT=0 / **3 条 VB3003**（`Byte → ?`、`Integer → ?`、`? → Byte`）→ 修后 EXIT=0 / **0 条**，签名不变。
+- 回归：`tests/run_tests.ps1 -Category syntax` → **PASS=183 FAIL=0 SKIP=0**（含本用例）。
+- 构建：`CMAKE_BUILD_PARALLEL_LEVEL=2`；本次含 `type_system.hpp` 导致 77 目标重编，并发峰值按 2 封顶，随后复验 `ninja: no work to do`（空闲内存 12.3 GB / 16.1 GB）。
+
+## 5. 下一步
+
+1. 记录回归基线：现有测试套件结果 + GA 22 job 现状（全绿才算基线确认）。
+2. 按影响面顺序继续：R4（`Implements` 空体接口，19 条）→ R1（跨模块 `Public` 变量不可见，3693 条）。
+3. 每次改动后复跑 CI emit 探针，用 `VB3001` / `VB3003` / `VB3044` 计数变化作为影响面证据。
+4. 之后的目标是 `--arch x86` 真编译（emit 后跑 cl/link），届时再看控件属性/方法缺失类缺口。
