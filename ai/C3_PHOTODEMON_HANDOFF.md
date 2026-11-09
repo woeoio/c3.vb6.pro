@@ -244,17 +244,40 @@ Entry.bas(26,5): warning VB3003: assignment: 无法将 ? 隐式转换为 Byte
 
 口径（用户 2026-11-09 定）：**emit manifest / 覆盖率 / census 计数这类非源码性质的记账型红可以暂缓，产品正确性类红必须修**。这里逐条留账，不静默忽略。
 
-| # | run / job | 现象 | 为什么是记账型 | 将来怎么处理 |
+| # | run / job | 现象 | 为什么是记账型 | 处置 |
 | --- | --- | --- | --- | --- |
-| A1 | run 42590924685 · `Emit manifest (shape oracle)` | 报红：语料新增输入未登记哈希 | 比较器只比"哈希表行集合"，与程序行为无关；差异全部是"新增行" | 用 CI 自己那份 `ci/emit-manifest` 的读数登记（`scripts/rebless_emit_manifest.ps1`），**不在本机造哈希**：本机 MSVC 14.29 与 CI 工具集的注释编码可能不同，`sha256` 会假差 |
-| A2 | run 42590924685 · `Tests (compile #1)`（`[STATIC] manifest_coverage`） | K1 报 **115** 份语料输入不在 `emit-manifest.expected.txt` | 同上，是 A1 的本地哨兵版；`tests/photodemon/` 的探针语料是上一轮入仓的，尚未登记 | 同 A1，一次登记把 115 行 + 本轮新增的 `tests/pd_arrtype/p01_array_elem.bas`、`tests/pd_iface/Entry.bas` 一起补上 |
-| A3 | 待观测 | — | — | — |
+| A1 | run 42590924685 · `Emit manifest (shape oracle)` | 报红：语料新增输入未登记哈希 | 比较器只比"哈希表行集合"，与程序行为无关；差异全部是"新增行" | **已消除**：`tests/photodemon/**` 从语料枚举里排除（见 8.1），本轮新增的 2 份夹具行按本机 `emit_manifest.ps1` 生成（方法已用既有行逐字对账，见 8.2） |
+| A2 | run 42590924685 · `Tests (compile #1)`（`[STATIC] manifest_coverage`） | K1 报 **115** 份语料输入未登记 | 同上，是 A1 的本地哨兵版 | **已消除**：排除后 K1 只剩本轮 2 份新夹具，已登记；哨兵现为 `inputs=607 [.vbp=224 .bas=383], registered=607, sets equal` |
 
-注意 A1/A2 的**影响面**：`tests/photodemon/` 的 `.bas`/`.vbp` 进了语料枚举（`emit_manifest.ps1` 的枚举口径是 `tests/**.vbp|.bas`），所以 shape oracle 那一步会多跑 115 次 emit（约 +8 分钟 CI 时间）。是否要把探针语料从形状门的语料里排除，是要改主链路判据的决定，**留给用户拍板**，本轮不动。
+### 8.1 排除口径（用户 2026-11-09 拍板）
+
+`tests/photodemon/` 是**第三方工程的 vendored 副本**（PhotoDemon 源集），只用于 `--arch x86` emit 探针取证，不是编译器夹具。它的 115 份 `.bas/.vbp` 每轮让形状门多跑 115 次 emit（约 +8 分钟）而无产品价值，因此从形状门语料里排除。
+
+- 位置：`scripts/emit_manifest.ps1` 的语料枚举（**唯一权威**），一行 `-notmatch '\\tests\\photodemon\\'` 加注释。
+- 可逆：删掉那一行即恢复原口径，别处不用改；恢复后需要按 CI 的 `ci/emit-manifest` 一次性补登 115 行。
+- 不受影响：探针 workflow（`.github/workflows/pd_emit_probe.yml`）自己遍历 `tests/photodemon/**`，与形状门语料无关。
+
+### 8.2 新夹具行的生成方法（避免"造哈希"）
+
+用 `scripts/emit_manifest.ps1` 本身生成（不另写哈希逻辑）：把 2 份新夹具按原相对路径摊进一个临时根 `.build\msub\`，`-Root` 指向它，产出即得行。**方法先对账**：用同一手法对既有语料 `tests/acc/acc_main.bas` 生成一行，与 `emit-manifest.expected.txt` 里已登记的那行**逐字节相同**，证明临时根不影响哈希；再插入 2 行。
+若 CI 侧出现 `sha256` 假差（本机 MSVC 14.29 与 CI 工具集注释编码不同），以 `ci/emit-manifest` 的读数为准覆盖，不猜。
 
 ## 9. 下一步
 
-1. 等本轮 CI（dev 22 job + 探针）跑完：核对 `VB3044` 是否 19 → 0，并把 A1/A2 的记账型红按上表口径记入。
-2. 登记 A1/A2：从 `ci/emit-manifest` 取 CI 自己的清单读数补行，一次提交。
-3. 继续 R1（跨模块 `Public` 变量不可见，3693 条）；之后再处理 VB3003 剩余 57 条的隐式转换判据。
-4. 之后的目标是 `--arch x86` 真编译（emit 后跑 cl/link），届时再看控件属性/方法缺失类缺口。
+1. R1（跨模块 `Public` 变量不可见，3693 条）：根因已定位，方案待用户放行（见 9.1）。
+2. 之后再处理 VB3003 剩余 57 条的隐式转换判据。
+3. 之后的目标是 `--arch x86` 真编译（emit 后跑 cl/link），届时再看控件属性/方法缺失类缺口。
+
+### 9.1 R1 根因与方案（待放行）
+
+**根因**：不是符号表没登记，也不是解析顺序问题。`src/driver/driver_crossmod.cpp` 的 `globalPublicSyms` 里**已经含模块级 Variable**（`getPublicSymbols()` 导出 `SymbolKind::Variable`），注入后发码侧能正确解析——实测探针 vbp 的产物是 `extern int32_t gX;` + 一份定义 + `gX = 41;`，**发码是对的**。
+
+问题在**诊断层**：`SemanticAnalyzer::namesProjectLevel`（semantic_analyzer_util.cpp）只放行 `projPublicProcs_` / `projPublicConsts_` / `projFormNames_` / `projModuleNames_` 四张表，**没有"工程级 Public 变量"这一档**，而跨模块符号注入发生在 stage 3.5（分析 pass 2 之后）⇒ 分析期 `symTab_.lookup` 查不到，落进 `VB3001`。
+
+**方案（不动符号表结构）**：
+1. 新增一张名字集合 `projPublicVars_`（`std::unordered_set<std::string>`，与 `projPublicProcs_` 同款）及其 setter，`namesProjectLevel` 里加一行判断。
+2. driver 在分析前（与 `projPublicProcs_` 同一处装配点）把每个模块 `Public`/`Friend` 的模块级 Variable 名灌进去。
+3. 作用域遮蔽不受影响：本模块/本过程的同名符号在 `symTab_.lookup` 先命中，根本走不到这条分支。
+4. 探针覆盖：跨模块读 / 跨模块写 / `Public` 数组 / `Public` UDT 成员 / 同名不同模块遮蔽。
+
+不改 `SymbolTable` 结构、不改注入时序、不改发码。
