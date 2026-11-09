@@ -405,3 +405,42 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 
 预期下一次探针 `VB3001 = 0`（若仍有残留，只能是本轮之外的第三形态）。`VB3003` / `VB3044` 仍按各自账走。
 
+## 11. 步数截断与固化（2026-11-09）
+
+### 11.1 截断点
+
+上一轮在修 `scripts/check_iface_view_authority.ps1` 的产品/架构类红时撞步数上限，重构只落到源码、**没跑构建、也没改哨兵脚本**。按用户当轮的固化口径（「改了但没跑验证 / 改了一半缺配套 ⇒ `git checkout --` 回退，不要留」）整刀回退。
+
+### 11.2 回退了什么（7 个文件，全部 `git checkout --`）
+
+| 文件 | 截断时的半成品内容 |
+| --- | --- |
+| `src/backend/module/cgen_iface_vtbl.cpp` | 新增 `ivrefViewDeclType` / `ivrefViewIfaceOfReceiver`；`ivrefCType` 改为委托；`ivrefViewGetterReadExpr` 改问新入口 |
+| `src/backend/detail/util/cgen_helpers.inc` | 上述三枚的声明 |
+| `src/backend/cgen_util_com.cpp` | 新增 `viewGetterReadExpr`（legacy → 新式二选一）；站S1 改调它 |
+| `src/backend/stmt/cgen_call.cpp` | Debug.Print 站改调 `viewGetterReadExpr`；站D 改问 `ivrefViewIfaceOfReceiver` |
+| `src/backend/stmt/cgen_control.cpp` | For Each 站改问 `ivrefViewIfaceOfReceiver` |
+| `src/backend/stmt/cgen_with.cpp` | 字面量 `"vb6_ivref_"` 换成 `ivrefViewDeclType`；接收者问句换 owner |
+| `src/backend/detail/expr/cgen_expr_call_com_bind.inc` | P6.4 改问 `ivrefViewIfaceOfReceiver` |
+
+回退后 `git status` 只剩未跟踪的 `.zcodeignore`（非本任务产物，未动）。**没有代码进入提交**；HEAD 仍是 `d680b4d2`。
+
+为什么判为半截：源码侧的四处站点已接上，但**哨兵脚本的钉没改**（⑤ 的 `emitIvrefRefSet(target` 会从 4 变 5、⑨ 需要补两枚新入口的钉），且**一次编译都没跑** ⇒ 既不能证明编译通过，也不能证明 6 个 R4 夹具产物逐字节不变。留着它就是「红着且不知红在哪」。
+
+### 11.3 重做时照这个方案（省得重新推演）
+
+1. `cgen_with.cpp` 的 `"vb6_ivref_" + cIdent(...) + "*"` 不再自己拼：走 `ivrefViewDeclType(<名册答出的接口名>)`（该接口可能空体、`ivreg_` 里 slots 为空，`ivrefCType` 会交空串，所以不能直接用它）。
+2. 新增 `ivrefViewIfaceOfReceiver(receiverText)`（归一问 `slotIvrefViewName`）作为**唯一**入口；`cgen_call.cpp` / `cgen_control.cpp` / `cgen_with.cpp` / `cgen_expr_call_com_bind.inc` 四处改调它，`slotIvrefViewName(` 回到 3 处 / 2 文件。
+3. 新增 `viewGetterReadExpr`（先 legacy、空则新式）住在 `cgen_util_com.cpp`，站S1 与 Debug.Print 站各只调一次；`ivrefViewGetterReadExpr` 保持 1 定义 / 1 声明 / 1 调用。
+4. 哨兵：⑤ 口径扩到 **5 处 / 3 文件**（加 `cgen_control.cpp` 的 For Each 站，理由 = 同一发「退旧 + AddRef」不许站点内联）；⑨ 补 `ivrefViewIfaceOfReceiver`（1/1/4）与 `viewGetterReadExpr`（1/1/2）的钉。
+5. 验收顺序：`check_iface_view_authority.ps1` OK → 6 个 R4 夹具 emit 与截断前基线逐字节一致 → `-Category syntax` 全绿 → 提交。
+
+### 11.4 已确认的中间结论（未随回退丢失）
+
+sha256 二分归因**已全部完成，6 条全部确认（未确认 0 条）**，结论在 §9.1 / §9.2：`fa56b9e2`（R2/R3 前）与 `a7fc9137`（R2+R3）两站 6 条形状全 SAME；`fdbd29e5`（R4）/ `91de0a68` / HEAD 全 DIFF ⇒ **唯一引入点 = R4**；其中 5 条为真回归（已修并验证），`k165` 仅为 canonical 形状随动。归因数据与修复读数已在 §9.4 固化，无需重跑。
+
+### 11.5 仍开着的红（口径不变）
+
+- `check_iface_view_authority`：**产品/架构类**，必须修（即 §11.3）；上一轮已回退，今天它是干净的（无未提交改动）——CI 上的红来自 `e21b5b5c` 那版已提交的 R4 站点，重做时按 §11.3 收口。
+- `manifest_coverage` / emit manifest 等记账型：按用户授权继续挂账，不逐个 re-bless。
+
