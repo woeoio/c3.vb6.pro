@@ -174,6 +174,14 @@ public:
     void setProjectPublicConstNames(std::unordered_set<std::string> s) {
         projPublicConsts_ = std::move(s);
     }
+    // 账 #278 (§B118): 标准模块的**模块级 Public 变量** —— 与 Public 过程/常量同格, 裸名位就是
+    // 它的合法位置 (VB6 工程级全局)。缺这一档 = 跨模块引用必配一条假 VB3001 (PhotoDemon 里
+    // 3693 条的主因), 且类型退化成 Variant。只收 .bas 的 Public: 类/窗体模块的 Public 变量是
+    // **实例成员** (必须经对象名访问), 不是工程级裸名; Private 永远不跨模块; Friend 在标准模块
+    // 里 VB6 本来就不认, 不收。名单同样只由 driver 从已解析的 AST 算一次。
+    void setProjectPublicVarNames(std::unordered_set<std::string> s) {
+        projPublicVars_ = std::move(s);
+    }
     // 账 #278 (§B110): 工程内**窗体模块名**。窗体名在裸名位就是 VB6 的默认实例
     // （`Unload TmForm2` / `Set f = TmForm2`），发码侧 `cgen_expr_ident_symbol.inc` 那条支路答
     // `vb6_form_hwnd_<名>()`，两边同源 = Driver::collectFormModuleNames()（唯一建造点）。
@@ -186,6 +194,7 @@ public:
     std::unordered_set<std::string> projModuleNames_;
     std::unordered_set<std::string> projPublicProcs_;
     std::unordered_set<std::string> projPublicConsts_;
+    std::unordered_set<std::string> projPublicVars_;  // 账 #278 §B118: 标准模块 Public 变量
     std::unordered_set<std::string> projFormNames_;   // 账 #278 §B110: 窗体模块名 (默认实例)
 
     // 类继承 (tB, B08c): `obj.<成员>` 的 Protected 越权判定, 命中即报错并返回 true。

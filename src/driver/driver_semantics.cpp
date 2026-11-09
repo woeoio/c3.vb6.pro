@@ -99,6 +99,10 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
     std::unordered_set<std::string> projModNames;
     std::unordered_set<std::string> projPubProcs;
     std::unordered_set<std::string> projPubConsts;
+    // 账 #278 §B118: 第五份 = 标准模块的模块级 Public 变量名（工程级裸名可见的全局）。
+    // 与前三份同源、同一时刻装配: 跨模块符号注入跑在逐模块分析之后, 等它来不及 ——
+    // 分析当刻查不到就落一条假 VB3001（PhotoDemon 全工程 3693 条的主因）。
+    std::unordered_set<std::string> projPubVars;
     // 账 #278 §B110: 第四份 = 工程内**窗体模块名**。VB6 里窗体名在裸名位就是它的默认实例
     // （`Unload TmForm2` / `Set f = TmForm2`），发码侧 `cgen_expr_ident_symbol.inc` 一直在答
     // `vb6_form_hwnd_TmForm2()`；语义层认不得 ⇒ 那条合法写法多配一条 VB3001（宽松模块里还会
@@ -132,6 +136,27 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                             projPubConsts.insert(Symbol::toLower(m->name));
                         }
                     }
+                }
+                continue;
+            }
+            // 账 #278 §B118: 模块级 **Public 变量**。VB6 里标准模块的 Public 变量与 Public
+            // 过程/常量同格 —— 裸名位就是它的合法位置（工程级全局）。缺这一档的后果与 §B106
+            // 同一对，但更脏: Option Explicit 下每个跨模块引用配一条假 VB3001（PhotoDemon 里
+            // g_Language 1266 条、workingDIB 691 条… 合计 3693），宽松模式下更实 —— 名字被
+            // 登记成一枚隐式 Variant 局部，把全局吃掉。
+            // 只收 Public（Private 不跨模块；标准模块里的 Friend VB6 本来就不认，不收；
+            // 类/窗体模块的 Public 变量是实例成员，得经对象名访问，不是工程级裸名 —— 那段
+            // 循环在 isClassModule/isFormModule 处已经 continue 掉了）。
+            if (d->kind == ASTNodeKind::VariableDecl) {
+                auto& v = static_cast<VariableDecl&>(*d);
+                if (v.access == AccessLevel::Public && !v.name.empty()) {
+                    const std::string lk = Symbol::toLower(v.name);
+                    bool blockedByPkg = false;
+                    if (!module->packageName.empty()) {
+                        auto pit = packageBlockedNames_.find(Symbol::toLower(module->packageName));
+                        if (pit != packageBlockedNames_.end()) blockedByPkg = pit->second.count(lk) > 0;
+                    }
+                    if (!blockedByPkg) projPubVars.insert(lk);
                 }
                 continue;
             }
@@ -177,6 +202,7 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
         analyzer->setProjectModuleNames(projModNames);
         analyzer->setProjectPublicProcNames(projPubProcs);
         analyzer->setProjectPublicConstNames(projPubConsts);
+        analyzer->setProjectPublicVarNames(projPubVars);
         // 账 #278 §B110: 第四份 = 工程内窗体模块名（裸名位 = VB6 的默认实例引用）
         analyzer->setProjectFormNames(projFormNames);
         // 泛型 (tB, G3): 调用点推断需要模板只读视图 (runGenericsPrepass 已构建)
