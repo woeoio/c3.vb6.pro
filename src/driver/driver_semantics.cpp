@@ -114,6 +114,15 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
         // 只有标准模块的 Public 过程能被别处按**裸名**点到 (类/窗体的公开成员必须经
         // 实例名), 所以第二份只收 .bas 模块。
         if (module->isClassModule || module->isFormModule) continue;
+        // 包边界：本模块所在的包若在 manifest 里屏蔽了某些名字，这些名字不进工程级名单。
+        // 那份 manifest 规则的唯一权威是 packageBlockedNames_ —— 这里只"问一次"，点名的
+        // 三个分支（变量 / 常量 / 过程）共用同一份答案，不许各自再抄一遍
+        // (scripts/check_project_const_visibility.ps1 的 S3 钉的就是"全仓只有一处问")。
+        const std::map<std::string, std::string>* blockedForModule = nullptr;
+        if (!module->packageName.empty()) {
+            auto pit = packageBlockedNames_.find(Symbol::toLower(module->packageName));
+            if (pit != packageBlockedNames_.end()) blockedForModule = &pit->second;
+        }
         for (auto& d : module->declarations) {
             if (!d) continue;
             // 账 #278 (§B106): 同一格还漏了**模块级 Public Const / Public Enum 成员**。
@@ -151,12 +160,7 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                 auto& v = static_cast<VariableDecl&>(*d);
                 if (v.access == AccessLevel::Public && !v.name.empty()) {
                     const std::string lk = Symbol::toLower(v.name);
-                    bool blockedByPkg = false;
-                    if (!module->packageName.empty()) {
-                        auto pit = packageBlockedNames_.find(Symbol::toLower(module->packageName));
-                        if (pit != packageBlockedNames_.end()) blockedByPkg = pit->second.count(lk) > 0;
-                    }
-                    if (!blockedByPkg) projPubVars.insert(lk);
+                    if (!blockedForModule || !blockedForModule->count(lk)) projPubVars.insert(lk);
                 }
                 continue;
             }
@@ -187,12 +191,7 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
             if (!nm.empty() &&
                 (acc == AccessLevel::Public || acc == AccessLevel::Friend)) {
                 const std::string lk = Symbol::toLower(nm);
-                bool blockedByPkg = false;
-                if (!module->packageName.empty()) {
-                    auto pit = packageBlockedNames_.find(Symbol::toLower(module->packageName));
-                    if (pit != packageBlockedNames_.end()) blockedByPkg = pit->second.count(lk) > 0;
-                }
-                if (!blockedByPkg) projPubProcs.insert(lk);
+                if (!blockedForModule || !blockedForModule->count(lk)) projPubProcs.insert(lk);
             }
         }
     }
