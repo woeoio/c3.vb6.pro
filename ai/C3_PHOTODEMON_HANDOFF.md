@@ -560,3 +560,50 @@ vbAsyncStatusCodeEndDownloadData=6
 - 断言侧：`run_tests.ps1` 的 `test_builtin_const_ext`（Compile+Run，读数 `BCE-CF=15` / `BCE-ASYNC=6`）+ `bce_emitc_reads_are_literals`（发码必须是字面量）+ `test_intrinsic_consts` 的 `IC-CF-FILES=15` / `IC-ASYNC-END=6`。这些断言证明的是**值本身**，不是「能编译」。
 - 本轮**无新提交**：常量项已在 `2e19c556` 完成，本节的产出只是 oracle 复核记录。
 
+### 14. Randomize + Rnd：与真 VB6 逐值对齐
+
+`Randomize` 语句形态这一项，动到 `Rnd` 算法才发现**只修语句形态等于假修**（用户预告的第 3 条）。本轮按「`Randomize` + `Rnd` 序列对齐」收口。
+
+#### 14.1 真 VB6 的算法（反汇编 + 探针双证）
+
+oracle 不是文档抄的，是两条独立证据：
+
+1. **反汇编** `C:\Windows\SysWOW64\MSVBVM60.DLL`（`dumpbin /disasm:nobytes`，image base `0x66000000`）：
+   - `rtcRandomize` @ RVA `0x486B1`；有参分支 → `0x6608C074`（`__vbaR8Var` 转 double，`fstp qword`）→ `0x660EDF4A`；缺参分支 → `0x660486E0`（`call Timer` → **`fstp dword`**，即先落 Single）→ 同一个 `0x660EDF4A`。
+   - `0x660EDF4A` 折叠：`u = 参数高 32 位`；`fold = ((u & 0xFFFF) << 8) ^ ((u >> 8) & 0xFFFF00)`；`state = fold | (old_state & 0xFF0000FF)`。
+   - `rtcRandomNext` @ RVA `0x4871A`：`Rnd` 形参是 **Single**（`[ebp+8]` dword）；`==0` 直接返回当前 state；`<0` → `0x6608C089`：`state = ((u >> 24) + u) & 0xFFFFFF`（`u` 是 Single 位型）再走 LCG；`>0`/缺参直接走 LCG。LCG 写作 `eax = 0xFFC39EC3 - state*0x2BC03`，等价 `state*1140671485 + 12820163`（mod 2^24）。
+2. **真 VB6 探针**：`C:\Program Files (x86)\VB6Mini\bin\VB6.EXE`（6.00.9782）。中间产物 `.build\oracle\rnd\RndSeq.vbp` / `RndSeq.bas`（不入库）。用 `Hex$(CLng(Rnd() * 16777216#))` **精确还原 24-bit state**（`Rnd` 是 Single，24 位尾数在 double 里精确）。
+
+由此确定的语义（三条最容易踩的）：
+
+- 有参 `Randomize n`：取 `(double)n` 的**高 32 位**折半 XOR，且 **`state` 的低字节沿用旧状态**（`old & 0xFF0000FF`）。所以**连投同一整数种子不复现序列**，旧测试的 `a = b` 断言本身就是错的。
+- `Randomize 0` 是**确定性**的 `fold = 0`，不是 Timer。
+- 裸 `Randomize` 用 `Timer()` 的 **Single 位型**（与有参不同，有参走 double 高 32 位）。
+- `Rnd(<0)` 用 Single 位型重播种（不是 `seed & 0xFFFFFF`）；`Rnd(0)` 不推进。
+
+#### 14.2 改了什么
+
+| 文件 | 改动 |
+| --- | --- |
+| [vb6rtl_conv.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6rtl/vb6rtl_conv.c#L100-L175) | `vb6_Rnd(int32_t)` → `vb6_Rnd(double)`；新增 `vb6_rndFoldState` / `vb6_rndStep` / `vb6_RandomizeTimer`；`vb6_Randomize` 改折半 XOR 播种（旧实现是 `(int32_t)seed & 0xFFFFFF` 截断 + `seed==0` 当 Timer + 裸调用用 `GetTickCount`，三处都错）；`vb6_Rnd_Full` 转发 |
+| [vb6rtl_builtin.h](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6rtl/vb6rtl_builtin.h#L99-L101) | 同步签名；新增 `void vb6_RandomizeTimer(void);` |
+| [cgen_expr_call_builtin_fixup.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_call_builtin_fixup.inc#L407-L415) | 裸 `Randomize` 不再补 `"0.0"`，改发 `vb6_RandomizeTimer()` |
+| [cgen_expr_call_com_bind.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_call_com_bind.inc#L1019-L1032) | `Rnd` 的 ident 展开是 `vb6_Rnd(1)`，括号里的 `1` **不是接收者**；`Rnd(x)` 必须用 x 替代它（旧发码 `vb6_Rnd(1, x)`） |
+| [cgen_expr_call_arg_emit.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_call_arg_emit.inc#L116-L124) | `Rnd`/`Randomize` 的 Variant 实参显式 `vb6_VariantToDouble(...)`（旧发码把 `vb6_VARIANT` 结构体直接塞进 double 形参） |
+| [cgen_call.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/stmt/cgen_call.cpp#L650-L656) | 语句路径同一规则（防御性：`vb6_RandomizeTimer`） |
+
+#### 14.3 oracle 取值过程
+
+- 探针工程 `RndSeq.vbp` 复制到 `%TEMP%` 下 → `VB6.EXE /make RndSeq.vbp /out <log>`（`/outdir` 也行）。两个坑：模块名不能与工程名（VBP 文件名）相同，否则报「名称与已存在的模块、工程或对象冲突」；`Debug.Print` 在 EXE 里不进 stdout，探针必须 `Print #f` 写文件。
+- 探针覆盖 29 段：BASELINE（未播种）、`Randomize 0/1/2/5/42/100`、`42.5/42.25/0.5`、`-1/-2/-1.5`、Variant 42、`16777216/16777217`、变量种子（Single/Double/Integer/Long/Variant）、`Rnd(-1)` ×2、`Rnd(0)`、`Rnd(1)`、裸 `Rnd`、`Randomize 5` ×2（A/B 不复现）、裸 `Randomize`（只验值域）。
+- 每段打 6 个值，共 29 行读数，作为 `run_tests.ps1` 的期望串逐行嵌入。
+
+#### 14.4 修前 / 修后
+
+- **修前红**（旧 C3.exe 编新夹具）：
+  - 2 条 **error C2440**：`vb6_Randomize(vv)` 把 `vb6_VARIANT` 塞进 double（两处 Variant 种子）⇒ 链接不出 exe。
+  - 4 条 **warning C4020** `vb6_Rnd: 实参太多`：`vb6_Rnd(1, (-1))` / `vb6_Rnd(1, 0)` / `vb6_Rnd(1, 1)`。C 里多传实参只是警告，**第一个实参 `1` 被当真种子** ⇒ `Rnd(0)` 变成取下一个、`Rnd(-1)` 根本不重播种 —— 能编、数是错的，正是「假修」的形状。
+  - 裸 `Randomize` 发 `vb6_Randomize(0.0)`；`Randomize 0` 在 RTL 里被当 Timer。
+- **修后绿**：同一夹具真编真跑，输出与 VB6 oracle **29/29 行逐字相同**（`Compare-Object` 无差异）。`run_tests.ps1` 的 30 条期望串全部命中；发码形状门 5 条在场、3 条不在场（`vb6_Rnd(1, ` / `vb6_Randomize(0.0)` / `(vb6_Randomize - 1)`）。
+- 裸 `Randomize` 只能验 `RZ-BARE-RANGE=True`（Timer 播种天然不可复现），已在夹具里注明。
+

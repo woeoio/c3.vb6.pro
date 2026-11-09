@@ -647,11 +647,10 @@ void CCodeGen::visit(CallStmt& node) {
                     }
                 }
             }
-            // Fix 034: Builtin Sub statements with Optional ByVal 参 — 硬编码补默认值.
-            // calleeParams 未注册的 builtin (如 Randomize), bare-call 无参时补默认值.
-            // Randomize([seed]) — RTL vb6_Randomize(double seed); 不传参时 seed=0.0.
+            // Fix 034 / Fix RND-SEQ: 裸 `Randomize` 不是 `Randomize 0` —— 真 VB6 走
+            // rtcRandomize 的缺参分支: Timer → Single 位型 → 折半 XOR 播种。RTL 有专名。
             if (callExpr == "vb6_Randomize" && bareArgList.empty()) {
-                bareArgList = "0.0";
+                callExpr = "vb6_RandomizeTimer";
             }
             callExpr += "(" + bareArgList + ")";
             // 窗体裸名 `ZOrder` (= `Me.ZOrder`): `.frm` 里不带接收者写 `ZOrder` 是窗体自己

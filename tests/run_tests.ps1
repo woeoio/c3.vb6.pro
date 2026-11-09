@@ -6103,13 +6103,47 @@ if ($Category -in @("all", "run", "bas")) {
         "BCE-CF=15", "BCE-ASYNC=6", "BCE PASS")
     Test-EmitcShape "bce_emitc_reads_are_literals" @("$Tests\test_builtin_const_ext.bas") @(
         "f = 15;", "s = 6;")
-    # Randomize 语句（PhotoDemon pdPaletteChild.cls: `Randomize -1`）。修前通用语句路径
-    # 把 `-` 绑成中缀减法 ⇒ 假 VB3001 + `(vb6_Randomize - 1)`。
-    Add-BasTest "test_randomize_stmt" "$Tests\test_randomize_stmt.bas" @("RZ-OK=True")
+    # Randomize 语句 + Rnd 序列（PhotoDemon pdPaletteChild.cls: `Randomize -1`）。
+    # 修前：`-` 被绑成中缀减法 ⇒ 假 VB3001 + `(vb6_Randomize - 1)`；`Rnd(x)` 发出
+    # `vb6_Rnd(1, x)`（C2064）；`Randomize v`（Variant）把结构体塞进 double（C2440）；
+    # 更糟的是 RTL 的播种规则与 VB6 不符（取整截断 vs 折半 XOR、Randomize 0 当 Timer）。
+    # 下面每一行都是真 VB6 6.00.9782 同一段代码打出的 24-bit state 序列（oracle）：
+    #   Hex$(CLng(Rnd() * 2^24)) —— 逐值对齐，不是"能编译"。
+    Add-BasTest "test_randomize_stmt" "$Tests\test_randomize_stmt.bas" @(
+        "BASELINE= B49EC3 888E7A 945B55 4A20C4 4D4C77 C6555E",
+        "RZ-0= C295A9 41C1C8 1F796B 649E82 2A4B3D 89F10C",
+        "RZ-1= A2FE9F 9FDEE6 671A11 47D490 B26113 3C878A",
+        "RZ-2= 8A4525 13A354 EF04C7 E66C6E 939179 420E58",
+        "RZ-5= 62C1BB E00592 E8560D BF109C 1BDCEF 5283F6",
+        "RZ-42= B624E1 C9F420 DE4263 A2239A 841BF5 C55EE4",
+        "RZ-100= 372117 A3577E 9D1049 64D1E8 9EC90B 2D2FA2",
+        "RZ-42.5= 5BD5DD E7D12C 17DB3F FBC906 23DBB1 A00FB0",
+        "RZ-42.25= 158DB3 D81AA E41C5 C22D74 33E667 26478E",
+        "RZ-0.5= FFB519 942378 B145B F98DB2 643DAD F1D9BC",
+        "RZ-NEG1= 41BC8F 676516 254781 CF0C40 D77A03 9CFCBA",
+        "RZ-NEG2= 870495 A72504 973FB7 C57B9E 6F23E9 451708",
+        "RZ-NEG1.5= 4DD6AB DE86C2 AD927D 2D1B4C 987CDF 886426",
+        "RZ-VAR42= EEE751 756CD0 DA9853 B0E1CA 4CA165 8D8E94",
+        "RZ-2P24= 2A9D07 E4A3AE 85EBB9 A3FF98 F3FFFB F54AD2",
+        "RZ-2P24P1= 81144D BDD5DC C48D2F 697336 7F9D21 9E8B60",
+        "RZ-VAR-SGL= 104EA3 8CFEDA 408A35 191424 65F257 EBE3BE",
+        "RZ-VAR-DBL= EF4589 D33228 24A84B 2891E2 63F11D 4C7F6C",
+        "RZ-VAR-INT= 4BF97F A86E46 42EBF1 D3DEF0 AFC1F3 5FE4EA",
+        "RZ-VAR-LNG= D6F505 4513B4 1433A7 4A5FCE ED3759 A49CB8",
+        "RZ-VAR-VAR= 58139B 1F8FF2 CB36ED 31EDFC 70C4CF 4B4C56",
+        "RND-NEG1= 92D31 161B30 2A0D33 2E032A 92BD45 82BAF4",
+        "RND-NEG1-AGAIN= 92D31 161B30 2A0D33 2E032A 92BD45 82BAF4",
+        "RND-0=82BAF4",
+        "RND-POS=83DE7",
+        "RND-BARE=67410E",
+        "RZ-5-A= 2D1A99 81F2F8 DFA5DB A1D932 F95B2D 88813C",
+        "RZ-5-B= AF520F 54A496 BB8901 F247C0 BBC783 6143A",
+        "RZ-BARE-RANGE=True", "RZ PASS")
     Test-EmitcShape "rz_emitc_forms" @("$Tests\test_randomize_stmt.bas") @(
-        "vb6_Randomize(5);", "vb6_Randomize((-1));")
+        "vb6_Randomize(5);", "vb6_Randomize((-1));", "vb6_RandomizeTimer();",
+        "vb6_Rnd(0)", "vb6_Rnd((-1))")
     Test-EmitcAbsent "rz_emitc_no_binary_sub" @("$Tests\test_randomize_stmt.bas") @(
-        "(vb6_Randomize - 1)")
+        "(vb6_Randomize - 1)", "vb6_Rnd(1, ", "vb6_Randomize(0.0)")
     # VBA.Math（VB6 自带 VBA 类型库里的真实模块，不是 tB 专有；PhotoDemon 剩余 VB3001
     # 的 18 条就是 Math.Log/Abs/Cos/Sin/Sqr/Round 的限定写法）。成员折叠到同一批内建函数。
     Add-BasTest "test_vbamath" "$Tests\test_vbamath.bas" @(

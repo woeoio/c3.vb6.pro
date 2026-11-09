@@ -1036,8 +1036,16 @@
         if (openPos > 0) {
             // callee = "funcName(existingArgs)" → 拆开
             std::string funcPart = callee.substr(0, openPos);
-            classMethodObjArg = callee.substr(openPos + 1, callee.size() - openPos - 2);
-            callee = funcPart;
+            // Fix RND-SEQ: `Rnd` 的无参形态在 ident 层已展开成 `vb6_Rnd(1)` (默认种子 1),
+            // 括号里那个 1 **不是接收者** —— `Rnd(x)` 的 x 是种子, 必须替代它而不是被前插,
+            // 否则发出 `vb6_Rnd(1, x)` (C2064/C2197)。VB6 内置里只有 Rnd 是这种形态。
+            if (funcPart == "vb6_Rnd") {
+                classMethodObjArg.clear();
+                callee = funcPart;
+            } else {
+                classMethodObjArg = callee.substr(openPos + 1, callee.size() - openPos - 2);
+                callee = funcPart;
+            }
             // Fix 086: 链式默认属性调用 — 内层是无参 prop_get_(如 .Root("data")) 或
             // COM 调用 (Dic(N)(RouteName)) 时, 内层返回 COM 对象, 外层索引是对返回
             // 对象的 Item 调用. 不能并入内层参数表 (C2197 参数太多).
