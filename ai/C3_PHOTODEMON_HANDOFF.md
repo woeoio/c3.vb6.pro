@@ -591,6 +591,80 @@ Text1(隐藏)    -16|w700|cs0|q0|Segoe UI           (与 UC 宿主窗口逐字�
 
 预期下一次探针 `VB3001 = 0`（若仍有残留，只能是本轮之外的第三形态）。`VB3003` / `VB3044` 仍按各自账走。
 
+### 10.7 过程级 `Dim/Const` 4 条：调查定案（2026-11-09 夜，**只调查、未改代码**）
+
+旧读数出处：`.build\pd_ci\r1\pd_emit.err`（2026-11-09 18:31，`EMIT_EXIT=0`、`STDERR_LINES=238`、其中 `error` 0 条 / `warning` 95 条）。
+
+#### 10.7.1 逐处清单（4 条，一条不落）
+
+| # | 文件 | 过程 | 声明位置（原文） | 引用位置 | C3 旧报（VB 号 + 文本） | 真 VB6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `Classes\pdXCF.cls` | `Friend Function IsFileXCF`（276 行；`Do` 在 331，嵌于 `If useGZMode`→`If Files.FileLoadAsByteArray`） | 337 行 `Dim ldResult As Long`（**Do 体内**） | 342 行 `Loop While (ldResult = ERR_BUFF_TOO_SMALL) ...`；循环后 345 行再用一次 | `pdXCF.cls(342,29): warning VB3001: 未声明的标识符: 'ldResult' (可能来自其他模块)` | 接受 |
+| 2 | 同上 | 同上 | 336 行 `Const ERR_BUFF_TOO_SMALL As Long = 3`（**Do 体内**） | 342 行同上 | `pdXCF.cls(342,40): warning VB3001: 未声明的标识符: 'ERR_BUFF_TOO_SMALL' (可能来自其他模块)` | 接受 |
+| 3 | `Modules\UserControl_Support.bas` | `Public Sub ShowUCTooltip`（1035 行；`Do` 在 1231，直接位于过程体） | 1272 行 `Dim positionFailed As Boolean: positionFailed = False`（**Do 体内**，冒号连写） | 1287 行 `Loop While positionFailed And (Not failsafePosition)` | `UserControl_Support.bas(1287,16): warning VB3001: 未声明的标识符: 'positionFailed' (可能来自其他模块)` | 接受 |
+| 4 | 同上 | 同上 | 1237 行 `Dim failsafePosition As Boolean`（**Do 体内**） | 1287 行同上 | `UserControl_Support.bas(1287,40): warning VB3001: 未声明的标识符: 'failsafePosition' (可能来自其他模块)` | 接受 |
+
+#### 10.7.2 定性：四条同一根因 = 语句分析**顺序**，不是作用域建模缺失
+
+四个候选逐一排除（每一条都有探针读数背书，见 10.7.3）：
+
+| 假设 | 判据 | 结论 |
+| --- | --- | --- |
+| 过程内声明没进局部符号表（作用域建模缺失） | S2（两个块各 `Dim dup`）C3 报 `VB3002 重复声明: 'dup'` ⇒ `Dim` 确实 define 进了**过程级**作用域，且**没有**块作用域 | **否** |
+| 块内声明被语法层拒 | S1/S3/S5b/S6 在 `--syntax-only` 与 `--emit-c` 下均 `rc=0`、0 诊断 | **否** |
+| `Const` 与 `Dim` 路径不同 | 四条里 2 条 `Dim`、2 条 `Const`，是同一处 `visit(DoLoopStmt)` 顺序问题一次性收掉的（`d680b4d2`） | **否** |
+| `Static` 相关 | S4 两处 `Static` 均通过，产物为 `static int32_t n = 0;` / `static int32_t m = 0;`（块内 `Static` 抬到函数级，与 VB6 一致） | **否** |
+
+唯一成因：`visit(DoLoopStmt)` 历史上「先 `analyzeExpr(condition)`、后 `analyzeStmtList(body)`」，而 `Dim`/`Const` 是 visit 到声明语句时才 `define` ⇒ 回边条件查不到名字。**旧日志 18:31 早于修复 `d680b4d2`（20:18），所以那 4 条是修复前读数，不是当前缺口。**
+
+#### 10.7.3 真 VB6 oracle（12 个最小探针，`.temp\procdim\vb6\`，未入库）
+
+| 探针 | 形态 | 真 VB6（6.00.9782） | C3（HEAD `c0d57af4`） |
+| --- | --- | --- | --- |
+| S1 | `If` / `Do`（`Loop While False`）/ `For` 体内各 `Dim` 一只，块外读 | 编译过；`S1 inIf=11 inDo=22 inFor=33` | 0 诊断 |
+| S2 | 两个块各 `Dim dup` 同名 | **编译错**：`行 11 : 当前范围内的声明重复` | `VB3002 重复声明: 'dup'`（rc=1） |
+| S3 | `If` 体 `Const K_IF` + `Do` 体 `Const K_DO`，`Loop While i < K_DO`，块外读两者 | 编译过；`S3 K_IF=5 K_DO=6 i=6` | 0 诊断 |
+| S4 | 过程级 `Static n` + `If` 块内 `Static m`，跨调用 | 编译过；`bump=1/2/3`、`blockstatic=1/2` | 0 诊断；产物 `static int32_t n = 0;` / `static int32_t m = 0;` |
+| S5 | `Dim a()` + `ReDim` + `Preserve`，块外读 | `S5 a(1)=7 ub=5` | 0 诊断 |
+| S5b | `Do` 体内 `Dim b()`（动态数组），块外 `ReDim` | `S5b b(2)=9 bub=4` | 0 诊断 |
+| S6 | `With` 块内 `Dim`，块外读 | `S6 insideWith=44 count=1` | 0 诊断 |
+| S7 | `Dim a(1 To 3)` 之后 `ReDim a(1 To 5)` | **编译错**：`行 5 : 数组维数已定义` | **rc=0、0 诊断 ⇒ 过宽**（见 10.7.6） |
+| S8 | `While i < LIMIT` 条件引用**体内** `Const LIMIT` | **编译错**：`行 5 : 变量未定义` | `VB3001: 'LIMIT'`（方向同、等级不同） |
+| S9 | `If flag = ON_VAL` 条件引用**体内** `Const ON_VAL` | **编译错**：`行 6 : 变量未定义` | `VB3001: 'ON_VAL'` |
+| S10 | `While Not done` 条件引用**体内** `Dim done` | **编译错**：`行 6 : 变量未定义` | `VB3001: 'done'` |
+| S11 | **pdXCF 同形**：`Do` 体内 `Dim ldResult`，`Loop While (ldResult = 3) And ...`，循环后再用 | 编译过；`S11 n=5 last=3` | 0 诊断；同形探针 P1b 真编真跑 `P1b=0,1600,False` |
+| D1 | **风险面**：`Do While Not done` 前置条件引用体内 `Dim done` | **编译错**：`行 6 : 变量未定义` | **rc=0、0 诊断 ⇒ 过宽**（见 10.7.5） |
+
+三条钉死的语义：
+
+1. 块内 `Dim`/`Const`/`Static` 都是**过程级**：块外可读（S1/S3/S6）、跨调用保持（S4）、同名重复声明直接报错（S2）——**没有块作用域**。
+2. VB6 是**单遍文本序**：名字必须在**使用点之前文本出现**过。`While`/`If` 条件在体之前（S8/S9/S10）⇒ 引用体内声明报「变量未定义」；`Loop While` 条件在体之后（S3/S11）⇒ 合法。**这条边界正好把 4 条与「不能放宽」分开**：pdXCF / UserControl_Support 的引用都落在 `Loop While`。
+3. `ReDim` 与过程内 `Dim`：动态数组（`Dim a()` / `Dim b()`）任意块内声明后块外 `ReDim` 均合法（S5/S5b）；**定长数组不可 `ReDim`**（S7）。
+
+#### 10.7.4 C3 现状对照
+
+- 4 条对应形态全绿：P1/P2/P3/P4、P1b（pdXCF 形，真编真跑）、P9（ShowUCTooltip 形）、S3/S11 均 0 条 `VB3001`。
+- `Modules\UserControl_Support.bas` **单文件 emit 直接复核**：`rc=0`、1287 行 **0 条**（全文件 56 条 `VB3001` 全是 `g_WindowManager` / `PDDebug` / `Fonts` 这类跨模块名，单文件口径的既有噪声，与第 3/4 条无关）⇒ 第 3、4 条在真实文件上确认收口。
+- `Classes\pdXCF.cls` 在 dev 上**整体不可解析**（停在 1028/1055，见 10.7.6 第 1 项），所以 342 行只能用同形探针 P1b/S11 背书，无法在 dev 上直读该文件。
+
+#### 10.7.5 改法候选与风险面（**仅列，不动手**）
+
+| 候选 | 内容 | 影响面 | 风险 |
+| --- | --- | --- | --- |
+| A：维持现状（`d680b4d2` 的**无条件**换序） | 0 改动 | `visit(DoLoopStmt)` 一处 | **已实测过宽**：`DoWhileLoop` / `DoUntilLoop`（前置条件）也被换序，D1 真 VB6 报错而 C3 通过。属「多收 VB6 不收的写法」，不阻塞 |
+| B：按 `loopKind` 分流 | 只有 `DoLoopWhile` / `DoLoopUntil` 先体后条件；`DoWhileLoop` / `DoUntilLoop` 保持条件先 | 同 A，约 6 行 if；AST/发码不动 | 若语料里有 `Do While` 引用体内声明，收紧后会**新增**报错。本轮未扫全工程（用户口径：不整工程 emit），动手前应 grep 语料核一遍；现有用例 `test_procscope_loopdim` 与本报告 P1–P4/P9/S11 全在后测形，不受影响 |
+| C：过程级声明预扫描（首次进过程先收集所有 `LocalDeclStmt`） | 一次性对齐「过程级声明」直觉 | 覆盖**全部**语句类型，不是一处 if | 会把 S8/S9/S10/D1 那类 VB6 真错变成通过（漏报面扩大），与 C3 现有文本序行为相反。**不建议** |
+
+风险面总述：动的是 [semantic_analyzer_stmt.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_stmt.cpp#L126-L141) 里 `Do`/`While` 两个 visit 的**分析顺序**，影响所有 `Do` 块的条件类型推断与未声明名诊断；**不触碰** `SymbolTable` 结构、**不触碰**发码。现有用例中与本条相关的只有 `tests\test_procscope_loopdim.bas`，它在 `Loop While` 形，候选 B 不会改它的读数。
+
+#### 10.7.6 调查中发现的、**不属于**这 4 条的三件事（如实记录，均未动手）
+
+1. **dev 缺 `ReDim` 无括号成员链**（真缺口，非本轮范围）：`ReDim m_Layers(i).lMask.cProperties(0 To n) As T`（pdXCF 1028 / 1055 行）在 dev 上报 `VB2003`（`(1028,35)` 起 9 条 + `(1055,145)` 起 9 条）。`probe/photodemon-emit` 已有修复（`if (cur_.kind != TokenKind::LeftParen) { if (cur_.kind == TokenKind::Dot) continue; break; }` + `parseReDimStmtList/parseReDimEntry`），dev **没有**。⇒ 18:31 那份日志是用带此修复的二进制跑的；dev 上 pdXCF 目前整体不可解析。
+2. **定长数组 `ReDim` 过宽**：S7 真 VB6 报「数组维数已定义」，C3 `rc=0` 无诊断。
+3. **未声明名严重度差异**：S8/S9/S10/D1 真 VB6 是**编译错误**，C3 只发 `VB3001` warning（`Option Explicit` 下也未升级）。方向一致、等级不同。
+
+**这 4 条不是工程源码问题**：真 VB6 接受同形写法（S1/S3/S11 均 `/make` 出 exe 并运行出预期读数）。局限说明：未对 `PhotoDemon.vbp` 整工程跑真 VB6 `/make`，「接受」由同形最小探针背书。
+
 ## 11. 步数截断与固化（2026-11-09）
 
 ### 11.1 截断点
