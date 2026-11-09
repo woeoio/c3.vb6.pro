@@ -123,10 +123,12 @@ const Symbol* lookupOwnModuleSymbol(const SymbolTable& symTab, const std::string
     const std::string lower = Symbol::toLower(name);
     static const char* const kSuffixes[] = { "", "$pg", "$pl", "$ps", "$ty" };
     for (const char* suf : kSuffixes) {
-        auto it = symTab.moduleScope()->symbols().find(lower + suf);
-        if (it != symTab.moduleScope()->symbols().end() && it->second
-            && !it->second->isExternal) {
-            return it->second.get();
+        // peek = 本地优先 + 共享层 (类型库) 回退。共享化之前类型库符号就在本地表里,
+        // 这里必须仍然看得见它们 —— replaceBuiltinCom 的判据 (内建 ComClass/ComInterface
+        // 占裸键) 依赖这一档。
+        const Symbol* hit = symTab.moduleScope()->peek(lower + suf);
+        if (hit && !hit->isExternal) {
+            return hit;
         }
     }
     return nullptr;
@@ -206,6 +208,17 @@ bool Driver::runCrossModuleResolution() {
                     if (curIsClass && !newIsClass) {
                         globalPublicSyms[sKey] = {i, sym};
                     }
+                }
+                // 共享化: 类模块 `Foo` 里有同名成员 (`Public Sub Foo`) 时, 两个符号的
+                // storageKey 都是裸名 "foo", 谁先被遍历到谁当代表 —— 而 getPublicSymbols()
+                // 走的是模块符号表 unordered_map 的遍历序, 共享化把类型库符号撤出该表后
+                // 桶布局变了, 顺序跟着翻 (实测 VeList: 基线的代表是 Class, 共享化后变成 Sub
+                // ⇒ 消费模块 lookup("VbPop") 不再是 Class ⇒ 头文件里 `#include "VbPop.h"`
+                // 从 crossmod 段掉进实现段, emit-manifest 形状门报警).
+                // 定序: 类型名只能解析到 Class (VB6 里类型名与过程名分属不同命名空间,
+                // 裸名作为类型时唯一来源就是 Class 符号), 所以 Class 优先, 与遍历序无关。
+                else if (sym->kind == SymbolKind::Class && existing->kind != SymbolKind::Class) {
+                    globalPublicSyms[sKey] = {i, sym};
                 }
             }
             // 窗体 Public 过程的**模块限定键表** (`<form>_<procKey>`): 裸键

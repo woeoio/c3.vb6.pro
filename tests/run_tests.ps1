@@ -1443,6 +1443,37 @@ function Test-ScaleModeWriters {
         $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
     }
 }
+function Test-TypelibPayloadWriters {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] typelib_payload_writers ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_typelib_payload_writers.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+# 规模哨兵（账 §25）：类型库/内建符号只许造一份，不许随模块数线性重造。
+# 语料 = N 份同构小类 + PhotoDemon 同款两条 Reference（shell32 / stdole2），--syntax-only 各跑一次。
+# 判据用 **per-module 斜率**（Δpeak/ΔN），标定于 2026-11-10 本机 Release：
+#   共享层落地后 4.10 MB/模块，改造前 7.64 MB/模块 ⇒ 阈值 5.5 落在两者之间，能抓住回退。
+function Test-TypelibScaleSentinel {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] typelib_scale_sentinel ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_typelib_scale_sentinel.ps1" `
+        -C3 "$Root\.build\C3.exe" -N1 8 -N2 64 -MaxSlopeMB 5.5 -MaxPeakMB 700 -MaxSeconds 180 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 function Test-VbpSourceExt {
     $script:total++
     Write-Host -NoNewline "  [STATIC] vbp_source_ext ... "
@@ -11954,6 +11985,8 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-AppTitleAuthority }
     if (Enter-StaticShard) { Test-SelectLabelOwner }
     if (Enter-StaticShard) { Test-ScaleModeWriters }
+    if (Enter-StaticShard) { Test-TypelibPayloadWriters }
+    if (Enter-StaticShard) { Test-TypelibScaleSentinel }
     if (Enter-StaticShard) { Test-VbpSourceExt }
     if (Enter-StaticShard) { Test-ExtenderEmitChannel }
     if (Enter-StaticShard) { Test-ExtenderPushPop }

@@ -6,6 +6,30 @@
 - VB6 参考 exe：`D:\vb_yqt4qPac\PhotoDemon-main\PhotoDemon.exe`（图标/界面基准，仅作对照）。
 - 节奏约束：单进程串行构建、低并行度；不急于编过，重点是补齐语法 / 控件方法属性 / 类型与语义缺口；每类缺口单独提交。
 
+## 0. 工作区纪律（两条线共用同一工作区，2026-11-10 起）
+
+- **禁用 `git add -A` / `git add .` / `git commit -a`**，一律按显式路径 `git add <file>...` 提交。
+- 提交前先看 `git status`：出现不属于本刀的文件就**停下报告**，不要顺手带进去。
+- 非 `src/**` 源码变动（文档、注释、handoff、`.temp` 探针）不跑 CI —— 空跑 GA 无意义，直接 skip。
+- 起因：`tests/photodemon/*`（643 份）曾被另一条线的 `git add` 连带扫入并推送（`7230557e`），内容未改、不改写历史。连带后果是 `vbp_fixture_census` 报 `photodemon\PhotoDemon.vbp` 未登记 —— 本线记账，等内存主线清完再处理。
+
+## 0.1 本机资源硬规则（2026-11-10 事故后，**任何一轮都适用**）
+
+事故：本机跑 `PhotoDemon.vbp --emit-c --arch x86`（`.temp\pd_run.ps1`），峰值工作集 **12,518 MB**、
+墙钟约 52 s 后 `bad allocation`，16 GB 机器进入交换、整机被拖死。stdout 0 B，未产出任何 C。
+
+因此：
+
+- **禁止**在本机整工程跑 `PhotoDemon.vbp`（`--emit-c` / `--syntax-only` / 任何模式、任何内存上限）。
+  16 GB 撑不住；一进交换就是把整机拖死，不是"慢一点"。
+- 整工程验证**只走 CI**（16 GB runner），本地只取 artifact / 日志。
+- 本机只许：单文件探针、合成小语料（**≤ 60 模块**）、`-Category syntax` 的定向用例。
+- 任何构建必须 `CMAKE_BUILD_PARALLEL_LEVEL=2`；起构建前先报空闲物理内存，**低于 8 GB 不许起**。
+- 启动任何长命令前必须报「预计峰值内存 + 依据（历史读数/语料规模）」，不得凭感觉启动。
+- 本轮实测的 per-module 斜率（Release，合成语料）：共享层后 **4.10 MB/模块**，改造前 7.64 MB/模块；
+  PhotoDemon 539 模块 ⇒ 按此推算仍在 2 GB 以上，**本机永远不要试整工程**。
+
+
 ## 1. 工程规模与依赖（只读摸底）
 
 - 源码文件 592 份，合计约 20.4 MB：`.frm` 232、`.cls` 165、`.bas` 139、`.ctl` 56。
@@ -1209,3 +1233,201 @@ C3 语义层早已按真值报 `VB3012`，但夹具仍按「能编过 + `B-THREE
   - `9be0a411`（11-09 UC 批前）= **1453**
 - 结论：**1438 在任何可复现的树上都测不出来**；它早于 11-09 的 RTL 批次，属旧树读数。
   按用户口径：**原记录作废，原因未明**（不是我们之前记错口径）。当前真值 = 1454 对，exit 0。
+
+## 24. 2026-11-10 重跑普查：**emit 在 2 GB 红线处被打断**（装配阶段失控，先于语义/发码）
+
+> **【勘误 / 本节结论作废，见 §25】** 本节把"2 GB 处被打断"判成"回归"是错的。A/B 实测：
+> `ba455c7f`（本机 Release）与 HEAD 的逐模块内存斜率完全相同（22.4 vs 22.5 MB/模块），
+> 两版都在 5–6 s 撞 2 GB。这不是 ba455c7f..HEAD 的回归，是自 `ba50be1a`（2026-06-26）
+> 就在的 O(模块数 × 类型库符号数) 结构问题。§25 有读数与根因。
+
+
+口径：HEAD `2a2c3d29`，`.build\C3.exe`（03:27 构建），单进程串行，`PhotoDemon.vbp --emit-c --arch x86`，
+看门狗 2 GB / 600 s。空闲内存 7.4–7.5 GB / 16.1 GB。
+
+| 项 | 读数 |
+| --- | --- |
+| EXIT | **KILLED（PEAK_OVER_2048MB）** |
+| 耗时 | 36.9 s（三次复跑 36.8 / 36.9 / 36.8） |
+| 峰值工作集 | **2069.8 MB**（2 GB 上限触发即杀） |
+| stdout | 0 B（一个模块的 C 都还没 dump） |
+| stderr | 142 行，全部是 `C3: CoClass/Interface ... identity`（Pass D/E 的信息行），0 条 `error` |
+| 中间目录 | 未创建任何新 `%TEMP%\C3C\<id>` ⇒ 根本没进 codegen |
+
+内存曲线（`C3_TIMING=1` + 250 ms 采样，`.temp\pd_census2\memtrace.txt`）：
+
+- `0…26 s`：线性 +22 MB/s（36 → 558 MB），对应 `parse 25955 ms`（596 份源文件）。
+- `26 s`：142 行 CoClass/Interface 身份行打完（Pass E 结束），随后 **+144 MB/s**：
+  `558 MB(t=26.4) → 772(28.5) → 1088(30.6) → 1455(32.7) → 1773(34.8) → 2070(36.9)`。
+- `C3_TIMING` 只打出 `vbp+expand / lex / preprocess / parse / typelib+prepasses`，
+  **`semantic` 那条 mark 从未出现** ⇒ 失控点在 Pass F（CoClass 形状校验）到 stage 3.4 成员合并之间。
+
+旁证：`--syntax-only` 同样在 36.3 s / 2051.8 MB 被打断，默认 x64 架构同样 36.7 s / 2064.7 MB
+⇒ 与 `--arch`、与 codegen/emit 无关，是**共用的工程装配阶段**。
+
+判断：§6.5 的上一份普查（`ba455c7f`，CI run 42599592249）**跑完了**（`EMIT_EXIT=0`、792.7 s、
+stdout 48,341,497 B）；按 144 MB/s 的斜率它撑不到 792 s ⇒ 这是一次**回归**，落在
+`ba455c7f..2a2c3d29` 这 45 个提交里（iface 视图那批 43528bb8 / 650b7bac / 1075d990 / d7410cc3 是首要嫌疑）。
+本轮**不猜**：下一轮第一步是逐刀二分构建 + 在该阶段加一行逐模块 stderr，定到具体提交与具体循环。
+
+因此本轮拿不到「各诊断码条数 / 与上次普查的对比 / 距离 exe 还差什么」——因为**连 C 都没发出来**，
+`cl`/`link` 无从谈起。当前第一个缺口不是语法，是装配阶段的内存/超线性行为。
+
+## 25. 2026-11-10 内存"A/B 定案"：**不是回归；根因是每模块深拷贝整份类型库符号**（`ba50be1a` 起）
+
+工具：`.temp\pd_census2\probe_v.ps1`（250 ms 采样 `PeakWorkingSet64`）；语料 `tests/photodemon/PhotoDemon.vbp`
+（539 个模块，仓库内路径，cwd = 仓库根）；构建：`.temp\build-rel`（Release/Ninja，VS2019 14.29，`VB6C3_ENABLE_LLVM=OFF`）；
+锚点：`.temp\wt-ba` worktree 独立 Release 构建。临时插桩为逐模块 stderr
+`C3: SEMTRACE <i>/<N> <ms>ms ws=<MB>MB nsym=<模块级符号数> <模块名>`（两棵树同款；**已删除**）。
+
+**A/B（同语料、同参数 `--syntax-only`、4 GB 上限）**
+
+| 树 | 峰值 | 耗时 | 到被杀时已完成 | 该点工作集 | nsym | 斜率 |
+| --- | --- | --- | --- | --- | --- | --- |
+| HEAD（含 SEMTRACE） | 4078.9 MB | 8.8 s | 180/539（6189 ms） | 4069 MB | 3042 | 22.4 MB/模块 |
+| `ba455c7f`（含 SEMTRACE） | 4176.7 MB | 8.9 s | 184/539（6242 ms） | 4173 MB | 3042 | 22.5 MB/模块 |
+
+两版**不可区分** ⇒ `ba455c7f..2a2c3d29` 45 个提交**无罪**，二分没有可定位的提交。§24 的"回归"结论作废。
+
+**形态（逐模块读数，无拐点）**
+
+`1/539 22ms ws=272MB` / `2 53ms ws=295` / `3 85ms ws=317` / … / `88 3207ms ws=2123` / … / `180 6189ms ws=4069`。
+模块 1 之前是 parse 1553 ms + typelib/prepasses 1006 ms（基线 272 MB），此后**每模块匀速 +21~23 MB**，
+没有任何一个模块变陡 ⇒ 不是"某模块内容重"，是**每模块固定付一份全工程量级的钱**。
+
+**根因**
+
+`driver_semantics.cpp` 的逐模块循环（`for (auto& module : modules_)`）内部，第 257 行起把
+`typelibParser_->cachedResults()` 的**全部** coclass / 接口成员 / 枚举 / 模块函数重新构造成 `Symbol`
+塞进**该模块自己的** `SymbolTable`。实测每个分析器的模块级符号数 `nsym=3042`（全部来自类型库）。
+539 个 `SemanticAnalyzer` 又全部被 `analyzers_.push_back()` 保留（crossmod / generics / codegen 都要用，不能提前释放）
+⇒ 1.64 M 个 Symbol 对象常驻 ≈ 12 GB。`git log -S` 表明这段自 `ba50be1a`（2026-06-26，接口 vtable/早期绑定）就在，
+不是最近 45 个提交。
+
+**为什么 CI 能跑完**：CI 是 16 GB runner，792.7 s 成功说明它把 ~12 GB 吃了下来；本机 15.7 GB 总内存，
+2 GB 红线先杀 — 差别是红线，不是代码。
+
+**修法（已落地，2026-11-10）**：把类型库符号集**只造一份**（`Driver::buildSharedTypelibSymbols()` →
+`typelibTable_`），`SymbolTable` 增加一层非拥有只读回退（`Scope::sharedScope_`，本地未命中才查共享层；
+本地同名声明用 `shadowShared` 复现"遮蔽内建符号"语义）。写点审计：payload 字段只有该函数一处写点，
+`scripts/check_typelib_payload_writers.ps1` 把"payload 只读"钉成断言。
+
+**规模哨兵（已加）**：`scripts/check_typelib_scale_sentinel.ps1`，接进 `run_tests.ps1` 的
+`[STATIC] typelib_scale_sentinel`。语料 = N 份同构小类 + shell32/stdole2 两条 Reference，
+`--syntax-only` 跑 N1=8 / N2=64，判据是 **per-module 斜率 ≤ 5.5 MB/模块**（+ 峰值 ≤ 700 MB、墙钟 ≤ 180 s）。
+
+**实测（Release，本机，2026-11-10）**
+
+| 版本 | N=8 | N=64 | 斜率 |
+| --- | --- | --- | --- |
+| 改造前 `.temp\wt-ba\.build-rel`（`ba455c7f`） | 61.9 MB | 490.0 MB | **7.64 MB/模块** |
+| 共享层后 `.build\C3.exe` | 45.3 MB | 274.9 MB | **4.10 MB/模块** |
+
+`--emit-c` 同口径：基线 73.6 → 497.5（7.57 MB/模块），共享后 49.4 → 282.4（4.16 MB/模块）。
+带 Reference 与不带 Reference 的斜率相同（274.8 vs 274.9 @ N=64）⇒ 剩下的 4.1 MB/模块**不是**类型库符号，
+是每模块自身的 AST / 语义表 / 发码缓冲。
+
+**⚠ 未解决**：整工程 `PhotoDemon.vbp --emit-c --arch x86` 在共享层后**仍然爆内存** ——
+峰值 12,518 MB、约 52 s 后 `bad allocation`（`.temp\pd_run\post_ucprop.log.err`，stdout 0 B）。
+共享层是**必要但不充分**：它拿掉了 3.5 MB/模块 的类型库克隆，但 539 模块 × ~20 MB 的模块自身开销
+仍远超 16 GB。整工程验证只走 CI；本机按 §0.1 禁止再跑。
+
+## 26. UC 属性桥 Let/Set 双入口（2026-11-10）
+
+### 26.1 VB6 oracle（4 条，真 VB6 6.00.9782，x86，`.temp/oracle/letset`）
+
+| 调用点 | 落到的入口 | 说明 |
+| --- | --- | --- |
+| `uc.X = 5` | Property Let | |
+| `Set uc.X = obj` | Property Set | |
+| `Set uc.X = Nothing` | Property Set | |
+| `uc.X = Nothing`（**不带** Set） | Property Set | 关键：VB6 对 `Nothing` 字面量恒走 PUTREF |
+| `uc.X = Empty` | Property Let | |
+| `uc.X = obj`（不带 Set） | Property Let | 推翻"值是不是对象"分流 |
+| `GET uc.X` | 返回 Set 写进去的那个值 | 两个入口写**同一份**属性存储 |
+
+分流依据是**调用点形态**（有没有 Set / 右边是不是 Nothing），不是值的类型。C3 原先按"哪个符号先到"
+（哈希顺序）挑一个 thunk，导致 7 份发码在 `prop_let_` / `prop_set_` 之间随机翻转（账 #418 那 13 行）。
+
+### 26.2 实现
+
+- `cgen_form_uc_props.inc`：`UcPropPick` 分开记 `letSeg`/`setSeg`（不再 merge）；**两侧都声明且同族**
+  才发两个 thunk（`ucPropLet_X` → `prop_let_`，`ucPropSet_X` → `prop_set_`），否则保持今天的单 thunk、
+  两个入口都退到它。`vb6_UcPropDesc` 加第 4 槽 `setref`（NULL = 退化到 `set`）。
+- RTL：`vb6_UC_OwnPropSetRef` → `vb6_Host_SetPropRef` → `HW_Invoke` 按 `DISPATCH_PROPERTYPUTREF` 分流；
+  `vb6com_invoke.c` 的 SetRef 接收者走 `vb6_Host_SetPropRef`。
+- `cgen_assign_com_prop.inc`：`o.Prop = Nothing`（无 Set）改发 `vb6_ComSetRef(o, L"Prop", NULL)`。
+- `cgen_setlet_set_prop.inc`：`Set <晚绑定接收者>.Prop = v` 原先按成员名全局命中工程类 Property Set
+  **直发** `vb6_Cls_prop_set_X(o, …)`（`o` 实际是 HWND / IDispatch*）⇒ 0xC0000005。现加降级门：
+  接收者推不出类名 且 是 `As Object`/`As Variant` 形参或变量、且不是窗体控件/UC 实例 ⇒ 走 `vb6_ComSetRef`。
+
+### 26.3 探针读数（`.temp/ab13/ucprobe`，7 行一条不少）
+
+`Module1.bas` 里 7 个 `Public Sub Pn(ByVal o As Object)` 强制晚绑定，UC 的 `Property Get/Let/Set X As Object`
+各写一段 trace。改前（Set 优先）C1 = `SET[Object]`（错），且 C2 直接 AV；改后：
+
+```
+C1 o.X = 5           -> LET[Object]
+C2 Set o.X = obj     -> SET[Object]
+C3 Set o.X = Nothing -> SET[Object]
+C4 o.X = Nothing     -> SET[Object]
+C5 o.X = Empty       -> LET[Object]
+C6 o.X = obj (no Set)-> LET[Object]
+C7 GET               -> late-bound: Empty / early-bound(ucP1.X): Object(非 Nothing)
+```
+
+C7 的 `early-bound = Object` 证明 Let/Set 写的是同一份存储（最后写入方是 C6 的 Let，GET 读得回来）。
+`late-bound = Empty` 是另一个既有缺口：`Property Get X As Object` 不生成 getter 桥
+（`objCTypeOf` 只认 `vb6_cls_*`，`void*` 一律 `continue`），不是本轮引入，本轮不动。
+
+### 26.4 已知缺口（明确不修）
+
+1. `Set uc.X = obj` 但属性**只有** `Property Let`：仍退化到单 thunk（今天的形状），不新造错误腿。
+2. `As Variant` 形参的属性完全不发桥（`Property Let X(v As Variant)` 晚绑定访问不到），与 `As Object`
+   的 getter 缺口同上 —— 记缺口，别顺手加。
+3. `Is Nothing` 对 `As Object` 形参恒为 False（探针 trace 里 `:null/:obj` 标记失效，`ObjPtr` 返回栈地址），
+   与本刀无关，未修。
+
+### 26.5 运行等价性（13 行到底影不影响运行）
+
+| 工程 | 口径 | 结果 |
+| --- | --- | --- |
+| ucTreeView | `tests/guisample/uctreeview_px.ps1`（光标钉 (4,4)，2 轮/侧） | 除 `at=`（光标坐标）与 `try=`（前台重试计数）外**逐项相同**；base 自身两轮也只差 `at=` |
+| VBFlexGridDemo | UC dump 4 份 + FORM dump | **逐字节相同**（sha 3a6851… / 82de16…） |
+| Charts 2020 | 标题带 y=8..26（`band.ps1`，4 轮） | **0 差异**；图表主体随机数据驱动，同二进制两轮也不同，不可作读数 |
+
+629 份全量诊断对账（`scripts/emit_manifest.ps1 -ListInputs` 枚举）：`inputs=629 / diff_inputs=0 / rc_mismatch=0`。
+
+### 26.6 那 13 行变成了什么（形状门 7 份 → 15 份）
+
+`emit_manifest.ps1` 全量复跑（Release `.build\C3.exe`，8,001,024 B，sha256 `1ef0b652…`）：
+`# arch=x64 inputs=629 / 期望 629 行 / 实得 629 行 / 相同 614 / 哈希不同 15 / 缺席 0 / 多出 0`。
+
+- **原来的 7 份（账 #418 那 13 行）全部落在新的 15 份里，交集 = 7**：`2020/Proyecto1.vbp`、
+  `2020/ucChartArea`、`2020/ucChartBar`、`2020/ucPieChart`、`2020/ucTreeMaps`、`tests/ucTreeView`、
+  `tests/VBFlexGridDemo`。
+- 新增 8 份（`ucProgressCircular`、`ucSlider_2022`、`ucSegmentedControl`、`TeeChartChartDisplay`、
+  `czUI-main/czFormDemo.vbp`、`guisample/GUISample.vbp` ×3）不是新语义，是同一形状变化的必然结果：
+  凡**同时声明 Let+Set** 的属性都多一个 Let thunk，`vb6_UcPropDesc` 表项从 3 槽变 4 槽。
+- ucTreeView 差分实证：emitted C `965,088 B → 968,550 B`，新增
+  `ucPropLet_DragIcon` / `ucPropLet_Font` / `ucPropLet_SubTextFont`；表项形如
+  `{ L"Font", NULL, ucPropLet_Font, ucPropSet_Font },`，单侧属性仍是 set 与 setref 同函数。
+
+**性质判断**：这 13 行原先的翻转是"哈希顺序偶然"（`UcPropPick` 按符号先到者挑一个 thunk，7 份里挑中
+Let 还是 Set 取决于目录枚举顺序），现在是**按 oracle 定的调用点规则**的确定性产物 —— 同一份输入两次
+跑逐字节相同，与目录遍历顺序无关。
+
+确定性取证（ucTreeView `tests\ucTreeView\Proyecto1.vbp`，连跑 3 次 `--emit-c`）：
+
+```
+run1 rc=0 bytes=968550 sha=CFCEA466B178F194F921533521C22387DC717A212B7328149F81382ED748A61F
+run2 rc=0 bytes=968550 sha=CFCEA466...(同)
+run3 rc=0 bytes=968550 sha=CFCEA466...(同)      distinct=1
+```
+
+双入口只出现在确实同时声明 Let+Set 的属性上（本工程 3 个：`DragIcon` / `Font` / `SubTextFont`），
+其余 20+ 个仍是单个 `ucPropSet_*`（setref 同函数），符合"只声明一个的保持现状"。
+
+**待批**：`emit-manifest.expected.txt` 这 15 行**尚未 bless**（保持红）。按此前裁决，bless 需单独批准；
+批准后再跑一次 gate 确认 15→0。
+

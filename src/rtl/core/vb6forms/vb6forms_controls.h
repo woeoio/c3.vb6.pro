@@ -186,10 +186,14 @@ void* vb6_FormAnswerGetFont(void* hwnd);
 // ABI 用 void* 而不是 vb6_VARIANT*: 本头只 include <stdint.h>, 不想把 vb6rtl 拖进来;
 // thunk 自己把它当 vb6_VARIANT* 用。
 // get 返回非 NULL 表示命中; set 返回非 0 表示命中。
+// set  = DISPATCH_PROPERTYPUT   (VB6 `x.P = v`, 走 Property Let)
+// setref = DISPATCH_PROPERTYPUTREF (VB6 `Set x.P = v` / `x.P = Nothing`, 走 Property Set)
+// 只有同时声明 Let 与 Set 时两者才不同; 只声明一侧时两个槽指向同一个 thunk。
 typedef struct vb6_UcPropDesc {
     const wchar_t* name;                                    // 属性名 (VB6 原名)
     void* (*get)(void* inst, void* outV);                   // NULL = 只写
     int32_t (*set)(void* inst, const void* inV);            // NULL = 只读
+    int32_t (*setref)(void* inst, const void* inV);         // NULL = 退化到 set
 } vb6_UcPropDesc;
 
 // Fix <vbeclipse> rev21: UserControl **自有 Public Sub 的按名桥** (晚绑定方法调用用)。
@@ -341,6 +345,8 @@ int32_t vb6_Host_Error438Count(void);
 const wchar_t* vb6_Host_TypeNameOf(void* obj);
 int32_t vb6_Host_GetProp(void* obj, const wchar_t* name, void* outVariant);
 int32_t vb6_Host_SetProp(void* obj, const wchar_t* name, const void* inVariant);
+// PROPERTYPUTREF 入口 (`Set x.P = v` / `x.P = Nothing`)。
+int32_t vb6_Host_SetPropRef(void* obj, const wchar_t* name, const void* inVariant);
 int32_t vb6_Host_Call(void* obj, const wchar_t* name, int32_t argc,
                       void** argv, void* outVariant);
 // 账 <438>: 窗体/图片框内建方法 PaintPicture —— cgen 直接发到本入口

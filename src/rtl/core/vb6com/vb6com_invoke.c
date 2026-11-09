@@ -1390,7 +1390,7 @@ static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) 
         winObj.vt = VT_DISPATCH; winObj.pdispVal = (IDispatch*)objRef;
         char hin[64];
         vb6_Host_FromWinVariant(&winObj, hin);
-        vb6_Host_SetProp(disp, propName, hin);
+        vb6_Host_SetPropRef(disp, propName, hin);
         vb6_Host_ClearVariant(hin);
         return;
     }

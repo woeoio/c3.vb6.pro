@@ -415,6 +415,27 @@
         }
         if (_psSym) {
             std::string _objClass = inferClassTypeOfExpr(*_ma.object);
+            // 晚绑定接收者: 静态类型是 Object / Variant 时成员必走 IDispatch 派发
+            // (VB6 语义就是 DISPATCH_PROPERTYPUTREF)，不能按成员名全局命中某个工程类
+            // 的 Property Set 直发 —— 接收者的 C 存储是 void* (IDispatch* / 控件 HWND)，
+            // 直发等于把它当 `vb6_cls_<Cls>*` 实例指针。实测探针
+            //   Sub P2(ByVal o As Object): Set o.X = v
+            // 生成 `vb6_UCProbe_prop_set_X(o, …)` (o 实参是 UserControl 的 HWND)
+            // → 0xC0000005。置空符号交给下方 COM SetRef 分支 (vb6_ComSetRef)。
+            // 只在**推不出类名** (`_objClass` 空) 且不是窗体控件/UC 实例时降级 ——
+            // 后两者在 knownObjectVars_ 里也有登记, 但它们有静态类面 (Fix 160-E 那条
+            // `vb6_UC_InstanceOf` 直发) 必须保留。
+            bool _lateBoundRecv = false;
+            if (_objClass.empty() && _ma.object
+                && _ma.object->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string _oidLB = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*_ma.object).name);
+                const bool _isCtrlLB = knownFormControls_.count(_oidLB) > 0
+                    || knownUserControlCtrlVars_.count(_oidLB) > 0;
+                _lateBoundRecv = !_isCtrlLB
+                    && (procObjectFormals_.count(_oidLB) || knownVariantVars_.count(_oidLB)
+                        || knownObjectVars_.count(_oidLB));
+            }
             // Fix 084g-2: 外部注入的跨类属性符号 — 对象类型无法从符号表推断
             // (cgen阶段访问不到过程作用域局部变量) 时, 由外部符号提供 sourceModule.
             // Fix 084y-2: 同 P6.7 — 对象类与属性所属类不一致时, 属性是其他类的
@@ -422,12 +443,13 @@
             // PropertySet, 而 oCallback 是 cClientCallback, Socket 是数据字段) →
             // 跳过属性路径, 交给 visit(MemberAccessExpr) 生成 obj->field 字段赋值.
             bool _objClassMatchesProp = true;
-            if (!_objClass.empty() && _psSym->isExternal) {
+            if (!_lateBoundRecv && !_objClass.empty() && _psSym->isExternal) {
                 std::string _psModLower = Symbol::toLower(_psSym->sourceModule);
                 std::string _objClassLower = Symbol::toLower(_objClass);
                 _objClassMatchesProp = (_psModLower == _objClassLower);
             }
-            if (_objClassMatchesProp && (!_objClass.empty() || _psSym->isExternal)) {
+            if (!_lateBoundRecv && _objClassMatchesProp
+                && (!_objClass.empty() || _psSym->isExternal)) {
                 std::string _verb = (_psSym->kind == SymbolKind::PropertySet) ? "prop_set_" : "prop_let_";
                 std::string _src = _psSym->isExternal ? _psSym->sourceModule : _objClass;
                 std::string _fn = cProcName(_verb + _ma.memberName, _psSym->access, _src);

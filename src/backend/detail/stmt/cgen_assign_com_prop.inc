@@ -517,6 +517,17 @@
                 }
             }
         }
+        // VB6: `o.Prop = Nothing` (不带 Set 关键字) 也走 DISPATCH_PROPERTYPUTREF,
+        // 落 Property Set。oracle 实测 (真 VB6 6.00.9782):
+        //   uc.X = 5 → LET   Set uc.X = obj → SET   Set uc.X = Nothing → SET
+        //   uc.X = Nothing → SET   uc.X = Empty → LET   uc.X = obj → LET
+        // 分流依据是**调用形态**而不是"值是不是对象"—— 所以这里不能按普通 PUT 发。
+        if (node.value && node.value->kind == ASTNodeKind::LiteralExpr
+            && static_cast<LiteralExpr&>(*node.value).literalKind == LiteralKind::Nothing) {
+            c_.emitLine("vb6_ComSetRef(" + objExpr + ", L\"" + memberName
+                        + "\", NULL);  /* COM SetRef Nothing (no Set keyword) */");
+            return;
+        }
         emitExpr(*node.value);
         std::string valExpr = std::move(lastExpr_);
         std::string packFn = comPackExpr(*node.value);

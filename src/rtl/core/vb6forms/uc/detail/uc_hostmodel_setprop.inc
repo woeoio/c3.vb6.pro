@@ -161,7 +161,7 @@
                 if (_wcsicmp(name, *k) == 0) return 1;
         }
     }
-    if (vb6_UC_OwnPropSet(obj, name, v)) return 1;
+    if (VB6_UC_OWN_SET(obj, name, v)) return 1;
 
     /* 账 #305 第二百六十二刀 (丙): 同 Call 那条 —— 不认识的属性名以前静默忽略。 */
     vb6_ho_reportUnknown(L"SetProp", name, obj);
