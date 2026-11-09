@@ -324,3 +324,22 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 
 处置：延后统一 re-bless（`scripts/rebless_emit_manifest.ps1 -Bless` 或取 CI `ci/emit-manifest` 的 artifact），不在本轮逐行手改哈希。
 
+## 10. VB3001 剩余 38 条：逐类收口
+
+### 10.1 内建常量表补项（8 条）
+
+两枚缺表常量，值取自 VB6 参考（Clipboard 格式 / `StatusCode Property` 页）：
+
+| 常量 | 值 | 用途 | PhotoDemon 条数 |
+| --- | --- | --- | --- |
+| `vbCFFiles` | 15（`CF_HDROP`） | `Data.GetFormat(vbCFFiles)` | 7 |
+| `vbAsyncStatusCodeEndDownloadData` | 6 | `AsyncProp.StatusCode <> ...` | 1 |
+
+- 改动：[builtin_consts_ext.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/builtin/builtin_consts_ext.inc#L194-L204) 两行 `addConst`（同一处表，未新增第二答案源）。
+- 修前红：`tests\test_builtin_const_ext.bas`（带 `Option Explicit`）在旧二进制上：
+  `warning VB3001: 未声明的标识符: 'vbCFFiles'` 与 `... 'vbAsyncStatusCodeEndDownloadData'` 各 1 条，符号落成隐式 Variant。
+- 修后：编译 stderr **0 行**，运行读数 `BCE-CF=15` / `BCE-ASYNC=6` / `BCE PASS`。
+- 断言：`run_tests.ps1` 新增 `test_builtin_const_ext`（Compile+Run）与 `bce_emitc_reads_are_literals`（发码必须是字面量 `f = 15;` / `s = 6;`）；`test_intrinsic_consts` 追加 `IC-CF-FILES=15` / `IC-ASYNC-END=6`（无 `Option Explicit` 那一形同时被钉住）。
+- 哨兵：`scripts/check_builtin_const_authority.ps1` → `OK ... table=555 numeric-folds=56 expr-folds=11 rtl-vb-defines=0`（表 +2，折叠计数未变 ⇒ 没有长出第二答案源）。
+- 记账：新夹具 `tests/test_builtin_const_ext.bas` 尚未登记 emit-manifest（形状门/coverage 按用户口径暂缓，后期统一 re-bless/补登）。
+

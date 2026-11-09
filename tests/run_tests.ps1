@@ -6087,6 +6087,7 @@ if ($Category -in @("all", "run", "bas")) {
         "IC-FOLD-ROP=13369376,8913094,15597702,5588696,66,16711782",
         "IC-FOLD-LOG=1,2,3,4", "IC-FOLD-DFM=0,1,2,3,4", "IC-FOLD-WK=1,1,0",
         "IC-FOLD-MISC=256,-1,-2", "IC-VS-CONST=0", "IC-VS-VAR=0", "IC-VS-DIRECT=0",
+        "IC-CF-FILES=15", "IC-ASYNC-END=6",
         "IC PASS")
     # 发码那一面：名字必须落成字面量（值来自表），隐式变量那一套自救行一条都不许在场。
     Test-EmitcShape "ic_emitc_reads_are_literals" @("$Tests\test_intrinsic_consts.bas") @(
@@ -6096,6 +6097,12 @@ if ($Category -in @("all", "run", "bas")) {
         "#undef vbPicTypeBitmap",
         "vb6_VARIANT vbPicTypeBitmap",
         "vb6_ChkLong(vbPicTypeBitmap)")
+    # 内建常量表补项（PhotoDemon 剩余 VB3001 里的 8 条）：这两枚原先不在表里，Option Explicit
+    # 下每处引用各报一条 VB3001 并落成隐式 Variant（读 0）。修后按表值折成字面量。
+    Add-BasTest "test_builtin_const_ext" "$Tests\test_builtin_const_ext.bas" @(
+        "BCE-CF=15", "BCE-ASYNC=6", "BCE PASS")
+    Test-EmitcShape "bce_emitc_reads_are_literals" @("$Tests\test_builtin_const_ext.bas") @(
+        "f = 15;", "s = 6;")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,

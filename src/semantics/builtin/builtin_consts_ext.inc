@@ -198,6 +198,10 @@
     addConst("vbCFPalette", Vb6Type::Long, 9);
     addConst("vbCFRTF", Vb6Type::Long, -16639);       // &HFFFFBF01
     addConst("vbCFEMetafile", Vb6Type::Long, 14);
+    addConst("vbCFFiles", Vb6Type::Long, 15);         // CF_HDROP; PhotoDemon 的 Data.GetFormat(vbCFFiles)
+
+    // AsyncRead StatusCode 常量（VB6 Reference: StatusCode Property）
+    addConst("vbAsyncStatusCodeEndDownloadData", Vb6Type::Long, 6);   // pdDownload.ctl 唯一用到的一枚
 
     // DriveType constants
     addConst("vbDriveTypeRemovable", Vb6Type::Long, 1);
