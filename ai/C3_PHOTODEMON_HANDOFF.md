@@ -368,3 +368,19 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 - 断言：`pd_parent_controls_ctl`（正向两条 + 反向 `VB3001`/`vb6_Parent_Controls`）；负控 `pd_parent_typo_still_reported`（`Paren` 必须照旧报 VB3001，证明只精确放行这一枚名字）。
 - 记账：两个新夹具（`PdParentCtl.vbp` / `PdParentTypo.vbp`）同样未登记 emit-manifest，按同一口径延后。
 
+### 10.4 `Math` 18 条：不是 tB 专有，是 VB6 自带 VBA 类型库的 `VBA.Math`
+
+- **定案（推翻旧记的「疑似 tB-only」）**：`Math` 是 VBA 类型库里真实存在的模块（`Element of VBA.Math`：`Log` / `Rnd` / `Round` …），VB6 引用 VBA6 库即拥有它；PhotoDemon 的 `INSTALL.md` 明确是「把 `.vbp` 载入 VB6 IDE 编译」，`Math.Log` 等 18 处因此本来就是合法 VB6。twinBASIC 的 `Math` 模块只是同一族（`docs.twinbasic.com/tB/Modules/Math`），不是来源。
+- 语料形态：`Modules\ComplexNumbers.bas` 5 行 / 18 个限定成员（`Math.Log` / `Math.Abs` / `Math.Cos` / `Math.Sin` / `Math.Sqr` / `Math.Round`）。
+- 修法（与已有 `VBA.<成员>` 折叠同一条通路，零新语法）：
+  1. [semantic_analyzer_util.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/semantic_analyzer_util.cpp#L789-L794)：`isDocumentHostObject` 认 `math`，**仅限定位**（与 `vba` 同款；值位的裸 `Math` 仍报 VB3001）。
+  2. [cgen_expr_member_precheck.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_precheck.inc#L186-L194)：`Math.<成员>` 并入 `VBA.<成员>` 那一支，成员白名单 = `abs/atn/cos/exp/fix/int/log/rnd/round/sgn/sin/sqr/tan`（拼错的成员不会因前缀是 `Math` 就变合法）。
+- 读数：修前 6 条 VB3001（`Math`）+ `vb6_Math_Log/Abs/Cos/Sin/Sqr/Round`（RTL 无此符号，真编译必 C2065）；修后 stderr 0 行，产物 `vb6_Log(1.0)` / `vb6_Abs((-4.5))` / `vb6_Cos(0.0)` / `vb6_Sin(0.0)` / `vb6_Sqr(9.0)` / `vb6_Round(2.6000000000000001, 0)`。
+- 运行读数（真编译）：`VM-LOG=0` / `VM-ABS=4.5` / `VM-COS=1` / `VM-SIN=0` / `VM-SQR=3` / `VM-ROUND=3`。
+- 断言：`test_vbamath`（Compile+Run 7 行读数）+ `vbamath_emitc_folds_to_builtins` 形状钉 + `vbamath_no_module_symbol` 反向钉；负控 `vbamath_bare_is_undeclared`（值位 `Set m = Math` 必须仍报 VB3001）。
+- 记账：两个新夹具按同一口径延后登记 emit-manifest。
+
+### 10.5 VB3001 剩余 4 条（过程级 `Dim/Const`）—— 下一项
+
+38 − 8（10.1）− 1（10.2）− 7（10.3）− 18（10.4）= **4**，与用户给的分类一致；这一类涉及块内声明的过程级作用域，影响面最大，单独一刀，不并入本节。
+

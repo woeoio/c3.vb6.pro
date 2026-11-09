@@ -6110,6 +6110,16 @@ if ($Category -in @("all", "run", "bas")) {
         "vb6_Randomize(5);", "vb6_Randomize((-1));")
     Test-EmitcAbsent "rz_emitc_no_binary_sub" @("$Tests\test_randomize_stmt.bas") @(
         "(vb6_Randomize - 1)")
+    # VBA.Math（VB6 自带 VBA 类型库里的真实模块，不是 tB 专有；PhotoDemon 剩余 VB3001
+    # 的 18 条就是 Math.Log/Abs/Cos/Sin/Sqr/Round 的限定写法）。成员折叠到同一批内建函数。
+    Add-BasTest "test_vbamath" "$Tests\test_vbamath.bas" @(
+        "VM-LOG=0", "VM-ABS=4.5", "VM-COS=1", "VM-SIN=0", "VM-SQR=3", "VM-ROUND=3", "VM PASS")
+    Test-EmitcShape "vbamath_emitc_folds_to_builtins" @("$Tests\test_vbamath.bas") @(
+        "vb6_Log(1.0)", "vb6_Abs((-4.5))", "vb6_Cos(0.0)", "vb6_Sqr(9.0)")
+    Test-EmitcAbsent "vbamath_no_module_symbol" @("$Tests\test_vbamath.bas") @("vb6_Math_")
+    # 负控: 值位的裸 `Math` 不是合法名字，必须照旧报 VB3001（只放限定符位）。
+    Test-CodegenNote "vbamath_bare_is_undeclared" @("$Tests\test_vbamath_bad.bas") @(
+        "未声明的标识符: 'Math'")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,

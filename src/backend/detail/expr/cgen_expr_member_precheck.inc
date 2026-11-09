@@ -183,7 +183,15 @@
         // C2065). 常量内联字面量; 函数生成裸 rtl 名 vb6_<member> (去 $ 后缀,
         // 如 VBA.Mid$ → vb6_Mid), 由外层 IndexOrCallExpr 的 Fix 033 回退
         // (lookupModule + lookup 全表) 解析参数表并填充 Optional 默认值.
-        if (_objLower == "vba" || _objLower == "vba5") {
+        // VBA.Math 是 VB6 自带 VBA 类型库里的真实模块（PhotoDemon 的 Math.Log/Abs/Cos）。
+        // 成员是同一批内建函数的限定写法 ⇒ m 走与 VBA.<成员> 同一条折叠；但只放行 VBA.Math
+        // 真实成员的名单，拼错的成员不该因为前缀是 Math 就变成"合法"。
+        static const std::unordered_set<std::string> vbaMathMembers = {
+            "abs", "atn", "cos", "exp", "fix", "int", "log", "rnd", "round",
+            "sgn", "sin", "sqr", "tan"
+        };
+        const bool isVbaMath = (_objLower == "math" && vbaMathMembers.count(_memLower) != 0);
+        if (_objLower == "vba" || _objLower == "vba5" || isVbaMath) {
             static const std::unordered_map<std::string, std::string> vbaConsts = {
                 {"vbcr", "13"}, {"vblf", "10"}, {"vbtab", "9"},
                 {"vbnullchar", "vb6_BSTR_FromStrN(L\"\\000\", 1)"}, {"vbnullstring", "vb6_BSTR_FromStr(L\"\")"},

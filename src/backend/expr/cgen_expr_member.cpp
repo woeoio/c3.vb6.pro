@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <functional>
 #include <cstdio>
+#include <unordered_set>
 #include "driver/detail/phase_timing.hpp"   // ai/030 续: member 分段打点 (c3StatSplit; 必须在 namespace 外)
 
 namespace vb6c3 {
