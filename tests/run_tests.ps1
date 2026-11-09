@@ -12245,7 +12245,15 @@ if ($Category -in @("all", "syntax")) {
     # 夹具钉的是: 数组整体赋值(函数返回/整体拷贝)与数组下标取元素都不许再报 VB3003。
     Test-CodegenNote "pd_arrtype_element_type" @("$Tests\pd_arrtype\p01_array_elem.bas") @(
         "vb6_SafeArray1D* vb6_MakeArr(void);", "void vb6_FillArr(vb6_SafeArray1D** dst);") @("VB3003")
-    # PhotoDemon R4 探针: 接口宿主是**可创建**的类 (VB_Creatable = True) 时,
+    # PhotoDemon R1 探针: 标准模块的模块级 Public 变量是**工程级裸名可见** (VB6 全局),
+    # 语义层过去没有这一档名字表 ⇒ 跨模块引用各配一条假 VB3001 (PhotoDemon 3693 条)。
+    # 正面: gX 读写 / Public 数组 / Public UDT 成员 / 同名 Private 遮蔽 (ModC) 都不许再报。
+    # 负控 (防"把告警关掉"): 拼错的 gXX、别的模块的 Private pvLocal、标准模块里的 Friend fFr
+    # 必须照旧报 VB3001 —— 名字表只做精确匹配 (仅大小写折叠), 不做前缀/驼峰放宽。
+    Test-CodegenNote "pd_globals_public_var_visibility" @(
+        "$Tests\pd_globals\ModA.bas", "$Tests\pd_globals\ModB.bas", "$Tests\pd_globals\ModC.bas") @(
+        "未声明的标识符: 'gXX'", "未声明的标识符: 'pvLocal'", "未声明的标识符: 'fFr'") @(
+        "未声明的标识符: 'gX'", "未声明的标识符: 'gArr'", "未声明的标识符: 'gColor'")
     # Pass A2 过去只认 VB_Creatable = False, 于是 ISubclass 这类「空体签名 + 被 Implements」
     # 的宿主不进接口登记表 ⇒ 语义层退回 legacy 只发 VB3044 warn, 发码层每个实现类各发一份
     # 同名 vtable (C2011 撞名)。`VB_Creatable` 只管 `New X` 能不能建, 与 `Implements X` 无关。
