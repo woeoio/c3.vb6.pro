@@ -6201,6 +6201,10 @@ if ($Category -in @("all", "run", "bas")) {
     # 定长字符串常量（PhotoDemon PublicConstants.bas:28）：长度表达式必须停在算术级，
     # 否则 `3 = "pdm"` 被当相等比较吃掉 ⇒ VB2001 expected '=' in Const declaration。
     Add-BasTest "test_fixed_string_const" "$Tests\test_fixed_string_const.bas" @("FSC=3,pdm")
+    # ReDim 的两种形态：多数组 (`ReDim a(...), b(...)`) 与无括号成员链
+    # (`ReDim m.lMask.cProps(0 To 3)`，pdXCF.cls 1028 行的真实形态)。修前后者
+    # 在 `.lMask` 处断 ⇒ VB2003，导致整个 pdXCF.cls 不可解析。
+    Add-BasTest "test_redim_shapes" "$Tests\test_redim_shapes.bas" @("RS=7,9,42")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,

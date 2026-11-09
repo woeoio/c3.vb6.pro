@@ -77,7 +77,7 @@ StmtPtr Parser::parseStatement() {
 
         // --- 声明 (可出现在过程体内) ---
         case TokenKind::Dim:      return parseDimStmt();
-        case TokenKind::ReDim:    return parseReDimStmt();
+        case TokenKind::ReDim:    return parseReDimStmtList();
         case TokenKind::Const:    return parseConstStmtInBody();
         case TokenKind::Static:   return parseStaticStmtInBody();
         case TokenKind::Public:

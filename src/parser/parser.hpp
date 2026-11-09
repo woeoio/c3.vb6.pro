@@ -216,6 +216,10 @@ private:
     std::unique_ptr<GoSubStmt> parseGoSubStmt();
     std::unique_ptr<ReturnStmt> parseReturnStmt();
     std::unique_ptr<ReDimStmt> parseReDimStmt();
+    // ReDim 多数组声明 (`ReDim a(0 To n), b(0 To m)`): 返回 Block 包裹的多个 ReDimStmt。
+    StmtPtr parseReDimStmtList();
+    // 单个 ReDim 条目 (ReDim / Preserve 已由调用方消费)。
+    std::unique_ptr<ReDimStmt> parseReDimEntry(SourceLocation loc, bool preserve);
     std::unique_ptr<EraseStmt> parseEraseStmt();
     // 账 #186: 点链字符串 → 表达式树 (ReDim 与 Erase **共用这一处**，别再抄第二份)。
     // 前置 '.' 表示 With 块成员 (WithMemberExpr)，其余逐段 MemberAccessExpr。
