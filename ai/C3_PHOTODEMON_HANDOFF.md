@@ -444,3 +444,47 @@ sha256 二分归因**已全部完成，6 条全部确认（未确认 0 条）**�
 - `check_iface_view_authority`：**产品/架构类**，必须修（即 §11.3）；上一轮已回退，今天它是干净的（无未提交改动）——CI 上的红来自 `e21b5b5c` 那版已提交的 R4 站点，重做时按 §11.3 收口。
 - `manifest_coverage` / emit manifest 等记账型：按用户授权继续挂账，不逐个 re-bless。
 
+## 12. 对账（2026-11-09 晚，HEAD `cb1a68f1`）
+
+### 12.1 五条真回归 → 全部落在 `43528bb8`
+
+`fix(cgen): 修 R4 canonical 视图的真回归 —— 形参/For Each/语句位/With 接收者`（13 文件，+258/−53）。逐条：
+
+| 夹具 | 修在哪 | 形状 |
+| --- | --- | --- |
+| `k172_viewarg` | `cgen_decl_func.cpp` / `cgen_decl_prop.cpp`（形参归一后同登 `knownIvrefVars_`）；`cgen_util_classtype.cpp` 新增 `ivrefViewBoxExpr`；`cgen_expr_call_arg_emit.inc` | 薄指针按 legacy 发 `.vtbl` ⇒ cl C2039；ByRef Variant 实参把 `vb6_ivref_I**` 当 `vb6_VARIANT*` ⇒ `boxtype=46832`。修后形参走 canonical，ByRef 站发临时 `vb6_VARIANT` |
+| `k174_vieweach` | `cgen_control.cpp` For Each canonical 分支；`cgen_iface_vtbl.cpp` 新增 `ivrefIfaceViewFromFn` / `emitIvrefIfaceViewFrom`；`cgen_base_generate_body_pass.inc` | For Each 落 `vb6_VariantFromStackVARIANT` ⇒ C2440。修后解包对象→取类名→`vb6_ivref_<I>_from_class` 派发 |
+| `k175_viewstmt` | `cgen_call.cpp` 站D | 语句位零实参调用只认 legacy 视图 ⇒ 落 COM 兜底、读数错。修后 `slotIvrefViewName` → `ivrefVtableCall` |
+| `k177_viewwith` | `cgen_expr_call_com_bind.inc` P6.4；`cgen_with.cpp` | P6.4 只认 legacy；With 接收者未登新式名册 ⇒ 静默走 COM 兜底。修后二选一 + 接收者判定/登记 |
+| `k178_viewprop` | `cgen_call.cpp` Debug.Print 实参站；`cgen_with.cpp` | `Debug.Print x.Label` 走 COM getter ⇒ `rc=2/rn=3`。修后补 `ivrefViewGetterReadExpr` |
+
+`k165_iface_slot` 不动发码，只随 canonical 更新 `tests/run_tests.ps1` 的形状断言（`mi=16` 不变）。HEAD 工作树已 grep 确认各修点在位（`ivrefViewBoxExpr` / `ivrefIfaceViewFromFn` / `emitIvrefIfaceViewFrom` / For Each 分支 / 站D / P6.4），代码与文档一致，不存在「只写在文档里」。
+
+修后读数见 §9.4（k172 `boxtype=0`、k174 `sum=303`、k175 `alpha=2/beta=10`、k177 `t1=6/t2=15`、k178 `rc=4/rn=2`、k165 `mi=16`）。
+
+### 12.2 形状门实测（本机，HEAD 二进制）
+
+`scripts/emit_manifest.ps1`（默认 x64 口径，与 CI 一致）：
+
+```
+期望 610 行 / 实得 617 行 / 相同 585 / 哈希不同 25 / 缺席 0 / 多出 7
+```
+
+**不是「只剩 k165」**，25 的构成可逐条解释：
+
+- 6 行 = 六个 R4 夹具（5 条已修真回归 + k165 canonical 随动）；
+- 18 行 = 含 canonical 接口的工程，因新增 `from_class` 派发器多一段函数；
+- 1 行 = `tests/test_intrinsic_consts.bas`（本轮常量表收口时追加了 `IC-CF-FILES` / `IC-ASYNC-END` 两条断言）；
+- 7 行多出 = 本轮新增夹具未登记（`pd_parentctl` ×2、`test_builtin_const_ext`、`test_procscope_loopdim`、`test_randomize_stmt`、`test_vbamath`、`test_vbamath_bad`）。
+
+CI（run `42617564259`，HEAD `cb1a68f1`）的 `Emit manifest (shape oracle)` **红**，红点即上表：`存量 21 份发码真的变了 + 新增 7 份未登记`。CI 少 4 行的原因是**环境**，不是版本差：
+
+- 差集恰为 `guisample/GUISample.vbp`、`guisample/vb6ref/src/vc6|vs2015/GUISample.vbp`、`TeeChartChartDisplay/DisplayProject.vbp`；
+- 四者的 `expected == CI`，本机值更大（如 GUISample 306612 vs 277667 字节）；
+- 它们都 `Object=` 了本机注册的 OCX（Codejock / TeeChart5 / RICHTX32），CI runner 没有 ⇒ COM 绑定深度不同；
+- 本机 19:41 的 `r4_manifest.txt` 与 20:38 的 `recon_manifest.txt` 这四行逐字节相同 ⇒ **早于本分支全部改动，非本轮引入**（属 `emit_manifest.ps1` 头注释里已记录的「语料读取机器状态」旧缺陷类）。
+
+### 12.3 结论
+
+未发现未修的真回归；25 行 DIFF 全部可归因、7 行多出均为新夹具。形状门仍按用户口径挂账，待统一 re-bless（`scripts/rebless_emit_manifest.ps1 -Bless`，或取 CI `emit-manifest` artifact）。
+
