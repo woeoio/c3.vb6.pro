@@ -212,9 +212,29 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 - 回归：`tests/run_tests.ps1 -Category syntax` → **PASS=185 FAIL=0 SKIP=0**。
 - 形状门：`scripts/check_manifest_coverage.ps1` → `inputs=610 [.vbp=224 .bas=386], registered=610, sets equal`（3 份新夹具行按 7.2 的方法生成，先与既有行逐字节对账）。
 
-### 6.5 CI 实测影响面
+### 6.5 CI 实测影响面（run 42599592249，提交 `ba455c7f`）
 
-待 `probe/photodemon-emit` 复跑后回填（VB3001 应从 3693 实际下降；VB3044 应随 R4 从 19 降到 0）。
+`EMIT_EXIT=0`、`EMIT_SECONDS=792.7`、stdout 48,341,497 B、stderr 238 行。
+
+| 诊断 | 修前 | 修后 | 变化 |
+| --- | --- | --- | --- |
+| `VB3001` | 3693 | **38** | **−3655** |
+| `VB3003` | 57 | 57 | 0（R1 未动） |
+| `VB3044` | 19 | **0** | **−19**（R4 生效） |
+
+剩余 38 条按名字归总（**与 R1 无关，是下一轮的新根因**）：
+
+| 名字 | 条数 | 判定 |
+| --- | --- | --- |
+| `Math` | 18 | `Modules\ComplexNumbers.bas` 的 `Math.Log/Abs/Cos`。工程内没有 `Math` 模块/类，VB6 原生也没有这个对象 ⇒ **疑似 tB-only 写法**；下一轮先确认 PhotoDemon.exe 的 VB6 构建是否真编这份文件，再决定是补内置表还是按条件编译处理 |
+| `Parent` | 7 | `Controls\pdCommandBar.ctl` 里裸写 `Parent.Controls`（等价 `UserControl.Parent`）⇒ **UserControl 内建成员在裸名位未登记** |
+| `vbCFFiles` | 7 | `pdClipboardMain.cls` 的 `Data.GetFormat(vbCFFiles)` ⇒ 内建常量表缺项（`vbCFText` / `vbCFBitmap` 都在，只漏这一个） |
+| `ldResult` / `ERR_BUFF_TOO_SMALL` | 2 | `pdXCF.cls` 在 `Do ... Loop` 体内 `Dim` / `Const`，`Loop While` 条件里再用 ⇒ **块内声明未按 VB6 的过程级作用域处理** |
+| `positionFailed` / `failsafePosition` | 2 | `UserControl_Support.bas` 同类：循环 / `If` 块内声明的量在块外引用 |
+| `Randomize` | 1 | `pdPaletteChild.cls` 的 `Randomize -1`（带参数的语句形态）⇒ 内建语句未登记 |
+| `vbAsyncStatusCodeEndDownloadData` | 1 | `pdDownload.ctl` ⇒ 内建常量表缺项 |
+
+即：R1 之后 `VB3001` 已从"刷屏"降到 38 条，且**每一条都能指到具体的一类缺口**，不再有"跨模块全局变量"这一族。
 
 ## 7. 暂缓项清单（记账型红灯，用户已授权可挂）
 
@@ -239,7 +259,8 @@ PhotoDemon 全工程 3693 条 `VB3001` 对应的跨模块读写**一直在正确
 
 ## 8. 下一步
 
-1. VB3003 剩余 57 条的隐式转换判据。
-2. `--arch x86` 真编译（emit 后跑 cl/link），按编译错误反推下一批缺口。
-3. 控件属性 / 方法缺失类缺口（需先有一份可编译的产物才能暴露）。
+1. `VB3001` 剩余 38 条按 6.5 的分类逐类收口（内建常量表缺项 / UserControl 内建成员 / 块内声明的过程级作用域 / `Randomize` 语句形态）；`Math` 18 条先定口径再动。
+2. `VB3003` 剩余 57 条的隐式转换判据。
+3. `--arch x86` 真编译（emit 后跑 cl/link），按编译错误反推下一批缺口。
+4. 控件属性 / 方法缺失类缺口（需先有一份可编译的产物才能暴露）。
 
