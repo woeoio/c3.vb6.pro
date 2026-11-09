@@ -6198,6 +6198,9 @@ if ($Category -in @("all", "run", "bas")) {
     # `Option Compare Binary`：词法把 "binary" 统一归 TokenKind::Binary，parseOption 修前只认
     # Binary2 ⇒ VB2001。真 VB6 在 Binary 下 "abc" = "ABC" 为 False，读数同钉。
     Add-BasTest "test_opt_compare_binary" "$Tests\test_opt_compare_binary.bas" @("OCB=False,3")
+    # 定长字符串常量（PhotoDemon PublicConstants.bas:28）：长度表达式必须停在算术级，
+    # 否则 `3 = "pdm"` 被当相等比较吃掉 ⇒ VB2001 expected '=' in Const declaration。
+    Add-BasTest "test_fixed_string_const" "$Tests\test_fixed_string_const.bas" @("FSC=3,pdm")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,
