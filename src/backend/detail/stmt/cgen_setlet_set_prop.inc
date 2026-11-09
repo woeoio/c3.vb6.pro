@@ -923,6 +923,44 @@
                         c_.emitLine("}");
                         return;
                     }
+                    // 账 #305 新账: `Set <接口变量> = <Variant/Object 里装的对象>` —— VB6 语义是
+                    // **运行期 QI** (目标接口由实例的实际类决定, 不符 = 错误 13)。C 侧已有
+                    // 「运行期那一枚实例 → 本接口视图」的唯一主人 `vb6_ivref_<I>_from_class`
+                    // (emitIvrefIfaceViewFrom, 与 For Each 视图站同一发), 这里只要把 Variant
+                    // 拆成 (包装器 → 类名 + 裸实例) 即可。真实夹具: iface_wrap `Set f = v`
+                    // (v Variant 往返 Impl) / BalloonTooltips mdlSubclass `Set Subclass = vSubclass`
+                    // (ByVal Variant 形参)。
+                    // 次序是判据: 先问类名 (ClassNameA 内部走 IsBoxed 三闸, 对裸 HWND /
+                    // 外部 IDispatch 安全), 名字非空才敢 GetInstance (它头一句是 obj->vtable 裸读)。
+                    // 认不出 = NULL 视图 (= Nothing; 在册欠项 = 这一形 VB6 报 13)。
+                    if (node.value && !allImplementationClasses(v->name).empty()) {
+                        bool rhsVariant = isDefinitelyVariantExpr(*node.value);
+                        bool rhsObject = false;
+                        if (!rhsVariant && node.value->kind == ASTNodeKind::IdentifierExpr) {
+                            rhsObject = knownObjectVars_.count(Symbol::toLower(
+                                static_cast<IdentifierExpr&>(*node.value).name)) != 0;
+                        }
+                        if (rhsVariant || rhsObject) {
+                            const std::string ivSeq = std::to_string(ivrefSetSeq_++);
+                            const std::string ivBox = "__ivbox" + ivSeq;
+                            const std::string ivName = "__ivname" + ivSeq;
+                            const std::string ivView = ivrefIfaceViewFromFn(v->name) + "("
+                                + ivName + " ? vb6_ComObject_GetInstance(" + ivBox
+                                + ") : (void*)0, " + ivName + ")";
+                            c_.emitLine("void* " + ivBox + " = "
+                                + (rhsVariant ? "vb6_VariantToObjectValChecked(" + value + ")" : value)
+                                + ";  /* Set " + target + ": " + (rhsVariant ? "Variant" : "Object")
+                                + " 里的对象 */");
+                            c_.emitLine("const char* " + ivName
+                                + " = vb6_ComObject_ClassNameA(" + ivBox + ");");
+                            if (plainIvTarget) {
+                                emitIvrefRefSet(target, v->name, ivView, false);
+                            } else {
+                                c_.emitLine(target + " = " + ivView + ";  /* 视图直槽 (B04 口径) */");
+                            }
+                            return;
+                        }
+                    }
                     diag_.error(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
                         "Interface binding: Set " + target + " = <expr> needs a class instance,"
                         " New, or another interface value on the right side"

@@ -1113,3 +1113,48 @@ run `42660526229`（`30a099e3`）的 22 job：
 2. **尚未被任何 CI 验证**：`d4a25a1c`、`574f0029`（回滚）、`3ebb656c`（撤销回滚）、
    `650b7bac`（本刀 src）、`e4f75a7e`（本刀文档）——其中 `650b7bac` 的 run `42669065145` 正在跑；
 3. §17.4 里「未能验证 30a099e3」一句作废，以本节为准。
+
+## 20. `Set <接口变量> = <Variant/Object>` 拆箱（§18.4 第一条欠项已清）
+
+**站点**：`cgen_setlet_set_prop.inc` 的 ivref 目标分派 —— 原 `else` 末尾发
+`VB4001: Interface binding: Set <x> = <expr> ...`。实测双击中：`iface_wrap`（`Set f = v`，
+v Variant 往返 `Impl`）与 `BalloonTooltips`（`Set Subclass = vSubclass`，ByVal Variant 形参）。
+
+**修法**（复用既有唯一主人，不另造视图）：
+`vb6_VariantToObjectValChecked(RHS)` 取包装器 → `vb6_ComObject_ClassNameA` 认类名
+（内部 `IsBoxed` 三闸，裸 HWND / 外部 IDispatch 安全）→ 名字非空才
+`vb6_ComObject_GetInstance` → `vb6_ivref_<I>_from_class(inst, name)`
+（`emitIvrefIfaceViewFrom`，与 For Each 视图站同一发）。裸标识符目标走
+`emitIvrefRefSet`（新 AddRef / 旧 Release），`me->` 字段沿用 B04 纯赋值口径。
+`As Object` 的裸标识符同档（`knownObjectVars_`），包装器指针直接用。
+认不出（外部对象 / 宿主句柄 / 非本族包装器）= NULL 视图 = Nothing —— 这是把原
+VB4001（编译期）降成运行期「给 Nothing」，**方向是少报错**，真值待 VB6 探针钉（见 §21）。
+
+**生成码形状**（iface_wrap）：
+
+```c
+void* __ivbox1 = vb6_VariantToObjectValChecked(v);
+const char* __ivname1 = vb6_ComObject_ClassNameA(__ivbox1);
+{ /* vb6_ivref_IFoo*: 旧值 Release / 新值 AddRef */
+  vb6_ivref_IFoo* __ivold1 = f;
+  f = vb6_ivref_IFoo_from_class(__ivname1 ? vb6_ComObject_GetInstance(__ivbox1) : (void*)0, __ivname1);
+  if (f) f->vt->AddRef(f);
+  if (__ivold1) __ivold1->vt->Release(__ivold1);
+}
+```
+
+**读数（修前 → 修后）**：
+
+| 项 | 修前 | 修后 |
+| --- | --- | --- |
+| iface_wrap emit-c | exit 1，`VB4001 ... (tB Interface IFoo)` | exit 0，无 error |
+| iface_wrap x64 真编 + 运行 | 无 exe | exit 0；`IFACE-CALL-OK` / `IFACE-DONE` |
+| iface_wrap x86 真编 + 运行 | 无 exe | exit 0；同两行 |
+| BalloonTooltips x86 真编 | exit 1，2 发 `VB4001 ... (tB Interface ISubclass)` | exit 0，`BalloonTooltips.exe` 555008 B |
+| `-Category syntax` | PASS=187 FAIL=0 | PASS=187 FAIL=0 |
+
+**BalloonTooltips 两条既存 warning（非本刀引入，记在册）**：
+- `(1,1): warning VB4001: TypeLib reference path not found: ...\Windows\SysWOW64\stdole2.tlb`
+- `cTT.cls(154,31): warning VB3003: If条件应为Boolean, 实际为 Object`
+
+**范围**：新分支只落在原 `VB4001` 的 `else` 末尾、错误之前 ⇒ 此前能编过的形状一字未动。
