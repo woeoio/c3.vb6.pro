@@ -1963,4 +1963,135 @@ C4090 587、C4028 560、C4022 352、C4305 143。
 * 资源：峰值 8,891 MB、最小空闲 4,805 MB（runner 16,379 MB），比 §0.1 的 8 GB 红线低一半 ⇒ **整编继续只走 CI**。
 * 下一刀 = **G3**（先给根因 + 影响面 + 修法 + 风险面，再动手；独立提交、独立报前后读数）。
 
+## 34. G1b（UDT 同名不同体）落地 + 整编读数（2026-11-10）
+
+### 34.1 根因 / 修法 / 风险面
+
+* **根因**（G1 自己引入的回归）：G1 的工程级 UDT 表只按**类型名**汇总、同名**先到者**胜；阶段 2 对每个模块头里
+  出现的**所有** `vb6_type_X` 记号注入先到块。模块私有 Type（对象模块（类/窗体）里的 `Type`、标准模块里显式
+  `Private Type`）因此被当成全局类型 ⇒ 别人的字段体被注到 `vb6rtl.h` 之后、抢在本模块本地定义之前，
+  本地定义又被 `#ifndef VB6_TYPE_X_DEFINED` 守卫跳过 ⇒ 本模块用了错的结构体。PhotoDemon 实测 **215 条
+  C2039**，8 个结构体（分项见 §34.4），与 G3 的 pdImage 那批是两回事。
+* **修法**（按 (模块, 可见性) 归档，不按名字先到者）：
+  - `CCodeGen` 记录 `UdtDefRecord{moduleLower, typeName, isPrivate, block}`；`isPrivate = 显式 Private
+    || isClassModule_ || isFormModule_`（`cgen_api.inc` / `cgen_state.inc` / `cgen_decl.cpp`）。
+  - driver 侧两张表：`projectUdtDefs`（键 `模块名\x1f类型名`，**含**私有）、`projectPublicUdtDefs`
+    （键类型名，**只** Public）。
+  - 阶段 2 注入：**本模块有同名定义 → 注入自己的块**（保持 G1 的"头自足"，内容不再串类）；否则找 Public
+    定义；只有别模块的私有定义 → **留前向 typedef、不静默换体**。UDT 依赖解析同样先同模块、再 Public。
+  - 提交 `488f36fb`（4 文件）。
+* **风险面**：(a) 发码形状改变 —— 629 门 **4 行**（§34.3）；(b) 实现继承布局里"基类私有 UDT 被派生类按值使用"
+  不再重复注入派生头，改由派生头本来就有的 `#include "InhBase.h"` 供体（`tests/cls_inh` 编译用例绿，见 §34.3）；
+  (c) 跨模块同名 **Public** Type 多份不同体仍取先到者 —— 那是 VB6 工程级唯一名约束之外的输入，不在本刀范围。
+
+### 34.2 小语料探针（本机，7 模块：3 份 MergedEntry / 2 族 BITMAPINFOHEADER / 1 组 Public+私有依赖 / 1 消费模块）
+
+语料 `.temp/g1b_probe/`。同一份输入分别喂 G1 二进制（`.temp/C3.g1.exe`）与 CI 交回的 G1b 二进制
+（`c3-exe` artifact，sha256 `350f3c56…`）：
+
+| 口径 | G1 二进制 | G1b 二进制 |
+| --- | --- | --- |
+| cl 诊断 | **C2039 ×11**（MergedEntry 7 = `hstColor/hstCount/v/n`；BITMAPINFOHEADER 4 = `Size/Width`）+ 级联 C2198 1 + C2440 1 | **0** |
+| 产物 | 无（cl 失败） | `G1bProbe.exe` 554,496 B |
+| `G1bHash1.h` | 被注 `hstColor/hstCount` 体，自己 `sKey/sItem` 被守卫跳过 | 只有 `sKey/sItem` |
+| `G1bHash2.h` | 同上（错体） | 只有 `hstColor/hstCount` |
+| `G1bHash3.h` | 同上（错体） | 只有 `v/n` |
+| `G1bDib1.h` / `G1bDib2.h` | 两族互相顶替 | `biSize/biWidth` 与 `Size/Width` 各归各 |
+| `G1bMain.h` | 注入 `G1bRec` | 注入 `G1bRec` **+ 它按值依赖的私有 `G1bInner`**（依赖解析先同模块） |
+
+判读：回归在最小语料上 100% 复现，修法是**按模块取自己的块**，不是"少注入"。
+
+### 34.3 629 形状门：4 行差异逐条归因 + bless
+
+| 口径 | 读数 |
+| --- | --- |
+| CI 清单 vs 期望（`ci/emit-manifest`，commit 注记 `head=488f36fb`） | 629 行 / 相同 **625** / 哈希不同 **4** / 缺席 0 / 多出 0 |
+| 逐行 diff 方式 | 同一输入分别喂 `.temp/C3.g1.exe` 与新二进制 `--emit-c`，字节级 + 大小写敏感行 diff；本机复算哈希与 CI 期望/实得**逐条相同** |
+
+| # | 输入 | 差异 | 归因（为什么必须变） |
+| --- | --- | --- | --- |
+| 1 | `tests/Charts 2020/Proyecto1.vbp` | 10 行（2 个 `tSerie` 块） | 三个 `.ctl` 各有一份字段不同的 `Private Type tSerie`；本刀让每个控件头取**自己的**（`Labels/IconsFonts/keys/Values/LegendRect As RectF/Prop`），不再是先到者那份（含 `PT`、`LegendRect As RectL`） |
+| 2 | `tests/Charts 2020/ucTreeMaps/Proyecto1.vbp` | 1 行 | `GDIPlusStartupInput.DebugEventCallback` 按本模块 `As Long` 发 `int32_t`（原为外来定义的 `intptr_t`） |
+| 3 | `tests/cls_inh/Inh.vbp` | 24 行（删 3 个 `TPoint` 块） | `InhBase` 的 `Private Type TPoint` 不再强行注入 `InhMid/InhDerived/InhSib` 三个派生头；三份头本来就有 `#include "InhBase.h"`，类型仍完整可见（该用例 CI 编译/运行绿） |
+| 4 | `tests/ucTreeView/Proyecto1.vbp` | 1 字节 | `POINTAPI` 取本模块字段 `X`（原为外来定义的 `x`）；字节数不变，所以只能用大小写敏感比较看出来 |
+
+* `rebless_emit_manifest.ps1 -Bless`：改写 **4** 行 / 新增 0 / 退场 0；复算 **629/629 逐行相同**，
+  `check_manifest_coverage` K1..K3 绿。提交 `95d2524d`。
+* dev CI run `42792610693`：唯一新增红是 `Emit manifest`（登记前，预期）；`Tests (compile #1/#2)`、
+  `vbp #11` 的红与上一轮 `42776279675` **同一组**（§31.3 那 8 条既有 STATIC + 既有 vbp 红），
+  `cls_inh` / `ucTreeView` / `Charts 2020` 用例均通过。
+
+### 34.4 215 条按结构体分项（G1 后基线，可比子集口径见下表）
+
+| 结构体 | C2039 | 结构体 | C2039 |
+| --- | --- | --- | --- |
+| `MergedEntry` | 62 | `MinMaxInfo` | 16 |
+| `BITMAPINFOHEADER` | 61 | `PDP_NODE` | 6 |
+| `PDP_HEADER` | 39 | `BITMAPINFO` | 4 |
+| `ButtonEntry` | 26 | `WIN32_FIND_DATA` | 1 |
+| **合计** | **215** | | |
+
+G1 后全工程基线（`.temp/pd_g1/pd_full/c3-error.log`，run 42771735403）：`C2039=1,333 / 95 TU`、
+`C2079=0`、`C1003` 截断 15 TU；逐码 `C2197 887`、`C2224 668`、`C2198 643`、`C2065 279`、`C2440 265`。
+
+发码层同口径核对（`pd_emit_probe` artifact 的 `pd_emit.out`，逐模块头统计"同一头里同名的不同定义体"）：
+
+| 结构体 | G1（run 42787817866）冲突头 | G1b（run 42792630463）冲突头 | 头文件数 / 不同体数（G1b） |
+| --- | --- | --- | --- |
+| `MergedEntry` | **2**（pdVariantHash、pdStringHash） | **0** | 3 / 3 |
+| `BITMAPINFOHEADER` | **3**（pdICO、pdDIB、GDIPlus） | **0** | 6 / 2 |
+| `PDP_HEADER` | **1**（pdPackagerLegacy） | **0** | 2 / 1 |
+| `ButtonEntry` | **2**（pdButtonStripVertical、pdStrip） | **0** | 3 / 2 |
+| `MinMaxInfo` | **2**（pdWindowManager、pdWindowSize） | **0** | 3 / 2 |
+| `PDP_NODE` | **1**（pdPackagerLegacy） | **0** | 2 / 1 |
+| `BITMAPINFO` | **2**（GDIPlus、Plugin_FreeImage） | **0** | 3 / 3 |
+| `WIN32_FIND_DATA` | **1**（pdFSO） | **0** | 2 / 2 |
+| **合计** | **14** | **0** | — |
+
+"不同体数 > 1"是**跨模块**的差异（每个模块保留自己那份），"冲突头 = 0"才是本刀要的结论。
+
+### 34.5 整编读数（G1b，CI run `42792630868`；基线 = G1 run `42771735403`）
+
+环境口径：`BUILD_EXIT=1`（仍未到 link，**预期**）、`EXE_EXISTS=False`、`LINK_DIAG=0`、
+`C3_TIMING=True`（`BUILD_SECONDS=6895.9`，与关计时的轮次不可比墙钟）、`PEAK_TREE_WS_MB=8895`、
+`MIN_FREE_PHYS_MB=4398`（runner 16,379 MB）。
+
+**215 条按结构体分项（前 → 后）**：
+
+| 结构体 | G1 | G1b | 结构体 | G1 | G1b |
+| --- | --- | --- | --- | --- | --- |
+| `MergedEntry` | 62 | **0** | `MinMaxInfo` | 16 | **0** |
+| `BITMAPINFOHEADER` | 61 | **0** | `PDP_NODE` | 6 | **0** |
+| `PDP_HEADER` | 39 | **0** | `BITMAPINFO` | 4 | **0** |
+| `ButtonEntry` | 26 | **0** | `WIN32_FIND_DATA` | 1 | **0** |
+| **合计** | **215** | **0** | | | |
+
+**全码表（未剔截断 TU，仅作总量参考）**：`C2039 1,333/95 TU → 1,118/84 TU`；`C2198 643/114 → 555/105`；
+`C2440 265/72 → 257/70`；其余 20 个码逐条**不变**（`C2197 887/63`、`C2224 668/76`、`C2065 279/100`、
+`C2064 61/10`、`C2045 50/17`、`C2296 39/19`、`C2036 34/4`、`C2231 21/6`、`C2063 19/19`、`C2106 10/4`、
+`C2069 8/4`、`C2297 5/1`、`C2095 5/2`、`C2186 5/3`、`C2102 4/3`、`C2172 4/1`、`C2223 3/1`、`C2113 3/2`、
+`C2112 2/1`）。**`C2079` 两轮都是 0**（G1 那刀没被破）。
+
+**可比子集**（两轮都撞 `C1003` 的 TU 完全相同，共 15 个：`Filters_Transform / FormAnimBackground /
+FormMain / FormMetadata / Interface / Layers / pdCanvas / pdLayerListInner / Processor / SelectionFilters /
+SelectionUI / Snap / toolbar_Toolbox / toolpanel_MoveSize / toolpanel_TextAdvanced`，剔除后 **532 TU**）：
+
+| 码 | G1 | G1b | Δ | TU |
+| --- | --- | --- | --- | --- |
+| `C2039` | 868 | 653 | **-215** | 82 → 71 |
+| `C2198` | 408 | 320 | **-88** | 101 → 92 |
+| `C2440` | 196 | 188 | **-8** | 64 → 62 |
+| `C2197` / `C2224` / `C2065` / `C2064` / `C2045` / `C2296` / `C2036` / `C2231` / `C2063` / 其余 | — | — | **0** | 不变 |
+
+`C1003`：两轮都是 **15 TU**、同一组 ⇒ **没有 TU 因这刀新撞上限**，可比子集口径成立。
+
+**Δ 归因**（逐 TU 逐码比对）：非零 Δ 只落在 **11 个 TU**，且**全部**属于两轮分类表里那 8 个结构体所在的
+模块（`pdPackageLegacyV1 45+19`、`pdICO 33+12`、`pdStringHash 32+20`、`pdVariantHash 30+19+5`、
+`pdButtonStripVertical 18+9`、`pdDIB 18+3`、`GDI_Plus 14`、`pdWindowManager 12`、`pdStrip 8+4`、
+`pdWindowSize 4+1`、`pdFSO 1+1+3`）。`C2198`/`C2440` 是 `C2039` 的**级联**：成员不存在 → cl 把表达式
+当错误类型 → 跟着报"实参太少 / 不能转换"；成员一回来，级联同步消失。没有第 12 个 TU、没有第 4 个码变化。
+
+结论：215 条 **降到 0**（无可消除剩余）；发码层同口径的 14 个"同头冲突"也降到 0（§34.4）；
+`C2079` 保持 0；`C1003` 截断面不变；其余码零变化。
+
 
