@@ -1588,3 +1588,23 @@ codegen 阶段没有新的分配峰值（8–10 GB 平台期是语义表仍常�
   跨模块注入侧仍要求 `sharePayloadFrom` 且零逐字段拷贝。
   该脚本本身仍有两条**改前就存在**的 FAIL（`ExitCode` 读成空 + 斜率阈值 2.0），与本系列改动无关，未粉饰。
 
+### 29.5 第 3 刀：过程形参表 `params` 迁入载荷（`c5b20db7`）
+
+- 枚举方式：**先删 `Symbol::params` 字段，让编译器逐个报错定位**，再按接收者类型分别改 `P()` / `W()`。
+  AST 侧的 `node.params`（Sub/Function/Property 声明节点）、`MemberInfo::params`、`ComMethodSig::params`
+  同名但类型不同，全部未被误改；没有做任何批量替换。
+- 3.5 注入：删除 `extSym->params = srcSym->params;`（由 `sharePayloadFrom` 一并共享）。
+  窗体限定二级键是例外：`qExt->W().params = qSym->P().params;`（这条是**新建**限定副本，不是共享源本体）。
+- 事件 ABI 回写（`applyEventHandlerAbi` 把 `isByVal` 改 true）改走 `evtSym->W().params`，COW 保证不污染共享源。
+- `--dump-symbols`：输出代码从 `sym->params` 改成 `sym->P().params`，**输出文本不变**（形状门覆盖不到 dump，
+  这条靠代码审读；dump 顺序/格式未动）。
+- 形状门：上一刀二进制 vs 本刀，**629/629 逐字节零差异**（`emit-manifest.cut3.txt` vs `cut4.txt`）。
+- `-Category syntax`：**187/187 PASS**。
+- 斜率（同一语料）：N=8 **51.1 MB**、N=60 **268.3 MB**，**4.18 MB/模块**。
+  **注意方向相反**：上一刀 3.45 → 本刀 4.18（+0.73）。重复 3 次稳定；用 pre-cut2 二进制复测同语料为
+  5.12 MB/模块，排除随机噪声与后台负载。原因未定位（怀疑 procedure 载荷首建/COW 克隆路径），
+  **整工程是否受益以 §30 的 CI 读数为准；若峰值/注入段不改善，回退本刀，保留前三刀。**
+- 哨兵：`check_typelib_payload_writers.ps1` 绿（核心字段 22 个不变，注入权威区仍只 `driver_semantics.cpp`）；
+  `check_typelib_scale_sentinel.ps1` 的 S0 载荷字段表扩到 **19 个**（加入 `params`）。
+  该脚本自身两条改前既有 FAIL 仍在（`ExitCode` 读空、斜率阈值 2.0），未粉饰。
+
