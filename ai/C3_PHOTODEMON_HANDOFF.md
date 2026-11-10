@@ -1572,3 +1572,19 @@ codegen 阶段没有新的分配峰值（8–10 GB 平台期是语义表仍常�
 - 登记方式：等 CI 那台二进制交回清单后，用 `scripts/rebless_emit_manifest.ps1 -Bless` 统一重登记一次。
   在此之前，本系列所有「形状门通过」均指上述「旧 vs 新 629 零差异」口径。
 
+### 29.4 第 2 刀：COM / Delegate 表迁入载荷（`fa70cfe2`）
+
+- 迁入 `SymbolPayload`：`comMethods` / `comSourceMethods` / `comModuleFunctions` 三张签名表，
+  以及 `delegateProcKind` / `delegateCallConv` / `delegateReturnType` / `delegateTargets`。
+- 读写点改门（8 个文件）：读 `P()`、写 `W()`。`insertComMethod` 的 `find` 走 `P()`，
+  末尾写入走 `W()` —— 迭代器在写入前已用完（`comSigReadShapeDiffers` 与 COMSIG-AMBIG 都在这之前），
+  无失效窗口；COW 保证共享载荷不会被原地改。
+- 形状门：上一刀二进制 vs 本刀，**629/629 逐字节零差异**（`emit-manifest.cut2.txt` vs `cut3.txt`）。
+- 斜率（同一语料）：N=8 57.0 → **50.6 MB**，N=60 324.2 → **230.1 MB**，
+  **5.14 → 3.45 MB/模块**。
+- `-Category syntax` 187/187 PASS。
+- 哨兵：`check_typelib_payload_writers.ps1` 绿（核心字段 22 个不变 —— 新迁入的 delegate 字段不在注入块写，
+  不产生新权威点）；`check_typelib_scale_sentinel.ps1` 的 S0 载荷字段表同步扩充到 18 个，
+  跨模块注入侧仍要求 `sharePayloadFrom` 且零逐字段拷贝。
+  该脚本本身仍有两条**改前就存在**的 FAIL（`ExitCode` 读成空 + 斜率阈值 2.0），与本系列改动无关，未粉饰。
+
