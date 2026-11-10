@@ -136,13 +136,25 @@ jobs:
       - name: Classify cl/link diagnostics
         if: always()
         run: |
-          $err = Get-Content .build\pd_build.err -ErrorAction SilentlyContinue
+          # 全量 cl 诊断在 .build/pd_full/c3-error.log (msvc_driver 写的)；pd_build.err
+          # 只有 C3 自己的摘要 —— 旧版只读后者，于是 CL_DIAG 恒 0，artifact 里是空表。
+          $src = @()
+          if (Test-Path .build\pd_full\c3-error.log) {
+            $src += Get-Content .build\pd_full\c3-error.log -ErrorAction SilentlyContinue
+            Write-Host "classify source: .build/pd_full/c3-error.log ($($src.Count) lines)"
+          }
+          $src += Get-Content .build\pd_build.err -ErrorAction SilentlyContinue
+          $err = $src
           # cl: `path(123): error C2039: ...` 或 `fatal error C1083: ...`（无 file(line)）
           $cl = @($err | Select-String -Pattern '(?<kind>fatal error|error|warning)\s+(?<code>C\d{4})\s*:' | ForEach-Object {
             $m = $_.Matches[0]
             $file = ''
             if ($_.Line -match '^(?<f>.+?)\(\d+\)\s*:') { $file = $Matches['f'] }
-            [pscustomobject]@{ Kind = $m.Groups['kind'].Value; Id = $m.Groups['code'].Value; File = $file; Line = $_.Line }
+            # 受影响 TU: 诊断落在 .c 上就是它自己; 落在 .h 上则看 cl 附的 compiling source file
+            $tu = ''
+            if ($_.Line -match '^(?<t>[^\\/:]+\.c)\(\d+\)\s*:') { $tu = $Matches['t'] }
+            elseif ($_.Line -match 'compiling source file [^)]*?[\\/](?<t>[^\\/]+\.c)\)') { $tu = $Matches['t'] }
+            [pscustomobject]@{ Kind = $m.Groups['kind'].Value; Id = $m.Groups['code'].Value; File = $file; Tu = $tu; Line = $_.Line }
           })
           # link: `LNK2019: 无法解析的外部符号 ...` / `fatal error LNK1120: ...`
           $lnk = @($err | Select-String -Pattern '(?<kind>fatal error|error|warning)\s+(?<code>LNK\d{4})\s*:' | ForEach-Object {
@@ -162,10 +174,11 @@ jobs:
           $lines = New-Object System.Collections.Generic.List[string]
           $lines.Add("STDERR_LINES=$($err.Count)")
           $lines.Add("CL_DIAG=$($cl.Count)  LINK_DIAG=$($lnk.Count)  UNRESOLVED=$($unres.Count)")
-          $lines.Add("--- cl by code ---")
+          $lines.Add("--- cl by code (code / kind / count / affected TUs / top dirs) ---")
           foreach ($g in ($cl | Group-Object Id | Sort-Object Count -Descending)) {
             $files = @($g.Group | Where-Object { $_.File } | ForEach-Object { Split-Path $_.File -Parent } | Group-Object | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object { "$($_.Name)($($_.Count))" })
-            $lines.Add(("{0}`t{1}`t{2}`t{3}" -f $g.Name, $g.Group[0].Kind, $g.Count, ($files -join '; ')))
+            $tuCount = @($g.Group | Where-Object { $_.Tu } | Select-Object -ExpandProperty Tu -Unique).Count
+            $lines.Add(("{0}`t{1}`t{2}`tTU={3}`t{4}" -f $g.Name, $g.Group[0].Kind, $g.Count, $tuCount, ($files -join '; ')))
           }
           $lines.Add("--- link by code ---")
           foreach ($g in ($lnk | Group-Object Id | Sort-Object Count -Descending)) {
@@ -199,3 +212,21 @@ jobs:
             .build/pd_full/c3-error.log
           if-no-files-found: warn
           retention-days: 7
+
+      # 结论不许被 continue-on-error 盖住: 上一步只保证日志能上传, 这里把它翻成 job 结论.
+      # (看这个 job 的颜色才算数, 不要看 fullbuild 那步.)
+      - name: Verdict (exe must exist)
+        if: always()
+        run: |
+          $meta = Get-Content .build\pd_build.meta -ErrorAction SilentlyContinue
+          Write-Host "===== BUILD VERDICT ====="
+          foreach ($k in @('BUILD_EXIT','EXE_EXISTS','BUILD_SECONDS','PEAK_TREE_WS_MB','MIN_FREE_PHYS_MB')) {
+            $hit = $meta | Where-Object { $_ -like "$k=*" } | Select-Object -First 1
+            Write-Host ($(if ($hit) { $hit } else { "$k=<missing>" }))
+          }
+          $exeLine = $meta | Where-Object { $_ -like 'EXE_EXISTS=*' } | Select-Object -First 1
+          if (-not $exeLine -or $exeLine -notmatch 'EXE_EXISTS=True') {
+            Write-Error "PhotoDemon x86 full build produced NO exe (see photodemon-full-build-logs artifact)"
+            exit 1
+          }
+          Write-Host "OK: exe produced"
