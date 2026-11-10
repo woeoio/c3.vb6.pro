@@ -1590,6 +1590,19 @@
                                      std::vector<ParameterInfo>& outParams,
                                      bool& outBuiltin) const;
 
+    // G4/M2 **事件转发站的统一调用文本 (唯一采纳点, 由 scripts/check_g4_event_index_forward.ps1 静态钉住)**:
+    // 菜单派发与 Slider 的 Change/Scroll 臂此前都写死 `{ extern void fn(); fn(); }`,
+    // 而控件数组 / 菜单数组的处理器首形参是元素下标 ⇒ 0 实参打 1 形参 = C2198。
+    // 三条口径:
+    //   ① handler 为空 / 无第一形参 / elemIndex<0 (**非数组成员**) → 逐字回原 0 参文本;
+    //   ② 第一形参 ByVal (事件 ABI) → `fn(N)`;
+    //   ③ 第一形参 ByRef → `T v = N; fn(&v)` (类型取 mapType(p0.type), 不写死 int16_t)。
+    // **elemIndex 必须是元素自身的 Index (child.index / ctrl.index), 不许传 menuId** ——
+    // menuId 是顺序计数器, 与 VB6 的 Index 无关。
+    std::string eventIndexCallText(const std::string& fn, const Symbol* handler,
+                                   int elemIndex) const;
+
+
 
     // Fix <vbeclipse> rev8: 该类成员的返回类型是不是 `As Object` (即 C 侧 void*)。
     // `Property Get View() As Object` (View.cls:66) 就是这一类。

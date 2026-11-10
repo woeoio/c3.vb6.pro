@@ -677,21 +677,33 @@
     for (const FrmControl* ctrlPtr : scrollCtrlsM3) {
         const FrmControl& ctrl = *ctrlPtr;
         if (ctrl.controlType != FrmControlType::Slider) continue;
+        // G4/M2: 工程内 UserControl 的名字里带 "slider" 就会被 parseControlType 判成 Slider
+        // (frm_parser_util.cpp:206 pdSlider)，但它的 Change/Scroll 由 UC sink thunk 派发 ——
+        // thunk 已经把元素下标实参化了。这里再发一份既是 C2198，修好后还会重复派发 ⇒
+        // 与上面子控件收集那趟的口径对齐 (同一条 findUserControlSpec 门)，直接跳过。
+        if (findUserControlSpec(ctrl.controlTypeName)) continue;
         std::string slHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
         std::string slScrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");
         std::string slChangeFn = eventHandlerFn(ctrl.controlName, "_Change");
-        bool slHasScroll = symTab_.lookup(ctrl.controlName + "_Scroll") != nullptr;
-        bool slHasChange = symTab_.lookup(ctrl.controlName + "_Change") != nullptr;
-        if (!slHasScroll && !slHasChange) continue;
+        Symbol* slScrollSym = symTab_.lookup(ctrl.controlName + "_Scroll");
+        Symbol* slChangeSym = symTab_.lookup(ctrl.controlName + "_Change");
+        if (!slScrollSym && !slChangeSym) continue;
+        // 控件数组: 没有 `vb6_hwnd_<name>` 这一枚，句柄按元素取 (与 ScrollBar 臂同一口径)。
+        const bool slIsArr = knownControlArrays_.count(Symbol::toLower(ctrl.controlName)) > 0;
+        if (slIsArr) {
+            const int slIdx = ctrl.index >= 0 ? ctrl.index : 0;
+            slHwnd = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", "
+                   + std::to_string(slIdx) + ")";
+        }
         c_.emitLine("if (scrollHwnd == (void*)" + slHwnd + ") {");
         c_.indent();
         // FireChange 只在**真挂了 Change 处理器**时才调：它会推进基准，白调一次等于吞掉一条 Change。
-        if (slHasChange)
-            c_.emitLine("if (vb6_Slider_FireChange((void*)" + slHwnd + ")) { extern void "
-                        + slChangeFn + "(); " + slChangeFn + "(); }");
-        if (slHasScroll)
-            c_.emitLine("if (scrollCode == 4 || scrollCode == 5) { extern void "
-                        + slScrollFn + "(); " + slScrollFn + "(); }");
+        if (slChangeSym)
+            c_.emitLine("if (vb6_Slider_FireChange((void*)" + slHwnd + ")) "
+                        + eventIndexCallText(slChangeFn, slChangeSym, slIsArr ? ctrl.index : -1));
+        if (slScrollSym)
+            c_.emitLine("if (scrollCode == 4 || scrollCode == 5) "
+                        + eventIndexCallText(slScrollFn, slScrollSym, slIsArr ? ctrl.index : -1));
         c_.dedent();
         c_.emitLine("}");
     }

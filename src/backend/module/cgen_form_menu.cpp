@@ -80,15 +80,35 @@ void CCodeGen::emitMenuItem(const std::string& parentVar, const FrmControl& menu
 }
 
 // P7.8: 递归生成菜单点击事件派发 (WM_COMMAND中)
+// G4/M2: 菜单数组的元素下标 = `child.index` (.frm 里的 `Index = N`)，**不是** menuId ——
+// menuId 是"第几个叶菜单项"的顺序计数器，与 VB6 的 Index 无关。非数组成员 (`index = -1`)
+// 与无参处理器由 eventIndexCallText 逐字回落原来的 0 参文本。
+std::string CCodeGen::eventIndexCallText(const std::string& fn, const Symbol* handler,
+                                        int elemIndex) const {
+    // C3-SENTINEL(g4-m2-event-index): 唯一采纳点 —— 见 scripts/check_g4_event_index_forward.ps1
+    if (!handler || handler->P().params.empty() || elemIndex < 0)
+        return "{ extern void " + fn + "(); " + fn + "(); }";
+    const ParameterInfo& p0 = handler->P().params[0];
+    const std::string cty = mapType(p0.type);
+    const std::string idx = std::to_string(elemIndex);
+    if (p0.isByVal)
+        return "{ extern void " + fn + "(" + cty + "); " + fn + "(" + idx + "); }";
+    const std::string var = "vb6_evidx_" + idx;
+    return "{ " + cty + " " + var + " = " + idx + "; extern void " + fn + "(" + cty + "*); "
+         + fn + "(&" + var + "); }";
+}
+
 void CCodeGen::emitMenuClickDispatch(const FrmControl& menuCtrl, int& menuId) {
     // Fix <vbeclipse>: 菜单项在 .frm 里存在但源文件**没有**对应 Click 过程
     // (frmToolWin.frm 的 mnuMaximize/mnuClose 只有 Begin VB.Menu, 无
     // `Private Sub mnuMaximize_Click`) — VB6 语义是"点了没反应"。此前无条件发
     // `{ extern void vb6_<f>_<mnu>_Click(); ... }` → 该过程无定义 → LNK2001
     // "无法解析的外部符号". 只有真实存在过程时才派发 (菜单本身仍创建, 保留 ID).
-    auto hasClickHandler = [&](const std::string& ctrlName) -> bool {
+    auto hasClickHandler = [&](const std::string& ctrlName) -> const Symbol* {
         Symbol* sym = symTab_.lookupModule(ctrlName + "_Click");
-        return sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function);
+        if (!sym || (sym->kind != SymbolKind::Sub && sym->kind != SymbolKind::Function))
+            return nullptr;
+        return sym;
     };
     // M22-Issue3: 如果顶层Menu控件没有children, 它自身就是叶菜单项, 需要生成Click处理
     if (menuCtrl.children.empty()) {
@@ -112,11 +132,12 @@ void CCodeGen::emitMenuClickDispatch(const FrmControl& menuCtrl, int& menuId) {
                     visible = false;
                 }
             }
-            if (visible && hasClickHandler(menuCtrl.controlName)) {
+            const Symbol* clickSym = hasClickHandler(menuCtrl.controlName);
+            if (visible && clickSym) {
                 std::string clickFn = eventHandlerFn(menuCtrl.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(menuId) + ") {");
                 c_.indent();
-                c_.emitLine("{ extern void " + clickFn + "(); " + clickFn + "(); }");
+                c_.emitLine(eventIndexCallText(clickFn, clickSym, menuCtrl.index));
                 c_.dedent();
                 c_.emitLine("}");
             }
@@ -158,11 +179,12 @@ void CCodeGen::emitMenuClickDispatch(const FrmControl& menuCtrl, int& menuId) {
             emitMenuClickDispatch(child, menuId);
         } else {
             // 叶子菜单项
-            if (visible && hasClickHandler(child.controlName)) {
+            const Symbol* leafSym = hasClickHandler(child.controlName);
+            if (visible && leafSym) {
                 std::string clickFn = eventHandlerFn(child.controlName, "_Click");
                 c_.emitLine("if (id == " + std::to_string(menuId) + ") {");
                 c_.indent();
-                c_.emitLine("{ extern void " + clickFn + "(); " + clickFn + "(); }");
+                c_.emitLine(eventIndexCallText(clickFn, leafSym, child.index));
                 c_.dedent();
                 c_.emitLine("}");
             }
