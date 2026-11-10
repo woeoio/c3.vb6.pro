@@ -2451,3 +2451,93 @@ dev CI（`0e6d7719` / `595cc729`）除 3 个既有失败分片（`compile #1/#2`
 `Tests (vbp #5)` 掉了一条 `[PIXELS] uctreeview_px.ps1`：`'Contact  List' 内容段 BM_CLICK 3s 未返回 / 看门狗超时`。
 同一份二进制在 `0e6d7719` 那一轮该分片 `PASS=48 FAIL=0`，且 `ucTreeView` 语料无菜单、无 Slider ⇒ 主机时序抖动，
 与本刀无关，未单独处理。
+
+## §38 G4 A–E：UDT 数组成员秩 / 语句首参负号 / 值成员空括号（C2064 66 → 0；C2197 −32、C2198 −10）
+
+**提交**：`941a2afd`（A）、`d7b18ab7`（B）、`58fd516e`（C/D/E）、`206b4c7f`（三条 static 哨兵 + 三份夹具登记）、
+`0337282a`（形状门登记 3 行）。**探针分支**：merge dev `0337282a` → `ac25f3aa`。
+**整编验收**：CI run `42915022004`；基线 = §37 的 `42884417424`（同一探针作业、同一 x86 全量口径）。
+
+### 38.1 机理（三处改点，都是"把不是调用的东西当调用发"）
+
+| 刀 | 触发形态（PhotoDemon 实证） | 病根 | 改点 |
+|---|---|---|---|
+| **A** | UDT 内嵌动态数组字段 `x.arr(i, j)` / `(i, j, k)` | 成员访问叶子落进 `IndexOrCallExpr` 的 callee 分支，按"函数调用"发 `(vb6_<x>_arr)(i, j)` ⇒ C2064，连带 C2197 | 按实参秩发 `VB6_SA_ND_AT2 / AT3 / ATN`（新秩判定在 `cgen_util_classtype.cpp`），`cgen_expr_call_callee_member.inc` + `callee_withm.inc` 两处接收者接入 |
+| **B** | 语句级 `obj.M -1 * halfWidth, ...`（`baseArrow.AddTriangle -1 * triangleHalfWidth, …`） | 旧判据只认 `LiteralExpr` 作右操作数；`-1 * w` 被解析成 `Sub(1, w)` ⇒ 整句落空 ⇒ `(callee - (1*w))(args)` ⇒ C2064（实测 9 处 / 7 TU：`Dialog_GradientEditor`、`FormLevels`、`Interface`、`PD2D`、`pdEdgeDetector`、`Tools_Clone`、`Tools_Gradient`） | `parser_stmt_assign.cpp` 的折叠判据放宽到"任意非 String/Date 数值表达式"（语句级不存在减法语句，`M -` 只能是调用首参负号） |
+| **C/D/E** | 值成员空括号 `obj.Prop()` / `arr()` / `classField()` 读 | 值成员被按"函数调用"发码 ⇒ C2064（`term does not evaluate to a function taking 0 arguments`） | `cgen_expr_call_builtin_argtype.inc` 按"控件属性 / 数组 / 类字段"三类收口，值成员空括号退回值访问 |
+
+### 38.2 夹具与哨兵
+
+- 新夹具三份：`tests/b606_udtmem_nd`（A）、`tests/b607_neg_first_arg`（B）、`tests/b608_value_member_paren`（C/D/E）。
+- 三条 static 哨兵：`check_g4_udt_member_nd.ps1` / `check_g4_neg_first_arg.ps1` / `check_g4_value_member_paren.ps1`；
+  负例（定点破坏判据）**全部判红**，正例全绿；已注册进 `tests/run_tests.ps1` static 分片并通过
+  `scripts/check_static_sentinel_registration.ps1` 普查。
+- 本机 `tests\run_tests.ps1 -Category syntax -Incremental`：**PASS=190 FAIL=0 SKIP=0**。
+
+### 38.3 形状门（629 → 632）与 bless 记录
+
+- **本刀对存量 629 行零变化**，两条独立证据：① 本机 stash 前后用同源码各跑一遍受影响输入，发码**逐字节相同**；
+  ② CI 自己那台的清单：629 行相同 / 0 行哈希不同 / 0 行缺席 / 3 行多出（多出的正是 b606/b607/b608）。
+- bless 只登记新增 3 行（`b606/b607/b608`），存量 629 行逐行未动；`git diff --numstat` = 3 增 0 删；
+  登记后复算 **632/632 相同**，coverage K1..K3 绿。提交 `0337282a`。
+- **本机那 4 条 OCX 侧哈希差异一律不登记**：`tests/guisample/GUISample.vbp`、`tests/guisample/vb6ref/src/vc6/GUISample.vbp`、
+  `tests/guisample/vb6ref/src/vs2015/GUISample.vbp`、`tests/TeeChartChartDisplay/DisplayProject.vbp`。
+  归因链：本机哈希与 CI 官方 `C3.exe`（run `42886770374` 的 `c3-exe` 工件）复算结果**相同** ⇒ 不是 Debug/Release，
+  也不是本刀；主工作树 `tests/guisample` 下有一批 **gitignore 的 OCX 侧文件**（`Codejock.*.ocx/.lic`、`RICHTX32.OCX`、
+  `GUISample.exe.manifest`），C3 据此整块发"`Object=` 免注册 OCX 控件表"。
+- **硬口径（写死，后续不许改判）**：**本机形状门必须从干净克隆跑** —— `core.autocrlf=false`（LF 工作树）、
+  且不带任何 gitignore 的 OCX 侧文件。该口径下 gs 的哈希从 306989 字节档落回 LF 档（约 −25K 字节发码），
+  但上述 4 行**仍然**因本机注册的 typelib/OCX 与 CI 不同而不同：干净克隆的读数是
+  **632 行 / 628 相同 / 4 条既知环境差异 / 0 缺席 / 0 多出**。这 4 条永远不进基线，也不作为"发码变了"的证据。
+
+### 38.4 整编读数（基线 `42884417424` → 本刀 `42915022004`）
+
+| 诊断 | 修前 总量/TU | 修后 总量/TU | Δ |
+|---|---|---|---|
+| **C2064** | 66/12 | **0/0** | **−66 / −12** |
+| **C2197** | 219/21 | **187/19** | **−32 / −2** |
+| **C2198** | 133/54 | **123/49** | **−10 / −5** |
+| C2296 | 14/12 | 13/12 | −1 |
+| C2065 | 228/96 | 228/96 | 0 |
+| C2440 | 214/55 | 214/55 | 0 |
+| C2039 | 88/12 | 88/12 | 0 |
+| C2224 | 59/16 | 59/16 | 0 |
+| 全码合计（excl C1003） | 1276 | **1167** | **−109** |
+
+- **没有新增任何错误码**（逐码对表：变化项只有上表 4 行，其余逐一相同）。
+- `C1003` 两轮均 0 TU（截断在本轮基线的上一刀已解除）。
+- 族级对账（run log 抽样 + 机理）：`vb6_lwa_RtlMoveMemory` 的 C2064/C2197 成对消失（A）；`ApplyTranslation` 那条
+  `too few arguments` 消失（B）；`vb6_MonthName` 5/5 条抽样**原样保留**（M3 范围，见 §39）。
+- `BUILD_EXIT=1` / `EXE_EXISTS=False` 两轮一致（工程仍有 1167 条错误，本刀不改这条结论）。
+  `PEAK_TREE_WS_MB 8892→8885`、`MIN_FREE_PHYS_MB 4851→4832`、`BUILD_SECONDS 6173.7→4847.1`。
+
+### 38.5 M3 取证更正（与 §36 M1 口径对齐）
+
+- `pdStringStack_GetString` 的 17 处 6 实参**不是 Optional 缺省**：`pdStringStack.GetString(strIndex)` 只有 1 形参，
+  实参串成了 `pdSerialize.GetString` 的 3 形参 + 2 枚 `_has_` 尾标记 ⇒ 与 §36 M1 **同一族**
+  （接收者类解析不出 ⇒ 按成员名命中跨类同名形参表），**不是**"少写实参"。归 M1 已修口径，不再单列。
+- `vb6_Randomize()` 那 7 处也**不是缺省**：源码是 `Randomize -1` / `Randomize 1234567` / `Randomize Timer`
+  （`pdPaletteChild.cls:291-292` 对应 emit 431/432）—— 是**实参整体丢失**，随 2026-11-09 的 `Randomize` 语句收口
+  （`2600664d`）已消失；当前 head 四形态探针：`vb6_Randomize(-1)` / `vb6_Randomize(1234567)` / `vb6_Randomize(<Timer>)` /
+  裸形 `vb6_RandomizeTimer()`，全部带实参。
+- 结论口径只有一句：**M3 的"缺省"只剩真正的 Optional 省略档**（`MonthName` / `WeekdayName` 一类）；
+  同名成员形参表串台属 M1，实参丢失属解析器，两者都不计入 M3。
+
+### 38.6 `Tests (vbp #5)` 留证（判真抖动，判据不动）
+
+- 现象：run `42886770374` 的 `Tests (vbp #5)` 掉 `[PIXELS] uctreeview_px.ps1`：`'Contact  List' 内容段 BM_CLICK 3s 未返回`。
+- 判据与处置：**同一 job `130077321416` 原地复跑 ⇒ 6m54s 全绿**；同一二进制上一轮该分片 `PASS=48 FAIL=0`；
+  夹具 `ucTreeView` 无菜单、无 Slider（与本刀 M2 改动面无关）⇒ **真抖动（迟到），不是消息丢失**。
+- 采集侧只加迟到判定（`uctreeview_px.ps1` 的 `Invoke-ClickSyncLate`：3s 超时后再等 7s 找窗体，
+  命中记 `jitter[$btn]=BM_CLICK(late=…ms resp=…)`），**不改任何既有判据/超时阈值**。提交 `730e461d`。
+- 交叉证据：本刀 CI `42913600247`（`0337282a`）与 `42918309147`（`76bbb0e9`）的 `Tests (vbp #5)` 均绿；
+  两个 run 的失败分片都只有存量三项 `compile #1/#2`、`vbp #11`。
+
+### 38.7 下一刀
+
+M3（§39）已随本文件同轮落地提交 `76bbb0e9`：`MonthName/WeekdayName` 的 Optional 省略档补齐
+（`kOD_MonthName{nullptr,"0"}` / `kOD_WeekdayName{nullptr,"0","1"}`，补齐点仍唯一），
+配 `scripts/check_m3_builtin_opt_defaults.ps1`（标记唯一、表行唯一、档数 2/3、首档必填不补、与 RTL 声明逐档对账，
+负例全红）。CI 形状门 `Emit manifest (shape oracle)` 在 `76bbb0e9` 上 **success**（632/632 相同），
+即 M3 对存量语料零形状变化；本机干净克隆读数同为 632/628/4 既知/0/0。
+下一轮整编（同探针流程、head `76bbb0e9`）用于取 `vb6_MonthName` 7 → 0 的验收读数并经 §39 收口。
