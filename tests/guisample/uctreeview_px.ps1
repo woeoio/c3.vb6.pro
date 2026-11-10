@@ -1205,6 +1205,27 @@ function Wait-Gone([IntPtr]$h, [int]$ms) {
     }
     return (-not [UP]::IsWindow($h))
 }
+# §B92 (2026-11-11): BM_CLICK 超时**不等于**消息被丢弃 —— SendMessageTimeoutW 只结束
+# "等窗口过程处理完"这件事, 那条消息仍然排在按钮自己的队列里, UI 线程回到消息泵就照常处理。
+# 现场 (dev CI `Tests (vbp #5)` job 130077321416): 新实例刚 WaitForInputIdle 就点
+# 'Contact  List', 3 s 未返回 ⇒ 旧口径当场判红; 但同一次运行里 10 s 后该实例的三个重复段
+# 全绿, 且 state=alive / out+err 全空 ⇒ 不是挂死, 是"点得太早 + 3 s 太短"(那一份样例的
+# Form_Load 最长)。判据不变: 按钮过程真的不处理仍然红; 这里只把"迟到"与"真挂死"分开,
+# 并把迟到量记进读数 jitter[...]=BM_CLICK(late=...ms) —— 抖动必须可识别, 不许静默吞掉。
+function Invoke-ClickSyncLate {
+    param([IntPtr]$Btn, [IntPtr]$Main, [int]$ProcId, [int]$ProbeMs = 3000, [int]$LateMs = 7000)
+    $r = @{ Sync = $false; Late = $false; Win = [IntPtr]::Zero; LateMs = 0 }
+    if ([UP]::ClickSync($Btn)) {
+        $r.Sync = $true
+        $r.Win = Wait-Until { [UP]::FindOtherForm([uint32]$ProcId, $Main) } $ProbeMs
+        return $r
+    }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $r.Win = Wait-Until { [UP]::FindOtherForm([uint32]$ProcId, $Main) } $LateMs
+    $r.LateMs = [int]$sw.ElapsedMilliseconds
+    $r.Late = ($r.Win -ne [IntPtr]::Zero)
+    return $r
+}
 # 看门狗: 任何一步超时都必须**杀进程 + 打诊断**, 不许留下半死进程继续跑后面的判据.
 # 注意 PowerShell 函数有自己的作用域, 红项必须写回 $script:actBad 才不会被丢掉.
 function Kill-ProcDiag {
@@ -1628,13 +1649,17 @@ if ($p.HasExited) {
             Kill-ProcDiag $pa "'$($sp.btn)' 内容段找不到按钮" $oA $eA
             continue
         }
-        $bsync = [UP]::ClickSync($fb)
-        if (-not $bsync) {
-            $actBad += "'$($sp.btn)' 内容段: BM_CLICK 3s 未返回 (事件没到按钮过程)"
+        $clk = Invoke-ClickSyncLate -Btn $fb -Main $ma -ProcId ([int]$pa.Id)
+        if ($clk.Late) {
+            $actRead += "jitter[$($sp.btn)]=BM_CLICK(late=$($clk.LateMs)ms resp=$([UP]::Responds($ma)))"
+            $fw = $clk.Win
+        } elseif ($clk.Sync) {
+            $fw = $clk.Win
+        } else {
+            $actBad += "'$($sp.btn)' 内容段: BM_CLICK 3s 未返回 + 迟到 7s 仍无窗体 (resp=$([UP]::Responds($ma)))"
             Kill-ProcDiag $pa "'$($sp.btn)' 内容段 BM_CLICK 超时" $oA $eA
             continue
         }
-        $fw = Wait-Until { [UP]::FindOtherForm([uint32]$pa.Id, $ma) } 3000
         if ($fw -eq [IntPtr]::Zero) {
             $actRead += "content[$($sp.btn)]=OPEN-FAIL"
             $actBad += "'$($sp.btn)' 内容段: 3s 内没有弹出可见窗体"
@@ -1809,13 +1834,15 @@ if ($p.HasExited) {
                     $actBad += "'$($sp.btn)' 第 $round 轮找不到按钮 (主窗控件已失效)"
                     break
                 }
-                $bsync = [UP]::ClickSync($fb)
-                if (-not $bsync) {
+                $clk = Invoke-ClickSyncLate -Btn $fb -Main $mb -ProcId ([int]$pb.Id)
+                if ($clk.Late) {
+                    $actRead += "jitter[$($sp.btn)] r$round=BM_CLICK(late=$($clk.LateMs)ms)"
+                } elseif (-not $clk.Sync) {
                     $actRead += "repeat[$($sp.btn)] r$round clickSync=false"
-                    $actBad += "'$($sp.btn)' 第 $round 轮 BM_CLICK 3s 未返回 (事件没到按钮过程)"
+                    $actBad += "'$($sp.btn)' 第 $round 轮 BM_CLICK 3s 未返回 + 迟到 7s 仍无窗体 (resp=$([UP]::Responds($mb)))"
                     break
                 }
-                $fw = Wait-Until { [UP]::FindOtherForm([uint32]$pb.Id, $mb) } 3000
+                $fw = $clk.Win
                 if ($fw -eq [IntPtr]::Zero) {
                     $actRead += "repeat[$($sp.btn)] r$round=OPEN-FAIL"
                     $actBad += "'$($sp.btn)' 第 $round 轮 3s 内没有弹出可见窗体 (Show 重建失败)"
