@@ -693,18 +693,30 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
         }
         if (aboveMA && (*leafSlot)->kind == ASTNodeKind::MemberAccessExpr) {
             auto& binNeg = static_cast<BinaryExpr&>(**aboveMA);
+            // C3-SENTINEL(g4-neg-first-arg): 语句级 `obj.M -<数值表达式>, ...` 的折叠点。
+            // §B93: 右操作数**不只字面数** —— PhotoDemon `baseArrow.AddTriangle
+            // -1 * triangleHalfWidth, ...` 解析成 `Sub(obj.M, Mul(1, x))`, 旧判据只认
+            // LiteralExpr ⇒ 整句落空, 仍发 `(callee - (1*x))(args)` ⇒ C2064
+            // (实测 9 处 / 7 TU: Dialog_GradientEditor、FormLevels、Interface、PD2D、
+            //  pdEdgeDetector、Tools_Clone、Tools_Gradient)。
+            // 语句级根本不存在"减法语句", 裸成员访问后跟 `-` 只能是调用语句的负数首参,
+            // 所以判据放宽到"任意非字符串/日期表达式" (与上面 Fix <vbeclipse> 同机理)。
+            bool negatable = true;
             if (binNeg.op == BinaryOp::Sub && binNeg.right
                 && binNeg.right->kind == ASTNodeKind::LiteralExpr) {
                 auto& litNeg = static_cast<LiteralExpr&>(*binNeg.right);
-                if (litNeg.literalKind != LiteralKind::String
-                    && litNeg.literalKind != LiteralKind::Date) {
-                    auto negArg = std::make_unique<UnaryExpr>(binNeg.right->loc,
-                        UnaryOp::Negate, std::move(binNeg.right));
-                    calleeOverride110y = std::move(*leafSlot);  // MemberAccess 作 callee
-                    *aboveMA = std::move(negArg);
-                    leadingArg110y = std::move(expr);
-                    negFirstArgCollapse = true;
-                }
+                negatable = (litNeg.literalKind != LiteralKind::String
+                          && litNeg.literalKind != LiteralKind::Date);
+            } else if (binNeg.op != BinaryOp::Sub || !binNeg.right) {
+                negatable = false;
+            }
+            if (negatable) {
+                auto negArg = std::make_unique<UnaryExpr>((*aboveMA)->loc,
+                    UnaryOp::Negate, std::move(binNeg.right));
+                calleeOverride110y = std::move(*leafSlot);  // MemberAccess 作 callee
+                *aboveMA = std::move(negArg);
+                leadingArg110y = std::move(expr);
+                negFirstArgCollapse = true;
             }
         }
     }
