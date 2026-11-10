@@ -13,6 +13,11 @@
 - 仓库根完整性必须 Medium（否则启动弹"打开文件 - 安全警告"）；测试启动用 redirect/`-NoNewWindow`。
 - `SmoothScrollFactor` 无效值只告警不致命（与 VB6 一致），不得为消警告改夹具。
 - 流程：小步提交，推 `github`/`origin` 的 `dev`（快进、不 force），GA 22/22 全绿再进下一步。
+- **提交纪律（2026-11-10 起，两条线共用同一工作区，硬性）**：
+  - 一律按显式路径 `git add <具体文件>...`；**禁用** `git add -A` / `git add .` / `git commit -a`。
+  - `git add` 之后、`git commit` 之前必须 `git diff --cached --name-only` 逐条过目，只许出现本刀文件。
+  - `git status` 里出现不属于本刀的文件（哪怕别人未提交的在途改动）⇒ **停下报告，不得顺手带进去**。
+  - 起因见 §57.7：`tests/photodemon/*` 643 份被一次 `git add` 连带扫入 `7230557e`。
 
 ## 1. 已落盘修复（RTL 侧，已重建并验证内嵌）
 
@@ -4056,3 +4061,154 @@ sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0 dpi=96
 
 即：悬停三角按 DPI 折算出 8x6/6x5（120dpi 参考 10x8/8x6 的 0.8 倍），park/leave 墨迹 0；
 `edFrameDark` 回到 0，修的是采集口径而不是判据。
+
+## §56 2026-11-10 像素门 FAIL 结案：不是字体、不是前台，是产物旁边缺头像资产
+
+11-10 02:17 那份 FAIL（`'Form3' 文字行 17 != 真 VB6 10; vivid=17913 < 21768*0.9; photo=4917 < 9292*0.9;
+avatar=4284 < 6498*0.9; dark=2239 < 5155*0.9`）的三项指控逐个查完：
+
+1. **字体（无罪）**：本机装了 Arial Narrow（注册表 4 条 + 4 个 TTF）；两边 LOGFONT 逐字段相同
+   （本轮给 `LogFontOf` 加了第 5 字段 lfQuality）：
+   `ref[Form3]=Segoe UI|-16|0|700|0` / `c3[Form3]=Segoe UI|-16|0|700|0`，
+   `ref[Drag&Drop]=Arial Narrow|-16|0|400|0` / C3 同。差别不在字体。
+2. **前台（无罪）**：同一次运行 5 窗 `fg ok=True try=1`，且 `scr[...]` 与 `content[...]` 每个读数
+   逐项相同 —— PrintWindow 采集本身不依赖前台。抢前台那条仍然保留，但它不是这次的原因。
+3. **真因**：产物目录 `output\build_ucTreeView\img\` 里 **0 张 `avatar_*.jpg`**（夹具里有 15 张），
+   Form3 的 5 张头像全没加载 ⇒ 照片/彩色/深色像素同时掉，`textRows` 从 10 变 17 是因为照片本来
+   把「姓名+职位」两行连成一条深色带。把 `tests\ucTreeView\img\` 整目录补进产物后，同一条命令
+   **PASS**，且 Form3 读数与 11-09 22:49 那次逐项相同（`dark=5155 textRows=10 vivid=20947
+   photo=8997 avatar=6356 sig=1631839419`）。
+   结论：`run_tests.ps1` 的 `-AssetDir img` 拷贝本身是全目录拷贝（15 张都会带），这份产物目录是
+   手工留下的旧目录 —— 不是产品缺口，也不是夹具判据问题；**别再拿"字体缺失"解释这条红**。
+
+同轮修掉的两个脚本真 bug：
+
+- `faceInstalled` 恒 false：原句 `Add-Type -AssemblyName $dwAsm`，`$dwAsm` 在 `tests/` 里从未定义，
+  异常被空 `catch` 吞掉。改用脚本顶部已加载的 `System.Drawing` 后，5.1 实跑打印
+  `faceInstalled=Arial Narrow:yes`。
+- **两把尺子**：11-09 22:49 的 PASS 是 `ref=none`（设计值口径），11-10 FAIL 是 `ref=json`（真 VB6 实拍）。
+  现在内容判据**只认真 VB6 读数**：默认读 `tests/guisample/uctreeview_ref.json`（`_dpi=120`），
+  没有读数直接红；`ref=none` 的设计值分支已删除。**11-09 那次 PASS 按宽松尺子跑出，不代表对齐，效力作废**
+  （但它与今天补资产后的实拍逐项相同，所以数值本身仍可当交叉证据）。
+  基准 DPI 与本机不同时记 `SKIP(基准dpi=… 本机dpi=…)`，不拿设计值顶替。
+
+连跑读数（同一 exe，补资产后）：pwsh 3 次 + Windows PowerShell 5.1 1 次，全部 rc=0，
+五窗读数逐项相同；`Contact List` 的 `repeatcontent` 第 2/3 次仍抖（6453/4226/7218，既有图像解码
+时序问题），主判据取第一份，不受影响。
+
+k178 形状针（同轮）：`vb6_DebugWriteBSTR(BSTR)` 只读不 free，COM getter 返回的 BSTR 所有权在
+caller（旧形有显式 `vb6_BSTR_Free`）。视图读点漏了 free ⇒ 产品补回（`cgen_call.cpp` 的
+`isBstrExpr` 分支只对 `->vt->get_` / `_prop_get_` 这一族新分配的读点加 brace+Free），**针不动**。
+
+## §57 2026-11-10 资产闸补洞：XML 数据文件也进清单（只修闸，不修产品）
+
+### 57.1 复现（把三份 XML 移出产物目录）
+
+`output\build_ucTreeView\` 只留 `Proyecto1.exe` / `.map` / `exportado.xml` / `img\`，跑
+`tests\guisample\uctreeview_px.ps1 -Exe output\build_ucTreeView\Proyecto1.exe`：
+
+```
+FAIL 交互: XML 载入弹了模态框 'Proyecto1'; XML 载入后树区深色像素 0 < 30 …;
+     'Drag and Drop' 第 1 轮弹了模态框 'XML Load Error'; 'Menu / Tools' 第 1 轮 BM_CLICK 3s 未返回 …
+tree=221x556 asset=36/36 ok   ← 闸在这里说了假话
+```
+
+即：交互段能把它撞红，但**资产闸自己报的是"齐了"**（它只数 `img\`）。这正是洞。
+另：诊断走的是"弹框/没画"，不是"缺哪份文件"，报不出缺 `ejemplo.xml`。
+
+App 自己报的错（脚本化点击实测，`EnumChildWindows` 读 Static 文本）：
+
+| 按钮 | 读的文件（源码位置） | 弹框标题 | 文案 |
+| --- | --- | --- | --- |
+| `Corporate Hierarchy` | `Form3.frm:48` `\JerarquiaEmpresa.xml` | `XML Load Error` | `Error loading XML file: 系统无法找到指定的对象。` |
+| `Load from custom XML` | `Form1.frm:1128` `\ejemplo.xml` | `Proyecto1`（MsgBox 默认标题 = App.Title） | `Error al cargar el archivo XML: 系统无法找到指定的对象。` |
+| `Menu / Tools` | `Form5.frm:63` `\menu.xml` | `XML Load Error` | 同第一行 |
+
+### 57.2 清单（以夹具源码为准，不凭记忆）
+
+`App.Path & "\<名>"` 的读取点只有三处，全部是 **XML**；`img\` 走的是 `ImageListAddImage`
+（`Form1.frm:1224-1229`、`Form4.frm:65-67`）。`exportado.xml` **不是运行期输入** —— 全夹具
+没有任何代码读它（它是导出产物），不进清单。
+
+`tests\run_tests.ps1:9897` 的拷贝本来就带着这三份：
+`-AssetDir "img" -AssetFile @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml")`（70267038 起），
+本轮核对无遗漏，**未改**。缺的是判定侧：px 门只核了图片。
+
+### 57.3 闸的改动（`tests\guisample\uctreeview_px.ps1`）
+
+资产前置闸从"图片集合"扩成"**数据文件集合**"，两段都按**文件名集合**比、不比像素：
+
+* `img`：沿用原逻辑（夹具 N 张 vs 产物 M 张，缺一张就红并点名）。
+* `data`：`$reqData = @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml")`，
+  `夹具里没有 ⇒ SKIP(缺资产)`、`夹具有而产物没有 ⇒ FAIL 并点名`。
+* 读数串变为 `asset=36/36 img + 3/3 data ok`。
+
+### 57.4 正负控
+
+| 控制 | 命令 | 结果 |
+| --- | --- | --- |
+| 正控（完整产物） | `-OutDir .temp\px_pos -Sec 6` | `PASS … asset=36/36 img + 3/3 data ok …`（rc=0）；与改前基线逐项**全等**（85 段读数，去 `asset=`/`png=` 后 `IDENTICAL=True`） |
+| 负控（抽掉 `menu.xml`） | 同上 | `FAIL 产物数据文件缺失，请重跑构建拷贝 (数据文件: 夹具 3 份 / 产物 2 份 / 缺: menu.xml)`（rc=1，**不进入像素比对**） |
+| `-HoverOnly` 回归 | `-HoverOnly` | `PASS sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120`（rc=0） |
+
+正控同轮有一次偶发红（`ToggleIconSize` 数值点击时进程 exitCode=0 提前退出），复跑即恢复；
+与本次改动无关（闸在起窗之前就结束，红的是交互段），记录备查。
+
+### 57.5 另外两个工程的同类风险（只查不改）
+
+| 工程 | 运行期外部文件 | 结论 |
+| --- | --- | --- |
+| `tests\ucSlider_2022` | 无 `App.Path` / `LoadPicture` / `Open … For Input`；`Imagenes\*.png` 在源码与 `.frx` 里都没有引用（设计期示例图） | 无需资产拷贝 |
+| `tests\VBFlexGridDemo` | 无 `App.Path` 读取（`Common.bas:653` 有 `AppPath()` 定义但全工程零调用）；`Resources\Resources.res` 与 `PD_icons.RES` 是 `ResFile32`，编译期进 exe | 无需资产拷贝 |
+
+两者都不是"运行期读外部文件"，当前登记（ucSlider 无 `-AssetDir`、FlexGrid 走 `$Cases`）正确。
+
+### 57.6 GA（run 42711515912，提交 7230557e）
+
+`Tests (vbp #2)` **success**，CI 96dpi 上资产闸按新口径报：
+`asset=36/36 img + 3/3 data ok`（同时 `edFrameDark=0`、`sbHover=6/6 hot=8x6@102 nrm=6x5@133`）。
+
+22 格里 20 绿、`Tests (compile #1/#2)` 红，红的是**另一条在途工作线**的 4 条 STATIC
+（`vbp_fixture_census`：`photodemon\PhotoDemon.vbp` 未登记；`legacy_view_arg_owners`、
+`box_temp_reclaim`、`class_refcount_authority`），与本次资产闸无关 ——
+同一批红在上一提交 `5e596225` 的 run 42683890189 里就已存在（另有 manifest 红，本轮已绿）。
+本轮只动了 `tests\guisample\uctreeview_px.ps1` 的资产段与本文件，不触碰那 4 条判据。
+
+> 记账：提交 7230557e 的暂存区里原本就有 643 个 `tests\photodemon\*`（另一条工作线的未提交
+> 文件），被这次 `git add` 一起带进了提交。内容未改、只是"提前入库"，但违反了"一条一提交"，
+> 已在会话里向用户说明；因已双推，未做 force-push 改写历史。详见 §57.7。
+
+### 57.7 事故复盘：`7230557e` 连带 643 份 PhotoDemon 夹具
+
+**谁扫进去的**：本线（ucTreeView / XML 资产闸）。`git add tests\guisample\uctreeview_px.ps1
+ai\C3_UCTREEVIEW_HANDOFF.md` 之前，暂存区里已经躺着 PhotoDemon 线未提交的 643 个
+`tests/photodemon/*`；`git add <path>` 不会清理既有暂存内容，于是 `git commit` 把它们一并写进了提交。
+
+**范围（`git show --name-status 7230557e` 全量核对）**：除上述 643 份外，只有本刀的
+`ai/C3_UCTREEVIEW_HANDOFF.md`(M) 与 `tests/guisample/uctreeview_px.ps1`(M)。
+**没有第三条线的文件**：`src/**` 零命中（PhotoDemon 线在途的 15 个 `src` 改动全部仍是
+工作区的未提交状态，未被带进去）。
+
+**内容有无变化（逐文件比对，不是看描述）**：
+
+```
+commit 内 tests/photodemon 文件数 = 643
+git diff HEAD -- tests/photodemon            → 0 行
+git status --porcelain -- tests/photodemon   → 0 行
+逐文件 git rev-parse 7230557e:<f> vs git hash-object <f> → mismatch = 0 / 643
+零字节文件 = 0；合计 19,444,856 B
+```
+
+即：643 份**逐字节完全一致**，无改坏、无截断；只是"提前入库"。
+
+**为什么两条线会撞**：两个会话共用一个工作区（`c:\Users\Administrator\Documents\c3.vb6.pro`），
+PhotoDemon 线把 643 份新夹具 `git add` 后尚未 commit，本线在同一索引上提交。
+
+**为什么选择不改写历史**：`7230557e` 已双推 `github`/`origin`（`dev`）；force-push 会改写公共
+分支、影响另一条线已拉取的状态，风险大于"一个提交里混了两件事"的代价。改为：
+① 本文件 §0 与 `ai/C3_PHOTODEMON_HANDOFF.md` §0 都落"显式路径 / 提交前查 status / 见异即停"的硬规则；
+② 连带后果 `vbp_fixture_census`（`photodemon\PhotoDemon.vbp` 未登记）归 PhotoDemon 线记账。
+
+**核对时的在途状态（说明为何 `src/**` 未入提交）**：`git status` 彼时与本轮均显示 15 个
+`src/**` + `tests/run_tests.ps1` 处于未提交修改，属 PhotoDemon 线在途改动，本线一律未 touch。
+

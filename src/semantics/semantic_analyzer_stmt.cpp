@@ -124,10 +124,22 @@ void SemanticAnalyzer::visit(ForEachStmt& node) {
 }
 
 void SemanticAnalyzer::visit(DoLoopStmt& node) {
+    // VB6 的 Dim/Const 是**过程级**声明（写进哪个块都算整个过程的），但名字仍然受
+    // 单遍文本序约束：必须在**使用点之前文本出现过**。
+    //   - `Loop While/Until <条件>` 是**回边**条件，文本上后于体 ⇒ 可引用体内声明
+    //     （PhotoDemon pdXCF.cls 的 ldResult / ERR_BUFF_TOO_SMALL、
+    //     UserControl_Support.bas 的 positionFailed / failsafePosition 全是这一形）。
+    //   - `Do While/Until <条件>` 是**前置**条件，文本上先于体 ⇒ 引用体内声明必须报
+    //     未声明（真 VB6 报「变量未定义」）。
+    // 所以这里不能无条件换序，只对后测形（Do ... Loop While/Until）先体后条件。
+    // 顺序只是分析顺序，不改 AST、不改发码。
+    const bool postTest = (node.loopKind == DoLoopKind::DoLoopWhile
+                           || node.loopKind == DoLoopKind::DoLoopUntil);
+    if (postTest) analyzeStmtList(node.body);
     if (node.condition) {
         Vb6Type condType = analyzeExpr(*node.condition);
     }
-    analyzeStmtList(node.body);
+    if (!postTest) analyzeStmtList(node.body);
 }
 
 void SemanticAnalyzer::visit(WhileWendStmt& node) {

@@ -767,6 +767,23 @@ int32_t vb6_UC_OwnPropSet(void* obj, const wchar_t* name, const void* inV) {
     return ok;
 }
 
+// PROPERTYPUTREF 入口 (`Set x.P = v` / `x.P = Nothing`)。属性若没声明 Property Set,
+// 退化到 put 槽 —— 与改动前的行为一致, 不新造错误 (oracle 只证明了两条入口各自
+// 存在, 没证明缺一侧时 VB6 会报什么)。
+int32_t vb6_UC_OwnPropSetRef(void* obj, const wchar_t* name, const void* inV) {
+    void* inst = NULL;
+    int32_t ok;
+    const vb6_UcPropDesc* pd = vb6_uc_ownPropLookup(obj, name, &inst);
+    if (!pd || !inst) return 0;
+    if (!pd->setref) return pd->set ? vb6_UC_OwnPropSet(obj, name, inV) : 0;
+    vb6_UCRec* r = vb6_uc_findByInstance(inst);
+    vb6_UCSaved saved;
+    if (r) vb6_uc_push(r, &saved);
+    ok = pd->setref(inst, inV) ? 1 : 0;
+    if (r) vb6_uc_pop(&saved);
+    return ok;
+}
+
 // Fix <vbeclipse> rev21: UserControl **自有 Public Sub 的按名桥**。见
 // vb6forms_controls.h 里 vb6_UcMethodDesc 的说明 (为什么缺了它视图窗体停在 0x0)。
 // 与 props 桥同一套定位: 先按实例找 rec, 找不到再按宿主 HWND 找 —— 两种形态的

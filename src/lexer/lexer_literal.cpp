@@ -332,7 +332,7 @@ Token Lexer::scanComment() {
         const bool continued = end > 1 && text[end - 1] == '_' &&
                                (text[end - 2] == ' ' || text[end - 2] == '\t');
         if (!continued || offset_ >= content_.size()) break;
-        text += advance();                                    // 吞掉 '\r' 或 '\n'
+        text += advance();                                            // 吞掉 '\r' 或 '\n'
         if (text.back() == '\r' && peek() == '\n') text += advance();  // CRLF
     }
     return makeToken(TokenKind::Comment, text, startLine, startCol);

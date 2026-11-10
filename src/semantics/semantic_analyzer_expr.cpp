@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include "semantics/semantic_analyzer_internal.h"
 #include "common/form_pseudo.hpp"  // 账 #278 §B109: 窗体裸写属性问那张表 (与 backend 同一处登记)
+#include "common/vba_math.hpp"     // VBA.Math 成员名单: Math.<成员> 的编译期收口
 
 namespace vb6c3 {
 
@@ -199,6 +200,21 @@ void SemanticAnalyzer::visit(MemberAccessExpr& node) {
     memberObjCtx_ = true;
     Vb6Type objType = analyzeExpr(*node.object);
     memberObjCtx_ = savedMemberObjCtx;
+    // VBA.Math 的成员收口（PhotoDemon `Math` 定案，handoff §10.4）。真 VB6 的 VBA.Math
+    // 标准模块只认 Abs/Atn/Cos/Exp/Log/Rnd/Round/Sgn/Sin/Sqr/Tan；Fix/Int 是**全局内建
+    // 函数**，不是它的成员，`Math.Fix(1.7)` 在真 VB6 里是编译期「未找到方法或数据成员」。
+    // 修前它们落进发码白名单，折成 vb6_vb6_Fix / vb6_vb6_Int 再到链接期 LNK2019。
+    // 正向对照：Math.Sin 等真成员照旧通过。接收者同名符号（用户自己的变量/类）在场时不判，
+    // 交给既有解析 —— 收紧只能收 VBA.Math 这一格。
+    if (pass_ == 2 && node.object && node.object->kind == ASTNodeKind::IdentifierExpr) {
+        auto& recvMat = static_cast<IdentifierExpr&>(*node.object);
+        if (vbaLibLower(recvMat.name) == "math" && !symTab_.lookup(recvMat.name)
+            && !symTab_.lookupModule(recvMat.name)
+            && vbaMathMemberNames().count(vbaLibLower(node.memberName)) == 0) {
+            diag_.error(DiagnosticID::SemMemberNotFound, node.loc,
+                "未找到方法或数据成员: '" + recvMat.name + "." + node.memberName + "'");
+        }
+    }
     // ai/084a M1/M2: 成员访问级别守卫 —— obj 为 Me / 类类型变量时解析接收者类,
     // Private 成员越界报 3028 (家族内放行; 解析不出接收者 → 静默, 维持旧行为)。
     checkMemberAccessGuard(*node.object, node.memberName, node.loc);

@@ -174,6 +174,10 @@ void CCodeGen::visit(CallStmt& node) {
                                     // 交给站F 那位读者判「接收者是视图且这一席同型吗」，不合就留原发。
                                     std::string dbgLate = "vb6_ComGetStringProp(" + comObjExpr_ + ", L\"" + comMemberName_ + "\")";
                                     std::string dbgView = legacyViewGetterReadExpr(comObjExpr_, comMemberName_, dbgLate);
+                                    // 账 #305 (R4 收口): 同一个接收者的**新式**档 (薄指针) —— 与
+                                    // cgen_util_com.cpp:414 那一位的次序一字不差, 只补这处漏问的站点。
+                                    if (dbgView.empty())
+                                        dbgView = ivrefViewGetterReadExpr(comObjExpr_, comMemberName_, dbgLate);
                                     std::string comPropCall = dbgView.empty() ? dbgLate : std::move(dbgView);
                                     c_.emitLine("{");
                                     c_.indent();
@@ -200,7 +204,26 @@ void CCodeGen::visit(CallStmt& node) {
                                     // char[N] (内联 ANSI), 直接塞进 BSTR 形参会把 ANSI 字节按 UTF-16
                                     // 读 (test_fixedstr_decl 的 `Debug.Print r.f` 实测发成裸 r.f)。
                                     // 统一过一次 wrapToBSTR —— 普通 BSTR 原样返回, 只有成员定长串被换算。
-                                    c_.emitLine("vb6_DebugWriteBSTR(" + wrapToBSTR(val, *call.positional[j]) + ");");
+                                    //
+                                    // 2026-11-10 (k178 形状针): `Debug.Print x.Label` 走视图/getter 读时,
+                                    // 形参拿到的是**刚刚分配**的 BSTR (vb6_*_prop_get_* 里 FromStr/ConcatFree
+                                    // 的结果, 所有权在 caller)。vb6_DebugWriteBSTR 不吃所有权 (只读不 free),
+                                    // 旧形在 isComMarker_ 那一路是显式 Free 的, 这里漏了 ⇒ 每打一行泄漏一只。
+                                    // 只对这一族"会新分配"的读点补 Free; 变量/字面量不走这条, 免得误放别名。
+                                    std::string dbgB = wrapToBSTR(val, *call.positional[j]);
+                                    bool dbgOwned = dbgB.find("->vt->get_") != std::string::npos
+                                                 || dbgB.find("_prop_get_") != std::string::npos;
+                                    if (dbgOwned) {
+                                        c_.emitLine("{");
+                                        c_.indent();
+                                        c_.emitLine("wchar_t* _dbg_com_bstr = " + dbgB + ";");
+                                        c_.emitLine("vb6_DebugWriteBSTR(_dbg_com_bstr);");
+                                        c_.emitLine("vb6_BSTR_Free(_dbg_com_bstr);");
+                                        c_.dedent();
+                                        c_.emitLine("}");
+                                    } else {
+                                        c_.emitLine("vb6_DebugWriteBSTR(" + dbgB + ");");
+                                    }
                                 } else if (inferExprType(*call.positional[j]) == Vb6Type::Date) {
                                     // Fix 175: Debug.Print d (d As Date) —— Date 变量同时
                                     // 登记在 knownDoubleVars_, isDoubleExpr 会抢先命中并
@@ -448,6 +471,22 @@ void CCodeGen::visit(CallStmt& node) {
                     return;
                 }
             }
+            // 账 #305 (R4 收口) 同一站的**新式**档: 接收者是薄指针 `vb6_ivref_<I>*` 时同上,
+            // 那一发也不许进 COM 兜底 (对一枚不是 IDispatch 的薄指针发 Invoke: 编得过、
+            // 跑起来一声不响 —— k175/k177 实测)。形状仍问那位唯一主人 ivrefVtableCall。
+            {
+                const std::string ifaceR4s = slotIvrefViewName(Symbol::toLower(comObjExpr_));
+                if (!ifaceR4s.empty()) {
+                    const std::string callR4 =
+                        ivrefVtableCall(ifaceR4s, comMemberName_, comObjExpr_, {});
+                    if (!callR4.empty()) {
+                        comObjExpr_.clear();
+                        comMemberName_.clear();
+                        c_.emitLine(callR4 + ";  /* 新式视图 ->vt->方法 (站D 零实参裸形) */");
+                        return;
+                    }
+                }
+            }
             // 无括号的COM方法调用: obj.Method → vb6_ComCall(obj, L"Method", NULL, 0)
             callExpr = "vb6_ComCall(" + comObjExpr_ + ", L\"" + comMemberName_ + "\", NULL, 0)";
             comObjExpr_.clear();
@@ -627,11 +666,10 @@ void CCodeGen::visit(CallStmt& node) {
                     }
                 }
             }
-            // Fix 034: Builtin Sub statements with Optional ByVal 参 — 硬编码补默认值.
-            // calleeParams 未注册的 builtin (如 Randomize), bare-call 无参时补默认值.
-            // Randomize([seed]) — RTL vb6_Randomize(double seed); 不传参时 seed=0.0.
+            // Fix 034 / Fix RND-SEQ: 裸 `Randomize` 不是 `Randomize 0` —— 真 VB6 走
+            // rtcRandomize 的缺参分支: Timer → Single 位型 → 折半 XOR 播种。RTL 有专名。
             if (callExpr == "vb6_Randomize" && bareArgList.empty()) {
-                bareArgList = "0.0";
+                callExpr = "vb6_RandomizeTimer";
             }
             callExpr += "(" + bareArgList + ")";
             // 窗体裸名 `ZOrder` (= `Me.ZOrder`): `.frm` 里不带接收者写 `ZOrder` 是窗体自己

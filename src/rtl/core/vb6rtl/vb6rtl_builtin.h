@@ -96,7 +96,9 @@ double vb6_Sqr(double x);
 double vb6_Round(double x, int32_t decimals);
 // Fix 117: VB6 默认数值→字符串 (最短往返表示; Single 最多 7 位有效数字)
 BSTR vb6_NumToBSTRDefault(double v, int isSingle);
-float vb6_Rnd(int32_t seed);
+// Fix RND-SEQ: 与 VB6 逐值一致 (24-bit LCG + Randomize 折半 XOR)。seed 收 double:
+//   有参 Randomize 取 double 高 32 位; Rnd(<0) 取 (float)seed 的位型; Rnd(0) 不推进。
+float vb6_Rnd(double seed);
 
 // 转换函数
 int16_t vb6_CInt(double x);
@@ -325,6 +327,7 @@ double vb6_Exp(double x);
 double vb6_Fix(double x);
 double vb6_Int(double x);
 void vb6_Randomize(double seed);
+void vb6_RandomizeTimer(void);   // Fix RND-SEQ: 裸 Randomize (Timer 的 Single 位型)
 float vb6_Rnd_Full(int32_t seed);
 
 // 日期时间函数

@@ -359,6 +359,35 @@ std::string CCodeGen::ifaceViewOfExpr(const ASTNode& expr) {
                 return fs221->variableTypeName;
             }
         }
+        // 账 #305 (R4 收口): 接收者是**类成员属性**的那一形 (`h.OwnView`，解析器把零实参属性
+        // 读也铸成 IndexOrCallExpr)。按接收者的类问成员返回类型, 只有当返回类型是 canonical
+        // 视图时才认 (与上面形①③同一条判据: ivrefCType 非空)。此前这一形落到
+        // inferClassTypeOfExpr 的类兜底, 答成宿主类 (实测 n=[H2947]) ⇒ `.Has` 按类实例发。
+        if (call221.callee && call221.callee->kind == ASTNodeKind::MemberAccessExpr) {
+            const auto& maC221 = static_cast<const MemberAccessExpr&>(*call221.callee);
+            if (maC221.object) {
+                const std::string baseC221 = inferClassTypeOfExpr(*maC221.object);
+                if (!baseC221.empty()) {
+                    const std::string retC221 =
+                        getClassMethodReturnType(baseC221, maC221.memberName);
+                    if (!retC221.empty() && !ivrefCType(retC221).empty()) return retC221;
+                }
+            }
+        }
+    }
+    if (expr.kind == ASTNodeKind::WithMemberExpr) {
+        // 账 #305 (R4 收口): `With <类实例>: .View.Has` 里 `.View` 是 WithMemberExpr
+        // (无 object, 基类在 With 栈上)。成员返回 canonical 视图时认这一形 ——
+        // 此前落到 inferClassTypeOfExpr 的 With 类兜底 (答成宿主类 H2947) ⇒ `.Has`
+        // 按类实例发 `vb6_<I>_Has((void*)<视图>)`, 恒 0 (k2947-k 实测)。
+        if (!withObjectInfoStack_.empty()) {
+            const WithObjInfo& wiW = withObjectInfoStack_.back();
+            if (wiW.kind == WithObjKind::ClassInstance && !wiW.className.empty()) {
+                const std::string retW = getClassMethodReturnType(
+                    wiW.className, static_cast<const WithMemberExpr&>(expr).memberName);
+                if (!retW.empty() && !ivrefCType(retW).empty()) return retW;
+            }
+        }
     }
     std::string n = inferClassTypeOfExpr(expr);
     if (n.empty()) return std::string();
@@ -422,6 +451,19 @@ std::string CCodeGen::legacyViewBoxExpr(const ASTNode* expr, const std::string& 
     const auto& id = static_cast<const IdentifierExpr&>(*expr);
     if (!slotIsLegacyIfaceView(Symbol::toLower(id.name))) return std::string();
     return "vb6_VariantFromProjectInstance((void*)(" + cExpr + ").obj)";
+}
+
+// 账 #305 (R4 收口): 上面那一站的**新式**那一档。R4 去掉 `VB_Creatable` 闸之后, 可创建的
+// 空体接口类也进 ivreg_, 同一枚 `Dim v As IK172` 的 C 值从值结构体 (`vb6_iface_<I>`) 变成
+// 薄指针 (`vb6_ivref_<I>*`, 没有 `.obj` / `.vtbl` 两格)。装箱站不认这一档就把
+// `vb6_ivref_<I>**` 当 `vb6_VARIANT*` 交出去 —— k172_viewarg 站E 实测: 编得过, VarType
+// 读成 46832 (把指针的低 16 位当 vt)。身份仍按指针问, 与 legacy 那一臂同一句答案;
+// 哪一枚是视图只问既有主人 ifaceViewOfExpr, 不在这里另立名单。
+std::string CCodeGen::ivrefViewBoxExpr(ASTNode* expr, const std::string& cExpr) {
+    if (!expr || cExpr.empty()) return std::string();
+    if (cExprIsVariantCarrier(cExpr)) return std::string();
+    if (ifaceViewOfExpr(*expr).empty()) return std::string();
+    return "vb6_VariantFromProjectInstance((void*)(" + cExpr + "))";
 }
 
 // 账 #305 新账 #471 站D (第一百七十五刀): 「接收者是一枚视图，它的方法那一发怎么发」收成一处。

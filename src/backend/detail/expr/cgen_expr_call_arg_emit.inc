@@ -113,6 +113,16 @@
            VariantToString / wrapToBSTR / boxToVariant 那一层包装全在下面, 于是包装套在
            读入口**外面**, 与 4a "外层 vb6_ChkInt 照旧套着" 同款。 */
         argVal = extenderMemberReadExpr(argVal);
+        // Fix RND-SEQ: `Rnd(v)` / `Randomize v` 的种子在 VB6 运行期按 Variant→double 取
+        // (rtcRandomize 收 VARIANT*, rtcRandomNext 收 Single)。这两枚内置没登记
+        // calleeParams (见 builtin_funcs.inc 的说明), 所以 Variant 实参在这里显式提值 ——
+        // 否则把 vb6_VARIANT 结构体直接塞进 double 形参 = C2440。
+        if (i == 0 && (callee == "vb6_Rnd" || callee == "vb6_Randomize")
+            && i < node.positional.size() && node.positional[i]
+            && argVal.find("vb6_VariantToDouble(") == std::string::npos
+            && isVariantSlot(argVal, node.positional[i].get())) {
+            argVal = "vb6_VariantToDouble(" + argVal + ")";
+        }
         // 账 #305 第一百七十二刀 站B = 实例递进 legacy 接口的**视图形参**那一档。视图
         // (`vb6_iface_<I> { vtbl; obj; }`) 是一枚值结构体，C 里没有任何转换能把裸实例
         // `vb6_cls_<Impl>*` 喂进去 (实测 Ray.vbp: Sphere.c(146) / Plane.c(83) / Disk.c(110) /
@@ -1199,6 +1209,18 @@
                                                     + ";  /* Fix <vbeclipse>: ByRef Variant 实参装箱 */");
                                         boxTempsToClear_.push_back({tmp172e, c_.indentLevel()});
                                         argVal = "&" + tmp172e;
+                                        break;
+                                    }
+                                    // 账 #305 (R4 收口): 同一站的**新式**视图档 (薄指针)。
+                                    const std::string viewBoxR4 =
+                                        ivrefViewBoxExpr(node.positional[i].get(), argVal);
+                                    if (!viewBoxR4.empty()) {
+                                        const std::string tmpR4 = "_vb6_vararg_"
+                                            + std::to_string(ansiCounter_++);
+                                        c_.emitLine("vb6_VARIANT " + tmpR4 + " = " + viewBoxR4
+                                                    + ";  /* Fix <vbeclipse>: ByRef Variant 实参装箱 */");
+                                        boxTempsToClear_.push_back({tmpR4, c_.indentLevel()});
+                                        argVal = "&" + tmpR4;
                                         break;
                                     }
                                 }

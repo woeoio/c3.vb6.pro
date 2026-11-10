@@ -406,6 +406,13 @@ static const char* const kOD_Randomize[]   = { "0.0" };
     };
     for (const BuiltinOptDefault& bod : kBuiltinOptDefaults) {
         if (callee != bod.callee) continue;
+        // Fix RND-SEQ: 裸 `Randomize` **不是** `Randomize 0` —— 真 VB6 走缺参分支
+        // (rtcRandomize: Timer → Single 位型 → 折半 XOR 播种), RTL 有专名。
+        if (callee == "vb6_Randomize" && args.empty()) {
+            callee = "vb6_RandomizeTimer";
+            argList.clear();
+            break;
+        }
         // 账 #305 第二百四十一刀 (甲): **命名实参按名字落位** —— 只吃表里登记了形参名的那一族折叠内置。
         // VB6 的 `Foo Name:=v` 绑的是形参名，而这一族的形参表在语义层不可达：cgen_expr_call_named_args.inc
         // 那条「没有形参信息」的兜底把 node.named 按**书写序** append ⇒ `Err.Raise Number:=5, Description:="m"`

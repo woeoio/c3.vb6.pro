@@ -787,6 +787,11 @@ bool SemanticAnalyzer::isDocumentHostObject(const std::string& name, bool qualif
     if (name.empty() || !currentModule_) return false;
     const std::string lk = ifaceLower(name);
     if (lk == "vba") return qualifierPos;   // VBA 全局库前缀, 但只有站在限定符位才有意义
+    // VBA.Math 是**VB6 自带 VBA 类型库里的真实模块**（不是 tB 专有写法；PhotoDemon
+    // 的 INSTALL.md 就是拿 VB6 IDE 编这份源码）。成员（Log/Abs/Cos/Sin/Sqr/Round…）
+    // 只是同一批内建函数的限定写法，发码折叠见 cgen_expr_member_precheck.inc。
+    // 与 VBA 同款：只有站在限定符位才算合法，值位的 `Math` 仍是未声明名字。
+    if (lk == "math") return qualifierPos;
     const DocumentKind k = currentModule_->docKind;
     // 文档对象**自己的名字**在 VB6 两个位都合法：`UserControl.hDC`（限定符位）与
     // `With UserControl`（值位，等价于 Me）。两档现在一起放（账 #278 §B115 的第二半）。
@@ -800,6 +805,11 @@ bool SemanticAnalyzer::isDocumentHostObject(const std::string& name, bool qualif
     if (lk == "usercontrol") return k == DocumentKind::UserControl;
     if (lk == "propertypage") return k == DocumentKind::PropertyPage;
     if (lk == "extender" || lk == "ambient") return k == DocumentKind::UserControl && qualifierPos;
+    // VB6 UserControl 内建 `Parent`：值是**宿主容器对象**（窗体 / 容器控件），不是容器
+    // 窗口句柄。两个位都合法（`Set p = Parent` / `Parent.Controls`），发码侧由
+    // vb6_UC_ParentObject() / vb6_UC_ParentControls() 两条码头回答（见 cgen 的 133u 与
+    // PD-Parent 那一支）。PhotoDemon pdCommandBar.ctl 的 7 处都是 `Parent.Controls`。
+    if (lk == "parent") return k == DocumentKind::UserControl;
     return false;
 }
 

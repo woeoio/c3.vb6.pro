@@ -19,6 +19,41 @@
         lastExpr_ = "(void*)vb6_UC_Controls()";
         return;
     }
+    // PD-Parent: .ctl 里的裸 `Parent.Controls` —— VB6 的 `Parent` 是宿主容器对象，
+    // `.Controls` 就是**父容器的**控件集合（与 UserControl.ParentControls 同一件事，
+    // 同一枚码头 vb6_UC_ParentControls）。PhotoDemon pdCommandBar.ctl 7 处
+    // `For Each eControl In Parent.Controls`；此前通用路径把裸 `Parent` 拼成
+    // `vb6_Parent_Controls`（未声明符号）并配一条假 VB3001。
+    // 放在裸 `Controls` 那一支之后、其余类感知解析之前，理由与它相同。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "parent"
+        && Symbol::toLower(node.memberName) == "controls") {
+        // 与限定写法同形：交出那枚已同步的兼容全局（host init 里 vb6_uc_syncParentControls
+        // 每轮同步），For Each 发 `vb6_ForEach_Init(vb6_UserControl_ParentControls)`，
+        // `.Count` 一类链式成员由 generic_access 的 ParentControls 那一支换真实访问器。
+        // 不立 COM 标记 —— 集合对象已就绪，再解一层会发出 `...ComGetObjectProp(…, L"Controls")`。
+        isComMarker_ = false;
+        lastExpr_ = "vb6_UserControl_ParentControls";
+        return;
+    }
+    // PD-Parent 语义刀: .ctl 里裸 `Parent` 的**其余成员** (`Parent.Name` /
+    // `Parent.Caption` / `Parent.BackColor` / `Parent.hWnd` …)。
+    // VB6 里 `Parent` 的静态类型是 **Object**(晚绑定), 且真值是**顶层窗体对象** ——
+    // 不是"直接父容器"(那是 `Container`), 也不是 UC 窗口。RTL 那枚
+    // vb6_UC_ParentObject() 交的正是这个口径(GA_ROOT), 宿主模型按名答属性。
+    // 不立这一支的话, 通用路径会把这句当"模块名限定符"拼成 `vb6_Parent_Name`
+    // (RTL 里没有这枚符号 ⇒ C2065), 与 `Parent.Controls` 修前同病。
+    // 放在 `Parent.Controls` 之后: 集合那一支交的是已同步的兼容全局, 不能再解一层。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "parent") {
+        comObjExpr_ = "(void*)vb6_UC_ParentObject()";
+        comMemberName_ = node.memberName;
+        isComMarker_ = true;
+        isEarlyBoundCom_ = false;
+        earlyBoundSym_ = nullptr;
+        lastExpr_ = "(void*)vb6_UC_ParentObject()";
+        return;
+    }
     // Fix 255: 上一支的**限定写法** —— `PropertyPage.Controls.Add(...)` /
     // `UserControl.Controls.Item(k)`. 上面的判据要求 node.object 是裸 `Controls`
     // 标识符, 而这里 node.object 是 MemberAccessExpr(`PropertyPage`.`Controls`),
@@ -166,7 +201,13 @@
         // C2065). 常量内联字面量; 函数生成裸 rtl 名 vb6_<member> (去 $ 后缀,
         // 如 VBA.Mid$ → vb6_Mid), 由外层 IndexOrCallExpr 的 Fix 033 回退
         // (lookupModule + lookup 全表) 解析参数表并填充 Optional 默认值.
-        if (_objLower == "vba" || _objLower == "vba5") {
+        // VBA.Math 是 VB6 自带 VBA 类型库里的真实模块（PhotoDemon 的 Math.Log/Abs/Cos）。
+        // 成员是同一批内建函数的限定写法 ⇒ 走与 VBA.<成员> 同一条折叠；成员名单的唯一出口
+        // 在 common/vba_math.hpp（语义层用同一张表拦"未找到方法或数据成员"）。
+        // 名单里刻意没有 fix/int：真 VB6 对 `Math.Fix` 报编译期错误，不是内建折叠。
+        const bool isVbaMath = (_objLower == "math"
+                                && vbaMathMemberNames().count(_memLower) != 0);
+        if (_objLower == "vba" || _objLower == "vba5" || isVbaMath) {
             static const std::unordered_map<std::string, std::string> vbaConsts = {
                 {"vbcr", "13"}, {"vblf", "10"}, {"vbtab", "9"},
                 {"vbnullchar", "vb6_BSTR_FromStrN(L\"\\000\", 1)"}, {"vbnullstring", "vb6_BSTR_FromStr(L\"\")"},
@@ -200,6 +241,14 @@
                 std::string fnLower86 = Symbol::toLower(fnCanon);
                 if (fnLower86 == "rnd") {
                     lastExpr_ = "vb6_Rnd(1)";
+                } else if (auto itB86 = builtinFuncs.find(fnLower86); itB86 != builtinFuncs.end()) {
+                    // 账 #478: RTL 名一律问内置表, 不再用 `"vb6_" + cIdent(...)` **现拼**。
+                    // `Int` 是 C 关键字 (cgen_base_naming.cpp 的 cKeywords), cIdent("Int") 先
+                    // 转成 `vb6_Int`, 再被这里拼一次前缀 ⇒ `vb6_vb6_Int` ⇒ `VBA.Int(1.7)`
+                    // LNK2019。`VBA.Fix` 只是恰好因为 "Fix" 不是关键字、cIdent 原样返回才名对。
+                    // 表里其余名字两种拼法逐字节相同, 所以这一改只动 Int 一格。
+                    lastExpr_ = itB86->second;
+                    if (vbaZeroArgFns.count(fnLower86)) lastExpr_ += "()";
                 } else if (vbaZeroArgFns.count(fnLower86)) {
                     lastExpr_ = "vb6_" + cIdent(fnCanon) + "()";
                 } else {

@@ -468,14 +468,43 @@ public:
     //              (类型符号改用 <name>$ty), 留空时按 Symbol::storageKey() 推导.
     bool define(std::unique_ptr<Symbol> sym, const std::string& keyOverride = std::string());
 
-    // 按名称查找 (本作用域, 不递归) - 返回第一个匹配
+    // 按名称查找 (本作用域 + 共享层, 不递归) - 返回第一个匹配
+    // 共享层 (sharedScope_, 仅模块级作用域会设置) 是**非拥有**的只读回退:
+    // 本地命中即返回, 本地未命中才问共享层。
     Symbol* lookupLocal(const std::string& name) const;
 
-    // 按名称+类别查找 (本作用域, 不递归) - 精确匹配
+    // 按名称+类别查找 (本作用域 + 共享层, 不递归) - 精确匹配
     Symbol* lookupLocalByKind(const std::string& name, SymbolKind kind) const;
 
     // 按名称查找 (递归向上搜索所有祖先作用域)
     Symbol* lookup(const std::string& name) const;
+
+    // 共享符号层 (非拥有). 只有模块级作用域设置, 由 SymbolTable::setSharedScope 下发。
+    void setSharedScope(const Scope* s) { sharedScope_ = s; }
+    const Scope* sharedScope() const { return sharedScope_; }
+
+    // 精确存储键查找: 本地优先, 未命中回退共享层.
+    // 用途: SymbolTable::define/defineExternal 的"这个名字是否已被占用"判定 ——
+    // 占键者可能在共享层 (类型库内建符号), 判占用必须看得见它。
+    Symbol* peek(const std::string& storageKey) const {
+        auto it = symbols_.find(storageKey);
+        if (it != symbols_.end()) return it->second.get();
+        if (!sharedScope_ || isShadowed(storageKey)) return nullptr;
+        return sharedScope_->peek(storageKey);
+    }
+
+    // 遮蔽标记: 本模块声明了用户符号 (过程/变量/常量/属性...) 与共享层的内建符号同名时,
+    // SymbolTable::define 会把内建符号从**本地表**里删掉 (VB6: 工程内声明优先于引用库).
+    // 共享化之后内建符号不在本地表里, 删不掉 —— 于是把名字记在这里, 让所有共享回退
+    // (lookupLocal / lookupLocalByKind / peek) 对该名字短路, 复现"内建符号已被删"的语义。
+    void shadowShared(const std::string& lowerName) { shadowedShared_.insert(lowerName); }
+    bool isShadowed(const std::string& storageKey) const {
+        if (shadowedShared_.empty()) return false;
+        if (shadowedShared_.count(storageKey)) return true;
+        const size_t dollar = storageKey.find('$');
+        return dollar != std::string::npos
+            && shadowedShared_.count(storageKey.substr(0, dollar)) != 0;
+    }
 
     // 获取所有符号
     const std::unordered_map<std::string, std::unique_ptr<Symbol>>& symbols() const {
@@ -486,8 +515,16 @@ public:
     Scope* parent() const { return parent_; }
 
 private:
+    // 只看本作用域 (不含共享层) 的查找实现 —— 供 lookupLocal/lookupLocalByKind 的
+    // 共享回退复用, 也保证共享层自身不会再递归回退。
+    Symbol* lookupOwnLocal(const std::string& name) const;
+    Symbol* lookupOwnLocalByKind(const std::string& name, SymbolKind kind) const;
+
     ScopeKind kind_;
     Scope* parent_;
+    const Scope* sharedScope_ = nullptr;  // 非拥有; 仅模块级作用域可非空
+    // 已被本地用户声明遮蔽的共享层名字 (小写裸名), 见 shadowShared().
+    std::unordered_set<std::string> shadowedShared_;
     std::unordered_map<std::string, std::unique_ptr<Symbol>> symbols_;  // key=storageKey()
 };
 
@@ -508,6 +545,15 @@ public:
 
     // 模块级作用域
     Scope* moduleScope() const { return moduleScope_; }
+
+    // 共享符号层 (非拥有, 只读): 模块作用域的查找回退。
+    // 只解决"同一批类型库符号被每模块各造一份"的重复; analyzers_ 自有符号仍各存各的。
+    void setSharedScope(const Scope* s) {
+        if (moduleScope_) moduleScope_->setSharedScope(s);
+    }
+    const Scope* sharedScope() const {
+        return moduleScope_ ? moduleScope_->sharedScope() : nullptr;
+    }
 
     // 定义符号 (当前作用域)
     bool define(std::unique_ptr<Symbol> sym);

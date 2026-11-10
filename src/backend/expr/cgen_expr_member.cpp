@@ -1,12 +1,14 @@
 #include "backend/cgen.hpp"
 #include "common/canvas_drawing.hpp"  // 账 #232①: 画布动词表 (Printer 成员那一路问它要名字)
 #include "common/host_pseudo.hpp"     // Fix 255: precheck 里限定形式的宿主集合 (PropertyPage.Controls.X) 问那张表
+#include "common/vba_math.hpp"        // VBA.Math 成员名单的唯一出口 (语义层同一张表)
 #include <algorithm>
 #include <cctype>
 #include <iostream>
 #include <cstdlib>
 #include <functional>
 #include <cstdio>
+#include <unordered_set>
 #include "driver/detail/phase_timing.hpp"   // ai/030 续: member 分段打点 (c3StatSplit; 必须在 namespace 外)
 
 namespace vb6c3 {
@@ -67,6 +69,54 @@ void CCodeGen::visit(MemberAccessExpr& node) {
                           + node.memberName + "\")";
                 return;
             }
+        }
+    }
+    // 账 #305 (R4 收口) 补: 接收者是**新式接口视图**的零参属性读 (无括号 = 成员访问路) ——
+    //   `h.OwnView.Has` / `With Me: .OwnView.Has`
+    // 类实例那位主人按 `resolveClassMemberCall(接口名, 成员)` 拼
+    // `vb6_<I>_<M>((void*)<视图>)`，而接口模块函数首形参的契约是**实例** ⇒ 视图喂进去
+    // 每枚实现者都试不中、属性恒 0 (k2947-j/k 实测)。
+    // 只接**读**那一档 (裸名零参 Function 或 `get_`) 且非 void; 接收者先落临时量
+    // (表达式只求值一次, 视图属性自带 AddRef); 形状仍交唯一作者 ivrefVtableCall。
+    // 放在**函数最前**: 下面八个片段里更早的分支 (obj_dispatch 的 memSym 闸) 会先把
+    // 这一形交给类实例/模块限定两站, 只有入口拦才唯一。
+    // 左值语境 (suppressVirtDispatch_，见 cgen_setlet_set_prop 置空那站) 不换发:
+    // 那里要的是「目标 + COM 标记」, 由写读者接手, 不是把 getter 当左值。
+    if (node.object && !asCallCallee_ && !suppressVirtDispatch_) {
+        const std::string ivClsTop = ifaceViewOfExpr(*node.object);
+        const IfaceView* ivVTop = ivClsTop.empty() ? nullptr : ivLookupIface(ivClsTop);
+        const std::string ivSlotTop =
+            ivVTop ? ivSlotKeyForMember(*ivVTop, node.memberName) : std::string();
+        bool ivReadTop = !ivSlotTop.empty()
+            && (ivSlotTop.compare(0, 4, "get_") == 0
+                || ivSlotTop == Symbol::toLower(node.memberName));
+        if (ivReadTop) {
+            for (const IfaceSlotView& sTop : ivVTop->slots) {
+                if (sTop.key != ivSlotTop) continue;
+                if (!ivParamDeclsRef(sTop.sig).empty() || ivSlotRetType(sTop.sig) == "void") {
+                    ivReadTop = false;
+                }
+                break;
+            }
+        }
+        if (ivReadTop) {
+            emitExpr(*node.object);
+            // 裸标识符接收者求值幂等 (无副作用), 直接拼两遍 = 形状最简;
+            // 复合接收者 (如 `h.OwnView`, 视图属性自带 AddRef) 才落临时量。
+            std::string recvTop = lastExpr_;
+            if (node.object->kind != ASTNodeKind::IdentifierExpr) {
+                recvTop = "__ivrecv" + std::to_string(ivrefSetSeq_++);
+                c_.addPending(ivrefCType(ivClsTop) + " " + recvTop + " = " + lastExpr_ + ";");
+            }
+            isComMarker_ = false;
+            isEarlyBoundCom_ = false;
+            earlyBoundSym_ = nullptr;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            pendingChainObj_.clear();
+            lastExpr_ = ivrefVtableCall(ivClsTop, ivSlotTop, recvTop,
+                                        std::vector<std::string>());
+            return;
         }
     }
     std::chrono::steady_clock::time_point _c3sMem = std::chrono::steady_clock::now();

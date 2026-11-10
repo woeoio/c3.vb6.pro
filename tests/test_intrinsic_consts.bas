@@ -52,5 +52,12 @@ Public Sub Main()
     Debug.Print "IC-VS-VAR=" & n
     Debug.Print "IC-VS-DIRECT=" & vbUseSystem
 
+    ' --- 补表项: Clipboard 文件格式 / AsyncRead StatusCode (PhotoDemon 用到的两枚) ---
+    Dim p4 As Long, p5 As Long
+    p4 = vbCFFiles
+    p5 = vbAsyncStatusCodeEndDownloadData
+    Debug.Print "IC-CF-FILES=" & p4
+    Debug.Print "IC-ASYNC-END=" & p5
+
     Debug.Print "IC PASS"
 End Sub

@@ -116,22 +116,61 @@ BSTR vb6_NumToBSTRDefault(double v, int isSingle) {
     MultiByteToWideChar(CP_ACP, 0, nbuf, -1, wbuf, 64);
     return vb6_BSTR_FromStr(wbuf);
 }
-// Fix 135: VB6 Rnd 的真实算法 —— 24-bit LCG (与 VBA 一致):
-//   state = (state * 1140671485 + 12820163) Mod 2^24
-//   Rnd   = state / 2^24
-// 初值 (未 Randomize) = 0x50000。序列与 VB6 逐值一致, 图表 demo 的数据
-// (Charts 2020 各控件 Random(Min,Max)) 因此与 VB6 参考图完全相同。
-// 此前用 C rand(): 序列不同 → 柱高/饼图占比/TreeMaps 布局全都对不上参考图。
+// Fix 135 / Fix RND-SEQ: VB6 Rnd/Randomize 的**真实**实现。
+// 依据 = MSVBVM60.dll 反汇编 (rtcRandomize @ RVA 0x486B1 / rtcRandomNext @ 0x4871A,
+// 折叠工人 0x660EDF4A) + 真 VB6 6.00.9782 探针逐值核对 (28 段序列全等)。
+//   状态: 24-bit LCG, state = (state * 1140671485 + 12820163) & 0xFFFFFF
+//   输出: state / 2^24        (Single, 24 位尾数可精确表示)
+//   初值: 0x50000
+//   Randomize n (有参):
+//       u = (double)n 的**高 32 位**; fold = ((u & 0xFFFF) << 8) ^ ((u >> 8) & 0xFFFF00)
+//       state = fold | (old_state & 0xFF0000FF)     ← 低字节沿用旧状态, 不是取整截断
+//   Randomize (无参): 同一 fold, 但输入是 Timer 的 **Single 位型** (VB6 先 fstp dword)
+//   Rnd(n<0): u = (float)n 的位型; state = (((uint32_t)u >> 24) + u) & 0xFFFFFF; 再走一步
+//   Rnd(0):   返回当前 state, 不推进
+//   Rnd(n>0)/Rnd: 走一步
+// 三条容易踩的: (1) 连投同一整数种子**不复现**序列 (低字节继承);
+//   (2) `Randomize 0` 是确定性的 fold=0, 不是 Timer; (3) 非整数种子的归一化是折半 XOR,
+//   不是 float→int 截断。
 static int32_t g_rndState135 = 0x50000;
 
-float vb6_Rnd(int32_t seed) {
-    if (seed < 0) {
-        g_rndState135 = (int32_t)(seed & 0xFFFFFF);   /* 负参: 重播种 */
-    } else if (seed == 0) {
-        return (float)g_rndState135 / 16777216.0f;    /* 0: 重复上一个 */
+static int32_t vb6_rndFoldState(uint32_t u) {
+    uint32_t fold = (((u & 0xFFFFu) << 8) ^ ((u >> 8) & 0xFFFF00u)) & 0xFFFFFFu;
+    return (int32_t)((fold | ((uint32_t)g_rndState135 & 0xFF0000FFu)) & 0xFFFFFFu);
+}
+
+static int32_t vb6_rndStep(int32_t s) {
+    return (int32_t)(((int64_t)s * 1140671485LL + 12820163LL) & 0xFFFFFF);
+}
+
+float vb6_Rnd(double seed) {
+    if (seed == 0.0) {
+        return (float)g_rndState135 / 16777216.0f;    /* 0: 重复上一个 (不推进) */
     }
-    g_rndState135 = (int32_t)(((int64_t)g_rndState135 * 1140671485LL + 12820163LL) & 0xFFFFFF);
+    if (seed < 0.0) {
+        /* 负参: 用 Single 位型重播种 —— MSVBVM60: ((u >> 24) + u) & 0xFFFFFF */
+        float f = (float)seed;
+        uint32_t u;
+        memcpy(&u, &f, sizeof(u));
+        g_rndState135 = (int32_t)(((u >> 24) + u) & 0xFFFFFFu);
+    }
+    g_rndState135 = vb6_rndStep(g_rndState135);
     return (float)g_rndState135 / 16777216.0f;
+}
+
+/* Randomize <expr>: u 取 double 的高 32 位 (rtcRandomize 先 __vbaR8Var 再 fstp qword) */
+void vb6_Randomize(double seed) {
+    uint64_t bits;
+    memcpy(&bits, &seed, sizeof(bits));
+    g_rndState135 = vb6_rndFoldState((uint32_t)(bits >> 32));
+}
+
+/* 裸 Randomize: VB6 用 Timer 的 **Single** 位型 (660486E4 调 Timer 后 fstp dword) */
+void vb6_RandomizeTimer(void) {
+    float f = (float)vb6_Timer();
+    uint32_t u;
+    memcpy(&u, &f, sizeof(u));
+    g_rndState135 = vb6_rndFoldState(u);
 }
 
 // ============================================================
@@ -753,18 +792,9 @@ double vb6_Exp(double x) { return exp(x); }
 double vb6_Fix(double x) { return (x >= 0) ? floor(x) : ceil(x); }
 double vb6_Int(double x) { return floor(x); }
 
-void vb6_Randomize(double seed) {
-    /* Fix 135: VB6 Randomize 用 Timer 计时值作种 (省略参数时)。 */
-    if (seed == 0.0) {
-        g_rndState135 = (int32_t)((unsigned)(GetTickCount() & 0xFFFFFF));
-    } else {
-        g_rndState135 = (int32_t)((unsigned)(int32_t)seed & 0xFFFFFF);
-    }
-}
-
 float vb6_Rnd_Full(int32_t seed) {
     /* Fix 135: 与 vb6_Rnd 同一 LCG。 */
-    return vb6_Rnd(seed);
+    return vb6_Rnd((double)seed);
 }
 
 // 类型转换 (补充)

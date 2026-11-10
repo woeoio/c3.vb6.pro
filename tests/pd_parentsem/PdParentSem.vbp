@@ -1,0 +1,6 @@
+Type=Exe
+UserControl=UCProbe.ctl
+Form=Form1.frm
+Startup="Form1"
+ExeName32="PdParentSem.exe"
+Name="PdParentSem"

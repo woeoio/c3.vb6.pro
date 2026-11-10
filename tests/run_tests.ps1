@@ -349,6 +349,32 @@ function Test-Compile {
     }
 }
 
+# === 负控编译: 必须报指定诊断, 且不得产出 exe ===
+# 用于「真 VB6 也拒绝」的夹具 (如 Implements 少写成员): 判据是编译器**拒**,
+# 不是夹具能编过。三条同时成立才算绿: exit != 0 / 输出含 needle / 无 exe。
+function Test-CompileFails {
+    param([string]$Name, [string]$Source, [string]$Needle)
+    $script:total++
+    Write-Host -NoNewline "  [COMPILE-FAIL] $Name ... "
+    $negOut = Join-Path $OutDir ("neg_" + $Name)
+    $result = & $C3 $Source --output-dir $negOut @IncArg 2>&1
+    $exitCode = $LASTEXITCODE
+    $text = ($result | Out-String)
+    $hit = $text.IndexOf($Needle, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    $exe = Get-ChildItem $negOut -Filter *.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($exitCode -ne 0 -and $hit -and -not $exe) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        if ($Verbose) {
+            Write-Host ("exit=$exitCode needle=$hit exe=" + [bool]$exe)
+            Write-Host $text
+        }
+    }
+}
+
 # 判据匹配器 —— 进程内路径的单一出口, 按**字面**子串比 (忽略大小写, 与 -like 原本的
 # 大小写行为一致, 只去掉通配语义)。
 # 旧代码在 4 个点各自写 -like 通配匹配, 而 [ ] * ? 在 needle 里会被当成通配符:
@@ -1408,6 +1434,37 @@ function Test-ScaleModeWriters {
     $script:total++
     Write-Host -NoNewline "  [STATIC] scalemode_writers ... "
     $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_scalemode_writers.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+function Test-TypelibPayloadWriters {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] typelib_payload_writers ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_typelib_payload_writers.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+# 规模哨兵（账 §25）：类型库/内建符号只许造一份，不许随模块数线性重造。
+# 语料 = N 份同构小类 + PhotoDemon 同款两条 Reference（shell32 / stdole2），--syntax-only 各跑一次。
+# 判据用 **per-module 斜率**（Δpeak/ΔN），标定于 2026-11-10 本机 Release：
+#   共享层落地后 4.10 MB/模块，改造前 7.64 MB/模块 ⇒ 阈值 5.5 落在两者之间，能抓住回退。
+function Test-TypelibScaleSentinel {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] typelib_scale_sentinel ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_typelib_scale_sentinel.ps1" `
+        -C3 "$Root\.build\C3.exe" -N1 8 -N2 64 -MaxSlopeMB 5.5 -MaxPeakMB 700 -MaxSeconds 180 2>&1
     if ($LASTEXITCODE -eq 0) {
         $script:pass++
         Write-Host "PASS" -ForegroundColor Green
@@ -3580,17 +3637,20 @@ function Invoke-CodegenProj {
 }
 
 function Test-CompileFail {
-    param([string]$Name, [array]$Sources, [string]$Needle)
+    param([string]$Name, [array]$Sources, [array]$Needles, [array]$Absent = @())
     $script:total++
     Write-Host -NoNewline "  [COMPILE-FAIL] $Name ... "
     $text = Invoke-CodegenProj $Sources
-    if ($script:codegenProjExit -ne 0 -and $text.Contains($Needle)) {
+    $bad = @($Needles | Where-Object { -not $text.Contains($_) })
+    $hit = @($Absent | Where-Object { $text.Contains($_) })
+    if ($script:codegenProjExit -ne 0 -and $bad.Count -eq 0 -and $hit.Count -eq 0) {
         $script:pass++
         Write-Host "PASS" -ForegroundColor Green
     } else {
         $script:fail++
         Write-Host "FAIL" -ForegroundColor Red
-        Write-Host "  expected failing codegen containing: $Needle" -ForegroundColor DarkGray
+        Write-Host ("  expected failing codegen containing: " + ($Needles -join ' | ') +
+                    "  unexpected: " + ($hit -join ' | ')) -ForegroundColor DarkGray
         if ($Verbose) { Write-Host $text }
     }
 }
@@ -4980,26 +5040,27 @@ if ($Category -in @("all", "run", "bas")) {
     $setViewNeedles = @("K2947-a=1", "K2947-o=False", "K2947-b=0", "K2947-p=True", "K2947-i=3:a", "K2947-w=False", "K2947-w0=True", "K2947-f=1", "K2947-g=1", "K2947-h=1", "K2947-j=1", "K2947-k=1", "K2947-l=False", "K2947-m=1", "K2947-n=1", "K2947-DONE")
     Add-BasTest "k2947_set_view" "$Tests\k2947_setview\K2947.vbp" $setViewNeedles
     Add-BasTest "k2947_set_view_x86" "$Tests\k2947_setview\K2947.vbp" $setViewNeedles -Arch "x86"
+    # 正针已换 canonical 视图 (ivtbl 槽表 + ivref 薄指针 + iimpl 实现表):
+    # `x.Vtbl->M(x.obj, …)` 那族 legacy 形是 R4 之前的产物, 保留它们等于把回归钉在旧路上。
+    # 末两针 (j/k) 钉的是「裸读属性 (无括号) 也走视图槽」—— 此前发
+    # `vb6_IK2947_Has((void*)<视图>)` (接口模块函数首形参是**实例**), 运行值恒 0。
     Test-EmitcShape "k2947_set_view_shape" @("$Tests\k2947_setview\K2947.vbp") @(
-        'x.vtbl->Owner_putref(x.obj, (vb6_cls_O2947_New()));',
-        'x.vtbl->Owner_putref(x.obj, NULL);',
-        'x.vtbl->Item_put(x.obj, 3, vb6_BSTR_FromStr(L"a"));',
-        'vb6_BSTR_Assign(&s, x.vtbl->Item(x.obj, 3));',
-        'o = x.vtbl->Owner(x.obj);',
-        'o = _vb6_with_0.vtbl->Owner(_vb6_with_0.obj);',
-        'vb6_iface_IK2947 vb6_ret_MakeI = {0};',
-        'vb6_ret_MakeI = t;',
-        'vb6_iface_IK2947 vb6_ret_OwnView = {0};',
-        'vb6_ret_OwnView = vb6_iface_IK2947_wrap_H2947(me);',
-        'static inline int32_t vb6_iface_IK2947_call_Has(vb6_iface_IK2947 _v)',
-        'vb6_iface_IK2947 __vbvrecv',
-        'vb6_iface_IK2947_call_Has(__vbvrecv',
-        'vb6_iface_IK2947 __vbvread',
-        'vb6_iface_IK2947_call_Has(__vbvread',
-        'vb6_cls_H2947* _vb6_with_',
-        'vb6_H2947_prop_get_OwnView(_vb6_with_',
-        'vb6_iface_IK2947 _vb6_with_',
-        'vb6_iface_IK2947_call_Has(_vb6_with_'
+        'void (__stdcall *putref_owner)(vb6_ivref_IK2947* self, void* o);',
+        'BSTR (__stdcall *get_item)(vb6_ivref_IK2947* self, int32_t i);',
+        'vb6_iimpl_H2947_IK2947_putref_owner,',
+        'vb6_iimpl_H2947_IK2947_get_item',
+        'x->vt->putref_owner(x, (vb6_cls_O2947_New()));',
+        'x->vt->putref_owner(x, NULL);',
+        'x->vt->put_item(x, 3, vb6_BSTR_FromStr(L"a"));',
+        'vb6_BSTR_Assign(&s, x->vt->get_item(x, 3));',
+        'o = _vb6_with_0->vt->get_owner(_vb6_with_0);',
+        'vb6_ivref_IK2947* vb6_ret_OwnView = 0;',
+        'vb6_ret_OwnView = ((me) ? &(me)->__iv_IK2947 : NULL);',
+        'vb6_ivref_IK2947* _vb6_with_1 = vb6_mdl2947_MakeI()',
+        'vb6_ivref_IK2947* _vb6_with_2 = vb6_H2947_prop_get_OwnView(h)',
+        'vb6_ret_ViaMe = __ivrecv',
+        'vb6_ivref_IK2947* __ivrecv',
+        '->vt->has(__ivrecv'
     )
     Test-EmitcAbsent "k2947_set_view_lesion" @("$Tests\k2947_setview\K2947.vbp") @(
         'prop_set_Owner(x,',
@@ -5007,14 +5068,16 @@ if ($Category -in @("all", "run", "bas")) {
         'x.vtbl->Item(x.obj, 3) = ',
         'prop_let_Item(x,',
         'vb6_ComGetObjectProp(x, L"Owner")',
-        'vb6_ret_MakeI = 0;',
-        'vb6_ret_OwnView = 0;',
+        'vb6_iface_IK2947 vb6_ret_MakeI',
+        'vb6_iface_IK2947 vb6_ret_OwnView',
         'vb6_ret_OwnView = me;',
         'vb6_ret_MakeI = (vb6_cls_H2947_New());',
         'vb6_IK2947_Has((void*)vb6_H2947_prop_get_OwnView(h))',
         'vb6_ComGetObjectProp(_vb6_with_',
         '(void*)vb6_mdl2947_MakeI()',
-        'vb6_ComGetStringProp(_vb6_with_'
+        'vb6_ComGetStringProp(_vb6_with_',
+        'vb6_iface_IK2947_call_Has',
+        'x.vtbl->'
     )
     Test-EmitcShape "let_variant_slot_shape" @("$Tests\test_let_variant_slot.bas") @(
         'gv = vb6_VariantString(vb6_BSTR_FromStr(L"abc"));',
@@ -6087,6 +6150,7 @@ if ($Category -in @("all", "run", "bas")) {
         "IC-FOLD-ROP=13369376,8913094,15597702,5588696,66,16711782",
         "IC-FOLD-LOG=1,2,3,4", "IC-FOLD-DFM=0,1,2,3,4", "IC-FOLD-WK=1,1,0",
         "IC-FOLD-MISC=256,-1,-2", "IC-VS-CONST=0", "IC-VS-VAR=0", "IC-VS-DIRECT=0",
+        "IC-CF-FILES=15", "IC-ASYNC-END=6",
         "IC PASS")
     # 发码那一面：名字必须落成字面量（值来自表），隐式变量那一套自救行一条都不许在场。
     Test-EmitcShape "ic_emitc_reads_are_literals" @("$Tests\test_intrinsic_consts.bas") @(
@@ -6096,6 +6160,124 @@ if ($Category -in @("all", "run", "bas")) {
         "#undef vbPicTypeBitmap",
         "vb6_VARIANT vbPicTypeBitmap",
         "vb6_ChkLong(vbPicTypeBitmap)")
+    # 内建常量表补项（PhotoDemon 剩余 VB3001 里的 8 条）：这两枚原先不在表里，Option Explicit
+    # 下每处引用各报一条 VB3001 并落成隐式 Variant（读 0）。修后按表值折成字面量。
+    Add-BasTest "test_builtin_const_ext" "$Tests\test_builtin_const_ext.bas" @(
+        "BCE-CF=15", "BCE-ASYNC=6", "BCE PASS")
+    Test-EmitcShape "bce_emitc_reads_are_literals" @("$Tests\test_builtin_const_ext.bas") @(
+        "f = 15;", "s = 6;")
+    # Randomize 语句 + Rnd 序列（PhotoDemon pdPaletteChild.cls: `Randomize -1`）。
+    # 修前：`-` 被绑成中缀减法 ⇒ 假 VB3001 + `(vb6_Randomize - 1)`；`Rnd(x)` 发出
+    # `vb6_Rnd(1, x)`（C2064）；`Randomize v`（Variant）把结构体塞进 double（C2440）；
+    # 更糟的是 RTL 的播种规则与 VB6 不符（取整截断 vs 折半 XOR、Randomize 0 当 Timer）。
+    # 下面每一行都是真 VB6 6.00.9782 同一段代码打出的 24-bit state 序列（oracle）：
+    #   Hex$(CLng(Rnd() * 2^24)) —— 逐值对齐，不是"能编译"。
+    Add-BasTest "test_randomize_stmt" "$Tests\test_randomize_stmt.bas" @(
+        "BASELINE= B49EC3 888E7A 945B55 4A20C4 4D4C77 C6555E",
+        "RZ-0= C295A9 41C1C8 1F796B 649E82 2A4B3D 89F10C",
+        "RZ-1= A2FE9F 9FDEE6 671A11 47D490 B26113 3C878A",
+        "RZ-2= 8A4525 13A354 EF04C7 E66C6E 939179 420E58",
+        "RZ-5= 62C1BB E00592 E8560D BF109C 1BDCEF 5283F6",
+        "RZ-42= B624E1 C9F420 DE4263 A2239A 841BF5 C55EE4",
+        "RZ-100= 372117 A3577E 9D1049 64D1E8 9EC90B 2D2FA2",
+        "RZ-42.5= 5BD5DD E7D12C 17DB3F FBC906 23DBB1 A00FB0",
+        "RZ-42.25= 158DB3 D81AA E41C5 C22D74 33E667 26478E",
+        "RZ-0.5= FFB519 942378 B145B F98DB2 643DAD F1D9BC",
+        "RZ-NEG1= 41BC8F 676516 254781 CF0C40 D77A03 9CFCBA",
+        "RZ-NEG2= 870495 A72504 973FB7 C57B9E 6F23E9 451708",
+        "RZ-NEG1.5= 4DD6AB DE86C2 AD927D 2D1B4C 987CDF 886426",
+        "RZ-VAR42= EEE751 756CD0 DA9853 B0E1CA 4CA165 8D8E94",
+        "RZ-2P24= 2A9D07 E4A3AE 85EBB9 A3FF98 F3FFFB F54AD2",
+        "RZ-2P24P1= 81144D BDD5DC C48D2F 697336 7F9D21 9E8B60",
+        "RZ-VAR-SGL= 104EA3 8CFEDA 408A35 191424 65F257 EBE3BE",
+        "RZ-VAR-DBL= EF4589 D33228 24A84B 2891E2 63F11D 4C7F6C",
+        "RZ-VAR-INT= 4BF97F A86E46 42EBF1 D3DEF0 AFC1F3 5FE4EA",
+        "RZ-VAR-LNG= D6F505 4513B4 1433A7 4A5FCE ED3759 A49CB8",
+        "RZ-VAR-VAR= 58139B 1F8FF2 CB36ED 31EDFC 70C4CF 4B4C56",
+        "RND-NEG1= 92D31 161B30 2A0D33 2E032A 92BD45 82BAF4",
+        "RND-NEG1-AGAIN= 92D31 161B30 2A0D33 2E032A 92BD45 82BAF4",
+        "RND-0=82BAF4",
+        "RND-POS=83DE7",
+        "RND-BARE=67410E",
+        "RZ-5-A= 2D1A99 81F2F8 DFA5DB A1D932 F95B2D 88813C",
+        "RZ-5-B= AF520F 54A496 BB8901 F247C0 BBC783 6143A",
+        "RZ-BARE-RANGE=True", "RZ PASS")
+    Test-EmitcShape "rz_emitc_forms" @("$Tests\test_randomize_stmt.bas") @(
+        "vb6_Randomize(5);", "vb6_Randomize((-1));", "vb6_RandomizeTimer();",
+        "vb6_Rnd(0)", "vb6_Rnd((-1))")
+    Test-EmitcAbsent "rz_emitc_no_binary_sub" @("$Tests\test_randomize_stmt.bas") @(
+        "(vb6_Randomize - 1)", "vb6_Rnd(1, ", "vb6_Randomize(0.0)")
+    # VBA.Math（VB6 自带 VBA 类型库里的真实模块，不是 tB 专有；PhotoDemon 剩余 VB3001
+    # 的 18 条就是 Math.Log/Abs/Cos/Sin/Sqr/Round 的限定写法）。成员折叠到同一批内建函数。
+    Add-BasTest "test_vbamath" "$Tests\test_vbamath.bas" @(
+        "VM-LOG=0", "VM-ABS=4.5", "VM-COS=1", "VM-SIN=0", "VM-SQR=3", "VM-ROUND=3", "VM PASS")
+    Test-EmitcShape "vbamath_emitc_folds_to_builtins" @("$Tests\test_vbamath.bas") @(
+        "vb6_Log(1.0)", "vb6_Abs((-4.5))", "vb6_Cos(0.0)", "vb6_Sqr(9.0)")
+    Test-EmitcAbsent "vbamath_no_module_symbol" @("$Tests\test_vbamath.bas") @("vb6_Math_")
+    # 负控: 值位的裸 `Math` 不是合法名字，必须照旧报 VB3001（只放限定符位）。
+    Test-CodegenNote "vbamath_bare_is_undeclared" @("$Tests\test_vbamath_bad.bas") @(
+        "未声明的标识符: 'Math'")
+    # 收紧①（PhotoDemon Math 定案 §10.4）: Fix/Int 是全局内建函数，不是 VBA.Math 的成员。
+    # 真 VB6 在这里是**编译期**「未找到方法或数据成员」。判据钉阶段 + 错误码 + 不发码：
+    #   ① --syntax-only 就报 VB3045（退码非 0）—— 证明诊断落在语义阶段，不是发码期；
+    #   ② --emit-c 同样报 VB3045（错误级），两处成员各一条；
+    #   ③ --emit-c 的输出里不得出现修前的坏形状 vb6_vb6_Fix / vb6_vb6_Int（否则就是发了 C
+    #      再去链接期 LNK2019 收场）。
+    Test-SyntaxFail "vbamath_fixint_semantic_stage" "$Tests\test_vbamath_members_bad.bas" "VB3045"
+    Test-CompileFail "vbamath_fixint_not_found" @("$Tests\test_vbamath_members_bad.bas") @(
+        "VB3045", "未找到方法或数据成员: 'Math.Fix'", "未找到方法或数据成员: 'Math.Int'") @(
+        "vb6_vb6_Fix", "vb6_vb6_Int")
+    # 收紧②（同一定案）: 标准模块不能当类型用。真 VB6 对 `Dim m As VBA.Math` / `Dim m As Math`
+    # 报「Visual Basic 中不支持自动化类型」，修前 C3 静默当 Variant 编过。
+    # 正向对照（test_vbamath.bas）: `Dim x As Form` 与 `Dim e As VBA.ErrObject` 必须照旧通过
+    # —— 判据是"标准模块"，不是整个 VBA.* 前缀。
+    Test-SyntaxFail "vbamath_typeuse_semantic_stage" "$Tests\test_vbamath_typeuse_bad.bas" "VB3046"
+    Test-CompileFail "vbamath_typeuse_module_as_type" @("$Tests\test_vbamath_typeuse_bad.bas") @(
+        "VB3046", "Visual Basic 中不支持自动化类型: 'VBA.Math'",
+        "Visual Basic 中不支持自动化类型: 'Math'") @()
+    # 账 #478: `VBA.Int` / `VBA.Fix` 是内建函数的限定写法, 必须发**裸 RTL 名**。
+    # 修前 `VBA.Int` 发 `vb6_vb6_Int` (Int 是 C 关键字, cIdent 先转 vb6_Int, 发码点又拼
+    # 一次 vb6_) ⇒ LNK2019; `VBA.Fix` 只是恰好因为 "Fix" 非关键字才名对。
+    # 取值是真 VB6 6.00.9782 探针读数 (.temp/vbaint/vb6_readings.txt):
+    #   Int(1.7)=1 Int(-1.7)=-2 | Fix(1.7)=1 Fix(-1.7)=-1
+    # 正数方向 Int 与 Fix **相同**, 分界只在负数 —— 断言必须落负例。
+    Add-BasTest "test_vbaint_qual" "$Tests\test_vbaint_qual.bas" @(
+        "VI-POS=1", "VI-NEG=-2", "VF-POS=1", "VF-NEG=-1",
+        "BI-NEG=-2", "BF-NEG=-1", "VA-ABS=3", "VA-PASS")
+    Test-EmitcShape "vbaint_emitc_rtl_names" @("$Tests\test_vbaint_qual.bas") @(
+        "vb6_Int(1.7)", "vb6_Int((-1.7))", "vb6_Fix((-1.7))")
+    Test-EmitcAbsent "vbaint_no_double_prefix" @("$Tests\test_vbaint_qual.bas") @(
+        "vb6_vb6_Int", "vb6_vb6_Fix")
+    # 过程级作用域：Do 体里的 Dim/Const 可以在 `Loop While` 条件里用（VB6 的 Dim/Const
+    # 是整个过程级的）。修前语义层先分析条件再分析体 ⇒ 假 VB3001。PhotoDemon
+    # pdXCF.cls / UserControl_Support.bas 的 4 条都是这一形。
+    Add-BasTest "test_procscope_loopdim" "$Tests\test_procscope_loopdim.bas" @(
+        "PS-LOOP=3,6,6")
+    Test-EmitcAbsent "procscope_loopdim_no_vb3001" @("$Tests\test_procscope_loopdim.bas") @(
+        "VB3001", "未声明的标识符")
+    # 上一格只钉了「回边条件可以引用体内声明」。反过来那半边同样要钉死：VB6 是单遍文本序，
+    # `Do While <条件>` 是**前置**条件（文本上先于体），条件里引用体内声明真 VB6 报
+    # 「变量未定义」。`d680b4d2` 当时是无条件换序 ⇒ 这一形被一起放宽（调查里的 D1）。
+    # 现在按 loopKind 分流：只有 DoLoopWhile/DoLoopUntil 先体后条件。
+    # 只钉"有没有报"，warning/error 的等级差异不在判据内。
+    Test-CodegenNote "procscope_dowhile_cond_bad" @("$Tests\test_procscope_dowhile_bad.bas") @(
+        "VB3001", "'stopFlag'")
+    # 同一条文本序的另外两处：While ... Wend 与 If ... Then 的条件都在体之前。
+    Test-CodegenNote "procscope_condref_bad" @("$Tests\test_procscope_condref_bad.bas") @(
+        "VB3001", "'LIMIT_WEND'", "'ON_VAL_IF'", "'DONE_FLAG'")
+    # 注释行以「空白 + _」结尾时延续到下一物理行（PhotoDemon 的 `'Public Declare ... ( _`
+    # 紧跟 `ByVal x As Long) As Long` 就是这一形）。修前那第二行会被当成代码 ⇒ VB2002。
+    Add-BasTest "test_comment_continuation" "$Tests\test_comment_continuation.bas" @("CC=1")
+    # `Option Compare Binary`：词法把 "binary" 统一归 TokenKind::Binary，parseOption 修前只认
+    # Binary2 ⇒ VB2001。真 VB6 在 Binary 下 "abc" = "ABC" 为 False，读数同钉。
+    Add-BasTest "test_opt_compare_binary" "$Tests\test_opt_compare_binary.bas" @("OCB=False,3")
+    # 定长字符串常量（PhotoDemon PublicConstants.bas:28）：长度表达式必须停在算术级，
+    # 否则 `3 = "pdm"` 被当相等比较吃掉 ⇒ VB2001 expected '=' in Const declaration。
+    Add-BasTest "test_fixed_string_const" "$Tests\test_fixed_string_const.bas" @("FSC=3,pdm")
+    # ReDim 的两种形态：多数组 (`ReDim a(...), b(...)`) 与无括号成员链
+    # (`ReDim m.lMask.cProps(0 To 3)`，pdXCF.cls 1028 行的真实形态)。修前后者
+    # 在 `.lMask` 处断 ⇒ VB2003，导致整个 pdXCF.cls 不可解析。
+    Add-BasTest "test_redim_shapes" "$Tests\test_redim_shapes.bas" @("RS=7,9,42")
     Add-BasTest "test_bstr_concat_scalar" "$Tests\test_bstr_concat_scalar.bas" @("BCS:16/16")
     # 账 #115: Len() 的"存储宽度"兜底桶把模块级 String 也吞了 (knownBstrVars_ 每过程入口 clear,
     # 只有局部声明/形参进表) => `Len(gS)` 发成 sizeof(gS): x64 读 8、x86 读 4。两条架构各真跑一次,
@@ -8965,18 +9147,23 @@ if ($Category -in @("all", "run", "vbp")) {
         "Inner.Row(2)",
         "_vb6_with_0->Coord(2)",
         "b.Items(2)")
-    # <vbeclipse> 回归夹子 (k172_viewarg, 账 #305 第一百七十二刀): legacy 接口的**视图**
-    # (vb6_iface_<I> = 值结构体 {vtbl; obj}) 站在**被接收**那一头的三站, 三站各问一位在册主人,
-    # 没长第二种答案 —— 站B 实例递进视图形参问 legacyIfaceWrapFn (第一百六十六刀);
-    # 站C 视图参与 Is 问 slotIsLegacyIfaceView (第一百六十五刀), 同一性就是 .obj 那一格;
-    # 站E 视图递进 ByRef Variant 形参问 legacyViewBoxExpr (第一百七十一刀, 身份按指针查)。
+    # <vbeclipse> 回归夹子 (k172_viewarg, 账 #305 第一百七十二刀): 接口的**视图**站在
+    # **被接收**那一头的三站, 三站各问一位在册主人, 没长第二种答案。
+    # 形状在 R4 (fdbd29e5) 前后是**两种, 都是预期内的**:
+    #   R4 前 IK172 被 A2 的 `VB_Creatable` 闸挡在接口表外 ⇒ legacy 视图 (值结构体
+    #     vb6_iface_IK172 {vtbl;obj}): 站B 问 legacyIfaceWrapFn、站C 比 `.obj`、
+    #     站E 问 legacyViewBoxExpr (`(void*)(v).obj`);
+    #   R4 起 IK172 进 ivreg_ ⇒ 新式 tB 视图 (薄指针 vb6_ivref_IK172*): 站B 交
+    #     `&me->__iv_IK172`、站C 直接比指针、站E 问 ivrefViewBoxExpr (`(void*)(v)`)。
+    # R4 之后这一投影还补了一刀: 归一后的接口形参同时登 knownIvrefVars_ (站B 的目标调用
+    # 才发 `->vt->`), 否则 cl C2039 (`target.vtbl` 不是薄指针的成员)。
     # BASE(= 第一百七十三刀收线那台) 编这份夹具 = 4 发 C2088 + 2 发 C2440、**没有 exe**
     # (.build/k2392_base_err.txt)；而站E 那一形在 BASE 上是**静默**的: 发的是
-    # `vb6_mdlK172_BoxValue(&v)`, 把 16 字节的视图描述符当 24 字节的 vb6_VARIANT 读 (越界读),
+    # `vb6_mdlK172_BoxValue(&v)`, 把视图描述符当 vb6_VARIANT 读 (越界读),
     # C 侧只是不兼容指针警告 ⇒ 只有门上的针看得见。两台读数一字相同 (.build/k2390_k172_run.txt)。
     #   K172-pushA=101 / pushB=202   同一枚形参收两枚不同实现类的 Me ⇒ 各拿自己那份 vtbl;
-    #   K172-view2view=101           视图→视图形参 = 值结构体直传, 不许再套一层 wrap (反面证人);
-    #   K172-is-diff=0 / is-same=1   比的是 .obj: 不同实例 False、同一实例 True;
+    #   K172-view2view=101           视图→视图形参 = 视图值直传, 不许再包一层 wrap (反面证人);
+    #   K172-is-diff=0 / is-same=1   同一性: 不同实例 False、同一实例 True (legacy 比 .obj, 新式比薄指针);
     #   K172-nothing=1 / after=0     Is Nothing 认未赋值那一格, 接管值后翻面;
     #   K172-boxtype=0               ⚠ 这一条是**已知欠项的读数**, 不是 VB6 那一面的正确答案:
     #                                Exe 工程里工程类登记表恒空 (登记腿被 isDll_ 夹着, 账 #407 的
@@ -8995,19 +9182,19 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k172_view_arg_wrap' "$Tests\k172_viewarg\K172.vbp" $k172Expected
     Test-Vbp 'k172_view_arg_wrap_x86' "$Tests\k172_viewarg\K172.vbp" $k172Expected -Arch "x86"
     Test-EmitcShape "k172_view_arg_shape" @("$Tests\k172_viewarg\K172.vbp") @(
-        "vb6_ret_PushInto = vb6_mdlK172_ViewValue(vb6_iface_IK172_wrap_K172Alpha(me));",
-        "vb6_ret_PushInto = vb6_mdlK172_ViewValue(vb6_iface_IK172_wrap_K172Beta(me));",
-        "if (((v).obj == (w).obj)) {",
-        "if (((v).obj == (u).obj)) {",
-        "if (((nVar).obj == NULL)) {",
-        "vb6_VARIANT _vb6_vararg_0 = vb6_VariantFromProjectInstance((void*)(v).obj);",
+        "vb6_ret_PushInto = vb6_mdlK172_ViewValue((vb6_ivref_IK172*)&((me)->__iv_IK172));",
+        "if ((-(v == w))) {",
+        "if ((-(v == u))) {",
+        "if ((-(nVar == NULL))) {",
+        "vb6_VARIANT _vb6_vararg_0 = vb6_VariantFromProjectInstance((void*)(v));",
         "vb6_VariantClear(&_vb6_vararg_0);")
     Test-EmitcAbsent "k172_view_arg_bare_shapes_gone" @("$Tests\k172_viewarg\K172.vbp") @(
         "vb6_mdlK172_ViewValue(me);",
         "vb6_mdlK172_BoxValue(&v);",
-        "(v == w)",
-        "(v == u)",
-        "(nVar == NULL)")
+        "(v).obj",
+        "(w).obj",
+        "(nVar).obj",
+        "vb6_iface_IK172")
     # <vbeclipse> 回归夹子 (k174_vieweach, 账 #305 第一百七十四刀 = 新账 #471 站A): For Each 的循环变量是一枚
     # legacy 接口的**视图** (值结构体 vb6_iface_<I>) —— 上一刀之前这一站发的是 `o = vb6_VariantFromStackVARIANT(&_fe_var_N)`
     # (把元素按泛对象槽存) ⇒ cl C2440, 语料 Ray.vbp 里 14 站全撞这一发。修法不新立答案: 集合交回来的元素是本族
@@ -9029,12 +9216,13 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k174_vieweach_station_a' "$Tests\k174_vieweach\K174.vbp" $k174Expected
     Test-Vbp 'k174_vieweach_station_a_x86' "$Tests\k174_vieweach\K174.vbp" $k174Expected -Arch "x86"
     Test-EmitcShape "k174_vieweach_shape" @("$Tests\k174_vieweach\K174.vbp") @(
-        'vb6_iface_IK174 vb6_iface_IK174_view_from(void* instance, const char* className);',
-        'if (_stricmp(className, "K174Alpha") == 0) return vb6_iface_IK174_wrap_K174Alpha((vb6_cls_K174Alpha*)instance);',
-        'if (_stricmp(className, "K174Beta") == 0) return vb6_iface_IK174_wrap_K174Beta((vb6_cls_K174Beta*)instance);',
+        'vb6_ivref_IK174* vb6_ivref_IK174_from_class(void* instance, const char* className);',
+        'if (_stricmp(className, "K174Alpha") == 0) return (vb6_ivref_IK174*)vb6_iv_thin_of_K174Alpha(instance);',
+        'if (_stricmp(className, "K174Beta") == 0) return (vb6_ivref_IK174*)vb6_iv_thin_of_K174Beta(instance);',
         'void* _vb6_fe_box_0 = vb6_ComUnpackObject(&_fe_var_0);',
         'const char* _vb6_fe_name_0 = vb6_ComObject_ClassNameA(_vb6_fe_box_0);',
-        'o = vb6_iface_IK174_view_from(_vb6_fe_name_0 ? vb6_ComObject_GetInstance(_vb6_fe_box_0) : (void*)0, _vb6_fe_name_0);')
+        'o = vb6_ivref_IK174_from_class(_vb6_fe_name_0 ? vb6_ComObject_GetInstance(_vb6_fe_box_0) : (void*)0, _vb6_fe_name_0);',
+        'if (o) o->vt->AddRef(o);')
     Test-EmitcAbsent "k174_vieweach_variant_store_gone" @("$Tests\k174_vieweach\K174.vbp") @(
         'o = vb6_VariantFromStackVARIANT(&_fe_var_0);',
         'vb6_VariantClear(&o);')
@@ -9067,18 +9255,16 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k175_viewstmt_station_d' "$Tests\k175_viewstmt\K175.vbp" $k175Expected
     Test-Vbp 'k175_viewstmt_station_d_x86' "$Tests\k175_viewstmt\K175.vbp" $k175Expected -Arch "x86"
     Test-EmitcShape "k175_viewstmt_shape" @("$Tests\k175_viewstmt\K175.vbp") @(
-        'x.vtbl->Ping(x.obj);',
-        't = x.vtbl->Twice(x.obj, 5);',
-        'me->m_lv = vb6_iface_IK175_wrap_K175Alpha((vb6_cls_K175Alpha_New()));  /* Set */',
-        'vb6_ret_NumViaField = me->m_lv.vtbl->Num(me->m_lv.obj);',
-        'memset(&me->m_lv, 0, sizeof(me->m_lv));',
-        'memset(&me->m_lv, 0, sizeof(me->m_lv));  /* Set Nothing (接口视图空形) */')
+        'x->vt->ping(x);',
+        't = x->vt->twice(x, 5);',
+        'me->m_lv = &((vb6_cls_K175Alpha_New()))->__iv_IK175;',
+        'vb6_ret_NumViaField = me->m_lv->vt->get_num(me->m_lv);',
+        'me->m_lv = NULL;')
     Test-EmitcAbsent "k175_viewstmt_com_fallback_gone" @("$Tests\k175_viewstmt\K175.vbp") @(
         'vb6_ComCall(x, L"Ping", NULL, 0)',
         'vb6_ComVarFree((void*)vb6_ComCall(x',
         'me->m_lv = (vb6_cls_K175Alpha_New());  /* Set */',
         'vb6_ComGetIntProp(me->m_lv, L"Num")',
-        'me->m_lv = NULL;',
         'vb6_ReleaseObject((void**)&me->m_lv)')
     # <vbeclipse> 回归夹子 (k177_viewwith, 账 #305 第一百七十七刀 = 新账 #471 站D′): With 的**接收者**是一枚视图。
     # 改前那一格发 "void* _vb6_with_0 = (void*)x" —— 整枚值结构体 vb6_iface_<I> 进 void* 槽 = cl **C2440**，
@@ -9100,10 +9286,10 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k177_viewwith_station_d_prime' "$Tests\k177_viewwith\K177.vbp" $k177Expected
     Test-Vbp 'k177_viewwith_station_d_prime_x86' "$Tests\k177_viewwith\K177.vbp" $k177Expected -Arch "x86"
     Test-EmitcShape "k177_viewwith_shape" @("$Tests\k177_viewwith\K177.vbp") @(
-        'vb6_iface_IK177 _vb6_with_0 = x',
-        '_vb6_with_0.vtbl->Ping(_vb6_with_0.obj);',
-        't1 = vb6_ChkLong(_vb6_with_0.vtbl->Twice(_vb6_with_0.obj, 3));',
-        '_vb6_with_1.vtbl->Ping(_vb6_with_1.obj);')
+        'vb6_ivref_IK177* _vb6_with_0 = x',
+        '_vb6_with_0->vt->ping(_vb6_with_0);',
+        't1 = vb6_ChkLong(_vb6_with_0->vt->twice(_vb6_with_0, 3));',
+        '_vb6_with_1->vt->ping(_vb6_with_1);')
     Test-EmitcAbsent "k177_viewwith_void_temp_gone" @("$Tests\k177_viewwith\K177.vbp") @(
         'void* _vb6_with_0 = (void*)x',
         'vb6_ComCall(_vb6_with_0, L"Ping", NULL, 0)')
@@ -9263,16 +9449,16 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k178_viewprop_station_f_read' "$Tests\k178_viewprop\K178.vbp" $k178Expected
     Test-Vbp 'k178_viewprop_station_f_read_x86' "$Tests\k178_viewprop\K178.vbp" $k178Expected -Arch "x86"
     Test-EmitcShape "k178_viewprop_shape" @("$Tests\k178_viewprop\K178.vbp") @(
-        '.Label = (BSTR (*)(void*))vb6_K178Alpha_prop_get_IK178_Label,',
-        '.Label_put = (void (*)(void*, BSTR v))vb6_K178Alpha_prop_let_IK178_Label,',
-        '.Label = (BSTR (*)(void*))vb6_K178Beta_prop_get_IK178_Label,',
-        '.Label_put = (void (*)(void*, BSTR v))vb6_K178Beta_prop_let_IK178_Label,',
-        'vb6_BSTR_Assign(&s, x.vtbl->Label(x.obj));',
-        'n = x.vtbl->Num(x.obj);',
-        'wchar_t* _dbg_com_bstr = x.vtbl->Label(x.obj);',
-        'vb6_BSTR_Assign(&s, _vb6_with_0.vtbl->Label(_vb6_with_0.obj));',
-        'n = _vb6_with_0.vtbl->Num(_vb6_with_0.obj);',
-        'w = x.vtbl->Twice(x.obj, 4);')
+        'vb6_iimpl_K178Alpha_IK178_get_label,',
+        'vb6_iimpl_K178Alpha_IK178_put_label,',
+        'vb6_iimpl_K178Beta_IK178_get_label,',
+        'vb6_iimpl_K178Beta_IK178_put_label,',
+        'vb6_BSTR_Assign(&s, x->vt->get_label(x));',
+        'n = x->vt->get_num(x);',
+        'wchar_t* _dbg_com_bstr = x->vt->get_label(x);',
+        'vb6_BSTR_Assign(&s, _vb6_with_0->vt->get_label(_vb6_with_0));',
+        'n = _vb6_with_0->vt->get_num(_vb6_with_0);',
+        'w = x->vt->twice(x, 4);')
     # 四条负针抄自**改前那台的真实产物** (同一批语句, 探针 `.local/k2690_sd3` = `.build/k2691_emit.txt` 与
     # Let-first 探针 `.build/k2739_emit2.txt`, 变量名与成员名与本夹具一字相同): 这一族从此不再走 helper,
     # 而 Get 的函数也从此不再被硬套进 setter 的形状那一格 (新账 #489 的那枚静默错绑)。
@@ -9308,23 +9494,28 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'k489_slot_dir_let_first' "$Tests\k489_slot_dir\K489.vbp" $k489Expected
     Test-Vbp 'k489_slot_dir_let_first_x86' "$Tests\k489_slot_dir\K489.vbp" $k489Expected -Arch "x86"
     Test-EmitcShape "k489_slot_dir_shape" @("$Tests\k489_slot_dir\K489.vbp") @(
-        'void (*Label_put)(void* me, BSTR v);',
-        'BSTR (*Label)(void* me);',
-        '.Label_put = (void (*)(void*, BSTR v))vb6_K489Holder_prop_let_IK489_Label,',
-        '.Label = (BSTR (*)(void*))vb6_K489Holder_prop_get_IK489_Label,',
-        'vb6_BSTR_Assign(&s, x.vtbl->Label(x.obj));',
-        'n = x.vtbl->Num(x.obj);',
-        'x.vtbl->Label_put(x.obj, vb6_BSTR_FromStr(L"abc"));',
-        'x.vtbl->Label_put(x.obj, vb6_BSTR_FromStr(L"zzz"));',
-        '_vb6_with_0.vtbl->Label_put(_vb6_with_0.obj, vb6_BSTR_FromStr(L"www"));')
+        'void (__stdcall *put_label)(vb6_ivref_IK489* self, BSTR v);',
+        'BSTR (__stdcall *get_label)(vb6_ivref_IK489* self);',
+        'vb6_iimpl_K489Holder_IK489_put_label,',
+        'vb6_iimpl_K489Holder_IK489_get_label,',
+        'vb6_BSTR_Assign(&s, x->vt->get_label(x));',
+        'n = x->vt->get_num(x);',
+        'x->vt->put_label(x, vb6_BSTR_FromStr(L"abc"));',
+        'x->vt->put_label(x, vb6_BSTR_FromStr(L"zzz"));',
+        '_vb6_with_0->vt->put_label(_vb6_with_0, vb6_BSTR_FromStr(L"www"));')
     # 三条负针逐字节抄自**改前那台的真实产物**: 前两条 = Let-first 探针 .build/k2739_emit2.txt
     # (表里那一席裸名 + 属性读落回 helper); 第三条 = 写侧改前那台的真产物 .build/k2778_emit.txt
     # (站点按「接收者的类名」现场拼出口, 把整枚视图交给接口模块自己的 `vb6_cls_IK489*` 形参)。
+    # 第四条 = R4 让 IK489 走 canonical 之后、写侧还没接上那一刀的真产物 (mdlK489.c:21/22,
+    # `x.Label = v` 落 Module.var 回退 ⇒ cl C2065)。legacy 的 `.vtbl` 形状也一并钉住: R4 之后
+    # 同一枚接口变量是薄指针, 谁把 `.vtbl->Label_put(...obj...)` 写回来就是退了档。
     Test-EmitcAbsent "k489_slot_dir_bare_slot_gone" @("$Tests\k489_slot_dir\K489.vbp") @(
         'void (*Label)(void* me, BSTR v);',
         'vb6_BSTR_Assign(&s, vb6_ComGetStringProp(x, L"Label"));',
         'vb6_IK489_prop_let_Label(x, vb6_BSTR_FromStr(L"abc"));  /* Property Let */',
-        'vb6_ComSetProp(_vb6_with_0, L"Label", vb6_ComPackBSTR(vb6_BSTR_FromStr(L"www")));  /* With COM SetProp */')
+        'vb6_ComSetProp(_vb6_with_0, L"Label", vb6_ComPackBSTR(vb6_BSTR_FromStr(L"www")));  /* With COM SetProp */',
+        'vb6_x_Label = vb6_BSTR_FromStr(L"abc");  /* Module.Label */',
+        'x.vtbl->Label_put(x.obj, vb6_BSTR_FromStr(L"abc"));')
     # <vbeclipse> 回归夹子 (b174_numstrarg, 账 #305 §B174 第六十五刀): 数值实参交进内在函数的
     # BSTR 形参。修前 InStr 那一路把 int32_t / double / int16_t 裸交给 wchar_t* —— cl 只给 C4047
     # (在 -W3 之外) ⇒ **编得过**, 而 BASE 那一台在别处 (Mid$(1.1,...) 那类) 拿的是 C2440, 本机
@@ -9370,7 +9561,10 @@ if ($Category -in @("all", "run", "vbp")) {
     # projectClassNameOf 短路放在符号真值之前, 把这路劫成裸 `vb6_cls_IFoo*` ⇒ 与 Set 侧
     # `vb6_iface_IFoo_wrap(...)` 对不上 → C2440 整工程编译红。`Set f = v` (Variant 往返)
     # 是 BalloonTooltips mdlSubclass.SubclassWnd 的原形态, Bar() 走接口 vtable 钉住运行期。
-    $ifaceWrapExpected = @("IFACE-CALL-OK", "IFACE-DONE")
+    # 负控三针 (真 VB6 探针 .temp/vb6probe_neg): 未实现类 / 外部对象 = 运行期 13,
+    # 且失败后接口变量保持原值 (`IFACE-NEG-KEEP=7` 是前面 Set f = v 装进去的那枚 Impl)。
+    $ifaceWrapExpected = @("IFACE-CALL-OK", "IFACE-NEG-KIND=13", "IFACE-NEG-EXT=13",
+                           "IFACE-NEG-KEEP=7", "IFACE-DONE")
     Test-Vbp "iface_wrap" "$Tests\iface_wrap\IfaceWrap.vbp" $ifaceWrapExpected
     Test-Vbp "iface_wrap_x86" "$Tests\iface_wrap\IfaceWrap.vbp" $ifaceWrapExpected -Arch "x86"
     # <vbeclipse> 回归夹子 (iface_multi) = 新账 #464 / 第一百六十六刀: 一枚 legacy 接口被**两枚**类
@@ -9386,25 +9580,30 @@ if ($Category -in @("all", "run", "vbp")) {
     # 两台实测都答 Empty: Exe 工程连工程类登记都不发 (§B187 第二格那条按工程类型分档的口径),
     # 所以按指针问身份那一张表是空的 ⇒ 本刀只保证「发码编得过 + 不冒充对象」;
     # 行为面 (VB6 答实现类名) 欠的是一枚 per-interface 的静态身份 resolver, 已另记在册。
+    # 真 VB6 对「只实现 2/3 成员」直接拒 (`类模块需要实现 'Three' 为接口 'IMul'`) —— 本夹具
+    # 从前被当成**合法**跑: C3 也已按真值拒 (VB3012), 于是它一直是 4 个 vbp 分片里的红。
+    # 现在把判据改对: tests\iface_multi = **负控** (必须 VB3012 + 无 exe);
+    # tests\iface_multi_full = 完整 3/3 的**正向**夹具 (k166 的槽序/单表/wrap 读数都搬去那边)。
+    Test-CompileFails "iface_multi_incomplete_negcontrol" "$Tests\iface_multi\IfaceMulti.vbp" "VB3012"
     $ifaceMultiExpected = @("A-ONE=11", "A-TWO=12", "A-THREE=13", "B-ONE=21", "B-TWO=22",
-                            "B-THREE-ERR=438", "A-TNAME=Empty", "B-TNAME=Empty", "MULTI-DONE")
-    Test-Vbp "iface_multi" "$Tests\iface_multi\IfaceMulti.vbp" $ifaceMultiExpected
-    Test-Vbp "iface_multi_x86" "$Tests\iface_multi\IfaceMulti.vbp" $ifaceMultiExpected -Arch "x86"
-    Test-EmitcShape "k166_emitc_shape" @("$Tests\iface_multi\IfaceMulti.vbp") @(
-        "#ifndef VB6_IFACE_IMUL_TBL",
-        "    int32_t (*One)(void* me);",
-        "    int32_t (*Three)(void* me);",
-        "static vb6_vtbl_IMul vb6_vtbl_IMul_for_Alpha = {",
-        "    .One = (int32_t (*)(void*))vb6_Alpha_IMul_One,",
-        "static vb6_vtbl_IMul vb6_vtbl_IMul_for_Beta = {",
-        "static int32_t vb6_iface_IMul_unimpl_Three_Beta(void* me) {",
-        "    vb6_RaiseError(438, NULL);",
-        "    .Three = (int32_t (*)(void*))vb6_iface_IMul_unimpl_Three_Beta",
-        "vb6_iface_IMul vb6_iface_IMul_wrap_Alpha(vb6_cls_Alpha* obj);",
-        "vb6_iface_IMul vb6_iface_IMul_wrap_Beta(vb6_cls_Beta* obj);")
+                            "B-THREE=23", "A-TNAME=Object", "B-TNAME=Object", "MULTI-DONE")
+    Test-Vbp "iface_multi_full" "$Tests\iface_multi_full\IfaceMulti.vbp" $ifaceMultiExpected
+    Test-Vbp "iface_multi_full_x86" "$Tests\iface_multi_full\IfaceMulti.vbp" $ifaceMultiExpected -Arch "x86"
+    # k166 两条 oracle 已按当前发码面改写: IMul 现在走 **tB 薄视图** (vb6_ivtbl_IMul /
+    # vb6_ivref_IMul / _from_class), 不再是 legacy `vb6_iface_IMul` 胖对。旧针保留的语义
+    # 只剩「槽序归接口」(Alpha 倒序声明)、「每实现类一张表」、「工程级唯一 from_class」。
+    Test-EmitcShape "k166_emitc_shape" @("$Tests\iface_multi_full\IfaceMulti.vbp") @(
+        "#ifndef VB6_IVTBL_IMUL",
+        "    int32_t (__stdcall *one)(vb6_ivref_IMul* self);",
+        "    int32_t (__stdcall *three)(vb6_ivref_IMul* self);",
+        "static const vb6_ivtbl_IMul vb6_ivtbl_IMul_for_Alpha = {",
+        "static const vb6_ivtbl_IMul vb6_ivtbl_IMul_for_Beta = {",
+        "vb6_ivref_IMul* vb6_ivref_IMul_from_class(void* instance, const char* className);",
+        "if (_stricmp(className, `"Alpha`") == 0) return (vb6_ivref_IMul*)vb6_iv_thin_of_Alpha(instance);",
+        "if (_stricmp(className, `"Beta`") == 0) return (vb6_ivref_IMul*)vb6_iv_thin_of_Beta(instance);")
     # 反面针: 旧形状三发都必须绝迹 —— 表类型不再由实现类发 (那句注释 / 带类名的 me 槽)、
-    # wrap 不再发无实现者后缀的那一份。
-    Test-EmitcAbsent "k166_emitc_absent_old_shape" @("$Tests\iface_multi\IfaceMulti.vbp") @(
+    # legacy wrap 不再发无实现者后缀的那一份。
+    Test-EmitcAbsent "k166_emitc_absent_old_shape" @("$Tests\iface_multi_full\IfaceMulti.vbp") @(
         "// Interface vtable: IMul",
         "(*Three)(vb6_cls_",
         "vb6_iface_IMul_wrap(")
@@ -9494,6 +9693,39 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcAbsent "so_emitc_default_prop_in_set" @("$Tests\setobj\SetObj.vbp") @(
         'o = vb6_GetControlText(vb6_hwnd_Text1)  /* default prop: .Text */;  /* Set */',
         'v = vb6_VariantFromValue(vb6_GetCheckValue(vb6_hwnd_Check1)  /* default prop: .Value */);  /* Set */')
+
+    # PD-Parent 语义刀: `Parent` 的三层语义, 全部由真 VB6 6.00.9782 探针钉死
+    # (oracle 工程 = .build/oracle/parent, 与 tests/pd_parentsem 同形):
+    #   ① 普通控件/容器控件/UC Extender 的 Parent = **顶层窗体** —— 摆在 Frame/PictureBox
+    #      里的控件也一样 (`Command1.Parent.Name` = "Form1"); "直接父容器"那一问叫 Container。
+    #   ② UserControl 内部裸 `Parent` = 顶层窗体 (UC 摆在 Frame 里也是 Form, 不是 Frame)。
+    #   ③ UC **内层控件**的 `Parent` = 该 UserControl 对象本身: `Is Me` = True,
+    #      `.Name` = 设计器类名 ("UCProbe", 不是实例名 "ucP1")。
+    # 修前: ③ 的那几个成员发成未声明符号 vb6_Parent_Name/Caption/BackColor (C2065 ×3);
+    # 只修发码不修 RTL 时: ① 答 Frame1/Pic1、③ 答 Is Me=False / Name="" / TypeName=Object。
+    $pdParentSemExpected = @(
+        "PS-CMD2-PARENT-NAME=Form1", "PS-CMD2-PARENT-CAPTION=HostForm",
+        "PS-CMD2-PARENT-TYPENAME=Form1", "PS-LABEL2-PARENT-NAME=Form1",
+        "PS-CMD1-PARENT-NAME=Form1", "PS-CMD1-PARENT-TYPENAME=Form1",
+        "PS-CMD1-CONTAINER-CAPTION=FrameOne", "PS-CMD3-PARENT-NAME=Form1",
+        "PS-UCP1-PARENT-NAME=Form1", "PS-UCP1-NAME=ucP1",
+        "PS-UCP2-PARENT-NAME=Form1", "PS-UCP2-CONTAINER-CAPTION=FrameTwo",
+        "P1-PARENT-NAME=Form1", "P1-PARENT-CAPTION=HostForm", "P1-PARENT-TYPENAME=Form1",
+        "P1-INNER-PARENT-IS-ME=True", "P1-INNER-PARENT-NAME=UCProbe",
+        "P1-INNER-PARENT-TYPENAME=UCProbe", "P1-PARENT-BACKCOLOR-IS-INNER=True",
+        "P2-PARENT-NAME=Form1", "P2-PARENT-CAPTION=HostForm", "P2-PARENT-TYPENAME=Form1",
+        "P2-INNER-PARENT-IS-ME=True", "P2-INNER-PARENT-NAME=UCProbe",
+        "P2-INNER-PARENT-TYPENAME=UCProbe", "P2-PARENT-BACKCOLOR-IS-INNER=True",
+        "PS-DONE")
+    Test-Vbp "pd_parentsem" "$Tests\pd_parentsem\PdParentSem.vbp" $pdParentSemExpected
+    # 发码形状面: UC 内部各成员走宿主模型 (不再是模块限定符拼名), 内层控件 Parent 仍交对象。
+    Test-EmitcShape "pd_parentsem_emitc" @("$Tests\pd_parentsem\PdParentSem.vbp") @(
+        'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Name")',
+        'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Caption")',
+        'vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"BackColor")',
+        'vb6_ComGetStringProp(vb6_ComGetObjectProp(vb6_hwnd_Label1, L"Parent"), L"Name")')
+    Test-EmitcAbsent "pd_parentsem_emitc_absent" @("$Tests\pd_parentsem\PdParentSem.vbp") @(
+        "vb6_Parent_Name", "vb6_Parent_Caption", "vb6_Parent_BackColor")
 
     # <vbeclipse> 回归夹子 (evtcase) 账 #190: 控件事件臂调用的函数名必须按 **Sub 自己的拼写** 发。
     # VB6 的标识符大小写不敏感、C 敏感: 以前臂里那个名字是拿控件的设计期拼写现拼的, 于是
@@ -11031,14 +11263,14 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp 'b165_iface_view_slot' "$Tests\k165_iface_slot\K165Slot.vbp" $b165Expected
     Test-Vbp 'b165_iface_view_slot_x86' "$Tests\k165_iface_slot\K165Slot.vbp" $b165Expected -Arch "x86"
     $b165Shapes = @(
-        'mv = vb6_iface_K165Iface_wrap_K165Impl((vb6_cls_K165Impl_New()));  /* Set */',
-        'mv = vb6_iface_K165Iface_wrap_K165Impl(mi);  /* Set */',
-        'lv = vb6_iface_K165Iface_wrap_K165Impl((vb6_cls_K165Impl_New()));  /* Set */',
+        'mv = &((vb6_cls_K165Impl_New()))->__iv_K165Iface;',
+        'mv = ((mi) ? &(mi)->__iv_K165Iface : NULL);',
+        'lv = &((vb6_cls_K165Impl_New()))->__iv_K165Iface;',
         # 账 #305 第二百一十七刀: 视图槽的置空从前发 `vb6_ReleaseObject((void**)&mv)` —— 那把整枚
         # 值结构体的地址交给一枚 IUnknown** 槽 (它读的首字段是那张函数指针表)。现在的正答案 =
         # 整枚零化；`mv = NULL;` 那枚反面针早在第一百六十五刀就在册 (值结构体没有 NULL 这一形)。
-        'memset(&mv, 0, sizeof(mv));  /* Set Nothing (接口视图空形) */',
-        'mv.vtbl->Bar(mv.obj, 3)',
+        'mv = NULL;  /* Set Nothing (tB Interface 值) */',
+        'mv->vt->bar(mv, 3)',
         'vb6_cls_K165Impl* __clsold',
         # 8f4e4b24: 类槽那一支统一过解包（裸实例原样交回），形状针跟着换整句。
         'mi = (vb6_cls_K165Impl*)vb6_ComObject_UnboxVb6Instance((void*)((vb6_cls_K165Impl_New())));',
@@ -11049,7 +11281,7 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_cls_K165Iface* __clsold',
         'vb6_cls_K165Iface_AddRef(mv)',
         'vb6_cls_K165Iface_Release(__clsold',
-        'mv = NULL;',
+        'memset(&mv, 0, sizeof(mv));',        # R4 收口: 薄指针档不许退回结构体零化
         'vb6_ReleaseObject((void**)&mv)')   # 第二百一十七刀的病灶 (结构体地址进 IUnknown** 槽)
     Test-EmitcAbsent 'b165_no_phantom_class_holder_for_a_view_slot' @(
         "$Tests\k165_iface_slot\K165Slot.vbp") $b165Absent
@@ -11753,6 +11985,8 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-AppTitleAuthority }
     if (Enter-StaticShard) { Test-SelectLabelOwner }
     if (Enter-StaticShard) { Test-ScaleModeWriters }
+    if (Enter-StaticShard) { Test-TypelibPayloadWriters }
+    if (Enter-StaticShard) { Test-TypelibScaleSentinel }
     if (Enter-StaticShard) { Test-VbpSourceExt }
     if (Enter-StaticShard) { Test-ExtenderEmitChannel }
     if (Enter-StaticShard) { Test-ExtenderPushPop }
@@ -12262,6 +12496,16 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_iface\IThing.cls", "$Tests\pd_iface\Impl.cls", "$Tests\pd_iface\Entry.bas") @(
         "typedef struct vb6_ivtbl_IThing {",
         "static const vb6_ivtbl_IThing vb6_ivtbl_IThing_for_Impl = {") @("VB3044")
+    # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
+    # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
+    # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
+    # 修前通用路径把裸 `Parent` 拼成未声明符号 `vb6_Parent_Controls` 并配一条假 VB3001。
+    Test-CodegenNote "pd_parent_controls_ctl" @("$Tests\pd_parentctl\PdParentCtl.vbp") @(
+        "vb6_ForEach_Init(vb6_UserControl_ParentControls)",
+        "vb6_UC_ParentObject()") @("VB3001", "vb6_Parent_Controls")
+    # 负控: 只放行 `Parent` 这一枚。`Paren` 拼错必须照旧报 VB3001 (精确匹配, 不做前缀放宽)。
+    Test-CodegenNote "pd_parent_typo_still_reported" @("$Tests\pd_parentctl\PdParentTypo.vbp") @(
+        "未声明的标识符: 'Paren'") @("vb6_UC_ParentObject()")
     # 账 #184 的形状面: 被 AddressOf 取址的过程 → Private 的发 static 桩、Public 的发外链桩,
     # 桩体逐字转调本体 (参数个数/宽度/顺序与本体一致, 只有约定不同); AddressOf 站点取桩地址;
     # 本体**保持 cdecl** (直接调用那条路与 RTL 的 cdecl 登记面都不受牵连)。

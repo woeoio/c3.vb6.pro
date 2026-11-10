@@ -609,7 +609,14 @@
         {
             std::string objLower = objExpr;
             std::transform(objLower.begin(), objLower.end(), objLower.begin(), ::tolower);
-            if (slotIsLegacyIfaceView(objLower) && !isEarlyBoundCom_) {
+            const bool isLegacyView454 = slotIsLegacyIfaceView(objLower);
+            // 账 #305 (R4 收口): 同一站的新式档 (薄指针 vb6_ivref_<I>*)。R4 之后可创建的空体
+            // 接口类也进 ivreg_, k177 的 `x.Twice(5)` / With 里的 `.Twice(3)` 就从值结构体
+            // 变成薄指针; 不认这一档就落 DispView/ComCall 兜底 —— 运行期 notdispatchable
+            // (编得过、读数全空)。形状仍交唯一主人 ivrefVtableCall, 这里只多问一次名册。
+            const std::string ifaceR4454 =
+                isLegacyView454 ? std::string() : slotIvrefViewName(objLower);
+            if ((isLegacyView454 || !ifaceR4454.empty()) && !isEarlyBoundCom_) {
                 // 生成参数列表
                 std::vector<std::string> callArgs;
                 for (size_t i = 0; i < node.positional.size(); i++) {
@@ -620,7 +627,9 @@
                     emitExpr(*named.value);
                     callArgs.push_back(lastExpr_);
                 }
-                const std::string p64Call = legacyViewCallExpr(objExpr, memberName, callArgs);
+                const std::string p64Call = isLegacyView454
+                    ? legacyViewCallExpr(objExpr, memberName, callArgs)
+                    : ivrefVtableCall(ifaceR4454, memberName, objExpr, callArgs);
                 if (!p64Call.empty()) {
                     lastExpr_ = p64Call;
                     return;
@@ -1027,8 +1036,16 @@
         if (openPos > 0) {
             // callee = "funcName(existingArgs)" → 拆开
             std::string funcPart = callee.substr(0, openPos);
-            classMethodObjArg = callee.substr(openPos + 1, callee.size() - openPos - 2);
-            callee = funcPart;
+            // Fix RND-SEQ: `Rnd` 的无参形态在 ident 层已展开成 `vb6_Rnd(1)` (默认种子 1),
+            // 括号里那个 1 **不是接收者** —— `Rnd(x)` 的 x 是种子, 必须替代它而不是被前插,
+            // 否则发出 `vb6_Rnd(1, x)` (C2064/C2197)。VB6 内置里只有 Rnd 是这种形态。
+            if (funcPart == "vb6_Rnd") {
+                classMethodObjArg.clear();
+                callee = funcPart;
+            } else {
+                classMethodObjArg = callee.substr(openPos + 1, callee.size() - openPos - 2);
+                callee = funcPart;
+            }
             // Fix 086: 链式默认属性调用 — 内层是无参 prop_get_(如 .Root("data")) 或
             // COM 调用 (Dic(N)(RouteName)) 时, 内层返回 COM 对象, 外层索引是对返回
             // 对象的 Item 调用. 不能并入内层参数表 (C2197 参数太多).

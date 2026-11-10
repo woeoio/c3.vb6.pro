@@ -33,6 +33,9 @@
     // —— For Each 的循环变量声明成视图时, 元素是哪一枚实现类只有运行期知道 (`.obj` 与类名都住在
     // 集合交回来的那枚包装器里)。只有这一份 TU 同时看得见全工程实现类的那批 wrap 原型。
     if (isClassModule_ && currentClassIsInterface) emitLegacyIfaceViewFrom(module);
+    // 账 #305 (R4 收口): 同一站的**新式**档 —— R4 之后可创建的空体接口类也进 ivreg_,
+    // 循环变量是薄指针; 视图怎么造问实现类自己的 vb6_iv_thin_of_<C> (见 cgen_iface_vtbl.cpp)。
+    if (isClassModule_ && currentClassIsInterface) emitIvrefIfaceViewFrom(module);
 
     // === 类模块: 生成工厂函数 ===
     if (isClassModule_ && !currentClassIsInterface) {  // P6.4: 接口类不生成工厂/析构函数

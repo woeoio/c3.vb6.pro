@@ -258,7 +258,10 @@ void vb6_uc_releaseHost(void* hwnd);
 // Fix <vbeclipse> rev18: UserControl 自有 Property 的按名桥 (晚绑定访问)。
 // obj 收 UC 实例指针或宿主 HWND; 命中返回 1。见 vb6forms_controls.h 的 vb6_UcPropDesc。
 int32_t vb6_UC_OwnPropGet(void* obj, const wchar_t* name, void* outV);
+// PUT: VB6 `x.P = v` → Property Let。PUTREF: `Set x.P = v` / `x.P = Nothing`
+// → Property Set。两条入口在 VB6 里从不合并 (oracle 实测), 表里是两个槽。
 int32_t vb6_UC_OwnPropSet(void* obj, const wchar_t* name, const void* inV);
+int32_t vb6_UC_OwnPropSetRef(void* obj, const wchar_t* name, const void* inV);
 
 // Fix <vbeclipse> rev22: 反查一个设计期子控件窗口属于哪个 UC 实例 + 槽位名。
 // vb6_ControlMove 改完尺寸后用它决定要不要触发 `<Ctrl>_Resize` 事件

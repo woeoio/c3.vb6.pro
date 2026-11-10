@@ -153,6 +153,12 @@ private:
     std::unique_ptr<Diagnostics> diag_;
     std::vector<std::unique_ptr<Module>> modules_;  // 解析产出的AST
 
+    // 类型库符号共享层 (只造一份, 非拥有下发给各模块的 SymbolTable 作回退)。
+    // 共享化之前每个模块各自重造一份 (539 模块 × 3042 符号 ≈ 12 GB); 这里只保留基座。
+    // 声明在 analyzers_ 之前: 析构顺序 = 逆声明序 ⇒ analyzers_ 先销毁, 不会留下
+    // 指向已销毁共享层的裸指针。
+    std::unique_ptr<SymbolTable> typelibTable_;
+
     // 语义分析产出 (供代码生成使用)
     std::vector<std::unique_ptr<SemanticAnalyzer>> analyzers_;
 
@@ -360,6 +366,9 @@ private:
     bool runPreprocess(const CompileOptions& options);
     bool runParser(const CompileOptions& options);
     bool runTypeLibImport(const CompileOptions& options);  // P6.3: 加载TypeLib+注册COM类型
+    // P6.3 共享化: 把类型库符号 (coclass/接口/枚举/模块函数/GlobalNs) 只造一份进
+    // typelibTable_, 各模块 SymbolTable 以非拥有回退方式共享 (见 SymbolTable::setSharedScope)。
+    void buildSharedTypelibSymbols();
     bool runSemanticAnalysis(const CompileOptions& options);
     bool runGenericsPrepass();  // 泛型 (tB): 模板登记 + 使用点物化 (G2)
     // Interface (tB, B02): stage 2.7 建接口契约登记表 (名字/Extends 链/展平槽表)

@@ -132,6 +132,11 @@ const wchar_t* vb6_Host_TypeNameOf(void* obj) {
         return h->isForm ? L"Form" : L"Control";
     }
     vb6_UCRec* r = vb6_uc_findByHwnd(obj);
+    /* PD-Parent 语义刀: 递进来的可能是 UC 的**实例指针** —— UserControl 内层控件的
+       `.Parent` 交回的就是它 (`Label1.Parent Is Me` = True)。有窗宿主在 ho 表里带 hwnd,
+       而 vb6_ho_findInstance 刻意只认无窗那一档 ⇒ 这里按实例补齐一问, 答案与 hwnd
+       那一档同一个类名 ("UCProbe")。`!IsWindow` 是防 HWND 与实例指针数值撞车。 */
+    if (!r && !IsWindow((HWND)obj)) r = vb6_uc_findByInstance(obj);
     if (r && r->desc && r->desc->typeName) {
         const char* dot = strrchr(r->desc->typeName, '.');
         static wchar_t buf[VB6_UC_NAME_LEN];
@@ -431,10 +436,20 @@ int32_t vb6_Host_GetProp(void* obj, const wchar_t* name, void* outV) {
 
 }
 
+// 同一个函数体服务两个入口: PUT 走 UC 自有属性的 set 槽 (Property Let),
+// PUTREF 走 setref 槽 (Property Set)。VB6 从不合并这两条 (oracle 实测)。
+#define VB6_UC_OWN_SET vb6_UC_OwnPropSet
 int32_t vb6_Host_SetProp(void* obj, const wchar_t* name, const void* inV) {
 #include "uc_hostmodel_setprop.inc"
 
 }
+#undef VB6_UC_OWN_SET
+#define VB6_UC_OWN_SET vb6_UC_OwnPropSetRef
+int32_t vb6_Host_SetPropRef(void* obj, const wchar_t* name, const void* inV) {
+#include "uc_hostmodel_setprop.inc"
+
+}
+#undef VB6_UC_OWN_SET
 
 int32_t vb6_Host_Call(void* obj, const wchar_t* name, int32_t argc, void** argv, void* outV) {
 #include "uc_hostmodel_call.inc"
@@ -584,7 +599,8 @@ static HRESULT STDMETHODCALLTYPE HW_Invoke(IDispatch* self, DISPID id, REFIID ri
         if (pd->cArgs < 1) return DISP_E_BADPARAMCOUNT;
         vb6_VARIANT hv; vb6_ho_setVariantEmpty(&hv);
         vb6_Host_FromWinVariant(&pd->rgvarg[0], &hv);
-        vb6_Host_SetProp(w->target, name, &hv);
+        if (flags & DISPATCH_PROPERTYPUTREF) vb6_Host_SetPropRef(w->target, name, &hv);
+        else vb6_Host_SetProp(w->target, name, &hv);
         return S_OK;
     }
     // 方法/属性读取: DISPPARAMS 逆序 → RTL 正序变体数组

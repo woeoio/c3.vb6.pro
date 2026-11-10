@@ -17,6 +17,11 @@ void CCodeGen::visit(WithStmt& node) {
     // 这一格非空 = 接口名。它同时决定两件事: 临时量的**类型** (视图是值结构体, 不是 void*)
     // 和临时量自己要不要登记进名册 (体内成员那两路主人只认名册里的名字)。
     std::string viewIface177;
+    // 账 #305 (R4 收口): 上面那一位记的是 legacy 视图 (值结构体); 这一枚记的是**新式**视图
+    // (薄指针 vb6_ivref_<I>*)。R4 之后可创建的空体接口类也进 ivreg_, 同一份 With 夹具
+    // (k177/k178) 的接收者从值结构体变成薄指针; 不认这一档就落 COM 兜底 (编得过、读数 0)。
+    // 两档共用一个"是不是视图"的判定位, 只有 tempType 与登记哪张名册不同。
+    bool viewIvrefR4 = false;
 
     // 检测With对象类型: 遍历表达式判断
     if (node.object) {
@@ -53,7 +58,15 @@ void CCodeGen::visit(WithStmt& node) {
                     // 临时量是**值拷贝**, 体内成员交给视图那几位主人 (临时量自身登记进名册)。
                     viewIface177 = clsSym->name;
                     withInfo.kind = WithObjKind::COMObject;
-                    tempType = "vb6_iface_" + cIdent(clsSym->name);
+                    // 账 #305 (R4 收口): 同一枚接口若在 canonical 视图表 (ivreg_) 里, 值就是
+                    // 薄指针 —— 照 legacy 的 `vb6_iface_<I>` 声明会拿到一枚**未定义**的类型名
+                    // (k2947 的 `With MakeI()` / `With h.OwnView` 实测 C2065)。
+                    if (ivLookupIface(clsSym->name)) {
+                        viewIvrefR4 = true;
+                        tempType = "vb6_ivref_" + cIdent(clsSym->name) + "*";
+                    } else {
+                        tempType = "vb6_iface_" + cIdent(clsSym->name);
+                    }
                 }
             }
         }
@@ -163,6 +176,16 @@ void CCodeGen::visit(WithStmt& node) {
             if (!viewIface177.empty()) {
                 withInfo.kind = WithObjKind::COMObject;
                 tempType = "vb6_iface_" + cIdent(viewIface177);
+            } else {
+                // 账 #305 (R4 收口): 同一问的**新式**档 —— 同一张名册的主人 (slotIvrefViewName),
+                // 只是值是薄指针 (没有 `.vtbl` / `.obj` 两格)。kind 同样留 COMObject。
+                const std::string ifaceR4w = slotIvrefViewName(objNameLower);
+                if (!ifaceR4w.empty()) {
+                    viewIface177 = ifaceR4w;
+                    viewIvrefR4 = true;
+                    withInfo.kind = WithObjKind::COMObject;
+                    tempType = "vb6_ivref_" + cIdent(ifaceR4w) + "*";
+                }
             }
             // Fix 161f-extlist: `With lv` —— lv 是**形参/局部持有的 ListView**
             // (`Sub RefillList(lv As ListView)`)。ListView 是真窗口, C 侧槽变量本身
@@ -994,8 +1017,11 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     // listViewSlotVars_ 那一档同款口径。
     bool viewSlotRegistered177 = false;
     if (!viewIface177.empty()) {
-        viewSlotRegistered177 =
-            knownIfaceVars_.insert(std::make_pair(Symbol::toLower(tempVar), viewIface177)).second;
+        // 账 #305 (R4 收口): 两档各登自己那张名册 —— 体内那两位主人问的就是各自的名字表;
+        // 把新式视图登进 legacy 那张会让它们按 `.vtbl`/`.obj` 发码 (cl C2039)。
+        viewSlotRegistered177 = viewIvrefR4
+            ? knownIvrefVars_.insert(std::make_pair(Symbol::toLower(tempVar), viewIface177)).second
+            : knownIfaceVars_.insert(std::make_pair(Symbol::toLower(tempVar), viewIface177)).second;
     }
 
     // Fix 161f-extlist: With 目标是 ListView 槽 (形参/局部) 时, 把 _vb6_with_N 本身
@@ -1018,7 +1044,10 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     withObjectVars_.pop_back();
     withObjectInfoStack_.pop_back();
     if (lvSlotRegistered161f) listViewSlotVars_.erase(Symbol::toLower(tempVar));
-    if (viewSlotRegistered177) knownIfaceVars_.erase(Symbol::toLower(tempVar));  // 站D′
+    if (viewSlotRegistered177) {
+        if (viewIvrefR4) knownIvrefVars_.erase(Symbol::toLower(tempVar));
+        else knownIfaceVars_.erase(Symbol::toLower(tempVar));  // 站D′
+    }
 }
 
 

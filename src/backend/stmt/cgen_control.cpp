@@ -515,6 +515,23 @@ void CCodeGen::visit(ForEachStmt& node) {
                 c_.emitLine(varAcc + " = " + legacyIfaceViewFromFn(iface174) + "("
                             + name174 + " ? vb6_ComObject_GetInstance(" + box174 + ") : (void*)0"
                             + ", " + name174 + ");");
+            } else if (const std::string ifaceR4 = slotIvrefViewName(lower); !ifaceR4.empty()) {
+                // 账 #305 (R4 收口) 同一站的**新式**档: 循环变量是薄指针 `vb6_ivref_<I>*`。
+                // R4 之后可创建的空体接口类也进 ivreg_, 同一份夹具 (k174) 的循环变量就从值结构体
+                // 变成了薄指针; 不认这一档就落最后一臂, 把 `vb6_VARIANT` 赋给薄指针 (cl C2440)。
+                // 元素的身份问法与上一档一字不差 (先 ClassNameA 再 GetInstance); 视图怎么造问接口
+                // 自己那一发 (`<I>_from_class` → 实现类的 `vb6_iv_thin_of_<C>`), 不在这里另立。
+                // 所有权与别的薄指针槽一致 (B05): 旧值 Release、新值 AddRef —— 出口那一发
+                // `scope-exit release` 记的正是这一枚, 借来不登记就会提前销毁实例。
+                const std::string box174 = "_vb6_fe_box_" + std::to_string(tmpIdx);
+                const std::string name174 = "_vb6_fe_name_" + std::to_string(tmpIdx);
+                c_.emitLine("void* " + box174 + " = vb6_ComUnpackObject(&" + feVar + ");");
+                c_.emitLine("const char* " + name174 + " = vb6_ComObject_ClassNameA(" + box174 + ");");
+                emitIvrefRefSet(varAcc, ifaceR4,
+                    ivrefIfaceViewFromFn(ifaceR4) + "("
+                        + name174 + " ? vb6_ComObject_GetInstance(" + box174 + ") : (void*)0"
+                        + ", " + name174 + ")",
+                    false);
             } else if (knownObjectVars_.count(lower) || knownTypedComVars_.count(lower)) {
                 c_.emitLine(varAcc + " = vb6_ComUnpackObject(&" + feVar + ");  /* P24-05: For Each Object: VARIANT→IDispatch* */");
             } else if (knownClassVars_.count(lower)) {
