@@ -148,7 +148,7 @@ void Driver::buildSharedTypelibSymbols() {
                 }
                 // 填充memberNames (类成员名列表, 兼容现有逻辑)
                 for (auto& member : cc->defaultIface->members) {
-                    sym->memberNames.push_back(member.realName);
+                    sym->W().memberNames.push_back(member.realName);
                 }
             }
 

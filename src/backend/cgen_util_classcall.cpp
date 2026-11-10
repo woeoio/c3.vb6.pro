@@ -138,8 +138,8 @@ std::string CCodeGen::resolveClassMemberCallUncached(const std::string& classNam
             }
         }
         if (classSymFix) {
-            auto itKindFix = classSymFix->memberProcKinds.find(memberLower);
-            if (itKindFix != classSymFix->memberProcKinds.end()) {
+            auto itKindFix = classSymFix->P().memberProcKinds.find(memberLower);
+            if (itKindFix != classSymFix->P().memberProcKinds.end()) {
                 std::string canonFix = classCanonFix.empty() ? canonicalClassName : classCanonFix;
                 switch (itKindFix->second) {
                     case ProcKind::PropertyGet:
@@ -194,7 +194,7 @@ std::string CCodeGen::resolveClassMemberCallUncached(const std::string& classNam
             }
         }
         if (classSym) {
-            for (const auto& mn : classSym->memberNames) {
+            for (const auto& mn : classSym->P().memberNames) {
                 if (Symbol::toLower(mn) == memberLower) {
                     // Fix 016: 用 Class 符号的 memberProcKinds 直接判断前缀, 替代
                     // Fix 014b 的 "$pg 外部符号启发式" (后者在跨类同名混合场景下误判:
@@ -206,8 +206,8 @@ std::string CCodeGen::resolveClassMemberCallUncached(const std::string& classNam
                     // semantic_analyzer.cpp 在创建 Class 符号时按读上下文优先级
                     // (Get > Function > Sub > Let > Set) 填充.
                     std::string prefix;
-                    auto itKind = classSym->memberProcKinds.find(memberLower);
-                    if (itKind != classSym->memberProcKinds.end()) {
+                    auto itKind = classSym->P().memberProcKinds.find(memberLower);
+                    if (itKind != classSym->P().memberProcKinds.end()) {
                         switch (itKind->second) {
                             case ProcKind::PropertyGet: prefix = "prop_get_"; break;
                             case ProcKind::PropertyLet: prefix = "prop_let_"; break;
@@ -217,7 +217,7 @@ std::string CCodeGen::resolveClassMemberCallUncached(const std::string& classNam
                     }
                     // 若 memberProcKinds 缺失 (理论上不应发生, 旧 Class 符号兼容),
                     // 回退到原启发式: 作用域中存在 "<memberLower>$pg" 即判为 PropertyGet.
-                    if (prefix.empty() && itKind == classSym->memberProcKinds.end()) {
+                    if (prefix.empty() && itKind == classSym->P().memberProcKinds.end()) {
                         std::string pgKey = memberLower + "$pg";
                         if (symTab_.moduleScope()->symbols().find(pgKey)
                             != symTab_.moduleScope()->symbols().end()) {
@@ -368,8 +368,8 @@ bool CCodeGen::findClassMemberCallParamsUncached(const std::string& className,
         }
         if (!classMatches) continue;
 
-        auto it = csym->memberParams.find(memberLower);
-        if (it != csym->memberParams.end()) {
+        auto it = csym->P().memberParams.find(memberLower);
+        if (it != csym->P().memberParams.end()) {
             outParams = it->second;
             outIsBuiltin = false;  // memberParams 仅记录用户类方法, 不是 RTL builtin
             return true;
@@ -425,7 +425,7 @@ bool CCodeGen::findClassMemberWriteParams(const std::string& className,
             classMatches = true;
         }
         if (!classMatches) continue;
-        const auto& tbl = isSet ? csym->memberSetParams : csym->memberLetParams;
+        const auto& tbl = isSet ? csym->P().memberSetParams : csym->P().memberLetParams;
         auto it = tbl.find(memberLower);
         if (it != tbl.end()) {
             outParams = it->second;
@@ -509,13 +509,13 @@ bool CCodeGen::findClassMemberGetParamsUncached(const std::string& className,
             classMatches = true;
         }
         if (!classMatches) continue;
-        auto it = csym->memberParams.find(memberLower);
-        if (it == csym->memberParams.end()) continue;
+        auto it = csym->P().memberParams.find(memberLower);
+        if (it == csym->P().memberParams.end()) continue;
         // 只认**读方向**的形状: memberParams 是单值槽, 万一被 Let 覆盖过就会带上
         // 末参 Value —— 那种表拿去 pad prop_get_ 会让 `vb6_VariantEmpty()` 顶掉
         // `int _has_After` (C2440)。宁可退回 C2198 (少量) 也不要错方向的表。
-        if (csym->memberLetParams.count(memberLower)
-            && csym->memberLetParams[memberLower].size() == it->second.size()) {
+        if (csym->P().memberLetParams.count(memberLower)
+            && csym->P().memberLetParams.at(memberLower).size() == it->second.size()) {
             return false;   // 与 Let 同宽 ⇒ 不能断定是读方向, 不 pad
         }
         outParams = it->second;
@@ -646,8 +646,8 @@ std::string CCodeGen::getClassMethodReturnType(const std::string& className,
         }
     }
     if (classSym) {
-        auto it = classSym->memberReturnTypes.find(memberLower);
-        if (it != classSym->memberReturnTypes.end()) {
+        auto it = classSym->P().memberReturnTypes.find(memberLower);
+        if (it != classSym->P().memberReturnTypes.end()) {
             const std::string& rawRetName = it->second;
             const std::string retLower = Symbol::toLower(rawRetName);
             // 校验 rawRetName 对应当前作用域中真实存在的 Class 符号 (canonical 同时取大小写)
@@ -720,8 +720,8 @@ bool CCodeGen::classMemberReturnsAsObject(const std::string& className,
             ? (Symbol::toLower(cs->sourceModule) == classLower)
             : (Symbol::toLower(cs->name) == classLower);
         if (!clsHit) continue;
-        auto it = cs->memberReturnTypes.find(memberLower);
-        if (it != cs->memberReturnTypes.end() && isObjectishEx(it->second)) return true;
+        auto it = cs->P().memberReturnTypes.find(memberLower);
+        if (it != cs->P().memberReturnTypes.end() && isObjectishEx(it->second)) return true;
         break;
     }
     // ② 成员符号本体

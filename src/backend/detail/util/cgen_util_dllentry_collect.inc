@@ -124,7 +124,7 @@
                 // extern 引用不存在的 vb6_<cls>_<ev> → LNK2019. 事件不进方法表.
                 std::set<std::string> eventNamesLower;
                 for (const auto& en : authCls.eventNames) eventNamesLower.insert(Symbol::toLower(en));
-                for (auto& memberName : authCls.memberNames) {
+                for (auto& memberName : authCls.P().memberNames) {
                     if (!seenMemberNames.insert(Symbol::toLower(memberName)).second) continue;
                     if (eventNamesLower.count(Symbol::toLower(memberName))) continue;
                     // Try Sub/Function: 优先在类自身符号表搜索 (本类方法, 无碰撞)
@@ -205,11 +205,11 @@
                 // Class 符号), dispid 与 IID/CLSID 同源同锚.
                 const Symbol* dispidSym = (hostClsSym && hostClsSym->kind == SymbolKind::Class)
                     ? hostClsSym : sym.get();
-                for (auto& fname : authCls.publicFieldNames) {
+                for (auto& fname : authCls.P().publicFieldNames) {
                     info.publicFields.push_back(fname);
-                    auto itFd = dispidSym->memberFieldDispids.find(Symbol::toLower(fname));
+                    auto itFd = dispidSym->P().memberFieldDispids.find(Symbol::toLower(fname));
                     info.publicFieldDispids.push_back(
-                        (itFd != dispidSym->memberFieldDispids.end()) ? itFd->second : 0);
+                        (itFd != dispidSym->P().memberFieldDispids.end()) ? itFd->second : 0);
                 }
                 // P6.6.4: 收集事件信息
                 if (!authCls.eventNames.empty()) {

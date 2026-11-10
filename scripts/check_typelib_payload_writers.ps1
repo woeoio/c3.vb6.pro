@@ -23,6 +23,10 @@
 #       driver_crossmod.cpp 的 extSym 拷贝、以及注入权威区; 其余任何位置写一律红。
 #   S4  isBuiltin 不纳入本哨兵: 它是声明期标志, 且 ClassMemberParamsMemo 等局部结构
 #       也有同名字段 (纯文本静态扫描会误报)。
+#   S5  (2026-11 载荷共享) 写门只认 Symbol::W() —— 字段写形态可以是
+#       `sym->FIELD =` 或 `sym->W().FIELD =`; W() 是 COW 门, 判据口径不变。
+#   S6  (2026-11 载荷共享) 读门 Symbol::P() 不许出现在写点左侧。共享之后
+#       `sym->P().memberNames = …` 会改到别的模块共享的那一份, 必须走 W()。
 #
 # 用法:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check_typelib_payload_writers.ps1
 # 退出码: 0 = 全绿; 1 = 红
@@ -105,10 +109,10 @@ if ($symVars.Count -eq 0) {
 }
 $names = @()
 $varAlt = (($symVars | ForEach-Object { [regex]::Escape($_) }) -join '|')
-foreach ($mm in [regex]::Matches($body, '\b(' + $varAlt + ')\s*->\s*([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?(?:=(?!=)|\+=|-=|\|=|&=)')) {
+foreach ($mm in [regex]::Matches($body, '\b(' + $varAlt + ')\s*->\s*(?:W\(\)\s*\.\s*)?([A-Za-z_]\w*)\s*(?:\[[^\]]*\]\s*)?(?:=(?!=)|\+=|-=|\|=|&=)')) {
     $names += $mm.Groups[2].Value
 }
-foreach ($mm in [regex]::Matches($body, '\b(' + $varAlt + ')\s*->\s*([A-Za-z_]\w*)\s*\.\s*(?:push_back|emplace_back|insert|emplace|push)\s*\(')) {
+foreach ($mm in [regex]::Matches($body, '\b(' + $varAlt + ')\s*->\s*(?:W\(\)\s*\.\s*)?([A-Za-z_]\w*)\s*\.\s*(?:push_back|emplace_back|insert|emplace|push)\s*\(')) {
     $names += $mm.Groups[2].Value
 }
 if ($body -match 'insertComMethod\s*\(') { $names += 'comMethods' }
@@ -140,17 +144,31 @@ $constAllowedFiles = @(
 
 function New-WriteRegex([string[]]$fields) {
     $alt = (($fields | ForEach-Object { [regex]::Escape($_) }) -join '|')
-    $pat = "(?:->|\.)\s*($alt)\s*(?:\[[^\]]*\]\s*)?(?:=(?!=)|\+=|-=|\|=|&=)" +
-           "|(?:->|\.)\s*($alt)\s*\.\s*(?:push_back|emplace_back|insert|emplace|push)\s*\("
+    # 2026-11 载荷共享重构后, payload 的写形态多了一层权威入口: `sym->W().FIELD`
+    # (Symbol::W() = COW 写门)。这里把 W() 记为**可选前缀**, 判据本身不放宽 ——
+    # 仍然是"哪个字段被写、写在哪个文件"的同一套口径。
+    $pat = "(?:->|\.)\s*(?:W\(\)\s*\.\s*)?($alt)\s*(?:\[[^\]]*\]\s*)?(?:=(?!=)|\+=|-=|\|=|&=)" +
+           "|(?:->|\.)\s*(?:W\(\)\s*\.\s*)?($alt)\s*\.\s*(?:push_back|emplace_back|insert|emplace|push)\s*\("
+    return [regex]::new($pat, [System.Text.RegularExpressions.RegexOptions]::Compiled)
+}
+# S6: 读门 P() 绝不许出现在写点左侧 —— 写必须走 W() (否则共享载荷被原地改,
+# 消费模块的眼里的类成员表会跟着源模块变; 无崩溃、无诊断, 只有发码悄悄变味)。
+function New-ReadAsWriteRegex([string[]]$fields) {
+    if ($fields.Count -eq 0) { return $null }
+    $alt = (($fields | ForEach-Object { [regex]::Escape($_) }) -join '|')
+    $pat = "(?:->|\.)\s*P\(\)\s*\.\s*($alt)\s*(?:\[[^\]]*\]\s*)?(?:=(?!=)|\+=|-=|\|=|&=)" +
+           "|(?:->|\.)\s*P\(\)\s*\.\s*($alt)\s*\.\s*(?:push_back|emplace_back|insert|emplace|push)\s*\("
     return [regex]::new($pat, [System.Text.RegularExpressions.RegexOptions]::Compiled)
 }
 $coreRe = $null
 $constRe = $null
 if ($core.Count -gt 0) { $coreRe = New-WriteRegex $core }
 if ($constSeen.Count -gt 0) { $constRe = New-WriteRegex $constSeen }
+$readAsWriteRe = New-ReadAsWriteRegex $core
 
 $coreHits = @()
 $constHits = @()
+$readAsWriteHits = @()
 foreach ($file in $files) {
     $rel = $file.FullName.Substring($root.Length + 1)
     $relLower = $rel.ToLower()
@@ -179,6 +197,12 @@ foreach ($file in $files) {
                 }
             }
         }
+        if ($null -ne $readAsWriteRe) {
+            foreach ($mm in $readAsWriteRe.Matches($code)) {
+                $fld = if ($mm.Groups[1].Success) { $mm.Groups[1].Value } else { $mm.Groups[2].Value }
+                $readAsWriteHits += ("{0}:{1}  {2}" -f $rel, $ln, $fld)
+            }
+        }
     }
 }
 
@@ -195,7 +219,10 @@ foreach ($file in $files) {
 # 注意 cgen_util_dllentry_collect.inc 那条写的是局部 info 结构, 不是 Symbol。
 $knownCore = @{
     "src\driver\driver_classchain.cpp"                     = 1
-    "src\driver\driver_crossmod.cpp"                       = 3
+    # 2026-11 载荷共享: 3 → 2。少的那一条是 `extSym->memberNames = srcSym->memberNames`
+    # (11 张类成员表之一), 现在整份载荷由 `extSym->sharePayloadFrom(*srcSym)` 共享,
+    # 不再逐字段深拷贝; eventNames / comClsidStr 仍是普通字段, 照旧显式拷。
+    "src\driver\driver_crossmod.cpp"                       = 2
     "src\driver\detail\driver_codegen_dll_sync.inc"        = 7
     "src\driver\detail\driver_codegen_dll_typelib.inc"     = 9
     "src\semantics\semantic_analyzer.cpp"                  = 5
@@ -227,6 +254,11 @@ foreach ($f in $knownCore.Keys) {
 if ($constHits.Count -gt 0) {
     $bad += ("S3 const-family write sites outside declaration-time files = " + $constHits.Count)
     $bad += $constHits
+}
+
+if ($readAsWriteHits.Count -gt 0) {
+    $bad += ("S6 payload written through the read door P() = " + $readAsWriteHits.Count + " (写必须走 W())")
+    $bad += $readAsWriteHits
 }
 
 if ($bad.Count -eq 0) {

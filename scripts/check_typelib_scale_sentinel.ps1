@@ -27,6 +27,28 @@ $Root = Split-Path -Parent $PSScriptRoot
 if (-not $C3) { $C3 = Join-Path $Root ".build\C3.exe" }
 if (-not (Test-Path $C3)) { Write-Host "MISSING C3.exe: $C3"; exit 2 }
 
+# ---- S0: 跨模块注入的权威点 (2026-11 载荷共享) ----
+# 注入只许共享 SymbolPayload, 不许再逐字段深拷贝 11 张类成员表 —— 这正是
+# PhotoDemon 那 +2.7 GB / 378 s 的来源。斜率读数只能事后发现退步, 这里把它钉成结构断言:
+#   · Driver::runCrossModuleResolution 必须调用 sharePayloadFrom()
+#   · extSym 不许直接赋值/改写字面上的载荷表字段 (含 W() 写门形态)
+$crossPath = Join-Path $Root "src\driver\driver_crossmod.cpp"
+if (-not (Test-Path $crossPath)) { Write-Host "FAIL S0 missing src/driver/driver_crossmod.cpp"; exit 1 }
+$cross = [System.IO.File]::ReadAllText($crossPath)
+$payloadFields = 'memberNames|memberReturnTypes|memberProcKinds|memberParams|memberFieldTypes|memberFieldNames|publicFieldNames|memberFieldDispids|memberAccessLevels|memberLetParams|memberSetParams'
+$s0 = @()
+if ($cross -notmatch 'sharePayloadFrom\s*\(') {
+    $s0 += "S0 crossmod injection no longer shares the payload (sharePayloadFrom missing)"
+}
+foreach ($mm in [regex]::Matches($cross, 'extSym\s*->\s*(?:W\(\)\s*\.\s*)?(' + $payloadFields + ')\b')) {
+    $s0 += ("S0 extSym still touches payload field '" + $mm.Groups[1].Value + "' (must share, not copy)")
+}
+if ($s0.Count -gt 0) {
+    foreach ($m in $s0) { Write-Host ("FAIL " + $m) }
+    exit 1
+}
+Write-Host "S0 ok: crossmod injection shares SymbolPayload (no field-by-field payload copy)"
+
 $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("c3_scale_" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 

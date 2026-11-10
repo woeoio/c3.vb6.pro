@@ -98,6 +98,34 @@ struct ParameterInfo {
     std::string defaultValueExpr;       // C表达式字符串(如"10", "vb6_BSTR_FromStr(L\"hello\")", "-1"等)
 };
 
+// ============================================================
+// 不可变载荷 (SymbolPayload)
+// ============================================================
+// 这一批字段在**本模块分析结束**之后就不再变, 且跨模块注入时是逐字段深拷贝的大头
+// (每枚外部副本各带 11 张成员表)。把它们收进一份堆上载荷, 注入时只共享指针
+// (Symbol::sharePayloadFrom), 消费模块的壳只留 16 字节 —— 不再逐消费模块深拷贝。
+//
+// 读写纪律:
+//   · 读: `sym->P().memberNames`  (P() 返回 const 引用; 载荷为空时给全默认静态实例)
+//   · 写: `sym->W().memberNames`  (W() 先做 COW: 载荷与别人共享时先克隆一份)
+// 为什么写必须走 W(): 注入之后源模块与消费模块共享同一份载荷, 原地写会让 A 模块的
+// 回填补到 B 模块眼里 (跨模块串值, 无崩溃无诊断)。COW 保证"注入那一刻的快照"语义
+// 与逐字段深拷贝逐字节一致。
+struct SymbolPayload {
+    // --- 类成员表 (Fix 015/016/033/091a/092m/092p/099, tB B08a) ---
+    std::vector<std::string> memberNames;              // 类成员名称列表(方法+属性+事件)
+    std::unordered_map<std::string, std::string> memberReturnTypes;   // Fix 015
+    std::unordered_map<std::string, ProcKind> memberProcKinds;        // Fix 016
+    std::unordered_map<std::string, std::vector<ParameterInfo>> memberParams;  // Fix 033
+    std::unordered_map<std::string, std::string> memberFieldTypes;    // Fix 092m
+    std::unordered_map<std::string, std::string> memberFieldNames;    // Fix 092p
+    std::vector<std::string> publicFieldNames;                        // Fix 099
+    std::unordered_map<std::string, int32_t> memberFieldDispids;      // Fix 099
+    std::unordered_map<std::string, AccessLevel> memberAccessLevels;  // tB B08a
+    std::unordered_map<std::string, std::vector<ParameterInfo>> memberLetParams;  // Fix 091a
+    std::unordered_map<std::string, std::vector<ParameterInfo>> memberSetParams;  // Fix 091a
+};
+
 struct Symbol {
     std::string name;           // 原始名称 (保留大小写)
     std::string lowerName;      // 小写名称 (用于查找)
@@ -162,7 +190,9 @@ struct Symbol {
 
     // --- 类相关 (仅SymbolKind::Class) ---
     VBInstancing instancing = VBInstancing::Private;  // Instancing属性
-    std::vector<std::string> memberNames;              // 类成员名称列表(方法+属性+事件)
+    // 注: 下面这批成员表的**实际存储**已收进 SymbolPayload (见本文件顶部与 payload_ 处),
+    // 跟着它们的历史注释留在原位, 作为字段文档; 代码里一律用 `sym->P().<表名>` 读、
+    // `sym->W().<表名>` 写。
     // Fix 015: 成员返回类型表 — 仅记录 Function/PropertyGet 返回类型名为命名类型
     // (即 returnType 是 SimpleTypeRef 的成员) 的方法. key=成员名小写, value=返回类型名(源码原样).
     // 用于 method chaining: 当跨模块 storageKey 冲突导致消费模块符号表中找不到
@@ -173,7 +203,6 @@ struct Symbol {
     //     同名 Property Get/Let/Set 共用同一个 lowerName 键; 只在 Get 时写入,
     //     Let/Set 会覆盖. 因 Get 先于 Let/Set 处理, 同名共存时记录的是 Get 的返回类型
     //     (后者无返回类型, 不写入, 但会覆盖 — 故需在写入前判断 node.propKind==Get).
-    std::unordered_map<std::string, std::string> memberReturnTypes;
     // Fix 016: 成员过程类型表 — 解决 prop_get_ 前缀启发式误判 (Fix 014b 遗留).
     // 跨模块 storageKey 冲突场景下 resolveClassMemberCall 的 fallback 需要判断
     // 目标成员在目标类中到底是 Function/Sub (无前缀) 还是 Property Get/Let/Set
@@ -187,7 +216,6 @@ struct Symbol {
     // - PropertyLet → 仅在当前键不存在或为 Let/Set 时写入 (不覆盖 Get/Function)
     // - PropertySet → 仅在当前键不存在或为 Let 时写入    (不覆盖 Get/Function/Let)
     // 读上下文 (resolveClassMemberCall) 优先级: Get > Function > Sub > Let > Set.
-    std::unordered_map<std::string, ProcKind> memberProcKinds;
     // Fix 033: 成员参数表 — 解决 IndexOrCallExpr calleeParams 跨模块 storageKey 冲突.
     // 当 cTlsSocket.Create / cAsyncSocket.Create / cPassword.Create 共享 storageKey="create"
     // 时, driver.cpp 的 globalPublicSyms 按 storageKey 去重, 仅首个注册者的 sourceModule
@@ -196,7 +224,6 @@ struct Symbol {
     // 与 memberProcKinds 同一优先级 (Get > Function > Sub > Let > Set), 仅在 procKind 写入
     // 胜出时同步更新 memberParams, 确保表中存储的是该类该成员读上下文优先级最高的参数表.
     // 用于 IndexOrCallExpr 中 Optional 参数 _has_ 标志计数匹配, 避免 C2197.
-    std::unordered_map<std::string, std::vector<ParameterInfo>> memberParams;
     // Fix 092m: 成员数据字段类型表 — 类模块顶层变量 (仅 As <简单类型> 字段).
     // key=字段名小写, value=源码类型名 (原样, 如 "String"/"Long"/"Date"/"cTlsReMaster").
     // 用途: With 块类字段写 `temp->field = <COM 属性读>` 需按目标字段类型选择 COM
@@ -204,13 +231,11 @@ struct Symbol {
     // ComGetDoubleProp / Object→ComGetObjectProp). 此前无类型信息一律按默认 BSTR
     // 解包 → int32_t 字段收到 BSTR 指针 (cHttpServer 373 `.Port = m_oServer.RemotePort`
     // 编译通过但语义错); 且 COM 标记不消费会泄漏到下一条语句 (374 C2440).
-    std::unordered_map<std::string, std::string> memberFieldTypes;
     // Fix 092p: 成员数据字段的**声明原名**表 — key=字段名小写, value=声明时原样名
     // (如 "Socket"). C 结构体成员名按声明生成, 而 VB6 大小写不敏感: 源码里写
     // `.socket` (cHttpServerResponse 487 `Client.socket.SendData`) 也会指向同一字段,
     // cgen 直接 cIdent(源码名) → `me->Client->socket` C2039. 字段访问生成点用
     // canonicalClassFieldName() 规范化回声明名.
-    std::unordered_map<std::string, std::string> memberFieldNames;
     // Fix 099: 类模块**显式 Public** 数据字段清单 (ActiveX DLL 的 COM 暴露用).
     // 真 VB6 把类的 Public 字段暴露成 Property Get/Let 对; 此前 C3 只把
     // Sub/Function/Property 收进 memberNames, Public 字段完全不进 IDispatch 表
@@ -223,12 +248,10 @@ struct Symbol {
     // Private, 故必须排除 Default — 否则 cHttpServer 的 `Dim m_Sessions As ...`
     // 这类内部字段会被误暴露. 数组/WithEvents/As New 不暴露 (VB6 亦然).
     // 存声明原名, 保持声明顺序 (生成的表项顺序稳定).
-    std::vector<std::string> publicFieldNames;
     // Fix 099: Public 字段的 TypeLib DISPID (driver 在 TypeLib 阶段回写).
     // key=字段名小写, 0/缺省=尚未分配. dll_entry.c 的字段表读它, 保证与
     // TypeLib 中同名字段的 dispid 一致 (否则早绑定客户端按 TypeLib 的 dispid
     // 调 Invoke 会命中错项).
-    std::unordered_map<std::string, int32_t> memberFieldDispids;
     // Fix 091a: 成员写方向参数表 — memberParams 按读上下文优先级 (Get > Function >
     // Sub > Let > Set) 只存胜出者, 对「Get 有参 + Let 末参才是 value」的属性
     // (cJson.Item(key)/Let Item(key, Dat As Variant)) 会存成 Get 的 [key], 使
@@ -238,9 +261,24 @@ struct Symbol {
     // tB 类继承 (B08a): 成员小写键 -> 声明时的访问级别。既有 11 张成员表都不带访问级别,
     // 而 `Protected` 的语义 (家族内可见) 与 `Inherits` 的可见面裁决都要读它; 跨模块拷贝
     // (driver_crossmod) 与继承合并 (driver_classchain) 两处都得带上, 漏一张就是静默错判。
-    std::unordered_map<std::string, AccessLevel> memberAccessLevels;
-    std::unordered_map<std::string, std::vector<ParameterInfo>> memberLetParams;
-    std::unordered_map<std::string, std::vector<ParameterInfo>> memberSetParams;
+    // --- 不可变载荷 (上面 11 张成员表) ---
+    // 读走 P(), 写走 W(); 语义见 SymbolPayload 顶部注释。
+    // 跨模块注入用 sharePayloadFrom() 共享同一份, 不再逐消费模块深拷贝。
+    std::shared_ptr<SymbolPayload> payload_;
+
+    const SymbolPayload& P() const {
+        static const SymbolPayload kEmpty;
+        return payload_ ? *payload_ : kEmpty;
+    }
+    SymbolPayload& W() {
+        if (!payload_) {
+            payload_ = std::make_shared<SymbolPayload>();
+        } else if (payload_.use_count() > 1) {
+            payload_ = std::make_shared<SymbolPayload>(*payload_);  // COW: 与别人共享时先克隆
+        }
+        return *payload_;
+    }
+    void sharePayloadFrom(const Symbol& src) { payload_ = src.payload_; }
     bool isInterface = false;                          // 是否为接口类(纯抽象,无实现)
     std::vector<std::string> implementsNames;          // Implements列表: 该类实现的接口名
     // 接口方法(仅isInterface=true时有意义): 必须被实现类覆盖的方法签名

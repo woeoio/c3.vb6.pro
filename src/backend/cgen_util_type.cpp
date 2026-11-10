@@ -549,8 +549,8 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                             ? (Symbol::toLower(csym->sourceModule) == clsLower)
                             : (Symbol::toLower(csym->name) == clsLower);
                         if (!hit) continue;
-                        auto it = csym->memberReturnTypes.find(memLowerCls);
-                        if (it != csym->memberReturnTypes.end()) {
+                        auto it = csym->P().memberReturnTypes.find(memLowerCls);
+                        if (it != csym->P().memberReturnTypes.end()) {
                             std::string rn = Symbol::toLower(it->second);
                             if (rn == "string")  return Vb6Type::String;
                             if (rn == "long")    return Vb6Type::Long;
