@@ -8,6 +8,12 @@ name: PhotoDemon x86 emit probe
 #  因此首次用分支 push 触发；后续可用 gh workflow run 指定 ref）。
 on:
   workflow_dispatch:
+    inputs:
+      timing:
+        description: 'C3_TIMING=1（相位计时/统计行走 stderr；会让总墙钟失真，不能与不带 TIMING 的读数混比）'
+        type: choice
+        options: ['0', '1']
+        default: '0'
   push:
     branches: [probe/photodemon-emit]
     paths:
@@ -71,7 +77,11 @@ jobs:
           "RUNNER_TOTAL_MB=$([math]::Round($os.TotalVisibleMemorySize/1KB,0))" | Tee-Object -FilePath .build\pd_emit.meta -Append
           # C3_TIMING=1: 相位计时/统计行走 stderr (不动 stdout, 不改进发码);
           # 只为把内存曲线归到相位上, 诊断计数照旧按 VBxxxx 正则归总。
-          $env:C3_TIMING = '1'
+          # 由 workflow_dispatch input 控制: push 触发的默认跑**不带** TIMING,
+          # 这样墙钟/stdout 可直接与基线对照; 相位归因另起一次 timing=1。
+          $timing = '${{ inputs.timing }}'
+          if ($timing -eq '1') { $env:C3_TIMING = '1' }
+          "C3_TIMING=$([bool]$env:C3_TIMING)" | Tee-Object -FilePath .build\pd_emit.meta -Append
           $p = Start-Process -FilePath (Join-Path $cwd '.build\C3.exe') `
                 -ArgumentList 'tests/photodemon/PhotoDemon.vbp','--arch','x86','--emit-c' `
                 -RedirectStandardOutput (Join-Path $cwd '.build\pd_emit.out') `
