@@ -2183,3 +2183,148 @@ E2b 后该 TU 退出截断组 ⇒ **本刀没有 TU 因接收者写法变长而�
 `c2b1e52c` / `853a36fa` 两轮完全同一组**，属既有红，不由本刀引入。
 
 
+## 36. G4 / M1 收口：控件数组接收者的类感知形参表（2026-11-11）
+
+- 提交：`b67f45ab`（`dev`，6 files changed / 262+ / 22-）；哨兵 `scripts/check_g4_receiver_class_gate.ps1`。
+- 探针分支：`b67f45ab` cherry-pick 为 `a9715867`，推 `github` + `origin` 的 `probe/photodemon-emit`。
+- 范围：本刀**只做 M1**。M2（菜单/控件事件处理器漏传 Index）、M3（内置/RTL 不补缺省）、
+  以及「UDT 内嵌数组字段被当函数调用」（本刀新归出）**全部不进本刀**，见 36.7。
+
+### 36.1 根因（M1）
+
+形参表决策的**接收者类解析**只有 `inferClassTypeOfExpr` 一条路，它不认**控件数组元素**接收者
+（AST 为 `IndexOrCallExpr`，如 `ddWhichFrame(1).AddItem ...`、`ctlMany(0).AddItem(...)`）。
+解析答不出 ⇒ 落回「全表按成员名兜底」`symTab_.lookupModule(成员名)`，命中**跨类同名成员**的形参表：
+
+| 成员 | 真实类（`pdDropDown`） | 兜底命中的类（`pdListSupport`） | 后果 |
+| --- | --- | --- | --- |
+| `AddItem` | 4 参（self + 4 = 5） | 5 参 | 多发 1 枚 Optional 缺省 + 1 枚 `_has_` 尾标记 |
+| `AssignTooltip` | 4 参 | 6 参 | 多发 2 枚 |
+
+即发码形状从「self + 4 参 + 4 `_has_`」变成「self + 5 参 + 5 `_has_`」，11 枚实参打 9 参原型 ⇒ `C2197`。
+**注意：这不是"少传 / 多传用户实参"，而是补缺省那一层按错的形参表补齐。** 所以 M1 属"接收者推断带出来的级联"，
+不是"真缺参数"。
+
+### 36.2 两道闸 + 可检查形态（用户硬要求）
+
+采纳点收敛为**唯一**成员函数 `CCodeGen::tryAdoptReceiverClassParams`（`src/backend/cgen_util_classtype.cpp`）：
+
+1. `inferCallReceiverClassForParams` 先试 `inferClassTypeOfExpr`；答不出再看接收者是否是
+   `IdentifierExpr` / `IndexOrCallExpr` 的 callee，查 `knownUserControlCtrlVars_`（控件数组变量 → UserControl 类）；
+2. 类解析仍为空 ⇒ `return false`；
+3. `findClassMemberCallParams` 未命中 ⇒ `return false`；只有 `true` 才写 `calleeParams`，
+   否则**逐字回落**原 `lookupModule` 兜底（三处兜底代码一行未动）。
+
+可检查形态 = `scripts/check_g4_receiver_class_gate.ps1`，5 条规则：
+
+| 规则 | 断言 |
+| --- | --- |
+| A1 | `tryAdoptReceiverClassParams` 定义在权威文件恰 1 处、全 `src` 恰 1 处 |
+| A2 | 函数体内 `inferCallReceiverClassForParams` 恰 1 次；`if (<x>.empty()) return false;` 出现在 `findClassMemberCallParams` **之前**；调用形如 `if (!findClassMemberCallParams(`；有 `return true;` |
+| A3 | 调用点恰 2 处，均为 `if (tryAdoptReceiverClassParams(` 守卫形态，且 400 字符内出现 `calleeParams = std::move(` |
+| A4 | 两处 class-unaware 兜底仍在（`if (!byClassCS254) { … lookupModule(maExpr.memberName) … }` 与 `callee_params.inc` 的 `lookupModule`） |
+| A5 | `C3-SENTINEL(g4-m1-gate)` 在权威文件恰 1 处 |
+
+已接入 `tests/run_tests.ps1` 静态分片（`Test-G4ReceiverClassGate`）；`check_static_sentinel_registration.ps1`
+复验 `127 sentinels on disk, all registered`。**负测试**：删掉 `if (recvCls.empty()) return false;` ⇒ 哨兵判红；
+还原 ⇒ PASS。即这道闸不靠口径说明，规则被改坏会立刻变红。
+
+### 36.3 小语料探针（4 模块，`.temp/g4_probe/M1/`）
+
+`G4Probe.vbp`：`G4Uc.ctl`（真接收者，`AddItem` 4 参）+ `G4Decoy.cls`（诱饵，`AddItem` 5 参）+ `G4Form.frm`
+（`ctlOne` 单枚、`ctlMany` 控件数组 Index 0/1），四种形态覆盖两条 gate 调用点。
+
+| 形态 | 修前实参数 | 修后 | 原型 |
+| --- | --- | --- | --- |
+| `ctlMany(1).AddItem "beta", 1`（无括号） | 11 | **9** | 9 |
+| `ctlMany(0).AddItem("delta", 3)`（带括号） | 11 | **9** | 9 |
+| `ctlMany(1).TagIt`（裸 MemberAccess、无括号无参） | 7 | **3** | 3 |
+| `ctlOne.AddItem "alpha", 0`（IdentifierExpr 接收者） | 9 | 9 | 9（未受影响） |
+
+修前 `cl /we4020` 3 处 `C4020`（本机 14.29 对同构造的码，CI 版是 `C2197`）；修后 **0 error / `CL_EXIT=0`**。
+
+### 36.4 629 形状门（逐条归因，该 bless 才 bless）
+
+`scripts/emit_manifest.ps1` 跑 629 个输入，修前（`C3_prefix.exe` sha256 `b89320be…`）与修后
+（`C3_after.exe` sha256 `90c7b1d1…`）各一份：
+
+- `629` 条数据行**逐行相同**，哈希不同 **0**，`rc=` 不同 **0** ⇒ **本刀不改任何既有语料的发码形状**。
+- 两份清单**只有第 1 行 `# c3-exe sha256=` 不同**（二进制本身），`toolset` / `inputs=629` 行一致。
+- ⇒ **不 bless，`emit-manifest.expected.txt` 未动。**
+
+与 checked-in 期望相比有 4 份 `.vbp` 不一致（`tests/guisample/GUISample.vbp`、两个
+`vb6ref/.../GUISample.vbp`、`tests/TeeChartChartDisplay/DisplayProject.vbp`）：这 4 份在**修前二进制上同样不一致**，
+修前修后是同一组 ⇒ 本机 vs CI 环境噪声，不是本刀引入，不静默、不 bless，只在此记账。
+
+### 36.5 整编读数（CI run `42856903368`，post-M1；基线 = `run 42812594786` / G3 收口版）
+
+| 诊断 | 修前 总量 / TU | 修后 总量 / TU | Δ总量 | 可比子集 Δ |
+| --- | --- | --- | --- | --- |
+| `C2197` | 762 / 49 | **219 / 21** | **-543** | **-411** |
+| `C2198` | 261 / 65 | 261 / 65 | 0 | 0 |
+| `C2065` | 283 / 102 | 283 / 102 | **0** | 0 |
+| `C2440` | 214 / 55 | 214 / 55 | **0** | 0 |
+| `C2039` | 88 / 12 | 88 / 12 | 0 | 0 |
+| `C2223` | 3 / 1 | 3 / 1 | 0 | 0 |
+| `C2064` | 66 / 12 | 66 / 12 | 0 | 0 |
+| `C2231` | 59 / 8 | 59 / 8 | 0 | 0 |
+| `C2296` | 14 / 14 | 14 / 14 | 0 | 0 |
+| 全码（excl `C1003`） | 1960 | **1417** | **-543** | — |
+
+- **`C2065` / `C2440` 没有被顺带推高**：总量、TU 数、可比子集三项全为 0 变化。
+- **`C1003` 截断组：3 TU → 1 TU**（`FormMain.c`、`FormMetadata.c`、`toolbar_Toolbox.c` → `FormMain.c`），
+  **新增 0**，消失 2 ⇒ 本刀没有让任何 TU 新撞上限，反而把两个 TU 拉回可测区间。
+- 可比子集（两轮都未撞 `C1003` 的 242 个 TU）：`C2197` `566 → 155`，其余 22 个码**全部 Δ=0**。
+- `BUILD_EXIT=1`、`EXE_EXISTS=False`（两轮一致，工程仍未整体编过；本刀只收诊断，不宣称可执行）。
+
+### 36.6 逐 TU / 逐成员归因
+
+`C2197` 按 TU：**上升的 TU 数 = 0**；下降 30 个 TU，合计 -543。前三名
+`toolbar_Toolbox.c 100→0`、`FormRechannel.c 70→0`、`toolpanel_Selections.c 50→0`。
+
+按被调方：**12 个族归零**，全部是 M1 命中的控件接收者族 ——
+`pdDropDown_AddItem 140→0`、`pdButtonToolbox_AssignTooltip 127→0`、`pdButtonStrip_AddItem 126→0`、
+`pdButtonToolbox_AssignImage 66→0`、`pdDropDown_AssignTooltip 21→0`、`pdCheckBox_AssignTooltip 18→0`、
+`pdButton_AssignTooltip 18→0`、`pdTitle_AssignTooltip 18→0`、`pdRadioButton_AssignTooltip 9→0`、
+`pdContainer_SetPosition 8→0`、`pdButtonStrip_AssignTooltip 6→0`、`pdSlider_AssignTooltip 6→0`。
+
+**唯一按函数看是涨的项要单独说清**：`vb6_pdStringStack_GetString 48→68`（+20）。它**不构成回归**：
+20 条全部落在 `FormMetadata.c`，而该 TU 在基线被 `C1003` 截断（96 条封顶）、本刀后截断解除（64 条），
+原本被吞的诊断现形；同一 TU 总量仍是 `96 → 64（-32）`。这正是"按 TU 看无上升项"的口径依据。
+
+剩余 219 条 `C2197` 的归属：`pdStringStack_GetString 68`（截断解除现形）、`Num_Div 24`、`RtlMoveMemory 22`、
+其余 105 条为单点/低频族（`UpdateAgainstCurrentTheme` 一族、`Tools_*_NotifyMouse*`、`Plugin_*_GetVersion` …），
+本刀未触及。
+
+### 36.7 单列项（不进本刀读数）
+
+**A) 46 条待确认桶（已在最终 emit 工件上钉死，单独汇报过，此处只记账）**
+
+- 工件：CI run `42856817850` 的 `pd_emit.out`（1078 段，每模块 `.h`+`.c`，`.c` 段行号与整编诊断逐条对齐）。
+- `vb6_Num_Div` 24 条 = **真·实参溢出**，4 个调用点 × 6 枚多余实参
+  （`pdSliderStandalone.c` 1394/1408、`Adjustments_Color_HSL.c` 925/927）。触发形态：
+  **无括号语句式调用 + 首实参是 `/` 除法 + 被调方带 ByRef 出参**，真 callee 被塞成 `Num_Div` 的第 1 实参、
+  其余实参漏到 `Num_Div` 实参表尾。→ 归 **M3 之后的「无括号调用 + 二元表达式实参」刀**。
+- `vb6_lwa_RtlMoveMemory` 22 条 = **C2064 的级联，不是 arity 问题**。`CopyMemoryStrict` 全工程 504 个点
+  全 3 实参、零失配；这 22 行**每行都同时带一条 `C2064`**（22/22 落在全工程 66 条 `C2064` 的 (file,line) 集合内），
+  现场是 **UDT 内嵌数组字段被当函数调用发码**（`.pixelData(0, 0)`、`(*srcChannel).cBytes(...)`）。
+  → 归 **「UDT 内嵌数组字段被当函数调用」刀**（本刀新归出）。
+- 工件级前后一致性：`pdGIF.c`(1929 行) / `pdXCF.c`(3540) / `pdSliderStandalone.c`(1984) /
+  `Adjustments_Color_HSL.c`(960) 四个模块的 `.c` 段**逐字节 SAME**；对照组 `toolpanel_Gradient.c` **DIFF**
+  （M1 命中），`vb6_pdDropDown_AddItem` 的 11 实参点 **70 → 0**。
+
+**B) M2 / M3**（范围批准时即约定单列，本刀不碰）：M2 = 菜单/控件事件处理器漏传 `Index`；
+M3 = 内置/RTL 不补缺省。二者构成 `C2198 261 / 65 TU` 的主体：
+`FormMain_Mnu*_Click` 一族 ~86 条（15+14+10+9+8+6+5+5+4+3+2+2+1+1+1）、
+`pdResize_ConvertUnitToPixels 12`、`pdOpenSaveDialog_Get*FileName 10`、`IntDiv 7`、`Randomize 7`、`MonthName 7`。
+
+### 36.8 下一刀排序（按本刀读数重排收益）
+
+1. **M2 菜单/控件事件处理器漏传 `Index`** —— `C2198` 单族最大（`FormMain_Mnu*_Click` ~86 条 / 14 TU），
+   机理单一（事件 raiser 补 `Index`），改动面小。
+2. **「UDT 内嵌数组字段被当函数调用」** —— 一次收 `C2064 66 + C2197 22`，且是**错误码混用**（本该是取址/下标），
+   不修则会持续污染 `C2197` 的读数口径。
+3. **M3 内置/RTL 补缺省** —— `C2198` 剩下的散点族（`IntDiv/Randomize/MonthName/CSng/Str/…`）+ `Num_Div` 24 条。
+4. 之后再看 `C2039` 残余 88 条（G3b：带参模块函数当接收者）与 `C2065 283`。
+
+
