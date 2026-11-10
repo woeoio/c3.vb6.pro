@@ -476,7 +476,7 @@ void CCodeGen::visit(TypeDecl& node) {
     // 泛型模板 (tB, G2): 模板本体不发码 (特化副本由泛型器注入, 是普通 TypeDecl)
     if (!node.typeParams.empty()) return;
     std::string typeName = cIdent(node.name);
-    // 账 §G1: 记下本块在 .h 缓冲里的起止, 原样摘出来备案 (见 udtDefBlocks_)
+    // 账 §G1 / §G1b: 记下本块在 .h 缓冲里的起点, 原样摘出来备案 (见 udtDefs_)
     const size_t defStart = h_.size();
     bool hasPack = (node.packingAlignment > 0);
     if (hasPack) {
@@ -563,10 +563,19 @@ void CCodeGen::visit(TypeDecl& node) {
         h_.emitLine("#pragma pack(pop)");
     }
     h_.emitBlank();
-    // 账 §G1: 同名 UDT 在多个模块各有一份声明时, 定义块内容可能不同 (各模块自己的
-    // 成员类型解析) —— 工程级表保留**先到者**, 与 .h 里的 #ifndef 守卫同一口径:
-    // 谁先被展开谁定义, 后到的同名块在 C 里本来也是被守卫跳过的.
-    if (!typeName.empty()) udtDefBlocks_[typeName] = h_.substr(defStart);
+    // 账 §G1b: 同名 UDT 在多个模块各有一份声明时, 定义块内容可能不同 (各模块自己的
+    // 成员类型解析) —— 所以按 (模块, 类型名) 归档并带上可见性, 不再"同名先到者"。
+    // VB6 对象模块 (类/窗体) 里的 Type 一律模块私有 (Public Type 在对象模块非法);
+    // 标准模块里显式 Private 的同样不跨模块。只有标准模块的 Public Type 允许注入别处。
+    if (!typeName.empty()) {
+        UdtDefRecord rec;
+        rec.moduleLower = Symbol::toLower(moduleName_);
+        rec.typeName = typeName;
+        rec.isPrivate = (node.access == AccessLevel::Private)
+                        || isClassModule_ || isFormModule_;
+        rec.block = h_.substr(defStart);
+        udtDefs_.push_back(std::move(rec));
+    }
 }
 
 void CCodeGen::visit(TypeMember& node) {
