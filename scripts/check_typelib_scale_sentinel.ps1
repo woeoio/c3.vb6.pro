@@ -125,11 +125,22 @@ Write-Vbp $vbp1 $N1
 Write-Vbp $vbp2 $N2
 
 function Measure-Run([string]$vbp) {
-    $log = [System.IO.Path]::GetTempFileName()
-    $err = $log + ".err"
+    # PS 5.1 的 `Start-Process -PassThru` 在本机与 CI runner 上都读不回 ExitCode（恒空 ⇒
+    # 「C3 退出码非 0」误报，改前就在改）；直接用 Process 对象，5.1 / 7.x 都能读。
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $C3
+    $psi.Arguments = ('"' + $vbp + '" --syntax-only')
+    $psi.WorkingDirectory = $Root
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $p = Start-Process -FilePath $C3 -ArgumentList ('"' + $vbp + '" --syntax-only') -WorkingDirectory $Root `
-        -RedirectStandardOutput $log -RedirectStandardError $err -NoNewWindow -PassThru
+    [void]$p.Start()
+    # 必须异步抽干两条管道：-syntax-only 的输出足以写满 4 KB 管道，不抽会互相等死。
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
     $peak = 0
     while (-not $p.HasExited) {
         try { $p.Refresh(); if ($p.PeakWorkingSet64 -gt $peak) { $peak = $p.PeakWorkingSet64 } } catch { }
@@ -137,10 +148,10 @@ function Measure-Run([string]$vbp) {
     }
     $sw.Stop()
     try { if ($p.PeakWorkingSet64 -gt $peak) { $peak = $p.PeakWorkingSet64 } } catch { }
-    # -PassThru 不等待时 ExitCode 可能还没回填，必须 WaitForExit 一次再读
-    try { $p.WaitForExit() } catch { }
+    $p.WaitForExit()
     $rc = $p.ExitCode
-    Remove-Item $log, $err -Force -ErrorAction SilentlyContinue
+    [void]$outTask.Result
+    [void]$errTask.Result
     return @(($peak / 1MB), $sw.Elapsed.TotalSeconds, $rc)
 }
 
