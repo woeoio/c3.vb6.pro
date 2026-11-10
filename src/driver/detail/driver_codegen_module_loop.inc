@@ -53,6 +53,16 @@
     // Fix <vbeclipse> 2026-10-06: Object= OCX 免注册组件表 {ProgID, CLSID, coclass名, 相对exe路径}
     const std::vector<std::array<std::string, 4>>& ocxLibRefs = ocxLibRefs_;
 
+    // 账 §G1: 两阶段发码的产物暂存 (模块序) + 工程级 UDT 定义块表 (同名取先到者)
+    struct ModArtifact {
+        std::string baseName;
+        std::string header;
+        std::string source;
+    };
+    std::vector<ModArtifact> artifacts;
+    artifacts.reserve(modules_.size());
+    std::unordered_map<std::string, std::string> projectUdtDefs;
+
     for (size_t i = 0; i < modules_.size(); i++) {
         auto& module = modules_[i];
         auto& analyzer = analyzers_[i];
@@ -164,32 +174,92 @@
             asmProcs_.push_back({baseName, ap});
         }
 
-        // 写 .h 文件
-        std::string hPath = outputDir + "/" + baseName + ".h";
+        // 账 §G1: 生成与落盘拆两阶段 —— 这里只收产物与 UDT 定义块, 不写盘。
+        // 原因: 模块 i 的头可能要按值用模块 j>i 定义的 UDT, 单趟边生成边写拿不到 j 的定义块。
+        artifacts.push_back({baseName, cgen.headerCode(), cgen.sourceCode()});
+        for (const auto& kv : cgen.udtDefBlocks()) projectUdtDefs.emplace(kv.first, kv.second);
+    }
+
+    // ===== 阶段 2 (账 §G1): 让每个 .h 自足, 再落盘 =====
+    // 头里出现的 `vb6_type_X` 若本工程有定义块, 就按依赖序把完整 struct 体提到
+    // `#include "vb6rtl.h"` 之后。C 的值成员要求完整类型, 旧的"只给前向 typedef"必然
+    // 让消费方撞 C2079; 而靠 vbp 的模块先后蒙过去不算解法 —— 这里不改变任何模块的顺序,
+    // 每个头自己带够定义。
+    // 同名 UDT 在多个模块各声明一份时, 用 phase 1 汇总的**先到者** (与 .h 里
+    // #ifndef VB6_TYPE_X_DEFINED 守卫同口径); 守卫保证重复展开被跳过。
+    auto collectTokens = [](const std::string& s, const char* prefix, std::set<std::string>& out) {
+        const size_t n = std::strlen(prefix);
+        size_t p = 0;
+        while ((p = s.find(prefix, p)) != std::string::npos) {
+            size_t q = p + n, r = q;
+            while (r < s.size()
+                   && (std::isalnum((unsigned char)s[r]) || s[r] == '_')) r++;
+            if (r > q) out.insert(s.substr(q, r - q));
+            p = r;
+        }
+    };
+    for (auto& art : artifacts) {
+        std::string& hdr = art.header;
+        const size_t incPos = hdr.find("#include \"vb6rtl.h\"");
+        if (incPos == std::string::npos) continue;
+        std::set<std::string> usedTypes;
+        collectTokens(hdr, "vb6_type_", usedTypes);
+        if (usedTypes.empty()) continue;
+        std::set<std::string> emitted;
+        std::string block;
+        std::function<void(const std::string&)> emitOne = [&](const std::string& name) {
+            if (!emitted.insert(name).second) return;
+            auto it = projectUdtDefs.find(name);
+            if (it == projectUdtDefs.end()) return;   // RTL/系统类型: 由 vb6rtl.h 自己给齐
+            std::set<std::string> deps;
+            collectTokens(it->second, "vb6_type_", deps);
+            for (const auto& d : deps) {
+                if (d != name) emitOne(d);
+            }
+            block += it->second;
+        };
+        for (const auto& t : usedTypes) emitOne(t);
+        if (block.empty()) continue;
+        // 定义块里可能提到别的类的指针 (`vb6_cls_Foo*`), 那些名字在消费方头里未必有
+        // 前向 typedef —— 补上 (C11 允许同类型 typedef 重复声明, 已有的不会冲突).
+        std::set<std::string> clsNames;
+        collectTokens(block, "vb6_cls_", clsNames);
+        std::string pre;
+        for (const auto& c : clsNames) {
+            pre += "typedef struct vb6_cls_" + c + " vb6_cls_" + c + ";\n";
+        }
+        size_t insertAt = hdr.find('\n', incPos);
+        if (insertAt == std::string::npos) insertAt = incPos + std::strlen("#include \"vb6rtl.h\"");
+        else insertAt += 1;
+        hdr.insert(insertAt, pre + block);
+    }
+
+    // 阶段 2 落盘 + --emit-c 输出 (顺序与阶段 1 的模块序一致, 保证产物确定性)
+    for (auto& art : artifacts) {
+        std::string hPath = outputDir + "/" + art.baseName + ".h";
         {
             std::ofstream ofs = ofstreamUtf8(hPath, std::ios::out | std::ios::trunc);
             if (!ofs) {
                 std::cerr << "C3: 无法写入文件: " << hPath << std::endl;
                 return false;
             }
-            ofs << cgen.headerCode();
+            ofs << art.header;
         }
 
-        // 写 .c 文件
-        std::string cPath = outputDir + "/" + baseName + ".c";
+        std::string cPath = outputDir + "/" + art.baseName + ".c";
         {
             std::ofstream ofs = ofstreamUtf8(cPath, std::ios::out | std::ios::trunc);
             if (!ofs) {
                 std::cerr << "C3: 无法写入文件: " << cPath << std::endl;
                 return false;
             }
-            ofs << cgen.sourceCode();
+            ofs << art.source;
         }
-        c3PhaseMark("io " + baseName);    // ai/030 续: .h/.c 落盘计时
+        c3PhaseMark("io " + art.baseName);    // ai/030 续: .h/.c 落盘计时
 
         if (options.verbose) {
-            std::cout << "C3: 生成 " << hPath << " (" << cgen.headerCode().size() << " bytes)" << std::endl;
-            std::cout << "C3: 生成 " << cPath << " (" << cgen.sourceCode().size() << " bytes)" << std::endl;
+            std::cout << "C3: 生成 " << hPath << " (" << art.header.size() << " bytes)" << std::endl;
+            std::cout << "C3: 生成 " << cPath << " (" << art.source.size() << " bytes)" << std::endl;
         }
 
         // --emit-c 模式: 输出C代码后结束
@@ -199,9 +269,9 @@
         // 先 flush 诊断，再直接 fwrite（stdout 是文本流，'\n' 照旧翻成 CRLF，与 ofstream 写的那两份一致）。
         if (options.emitC) {
             std::cout.flush();
-            std::string dump = cgen.headerCode();
+            std::string dump = art.header;
             dump += "\n";
-            dump += cgen.sourceCode();
+            dump += art.source;
             dump += "\n";
             writeStdoutRaw(dump);
             std::fflush(stdout);

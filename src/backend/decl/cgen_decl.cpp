@@ -476,6 +476,8 @@ void CCodeGen::visit(TypeDecl& node) {
     // 泛型模板 (tB, G2): 模板本体不发码 (特化副本由泛型器注入, 是普通 TypeDecl)
     if (!node.typeParams.empty()) return;
     std::string typeName = cIdent(node.name);
+    // 账 §G1: 记下本块在 .h 缓冲里的起止, 原样摘出来备案 (见 udtDefBlocks_)
+    const size_t defStart = h_.size();
     bool hasPack = (node.packingAlignment > 0);
     if (hasPack) {
         h_.emitLine("#pragma pack(push, " + std::to_string(node.packingAlignment) + ")");
@@ -561,6 +563,10 @@ void CCodeGen::visit(TypeDecl& node) {
         h_.emitLine("#pragma pack(pop)");
     }
     h_.emitBlank();
+    // 账 §G1: 同名 UDT 在多个模块各有一份声明时, 定义块内容可能不同 (各模块自己的
+    // 成员类型解析) —— 工程级表保留**先到者**, 与 .h 里的 #ifndef 守卫同一口径:
+    // 谁先被展开谁定义, 后到的同名块在 C 里本来也是被守卫跳过的.
+    if (!typeName.empty()) udtDefBlocks_[typeName] = h_.substr(defStart);
 }
 
 void CCodeGen::visit(TypeMember& node) {

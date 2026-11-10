@@ -44,6 +44,13 @@ public:
     // 获取生成的代码
     std::string str() const { return oss_.str(); }
 
+    // 账 §G1: 取当前缓冲长度 / 从某位置起的片段 —— 用来把"某次 visit 落下的那段"
+    // 原样摘出来 (UDT 结构体定义块), 供跨模块头自足展开, 不重新渲染 (重渲染会丢
+    // 定长串长度与多维数组维度这些只有声明侧 AST 才有的信息).
+    // 注意 tellp() 不是 const 成员, 所以这两个也不标 const (只在本类非 const 上下文用).
+    size_t size() { return (size_t)oss_.tellp(); }
+    std::string substr(size_t from) const { return oss_.str().substr(from); }
+
     // 清空
     void clear() { oss_.str(""); oss_.clear(); indentLevel_ = 0; pendingLines_.clear(); postLines_.clear(); }
 
