@@ -287,6 +287,16 @@
             lastExpr_ = ivRecv221;
             return;
         } else if (node.object) {
+            // G3-E2: 接收者是 `Mod.Fn` 且 Fn 为**无参**函数时, 值应是**调用结果**,
+            //   不是函数地址。这里一次性把 `()` 补齐, 下面两条腿 (成员调用 / 数据字段读)
+            //   共用同一个接收者文本 —— 此前只在成员调用那一支补, 字段读于是发出
+            //   `vb6_PDImages_GetActiveImage->MainSelection` ⇒ C2223 (left of '->' must
+            //   point to struct/union), 实测 PhotoDemon `PDImages.GetActiveImage.PublicField`
+            //   共 283 处。值上下文那一支另见 cgen_expr_member_class_module.inc。
+            if (findModuleQualifiedNoArgFunction(*node.object)
+                && (obj.size() < 2 || obj.compare(obj.size() - 2, 2, "()") != 0)) {
+                obj += "()";
+            }
             // Fix 088c: AST 层兜底推断 — obj 是 knownClassVars_ 未覆盖的类实例
             // 表达式文本 (prop_get 调用文本 vb6_cY_prop_get_Z(a)、类方法链返回、
             // WithMemberExpr 等). inferClassTypeOfExpr 走 AST 递归
@@ -302,18 +312,9 @@
                     // (`me->m_x` 这类) 与 ⑤ 同法接派发; 含调用的 (链式/属性返回对象) 由
                     // mustDispatch=true 出 VB3027 —— 这一支此前一律静默直调, 正是
                     // D27-13 那类"编得过、虚调用消失"的形状。
+                    // 接收者的 `()` 已由本分支开头的 G3-E2 统一补齐 (含 asCallCallee_
+                    // 上下文里提前发出的裸函数名)。
                     std::string thisArg088c = "(void*)" + obj;
-                    // G3-E2: 接收者是 `Mod.Fn` 且 Fn 为无参函数时, 值应是**调用结果**,
-                    //   不是函数地址。值上下文那一支已由 cgen_expr_member_class_module.inc
-                    //   补过 `()`; 但 callee 上下文里接收者是提前 (asCallCallee_=true) 发的,
-                    //   那条补括注被跳过 —— 实测 PhotoDemon
-                    //   `PDImages.GetActiveImage.GetActiveDIB().GetDIBColorDepth` 内层发成
-                    //   `vb6_pdImage_GetActiveDIB((void*)vb6_PDImages_GetActiveImage)`。
-                    //   这里按 AST 复核一次, 只补真正缺的那一层。
-                    if (findModuleQualifiedNoArgFunction(*node.object)
-                        && (obj.size() < 2 || obj.compare(obj.size() - 2, 2, "()") != 0)) {
-                        thisArg088c = "(void*)" + obj + "()";
-                    }
                     if (!suppressVirtDispatch_
                         && resolvedFn.find("_prop_let_") == std::string::npos
                         && resolvedFn.find("_prop_set_") == std::string::npos) {
