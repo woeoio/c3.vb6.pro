@@ -110,7 +110,7 @@ void CCodeGen::emitDelegateDecls(Module& module) {
                     ")(" + makeParamList(del.params, true) + ");");
 
         if (!delSym) continue;
-        for (auto& t : delSym->delegateTargets) {
+        for (auto& t : delSym->P().delegateTargets) {
             Decl* proc = findDelegateTargetDecl(module, t.procName, t.procFp);
             if (!proc) continue;  // 语义层已校验目标存在, 防御性跳过
             std::string sig = (proc->kind == ASTNodeKind::FunctionDecl)

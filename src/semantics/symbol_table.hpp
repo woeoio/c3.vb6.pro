@@ -152,6 +152,14 @@ struct SymbolPayload {
     std::unordered_map<std::string, AccessLevel> memberAccessLevels;  // tB B08a
     std::unordered_map<std::string, std::vector<ParameterInfo>> memberLetParams;  // Fix 091a
     std::unordered_map<std::string, std::vector<ParameterInfo>> memberSetParams;  // Fix 091a
+    // --- COM 方法签名表 / Delegate 签名 (第二刀) ---
+    std::unordered_map<std::string, ComMethodSig> comMethods;          // key=小写方法名
+    std::unordered_map<std::string, ComMethodSig> comSourceMethods;    // source interface 方法签名
+    std::unordered_map<std::string, ComMethodSig> comModuleFunctions;  // P24-04: COM Module全局函数
+    ProcKind delegateProcKind = ProcKind::Sub;
+    CallConv delegateCallConv = CallConv::StdCall;
+    Vb6Type delegateReturnType = Vb6Type::Void;
+    std::vector<DelegateTarget> delegateTargets;
 };
 
 struct Symbol {
@@ -346,9 +354,8 @@ struct Symbol {
 
     // COM方法签名 (ComInterface用, 方法名小写→签名)
     // 类型已上提到命名空间作用域 (见本文件上方), 这里保留同名别名以兼容 `Symbol::ComMethodSig`。
+    // 表本体已收进 SymbolPayload (见结构体定义), 读 `P().comMethods`, 写 `W().comMethods`。
     using ComMethodSig = ::vb6c3::ComMethodSig;
-    std::unordered_map<std::string, ComMethodSig> comMethods;  // key=小写方法名
-    std::unordered_map<std::string, ComMethodSig> comSourceMethods;  // source interface 方法签名 (key=小写方法名)
 
     // P24-10: COM默认成员名 (DISPID_VALUE=0, 如 Dictionary.Item, Collection._Item)
     // VB6语义: obj(args) 等价于 obj.DefaultMember(args)
@@ -367,7 +374,7 @@ struct Symbol {
 
     // --- P24-04: COM Module全局函数 (SymbolKind::ComModule) ---
     std::string comModuleDllPath;    // 源DLL路径 (用于LoadLibrary)
-    std::unordered_map<std::string, ComMethodSig> comModuleFunctions;  // key=小写函数名
+    // comModuleFunctions 表已收进 SymbolPayload (见结构体定义), 读 `P()`, 写 `W()`。
 
     // --- P24-04: VB_GlobalNameSpace promoted函数 (SymbolKind::ComGlobalNs) ---
     // coclass的VB_GlobalNameSpace=True时, 默认接口的Public方法提升为全局符号
@@ -378,15 +385,11 @@ struct Symbol {
     std::string comGlobalNsMethodName;  // P24-04: 提升的方法名 (原始大小写, 如"VBMAN")
 
     // --- Delegate 签名 (仅 SymbolKind::Delegate) ---
-    // 委托值本身按 Vb6Type::LongPtr 表示 (位兼容), 签名细节存这里,
-    // 供赋值/传参/调用点的签名检查与后端桩生成使用.
-    ProcKind delegateProcKind = ProcKind::Sub;
-    CallConv delegateCallConv = CallConv::StdCall;
-    Vb6Type delegateReturnType = Vb6Type::Void;
-    // 语义层在 AddressOf 绑定成功时登记的静态目标 (v1 限同模块过程).
+    // 委托值本身按 Vb6Type::LongPtr 表示 (位兼容), 签名细节存这个载荷 (见结构体定义),
+    // 供赋值/传参/调用点的签名检查与后端桩生成使用. 读 `P()`, 写 `W()`。
+    // 语义层在 AddressOf 绑定成功时登记的静态目标也收在同一载荷的 delegateTargets 里.
     // 类型已上提到命名空间作用域, 这里保留同名别名以兼容 `Symbol::DelegateTarget`。
     using DelegateTarget = ::vb6c3::DelegateTarget;
-    std::vector<DelegateTarget> delegateTargets;
 
     // --- P20-21: UDT成员信息 (仅SymbolKind::UserDefinedType) ---
     struct UdtMemberInfo {

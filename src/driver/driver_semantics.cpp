@@ -40,8 +40,8 @@ void insertComMethod(Symbol& sym, const std::string& key, Symbol::ComMethodSig s
                      ComMemberKind kind) {
     bool incomingSetter = (kind == ComMemberKind::PropertyPut
                         || kind == ComMemberKind::PropertyPutRef);
-    auto it = sym.comMethods.find(key);
-    if (incomingSetter && it != sym.comMethods.end() && it->second.isPropertyGet) {
+    auto it = sym.P().comMethods.find(key);
+    if (incomingSetter && it != sym.P().comMethods.end() && it->second.isPropertyGet) {
         return;  // 已有 getter, setter 不得覆盖
     }
     // 账 #245 / §B94 的政策就两条: ① getter 永远赢 over setter (上面那道闸, 两向都对); ② 其余的覆盖今天
@@ -51,7 +51,7 @@ void insertComMethod(Symbol& sym, const std::string& key, Symbol::ComMethodSig s
     // putref_Item 折成同一个小写键, 读形三项全同) —— 两种都不许响。响的只剩「读形真的变了、又不是
     // blessed 那一向」那一种 (实测语料 0 次)。
     {
-        bool exists = (it != sym.comMethods.end());
+        bool exists = (it != sym.P().comMethods.end());
         // 注意顺序: 先判存在, 再解引用 it->second —— 反过来就是把 end() 迭代器当元素读
         // (本机实测: 每台输入一进来就 0xC0000409 崩在 insertComMethod 里)。
         bool oldSetter = exists && (it->second.isPropertyPut || it->second.isPropertyPutRef);
@@ -70,7 +70,7 @@ void insertComMethod(Symbol& sym, const std::string& key, Symbol::ComMethodSig s
                       << std::endl;
         }
     }
-    sym.comMethods[key] = std::move(sig);
+    sym.W().comMethods[key] = std::move(sig);
 }
 
 } // namespace
@@ -175,7 +175,7 @@ void Driver::buildSharedTypelibSymbols() {
                             pi.isOptional = param.isOptional;
                             sig.params.push_back(pi);
                         }
-                        sym->comSourceMethods[Symbol::toLower(member.name)] = std::move(sig);
+                        sym->W().comSourceMethods[Symbol::toLower(member.name)] = std::move(sig);
                     }
                 }
             }
@@ -304,7 +304,7 @@ void Driver::buildSharedTypelibSymbols() {
                     pi.isOptional = param.isOptional;
                     sig.params.push_back(std::move(pi));
                 }
-                sym->comModuleFunctions[func.name] = std::move(sig);
+                sym->W().comModuleFunctions[func.name] = std::move(sig);
             }
             tab.define(std::move(sym));
         }

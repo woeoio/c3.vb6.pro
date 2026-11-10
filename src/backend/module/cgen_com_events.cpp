@@ -436,7 +436,7 @@ void CCodeGen::emitComVtableSinkDecls() {
         if (!srcClsSym || srcClsSym->kind != SymbolKind::ComClass) continue;
         if (!srcClsSym->comHasSourceIface) continue;
         if (srcClsSym->comSourceIfaceIsDispOnly) continue;  // dispinterface uses vb6_CreateEventSink
-        if (srcClsSym->comSourceMethods.empty()) continue;
+        if (srcClsSym->P().comSourceMethods.empty()) continue;
         if (srcClsSym->comSourceIfaceIid.empty()) continue;
         std::string createFn = "vb6_vsink_" + varLower + "_create";
         // Fix 095: 声明须与定义/调用一致 (void* handler)。原声明 (void) 导致
@@ -468,7 +468,7 @@ void CCodeGen::emitComVtableSinks() {
         if (!srcClsSym || srcClsSym->kind != SymbolKind::ComClass) continue;
         if (!srcClsSym->comHasSourceIface) continue;
         if (srcClsSym->comSourceIfaceIsDispOnly) continue;  // dispinterface uses vb6_CreateEventSink
-        if (srcClsSym->comSourceMethods.empty()) continue;
+        if (srcClsSym->P().comSourceMethods.empty()) continue;
         if (srcClsSym->comSourceIfaceIid.empty()) continue;
 
         std::string iidStr = srcClsSym->comSourceIfaceIid;
@@ -542,8 +542,8 @@ void CCodeGen::emitComVtableSinks() {
         // 及关联 C2099 (vtable 初始化器不是常量).
         for (auto& evtName : srcClsSym->eventNames) {
             std::string evtLower = Symbol::toLower(evtName);
-            auto itSig = srcClsSym->comSourceMethods.find(evtLower);
-            if (itSig == srcClsSym->comSourceMethods.end()) continue;
+            auto itSig = srcClsSym->P().comSourceMethods.find(evtLower);
+            if (itSig == srcClsSym->P().comSourceMethods.end()) continue;
             auto& sig = itSig->second;
 
             std::string handlerName = varName + "_" + evtName;
@@ -599,7 +599,7 @@ void CCodeGen::emitComVtableSinks() {
         c_.emitLine(sinkPrefix + "_QI, " + sinkPrefix + "_AddRef, " + sinkPrefix + "_Release,");
         for (auto& evtName : srcClsSym->eventNames) {
             std::string evtLower = Symbol::toLower(evtName);
-            if (srcClsSym->comSourceMethods.find(evtLower) == srcClsSym->comSourceMethods.end()) continue;
+            if (srcClsSym->P().comSourceMethods.find(evtLower) == srcClsSym->P().comSourceMethods.end()) continue;
             c_.emitLine(sinkPrefix + "_" + cIdent(evtName) + ",");
         }
         c_.dedent();

@@ -268,10 +268,10 @@ void SemanticAnalyzer::visit(DelegateDecl& node) {
             SymbolKind::Delegate, node.name,
             Vb6Type::LongPtr, node.loc, node.access
         );
-        sym->delegateProcKind = node.procKind;
-        sym->delegateCallConv = node.callingConv;
+        sym->W().delegateProcKind = node.procKind;
+        sym->W().delegateCallConv = node.callingConv;
         if (node.procKind == ProcKind::Function && node.returnType) {
-            sym->delegateReturnType = resolveTypeRef(node.returnType.get());
+            sym->W().delegateReturnType = resolveTypeRef(node.returnType.get());
         }
         for (auto& param : node.params) {
             ParameterInfo pi;

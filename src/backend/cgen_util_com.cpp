@@ -100,8 +100,8 @@ CCodeGen::ComSigView CCodeGen::comSigViewOf(const Symbol* comSym,
                                             const std::string& memberName) const {
     ComSigView sv;
     if (!comSym) return sv;
-    auto it = comSym->comMethods.find(Symbol::toLower(memberName));
-    if (it == comSym->comMethods.end()) return sv;
+    auto it = comSym->P().comMethods.find(Symbol::toLower(memberName));
+    if (it == comSym->P().comMethods.end()) return sv;
     sv.found = true;
     sv.isGet = it->second.isPropertyGet;
     sv.retCType = mapType(it->second.returnType);
