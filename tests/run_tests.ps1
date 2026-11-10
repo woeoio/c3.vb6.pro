@@ -1967,6 +1967,48 @@ function Test-G4EventIndexForward {
     }
 }
 
+function Test-G4UdtMemberNd {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] g4_udt_member_nd ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_g4_udt_member_nd.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-G4NegFirstArg {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] g4_neg_first_arg ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_g4_neg_first_arg.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+function Test-G4ValueMemberParen {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] g4_value_member_paren ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_g4_value_member_paren.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-CtrlPropTypeAuthority {
     $script:total++
     Write-Host -NoNewline "  [STATIC] ctrl_prop_type_authority ... "
@@ -12054,6 +12096,9 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-CtrlArrayMemberSites }
     if (Enter-StaticShard) { Test-G4ReceiverClassGate }
     if (Enter-StaticShard) { Test-G4EventIndexForward }
+    if (Enter-StaticShard) { Test-G4UdtMemberNd }
+    if (Enter-StaticShard) { Test-G4NegFirstArg }
+    if (Enter-StaticShard) { Test-G4ValueMemberParen }
     if (Enter-StaticShard) { Test-CtrlPropTypeAuthority }
     if (Enter-StaticShard) { Test-FormDrawState }
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }
@@ -12502,6 +12547,51 @@ if ($Category -in @("all", "syntax")) {
         "vb6_PropertyPage_Changed = (-1);") @("VB3001")
     Test-CodegenNote "dochost_bare_typo_still_reported" @("$Tests\dochost\dhTypo.pag") @(
         "'Changd'") @("'Changed'", "vb6_PropertyPage_Changed")
+    # §38 探针 (PhotoDemon C2064 主族): UDT 的**动态数组字段**被下标访问时, member 站
+    # (obj.arr(i,j)) 与 With 站 (.arr(i,j)) 以前都只写死"实参正好 1 枚", 秩 2 整条落空,
+    # 退回通用调用路发成 `field(0, 0)` ⇒ cl C2064 + 同站 C2197 (全工程 48 + 32 条)。
+    # 正面钉: 秩 2 走 VB6_SA_ND_AT2 (含数组元素 UDT 与 With 两站), 秩 1 仍是 VB6_SA_AT,
+    # 定长 2 维成员仍是 C 多维数组 `[2][1]` —— 后两条是负控 (防一刀把存量形状改掉)。
+    Test-CodegenNote "pd_udtmem_nd_rank2" @(
+        "$Tests\b606_udtmem_nd\ModNd.bas", "$Tests\b606_udtmem_nd\Frames.cls") @(
+        "VB6_SA_ND_AT2(uint8_t, (vb6_SafeArrayND*)(*ch).cBytes, 1, 2)",
+        "VB6_SA_ND_AT2(uint8_t, (vb6_SafeArrayND*)VB6_SA_AT(vb6_type_Frame, me->m_allFrames, frameIndex).pixelData, 0, 0)",
+        "VB6_SA_ND_AT2(uint8_t, (vb6_SafeArrayND*)_vb6_with_0->pixelData, 1, 1)",
+        "VB6_SA_ND_AT2(uint8_t, (vb6_SafeArrayND*)(*ly).lMask.cBytes, 0, 0)",
+        "VB6_SA_AT(uint8_t, (*ch).cLine, 5)",
+        "(*ch).cFixed[2][1]",
+        "vb6_Frames_Pick(me, 1, 2)") @("cBytes(1, 2)", "pixelData(0, 0)")
+
+    # §B93 探针: 语句级无括号调用的**首参是负数**。右操作数是二元乘 (`-1 * w`) 或标识符
+    # (`-x`) 时, 旧判据 (只认 LiteralExpr) 落空 ⇒ 整句发成 `(callee - (1*w))(args)`
+    # ⇒ cl C2064 (PhotoDemon 9 处 / 7 TU)。正面钉折叠后的三形 (含存量字面数那一形),
+    # 反面钉赋值右侧的减法**不许**被折叠 (那是真减法, 不是调用首参)。
+    Test-CodegenNote "pd_neg_first_arg" @(
+        "$Tests\b607_neg_first_arg\ModNeg.bas", "$Tests\b607_neg_first_arg\Mover.cls") @(
+        "vb6_Mover_Move((*o), (-(1 * w)), h)",
+        "vb6_Mover_Move((*o), (-x), (y + 1))",
+        "vb6_Mover_Move((*o), (-30), (-40))",
+        "vb6_ret_UseVal = (vb6_Mover_prop_get_Val((*o)) - 1)") @(
+        "(vb6_Mover_Move((*o)) - ")
+
+    # §B94 探针: 值成员被写成"带空括号"。成员读已产出完整 C 表达式, 再追 `()` 就是
+    # "调用非函数" ⇒ C2064 (PhotoDemon 9 条 = options_Updates 4 + SelectionFilters 4 +
+    # pdCommandBarMini 1)。正面钉三条读法尾注都不再跟 `()`, 反面钉同一批成员的普通读法
+    # (无括号/带参写) 与真方法调用逐字不变。
+    Test-CodegenNote "pd_value_member_paren" @(
+        "$Tests\b608_value_member_paren\ValForm.frm",
+        "$Tests\b608_value_member_paren\PDImages.bas",
+        "$Tests\b608_value_member_paren\Img.cls") @(
+        "n = vb6_CtrlArr_UBound(&vb6_arr_cboUpdates) /* ctrl array UBound */;",
+        "n = vb6_CtrlArr_LBound(&vb6_arr_cboUpdates) /* ctrl array LBound */;",
+        "vb6_GetControlFontSize(vb6_hwnd_cmdOK) /* ctrl prop read */)",
+        "->Width /* class var .Width field */;",
+        "vb6_SetControlFontSize(vb6_hwnd_cmdOK, 12);",
+        "vb6_CtrlArr_GetCount(&vb6_arr_cboUpdates) /* ctrl array Count */)") @(
+        "/* ctrl array UBound */()",
+        "/* ctrl prop read */()",
+        "field */()")
+
     # PhotoDemon R2/R3 探针: 数组类型的"数组性"以前记在三处不同地方 ——
     # 局部动态数组只记符号 isArray、函数返回 `As Byte()` 与 ByRef 形参 `dst() As Byte`
     # 记在类型 Array 位上。两类表达式相遇时赋值相容性判成"元素类型 vs 数组"(打印成 `?`)，

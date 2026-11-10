@@ -1696,6 +1696,14 @@
     std::string udtFixedMemberIndex(const std::string& fieldExpr,
                                     const std::vector<ExprPtr>& args, int32_t rank);
 
+    // §38 (PhotoDemon C2064 主族): UDT **动态**数组成员的下标读/写，秩数由实参个数决定。
+    // 秩 1 = VB6_SA_AT (存量逐字节不变)，秩 2/3 = VB6_SA_ND_AT2/AT3，秩 >=4 = VB6_SA_ND_ATN。
+    // member 站 (obj.arr(i,j)) 与 With 站 (.arr(i,j)) 共用这一枚出口 —— 以前两站各写死
+    // "size()==1" 一条，秩 2 落空后整条表达式退回通用调用路 ⇒ `field(0, 0)` ⇒ C2064。
+    std::string udtDynMemberIndex(const std::string& elemCType,
+                                  const std::string& fieldExpr,
+                                  const std::vector<ExprPtr>& args);
+
     // ai/022 B08f-1 (D37): 走同一条 UDT 解析路, 但返回字段在 C 里的**对象类型**
     // (`vb6_cls_X*` / `void*` / "" = 不是对象字段或推不出)。判"这个左值到底是不是 Variant
     // 容器"用它 —— `mi.type` 那条口径对跨模块的 `As <项目类>` 会说是 Variant。

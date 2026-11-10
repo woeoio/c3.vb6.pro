@@ -930,6 +930,47 @@ std::string CCodeGen::udtFixedMemberIndex(const std::string& fieldExpr,
     return out;
 }
 
+std::string CCodeGen::udtDynMemberIndex(const std::string& elemCType,
+                                        const std::string& fieldExpr,
+                                        const std::vector<ExprPtr>& args) {
+    // C3-SENTINEL(g4-udt-member-nd): UDT 动态数组成员下标的**唯一**发码出口。
+    // 秩 = 实参个数：1 = VB6_SA_AT（存量形状不许动），2/3/>=4 = VB6_SA_ND_AT2/AT3/ATN。
+    // member 站与 With 站 (含 With 类成员那一臂) 都只调这里 —— 谁再自己拼一层 VB6_SA_*，
+    // 秩就会各自演化（§38 之前正是两站各写死一维，秩 2 全落空 ⇒ C2064 + 同站 C2197）。
+    std::vector<std::string> idxs;
+    idxs.reserve(args.size());
+    for (size_t k = 0; k < args.size(); k++) {
+        if (!args[k]) continue;
+        emitExpr(*args[k]);   // ⚠ emitExpr 覆写 lastExpr_，每枚下标当场取走
+        // 秩 1 保持存量形状 (裸表达式进 VB6_SA_AT)；秩 >=2 是这一刀新开的路，按变量路
+        // 同一口径把 Variant 下标转 Long (VB6_SA_ND_AT* 的形参是 int32_t)。
+        if (args.size() == 1) idxs.push_back(std::move(lastExpr_));
+        else idxs.push_back(toLongIfVariant(std::move(lastExpr_), args[k].get()));
+    }
+    if (idxs.empty()) return fieldExpr;   // 调用方应走"整数组"那支；这里只兜底
+    if (idxs.size() == 1) {
+        return "VB6_SA_AT(" + elemCType + ", " + fieldExpr + ", " + idxs[0] + ")";
+    }
+    // 动态数组字段的 C 声明恒为 vb6_SafeArray1D*，ReDim 后可能是 ND ⇒ 与变量路同样强转。
+    const std::string ndArr = "(vb6_SafeArrayND*)" + fieldExpr;
+    if (idxs.size() == 2) {
+        return "VB6_SA_ND_AT2(" + elemCType + ", " + ndArr + ", " + idxs[0] + ", " + idxs[1] + ")";
+    }
+    if (idxs.size() == 3) {
+        return "VB6_SA_ND_AT3(" + elemCType + ", " + ndArr + ", " + idxs[0] + ", " + idxs[1]
+             + ", " + idxs[2] + ")";
+    }
+    // 秩 >=4: 秩数与**全部**下标一次交全 (与变量路 VB6_SA_ND_ATN 同形；最外层那对括号
+    // 不是装饰 —— 预处理器按顶层逗号切宏实参)。
+    std::string idxList;
+    for (size_t d = 0; d < idxs.size(); d++) {
+        if (d) idxList += ", ";
+        idxList += "(int32_t)(" + idxs[d] + ")";
+    }
+    return "VB6_SA_ND_ATN(" + elemCType + ", " + ndArr + ", " + std::to_string(idxs.size())
+         + ", ((const int32_t[]){" + idxList + "}))";
+}
+
 // <vbeclipse> <VBFlexGridDemo>: 返回左值 UDT 字段的**声明类型名** (`mi.typeRefName`)。
 // 空串 = 无声明类型 (真 Variant 槽), 非空 = 声明了具体类型 (Object/接口/类/UDT)。
 // 与 Set-RHS 装箱 guard 配套 —— VTableHandle.bas `Set VTableIPAOData.OriginalIOleIPAO = This`
