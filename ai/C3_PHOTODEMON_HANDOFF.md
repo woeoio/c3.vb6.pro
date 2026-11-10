@@ -2096,4 +2096,90 @@ SelectionUI / Snap / toolbar_Toolbox / toolpanel_MoveSize / toolpanel_TextAdvanc
 结论：215 条 **降到 0**（无可消除剩余）；发码层同口径的 14 个"同头冲突"也降到 0（§34.4）；
 `C2079` 保持 0；`C1003` 截断面不变；其余码零变化。
 
+## 35. G3（E1+E2）落地 + 整编读数（2026-11-10）
+
+范围：只补"模块限定无参函数返回值当接收者"这一条链的接收者推断（E1）与调用补全（E2）。
+不碰成员方法表可见性、不碰 `getPublicSymbols` 的 Friend 导出、不碰包边界、不洗 `udtDefBlocks_`。
+
+### 35.1 两次提交（本刀内的分叉与修法）
+
+| 提交 | 内容 |
+| --- | --- |
+| dev `853a36fa` | E1：`inferClassTypeOfExpr` 的 `MemberAccessExpr` 分支在 base 类名为空时调 `findModuleQualifiedNoArgFunction`，返回类的工程类名；E2：值上下文 `funcName += "()"`；成员调用分支补 `()` |
+| dev `be12a9fe` | **E2b（回归修复）**：`() ` 的补齐上移到 `cgen_expr_member_class_fallback.inc` 的 `node.object` 分支入口，成员调用 / 数据字段读两条腿共用 |
+
+`853a36fa` 整编实测 `C2223 3 → 286`（+283）：E2 的 `()` 只补在成员调用分支，**字段读那一支漏补**，
+于是 `vb6_PDImages_GetActiveImage->MainSelection` 原样发出（`->` 左边是函数指针）。
+E2b 修后同一形态发成 `vb6_PDImages_GetActiveImage()->MainSelection`。
+
+### 35.2 小语料探针（本机，3 类 + 1 字段形）
+
+三种链形（E2b 后）：
+
+- `vb6_G3Image_GetNumOfLayers((void*)vb6_G3Images_GetActiveImage())`
+- `vb6_G3Layer_GetLayerOffsetX((void*)vb6_G3Image_GetActiveLayer((void*)vb6_G3Images_GetActiveImage()))`
+- `vb6_G3DIB_GetDIBColorDepth((void*)vb6_G3Image_GetActiveDIB((void*)vb6_G3Images_GetActiveImage()))`
+
+字段形（E2b 新增覆盖）：`vb6_G3Layer_GetLayerOffsetX((void*)vb6_G3Images_GetActiveImage()->MainSel)`。
+小语料修前 3×`C2039` + 3×`C2198` 无 exe；修后 0 error，出 `G3Probe.exe`（556032 B）。
+
+### 35.3 629 形状门
+
+本机 625 相同 / 4 哈希不同（GUISample×3、TeeChart）。用旧二进制 `.temp/g1b_probe/bin/C3.exe` 与新二进制
+逐份 emit，四份**字节完全相同**（306843 / 289698 / 288429 / 83528）⇒ 环境噪声，**无需 bless**。
+CI 侧 `Emit manifest (shape oracle)` 在 run `42828836909` 上 **success（629/629）**。
+
+### 35.4 整编读数（G1b run → G3 最终版 run `42828903579`，headSha `581206ea`）
+
+`BUILD_SECONDS=4947.6`（基线 6895.9，`C3_TIMING=True` 下墙钟不可比）、`PEAK_TREE_WS_MB=8910`、
+`MIN_FREE_PHYS_MB=4876`、`BUILD_EXIT 1 → 1`、`EXE_EXISTS False → False`。
+
+| 码 | G1b | G3 | Δ | 可比子集 Δ |
+| --- | --- | --- | --- | --- |
+| `C2039` | 1118 / 84 TU | **88 / 12 TU** | **-1030** | -570 |
+| `C2224` | 668 / 76 | **59 / 16** | **-609** | -341 |
+| `C2198` | 555 / 105 | **261 / 65** | **-294** | -172 |
+| `C2197` | 887 / 63 | **762 / 49** | **-125** | -81 |
+| `C2440` | 257 / 70 | **214 / 55** | **-43** | -20 |
+| `C2065` | 279 / 100 | 283 / 102 | +4 | **0** |
+| `C2223` | 3 / 1 | **3 / 1** | **0** | **0** |
+| `C2143` | 0 | 2 / 1 | +2 | 0 |
+| `C2231` | 21 / 6 | 59 / 8 | +38 | **0** |
+| `C2064` | 61 / 10 | 66 / 12 | +5 | **0** |
+| `C2296` | 39 / 19 | 14 / 14 | -25 | -26 |
+| 全码（excl `C1003`） | 4037 | **1960** | **-2077** | — |
+
+`C2039` 分项：pdImage `1049 → 50`，非 pdImage `69 → 38`。残余 88 条 = 24 个 (类型,成员) 对：
+pdImage 50 条 / 16 个成员（`GetLayerByID 8`、`RequestThumbnail 8`、`GetSaveState 5`、`EstimateRAMUsage 4`、
+`GetLayerByIndex 4`、`GetOriginalFileFormat 4`、`IsSuspended 4` …）；非 pdImage 38 条 = `pdResize 32`、
+`pdSelection 2`、`UserControl_Extender 2`、`pdCanvas 1`、`pdStatusBar 1`。
+
+**`C2223` 已完全回落**：286 → 3，且这 3 条与基线**同一 TU、同一行**（`PDImages.c` 364 / 442 / 450，
+`'->imageID'`），是 G1b 就有的旧账，不是本刀引入。
+
+**总量上涨的三项全是截断面变化，不是新错误**：`C2231 +38` 里 +32 全在 `SelectionUI.c`（基线该 TU 被
+`C1003` 截断，G3 后不再截断 ⇒ 原本被吞的诊断现形）；`C2065 +4`、`C2064 +5` 同理，可比子集 Δ 均为 0。
+
+### 35.5 `C1003` 截断 TU 组
+
+`15 TU → 3 TU`（`FormMain.c`、`FormMetadata.c`、`toolbar_Toolbox.c`），**新增 0**，消失 12。
+中间版 `853a36fa` 曾新撞 1 个 `toolpanel_Selections.c`（18 条 `C2223` 把原有 ~70 条推过 100 条上限），
+E2b 后该 TU 退出截断组 ⇒ **本刀没有 TU 因接收者写法变长而新撞上限**。
+
+### 35.6 50 条 pdImage `C2039` 的逐成员核对
+
+291 个 (成员, TU) 对：G3 前 27 对同 TU 已有正确 `vb6_pdImage_<member>(` 发码；G3 后 272 对。
+剩 19 对**全部**是 `PDImages.GetImageByID(<实参>).Member` —— 带参模块函数当接收者，属 G3b，本刀不碰。
+可见性缺口 = 0（50 条对应的成员在修前发码里都有定义）。
+
+### 35.7 单列残余（不属本刀机理）
+
+`Layers.bas:467-468` 的 `X.MainSelection.GetCompositeBoundaryRect.Left`：无参方法返回 UDT 再读字段，
+现在发出 `vb6_pdLayer_SetLayerOffsetX(..., vb6_pdSelection_GetCompositeBoundaryRect((void*)vb6_PDImages_GetActiveImage()->MainSelection->Left);`
+⇒ 2×`C2143`（缺 2 个右括号，`Layers.c` 672/673）。基线同一行发成 `...GetActiveImage.GetLayerByID(...).SetLayerOffsetX(...)`
+⇒ `C2039`，即这两行本来就坏，只是错误码换了。根因在"无括号调用语句实参 + UDT 字段标记"的 `pendingChainObj_` 协议。
+
+`dev` CI run `42828836909`：形状门 success；`Tests (compile #1/#2)` 与 `Tests (vbp #11)` 失败，**与
+`c2b1e52c` / `853a36fa` 两轮完全同一组**，属既有红，不由本刀引入。
+
 
