@@ -151,8 +151,10 @@ jobs:
             $file = ''
             if ($_.Line -match '^(?<f>.+?)\(\d+\)\s*:') { $file = $Matches['f'] }
             # 受影响 TU: 诊断落在 .c 上就是它自己; 落在 .h 上则看 cl 附的 compiling source file
+            # 注意 cl 的路径是**绝对路径**（`D:\...\C3C\xxx/clsMenuImage.c(634): error`），
+            # 首版正则 `^[^\\/:]+\.c\(` 要求行首就是文件名 ⇒ 真跑时 TU 全被算成 0（§33 实测）。
             $tu = ''
-            if ($_.Line -match '^(?<t>[^\\/:]+\.c)\(\d+\)\s*:') { $tu = $Matches['t'] }
+            if ($_.Line -match '^(?<f>.+?\.c)\(\d+\)\s*:') { $tu = [IO.Path]::GetFileName($Matches['f']) }
             elseif ($_.Line -match 'compiling source file [^)]*?[\\/](?<t>[^\\/]+\.c)\)') { $tu = $Matches['t'] }
             [pscustomobject]@{ Kind = $m.Groups['kind'].Value; Id = $m.Groups['code'].Value; File = $file; Tu = $tu; Line = $_.Line }
           })
