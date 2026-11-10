@@ -90,6 +90,10 @@
     const std::string& headerCode() const { return header_; }
     const std::string& sourceCode() const { return source_; }
 
+    // 账 §G1: 本模块生成过的 UDT 定义块 (类型名 → .h 里那段原样文本).
+    // driver 汇总成全工程表后注入各 .h 顶部, 让"头里按值用到 UDT"不再依赖模块先后.
+    const std::unordered_map<std::string, std::string>& udtDefBlocks() const { return udtDefBlocks_; }
+
     // --- 声明 ---
     void visit(SubDecl& node) override;
     void visit(FunctionDecl& node) override;

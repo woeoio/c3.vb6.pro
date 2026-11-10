@@ -487,6 +487,13 @@
     // 用于在.h文件中生成typedef前向声明, 使 vb6_type_<Name> 类型可用
     std::unordered_set<std::string> usedUdtTypes_;
 
+    // 账 §G1: 本模块自己落进 .h 的每个 UDT 定义块 (类型名 → 原样文本).
+    // 前向 typedef 只够指针用; 头里按值出现 (`vb6_type_RectL rcMonitor;`) 必须见到
+    // 完整 struct 体, 否则消费方一律 C2079 (PhotoDemon: 16,152 条 / 539 TU 全中).
+    // 由 driver 汇总成工程级表, 再按依赖序注入每个 .h 的顶部 —— 这样头自足,
+    // 不靠 vbp 的模块先后蒙过去.
+    std::unordered_map<std::string, std::string> udtDefBlocks_;
+
     // COM后期绑定中间状态 (P6.2)
     // MemberAccessExpr为COM对象设置此字段, IndexOrCallExpr/AssignmentStmt/SetStmt读取后清除
     // 当此字段非空时, lastExpr_中的"值"是对象表达式, comMemberName_是成员名

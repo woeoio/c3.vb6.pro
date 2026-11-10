@@ -1588,3 +1588,267 @@ codegen 阶段没有新的分配峰值（8–10 GB 平台期是语义表仍常�
   跨模块注入侧仍要求 `sharePayloadFrom` 且零逐字段拷贝。
   该脚本本身仍有两条**改前就存在**的 FAIL（`ExitCode` 读成空 + 斜率阈值 2.0），与本系列改动无关，未粉饰。
 
+### 29.5 第 3 刀：过程形参表 `params` 迁入载荷（`c5b20db7`）
+
+- 枚举方式：**先删 `Symbol::params` 字段，让编译器逐个报错定位**，再按接收者类型分别改 `P()` / `W()`。
+  AST 侧的 `node.params`（Sub/Function/Property 声明节点）、`MemberInfo::params`、`ComMethodSig::params`
+  同名但类型不同，全部未被误改；没有做任何批量替换。
+- 3.5 注入：删除 `extSym->params = srcSym->params;`（由 `sharePayloadFrom` 一并共享）。
+  窗体限定二级键是例外：`qExt->W().params = qSym->P().params;`（这条是**新建**限定副本，不是共享源本体）。
+- 事件 ABI 回写（`applyEventHandlerAbi` 把 `isByVal` 改 true）改走 `evtSym->W().params`，COW 保证不污染共享源。
+- `--dump-symbols`：输出代码从 `sym->params` 改成 `sym->P().params`，**输出文本不变**（形状门覆盖不到 dump，
+  这条靠代码审读；dump 顺序/格式未动）。
+- 形状门：上一刀二进制 vs 本刀，**629/629 逐字节零差异**（`emit-manifest.cut3.txt` vs `cut4.txt`）。
+- `-Category syntax`：**187/187 PASS**。
+- 斜率（同一语料）：N=8 **51.1 MB**、N=60 **268.3 MB**，**4.18 MB/模块**。
+  **注意方向相反**：上一刀 3.45 → 本刀 4.18（+0.73）。重复 3 次稳定；用 pre-cut2 二进制复测同语料为
+  5.12 MB/模块，排除随机噪声与后台负载。原因未定位（怀疑 procedure 载荷首建/COW 克隆路径），
+  **整工程是否受益以 §30 的 CI 读数为准；若峰值/注入段不改善，回退本刀，保留前三刀。**
+- 哨兵：`check_typelib_payload_writers.ps1` 绿（核心字段 22 个不变，注入权威区仍只 `driver_semantics.cpp`）；
+  `check_typelib_scale_sentinel.ps1` 的 S0 载荷字段表扩到 **19 个**（加入 `params`）。
+  该脚本自身两条改前既有 FAIL 仍在（`ExitCode` 读空、斜率阈值 2.0），未粉饰。
+
+## 30. CI 整工程复跑（2026-11-10，载荷共享三刀合并后）
+
+把 `dev`（`c5b20db7`）合到 `probe/photodemon-emit`（merge `f3979e10`），探针 workflow 加 `timing` 开关
+（`13774b90`：push 默认**不带** `C3_TIMING`，相位归因用 `workflow_dispatch -f timing=1`），跑两次：
+
+| run | 触发 | `C3_TIMING` | 用途 |
+| --- | --- | --- | --- |
+| 42753537997 | push | 关 | 与 §27 基线同口径比墙钟/峰值/stdout/诊断 |
+| 42753601684 | workflow_dispatch | 开 | 相位耗时与注入段归因 |
+
+### 30.1 同口径对照（都不带 `C3_TIMING`）
+
+| 项 | 基线 42725438757 | 本次 42753537997 | 变化 |
+| --- | --- | --- | --- |
+| `EMIT_EXIT` | 0 | **0** | — |
+| 墙钟 | 659.2 s | **71.4 s** | **−587.8 s（−89.2%）** |
+| stdout | 48,358,712 B | **48,358,712 B** | sha256 `5CB9D6DF…96EE0` **逐字节相同** |
+| stderr 行 | 200 | **200** | 相同 |
+| 诊断 | VB3003=57，其余 0 | **VB3003=57，其余 0** | 相同 |
+| 峰值工作集 | 13,544.9 MB | **8,456 MB** | **−5,088.9 MB（−37.6%）** |
+| 最小空闲物理内存 | ~2 MB（`meta`）/ 4 MB（csv） | **5,211 MB** | **+5.2 GB 余量** |
+
+`VB3001=0`、`VB3044=0`、`VB4001=0` 均未变；`VB3003=57` 未变。非诊断行仍是
+142 条 `CoClass '…' identity` + 1 条 `AddressOf callback procs`。
+**结论：发码逐字节不变，峰值与墙钟都实质下降，`params` 刀不需要回退。**
+
+### 30.2 相位（都带 `C3_TIMING`，两次之间才能比）
+
+| 相位 | 基线 42727942019 | 本次 42753601684 | 变化 |
+| --- | --- | --- | --- |
+| 总墙钟（带 TIMING） | 1410.3 s | **73.4 s** | −94.8% |
+| parse | 1,014 ms | 1,211 ms | +197 ms |
+| typelib+prepasses | 505 ms | 1,102 ms | +597 ms |
+| semantic | 9,243 ms | **5,937 ms** | −3,306 ms |
+| inherit-merge | 0 ms | 1 ms | 噪声 |
+| **crossmod+generics+marks** | **378,117 ms** | **11,727 ms** | **−366,390 ms（−96.9%）** |
+| unpack-rtl | 291 ms | 92 ms | −199 ms |
+| codegen 余量（总墙钟减上面） | ≈1,021 s | **≈53 s** | −94.8% |
+| 峰值工作集（TIMING 口径） | 13,204 MB | **8,454 MB** | −4,750 MB |
+| 最小空闲物理内存 | 16 MB | **5,181 MB** | +5.2 GB |
+
+**时间口径必须分开说**：基线那次带 TIMING 是 1410 s、不带是 659 s（2.1×），§27.4 已判为
+"只能做相位归因、不能当时间基线"（当时空闲物理内存只剩 16 MB，整机在换页）。
+本次带 TIMING 73.4 s、不带 71.4 s（+2.0 s，2.8%），**TIMING 开销本身可以忽略**；
+墙钟的下降不是 TIMING 口径差造成的。
+
+### 30.3 跨模块注入段（3.5）
+
+用 stderr 字节偏移把相位边界对回 2 s 采样（本次 `crossmod` 行落在 18–20 s 采样之间，
+与累计相位 8.25 s + 11.73 s ≈ 20.0 s 一致）：
+
+| 项 | 基线（TIMING） | 本次（TIMING） |
+| --- | --- | --- |
+| 注入段起点工作集 | 10,528 MB @12 s | 3,274 MB @8 s |
+| 注入段终点/窗口峰值 | 13,204 MB | 8,431 MB @20 s |
+| 窗口内增量 | +2,676 MB | **+5,157 MB** |
+| 注入段墙钟 | 378.1 s | **11.7 s** |
+
+**两个"增量"不是同一个量，不许直接比**：基线起点 10.5 GB 是在空闲内存只剩 16 MB、
+工作集已被系统修剪的状态下测的（真实提交量更高、增量被低估）；本次起点只有 3.3 GB，
+机器全程有余量，读数可信。可比的是**绝对峰值**：13.2 GB → 8.45 GB（TIMING 口径）、
+13.5 GB → 8.46 GB（不带 TIMING 口径）。注入耗时 378 s → 11.7 s 是干净的同比。
+
+### 30.4 口径与保留项
+
+- 本次两次 run 的 stdout sha256 与基线**完全一致**（48,358,712 B），因此"性能改善没有换来发码变化"是硬证据，
+  比 §29.3 的 629 输入形状门更强。
+- 本读数只证明**三刀合计**相对 `aa715a0d` 的收益；**没有**单独测 `params` 一刀（`fa70cfe2` vs `c5b20db7`）。
+  §29.5 的合成语料斜率反向（3.45→4.18 MB/模块）在整工程口径没有兑现为回归，但也没有被解释掉；
+  若以后要继续追，就在探针分支上跑一次 `fa70cfe2` 做对照。
+- `--dump-symbols` 的可观测面：`params` 刀的 dump 代码从 `sym->params` 改读 `sym->P().params`，输出文本不变；
+  本次 CI 不跑 dump，这条靠 §29.5 的代码审读 + 形状门兜底。
+
+## 31. 三刀之后的 dev CI 归因（2026-11-10）
+
+`dev` 推到 `github/dev`（`f12cc7ea`）触发三次 `VB6 C3 Regression`，结果逐轮收口：
+
+| run | 结论 | 说明 |
+| --- | --- | --- |
+| 42754470554 | 22 job 中 3 红 | emit-manifest + compile ×2，见 31.1 |
+| 42756305967 | 2 红 | BOM/W2 修好，emit-manifest 绿 |
+| 42757586471 | 2 红 | 规模哨兵 rc 修好；**只剩 8 条既有 STATIC** |
+
+### 31.1 形状门（emit manifest）
+
+首轮红了 11 份：`2020/ucChart*`、`ucPieChart`、`ucProgressCircular`、`ucTreeMaps`、
+`tests/czUI-main`、`VBFlexGridDemo`、`ucSegmentedControl`、`ucTreeView`。
+**不是三刀引入**，证据链：
+- 用 cut1 之前的二进制（`aa715a0d`，即 `951574f8` 的父提交）跑出的清单 `.temp/emit-manifest.old.txt`
+  对这 11 份给出的 sha256 与 CI 本次"实得"**逐条相同**；
+- 再拿 CI 清单（`ci/emit-manifest` 分支，bless 前）与 cut1 前清单做全量 629 行比对：
+  **只有 4 行不同**（`GUISample` ×3 + `TeeChartChartDisplay`），而这 4 行正是 §29.3 挂账的
+  "与本系列无关"那 4 行（本机 VS 16.11 vs CI VS 18.11 的工具链差异，期望文件里的就是 CI 值）。
+- 因此：**三刀合计对 629 份语料的发码形状改动 = 0**；11 行属于 `aa715a0d` 的 UC 属性桥
+  Let/Set 双入口（其提交信息自述的发码变化），已用 `rebless_emit_manifest.ps1 -Bless` 登记，
+  复算 629/629 绿、`check_manifest_coverage` K1..K3 绿。
+
+### 31.2 本系列引入并已修的 4 条
+
+| 用例 | 原因 | 修法 |
+| --- | --- | --- |
+| `ps51_joinpath` / `test_helper_integrity`（H7）/ `static_sentinel_registration`（R4） | §29.5 编辑 `check_typelib_scale_sentinel.ps1` 时丢了 UTF-8 BOM，CI 的 PS 5.1 按 ANSI 读 → 解析失败 | 恢复 BOM（内容不动），三条本地 PS 5.1 复跑绿 |
+| `com_sig_collision_policy`（W2） | 判据写死 `sym.comMethods.end()`；载荷共享后权威写法是 `sym.P().comMethods.end()` | 判据改认读门（闸本体与位置未动，不算放宽） |
+| `typelib_scale_sentinel` | 哨兵自身缺陷：PS 5.1 下 `Start-Process -PassThru` 的 `ExitCode` 恒空 → 误报"C3 退出码非 0"（本机与 CI 都复现） | `Measure-Run` 改用 `System.Diagnostics.Process` + 异步抽干管道；PS 5.1 本地 PASS（N=8 51.1 MB / N=64 285.7 MB / 4.19 MB/模块，rc=0） |
+
+### 31.3 剩下的 8 条：全部既有，与三刀无关
+
+- `builtin_opt_defaults`：`vb6_Randomize` 缺"按实参个数"档的理由（更早的账）。
+- `vbp_fixture_census`：`photodemon\PhotoDemon.vbp` 未登记（刻意只在探针分支跑）。
+- `legacy_slot_key_owners` P3：9 vs 8（`cgen_iface_vtbl.cpp` 2 vs 1）。
+- `iface_view_authority`：`ifaceViewOfExpr` 6 文件 vs 5、`vb6_ivref_` 7 vs 6、`emitIvrefRefSet` 5 vs 4。
+- `legacy_view_arg_owners` V8：2 vs 1。
+- `box_temp_reclaim` R1：3 vs 2。
+- `class_refcount_authority`：8 vs 7。
+- `object_slot_boxing` B11：`procObjectFormals_.count` 2 vs 1 —— 用 `git log -S` 定位到
+  **`aa715a0d`**（`cgen_setlet_set_prop.inc` 的 Set 晚绑定接收者判断新增第二处直接问表）。
+
+前 7 条在 `7230557e`（三刀之前的 dev）就红；第 8 条是 `aa715a0d` 引入、但**早于三刀**。
+三刀没有新增任何 STATIC 红。**这些既有红本次不修**（不在本系列范围，且 `object_slot_boxing`
+的正解是让 Set 站点改走 `inferClassTypeOfExpr` 那条唯一权威，属发码改动，需单独一刀 + 形状门）。
+
+### 31.4 run 42757586471 的逐 job 结论（12 分片全绿）
+
+20 个 job 里 18 绿 2 红，红的只有 `Tests (compile #1)` / `Tests (compile #2)`（上面 8 条 STATIC）：
+
+| 绿 | job |
+| --- | --- |
+| 构建/形状 | `Build C3.exe`、`Emit manifest (shape oracle)`、`Baseline (M1)` |
+| **vbp 分片 12/12** | `Tests (vbp #1)` … `Tests (vbp #12)` |
+| 其它夹具 | `Tests (bas #1)`、`Tests (bas #2)`、`Tests (syntax)`、`Tests (asm)`、`Tests (smoke)` |
+
+⇒ **三刀没有伤到既有夹具**：12 个 vbp 分片、bas/syntax/asm/smoke 与 629 形状门全部通过；
+唯一的红是 compile #1/#2 里的 8 条既有 STATIC 哨兵。
+
+## 32. 整编探针：emit → cl → link 的第一个真实读数（2026-11-10）
+
+`dev` 三刀之后，`--emit-c` 已能整工程出 539 份 C（§30）。本节验证的是**下一段**：
+把产出的 C 交给 `cl.exe` 编、再 link 成 exe。新 workflow `.github/workflows/pd_build_probe.yml`
+（探针分支，`workflow_dispatch` + 本文件自己的 push），run **42754639429**（job 结论 `success`
+只因整编 step 有 `continue-on-error: true`，**实际 `BUILD_EXIT=1`，没有 exe**）。
+
+**这一节没有为了让它过而放宽阈值、桩掉函数或跳过一个文件。** 读数原样记录。
+
+### 32.1 总量
+
+| 项 | 读数 |
+| --- | --- |
+| 命令 | `.build\C3.exe tests/photodemon/PhotoDemon.vbp --arch x86 --output-dir .build/pd_full` |
+| `C3_TIMING` | 1（时间口径只能跟同样带 TIMING 的读数比） |
+| `BUILD_EXIT` | **1**（cl 返回 2，停在 cl 阶段，**未进 link**） |
+| exe | **不存在** |
+| 整编墙钟（含 emit + cl） | **6,596.2 s** |
+| 峰值整棵进程树工作集 | **8,861 MB** |
+| 最小空闲物理内存 | **4,858 MB**（runner 总 16,379 MB） |
+| 工程 TU | **539 份，539 份都有 error** |
+| 24 份 TU 撞 `C1003`（每 TU 100 错误上限） | 真实错误数**比下表更多**，被截断 |
+| `c3-error.log` | 18,784,181 B / 85,020 行（cl 全量输出） |
+| error 行合计 | **≈20,474** |
+| warning 行合计 | **≈46,354** |
+
+### 32.2 cl 错误码（按次数）
+
+| 码 | 级别 | 次数 | 受影响 TU |
+| --- | --- | --- | --- |
+| C2079 | error | **16,152** | **539 / 539** |
+| C2224 | error | 1,125 | 90 |
+| C2039 | error | 971 | 84 |
+| C2197 | error | 774 | 62 |
+| C2198 | error | 549 | 112 |
+| C2440 | error | 329 | 76 |
+| C2065 | error | 278 | 99 |
+| C2064 | error | 60 | 10 |
+| C2045 | error | 50 | 17 |
+| C2296 | error | 39 | 19 |
+| C2036 | error | 34 | 4 |
+| C1003 | **fatal** | 24 | 24（错误上限截断） |
+| C2231 | error | 21 | 6 |
+| C2063 | error | 19 | 19 |
+| C2106 / C2069 / C2297 / C2095 / C2186 | error | 10 / 8 / 5 / 5 / 5 | ≤4 |
+| C2102 / C2172 / C2223 / C2113 / C2112 | error | 4 / 4 / 3 / 3 / 2 | ≤3 |
+
+warning 侧（不是失败原因，但量很大、且都是生成器形状问题）：C4005 宏重定义 **16,516**（≈30 个宏 × 539 TU）、
+C4244 收窄 **8,440**、C4047 **7,628**、C4024 **6,940**、C4133 **2,932**、C4146 **2,185**、
+C4090 587、C4028 560、C4022 352、C4305 143。
+
+### 32.3 缺口分类（按"哪一类、影响多少文件"）
+
+| # | 族 | 码 | 条数 | 影响 TU | 判据/位置 |
+| --- | --- | --- | --- | --- | --- |
+| G1 | **UDT 值类型在头里只有前向声明** | C2079 | **16,152** | **539（全）** | 6 个类型 `vb6_type_RectL` 3,771、`RGBQuad` 3,769、`PointAPI` 3,759、`PointLong` 2,690、`RectF` 1,617、`winRect` 539；落点 57 处，全在**头文件**里（`Fonts.h(319..327)`、`GDI_Plus.h(597..)`、`pdDisplays.h(113)`、`pdEditBoxW.h(201)`…），形如 `vb6_type_RectL rcMonitor;` 的值成员 |
+| G2 | 接收者类型推不出（当非结构用） | C2224/C2296/C2231/C2036 | 1,225 | ~92 | `.MainSelection` 201、`.Width` 123、`.Height` 121、`.Left` 82、`.x/.y/.Top/.Right` … 接收者是 `void*` / 不完整类型 |
+| G3 | 类实例的"方法名当字段发" | C2039 | 971 | 84 | **907 条集中在 `vb6_cls_pdImage`**：`GetActiveLayer` 237、`GetLayerByIndex` 112、`GetNumOfLayers` 66、`GetActiveLayerIndex` 54、`GetActiveDIB` 54、`IsSelectionActive` 53、`NotifyImageChanged` 51…（63 个不同成员名） |
+| G4 | 实参个数与签名不符 | C2197 + C2198 | 1,323 | ~115 | 多传：`pdDropDown_AddItem` 144、`pdButtonStrip_AddItem` 126、`pdButtonToolbox_AssignTooltip` 72；少传：`ChkLong` 56、`Processor_FlagInitialNDFXState_Text` 36、`Int` 25、`IntDiv` 13。两侧都指向**控件/类方法的接收者与默认参数展开**，共 68 + 141 个不同被调方 |
+| G5 | 值/指针/整数互转 | C2440 | 329 | 76 | `void* → float` 36、`vb6_type_RGBQuad → int` 31、`PointLong → int` 23、`ComplexNumber → intptr_t` 16、`RectF → int` 14、`int → VARIANT` 13、`double → pdSpinner**` 12 |
+| G6 | 控件名/控件数组元素未声明 | C2065 | 278 | 99 | `pdFxPreview` 39、`sltQuality` 19、`vb6_hwnd_sltBrushSetting` 14、`MergedEntry` 12、`PD_MenuEntry` 10、`cmdFlyoutLock` 10（.frm 控件变量没进 TU） |
+| G7 | 其它零散 | C2064 60（`takes 0`）、C2045 50（label 重复）、C2063 19、C2106 10、C2069 8（`void` 返回值被使用）、C2095 5、C2186 5 | ~157 | ≤20 | 单点形状问题，批量修不值当，先记账 |
+
+**G1 的机理（最小复现，非推测）**：生成器在**每个模块头**里为用到但没定义的 UDT 写的是
+`typedef struct vb6_type_X vb6_type_X;`（[cgen_base_generate_epilogue.inc:78-85](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/base/cgen_base_generate_epilogue.inc#L78-L85)），
+而 `struct` 体只写进**定义方**的头。本机 2 模块探针（`Holder.cls` 里 `Private mR As RectL`，
+`RectL` 由排在其后的 `ModA.bas` 定义）复现为：
+`Holder.h` 里有 `vb6_type_RectL mR;` + 只有前向 typedef，`ModA.h` 里才有 `typedef struct vb6_type_RectL { … }`，
+而 `Holder.c` 先 `#include "Holder.h"` ⇒ C2079。整工程里这 6 个 UDT 定义在
+`Drawing2D.bas` / `PublicEnumsAndTypes.bas`，用到它们的头分散在 `Fonts.h`、`GDI_Plus.h` 等，
+**头顺序由 vbp 顺序决定**，所以 539 个 TU 全中。这是**一个发码层的单点缺口**（"头里按值用到的 UDT 必须把定义
+提到前向声明处，或按依赖排序/统一放到类型枢纽头"），不是 539 个独立问题。
+
+### 32.4 RTL 缺符号（LNK2019/LNK2001）
+
+**本次 0 条，因为根本没到 link**（cl `exit 2`）。cli 阶段 RTL 侧自身是干净的：RTL 的 TU 里只有
+`vb6_di_stubs.c` / `vb6_di_win32_stubs.c` 出了诊断，共 **2 条 C4996 + 1 条 C4113**，**0 error**。
+`LNK2019/LNK2001` 的函数族、导出表、入口点（`Sub Main`/`WinMain`）、manifest、依赖库
+**均为未观测项**，要等 G1–G6 降到 0 之后才有读数。不许把"这次没红"当成"RTL 齐了"。
+
+### 32.5 本机不可行，只能走 CI
+
+- 一个 cl 调用（`/MP` 并行）在 16 GB runner 上墙钟 **6,596 s**、进程树峰值 **8,861 MB**、
+  空闲物理内存最低只剩 **4,858 MB**。也就是说：**光是 cl 这一段就吃掉了半个机器**。
+- 按 TU 摊：6,596 / 539 = **12.2 s/TU（还是并行之后）**。
+- 本机硬规则要求 `CMAKE_BUILD_PARALLEL_LEVEL=2`、起构建前空闲 ≥ 8 GB。把 `/MP` 压到 2 换内存，
+  墙钟至少 3 小时量级，且 emit 段自己就要 8.4 GB 峰值（§30）⇒ **本机串行整编在这台 16 GB 机器上不可行**，
+  与 §0.1 的事故同一量级。整编**继续只走 CI**。
+- `C_FILES=0 / OBJ_FILES=0` 不是失败：`--output-dir` 只落 exe 与 `c3-error.log`，`.c`/`.obj`
+  在 `%TEMP%\C3C\<pid>_<n>` 且结束即清理。要看 C 就另开一次 `--emit-c`，别看整编产物。
+
+### 32.6 探针自身的两个缺陷（记账，别误读）
+
+1. workflow 里 `Classify` 步骤读的是 `pd_build.err`（C3 的 stderr，只有 7,760 行摘要），
+   而 cl 的全量诊断在 `pd_full/c3-error.log` ⇒ 首轮 artifact 的 `pd_build.codes.txt` 是
+   `CL_DIAG=0 / LINK_DIAG=0`（空表）。本节所有表格是**本地对 `c3-error.log` 重算**的结果。
+   下次复跑前先把归类改成读 `c3-error.log`，否则还会拿到空表。
+2. `continue-on-error: true` 让 job 显示 `success`。**看结论要看 `BUILD_EXIT` / `EXE_EXISTS`**，
+   不要看 job 颜色。
+
+### 32.7 下一步的顺序（按收益排序）
+
+1. **G1 单点修**（预计一次能把 error 从 ~20k 降到 ~4k、TU 覆盖率从 539 降到几十）：
+   让"头里按值出现的 UDT"拿到完整 `struct` 体（类型枢纽头或按依赖拓扑排序），修完重跑整编，
+   同时盯 §30 的 629 形状门（这一刀**会**改发码形状，属预期改动，需重新 bless + 说明）。
+2. G3（`pdImage` 方法当字段）与 G4（实参个数）是第二批：两者都指向"接收者/签名解析"，
+   与 §28 的 `inferClassTypeOfExpr` 权威线同源，应合成一刀做形状门。
+3. G2/G5/G6 再各自成刀。
+4. 只有到了 link，才有 `LNK2019/LNK2001` 与入口/manifest 的第一份真实读数。
+

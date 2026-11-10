@@ -45,6 +45,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cctype>
+#include <cstring>
+#include <functional>
 
 #ifdef _WIN32
 #include <windows.h>
