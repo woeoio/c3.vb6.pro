@@ -2327,4 +2327,127 @@ M3 = 内置/RTL 不补缺省。二者构成 `C2198 261 / 65 TU` 的主体：
 3. **M3 内置/RTL 补缺省** —— `C2198` 剩下的散点族（`IntDiv/Randomize/MonthName/CSng/Str/…`）+ `Num_Div` 24 条。
 4. 之后再看 `C2039` 残余 88 条（G3b：带参模块函数当接收者）与 `C2065 283`。
 
+---
 
+## §37 G4/M2：事件转发站按元素 Index 传参（C2198 −128；菜单 19 族 + Slider 11 族归零）
+
+**提交**：`0e6d7719`（src + 哨兵 + 测试登记，dev / `github/dev`）、`dc507a19`（探针分支 cherry-pick）、
+`595cc729`（形状门登记 1 行）。**整编验收**：CI run `42884417424`（`PhotoDemon x86 full build`，探针分支）。
+
+### 37.1 机理（两处转发站，一个病根）
+
+事件转发站把调用写死成 `{ extern void fn(); fn(); }` —— `void fn()` 是**无原型声明**，
+而控件数组 / 菜单数组的处理器首形参是元素下标 ⇒ 0 实参打 1 形参 = **C2198**。
+本刀把这两站收进唯一采纳点 `CCodeGen::eventIndexCallText`（`cgen_form_menu.cpp`）：
+
+| 条件 | 发码 |
+|---|---|
+| handler 为空 / 无第一形参 / `elemIndex < 0`（非数组成员） | **逐字**原 0 参文本 `{ extern void fn(); fn(); }` |
+| 第一形参 ByVal | `fn(N)` |
+| 第一形参 ByRef | `T v = N; fn(&v)`，`T = mapType(p0.type)`（不写死 int16_t） |
+
+- **菜单**（`emitMenuClickDispatch` 两处叶结点）：下标必须是 **`child.index` / `menuCtrl.index`**。
+  `menuId` 是"第几个叶菜单项"的**顺序计数器**，与 VB6 的 `Index` 无关 —— 哨兵 B4 明令禁止把它传进来。
+- **Slider 的 Change/Scroll 臂**（`cgen_form_wndproc_dispatch.inc`）：除传下标外同时补两件——
+  ① 控件数组元素**没有** `vb6_hwnd_<名>`，句柄按 `vb6_CtrlArr_GetAt(&vb6_arr_<名>, idx)` 取（原为 C2065）；
+  ② 工程 UserControl 名字里带 "slider" 会被 `frm_parser_util.cpp:206` 判成原生 Slider，而它的事件
+  由 UC sink thunk 派发（thunk 早已实参化）⇒ 按 `findUserControlSpec(ctrl.controlTypeName)` 跳过。
+  不跳过的后果是：修好 arity 之后**同一条 Change 会被派发两次**。
+
+### 37.2 小语料（`.temp/g4m2_probe`，2 模块，五种形态全带正/负向）
+
+| 形态 | 修前（`M2Form.before.c`） | 修后（`M2Form.after.c`） |
+|---|---|---|
+| 菜单数组 `mnuArr` idx 0/1，`_Click(Index)` | L61/64 0 参 ⇒ **C2198 ×2** | `int16_t vb6_evidx_0/1 = 0/1; …(&…)` |
+| 非数组菜单 `mnuSolo`，`_Click()` | L67 0 参 | 逐字不变 |
+| 菜单数组 `mnuZero` idx 0，`_Click()`（数组但无参） | L70 0 参 | 逐字不变 |
+| 原生 Slider 数组 `sldArr` idx 0/1，`_Change(Index)` | L91-96 **两块重复** + `vb6_hwnd_sldArr` 未声明 ⇒ **C2198 ×2 + C2065 ×2** | 两块按元素各一，句柄 `CtrlArr_GetAt(…,0/1)`，实参带下标 |
+| 非数组 Slider `sldOne`，`_Change()` | L98-100 0 参 | 逐字不变 |
+
+修前 `EXIT=1`（cl 失败），修后 `EXIT=0`。负向三态的生成文本**逐字节相同**。
+
+### 37.3 哨兵 `scripts/check_g4_event_index_forward.ps1`
+
+B1 定义全域唯一且在权威文件；B2 标记 `C3-SENTINEL(g4-m2-event-index)` 全域恰好 1 处且在函数体内；
+B3 函数体形状（回落文本逐字、`params.empty()` + `elemIndex < 0` 双闸、`isByVal` 两臂、类型取 `mapType(p0.type)`、禁 `int16_t`）；
+B4 调用面计数（menu 3 次 = 1 定义 + 2 叶、wndproc 2 次、helpers 1 次声明、其余 0）+ 菜单必须 `.index` + 调用里禁 `menuId`；
+B5 菜单不得再有写死 0 参；B6 Slider 臂（禁写死 0 参、必须保留 UC 跳过门、数组句柄必须走 `CtrlArr_GetAt`）。
+
+- 已进 `tests/run_tests.ps1` 的 static 分片（`Test-G4EventIndexForward`），注册普查 `check_static_sentinel_registration.ps1` 通过。
+- **负例 4/4 判红**（副本树 `-SrcRoot` 定点破坏）：`menuCtrl.index→menuId`（B4）、`elemIndex < 0 → < -1`（B3b）、
+  删 UC 跳过门（B6）、数组句柄退回 `vb6_hwnd_`（B6）。
+
+### 37.4 629 形状门
+
+本机修前/修后各跑一遍，逐行比对：**1 行真变化**（`tests/ucSlider_2022/Proyecto1.vbp`），
+另有 4 行是 §36.4 已记账的本机/CI 工具链噪声（两份清单里同样 4 条，本刀未变）。
+
+该语料的变化**逐字节归因**（用 post-M1/pre-M2 二进制 `C3_after.exe` 与修后二进制各 `--emit-c` 对拍）：
+**只少 6 行、0 增 0 改** —— 恰好 `ucSlider6` / `ucSlider4` 两块 Slider 臂（2 条 `scrollHwnd ==` +
+2 条 `FireChange` 调用 + 2 个右括号）。这两个 UC 的 Change 由 sink thunk 派发，那两块是重复派发，必须消失。
+数组 `ucSlider1` 的 6 个元素根本没被 Slider 臂发过（无 `_Change`/`_Scroll` 处理器，早已 `continue`）。
+
+登记方式：**不吃本机清单**，`rebless_emit_manifest.ps1` 取 CI 自己那台的 `ci/emit-manifest`
+（head `0e6d7719`）⇒ 仅 1 行改写，且 CI 哈希与本机产物哈希**相同**（`7a81869c…`）；
+登记后复算 629/629 相同，dev 的形状门任务转 `success`。
+
+### 37.5 整编读数（基线 run `42856903368` → 本刀 `42884417424`）
+
+| 诊断 | 修前 总量/TU | 修后 总量/TU | Δ | 可比子集 Δ |
+|---|---|---|---|---|
+| **C2198** | 261/65 | **133/54** | **−128 / −11** | **−11**（64→53） |
+| C2197 | 219/21 | 219/21 | 0 | 0 |
+| C2065 | 283/102 | **228/96** | **−55 / −6** | −7（102→95） |
+| C2440 | 214/55 | 214/55 | 0 | 0 |
+| C2039 | 88/12 | 88/12 | 0 | 0 |
+| C2064 | 66/12 | 66/12 | 0 | 0 |
+| C2224 | 59/16 | 59/16 | 0 | 0 |
+| 全码（excl C1003） | 1417 | **1276** | **−141** | — |
+
+- **C1003 截断组：`FormMain.c` 1 TU → 0 TU**（新增 0）。基线的 `FormMain.c(803): fatal error C1003` 消失，
+  即该 TU 从"100 条封顶"变成全部报完。
+- `BUILD_EXIT=1` / `EXE_EXISTS=False` 两轮一致（工程仍有 1200+ 条错误，本刀不动这条结论）。
+  `PEAK_TREE_WS_MB 8898→8892`、`MIN_FREE_PHYS_MB 4919→4851`、`BUILD_SECONDS 3558.8→6173.7`（后者是本次 runner 偏慢，非代码量）。
+- **C2198 归零族：31 个族里的 30 个** —— 菜单 19 族 / 101 条（`MnuEdit 15`、`MnuImage 14`、`MnuFile 10`、
+  `MnuLayerOrder 9`、`MnuLayerNew 8`、`MnuFileExport 6`、`MnuRotate/MnuFileImport/MnuLayerVisibility 5`、
+  `MnuMetadata/MnuEditSpecial 4`、`MnuLayerReplace 3`、其余 8 族各 1–2）+ Slider 11 族 / 28 条
+  （`FormGamma.sltGamma 3`、`FormColorize.sldHSL 3`、`FormColorHalftone.sltAngle 3`、
+  `dialog.ColorSelector.sldRGB/sldHSV 3+3`、`toolpanel_Clone/Eraser/Paintbrush/Pencil`、`FormRangeFilter`、
+  `FormModernArt`、`FormHarmonicMean`）。
+- **唯一按函数看是涨的项**：`vb6_Menus_UpdateAgainstCurrentTheme 1→2`，新增那条落在 `FormMain.c(2909)` ——
+  在该 TU 基线的截断点（803 行）**之后**，属"截断解除现形"，不是本刀引入（同一 TU 的 `hPopup_Mnu*` 声明
+  在修前/修后 emit 里**逐字相同**）。
+- 同理，本刀后新出现的 `C2374 42 条`（全部 `FormMain.c` 1659 行以后，`hPopup_MnuFile/MnuImage/MnuLayer…` 重定义）
+  **全部是既有隐藏项**：同一个 `hPopup_*` 初始化语句在修前 emit 里一模一样，只是过去被 100 条上限截断吞掉。
+- C2065 那 −55 条：基线里 56 条是 `vb6_hwnd_sld*` / `vb6_hwnd_slt*`（Slider 控件数组没有这枚句柄），
+  本刀改成 `CtrlArr_GetAt` 后整族消失；`FormMain.c` 截断解除又现形 1 条，净 −55。
+
+### 37.6 emit 工件读数（`pd_emit.out`，run `42856817850` → `42884401927`）
+
+- `vb6_FormMain_Mnu*_Click` 的 **0 参调用点 352 → 2**；剩余 2 条 `MnuClearRecentMacros_Click` / `MnuTest_Click`
+  的定义侧就是 `(void)` ⇒ 负向口径逐字保留。
+- `vb6_Slider_FireChange` 块 **323 → 0**（PhotoDemon 的 slider 全是工程 UC `pdSlider`；`sldDitheringAmount`
+  一类控件在 emit 里是 `vb6_UC_CreateEx + evtThunk + _sink_`，事件走 sink，不走 form 的 WM_*SCROLL 臂）。
+- emit 总行数 `1,010,915 → 1,009,946`（−969）：323 块 ×3 行 + 菜单 350 处的改写。
+
+### 37.7 单列项（本刀未碰，按批准范围）
+
+- **UDT 内嵌数组字段被当函数调用**：`C2064 66 / 12 TU` + 连带 `C2197 22`（`RtlMoveMemory` 那一族每行都带 C2064）。
+- **M3 内置/RTL 补缺省**：`pdResize_ConvertUnitToPixels 12`、`Plugin_libdeflate_* 15`、`Randomize 7`、
+  `MonthName 7`、`IntDiv 7`、`pdOpenSaveDialog_GetSaveFileName 6`、`GetOpenFileName 4` …
+- `Num_Div 24`（无括号调用 + 二元表达式实参）仍在原地。
+
+### 37.8 下一刀排序（按本刀读数重排）
+
+1. **UDT 内嵌数组字段被当函数调用** —— 一次收 `C2064 66 + C2197 22`，且是错误码混用（本该是取址/下标），
+   继续留着会污染 C2197 的读数口径。
+2. **M3 内置/RTL 补缺省** —— C2198 剩余 133 里最大的一块（前 7 族合计 55 条）。
+3. `Num_Div` 24（无括号调用形态）+ `C2039 88`。
+4. `C2065 228`：先按"截断解除现形 vs 真缺声明"两桶分开，再定刀。
+
+### 37.9 本刀遗留的观测量
+
+dev CI（`0e6d7719` / `595cc729`）除 3 个既有失败分片（`compile #1/#2`、`vbp #11`）外，
+`Tests (vbp #5)` 掉了一条 `[PIXELS] uctreeview_px.ps1`：`'Contact  List' 内容段 BM_CLICK 3s 未返回 / 看门狗超时`。
+同一份二进制在 `0e6d7719` 那一轮该分片 `PASS=48 FAIL=0`，且 `ucTreeView` 语料无菜单、无 Slider ⇒ 主机时序抖动，
+与本刀无关，未单独处理。
