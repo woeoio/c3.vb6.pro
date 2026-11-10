@@ -1,0 +1,195 @@
+name: PhotoDemon x86 full build
+
+# 独立探针 workflow：构建 C3，然后对 tests/photodemon/PhotoDemon.vbp 做**完整构建**
+# （emit → cl 编译 → link 出 exe），把 cl/link 诊断按错误码归总。
+# 只 workflow_dispatch 触发，避免每次 push 都跑双份。
+#
+# 目标：第一个"能出 exe"的真实读数。编不过就如实分类，不放宽、不桩掉。
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: PhotoDemon x86 full build
+    runs-on: windows-latest
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Sanity — MSVC present
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere missing" }
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+          if (-not $vsPath) { throw "No MSVC C++ tools found" }
+          Write-Host "MSVC install: $vsPath"
+          cmake --version
+          ninja --version
+
+      - name: Build C3.exe from source
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+          $envLines = & cmd /c "call `"$vcvars`" x64 >nul 2>&1 && set" 2>$null
+          foreach ($line in $envLines) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+            }
+          }
+          $buildDir = Join-Path $env:RUNNER_TEMP "c3build"
+          cmake -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+          cmake --build $buildDir
+          if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
+          New-Item -ItemType Directory -Force -Path .build | Out-Null
+          Copy-Item (Join-Path $buildDir "C3.exe") .build\C3.exe -Force
+          & .build\C3.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "C3.exe smoke check failed" }
+
+      - name: Full build (emit -> cl -> link, x86)
+        id: fullbuild
+        continue-on-error: true
+        run: |
+          # cl/link 必须在 PATH 上（C3 找不到 cl 会回退到自带 vcvars 探测，这里显式给一份）
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvarsall.bat"
+          $envLines = & cmd /c "call `"$vcvars`" x86 >nul 2>&1 && set" 2>$null
+          foreach ($line in $envLines) {
+            if ($line -match '^([^=]+)=(.*)$') {
+              [Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+            }
+          }
+          New-Item -ItemType Directory -Force -Path .build | Out-Null
+          New-Item -ItemType Directory -Force -Path .build\pd_full | Out-Null
+          $cwd = (Get-Location).Path
+          $os = Get-CimInstance Win32_OperatingSystem
+          "RUNNER_TOTAL_MB=$([math]::Round($os.TotalVisibleMemorySize/1KB,0))" | Tee-Object -FilePath .build\pd_build.meta -Append
+          # C3_TIMING=1: 相位计时/统计行落 stderr（只观测，不改发码）。
+          $env:C3_TIMING = '1'
+          "C3_TIMING=True" | Tee-Object -FilePath .build\pd_build.meta -Append
+          $p = Start-Process -FilePath (Join-Path $cwd '.build\C3.exe') `
+                -ArgumentList 'tests/photodemon/PhotoDemon.vbp','--arch','x86','--output-dir','.build/pd_full' `
+                -RedirectStandardOutput (Join-Path $cwd '.build\pd_build.out') `
+                -RedirectStandardError (Join-Path $cwd '.build\pd_build.err') `
+                -NoNewWindow -PassThru
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $samples = New-Object System.Collections.Generic.List[string]
+          $samples.Add("seconds,tree_ws_mb,free_phys_mb,c3_ws_mb,cl_proc_count,stderr_bytes")
+          $peakTree = 0
+          while (-not $p.HasExited) {
+            Start-Sleep -Milliseconds 2000
+            try { $p.Refresh() } catch { break }
+            $freeMB = [int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1KB)
+            $c3MB = [int]($p.WorkingSet64/1MB)
+            # cl/c1/link 是 C3 的子进程，单独采样求和（C3 自身的 WS 不包含它们）
+            $kids = @(Get-Process -Name cl,c1,link,cvtres,mspdbsrv -ErrorAction SilentlyContinue)
+            $treeMB = $c3MB + [int]((($kids | Measure-Object WorkingSet64 -Sum).Sum)/1MB)
+            if ($treeMB -gt $peakTree) { $peakTree = $treeMB }
+            $errLen = 0
+            $ei = Get-Item .build\pd_build.err -ErrorAction SilentlyContinue
+            if ($ei) { $errLen = $ei.Length }
+            $samples.Add(("{0},{1},{2},{3},{4},{5}" -f [int]$sw.Elapsed.TotalSeconds, $treeMB, $freeMB, $c3MB, $kids.Count, $errLen))
+          }
+          $sw.Stop()
+          $p.WaitForExit()
+          $code = $p.ExitCode
+          $samples | Set-Content -Path .build\pd_build.mem.csv -Encoding utf8
+          "BUILD_EXIT=$code" | Tee-Object -FilePath .build\pd_build.meta -Append
+          "BUILD_SECONDS=$([math]::Round($sw.Elapsed.TotalSeconds,1))" | Tee-Object -FilePath .build\pd_build.meta -Append
+          "STDOUT_BYTES=$((Get-Item .build\pd_build.out).Length)" | Tee-Object -FilePath .build\pd_build.meta -Append
+          "STDERR_BYTES=$((Get-Item .build\pd_build.err).Length)" | Tee-Object -FilePath .build\pd_build.meta -Append
+          "STDERR_LINES=$((Get-Content .build\pd_build.err -ErrorAction SilentlyContinue).Count)" | Tee-Object -FilePath .build\pd_build.meta -Append
+          "C_FILES=$((Get-ChildItem .build\pd_full -Filter *.c -ErrorAction SilentlyContinue).Count)" | Tee-Object -FilePath .build\pd_build.meta -Append
+          "OBJ_FILES=$((Get-ChildItem .build\pd_full -Filter *.obj -ErrorAction SilentlyContinue).Count)" | Tee-Object -FilePath .build\pd_build.meta -Append
+          "PEAK_TREE_WS_MB=$peakTree" | Tee-Object -FilePath .build\pd_build.meta -Append
+          $minFree = 999999
+          foreach ($l in ($samples | Select-Object -Skip 1)) { $v = [int]($l.Split(',')[2]); if ($v -lt $minFree) { $minFree = $v } }
+          if ($minFree -ne 999999) { "MIN_FREE_PHYS_MB=$minFree" | Tee-Object -FilePath .build\pd_build.meta -Append }
+          $exe = Get-Item .build\pd_full\PhotoDemon.exe -ErrorAction SilentlyContinue
+          if ($exe) {
+            "EXE_EXISTS=True" | Tee-Object -FilePath .build\pd_build.meta -Append
+            "EXE_BYTES=$($exe.Length)" | Tee-Object -FilePath .build\pd_build.meta -Append
+            # PE Machine: 0x014C = x86
+            $fs = [IO.File]::OpenRead($exe.FullName)
+            try {
+              $br = New-Object IO.BinaryReader($fs)
+              $fs.Position = 0x3C; $peOff = $br.ReadInt32(); $fs.Position = $peOff + 4
+              "EXE_MACHINE=0x{0:X4}" -f $br.ReadUInt16() | Tee-Object -FilePath .build\pd_build.meta -Append
+            } finally { $fs.Dispose() }
+          } else {
+            "EXE_EXISTS=False" | Tee-Object -FilePath .build\pd_build.meta -Append
+          }
+          Write-Host "build exit=$code peakTree=${peakTree}MB"
+
+      - name: Classify cl/link diagnostics
+        if: always()
+        run: |
+          $err = Get-Content .build\pd_build.err -ErrorAction SilentlyContinue
+          # cl: `path(123): error C2039: ...` 或 `fatal error C1083: ...`（无 file(line)）
+          $cl = @($err | Select-String -Pattern '(?<kind>fatal error|error|warning)\s+(?<code>C\d{4})\s*:' | ForEach-Object {
+            $m = $_.Matches[0]
+            $file = ''
+            if ($_.Line -match '^(?<f>.+?)\(\d+\)\s*:') { $file = $Matches['f'] }
+            [pscustomobject]@{ Kind = $m.Groups['kind'].Value; Id = $m.Groups['code'].Value; File = $file; Line = $_.Line }
+          })
+          # link: `LNK2019: 无法解析的外部符号 ...` / `fatal error LNK1120: ...`
+          $lnk = @($err | Select-String -Pattern '(?<kind>fatal error|error|warning)\s+(?<code>LNK\d{4})\s*:' | ForEach-Object {
+            $m = $_.Matches[0]
+            $file = ''
+            if ($_.Line -match '^(?<f>.+?)\(\d+\)\s*:') { $file = $Matches['f'] }
+            [pscustomobject]@{ Kind = $m.Groups['kind'].Value; Id = $m.Groups['code'].Value; File = $file; Line = $_.Line }
+          })
+          # 未解析外部符号（LNK2019/LNK2001 的正文）
+          $unres = @($err | Select-String -Pattern 'unresolved external symbol\s+(?<sym>\S+)(?:\s+referenced in function\s+(?<fn>.+))?' | ForEach-Object {
+            $sym = $_.Matches[0].Groups['sym'].Value
+            $fam = ($sym -replace '^_+','' -replace '@\d+$','')
+            if ($fam -match '^(vb6_[a-zA-Z0-9]+)') { $fam = $Matches[1] }
+            [pscustomobject]@{ Symbol = $sym; Family = $fam }
+          })
+
+          $lines = New-Object System.Collections.Generic.List[string]
+          $lines.Add("STDERR_LINES=$($err.Count)")
+          $lines.Add("CL_DIAG=$($cl.Count)  LINK_DIAG=$($lnk.Count)  UNRESOLVED=$($unres.Count)")
+          $lines.Add("--- cl by code ---")
+          foreach ($g in ($cl | Group-Object Id | Sort-Object Count -Descending)) {
+            $files = @($g.Group | Where-Object { $_.File } | ForEach-Object { Split-Path $_.File -Parent } | Group-Object | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object { "$($_.Name)($($_.Count))" })
+            $lines.Add(("{0}`t{1}`t{2}`t{3}" -f $g.Name, $g.Group[0].Kind, $g.Count, ($files -join '; ')))
+          }
+          $lines.Add("--- link by code ---")
+          foreach ($g in ($lnk | Group-Object Id | Sort-Object Count -Descending)) {
+            $lines.Add(("{0}`t{1}`t{2}" -f $g.Name, $g.Group[0].Kind, $g.Count))
+          }
+          $lines.Add("--- unresolved symbols by family (top 30) ---")
+          foreach ($g in ($unres | Group-Object Family | Sort-Object Count -Descending | Select-Object -First 30)) {
+            $lines.Add(("{0}`t{1}" -f $g.Name, $g.Count))
+          }
+          $lines.Add("--- cl error samples (first 40) ---")
+          foreach ($d in ($cl | Where-Object { $_.Kind -ne 'warning' } | Select-Object -First 40)) { $lines.Add($d.Line) }
+          $lines | Set-Content -Path .build\pd_build.codes.txt -Encoding utf8
+          $lines | ForEach-Object { Write-Host $_ }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## PhotoDemon x86 full build"
+          foreach ($l in (Get-Content .build\pd_build.meta -ErrorAction SilentlyContinue)) { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- $l" }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+          foreach ($l in ($lines | Select-Object -First 60)) { Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $l }
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: photodemon-full-build-logs
+          path: |
+            .build/pd_build.out
+            .build/pd_build.err
+            .build/pd_build.meta
+            .build/pd_build.mem.csv
+            .build/pd_build.codes.txt
+            .build/pd_full/c3-error.log
+          if-no-files-found: warn
+          retention-days: 7
