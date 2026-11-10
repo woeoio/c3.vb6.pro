@@ -351,11 +351,12 @@ void SemanticAnalyzer::dumpSymbols(std::ostream& os) const {
             else os << " (unused)";
             os << std::endl;
             // 过程参数
-            if (!sym->params.empty()) {
+            if (!sym->P().params.empty()) {
                 os << "    params: ";
-                for (size_t i = 0; i < sym->params.size(); i++) {
+                const auto& dumpParams = sym->P().params;
+                for (size_t i = 0; i < dumpParams.size(); i++) {
                     if (i > 0) os << ", ";
-                    auto& p = sym->params[i];
+                    auto& p = dumpParams[i];
                     os << (p.isByVal ? "ByVal " : "ByRef ") << p.name;
                     os << " As " << TypeSystem::typeToString(p.type);
                     if (p.isOptional) os << " Optional";

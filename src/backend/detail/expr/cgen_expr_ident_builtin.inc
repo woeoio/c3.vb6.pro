@@ -30,7 +30,7 @@
         Symbol* dsym = symTab_.lookupModule(node.name);
         if (dsym && (dsym->kind == SymbolKind::DeclareSub
                      || dsym->kind == SymbolKind::DeclareFunc)
-            && !dsym->params.empty()) {
+            && !dsym->P().params.empty()) {
             explicitDeclareWins = true;
         }
     }
@@ -137,7 +137,7 @@
         // 同一判定方式: 函数名以 "vb6_<本类>_" 前缀开头即本类成员方法.
         if (!asCallCallee_ && !std::getenv("C3_NO_BAREFN")) {
             bool hasRequired = false;
-            for (const auto& p : sym->params) {
+            for (const auto& p : sym->P().params) {
                 if (!p.isOptional && !p.isParamArray) { hasRequired = true; break; }
             }
             if (!hasRequired) {

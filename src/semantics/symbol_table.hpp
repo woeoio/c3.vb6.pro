@@ -160,6 +160,9 @@ struct SymbolPayload {
     CallConv delegateCallConv = CallConv::StdCall;
     Vb6Type delegateReturnType = Vb6Type::Void;
     std::vector<DelegateTarget> delegateTargets;
+    // --- 过程形参表 (第三刀) ---
+    // 跨模块注入时随载荷共享, 不再逐消费模块深拷贝 ParameterInfo 向量。
+    std::vector<ParameterInfo> params;
 };
 
 struct Symbol {
@@ -175,7 +178,7 @@ struct Symbol {
     AccessLevel access = AccessLevel::Public;
 
     // 过程相关
-    std::vector<ParameterInfo> params;
+    // 形参表已收进 SymbolPayload (见结构体定义), 读 `P().params`, 写 `W().params`。
     bool isStatic = false;      // Static Sub/Function
     bool isArray = false;       // 数组变量
     int32_t dimCount = 0;       // 数组维度数 (0=非数组, 1=一维, 2+=多维)

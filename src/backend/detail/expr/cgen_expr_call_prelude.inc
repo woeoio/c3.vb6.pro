@@ -26,7 +26,7 @@
 
         auto& ident = static_cast<IdentifierExpr&>(*node.callee);
 
-        for (auto& p : currentProc_->params) {
+        for (auto& p : currentProc_->P().params) {
 
             if (p.isParamArray) {
 
@@ -127,7 +127,7 @@
             }
             // Fix 010r-6 rev2: ByRef array param needs dereference (*name) since it's now **
             if (currentProc_) {
-                for (auto& param : currentProc_->params) {
+                for (auto& param : currentProc_->P().params) {
                     if (Symbol::toLower(param.name) == lower && !param.isByVal
                         && (static_cast<uint16_t>(param.type) & static_cast<uint16_t>(Vb6Type::Array))) {
                         arrName = "(*" + arrName + ")";
@@ -149,7 +149,7 @@
                 }
                 // Fix 010r-6 rev2: ByRef array param needs dereference (*name) since it's now **
                 if (currentProc_) {
-                    for (auto& param : currentProc_->params) {
+                    for (auto& param : currentProc_->P().params) {
                         if (Symbol::toLower(param.name) == lower && !param.isByVal
                             && (static_cast<uint16_t>(param.type) & static_cast<uint16_t>(Vb6Type::Array))) {
                             arrName = "(*" + arrName + ")";
@@ -173,7 +173,7 @@
             // (cToolsArray prop_let_Extend/DeArray 的 Vars(i)/Arr(i)).
             std::string vArg = "&" + cIdent(vIdent.name);
             if (currentProc_) {
-                for (auto& p091k : currentProc_->params) {
+                for (auto& p091k : currentProc_->P().params) {
                     if (Symbol::toLower(p091k.name) != vLower) continue;
                     bool paArr091k = (static_cast<uint16_t>(p091k.type)
                                       & static_cast<uint16_t>(Vb6Type::Array)) != 0;

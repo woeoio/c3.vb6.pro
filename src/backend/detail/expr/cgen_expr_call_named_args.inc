@@ -45,7 +45,7 @@
                     bool piIsCurrentByRefParam = false;
                     Vb6Type piCurPType189 = Vb6Type::Unknown;
                     if (currentProc_) {
-                        for (auto& p : currentProc_->params) {
+                        for (auto& p : currentProc_->P().params) {
                             if (Symbol::toLower(p.name) == Symbol::toLower(innerName) && !p.isByVal && !p.isParamArray) {
                                 bool paramIsArray = (static_cast<uint16_t>(p.type) & static_cast<uint16_t>(Vb6Type::Array)) != 0;
                                 if (!paramIsArray) {
@@ -94,7 +94,7 @@
                     bool piArgIsCurrentByRefParam = false;
                     Vb6Type piArgCurPType189 = Vb6Type::Unknown;
                     if (currentProc_) {
-                        for (auto& p : currentProc_->params) {
+                        for (auto& p : currentProc_->P().params) {
                             if (Symbol::toLower(p.name) == Symbol::toLower(argVal) && !p.isByVal && !p.isParamArray) {
                                 piArgIsCurrentByRefParam = true;
                                 piArgCurPType189 = p.type;
@@ -392,7 +392,7 @@
                         && currentProc_) {
                         auto& paIdent = static_cast<IdentifierExpr&>(*node.positional[argIdx]);
                         std::string paIdentLow = Symbol::toLower(paIdent.name);
-                        for (auto& curP : currentProc_->params) {
+                        for (auto& curP : currentProc_->P().params) {
                             if (curP.isParamArray
                                 && Symbol::toLower(curP.name) == paIdentLow) {
                                 isParamArrayVarArg = true;

@@ -320,7 +320,7 @@
                     //     vb6_frmMain_RibbonBar.FindTab C2065); 带 "()" 后外层按
                     //     COM 接收者续链。Sub 不能带 "()" —— 会被包成
                     //     vb6_ComCall(void 调用) (C2095, 实测)。
-                    bool xfZeroParams = xfSym->params.empty();
+                    bool xfZeroParams = xfSym->P().params.empty();
                     if (asCallCallee_ && (xfSym->kind == SymbolKind::Sub || !xfZeroParams)) {
                         lastExpr_ = xfCall;
                         return;

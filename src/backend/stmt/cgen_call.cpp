@@ -513,7 +513,7 @@ void CCodeGen::visit(CallStmt& node) {
                 if (sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
                     || sym->kind == SymbolKind::PropertySet)) {
-                    calleeParams = sym->params;
+                    calleeParams = sym->P().params;
                     calleeIsBuiltin = sym->isBuiltin;
                 }
             }
@@ -574,7 +574,7 @@ void CCodeGen::visit(CallStmt& node) {
                 if (sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
                     || sym->kind == SymbolKind::PropertySet)) {
-                    calleeParams = sym->params;
+                    calleeParams = sym->P().params;
                     calleeIsBuiltin = sym->isBuiltin;
                 }
                 }

@@ -63,12 +63,12 @@ std::string wideName = "L\"" + bareName + "\"";
             // 空形参表 = 不发数组、表行交 NULL(与 §B219 之前「没人问」同一形状)。
             std::string argVtRef = "NULL";
             {
-                const size_t nPrm = methodSym->params.size();
+                const size_t nPrm = methodSym->P().params.size();
                 if (nPrm > 0) {
                     std::string init;
                     for (size_t pi = 0; pi < nPrm; pi++) {
                         if (!init.empty()) init += ", ";
-                        init += cDispatchArgVt(methodSym->params[pi]);
+                        init += cDispatchArgVt(methodSym->P().params[pi]);
                     }
                     // 名字直接从 invokeName 派生 —— invokeName 本来就是全模块唯一的真符号，
                     // 再拼一遍类名/后缀就是第二套命名口径。
@@ -81,7 +81,7 @@ std::string wideName = "L\"" + bareName + "\"";
             methodRowLines.push_back("{ " + wideName + ", " + std::to_string((int32_t)dispid) +
                         ", " + std::to_string(invkind) + ", " + invokeName + ", " + argVtRef + ", " +
                         (argVtRef == "NULL" ? std::string("0")
-                             : std::to_string((int)methodSym->params.size())) + " },");
+                             : std::to_string((int)methodSym->P().params.size())) + " },");
         }
 
         for (auto& arrayLine : argVtArrayLines) entry.emitLine(arrayLine);

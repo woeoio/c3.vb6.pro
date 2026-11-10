@@ -347,7 +347,7 @@ bool CCodeGen::findClassMemberCallParamsUncached(const std::string& className,
             || chosen->kind == SymbolKind::PropertyGet
             || chosen->kind == SymbolKind::PropertyLet
             || chosen->kind == SymbolKind::PropertySet)) {
-        outParams = chosen->params;
+        outParams = chosen->P().params;
         outIsBuiltin = chosen->isBuiltin;
         return true;
     }
@@ -408,7 +408,7 @@ bool CCodeGen::findClassMemberWriteParams(const std::string& className,
             matches = true;
         }
         if (!matches) continue;
-        outParams = sym->params;
+        outParams = sym->P().params;
         return true;
     }
 
@@ -491,7 +491,7 @@ bool CCodeGen::findClassMemberGetParamsUncached(const std::string& className,
             matches = true;
         }
         if (!matches) continue;
-        outParams = sym->params;
+        outParams = sym->P().params;
         return true;
     }
 

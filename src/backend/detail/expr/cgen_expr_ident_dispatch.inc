@@ -223,7 +223,7 @@
 
     // ByRef参数: 最优先检查 (通过currentProc_->params, 不依赖符号表作用域)
     if (currentProc_) {
-        for (auto& param : currentProc_->params) {
+        for (auto& param : currentProc_->P().params) {
             if (Symbol::toLower(param.name) == lower) {
                 if (param.isParamArray) {
                     // P14.1.5: ParamArray is SAFEARRAY*, no dereference needed

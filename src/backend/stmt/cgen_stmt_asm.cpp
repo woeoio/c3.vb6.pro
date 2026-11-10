@@ -69,7 +69,7 @@ CCodeGen::AsmRefScan CCodeGen::scanAsmRefs(const AsmStmt& node) {
         bool isByRef = false;
         if (knownByRefParams_.count(lower)) { isVar = true; isByRef = true; }
         if (!isVar && currentProc_) {
-            for (auto& pi : currentProc_->params) {
+            for (auto& pi : currentProc_->P().params) {
                 if (Symbol::toLower(pi.name) == lower) { isVar = true; isByRef = !pi.isByVal; break; }
             }
         }
@@ -126,7 +126,7 @@ void CCodeGen::emitAsmStmtMixed(AsmStmt& node) {
         std::string lower = Symbol::toLower(v);
         if (knownByRefParams_.count(lower)) return true;
         if (currentProc_) {
-            for (auto& pi : currentProc_->params)
+            for (auto& pi : currentProc_->P().params)
                 if (Symbol::toLower(pi.name) == lower) return !pi.isByVal;
         }
         return false;
@@ -166,7 +166,7 @@ void CCodeGen::emitAsmStmtMixed(AsmStmt& node) {
                 // 指针的指向类型 = 参数的 C 类型去掉尾随 `*` (参数列表里 ByRef 已带 *)
                 std::string pointee;
                 if (currentProc_) {
-                    for (auto& pi : currentProc_->params) {
+                    for (auto& pi : currentProc_->P().params) {
                         if (Symbol::toLower(pi.name) == Symbol::toLower(v)) {
                             pointee = mapType(pi.type);
                             break;

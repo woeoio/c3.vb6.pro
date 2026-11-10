@@ -146,7 +146,7 @@
                     && node.positional[i]->kind == ASTNodeKind::IdentifierExpr && currentProc_) {
                     std::string paLower091k = Symbol::toLower(
                         static_cast<IdentifierExpr&>(*node.positional[i]).name);
-                    for (auto& p091k : currentProc_->params) {
+                    for (auto& p091k : currentProc_->P().params) {
                         if (Symbol::toLower(p091k.name) == paLower091k) {
                             argIsPA091k = p091k.isParamArray;
                             break;

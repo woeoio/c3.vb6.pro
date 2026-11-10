@@ -156,13 +156,13 @@
             if (isFnPick && ps->type != Vb6Type::Variant) continue;
             // 形参全 ByVal 标量才发（判据见文件头）。上限 4 个；0 个形参同样发
             // (旧判据把空形参表排除掉, 于是零参方法一条都进不了表)。
-            if (ps->params.size() > 4) continue;
+            if (ps->P().params.size() > 4) continue;
             UcMethPick pick;
             pick.name = ps->name;
             pick.isFn = isFnPick;
             bool ok = true;
             std::vector<bool> isOpt;
-            for (const ParameterInfo& pi : ps->params) {
+            for (const ParameterInfo& pi : ps->P().params) {
                 // ucTreeView (2026-11-06): ByRef **标量**形参也发桥。
                 // 实证 ucScrollbar.ctl `Public Function TrackMouseWheelOnHwnd(lHwnd&)`:
                 // 旧判据"ByRef 还原不了"整条跳过 ⇒ 表里没有它 ⇒ ucTreeViewPlus.Update 的

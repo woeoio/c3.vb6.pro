@@ -80,7 +80,7 @@ void CCodeGen::visit(ReDimStmt& node) {
     // (VB6 允许 As Variant 参数后接 ReDim 变数组, 如 cZipArchive.Extract 的
     // OutputTarget As Variant → ReDim OutputTarget(...) As Byte)
     if (currentProc_) {
-        for (auto& param : currentProc_->params) {
+        for (auto& param : currentProc_->P().params) {
             std::string paramLower = param.name;
             std::transform(paramLower.begin(), paramLower.end(), paramLower.begin(), ::tolower);
             if (paramLower == lowerVar && !param.isByVal

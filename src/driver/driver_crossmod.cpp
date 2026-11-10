@@ -368,7 +368,8 @@ bool Driver::runCrossModuleResolution() {
             );
             extSym->isExternal = true;
             extSym->sourceModule = moduleBaseNames[srcIdx];
-            extSym->params = srcSym->params;  // 复制参数列表（函数调用需要）
+            // 形参表 (params) 已并入 SymbolPayload, 由下面的 sharePayloadFrom 一并共享,
+            // 不再单独逐字段深拷贝。
             extSym->isArray = srcSym->isArray;
             // 泛型 (G2) 暴露的存量洞: 跨模块 UDT 未复制成员表 → 消费模块成员
             // 类型全退化 Variant (普通 UDT 复现: g.V As String 被 Debug.Print
@@ -441,7 +442,7 @@ bool Driver::runCrossModuleResolution() {
                 qSym->kind, qSym->name, qSym->type, qSym->location, qSym->access);
             qExt->isExternal = true;
             qExt->sourceModule = moduleBaseNames[qSrcIdx];
-            qExt->params = qSym->params;
+            qExt->W().params = qSym->P().params;
             qExt->variableTypeName = qSym->variableTypeName;
             qExt->access = qSym->access;
             symTab.moduleScope()->define(std::move(qExt), qKey);

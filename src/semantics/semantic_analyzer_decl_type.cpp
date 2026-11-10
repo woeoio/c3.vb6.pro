@@ -227,7 +227,7 @@ void SemanticAnalyzer::visit(DeclareDecl& node) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
                 pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
             }
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
 
         symTab_.define(std::move(sym));
@@ -254,7 +254,7 @@ void SemanticAnalyzer::visit(EventDecl& node) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
                 pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
             }
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
         symTab_.define(std::move(sym));
     }
@@ -281,7 +281,7 @@ void SemanticAnalyzer::visit(DelegateDecl& node) {
             pi.isByVal = param->isByVal;
             pi.isOptional = param->isOptional;
             pi.isParamArray = param->isParamArray;
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
         symTab_.define(std::move(sym));
     }

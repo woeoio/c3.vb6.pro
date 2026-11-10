@@ -24,7 +24,7 @@
         // currentProc_->params 中查找同名参数, 非数组, 非ParamArray, 类型为 Object/Variant.
         // ByRef Object 在 C 中是 void** → emitExpr emit "(*name)"; ByVal Object 是 void* → emit "name".
         if (!handled && currentProc_) {
-            for (auto& p : currentProc_->params) {
+            for (auto& p : currentProc_->P().params) {
                 if (Symbol::toLower(p.name) == nameLower) {
                     bool isArray = (static_cast<uint16_t>(p.type) & static_cast<uint16_t>(Vb6Type::Array)) != 0;
                     if (!isArray && !p.isParamArray
@@ -72,7 +72,7 @@
             && !(kBuiltinFuncNames.count(nameLower) && !node.positional.empty())) {
             // 确认 name 不是当前过程的参数 (Pattern F 已处理)
             bool isParam = false;
-            for (auto& p : currentProc_->params) {
+            for (auto& p : currentProc_->P().params) {
                 if (Symbol::toLower(p.name) == nameLower) { isParam = true; break; }
             }
             if (!isParam) {
@@ -214,7 +214,7 @@
         if (!handled && nameLower == "forms" && node.positional.size() == 1
             && currentProc_ && !knownLocalVars_.count(nameLower)) {
             bool isFormsParam = false;
-            for (auto& p : currentProc_->params) {
+            for (auto& p : currentProc_->P().params) {
                 if (Symbol::toLower(p.name) == nameLower) { isFormsParam = true; break; }
             }
             if (!isFormsParam) {

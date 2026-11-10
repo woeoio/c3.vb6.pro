@@ -424,7 +424,7 @@
                 // (零参那一形在夹具 tests/ctrlrichtextbox/RtfForm.frm:560 就是这个形状,
                 //  且是既有 EMITC-SHAPE 针钉住的; 声明了 3 个形参的处理器才是 C2198 现场)。
                 // 选区从 RTL 取, SelType 交 0。
-                const size_t nSel258 = rtSelSym->params.size();
+                const size_t nSel258 = rtSelSym->P().params.size();
                 if (nSel258 == 0) {
                     c_.emitLine("{ extern void " + rtSelFn + "(); " + rtSelFn + "(); }");
                 } else {

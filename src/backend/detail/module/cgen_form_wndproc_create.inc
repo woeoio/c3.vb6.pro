@@ -424,7 +424,7 @@
                 // 零参那一形逐字发回原形状 (夹具的 EMITC-SHAPE 针原样成立)。
                 // 选区从 RTL 取 (vb6_RTB_GetSelStart/GetSelLength, 与 .SelStart 属性同源);
                 // SelType 交 0 (原生 EN_SELCHANGE 的 seltyp 在 C 侧没有出口, VB6 常规取值即 0)。
-                const size_t nSel258 = rtbSelSym258->params.size();
+                const size_t nSel258 = rtbSelSym258->P().params.size();
                 const std::string rtbHwnd258 = isArrayCtrl
                     ? ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", 0)")
                     : ("vb6_hwnd_" + cIdent(ctrl.controlName));

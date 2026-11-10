@@ -915,7 +915,7 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
     if (!std::regex_match(argText, lvRe)) return "";
     bool isByRefParam = false;
     if (currentProc_ && argText.find("me->") != 0) {
-        for (auto& p : currentProc_->params) {
+        for (auto& p : currentProc_->P().params) {
             if (Symbol::toLower(p.name) == lower && !p.isByVal && !p.isParamArray) {
                 isByRefParam = true;
                 break;

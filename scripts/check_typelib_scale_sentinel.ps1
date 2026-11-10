@@ -35,7 +35,7 @@ if (-not (Test-Path $C3)) { Write-Host "MISSING C3.exe: $C3"; exit 2 }
 $crossPath = Join-Path $Root "src\driver\driver_crossmod.cpp"
 if (-not (Test-Path $crossPath)) { Write-Host "FAIL S0 missing src/driver/driver_crossmod.cpp"; exit 1 }
 $cross = [System.IO.File]::ReadAllText($crossPath)
-$payloadFields = 'memberNames|memberReturnTypes|memberProcKinds|memberParams|memberFieldTypes|memberFieldNames|publicFieldNames|memberFieldDispids|memberAccessLevels|memberLetParams|memberSetParams|comMethods|comSourceMethods|comModuleFunctions|delegateProcKind|delegateCallConv|delegateReturnType|delegateTargets'
+$payloadFields = 'memberNames|memberReturnTypes|memberProcKinds|memberParams|memberFieldTypes|memberFieldNames|publicFieldNames|memberFieldDispids|memberAccessLevels|memberLetParams|memberSetParams|comMethods|comSourceMethods|comModuleFunctions|delegateProcKind|delegateCallConv|delegateReturnType|delegateTargets|params'
 $s0 = @()
 if ($cross -notmatch 'sharePayloadFrom\s*\(') {
     $s0 += "S0 crossmod injection no longer shares the payload (sharePayloadFrom missing)"

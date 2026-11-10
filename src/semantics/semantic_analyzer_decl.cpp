@@ -43,7 +43,7 @@ void SemanticAnalyzer::visit(SubDecl& node) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
                 pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
             }
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
 
         // Fix 033: Pass1 填充 Class 符号的 memberParams (类型解析正确, 避免 class init phase 的 Variant 回归)
@@ -51,7 +51,7 @@ void SemanticAnalyzer::visit(SubDecl& node) {
             auto* classSym = symTab_.lookupModule(Symbol::toLower(currentModule_->moduleName));
             if (classSym && classSym->kind == SymbolKind::Class) {
                 // Sub: 覆盖 (与 memberProcKinds Sub 行为一致; VB6 不允许 Sub 与同名 Property 共存)
-                classSym->W().memberParams[Symbol::toLower(node.name)] = sym->params;
+                classSym->W().memberParams[Symbol::toLower(node.name)] = sym->P().params;
             }
         }
 
@@ -71,19 +71,20 @@ void SemanticAnalyzer::visit(SubDecl& node) {
         // declared as As SomeEnum get resolved to Variant in Pass 1. In Pass 2, after
         // runCrossModuleResolution() has injected external symbols, re-resolve to get
         // the correct type (e.g., Enum → Long). Also update classSym->W().memberParams.
-        if (sym->params.size() == node.params.size()) {
+        if (sym->P().params.size() == node.params.size()) {
             bool paramsChanged = false;
+            auto& symParams = sym->W().params;
             for (size_t i = 0; i < node.params.size(); i++) {
                 Vb6Type newType = resolveTypeOrDefault(node.params[i]->name, node.params[i]->asType.get());
-                if (newType != sym->params[i].type) {
-                    sym->params[i].type = newType;
+                if (newType != symParams[i].type) {
+                    symParams[i].type = newType;
                     paramsChanged = true;
                 }
             }
             if (paramsChanged && currentModule_->isClassModule) {
                 auto* classSym = symTab_.lookupModule(Symbol::toLower(currentModule_->moduleName));
                 if (classSym && classSym->kind == SymbolKind::Class) {
-                    classSym->W().memberParams[Symbol::toLower(node.name)] = sym->params;
+                    classSym->W().memberParams[Symbol::toLower(node.name)] = sym->P().params;
                 }
             }
         }
@@ -161,7 +162,7 @@ void SemanticAnalyzer::visit(FunctionDecl& node) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
                 pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
             }
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
 
         // Fix 033: Pass1 填充 Class 符号的 memberParams (类型解析正确)
@@ -169,7 +170,7 @@ void SemanticAnalyzer::visit(FunctionDecl& node) {
             auto* classSym = symTab_.lookupModule(Symbol::toLower(currentModule_->moduleName));
             if (classSym && classSym->kind == SymbolKind::Class) {
                 // Function: 覆盖 (与 memberProcKinds Function 行为一致)
-                classSym->W().memberParams[Symbol::toLower(node.name)] = sym->params;
+                classSym->W().memberParams[Symbol::toLower(node.name)] = sym->P().params;
             }
         }
 
@@ -184,12 +185,13 @@ void SemanticAnalyzer::visit(FunctionDecl& node) {
 
         // Fix 047: Re-resolve parameter types AND return type in Pass 2.
         // Enum/UDT types from other modules are not visible during Pass 1.
-        if (sym->params.size() == node.params.size()) {
+        if (sym->P().params.size() == node.params.size()) {
             bool paramsChanged = false;
+            auto& symParams = sym->W().params;
             for (size_t i = 0; i < node.params.size(); i++) {
                 Vb6Type newType = resolveTypeOrDefault(node.params[i]->name, node.params[i]->asType.get());
-                if (newType != sym->params[i].type) {
-                    sym->params[i].type = newType;
+                if (newType != symParams[i].type) {
+                    symParams[i].type = newType;
                     paramsChanged = true;
                 }
             }
@@ -202,7 +204,7 @@ void SemanticAnalyzer::visit(FunctionDecl& node) {
             if (paramsChanged && currentModule_->isClassModule) {
                 auto* classSym = symTab_.lookupModule(Symbol::toLower(currentModule_->moduleName));
                 if (classSym && classSym->kind == SymbolKind::Class) {
-                    classSym->W().memberParams[Symbol::toLower(node.name)] = sym->params;
+                    classSym->W().memberParams[Symbol::toLower(node.name)] = sym->P().params;
                 }
             }
         }
@@ -281,7 +283,7 @@ void SemanticAnalyzer::visit(PropertyDecl& node) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
                 pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
             }
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
 
         // Fix 033: Pass1 填充 Class 符号的 memberParams (类型解析正确, 按 Get > Function > Sub > Let > Set 优先级)
@@ -302,14 +304,14 @@ void SemanticAnalyzer::visit(PropertyDecl& node) {
                             && it->second == ProcKind::PropertySet);
                 }
                 if (wins) {
-                    classSym->W().memberParams[lower] = sym->params;
+                    classSym->W().memberParams[lower] = sym->P().params;
                 }
                 // Fix 091a: 写方向参数表独立填充 — 同类内 Let/Set 各自唯一, 不受
                 // 读上下文优先级 (Get 有参遮蔽 Let 末参 value) 影响.
                 if (node.propKind == ProcKind::PropertyLet) {
-                    classSym->W().memberLetParams[lower] = sym->params;
+                    classSym->W().memberLetParams[lower] = sym->P().params;
                 } else if (node.propKind == ProcKind::PropertySet) {
-                    classSym->W().memberSetParams[lower] = sym->params;
+                    classSym->W().memberSetParams[lower] = sym->P().params;
                 }
             }
         }
@@ -329,12 +331,13 @@ void SemanticAnalyzer::visit(PropertyDecl& node) {
 
         // Fix 047: Re-resolve parameter types AND return type in Pass 2.
         // Enum/UDT types from other modules are not visible during Pass 1.
-        if (sym->params.size() == node.params.size()) {
+        if (sym->P().params.size() == node.params.size()) {
             bool paramsChanged = false;
+            auto& symParams = sym->W().params;
             for (size_t i = 0; i < node.params.size(); i++) {
                 Vb6Type newType = resolveTypeOrDefault(node.params[i]->name, node.params[i]->asType.get());
-                if (newType != sym->params[i].type) {
-                    sym->params[i].type = newType;
+                if (newType != symParams[i].type) {
+                    symParams[i].type = newType;
                     paramsChanged = true;
                 }
             }
@@ -362,13 +365,13 @@ void SemanticAnalyzer::visit(PropertyDecl& node) {
                                 && it->second == ProcKind::PropertySet);
                     }
                     if (wins) {
-                        classSym->W().memberParams[lower] = sym->params;
+                        classSym->W().memberParams[lower] = sym->P().params;
                     }
                     // Fix 091a: 写方向参数表同步 (Pass2 重解析后类型修正)
                     if (node.propKind == ProcKind::PropertyLet) {
-                        classSym->W().memberLetParams[lower] = sym->params;
+                        classSym->W().memberLetParams[lower] = sym->P().params;
                     } else if (node.propKind == ProcKind::PropertySet) {
-                        classSym->W().memberSetParams[lower] = sym->params;
+                        classSym->W().memberSetParams[lower] = sym->P().params;
                     }
                 }
             }

@@ -216,7 +216,7 @@ void CCodeGen::visit(ForEachStmt& node) {
     if (node.collection && node.collection->kind == ASTNodeKind::IdentifierExpr && currentProc_) {
         std::string paLower092q =
             Symbol::toLower(static_cast<IdentifierExpr&>(*node.collection).name);
-        for (auto& p092q : currentProc_->params) {
+        for (auto& p092q : currentProc_->P().params) {
             if (Symbol::toLower(p092q.name) == paLower092q) {
                 isPA092q = p092q.isParamArray;
                 break;

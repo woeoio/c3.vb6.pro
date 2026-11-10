@@ -309,7 +309,7 @@
                                 }
                                 // M29: 回写dispid到method symbol, 供cgen生成dll_entry.c方法表使用, 确保TypeLib与dll_entry.c dispid一致
                                 mr.sym->comDispid = mi.dispid;
-                                for (auto& param : mr.sym->params) {
+                                for (auto& param : mr.sym->P().params) {
                                     mi.params.push_back(param);
                                 }
                                 methods.push_back(mi);

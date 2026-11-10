@@ -595,13 +595,13 @@ bool SemanticAnalyzer::checkDelegateSignature(Symbol* del, Symbol* proc, SourceL
             return fail("Delegate '" + del->name + "' 是 Sub 签名, 目标 '" +
                         proc->name + "' 不是 Sub");
     }
-    if (del->params.size() != proc->params.size())
+    if (del->P().params.size() != proc->P().params.size())
         return fail("Delegate '" + del->name + "' 参数个数不符: 委托 " +
-                    std::to_string(del->params.size()) + " 个, 目标 " +
-                    std::to_string(proc->params.size()) + " 个");
-    for (size_t i = 0; i < del->params.size(); i++) {
-        const auto& d = del->params[i];
-        const auto& p = proc->params[i];
+                    std::to_string(del->P().params.size()) + " 个, 目标 " +
+                    std::to_string(proc->P().params.size()) + " 个");
+    for (size_t i = 0; i < del->P().params.size(); i++) {
+        const auto& d = del->P().params[i];
+        const auto& p = proc->P().params[i];
         if (d.type != p.type)
             return fail("Delegate '" + del->name + "' 第" + std::to_string(i + 1) +
                         "个参数类型不符: 委托 " + std::string(TypeSystem::typeToString(d.type)) +
@@ -622,10 +622,10 @@ bool SemanticAnalyzer::matchesDelegateSignature(Symbol* del, Symbol* proc) {
     } else {
         if (proc->kind != SymbolKind::Sub) return false;
     }
-    if (del->params.size() != proc->params.size()) return false;
-    for (size_t i = 0; i < del->params.size(); i++) {
-        if (del->params[i].type != proc->params[i].type) return false;
-        if (del->params[i].isByVal != proc->params[i].isByVal) return false;
+    if (del->P().params.size() != proc->P().params.size()) return false;
+    for (size_t i = 0; i < del->P().params.size(); i++) {
+        if (del->P().params[i].type != proc->P().params[i].type) return false;
+        if (del->P().params[i].isByVal != proc->P().params[i].isByVal) return false;
     }
     return true;
 }

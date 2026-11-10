@@ -95,7 +95,7 @@
 
                 std::transform(argLower.begin(), argLower.end(), argLower.begin(), ::tolower);
 
-                for (auto& p : currentProc_->params) {
+                for (auto& p : currentProc_->P().params) {
 
                     if (p.isParamArray) {
 
