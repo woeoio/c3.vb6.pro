@@ -2020,6 +2020,8 @@ C4090 587、C4028 560、C4022 352、C4305 143。
 * dev CI run `42792610693`：唯一新增红是 `Emit manifest`（登记前，预期）；`Tests (compile #1/#2)`、
   `vbp #11` 的红与上一轮 `42776279675` **同一组**（§31.3 那 8 条既有 STATIC + 既有 vbp 红），
   `cls_inh` / `ucTreeView` / `Charts 2020` 用例均通过。
+* **登记后** dev CI run `42809450669`：`Emit manifest (Shape oracle)` **success**（629/629 逐行相同）；
+  失败 job 只有 `Tests (compile #1/#2)` + `Tests (vbp #11)`，与 §31.3 的既有红**同一组**，本刀没添新红。
 
 ### 34.4 215 条按结构体分项（G1 后基线，可比子集口径见下表）
 
