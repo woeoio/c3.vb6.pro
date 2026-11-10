@@ -63,11 +63,15 @@ jobs:
         continue-on-error: true
         run: |
           New-Item -ItemType Directory -Force -Path .build | Out-Null
-          # 内存采样 (只观测, 不改 emit 行为): 每 2 s 记一次 C3 工作集 + 系统空闲物理内存。
-          # 目的是拿到「峰值工作集 / 是否进交换」的实测曲线, 而不是靠模块数推算。
+          # 内存采样 (只观测, 不改 emit 行为): 每 2 s 记一次 C3 工作集 + 系统空闲物理内存
+          # + stderr 已写字节数 (用于把 C3_TIMING 的相位行对回时间轴)。
+          # 数值一律取整, 避开 N1 的千位分隔符把 CSV 拆坏 (首轮基线踩过)。
           $cwd = (Get-Location).Path
           $os = Get-CimInstance Win32_OperatingSystem
           "RUNNER_TOTAL_MB=$([math]::Round($os.TotalVisibleMemorySize/1KB,0))" | Tee-Object -FilePath .build\pd_emit.meta -Append
+          # C3_TIMING=1: 相位计时/统计行走 stderr (不动 stdout, 不改进发码);
+          # 只为把内存曲线归到相位上, 诊断计数照旧按 VBxxxx 正则归总。
+          $env:C3_TIMING = '1'
           $p = Start-Process -FilePath (Join-Path $cwd '.build\C3.exe') `
                 -ArgumentList 'tests/photodemon/PhotoDemon.vbp','--arch','x86','--emit-c' `
                 -RedirectStandardOutput (Join-Path $cwd '.build\pd_emit.out') `
@@ -75,28 +79,32 @@ jobs:
                 -NoNewWindow -PassThru
           $sw = [Diagnostics.Stopwatch]::StartNew()
           $samples = New-Object System.Collections.Generic.List[string]
-          $samples.Add("seconds,working_set_mb,free_phys_mb")
+          $samples.Add("seconds,working_set_mb,free_phys_mb,stderr_bytes")
+          $peakWS = 0
           while (-not $p.HasExited) {
             Start-Sleep -Milliseconds 2000
             try { $p.Refresh() } catch { break }
-            $freeMB = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1KB,0)
-            $samples.Add(("{0:N1},{1:N1},{2}" -f $sw.Elapsed.TotalSeconds, ($p.WorkingSet64/1MB), $freeMB))
+            $freeMB = [int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1KB)
+            $wsMB = [int]($p.WorkingSet64/1MB)
+            if ($wsMB -gt $peakWS) { $peakWS = $wsMB }
+            $errLen = 0
+            $ei = Get-Item .build\pd_emit.err -ErrorAction SilentlyContinue
+            if ($ei) { $errLen = $ei.Length }
+            $samples.Add(("{0},{1},{2},{3}" -f [int]$sw.Elapsed.TotalSeconds, $wsMB, $freeMB, $errLen))
           }
           $sw.Stop()
           $p.WaitForExit()
           $code = $p.ExitCode
-          $peakMB = -1
-          try { $peakMB = [math]::Round($p.PeakWorkingSet64/1MB,1) } catch { }
           $samples | Set-Content -Path .build\pd_emit.mem.csv -Encoding utf8
           "EMIT_EXIT=$code" | Tee-Object -FilePath .build\pd_emit.meta -Append
           "EMIT_SECONDS=$([math]::Round($sw.Elapsed.TotalSeconds,1))" | Tee-Object -FilePath .build\pd_emit.meta -Append
           "STDOUT_BYTES=$((Get-Item .build\pd_emit.out).Length)" | Tee-Object -FilePath .build\pd_emit.meta -Append
           "STDERR_LINES=$((Get-Content .build\pd_emit.err -ErrorAction SilentlyContinue).Count)" | Tee-Object -FilePath .build\pd_emit.meta -Append
-          "PEAK_WORKING_SET_MB=$peakMB" | Tee-Object -FilePath .build\pd_emit.meta -Append
+          "PEAK_WORKING_SET_MB=$peakWS" | Tee-Object -FilePath .build\pd_emit.meta -Append
           $minFree = 999999
           foreach ($l in ($samples | Select-Object -Skip 1)) { $v = [int]($l.Split(',')[2]); if ($v -lt $minFree) { $minFree = $v } }
           if ($minFree -ne 999999) { "MIN_FREE_PHYS_MB=$minFree" | Tee-Object -FilePath .build\pd_emit.meta -Append }
-          Write-Host "emit exit=$code peak=${peakMB}MB"
+          Write-Host "emit exit=$code peak=${peakWS}MB"
 
       - name: Classify diagnostics into job summary
         if: always()
