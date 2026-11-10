@@ -36,6 +36,59 @@ const Symbol* CCodeGen::findModuleQualifiedNoArgFunction(const ASTNode& obj) con
     return nullptr;
 }
 
+// G4/M1: 调用点接收者类解析 (只服务形参表决策)。
+// 第一步沿用 inferClassTypeOfExpr 的既有语义 (不改它一处); 它答不出时再问一张只在
+// **设计期控件** 上有话可说的表: knownUserControlCtrlVars_ (控件名/控件数组基名 → .ctl 的
+// VB_Name, 见 cgen_form_ctrl_registry.inc:41 —— 控件数组登记的就是数组基名，
+// 所以 `ctlMany(1)` 的 callee 基名查得到类)。回答不出仍返回空串。
+std::string CCodeGen::inferCallReceiverClassForParams(const ASTNode& obj) const {
+    const std::string byClass = inferClassTypeOfExpr(obj);
+    if (!byClass.empty()) return byClass;
+    const ASTNode* recvNameNode = nullptr;
+    if (obj.kind == ASTNodeKind::IdentifierExpr) {
+        recvNameNode = &obj;
+    } else if (obj.kind == ASTNodeKind::IndexOrCallExpr) {
+        const auto& call = static_cast<const IndexOrCallExpr&>(obj);
+        if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr) {
+            recvNameNode = call.callee.get();
+        }
+    }
+    if (!recvNameNode) return "";
+    const std::string recvLower =
+        Symbol::toLower(static_cast<const IdentifierExpr&>(*recvNameNode).name);
+    auto it = knownUserControlCtrlVars_.find(recvLower);
+    if (it == knownUserControlCtrlVars_.end()) return "";
+    return it->second;
+}
+
+// G4/M1 闸: 唯一的类感知形参表采纳点。两道判据缺一不可 —— 接收者类答不出、或该类
+// 没有这枚成员, 都交回 false, 调用方随即逐字回落原 lookupModule 兜底 (不静默、不改写)。
+bool CCodeGen::tryAdoptReceiverClassParams(const ASTNode& recv,
+                                           const std::string& member,
+                                           std::vector<ParameterInfo>& outParams,
+                                           bool& outBuiltin) const {
+    const std::string recvCls = inferCallReceiverClassForParams(recv);
+    if (recvCls.empty()) return false;
+    // Fix 240b 同款方向闸: emit 侧把该成员解成 `prop_get_` 时, 形参表要取**读方向**那一份
+    // (Get/Let 并存时 findClassMemberCallParams 实测交回 Let 表, 会把 Let 末参 Value 的
+    // 默认值顶到 `_has_<param>` 上 ⇒ C2440)。
+    if (resolveClassMemberCall(recvCls, member).find("_prop_get_") != std::string::npos) {
+        std::vector<ParameterInfo> getParams;
+        if (findClassMemberGetParams(recvCls, member, getParams)) {
+            outParams = std::move(getParams);
+            outBuiltin = false;
+            return true;
+        }
+    }
+    std::vector<ParameterInfo> callParams;
+    bool callBuiltin = false;
+    // C3-SENTINEL(g4-m1-gate): 唯一采纳点 —— 未命中即回落, 见 scripts/check_g4_receiver_class_gate.ps1
+    if (!findClassMemberCallParams(recvCls, member, callParams, callBuiltin)) return false;
+    outParams = std::move(callParams);
+    outBuiltin = callBuiltin;
+    return true;
+}
+
 std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
     switch (expr.kind) {
         case ASTNodeKind::IdentifierExpr: {

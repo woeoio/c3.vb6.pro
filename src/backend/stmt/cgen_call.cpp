@@ -554,16 +554,18 @@ void CCodeGen::visit(CallStmt& node) {
                 // 不另立一套尺; 它答不出 (成员不属于该类 / 接收者不是工程类) 时逐字回落原路径。
                 bool byClassCS254 = false;
                 if (maExpr.object) {
-                    std::string chainClass254 = inferClassTypeOfExpr(*maExpr.object);
-                    if (!chainClass254.empty()) {
-                        std::vector<ParameterInfo> clsParams254;
-                        bool clsBuiltin254 = false;
-                        if (findClassMemberCallParams(chainClass254, maExpr.memberName,
-                                                      clsParams254, clsBuiltin254)) {
-                            calleeParams = clsParams254;
-                            calleeIsBuiltin = clsBuiltin254;
-                            byClassCS254 = true;
-                        }
+                    // G4/M1: 与 Fix 033/042b 共用**唯一的类感知采纳点** —— 接收者类解析
+                    // = inferClassTypeOfExpr + 控件/控件数组 → 工程 UserControl 类
+                    // (无括号语句式 `ddWhichFrame(1).AddItem ...` 的 object 是
+                    // IndexOrCallExpr, 旧路径推不出类 ⇒ 落到 class-unaware 兜底,
+                    // 命中跨类同名成员形参表 ⇒ 多发 Optional 缺省 + `_has_` 尾叜 ⇒ C2197)。
+                    std::vector<ParameterInfo> clsParams254;
+                    bool clsBuiltin254 = false;
+                    if (tryAdoptReceiverClassParams(*maExpr.object, maExpr.memberName,
+                                                    clsParams254, clsBuiltin254)) {
+                        calleeParams = std::move(clsParams254);
+                        calleeIsBuiltin = clsBuiltin254;
+                        byClassCS254 = true;
                     }
                 }
                 // Fix 084y-3 (原逻辑): 链式调用对象方法时 (X.Y(args).Z) 取类方法签名 ——

@@ -1939,6 +1939,20 @@ function Test-CtrlArrayMemberSites {
     }
 }
 
+function Test-G4ReceiverClassGate {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] g4_receiver_class_gate ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_g4_receiver_class_gate.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-CtrlPropTypeAuthority {
     $script:total++
     Write-Host -NoNewline "  [STATIC] ctrl_prop_type_authority ... "
@@ -12024,6 +12038,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-UcArrayEventSites }
     if (Enter-StaticShard) { Test-SubclassSlotSites }
     if (Enter-StaticShard) { Test-CtrlArrayMemberSites }
+    if (Enter-StaticShard) { Test-G4ReceiverClassGate }
     if (Enter-StaticShard) { Test-CtrlPropTypeAuthority }
     if (Enter-StaticShard) { Test-FormDrawState }
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }
