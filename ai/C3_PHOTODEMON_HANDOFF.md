@@ -1538,3 +1538,37 @@ codegen 阶段没有新的分配峰值（8–10 GB 平台期是语义表仍常�
 **判断**：13.5 GB 里 AST 只占 0.7 GB，**先放 AST 没有意义**。要达到"一次一个模块"，B 是唯一彻底的路，
 但 B 依赖 A（否则摘要里 Public 载荷仍是全量拷贝）；A 可以独立落地、独立用 `emit-manifest` 验。
 
+## 29. 方案 A 落地：跨模块注入载荷共享（2026-11-10）
+
+### 29.1 第 1 刀：类成员表 11 张收进 `SymbolPayload`（`951574f8`）
+
+- `Symbol` 新增 `std::shared_ptr<SymbolPayload> payload_`，读走 `P()`（const 引用，空载荷返回静态默认实例），
+  写走 `W()`（`use_count()>1` 时 COW 克隆）；3.5 注入改用 `sharePayloadFrom()`，只花一个 `shared_ptr`。
+- 11 张类成员表（`memberNames` … `memberSetParams`）的读写点全部改门（19 个文件、221 处）。
+- 形状门：HEAD 现编旧二进制 vs 新二进制，**629/629 逐字节零差异**。
+- 斜率（`check_typelib_scale_sentinel.ps1` 语料，本机）：N=8 86.7 → **56.9 MB**，N=60 585.2 → **324.2 MB**，
+  **9.59 → 5.14 MB/模块**。
+- `-Category syntax` 187/187 PASS。`check_typelib_payload_writers.ps1` 绿（`driver_crossmod.cpp` 载荷写点
+  3 → 2，少的正是被共享替换掉的 `extSym->memberNames = srcSym->memberNames`；S6「读门不许当写门」新增）。
+
+### 29.2 第 1.5 刀：`ComMethodSig` / `DelegateTarget` 上提到命名空间作用域（`7b991465`）
+
+第二刀要把 `comMethods`/`comSourceMethods`/`comModuleFunctions`/`delegateTargets` 收进 `SymbolPayload`，
+而载荷定义在 `Symbol` 之前，嵌套类型在那里不可见。故先做纯机械上提：字段与方法签名一字不改，
+`Symbol` 内保留同名 `using` 别名，既有 `Symbol::ComMethodSig` 写法继续有效。
+
+- 形状门：629/629 逐字节零差异（`emit-manifest.old.txt` vs `emit-manifest.cut2.txt`，数据行 629 = 629，diff 0）。
+- `-Category syntax` 187/187 PASS；两道哨兵读数不变（`driver_crossmod` 载荷写点仍为 0）。
+
+### 29.3 形状门期望文件挂账（**读之前先看这条**）
+
+`emit-manifest.expected.txt` 当前落后 dev **15 行**，其中 **4 行与本系列改动无关**（dev 上早已存在的漂移）。
+判读口径：
+
+- 本系列每一刀都用**同一个 HEAD 现编的旧二进制**跑全量 629 输入，与改动后的新二进制逐字节比较；
+  得到 0 差异 = 本刀没有改变发码形状。这个比较比「对 expected 文件」更强，因为 expected 本身陈旧。
+- `emit_manifest.ps1` 末尾与 expected 比会报 15 行 FAIL（脚本 rc=1/4），**这是期望文件陈旧，不是代码回归**。
+  不要据此回滚，也不要逐行手改 expected。
+- 登记方式：等 CI 那台二进制交回清单后，用 `scripts/rebless_emit_manifest.ps1 -Bless` 统一重登记一次。
+  在此之前，本系列所有「形状门通过」均指上述「旧 vs 新 629 零差异」口径。
+
