@@ -9,6 +9,11 @@ name: Verdict self-check (must go RED)
 
 on:
   workflow_dispatch:
+  # workflow_dispatch 要求该文件已在默认分支上；探针分支上的一次性自检用 push 自触发
+  # （只匹配本文件，不会连带 pd_build_probe 那两小时的整编）。
+  push:
+    paths:
+      - '.github/workflows/pd_verdict_selfcheck.yml'
 
 jobs:
   selfcheck:
