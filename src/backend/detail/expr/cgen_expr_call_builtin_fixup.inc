@@ -346,6 +346,15 @@
     static const char* const kOD_LoadPicEx[]   = { "NULL" };
 static const char* const kOD_Rnd[]         = { "0" };        // VB6 无参 Rnd = 取下一个数
 static const char* const kOD_Randomize[]   = { "0.0" };
+    // C3-SENTINEL(m3-builtin-opt-defaults): 日期名家族的第二/第三档是 Optional ——
+    // VB6 签名 `MonthName(month[, abbreviate])` / `WeekdayName(weekday[, abbreviate[, firstdayofweek]])`。
+    // RTL 出口是 2/3 参的固定 C 签名 (vb6rtl_builtin.h:528-529), 省略档不补 ⇒
+    // `vb6_MonthName(Month(Now))` 1 实参进 2 形参 = cl C2198 整份 TU 编不过
+    // (PhotoDemon 7 处: ScreenCapture.bas / Plugin_EZTwain.bas / pdClipboardMain.cls)。
+    // 省略档取值 = VB6 缺省: abbreviate=False(0); firstDayOfWeek=vbSunday(1)。
+    // 第一档 (month/weekday) 是必填档 (nullptr) —— 缺了就停住, 让 cl 的 C2198 说话。
+    static const char* const kOD_MonthName[]   = { nullptr, "0" };
+    static const char* const kOD_WeekdayName[] = { nullptr, "0", "1" };
 // 账 #439 (§B212): 位 3 = **UseParentheses**，默认是 **False(0)**，**不是 -1**。
 //   ⚠ 这一格原先和另外两位一样填 "-1"，于是「**省略**」与「**显式写 True**」在 C 侧**同码**
 //   （VB6 的 True 恒为 -1）⇒ RTL 收到 -1 分不清是「省略、走默认」还是「要括号」。
@@ -390,6 +399,8 @@ static const char* const kOD_Randomize[]   = { "0.0" };
         { "vb6_LoadPictureEx",   kOD_LoadPicEx,   sizeof(kOD_LoadPicEx) / sizeof(kOD_LoadPicEx[0]),     false },
         { "vb6_Rnd",             kOD_Rnd,         sizeof(kOD_Rnd) / sizeof(kOD_Rnd[0]),                 false },
         { "vb6_Randomize",       kOD_Randomize,   sizeof(kOD_Randomize) / sizeof(kOD_Randomize[0]),     false },
+        { "vb6_MonthName",       kOD_MonthName,   sizeof(kOD_MonthName) / sizeof(kOD_MonthName[0]),     false },
+        { "vb6_WeekdayName",     kOD_WeekdayName, sizeof(kOD_WeekdayName) / sizeof(kOD_WeekdayName[0]), false },
         { "vb6_Mid",             kOD_Mid,         sizeof(kOD_Mid) / sizeof(kOD_Mid[0]),                 true  },
         { "vb6_MidB",            kOD_MidB,        sizeof(kOD_MidB) / sizeof(kOD_MidB[0]),               true  },
         { "vb6_StrConv",         kOD_StrConv,     sizeof(kOD_StrConv) / sizeof(kOD_StrConv[0]),         true  },
