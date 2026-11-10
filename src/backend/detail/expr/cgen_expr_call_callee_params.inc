@@ -173,18 +173,23 @@
         // Use inferClassTypeOfExpr to determine the class type, then look up
         // member params. This enables Optional param padding for cross-module
         // method chain calls.
-        if (!classAwareResolved && maExpr.object
-            && maExpr.object->kind != ASTNodeKind::IdentifierExpr) {
-            std::string className = inferClassTypeOfExpr(*maExpr.object);
-            if (!className.empty()) {
-                std::vector<ParameterInfo> params;
-                bool isBuiltin = false;
-                if (findClassMemberCallParams(className, maExpr.memberName, params, isBuiltin)) {
-                    calleeParams = std::move(params);
-                    calleeIsBuiltin = isBuiltin;
-                    classAwareResolved = true;
-                    calleeParamsFound = true;
-                }
+        // G4/M1: 接收者类解析统一交给**唯一的类感知采纳点** tryAdoptReceiverClassParams
+        // (接收者类解析 = inferClassTypeOfExpr + 控件/控件数组 → 工程 UserControl 类)。
+        // 原判据只认 inferClassTypeOfExpr, 控件数组元素接收者 (`ddWhichFrame(1).AddItem ...`,
+        // object 是 IndexOrCallExpr) 推不出类 ⇒ 掉到下面 class-unaware 的
+        // lookupModule(memberName), 命中**跨类同名成员**的形参表 (pdListSupport.AddItem
+        // 5 参 vs pdDropDown.AddItem 4 参) ⇒ Optional 缺省多发一枚 + `_has_` 尾叜多一枚
+        // ⇒ 实参 11 枚打 9 参原型 ⇒ C2197 "too many arguments for call"。
+        // 门后的两条判据 (类答不出 / 类里没这枚成员) 仍逐字回落原兜底, 不静默改写。
+        if (!classAwareResolved && maExpr.object) {
+            std::vector<ParameterInfo> g4Params;
+            bool g4Builtin = false;
+            if (tryAdoptReceiverClassParams(*maExpr.object, maExpr.memberName,
+                                            g4Params, g4Builtin)) {
+                calleeParams = std::move(g4Params);
+                calleeIsBuiltin = g4Builtin;
+                classAwareResolved = true;
+                calleeParamsFound = true;
             }
         }
 

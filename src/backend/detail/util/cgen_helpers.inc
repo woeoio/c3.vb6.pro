@@ -1573,6 +1573,23 @@
     // 只有这一形才可以在值上下文补 `()` —— 带参裸引用在 VB6 里不合法, 可选参另有补默认值通路。
     const Symbol* findModuleQualifiedNoArgFunction(const ASTNode& obj) const;
 
+    // G4/M1: **调用点接收者类解析** —— 只服务形参表决策 (calleeParams), 一个字都不改 emit 路径。
+    // 与 inferClassTypeOfExpr 的唯一差别: 在其后再问一张表 knownUserControlCtrlVars_
+    // (控件名 / **控件数组基名** → .ctl 的 VB_Name)。emit 侧 (emitUcInstanceMemberExpr)
+    // 早就按同一张表解对了函数名, 只有形参表没跟上 ⇒ `ddWhichFrame(1).AddItem ...`
+    // 落到"全表按名兜底" lookupModule, 命中跨类同名成员 (pdListSupport.AddItem 5 参
+    // vs pdDropDown.AddItem 4 参) 的形参表 ⇒ 多发 Optional 缺省 + _has_ 尾叜 ⇒ C2197。
+    std::string inferCallReceiverClassForParams(const ASTNode& obj) const;
+
+    // G4/M1 **闸 (唯一的类感知形参表采纳点, 由 scripts/check_g4_receiver_class_gate.ps1 静态钉住)**:
+    //   ① 接收者类答不出 → false;  ② findClassMemberCallParams 未命中 → false。
+    // 只有 true 时调用方才会写 calleeParams; 否则调用方逐字回落原来那条
+    // class-unaware 的 lookupModule 兜底 (口径与 Fix 254 既有注释 "既有唯一出口" 同源)。
+    bool tryAdoptReceiverClassParams(const ASTNode& recv,
+                                     const std::string& member,
+                                     std::vector<ParameterInfo>& outParams,
+                                     bool& outBuiltin) const;
+
 
     // Fix <vbeclipse> rev8: 该类成员的返回类型是不是 `As Object` (即 C 侧 void*)。
     // `Property Get View() As Object` (View.cls:66) 就是这一类。
