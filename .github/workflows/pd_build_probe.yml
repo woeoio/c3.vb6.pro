@@ -8,6 +8,12 @@ name: PhotoDemon x86 full build
 
 on:
   workflow_dispatch:
+  # 仅本文件变动时触发：首次靠 push 把 workflow 注册进 Actions（workflow_dispatch
+  # 要求 workflow 已在默认分支上）；后续文件不变就不会跟着别的 push 跑。
+  push:
+    branches: [probe/photodemon-emit]
+    paths:
+      - '.github/workflows/pd_build_probe.yml'
 
 jobs:
   build:
