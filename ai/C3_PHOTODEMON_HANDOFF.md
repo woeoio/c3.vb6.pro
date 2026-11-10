@@ -1729,3 +1729,126 @@ codegen 阶段没有新的分配峰值（8–10 GB 平台期是语义表仍常�
 三刀没有新增任何 STATIC 红。**这些既有红本次不修**（不在本系列范围，且 `object_slot_boxing`
 的正解是让 Set 站点改走 `inferClassTypeOfExpr` 那条唯一权威，属发码改动，需单独一刀 + 形状门）。
 
+### 31.4 run 42757586471 的逐 job 结论（12 分片全绿）
+
+20 个 job 里 18 绿 2 红，红的只有 `Tests (compile #1)` / `Tests (compile #2)`（上面 8 条 STATIC）：
+
+| 绿 | job |
+| --- | --- |
+| 构建/形状 | `Build C3.exe`、`Emit manifest (shape oracle)`、`Baseline (M1)` |
+| **vbp 分片 12/12** | `Tests (vbp #1)` … `Tests (vbp #12)` |
+| 其它夹具 | `Tests (bas #1)`、`Tests (bas #2)`、`Tests (syntax)`、`Tests (asm)`、`Tests (smoke)` |
+
+⇒ **三刀没有伤到既有夹具**：12 个 vbp 分片、bas/syntax/asm/smoke 与 629 形状门全部通过；
+唯一的红是 compile #1/#2 里的 8 条既有 STATIC 哨兵。
+
+## 32. 整编探针：emit → cl → link 的第一个真实读数（2026-11-10）
+
+`dev` 三刀之后，`--emit-c` 已能整工程出 539 份 C（§30）。本节验证的是**下一段**：
+把产出的 C 交给 `cl.exe` 编、再 link 成 exe。新 workflow `.github/workflows/pd_build_probe.yml`
+（探针分支，`workflow_dispatch` + 本文件自己的 push），run **42754639429**（job 结论 `success`
+只因整编 step 有 `continue-on-error: true`，**实际 `BUILD_EXIT=1`，没有 exe**）。
+
+**这一节没有为了让它过而放宽阈值、桩掉函数或跳过一个文件。** 读数原样记录。
+
+### 32.1 总量
+
+| 项 | 读数 |
+| --- | --- |
+| 命令 | `.build\C3.exe tests/photodemon/PhotoDemon.vbp --arch x86 --output-dir .build/pd_full` |
+| `C3_TIMING` | 1（时间口径只能跟同样带 TIMING 的读数比） |
+| `BUILD_EXIT` | **1**（cl 返回 2，停在 cl 阶段，**未进 link**） |
+| exe | **不存在** |
+| 整编墙钟（含 emit + cl） | **6,596.2 s** |
+| 峰值整棵进程树工作集 | **8,861 MB** |
+| 最小空闲物理内存 | **4,858 MB**（runner 总 16,379 MB） |
+| 工程 TU | **539 份，539 份都有 error** |
+| 24 份 TU 撞 `C1003`（每 TU 100 错误上限） | 真实错误数**比下表更多**，被截断 |
+| `c3-error.log` | 18,784,181 B / 85,020 行（cl 全量输出） |
+| error 行合计 | **≈20,474** |
+| warning 行合计 | **≈46,354** |
+
+### 32.2 cl 错误码（按次数）
+
+| 码 | 级别 | 次数 | 受影响 TU |
+| --- | --- | --- | --- |
+| C2079 | error | **16,152** | **539 / 539** |
+| C2224 | error | 1,125 | 90 |
+| C2039 | error | 971 | 84 |
+| C2197 | error | 774 | 62 |
+| C2198 | error | 549 | 112 |
+| C2440 | error | 329 | 76 |
+| C2065 | error | 278 | 99 |
+| C2064 | error | 60 | 10 |
+| C2045 | error | 50 | 17 |
+| C2296 | error | 39 | 19 |
+| C2036 | error | 34 | 4 |
+| C1003 | **fatal** | 24 | 24（错误上限截断） |
+| C2231 | error | 21 | 6 |
+| C2063 | error | 19 | 19 |
+| C2106 / C2069 / C2297 / C2095 / C2186 | error | 10 / 8 / 5 / 5 / 5 | ≤4 |
+| C2102 / C2172 / C2223 / C2113 / C2112 | error | 4 / 4 / 3 / 3 / 2 | ≤3 |
+
+warning 侧（不是失败原因，但量很大、且都是生成器形状问题）：C4005 宏重定义 **16,516**（≈30 个宏 × 539 TU）、
+C4244 收窄 **8,440**、C4047 **7,628**、C4024 **6,940**、C4133 **2,932**、C4146 **2,185**、
+C4090 587、C4028 560、C4022 352、C4305 143。
+
+### 32.3 缺口分类（按"哪一类、影响多少文件"）
+
+| # | 族 | 码 | 条数 | 影响 TU | 判据/位置 |
+| --- | --- | --- | --- | --- | --- |
+| G1 | **UDT 值类型在头里只有前向声明** | C2079 | **16,152** | **539（全）** | 6 个类型 `vb6_type_RectL` 3,771、`RGBQuad` 3,769、`PointAPI` 3,759、`PointLong` 2,690、`RectF` 1,617、`winRect` 539；落点 57 处，全在**头文件**里（`Fonts.h(319..327)`、`GDI_Plus.h(597..)`、`pdDisplays.h(113)`、`pdEditBoxW.h(201)`…），形如 `vb6_type_RectL rcMonitor;` 的值成员 |
+| G2 | 接收者类型推不出（当非结构用） | C2224/C2296/C2231/C2036 | 1,225 | ~92 | `.MainSelection` 201、`.Width` 123、`.Height` 121、`.Left` 82、`.x/.y/.Top/.Right` … 接收者是 `void*` / 不完整类型 |
+| G3 | 类实例的"方法名当字段发" | C2039 | 971 | 84 | **907 条集中在 `vb6_cls_pdImage`**：`GetActiveLayer` 237、`GetLayerByIndex` 112、`GetNumOfLayers` 66、`GetActiveLayerIndex` 54、`GetActiveDIB` 54、`IsSelectionActive` 53、`NotifyImageChanged` 51…（63 个不同成员名） |
+| G4 | 实参个数与签名不符 | C2197 + C2198 | 1,323 | ~115 | 多传：`pdDropDown_AddItem` 144、`pdButtonStrip_AddItem` 126、`pdButtonToolbox_AssignTooltip` 72；少传：`ChkLong` 56、`Processor_FlagInitialNDFXState_Text` 36、`Int` 25、`IntDiv` 13。两侧都指向**控件/类方法的接收者与默认参数展开**，共 68 + 141 个不同被调方 |
+| G5 | 值/指针/整数互转 | C2440 | 329 | 76 | `void* → float` 36、`vb6_type_RGBQuad → int` 31、`PointLong → int` 23、`ComplexNumber → intptr_t` 16、`RectF → int` 14、`int → VARIANT` 13、`double → pdSpinner**` 12 |
+| G6 | 控件名/控件数组元素未声明 | C2065 | 278 | 99 | `pdFxPreview` 39、`sltQuality` 19、`vb6_hwnd_sltBrushSetting` 14、`MergedEntry` 12、`PD_MenuEntry` 10、`cmdFlyoutLock` 10（.frm 控件变量没进 TU） |
+| G7 | 其它零散 | C2064 60（`takes 0`）、C2045 50（label 重复）、C2063 19、C2106 10、C2069 8（`void` 返回值被使用）、C2095 5、C2186 5 | ~157 | ≤20 | 单点形状问题，批量修不值当，先记账 |
+
+**G1 的机理（最小复现，非推测）**：生成器在**每个模块头**里为用到但没定义的 UDT 写的是
+`typedef struct vb6_type_X vb6_type_X;`（[cgen_base_generate_epilogue.inc:78-85](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/base/cgen_base_generate_epilogue.inc#L78-L85)），
+而 `struct` 体只写进**定义方**的头。本机 2 模块探针（`Holder.cls` 里 `Private mR As RectL`，
+`RectL` 由排在其后的 `ModA.bas` 定义）复现为：
+`Holder.h` 里有 `vb6_type_RectL mR;` + 只有前向 typedef，`ModA.h` 里才有 `typedef struct vb6_type_RectL { … }`，
+而 `Holder.c` 先 `#include "Holder.h"` ⇒ C2079。整工程里这 6 个 UDT 定义在
+`Drawing2D.bas` / `PublicEnumsAndTypes.bas`，用到它们的头分散在 `Fonts.h`、`GDI_Plus.h` 等，
+**头顺序由 vbp 顺序决定**，所以 539 个 TU 全中。这是**一个发码层的单点缺口**（"头里按值用到的 UDT 必须把定义
+提到前向声明处，或按依赖排序/统一放到类型枢纽头"），不是 539 个独立问题。
+
+### 32.4 RTL 缺符号（LNK2019/LNK2001）
+
+**本次 0 条，因为根本没到 link**（cl `exit 2`）。cli 阶段 RTL 侧自身是干净的：RTL 的 TU 里只有
+`vb6_di_stubs.c` / `vb6_di_win32_stubs.c` 出了诊断，共 **2 条 C4996 + 1 条 C4113**，**0 error**。
+`LNK2019/LNK2001` 的函数族、导出表、入口点（`Sub Main`/`WinMain`）、manifest、依赖库
+**均为未观测项**，要等 G1–G6 降到 0 之后才有读数。不许把"这次没红"当成"RTL 齐了"。
+
+### 32.5 本机不可行，只能走 CI
+
+- 一个 cl 调用（`/MP` 并行）在 16 GB runner 上墙钟 **6,596 s**、进程树峰值 **8,861 MB**、
+  空闲物理内存最低只剩 **4,858 MB**。也就是说：**光是 cl 这一段就吃掉了半个机器**。
+- 按 TU 摊：6,596 / 539 = **12.2 s/TU（还是并行之后）**。
+- 本机硬规则要求 `CMAKE_BUILD_PARALLEL_LEVEL=2`、起构建前空闲 ≥ 8 GB。把 `/MP` 压到 2 换内存，
+  墙钟至少 3 小时量级，且 emit 段自己就要 8.4 GB 峰值（§30）⇒ **本机串行整编在这台 16 GB 机器上不可行**，
+  与 §0.1 的事故同一量级。整编**继续只走 CI**。
+- `C_FILES=0 / OBJ_FILES=0` 不是失败：`--output-dir` 只落 exe 与 `c3-error.log`，`.c`/`.obj`
+  在 `%TEMP%\C3C\<pid>_<n>` 且结束即清理。要看 C 就另开一次 `--emit-c`，别看整编产物。
+
+### 32.6 探针自身的两个缺陷（记账，别误读）
+
+1. workflow 里 `Classify` 步骤读的是 `pd_build.err`（C3 的 stderr，只有 7,760 行摘要），
+   而 cl 的全量诊断在 `pd_full/c3-error.log` ⇒ 首轮 artifact 的 `pd_build.codes.txt` 是
+   `CL_DIAG=0 / LINK_DIAG=0`（空表）。本节所有表格是**本地对 `c3-error.log` 重算**的结果。
+   下次复跑前先把归类改成读 `c3-error.log`，否则还会拿到空表。
+2. `continue-on-error: true` 让 job 显示 `success`。**看结论要看 `BUILD_EXIT` / `EXE_EXISTS`**，
+   不要看 job 颜色。
+
+### 32.7 下一步的顺序（按收益排序）
+
+1. **G1 单点修**（预计一次能把 error 从 ~20k 降到 ~4k、TU 覆盖率从 539 降到几十）：
+   让"头里按值出现的 UDT"拿到完整 `struct` 体（类型枢纽头或按依赖拓扑排序），修完重跑整编，
+   同时盯 §30 的 629 形状门（这一刀**会**改发码形状，属预期改动，需重新 bless + 说明）。
+2. G3（`pdImage` 方法当字段）与 G4（实参个数）是第二批：两者都指向"接收者/签名解析"，
+   与 §28 的 `inferClassTypeOfExpr` 权威线同源，应合成一刀做形状门。
+3. G2/G5/G6 再各自成刀。
+4. 只有到了 link，才有 `LNK2019/LNK2001` 与入口/manifest 的第一份真实读数。
+
