@@ -13,6 +13,29 @@ namespace vb6c3 {
 // --- cgen_util_classtype.cpp: 类/UDT 类型推断与字段 C 类型 ---
 
 
+// G3: `Mod.Fn` 形态识别 —— 限定符是模块名 (跨模块 external 或本模块), Fn 是形参表
+// 为空的 Function/PropertyGet。E1 (接收者返回类推断) 与 E2 (值上下文补 `()`) 共用。
+const Symbol* CCodeGen::findModuleQualifiedNoArgFunction(const ASTNode& obj) const {
+    if (obj.kind != ASTNodeKind::MemberAccessExpr) return nullptr;
+    const auto& ma = static_cast<const MemberAccessExpr&>(obj);
+    if (!ma.object || ma.object->kind != ASTNodeKind::IdentifierExpr) return nullptr;
+    if (!symTab_.moduleScope()) return nullptr;
+    const std::string modLower =
+        Symbol::toLower(static_cast<const IdentifierExpr&>(*ma.object).name);
+    const std::string memLower = Symbol::toLower(ma.memberName);
+    for (const auto& [key, s] : symTab_.moduleScope()->symbols()) {
+        if (!s || s->lowerName != memLower) continue;
+        if (s->kind != SymbolKind::Function && s->kind != SymbolKind::PropertyGet) continue;
+        if (!s->P().params.empty()) continue;
+        const bool sameMod = !s->isExternal
+            && Symbol::toLower(moduleName_) == modLower;
+        const bool extMod = s->isExternal
+            && Symbol::toLower(s->sourceModule) == modLower;
+        if (sameMod || extMod) return s.get();
+    }
+    return nullptr;
+}
+
 std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
     switch (expr.kind) {
         case ASTNodeKind::IdentifierExpr: {
@@ -250,7 +273,28 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             auto& ma = static_cast<const MemberAccessExpr&>(expr);
             if (!ma.object) return "";
             std::string baseClassName = inferClassTypeOfExpr(*ma.object);
-            if (baseClassName.empty()) return "";
+            if (baseClassName.empty()) {
+                // G3-E1: **模块限定无参函数**当接收者 —— `Mod.Fn.Member` 的语义是
+                //   `(调用 Fn).Member`, 表达式的类是 Fn 的返回类, 不是"模块 Mod"。
+                //   此前这里只认 `inferClassTypeOfExpr(object)` (对象本身是类实例);
+                //   限定符是**标准模块名**时该问返回空 ⇒ 外层 `.Member` 落
+                //   `obj + "." + member` (实测 PhotoDemon `PDImages.GetActiveImage` /
+                //   `GetNumOfLayers` 一族 C2039)。与 Fix 218 (裸函数名, 同文件上一个
+                //   分支) 同一语义, 只是多了一层模块限定符; 只认**形参表为空**的
+                //   Function/PropertyGet, 且返回类型必须是工程类 —— 带参函数在 VB6 里
+                //   无括号引用是编译错误, 不在本刀范围。
+                if (const Symbol* fnSym = findModuleQualifiedNoArgFunction(expr)) {
+                    if (!fnSym->variableTypeName.empty()) {
+                        const std::string projHit =
+                            projectClassNameOf(fnSym->variableTypeName);
+                        if (!projHit.empty()) return projHit;
+                        const Symbol* clsSym = symTab_.lookup(fnSym->variableTypeName);
+                        if (clsSym && clsSym->kind == SymbolKind::Class)
+                            return fnSym->variableTypeName;
+                    }
+                }
+                return "";
+            }
             if (classTypedFieldMap_) {
                 auto it = classTypedFieldMap_->find(baseClassName);
                 if (it != classTypedFieldMap_->end()) {

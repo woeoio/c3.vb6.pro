@@ -1568,6 +1568,12 @@
     // 用于链式调用 db.Sql(s).Exec(...) 中 .Exec 的对象表达式 (db.Sql(s)) 类型推断
     std::string inferClassTypeOfExpr(const ASTNode& expr) const;
 
+    // G3: `Mod.Fn` 形态里, Fn 是否为**模块限定、形参表为空**的 Function/PropertyGet。
+    // 命中返回该符号 (moduleScope 所有, 生命周期稳定), 否则 nullptr。
+    // 只有这一形才可以在值上下文补 `()` —— 带参裸引用在 VB6 里不合法, 可选参另有补默认值通路。
+    const Symbol* findModuleQualifiedNoArgFunction(const ASTNode& obj) const;
+
+
     // Fix <vbeclipse> rev8: 该类成员的返回类型是不是 `As Object` (即 C 侧 void*)。
     // `Property Get View() As Object` (View.cls:66) 就是这一类。
     // 用途: 链式成员访问的**接收者是这种成员**时, 后面那一段必须走 COM 晚绑定

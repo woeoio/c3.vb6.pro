@@ -387,6 +387,20 @@
                 else if (memSym->kind == SymbolKind::PropertyLet) memberProcName = "prop_let_" + node.memberName;
                 else if (memSym->kind == SymbolKind::PropertySet) memberProcName = "prop_set_" + node.memberName;
                 std::string funcName = cProcName(memberProcName, memSym->access, sourceMod);
+                // G3-E2: 模块限定**无参函数**在值上下文里是"调用它、取返回值", 不是取
+                //   函数地址。Fix 086 已给裸标识符补过 `()` (cgen_expr_ident_builtin.inc),
+                //   这条"模块名.函数名"的路当时漏了 —— 于是 `PDImages.GetActiveImage`
+                //   作为接收者时, 外层 `.GetNumOfLayers` 拿到的是函数名而非对象
+                //   (实测 PhotoDemon C2039 一族)。callee 上下文由外层 IndexOrCallExpr/
+                //   CallStmt 补括注与实参, 这里不重复。只补**形参表为空**的
+                //   Function/PropertyGet: 带参的裸引用在 VB6 里不合法, 可选参函数另有
+                //   补默认值的通路, 不在此处冒 C2198 的风险。
+                if (!asCallCallee_ && !std::getenv("C3_NO_BAREFN")
+                    && (memSym->kind == SymbolKind::Function
+                        || memSym->kind == SymbolKind::PropertyGet)
+                    && memSym->P().params.empty()) {
+                    funcName += "()";
+                }
                 lastExpr_ = funcName;  // 仅输出函数名, 参数由IndexOrCallExpr添加
                 return;
             }

@@ -303,6 +303,17 @@
                     // mustDispatch=true 出 VB3027 —— 这一支此前一律静默直调, 正是
                     // D27-13 那类"编得过、虚调用消失"的形状。
                     std::string thisArg088c = "(void*)" + obj;
+                    // G3-E2: 接收者是 `Mod.Fn` 且 Fn 为无参函数时, 值应是**调用结果**,
+                    //   不是函数地址。值上下文那一支已由 cgen_expr_member_class_module.inc
+                    //   补过 `()`; 但 callee 上下文里接收者是提前 (asCallCallee_=true) 发的,
+                    //   那条补括注被跳过 —— 实测 PhotoDemon
+                    //   `PDImages.GetActiveImage.GetActiveDIB().GetDIBColorDepth` 内层发成
+                    //   `vb6_pdImage_GetActiveDIB((void*)vb6_PDImages_GetActiveImage)`。
+                    //   这里按 AST 复核一次, 只补真正缺的那一层。
+                    if (findModuleQualifiedNoArgFunction(*node.object)
+                        && (obj.size() < 2 || obj.compare(obj.size() - 2, 2, "()") != 0)) {
+                        thisArg088c = "(void*)" + obj + "()";
+                    }
                     if (!suppressVirtDispatch_
                         && resolvedFn.find("_prop_let_") == std::string::npos
                         && resolvedFn.find("_prop_set_") == std::string::npos) {
