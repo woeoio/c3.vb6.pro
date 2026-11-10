@@ -1681,3 +1681,51 @@ codegen 阶段没有新的分配峰值（8–10 GB 平台期是语义表仍常�
 - `--dump-symbols` 的可观测面：`params` 刀的 dump 代码从 `sym->params` 改读 `sym->P().params`，输出文本不变；
   本次 CI 不跑 dump，这条靠 §29.5 的代码审读 + 形状门兜底。
 
+## 31. 三刀之后的 dev CI 归因（2026-11-10）
+
+`dev` 推到 `github/dev`（`f12cc7ea`）触发三次 `VB6 C3 Regression`，结果逐轮收口：
+
+| run | 结论 | 说明 |
+| --- | --- | --- |
+| 42754470554 | 22 job 中 3 红 | emit-manifest + compile ×2，见 31.1 |
+| 42756305967 | 2 红 | BOM/W2 修好，emit-manifest 绿 |
+| 42757586471 | 2 红 | 规模哨兵 rc 修好；**只剩 8 条既有 STATIC** |
+
+### 31.1 形状门（emit manifest）
+
+首轮红了 11 份：`2020/ucChart*`、`ucPieChart`、`ucProgressCircular`、`ucTreeMaps`、
+`tests/czUI-main`、`VBFlexGridDemo`、`ucSegmentedControl`、`ucTreeView`。
+**不是三刀引入**，证据链：
+- 用 cut1 之前的二进制（`aa715a0d`，即 `951574f8` 的父提交）跑出的清单 `.temp/emit-manifest.old.txt`
+  对这 11 份给出的 sha256 与 CI 本次"实得"**逐条相同**；
+- 再拿 CI 清单（`ci/emit-manifest` 分支，bless 前）与 cut1 前清单做全量 629 行比对：
+  **只有 4 行不同**（`GUISample` ×3 + `TeeChartChartDisplay`），而这 4 行正是 §29.3 挂账的
+  "与本系列无关"那 4 行（本机 VS 16.11 vs CI VS 18.11 的工具链差异，期望文件里的就是 CI 值）。
+- 因此：**三刀合计对 629 份语料的发码形状改动 = 0**；11 行属于 `aa715a0d` 的 UC 属性桥
+  Let/Set 双入口（其提交信息自述的发码变化），已用 `rebless_emit_manifest.ps1 -Bless` 登记，
+  复算 629/629 绿、`check_manifest_coverage` K1..K3 绿。
+
+### 31.2 本系列引入并已修的 4 条
+
+| 用例 | 原因 | 修法 |
+| --- | --- | --- |
+| `ps51_joinpath` / `test_helper_integrity`（H7）/ `static_sentinel_registration`（R4） | §29.5 编辑 `check_typelib_scale_sentinel.ps1` 时丢了 UTF-8 BOM，CI 的 PS 5.1 按 ANSI 读 → 解析失败 | 恢复 BOM（内容不动），三条本地 PS 5.1 复跑绿 |
+| `com_sig_collision_policy`（W2） | 判据写死 `sym.comMethods.end()`；载荷共享后权威写法是 `sym.P().comMethods.end()` | 判据改认读门（闸本体与位置未动，不算放宽） |
+| `typelib_scale_sentinel` | 哨兵自身缺陷：PS 5.1 下 `Start-Process -PassThru` 的 `ExitCode` 恒空 → 误报"C3 退出码非 0"（本机与 CI 都复现） | `Measure-Run` 改用 `System.Diagnostics.Process` + 异步抽干管道；PS 5.1 本地 PASS（N=8 51.1 MB / N=64 285.7 MB / 4.19 MB/模块，rc=0） |
+
+### 31.3 剩下的 8 条：全部既有，与三刀无关
+
+- `builtin_opt_defaults`：`vb6_Randomize` 缺"按实参个数"档的理由（更早的账）。
+- `vbp_fixture_census`：`photodemon\PhotoDemon.vbp` 未登记（刻意只在探针分支跑）。
+- `legacy_slot_key_owners` P3：9 vs 8（`cgen_iface_vtbl.cpp` 2 vs 1）。
+- `iface_view_authority`：`ifaceViewOfExpr` 6 文件 vs 5、`vb6_ivref_` 7 vs 6、`emitIvrefRefSet` 5 vs 4。
+- `legacy_view_arg_owners` V8：2 vs 1。
+- `box_temp_reclaim` R1：3 vs 2。
+- `class_refcount_authority`：8 vs 7。
+- `object_slot_boxing` B11：`procObjectFormals_.count` 2 vs 1 —— 用 `git log -S` 定位到
+  **`aa715a0d`**（`cgen_setlet_set_prop.inc` 的 Set 晚绑定接收者判断新增第二处直接问表）。
+
+前 7 条在 `7230557e`（三刀之前的 dev）就红；第 8 条是 `aa715a0d` 引入、但**早于三刀**。
+三刀没有新增任何 STATIC 红。**这些既有红本次不修**（不在本系列范围，且 `object_slot_boxing`
+的正解是让 Set 站点改走 `inferClassTypeOfExpr` 那条唯一权威，属发码改动，需单独一刀 + 形状门）。
+
