@@ -173,7 +173,7 @@ std::string CCodeGen::ucInstanceByRefArgExpr(const std::string& name) const {
 std::string CCodeGen::dataObjectArgExpr(const std::string& name) const {
     if (currentProc_) {
         const std::string want = Symbol::toLower(name);
-        for (const auto& p : currentProc_->params) {
+        for (const auto& p : currentProc_->P().params) {
             if (Symbol::toLower(p.name) == want)
                 return p.isByVal ? ("(void*)" + name) : ("(void*)(*" + name + ")");
         }
@@ -297,7 +297,7 @@ std::string CCodeGen::resolveArrayTargetIdent(const std::string& varName) {
         std::string objLower = objName;
         std::transform(objLower.begin(), objLower.end(), objLower.begin(), ::tolower);
         if (currentProc_) {
-            for (auto& p : currentProc_->params) {
+            for (auto& p : currentProc_->P().params) {
                 std::string pLower = p.name;
                 std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
                 if (pLower == objLower && !p.isByVal
@@ -425,7 +425,7 @@ std::string CCodeGen::wrapByRefVariantParamArg(const std::string& paramName,
     // vb6_ComObject_FromInstance 包成真 IDispatch (它的 1 个引用直接转移给 VARIANT)。
     // 接口槽 (`vb6_ivref_*`) 不走这条: 那不是 vb6_ComObject 包装, 保持原行为。
     if (currentProc_) {
-        for (const auto& p : currentProc_->params) {
+        for (const auto& p : currentProc_->P().params) {
             if (Symbol::toLower(p.name) != Symbol::toLower(paramName)) continue;
             if (p.isByVal || p.isParamArray) break;
             // cParamClassPtrType 非 const (它与 mapTypeRef 同族), 本函数是 const —— 只读调用.

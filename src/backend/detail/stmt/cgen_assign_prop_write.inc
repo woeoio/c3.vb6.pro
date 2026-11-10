@@ -130,8 +130,8 @@
                     //       (_vb6_with_14/_vb6_with_15). 同 assign_com_prop Fix 110i.
                     if (isComMarker_) {
                         std::string hint160w = "BSTR";  // String 属性默认解 BSTR
-                        if (propLetSym && !propLetSym->params.empty()) {
-                            const Vb6Type pt160w = propLetSym->params.back().type;
+                        if (propLetSym && !propLetSym->P().params.empty()) {
+                            const Vb6Type pt160w = propLetSym->P().params.back().type;
                             if (pt160w == Vb6Type::Double || pt160w == Vb6Type::Single
                                 || pt160w == Vb6Type::Date || pt160w == Vb6Type::Currency) {
                                 hint160w = "Double";
@@ -365,7 +365,7 @@
         {
             bool isLocalTarget = knownLocalVars_.count(tgtLower);
             if (!isLocalTarget && currentProc_) {
-                for (const auto& p : currentProc_->params) {
+                for (const auto& p : currentProc_->P().params) {
                     std::string pLower = p.name;
                     std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
                     if (pLower == tgtLower) { isLocalTarget = true; break; }
@@ -433,8 +433,8 @@
                     // (Fix 158h 教训), external 符号维持原发射不介入.
                     if (isClassModule_ && !propSym->isExternal
                         && propSym->kind == SymbolKind::PropertyLet
-                        && !propSym->params.empty()) {
-                        valExpr = packLetValueArg(propSym->params.back(),
+                        && !propSym->P().params.empty()) {
+                        valExpr = packLetValueArg(propSym->P().params.back(),
                                                   node.value.get(), valExpr);
                     }
                     c_.emitLine(funcName + (isClassModule_ ? "((void*)me, " : "(") + valExpr + ");  /* Property Let/Set (bare) */");
@@ -471,7 +471,7 @@
             && !knownLocalVars_.count(tgtLower)) {
             bool bareParamShadow329 = false;
             if (currentProc_) {
-                for (const auto& p : currentProc_->params) {
+                for (const auto& p : currentProc_->P().params) {
                     std::string pLower329 = p.name;
                     std::transform(pLower329.begin(), pLower329.end(), pLower329.begin(), ::tolower);
                     if (pLower329 == tgtLower) { bareParamShadow329 = true; break; }
@@ -666,8 +666,8 @@
                     // packLetValueArg 现在对**按值具体类型形参 ← Variant 实参**也解箱
                     // (见 cgen_util_comwrite.cpp), 其余形状原样返回 ⇒ 无条件调用与
                     // 旧行为逐字等价, 只多出解箱那一档。
-                    if (letPropSym && !letPropSym->params.empty()) {
-                        lastExpr_ = packLetValueArg(letPropSym->params.back(),
+                    if (letPropSym && !letPropSym->P().params.empty()) {
+                        lastExpr_ = packLetValueArg(letPropSym->P().params.back(),
                                                     node.value.get(), lastExpr_);
                     }
                     // Fix <VBFlexGridDemo>: With 块这条 prop_let_ 与上面 Fix 158h 那条
@@ -732,8 +732,8 @@
                     // CommandButtonW.c:2955, OptionButtonW.c:2594, Pager.c:1836,
                     // UpDown.c:1930, PagerForm.c:187 …)。复用同一把尺 packLetValueArg,
                     // ByRef 槽的 `&(T){...}` / `&(vb6_VARIANT){...}` 也由它给。
-                    if (setPropSym && !setPropSym->params.empty()) {
-                        lastExpr_ = packLetValueArg(setPropSym->params.back(),
+                    if (setPropSym && !setPropSym->P().params.empty()) {
+                        lastExpr_ = packLetValueArg(setPropSym->P().params.back(),
                                                     node.value.get(), lastExpr_);
                     }
                     c_.emitLine(setFn + "(" + tempVar + ", " + lastExpr_ + ");  /* With class prop_set_ (fallback) */");

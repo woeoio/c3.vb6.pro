@@ -227,7 +227,7 @@ void SemanticAnalyzer::visit(DeclareDecl& node) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
                 pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
             }
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
 
         symTab_.define(std::move(sym));
@@ -254,7 +254,7 @@ void SemanticAnalyzer::visit(EventDecl& node) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
                 pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
             }
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
         symTab_.define(std::move(sym));
     }
@@ -268,10 +268,10 @@ void SemanticAnalyzer::visit(DelegateDecl& node) {
             SymbolKind::Delegate, node.name,
             Vb6Type::LongPtr, node.loc, node.access
         );
-        sym->delegateProcKind = node.procKind;
-        sym->delegateCallConv = node.callingConv;
+        sym->W().delegateProcKind = node.procKind;
+        sym->W().delegateCallConv = node.callingConv;
         if (node.procKind == ProcKind::Function && node.returnType) {
-            sym->delegateReturnType = resolveTypeRef(node.returnType.get());
+            sym->W().delegateReturnType = resolveTypeRef(node.returnType.get());
         }
         for (auto& param : node.params) {
             ParameterInfo pi;
@@ -281,7 +281,7 @@ void SemanticAnalyzer::visit(DelegateDecl& node) {
             pi.isByVal = param->isByVal;
             pi.isOptional = param->isOptional;
             pi.isParamArray = param->isParamArray;
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
         symTab_.define(std::move(sym));
     }

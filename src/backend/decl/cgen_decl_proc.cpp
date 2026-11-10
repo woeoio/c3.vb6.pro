@@ -337,7 +337,7 @@ void CCodeGen::visit(SubDecl& node) {
     // This ensures the parameter variable has the correct default value
     // when the caller omits it, instead of the type's zero value.
     if (sym) {
-        for (auto& pi : sym->params) {
+        for (auto& pi : sym->P().params) {
             if (pi.isOptional && !pi.isParamArray && pi.hasDefaultValue && !pi.defaultValueExpr.empty()) {
                 std::string pName = cIdent(pi.name);
                 std::string hasFlag = "_has_" + pName;
@@ -497,8 +497,9 @@ void CCodeGen::applyEventHandlerAbi(SubDecl& node) {
         prm->isByVal = true;
     }
     if (auto* evtSym = symTab_.lookupModuleOverloadByLoc(node.name, node.loc)) {
-        for (size_t j = 0; j < evtSym->params.size(); ++j) {
-            auto& pi = evtSym->params[j];
+        auto& evtParams = evtSym->W().params;
+        for (size_t j = 0; j < evtParams.size(); ++j) {
+            auto& pi = evtParams[j];
             if (pi.isParamArray) continue;
             if (j < slots256.size() && slots256[j]) continue;
             pi.isByVal = true;

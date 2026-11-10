@@ -1100,7 +1100,7 @@
                             propSym86 = symTab_.lookupModuleByKind(propName,
                                                                    SymbolKind::PropertyGet);
                         }
-                        if (propSym86 && propSym86->params.empty()) {
+                        if (propSym86 && propSym86->P().params.empty()) {
                             innerIsChainedObj = true;
                             // Fix 242b: 该无参属性返回**项目类集合**时记下项目类 Item 发射
                             // 函数 (下方走项目类路径)。判据用 getClassMethodReturnType(返回名,

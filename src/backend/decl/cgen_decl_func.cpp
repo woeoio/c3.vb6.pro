@@ -452,7 +452,7 @@ void CCodeGen::visit(FunctionDecl& node) {
     // This ensures the parameter variable has the correct default value
     // when the caller omits it, instead of the type's zero value.
     if (sym) {
-        for (auto& pi : sym->params) {
+        for (auto& pi : sym->P().params) {
             if (pi.isOptional && !pi.isParamArray && pi.hasDefaultValue && !pi.defaultValueExpr.empty()) {
                 std::string pName = cIdent(pi.name);
                 std::string hasFlag = "_has_" + pName;

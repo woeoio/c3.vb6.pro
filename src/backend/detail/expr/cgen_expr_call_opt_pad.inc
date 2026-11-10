@@ -64,7 +64,7 @@
                         static_cast<IdentifierExpr&>(*node.positional[i]).name;
                     std::string fwdLower = fwdName;
                     std::transform(fwdLower.begin(), fwdLower.end(), fwdLower.begin(), ::tolower);
-                    for (const auto& srcParam : currentProc_->params) {
+                    for (const auto& srcParam : currentProc_->P().params) {
                         std::string srcLower = srcParam.name;
                         std::transform(srcLower.begin(), srcLower.end(), srcLower.begin(), ::tolower);
                         if (srcLower != fwdLower) continue;

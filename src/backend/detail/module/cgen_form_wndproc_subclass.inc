@@ -189,7 +189,7 @@
             auto evCallBlock = [&](const char* suffix) -> std::string {
                 Symbol* evSym = symTab_.lookup(info.ctrlName + suffix);
                 std::string fn = eventHandlerFn(info.ctrlName, suffix);
-                if (evSym && !evSym->params.empty() && info.arrayIndex >= 0) {
+                if (evSym && !evSym->P().params.empty() && info.arrayIndex >= 0) {
                     return "{ extern void " + fn + "(int16_t*); int16_t vb6_evindex = "
                          + std::to_string(info.arrayIndex) + "; " + fn + "(&vb6_evindex); }";
                 }
@@ -247,7 +247,7 @@
                 auto evCallBlockUcByVal = [&](const char* suffix) -> std::string {
                     Symbol* evSym = symTab_.lookup(info.ctrlName + suffix);
                     std::string fn = eventHandlerFn(info.ctrlName, suffix);
-                    if (evSym && !evSym->params.empty() && info.arrayIndex >= 0) {
+                    if (evSym && !evSym->P().params.empty() && info.arrayIndex >= 0) {
                         return "{ extern void " + fn + "(int16_t); " + fn + "("
                              + std::to_string(info.arrayIndex) + "); }";
                     }
@@ -371,7 +371,7 @@
                 // arm 里却 `extern void vb6_sldM6_DblClick(); …`）。存量工程两种都见过
                 // （本仓夹具就写着无参的 `sld6_DblClick()`），所以按**处理器自己声明的形参数**发。
                 const Symbol* symDc = symTab_.lookup(info.ctrlName + "_DblClick");
-                if (symDc && !symDc->params.empty()) {
+                if (symDc && !symDc->P().params.empty()) {
                     c_.emitLine("if (msg == WM_LBUTTONDBLCLK) { int16_t vb6_dblcancel = 0;"
                                 " extern void " + fn + "(int16_t*); " + fn + "(&vb6_dblcancel); }");
                 } else {

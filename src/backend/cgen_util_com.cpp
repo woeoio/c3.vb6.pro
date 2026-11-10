@@ -100,8 +100,8 @@ CCodeGen::ComSigView CCodeGen::comSigViewOf(const Symbol* comSym,
                                             const std::string& memberName) const {
     ComSigView sv;
     if (!comSym) return sv;
-    auto it = comSym->comMethods.find(Symbol::toLower(memberName));
-    if (it == comSym->comMethods.end()) return sv;
+    auto it = comSym->P().comMethods.find(Symbol::toLower(memberName));
+    if (it == comSym->P().comMethods.end()) return sv;
     sv.found = true;
     sv.isGet = it->second.isPropertyGet;
     sv.retCType = mapType(it->second.returnType);
@@ -454,8 +454,8 @@ std::string CCodeGen::classFieldComUnpackHint(const std::string& className,
         const Symbol* cs = kv.second.get();
         if (!cs || cs->kind != SymbolKind::Class) continue;
         if (Symbol::toLower(cs->name) != want) continue;
-        auto it = cs->memberFieldTypes.find(fld);
-        if (it == cs->memberFieldTypes.end()) return "BSTR";
+        auto it = cs->P().memberFieldTypes.find(fld);
+        if (it == cs->P().memberFieldTypes.end()) return "BSTR";
         const std::string tn = Symbol::toLower(it->second);
         if (tn == "string") return "BSTR";
         if (tn == "long" || tn == "integer" || tn == "boolean" || tn == "byte") return "Long";
@@ -480,8 +480,8 @@ std::string CCodeGen::canonicalClassFieldName(const std::string& className,
         if (!cs || cs->kind != SymbolKind::Class) continue;
         if (Symbol::toLower(cs->name) != want
             && Symbol::toLower(cs->sourceModule) != want) continue;
-        auto it = cs->memberFieldNames.find(fld);
-        return (it != cs->memberFieldNames.end()) ? it->second : memberName;
+        auto it = cs->P().memberFieldNames.find(fld);
+        return (it != cs->P().memberFieldNames.end()) ? it->second : memberName;
     }
     return memberName;
 }
@@ -674,7 +674,7 @@ bool CCodeGen::isOwnClassField(const std::string& memberName) const {
         if (!cs || cs->kind != SymbolKind::Class) continue;
         if (Symbol::toLower(cs->name) != want
             && Symbol::toLower(cs->sourceModule) != want) continue;
-        return cs->memberFieldNames.count(fld) > 0;
+        return cs->P().memberFieldNames.count(fld) > 0;
     }
     return false;
 }
@@ -694,7 +694,7 @@ std::string CCodeGen::canonicalClassMemberName(const std::string& className,
         if (!cs || cs->kind != SymbolKind::Class) continue;
         if (Symbol::toLower(cs->name) != want
             && Symbol::toLower(cs->sourceModule) != want) continue;
-        for (const auto& mn : cs->memberNames) {
+        for (const auto& mn : cs->P().memberNames) {
             if (Symbol::toLower(mn) == mem) return mn;
         }
         return memberName;
@@ -915,7 +915,7 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
     if (!std::regex_match(argText, lvRe)) return "";
     bool isByRefParam = false;
     if (currentProc_ && argText.find("me->") != 0) {
-        for (auto& p : currentProc_->params) {
+        for (auto& p : currentProc_->P().params) {
             if (Symbol::toLower(p.name) == lower && !p.isByVal && !p.isParamArray) {
                 isByRefParam = true;
                 break;

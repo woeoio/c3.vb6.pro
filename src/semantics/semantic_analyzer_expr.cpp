@@ -249,8 +249,8 @@ void SemanticAnalyzer::visit(MemberAccessExpr& node) {
         if (modSym && modSym->kind == SymbolKind::ComModule) {
             std::string memberLower = node.memberName;
             std::transform(memberLower.begin(), memberLower.end(), memberLower.begin(), ::tolower);
-            auto it = modSym->comModuleFunctions.find(memberLower);
-            if (it != modSym->comModuleFunctions.end()) {
+            auto it = modSym->P().comModuleFunctions.find(memberLower);
+            if (it != modSym->P().comModuleFunctions.end()) {
                 lastExprType_ = it->second.returnType;
                 return;
             }
@@ -432,8 +432,8 @@ void SemanticAnalyzer::visit(IndexOrCallExpr& node) {
                     diag_.error(DiagnosticID::SemTypeMismatch, node.loc,
                         "Delegate 直调暂不支持命名参数 (v1)");
                 }
-                calleeType = (del->delegateProcKind == ProcKind::Function)
-                             ? del->delegateReturnType : Vb6Type::Variant;
+                calleeType = (del->P().delegateProcKind == ProcKind::Function)
+                             ? del->P().delegateReturnType : Vb6Type::Variant;
             } else if (sym->kind == SymbolKind::Function ||
                 sym->kind == SymbolKind::DeclareFunc) {
                 // 函数调用: 返回类型即为表达式类型
@@ -582,26 +582,26 @@ bool SemanticAnalyzer::checkDelegateSignature(Symbol* del, Symbol* proc, SourceL
         diag_.error(DiagnosticID::SemTypeMismatch, loc, msg);
         return false;
     };
-    if (del->delegateProcKind == ProcKind::Function) {
+    if (del->P().delegateProcKind == ProcKind::Function) {
         if (proc->kind != SymbolKind::Function)
             return fail("Delegate '" + del->name + "' 是 Function 签名, 目标 '" +
                         proc->name + "' 不是 Function");
-        if (proc->type != del->delegateReturnType)
+        if (proc->type != del->P().delegateReturnType)
             return fail("Delegate '" + del->name + "' 返回类型不符: 委托为 " +
-                        std::string(TypeSystem::typeToString(del->delegateReturnType)) +
+                        std::string(TypeSystem::typeToString(del->P().delegateReturnType)) +
                         ", 目标为 " + std::string(TypeSystem::typeToString(proc->type)));
     } else {
         if (proc->kind != SymbolKind::Sub)
             return fail("Delegate '" + del->name + "' 是 Sub 签名, 目标 '" +
                         proc->name + "' 不是 Sub");
     }
-    if (del->params.size() != proc->params.size())
+    if (del->P().params.size() != proc->P().params.size())
         return fail("Delegate '" + del->name + "' 参数个数不符: 委托 " +
-                    std::to_string(del->params.size()) + " 个, 目标 " +
-                    std::to_string(proc->params.size()) + " 个");
-    for (size_t i = 0; i < del->params.size(); i++) {
-        const auto& d = del->params[i];
-        const auto& p = proc->params[i];
+                    std::to_string(del->P().params.size()) + " 个, 目标 " +
+                    std::to_string(proc->P().params.size()) + " 个");
+    for (size_t i = 0; i < del->P().params.size(); i++) {
+        const auto& d = del->P().params[i];
+        const auto& p = proc->P().params[i];
         if (d.type != p.type)
             return fail("Delegate '" + del->name + "' 第" + std::to_string(i + 1) +
                         "个参数类型不符: 委托 " + std::string(TypeSystem::typeToString(d.type)) +
@@ -616,16 +616,16 @@ bool SemanticAnalyzer::checkDelegateSignature(Symbol* del, Symbol* proc, SourceL
 
 bool SemanticAnalyzer::matchesDelegateSignature(Symbol* del, Symbol* proc) {
     if (!del || !proc) return false;
-    if (del->delegateProcKind == ProcKind::Function) {
+    if (del->P().delegateProcKind == ProcKind::Function) {
         if (proc->kind != SymbolKind::Function) return false;
-        if (proc->type != del->delegateReturnType) return false;
+        if (proc->type != del->P().delegateReturnType) return false;
     } else {
         if (proc->kind != SymbolKind::Sub) return false;
     }
-    if (del->params.size() != proc->params.size()) return false;
-    for (size_t i = 0; i < del->params.size(); i++) {
-        if (del->params[i].type != proc->params[i].type) return false;
-        if (del->params[i].isByVal != proc->params[i].isByVal) return false;
+    if (del->P().params.size() != proc->P().params.size()) return false;
+    for (size_t i = 0; i < del->P().params.size(); i++) {
+        if (del->P().params[i].type != proc->P().params[i].type) return false;
+        if (del->P().params[i].isByVal != proc->P().params[i].isByVal) return false;
     }
     return true;
 }
@@ -686,12 +686,12 @@ void SemanticAnalyzer::bindDelegateAddressOf(const std::string& typeName, Expr& 
     aof.funcOvlSuffix = proc->ovlCount > 0 ? ("$ov$" + proc->overloadFp) : "";
     proc->isReferenced = true;
     // 幂等登记桩生成需求 (同一目标变体可能被多处赋值引用).
-    for (auto& t : del->delegateTargets) {
+    for (auto& t : del->P().delegateTargets) {
         if (Symbol::toLower(t.procName) == Symbol::toLower(proc->name) &&
             t.procFp == (proc->ovlCount > 0 ? proc->overloadFp : ""))
             return;
     }
-    del->delegateTargets.push_back(
+    del->W().delegateTargets.push_back(
         {proc->name, "", proc->ovlCount > 0 ? proc->overloadFp : ""});
 }
 

@@ -501,8 +501,8 @@
                     || (node.value && node.value->kind == ASTNodeKind::IdentifierExpr
                         && knownVariantVars_.count(Symbol::toLower(
                                static_cast<IdentifierExpr&>(*node.value).name)));
-                bool _psValVariant159 = !_psSym->params.empty()
-                    && _psSym->params.back().type == Vb6Type::Variant;
+                bool _psValVariant159 = !_psSym->P().params.empty()
+                    && _psSym->P().params.back().type == Vb6Type::Variant;
                 // Fix 166: 被调方形参是 **ByVal** 对象时, 其 C 形参就是单个指针
                 // (VBFlexGrid.ctl:3258 `Property Set Font(ByVal NewFont As StdFont)` →
                 // `prop_set_Font(vb6_cls_VBFlexGrid*, vb6_ComIface_Font* NewFont)`),
@@ -515,8 +515,8 @@
                 //   其首 8 字节恰为 &vb6_UserControl_FontObj → 当成 vtable 调用 →
                 //   RIP 落进 .data。**C 里 void** 传成 vb6_ComIface_Font* 只是指针不匹配
                 //   警告, 所以编译期全绿、错误数为 0 也照样崩。**别再加回无条件包装。**
-                bool _psValByVal166 = !_psSym->params.empty()
-                    && _psSym->params.back().isByVal;
+                bool _psValByVal166 = !_psSym->P().params.empty()
+                    && _psSym->P().params.back().isByVal;
                 // Fix 236b: 末形参在**语义层**记成 Variant、但 C 声明是 typed 对象指针
                 // (`Property Set SelectedItem(ByVal Value As LvwListItem)` →
                 // `prop_set_SelectedItem(cls* me, vb6_cls_LvwListItem* Value)`) 时
@@ -527,7 +527,7 @@
                 // 判据看字段/形参的**真实 C 类型**, 不看语义层那档 Variant。
                 bool _psValTypedPtr236 = false;
                 if (_psValVariant159) {
-                    const std::string& _trn236 = _psSym->params.back().typeRefName;
+                    const std::string& _trn236 = _psSym->P().params.back().typeRefName;
                     if (!_trn236.empty()
                         && cTypeForDeclaredTypeName(_trn236) != "vb6_VARIANT") {
                         _psValTypedPtr236 = true;

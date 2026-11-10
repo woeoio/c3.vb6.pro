@@ -60,7 +60,7 @@
                     funcSym = ovSym;
                 }
             }
-            calleeParams = funcSym->params;
+            calleeParams = funcSym->P().params;
             calleeIsBuiltin = funcSym->isBuiltin;
             calleeParamsFound = true;
             // 0 参 Variant 返回值的下标形态 (见 calleeZeroArgVariantSubscript 注释)。
@@ -302,7 +302,7 @@
                 || funcSym->kind == SymbolKind::PropertyGet || funcSym->kind == SymbolKind::PropertyLet
                 || funcSym->kind == SymbolKind::PropertySet
                 || funcSym->kind == SymbolKind::DeclareSub || funcSym->kind == SymbolKind::DeclareFunc)) {
-                calleeParams = funcSym->params;
+                calleeParams = funcSym->P().params;
                 calleeIsBuiltin = funcSym->isBuiltin;
                 calleeParamsFound = true;
                 // Fix 042a: Track Declare functions for _has_ flag suppression
@@ -352,7 +352,7 @@
                     || wmSym210b->kind == SymbolKind::PropertyGet
                     || wmSym210b->kind == SymbolKind::PropertyLet
                     || wmSym210b->kind == SymbolKind::PropertySet)) {
-                    calleeParams = wmSym210b->params;
+                    calleeParams = wmSym210b->P().params;
                     calleeIsBuiltin = wmSym210b->isBuiltin;
                     calleeParamsFound = true;
                 }

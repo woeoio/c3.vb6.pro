@@ -61,7 +61,7 @@
         for (auto& [mKey, mClsSym] : lastAnalyzer->symbolTable().moduleScope()->symbols()) {
             if (!mClsSym || mClsSym->kind != SymbolKind::Class || mClsSym->isInterface) continue;
             if (mClsSym->isExternal) continue;  // 跳过外部注入副本
-            for (auto& memberName : mClsSym->memberNames) {
+            for (auto& memberName : mClsSym->P().memberNames) {
                 // Sync each possible method kind independently (Sub/Function are exclusive;
                 // Property Get/Let/Set share name but are distinct Symbol objects)
                 for (auto mKind : {SymbolKind::Sub, SymbolKind::Function,

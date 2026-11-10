@@ -49,7 +49,7 @@ std::string SemanticAnalyzer::computeOverloadFp(const Symbol& sym) const {
     }
     std::string fp;
     fp += (sym.kind == SymbolKind::Function) ? "F" : "S";
-    for (const auto& p : sym.params) {
+    for (const auto& p : sym.P().params) {
         if (p.isParamArray) return "";  // fbc 规则: vararg 过程不进重载组
         fp += ':';
         fp += std::to_string(static_cast<int>(p.type));
@@ -87,12 +87,12 @@ Symbol* SemanticAnalyzer::resolveOverload(Symbol* head, const std::vector<Vb6Typ
     for (auto* s : cands) {
         if (s->kind != head->kind) continue;
         size_t required = 0;
-        for (auto& p : s->params) if (!p.isOptional) required++;
-        if (n < required || n > s->params.size()) continue;
+        for (auto& p : s->P().params) if (!p.isOptional) required++;
+        if (n < required || n > s->P().params.size()) continue;
         int score = 0;
         bool ok = true;
         for (size_t i = 0; i < n; i++) {
-            int sc = ovlScoreParam(argT[i], s->params[i]);
+            int sc = ovlScoreParam(argT[i], s->P().params[i]);
             if (!sc) { ok = false; break; }
             score += sc;
         }
@@ -290,7 +290,7 @@ void SemanticAnalyzer::checkCallArgs(Symbol* procSym, IndexOrCallExpr& callNode)
     size_t optionalParams = 0;
     bool hasParamArray = false;
 
-    for (auto& p : procSym->params) {
+    for (auto& p : procSym->P().params) {
         if (p.isParamArray) {
             hasParamArray = true;
             continue;
@@ -333,7 +333,7 @@ void SemanticAnalyzer::checkCallArgs(Symbol* procSym, IndexOrCallExpr& callNode)
     for (auto& namedArg : callNode.named) {
         bool found = false;
         std::string lowerName = Symbol::toLower(namedArg.name);
-        for (auto& p : procSym->params) {
+        for (auto& p : procSym->P().params) {
             if (Symbol::toLower(p.name) == lowerName) {
                 found = true;
                 break;

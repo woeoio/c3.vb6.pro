@@ -368,7 +368,8 @@ bool Driver::runCrossModuleResolution() {
             );
             extSym->isExternal = true;
             extSym->sourceModule = moduleBaseNames[srcIdx];
-            extSym->params = srcSym->params;  // 复制参数列表（函数调用需要）
+            // 形参表 (params) 已并入 SymbolPayload, 由下面的 sharePayloadFrom 一并共享,
+            // 不再单独逐字段深拷贝。
             extSym->isArray = srcSym->isArray;
             // 泛型 (G2) 暴露的存量洞: 跨模块 UDT 未复制成员表 → 消费模块成员
             // 类型全退化 Variant (普通 UDT 复现: g.V As String 被 Debug.Print
@@ -382,20 +383,13 @@ bool Driver::runCrossModuleResolution() {
             extSym->overloadFp = srcSym->overloadFp;
             extSym->isOverloadVariant = srcSym->isOverloadVariant;
             extSym->ovlCount = srcSym->ovlCount;
-            // 类符号: 复制instancing、memberNames、isInterface、implementsNames
+            // 类符号: 成员面 (memberNames/memberReturnTypes/memberProcKinds/…) 不再逐字段
+            // 深拷贝 —— 共享源符号的不可变载荷 (SymbolPayload), 注入只花一个 shared_ptr。
+            // 注入之后的写点一律走 Symbol::W() 的 COW, 因此"注入那一刻的快照"语义
+            // 与旧实现逐字节一致 (含 Fix 099 的 memberFieldDispids 快照)。
+            extSym->sharePayloadFrom(*srcSym);
             if (srcSym->kind == SymbolKind::Class) {
                 extSym->instancing = srcSym->instancing;
-                extSym->memberNames = srcSym->memberNames;
-                extSym->memberReturnTypes = srcSym->memberReturnTypes;  // Fix 015: 链式调用返回类型表
-                extSym->memberProcKinds = srcSym->memberProcKinds;       // Fix 016: 成员过程类型表
-                extSym->memberParams = srcSym->memberParams;             // Fix 033: 成员参数表 (calleeParams 跨模块精确查找)
-                extSym->memberFieldTypes = srcSym->memberFieldTypes;     // Fix 092m: 字段类型表 (With 字段写 COM 解包)
-                extSym->memberFieldNames = srcSym->memberFieldNames;     // Fix 092p: 字段声明原名表 (访问点大小写规范化)
-                extSym->publicFieldNames = srcSym->publicFieldNames;     // Fix 099: 显式 Public 字段清单 (COM 暴露)
-                extSym->memberFieldDispids = srcSym->memberFieldDispids; // Fix 099: Public 字段 TypeLib DISPID
-                extSym->memberLetParams = srcSym->memberLetParams;       // Fix 091a: Let 写方向参数表
-                extSym->memberSetParams = srcSym->memberSetParams;       // Fix 091a: Set 写方向参数表
-                extSym->memberAccessLevels = srcSym->memberAccessLevels; // tB B08a: 成员访问级别
                 extSym->isInterface = srcSym->isInterface;  // P6.4
                 extSym->implementsNames = srcSym->implementsNames;  // P6.4
                 extSym->interfaceMethodNames = srcSym->interfaceMethodNames;  // P6.4
@@ -448,7 +442,7 @@ bool Driver::runCrossModuleResolution() {
                 qSym->kind, qSym->name, qSym->type, qSym->location, qSym->access);
             qExt->isExternal = true;
             qExt->sourceModule = moduleBaseNames[qSrcIdx];
-            qExt->params = qSym->params;
+            qExt->W().params = qSym->P().params;
             qExt->variableTypeName = qSym->variableTypeName;
             qExt->access = qSym->access;
             symTab.moduleScope()->define(std::move(qExt), qKey);

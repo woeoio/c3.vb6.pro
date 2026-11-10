@@ -261,7 +261,7 @@
                         // 重复处理会导致同一方法被添加多次, 且第二次查找可能命中其他类的同名
                         // 方法符号 (参数污染)。按大小写不敏感去重。
                         std::unordered_set<std::string> seenMemberNames;
-                        for (auto& memberName : clsSym.memberNames) {
+                        for (auto& memberName : clsSym.P().memberNames) {
                             if (!seenMemberNames.insert(Symbol::toLower(memberName)).second) continue;
                             // 同名属性可能有 PropertyGet/Let/Set 多个符号
                             // memberNames 中同名属性只存一次, 需要分别查找各变体
@@ -309,7 +309,7 @@
                                 }
                                 // M29: 回写dispid到method symbol, 供cgen生成dll_entry.c方法表使用, 确保TypeLib与dll_entry.c dispid一致
                                 mr.sym->comDispid = mi.dispid;
-                                for (auto& param : mr.sym->params) {
+                                for (auto& param : mr.sym->P().params) {
                                     mi.params.push_back(param);
                                 }
                                 methods.push_back(mi);
@@ -327,7 +327,7 @@
                         // 导致整个 TypeLib 构建出错), 早绑定客户端可隐式转换 Variant.
                         {
                             std::unordered_set<std::string> seenFields;
-                            for (auto& fname : clsSym.publicFieldNames) {
+                            for (auto& fname : clsSym.P().publicFieldNames) {
                                 if (!seenFields.insert(Symbol::toLower(fname)).second) continue;
                                 int32_t fieldDispid = dispidCounter++;
                                 TypeLibBuilder::MethodInfo fGet;
@@ -349,7 +349,7 @@
                                 fPut.params.push_back(fieldValueParam);
                                 methods.push_back(fPut);
 
-                                clsSym.memberFieldDispids[Symbol::toLower(fname)] = fieldDispid;
+                                clsSym.W().memberFieldDispids[Symbol::toLower(fname)] = fieldDispid;
                             }
                         }
 

@@ -118,7 +118,7 @@
             UcPropPick pick;
             pick.name = ps->name;
             if (ps->kind == SymbolKind::PropertyGet) {
-                if (!ps->params.empty()) continue;              // 带参默认属性不走桥
+                if (!ps->P().params.empty()) continue;              // 带参默认属性不走桥
                 pick.vbType = vbScalarOfName(ps->variableTypeName);
                 if (pick.vbType.empty()) pick.vbType = vbScalarOfType(ps->type);
                 if (pick.vbType.empty()) {
@@ -146,8 +146,8 @@
                     pick.getFn = "vb6_" + ctl + "_ucPropGet_" + cIdent(ps->name);
                 }
             } else if (ps->kind == SymbolKind::PropertyLet || ps->kind == SymbolKind::PropertySet) {
-                if (ps->params.size() != 1) continue;
-                const ParameterInfo& pi = ps->params[0];
+                if (ps->P().params.size() != 1) continue;
+                const ParameterInfo& pi = ps->P().params[0];
                 pick.vbType = vbScalarOfName(pi.typeRefName);
                 if (pick.vbType.empty()) pick.vbType = vbScalarOfType(pi.type);
                 if (!pick.vbType.empty()) {

@@ -682,7 +682,7 @@
                     bool isCurrentByRefParam = false;
                     Vb6Type curPType189 = Vb6Type::Unknown;
                     if (currentProc_) {
-                        for (auto& p : currentProc_->params) {
+                        for (auto& p : currentProc_->P().params) {
                             if (Symbol::toLower(p.name) == Symbol::toLower(innerName) && !p.isByVal && !p.isParamArray) {
                                 bool paramIsArray = (static_cast<uint16_t>(p.type) & static_cast<uint16_t>(Vb6Type::Array)) != 0;
                                 if (!paramIsArray) {
@@ -1016,7 +1016,7 @@
                     bool argIsCurrentByRefParam = false;
                     Vb6Type argCurPType189 = Vb6Type::Unknown;
                     if (currentProc_) {
-                        for (auto& p : currentProc_->params) {
+                        for (auto& p : currentProc_->P().params) {
                             if (Symbol::toLower(p.name) == Symbol::toLower(argVal) && !p.isByVal && !p.isParamArray) {
                                 argIsCurrentByRefParam = true;
                                 argCurPType189 = p.type;

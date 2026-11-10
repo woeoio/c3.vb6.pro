@@ -309,7 +309,7 @@ void CCodeGen::visit(BinaryExpr& node) {
             std::string inner86 = Symbol::toLower(cExpr.substr(2, cExpr.size() - 3));
             if (knownVariantVars_.count(inner86)) return true;
             if (currentProc_) {
-                for (const auto& p : currentProc_->params) {
+                for (const auto& p : currentProc_->P().params) {
                     if (Symbol::toLower(p.name) == inner86
                         && (p.type == Vb6Type::Variant || p.type == Vb6Type::Empty)) {
                         return true;
