@@ -90,9 +90,18 @@
     const std::string& headerCode() const { return header_; }
     const std::string& sourceCode() const { return source_; }
 
-    // 账 §G1: 本模块生成过的 UDT 定义块 (类型名 → .h 里那段原样文本).
-    // driver 汇总成全工程表后注入各 .h 顶部, 让"头里按值用到 UDT"不再依赖模块先后.
-    const std::unordered_map<std::string, std::string>& udtDefBlocks() const { return udtDefBlocks_; }
+    // 账 §G1 / §G1b: UDT 定义块的内存形状 (由 driver 汇总后注入各 .h 顶部)。
+    // G1b: 带上模块与可见性 —— 同名但不同模块的模块私有 Type 是**不同的类型**。
+    struct UdtDefRecord {
+        std::string moduleLower;   // 定义模块 (lower)
+        std::string typeName;      // C 标识符 (cIdent 之后)
+        bool isPrivate = false;    // Private Type / 类、窗体模块内的 Type
+        std::string block;         // 完整定义块 (含 #ifndef 守卫)
+    };
+    // 账 §G1 / §G1b: 本模块生成过的 UDT 定义块 (模块 + 类型名 + 可见性 + 原样文本).
+    // driver 汇总成全工程表后注入各 .h 顶部, 让"头里按值用到 UDT"不再依赖模块先后;
+    // 同名类型按模块区分, 跨模块只注入 Public Type。
+    const std::vector<UdtDefRecord>& udtDefs() const { return udtDefs_; }
 
     // --- 声明 ---
     void visit(SubDecl& node) override;

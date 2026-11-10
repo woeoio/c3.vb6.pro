@@ -487,12 +487,18 @@
     // 用于在.h文件中生成typedef前向声明, 使 vb6_type_<Name> 类型可用
     std::unordered_set<std::string> usedUdtTypes_;
 
-    // 账 §G1: 本模块自己落进 .h 的每个 UDT 定义块 (类型名 → 原样文本).
+    // 账 §G1 / §G1b: 本模块自己落进 .h 的每个 UDT 定义块。
     // 前向 typedef 只够指针用; 头里按值出现 (`vb6_type_RectL rcMonitor;`) 必须见到
     // 完整 struct 体, 否则消费方一律 C2079 (PhotoDemon: 16,152 条 / 539 TU 全中).
     // 由 driver 汇总成工程级表, 再按依赖序注入每个 .h 的顶部 —— 这样头自足,
     // 不靠 vbp 的模块先后蒙过去.
-    std::unordered_map<std::string, std::string> udtDefBlocks_;
+    //
+    // G1b: 原表按"类型名 → 块"汇总, 把不同模块的**模块私有 Type** 当成同一个类型,
+    // 同名先到者会把别人的字段名注入进本模块的头 (PhotoDemon: MergedEntry /
+    // BITMAPINFOHEADER 等 215 条 C2039)。现改按 (模块, 类型名) 归档并带上可见性:
+    // 本模块出现的同名类型一律取**自己的**块; 跨模块注入只放行 Public Type。
+    // 记录形状见 cgen_api.inc 的 UdtDefRecord (公开访问器要先用到这个类型)。
+    std::vector<UdtDefRecord> udtDefs_;
 
     // COM后期绑定中间状态 (P6.2)
     // MemberAccessExpr为COM对象设置此字段, IndexOrCallExpr/AssignmentStmt/SetStmt读取后清除

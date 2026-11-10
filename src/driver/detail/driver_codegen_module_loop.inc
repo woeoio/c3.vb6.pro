@@ -53,15 +53,25 @@
     // Fix <vbeclipse> 2026-10-06: Object= OCX 免注册组件表 {ProgID, CLSID, coclass名, 相对exe路径}
     const std::vector<std::array<std::string, 4>>& ocxLibRefs = ocxLibRefs_;
 
-    // 账 §G1: 两阶段发码的产物暂存 (模块序) + 工程级 UDT 定义块表 (同名取先到者)
+    // 账 §G1 / §G1b: 两阶段发码的产物暂存 (模块序) + 工程级 UDT 定义表。
+    // G1b: 同名 UDT 按 (模块, 类型名) 区分 —— 模块私有 Type 不再被别模块顶替。
     struct ModArtifact {
         std::string baseName;
+        std::string moduleName;   // VB_Name (单文件模式下与 baseName 不同)
         std::string header;
         std::string source;
     };
+    struct UdtRec {
+        std::string moduleLower;
+        std::string typeName;
+        std::string block;
+    };
     std::vector<ModArtifact> artifacts;
     artifacts.reserve(modules_.size());
-    std::unordered_map<std::string, std::string> projectUdtDefs;
+    // key = moduleLower + '\x1f' + lower(typeName)
+    std::unordered_map<std::string, UdtRec> projectUdtDefs;        // 全部定义 (含私有)
+    std::unordered_map<std::string, UdtRec> projectPublicUdtDefs;  // 仅 Public, 按类型名
+    auto lowerName = [](const std::string& s) { return Symbol::toLower(s); };
 
     for (size_t i = 0; i < modules_.size(); i++) {
         auto& module = modules_[i];
@@ -174,19 +184,27 @@
             asmProcs_.push_back({baseName, ap});
         }
 
-        // 账 §G1: 生成与落盘拆两阶段 —— 这里只收产物与 UDT 定义块, 不写盘。
+        // 账 §G1 / §G1b: 生成与落盘拆两阶段 —— 这里只收产物与 UDT 定义块, 不写盘。
         // 原因: 模块 i 的头可能要按值用模块 j>i 定义的 UDT, 单趟边生成边写拿不到 j 的定义块。
-        artifacts.push_back({baseName, cgen.headerCode(), cgen.sourceCode()});
-        for (const auto& kv : cgen.udtDefBlocks()) projectUdtDefs.emplace(kv.first, kv.second);
+        artifacts.push_back({baseName, module->moduleName, cgen.headerCode(), cgen.sourceCode()});
+        for (const auto& rec : cgen.udtDefs()) {
+            const std::string key = rec.moduleLower + '\x1f' + lowerName(rec.typeName);
+            projectUdtDefs.emplace(key, UdtRec{rec.moduleLower, rec.typeName, rec.block});
+            if (!rec.isPrivate) {
+                projectPublicUdtDefs.emplace(lowerName(rec.typeName),
+                                             UdtRec{rec.moduleLower, rec.typeName, rec.block});
+            }
+        }
     }
 
-    // ===== 阶段 2 (账 §G1): 让每个 .h 自足, 再落盘 =====
+    // ===== 阶段 2 (账 §G1 / §G1b): 让每个 .h 自足, 再落盘 =====
     // 头里出现的 `vb6_type_X` 若本工程有定义块, 就按依赖序把完整 struct 体提到
     // `#include "vb6rtl.h"` 之后。C 的值成员要求完整类型, 旧的"只给前向 typedef"必然
     // 让消费方撞 C2079; 而靠 vbp 的模块先后蒙过去不算解法 —— 这里不改变任何模块的顺序,
     // 每个头自己带够定义。
-    // 同名 UDT 在多个模块各声明一份时, 用 phase 1 汇总的**先到者** (与 .h 里
-    // #ifndef VB6_TYPE_X_DEFINED 守卫同口径); 守卫保证重复展开被跳过。
+    // G1b: 本模块自有同名 Type 时一律注入**自己的**块 (字段名不会串类); 只有本模块
+    // 没有该类型时才找 Public 定义注入。别处的模块私有 Type 不能跨模块可见, 不注入
+    // (真跨模块用了会留下 C2079/未定义, 不拿别人的结构体蒙过去)。
     auto collectTokens = [](const std::string& s, const char* prefix, std::set<std::string>& out) {
         const size_t n = std::strlen(prefix);
         size_t p = 0;
@@ -205,20 +223,41 @@
         std::set<std::string> usedTypes;
         collectTokens(hdr, "vb6_type_", usedTypes);
         if (usedTypes.empty()) continue;
+        const std::string curMod = lowerName(art.moduleName);
         std::set<std::string> emitted;
         std::string block;
-        std::function<void(const std::string&)> emitOne = [&](const std::string& name) {
-            if (!emitted.insert(name).second) return;
-            auto it = projectUdtDefs.find(name);
-            if (it == projectUdtDefs.end()) return;   // RTL/系统类型: 由 vb6rtl.h 自己给齐
+        // ownerMod: 该定义块所属模块 —— 依赖先在同一模块里找 (公共 Type 可以引用
+        // 同模块的私有 Type), 找不到再退回 Public 表。
+        std::function<void(const UdtRec&, const std::string&)> emitOne =
+            [&](const UdtRec& rec, const std::string& ownerMod) {
+            const std::string key = ownerMod + '\x1f' + lowerName(rec.typeName);
+            if (!emitted.insert(key).second) return;
             std::set<std::string> deps;
-            collectTokens(it->second, "vb6_type_", deps);
+            collectTokens(rec.block, "vb6_type_", deps);
             for (const auto& d : deps) {
-                if (d != name) emitOne(d);
+                if (lowerName(d) == lowerName(rec.typeName)) continue;
+                auto selfDep = projectUdtDefs.find(ownerMod + '\x1f' + lowerName(d));
+                if (selfDep != projectUdtDefs.end()) {
+                    emitOne(selfDep->second, ownerMod);
+                    continue;
+                }
+                auto pubDep = projectPublicUdtDefs.find(lowerName(d));
+                if (pubDep != projectPublicUdtDefs.end())
+                    emitOne(pubDep->second, pubDep->second.moduleLower);
             }
-            block += it->second;
+            block += rec.block;
         };
-        for (const auto& t : usedTypes) emitOne(t);
+        for (const auto& t : usedTypes) {
+            auto selfIt = projectUdtDefs.find(curMod + '\x1f' + lowerName(t));
+            if (selfIt != projectUdtDefs.end()) {
+                emitOne(selfIt->second, curMod);
+                continue;
+            }
+            auto pubIt = projectPublicUdtDefs.find(lowerName(t));
+            if (pubIt != projectPublicUdtDefs.end())
+                emitOne(pubIt->second, pubIt->second.moduleLower);
+            // 只有别模块的私有定义 → 不可见, 留前向 typedef (不静默换体)。
+        }
         if (block.empty()) continue;
         // 定义块里可能提到别的类的指针 (`vb6_cls_Foo*`), 那些名字在消费方头里未必有
         // 前向 typedef —— 补上 (C11 允许同类型 typedef 重复声明, 已有的不会冲突).
