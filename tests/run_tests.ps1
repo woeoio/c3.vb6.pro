@@ -2009,6 +2009,20 @@ function Test-G4ValueMemberParen {
     }
 }
 
+function Test-M3BuiltinOptDefaults {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] m3_builtin_opt_defaults ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_m3_builtin_opt_defaults.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-CtrlPropTypeAuthority {
     $script:total++
     Write-Host -NoNewline "  [STATIC] ctrl_prop_type_authority ... "
@@ -12099,6 +12113,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-G4UdtMemberNd }
     if (Enter-StaticShard) { Test-G4NegFirstArg }
     if (Enter-StaticShard) { Test-G4ValueMemberParen }
+    if (Enter-StaticShard) { Test-M3BuiltinOptDefaults }
     if (Enter-StaticShard) { Test-CtrlPropTypeAuthority }
     if (Enter-StaticShard) { Test-FormDrawState }
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }
