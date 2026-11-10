@@ -99,6 +99,34 @@ struct ParameterInfo {
 };
 
 // ============================================================
+// COM / Delegate 子结构 (命名空间作用域)
+// ============================================================
+// 这两个类型原本嵌套在 Symbol 内部。载荷共享第二刀要把 comMethods / comSourceMethods /
+// comModuleFunctions / delegateTargets 收进 SymbolPayload, 而载荷定义在 Symbol 之前 ——
+// 嵌套类型在那里不可见。故先做纯机械上提: 字段与方法签名一字不改, Symbol 内保留同名
+// using 别名, 既有 `Symbol::ComMethodSig` 写法继续有效 (零行为变化)。
+struct ComMethodSig {
+    std::string realName;         // 原始名称(保留大小写)
+    int32_t memid = 0;           // DISPID
+    int32_t vtableIndex = -1;    // vtable偏移
+    Vb6Type returnType = Vb6Type::Void;  // 返回类型
+    bool isPropertyGet = false;
+    bool isPropertyPut = false;
+    bool isPropertyPutRef = false;
+    std::vector<ParameterInfo> params;  // 参数列表(含方向/类型)
+};
+
+// 语义层在 AddressOf 绑定成功时登记的静态目标 (v1 限同模块过程).
+// cgen 按对子生成调用桩: 桩用委托约定的签名, 体内转调 cdecl 过程本体.
+struct DelegateTarget {
+    std::string procName;     // VB 过程名 (原样)
+    std::string procModule;   // "" = 当前模块 (v1 仅此形态)
+    // 绑定的具体重载变体指纹 (O2): "" = 该名字无重载组 (旧行为);
+    // 非空 = 组内 fp 精确匹配的那条 (含 head), cgen 据此找回声明并区分桩名.
+    std::string procFp;
+};
+
+// ============================================================
 // 不可变载荷 (SymbolPayload)
 // ============================================================
 // 这一批字段在**本模块分析结束**之后就不再变, 且跨模块注入时是逐字段深拷贝的大头
@@ -317,16 +345,8 @@ struct Symbol {
     std::unordered_map<std::string, int32_t> comEventDispids;  // 事件源方法名(lower)→DISPID
 
     // COM方法签名 (ComInterface用, 方法名小写→签名)
-    struct ComMethodSig {
-        std::string realName;         // 原始名称(保留大小写)
-        int32_t memid = 0;           // DISPID
-        int32_t vtableIndex = -1;    // vtable偏移
-        Vb6Type returnType = Vb6Type::Void;  // 返回类型
-        bool isPropertyGet = false;
-        bool isPropertyPut = false;
-        bool isPropertyPutRef = false;
-        std::vector<ParameterInfo> params;  // 参数列表(含方向/类型)
-    };
+    // 类型已上提到命名空间作用域 (见本文件上方), 这里保留同名别名以兼容 `Symbol::ComMethodSig`。
+    using ComMethodSig = ::vb6c3::ComMethodSig;
     std::unordered_map<std::string, ComMethodSig> comMethods;  // key=小写方法名
     std::unordered_map<std::string, ComMethodSig> comSourceMethods;  // source interface 方法签名 (key=小写方法名)
 
@@ -364,14 +384,8 @@ struct Symbol {
     CallConv delegateCallConv = CallConv::StdCall;
     Vb6Type delegateReturnType = Vb6Type::Void;
     // 语义层在 AddressOf 绑定成功时登记的静态目标 (v1 限同模块过程).
-    // cgen 按对子生成调用桩: 桩用委托约定的签名, 体内转调 cdecl 过程本体.
-    struct DelegateTarget {
-        std::string procName;     // VB 过程名 (原样)
-        std::string procModule;   // "" = 当前模块 (v1 仅此形态)
-        // 绑定的具体重载变体指纹 (O2): "" = 该名字无重载组 (旧行为);
-        // 非空 = 组内 fp 精确匹配的那条 (含 head), cgen 据此找回声明并区分桩名.
-        std::string procFp;
-    };
+    // 类型已上提到命名空间作用域, 这里保留同名别名以兼容 `Symbol::DelegateTarget`。
+    using DelegateTarget = ::vb6c3::DelegateTarget;
     std::vector<DelegateTarget> delegateTargets;
 
     // --- P20-21: UDT成员信息 (仅SymbolKind::UserDefinedType) ---
