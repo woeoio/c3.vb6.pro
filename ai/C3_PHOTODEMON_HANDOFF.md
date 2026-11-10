@@ -1471,9 +1471,70 @@ CI run **42725438757**（`fe5cb1a3`，16 GB runner）跑 `PhotoDemon.vbp --arch 
 - `VB3003` 57（R2/R3 后）保持，未再降。
 - 耗时 792.7 s → 659.2 s，但代码与采样都变了，**不当作性能结论**。
 
-### 27.4 下一步（本轮已排队）
+### 27.4 相位归因（已补：run 42727942019，`C3_TIMING=1`）
 
-同一探针再跑一次，emit 子进程带 `C3_TIMING=1`（相位计时行只走 stderr，不动 stdout/发码），
-把内存曲线按相位归因（parse / typelib+prepasses / semantic / crossmod / codegen），
-用来判定 13.5 GB 里 AST、语义表、跨模块拷贝各占多少。这决定生命周期重构的切法。
+同一探针第二次跑（`d53ecf84`）带 `C3_TIMING=1`，用"stderr 字节数"把相位行对回 2 s 采样时间轴：
+
+| 相位结束 | 时刻 | 工作集 | 该相位墙钟 |
+| --- | --- | --- | --- |
+| parse | ~2 s | 704 MB | 1014 ms |
+| typelib+prepasses | ~2 s | 704 MB | 505 ms |
+| semantic | ~12 s | **10,528 MB** | 9243 ms |
+| inherit-merge | ~12 s | 10,528 MB | 0 ms |
+| crossmod+generics+marks | ~390 s | 8,902 MB（峰值 **13,204 MB @94 s**） | 378,117 ms |
+| codegen（余下 539 模块） | ~1410 s | 平台期 8–10 GB，末段 <1 GB | ~1020 s |
+
+**斜率陡增在 semantic**：2 s→12 s，704 MB→10.5 GB（≈1 GB/s，≈18 MB/模块）。
+**AST 不是大头**：parse+typelib+prepasses 结束时总共 704 MB（592 份源、20 MB 文本）。
+**第二个大头是 3.5 跨模块注入**：峰值 13.2 GB 出现在注入区间（+2.7 GB），墙钟 378 s；
+注入是"每个消费模块 × 每个 Public 符号"的 35 字段深拷贝（[driver_crossmod.cpp#L365-L433](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_crossmod.cpp#L365-L433)）。
+codegen 阶段没有新的分配峰值（8–10 GB 平台期是语义表仍常驻 + 换页修剪）。
+
+口径警告（必须一起读）：
+- 本轮墙钟 1410.3 s，不带 TIMING 的基线是 659.2 s（2.1×）。**这一轮只能用来做相位归因，不能当时间基线。**
+- 空闲物理内存最低 **16 MB**，工作集被系统修剪，表里的 GB 是**下限**；未采到 commit 峰值。
+- 相位边界用 stderr 落盘字节对齐，粒度约 2 s；semantic 的真实结束时刻在 10–12 s 之间。
+
+### 28. `analyzers_` 生命周期审计（只读，2026-11-10）
+
+#### 28.1 消费者清单
+
+| # | 消费者 | 阶段 | 要什么 | 类别 | 可行替代 | 风险 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `dumpSymbols` [driver_semantics.cpp#L672](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_semantics.cpp#L672) | 3.1 循环内 | 自己一张表 | 仅自身 | 用完即弃 | 无 |
+| 2 | `mergeInheritedMembers` [driver_classchain.cpp#L589-L598](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_classchain.cpp#L589-L598) | 3.4 | 自己 + 每个祖先的 Class 符号（成员表），**写回**自身 | 完整符号载荷 + 祖先 AST 指针（经 `classes_`） | 必须先算好"类 → 祖先成员"摘要；写入点仅 Class 符号 | 中：合并结果被 cl 端当结构体字段用，顺序/去重一变就出 C2039 |
+| 3 | `markAddressOfCallbacks` [driver_crossmod.cpp#L35-L96](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_crossmod.cpp#L35-L96) | 3.5a | 遍历**所有**模块 AST + 查/写**所有**模块符号表 | 完整 AST + 完整表 | 改成"分析期就地标记"（AddressOf 在单模块内可判定） | 低-中：判定规则若依赖跨模块可见性则不能就地 |
+| 4 | 3.5 注入 [driver_crossmod.cpp#L140-L515](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_crossmod.cpp#L140-L515) | 3.5 | 每模块 `getPublicSymbols()` 全载荷；对每个消费模块深拷贝 35 字段；回填 UDT 成员、`comProjectImplClass`；窗体限定键；祖先 Private UDT/Enum；再逐 analyzer 跑 `resolveDeferredCrossModuleOverloads` | 完整符号载荷（全部模块） | ①载荷改共享只读（不拷贝）；②或先做"工程级摘要表"再按需注入 | 高：`Symbol` 字段与写点遍布；`scripts/check_typelib_payload_writers.ps1` 钉了载荷写点 |
+| 5 | 泛型 fixpoint [driver_generics.cpp#L408-L444](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_generics.cpp#L408-L444) | 3.5b | `takeGenericRequests()` + `analyzeExtraDecls()`（要 analyzer 活着，含 AST/类型系统） | analyzer 内部状态 | 保留"请求队列"摘要，物化期重建 analyzer | 中：PhotoDemon 无泛型，但回归语料有 |
+| 6 | iface 标记 [driver_compile.cpp#L745-L756](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_compile.cpp#L745-L756) | 3.6 | 扫**所有**表，把匹配的 Class 符号 `isInterface=true` | 名称 + 写标志 | 改成"声明模块自己标记 + 名称索引查询" | 低：只写一个 bool |
+| 7 | codegen voidfield 扫描 [driver_codegen_voidfield_scan.inc#L49-L68](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/detail/driver_codegen_voidfield_scan.inc#L49-L68) | codegen | 所有模块 Class 的**名字 + implementsNames** | 摘要 | 轻量索引 | 低 |
+| 8 | codegen typedfield 扫描 [driver_codegen_typedfield_scan.inc#L24-L83](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/detail/driver_codegen_typedfield_scan.inc#L24-L83) | codegen | 所有模块 Public Constant 的**值/类型** + 本模块字段类型 | 摘要 + 自身表 | 轻量索引（常量表） | 低 |
+| 9 | dup-module-vars [driver_codegen_dup_module_vars.inc#L29](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/detail/driver_codegen_dup_module_vars.inc#L29) | codegen | 本模块 Class 符号 | 仅自身 | 直接 | 无 |
+| 10 | 逐模块 cgen [driver_codegen_module_loop.inc#L56-L82](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/detail/driver_codegen_module_loop.inc#L56-L82) | codegen | 本模块 SymbolTable + TypeSystem + AST（发码主体） | 完整 | 必须常驻到该模块发完码 | 低（天然可流式） |
+| 11 | DLL 入口/typelib [driver_codegen_dll_entry.inc#L48-L54](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/detail/driver_codegen_dll_entry.inc#L48-L54)、[driver_codegen_dll_typelib.inc#L33-L87](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/detail/driver_codegen_dll_typelib.inc#L33-L87) | codegen（仅 `--dll`） | **所有** SymbolTable 指针 | 完整表 | 只在 DLL 时聚合 | 中：EXE 路径也走 `generateDllEntry(..., allSymTabs)`（L54） |
+
+#### 28.2 跨模块顺序依赖
+
+- **分析期（3.1）无跨 analyzer 依赖**：`analyzers_` 只在 driver 里被访问，`analyze()` 不读别的 analyzer。
+  但依赖"**所有模块 AST 先就位**"：3.1 每个模块前会扫其它模块 AST 预登记 Enum/UDT/Public 名
+  （[driver_semantics.cpp#L528-L663](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_semantics.cpp#L528-L663)）。
+- **3.5 全局合并对顺序敏感**：`storageKey` 先到先得，外加显式裁决（.bas 胜 .cls、getter 胜 setter、
+  UDT 成员空→非空换人），见 [driver_crossmod.cpp#L161-L250](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/driver/driver_crossmod.cpp#L161-L250)。
+  这条顺序必须逐位保留（`emit-manifest` 是门）。
+- **隐藏陷阱**：`getPublicSymbols()` 不排除 `isExternal`（[symbol_table.cpp#L528-L550](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/semantics/symbol_table.cpp#L528-L550)），
+  泛型 fixpoint 第二轮会把上一轮注入的副本再导出一次。任何"摘要/共享"重构都要么复刻这个行为，要么用形状门证明等价。
+- **阶段链**：3.1 → 3.4 → 3.5a → 3.5 → 3.5b → 3.6 → codegen；3.6 必须在注入之后（消费模块里的 iface 副本也要标记）。
+- **AST 指针外泄**：`classes_` / `ifaces_` / `genericTemplates_` / `legacy` 形状都直接持有 `Module*`/`Decl*`，
+  所以"放掉 AST"不是局部改动，得先把这几张注册表改成不持指针（或自有摘要）。
+
+#### 28.3 候选方案
+
+| 方案 | 改动面 | 预期收益 | 风险 |
+| --- | --- | --- | --- |
+| **A. 注入载荷共享（不动生命周期）** | `Symbol` 载荷拆"不可变共享部分 + 可变字段"；3.5 注入只建轻量壳；3.6 标记改旁路集合 | 砍掉 +2.7 GB 峰值与 378 s 注入时间；不改变阶段顺序 | 中-高：`Symbol` 字段/写点遍布，`check_typelib_payload_writers.ps1` 要同步；`comProjectImplClass`/`udtMembers` 回填必须留写权 |
+| **B. 两遍流式（真"一次只活一个模块"）** | ①第一遍 parse+analyze 后导出工程摘要（Public 符号 + 常量 + coclass/implements 名 + 类祖先成员）；②第二遍重解析/重分析，注入摘要，发码后立刻释放；③注册表去 AST 指针 | 常驻降到 O(1 模块 + 摘要)，目标 <1.5 GB | 高：等价性全靠 `emit-manifest`；解析+分析跑两遍（这里约 +11 s，可接受）；`--dump-symbols`/DLL 全表聚合要特判 |
+| **C. 只压 per-module 语义表** | Symbol 池化、字符串 intern、成员表按需/共享、局部变量符号分析后释放 | 线性降 30–50%（10.5 GB → 5–7 GB），最省事 | 低-中；可能仍要 6 GB+，单独不够，但可与 A/B 叠加 |
+
+**判断**：13.5 GB 里 AST 只占 0.7 GB，**先放 AST 没有意义**。要达到"一次一个模块"，B 是唯一彻底的路，
+但 B 依赖 A（否则摘要里 Public 载荷仍是全量拷贝）；A 可以独立落地、独立用 `emit-manifest` 验。
 
