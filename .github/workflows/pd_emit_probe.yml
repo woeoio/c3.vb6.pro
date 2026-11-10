@@ -63,15 +63,40 @@ jobs:
         continue-on-error: true
         run: |
           New-Item -ItemType Directory -Force -Path .build | Out-Null
+          # 内存采样 (只观测, 不改 emit 行为): 每 2 s 记一次 C3 工作集 + 系统空闲物理内存。
+          # 目的是拿到「峰值工作集 / 是否进交换」的实测曲线, 而不是靠模块数推算。
+          $cwd = (Get-Location).Path
+          $os = Get-CimInstance Win32_OperatingSystem
+          "RUNNER_TOTAL_MB=$([math]::Round($os.TotalVisibleMemorySize/1KB,0))" | Tee-Object -FilePath .build\pd_emit.meta -Append
+          $p = Start-Process -FilePath (Join-Path $cwd '.build\C3.exe') `
+                -ArgumentList 'tests/photodemon/PhotoDemon.vbp','--arch','x86','--emit-c' `
+                -RedirectStandardOutput (Join-Path $cwd '.build\pd_emit.out') `
+                -RedirectStandardError (Join-Path $cwd '.build\pd_emit.err') `
+                -NoNewWindow -PassThru
           $sw = [Diagnostics.Stopwatch]::StartNew()
-          & .build\C3.exe tests/photodemon/PhotoDemon.vbp --arch x86 --emit-c 1> .build\pd_emit.out 2> .build\pd_emit.err
-          $code = $LASTEXITCODE
+          $samples = New-Object System.Collections.Generic.List[string]
+          $samples.Add("seconds,working_set_mb,free_phys_mb")
+          while (-not $p.HasExited) {
+            Start-Sleep -Milliseconds 2000
+            try { $p.Refresh() } catch { break }
+            $freeMB = [math]::Round((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1KB,0)
+            $samples.Add(("{0:N1},{1:N1},{2}" -f $sw.Elapsed.TotalSeconds, ($p.WorkingSet64/1MB), $freeMB))
+          }
           $sw.Stop()
+          $p.WaitForExit()
+          $code = $p.ExitCode
+          $peakMB = -1
+          try { $peakMB = [math]::Round($p.PeakWorkingSet64/1MB,1) } catch { }
+          $samples | Set-Content -Path .build\pd_emit.mem.csv -Encoding utf8
           "EMIT_EXIT=$code" | Tee-Object -FilePath .build\pd_emit.meta -Append
           "EMIT_SECONDS=$([math]::Round($sw.Elapsed.TotalSeconds,1))" | Tee-Object -FilePath .build\pd_emit.meta -Append
           "STDOUT_BYTES=$((Get-Item .build\pd_emit.out).Length)" | Tee-Object -FilePath .build\pd_emit.meta -Append
           "STDERR_LINES=$((Get-Content .build\pd_emit.err -ErrorAction SilentlyContinue).Count)" | Tee-Object -FilePath .build\pd_emit.meta -Append
-          Write-Host "emit exit=$code"
+          "PEAK_WORKING_SET_MB=$peakMB" | Tee-Object -FilePath .build\pd_emit.meta -Append
+          $minFree = 999999
+          foreach ($l in ($samples | Select-Object -Skip 1)) { $v = [int]($l.Split(',')[2]); if ($v -lt $minFree) { $minFree = $v } }
+          if ($minFree -ne 999999) { "MIN_FREE_PHYS_MB=$minFree" | Tee-Object -FilePath .build\pd_emit.meta -Append }
+          Write-Host "emit exit=$code peak=${peakMB}MB"
 
       - name: Classify diagnostics into job summary
         if: always()
@@ -107,6 +132,22 @@ jobs:
             }
             Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
           }
+          # 逐码计数落盘 (artifact 里可取, 不依赖 job summary 留存)。
+          $nonDiag = @($err | Where-Object { $_.Trim() -ne '' -and $_ -notmatch ':\s*(error|warning)\s+VB\d+' })
+          $lines = New-Object System.Collections.Generic.List[string]
+          $lines.Add("STDERR_TOTAL_LINES=$($err.Count)")
+          $lines.Add("DIAG_LINES=$($diag.Count)")
+          $lines.Add("NONDIAG_LINES=$($nonDiag.Count)")
+          $lines.Add("--- diag by code ---")
+          foreach ($g in ($diag | Group-Object Id | Sort-Object Count -Descending)) {
+            $lines.Add(("{0}`t{1}`t{2}" -f $g.Name, $g.Group[0].Kind, $g.Count))
+          }
+          $lines.Add("--- non-diagnostic lines by prefix ---")
+          foreach ($g in ($nonDiag | ForEach-Object { ($_ -replace '^C3:\s*','') -replace '[:\(].*$','' } | Group-Object | Sort-Object Count -Descending)) {
+            $lines.Add(("{0}`t{1}" -f $g.Name, $g.Count))
+          }
+          $lines | Set-Content -Path .build\pd_emit.codes.txt -Encoding utf8
+          $lines | ForEach-Object { Write-Host $_ }
 
       - name: Upload emit logs
         if: always()
@@ -117,5 +158,7 @@ jobs:
             .build/pd_emit.out
             .build/pd_emit.err
             .build/pd_emit.meta
+            .build/pd_emit.mem.csv
+            .build/pd_emit.codes.txt
           if-no-files-found: error
           retention-days: 7
