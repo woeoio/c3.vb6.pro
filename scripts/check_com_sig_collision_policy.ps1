@@ -73,7 +73,9 @@ if ($iIdx -lt 0) {
     $iBlk = if ($iTail -gt 0) { $w.Substring($iIdx, $iTail - $iIdx) } else { $w.Substring($iIdx) }
     $iCode = StripComments $iBlk
     # ---- W2: getter 永远赢 over setter 那道闸 ----
-    if ($iCode -notmatch 'if\s*\(\s*incomingSetter\s*&&\s*it\s*!=\s*sym\.comMethods\.end\(\)\s*&&\s*it->second\.isPropertyGet\s*\)') {
+    # §29 载荷共享后 comMethods 住在 SymbolPayload 里，读门固定写成 sym.P().comMethods
+    # （W1 的写侧仍只认 insertComMethod 那 1 处）；判据从旧字段直读换成读门，语义不变。
+    if ($iCode -notmatch 'if\s*\(\s*incomingSetter\s*&&\s*it\s*!=\s*sym\.P\(\)\.comMethods\.end\(\)\s*&&\s*it->second\.isPropertyGet\s*\)') {
         $fails += 'W2 the getter-beats-setter gate is gone (a put signature must not replace a getter - that is how BSTR props lost their type)'
     }
     if ($iCode -notmatch 'return;') {

@@ -1,4 +1,4 @@
-# check_typelib_scale_sentinel.ps1 - 规模哨兵：类型库符号只许"造一份"，不许随模块数线性长。
+﻿# check_typelib_scale_sentinel.ps1 - 规模哨兵：类型库符号只许"造一份"，不许随模块数线性长。
 #
 # 背景（ai/C3_PHOTODEMON_HANDOFF.md §25）：改造前每个模块的 SymbolTable 都深拷贝一份完整类型库符号集，
 # PhotoDemon (539 模块 × 3042 符号) 吃到 ~12 GB。共享表落地后本哨兵盯两件事：
