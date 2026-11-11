@@ -4098,6 +4098,49 @@ VB6 的实际语义是 `.SetLayerOffsetX ((maxWidth - .GetLayerWidth()) \ 2)` �
 （`pdDropDown` 的 `void(…, float, float)` 等）签名一致 —— 一元 `Not`（C 面是 `-(…)`）
 被绑到一枚 void 方法调用上，疑似同一解析口径；**未取证前不并案**。
 
+### 56.19 形状门 3 行 bless（FrmEvents / PDImages / VBFlexGridDemo），逐行归因已落纸
+
+**来源**：CI run `43001155566`（head `be57943b`）自交的 `ci/emit-manifest`；门读数
+「期望 633 / 实得 650 / 相同 630 / 哈希不同 3 / 缺席 0 / 多出 17」。登记后复算
+**650/650 相同 + `check_manifest_coverage` K1..K3 绿**（inputs=650 [.vbp=233 .bas=417]）。
+
+**基线怎么取的（关键）**：`emit-manifest.expected.txt` 只存哈希，不存旧内容。取**该 head 之前
+最近一次门绿**的 run `42946294539`（head `6da14e92`）的 `c3-exe` 工件（retention 1 天，正好还在），
+在本机按 `scripts/emit_manifest.ps1` 同口径（默认 x64、只哈希 stdout）对三份输入 `--emit-c`：
+
+| 行 | 旧二进制复现期望 | 新二进制（本机 .build）复现 CI 现值 |
+| --- | --- | --- |
+| `tests/frmevents/FrmEvents.vbp` | `330bf057 / 23327` ✔ 逐字节 | `6aa8475c / 23514` ✔ |
+| `tests/pd_modret/PDImages.bas`（旧夹具） | `3da31e4d / 1822` ✔ | 当前夹具 `fd39a438 / 2083` ✔ |
+| `tests/VBFlexGridDemo/VBFlexGridDemo.vbp` | `78a9cd60 / 5631721` ✔ | `5eee6ddf / 5631739` ✔ |
+
+⇒ 三行都是「同一输入、同一路径、两台确定性二进制」的产物差，可排除机器/编码/工具链噪声。
+
+**逐行归因**（完整版写在 `emit-manifest.expected.txt` 末尾注脚）：
+
+- **A `FrmEvents.vbp` +187 = 插入 2 行**：`vb6_form_load_FrmEvents()` 多出
+  `{ extern void vb6_Form_OLEDragDrop(...); vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FrmEvents, 1, (void*)vb6_Form_OLEDragDrop); }`。
+  来源站点 `tests/frmevents/FrmEvents.frm:186`；成因 = `43db3520`（§51）把 `Form_OLEDrag*` 接成窗体放置目标回调。
+  控件级 5 条注册一行未动 ⇒ 非回归。
+- **B `PDImages.bas` +261 = 新增 1 条声明 + 6 行函数体 + 1 空行**：`024cf46c` 给夹具加了
+  `SelfModuleChain`（`PDImages.bas:18-20`），新增 VB 过程必然多发一条声明与体。
+  **不是 codegen 行为变化**：旧夹具内容在新旧两台 C3 上逐字节相同（1966 B/sha 相同），
+  当前夹具在两台上也逐字节相同（2217 B/sha 相同）。
+  ⚠ 另记一笔：该夹具在本机单文件 emit 下**不区分** `024cf46c` 那刀修法（两台输出同形，
+  因为 `pdImage` 不在单文件输入里 ⇒ 返回类型落 `void*`）；它只在整编上下文里才钉得住，
+  后续若要真正钉住 §56 那条链，需要带类定义的 vbp 形态。
+- **C `VBFlexGridDemo.vbp` +18 = 2 行各 +9**：两处 `sizeof(SCROLLINFO)` → `sizeof(vb6_type_SCROLLINFO)`。
+  来源站点 `Builds/VBFlexGrid/VBFlexGrid.ctl:22020` 与 `:26055`（`SCI(0).cbSize = LenB(SCI(0))`）；
+  成因 = `2efc2c01`（§45）修掉 `substr(19)` 吃掉 `vb6_type_` 前缀 ⇒ 旧形状是**裸 VB 类型名**，
+  C 里会指向 SDK 的同名结构（或缺声明即 C2065）。只改类型名 ⇒ 非回归。
+
+**新增 17 行**：全部是各刀的新夹具（`formhwndval`/`lblnest`×2/`menuarr`/`pd_ctrlarrvar`/
+`pd_formproplet`/`pd_loopcond`/`pd_oledrop`/`pd_selparama`/`pd_udtchain`×2/`pd_udtlen`/
+`propcomlet`×2/`udtbyref`×3），无旧期望可比，按 CI 同一 head 自交数登记。
+
+**结论**：3 行全部解释得清，没有「解释不清、暂挂不登记」的行。提交为纯登记
+（`emit-manifest.expected.txt` + 本节），按纪律带 `[skip ci]`。
+
 
 
 
