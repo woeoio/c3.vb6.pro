@@ -1033,7 +1033,10 @@ std::string CCodeGen::ndAtnSubscriptArg(const std::vector<std::string>& idxExprs
         if (d) idxList += ", ";
         idxList += "(int32_t)(" + idxExprs[d] + ")";
     }
-    return ", ((const int32_t[]){" + idxList + "})";
+    // 末尾两枚右括号: 第一枚收复合字面量的外层括号, 第二枚收 VB6_SA_ND_ATN( 本身 ——
+    // 两枚都在这里出, 调用方只做字符串拼接 (归并时曾漏掉收宏的那一枚: 全语料 33 处
+    // 秩 >=4 站点少一个 ')' 而未编译, 形状门按字符串哈希当场照出)。
+    return ", ((const int32_t[]){" + idxList + "}))";
 }
 
 // <vbeclipse> <VBFlexGridDemo>: 返回左值 UDT 字段的**声明类型名** (`mi.typeRefName`)。

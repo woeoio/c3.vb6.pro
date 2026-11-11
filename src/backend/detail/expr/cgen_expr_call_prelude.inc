@@ -373,9 +373,9 @@
             lastExpr_ = "VB6_SA_ND_ATN(" + elemCType + ", (vb6_SafeArrayND*)" + arrName +
                         ", " + std::to_string(indices.size()) +
                         ndAtnSubscriptArg(indices);
-            // 下标实参 (含最外层那对括号) 只在 ndAtnSubscriptArg 里拼一次: 预处理器按顶层
-            // 逗号切宏实参, `{a, b, c}` 里的花括号挡不住它 —— 少了这对括号就是 cl C4002
-            // "VB6_SA_ND_ATN 参数过多"(实测 P4.bas)。
+            // 下标实参 (含复合字面量外层括号与 VB6_SA_ND_ATN( 的收括号) 只在
+            // ndAtnSubscriptArg 里拼一次: 预处理器按顶层逗号切宏实参, `{a, b, c}` 里的花括号
+            // 挡不住它 —— 少了外层括号就是 cl C4002 "VB6_SA_ND_ATN 参数过多"(实测 P4.bas)。
         }
         return;
     }
