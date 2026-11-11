@@ -1,0 +1,4 @@
+Type=Exe
+Class=CtlBox; CtlBox.cls
+Module=Main; Main.bas
+Startup="Main"

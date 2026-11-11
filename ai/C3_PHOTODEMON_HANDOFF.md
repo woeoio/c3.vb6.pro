@@ -3856,6 +3856,52 @@ head `b301ddfc`）：期望 633 / 实得 639 / 相同 630 / **哈希不同 3** /
 **纪律记录**：构建前空闲内存 6.6 GB（< 8 GB 线），按 §0.1 的先例改为
 `CMAKE_BUILD_PARALLEL_LEVEL=1` 增量构建单 TU（仅 `cgen_expr_call.cpp` + link）。
 
+### 56.14 C2440 `'function': void* → float/double`：裸属性写收晚绑定值（43 条）
+
+**目标桶**：C2440 里 `'function': cannot convert from 'void *' to 'float'`（30）+
+`… to 'double'`（13）= **43 条**，全部落在 UserControl 生成文件
+（`pdDropDown.c` 985/986、`pdSlider.c` 1114… 每个 UC 的 `UserControl_ReadProperties`）。
+
+**根因**：`packLetValueArg`（`cgen_util_comwrite.cpp`）的 **ByVal 档**只认
+`isVariantSlot(val)`：
+
+```
+With PropBag
+    FontSize = .ReadProperty("FontSize", 10)   ' PropertyBag 是外部对象 ⇒ 晚绑定
+End With
+```
+
+`FontSize` 是本类 Property Let（bare 写），RHS 发成 `vb6_ComCall(...)`（void* 承载的
+COM VARIANT*）；`isVariantSlot` 对 ComCall 结果返回 false ⇒ 原样递进 `float` 形参
+⇒ C2440。
+
+**修法**：ByVal 档把 `vb6_ComCall(` / `vb6_ComCallByDispid(` / `vb6_ComGetProp(`
+开头的值也当 Variant 载体，先 `vb6_VariantFromComResult(...)` 再按目标 C 档解箱
+（`Single→(float)vb6_VariantToDouble`、`Double/Date/Currency→vb6_VariantToDouble`、
+`Long/Integer/Boolean/Byte` 同 Fix 249 档位）。
+
+**实测**（`.temp\propvariant`：`CtlBox.cls` 的 `Property Let FontSize(ByVal Single)` +
+`With bag`（`bag As Object`）里 `FontSize = .ReadProperty(...)`）：
+
+| | 发码 |
+| --- | --- |
+| 修前 | `vb6_CtlBox_prop_let_FontSize((void*)me, vb6_ComCall(...))` |
+| 修后 | `vb6_CtlBox_prop_let_FontSize((void*)me, (float)vb6_VariantToDouble(vb6_VariantFromComResult(vb6_ComCall(...))))` |
+
+**钉子**：`tests/propcomlet/`（`CtlBox.cls` / `Main.bas` / `propcomlet.vbp`）+
+`Test-CodegenNote "prop_let_comresult"`。
+
+**`-Category syntax`**：PASS=208 FAIL=0（上一刀 207，+1 = 新钉子）。
+
+**形状门归因**：仍 3 份哈希不同（`FrmEvents` / `PDImages` / `VBFlexGridDemo`）+ 新增
+11 份输入（6 旧 + 本刀两刀的 `tests/udtbyref`×3、`tests/propcomlet`×2 —— 记为 3+2）。
+逐份复核 3 份存量：`vb6_type_* _vb6_anytmp` 命中 0；`prop_let_*` 里
+`vb6_VariantFromComResult` 只在 `VBFlexGridDemo` 有 2 处，且尾注是
+`/* Property Let via prop_get_ rewrite (Pattern C/D2) */`（既有路径，非本刀 bare 档）
+⇒ 本刀对存量语料形状差 **0**。
+
+**纪律记录**：构建前空闲内存 6.4 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
+
 
 
 
