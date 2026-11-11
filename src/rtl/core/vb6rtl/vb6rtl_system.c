@@ -619,8 +619,8 @@ void* vb6_Printers_Collection(void) {
 }
 
 // C2224 Printer/Printers 数据属性族 (声明与理由见 vb6rtl_builtin.h)。
-// 空串用一枚进程级共享 BSTR: 调用方一律经 vb6_BSTR_Assign (复制) 落地,
-// 不会 Free 到这一枚; 每次调用都 SysAllocString 会按语句数漏。
+// Item 结构体里的两个 BSTR 用进程级共享空串: 它们只被当**结构体字段**读
+// (vb6_BSTR_Assign 复制落地, 发码侧不把字段当 mint 回收)。
 static BSTR vb6_prn_EmptyStr(void) {
     static BSTR s_empty = NULL;
     if (!s_empty) s_empty = SysAllocString(L"");
@@ -644,8 +644,10 @@ vb6_PrinterInfo vb6_Printers_Item(int32_t index) {
     return info;
 }
 
-BSTR vb6_Printer_DeviceName(void) { return vb6_prn_EmptyStr(); }
-BSTR vb6_Printer_Port(void) { return vb6_prn_EmptyStr(); }
+// 这两枚是**出口**：按 owned BSTR 交卷（K13 的 owned 名单在册），调用方语句末会放它
+// ⇒ 每次都得新造一枚，不能交共享的那一枚（否则回收刀放掉全局空串 ⇒ 堆损坏）。
+BSTR vb6_Printer_DeviceName(void) { return SysAllocString(L""); }
+BSTR vb6_Printer_Port(void) { return SysAllocString(L""); }
 int32_t vb6_Printer_Copies(void) { return g_printerCopies; }
 void vb6_Printer_SetCopies(int32_t copies) { g_printerCopies = copies; }
 int32_t vb6_Printer_PrintQuality(void) { return g_printerPrintQuality; }

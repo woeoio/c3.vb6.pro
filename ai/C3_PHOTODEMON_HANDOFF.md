@@ -4200,7 +4200,7 @@ VB6 的实际语义是 `.SetLayerOffsetX ((maxWidth - .GetLayerWidth()) \ 2)` �
 - 构建：空闲 7.37 GB（< 8 GB ⇒ `CMAKE_BUILD_PARALLEL_LEVEL=1` 口径），`ninja -j1` 53 目标，`cl` 峰值 264 MB。
 - `-Category syntax`：**PASS=212 FAIL=0 SKIP=0**（与 `b4d756a8` 同数）。
 - 形状：9 份相关输入逐行同哈希 `emit-manifest.expected.txt` —— 3 份 bless 语料（`frmevents/FrmEvents.vbp`、`pd_modret/PDImages.bas`、`VBFlexGridDemo/VBFlexGridDemo.vbp`）+ 改动覆盖的 `b606_udtmem_nd/ModNd.bas`、`b608_value_member_paren/PDImages.bas`、`pd_udtchain/{PdChainTypes.bas,PdChainUse.bas}`、以及本刀刚登记的 `pd_clsarrparam/{Mod1.bas,pd_clsarrparam.vbp}`。**A7 重构与识别半合并都没有改一个字节的发码。**
-- **⚠ 上面这条「零字节」结论被全量形状门推翻（11-11 补记）**：那 9 份输入里没有一份用到**秩 >=4** 的 `VB6_SA_ND_ATN`，而 `ndAtnSubscriptArg` 收尾少拼了**收宏的那一枚 `)`**（旧串 `...}))` 的两枚里只留下收复合字面量外层的那一枚）。全量 `emit_manifest` 当场照出 `tests/test_arr_nd.bas` 哈希不同、字节数 60508 → 60475（差 33 = 该输入的 33 处秩 >=4 站点各少一枚括号）。这不是形状偏好，是真会编译不过（`VB6_SA_ND_ATN` 实参未闭合）。已把收尾改回 `"))"` 并在 helper 注释里写死「两枚右括号都在这里出」，`test_arr_nd.bas` 复算回到 `ecaee85a…` / 60508 逐字节同哈希；全量复跑只剩 4 行既存机器侧差（`guisample`×3 + `TeeChartChartDisplay`，见文件尾注）+ 本刀新夹具 2 行。
+- **⚠ 上面这条「零字节」结论被全量形状门推翻（11-11 补记）**：那 9 份输入里没有一份用到**秩 >=4** 的 `VB6_SA_ND_ATN`，而 `ndAtnSubscriptArg` 收尾少拼了**收宏的那一枚 `)`**（旧串 `...}))` 的两枚里只留下收复合字面量外层的那一枚）。全量 `emit_manifest` 当场照出 `tests/test_arr_nd.bas` 哈希不同、字节数 60508 → 60475（差 33 = 该输入的 33 处秩 >=4 站点各少一枚括号）。CI run `43008472170`（head `918c3ca1`）的 shape oracle 与本地逐字同结论：**651/652 相同，唯一一条哈希不同就是 `tests/test_arr_nd.bas`**。这不是形状偏好，是真会编译不过（`VB6_SA_ND_ATN` 实参未闭合）。已把收尾改回 `"))"` 并在 helper 注释里写死「两枚右括号都在这里出」，`test_arr_nd.bas` 复算回到 `ecaee85a…` / 60508 逐字节同哈希；全量复跑只剩 4 行既存机器侧差（`guisample`×3 + `TeeChartChartDisplay`，见文件尾注）+ 本刀新夹具 2 行。
 - 同期 `b4d756a8` 的回归 run `43006254739`：compile #1 的 8 红 = 本刀这 4 项 + `manifest_coverage`（已随 2 行新输入登记转绿）+ 3 项既存旧红（`builtin_opt_defaults` / `legacy_slot_key_owners` / `iface_view_authority`，不在本刀范围）；vbp #4/#11 是 runner 上的 GUI 像素用例（`ucSegmentedControl`），与本刀无关。
 
 ### 56.22 整编 #8/#9 读数对表 + C2224 Printer/Printers 数据属性族
@@ -4265,6 +4265,9 @@ vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(i)).Port);
 - 4 个 STATIC 脚本仍全绿。
 - 端到端编译：`scripts/c3_build.ps1 -Vbp tests/pd_printer_props/pd_printer_props.vbp` 走 MSVC 成功。
 - PD 真源复算：`Printing.bas` 单文件发码 159/160 已是 `vb6_Printers_Item(...).DeviceName/.Port`；`File_PrintXP.frm` 单文件发码 196/197/211/239/240/245 六处全部转新形状，坏形状 0。
-- 形状门（全量 `emit_manifest`）：存量 652 行里 648 行逐字节同哈希，只剩 4 行既存机器侧差（`guisample`×3 + `TeeChartChartDisplay`，文件尾注在册）；另 2 行是本刀新夹具（`tests/pd_printer_props/{Mod1.bas,pd_printer_props.vbp}`），按「新输入」老规矩待 CI 回来登记。
+- 形状门（全量 `emit_manifest`）：存量 652 行里 648 行逐字节同哈希，只剩 4 行既存机器侧差（`guisample`×3 + `TeeChartChartDisplay`，文件尾注在册）；另 2 行是本刀新夹具（`tests/pd_printer_props/{Mod1.bas,pd_printer_props.vbp}`）。
+- CI run `43015301625`（head `0501d424`）：shape oracle **期望 652 / 实得 654 / 相同 652 / 哈希不同 0 / 缺席 0 / 多出 2** —— 2 行全是新输入；已按老规矩从 `github/ci/emit-manifest`（head=0501d424）`-Bless` 登记为 654 行，`check_manifest_coverage` K1..K3 绿。
+- **K13 追加红（本刀自造，已收口）**：compile #1 的 `[STATIC] owned_temp_keeps` 点名 `vb6_Printer_DeviceName` / `vb6_Printer_Port` —— 推导把这两枚判成 owned BSTR（mint），而发码侧 `kOwned` 名单里没有。归因不是判据错：这两枚**本来就是出口**，但实现交的是进程级共享空串（alias），真按 owned 回收会放掉全局那枚 ⇒ 堆损坏。收口两头一起改：① RTL 两枚改为每次 `SysAllocString(L"")`（结构体 `vb6_PrinterInfo` 的两个字段仍用共享空串 —— 它们只被当字段读、发码侧不当 mint 回收）；② `src/common/owned_temp_keeps.hpp` 的 `kOwned` 名单按字母序补这两行。哨兵双向对账转绿（owned 120），夹具复算哈希 `3453f41c…` / `8d742115…` 逐字节未变（回收刀不提名这两枚），已登记的两行不用重登。
+- 该 run 其余红：compile #1 剩 `legacy_slot_key_owners` / `iface_view_authority`（既存旧红，不在本刀范围）；vbp #4/#11 = runner 的 GUI 像素用例；shape oracle 的红只到那 2 行新输入。
 
 
