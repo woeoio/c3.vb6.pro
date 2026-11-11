@@ -12837,6 +12837,16 @@ if ($Category -in @("all", "syntax")) {
         "vb6_label_SkipPixel_d2_d2:;",
         "goto vb6_label_SkipPixel_d1_d2;",
         "vb6_label_NextPixel_d2:;")
+    # C2224 "左侧必须具有结构/联合类型" 的**类数组形参**一族 (PhotoDemon 整编 22 条,
+    # 全在 ImageFormats_PSP.c): `ByRef srcChannels() As pdPSPChannel` 这类形参此前只登记
+    # knownArrays_ / arrayElemTypes_, 没登记 arrayClassElemTypes_ ⇒ `srcChannels(i).Method`
+    # 推断不出类, 通用成员访问发成 `VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK`
+    # (void* 取成员). 修后按类方法调用发, 接收者强转 void* 入参。
+    # 反向钉: 同一位置上裸 `.IsChannelOK` 不许再出现; 顺带钉住 _vcmp_ 不再包 (类型已知)。
+    Test-CodegenNote "class_array_param_member" @("$Tests\pd_clsarrparam\pd_clsarrparam.vbp") @(
+        "vb6_PdChannel_IsChannelOK((void*)VB6_SA_AT(void*, (*srcChannels), i))",
+        "vb6_PdChannel_GetChannelDIBType((void*)VB6_SA_AT(void*, (*srcChannels), i))") @(
+        "VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

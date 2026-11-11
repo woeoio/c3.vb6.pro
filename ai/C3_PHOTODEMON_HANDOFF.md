@@ -4141,6 +4141,42 @@ VB6 的实际语义是 `.SetLayerOffsetX ((maxWidth - .GetLayerWidth()) \ 2)` �
 **结论**：3 行全部解释得清，没有「解释不清、暂挂不登记」的行。提交为纯登记
 （`emit-manifest.expected.txt` + 本节），按纪律带 `[skip ci]`。
 
+### 56.20 C2224 类数组形参一族（22 条，全在 ImageFormats_PSP.c）
+
+**读数来源**：`#6`（run `42974019359`）整编日志，C2224 共 55 条，其中 22 条在
+`ImageFormats_PSP.c`，成员是 `GetChannelDIBType` 8 / `GetChannelSize` 6 / `IsChannelOK` 2 /
+`GetChannelType` 2 / `GetChannelPtr` 2 / `FreeChannelContents` 2。
+
+**根因**：VB 源是 `PSP_BuildDIBFromChannels(ByRef srcChannels() As pdPSPChannel, …)` 里的
+`srcChannels(i).IsChannelOK` 形态。形参 `ArrayTypeRef` 的登记路（`cgen_decl_func.cpp:302`、
+`cgen_decl_proc.cpp:299`、`cgen_decl_prop.cpp:260`）只写了 `knownArrays_` / `arrayElemTypes_` /
+`arrayUdtElemTypes_`，**没写 `arrayClassElemTypes_`**；而 `inferClassTypeOfExpr` 的 Fix 192 分支
+（`cgen_util_classtype.cpp:253-259`）只查这张表 ⇒ 类推不出 ⇒ 通用成员访问发成
+`VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK`（void* 取成员）⇒ C2224。
+
+**修法**：三处形参登记各补 3 行 `resolveArrayClassElemType(p->asType.get())` 的登记，
+与 `cgen_decl_var.cpp:99` / `cgen_localdecl.cpp:167` 的局部·模块数组路对称。零新判据。
+
+**复现**（`.temp\c2224arr`：`PdChannel.cls` + `Mod1.bas`，`ByRef srcChannels() As PdChannel`）：
+
+| | 发码形状 |
+| --- | --- |
+| 修前 | `VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK` |
+| 修后 | `vb6_PdChannel_IsChannelOK((void*)VB6_SA_AT(void*, (*srcChannels), i))` |
+
+顺带：`GetChannelDIBType = 2` 的 `_vcmp_` VARIANT 包装也一并消失（接收者类型已知后走
+整数比较），与 §56.x 的 `_vcmp_ 4→0` 口径同向。
+
+**钉子**：`tests/pd_clsarrparam/{pd_clsarrparam.vbp, PdChannel.cls, Mod1.bas}` +
+`class_array_param_member`（正向 2 条类方法调用；反向钉裸 `.IsChannelOK`）。
+本机 `-Category syntax`：**PASS=212 FAIL=0 SKIP=0**（上一轮 211）。
+
+**构建**：构建前空闲 7.5 GB（< 8 GB ⇒ 按 §0.1 用 `CMAKE_BUILD_PARALLEL_LEVEL=1`），
+增量 5 目标（3 TU + 2 link）。
+
+**形状门**：三份既有语料（FrmEvents / PDImages / VBFlexGridDemo）本刀后**逐字节未变**
+（与 CI 现值同哈希）；本刀新增 2 行输入（`pd_clsarrparam.vbp` + `Mod1.bas`），待 CI 读数登记。
+
 
 
 
