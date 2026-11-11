@@ -4685,3 +4685,35 @@ vb6_FormA_UACT(0, 0);   // C2197: FormA.UACT 是 void(void)
 **顺带记一笔（未修，不属 C2197）**：同一复现里 `Menus.UACT`（qualifier 是**标准模块**、调用方
 FormMain 另有同名 0 参过程）发出的是 `vb6_Menus_UACT()` —— 少了 Optional 的 `(0, 0)`，属 C2198
 桶（形参表命中调用方本模块的同名过程）。等 C2198 排到时按同一「限定符 → sourceModule」口径收。
+
+### 56.30 C2440：`obj.Method()` 返回工程 UDT 作 ByRef 实参（RectF/RGBQuad/Guid 一族）
+
+**#9 桶**（C2440=135 行 / 133 站）里除 §56.27（`Mod.Fn` 限定返回，31 行）外的第二大族：
+pdPSPShape.c 483/506、pdCompositor.c 405/1112/1162、WIC.c 415、pdPalette.c、Drawing.c、
+Tools_Crop.c 等 `cannot convert from 'vb6_type_RectF' to 'intptr_t'`。
+
+**形状**：`m_BrushFill.SetBoundaryRect m_PolylineShape.GetPathBoundariesF()`
+（pdPSPShape.cls:933）。实参是**类方法**返回的 UDT，形参是 UDT ByRef。§56.27 的
+`inferUdtTypeOfExpr` 分支只认裸标识符 callee 与 `Mod.Fn` 限定符，`obj.Method()`
+落空 ⇒ `intptr_t _vb6_anytmp0 = (intptr_t)(vb6_...GetPathBoundariesF(...))` C2440。
+
+**修法**（`inferUdtTypeOfExpr` 的 IndexOrCallExpr，§56.27 块之后）：callee 是
+MemberAccessExpr 时先 `inferClassTypeOfExpr(object)` 定类，再按两张权威表取返回类型名 ——
+① Function/PropertyGet 符号的 `variableTypeName`（isExternal 按 `sourceModule == 类名`，
+本模块类按 `moduleName_ == 类名`，与 `findClassMemberCallParams` 同一匹配口径）；
+② 回退 Class 符号的 `memberReturnTypes[member]`（Fix 015 的 storageKey 冲突兜底）。
+返回类型名查到 `SymbolKind::UserDefinedType` 才答 `vb6_type_<名>`，否则维持原样。
+
+**夹具/钉子**：`tests/udtret_byref/`（URetMod.bas 内 `Public Type URect` + UBrush.cls
+`SetRect(ByRef r As URect)` + UPath.cls `GetRect() As URect`）；
+`Test-CodegenNote "udt_ret_byref_class_method"` 正向
+`vb6_type_URect _vb6_anytmp0 = vb6_UPath_GetRect(p);` /
+`vb6_UBrush_SetRect(b, (void*)&_vb6_anytmp0);`，反向 `intptr_t ... (intptr_t)(vb6_UPath_GetRect(p))`。
+
+**读数**：`-Category syntax` **PASS=222 FAIL=0 SKIP=0**。形状门：新增
+`tests/udtret_byref/URetMod.bas` 一行（新输入），既有语料 0 变化待 CI 复核。
+
+**未收**：pdCanvas.c 40 行（`double → vb6_cls_pdCanvas*/pdImage*` + `** → float`）仍是
+整编 C2440 最大单块，单文件/两文件复现均落空（需要整编符号面）；下次取 CI 生成的
+`pdCanvas.c` 再定位。WIC 的 `GUID_NULL()` 装箱成 VT_BSTR 是同族另一变体（参数表把
+`ByRef ... As Guid` 映射成 void**），本次未动。

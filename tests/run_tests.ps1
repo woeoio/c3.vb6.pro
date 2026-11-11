@@ -12746,6 +12746,16 @@ if ($Category -in @("all", "syntax")) {
         "vb6_Stack_GetString((void*)VB6_SA_AT(vb6_type_TagRec, arr, 0).IDs, 0)") @(
         "->IDs, (&(BSTR){0})",
         "VB6_SA_AT(vb6_type_TagRec, arr, 0).IDs, (&(BSTR){0})")
+    # C2440 §56.30 (整编 RectF 一族, pdPSPShape/pdCompositor/WIC/pdPalette/Drawing):
+    # 类方法返回工程 UDT 直接作 ByRef 实参 (`b.SetRect p.GetRect()`)。§56.27 只认
+    # `Mod.Fn` 限定符, `obj.Method()` 落 intptr_t 兜底 `(intptr_t)(struct)`。
+    # 正面钉按成员返回表承接的 UDT 临时; 反面钉 intptr_t 兜底旧形状。
+    Test-CodegenNote "udt_ret_byref_class_method" @(
+        "$Tests\udtret_byref\URetMod.bas", "$Tests\udtret_byref\UBrush.cls",
+        "$Tests\udtret_byref\UPath.cls") @(
+        "vb6_type_URect _vb6_anytmp0 = vb6_UPath_GetRect(p);",
+        "vb6_UBrush_SetRect(b, (void*)&_vb6_anytmp0);") @(
+        "intptr_t _vb6_anytmp0 = (intptr_t)(vb6_UPath_GetRect(p))")
     # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
     # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
     # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`

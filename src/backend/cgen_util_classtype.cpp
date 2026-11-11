@@ -872,6 +872,54 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                         return "vb6_type_" + cIdent(fnSymQ->variableTypeName);
                 }
             }
+            // C2440 §56.30: `obj.Method()` 返回工程 UDT 作 ByRef 实参 ——
+            // `m_BrushFill.SetBoundaryRect m_PolylineShape.GetPathBoundariesF()`
+            // (pdPSPShape `RectF`)。§56.27 那条只认 `Mod.Fn`; 类方法返回的 UDT
+            // 走类成员那两张表 (Function 符号的 variableTypeName / Class 符号的
+            // memberReturnTypes)。推断落空 ⇒ intptr_t 兜底 `(intptr_t)(struct)`
+            // (pdPSPShape.c 483/506、pdCompositor.c、WIC.c、pdPalette.c 一族)。
+            if (call.callee && call.callee->kind == ASTNodeKind::MemberAccessExpr) {
+                auto& maC = static_cast<const MemberAccessExpr&>(*call.callee);
+                const std::string clsC = maC.object
+                    ? inferClassTypeOfExpr(*maC.object) : std::string();
+                if (!clsC.empty()) {
+                    const std::string memLowerC = Symbol::toLower(maC.memberName);
+                    const std::string clsLowerC = Symbol::toLower(clsC);
+                    std::string retNameC;
+                    for (const auto& [kC, sC] : symTab_.moduleScope()->symbols()) {
+                        if (sC->lowerName != memLowerC) continue;
+                        if (sC->kind != SymbolKind::Function
+                            && sC->kind != SymbolKind::PropertyGet) continue;
+                        const bool mC = sC->isExternal
+                            ? Symbol::toLower(sC->sourceModule) == clsLowerC
+                            : (isClassModule_
+                               && Symbol::toLower(moduleName_) == clsLowerC);
+                        if (mC && !sC->variableTypeName.empty()) {
+                            retNameC = sC->variableTypeName;
+                            break;
+                        }
+                    }
+                    if (retNameC.empty()) {
+                        for (const auto& [kC, sC] : symTab_.moduleScope()->symbols()) {
+                            if (sC->kind != SymbolKind::Class) continue;
+                            const bool mC = sC->isExternal
+                                ? Symbol::toLower(sC->sourceModule) == clsLowerC
+                                : (isClassModule_
+                                   && Symbol::toLower(moduleName_) == clsLowerC);
+                            if (!mC) continue;
+                            auto itR = sC->P().memberReturnTypes.find(memLowerC);
+                            if (itR != sC->P().memberReturnTypes.end())
+                                retNameC = itR->second;
+                            break;
+                        }
+                    }
+                    if (!retNameC.empty()) {
+                        Symbol* udtC = lookupTypeSymbol(retNameC);
+                        if (udtC && udtC->kind == SymbolKind::UserDefinedType)
+                            return "vb6_type_" + cIdent(retNameC);
+                    }
+                }
+            }
             return "";
         }
         case ASTNodeKind::MemberAccessExpr: {
