@@ -685,6 +685,8 @@ sha256=ffac7abf46c58a0addf3a999879e42a5f067d665e321dea9a13ad7dd352734ab ascii256
 sha256=c6dac032e53768531b9850e73274f22740c19b82447ca79148f777a283544c60 ascii256=a41ecf491d57f4712ed177fab1ac5bd5cb95b356eb6a8ec8c48e2bafc1c92008 rc=0 bytes=2248 tests/udtbyref/Cx.bas
 sha256=14668f11f3610e25eaf512ff34ca4e8dbd6120a57a63e92a05e242e8684d8582 ascii256=96f4680fea5b8aea5bc807b800c7f9b4fa56ec7c690583b914e4701fd0ccb65e rc=0 bytes=4560 tests/udtbyref/udtbyref.vbp
 sha256=a3e59c34ffdfafcab02dd98a3078c9a208e80e0642563e8c4db4e8d321c18bfc ascii256=28c443cabb89aeac6517e2cab915a6e0f18dc0b99385069f57d2cd6b1f0fd7c9 rc=0 bytes=1612 tests/udtbyref/Use.bas
+sha256=7b79da73d124c4352f6a5d1a7a40ef1a0b486d0cb1f482b6d117384b7d5fa7d1 ascii256=d63859fad911132eb6a7285b6df2fc1b2a28a66c5f3dd4537b0c7cfbafb3735f rc=0 bytes=2461 tests/pd_clsarrparam/Mod1.bas
+sha256=43f3a8cb9c796906f4c8293466fa5aba7adcf88a1716054413aee94274821069 ascii256=655342ec14560ab073c1f32dc7c8119481dbc5079971c4e21fe512e3eb55a277 rc=0 bytes=6260 tests/pd_clsarrparam/pd_clsarrparam.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
@@ -1063,3 +1065,7 @@ sha256=a3e59c34ffdfafcab02dd98a3078c9a208e80e0642563e8c4db4e8d321c18bfc ascii256
 #     pd_selparama/SelPa.bas(d2511deb) · pd_udtchain/{PdChainTypes.bas,PdChainUse.bas}(a0620eae) · pd_udtlen/Main.bas(2efc2c01) ·
 #     propcomlet/{Main.bas,propcomlet.vbp}(52a7acf2) · udtbyref/{Cx.bas,udtbyref.vbp,Use.bas}(d46d98b3)。
 #   结论：3 行全部可解释，无「解释不清、暂挂不登记」的行。
+# --- b4d756a8 登记（2 行，全部是**新输入**，不是形状回归）---
+#   新增 2 行 = tests/pd_clsarrparam/{pd_clsarrparam.vbp,Mod1.bas}：C2224 类数组形参族的钉子夹具，
+#   新输入本无旧期望可比；哈希取 CI 同一 head（b4d756a8）自交清单（github/ci/emit-manifest，652 行）。
+#   存量 650 行逐行相同 ⇒ 这一刀对既有语料发码零影响；未发生退场行。
