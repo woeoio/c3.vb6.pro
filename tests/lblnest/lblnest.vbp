@@ -1,0 +1,3 @@
+Type=Exe
+Module=Mod1; Mod1.bas
+Startup="Sub Main"

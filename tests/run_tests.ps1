@@ -12828,6 +12828,15 @@ if ($Category -in @("all", "syntax")) {
         "HMENU hPopup_MnuFile_2 = CreatePopupMenu();",
         "HMENU hPopup_MnuFileTop = CreatePopupMenu();") @(
         "HMENU hPopup_MnuFile = CreatePopupMenu();")
+    # C2045 'label redefined' (PhotoDemon 整编 50 条): For 方向拆分是逐层的,
+    # 修前副本位只是一枚 int (labelCopyIdx_), 内层拆分把外层覆盖+清零 ⇒ 内层标签在
+    # 外层两份里都发 _d2; 外层循环体里内层 For 之后的标签两份都不带后缀。
+    # 修后副本路径逐层编码: (外层1,内层1)="" / (1,2)="_d1_d2" / (2,1)="_d2" / (2,2)="_d2_d2"。
+    Test-CodegenNote "split_label_nest" @("$Tests\lblnest\lblnest.vbp") @(
+        "vb6_label_SkipPixel_d1_d2:;",
+        "vb6_label_SkipPixel_d2_d2:;",
+        "goto vb6_label_SkipPixel_d1_d2;",
+        "vb6_label_NextPixel_d2:;")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

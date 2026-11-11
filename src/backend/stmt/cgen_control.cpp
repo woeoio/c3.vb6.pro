@@ -86,7 +86,7 @@ void CCodeGen::visit(ForStmt& node) {
         c_.emitLine("for (; vb6_VariantToLong(" + varAcc + ") <= " + var + "_end; "
                     + varAcc + " = vb6_VariantFromValue(vb6_VariantToLong(" + varAcc + ") + " + var + "_step)) {");
         c_.indent();
-        labelCopyIdx_ = 0;
+        splitCopyStack_.push_back(0);
         emitStmtList(node.body);
         c_.dedent();
         c_.emitLine("}");
@@ -96,9 +96,9 @@ void CCodeGen::visit(ForStmt& node) {
         c_.emitLine("for (; vb6_VariantToLong(" + varAcc + ") >= " + var + "_end; "
                     + varAcc + " = vb6_VariantFromValue(vb6_VariantToLong(" + varAcc + ") + " + var + "_step)) {");
         c_.indent();
-        labelCopyIdx_ = 1;
+        splitCopyStack_.back() = 1;
         emitStmtList(node.body);
-        labelCopyIdx_ = 0;
+        splitCopyStack_.pop_back();
         c_.dedent();
         c_.emitLine("}");
         c_.dedent();
@@ -124,7 +124,7 @@ void CCodeGen::visit(ForStmt& node) {
     c_.indent();
     c_.emitLine("for (; " + varAcc + " <= " + var + "_end; " + varAcc + " += " + var + "_step) {");
     c_.indent();
-    labelCopyIdx_ = 0;
+    splitCopyStack_.push_back(0);
     emitStmtList(node.body);
     c_.dedent();
     c_.emitLine("}");
@@ -133,9 +133,9 @@ void CCodeGen::visit(ForStmt& node) {
     c_.indent();
     c_.emitLine("for (; " + varAcc + " >= " + var + "_end; " + varAcc + " += " + var + "_step) {");
     c_.indent();
-    labelCopyIdx_ = 1;
+    splitCopyStack_.back() = 1;
     emitStmtList(node.body);
-    labelCopyIdx_ = 0;
+    splitCopyStack_.pop_back();
     c_.dedent();
     c_.emitLine("}");
     c_.dedent();

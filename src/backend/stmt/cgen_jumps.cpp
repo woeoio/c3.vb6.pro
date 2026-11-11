@@ -8,22 +8,46 @@ namespace vb6c3 {
 
 // --- cgen_jumps.cpp: 跳转与错误处理语句生成 (GoTo/OnError/Resume/Exit/GoSub) ---
 
+// Fix 092b: For 方向拆分的「副本路径后缀」唯一出口 (LabelStmt 定义 / GoToStmt 引用共用)。
+// 语义: 只有**定义在某个被拆 body 里**的标签才需要后缀; 深度 K = 最内层「标签集包含
+// 该标签」的拆分层 (collectForBodyLabels 递归收集, 外层集合也含内层标签 ⇒ 最内层即
+// 该标签的定义层)。副本位由 splitCopyStack_ 逐层记录。
+// 编码: 逐层拼接 —— 该层是第二份发 "_d2"; 该层是第一份、但更深层有第二份时发 "_d1"
+// (否则 (外层1, 内层2) 与 (外层2, 内层1) 都拼成 "_d2", 仍然重定义 → C2045);
+// 整条路径都是第一份 → 无后缀 (签名形状与 Fix 086 的单层一致)。
+std::string CCodeGen::forSplitLabelSuffix(const std::string& labelLower) const {
+    size_t depth = 0;
+    for (size_t k = 0; k < forSplitLabelStack_.size() && k < splitCopyStack_.size(); ++k) {
+        if (forSplitLabelStack_[k].count(labelLower)) depth = k + 1;
+    }
+    bool anySecond = false;
+    for (size_t k = 0; k < depth; ++k) {
+        if (splitCopyStack_[k] == 1) { anySecond = true; break; }
+    }
+    if (!anySecond) return std::string();
+    std::string suffix;
+    for (size_t k = 0; k < depth; ++k) {
+        if (splitCopyStack_[k] == 1) {
+            suffix += "_d2";
+        } else {
+            bool deeperSecond = false;
+            for (size_t m = k + 1; m < depth; ++m) {
+                if (splitCopyStack_[m] == 1) { deeperSecond = true; break; }
+            }
+            if (deeperSecond) suffix += "_d1";
+        }
+    }
+    return suffix;
+}
+
 void CCodeGen::visit(GoToStmt& node) {
     // Fix 086: 与 LabelStmt 的方向副本后缀配对
     // Fix 090o: 后缀仅在「目标标签定义在某个被方向拆分的 For body 内」时使用
     // (该标签会被两份副本各定义一次, goto 需与所在副本的 _dN 定义配对)。
     // 目标若在 body 外 (函数级出口标签如 QH/EH, VB6: GoTo 跳出循环到过程尾)
     // 只定义一份, 加后缀会指向不存在的 vb6_label_X_dN → C2094 (cZipArchive 事件取消出口)。
-    std::string targetLower = Symbol::toLower(node.labelName);
-    bool targetInSplitBody = false;
-    for (auto& splitLabels : forSplitLabelStack_) {
-        if (splitLabels.count(targetLower)) {
-            targetInSplitBody = true;
-            break;
-        }
-    }
-    std::string lblSuffix =
-        (labelCopyIdx_ > 0 && targetInSplitBody) ? ("_d" + std::to_string(labelCopyIdx_ + 1)) : "";
+    // Fix 092b: 后缀归一到 forSplitLabelSuffix (与 LabelStmt 同一出口, 支持嵌套拆分)。
+    std::string lblSuffix = forSplitLabelSuffix(Symbol::toLower(node.labelName));
     c_.emitLine("goto vb6_label_" + cIdent(node.labelName) + lblSuffix + ";");
 }
 
@@ -159,7 +183,8 @@ void CCodeGen::visit(ExitStmt& node) {
 void CCodeGen::visit(LabelStmt& node) {
     // Fix 086: For循环方向拆分会发射两份循环体, 第二份的标签加 _d2 后缀,
     // 与对应的 goto 配对, 避免同一函数内标签重定义 (C2045).
-    std::string lblSuffix = (labelCopyIdx_ > 0) ? ("_d" + std::to_string(labelCopyIdx_ + 1)) : "";
+    // Fix 092b: 嵌套拆分的副本路径由 forSplitLabelSuffix 统一编码。
+    std::string lblSuffix = forSplitLabelSuffix(Symbol::toLower(node.labelName));
     c_.emitLine("vb6_label_" + cIdent(node.labelName) + lblSuffix + ":;");
     // P14.1.2: 如果这是错误处理器标签，结束受保护区块
     if (inProtectedBlock_ && !currentErrorHandlerLabel_.empty() &&

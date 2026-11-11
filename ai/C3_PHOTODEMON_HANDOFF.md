@@ -4004,5 +4004,64 @@ HMENU hPopup_MnuFile = CreatePopupMenu();   // Index = 2 那枚 → C2374
 **纪律记录**：构建前空闲内存 6.6 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
 
 
+### 56.17 C2045 `'…': label redefined`：For 方向拆分的副本后缀在嵌套时丢失（50 条）
+
+**目标桶**：C2045 **50 条**，两类名字都出现：
+`vb6_label_SkipChannel` 6 / `NextPixel` 5 / `NextPixel_d2` 5 / `NextDitheredPixel` 4 /
+`NextDitheredPixel_d2` 4 / `SkipPoint`+`SkipPoint_d2` 各 2 / `NextFrame` 2 /
+`NextNeighbor`+`NextNeighbor_d2` 各 2 / 其余 15 个各 1（`BadLineColor`、`StartSearchAgain`、
+`SkipToNextLayer`、`SkipChannelAlpha`、`NextWord`、`NextPixelatePixel1/2/3` …）。
+**带 `_d2` 与不带 `_d2` 的都是重定义**，计数到 6 说明三层嵌套。
+
+**根因**：For 方向拆分（首份 / 第二份）用一枚**单值** `int labelCopyIdx_` 记副本位，
+而拆分层是栈（`forSplitLabelStack_`）：
+
+```c
+if (i_step > 0) { for (…) { … 内层 For：labelCopyIdx_ = 0 … 1 … 0 … } }   // 第一份
+else            { for (…) { … 内层 For：labelCopyIdx_ = 0 … 1 … 0 … } }   // 第二份
+```
+
+`cgen_control.cpp` 两处拆分点把 `labelCopyIdx_` 置 0/1/0，从不保存外层值 ⇒
+① 内层 `_d2` 在外层两份里各发一次（**同一后缀定义两次**）；
+② 外层循环体里内层 For **之后**的标签，因内层收尾已清零，两份都不带后缀
+（同样两次定义）。`GoTo` 侧同病 —— 它只读那一枚被内层覆盖的值。
+
+**修法**：副本位改成与 `forSplitLabelStack_` 同深度的栈 `splitCopyStack_`（0=首份、
+1=第二份），拆分点 `push_back(0)` / `back()=1` / `pop_back()`；后缀唯一出口
+`CCodeGen::forSplitLabelSuffix(labelLower)`，`LabelStmt` 定义与 `GoToStmt` 引用共用：
+
+* 深度 K = 最内层「该 body 的标签集包含此标签」的拆分层（`collectForBodyLabels`
+  递归收集，外层集合也含内层标签 ⇒ 取最内层就是定义层；目标在 body 外 ⇒ K=0 ⇒
+  无后缀，保留 Fix 090o 那条"C2094 出口标签"约定）；
+* 逐层拼接：该层第二份 → `_d2`；该层第一份但更深层有第二份 → `_d1`；全第一份 → 无后缀。
+
+（`_d1` 那一段是必须的：只拼「第二份」会让 (外层1,内层2) 与 (外层2,内层1) 都拼成
+`_d2`，仍然重定义。）
+
+**实测**（`.temp\lblnest`：`For i` 里套 `For j`，`SkipPixel:` 在内层、
+`NextPixel:` 在外层且在内层之后，各配一枚 `GoTo`）：
+
+| 副本路径 | 修前 | 修后 |
+| --- | --- | --- |
+| (外1, 内1) | `SkipPixel` / `NextPixel` | `SkipPixel` / `NextPixel` |
+| (外1, 内2) | `SkipPixel_d2`（与下面撞） | `SkipPixel_d1_d2` |
+| (外2, 内1) | `SkipPixel_d2` / `NextPixel`（与上面撞） | `SkipPixel_d2` / `NextPixel_d2` |
+| (外2, 内2) | `SkipPixel_d2`（第三次定义） | `SkipPixel_d2_d2` |
+
+单层拆分（无嵌套）的签名形状不变（"" / `_d2`），所以存量语料形状差 0。
+
+**钉子**：`tests/lblnest/`（`Mod1.bas` / `lblnest.vbp`）+ `Test-CodegenNote "split_label_nest"`。
+
+**`-Category syntax`**：PASS=211 FAIL=0（上一刀 210，+1 = 新钉子）。
+
+**形状门归因**：期望 633 / 实得 648 / 相同 630 / 哈希不同 **3** / 缺席 0 / 多出 15。
+3 份哈希不同仍是 `FrmEvents.vbp` / `PDImages.bas` / `VBFlexGridDemo.vbp`（§56.13 起的
+同一批待批 bless）；**"相同"的 630 份里有嵌套 For 的语料一份没变** ⇒ 本刀只影响嵌套拆分
+的标签拼名。15 份新增输入 = 前几刀 14 + 本刀 `tests/lblnest/lblnest.vbp`。
+
+**纪律记录**：构建前空闲内存 7.1 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
+
+
+
 
 

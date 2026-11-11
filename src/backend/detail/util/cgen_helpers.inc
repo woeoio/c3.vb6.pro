@@ -1162,13 +1162,19 @@
     // `Public fMainForm As frmMain` 这类跨模块窗体引用变量 —— C3 单实例模型下
     // 即窗体默认实例, 成员访问/裸值引用改道 form_builtin 的外部窗体支。
     std::unordered_map<std::string, std::string> knownFormTypeVars_;
-    // Fix 086: For方向拆分的循环体副本索引 (0=首份, 1=第二份); Label/GoTo配对加后缀
-    int labelCopyIdx_ = 0;
+    // Fix 086: For方向拆分的循环体副本索引 —— 与 forSplitLabelStack_ 同深度的栈
+    // (0=首份, 1=第二份). Fix 092b: 原来是**单值** int, 嵌套拆分时内层把外层的副本
+    // 位覆盖掉 (内层收尾又清零) ⇒ 同一标签在「外层第二份 × 内层第一份」与
+    // 「外层第一份 × 内层第二份」都发 _d2 (C2045 label redefined), 外层循环体里
+    // 内层 For 之后的标签更是两份都不带后缀 (同样 C2045)。
+    std::vector<int> splitCopyStack_;
     // Fix 090o: For方向拆分期间各被拆 body 内定义的标签名栈 (嵌套层)。
     // GoTo 目标若定义在(某个被拆的) For body 内 → 第二份副本 goto 须加 _dN 后缀与
     // 副本内 LabelStmt 配对; 若目标在 body 外 (函数级出口标签如 QH/EH/ErrHandler,
     // VB6: GoTo 跳出循环到过程尾) 只在过程尾定义一份 → 盲目加后缀会 C2094 标签未定义。
     std::vector<std::unordered_set<std::string>> forSplitLabelStack_;
+    // Fix 092b: 副本后缀的唯一出口 (Label 定义与 GoTo 引用共用), 见 cgen_jumps.cpp。
+    std::string forSplitLabelSuffix(const std::string& labelLower) const;
     void collectForBodyLabels(const StmtList& stmts, std::unordered_set<std::string>& out);
     // Fix 090m/090p: ReDim/Erase 目标是 Variant 数组判定 (顶层 As Variant 变量 /
     // UDT 的 As Variant 字段如 (*uFile).BufferArray)
