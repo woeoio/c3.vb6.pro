@@ -12756,6 +12756,17 @@ if ($Category -in @("all", "syntax")) {
         "vb6_type_URect _vb6_anytmp0 = vb6_UPath_GetRect(p);",
         "vb6_UBrush_SetRect(b, (void*)&_vb6_anytmp0);") @(
         "intptr_t _vb6_anytmp0 = (intptr_t)(vb6_UPath_GetRect(p))")
+    # C2440/C2172/C2083 §56.31 (整编 pdGIF/pdPNG/pdRecentFiles/pdImageStrip 共 110 条):
+    # `Set m_allFrames(i).frameDIB = …` 的目标是 `VB6_SA_AT(<UDT>, …).<类字段>`。
+    # classArraySlotElemType 只读得到宏第一实参 (整枚 UDT 档), 腿② 的地址临时量按它落 ⇒
+    # deref 出整枚 struct: `vb6_type_* __clsoldN` + `if (…) Release(…)` = C2083+C2172(+C2440)。
+    # 正面钉这一格按类主人口径的 `vb6_cls_<类>**`/`vb6_cls_<类>*`; 反面钉整枚 UDT 旧形状。
+    Test-CodegenNote "udt_elem_clsfld_set" @(
+        "$Tests\pd_udtelem_clsfld\ElemObj.cls", "$Tests\pd_udtelem_clsfld\ElemMod.bas") @(
+        "vb6_cls_ElemObj** __clsaddr",
+        "vb6_cls_ElemObj* __clsold",
+        "= &(VB6_SA_AT(vb6_type_ElemRec, m_frames, 0).DIB") @(
+        "vb6_type_ElemRec __clsold")
     # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
     # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
     # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`
