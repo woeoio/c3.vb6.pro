@@ -3261,3 +3261,14 @@ VB6 里 UC 模块的 `UserControl` 就是这枚 UC 自身的对象（与 `Me` �
 → `FormExportLayers.c:754` 的 `cmdExportSettings` → `Dialogs.c:625` 的 `fi_HandleCopy`
 → 族② UDT 裸名（`PD_MenuEntry` 10 条等，需先按工程上下文复现）。
 
+### 50.6 截断审计（步数上限打断后重入）
+
+- 截断时状态：`git status --short` 只有本 §50 的 3 个 `M` + 1 个 `?? tests/pd_uctrlqual/`，
+  外加与本线无关的 `?? .zcodeignore`；`git diff --stat` 共 3 文件 71 行插入，无冲突标记、
+  无半截函数。
+- 保留：§50 整组（M22 片段 + 夹具 + 回归针 + 本节），判定依据是三项俱全 ——
+  代码可编过（本机增量构建）、夹具正反针实测有读数、`-Category syntax` PASS=197 FAIL=0。
+- 回退：**无**。本轮没有需要 `git checkout --` 的半截改动；`.zcodeignore` 非本线产物，不动。
+- 提交：`7362a58c`（显式路径 4 个），已双推 `origin`/`github` 的 `dev`。
+  §42.6（整编 #3 的 C2039 族②行号与验收读数）在截断前已落盘，本次未重跑。
+
