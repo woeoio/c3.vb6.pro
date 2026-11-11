@@ -3729,4 +3729,44 @@ PASS=202 FAIL=0）。**没有半截改动**，因此本轮**未执行任何 `git
 5 files changed。逐个判定：**全部完整**（能编过、三条测试通过、子集读数如上）⇒
 无 `git checkout --`，按显式路径提交后双推。`.zcodeignore` 不动。
 
+### 56.10 第五轮截断审计 + 「零散」Layers 两条 C2143 收口
+
+截断时 `git status --short` 只有 `?? .zcodeignore`，`git diff --stat` **无输出**
+⇒ 无 modified、无半截，未做任何 `git checkout --`；上一轮三刀 + pdResize 两刀都在
+`dev`，且 `dev` 与 `github/dev` 无 ahead/behind（双推一致，无需补提交）。
+
+「零散 4 条」= `Extender.Index` ×2（`117836fb` 已收）+ `Layers.bas:467/468` 两条。
+复现用 `.temp\pdsel\pdsel.vbp`（pdImage.cls / pdSelection.cls / PDImages.bas /
+Drawing2D.bas / PublicEnumsAndTypes.bas / SelChain.bas）：
+
+| VB 源 | 旧发码（`Layers.c` 672/673） | 期望 |
+| --- | --- | --- |
+| `PDImages.GetActiveImage.MainSelection.GetCompositeBoundaryRect.Left/.Top` | `vb6_ChkLong(vb6_pdSelection_GetCompositeBoundaryRect((void*)vb6_PDImages_GetActiveImage()->MainSelection->Left);` | `vb6_pdSelection_GetCompositeBoundaryRect((void*)…->MainSelection  /* class var .MainSelection field */).Left` |
+
+根因：`cgen_expr_member_voidptr_com.inc` 的 class_voidptr 尾注判定用
+`obj.find("/* class var .")` —— 尾注出现在**内层调用的实参里**时也命中，随后
+`substr(0, mkPos)` 把对象文本从实参中间截断再拼 `->member`，调用自身的右括号随之丢失。
+修法：只认「`*/` 之后只剩空白」的那一枚（`classFieldReadExpr` 恒把尾注拼在整串末尾，
+故「末尾」=「这枚注释是对象本身的字段读标记」）；` voidptr */` 的检查也收进同一区间。
+
+实测（`.temp\pdsel` 子集）：修后 `TestLeft/TestTop` 均为
+`vb6_ChkLong(vb6_pdSelection_GetCompositeBoundaryRect((void*)…->MainSelection  /* class var .MainSelection field */).Left);`
+；`cl /c /TC /std:c11 SelChain.c` 只剩两条**探针自身非法**的 C 错
+（`TestNoField` 把 UDT 赋给 Variant、`TestFieldFirst` 用了 pdSelection 并不存在的
+`Bounds` 成员），无 C2143 —— 这两条不计缺口。
+
+夹具：`tests/pd_udtchain/`（PdChainTypes.bas + PdChainSel.cls + PdChainImg.cls +
+PdChainUse.bas，两跳类字段链 + 返回 UDT 的零参方法），钉子
+`pd_udt_chain_noparens_field`：正向
+`vb6_PdChainSel_GetBounds((void*)m_Img->Selection /* class var .Selection field */).Left/.Top`，
+absent `->Selection->Left` / `->Selection->Top`。
+
+回归：`tests\run_tests.ps1 -Category syntax` → **PASS=206 FAIL=0 SKIP=0**。
+构建 `-j2` EXIT=0。**纪律记录**：本轮起构建前空闲 7.75 GB，低于 §0.1 的 8 GB 线
+（3 步增量、未起整工程 emit，未出事）；下一轮起构建前须先确认 ≥8 GB 再动手。
+
+提交：`a0620eae`（codegen 修正 + 夹具 + 钉子）；handoff 单独一刀。
+「族② UDT 裸名」按 §55.2 已由 §45 修好、夹具通过，仍等整编 #5 工件确认 0 命中。
+
+
 
