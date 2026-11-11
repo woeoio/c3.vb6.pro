@@ -12674,6 +12674,13 @@ if ($Category -in @("all", "syntax")) {
         "vb6_pdImage_GetNumOfLayers((void*)vb6_PDImages_GetImageByID(",
         "vb6_pdLayer_prop_get_GetLayerDIB((void*)vb6_pdImage_GetLayerByID(") @(
         ").GetNumOfLayers", ").GetLayerByID")
+    # §56 (C2065 `_vcmp_N` ×5): **后测循环**（`Do … Loop While/Until`）的条件里出现需要
+    # 物化的 Variant 比较时，物化语句落在 `}` 之前、do 体内，而 C 的 `} while (expr)`
+    # 那颗 expr 已出块作用域 ⇒ 声明的 `_vcmp_N` 在条件里看不见。
+    # 正面钉新形状（条件进体内 + `} while (1);`），反面钉旧坏形状不出现。
+    Test-CodegenNote "pd_post_test_loop_vcmp" @(
+        "$Tests\pd_loopcond\p01_post_test_vcmp.bas") @(
+        "if (!((vb6_VarCmp", "} while (1);") @("} while (vb6_VarCmp")
     # §45 (C2065 族②): 类模块内 `Private Type` 的动态数组, `LenB(arr(i).串字段)`
     # 必须问 BSTR 的字节长度 (落 vb6_LenB), 且整枚元素的 sizeof 必须带 vb6_type_ 前缀。
     Test-CodegenNote "pd_udt_field_lenb" @(
