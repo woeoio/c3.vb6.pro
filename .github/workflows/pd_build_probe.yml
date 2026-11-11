@@ -212,6 +212,7 @@ jobs:
             .build/pd_build.mem.csv
             .build/pd_build.codes.txt
             .build/pd_full/c3-error.log
+            .build/pd_full/*.c
           if-no-files-found: warn
           retention-days: 7
 
