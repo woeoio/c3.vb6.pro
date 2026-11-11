@@ -12711,6 +12711,14 @@ if ($Category -in @("all", "syntax")) {
         'SAFEARRAY* _pa_3 = NULL; if (',
         'vb6_Tr(vb6_BSTR_FromStr(L"px"), _pa_2)') @(
         'vb6_ret_UnitId = 0; SAFEARRAY* _pa_2 = NULL;')
+    # C2065 族① (WindowState ×4): 跨窗体内建属性 WindowState 的**写**侧。
+    # 读侧 form_pseudo 表有 windowstate → vb6_GetWindowState; 写侧没登记 ⇒
+    # 落 Module.var 回退，发裸 `WindowState = 2` (Interface.c 2 条 +
+    # Tools_ScreenVideo.c / Tools_ScreenVideoPrefs.c 各 1 条)。
+    Test-CodegenNote "pd_form_windowstate_write" @(
+        "$Tests\pd_formstate\frmWriter.frm", "$Tests\pd_formstate\frmOther.frm") @(
+        "vb6_SetWindowState(vb6_form_hwnd_frmOther(), 2); /* external form prop write */") @(
+        "WindowState = 2")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

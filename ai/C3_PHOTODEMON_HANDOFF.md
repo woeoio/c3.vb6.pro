@@ -3156,3 +3156,61 @@ PD 侧同源复现（`.temp/paprobe`，`Units.bas + pdTranslate.cls`）：`_pa_1
   `FormMain.c:2455` 的 `HotkeyManager`、`FormExportLayers.c:754` 的 `cmdExportSettings`、
   `Dialogs.c:625` 的 `fi_HandleCopy`，最后是族② UDT 裸名。
 
+## §49 C2065 族① 第四站 —— `WindowState` 写侧缺配对出口（4 条）
+
+### 49.1 根因（#3：`Interface.c(1269,1356)`、`Tools_ScreenVideo.c`、`Tools_ScreenVideoPrefs.c`）
+
+读侧的窗体伪属性表 [form_pseudo.hpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/common/form_pseudo.hpp#L89)
+早就有 `{"windowstate", "vb6_GetWindowState", FPQ_NONE, true}`；写侧
+[getControlPropWriteFn](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/cgen_util_ctrl.cpp#L867-L877)
+的 `case FrmControlType::Form` 里**没有**这一行。于是
+`FormMain.WindowState = vbNormal`（`Interface.bas` ×2、`Tools_ScreenVideo.frm:947`、
+`Tools_ScreenVideoPrefs.frm:246`）落「Module.var」回退，发成裸
+`WindowState = 0;`（C2065）。读侧一直是好的，这正是
+「赋值只问写表、读问读表」两条口径没配对的老坑（同类注释见同函数 `currentx/currenty`、
+`drawwidth` 两行）。
+
+### 49.2 修法（补一行，走配对出口）
+
+```cpp
+        if (propLower == "windowstate") return "vb6_SetWindowState";
+```
+
+`vb6_SetWindowState(void* hwnd, int32_t val)` 早就在
+[vb6forms_widget.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/vb6forms_widget.c#L154)
+里（`vb6_GetWindowState` 的配对），不需要新 RTL。
+
+### 49.3 修后实读
+
+- `Interface.bas + MainWindow.frm`：
+  `vb6_SetWindowState(vb6_form_hwnd_FormMain(), 0);  /* external form prop write */`
+  （读侧仍是 `vb6_GetWindowState(vb6_form_hwnd_FormMain())  /* external form prop */`）；
+- `Tools_ScreenVideo.frm + Tools_ScreenVideoPrefs.frm + MainWindow.frm`：
+  两处分别 `vb6_SetWindowState(vb6_form_hwnd_FormMain(), 0 / 1);`，裸
+  `WindowState = …` 归零。
+- ⚠ 复现注意：只发**写方窗体**（不带声明该窗体名的 `MainWindow.frm`）时，
+  `knownFormModuleNames_` 里没有 `formmain`，走的是另一条回退 ——
+  发 `vb6_FormMain_WindowState = 0;  /* Module.WindowState */`。整编是整工程，
+  不会落这一支；夹具必须两枚窗体一起给（见 49.4）。
+
+### 49.4 夹具与正反针
+
+- 新增 `tests/pd_formstate/{frmWriter.frm,frmOther.frm}`：`frmWriter` 里
+  `frmOther.WindowState = vbMaximized`；
+- `Test-CodegenNote "pd_form_windowstate_write"`：正面钉
+  `vb6_SetWindowState(vb6_form_hwnd_frmOther(), 2); /* external form prop write */`，
+  反面钉 `WindowState = 2`；
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=196 FAIL=0 SKIP=0**（+1）。
+
+### 49.5 资源与未完
+
+本机增量构建：空闲 **6.48 GB**（仍低于 8 GB 硬线，`CMAKE_BUILD_PARALLEL_LEVEL=1`，
+1 TU + 2 链接）。
+
+- `_vcmp_0..3`（`pdPSDLayer.c` 4 条）：本地按 HEAD 复现 `pdPSDLayer.cls`，
+  70 处 `_vcmp_*` 声明/使用全配对，无「先用后声」；与 §48 的 Select Case 标签
+  同源的可能性高，**以 #5 整编对照为准**，未单独改码。
+- 下一站：`pdResize.c(799,800,802,803)` 的 `vb6_UserControl_cmbWidthUnit/cmbHeightUnit`
+  → `OLEDropMode`（`Processor.c:1176,1185`）→ 零散 3 条（`HotkeyManager` /
+  `cmdExportSettings` / `fi_HandleCopy`）→ 族② UDT 裸名。
+

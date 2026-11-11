@@ -869,6 +869,11 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
         if (propLower == "visible") return "vb6_SetControlVisible";
         if (propLower == "enabled") return "vb6_SetControlEnabled";
         if (propLower == "scalemode") return "vb6_SetScaleMode";  // 账 #197: Me.ScaleMode 写得动
+        // 读侧 form_pseudo 表早就有 windowstate → vb6_GetWindowState；
+        // 写侧没登记 ⇒ `FormMain.WindowState = vbNormal` 落 Module.var 回退，
+        // 发出裸 `WindowState = 0;`（整编实测 C2065 ×4：Interface.c 2、
+        // Tools_ScreenVideo.c 1、Tools_ScreenVideoPrefs.c 1）。
+        if (propLower == "windowstate") return "vb6_SetWindowState";
         // 账 #233: 与上面读侧成对 —— 赋值语句发 C 时**只问这张表**, 没登记就把读函数当左值。
         if (propLower == "currentx") return "vb6_SetCurrentX";
         if (propLower == "currenty") return "vb6_SetCurrentY";
