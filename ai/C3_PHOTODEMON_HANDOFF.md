@@ -4757,3 +4757,68 @@ c50a4260 注块；来源 github/ci/emit-manifest 提交 38d92803）：改写 1 �
 **同批登记（新输入）**：`tests/cxmodqual/{cxmodqual.vbp,ModCx.bas,ModUse.bas}`、
 `tests/pa_variant_slot/{pa_variant_slot.vbp,PaSlot.bas}`、`tests/pd_formcall/ModC.bas`、
 `tests/pd_udtfield_call/TagMod.bas`、`tests/udtret_byref/URetMod.bas`（8 行；.frm/.cls 不进清单）。
+
+### 56.32 新桶：PD 整编 run 43048222839（head 8c0d5dd6，旧 #9 作废）
+
+**head 口径**：run 的 head = `8c0d5dd6`（probe 分支上 merge 了 dev `b30100a7`）。当前 dev
+`b76265ae` 只多两笔文档/清单提交（`2c082994`、`b76265ae`），**编译器源码逐字节相同**，
+所以这份日志与现 head 等价。旧 run 43035705199（ba5f15fb）的 500 行全部作废。
+
+**总量**：cl 报错 395 行（旧 500）。逐码：
+
+| 码 | 新 | 旧 | 说明 |
+|---|---:|---:|---|
+| C2440 | 113 | 135 | 37 个 TU；pdGIF 21 / pdSelection 11 / Drawing 8 / pdPNG 7 / pdRecentFiles 6 |
+| C2198 | 75 | 75 | 29 个 TU；最大 `vb6_Plugin_libdeflate_CompressPtrToPtr` 6+3、`vb6_IntDiv` 4 |
+| C2172 | 59 | 4 | 12 个 TU；**本刀引入**（见下），pdGIF 27 / pdPNG 13 / pdRecentFiles 6 / pdImageStrip 4 |
+| C2083 | 55 | 0 | 11 个 TU；与 C2172 同一族（struct 当条件/实参） |
+| C2036 | 34 | 34 | 4 个 TU：pdString 26 / pdStream 4 / pdNavigator 3 / cFileDialogVista 1，全是 `void *: unknown size` |
+| C2296 | 13 | 13 | 13 个 TU，各 1 条 |
+| C2106 | 10 | 10 | 4 个 TU |
+| C2102 | 8 | 4 | |
+| C2095 5 / C2186 5 / C2297 5 / C2069 4 / C2113 3 / C2223 3 / C2112 2 | | 同旧 | |
+| C2197 | **1** | 159 | 只剩 pdSelection.c(574) `vb6_pdSelection_LockIn(vb6_cls_pdSelection *)` too many arguments |
+| C2224 | **0** | 39 | 整桶清空 |
+
+**C2440 形状分组（113）**：`void* → vb6_type_PD_GifFrame` 21、`double → void*` 8、
+`vb6_VARIANT → int32_t` 8、`vb6_type_RectF → intptr_t` 8、`void* → PD_APNGFrame` 7、
+`void* → MRUEntry` 6、`void* → float` 6、`VARIANT → BSTR` 4、`BSTR → float` 4、
+`void* → ImageThumbEntry` 4、`void* → double` 4，其余 ≤3。
+
+**旧 #9 两块的证实/否证**：
+- **pdCanvas.c 那 40 行：否证**。新日志里 pdCanvas.c 的 C2440 只剩 **1** 条，且形状不同
+  （`(165): vb6_cls_pdDropDown* → vb6_VARIANT`）；`double → vb6_cls_pdCanvas*` 与
+  `cls** → float` 全部消失。
+- **ComplexNumber 20 行：否证**（§56.30 末尾已记，小语料 `.temp/cxpb` 复核）。
+- **新出现的一族**：pdGIF/pdPNG/pdRecentFiles/pdImageStrip 的 `C2083+C2172`（110 条）——
+  §56.29 的 UDT 字段类推断把 `Set m_allFrames(i).frameDIB = …` 送进账 #305 腿②，
+  而 `classArraySlotElemType` 只读得到 `VB6_SA_AT(<UDT>, …)` 的元素档，
+  地址临时量按整枚 UDT 落 ⇒ `vb6_type_PD_GifFrame __clsoldN = …; if (__clsoldN) Release(__clsoldN);`
+  （C2083 + C2172）以及 `void* → vb6_type_PD_GifFrame`（C2440 最大那一族 21 条）。
+
+### 56.33 C2440/C2172/C2083 修：UDT 元素里的类字段作 Set 目标
+
+**复现**：`tests/pd_udtelem_clsfld`（`ElemRec{BackupDIB,DIB As ElemObj}` + `m_frames() As ElemRec`，
+`Set m_frames(0).DIB = New ElemObj` / `Set …BackupDIB = …DIB` / `Set …DIB = Nothing`）。
+修前 emit：
+```c
+vb6_type_ElemRec* __clsaddr1 = &(VB6_SA_AT(vb6_type_ElemRec, m_frames, 0).DIB  /* udt objfield vb6_cls_ElemObj* */);
+vb6_type_ElemRec  __clsold0  = (*__clsaddr1);
+if (__clsold0) vb6_cls_ElemObj_Release(__clsold0);          /* C2083 + C2172 */
+(*__clsaddr1) = (vb6_type_ElemRec)vb6_ComObject_UnboxVb6Instance(…);  /* C2440 */
+```
+
+**修**：`src/backend/module/cgen_com.cpp` 的 `emitClassSlotRefSet` 元素臂 —— 宏第一实参是
+`vb6_type_*`（UDT 元素）时，这一格按类主人自己的 C 档 `vb6_cls_<类>*` 落地址/旧值/写入；
+元素档本来就是 `void*` / `vb6_cls_X*` 的保持原样（类数组不受影响）。修后逐字节：
+```c
+vb6_cls_ElemObj** __clsaddr1 = &(VB6_SA_AT(vb6_type_ElemRec, m_frames, 0).DIB …);
+vb6_cls_ElemObj*  __clsold0  = (*__clsaddr1);
+(*__clsaddr1) = (vb6_cls_ElemObj*)vb6_ComObject_UnboxVb6Instance(…);
+if ((*__clsaddr1)) vb6_cls_ElemObj_AddRef((*__clsaddr1));
+if (__clsold0) vb6_cls_ElemObj_Release(__clsold0);
+```
+**钉子**：`udt_elem_clsfld_set`（正 `vb6_cls_ElemObj** __clsaddr` / `vb6_cls_ElemObj* __clsold`
+/ `= &(VB6_SA_AT(vb6_type_ElemRec, m_frames, 0).DIB`；反 `vb6_type_ElemRec __clsold`）。
+`syntax` PASS=223 FAIL=0。本机 `--output-dir` 编出 exe 运行 = `kept` / `gone` / exit 0
+（引用交接正确：DIB 置空后退掉，BackupDIB 仍持有）。

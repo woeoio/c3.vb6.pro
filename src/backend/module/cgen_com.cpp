@@ -469,13 +469,21 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
         // 悄悄改成 3 次：本机 VB-family 运行期对 `a(Bump())` 与 `a(Bump()+k-1)` 两形都答 1。
         const std::string addrSlot = "__clsaddr" + std::to_string(ivrefSetSeq_++);
         const std::string deref = "(*" + addrSlot + ")";
+        // 目标可以是 `VB6_SA_AT(<UDT>, arr, i)` **本身** (纯元素槽), 也可以是它后面挂一枚类字段
+        // (`…(i).Field`)。后一形里 classArraySlotElemType 只读得到宏的第一个实参 = **元素**档
+        // (整枚 UDT struct), 不是这一格的 C 档 —— 拿它落地址临时量, deref 出来就是整枚 struct:
+        // 实测 pdGIF `Set m_allFrames(i).frameDIB = …` 发成 `vb6_type_PD_GifFrame __clsoldN = …;
+        // if (__clsoldN) vb6_cls_pdDIB_Release(__clsoldN);` ⇒ cl C2083 + C2172 (+ C2440)。
+        // 这一格按类主人自己的 C 档 (`vb6_cls_<类>*`) 落, 元素档 `void*` / `vb6_cls_X*` 原样保留。
+        const bool elemIsUdtStruct = slotElemType.compare(0, 9, "vb6_type_") == 0;
+        const std::string addrTy = elemIsUdtStruct ? clsStruct + "*" : slotElemType;
         c_.emitLine("{  /* 账 #305 (甲) 腿" + legTag + ": Set 数组元素 " + commentStripBlockComments(target)
                     + " (地址落一次, 下标算术只算一次) */");
         c_.indent();
-        c_.emitLine(slotElemType + "* " + addrSlot + " = &(" + target + ");");
-        c_.emitLine(slotElemType + " " + oldSlot + " = " + deref + ";");
+        c_.emitLine(addrTy + "* " + addrSlot + " = &(" + target + ");");
+        c_.emitLine(addrTy + " " + oldSlot + " = " + deref + ";");
         if (!valueExpr.empty()) {
-            c_.emitLine(deref + " = " + slotValue(slotElemType) + ";");
+            c_.emitLine(deref + " = " + slotValue(addrTy) + ";");
             if (!rhsTransferred) {
                 c_.emitLine("if (" + deref + ") " + clsStruct + "_AddRef(" + deref + ");");
             }

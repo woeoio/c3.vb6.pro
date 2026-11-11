@@ -1,0 +1,4 @@
+Type=Exe
+Class=ElemObj; ElemObj.cls
+Module=ElemMod; ElemMod.bas
+Startup="Sub Main"
