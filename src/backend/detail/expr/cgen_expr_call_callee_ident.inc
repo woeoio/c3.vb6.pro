@@ -225,6 +225,26 @@
             }
         }
 
+        // ---- Pattern M2: VB6 内置 Printers 集合索引 ----
+        // Printers(i) = Printers.Item(i)。元素按 vb6_PrinterInfo **结构体值**返回
+        // (DeviceName/Port/Copies/PrintQuality), 外层的 .DeviceName 就是普通字段读。
+        // 此前落通用索引路径原样发 `vb6_Printers_Collection(i)` —— 0 参函数被塞 1 个
+        // 实参, 且返回值是 void* ⇒ 外层取字段 = C2224 (Printing.bas:159/160、
+        // File_PrintXP.frm:240 实测)。
+        if (!handled && nameLower == "printers" && node.positional.size() == 1
+            && currentProc_ && !knownLocalVars_.count(nameLower)) {
+            bool isPrintersParam = false;
+            for (auto& p : currentProc_->P().params) {
+                if (Symbol::toLower(p.name) == nameLower) { isPrintersParam = true; break; }
+            }
+            if (!isPrintersParam) {
+                emitExpr(*node.positional[0]);
+                std::string idxPrn = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
+                lastExpr_ = "vb6_Printers_Item((int32_t)(" + idxPrn + "))";
+                handled = true;
+            }
+        }
+
         // ---- Pattern F4 (账 #305 第三百三十二刀): 窗体**单控件**带索引 ----
         // `DockingPaneManager(i).Closed` (GUISample frmMain:586) —— DockingPaneManager
         // 是窗体上的单个 OCX 控件 (非控件数组), `(i)` 是取它 DISPID 0 默认属性 Item 的

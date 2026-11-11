@@ -4062,6 +4062,496 @@ else            { for (…) { … 内层 For：labelCopyIdx_ = 0 … 1 … 0 …
 **纪律记录**：构建前空闲内存 7.1 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
 
 
+### 56.18 C2095 + C2198 `vb6_IntDiv`（7 + 6 条）：语句式调用的括号被当成实参表（暂挂，解析层）
+
+**现象**：`pdCBZ.c(311/312/319/320)`、`dialog_GenericMemory.c(670)` 每处**成对**报
+`error C2095: 'vb6_IntDiv': actual parameter has type 'void': parameter 1` 与
+`error C2198: 'int32_t vb6_IntDiv(int32_t,int32_t)': too few arguments for call`；
+另 `pdString.c(175/188)` 只有 C2198。C2095 的"实参类型是 void"说明第一个实参是一枚
+**void 返回的函数调用**（MSVC 把 void 表达式当"没有实参"，于是同时报 too few）。
+
+**源码形状**（`pdCBZ.cls:295`）：
+
+```vb
+.SetLayerOffsetX (maxWidth - .GetLayerWidth()) \ 2
+```
+
+**本机复现**（`.temp\intdivprobe`：`Lyr.GetWidth(Optional ByVal … As Boolean = True) As Double`
++ `SetOffset(ByVal v As Long)`，With 块里同形两行）：
+
+```c
+vb6_IntDiv(vb6_Lyr_SetOffset((void*)_vb6_with_0, (maxWidth - vb6_Lyr_GetWidth(...))), 2);
+vb6_Lyr_SetOffset((void*)_vb6_with_0, vb6_IntDiv(vb6_Lyr_GetWidth(...), 2));
+```
+
+第一行就是病：`SetOffset` 是 **Sub**（C 返回 void），可 `\ 2` 被绑到了**调用结果**上。
+VB6 的实际语义是 `.SetLayerOffsetX ((maxWidth - .GetLayerWidth()) \ 2)` —— 语句式调用
+后面的括号只界定**实参表达式**，`\` 属于实参内部；C3 的解析把括号当成实参表收尾，
+于是尾随的二元运算符落到整条调用上。第二行（实参本身不以括号包裹）发码正确。
+
+**为何暂挂**：这是**语句式调用 + 括号实参 + 尾随二元运算符**的解析/绑定规则问题，
+不是单点发码缺陷；改它要动"无 Call 的调用语句如何吃掉实参列表"这条主链，影响面
+远大于 13 条读数，且本轮没有可逐份归因的形状门语料兜底。留作独立一刀（需先补
+`Sub Foo (x) \ 2` / `Sub Foo (x) + 2` / `Sub Foo ((x) \ 2)` 三形态探针再动）。
+
+**同族待证**：C2296 `'-': not valid as left operand has type 'void (__cdecl *)(…)'` 13 条
+（`pdDropDown` 的 `void(…, float, float)` 等）签名一致 —— 一元 `Not`（C 面是 `-(…)`）
+被绑到一枚 void 方法调用上，疑似同一解析口径；**未取证前不并案**。
+
+### 56.19 形状门 3 行 bless（FrmEvents / PDImages / VBFlexGridDemo），逐行归因已落纸
+
+**来源**：CI run `43001155566`（head `be57943b`）自交的 `ci/emit-manifest`；门读数
+「期望 633 / 实得 650 / 相同 630 / 哈希不同 3 / 缺席 0 / 多出 17」。登记后复算
+**650/650 相同 + `check_manifest_coverage` K1..K3 绿**（inputs=650 [.vbp=233 .bas=417]）。
+
+**基线怎么取的（关键）**：`emit-manifest.expected.txt` 只存哈希，不存旧内容。取**该 head 之前
+最近一次门绿**的 run `42946294539`（head `6da14e92`）的 `c3-exe` 工件（retention 1 天，正好还在），
+在本机按 `scripts/emit_manifest.ps1` 同口径（默认 x64、只哈希 stdout）对三份输入 `--emit-c`：
+
+| 行 | 旧二进制复现期望 | 新二进制（本机 .build）复现 CI 现值 |
+| --- | --- | --- |
+| `tests/frmevents/FrmEvents.vbp` | `330bf057 / 23327` ✔ 逐字节 | `6aa8475c / 23514` ✔ |
+| `tests/pd_modret/PDImages.bas`（旧夹具） | `3da31e4d / 1822` ✔ | 当前夹具 `fd39a438 / 2083` ✔ |
+| `tests/VBFlexGridDemo/VBFlexGridDemo.vbp` | `78a9cd60 / 5631721` ✔ | `5eee6ddf / 5631739` ✔ |
+
+⇒ 三行都是「同一输入、同一路径、两台确定性二进制」的产物差，可排除机器/编码/工具链噪声。
+
+**逐行归因**（完整版写在 `emit-manifest.expected.txt` 末尾注脚）：
+
+- **A `FrmEvents.vbp` +187 = 插入 2 行**：`vb6_form_load_FrmEvents()` 多出
+  `{ extern void vb6_Form_OLEDragDrop(...); vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FrmEvents, 1, (void*)vb6_Form_OLEDragDrop); }`。
+  来源站点 `tests/frmevents/FrmEvents.frm:186`；成因 = `43db3520`（§51）把 `Form_OLEDrag*` 接成窗体放置目标回调。
+  控件级 5 条注册一行未动 ⇒ 非回归。
+- **B `PDImages.bas` +261 = 新增 1 条声明 + 6 行函数体 + 1 空行**：`024cf46c` 给夹具加了
+  `SelfModuleChain`（`PDImages.bas:18-20`），新增 VB 过程必然多发一条声明与体。
+  **不是 codegen 行为变化**：旧夹具内容在新旧两台 C3 上逐字节相同（1966 B/sha 相同），
+  当前夹具在两台上也逐字节相同（2217 B/sha 相同）。
+  ⚠ 另记一笔：该夹具在本机单文件 emit 下**不区分** `024cf46c` 那刀修法（两台输出同形，
+  因为 `pdImage` 不在单文件输入里 ⇒ 返回类型落 `void*`）；它只在整编上下文里才钉得住，
+  后续若要真正钉住 §56 那条链，需要带类定义的 vbp 形态。
+- **C `VBFlexGridDemo.vbp` +18 = 2 行各 +9**：两处 `sizeof(SCROLLINFO)` → `sizeof(vb6_type_SCROLLINFO)`。
+  来源站点 `Builds/VBFlexGrid/VBFlexGrid.ctl:22020` 与 `:26055`（`SCI(0).cbSize = LenB(SCI(0))`）；
+  成因 = `2efc2c01`（§45）修掉 `substr(19)` 吃掉 `vb6_type_` 前缀 ⇒ 旧形状是**裸 VB 类型名**，
+  C 里会指向 SDK 的同名结构（或缺声明即 C2065）。只改类型名 ⇒ 非回归。
+
+**新增 17 行**：全部是各刀的新夹具（`formhwndval`/`lblnest`×2/`menuarr`/`pd_ctrlarrvar`/
+`pd_formproplet`/`pd_loopcond`/`pd_oledrop`/`pd_selparama`/`pd_udtchain`×2/`pd_udtlen`/
+`propcomlet`×2/`udtbyref`×3），无旧期望可比，按 CI 同一 head 自交数登记。
+
+**结论**：3 行全部解释得清，没有「解释不清、暂挂不登记」的行。提交为纯登记
+（`emit-manifest.expected.txt` + 本节），按纪律带 `[skip ci]`。
+
+### 56.20 C2224 类数组形参一族（22 条，全在 ImageFormats_PSP.c）
+
+**读数来源**：`#6`（run `42974019359`）整编日志，C2224 共 55 条，其中 22 条在
+`ImageFormats_PSP.c`，成员是 `GetChannelDIBType` 8 / `GetChannelSize` 6 / `IsChannelOK` 2 /
+`GetChannelType` 2 / `GetChannelPtr` 2 / `FreeChannelContents` 2。
+
+**根因**：VB 源是 `PSP_BuildDIBFromChannels(ByRef srcChannels() As pdPSPChannel, …)` 里的
+`srcChannels(i).IsChannelOK` 形态。形参 `ArrayTypeRef` 的登记路（`cgen_decl_func.cpp:302`、
+`cgen_decl_proc.cpp:299`、`cgen_decl_prop.cpp:260`）只写了 `knownArrays_` / `arrayElemTypes_` /
+`arrayUdtElemTypes_`，**没写 `arrayClassElemTypes_`**；而 `inferClassTypeOfExpr` 的 Fix 192 分支
+（`cgen_util_classtype.cpp:253-259`）只查这张表 ⇒ 类推不出 ⇒ 通用成员访问发成
+`VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK`（void* 取成员）⇒ C2224。
+
+**修法**：三处形参登记各补 3 行 `resolveArrayClassElemType(p->asType.get())` 的登记，
+与 `cgen_decl_var.cpp:99` / `cgen_localdecl.cpp:167` 的局部·模块数组路对称。零新判据。
+
+**复现**（`.temp\c2224arr`：`PdChannel.cls` + `Mod1.bas`，`ByRef srcChannels() As PdChannel`）：
+
+| | 发码形状 |
+| --- | --- |
+| 修前 | `VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK` |
+| 修后 | `vb6_PdChannel_IsChannelOK((void*)VB6_SA_AT(void*, (*srcChannels), i))` |
+
+顺带：`GetChannelDIBType = 2` 的 `_vcmp_` VARIANT 包装也一并消失（接收者类型已知后走
+整数比较），与 §56.x 的 `_vcmp_ 4→0` 口径同向。
+
+**钉子**：`tests/pd_clsarrparam/{pd_clsarrparam.vbp, PdChannel.cls, Mod1.bas}` +
+`class_array_param_member`（正向 2 条类方法调用；反向钉裸 `.IsChannelOK`）。
+本机 `-Category syntax`：**PASS=212 FAIL=0 SKIP=0**（上一轮 211）。
+
+**构建**：构建前空闲 7.5 GB（< 8 GB ⇒ 按 §0.1 用 `CMAKE_BUILD_PARALLEL_LEVEL=1`），
+增量 5 目标（3 TU + 2 link）。
+
+**形状门**：三份既有语料（FrmEvents / PDImages / VBFlexGridDemo）本刀后**逐字节未变**
+（与 CI 现值同哈希）；本刀新增 2 行输入（`pd_clsarrparam.vbp` + `Mod1.bas`），待 CI 读数登记。
 
 
 
+
+
+
+
+### 56.21 四项 11-10 起 STATIC 红账清零（sa_access / uc_default_member / variant_slot_store / prop_write_value_slot）
+
+区间 `d9040222..b301ddfc` 逐条定位（不看数字，先问「哪一刀漏的、漏的是什么」）：
+
+| 检查 | 肇事刀（11-11） | 定位读数 | 性质 | 处置 |
+| --- | --- | --- | --- | --- |
+| `sa_access` A7 | `941a2afd` UDT 动态数组成员按实参秩发码（秩 2/3/N） | `941a2afd^` 的 `((const int32_t[])` 全 src/backend = 1；该刀起 = 2（多出 `cgen_util_classtype.cpp` 的 `udtDynMemberIndex`） | **真违反**：`VB6_SA_ND_ATN` 下标实参与最外层括号出现第二份拼法，C4002 的教训可在两条路上各自复发 | 归并回唯一权威：新增 `ndAtnSubscriptArg`（声明 `cgen_helpers.inc`，定义在 `cgen_util_classtype.cpp`），变量路（`cgen_expr_call_prelude.inc`）与 UDT 路都只调它；A7 计数回到 1 |
+| `uc_default_member` R4 | `bfdbb265` §42 两条红归因并修 —— U1 走既有实例出口 | `arg_emit.inc` 的 `vb6_UC_InstanceOf(` 0 处；设计槽那一格改为 `ucInstanceThisPtrExpr("vb6_cls_" + cIdent(ucParamCls) + "*", argVal)` | **判据过时**：形状被收进一枚出口（比原来更严，拼法只一处），但 R4 仍找 expr/ 里的字面 | 口径写清：R4 改钉「设计槽实参恰好 1 次调该出口且实参形状逐字如上」+「`cgen_util_classcall.cpp` 的 `ucInstanceThisPtrExpr` 体内仍拼 `vb6_UC_InstanceOf(`」（新增该文件的存在性检查；同文件另一处 ByRef 实参调用不计入本格） |
+| `variant_slot_store` R5d | 注释：`a0620eae`；新消费者：`58fd516e` | `cgen_expr_member_voidptr_com.inc` 4 → 6（多出的 2 处是解释注释）；`cgen_expr_call_builtin_argtype.inc` 3 处、其中 1 处是**生产判据** `callee.find("/* class var .")` | 一半判据噪声（注释引用尾注）、一半**真违反**（新文件把尾注文字当判据） | 注释按 §B164 先例改写为不点名的说法（6 → 4，判据不放宽）；真判据归并：新增 `cExprIsClassFieldRead`（与 `classFieldReadExpr` 同文件，钉 ` field */` / ` field variant */` / ` field voidptr */` 三种串尾），消费者只许调它，该文件回到 0 处 |
+| `prop_write_value_slot` R2 | `909a9e7b` pdResize 三小族 — ByRef 标量属性写 | `packLetValueArg(` 2 → 4；新增两处都在主人 `writeValArgForParamSlot` 体内（`byrefScalarSlot` 的地址那一发与解箱后补取址） | **判据随实现失真**：仍是主人自己答，没有站点绕过；钉「定义 1 + 主人调用 1」这个数会随主人内部排布误红 | 口径写清：改钉结构 —— 本文件每一处 `packLetValueArg(` 必须落在 `packLetValueArg` 或 `writeValArgForParamSlot` 的函数体内（花括号配平取 span），落到别处才算第二份答案 |
+
+**验证**：
+
+- 4 个脚本本机全绿（`check_sa_access` / `check_uc_default_member` / `check_variant_slot_store` / `check_prop_write_value_slot`）。
+- 构建：空闲 7.37 GB（< 8 GB ⇒ `CMAKE_BUILD_PARALLEL_LEVEL=1` 口径），`ninja -j1` 53 目标，`cl` 峰值 264 MB。
+- `-Category syntax`：**PASS=212 FAIL=0 SKIP=0**（与 `b4d756a8` 同数）。
+- 形状：9 份相关输入逐行同哈希 `emit-manifest.expected.txt` —— 3 份 bless 语料（`frmevents/FrmEvents.vbp`、`pd_modret/PDImages.bas`、`VBFlexGridDemo/VBFlexGridDemo.vbp`）+ 改动覆盖的 `b606_udtmem_nd/ModNd.bas`、`b608_value_member_paren/PDImages.bas`、`pd_udtchain/{PdChainTypes.bas,PdChainUse.bas}`、以及本刀刚登记的 `pd_clsarrparam/{Mod1.bas,pd_clsarrparam.vbp}`。**A7 重构与识别半合并都没有改一个字节的发码。**
+- **⚠ 上面这条「零字节」结论被全量形状门推翻（11-11 补记）**：那 9 份输入里没有一份用到**秩 >=4** 的 `VB6_SA_ND_ATN`，而 `ndAtnSubscriptArg` 收尾少拼了**收宏的那一枚 `)`**（旧串 `...}))` 的两枚里只留下收复合字面量外层的那一枚）。全量 `emit_manifest` 当场照出 `tests/test_arr_nd.bas` 哈希不同、字节数 60508 → 60475（差 33 = 该输入的 33 处秩 >=4 站点各少一枚括号）。CI run `43008472170`（head `918c3ca1`）的 shape oracle 与本地逐字同结论：**651/652 相同，唯一一条哈希不同就是 `tests/test_arr_nd.bas`**。这不是形状偏好，是真会编译不过（`VB6_SA_ND_ATN` 实参未闭合）。已把收尾改回 `"))"` 并在 helper 注释里写死「两枚右括号都在这里出」，`test_arr_nd.bas` 复算回到 `ecaee85a…` / 60508 逐字节同哈希；全量复跑只剩 4 行既存机器侧差（`guisample`×3 + `TeeChartChartDisplay`，见文件尾注）+ 本刀新夹具 2 行。
+- 同期 `b4d756a8` 的回归 run `43006254739`：compile #1 的 8 红 = 本刀这 4 项 + `manifest_coverage`（已随 2 行新输入登记转绿）+ 3 项既存旧红（`builtin_opt_defaults` / `legacy_slot_key_owners` / `iface_view_authority`，不在本刀范围）；vbp #4/#11 是 runner 上的 GUI 像素用例（`ucSegmentedControl`），与本刀无关。
+
+### 56.22 整编 #8/#9 读数对表 + C2224 Printer/Printers 数据属性族
+
+#### 56.22.1 两次整编读数（都跑完了，都仍红 —— 逐桶对表）
+
+两次 run 的 `headSha` 是 CI 自己造的 dev 合并提交，不是本仓 HEAD 直接对应，按被合并的 dev 尖端记：
+
+| run | head | 合并的 dev 尖端 | 总错误 | C2224 | C2197 | C2440 | C2198 | C2045 | C2374 | C2036 | 其余 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| #8 `42997011317` | `cce5aa95` | `52a7acf2` | 624 | 55 | 159 | 135 | 91 | 50 | 42 | 34 | 58 |
+| #9 `43001534143` | `2586f87c` | `be57943b` | 500 | 39 | 159 | 135 | 75 | 0 | 0 | 34 | 58 |
+
+对表结论（#8 → #9 共 −124，逐码可加）：
+
+- `C2045` 50 → 0、`C2374` 42 → 0：`be57943b`（For 方向拆分按层栈）与菜单控件数组 Index 后缀两刀全清。
+- `C2224` 55 → 39（−16）、`C2198` 91 → 75（−16）：`5e45d5c3` 的 `.hWnd` 16 条连带省下 16 条实参个数错。
+- 其余码逐字未动：`C2197` 159、`C2440` 135、`C2036` 34 是当前三大桶；这三桶在 #8/#9 之间没有本刀介入，符合预期。
+
+#9 的 C2224 分布（39 条，按文件×成员）：
+
+| 成员 | 条数 | 站点 |
+| --- | --- | --- |
+| `ImageFormats_PSP` 六个方法 | 22 | 8 `GetChannelDIBType` + 6 `GetChannelSize` + 2×3 `IsChannelOK`/`GetChannelType`/`GetChannelPtr` + 2 `FreeChannelContents` —— 即 `b4d756a8` 类数组形参那一族（已修，等下一次整编验收） |
+| `FormPrint .DeviceName` | 4 | 211（PDMsgBox 实参）+ 240（`Printers(i).DeviceName`，该 `AddItem` 在发码里有两份）+ 245（`ListIndexByString` 首参） |
+| `FormPrint .ScaleMode` | 2 | 422/423 的 `Printer.ScaleMode` |
+| `FormPrint .Copies` / `.PrintQuality` / `.Count` | 1 / 1 / 1 | 196 / 197 / 239 |
+| `Printing .DeviceName` / `.Port` | 1 / 1 | 159 / 160 |
+| `pdCommandBarMini .Visible` ×2 / `.Hide` ×1 | 3 | 控件成员桶（下一刀） |
+| `pdCommandBar .Visible` / `.Caption` / `.Name` | 3 | 控件成员桶（下一刀） |
+
+⇒ 本刀吃 9（Printer 六项 + Count），`b4d756a8` 吃 22，剩余 8 = `.ScaleMode` 2 + `pdCommandBar*` 6。
+
+#### 56.22.2 Printer/Printers 数据属性族（本刀）
+
+改前（#9 日志实证，`FormPrint.c(704)/(705)/(764)/(769)`、`Printing.c`）：
+
+- `Printers.Count` → `vb6_Printers_Collection().Count`：`vb6_Printers_Collection` 是**零参**函数，读 Count 时却把成员访问落在 `void*` 上。
+- `Printers(i).DeviceName` → `vb6_Printers_Collection(i).DeviceName`：同一句里两错 —— C2197「实参太多」+ C2224「`void*` 上取字段」。
+- `Printer.Copies = x` / `Printer.PrintQuality = x` → `vb6_Printer_Object().Copies = x`：`vb6_Printer_Object()` 是 DC 指针（`void*`），在 `void*` 上取字段。
+
+改后（本机探针 `tests/pd_printer_props` 逐形 + PD 两源文件复算）：
+
+```
+vb6_BSTR_Assign(&s, vb6_Printer_DeviceName());
+vb6_Printer_SetCopies((int32_t)(2));
+vb6_Printer_SetPrintQuality((int32_t)((-1)));
+i = vb6_ChkLong(vb6_Printers_Count());
+vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(i)).Port);
+```
+
+- RTL：`vb6rtl_builtin.h` 新增 `vb6_PrinterInfo{DeviceName,Port,Copies,PrintQuality}` 与 8 条出口；`vb6rtl_system.c` 实现（进程级共享空 BSTR + `Copies` 默认 1 / `PrintQuality` 默认 0）。
+- 读路径：`cgen_expr_member_form_builtin.inc` 的 Printer 块补 4 个成员，Printers 块补 `Count`；`cgen_expr_call_callee_ident.inc` 新增 Pattern M2 `Printers(i)` → `vb6_Printers_Item((int32_t)(...))`（返回**结构体值**，成员读就是普通字段读）。
+- 写路径：`cgen_assign_stmt_special.inc` 与 `cgen_setlet.cpp` 的 Printer 写分支补 `copies` / `printquality`。
+- **语义边界（必须写清）**：`vb6_Printers_Item` 交零值结构、`DeviceName`/`Port` 交空串 —— 本刀只把**发码形状**修到可编，不做 `EnumPrintersW` 真枚举。改前这两条路根本编不过（无运行期语义可言），改后至少不崩、不误画；真枚举留给「Printer 运行期语义」独立账。
+- **同文件另一格不在本刀**：`File_PrintXP.frm` 的 `Dim srcPrinter As Printer` 走的是后期绑定 `vb6_ComGetStringProp(p, L"DeviceName")`，本身可编，不动。
+
+**验证**：
+
+- 构建：空闲 7.75 GB（< 8 GB ⇒ `-j1`），`ninja -j1` 8 目标通过。
+- `-Category syntax`：**PASS=213 FAIL=0 SKIP=0**（新增 `pd_printer_data_props` 一例：正向 7 条 / 反向 5 条）。
+- 4 个 STATIC 脚本仍全绿。
+- 端到端编译：`scripts/c3_build.ps1 -Vbp tests/pd_printer_props/pd_printer_props.vbp` 走 MSVC 成功。
+- PD 真源复算：`Printing.bas` 单文件发码 159/160 已是 `vb6_Printers_Item(...).DeviceName/.Port`；`File_PrintXP.frm` 单文件发码 196/197/211/239/240/245 六处全部转新形状，坏形状 0。
+- 形状门（全量 `emit_manifest`）：存量 652 行里 648 行逐字节同哈希，只剩 4 行既存机器侧差（`guisample`×3 + `TeeChartChartDisplay`，文件尾注在册）；另 2 行是本刀新夹具（`tests/pd_printer_props/{Mod1.bas,pd_printer_props.vbp}`）。
+- CI run `43015301625`（head `0501d424`）：shape oracle **期望 652 / 实得 654 / 相同 652 / 哈希不同 0 / 缺席 0 / 多出 2** —— 2 行全是新输入；已按老规矩从 `github/ci/emit-manifest`（head=0501d424）`-Bless` 登记为 654 行，`check_manifest_coverage` K1..K3 绿。
+- **K13 追加红（本刀自造，已收口）**：compile #1 的 `[STATIC] owned_temp_keeps` 点名 `vb6_Printer_DeviceName` / `vb6_Printer_Port` —— 推导把这两枚判成 owned BSTR（mint），而发码侧 `kOwned` 名单里没有。归因不是判据错：这两枚**本来就是出口**，但实现交的是进程级共享空串（alias），真按 owned 回收会放掉全局那枚 ⇒ 堆损坏。收口两头一起改：① RTL 两枚改为每次 `SysAllocString(L"")`（结构体 `vb6_PrinterInfo` 的两个字段仍用共享空串 —— 它们只被当字段读、发码侧不当 mint 回收）；② `src/common/owned_temp_keeps.hpp` 的 `kOwned` 名单按字母序补这两行。哨兵双向对账转绿（owned 120），夹具复算哈希 `3453f41c…` / `8d742115…` 逐字节未变（回收刀不提名这两枚），已登记的两行不用重登。
+- 该 run 其余红：compile #1 剩 `legacy_slot_key_owners` / `iface_view_authority`（既存旧红，不在本刀范围）；vbp #4/#11 = runner 的 GUI 像素用例；shape oracle 的红只到那 2 行新输入。
+
+### 56.23 C2224 `UserControl.Parent` 扩展属性族（6 条，pdCommandBar\*）
+
+#### 56.23.1 病灶
+
+`#9` 那 6 条全在 `.ctl` 的**限定写法** `UserControl.Parent.<成员>`：
+
+| 站点 | 成员 |
+| --- | --- |
+| `pdCommandBarMini.ctl:220` | `.Visible`（读）/ `.Hide`（无括号调用） |
+| `pdCommandBarMini.ctl:256` | `.Visible`（写） |
+| `pdCommandBar.ctl:760` | `.Visible`（写） |
+| `pdCommandBar.ctl:1056` | `.Name`（`Replace$` 首参） |
+| `pdCommandBar.ctl:1067` | `.Caption`（`Trim$` 实参） |
+
+改前这一形落通用路径：先把内层拼成中间符号 `vb6_UserControl_Parent`，写出前由
+`cgen_base.cpp` 的 `fixupUserControlParentChain` 把**基础符号**改成 `vb6_UC_ParentObject()`，
+但后面那截 `.成员` 原样留着 ⇒
+
+```
+vb6_UC_ParentObject().Caption      // C2224: void* 上取字段
+vb6_UC_ParentObject().Visible = 0; // C2224（写侧同一句）
+vb6_UC_ParentObject().Hide();      // C2063/C2224 一族
+```
+
+`vb6_UC_ParentObject()` 的返回类型是 `void*`（顶层窗体对象的运行期码头），根本不存在结构体字段。
+
+#### 56.23.2 改后（逐站点形状）
+
+| 改前 | 改后 | 落点 |
+| --- | --- | --- |
+| `vb6_UC_ParentObject().Caption` / `.Name` | `vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Caption"/L"Name")` | `cgen_expr_member_precheck.inc`（限定 Form 的 Parent 分支，立 COM 标记） |
+| `vb6_UC_ParentObject().Visible`（读） | `vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"Visible")` | 同上 |
+| `vb6_UC_ParentObject().Visible = 0;` | `vb6_ComSetProp(vb6_UC_ParentObject(), L"Visible", vb6_ComPackBool(0));` | `cgen_assign_host_pseudo.inc`（外层条件放宽到 `MemberAccessExpr` 接收者） |
+| `vb6_UC_ParentObject().Hide();` | `vb6_ComCall(vb6_UC_ParentObject(), L"Hide", NULL, 0);` | `cgen_call.cpp`（paren-less 调用，同时认裸 `Parent.X` 与限定形） |
+
+口径：`Parent` 的静态类型是 **Object（晚绑定）**，真值是**顶层窗体**（不是"直接父容器"，那是 `Container`），
+成员按名由宿主模型答 —— 正是 RTL `vb6_UC_ParentObject()` 交的那个对象，所以走 IDispatch 派发而不是字段访问。
+
+#### 56.23.3 为什么必须收窄（A/B 抓到的语义回退）
+
+第一版把分支放在 `hostPseudoChannel` 之前、且不区分成员，A/B（同源码、基线二进制 vs 新二进制）当场照出 7 行回退：
+
+```
+-    hWndForm = vb6_ChkLong(vb6_UC_ParentHwnd());
++    hWndForm = vb6_ChkLong(vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"hWnd"));
+-    vb6_UC_ParentMove(me->m_SavedLeft, ...);
++    vb6_ComVarFree((void*)vb6_ComCall((void*)vb6_UC_ParentObject(), L"Move", ...));
+-    hIcon = ... vb6_UC_ParentIconHandle();
++    hIcon = ... vb6_ComGetIntProp(vb6_ComGetObjectProp((void*)vb6_UC_ParentObject(), L"Icon"), L"Handle");
+-    vb6_UserControl_BackColor = vb6_Ambient_BackColor;
++    vb6_UserControl_BackColor = vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"BackColor");
+```
+
+`hWnd` / `Icon` / `Move` / `BackColor` 四档在 `fixupUserControlParentChain` 里早有**编译期直答**的专用通道
+（`vb6_UC_ParentHwnd` / `vb6_UC_ParentIconHandle` / `vb6_UC_ParentMove` / `vb6_Ambient_BackColor`）：
+一处不经过 IDispatch、父窗体也未必是 IDispatch（`Move` 改派成 COM 调用可能静默空转，属真语义回退）。
+因此两处都加了成员白名单：读侧 `parentDedicatedHp`（hwnd/icon/move/backcolor 放行回原路径），
+调用侧只对 `Move` 让路。收窄后重跑 A/B：
+
+| 输入 | 逐行差异 |
+| --- | --- |
+| `tests/czUI-main/czFormDemo.vbp` | **0 行**（原 5 行回退全收） |
+| `tests/ucTreeView/Proyecto1.vbp` | **0 行**（原 1 行） |
+| `tests/ve_units/Units.vbp` | **0 行**（原 1 行） |
+| `tests/pd_parentctl/PdParentCtl.vbp` | 5 行，全是本刀要的形状（见 56.23.2） |
+
+#### 56.23.4 夹具与钉子
+
+- `tests/pd_parentctl/ParentCtl.ctl` 新增 `ParentExtenderProbe`：`.Caption` / `.Name` 读、`.Visible` 读+写、`.Hide`（无括号）。
+- `tests/run_tests.ps1` 新增 `Test-CodegenNote "pd_usercontrol_parent_extender"`：正向 5 条（两枚 ComGetStringProp / ComGetIntProp / ComSetProp+ComPackBool(0) / ComCall），
+  反向 4 条（`vb6_UC_ParentObject().Caption` / `.Name` / `.Visible` / `.Hide` 一律不得出现）。
+
+**验证**：
+
+- `-Category syntax`：**PASS=214 FAIL=0 SKIP=0**（213 + 本刀 1 例）。
+- 6 个 STATIC 本机全绿（含 11-10 那 4 项 + `owned_temp_keeps` + `manifest_coverage` 654 行对表）。
+- 形状门：本刀只动 **1 行既有输入** `tests/pd_parentctl/PdParentCtl.vbp`（字节 7194 → 8215；本机归一哈希
+  `sha256=4d467702…` / `ascii256=0a52baf2…`，CI 值为准）。`PdParentTypo.vbp` 逐字节未变
+  （`194269cf…` / 7046）—— 负控没被放宽。photodemon 整工程不在形状门清单内（走整编），
+  本刀在它身上只改上面列的 6 个站点。
+
+### 56.24 C2224 `Printer.ScaleMode`（2 条，File_PrintXP.frm:422/423）
+
+改前：`pWidth = Me.scaleX(Printer.Width, Printer.ScaleMode, vbInches)` 的源量纲那一格落通用 COM 绑定
+⇒ `vb6_Printer_Object().ScaleMode`（`vb6_Printer_Object()` 是 DC 指针 `void*`，取字段 = C2224）。
+
+改后：
+
+```
+pWidth  = vb6_ScaleUnitX(vb6_Printer_Width(),  vb6_Printer_ScaleMode(), 5);
+pHeight = vb6_ScaleUnitY(vb6_Printer_Height(), vb6_Printer_ScaleMode(), 5);
+```
+
+- `cgen_expr_member_form_builtin.inc` 的 Printer 读块补一格 `scalemode → vb6_Printer_ScaleMode()`。
+- RTL：`vb6rtl_builtin.h` 声明 + `vb6rtl_system.c` 实现 `return 1;` —— **口径**：`vb6_Printer_Width/Height`
+  本来就一律按 twips 答（P20-44），vbTwips 正是 VB6 默认 `ScaleMode = 1`，两者必须同口径；
+  全语料（含 photodemon）没有 `Printer.ScaleMode =` 写入点，故只答常量、不建可写槽。
+  将来若出现写入点，写侧会落回 C2224（可见错误，不会静默答错）。
+- 夹具：`tests/pd_printer_props/Mod1.bas` 补一行 `i = Printer.ScaleMode`；
+  `Test-CodegenNote "pd_printer_data_props"` 正向追加 `i = vb6_ChkLong(vb6_Printer_ScaleMode());`，
+  反向追加 `vb6_Printer_Object().ScaleMode`。
+
+**验证**：`-Category syntax` **PASS=214 FAIL=0 SKIP=0**；`File_PrintXP.frm` 单文件发码 422/423 两格
+已是上表形状；`pd_printer_props` 两个输入复算 `7632566b…` / 1901 与 `8293417e…` / 1814（待 CI 读数 bless）。
+
+### 56.25 C2197 第一刀：`Mod.Proc(...)` 不许借本模块同名过程的形参表（9 条）
+
+#### 56.25.1 #9 日志的 159 行 → 72 唯一站点（按被调名分族）
+
+| 族 | 行数 | 唯一站点 | 被调形状（错误原型） | 定位 |
+|---|---:|---:|---|---|
+| `pdStringStack.GetString` | 68 | 17 | `BSTR (vb6_cls_pdStringStack*, int32_t)` | FormMetadata.c ×16、pdSpriteSheet.c:264 |
+| `*.UpdateAgainstCurrentTheme` | 42 | 17 | `void (void)`（14 个 Options/layerpanel/工具栏窗体 + FormMain） | FormOptions.c:568..618、Interface.c:2536/2542/2544、toolbar_Layers.c:1347..1356、PDMain.c:778、FormHotkeys.c:1532、UserControls.c:1677 |
+| `Tools_*.NotifyMouse*` | 22 | 7 | 4 参（`int16_t,int32_t,float,float` 等） | pdCanvas.c:1667..2102 |
+| `Plugin_libdeflate_Get*CompressionLevel` | 9 | 9 | `int32_t (void)` | **Compression.c:575..650（本刀）** |
+| `Plugin_*_GetVersion` | 7 | 7 | `BSTR (void)` | PluginManager.c:647..680 |
+| `Printers.Collection` | 4 | 2 | `void *(void)` | FormPrint.c:769/773、Printing.c:419/420 |
+| `pdStream.SetPosition` | 4 | 2 | `int16_t (cls*, int32_t, int32_t, int)` | pdMBM.c:1194/2122 |
+| `pdInpaint.SetSamplingCenter` | 2 | 1 | `void (cls*, int32_t, int32_t)` | SelectionFilters.c:1250 |
+| `pdSelection.LockIn` | 1 | 1 | `void (cls*)` | pdSelection.c:574 |
+
+（计数口径：日志逐行；同一条错误在日志里重复出现（cl 对同一 TU 多次报）算多行、站点按 `file:line` 去重。
+`GetString` 68 行只落在 17 个站点上就是这个原因。）
+
+#### 56.25.2 本刀病灶（libdeflate 9 条）
+
+Compression.bas 自己有一枚 **1 参**的 `Public Function GetDefaultCompressionLevel(ByVal cmpFormat As PD_Compr. As Long)`
+（同理 `GetMinCompressionLevel` / `GetMaxCompressionLevel`），而 `Plugin_libdeflate.*` 那三枚是 **0 参**：
+
+```
+Compression.bas:348  GetDefaultCompressionLevel = Plugin_libdeflate.GetDefaultCompressionLevel()
+```
+
+`cgen_expr_call_callee_params.inc` 的 MemberAccessExpr 兜底段在限定的 `Mod.Proc` 上仍然只做
+`lookupModule(maExpr.memberName)`（裸名）—— 本模块那枚同名过程先被命中，缺省/必填补齐按它的
+1 枚形参照补 ⇒ `vb6_Plugin_libdeflate_GetDefaultCompressionLevel(0)`，而原型是 `(void)` ⇒ C2197。
+
+#### 56.25.3 改法
+
+在兜底段 `funcSym` 解析完之后、取形参表之前加一道**弃表**（不是改 callee 名字 —— 名字本来就由限定符算对了）：
+
+```cpp
+if (funcSym && !vbaQualifiedCallee216
+    && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
+    const std::string qualLowerQ = Symbol::toLower(...object.name);
+    if (!hostPseudoIsObject(qualLowerQ)
+        && qualLowerQ != Symbol::toLower(moduleName_)) {
+        if (!funcSym->isExternal) {
+            funcSym = nullptr;                       // 本模块同名过程
+        } else if (!funcSym->sourceModule.empty()
+                   && Symbol::toLower(funcSym->sourceModule) != qualLowerQ
+                   && !knownLocalVars_.count(qualLowerQ)
+                   && !knownClassVars_.count(qualLowerQ)
+                   && !procObjectFormals_.count(qualLowerQ)) {
+            funcSym = nullptr;                       // 别的模块注入副本 (§56.26.1)
+        }
+    }
+}
+```
+
+判据口径：
+- **只看本地符号**（`!isExternal`）。跨模块注入的外部副本有可能是本模块被窗体限定那条路取来的
+  （`<form>_<proc>`），`sourceModule` 会是空或别名 —— 一刀按 `sourceModule` 判掉会把 pd_meform
+  那枚的 ByRef 类实例实参 argtmp 转换整段丢掉（实测 `vb6_MeForm_ApplySepiaEffect(...)` 缺
+  `&vb6_argtmp_...` 与 `vb6_UC_InstanceOf` 两行，`pd_me_own_proc` 直接 FAIL）。
+- 限定符就是本模块时（`Mod.Proc` 且 `Mod` = 当前模块）不弃 —— 那就是本模块自己的过程。
+- `VBA.X` 那条路不碰（`vbaQualifiedCallee216`）。
+- **宿主伪对象例外**（`hostPseudoIsObject`：UserControl / Ambient / Extender / PropertyPage / Parent）：
+  `vb6_<伪对象>_<成员>` 的 C 签名就是本类同名成员的签名（M22 分支），这张表是唯一来源。
+  首版漏了这条，CI 形状门立刻抓到两张既有输入改写（ucSegmentedControl 的 `Extender.Move`
+  少发 3 枚 `_has_`、VBFlexGrid 的 `Extender.Drag/ZOrder` 少发 `_has_Action`），
+  加上例外后两者恢复原形状（见 §56.26.4）。
+
+#### 56.25.4 夹具与钉子
+
+- 新增 `tests/pd_modqual/ModA.bas`：0 参 `Public Function GetLevel() As Long`。
+- 新增 `tests/pd_modqual/ModB.bas`：同名但 **1 参** `GetLevel(ByVal fmt As Long)`，另有
+  `Probe()` 写 `Probe = ModA.GetLevel()`。
+- `tests/run_tests.ps1` 新增 `Test-CodegenNote "pd_modqual_no_borrow"`：
+  正向 `"int32_t vb6_ModA_GetLevel(void);"` 与 `"vb6_ret_Probe = vb6_ModA_GetLevel();"`，
+  反向 `"vb6_ModA_GetLevel(0)"`。
+
+#### 56.25.5 验证读数
+
+- 修前（本机复现）：`vb6_ret_GetDefaultCompressionLevel = vb6_Plugin_libdeflate_GetDefaultCompressionLevel(0);`
+  修后：`... = vb6_Plugin_libdeflate_GetDefaultCompressionLevel();`（`Compression.bas` 单文件发码）。
+- 新夹具：`Probe` 发成 `vb6_ret_Probe = vb6_ModA_GetLevel();`。
+- `-Category syntax`：**PASS=215 FAIL=0 SKIP=0**（214 + 本刀 1 例）。
+- 形状门：本刀不改任何既有输入（`tests/pd_modqual/*.bas` 是**新输入**，CI 侧按新清单行登记）；
+  photodemon 整工程不在形状门清单内，待 CI 整编 run 出 C2197 剩余读数。
+
+#### 56.25.6 余下族的工作口径（本刀不碰）
+
+- `pdStringStack.GetString`(68) / `UpdateAgainstCurrentTheme`(42) / `NotifyMouse*`(22) 三族都**不是**
+  “借本模块同名”：前三者的借用源是**另一个模块/类的同名成员**（不同 `sourceModule`），
+  或干脆是接收者重复前置。它们各自要单独复现，见 §56.26 起。
+
+### 56.26 C2197 第二、三刀：跨模块同名成员借表（22 条）+ 语句级括号首参（6 条）
+
+#### 56.26.1 第二刀：限定的 `Mod.Proc` 借到**别的模块**注入副本（NotifyMouse* 22 条）
+
+**病灶**：跨模块注入按 `storageKey`（裸名）去重、**先注册者留**，所以消费方符号表里同一裸名
+只有一份外部符号。`pdCanvas.ctl` 里 `Tools_Move` / `Tools_Zoom` / `Tools_Measure` 等都有
+`NotifyMouse*`，4 参那家借到 6 参那家的形参表 ⇒ 补两枚缺省 ⇒ C2197（`pdCanvas.c:1667..2102`）。
+修前本机复现（`.temp\c2197x`，三模块）：
+
+```
+vb6_ToolsA_NotifyMouseMove(down, sh, x, y, 0.0, 0.0);   // 原型 4 参
+```
+
+**改法**（`cgen_expr_call_callee_params.inc`，紧跟 §56.25 那道守卫之后）：外部符号的
+`sourceModule` 与限定符不符即弃表。限定符是**变量/形参**时不适用（变量名与类名本就不同源，
+那条路是 `obj.Member(...)` 的 Optional 补齐，弃了会变 C2198）：
+
+```cpp
+if (funcSym && funcSym->isExternal && !funcSym->sourceModule.empty()
+    && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
+    const std::string qualLowerX = Symbol::toLower(...object.name);
+    const bool qualIsVarX = knownLocalVars_.count(qualLowerX) != 0
+        || knownClassVars_.count(qualLowerX) != 0
+        || procObjectFormals_.count(qualLowerX) != 0;
+    if (!qualIsVarX && qualLowerX != Symbol::toLower(moduleName_)
+        && Symbol::toLower(funcSym->sourceModule) != qualLowerX) {
+        funcSym = nullptr;
+    }
+}
+```
+
+**夹具/钉子**：`tests/pd_modqual/ToolsA.bas`（4 参）、`ToolsB.bas`（6 参，注册在前）、
+`ModB.bas` 新增 `ProbeMouse` 调 `ToolsA.NotifyMouseMove down, sh, x, y`；
+`Test-CodegenNote "pd_modqual_no_borrow_crossmod"` 正向 `vb6_ToolsA_NotifyMouseMove(down, sh, x, y);`，
+反向 `...x, y, 0.0, 0.0)`。修后本机：
+
+```
+vb6_ToolsA_NotifyMouseMove(down, sh, x, y);
+```
+
+#### 56.26.2 第三刀：语句级无括号调用 + 括号分组首参 + 后续实参（6 条）
+
+**病灶**：`m_Stream.SetPosition (.a + .b), FILE_BEGIN`（pdMBM.cls:781）与
+`cInpaint.SetSamplingCenter (x), (y)`（SelectionFilters.bas:732）。表达式层把 `M (…)`
+当“带 1 实参的调用”，语句层再把 `, FILE_BEGIN` 挂到**调用结果**上。修前本机：
+
+```
+vb6_pdStream_SetPosition(me->m_Stream, (…) , 0, 0, _own_11, 1);   // 原型要我 + 3 形参
+```
+
+`parser_stmt_assign.cpp` 的无 binop 折叠格（C3-SENTINEL(np-call-firstarg-paren-binop)）
+此前只认**裸标识符** callee（`fHSVtoRGB (…), 1, …`），`obj.Member` 落到“调用结果再调用”。
+本刀把该格放宽到 `MemberAccessExpr`，收窄条件不动（恰 1 枚实参、首参不可寻址 ——
+`f (v), x` 的括号是“按值传临时”，折叠会改成按引用，语义不同）。
+`scripts/check_np_call_firstarg_binop.ps1` 的头部口径同步写明（哨兵断言未放宽，仍 PASS）。
+
+**夹具/钉子**：`tests/pd_modqual/ProbeCls.cls`（`Me.SetPos (m_X + m_Y), 1`，第二枚 Optional）；
+`Test-CodegenNote "pd_modqual_parenless_paren_arg"` 正向
+`vb6_ProbeCls_SetPos(me, (me->m_X + me->m_Y), 1, 1);`，反向 `…, 0, 0, _own_`。
+
+**修后本机读数**：
+- `pdMBM.cls`：原 6 实参那两处变 `vb6_pdStream_SetPosition(me->m_Stream, (… ), FILE_BEGIN, 1);`。
+- `SelectionFilters.bas`：`vb6_pdInpaint_SetSamplingCenter(cInpaint, (x 差值), (y 差值));`。
+
+#### 56.26.3 验证读数
+
+- `-Category syntax`：**PASS=217 FAIL=0 SKIP=0**（215 + 本刀新增 2 例）。
+- `check_np_call_firstarg_binop.ps1`：PASS。
+- 形状门：本刀只新增输入（`toolsA/ToolsB/ProbeCls`），无既有输入改写；新增行按“新输入”登记。
+
+#### 56.26.4 A/B：首版守卫误伤（形状门两行）与收窄过程
+
+§56.25 首版只拦“本地同名过程”，CI 形状门报 **相同 652 / 哈希不同 2**：
+
+| 输入 | 触发点 | 修前（期望形状） | 首版误发 |
+|---|---|---|---|
+| `tests/ucSegmentedControl/SegmentedControl.vbp` | ucSegmentedControl.ctl `Extender.Move` | `vb6_Extender_Move(Left, Top, Width, Height, _has_Top, _has_Width, _has_Height);` | `vb6_Extender_Move((*Left), (*Top), (*Width), (*Height));` |
+| `tests/VBFlexGridDemo/VBFlexGridDemo.vbp` | VBFlexGrid.ctl `Extender.Drag` / `Extender.ZOrder` | `vb6_Extender_Drag(Action, _has_Action);` | `vb6_Extender_Drag((*Action));` |
+
+RTL 原型（`src/rtl/core/vb6rtl/vb6rtl_userctl.h:262/265/270`）明确收 `_has_` 标志，
+所以**旧形状是对的**：宿主伪对象那几枚 `vb6_<伪对象>_<成员>` 的签名设计上就是复用本类同名成员
+（`cgen_expr_member_obj_dispatch.inc` 的 M22 分支 + Fix 110e 注释）。收窄判据加
+`hostPseudoIsObject(qualLowerQ)` 例外后，两张输入逐字恢复原发码，形状门只剩“新输入 2 行”。
+
+复现口径（不重建两遍编译器）：临时把守卫改成 `std::getenv("C3_2197_OFF") == nullptr` 开关，
+同一个 exe 加/不加环境变量各发一次再 diff；确认后把开关与 `[DBG2197]` 打印全部删掉。
+`[DBG2197]` 顺带把误伤点定位到 `mod=ucSegmentedControl qual=Extender member=Move` 与
+`mod=VBFlexGrid qual=Extender member=Drag/ZOrder`。

@@ -310,6 +310,14 @@ void CCodeGen::visit(FunctionDecl& node) {
             // Fix 055: 注册UDT数组元素C类型
             std::string udtCType = resolveArrayUdtElemCType(p->asType.get());
             if (!udtCType.empty()) arrayUdtElemTypes_[pLower] = udtCType;
+            // Fix 192 补口: 类数组**形参** (`ByRef srcChannels() As pdPSPChannel`) 此前只进
+            // knownArrays_ / arrayElemTypes_, 没进 arrayClassElemTypes_ ⇒ `srcChannels(i).Method`
+            // 的接收者推断不出类, 通用成员访问发成 `VB6_SA_AT(void*, (*srcChannels), i).Method`
+            // ⇒ C2224 (void* 取成员)。与 cgen_decl_var.cpp:99 的局部/模块数组登记路对称。
+            {
+                std::string cls = resolveArrayClassElemType(p->asType.get());
+                if (!cls.empty()) arrayClassElemTypes_[pLower] = cls;
+            }
             // 账 #305 §B181 (第七十一刀): 形参这一档以前只进上面那几张表, **没进字节数组名单**
             // (knownByteArrayVars_ 的写者只有模块级两条 + 局部两条声明路) ⇒
             // `StrPtr(b)` / `StrConv(b, …)` 里 b 是 `ByRef b() As Byte` 时按裸名查不到,

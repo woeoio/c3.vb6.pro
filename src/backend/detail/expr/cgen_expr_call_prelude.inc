@@ -370,16 +370,12 @@
             for (auto& arg : node.positional) {
                 indices.push_back(emitIndexAsLong(*arg));
             }
-            std::string idxList;
-            for (size_t d = 0; d < indices.size(); d++) {
-                if (d) idxList += ", ";
-                idxList += "(int32_t)(" + indices[d] + ")";
-            }
             lastExpr_ = "VB6_SA_ND_ATN(" + elemCType + ", (vb6_SafeArrayND*)" + arrName +
                         ", " + std::to_string(indices.size()) +
-                        ", ((const int32_t[]){" + idxList + "}))";
-            // 最外层那对括号不是装饰: 预处理器按顶层逗号切宏实参, `{a, b, c}` 里的花括号
-            // 挡不住它 —— 少了这对括号就是 cl C4002 "VB6_SA_ND_ATN 参数过多"(实测 P4.bas)。
+                        ndAtnSubscriptArg(indices);
+            // 下标实参 (含复合字面量外层括号与 VB6_SA_ND_ATN( 的收括号) 只在
+            // ndAtnSubscriptArg 里拼一次: 预处理器按顶层逗号切宏实参, `{a, b, c}` 里的花括号
+            // 挡不住它 —— 少了外层括号就是 cl C4002 "VB6_SA_ND_ATN 参数过多"(实测 P4.bas)。
         }
         return;
     }

@@ -12697,6 +12697,31 @@ if ($Category -in @("all", "syntax")) {
         "vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);",
         "vb6_argtmp_vb6_cls_pdFxPreviewCtl_0 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);") @(
         "vb6_ComPackObject(pdFxPreview)", 'L"ApplySepiaEffect"), NULL')
+    # C2197 主族 (整编 68 条, Compression.bas:348 `Plugin_libdeflate.GetDefaultCompressionLevel()`):
+    # `Mod.Proc(...)` 的形参表**不许借本模块的同名过程** —— 限定符不是本模块时按裸名
+    # lookupModule 会先命中本模块那枚同名符号, 缺省/必填补齐照它的形参个数补, 于是实参
+    # 比真正的被调方多一枚 ⇒ MSVC C2197。夹具: ModB 有一枚 1 参 `GetLevel`, ModA 那枚 0 参,
+    # `ModA.GetLevel()` 必须发成 0 实参。正面钉正确调用, 反面钉多补的 `(0)`。
+    Test-CodegenNote "pd_modqual_no_borrow" @(
+        "$Tests\pd_modqual\ModA.bas", "$Tests\pd_modqual\ModB.bas") @(
+        "int32_t vb6_ModA_GetLevel(void);",
+        "vb6_ret_Probe = vb6_ModA_GetLevel();") @(
+        "vb6_ModA_GetLevel(0)")
+    # C2197 同一族的另一半（整编 22 条, pdCanvas.c:1667..2102 Tools_*.NotifyMouse*）:
+    # 限定的 `Mod.Proc` 借到的外部副本来自**另一个模块**（跨模块注入按裸名去重, 先注册者留）,
+    # 4 参那家按 6 参那家的表补两枚缺省 ⇒ C2197。夹具里 ToolsB 注册在前且 6 参。
+    Test-CodegenNote "pd_modqual_no_borrow_crossmod" @(
+        "$Tests\pd_modqual\ToolsB.bas", "$Tests\pd_modqual\ToolsA.bas",
+        "$Tests\pd_modqual\ModA.bas", "$Tests\pd_modqual\ModB.bas") @(
+        "vb6_ToolsA_NotifyMouseMove(down, sh, x, y);") @(
+        "vb6_ToolsA_NotifyMouseMove(down, sh, x, y, 0.0, 0.0)")
+    # C2197 第三族（整编 6 条, pdMBM.c:1194/2122 + SelectionFilters.c:1250）:
+    # 语句级无括号调用, 首参是括号分组且后面还有实参 —— `obj.M (a + b), c`。
+    # 修前 `, c` 被挂到**调用结果**上（发 `_own_1, 1` 两枚多余实参）⇒ C2197。
+    Test-CodegenNote "pd_modqual_parenless_paren_arg" @(
+        "$Tests\pd_modqual\ProbeCls.cls") @(
+        "vb6_ProbeCls_SetPos(me, (me->m_X + me->m_Y), 1, 1);") @(
+        "vb6_ProbeCls_SetPos(me, (me->m_X + me->m_Y), 0, 0, _own_")
     # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
     # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
     # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`
@@ -12837,6 +12862,36 @@ if ($Category -in @("all", "syntax")) {
         "vb6_label_SkipPixel_d2_d2:;",
         "goto vb6_label_SkipPixel_d1_d2;",
         "vb6_label_NextPixel_d2:;")
+    # C2224 "左侧必须具有结构/联合类型" 的**类数组形参**一族 (PhotoDemon 整编 22 条,
+    # 全在 ImageFormats_PSP.c): `ByRef srcChannels() As pdPSPChannel` 这类形参此前只登记
+    # knownArrays_ / arrayElemTypes_, 没登记 arrayClassElemTypes_ ⇒ `srcChannels(i).Method`
+    # 推断不出类, 通用成员访问发成 `VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK`
+    # (void* 取成员). 修后按类方法调用发, 接收者强转 void* 入参。
+    # 反向钉: 同一位置上裸 `.IsChannelOK` 不许再出现; 顺带钉住 _vcmp_ 不再包 (类型已知)。
+    Test-CodegenNote "class_array_param_member" @("$Tests\pd_clsarrparam\pd_clsarrparam.vbp") @(
+        "vb6_PdChannel_IsChannelOK((void*)VB6_SA_AT(void*, (*srcChannels), i))",
+        "vb6_PdChannel_GetChannelDIBType((void*)VB6_SA_AT(void*, (*srcChannels), i))") @(
+        "VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK")
+    # C2224 Printer/Printers 数据属性族: .DeviceName/.Port/.Copies/.PrintQuality 是
+    # **数据属性**。修前落通用 COM 绑定 ⇒ `vb6_Printer_Object().DeviceName` (void* 取字段);
+    # `Printers(i)` 落索引路径 ⇒ `vb6_Printers_Collection(i).DeviceName` (0 参函数塞实参
+    # + void* 取字段)。修后默认打印机走具名存取器, 集合元素按 vb6_PrinterInfo 结构体值
+    # 返回 (外层 .DeviceName 就是普通字段读)。反向钉住这两种坏形状不许复活。
+    Test-CodegenNote "pd_printer_data_props" @("$Tests\pd_printer_props\pd_printer_props.vbp") @(
+        "vb6_BSTR_Assign(&s, vb6_Printer_DeviceName());",
+        "vb6_BSTR_Assign(&s, vb6_Printer_Port());",
+        "vb6_Printer_SetCopies((int32_t)(2));",
+        "vb6_Printer_SetPrintQuality((int32_t)((-1)));",
+        "i = vb6_ChkLong(vb6_Printers_Count());",
+        "vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(0)).DeviceName);",
+        "vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(i)).Port);",
+        "i = vb6_ChkLong(vb6_Printer_ScaleMode());") @(
+        "vb6_Printer_Object().DeviceName",
+        "vb6_Printer_Object().ScaleMode",
+        "vb6_Printer_Object().Copies",
+        "vb6_Printer_Object().PrintQuality",
+        "vb6_Printers_Collection(0)",
+        "vb6_Printers_Collection(i)")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
@@ -12844,6 +12899,18 @@ if ($Category -in @("all", "syntax")) {
     Test-CodegenNote "pd_parent_controls_ctl" @("$Tests\pd_parentctl\PdParentCtl.vbp") @(
         "vb6_ForEach_Init(vb6_UserControl_ParentControls)",
         "vb6_UC_ParentObject()") @("VB3001", "vb6_Parent_Controls")
+    # 限定写法 `UserControl.Parent.<成员>`: 与裸 `Parent.<成员>` 同一口径, 由宿主模型按名答。
+    # 修前这一形落到通用路径, 把成员挂在 void* 上 (C2224; 整编 pdCommandBar*.c 6 条)。
+    Test-CodegenNote "pd_usercontrol_parent_extender" @("$Tests\pd_parentctl\PdParentCtl.vbp") @(
+        'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Caption")',
+        'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Name")',
+        'vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"Visible")',
+        'vb6_ComSetProp(vb6_UC_ParentObject(), L"Visible", vb6_ComPackBool(0))',
+        'vb6_ComCall(vb6_UC_ParentObject(), L"Hide", NULL, 0)') @(
+        "vb6_UC_ParentObject().Caption",
+        "vb6_UC_ParentObject().Name",
+        "vb6_UC_ParentObject().Visible",
+        "vb6_UC_ParentObject().Hide")
     # 负控: 只放行 `Parent` 这一枚。`Paren` 拼错必须照旧报 VB3001 (精确匹配, 不做前缀放宽)。
     Test-CodegenNote "pd_parent_typo_still_reported" @("$Tests\pd_parentctl\PdParentTypo.vbp") @(
         "未声明的标识符: 'Paren'") @("vb6_UC_ParentObject()")

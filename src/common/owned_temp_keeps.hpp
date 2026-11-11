@@ -263,6 +263,8 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Oct",
         "vb6_PA_GetBSTR",
         "vb6_Partition",
+        "vb6_Printer_DeviceName",
+        "vb6_Printer_Port",
         "vb6_Replace",
         "vb6_Right",
         "vb6_RightB",

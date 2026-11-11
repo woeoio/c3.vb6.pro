@@ -20,10 +20,29 @@ void CCodeGen::visit(CallStmt& node) {
         // (带实参的形态走 cgen_expr_call_callee_member.inc 的 IndexOrCallExpr 分支。)
         if (node.callee->kind == ASTNodeKind::MemberAccessExpr && isDesignerModule_) {
             auto& maParCs = static_cast<MemberAccessExpr&>(*node.callee);
+            // 两种写法同一口径：裸 `Parent.<方法>` 与限定 `UserControl.Parent.<方法>`
+            // （pdCommandBarMini.ctl:220 `UserControl.Parent.Hide` 走的是后者）。
+            // 例外 `Move`：限定写法在 cgen_base.cpp 的 fixupUserControlParentChain 里
+            // 已有专用通道 vb6_UC_ParentMove（VB 侧量纲换算也在 RTL 内），别再改派成
+            // 运行期 COM 调用。
+            bool isParentCs = false;
+            const bool parentMoveCs = Symbol::toLower(maParCs.memberName) == "move";
             if (maParCs.object && maParCs.object->kind == ASTNodeKind::IdentifierExpr
-                && Symbol::toLower(
-                       static_cast<IdentifierExpr&>(*maParCs.object).name) == "parent"
                 && !knownLocalVars_.count("parent")) {
+                isParentCs = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*maParCs.object).name) == "parent";
+            } else if (maParCs.object
+                       && maParCs.object->kind == ASTNodeKind::MemberAccessExpr) {
+                auto& innerCs = static_cast<MemberAccessExpr&>(*maParCs.object);
+                if (innerCs.object && innerCs.object->kind == ASTNodeKind::IdentifierExpr
+                    && !knownLocalVars_.count("parent") && !parentMoveCs) {
+                    isParentCs =
+                        Symbol::toLower(static_cast<IdentifierExpr&>(*innerCs.object).name)
+                            == "usercontrol"
+                        && Symbol::toLower(innerCs.memberName) == "parent";
+                }
+            }
+            if (isParentCs) {
                 c_.emitLine("vb6_ComCall(vb6_UC_ParentObject(), L\""
                             + escapeWideCString(maParCs.memberName)
                             + "\", NULL, 0);  /* Parent.<method> */");

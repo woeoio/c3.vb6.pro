@@ -6,7 +6,9 @@
 # 继续把首参写下去。表达式层却把括号当实参表, 语句层再把整个二元表达式当 callee
 # ⇒ 发 `vb6_Num_Div((double)(f(...)), (double)(hueSpread), vb6_VariantEmpty(), 1, 1, …)` ⇒ C2197。
 # 折叠点有两格 (有二元运算符 / 没有二元运算符), 判据必须同时满足:
-#   a) 最左叶是 IndexOrCallExpr, 且 callee 是**裸标识符** (obj.Member 由 110y 另管);
+#   a) 最左叶是 IndexOrCallExpr, callee 是**裸标识符或 obj.Member**
+#      (2026-11-11: 无 binop 格也收 obj.Member —— `m_Stream.SetPosition (a + b), 1`
+#       原先整个落到"调用结果再调用", 发成 `vb6_...(me, expr, 0, 0, _own_1, 1)` ⇒ C2197);
 #   b) 内层调用恰好 1 个位置实参、无命名实参;
 #   c) 语句在逗号后还有实参 (`cur_.kind == TokenKind::Comma`) —— 单独成句的 `f (a)` 仍是正常调用;
 #   d) 无二元运算符那一格, 首参**不得是可寻址左值** (Identifier/MemberAccess):

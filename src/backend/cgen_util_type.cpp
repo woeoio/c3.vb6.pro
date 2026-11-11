@@ -1199,6 +1199,24 @@ bool CCodeGen::cExprIsVariantSlotFieldRead(const std::string& cExpr) const {
         && cExpr.compare(cExpr.size() - tail.size(), tail.size(), tail) == 0;
 }
 
+// §B172 同一出口的识别半: 「这枚 C 文本是不是类数据字段的读」。三种形态都由
+// classFieldReadExpr 拼出 (见上), 后缀只差 ` variant` / ` voidptr` 那一档 ——
+// 判据钉在**串尾**: 表达式可能是「内层调用 + 实参里的字段尾注」(Layers.c 两条 C2143
+// 就是这么长出来的), 按「包含」判会把它一并答成读。
+bool CCodeGen::cExprIsClassFieldRead(const std::string& cExpr) const {
+    static const char* const kTails[] = {
+        " field */", " field variant */", " field voidptr */",
+    };
+    for (const char* t : kTails) {
+        const std::string tail(t);
+        if (cExpr.size() >= tail.size()
+            && cExpr.compare(cExpr.size() - tail.size(), tail.size(), tail) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // 账 #305 第二百四十四刀: 「这发交回的 C 是不是裸晚绑定调用的结果」—— 唯一主人。
 //   口径 = 位置 0 的严格前缀 (不剥外层括号, 见 cgen_helpers.inc 那两条声明的理由)。
 // 账 #305 第二百四十六刀: 名单从四条缩成三条 —— 撤掉属性读那枚交回**对象指针**的出口。

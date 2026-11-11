@@ -20,7 +20,9 @@
 #   R2 `findUcDefaultMember` / `ucDefaultReadPlan` 各定义 1 处、各被调用 1 处。
 #   R3 `isUcDefault = true` 恰好 1 处；读它的地方恰好 1 处且与 `folds` 同段（写腿）。
 #   R4 三个发码面各恰好 1 处：读（castTo + readFn）、写（`/* UC default prop let */`）、
-#      对象（cgen_util_ctrl.cpp 里的 `vb6_UC_InstanceOf(`）。
+#      对象（实参位调 ucInstanceThisPtrExpr 一次；形状 `vb6_UC_InstanceOf(` 只许住
+#      cgen_util_classcall.cpp 的 ucInstanceThisPtrExpr 体内 —— 账 #191 续把形状收成这一枚
+#      出口，expr/ 不再手拼）。
 #   R5 写腿两枚守卫必须同段在：返回槽（isRetSlotUc）与局部变量（knownLocalVars_）。
 #   R6 读腿必须走 propText()（属性名是运行时读出来的，不许再拼 const char* 的 prop）。
 #   R7 census 不许读空：上面每条都要真的读出数（文件存在 + 关键字命中）。
@@ -34,7 +36,8 @@ $helpers   = Join-Path $Root 'src\backend\detail\util\cgen_helpers.inc'
 $identInc  = Join-Path $Root 'src\backend\detail\expr\cgen_expr_ident_symbol.inc'
 $assignInc = Join-Path $Root 'src\backend\detail\stmt\cgen_assign_stmt_special.inc'
 $argInc    = Join-Path $Root 'src\backend\detail\expr\cgen_expr_call_arg_emit.inc'
-foreach ($p in @($ctrlCpp, $helpers, $identInc, $assignInc, $argInc)) {
+$clsCall   = Join-Path $Root 'src\backend\cgen_util_classcall.cpp'
+foreach ($p in @($ctrlCpp, $helpers, $identInc, $assignInc, $argInc, $clsCall)) {
     if (-not (Test-Path -LiteralPath $p)) { Write-Host ('FAIL: 读不到 ' + $p); exit 1 }
 }
 
@@ -49,6 +52,7 @@ $hlp  = [IO.File]::ReadAllText($helpers)
 $idt  = [IO.File]::ReadAllText($identInc)
 $asg  = [IO.File]::ReadAllText($assignInc)
 $arg  = [IO.File]::ReadAllText($argInc)
+$cls  = [IO.File]::ReadAllText($clsCall)
 
 $viol = @()
 
@@ -85,10 +89,15 @@ $readSite = ([regex]::Matches($idt, 'fold256\.castTo\s*\+\s*fold256\.readFn')).C
 if ($readSite -ne 1) { $viol += ('R4 读腿发码 ' + $readSite + ' 处 (钉死 1 处: castTo + readFn)') }
 $writeSite = ([regex]::Matches($asg, '/\* UC default prop let \*/')).Count
 if ($writeSite -ne 1) { $viol += ('R4 写腿发码 ' + $writeSite + ' 处 (钉死 1 处)') }
-$objSite = ([regex]::Matches($arg, 'vb6_UC_InstanceOf\(')).Count
-if ($objSite -ne 1) { $viol += ('R4 对象上下文发码 ' + $objSite + ' 处 (钉死 1 处, 在实参位那一格)') }
-if ($arg -notmatch '\(vb6_cls_" \+ cIdent\(ucParamCls\) \+ "\*\)vb6_UC_InstanceOf') {
-    $viol += 'R4 对象上下文没有再发实例指针 —— 设计槽存的是宿主 HWND, 直接传进去会把窗口句柄当结构体解引用'
+# 实参位那一格: 只数**设计槽 → 实例指针**这一发 (同文件另有 ByRef 实参那一格也调本出口,
+# 那是别的判据的站点, 不在这一条里)。
+$objSite = ([regex]::Matches($arg, 'ucInstanceThisPtrExpr\("vb6_cls_" \+ cIdent\(ucParamCls\) \+ "\*", argVal\)')).Count
+if ($objSite -ne 1) {
+    $viol += ('R4 对象上下文发码 ' + $objSite + ' 处 (钉死 1 处: 设计槽实参调 ucInstanceThisPtrExpr 交实例指针)')
+}
+$ucShape = [regex]::Match($cls, 'std::string CCodeGen::ucInstanceThisPtrExpr[\s\S]{0,400}?\r?\n\}')
+if (-not $ucShape.Success -or $ucShape.Value -notmatch 'vb6_UC_InstanceOf\(') {
+    $viol += 'R4 ucInstanceThisPtrExpr 不再拼 vb6_UC_InstanceOf —— 实参位会交回裸句柄'
 }
 if (([regex]::Matches($ctrl, 'vb6_UC_InstanceOf\(')).Count -ne 0) {
     $viol += 'R4 ctrlObjectRefExpr 又长出了实例指针分支 —— With/成员接收者那一族会退化成 instance→HWND 的来回强转'

@@ -15,8 +15,11 @@
 #   R1  唯一主人: `writeValArgForParamSlot(` 在 cgen_util_comwrite.cpp 恰好 3 处 = 定义 1 +
 #       站点 2 (Let 臂 + Set 臂); 全 src/backend 恰好 4 处 = 再加 cgen_helpers.inc 那份声明。
 #       多一处 = 别处又开始自己答这一问。
-#   R2  站点不许绕过主人直接装箱: `valArg = packLetValueArg` 恰好 0; 本文件里
-#       `packLetValueArg(` 恰好 2 = 它自己的定义 + 主人内部那一句调用。
+#   R2  站点不许绕过主人直接装箱: `valArg = packLetValueArg` 恰好 0; 本文件里每一处
+#       `packLetValueArg(` 都必须落在 packLetValueArg 自己或主人 (writeValArgForParamSlot)
+#       的函数体内 —— 落到别处就是第二份答案。(原判据钉「定义 1 + 主人调用 1」这个数;
+#       909a9e7b「pdResize 三小族 — ByRef 标量属性写」让主人内部又多调了两次同一张
+#       Fix 185 表, 数会随主人内部排布变化 ⇒ 改钉结构, 不再钉数字。)
 #   R3  解箱表只有一份: `ext = "vb6_VariantTo` 恰好 7 档, 且 `vb6_VariantToSafeArray1D`
 #       在本文件恰好 1 处 (第二张表就是从这一行开始的)。
 #   R4  装箱必须问 C 槽型: `slotC == "vb6_VARIANT"` 恰好 1; 而旧的「只看语义档」那道闸
@@ -66,8 +69,32 @@ if ($nAll -ne 4) { $script:bad += ("R1 全 src/backend 里 writeValArgForParamSl
 if ((Count-Of $owner "valArg = packLetValueArg") -ne 0) {
     $script:bad += "R2 站点里又出现 valArg = packLetValueArg (装箱必须走主人)"
 }
-$nPack = Count-Of $owner "packLetValueArg("
-if ($nPack -ne 2) { $script:bad += ("R2 本文件里 packLetValueArg = $nPack 处 (要 2: 定义 1 + 主人调用 1)") }
+# 结构判据: 每一处 packLetValueArg( 的调用都必须在「自己」或「主人」的函数体里。
+$ownerSpans = @()
+foreach ($sig in @('std::string CCodeGen::packLetValueArg\s*\(',
+                   'std::string CCodeGen::writeValArgForParamSlot\s*\(')) {
+    $m = [regex]::Match($owner, $sig)
+    if (-not $m.Success) { $script:bad += ("R2 找不到函数定义 " + $sig); continue }
+    $b = $owner.IndexOf('{', $m.Index)
+    $depth = 0; $e = -1
+    for ($i = $b; $i -ge 0 -and $i -lt $owner.Length; $i++) {
+        if ($owner[$i] -eq '{') { $depth++ }
+        elseif ($owner[$i] -eq '}') { $depth--; if ($depth -eq 0) { $e = $i; break } }
+    }
+    if ($e -lt 0) { $script:bad += ("R2 函数体配平失败 " + $sig); continue }
+    $ownerSpans += ,@($m.Index, $e)
+}
+$nPack = 0
+foreach ($m in [regex]::Matches($owner, 'packLetValueArg\s*\(')) {
+    $nPack++
+    $inside = $false
+    foreach ($sp in $ownerSpans) {
+        if ($m.Index -ge $sp[0] -and $m.Index -le $sp[1]) { $inside = $true; break }
+    }
+    if (-not $inside) {
+        $script:bad += ("R2 packLetValueArg( 出现在主人与定义之外 (offset " + $m.Index + ") —— 第二份答案")
+    }
+}
 
 # ---- R3 解箱表只有一份 ----
 $nArms = Count-Of $owner 'ext = "vb6_VariantTo'
