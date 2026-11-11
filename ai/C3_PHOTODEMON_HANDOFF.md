@@ -4270,4 +4270,85 @@ vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(i)).Port);
 - **K13 追加红（本刀自造，已收口）**：compile #1 的 `[STATIC] owned_temp_keeps` 点名 `vb6_Printer_DeviceName` / `vb6_Printer_Port` —— 推导把这两枚判成 owned BSTR（mint），而发码侧 `kOwned` 名单里没有。归因不是判据错：这两枚**本来就是出口**，但实现交的是进程级共享空串（alias），真按 owned 回收会放掉全局那枚 ⇒ 堆损坏。收口两头一起改：① RTL 两枚改为每次 `SysAllocString(L"")`（结构体 `vb6_PrinterInfo` 的两个字段仍用共享空串 —— 它们只被当字段读、发码侧不当 mint 回收）；② `src/common/owned_temp_keeps.hpp` 的 `kOwned` 名单按字母序补这两行。哨兵双向对账转绿（owned 120），夹具复算哈希 `3453f41c…` / `8d742115…` 逐字节未变（回收刀不提名这两枚），已登记的两行不用重登。
 - 该 run 其余红：compile #1 剩 `legacy_slot_key_owners` / `iface_view_authority`（既存旧红，不在本刀范围）；vbp #4/#11 = runner 的 GUI 像素用例；shape oracle 的红只到那 2 行新输入。
 
+### 56.23 C2224 `UserControl.Parent` 扩展属性族（6 条，pdCommandBar\*）
+
+#### 56.23.1 病灶
+
+`#9` 那 6 条全在 `.ctl` 的**限定写法** `UserControl.Parent.<成员>`：
+
+| 站点 | 成员 |
+| --- | --- |
+| `pdCommandBarMini.ctl:220` | `.Visible`（读）/ `.Hide`（无括号调用） |
+| `pdCommandBarMini.ctl:256` | `.Visible`（写） |
+| `pdCommandBar.ctl:760` | `.Visible`（写） |
+| `pdCommandBar.ctl:1056` | `.Name`（`Replace$` 首参） |
+| `pdCommandBar.ctl:1067` | `.Caption`（`Trim$` 实参） |
+
+改前这一形落通用路径：先把内层拼成中间符号 `vb6_UserControl_Parent`，写出前由
+`cgen_base.cpp` 的 `fixupUserControlParentChain` 把**基础符号**改成 `vb6_UC_ParentObject()`，
+但后面那截 `.成员` 原样留着 ⇒
+
+```
+vb6_UC_ParentObject().Caption      // C2224: void* 上取字段
+vb6_UC_ParentObject().Visible = 0; // C2224（写侧同一句）
+vb6_UC_ParentObject().Hide();      // C2063/C2224 一族
+```
+
+`vb6_UC_ParentObject()` 的返回类型是 `void*`（顶层窗体对象的运行期码头），根本不存在结构体字段。
+
+#### 56.23.2 改后（逐站点形状）
+
+| 改前 | 改后 | 落点 |
+| --- | --- | --- |
+| `vb6_UC_ParentObject().Caption` / `.Name` | `vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Caption"/L"Name")` | `cgen_expr_member_precheck.inc`（限定 Form 的 Parent 分支，立 COM 标记） |
+| `vb6_UC_ParentObject().Visible`（读） | `vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"Visible")` | 同上 |
+| `vb6_UC_ParentObject().Visible = 0;` | `vb6_ComSetProp(vb6_UC_ParentObject(), L"Visible", vb6_ComPackBool(0));` | `cgen_assign_host_pseudo.inc`（外层条件放宽到 `MemberAccessExpr` 接收者） |
+| `vb6_UC_ParentObject().Hide();` | `vb6_ComCall(vb6_UC_ParentObject(), L"Hide", NULL, 0);` | `cgen_call.cpp`（paren-less 调用，同时认裸 `Parent.X` 与限定形） |
+
+口径：`Parent` 的静态类型是 **Object（晚绑定）**，真值是**顶层窗体**（不是"直接父容器"，那是 `Container`），
+成员按名由宿主模型答 —— 正是 RTL `vb6_UC_ParentObject()` 交的那个对象，所以走 IDispatch 派发而不是字段访问。
+
+#### 56.23.3 为什么必须收窄（A/B 抓到的语义回退）
+
+第一版把分支放在 `hostPseudoChannel` 之前、且不区分成员，A/B（同源码、基线二进制 vs 新二进制）当场照出 7 行回退：
+
+```
+-    hWndForm = vb6_ChkLong(vb6_UC_ParentHwnd());
++    hWndForm = vb6_ChkLong(vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"hWnd"));
+-    vb6_UC_ParentMove(me->m_SavedLeft, ...);
++    vb6_ComVarFree((void*)vb6_ComCall((void*)vb6_UC_ParentObject(), L"Move", ...));
+-    hIcon = ... vb6_UC_ParentIconHandle();
++    hIcon = ... vb6_ComGetIntProp(vb6_ComGetObjectProp((void*)vb6_UC_ParentObject(), L"Icon"), L"Handle");
+-    vb6_UserControl_BackColor = vb6_Ambient_BackColor;
++    vb6_UserControl_BackColor = vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"BackColor");
+```
+
+`hWnd` / `Icon` / `Move` / `BackColor` 四档在 `fixupUserControlParentChain` 里早有**编译期直答**的专用通道
+（`vb6_UC_ParentHwnd` / `vb6_UC_ParentIconHandle` / `vb6_UC_ParentMove` / `vb6_Ambient_BackColor`）：
+一处不经过 IDispatch、父窗体也未必是 IDispatch（`Move` 改派成 COM 调用可能静默空转，属真语义回退）。
+因此两处都加了成员白名单：读侧 `parentDedicatedHp`（hwnd/icon/move/backcolor 放行回原路径），
+调用侧只对 `Move` 让路。收窄后重跑 A/B：
+
+| 输入 | 逐行差异 |
+| --- | --- |
+| `tests/czUI-main/czFormDemo.vbp` | **0 行**（原 5 行回退全收） |
+| `tests/ucTreeView/Proyecto1.vbp` | **0 行**（原 1 行） |
+| `tests/ve_units/Units.vbp` | **0 行**（原 1 行） |
+| `tests/pd_parentctl/PdParentCtl.vbp` | 5 行，全是本刀要的形状（见 56.23.2） |
+
+#### 56.23.4 夹具与钉子
+
+- `tests/pd_parentctl/ParentCtl.ctl` 新增 `ParentExtenderProbe`：`.Caption` / `.Name` 读、`.Visible` 读+写、`.Hide`（无括号）。
+- `tests/run_tests.ps1` 新增 `Test-CodegenNote "pd_usercontrol_parent_extender"`：正向 5 条（两枚 ComGetStringProp / ComGetIntProp / ComSetProp+ComPackBool(0) / ComCall），
+  反向 4 条（`vb6_UC_ParentObject().Caption` / `.Name` / `.Visible` / `.Hide` 一律不得出现）。
+
+**验证**：
+
+- `-Category syntax`：**PASS=214 FAIL=0 SKIP=0**（213 + 本刀 1 例）。
+- 6 个 STATIC 本机全绿（含 11-10 那 4 项 + `owned_temp_keeps` + `manifest_coverage` 654 行对表）。
+- 形状门：本刀只动 **1 行既有输入** `tests/pd_parentctl/PdParentCtl.vbp`（字节 7194 → 8215；本机归一哈希
+  `sha256=4d467702…` / `ascii256=0a52baf2…`，CI 值为准）。`PdParentTypo.vbp` 逐字节未变
+  （`194269cf…` / 7046）—— 负控没被放宽。photodemon 整工程不在形状门清单内（走整编），
+  本刀在它身上只改上面列的 6 个站点。
+
 

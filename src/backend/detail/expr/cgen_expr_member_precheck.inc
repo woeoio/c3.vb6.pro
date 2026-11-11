@@ -101,6 +101,34 @@
             const std::string hostNameHp = Symbol::toLower(
                 static_cast<IdentifierExpr&>(*midHp.object).name);
             std::string chanDockHp;
+            // 限定写法 `UserControl.Parent.<成员>`：与上面裸 `Parent.<成员>` 同一口径。
+            // `Parent` 的静态类型是 Object(晚绑定)，真值是顶层窗体；成员由宿主模型按名答。
+            // 以前这一形落到通用路径，发成 `vb6_UC_ParentObject().Visible`（对 void* 取
+            // 字段，C2224；整编 pdCommandBar.c / pdCommandBarMini.c 6 条）。
+            //
+            // 例外：hWnd / Icon / Move / BackColor 这四档在 cgen_base.cpp 的
+            // fixupUserControlParentChain 里已有**专用通道**（vb6_UC_ParentHwnd /
+            // vb6_UC_ParentIconHandle / vb6_UC_ParentMove / vb6_Ambient_BackColor，
+            // 都是编译期直答，一处比 COM 派发少两次虚调用，且父窗体未必是 IDispatch）。
+            // 那一层是**写出前**的文本改写，走的仍是 `vb6_UserControl_Parent.<成员>`
+            // 这个中间符号；这里一旦先拦截成 `vb6_UC_ParentObject()`，它就匹配不上了
+            // （czUI 5 行 / ucTreeView 1 行 / ve_units 1 行实测回退）。故这四档不拦。
+            const std::string parentMemberHp = Symbol::toLower(node.memberName);
+            const bool parentDedicatedHp =
+                parentMemberHp == "hwnd" || parentMemberHp == "icon"
+                || parentMemberHp == "move" || parentMemberHp == "backcolor";
+            if (hostNameHp == "usercontrol"
+                && Symbol::toLower(midHp.memberName) == "parent"
+                && !parentDedicatedHp
+                && !knownLocalVars_.count("parent")) {
+                comObjExpr_ = "(void*)vb6_UC_ParentObject()";
+                comMemberName_ = node.memberName;
+                isComMarker_ = true;
+                isEarlyBoundCom_ = false;
+                earlyBoundSym_ = nullptr;
+                lastExpr_ = comObjExpr_;
+                return;
+            }
             if (hostPseudoIsObject(hostNameHp)
                 && hostPseudoChannel(hostNameHp, midHp.memberName, chanDockHp)) {
                 comObjExpr_ = "(void*)" + chanDockHp + "()";

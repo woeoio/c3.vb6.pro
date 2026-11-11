@@ -12872,6 +12872,18 @@ if ($Category -in @("all", "syntax")) {
     Test-CodegenNote "pd_parent_controls_ctl" @("$Tests\pd_parentctl\PdParentCtl.vbp") @(
         "vb6_ForEach_Init(vb6_UserControl_ParentControls)",
         "vb6_UC_ParentObject()") @("VB3001", "vb6_Parent_Controls")
+    # 限定写法 `UserControl.Parent.<成员>`: 与裸 `Parent.<成员>` 同一口径, 由宿主模型按名答。
+    # 修前这一形落到通用路径, 把成员挂在 void* 上 (C2224; 整编 pdCommandBar*.c 6 条)。
+    Test-CodegenNote "pd_usercontrol_parent_extender" @("$Tests\pd_parentctl\PdParentCtl.vbp") @(
+        'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Caption")',
+        'vb6_ComGetStringProp((void*)vb6_UC_ParentObject(), L"Name")',
+        'vb6_ComGetIntProp((void*)vb6_UC_ParentObject(), L"Visible")',
+        'vb6_ComSetProp(vb6_UC_ParentObject(), L"Visible", vb6_ComPackBool(0))',
+        'vb6_ComCall(vb6_UC_ParentObject(), L"Hide", NULL, 0)') @(
+        "vb6_UC_ParentObject().Caption",
+        "vb6_UC_ParentObject().Name",
+        "vb6_UC_ParentObject().Visible",
+        "vb6_UC_ParentObject().Hide")
     # 负控: 只放行 `Parent` 这一枚。`Paren` 拼错必须照旧报 VB3001 (精确匹配, 不做前缀放宽)。
     Test-CodegenNote "pd_parent_typo_still_reported" @("$Tests\pd_parentctl\PdParentTypo.vbp") @(
         "未声明的标识符: 'Paren'") @("vb6_UC_ParentObject()")

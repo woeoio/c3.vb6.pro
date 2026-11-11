@@ -37,10 +37,27 @@
                 maHp = static_cast<const MemberAccessExpr*>(icHp.callee.get());
             }
         }
-        if (maHp && maHp->object && maHp->object->kind == ASTNodeKind::IdentifierExpr
+        if (maHp && maHp->object
+            && (maHp->object->kind == ASTNodeKind::IdentifierExpr
+                || maHp->object->kind == ASTNodeKind::MemberAccessExpr)
             && isDesignerModule_) {
-            const std::string objNameHp =
-                static_cast<const IdentifierExpr&>(*maHp->object).name;
+            std::string objNameHp;
+            if (maHp->object->kind == ASTNodeKind::IdentifierExpr) {
+                objNameHp = static_cast<const IdentifierExpr&>(*maHp->object).name;
+            } else {
+                // 限定写法 `UserControl.Parent.<成员> = v` —— 与裸 `Parent.<成员> = v`
+                // 同一口径（Parent 静态类型 Object、真值顶层窗体、宿主模型按名答）。
+                // 以前这一形落通用赋值，发成 `vb6_UC_ParentObject().Visible = 0;`
+                // （对 void* 取字段，C2224；整编 pdCommandBar*.c）。
+                auto& innerHp = static_cast<const MemberAccessExpr&>(*maHp->object);
+                if (innerHp.object && innerHp.object->kind == ASTNodeKind::IdentifierExpr
+                    && Symbol::toLower(
+                           static_cast<const IdentifierExpr&>(*innerHp.object).name) == "usercontrol"
+                    && Symbol::toLower(innerHp.memberName) == "parent"
+                    && !knownLocalVars_.count("parent")) {
+                    objNameHp = "parent";
+                }
+            }
             const std::string objLowerHp = Symbol::toLower(objNameHp);
             const bool isParentHp = (objLowerHp == "parent");
             // 账 #278 §B120: 这一问由那张表答 (抄了五份的那一份就在这)。
