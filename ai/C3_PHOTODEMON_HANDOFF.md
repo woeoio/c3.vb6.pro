@@ -4351,4 +4351,28 @@ vb6_UC_ParentObject().Hide();      // C2063/C2224 一族
   （`194269cf…` / 7046）—— 负控没被放宽。photodemon 整工程不在形状门清单内（走整编），
   本刀在它身上只改上面列的 6 个站点。
 
+### 56.24 C2224 `Printer.ScaleMode`（2 条，File_PrintXP.frm:422/423）
+
+改前：`pWidth = Me.scaleX(Printer.Width, Printer.ScaleMode, vbInches)` 的源量纲那一格落通用 COM 绑定
+⇒ `vb6_Printer_Object().ScaleMode`（`vb6_Printer_Object()` 是 DC 指针 `void*`，取字段 = C2224）。
+
+改后：
+
+```
+pWidth  = vb6_ScaleUnitX(vb6_Printer_Width(),  vb6_Printer_ScaleMode(), 5);
+pHeight = vb6_ScaleUnitY(vb6_Printer_Height(), vb6_Printer_ScaleMode(), 5);
+```
+
+- `cgen_expr_member_form_builtin.inc` 的 Printer 读块补一格 `scalemode → vb6_Printer_ScaleMode()`。
+- RTL：`vb6rtl_builtin.h` 声明 + `vb6rtl_system.c` 实现 `return 1;` —— **口径**：`vb6_Printer_Width/Height`
+  本来就一律按 twips 答（P20-44），vbTwips 正是 VB6 默认 `ScaleMode = 1`，两者必须同口径；
+  全语料（含 photodemon）没有 `Printer.ScaleMode =` 写入点，故只答常量、不建可写槽。
+  将来若出现写入点，写侧会落回 C2224（可见错误，不会静默答错）。
+- 夹具：`tests/pd_printer_props/Mod1.bas` 补一行 `i = Printer.ScaleMode`；
+  `Test-CodegenNote "pd_printer_data_props"` 正向追加 `i = vb6_ChkLong(vb6_Printer_ScaleMode());`，
+  反向追加 `vb6_Printer_Object().ScaleMode`。
+
+**验证**：`-Category syntax` **PASS=214 FAIL=0 SKIP=0**；`File_PrintXP.frm` 单文件发码 422/423 两格
+已是上表形状；`pd_printer_props` 两个输入复算 `7632566b…` / 1901 与 `8293417e…` / 1814（待 CI 读数 bless）。
+
 

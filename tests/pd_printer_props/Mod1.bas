@@ -13,4 +13,6 @@ Sub ProbePrinterProps()
     i = Printers.Count
     s = Printers(0).DeviceName
     s = Printers(i).Port
+    ' File_PrintXP.frm:422/423 的源量纲参数 (Me.ScaleX(Printer.Width, Printer.ScaleMode, vbInches))
+    i = Printer.ScaleMode
 End Sub

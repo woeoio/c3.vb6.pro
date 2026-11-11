@@ -12859,8 +12859,10 @@ if ($Category -in @("all", "syntax")) {
         "vb6_Printer_SetPrintQuality((int32_t)((-1)));",
         "i = vb6_ChkLong(vb6_Printers_Count());",
         "vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(0)).DeviceName);",
-        "vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(i)).Port);") @(
+        "vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(i)).Port);",
+        "i = vb6_ChkLong(vb6_Printer_ScaleMode());") @(
         "vb6_Printer_Object().DeviceName",
+        "vb6_Printer_Object().ScaleMode",
         "vb6_Printer_Object().Copies",
         "vb6_Printer_Object().PrintQuality",
         "vb6_Printers_Collection(0)",

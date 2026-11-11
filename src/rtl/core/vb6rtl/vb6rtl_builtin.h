@@ -459,6 +459,9 @@ int32_t vb6_Printer_Copies(void);
 void    vb6_Printer_SetCopies(int32_t copies);
 int32_t vb6_Printer_PrintQuality(void);
 void    vb6_Printer_SetPrintQuality(int32_t quality);
+// File_PrintXP.frm:422/423 的 `Me.ScaleX(Printer.Width, Printer.ScaleMode, vbInches)` ——
+// 源量纲 (Width/Height 是 twips, 与 VB6 默认 ScaleMode = 1 一致)。全语料无写入点。
+int32_t vb6_Printer_ScaleMode(void);
 
 // P18-C: Forms 集合
 int32_t vb6_Forms_Count(void);

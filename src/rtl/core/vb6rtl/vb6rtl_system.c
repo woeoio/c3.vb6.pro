@@ -653,6 +653,10 @@ void vb6_Printer_SetCopies(int32_t copies) { g_printerCopies = copies; }
 int32_t vb6_Printer_PrintQuality(void) { return g_printerPrintQuality; }
 void vb6_Printer_SetPrintQuality(int32_t quality) { g_printerPrintQuality = quality; }
 
+// File_PrintXP.frm:422/423 的源量纲参数。Width/Height 一律按 twips 答 (P20-44),
+// 与 VB6 默认 ScaleMode = 1 (vbTwips) 同口径; 全语料没有写入点, 故只答常量。
+int32_t vb6_Printer_ScaleMode(void) { return 1; }
+
 // ============================================================
 // P18-C: Forms 集合
 // ============================================================

@@ -506,6 +506,9 @@
             if (memLower == "port") { lastExpr_ = "vb6_Printer_Port()"; return; }
             if (memLower == "copies") { lastExpr_ = "vb6_Printer_Copies()"; return; }
             if (memLower == "printquality") { lastExpr_ = "vb6_Printer_PrintQuality()"; return; }
+            // File_PrintXP.frm:422/423 `Me.ScaleX(Printer.Width, Printer.ScaleMode, vbInches)`
+            // —— 源量纲。同一族 (void* 上取字段 = C2224), 走具名读出口。
+            if (memLower == "scalemode") { lastExpr_ = "vb6_Printer_ScaleMode()"; return; }
         }
 
         // C2224: Printers 集合的 Count。元素 Printers(i) 由 callee_ident 发
