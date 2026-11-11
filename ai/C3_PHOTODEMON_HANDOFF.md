@@ -4555,3 +4555,198 @@ RTL 原型（`src/rtl/core/vb6rtl/vb6rtl_userctl.h:262/265/270`）明确收 `_ha
 同一个 exe 加/不加环境变量各发一次再 diff；确认后把开关与 `[DBG2197]` 打印全部删掉。
 `[DBG2197]` 顺带把误伤点定位到 `mod=ucSegmentedControl qual=Extender member=Move` 与
 `mod=VBFlexGrid qual=Extender member=Drag/ZOrder`。
+
+#### 56.26.5 提交后 CI 读数（#10 之前）
+
+- 形状门：**相同 654 / 哈希不同 0 / 缺席 0 / 新增 4**（`tests/pd_modqual/{ModA,ModB,ToolsA,ToolsB}.bas`）。
+  已 `-Bless` 登记为 658 行并在提交信息里注明“新输入”；`ProbeCls.cls` 不入形状门
+  （语料枚举只收 `.vbp/.bas`，见 `scripts/emit_manifest.ps1:46-50`）。
+- `Tests (compile #1/#2)` 仍红 3 + 8 项，逐项与 11-10/12:33 基线逐字相同，**非本刀引入**；
+  `vbp #4 ucSegmentedControl`（像素判据）与 `vbp #11 FlexGridX86`（编译）同样在 12:33
+  基线里就红。本刀只把 knife-1 造成的 `ucSegmentedControl` **(compile)** 回归消除。
+- `pdCanvas.ctl` 相关的 C2197 剩余族（libdeflate 9 / GetVersion 7 / Printers.Collection 4）
+  本机单模块复算全部已收口：
+
+```
+vb6_Plugin_libdeflate_GetDefaultCompressionLevel()      // 修前 (0)
+vb6_Plugin_CharLS_GetVersion()                          // 修前 (0)
+vb6_Printers_Item(i)                                    // 修前 vb6_Printers_Collection(i) ⇒ C2197
+```
+
+### 56.27 C2440 第一刀：`Mod.Fn(...)` 返回 UDT 作 ByRef 实参（31 条）
+
+**#9 桶**：C2440 135 行 / 124 个唯一站点（MSVC 部分行重复打印）。按转换方向分族：
+
+| 族 | 唯一站点 | 代表 |
+|---|---:|---|
+| `vb6_type_<UDT> -> intptr_t` | 31 | ComplexNumber 12 + RectF 11 + ComplexNumberF 8 |
+| `double -> vb6_cls_pdCanvas* / pdImage*` + `** -> float` | 30 | pdCanvas.c 四簇（与 C2197 同源） |
+| `VARIANT -> int32_t / VARIANT / BSTR` | 16 | 晚绑定调用结果直接落强类型 |
+| 其余（`void* -> double/float`、`BSTR -> float`、`RGBQuad -> void*` …） | 47 | 分散 |
+
+**病灶（本刀）**：§56.13 那刀把“返回 UDT 的函数作 ByRef UDT 实参”改成先落 `_vb6_anytmpN`
+再取址，但 `inferUdtTypeOfExpr` 的 `IndexOrCallExpr` 分支只认**裸名** callee。PhotoDemon 里
+`c_add(b(j), ComplexNumbers.c_mul(a(j), b(j)))` 是**限定**调用 ⇒ 推断落空 ⇒ 仍走 `intptr_t` 兜底。
+本机复现（`.temp\cxq`，两模块）：
+
+```
+intptr_t _vb6_anytmp0 = (intptr_t)(vb6_ComplexNumbers_c_mul(...));   // C2440
+```
+
+**改法**（`cgen_util_classtype.cpp`，`inferUdtTypeOfExpr` 的 IndexOrCallExpr 尾部）：callee 是
+`MemberAccessExpr` 时用既有的 `findModuleQualifiedFunction`（G3/§43 同一张表、同一匹配口径：
+本模块或 external 的 `sourceModule` 与限定符相符）取 Function 符号，`variableTypeName` 是
+工程 UDT 就交 `vb6_type_<UDT>`。修后：
+
+```
+vb6_type_ComplexNumber _vb6_anytmp0 = vb6_ComplexNumbers_c_mul(...);
+```
+
+**夹具/钉子**：`tests/cxmodqual/`（`ModCx.bas` = CxMod 的 `Cpx`/`c_add`/`c_mul`，
+`ModUse.bas` = CxUse 里两种嵌套顺序）；
+`Test-CodegenNote "udt_ret_byref_arg_modqual"` 正向三行（`vb6_type_Cpx _vb6_anytmp0 =
+vb6_CxMod_c_add(`、`vb6_CxMod_c_mul((void*)&_vb6_anytmp0`、`_vb6_anytmp1 = vb6_CxMod_c_mul(`），
+反向 `(intptr_t)(vb6_CxMod_`。
+
+**读数**：`-Category syntax` **PASS=218 FAIL=0 SKIP=0**（217 + 本刀 1 例）。
+
+### 56.28 C2440 第二刀：ParamArray 元素回写的承接临时（5 条）
+
+**病灶**：`cgen_assign_value_sem.inc` 的 `vb6_PA_GetVariant(...)` 目标那一格
+（Fix 091c）发的是 `{ VARIANT _pav_N = <boxToVariant>; vb6_PA_SetVariant(args, (VARIANT*)&_pav_N); }`。
+`boxToVariant` 交的是 `vb6_VariantFromValue(...)` / `vb6_VariantBool(...)`，返回值都是
+**`vb6_VARIANT`**；Win32 `VARIANT` 与它是两个布局相同的结构体 ⇒ `'initializing': cannot
+convert from 'vb6_VARIANT' to 'VARIANT'`。PhotoDemon 命中在
+`PDMath.bas` 的 `ConvertArbitraryListToRoundedInt/FurthestRoundedInt` 等五处
+`listOfValues(i) = Int(listOfValues(i) [± 1])`（PDMath.c 825/831/837/843）。
+
+**改法**：临时改发 `vb6_VARIANT`（`(VARIANT*)&` 显式转换照旧；两者逐平台布局一致，
+见 `vb6rtl_variant.h:35-75`）。
+
+**夹具/钉子**：`tests/pa_variant_slot/`（`Bump(ParamArray vals() As Variant)` 里
+`vals(i) = CInt(vals(i)) + 1`）；`Test-CodegenNote "paramarray_variant_temp"` 正向
+`{ vb6_VARIANT _pav_`、`vb6_PA_SetVariant(vals, i, (VARIANT*)&_pav_`，反向 `{ VARIANT _pav_`。
+
+**读数**：两刀合计 `-Category syntax` **PASS=219 FAIL=0 SKIP=0**（217 + 2 例）。
+形状门预期：新增 `tests/cxmodqual/cxmodqual.vbp`、`tests/pa_variant_slot/pa_variant_slot.vbp`
+两行（新输入）；既有语料无 ParamArray 元素回写、无限定 UDT 返回调用作 ByRef 实参
+（`tests/*` 全量 grep），预期 0 哈希变化 —— 以 CI 读数为准。
+
+### 56.29 C2197 残余两族：同名过程借表的另外两站（#9 日志 110 行 / 37 站）
+
+**#9 桶**（`.temp/pd9_logs/pd_full/c3-error.log`，C2197=159 行 / 72 站）在 knife 2/3 之后
+只剩两大族（其余 libdeflate / GetVersion / Printers.Collection 本机复算已被 knife 2/3 收口）：
+
+| 族 | 行 | 站 | 站点形状 | 借到的错表 |
+|---|---|---|---|---|
+| ① 跨窗体语句调用 | 42 | 20 | `options_Menus.UpdateAgainstCurrentTheme`、`layerpanel_*.UACT`、`toolbar_*.UACT`、`tool_Tooltip.UACT`（**无括号**，都在别的窗体里） | 注册最早那家同名过程的形参表（带 Optional） |
+| ② UDT 字段是工程类 | 68 | 17 | `With m_AllTags(g,t)` 内 `.DB_StackIDs.GetString(i)`（Image_Metadata 16 站）/ `m_ImageCache(i).spriteNames.GetString(...)`（pdSpriteSheet 1 站） | `pdSerialize.GetString` 的 3 参表 |
+
+两族都不是「被调方名字错」：名字侧一直发对（`vb6_options_Menus_*` / `vb6_pdStringStack_GetString`），
+错的是**缺省实参补齐用的形参表**——两处 padding 各自落裸键 `lookupModule(memberName)`，命中谁先注册谁。
+
+**族①（语句级无括号路）**：`cgen_call.cpp` 的 statement bare-call 分支只查裸键，没有
+`cgen_expr_call_callee_params.inc` 里那张 `<form>_<proc>` 模块限定二级键（driver_crossmod 的
+`formQualifiedSyms`）。本机复现（`.temp/uact`，FormB 1 枚 Optional 注册在前 + FormA 0 参）：
+
+```
+vb6_FormA_UACT(0, 0);   // C2197: FormA.UACT 是 void(void)
+```
+
+改法：语句路在裸键之前先问 `lookupLocal(<qual>_<member>)`（限 `knownFormModuleNames_` 且
+`qForm != 本模块`，要求 `isExternal` 且是 Sub/Function），命中即用它的形参表；命中不了才回退裸键。
+修后 `vb6_FormA_UACT();`、`vb6_FormB_UACT(0, 0);`。
+
+**族②（类推断落空 → 借裸名表）**：两条推断缺口，都补在 `inferClassTypeOfExpr`：
+
+- `With <UDT>` 块（`WithObjKind::Unknown`）只认 `ClassInstance`，UDT 成员声明 `As <工程类>`
+  时推不出类 → 问 `knownUdtVars_[withObjectVars_.back()]` + `udtFieldObjCType`，字段 C 类型是
+  `vb6_cls_<X>*` 就答类名 X；
+- 接收者是 UDT 值 / UDT 数组元素（`arr(i).IDs.GetString(0)`、`m_ImageCache(i).spriteNames`）时
+  同样问 `inferUdtTypeOfExpr(object)` + `udtFieldObjCType`。
+
+本机复现（`.temp/getstr`、`.temp/udtarr`）：修前
+`vb6_pdStringStack_GetString((void*)_vb6_with_0->DB_StackIDs, (&(BSTR){0}), _own_1, 0, 0, 0)`
+/ `VB6_SA_AT(vb6_type_TagRec, arr, 0).IDs, 0, 0, 0, 0, 0`；修后各只剩 1 枚实参。
+
+**夹具/钉子**：
+- `tests/pd_formcall/`（FormB.frm = 1 枚 Optional 且注册在前，FormA.frm = 0 参，ModC.bas 两调用）；
+  `Test-CodegenNote "pd_form_qualified_call"` 正向 `void vb6_FormA_UACT(void);` /
+  `vb6_FormA_UACT();` / `vb6_FormB_UACT(0, 0);`，反向 `vb6_FormA_UACT(0, 0)`。
+- `tests/pd_udtfield_call/`（Ser.cls = 3 参同名 `GetString` 注册在前，Stack.cls = 1 参，
+  TagMod.bas 的 With 形 + UDT 数组形）；`Test-CodegenNote "pd_udtfield_class_call"` 正向
+  `vb6_Stack_GetString((void*)_vb6_with_0->IDs, 0)` / `VB6_SA_AT(vb6_type_TagRec, arr, 0).IDs, 0)`，
+  反向两条 `, (&(BSTR){0})` 尾巴。
+
+**读数**：`-Category syntax` **PASS=221 FAIL=0 SKIP=0**（219 + 2 例）。
+形状门预期：新增 `tests/pd_udtfield_call/TagMod.bas`、`tests/pd_formcall/ModC.bas` 两行（新输入；
+.frm/.cls 不进清单），既有语料 0 哈希变化 —— 以 CI 读数为准。
+
+**顺带记一笔（未修，不属 C2197）**：同一复现里 `Menus.UACT`（qualifier 是**标准模块**、调用方
+FormMain 另有同名 0 参过程）发出的是 `vb6_Menus_UACT()` —— 少了 Optional 的 `(0, 0)`，属 C2198
+桶（形参表命中调用方本模块的同名过程）。等 C2198 排到时按同一「限定符 → sourceModule」口径收。
+
+### 56.30 C2440：`obj.Method()` 返回工程 UDT 作 ByRef 实参（RectF/RGBQuad/Guid 一族）
+
+**#9 桶**（C2440=135 行 / 133 站）里除 §56.27（`Mod.Fn` 限定返回，31 行）外的第二大族：
+pdPSPShape.c 483/506、pdCompositor.c 405/1112/1162、WIC.c 415、pdPalette.c、Drawing.c、
+Tools_Crop.c 等 `cannot convert from 'vb6_type_RectF' to 'intptr_t'`。
+
+**形状**：`m_BrushFill.SetBoundaryRect m_PolylineShape.GetPathBoundariesF()`
+（pdPSPShape.cls:933）。实参是**类方法**返回的 UDT，形参是 UDT ByRef。§56.27 的
+`inferUdtTypeOfExpr` 分支只认裸标识符 callee 与 `Mod.Fn` 限定符，`obj.Method()`
+落空 ⇒ `intptr_t _vb6_anytmp0 = (intptr_t)(vb6_...GetPathBoundariesF(...))` C2440。
+
+**修法**（`inferUdtTypeOfExpr` 的 IndexOrCallExpr，§56.27 块之后）：callee 是
+MemberAccessExpr 时先 `inferClassTypeOfExpr(object)` 定类，再按两张权威表取返回类型名 ——
+① Function/PropertyGet 符号的 `variableTypeName`（isExternal 按 `sourceModule == 类名`，
+本模块类按 `moduleName_ == 类名`，与 `findClassMemberCallParams` 同一匹配口径）；
+② 回退 Class 符号的 `memberReturnTypes[member]`（Fix 015 的 storageKey 冲突兜底）。
+返回类型名查到 `SymbolKind::UserDefinedType` 才答 `vb6_type_<名>`，否则维持原样。
+
+**夹具/钉子**：`tests/udtret_byref/`（URetMod.bas 内 `Public Type URect` + UBrush.cls
+`SetRect(ByRef r As URect)` + UPath.cls `GetRect() As URect`）；
+`Test-CodegenNote "udt_ret_byref_class_method"` 正向
+`vb6_type_URect _vb6_anytmp0 = vb6_UPath_GetRect(p);` /
+`vb6_UBrush_SetRect(b, (void*)&_vb6_anytmp0);`，反向 `intptr_t ... (intptr_t)(vb6_UPath_GetRect(p))`。
+
+**读数**：`-Category syntax` **PASS=222 FAIL=0 SKIP=0**。形状门：新增
+`tests/udtret_byref/URetMod.bas` 一行（新输入），既有语料 0 变化待 CI 复核。
+
+**未收**：pdCanvas.c 40 行（`double → vb6_cls_pdCanvas*/pdImage*` + `** → float`）仍是
+整编 C2440 最大单块，单文件/两文件复现均落空（需要整编符号面）；下次取 CI 生成的
+`pdCanvas.c` 再定位。WIC 的 `GUID_NULL()` 装箱成 VT_BSTR 是同族另一变体（参数表把
+`ByRef ... As Guid` 映射成 void**），本次未动。
+
+### 56.31 形状门归因：`tests/cls_inh/Inh.vbp`（§56.29 的既有输入改写）
+
+**现象**：CI `43045032842`（head 6f923ac6）形状门报「哈希不同 1」——`tests/cls_inh/Inh.vbp`
+`a65cd485…`（96,510 B）→ `e861bf0f…`（97,943 B，+1,433 B）。前一刀 `48e4ea0a` 的清单
+（`ci/emit-manifest` 提交 84079a9c）该行仍是 a65cd485，故定位到 §56.29 这一笔。
+
+**归因（逐行 diff 实证，不是推测）**：把 `src/backend/stmt/cgen_call.cpp` +
+`src/backend/cgen_util_classtype.cpp` 临时回退到 `48e4ea0a` 重建，对同一 `Inh.vbp`
+`--emit-c` 取旧文（97,284 B）与本机现文（98,717 B）逐行 diff：增 39 行 / 删 20 行，
+与 CI 的 +1,433 B 逐字节对得上（归一化只是把仓库根路径换成长度固定的 `<ROOT>`）。差异全部
+落在 `u.h`（`Public Type TWrap` 的 `h As InhBase`，即本刀补上的「UDT 字段是工程类」推断）：
+
+1. `Set u.h = me/d` 由裸指针赋值 `u.h = me;  /* Set */` 变成账 #305 (甲) 腿② 的类对象
+   Set：`vb6_cls_InhBase* __clsoldN = u.h; … = (vb6_cls_InhBase*)vb6_ComObject_UnboxVb6Instance(…);
+   if (u.h) vb6_cls_InhBase_AddRef(u.h); if (__clsoldN) vb6_cls_InhBase_Release(__clsoldN);`
+   —— 推断出类之后才走得到这条**带引用计数**的腿，修前那条裸赋值既不 AddRef 也不 Release。
+2. `u.h.Level` / `u.h.Speak()` 的返回值不再经 `vb6_VariantFromValue(...)` + `vb6_CStr(...)`
+   装箱（修前 `vb6_VarCmpLongEq(&_vcmp_1, 105)`），直接 `vb6_CStrLong(...)` / `vb6_StrCmp(...)`。
+3. `Set mi2 = New InhMid` / `Set sg = New InhSib` 的 `__clsoldN` 只是编号从 11/12 顺延到 13/14。
+
+**行为核对**（栈上跑，不是只看形状）：现文 `--output-dir` 编出 `Inh.exe` 运行 = **59 × OK /
+0 FAIL / exit 0**，其中 INH41/42/43（`u.h.Speak()`/`Greet()`）与 INH59（`u.h.Level` 读写）
+全 OK —— 新增的 Release 与被 AddRef 的引用一一配对，没有双释放/泄漏迹象。
+
+**结论**：这是 §56.29 想要的形状变化（同一族在 Photodemon 侧的 `m_AllTags(g,t).DB_StackIDs`
+也是这条推断），不是误伤。**待办：需用户确认后 `-Bless` 这一行并注明本归因**（既有输入改写
+的 bless 按停点规矩不擅自做）。
+
+**同批待登记（新输入，等 CI 43046660886 清单一次办）**：`tests/cxmodqual/{cxmodqual.vbp,
+ModCx.bas,ModUse.bas}`、`tests/pa_variant_slot/{pa_variant_slot.vbp,PaSlot.bas}`、
+`tests/pd_formcall/ModC.bas`、`tests/pd_udtfield_call/TagMod.bas`、`tests/udtret_byref/URetMod.bas`
+（9 行；.frm/.cls 不进清单）。
