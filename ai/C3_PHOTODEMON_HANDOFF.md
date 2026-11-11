@@ -3695,4 +3695,38 @@ PASS=202 FAIL=0）。**没有半截改动**，因此本轮**未执行任何 `git
 
 随后 `git push` 到 `origin` 与 `github` 两端。工作区只留 `?? .zcodeignore`。
 
+### 56.8 pdResize 4 条（三小族）已清零
+
+复现：`.temp\pdres\pdres.vbp`（pdResize + pdDropDown/pdSpinner/pdButtonToolbox + Units.bas，
+`C3.exe <vbp> --arch x86 --output-dir .temp\pdres_out`）。子集里同时出现三条原文诊断，
+与整编 #4 的 277 / 799-803 / 1226-1227 一一对应。
+
+| 族 | VB 源 | 旧发码 | 根因 | 修法 |
+| --- | --- | --- | --- | --- |
+| ① `UserControl.Controls(name)` | `IsChildInControlArray`：`Not UserControl.Controls(ctlChild.Name) Is ctlChild` | `vb6_UserControl_Controls(_own_1)` ⇒ C2063 | 显式限定写法走 M22 宿主伪对象，先拼未声明符号再被调用侧追加实参 | precheck 折成 `(void*)vb6_UC_Controls()` + 成员 `Item`；`cgen_expr_call_com_bind.inc` 消费成 `vb6_ComCallObject(..., L"Item", ...)`（Object 返回档，与 `Is` 的对象比较同型） |
+| ② `UserControl.<设计期子控件>.<成员>` | `UserControl.cmbWidthUnit.ListIndex = mu_Centimeters` ×4 | `vb6_UserControl_cmbWidthUnit.ListIndex` ⇒ C2065，子集无设计期表时是 `vb6_hwnd_X.ListIndex = 3` ⇒ C2224 | 内层接收者能折成控件槽，但外层成员读写仍走 generic（对 `void*` 取成员） | Fix255 里补一支：`hostNameHp=="usercontrol"` 且成员是 `knownFormControls_` → 立 COM 标记（`makeCtrlHwndArg` + 原成员名），与裸 `cmbResolution.ListIndex` 同形 |
+| ③ `Property Let X(p As T)` 默认 ByRef | `Me.ResizeWidth = .GetDouble(...)`、`Me.UnitOfMeasurement = .GetLong(...)` | `prop_let_X(me, <值>)` ⇒ C2440 `double → double*`（枚举槽只是 C4047/C4133） | `writeValArgForParamSlot` 的 ③ 只解箱不取址；而取址必须在解箱之后（先取址会得到 `&(double){void*}`，仍 C2440） | 该函数末尾两个出口：ByRef 具体标量槽交 `packLetValueArg`（Fix 185 表；枚举按 Long 档解箱后再取址）。`packLetValueArg` 的 ByRef Double 臂补 Date/Currency（mapType 均为 double） |
+
+实测（子集 emit，新 C3）：
+
+- ①：`vb6_ComCallObject((void*)vb6_UC_Controls(), L"Item", (void*[]){...}, 1)`；`vb6_UserControl_Controls` 0 命中。
+- ②：`vb6_ComSetProp(vb6_hwnd_cmbWidthUnit, L"ListIndex", vb6_ComPackInt(3));` ×4；`vb6_UserControl_cmbWidthUnit` / `vb6_hwnd_X.ListIndex` 0 命中。
+- ③：`vb6_pdResize_prop_let_ResizeWidth((void*)me, (&(double){(vb6_VariantToDouble(vb6_VariantFromComResult(vb6_ComCall(...))))}))`；UnitOfMeasurement/Resolution 为 `(&(int32_t){(vb6_VariantToLong(...))})`。C2440/C4047/C4133 这三处 0 命中。
+- 子集剩余 37 条诊断全是**缺模块**（PublicConstants / g_Displays 等）与「Property Let/Set (bare)」ByVal 槽的旧警告（如 `DefaultToRealWorldUnits`，不是本轮 4 条），没有新增。
+
+回归：`tests\run_tests.ps1 -Category syntax` → **PASS=205 FAIL=0 SKIP=0**（新增
+`pd_uc_self_qualified_control_write` / `pd_uc_controls_item_call` /
+`pd_prop_let_byref_scalar` 三条；原 `pd_uc_self_qualified_control` 的正向钉子从
+`vb6_hwnd_X.ListIndex` 更新为 `vb6_ComGetIntProp(vb6_hwnd_X, L"ListIndex")`，
+判据只随发码形状收紧，未放宽）。
+
+### 56.9 第四轮截断审计与提交（pdResize 刀）
+
+截断时 `git status --short`：`src/backend/cgen_util_comwrite.cpp`、
+`src/backend/detail/expr/cgen_expr_call_com_bind.inc`、
+`src/backend/detail/expr/cgen_expr_member_precheck.inc`、`tests/pd_uctrlqual/UcQual.ctl`、
+`tests/run_tests.ps1`、`?? tests/pd_proplet/`、`?? .zcodeignore`。`git diff --stat`
+5 files changed。逐个判定：**全部完整**（能编过、三条测试通过、子集读数如上）⇒
+无 `git checkout --`，按显式路径提交后双推。`.zcodeignore` 不动。
+
 
