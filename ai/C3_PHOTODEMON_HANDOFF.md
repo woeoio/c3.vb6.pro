@@ -2541,3 +2541,49 @@ M3（§39）已随本文件同轮落地提交 `76bbb0e9`：`MonthName/WeekdayNam
 负例全红）。CI 形状门 `Emit manifest (shape oracle)` 在 `76bbb0e9` 上 **success**（632/632 相同），
 即 M3 对存量语料零形状变化；本机干净克隆读数同为 632/628/4 既知/0/0。
 下一轮整编（同探针流程、head `76bbb0e9`）用于取 `vb6_MonthName` 7 → 0 的验收读数并经 §39 收口。
+
+## §39 M3：MonthName / WeekdayName 的 Optional 省略档（收 C2198）
+
+**提交** `76bbb0e9`。**机理**：VB6 签名 `MonthName(month[, abbreviate])` /
+`WeekdayName(weekday[, abbreviate[, firstdayofweek]])`，RTL 出口是 **2/3 参固定 C 签名**
+（`vb6rtl_builtin.h:528-529`）；省略档不补 ⇒ `vb6_MonthName(Month(Now))` 1 实参打 2 形参 = C2198
+（PhotoDemon 7 处：`ScreenCapture.bas` / `Plugin_EZTwain.bas` / `pdClipboardMain.cls`）。
+
+- 补齐点仍**唯一**（`kBuiltinOptDefaults`）：`kOD_MonthName{nullptr,"0"}`、
+  `kOD_WeekdayName{nullptr,"0","1"}`（abbreviate=False；firstDayOfWeek=vbSunday=1，RTL 亦把 <1 折成 1）。
+  **首档（month/weekday）是必填档，写 nullptr 不补** —— 少了它就该停在 C2198，不许变成静默错值。
+- 哨兵 `scripts/check_m3_builtin_opt_defaults.ps1`：S1 标记唯一；S2 表行各一；S3 档数 2/3 且首档
+  nullptr；**S4 与 RTL 声明逐档双向对账**（任一侧改形即红）。负例（删表行 / 把首档补成 "0"）判红。
+- 本机探针（`--emit-c`）：`vb6_MonthName(x, 0)`、`vb6_WeekdayName(2, 0, 1)`，显式两参形原样不动；
+  裸 `Randomize` 仍走 `vb6_RandomizeTimer()`。
+- 形状门：CI `Emit manifest (shape oracle)` 在 `76bbb0e9` 上 **success**（632/632 相同）；
+  本机干净克隆 632 行 / 628 相同 / 4 条既知环境差异 / 0 缺席 / 0 多出。**无需 bless**。
+- 整编读数：见 §39.1（本轮探针 head 与读数落地后补）。
+
+## §40 语句级无括号调用的首参括号分组（收 Num_Div 族 C2197）
+
+**提交** `f5a9dc1f`。**机理**：VB6 语句级没有"表达式语句" ⇒ `f (...)` 只能是调用，括号是**首参的分组**：
+
+```
+fHSVtoRGB (x - trackRadius) / hueSpread, 1, 1, tmpR, tmpG, tmpB
+' = fHSVtoRGB((x - trackRadius) / hueSpread, 1, 1, tmpR, tmpG, tmpB)
+```
+
+（PhotoDemon `Controls/pdSliderStandalone.ctl:1135`，实测 4 个站点 / 24 条 C2197。）
+表达式层把括号当实参表（f 只收到 1 个实参），语句层再把整个二元表达式当 callee、
+把 `, 1, 1, …` 挂到调用结果上 ⇒ 实参被塞进 `/` 的 helper：
+`vb6_Num_Div((double)(vb6_Colors_fHSVtoRGB(...)), (double)(hueSpread), vb6_VariantEmpty(), 1, 1, tmpR, tmpG, tmpB)`。
+
+- 复用 Fix 110y 折叠法，扩到**裸标识符 callee**；`obj.Member` 那格仍由 110y 原判据管；
+- 同族"无二元运算符"一格 `f (expr), a, b`（原判 VB3005 1/N、发码成 `vb6_f(...)(a,b)`）一并收；
+  仅当首参**不是可寻址左值**时折叠 —— `f (v), x` 的括号在 VB6 是按值传临时，折叠会变成按引用
+  传原变量（语义不同），该形**保持现状**，作为已知缺口留在原地；
+- 哨兵 `scripts/check_np_call_firstarg_binop.ps1`：标记唯一、`cur_ == Comma` 判据、
+  裸标识符 callee、恰 1 位置实参、可寻址左值豁免；负例（去掉 `!argAddressable`）判红。
+- 本机探针（`--emit-c`）五形态：
+  ① `(x-r)/h` → `vb6_fHSVtoRGB(vb6_Num_Div((double)((x - trackRadius)), (double)(hueSpread)), 1, 1, &tmpR, &tmpG, &tmpB)`
+  ② `(x-r)*h` → 乘法直发 ③ `f (x-r), 1, …` → 6 实参直发 ④ `TakesThree x / h, 1, 2` 不变
+  ⑤ `y = Dbl(x) / h`（赋值路）不变。
+- 形状门：本机干净克隆 **632 行 / 与 §39 清单逐行比对 changed=0**（628 相同 + 4 条既知环境差异），
+  即对存量语料**零形状变化**，**无需 bless**。
+- 整编读数：见 §40.1（待下一轮探针落地后补）。
