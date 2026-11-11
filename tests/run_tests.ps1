@@ -12719,6 +12719,13 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_formstate\frmWriter.frm", "$Tests\pd_formstate\frmOther.frm") @(
         "vb6_SetWindowState(vb6_form_hwnd_frmOther(), 2); /* external form prop write */") @(
         "WindowState = 2")
+    # C2065 族① (`vb6_UserControl_cmbWidthUnit/cmbHeightUnit` ×4, pdResize.c):
+    # `UserControl.<本 UC 的设计期控件>` 与 `Me.<控件>` 同义; 旧发码走宿主伪成员表,
+    # 拼成没人声明的 `vb6_UserControl_<控件名>`。只钉**限定符**这一层。
+    Test-CodegenNote "pd_uc_self_qualified_control" @(
+        "$Tests\pd_uctrlqual\UcQual.ctl") @(
+        "vb6_ChkLong(vb6_hwnd_cmbWidthUnit.ListIndex)") @(
+        "vb6_UserControl_cmbWidthUnit")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

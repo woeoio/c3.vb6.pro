@@ -3214,3 +3214,50 @@ PD 侧同源复现（`.temp/paprobe`，`Units.bas + pdTranslate.cls`）：`_pa_1
   → `OLEDropMode`（`Processor.c:1176,1185`）→ 零散 3 条（`HotkeyManager` /
   `cmdExportSettings` / `fi_HandleCopy`）→ 族② UDT 裸名。
 
+## §50 C2065 族① 第五站 —— UC 自限定控件 `UserControl.<控件>`（4 条）
+
+### 50.1 根因（#3：`pdResize.c(799,800,802,803)`）
+
+`Controls\pdResize.ctl:733` 写的是 `UserControl.cmbWidthUnit.ListIndex = …`。
+VB6 里 UC 模块的 `UserControl` 就是这枚 UC 自身的对象（与 `Me` 同义），
+`UserControl.<名>` 指向它的**设计期子控件**。发码把它当「宿主伪对象 + 成员」，
+走 [hostPseudoRtlSymbol](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/cgen_util_com.cpp#L505)，
+拼出 `vb6_UserControl_cmbWidthUnit` —— 宿主伪成员表里没有控件名，也就没人声明它 ⇒ C2065。
+
+### 50.2 修法（在宿主伪对象那一支之前，先问控件表）
+
+[cgen_expr_member_m22_module.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_m22_module.inc#L144-L164)
+里，`hostPseudoIsObject(modName2)` 那一支原本直接发宿主符号。新增一问：
+成员名命中 `knownFormControls_`（本模块设计期控件表）⇒ 按**裸控件名**的唯一出口
+发 `vb6_hwnd_<原拼写>`（`knownFormControlOriginalNames_` 给原拼写，`cIdent` 折名），
+其后成员再交给 `formCtrlSlot` 那条既有码头 —— 与 `Me.<控件>` 走同一条。
+不是控件名时一字不动（`UserControl.hDC` / `Ambient.*` 等仍走宿主伪对象表）。
+
+### 50.3 修后实读
+
+- `Controls\pdResize.ctl`：`vb6_UserControl_cmbWidthUnit` 归零，改为
+  `vb6_ComSetProp(vb6_hwnd_cmbWidthUnit, L"ListIndex", vb6_ComPackValue(…));`、
+  `vb6_ComGetIntProp(vb6_hwnd_cmbWidthUnit, L"ListIndex")`、以及
+  `vb6_ComCall(vb6_hwnd_cmbWidthUnit, L"UpdateAgainstCurrentTheme", NULL, 0)`
+  （`cmbHeightUnit` 同）。
+- 对照实验：把同一句改写成 `Me.cmbWidthUnit…` 发码一致（`vb6_hwnd_cmbWidthUnit`），
+  证明两条写法现已同一出口。
+
+### 50.4 夹具与正反针
+
+- 新增 `tests/pd_uctrlqual/UcQual.ctl`：UC 内 `Begin VB.ComboBox cmbWidthUnit`，
+  过程里读 `UserControl.cmbWidthUnit.ListIndex`；
+- `Test-CodegenNote "pd_uc_self_qualified_control"`：正面钉
+  `vb6_ChkLong(vb6_hwnd_cmbWidthUnit.ListIndex)`，反面钉 `vb6_UserControl_cmbWidthUnit`；
+  只钉**限定符解析**这一层（其后成员按控件类型走 COM 还是结构体不在本题范围）；
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=197 FAIL=0 SKIP=0**（+1）。
+
+### 50.5 资源与未完
+
+本机增量构建：空闲 **5.24 GB**（低于 8 GB 硬线，`CMAKE_BUILD_PARALLEL_LEVEL=1`，
+1 TU + 2 链接）。
+
+下一站：`OLEDropMode`（`Processor.c:1176,1185`）→ `FormMain.c:2455` 的 `HotkeyManager`
+→ `FormExportLayers.c:754` 的 `cmdExportSettings` → `Dialogs.c:625` 的 `fi_HandleCopy`
+→ 族② UDT 裸名（`PD_MenuEntry` 10 条等，需先按工程上下文复现）。
+

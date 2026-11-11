@@ -142,6 +142,23 @@
             // vb6_usercontrol_hDC (没人声明它) ⇒ C2065, 而同一份文档写 `UserControl.hDC` 是通的。
             // 其余限定符是工程内模块名, 那条路一字不动。
             if (!isIncluded2 && hostPseudoIsObject(modName2)) {
+                // `UserControl.<本 UC 的设计期控件>` —— VB6 里这是「UC 自身对象 → 它的子控件」
+                // 的写法，与 `Me.<控件>` 同义（实测 Controls\pdResize.ctl:733 的
+                // `UserControl.cmbWidthUnit.ListIndex = …`）。宿主伪成员表里没有控件名，
+                // 直接走 hostPseudoRtlSymbol 会拼出 `vb6_UserControl_cmbWidthUnit`
+                // （没人声明它 ⇒ 整编 C2065 ×4: pdResize.c 799/800/802/803）。
+                // 控件的唯一出口与裸控件名一致：`vb6_hwnd_<原拼写>`，其后的成员再按
+                // formCtrlSlot 认回控件类型（与 Me 路同一条）。
+                {
+                    const std::string ucCtrlLowerM22 = Symbol::toLower(node.memberName);
+                    if (knownFormControls_.count(ucCtrlLowerM22)) {
+                        auto orgM22 = knownFormControlOriginalNames_.find(ucCtrlLowerM22);
+                        lastExpr_ = "vb6_hwnd_" + cIdent(
+                            orgM22 != knownFormControlOriginalNames_.end()
+                                ? orgM22->second : node.memberName);
+                        return;
+                    }
+                }
                 lastExpr_ = hostPseudoRtlSymbol(modName2, varName2);
                 return;
             }
