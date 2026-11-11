@@ -2778,6 +2778,29 @@ if (vb6_argtmp_vb6_cls_ucTreeViewPlus_0) vb6_cls_ucTreeViewPlus_Release(vb6_argt
 `cTE.Init TVP, "*.*"`：实参从复合字面量改为「落临时 + AddRef/Release 再取址」，
 交出去的实例指针不变（`vb6_UC_InstanceOf(vb6_hwnd_TVP)`），与相邻 `SelNode` 实参同形。
 
+### 42.7 bless 推送后的 CI 归因（本刀新红 = 2 条，已修）
+
+`17637127`（bless）的 CI：`Tests (compile #1)` 5 红 / `Tests (compile #2)` 7 红 /
+`Tests (vbp #11)` 的 `[GUI] FlexGridX86 ... FAIL (compile)`。用 `git worktree` 起
+`6f46c03f`（§42 之前的 dev）逐条复跑同一批哨兵对账，结论：
+
+- **既有 10 条**：`sa_access` / `builtin_opt_defaults` / `variant_slot_store` /
+  `legacy_slot_key_owners` / `iface_view_authority` / `legacy_view_arg_owners` /
+  `box_temp_reclaim` / `class_refcount_authority` / `object_slot_boxing` /
+  `vbp_fixture_census` —— 在 `6f46c03f` 全部同款红（§31.3 已记账），`FlexGridX86` 同样红。
+- **本刀新红 2 条**，逐条修：
+  1. `uc_instance_exit` U1：§42 的实参位实例指针在 `cgen_expr_call_arg_emit.inc` 手拼了
+     `vb6_UC_InstanceOf(`。改成调既有出口 `ucInstanceThisPtrExpr("vb6_cls_<UC>*", …)` ——
+     发码文本逐字节相同，expr/ 里手拼处回到 0。
+  2. `ctrl_prop_type_authority` A7：`ctrlDefaultPropOf` 多了**第三个消费者**（UC 默认属性
+     **Let** 站，`tudWidth = newWidth` 那一向）。这是合法新站点、不是第二份判据：它问的
+     是同一个出口。哨兵按原话重钉 4→5，并把 `cgen_assign_stmt_special.inc=1` 钉进
+     `$want7` —— 将来它若自己抄一份判据，计数会变 6 并被点名（钉死，不是放宽）。
+- `§43` 未新增任何 STATIC 红（它只碰 `cgen_util_classtype.cpp` / `cgen_helpers.inc`）。
+- 复跑：两条哨兵 PASS；`build.bat` 3 目标（增量，`CMAKE_BUILD_PARALLEL_LEVEL=1`，
+  起构建时空闲 5.9 GB < 8 GB 硬线，第二次违例、仅 3 目标、未进交换）；
+  `run_tests.ps1 -Category syntax` ⇒ **PASS=191 FAIL=0 SKIP=0**。
+
 
 ## §43 C2039 族② —— 标准模块函数返回类的链式接收者（47 条）
 

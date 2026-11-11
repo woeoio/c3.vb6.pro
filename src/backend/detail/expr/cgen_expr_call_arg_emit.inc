@@ -129,8 +129,9 @@
         // 设计槽 `vb6_hwnd_<名>` 存的是 vb6_UC_HostCreate 交回来的窗口，直接塞进类指针槽
         // 会让被调方把 HWND 当结构体解引用。只改这一格（实参位），With/成员接收者那一族
         // 的存量发码一字不动。
+        // 形状只在 ucInstanceThisPtrExpr 里拼一次 (账 #191 续: expr/ 不手拼 vb6_UC_InstanceOf)。
         if (!ucParamCls.empty() && argVal.rfind("vb6_hwnd_", 0) == 0) {
-            argVal = "(vb6_cls_" + cIdent(ucParamCls) + "*)vb6_UC_InstanceOf(" + argVal + ")";
+            argVal = ucInstanceThisPtrExpr("vb6_cls_" + cIdent(ucParamCls) + "*", argVal);
         }
         /* Fix 296 / 4b: 实参位上的 Extender 成员读也走实例入口 (CoolBar.ctl
            `RaiseEvent HeightChanged` 发成 `onHeightChanged(h, Extender.Height)`,

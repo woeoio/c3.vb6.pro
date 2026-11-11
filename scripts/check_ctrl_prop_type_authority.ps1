@@ -19,9 +19,12 @@
 #       call site is inside ctrlDefaultPropOf - the box a late-bound argument gets has to follow the
 #       value the emitter hands over, so the fold is the only place allowed to ask the default
 #       property's type. Asking controlPropType from there again = two tables for one question.
-#   A7 (256) ctrlDefaultPropOf = 4: definition + declaration + the TWO consumers (the identifier
-#       emission and the late-bound argument packing). Before this knife those two each carried
-#       their own copy of the decision, which is exactly how a BSTR ended up in a VT_DISPATCH slot.
+#   A7 (256) ctrlDefaultPropOf = 5: definition + declaration + the THREE consumers (the identifier
+#       emission, the late-bound argument packing, and the UC default-property **Let** station,
+#       account §42's `tudWidth = newWidth` write direction). Before this knife those two each
+#       carried their own copy of the decision, which is exactly how a BSTR ended up in a
+#       VT_DISPATCH slot. The Let station asks the same authority instead of copying the fold --
+#       if it ever grows its own decision, this count goes to 6 and the sentinel names it.
 #   A8 (230 §B137) the table's LongPtr answer must be consumed on BOTH roads, and the numeric box
 #       it produces must not be re-flattened downstream:
 #         a) boxToVariant carries a `case Vb6Type::LongPtr:` arm that boxes through `(intptr_t)`
@@ -133,7 +136,7 @@ if ($foldBody -ne '') {
     }
 }
 $want7 = @{ 'cgen_util_ctrl.cpp' = 1; 'cgen_helpers.inc' = 1; 'cgen_util_com.cpp' = 1;
-            'cgen_expr_ident_symbol.inc' = 1 }
+            'cgen_expr_ident_symbol.inc' = 1; 'cgen_assign_stmt_special.inc' = 1 }
 $got7 = @{}
 foreach ($f in $files) {
     $c7 = @([regex]::Matches(([System.IO.File]::ReadAllText($f.FullName)), 'ctrlDefaultPropOf\s*\(')).Count
@@ -141,9 +144,9 @@ foreach ($f in $files) {
 }
 $tot7 = 0
 foreach ($k in $got7.Keys) { $tot7 += $got7[$k] }
-if ($tot7 -ne 4) {
+if ($tot7 -ne 5) {
     $bad += ('A7 ctrlDefaultPropOf mentioned ' + $tot7 +
-             ' times (want definition + declaration + the two consumers) -> ' +
+             ' times (want definition + declaration + the three consumers) -> ' +
              (($got7.Keys | ForEach-Object { $_ + '=' + $got7[$_] }) -join ' '))
 }
 foreach ($k in $want7.Keys) {
