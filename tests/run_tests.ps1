@@ -12719,6 +12719,16 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_formstate\frmWriter.frm", "$Tests\pd_formstate\frmOther.frm") @(
         "vb6_SetWindowState(vb6_form_hwnd_frmOther(), 2); /* external form prop write */") @(
         "WindowState = 2")
+    # C2065 族① (`OLEDropMode` ×2, Processor.c 1176/1185): 窗体本体的 OLEDropMode
+    # 写侧从来没有配对出口, 落 Module.var 回退发裸名字。写侧登记后走 RTL 的放置
+    # 目标开关 (0 → Revoke / 非 0 → Register); 设计期非 0 的窗体在 load 里顺带把
+    # Form_OLEDragOver/Drop 挂成回调并注册, 否则运行期切模式是空转。
+    Test-CodegenNote "pd_form_oledropmode" @(
+        "$Tests\pd_oledrop\FormMain.frm", "$Tests\pd_oledrop\Proc.bas") @(
+        "vb6_SetOLEDropMode(vb6_form_hwnd_FormMain(), 0); /* external form prop write */",
+        "vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FormMain, 1, (void*)vb6_FormMain_Form_OLEDragDrop);",
+        "vb6_OLEDrop_Register((void*)vb6_hwnd_FormMain); /* 设计期 OLEDropMode=1 */") @(
+        "OLEDropMode = 0;")
     # C2065 族① (`vb6_UserControl_cmbWidthUnit/cmbHeightUnit` ×4, pdResize.c):
     # `UserControl.<本 UC 的设计期控件>` 与 `Me.<控件>` 同义; 旧发码走宿主伪成员表,
     # 拼成没人声明的 `vb6_UserControl_<控件名>`。只钉**限定符**这一层。

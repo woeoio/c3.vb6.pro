@@ -3272,3 +3272,59 @@ VB6 里 UC 模块的 `UserControl` 就是这枚 UC 自身的对象（与 `Me` �
 - 提交：`7362a58c`（显式路径 4 个），已双推 `origin`/`github` 的 `dev`。
   §42.6（整编 #3 的 C2039 族②行号与验收读数）在截断前已落盘，本次未重跑。
 
+## §51 C2065 族① 第六站 —— 窗体 `OLEDropMode` 写侧缺配对出口（2 条）
+
+### 51.1 根因（#3：`Processor.c(1176,1185)`）
+
+`Modules\Processor.bas:999/1015` 写 `FormMain.OLEDropMode = vbOLEDropNone / vbOLEDropManual`。
+读侧 `form_pseudo.hpp` 从来没有这一格，写侧 `getControlPropWriteFn` 的 Form 分支也没有
+⇒ 落 Module.var 回退，发出裸 `OLEDropMode = 0;`（C2065 ×2）。窗体自己的裸写
+（`OLEDropMode = 1`）同样落空 —— 发送形状一模一样。RTL 侧其实早就有放置目标的
+三件套（`vb6_OLEDrop_Register / Revoke / SetHandler`），只是没有「按模式切」的入口。
+
+### 51.2 修法
+
+1. **写侧登记**：[cgen_util_ctrl.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/cgen_util_ctrl.cpp#L877-L881)
+   Form 分支加 `oledropmode → vb6_SetOLEDropMode`。跨窗体（`FormMain.`）与窗体模块内
+   裸写两条路都走这张表，一处登记两边同时收口。
+2. **RTL 配对出口**：[vb6forms_oledd.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/vb6forms_oledd.c)
+   新增 `vb6_SetOLEDropMode(void* hwnd, int32_t val)`：非 0 → Register、0 → Revoke。
+   同时给 `Vb6OLETarget` 加 `registered` 位，把「注册状态」与「事件槽」分开 ——
+   `Revoke` 只清注册位、**保留事件回调**，这样 Processor 的「关掉再打开」不必重新挂
+   handler（否则重开之后掉下来的文件没人接）；`Register` 也不会再把「只有事件槽」误当
+   已注册。
+3. **事件接线**：[cgen_form_show.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/module/cgen_form_show.inc)
+   在 `vb6_LoadForm` 之前，把本窗体的 `Form_OLEDragOver/Drop`（也认 `<窗体名>_` 前缀）
+   按控件那条同一出口 `vb6_OLEDrop_SetHandler` 挂上（kind 0=Over / 1=Drop）；
+   设计期 `OLEDropMode<>0` 时再 `vb6_OLEDrop_Register`。没有这一步，写侧即使发对也是空转。
+   设计期取值由 [cgen_form_prelude.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/module/cgen_form_prelude.inc)
+   新读的 `formOLEDropMode` 提供（与 `formBorderStyle` 同一个读法）。
+
+### 51.3 实读（本机 emit，`.temp/oledrop`）
+
+```
+vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FormMain, 0, (void*)vb6_FormMain_Form_OLEDragOver); }
+vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FormMain, 1, (void*)vb6_FormMain_Form_OLEDragDrop); }
+vb6_OLEDrop_Register((void*)vb6_hwnd_FormMain);  /* 设计期 OLEDropMode=1 */
+vb6_SetOLEDropMode(vb6_hwnd_FormMain, 1);  /* bare form prop: OLEDropMode */
+vb6_SetOLEDropMode(vb6_form_hwnd_FormMain(), 1);  /* external form prop write */
+vb6_SetOLEDropMode(vb6_form_hwnd_FormMain(), 0);  /* external form prop write */
+```
+
+`--arch x86` 整编该探针通过（`oledrop.exe` 产出），即 RTL 新函数与生成码两侧签名对齐。
+
+### 51.4 夹具 / 回归
+
+- `tests/pd_oledrop/{FormMain.frm,Proc.bas}`：设计期 `OLEDropMode=1` + 两条
+  `Form_OLEDrag*` 处理器；模块里 `FormMain.OLEDropMode = vbOLEDropManual/None`。
+- `run_tests.ps1` 新针 `pd_form_oledropmode`：正面三形状（跨窗体写 0、Drop 回调接线、
+  设计期注册），反面 `OLEDropMode = 0;`。
+- `-Category syntax` ⇒ **PASS=198 FAIL=0 SKIP=0**。
+
+### 51.5 资源与下一站
+
+空闲物理 6.18 GB（< 8 GB 硬线），按先例 `CMAKE_BUILD_PARALLEL_LEVEL=2` 增量构建
+（5 个 TU），探针编译同样低载荷。下一站按 §37.8：`FormMain.c:2455` 的 `HotkeyManager`
+→ `FormExportLayers.c:754` 的 `cmdExportSettings` → `Dialogs.c:625` 的 `fi_HandleCopy`
+→ 族② UDT 裸名。
+

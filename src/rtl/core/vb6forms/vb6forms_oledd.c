@@ -340,6 +340,7 @@ typedef void (*Vb6OLEDropCb)(void** dataObj, int32_t* effect, int16_t* button,
 #define VB6_OLETARGET_MAX 32
 typedef struct {
     HWND hwnd;
+    int  registered;       // RegisterDragDrop 已生效 (≠ 有没有事件槽)
     Vb6OLEDropCb cb[2];
     void* srcCb[4];        // 源侧: [0]=StartDrag [1]=SetData [2]=GiveFeedback [3]=CompleteDrag
 } Vb6OLETarget;
@@ -467,16 +468,25 @@ static IDropTargetVtbl kDropTargetVtbl = {
 
 int32_t vb6_OLEDrop_Register(void* hwnd) {
     if (!hwnd) return 0;
-    if (targetFind((HWND)hwnd)) return 1;   // 已注册
+    Vb6OLETarget* slot = targetFind((HWND)hwnd);
+    if (slot && slot->registered) return 1;   // 已注册
     Vb6DropTarget* t = (Vb6DropTarget*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(Vb6DropTarget));
     if (!t) return 0;
     t->vt.lpVtbl = &kDropTargetVtbl;
     t->hwnd = (HWND)hwnd;
     if (RegisterDragDrop((HWND)hwnd, &t->vt) != S_OK) { HeapFree(GetProcessHeap(), 0, t); return 0; }
-    if (g_targetCount < VB6_OLETARGET_MAX) {
-        g_targets[g_targetCount].hwnd = (HWND)hwnd;
-        g_targetCount++;
+    if (!slot) {
+        if (g_targetCount >= VB6_OLETARGET_MAX) {   // 没地方记状态 ⇒ 不留半个注册
+            RevokeDragDrop((HWND)hwnd);
+            HeapFree(GetProcessHeap(), 0, t);
+            return 0;
+        }
+        slot = &g_targets[g_targetCount++];
+        slot->hwnd = (HWND)hwnd;
+        slot->cb[0] = slot->cb[1] = NULL;
+        slot->srcCb[0] = slot->srcCb[1] = slot->srcCb[2] = slot->srcCb[3] = NULL;
     }
+    slot->registered = 1;
     return 1;
 }
 
@@ -591,13 +601,19 @@ void vb6_OLEDrop_RevokeAll(void) {
 void vb6_OLEDrop_Revoke(void* hwnd) {
     if (!hwnd) return;
     RevokeDragDrop((HWND)hwnd);
-    for (int i = 0; i < g_targetCount; i++) {
-        if (g_targets[i].hwnd == (HWND)hwnd) {
-            g_targets[i] = g_targets[g_targetCount - 1];
-            g_targetCount--;
-            return;
-        }
-    }
+    // 事件槽**保留** (只清注册位): OLEDropMode 关掉再打开 (PhotoDemon 的
+    // Processor.PrepareForProcessing / ResetProcessingStatus 就是这一对) 时
+    // 不必重新 SetHandler —— 否则重开之后掉下来的文件没人接。
+    Vb6OLETarget* t = targetFind((HWND)hwnd);
+    if (t) t->registered = 0;
+}
+
+// OLEDropMode 写侧 (0=无 / 1=Manual / 2=Automatic): 只切「是不是放置目标」。
+// 注册成功与否不改变属性语义, 故没有回读; 事件槽由 SetHandler 预先挂好。
+void vb6_SetOLEDropMode(void* hwnd, int32_t val) {
+    if (!hwnd) return;
+    if (val != 0) vb6_OLEDrop_Register(hwnd);
+    else          vb6_OLEDrop_Revoke(hwnd);
 }
 
 // ===================== 无头联测: 给已注册目标发一次 Drop =====================

@@ -100,6 +100,13 @@
     int formBorderStyle = 2;
     it = frmDesc.formControl.properties.find("BorderStyle");
     if (it != frmDesc.formControl.properties.end()) formBorderStyle = (int)it->second.intValue;
+    // 窗体级 OLEDropMode (0=无/1=Manual/2=Automatic): 设计期非 0 时, load 里把窗体
+    // 注册成 OLE 放置目标 (与控件那条同一出口, 见 cgen_form_ctrl_style_apply.inc)。
+    // 运行期由 `vb6_SetOLEDropMode` 切 —— Processor.bas 的
+    // `FormMain.OLEDropMode = vbOLEDropNone/vbOLEDropManual` 就是这一对。
+    int formOLEDropMode = 0;
+    it = frmDesc.formControl.properties.find("OLEDropMode");
+    if (it != frmDesc.formControl.properties.end()) formOLEDropMode = (int)it->second.intValue;
 
     // czUI fix: UC 事件接线 (文件作用域) — 对每个工程内 UserControl 实例:
     // 解析 .ctl 的 Public Event 声明, 若窗体代码定义了 <实例>_<事件> 处理器,

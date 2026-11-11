@@ -874,6 +874,11 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
         // 发出裸 `WindowState = 0;`（整编实测 C2065 ×4：Interface.c 2、
         // Tools_ScreenVideo.c 1、Tools_ScreenVideoPrefs.c 1）。
         if (propLower == "windowstate") return "vb6_SetWindowState";
+        // OLEDropMode 是窗体/控件的 VB6 属性, 但写侧从来没登记过 ⇒
+        // `FormMain.OLEDropMode = vbOLEDropNone` 落 Module.var 回退, 发出裸
+        // `OLEDropMode = 0;`(整编实测 C2065 ×2: Processor.c 1176/1185)。
+        // 配对出口走 RTL 的 OLE 放置目标开关 (0 → Revoke, 非 0 → Register)。
+        if (propLower == "oledropmode") return "vb6_SetOLEDropMode";
         // 账 #233: 与上面读侧成对 —— 赋值语句发 C 时**只问这张表**, 没登记就把读函数当左值。
         if (propLower == "currentx") return "vb6_SetCurrentX";
         if (propLower == "currenty") return "vb6_SetCurrentY";
