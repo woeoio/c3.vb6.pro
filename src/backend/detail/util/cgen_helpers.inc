@@ -903,6 +903,13 @@
     // ` variant` 词, 由两条成员读的发码路按 classFieldKind (§B169 的唯一出口) 盖上。
     bool cExprIsVariantSlotFieldRead(const std::string& cExpr) const;
 
+    // §B172 同一出口的**识别半**: 「这枚 C 文本是不是类数据字段的读」。
+    // 尾注由 classFieldReadExpr (本文件上方声明) 唯一拼出, 三种形态只差后缀:
+    // ` field */` / ` field variant */` / ` field voidptr */`。值成员空括号那个判据
+    // (cgen_expr_call_builtin_argtype.inc 的 §38-C/D/E) 问的就是这一问 —— 它不许自己
+    // 去认尾注那段文字 (check_variant_slot_store.ps1 的 R5d 钉死这一点), 只许调这里。
+    bool cExprIsClassFieldRead(const std::string& cExpr) const;
+
     // 账 #305 §B172 (第六十三刀): 上面那个词的**唯一作者** —— 「把一枚类数据字段的读发出去」
     // 这一件事收成一枚出口。三条成员读的发码路 (点号走 knownClassVars_ 的那一站 / 点号走
     // Fix 088c 由 AST 推类的那一站 / With 体内那一站) 都调它, 尾注与 ` variant` 词因此
@@ -1723,6 +1730,12 @@
     std::string udtDynMemberIndex(const std::string& elemCType,
                                   const std::string& fieldExpr,
                                   const std::vector<ExprPtr>& args);
+
+    // A7 收口: 秩 >=4 的 VB6_SA_ND_ATN 下标实参**唯一一处**拼接 (变量路与 UDT 成员路共用)。
+    // 最外层那对括号不是装饰 —— 预处理器按顶层逗号切宏实参, `{a, b, c}` 的花括号挡不住它;
+    // 少了就是 cl C4002 "VB6_SA_ND_ATN 参数过多"(实测 P4.bas)。拼法只有这一份, 两条路
+    // 各拼一遍 = 同一个 bug 可以只在其中一条路上复发, 而且 check_sa_access.ps1 的 A7 会红。
+    std::string ndAtnSubscriptArg(const std::vector<std::string>& idxExprs) const;
 
     // ai/022 B08f-1 (D37): 走同一条 UDT 解析路, 但返回字段在 C 里的**对象类型**
     // (`vb6_cls_X*` / `void*` / "" = 不是对象字段或推不出)。判"这个左值到底是不是 Variant

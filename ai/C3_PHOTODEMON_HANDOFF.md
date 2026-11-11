@@ -4182,3 +4182,23 @@ VB6 的实际语义是 `.SetLayerOffsetX ((maxWidth - .GetLayerWidth()) \ 2)` �
 
 
 
+
+### 56.21 四项 11-10 起 STATIC 红账清零（sa_access / uc_default_member / variant_slot_store / prop_write_value_slot）
+
+区间 `d9040222..b301ddfc` 逐条定位（不看数字，先问「哪一刀漏的、漏的是什么」）：
+
+| 检查 | 肇事刀（11-11） | 定位读数 | 性质 | 处置 |
+| --- | --- | --- | --- | --- |
+| `sa_access` A7 | `941a2afd` UDT 动态数组成员按实参秩发码（秩 2/3/N） | `941a2afd^` 的 `((const int32_t[])` 全 src/backend = 1；该刀起 = 2（多出 `cgen_util_classtype.cpp` 的 `udtDynMemberIndex`） | **真违反**：`VB6_SA_ND_ATN` 下标实参与最外层括号出现第二份拼法，C4002 的教训可在两条路上各自复发 | 归并回唯一权威：新增 `ndAtnSubscriptArg`（声明 `cgen_helpers.inc`，定义在 `cgen_util_classtype.cpp`），变量路（`cgen_expr_call_prelude.inc`）与 UDT 路都只调它；A7 计数回到 1 |
+| `uc_default_member` R4 | `bfdbb265` §42 两条红归因并修 —— U1 走既有实例出口 | `arg_emit.inc` 的 `vb6_UC_InstanceOf(` 0 处；设计槽那一格改为 `ucInstanceThisPtrExpr("vb6_cls_" + cIdent(ucParamCls) + "*", argVal)` | **判据过时**：形状被收进一枚出口（比原来更严，拼法只一处），但 R4 仍找 expr/ 里的字面 | 口径写清：R4 改钉「设计槽实参恰好 1 次调该出口且实参形状逐字如上」+「`cgen_util_classcall.cpp` 的 `ucInstanceThisPtrExpr` 体内仍拼 `vb6_UC_InstanceOf(`」（新增该文件的存在性检查；同文件另一处 ByRef 实参调用不计入本格） |
+| `variant_slot_store` R5d | 注释：`a0620eae`；新消费者：`58fd516e` | `cgen_expr_member_voidptr_com.inc` 4 → 6（多出的 2 处是解释注释）；`cgen_expr_call_builtin_argtype.inc` 3 处、其中 1 处是**生产判据** `callee.find("/* class var .")` | 一半判据噪声（注释引用尾注）、一半**真违反**（新文件把尾注文字当判据） | 注释按 §B164 先例改写为不点名的说法（6 → 4，判据不放宽）；真判据归并：新增 `cExprIsClassFieldRead`（与 `classFieldReadExpr` 同文件，钉 ` field */` / ` field variant */` / ` field voidptr */` 三种串尾），消费者只许调它，该文件回到 0 处 |
+| `prop_write_value_slot` R2 | `909a9e7b` pdResize 三小族 — ByRef 标量属性写 | `packLetValueArg(` 2 → 4；新增两处都在主人 `writeValArgForParamSlot` 体内（`byrefScalarSlot` 的地址那一发与解箱后补取址） | **判据随实现失真**：仍是主人自己答，没有站点绕过；钉「定义 1 + 主人调用 1」这个数会随主人内部排布误红 | 口径写清：改钉结构 —— 本文件每一处 `packLetValueArg(` 必须落在 `packLetValueArg` 或 `writeValArgForParamSlot` 的函数体内（花括号配平取 span），落到别处才算第二份答案 |
+
+**验证**：
+
+- 4 个脚本本机全绿（`check_sa_access` / `check_uc_default_member` / `check_variant_slot_store` / `check_prop_write_value_slot`）。
+- 构建：空闲 7.37 GB（< 8 GB ⇒ `CMAKE_BUILD_PARALLEL_LEVEL=1` 口径），`ninja -j1` 53 目标，`cl` 峰值 264 MB。
+- `-Category syntax`：**PASS=212 FAIL=0 SKIP=0**（与 `b4d756a8` 同数）。
+- 形状：9 份相关输入逐行同哈希 `emit-manifest.expected.txt` —— 3 份 bless 语料（`frmevents/FrmEvents.vbp`、`pd_modret/PDImages.bas`、`VBFlexGridDemo/VBFlexGridDemo.vbp`）+ 改动覆盖的 `b606_udtmem_nd/ModNd.bas`、`b608_value_member_paren/PDImages.bas`、`pd_udtchain/{PdChainTypes.bas,PdChainUse.bas}`、以及本刀刚登记的 `pd_clsarrparam/{Mod1.bas,pd_clsarrparam.vbp}`。**A7 重构与识别半合并都没有改一个字节的发码。**
+- 同期 `b4d756a8` 的回归 run `43006254739`：compile #1 的 8 红 = 本刀这 4 项 + `manifest_coverage`（已随 2 行新输入登记转绿）+ 3 项既存旧红（`builtin_opt_defaults` / `legacy_slot_key_owners` / `iface_view_authority`，不在本刀范围）；vbp #4/#11 是 runner 上的 GUI 像素用例（`ucSegmentedControl`），与本刀无关。
+

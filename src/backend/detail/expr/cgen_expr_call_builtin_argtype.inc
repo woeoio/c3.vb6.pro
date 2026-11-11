@@ -167,7 +167,7 @@
     //   · 有实参的调用不进这一格 (argList 非空);
     //   · 真方法调用 (resolveClassMemberCall 有解) 在 callee 阶段就被折成函数名, 没有尾注;
     //   · 尾注是这三条读法自己写的 (`/* ctrl prop read */`、`/* ctrl array U|LBound */`、
-    //     `/* class var .X field */`) ⇒ 产出的是值访问, 空括号只是 VB6 的噪声写法。
+    //     类字段的字段尾注) ⇒ 产出的是值访问, 空括号只是 VB6 的噪声写法。
     if (argList.empty() && callee.size() > 3 && callee.compare(callee.size() - 2, 2, "*/") == 0) {
         static const std::string kValueReadTails[] = {
             "  /* ctrl prop read */",
@@ -182,8 +182,9 @@
                 break;
             }
         }
-        // 类字段读: `obj->member  /* class var .X field */` (尾注里带字段名)
-        if (!valueReadNote && callee.find("/* class var .") != std::string::npos) {
+        // 类字段读: 尾注里带字段名 —— 认这一问只许问 §B172 那个出口的识别半
+        // (cExprIsClassFieldRead), 不在这里认尾注文字。
+        if (!valueReadNote && cExprIsClassFieldRead(callee)) {
             valueReadNote = true;
         }
         if (valueReadNote) {

@@ -14,9 +14,9 @@
     // 注: class_voidptr 的注释会被 MSVC 视为空白, 不影响 C 代码语义.
     //
     // PhotoDemon C2143 收口: 尾注只认**末尾**那一枚。`obj` 可能是「内层调用 + 实参里的尾注」:
-    //   vb6_pdSelection_GetCompositeBoundaryRect((void*)…->MainSelection  /* class var .MainSelection field */)
-    // 那枚注释标的是**内层调用的接收者**, 不是外层成员要读的字段。此前
-    // `obj.find("/* class var .")` 一命中就 substr 截断 + 拼 `->member`, 把这枚
+    //   vb6_pdSelection_GetCompositeBoundaryRect((void*)…->MainSelection  /* 字段尾注 */)
+    // 那枚注释标的是**内层调用的接收者**, 不是外层成员要读的字段。此前按「包含字段尾注标记」
+    // 一命中就 substr 截断 + 拼 `->member`, 把这枚
     // 调用从实参中间切开: `…GetCompositeBoundaryRect((void*)…->MainSelection->Left`
     // (PhotoDemon Layers.bas:467/468 `…GetCompositeBoundaryRect.Left/Top`
     //  ⇒ Layers.c 672/673 两条 C2143「缺少右括号」)。

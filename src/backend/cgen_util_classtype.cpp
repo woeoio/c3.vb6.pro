@@ -1020,13 +1020,20 @@ std::string CCodeGen::udtDynMemberIndex(const std::string& elemCType,
     }
     // 秩 >=4: 秩数与**全部**下标一次交全 (与变量路 VB6_SA_ND_ATN 同形；最外层那对括号
     // 不是装饰 —— 预处理器按顶层逗号切宏实参)。
-    std::string idxList;
-    for (size_t d = 0; d < idxs.size(); d++) {
-        if (d) idxList += ", ";
-        idxList += "(int32_t)(" + idxs[d] + ")";
-    }
     return "VB6_SA_ND_ATN(" + elemCType + ", " + ndArr + ", " + std::to_string(idxs.size())
-         + ", ((const int32_t[]){" + idxList + "}))";
+         + ndAtnSubscriptArg(idxs);
+}
+
+// A7 收口: `VB6_SA_ND_ATN` 的下标实参 (含最外层那对括号) 的唯一拼法。变量路
+// (cgen_expr_call_prelude.inc) 与 UDT 动态成员路 (上面 udtDynMemberIndex) 都只调这里。
+// 两条路各拼一遍的后果是实测过的: 少一层括号 ⇒ cl C4002 "VB6_SA_ND_ATN 参数过多"。
+std::string CCodeGen::ndAtnSubscriptArg(const std::vector<std::string>& idxExprs) const {
+    std::string idxList;
+    for (size_t d = 0; d < idxExprs.size(); d++) {
+        if (d) idxList += ", ";
+        idxList += "(int32_t)(" + idxExprs[d] + ")";
+    }
+    return ", ((const int32_t[]){" + idxList + "})";
 }
 
 // <vbeclipse> <VBFlexGridDemo>: 返回左值 UDT 字段的**声明类型名** (`mi.typeRefName`)。
