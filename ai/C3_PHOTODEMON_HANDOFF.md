@@ -3766,7 +3766,26 @@ absent `->Selection->Left` / `->Selection->Top`。
 （3 步增量、未起整工程 emit，未出事）；下一轮起构建前须先确认 ≥8 GB 再动手。
 
 提交：`a0620eae`（codegen 修正 + 夹具 + 钉子）；handoff 单独一刀。
-「族② UDT 裸名」按 §55.2 已由 §45 修好、夹具通过，仍等整编 #5 工件确认 0 命中。
+「族② UDT 裸名」按 §55.2 已由 §45 修好、夹具通过，仍等含本轮的整编确认 0 命中。
+
+### 56.11 整编 #5 是**旧基线**；#6 已按含本轮的 merge 发起
+
+run `42960826666`（workflow_dispatch，`probe/photodemon-emit`，sha `965b6a64`）完成后
+`git merge-base --is-ancestor` 判定 `6b2311f8` / `117836fb` / `a0620eae` **均不在**该提交里
+⇒ 工件不含本轮任何一刀，只能当「改前基线」用：
+
+| 项 | #5 读数（旧基线） |
+| --- | --- |
+| `_vcmp_` | `pdPSDLayer.c` C2065 ×4（4713 / 4742 / 5183 / 5212） |
+| 零散 | `Layers.c` C2143 ×2（672 / 673，`missing ')' before ';'`） |
+| `pdResize.c` | 无 cl 错误（仅 6 条 VB3003 C3 警告，既有 bare ByVal） |
+| `WindowState` / `Extender` | 0 命中 |
+| 大桶 | C2440 202 / C2197 159 / C2198 97 / C2224 59 / C2045 50 / C2374 42 / C2036 34 / C2063 19 / C2296 13 / C2039 13 / C2106 10 |
+
+已把 dev（`0aa7a696`）合入 `probe/photodemon-emit`（merge `4e48d43c`），origin/github 双推，
+并 dispatch #6：run `42974019359`。等工件后按上表逐桶对比收口（预期 `_vcmp_` 4→0、
+C2143 2→0；其余桶不应变差）。
+
 
 
 
