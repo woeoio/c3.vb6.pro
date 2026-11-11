@@ -4717,3 +4717,36 @@ MemberAccessExpr 时先 `inferClassTypeOfExpr(object)` 定类，再按两张权�
 整编 C2440 最大单块，单文件/两文件复现均落空（需要整编符号面）；下次取 CI 生成的
 `pdCanvas.c` 再定位。WIC 的 `GUID_NULL()` 装箱成 VT_BSTR 是同族另一变体（参数表把
 `ByRef ... As Guid` 映射成 void**），本次未动。
+
+### 56.31 形状门归因：`tests/cls_inh/Inh.vbp`（§56.29 的既有输入改写）
+
+**现象**：CI `43045032842`（head 6f923ac6）形状门报「哈希不同 1」——`tests/cls_inh/Inh.vbp`
+`a65cd485…`（96,510 B）→ `e861bf0f…`（97,943 B，+1,433 B）。前一刀 `48e4ea0a` 的清单
+（`ci/emit-manifest` 提交 84079a9c）该行仍是 a65cd485，故定位到 §56.29 这一笔。
+
+**归因（逐行 diff 实证，不是推测）**：把 `src/backend/stmt/cgen_call.cpp` +
+`src/backend/cgen_util_classtype.cpp` 临时回退到 `48e4ea0a` 重建，对同一 `Inh.vbp`
+`--emit-c` 取旧文（97,284 B）与本机现文（98,717 B）逐行 diff：增 39 行 / 删 20 行，
+与 CI 的 +1,433 B 逐字节对得上（归一化只是把仓库根路径换成长度固定的 `<ROOT>`）。差异全部
+落在 `u.h`（`Public Type TWrap` 的 `h As InhBase`，即本刀补上的「UDT 字段是工程类」推断）：
+
+1. `Set u.h = me/d` 由裸指针赋值 `u.h = me;  /* Set */` 变成账 #305 (甲) 腿② 的类对象
+   Set：`vb6_cls_InhBase* __clsoldN = u.h; … = (vb6_cls_InhBase*)vb6_ComObject_UnboxVb6Instance(…);
+   if (u.h) vb6_cls_InhBase_AddRef(u.h); if (__clsoldN) vb6_cls_InhBase_Release(__clsoldN);`
+   —— 推断出类之后才走得到这条**带引用计数**的腿，修前那条裸赋值既不 AddRef 也不 Release。
+2. `u.h.Level` / `u.h.Speak()` 的返回值不再经 `vb6_VariantFromValue(...)` + `vb6_CStr(...)`
+   装箱（修前 `vb6_VarCmpLongEq(&_vcmp_1, 105)`），直接 `vb6_CStrLong(...)` / `vb6_StrCmp(...)`。
+3. `Set mi2 = New InhMid` / `Set sg = New InhSib` 的 `__clsoldN` 只是编号从 11/12 顺延到 13/14。
+
+**行为核对**（栈上跑，不是只看形状）：现文 `--output-dir` 编出 `Inh.exe` 运行 = **59 × OK /
+0 FAIL / exit 0**，其中 INH41/42/43（`u.h.Speak()`/`Greet()`）与 INH59（`u.h.Level` 读写）
+全 OK —— 新增的 Release 与被 AddRef 的引用一一配对，没有双释放/泄漏迹象。
+
+**结论**：这是 §56.29 想要的形状变化（同一族在 Photodemon 侧的 `m_AllTags(g,t).DB_StackIDs`
+也是这条推断），不是误伤。**待办：需用户确认后 `-Bless` 这一行并注明本归因**（既有输入改写
+的 bless 按停点规矩不擅自做）。
+
+**同批待登记（新输入，等 CI 43046660886 清单一次办）**：`tests/cxmodqual/{cxmodqual.vbp,
+ModCx.bas,ModUse.bas}`、`tests/pa_variant_slot/{pa_variant_slot.vbp,PaSlot.bas}`、
+`tests/pd_formcall/ModC.bas`、`tests/pd_udtfield_call/TagMod.bas`、`tests/udtret_byref/URetMod.bas`
+（9 行；.frm/.cls 不进清单）。
