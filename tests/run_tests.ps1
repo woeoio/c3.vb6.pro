@@ -12808,6 +12808,35 @@ if ($Category -in @("all", "syntax")) {
     Test-CodegenNote "prop_let_comresult" @("$Tests\propcomlet\propcomlet.vbp") @(
         "vb6_CtlBox_prop_let_FontSize((void*)me, (float)vb6_VariantToDouble(vb6_VariantFromComResult(") @(
         "prop_let_FontSize((void*)me, vb6_ComCall(")
+    # C2224 "左侧必须具有结构/联合类型" (PhotoDemon 整编 16 条): 接收者是**窗体值表达式** ——
+    #   Interface.GetModalOwner()  (`Public Function GetModalOwner() As Form`, 15 处)
+    #   Forms(0&)                  (内置 Forms 集合元素, OS.bas:1250)
+    # 修前拼 `vb6_Interface_GetModalOwner().hWnd` / `vb6_Forms_Item(0).hWnd`。
+    # 窗体值的 C 类型只有 HWND void*, 属性读唯一出口是窗体属性表 (getControlPropReadFn)。
+    Test-CodegenNote "form_value_hwnd" @("$Tests\formhwndval\formhwndval.vbp") @(
+        "vb6_GetControlHwnd(vb6_FormB_GetModalOwner())",
+        "vb6_GetControlHwnd(vb6_FormB_GetOwnerForm())",
+        "vb6_GetControlHwnd(vb6_Forms_Item(") @(
+        ".hWnd);")
+    # C2374 'redefinition; multiple initialization' (PhotoDemon MainWindow.frm 42 条):
+    # 菜单**控件数组** (`Begin VB.Menu MnuFile ... Index = 1`) 里几枚带子菜单的元素,
+    # 生成名此前只有 controlName ⇒ 同一函数里重复 `HMENU hPopup_MnuFile = CreatePopupMenu();`
+    # (MnuEffectUpper 14 枚 / MnuLayer 11 枚 / MnuAdjustments 8 枚 …)。数组元素把 Index
+    # 缀进名字, 非数组 (index = -1) 保持原名 (MnuFileTop / MnuEditTop)。
+    Test-CodegenNote "menu_array_popup_var" @("$Tests\menuarr\menuarr.vbp") @(
+        "HMENU hPopup_MnuFile_1 = CreatePopupMenu();",
+        "HMENU hPopup_MnuFile_2 = CreatePopupMenu();",
+        "HMENU hPopup_MnuFileTop = CreatePopupMenu();") @(
+        "HMENU hPopup_MnuFile = CreatePopupMenu();")
+    # C2045 'label redefined' (PhotoDemon 整编 50 条): For 方向拆分是逐层的,
+    # 修前副本位只是一枚 int (labelCopyIdx_), 内层拆分把外层覆盖+清零 ⇒ 内层标签在
+    # 外层两份里都发 _d2; 外层循环体里内层 For 之后的标签两份都不带后缀。
+    # 修后副本路径逐层编码: (外层1,内层1)="" / (1,2)="_d1_d2" / (2,1)="_d2" / (2,2)="_d2_d2"。
+    Test-CodegenNote "split_label_nest" @("$Tests\lblnest\lblnest.vbp") @(
+        "vb6_label_SkipPixel_d1_d2:;",
+        "vb6_label_SkipPixel_d2_d2:;",
+        "goto vb6_label_SkipPixel_d1_d2;",
+        "vb6_label_NextPixel_d2:;")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

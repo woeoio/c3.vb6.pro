@@ -3903,6 +3903,165 @@ COM VARIANT*）；`isVariantSlot` 对 ComCall 结果返回 false ⇒ 原样递�
 **纪律记录**：构建前空闲内存 6.4 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
 
 
+### 56.15 C2224 `left of '.hWnd' must have struct/union type`：窗体值表达式上的属性读（16 条）
+
+**目标桶**：C2224 `'left of '.hWnd' must have struct/union type'` **16 条**，整编落点：
+`ColorManagement.c(1392)`、`dialog_GradientEditor.c(1918/2008)`、`FileMenu.c(352)`、
+`Macros.c(480/656)`、`OS.c(1306)`、`Palettes.c(7375/7456)`、`pdLUT3D.c(1627)`、
+`Plugin_EZTwain.c(426/478)`、`Printing.c(400)`、`Saving.c(1564)`、
+`SelectionFiles.c(560/641)`。
+
+**根因**：接收者是**窗体值表达式**，C 侧类型只有一枚 HWND `void*`，但发码拼了结构体成员：
+
+| 源码形状 | 修前发码 | 出处 |
+| --- | --- | --- |
+| `GetModalOwner().hWnd` | `vb6_Interface_GetModalOwner().hWnd` | `Public Function GetModalOwner() As Form`（Interface.bas:1392），15 处 |
+| `Forms(0&).hWnd` | `vb6_Forms_Item((int32_t)(0L)).hWnd` | OS.bas:1250 |
+
+两条都落到 `cgen_expr_member_class_fallback.inc` 的最终兜底 `obj + "." + member`：
+`inferClassTypeOfExpr` 只认 `SymbolKind::Class`（窗体模块/`Form` 都不是），
+`inferUdtTypeOfExpr` 也空 ⇒ 没有任何一条窗体判据在链上。
+
+**修法**：新增 `receiverIsFormValue090(objAst, objText)`（同文件、`Fix 091y`），两半判据：
+1. 接收者静态类型是窗体 —— 发射文本以 `vb6_Forms_Item(` 开头（内置 Forms 元素），
+   或 AST 是调用、被调函数符号的 `variableTypeName` ∈ {`Form`, `VB.Form`, 工程窗体模块名}；
+2. 成员名在窗体属性表里查得到（`getControlPropReadFn(FrmControlType::Form, …)` 非空）。
+
+两条都成立才在最终兜底前改发 `readFn(obj)`，与正例 `FormMain.hWnd`
+（`vb6_GetControlHwnd(vb6_form_hwnd_FormMain())`）走**同一张表**（`form_pseudo.hpp`）。
+不会误抢 void* COM 对象的同名成员（那类没有这两半判据）。
+
+**实测**（`.temp\formshwnd`：`FormB.frm` 里 `GetModalOwner() As FormA` /
+`GetOwnerForm() As Form` / `FormA.hWnd` / `Forms(0&).hWnd`）：
+
+| | 发码 |
+| --- | --- |
+| 修前 | `h = vb6_ChkLong(vb6_FormB_GetModalOwner().hWnd);`<br>`h = vb6_ChkLong(vb6_Forms_Item((int32_t)(0L)).hWnd);` |
+| 修后 | `h = vb6_ChkLong(vb6_GetControlHwnd(vb6_FormB_GetModalOwner()));`<br>`h = vb6_ChkLong(vb6_GetControlHwnd(vb6_FormB_GetOwnerForm()));`<br>`h = vb6_ChkLong(vb6_GetControlHwnd(vb6_Forms_Item((int32_t)(0L))));` |
+| 正例（未动） | `h = vb6_GetControlHwnd(vb6_form_hwnd_FormA())  /* external form prop */;` |
+
+**钉子**：`tests/formhwndval/`（`FormA.frm` / `FormB.frm` / `formhwndval.vbp`）+
+`Test-CodegenNote "form_value_hwnd"`（正向三条 + 反向禁止 `.hWnd);`）。
+
+**`-Category syntax`**：PASS=209 FAIL=0（上一刀 208，+1 = 新钉子）。
+
+**形状门归因**：期望 633 / 实得 646 / 相同 630 / 哈希不同 **3** / 缺席 0 / 多出 13。
+3 份哈希不同仍是 `FrmEvents.vbp` / `PDImages.bas` / `VBFlexGridDemo.vbp` —— 与 §56.13、
+§56.14 同一批（待批 bless），且三份语料里 `.hWnd` 只有 `Me.hWnd`（MeExpr 走 form_builtin，
+本刀不经手）与 UDT 字段 `.hWndOwner`，无「窗体值表达式」形状 ⇒ 本刀对存量语料形状差 **0**。
+13 份新增输入 = 前两刀 11 + 本刀 `tests/formhwndval/FormA.frm`、`FormB.frm`。
+
+**纪律记录**：构建前空闲内存 6.8 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
+
+
+### 56.16 C2374 `'…': redefinition; multiple initialization`：菜单控件数组的弹出菜单变量重名（42 条）
+
+**目标桶**：C2374 **42 条**，全部落在 `FormMain.c`（= `MainWindow.frm` 生成的 TU），
+变量族：`hPopup_MnuEffectUpper` 13 / `hPopup_MnuLayer` 10 / `hPopup_MnuAdjustments` 7 /
+`hPopup_MnuFile` 3 / `hPopup_MnuTool` 3 / `hPopup_MnuImage` 2 / `hPopup_MnuView` 2 /
+`hPopup_MnuSelect` 1 / `hPopup_MnuWindow` 1。
+
+**根因**：这些名字在 VB6 里是**菜单控件数组**（`Begin VB.Menu MnuFile … Index = N`），
+同一数组里第 1/2/3 枚元素各自带子菜单。两处菜单构建发码
+（`cgen_form_menu.cpp` 的 `emitMenuItem`、`cgen_form_frame_menu.inc` 的顶层菜单段）
+生成局部变量时只用了 `"hPopup_" + controlName`：
+
+```c
+HMENU hPopup_MnuFile = CreatePopupMenu();   // Index = 1 那枚
+AppendMenuW(hPopup_MnuFile, …, L"empty");
+AppendMenuW(hPopup_MnuFileTop, MF_POPUP, hPopup_MnuFile, L"Open recent");
+HMENU hPopup_MnuFile = CreatePopupMenu();   // Index = 2 那枚 → C2374
+```
+
+递归 `emitMenuItem` 不开新作用域，所以整棵菜单树的弹出菜单变量都在
+`vb6_form_create_<Form>` 同一层。
+
+**修法**：数组元素把 `Index` 缀进生成名（`hPopup_<Name>_<Index>`），非数组控件
+（`index = -1`）保持原名。两处发码点同改；`popupVar` 同时被用作子项递归的父变量与
+`AppendMenuW` 实参，改名只在源头一处，递归自然跟随。
+
+**实测**（`.temp\menuarr`：`MnuFile` 数组 Index 0/1/2，其中 1、2 带子菜单；
+另有非数组 `MnuFileTop` / `MnuEditTop`）：
+
+| | 发码 |
+| --- | --- |
+| 修前 | `HMENU hPopup_MnuFile = CreatePopupMenu();` ×2（同一函数，逐字相同）|
+| 修后 | `HMENU hPopup_MnuFile_1 = CreatePopupMenu();`<br>`HMENU hPopup_MnuFile_2 = CreatePopupMenu();` |
+| 非数组（未动） | `HMENU hPopup_MnuFileTop = CreatePopupMenu();` |
+
+**钉子**：`tests/menuarr/`（`MenuArr.frm` / `menuarr.vbp`）+
+`Test-CodegenNote "menu_array_popup_var"`（正向 `_1` / `_2` / `MnuFileTop` 三条，
+反向禁止无后缀的 `HMENU hPopup_MnuFile = CreatePopupMenu();`）。
+
+**`-Category syntax`**：PASS=210 FAIL=0（上一刀 209，+1 = 新钉子）。
+
+**形状门归因**：期望 633 / 实得 647 / 相同 630 / 哈希不同 **3** / 缺席 0 / 多出 14。
+3 份哈希不同仍是 `FrmEvents.vbp` / `PDImages.bas` / `VBFlexGridDemo.vbp`（§56.13 起的
+同一批待批 bless）——**本刀没动它们**：三份语料全都没有 `Begin VB.Menu`（无菜单构建
+发码），且本刀只改菜单弹出菜单变量的拼名。14 份新增输入 = 前几刀 13 + 本刀
+`tests/menuarr/menuarr.vbp`。
+
+**纪律记录**：构建前空闲内存 6.6 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
+
+
+### 56.17 C2045 `'…': label redefined`：For 方向拆分的副本后缀在嵌套时丢失（50 条）
+
+**目标桶**：C2045 **50 条**，两类名字都出现：
+`vb6_label_SkipChannel` 6 / `NextPixel` 5 / `NextPixel_d2` 5 / `NextDitheredPixel` 4 /
+`NextDitheredPixel_d2` 4 / `SkipPoint`+`SkipPoint_d2` 各 2 / `NextFrame` 2 /
+`NextNeighbor`+`NextNeighbor_d2` 各 2 / 其余 15 个各 1（`BadLineColor`、`StartSearchAgain`、
+`SkipToNextLayer`、`SkipChannelAlpha`、`NextWord`、`NextPixelatePixel1/2/3` …）。
+**带 `_d2` 与不带 `_d2` 的都是重定义**，计数到 6 说明三层嵌套。
+
+**根因**：For 方向拆分（首份 / 第二份）用一枚**单值** `int labelCopyIdx_` 记副本位，
+而拆分层是栈（`forSplitLabelStack_`）：
+
+```c
+if (i_step > 0) { for (…) { … 内层 For：labelCopyIdx_ = 0 … 1 … 0 … } }   // 第一份
+else            { for (…) { … 内层 For：labelCopyIdx_ = 0 … 1 … 0 … } }   // 第二份
+```
+
+`cgen_control.cpp` 两处拆分点把 `labelCopyIdx_` 置 0/1/0，从不保存外层值 ⇒
+① 内层 `_d2` 在外层两份里各发一次（**同一后缀定义两次**）；
+② 外层循环体里内层 For **之后**的标签，因内层收尾已清零，两份都不带后缀
+（同样两次定义）。`GoTo` 侧同病 —— 它只读那一枚被内层覆盖的值。
+
+**修法**：副本位改成与 `forSplitLabelStack_` 同深度的栈 `splitCopyStack_`（0=首份、
+1=第二份），拆分点 `push_back(0)` / `back()=1` / `pop_back()`；后缀唯一出口
+`CCodeGen::forSplitLabelSuffix(labelLower)`，`LabelStmt` 定义与 `GoToStmt` 引用共用：
+
+* 深度 K = 最内层「该 body 的标签集包含此标签」的拆分层（`collectForBodyLabels`
+  递归收集，外层集合也含内层标签 ⇒ 取最内层就是定义层；目标在 body 外 ⇒ K=0 ⇒
+  无后缀，保留 Fix 090o 那条"C2094 出口标签"约定）；
+* 逐层拼接：该层第二份 → `_d2`；该层第一份但更深层有第二份 → `_d1`；全第一份 → 无后缀。
+
+（`_d1` 那一段是必须的：只拼「第二份」会让 (外层1,内层2) 与 (外层2,内层1) 都拼成
+`_d2`，仍然重定义。）
+
+**实测**（`.temp\lblnest`：`For i` 里套 `For j`，`SkipPixel:` 在内层、
+`NextPixel:` 在外层且在内层之后，各配一枚 `GoTo`）：
+
+| 副本路径 | 修前 | 修后 |
+| --- | --- | --- |
+| (外1, 内1) | `SkipPixel` / `NextPixel` | `SkipPixel` / `NextPixel` |
+| (外1, 内2) | `SkipPixel_d2`（与下面撞） | `SkipPixel_d1_d2` |
+| (外2, 内1) | `SkipPixel_d2` / `NextPixel`（与上面撞） | `SkipPixel_d2` / `NextPixel_d2` |
+| (外2, 内2) | `SkipPixel_d2`（第三次定义） | `SkipPixel_d2_d2` |
+
+单层拆分（无嵌套）的签名形状不变（"" / `_d2`），所以存量语料形状差 0。
+
+**钉子**：`tests/lblnest/`（`Mod1.bas` / `lblnest.vbp`）+ `Test-CodegenNote "split_label_nest"`。
+
+**`-Category syntax`**：PASS=211 FAIL=0（上一刀 210，+1 = 新钉子）。
+
+**形状门归因**：期望 633 / 实得 648 / 相同 630 / 哈希不同 **3** / 缺席 0 / 多出 15。
+3 份哈希不同仍是 `FrmEvents.vbp` / `PDImages.bas` / `VBFlexGridDemo.vbp`（§56.13 起的
+同一批待批 bless）；**"相同"的 630 份里有嵌套 For 的语料一份没变** ⇒ 本刀只影响嵌套拆分
+的标签拼名。15 份新增输入 = 前几刀 14 + 本刀 `tests/lblnest/lblnest.vbp`。
+
+**纪律记录**：构建前空闲内存 7.1 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
+
+
 
 
 

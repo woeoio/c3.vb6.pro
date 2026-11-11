@@ -682,7 +682,10 @@
                     c_.emitLine("AppendMenuW(hMenuBar, MF_STRING, " + std::to_string(menuId) + ", L\"" + escapeWideCString(caption) + "\");");
                     menuId++;
                 } else {
+                    // Fix 092a (C2374): 同 cgen_form_menu.cpp —— 菜单控件数组要带 Index,
+                    // 否则同名的多枚弹出菜单在同一函数里重复定义。
                     std::string popupVar = "hPopup_" + cIdent(ctrl.controlName);
+                    if (ctrl.index >= 0) popupVar += "_" + std::to_string(ctrl.index);
                     c_.emitLine("HMENU " + popupVar + " = CreatePopupMenu();");
 
                     for (const auto& child : ctrl.children) {
