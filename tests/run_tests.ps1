@@ -2037,6 +2037,20 @@ function Test-UcDefaultMember {
     }
 }
 
+function Test-UdtCallretNoparens {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] udt_callret_noparens ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_udt_callret_noparens.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-M3BuiltinOptDefaults {
     $script:total++
     Write-Host -NoNewline "  [STATIC] m3_builtin_opt_defaults ... "
@@ -12144,6 +12158,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-M3BuiltinOptDefaults }
     if (Enter-StaticShard) { Test-NpCallFirstArgBinop }
     if (Enter-StaticShard) { Test-UcDefaultMember }
+    if (Enter-StaticShard) { Test-UdtCallretNoparens }
     if (Enter-StaticShard) { Test-CtrlPropTypeAuthority }
     if (Enter-StaticShard) { Test-FormDrawState }
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }
@@ -12905,6 +12920,27 @@ if ($Category -in @("all", "syntax")) {
         "vb6_CxMod_c_mul((void*)&_vb6_anytmp0",
         "vb6_type_Cpx _vb6_anytmp1 = vb6_CxMod_c_mul(") @(
         "(intptr_t)(vb6_CxMod_")
+    # F2 (C2440 族, PhotoDemon Tools_Crop / Tools_Fill / pdPSPShape / WIC / Drawing 11 条):
+    # 「零参函数/方法**不写括号**」当值用 —— `GUID_NULL`、`m_Brush.GetBrushColorRGBA`、
+    # `m_Outline.GetPathBoundariesF`、`srcImg.GetBoundaryRectF`。AST 里分别是
+    # IdentifierExpr / MemberAccessExpr (不是 IndexOrCallExpr), 旧 inferUdtTypeOfExpr 两条
+    # 分支都不认 ⇒ ByRef UDT 实参掉回 `(intptr_t)(struct)`、With 目标落 `(void*)` 右值取址
+    # (C2102)。判据收在 udtReturnOfClassMember 这一枚 (有/无括号两个形状共用)。
+    Test-CodegenNote "udt_callret_noparens" @(
+        "$Tests\pd_udtcallret\UdGeom.bas", "$Tests\pd_udtcallret\UdImg.cls",
+        "$Tests\pd_udtcallret\UdHolder.bas", "$Tests\pd_udtcallret\UdBrush.cls",
+        "$Tests\pd_udtcallret\UdPen.cls", "$Tests\pd_udtcallret\UdShape.cls",
+        "$Tests\pd_udtcallret\UdWic.bas", "$Tests\pd_udtcallret\UdUse.bas") @(
+        "vb6_type_Guid _vb6_anytmp0 = vb6_pdWic_GUID_NULL();",
+        "vb6_type_RGBQuad _vb6_anytmp0 = vb6_pdBrush_GetBrushColorRGBA(me->m_Brush)",
+        "vb6_type_RectF _vb6_anytmp0 = vb6_pdImg_GetBoundaryRectF((void*)vb6_pdHolder_GetImg())",
+        "vb6_type_RectF _vb6_withret",
+        "/* With obj ref (fn ret copy) */") @(
+        "(intptr_t)(vb6_pdWic_GUID_NULL(",
+        "(intptr_t)(vb6_pdBrush_GetBrushColorRGBA(",
+        "(intptr_t)(vb6_pdImg_GetBoundaryRectF(",
+        "= &(vb6_pdImg_GetBoundaryRectF(",
+        "(void*)vb6_pdImg_GetBoundaryRectF(srcImg)")
     # §56.28: ParamArray 元素回写那一站的承接临时必须是 vb6_VARIANT。
     # boxToVariant 交的是 vb6_VariantFromValue(...) (返回 vb6_VARIANT), 声明成
     # Win32 VARIANT 就是 `initializing` C2440 (PhotoDemon PDMath.c 825/831/837/843)。

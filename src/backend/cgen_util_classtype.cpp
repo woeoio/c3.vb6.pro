@@ -798,6 +798,51 @@ std::string CCodeGen::lateBoundReadOnVariantCarrier(const std::string& carrierEx
 
 
 
+// §56.38 F2: 类成员返回工程 UDT 的唯一判据.
+// 成员返回类型先问符号表的 variableTypeName (语义层已把返回类型名写在那一格),
+// 落空再问 Class 符号自身的 memberReturnTypes (storageKey 撞名时的回退, 与
+// getClassMethodReturnType 的 Fix 015 同源)。两条都要求最终能解析出
+// UserDefinedType 符号 —— 返回类/标量/接口的一律交回空串, 不能当 UDT 用。
+std::string CCodeGen::udtReturnOfClassMember(const std::string& clsC,
+                                             const std::string& memberName) const {
+    if (clsC.empty() || memberName.empty()) return "";
+    const std::string memLowerC = Symbol::toLower(memberName);
+    const std::string clsLowerC = Symbol::toLower(clsC);
+    std::string retNameC;
+    for (const auto& [kC, sC] : symTab_.moduleScope()->symbols()) {
+        if (sC->lowerName != memLowerC) continue;
+        if (sC->kind != SymbolKind::Function
+            && sC->kind != SymbolKind::PropertyGet) continue;
+        const bool mC = sC->isExternal
+            ? Symbol::toLower(sC->sourceModule) == clsLowerC
+            : (isClassModule_
+               && Symbol::toLower(moduleName_) == clsLowerC);
+        if (mC && !sC->variableTypeName.empty()) {
+            retNameC = sC->variableTypeName;
+            break;
+        }
+    }
+    if (retNameC.empty()) {
+        for (const auto& [kC, sC] : symTab_.moduleScope()->symbols()) {
+            if (sC->kind != SymbolKind::Class) continue;
+            const bool mC = sC->isExternal
+                ? Symbol::toLower(sC->sourceModule) == clsLowerC
+                : (isClassModule_
+                   && Symbol::toLower(moduleName_) == clsLowerC);
+            if (!mC) continue;
+            auto itR = sC->P().memberReturnTypes.find(memLowerC);
+            if (itR != sC->P().memberReturnTypes.end())
+                retNameC = itR->second;
+            break;
+        }
+    }
+    if (retNameC.empty()) return "";
+    Symbol* udtC = lookupTypeSymbol(retNameC);
+    if (udtC && udtC->kind == SymbolKind::UserDefinedType)
+        return "vb6_type_" + cIdent(retNameC);
+    return "";
+}
+
 // Fix 037: 递归推断表达式的 UDT C 类型标识符 (如 "vb6_type_UcsBuffer").
 // 支持 IdentifierExpr (knownUdtVars_ 直查) 和 MemberAccessExpr (嵌套 UDT 字段递归).
 // 返回空串表示非 UDT 表达式.
@@ -820,6 +865,21 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 && currentReturnCType_.rfind("vb6_type_", 0) == 0
                 && lower == Symbol::toLower(currentProc_->name)) {
                 return currentReturnCType_;
+            }
+            // §56.38 F2: 裸名**零参调用不写括号** (`GUID_NULL` / `m_FillOutline.GetPathBoundariesF`
+            // 的实参位) 在 AST 里就是 IdentifierExpr —— 下面 IndexOrCallExpr 那条 (§56.30)
+            // 走不到, 于是外层按非 UDT 落 `(intptr_t)(vb6_type_X)` 兜底 (WIC.c 415/432 的
+            // C2440)。判据与那条同一张表: 模块作用域里的 Function/PropertyGet、无参、返回
+            // 类型能解析成工程 UDT。VB6 里零参调用本来就必须无参, 所以这条不会误伤带参函数。
+            if (const Symbol* fnSymF2 = symTab_.lookupModule(id.name)) {
+                if ((fnSymF2->kind == SymbolKind::Function
+                     || fnSymF2->kind == SymbolKind::PropertyGet)
+                    && fnSymF2->P().params.empty()
+                    && !fnSymF2->variableTypeName.empty()) {
+                    const Symbol* udtSymF2 = lookupTypeSymbol(fnSymF2->variableTypeName);
+                    if (udtSymF2 && udtSymF2->kind == SymbolKind::UserDefinedType)
+                        return "vb6_type_" + cIdent(fnSymF2->variableTypeName);
+                }
             }
             return "";
         }
@@ -883,41 +943,8 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 const std::string clsC = maC.object
                     ? inferClassTypeOfExpr(*maC.object) : std::string();
                 if (!clsC.empty()) {
-                    const std::string memLowerC = Symbol::toLower(maC.memberName);
-                    const std::string clsLowerC = Symbol::toLower(clsC);
-                    std::string retNameC;
-                    for (const auto& [kC, sC] : symTab_.moduleScope()->symbols()) {
-                        if (sC->lowerName != memLowerC) continue;
-                        if (sC->kind != SymbolKind::Function
-                            && sC->kind != SymbolKind::PropertyGet) continue;
-                        const bool mC = sC->isExternal
-                            ? Symbol::toLower(sC->sourceModule) == clsLowerC
-                            : (isClassModule_
-                               && Symbol::toLower(moduleName_) == clsLowerC);
-                        if (mC && !sC->variableTypeName.empty()) {
-                            retNameC = sC->variableTypeName;
-                            break;
-                        }
-                    }
-                    if (retNameC.empty()) {
-                        for (const auto& [kC, sC] : symTab_.moduleScope()->symbols()) {
-                            if (sC->kind != SymbolKind::Class) continue;
-                            const bool mC = sC->isExternal
-                                ? Symbol::toLower(sC->sourceModule) == clsLowerC
-                                : (isClassModule_
-                                   && Symbol::toLower(moduleName_) == clsLowerC);
-                            if (!mC) continue;
-                            auto itR = sC->P().memberReturnTypes.find(memLowerC);
-                            if (itR != sC->P().memberReturnTypes.end())
-                                retNameC = itR->second;
-                            break;
-                        }
-                    }
-                    if (!retNameC.empty()) {
-                        Symbol* udtC = lookupTypeSymbol(retNameC);
-                        if (udtC && udtC->kind == SymbolKind::UserDefinedType)
-                            return "vb6_type_" + cIdent(retNameC);
-                    }
+                    const std::string udtC = udtReturnOfClassMember(clsC, maC.memberName);
+                    if (!udtC.empty()) return udtC;
                 }
             }
             return "";
@@ -927,25 +954,48 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
             if (!ma.object) return "";
             // 递归推断父对象的 UDT 类型
             std::string parentUdtCType = inferUdtTypeOfExpr(*ma.object);
-            if (parentUdtCType.empty()) return "";
             // parentUdtCType 形如 "vb6_type_UcsBuffer", 剥前缀得到 UDT 名
             const std::string prefix = "vb6_type_";
-            if (parentUdtCType.size() <= prefix.size()
-                || parentUdtCType.compare(0, prefix.size(), prefix) != 0) return "";
-            std::string udtName = parentUdtCType.substr(prefix.size());
-            Symbol* udtSym = lookupTypeSymbol(udtName);
-            if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return "";
-            std::string memLower = Symbol::toLower(ma.memberName);
-            for (auto& mi : udtSym->udtMembers) {
-                if (Symbol::toLower(mi.name) == memLower) {
-                    // 若该成员本身是 UDT (typeRefName 非空且能查到 UserDefinedType 符号)
-                    if (!mi.typeRefName.empty()) {
-                        Symbol* refSym = lookupTypeSymbol(mi.typeRefName);
-                        if (refSym && refSym->kind == SymbolKind::UserDefinedType) {
-                            return "vb6_type_" + cIdent(mi.typeRefName);
+            if (!parentUdtCType.empty()
+                && parentUdtCType.size() > prefix.size()
+                && parentUdtCType.compare(0, prefix.size(), prefix) == 0) {
+                std::string udtName = parentUdtCType.substr(prefix.size());
+                Symbol* udtSym = lookupTypeSymbol(udtName);
+                if (udtSym && udtSym->kind == SymbolKind::UserDefinedType) {
+                    std::string memLower = Symbol::toLower(ma.memberName);
+                    for (auto& mi : udtSym->udtMembers) {
+                        if (Symbol::toLower(mi.name) == memLower) {
+                            // 若该成员本身是 UDT (typeRefName 非空且能查到 UserDefinedType 符号)
+                            if (!mi.typeRefName.empty()) {
+                                Symbol* refSym = lookupTypeSymbol(mi.typeRefName);
+                                if (refSym && refSym->kind == SymbolKind::UserDefinedType) {
+                                    return "vb6_type_" + cIdent(mi.typeRefName);
+                                }
+                            }
+                            return "";  // 成员是标量/数组, 不是嵌套 UDT
                         }
                     }
-                    return "";  // 成员是标量/数组, 不是嵌套 UDT
+                }
+            }
+            // §56.38 F2: 上面那条只认"父对象是 UDT 的字段"。`obj.Member` 这种
+            // **零参调用不写括号**的写法（VB6 合法）在 AST 里也是 MemberAccessExpr，
+            // Member 是返回工程 UDT 的 Function/PropertyGet ⇒ 旧路径答空 ⇒
+            // With 目标落 `(void*)` + ComGetProp（Drawing.c 1248/1378）、ByRef UDT
+            // 实参落 `(intptr_t)(struct)`（Tools_Crop/Tools_Fill 一族）。判据与
+            // IndexOrCallExpr 那条 (§56.30) 同一枚 udtReturnOfClassMember。
+            {
+                const std::string clsF2 = inferClassTypeOfExpr(*ma.object);
+                if (!clsF2.empty()) {
+                    const std::string udtF2 = udtReturnOfClassMember(clsF2, ma.memberName);
+                    if (!udtF2.empty()) return udtF2;
+                }
+            }
+            // `Mod.Fn` 形态（限定符是标准模块名）：与 §56.27 / G3 同一张表。
+            if (const Symbol* fnQF2 = findModuleQualifiedFunction(expr)) {
+                if (!fnQF2->variableTypeName.empty()) {
+                    const Symbol* udtQF2 = lookupTypeSymbol(fnQF2->variableTypeName);
+                    if (udtQF2 && udtQF2->kind == SymbolKind::UserDefinedType)
+                        return "vb6_type_" + cIdent(fnQF2->variableTypeName);
                 }
             }
             return "";

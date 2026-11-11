@@ -1681,6 +1681,13 @@
     // 字段误当函数调用 (C2064).
     std::string inferUdtTypeOfExpr(const ASTNode& expr) const;
 
+    // ---- §56.38 F2: 类成员返回工程 UDT 的唯一判据 ----
+    // `obj.Member` / `obj.Member()` 里 Member 是 Function/PropertyGet 且返回类型是
+    // 工程 UDT 时交回 "vb6_type_X"；否则空串。两种 AST 形状（无括号 = MemberAccessExpr、
+    // 有括号 = IndexOrCallExpr）共用这一枚，免得两处各查一套表。
+    std::string udtReturnOfClassMember(const std::string& clsC,
+                                       const std::string& memberName) const;
+
     // ---- Fix 085: UDT 对象字段类型推断 ----
     // 给定 UDT C 类型标识符 (如 "vb6_type_tZipFileItem") 与字段名(小写), 返回该字段
     // 的对象类别 C 类型:
