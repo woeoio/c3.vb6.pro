@@ -12729,6 +12729,12 @@ if ($Category -in @("all", "syntax")) {
         "vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FormMain, 1, (void*)vb6_FormMain_Form_OLEDragDrop);",
         "vb6_OLEDrop_Register((void*)vb6_hwnd_FormMain); /* 设计期 OLEDropMode=1 */") @(
         "OLEDropMode = 0;")
+    # C2065 族① (`HotkeyManager` ×1, FormMain.c 2455): `Is` 比对象同一性, 不触发
+    # 默认成员 ⇒ 裸控件名要交句柄槽。以前和普通值一样原样交裸名 ⇒ `HotkeyManager == NULL`。
+    Test-CodegenNote "pd_ctrl_is_nothing" @(
+        "$Tests\pd_ctrlisnothing\FrmIsNothing.frm") @(
+        "vb6_hwnd_txtDummy == NULL") @(
+        "(txtDummy == NULL)")
     # C2065 族① (`vb6_UserControl_cmbWidthUnit/cmbHeightUnit` ×4, pdResize.c):
     # `UserControl.<本 UC 的设计期控件>` 与 `Me.<控件>` 同义; 旧发码走宿主伪成员表,
     # 拼成没人声明的 `vb6_UserControl_<控件名>`。只钉**限定符**这一层。

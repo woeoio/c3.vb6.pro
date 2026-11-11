@@ -3328,3 +3328,51 @@ vb6_SetOLEDropMode(vb6_form_hwnd_FormMain(), 0);  /* external form prop write */
 → `FormExportLayers.c:754` 的 `cmdExportSettings` → `Dialogs.c:625` 的 `fi_HandleCopy`
 → 族② UDT 裸名。
 
+## §52 C2065 族① 第七站 —— `Not <控件> Is Nothing` 的裸控件名（1 条，FormMain.c:2455）
+
+### 52.1 根因
+
+`MainWindow.frm:2393`：
+
+```vb
+If (Not HotkeyManager Is Nothing) Then HotkeyManager.ReleaseResources
+```
+
+第二句（成员访问）发得对：`vb6_ComCall(vb6_hwnd_HotkeyManager, L"ReleaseResources", …)`。
+第一句左操作数是**裸标识符**，`Is` 的消费点在
+[cgen_expr_binary.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/expr/cgen_expr_binary.cpp)
+里只把两个操作数的发码文本直接拼 `==` ⇒ `HotkeyManager` 原样落地，C2065。
+
+VB6 里 `Is` 比的是**对象同一性**，不触发默认成员 —— 裸控件名在这一格的含义是
+"控件对象本身"，它不是默认属性值（`x = Text1` 才是默认属性）。所以这一格需要的
+正是 `ctrlObjectRefExpr`（设计期控件 → 句柄槽）那位唯一出口。
+
+### 52.2 修法
+
+`visit(BinaryExpr)` 的 `BinaryOp::Is` 分支、`varsHoldComWrapper` 剥壳**之前**加一小段：
+操作数 AST 是 `IdentifierExpr`、名字在 `knownFormControls_`、且没有被局部变量遮蔽
+（`knownLocalVars_`）⇒ `slot = ctrlObjectRefExpr(lower, 原拼写)`。两条操作数独立判。
+只动 `Is` 这一格，其它二元运算的裸名语义（默认属性/内置常量）一字不动。
+
+### 52.3 实读
+
+探针（`.temp/oledrop`，窗体带 `Begin PhotoDemon.pdAccelerator HotkeyManager`）：
+
+```
+if (((((int32_t)((-(vb6_hwnd_HotkeyManager == NULL)))) != 0) ? 0 : -1)) {
+    vb6_ComVarFree((void*)vb6_ComCall(vb6_hwnd_HotkeyManager, L"ReleaseResources", NULL, 0));
+```
+
+### 52.4 夹具 / 回归
+
+- `tests/pd_ctrlisnothing/FrmIsNothing.frm`：`Begin VB.TextBox txtDummy` +
+  `If Not txtDummy Is Nothing Then txtDummy.Text = "x"`（不依赖 OCX）。
+- 新针 `pd_ctrl_is_nothing`：正面 `vb6_hwnd_txtDummy == NULL`，反面 `(txtDummy == NULL)`
+  （防退化成裸名）。
+- `-Category syntax` ⇒ **PASS=199 FAIL=0 SKIP=0**。
+
+### 52.5 下一站
+
+`FormExportLayers.c:754` 的 `cmdExportSettings`（族①剩 2 条：`cmdExportSettings`、
+`Dialogs.c:625` 的 `fi_HandleCopy`）。
+

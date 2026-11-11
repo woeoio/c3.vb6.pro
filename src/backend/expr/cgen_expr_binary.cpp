@@ -479,6 +479,23 @@ void CCodeGen::visit(BinaryExpr& node) {
         // 装箱腿 / Fix 179a) 而 typed 变量那侧是裸实例 —— 不剥就是 `If o Is f` 恒假
         // (VB6 交真)。判据问 varHoldsComWrapper (唯一那张登记表), 只认裸变量名那一形,
         // 两侧各自独立剥 (都装箱时剥回同一裸实例, 照样相等)。
+        // 账 §52: `Not <控件> Is Nothing` —— `Is` 比的是**对象同一性**, 不触发默认
+        // 成员, 所以裸控件名在这一格是"控件对象"而不是"控件默认属性值"。发码以前
+        // 把裸名原样交出去 ⇒ `HotkeyManager == NULL` (整编 C2065: FormMain.c:2455
+        // 的 `If (Not HotkeyManager Is Nothing) Then HotkeyManager.ReleaseResources`)。
+        // 唯一出口仍是 ctrlObjectRefExpr (With 块 / 对象形参 / Set 右值那一答):
+        // 设计期控件 → 句柄槽 (ListView/ImageList/Menu 各有各的拼法), 不手拼。
+        // 局部变量同名时让局部赢 (与同一文件里 activeform 那条同一条闸)。
+        auto ctrlOperand52 = [&](const Expr* ast, std::string& slotOut) {
+            if (!ast || ast->kind != ASTNodeKind::IdentifierExpr) return;
+            const auto& idC52 = static_cast<const IdentifierExpr&>(*ast);
+            const std::string lowC52 = Symbol::toLower(idC52.name);
+            if (knownLocalVars_.count(lowC52)) return;
+            if (!knownFormControls_.count(lowC52)) return;
+            slotOut = ctrlObjectRefExpr(lowC52, idC52.name);
+        };
+        ctrlOperand52(node.left.get(), left);
+        ctrlOperand52(node.right.get(), right);
         if (varHoldsComWrapper(left))  left  = unwrapComVarExpr(left);
         if (varHoldsComWrapper(right)) right = unwrapComVarExpr(right);
         // 账 #305 第一百七十二刀 站C: 操作数是一枚 legacy 接口的**视图** (值结构体
