@@ -3553,3 +3553,146 @@ $ git diff --cached --stat
   自动消失（§43–§54 未动该出口）；C2065 应从 153 明显下降（族② 72 条 + 族① 已修条目）。
   以实际读数为准，不预设。
 
+## §56 第三次截断 + `_vcmp_` 族根因（后测循环条件）+ §43 自模块限定调用
+
+### 56.1 截断时状态（第三轮开工原样读数）
+
+```
+$ git status --short
+?? .zcodeignore
+$ git diff --stat
+（空）
+$ git diff --cached --stat
+（空）
+```
+
+无 `M/A/D`、两个 diff 均空 ⇒ 本轮截断同样**没有半截改动可退**，`?? .zcodeignore` 不是
+编译器改动，不动。两次截断都发生在上下文层，不在工作区。
+
+### 56.2 `_vcmp_` 4 条（pdPSDLayer.c 4713/4742/5183/5212）+ pdPSD.c 1754 —— 同一个出口
+
+- 复现口径：**不带**整工程。2–6 模块子集 `.temp\pdsub\pdsub.vbp`
+  （`pdPSDLayer.cls` + `pdPSD.cls` + `pdDIB.cls` + `pdPSDLayerInfo.cls` +
+  `Drawing2D.bas` + `Colors.bas`）跑 `--arch x86 --output-dir`，本机即原样复现
+  `pdPSDLayer.c(4627)` 一类 **C2065 `_vcmp_0`**，与 #4 日志逐字同形。
+- 生成的 C（局部实读）：
+
+```c
+do {
+    ...
+    vb6_VARIANT _vcmp_0 = vb6_VariantFromValue(VB6_SA_AT(int32_t, lineLengths, y));
+} while (vb6_VarCmpLongGt(&_vcmp_0, bytesReadLine));
+```
+
+- 根因：`emitExpr(条件)` 的**物化语句**（`vb6_VARIANT _vcmp_N = ...;`）落在
+  `c_.dedent()` **之后**、`}` 之前 —— 文本上还在 do 体里，但 C 的
+  `} while (expr)` 那颗 expr **已经出了 do 体的块作用域**（C11 6.8.5.2 的块作用域
+  在 `}` 结束），所以条件里引用 `_vcmp_N` 恒 C2065。前测型（`Do While`/`While…Wend`）
+  走 label + `if(!cond) goto exit`，物化与 `if` 同层，不受影响 —— 这也解释了为什么
+  整工程只有后测型出现。
+- 修法（`src/backend/stmt/cgen_loop.cpp` 的 `DoLoopWhile` / `DoLoopUntil`）：先量
+  `c_.size()` 与 `c_.hasPending()`，**有物化时**改形
+
+```c
+do {
+    ... 体 ...
+    vb6_VARIANT _vcmp_0 = ...;          /* 仍在块内，条件看得见 */
+    if (!(vb6_VarCmpLongGt(&_vcmp_0, bytesReadLine))) break;   /* 仍每轮重测 */
+} while (1);
+```
+
+  无物化时**逐字节不变**（仍是 `} while (cond);`），所以存量语料零影响。
+  `break` 出的是本 do（Select Case 走 if 链，不发 `switch`，body 内没有别的 `break`）。
+- 附带补 `CodeEmitter::hasPending()`：pending 声明与物化同属「条件求值落下的声明」，
+  只量 `size()` 会漏。
+
+### 56.3 族② C2039 9 条（PDImages.c）+ Layers.c 2 条 —— §43 只修了「跨模块」，漏了「自模块」
+
+- 复现：2 模块子集 `.temp\pdimg\pdimg.vbp`（`pdImage.cls` + `PDImages.bas`），本机即
+  复现 `PDImages.c(342)` 一族。
+- 根因：`inferClassTypeOfExpr` 的 §43 分支（`cgen_util_classtype.cpp:316`）只调
+  `getClassMethodReturnType(模块名, 成员名)`，而那条路的「同模块」匹配闸是
+  `isClassModule_ && moduleName_ == classLower`（同文件 563 行）。**标准模块自己**
+  调 `PDImages.GetImageByID(x)` 时 `isClassModule_=false`、符号又非 external ⇒ 恒查不到
+  ⇒ 返回空 ⇒ 外层 `.IsSuspended()` 落 `obj.member` ⇒ C2039。
+- 修法：§43 里先用 `findModuleQualifiedFunction` 拿到函数符号，直接读它的
+  `variableTypeName` 并按 **G3-E1 同一口径**校验是不是项目 Class；查不到才回落到
+  原来的 `getClassMethodReturnType`。跨模块那条路径**不变**（仍是 external 符号）。
+- 预期同时消掉 Layers.c 672/673 的 `MainSelection.GetCompositeBoundaryRect.Left/Top`
+  —— 那条链的第一环正是自模块 `PDImages.GetActiveImage`。
+
+### 56.4 零散：`Extender.Index` 2 条（pdButtonStrip.c:283 / pdLabel.c:302）
+
+- `UserControl.Extender.Index` 走结构体字段（与 `.Visible`/`.Name` 同形），
+  `vb6_UserControl_Extender_Type` 里**没有** `Index` ⇒ C2039。
+- 修法：结构体尾部加 `int32_t Index;`（位置在 `ZOrder` 之后，不动既有位置初始化），
+  全局初值补 `-1`（非控件数组），`vb6_uc_push` 里用 `r->index` 灌（`vb6_UCRec` 早就有
+  这个字段）。pop 走整结构体快照，无需另加。
+
+### 56.5 pdResize.c 三小族（本刀只定位，未改）
+
+| 行 | 诊断 | 方向 |
+| --- | --- | --- |
+| 277 | C2063 `'vb6_UserControl_Controls': not a function` | `UserControl.Controls(name)` 的直呼形态（不带 `.Item`）落到 `vb6_UserControl_Controls` 这个**全局变量**上被当函数调；`.Item(...)` 那一支已有专门改写（`cgen_expr_member_generic_access.inc`），需要把直呼形态并到同一出口 |
+| 799/800/802/803 | C2065 `vb6_UserControl_cmbWidthUnit` / `cmbHeightUnit` + C2224 `.ListIndex` | 设计期子控件（`pdDropDown`）被当成 host 伪成员发成 `vb6_UserControl_<name>`，应落实例设计槽（`vb6_hwnd_<name>` / UC 设计槽） |
+| 1223/1224（警告）、1226/1227（错误） | C2440 `double → double *`（`prop_let_ResizeWidth/Height`） | `cgen_util_comwrite.cpp:476` 的 `writeValArgForParamSlot` **不看 `isByRef`**：声明是 `double* newWidth` 而实参交的是值。方向：ByRef 标量槽 → pending 临时量 + `&tmp`；类/对象指针槽（`void**`）保持原样 |
+
+### 56.6 本刀验证状态（已构建 + 已回归）
+
+- 构建：`.\build.bat`，`CMAKE_BUILD_PARALLEL_LEVEL=2`，**54 目标**（含 `cgen_emitter.hpp`
+  引起的 PCH 重编），EXIT=0；起构建时空闲物理内存 **5888 MB**（低于 §0.1 的 8 GB 门槛，
+  本轮是「改头文件后的一次 -j2 增量」，不是整工程 emit，峰值按 2 个 cl 封顶）。
+- `_vcmp_` 复核：`.temp\pdsub` 六模块子集重新 emit，`_vcmp_` 命中 **0**（修前 4 条）；
+  生成的 C 实读 `pdPSDLayer.c(4627)` = `if (!((vb6_VarCmpLongGt(&_vcmp_0, bytesReadLine)))) break;`
+  + `} while (1);`。
+- 族② 复核：`.temp\pdimg` 两模块子集重新 emit，`IsSuspended|EstimateRAMUsage|SuspendImage`
+  命中 **0**（修前 9 条）。
+- RTL：同一轮 emit 的 cl 命令行含 `rtl\vb6rtl_com.c`，`rtl\\vb6rtl_com.c(N): error/warning`
+  命中 **0**；`uc_host.c` 同。
+- 回归：`tests\run_tests.ps1 -Category syntax` → **PASS=202 FAIL=0 SKIP=0**。
+  新增/加固两个夹具：
+  - `pd_post_test_loop_vcmp`（`tests/pd_loopcond/p01_post_test_vcmp.bas`，正面钉
+    `if (!((vb6_VarCmp` + `} while (1);`，反面钉 `} while (vb6_VarCmp`）；
+  - `pd_modret_class_chain` 加了一句**自模块限定调用**
+    `PDImages.GetImageByID(imgID).GetNumOfLayers()`（`tests/pd_modret/PDImages.bas`），
+    既有反面钉子 `).GetNumOfLayers` 直接兜住旧坏形状。
+- `Extender.Index` 没有本地夹具：它要一整个 UC 宿主 + 设计期子控件形状，本机只做了
+  「结构体/初值/push 三处一致 + RTL 编译 0 诊断」这一层；整编读数等 #5 之后下一轮确认。
+
+### 56.7 本轮（第四轮开工）截断审计与提交
+
+截断时的原样读数：
+
+```
+$ git status --short
+ M ai/C3_PHOTODEMON_HANDOFF.md
+ M src/backend/cgen_emitter.hpp
+ M src/backend/cgen_util_classtype.cpp
+ M src/backend/stmt/cgen_loop.cpp
+ M src/rtl/core/vb6forms/uc/uc_host.c
+ M src/rtl/core/vb6rtl/vb6rtl_com.c
+ M src/rtl/core/vb6rtl/vb6rtl_userctl.h
+ M tests/pd_modret/PDImages.bas
+ M tests/run_tests.ps1
+?? .zcodeignore
+?? tests/pd_loopcond/
+$ git diff --stat
+ 9 files changed, 178 insertions(+), 7 deletions(-)
+```
+
+逐个判定：9 个 `M` 全部是 §56.2–§56.4 那两刀的**完整**改动（都能单 TU 编过、
+夹具与 `run_tests.ps1` 钉子同步、子集 emit 有读数：`_vcmp_` 0 / 族② 0 /
+PASS=202 FAIL=0）。**没有半截改动**，因此本轮**未执行任何 `git checkout --`**；
+`?? .zcodeignore` 不是编译器改动，不动。
+
+保留并分三条提交（都是显式路径 `git add`，未用 `-A`/`.`）：
+
+| commit | 内容 | 验证读数 |
+| --- | --- | --- |
+| `6b2311f8` | `_vcmp_` 后测循环条件物化改形（`cgen_emitter.hpp` / `cgen_loop.cpp` / `tests/pd_loopcond/` / `run_tests.ps1`） | 子集 emit `_vcmp_` 0（修前 5 条） |
+| `024cf46c` | §43 标准模块自限定调用返回类推断（`cgen_util_classtype.cpp` / `tests/pd_modret/PDImages.bas`） | 子集 emit 族② 0（修前 9 条） |
+| `117836fb` | `UserControl.Extender.Index`（`vb6rtl_userctl.h` / `vb6rtl_com.c` / `uc_host.c`） | RTL 编译 0 诊断；整编读数待 #5 |
+
+随后 `git push` 到 `origin` 与 `github` 两端。工作区只留 `?? .zcodeignore`。
+
+
