@@ -67,6 +67,24 @@
                 suppressDefaultProp_ = true;
             }
         }
+        // 账 §42: 形参是**工程内 UserControl**（`ByRef tudSource As pdSpinner`）时与 Object 同档。
+        // 判据问 cParamClassPtrType —— "这个槽收不收类实例指针"的唯一口径：类形参在语义层被
+        // 折成 Variant，typeRefName 是空的，只有它答得出 `vb6_cls_X*`。
+        std::string ucParamCls;
+        if (i < calleeParams.size() && node.positional[i]
+            && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string slotCls042 = cParamClassPtrType(calleeParams[i]);
+            if (slotCls042.compare(0, 8, "vb6_cls_") == 0) {
+                std::string cls042 = slotCls042.substr(8);
+                while (!cls042.empty() && cls042.back() == '*') cls042.pop_back();
+                const std::string idLowerUc = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*node.positional[i]).name);
+                if (knownFormControls_.count(idLowerUc) && findUserControlSpec(cls042)) {
+                    suppressDefaultProp_ = true;
+                    ucParamCls = cls042;
+                }
+            }
+        }
         emitExpr(*node.positional[i]);
         suppressDefaultProp_ = savedSuppressProp;
       // COM属性标记残留: MsgBox dic.Count 等场景 — 参数是COM属性读取但标记未被消费
@@ -107,6 +125,13 @@
             }
         }
         std::string argVal = std::move(lastExpr_);
+        // 账 §42: 工程内 UC 形参收的是**实例指针**（`vb6_cls_<UC>*`），不是宿主窗口句柄 ——
+        // 设计槽 `vb6_hwnd_<名>` 存的是 vb6_UC_HostCreate 交回来的窗口，直接塞进类指针槽
+        // 会让被调方把 HWND 当结构体解引用。只改这一格（实参位），With/成员接收者那一族
+        // 的存量发码一字不动。
+        if (!ucParamCls.empty() && argVal.rfind("vb6_hwnd_", 0) == 0) {
+            argVal = "(vb6_cls_" + cIdent(ucParamCls) + "*)vb6_UC_InstanceOf(" + argVal + ")";
+        }
         /* Fix 296 / 4b: 实参位上的 Extender 成员读也走实例入口 (CoolBar.ctl
            `RaiseEvent HeightChanged` 发成 `onHeightChanged(h, Extender.Height)`,
            实测 ComCtlsDemo 1 处)。换道放在**捕获的那一刻** —— boxIntoLateSlot /
