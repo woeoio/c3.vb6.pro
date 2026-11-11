@@ -1242,6 +1242,15 @@
     };
     CtrlDefaultProp ctrlDefaultPropOf(const std::string& lower) const;
 
+    // 账 §42 续（F1 控件数组元素）: UC 默认成员的**读数表达式** —— 接收者由调用方给
+    // （裸名 = 句柄，控件数组元素 = vb6_CtrlArr_GetAt(...)）；折不折、属性名、收口前缀
+    // 都只问 ctrlDefaultPropOf。空串 = 不折（含 suppressDefaultProp_ 的对象上下文）。
+    std::string ctrlDefaultReadExpr(const std::string& lower, const std::string& recvExpr) const;
+    // 同一条出口的写腿：`vb6_ComSetProp(接收者, L"<默认成员>", 打包(右值))`。
+    // 返回 false = 这一枚不是工程内 UC 的默认成员（调用方保持原路）。
+    bool emitUcDefaultPropLet(const CtrlDefaultProp& fold, const std::string& recvExpr,
+                              Expr& valueExpr);
+
     // Vb6Type → 打包函数名。comPackExpr 的类型分支与上面那条折叠共用这一张映射；
     // 空串 = 这一型在这里答不了，交回调用方兜底（不擅自换默认档）。
     static std::string comPackFnForVbType(Vb6Type vt);

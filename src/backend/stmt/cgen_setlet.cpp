@@ -21,10 +21,20 @@ namespace vb6c3 {
 // 与 P16 事后在发好的文本里截 "vb6_hwnd_"（只认 knownWithEventsCtrlVars_ 的目标）——
 // 于是泛对象槽 (`Dim o As Object`) 与 Variant 槽拿到的是一枚 BSTR / 一个 int。
 // 闸只在这一枚标识符上开：右值是表达式（`Set o = f(Text1)`）时子树照旧按值上下文，不顺着漏下去。
+// 账 §42 续（F1）：控件数组元素同属对象引用那一档（`Set mCtlSlider = ucSlider1(0)`），
+// 否则读腿的默认成员折叠（ctrlDefaultReadExpr）会把它折成标量。
 void CCodeGen::emitSetObjectRhs(const ExprPtr& value) {
     const bool bareIdent = value && value->kind == ASTNodeKind::IdentifierExpr;
+    bool ctrlArrElem = false;
+    if (value && value->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& idxSet = static_cast<IndexOrCallExpr&>(*value);
+        if (idxSet.callee && idxSet.callee->kind == ASTNodeKind::IdentifierExpr) {
+            auto& idSet = static_cast<IdentifierExpr&>(*idxSet.callee);
+            ctrlArrElem = knownControlArrays_.count(Symbol::toLower(idSet.name)) > 0;
+        }
+    }
     const bool savedSuppress = suppressDefaultProp_;
-    if (bareIdent) suppressDefaultProp_ = true;
+    if (bareIdent || ctrlArrElem) suppressDefaultProp_ = true;
     emitExpr(*value);
     suppressDefaultProp_ = savedSuppress;
 }

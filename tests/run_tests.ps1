@@ -12853,6 +12853,18 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_uctrlqual\UcQual.ctl") @(
         "vb6_ComSetProp(vb6_hwnd_cmbWidthUnit, L""ListIndex"", vb6_ComPackInt(newIndex))") @(
         "vb6_hwnd_cmbWidthUnit.ListIndex")
+    # C2440 (FormLevels.c / dialog_ToneMapping.c): 工程内 UC 的**控件数组元素**在值上下文
+    # 就是该 UC 的默认成员。旧发码 `vb6_CtrlArr_GetAt(&vb6_arr_slt, 0) = 2.2`（double → void*）
+    # 与读侧 `x = GetAt(...)`（void* → double）都 C2440。两条腿都收在 ctrlDefaultPropOf。
+    Test-CodegenNote "pd_uc_ctrlarr_default_prop" @(
+        "$Tests\pd_ucctrlarr\PdUcSlider.ctl",
+        "$Tests\pd_ucctrlarr\PdUcArr.frm") @(
+        "vb6_ComSetProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, 0), L""Value"", vb6_ComPackDouble(",
+        "vb6_ComSetProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, idx), L""Value"", vb6_ComPackDouble(newValue))",
+        "vb6_ret_ReadSecond = vb6_ComGetDoubleProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, 1), L""Value"")",
+        "vb6_ComGetDoubleProp(vb6_hwnd_sltSingle, L""Value"")") @(
+        "vb6_arr_slt, 0) = ",
+        "o = vb6_ComGetDoubleProp")
     # C2063 (pdResize.c:277): `Not UserControl.Controls(name) Is ctl` —— 显式限定
     # `UserControl.Controls(...)` = 集合默认成员 Item, 返回 Object。
     Test-CodegenNote "pd_uc_controls_item_call" @(

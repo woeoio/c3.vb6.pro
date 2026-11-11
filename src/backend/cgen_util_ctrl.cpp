@@ -2446,9 +2446,12 @@ static bool findUcDefaultMember(const std::string& code, std::string& propOut,
         pos = eol + 1;
     }
     if (prop.empty()) return false;
-
     std::string lowNeedle = "property get " + prop;
     for (char& c : lowNeedle) c = (char)std::tolower((unsigned char)c);
+    // 只认**非注释行**上的声明。旧写法把整个 codeSection（含注释）都当候选，`.ctl` 注释里
+    // 顺口提到 `Property Get <Prop>() As <型>` 就会把注释尾巴当型 ⇒ ucDefaultReadPlan
+    // 落空 ⇒ 静默不折（C2440 原样回来）。声明行在 VB6 里写在
+    // `Attribute <Prop>.VB_UserMemId = 0` **之前**，所以起点仍是 0，只加注释行过滤。
     size_t g = 0;
     while ((g = low.find(lowNeedle, g)) != std::string::npos) {
         size_t after = g + lowNeedle.size();
@@ -2456,6 +2459,10 @@ static bool findUcDefaultMember(const std::string& code, std::string& propOut,
             g = after;
             continue;
         }
+        size_t ls = low.rfind('\n', g);
+        ls = (ls == std::string::npos) ? 0 : ls + 1;
+        while (ls < g && std::isspace((unsigned char)low[ls])) ++ls;
+        if (ls < low.size() && low[ls] == '\'') { g = after; continue; }   // 注释行不认
         size_t eol = low.find('\n', after);
         if (eol == std::string::npos) eol = low.size();
         const std::string decl = low.substr(after, eol - after);
@@ -2541,6 +2548,29 @@ CCodeGen::CtrlDefaultProp CCodeGen::ctrlDefaultPropOf(const std::string& lower) 
     r.readFn = std::move(readFn);
     r.valueType = defaultPropType(it->second);
     return r;
+}
+
+// 账 §42 续（F1）: 默认成员的读数/写值两条发码腿收成这一对，消费点只有两档接收者：
+// 裸名（句柄）与控件数组元素（vb6_CtrlArr_GetAt(...)）。判据仍只住 ctrlDefaultPropOf，
+// 站点不许再各拼一份 `castTo + readFn` / `ComSetProp + L"<prop>"`。
+std::string CCodeGen::ctrlDefaultReadExpr(const std::string& lower,
+                                          const std::string& recvExpr) const {
+    CtrlDefaultProp fold = ctrlDefaultPropOf(lower);
+    if (!fold.folds || fold.isWithEvents) return std::string();
+    return fold.castTo + fold.readFn + "(" + recvExpr + fold.readArgTail
+         + ")  /* default prop: ." + fold.propText() + " */";
+}
+
+bool CCodeGen::emitUcDefaultPropLet(const CtrlDefaultProp& fold,
+                                    const std::string& recvExpr, Expr& valueExpr) {
+    if (!fold.folds || !fold.isUcDefault) return false;
+    emitExpr(valueExpr);
+    std::string valUc = std::move(lastExpr_);
+    std::string packUc = comPackFnForVbType(fold.valueType);
+    if (packUc.empty()) packUc = comPackExpr(valueExpr);
+    c_.emitLine("vb6_ComSetProp(" + recvExpr + ", L\"" + fold.propText() + "\", " + packUc
+                + "(" + valUc + "));  /* UC default prop let */");
+    return true;
 }
 
 

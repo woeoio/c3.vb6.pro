@@ -4955,3 +4955,68 @@ Clone.bas `Tools_Clone` + Comp.cls + Main.bas），三种形状对照：
 3. **F3（13 条）**：在**内建/运行时调用**的实参侧补 Variant→标量/串提取（`PA_SetLong`
    取 Long、`Pow` 取 Double、`Like` 取 BSTR、`Num_Mod` 取 Long…）。
 4. F5、F7、F6 各自独立，按站点多少依次收。
+
+### 56.37 F1 收口：控件数组元素的 UC 默认成员（读写两腿）+ CI 对账 43089675141
+
+#### 一、CI 对账（run 43089675141，head 20ee86a2 = 跨模块同名刀）
+
+1. **shape oracle 红，只有"新输入未登记"这一种**：既有 668 行哈希 **0 变化**，
+   新增 5 行全是 `tests/pd_qualproc/*`（`qualproc.vbp` + 4 个源文件，跨模块同名刀的夹具）。
+   → `scripts/rebless_emit_manifest.ps1 -Bless` 登记完成：**673 行数据，新增 5 / 改写 0**。
+2. **`vbp_fixture_census` 红，3 份 .vbp 两头不靠**：`pd_qualproc\qualproc.vbp`、
+   `pd_udtelem_clsfld\udtelem.vbp`（两条都是 codegen 形状钉子，不走整工程编译面）、
+   `photodemon\PhotoDemon.vbp`（§0 连带入库那 643 份，由 CI 的 full build / emit probe 覆盖）。
+   → 已按"刻意不列 + 理由"补进 `scripts/vbp_fixtures_unregistered.txt`（表头 4 → 9）。
+   本机复跑：240 份 .vbp，231 入册 / 9 挂账 / 0 漏。
+3. **本机 `scripts/emit_manifest.ps1` 的读数口径**：本机生成的清单里有 **6 份 .vbp 输入**
+   的哈希与 `emit-manifest.expected.txt` 不同（其余 673 行逐行相同）。原因是 .vbp 那一档的
+   发码里带了工程根路径，归一化只认本仓 root；CI 那台的产物与 expected 逐行一致。
+   ⇒ **本机清单只作集合比对（新增 / 消失 / 改写），不作哈希判据**；哈希一律以 CI 为准。
+   本次集合比对：新增 5（qualproc）、消失 0、改写 0。
+
+#### 二、F1 落地（本刀唯一改动面：发码不再把控件数组元素当普通数组元素）
+
+- 根因：`sltGamma(0) = 2.2` / `x = tudLevels(Index)` 这类**工程内 UC 的控件数组元素**
+  在 VB6 里就是该 UC 的默认成员，旧发码按普通数组元素处理 →
+  `vb6_CtrlArr_GetAt(&vb6_arr_slt, 0) = 2.2`（C2440: double → void\*）、
+  读侧 `= vb6_CtrlArr_GetAt(...)`（C2440: void\* → double）。
+- 修法：默认成员判据仍然只有 `ctrlDefaultPropOf` 一枚，把**两颗出口**放进
+  `src/backend/cgen_util_ctrl.cpp`，四个站点只调出口：
+  - `ctrlDefaultReadExpr(lower, recvExpr)` —— 读腿（裸名 / 控件数组元素共用）。
+  - `emitUcDefaultPropLet(fold, recvExpr, valueExpr)` —— 写腿（同上，两档接收者）。
+  站点：`cgen_expr_ident_symbol.inc`（裸名读）、`cgen_expr_call.cpp`（控件数组读）、
+  `cgen_assign_stmt_special.inc`（裸名写 + 新增的控件数组写）。
+- **顺带修的真 bug**：`findUcDefaultMember` 旧实现把整个 codeSection（含注释）都当候选，
+  `.ctl` 注释里顺口写出声明串就会把注释尾巴当型 → `ucDefaultReadPlan` 落空 → **静默不折**
+  （C2440 原样回来，且没有任何诊断）。现在只认**非注释行**。夹具注释里故意留了这条
+  "被钉住的串"，防止回退。
+- 形状（`tests/pd_ucctrlarr`）：
+  - 写：`vb6_ComSetProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, 0), L"Value", vb6_ComPackDouble(2.2));  /* UC default prop let */`
+  - 读：`vb6_ComGetDoubleProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, 1), L"Value")  /* default prop: .Value */`
+  - 裸名单实例：`vb6_ComGetDoubleProp(vb6_hwnd_sltSingle, L"Value")`
+  - 对象上下文（负控）：`o = vb6_CtrlArr_GetAt(&vb6_arr_slt, 0);  /* Set */`（不折）
+  - `Set` 右值这一档由 `emitSetObjectRhs` 把闸补到控件数组元素上（原来只对裸名开）。
+- 夹具/钉子：`tests/pd_ucctrlarr/{PdUcSlider.ctl,PdUcArr.frm}` +
+  `run_tests.ps1` 的 `pd_uc_ctrlarr_default_prop`（4 条正向、2 条反向：
+  不许再出 `GetAt(...) = `，不许把 Set 右值折成 `ComGetDoubleProp`）。
+- 判据脚本 `scripts/check_uc_default_member.ps1` 同步：R3 增加"控件数组写腿消费
+  isUcDefault 1 处"，R4 增加"读腿出口消费 2 处 / 写腿出口消费 2 处"，R6 改到出口里认
+  `propText()`。本机 PASS，census 全部读出数：
+  `ownerFiles=1 findDef=1 findUse=1 planDef=1 planUse=1 ucSet=1 ucRead=1 ucReadArr=1
+   readSites=1 writeSites=1 objSites=1 readCalls=2 writeCalls=2`。
+- 本机回归：`-Category syntax` **PASS=225 FAIL=0 SKIP=0**（224 + 本刀 1）。
+
+#### 三、已知残留 / 判据缺口
+
+- 语义层仍对 `slt(0) = 2.2` 报 `VB3003`（Double → Object）：语义分析器不知道
+  "控件数组元素是 UC 的默认成员"，属**诊断噪声**（C 发码已正确，与 §6 R1 同类）。
+  记账，等诊断族一起收；不影响本族 C2440 归零。
+- 本刀的 C2440 预计归零面：FormLevels 5 行（4 写 1 读）+ dialog_ToneMapping 4 行（全写）
+  = **9/9**。读数要等 CI 对 F1 head 的 PD full build（下一刀前先拿读数，再进 F2）。
+
+#### 四、待办（严格顺序）
+
+1. CI 对 F1 head 跑完后：`rebless_emit_manifest.ps1 -Bless` 登记 `tests/pd_ucctrlarr`
+   的 **2 行**新输入（预期仍然只有新增、改写 0）。
+2. 拿 PD full build 的新 C2440 报表对账：确认 F1 那 9 条消失、其余族不动。
+3. 按 §56.36 顺序进 **F2（11 条，零参 UDT 取值当 ByRef 实参）**。
