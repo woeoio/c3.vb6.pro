@@ -4718,6 +4718,13 @@ MemberAccessExpr 时先 `inferClassTypeOfExpr(object)` 定类，再按两张权�
 `pdCanvas.c` 再定位。WIC 的 `GUID_NULL()` 装箱成 VT_BSTR 是同族另一变体（参数表把
 `ByRef ... As Guid` 映射成 void**），本次未动。
 
+**#9 桶里已确认被本刀收掉的族（本机小语料复核，2026-11-11）**：`ComplexNumber(F) → intptr_t`
+（20 行，Filters_Area.c 3673…）在现 head 已不再出现 —— `.temp/cxpb`（`ComplexNumbers.bas` +
+一枚 `c = c_add(a, c_mul(a, b))` 的调用方）emit 出
+`vb6_type_ComplexNumber _vb6_anytmp0 = vb6_ComplexNumbers_c_mul((void*)&(a), (void*)&(b));`
+`c = vb6_ComplexNumbers_c_add((void*)&(a), (void*)&_vb6_anytmp0);`。
+故 C2440 的剩余桶必须用当前 head 的新 PD 日志重算（run 43048222839），旧 #9 的 135 行已过期。
+
 ### 56.31 形状门归因：`tests/cls_inh/Inh.vbp`（§56.29 的既有输入改写）
 
 **现象**：CI `43045032842`（head 6f923ac6）形状门报「哈希不同 1」——`tests/cls_inh/Inh.vbp`
