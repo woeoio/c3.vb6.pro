@@ -1216,6 +1216,16 @@
         const char* prop = nullptr;            // "Text" / "Caption" / "Value" / ...
         std::string readFn;                    // vb6_GetControlText / vb6_GetCheckValue / ...
         Vb6Type valueType = Vb6Type::Unknown;  // 折出来那个值的 VB 型（打包档问的就是它）
+        // 账 §42: 工程内 UserControl 子控件的默认成员（`.ctl` 里 `Attribute <Prop>.VB_UserMemId = 0`）。
+        // 这条路的属性名是**运行时读出来的**，不是上面那张内置表的静态字面量，故单独一格；
+        // 非空时优先于 prop（prop 对这条路是 nullptr）。
+        std::string propName;
+        std::string castTo;                    // 值收口前缀（Single ⇒ "(float)"），空 = 直发
+        std::string readArgTail;               // 读数实参尾（UC 的 COM getter 要 `, L"<Prop>"`），空 = 只交句柄
+        bool isUcDefault = false;              // 走 COM 读写（vb6_ComGet*Prop / vb6_ComSetProp）
+        std::string propText() const {
+            return propName.empty() ? std::string(prop ? prop : "") : propName;
+        }
     };
     CtrlDefaultProp ctrlDefaultPropOf(const std::string& lower) const;
 

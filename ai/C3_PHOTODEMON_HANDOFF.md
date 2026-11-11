@@ -2558,7 +2558,26 @@ M3（§39）已随本文件同轮落地提交 `76bbb0e9`：`MonthName/WeekdayNam
   裸 `Randomize` 仍走 `vb6_RandomizeTimer()`。
 - 形状门：CI `Emit manifest (shape oracle)` 在 `76bbb0e9` 上 **success**（632/632 相同）；
   本机干净克隆 632 行 / 628 相同 / 4 条既知环境差异 / 0 缺席 / 0 多出。**无需 bless**。
-- 整编读数：见 §39.1（本轮探针 head 与读数落地后补）。
+- 整编读数：见 §39.1（已落地）。
+
+### 39.1 整编读数（run `42927781262`，probe head `4143259b` = dev `76bbb0e9`）
+
+`BUILD_EXIT=1`、`EXE_EXISTS=False`（存量红，预期）、`BUILD_SECONDS=4901.8`、
+`PEAK_TREE_WS_MB=8908` / `MIN_FREE_PHYS_MB=4938`。
+
+| 读数 | 改前（`ac25f3aa`/`4143259b` 前） | 本轮 |
+|---|---|---|
+| `vb6_MonthName` | 7 | **0** |
+| `vb6_WeekdayName` | 7 | **0** |
+| C2198 | 123 | **116**（−7，正好这两族的站点数） |
+| C2064 | 66 | **0** |
+| C2197 | 187 | 187 |
+| C2039 | 88 | 88 |
+| C2065 | 228 | 228 |
+| C2440 | 214 | 214 |
+| 全码 error 合计 | 1167 | **1160** |
+
+口径：`c3-error.log` 逐族计数（`pd_build.codes.txt` 首段）。
 
 ## §40 语句级无括号调用的首参括号分组（收 Num_Div 族 C2197）
 
@@ -2647,3 +2666,107 @@ emit 里同一形态在**大部分 TU 编得过**，说明不是「漏 `()`」�
 
 先做族①（32 条，已复现、机理清楚、判据唯一）：小语料正负 → 哨兵 → 本机重建 → 632 形状门 → 双推 + 整编读数。
 族② 需先拿到**当前 head** 的 `c3-error.log` 与单 TU 行号（PD 整编 #3 的工件可直接给），再定。
+
+## §42 工程内 UserControl 设计期子控件「裸名当值/当对象」（收 C2039 族① 32 条）
+
+来源 §41.2。这一刀只动**一个判据出口**（`ctrlDefaultPropOf`）+ 三个发码面，不加第二份名单。
+
+### 42.1 口径
+
+| 面 | 改前 | 改后 |
+|---|---|---|
+| 值/标量读 | `me->tudWidth`（C2039） | `vb6_ComGetDoubleProp(vb6_hwnd_tudWidth, L"Value")` |
+| 裸名写 | `me->tudWidth = d`（C2039） | `vb6_ComSetProp(vb6_hwnd_tudWidth, L"Value", vb6_ComPackDouble(d))` |
+| 对象上下文（`ByRef <UC>` / `Set` / `With`） | `vb6_hwnd_tudWidth`（HWND 当 `vb6_cls_pdSpinner*` 传） | `(vb6_cls_Spinner*)vb6_UC_InstanceOf(vb6_hwnd_tudWidth)` |
+
+判据不是新表，而是那个 UC 自己的 `.ctl` 代码段：
+
+```
+Public Property Get Value() As Double
+Attribute Value.VB_UserMemId = 0
+```
+
+`findUcDefaultMember` 只认 `= 0`（DISPID_VALUE）与同名 `Property Get … As <型>`；返回型 →
+COM 读数由 `ucDefaultReadPlan` 一张小表给（double/single/long/integer/boolean/string/date），
+其余型**不折**（保持改前行为，不猜）。
+
+### 42.2 改动点
+
+- `src/backend/detail/util/cgen_helpers.inc` `CtrlDefaultProp`：加 `propName` / `castTo` /
+  `readArgTail` / `isUcDefault` / `propText()`。
+- `src/backend/cgen_util_ctrl.cpp`：
+  - 新增 `findUcDefaultMember` + `ucDefaultReadPlan`（全仓唯一的 `.VB_UserMemId` 解析点）；
+  - `ctrlDefaultPropOf`：`getDefaultPropertyName` 落空时回落到 `.ctl`（`isWE` 直接返回 ——
+    WithEvents 变量不指向工程内 UC）。
+- `src/backend/detail/expr/cgen_expr_ident_symbol.inc`：默认属性发码带 `castTo` 与 `, L"<Prop>"`；
+  内置控件这两格为空 ⇒ 存量发码字节不变。
+- `src/backend/detail/stmt/cgen_assign_stmt_special.inc`：裸名赋值腿，两枚守卫
+  （返回槽 `isRetSlotUc`、局部变量 `knownLocalVars_`）。
+- `src/backend/detail/expr/cgen_expr_call_arg_emit.inc`：形参是工程内 UC 时（判据问
+  `cParamClassPtrType` —— 类形参在语义层被折成 Variant、`typeRefName` 是空的，只有它答得出
+  `vb6_cls_X*`）与 `Object` 同档抑制默认属性，并在实参位把 `vb6_hwnd_<名>` 换成
+  `(vb6_cls_<UC>*)vb6_UC_InstanceOf(…)`。**只改实参位这一格**：With / 成员接收者那一族的存量
+  发码一字不动（With 的临时量类型是 HWND，把实例指针再 `(HWND)` 回去是错的 —— 实测初版那样写
+  `tests/ucTreeView` 多出 796 字节，已收回）。
+
+### 42.3 小语料 A/B（`.temp/c2039probe/`）
+
+探针补三处：`Spinner.ctl` 的 `Attribute Value.VB_UserMemId = 0`、`Holder.ctl` 的
+`TakeIt(ByRef s As Spinner)` 与调用 `TakeIt tudWidth`（与 `pdResize.ctl` 的
+`ConvertUnitToPixels(..., ByRef tudSource As pdSpinner, ...)` 同形）。改后 `--emit-c`：
+
+```
+d = vb6_ComGetDoubleProp(vb6_hwnd_tudWidth, L"Value")  /* default prop: .Value */;
+vb6_Holder_ReadIt((void*)me, vb6_ComGetDoubleProp(vb6_hwnd_tudWidth, L"Value")  /* default prop: .Value */);
+vb6_cls_Spinner* vb6_argtmp_vb6_cls_Spinner_0 = (vb6_cls_Spinner*)vb6_UC_InstanceOf(vb6_hwnd_tudWidth);
+vb6_ComSetProp(vb6_hwnd_tudWidth, L"Value", vb6_ComPackDouble(d));  /* UC default prop let */
+```
+
+`me->tudWidth` 三形态全清；`c3_build.ps1 -Vbp .temp/c2039probe/Probe.vbp` 整编 **C3 exit=0**
+（`OBJCACHE … total=87/87`，仅 `Holder.ctl(28,5) VB3003` 一枚**既有**语义告警：`s.DefaultValue`
+在 `ByRef s As Spinner` 上仍按 Object 判，与本刀无关）。
+
+### 42.4 哨兵
+
+`scripts/check_uc_default_member.ps1`（R1..R7）：解析点唯一文件、`findUcDefaultMember` /
+`ucDefaultReadPlan` 各 1 定义 1 调用、`isUcDefault` 1 置位 1 消费、三个发码面各 1 处、
+写腿两枚守卫、读腿必须走 `propText()`、census 不许读空。已注册进 `tests/run_tests.ps1`
+static 分片（`Test-UcDefaultMember`），`check_static_sentinel_registration.ps1` 通过。
+**负例**：把写腿的 `!knownLocalVars_.count(tgtLowerUc)` 改成 `true` ⇒ R5 判红（实测），改回即绿。
+
+### 42.5 形状门
+
+**读数**（`.temp/shape_gate_clone`，干净克隆 + 本刀二进制 `sha256=0fe2e1ce…`，
+`inputs=632`，`rc!=0=88`）：
+
+- 与改前基线 `emit-manifest.nb.txt`（`c3-exe sha256=f9efe642…`，commit `0337282`）按
+  `ascii256` 逐行比：**632 行只差 1 行** —— `tests/ucTreeView/Proyecto1.vbp`
+  （974547 → 975179 B，+632）。
+- 与 checked-in `emit-manifest.expected.txt` 比：相同 627 / 不同 5 = 4 条既知环境差异 + 本刀这 1 行。
+
+**逐条归因**（唯一差异，单站点）：
+
+源码 `tests/ucTreeView/Form2.frm:80` 的 `cTE.Init TVP, "*.*"`，形参
+`ClsTreeExplorer.Init(TVP As ucTreeViewPlus, ...)`：
+
+```c
+/* 改前（复合字面量，无持引用；由 fixUCInstanceAddrInExpr 从 `&TVP` 改写而来） */
+vb6_ClsTreeExplorer_Init(cTE, &((vb6_cls_ucTreeViewPlus*){ (vb6_cls_ucTreeViewPlus*)vb6_UC_InstanceOf(vb6_hwnd_TVP) }), ...);
+/* 改后（rev7 落临时 + 账 #305 腿⑤ 借出/交回） */
+vb6_cls_ucTreeViewPlus* vb6_argtmp_vb6_cls_ucTreeViewPlus_0 = (vb6_cls_ucTreeViewPlus*)vb6_UC_InstanceOf(vb6_hwnd_TVP);
+{ void* __bx = ... vb6_ComObject_IsBoxed ... vb6_cls_ucTreeViewPlus_AddRef(...); }  /* 账 #305 (甲) 腿⑤ */
+vb6_ClsTreeExplorer_Init(cTE, &vb6_argtmp_vb6_cls_ucTreeViewPlus_0, ...);
+if (vb6_argtmp_vb6_cls_ucTreeViewPlus_0) vb6_cls_ucTreeViewPlus_Release(vb6_argtmp_vb6_cls_ucTreeViewPlus_0);
+```
+
+- **指向的实例指针完全相同**（`vb6_UC_InstanceOf(vb6_hwnd_TVP)`），变的只是"怎么落到
+  `vb6_cls_ucTreeViewPlus**` 槽"：本刀在实参位先交出实例指针（不再是裸 HWND/裸名），
+  于是存量 rev7 那条「右值进 ByRef 类槽 ⇒ 先落临时再取址」接住了它，并补上 #305 腿⑤的
+  借出/交回。语义更严（调用期间持引用），不是退回 HWND。
+- 旁证：紧随其后的 `SelNode` 实参早就是同一形状（`vb6_argtmp_vb6_cls_Node_*` + #305），
+  本刀只是把同一档套到 UC 形参上；`Node` 临时量序号 0→1 是重排，不是新增站点。
+- 语料其余 631 行 `ascii256` 全同 ⇒ §39/§40 与本刀对存量发码零影响（除这一格）。
+
+**处置**：这一行属**本刀预期语义**（对象位交实例指针），需要重新登记（bless）。
+按纪律先归因、再等批准，**尚未**写入 `emit-manifest.expected.txt`。
+

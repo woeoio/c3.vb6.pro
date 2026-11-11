@@ -122,6 +122,28 @@
             return;
         }
     }
+    // 账 §42: 工程内 UserControl 设计期子控件的**默认成员 Let**（`tudWidth = newWidth`）。
+    // 改前这条落到类模块变量那一格，发成 `me->tudWidth = …`（C2039：结构体没有这枚成员）。
+    // 判据与读数走同一个出口 ctrlDefaultPropOf（isUcDefault 只在那条回落后置位）；
+    // 写 = vb6_ComSetProp(句柄, L"<默认成员>", 打包(RHS))。
+    if (node.target->kind == ASTNodeKind::IdentifierExpr) {
+        auto& tgtUc = static_cast<IdentifierExpr&>(*node.target);
+        const std::string tgtLowerUc = Symbol::toLower(tgtUc.name);
+        const bool isRetSlotUc = currentProc_
+                                 && Symbol::toLower(currentProc_->name) == tgtLowerUc;
+        CtrlDefaultProp foldUc = ctrlDefaultPropOf(tgtLowerUc);
+        if (!isRetSlotUc && !knownLocalVars_.count(tgtLowerUc)
+            && foldUc.folds && foldUc.isUcDefault) {
+            emitExpr(*node.value);
+            std::string valUc = std::move(lastExpr_);
+            std::string packUc = comPackFnForVbType(foldUc.valueType);
+            if (packUc.empty()) packUc = comPackExpr(*node.value);
+            c_.emitLine("vb6_ComSetProp(" + makeCtrlHwndArg(tgtLowerUc, foldUc.ctrlType)
+                        + ", L\"" + foldUc.propText() + "\", " + packUc + "(" + valUc
+                        + "));  /* UC default prop let */");
+            return;
+        }
+    }
     // P22: Date$/Time$ statement interception (Date$ = "12-31-2025" / Time$ = "23:59:59")
     if (node.target->kind == ASTNodeKind::IdentifierExpr) {
         auto& _tgtId22 = static_cast<IdentifierExpr&>(*node.target);

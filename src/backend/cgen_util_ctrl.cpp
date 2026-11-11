@@ -2383,6 +2383,102 @@ std::string CCodeGen::ctrlObjectRefExpr(const std::string& lower,
 }
 
 // ============================================================
+// 账 §42: 工程内 UserControl 的**默认成员**（只读设计器代码段，不碰解析器）
+//
+// VB6 把默认成员写在 `.ctl` 的代码段里：
+//     Public Property Get Value() As Double
+//     Attribute Value.VB_UserMemId = 0
+//         Value = m_Value
+//     End Property
+// 判据只有这两行：`VB_UserMemId = 0` 给出成员名，同名 `Property Get … As <型>` 给出返回型。
+// 只认 `= 0`（VB 的 DISPID_VALUE）；`= -4` 之类是别的东西，一律不折。
+// ------------------------------------------------------------
+static std::string trimAscii(const std::string& s) {
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace((unsigned char)s[b])) ++b;
+    while (e > b && std::isspace((unsigned char)s[e - 1])) --e;
+    return s.substr(b, e - b);
+}
+
+static bool findUcDefaultMember(const std::string& code, std::string& propOut,
+                                std::string& typeOut) {
+    if (code.empty()) return false;
+    std::string low = code;
+    for (char& c : low) c = (char)std::tolower((unsigned char)c);
+
+    std::string prop;
+    size_t pos = 0;
+    while (pos < low.size()) {
+        size_t eol = low.find('\n', pos);
+        if (eol == std::string::npos) eol = low.size();
+        size_t start = pos;
+        while (start < eol && std::isspace((unsigned char)low[start])) ++start;
+        if (eol - start > 10 && low.compare(start, 10, "attribute ") == 0) {
+            size_t mem = low.find(".vb_usermemid", start);
+            if (mem != std::string::npos && mem < eol) {
+                size_t eq = low.find('=', mem);
+                if (eq != std::string::npos && eq < eol) {
+                    std::string val;
+                    for (size_t i = eq + 1; i < eol; ++i) {
+                        const char c = low[i];
+                        if (std::isdigit((unsigned char)c) || c == '-' || c == '+') val += c;
+                        else if (!val.empty()) break;
+                    }
+                    if (val == "0") {
+                        size_t nameStart = start + 10;
+                        while (nameStart < mem && std::isspace((unsigned char)low[nameStart])) ++nameStart;
+                        std::string name = trimAscii(code.substr(nameStart, mem - nameStart));
+                        if (!name.empty()) { prop = name; break; }
+                    }
+                }
+            }
+        }
+        pos = eol + 1;
+    }
+    if (prop.empty()) return false;
+
+    std::string lowNeedle = "property get " + prop;
+    for (char& c : lowNeedle) c = (char)std::tolower((unsigned char)c);
+    size_t g = 0;
+    while ((g = low.find(lowNeedle, g)) != std::string::npos) {
+        size_t after = g + lowNeedle.size();
+        if (after < low.size() && (std::isalnum((unsigned char)low[after]) || low[after] == '_')) {
+            g = after;
+            continue;
+        }
+        size_t eol = low.find('\n', after);
+        if (eol == std::string::npos) eol = low.size();
+        const std::string decl = low.substr(after, eol - after);
+        size_t asPos = decl.rfind(" as ");
+        if (asPos != std::string::npos) {
+            std::string ty = trimAscii(decl.substr(asPos + 4));
+            size_t cut = ty.find_first_of(" \t'(");
+            if (cut != std::string::npos) ty = ty.substr(0, cut);
+            if (!ty.empty()) {
+                propOut = prop;
+                typeOut = ty;
+                return true;
+            }
+        }
+        g = after;
+    }
+    return false;
+}
+
+// 默认成员的返回型 → COM 读数（只登记 PhotoDemon 与常见语料里出现过的型；其余不折、保持原样）
+static bool ucDefaultReadPlan(const std::string& typeLower, std::string& readFn,
+                              Vb6Type& vt, std::string& castTo) {
+    if (typeLower == "double")  { readFn = "vb6_ComGetDoubleProp"; vt = Vb6Type::Double;  return true; }
+    if (typeLower == "single")  { readFn = "vb6_ComGetDoubleProp"; vt = Vb6Type::Single;  castTo = "(float)"; return true; }
+    if (typeLower == "long")    { readFn = "vb6_ComGetIntProp";    vt = Vb6Type::Long;    return true; }
+    if (typeLower == "integer") { readFn = "vb6_ComGetIntProp";    vt = Vb6Type::Integer; return true; }
+    if (typeLower == "boolean") { readFn = "vb6_ComGetIntProp";    vt = Vb6Type::Boolean; return true; }
+    if (typeLower == "string")  { readFn = "vb6_ComGetStringProp"; vt = Vb6Type::String;  return true; }
+    if (typeLower == "date")    { readFn = "vb6_ComGetDoubleProp"; vt = Vb6Type::Date;    return true; }
+    return false;
+}
+
+// ============================================================
 // 账 #256: 「这枚裸控件名会被折成哪一枚默认属性读数、折出来是什么型」只此一处回答
 //         （声明与背景见 cgen_helpers.inc 的 CtrlDefaultProp）。
 // 两个消费点：① 标识符发码那条路（cgen_expr_ident_symbol.inc）拿 readFn/prop/ctrlType
@@ -2402,7 +2498,30 @@ CCodeGen::CtrlDefaultProp CCodeGen::ctrlDefaultPropOf(const std::string& lower) 
         isWE = true;
     }
     const char* prop = getDefaultPropertyName(it->second);
-    if (!prop) return r;
+    if (!prop) {
+        // 账 §42: 工程内 UserControl 的默认成员。`getDefaultPropertyName` 只认 13 个内置
+        // FrmControlType，工程内 UC 一律 Unknown ⇒ 这里回落到 `.ctl` 的 VB_UserMemId = 0。
+        if (isWE) return r;                       // WithEvents 变量不会指向工程内 UC
+        auto itTN = knownFormControlTypeNames_.find(lower);
+        if (itTN == knownFormControlTypeNames_.end()) return r;
+        const FrmFile* ucSpec = findUserControlSpec(itTN->second);
+        if (!ucSpec) return r;
+        std::string ucProp, ucType;
+        if (!findUcDefaultMember(ucSpec->codeSection, ucProp, ucType)) return r;
+        std::string readFn;
+        Vb6Type vt = Vb6Type::Unknown;
+        std::string castTo;
+        if (!ucDefaultReadPlan(ucType, readFn, vt, castTo)) return r;
+        r.folds = true;
+        r.ctrlType = it->second;
+        r.isUcDefault = true;
+        r.propName = std::move(ucProp);
+        r.readFn = std::move(readFn);
+        r.castTo = std::move(castTo);
+        r.readArgTail = ", L\"" + r.propName + "\"";   // COM getter 的第二档就是属性名
+        r.valueType = vt;
+        return r;
+    }
     std::string readFn = getControlPropReadFn(it->second, prop);
     if (readFn.empty()) return r;        // 没有读函数 ⇒ 发码那条路本来就不会折
     r.folds = true;
