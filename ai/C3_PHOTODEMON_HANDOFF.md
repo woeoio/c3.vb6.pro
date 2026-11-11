@@ -2863,3 +2863,52 @@ cl 报 C2039 `'GetNumOfLayers': is not a member of 'vb6_cls_pdImage'`（整编 #
 本机增量构建：空闲 **6.0 GB**（低于 8 GB 硬线，违例一次，记录在此），
 `CMAKE_BUILD_PARALLEL_LEVEL=1`，53 目标（头文件一行声明带出的重编），峰值未进交换；
 下一轮起恢复按 8 GB 线执行。
+
+
+## §45 C2065 族② 第一站 —— `LenB(UDT 数组元素.串字段)` 吃掉 `vb6_type_` 前缀
+
+### 45.1 根因（PD 整编 #2 日志：`MergedEntry` 12 条）
+
+`pdStringHash.c:31` 一行出三条错：
+
+```c
+if ((-((int32_t)sizeof(MergedEntry) == 0))) {          // 裸 VB 类型名 ⇒ C2065
+```
+
+对应 VB 源码 `Classes\pdStringHash.cls`：`If (LenB(m_hashTable(idxTable).sKey) = 0) Then`。
+发码在 [cgen_expr_call_conv_varargs_lenb.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_call_conv_varargs_lenb.inc)
+的 Fix 084h 支（UDT 数组元素 `LenB` → `sizeof`）被截走，两处都错：
+
+1. **前缀被吃**：`substr(19, …)` 从 `vb6_sa_at(vb6_type_` 之后起算，交出 `MergedEntry`，
+   拼成 `sizeof(MergedEntry)` —— 裸 VB 名不是 C 标识符 ⇒ C2065（跨模块只是观感，
+   同模块同样红）。
+2. **字段被当成整枚元素**：实参是 `VB6_SA_AT(…).sKey`（BSTR 字段），语义是**字节长度**，
+   不是结构体宽度；这一支把它按整枚 UDT 处理，即使名字修对，读数也是错的。
+
+### 45.2 修法（只动这一站，不动判据）
+
+- 只认**整枚元素**：实参里出现 `).`（即 `VB6_SA_AT(...)` 之后还挂了 `.字段`）一律不接，
+  交回既有 `vb6_LenB(...)` 路径（BSTR 字节长度）；
+- 类型名保留前缀：`substr(10, …)`，发 `sizeof(vb6_type_XXX)`。
+
+修后同一行：
+
+```c
+if ((-(vb6_LenB(VB6_SA_AT(vb6_type_MergedEntry, me->m_hashTable, idxTable).sKey) == 0))) {
+```
+
+### 45.3 夹具与正反针
+
+- 新增 `tests/pd_udtlen/clsHash.cls`（类模块内 `Private Type MergedEntry` + `Private m_hashTable() As MergedEntry`
+  + `LenB(m_hashTable(0).sKey) = 0`）与 `Main.bas`；
+- `Test-CodegenNote "pd_udt_field_lenb"`：正面钉 `vb6_LenB(VB6_SA_AT(vb6_type_MergedEntry, me->m_hashTable, 0).sKey)`
+  与 `sizeof(vb6_type_MergedEntry)`，反面钉 `sizeof(MergedEntry)` 不出现。
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=192 FAIL=0 SKIP=0**（+1）。
+
+### 45.4 范围与未完
+
+本刀只收 `LenB` 这一站（`MergedEntry` 12 条）。#2 日志里其余 UDT 裸名 ——
+`PD_MenuEntry` 10 / `PD_Phrase` 10 / `PD_Contributor` 6 / `GradientPoint` 5 / `GP_EncoderParameter` 5 /
+`PD_8bfNew` 5 等 —— 分布在别的 TU 的别的上下文，**未归因、未改**；
+等整编 #4（含 §43）读数后逐站定位，不许按名字猜。
+

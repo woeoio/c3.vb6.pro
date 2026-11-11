@@ -12674,6 +12674,13 @@ if ($Category -in @("all", "syntax")) {
         "vb6_pdImage_GetNumOfLayers((void*)vb6_PDImages_GetImageByID(",
         "vb6_pdLayer_prop_get_GetLayerDIB((void*)vb6_pdImage_GetLayerByID(") @(
         ").GetNumOfLayers", ").GetLayerByID")
+    # §45 (C2065 族②): 类模块内 `Private Type` 的动态数组, `LenB(arr(i).串字段)`
+    # 必须问 BSTR 的字节长度 (落 vb6_LenB), 且整枚元素的 sizeof 必须带 vb6_type_ 前缀。
+    Test-CodegenNote "pd_udt_field_lenb" @(
+        "$Tests\pd_udtlen\clsHash.cls", "$Tests\pd_udtlen\Main.bas") @(
+        "vb6_LenB(VB6_SA_AT(vb6_type_MergedEntry, me->m_hashTable, 0).sKey)",
+        "sizeof(vb6_type_MergedEntry)") @(
+        "sizeof(MergedEntry)")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
