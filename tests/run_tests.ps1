@@ -12722,6 +12722,30 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_modqual\ProbeCls.cls") @(
         "vb6_ProbeCls_SetPos(me, (me->m_X + me->m_Y), 1, 1);") @(
         "vb6_ProbeCls_SetPos(me, (me->m_X + me->m_Y), 0, 0, _own_")
+    # C2197 §56.29 族① (整编 42 条, options_*/layerpanel_*/toolbar_* 同名过程):
+    # **语句级无括号的跨窗体调用** `frmX.Proc`。语句路此前不查 `<form>_<proc>`
+    # 模块限定二级键, 直接 lookupModule(裸名) 命中注册最早那家 (FormB, 1 枚 Optional)
+    # ⇒ 0 参的 FormA.UACT 被补成 (0, 0) C2197。正面钉 FormA 裸 0 实参 + FormB 按
+    # 自己的表补 (0, 0); 反面钉 FormA 多补的旧形状。
+    Test-CodegenNote "pd_form_qualified_call" @(
+        "$Tests\pd_formcall\FormB.frm", "$Tests\pd_formcall\FormA.frm",
+        "$Tests\pd_formcall\ModC.bas") @(
+        "void vb6_FormA_UACT(void);",
+        "vb6_FormA_UACT();",
+        "vb6_FormB_UACT(0, 0);") @(
+        "vb6_FormA_UACT(0, 0)")
+    # C2197 §56.29 族② (整编 68 条, Image_Metadata `With m_AllTags(...)` 内
+    # `.DB_StackIDs.GetString(i)`): UDT 字段声明成工程类时 `With` 块推不出字段的类,
+    # 外层调用落裸名表借到 Ser/pdSerialize.GetString 的 3 参 ⇒ 多补缺省实参。
+    # 正面钉类感知后的 1 实参调用; 反面钉借表后的 `(&(BSTR){0}), _own_` 尾巴。
+    Test-CodegenNote "pd_udtfield_class_call" @(
+        "$Tests\pd_udtfield_call\Ser.cls", "$Tests\pd_udtfield_call\Stack.cls",
+        "$Tests\pd_udtfield_call\TagMod.bas") @(
+        "BSTR vb6_Stack_GetString(vb6_cls_Stack* me, int32_t strIndex);",
+        "vb6_Stack_GetString((void*)_vb6_with_0->IDs, 0)",
+        "vb6_Stack_GetString((void*)VB6_SA_AT(vb6_type_TagRec, arr, 0).IDs, 0)") @(
+        "->IDs, (&(BSTR){0})",
+        "VB6_SA_AT(vb6_type_TagRec, arr, 0).IDs, (&(BSTR){0})")
     # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
     # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
     # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`

@@ -385,6 +385,21 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             if (!ma.object) return "";
             std::string baseClassName = inferClassTypeOfExpr(*ma.object);
             if (baseClassName.empty()) {
+                // C2197 §56.29: 接收者是 **UDT 值 / UDT 数组元素**时
+                // (`m_ImageCache(i).spriteNames.GetString(...)`), inferClassTypeOfExpr
+                // 推不出类 (元素是 UDT), 但成员的 C 类型 `vb6_cls_<X>*` 已是事实 ——
+                // 问同一枚 udtFieldObjCType, 否则外层调用落裸名表借到别模块同名过程
+                // (PD #9 pdSpriteSheet.c:264 一族)。与 With 分支同一判据。
+                const std::string baseUdtCU = inferUdtTypeOfExpr(*ma.object);
+                if (!baseUdtCU.empty()) {
+                    const std::string fldCM = udtFieldObjCType(
+                        baseUdtCU, Symbol::toLower(ma.memberName));
+                    static const std::string kClsPM = "vb6_cls_";
+                    if (fldCM.size() > kClsPM.size() + 1 && fldCM.back() == '*'
+                        && fldCM.compare(0, kClsPM.size(), kClsPM) == 0) {
+                        return fldCM.substr(kClsPM.size(), fldCM.size() - kClsPM.size() - 1);
+                    }
+                }
                 // G3-E1: **模块限定无参函数**当接收者 —— `Mod.Fn.Member` 的语义是
                 //   `(调用 Fn).Member`, 表达式的类是 Fn 的返回类, 不是"模块 Mod"。
                 //   此前这里只认 `inferClassTypeOfExpr(object)` (对象本身是类实例);
@@ -477,6 +492,24 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
                 // (Fix 085b 在调用链推断处对 callee=WithMemberExpr 已按方法返回类
                 // 特判, 此处不做方法返回类型推断以免误伤 String/Long 属性场景)
                 return info.className;
+            }
+            // C2197 §56.29: `With <UDT>` 块内的 `.类字段.方法(...)` —— UDT 成员声明成
+            // `As <工程类>` 时 (pdMDTag.DB_StackIDs As pdStringStack), 此前这一形推不出类,
+            // 外层调用落裸名表借到别模块的同名过程 (pdSerialize.GetString 3 参) ⇒ 多补
+            // 缺省实参 (PD #9 68 行 / 17 站)。判据与 udtFieldCTypeOfTarget 同源:
+            // 只认 UDT (Unknown) 档, 且该字段的 C 类型确为 `vb6_cls_<X>*` 才答类名。
+            if (info.kind == WithObjKind::Unknown) {
+                auto itU = knownUdtVars_.find(Symbol::toLower(withObjectVars_.back()));
+                if (itU != knownUdtVars_.end()) {
+                    const std::string fldCU = udtFieldObjCType(
+                        itU->second,
+                        Symbol::toLower(static_cast<const WithMemberExpr&>(expr).memberName));
+                    static const std::string kClsP = "vb6_cls_";
+                    if (fldCU.size() > kClsP.size() + 1 && fldCU.back() == '*'
+                        && fldCU.compare(0, kClsP.size(), kClsP) == 0) {
+                        return fldCU.substr(kClsP.size(), fldCU.size() - kClsP.size() - 1);
+                    }
+                }
             }
             return "";
         }

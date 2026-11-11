@@ -591,7 +591,28 @@ void CCodeGen::visit(CallStmt& node) {
                 // 类感知已在上面先跑, 此处只剩"类推得出来但该类没这枚成员"的兜底,
                 // 以及"接收者不是 IdentifierExpr/推断不出类"时的原 lookupModule 行为。
                 if (!byClassCS254) {
-                Symbol* sym = symTab_.lookupModule(maExpr.memberName);
+                Symbol* sym = nullptr;
+                // C2197 §56.29: 跨窗体语句调用 `frmX.Proc` (无括号) 先问模块限定二级键
+                // `<form>_<proc>` —— 与 cgen_expr_call_callee_params.inc 同一张表
+                // (driver_crossmod 的 formQualifiedSyms)。多窗体同名过程时裸键
+                // lookupModule 命中的是注册最早那家, 缺省补齐按它算 ⇒ 实参比真正的
+                // 被调方多 (PD #9 options_*/layerpanel_* 一族 20 站 42 行)。
+                if (maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr
+                    && symTab_.moduleScope()) {
+                    const std::string qFormCS = Symbol::toLower(
+                        static_cast<IdentifierExpr&>(*maExpr.object).name);
+                    if (qFormCS != Symbol::toLower(moduleName_)
+                        && knownFormModuleNames_.count(qFormCS)) {
+                        Symbol* qSymCS = symTab_.moduleScope()->lookupLocal(
+                            qFormCS + "_" + Symbol::toLower(maExpr.memberName));
+                        if (qSymCS && qSymCS->isExternal
+                            && (qSymCS->kind == SymbolKind::Sub
+                                || qSymCS->kind == SymbolKind::Function)) {
+                            sym = qSymCS;
+                        }
+                    }
+                }
+                if (!sym) sym = symTab_.lookupModule(maExpr.memberName);
                 if (sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
                     || sym->kind == SymbolKind::PropertySet)) {

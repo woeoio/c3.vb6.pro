@@ -4631,3 +4631,57 @@ convert from 'vb6_VARIANT' to 'VARIANT'`。PhotoDemon 命中在
 形状门预期：新增 `tests/cxmodqual/cxmodqual.vbp`、`tests/pa_variant_slot/pa_variant_slot.vbp`
 两行（新输入）；既有语料无 ParamArray 元素回写、无限定 UDT 返回调用作 ByRef 实参
 （`tests/*` 全量 grep），预期 0 哈希变化 —— 以 CI 读数为准。
+
+### 56.29 C2197 残余两族：同名过程借表的另外两站（#9 日志 110 行 / 37 站）
+
+**#9 桶**（`.temp/pd9_logs/pd_full/c3-error.log`，C2197=159 行 / 72 站）在 knife 2/3 之后
+只剩两大族（其余 libdeflate / GetVersion / Printers.Collection 本机复算已被 knife 2/3 收口）：
+
+| 族 | 行 | 站 | 站点形状 | 借到的错表 |
+|---|---|---|---|---|
+| ① 跨窗体语句调用 | 42 | 20 | `options_Menus.UpdateAgainstCurrentTheme`、`layerpanel_*.UACT`、`toolbar_*.UACT`、`tool_Tooltip.UACT`（**无括号**，都在别的窗体里） | 注册最早那家同名过程的形参表（带 Optional） |
+| ② UDT 字段是工程类 | 68 | 17 | `With m_AllTags(g,t)` 内 `.DB_StackIDs.GetString(i)`（Image_Metadata 16 站）/ `m_ImageCache(i).spriteNames.GetString(...)`（pdSpriteSheet 1 站） | `pdSerialize.GetString` 的 3 参表 |
+
+两族都不是「被调方名字错」：名字侧一直发对（`vb6_options_Menus_*` / `vb6_pdStringStack_GetString`），
+错的是**缺省实参补齐用的形参表**——两处 padding 各自落裸键 `lookupModule(memberName)`，命中谁先注册谁。
+
+**族①（语句级无括号路）**：`cgen_call.cpp` 的 statement bare-call 分支只查裸键，没有
+`cgen_expr_call_callee_params.inc` 里那张 `<form>_<proc>` 模块限定二级键（driver_crossmod 的
+`formQualifiedSyms`）。本机复现（`.temp/uact`，FormB 1 枚 Optional 注册在前 + FormA 0 参）：
+
+```
+vb6_FormA_UACT(0, 0);   // C2197: FormA.UACT 是 void(void)
+```
+
+改法：语句路在裸键之前先问 `lookupLocal(<qual>_<member>)`（限 `knownFormModuleNames_` 且
+`qForm != 本模块`，要求 `isExternal` 且是 Sub/Function），命中即用它的形参表；命中不了才回退裸键。
+修后 `vb6_FormA_UACT();`、`vb6_FormB_UACT(0, 0);`。
+
+**族②（类推断落空 → 借裸名表）**：两条推断缺口，都补在 `inferClassTypeOfExpr`：
+
+- `With <UDT>` 块（`WithObjKind::Unknown`）只认 `ClassInstance`，UDT 成员声明 `As <工程类>`
+  时推不出类 → 问 `knownUdtVars_[withObjectVars_.back()]` + `udtFieldObjCType`，字段 C 类型是
+  `vb6_cls_<X>*` 就答类名 X；
+- 接收者是 UDT 值 / UDT 数组元素（`arr(i).IDs.GetString(0)`、`m_ImageCache(i).spriteNames`）时
+  同样问 `inferUdtTypeOfExpr(object)` + `udtFieldObjCType`。
+
+本机复现（`.temp/getstr`、`.temp/udtarr`）：修前
+`vb6_pdStringStack_GetString((void*)_vb6_with_0->DB_StackIDs, (&(BSTR){0}), _own_1, 0, 0, 0)`
+/ `VB6_SA_AT(vb6_type_TagRec, arr, 0).IDs, 0, 0, 0, 0, 0`；修后各只剩 1 枚实参。
+
+**夹具/钉子**：
+- `tests/pd_formcall/`（FormB.frm = 1 枚 Optional 且注册在前，FormA.frm = 0 参，ModC.bas 两调用）；
+  `Test-CodegenNote "pd_form_qualified_call"` 正向 `void vb6_FormA_UACT(void);` /
+  `vb6_FormA_UACT();` / `vb6_FormB_UACT(0, 0);`，反向 `vb6_FormA_UACT(0, 0)`。
+- `tests/pd_udtfield_call/`（Ser.cls = 3 参同名 `GetString` 注册在前，Stack.cls = 1 参，
+  TagMod.bas 的 With 形 + UDT 数组形）；`Test-CodegenNote "pd_udtfield_class_call"` 正向
+  `vb6_Stack_GetString((void*)_vb6_with_0->IDs, 0)` / `VB6_SA_AT(vb6_type_TagRec, arr, 0).IDs, 0)`，
+  反向两条 `, (&(BSTR){0})` 尾巴。
+
+**读数**：`-Category syntax` **PASS=221 FAIL=0 SKIP=0**（219 + 2 例）。
+形状门预期：新增 `tests/pd_udtfield_call/TagMod.bas`、`tests/pd_formcall/ModC.bas` 两行（新输入；
+.frm/.cls 不进清单），既有语料 0 哈希变化 —— 以 CI 读数为准。
+
+**顺带记一笔（未修，不属 C2197）**：同一复现里 `Menus.UACT`（qualifier 是**标准模块**、调用方
+FormMain 另有同名 0 参过程）发出的是 `vb6_Menus_UACT()` —— 少了 Optional 的 `(0, 0)`，属 C2198
+桶（形参表命中调用方本模块的同名过程）。等 C2198 排到时按同一「限定符 → sourceModule」口径收。
