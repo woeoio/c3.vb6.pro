@@ -12818,6 +12818,16 @@ if ($Category -in @("all", "syntax")) {
         "vb6_GetControlHwnd(vb6_FormB_GetOwnerForm())",
         "vb6_GetControlHwnd(vb6_Forms_Item(") @(
         ".hWnd);")
+    # C2374 'redefinition; multiple initialization' (PhotoDemon MainWindow.frm 42 条):
+    # 菜单**控件数组** (`Begin VB.Menu MnuFile ... Index = 1`) 里几枚带子菜单的元素,
+    # 生成名此前只有 controlName ⇒ 同一函数里重复 `HMENU hPopup_MnuFile = CreatePopupMenu();`
+    # (MnuEffectUpper 14 枚 / MnuLayer 11 枚 / MnuAdjustments 8 枚 …)。数组元素把 Index
+    # 缀进名字, 非数组 (index = -1) 保持原名 (MnuFileTop / MnuEditTop)。
+    Test-CodegenNote "menu_array_popup_var" @("$Tests\menuarr\menuarr.vbp") @(
+        "HMENU hPopup_MnuFile_1 = CreatePopupMenu();",
+        "HMENU hPopup_MnuFile_2 = CreatePopupMenu();",
+        "HMENU hPopup_MnuFileTop = CreatePopupMenu();") @(
+        "HMENU hPopup_MnuFile = CreatePopupMenu();")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

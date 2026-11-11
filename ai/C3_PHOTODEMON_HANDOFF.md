@@ -3954,4 +3954,55 @@ COM VARIANT*）；`isVariantSlot` 对 ComCall 结果返回 false ⇒ 原样递�
 **纪律记录**：构建前空闲内存 6.8 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
 
 
+### 56.16 C2374 `'…': redefinition; multiple initialization`：菜单控件数组的弹出菜单变量重名（42 条）
+
+**目标桶**：C2374 **42 条**，全部落在 `FormMain.c`（= `MainWindow.frm` 生成的 TU），
+变量族：`hPopup_MnuEffectUpper` 13 / `hPopup_MnuLayer` 10 / `hPopup_MnuAdjustments` 7 /
+`hPopup_MnuFile` 3 / `hPopup_MnuTool` 3 / `hPopup_MnuImage` 2 / `hPopup_MnuView` 2 /
+`hPopup_MnuSelect` 1 / `hPopup_MnuWindow` 1。
+
+**根因**：这些名字在 VB6 里是**菜单控件数组**（`Begin VB.Menu MnuFile … Index = N`），
+同一数组里第 1/2/3 枚元素各自带子菜单。两处菜单构建发码
+（`cgen_form_menu.cpp` 的 `emitMenuItem`、`cgen_form_frame_menu.inc` 的顶层菜单段）
+生成局部变量时只用了 `"hPopup_" + controlName`：
+
+```c
+HMENU hPopup_MnuFile = CreatePopupMenu();   // Index = 1 那枚
+AppendMenuW(hPopup_MnuFile, …, L"empty");
+AppendMenuW(hPopup_MnuFileTop, MF_POPUP, hPopup_MnuFile, L"Open recent");
+HMENU hPopup_MnuFile = CreatePopupMenu();   // Index = 2 那枚 → C2374
+```
+
+递归 `emitMenuItem` 不开新作用域，所以整棵菜单树的弹出菜单变量都在
+`vb6_form_create_<Form>` 同一层。
+
+**修法**：数组元素把 `Index` 缀进生成名（`hPopup_<Name>_<Index>`），非数组控件
+（`index = -1`）保持原名。两处发码点同改；`popupVar` 同时被用作子项递归的父变量与
+`AppendMenuW` 实参，改名只在源头一处，递归自然跟随。
+
+**实测**（`.temp\menuarr`：`MnuFile` 数组 Index 0/1/2，其中 1、2 带子菜单；
+另有非数组 `MnuFileTop` / `MnuEditTop`）：
+
+| | 发码 |
+| --- | --- |
+| 修前 | `HMENU hPopup_MnuFile = CreatePopupMenu();` ×2（同一函数，逐字相同）|
+| 修后 | `HMENU hPopup_MnuFile_1 = CreatePopupMenu();`<br>`HMENU hPopup_MnuFile_2 = CreatePopupMenu();` |
+| 非数组（未动） | `HMENU hPopup_MnuFileTop = CreatePopupMenu();` |
+
+**钉子**：`tests/menuarr/`（`MenuArr.frm` / `menuarr.vbp`）+
+`Test-CodegenNote "menu_array_popup_var"`（正向 `_1` / `_2` / `MnuFileTop` 三条，
+反向禁止无后缀的 `HMENU hPopup_MnuFile = CreatePopupMenu();`）。
+
+**`-Category syntax`**：PASS=210 FAIL=0（上一刀 209，+1 = 新钉子）。
+
+**形状门归因**：期望 633 / 实得 647 / 相同 630 / 哈希不同 **3** / 缺席 0 / 多出 14。
+3 份哈希不同仍是 `FrmEvents.vbp` / `PDImages.bas` / `VBFlexGridDemo.vbp`（§56.13 起的
+同一批待批 bless）——**本刀没动它们**：三份语料全都没有 `Begin VB.Menu`（无菜单构建
+发码），且本刀只改菜单弹出菜单变量的拼名。14 份新增输入 = 前几刀 13 + 本刀
+`tests/menuarr/menuarr.vbp`。
+
+**纪律记录**：构建前空闲内存 6.6 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
+
+
+
 

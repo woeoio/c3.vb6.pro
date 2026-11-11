@@ -63,7 +63,14 @@ void CCodeGen::emitMenuItem(const std::string& parentVar, const FrmControl& menu
 
     if (!menuCtrl.children.empty()) {
         // Submenu: create a popup
+        // Fix 092a (C2374): 菜单**控件数组**的每个元素都是独立菜单项，但生成名此前只有
+        // controlName ⇒ `Begin VB.Menu MnuFile ... Index = 1/2/3` 里几枚带子菜单的元素
+        // 在同一函数里重复 `HMENU hPopup_MnuFile = CreatePopupMenu();`
+        // → 'redefinition; multiple initialization' (PhotoDemon MainWindow.frm:
+        // MnuFile 3 枚 / MnuEffectUpper 14 枚 / MnuLayer 11 枚 … 共 42 条)。数组元素把
+        // Index 缀进名字，非数组 (index = -1) 保持原名。
         std::string popupVar = "hPopup_" + cIdent(menuCtrl.controlName);
+        if (menuCtrl.index >= 0) popupVar += "_" + std::to_string(menuCtrl.index);
         c_.emitLine("HMENU " + popupVar + " = CreatePopupMenu();");
 
         for (const auto& child : menuCtrl.children) {
