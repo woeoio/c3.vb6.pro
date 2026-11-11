@@ -2778,6 +2778,50 @@ if (vb6_argtmp_vb6_cls_ucTreeViewPlus_0) vb6_cls_ucTreeViewPlus_Release(vb6_argt
 `cTE.Init TVP, "*.*"`：实参从复合字面量改为「落临时 + AddRef/Release 再取址」，
 交出去的实例指针不变（`vb6_UC_InstanceOf(vb6_hwnd_TVP)`），与相邻 `SelNode` 实参同形。
 
+### 42.6 整编 #3 读数（C2039 族② 行号与验收）
+
+run `42942508353`，sha `7f5c6c9d`（= dev `ae184256` 的同一份 §42；**不含** §43/§45/§46/§47 ——
+`git merge-base --is-ancestor` 对 `6da14e92`/`bfdbb265`/`229789bf`/`e450cf15` 均 exit=1）。
+构建结果：emit 成功、cl 失败、`EXE_EXISTS=False`、`BUILD_EXIT=1`、`BUILD_SECONDS=4950.7`、
+`PEAK_TREE_WS_MB=8892`、`MIN_FREE_PHYS_MB=4817`。
+
+诊断来源是 `.build/pd_full/c3-error.log`（14,740,339 B）—— `pd_build.err` 在 7,760 行处截断，
+里面只有 C3 摘要（`STDERR_LINES=7759`），**cl 诊断不在该文件**；按代码列表里的
+`C2039 54` 直接去前者取行。
+
+| 读数 | #2（`ac25f3aa`，§41.1） | #3（本 run） |
+|---|---|---|
+| C2039 | 88 | **54** |
+| 其中族① 设计期子控件裸名 | 32 `tudWidth/tudHeight/tudResolution` + `cmbZoom` + `CanvasView` | **0**（全归零） |
+| 其中族② `vb6_cls_pdImage` 链接收者 | 47 | **50** |
+| 其中 `vb6_cls_pdSelection` 的 `Top/Left` | 2 | 2 |
+| 其中 `vb6_UserControl_Extender_Type` 的 `Index` | 2 | 2 |
+
+族② 50 条的行号（生成 C 文件内，接收者全是 `PDImages.GetActiveImage/GetImageByID` 的链）：
+
+| 文件 | 条数 | 行号 |
+|---|---|---|
+| `pdMetadata.c` | 15 | 866, 1235, 1238, 1239, 1242, 1246, 1254, 1257, 1265, 1276, 1287, 1312, 1317, 1318, 1319 |
+| `Tools_Clone.c` | 10 | 740, 743, 748, 764, 769, 771, 942, 1256, 1257, 1370 |
+| `PDImages.c` | 9 | 688, 696, 715, 716, 718, 727, 728, 730, 745 |
+| `pdImageStrip.c` | 7 | 780, 782, 1003, 1005, 1321, 1325, 1536 |
+| `CanvasManager.c` | 5 | 454, 468, 572, 573, 585 |
+| `Layers.c` | 2 | 1696, 1713（同文件 672/673 是下表的 `pdSelection.Top/Left`，不属族②） |
+| `dialog_UnsavedChanges.c` | 2 | 804, 828 |
+
+成员清单（16 种）：`GetLayerByID` / `RequestThumbnail` / `GetSaveState` / `GetLayerByIndex` /
+`GetOriginalFileFormat` / `EstimateRAMUsage` / `IsSuspended` / `GetActiveDIB` /
+`GetColorProfile_Original` / `GetNumOfLayers` / `SetDPI` / `SuspendImage` /
+`HasOriginalPalette` / `IsActive` / `GetCompositedImage` / `SetColorProfile_Original`。
+
+非族② 的 4 条（仍待定，不在本刀范围）：
+
+- `Layers.c(672,673)`：`Left`/`Top` 不是 `vb6_cls_pdSelection` 的成员；
+- `pdButtonStrip.c(283)`、`pdLabel.c(302)`：`Index` 不是 `vb6_UserControl_Extender_Type` 的成员。
+
+族② 的修法见 §43（`findModuleQualifiedFunction`），该修**不在本 run 里**，所以本 run 的 50 条
+是族②的「改前读数」；#4（`42947684024`）含 §43 之后的 dev，其 artifact 到位后在这里补改后读数。
+
 ### 42.7 bless 推送后的 CI 归因（本刀新红 = 2 条，已修）
 
 `17637127`（bless）的 CI：`Tests (compile #1)` 5 红 / `Tests (compile #2)` 7 红 /
