@@ -368,6 +368,11 @@
                 emitExpr(*node.value);
                 if (memName == "currentx") { c_.emitLine("vb6_Printer_SetCurrentX((int32_t)(" + lastExpr_ + "));"); return; }
                 if (memName == "currenty") { c_.emitLine("vb6_Printer_SetCurrentY((int32_t)(" + lastExpr_ + "));"); return; }
+                // C2224: Printer.Copies / .PrintQuality 是数据属性 (PhotoDemon
+                // File_PrintXP.frm:196/197 写) —— 目标 emitExpr 会走读路径发
+                // vb6_Printer_Object().Copies = ... (void* 取字段), 这里改成具名写入口。
+                if (memName == "copies") { c_.emitLine("vb6_Printer_SetCopies((int32_t)(" + lastExpr_ + "));"); return; }
+                if (memName == "printquality") { c_.emitLine("vb6_Printer_SetPrintQuality((int32_t)(" + lastExpr_ + "));"); return; }
             }
             // Fix 161f: Screen.MousePointer 全局写入 (CWaitCursor 等类里用)。
             // 早先目标 emitExpr 走读路径生成 vb6_Screen_MousePointer() = ... →

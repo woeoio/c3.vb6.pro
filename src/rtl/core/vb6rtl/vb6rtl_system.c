@@ -618,6 +618,39 @@ void* vb6_Printers_Collection(void) {
     return vb6_Collection_New();
 }
 
+// C2224 Printer/Printers 数据属性族 (声明与理由见 vb6rtl_builtin.h)。
+// 空串用一枚进程级共享 BSTR: 调用方一律经 vb6_BSTR_Assign (复制) 落地,
+// 不会 Free 到这一枚; 每次调用都 SysAllocString 会按语句数漏。
+static BSTR vb6_prn_EmptyStr(void) {
+    static BSTR s_empty = NULL;
+    if (!s_empty) s_empty = SysAllocString(L"");
+    return s_empty;
+}
+
+static int32_t g_printerCopies = 1;        /* VB6 默认 Copies = 1 */
+static int32_t g_printerPrintQuality = 0;
+
+int32_t vb6_Printers_Count(void) {
+    return 0;  /* 尚未 EnumPrinters: 与集合空 (For Each 零次) 保持一致 */
+}
+
+vb6_PrinterInfo vb6_Printers_Item(int32_t index) {
+    vb6_PrinterInfo info;
+    (void)index;
+    info.DeviceName = vb6_prn_EmptyStr();
+    info.Port = vb6_prn_EmptyStr();
+    info.Copies = g_printerCopies;
+    info.PrintQuality = g_printerPrintQuality;
+    return info;
+}
+
+BSTR vb6_Printer_DeviceName(void) { return vb6_prn_EmptyStr(); }
+BSTR vb6_Printer_Port(void) { return vb6_prn_EmptyStr(); }
+int32_t vb6_Printer_Copies(void) { return g_printerCopies; }
+void vb6_Printer_SetCopies(int32_t copies) { g_printerCopies = copies; }
+int32_t vb6_Printer_PrintQuality(void) { return g_printerPrintQuality; }
+void vb6_Printer_SetPrintQuality(int32_t quality) { g_printerPrintQuality = quality; }
+
 // ============================================================
 // P18-C: Forms 集合
 // ============================================================

@@ -51,6 +51,9 @@ void CCodeGen::visit(LetStmt& node) {
                 emitExpr(*node.value);
                 if (memName == "currentx") { c_.emitLine("vb6_Printer_SetCurrentX((int32_t)(" + lastExpr_ + "));"); return; }
                 if (memName == "currenty") { c_.emitLine("vb6_Printer_SetCurrentY((int32_t)(" + lastExpr_ + "));"); return; }
+                // C2224: Printer.Copies / .PrintQuality 数据属性写入 (同 assign 那一格)。
+                if (memName == "copies") { c_.emitLine("vb6_Printer_SetCopies((int32_t)(" + lastExpr_ + "));"); return; }
+                if (memName == "printquality") { c_.emitLine("vb6_Printer_SetPrintQuality((int32_t)(" + lastExpr_ + "));"); return; }
             }
             // Fix 161f: Screen.MousePointer 全局写入 (CWaitCursor 等类里用;
             // 早先落进类成员 fallback → me->Screen.MousePointer = ... → C2039)。

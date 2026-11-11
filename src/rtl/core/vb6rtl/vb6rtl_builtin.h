@@ -438,6 +438,28 @@ extern void* vb6_Screen_MouseIcon;         // Fix <vbeclipse>: Screen.MouseIcon 
 void*  vb6_Printer_hDC(void);
 void*  vb6_Printers_Collection(void);
 
+// C2224 Printer/Printers 数据属性族 (PhotoDemon Printing.bas / File_PrintXP.frm):
+//   VB6 里 `Printers(i)` 返回 Printer 对象, `.DeviceName`/`.Port`/`.Copies`/
+//   `.PrintQuality` 是**数据属性**而不是方法。RTL 没有真 IDispatch 可绑, 于是:
+//   · 集合元素按**结构体值**返回 ⇒ `Printers(i).DeviceName` 就是普通成员读 (`.` 合法);
+//   · 默认打印机那四个属性走独立存取器。
+//   空集合 (尚未 EnumPrinters) ⇒ 元素字段给空串/当前全局设置, 只为形状与语义默认值正确。
+typedef struct vb6_PrinterInfo {
+    BSTR    DeviceName;
+    BSTR    Port;
+    int32_t Copies;
+    int32_t PrintQuality;
+} vb6_PrinterInfo;
+
+int32_t         vb6_Printers_Count(void);
+vb6_PrinterInfo vb6_Printers_Item(int32_t index);
+BSTR    vb6_Printer_DeviceName(void);
+BSTR    vb6_Printer_Port(void);
+int32_t vb6_Printer_Copies(void);
+void    vb6_Printer_SetCopies(int32_t copies);
+int32_t vb6_Printer_PrintQuality(void);
+void    vb6_Printer_SetPrintQuality(int32_t quality);
+
 // P18-C: Forms 集合
 int32_t vb6_Forms_Count(void);
 void*  vb6_Forms_Item(int32_t index);  // 0-based

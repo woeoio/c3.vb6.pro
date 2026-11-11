@@ -12847,6 +12847,24 @@ if ($Category -in @("all", "syntax")) {
         "vb6_PdChannel_IsChannelOK((void*)VB6_SA_AT(void*, (*srcChannels), i))",
         "vb6_PdChannel_GetChannelDIBType((void*)VB6_SA_AT(void*, (*srcChannels), i))") @(
         "VB6_SA_AT(void*, (*srcChannels), i).IsChannelOK")
+    # C2224 Printer/Printers 数据属性族: .DeviceName/.Port/.Copies/.PrintQuality 是
+    # **数据属性**。修前落通用 COM 绑定 ⇒ `vb6_Printer_Object().DeviceName` (void* 取字段);
+    # `Printers(i)` 落索引路径 ⇒ `vb6_Printers_Collection(i).DeviceName` (0 参函数塞实参
+    # + void* 取字段)。修后默认打印机走具名存取器, 集合元素按 vb6_PrinterInfo 结构体值
+    # 返回 (外层 .DeviceName 就是普通字段读)。反向钉住这两种坏形状不许复活。
+    Test-CodegenNote "pd_printer_data_props" @("$Tests\pd_printer_props\pd_printer_props.vbp") @(
+        "vb6_BSTR_Assign(&s, vb6_Printer_DeviceName());",
+        "vb6_BSTR_Assign(&s, vb6_Printer_Port());",
+        "vb6_Printer_SetCopies((int32_t)(2));",
+        "vb6_Printer_SetPrintQuality((int32_t)((-1)));",
+        "i = vb6_ChkLong(vb6_Printers_Count());",
+        "vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(0)).DeviceName);",
+        "vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(i)).Port);") @(
+        "vb6_Printer_Object().DeviceName",
+        "vb6_Printer_Object().Copies",
+        "vb6_Printer_Object().PrintQuality",
+        "vb6_Printers_Collection(0)",
+        "vb6_Printers_Collection(i)")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

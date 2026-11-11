@@ -4200,5 +4200,71 @@ VB6 的实际语义是 `.SetLayerOffsetX ((maxWidth - .GetLayerWidth()) \ 2)` �
 - 构建：空闲 7.37 GB（< 8 GB ⇒ `CMAKE_BUILD_PARALLEL_LEVEL=1` 口径），`ninja -j1` 53 目标，`cl` 峰值 264 MB。
 - `-Category syntax`：**PASS=212 FAIL=0 SKIP=0**（与 `b4d756a8` 同数）。
 - 形状：9 份相关输入逐行同哈希 `emit-manifest.expected.txt` —— 3 份 bless 语料（`frmevents/FrmEvents.vbp`、`pd_modret/PDImages.bas`、`VBFlexGridDemo/VBFlexGridDemo.vbp`）+ 改动覆盖的 `b606_udtmem_nd/ModNd.bas`、`b608_value_member_paren/PDImages.bas`、`pd_udtchain/{PdChainTypes.bas,PdChainUse.bas}`、以及本刀刚登记的 `pd_clsarrparam/{Mod1.bas,pd_clsarrparam.vbp}`。**A7 重构与识别半合并都没有改一个字节的发码。**
+- **⚠ 上面这条「零字节」结论被全量形状门推翻（11-11 补记）**：那 9 份输入里没有一份用到**秩 >=4** 的 `VB6_SA_ND_ATN`，而 `ndAtnSubscriptArg` 收尾少拼了**收宏的那一枚 `)`**（旧串 `...}))` 的两枚里只留下收复合字面量外层的那一枚）。全量 `emit_manifest` 当场照出 `tests/test_arr_nd.bas` 哈希不同、字节数 60508 → 60475（差 33 = 该输入的 33 处秩 >=4 站点各少一枚括号）。这不是形状偏好，是真会编译不过（`VB6_SA_ND_ATN` 实参未闭合）。已把收尾改回 `"))"` 并在 helper 注释里写死「两枚右括号都在这里出」，`test_arr_nd.bas` 复算回到 `ecaee85a…` / 60508 逐字节同哈希；全量复跑只剩 4 行既存机器侧差（`guisample`×3 + `TeeChartChartDisplay`，见文件尾注）+ 本刀新夹具 2 行。
 - 同期 `b4d756a8` 的回归 run `43006254739`：compile #1 的 8 红 = 本刀这 4 项 + `manifest_coverage`（已随 2 行新输入登记转绿）+ 3 项既存旧红（`builtin_opt_defaults` / `legacy_slot_key_owners` / `iface_view_authority`，不在本刀范围）；vbp #4/#11 是 runner 上的 GUI 像素用例（`ucSegmentedControl`），与本刀无关。
+
+### 56.22 整编 #8/#9 读数对表 + C2224 Printer/Printers 数据属性族
+
+#### 56.22.1 两次整编读数（都跑完了，都仍红 —— 逐桶对表）
+
+两次 run 的 `headSha` 是 CI 自己造的 dev 合并提交，不是本仓 HEAD 直接对应，按被合并的 dev 尖端记：
+
+| run | head | 合并的 dev 尖端 | 总错误 | C2224 | C2197 | C2440 | C2198 | C2045 | C2374 | C2036 | 其余 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| #8 `42997011317` | `cce5aa95` | `52a7acf2` | 624 | 55 | 159 | 135 | 91 | 50 | 42 | 34 | 58 |
+| #9 `43001534143` | `2586f87c` | `be57943b` | 500 | 39 | 159 | 135 | 75 | 0 | 0 | 34 | 58 |
+
+对表结论（#8 → #9 共 −124，逐码可加）：
+
+- `C2045` 50 → 0、`C2374` 42 → 0：`be57943b`（For 方向拆分按层栈）与菜单控件数组 Index 后缀两刀全清。
+- `C2224` 55 → 39（−16）、`C2198` 91 → 75（−16）：`5e45d5c3` 的 `.hWnd` 16 条连带省下 16 条实参个数错。
+- 其余码逐字未动：`C2197` 159、`C2440` 135、`C2036` 34 是当前三大桶；这三桶在 #8/#9 之间没有本刀介入，符合预期。
+
+#9 的 C2224 分布（39 条，按文件×成员）：
+
+| 成员 | 条数 | 站点 |
+| --- | --- | --- |
+| `ImageFormats_PSP` 六个方法 | 22 | 8 `GetChannelDIBType` + 6 `GetChannelSize` + 2×3 `IsChannelOK`/`GetChannelType`/`GetChannelPtr` + 2 `FreeChannelContents` —— 即 `b4d756a8` 类数组形参那一族（已修，等下一次整编验收） |
+| `FormPrint .DeviceName` | 4 | 211（PDMsgBox 实参）+ 240（`Printers(i).DeviceName`，该 `AddItem` 在发码里有两份）+ 245（`ListIndexByString` 首参） |
+| `FormPrint .ScaleMode` | 2 | 422/423 的 `Printer.ScaleMode` |
+| `FormPrint .Copies` / `.PrintQuality` / `.Count` | 1 / 1 / 1 | 196 / 197 / 239 |
+| `Printing .DeviceName` / `.Port` | 1 / 1 | 159 / 160 |
+| `pdCommandBarMini .Visible` ×2 / `.Hide` ×1 | 3 | 控件成员桶（下一刀） |
+| `pdCommandBar .Visible` / `.Caption` / `.Name` | 3 | 控件成员桶（下一刀） |
+
+⇒ 本刀吃 9（Printer 六项 + Count），`b4d756a8` 吃 22，剩余 8 = `.ScaleMode` 2 + `pdCommandBar*` 6。
+
+#### 56.22.2 Printer/Printers 数据属性族（本刀）
+
+改前（#9 日志实证，`FormPrint.c(704)/(705)/(764)/(769)`、`Printing.c`）：
+
+- `Printers.Count` → `vb6_Printers_Collection().Count`：`vb6_Printers_Collection` 是**零参**函数，读 Count 时却把成员访问落在 `void*` 上。
+- `Printers(i).DeviceName` → `vb6_Printers_Collection(i).DeviceName`：同一句里两错 —— C2197「实参太多」+ C2224「`void*` 上取字段」。
+- `Printer.Copies = x` / `Printer.PrintQuality = x` → `vb6_Printer_Object().Copies = x`：`vb6_Printer_Object()` 是 DC 指针（`void*`），在 `void*` 上取字段。
+
+改后（本机探针 `tests/pd_printer_props` 逐形 + PD 两源文件复算）：
+
+```
+vb6_BSTR_Assign(&s, vb6_Printer_DeviceName());
+vb6_Printer_SetCopies((int32_t)(2));
+vb6_Printer_SetPrintQuality((int32_t)((-1)));
+i = vb6_ChkLong(vb6_Printers_Count());
+vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(i)).Port);
+```
+
+- RTL：`vb6rtl_builtin.h` 新增 `vb6_PrinterInfo{DeviceName,Port,Copies,PrintQuality}` 与 8 条出口；`vb6rtl_system.c` 实现（进程级共享空 BSTR + `Copies` 默认 1 / `PrintQuality` 默认 0）。
+- 读路径：`cgen_expr_member_form_builtin.inc` 的 Printer 块补 4 个成员，Printers 块补 `Count`；`cgen_expr_call_callee_ident.inc` 新增 Pattern M2 `Printers(i)` → `vb6_Printers_Item((int32_t)(...))`（返回**结构体值**，成员读就是普通字段读）。
+- 写路径：`cgen_assign_stmt_special.inc` 与 `cgen_setlet.cpp` 的 Printer 写分支补 `copies` / `printquality`。
+- **语义边界（必须写清）**：`vb6_Printers_Item` 交零值结构、`DeviceName`/`Port` 交空串 —— 本刀只把**发码形状**修到可编，不做 `EnumPrintersW` 真枚举。改前这两条路根本编不过（无运行期语义可言），改后至少不崩、不误画；真枚举留给「Printer 运行期语义」独立账。
+- **同文件另一格不在本刀**：`File_PrintXP.frm` 的 `Dim srcPrinter As Printer` 走的是后期绑定 `vb6_ComGetStringProp(p, L"DeviceName")`，本身可编，不动。
+
+**验证**：
+
+- 构建：空闲 7.75 GB（< 8 GB ⇒ `-j1`），`ninja -j1` 8 目标通过。
+- `-Category syntax`：**PASS=213 FAIL=0 SKIP=0**（新增 `pd_printer_data_props` 一例：正向 7 条 / 反向 5 条）。
+- 4 个 STATIC 脚本仍全绿。
+- 端到端编译：`scripts/c3_build.ps1 -Vbp tests/pd_printer_props/pd_printer_props.vbp` 走 MSVC 成功。
+- PD 真源复算：`Printing.bas` 单文件发码 159/160 已是 `vb6_Printers_Item(...).DeviceName/.Port`；`File_PrintXP.frm` 单文件发码 196/197/211/239/240/245 六处全部转新形状，坏形状 0。
+- 形状门（全量 `emit_manifest`）：存量 652 行里 648 行逐字节同哈希，只剩 4 行既存机器侧差（`guisample`×3 + `TeeChartChartDisplay`，文件尾注在册）；另 2 行是本刀新夹具（`tests/pd_printer_props/{Mod1.bas,pd_printer_props.vbp}`），按「新输入」老规矩待 CI 回来登记。
+
 

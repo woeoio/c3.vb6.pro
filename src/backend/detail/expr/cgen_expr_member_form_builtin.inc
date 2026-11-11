@@ -498,6 +498,21 @@
             // 绘图状态读 (CurrentX/CurrentY 上面已给, 这里补 ForeColor/DrawWidth)
             if (memLower == "forecolor") { lastExpr_ = "vb6_Printer_DrawGetForeColor()"; return; }
             if (memLower == "drawwidth") { lastExpr_ = "vb6_Printer_DrawGetWidth()"; return; }
+            // C2224: 四个**数据属性**。RTL 的 Printer 不是真 IDispatch,
+            // vb6_Printer_Object() 是 DC 指针 (void*) —— 落到下面的通用 COM 绑定
+            // 就是 `vb6_Printer_Object().DeviceName`, 在 void* 上取字段 = C2224
+            // (Printing.bas / File_PrintXP.frm 实测 5+1 条)。换成具名存取器。
+            if (memLower == "devicename") { lastExpr_ = "vb6_Printer_DeviceName()"; return; }
+            if (memLower == "port") { lastExpr_ = "vb6_Printer_Port()"; return; }
+            if (memLower == "copies") { lastExpr_ = "vb6_Printer_Copies()"; return; }
+            if (memLower == "printquality") { lastExpr_ = "vb6_Printer_PrintQuality()"; return; }
+        }
+
+        // C2224: Printers 集合的 Count。元素 Printers(i) 由 callee_ident 发
+        // vb6_Printers_Item(i) —— 返回 vb6_PrinterInfo **结构体值**, 其成员
+        // .DeviceName/.Port/.Copies/.PrintQuality 就是普通字段读, 不再进这里的表。
+        if (objLower == "printers") {
+            if (memLower == "count") { lastExpr_ = "vb6_Printers_Count()"; return; }
         }
 
         // P18-C: Forms 集合
