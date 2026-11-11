@@ -2733,6 +2733,7 @@ vb6_ComSetProp(vb6_hwnd_tudWidth, L"Value", vb6_ComPackDouble(d));  /* UC defaul
 写腿两枚守卫、读腿必须走 `propText()`、census 不许读空。已注册进 `tests/run_tests.ps1`
 static 分片（`Test-UcDefaultMember`），`check_static_sentinel_registration.ps1` 通过。
 **负例**：把写腿的 `!knownLocalVars_.count(tgtLowerUc)` 改成 `true` ⇒ R5 判红（实测），改回即绿。
+**回归**：`tests/run_tests.ps1 -Category syntax` ⇒ **PASS=190 FAIL=0 SKIP=0**（含本刀新增 `Test-UcDefaultMember`）。
 
 ### 42.5 形状门
 
