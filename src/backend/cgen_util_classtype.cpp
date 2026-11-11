@@ -89,6 +89,31 @@ bool CCodeGen::tryAdoptReceiverClassParams(const ASTNode& recv,
     return true;
 }
 
+// §43 (C2039 族②): `Mod.Fn(...)` —— 限定符是**标准模块**（.bas，不是类实例），Fn 是
+// 带形参的 Function。返回值仍可以是项目类，链式访问 `Mod.Fn(x).Member` 的类型就是它。
+// 与 findModuleQualifiedNoArgFunction 同一张表、同一匹配口径（external 的 sourceModule
+// 或本模块名），只放开"形参表为空"这一条 —— 那一问服务的是 E1/E2 的值上下文补 `()`，
+// 这里服务的是接收者类推断。
+const Symbol* CCodeGen::findModuleQualifiedFunction(const ASTNode& obj) const {
+    if (obj.kind != ASTNodeKind::MemberAccessExpr) return nullptr;
+    const auto& ma = static_cast<const MemberAccessExpr&>(obj);
+    if (!ma.object || ma.object->kind != ASTNodeKind::IdentifierExpr) return nullptr;
+    if (!symTab_.moduleScope()) return nullptr;
+    const std::string modLower =
+        Symbol::toLower(static_cast<const IdentifierExpr&>(*ma.object).name);
+    const std::string memLower = Symbol::toLower(ma.memberName);
+    for (const auto& [key, s] : symTab_.moduleScope()->symbols()) {
+        if (!s || s->lowerName != memLower) continue;
+        if (s->kind != SymbolKind::Function) continue;
+        const bool sameMod = !s->isExternal
+            && Symbol::toLower(moduleName_) == modLower;
+        const bool extMod = s->isExternal
+            && Symbol::toLower(s->sourceModule) == modLower;
+        if (sameMod || extMod) return s.get();
+    }
+    return nullptr;
+}
+
 std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
     switch (expr.kind) {
         case ASTNodeKind::IdentifierExpr: {
@@ -280,7 +305,21 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             if (!ma.object) return "";
             // 递归推断对象表达式的类名
             std::string baseClassName = inferClassTypeOfExpr(*ma.object);
-            if (baseClassName.empty()) return "";
+            if (baseClassName.empty()) {
+                // §43 (C2039 族②): `Mod.Fn(x)` —— 限定符是**标准模块**（.bas），不是类实例，
+                // 所以上一步必然答空；但 Fn 的返回类就是接收者类。此前直接 `return ""`，
+                // 下游把 `.Member` 当结构体字段发 ⇒ `vb6_PDImages_GetImageByID(x).GetNumOfLayers`
+                // ⇒ C2039 "'GetNumOfLayers': is not a member of 'vb6_cls_pdImage'"（整编实测 47 条，
+                // 接收者全是 PDImages.GetImageByID/GetActiveImage 的链）。
+                // 返回类校验沿用 getClassMethodReturnType 的同一口径（返回名必须真是项目 Class，
+                // `As Object`/UDT/内置类型一律答空 ⇒ 链在此终止，交回 COM 路径）。
+                if (ma.object->kind == ASTNodeKind::IdentifierExpr
+                    && findModuleQualifiedFunction(*call.callee)) {
+                    return getClassMethodReturnType(
+                        static_cast<const IdentifierExpr&>(*ma.object).name, ma.memberName);
+                }
+                return "";
+            }
             // 查找该方法的返回类型
             const std::string retCls242 = getClassMethodReturnType(baseClassName, ma.memberName);
             if (retCls242.empty()) return "";

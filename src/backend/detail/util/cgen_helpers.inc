@@ -1583,6 +1583,10 @@
     // 只有这一形才可以在值上下文补 `()` —— 带参裸引用在 VB6 里不合法, 可选参另有补默认值通路。
     const Symbol* findModuleQualifiedNoArgFunction(const ASTNode& obj) const;
 
+    // 账 §43: `Mod.Fn(...)` 形态里, 限定符是**标准模块**、Fn 是带形参的 Function。
+    // 服务接收者类推断 (Mod.Fn(x).Member 的接收者 = Fn 的返回类), 不参与值上下文补 `()`。
+    const Symbol* findModuleQualifiedFunction(const ASTNode& obj) const;
+
     // G4/M1: **调用点接收者类解析** —— 只服务形参表决策 (calleeParams), 一个字都不改 emit 路径。
     // 与 inferClassTypeOfExpr 的唯一差别: 在其后再问一张表 knownUserControlCtrlVars_
     // (控件名 / **控件数组基名** → .ctl 的 VB_Name)。emit 侧 (emitUcInstanceMemberExpr)
