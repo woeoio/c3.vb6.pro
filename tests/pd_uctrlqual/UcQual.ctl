@@ -26,3 +26,18 @@ Option Explicit
 Public Function CurrentMetricIndex() As Long
     CurrentMetricIndex = UserControl.cmbWidthUnit.ListIndex
 End Function
+
+' 写侧同形 (pdResize.ctl:733/734/736/737 `UserControl.cmbWidthUnit.ListIndex = ...`):
+' 只把内层接收者折成控件槽还不够 —— 外层若走 generic 会发成
+' `vb6_hwnd_cmbWidthUnit.ListIndex = 3` (对 void* 取成员, C2224)。
+Public Sub SetMetricIndex(ByVal newIndex As Long)
+    UserControl.cmbWidthUnit.ListIndex = newIndex
+End Sub
+
+' pdResize.ctl:301 `Not UserControl.Controls(ctlChild.Name) Is ctlChild` 的同形:
+' 显式限定 `UserControl.Controls(...)` = 集合默认成员 Item, 返回 Object。
+' 旧发码把它当宿主伪函数, 先拼未声明的 `vb6_UserControl_Controls` 再追加实参
+' ⇒ cl C2063 "not a function"。
+Public Function IsChildControl(ByRef ctlChild As Object) As Boolean
+    IsChildControl = Not UserControl.Controls(ctlChild.Name) Is ctlChild
+End Function

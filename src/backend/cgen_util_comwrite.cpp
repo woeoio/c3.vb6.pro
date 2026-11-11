@@ -662,6 +662,8 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
             case Vb6Type::Single:
                 return "(&(float){(" + val + ")})";
             case Vb6Type::Double:
+            case Vb6Type::Date:      // mapType: double
+            case Vb6Type::Currency:  // mapType: double（Fix 126 值语义）
                 return "(&(double){(" + val + ")})";
             default:
                 return val;
@@ -742,6 +744,33 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
     }
     const bool slotIsLateObj = (slotC == "void*");
     if (!writeDirResolved || lastP.type == Vb6Type::Empty) return value;
+    // ④ ByRef 具体标量槽：`Property Let ResizeWidth(newWidth As Double)`（VB6 默认 ByRef）
+    //    ⇒ C 形参是 <T>*，而这里递的是值 ⇒ cl C2440「cannot convert from 'double' to
+    //    'double *'」（整编 pdResize.c:1226/1227），枚举/整数槽则只是 C4047/C4133
+    //    （pdResize.c:1223/1224 的 UnitOfMeasurement/UnitOfResolution）。
+    //    **取址必须在下面 ③ 解箱之后**：`With .GetDouble("width", …)` 交回的是
+    //    裸 `vb6_ComCall(...)`（VARIANT*），先取址会得到 `&(double){void*}` 仍 C2440
+    //    （本机子集实测）。所以这里只算出"按哪个 C 标量档解箱"，两个出口都交
+    //    packLetValueArg 的 Fix 185 表（C99 复合字面量临时量），它同时负责 String 的
+    //    BSTR 形态。工程内 Public Enum 形参在语义档是 Variant + typeRefName，
+    //    C 侧按 Long 槽装配（见 packLetValueArg 开头）。
+    //    只在写方向解析成功时进来：Get 方向的末形参不是值槽，按它取址会错。
+    Vb6Type byrefBaseType = Vb6Type::Empty;
+    if (!lastP.isByVal && lastP.type != Vb6Type::Object
+        && lastP.type != Vb6Type::Empty && lastP.type != Vb6Type::Null
+        && !(static_cast<uint16_t>(lastP.type)
+             & static_cast<uint16_t>(Vb6Type::Array))) {
+        if (lastP.type == Vb6Type::Variant) {
+            if (!lastP.typeRefName.empty()) {
+                Symbol* esP = symTab_.lookup(lastP.typeRefName);
+                if (!esP) esP = symTab_.lookupModule(lastP.typeRefName);
+                if (esP && esP->kind == SymbolKind::EnumType) byrefBaseType = Vb6Type::Long;
+            }
+        } else {
+            byrefBaseType = lastP.type;
+        }
+    }
+    const bool byrefScalarSlot = (byrefBaseType != Vb6Type::Empty);
     // RHS 是不是整只 vb6_VARIANT —— 文本前缀表 + 已知 Variant 变量 (Fix 156-B 原判据)
     bool valIsVar = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
     if (!valIsVar && valueExpr && valueExpr->kind == ASTNodeKind::IdentifierExpr) {
@@ -779,6 +808,7 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
             && isScalarImplicitStr159(inferExprType(*valueExpr))) {
             return wrapToBSTR(value, *valueExpr);
         }
+        if (byrefScalarSlot) return packLetValueArg(lastP, valueExpr, value);
         return value;
     }
     // ③ 解箱表 (只此一份)。泛对象槽由 C 型先答 —— 语义档在 `As Picture` / 外部类型名 那一族
@@ -787,12 +817,14 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
                          & static_cast<uint16_t>(Vb6Type::Array)) != 0;
     const Vb6Type pBase = static_cast<Vb6Type>(
         static_cast<uint16_t>(lastP.type) & ~static_cast<uint16_t>(Vb6Type::Array));
+    // ByRef 标量槽按 ④ 算出的 C 档解箱（枚举 → Long）；其余照旧按语义档。
+    const Vb6Type pBaseEff = byrefScalarSlot ? byrefBaseType : pBase;
     const char* ext = nullptr;
     if (pIsArr) {
         ext = "vb6_VariantToSafeArray1D";
     } else if (slotIsLateObj) {
         ext = "vb6_VariantToObjectVal";
-    } else switch (pBase) {
+    } else switch (pBaseEff) {
         case Vb6Type::String:                          ext = "vb6_VariantToString";    break;
         case Vb6Type::Long:   case Vb6Type::Integer:
         case Vb6Type::Byte:   case Vb6Type::Boolean:                                   ext = "vb6_VariantToLong";     break;
@@ -802,6 +834,9 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
         case Vb6Type::Object:                          ext = "vb6_VariantToObjectVal"; break;
         default: break;
     }
-    return ext ? std::string(ext) + "(" + valText + ")" : value;
+    std::string out = ext ? std::string(ext) + "(" + valText + ")" : value;
+    // ④ 的后半：值已解箱成目标标量，这里补 ByRef 取址（见本函数上方 byrefScalarSlot）。
+    if (byrefScalarSlot && ext) return packLetValueArg(lastP, valueExpr, out);
+    return out;
 }
 } // namespace vb6c3

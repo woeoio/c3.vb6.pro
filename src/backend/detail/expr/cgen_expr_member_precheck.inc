@@ -19,6 +19,37 @@
         lastExpr_ = "(void*)vb6_UC_Controls()";
         return;
     }
+    // PD: `.ctl` 里的**显式限定** `UserControl.Controls(...)` —— 与上面裸 `Controls(...)`
+    // 同义。二十枚控件的 IsChildInControlArray 都是这一句
+    // (`Not UserControl.Controls(ctlChild.Name) Is ctlChild`)。此前落 M22 宿主伪对象
+    // 兜底，先拼出未声明的 `vb6_UserControl_Controls`，再被调用侧追加实参 ⇒
+    // cl C2063 "not a function"（整编 pdResize.c:277）。这里折成集合单例 + 默认成员 Item，
+    // 调用侧在 cgen_expr_call_com_bind.inc 的 UC-Control 那一格消费。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "usercontrol"
+        && Symbol::toLower(node.memberName) == "controls") {
+        comObjExpr_ = "(void*)vb6_UC_Controls()";
+        comMemberName_ = "Item";
+        isComMarker_ = true;
+        isEarlyBoundCom_ = false;
+        earlyBoundSym_ = nullptr;
+        lastExpr_ = comObjExpr_;
+        return;
+    }
+    // PD: `UserControl.<设计期子控件>.<成员>` —— pdResize.ctl:733/734/736/737 的
+    // `UserControl.cmbWidthUnit.ListIndex = ...`。此前 M22 把接收者拼成
+    // `vb6_UserControl_cmbWidthUnit`（RTL 无此符号 ⇒ C2065, 整编 pdResize.c 799-803），
+    // 而裸写 `cmbWidthUnit.ListIndex` 那条路本来就会发 COM SetProp。这里只把接收者换成
+    // 与裸名相同的控件槽，成员读写继续走外层已有路径。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "usercontrol") {
+        const std::string childLower = Symbol::toLower(node.memberName);
+        auto itChild = knownFormControls_.find(childLower);
+        if (itChild != knownFormControls_.end()) {
+            lastExpr_ = makeCtrlHwndArg(childLower, itChild->second);
+            return;
+        }
+    }
     // PD-Parent: .ctl 里的裸 `Parent.Controls` —— VB6 的 `Parent` 是宿主容器对象，
     // `.Controls` 就是**父容器的**控件集合（与 UserControl.ParentControls 同一件事，
     // 同一枚码头 vb6_UC_ParentControls）。PhotoDemon pdCommandBar.ctl 7 处
@@ -79,6 +110,25 @@
                 earlyBoundSym_ = nullptr;
                 lastExpr_ = comObjExpr_;
                 return;
+            }
+            // PD: `UserControl.<设计期子控件>.<成员>` —— pdResize.ctl:733/734/736/737
+            // 的 `UserControl.cmbWidthUnit.ListIndex = ...`。内层接收者已在上面的分支
+            // 折成控件槽，但外层若继续走 generic 就会发成
+            // `vb6_hwnd_cmbWidthUnit.ListIndex = 3`（对 void* 取成员，C2224；
+            // 整编 pdResize.c 799-803）。裸写 `cmbResolution.ListIndex` 那条路本来
+            // 就是"控件槽 + COM 成员读写"，这里让限定写法立同一枚标记。
+            if (hostNameHp == "usercontrol") {
+                const std::string childLowerHp = Symbol::toLower(midHp.memberName);
+                auto itCtlHp = knownFormControls_.find(childLowerHp);
+                if (itCtlHp != knownFormControls_.end()) {
+                    comObjExpr_ = makeCtrlHwndArg(childLowerHp, itCtlHp->second);
+                    comMemberName_ = node.memberName;
+                    isComMarker_ = true;
+                    isEarlyBoundCom_ = false;
+                    earlyBoundSym_ = nullptr;
+                    lastExpr_ = comObjExpr_;
+                    return;
+                }
             }
         }
     }
