@@ -12701,6 +12701,16 @@ if ($Category -in @("all", "syntax")) {
         'vb6_CtrlArrToVariantArray(&_vb6_vararg_0, &vb6_arr_cmdFlyoutLock, "pdButtonToolbox");',
         "vb6_ArrVar_ThemeFlyoutControls(&_vb6_vararg_0);") @(
         "(void*)(cmdFlyoutLock)")
+    # C2065 族① (Units.c 的 `_pa_19.._pa_30` 12 条): `Select Case` 的 Case 标签里调
+    # ParamArray 过程。标签求值要落一枚 `SAFEARRAY* _pa_N = NULL;`; 旧发码「边建条件
+    # 边发 if 链」把它发进**上一条 Case 的体内** ⇒ `} else if` 行看不到它。
+    # 正面钉「声明紧贴 if 链之前」(空白已被 Invoke-CodegenProj 折成单空格);
+    # 反面钉旧坏形状（赋值语句后面直接跟着下一枚 Case 的声明）。
+    Test-CodegenNote "pd_select_paramarray" @(
+        "$Tests\pd_selparama\SelPa.bas") @(
+        'SAFEARRAY* _pa_3 = NULL; if (',
+        'vb6_Tr(vb6_BSTR_FromStr(L"px"), _pa_2)') @(
+        'vb6_ret_UnitId = 0; SAFEARRAY* _pa_2 = NULL;')
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

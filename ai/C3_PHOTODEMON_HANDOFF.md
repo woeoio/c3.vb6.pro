@@ -3086,3 +3086,73 @@ RTL：[vb6forms_ctrlarr.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/s
 （`WindowState`、`vb6_UserControl_cmbWidthUnit`、`txtRenameRemove`、`txtPageRange`）
 → 族② UDT 裸名。
 
+## §48 C2065 族① 第三站 —— `Select Case` 标签里的 `_pa_N`（`Units.c` 12 条）
+
+### 48.1 根因（#3：`Units.c(509..529)` 每行 2 条，`_pa_19.._pa_30`）
+
+`Modules\Units.bas:376` 的 `GetUnitFromName` 把 `g_Language.TranslateMessage(...)`
+（`pdTranslate.TranslateMessage(ByRef msg As String, ParamArray extra() As Variant)`）
+写在 **Case 标签**里：
+
+```vb
+Case "%", "percent", g_Language.TranslateMessage("percent")
+```
+
+零枚 ParamArray 实参时，装箱站发一枚 `SAFEARRAY* _pa_N = NULL;` 再把它交给形参。
+旧发码是「边建条件边发 if 链」（[cgen_select.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/stmt/cgen_select.cpp) 非变体档）：
+第 N 条 Case 的条件在**上一条 Case 的体内**求值，于是这枚声明发在体内，而
+`} else if (...)` 那一行在体外 —— 作用域外 ⇒ C2065。实测 13 枚里
+`_pa_18` 恰好是首条、落在 `if` 之前（编过了），后 12 枚（`_pa_19.._pa_30`）全红。
+
+### 48.2 修法（把「建条件」与「发 if 链」拆成两趟）
+
+与同文件**变体档那条链早就采用的次序**对齐（那里把 `labelDecls` 统一提到 if 链之前，
+注释写明了「第二枚标签的声明会落在 `}` 与 `else if` 之间（非法 C）」）：
+先遍历所有 Case 只把条件串收进 `clauseConds`，再单独一趟发
+`if / } else if / 体`。物化语句（`_pa_N`、标签临时量等）于是全部落在 `if` 之前、
+与 `if` 同一层块内。**没有物化语句时发码逐字节不变**（只是把字符串的拼接次序
+前移），因此不触碰形状门。
+
+修后实读（`tests/pd_selparama/SelPa.bas`，与 PD 同形的最小夹具）：
+
+```c
+    SAFEARRAY* _pa_1 = NULL;
+    SAFEARRAY* _pa_2 = NULL;
+    SAFEARRAY* _pa_3 = NULL;
+    if ((vb6_StrCmp(_vb6_select_0, vb6_BSTR_FromStr(L"%")) == 0) || (vb6_StrCmp(_vb6_select_0, vb6_Tr(vb6_BSTR_FromStr(L"percent"), _pa_1)) == 0)) {
+        vb6_ret_UnitId = 0;
+    } else if (... _pa_2 ... _pa_3 ...) {
+```
+
+PD 侧同源复现（`.temp/paprobe`，`Units.bas + pdTranslate.cls`）：`_pa_18.._pa_30`
+现在全部排在 `if` 之前，行 177/179/181/183/185/187/189 七条 `if / else if` 里不再有
+块外引用。
+
+### 48.3 夹具与正反针
+
+- 新增 `tests/pd_selparama/SelPa.bas`（`Select Case` 两条标签各带一枚 ParamArray 调用的
+  零实参形 + 一枚带实参形）；
+- `Test-CodegenNote "pd_select_paramarray"`：正面钉
+  `SAFEARRAY* _pa_3 = NULL; if (`（声明紧贴 if 链之前）与 `_pa_2` 的调用点；
+  反面钉 `vb6_ret_UnitId = 0; SAFEARRAY* _pa_2 = NULL;`（旧坏形状）；
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=195 FAIL=0 SKIP=0**（+1）。
+
+### 48.4 构建与资源
+
+本机增量构建：空闲 **5.98 GB**（仍低于 8 GB 硬线，`CMAKE_BUILD_PARALLEL_LEVEL=1`，
+1 TU + 2 链接，未进交换）。本地不做整工程 emit；探针走
+`.temp/**` 的最小 `.vbp`（`--output-dir`），中间产物落在 `%TEMP%\C3C`。
+
+### 48.5 范围与未完
+
+- 本刀只改**非变体档** `Select Case` 的发码次序；变体档本来就是这个次序，未动。
+- 已知残留风险：Case 标签里调**带实参**的 ParamArray 过程时，除 `_pa_N` 外还会落
+  `vb6_PA_Add` 一类语句，同样会被提到 if 链之前 —— 位置合法（同一块内），
+  但求值时机变成「全部标签先算」；与变体档的既有取舍一致，PD 里未观测到该类标签。
+- C2065 下一站（#3 实读行号）：`pdPSDLayer.c(4713,4742,5183,5212)` 的 `_vcmp_0..3`、
+  `WindowState` 4 条（`Interface.c:1269,1356`、`FormScreenVideo.c:1420`、
+  `FormScreenVideoPrefs.c:799`）、`pdResize.c:799,800,802,803` 的
+  `vb6_UserControl_cmbWidthUnit/cmbHeightUnit`、`OLEDropMode`（`Processor.c:1176,1185`）、
+  `FormMain.c:2455` 的 `HotkeyManager`、`FormExportLayers.c:754` 的 `cmdExportSettings`、
+  `Dialogs.c:625` 的 `fi_HandleCopy`，最后是族② UDT 裸名。
+

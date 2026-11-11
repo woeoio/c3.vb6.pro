@@ -285,7 +285,13 @@ void CCodeGen::visit(SelectCaseStmt& node) {
     }
 
     // 用if-else if链代替switch (VB6 Select Case支持范围比较和字符串)
-    bool first = true;
+    // 先**只建条件**、再发 if 链：条件求值时的物化语句（如 ParamArray 的
+    // `SAFEARRAY* _pa_N = NULL;`）发在当前输出位置 —— 边建边发的话，第二条
+    // Case 的声明会落在上一条 Case 的**体内**，`} else if (...)` 那一行却在
+    // 体外观测不到它 ⇒ C2065（实测 Units.c 的 `Select Case g_Language.
+    // TranslateMessage("px")` 一族 12 条）。变体档那条链早就按这个次序做
+    // （见上面 labelDecls 的注释），这里与它对齐；没有物化语句时发码逐字节不变。
+    std::vector<std::string> clauseConds;
     for (auto& caseClause : node.cases) {
         // 构建条件: 同一Case子句的多个值用||连接 (Case 1, 2, 3 → val==1 || val==2 || val==3)
         std::string combinedCond;
@@ -350,14 +356,19 @@ void CCodeGen::visit(SelectCaseStmt& node) {
             combinedCond += "(" + cond + ")";
         }
 
+        clauseConds.push_back(combinedCond);
+    }
+
+    bool first = true;
+    for (size_t ci = 0; ci < node.cases.size(); ci++) {
         if (first) {
-            c_.emitLine("if (" + combinedCond + ") {");
+            c_.emitLine("if (" + clauseConds[ci] + ") {");
             first = false;
         } else {
-            c_.emitLine("} else if (" + combinedCond + ") {");
+            c_.emitLine("} else if (" + clauseConds[ci] + ") {");
         }
         c_.indent();
-        emitStmtList(caseClause->body);
+        emitStmtList(node.cases[ci]->body);
         c_.dedent();
     }
 
