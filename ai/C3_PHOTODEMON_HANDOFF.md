@@ -2587,3 +2587,63 @@ fHSVtoRGB (x - trackRadius) / hueSpread, 1, 1, tmpR, tmpG, tmpB
 - 形状门：本机干净克隆 **632 行 / 与 §39 清单逐行比对 changed=0**（628 相同 + 4 条既知环境差异），
   即对存量语料**零形状变化**，**无需 bless**。
 - 整编读数：见 §40.1（待下一轮探针落地后补）。
+
+## §41 C2039 88：取证（本轮未改码）
+
+本轮只做取证，不改判据、不动源码。CI `42933219765`（dev `f5a9dc1f`）：形状门 success、`vbp #5` success，
+失败分片仅存量 `compile #1/#2`、`vbp #11` —— 与 §38.6 一致。
+
+### 41.1 分族（基线 run `42915022004` = `ac25f3aa` 的 `c3-error.log`，共 88 条 / 12 TU）
+
+| 成员 | 接收者 | 条数 | 族 |
+|---|---|---|---|
+| `tudWidth` / `tudHeight` / `tudResolution` | `vb6_cls_pdResize` | 12+12+8 = **32** | 设计期子控件当值用 |
+| `GetLayerByID` / `RequestThumbnail` / `GetSaveState` / `GetLayerByIndex` / `GetOriginalFileFormat` / `EstimateRAMUsage` / `IsSuspended` / `GetActiveDIB` / `GetColorProfile_Original` / `GetNumOfLayers` / `SetDPI` / `SuspendImage` / `HasOriginalPalette` / `IsActive` / `GetCompositedImage` / `SetColorProfile_Original` | `vb6_cls_pdImage` | **47** | 接收者 = `PDImages.GetActiveImage` |
+| `Top` / `Left` | `vb6_cls_pdSelection` | 2 | 待定 |
+| `Index` | `vb6_UserControl_Extender_Type` | 2 | 待定 |
+| `cmbZoom` | `vb6_cls_pdStatusBar` | 1 | 待定 |
+| `CanvasView` | `vb6_cls_pdCanvas` | 1 | 待定 |
+
+### 41.2 族①「设计期子控件当值用」（32 条，已在小语料复现）
+
+`Controls/pdResize.ctl` 的 Begin 块里有三枚工程内 UserControl 子控件（`PhotoDemon.pdSpinner`）：
+`tudWidth` / `tudHeight` / `tudResolution`。源码里既有**值上下文**也有**对象上下文**：
+
+```
+Private Function ConvertUnitToPixels(ByVal curUnit As PD_MeasurementUnit, ByRef tudSource As pdSpinner, ...)
+pxWidthFloat = ConvertUnitToPixels(GetCurrentWidthUnit, tudWidth, GetResolutionAsPPI(), m_initWidth)  ' 对象（ByRef pdSpinner）
+tudWidth = newWidth                    ' 赋值 → 默认属性 Let（pdSpinner 的 Value，VB_UserMemId=0）
+vb6_ret_ResizeWidth = tudWidth         ' 读默认属性
+```
+
+小语料探针 `.temp/c2039probe/`（`Probe.vbp` + `Spinner.ctl` + `Holder.ctl`，`tudWidth` 为
+`Begin Probe.Spinner tudWidth`）在本机 head 上**逐字复现**（`--emit-c`）：
+
+```
+d = me->tudWidth;                             /* 读 → 结构体成员（不存在） */
+vb6_Holder_ReadIt((void*)me, me->tudWidth);   /* 传参 */
+me->tudWidth = d;                             /* 写 → 结构体成员 */
+```
+
+同一份 emit 里成员调用是**对的**（`vb6_ComGetObjectProp(vb6_hwnd_tudWidth, L"IsValid")`），
+即设计期子控件的句柄宏 `#define vb6_hwnd_tudWidth (*vb6_UC_DesignSlotOf(me,"tudWidth"))` 在，
+只有「裸名当值/当对象」这条路没有折。**根因**：`ctrlDefaultPropOf`（账 #256）只查
+`knownFormControls_` 里能映射到 `FrmControlType` 的表（`getDefaultPropertyName` 的 13 个内置型），
+工程内 UserControl 子控件映射不到默认属性 ⇒ `folds=false` ⇒ 落到 `me-><名>`。
+
+**修法（下一刀）**：两条腿都得有，且只许一个出口回答——
+- 值/标量上下文：从该子控件的 `.ctl` 里读默认属性（`Attribute <Prop>.VB_UserMemId = 0`，
+  实测 `pdSpinner.ctl:320 Attribute Value.VB_UserMemId = 0`），发 `vb6_ComGetObjectProp(vb6_hwnd_<名>, L"Value")` 再按型收；
+- 对象上下文（`ByRef <UC>` 形参、`Set`、`With`）：发 `(vb6_cls_<Type>*)vb6_UC_InstanceOf(vb6_hwnd_<名>)`
+  （与 `cgen_with.cpp:803` 的工程内 UC 实例同构；设计槽存的是 HWND，不是实例指针）。
+
+### 41.3 族② 接收者 = `PDImages.GetActiveImage`（47 条）
+
+emit 里同一形态在**大部分 TU 编得过**，说明不是「漏 `()`」那种纯拼写错（漏 `()` 应报 C2228，
+而全量诊断表里 C2228 = 0）。需要按 TU 定位到真实行（`Tools_Clone.c(743)` 等）后再定论：
+`pd_emit.out`（48 MB，`42927780444` 的工件）只按文件顺序拼接、无行号，无法直接对行。
+
+### 41.4 下一刀入口
+
+先做族①（32 条，已复现、机理清楚、判据唯一）：小语料正负 → 哨兵 → 本机重建 → 632 形状门 → 双推 + 整编读数。
+族② 需先拿到**当前 head** 的 `c3-error.log` 与单 TU 行号（PD 整编 #3 的工件可直接给），再定。
