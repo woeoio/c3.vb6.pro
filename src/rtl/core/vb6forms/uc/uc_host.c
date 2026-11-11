@@ -286,6 +286,7 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     vb6_UserControl_Extender.Left = r->extLeft;
     vb6_UserControl_Extender.Name = r->displayNameBstr;
     vb6_UserControl_Extender.ZOrder = vb6_UC_ExtenderZOrder;
+    vb6_UserControl_Extender.Index = r->index;      // §56: 控件数组下标 (-1=非数组)
     vb6_UserControl_FontBold = r->fontBold;
     vb6_UserControl_FontUnderline = r->fontUnderline;
     vb6_ucCurrent = r;

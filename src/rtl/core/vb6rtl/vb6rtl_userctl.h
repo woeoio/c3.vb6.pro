@@ -297,6 +297,10 @@ struct vb6_UserControl_Extender_Type {
     BSTR    Name;         // 控件实例名 (Ambient.DisplayName 同一份缓存)
     // `UserControl.Extender.ZOrder v` 生成成员函数调用形态 (2 实参: 值 + has 标记)。
     void  (*ZOrder)(int32_t* value, int32_t hasValue);
+    // §56: `UserControl.Extender.Index` —— pdButtonStrip.ctl / pdLabel.ctl 在
+    // `VBHacks.InControlArray(...)` 之后读它来区分数组里的哪一枚。push 时从
+    // 当前实例记录 r->index 灌入 (-1 = 非控件数组)。
+    int32_t Index;
 };
 extern struct vb6_UserControl_Extender_Type vb6_UserControl_Extender;
 /* Fix 294 / 3a: Extender.<成员> = v 的实例感知写入口(代码生成侧调用)。

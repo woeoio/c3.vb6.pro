@@ -1624,7 +1624,7 @@ int16_t vb6_Extender_Cancel  = 0;
 // Fix 221: 第三格 DataChanged (ComCtlsDemo 的 `UserControl.Extender.DataChanged = True`,
 // 32 处). 运行期容器不活动 ⇒ 只写不读, 保留可写字段。
 struct vb6_UserControl_Extender_Type vb6_UserControl_Extender =
-    { -1, 0, 0, 0, NULL, 0, 0, NULL, vb6_UC_ExtenderZOrder };
+    { -1, 0, 0, 0, NULL, 0, 0, NULL, vb6_UC_ExtenderZOrder, -1 };
 
 // ucTreeView: `UserControl.FontBold` / `UserControl.FontUnderline` 的持久值。
 // 生成 C 里是裸全局读写 (push/pop 按实例存取, 见 uc_host.c)。绘制与 TextWidth
