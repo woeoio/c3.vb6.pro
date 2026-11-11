@@ -29,6 +29,9 @@ public:
     // UDT 临时变量声明). 表达式拼接期无法在行中插语句, 故挂到下一个 emitLine
     // 之前按当前缩进输出 — 表达式文本与该行同次 flush, 声明恒先于引用.
     void addPending(const std::string& line) { pendingLines_.push_back(line); }
+    // 还有没有没落地的 pending 行 —— 后测循环那一站要先问「这次条件求值有没有
+    // 落下声明」再决定尾巴发哪一形 (见 cgen_loop.cpp 的 DoLoopWhile/Until)。
+    bool hasPending() const { return !pendingLines_.empty(); }
 
     // Fix 133: 注册"当前语句行输出完之后"须落地的回写行. 用途: Variant 变量
     // 作为 Declare 标量 ByRef 出参 (Dim hFont: GdipCreateFont(..., hFont)) —

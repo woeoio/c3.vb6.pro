@@ -5,6 +5,35 @@
     // --- COM后期绑定检测 (P6.2) + 前期绑定检测 (P6.3) + P6.4接口调用 ---
     // MemberAccessExpr为COM对象设置isComMarker_标志 + comObjExpr_/comMemberName_
     if (isComMarker_) {
+        // PD: `UserControl.Controls(name)` —— precheck 把限定写法折成
+        // `(void*)vb6_UC_Controls()` + 成员 "Item"（同裸 `Controls.Item(name)`）。
+        // 集合元素返回 Object，必须走 ComCallObject（返回 IDispatch*）而不是下面
+        // 泛 COM 方法那一格的 vb6_ComCall（返回 VARIANT*）——外层是
+        // `... Is ctlChild` 的对象比较，两边的指针档位必须一致。
+        if (comObjExpr_ == "(void*)vb6_UC_Controls()"
+            && Symbol::toLower(comMemberName_) == "item"
+            && !node.positional.empty()) {
+            std::string ucObj = comObjExpr_;
+            isComMarker_ = false;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            std::vector<std::string> ucArgs;
+            for (size_t i = 0; i < node.positional.size(); i++) {
+                std::string packFn = comPackExpr(*node.positional[i]);
+                emitExpr(*node.positional[i]);
+                { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
+                ucArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
+            }
+            std::string ucArr = "(void*[]){";
+            for (size_t i = 0; i < ucArgs.size(); i++) {
+                if (i > 0) ucArr += ", ";
+                ucArr += ucArgs[i];
+            }
+            ucArr += "}";
+            lastExpr_ = "vb6_ComCallObject(" + ucObj + ", L\"Item\", " + ucArr
+                      + ", " + std::to_string(ucArgs.size()) + ")";
+            return;
+        }
         // 2026-09-30 (门 #233 c29sbevt): **控件的判据专用方法先落地**。
         // 位置: 必须在下面**所有**分支 (Sim 汇总那一块 / axSlotObj / Data / OLE) **之前** ——
         // 这些分支的顺序改过好几轮, 而 `StatusBar1.SimClick 1, 0` 一旦落进 axSlotObj 那条

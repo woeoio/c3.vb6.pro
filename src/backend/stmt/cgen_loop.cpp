@@ -71,10 +71,24 @@ void CCodeGen::visit(DoLoopStmt& node) {
             emitStmtList(node.body);
             c_.dedent();
             if (node.condition) {
+                // 账 §56: 后测条件的**物化语句**（`vb6_VARIANT _vcmp_N = ...;`）由
+                // emitExpr 直接落在这里 —— 位置在 `}` **之前**，但 C 的
+                // `} while (expr)` 那颗 expr 已经出了 do 体块作用域 ⇒ 声明的
+                // `_vcmp_N` 在条件里看不见（整编实测 pdPSDLayer.c 与 pdPSD.c
+                // 各一族 C2065，全是 `Loop While 数组元素 > 标量` 这一形）。
+                // 有物化时改成「条件进体内 + `} while (1);`」：`if (!(cond)) break;`
+                // 仍每轮重测（break 出的是本 do），语义不变；没有物化时逐字节不变。
+                const size_t mark = c_.size();
                 emitExpr(*node.condition);
+                const bool materialized = (c_.size() != mark) || c_.hasPending();
                 // 账 #305 第二百四十四刀: Loop While 恒真 = 出不去
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
-                c_.emitLine("} while (" + lastExpr_ + ");");
+                if (materialized) {
+                    c_.emitLine("if (!(" + lastExpr_ + ")) break;");
+                    c_.emitLine("} while (1);");
+                } else {
+                    c_.emitLine("} while (" + lastExpr_ + ");");
+                }
             } else {
                 c_.emitLine("} while (1);");
             }
@@ -86,10 +100,18 @@ void CCodeGen::visit(DoLoopStmt& node) {
             emitStmtList(node.body);
             c_.dedent();
             if (node.condition) {
+                // 同上（Loop Until = 条件为真就出循环）。
+                const size_t mark = c_.size();
                 emitExpr(*node.condition);
+                const bool materialized = (c_.size() != mark) || c_.hasPending();
                 // 账 #305 第二百四十四刀: Loop Until 恒真 = 只跑一轮
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
-                c_.emitLine("} while (!(" + lastExpr_ + "));");
+                if (materialized) {
+                    c_.emitLine("if (" + lastExpr_ + ") break;");
+                    c_.emitLine("} while (1);");
+                } else {
+                    c_.emitLine("} while (!(" + lastExpr_ + "));");
+                }
             } else {
                 c_.emitLine("} while (1);");
             }

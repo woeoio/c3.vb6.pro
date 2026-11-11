@@ -313,10 +313,29 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
                 // 接收者全是 PDImages.GetImageByID/GetActiveImage 的链）。
                 // 返回类校验沿用 getClassMethodReturnType 的同一口径（返回名必须真是项目 Class，
                 // `As Object`/UDT/内置类型一律答空 ⇒ 链在此终止，交回 COM 路径）。
-                if (ma.object->kind == ASTNodeKind::IdentifierExpr
-                    && findModuleQualifiedFunction(*call.callee)) {
-                    return getClassMethodReturnType(
-                        static_cast<const IdentifierExpr&>(*ma.object).name, ma.memberName);
+                if (ma.object->kind == ASTNodeKind::IdentifierExpr) {
+                    const Symbol* fnSym43 = findModuleQualifiedFunction(*call.callee);
+                    if (fnSym43 && !fnSym43->variableTypeName.empty()) {
+                        // §56: 上一刀这里只走了 getClassMethodReturnType(模块名, 成员名),
+                        // 而那条路的"同模块"匹配闸是 `isClassModule_`（第 563 行）——
+                        // **标准模块自己**调用 `PDImages.GetImageByID(x)` 时
+                        // isClassModule_=false、符号又不是 external ⇒ 恒查不到 ⇒ 返回空
+                        // ⇒ 外层 `.Member` 落 `obj.member`（整编实测 PDImages.c
+                        // `IsSuspended`/`EstimateRAMUsage`/`SuspendImage` ×9 C2039，
+                        // 连带 Layers.bas 的 `MainSelection.GetCompositeBoundaryRect.Left`
+                        // 整条链不解析 ×2）。返回类**直接**取符号上的 variableTypeName，
+                        // 口径与 G3-E1 那一支（本文件 378-386 行）逐字同源。
+                        const std::string projHit43 =
+                            projectClassNameOf(fnSym43->variableTypeName);
+                        if (!projHit43.empty()) return projHit43;
+                        const Symbol* clsSym43 = symTab_.lookup(fnSym43->variableTypeName);
+                        if (clsSym43 && clsSym43->kind == SymbolKind::Class)
+                            return fnSym43->variableTypeName;
+                    }
+                    if (fnSym43) {
+                        return getClassMethodReturnType(
+                            static_cast<const IdentifierExpr&>(*ma.object).name, ma.memberName);
+                    }
                 }
                 return "";
             }
