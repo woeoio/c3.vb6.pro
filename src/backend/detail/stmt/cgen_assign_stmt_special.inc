@@ -574,6 +574,33 @@
                     c_.emitLine(wfEf + "(" + hwndEf + ", " + valEf + ");  /* external form prop write */");
                     return;
                 }
+                // 账 §54: 跨窗体**用户自定义 Property Let** (`dialog_ToneMapping.fi_HandleCopy
+                // = fi_Handle`, DialogManager.bas:356) —— 它不在窗体内建属性表里, 以前落
+                // Module.var 回退发裸 `fi_HandleCopy = …;` (整编 C2065, Dialogs.c:625)。
+                // 唯一出口与同窗体里的写法同一枚: `vb6_<窗体>_prop_let_<属性>(值)`。
+                // 归属判定抄 findModuleQualifiedFunction 那套 (isExternal + sourceModule),
+                // 不能只按裸名查模块表 —— 同名属性在别的窗体上也是合法名字。
+                if (wfEf.empty() && symTab_.moduleScope()) {
+                    const std::string memEf = Symbol::toLower(maExpr.memberName);
+                    const Symbol* letEf = nullptr;
+                    for (const auto& [keyEf, sEf] : symTab_.moduleScope()->symbols()) {
+                        if (!sEf || sEf->lowerName != memEf) continue;
+                        if (sEf->kind != SymbolKind::PropertyLet) continue;
+                        if (sEf->isExternal
+                            && Symbol::toLower(sEf->sourceModule) == objLower) {
+                            letEf = sEf.get();
+                            break;
+                        }
+                    }
+                    if (letEf) {
+                        emitExpr(*node.value);
+                        std::string valEf = std::move(lastExpr_);
+                        c_.emitLine("vb6_" + cIdent(objIdent.name) + "_prop_let_"
+                                    + cIdent(maExpr.memberName) + "(" + valEf
+                                    + ");  /* external form prop let */");
+                        return;
+                    }
+                }
             }
 
             bool isVarName = (objSym && (objSym->kind == SymbolKind::Variable || objSym->kind == SymbolKind::Parameter));

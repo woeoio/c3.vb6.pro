@@ -12735,6 +12735,19 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_ctrlisnothing\FrmIsNothing.frm") @(
         "vb6_hwnd_txtDummy == NULL") @(
         "(txtDummy == NULL)")
+    # C2065 族① (`cmdExportSettings` ×1, FormExportLayers.c 754): UC 上没建模的方法
+    # 退化成空操作, 但"保留接收者引用"那格直接把裸控件名当 C 标识符交出去。
+    Test-CodegenNote "pd_uc_unmodeled_noop_receiver" @(
+        "$Tests\pd_ucnoop\FrmUcNoop.frm", "$Tests\pd_ucnoop\UcNoop.ctl") @(
+        "(void)vb6_hwnd_ucTest; /* vbeclipse: SetFocus 未建模于 UcNoop") @(
+        "(void)ucTest;")
+    # C2065 族① (`fi_HandleCopy` ×1, Dialogs.c 625): 跨窗体**用户自定义** Property Let
+    # 不在窗体内建属性表里, 以前落 Module.var 回退发裸 `fi_HandleCopy = …;`。
+    Test-CodegenNote "pd_form_prop_let" @(
+        "$Tests\pd_formproplet\Dialog_ToneMapping.frm",
+        "$Tests\pd_formproplet\DialogManager.bas") @(
+        "vb6_dialog_ToneMapping_prop_let_fi_HandleCopy(fi_Handle); /* external form prop let */") @(
+        "/* Module.fi_HandleCopy */")
     # C2065 族① (`vb6_UserControl_cmbWidthUnit/cmbHeightUnit` ×4, pdResize.c):
     # `UserControl.<本 UC 的设计期控件>` 与 `Me.<控件>` 同义; 旧发码走宿主伪成员表,
     # 拼成没人声明的 `vb6_UserControl_<控件名>`。只钉**限定符**这一层。

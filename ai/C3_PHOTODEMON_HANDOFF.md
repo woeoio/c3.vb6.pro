@@ -3376,3 +3376,91 @@ if (((((int32_t)((-(vb6_hwnd_HotkeyManager == NULL)))) != 0) ? 0 : -1)) {
 `FormExportLayers.c:754` 的 `cmdExportSettings`（族①剩 2 条：`cmdExportSettings`、
 `Dialogs.c:625` 的 `fi_HandleCopy`）。
 
+## §53 C2065 族① 第八站 —— UC 未建模方法空操作的接收者（1 条，FormExportLayers.c:754）
+
+### 53.1 根因
+
+`Forms\File_Export_Layers.frm:214`（`cmdBar_ExtraValidations` 里）：
+
+```vb
+cmdExportSettings.SetFocus
+```
+
+`cmdExportSettings` 是 `pdButton`（工程内 UserControl）实例，`SetFocus` 不在
+`resolveClassMemberCall` 的表里 ⇒ 落 [cgen_call.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/stmt/cgen_call.cpp)
+「未建模 → 空操作」那条腿。该腿为了保留接收者引用发 `(void)<接收者>;`，
+而接收者文本是从 `emitExpr(object)` 直接取的 —— 裸控件名在这一格不是 C 标识符，
+发成 `(void)cmdExportSettings;` ⇒ C2065。
+
+注意：只把该窗体单独 emit **不复现**（控件退化成未知 OCX，走 COM 腿）；
+必须把 `Controls\pdButton.ctl` 一起给（`Begin PhotoDemon.pdButton` 要能对到工程类）
+才落这条腿 —— 复现方法记在这里，免得下次又按"单窗体检"误判已修。
+
+### 53.2 修法
+
+空操作腿里，接收者 AST 是裸标识符且命中 `knownFormControls_`（局部变量遮蔽优先）
+⇒ 用 `ctrlObjectRefExpr` 取句柄槽，再发 `(void)vb6_hwnd_…;`。只动"未建模空操作"
+这一格，其它 UC 成员调用不动。
+
+### 53.3 实读
+
+```
+(void)vb6_hwnd_cmdExportSettings;  /* vbeclipse: SetFocus 未建模于 pdButton, 空操作 */
+```
+
+### 53.4 夹具 / 回归
+
+- `tests/pd_ucnoop/{FrmUcNoop.frm,UcNoop.ctl}`：UC 只有 `UserControl_Initialize`，
+  窗体过程 `ucTest.SetFocus`。
+- 新针 `pd_uc_unmodeled_noop_receiver`：正面 `(void)vb6_hwnd_ucTest; /* vbeclipse: SetFocus 未建模于 UcNoop`，
+  反面 `(void)ucTest;`。
+
+## §54 C2065 族① 第九站 —— 跨窗体用户自定义 Property Let（1 条，Dialogs.c:625）
+
+### 54.1 根因
+
+`Modules\DialogManager.bas:356`：
+
+```vb
+Load dialog_ToneMapping
+dialog_ToneMapping.fi_HandleCopy = fi_Handle
+```
+
+`fi_HandleCopy` 是 `Forms\Dialog_ToneMapping.frm:368` 的 `Public Property Let`
+（不是窗体内建属性）⇒ 跨窗体写侧只认 `getControlPropWriteFn` 的 Form 内建表，
+查空后落 Module.var 回退，发裸 `fi_HandleCopy = fi_Handle;` ⇒ C2065。
+同模块里的 `ShowDialog`（Sub）走 `findModuleQualifiedFunction` 一直是对的，
+缺的只是 Property Let 这一种 kind。
+
+顺带核实：PD 里同形的 `FormResizeContentAware.ResizeTarget = ResizeTarget`
+（DialogManager.bas:331）之所以不报错，是**右值恰好也叫 ResizeTarget**（外围 Sub 的
+形参）—— 裸名落到形参上，实际是自赋值空转，不是"已支持"。本条修完这类写才是真发出去。
+
+### 54.2 修法
+
+[cgen_assign_stmt_special.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/stmt/cgen_assign_stmt_special.inc)
+在「外窗体内建属性写」之后补一格：目标对象是窗体模块名、成员在模块作用域里是
+**PropertyLet** 且归属就是这枚窗体（`isExternal && sourceModule == objLower`，
+与 `findModuleQualifiedFunction` 同一归属判定）⇒ 发
+`vb6_<窗体>_prop_let_<属性>(值);`。这是同窗体写法的同一枚出口，不新拼第三种形状。
+
+### 54.3 实读
+
+```
+vb6_dialog_ToneMapping_prop_let_fi_HandleCopy(fi_Handle);  /* external form prop let */
+```
+
+探针整编（`--arch x86 --output-dir`）出 `a.exe`，即声明/定义/调用三处对得上。
+
+### 54.4 夹具 / 回归
+
+- `tests/pd_formproplet/{Dialog_ToneMapping.frm,DialogManager.bas}`：与 PD 同形。
+- 新针 `pd_form_prop_let`：正面上面那行，反面 `/* Module.fi_HandleCopy */`。
+- `-Category syntax` ⇒ **PASS=201 FAIL=0 SKIP=0**（本条与 §53 同批）。
+
+### 54.5 下一站
+
+族①清单已清空（`OLEDropMode` ×2、`HotkeyManager` ×1、`cmdExportSettings` ×1、
+`fi_HandleCopy` ×1）。按 §37.8 转入 C2065 **族②** UDT 裸名（`PD_MenuEntry` 10 条等），
+需按工程上下文逐个复现。
+
