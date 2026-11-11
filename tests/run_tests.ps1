@@ -12697,6 +12697,16 @@ if ($Category -in @("all", "syntax")) {
         "vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);",
         "vb6_argtmp_vb6_cls_pdFxPreviewCtl_0 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);") @(
         "vb6_ComPackObject(pdFxPreview)", 'L"ApplySepiaEffect"), NULL')
+    # C2197 主族 (整编 68 条, Compression.bas:348 `Plugin_libdeflate.GetDefaultCompressionLevel()`):
+    # `Mod.Proc(...)` 的形参表**不许借本模块的同名过程** —— 限定符不是本模块时按裸名
+    # lookupModule 会先命中本模块那枚同名符号, 缺省/必填补齐照它的形参个数补, 于是实参
+    # 比真正的被调方多一枚 ⇒ MSVC C2197。夹具: ModB 有一枚 1 参 `GetLevel`, ModA 那枚 0 参,
+    # `ModA.GetLevel()` 必须发成 0 实参。正面钉正确调用, 反面钉多补的 `(0)`。
+    Test-CodegenNote "pd_modqual_no_borrow" @(
+        "$Tests\pd_modqual\ModA.bas", "$Tests\pd_modqual\ModB.bas") @(
+        "int32_t vb6_ModA_GetLevel(void);",
+        "vb6_ret_Probe = vb6_ModA_GetLevel();") @(
+        "vb6_ModA_GetLevel(0)")
     # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
     # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
     # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`

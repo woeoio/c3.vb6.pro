@@ -303,6 +303,22 @@
                     }
                 }
             }
+            // C2197: `Mod.Proc(...)` 的形参表不许借**本模块的同名过程**。本模块恰好有
+            // 一枚同名过程时 lookupModule 先命中它, 缺省/必填补齐按它的形参个数补,
+            // 于是实参比真正的被调方多一枚 —— 实测 Compression.bas:348
+            // `Plugin_libdeflate.GetDefaultCompressionLevel()` 本身 0 参, 被补成 1 参
+            // ⇒ `vb6_Plugin_libdeflate_GetDefaultCompressionLevel(0)` (整编 68 条
+            // C2197 的主族)。限定符不是本模块时, 宁可不补 (实参照原样发)。
+            // 只看**本地**符号: 注入的外部符号 (含窗体 `frm_proc` 那枚) 不能凭
+            // sourceModule 判掉 —— pd_meform 夹具里那枚的 sourceModule 是空/别名,
+            // 判掉会把 ByRef 类实例实参的 argtmp 转换整段丢掉。
+            if (funcSym && !vbaQualifiedCallee216
+                && !funcSym->isExternal
+                && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr
+                && Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name)
+                       != Symbol::toLower(moduleName_)) {
+                funcSym = nullptr;
+            }
             if (funcSym && (funcSym->kind == SymbolKind::Sub || funcSym->kind == SymbolKind::Function
                 || funcSym->kind == SymbolKind::PropertyGet || funcSym->kind == SymbolKind::PropertyLet
                 || funcSym->kind == SymbolKind::PropertySet

@@ -4375,4 +4375,80 @@ pHeight = vb6_ScaleUnitY(vb6_Printer_Height(), vb6_Printer_ScaleMode(), 5);
 **验证**：`-Category syntax` **PASS=214 FAIL=0 SKIP=0**；`File_PrintXP.frm` 单文件发码 422/423 两格
 已是上表形状；`pd_printer_props` 两个输入复算 `7632566b…` / 1901 与 `8293417e…` / 1814（待 CI 读数 bless）。
 
+### 56.25 C2197 第一刀：`Mod.Proc(...)` 不许借本模块同名过程的形参表（9 条）
 
+#### 56.25.1 #9 日志的 159 行 → 72 唯一站点（按被调名分族）
+
+| 族 | 行数 | 唯一站点 | 被调形状（错误原型） | 定位 |
+|---|---:|---:|---|---|
+| `pdStringStack.GetString` | 68 | 17 | `BSTR (vb6_cls_pdStringStack*, int32_t)` | FormMetadata.c ×16、pdSpriteSheet.c:264 |
+| `*.UpdateAgainstCurrentTheme` | 42 | 17 | `void (void)`（14 个 Options/layerpanel/工具栏窗体 + FormMain） | FormOptions.c:568..618、Interface.c:2536/2542/2544、toolbar_Layers.c:1347..1356、PDMain.c:778、FormHotkeys.c:1532、UserControls.c:1677 |
+| `Tools_*.NotifyMouse*` | 22 | 7 | 4 参（`int16_t,int32_t,float,float` 等） | pdCanvas.c:1667..2102 |
+| `Plugin_libdeflate_Get*CompressionLevel` | 9 | 9 | `int32_t (void)` | **Compression.c:575..650（本刀）** |
+| `Plugin_*_GetVersion` | 7 | 7 | `BSTR (void)` | PluginManager.c:647..680 |
+| `Printers.Collection` | 4 | 2 | `void *(void)` | FormPrint.c:769/773、Printing.c:419/420 |
+| `pdStream.SetPosition` | 4 | 2 | `int16_t (cls*, int32_t, int32_t, int)` | pdMBM.c:1194/2122 |
+| `pdInpaint.SetSamplingCenter` | 2 | 1 | `void (cls*, int32_t, int32_t)` | SelectionFilters.c:1250 |
+| `pdSelection.LockIn` | 1 | 1 | `void (cls*)` | pdSelection.c:574 |
+
+（计数口径：日志逐行；同一条错误在日志里重复出现（cl 对同一 TU 多次报）算多行、站点按 `file:line` 去重。
+`GetString` 68 行只落在 17 个站点上就是这个原因。）
+
+#### 56.25.2 本刀病灶（libdeflate 9 条）
+
+Compression.bas 自己有一枚 **1 参**的 `Public Function GetDefaultCompressionLevel(ByVal cmpFormat As PD_Compr. As Long)`
+（同理 `GetMinCompressionLevel` / `GetMaxCompressionLevel`），而 `Plugin_libdeflate.*` 那三枚是 **0 参**：
+
+```
+Compression.bas:348  GetDefaultCompressionLevel = Plugin_libdeflate.GetDefaultCompressionLevel()
+```
+
+`cgen_expr_call_callee_params.inc` 的 MemberAccessExpr 兜底段在限定的 `Mod.Proc` 上仍然只做
+`lookupModule(maExpr.memberName)`（裸名）—— 本模块那枚同名过程先被命中，缺省/必填补齐按它的
+1 枚形参照补 ⇒ `vb6_Plugin_libdeflate_GetDefaultCompressionLevel(0)`，而原型是 `(void)` ⇒ C2197。
+
+#### 56.25.3 改法
+
+在兜底段 `funcSym` 解析完之后、取形参表之前加一道**弃表**（不是改 callee 名字 —— 名字本来就由限定符算对了）：
+
+```cpp
+if (funcSym && !vbaQualifiedCallee216
+    && !funcSym->isExternal
+    && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr
+    && Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name)
+           != Symbol::toLower(moduleName_)) {
+    funcSym = nullptr;
+}
+```
+
+判据口径：
+- **只看本地符号**（`!isExternal`）。跨模块注入的外部副本有可能是本模块被窗体限定那条路取来的
+  （`<form>_<proc>`），`sourceModule` 会是空或别名 —— 一刀按 `sourceModule` 判掉会把 pd_meform
+  那枚的 ByRef 类实例实参 argtmp 转换整段丢掉（实测 `vb6_MeForm_ApplySepiaEffect(...)` 缺
+  `&vb6_argtmp_...` 与 `vb6_UC_InstanceOf` 两行，`pd_me_own_proc` 直接 FAIL）。
+- 限定符就是本模块时（`Mod.Proc` 且 `Mod` = 当前模块）不弃 —— 那就是本模块自己的过程。
+- `VBA.X` 那条路不碰（`vbaQualifiedCallee216`）。
+
+#### 56.25.4 夹具与钉子
+
+- 新增 `tests/pd_modqual/ModA.bas`：0 参 `Public Function GetLevel() As Long`。
+- 新增 `tests/pd_modqual/ModB.bas`：同名但 **1 参** `GetLevel(ByVal fmt As Long)`，另有
+  `Probe()` 写 `Probe = ModA.GetLevel()`。
+- `tests/run_tests.ps1` 新增 `Test-CodegenNote "pd_modqual_no_borrow"`：
+  正向 `"int32_t vb6_ModA_GetLevel(void);"` 与 `"vb6_ret_Probe = vb6_ModA_GetLevel();"`，
+  反向 `"vb6_ModA_GetLevel(0)"`。
+
+#### 56.25.5 验证读数
+
+- 修前（本机复现）：`vb6_ret_GetDefaultCompressionLevel = vb6_Plugin_libdeflate_GetDefaultCompressionLevel(0);`
+  修后：`... = vb6_Plugin_libdeflate_GetDefaultCompressionLevel();`（`Compression.bas` 单文件发码）。
+- 新夹具：`Probe` 发成 `vb6_ret_Probe = vb6_ModA_GetLevel();`。
+- `-Category syntax`：**PASS=215 FAIL=0 SKIP=0**（214 + 本刀 1 例）。
+- 形状门：本刀不改任何既有输入（`tests/pd_modqual/*.bas` 是**新输入**，CI 侧按新清单行登记）；
+  photodemon 整工程不在形状门清单内，待 CI 整编 run 出 C2197 剩余读数。
+
+#### 56.25.6 余下族的工作口径（本刀不碰）
+
+- `pdStringStack.GetString`(68) / `UpdateAgainstCurrentTheme`(42) / `NotifyMouse*`(22) 三族都**不是**
+  “借本模块同名”：前三者的借用源是**另一个模块/类的同名成员**（不同 `sourceModule`），
+  或干脆是接收者重复前置。它们各自要单独复现，见 §56.26 起。
