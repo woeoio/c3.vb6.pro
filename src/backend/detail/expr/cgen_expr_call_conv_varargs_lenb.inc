@@ -62,15 +62,23 @@
         // Fix 084h: UDT 数组元素 LenB(VB6_SA_AT(vb6_type_XXX, arr, idx)) →
         // sizeof(vb6_type_XXX)。_Generic 宏无法匹配自定义结构体类型, 且
         // 数组元素类型未知, 直接由类型名生成 sizeof。
+        //
+        // §45 (C2065 族② `MergedEntry`12 条): 两处收口 ——
+        //   ① 只认**整枚元素**: 实参必须是 `VB6_SA_AT(...)` 本身, 不能带 `.字段`。
+        //      `LenB(m_hashTable(i).sKey)` 的 sKey 是 BSTR 字段, 语义是**字节长度**,
+        //      不是结构体宽度; 以前它也被这一支截走, 而双负号版还被当成数组元素。
+        //   ② 类型名必须带 `vb6_type_` 前缀: 以前 substr(19) 把前缀吃掉, 发出
+        //      `sizeof(MergedEntry)` ⇒ C2065 (裸 VB 类型名不是 C 标识符)。
         {
             std::string rawArg = args[0];
             std::string rawLower = rawArg;
             std::transform(rawLower.begin(), rawLower.end(), rawLower.begin(), ::tolower);
             const char* saPrefix = "vb6_sa_at(vb6_type_";
-            if (rawLower.compare(0, 19, saPrefix) == 0) {
+            if (rawLower.compare(0, 19, saPrefix) == 0
+                && rawArg.find(").") == std::string::npos) {
                 size_t comma = rawArg.find(',');
                 if (comma != std::string::npos) {
-                    std::string typeName = rawArg.substr(19, comma - 19);
+                    std::string typeName = rawArg.substr(10, comma - 10);
                     lastExpr_ = "(int32_t)sizeof(" + typeName + ")";
                     return;
                 }

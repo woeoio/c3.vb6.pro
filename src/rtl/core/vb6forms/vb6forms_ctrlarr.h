@@ -48,6 +48,12 @@ void* vb6_CtrlArr_Load(vb6_CtrlArr* arr, int index, void* hParent, void* hInstan
 // 动态卸载控件数组元素 (VB6 Unload语句)
 void vb6_CtrlArr_Unload(vb6_CtrlArr* arr, int index);
 
+// 整枚控件数组 → Variant 数组 (交给 `ByRef v As Variant` 形参时的 VB6 形态:
+// 元素是各控件对象, 调用方可 `v(i).Prop` / `v.UBound`)。
+// ABI 用 void* 而不是 vb6_VARIANT*: 本头只 include <stdint.h>, 不把 vb6rtl 拖进来;
+// 调用点 (发码) 自己持有 vb6_VARIANT 临时量并取址传入。
+void vb6_CtrlArrToVariantArray(void* outVariant, const vb6_CtrlArr* arr, const char* classVariable);
+
 
 #ifdef __cplusplus
 }

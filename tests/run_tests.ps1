@@ -12674,6 +12674,87 @@ if ($Category -in @("all", "syntax")) {
         "vb6_pdImage_GetNumOfLayers((void*)vb6_PDImages_GetImageByID(",
         "vb6_pdLayer_prop_get_GetLayerDIB((void*)vb6_pdImage_GetLayerByID(") @(
         ").GetNumOfLayers", ").GetLayerByID")
+    # §45 (C2065 族②): 类模块内 `Private Type` 的动态数组, `LenB(arr(i).串字段)`
+    # 必须问 BSTR 的字节长度 (落 vb6_LenB), 且整枚元素的 sizeof 必须带 vb6_type_ 前缀。
+    Test-CodegenNote "pd_udt_field_lenb" @(
+        "$Tests\pd_udtlen\clsHash.cls", "$Tests\pd_udtlen\Main.bas") @(
+        "vb6_LenB(VB6_SA_AT(vb6_type_MergedEntry, me->m_hashTable, 0).sKey)",
+        "sizeof(vb6_type_MergedEntry)") @(
+        "sizeof(MergedEntry)")
+    # C2065 族①: 窗体自有过程用 `Me.` 显式限定 (`Me.ApplySepiaEffect ..., pdFxPreview`)。
+    # 修前落进「未知 Form 成员 → COM dispatch」, 实参里的设计期 UC 控件名被晚绑定打包
+    # 裸发 ⇒ C2065 'pdFxPreview' (整编实测 39 条, 与源码里 39 处 `Me.` 调用一一对应)。
+    # 正面钉「直接调用 + §42 UC 实参站」, 反面钉旧坏形状。
+    Test-CodegenNote "pd_me_own_proc" @(
+        "$Tests\pd_meform\MeForm.frm", "$Tests\pd_meform\pdFxPreviewCtl.ctl") @(
+        "vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);",
+        "vb6_argtmp_vb6_cls_pdFxPreviewCtl_0 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);") @(
+        "vb6_ComPackObject(pdFxPreview)", 'L"ApplySepiaEffect"), NULL')
+    # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
+    # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
+    # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`
+    # (C 里只有 `vb6_arr_cmdFlyoutLock`) ⇒ 整编 13 条 C2065。正面钉两行: 载体出口
+    # 收原拼写数组名 + 调用点收该 Variant 临时; 反面钉旧坏形状。
+    Test-CodegenNote "pd_ctrlarr_variant" @(
+        "$Tests\pd_ctrlarrvar\frmArrVar.frm", "$Tests\pd_ctrlarrvar\pdButtonToolbox.ctl",
+        "$Tests\pd_ctrlarrvar\ArrVar.bas") @(
+        'vb6_CtrlArrToVariantArray(&_vb6_vararg_0, &vb6_arr_cmdFlyoutLock, "pdButtonToolbox");',
+        "vb6_ArrVar_ThemeFlyoutControls(&_vb6_vararg_0);") @(
+        "(void*)(cmdFlyoutLock)")
+    # C2065 族① (Units.c 的 `_pa_19.._pa_30` 12 条): `Select Case` 的 Case 标签里调
+    # ParamArray 过程。标签求值要落一枚 `SAFEARRAY* _pa_N = NULL;`; 旧发码「边建条件
+    # 边发 if 链」把它发进**上一条 Case 的体内** ⇒ `} else if` 行看不到它。
+    # 正面钉「声明紧贴 if 链之前」(空白已被 Invoke-CodegenProj 折成单空格);
+    # 反面钉旧坏形状（赋值语句后面直接跟着下一枚 Case 的声明）。
+    Test-CodegenNote "pd_select_paramarray" @(
+        "$Tests\pd_selparama\SelPa.bas") @(
+        'SAFEARRAY* _pa_3 = NULL; if (',
+        'vb6_Tr(vb6_BSTR_FromStr(L"px"), _pa_2)') @(
+        'vb6_ret_UnitId = 0; SAFEARRAY* _pa_2 = NULL;')
+    # C2065 族① (WindowState ×4): 跨窗体内建属性 WindowState 的**写**侧。
+    # 读侧 form_pseudo 表有 windowstate → vb6_GetWindowState; 写侧没登记 ⇒
+    # 落 Module.var 回退，发裸 `WindowState = 2` (Interface.c 2 条 +
+    # Tools_ScreenVideo.c / Tools_ScreenVideoPrefs.c 各 1 条)。
+    Test-CodegenNote "pd_form_windowstate_write" @(
+        "$Tests\pd_formstate\frmWriter.frm", "$Tests\pd_formstate\frmOther.frm") @(
+        "vb6_SetWindowState(vb6_form_hwnd_frmOther(), 2); /* external form prop write */") @(
+        "WindowState = 2")
+    # C2065 族① (`OLEDropMode` ×2, Processor.c 1176/1185): 窗体本体的 OLEDropMode
+    # 写侧从来没有配对出口, 落 Module.var 回退发裸名字。写侧登记后走 RTL 的放置
+    # 目标开关 (0 → Revoke / 非 0 → Register); 设计期非 0 的窗体在 load 里顺带把
+    # Form_OLEDragOver/Drop 挂成回调并注册, 否则运行期切模式是空转。
+    Test-CodegenNote "pd_form_oledropmode" @(
+        "$Tests\pd_oledrop\FormMain.frm", "$Tests\pd_oledrop\Proc.bas") @(
+        "vb6_SetOLEDropMode(vb6_form_hwnd_FormMain(), 0); /* external form prop write */",
+        "vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FormMain, 1, (void*)vb6_FormMain_Form_OLEDragDrop);",
+        "vb6_OLEDrop_Register((void*)vb6_hwnd_FormMain); /* 设计期 OLEDropMode=1 */") @(
+        "OLEDropMode = 0;")
+    # C2065 族① (`HotkeyManager` ×1, FormMain.c 2455): `Is` 比对象同一性, 不触发
+    # 默认成员 ⇒ 裸控件名要交句柄槽。以前和普通值一样原样交裸名 ⇒ `HotkeyManager == NULL`。
+    Test-CodegenNote "pd_ctrl_is_nothing" @(
+        "$Tests\pd_ctrlisnothing\FrmIsNothing.frm") @(
+        "vb6_hwnd_txtDummy == NULL") @(
+        "(txtDummy == NULL)")
+    # C2065 族① (`cmdExportSettings` ×1, FormExportLayers.c 754): UC 上没建模的方法
+    # 退化成空操作, 但"保留接收者引用"那格直接把裸控件名当 C 标识符交出去。
+    Test-CodegenNote "pd_uc_unmodeled_noop_receiver" @(
+        "$Tests\pd_ucnoop\FrmUcNoop.frm", "$Tests\pd_ucnoop\UcNoop.ctl") @(
+        "(void)vb6_hwnd_ucTest; /* vbeclipse: SetFocus 未建模于 UcNoop") @(
+        "(void)ucTest;")
+    # C2065 族① (`fi_HandleCopy` ×1, Dialogs.c 625): 跨窗体**用户自定义** Property Let
+    # 不在窗体内建属性表里, 以前落 Module.var 回退发裸 `fi_HandleCopy = …;`。
+    Test-CodegenNote "pd_form_prop_let" @(
+        "$Tests\pd_formproplet\Dialog_ToneMapping.frm",
+        "$Tests\pd_formproplet\DialogManager.bas") @(
+        "vb6_dialog_ToneMapping_prop_let_fi_HandleCopy(fi_Handle); /* external form prop let */") @(
+        "/* Module.fi_HandleCopy */")
+    # C2065 族① (`vb6_UserControl_cmbWidthUnit/cmbHeightUnit` ×4, pdResize.c):
+    # `UserControl.<本 UC 的设计期控件>` 与 `Me.<控件>` 同义; 旧发码走宿主伪成员表,
+    # 拼成没人声明的 `vb6_UserControl_<控件名>`。只钉**限定符**这一层。
+    Test-CodegenNote "pd_uc_self_qualified_control" @(
+        "$Tests\pd_uctrlqual\UcQual.ctl") @(
+        "vb6_ChkLong(vb6_hwnd_cmbWidthUnit.ListIndex)") @(
+        "vb6_UserControl_cmbWidthUnit")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

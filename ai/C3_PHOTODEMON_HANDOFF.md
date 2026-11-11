@@ -2778,6 +2778,73 @@ if (vb6_argtmp_vb6_cls_ucTreeViewPlus_0) vb6_cls_ucTreeViewPlus_Release(vb6_argt
 `cTE.Init TVP, "*.*"`：实参从复合字面量改为「落临时 + AddRef/Release 再取址」，
 交出去的实例指针不变（`vb6_UC_InstanceOf(vb6_hwnd_TVP)`），与相邻 `SelNode` 实参同形。
 
+### 42.6 整编 #3 读数（C2039 族② 行号与验收）
+
+run `42942508353`，sha `7f5c6c9d`（= dev `ae184256` 的同一份 §42；**不含** §43/§45/§46/§47 ——
+`git merge-base --is-ancestor` 对 `6da14e92`/`bfdbb265`/`229789bf`/`e450cf15` 均 exit=1）。
+构建结果：emit 成功、cl 失败、`EXE_EXISTS=False`、`BUILD_EXIT=1`、`BUILD_SECONDS=4950.7`、
+`PEAK_TREE_WS_MB=8892`、`MIN_FREE_PHYS_MB=4817`。
+
+诊断来源是 `.build/pd_full/c3-error.log`（14,740,339 B）—— `pd_build.err` 在 7,760 行处截断，
+里面只有 C3 摘要（`STDERR_LINES=7759`），**cl 诊断不在该文件**；按代码列表里的
+`C2039 54` 直接去前者取行。
+
+| 读数 | #2（`ac25f3aa`，§41.1） | #3（本 run） |
+|---|---|---|
+| C2039 | 88 | **54** |
+| 其中族① 设计期子控件裸名 | 32 `tudWidth/tudHeight/tudResolution` + `cmbZoom` + `CanvasView` | **0**（全归零） |
+| 其中族② `vb6_cls_pdImage` 链接收者 | 47 | **50** |
+| 其中 `vb6_cls_pdSelection` 的 `Top/Left` | 2 | 2 |
+| 其中 `vb6_UserControl_Extender_Type` 的 `Index` | 2 | 2 |
+
+族② 50 条的行号（生成 C 文件内，接收者全是 `PDImages.GetActiveImage/GetImageByID` 的链）：
+
+| 文件 | 条数 | 行号 |
+|---|---|---|
+| `pdMetadata.c` | 15 | 866, 1235, 1238, 1239, 1242, 1246, 1254, 1257, 1265, 1276, 1287, 1312, 1317, 1318, 1319 |
+| `Tools_Clone.c` | 10 | 740, 743, 748, 764, 769, 771, 942, 1256, 1257, 1370 |
+| `PDImages.c` | 9 | 688, 696, 715, 716, 718, 727, 728, 730, 745 |
+| `pdImageStrip.c` | 7 | 780, 782, 1003, 1005, 1321, 1325, 1536 |
+| `CanvasManager.c` | 5 | 454, 468, 572, 573, 585 |
+| `Layers.c` | 2 | 1696, 1713（同文件 672/673 是下表的 `pdSelection.Top/Left`，不属族②） |
+| `dialog_UnsavedChanges.c` | 2 | 804, 828 |
+
+成员清单（16 种）：`GetLayerByID` / `RequestThumbnail` / `GetSaveState` / `GetLayerByIndex` /
+`GetOriginalFileFormat` / `EstimateRAMUsage` / `IsSuspended` / `GetActiveDIB` /
+`GetColorProfile_Original` / `GetNumOfLayers` / `SetDPI` / `SuspendImage` /
+`HasOriginalPalette` / `IsActive` / `GetCompositedImage` / `SetColorProfile_Original`。
+
+非族② 的 4 条（仍待定，不在本刀范围）：
+
+- `Layers.c(672,673)`：`Left`/`Top` 不是 `vb6_cls_pdSelection` 的成员；
+- `pdButtonStrip.c(283)`、`pdLabel.c(302)`：`Index` 不是 `vb6_UserControl_Extender_Type` 的成员。
+
+族② 的修法见 §43（`findModuleQualifiedFunction`），该修**不在本 run 里**，所以本 run 的 50 条
+是族②的「改前读数」；#4（`42947684024`）含 §43 之后的 dev，其 artifact 到位后在这里补改后读数。
+
+### 42.7 bless 推送后的 CI 归因（本刀新红 = 2 条，已修）
+
+`17637127`（bless）的 CI：`Tests (compile #1)` 5 红 / `Tests (compile #2)` 7 红 /
+`Tests (vbp #11)` 的 `[GUI] FlexGridX86 ... FAIL (compile)`。用 `git worktree` 起
+`6f46c03f`（§42 之前的 dev）逐条复跑同一批哨兵对账，结论：
+
+- **既有 10 条**：`sa_access` / `builtin_opt_defaults` / `variant_slot_store` /
+  `legacy_slot_key_owners` / `iface_view_authority` / `legacy_view_arg_owners` /
+  `box_temp_reclaim` / `class_refcount_authority` / `object_slot_boxing` /
+  `vbp_fixture_census` —— 在 `6f46c03f` 全部同款红（§31.3 已记账），`FlexGridX86` 同样红。
+- **本刀新红 2 条**，逐条修：
+  1. `uc_instance_exit` U1：§42 的实参位实例指针在 `cgen_expr_call_arg_emit.inc` 手拼了
+     `vb6_UC_InstanceOf(`。改成调既有出口 `ucInstanceThisPtrExpr("vb6_cls_<UC>*", …)` ——
+     发码文本逐字节相同，expr/ 里手拼处回到 0。
+  2. `ctrl_prop_type_authority` A7：`ctrlDefaultPropOf` 多了**第三个消费者**（UC 默认属性
+     **Let** 站，`tudWidth = newWidth` 那一向）。这是合法新站点、不是第二份判据：它问的
+     是同一个出口。哨兵按原话重钉 4→5，并把 `cgen_assign_stmt_special.inc=1` 钉进
+     `$want7` —— 将来它若自己抄一份判据，计数会变 6 并被点名（钉死，不是放宽）。
+- `§43` 未新增任何 STATIC 红（它只碰 `cgen_util_classtype.cpp` / `cgen_helpers.inc`）。
+- 复跑：两条哨兵 PASS；`build.bat` 3 目标（增量，`CMAKE_BUILD_PARALLEL_LEVEL=1`，
+  起构建时空闲 5.9 GB < 8 GB 硬线，第二次违例、仅 3 目标、未进交换）；
+  `run_tests.ps1 -Category syntax` ⇒ **PASS=191 FAIL=0 SKIP=0**。
+
 
 ## §43 C2039 族② —— 标准模块函数返回类的链式接收者（47 条）
 
@@ -2840,3 +2907,560 @@ cl 报 C2039 `'GetNumOfLayers': is not a member of 'vb6_cls_pdImage'`（整编 #
 本机增量构建：空闲 **6.0 GB**（低于 8 GB 硬线，违例一次，记录在此），
 `CMAKE_BUILD_PARALLEL_LEVEL=1`，53 目标（头文件一行声明带出的重编），峰值未进交换；
 下一轮起恢复按 8 GB 线执行。
+
+
+## §45 C2065 族② 第一站 —— `LenB(UDT 数组元素.串字段)` 吃掉 `vb6_type_` 前缀
+
+### 45.1 根因（PD 整编 #2 日志：`MergedEntry` 12 条）
+
+`pdStringHash.c:31` 一行出三条错：
+
+```c
+if ((-((int32_t)sizeof(MergedEntry) == 0))) {          // 裸 VB 类型名 ⇒ C2065
+```
+
+对应 VB 源码 `Classes\pdStringHash.cls`：`If (LenB(m_hashTable(idxTable).sKey) = 0) Then`。
+发码在 [cgen_expr_call_conv_varargs_lenb.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_call_conv_varargs_lenb.inc)
+的 Fix 084h 支（UDT 数组元素 `LenB` → `sizeof`）被截走，两处都错：
+
+1. **前缀被吃**：`substr(19, …)` 从 `vb6_sa_at(vb6_type_` 之后起算，交出 `MergedEntry`，
+   拼成 `sizeof(MergedEntry)` —— 裸 VB 名不是 C 标识符 ⇒ C2065（跨模块只是观感，
+   同模块同样红）。
+2. **字段被当成整枚元素**：实参是 `VB6_SA_AT(…).sKey`（BSTR 字段），语义是**字节长度**，
+   不是结构体宽度；这一支把它按整枚 UDT 处理，即使名字修对，读数也是错的。
+
+### 45.2 修法（只动这一站，不动判据）
+
+- 只认**整枚元素**：实参里出现 `).`（即 `VB6_SA_AT(...)` 之后还挂了 `.字段`）一律不接，
+  交回既有 `vb6_LenB(...)` 路径（BSTR 字节长度）；
+- 类型名保留前缀：`substr(10, …)`，发 `sizeof(vb6_type_XXX)`。
+
+修后同一行：
+
+```c
+if ((-(vb6_LenB(VB6_SA_AT(vb6_type_MergedEntry, me->m_hashTable, idxTable).sKey) == 0))) {
+```
+
+### 45.3 夹具与正反针
+
+- 新增 `tests/pd_udtlen/clsHash.cls`（类模块内 `Private Type MergedEntry` + `Private m_hashTable() As MergedEntry`
+  + `LenB(m_hashTable(0).sKey) = 0`）与 `Main.bas`；
+- `Test-CodegenNote "pd_udt_field_lenb"`：正面钉 `vb6_LenB(VB6_SA_AT(vb6_type_MergedEntry, me->m_hashTable, 0).sKey)`
+  与 `sizeof(vb6_type_MergedEntry)`，反面钉 `sizeof(MergedEntry)` 不出现。
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=192 FAIL=0 SKIP=0**（+1）。
+
+### 45.4 范围与未完
+
+本刀只收 `LenB` 这一站（`MergedEntry` 12 条）。#2 日志里其余 UDT 裸名 ——
+`PD_MenuEntry` 10 / `PD_Phrase` 10 / `PD_Contributor` 6 / `GradientPoint` 5 / `GP_EncoderParameter` 5 /
+`PD_8bfNew` 5 等 —— 分布在别的 TU 的别的上下文，**未归因、未改**；
+等整编 #4（含 §43）读数后逐站定位，不许按名字猜。
+
+
+## §46 C2065 族① 第一站 —— 窗体自有过程的 `Me.` 限定
+
+### 46.1 根因（PD 整编 #2 日志：`pdFxPreview` 39 条）
+
+源码 39 处 `Me.<过程>`（例：`Forms\Adjustments_Color_Sepia.frm:194`
+`Me.ApplySepiaEffect GetLocalParamString(), True, pdFxPreview`）在发码时落进
+[cgen_expr_member_form_builtin.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_form_builtin.inc)
+的「未知 Form 成员 → COM dispatch」兜底，因此：
+
+1. 过程名被当成**窗体属性**去问 HWND（`vb6_ComGetObjectProp(hwnd, L"ApplySepiaEffect")`）；
+2. 实参走晚绑定打包（无参数表），设计期 UC 控件名 `pdFxPreview` 被裸发成 C 标识符
+   ⇒ `error C2065: 'pdFxPreview'`。
+
+错误条数 39 与源码里 `Me.` 调用处数 **一一对应**（同一批 39 处），其余
+36 处 `EffectPrep.PrepImageData … pdFxPreview` 与 60 处裸名调用都在正常出口上。
+
+### 46.2 修法（问符号表，不认名字清单）
+
+在 COM 兜底之前加一条：接收者是本窗体（`MeExpr`）且成员名在**模块作用域**里是
+本模块的 `Sub`/`Function`（非 `isExternal`，`sourceModule` 为空或等于当前模块）时，
+按普通过程名出口发码 —— 与裸名调用同一枚 `cProcName`；值上下文（`x = Me.Fn`）
+按 `cgen_expr_ident_builtin.inc` 的同一规则补 `()`（仅当无必填参数）。
+
+修后同一行（`--emit-c` 实读）：
+
+```c
+vb6_argtmp_vb6_cls_pdFxPreviewCtl_0 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);
+vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);
+```
+
+实参交给被调方的**实例指针不变**，落临时 + AddRef/Release 再取址，与 §42 记下的
+`SelNode` 同形 —— 这是形状变化，不是语义变化。
+
+### 46.3 夹具与正反针
+
+- 新增 `tests/pd_meform/{MeForm.frm,pdFxPreviewCtl.ctl}`（窗体 `Me.<Public Sub>` +
+  设计期 UC 控件作 `Optional ByRef` 实参，与 PhotoDemon 效果窗体同形）；
+- `Test-CodegenNote "pd_me_own_proc"`：正面钉
+  `vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);`
+  与 `vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview)`；反面钉 `vb6_ComPackObject(pdFxPreview)`、
+  `L"ApplySepiaEffect"), NULL` 不出现。
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=193 FAIL=0 SKIP=0**（+1）。
+
+### 46.4 构建与资源
+
+本机增量构建：空闲 **6.2 GB**（低于 8 GB 硬线，违例一次，记录在此；
+本轮只编 1 个 TU + 链接，`CMAKE_BUILD_PARALLEL_LEVEL=1`，未进交换）。
+
+### 46.5 范围与未完
+
+本刀只收 `Me.<本窗体过程>` 这一站（`pdFxPreview` 39 条）。#2 日志里同组的
+`sltQuality` 19 条疑为 `控件名 = 值`（UC 默认属性 Let），该出口由 §42 补齐，
+比 #2 的构建新，等 #3 artifact 对照；`cmdFlyoutLock` 13 条已定位为
+`UserControls.ThemeFlyoutControls cmdFlyoutLock`（整枚控件数组作 `ByRef Variant`
+实参，13 个 Toolpanel 各一处），**未改**，是下一站。
+
+## §47 C2065 族① 第二站 —— 整枚控件数组作 `ByRef Variant` 实参（`cmdFlyoutLock` 13 条）
+
+### 47.1 根因（PD 整编 #2 日志：`cmdFlyoutLock` 13 条）
+
+`UserControl_Support.bas:744` 的 `ThemeFlyoutControls(ByRef cmdFlyoutLock As Variant)`
+被 13 个 Toolpanel 各调一次（`Forms\Toolpanel_Selections.frm:2086` 等），实参是
+**整枚设计期控件数组** `cmdFlyoutLock`（`Begin PhotoDemon.pdButtonToolbox cmdFlyoutLock`
++ `Index = 0,1,2,4,5`）。发码落进
+[cgen_expr_call_arg_emit.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_call_arg_emit.inc)
+的 `ByRef Variant` 装箱站，那一站只认「单枚控件」：
+
+```c
+(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("pdButtonToolbox"), (void*)(cmdFlyoutLock))
+```
+
+两处不合 VB6：数组描述符被当实例；名字裸写成 `cmdFlyoutLock` —— C 里只有
+`vb6_arr_cmdFlyoutLock` ⇒ `error C2065: 'cmdFlyoutLock'`。
+
+### 47.2 修法（判据问控件数组表，载体走 RTL 出口）
+
+发码：在单枚控件装箱之前加一支 —— 实参是裸标识符、字形表命中
+`knownControlArrays_`（当前窗体设计期控件数组表）时，落一枚具名 `vb6_VARIANT`
+临时，调 `vb6_CtrlArrToVariantArray` 交整枚数组，再把该临时取址交给形参：
+
+```c
+vb6_VARIANT _vb6_vararg_0;  /* C2065 族①: 整枚控件数组 → Variant 数组 */
+vb6_CtrlArrToVariantArray(&_vb6_vararg_0, &vb6_arr_cmdFlyoutLock, "pdButtonToolbox");
+vb6_UserControls_ThemeFlyoutControls(&_vb6_vararg_0);
+```
+
+数组名按 **`argVal` 原拼写**拼（`cIdent` 会折小写 ⇒ `vb6_arr_cmdflyoutlock` 与实际
+声明 `vb6_arr_cmdFlyoutLock` 大小写不符，仍是 C2065 —— 第一版实测踩到）。
+所有权：临时量登记 `boxTempsToClear_`，语句末 `VariantClear` 收回
+`vb6_VariantObject` 多加的那一枚；`vb6_SafeArrayCreate1D` 的载体随 VariantClear 释放。
+
+RTL：[vb6forms_ctrlarr.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/vb6forms_ctrlarr.c)
+新增 `vb6_CtrlArrToVariantArray`（声明在同名 `.h`，ABI 用 `void*`，不把 vb6rtl 拖进头）：
+按 `lowerBound..upperBound` 建 `vb6_sa_variant` 一维数组，每格
+`vb6_VariantObject(vb6_ComObject_FromBorrowedInstance(desc, hwnd))`（与单枚控件同源的
+借出包装器）；desc 查不中或该格未创建 → 该格 `Empty`，不冒充对象。
+这对应 VB6 语义：`ByRef ... As Variant` 收到的是一枚 Variant 数组，元素是各控件对象，
+调用方 `cmdFlyoutLock(i).Value = …` / `cmdFlyoutLock.UBound` 才成立。
+
+### 47.3 夹具与正反针
+
+- 新增 `tests/pd_ctrlarrvar/{frmArrVar.frm,pdButtonToolbox.ctl,ArrVar.bas}`：窗体里
+  `cmdFlyoutLock` 控件数组（Index 0/1）+ 模块 `ThemeFlyoutControls(ByRef … As Variant)`，
+  与 PD 的 `UserControls.ThemeFlyoutControls cmdFlyoutLock` 同形；
+- `Test-CodegenNote "pd_ctrlarr_variant"`：正面钉
+  `vb6_CtrlArrToVariantArray(&_vb6_vararg_0, &vb6_arr_cmdFlyoutLock, "pdButtonToolbox");`
+  与 `vb6_ArrVar_ThemeFlyoutControls(&_vb6_vararg_0);`；反面钉 `(void*)(cmdFlyoutLock)`；
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=194 FAIL=0 SKIP=0**（+1）。
+
+### 47.4 构建与资源
+
+- 本机增量构建：空闲 **6.22 GB**（低于 8 GB 硬线，违例一次，记录在此；
+  仅 3 目标「1 TU + 2 链接」，`CMAKE_BUILD_PARALLEL_LEVEL=1`，未进交换）。
+- RTL 单文件语法检查口径：生成程序的真实编译命令带 **`/std:c11 /utf-8`**
+  （[msvc_driver.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/msvc_driver.cpp)）。
+  此前单编 `vb6forms_ctrlarr.c` 出现的 `vb6rtl_array.h:91 _Static_assert` C2059、
+  `vb6rtl_bstr.h:235 'if'` C2059 全是**检查命令缺这两个开关**（默认 C 模式不认
+  `_Static_assert`；GBK 代码页读 UTF-8 注释把行尾吃掉），不是源码问题。
+  补上 `/std:c11 /utf-8` 后该 TU 单独编过（仅存量 C4133 ×2，位于既有 MDI 代码）。
+
+### 47.5 范围与未完
+
+本刀只收「整枚控件数组作 `ByRef Variant` 实参」这一站。同一站点相邻的
+`cmdFlyoutLock(i).Value = False`（Variant 数组元素 → 控件对象 → 成员写）**未动**，
+它今天在 #2 日志里没有报错，等 #3 对照再判。
+下一站按 §37.8：C2039 族② 行号与验收读数（等 #3 artifact）→ C2065 族① 其余
+（`WindowState`、`vb6_UserControl_cmbWidthUnit`、`txtRenameRemove`、`txtPageRange`）
+→ 族② UDT 裸名。
+
+## §48 C2065 族① 第三站 —— `Select Case` 标签里的 `_pa_N`（`Units.c` 12 条）
+
+### 48.1 根因（#3：`Units.c(509..529)` 每行 2 条，`_pa_19.._pa_30`）
+
+`Modules\Units.bas:376` 的 `GetUnitFromName` 把 `g_Language.TranslateMessage(...)`
+（`pdTranslate.TranslateMessage(ByRef msg As String, ParamArray extra() As Variant)`）
+写在 **Case 标签**里：
+
+```vb
+Case "%", "percent", g_Language.TranslateMessage("percent")
+```
+
+零枚 ParamArray 实参时，装箱站发一枚 `SAFEARRAY* _pa_N = NULL;` 再把它交给形参。
+旧发码是「边建条件边发 if 链」（[cgen_select.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/stmt/cgen_select.cpp) 非变体档）：
+第 N 条 Case 的条件在**上一条 Case 的体内**求值，于是这枚声明发在体内，而
+`} else if (...)` 那一行在体外 —— 作用域外 ⇒ C2065。实测 13 枚里
+`_pa_18` 恰好是首条、落在 `if` 之前（编过了），后 12 枚（`_pa_19.._pa_30`）全红。
+
+### 48.2 修法（把「建条件」与「发 if 链」拆成两趟）
+
+与同文件**变体档那条链早就采用的次序**对齐（那里把 `labelDecls` 统一提到 if 链之前，
+注释写明了「第二枚标签的声明会落在 `}` 与 `else if` 之间（非法 C）」）：
+先遍历所有 Case 只把条件串收进 `clauseConds`，再单独一趟发
+`if / } else if / 体`。物化语句（`_pa_N`、标签临时量等）于是全部落在 `if` 之前、
+与 `if` 同一层块内。**没有物化语句时发码逐字节不变**（只是把字符串的拼接次序
+前移），因此不触碰形状门。
+
+修后实读（`tests/pd_selparama/SelPa.bas`，与 PD 同形的最小夹具）：
+
+```c
+    SAFEARRAY* _pa_1 = NULL;
+    SAFEARRAY* _pa_2 = NULL;
+    SAFEARRAY* _pa_3 = NULL;
+    if ((vb6_StrCmp(_vb6_select_0, vb6_BSTR_FromStr(L"%")) == 0) || (vb6_StrCmp(_vb6_select_0, vb6_Tr(vb6_BSTR_FromStr(L"percent"), _pa_1)) == 0)) {
+        vb6_ret_UnitId = 0;
+    } else if (... _pa_2 ... _pa_3 ...) {
+```
+
+PD 侧同源复现（`.temp/paprobe`，`Units.bas + pdTranslate.cls`）：`_pa_18.._pa_30`
+现在全部排在 `if` 之前，行 177/179/181/183/185/187/189 七条 `if / else if` 里不再有
+块外引用。
+
+### 48.3 夹具与正反针
+
+- 新增 `tests/pd_selparama/SelPa.bas`（`Select Case` 两条标签各带一枚 ParamArray 调用的
+  零实参形 + 一枚带实参形）；
+- `Test-CodegenNote "pd_select_paramarray"`：正面钉
+  `SAFEARRAY* _pa_3 = NULL; if (`（声明紧贴 if 链之前）与 `_pa_2` 的调用点；
+  反面钉 `vb6_ret_UnitId = 0; SAFEARRAY* _pa_2 = NULL;`（旧坏形状）；
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=195 FAIL=0 SKIP=0**（+1）。
+
+### 48.4 构建与资源
+
+本机增量构建：空闲 **5.98 GB**（仍低于 8 GB 硬线，`CMAKE_BUILD_PARALLEL_LEVEL=1`，
+1 TU + 2 链接，未进交换）。本地不做整工程 emit；探针走
+`.temp/**` 的最小 `.vbp`（`--output-dir`），中间产物落在 `%TEMP%\C3C`。
+
+### 48.5 范围与未完
+
+- 本刀只改**非变体档** `Select Case` 的发码次序；变体档本来就是这个次序，未动。
+- 已知残留风险：Case 标签里调**带实参**的 ParamArray 过程时，除 `_pa_N` 外还会落
+  `vb6_PA_Add` 一类语句，同样会被提到 if 链之前 —— 位置合法（同一块内），
+  但求值时机变成「全部标签先算」；与变体档的既有取舍一致，PD 里未观测到该类标签。
+- C2065 下一站（#3 实读行号）：`pdPSDLayer.c(4713,4742,5183,5212)` 的 `_vcmp_0..3`、
+  `WindowState` 4 条（`Interface.c:1269,1356`、`FormScreenVideo.c:1420`、
+  `FormScreenVideoPrefs.c:799`）、`pdResize.c:799,800,802,803` 的
+  `vb6_UserControl_cmbWidthUnit/cmbHeightUnit`、`OLEDropMode`（`Processor.c:1176,1185`）、
+  `FormMain.c:2455` 的 `HotkeyManager`、`FormExportLayers.c:754` 的 `cmdExportSettings`、
+  `Dialogs.c:625` 的 `fi_HandleCopy`，最后是族② UDT 裸名。
+
+## §49 C2065 族① 第四站 —— `WindowState` 写侧缺配对出口（4 条）
+
+### 49.1 根因（#3：`Interface.c(1269,1356)`、`Tools_ScreenVideo.c`、`Tools_ScreenVideoPrefs.c`）
+
+读侧的窗体伪属性表 [form_pseudo.hpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/common/form_pseudo.hpp#L89)
+早就有 `{"windowstate", "vb6_GetWindowState", FPQ_NONE, true}`；写侧
+[getControlPropWriteFn](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/cgen_util_ctrl.cpp#L867-L877)
+的 `case FrmControlType::Form` 里**没有**这一行。于是
+`FormMain.WindowState = vbNormal`（`Interface.bas` ×2、`Tools_ScreenVideo.frm:947`、
+`Tools_ScreenVideoPrefs.frm:246`）落「Module.var」回退，发成裸
+`WindowState = 0;`（C2065）。读侧一直是好的，这正是
+「赋值只问写表、读问读表」两条口径没配对的老坑（同类注释见同函数 `currentx/currenty`、
+`drawwidth` 两行）。
+
+### 49.2 修法（补一行，走配对出口）
+
+```cpp
+        if (propLower == "windowstate") return "vb6_SetWindowState";
+```
+
+`vb6_SetWindowState(void* hwnd, int32_t val)` 早就在
+[vb6forms_widget.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/vb6forms_widget.c#L154)
+里（`vb6_GetWindowState` 的配对），不需要新 RTL。
+
+### 49.3 修后实读
+
+- `Interface.bas + MainWindow.frm`：
+  `vb6_SetWindowState(vb6_form_hwnd_FormMain(), 0);  /* external form prop write */`
+  （读侧仍是 `vb6_GetWindowState(vb6_form_hwnd_FormMain())  /* external form prop */`）；
+- `Tools_ScreenVideo.frm + Tools_ScreenVideoPrefs.frm + MainWindow.frm`：
+  两处分别 `vb6_SetWindowState(vb6_form_hwnd_FormMain(), 0 / 1);`，裸
+  `WindowState = …` 归零。
+- ⚠ 复现注意：只发**写方窗体**（不带声明该窗体名的 `MainWindow.frm`）时，
+  `knownFormModuleNames_` 里没有 `formmain`，走的是另一条回退 ——
+  发 `vb6_FormMain_WindowState = 0;  /* Module.WindowState */`。整编是整工程，
+  不会落这一支；夹具必须两枚窗体一起给（见 49.4）。
+
+### 49.4 夹具与正反针
+
+- 新增 `tests/pd_formstate/{frmWriter.frm,frmOther.frm}`：`frmWriter` 里
+  `frmOther.WindowState = vbMaximized`；
+- `Test-CodegenNote "pd_form_windowstate_write"`：正面钉
+  `vb6_SetWindowState(vb6_form_hwnd_frmOther(), 2); /* external form prop write */`，
+  反面钉 `WindowState = 2`；
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=196 FAIL=0 SKIP=0**（+1）。
+
+### 49.5 资源与未完
+
+本机增量构建：空闲 **6.48 GB**（仍低于 8 GB 硬线，`CMAKE_BUILD_PARALLEL_LEVEL=1`，
+1 TU + 2 链接）。
+
+- `_vcmp_0..3`（`pdPSDLayer.c` 4 条）：本地按 HEAD 复现 `pdPSDLayer.cls`，
+  70 处 `_vcmp_*` 声明/使用全配对，无「先用后声」；与 §48 的 Select Case 标签
+  同源的可能性高，**以 #5 整编对照为准**，未单独改码。
+- 下一站：`pdResize.c(799,800,802,803)` 的 `vb6_UserControl_cmbWidthUnit/cmbHeightUnit`
+  → `OLEDropMode`（`Processor.c:1176,1185`）→ 零散 3 条（`HotkeyManager` /
+  `cmdExportSettings` / `fi_HandleCopy`）→ 族② UDT 裸名。
+
+## §50 C2065 族① 第五站 —— UC 自限定控件 `UserControl.<控件>`（4 条）
+
+### 50.1 根因（#3：`pdResize.c(799,800,802,803)`）
+
+`Controls\pdResize.ctl:733` 写的是 `UserControl.cmbWidthUnit.ListIndex = …`。
+VB6 里 UC 模块的 `UserControl` 就是这枚 UC 自身的对象（与 `Me` 同义），
+`UserControl.<名>` 指向它的**设计期子控件**。发码把它当「宿主伪对象 + 成员」，
+走 [hostPseudoRtlSymbol](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/cgen_util_com.cpp#L505)，
+拼出 `vb6_UserControl_cmbWidthUnit` —— 宿主伪成员表里没有控件名，也就没人声明它 ⇒ C2065。
+
+### 50.2 修法（在宿主伪对象那一支之前，先问控件表）
+
+[cgen_expr_member_m22_module.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_m22_module.inc#L144-L164)
+里，`hostPseudoIsObject(modName2)` 那一支原本直接发宿主符号。新增一问：
+成员名命中 `knownFormControls_`（本模块设计期控件表）⇒ 按**裸控件名**的唯一出口
+发 `vb6_hwnd_<原拼写>`（`knownFormControlOriginalNames_` 给原拼写，`cIdent` 折名），
+其后成员再交给 `formCtrlSlot` 那条既有码头 —— 与 `Me.<控件>` 走同一条。
+不是控件名时一字不动（`UserControl.hDC` / `Ambient.*` 等仍走宿主伪对象表）。
+
+### 50.3 修后实读
+
+- `Controls\pdResize.ctl`：`vb6_UserControl_cmbWidthUnit` 归零，改为
+  `vb6_ComSetProp(vb6_hwnd_cmbWidthUnit, L"ListIndex", vb6_ComPackValue(…));`、
+  `vb6_ComGetIntProp(vb6_hwnd_cmbWidthUnit, L"ListIndex")`、以及
+  `vb6_ComCall(vb6_hwnd_cmbWidthUnit, L"UpdateAgainstCurrentTheme", NULL, 0)`
+  （`cmbHeightUnit` 同）。
+- 对照实验：把同一句改写成 `Me.cmbWidthUnit…` 发码一致（`vb6_hwnd_cmbWidthUnit`），
+  证明两条写法现已同一出口。
+
+### 50.4 夹具与正反针
+
+- 新增 `tests/pd_uctrlqual/UcQual.ctl`：UC 内 `Begin VB.ComboBox cmbWidthUnit`，
+  过程里读 `UserControl.cmbWidthUnit.ListIndex`；
+- `Test-CodegenNote "pd_uc_self_qualified_control"`：正面钉
+  `vb6_ChkLong(vb6_hwnd_cmbWidthUnit.ListIndex)`，反面钉 `vb6_UserControl_cmbWidthUnit`；
+  只钉**限定符解析**这一层（其后成员按控件类型走 COM 还是结构体不在本题范围）；
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=197 FAIL=0 SKIP=0**（+1）。
+
+### 50.5 资源与未完
+
+本机增量构建：空闲 **5.24 GB**（低于 8 GB 硬线，`CMAKE_BUILD_PARALLEL_LEVEL=1`，
+1 TU + 2 链接）。
+
+下一站：`OLEDropMode`（`Processor.c:1176,1185`）→ `FormMain.c:2455` 的 `HotkeyManager`
+→ `FormExportLayers.c:754` 的 `cmdExportSettings` → `Dialogs.c:625` 的 `fi_HandleCopy`
+→ 族② UDT 裸名（`PD_MenuEntry` 10 条等，需先按工程上下文复现）。
+
+### 50.6 截断审计（步数上限打断后重入）
+
+- 截断时状态：`git status --short` 只有本 §50 的 3 个 `M` + 1 个 `?? tests/pd_uctrlqual/`，
+  外加与本线无关的 `?? .zcodeignore`；`git diff --stat` 共 3 文件 71 行插入，无冲突标记、
+  无半截函数。
+- 保留：§50 整组（M22 片段 + 夹具 + 回归针 + 本节），判定依据是三项俱全 ——
+  代码可编过（本机增量构建）、夹具正反针实测有读数、`-Category syntax` PASS=197 FAIL=0。
+- 回退：**无**。本轮没有需要 `git checkout --` 的半截改动；`.zcodeignore` 非本线产物，不动。
+- 提交：`7362a58c`（显式路径 4 个），已双推 `origin`/`github` 的 `dev`。
+  §42.6（整编 #3 的 C2039 族②行号与验收读数）在截断前已落盘，本次未重跑。
+
+## §51 C2065 族① 第六站 —— 窗体 `OLEDropMode` 写侧缺配对出口（2 条）
+
+### 51.1 根因（#3：`Processor.c(1176,1185)`）
+
+`Modules\Processor.bas:999/1015` 写 `FormMain.OLEDropMode = vbOLEDropNone / vbOLEDropManual`。
+读侧 `form_pseudo.hpp` 从来没有这一格，写侧 `getControlPropWriteFn` 的 Form 分支也没有
+⇒ 落 Module.var 回退，发出裸 `OLEDropMode = 0;`（C2065 ×2）。窗体自己的裸写
+（`OLEDropMode = 1`）同样落空 —— 发送形状一模一样。RTL 侧其实早就有放置目标的
+三件套（`vb6_OLEDrop_Register / Revoke / SetHandler`），只是没有「按模式切」的入口。
+
+### 51.2 修法
+
+1. **写侧登记**：[cgen_util_ctrl.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/cgen_util_ctrl.cpp#L877-L881)
+   Form 分支加 `oledropmode → vb6_SetOLEDropMode`。跨窗体（`FormMain.`）与窗体模块内
+   裸写两条路都走这张表，一处登记两边同时收口。
+2. **RTL 配对出口**：[vb6forms_oledd.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/vb6forms_oledd.c)
+   新增 `vb6_SetOLEDropMode(void* hwnd, int32_t val)`：非 0 → Register、0 → Revoke。
+   同时给 `Vb6OLETarget` 加 `registered` 位，把「注册状态」与「事件槽」分开 ——
+   `Revoke` 只清注册位、**保留事件回调**，这样 Processor 的「关掉再打开」不必重新挂
+   handler（否则重开之后掉下来的文件没人接）；`Register` 也不会再把「只有事件槽」误当
+   已注册。
+3. **事件接线**：[cgen_form_show.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/module/cgen_form_show.inc)
+   在 `vb6_LoadForm` 之前，把本窗体的 `Form_OLEDragOver/Drop`（也认 `<窗体名>_` 前缀）
+   按控件那条同一出口 `vb6_OLEDrop_SetHandler` 挂上（kind 0=Over / 1=Drop）；
+   设计期 `OLEDropMode<>0` 时再 `vb6_OLEDrop_Register`。没有这一步，写侧即使发对也是空转。
+   设计期取值由 [cgen_form_prelude.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/module/cgen_form_prelude.inc)
+   新读的 `formOLEDropMode` 提供（与 `formBorderStyle` 同一个读法）。
+
+### 51.3 实读（本机 emit，`.temp/oledrop`）
+
+```
+vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FormMain, 0, (void*)vb6_FormMain_Form_OLEDragOver); }
+vb6_OLEDrop_SetHandler((void*)vb6_hwnd_FormMain, 1, (void*)vb6_FormMain_Form_OLEDragDrop); }
+vb6_OLEDrop_Register((void*)vb6_hwnd_FormMain);  /* 设计期 OLEDropMode=1 */
+vb6_SetOLEDropMode(vb6_hwnd_FormMain, 1);  /* bare form prop: OLEDropMode */
+vb6_SetOLEDropMode(vb6_form_hwnd_FormMain(), 1);  /* external form prop write */
+vb6_SetOLEDropMode(vb6_form_hwnd_FormMain(), 0);  /* external form prop write */
+```
+
+`--arch x86` 整编该探针通过（`oledrop.exe` 产出），即 RTL 新函数与生成码两侧签名对齐。
+
+### 51.4 夹具 / 回归
+
+- `tests/pd_oledrop/{FormMain.frm,Proc.bas}`：设计期 `OLEDropMode=1` + 两条
+  `Form_OLEDrag*` 处理器；模块里 `FormMain.OLEDropMode = vbOLEDropManual/None`。
+- `run_tests.ps1` 新针 `pd_form_oledropmode`：正面三形状（跨窗体写 0、Drop 回调接线、
+  设计期注册），反面 `OLEDropMode = 0;`。
+- `-Category syntax` ⇒ **PASS=198 FAIL=0 SKIP=0**。
+
+### 51.5 资源与下一站
+
+空闲物理 6.18 GB（< 8 GB 硬线），按先例 `CMAKE_BUILD_PARALLEL_LEVEL=2` 增量构建
+（5 个 TU），探针编译同样低载荷。下一站按 §37.8：`FormMain.c:2455` 的 `HotkeyManager`
+→ `FormExportLayers.c:754` 的 `cmdExportSettings` → `Dialogs.c:625` 的 `fi_HandleCopy`
+→ 族② UDT 裸名。
+
+## §52 C2065 族① 第七站 —— `Not <控件> Is Nothing` 的裸控件名（1 条，FormMain.c:2455）
+
+### 52.1 根因
+
+`MainWindow.frm:2393`：
+
+```vb
+If (Not HotkeyManager Is Nothing) Then HotkeyManager.ReleaseResources
+```
+
+第二句（成员访问）发得对：`vb6_ComCall(vb6_hwnd_HotkeyManager, L"ReleaseResources", …)`。
+第一句左操作数是**裸标识符**，`Is` 的消费点在
+[cgen_expr_binary.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/expr/cgen_expr_binary.cpp)
+里只把两个操作数的发码文本直接拼 `==` ⇒ `HotkeyManager` 原样落地，C2065。
+
+VB6 里 `Is` 比的是**对象同一性**，不触发默认成员 —— 裸控件名在这一格的含义是
+"控件对象本身"，它不是默认属性值（`x = Text1` 才是默认属性）。所以这一格需要的
+正是 `ctrlObjectRefExpr`（设计期控件 → 句柄槽）那位唯一出口。
+
+### 52.2 修法
+
+`visit(BinaryExpr)` 的 `BinaryOp::Is` 分支、`varsHoldComWrapper` 剥壳**之前**加一小段：
+操作数 AST 是 `IdentifierExpr`、名字在 `knownFormControls_`、且没有被局部变量遮蔽
+（`knownLocalVars_`）⇒ `slot = ctrlObjectRefExpr(lower, 原拼写)`。两条操作数独立判。
+只动 `Is` 这一格，其它二元运算的裸名语义（默认属性/内置常量）一字不动。
+
+### 52.3 实读
+
+探针（`.temp/oledrop`，窗体带 `Begin PhotoDemon.pdAccelerator HotkeyManager`）：
+
+```
+if (((((int32_t)((-(vb6_hwnd_HotkeyManager == NULL)))) != 0) ? 0 : -1)) {
+    vb6_ComVarFree((void*)vb6_ComCall(vb6_hwnd_HotkeyManager, L"ReleaseResources", NULL, 0));
+```
+
+### 52.4 夹具 / 回归
+
+- `tests/pd_ctrlisnothing/FrmIsNothing.frm`：`Begin VB.TextBox txtDummy` +
+  `If Not txtDummy Is Nothing Then txtDummy.Text = "x"`（不依赖 OCX）。
+- 新针 `pd_ctrl_is_nothing`：正面 `vb6_hwnd_txtDummy == NULL`，反面 `(txtDummy == NULL)`
+  （防退化成裸名）。
+- `-Category syntax` ⇒ **PASS=199 FAIL=0 SKIP=0**。
+
+### 52.5 下一站
+
+`FormExportLayers.c:754` 的 `cmdExportSettings`（族①剩 2 条：`cmdExportSettings`、
+`Dialogs.c:625` 的 `fi_HandleCopy`）。
+
+## §53 C2065 族① 第八站 —— UC 未建模方法空操作的接收者（1 条，FormExportLayers.c:754）
+
+### 53.1 根因
+
+`Forms\File_Export_Layers.frm:214`（`cmdBar_ExtraValidations` 里）：
+
+```vb
+cmdExportSettings.SetFocus
+```
+
+`cmdExportSettings` 是 `pdButton`（工程内 UserControl）实例，`SetFocus` 不在
+`resolveClassMemberCall` 的表里 ⇒ 落 [cgen_call.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/stmt/cgen_call.cpp)
+「未建模 → 空操作」那条腿。该腿为了保留接收者引用发 `(void)<接收者>;`，
+而接收者文本是从 `emitExpr(object)` 直接取的 —— 裸控件名在这一格不是 C 标识符，
+发成 `(void)cmdExportSettings;` ⇒ C2065。
+
+注意：只把该窗体单独 emit **不复现**（控件退化成未知 OCX，走 COM 腿）；
+必须把 `Controls\pdButton.ctl` 一起给（`Begin PhotoDemon.pdButton` 要能对到工程类）
+才落这条腿 —— 复现方法记在这里，免得下次又按"单窗体检"误判已修。
+
+### 53.2 修法
+
+空操作腿里，接收者 AST 是裸标识符且命中 `knownFormControls_`（局部变量遮蔽优先）
+⇒ 用 `ctrlObjectRefExpr` 取句柄槽，再发 `(void)vb6_hwnd_…;`。只动"未建模空操作"
+这一格，其它 UC 成员调用不动。
+
+### 53.3 实读
+
+```
+(void)vb6_hwnd_cmdExportSettings;  /* vbeclipse: SetFocus 未建模于 pdButton, 空操作 */
+```
+
+### 53.4 夹具 / 回归
+
+- `tests/pd_ucnoop/{FrmUcNoop.frm,UcNoop.ctl}`：UC 只有 `UserControl_Initialize`，
+  窗体过程 `ucTest.SetFocus`。
+- 新针 `pd_uc_unmodeled_noop_receiver`：正面 `(void)vb6_hwnd_ucTest; /* vbeclipse: SetFocus 未建模于 UcNoop`，
+  反面 `(void)ucTest;`。
+
+## §54 C2065 族① 第九站 —— 跨窗体用户自定义 Property Let（1 条，Dialogs.c:625）
+
+### 54.1 根因
+
+`Modules\DialogManager.bas:356`：
+
+```vb
+Load dialog_ToneMapping
+dialog_ToneMapping.fi_HandleCopy = fi_Handle
+```
+
+`fi_HandleCopy` 是 `Forms\Dialog_ToneMapping.frm:368` 的 `Public Property Let`
+（不是窗体内建属性）⇒ 跨窗体写侧只认 `getControlPropWriteFn` 的 Form 内建表，
+查空后落 Module.var 回退，发裸 `fi_HandleCopy = fi_Handle;` ⇒ C2065。
+同模块里的 `ShowDialog`（Sub）走 `findModuleQualifiedFunction` 一直是对的，
+缺的只是 Property Let 这一种 kind。
+
+顺带核实：PD 里同形的 `FormResizeContentAware.ResizeTarget = ResizeTarget`
+（DialogManager.bas:331）之所以不报错，是**右值恰好也叫 ResizeTarget**（外围 Sub 的
+形参）—— 裸名落到形参上，实际是自赋值空转，不是"已支持"。本条修完这类写才是真发出去。
+
+### 54.2 修法
+
+[cgen_assign_stmt_special.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/stmt/cgen_assign_stmt_special.inc)
+在「外窗体内建属性写」之后补一格：目标对象是窗体模块名、成员在模块作用域里是
+**PropertyLet** 且归属就是这枚窗体（`isExternal && sourceModule == objLower`，
+与 `findModuleQualifiedFunction` 同一归属判定）⇒ 发
+`vb6_<窗体>_prop_let_<属性>(值);`。这是同窗体写法的同一枚出口，不新拼第三种形状。
+
+### 54.3 实读
+
+```
+vb6_dialog_ToneMapping_prop_let_fi_HandleCopy(fi_Handle);  /* external form prop let */
+```
+
+探针整编（`--arch x86 --output-dir`）出 `a.exe`，即声明/定义/调用三处对得上。
+
+### 54.4 夹具 / 回归
+
+- `tests/pd_formproplet/{Dialog_ToneMapping.frm,DialogManager.bas}`：与 PD 同形。
+- 新针 `pd_form_prop_let`：正面上面那行，反面 `/* Module.fi_HandleCopy */`。
+- `-Category syntax` ⇒ **PASS=201 FAIL=0 SKIP=0**（本条与 §53 同批）。
+
+### 54.5 下一站
+
+族①清单已清空（`OLEDropMode` ×2、`HotkeyManager` ×1、`cmdExportSettings` ×1、
+`fi_HandleCopy` ×1）。按 §37.8 转入 C2065 **族②** UDT 裸名（`PD_MenuEntry` 10 条等），
+需按工程上下文逐个复现。
+

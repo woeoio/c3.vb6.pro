@@ -717,7 +717,22 @@ void CCodeGen::visit(CallStmt& node) {
                 && params090g.empty() && !builtin090g
                 && resolveClassMemberCall(cls090g, maExpr090g.memberName).empty()) {
                 emitExpr(*maExpr090g.object);
-                c_.emitLine("(void)" + lastExpr_ + ";  /* vbeclipse: "
+                // 账 §53: 接收者是**本窗体的设计期控件**时, 裸名不是 C 标识符 ——
+                // 它是"控件对象", 唯一出口仍是 ctrlObjectRefExpr (与 With 块 /
+                // `Is Nothing` / 对象形参同一答)。整编实测 FormExportLayers.c:754
+                // `cmdExportSettings.SetFocus` 落到这个空操作腿, 发成
+                // `(void)cmdExportSettings;` ⇒ C2065。
+                std::string recv090g = lastExpr_;
+                if (maExpr090g.object
+                    && maExpr090g.object->kind == ASTNodeKind::IdentifierExpr) {
+                    const auto& idR090g = static_cast<const IdentifierExpr&>(*maExpr090g.object);
+                    const std::string lowR090g = Symbol::toLower(idR090g.name);
+                    if (!knownLocalVars_.count(lowR090g)
+                        && knownFormControls_.count(lowR090g)) {
+                        recv090g = ctrlObjectRefExpr(lowR090g, idR090g.name);
+                    }
+                }
+                c_.emitLine("(void)" + recv090g + ";  /* vbeclipse: "
                             + maExpr090g.memberName
                             + " 未建模于 " + cls090g + ", 空操作 */");
                 return;

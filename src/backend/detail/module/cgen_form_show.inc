@@ -124,6 +124,34 @@
                         + cIdent(formName) + ", (void*)" + resizeFn29 + "); }  /* Fix <vbeclipse> rev29 */");
         }
     }
+    // OLE 拖放 (P20-44): 窗体自己当放置目标。事件处理器与控件那条同一出口
+    // (`vb6_OLEDrop_SetHandler`, 生成签名与 RTL 的 Vb6OLEDropCb 一致, 不要 thunk);
+    // 设计期 OLEDropMode<>0 才在 load 时注册 —— 运行期由 `vb6_SetOLEDropMode` 切。
+    // 没有这一段, `FormMain.OLEDropMode = vbOLEDropManual` 即使发对了也是空转。
+    {
+        std::string odHwnd29 = "vb6_hwnd_" + cIdent(formName);
+        auto hasOwnOD29 = [&](const std::string& nm) -> bool {
+            Symbol* sOD = symTab_.lookupModule(nm.c_str());
+            return sOD && !sOD->isExternal;
+        };
+        static const char* odEv29[2] = { "_OLEDragOver", "_OLEDragDrop" };
+        for (int odK29 = 0; odK29 < 2; odK29++) {
+            std::string odName29;
+            if (hasOwnOD29(std::string(formEvtBase334) + odEv29[odK29]))
+                odName29 = std::string(formEvtBase334) + odEv29[odK29];
+            else if (hasOwnOD29(formName + odEv29[odK29]))
+                odName29 = formName + odEv29[odK29];
+            if (odName29.empty()) continue;
+            std::string odFn29 = cProcName(odName29, AccessLevel::Private);
+            c_.emitLine("{ extern void " + odFn29 + "(void**, int32_t*, int16_t*, int16_t*, float*, float*);");
+            c_.emitLine("  vb6_OLEDrop_SetHandler((void*)" + odHwnd29 + ", "
+                        + std::to_string(odK29) + ", (void*)" + odFn29 + "); }");
+        }
+        if (formOLEDropMode != 0) {
+            c_.emitLine("vb6_OLEDrop_Register((void*)" + odHwnd29
+                        + ");  /* 设计期 OLEDropMode=" + std::to_string(formOLEDropMode) + " */");
+        }
+    }
     c_.emitLine("vb6_LoadForm(vb6_hwnd_" + cIdent(formName) + ");");
     c_.dedent();
     c_.emitLine("}");  // Load

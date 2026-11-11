@@ -242,6 +242,9 @@ int32_t vb6_OLEDrop_Register(void* hwnd);
 void    vb6_OLEDrop_Revoke(void* hwnd);
 void    vb6_OLEDrop_RevokeAll(void);
 void    vb6_OLEDrop_SetHandler(void* hwnd, int32_t kind, void* cb);
+//   写侧: `[Form.]OLEDropMode = …` 的配对出口 (0=无 → Revoke, 非 0 → Register)。
+//   窗体与控件共用同一枚 —— 两边语义都是「这枚 hwnd 是不是放置目标」。
+void    vb6_SetOLEDropMode(void* hwnd, int32_t val);
 //   DataObject 取值 (GetText 返回 BSTR 副本)
 //   造 DataObject (目标/源两侧都用): text 可空; files/fileCount 是 CF_HDROP 清单。
 //   **必须有原型**: 生成码会这样调 —— 漏原型 = 隐式 int = x64 指针截断 (实测崩)。
