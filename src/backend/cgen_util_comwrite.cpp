@@ -625,23 +625,35 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
         //   解箱档位与 cgen_expr_call_arg_variant.inc 的 Fix 092q/090r/049b 同口径
         //   (Long 档含 Integer/Byte/Boolean, Double 档含 Single/Date/Currency)。
         if (lastP.isByVal) {
-            if (!isVariantSlot(val, nullptr)) return val;  // P1.3: ast 不可得 (val 为形参)
+            // Fix 091x (C2440 void*→float/double): 裸晚绑定读 (vb6_ComCall 结果) 也是
+            // Variant 载体, 必须与本 switch 同口径解箱 —— 否则原样递进 float/int32_t
+            // 形参 ⇒ 'function': cannot convert from 'void *' to 'float'.
+            // 实测 PhotoDemon 每个 UserControl 的 UserControl_ReadProperties:
+            //   `With PropBag` 里 `FontSize = .ReadProperty("FontSize", 10)`
+            //   ⇒ vb6_pdDropDown_prop_let_FontSize(me, vb6_ComCall(...))
+            //   (pdDropDown.c 985/986, pdSlider.c 1114…, 共 30 + 13 条)。
+            const bool comRes091x = val.rfind("vb6_ComCall(", 0) == 0
+                || val.rfind("vb6_ComCallByDispid(", 0) == 0
+                || val.rfind("vb6_ComGetProp(", 0) == 0;
+            if (!comRes091x && !isVariantSlot(val, nullptr)) return val;  // P1.3: ast 不可得 (val 为形参)
+            const std::string varVal091x = comRes091x
+                ? ("vb6_VariantFromComResult(" + val + ")") : val;
             switch (lastP.type) {
                 case Vb6Type::String:
-                    return "vb6_VariantToString(" + val + ")";
+                    return "vb6_VariantToString(" + varVal091x + ")";
                 case Vb6Type::Integer:
                 case Vb6Type::Boolean:
-                    return "(int16_t)vb6_VariantToLong(" + val + ")";
+                    return "(int16_t)vb6_VariantToLong(" + varVal091x + ")";
                 case Vb6Type::Long:
-                    return "vb6_VariantToLong(" + val + ")";
+                    return "vb6_VariantToLong(" + varVal091x + ")";
                 case Vb6Type::Byte:
-                    return "(uint8_t)vb6_VariantToLong(" + val + ")";
+                    return "(uint8_t)vb6_VariantToLong(" + varVal091x + ")";
                 case Vb6Type::Single:
-                    return "(float)vb6_VariantToDouble(" + val + ")";
+                    return "(float)vb6_VariantToDouble(" + varVal091x + ")";
                 case Vb6Type::Double:
                 case Vb6Type::Date:
                 case Vb6Type::Currency:
-                    return "vb6_VariantToDouble(" + val + ")";
+                    return "vb6_VariantToDouble(" + varVal091x + ")";
                 default:
                     return val;
             }

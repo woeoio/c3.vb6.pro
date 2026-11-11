@@ -12800,6 +12800,14 @@ if ($Category -in @("all", "syntax")) {
         "vb6_type_Cpx _vb6_anytmp0 = vb6_Cx_c_add(",
         "vb6_Cx_c_mul((void*)&_vb6_anytmp0") @(
         "(intptr_t)(vb6_Cx_c_add(")
+    # C2440 'function': cannot convert from 'void *' to 'float' (PhotoDemon
+    # pdDropDown.c 985/986、pdSlider.c 1114… 共 30 + 13 条): 每个 UserControl 的
+    # UserControl_ReadProperties 都是 `With PropBag` 里 `FontSize = .ReadProperty(...)`。
+    # 裸属性写的 RHS 是裸晚绑定调用 (ComCall 交回 void* 承载的 COM VARIANT*),
+    # packLetValueArg 的 ByVal 档必须按 Variant 同口径解箱。
+    Test-CodegenNote "prop_let_comresult" @("$Tests\propcomlet\propcomlet.vbp") @(
+        "vb6_CtlBox_prop_let_FontSize((void*)me, (float)vb6_VariantToDouble(vb6_VariantFromComResult(") @(
+        "prop_let_FontSize((void*)me, vb6_ComCall(")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
