@@ -3903,6 +3903,55 @@ COM VARIANT*）；`isVariantSlot` 对 ComCall 结果返回 false ⇒ 原样递�
 **纪律记录**：构建前空闲内存 6.4 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
 
 
+### 56.15 C2224 `left of '.hWnd' must have struct/union type`：窗体值表达式上的属性读（16 条）
+
+**目标桶**：C2224 `'left of '.hWnd' must have struct/union type'` **16 条**，整编落点：
+`ColorManagement.c(1392)`、`dialog_GradientEditor.c(1918/2008)`、`FileMenu.c(352)`、
+`Macros.c(480/656)`、`OS.c(1306)`、`Palettes.c(7375/7456)`、`pdLUT3D.c(1627)`、
+`Plugin_EZTwain.c(426/478)`、`Printing.c(400)`、`Saving.c(1564)`、
+`SelectionFiles.c(560/641)`。
+
+**根因**：接收者是**窗体值表达式**，C 侧类型只有一枚 HWND `void*`，但发码拼了结构体成员：
+
+| 源码形状 | 修前发码 | 出处 |
+| --- | --- | --- |
+| `GetModalOwner().hWnd` | `vb6_Interface_GetModalOwner().hWnd` | `Public Function GetModalOwner() As Form`（Interface.bas:1392），15 处 |
+| `Forms(0&).hWnd` | `vb6_Forms_Item((int32_t)(0L)).hWnd` | OS.bas:1250 |
+
+两条都落到 `cgen_expr_member_class_fallback.inc` 的最终兜底 `obj + "." + member`：
+`inferClassTypeOfExpr` 只认 `SymbolKind::Class`（窗体模块/`Form` 都不是），
+`inferUdtTypeOfExpr` 也空 ⇒ 没有任何一条窗体判据在链上。
+
+**修法**：新增 `receiverIsFormValue090(objAst, objText)`（同文件、`Fix 091y`），两半判据：
+1. 接收者静态类型是窗体 —— 发射文本以 `vb6_Forms_Item(` 开头（内置 Forms 元素），
+   或 AST 是调用、被调函数符号的 `variableTypeName` ∈ {`Form`, `VB.Form`, 工程窗体模块名}；
+2. 成员名在窗体属性表里查得到（`getControlPropReadFn(FrmControlType::Form, …)` 非空）。
+
+两条都成立才在最终兜底前改发 `readFn(obj)`，与正例 `FormMain.hWnd`
+（`vb6_GetControlHwnd(vb6_form_hwnd_FormMain())`）走**同一张表**（`form_pseudo.hpp`）。
+不会误抢 void* COM 对象的同名成员（那类没有这两半判据）。
+
+**实测**（`.temp\formshwnd`：`FormB.frm` 里 `GetModalOwner() As FormA` /
+`GetOwnerForm() As Form` / `FormA.hWnd` / `Forms(0&).hWnd`）：
+
+| | 发码 |
+| --- | --- |
+| 修前 | `h = vb6_ChkLong(vb6_FormB_GetModalOwner().hWnd);`<br>`h = vb6_ChkLong(vb6_Forms_Item((int32_t)(0L)).hWnd);` |
+| 修后 | `h = vb6_ChkLong(vb6_GetControlHwnd(vb6_FormB_GetModalOwner()));`<br>`h = vb6_ChkLong(vb6_GetControlHwnd(vb6_FormB_GetOwnerForm()));`<br>`h = vb6_ChkLong(vb6_GetControlHwnd(vb6_Forms_Item((int32_t)(0L))));` |
+| 正例（未动） | `h = vb6_GetControlHwnd(vb6_form_hwnd_FormA())  /* external form prop */;` |
+
+**钉子**：`tests/formhwndval/`（`FormA.frm` / `FormB.frm` / `formhwndval.vbp`）+
+`Test-CodegenNote "form_value_hwnd"`（正向三条 + 反向禁止 `.hWnd);`）。
+
+**`-Category syntax`**：PASS=209 FAIL=0（上一刀 208，+1 = 新钉子）。
+
+**形状门归因**：期望 633 / 实得 646 / 相同 630 / 哈希不同 **3** / 缺席 0 / 多出 13。
+3 份哈希不同仍是 `FrmEvents.vbp` / `PDImages.bas` / `VBFlexGridDemo.vbp` —— 与 §56.13、
+§56.14 同一批（待批 bless），且三份语料里 `.hWnd` 只有 `Me.hWnd`（MeExpr 走 form_builtin，
+本刀不经手）与 UDT 字段 `.hWndOwner`，无「窗体值表达式」形状 ⇒ 本刀对存量语料形状差 **0**。
+13 份新增输入 = 前两刀 11 + 本刀 `tests/formhwndval/FormA.frm`、`FormB.frm`。
+
+**纪律记录**：构建前空闲内存 6.8 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
 
 
 
