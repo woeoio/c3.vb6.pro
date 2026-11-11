@@ -2768,6 +2768,13 @@ if (vb6_argtmp_vb6_cls_ucTreeViewPlus_0) vb6_cls_ucTreeViewPlus_Release(vb6_argt
   本刀只是把同一档套到 UC 形参上；`Node` 临时量序号 0→1 是重排，不是新增站点。
 - 语料其余 631 行 `ascii256` 全同 ⇒ §39/§40 与本刀对存量发码零影响（除这一格）。
 
-**处置**：这一行属**本刀预期语义**（对象位交实例指针），需要重新登记（bless）。
-按纪律先归因、再等批准，**尚未**写入 `emit-manifest.expected.txt`。
+**处置（已批准并完成）**：只登记这 1 行 —— `emit-manifest.expected.txt` 里
+`tests/ucTreeView/Proyecto1.vbp` 由 `sha256=edbf85a9… bytes=974547` 换成本次读数
+`sha256=ddd6fe8a… bytes=975179`；全文件 **1 增 1 删、行数 1018 不变**（BOM + 纯 CRLF 保持），
+其余 631 行逐行未动，**4 条既知环境差异（`tests/guisample/*` ×3、`TeeChartChartDisplay`）一律未登记**。
+复算：`compare_emit_manifest.ps1` ⇒ 相同 628 / 不同 4（即那 4 条既知）/ 缺席 0 / 多出 0。
+
+**性质**：这是**形状变化，不是语义变化** —— `+632 B` 唯一来源是 `Form2.frm:80` 的
+`cTE.Init TVP, "*.*"`：实参从复合字面量改为「落临时 + AddRef/Release 再取址」，
+交出去的实例指针不变（`vb6_UC_InstanceOf(vb6_hwnd_TVP)`），与相邻 `SelNode` 实参同形。
 
