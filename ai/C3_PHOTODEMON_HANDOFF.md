@@ -2820,7 +2820,45 @@ run `42942508353`，sha `7f5c6c9d`（= dev `ae184256` 的同一份 §42；**不�
 - `pdButtonStrip.c(283)`、`pdLabel.c(302)`：`Index` 不是 `vb6_UserControl_Extender_Type` 的成员。
 
 族② 的修法见 §43（`findModuleQualifiedFunction`），该修**不在本 run 里**，所以本 run 的 50 条
-是族②的「改前读数」；#4（`42947684024`）含 §43 之后的 dev，其 artifact 到位后在这里补改后读数。
+是族②的「改前读数」。
+
+> ⚠ 账更正（2026-11-11）：`.temp/pd_art_m3/` 落地的是 **#2** 的 artifact（TEMP 目录
+> `303862406400_9324`，`pd_build.codes.txt` 写 `C2039 88 / C2065 228`，且含 32 条族①
+> `pdResize.c tudWidth/tudHeight`），不是 #3。#3 的 54/50 以上表为准（其
+> run log 的 `Classify` 步给出 `C2039 error 54 TU=9`、`C2065 error 153 TU=78`），
+> 行号取自截断前那轮下载的真 #3 日志；本轮不重跑。
+
+### 42.6.1 整编 #4 读数（§43 改后）
+
+run `42947684024`，sha `2202e689`（= dev `6da14e92` 合入 `probe/photodemon-emit`，含 §43，
+**不含** §45 `2efc2c01` 及以后）。`BUILD_SECONDS=6074.8`、`EXE_EXISTS=False`、
+`PEAK_TREE_WS_MB=8893`、`MIN_FREE_PHYS_MB=4422`、`CL_DIAG=52096`。
+
+| 读数 | #2 | #3 | #4（本 run） |
+|---|---|---|---|
+| C2039 | 88 | 54 | **13** |
+| 族① 设计期子控件裸名 | 32 | 0 | 0 |
+| 族② `vb6_cls_pdImage` 链接收者 | 47 | 50 | **9** |
+| 非族②（`pdSelection.Top/Left` ×2、`Extender.Index` ×2） | 4 | 4 | 4 |
+| C2065 | 175 | 153 | 153 |
+
+族② 剩余的 9 条全在 `PDImages.c`，成员是**零参 Public Function 的裸调用**（不带括号）：
+
+| 成员 | 行号 |
+|---|---|
+| `IsSuspended` | 688, 696, 715, 727 |
+| `EstimateRAMUsage` | 716, 718, 728, 730 |
+| `SuspendImage` | 745 |
+
+即 `PDImages.GetImageByID(...).IsSuspended` 这类链，§43 已把接收者判成
+`vb6_cls_pdImage`，但成员位仍按**结构体字段**发 `->IsSuspended`，而该成员是函数
+（`vb6_cls_pdImage_IsSuspended(recv)`）—— 下一站在这里，不是结构体补字段。
+
+C2065 与 #3 相同（153），说明 §43 只动 C2039、未碰 C2065。族② UDT 裸名此时仍在
+72 条（`PD_Phrase` 10、`PD_MenuEntry` 10、`MergedEntry` 12、`PD_Contributor` 6、
+`GP_EncoderParameter` 5、`GradientPoint` 5、`PD_8bfNew` 5、`PD_JXLFramePreview` 3、
+`opj_image_comp` 3、`PDLanguageFile` 3、`PDPaletteEntry` 2、`PD_HistoryItem` 2、
+`MRUEntry` 2、`CoordEntry` 2、`ButtonEntry` 2），因为 #4 早于 §45。
 
 ### 42.7 bless 推送后的 CI 归因（本刀新红 = 2 条，已修）
 
@@ -3461,6 +3499,54 @@ vb6_dialog_ToneMapping_prop_let_fi_HandleCopy(fi_Handle);  /* external form prop
 ### 54.5 下一站
 
 族①清单已清空（`OLEDropMode` ×2、`HotkeyManager` ×1、`cmdExportSettings` ×1、
-`fi_HandleCopy` ×1）。按 §37.8 转入 C2065 **族②** UDT 裸名（`PD_MenuEntry` 10 条等），
-需按工程上下文逐个复现。
+`fi_HandleCopy` ×1）。按 §37.8 转入 C2065 **族②** UDT 裸名（`PD_MenuEntry` 10 条等）。
+
+## §55 截断审计 + C2065 族② 归因 + 整编 #5
+
+### 55.1 截断时状态（本轮开工原样读数）
+
+```
+$ git status --short
+?? .zcodeignore
+$ git diff --stat
+（空）
+$ git diff --cached --stat
+（空）
+```
+
+- **保留**：§50–§54 全部改动都已在提交 `7362a58c`…`67d4efeb` 内；`origin/dev` 与
+  `github/dev` 均在 `67d4efeb`，`rev-list --left-right --count` = `0 0`。
+- **回退**：无。没有半截改动可判，故**未执行** `git checkout --`。
+- `.zcodeignore` 是无关工具文件（非本线），未动。
+
+### 55.2 C2065 族② 第一站归因：`PD_MenuEntry` 10 条 = §45 同一个 `LenB` 出口
+
+不是猜名字，是三条互证：
+
+1. **旧码原文**：`git show ae184256:src/backend/detail/expr/cgen_expr_call_conv_varargs_lenb.inc`
+   里 `Fix 084h` 用 `rawArg.substr(19, comma-19)` 取类型名 —— 19 正好是
+   `vb6_sa_at(vb6_type_` 的长度，于是**把前缀剥掉**，发出 `(int32_t)sizeof(PD_MenuEntry)`。
+2. **站点数**：`tests/photodemon/Modules/Menus.bas` 的 `LenB(<UDT数组元素>.串字段)` 恰好
+   10 处（显式 `m_Menus(i).xxx` 5 处：764/927/1059/1296/1585；`With m_Menus(i)` 块内
+   `.xxx` 5 处：867/880/895/909/979），与 #3/#4 的 10 条一一对应。
+3. **现码实读**（dev `67d4efeb`，2 模块子集 `Menus.bas`+`Tools_Hotkeys.frm`，本机
+   `--emit-c`，`EXIT=0`）：裸名 `(?<![\w_])PD_MenuEntry` **0 命中**；
+   `vb6_LenB(VB6_SA_AT(vb6_type_PD_MenuEntry` **10 命中**；`sizeof(PD_MenuEntry` **0**。
+
+其余族② 名字同出口（`Sec45` 已改）：`MergedEntry` 12 条正是 §45 的原始读数；`CoordEntry`
+（`pdHashCoord.cls:313/314` 两处 `LenB(tmpHash(0))`）2 站 = 2 条；`MRUEntry`/`PDLanguageFile`
+等站点的**诊断条数可能多于源内 `LenB` 站点数**（同一表达式在临时量/比较里被发两次），
+所以「条数=站点数」只对部分模块成立，归因仍以出口唯一性为准 —— 该出口是全仓**唯一**
+会发裸 UDT 名的地方（`sizeof(` 的其它拼法全接 `vb6_type_` 前缀或变量名）。
+结论：族② 属于 **§45 已修**，需要 #5 的读数额为零来关闭。
+
+### 55.3 整编 #5 已发起
+
+- 探针分支合并：`965b6a64` = `Merge branch 'dev' into probe/photodemon-emit`（父
+  `67d4efeb`），已 push `origin` 与 `github`（Actions 跑在 `github` = `fxl447098457/c3test`）。
+- run `42960826666`（`pd_build_probe.yml`，`--ref probe/photodemon-emit`，sha `965b6a64`）。
+  另有一条 push 自动触发的同 sha run `42960808114`，已取消去重。
+- 预期：#5 含 §44–§54，#4 的 13 条 C2039 里的 9 条 `PDImages.c` 零参函数裸调用**不会**
+  自动消失（§43–§54 未动该出口）；C2065 应从 153 明显下降（族② 72 条 + 族① 已修条目）。
+  以实际读数为准，不预设。
 
