@@ -181,8 +181,14 @@
                 // 而 boxToVariant 给的是**值**。SafeArrayPutElement 会深拷贝
                 // (另配一只 BSTR/对象), 所以这里借用栈地址、发射后不额外释放,
                 // 也不调 VariantClear (那会把刚交给 SAFEARRAY 的副本再清一次)。
+                // C2440 §56.28: 临时必须是 vb6_VARIANT —— boxToVariant 的发码是
+                // `vb6_VariantFromValue(...)` / `vb6_VariantBool(...)`, 返回值都是
+                // vb6_VARIANT; 声明成 Win32 `VARIANT` 就 `initializing` C2440
+                // (PhotoDemon PDMath.c 825/831/837/843: ConvertArbitraryListTo* 的
+                // `listOfValues(i) = ...` 五处)。两者布局逐平台一致 (见
+                // vb6rtl_variant.h:35-75), 下面那枚 `(VARIANT*)&` 显式转换照旧。
                 std::string tmp091c = "_pav_" + std::to_string(tempCounter_++);
-                c_.emitLine("{ VARIANT " + tmp091c + " = " + boxToVariant(node.value.get(), value) + ";");
+                c_.emitLine("{ vb6_VARIANT " + tmp091c + " = " + boxToVariant(node.value.get(), value) + ";");
                 c_.emitLine("  vb6_PA_SetVariant(" + args091c + ", (VARIANT*)&" + tmp091c + "); }");
                 return;
             }

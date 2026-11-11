@@ -825,6 +825,20 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 std::string elemUdt = inferUdtTypeOfExpr(*call.callee);
                 if (!elemUdt.empty()) return elemUdt;
             }
+            // C2440 §56.27: `Mod.Fn(...)` —— 限定符是标准模块名、Fn 是返回工程 UDT 的
+            // Function。上面 804 那条只认裸名 callee, 于是
+            // `c_add(b(j), ComplexNumbers.c_mul(a(j), b(j)))` 的**第二枚实参**落
+            // intptr_t 兜底 ⇒ `(intptr_t)(struct)` C2440 (PhotoDemon
+            // Filters_Area.c 3673…、FormDroste.c 1044…、Drawing.c 1248/1378)。
+            // 与 G3/§43 的 findModuleQualifiedFunction 同一张表、同一匹配口径。
+            if (call.callee && call.callee->kind == ASTNodeKind::MemberAccessExpr) {
+                const Symbol* fnSymQ = findModuleQualifiedFunction(*call.callee);
+                if (fnSymQ && !fnSymQ->variableTypeName.empty()) {
+                    Symbol* udtSymQ = lookupTypeSymbol(fnSymQ->variableTypeName);
+                    if (udtSymQ && udtSymQ->kind == SymbolKind::UserDefinedType)
+                        return "vb6_type_" + cIdent(fnSymQ->variableTypeName);
+                }
+            }
             return "";
         }
         case ASTNodeKind::MemberAccessExpr: {

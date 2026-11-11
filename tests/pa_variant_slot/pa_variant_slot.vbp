@@ -1,0 +1,3 @@
+Type=Exe
+Module=PaSlot; PaSlot.bas
+Startup="PaSlot"

@@ -12825,6 +12825,22 @@ if ($Category -in @("all", "syntax")) {
         "vb6_type_Cpx _vb6_anytmp0 = vb6_Cx_c_add(",
         "vb6_Cx_c_mul((void*)&_vb6_anytmp0") @(
         "(intptr_t)(vb6_Cx_c_add(")
+    # 同族补口 (§56.27): 上面那刀只认**裸名** callee —— `Mod.Fn(...)` 返回 UDT 时
+    # inferUdtTypeOfExpr 的 IndexOrCallExpr 分支落空, 实参仍掉回 intptr_t 兜底:
+    # PhotoDemon `c_add(b(j), ComplexNumbers.c_mul(...))` ⇒ Filters_Area.c 3673…
+    # / FormDroste.c 1044… / Drawing.c 1248、1378 的 `(intptr_t)(struct)` C2440。
+    Test-CodegenNote "udt_ret_byref_arg_modqual" @("$Tests\cxmodqual\cxmodqual.vbp") @(
+        "vb6_type_Cpx _vb6_anytmp0 = vb6_CxMod_c_add(",
+        "vb6_CxMod_c_mul((void*)&_vb6_anytmp0",
+        "vb6_type_Cpx _vb6_anytmp1 = vb6_CxMod_c_mul(") @(
+        "(intptr_t)(vb6_CxMod_")
+    # §56.28: ParamArray 元素回写那一站的承接临时必须是 vb6_VARIANT。
+    # boxToVariant 交的是 vb6_VariantFromValue(...) (返回 vb6_VARIANT), 声明成
+    # Win32 VARIANT 就是 `initializing` C2440 (PhotoDemon PDMath.c 825/831/837/843)。
+    Test-CodegenNote "paramarray_variant_temp" @("$Tests\pa_variant_slot\pa_variant_slot.vbp") @(
+        "{ vb6_VARIANT _pav_",
+        "vb6_PA_SetVariant(vals, i, (VARIANT*)&_pav_") @(
+        "{ VARIANT _pav_")
     # C2440 'function': cannot convert from 'void *' to 'float' (PhotoDemon
     # pdDropDown.c 985/986、pdSlider.c 1114… 共 30 + 13 条): 每个 UserControl 的
     # UserControl_ReadProperties 都是 `With PropBag` 里 `FontSize = .ReadProperty(...)`。
