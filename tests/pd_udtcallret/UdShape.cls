@@ -16,3 +16,9 @@ Private m_Pen As pdPen
 Friend Sub TestBrush()
     m_Pen.SetPenColorRGBA m_Brush.GetBrushColorRGBA
 End Sub
+
+' 类模块里跨模块 `Mod.Fn()` —— pdCompositor.cls 那一站的形状。
+Friend Sub TestModQual()
+    Dim d As RectF
+    If pdGeom.TakeRect(d, Tools_Pencil.GetRect()) Then Debug.Print "ok"
+End Sub

@@ -12930,15 +12930,18 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_udtcallret\UdGeom.bas", "$Tests\pd_udtcallret\UdImg.cls",
         "$Tests\pd_udtcallret\UdHolder.bas", "$Tests\pd_udtcallret\UdBrush.cls",
         "$Tests\pd_udtcallret\UdPen.cls", "$Tests\pd_udtcallret\UdShape.cls",
-        "$Tests\pd_udtcallret\UdWic.bas", "$Tests\pd_udtcallret\UdUse.bas") @(
+        "$Tests\pd_udtcallret\UdWic.bas", "$Tests\pd_udtcallret\UdUse.bas",
+        "$Tests\pd_udtcallret\UdTools.bas") @(
         "vb6_type_Guid _vb6_anytmp0 = vb6_pdWic_GUID_NULL();",
         "vb6_type_RGBQuad _vb6_anytmp0 = vb6_pdBrush_GetBrushColorRGBA(me->m_Brush)",
         "vb6_type_RectF _vb6_anytmp0 = vb6_pdImg_GetBoundaryRectF((void*)vb6_pdHolder_GetImg())",
+        "= vb6_Tools_Pencil_GetRect(-1, 0);",
         "vb6_type_RectF _vb6_withret",
         "/* With obj ref (fn ret copy) */") @(
         "(intptr_t)(vb6_pdWic_GUID_NULL(",
         "(intptr_t)(vb6_pdBrush_GetBrushColorRGBA(",
         "(intptr_t)(vb6_pdImg_GetBoundaryRectF(",
+        "(intptr_t)(vb6_Tools_Pencil_GetRect(",
         "= &(vb6_pdImg_GetBoundaryRectF(",
         "(void*)vb6_pdImg_GetBoundaryRectF(srcImg)")
     # §56.28: ParamArray 元素回写那一站的承接临时必须是 vb6_VARIANT。
