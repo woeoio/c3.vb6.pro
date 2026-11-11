@@ -4743,10 +4743,10 @@ MemberAccessExpr 时先 `inferClassTypeOfExpr(object)` 定类，再按两张权�
 全 OK —— 新增的 Release 与被 AddRef 的引用一一配对，没有双释放/泄漏迹象。
 
 **结论**：这是 §56.29 想要的形状变化（同一族在 Photodemon 侧的 `m_AllTags(g,t).DB_StackIDs`
-也是这条推断），不是误伤。**待办：需用户确认后 `-Bless` 这一行并注明本归因**（既有输入改写
-的 bless 按停点规矩不擅自做）。
+也是这条推断），不是误伤。**已获用户批准并登记**（`emit-manifest.expected.txt` 的
+c50a4260 注块；来源 github/ci/emit-manifest 提交 38d92803）：改写 1 行 + 新增 8 行，
+登记后复算 666/666 逐行相同，`check_manifest_coverage` K1..K3 绿。
 
-**同批待登记（新输入，等 CI 43046660886 清单一次办）**：`tests/cxmodqual/{cxmodqual.vbp,
-ModCx.bas,ModUse.bas}`、`tests/pa_variant_slot/{pa_variant_slot.vbp,PaSlot.bas}`、
-`tests/pd_formcall/ModC.bas`、`tests/pd_udtfield_call/TagMod.bas`、`tests/udtret_byref/URetMod.bas`
-（9 行；.frm/.cls 不进清单）。
+**同批登记（新输入）**：`tests/cxmodqual/{cxmodqual.vbp,ModCx.bas,ModUse.bas}`、
+`tests/pa_variant_slot/{pa_variant_slot.vbp,PaSlot.bas}`、`tests/pd_formcall/ModC.bas`、
+`tests/pd_udtfield_call/TagMod.bas`、`tests/udtret_byref/URetMod.bas`（8 行；.frm/.cls 不进清单）。

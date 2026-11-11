@@ -111,7 +111,7 @@ sha256=3ca810b0c9eac0b02e84ce405ada0ebc041251ad687081f8c4deba96ca2c0b82 ascii256
 sha256=e261fcc2482c32d46b4359956ec26518298558e72b4b8d4c4b05f009b25459a3 ascii256=f7f1cf67d88f84f401c16c947e8f3cb6afa65436d7beb5f7ef0f4bb561739016 rc=0 bytes=299395 tests/Charts 2020/ucPieChart/Proyecto1.vbp
 sha256=5a86a0e124a23818c3320cc9f32e9d85059478e803e1c5a5d996d9e7f8dff4d3 ascii256=57f979a701b1fe76a4944bbd0bd6d6f343ca7943897d5507e075f41f55c6bf32 rc=0 bytes=378693 tests/Charts 2020/ucProgressCircular/Proyecto1.vbp
 sha256=0962879b38d35ab253c75f431b7d812faa4086cced4d6486b6788d07d765aa07 ascii256=89f20416f81f840a9b70358bc69cc8aa77809d82e07d3d1cbff5f547d2da66f3 rc=0 bytes=1002494 tests/Charts 2020/ucTreeMaps/Proyecto1.vbp
-sha256=a65cd48524b45a593b210a00ffa11fb7799888a75592f3aad14a503de87ab621 ascii256=627fee45e7ab783e363b49d297d3f97f3347d561815589a4628b28309cb7c11c rc=0 bytes=96510 tests/cls_inh/Inh.vbp
+sha256=e861bf0f407e993632baa421963676cda5f61fc3417ccd93373a1cb829b5ab52 ascii256=ee51979b2fb787b40640f4763f82dbb1375022f7b1bfb662f7d5e071f69e00e7 rc=0 bytes=97943 tests/cls_inh/Inh.vbp
 sha256=60cd8e43f597f94e2d2497b448f687987966d1633632ef039439d80a763ea75e ascii256=b8e9bacfefaa3e81883f0e1d1ea00515710750f2412a2de434ed4250ae34bf26 rc=0 bytes=33074 tests/cls_inh/InhMain.bas
 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ascii256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 rc=1 bytes=0 tests/cls_neg/ci_n02_not_class.bas
 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ascii256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 rc=1 bytes=0 tests/cls_neg/ci_n11_protected_in_interface.bas
@@ -693,6 +693,14 @@ sha256=6620cc1bd535c942b02d1d8c561364c92e92cb79d2c52b76009f2fe091c06d86 ascii256
 sha256=7067cb76f48edd3ec733b7a39bb935691ba89c31e14845e848168f05e6657bc3 ascii256=184b350d331b99def5dd57f3751f876d6a867fb660da13c87950dd7dd27c9de7 rc=0 bytes=1765 tests/pd_modqual/ModB.bas
 sha256=241ec2135348d9ee04519e82d800543a17b71e0f649912ea976a87c273d90916 ascii256=b66895d7d257140f84a30be287194fd1209765344e2b15a59a7b39a94d046076 rc=0 bytes=1402 tests/pd_modqual/ToolsA.bas
 sha256=aac840a6f0ce55c515a08966b07f94fe6fd567e423e9f312a923fad14ffd4b01 ascii256=55321b11335c3f3da8cae8c7a823e7d21d56565bfb2cdb2b8fbd927a93387fa3 rc=0 bytes=1442 tests/pd_modqual/ToolsB.bas
+sha256=4aef2a8940382962cd33307465d8e5a5dba8657d7e67f1f889003273d1236b07 ascii256=0634fff2ba98333105542bd1624394406b0843fa03fcdeb4c50b202ee5881ff5 rc=0 bytes=4762 tests/cxmodqual/cxmodqual.vbp
+sha256=82e26fb531be57f6e7051708e9db32c8c9c783e1f6a76fce09656e085a786d3a ascii256=9ce55d797c1e120d36cc9d1949eea02125d7cf6469129ad6192e129fc1d8ab4a rc=0 bytes=2260 tests/cxmodqual/ModCx.bas
+sha256=0208121cc576829d5e192981f1afba78e5d3a049faa35a8567b286b38452cffb ascii256=13b9f7f184abf7a54134c005662a25ff27a36a70dd65db3971baf6c4214c7e36 rc=0 bytes=1692 tests/cxmodqual/ModUse.bas
+sha256=8b9efd8d96ba1c7b56070910b3c1033d10f8bd30c7df8b154d70f461d3be0b15 ascii256=1dccc554cbda5e8384ac7d5638b195326fb74e57a3359de5653d24c54e5ae692 rc=0 bytes=2602 tests/pa_variant_slot/pa_variant_slot.vbp
+sha256=09cd03d529aacbc2e0c189c3c407082f31b868b61fbeb31156706beca95dc9a6 ascii256=1dccc554cbda5e8384ac7d5638b195326fb74e57a3359de5653d24c54e5ae692 rc=0 bytes=2516 tests/pa_variant_slot/PaSlot.bas
+sha256=ba4a3de70e0b7fba6bc305b3367bda40b1a13d4cb34784f3d47f119ac7f1548f ascii256=d087af670a896537fe77dfb226d7de887788b4aa3375af08ae3c3bddc5cc4262 rc=0 bytes=1349 tests/pd_formcall/ModC.bas
+sha256=6e3308acf35c641f6a5dabdbc11fd891fc71106a10bbaef44fcae72eb5afb876 ascii256=7842be408ba8ac0bc6276fff58e63f371fc8a84c70dab7c8553f3a60ebbf6fd3 rc=0 bytes=2514 tests/pd_udtfield_call/TagMod.bas
+sha256=5ffece3ebc7da72cb4ef5411678c8ea54004406892598a4a0eddd4c113a8f6b4 ascii256=4530a0536f3b8be1110dfc4eb81573b1e67a5d61d59b50aef63175fa7d14cb0c rc=0 bytes=1949 tests/udtret_byref/URetMod.bas
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
@@ -1088,3 +1096,13 @@ sha256=aac840a6f0ce55c515a08966b07f94fe6fd567e423e9f312a923fad14ffd4b01 ascii256
 #   · tests/pd_printer_props/{Mod1.bas,pd_printer_props.vbp}：C2224 Printer.ScaleMode 的钉子
 #     （`i = Printer.ScaleMode` → `i = vb6_ChkLong(vb6_Printer_ScaleMode());`，归因见 §56.24）。
 #   形状门读数：期望 654 / 实得 654 / 相同 651 / 哈希不同 3 / 缺席 0 / 多出 0 —— 存量 651 行逐行相同。
+# --- c50a4260 登记（8 行新增 / 1 行改写 / 0 退场；来源 github/ci/emit-manifest 提交 38d92803）---
+#   新输入（本刀 §56.27/§56.29/§56.30 的夹具，本来就没有旧期望可比，非发码回归）：
+#     tests/cxmodqual/{cxmodqual.vbp,ModCx.bas,ModUse.bas}、tests/pa_variant_slot/{pa_variant_slot.vbp,PaSlot.bas}、
+#     tests/pd_formcall/ModC.bas、tests/pd_udtfield_call/TagMod.bas、tests/udtret_byref/URetMod.bas
+#     （.frm/.cls 不进清单）。
+#   存量改写 1 行 = tests/cls_inh/Inh.vbp（96,510 → 97,943 字节）：§56.29 让 `u.h`（UDT 字段声明为工程类）推断出类，
+#     ① `Set u.h = me/d` 由裸指针赋值转成账 #305 (甲) 腿② 的类对象 Set（旧值 Release + AddRef）；
+#     ② `u.h.Level`/`u.h.Speak()` 不再经 vb6_VariantFromValue + vb6_CStr 装箱，直接 vb6_CStrLong/vb6_StrCmp；
+#     ③ 其余只是 __clsoldN 编号顺延。逐行 diff 实证 + 运行核对 59×OK/0 FAIL（归因见 handoff §56.31）。
+#   形状门读数：期望 666 / 实得 666 / 相同 666 / 哈希不同 0 / 缺席 0 / 多出 0。
