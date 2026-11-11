@@ -338,7 +338,14 @@
                         // 4 参那家借到 6 参那家的表 ⇒ 补两枚缺省 ⇒ C2197 (整编 22 条)。
                         // 限定符是变量/形参时不适用: 变量名与类名本就不同源, 那条路是
                         // `obj.Member(...)` 的 Optional 补齐, 弃了会变 C2198。
-                        funcSym = nullptr;
+                        //
+                        // 账 #305 §56.35: driver 现在给撞名的各家补了一份
+                        // `<mod>$x$<procKey>`, 先按它取**自家**形参表 —— 取到就不弃
+                        // (PD: Tools_Clone/Tools_Paint 的 GetModifiedUpdateRectF 曾有
+                        // C2198 + 返回 UDT 落 intptr_t 的 C2440)。取不到才维持原判。
+                        Symbol* qProc = symTab_.lookupQualifiedProc(
+                            qualLowerQ, Symbol::toLower(maExpr.memberName));
+                        funcSym = qProc ? qProc : nullptr;
                     }
                 }
             }

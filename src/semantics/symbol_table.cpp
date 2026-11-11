@@ -477,15 +477,15 @@ bool SymbolTable::inProcedure() const {
 
 // --- 跨模块符号操作 ---
 
-void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom) {
+void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom,
+                                 const std::string& keyOverride) {
     // 在模块级作用域定义外部符号
     // 如果已存在同名符号（本地已有定义），跳过不覆盖
     if (!moduleScope_) return;
-    std::string key = sym->storageKey();
-    // Fix 103: 同名过程占用了裸键时, 外部 Type/Enum 改注入 "<name>$ty"
-    // (与 SymbolTable::define 的冲突处理一致), 避免跨模块 Public Type
-    // 与本地同名过程冲突后类型彻底不可见.
-    if (sym->kind == SymbolKind::UserDefinedType || sym->kind == SymbolKind::EnumType) {
+    std::string key = keyOverride.empty() ? sym->storageKey() : keyOverride;
+    // 限定键（`<mod>$x$<proc>`）不参与下面的类型 $ty 改键与内建替换 —— 它天然唯一。
+    if (keyOverride.empty()
+        && (sym->kind == SymbolKind::UserDefinedType || sym->kind == SymbolKind::EnumType)) {
         // peek = 本地优先 + 共享层回退: 类型库内建 EnumType 占着裸键时也要让位到 $ty
         // (与共享化之前"它就在本地表里"的行为一致)。
         if (moduleScope_->peek(key)) {
@@ -523,6 +523,27 @@ void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuilti
         return;
     }
     moduleScope_->symbols_[key] = std::move(sym);
+}
+
+// 账 #305 §56.35: `Mod.Proc` 的**自家形参表/返回类型** —— 裸键 storageKey 按先到先得
+// 只留一份，同名过程在别的标准模块里还有第二、第三份时，那几家的表在消费模块里原本
+// 根本不存在。driver_crossmod 现在给撞名各家补一份 `<mod>$x$<storageKey>`，这里按键前缀
+// 找回来（kind 后缀 $pg/$pl/$ps 任取）。
+Symbol* SymbolTable::lookupQualifiedProc(const std::string& modLower,
+                                         const std::string& procLower) const {
+    if (!moduleScope_ || modLower.empty() || procLower.empty()) return nullptr;
+    const std::string prefix = modLower + "$x$" + procLower;
+    for (const auto& [key, sym] : moduleScope_->symbols()) {
+        if (!sym) continue;
+        if (key.compare(0, prefix.size(), prefix) != 0) continue;
+        // 只认过程档，且必须是**该模块**注入的那一份（防止前缀撞上别的长名）
+        if (sym->kind != SymbolKind::Sub && sym->kind != SymbolKind::Function
+            && !isPropertyKind(sym->kind)) continue;
+        if (sym->isExternal && Symbol::toLower(sym->sourceModule) != modLower) continue;
+        if (key.size() > prefix.size() && key[prefix.size()] != '$') continue;
+        return sym.get();
+    }
+    return nullptr;
 }
 
 std::vector<const Symbol*> SymbolTable::getPublicSymbols() const {

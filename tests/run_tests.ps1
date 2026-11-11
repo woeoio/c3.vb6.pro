@@ -12767,6 +12767,20 @@ if ($Category -in @("all", "syntax")) {
         "vb6_cls_ElemObj* __clsold",
         "= &(VB6_SA_AT(vb6_type_ElemRec, m_frames, 0).DIB") @(
         "vb6_type_ElemRec __clsold")
+    # 账 #305 §56.35: 两个**标准模块**里的同名过程（Tools_Pencil / Tools_Clone 各一枚
+    # GetModifiedUpdateRectF，形参表不同、返回同一 UDT）。裸键只注入第一份时，
+    # `Tools_Clone.GetModifiedUpdateRectF()` 借到 Pencil 的表 ⇒ 缺省实参按 4 枚补
+    # (或干脆不补 ⇒ C2198)，返回 UDT 推断落空走 `intptr_t` 兜底 ⇒ C2440。
+    # 正面钉：两家各自按**自家**形参表补缺省（Pencil 两个 Optional → 4 实参；
+    # Clone 一个 Optional → 2 实参），且都发成 `vb6_type_RectF` 临时量；
+    # 反面钉：本语料里不该再出现 intptr_t 兜底。
+    Test-CodegenNote "qualproc_same_name_module" @(
+        "$Tests\pd_qualproc\GDI.bas", "$Tests\pd_qualproc\Pencil.bas",
+        "$Tests\pd_qualproc\Clone.bas", "$Tests\pd_qualproc\QualMod.bas") @(
+        "= vb6_Tools_Pencil_GetModifiedUpdateRectF(-1, 0, 0, 0)",
+        "= vb6_Tools_Clone_GetModifiedUpdateRectF(-1, 0)",
+        "vb6_type_RectF _vb6_anytmp") @(
+        "intptr_t _vb6_anytmp")
     # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
     # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
     # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`
