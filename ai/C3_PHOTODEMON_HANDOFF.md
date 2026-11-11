@@ -3766,7 +3766,97 @@ absent `->Selection->Left` / `->Selection->Top`。
 （3 步增量、未起整工程 emit，未出事）；下一轮起构建前须先确认 ≥8 GB 再动手。
 
 提交：`a0620eae`（codegen 修正 + 夹具 + 钉子）；handoff 单独一刀。
-「族② UDT 裸名」按 §55.2 已由 §45 修好、夹具通过，仍等整编 #5 工件确认 0 命中。
+「族② UDT 裸名」按 §55.2 已由 §45 修好、夹具通过，仍等含本轮的整编确认 0 命中。
+
+### 56.11 整编 #5 是**旧基线**；#6 已按含本轮的 merge 发起
+
+run `42960826666`（workflow_dispatch，`probe/photodemon-emit`，sha `965b6a64`）完成后
+`git merge-base --is-ancestor` 判定 `6b2311f8` / `117836fb` / `a0620eae` **均不在**该提交里
+⇒ 工件不含本轮任何一刀，只能当「改前基线」用：
+
+| 项 | #5 读数（旧基线） |
+| --- | --- |
+| `_vcmp_` | `pdPSDLayer.c` C2065 ×4（4713 / 4742 / 5183 / 5212） |
+| 零散 | `Layers.c` C2143 ×2（672 / 673，`missing ')' before ';'`） |
+| `pdResize.c` | 无 cl 错误（仅 6 条 VB3003 C3 警告，既有 bare ByVal） |
+| `WindowState` / `Extender` | 0 命中 |
+| 大桶 | C2440 202 / C2197 159 / C2198 97 / C2224 59 / C2045 50 / C2374 42 / C2036 34 / C2063 19 / C2296 13 / C2039 13 / C2106 10 |
+
+已把 dev（`0aa7a696`）合入 `probe/photodemon-emit`（merge `4e48d43c`），origin/github 双推，
+并 dispatch #6：run `42974019359`。等工件后按上表逐桶对比收口（预期 `_vcmp_` 4→0、
+C2143 2→0；其余桶不应变差）。
+
+### 56.12 整编 #6 验收读数（含本轮全部五刀，无回退）
+
+run `42974019359`（`probe/photodemon-emit`，merge `4e48d43c` = dev `0aa7a696`，
+BUILD_SECONDS=6741，PEAK_TREE_WS=8895 MB，MIN_FREE=5002 MB，EXE_EXISTS=False）：
+
+| 桶 | #5 基线 | #6 实测 | 差 |
+| --- | --- | --- | --- |
+| C2065 | 4（`_vcmp_0..3`） | **0** | −4 ✅ |
+| C2143 | 2（Layers 672/673） | **0** | −2 ✅ |
+| C2039 | 13 | **0** | −13 ✅ |
+| C2063 | 19 | **0** | −19 ✅ |
+| C2440 | 202 | 197 | −5 ✅ |
+| C2224 | 59 | 55 | −4 ✅ |
+| C2198 | 97 | 91 | −6 ✅ |
+| C2197 | 159 | 159 | 0 |
+| C2045 | 50 | 50 | 0 |
+| C2374 | 42 | 42 | 0 |
+| C2036 | 34 | 34 | 0 |
+| C2296 | 13 | 13 | 0 |
+| C2106 | 10 | 10 | 0 |
+
+结论：`_vcmp_` 4→0、`Layers.c` C2143 2→0 均按预期归零；其余桶**无一变差**，
+C2039/C2063 两个桶整体清零（§43 自模块返回类 + §45/§55 的 UDT 裸名出口连带收口）。
+「族② UDT 裸名」至此以整编读数确认 0 命中，本项关闭。
+
+### 56.13 C2440 `'type cast'`：UDT 返回值当 ByRef 实参（44 条）
+
+**目标桶**：C2440 197 里 `'type cast': cannot convert from 'vb6_type_X' to 'intptr_t'`
+一组，按类型 16（`ComplexNumber`）+ 11（`RectF`）+ 9（`RGBQuad`）+ 8（`ComplexNumberF`）
+= **44 条**（PhotoDemon `Filters_Area.c` 3673…、`Drawing.c` 1248/1378、
+`FormDroste.c` 1044… 等）。
+
+**根因**：`cgen_expr_call_arg_emit.inc` 里 ByRef-UDT / `As Any` 那一档，右值只有
+`argUdtRetCType090q`（`funcUdtRetCType_` 只登记 Declare/已知表）一条出路；**工程内**
+返回 UDT 的函数（`ComplexNumbers.c_add/c_mul`）不在其中 ⇒ 落进 `intptr_t` 兜底：
+
+```
+intptr_t _vb6_anytmp0 = (intptr_t)(vb6_ComplexNumbers_c_add(...));
+```
+
+`(intptr_t)(struct)` 就是 C2440 `'type cast'`。
+
+**修法**：同档先问 AST：`inferUdtTypeOfExpr(*node.positional[i])` 有 UDT 类型就按 090q
+同一条路落 UDT 临时再取址（`argUdtCtype090q`）。
+
+**实测**（`.temp\udtbyref`：`Cx.bas` 的 `c_add/c_mul(ByRef Cpx…) As Cpx` +
+`Use.bas` 的 `s = c_mul(c_add(a, b), b)`）：
+
+| | 发码 |
+| --- | --- |
+| 修前 | `intptr_t _vb6_anytmp0 = (intptr_t)(vb6_Cx_c_add((void*)&(a), (void*)&(b)));` |
+| 修后 | `vb6_type_Cpx _vb6_anytmp0 = vb6_Cx_c_add((void*)&(a), (void*)&(b));` + `vb6_Cx_c_mul((void*)&_vb6_anytmp0, …)` |
+
+**钉子**：`tests/udtbyref/`（`Cx.bas` / `Use.bas` / `udtbyref.vbp`）+
+`Test-CodegenNote "udt_ret_byref_arg"`（正面钉 `vb6_type_Cpx _vb6_anytmp0 = …` 与
+`c_mul((void*)&_vb6_anytmp0`，反面钉 `(intptr_t)(vb6_Cx_c_add(`）。
+
+**`-Category syntax`**：PASS=207 FAIL=0（上一刀 206，+1 = 新钉子）。
+
+**形状门逐条归因**（`scripts/rebless_emit_manifest.ps1`，来源 github `ci/emit-manifest`
+head `b301ddfc`）：期望 633 / 实得 639 / 相同 630 / **哈希不同 3** / 多出 6。
+3 份 = `tests/frmevents/FrmEvents.vbp`、`tests/pd_modret/PDImages.bas`（§43 已登记
+`024cf46c`）、`tests/VBFlexGridDemo/VBFlexGridDemo.vbp`；多出 6 份 = 前几轮新夹具
+（`pd_ctrlarrvar` / `pd_formproplet` / `pd_loopcond` / `pd_oledrop` / `pd_selparama` /
+`pd_udtlen`）。这 3 份逐份跑 `--emit-c` 查 `vb6_type_* _vb6_anytmp` 命中 **0** ⇒ 与本刀无关，
+是既有待批 bless 的账；本刀对存量语料形状差 **0**，只新增 `tests/udtbyref` 3 份输入。
+
+**纪律记录**：构建前空闲内存 6.6 GB（< 8 GB 线），按 §0.1 的先例改为
+`CMAKE_BUILD_PARALLEL_LEVEL=1` 增量构建单 TU（仅 `cgen_expr_call.cpp` + link）。
+
+
 
 
 
