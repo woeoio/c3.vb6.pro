@@ -701,6 +701,8 @@ sha256=09cd03d529aacbc2e0c189c3c407082f31b868b61fbeb31156706beca95dc9a6 ascii256
 sha256=ba4a3de70e0b7fba6bc305b3367bda40b1a13d4cb34784f3d47f119ac7f1548f ascii256=d087af670a896537fe77dfb226d7de887788b4aa3375af08ae3c3bddc5cc4262 rc=0 bytes=1349 tests/pd_formcall/ModC.bas
 sha256=6e3308acf35c641f6a5dabdbc11fd891fc71106a10bbaef44fcae72eb5afb876 ascii256=7842be408ba8ac0bc6276fff58e63f371fc8a84c70dab7c8553f3a60ebbf6fd3 rc=0 bytes=2514 tests/pd_udtfield_call/TagMod.bas
 sha256=5ffece3ebc7da72cb4ef5411678c8ea54004406892598a4a0eddd4c113a8f6b4 ascii256=4530a0536f3b8be1110dfc4eb81573b1e67a5d61d59b50aef63175fa7d14cb0c rc=0 bytes=1949 tests/udtret_byref/URetMod.bas
+sha256=8de347ffd2db716d4980fd8e5cbdb71048b22c03908c17908248bcf41d99baa5 ascii256=73177f0138566700df1c814013cd05368eedd0f82dcbc0e6b057fa996ded2e23 rc=0 bytes=2578 tests/pd_udtelem_clsfld/ElemMod.bas
+sha256=ca76ffca68db9daff4da69a945204f6921b83caa7817e481edbeff0ae3c10c66 ascii256=03163ed48cef83161469c3d96024fcd2160399cac73cc064e76bb297bba7f4a5 rc=0 bytes=7937 tests/pd_udtelem_clsfld/udtelem.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
@@ -1106,3 +1108,8 @@ sha256=5ffece3ebc7da72cb4ef5411678c8ea54004406892598a4a0eddd4c113a8f6b4 ascii256
 #     ② `u.h.Level`/`u.h.Speak()` 不再经 vb6_VariantFromValue + vb6_CStr 装箱，直接 vb6_CStrLong/vb6_StrCmp；
 #     ③ 其余只是 __clsoldN 编号顺延。逐行 diff 实证 + 运行核对 59×OK/0 FAIL（归因见 handoff §56.31）。
 #   形状门读数：期望 666 / 实得 666 / 相同 666 / 哈希不同 0 / 缺席 0 / 多出 0。
+# --- 9b4372fd 登记（2 行新增 / 0 行改写 / 0 退场；来源 github/ci/emit-manifest 提交 7a86ac9c）---
+#   新输入（§56.33 的夹具，本来就没有旧期望可比，非发码回归）：
+#     tests/pd_udtelem_clsfld/udtelem.vbp、tests/pd_udtelem_clsfld/ElemMod.bas（.cls 不进清单）。
+#   存量 666 行逐行相同（哈希不同 0）⇒ UDT 元素类字段 Set 的修法没有改到任何既有语料的形状。
+#   形状门读数：期望 668 / 实得 668 / 相同 668 / 哈希不同 0 / 缺席 0 / 多出 0。
