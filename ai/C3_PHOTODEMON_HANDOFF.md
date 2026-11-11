@@ -4062,6 +4062,44 @@ else            { for (…) { … 内层 For：labelCopyIdx_ = 0 … 1 … 0 …
 **纪律记录**：构建前空闲内存 7.1 GB（< 8 GB 线），`CMAKE_BUILD_PARALLEL_LEVEL=1`。
 
 
+### 56.18 C2095 + C2198 `vb6_IntDiv`（7 + 6 条）：语句式调用的括号被当成实参表（暂挂，解析层）
+
+**现象**：`pdCBZ.c(311/312/319/320)`、`dialog_GenericMemory.c(670)` 每处**成对**报
+`error C2095: 'vb6_IntDiv': actual parameter has type 'void': parameter 1` 与
+`error C2198: 'int32_t vb6_IntDiv(int32_t,int32_t)': too few arguments for call`；
+另 `pdString.c(175/188)` 只有 C2198。C2095 的"实参类型是 void"说明第一个实参是一枚
+**void 返回的函数调用**（MSVC 把 void 表达式当"没有实参"，于是同时报 too few）。
+
+**源码形状**（`pdCBZ.cls:295`）：
+
+```vb
+.SetLayerOffsetX (maxWidth - .GetLayerWidth()) \ 2
+```
+
+**本机复现**（`.temp\intdivprobe`：`Lyr.GetWidth(Optional ByVal … As Boolean = True) As Double`
++ `SetOffset(ByVal v As Long)`，With 块里同形两行）：
+
+```c
+vb6_IntDiv(vb6_Lyr_SetOffset((void*)_vb6_with_0, (maxWidth - vb6_Lyr_GetWidth(...))), 2);
+vb6_Lyr_SetOffset((void*)_vb6_with_0, vb6_IntDiv(vb6_Lyr_GetWidth(...), 2));
+```
+
+第一行就是病：`SetOffset` 是 **Sub**（C 返回 void），可 `\ 2` 被绑到了**调用结果**上。
+VB6 的实际语义是 `.SetLayerOffsetX ((maxWidth - .GetLayerWidth()) \ 2)` —— 语句式调用
+后面的括号只界定**实参表达式**，`\` 属于实参内部；C3 的解析把括号当成实参表收尾，
+于是尾随的二元运算符落到整条调用上。第二行（实参本身不以括号包裹）发码正确。
+
+**为何暂挂**：这是**语句式调用 + 括号实参 + 尾随二元运算符**的解析/绑定规则问题，
+不是单点发码缺陷；改它要动"无 Call 的调用语句如何吃掉实参列表"这条主链，影响面
+远大于 13 条读数，且本轮没有可逐份归因的形状门语料兜底。留作独立一刀（需先补
+`Sub Foo (x) \ 2` / `Sub Foo (x) + 2` / `Sub Foo ((x) \ 2)` 三形态探针再动）。
+
+**同族待证**：C2296 `'-': not valid as left operand has type 'void (__cdecl *)(…)'` 13 条
+（`pdDropDown` 的 `void(…, float, float)` 等）签名一致 —— 一元 `Not`（C 面是 `-(…)`）
+被绑到一枚 void 方法调用上，疑似同一解析口径；**未取证前不并案**。
+
+
+
 
 
 
