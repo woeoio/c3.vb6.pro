@@ -863,6 +863,17 @@
                         || (argValLv.size() > 4 && argValLv[0] == '(' && argValLv[1] == '*' && argValLv.back() == ')')
                         || isDerefFieldChain)
                         && !isConstMacro;
+                    // 工程内**返回 UDT 的函数调用** (ComplexNumbers.c_add(...)) 也是 UDT 右值,
+                    // 与 090q 的 Declare 那一档同形 —— funcUdtRetCType_ 只登记 Declare/已知表,
+                    // 内部函数不在其中, 于是落进下面的 intptr_t 兜底:
+                    //   intptr_t _vb6_anytmp0 = (intptr_t)(vb6_ComplexNumbers_c_add(...));
+                    // → C2440 'type cast': cannot convert from 'vb6_type_ComplexNumber' to
+                    // 'intptr_t' (PhotoDemon Filters_Area.c 3673…, FormDroste.c 1044…).
+                    // 用 AST 直接问 UDT 类型, 有就按 090q 同一条路落 UDT 临时再取址。
+                    std::string argUdtCtype090q = argUdtRetCType090q;
+                    if (argUdtCtype090q.empty() && i < node.positional.size() && node.positional[i]) {
+                        argUdtCtype090q = inferUdtTypeOfExpr(*node.positional[i]);
+                    }
                     if (isLValue) {
                         // 左值: 变量名、数组元素、me->field、(*ptr) 解引用 — 可以取地址
                         // 账 #305 §B218 (甲) 腿④ 第二道夹: 把一个**标识符**格子的地址交给外部
@@ -870,7 +881,7 @@
                         // 出口放手那张表里 (工程类那一档), 就把这一条撤掉 (只动类档, 视图档不动)。
                         if (isSimpleIdent) dropClassSlotRelease(argValLv);
                         argVal = "(void*)&(" + argVal + ")";
-                    } else if (!argUdtRetCType090q.empty()) {
+                    } else if (!argUdtCtype090q.empty()) {
                         // Fix 090q: 实参是返回 UDT 的函数调用 — VB6 把返回值拷入临时
                         // UDT 再传址 (As Any ByRef). C 不能直接强转 struct 值
                         // ((void*)(intptr_t)(struct) → C2440), 也不能用复合字面量
@@ -880,7 +891,7 @@
                         // 保证 "声明先于引用". 例: cZipArchive pvVfsSetEof 内
                         // SetFileTime(..., pvToFileTime(dLastWriteTime)) (FILETIME).
                         std::string tmpAny090q = "_vb6_anytmp" + std::to_string(tempCounter_++);
-                        c_.addPending(argUdtRetCType090q + " " + tmpAny090q
+                        c_.addPending(argUdtCtype090q + " " + tmpAny090q
                                       + " = " + argVal + ";");
                         argVal = "(void*)&" + tmpAny090q;
                     } else if (isConstMacro && argVal != "NULL") {

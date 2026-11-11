@@ -3811,6 +3811,51 @@ BUILD_SECONDS=6741，PEAK_TREE_WS=8895 MB，MIN_FREE=5002 MB，EXE_EXISTS=False�
 C2039/C2063 两个桶整体清零（§43 自模块返回类 + §45/§55 的 UDT 裸名出口连带收口）。
 「族② UDT 裸名」至此以整编读数确认 0 命中，本项关闭。
 
+### 56.13 C2440 `'type cast'`：UDT 返回值当 ByRef 实参（44 条）
+
+**目标桶**：C2440 197 里 `'type cast': cannot convert from 'vb6_type_X' to 'intptr_t'`
+一组，按类型 16（`ComplexNumber`）+ 11（`RectF`）+ 9（`RGBQuad`）+ 8（`ComplexNumberF`）
+= **44 条**（PhotoDemon `Filters_Area.c` 3673…、`Drawing.c` 1248/1378、
+`FormDroste.c` 1044… 等）。
+
+**根因**：`cgen_expr_call_arg_emit.inc` 里 ByRef-UDT / `As Any` 那一档，右值只有
+`argUdtRetCType090q`（`funcUdtRetCType_` 只登记 Declare/已知表）一条出路；**工程内**
+返回 UDT 的函数（`ComplexNumbers.c_add/c_mul`）不在其中 ⇒ 落进 `intptr_t` 兜底：
+
+```
+intptr_t _vb6_anytmp0 = (intptr_t)(vb6_ComplexNumbers_c_add(...));
+```
+
+`(intptr_t)(struct)` 就是 C2440 `'type cast'`。
+
+**修法**：同档先问 AST：`inferUdtTypeOfExpr(*node.positional[i])` 有 UDT 类型就按 090q
+同一条路落 UDT 临时再取址（`argUdtCtype090q`）。
+
+**实测**（`.temp\udtbyref`：`Cx.bas` 的 `c_add/c_mul(ByRef Cpx…) As Cpx` +
+`Use.bas` 的 `s = c_mul(c_add(a, b), b)`）：
+
+| | 发码 |
+| --- | --- |
+| 修前 | `intptr_t _vb6_anytmp0 = (intptr_t)(vb6_Cx_c_add((void*)&(a), (void*)&(b)));` |
+| 修后 | `vb6_type_Cpx _vb6_anytmp0 = vb6_Cx_c_add((void*)&(a), (void*)&(b));` + `vb6_Cx_c_mul((void*)&_vb6_anytmp0, …)` |
+
+**钉子**：`tests/udtbyref/`（`Cx.bas` / `Use.bas` / `udtbyref.vbp`）+
+`Test-CodegenNote "udt_ret_byref_arg"`（正面钉 `vb6_type_Cpx _vb6_anytmp0 = …` 与
+`c_mul((void*)&_vb6_anytmp0`，反面钉 `(intptr_t)(vb6_Cx_c_add(`）。
+
+**`-Category syntax`**：PASS=207 FAIL=0（上一刀 206，+1 = 新钉子）。
+
+**形状门逐条归因**（`scripts/rebless_emit_manifest.ps1`，来源 github `ci/emit-manifest`
+head `b301ddfc`）：期望 633 / 实得 639 / 相同 630 / **哈希不同 3** / 多出 6。
+3 份 = `tests/frmevents/FrmEvents.vbp`、`tests/pd_modret/PDImages.bas`（§43 已登记
+`024cf46c`）、`tests/VBFlexGridDemo/VBFlexGridDemo.vbp`；多出 6 份 = 前几轮新夹具
+（`pd_ctrlarrvar` / `pd_formproplet` / `pd_loopcond` / `pd_oledrop` / `pd_selparama` /
+`pd_udtlen`）。这 3 份逐份跑 `--emit-c` 查 `vb6_type_* _vb6_anytmp` 命中 **0** ⇒ 与本刀无关，
+是既有待批 bless 的账；本刀对存量语料形状差 **0**，只新增 `tests/udtbyref` 3 份输入。
+
+**纪律记录**：构建前空闲内存 6.6 GB（< 8 GB 线），按 §0.1 的先例改为
+`CMAKE_BUILD_PARALLEL_LEVEL=1` 增量构建单 TU（仅 `cgen_expr_call.cpp` + link）。
+
 
 
 

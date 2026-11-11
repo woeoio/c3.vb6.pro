@@ -12792,6 +12792,14 @@ if ($Category -in @("all", "syntax")) {
         "vb6_PdChainSel_GetBounds((void*)m_Img->Selection /* class var .Selection field */).Left",
         "vb6_PdChainSel_GetBounds((void*)m_Img->Selection /* class var .Selection field */).Top") @(
         "->Selection->Left", "->Selection->Top")
+    # C2440 'type cast' (PhotoDemon Filters_Area.c 3673…, FormDroste.c 1044…):
+    # 工程内**返回 UDT 的函数** (ComplexNumbers.c_add/c_mul) 作 ByRef UDT 实参 ——
+    # 右值必须先落一枚 UDT 临时再取址。修前 funcUdtRetCType_ 只登记 Declare,
+    # 内部函数落 intptr_t 兜底 ⇒ `intptr_t t = (intptr_t)(vb6_Cx_c_add(...))`。
+    Test-CodegenNote "udt_ret_byref_arg" @("$Tests\udtbyref\udtbyref.vbp") @(
+        "vb6_type_Cpx _vb6_anytmp0 = vb6_Cx_c_add(",
+        "vb6_Cx_c_mul((void*)&_vb6_anytmp0") @(
+        "(intptr_t)(vb6_Cx_c_add(")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
