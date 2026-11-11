@@ -4822,3 +4822,17 @@ if (__clsold0) vb6_cls_ElemObj_Release(__clsold0);
 / `= &(VB6_SA_AT(vb6_type_ElemRec, m_frames, 0).DIB`；反 `vb6_type_ElemRec __clsold`）。
 `syntax` PASS=223 FAIL=0。本机 `--output-dir` 编出 exe 运行 = `kept` / `gone` / exit 0
 （引用交接正确：DIB 置空后退掉，BackupDIB 仍持有）。
+
+**下一族候选（已小语料复现，未修）**：`Object` 数组元素直接赋给 Single/Double ——
+```vb
+Private m_objs() As Object
+f = m_objs(0)      ' 现发成: f = VB6_SA_AT(void*, m_objs, 0);
+d = m_objs(1)      '         d = VB6_SA_AT(void*, m_objs, 1);
+```
+= C2440 `void* → float/double`（新桶里 pdSelection 11 条那一族的**同形候选**，但 pdSelection
+真正站点尚未用整编 C 对上，归属待新日志确认）。VB6 语义是取对象**默认成员**（DISPID_VALUE
+无参属性读）。RTL 目前只有 `vb6_ComCallByDispidRcv`（带实参）与具名 `vb6_ComCall`，
+没有"无参默认成员→值"的帮手；typed COM 变量那条（`knownTypedComVars_` /
+`comDefaultMemberRealName`）只覆盖前期绑定。若要修，得补一条 late-bound 无参 DISPID_VALUE
+取值帮手，并在赋值右值 coercion 里按目标标量类型折出 Long/Double/BSTR —— 注意这属于新
+RTL 面，先确认 pdSelection 的实际站点再动。
