@@ -12681,6 +12681,15 @@ if ($Category -in @("all", "syntax")) {
         "vb6_LenB(VB6_SA_AT(vb6_type_MergedEntry, me->m_hashTable, 0).sKey)",
         "sizeof(vb6_type_MergedEntry)") @(
         "sizeof(MergedEntry)")
+    # C2065 族①: 窗体自有过程用 `Me.` 显式限定 (`Me.ApplySepiaEffect ..., pdFxPreview`)。
+    # 修前落进「未知 Form 成员 → COM dispatch」, 实参里的设计期 UC 控件名被晚绑定打包
+    # 裸发 ⇒ C2065 'pdFxPreview' (整编实测 39 条, 与源码里 39 处 `Me.` 调用一一对应)。
+    # 正面钉「直接调用 + §42 UC 实参站」, 反面钉旧坏形状。
+    Test-CodegenNote "pd_me_own_proc" @(
+        "$Tests\pd_meform\MeForm.frm", "$Tests\pd_meform\pdFxPreviewCtl.ctl") @(
+        "vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);",
+        "vb6_argtmp_vb6_cls_pdFxPreviewCtl_0 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);") @(
+        "vb6_ComPackObject(pdFxPreview)", 'L"ApplySepiaEffect"), NULL')
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

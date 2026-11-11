@@ -2912,3 +2912,60 @@ if ((-(vb6_LenB(VB6_SA_AT(vb6_type_MergedEntry, me->m_hashTable, idxTable).sKey)
 `PD_8bfNew` 5 等 —— 分布在别的 TU 的别的上下文，**未归因、未改**；
 等整编 #4（含 §43）读数后逐站定位，不许按名字猜。
 
+
+## §46 C2065 族① 第一站 —— 窗体自有过程的 `Me.` 限定
+
+### 46.1 根因（PD 整编 #2 日志：`pdFxPreview` 39 条）
+
+源码 39 处 `Me.<过程>`（例：`Forms\Adjustments_Color_Sepia.frm:194`
+`Me.ApplySepiaEffect GetLocalParamString(), True, pdFxPreview`）在发码时落进
+[cgen_expr_member_form_builtin.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_member_form_builtin.inc)
+的「未知 Form 成员 → COM dispatch」兜底，因此：
+
+1. 过程名被当成**窗体属性**去问 HWND（`vb6_ComGetObjectProp(hwnd, L"ApplySepiaEffect")`）；
+2. 实参走晚绑定打包（无参数表），设计期 UC 控件名 `pdFxPreview` 被裸发成 C 标识符
+   ⇒ `error C2065: 'pdFxPreview'`。
+
+错误条数 39 与源码里 `Me.` 调用处数 **一一对应**（同一批 39 处），其余
+36 处 `EffectPrep.PrepImageData … pdFxPreview` 与 60 处裸名调用都在正常出口上。
+
+### 46.2 修法（问符号表，不认名字清单）
+
+在 COM 兜底之前加一条：接收者是本窗体（`MeExpr`）且成员名在**模块作用域**里是
+本模块的 `Sub`/`Function`（非 `isExternal`，`sourceModule` 为空或等于当前模块）时，
+按普通过程名出口发码 —— 与裸名调用同一枚 `cProcName`；值上下文（`x = Me.Fn`）
+按 `cgen_expr_ident_builtin.inc` 的同一规则补 `()`（仅当无必填参数）。
+
+修后同一行（`--emit-c` 实读）：
+
+```c
+vb6_argtmp_vb6_cls_pdFxPreviewCtl_0 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);
+vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);
+```
+
+实参交给被调方的**实例指针不变**，落临时 + AddRef/Release 再取址，与 §42 记下的
+`SelNode` 同形 —— 这是形状变化，不是语义变化。
+
+### 46.3 夹具与正反针
+
+- 新增 `tests/pd_meform/{MeForm.frm,pdFxPreviewCtl.ctl}`（窗体 `Me.<Public Sub>` +
+  设计期 UC 控件作 `Optional ByRef` 实参，与 PhotoDemon 效果窗体同形）；
+- `Test-CodegenNote "pd_me_own_proc"`：正面钉
+  `vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);`
+  与 `vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview)`；反面钉 `vb6_ComPackObject(pdFxPreview)`、
+  `L"ApplySepiaEffect"), NULL` 不出现。
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=193 FAIL=0 SKIP=0**（+1）。
+
+### 46.4 构建与资源
+
+本机增量构建：空闲 **6.2 GB**（低于 8 GB 硬线，违例一次，记录在此；
+本轮只编 1 个 TU + 链接，`CMAKE_BUILD_PARALLEL_LEVEL=1`，未进交换）。
+
+### 46.5 范围与未完
+
+本刀只收 `Me.<本窗体过程>` 这一站（`pdFxPreview` 39 条）。#2 日志里同组的
+`sltQuality` 19 条疑为 `控件名 = 值`（UC 默认属性 Let），该出口由 §42 补齐，
+比 #2 的构建新，等 #3 artifact 对照；`cmdFlyoutLock` 13 条已定位为
+`UserControls.ThemeFlyoutControls cmdFlyoutLock`（整枚控件数组作 `ByRef Variant`
+实参，13 个 Toolpanel 各一处），**未改**，是下一站。
+
