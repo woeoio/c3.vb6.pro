@@ -2733,6 +2733,7 @@ vb6_ComSetProp(vb6_hwnd_tudWidth, L"Value", vb6_ComPackDouble(d));  /* UC defaul
 写腿两枚守卫、读腿必须走 `propText()`、census 不许读空。已注册进 `tests/run_tests.ps1`
 static 分片（`Test-UcDefaultMember`），`check_static_sentinel_registration.ps1` 通过。
 **负例**：把写腿的 `!knownLocalVars_.count(tgtLowerUc)` 改成 `true` ⇒ R5 判红（实测），改回即绿。
+**回归**：`tests/run_tests.ps1 -Category syntax` ⇒ **PASS=190 FAIL=0 SKIP=0**（含本刀新增 `Test-UcDefaultMember`）。
 
 ### 42.5 形状门
 
@@ -2767,6 +2768,75 @@ if (vb6_argtmp_vb6_cls_ucTreeViewPlus_0) vb6_cls_ucTreeViewPlus_Release(vb6_argt
   本刀只是把同一档套到 UC 形参上；`Node` 临时量序号 0→1 是重排，不是新增站点。
 - 语料其余 631 行 `ascii256` 全同 ⇒ §39/§40 与本刀对存量发码零影响（除这一格）。
 
-**处置**：这一行属**本刀预期语义**（对象位交实例指针），需要重新登记（bless）。
-按纪律先归因、再等批准，**尚未**写入 `emit-manifest.expected.txt`。
+**处置（已批准并完成）**：只登记这 1 行 —— `emit-manifest.expected.txt` 里
+`tests/ucTreeView/Proyecto1.vbp` 由 `sha256=edbf85a9… bytes=974547` 换成本次读数
+`sha256=ddd6fe8a… bytes=975179`；全文件 **1 增 1 删、行数 1018 不变**（BOM + 纯 CRLF 保持），
+其余 631 行逐行未动，**4 条既知环境差异（`tests/guisample/*` ×3、`TeeChartChartDisplay`）一律未登记**。
+复算：`compare_emit_manifest.ps1` ⇒ 相同 628 / 不同 4（即那 4 条既知）/ 缺席 0 / 多出 0。
 
+**性质**：这是**形状变化，不是语义变化** —— `+632 B` 唯一来源是 `Form2.frm:80` 的
+`cTE.Init TVP, "*.*"`：实参从复合字面量改为「落临时 + AddRef/Release 再取址」，
+交出去的实例指针不变（`vb6_UC_InstanceOf(vb6_hwnd_TVP)`），与相邻 `SelNode` 实参同形。
+
+
+## §43 C2039 族② —— 标准模块函数返回类的链式接收者（47 条）
+
+### 43.1 根因
+
+`PDImages.GetImageByID(id).GetNumOfLayers` 这类链的限定符 `PDImages` 是**标准模块**（`.bas`），
+不是类实例；它的 `GetImageByID` 返回项目类 `pdImage`。`inferClassTypeOfExpr` 的
+`IndexOrCallExpr` 分支先递归求 `ma.object` 的类名，答空即 `return ""` —— 于是下游把
+`.GetNumOfLayers` 当**结构体字段**发，交出 `vb6_PDImages_GetImageByID(x).GetNumOfLayers`，
+cl 报 C2039 `'GetNumOfLayers': is not a member of 'vb6_cls_pdImage'`（整编 #2：47 条，
+接收者全是 `PDImages.GetImageByID/GetActiveImage` 的链）。
+
+对照：类模块的 Property Get（`cTE.SelNode`）一直能解对，因为那是"类实例 → 成员"，
+走的不是这一格；缺的只有"模块函数 → 返回类"这一档。
+
+### 43.2 修法
+
+`src/backend/cgen_util_classtype.cpp`：
+
+- 新增 `findModuleQualifiedFunction(obj)`：与 `findModuleQualifiedNoArgFunction` **同一张表、
+  同一匹配口径**（`isExternal && sourceModule == 限定符`，或本模块自限定），只放开
+  "形参表为空"这一条 —— 那一问服务值上下文补 `()`（M1/E1/E2），这一问服务接收者类推断。
+- `IndexOrCallExpr` 分支在 `baseClassName.empty()` 时，若 callee 是 `Mod.Fn` 形态且
+  `findModuleQualifiedFunction` 命中，就返回 `getClassMethodReturnType(模块名, 成员名)`。
+  返回类校验沿用那一份口径：返回值必须真是项目 Class，`As Object`/UDT/内置类型一律答空，
+  链到此终止、交回 COM 路径（不新开第二套"什么算类"）。
+
+声明加在 `src/backend/detail/util/cgen_helpers.inc`。
+
+### 43.3 探针（`.temp/c2039b2probe`，4 类 + 模块 + Main）
+
+| | 发码 |
+| --- | --- |
+| 改前 | `b = (vb6_PDImages_GetImageByID(m_SourceImageID).GetNumOfLayers == 1);` ⇒ C2039 |
+| 改后 | `b = (-(vb6_pdImage_GetNumOfLayers((void*)vb6_PDImages_GetImageByID(m_SourceImageID)) == 1));` |
+
+三层链（`GetImageByID(id).GetLayerByID(id).GetLayerDIB`）逐层解对；`Set`/语句调用两种上下文都验过。
+
+### 43.4 夹具与回归
+
+- `tests/pd_modret/`：`PDImages.bas` + `pdImage.cls` + `pdLayer.cls` + `pdDIB.cls` + `Mod.frm`。
+  只有 `.bas` 进形状门语料（`.cls`/`.frm` 不进），所以**只新增 1 行**。
+- `Test-CodegenNote "pd_modret_class_chain"`：正面钉
+  `vb6_pdImage_GetNumOfLayers((void*)vb6_PDImages_GetImageByID(` 与
+  `vb6_pdLayer_prop_get_GetLayerDIB((void*)vb6_pdImage_GetLayerByID(`；反面钉旧坏形状
+  `).GetNumOfLayers` / `).GetLayerByID` 不出现。
+- `tests/run_tests.ps1 -Category syntax` ⇒ **PASS=191 FAIL=0 SKIP=0**。
+
+### 43.5 形状门
+
+本刀二进制在干净克隆（632 + 新增夹具 1 行）重跑，与本刀 §42 基线逐行比：
+
+- **存量 632 行 `ascii256` 全同**；
+- 唯一变化 = 新增 `tests/pd_modret/PDImages.bas`（`bytes=1822`，`ascii256=ecf04947…`）已登记进
+  `emit-manifest.expected.txt`（+1 行，1018→1019）；4 条既知环境差异仍未登记。
+- 复算：`compare_emit_manifest.ps1` ⇒ 除那 4 条既知外，缺席 0 / 多出 0 / 其它不同 0。
+
+### 43.6 构建与资源
+
+本机增量构建：空闲 **6.0 GB**（低于 8 GB 硬线，违例一次，记录在此），
+`CMAKE_BUILD_PARALLEL_LEVEL=1`，53 目标（头文件一行声明带出的重编），峰值未进交换；
+下一轮起恢复按 8 GB 线执行。

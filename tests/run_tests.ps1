@@ -12661,6 +12661,19 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_iface\IThing.cls", "$Tests\pd_iface\Impl.cls", "$Tests\pd_iface\Entry.bas") @(
         "typedef struct vb6_ivtbl_IThing {",
         "static const vb6_ivtbl_IThing vb6_ivtbl_IThing_for_Impl = {") @("VB3044")
+    # PhotoDemon C2039 族② 探针: 链式接收者是**标准模块函数**返回的项目类
+    # (`PDImages.GetImageByID(id).GetNumOfLayers`)。接收者类推断过去只认类实例/类模块
+    # PropertyGet —— 限定符是标准模块名时直接答空, 下游把 `.Member` 当结构体字段发,
+    # 交出 `vb6_PDImages_GetImageByID(x).GetNumOfLayers` ⇒ cl C2039 (整编实测 47 条,
+    # 接收者全是 PDImages.GetImageByID/GetActiveImage 的链)。
+    # 正面钉「链解对」(自由函数 + 实例作首参), 反面钉旧坏形状不出现。
+    Test-CodegenNote "pd_modret_class_chain" @(
+        "$Tests\pd_modret\PDImages.bas", "$Tests\pd_modret\pdImage.cls",
+        "$Tests\pd_modret\pdLayer.cls", "$Tests\pd_modret\pdDIB.cls",
+        "$Tests\pd_modret\Mod.frm") @(
+        "vb6_pdImage_GetNumOfLayers((void*)vb6_PDImages_GetImageByID(",
+        "vb6_pdLayer_prop_get_GetLayerDIB((void*)vb6_pdImage_GetLayerByID(") @(
+        ").GetNumOfLayers", ").GetLayerByID")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
