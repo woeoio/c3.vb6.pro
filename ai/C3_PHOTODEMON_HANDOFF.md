@@ -4836,3 +4836,41 @@ d = m_objs(1)      '         d = VB6_SA_AT(void*, m_objs, 1);
 `comDefaultMemberRealName`）只覆盖前期绑定。若要修，得补一条 late-bound 无参 DISPID_VALUE
 取值帮手，并在赋值右值 coercion 里按目标标量类型折出 Long/Double/BSTR —— 注意这属于新
 RTL 面，先确认 pdSelection 的实际站点再动。
+
+### 56.34 对账：PD run 43071115257（head 1c460d6b = §56.33 修后）
+
+**110 条归零，证实**：总报错 395 → **238**（旧 #9 是 500）。
+- `C2083 55 → 0`、`C2172 59 → 4`（回到 §56.29 之前的基线 4 条），`C2440 113 → 66`。
+- `void* → vb6_type_PD_GifFrame` / `PD_APNGFrame` 族**全部消失**（GIF/APNG 形状 0 条）。
+- 三刀合计：C2197 159→1、C2224 39→0、C2440 135→66、C2172 归基线、C2083 消失。
+
+**新 C2440 桶（66 行 / 26 TU）**：
+
+| 形状 | 条数 | 站点 |
+|---|---:|---|
+| `double → void*` | 8 | dialog_ToneMapping.c 988/989/990/991；FormLevels.c 1460/1464/1580/1618 |
+| `vb6_VARIANT → int32_t` | 8 | TextSupport.c 357/370/386/398；Evaluator.c 494×2；pdSpinner.c 919；toolpanel_TextBasic.c 1811 |
+| `vb6_type_RectF → intptr_t` | 8 | Tools_Crop.c 2256/2316/2427；Tools_Fill.c 437/457/739；pdCompositor.c 1100/1104 |
+| `void* → float` | 6 | pdSelection.c 1916/1921/1928/1934（+…） |
+| `BSTR → float` | 4 | Drawing.c 1252/1256/1382/1386 |
+| `vb6_VARIANT → BSTR` | 4 | Evaluator.c 474×2；pdDictionary.c 239/248 |
+| `void* → double` | 4 | pdSelection.c 1962/1965（+…） |
+| 其余 | 22 | `RectF→void*` 2、`Guid→intptr_t` 2、`BSTR→double` 2、`pdTreeSupport*/pdDropDown*→VARIANT` 各 2、`int→VARIANT` 2、`float→void*` 2、`float→BSTR` 2、`LOGFONTW→LOGFONTW*` 1、`RectF→BSTR` 1、`RGBQuad→intptr_t` 1、`VARIANT→double` 1、`VARIANT→int16_t` 1、`VARIANT→VARIANT*` 1、`SafeArray1D*→VARIANT` 1、`OUTLINETEXTMETRIC→BSTR` 1 |
+
+**其它桶（未动）**：C2198 75（29 TU）、C2036 34（4 TU：pdString 26 / pdStream 4 / pdNavigator 3 /
+cFileDialogVista 1）、C2296 13、C2106 10、C2102 8、C2095/C2186/C2297 各 5、C2069 4、C2113 3、
+C2223 3、C2112 2、C2197 1（pdSelection.c 574 LockIn）。
+
+**取证手段升级**：probe workflow 的工件里现在带 `.build/pd_full/*.c`
+（probe 分支提交 9f5bb3bb，push 即触发 run **43086544253**）。上一轮只能看到 file(line)，
+无法把 C2440/C2036 站点对到生成物，这一轮起可以直接读生成 C 定位，不必再靠猜。
+
+**小语料复核（为下一族探路）**：
+- 模块级 `Property Get ... As <全局 UDT>` 作 ByRef 实参（`TakeRect CurRect` / `RectProp.CurRect`）
+  —— 现 head **正常**（`vb6_type_RectF _vb6_anytmp0`），不是本族来源。
+- 类作用域 UDT（`Public Type RectF` 声明在 .cls 内）作实参时发成
+  `TakeRect((&(void*){vb6_CRect_prop_get_Rect(p)}))`，UDT 数组元素发成
+  `&(VB6_SA_AT(void*, m_arr, 0))` —— 是**另一形状**（`void* / void** → vb6_type_X*`），
+  与 `RectF → intptr_t` 不同形，先记作线索，等生成 C 对上再判断。
+- `Object` 数组元素赋给 Single/Double → `VB6_SA_AT(void*, …)`（§56.33 末记），
+  与 pdSelection 的 `void* ↔ float/double` 同形候选，仍需生成 C 证实。
