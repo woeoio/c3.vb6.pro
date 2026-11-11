@@ -1,0 +1,6 @@
+Type=Exe
+Module=GDI; GDI.bas
+Module=Pencil; Pencil.bas
+Module=Clone; Clone.bas
+Module=QualMod; QualMod.bas
+Startup="Sub Main"

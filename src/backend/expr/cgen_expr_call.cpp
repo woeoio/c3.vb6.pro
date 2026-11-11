@@ -63,7 +63,12 @@ void CCodeGen::visit(IndexOrCallExpr& node) {
             if (itOCA != knownFormControlOriginalNames_.end()) origCA = itOCA->second;
             std::string idxCA = "0";
             if (!node.positional.empty()) { emitExpr(*node.positional[0]); idxCA = lastExpr_; }
-            lastExpr_ = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(origCA) + ", " + idxCA + ")";
+            std::string atCA = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(origCA) + ", " + idxCA + ")";
+            // 账 §42 续（F1）: 值上下文里控件数组元素就是该 UC 的默认成员
+            // （`x = tudLevels(Index)` ⇒ vb6_ComGet*Prop(GetAt(...), L"Value")）。
+            // 对象上下文（Set 右值 / With）由 suppressDefaultProp_ 关掉，发回裸载体。
+            std::string foldedCA = ctrlDefaultReadExpr(caLower, atCA);
+            lastExpr_ = foldedCA.empty() ? atCA : foldedCA;
             return;
         }
     }

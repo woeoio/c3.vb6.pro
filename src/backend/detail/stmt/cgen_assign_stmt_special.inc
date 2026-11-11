@@ -133,14 +133,9 @@
                                  && Symbol::toLower(currentProc_->name) == tgtLowerUc;
         CtrlDefaultProp foldUc = ctrlDefaultPropOf(tgtLowerUc);
         if (!isRetSlotUc && !knownLocalVars_.count(tgtLowerUc)
-            && foldUc.folds && foldUc.isUcDefault) {
-            emitExpr(*node.value);
-            std::string valUc = std::move(lastExpr_);
-            std::string packUc = comPackFnForVbType(foldUc.valueType);
-            if (packUc.empty()) packUc = comPackExpr(*node.value);
-            c_.emitLine("vb6_ComSetProp(" + makeCtrlHwndArg(tgtLowerUc, foldUc.ctrlType)
-                        + ", L\"" + foldUc.propText() + "\", " + packUc + "(" + valUc
-                        + "));  /* UC default prop let */");
+            && foldUc.folds && foldUc.isUcDefault
+            && emitUcDefaultPropLet(foldUc, makeCtrlHwndArg(tgtLowerUc, foldUc.ctrlType),
+                                    *node.value)) {
             return;
         }
     }
@@ -231,6 +226,22 @@
                                     + ", " + idxArg + "), " + valExpr
                                     + ");  /* ctrl array default prop write */");
                         return;
+                    }
+                    // 账 §42 续（F1）: 工程内 UC 的控件数组元素默认成员写 ——
+                    // `sltGamma(0) = 2.2` 旧落在普通数组元素赋值, 发出
+                    // `vb6_CtrlArr_GetAt(...) = 2.2`（C2440: double → void*）。
+                    // 接收者同一载体, 写腿与裸名那档共用 emitUcDefaultPropLet。
+                    CtrlDefaultProp foldCA = ctrlDefaultPropOf(caLower);
+                    if (foldCA.folds && foldCA.isUcDefault) {
+                        emitExpr(*caP.positional[0]);
+                        std::string idxCA = std::move(lastExpr_);
+                        std::string origName = knownFormControlOriginalNames_.count(caLower)
+                            ? knownFormControlOriginalNames_[caLower] : caId.name;
+                        if (emitUcDefaultPropLet(
+                                foldCA,
+                                "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(origName) + ", "
+                                    + idxCA + ")",
+                                *node.value)) return;
                     }
                 }
             }

@@ -162,6 +162,18 @@ bool Driver::runCrossModuleResolution() {
     // 窗体 Public 过程的模块限定键表 (`<form>_<proc>`): 裸键先到先得之外,
     // 每家窗体各存一份 —— 限定调用 `frmX.Proc` 按限定符精确解析名字+形参表。
     std::unordered_map<std::string, std::pair<size_t, const Symbol*>> formQualifiedSyms;
+    // 账 #305 §56.35: 标准模块之间**同名过程**的模块限定副本表
+    // (`<modLower>$x$<storageKey>`)。裸键 globalPublicSyms 先到先得只留一份，
+    // 于是 PD 里 `GetModifiedUpdateRectF` 同时存在于 Tools_Pencil / Tools_Paint /
+    // Tools_Clone 三家时，后两家在消费模块里既没有形参表（缺省实参不补 → C2198）
+    // 也没有返回 UDT（`intptr_t` 兜底 → C2440）。这里给撞名的每家各存一份，
+    // 限定调用 `Mod.Proc` 按限定键精确取用；裸键路径零变化。
+    std::unordered_map<std::string, std::pair<size_t, const Symbol*>> qualifiedProcSyms;
+    auto isProcKind = [](SymbolKind k) {
+        return k == SymbolKind::Sub || k == SymbolKind::Function
+            || k == SymbolKind::PropertyGet || k == SymbolKind::PropertyLet
+            || k == SymbolKind::PropertySet;
+    };
     for (size_t i = 0; i < exportedSymbols.size(); i++) {
         for (const Symbol* sym : exportedSymbols[i]) {
             std::string sKey = sym->storageKey();
@@ -219,6 +231,17 @@ bool Driver::runCrossModuleResolution() {
                 // 裸名作为类型时唯一来源就是 Class 符号), 所以 Class 优先, 与遍历序无关。
                 else if (sym->kind == SymbolKind::Class && existing->kind != SymbolKind::Class) {
                     globalPublicSyms[sKey] = {i, sym};
+                }
+                // 账 #305 §56.35: 两个不同**标准模块**的同类过程撞名 —— 裸键只能留一份,
+                // 另一家的形参表/返回类型在消费模块里根本不存在。给每家各登记一份
+                // `<modLower>$x$<sKey>`, 下面单独注入; 裸键代表不变 (先到先得/上列规则)。
+                if (isProcKind(sym->kind) && isProcKind(existing->kind)
+                    && itExisting->second.first != i
+                    && !modules_[itExisting->second.first]->isClassModule
+                    && !modules_[i]->isClassModule) {
+                    qualifiedProcSyms[Symbol::toLower(moduleBaseNames[itExisting->second.first])
+                                      + "$x$" + sKey] = itExisting->second;
+                    qualifiedProcSyms[Symbol::toLower(moduleBaseNames[i]) + "$x$" + sKey] = {i, sym};
                 }
             }
             // 窗体 Public 过程的**模块限定键表** (`<form>_<procKey>`): 裸键
@@ -446,6 +469,27 @@ bool Driver::runCrossModuleResolution() {
             qExt->variableTypeName = qSym->variableTypeName;
             qExt->access = qSym->access;
             symTab.moduleScope()->define(std::move(qExt), qKey);
+        }
+    }
+
+    // 账 #305 §56.35: 跨模块同名过程的模块限定副本 (`<modLower>$x$<procKey>`)。
+    // 与上面窗体那一段同构, 只有撞名的标准模块过程才在这里(表本身是稀疏的);
+    // 裸键 `lookup*`/`lookupModule*` 永不命中这种含 `$x$` 的键 ⇒ 非限定路径零变化。
+    for (size_t i = 0; i < analyzers_.size(); i++) {
+        SymbolTable& symTab = analyzers_[i]->symbolTable();
+        if (!symTab.moduleScope()) continue;
+        for (const auto& [qKey, qEntry] : qualifiedProcSyms) {
+            auto [qSrcIdx, qSym] = qEntry;
+            if (qSrcIdx == i) continue;   // 本模块自己的过程, 裸键已可见
+            if (!qSym || qSym->isOverloadVariant) continue;
+            auto qExt = std::make_unique<Symbol>(
+                qSym->kind, qSym->name, qSym->type, qSym->location, qSym->access);
+            qExt->isExternal = true;
+            qExt->sourceModule = moduleBaseNames[qSrcIdx];
+            qExt->W().params = qSym->P().params;
+            qExt->variableTypeName = qSym->variableTypeName;
+            qExt->access = qSym->access;
+            symTab.defineExternal(std::move(qExt), false, qKey);
         }
     }
 

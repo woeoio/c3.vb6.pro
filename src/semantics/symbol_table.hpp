@@ -662,7 +662,15 @@ public:
     // 在模块级作用域定义一个isExternal=true的符号
     // replaceBuiltinCom: 仅当同名占用者是**类型库内建** coclass/接口、且待注入的是
     // 工程 Class 时替换之 (VB6: 工程类遮蔽引用库同名 coclass; Fix <vbeclipse>)
-    void defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom = false);
+    // keyOverride: 非空时按该键落库（而不是 sym->storageKey()）。给"跨模块同名过程"
+    // 的**第二份起**用：裸键被先到者占着时，其余各家用 `<mod>$x$<storageKey>` 各自
+    // 保留一份，限定调用 `Mod.Proc` 才能拿到**自家**的形参表与返回类型。
+    void defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom = false,
+                        const std::string& keyOverride = std::string());
+
+    // 按 `<modLower>$x$<procLower>` 查"跨模块同名过程"的限定副本（任何 kind 后缀）。
+    // 只读本地模块作用域；裸键语义不变（裸名引用仍命中先到的那一份）。
+    Symbol* lookupQualifiedProc(const std::string& modLower, const std::string& procLower) const;
 
     // 获取所有模块级Public符号（供其他模块链接用）
     // 返回 name → Symbol* 的映射（仅Sub/Function/Variable/Constant, Public访问级别）

@@ -2037,6 +2037,20 @@ function Test-UcDefaultMember {
     }
 }
 
+function Test-UdtCallretNoparens {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] udt_callret_noparens ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_udt_callret_noparens.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-M3BuiltinOptDefaults {
     $script:total++
     Write-Host -NoNewline "  [STATIC] m3_builtin_opt_defaults ... "
@@ -12144,6 +12158,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-M3BuiltinOptDefaults }
     if (Enter-StaticShard) { Test-NpCallFirstArgBinop }
     if (Enter-StaticShard) { Test-UcDefaultMember }
+    if (Enter-StaticShard) { Test-UdtCallretNoparens }
     if (Enter-StaticShard) { Test-CtrlPropTypeAuthority }
     if (Enter-StaticShard) { Test-FormDrawState }
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }
@@ -12767,6 +12782,20 @@ if ($Category -in @("all", "syntax")) {
         "vb6_cls_ElemObj* __clsold",
         "= &(VB6_SA_AT(vb6_type_ElemRec, m_frames, 0).DIB") @(
         "vb6_type_ElemRec __clsold")
+    # 账 #305 §56.35: 两个**标准模块**里的同名过程（Tools_Pencil / Tools_Clone 各一枚
+    # GetModifiedUpdateRectF，形参表不同、返回同一 UDT）。裸键只注入第一份时，
+    # `Tools_Clone.GetModifiedUpdateRectF()` 借到 Pencil 的表 ⇒ 缺省实参按 4 枚补
+    # (或干脆不补 ⇒ C2198)，返回 UDT 推断落空走 `intptr_t` 兜底 ⇒ C2440。
+    # 正面钉：两家各自按**自家**形参表补缺省（Pencil 两个 Optional → 4 实参；
+    # Clone 一个 Optional → 2 实参），且都发成 `vb6_type_RectF` 临时量；
+    # 反面钉：本语料里不该再出现 intptr_t 兜底。
+    Test-CodegenNote "qualproc_same_name_module" @(
+        "$Tests\pd_qualproc\GDI.bas", "$Tests\pd_qualproc\Pencil.bas",
+        "$Tests\pd_qualproc\Clone.bas", "$Tests\pd_qualproc\QualMod.bas") @(
+        "= vb6_Tools_Pencil_GetModifiedUpdateRectF(-1, 0, 0, 0)",
+        "= vb6_Tools_Clone_GetModifiedUpdateRectF(-1, 0)",
+        "vb6_type_RectF _vb6_anytmp") @(
+        "intptr_t _vb6_anytmp")
     # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
     # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
     # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`
@@ -12839,6 +12868,18 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_uctrlqual\UcQual.ctl") @(
         "vb6_ComSetProp(vb6_hwnd_cmbWidthUnit, L""ListIndex"", vb6_ComPackInt(newIndex))") @(
         "vb6_hwnd_cmbWidthUnit.ListIndex")
+    # C2440 (FormLevels.c / dialog_ToneMapping.c): 工程内 UC 的**控件数组元素**在值上下文
+    # 就是该 UC 的默认成员。旧发码 `vb6_CtrlArr_GetAt(&vb6_arr_slt, 0) = 2.2`（double → void*）
+    # 与读侧 `x = GetAt(...)`（void* → double）都 C2440。两条腿都收在 ctrlDefaultPropOf。
+    Test-CodegenNote "pd_uc_ctrlarr_default_prop" @(
+        "$Tests\pd_ucctrlarr\PdUcSlider.ctl",
+        "$Tests\pd_ucctrlarr\PdUcArr.frm") @(
+        "vb6_ComSetProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, 0), L""Value"", vb6_ComPackDouble(",
+        "vb6_ComSetProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, idx), L""Value"", vb6_ComPackDouble(newValue))",
+        "vb6_ret_ReadSecond = vb6_ComGetDoubleProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, 1), L""Value"")",
+        "vb6_ComGetDoubleProp(vb6_hwnd_sltSingle, L""Value"")") @(
+        "vb6_arr_slt, 0) = ",
+        "o = vb6_ComGetDoubleProp")
     # C2063 (pdResize.c:277): `Not UserControl.Controls(name) Is ctl` —— 显式限定
     # `UserControl.Controls(...)` = 集合默认成员 Item, 返回 Object。
     Test-CodegenNote "pd_uc_controls_item_call" @(
@@ -12879,6 +12920,27 @@ if ($Category -in @("all", "syntax")) {
         "vb6_CxMod_c_mul((void*)&_vb6_anytmp0",
         "vb6_type_Cpx _vb6_anytmp1 = vb6_CxMod_c_mul(") @(
         "(intptr_t)(vb6_CxMod_")
+    # F2 (C2440 族, PhotoDemon Tools_Crop / Tools_Fill / pdPSPShape / WIC / Drawing 11 条):
+    # 「零参函数/方法**不写括号**」当值用 —— `GUID_NULL`、`m_Brush.GetBrushColorRGBA`、
+    # `m_Outline.GetPathBoundariesF`、`srcImg.GetBoundaryRectF`。AST 里分别是
+    # IdentifierExpr / MemberAccessExpr (不是 IndexOrCallExpr), 旧 inferUdtTypeOfExpr 两条
+    # 分支都不认 ⇒ ByRef UDT 实参掉回 `(intptr_t)(struct)`、With 目标落 `(void*)` 右值取址
+    # (C2102)。判据收在 udtReturnOfClassMember 这一枚 (有/无括号两个形状共用)。
+    Test-CodegenNote "udt_callret_noparens" @(
+        "$Tests\pd_udtcallret\UdGeom.bas", "$Tests\pd_udtcallret\UdImg.cls",
+        "$Tests\pd_udtcallret\UdHolder.bas", "$Tests\pd_udtcallret\UdBrush.cls",
+        "$Tests\pd_udtcallret\UdPen.cls", "$Tests\pd_udtcallret\UdShape.cls",
+        "$Tests\pd_udtcallret\UdWic.bas", "$Tests\pd_udtcallret\UdUse.bas") @(
+        "vb6_type_Guid _vb6_anytmp0 = vb6_pdWic_GUID_NULL();",
+        "vb6_type_RGBQuad _vb6_anytmp0 = vb6_pdBrush_GetBrushColorRGBA(me->m_Brush)",
+        "vb6_type_RectF _vb6_anytmp0 = vb6_pdImg_GetBoundaryRectF((void*)vb6_pdHolder_GetImg())",
+        "vb6_type_RectF _vb6_withret",
+        "/* With obj ref (fn ret copy) */") @(
+        "(intptr_t)(vb6_pdWic_GUID_NULL(",
+        "(intptr_t)(vb6_pdBrush_GetBrushColorRGBA(",
+        "(intptr_t)(vb6_pdImg_GetBoundaryRectF(",
+        "= &(vb6_pdImg_GetBoundaryRectF(",
+        "(void*)vb6_pdImg_GetBoundaryRectF(srcImg)")
     # §56.28: ParamArray 元素回写那一站的承接临时必须是 vb6_VARIANT。
     # boxToVariant 交的是 vb6_VariantFromValue(...) (返回 vb6_VARIANT), 声明成
     # Win32 VARIANT 就是 `initializing` C2440 (PhotoDemon PDMath.c 825/831/837/843)。

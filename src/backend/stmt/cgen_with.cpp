@@ -888,14 +888,35 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
             // Fix 160w: 目标是 Function 返回 UDT (With GetAppVersionInfo()) —
             // 返回值是右值, &(fn()) → C2102 非法取址, 且 (void*) 强转 → C2440.
             // 用复合字面量承载拷贝再取址 (VB6 在 With <udtFunc> 的临时副本上读写).
+            // §56.38 F2: 「这个 UDT 表达式是**调用返回值**(右值)」—— 裸函数 `Fn()`、
+            // `obj.Method()`、以及 VB6 允许不写括号的 `obj.Method` / `Mod.Fn` 都算。
+            // 数组元素 `arr(i)` / UDT 字段链仍是左值, 不能进这条 (否则多铸一份拷贝,
+            // With 体写不到原槽)。
             bool isFnRet160w = false;
-            if (node.object->kind == ASTNodeKind::IndexOrCallExpr) {
-                auto& ioc160w = static_cast<IndexOrCallExpr&>(*node.object);
-                if (ioc160w.callee && ioc160w.callee->kind == ASTNodeKind::IdentifierExpr) {
-                    auto& fid160w = static_cast<IdentifierExpr&>(*ioc160w.callee);
-                    Symbol* fn160w = symTab_.lookupModule(fid160w.name);
-                    if (!fn160w) fn160w = symTab_.lookup(fid160w.name);
-                    isFnRet160w = (fn160w && fn160w->kind == SymbolKind::Function);
+            {
+                const ASTNode* obj160w = node.object.get();
+                auto memberIsUdtCall = [&](const MemberAccessExpr& m) -> bool {
+                    if (!m.object) return false;
+                    const std::string cls160w = inferClassTypeOfExpr(*m.object);
+                    return !cls160w.empty()
+                        && !udtReturnOfClassMember(cls160w, m.memberName).empty();
+                };
+                if (obj160w && obj160w->kind == ASTNodeKind::IndexOrCallExpr) {
+                    auto& ioc160w = static_cast<const IndexOrCallExpr&>(*obj160w);
+                    if (ioc160w.callee && ioc160w.callee->kind == ASTNodeKind::IdentifierExpr) {
+                        auto& fid160w = static_cast<const IdentifierExpr&>(*ioc160w.callee);
+                        Symbol* fn160w = symTab_.lookupModule(fid160w.name);
+                        if (!fn160w) fn160w = symTab_.lookup(fid160w.name);
+                        isFnRet160w = (fn160w && (fn160w->kind == SymbolKind::Function
+                                                  || fn160w->kind == SymbolKind::PropertyGet));
+                    } else if (ioc160w.callee
+                               && ioc160w.callee->kind == ASTNodeKind::MemberAccessExpr) {
+                        isFnRet160w = memberIsUdtCall(
+                            static_cast<const MemberAccessExpr&>(*ioc160w.callee));
+                    }
+                } else if (obj160w && obj160w->kind == ASTNodeKind::MemberAccessExpr) {
+                    isFnRet160w = memberIsUdtCall(
+                        static_cast<const MemberAccessExpr&>(*obj160w));
                 }
             }
             if (isFnRet160w) {

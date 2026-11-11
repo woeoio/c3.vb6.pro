@@ -4822,3 +4822,201 @@ if (__clsold0) vb6_cls_ElemObj_Release(__clsold0);
 / `= &(VB6_SA_AT(vb6_type_ElemRec, m_frames, 0).DIB`；反 `vb6_type_ElemRec __clsold`）。
 `syntax` PASS=223 FAIL=0。本机 `--output-dir` 编出 exe 运行 = `kept` / `gone` / exit 0
 （引用交接正确：DIB 置空后退掉，BackupDIB 仍持有）。
+
+**下一族候选（已小语料复现，未修）**：`Object` 数组元素直接赋给 Single/Double ——
+```vb
+Private m_objs() As Object
+f = m_objs(0)      ' 现发成: f = VB6_SA_AT(void*, m_objs, 0);
+d = m_objs(1)      '         d = VB6_SA_AT(void*, m_objs, 1);
+```
+= C2440 `void* → float/double`（新桶里 pdSelection 11 条那一族的**同形候选**，但 pdSelection
+真正站点尚未用整编 C 对上，归属待新日志确认）。VB6 语义是取对象**默认成员**（DISPID_VALUE
+无参属性读）。RTL 目前只有 `vb6_ComCallByDispidRcv`（带实参）与具名 `vb6_ComCall`，
+没有"无参默认成员→值"的帮手；typed COM 变量那条（`knownTypedComVars_` /
+`comDefaultMemberRealName`）只覆盖前期绑定。若要修，得补一条 late-bound 无参 DISPID_VALUE
+取值帮手，并在赋值右值 coercion 里按目标标量类型折出 Long/Double/BSTR —— 注意这属于新
+RTL 面，先确认 pdSelection 的实际站点再动。
+
+### 56.34 对账：PD run 43071115257（head 1c460d6b = §56.33 修后）
+
+**110 条归零，证实**：总报错 395 → **238**（旧 #9 是 500）。
+- `C2083 55 → 0`、`C2172 59 → 4`（回到 §56.29 之前的基线 4 条），`C2440 113 → 66`。
+- `void* → vb6_type_PD_GifFrame` / `PD_APNGFrame` 族**全部消失**（GIF/APNG 形状 0 条）。
+- 三刀合计：C2197 159→1、C2224 39→0、C2440 135→66、C2172 归基线、C2083 消失。
+
+**新 C2440 桶（66 行 / 26 TU）**：
+
+| 形状 | 条数 | 站点 |
+|---|---:|---|
+| `double → void*` | 8 | dialog_ToneMapping.c 988/989/990/991；FormLevels.c 1460/1464/1580/1618 |
+| `vb6_VARIANT → int32_t` | 8 | TextSupport.c 357/370/386/398；Evaluator.c 494×2；pdSpinner.c 919；toolpanel_TextBasic.c 1811 |
+| `vb6_type_RectF → intptr_t` | 8 | Tools_Crop.c 2256/2316/2427；Tools_Fill.c 437/457/739；pdCompositor.c 1100/1104 |
+| `void* → float` | 6 | pdSelection.c 1916/1921/1928/1934（+…） |
+| `BSTR → float` | 4 | Drawing.c 1252/1256/1382/1386 |
+| `vb6_VARIANT → BSTR` | 4 | Evaluator.c 474×2；pdDictionary.c 239/248 |
+| `void* → double` | 4 | pdSelection.c 1962/1965（+…） |
+| 其余 | 22 | `RectF→void*` 2、`Guid→intptr_t` 2、`BSTR→double` 2、`pdTreeSupport*/pdDropDown*→VARIANT` 各 2、`int→VARIANT` 2、`float→void*` 2、`float→BSTR` 2、`LOGFONTW→LOGFONTW*` 1、`RectF→BSTR` 1、`RGBQuad→intptr_t` 1、`VARIANT→double` 1、`VARIANT→int16_t` 1、`VARIANT→VARIANT*` 1、`SafeArray1D*→VARIANT` 1、`OUTLINETEXTMETRIC→BSTR` 1 |
+
+**其它桶（未动）**：C2198 75（29 TU）、C2036 34（4 TU：pdString 26 / pdStream 4 / pdNavigator 3 /
+cFileDialogVista 1）、C2296 13、C2106 10、C2102 8、C2095/C2186/C2297 各 5、C2069 4、C2113 3、
+C2223 3、C2112 2、C2197 1（pdSelection.c 574 LockIn）。
+
+**取证手段升级**：probe workflow 的工件里现在带 `.build/pd_full/*.c`
+（probe 分支提交 9f5bb3bb，push 即触发 run **43086544253**）。上一轮只能看到 file(line)，
+无法把 C2440/C2036 站点对到生成物，这一轮起可以直接读生成 C 定位，不必再靠猜。
+
+**小语料复核（为下一族探路）**：
+- 模块级 `Property Get ... As <全局 UDT>` 作 ByRef 实参（`TakeRect CurRect` / `RectProp.CurRect`）
+  —— 现 head **正常**（`vb6_type_RectF _vb6_anytmp0`），不是本族来源。
+- 类作用域 UDT（`Public Type RectF` 声明在 .cls 内）作实参时发成
+  `TakeRect((&(void*){vb6_CRect_prop_get_Rect(p)}))`，UDT 数组元素发成
+  `&(VB6_SA_AT(void*, m_arr, 0))` —— 是**另一形状**（`void* / void** → vb6_type_X*`），
+  与 `RectF → intptr_t` 不同形，先记作线索，等生成 C 对上再判断。
+- `Object` 数组元素赋给 Single/Double → `VB6_SA_AT(void*, …)`（§56.33 末记），
+  与 pdSelection 的 `void* ↔ float/double` 同形候选，仍需生成 C 证实。
+
+### 56.35 下一族根因已在小语料锁定：**跨模块同名函数只注入第一份**
+
+复现目录 `.temp/rectfarg`（vbp：GDI.bas `IntersectRectF` + Pencil.bas `Tools_Pencil` +
+Clone.bas `Tools_Clone` + Comp.cls + Main.bas），三种形状对照：
+
+| 现场 | 发出 |
+|---|---|
+| `Tools_Pencil.GetModifiedUpdateRectF()`（有 2 个 Optional） | `vb6_type_RectF _vb6_anytmp0 = vb6_Tools_Pencil_…(-1, 0, 0, 0);` ✅ |
+| `Tools_Clone.GetModifiedUpdateRectF()`（同名，另一模块） | `intptr_t _vb6_anytmp1 = (intptr_t)(vb6_Tools_Clone_…());` ❌ C2440（+ C2198 参数太少）|
+| 把 Clone 的函数改名成 `GetModifiedRectF2` 后 | `vb6_type_RectF _vb6_anytmp1 = vb6_Tools_Clone_GetModifiedRectF2(-1, 0);` ✅ |
+
+⇒ 与 Optional、与类/模块无关；**判据是"全工程里有几个同名 Function"**。改名的对照说明
+这是符号表层面的丢失，不是推断逻辑本身的漏洞。
+
+机制：`driver_crossmod.cpp:315-361` 注入外部符号时，消费模块作用域里**同名键已有定义就
+`continue`**（"已有本地定义，不需要外部符号"）。PD 里 `GetModifiedUpdateRectF` 同时存在于
+`Tools_Pencil / Tools_Paint / Tools_Clone` 三模块，只有第一份进了消费模块作用域；另两处
+`Mod.Fn` 的形参表与返回 UDT 都查不到 ⇒ 缺省实参不补（C2198）+ UDT 推断落空走
+`intptr_t` 兜底（C2440）。生成 C 实测只命中 pdCompositor 那 2 条（`Tools_Pencil` /
+`Tools_Paint` 都发成 `(…GetModifiedUpdateRectF())` 零实参）；Tools_Crop/Tools_Fill 的 6 条
+是另一形状（见 §56.36）。
+
+修法方向（下一刀）：注入时把**来自不同 sourceModule 的同名符号**存进限定键
+（`mod$fn$name`，与类型符号 `name$ty` 同思路），并让 `findModuleQualifiedFunction`
+（cgen_util_classtype.cpp:97）/ 限定调用的形参解析先查限定键、再退回裸键。
+不动裸键语义 ⇒ 既有非限定引用行为不变。
+
+### 56.36 §56.35 落地 + C2440 全 66 行按**生成 C 原文**重分类
+
+#### 落地的刀（20ee86a2，已双推）
+
+- `SymbolTable::defineExternal(sym, replaceBuiltinCom, keyOverride)`：新增键覆盖参数；
+  带覆盖键时不走 `$ty` 改键/内建替换。
+- `SymbolTable::lookupQualifiedProc(modLower, procLower)`：在模块作用域里按键前缀
+  `<mod>$x$<proc>` 找回限定副本（`$pg/$pl/$ps` 后缀任取）。
+- `driver_crossmod.cpp`：撞名检测（两个**不同标准模块**的同 kind 过程）时给每家登记
+  `<modLower>$x$<sKey>`，在窗体限定副本那段之后**单独注入**；裸键代表规则一字未动。
+- `cgen_expr_call_callee_params.inc`：限定调用借到别家外部符号时，先
+  `lookupQualifiedProc` 取自家形参表，取到就**不再弃表**（原逻辑直接置 nullptr）。
+- 夹具 `tests/pd_qualproc/`（GDI.bas + Pencil.bas + Clone.bas + QualMod.bas + qualproc.vbp）
+  + 钉子 `qualproc_same_name_module`（正钉两家各自补自家缺省实参、都发 `vb6_type_RectF`
+  临时量；反钉 `intptr_t _vb6_anytmp`）。本机 `-Category syntax` 224 项全绿。
+- 待办：CI 对 20ee86a2 的 emit-manifest 下来后登记 `tests/pd_qualproc` 5 行新输入
+  （新输入自登记），若既有语料出现改写要逐条归因。
+
+#### 取证手段（本轮新增，往后不必等 full build）
+
+`PhotoDemon x86 emit probe` 的 `photodemon-emit-logs` 工件里 `pd_emit.out`（48MB）含**全部
+生成 C 原文**：每个文件以 `// Generated by vb6c3 …` + 下一行 `#include "<name>.h"` 开头
+（该 `Generated by` 行即文件第 1 行）。按此建立 `name.c → 起始行` 映射，
+`cl 报错行号 + 映射` 就是原文行号。脚本 `.temp/ctx2440.ps1`（入参 emit 输出 + 错误清单）
+已跑通 66/66，产物 `.temp/pd_new2/c2440_ctx.txt`。
+
+#### 66 行重新分族（按生成 C 原文；行数/站点）
+
+| 族 | 行数 | 原文特征 | 站点 |
+|---|---|---|---|
+| F1 控件数组元素当缺省属性用 | 9 | `vb6_CtrlArr_GetAt(&arr, i) = <double>`；反向 `<double> = vb6_CtrlArr_GetAt(...)` | dialog_ToneMapping 988-991、FormLevels 1460/1464/1580/1618/2694 |
+| F2 零参 UDT 取值当 ByRef 实参 | 11 | `intptr_t _vb6_anytmpN = (intptr_t)(<getter>())`；`void* _vb6_with = (void*)<UDT getter>()` | Tools_Crop 2256/2316/2427、Tools_Fill 437/457/739（`PDImages.GetActiveImage.GetBoundaryRectF`）、pdPSPShape 501（`GetBrushColorRGBA`）、WIC 415/432（`WIC_GUID_*`）、Drawing 1248/1378（With） |
+| F3 Variant 实参没在**调用边界**取标量/串 | 13 | `vb6_PA_SetLong(_pa,0,checkVal)`、`vb6_Pow(VARIANT,…)`、`vb6_Like(VARIANT,…)`、`vb6_Num_Mod((int32_t)(VARIANT))`、`…prop_let_Color(…VARIANT)`、`…SetStrictPixelAlignment(VARIANT)` | TextSupport 357/370/386/398、Evaluator 474×2/494×2/514、pdSpinner 919、toolpanel_Pencil 1085、toolpanel_TextBasic 1811、pdDictionary 239/248 |
+| F4 Variant 当取值的隐式转换 | 4 | `VARIANT = 0`（pdDictionary 258）、`f(…, 0, 0)` 给 Variant 形参（pdSelection 155）、事件包装按值传 ByRef VARIANT（pdCBZ 411） | 4 |
+| F5 控件数组/控件默认属性读成数值 | 8 | `me->m_CornersLocked.Left = vb6_form_ctrl_…_tudSel(i)`（void*）与反向 `…_tudSel(i) = float` | pdSelection 1916/1921/1928/1930/1934/1936/1941/1944/1962/1965 |
+| F6 COM 入口包装取类指针当 Variant 返 | 4 | `vb6_VARIANT retMeth = vb6_<cls>_<getter>(me);` | pdCanvas 165、pdStatusBar 160、pdTreeviewOD 126、pdTreeviewViewOD 109 |
+| F7 字符串→数值隐式转换 | 6 | `float/double = vb6_CStrDbl(vb6_Val(…))`、`…FromPixel(…, (vb6_CStrDbl(…)))` 给 ByVal Single 形参 | Drawing 1252/1256/1306/1382/1386/1436 |
+| F8 UDT 按值传 vs 指针形参 / LenB(UDT) | 4 | `vb6_Fonts_CreateGDIFont(tmpLogFont, …)` 缺 `&`；`vb6_LenB((*udt))` 选到 BSTR 重载 | pdTextRenderer 1334、Fonts 1054、PDMath 629 |
+| F9 其它 | 3 | `vb6_UBound(<SafeArray>,1)` 配 Variant* 重载（pdSpriteSheet 315）等 | 3 |
+
+（合计 66；报表里 pdSelection/pdCompositor 的行号落在同一行附近时按条目分别计数。）
+
+#### 下一刀顺序建议
+
+1. **F1（9 条，最机械）**：LHS/RHS 是 `vb6_CtrlArr_GetAt` 时按控件类走缺省属性
+   （`pdSlider` → `.Value`；`pdTextBox` → `.Text`）。先看 `.frm` 里两个数组控件的声明类型。
+2. **F2（11 条）**：把 §56.29/§56.30 的 UDT 推断扩到**零参**成员/模块函数（`obj.P()`、
+   `Mod.F()` 无实参时多半被解析成 MemberAccess/PropertyGet 节点，不在
+   `IndexOrCallExpr` 分支里）；With 目标为 UDT 时改走 UDT 临时量 + 直接字段访问，
+   不要 `void* _vb6_with` + `ComGetProp`。
+3. **F3（13 条）**：在**内建/运行时调用**的实参侧补 Variant→标量/串提取（`PA_SetLong`
+   取 Long、`Pow` 取 Double、`Like` 取 BSTR、`Num_Mod` 取 Long…）。
+4. F5、F7、F6 各自独立，按站点多少依次收。
+
+### 56.37 F1 收口：控件数组元素的 UC 默认成员（读写两腿）+ CI 对账 43089675141
+
+#### 一、CI 对账（run 43089675141，head 20ee86a2 = 跨模块同名刀）
+
+1. **shape oracle 红，只有"新输入未登记"这一种**：既有 668 行哈希 **0 变化**，
+   新增 5 行全是 `tests/pd_qualproc/*`（`qualproc.vbp` + 4 个源文件，跨模块同名刀的夹具）。
+   → `scripts/rebless_emit_manifest.ps1 -Bless` 登记完成：**673 行数据，新增 5 / 改写 0**。
+2. **`vbp_fixture_census` 红，3 份 .vbp 两头不靠**：`pd_qualproc\qualproc.vbp`、
+   `pd_udtelem_clsfld\udtelem.vbp`（两条都是 codegen 形状钉子，不走整工程编译面）、
+   `photodemon\PhotoDemon.vbp`（§0 连带入库那 643 份，由 CI 的 full build / emit probe 覆盖）。
+   → 已按"刻意不列 + 理由"补进 `scripts/vbp_fixtures_unregistered.txt`（表头 4 → 9）。
+   本机复跑：240 份 .vbp，231 入册 / 9 挂账 / 0 漏。
+3. **本机 `scripts/emit_manifest.ps1` 的读数口径**：本机生成的清单里有 **6 份 .vbp 输入**
+   的哈希与 `emit-manifest.expected.txt` 不同（其余 673 行逐行相同）。原因是 .vbp 那一档的
+   发码里带了工程根路径，归一化只认本仓 root；CI 那台的产物与 expected 逐行一致。
+   ⇒ **本机清单只作集合比对（新增 / 消失 / 改写），不作哈希判据**；哈希一律以 CI 为准。
+   本次集合比对：新增 5（qualproc）、消失 0、改写 0。
+
+#### 二、F1 落地（本刀唯一改动面：发码不再把控件数组元素当普通数组元素）
+
+- 根因：`sltGamma(0) = 2.2` / `x = tudLevels(Index)` 这类**工程内 UC 的控件数组元素**
+  在 VB6 里就是该 UC 的默认成员，旧发码按普通数组元素处理 →
+  `vb6_CtrlArr_GetAt(&vb6_arr_slt, 0) = 2.2`（C2440: double → void\*）、
+  读侧 `= vb6_CtrlArr_GetAt(...)`（C2440: void\* → double）。
+- 修法：默认成员判据仍然只有 `ctrlDefaultPropOf` 一枚，把**两颗出口**放进
+  `src/backend/cgen_util_ctrl.cpp`，四个站点只调出口：
+  - `ctrlDefaultReadExpr(lower, recvExpr)` —— 读腿（裸名 / 控件数组元素共用）。
+  - `emitUcDefaultPropLet(fold, recvExpr, valueExpr)` —— 写腿（同上，两档接收者）。
+  站点：`cgen_expr_ident_symbol.inc`（裸名读）、`cgen_expr_call.cpp`（控件数组读）、
+  `cgen_assign_stmt_special.inc`（裸名写 + 新增的控件数组写）。
+- **顺带修的真 bug**：`findUcDefaultMember` 旧实现把整个 codeSection（含注释）都当候选，
+  `.ctl` 注释里顺口写出声明串就会把注释尾巴当型 → `ucDefaultReadPlan` 落空 → **静默不折**
+  （C2440 原样回来，且没有任何诊断）。现在只认**非注释行**。夹具注释里故意留了这条
+  "被钉住的串"，防止回退。
+- 形状（`tests/pd_ucctrlarr`）：
+  - 写：`vb6_ComSetProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, 0), L"Value", vb6_ComPackDouble(2.2));  /* UC default prop let */`
+  - 读：`vb6_ComGetDoubleProp(vb6_CtrlArr_GetAt(&vb6_arr_slt, 1), L"Value")  /* default prop: .Value */`
+  - 裸名单实例：`vb6_ComGetDoubleProp(vb6_hwnd_sltSingle, L"Value")`
+  - 对象上下文（负控）：`o = vb6_CtrlArr_GetAt(&vb6_arr_slt, 0);  /* Set */`（不折）
+  - `Set` 右值这一档由 `emitSetObjectRhs` 把闸补到控件数组元素上（原来只对裸名开）。
+- 夹具/钉子：`tests/pd_ucctrlarr/{PdUcSlider.ctl,PdUcArr.frm}` +
+  `run_tests.ps1` 的 `pd_uc_ctrlarr_default_prop`（4 条正向、2 条反向：
+  不许再出 `GetAt(...) = `，不许把 Set 右值折成 `ComGetDoubleProp`）。
+- 判据脚本 `scripts/check_uc_default_member.ps1` 同步：R3 增加"控件数组写腿消费
+  isUcDefault 1 处"，R4 增加"读腿出口消费 2 处 / 写腿出口消费 2 处"，R6 改到出口里认
+  `propText()`。本机 PASS，census 全部读出数：
+  `ownerFiles=1 findDef=1 findUse=1 planDef=1 planUse=1 ucSet=1 ucRead=1 ucReadArr=1
+   readSites=1 writeSites=1 objSites=1 readCalls=2 writeCalls=2`。
+- 本机回归：`-Category syntax` **PASS=225 FAIL=0 SKIP=0**（224 + 本刀 1）。
+
+#### 三、已知残留 / 判据缺口
+
+- 语义层仍对 `slt(0) = 2.2` 报 `VB3003`（Double → Object）：语义分析器不知道
+  "控件数组元素是 UC 的默认成员"，属**诊断噪声**（C 发码已正确，与 §6 R1 同类）。
+  记账，等诊断族一起收；不影响本族 C2440 归零。
+- 本刀的 C2440 预计归零面：FormLevels 5 行（4 写 1 读）+ dialog_ToneMapping 4 行（全写）
+  = **9/9**。读数要等 CI 对 F1 head 的 PD full build（下一刀前先拿读数，再进 F2）。
+
+#### 四、待办（严格顺序）
+
+1. CI 对 F1 head 跑完后：`rebless_emit_manifest.ps1 -Bless` 登记 `tests/pd_ucctrlarr`
+   的 **2 行**新输入（预期仍然只有新增、改写 0）。
+2. 拿 PD full build 的新 C2440 报表对账：确认 F1 那 9 条消失、其余族不动。
+3. 按 §56.36 顺序进 **F2（11 条，零参 UDT 取值当 ByRef 实参）**。
