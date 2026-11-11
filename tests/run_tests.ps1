@@ -2009,6 +2009,20 @@ function Test-G4ValueMemberParen {
     }
 }
 
+function Test-NpCallFirstArgBinop {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] np_call_firstarg_binop ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_np_call_firstarg_binop.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-M3BuiltinOptDefaults {
     $script:total++
     Write-Host -NoNewline "  [STATIC] m3_builtin_opt_defaults ... "
@@ -12114,6 +12128,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-G4NegFirstArg }
     if (Enter-StaticShard) { Test-G4ValueMemberParen }
     if (Enter-StaticShard) { Test-M3BuiltinOptDefaults }
+    if (Enter-StaticShard) { Test-NpCallFirstArgBinop }
     if (Enter-StaticShard) { Test-CtrlPropTypeAuthority }
     if (Enter-StaticShard) { Test-FormDrawState }
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }

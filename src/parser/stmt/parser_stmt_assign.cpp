@@ -672,6 +672,53 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
                 }
             }
         }
+        if ((*leafSlot)->kind == ASTNodeKind::IndexOrCallExpr
+            && cur_.kind == TokenKind::Comma) {
+            // C3-SENTINEL(np-call-firstarg-binop): 语句级无括号调用, 首参是**括号组 + 二元运算**,
+            // 且被调方是裸标识符 (不是 obj.Member):
+            //     fHSVtoRGB (x - trackRadius) / hueSpread, 1, 1, tmpR, tmpG, tmpB
+            // (PhotoDemon Controls/pdSliderStandalone.ctl:1135).
+            // VB6 语句级没有"表达式语句", 所以 `f (...)` 只能是调用; 括号是首参的**分组**,
+            // `/ hueSpread` 继续把首参写下去 ⇒ 该句 = f((x-trackRadius)/hueSpread, 1, 1, tmpR, tmpG, tmpB)。
+            // 表达式层却把 `(x - trackRadius)` 当成**实参表**吃掉 (f 只有一个实参), 再把
+            // `/ hueSpread` 绑到调用结果上, 语句层随后把整个 BinOp 当 callee、把 `, 1, 1, ...`
+            // 当它的实参 ⇒ 实参被塞进 `/` 的 helper:
+            //     vb6_Num_Div((double)(vb6_Colors_fHSVtoRGB(...)), (double)(hueSpread),
+            //                 vb6_VariantEmpty(), 1, 1, tmpR, tmpG, tmpB)   ⇒ C2197 (24 处)
+            // 与 Fix 110y 同一歧义、同一折叠法, 只是最左叶的 callee 是 IdentifierExpr 而非
+            // MemberAccessExpr; 判据同样要求"逗号后还有实参"(cur_ == Comma), 单独成句的
+            // `f (a)` 仍是正常调用, 不受影响。
+            auto& innerNb = static_cast<IndexOrCallExpr&>(**leafSlot);
+            if (innerNb.callee && innerNb.callee->kind == ASTNodeKind::IdentifierExpr
+                && innerNb.named.empty() && innerNb.positional.size() == 1) {
+                calleeOverride110y = std::move(innerNb.callee);
+                ExprPtr innerArgNb = std::move(innerNb.positional[0]);
+                *leafSlot = std::move(innerArgNb);
+                leadingArg110y = std::move(expr);
+            }
+        }
+    }
+    // C3-SENTINEL(np-call-firstarg-paren-binop): 同族但**没有二元运算符**的一格:
+    //     fHSVtoRGB (x - trackRadius), 1, 1, tmpR, tmpG, tmpB
+    // 表达式层把 `f (…)` 当"带 1 个实参的调用", 语句层把整个调用当 callee、把 `, 1, …`
+    // 挂到调用结果上 ⇒ 语义阶段按内层调用报 VB3005 (1/6), 发码成 `vb6_f(...)(1, 1, …)`。
+    // VB6 语句级这里括号只是首参的**分组**, 整句仍是 f((x-trackRadius), 1, 1, tmpR, tmpG, tmpB)。
+    // 只在首参**不是可寻址左值**时折叠: `f (v), x` 里的括号在 VB6 是"按值传一份临时",
+    // 折叠掉会变成按引用传原变量 —— 语义不同, 该形保持现状, 不在本条内改。
+    if (expr && !leadingArg110y && expr->kind == ASTNodeKind::IndexOrCallExpr
+        && cur_.kind == TokenKind::Comma) {
+        auto& nbParen = static_cast<IndexOrCallExpr&>(*expr);
+        bool argAddressable = false;
+        if (nbParen.positional.size() == 1) {
+            auto k = nbParen.positional[0]->kind;
+            argAddressable = (k == ASTNodeKind::IdentifierExpr
+                           || k == ASTNodeKind::MemberAccessExpr);
+        }
+        if (nbParen.callee && nbParen.callee->kind == ASTNodeKind::IdentifierExpr
+            && nbParen.named.empty() && nbParen.positional.size() == 1 && !argAddressable) {
+            calleeOverride110y = std::move(nbParen.callee);
+            leadingArg110y = std::move(nbParen.positional[0]);
+        }
     }
     // Fix <vbeclipse>: 语句级 `obj.Method -30, -30, w, h` —— 无括号调用的首参是
     // 负数时, 表达式层把 `Method -30` 绑成中缀减法 Bin(Sub, MA, 30), 随后无括号
