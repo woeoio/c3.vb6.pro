@@ -4874,3 +4874,29 @@ C2223 3、C2112 2、C2197 1（pdSelection.c 574 LockIn）。
   与 `RectF → intptr_t` 不同形，先记作线索，等生成 C 对上再判断。
 - `Object` 数组元素赋给 Single/Double → `VB6_SA_AT(void*, …)`（§56.33 末记），
   与 pdSelection 的 `void* ↔ float/double` 同形候选，仍需生成 C 证实。
+
+### 56.35 下一族根因已在小语料锁定：**跨模块同名函数只注入第一份**
+
+复现目录 `.temp/rectfarg`（vbp：GDI.bas `IntersectRectF` + Pencil.bas `Tools_Pencil` +
+Clone.bas `Tools_Clone` + Comp.cls + Main.bas），三种形状对照：
+
+| 现场 | 发出 |
+|---|---|
+| `Tools_Pencil.GetModifiedUpdateRectF()`（有 2 个 Optional） | `vb6_type_RectF _vb6_anytmp0 = vb6_Tools_Pencil_…(-1, 0, 0, 0);` ✅ |
+| `Tools_Clone.GetModifiedUpdateRectF()`（同名，另一模块） | `intptr_t _vb6_anytmp1 = (intptr_t)(vb6_Tools_Clone_…());` ❌ C2440（+ C2198 参数太少）|
+| 把 Clone 的函数改名成 `GetModifiedRectF2` 后 | `vb6_type_RectF _vb6_anytmp1 = vb6_Tools_Clone_GetModifiedRectF2(-1, 0);` ✅ |
+
+⇒ 与 Optional、与类/模块无关；**判据是"全工程里有几个同名 Function"**。改名的对照说明
+这是符号表层面的丢失，不是推断逻辑本身的漏洞。
+
+机制：`driver_crossmod.cpp:315-361` 注入外部符号时，消费模块作用域里**同名键已有定义就
+`continue`**（"已有本地定义，不需要外部符号"）。PD 里 `GetModifiedUpdateRectF` 同时存在于
+`Tools_Pencil / Tools_Paint / Tools_Clone` 三模块，只有第一份进了消费模块作用域；另两处
+`Mod.Fn` 的形参表与返回 UDT 都查不到 ⇒ 缺省实参不补（C2198）+ UDT 推断落空走
+`intptr_t` 兜底（C2440）。这与 §56.34 表里 `RectF → intptr_t` 8 条（Tools_Crop 3 /
+Tools_Fill 3 / pdCompositor 2）以及同一批 C2198 是同一根。
+
+修法方向（下一刀）：注入时把**来自不同 sourceModule 的同名符号**存进限定键
+（`mod$fn$name`，与类型符号 `name$ty` 同思路），并让 `findModuleQualifiedFunction`
+（cgen_util_classtype.cpp:97）/ 限定调用的形参解析先查限定键、再退回裸键。
+不动裸键语义 ⇒ 既有非限定引用行为不变。
