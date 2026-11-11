@@ -648,7 +648,7 @@ sha256=4e9dd3ab9fb5211b2ff06f0c44e5454447cc16da6153471c6de0567293a9cc27 ascii256
 sha256=7a81869cdf2324beaac976039cd629dbca213bf61e1d030b8ac750aa6f31e7f4 ascii256=d399f1d94bee1e4ec2dfa4ee5cea789f5a18288761aa71049f0339f9ef345b5f rc=0 bytes=845297 tests/ucSlider_2022/Proyecto1.vbp
 sha256=85061a287b3a3a81e74d32eb59fdcffd907b07ea4c35f8a7a9d0417831153ae7 ascii256=48e208218109759a13a77366b70a778ff1e592b1ae03672f44acc3011eb10b6c rc=0 bytes=28990 tests/iface_multi_full/IfaceMulti.vbp
 sha256=929d0dd806b6dde6c1422af5f29a893d41127f4a646483704e59229ebf603d2c ascii256=99a7f683007e84525c2c9d448b54f9f5a055f062fd65b7290c79b64fe1703d2d rc=0 bytes=2998 tests/iface_multi_full/mdlMain.bas
-sha256=3c47db452867f421c487bffdb1909d7d19d5fded0d53af67bbf4a8de358795b4 ascii256=c93e0c907ee8f3af629a0b3b6bfc30734881624bfb50e32b1851c47cd85a5ec1 rc=0 bytes=7194 tests/pd_parentctl/PdParentCtl.vbp
+sha256=4d467702651d34f24f5dcd0103efbded2709e9fbf55eb81a20d9a3e21ee4c015 ascii256=0a52baf2c3dc0c3a6ac3f55eddd4509007836bfd36f9d49c08becff779ed9d56 rc=0 bytes=8215 tests/pd_parentctl/PdParentCtl.vbp
 sha256=194269cfe77e679bb8802eadf9196bf1df50e6e54d1a3358eaa92973c69cdd0c ascii256=3fbe7427fa971430666296df67238702a5e23abe8cd5fbd3e044d6ec6bb79270 rc=0 bytes=7046 tests/pd_parentctl/PdParentTypo.vbp
 sha256=42180d1abcb1eb05bacb3f73c216f4abbc3b9ad2c0f6d11bef84a0c9d6775416 ascii256=2dfda0b70070c9ff4fd3ef06e3d76fd4e9be178e861a38a61d674f3d85f429f0 rc=0 bytes=23911 tests/pd_parentsem/PdParentSem.vbp
 sha256=69c997596040c14aba5be976199d0c625c52657a07b5838bba78d65003368643 ascii256=b5719c8d02b869bdb1a241e9c780444d4ef89f8eaef33126da5fbb85711ea6bb rc=0 bytes=1791 tests/test_builtin_const_ext.bas
@@ -687,8 +687,8 @@ sha256=14668f11f3610e25eaf512ff34ca4e8dbd6120a57a63e92a05e242e8684d8582 ascii256
 sha256=a3e59c34ffdfafcab02dd98a3078c9a208e80e0642563e8c4db4e8d321c18bfc ascii256=28c443cabb89aeac6517e2cab915a6e0f18dc0b99385069f57d2cd6b1f0fd7c9 rc=0 bytes=1612 tests/udtbyref/Use.bas
 sha256=7b79da73d124c4352f6a5d1a7a40ef1a0b486d0cb1f482b6d117384b7d5fa7d1 ascii256=d63859fad911132eb6a7285b6df2fc1b2a28a66c5f3dd4537b0c7cfbafb3735f rc=0 bytes=2461 tests/pd_clsarrparam/Mod1.bas
 sha256=43f3a8cb9c796906f4c8293466fa5aba7adcf88a1716054413aee94274821069 ascii256=655342ec14560ab073c1f32dc7c8119481dbc5079971c4e21fe512e3eb55a277 rc=0 bytes=6260 tests/pd_clsarrparam/pd_clsarrparam.vbp
-sha256=8d742115a568d3e027f96cb4dc8ae59875550d0476afbdbc75759f3a87ef166d ascii256=7e7dd919f8e236c36228a00e5b1f50c4fb782dea77dcf978bda999be0047dee6 rc=0 bytes=1767 tests/pd_printer_props/Mod1.bas
-sha256=3453f41c0a2c3eed3ba4dc362762382d3f4cc0446c3e315746f734391b11e16e ascii256=7e7dd919f8e236c36228a00e5b1f50c4fb782dea77dcf978bda999be0047dee6 rc=0 bytes=1854 tests/pd_printer_props/pd_printer_props.vbp
+sha256=8293417e807f29f960ee10405f9c11a48379626990db6484854b28f554866a8c ascii256=3b4b5c911c5207084971c30f272bed64331a7df88ea35d7e8e6de00d296636a7 rc=0 bytes=1814 tests/pd_printer_props/Mod1.bas
+sha256=7632566b33707498b5d692110d2ab1695847d628080aab53dd4f204a9399077d ascii256=3b4b5c911c5207084971c30f272bed64331a7df88ea35d7e8e6de00d296636a7 rc=0 bytes=1901 tests/pd_printer_props/pd_printer_props.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
@@ -1077,3 +1077,10 @@ sha256=3453f41c0a2c3eed3ba4dc362762382d3f4cc0446c3e315746f734391b11e16e ascii256
 #   （github/ci/emit-manifest，654 行）。
 #   存量 652 行逐行相同 ⇒ 本刀（含 71ceeadd 的秩>=4 括号回收）对既有语料发码零影响；未发生退场行。
 #   另：918c3ca1 那次的形状门红已由 71ceeadd 收回 —— 当时唯一一条哈希不同就是 tests/test_arr_nd.bas。
+# --- 4ae70ce3 登记（3 行改写，全部是已落纸归因的形状更新；0 新增 / 0 退场）---
+#   · tests/pd_parentctl/PdParentCtl.vbp（7194 → 8215 字节）：C2224 UserControl.Parent 扩展属性族
+#     的钉子夹具加 ParentExtenderProbe；发码 5 处由 `vb6_UC_ParentObject().<成员>` 改成
+#     ComGetStringProp / ComGetIntProp / ComSetProp / ComCall（归因见 handoff §56.23）。
+#   · tests/pd_printer_props/{Mod1.bas,pd_printer_props.vbp}：C2224 Printer.ScaleMode 的钉子
+#     （`i = Printer.ScaleMode` → `i = vb6_ChkLong(vb6_Printer_ScaleMode());`，归因见 §56.24）。
+#   形状门读数：期望 654 / 实得 654 / 相同 651 / 哈希不同 3 / 缺席 0 / 多出 0 —— 存量 651 行逐行相同。
