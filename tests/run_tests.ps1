@@ -12783,6 +12783,15 @@ if ($Category -in @("all", "syntax")) {
         "vb6_PdPropLet_prop_let_ResizeWidth((void*)me, (&(double){(vb6_VariantToDouble(",
         "vb6_PdPropLet_prop_let_ResizeWidth((void*)me, (&(double){(42.5)}))") @(
         "vb6_PdPropLet_prop_let_ResizeWidth((void*)me, (vb6_VariantToDouble(")
+    # C2143 (Layers.c:672/673): 类字段链尾上「无括号零参方法（返回 UDT）」再读字段 ——
+    # `…MainSelection.GetCompositeBoundaryRect.Left`。尾注 (`/* class var .X field */`)
+    # 只认**整串末尾**那一枚: 它此刻躺在内层调用的实参里, 截断会把调用切开。
+    Test-CodegenNote "pd_udt_chain_noparens_field" @(
+        "$Tests\pd_udtchain\PdChainTypes.bas", "$Tests\pd_udtchain\PdChainSel.cls",
+        "$Tests\pd_udtchain\PdChainImg.cls", "$Tests\pd_udtchain\PdChainUse.bas") @(
+        "vb6_PdChainSel_GetBounds((void*)m_Img->Selection /* class var .Selection field */).Left",
+        "vb6_PdChainSel_GetBounds((void*)m_Img->Selection /* class var .Selection field */).Top") @(
+        "->Selection->Left", "->Selection->Top")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。
