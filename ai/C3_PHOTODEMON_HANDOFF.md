@@ -3518,6 +3518,9 @@ $ git diff --cached --stat
   `github/dev` 均在 `67d4efeb`，`rev-list --left-right --count` = `0 0`。
 - **回退**：无。没有半截改动可判，故**未执行** `git checkout --`。
 - `.zcodeignore` 是无关工具文件（非本线），未动。
+- **第二次截断（同日、本条 §55 写完后）**：`git status --short` 仍只有 `?? .zcodeignore`，
+  `git diff --stat` / `git diff --cached --stat` 均空；HEAD = `63b300aa`，
+  `origin/dev` 与 `github/dev` 同步（`0 0`）。仍然**无**改动可提交、**无**半截可回退。
 
 ### 55.2 C2065 族② 第一站归因：`PD_MenuEntry` 10 条 = §45 同一个 `LenB` 出口
 
