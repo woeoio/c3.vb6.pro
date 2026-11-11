@@ -12707,6 +12707,21 @@ if ($Category -in @("all", "syntax")) {
         "int32_t vb6_ModA_GetLevel(void);",
         "vb6_ret_Probe = vb6_ModA_GetLevel();") @(
         "vb6_ModA_GetLevel(0)")
+    # C2197 同一族的另一半（整编 22 条, pdCanvas.c:1667..2102 Tools_*.NotifyMouse*）:
+    # 限定的 `Mod.Proc` 借到的外部副本来自**另一个模块**（跨模块注入按裸名去重, 先注册者留）,
+    # 4 参那家按 6 参那家的表补两枚缺省 ⇒ C2197。夹具里 ToolsB 注册在前且 6 参。
+    Test-CodegenNote "pd_modqual_no_borrow_crossmod" @(
+        "$Tests\pd_modqual\ToolsB.bas", "$Tests\pd_modqual\ToolsA.bas",
+        "$Tests\pd_modqual\ModA.bas", "$Tests\pd_modqual\ModB.bas") @(
+        "vb6_ToolsA_NotifyMouseMove(down, sh, x, y);") @(
+        "vb6_ToolsA_NotifyMouseMove(down, sh, x, y, 0.0, 0.0)")
+    # C2197 第三族（整编 6 条, pdMBM.c:1194/2122 + SelectionFilters.c:1250）:
+    # 语句级无括号调用, 首参是括号分组且后面还有实参 —— `obj.M (a + b), c`。
+    # 修前 `, c` 被挂到**调用结果**上（发 `_own_1, 1` 两枚多余实参）⇒ C2197。
+    Test-CodegenNote "pd_modqual_parenless_paren_arg" @(
+        "$Tests\pd_modqual\ProbeCls.cls") @(
+        "vb6_ProbeCls_SetPos(me, (me->m_X + me->m_Y), 1, 1);") @(
+        "vb6_ProbeCls_SetPos(me, (me->m_X + me->m_Y), 0, 0, _own_")
     # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
     # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
     # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`

@@ -11,3 +11,9 @@ End Function
 Public Function Probe() As Long
     Probe = ModA.GetLevel()
 End Function
+
+' C2197 第二族（跨模块同名成员）：ToolsA 那枚 4 参, ToolsB 有一枚 6 参的同名。
+' 修前形参表借到注册在先的 ToolsB => 多补两枚缺省 => C2197。
+Public Sub ProbeMouse(ByVal down As Boolean, ByVal sh As Integer, ByVal x As Single, ByVal y As Single)
+    ToolsA.NotifyMouseMove down, sh, x, y
+End Sub

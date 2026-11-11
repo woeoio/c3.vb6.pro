@@ -307,17 +307,40 @@
             // 一枚同名过程时 lookupModule 先命中它, 缺省/必填补齐按它的形参个数补,
             // 于是实参比真正的被调方多一枚 —— 实测 Compression.bas:348
             // `Plugin_libdeflate.GetDefaultCompressionLevel()` 本身 0 参, 被补成 1 参
-            // ⇒ `vb6_Plugin_libdeflate_GetDefaultCompressionLevel(0)` (整编 68 条
-            // C2197 的主族)。限定符不是本模块时, 宁可不补 (实参照原样发)。
+            // ⇒ `vb6_Plugin_libdeflate_GetDefaultCompressionLevel(0)` (整编 9 条)。
+            // 限定符不是本模块时, 宁可不补 (实参照原样发)。
             // 只看**本地**符号: 注入的外部符号 (含窗体 `frm_proc` 那枚) 不能凭
             // sourceModule 判掉 —— pd_meform 夹具里那枚的 sourceModule 是空/别名,
             // 判掉会把 ByRef 类实例实参的 argtmp 转换整段丢掉。
+            //
+            // 宿主伪对象 (UserControl/Ambient/Extender/PropertyPage/Parent) 例外:
+            // `vb6_<伪对象>_<成员>` 的 C 签名就是**本类同名成员**的签名 (M22 分支),
+            // 这张表不但要借, 而且是唯一来源 —— 弃掉会把
+            // `vb6_Extender_Move(Left, Top, Width, Height, _has_Top, _has_Width, _has_Height)`
+            // 少发 3 枚 `_has_` 标志 (ucSegmentedControl.ctl / VBFlexGrid.ctl 实测)。
             if (funcSym && !vbaQualifiedCallee216
-                && !funcSym->isExternal
-                && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr
-                && Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name)
-                       != Symbol::toLower(moduleName_)) {
-                funcSym = nullptr;
+                && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string qualLowerQ =
+                    Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name);
+                if (!hostPseudoIsObject(qualLowerQ)
+                    && qualLowerQ != Symbol::toLower(moduleName_)) {
+                    if (!funcSym->isExternal) {
+                        funcSym = nullptr;
+                    } else if (!funcSym->sourceModule.empty()
+                               && Symbol::toLower(funcSym->sourceModule) != qualLowerQ
+                               && !knownLocalVars_.count(qualLowerQ)
+                               && !knownClassVars_.count(qualLowerQ)
+                               && !procObjectFormals_.count(qualLowerQ)) {
+                        // 同一族的另一半: 限定的 `Mod.Proc` 借到的是**别的模块**注入副本。
+                        // 跨模块注入按 storageKey (裸名) 去重、先注册者留, 所以同一裸名只有
+                        // 一份外部符号 —— 它可能来自另一个模块。实测 pdCanvas.ctl 里
+                        // Tools_Move/Tools_Zoom/Tools_Measure 三家都有 NotifyMouseMove,
+                        // 4 参那家借到 6 参那家的表 ⇒ 补两枚缺省 ⇒ C2197 (整编 22 条)。
+                        // 限定符是变量/形参时不适用: 变量名与类名本就不同源, 那条路是
+                        // `obj.Member(...)` 的 Optional 补齐, 弃了会变 C2198。
+                        funcSym = nullptr;
+                    }
+                }
             }
             if (funcSym && (funcSym->kind == SymbolKind::Sub || funcSym->kind == SymbolKind::Function
                 || funcSym->kind == SymbolKind::PropertyGet || funcSym->kind == SymbolKind::PropertyLet

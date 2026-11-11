@@ -714,7 +714,15 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
             argAddressable = (k == ASTNodeKind::IdentifierExpr
                            || k == ASTNodeKind::MemberAccessExpr);
         }
-        if (nbParen.callee && nbParen.callee->kind == ASTNodeKind::IdentifierExpr
+        // C3-SENTINEL(np-call-firstarg-paren-binop): 被调方两种形态都收 —— 裸标识符
+        // (`fHSVtoRGB (…), 1, …`) 与 `obj.Member` (`m_Stream.SetPosition (…), 1`;
+        // PhotoDemon pdMBM.cls:781 / SelectionFilters.bas:732 实测被外层调用结果吞成
+        // `vb6_pdStream_SetPosition(me, expr, 0, 0, _own_1, 1)` ⇒ C2197 6 条)。
+        // 收窄条件同一套: 1 枚实参、首参不可寻址 (可寻址时括号表示"按值传临时",
+        // 折叠会改成按引用, 语义不同)。
+        if (nbParen.callee
+            && (nbParen.callee->kind == ASTNodeKind::IdentifierExpr
+                || nbParen.callee->kind == ASTNodeKind::MemberAccessExpr)
             && nbParen.named.empty() && nbParen.positional.size() == 1 && !argAddressable) {
             calleeOverride110y = std::move(nbParen.callee);
             leadingArg110y = std::move(nbParen.positional[0]);

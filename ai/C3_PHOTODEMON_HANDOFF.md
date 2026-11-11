@@ -4413,11 +4413,20 @@ Compression.bas:348  GetDefaultCompressionLevel = Plugin_libdeflate.GetDefaultCo
 
 ```cpp
 if (funcSym && !vbaQualifiedCallee216
-    && !funcSym->isExternal
-    && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr
-    && Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name)
-           != Symbol::toLower(moduleName_)) {
-    funcSym = nullptr;
+    && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
+    const std::string qualLowerQ = Symbol::toLower(...object.name);
+    if (!hostPseudoIsObject(qualLowerQ)
+        && qualLowerQ != Symbol::toLower(moduleName_)) {
+        if (!funcSym->isExternal) {
+            funcSym = nullptr;                       // 本模块同名过程
+        } else if (!funcSym->sourceModule.empty()
+                   && Symbol::toLower(funcSym->sourceModule) != qualLowerQ
+                   && !knownLocalVars_.count(qualLowerQ)
+                   && !knownClassVars_.count(qualLowerQ)
+                   && !procObjectFormals_.count(qualLowerQ)) {
+            funcSym = nullptr;                       // 别的模块注入副本 (§56.26.1)
+        }
+    }
 }
 ```
 
@@ -4428,6 +4437,11 @@ if (funcSym && !vbaQualifiedCallee216
   `&vb6_argtmp_...` 与 `vb6_UC_InstanceOf` 两行，`pd_me_own_proc` 直接 FAIL）。
 - 限定符就是本模块时（`Mod.Proc` 且 `Mod` = 当前模块）不弃 —— 那就是本模块自己的过程。
 - `VBA.X` 那条路不碰（`vbaQualifiedCallee216`）。
+- **宿主伪对象例外**（`hostPseudoIsObject`：UserControl / Ambient / Extender / PropertyPage / Parent）：
+  `vb6_<伪对象>_<成员>` 的 C 签名就是本类同名成员的签名（M22 分支），这张表是唯一来源。
+  首版漏了这条，CI 形状门立刻抓到两张既有输入改写（ucSegmentedControl 的 `Extender.Move`
+  少发 3 枚 `_has_`、VBFlexGrid 的 `Extender.Drag/ZOrder` 少发 `_has_Action`），
+  加上例外后两者恢复原形状（见 §56.26.4）。
 
 #### 56.25.4 夹具与钉子
 
@@ -4452,3 +4466,92 @@ if (funcSym && !vbaQualifiedCallee216
 - `pdStringStack.GetString`(68) / `UpdateAgainstCurrentTheme`(42) / `NotifyMouse*`(22) 三族都**不是**
   “借本模块同名”：前三者的借用源是**另一个模块/类的同名成员**（不同 `sourceModule`），
   或干脆是接收者重复前置。它们各自要单独复现，见 §56.26 起。
+
+### 56.26 C2197 第二、三刀：跨模块同名成员借表（22 条）+ 语句级括号首参（6 条）
+
+#### 56.26.1 第二刀：限定的 `Mod.Proc` 借到**别的模块**注入副本（NotifyMouse* 22 条）
+
+**病灶**：跨模块注入按 `storageKey`（裸名）去重、**先注册者留**，所以消费方符号表里同一裸名
+只有一份外部符号。`pdCanvas.ctl` 里 `Tools_Move` / `Tools_Zoom` / `Tools_Measure` 等都有
+`NotifyMouse*`，4 参那家借到 6 参那家的形参表 ⇒ 补两枚缺省 ⇒ C2197（`pdCanvas.c:1667..2102`）。
+修前本机复现（`.temp\c2197x`，三模块）：
+
+```
+vb6_ToolsA_NotifyMouseMove(down, sh, x, y, 0.0, 0.0);   // 原型 4 参
+```
+
+**改法**（`cgen_expr_call_callee_params.inc`，紧跟 §56.25 那道守卫之后）：外部符号的
+`sourceModule` 与限定符不符即弃表。限定符是**变量/形参**时不适用（变量名与类名本就不同源，
+那条路是 `obj.Member(...)` 的 Optional 补齐，弃了会变 C2198）：
+
+```cpp
+if (funcSym && funcSym->isExternal && !funcSym->sourceModule.empty()
+    && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
+    const std::string qualLowerX = Symbol::toLower(...object.name);
+    const bool qualIsVarX = knownLocalVars_.count(qualLowerX) != 0
+        || knownClassVars_.count(qualLowerX) != 0
+        || procObjectFormals_.count(qualLowerX) != 0;
+    if (!qualIsVarX && qualLowerX != Symbol::toLower(moduleName_)
+        && Symbol::toLower(funcSym->sourceModule) != qualLowerX) {
+        funcSym = nullptr;
+    }
+}
+```
+
+**夹具/钉子**：`tests/pd_modqual/ToolsA.bas`（4 参）、`ToolsB.bas`（6 参，注册在前）、
+`ModB.bas` 新增 `ProbeMouse` 调 `ToolsA.NotifyMouseMove down, sh, x, y`；
+`Test-CodegenNote "pd_modqual_no_borrow_crossmod"` 正向 `vb6_ToolsA_NotifyMouseMove(down, sh, x, y);`，
+反向 `...x, y, 0.0, 0.0)`。修后本机：
+
+```
+vb6_ToolsA_NotifyMouseMove(down, sh, x, y);
+```
+
+#### 56.26.2 第三刀：语句级无括号调用 + 括号分组首参 + 后续实参（6 条）
+
+**病灶**：`m_Stream.SetPosition (.a + .b), FILE_BEGIN`（pdMBM.cls:781）与
+`cInpaint.SetSamplingCenter (x), (y)`（SelectionFilters.bas:732）。表达式层把 `M (…)`
+当“带 1 实参的调用”，语句层再把 `, FILE_BEGIN` 挂到**调用结果**上。修前本机：
+
+```
+vb6_pdStream_SetPosition(me->m_Stream, (…) , 0, 0, _own_11, 1);   // 原型要我 + 3 形参
+```
+
+`parser_stmt_assign.cpp` 的无 binop 折叠格（C3-SENTINEL(np-call-firstarg-paren-binop)）
+此前只认**裸标识符** callee（`fHSVtoRGB (…), 1, …`），`obj.Member` 落到“调用结果再调用”。
+本刀把该格放宽到 `MemberAccessExpr`，收窄条件不动（恰 1 枚实参、首参不可寻址 ——
+`f (v), x` 的括号是“按值传临时”，折叠会改成按引用，语义不同）。
+`scripts/check_np_call_firstarg_binop.ps1` 的头部口径同步写明（哨兵断言未放宽，仍 PASS）。
+
+**夹具/钉子**：`tests/pd_modqual/ProbeCls.cls`（`Me.SetPos (m_X + m_Y), 1`，第二枚 Optional）；
+`Test-CodegenNote "pd_modqual_parenless_paren_arg"` 正向
+`vb6_ProbeCls_SetPos(me, (me->m_X + me->m_Y), 1, 1);`，反向 `…, 0, 0, _own_`。
+
+**修后本机读数**：
+- `pdMBM.cls`：原 6 实参那两处变 `vb6_pdStream_SetPosition(me->m_Stream, (… ), FILE_BEGIN, 1);`。
+- `SelectionFilters.bas`：`vb6_pdInpaint_SetSamplingCenter(cInpaint, (x 差值), (y 差值));`。
+
+#### 56.26.3 验证读数
+
+- `-Category syntax`：**PASS=217 FAIL=0 SKIP=0**（215 + 本刀新增 2 例）。
+- `check_np_call_firstarg_binop.ps1`：PASS。
+- 形状门：本刀只新增输入（`toolsA/ToolsB/ProbeCls`），无既有输入改写；新增行按“新输入”登记。
+
+#### 56.26.4 A/B：首版守卫误伤（形状门两行）与收窄过程
+
+§56.25 首版只拦“本地同名过程”，CI 形状门报 **相同 652 / 哈希不同 2**：
+
+| 输入 | 触发点 | 修前（期望形状） | 首版误发 |
+|---|---|---|---|
+| `tests/ucSegmentedControl/SegmentedControl.vbp` | ucSegmentedControl.ctl `Extender.Move` | `vb6_Extender_Move(Left, Top, Width, Height, _has_Top, _has_Width, _has_Height);` | `vb6_Extender_Move((*Left), (*Top), (*Width), (*Height));` |
+| `tests/VBFlexGridDemo/VBFlexGridDemo.vbp` | VBFlexGrid.ctl `Extender.Drag` / `Extender.ZOrder` | `vb6_Extender_Drag(Action, _has_Action);` | `vb6_Extender_Drag((*Action));` |
+
+RTL 原型（`src/rtl/core/vb6rtl/vb6rtl_userctl.h:262/265/270`）明确收 `_has_` 标志，
+所以**旧形状是对的**：宿主伪对象那几枚 `vb6_<伪对象>_<成员>` 的签名设计上就是复用本类同名成员
+（`cgen_expr_member_obj_dispatch.inc` 的 M22 分支 + Fix 110e 注释）。收窄判据加
+`hostPseudoIsObject(qualLowerQ)` 例外后，两张输入逐字恢复原发码，形状门只剩“新输入 2 行”。
+
+复现口径（不重建两遍编译器）：临时把守卫改成 `std::getenv("C3_2197_OFF") == nullptr` 开关，
+同一个 exe 加/不加环境变量各发一次再 diff；确认后把开关与 `[DBG2197]` 打印全部删掉。
+`[DBG2197]` 顺带把误伤点定位到 `mod=ucSegmentedControl qual=Extender member=Move` 与
+`mod=VBFlexGrid qual=Extender member=Drag/ZOrder`。
