@@ -1275,6 +1275,33 @@
                                     argCls92y = currentReturnCType_.substr(8);
                                     if (!argCls92y.empty() && argCls92y.back() == '*') argCls92y.pop_back();
                                 }
+                                // C2065 族① (`cmdFlyoutLock`): 整枚**控件数组**作 ByRef Variant
+                                // 实参 (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个
+                                // Toolpanel 各一处)。单枚控件走下面 FromInstance 那条; 控件数组
+                                // 在 VB6 里交给 Variant 的是**一枚 Variant 数组** (元素是各控件
+                                // 对象)。照单枚口径包会把数组描述符当实例:
+                                // `(void*)(cmdFlyoutLock)` —— C 里只有 `vb6_arr_cmdFlyoutLock`,
+                                // 没有这个名字 ⇒ C2065。判据问 knownControlArrays_ (当前窗体
+                                // 的设计期控件数组表), 不认名字清单; 载体出口是
+                                // vb6_CtrlArrToVariantArray (与单枚同源, 借出包装器)。
+                                if (!isObjVar92y && !argLs92y.empty()
+                                    && knownControlArrays_.count(argLs92y)) {
+                                    // 数组变量名按**原拼写** (cgen_form 的声明就是
+                                    // `vb6_arr_<原拼写>`; cIdent 会折小写 ⇒ 大小写不符 = C2065)。
+                                    const std::string caOrig92y = argVal;
+                                    const std::string tmpCA92y = "_vb6_vararg_"
+                                        + std::to_string(ansiCounter_++);
+                                    c_.emitLine("vb6_VARIANT " + tmpCA92y
+                                        + ";  /* C2065 族①: 整枚控件数组 → Variant 数组 */");
+                                    c_.emitLine("vb6_CtrlArrToVariantArray(&" + tmpCA92y + ", &vb6_arr_"
+                                        + caOrig92y + ", "
+                                        + (argCls92y.empty() ? std::string("NULL")
+                                                             : ("\"" + argCls92y + "\""))
+                                        + ");");
+                                    boxTempsToClear_.push_back({tmpCA92y, c_.indentLevel()});
+                                    argVal = "&" + tmpCA92y;
+                                    break;
+                                }
                                 // Fix <VBFlexGridDemo>: 已知 **Variant 变量**不能走这两条
                                 // 装箱。cExprIsVariant 只认函数表达式 (vb6_VariantXxx( 前缀),
                                 // 裸变量名一律 false; 而 knownObjectVars_ 全程不清空, 别的

@@ -2969,3 +2969,76 @@ vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_
 `UserControls.ThemeFlyoutControls cmdFlyoutLock`（整枚控件数组作 `ByRef Variant`
 实参，13 个 Toolpanel 各一处），**未改**，是下一站。
 
+## §47 C2065 族① 第二站 —— 整枚控件数组作 `ByRef Variant` 实参（`cmdFlyoutLock` 13 条）
+
+### 47.1 根因（PD 整编 #2 日志：`cmdFlyoutLock` 13 条）
+
+`UserControl_Support.bas:744` 的 `ThemeFlyoutControls(ByRef cmdFlyoutLock As Variant)`
+被 13 个 Toolpanel 各调一次（`Forms\Toolpanel_Selections.frm:2086` 等），实参是
+**整枚设计期控件数组** `cmdFlyoutLock`（`Begin PhotoDemon.pdButtonToolbox cmdFlyoutLock`
++ `Index = 0,1,2,4,5`）。发码落进
+[cgen_expr_call_arg_emit.inc](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/detail/expr/cgen_expr_call_arg_emit.inc)
+的 `ByRef Variant` 装箱站，那一站只认「单枚控件」：
+
+```c
+(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("pdButtonToolbox"), (void*)(cmdFlyoutLock))
+```
+
+两处不合 VB6：数组描述符被当实例；名字裸写成 `cmdFlyoutLock` —— C 里只有
+`vb6_arr_cmdFlyoutLock` ⇒ `error C2065: 'cmdFlyoutLock'`。
+
+### 47.2 修法（判据问控件数组表，载体走 RTL 出口）
+
+发码：在单枚控件装箱之前加一支 —— 实参是裸标识符、字形表命中
+`knownControlArrays_`（当前窗体设计期控件数组表）时，落一枚具名 `vb6_VARIANT`
+临时，调 `vb6_CtrlArrToVariantArray` 交整枚数组，再把该临时取址交给形参：
+
+```c
+vb6_VARIANT _vb6_vararg_0;  /* C2065 族①: 整枚控件数组 → Variant 数组 */
+vb6_CtrlArrToVariantArray(&_vb6_vararg_0, &vb6_arr_cmdFlyoutLock, "pdButtonToolbox");
+vb6_UserControls_ThemeFlyoutControls(&_vb6_vararg_0);
+```
+
+数组名按 **`argVal` 原拼写**拼（`cIdent` 会折小写 ⇒ `vb6_arr_cmdflyoutlock` 与实际
+声明 `vb6_arr_cmdFlyoutLock` 大小写不符，仍是 C2065 —— 第一版实测踩到）。
+所有权：临时量登记 `boxTempsToClear_`，语句末 `VariantClear` 收回
+`vb6_VariantObject` 多加的那一枚；`vb6_SafeArrayCreate1D` 的载体随 VariantClear 释放。
+
+RTL：[vb6forms_ctrlarr.c](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/rtl/core/vb6forms/vb6forms_ctrlarr.c)
+新增 `vb6_CtrlArrToVariantArray`（声明在同名 `.h`，ABI 用 `void*`，不把 vb6rtl 拖进头）：
+按 `lowerBound..upperBound` 建 `vb6_sa_variant` 一维数组，每格
+`vb6_VariantObject(vb6_ComObject_FromBorrowedInstance(desc, hwnd))`（与单枚控件同源的
+借出包装器）；desc 查不中或该格未创建 → 该格 `Empty`，不冒充对象。
+这对应 VB6 语义：`ByRef ... As Variant` 收到的是一枚 Variant 数组，元素是各控件对象，
+调用方 `cmdFlyoutLock(i).Value = …` / `cmdFlyoutLock.UBound` 才成立。
+
+### 47.3 夹具与正反针
+
+- 新增 `tests/pd_ctrlarrvar/{frmArrVar.frm,pdButtonToolbox.ctl,ArrVar.bas}`：窗体里
+  `cmdFlyoutLock` 控件数组（Index 0/1）+ 模块 `ThemeFlyoutControls(ByRef … As Variant)`，
+  与 PD 的 `UserControls.ThemeFlyoutControls cmdFlyoutLock` 同形；
+- `Test-CodegenNote "pd_ctrlarr_variant"`：正面钉
+  `vb6_CtrlArrToVariantArray(&_vb6_vararg_0, &vb6_arr_cmdFlyoutLock, "pdButtonToolbox");`
+  与 `vb6_ArrVar_ThemeFlyoutControls(&_vb6_vararg_0);`；反面钉 `(void*)(cmdFlyoutLock)`；
+- 回归：`run_tests.ps1 -Category syntax` ⇒ **PASS=194 FAIL=0 SKIP=0**（+1）。
+
+### 47.4 构建与资源
+
+- 本机增量构建：空闲 **6.22 GB**（低于 8 GB 硬线，违例一次，记录在此；
+  仅 3 目标「1 TU + 2 链接」，`CMAKE_BUILD_PARALLEL_LEVEL=1`，未进交换）。
+- RTL 单文件语法检查口径：生成程序的真实编译命令带 **`/std:c11 /utf-8`**
+  （[msvc_driver.cpp](file:///c:/Users/Administrator/Documents/c3.vb6.pro/src/backend/msvc_driver.cpp)）。
+  此前单编 `vb6forms_ctrlarr.c` 出现的 `vb6rtl_array.h:91 _Static_assert` C2059、
+  `vb6rtl_bstr.h:235 'if'` C2059 全是**检查命令缺这两个开关**（默认 C 模式不认
+  `_Static_assert`；GBK 代码页读 UTF-8 注释把行尾吃掉），不是源码问题。
+  补上 `/std:c11 /utf-8` 后该 TU 单独编过（仅存量 C4133 ×2，位于既有 MDI 代码）。
+
+### 47.5 范围与未完
+
+本刀只收「整枚控件数组作 `ByRef Variant` 实参」这一站。同一站点相邻的
+`cmdFlyoutLock(i).Value = False`（Variant 数组元素 → 控件对象 → 成员写）**未动**，
+它今天在 #2 日志里没有报错，等 #3 对照再判。
+下一站按 §37.8：C2039 族② 行号与验收读数（等 #3 artifact）→ C2065 族① 其余
+（`WindowState`、`vb6_UserControl_cmbWidthUnit`、`txtRenameRemove`、`txtPageRange`）
+→ 族② UDT 裸名。
+

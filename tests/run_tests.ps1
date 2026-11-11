@@ -12690,6 +12690,17 @@ if ($Category -in @("all", "syntax")) {
         "vb6_MeForm_ApplySepiaEffect(vb6_MeForm_GetLocalParamString(), (-1), &vb6_argtmp_vb6_cls_pdFxPreviewCtl_0, 1, 1);",
         "vb6_argtmp_vb6_cls_pdFxPreviewCtl_0 = (vb6_cls_pdFxPreviewCtl*)vb6_UC_InstanceOf(vb6_hwnd_pdFxPreview);") @(
         "vb6_ComPackObject(pdFxPreview)", 'L"ApplySepiaEffect"), NULL')
+    # C2065 族① (cmdFlyoutLock): 整枚**控件数组**作 `ByRef v As Variant` 实参
+    # (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个 Toolpanel 各一处)。
+    # 修前按「单枚控件」口径包装: 数组描述符被当实例、且名字裸发成 `cmdFlyoutLock`
+    # (C 里只有 `vb6_arr_cmdFlyoutLock`) ⇒ 整编 13 条 C2065。正面钉两行: 载体出口
+    # 收原拼写数组名 + 调用点收该 Variant 临时; 反面钉旧坏形状。
+    Test-CodegenNote "pd_ctrlarr_variant" @(
+        "$Tests\pd_ctrlarrvar\frmArrVar.frm", "$Tests\pd_ctrlarrvar\pdButtonToolbox.ctl",
+        "$Tests\pd_ctrlarrvar\ArrVar.bas") @(
+        'vb6_CtrlArrToVariantArray(&_vb6_vararg_0, &vb6_arr_cmdFlyoutLock, "pdButtonToolbox");',
+        "vb6_ArrVar_ThemeFlyoutControls(&_vb6_vararg_0);") @(
+        "(void*)(cmdFlyoutLock)")
     # PhotoDemon 剩余 VB3001 里的 7 条 (pdCommandBar.ctl): 裸 `Parent.Controls`。
     # VB6 的 `UserControl.Parent` 是**宿主容器对象** (窗体/容器控件), 不是容器窗口;
     # `Parent.Controls` 就是父容器的控件集合, 与 `UserControl.ParentControls` 同一件事。

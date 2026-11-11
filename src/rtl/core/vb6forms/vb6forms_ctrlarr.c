@@ -11,6 +11,7 @@
 
 #include "vb6forms.h"
 #include "vb6forms_internal.h"
+#include "vb6rtl.h"   /* 控件数组 → Variant 数组 (vb6_VARIANT / vb6_SafeArrayCreate1D) */
 #include <stdio.h>
 #include <stdarg.h>
 
@@ -61,6 +62,56 @@ int vb6_CtrlArr_LBound(const vb6_CtrlArr* arr) {
 
 int vb6_CtrlArr_UBound(const vb6_CtrlArr* arr) {
     return arr->upperBound;
+}
+
+/* 跨族借用: 控件实例 → IDispatch 包装 (定义在 vb6comserver_obj.c)。
+ * vb6forms 系列不 include vb6comserver.h (VARIANT/COM 头互相打架), 按本仓既有
+ * 做法就地声明 —— 与 vb6forms_controls.h 里那几处 extern 同一口径。 */
+typedef struct vb6_CoClassDesc vb6_CoClassDesc;
+extern const vb6_CoClassDesc* vb6_FindCoClassDesc(const char* classVariable);
+extern void* vb6_ComObject_FromBorrowedInstance(const vb6_CoClassDesc* desc, void* instance);
+
+/* C2065 族① (cmdFlyoutLock): 整枚控件数组交给 `ByRef v As Variant` 形参。
+ *
+ * VB6 语义: `ThemeFlyoutControls(ByRef cmdFlyoutLock As Variant)` 里收到的是**一枚
+ * Variant 数组**, 元素是各控件对象 —— 调用方随后写 `cmdFlyoutLock(i).Value = …`、
+ * 读 `cmdFlyoutLock.UBound`。发码侧原先按「单枚控件」的口径包装, 把数组描述符当实例:
+ * `vb6_ComObject_FromInstance(…, (void*)(cmdFlyoutLock))` —— C 里根本没有
+ * `cmdFlyoutLock` 这个名字 (控件数组只有 `vb6_arr_cmdFlyoutLock`), 于是 C2065
+ * (整编 13 个 Toolpanel 各一处)。
+ *
+ * 引用口径与 vb6_ComPackVB6InstanceBorrowed 一致: 控件池/宿主仍握有实例, 这里只借
+ * 一枚包装器引用; `vb6_VariantObject` 再 AddRef 的那一枚由调用方语句末 VariantClear
+ * 收回。desc 查不中 (未登记的类) 时该槽落 Empty —— 与「传 Nothing」同档, 不冒充对象。
+ */
+void vb6_CtrlArrToVariantArray(void* outVariant, const vb6_CtrlArr* arr, const char* classVariable) {
+    vb6_VARIANT* out = (vb6_VARIANT*)outVariant;
+    vb6_SafeArray1D* sa;
+    const vb6_CoClassDesc* desc;
+    int lb, ub, n, i;
+
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    out->vt = vb6_vtEmpty;
+    if (!arr) return;
+    lb = arr->lowerBound;
+    ub = arr->upperBound;
+    if (ub < lb) return;
+    sa = vb6_SafeArrayCreate1D(vb6_sa_variant, lb, ub);
+    if (!sa) return;
+    desc = classVariable ? vb6_FindCoClassDesc(classVariable) : NULL;
+    n = ub - lb + 1;
+    for (i = 0; i < n; i++) {
+        vb6_VARIANT* slot = ((vb6_VARIANT*)sa->data) + i;
+        void* inst = vb6_CtrlArr_GetAt(arr, lb + i);
+        if (!inst || !desc) {
+            memset(slot, 0, sizeof(*slot));
+            slot->vt = vb6_vtEmpty;
+            continue;
+        }
+        *slot = vb6_VariantObject(vb6_ComObject_FromBorrowedInstance(desc, inst));
+    }
+    *out = vb6_VariantArray(sa);
 }
 
 void* vb6_CtrlArr_Load(vb6_CtrlArr* arr, int index, void* hParent, void* hInstance) {
