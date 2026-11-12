@@ -52,6 +52,12 @@
                 return;
             }
             lastExpr_ = "vb6_enum_" + cIdent(objIdent2.name) + "_" + cIdent(node.memberName);
+            // 账 §56.52: 枚举成员的裸名引用要靠**定义方**的头 (枚举 typedef 在那里)
+            // ⇒ 登记归属模块; 否则裁 include 会把那一行头裁掉 ⇒ C2065。
+            // (有常量值的那一支在上一行就返回了 —— 数值内联, 不构成依赖。)
+            if (objSym2->isExternal) {
+                noteExternalModule(objSym2->sourceModule);
+            }
             return;
         }
 

@@ -19,6 +19,11 @@
     header_ = h_.str();
     source_ = c_.str();
 
+    // 账 §56.52: 裁掉本模块没用到的跨模块 include (固定行为, 无开关)。
+    // ⚠ 必须排在下面那段「P6.3 前向 typedef」注入**之前** —— 那批 typedef 里带
+    // `vb6_cls_<X>` 字样, 若先注入再裁, 兜底文本反查会把它当成「引用了 X」⇒ 白留一个头。
+    trimCrossModuleIncludes();
+
     // Fix 178: 本模块请求到的「含所有权成员 UDT」深拷贝函数落地。必须在 body pass
     // 之后才知道用到了哪些类型, 而 C 又要求先定义后使用 —— 故插到 .c 自身
     // `#include "<Base>.h"` 之后 (先于所有 #define 与函数体)。static: 每个 .c 各一份,

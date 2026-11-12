@@ -21,10 +21,10 @@
                   bool isDll = false, const std::string& dllProgId = "",
                   const FrmFormDesc* frmDesc = nullptr);
 
-    // opt4: 裁剪标准模块.c中未实际引用的跨模块#include (降低预处理量, 加速cl编译)
-    void setTrimIncludes(bool b) { trimIncludes_ = b; }
-    // opt4: 设置"当前模块实际引用的外部模块"集合(小写), 由driver通过AST扫描提供
-    void setTrimModules(const std::unordered_set<std::string>& m) { trimModules_ = m; }
+    // 账 §56.52: 本模块真正引用到的外部模块(小写) —— 跨模块 include 瘦身的**唯一权威**,
+    // 由发码器在发出外部引用那一刻登记 (见 cgen_state.inc 的 usedExternalModules_)。
+    // 不用 AST 扫描 (扫描漏类型引用位点 ⇒ 会把还需要的头裁掉 ⇒ 编译断);
+    // 发码文本反查只作**兜底** (记漏时多留一个头, 而不是少留一个)。
 
     // Fix 142: 设置 VBP 的 Startup= 启动对象 ("Sub Main" 或窗体模块名).
     // 多模块工程下仅该模块生成进程入口点 (WinMain/main), 其余模块不生成,

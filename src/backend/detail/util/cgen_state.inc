@@ -319,10 +319,20 @@
     // 在过程开头 knownUdtVars_.clear() 后同样会丢失, 导致 With m_uData 被误分类为 COM 对象.
     // 本集合在 generate() 扫描模块声明时填充, 过程开头 clear() 后恢复.
     std::unordered_map<std::string, std::string> moduleUdtMembers_;
-    // opt4: 裁剪标准模块.c中未实际引用的跨模块#include
-    bool trimIncludes_ = false;
-    // opt4: 当前模块实际引用的外部模块(小写), 由 driver 的 AST 收集器填充
-    std::unordered_set<std::string> trimModules_;
+    // 账 §56.52: 本模块**真正引用到**的外部模块(小写) —— 「跨模块 include 瘦身」的唯一权威。
+    //
+    // 为什么权威在这张表而不在 AST 扫描: AST 遍历走不到若干类型引用位点
+    // (VariableDecl / ParameterDecl / TypeDecl / TypeMember 里的类型引用), 靠扫 AST
+    // 得出的名单是**残缺**的 ⇒ 裁 include 会漏头 ⇒ 编译断。
+    // 而发码器自己知道每个外部符号的归属模块 (Symbol::sourceModule), 它在**发**出
+    // 引用那一刻登记 ⇒ 构造上完备: 「发了引用 ⇒ 一定要那头」。
+    //
+    // 记录点三处 (见 noteExternalModule 的调用处):
+    //   1) cProcName(..., sourceModule)   —— 外部过程/函数引用的唯一收口
+    //   2) 类成员调用的类名归一 (sourceModule) —— 外部类的原型
+    //   3) 枚举成员引用 (无常量值那一支)   —— 枚举 typedef 在定义方
+    // mutable: 记录发生在 const 成员函数 cProcName 里。
+    mutable std::unordered_set<std::string> usedExternalModules_;
     // 已知类实例变量名 → 类名映射 (小写var名 → 类名, 如 "me" → "cDialog")
     // 用于方法调用翻译 c.Method → vb6_cls_ClassName_Method(c)
     // Fix 010r-10: 从 unordered_set 改为 unordered_map 以支持类名查找

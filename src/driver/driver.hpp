@@ -110,9 +110,11 @@ struct CompileOptions {
     // ai/023 S05: --check-packages 只读模式 —— 解析 Package= 引用、逐文件
     // 校验 sha1/size, 打印结果后退出 (不编译)。用于 CI 里预检包完整性。
     bool checkPackagesOnly = false;
-
-    // 裁剪include (性能优化): 只include实际引用的外部模块, 降低cl预处理量
-    bool trimIncludes = false;
+    // §56.52: 跨模块 include 瘦身是**编译器固有行为**, 不提供开关 (用户 2026-11-12 定:
+    // 「副作用选项没啥好处」)。理由: 每个模块的头原本把全工程每个模块的头都包进来,
+    // 每个 TU 重解析全工程的头 (PD 539 模块, 623 个 TU 合计 6.5 GB 头文本 + 29 万次
+    // 头文件打开; 本机单 TU 实测带 include 0.94 s vs 去掉 0.06 s, 94% 是重复劳动)。
+    // 普通项目同样受益。
 };
 
 // 编译结果

@@ -37,7 +37,6 @@ TypeLib/COM 选项:
 
 性能/杂项选项:
   --incremental       增量编译 (obj级缓存, 跳过未变化的.c)
-  --trim-includes     裁剪未实际引用的跨模块include
   --no-warn <ID列表>   抑制指定ID的警告 (逗号分隔, 如 3001,3003)
 
 静态库选项 (Lib "xxx.lib" / "xxx.obj"):

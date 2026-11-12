@@ -157,15 +157,11 @@
         cgen.setDefaultInstanceClasses(&defaultInstanceClasses);  // P6.4+: 类模块默认实例
         cgen.setClassFieldKindMap(&classFieldKindMap);  // 账 #305 §B168/§B169: 工程级「类 → 标量字段 → 声明档」表
         cgen.setClassMemberArrayMap(&classMemberArrayMap);  // 账 #476 §B190: 「类 → 动态数组成员 → 声明语法」表 (只运语法, 档位在出口里映射)
-        cgen.setTrimIncludes(options.trimIncludes);  // opt4: 裁剪未实际引用的跨模块include
         cgen.setTargetArch(options.arch);            // ai/vb-asm-extension-spec: Asm 块仅 x64
-        if (options.trimIncludes) {
-            // opt4: 基于AST实际引用收集外部模块, 供 include 裁剪
-            std::unordered_set<std::string> refdModules;
-            ExternalRefCollector collector(analyzer->symbolTable(), externalModules, refdModules);
-            traverseAST(*module, collector);
-            cgen.setTrimModules(refdModules);
-        }
+        // 账 §56.52: 裁剪的判据**不再**由 driver 用 AST 扫描提供 —— 那份名单漏类型引用
+        // 位点 (VariableDecl/ParameterDecl/TypeDecl/TypeMember 里的类型引用, AST 遍历
+        // 走不到), 会把还需要的头裁掉 ⇒ 编译断。判据现在只有一处: 发码器在**发出**
+        // 外部引用那一刻登记 (见 cgen_state.inc 的 usedExternalModules_), 外加发码文本反查兜底。
 
         // 传入模块基名和外部模块列表
         // P6.6: 传递ActiveX DLL模式信息

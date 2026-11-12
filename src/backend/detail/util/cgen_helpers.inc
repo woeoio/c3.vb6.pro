@@ -173,6 +173,16 @@
     std::string cProcName(const std::string& procName, AccessLevel access,
                           const std::string& sourceModule = "") const;
 
+    // 账 §56.52: 登记「本模块引用到的外部模块」(小写)。空串 = 本模块自有符号, 不登记。
+    // 见 cgen_state.inc 里 usedExternalModules_ 那段注释 —— 它是 include 瘦身的唯一权威。
+    void noteExternalModule(const std::string& sourceModule) const;
+
+    // 账 §56.52: 裁掉本模块**没用到**的跨模块 include (固定行为, 无开关)。
+    // 在发码器这一侧做, 不在 driver: 裁掉一行 include 要补一行
+    // `vb6_mod_<X>_init` 前向声明, 那个函数名的拼法 (cIdent) 是发码器的口径 ——
+    // 放 driver 就得把命名口径抄第二份 (两处权威 ⇒ 迟早对不上)。
+    void trimCrossModuleIncludes();
+
     // Fix 269: 类属性 C 函数名的**成员段** (即 `vb6_<Cls>_` 之后那一段)。
     // 属性前缀 (prop_get_/prop_let_/prop_set_) 是函数名的一部分, 所以关键字/特殊
     // 字符判定必须对 **prefix + member 整串** 做 —— 与定义侧

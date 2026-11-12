@@ -13,7 +13,7 @@
 | `gen_modules.ps1` | 生成器：`-Count N` 生成 N 个保守 VB6 语法模块（每模块 7 函数约 60 行）+ `Main.bas`（逐一调用全部模块防死代码消除）+ `OptBench.vbp`，UTF-8 无 BOM |
 | `src/M001..M120.bas`, `Main.bas` | 生成结果（121 个源文件，已入库） |
 | `OptBench.vbp` | 工程文件（Exe, Startup="Sub Main"） |
-| `build_optbench.bat` | 完整优化参数构建：`--incremental --trim-includes --no-warn 3001,3003` |
+| `build_optbench.bat` | 完整优化参数构建：`--incremental --no-warn 3001,3003`（include 瘦身已改成固定行为，不再是参数） |
 | `bench.bat` + `bench_run.ps1` | A/B 计时包装：`-Tag <名> -C3 <exe> -Clean 0|1`，Stopwatch 计时写 `bench_<Tag>.log` |
 
 预热验证：先生成 8 模块跑通（产出 exe、`.c3obj` 9 个 obj），再放大到 120 模块正式实测。
@@ -22,7 +22,7 @@
 
 - CPU: **2 核**；编译器: VS2022 BuildTools x64；C3: `.build\C3.exe`(/MP) 与 `.build\C3_nomp.exe`（同批构建，A/B 可信）
 - 工程: 120 模块 + Main，全量生成 121 个 `.c` 编译单位
-- 基准命令：`C3 OptBench.vbp --output-dir out --incremental --no-warn 3001,3003`（bench.bat 刻意不带 `--trim-includes`，opt4 已在 001 单独评估）
+- 基准命令：`C3 OptBench.vbp --output-dir out --incremental --no-warn 3001,3003`（bench.bat 刻意不带额外参数，opt4 已在 001 单独评估；**注**：`--trim-includes` 已于 2026-11-12 撤掉，见 §56.52）
 
 ## 实测数据
 

@@ -105,9 +105,6 @@ std::pair<CompileOptions, int> Driver::parseArgs(int argc, char* argv[]) {
         else if (arg == "--incremental") {
             opts.incremental = true;  // opt3: 增量编译 (obj级缓存)
         }
-        else if (arg == "--trim-includes") {
-            opts.trimIncludes = true;  // opt4: 裁剪未实际引用的跨模块include
-        }
         else if (arg == "--keep-for-debug") {
             opts.keepTemps = true;  // 保留中间文件便于调试
         }
@@ -260,7 +257,6 @@ void Driver::printHelp() {
               << "\n"
               << "性能/杂项选项:\n"
               << "  --incremental       增量编译 (obj级缓存, 跳过未变化的.c)\n"
-              << "  --trim-includes     裁剪未实际引用的跨模块include\n"
               << "  --no-warn <ID列表>   抑制指定ID的警告 (逗号分隔, 如 3001,3003)\n"
               << "\n"
               << "静态库选项 (Lib \"xxx.lib\" / \"xxx.obj\"):\n"

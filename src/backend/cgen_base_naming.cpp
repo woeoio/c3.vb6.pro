@@ -480,10 +480,20 @@ std::string CCodeGen::wrapByRefVariantParamArg(const std::string& paramName,
     }
 }
 
+// 账 §56.52: 登记「本模块引用到的外部模块」。见 cgen_state.inc 的 usedExternalModules_
+// 那段注释 —— 它是「跨模块 include 瘦身」的唯一权威。空串 = 本模块自有符号, 不登记。
+void CCodeGen::noteExternalModule(const std::string& sourceModule) const {
+    if (sourceModule.empty()) return;
+    usedExternalModules_.insert(Symbol::toLower(sourceModule));
+}
+
 std::string CCodeGen::cProcName(const std::string& procName, AccessLevel access,
                                  const std::string& sourceModule) const {
     // 跨模块函数(外部符号): vb6_<ModuleName>_<ProcName>
     if (!sourceModule.empty()) {
+        // 账 §56.52: 这一处是「引用外部模块的过程」的**唯一收口** —— 凡是外部过程,
+        // 它的 C 名都要从这里过 ⇒ 在这里登记归属模块, 裁 include 时才不会把它漏掉。
+        noteExternalModule(sourceModule);
         return "vb6_" + cIdent(sourceModule) + "_" + cIdent(procName);
     }
     // 多模块项目:
