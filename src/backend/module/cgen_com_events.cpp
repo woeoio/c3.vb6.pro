@@ -130,10 +130,10 @@ void CCodeGen::visit(RaiseEventStmt& node) {
         // 处理器写进去的值要回到递出方 —— PD 靠它在解压前改掉文件名。
         // ⚠ **UC (.ctl) 那一路不走这条**: 那一路的 prelude thunk 与容器侧处理器仍按值,
         //   两边必须同口径 ⇒ 抬事件这一侧也维持按值 (ucLane47 = true ⇒ 只认显式 ByRef)。
-        const bool ucLane47 = currentModule_ && currentModule_->docKind == DocumentKind::UserControl;
+        const bool ucLane47 = currentModule_ && currentModule_->isUserControlDoc();
         const ParameterDecl* prm256 =
             (evtDecl && i < evtDecl->params.size()) ? evtDecl->params[i].get() : nullptr;
-        const bool byAddr256 = prm256 && eventParamByAddressLane(
+        const bool byAddr256 = prm256 && eventParamByAddress(
             prm256->isByRef, prm256->isByVal, ucLane47,
             prm256->asType && prm256->asType->kind == ASTNodeKind::ArrayTypeRef);
         if (byAddr256) {
@@ -388,8 +388,8 @@ void CCodeGen::emitEventSink(Module& module) {
                 // ⚠ **UC (.ctl) 那一路不动**: 本函数也吃 .ctl 的 EventDecl (ucTreeMaps 的
                 //   ItemClick 就是), 那一路的 prelude thunk 与容器侧处理器仍按值 ⇒ typedef
                 //   也必须按值, 否则两边靠一枚显式 cast 才编得过, 运行期把地址当 24B 槽读。
-                const bool ucLane47 = module.docKind == DocumentKind::UserControl;
-                const bool byAddr256 = eventParamByAddressLane(
+                const bool ucLane47 = module.isUserControlDoc();
+                const bool byAddr256 = eventParamByAddress(
                     param->isByRef, param->isByVal, ucLane47,
                     param->asType && param->asType->kind == ASTNodeKind::ArrayTypeRef);
                 pi.isByVal = !byAddr256;

@@ -417,6 +417,10 @@ public:
     // 文档类别 (.frm/.ctl/.pag)，driver 按扩展名一处写入 (见 DocumentKind 的注释)。
     // isFormModule 是它的历史读法，两者必须同处赋值。
     DocumentKind docKind = DocumentKind::Standard;
+    // 账 §56.48: 「这个模块是不是**用户控件 (.ctl)**」的**唯一**读法。
+    // docKind 的写点只有 driver_frontend 一处 (账 dochost D2); 「是不是 UC」这一问若在
+    // 各处散着写 `docKind == DocumentKind::UserControl`, 就是同一个决定多份答案 ⇒ 收在这里。
+    bool isUserControlDoc() const { return docKind == DocumentKind::UserControl; }
     // Interface 头行宿主 (tB 扩展, ai/022 D1/B03): VB6 "一文件一接口" 的 `.cls` 写法 —
     // 文件自身就叫 IFoo.cls, 体内唯一的 Interface 块与模块同名. 由 stage 2.7 识别置位
     // (模块名要到 driver_frontend 才定得下来), 供"接口名与模块名不算撞车"的放行与

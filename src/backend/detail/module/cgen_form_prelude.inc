@@ -215,7 +215,8 @@
                             // (emitEventSink 的 typedef、thunk、处理器形参三处都问它)。
                             // 声明是这里从 .ctl 文本里切的，所以 ByRef 那一档也从同一段文本认。
                             ev.pbyaddr.push_back(eventParamByAddress(
-                                nameSeg.find("byref") != std::string::npos, isArrParam259) ? 1 : 0);
+                                nameSeg.find("byref") != std::string::npos, /*isByVal=*/false,
+                                /*isUserControl=*/true, isArrParam259) ? 1 : 0);
                             pcur = tEnd;
                         }
                     }

@@ -596,6 +596,10 @@
                     c_.emitLine(srcStruct48 + "* " + srcVar48 + " = (" + srcStruct48 + "*)" + target + ";");
                     c_.emitLine("if (!" + srcVar48 + "->events) " + srcVar48 + "->events = ("
                                 + sinkName + "*)vb6_Alloc(sizeof(" + sinkName + "));");
+                    // 账 §56.48: 归本实例所有那枚汇另记一格 (eventsOwned) —— 出厂只放它,
+                    // 不放 `events` (UC 那一路把 `events` 指向函数内 static 汇, 那是别人的内存)。
+                    c_.emitLine("if (" + srcVar48 + "->events) " + srcVar48 + "->eventsOwned = "
+                                + srcVar48 + "->events;");
                     c_.emitLine("if (" + srcVar48 + "->events) {");
                     c_.indent();
                     c_.emitLine(srcVar48 + "->events->handler = (void*)me;");

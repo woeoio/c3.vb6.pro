@@ -124,6 +124,11 @@
         if (hasEvents) {
             std::string sinkName = "vb6_events_" + cIdent(moduleName_);  // Fix 013: 用 moduleName_
             h_.emitLine("    struct " + sinkName + "* events;  /* P6.5: event sink */");
+            // 账 §56.48: **归本实例所有**的那枚汇 (类成员 WithEvents 那一路, 堆上) 单开一格。
+            // 为什么不能直接放 `events`: UC (.ctl) 那一路把 `events` 指向**函数内 static 汇**
+            // (那是别人的内存) ⇒ 出厂那一腿若对 `events` 无差别 vb6_Free ⇒ free 掉一块静态
+            // ⇒ 实测 0xC0000374 堆损坏 (CI 的 vbp 片全红)。单开一格 ⇒ 出厂只放自己那枚。
+            h_.emitLine("    struct " + sinkName + "* eventsOwned;  /* 账 §56.48: 堆上那枚汇, 归本实例所有 */");
         }
         h_.emitLine("} " + clsStruct + ";");
         h_.emitBlank();
