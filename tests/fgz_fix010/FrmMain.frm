@@ -39,13 +39,13 @@ Begin VB.Form FrmMain
    End
    Begin VB.Timer Timer1 
       Enabled         =   0   'False
-      Interval        =   1000
+      Interval        =   3000
       Left            =   3000
       Top             =   120
    End
    Begin VB.Timer Watch 
       Enabled         =   -1   'True
-      Interval        =   2000
+      Interval        =   8000
       Left            =   3000
       Top             =   240
    End
@@ -60,13 +60,19 @@ Option Explicit
 ' FIX-010 (upstream FGZ). Bare `Timer1.Enabled = True` takes the direct
 ' vb6_SetTimerEnabled path, so use an Object variable to force the late-bound
 ' vb6_ComSetProp(t, L"Enabled") / L"Interval" path into vb6_Host_SetProp.
-' The design-time Interval is 1000 ms; the runtime write should shorten it to
-' 50 ms. If either branch is missing, Timer1 cannot deliver 3 beats before the
-' 2000 ms watchdog, which prints F10-TIMEOUT instead (and the needle goes red).
+' The design-time Interval is 3000 ms; the runtime write should shorten it to
+' 50 ms. If either branch is missing, Timer1 cannot deliver 3 beats (9 s) before
+' the 8000 ms watchdog, which prints F10-TIMEOUT instead (needle goes red).
+' The watchdog line carries its own diagnosis: loaded=0 means Form_Load never
+' ran, ticks=0 means the Enabled branch did nothing, ticks=1..2 means the
+' Interval branch did not re-arm at 50 ms.
 Private gTicks As Long
+Private gLoaded As Long
 
 Private Sub Form_Load()
     Dim t As Object
+    gLoaded = 1
+    Debug.Print "F10-LOAD"
     Set t = Timer1
     t.Interval = 50
     t.Enabled = True
@@ -74,12 +80,13 @@ End Sub
 
 Private Sub Timer1_Timer()
     gTicks = gTicks + 1
+    Debug.Print "F10-TICK=" & CStr(gTicks)
     If gTicks < 3 Then Exit Sub
     Debug.Print "F10-TICKS=3"
     Unload Me
 End Sub
 
 Private Sub Watch_Timer()
-    Debug.Print "F10-TIMEOUT"
+    Debug.Print "F10-TIMEOUT loaded=" & CStr(gLoaded) & " ticks=" & CStr(gTicks)
     Unload Me
 End Sub
