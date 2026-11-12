@@ -176,10 +176,17 @@ if ((CountWhere "legacyViewCallExpr(" "cgen_util_classtype.cpp") -ne 4) {
 #   反向 comVbTypeForPackFn = 定义 + 声明 + With 体内那一问 = 3 处;
 #   表本体 kComPackTiers = 3 处 (表定义 + 两个循环)、且只住 cgen_util_com.cpp 一份文件。
 #   谁在别处再抄一份 switch / 名单，这两问就会在不同站点给出不同答案。
-#   ⚠ V11 (正向 comPackFnForVbType 期望 4 / 实到 5) 是**真回归**, 不是判据漂移 ——
+#   ⚠ V11 (正向 comPackFnForVbType 期望 4 / 实到 5) 曾经是**真回归**, 不是判据漂移 ——
 #     多出来的那处 (src/backend/cgen_util_ctrl.cpp:2569, 提交 356f21ae = F1 收口引入) 要改
-#     **发码** (新增消费点绕过既有权威), 另起一刀收口。**本轮只放 V8**: V11 的判据一个字不动,
-#     这条脚本因此仍会红 (读数只剩 V11 那条) —— 那是预期结果, 不许为了让它全绿而动 V11。
+#     **发码** (新增消费点绕过既有权威), 另起一刀收口。**第五十六刀 (2026-11-12) 已收口**:
+#     发码侧新增唯一一问 comPackFnForDefaultPropType (cgen_util_com.cpp, 住权威那份文件),
+#     把「折叠值只认那六档」这道闸与那张配对表合成一问 —— 两处消费点
+#     (comPackExpr 的「裸控件名折默认属性」那一支 + emitUcDefaultPropLet 写那一腿) 都问它,
+#     于是 comPackFnForVbType 的读者回到 2 位 (正向问位数仍是 4 = 定义 + 声明 + 两处消费),
+#     V11 的**判据一个字没动**。形状零改动 (逐字节证, 见 cgen_util_com.cpp 那处注释)。
+#   V11b (第五十六刀新钉): 新问句 comPackFnForDefaultPropType = 定义 1 + 声明 1 + 消费 2 = 4,
+#     且住处只许 cgen_util_com.cpp / cgen_helpers.inc / cgen_util_ctrl.cpp 三份 ——
+#     新增第三位读者 = 又一处绕过权威, 立刻红。
 $v11r = CountWhere "comVbTypeForPackFn(" ""
 if ($v11r -ne 3) { $fail += ("V11 打包器反向问位数: 期望 3 = 定义 + 声明 + With 站点一问, 实际到 " + $v11r) }
 $v11f = CountWhere "comPackFnForVbType(" ""
@@ -188,6 +195,17 @@ $v11t = CountWhere "kComPackTiers" ""
 if ($v11t -ne 3) { $fail += ("V11 配对表本体位数: 期望 3 = 表定义 + 正向循环 + 反向循环, 实际到 " + $v11t) }
 if ((CountWhere "kComPackTiers" "cgen_util_com.cpp") -ne 3) {
     $fail += "V11 配对表住处: 三处全部只许在 cgen_util_com.cpp (别在别处抄第二份)"
+}
+# V11b: 「折叠值该按哪一档装箱」这一问 (第五十六刀新增的那一问) —— 读者名单是闭的。
+$v11b = CountWhere "comPackFnForDefaultPropType(" ""
+if ($v11b -ne 4) { $fail += ("V11b 折叠值装箱问位数: 期望 4 = 定义 + 声明 + 两处消费, 实际到 " + $v11b) }
+$v11bAll = @()
+foreach ($f in $code.Keys) {
+    foreach ($ln in $code[$f]) { if ($ln.Contains("comPackFnForDefaultPropType(")) { $v11bAll += (Split-Path -Leaf $f) } }
+}
+$v11bFileSet = @($v11bAll | Sort-Object -Unique)
+if (($v11bFileSet -join ',') -ne 'cgen_helpers.inc,cgen_util_com.cpp,cgen_util_ctrl.cpp') {
+    $fail += ("V11b 折叠值装箱问的住处 = " + ($v11bFileSet -join ', ') + " (want cgen_helpers.inc, cgen_util_com.cpp, cgen_util_ctrl.cpp = 声明 + 权威 + UC 默认属性写那一腿)")
 }
 #   站点 (cgen_assign_prop_write.inc) 只许问一次, 形状仍在主人手里 (站点一枚都不拼)。
 # V12 (第一百八十六刀): 「带参写槽的末形参是什么 C 类型」只许住一处查询 —— 定义 + 声明 + 一个站点
