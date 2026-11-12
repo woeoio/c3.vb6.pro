@@ -2073,11 +2073,17 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
             if (sortIt != ctrl.properties.end() && sortIt->second.intValue != 0) style |= 0x0100L;
             break;
         }
+        // FIX-010 (富贵竹): PictureBox / Image 建的是 STATIC 类窗口，不带 SS_NOTIFY 的
+        // STATIC 在 WM_NCHITTEST 上答 HTTRANSPARENT，鼠标消息被交给父窗口 ⇒ 挂在它们
+        // 身上的子类化 WndProc 一条 WM_LBUTTONDOWN/UP 都收不到。Label 一直带着这一位，
+        // 所以「同一窗体里 Label_Click 活着、Image_MouseDown 全哑」正是这一位的对照。
+        // 这里是**容器子控件**那条创建路 (cgen_form_frame_menu.inc 调本函数)；顶层那条路
+        // 在 cgen_form_ctrl_style_apply.inc 有自己的第二份表，两处必须同口径。
         case FrmControlType::PictureBox:
-            style |= kSsBitmap | kSsCenterImg | kWsBorder;
+            style |= kSsBitmap | kSsCenterImg | kWsBorder | kSsNotify;
             break;
         case FrmControlType::Image:
-            style |= kSsBitmap | kSsCenterImg;
+            style |= kSsBitmap | kSsCenterImg | kSsNotify;
             break;
         // C29-SL-h: 此前这条路**压根没有 Slider 这一格** —— 容器里的滑杆连 TBS_AUTOTICKS 都没
         // 挂上（账 #83 那条"顶层专有项没铺到第二条创建路"的一个具体落点）。折算共用

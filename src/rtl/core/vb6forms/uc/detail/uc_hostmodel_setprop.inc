@@ -54,6 +54,28 @@
         return 1;
     }
     if (_wcsicmp(name, L"Visible") == 0) { ShowWindow((HWND)obj, vb6_ho_variantToLong(v) ? SW_SHOW : SW_HIDE); return 1; }
+    /* FIX-010 (富贵竹): Timer 控件的晚绑定 Enabled / Interval。
+       `Dim t As Object : Set t = Timer1 : t.Enabled = True` 生成
+       vb6_ComSetProp(t, L"Enabled", ...)，t 就是 VB6_TIMER 身份窗 (vb6_hwnd_Timer1)。
+       以前落到下面那句 EnableWindow() —— 而计时器真实状态在 vb6forms.c 的 g_timerTable
+       (按这枚身份窗找回那一格)，EnableWindow 不会 SetTimer ⇒ 一条 WM_TIMER 都发不出来。
+       这里走**当前 dev 的 Timer 属性出口** vb6_SetTimerEnabled / vb6_SetTimerInterval：
+       它们既写 VB6_TimerEnabled / VB6_TimerInterval 窗口属性又启停定时器，与裸名写法
+       (cgen_util_ctrl.cpp 的 Control Property 表) 和读侧 vb6_GetTimerEnabled/
+       GetTimerInterval 共用同一份状态；富贵竹原补丁裸调 vb6_TimerSetEnabled/
+       SetPeriod 会漏写那两枚属性。分派必须排在通用 Enabled 分支之前。 */
+    if (IsWindow((HWND)obj)) {
+        wchar_t vb6_cls10[32] = {0};
+        if (GetClassNameW((HWND)obj, vb6_cls10, 32) > 0 &&
+            wcscmp(vb6_cls10, L"VB6_TIMER") == 0) {
+            if (_wcsicmp(name, L"Enabled") == 0) {
+                vb6_SetTimerEnabled(obj, vb6_ho_variantToLong(v) ? 1 : 0); return 1;
+            }
+            if (_wcsicmp(name, L"Interval") == 0) {
+                vb6_SetTimerInterval(obj, (int)vb6_ho_variantToLong(v)); return 1;
+            }
+        }
+    }
     if (_wcsicmp(name, L"Enabled") == 0) { EnableWindow((HWND)obj, vb6_ho_variantToLong(v) ? TRUE : FALSE); return 1; }
     // 账 #247: 与读侧同一个出口 —— 四档各写自己那一档 (单位 = 所在容器的 ScaleMode,
     // 并把写进去的数存进 VB 侧读数缓存)。以前这一支把四档一起读成缇、再整体 MoveWindow:

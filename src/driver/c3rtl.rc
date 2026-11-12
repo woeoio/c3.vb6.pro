@@ -1,4 +1,9 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-13 (FIX-010): uc_hostmodel_setprop.inc —— VB6_TIMER 身份窗的晚绑定
+//   Enabled/Interval 改走 vb6_SetTimerEnabled / vb6_SetTimerInterval (写窗口属性
+//   并启停 g_timerTable)，此前落到 EnableWindow 一条 WM_TIMER 都发不出来。
+//   This touch exists only so rc.exe re-embeds src/rtl/** into C3.exe --
+//   check_rtl_embedded R1 catches the stale embed.
 // 2026-11-05 (账 <transparency>): vb6forms_picture_prop.c —— vb6_SetControlPictureFromCom
 //   不再给**窗体**窗口 (类名 VB6_Form_*) 装 Image 控件子类, 也不做 AutoRedraw 镜像。
 //   实测 ucSegmentedControl 的 uc11 Transparent: `Me.Picture = Me.Image` 之后

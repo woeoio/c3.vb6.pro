@@ -7003,15 +7003,15 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcAbsent "tw_emitc_vkup_bare" @("$Tests\tabwalk\TabWalkApp.vbp") @(', VK_UP, 40)')
     Test-EmitcShape "tw_emitc_cparent" @("$Tests\tabwalk\TabWalkApp.vbp") @(
         '1409286151L, 65536L,',           # 顶层 Frame（Frame1 与 optFrame 两处）
-        '1417675278L, 65536L,',           # 顶层 PictureBox（账 #164：这一串已不含 WS_TABSTOP）
-        '1350566414L, 65536L,',           # 容器里的 PictureBox（picDeep）—— 第二条创建路同口径
+        '1417675534L, 65536L,',           # 顶层 PictureBox（#164 不含 WS_TABSTOP；FIX-010 补 SS_NOTIFY）
+        '1350566670L, 65536L,',           # 容器里的 PictureBox（picDeep）—— 第二条创建路同口径
         '1342177287L, 65536L,'            # 容器里的容器 —— 第二条创建路也给了这一位
     )
     Test-EmitcAbsent "tw_emitc_notplain" @("$Tests\tabwalk\TabWalkApp.vbp") @(
         '1342259200L, 65536L,',           # 容器里的普通按钮不该挂这一位
         '1409368064L, 65536L,',           # 顶层按钮同样不该挂
-        '1417740814L, 65536L,',           # 账 #164: 顶层 PictureBox 又立回 WS_TABSTOP
-        '1350631950L, 65536L,'            # 容器里那枚又立回来（第二条创建路）
+        '1417741070L, 65536L,',           # 账 #164: 顶层 PictureBox 又立回 WS_TABSTOP（FIX-010 口径）
+        '1350632206L, 65536L,'            # 容器里那枚又立回来（第二条创建路）
     )
     # 账 #166: 这条用例**本身就是那条红的固化** —— 工程文件叫 `NameProbe.vbp`，而产物叫
     # `RenamedProbe.exe`（`.vbp` 里 `ExeName32="RenamedProbe.exe"`，故意与文件名不同、还带后缀）。
@@ -7694,6 +7694,36 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_frx_pic_Image1[]',
         'vb6_frx_pic_Image1_size'
     )
+    # 富贵竹合并 FIX-010: PictureBox / Image 建的是 STATIC 类窗口，不带 SS_NOTIFY 时
+    #   在 WM_NCHITTEST 上答 HTTRANSPARENT，鼠标消息交给父窗口 ⇒ 挂在控件上的子类化
+    #   WndProc 一条 WM_LBUTTONDOWN/UP 都收不到。两张样式表（顶层 ctrl_style_apply.inc
+    #   与容器子控件的 cgen_util_ctrl.cpp::controlTypeStyleBits）必须同口径，故正例
+    #   覆盖两条创建路，反面钉三枚旧裸常量。
+    #   注: 富贵竹原补丁还把设计期颜色发射搬进 emitDesignerStyleProps，本分支已由
+    #   「两条创建路各发一份」解决（容器内 Label 的 design BackColor 实测在），照搬
+    #   只会重复发码 ⇒ 只移植样式位与 Timer 晚绑定两半。
+    Test-EmitcShape "fgz_fix010_picture_ssnotify" @("$Tests\fgz_fix010\FgzFix010.vbp") @(
+        '1417675534L, 65536L,',    # 顶层 PictureBox（picTop / picBox 两处）
+        '1409286926L, 0L,',        # 顶层 Image（imgTop）
+        '1342178062L'              # 容器子控件 Image（imgIn，第二条创建路）
+    )
+    Test-EmitcAbsent "fgz_fix010_no_old_style" @("$Tests\fgz_fix010\FgzFix010.vbp") @(
+        '1417675278L',
+        '1409286670L',
+        '1342177806L'
+    )
+    # FIX-010 后半: Timer 的晚绑定 Enabled / Interval。裸名 `Timer1.Enabled = True`
+    #   如今直接发 vb6_SetTimerEnabled，测不到 RTL；夹具用 Object 变量强制
+    #   vb6_ComSetProp(t, L"Enabled"/L"Interval") → vb6_Host_SetProp。
+    Test-EmitcShape "fgz_fix010_timer_latebound" @("$Tests\fgz_fix010\FgzFix010.vbp") @(
+        'vb6_ComSetProp(t, L"Interval", vb6_ComPackInt(50))',
+        'vb6_ComSetProp(t, L"Enabled", vb6_ComPackBool((-1)))'
+    )
+    # 运行判据（能红）: 设计期 Interval=1000，运行期写 50；Enabled 或 Interval
+    #   任一晚绑定分支失效 ⇒ 3 拍赶不上 2000ms 看门狗 ⇒ 打 F10-TIMEOUT，针立刻红。
+    #   A/B 实测: 修前 F10-TIMEOUT，修后 F10-TICKS=3（x64 + x86 均自退）。
+    Test-Vbp "fgz_fix010_timer_run" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-TICKS=3")
+    Test-Vbp "fgz_fix010_timer_run_x86" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-TICKS=3") -Arch "x86"
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，
