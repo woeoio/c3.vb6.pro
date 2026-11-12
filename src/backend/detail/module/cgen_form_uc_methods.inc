@@ -44,6 +44,9 @@
         std::string name;
         std::string fn;                                       // 生成的 thunk 名
         bool        isFn = false;                             // 无类型 Function (返回 Variant)
+        // G3: 返回槽的装箱形态 (0=原生就返回 vb6_VARIANT, 原样搬; 1=原生返回工程类
+        // 裸实例指针; 2=原生返回 void* 的 COM 对象)。判据见下面 pick 段那格注释。
+        int32_t     retBox = 0;
         std::vector<std::string> paramVb;                     // 每形参的 VB6 标量类型名
         std::vector<std::string> paramC;                      // 每形参的 C 拆箱表达式类型
         std::vector<bool> byRef;                              // 每形参是否 ByRef (ucTreeView)
@@ -154,6 +157,40 @@
             // 不发 (缺席 = 旧行为, 不会更糟)。
             const bool isFnPick = (ps->kind == SymbolKind::Function);
             if (isFnPick && ps->type != Vb6Type::Variant) continue;
+            // G3 (PD C2440 家族第四处): 返回类型的判定**必须与原生函数的 C 签名同源**。
+            //
+            // 原生返回值的 C 形态 = mapTypeRef(声明的 `As <名>`):
+            //   · 无 As / As Variant → vb6_VARIANT   (thunk 原样搬, 旧行为)
+            //   · As <工程类>        → vb6_cls_<X>*  (裸实例指针!)
+            //   · As <其它命名类型>   → void*
+            //
+            // 语义层把「作用域里认不出的类型名」一律折成 Vb6Type::Variant
+            // (semantic_analyzer_typeref.cpp:152 「未识别类型 → Variant」) ⇒ 上面那句
+            // pick 判据把**工程类返回**的 Function 也放进来了 ⇒ thunk 里发
+            //     vb6_VARIANT retMeth = vb6_<ctl>_<Name>(me);   ← 裸类指针塞结构体
+            // ⇒ cl C2440。实测 PD 四处 (整编 emit 读数):
+            //   pdCanvas.c:165 / pdStatusBar.c:160 / pdTreeviewOD.c:126 / pdTreeviewViewOD.c:109
+            //
+            // 判据用**返回类型名** (符号的 variableTypeName = 源码原样的 `As <名>`,
+            // semantic_analyzer_decl.cpp:147 记在那儿) + 工程级类名表
+            // (projectClassNameOf —— 不受同名成员遮蔽, 与 cgen_decl_var.cpp:249 同源)。
+            // 装箱出口: 工程类 → vb6_VariantFromProjectInstance (裸实例指针装对象档
+            // VARIANT 的**唯一**出口, vb6rtl_variant.h:348); void* → vb6_VariantObject。
+            // ⚠ 不用 vb6_VariantFromValue —— 它的 _Generic default 落 vb6_VariantObject,
+            //   会把类结构体地址当 IDispatch 塞进 pdispVal ⇒ 之后按 vtable 解引用 0xC0000005
+            //   (「假对象」, 见 vb6rtl_variant.h:290 那段)。
+            int32_t retBox = 0;
+            if (isFnPick) {
+                const std::string retName = ps->variableTypeName;
+                const std::string retLower = Symbol::toLower(retName);
+                if (retName.empty() || retLower == "variant") {
+                    retBox = 0;                                  // 原生就返回 vb6_VARIANT
+                } else if (!projectClassNameOf(retName).empty()) {
+                    retBox = 1;                                  // vb6_cls_<X>* —— 工程实例
+                } else {
+                    retBox = 2;                                  // void* —— COM 对象
+                }
+            }
             // 形参全 ByVal 标量才发（判据见文件头）。上限 4 个；0 个形参同样发
             // (旧判据把空形参表排除掉, 于是零参方法一条都进不了表)。
             if (ps->P().params.size() > 4) continue;
@@ -205,6 +242,7 @@
             }
             if (!ok) continue;
             pick.fn = "vb6_" + ctl + "_ucMeth_" + cIdent(ps->name);
+            pick.retBox = retBox;
             // 记下 Optional 位（缺省时按 VB6 默认值补）→ 编码进 thunk 名后缀不便,
             // 改为把 optional 位写成函数尾叁 `_has_<形参>` 的显式 if（见下）。
             for (size_t i = 0; i < isOpt.size(); i++) {
@@ -296,7 +334,19 @@
         // vb6_VARIANT, 原样写进 outRet (引擎那边是 vb6_VARIANT*; 多数调用点丢掉返回值,
         // 走的是 vb6_ComVarFree 的路径, 与真 VB6 的临时值同生命周期)。
         if (m.isFn) {
-            c_.emitLine("    vb6_VARIANT retMeth = " + call);
+            // G3: 原生返回的不是 vb6_VARIANT 时 (工程类裸实例指针 / void*),
+            // 先按对应那一档装箱再进槽 —— 直接赋值是 cl C2440 (指针 → 结构体)。
+            // 装箱口径只有这两处 (vb6_VariantFromProjectInstance / vb6_VariantObject),
+            // 都是 RTL 侧现成的出口, 这里不另立第三种。
+            if (m.retBox == 1) {
+                c_.emitLine("    vb6_VARIANT retMeth = vb6_VariantFromProjectInstance("
+                            + call.substr(0, call.size() - 1) + ");");
+            } else if (m.retBox == 2) {
+                c_.emitLine("    vb6_VARIANT retMeth = vb6_VariantObject("
+                            + call.substr(0, call.size() - 1) + ");");
+            } else {
+                c_.emitLine("    vb6_VARIANT retMeth = " + call);
+            }
             c_.emitLine("    if (outRet) *(vb6_VARIANT*)outRet = retMeth;");
         } else {
             c_.emitLine("    " + call);
