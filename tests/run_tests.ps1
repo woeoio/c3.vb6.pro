@@ -7727,11 +7727,20 @@ if ($Category -in @("all", "run", "vbp")) {
     #     修前 F10-IVAL=0  F10-EN0=True  （且报 C3_HOST_MEMBER_MISS site=SetProp
     #                                     name="Interval" cls=VB6_TIMER）
     #     修后 F10-IVAL=50 F10-EN0=False
-    #   ⚠ 不用 F10-TICKS=3 当 GA 判据：GitHub-hosted runner 上生成的 Timer 事件
-    #   不投递（loaded=1 ticks=0），而把**同一枚 CI 构建的 C3.exe** 拿到本机跑就是
-    #   F10-TICKS=3 ⇒ runner 环境差异，不是产物/代码问题。打拍那对留给本机 A/B。
+    #   ⚠ 不用 F10-TICKS=3 当 GA 判据：CI 上生成的 Timer 事件不投递（loaded=1 ticks=0），
+    #   而同一枚 CI 构建的 C3.exe 拿到本机跑就是 F10-TICKS=3。根因不是 runner 环境、也不是
+    #   产物：CI 的 run_tests.ps1 带 -Incremental，objcache 的键只把 **.h 结尾**的本地
+    #   include 纳入 (src/backend/msvc_driver_incremental.cpp:79 collectLocalIncludes)，
+    #   本轮改的是函数体片段 uc_hostmodel_setprop.inc ⇒ uc_hostmodel.c 的键不变 ⇒ 复用旧
+    #   uc_hostmodel.obj ⇒ 链进旧 vb6_Host_SetProp，读数恒为修前值 (IVAL=0/EN0=True)。
+    #   这与「ninja 不跟踪函数体 .inc」「富贵竹 T4 要 touch cgen_form.cpp」同源。
+    #   在 objcache 的依赖跟踪修好之前，这两例临时关掉增量、强制全量编 RTL，判据才落在本次
+    #   RTL 上；打拍那对 (F10-TICKS=3 / F10-TIMEOUT) 留作本机运行 A/B。
+    $fgzSavedIncArg = $IncArg
+    $IncArg = @()
     Test-Vbp "fgz_fix010_timer_run" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-IVAL=50", "F10-EN0=False")
     Test-Vbp "fgz_fix010_timer_run_x86" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-IVAL=50", "F10-EN0=False") -Arch "x86"
+    $IncArg = $fgzSavedIncArg
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，
