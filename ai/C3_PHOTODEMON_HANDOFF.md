@@ -6349,3 +6349,33 @@ if (me->events) { vb6_Free(me->events); me->events = NULL; }  /* 账 §56.48: �
 本刀的 8 行是**有意的形状变化**（事件汇归源实例所有 ⇒ 出厂时放手），
 不是回归。本机实测：ucTreeView / test_events / m7_test 三个工程的发码逐行 diff
 **只多这一行**，无别的变化。
+
+---
+
+## §56.49 本机资源红线（本轮踩到并定下的规矩）
+
+### 一、事件
+
+本轮在本机跑 `tests/run_tests.ps1 -Category vbp -Jobs 8` 与 `-Category compile -Jobs 4`
+（两轮并行），**把 16 GB 内存打爆 ⇒ 电脑黑屏**。两轮都已停掉，内存恢复正常
+（可用 12.04 / 15.7 GB，无残留 `cl`/`C3`/`link` 进程）。
+
+### 二、规矩（此后本机一律照此）
+
+1. **本机不编译 PD** —— PD 整编 / PD emit 全部在 GA 上做（本机整编 emit 实测峰值 ~9.45 GB，
+   本机装不下）。本机只碰**小型探针**（单工程、几十 KB 源）。
+2. **并行度 ≤ 2**：跑 `tests/run_tests.ps1` 时用 `-Jobs 1`（默认档）或最多 `-Jobs 2`；
+   MSVC 侧 `/MP` 本身还会再开线程 ⇒ 别把 `-Jobs` 与 `/MP` 同时放大。
+3. **重类别交给 CI**：`vbp`（409 个槽）与 `compile`（~100 个静态普查 + 真编）这两类是
+   本机最重的 ⇒ 本机不再整体跑，只跑**纯扫源**的轻量判据（内存可忽略）：
+   `check_event_param_abi_authority.ps1` / `check_dochost_authority.ps1` /
+   `check_class_refcount_authority.ps1` / `check_variant_unbox.ps1`，
+   以及小体量的 `-Category syntax`。
+4. **构建本机 C3.exe 用 `-j1`**（ninja），一次只重编少数 TU；改 RTL `.c` ⇒ 只重编 `.rc` + 链接。
+
+### 三、CI 上的对应事实（供下轮对照）
+
+* `vbp` / `compile` 在 CI 上是 **12 片 + 2 片**（`-VbpShard i -VbpShardTotal 12` /
+  `-StaticShard i -StaticShardTotal 2`），每片一台机器 ⇒ 内存不是问题；
+* 本机复现 CI 的失败时，**优先只跑那一个用例**（`run_tests.ps1` 支持按用例筛），
+  不要为了看一条红把整个类别在本机跑一遍。
