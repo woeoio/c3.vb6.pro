@@ -160,10 +160,21 @@ bool SemanticAnalyzer::analyze(Module& module) {
                     classSym->eventNames.push_back(e.name);  // P6.5: 收集事件名
                     // 账 #305 256: 顺手把「哪几位形参是出参」算一次, 存进与 eventNames 同序的表
                     // (六处消费者必须同一个答案 —— 见 Symbol::eventParamByAddr 那段注释)
+                    //
+                    // 账 §56.47: 这一张表是**类事件 / 模块级 WithEvents** 那一路的主表
+                    // (模块级包装器的 .h 声明与 .c 定义都读它)。口径改回 **VB6 默认**:
+                    // 形参没写 ByVal 就是 ByRef —— 与同一枚处理器的**定义** (过程那一路,
+                    // 读 isByVal) 同一答案 ⇒ 包装器与处理器不再一个按值一个按地址。
+                    // 从前这里只认**显式** ByRef, 于是 PD 的 `File As Variant` (隐式 ByRef)
+                    // 在包装器那边按值、在处理器那边按地址 ⇒ cl C2440。
                     std::vector<char> addrSlots;
+                    // 账 §56.47: 两路两口径 —— UC (.ctl) 那一路只认**显式** ByRef (语料里
+                    // 几千处形状靠它冻结, 不动); 类事件 / 模块级 WithEvents 那一路用
+                    // **VB6 默认** (没写 ByVal 就是 ByRef), 与同一枚处理器的定义同源。
+                    const bool ucLane47 = module.docKind == DocumentKind::UserControl;
                     for (auto& p : e.params) {
-                        addrSlots.push_back(eventParamByAddress(
-                            p->isByRef,
+                        addrSlots.push_back(eventParamByAddressLane(
+                            p->isByRef, p->isByVal, ucLane47,
                             p->asType && p->asType->kind == ASTNodeKind::ArrayTypeRef) ? 1 : 0);
                     }
                     classSym->eventParamByAddr.push_back(std::move(addrSlots));

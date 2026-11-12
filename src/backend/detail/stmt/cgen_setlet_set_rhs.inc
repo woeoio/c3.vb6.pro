@@ -540,7 +540,16 @@
     // P6.5: WithEvents变量事件连接
     // Set obj = newInst -> 如果obj是WithEvents变量, 设置事件接收器
     {
-        std::string targetLower = target;
+        // 账 §56.48: **类成员**的 WithEvents 变量, 这一站的 target 文本是 "me->m_Src",
+        // 而登记表的键是**裸变量名** "m_src" ⇒ 改前那一下查表必然落空 ⇒ 事件汇从来没接上线
+        // (PD 的 m_ZipArchive_BeforeExtract 因此从不触发: pdCBZ.cls:322 处理器是死的,
+        //  "解压前改掉文件名"那一路整条不生效)。模块级那一路 target 本来就是裸名, 一字未动。
+        // 剥前缀只认 "me->" 一种形状 (本仓库既有写法, 见 cgen_setlet.cpp:321 等):
+        //   查表 / 汇名 / 处理器名 一律用**裸名**;
+        //   赋值那一行仍用**完整 target** ("me->m_Src" 才是对的 C 表达式)。
+        std::string weVarName = target;
+        if (isClassModule_ && weVarName.compare(0, 4, "me->") == 0) weVarName = weVarName.substr(4);
+        std::string targetLower = weVarName;
         std::transform(targetLower.begin(), targetLower.end(), targetLower.begin(), ::tolower);
         auto itWE = knownWithEventsVars_.find(targetLower);
         if (itWE != knownWithEventsVars_.end()) {
@@ -549,45 +558,79 @@
             // 查找源类符号，区分内部类与外部COM类
             auto* srcClsSym = symTab_.lookup(sourceClass);
             if (srcClsSym && srcClsSym->kind == SymbolKind::Class) {
-                // 内部类 WithEvents: if (target) { static sink = {...}; target->events = &sink; }
-                // 需要查找当前模块中是否有 obj_EventName 形式的事件处理器
+                // 内部类 WithEvents: 把源实例的 `events` 指针接到一枚**汇**上。
+                //
+                // 账 §56.48 三处设计:
+                //  (甲) **类成员**那一路 (target 带 "me->"): 汇必须**逐源实例一份**。函数内
+                //       static 汇会被同类的多个实例共用, 后一个实例的 Set 把 handler 抢走 ⇒
+                //       前一个实例的事件派发到别人身上 (串台)。所以汇改成**堆上**、由**源实例**
+                //       持有 (源类的 `events` 字段指着它), 源实例出厂时连汇一起放手
+                //       (cgen_com.cpp 的 _Destroy 那一腿)。
+                //       另: 汇里的 handler 是**宿主实例** ("me") —— 处理器体里的 `me->…` 靠它;
+                //       改前那一路根本没接上线, 处理器是死的 (PD 的 m_ZipArchive_BeforeExtract)。
+                //  (乙) 模块级那一路 (handler = NULL, 没有实例可指) 维持原来的函数内 static 汇,
+                //       一字未动 —— 那一路的形态被 PD 等语料冻结着, 不动最省事。
+                const bool weMember48 = isClassModule_ && weVarName != target;
+                // .cls 模块里 WithEvents 变量必是**字段** (VB6 的类模块没有全局变量) ⇒ target
+                // 带 "me->" 前缀。裸名 = **局部变量**撞了同名字段 ⇒ 那不是那一枚 ⇒ 不接线
+                // (落进静态汇那一支的话, 那一支的 handler 是 NULL ⇒ 处理器会以空宿主被调)。
+                const bool weSkip48 = isClassModule_ && !weMember48;
                 c_.emitLine("if (" + target + ") {");
                 c_.indent();
-                // 生成静态事件接收器实例
-                c_.emitLine("static " + sinkName + " " + targetLower + "_sink = {");
-                c_.indent();
-                // handler: 指向当前对象(me)
-                std::string handlerExpr = isClassModule_ ? "(void*)me" : "NULL";
-                c_.emitLine(".handler = " + handlerExpr + ",");
-                // 为源类的每个事件生成回调指针
-                bool firstEvent = true;
-                for (auto& evtName : srcClsSym->eventNames) {
-                    std::string handlerName = target + "_" + evtName;  // VB6: obj_Click
-                    std::string handlerLower = handlerName;
-                    std::transform(handlerLower.begin(), handlerLower.end(), handlerLower.begin(), ::tolower);
-                    // 查找处理器函数符号 (用lookup跨模块查找)
-                    auto* handlerSym = symTab_.lookup(handlerName);
-                    std::string cbField = ".on" + cIdent(evtName) + " = ";
-                    if (handlerSym) {
-                        // 生成包装函数名: vb6_evt_<EventName>_wrap_<varName>
-                        std::string wrapperName = evtWrapperName(targetLower, evtName);
-                        cbField += wrapperName;
-                    } else {
-                        cbField += "NULL";
+                if (weSkip48) {
+                    // 这一格不是那个 WithEvents 字段 ⇒ 不发任何接线 (与改前同形: 查不到就不接)
+                } else if (weMember48) {
+                    // 逐源实例一份的汇: 堆上, 归源实例所有 (源实例出厂时放手)。
+                    const std::string srcStruct48 = "vb6_cls_" + cIdent(sourceClass);
+                    const std::string srcVar48 = "__src48_" + targetLower;
+                    c_.emitLine(srcStruct48 + "* " + srcVar48 + " = (" + srcStruct48 + "*)" + target + ";");
+                    c_.emitLine("if (!" + srcVar48 + "->events) " + srcVar48 + "->events = ("
+                                + sinkName + "*)vb6_Alloc(sizeof(" + sinkName + "));");
+                    c_.emitLine("if (" + srcVar48 + "->events) {");
+                    c_.indent();
+                    c_.emitLine(srcVar48 + "->events->handler = (void*)me;");
+                    // 为源类的每个事件接上回调指针 (没有对应处理器的接 NULL = 静默, VB6 语义)
+                    for (auto& evtName : srcClsSym->eventNames) {
+                        std::string handlerName = weVarName + "_" + evtName;  // VB6: obj_Click
+                        auto* handlerSym = symTab_.lookup(handlerName);
+                        std::string cb = srcVar48 + "->events->on" + cIdent(evtName) + " = ";
+                        cb += handlerSym ? evtWrapperName(targetLower, evtName) : std::string("NULL");
+                        c_.emitLine(cb + ";");
                     }
-                    if (!firstEvent || srcClsSym->eventNames.size() > 1) {
-                        // 多事件时加逗号
+                    c_.dedent();
+                    c_.emitLine("}");
+                } else {
+                    // 生成静态事件接收器实例
+                    c_.emitLine("static " + sinkName + " " + targetLower + "_sink = {");
+                    c_.indent();
+                    // handler: 模块级没有实例可指 ⇒ NULL (那一路的处理器体不碰 me)
+                    c_.emitLine(".handler = NULL,");
+                    // 为源类的每个事件生成回调指针
+                    for (auto& evtName : srcClsSym->eventNames) {
+                        // 账 §56.48: 处理器名用**裸变量名** (VB6: obj_Click) —— 类成员那一路的
+                        // target 带 "me->" 前缀, 直接拼会得到 "me->m_Src_BeforeExtract" 那种
+                        // 查不到的串 ⇒ 改前回调槽恒为 NULL。
+                        std::string handlerName = weVarName + "_" + evtName;  // VB6: obj_Click
+                        // 查找处理器函数符号 (用lookup跨模块查找)
+                        auto* handlerSym = symTab_.lookup(handlerName);
+                        std::string cbField = ".on" + cIdent(evtName) + " = ";
+                        if (handlerSym) {
+                            // 生成包装函数名: vb6_evt_<EventName>_wrap_<varName>
+                            std::string wrapperName = evtWrapperName(targetLower, evtName);
+                            cbField += wrapperName;
+                        } else {
+                            cbField += "NULL";
+                        }
+                        c_.emitLine(cbField + ",");
                     }
-                    c_.emitLine(cbField + ",");
-                    firstEvent = false;
+                    c_.dedent();
+                    c_.emitLine("};");
+                    // WithEvents 变量在 C 侧声明为 void* (类实例统一用对象指针表示),
+                    // 直接生成 "var->events" 会触发 C2223 ("->" 的左侧必须指向结构/联合)。
+                    // 必须先 cast 回具体类结构体指针, 与 cgen_expr.cpp 中 void* 成员访问同机制。
+                    c_.emitLine("((vb6_cls_" + cIdent(sourceClass) + "*)" + target + ")->events = &"
+                                + targetLower + "_sink;");
                 }
-                c_.dedent();
-                c_.emitLine("};");
-                // WithEvents 变量在 C 侧声明为 void* (类实例统一用对象指针表示),
-                // 直接生成 "var->events" 会触发 C2223 ("->" 的左侧必须指向结构/联合)。
-                // 必须先 cast 回具体类结构体指针, 与 cgen_expr.cpp 中 void* 成员访问同机制。
-                c_.emitLine("((vb6_cls_" + cIdent(sourceClass) + "*)" + target + ")->events = &"
-                            + targetLower + "_sink;");
                 c_.dedent();
                 c_.emitLine("}");
             } else if (srcClsSym && srcClsSym->kind == SymbolKind::ComClass && srcClsSym->comHasSourceIface) {
