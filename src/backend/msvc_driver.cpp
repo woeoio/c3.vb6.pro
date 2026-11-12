@@ -289,7 +289,7 @@ namespace {
                             const std::string& rspPath, const std::string& tmpLogPath,
                             const MsvcDriverOptions& options,
                             const std::string& vcvarsPrefix, const std::string& tmpIsolation,
-                            bool appendErrorLog = false) {
+                            bool appendErrorLog = false, bool keepLogOnSuccess = false) {
         // Fix 196: 必须写成 UTF-16LE+BOM —— cl/link 按系统 ANSI 代码页读 @rsp,
         // 原样落 UTF-8 会把中文路径解成乱码 (详见 msvc_driver.hpp 的实测矩阵)。
         writeMsvcResponseFile(rspPath, args);
@@ -343,8 +343,13 @@ namespace {
             std::filesystem::remove(rspPath, std::error_code());
             return false;
         }
-        // 编译成功: 清理临时文件
-        std::filesystem::remove(tmpLogPath, std::error_code());
+        // 编译成功: 清理临时文件。keepLogOnSuccess ⇒ 日志**留着**给调用方 (§56.53:
+        //   分段编译时成功那几段的输出也要进失败留档 —— 老路是一段 cl 编全部, 那一段
+        //   失败 ⇒ 688 个 TU 的诊断全在 c3-error.log 里; 分段后只有失败的那几段落盘
+        //   ⇒ 成功那几段 (RTL / PCH 建库) 的警告会从记录里消失)。
+        if (!keepLogOnSuccess) {
+            std::filesystem::remove(tmpLogPath, std::error_code());
+        }
         std::filesystem::remove(rspPath, std::error_code());
         return true;
     }
@@ -656,6 +661,13 @@ bool MsvcDriver::compileAndLinkPch(const MsvcDriverOptions& options) {
 
     // 编译阶段是否有失败 (见下面第 3/4 段的注记: 分段后**不**因首个失败而中断)
     bool failed = false;
+    // 成功那几段的输出 (留档用): 失败时并进 c3-error.log, 否则它们的警告会从记录里消失
+    struct OkPhaseLog {
+        std::string label;
+        std::string logPath;
+        std::string args;
+    };
+    std::vector<OkPhaseLog> okPhaseLogs;
 
     // ---------- 2) 建 PCH (每组一次 cl: /Yc) ----------
     // 建库失败 = 编译器自己的问题 (不是用户代码) ⇒ 立刻停, 别把派生噪声堆上去。
@@ -670,8 +682,11 @@ bool MsvcDriver::compileAndLinkPch(const MsvcDriverOptions& options) {
         }
         std::string rsp = pchDir + "/_c3_cl_pch_" + b.stem + ".rsp";
         std::string log = pchDir + "/_c3_msvc_out_pch_" + b.stem + ".txt";
-        if (!runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation))
+        // keepLogOnSuccess: 成功那段的输出留着 (失败时要并进 c3-error.log)
+        if (!runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation,
+                               false, true))
             return false;
+        okPhaseLogs.push_back({"[PCH 建库 " + b.stem + "]", log, c.str()});
     }
 
     // ---------- 3) 按组编译 (每组一次 cl: /FI + /Yu 复用本组 PCH) ----------
@@ -692,8 +707,10 @@ bool MsvcDriver::compileAndLinkPch(const MsvcDriverOptions& options) {
         }
         std::string rsp = pchDir + "/_c3_cl_grp_" + b.stem + ".rsp";
         std::string log = pchDir + "/_c3_msvc_out_grp_" + b.stem + ".txt";
-        if (!runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation, failed))
-            failed = true;
+        bool okGrp = runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation,
+                                       failed, true);
+        if (!okGrp) failed = true;
+        else okPhaseLogs.push_back({"[PCH 组 " + b.stem + "]", log, c.str()});
     }
 
     // ---------- 4) 编其余 TU (RTL + driver 自产的 .c): 不用 PCH ----------
@@ -714,8 +731,37 @@ bool MsvcDriver::compileAndLinkPch(const MsvcDriverOptions& options) {
         std::string rsp = pchDir + "/_c3_cl_rest.rsp";
         std::string log = pchDir + "/_c3_msvc_out_rest.txt";
         // 同上: 前面几组失败也要把这一段编完 (老路是一次 cl 编全部 ⇒ RTL 的诊断也在同一份日志里)
-        if (!runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation, failed))
-            failed = true;
+        bool okRest = runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation,
+                                         failed, true);
+        if (!okRest) failed = true;
+        else okPhaseLogs.push_back({"[无 PCH 其余 TU]", log, c.str()});
+    }
+
+    // 失败留档补全: 把**成功**那几段的输出并进 c3-error.log。
+    // 为什么: 老路是一段 cl 编全部 TU, 那一段失败 ⇒ 688 个 TU 的诊断全在日志里;
+    // 分段后只有失败的那几段落盘 ⇒ 成功那几段 (PCH 建库 / RTL) 的警告会从记录里消失
+    // (PD 实测: 少了 126 条警告, 全是头级与 RTL 的)。取证要全 ⇒ 补齐。
+    if (failed && !okPhaseLogs.empty()) {
+        std::string outputDirForLog;
+        if (!options.outputFile.empty()) {
+            std::filesystem::path outP(utf8ToPath(options.outputFile));
+            outputDirForLog = pathToUtf8(outP.parent_path());
+        }
+        if (outputDirForLog.empty()) outputDirForLog = ".";
+        std::string errorLogPath = outputDirForLog + "/c3-error.log";
+        std::ofstream errLog = ofstreamUtf8(errorLogPath, std::ios::out | std::ios::app);
+        if (errLog) {
+            for (const auto& ph : okPhaseLogs) {
+                errLog << "=== Phase " << ph.label << " (succeeded) ===" << std::endl;
+                errLog << "=== Response File ===" << std::endl;
+                errLog << ph.args << std::endl;
+                errLog << "=== MSVC Output ===" << std::endl;
+                std::ifstream in = ifstreamUtf8(ph.logPath);
+                std::string line;
+                while (std::getline(in, line)) errLog << line << "\n";
+                errLog << std::endl;
+            }
+        }
     }
 
     // 编译阶段有失败 ⇒ 不进链接 (老路里 cl 有编译错误时也不会去链接)。
