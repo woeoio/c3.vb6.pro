@@ -6120,3 +6120,187 @@ pwsh -File scripts\rebless_emit_manifest.ps1 -Bless
 ① 差异已归因到 `212d8427` + `2460da8f` 这一族（§56.46 §一）；
 ② 本轮三刀零影响已用三个时点的逐行比对复核（§56.45 §四）；
 ③ bless 后形状门转绿，**红面总数 1 → 0**。
+
+---
+
+## §56.47 事件 ABI 刀 —— 类事件 / 模块级 WithEvents 的形参按地址口径（两路两口径）
+
+> 本节两刀（§56.47 口径、§56.48 接线）都是本轮做的，**判据侧一字未动**。
+> 两刀的探针都在 `.temp/probe/` 下，**不进仓库**。
+
+### 一、目标与病灶
+
+PD 整编的权威 cl 清单里有一条：
+
+```
+pdCBZ.c(411): error C2440: 'function': cannot convert from 'vb6_VARIANT' to 'vb6_VARIANT *'
+```
+
+PD 的形状（`tests/photodemon/Classes/`）：
+
+* `cZipArchive.cls:73` —— 事件声明：`Event BeforeExtract(ByVal FileIdx As Long, File As Variant, SkipFile As Boolean, Cancel As Boolean)`
+  ⇒ `File` **没写 ByVal**，按 VB6 默认就是 **ByRef**；
+* `cZipArchive.cls:1701-1729` —— 抬事件的一侧，抬完**还要继续用** `vFileName` ⇒ 写回是承重的；
+* `pdCBZ.cls:46` —— `Private WithEvents m_ZipArchive As cZipArchive`（**类成员**那一路）；
+* `pdCBZ.cls:322` —— 处理器 `m_ZipArchive_BeforeExtract(ByVal FileIdx As Long, File As Variant, …)`
+  里 `File = m_OverrideFilename`（改解压出来的文件名，隐私功能）。
+
+**同一枚形参，三站口径不同**（这是 C2440 的全部）：
+
+| 站 | 从前问的是 | 答案 |
+|---|---|---|
+| 事件 typedef（`emitEventSink`） | 只认**显式** ByRef | **按值** |
+| 抬事件实参位（`visit(RaiseEventStmt&)`） | 同一口径 | **按值** |
+| 处理器**定义**（过程那一路，读 `isByVal`） | VB 默认 | **按地址** |
+
+⇒ typedef 按值、处理器按地址 ⇒ `vb6_VARIANT` 递给 `vb6_VARIANT*` ⇒ **cl C2440**。
+
+### 二、修法：口径只此一处，两路两口径
+
+新增 `src/common/event_param_abi.hpp` 的 **`eventParamByAddressLane(declaredByRef, isByVal, isUserControl, arrayCarrier)`**，
+三处调用点（语义主表 / 事件 typedef / 抬事件实参位）只传标志，不各自答一遍：
+
+* **类事件 / 模块级 WithEvents 那一路**（`isUserControl = false`）⇒ **VB6 默认**：`!isByVal`（没写 ByVal 就是 ByRef）。
+  与同一枚处理器的定义同源 ⇒ 包装器与处理器不再一个按值一个按地址；
+* **UC (.ctl) 那一路**（`isUserControl = true`）⇒ 仍只认**显式** ByRef。
+  这一路六站（typedef / 抬事件 / prelude thunk / 容器侧原型 / 处理器 / 出参槽）本来自洽，
+  语料里几千处形状靠它冻结 ⇒ **不动**。
+
+UC 与非 UC 的分界用 `Module::docKind`（`DocumentKind::UserControl`）—— 判据只有这一问。
+
+### 三、这一刀第一次翻车（被仓库判据当场抓住）
+
+第一版只改了 typedef 与抬事件两处，**忘了 UC 那一路要同口径** ⇒ ucTreeMaps 的三站变成：
+typedef 按地址 / prelude thunk 按值 / 容器侧处理器按值 ⇒ 两边靠一枚**显式 cast** 才编得过
+⇒ 运行期把地址当 24B 的槽读。
+
+判据 `ucevt_thunk_type_same_authority`（`tests/run_tests.ps1:13250`）当场红：
+`PASS=226 FAIL=1`（缺 `typedef void (*vb6_evt_ucTreeMaps_ItemClick_cb)(void* handler, vb6_VARIANT Key);`）。
+补上 UC 那条分道后，三处复原成同口径（按值）：
+
+```
+typedef void (*vb6_evt_ucTreeMaps_ItemClick_cb)(void* handler, vb6_VARIANT Key);
+static void vb6_Form2_evtThunk_ucTreeMaps1_ItemClick(void* handler, vb6_VARIANT a0) { … }
+me->events->onItemClick(me->events->handler, vb6_VariantFromValue(…));
+```
+
+⇒ **这一条是「两路两口径」这个决定本身的证据**：UC 那一路动不得，一动就崩。
+
+### 四、负控 / 正控（探针在 `.temp/probe/evt57`、`evt58`，不进仓库）
+
+| 探针 | 形状 | 负控（改前 `.buildrel\C3.exe`） | 正控（改后 `.build\C3.exe`） |
+|---|---|---|---|
+| `evt57` | **类成员** WithEvents（= PD 形状） | `cHost.c(75): error C2440: 无法将 'vb6_VARIANT' 转换为 'vb6_VARIANT *'` | 编过，`EVT57.exe` 521,216 B |
+| `evt58` | 模块级 WithEvents | `mUser.c(56): error C2440: 无法将 'vb6_VARIANT' 转换为 'vb6_VARIANT *'` | 编过，`EVT58.exe` 521,216 B |
+
+负控的错误**逐字**就是 PD 那条（同一个 C2440、同一个 Variant→Variant*）。
+
+### 五、运行期读数（按被测进程 id 枚举窗体读标题）
+
+探针脚本 `.temp/probe/evt56_run.ps1`（**纯 ASCII**：Windows PowerShell 5.1 在无 BOM 时按 ANSI 解码 .ps1，
+中文注释会把 `param` 块解坏 ⇒ 一开始读到的空标题是**这个**原因，不是枚举问题；
+枚举那一版也确有 bug —— 用了 `$PID`（PowerShell 自身）而不是被测进程 id）。
+
+| 探针 | 标题读数 | 判定 |
+|---|---|---|
+| `evt58`（模块级，ByRef + ByVal 两枚事件） | `BYREF=OVERRIDDEN;BYVAL=orig.txt` | **PASS** —— 隐式 ByRef 的写回**落到了递出方**，显式 ByVal 的**没有** ⇒ VB6 的 ByRef/ByVal 语义分得对 |
+| `evt57`（类成员，= PD 形状） | `RESULT=OVERRIDDEN` | **PASS**（依赖 §56.48 那刀把事件汇接上） |
+
+### 六、PD 整编的权威错误清单（两轮逐条相同）
+
+`43152645631`（head `0d852762`，G3 之前）与 `43162821378`（head `f0adc504`，含 G3）两轮
+**都是 40 条错误、14 份文件、10 个错误码，逐条相同** ⇒ **G3 没有动过错误集**。
+
+按文件：
+
+| 文件 | 条数 | 错误码 |
+|---|---|---|
+| `pdSelection.c` | 11 | C2197, C2440 |
+| `pdCBZ.c` | 9 | C2095, C2198, C2440 |
+| `pdMRUManager.c` | 3 | C2198 |
+| `cZipArchive.c` / `pd8bf.c` | 2 / 2 | C2106 |
+| `pdLayer.c` / `pdPalette.c` / `pdPaletteChild.c` / `pdPSPShape.c` | 2 / 2 / 2 / 2 | C2069 / C2440 / C2198 / C2186 |
+| `cFileDialogVista.c` / `pdListSupport.c` / `pdLUT3D.c` / `pdRandomize.c` / `pdSpriteSheet.c` | 各 1 | C2036 / C2296 / C2198 / C2198 / C2440 |
+
+**本刀（§56.47）只占其中 1 条**：`pdCBZ.c(411)` 那条 C2440。剩下 39 条分属另外 9 族，
+与事件 ABI 无关（`vb6_IntDiv` 实参数为 void、`vb6_Randomize(double)` 少实参、
+`void*`↔`float` 互赋、`vb6_SafeArray1D*`→`vb6_VARIANT` 等），**逐族另开**。
+
+---
+
+## §56.48 类成员 WithEvents 的事件汇 —— 从来没接上线（处理器是死的）
+
+### 一、PD 现场
+
+`pdCBZ.cls:59` / `:118-119` 明写 `Set m_ZipArchive = New cZipArchive`（PD 自己惰性创建），
+但 C3 发出来的 `pdCBZ.c` 里，`Set` 之后**没有任何** `->events = &sink`：
+
+```
+me->m_ZipArchive = (vb6_cls_cZipArchive*)vb6_ComObject_UnboxVb6Instance(…);
+```
+
+全工程 1347 处 `->events =` 里，**类成员那一路 0 处**（其余是 `= NULL` 出厂初始化，
+以及模块级 / 窗体容器侧那几十处）⇒ `m_ZipArchive->events` 恒为 NULL ⇒ 抬事件那一站
+`if (me->events && me->events->onBeforeExtract)` 永远不成立 ⇒
+**`m_ZipArchive_BeforeExtract` 处理器从不触发** ⇒ PD「解压前改掉文件名」那一路整条不生效。
+
+### 二、两层根因
+
+**(甲) 查表键对不上。** `cgen_setlet_set_rhs.inc` 的 WithEvents 接线那一站拿 `target` 去查
+`knownWithEventsVars_`，而**类成员**的 `target` 文本是 `"me->m_Src"`，登记表的键是**裸变量名**
+`"m_src"` ⇒ 查表必然落空 ⇒ 整块接线代码从不执行。
+（处理器名也是同一个毛病：`target + "_" + evtName` 会拼成 `"me->m_Src_BeforeExtract"`，
+查不到 ⇒ 回调槽恒为 NULL。）
+
+**(乙) 静态汇的初值不是常量。** 把 (甲) 修掉之后，汇那一支露出来的是：
+`static vb6_events_cSrc m_src_sink = { .handler = (void*)me, … };` ——
+`static` 局部量的初值必须是常量，`(void*)me`（函数形参）不是 ⇒ **cl C2099**。
+
+### 三、设计（两条都不能省）
+
+1. **汇必须逐源实例一份。** 若仍用函数内 `static` 汇，同类的多个实例会共用它，
+   后一个实例的 `Set` 把 `handler` 抢走 ⇒ 前一个实例的事件**派发到别人身上**（串台）。
+   ⇒ 汇改成**堆上**、由**源实例**持有（源类的 `events` 字段指着它），源实例出厂时连汇一起放手
+   （`cgen_com.cpp` 的 `_Destroy` 那一腿新增一行 `if (me->events) { vb6_Free(me->events); … }`）。
+2. **模块级那一路一字未动。** 那一路 `handler = NULL`（模块级没有实例可指），
+   函数内 static 汇没有串台问题，而且**形态被 PD 等语料冻结着** ⇒ 不动最省事。
+   本刀只在**类模块**（`isClassModule_`）且 target 带 `me->` 前缀时走新那一支。
+
+**闸**：`.cls` 模块里 WithEvents 变量必是**字段**（VB6 的类模块没有全局变量）⇒ target 带 `me->`；
+裸名 = **局部变量**撞了同名字段 ⇒ 不是那一枚 ⇒ **不接线**（否则会落进静态汇那一支，
+而那一支的 handler 是 NULL ⇒ 处理器会以空宿主被调）。
+
+### 四、三处改动
+
+| 文件 | 改动 |
+|---|---|
+| `src/backend/detail/stmt/cgen_setlet_set_rhs.inc` | 剥 `me->` 前缀后查表 / 处理器名用**裸变量名**；类成员那一支发堆上汇（逐源实例一份）；`.cls` 里裸名（局部撞名）不接线 |
+| `src/backend/module/cgen_com.cpp` | 源类 `_Destroy` 那一腿放手事件汇；`moduleDeclaresEvents()` 抽成**一份权威**（出厂写 NULL 与出厂放手两处共用） |
+| `src/common/event_param_abi.hpp` | §56.47 的两路判定（同上） |
+
+### 五、读数
+
+| 探针 | 读数 | 判定 |
+|---|---|---|
+| `evt57`（类成员 WithEvents，= PD 形状） | `RESULT=OVERRIDDEN` | **PASS** —— 处理器**被调到了**，且 ByRef 写回**落到了递出方** |
+| `evt58`（模块级 WithEvents） | `BYREF=OVERRIDDEN;BYVAL=orig.txt` | **PASS** —— 改前 (甲) 那一版不动，形态与读数都没变 |
+
+### 六、附带发现（**独立缺口，本轮只记账不修**）
+
+**模块级 WithEvents 的对象从未被实例化。** `vb6_mod_<模块>_init()` 对模块级 WithEvents 变量
+**发的是空函数** ⇒ `m_Src` 恒为 NULL ⇒ 直接用就是空指针解引用。
+探针 `evt56`（模块级 WithEvents，没有显式 `Set`）实测 **exit = 0xC0000005**（`-1073741819`），
+窗体一个都没起来。VB6 语义是 `Dim WithEvents x As C` **当场创建**实例。
+⇒ 这一族要**另开一刀**（模块级自动实例化 + `Class_Terminate` 的对称问题）。
+
+### 七、遗留（本轮明确不做）
+
+* **窗体模块（`.frm`）的 WithEvents 成员那一路**仍未接线：窗体在 C3 里没有 `me` 实例指针
+  （成员走 `vb6_hwnd_<Form>` 那样的全局），汇里的 `handler` 无处可指 ⇒ 要另立设计；
+  改前它也不接线 ⇒ 现状不变。
+* **模块级 WithEvents 的自动实例化**（上一条）。
+* 本刀只动了**类成员**那一路 ⇒ PD 语料里其余 13 份带类成员 WithEvents 的 .cls
+  （`pdUCSupport` / `pdUCEventSink` / `pdTimerCountdown` / `pdTimerAnimation` / `pdSelection` /
+  `pdClipboardMain` / `pdAsyncPipe` / `pdInputKeyboard` / `pdPipe` / `pdEditBoxW` / `pdFlyout` …）
+  会在整编里**第一次真的接上事件** ⇒ 运行期行为会变（原先一律不触发）。
+  这一批只能在 PD 整编/运行期看，本机只能证到「发码形状 + 单工程运行期」。
