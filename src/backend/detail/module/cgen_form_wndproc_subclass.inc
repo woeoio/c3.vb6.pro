@@ -229,9 +229,12 @@
             };
             // decl/args 是"非数组口径"的原型形参串与实参串；withIndex 时在两者前面各补
             // 一枚 int16_t* 的运行时下标。调用方仍负责外层 { } 与局部变量声明。
-            auto emitEvCall = [&](const char* suffix, size_t arrayParamCount,
+            // ⚠ fn 必须由**每条臂**自己调 eventHandlerFn 取 (scripts/check_event_handler_names.ps1
+            // E3 数调用点 >= 40) —— 名字口径收在权威一处, 收进 helper 会让哨兵以为有臂
+            // 绕开权威现拼名字而假红。
+            auto emitEvCall = [&](const std::string& fn, const char* suffix,
+                                  size_t arrayParamCount,
                                   const std::string& decl, const std::string& args) {
-                std::string fn = eventHandlerFn(info.ctrlName, suffix);
                 if (evIndexArm(suffix, arrayParamCount)) {
                     c_.emitLine("int16_t vb6_evindex = (int16_t)((INT_PTR)GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1);");
                     c_.emitLine("extern void " + fn + "(int16_t*, " + decl + "); "
@@ -353,7 +356,7 @@
                 c_.emitLine("else if (msg == WM_MBUTTONDOWN) vb6_button = 4;");
                 c_.emitLine("if (wp & MK_SHIFT) vb6_shift |= 1; if (wp & MK_CONTROL) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
                 c_.emitLine("float vb6_x = (float)(int16_t)LOWORD(lp); float vb6_y = (float)(int16_t)HIWORD(lp);");
-                emitEvCall("_MouseDown", 5, "int16_t*, int16_t*, float*, float*",
+                emitEvCall(eventHandlerFn(info.ctrlName, "_MouseDown"), "_MouseDown", 5, "int16_t*, int16_t*, float*, float*",
                            "&vb6_button, &vb6_shift, &vb6_x, &vb6_y");
                 c_.dedent();
                 c_.emitLine("}");
@@ -368,7 +371,7 @@
                 c_.emitLine("else if (msg == WM_MBUTTONUP) vb6_button = 4;");
                 c_.emitLine("if (wp & MK_SHIFT) vb6_shift |= 1; if (wp & MK_CONTROL) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
                 c_.emitLine("float vb6_x = (float)(int16_t)LOWORD(lp); float vb6_y = (float)(int16_t)HIWORD(lp);");
-                emitEvCall("_MouseUp", 5, "int16_t*, int16_t*, float*, float*",
+                emitEvCall(eventHandlerFn(info.ctrlName, "_MouseUp"), "_MouseUp", 5, "int16_t*, int16_t*, float*, float*",
                            "&vb6_button, &vb6_shift, &vb6_x, &vb6_y");
                 c_.dedent();
                 c_.emitLine("}");
@@ -379,7 +382,7 @@
                 c_.emitLine("if (msg == WM_CHAR) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keyascii = (int16_t)(unsigned char)wp;");
-                emitEvCall("_KeyPress", 2, "int16_t*", "&vb6_keyascii");
+                emitEvCall(eventHandlerFn(info.ctrlName, "_KeyPress"), "_KeyPress", 2, "int16_t*", "&vb6_keyascii");
                 c_.dedent();
                 c_.emitLine("}");
             }
@@ -389,7 +392,7 @@
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keycode = (int16_t)wp; int16_t vb6_shift = 0;");
                 c_.emitLine("if (GetKeyState(VK_SHIFT) & 0x8000) vb6_shift |= 1; if (GetKeyState(VK_CONTROL) & 0x8000) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
-                emitEvCall("_KeyDown", 3, "int16_t*, int16_t*", "&vb6_keycode, &vb6_shift");
+                emitEvCall(eventHandlerFn(info.ctrlName, "_KeyDown"), "_KeyDown", 3, "int16_t*, int16_t*", "&vb6_keycode, &vb6_shift");
                 c_.dedent();
                 c_.emitLine("}");
             }
@@ -399,7 +402,7 @@
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keycode = (int16_t)wp; int16_t vb6_shift = 0;");
                 c_.emitLine("if (GetKeyState(VK_SHIFT) & 0x8000) vb6_shift |= 1; if (GetKeyState(VK_CONTROL) & 0x8000) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
-                emitEvCall("_KeyUp", 3, "int16_t*, int16_t*", "&vb6_keycode, &vb6_shift");
+                emitEvCall(eventHandlerFn(info.ctrlName, "_KeyUp"), "_KeyUp", 3, "int16_t*, int16_t*", "&vb6_keycode, &vb6_shift");
                 c_.dedent();
                 c_.emitLine("}");
             }

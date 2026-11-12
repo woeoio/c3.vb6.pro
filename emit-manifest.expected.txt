@@ -1138,4 +1138,11 @@ sha256=a37869c20813f956d2309622276debc5097d5e35f41dbcb032817de793cc245a ascii256
 #   SetPropW((HWND)vb6_sub_hwnd, L"VB6_CtrlArrIndex", (HANDLE)(INT_PTR)(vb6_si + 1))（顶层数组安装路径），
 #   1 删 2 增，UNEXPLAINED=0。新增 1 行 = tests/fgz_fix009/FgzFix009.vbp（正式夹具）。
 #   该门四枚针全绿，含 [VBP-BUILD] fgz_fix009_array_build PASS (629760 bytes) ⇒ 拆卸侧 C2065 已修。
-sha256=03c9d7e4b355fb8fd6f5953907cbac54e6e099cd12ddf1bf0f50a7708cc1caef ascii256=6d79f53f60c7791b9348925e57ac804f5204e6e0d4565998c7fb128c6abcc3b9 rc=0 bytes=16931 tests/fgz_fix009/FgzFix009.vbp
+sha256=df99009f66ef569411868617f170dd7723f54dd6536889a647d88b48f8c23f45 ascii256=27f3a53484fd72c8129af9d1531965c12cba0eb13e20d7f1cce5a15959204fb1 rc=0 bytes=25890 tests/fgz_fix009/FgzFix009.vbp
+# 2026-11-13 富贵竹 FIX-009 §7 登记来源：run 43304796761 / head 9ec08367，形状门读数
+#   期望 687 / 实得 687 / 相同 686 / 哈希不同 1 / 缺席 0 / 多出 0。
+#   按 CI 自交清单（github/ci/emit-manifest 提交 a03efcc2，head=9ec08367）登记。
+#   唯一变化 = tests/fgz_fix009/FgzFix009.vbp 正式夹具扩了六类数组事件处理器
+#   （lblItem 带 Index / labPlain 不带作零回归护栏）；全仓无存量语料写这六类数组事件
+#   ⇒ 其余 686 行哈希逐字未变，UNEXPLAINED=0。三枚 §7 针 + 原四枚 R2 针全绿，
+#   [VBP-BUILD] fgz_fix009_array_build PASS (633856 bytes)。
