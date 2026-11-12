@@ -412,6 +412,11 @@ private:
     bool runCodeGeneration(const CompileOptions& options, const std::string& outputDir);
     void writeErrorLog(const std::string& logPath, const std::string& stage);
     bool runLinker(const CompileOptions& options, const std::string& outputDir, const std::string& intermediatesDir, SessionManager& session);
+    // 账 §56.55: 发码之后放掉 AST 与语义产物, **让 cl 拿到内存**。
+    // 实现在 driver_compile.cpp (与它的调用点同文件)。只放 AST 与 analyzers_,
+    // **模块元数据保留** —— driver_link.cpp 的收集段还要读 modules_[i] 的
+    // moduleName / filename / isFormModule / classTypeParams。
+    void releaseAstAfterCodegen();
 };
 
 } // namespace vb6c3
