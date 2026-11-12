@@ -1007,7 +1007,7 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
             } else {
                 // 找不到 rc.exe = 类型库不嵌进 DLL ⇒ 注册表里也就没有 TypeLib 项，外部客户
                 // 按 LIBID 找不到契约。这是**静默**的质量损失，所以不藏在 --verbose 后面 (B17)。
-                std::cerr << "C3: rc.exe not found, TypeLib will not be embedded in DLL" << std::endl;
+                std::cerr << "C3: rc.exe not found, TypeLib will not be embedded in DLL (put rc.exe in .\\tools\\, or install the Windows SDK / add its bin to PATH)" << std::endl;
             }
         } else if (options.verbose) {
             std::cout << "C3: TypeLib file not found: " << tlbPath << std::endl;
@@ -1102,7 +1102,7 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
                 }
             }
         } else {
-            std::cerr << "C3: rc.exe not found, version info will not be embedded" << std::endl;
+            std::cerr << "C3: rc.exe not found, version info will not be embedded (put rc.exe in .\\tools\\, or install the Windows SDK / add its bin to PATH)" << std::endl;
         }
     }
 
@@ -1217,7 +1217,7 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
                 }
             } else {
                 // 与 TypeLib / VERSIONINFO 两处一致: 不藏在 --verbose 后面。
-                std::cerr << "C3: rc.exe not found, application manifest will not be embedded" << std::endl;
+                std::cerr << "C3: rc.exe not found, application manifest will not be embedded (put rc.exe in .\\tools\\, or install the Windows SDK / add its bin to PATH)" << std::endl;
             }
         }
     }

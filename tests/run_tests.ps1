@@ -2535,6 +2535,19 @@ function Test-EventHandlerNames {
     }
 }
 
+function Test-DiagMessageText {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] diag_message_text ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_diag_message_text.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 function Test-UcInstanceExit {
     $script:total++
     Write-Host -NoNewline "  [STATIC] uc_instance_exit ... "
@@ -12350,6 +12363,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-ParamArrayReclaim }
     if (Enter-StaticShard) { Test-BstrBorrowSlot }
     if (Enter-StaticShard) { Test-EventHandlerNames }
+    if (Enter-StaticShard) { Test-DiagMessageText }
     if (Enter-StaticShard) { Test-UcInstanceExit }
     if (Enter-StaticShard) { Test-StaticSentinelRegistration }
     if (Enter-StaticShard) { Test-QuitPumpInvariant }
