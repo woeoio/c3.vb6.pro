@@ -45,7 +45,7 @@ Begin VB.Form FrmMain
    End
    Begin VB.Timer Watch 
       Enabled         =   -1   'True
-      Interval        =   8000
+      Interval        =   2000
       Left            =   3000
       Top             =   240
    End
@@ -60,12 +60,14 @@ Option Explicit
 ' FIX-010 (upstream FGZ). Bare `Timer1.Enabled = True` takes the direct
 ' vb6_SetTimerEnabled path, so use an Object variable to force the late-bound
 ' vb6_ComSetProp(t, L"Enabled") / L"Interval" path into vb6_Host_SetProp.
-' The design-time Interval is 3000 ms; the runtime write should shorten it to
-' 50 ms. If either branch is missing, Timer1 cannot deliver 3 beats (9 s) before
-' the 8000 ms watchdog, which prints F10-TIMEOUT instead (needle goes red).
-' The watchdog line carries its own diagnosis: loaded=0 means Form_Load never
-' ran, ticks=0 means the Enabled branch did nothing, ticks=1..2 means the
-' Interval branch did not re-arm at 50 ms.
+' GA judgment is the READ-BACK pair F10-IVAL=50 / F10-EN0=False: the late-bound
+' writes must land in the window properties that vb6_GetTimerInterval /
+' vb6_GetTimerEnabled read. Without the RTL dispatch both read their defaults
+' (0 and True), so both needles go red. This does NOT depend on WM_TIMER being
+' delivered -- GitHub-hosted runners do not deliver generated Timer events even
+' though the same CI-built C3.exe produces F10-TICKS=3 on a local desktop.
+' Locally the F10-TICKS=3 / F10-TIMEOUT pair is still the runtime A/B judgment.
+' The watchdog line carries its own diagnosis (loaded / ticks) for that A/B.
 Private gTicks As Long
 Private gLoaded As Long
 
@@ -75,7 +77,11 @@ Private Sub Form_Load()
     Debug.Print "F10-LOAD"
     Set t = Timer1
     t.Interval = 50
+    Debug.Print "F10-IVAL=" & CStr(Timer1.Interval)
+    t.Enabled = False
+    Debug.Print "F10-EN0=" & CStr(Timer1.Enabled)
     t.Enabled = True
+    Debug.Print "F10-EN1=" & CStr(Timer1.Enabled)
 End Sub
 
 Private Sub Timer1_Timer()

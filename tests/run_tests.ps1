@@ -7719,11 +7719,19 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_ComSetProp(t, L"Interval", vb6_ComPackInt(50))',
         'vb6_ComSetProp(t, L"Enabled", vb6_ComPackBool((-1)))'
     )
-    # 运行判据（能红）: 设计期 Interval=1000，运行期写 50；Enabled 或 Interval
-    #   任一晚绑定分支失效 ⇒ 3 拍赶不上 2000ms 看门狗 ⇒ 打 F10-TIMEOUT，针立刻红。
-    #   A/B 实测: 修前 F10-TIMEOUT，修后 F10-TICKS=3（x64 + x86 均自退）。
-    Test-Vbp "fgz_fix010_timer_run" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-TICKS=3")
-    Test-Vbp "fgz_fix010_timer_run_x86" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-TICKS=3") -Arch "x86"
+    # 运行判据（能红）: 钉「晚绑定写入能读回」这一对，不经过消息循环。
+    #   t.Interval=50 / t.Enabled=False 走 vb6_ComSetProp → vb6_Host_SetProp 的
+    #   VB6_TIMER 分派 → vb6_SetTimerInterval / vb6_SetTimerEnabled（写窗口属性）；
+    #   裸名 Timer1.Interval / Timer1.Enabled 读侧读的正是那两枚属性。
+    #   A/B 实测（同一枚 C3.exe，只换 RTL 分派）:
+    #     修前 F10-IVAL=0  F10-EN0=True  （且报 C3_HOST_MEMBER_MISS site=SetProp
+    #                                     name="Interval" cls=VB6_TIMER）
+    #     修后 F10-IVAL=50 F10-EN0=False
+    #   ⚠ 不用 F10-TICKS=3 当 GA 判据：GitHub-hosted runner 上生成的 Timer 事件
+    #   不投递（loaded=1 ticks=0），而把**同一枚 CI 构建的 C3.exe** 拿到本机跑就是
+    #   F10-TICKS=3 ⇒ runner 环境差异，不是产物/代码问题。打拍那对留给本机 A/B。
+    Test-Vbp "fgz_fix010_timer_run" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-IVAL=50", "F10-EN0=False")
+    Test-Vbp "fgz_fix010_timer_run_x86" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-IVAL=50", "F10-EN0=False") -Arch "x86"
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，
