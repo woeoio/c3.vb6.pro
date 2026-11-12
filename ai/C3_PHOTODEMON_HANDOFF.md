@@ -5757,3 +5757,231 @@ Public Sub Main() : x = F1() : End Sub                          ' 调用点省�
    `probe/photodemon-emit` 分支（head `3273e035` = 「merge origin/dev into probe/photodemon-emit」，
    已含 212d8427 + 2460da8f）⇒ **要把 dev 的新提交喂给 PD, 得 merge 进 `probe/photodemon-emit` 再推**。
 5. **形状门**：维持挂账（本刀的 G1+G2 会带来新的形状行，等用户批准 bless 时**一次**登记）。
+
+---
+
+## §56.44 — ucSegmentedControl 红面收口（Form_Resize 提前）+ VARIANT 族 G3 落地 + 装箱普查登记
+
+本轮三刀，提交顺序：
+
+| 提交 | 性质 | 内容 |
+| --- | --- | --- |
+| `a6a5dc04` | fix(cgen) | VARIANT 族 G3：UC 方法返回工程类时按对象档装箱 |
+| `6145da6d` | ci | 登记 G3 给装箱权威出口新增的消费点（普查 8→11 处 / 7→8 份文件） |
+| `c7a24657` | fix(vb6forms) | Form_Resize 提到显示前 —— 修 ucSegmentedControl 的 uc1 拉伸竞态 |
+| `d045806b` | ci | 像素夹具的诊断开关改为默认关 |
+
+### 一、uc1 拉伸（`0,0 609x49` vs 期望 `0,0 751x49`）：根因与修法
+
+#### 1.1 现象
+
+判据 `tests/guisample/segmented_px.ps1` 钉 `uc1 = 0,0 751x49`（真 VB6 参考：
+`Form_Resize` 里 `ucSegmentedControl1.Move 0, 0, Me.ScaleWidth` 把设计期 609 拉到客户区宽 751）。
+C3 产物稳定读到 `0,0 609x49`（**设计期宽**），本机与 CI 同形 ⇒ 判红。
+
+#### 1.2 三次二分（把「拉没拉」拆成三问）
+
+| 问题 | 取证 | 读数 |
+| --- | --- | --- |
+| ① Form_Resize 跑了没有？ | 临时埋点（`vb6_QueueFormResize` / `vb6_DrainFormResize` / `vb6_InvokeFormResize`） | **跑了**（`[AD-fr] drain` 出现，生成代码的 `case VB6_FORM_FR_MSG` 接住） |
+| ② Move 算对了没有？ | `vb6_ControlMove` 埋点 | **算对了**：`W=11268` 缇 → `939x61` px = 751×49 逻辑像素；旧值 761×61 = 609×49 |
+| ③ 那为什么采样还是 609？ | `vb6_ShowForm` 各步插桩 | **顺序错了** |
+
+第 ③ 问的读数（本机埋点，逐步）：
+
+```
+[AD-fr] show hwnd=002B037E drained=0 pending=0     ← 显示前排空: 队列里空的
+[AD-fr] step pre-ShowWindow
+[AD-fr] queue hwnd=002B037E isWin=1 client=939x650 ← 首条 WM_SIZE **在 ShowWindow 里**才到
+[AD-fr] queue hwnd=002B037E posted
+[AD-fr] step post-ShowWindow
+...
+[AD-fr] drain hwnd=002B037E                        ← 消息循环里才派发 Form_Resize
+[AD-move] hwnd=009A079C mask=7 L=0 T=0 W=11268 H=0 -> px 0,0 939x61 (old 761x61) changed=1
+```
+
+#### 1.3 根因
+
+C3 把「该跑 Form_Resize」**完全挂在 Windows 的 WM_SIZE 通知上**（生成的 WndProc：
+`case WM_SIZE: vb6_QueueFormResize(hwnd);` ⇒ PostMessage `VB6_FORM_FR_MSG` ⇒ 消息循环里派发）。
+而窗体**首条** WM_SIZE 是**在 `ShowWindow` 里面**才到的（本机埋点：窗体建窗时尺寸就已经是
+`939x650` 物理 = 751×520 逻辑，客户区从头到尾没变过）⇒ Form_Resize 排在**窗口可见之后**
+⇒ 外部采样（判据的 `GetDC($main)` + `BitBlt`）能撞见「拉伸前」的布局。
+
+真 VB6 的语义是：**Form_Resize 在 Form_Load 之后、首次绘制之前跑一次**（窗体从「没有尺寸」
+到「设计尺寸」的那一次），布局在第一帧上屏前已经定型。
+
+#### 1.4 修法（`src/rtl/core/vb6forms/vb6forms.c`，`vb6_ShowForm`）
+
+显示前把首个 Form_Resize 跑掉，两条走法各管一档：
+
+* **排队那条排掉**（有就排）：`PeekMessageW(…, VB6_FORM_FR_MSG, …, PM_REMOVE)` +
+  `DispatchMessageW` ⇒ 派发走生成代码的 `case VB6_FORM_FR_MSG`
+  （`vb6_DrainFormResize` + `vb6_Form1_Form_Resize()` 本体）—— 这是 WM_SIZE **早到**那一档的走法；
+* **排不到**（WM_SIZE 还没来，即上面那条迟到路径）⇒ **直接调** rev29 的直调通道
+  `vb6_InvokeFormResize(hwnd)`：它存的就是生成代码的 `vb6_<Form>_Form_Resize` 地址，
+  不依赖 WM_SIZE，正是「显示前跑一次」要的那个动作。
+
+两条护栏：
+
+* **撤出队列是必须的** —— 否则消息循环里那条还会再派发一次（Form_Resize 跑两遍）；
+* **直调走 rev29 的同窗体重入闸**（thread-local `g_formResizeIn`）—— Form_Resize 内部
+  再 Move 子控件回到 `vb6_ControlMove` 那一发会被挡掉，不递归。
+
+**判据侧一字未动**：期望值（751）、计数口径、等待窗口、抓图方式都没碰。
+
+#### 1.5 本机读数（`--arch x86`）
+
+| | 修前 | 修后（干净模式，无任何诊断扰动） |
+| --- | --- | --- |
+| uc1 rect | `0,0 609x49` ✗ | `0,0 751x49` ✓ |
+| uc2 vivid/blue | 1087/480 | 1087/480 |
+| uc3 vivid/blue | 1085/617 | 1085/617 |
+| uc4 vivid/blue | 1665/1664 | 1665/1664 |
+| uc11 vivid/blue | 970/209 | 970/209 |
+| uc1 vivid/blue | 488/161 | 488/161 |
+| accent / CE00EF | #0078D7(10515) / 554 | #0078D7(10515) / 554 |
+| openEditor whitePx | 495 | 495 |
+| itemVisible hide/firstMs/settleMs | 0.4045 / 46 / 116 | 0.4045 / 29 / 95 |
+| solidTransparent image/back | 0.9727 / 0.0149 | 0.9727 / 0.0149 |
+| flatGradient deep→0→deep / diff | 3896→0→3896 / 0.2625 | 3896→0→3896 / 0.2625 |
+| error438 hits | 0 | 0 |
+| 结论 | `FAIL UC 宿主 rect 不符` | `PASS ucSegmentedControl client=751x520 hosts=12+1` |
+
+（带诊断与不带诊断两轮读数逐项一致 ⇒ 这一刀不是靠扰动换来的绿。）
+
+### 二、像素那条红：「开着诊断才绿」是**扰动换来的**
+
+#### 2.1 关键读数（CI 三轮对照）
+
+| CI run | 提交 | 诊断 | 像素读数 |
+| --- | --- | --- | --- |
+| `43150418737` | `0ba4720a` | 无 | 12 个宿主 rect **逐个纯白** |
+| `43152473320` | `4d02349c`（G1+G2） | 无 | vivid/blue **全 0** |
+| `43153977014` | `88ff7058` | **有** `[AD-paint]` 等 | **全绿** |
+
+⇒ 同一个产物，**只因 stderr 多写了几行就变绿** ⇒ 那条绿不是修复，是扰动。
+
+#### 2.2 失败轮工件的证据（`.temp/art_vbp4_43150418737/ucSegmentedControl/pixels/`）
+
+| 文件 | 读数 | 说明 |
+| --- | --- | --- |
+| `segmented_c3.png`（751×520） | 240,240,240 ×25293 + 255,255,255 ×18173，其余 ≈0 | 屏面 = 窗体底色 + **UC 宿主区纯白**；无 229,229,229（窗体 BackColor） |
+| `ucdump/ucSegmentedControl_1_00040212.bmp`（272×33） | 0,120,212 ×590、0,0,0 ×91、240 ×189、255 ×1248 | **UC 离屏 DIB 里内容全在**（accent 蓝 + 文字） |
+| `ucdump/FORM_00090158.bmp`（751×520） | 0,120,212 ×8144、229,229,229 ×73928、108,117,125 ×2269 | 窗体记忆 DC 里**整幅 UI 都在** |
+
+⇒ 内容**画进了 DIB、也进了窗体记忆 DC**，唯独没落到屏面 ⇒ 是「上屏那一环」的时序问题，
+不是「paint 回调画空」。
+
+（注：窗体记忆 DC 有内容，是因为夹具 `Form1.frm` 的 `ucSegmentedControl11_ItemClick`
+里 `Me.AutoRedraw = True` —— 那是**运行期点击之后**才有的 AutoRedraw DC，
+与首次绘制那一轮无关。）
+
+#### 2.3 本轮处置：把诊断开关收敛成 `-Diagnostics`（默认关）
+
+`tests/guisample/segmented_px.ps1` 之前**无条件**设 `C3_AD_TRACE=1`（并顺带开
+`C3_UC_DUMPDIR` 落盘）—— 那是定位期加的诊断刀，两个副作用：
+
+1. 往 stderr / 磁盘写东西 = **扰动时序** ⇒ CI 的绿/红被埋点牵着走；
+2. 判据一直跑在一条**非生产**路径上。
+
+改法：两枚开关收敛到 `-Diagnostics` 开关（**默认关**）。CI 侧 `run_tests.ps1` 调夹具只带
+`-Exe/-OutDir/-Sec` ⇒ 自动走干净那条路。判据本身（期望值、计数口径、等待窗口、抓图方式）
+一字未动。
+
+RTL 侧那几行 `[AD-paint]/[AD-blit]/[AD-pm]/[AD-erase]` **保留**（只在 `C3_AD_TRACE`
+存在时输出，运行时行为不变），留作下一次二分的手电筒；加 `-Diagnostics` 时工件规则
+（`output/**`）照样收 `.err` 与 `ucdump/`。
+
+**状态**：本机两模式都 PASS；**CI 上像素那条红是否随本刀转绿，待 CI 回填**（本节不预支结论）。
+本机复现不了（两模式都绿），需要 CI 那一台当判官。
+
+### 三、VARIANT 族 G3：对象 → Variant 返回槽的装箱（`a6a5dc04`）
+
+#### 3.1 病灶形状（PD 整编 emit 读数，四处同形）
+
+```
+pdCanvas.c:165 / pdStatusBar.c:160 / pdTreeviewOD.c:126 / pdTreeviewViewOD.c:109
+    vb6_VARIANT retMeth = vb6_pdCanvas_GetZoomDropDownReference(me);
+```
+
+原生函数返回的是 `vb6_cls_pdDropDown*`（**裸实例指针**），塞进 `vb6_VARIANT` ⇒ cl C2440。
+
+#### 3.2 根因
+
+语义层把「作用域里认不出的类型名」一律折成 `Vb6Type::Variant`
+（`semantic_analyzer_typeref.cpp:152`）⇒ **工程类返回**的 Function 也过了 UC 方法桥的
+pick 判据（`ps->type == Variant`）⇒ thunk 按「原生返回 `vb6_VARIANT`」发码。
+
+#### 3.3 修法（返回类型判定与原生 C 签名**同源**）
+
+判据用符号的 `variableTypeName`（= 源码原样的 `As <名>`，`semantic_analyzer_decl.cpp:147`
+记在那儿）+ 工程级类名表 `projectClassNameOf`（不受同名成员遮蔽，与 `cgen_decl_var.cpp:249` 同源）：
+
+| 原生返回的 C 形态 | 装箱档 | 发码 |
+| --- | --- | --- |
+| `vb6_VARIANT`（无 As / As Variant） | 0 | 原样搬（旧行为一字未动） |
+| `vb6_cls_<X>*`（工程类） | 1 | `vb6_VariantFromProjectInstance(call)` |
+| `void*`（其它命名类型） | 2 | `vb6_VariantObject(call)` |
+
+⚠ **不用** `vb6_VariantFromValue` —— 它的 `_Generic` default 落 `vb6_VariantObject`，
+会把类结构体地址当 IDispatch 塞进 `pdispVal` ⇒ 之后按 vtable 解引用 0xC0000005（「假对象」）。
+
+#### 3.4 本机负控/正控（探针 `.temp/probe/g3/`，**不进仓库**，不触形状门）
+
+`ProbeThing.cls`（工程类）+ `ucProbe.ctl`（`Public Function GetThing() As ProbeThing`）+
+`Form1.frm` + `G3.vbp`：
+
+| | 改前 C3.exe | 改后 C3.exe |
+| --- | --- | --- |
+| 编译 | **失败 exit 2**：`ucProbe.c(44): error C2440: 无法将 'vb6_cls_ProbeThing *' 转换为 'vb6_VARIANT'` | 成功链接，产出 `G3.exe`（496,128 B） |
+| thunk 发码 | `vb6_VARIANT retMeth = vb6_ucProbe_GetThing(me);` | `vb6_VARIANT retMeth = vb6_VariantFromProjectInstance(vb6_ucProbe_GetThing(me));` |
+
+#### 3.5 回归
+
+* `tests\run_tests.ps1 -Category syntax`：**PASS=227 FAIL=0 SKIP=0**；
+* `scripts\check_variant_unbox.ps1`：**PASS R1..R7**；
+* 形状门：语料里没有「UC 方法返回工程类」的形状（`As Picture` 那几处压根没进 pick），
+  本刀对 emit-manifest 零影响。
+
+### 四、G3 触发的 `Tests (compile #2)` 红：普查在**要求登记**，不是产品回归
+
+`a6a5dc04` 让**UC 方法返回工程类**那一臂也发同一枚 RTL 出口 `vb6_VariantFromProjectInstance`
+⇒ `scripts/check_class_refcount_authority.ps1` 的「view boxing rtl 出口」普查位数
+从 **8 处/7 份文件** 变成 **11 处/8 份文件** ⇒ CI 上 `Tests (compile #2)` 那一条红。
+
+处置按台账 §56.38 A7 的先例（R4 收口给新式薄指针臂发同一枚出口时，位数 7→8、份数不变，
+「同问同一权威，不是放宽」）**登记**：
+
+* `sites` 8 → **11**（新增 = 发码串一条 + 那一臂的归因注释两条）；
+* `files` 7 → **8**（新住的那一份 = `cgen_form_uc_methods.inc`）；
+* 钉仍是**恰好 N 处**，**没有**降级成「至少 N 处」；普查注释与 OK 汇总行同步更新。
+
+理由：那一臂的原生返回是 `vb6_cls_<X>*` 裸实例指针，直接塞进 `vb6_VARIANT` 就是 cl C2440
+（PD 四处实测），而裸实例指针装对象档的出口**只有**这一枚 ⇒ 不许另立第三种。
+
+本机：`scripts\check_class_refcount_authority.ps1` ⇒ `CLASS-REFCOUNT-AUTHORITY OK`（exit 0）。
+
+### 五、CI 读数（回填表）
+
+| run | 提交 | 结论 | 备注 |
+| --- | --- | --- | --- |
+| `43155378273` | `a6a5dc04` | failure（**3 红**） | 形状门 + vbp#4 + **compile#2**（普查未登记所致，已在 `6145da6d` 登记） |
+| `43160074983` | `6145da6d` | 待回填 | 只带 census 登记 |
+| 待回填 | `d045806b` | 待回填 | 带 Form_Resize 修复 + 诊断默认关 |
+
+PD 验证通道：`dev` 已 merge 进 `probe/photodemon-emit`（`474302b7`），emit probe 已 dispatch
+（run `43161138184`）—— 看 G3 是否让那四处 C2440 归零。
+
+### 六、下一刀（接续点）
+
+1. **CI 回填 `d045806b`**：vbp#4 是否转绿（uc1 rect + 像素）。像素那条若仍红，用
+   `-Diagnostics` 跑一轮拿 `[AD-pm]`（`BeginPaint` 返回值 / 更新区 / 父窗 / 可见性）+
+   `[AD-blit]`（`BitBlt` 返回值 / 裁剪框 / 回读像素）—— 这两行是本轮为二分留下的手电筒。
+   重点怀疑：`BeginPaint` 返回 NULL（无更新区 ⇒ 画了也白搭）这一档。
+2. **形状门**：维持挂账（18 行，用户裁定暂不 bless）。等批准时**一次**登记
+   （`scripts\rebless_emit_manifest.ps1 -Bless`，只提交 `emit-manifest.expected.txt`）。
+3. **PD 侧**：emit probe `43161138184` 读 G3 读数；full build 那条 workflow 在
+   `probe/photodemon-emit` 上 dispatch（约 2 h 量级）。
+4. **G3 的形状影响**：若 PD 侧那四处 C2440 归零但形状门多出新行，先登记形状再动判据，
+   不要反过来。
