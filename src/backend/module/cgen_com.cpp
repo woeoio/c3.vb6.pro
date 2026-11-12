@@ -28,6 +28,15 @@ static std::string commentStripBlockComments(const std::string& s) {
 
 // --- cgen_com.cpp: COM类工厂 + 接口vtable + RaiseEvent + 事件接收器 ---
 
+// 账 §56.48: 「这个类声明过事件吗」只有**这一份**答案 —— 类工厂体 (出厂写 `me->events = NULL`)
+// 与出厂那一腿 (放走事件汇) 共用它, 不各答一遍。
+static bool moduleDeclaresEvents(Module& module) {
+    for (auto& decl : module.declarations) {
+        if (decl && decl->kind == ASTNodeKind::EventDecl) return true;
+    }
+    return false;
+}
+
 void CCodeGen::emitClassFactory(Module& module) {
     std::string clsStruct = "vb6_cls_" + cIdent(moduleName_);  // Fix 013: VB_Name
 
@@ -188,10 +197,7 @@ void CCodeGen::emitClassFactory(Module& module) {
     }
 
     // P6.5: 初始化事件接收器指针为NULL
-    bool hasEvents = false;
-    for (auto& decl : module.declarations) {
-        if (decl->kind == ASTNodeKind::EventDecl) { hasEvents = true; break; }
-    }
+    bool hasEvents = moduleDeclaresEvents(module);
     if (hasEvents) {
         c_.emitLine("me->events = NULL;  /* P6.5: no event sink initially */");
     }
@@ -316,6 +322,14 @@ void CCodeGen::emitClassFactory(Module& module) {
                 }
             }
         }
+    }
+
+    // 账 §56.48: 事件汇归**源实例**所有 —— 类成员那一路 (宿主类里的 WithEvents 成员) 的汇是
+    // 堆上那枚, 由源类的 `events` 字段指着 (见 cgen_setlet_set_rhs.inc 的 Set 那一站)。
+    // 源实例没时那枚汇一起没, 否则每枚源实例漏一枚汇。`events` 这个字段只被那一路写成
+    // 堆上的汇 (出厂写 NULL, 别的路不碰它) ⇒ 这里放手的对象唯一。
+    if (moduleDeclaresEvents(module)) {
+        c_.emitLine("if (me->events) { vb6_Free(me->events); me->events = NULL; }  /* 账 §56.48: 事件汇出厂放手 */");
     }
 
     // 账 #481 = 第一百八十二刀: 登记腿的配对另一半 —— 表是「裸实例 → desc」的弱映射,
