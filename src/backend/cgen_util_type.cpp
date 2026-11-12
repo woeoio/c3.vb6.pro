@@ -809,6 +809,23 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                     return true;
                 }
                 if (kBuiltinFuncNames.count(bname)) return false;
+                // 账 §56.40 校准: **对象变量的默认属性调用** (`obj(9)`) —— 调用结果的
+                // 类型是**那个属性的返回档**, 不是变量自己的存储档 (类实例变量在符号表里
+                // 常记成 Variant/Object)。此前这一格直接 checkSym ⇒ 把 `m_up(9)` 答成
+                // 「整只 Variant 槽」⇒ 读腿给它套 vb6_VariantToString ⇒ C2440
+                // (tests/cls_inh InhHolder.ItemDefault: 那个默认属性返回 String, 交出去的
+                //  已经是 BSTR, 再包一层就是 BSTR→vb6_VARIANT 的反向 C2440)。
+                // 判据: 这枚符号是个**变量** (不是 Function/PropertyGet), 且它的类型是
+                // Object / 指向工程类 ⇒ 它身上的 `()` 是默认属性(或方法)调用, 不是取槽。
+                // 答否 = 保守方向 (与改前文本投影同答案), 不会把真 Variant 漏箱。
+                if (sym && sym->kind != SymbolKind::Function
+                    && sym->kind != SymbolKind::PropertyGet) {
+                    if (sym->type == Vb6Type::Object) return false;
+                    if (!sym->variableTypeName.empty()) {
+                        const Symbol* clsSymCall = lookupTypeSymbol(sym->variableTypeName);
+                        if (clsSymCall && clsSymCall->kind == SymbolKind::Class) return false;
+                    }
+                }
                 // 关键差异: sym==null (内置函数) 视为非 Variant
                 return checkSym(sym);
             }

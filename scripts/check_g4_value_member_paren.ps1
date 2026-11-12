@@ -13,7 +13,8 @@
 #   P1  Marker C3-SENTINEL(g4-value-member-empty-paren) 恰好 1 处, 且在权威 .inc 内。
 #   P2  收口块先于 `lastExpr_ = callee + "(" + argList + ")";` (顺序 + 存在性)。
 #   P3  三条读法尾注齐全 (`ctrl prop read` / `ctrl array UBound` / `ctrl array LBound`),
-#       且类字段尾注 (`/* class var .`) 仍在。
+#       且类字段读那一格**问 `cExprIsClassFieldRead`** (那一位主人自己认 ` field */` /
+#       ` field variant */` / ` field voidptr */` 三种串尾 —— 收口块不许自己认尾注文字)。
 #   P4  收口块必须有 `argList.empty()` 与 `lastExpr_ = callee;` + return (不许静默丢表达式)。
 #
 # 用法:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\check_g4_value_member_paren.ps1
@@ -84,8 +85,13 @@ if ($markM.Success) {
             $bad += ("P3 value-read tail missing from the collection block: " + $tail)
         }
     }
-    if ($body -notmatch [regex]::Escape('/* class var .')) {
-        $bad += "P3 class-field read tail (/* class var .) is no longer recognized"
+    # 类字段读那一格: 台账 §56.21 (行 4194) 已把它归并 —— 收口块不再**逐字认尾注**
+    #   (`callee.find("/* class var .")` 那种现场判字面量), 改成问 §B172 那个出口的识别半
+    #   cExprIsClassFieldRead (它认 ` field */` / ` field variant */` / ` field voidptr */`
+    #   三种串尾; 那位自身另有判据钉着)。判据正解 = 改钉「收口块必须问 cExprIsClassFieldRead」。
+    #   ⇒ P3 这一格跟着改钉**那一位主人**, 不再重复钉字面量 —— 与 §56.21 同口径。
+    if ($body -notmatch 'cExprIsClassFieldRead\s*\(') {
+        $bad += "P3 the collection block no longer asks cExprIsClassFieldRead (the class-field read tail must be recognized by that owner)"
     }
     if ($body -notmatch 'argList\.empty\(\)') {
         $bad += "P4 the guard lost argList.empty() (a real call with arguments must not be swallowed)"

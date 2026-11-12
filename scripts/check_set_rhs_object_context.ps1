@@ -17,7 +17,12 @@
 #       只是落点写成普通赋值而不是 vb6_ComSetRef —— 是真实的一类 Set 语句, 不是重复发码。
 #   S2  cgen_setlet_set_prop.inc 里 emitExpr(*node.value) 必须 0 处 —— 那正是"绕过唯一出口"的形
 #   S3  同一文件里 value.find("vb6_hwnd_") 必须 0 处 —— P16 那截事后手术不许回来
-#   S4  ctrlObjectRefExpr( 恰好 3 处 = 声明 + 定义 + 那一个消费点 (suppressDefaultProp_ 那一支)
+#   S4  ctrlObjectRefExpr( **剔除注释后**恰好 5 处 = 声明 + 定义 + 三位消费点
+#       (suppressDefaultProp_ 那一支 / §52 `Is Nothing` 裸控件名 / §53 未建模空操作接收者),
+#       并**按文件分别钉住**: 每个有消费点的文件恰好 1 处, 声明/定义各 1。
+#       (旧读数把**注释**也数了进去 —— 正文写「唯一出口仍是 ctrlObjectRefExpr (…)」的两处
+#        cgen_expr_binary.cpp:495 (注释块起于 :486) 与 cgen_call.cpp:761 被当成真调用
+#        ⇒ 读数 7 而不是 5。)
 #   S5  消费点里不许再手拼 "vb6_hwnd_" + cIdent(node.name) —— 那拼不出 ListView 槽变量 /
 #       ImageList 的 vb6_com_ / WithEvents 控件变量那三档 (改前它们发的是 C 里没有的名字)
 #   S6  那道闸只许在右值**整枚是一枚标识符**时开 (bareIdent 那一行必须在，且只有一处) ——
@@ -47,6 +52,32 @@ function Count-Pat([string]$pattern) {
     return $n
 }
 
+# ---- 只认**代码行** (与 check_legacy_slot_key_owners.ps1 / check_legacy_view_arg_owners.ps1
+#      同一把尺): 以 // 、/* 、* 开头的整行不算, 其余行裁掉行内 // 之后才算。
+#      S4 的旧读数把两处**注释**也数进去了 (正文写「唯一出口仍是 ctrlObjectRefExpr (…)」),
+#      所以这一格改成数代码行。
+$codeOf = @{}
+foreach ($k in $textOf.Keys) {
+    $keep = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($textOf[$k] -split "`r?`n")) {
+        $t = $line.TrimStart()
+        if ($t.StartsWith("//") -or $t.StartsWith("/*") -or $t.StartsWith("*")) { continue }
+        $idx = $line.IndexOf("//")
+        if ($idx -ge 0) { $line = $line.Substring(0, $idx) }
+        $keep.Add($line)
+    }
+    $codeOf[$k] = $keep
+}
+
+function Count-CodePat([string]$pattern, [string]$fileName) {
+    $n = 0
+    foreach ($k in $codeOf.Keys) {
+        if ($fileName -and ($k -notlike ("*" + $fileName))) { continue }
+        foreach ($line in $codeOf[$k]) { $n += @([regex]::Matches($line, $pattern)).Count }
+    }
+    return $n
+}
+
 # ---- S1: 唯一出口的站点计数 ----
 $s1 = Count-Pat 'emitSetObjectRhs\s*\('
 if ($s1 -ne 9) { $bad += ("S1 emitSetObjectRhs sites = " + $s1 + " (need exactly 9: decl + def + 7 Set RHS sites)") }
@@ -72,8 +103,25 @@ if ($s3 -ne 0) { $bad += ("S3 the after-the-fact hwnd substring surgery is back 
                           ") -- that is the second copy of the answer this account removed") }
 
 # ---- S4/S5: 句柄拼法那一份权威 ----
-$s4 = Count-Pat 'ctrlObjectRefExpr\s*\('
-if ($s4 -ne 3) { $bad += ("S4 ctrlObjectRefExpr sites = " + $s4 + " (need exactly 3: decl + def + the one consumer)") }
+# S4: 「把这枚控件名当对象交出去」那一问 —— **剔除注释后** 5 处 = 声明 + 定义 + 三位消费点。
+#   逐处点名 (台账 §56.38 A7 先例: 同问同一权威, 不是放宽):
+#     · cgen_helpers.inc            = 1  声明
+#     · cgen_util_ctrl.cpp          = 1  定义 (主人本体)
+#     · cgen_expr_ident_symbol.inc  = 1  消费点 (suppressDefaultProp_ 那一支)
+#     · cgen_expr_binary.cpp        = 1  消费点 (§52 `Is Nothing` 裸控件名, 提交 d879fc4e)
+#     · cgen_call.cpp               = 1  消费点 (§53 未建模空操作接收者, 提交 67d4efeb)
+#   后两处问的是**同一枚出口** (裸控件名要交成「控件对象」而不是「默认属性读数」),
+#   不是第二份答案 —— 所以是登记的人多了, 不是权威破了。
+$s4 = Count-CodePat 'ctrlObjectRefExpr\s*\(' ""
+if ($s4 -ne 5) { $bad += ("S4 ctrlObjectRefExpr sites (comments excluded) = " + $s4 + " (need exactly 5: decl + def + 3 consumers)") }
+$wantS4 = @{ 'cgen_helpers.inc' = 1; 'cgen_util_ctrl.cpp' = 1; 'cgen_expr_ident_symbol.inc' = 1;
+             'cgen_expr_binary.cpp' = 1; 'cgen_call.cpp' = 1 }
+foreach ($k in $wantS4.Keys) {
+    $c = Count-CodePat 'ctrlObjectRefExpr\s*\(' $k
+    if ($c -ne $wantS4[$k]) {
+        $bad += ("S4 " + $k + ": ctrlObjectRefExpr sites = " + $c + " (want exactly " + $wantS4[$k] + ")")
+    }
+}
 
 $identFile = Join-Path $root "src\backend\detail\expr\cgen_expr_ident_symbol.inc"
 if (-not (Test-Path -LiteralPath $identFile)) {
@@ -102,4 +150,4 @@ if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS set_rhs_object_context (S1 9 sites = decl+def+7 calls, S2 no bypass, S3 no P16 surgery, S4 3 hwnd-authority sites, S5 suppress branch asks it, S6 gate is identifier-only)"
+Write-Host "PASS set_rhs_object_context (S1 9 sites = decl+def+7 calls, S2 no bypass, S3 no P16 surgery, S4 5 hwnd-authority sites (comments excluded: decl+def+3 consumers), S5 suppress branch asks it, S6 gate is identifier-only)"

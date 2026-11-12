@@ -57,6 +57,33 @@ function CountWhere([string]$needle, [string]$fileName) {
     return $n
 }
 
+# 取某个函数的花括号平衡块体 (认字符串字面量 —— 那两发 view_from 里各有一行
+#   c_.emitLine("... (void* instance, const char* className) {"); ，串里那个 '{' 不算深度)。
+function Get-FnBlock([string]$text, [string]$sig) {
+    if ($text -eq '') { return $null }
+    $i = $text.IndexOf($sig)
+    if ($i -lt 0) { return $null }
+    $open = $text.IndexOf('{', $i)
+    if ($open -lt 0) { return $null }
+    $depth = 0
+    $inStr = $false
+    for ($k = $open; $k -lt $text.Length; $k++) {
+        $ch = $text[$k]
+        if ($inStr) {
+            if ($ch -eq '\') { $k++; continue }
+            if ($ch -eq '"') { $inStr = $false }
+            continue
+        }
+        if ($ch -eq '"') { $inStr = $true; continue }
+        if ($ch -eq '{') { $depth++ }
+        elseif ($ch -eq '}') {
+            $depth--
+            if ($depth -eq 0) { return $text.Substring($open + 1, $k - $open - 1) }
+        }
+    }
+    return $null
+}
+
 $fail = @()
 
 $v1 = CountWhere 'compare(0, 10, "vb6_iface_")' "cgen_base_type.cpp"
@@ -92,8 +119,12 @@ if ((CountWhere ").obj == " "") -gt 3) { $fail += "V6 视图比较发码在别�
 #        + With 那一站 1 (第一百七十七刀站D′) + 站F 属性读那一位读者 1 (第一百七十八刀),
     #        (新账 #474 写侧又添一位读者 ⇒ 位数见下面 V7 那条针)
 #        且 cgen_control.cpp / cgen_with.cpp 各恰好 1 处、cgen_util_classtype.cpp 恰好 5 处 (定义 + bool 投影 + 方法主人那一问 + 站F 读侧读者 + 站F 写侧读者)。
-#   V8  比名那把尺 `_stricmp(className` 全仓恰好 1 处, 且在 cgen_iface_vtbl.cpp (接口自己铸的那一发 view_from
-#        里) —— 站点自己比名 = 第二条答案; mint 外再比一次名 = 又一位主人。
+#   V8  比名那把尺 `_stricmp(className` 全仓恰好 2 处, 且**按发射器分别钉住**:
+#        · emitLegacyIfaceViewFrom (cgen_iface_vtbl.cpp:597) —— legacy 值视图那一发 (接口自己铸的 view_from);
+#        · emitIvrefIfaceViewFrom  (cgen_iface_vtbl.cpp:638) —— 新式薄指针视图的**兄弟发射器**
+#          (R4 收口, 提交 43528bb8)。
+#        两处问的是**同一把尺** (运行期 className 是不是这枚实现类) = 同问同一权威, 不是放宽
+#        (台账 §56.38 A7 先例); 站点自己比名 = 第二条答案; mint 外再比一次名 = 又一位主人。
 $v7 = CountWhere "slotLegacyIfaceViewName(" ""
 if ($v7 -ne 14) { $fail += ("V7 认视图槽那一问位址: 期望 14 = 定义 + 声明 + bool 投影 + For Each 那一站 + 调用主人自己那一问 + With 那一站 + 站F 读侧读者 + 站F 写侧读者 + 带参写槽只读查询 (第186刀) + With 体内零参读 (第193刀) + Set 装填那一站 (第215刀) + 「Is」 那一站 (第248刀: 认完名册再用 ivrefCType 问形状), 实际到 " + $v7) }
 if ((CountWhere "slotLegacyIfaceViewName(" "cgen_control.cpp") -ne 1) {
@@ -106,9 +137,20 @@ if ((CountWhere "slotLegacyIfaceViewName(" "cgen_util_classtype.cpp") -ne 6) {
     $fail += "V7 站点: 视图那一族自己这一份文件里, 认视图槽那一问只许六处 (定义 + bool 投影 + 方法主人那一问 + 站F 读侧读者 + 站F 写侧读者 + 带参写槽查询)"
 }
 $v8 = CountWhere "_stricmp(className" ""
-if ($v8 -ne 1) { $fail += ("V8 视图那一族的比名尺: 期望 1 (只许写在接口自己铸的 view_from 里), 实际到 " + $v8) }
-if ((CountWhere "_stricmp(className" "cgen_iface_vtbl.cpp") -ne 1) {
-    $fail += "V8 比名尺住错了文件 - 那一行应当在接口自己铸的那一发 view_from 里"
+if ($v8 -ne 2) { $fail += ("V8 视图那一族的比名尺: 期望 2 = legacy 值视图那一发 + 新式薄指针那一发 (同问同一权威, 不是放宽), 实际到 " + $v8) }
+# 按**发射器**分别钉住 (两条都在 cgen_iface_vtbl.cpp 里 —— 旧措辞「比名尺住错了文件」是误报:
+#   两条同住一份文件, 真正要钉的是「哪个发射器有几处」)。
+$vtblKey = ($code.Keys | Where-Object { $_ -like "*cgen_iface_vtbl.cpp" } | Select-Object -First 1)
+$vtblText = if ($vtblKey) { ($code[$vtblKey] -join "`n") } else { "" }
+$blkLegacy = Get-FnBlock $vtblText "void CCodeGen::emitLegacyIfaceViewFrom("
+$blkIvref  = Get-FnBlock $vtblText "void CCodeGen::emitIvrefIfaceViewFrom("
+if ($null -eq $blkLegacy -or $null -eq $blkIvref) {
+    $fail += "V8 读不到那两个发射器的函数体 (cgen_iface_vtbl.cpp 的 emitLegacyIfaceViewFrom / emitIvrefIfaceViewFrom)"
+} else {
+    $v8l = @([regex]::Matches($blkLegacy, '_stricmp\(className')).Count
+    $v8i = @([regex]::Matches($blkIvref,  '_stricmp\(className')).Count
+    if ($v8l -ne 1) { $fail += ("V8 legacy 值视图那一发 (emitLegacyIfaceViewFrom) 的比名尺: 期望 1, 实到 " + $v8l) }
+    if ($v8i -ne 1) { $fail += ("V8 新式薄指针那一发 (emitIvrefIfaceViewFrom, 提交 43528bb8) 的比名尺: 期望 1, 实到 " + $v8i) }
 }
 # V9 开线 (2026-10-23, 账 #305 第一百七十五刀 = 新账 #471 站D): 「接收者是一枚视图时那一发方法调用怎么拼」
 #   收成一处 = legacyViewCallExpr。病灶形状 = 表达式路现场拼了一份 (P6.4)，语句路压根没问、直接落
@@ -134,6 +176,10 @@ if ((CountWhere "legacyViewCallExpr(" "cgen_util_classtype.cpp") -ne 4) {
 #   反向 comVbTypeForPackFn = 定义 + 声明 + With 体内那一问 = 3 处;
 #   表本体 kComPackTiers = 3 处 (表定义 + 两个循环)、且只住 cgen_util_com.cpp 一份文件。
 #   谁在别处再抄一份 switch / 名单，这两问就会在不同站点给出不同答案。
+#   ⚠ V11 (正向 comPackFnForVbType 期望 4 / 实到 5) 是**真回归**, 不是判据漂移 ——
+#     多出来的那处 (src/backend/cgen_util_ctrl.cpp:2569, 提交 356f21ae = F1 收口引入) 要改
+#     **发码** (新增消费点绕过既有权威), 另起一刀收口。**本轮只放 V8**: V11 的判据一个字不动,
+#     这条脚本因此仍会红 (读数只剩 V11 那条) —— 那是预期结果, 不许为了让它全绿而动 V11。
 $v11r = CountWhere "comVbTypeForPackFn(" ""
 if ($v11r -ne 3) { $fail += ("V11 打包器反向问位数: 期望 3 = 定义 + 声明 + With 站点一问, 实际到 " + $v11r) }
 $v11f = CountWhere "comPackFnForVbType(" ""

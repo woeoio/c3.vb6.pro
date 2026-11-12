@@ -14,6 +14,8 @@
 #         a) 秩 1 发 VB6_SA_AT (存量形状: 秩 1 的索引走裸表达式, 不再包 toLongIfVariant);
 #         b) 秩 2/3 发 VB6_SA_ND_AT2/AT3, 且数组实参带 `(vb6_SafeArrayND*)` 强转;
 #         c) 秩 >=4 发 VB6_SA_ND_ATN, 秩数与全部下标一次交全 (最外层那对括号不是装饰);
+#            **下标实参 (含那对括号) 的拼法住在 ndAtnSubscriptArg 一处**, udtDynMemberIndex
+#            只调它 —— 见 B3c;
 #         d) 秩 >=2 的索引过 toLongIfVariant (ND 出口的形参是 int32_t)。
 #   B4  调用面: 成员站 1 处、With 站 2 处 (UDT 臂 + 类成员臂), 其余 src 文件 0 处;
 #       声明在 src/backend/detail/util/cgen_helpers.inc 恰 1 处。
@@ -36,6 +38,30 @@ function Read-Text([string]$rel) {
     $p = Join-Path $root $rel
     if (-not (Test-Path -LiteralPath $p)) { return $null }
     return [System.IO.File]::ReadAllText($p)
+}
+
+# 取一段花括号平衡的块体 (start 指向块首 '{' 的位置)，返回**块内**文本。
+# 认字符串字面量：ndAtnSubscriptArg 体内那句 ", ((const int32_t[]){" 就把 '{' 写进了串里，
+# 不认串就会把深度数错（括号提前闭合）。
+function Get-BlockBody([string]$t, [int]$start) {
+    if ($start -lt 0 -or $start -ge $t.Length) { return $null }
+    $depth = 0
+    $inStr = $false
+    for ($j = $start; $j -lt $t.Length; $j++) {
+        $ch = $t[$j]
+        if ($inStr) {
+            if ($ch -eq '\') { $j++; continue }
+            if ($ch -eq '"') { $inStr = $false }
+            continue
+        }
+        if ($ch -eq '"') { $inStr = $true; continue }
+        if ($ch -eq '{') { $depth++ }
+        elseif ($ch -eq '}') {
+            $depth--
+            if ($depth -eq 0) { return $t.Substring($start + 1, $j - $start - 1) }
+        }
+    }
+    return $null
 }
 
 $authRel  = "src\backend\cgen_util_classtype.cpp"
@@ -111,8 +137,32 @@ if ($defsInAuth -eq 1) {
     if ($body -notmatch '\(vb6_SafeArrayND\*\)') {
         $bad += "B3b the ND accessors lost the (vb6_SafeArrayND*) cast (dynamic array members are declared vb6_SafeArray1D*)"
     }
-    if ($body -notmatch '\(int32_t\)\(' -or $body -notmatch 'const int32_t\[\]') {
-        $bad += "B3c VB6_SA_ND_ATN no longer passes all indices as ((const int32_t[]){...})"
+    # ---- B3c: ND_ATN 下标实参的**唯一拼法** = ndAtnSubscriptArg (A7 收口, 提交 918c3ca1) ----
+    #   归并前 udtDynMemberIndex 自己拼 ((const int32_t[]){…}) ⇒ 与变量路
+    #   (cgen_expr_call_prelude.inc) 各留一份 ⇒ cl C4002 "VB6_SA_ND_ATN 参数过多" 的教训
+    #   可以在两条路上各自复发。台账 §56.21 (行 4192) 定的口径 = 归并回唯一权威: 新增
+    #   ndAtnSubscriptArg, 变量路与 UDT 路都只调它, sa_access A7 的字面量计数回到 1。
+    #   ⇒ 本条改钉**新形状**: 拼法住在 helper 体内, udtDynMemberIndex 只调它、不许自己再拼一份。
+    #     helper 体内那枚 ((const int32_t[]){ 字面量由 check_sa_access.ps1 的 A7 钉着 (全 backend
+    #     恰好 1 处), 这里只钉「谁问它 / 谁不许自己拼」, 不重复钉字面量 —— 与 §56.21 同口径。
+    $ndRx = 'std::string\s+CCodeGen::ndAtnSubscriptArg\s*\('
+    $ndM = [regex]::Match($authText, $ndRx)
+    if (-not $ndM.Success) {
+        $bad += "B3c the ndAtnSubscriptArg helper is gone (the ND_ATN subscript argument must have exactly one spelling)"
+    } else {
+        $ndOpen = $authText.IndexOf('{', $ndM.Index)
+        $ndBody = Get-BlockBody $authText $ndOpen
+        if ($null -eq $ndBody) {
+            $bad += ("B3c the ndAtnSubscriptArg body is not brace-balanced in " + $authRel)
+        } elseif ($ndBody -notmatch '\(int32_t\)\(' -or $ndBody -notmatch 'const int32_t\[\]') {
+            $bad += "B3c ndAtnSubscriptArg no longer spells the subscript argument as ((const int32_t[]){ (int32_t)(...) ... })"
+        }
+    }
+    if ($body -notmatch 'ndAtnSubscriptArg\s*\(') {
+        $bad += "B3c udtDynMemberIndex no longer asks ndAtnSubscriptArg (the subscript argument must have one spelling)"
+    }
+    if ($body -match 'const int32_t\[\]') {
+        $bad += "B3c udtDynMemberIndex spells a second copy of the ND_ATN subscript argument (only ndAtnSubscriptArg may)"
     }
     if ($body -notmatch 'toLongIfVariant') {
         $bad += "B3d rank>=2 indices no longer go through toLongIfVariant (ND accessors take int32_t)"
@@ -168,5 +218,5 @@ if ($bad.Count -gt 0) {
     $bad | ForEach-Object { Write-Host ("  " + $_) -ForegroundColor Red }
     exit 1
 }
-Write-Host ("PASS g4_udt_member_nd (authority=" + $authRel + ", member calls=1, with calls=2)") -ForegroundColor Green
+Write-Host ("PASS g4_udt_member_nd (authority=" + $authRel + ", member calls=1, with calls=2, ndAtnSubscriptArg helper=1, udtDynMemberIndex self-spelling=0)") -ForegroundColor Green
 exit 0

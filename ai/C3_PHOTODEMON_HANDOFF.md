@@ -5227,3 +5227,132 @@ Clone.bas `Tools_Clone` + Comp.cls + Main.bas），三种形状对照：
 - 判据/钉子链：`scripts\check_<族名>.ps1` + `tests\run_tests.ps1` 的
   `Test-<族名>`（STATIC 分片）与 `Test-CodegenNote`（正/反钉子）。
 - 三件要回头问用户：**改判据、bless 既有形状、force-push**。
+
+### 56.40 VARIANT 族收口（Variant → 具体型 读腿）+ GA 红面定性（2026-11-12）
+
+#### 一、本刀：VARIANT 族的根因与改法
+
+**根因一句话**：「这枚表达式是不是整只 Variant 槽」这个问题有**两个实现** —— 文本投影
+（`isVariantSlot` 的前缀表）与 AST 权威（`isDefinitelyVariantExpr`）。**消费点过去一律
+只问文本那一半**，于是两类形状集体漏箱：
+
+| 形状 | C 文本 | 为什么文本问不出来 | PD 站点 |
+| --- | --- | --- | --- |
+| UDT 字段声明为 Variant | `VB6_SA_AT(vb6_type_X, arr, i).member` | 不命中任何前缀表 | pdDictionary.c 239/248 |
+| 类方法返回 Variant | `vb6_<Cls>_<Fn>(...)` | 同理 | Evaluator.c 474/494/514、pdSpinner.c 919、TextSupport.c 357/370/386/398、toolpanel_TextBasic.c 1811 |
+
+AST 那一半本来就答得对，只是**没被问到** —— `node.value` / `rhs` / `astExpr` 都在手边
+（这几站旧注解里那句「P1.3: ast 不可得」的判词不成立）。
+
+**改动**（`212d8427`）：
+
+| 站 | 位置 | 改法 |
+| --- | --- | --- |
+| 赋值 | `detail/stmt/cgen_assign_value_sem.inc` | `isVariantSlot(value, node.value.get())` |
+| Let | `stmt/cgen_setlet.cpp` | 同上 |
+| BSTR 槽写入 | `cgen_util_ctrl.cpp` 的 `emitBstrSlotStore` | `isVariantSlot(value, rhs)` |
+| 整型/浮点/字符串上下文 | `cgen_util_classtype.cpp` | `toLongIfVariant` / `toDoubleIfVariant` 改问 `astExpr`；**新增第三枚 `toStringIfVariant`** |
+| Like / ^ / Mod | `expr/cgen_expr_binary.cpp` | 三处走这一族出口（此前操作数**原样**递进去） |
+| ParamArray 实参 | `detail/expr/cgen_expr_call_named_args.inc` | 按目标 setter 拆箱 |
+| 推理层（oracle 补两格） | `cgen_util_classtype.cpp` / `cgen_util_type.cpp` | ① `inferUdtTypeOfExpr` 认得「工程类的 UDT 数组成员」（经 `resolveMemberArrayDecl`）② `isDefinitelyVariantExpr` 认得「类成员方法返回 Variant」（经 `memberReturnTypes`，新增 `classMemberMethodReturnsVariant`）与「UDT 字段声明为 Variant」（经 `inferUdtFieldVb6Type` —— `inferExprType` 走 `lookupModule`，**跨模块 Public Type 解析不到**会答 Unknown） |
+
+> §56.39 的「VARIANT 族 21 条」按错误文本归的桶，根因未查。本刀查出来是**两个**根因
+> （读腿漏箱 / 别处的独立形状），**不是**一个 ⇒ 21 条这一刀收不干净，见 §六。
+
+#### 二、夹具与判据
+
+- 夹具 `tests/pd_variant_unbox/`：**两个 `.cls`**（`VbUdtField.cls` = UDT 字段声明为
+  Variant；`VbVariantOps.cls` = 类方法返回 Variant 进 Like / Mod / ^ / ParamArray / 形参）。
+  ⚠ `.cls` **不进形状门清单** ⇒ 本刀**不改 emit-manifest**（省掉一轮 bless）。
+- 判据 `scripts/check_variant_unbox.ps1`（R1..R7，结构性）+ `tests/run_tests.ps1` 的
+  `Test-VariantUnbox`（STATIC 分片）与 `Test-CodegenNote "variant_unbox_shapes"`
+  （正 8 钉 + 反 3 钉）。
+
+#### 三、本机读数
+
+- `-Category syntax`：**PASS=227 FAIL=0**（基线 226 +1 —— 静态那枚归 static 分片，
+  CI 的 compile #1/#2 跑它）。
+- `scripts\check_variant_unbox.ps1`：**PASS**（R1..R7）。
+- `variant_unbox_shapes` 钉子：missing=0 / unexpected=0。
+
+#### 四、CI 对账（第一轮 43137825076 / 43137889629）
+
+**回归 run 43137825076**（head `212d8427`）红面 = **形状门 + 两枚 cls_inh 编译 + 既有红**：
+
+- `Emit manifest (shape oracle)` **红**：678 行里 **19 行改写**（新增 0 / 退场 0）。
+  CI 已把新清单发到 `github/ci/emit-manifest`（提交 `b28a1b21`）。
+- `Tests (vbp #1)` / `Tests (vbp #2)`：**`cls_inh_pair` / `cls_inh_x86` 编译红**
+  —— ⚠ **本刀自己带出来的回归**，已修（见下面「校准」）。
+- STATIC 分片：红面因**加了新用例而重新洗牌**（分片是 round-robin，加一条就整体移位），
+  读数不变。
+
+**校准：AST 那一半有一个假阳性（本刀自己带出来的，已修 `2460da8f`）**
+
+`isDefinitelyVariantExpr` 对 **`obj(9)`（默认属性调用）** 答「整只 Variant 槽」——
+调用结果的类型是**那个属性的返回档**，不是变量自己的存储档（类实例变量在符号表里
+常记成 Variant/Object），而这一格直接 `checkSym` ⇒ 读腿给它套 `vb6_VariantToString`
+⇒ 形状反了（**BSTR → vb6_VARIANT 的反向 C2440**）。实物 = `tests/cls_inh`
+`InhHolder.ItemDefault`（`ItemDefault = m_up(9)`，那个默认属性返回 String，交出去
+已经是 BSTR）。
+
+修法：判据 = 「这枚符号是个**变量**（不是 Function/PropertyGet），且它的类型是
+Object / 指向工程类」⇒ 它身上的 `()` 是默认属性（或方法）调用，不是取槽 ⇒ 答否。
+答否 = 保守方向（与改前文本投影同答案），不会把真 Variant 漏箱。
+
+**两代二进制逐份归因**（`C3_old.exe` = `212d8427` 那代，`C3.exe` = 修后）：
+
+| 面 | 读数 |
+| --- | --- |
+| 19 份改写输入 | **18 份修后逐字节相同**，只有 `tests/cls_inh/Inh.vbp` 那一行回到改前的正确形状 |
+| ⇒ 形状门 | **不需要重新登记**（那 19 行是假阳性造成的，修完即复原） |
+
+**PD 全量 run 43137889629**（head `e5a40ff8` = probe 分支合 dev）：读数见下条。
+
+
+#### 五、GA 红面：11 STATIC + 2 GUI 的定性（§56.39 漏记了 FlexGridX86）
+
+**先纠一条账**：§56.39 写「失败面只剩 11 条既有 STATIC 与 GUI ucSegmentedControl 像素
+判据」—— **漏了 `vbp #11` 的 `[GUI] FlexGridX86 ... FAIL (compile)`**。实际失败面是
+**11 STATIC + 2 GUI**。FlexGridX86 不是新红（§42.7 行 2866 与行 4564-4566 已记），属
+**停线小结的记账漏项**。
+
+**11 条 STATIC 的定性**（逐条已用 git log/blame 归因，见 `scripts/check_<名>.ps1`）：
+
+| 类 | 条 | 判据 | 定性 |
+| --- | --- | --- | --- |
+| 判据漂移 | 3 | `g4_receiver_class_gate` / `g4_udt_member_nd` / `g4_value_member_paren` | **代码已按 §56.21 归并，比判据更严**，判据停在旧形状；台账行 4192/4194 已逐字给出该改成什么 |
+| 位数普查过期 | 4 | `box_temp_reclaim` / `set_rhs_object_context` / `class_refcount_authority` / `legacy_slot_key_owners` | 单一权威**没破**，只是登记点多；按 §56.38 A7 5→7 先例改数 + per-file 钉 |
+| 真回归 | 4 | `builtin_opt_defaults` / `object_slot_boxing` / `legacy_view_arg_owners` **V11** / `iface_view_authority` | 新增消费点绕过既有权威 ⇒ 要动发码，**另起一刀** |
+
+处置（用户已定）：**前两类改判据/改数收掉，真回归另起一刀。**
+落地（`e68a24be`）：**7 条转绿**（`g4_receiver_class_gate` / `g4_udt_member_nd` /
+`g4_value_member_paren` / `box_temp_reclaim` / `set_rhs_object_context` /
+`class_refcount_authority` / `legacy_slot_key_owners`）；`legacy_view_arg_owners`
+的 **V8**（位数）一并改掉，**V11 留着红** ⇒ 该脚本本轮仍红、读数只剩 V11。
+**留下 4 个脚本仍红**（真回归，另起一刀）：`builtin_opt_defaults`（R7 名单过期）、
+`object_slot_boxing`（B11 否决点 3 vs 1）、`legacy_view_arg_owners` **V11**
+（`comPackFnForVbType` 5 vs 4）、`iface_view_authority`（名册 7 处直问
+`slotIvrefViewName`，最重）。
+
+**两条 GUI**：
+
+| 红 | 定性 | 建议动作 |
+| --- | --- | --- |
+| `ucSegmentedControl` 像素 | **判据的采样面在 CI 上与本机不是同一张面**：CI 抓的是父窗体表面，12 个 UC 子窗各自的表面**不在其中** ⇒ 逐控件彩色计数必然全 0（宿主自身的 `openEditor whitePx=5617` 非零即是旁证）。**不是渲染回归**（上一轮基线 `43120794775` 读数逐字相同）。本机那张"绿"的图量的是 125% DPI 物理渲染被裁切后的图。 | ① 工件加传 `output/**/*.png`（下次红能直接看 CI 那张图）② 采样面改成 `PrintWindow(main, dc, 2)` 或按 ucTreeView 的做法逐个抓 UC 宿主子窗 ③ 阈值须按真 VB6 参考重标（`uc9`/`uc6` 两个设计区在本机那张图里根本不在画面内 ⇒ 那两条阈值从未被真参考验过） |
+| `FlexGridX86` 编译 | **真失败**（生成的 C 真的编不过），但触发条件是**环境**：CI runner 解析不到 `OLEGuids` 类型库（`VB4001 warning: TypeLib not registered for CLSID {5A2B9220-…}`）⇒ 含 COM 字段的 UDT **整块不生成** ⇒ `vb6_type_VTableIPAODataStruct` 未定义 ⇒ C2061/C2143/C2059/C2079。**不是 x86 工具链问题**（同 job 里 5 枚 x86 用例全绿）。 | ① **产品侧补缺口**：`cgen_util_classtype.cpp:1360` 那条降级（typelib 解析不到 ⇒ 字段按 `void*`）只覆盖了**字段标记**路径，**没覆盖「UDT 整体不生成」** —— 把降级原则补到 UDT 定义路径 ② runner 上注册仓库内 `tests\VBFlexGridDemo\OLEGuids\OLEGuids.tlb`（一步确认触发条件）③ CI 输出目录缺 `Manifest.RES` |
+
+#### 六、下一刀（接续点）
+
+1. **VARIANT 族剩下的形状**（本刀只收了读腿一族，21 条里约 14 条；行号以 CI 新读数为准）：
+   - **Optional `As Variant = <字面量>` 的默认值没装箱** ⇒ `'=' 无法从 int 转换为
+     vb6_VARIANT`（pdDictionary.c 258、pdSelection.c 155）。这一族**两处同形**，是下一个
+     首选：根因应当在「具名/可选形参的默认值发射」那一条路。
+   - **对象 → Variant 返回槽的初始化没装箱** ⇒ `'initializing' 无法从 vb6_cls_X* 转换为
+     vb6_VARIANT`（pdCanvas.c 165、pdStatusBar.c 160、pdTreeviewOD.c 126、
+     pdTreeviewViewOD.c 109，**四处同形**）。
+   - 零散两条：`pdCBZ.c 411`（VARIANT → VARIANT*）、`pdSpriteSheet.c 315`
+     （SafeArray1D* → VARIANT）。
+2. **GA 真回归那 4 条**（改发码，另起一刀，§56.38 §56.39 的规矩：动发码要先想形状门）。
+   `iface_view_authority` 最重（名册现在有 7 个站点直问 `slotIvrefViewName`，绕过主人）。
+3. **`FlexGridX86` 那条产品缺口**（typelib 解析不到 ⇒ UDT 整体不生成）—— 优先级高于
+   ucSegmentedControl，因为它是真的编不过。

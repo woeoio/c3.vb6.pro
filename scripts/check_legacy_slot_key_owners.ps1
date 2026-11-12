@@ -17,9 +17,11 @@
 #   P1  ifacePropSlotPrefix( 恰好 3 处且全在 interface_sig.hpp = 定义 1 + 两位转调者各 1。
 #   P2  "get_" / "put_" / "putref_" 那三枚前缀字面量各恰好 1 处, 且都住在 interface_sig.hpp
 #       —— 那张词汇表从前住过两处 (ifaceSlotKeyNamed 与 ifaceSlotPrefix), 本刀合一。
-#   P3  ifaceSlotKeyNamed( 恰好 8 处 = 定义 1 + ifaceSlotKey 本体转调 1 + legacy 那五站 + 第 186 刀带参写槽查询 1
-#       (去重键 1 [driver inc] / 槽键与字段 1 [cgen_iface_vtbl] / 实现绑定 1 [cgen_com] /
+#   P3  ifaceSlotKeyNamed( 恰好 9 处 = 定义 1 + ifaceSlotKey 本体转调 1 + legacy 那五站 + 第 186 刀带参写槽查询 1
+#       + 新读者那一发 1 (提交 650b7bac: 视图接收者的零参裸读走 canonical 槽)
+#       (去重键 1 [driver inc] / 槽键与字段 1 + 新读者 1 = 2 [cgen_iface_vtbl] / 实现绑定 1 [cgen_com] /
 #        属性读那一问 + 属性写那一问 = 2 [cgen_util_classtype 两位读者])。
+#       两处问的是**同一把去重键** = 同问同一权威, 不是放宽 (台账 §56.38 A7 先例)。
 #   P4  ifaceDeclProcKind( 恰好 4 处 = 定义 1 + ifaceSlotKey 本体 1 + legacy 两站各 1。
 #   P5  legacy 槽键只许铸一次: `s.slotKey = ifaceSlotKeyNamed(` 恰好 1 处 (cgen_iface_vtbl.cpp)。
 #   P6  字段名的第二档只许这一处: `+ "_put"` 与 `+ "_putref"` 各恰好 1 处且都在
@@ -81,12 +83,20 @@ foreach ($pair in @(@('"get_"', 'return "get_"'), @('"put_"', 'return "put_"'), 
 }
 
 $p3 = CountWhere "ifaceSlotKeyNamed(" ""
-if ($p3 -ne 8) {
-    $fail += ("P3 槽键主人位数: 期望 8 = 定义 + ifaceSlotKey 转调 + legacy 那五站 + 第 186 刀带参写槽查询, 实到 " + $p3)
+if ($p3 -ne 9) {
+    $fail += ("P3 槽键主人位数: 期望 9 = 定义 + ifaceSlotKey 转调 + legacy 那五站 + 第 186 刀带参写槽查询 + 新读者 (650b7bac), 实到 " + $p3)
 }
-foreach ($fn in @("driver_codegen_dup_module_vars.inc", "cgen_iface_vtbl.cpp", "cgen_com.cpp")) {
+foreach ($fn in @("driver_codegen_dup_module_vars.inc", "cgen_com.cpp")) {
     $c = CountWhere "ifaceSlotKeyNamed(" $fn
     if ($c -ne 1) { $fail += ("P3 legacy 那一站 " + $fn + ": 只许问一次槽键主人, 实到 " + $c) }
+}
+# cgen_iface_vtbl.cpp = 2: 铸槽键那一发 (:480 `s.slotKey = ifaceSlotKeyNamed(ifaceLower(written), d.kind, dir)`)
+#   + 新读者那一发 (:1178 `ifaceSlotKeyNamed(ifaceLower(memberName), ASTNodeKind::PropertyDecl, setKind)`,
+#   提交 650b7bac = 视图接收者的零参裸读走 canonical 槽)。两处问的是**同一把去重键**
+#   —— 同问同一权威, 不是放宽 (台账 §56.38 A7 先例); 任何一处自己拼第二把键, 这个数会变并被点名。
+$p3v = CountWhere "ifaceSlotKeyNamed(" "cgen_iface_vtbl.cpp"
+if ($p3v -ne 2) {
+    $fail += ("P3 cgen_iface_vtbl.cpp: 期望 2 处 (铸槽键 :480 + 新读者 :1178, 提交 650b7bac), 实到 " + $p3v)
 }
 if ((CountWhere "ifaceSlotKeyNamed(" "cgen_util_classtype.cpp") -ne 3) {
     $fail += "P3 那一份文件: 读侧/写侧/带参写槽查询三位读者各问一次槽键主人, 别处再问就是第二位主人"
@@ -125,5 +135,5 @@ if ($fail.Count -gt 0) {
     foreach ($m in $fail) { Write-Host ("FAIL " + $m) }
     exit 1
 }
-Write-Host ("PASS 前缀表主人=" + $p1all + "(interface_sig.hpp) 槽键主人=" + $p3 + "(legacy 四站各 1) 档位问句=" + $p4 + " 槽键铸处=" + $p5 + " 字段第二档=" + $p6a + "+" + $p6b + " 裸名原料=" + $p7 + " 实现绑定带档=" + $p8)
+Write-Host ("PASS 前缀表主人=" + $p1all + "(interface_sig.hpp) 槽键主人=" + $p3 + "(cgen_iface_vtbl=" + $p3v + ": 铸槽键 + 新读者; 其余 legacy 三站各 1) 档位问句=" + $p4 + " 槽键铸处=" + $p5 + " 字段第二档=" + $p6a + "+" + $p6b + " 裸名原料=" + $p7 + " 实现绑定带档=" + $p8)
 exit 0
