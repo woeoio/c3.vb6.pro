@@ -534,10 +534,11 @@ void CCodeGen::visit(CallStmt& node) {
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
                     || sym->kind == SymbolKind::PropertySet)
                     // 账 §56.50: 保留语句关键字 (Randomize/Kill/Load/Unload) 的**空形参表**
-                    // 不能当成被调方 —— 那枚成员顶不掉内建语句 (裸写永远是内建),
+                    // 不能当成被调方 —— 那枚**用户成员**顶不掉内建语句 (裸写永远是内建),
                     // 采用它的形参表会让这一格补出多余的缺省实参。口径与语义层/表达式层
-                    // 同一处 (common/reserved_stmt_keyword.hpp)。
-                    && !isReservedStmtKeyword(idExpr.name)) {
+                    // 同一处 (common/reserved_stmt_keyword.hpp)。⚠ 只挡用户符号:
+                    // `Load`/`Unload` 语义层本来就登记成内置, 那两份登记不动。
+                    && !(isReservedStmtKeyword(idExpr.name) && !sym->isBuiltin)) {
                     calleeParams = sym->P().params;
                     calleeIsBuiltin = sym->isBuiltin;
                 }
