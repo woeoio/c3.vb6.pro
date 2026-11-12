@@ -465,6 +465,12 @@ void CCodeGen::visit(FunctionDecl& node) {
                 std::string pName = cIdent(pi.name);
                 std::string hasFlag = "_has_" + pName;
                 if (pi.isByVal) {
+                    // 账 §56.43: ByVal Variant 的缺省回填在这里是**裸赋值** —— 但 vb6_VARIANT
+                    // 是结构体, 裸字面量赋不上 (cl C2440 "'=' 无法从 int 转换为 vb6_VARIANT")。
+                    // 装箱不在本处做: 语义层 (SemanticAnalyzer::evalOptionalDefault) 已按
+                    // 「ByVal + Variant + 显式默认值」把 defaultValueExpr 折成装箱形式
+                    // (vb6_VariantLong(N)), 这里照抄即可 —— **装箱口径只有那一个权威**。
+                    // (ByRef Variant 那一档在本分支之下, 仍由本文件自己按整数字面量判定。)
                     c_.emitLine("if (!" + hasFlag + ") " + pName + " = " + pi.defaultValueExpr + ";");
                 } else {
                     // ByRef Optional: dereference then assign default

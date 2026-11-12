@@ -225,7 +225,7 @@ void SemanticAnalyzer::visit(DeclareDecl& node) {
             // P14.1.4: 传播Optional默认值
             if (param->isOptional) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
-                pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
+                pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type, pi.isByVal);
             }
             sym->W().params.push_back(std::move(pi));
         }
@@ -252,7 +252,7 @@ void SemanticAnalyzer::visit(EventDecl& node) {
             // P14.1.4: 传播Optional默认值
             if (param->isOptional) {
                 pi.hasDefaultValue = (param->defaultValue != nullptr);
-                pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type);
+                pi.defaultValueExpr = evalOptionalDefault(param->defaultValue.get(), pi.type, pi.isByVal);
             }
             sym->W().params.push_back(std::move(pi));
         }

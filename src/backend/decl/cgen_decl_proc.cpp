@@ -348,6 +348,9 @@ void CCodeGen::visit(SubDecl& node) {
                 std::string pName = cIdent(pi.name);
                 std::string hasFlag = "_has_" + pName;
                 if (pi.isByVal) {
+                    // 账 §56.43: 装箱不在本处做 —— 语义层 (SemanticAnalyzer::evalOptionalDefault)
+                    // 已按「ByVal + Variant + 显式默认值」把 defaultValueExpr 折成装箱形式,
+                    // 这里照抄即可 (**装箱口径只有那一个权威**); 与 cgen_decl_func.cpp 同源。
                     c_.emitLine("if (!" + hasFlag + ") " + pName + " = " + pi.defaultValueExpr + ";");
                 } else {
                     std::string cType = mapType(pi.type);

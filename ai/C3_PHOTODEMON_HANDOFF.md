@@ -5634,3 +5634,126 @@ bas #1/#2、asm、smoke、syntax、compile #1/#2、`Build C3.exe`、`Baseline (M
    收这一族时**判据要与发码侧同源**（限定形态的多态内置只有 `Choose`/`Switch` 被折成三目，
    `IIf` 不是）。
 5. **形状门**：维持挂账，等用户批准 bless 时**一次**登记（本轮不动 `emit-manifest.expected.txt`）。
+
+## §56.43 ucSegmentedControl 二分第三阶段（画出来了！）+ VARIANT 族 G1+G2 收口
+
+### 一、CI 侧二分的三阶段（两刀诊断, 逐级收窄）
+
+| 阶段 | 证据 | 结论 |
+| --- | --- | --- |
+| 一（§56.41/§56.42） | 采样图 7 张：首帧与两次交互后 **MD5 完全相同**；唯一有内容的 `inter_3` 里只有 Form 自己的背景图 | **推翻**「采样时刻不够」；**排除**「UC 根本不在画面里」 |
+| 二（`93528f88`，`C3_AD_TRACE`） | `output/ucSegmentedControl/pixels/segmented.err` 里 **614 行 `[AD-paint]`**，12 个 UC 逐个都在，`paint=00DC1340` **非 NULL**；同文件除 trace 外 **0 行**其它输出 | **排除**「WM_PAINT 没进宿主窗口」「paint 回调没注册」「产物异常/438」 |
+| 三（`0ba4720a`，`C3_UC_DUMPDIR`） | 工件里 `ucdump/ucSegmentedControl_1_*.bmp`（272x33）**内容完整**（蓝色选中段 + "Suspendido"/"Apagado" + 圆角边框，与本机那张同款）；`ucdump/FORM_*.bmp`（751x520）**整窗合成图也完整**（12 个 UC 全在，Tab 2 品红心形 + 指示条、Chrome 图标、翻页条、OPEN EDITOR 全对） | **确定**：UC **画出来了**，而且**合成为整窗图也是对的** ⇒ 问题在**贴到"那张面"**这一步，不在绘制、不在合成 |
+
+### 二、剩下的一环（下一刀的起点，精确到一句话）
+
+- 判据抓的是 `GetDC($main)` + `BitBlt` 出来的那张面（`segmented_px.ps1` 的 `$bmp`，751x520）。
+  CI 上这张面是**空的**（只有宿主位置的默认白块 + Form 背景）；本机同一路径是**满的**。
+- 而 RTL 里**没有**任何「把 UC 子窗口合成进父窗表面」的正式代码：
+  `WM_PRINTCLIENT` 的发送方只有 UC→兄弟（`vb6_uc_composeBelow`，`uc_host_window.c:366`），
+  Form 侧从不发；`PrintWindow` 全库只在注释里出现；`vb6_uc_dumpFormComposite`
+  （`uc_debug_composite.inc:14`）是**调试 dump**（只在 `C3_UC_DUMPDIR` 分支被调），
+  它自己用 `WM_PRINTCLIENT` 逐个子窗口画进一张新 DIB —— **所以它满，不代表真实那张面满**。
+- ⇒ 下一刀要回答的是：**判据抓的那张面到底是什么**（父窗窗口表面 / 屏幕 / Form 的
+  `VB6_AutoRedrawDC` 记忆位图），以及**本机与 CI 的差别落在哪一句**。取证手段已经有了：
+  `C3_AD_TRACE`（逐次 WM_PAINT）+ `C3_UC_DUMPDIR`（UC 的 DIB + 整窗合成图）+ 采样图。
+- ⚠ 别再往「绘制」「合成」「GDI+」「字体」「DPI」「Release/Debug」这些方向找了 —— 上表
+  已经把它们逐个排除掉了。
+
+### 三、顺带排除掉的一条：**本机 Debug vs CI Release 不是原因**
+
+- 本机 `.build` 是 `CMAKE_BUILD_TYPE=Debug`，CI 是 `Release`（`/O2 /Ob2 /DNDEBUG`）
+  —— 本机 `C3.exe` 15,890,432 字节，CI 的 8,078,848 字节。
+  ⇒ **记账**：以往「本机验收」用的产物与 CI 产物**不同构**，凡涉及运行期行为差异先比 build type。
+- 本轮专建 `.buildrel`（Release，131 TU）复跑：Release `C3.exe` = 8,073,728 字节（CI 8,078,848）；
+  编出的夹具 exe **同尺寸 850,944**；**跑同一夹具仍 PASS**，读数与 Debug **逐字相同**
+  （`uc2 1087/480`、`uc4 1665/1664`、`accent #0078D7(10515)` …）。
+- ⇒ **不是**这条红的原因。且 produced exe 的编译 flags 来自 `src/backend/msvc_driver.cpp`
+  （与 C3.exe 自身 build type 无关）⇒ 本机与 CI 编产物用同一套 flags ⇒ 差异只剩**运行环境**。
+- DIB 尺寸也印证两套 RTL 行为一致：本机 UC 的 DIB 尺寸 = 客户区 × **1.25**（939x61 对 751x49），
+  CI 上 = 客户区 × 1.0（751x49）—— **只有 DPI 比例不同**。
+
+### 四、VARIANT 族 G1+G2：`Optional ByVal x As Variant = <字面量>` 的默认值没装箱（真修复）
+
+#### 4.1 根因（PD 侧两条 C2440 的确切形状）
+
+`emit` 工件（`photodemon-emit-logs` / `pd_emit.out`，head `3273e035`，**已含** 212d8427 +
+2460da8f ⇒ 是 VARIANT 族修**之后**的读数）里那两处原文：
+
+```c
+/* pdDictionary.c 256-258 */
+vb6_VARIANT vb6_pdDictionary_GetEntry_Variant(..., vb6_VARIANT defaultValueIfMissing, int _has_defaultValueIfMissing) {
+    if (!_has_defaultValueIfMissing) defaultValueIfMissing = 0;   /* ← 裸 int 赋给结构体 */
+
+/* pdSelection.c 155 */
+vb6_VARIANT _vcmp_0 = vb6_VariantFromValue(vb6_pdDictionary_GetEntry_Variant(me->m_PropertyDict, _own_6, 0, 0));
+                                                                   /* ↑ 调用点省略实参时传裸 0 */
+```
+
+⇒ 两处都是 **`vb6_VARIANT` 是结构体，裸字面量赋不上**（cl C2440
+`'=' 无法从 int 转换为 vb6_VARIANT` / `初始化: 无法从 int 转换为 vb6_VARIANT`）。
+
+#### 4.2 发码侧根因
+
+- 过程/函数体的缺省回填：`cgen_decl_func.cpp` / `cgen_decl_proc.cpp` 的
+  `if (pi.isByVal) → "if (!_has_X) X = <defaultValueExpr>;"` —— **裸赋值**。
+- 调用点的省略实参：12 处发码出口都是同一句
+  `defV = (param.hasDefaultValue && !param.defaultValueExpr.empty()) ? param.defaultValueExpr : defaultValueForParam(param);`
+  ⇒ **绕过了**唯一那个按形参补默认值的权威出口 `defaultValueForParam`
+  （`cgen_base_naming.cpp:60`），而它已经会处理「Variant 且**没有**显式默认值 ⇒ `vb6_VariantMissing()`」。
+
+#### 4.3 修法（**装箱口径只此一处权威**）
+
+- **权威落点**：语义层 `SemanticAnalyzer::evalOptionalDefault`（`semantic_analyzer_util.cpp:392`）
+  —— 它是「Optional 默认值 → C 表达式」的唯一求值器（5 个调用点都走它）。
+  新增 `isByVal` 形参；**当且仅当** `paramType == Variant && isByVal` 时装箱：
+  | VB6 默认值 | 装箱后 |
+  | --- | --- |
+  | Integer / Long | `vb6_VariantLong(N)` |
+  | Boolean | `vb6_VariantBool(-1/0)` |
+  | String | `vb6_VariantString(vb6_BSTR_FromStr(L"…"))`（单次求值，不双次分配 BSTR） |
+  | Empty / Null | 原样（已是 Variant） |
+- **ByRef Variant 不装箱**：它的调用点是 `&(vb6_VARIANT){…}` 复合字面量，C 只收常量 ⇒ 装箱会
+  变成 C2099「initializer for aggregate is not a constant」。
+- 过程体/调用点**一律照抄**语义层产出的表达式（`cgen_decl_func.cpp` / `cgen_decl_proc.cpp`
+  两处补注释指明权威，其余 12 处调用点与 ByRef 分支一字未动）。
+- unary（`-1`）那一档：递归**不装箱**，装箱落在取负之后（`vb6_VariantLong((-1))`）。
+
+#### 4.4 本机验证（探针 `.temp\probe\probeOptVar.bas`，**不进仓库**，不触形状门）
+
+```vb
+Public Function F1(Optional ByVal v As Variant = 0) As Variant   ' 目标形状
+Public Function F2(Optional ByVal n As Long = 7) As Long        ' 对照组
+Public Function F3(Optional ByVal s As String = "abc") As String ' 对照组
+Public Sub Main() : x = F1() : End Sub                          ' 调用点省略实参
+```
+
+| | 改前（`.buildrel` 那枚 C3.exe） | 改后（HEAD） |
+| --- | --- | --- |
+| 过程体 | `if (!_has_v) v = 0;` | `if (!_has_v) v = vb6_VariantLong(0);` |
+| 调用点 | `x = vb6_F1(0, 0);` | `vb6_VARIANT _own_1 = vb6_VariantLong(0);` → `x = vb6_F1(_own_1, 0);`（发码侧现成的变体临时量机制自动接管 + 语句末 `vb6_VariantClear`） |
+| cl 编译 | **失败 exit 2**，两条 `error C2440`（第 11 行过程体 / 第 34 行调用点） | **成功**，产出 exe |
+
+- 对照组 F2（Long）/ F3（String）**逐字未变** ⇒ 形状影响只落在「ByVal + Variant + 显式默认值」这一档。
+- `scripts\check_variant_unbox.ps1` **PASS**（R1..R7；census `astAsk=3 nullAsk=1
+  classMemberMethodReturnsVariant def=1 decl=1 use=1`）。
+- `tests\run_tests.ps1 -Category syntax`：**PASS=227 FAIL=0 SKIP=0**。
+
+### 五、下一刀（接续点）
+
+1. **§56.43 §二 那一环**：判据抓的那张面到底是什么 + 本机/CI 的差别落在哪一句。
+   取证手段齐了（AD_TRACE + UC_DUMPDIR + 采样图），别再往绘制/合成/GDI+/字体/DPI 方向找。
+2. **VARIANT 族 G3**：对象 → Variant **返回槽**的初始化没装箱
+   （`pdCanvas.c 165` / `pdStatusBar.c 160` / `pdTreeviewOD.c 126` / `pdTreeviewViewOD.c 109`，四处同形）：
+   ```c
+   vb6_VARIANT retMeth = vb6_pdCanvas_GetZoomDropDownReference(me);   /* 返回 vb6_cls_pdCanvas* */
+   ```
+   ⇒ 对象档装箱口是 `vb6_VariantFromProjectInstance`（`vb6rtl_variant.h:348`，**不是**
+   `vb6_VariantFromValue` —— 后者的 `_Generic` default 档会落 `vb6_VariantObject`）。
+   这一族仍在发码侧找落点，**尚未动**。
+3. **零散两条**：`pdCBZ.c 411`（VARIANT → VARIANT*）、`pdSpriteSheet.c 315`（SafeArray1D* → VARIANT）。
+4. **PD 侧验证通道**：PD 的两个 workflow（`PhotoDemon x86 full build` / `… emit probe`）**不在本仓库**
+   （本仓库只有 `ci.yml` / `ci_t0.yml` / `ci_vbman.yml`），它们 checkout 的是本仓库的
+   `probe/photodemon-emit` 分支（head `3273e035` = 「merge origin/dev into probe/photodemon-emit」，
+   已含 212d8427 + 2460da8f）⇒ **要把 dev 的新提交喂给 PD, 得 merge 进 `probe/photodemon-emit` 再推**。
+5. **形状门**：维持挂账（本刀的 G1+G2 会带来新的形状行，等用户批准 bless 时**一次**登记）。

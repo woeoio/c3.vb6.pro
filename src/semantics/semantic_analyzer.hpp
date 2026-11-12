@@ -389,7 +389,12 @@ private:
     static std::string makeInternalName(const std::string& prefix, const std::string& name);
 
     // P14.1.4: 将Optional参数的默认值AST表达式转换为C表达式字符串
-    std::string evalOptionalDefault(ASTNode* defaultValue, Vb6Type paramType);
+    // 账 §56.43: isByVal —— ByVal Variant 的默认值必须**装箱** (vb6_VARIANT 是结构体,
+    // 裸字面量赋不上, cl C2440: "'=' 无法从 int 转换为 vb6_VARIANT"; PD pdDictionary.c 258 /
+    // pdSelection.c 155 两处都是 `Optional ByVal x As Variant = 0`)。装箱只在这一处做,
+    // 调用点一律把 isByVal 传进来; ByRef Variant **不装箱** —— 它的调用点是
+    // `&(vb6_VARIANT){...}` 复合字面量, C 只收常量。
+    std::string evalOptionalDefault(ASTNode* defaultValue, Vb6Type paramType, bool isByVal = false);
 };
 
 } // namespace vb6c3
