@@ -610,5 +610,15 @@ jobs:
             # 覆盖构建失败时的其它日志。只动 artifact，不改任何判据。
             output/**/c3-error.log
             output/**/*.log
+            # 账 §56.41: **像素判据**那几枚 GUI 用例（ucSegmentedControl 等）把采样图存在
+            # output/<用例>/segmented_px/*.png。没有这一项 ⇒ CI 红了只能看见一串读数，看不见
+            # 那张图（读数是「几万个像素里有多少彩色」，图才看得出「面里到底有没有那个控件」）。
+            # 只加工件，不动任何判据。
+            output/**/*.png
+            # 账 §56.43: **UC 自己的离屏 DIB**（RTL 的 C3_UC_DUMPDIR 开关落的 bmp）。
+            # 读数只说得出「UC 区没画」，分不清「paint 回调没画」还是「画了没贴上」；
+            # 这张 DIB 就是那两者的分界 —— 空 DIB = 没画，有内容 = 贴丢了。
+            # 只加工件，不动任何判据。
+            output/**/*.bmp
           if-no-files-found: warn
           retention-days: 14

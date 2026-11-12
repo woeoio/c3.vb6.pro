@@ -1254,6 +1254,11 @@
     // Vb6Type → 打包函数名。comPackExpr 的类型分支与上面那条折叠共用这一张映射；
     // 空串 = 这一型在这里答不了，交回调用方兜底（不擅自换默认档）。
     static std::string comPackFnForVbType(Vb6Type vt);
+    // 「一枚**折成默认属性读数**的值该按哪一档装箱」—— 唯一那一问 (账 #256 / 第五十六刀补)。
+    // 答案取上面那张配对表, 再过一道「折叠值只认这六档」的闸; 两处消费点 =
+    // comPackExpr 的「裸控件名折默认属性」那一支 + 工程内 UC 默认属性的写那一腿
+    // (emitUcDefaultPropLet) ⇒ 同一枚型在两站不可能给出两个打包器名。空串 = 这一档答不了。
+    static std::string comPackFnForDefaultPropType(Vb6Type vt);
     // 反向那一问（账 #305 第一百八十一刀）：**这枚打包器吃哪一型**。与正向同一张表
     // (kComPackTiers) 扫出来，不在别处抄第二份。false = 这一族没有单一对应，调用方交回原路。
     // Integer 与 Long 正向同答 ComPackInt ⇒ 反向按表序只回 Long（那枚 RTL 原型收的就是 int32_t）。

@@ -845,6 +845,24 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                 std::string mname = Symbol::toLower(ma2.memberName);
                 if (!mname.empty() && mname.back() == '$') mname.pop_back();
                 if (kBuiltinFuncNames.count(mname)) return false;
+                // 账 §56.41 (FlexGridX86): 多态内置的**限定形态** (`VBA.Choose(...)` /
+                // `VBA.Switch(...)`) —— 发码侧 (cgen_expr_call_builtin_pre.inc 的 P18-E 段)
+                // 把它们**约简成嵌套三目** (`((idx)==1 ? (a) : ((idx)==2 ? (b) : (NULL)))`),
+                // 真 C 类型由**两支**决定, 不是 vb6_VARIANT ⇒ 槽问句必须答否。
+                // 此前只有**裸名**那一形进了 isPolymorphicBuiltin, 限定形态落到下方递归分支
+                // → `VBA.Choose` 的登记返回型是 Variant ⇒ 答"整只 Variant 槽" ⇒ 读腿给它套
+                // vb6_VariantToLongPtr(...) ⇒ cl C2440 "无法从 intptr_t 转换为 vb6_VARIANT"
+                // (VBFlexGrid.ctl:3824 `hToolTip = VBA.Choose(j, VBFlexGridToolTipHandle,
+                //  VBFlexGridScrollTipHandle)` —— 两支都是 LongPtr, 落臂 NULL ⇒ 三目 C 类型 intptr_t)。
+                // 限定名只认 VBA / VBA5 (与发码侧同一口径); 用户自己的 obj.Choose() 方法不受影响
+                // (那不是内置, 仍按声明返回型答)。
+                // IIf 不在这一族: 发码侧只对**裸名** IIf(...) 折成 vb6_IIfXXX, 限定形态不走那条路。
+                if ((mname == "choose" || mname == "switch") && ma2.object
+                    && ma2.object->kind == ASTNodeKind::IdentifierExpr) {
+                    const std::string objnm =
+                        Symbol::toLower(static_cast<IdentifierExpr&>(*ma2.object).name);
+                    if (objnm == "vba" || objnm == "vba5") return false;
+                }
             }
             // 类方法调用 a.Method(): 递归推断 callee 类型
             if (call.callee && call.callee->kind == ASTNodeKind::MemberAccessExpr) {

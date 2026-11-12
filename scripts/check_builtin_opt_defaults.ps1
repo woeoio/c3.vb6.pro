@@ -172,6 +172,12 @@ $notPadding = @{
     'vb6_ErrRaise'       = '反向那一格: VB6 最多 5 参而 RTL 只吃 3 参 ⇒ 截断'
     'vb6_StrConv'        = '首参是已知 Byte 数组时改 callee = vb6_StrConvFromByteArray'
     'vb6_StrPtr'         = '首参是已知 Byte 数组时改 callee = vb6_SafeArrayDataPtr'
+    # 账 #305 第二百四十刀 (fbc26f64, 2026-11-09): 裸 `Randomize` 走**缺参分支** ——
+    #   真 VB6 是 rtcRandomize 拿 Timer 播种 (走 vb6_RandomizeTimer), 不是 `Randomize 0`。
+    #   这一段改的是 callee 名 + 清空实参, **不补档** ⇒ 它不进那张表, 但按 R7 必须在这里写理由。
+    #   (表里那一行 `kOD_Randomize = { "0.0" }` 留给**带参**的 `Randomize 5` —— 那一形
+    #    命中不到本段, 仍走表。少一名 = 名册过期, R7 立刻红。)
+    'vb6_Randomize'      = '裸 `Randomize` (args 空) 改 callee = vb6_RandomizeTimer 并清空实参 (真 VB6 走 Timer 播种, 不是 Randomize 0); 不补档'
 }
 
 $viol = @()

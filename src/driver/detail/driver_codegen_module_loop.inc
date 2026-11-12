@@ -267,6 +267,21 @@
         for (const auto& c : clsNames) {
             pre += "typedef struct vb6_cls_" + c + " vb6_cls_" + c + ";\n";
         }
+        // 账 §56.41 (FlexGridX86): **类型库接口**那一族 (`vb6_ComIface_*`) 也是同一件事 ——
+        // UDT 字段可以声明成早期绑定的接口类型 (`OriginalIOleIPAO As IOleInPlaceActiveObject`
+        // ⇒ C 侧 `vb6_ComIface_IOleInPlaceActiveObject*`)。那一族的前向 typedef 由**后端**
+        // 发 (cgen_base_generate_epilogue.inc 的 P6.3 段), 但它插在 `#include "vb6rtl.h"`
+        // **之后** —— 与这里注入 UDT 定义块的是**同一个位置**, 而注入发生在后端之后 ⇒
+        // UDT 块落在那批 typedef **前面** ⇒ 字段类型名当未声明标识符 ⇒ cl C2061/C2143/C2059
+        // (VTableHandle.h:26/27/28 × 9 个 TU; 实物 = tests\VBFlexGridDemo\Builds\VTableHandle.bas)。
+        // 修法与 vb6_cls_ 同一件: 在注入块**前面**把那族前向 typedef 一并补上 (C11 允许
+        // 同类型 typedef 重复声明 ⇒ 与后端那一批重发不冲突)。只影响「UDT 块里真的提到
+        // vb6_ComIface_*」的那几张头, 别的头发码形状一字不动。
+        std::set<std::string> comIfaceNames;
+        collectTokens(block, "vb6_ComIface_", comIfaceNames);
+        for (const auto& c : comIfaceNames) {
+            pre += "typedef struct vb6_ComIface_" + c + " vb6_ComIface_" + c + ";\n";
+        }
         size_t insertAt = hdr.find('\n', incPos);
         if (insertAt == std::string::npos) insertAt = incPos + std::strlen("#include \"vb6rtl.h\"");
         else insertAt += 1;

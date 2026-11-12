@@ -128,6 +128,20 @@ $logErr = Join-Path $OutDir "segmented.err"
 # 让 vb6com 在"COM 晚绑定成员解析失败(真 438)"时打印 [C3_438]; 宿主属性/方法解析失败则由
 # uc_hostmodel 无条件打印 [C3_HOST_438 #n] (HEAD 既有格式, 见 uc_hostmodel.c)。两者都算 438。
 $env:C3_LATEBIND_MISS = "1"
+# 账 §56.42: **诊断可见性**。CI 上这枚用例红, 但读数只说得出「UC 区没画」(vivid/blue 全 0),
+# 说不清是「WM_PAINT 根本没进宿主窗口」还是「paint 回调跑了但画空」—— 这两者的修法完全不同。
+# RTL 自带 C3_AD_TRACE 开关: 每次进 UC 绘制路径打一行 [AD-paint] (含 paint 回调指针) 到 stderr,
+# 而 output/**/*.err 本来就在 CI 工件规则里 ⇒ 一行就能二分。只加诊断, **不动任何判据**。
+$env:C3_AD_TRACE = "1"
+# 账 §56.43: **第二枚诊断** —— 把 UC 自己那张离屏 DIB 落成 bmp (RTL 的 C3_UC_DUMPDIR 开关,
+# 只在真实 WM_PAINT 路径落, 落的正是绘制后的 DIB)。有了它就能一眼分清两种失败:
+#   · DIB 是空/纯色 ⇒ paint 回调跑了但没画出东西 (问题在 .ctl 绘制代码内部);
+#   · DIB 有内容 ⇒ 画出来了但没贴到屏幕上 (问题在 blit/合成那一段)。
+# 本机基线: uc3 那张 DIB = 蓝色选中段 + "Suspendido"/"Apagado" 文字 (340x41)。
+# 只加诊断, **不动任何判据**。
+$dumpDir = Join-Path $OutDir "ucdump"
+New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
+$env:C3_UC_DUMPDIR = $dumpDir
 $proc = Start-Process -FilePath $exePath -WorkingDirectory $wd `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr -NoNewWindow -PassThru
 if (-not $proc) { Write-Output "FAIL 无法启动 $exePath"; exit 1 }
@@ -647,6 +661,18 @@ foreach ($bb in @($b0, $b1, $b2, $b3, $b4, $b5, $b6, $g4, $g5, $g6)) { $bb.Dispo
 try { [SegPx]::SetThreadDpiAwarenessContext($prevCtx) | Out-Null } catch { }
 
 try { if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(3000) | Out-Null } } catch { }
+
+# 收尾 (诊断): ucdump 里每个类型只留前 2 张 —— CI 上 paint 次数多 (本机一轮就 230 张),
+# 全留会让工件膨胀十几倍; 而「首帧那张」就能回答「UC 到底画没画」。进程已在上面 kill,
+# 不会再有新的 dump 落盘, 这里删是安全的。
+if (Test-Path $dumpDir) {
+    $kept = @{}
+    foreach ($f in @(Get-ChildItem $dumpDir -Filter *.bmp -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $t = ($f.Name -split "_")[0]
+        if (-not $kept.ContainsKey($t)) { $kept[$t] = 0 }
+        if ($kept[$t] -lt 2) { $kept[$t]++ } else { try { [System.IO.File]::Delete($f.FullName) } catch { } }
+    }
+}
 
 Write-Output ("读数: " + ($read -join "; "))
 if ($fail.Count -gt 0) {

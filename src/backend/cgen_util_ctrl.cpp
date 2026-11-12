@@ -2566,7 +2566,10 @@ bool CCodeGen::emitUcDefaultPropLet(const CtrlDefaultProp& fold,
     if (!fold.folds || !fold.isUcDefault) return false;
     emitExpr(valueExpr);
     std::string valUc = std::move(lastExpr_);
-    std::string packUc = comPackFnForVbType(fold.valueType);
+    // 装箱档问**唯一**那一问 (cgen_util_com.cpp 的 comPackFnForDefaultPropType) ——
+    // 它与「裸控件名折默认属性」那一支 (comPackExpr 里的同一问) 共用同一张配对表与同一道
+    // 六档闸 ⇒ 同一枚型不可能在两站给出两个打包器名 (第二百四十一刀 V11 记的真回归)。
+    std::string packUc = comPackFnForDefaultPropType(fold.valueType);
     if (packUc.empty()) packUc = comPackExpr(valueExpr);
     c_.emitLine("vb6_ComSetProp(" + recvExpr + ", L\"" + fold.propText() + "\", " + packUc
                 + "(" + valUc + "));  /* UC default prop let */");

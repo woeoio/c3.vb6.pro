@@ -747,13 +747,10 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
         {
             CtrlDefaultProp fold256 = ctrlDefaultPropOf(lower);
             if (fold256.folds) {
-                switch (fold256.valueType) {
-                    case Vb6Type::String: case Vb6Type::Integer: case Vb6Type::Long:
-                    case Vb6Type::Boolean: case Vb6Type::Single: case Vb6Type::Double:
-                        return comPackFnForVbType(fold256.valueType);
-                    default:
-                        break;
-                }
+                // 折叠值那六档 → 晚绑定打包器: 问**唯一**那一问 (comPackFnForDefaultPropType),
+                // 不在这里自己 switch 一份 (答案与 UC 默认属性写那一腿必须一致)。
+                std::string packFold = comPackFnForDefaultPropType(fold256.valueType);
+                if (!packFold.empty()) return packFold;
             }
         }
         // 账 #305 §B159 (第五十刀): **数组本体当 COM 实参** —— 这一问必须排在下面那串「已知变量型」
@@ -954,6 +951,27 @@ std::string CCodeGen::comPackFnForVbType(Vb6Type vt) {
         if (e.vt == vt) return e.fn;
     }
     return std::string();   // 这一型在这里答不了，交回调用方兜底
+}
+
+// 账 #256 / 账 #305 (第一百八十一刀补, 第五十六刀): 「一枚**折成默认属性读数**的值该按哪一档
+// 装箱」—— 这一问的**答案**是上面那张配对表 (comPackFnForVbType), 但**问它的地方**有两处:
+//   ① comPackExpr 的「裸控件名折默认属性」那一支 (读侧交出去的那枚值);
+//   ② 工程内 UserControl 默认属性的**写**那一腿 (cgen_util_ctrl.cpp 的 emitUcDefaultPropLet,
+//      写进去的那枚值)。
+// 两处若各自直接问那张表, 同一枚型可能给出两个打包器名 ⇒ 站点与主人各说一遍
+// (第二百四十一刀 V11 把这记成真回归: 走位的第三位消费者绕过了既有权威)。
+// 这里把「折叠值只认这六档」这道闸与那张表合成**一问**, 两处都问它。
+// ⚠ 形状零改动 (逐字节证): 折叠值那六档两处原本就答得一样; 而 UC 默认成员的返回型
+//   (ucDefaultReadPlan) 只放行 Double/Single/Long/Integer/Boolean/String/Date 七档,
+//   其中 Date 不在配对表里 ⇒ 两处都答空串 ⇒ 写那一腿照旧交回 comPackExpr 兜底。
+std::string CCodeGen::comPackFnForDefaultPropType(Vb6Type vt) {
+    switch (vt) {
+        case Vb6Type::String: case Vb6Type::Integer: case Vb6Type::Long:
+        case Vb6Type::Boolean: case Vb6Type::Single: case Vb6Type::Double:
+            return comPackFnForVbType(vt);
+        default:
+            return std::string();   // 不是折叠值那六档 ⇒ 这一档这里答不了
+    }
 }
 
 bool CCodeGen::comVbTypeForPackFn(const std::string& packFn, Vb6Type& out) {
