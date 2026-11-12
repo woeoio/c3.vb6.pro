@@ -855,6 +855,16 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
             // 此前 memSym==null (UDT 字段) 被一律视为非 Variant, 导致
             // UBound(vb6_ret_X.BufferArray) 等不包装 vb6_VariantToSafeArray1D →
             // C2440 (无法从 vb6_VARIANT 转 vb6_SafeArray1D*).
+            //
+            // 账 §56.40: 这一格问的是 inferExprType, 它对 UDT 字段走的是
+            // symTab_.lookupModule(UDT 名) —— **跨模块 Public Type 解析不到** ⇒
+            // 答 Unknown ⇒ 整格答否 ⇒ 读腿不拆箱 ⇒ C2440 (PhotoDemon
+            // pdDictionary.c 239/248: `dItem As Variant` 读进 String 变量)。
+            // 字段**声明档位**的既有唯一出口是 inferUdtFieldVb6Type (它走
+            // lookupTypeSymbol, 带 $ty 回退与按 kind 查找) —— 与调用实参那条路
+            // (cgen_expr_call_arg_emit.inc 的 inferUdtFieldVb6Type(...) == Variant)
+            // 同一枚问句。先问它, 再落回原来的 inferExprType 那一格。
+            if (inferUdtFieldVb6Type(&expr) == Vb6Type::Variant) return true;
             if (!inferUdtTypeOfExpr(*ma.object).empty()) {
                 return inferExprType(expr) == Vb6Type::Variant;
             }
@@ -881,6 +891,18 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                 Vb6Type pt = Vb6Type::Unknown;
                 if (ctrlMemberPropType(ma.object.get(), ma.memberName, pt))
                     return pt == Vb6Type::Variant;
+            }
+            // 账 §56.40: 工程类成员的**方法**返回 Variant (`Evaluator.Evaluate(...)` /
+            // `pdLayer.GetTextLayerProperty(...)`) —— 上面那条字段表只管**字段**, 方法的
+            // 返回档在类符号的 memberReturnTypes 里。此前这一问落到下面那条「按裸成员名
+            // 查模块符号」⇒ 答否 ⇒ 实参/赋值不拆箱 ⇒ 整只 vb6_VARIANT 递给
+            // BSTR/double/int32_t 形参 ⇒ C2440 (PhotoDemon Evaluator.c 474/494/514、
+            // pdSpinner.c 919、TextSupport.c 357/370/386/398、toolpanel_TextBasic.c 1811)。
+            if (ma.object) {
+                const std::string clsVar = inferClassTypeOfExpr(*ma.object);
+                if (!clsVar.empty() && classMemberMethodReturnsVariant(clsVar, ma.memberName)) {
+                    return true;
+                }
             }
             auto* memSym = symTab_.lookupModule(ma.memberName);
             // 关键差异: memSym==null (UDT 字段访问或外部类成员) 视为非 Variant
@@ -1253,6 +1275,29 @@ std::string CCodeGen::conditionTruthExpr(const std::string& cExpr, Expr* cond) c
         return "vb6_VariantToBool(" + cExpr + ")";
     }
     return cExpr;
+}
+
+// 账 §56.40: 「这枚工程类成员的**方法**返回档是不是 Variant」—— 权威是类符号的
+// memberReturnTypes (与 inferExprType 的同名映射同源: cgen_util_type.cpp 里
+// 「类实例成员函数返回类型」那一节)。窄口径: 只认表里**明写 variant** 的那一档,
+// 不做别的推断 —— 判宽了会把非 Variant 实参套上 vb6_VariantToXxx, 反向 C2440。
+bool CCodeGen::classMemberMethodReturnsVariant(const std::string& className,
+                                                const std::string& memberName) const {
+    if (className.empty() || memberName.empty()) return false;
+    if (!symTab_.moduleScope()) return false;
+    const std::string memLower = Symbol::toLower(memberName);
+    const std::string clsLower = Symbol::toLower(className);
+    for (const auto& [k, csym] : symTab_.moduleScope()->symbols()) {
+        if (csym->kind != SymbolKind::Class) continue;
+        const bool hit = csym->isExternal
+            ? (Symbol::toLower(csym->sourceModule) == clsLower)
+            : (Symbol::toLower(csym->name) == clsLower);
+        if (!hit) continue;
+        auto it = csym->P().memberReturnTypes.find(memLower);
+        if (it == csym->P().memberReturnTypes.end()) return false;
+        return Symbol::toLower(it->second) == "variant";
+    }
+    return false;
 }
 
 // P1.2 三问之二: 「C 侧这段文本是不是**整只 vb6_VARIANT 槽**」(而不是槽的地址/指针)。

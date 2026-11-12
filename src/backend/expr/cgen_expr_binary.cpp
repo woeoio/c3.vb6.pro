@@ -257,7 +257,11 @@ void CCodeGen::visit(BinaryExpr& node) {
 
     // 幂运算: VB6 ^ → pow()
     if (node.op == BinaryOp::Pow) {
-        lastExpr_ = "vb6_Pow(" + left + ", " + right + ")";
+        // 账 §56.40: 两个形参都是 double —— Variant 操作数整只结构体递进去
+        // = C2440 (PhotoDemon Evaluator.c 514:
+        // vb6_Pow(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。按上下文拆箱。
+        lastExpr_ = "vb6_Pow(" + toDoubleIfVariant(left, node.left.get())
+                    + ", " + toDoubleIfVariant(right, node.right.get()) + ")";
         return;
     }
 
@@ -431,9 +435,14 @@ void CCodeGen::visit(BinaryExpr& node) {
 
     // Like运算: VB6 Like → vb6_Like
     if (node.op == BinaryOp::Like) {
+        // 账 §56.40: 两个形参都是 BSTR —— Variant 操作数整只 vb6_VARIANT 结构体
+        // 递进去 = C2440 (PhotoDemon Evaluator.c 474:
+        // vb6_Like(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。按上下文拆箱。
         // <vbeclipse>: Option Compare Text 模块里 Like 的大小写与字符区间都按文本形
         lastExpr_ = std::string("vb6_Like") + (optionCompareText_ ? "C" : "")
-                    + "(" + left + ", " + right + (optionCompareText_ ? ", 1" : "") + ")";
+                    + "(" + toStringIfVariant(left, node.left.get())
+                    + ", " + toStringIfVariant(right, node.right.get())
+                    + (optionCompareText_ ? ", 1" : "") + ")";
         return;
     }
 
@@ -1153,7 +1162,11 @@ void CCodeGen::visit(BinaryExpr& node) {
                           + asUnsignedOperand(right, *node.right, "uint32_t") + ")";
                 return;
             default:
-                lastExpr_ = "vb6_Num_Mod((int32_t)(" + left + "), (int32_t)(" + right + "))";
+                // 账 §56.40: (int32_t)(x) 对 vb6_VARIANT 结构体是 C2440
+                // (PhotoDemon Evaluator.c 494: (int32_t)(vb6_Evaluator_Eval(l))) ——
+                // 按上下文拆箱, 与整除那一路 (Fix 084o) 同一枚 toLongIfVariant。
+                lastExpr_ = "vb6_Num_Mod(" + toLongIfVariant(left, node.left.get())
+                          + ", " + toLongIfVariant(right, node.right.get()) + ")";
                 return;
         }
     }

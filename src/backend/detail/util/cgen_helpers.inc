@@ -1772,6 +1772,21 @@
     // (C2440 "无法从 vb6_VARIANT 转换为 double"), 改走 vb6_VariantToDouble.
     std::string toDoubleIfVariant(const std::string& cExpr, const Expr* astExpr);
 
+    // 账 §56.40: toLongIfVariant 的**字符串**版 —— 用于需要 BSTR 的上下文
+    // (Like 运算符的两个操作数等). vb6_VARIANT 结构体不能交给 BSTR 形参
+    // (C2440 "无法从 vb6_VARIANT 转换为 BSTR"). 与前两枚同构, 只把提取
+    // 函数换成 vb6_VariantToString. astExpr 可为 nullptr (只剩文本那一半).
+    std::string toStringIfVariant(const std::string& cExpr, const Expr* astExpr);
+
+    // 账 §56.40: 「这枚工程类成员的**方法**返回档是不是 Variant」—— 权威是类符号的
+    // memberReturnTypes (inferExprType 的同名映射同源)。isDefinitelyVariantExpr
+    // 此前只问字段表 ⇒ 方法返回 Variant 一律答否 ⇒ 实参/赋值不拆箱 ⇒ C2440
+    // (PhotoDemon Evaluator.c 474/494/514、pdSpinner.c 919、
+    // TextSupport.c 357/370/386/398、toolpanel_TextBasic.c 1811)。
+    // 只认 methodReturnTypes 里**明写 variant** 的那一档, 不做别的推断。
+    bool classMemberMethodReturnsVariant(const std::string& className,
+                                         const std::string& memberName) const;
+
     // 给定类名与成员名, 在当前模块作用域符号表中查找属于该类的 Function/PropertyGet 符号,
     // 若其返回类型为 Object 且记录了 variableTypeName (Fix 015), 返回经 canonicalClassName
     // 规范化后的类名; 否则返回空串. 用于推断方法返回值的类类型.

@@ -977,6 +977,24 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                     }
                 }
             }
+            // 账 §56.40: 工程类的成员若是 **UDT 数组**, 这一格以前答空 ——
+            // 父对象不是 UDT 变量 (它是类实例), 上面那条递归自然落空; 于是
+            // `me->m_Entries(0).dItem` (UDT 元素 + 声明为 Variant 的成员) 这一族
+            // 的**宿主类型**推不出来 ⇒ 字段那一问 (inferUdtFieldVb6Type) 够不着 ⇒
+            // 「这枚表达式是不是整只 Variant 槽」答否 ⇒ 读腿不套 vb6_VariantToString
+            // ⇒ C2440 (PhotoDemon pdDictionary.c 239/248: dItem As Variant 读进
+            // String 变量)。答案由 resolveMemberArrayDecl 给 —— 分配侧与访问侧同档
+            // (账 #305 §B154), 不另开第二张表。
+            if (ma.object) {
+                const std::string cls476 = inferClassTypeOfExpr(*ma.object);
+                if (!cls476.empty()) {
+                    MemberArrayDecl mad476;
+                    if (resolveMemberArrayDecl(std::string(), cls476, ma.memberName, mad476)
+                        && mad476.isUdt && !mad476.elemCType.empty()) {
+                        return mad476.elemCType;
+                    }
+                }
+            }
             // §56.38 F2: 上面那条只认"父对象是 UDT 的字段"。`obj.Member` 这种
             // **零参调用不写括号**的写法（VB6 合法）在 AST 里也是 MemberAccessExpr，
             // Member 是返回工程 UDT 的 Function/PropertyGet ⇒ 旧路径答空 ⇒
@@ -1462,7 +1480,14 @@ std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astE
     // 参与算术/整除前必须先按 VB6 语义取值 (与 unwrapBareComCall108 同口径)。
     if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
         return "vb6_VariantToLong(vb6_VariantFromComResult(" + cExpr + "))";
-    if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLong(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
+    // 账 §56.40: 这一问原本传 nullptr (ast 不可得), 只剩**文本那一半** ——
+    // 于是「UDT 字段声明为 Variant」「项目/类函数返回 Variant」这一族 (C 文本是
+    // VB6_SA_AT(vb6_type_X, arr, i).member / vb6_<Cls>_<Fn>(...), 不命中任何
+    // 前缀表) 一律不拆箱 ⇒ 整只 vb6_VARIANT 交给 int32_t 形参 ⇒ C2440
+    // (PhotoDemon Evaluator.c 494/514: (int32_t)(vb6_Evaluator_Eval(l))、
+    // vb6_Pow(vb6_Evaluator_Eval(l), …))。astExpr 是现成的形参, 问上它 ——
+    // isDefinitelyVariantExpr 本来就答得对 (AST 那一半是权威)。
+    if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToLong(" + cExpr + ")";
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;
@@ -1485,12 +1510,35 @@ std::string CCodeGen::toDoubleIfVariant(const std::string& cExpr, const Expr* as
     // 同上 (Fix 156 的配套): 无类型 COM 属性读参与浮点除法时先解包成数值。
     if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
         return "vb6_VariantToDouble(vb6_VariantFromComResult(" + cExpr + "))";
-    if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToDouble(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
+    // 账 §56.40: 与上面 toLongIfVariant 同一刀 —— 问上 AST 那一半 (astExpr 是
+    // 现成形参), 不再只剩文本投影 ⇒ 「UDT 字段声明为 Variant」「函数返回
+    // Variant」这一族在浮点上下文里也拆箱 (PhotoDemon Evaluator.c 514:
+    // vb6_Pow(vb6_Evaluator_Eval(l), …) —— 两个形参都是 double)。
+    if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToDouble(" + cExpr + ")";
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         if (knownVariantVars_.count(lower)) return "vb6_VariantToDouble(" + cExpr + ")";
+    }
+    return cExpr;
+}
+
+// 账 §56.40: toLongIfVariant 的**字符串**版 (第三枚)。与前两枚同构 —— 只把提取
+// 函数换成 vb6_VariantToString (BSTR 交出的是新分配的那一份, 与 RTL 的
+// vb6_BSTR_AssignMove 配对)。
+// 消费点: Like 运算符的两个操作数 (vb6_Like(BSTR, BSTR))。此前那一路把操作数
+// **原样**递进去 ⇒ 整只 vb6_VARIANT 结构体交给 BSTR 形参 ⇒ C2440
+// (PhotoDemon Evaluator.c 474: vb6_Like(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。
+std::string CCodeGen::toStringIfVariant(const std::string& cExpr, const Expr* astExpr) {
+    if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
+        return "vb6_VariantToString(vb6_VariantFromComResult(" + cExpr + "))";
+    if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToString(" + cExpr + ")";
+    if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
+        auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
+        std::string lower = ident.name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (knownVariantVars_.count(lower)) return "vb6_VariantToString(" + cExpr + ")";
     }
     return cExpr;
 }
