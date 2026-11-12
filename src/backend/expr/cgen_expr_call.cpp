@@ -1,5 +1,6 @@
 #include "backend/cgen.hpp"
 #include "common/canvas_drawing.hpp"  // 账 #232①: 画布动词表 (绘图码头问它要名字与"这一档有没有出口")
+#include "common/reserved_stmt_keyword.hpp"  // 账 §56.50: 保留语句关键字顶不掉 (与语义层同一处权威)
 #include <algorithm>
 #include <cctype>
 #include <iostream>
