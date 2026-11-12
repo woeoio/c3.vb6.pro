@@ -5471,19 +5471,22 @@ CI 侧读数（run `43139994702`，head `5dca11e4`）：`Emit manifest (shape or
   「编译失败 (exit code 2)」，错误落在 `%LOCALAPPDATA%\Temp\C3C\<戳>\` 里 —— 失败时
   intermediates 保留在那儿，`_c3_msvc_out.txt` 是**编译器的原话**；CI 那边的
   `output/FlexGridX86/c3-error.log` 是同一个东西）。
-- 修后：同一命令编过（**本机**；CI 上那台 runner 的 typelib 环境与本机略有差别，
-  最终以 CI 的 `Tests (vbp #11)` 为准）。
-- 这两刀都改发码 ⇒ 形状会变（VTableHandle.h 那张头多出两行前向 typedef + `VBA.Choose`
-  那一处少一层包装）⇒ 形状门那 18 行之外会**再增**（本轮同样**不 bless**，挂账）。
+- 修后：同一命令编过（**本机**）；CI 上 run `43145417784`（head `85cb509b`）的
+  `Tests (vbp #11)` **success** ⇒ 这条真编译失败在 CI 上转绿。
+- 形状：**实测形状门仍是 18 行，没有增加**（这一条与本节先前的预测相反，以实测为准）。
+  原因：`VBA.Choose` 与 UDT 块那两处改动落在 `tests/VBFlexGridDemo/VBFlexGridDemo.vbp`
+  与 `.../Common/Common.bas` 两行上，而那两行**本来就已在 18 行里**（VARIANT 族改的）；
+  `tests/VBFlexGridDemo/Builds/VTableHandle.bas` 单独 `--emit-c` 时**不经 driver 阶段 2
+  的 UDT 注入**（那是整工程才有的那一趟）⇒ 它那一行形状不变。
 
 ### 四、形状门以外的 GA 红面（现状）
 
 | 红 | 状态 |
 | --- | --- |
 | 11 条 STATIC | **全绿**（7 条在 `e68a24be`，4 条在 `7bfb3f35`） |
-| `Emit manifest (shape oracle)` | **红 18 行**（VARIANT 族的合法形状变化）+ 本刀 FlexGrid 两处会再增几行。**用户裁定：暂不 bless，挂账** |
-| `Tests (vbp #11)` `[GUI] FlexGridX86` | 本机已修（缺口 A + B），等 CI 复核 |
-| `Tests (vbp #4)` `[GUI] ucSegmentedControl` 像素 | 仍红：**判据的采样面在 CI 上与本机不是同一张面**（CI 抓的是父窗体表面，12 个 UC 子窗各自的表面不在其中 ⇒ 逐控件彩色计数必然全 0；`openEditor whitePx=5617` 非零即是旁证）。不是渲染回归（上一轮基线 `43120794775` 读数逐字相同）。三条建议见 §56.40 §五 |
+| `Emit manifest (shape oracle)` | **红 18 行**（VARIANT 族的合法形状变化）。本刀的 FlexGrid 两处**没有让这 18 行变多**（实测）。**用户裁定：暂不 bless，挂账** |
+| `Tests (vbp #11)` `[GUI] FlexGridX86` | **已转绿**（CI run `43145417784`，head `85cb509b`；本机也编过并产出 exe） |
+| `Tests (vbp #4)` `[GUI] ucSegmentedControl` 像素 | 仍红：**判据的采样面在 CI 上与本机不是同一张面**（CI 抓的是父窗体表面，12 个 UC 子窗各自的表面不在其中 ⇒ 逐控件彩色计数必然全 0；`openEditor whitePx=5617` 非零即是旁证）。不是渲染回归（上一轮基线 `43120794775` 读数逐字相同）。三条建议见 §56.40 §五，本刀补了一条更细的证据与工件改动，见 §六 第 3 条 |
 
 ### 五、本机读数（`7bfb3f35`）
 
@@ -5507,11 +5510,10 @@ CI 侧读数（run `43139994702`，head `5dca11e4`）：`Emit manifest (shape or
    - ⚠ 本刀的缺口 B 属于**同一族**的另一面（槽问句把「不是槽」的表达式答成「整只槽」）——
      下一刀收这一族时，**判据要与发码侧同源**（限定形态的多态内置只有 `Choose`/`Switch`
      被折成三目，`IIf` 不是）。
-2. **FlexGridX86 在 CI 上的复核**（`Tests (vbp #11)`）：本机已编过，但 CI 那台 runner 的
-   typelib 环境与本机不同（`msdatsrc.tlb` 两边都找不到；`OLEGuids` 注册表两边也不同）⇒
-   若 CI 仍红，下一步是把 `Implements OLEGuids.IObjectSafety` 那三条 `VB3044` 也收掉
-   （限定名 `OLEGuids.IObjectSafety` 在符号表里是**平名** `IObjectSafety` ⇒
-   `semantic_analyzer.cpp:278` 的 `lookupModule(ifaceName)` 认不出限定名）。
+2. **FlexGridX86 已转绿**（CI run `43145417784`）。若日后又红且症状是那三条
+   `VB3044 Implements: interface 'OLEGuids.IObjectSafety' not found` 还在，下一步是把
+   限定名那一条也收掉（限定名 `OLEGuids.IObjectSafety` 在符号表里是**平名** `IObjectSafety`
+   ⇒ `semantic_analyzer.cpp:278` 的 `lookupModule(ifaceName)` 认不出限定名）。
 3. **ucSegmentedControl 像素判据**：采样面与阈值两件事（§56.40 §五的三条建议）。
    本刀又查到一条**更细的证据**（判据脚本自身读数）：那次红里，**首张**采样
    （`$bmp`，客户区大小，`RedrawWindow` 后 400 ms）上**每一个** UC 区的彩色计数都是 0
