@@ -1,4 +1,5 @@
 #include "backend/cgen.hpp"
+#include "common/reserved_stmt_keyword.hpp"  // 账 §56.50: 保留语句关键字顶不掉 (与语义层同一处权威)
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -531,7 +532,12 @@ void CCodeGen::visit(CallStmt& node) {
                 }
                 if (sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
-                    || sym->kind == SymbolKind::PropertySet)) {
+                    || sym->kind == SymbolKind::PropertySet)
+                    // 账 §56.50: 保留语句关键字 (Randomize/Kill/Load/Unload) 的**空形参表**
+                    // 不能当成被调方 —— 那枚成员顶不掉内建语句 (裸写永远是内建),
+                    // 采用它的形参表会让这一格补出多余的缺省实参。口径与语义层/表达式层
+                    // 同一处 (common/reserved_stmt_keyword.hpp)。
+                    && !isReservedStmtKeyword(idExpr.name)) {
                     calleeParams = sym->P().params;
                     calleeIsBuiltin = sym->isBuiltin;
                 }

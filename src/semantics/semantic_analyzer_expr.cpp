@@ -6,6 +6,7 @@
 #include "semantics/semantic_analyzer_internal.h"
 #include "common/form_pseudo.hpp"  // 账 #278 §B109: 窗体裸写属性问那张表 (与 backend 同一处登记)
 #include "common/vba_math.hpp"     // VBA.Math 成员名单: Math.<成员> 的编译期收口
+#include "common/reserved_stmt_keyword.hpp"  // 账 §56.50: 保留语句关键字顶不掉 (与 backend 同一处权威)
 
 namespace vb6c3 {
 
@@ -395,6 +396,12 @@ void SemanticAnalyzer::visit(IndexOrCallExpr& node) {
     // 判断是函数调用还是数组索引
     if (auto* ident = dynamic_cast<IdentifierExpr*>(node.callee.get())) {
         auto* sym = symTab_.lookup(ident->name);
+        // 账 §56.50: VB6 **保留语句关键字** (Randomize/Kill/Load/Unload) 在语句位置
+        // 永远是内建语句, 工程里同名的成员顶不掉它 —— 那枚成员只能靠限定接收者调
+        // (PD pdRandomizeUI.ctl:301 `Me.Randomize`)。这里不挡一下, 同模块那枚 0 参成员
+        // 会被当成被调方 ⇒ 假 VB3005「参数数量错误: 'Randomize' 需要 0-0 个参数」
+        // (本机探针 .temp/probe/rnd4 实测)。口径问 common/reserved_stmt_keyword.hpp。
+        if (sym && isReservedStmtKeyword(ident->name)) sym = nullptr;
         if (sym) {
             sym->isReferenced = true;
             // 虚方法 (tB, B08d): 这条分支自己查符号、不走 visit(IdentifierExpr), 所以裸名

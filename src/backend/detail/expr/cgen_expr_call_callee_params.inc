@@ -36,6 +36,13 @@
         std::string idLower40 = Symbol::toLower(idExpr.name);
         if (!idLower40.empty() && idLower40.back() == '$') idLower40.pop_back();
         const bool calleeIsBuiltinFuncName40 = (kBuiltinFuncNames.count(idLower40) != 0);
+        // 账 §56.50: VB6 **保留语句关键字** (Randomize/Kill/Load/Unload) 顶不掉 ——
+        // 裸写永远是内建语句, 同名成员只能靠限定接收者调 (PD pdRandomizeUI.ctl:301
+        // `Me.Randomize`)。这一格若把那枚成员的**空形参表**当成被调方, 下游 Fix 041b
+        // 「实参多于形参就截断」会把种子实参全砍掉 ⇒ `vb6_Randomize()` ⇒ cl C2198
+        // 「too few arguments for call」(跨模块那枚; PD pdPaletteChild.cls:291-292 /
+        // pdRandomize.cls:118 三处)。口径问 common/reserved_stmt_keyword.hpp。
+        const bool calleeIsReservedStmtKeyword = isReservedStmtKeyword(idLower40);
         // 尝试多种查找方式: 先lookupModule(过程符号), 再lookup(嵌套作用域)
         Symbol* funcSym = symTab_.lookupModule(idExpr.name);
         if (!funcSym || (funcSym->kind != SymbolKind::Sub && funcSym->kind != SymbolKind::Function
@@ -52,7 +59,10 @@
             // 不采用属性的 (空) 形参表, 免得实参被清空。
             && !(calleeIsBuiltinFuncName40 && (funcSym->kind == SymbolKind::PropertyGet
                  || funcSym->kind == SymbolKind::PropertyLet
-                 || funcSym->kind == SymbolKind::PropertySet))) {
+                 || funcSym->kind == SymbolKind::PropertySet))
+            // 账 §56.50: 保留语句关键字一律让位给内建 (连 Sub/Function 也不采用) ——
+            // 名字已经解析成内建出口 (vb6_Randomize 等), 形参表必须与之一致。
+            && !calleeIsReservedStmtKeyword) {
             // 重载变体 (O2): 语义层选定变体时, 形参表/返回类型以变体符号为准
             if (!node.calleeOvlSuffix.empty()) {
                 if (auto* ovSym = symTab_.lookupModuleOverloadBySuffix(
