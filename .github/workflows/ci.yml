@@ -610,5 +610,10 @@ jobs:
             # 覆盖构建失败时的其它日志。只动 artifact，不改任何判据。
             output/**/c3-error.log
             output/**/*.log
+            # 账 §56.41: **像素判据**那几枚 GUI 用例（ucSegmentedControl 等）把采样图存在
+            # output/<用例>/segmented_px/*.png。没有这一项 ⇒ CI 红了只能看见一串读数，看不见
+            # 那张图（读数是「几万个像素里有多少彩色」，图才看得出「面里到底有没有那个控件」）。
+            # 只加工件，不动任何判据。
+            output/**/*.png
           if-no-files-found: warn
           retention-days: 14
