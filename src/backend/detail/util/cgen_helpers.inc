@@ -1165,6 +1165,9 @@
     std::set<const ASTNode*> hoistedLocalDeclSet_;
     // Fix 086: 工程内窗体模块名集合 (小写), driver预扫描填充
     std::unordered_set<std::string> knownFormModuleNames_;
+    // 账 §56.48: 工程内用户控件 (.ctl) 模块名 (小写) —— 发码侧那一问
+    // 「这个 WithEvents 的源类是不是 UC」的唯一来源 (名单由驱动下发, 见 collectControlModuleNames)。
+    std::unordered_set<std::string> knownControlModuleNames_;
     // 账 #305 第三百三十一刀: As <窗体类型> 的变量 (小写变量名 → 窗体名, 原大小写)。
     // `Public fMainForm As frmMain` 这类跨模块窗体引用变量 —— C3 单实例模型下
     // 即窗体默认实例, 成员访问/裸值引用改道 form_builtin 的外部窗体支。

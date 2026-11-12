@@ -87,6 +87,20 @@ std::unordered_set<std::string> Driver::collectFormModuleNames() const {
     return names;
 }
 
+// 账 §56.48: 工程内**用户控件 (.ctl) 模块名**（小写）的**唯一**建造点 —— 与
+// collectFormModuleNames 同形: 驱动扫一遍 modules_ 建一张表, 下发给每台 cgen。
+// 发码侧那一问「这个 WithEvents 的源类是不是 UC」只读它 (不许第二处各扫一遍 modules_
+// —— 那就是两份权威, 改一边漏一边)。
+std::unordered_set<std::string> Driver::collectControlModuleNames() const {
+    std::unordered_set<std::string> names;
+    for (const auto& module : modules_) {
+        if (module && module->docKind == DocumentKind::UserControl && !module->moduleName.empty()) {
+            names.insert(Symbol::toLower(module->moduleName));
+        }
+    }
+    return names;
+}
+
 // P6.3 共享化 (2026-11): 类型库符号的**唯一**建造点。
 //
 // 共享化之前这段代码在每个模块的循环里各跑一遍 —— 实测 539 模块 × 3042 符号
