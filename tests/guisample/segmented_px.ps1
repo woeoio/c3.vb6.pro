@@ -1,7 +1,8 @@
 ﻿param(
     [Parameter(Mandatory=$true)][string]$Exe,
     [string]$OutDir = "",
-    [int]$Sec = 10
+    [int]$Sec = 10,
+    [switch]$Diagnostics
 )
 # ucSegmentedControl 夹具的结构判据 (tests\ucSegmentedControl)。
 #
@@ -128,20 +129,20 @@ $logErr = Join-Path $OutDir "segmented.err"
 # 让 vb6com 在"COM 晚绑定成员解析失败(真 438)"时打印 [C3_438]; 宿主属性/方法解析失败则由
 # uc_hostmodel 无条件打印 [C3_HOST_438 #n] (HEAD 既有格式, 见 uc_hostmodel.c)。两者都算 438。
 $env:C3_LATEBIND_MISS = "1"
-# 账 §56.42: **诊断可见性**。CI 上这枚用例红, 但读数只说得出「UC 区没画」(vivid/blue 全 0),
-# 说不清是「WM_PAINT 根本没进宿主窗口」还是「paint 回调跑了但画空」—— 这两者的修法完全不同。
-# RTL 自带 C3_AD_TRACE 开关: 每次进 UC 绘制路径打一行 [AD-paint] (含 paint 回调指针) 到 stderr,
-# 而 output/**/*.err 本来就在 CI 工件规则里 ⇒ 一行就能二分。只加诊断, **不动任何判据**。
-$env:C3_AD_TRACE = "1"
-# 账 §56.43: **第二枚诊断** —— 把 UC 自己那张离屏 DIB 落成 bmp (RTL 的 C3_UC_DUMPDIR 开关,
-# 只在真实 WM_PAINT 路径落, 落的正是绘制后的 DIB)。有了它就能一眼分清两种失败:
-#   · DIB 是空/纯色 ⇒ paint 回调跑了但没画出东西 (问题在 .ctl 绘制代码内部);
-#   · DIB 有内容 ⇒ 画出来了但没贴到屏幕上 (问题在 blit/合成那一段)。
-# 本机基线: uc3 那张 DIB = 蓝色选中段 + "Suspendido"/"Apagado" 文字 (340x41)。
-# 只加诊断, **不动任何判据**。
-$dumpDir = Join-Path $OutDir "ucdump"
-New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
-$env:C3_UC_DUMPDIR = $dumpDir
+# 账 §56.44: **诊断默认关**。这两枚开关各自往 stderr / 磁盘写东西, 会**扰动时序** ——
+#   实测: 开着 [AD-paint] 那几行时这枚用例像素全绿, 关着就是白块 (CI 轮 43153977014
+#   全绿 vs 43150418737/43152473320 全 0)。也就是说「开着诊断才绿」的那种绿是**扰动换来的**,
+#   不能拿来交差 ⇒ 诊断改成 -Diagnostics 显式开启, CI 默认跑**干净**的那条路。
+#   需要复现/二分时再加 -Diagnostics (工件规则 output/** 照样收 .err 与 ucdump)。
+if ($Diagnostics) {
+    $env:C3_AD_TRACE = "1"
+    $dumpDir = Join-Path $OutDir "ucdump"
+    New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
+    $env:C3_UC_DUMPDIR = $dumpDir
+} else {
+    $env:C3_AD_TRACE = $null
+    $env:C3_UC_DUMPDIR = $null
+}
 $proc = Start-Process -FilePath $exePath -WorkingDirectory $wd `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr -NoNewWindow -PassThru
 if (-not $proc) { Write-Output "FAIL 无法启动 $exePath"; exit 1 }
