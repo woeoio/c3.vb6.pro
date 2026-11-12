@@ -26,6 +26,12 @@
     // 不用 AST 扫描 (扫描漏类型引用位点 ⇒ 会把还需要的头裁掉 ⇒ 编译断);
     // 发码文本反查只作**兜底** (记漏时多留一个头, 而不是少留一个)。
 
+    // 账 §56.53: 本模块用哪一副前奏 (普通档 / 窗体档) —— PCH 分组的**唯一判据**。
+    // isDesignerModule_ (.ctl/.pag 设计期模块) 是发码器内部状态, driver 拿不到也
+    // 不该重判 —— driver 只**转述**这个结果去分两组, 再把组交给 msvc_driver 建两份
+    // PCH (两份前奏内容不同, 混用会让 PCH 状态与 TU 自己解析出来的状态不同构)。
+    bool usesFormPrelude() const { return isFormModule_ || isDesignerModule_; }
+
     // Fix 142: 设置 VBP 的 Startup= 启动对象 ("Sub Main" 或窗体模块名).
     // 多模块工程下仅该模块生成进程入口点 (WinMain/main), 其余模块不生成,
     // 否则每个窗体模块各出一个 WinMain → LNK2005.

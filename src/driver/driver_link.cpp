@@ -10,6 +10,7 @@
 #include "common/encoding.hpp"
 #include "ast/ast.hpp"
 #include "backend/msvc_driver.hpp"
+#include "backend/cgen_pch.hpp"   // 账 §56.53: 前奏 include 块 (PCH 头与 TU 的前奏同源)
 #include "driver/rtl_embedded.hpp"
 #include <iostream>
 #include <fstream>
@@ -724,6 +725,22 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
     // Collect generated .c files from intermediatesDir
     // MUST match baseName logic in runCodeGeneration (single-file + -o uses output stem)
     MsvcDriverOptions msvcOpts;
+
+    // 账 §56.53: PCH 分组 —— 前奏有普通档/窗体档两副, 各建一份 PCH。
+    // 前奏的**内容**与模块 .h 的前奏同源 (backend/cgen_pch.hpp 的唯一排法) ⇒
+    // PCH 头与 TU 自己的前奏**逐字一致** ⇒ 套用 PCH 后的预处理状态与不开 PCH 同构。
+    MsvcDriverOptions::PchGroup pchStd;
+    pchStd.headerName = "c3_pch_std.h";
+    pchStd.preludeLines = c3PreludeIncludeLines(false);
+    MsvcDriverOptions::PchGroup pchForm;
+    pchForm.headerName = "c3_pch_form.h";
+    pchForm.preludeLines = c3PreludeIncludeLines(true);
+    auto isFormPreludeModule = [&](const std::string& baseName) {
+        for (const auto& fn : pchFormModules_) {
+            if (fn == baseName) return true;
+        }
+        return false;
+    };
     for (size_t i = 0; i < modules_.size(); i++) {
         // 泛型模板类 (G4): 未发码 (见 driver_codegen_module_loop), 无 .c 可链
         if (!modules_[i]->classTypeParams.empty()) continue;
@@ -737,6 +754,28 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
         }
         std::string cPath = intermediatesDir + "/" + baseName + ".c";
         msvcOpts.sourceFiles.push_back(cPath);
+
+        // 账 §56.53: 前奏分档 —— 判据由**发码器**报 (pchFormModules_), driver 不重判
+        // 「这个模块算不算窗体/设计期」(isDesignerModule_ 是发码器的内部状态)。
+        // 两档前奏内容不同 ⇒ 两份 PCH; 混用会让 PCH 状态与 TU 自己解析出来的状态
+        // 不同构 ⇒ 编译结果可能变。
+        if (isFormPreludeModule(baseName)) {
+            pchForm.sources.push_back(cPath);
+        } else {
+            pchStd.sources.push_back(cPath);
+        }
+    }
+
+    // 只交非空组: 两组都空 (一个模块都没有) ⇒ pchGroups 为空 ⇒ msvc_driver 走原来的
+    // 「一次 cl 编译+链接」老路, 命令行一字不改。
+    if (!pchStd.sources.empty()) msvcOpts.pchGroups.push_back(pchStd);
+    if (!pchForm.sources.empty()) msvcOpts.pchGroups.push_back(pchForm);
+
+    // 增量路径 (opt3) 是**另一条实现** (逐文件编 + 单独 link.exe), 本刀不覆盖它:
+    // 那条路的 obj store 是内容寻址的, PCH 得另做一份键设计 (PCH 变了 ⇒ 键变)。
+    // 显式不交组 ⇒ msvc_driver 走它自己的老路, 行为与本刀之前一致。
+    if (options.incremental) {
+        msvcOpts.pchGroups.clear();
     }
 
     // P6.6: ActiveX DLL mode, add dll_entry.c

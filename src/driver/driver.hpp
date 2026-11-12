@@ -267,6 +267,12 @@ private:
     //   并调 ml64 → .obj → MsvcDriverOptions::extraObjects。
     std::vector<EmittedAsmProc> asmProcs_;
 
+    // 账 §56.53: 用**窗体档前奏**的模块产物基名 (由发码器报, 见
+    // driver_codegen_module_loop.inc 里 cgen.usesFormPrelude()) —— PCH 分组的唯一判据。
+    // driver 不自己重判「这个模块算不算窗体/设计期」: isDesignerModule_ (.ctl/.pag)
+    // 是发码器内部状态, 重判就会出现两处权威。
+    std::vector<std::string> pchFormModules_;
+
     // Fix 143: vbp Object= 的 OCX 文件表 (CLSID 小写去花括号 → ocx 绝对路径).
     // 第三方 OCX 控件免注册加载用.
     std::map<std::string, std::string> ocxFiles_;
