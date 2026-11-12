@@ -4062,6 +4062,10 @@ function Test-Syntax {
 # 仍是一格不多 (RTL 的编译档与用户 -O 解耦) 而用户码必须多占一格 (键确实跟着优化档走)、
 # 三臂产物跑起来 stdout 逐字相同 (命中不改产物 —— 这条才是"敢默认开"的前提)。
 # 本机实测：冷编 24.5 s / 全命中 2.9 s / 换 -O 2 6.5 s / 换架构 x86 24.6 s。
+# objcache .inc 依赖跟踪 (本刀): 三臂还各读一个 frag=<n> —— 本轮纳入键的**函数体片段**
+# (.inc) 数。只收 .h 时这个字段根本不打印 (= -1) ⇒ 该判据直接红。三臂值必须一致且 >0，
+# 配合下面原有的「第二次全命中」一起钉住两条: ① .inc 真的进了键; ② 没有把不稳定的东西
+# 塞进键导致每次都全 miss。FIX-010 前三轮 CI 红、本机全绿的真因就是 .inc 没进键。
 function Test-ObjCache {
     param([string]$Name, [string]$Source)
     # vbp 分片: 本片不跑这例 —— 闸门必须在任何副作用之前 (建目录/起进程)。
@@ -4071,6 +4075,7 @@ function Test-ObjCache {
     $reasons = @()
     $outs = @('', '', '')
     $rtl = @('', '', ''); $usr = @('', '', '')
+    $frags = @(-1, -1, -1)
     $stem = [System.IO.Path]::GetFileNameWithoutExtension($Source)
 
     $sandbox = Join-Path $OutDir ("{0}_store" -f $Name)
@@ -4094,6 +4099,8 @@ function Test-ObjCache {
             if (-not $m.Success) { $reasons += ("build{0} 没读到 OBJCACHE 读数" -f $i); continue }
             $rtl[$i] = ('{0}/{1}' -f [int]$m.Groups[1].Value, [int]$m.Groups[2].Value)
             $usr[$i] = ('{0}/{1}' -f [int]$m.Groups[3].Value, [int]$m.Groups[4].Value)
+            $fm = [regex]::Match($log, 'frag=(\d+)')
+            if ($fm.Success) { $frags[$i] = [int]$fm.Groups[1].Value }
             $exe = Join-Path $dir ($stem + '.exe')
             if (-not (Test-Path $exe)) { $reasons += ("build{0} 无 exe" -f $i); continue }
             $run = Invoke-TestExe -ExePath $exe -WorkDir $dir -Name ("{0}run{1}" -f $Name, $i)
@@ -4125,6 +4132,9 @@ function Test-ObjCache {
     if ($reasons.Count -eq 0) {
         if ($a.Count -ne 2 -or [int]$a[1] -le 0) { $reasons += 'RTL 计数读不到 (读数形状变了?)' }
         elseif ([int]$a[0] -ne 0) { $reasons += ("空 store 第一次竟命中 {0}" -f $rtl[0]) }
+        elseif ($frags[0] -le 0 -or $frags[0] -ne $frags[1] -or $frags[1] -ne $frags[2]) {
+            $reasons += ("frag 读数 {0}/{1}/{2} 异常 (期望 >0 且三臂一致: .inc 没进键?)" -f $frags[0], $frags[1], $frags[2])
+        }
         elseif ($rtl[1] -ne ('{0}/{0}' -f $a[1])) { $reasons += ("第二次没全命中: {0}" -f $rtl[1]) }
         elseif ($rtl[2] -ne $rtl[1]) { $reasons += ("-O 2 之后 RTL 变了: {0} (解耦破了)" -f $rtl[2]) }
         elseif ([int](@($usr[2].Split('/'))[0]) -ne 0) { $reasons += ("-O 2 竟复用了 /O0 的用户码 obj: {0}" -f $usr[2]) }
@@ -4138,7 +4148,7 @@ function Test-ObjCache {
     } else {
         $script:fail++
         Write-Host ("FAIL: " + ($reasons -join ' | ')) -ForegroundColor Red
-        if ($Verbose) { Write-Host ("  rtl=" + ($rtl -join ' ') + " user=" + ($usr -join ' ')) }
+        if ($Verbose) { Write-Host ("  rtl=" + ($rtl -join ' ') + " user=" + ($usr -join ' ') + " frag=" + ($frags -join '/')) }
     }
 }
 
@@ -7728,19 +7738,16 @@ if ($Category -in @("all", "run", "vbp")) {
     #                                     name="Interval" cls=VB6_TIMER）
     #     修后 F10-IVAL=50 F10-EN0=False
     #   ⚠ 不用 F10-TICKS=3 当 GA 判据：CI 上生成的 Timer 事件不投递（loaded=1 ticks=0），
-    #   而同一枚 CI 构建的 C3.exe 拿到本机跑就是 F10-TICKS=3。根因不是 runner 环境、也不是
-    #   产物：CI 的 run_tests.ps1 带 -Incremental，objcache 的键只把 **.h 结尾**的本地
-    #   include 纳入 (src/backend/msvc_driver_incremental.cpp:79 collectLocalIncludes)，
-    #   本轮改的是函数体片段 uc_hostmodel_setprop.inc ⇒ uc_hostmodel.c 的键不变 ⇒ 复用旧
-    #   uc_hostmodel.obj ⇒ 链进旧 vb6_Host_SetProp，读数恒为修前值 (IVAL=0/EN0=True)。
-    #   这与「ninja 不跟踪函数体 .inc」「富贵竹 T4 要 touch cgen_form.cpp」同源。
-    #   在 objcache 的依赖跟踪修好之前，这两例临时关掉增量、强制全量编 RTL，判据才落在本次
-    #   RTL 上；打拍那对 (F10-TICKS=3 / F10-TIMEOUT) 留作本机运行 A/B。
-    $fgzSavedIncArg = $IncArg
-    $IncArg = @()
+    #   而同一枚 CI 构建的 C3.exe 拿到本机跑就是 F10-TICKS=3。
+    #   历史：前三轮 GA 这两针恒读修前值 (IVAL=0/EN0=True)，真因是 CI 带 -Incremental 而
+    #   objcache 的 collectLocalIncludes 只收 .h 结尾的本地 include ⇒ 函数体片段
+    #   uc_hostmodel_setprop.inc 不进键 ⇒ 复用旧 uc_hostmodel.obj。当时在此处临时
+    #   $IncArg = @() 关增量绕过；objcache 依赖跟踪修好后 guard 已撤，两针重新与 CI 其余
+    #   用例同走 -Incremental，本身就是「.inc 进键」的运行期回归针（另见 Test-ObjCache 的
+    #   frag 读数判据）。同源三坑：ninja 不跟踪函数体 .inc、富贵竹 T4 要 touch cgen_form.cpp、
+    #   objcache 不认 .inc —— 前两条属构建系统，第三条已在编译器侧修好。
     Test-Vbp "fgz_fix010_timer_run" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-IVAL=50", "F10-EN0=False")
     Test-Vbp "fgz_fix010_timer_run_x86" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-IVAL=50", "F10-EN0=False") -Arch "x86"
-    $IncArg = $fgzSavedIncArg
     # 富贵竹 FIX-009 R2: 控件数组事件下标改走运行时窗口属性 (VB6_CtrlArrIndex,
     # 存 si+1); MouseMove 按处理器形参数决定 4/5 实参; 容器子控件数组逐元素装卸。
     # 旧发码的 WM_DESTROY 引用未声明的 vb6_hwnd_<数组名> ⇒ C2065, 由下面的
