@@ -128,6 +128,11 @@ $logErr = Join-Path $OutDir "segmented.err"
 # 让 vb6com 在"COM 晚绑定成员解析失败(真 438)"时打印 [C3_438]; 宿主属性/方法解析失败则由
 # uc_hostmodel 无条件打印 [C3_HOST_438 #n] (HEAD 既有格式, 见 uc_hostmodel.c)。两者都算 438。
 $env:C3_LATEBIND_MISS = "1"
+# 账 §56.42: **诊断可见性**。CI 上这枚用例红, 但读数只说得出「UC 区没画」(vivid/blue 全 0),
+# 说不清是「WM_PAINT 根本没进宿主窗口」还是「paint 回调跑了但画空」—— 这两者的修法完全不同。
+# RTL 自带 C3_AD_TRACE 开关: 每次进 UC 绘制路径打一行 [AD-paint] (含 paint 回调指针) 到 stderr,
+# 而 output/**/*.err 本来就在 CI 工件规则里 ⇒ 一行就能二分。只加诊断, **不动任何判据**。
+$env:C3_AD_TRACE = "1"
 $proc = Start-Process -FilePath $exePath -WorkingDirectory $wd `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr -NoNewWindow -PassThru
 if (-not $proc) { Write-Output "FAIL 无法启动 $exePath"; exit 1 }
