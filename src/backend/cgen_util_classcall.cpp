@@ -88,6 +88,8 @@ std::string CCodeGen::resolveClassMemberCallUncached(const std::string& classNam
             if (Symbol::toLower(sym->sourceModule) == classNameLower) {
                 matches = true;
                 if (canonicalClassName.empty()) canonicalClassName = sym->sourceModule;
+                // 账 §56.52: 引用外部类的成员 ⇒ 该类的原型在**它自己**的头里 ⇒ 登记归属模块。
+                noteExternalModule(sym->sourceModule);
             }
         } else if (isClassModule_ && Symbol::toLower(moduleName_) == classNameLower) {  // Fix 013: moduleName_ = VB_Name
             // 当类模块编译自身时, 同模块类的方法符号 isExternal=false
@@ -129,6 +131,8 @@ std::string CCodeGen::resolveClassMemberCallUncached(const std::string& classNam
                 if (Symbol::toLower(csym2->sourceModule) == classNameLower) {
                     classSymFix = csym2.get();
                     classCanonFix = csym2->sourceModule;
+                    // 账 §56.52: 同上, 外部类 ⇒ 登记归属模块 (include 瘦身的权威名单)
+                    noteExternalModule(csym2->sourceModule);
                     break;
                 }
             } else if (isClassModule_ && Symbol::toLower(moduleName_) == classNameLower) {
@@ -184,6 +188,8 @@ std::string CCodeGen::resolveClassMemberCallUncached(const std::string& classNam
                 if (Symbol::toLower(csym->sourceModule) == classNameLower) {
                     classSym = csym.get();
                     classCanonName = csym->sourceModule;
+                    // 账 §56.52: 同上, 外部类 ⇒ 登记归属模块
+                    noteExternalModule(csym->sourceModule);
                     break;
                 }
             } else if (isClassModule_ && Symbol::toLower(moduleName_) == classNameLower) {
