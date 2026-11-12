@@ -123,6 +123,8 @@
         CCodeGen cgen(*diag_, analyzer->symbolTable(), analyzer->typeSystem(),
                       &classVoidFieldMap, &classTypedFieldMap, &variantReturnFuncs, options.verbose);
         cgen.setFormModuleNames(formModuleNames);  // Fix 086: 跨模块窗体默认实例引用
+        // 账 §56.48: 「这个 WithEvents 的源类是不是 UC」那一问的名单 (工程内 .ctl 模块名)。
+        cgen.setControlModuleNames(controlModuleNames);
         // 账 #305 第320刀 (账 #592): App.Title 真值 = .vbp 的 Title（空则工程 Name）。
         // 单文件编译（无 .vbp）时为空 ⇒ 入口点一行不发，读取侧退 EXEName（旧口径）。
         // 第330刀 (账 #605) + 第三百五十九刀: 算法仍只住 appTitleSeed() 一处 (DLL 的

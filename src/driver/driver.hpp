@@ -203,6 +203,9 @@ private:
     // 经 setFormModuleNames 下发给每台 cgen）与语义层的"这名字工程里有"必须是同一个答案 ——
     // 两边各扫一遍 modules_ 就是两份权威，将来谁改判据谁漏改另一边。
     std::unordered_set<std::string> collectFormModuleNames() const;
+    // 账 §56.48: 工程内**用户控件 (.ctl) 模块名**（小写）的唯一建造点（同 collectFormModuleNames 的形）。
+    // 消费方 = 发码侧「这个 WithEvents 的源类是不是 UC」那一问。
+    std::unordered_set<std::string> collectControlModuleNames() const;
     void buildMemberAccessTable();
     // ai/084c: 类名(小写) → Class_Initialize 形参个数 (buildMemberAccessTable 顺带扫描,
     // 经 setCtorParamCounts 下发; 表内缺席 = 非本工程类, New 带实参在语义层报错)。

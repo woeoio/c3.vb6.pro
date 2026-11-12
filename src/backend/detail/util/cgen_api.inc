@@ -41,6 +41,10 @@
     // 跨模块窗体默认实例引用 (cLogs 里 FLogs.Visible / Unload FLogs) 需要知道
     // FLogs 是窗体, 才能生成 vb6_form_hwnd_FLogs() 访问器调用而非裸标识符.
     void setFormModuleNames(const std::unordered_set<std::string>& names) { knownFormModuleNames_ = names; }
+    // 账 §56.48: 工程内**用户控件 (.ctl) 模块名**（小写）—— 发码侧那一问
+    // 「这个 WithEvents 的源类是不是 UC」的唯一来源 (UC 那一路的汇不接上线:
+    // 那一路的包装器按值、处理器按地址, 本来就对不上, 接上线 = 把不一致接活)。
+    void setControlModuleNames(const std::unordered_set<std::string>& names) { knownControlModuleNames_ = names; }
     // Fix 086: 各模块 Public 常量表 (小写模块名 → 小写常量名 → 整数值).
     // 本地同名过程符号会阻止跨模块常量注入 (如 cSerialPort.Sub SetDTR 与
     // modSerialPortAPI.Const SETDTR), 此表兜底内联数值.

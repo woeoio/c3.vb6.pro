@@ -574,12 +574,22 @@
                 // .cls 模块里 WithEvents 变量必是**字段** (VB6 的类模块没有全局变量) ⇒ target
                 // 带 "me->" 前缀。裸名 = **局部变量**撞了同名字段 ⇒ 那不是那一枚 ⇒ 不接线
                 // (落进静态汇那一支的话, 那一支的 handler 是 NULL ⇒ 处理器会以空宿主被调)。
-                const bool weSkip48 = isClassModule_ && !weMember48;
+                //
+                // 账 §56.48 追加: 源类若在 **UC (.ctl) 那一路** ⇒ 也不接线。那一路的包装器
+                // 按值、处理器按地址 (既有形状, 本来就对不上 —— 详见
+                // ucTreeView/ClsTreeExplorer.cls 的 `Private WithEvents cTVP As ucTreeViewPlus`),
+                // 把汇接上线 = 把那个既有不一致**接活** ⇒ 运行期拿错指针。
+                // 判据问驱动下发的「工程内 .ctl 模块名」那张表 (唯一来源, 见 collectControlModuleNames)。
+                const bool srcUcLane48 =
+                    knownControlModuleNames_.count(Symbol::toLower(sourceClass)) > 0;
+                const bool weSkip48 = isClassModule_ && (!weMember48 || srcUcLane48);
+                if (weSkip48) {
+                    // 不是那一枚 (局部撞名 / 源类在 UC 那一路) ⇒ **一个字都不发**
+                    // (与改前同形: 查不到就不接, 连空壳 if 都不留)。
+                } else {
                 c_.emitLine("if (" + target + ") {");
                 c_.indent();
-                if (weSkip48) {
-                    // 这一格不是那个 WithEvents 字段 ⇒ 不发任何接线 (与改前同形: 查不到就不接)
-                } else if (weMember48) {
+                if (weMember48) {
                     // 逐源实例一份的汇: 堆上, 归源实例所有 (源实例出厂时放手)。
                     const std::string srcStruct48 = "vb6_cls_" + cIdent(sourceClass);
                     const std::string srcVar48 = "__src48_" + targetLower;
@@ -633,6 +643,7 @@
                 }
                 c_.dedent();
                 c_.emitLine("}");
+                }
             } else if (srcClsSym && srcClsSym->kind == SymbolKind::ComClass && srcClsSym->comHasSourceIface) {
                 // P13.23: External COM WithEvents
                 std::string iidStr = srcClsSym->comSourceIfaceIid;
