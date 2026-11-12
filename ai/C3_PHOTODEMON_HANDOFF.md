@@ -5985,3 +5985,81 @@ PD 验证通道：`dev` 已 merge 进 `probe/photodemon-emit`（`474302b7`），
    `probe/photodemon-emit` 上 dispatch（约 2 h 量级）。
 4. **G3 的形状影响**：若 PD 侧那四处 C2440 归零但形状门多出新行，先登记形状再动判据，
    不要反过来。
+
+---
+
+## §56.45 — CI 回填：GA 只剩形状门一条红（挂账），G3 在真实 PD 语料上确认
+
+### 一、GA 红面收口
+
+| run | 提交 | 红面 |
+| --- | --- | --- |
+| `43153977014` | `88ff7058` | 2 红（形状门 + vbp#4） |
+| `43155378273` | `a6a5dc04` | 3 红（形状门 + vbp#4 + **compile#2**：普查未登记） |
+| `43160074983` | `6145da6d` | 2 红（形状门 + vbp#4）⇒ **compile#2 已消** |
+| `43160918467` | `d045806b` | **1 红 = 形状门**（其余 21 个 job 全绿，vbp#4 绿） |
+
+⇒ **13 条红 → 1 条**，剩下的那条是形状门（用户裁定**暂不 bless**，挂账）。
+`Tests (vbp #4)`（ucSegmentedControl 像素用例）在 CI 上**转绿**。
+
+### 二、vbp#4 转绿的成因（两件事都是真的修复，不是扰动）
+
+1. **uc1 拉伸**（`0,0 609x49` → `0,0 751x49`）：`c7a24657` —— Form_Resize 提到显示前
+   （根因与修法见 §56.44 §一）。
+2. **像素面**：`d045806b` —— 诊断开关默认关，CI 第一次跑在**干净**的那条路上也绿。
+   ⇒ 此前「开着 [AD-paint] 才绿、关着就白块」的那个绿确实是**扰动换来的**；
+   真正让内容落屏的是**布局在显示前就定型**（Form_Resize 提前 ⇒ 首帧就是最终布局），
+   像素竞态随之消失。
+
+### 三、PD 侧：G3 在真实语料上确认（emit probe `43161138184` / `43161051360`，均 success）
+
+* `EMIT_EXIT=0`、`EMIT_SECONDS=87.8`、`PEAK_WORKING_SET_MB=9451`（与已知的 ~9.45 GB 峰值吻合）、
+  `STDERR_LINES=200`（57 条 `VB3003` warning，**零 error**）；
+* 发出的 C 里那四处返回槽全部装箱成功（`pd_emit.out` 行号）：
+
+```c
+300575: vb6_VARIANT retMeth = vb6_VariantFromProjectInstance(vb6_pdCanvas_GetZoomDropDownReference(me));
+391823: vb6_VARIANT retMeth = vb6_VariantFromProjectInstance(vb6_pdStatusBar_GetZoomDropDownReference(me));
+399671: vb6_VARIANT retMeth = vb6_VariantFromProjectInstance(vb6_pdTreeviewOD_AccessUnderlyingTreeSupport(me));
+401624: vb6_VARIANT retMeth = vb6_VariantFromProjectInstance(vb6_pdTreeviewViewOD_AccessUnderlyingTreeSupport(me));
+```
+
+⇒ PD 整编那四处 `cl C2440`（`vb6_cls_<X>*` → `vb6_VARIANT`）的**病灶形状已消失**。
+PD x86 整编（`pd_build_probe.yml`，`probe/photodemon-emit` = `f0adc504`）已 dispatch：
+run `43162821378`（约 2 h 量级）。
+
+### 四、形状门归因：本轮三刀**零影响**（可复核，不靠"应该"）
+
+形状门把清单发布到 `ci/emit-manifest` 分支，取三个时点逐行比对（去掉注脚，只比数据行）：
+
+| 时点 | 对 `emit-manifest.expected.txt` 的差异 | 涉及文件数 |
+| --- | --- | --- |
+| head=`85cb509b`（G1+G2 **之前**） | 36 条 = **18 行** | 18 |
+| head=`4d02349c`（G1+G2 **之后**） | 36 条 = **18 行** | 18 |
+| head=`d045806b`（G3 + Form_Resize 之后） | 36 条 = **18 行** | 18 |
+
+三个时点**两两逐行比对**：只差**一行** —— 且那一行是清单头部的
+`# c3-exe sha256=... size=...`（C3.exe 本身的哈希，任何代码改动都会动它）。
+**678 行数据行三处逐字节相同** ⇒
+
+* **G1+G2、G3、Form_Resize 三刀对 emit-manifest 零影响**（与 §56.44 §3.5 的预判一致）；
+* 那 **18 行差异是本轮之前就有的**（本轮之前的所有轮次都是 18 行），不是本轮引入的，
+  也不是"顺手更新"的对象 —— 仍按用户裁定**挂账**，等批准 bless 时**一次**登记。
+
+### 五、本机一条环境性 flake（记录，不改判据）
+
+本机连跑判据时出现过一次：`FAIL 悬停 uc1 禁用项的光标不是 IDC_NO (得到 65539, 期望 65559)`。
+65539 = `IDC_WAIT`（系统「应用程序正在忙」的光标），不是 `IDC_ARROW` ⇒
+**那次是产物在那一刻还没处理 WM_SETCURSOR**（机器同时在下载 CI 工件）。
+空载复跑 ⇒ `disabled hover cursor=65559 idcNo=65559`，`PASS`。
+判据侧不动（CI 上该读数本就记 `unobservable`，session-0 无输入桌面）。
+
+### 六、下一刀（接续点）
+
+1. **PD x86 整编** run `43162821378` 的读数：四处 C2440 是否归零（emit 侧已确认形状变了，
+   整编侧要确认 cl 真过），以及有没有新冒出来的 C2440。
+2. **形状门**：维持挂账（18 行，本轮零影响已复核）。批准 bless 时**一次**登记
+   （`scripts\rebless_emit_manifest.ps1 -Bless`，只提交 `emit-manifest.expected.txt`）。
+3. **GA 现状**：1 红（形状门）。下一刀若要继续压红，方向是**新的产品缺口**，不是这两条。
+4. **像素竞态**这一族还有余味：诊断开关已留好透传通道（CI 的 env 加 `C3_AD_TRACE=1`
+   即可开一轮诊断，**不必改代码**），下次再撞上同一族症状时直接用。
