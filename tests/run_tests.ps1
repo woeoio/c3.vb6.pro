@@ -7656,6 +7656,13 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_MsgBox(s, sty, ttl, hlp)',    # 改前: 四枚实参进三参原型 = 多递
         'vb6_MsgBox(s, sty, ttl, v, ctx)'  # 改前: Variant 裸进 BSTR 槽
     )
+    # 富贵竹合并 FIX-002: Lexer 的 isAlpha/isAlphaNumeric 只认 ASCII, UTF-8 中文标识符
+    #   首字节落进 default 分支 ⇒ VB1005「意外字符」(最小夹具修前 60 个错)。
+    #   钉两枚: 中文过程名能进 vb6_Main 的调用点 + 中文串字面量按 Unicode 转义落地。
+    Test-EmitcShape "fgz_fix002_cn_ident" @("$Tests\fgz_fix002\fgz_cn_ident.bas") @(
+        'void vb6_Main(void)',
+        '\u4E2D\u6587\u503C'
+    )
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，
