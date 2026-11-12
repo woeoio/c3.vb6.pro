@@ -7673,6 +7673,14 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcShape "fgz_fix003_colon_control" @("$Tests\fgz_fix003\fgz_colon_control.bas") @(
         'void vb6_Main(void)'
     )
+    # 富贵竹合并 ICE-001: .frm 属性里的 frx 引用名是 UTF-8 窄串, 直接喂给
+    #   path::operator/(std::string) 被 MSVC STL 按 ACP(936) 解释, 中文序列非法 ⇒
+    #   filesystem_error 无人接 ⇒ 编译器 ICE。修法是走 utf8ToPath 转宽路径再拼。
+    #   夹具用文档点名的「创」(E5 88 9B, 88 不是合法 CP936 trail byte) 作文件名。
+    Test-EmitcShape "fgz_ice001_frx_utf8_name" @("$Tests\fgz_ice001\FgzIce001.vbp") @(
+        '#include <stdint.h>',
+        'vb6_mod_FrmCnU_init'
+    )
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，
