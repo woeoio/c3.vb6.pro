@@ -285,7 +285,12 @@ void CCodeGen::visit(LetStmt& node) {
     } else {
         // Fix 038b-6/045: 具体类型目标 + Variant 值 → 自动提取 (同 AssignmentStmt 路径)
         // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-        bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 距 emitExpr 超 5 行)
+        // 账 §56.40: 与 AssignmentStmt 同一枚问句 (cgen_assign_value_sem.inc 同一处
+        // 改法) —— 旧注解「ast 不可得 (value 距 emitExpr 超 5 行)」在本站不成立:
+        // node.value 就在手边。问上 AST 那一半, 「UDT 字段声明为 Variant」这一族
+        // (C 文本不命中任何前缀表) 才认得出, 读腿才套 vb6_VariantToString/ToLong/
+        // ToDouble ⇒ 修 C2440 (PhotoDemon pdDictionary.c 239/248 同族)。
+        bool valueIsVariant = isVariantSlot(value, node.value.get());
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
             auto& id = static_cast<IdentifierExpr&>(*node.value);
             std::string idLower = id.name;

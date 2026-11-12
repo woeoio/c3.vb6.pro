@@ -5020,3 +5020,210 @@ Clone.bas `Tools_Clone` + Comp.cls + Main.bas），三种形状对照：
    的 **2 行**新输入（预期仍然只有新增、改写 0）。
 2. 拿 PD full build 的新 C2440 报表对账：确认 F1 那 9 条消失、其余族不动。
 3. 按 §56.36 顺序进 **F2（11 条，零参 UDT 取值当 ByRef 实参）**。
+
+### 56.38 F2 收口（零参 UDT 返回不写括号）+ 形状门登记 + STATIC 重钉
+
+#### 一、CI 前提修正（转达的两个 run 号与事实不符）
+
+- `43098297035`（PD 全量）= **startup_failure**，0 个 job，没有任何工件可下。
+- `43098126460`（回归）= 从 20:47 起一直 **queued**，从未跑过；同批的
+  `43096349285` / `43098279287` 也一样。→ 已取消 `43086544253`（早于 F1，无法对账）
+  与 `43120084865`；按 F1+F2 的 head 重新派发：
+  - PD 全量 `43119969375`（head `3eea0d7f`，probe 分支合并 dev 后）；
+  - 回归 `43120794775`（head `8f958102`）。
+- 回归读数：**failure**，红面 = shape oracle（新增 5 / 改写 2）+ 11 条既有 STATIC
+  + 1 条 `[GUI] ucSegmentedControl` 像素判据（既有，与本刀无关）。**compile / vbp
+  那一侧没有功能红**（`udt_callret_noparens` 本刀哨兵 PASS）。
+
+#### 二、形状门（CI 清单，head `8f958102`）
+
+- 期望 673 → 实得 678：**新增 5**（`tests/pd_udtcallret` 的 5 个 `.bas` 输入：
+  UdGeom / UdHolder / UdTools / UdUse / UdWic）、**缺席 0**、**改写 2**。
+- 改写归因（本机两代二进制对同一份 `.vbp` 逐行 diff，差异各 14 行、两份同形）：
+  `2020/Proyecto1.vbp`、`2020/ucProgressCircular/Proyecto1.vbp`，全部是 **F1** 的
+  UC 默认成员折叠，例如
+
+  ```
+  -  ... vb6_CtrlArr_GetAt(&vb6_arr_TxtARGB, 3) ...
+  +  ... vb6_GetControlText(vb6_CtrlArr_GetAt(&vb6_arr_TxtARGB, 3))  /* default prop: .Text */ ...
+  ```
+
+  读腿 3 处（`> 255` / `< 0` / `IsNumeric` 实参位）+ ARGB/FillPicture 实参位若干。
+  **F2 对既有语料零改写**（这两份没有任何零参 UDT 返回站点）。
+- 已 `scripts/rebless_emit_manifest.ps1 -Bless` 登记：**678 行（改写 2 / 新增 5 /
+  退场 0）**，复算逐行相同，`check_manifest_coverage` K1..K3 绿
+  （inputs=678 [.vbp=239 .bas=439]）。提交 `5470f605`。
+- 口径提醒：本机清单（`.temp/emit_f2.txt`，677 = 673+4，跑在补 `UdTools.bas` 之前）
+  只作集合比对（新增/消失/改写），**哈希一律以 CI 那台为准**（§56.37 第 3 条）。
+
+#### 三、F2 落地（`c0800c60` + 夹具 `8f958102`）
+
+- 根因：VB6 允许零参函数/方法**不写括号**当值用，AST 是 `IdentifierExpr` /
+  `MemberAccessExpr`，而 `inferUdtTypeOfExpr` 原来只认 `IndexOrCallExpr` ⇒ 返回 UDT
+  的站点掉回 `(intptr_t)(vb6_type_X)` 兜底（ByRef 实参 C2440、With 目标 C2102）。
+- 判据仍然只有一枚：`CCodeGen::udtReturnOfClassMember(clsC, memberName)`，四张 AST
+  形状共用同一张表（moduleScope 的 `variableTypeName` + Class 符号
+  `P().memberReturnTypes`，最终必须解析成 `SymbolKind::UserDefinedType`）。
+  `cgen_with.cpp` 的 `isFnRet160w` 由 lambda `memberIsUdtCall` 提供（裸名 Function/
+  PropertyGet、`obj.Method()`、无括号 `obj.Method`）；数组元素/字段链仍是左值。
+- 夹具 9 文件（`tests/pd_udtcallret`）：裸名 `GUID_NULL`、成员链
+  `m_Brush.GetBrushColorRGBA`、`With srcImg.GetBoundaryRectF`、
+  `pdHolder.GetImg.GetBoundaryRectF`、跨模块 `Tools_Pencil.GetRect()`（标准模块 +
+  类模块两种调用方）。钉子 `udt_callret_noparens`：6 条正（`vb6_type_RectF _vb6_anytmp0 = ...`
+  / `vb6_type_RectF _vb6_withret`）+ 6 条反（`(intptr_t)(vb6_pdWic_GUID_NULL(` 等）。
+  判据脚本 `scripts/check_udt_callret_noparens.ps1` R1..R6，本机 PASS。
+- 未复现的 PD 孤形：`pdCompositor.c:1100/1104` 的
+  `Tools_Pencil.GetModifiedUpdateRectF()`（跨模块 + Optional）——夹具里两种调用方都能
+  折成 `vb6_type_RectF`，故其失败原因留给 PD 读数定性（见下节）。
+
+#### 四、STATIC 哨兵
+
+- `ctrl_prop_type_authority` A7：F1 新增了**两个合法消费点**（`ctrlDefaultReadExpr` /
+  `emitUcDefaultPropLet` 在 `cgen_util_ctrl.cpp` 各问 `ctrlDefaultPropOf` 一次；
+  `cgen_assign_stmt_special.inc` 的第二站 = 控件数组元素写）。钉数 5 → **7**，
+  per-file 钉住（`cgen_util_ctrl.cpp=2`、`cgen_assign_stmt_special.inc=2`）。同问同一
+  权威，不是放宽；任何一站自己抄判据，per-file 计数会变并被点名。提交 `8ad4fb10`。
+- 其余 **11 条既有红**（`set_rhs_object_context` / `object_slot_boxing` /
+  `legacy_view_arg_owners` / `box_temp_reclaim` / `class_refcount_authority` /
+  `iface_view_authority` / `legacy_slot_key_owners` / `builtin_opt_defaults` /
+  `g4_receiver_class_gate` / `g4_udt_member_nd` / `g4_value_member_paren`）本机逐条
+  复跑，与 `f0c502c7` / `20ee86a2` 同款（§31.3 / §42.7 已记账），**本刀未新增**。
+
+#### 五、PD 全量读数（run 43119969375，head `3eea0d7f` = dev `c0800c60`）
+
+工件：`photodemon-full-build-logs`（`c3-error.log` + `pd_build.codes.txt`），
+本地落在 `.temp/pd_f1f2/`，归一化后的 C2440 行 = `.temp/pd_f1f2/c2440.txt`。
+基线 = `.temp/pd_new2/c2440.txt`（run 43071115257，head `1c460d6b`，66 行）。
+⚠ 这一格 delta 含**三笔**：`20ee86a2`（跨模块同名过程限定副本）+ F1 + F2 ——
+所以「多消失的 9 条 / 新出现的 2 条」不能单独记在 F1/F2 账上（见下面第 4、5 点）。
+
+- **C2440：66 → 39（−27）**。
+- **F1 的 9 条全部归零**：`FormLevels.c 1460/1464/1580/1618/2694`、
+  `dialog_ToneMapping.c 988/989/990/991` —— 0 行残留。
+- **F2 的 11 条全部归零**：`pdPSPShape.c 501`、`Drawing.c 1248/1378`、
+  `Tools_Crop.c 2256/2316/2427`、`Tools_Fill.c 437/457/739`、`WIC.c 415/432`
+  —— 0 行残留。**同形的 `pdCompositor.c 1100/1104` 也一并归零**（原「未列入
+  F2 的同类形状」，读数证明与 F2 同根 —— 这条现在是**已确认**，可从在册缺口里划掉）。
+- **连坐消失（非 F1/F2 直接目标，共 9 条）**：`Drawing.c 1252/1256/1382/1386`
+  （BSTR↔float）、`1306/1436`（float→BSTR）、`toolpanel_Pencil.c 1085`
+  （VARIANT→int16）。**未逐条归因**（三笔改动都在这段区间里）。
+- **新出现（2 条）**：`FormCustomFilter.c 1203/1207`（`double → BSTR`）。
+  该 .c 对应 `Forms\Effects_CustomFilter.frm`，同文件有 `tudF(i)`（UC 控件数组
+  默认成员，Double）与 `tudF(i).Value`；**最可能是 F1 折叠把 Double 送进 BSTR
+  位置**，但同样未逐条归因（也可能是 `20ee86a2` 的限定副本换了重载）。已登记为
+  下一族候选（§56.39 缺口表第 8 条）。
+- 全码表（同两份 `pd_build.codes.txt` 相减，同样含三笔 delta）：C2198
+  **75 → 35（−40，主因是 `20ee86a2`）**、C2102 **8 → 4**、C2106 **10 → 6**、
+  C2112 **2 → 0**、C4244 9128 → 9116、C4047 8034 → 7993、
+  C4102 3845 → **3954（+109，未用标号警告，非错误）**；LINK_DIAG=0、
+  UNRESOLVED=0 不变。
+
+#### 六、新 C2440 形状桶（39 行，按形状归类；行号见 `.temp/pd_f1f2/c2440.txt`）
+
+| 形状 | 条数 | 站点 |
+| --- | --- | --- |
+| `vb6_VARIANT` ↔ 具体型 | 21 | pdDictionary 239/248/258、pdCBZ 411、pdSelection 155、pdSpriteSheet 315、pdSpinner 919、pdCanvas 165、pdStatusBar 160、pdTreeviewOD 126、pdTreeviewViewOD 109、Evaluator 474×2/494×2/514、TextSupport 357/370/386/398、toolpanel_TextBasic 1811 |
+| `void *` ↔ float/double（F3） | 10 | pdSelection 1916/1921/1928/1930/1934/1936/1941/1944/1962/1965 |
+| `BSTR` ↔ double（type cast） | 2 | pdPalette 578/706 |
+| `double → BSTR`（F1 余波） | 2 | FormCustomFilter 1203/1207 |
+| UDT → BSTR | 2 | PDMath 629（RectF）、Fonts 1054（OUTLINETEXTMETRIC） |
+| `void * → double` | 1 | pdLayerList 334 |
+| `vb6_type_LOGFONTW → *` | 1 | pdTextRenderer 1334 |
+| `vb6_VARIANT → vb6_VARIANT *` | 1 | pdCBZ 411（已计入上表第一行） |
+
+### 56.39 接续指南（2026-11-12 停线点；下一次从这里直接开工）
+
+#### 一、停在哪
+
+- 已收口：**F1（9 条，UC 控件数组元素默认成员，`356f21ae` + 夹具）**、
+  **F2（11 条，零参 UDT 返回不写括号，`c0800c60` + 夹具 `8f958102`）**；
+  形状门已按 CI 清单登记（`5470f605`，678 行）；STATIC 哨兵 A7 重新钉（`8ad4fb10`）。
+- 本机 `-Category syntax`：**PASS=226 FAIL=0**（`udt_callret_noparens` 在内）。
+- 远端：`origin`（gitcode）与 `github` 两个 remote，dev 分支同点 = 本节提交后核对
+  `git rev-parse HEAD` 与 `git ls-remote origin dev` / `git ls-remote github dev`。
+- 工作区：干净，只允许既有的未跟踪 `.zcodeignore`。
+
+#### 二、在册缺口（按收益排序；行号以 `.temp/pd_new2/c2440.txt` 基线 66 行为准）
+
+1. **VARIANT 族（约 23 条，下一刀首选）** —— 形状：`vb6_VARIANT` 与具体型互转
+   （`VARIANT→BSTR` / `VARIANT→int32_t` / `int→VARIANT` / `cls*→VARIANT`）。
+   站点：`pdDictionary.c 239/248/258`、`pdCBZ.c 411`、`pdSelection.c 155`、
+   `pdSpriteSheet.c 315`、`pdSpinner.c 919`、`pdCanvas.c 165`、`pdStatusBar.c 160`、
+   `pdTreeviewOD.c 126`、`pdTreeviewViewOD.c 109`、`Evaluator.c 474×2/494×2/514`、
+   `TextSupport.c 357/370/386/398`、`toolpanel_Pencil.c 1085`、
+   `toolpanel_TextBasic.c 1811`、`pdTextRenderer.c 1334`（LOGFONTW→指针）。
+   **未定位**：这是按错误文本归的桶，根因未查（下一刀先做小语料复现）。
+2. **F3 跨窗体 UC 控件数组默认成员（10 条）** —— `toolpanel_Selections.tudSel(n)`：
+   `pdSelection.c 1916/1921/1928/1930/1934/1936/1941/1944`（void*↔float）、
+   `1962/1965`（void*↔double）。**根因已定位**（VB 源 `Classes\pdSelection.cls`
+   L2059-2146；C 侧站点：读腿 `src/backend/expr/cgen_expr_call.cpp` 只认
+   `knownControlArrays_`（本模块），写腿 `detail/stmt/cgen_assign_stmt_special.inc`
+   同；跨窗体控件描述住在 `designerFiles_`，访问器 `vb6_form_ctrl_<Form>_<Ctrl>(idx)`
+   返回裸 `void*`）。
+   本会话已把修法做到「本机夹具 6 形全对」，但按停线指令**未提交、已回退**，
+   设计可直接复用：
+   - 新增 `CCodeGen::ucDefaultPropOfExternal(form, ctrl)`（`cgen_util_ctrl.cpp`）：
+     `suppressDefaultProp_` / `inMemberObjectEmit_` 两闸 → `findExternalFormControl`
+     →（`index >= 0`）→ **只认 `findUserControlSpec(ext->controlTypeName)`** →
+     `findUcDefaultMember` → `ucDefaultReadPlan`，填 `CtrlDefaultProp`；
+   - 读数文本拆成 `ctrlDefaultReadExprOf(fold, recv)`，`ctrlDefaultReadExpr` 委托它；
+   - 读腿钩子放 `cgen_expr_call.cpp`（callee = MemberAccess、object = 外部窗体名、
+     `positional.size()==1`），写腿钩子放 `cgen_assign_stmt_special.inc` 同形；
+   - `cgen_setlet.cpp` 的 `emitSetObjectRhs` 对象上下文闸要扩到跨窗体数组元素。
+   **坑（实测）**：① `FrmControlType` 是**按类型名关键字**的启发式分类，
+   `PdExtSlider` 会被认成 `Slider`（=36）—— 判「是不是工程内 UC」**只能**问
+   `findUserControlSpec`；② 显式 `.Value`（`frm.Ctrl(i).Value`）必须用
+   `inMemberObjectEmit_` 挡住内层折叠，否则拼出
+   `vb6_ComGetDoubleProp(...)  /* default prop: .Value */.Value`（语法坏）。
+3. **BSTR↔float/double（2 条）** —— `pdPalette.c 578/706`（BSTR→double）。未定位。
+   （`Drawing.c` 那 6 条已在 §56.38.5 消失，不用再管；连坐成因未逐条归因。）
+4. **`double → BSTR`（2 条，F1 余波，未归因）** —— `FormCustomFilter.c 1203/1207`
+   （对应 `Forms\Effects_CustomFilter.frm` 的 `tudF(i)` / `tudF(i).Value`）。
+   §56.38.5 读数里新出现的两条，最可能来自 F1 的默认成员折叠，也可能是
+   `20ee86a2` 的限定副本换了重载 —— **下一刀先做小语料复现再定**（别直接改）。
+5. **零散（3 条，未定位）** —— `pdLayerList.c 334`（`(double)void*`）、
+   `PDMath.c 629`（RectF→BSTR）、`Fonts.c 1054`（OUTLINETEXTMETRIC→BSTR）。
+6. **形状门** —— §56.38 的登记已落地；如需复核，CI 清单来源是
+   `ci/emit-manifest` 分支，**不要**用本机清单 bless（4 份环境差异会污染）。
+7. **STATIC 既有红 11 条**（见 §56.38 四）—— 在册、非本线引入，不要为了转绿改判据。
+
+> 已划掉：`pdCompositor.c 1100/1104` —— §56.38.5 读数证实随 F2 归零（已确认）。
+
+#### 三、尚未验证完的项
+
+- **形状门登记后的绿 run**：`43120794775` 是登记**之前**的清单（红是预期的）；
+  `8ad4fb10` 推送后触发的新回归（`43131259972`）已复核 `--log-failed`：失败面只剩
+  11 条既有 STATIC 与 GUI `ucSegmentedControl` 像素判据，**manifest/形状门已不在其中
+  ⇒ 登记后形状门已转绿（已确认）**。
+- `FormCustomFilter.c 1203/1207` 与 `Drawing.c` 那 6 条连坐消失的**逐条归因**
+  （delta 含 `20ee86a2` + F1 + F2 三笔）。
+- `pdCompositor.c 1100/1104` 已确认归零（§56.38.5），无需再查。
+
+#### 四、本机硬规则
+
+- **禁止本机整工程跑 PhotoDemon**（16 GB 会进交换）；PD 全量只在 CI 的
+  `pd_build_probe.yml` 跑，且必须 `--ref probe/photodemon-emit`。
+- **本机也不要整工程 `--emit-c tests/photodemon/PhotoDemon.vbp`**：实测 C3 峰值
+  ~7.2 GB、空闲内存掉到 1.4 GB（2026-11-12 09:14 撞过，已中止）。要看形状只发
+  单模块/小语料；PD 级 diff 一律用 CI 工件。
+- 构建：`. .\scripts\env.ps1 | Out-Null; ninja -C .build -j1`；开建前空闲内存须
+  > 8 GB；改 `.inc` 不触发重编，要 touch 宿主 `.cpp`（如
+  `cgen_assign_stmt_special.inc` 的宿主是 `src/backend/stmt/cgen_assign.cpp`）。
+- 本机可跑 `tests\run_tests.ps1 -Category syntax`（~15 分钟，PASS=226）。
+- 夹具：`tests\run_tests.ps1` 的 `Test-CodegenNote` 用 `Invoke-CodegenProj` 把
+  给定的 `.cls/.frm/.ctl/.bas` 合成一个工程发码；形状门只枚举 `.vbp|.bas`
+  （`.cls/.frm/.ctl` 不入清单，所以这类夹具不会新增登记的哈希行）。
+- probe 分支同步：worktree `.temp/probe_sync` 里 merge dev → push
+  `probe/photodemon-emit`，再 `gh workflow run pd_build_probe.yml`。
+
+#### 五、CI 用法要点
+
+- 看单：`gh run list --limit 8 --json databaseId,status,conclusion,headSha,name`；
+  看 job：`gh run view <id> --json jobs`（**先看 job 数**，0 = startup_failure，
+  排到 `queued` 也不算跑过）；看红：`gh run view <id> --log-failed`。
+- 形状门红：`pwsh -File scripts\rebless_emit_manifest.ps1`（只看，印三格）→
+  逐条归因（改写行用两代二进制对同一 `.vbp` 发码 diff）→ `-Bless` → 复算绿 →
+  **只提交 `emit-manifest.expected.txt`**。
+- 判据/钉子链：`scripts\check_<族名>.ps1` + `tests\run_tests.ps1` 的
+  `Test-<族名>`（STATIC 分片）与 `Test-CodegenNote`（正/反钉子）。
+- 三件要回头问用户：**改判据、bless 既有形状、force-push**。

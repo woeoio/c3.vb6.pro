@@ -2051,6 +2051,20 @@ function Test-UdtCallretNoparens {
     }
 }
 
+function Test-VariantUnbox {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] variant_unbox ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_variant_unbox.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-M3BuiltinOptDefaults {
     $script:total++
     Write-Host -NoNewline "  [STATIC] m3_builtin_opt_defaults ... "
@@ -12159,6 +12173,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-NpCallFirstArgBinop }
     if (Enter-StaticShard) { Test-UcDefaultMember }
     if (Enter-StaticShard) { Test-UdtCallretNoparens }
+    if (Enter-StaticShard) { Test-VariantUnbox }
     if (Enter-StaticShard) { Test-CtrlPropTypeAuthority }
     if (Enter-StaticShard) { Test-FormDrawState }
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }
@@ -12930,15 +12945,18 @@ if ($Category -in @("all", "syntax")) {
         "$Tests\pd_udtcallret\UdGeom.bas", "$Tests\pd_udtcallret\UdImg.cls",
         "$Tests\pd_udtcallret\UdHolder.bas", "$Tests\pd_udtcallret\UdBrush.cls",
         "$Tests\pd_udtcallret\UdPen.cls", "$Tests\pd_udtcallret\UdShape.cls",
-        "$Tests\pd_udtcallret\UdWic.bas", "$Tests\pd_udtcallret\UdUse.bas") @(
+        "$Tests\pd_udtcallret\UdWic.bas", "$Tests\pd_udtcallret\UdUse.bas",
+        "$Tests\pd_udtcallret\UdTools.bas") @(
         "vb6_type_Guid _vb6_anytmp0 = vb6_pdWic_GUID_NULL();",
         "vb6_type_RGBQuad _vb6_anytmp0 = vb6_pdBrush_GetBrushColorRGBA(me->m_Brush)",
         "vb6_type_RectF _vb6_anytmp0 = vb6_pdImg_GetBoundaryRectF((void*)vb6_pdHolder_GetImg())",
+        "= vb6_Tools_Pencil_GetRect(-1, 0);",
         "vb6_type_RectF _vb6_withret",
         "/* With obj ref (fn ret copy) */") @(
         "(intptr_t)(vb6_pdWic_GUID_NULL(",
         "(intptr_t)(vb6_pdBrush_GetBrushColorRGBA(",
         "(intptr_t)(vb6_pdImg_GetBoundaryRectF(",
+        "(intptr_t)(vb6_Tools_Pencil_GetRect(",
         "= &(vb6_pdImg_GetBoundaryRectF(",
         "(void*)vb6_pdImg_GetBoundaryRectF(srcImg)")
     # §56.28: ParamArray 元素回写那一站的承接临时必须是 vb6_VARIANT。
@@ -13491,6 +13509,30 @@ if ($Category -in @("all", "syntax")) {
         "q2 = vb6_WithMemberHost_ScaleFactor(") @(
         "vb6_ComCall",
         "void* _vb6_with_0 =")
+
+    # 账 §56.40 (C2440 VARIANT 族): 「Variant 表达式 → 具体型」的读腿。
+    # 夹具两个 .cls (不进形状门清单, 所以这一刀不改 emit-manifest):
+    #   VbUdtField   —— UDT 字段声明为 Variant, 读进 String/Double/Long
+    #   VbVariantOps —— 类方法返回 Variant, 进 Like / Mod / ^ / ParamArray / 形参
+    # 改前这一族**一律不拆箱**: 整只 vb6_VARIANT 结构体直接递给 BSTR / double /
+    # int32_t 形参 = C2440 (PhotoDemon pdDictionary.c 239/248、
+    # Evaluator.c 474/494/514、pdSpinner.c 919、TextSupport.c 357/370/386/398、
+    # toolpanel_TextBasic.c 1811)。
+    # 三条 Absent 是反面证人 (改前 BASE 的读数, 两头都数过): 裸 BSTR 赋值 /
+    # 裸 (int32_t)() 强转 / 没拆箱的 Like 操作数。
+    Test-CodegenNote "variant_unbox_shapes" @("$Tests\pd_variant_unbox\VbUdtField.cls",
+                                              "$Tests\pd_variant_unbox\VbVariantOps.cls") @(
+        "vb6_BSTR_Assign(&s, vb6_VariantToString(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem))",
+        "vb6_BSTR_Assign(&vb6_ret_ReadToReturnString, vb6_VariantToString(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem))",
+        "d = vb6_VariantToDouble(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem);",
+        "l = vb6_ChkLong(vb6_VariantToLong(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem));",
+        "vb6_Like(vb6_VariantToString(",
+        "vb6_Num_Mod(vb6_VariantToLong(",
+        "vb6_Pow(vb6_VariantToDouble(",
+        "vb6_PA_SetLong(_pa_0, 0, vb6_VariantToLong(") @(
+        "vb6_BSTR_Assign(&s, VB6_SA_AT(",
+        "vb6_Num_Mod((int32_t)(",
+        "vb6_Like(vb6_VbVariantOps_GetS(")
 
     # 账 #305 第二百七十一刀: VB6 的 out-param 惯用写法是「把**本过程的返回变量**当实参递出去」——
     # 实证 = 靶工程 Common/Common.bas:1017 `Public Function CloneOLEFont(ByVal Font As IFont)

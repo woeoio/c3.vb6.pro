@@ -231,7 +231,15 @@
         //       VB6_SA_AT(BSTR, arr, i) = func() (func 返回 Variant)
         //       int32_t_var = vb6_VariantArrayGet(...)
         // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-        bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
+        // 账 §56.40: 这一问原本只问**文本那一半** (ast 传 nullptr) —— 于是
+        // 「RHS 是不是整只 Variant 槽」只在**文本上认得出**的那些形状 (RTL/项目
+        // 函数前缀 / VB6_SA_AT(vb6_VARIANT…) / 类字段尾注) 有拆箱, 而「UDT 字段
+        // 声明为 Variant」这一族 (C 文本是 VB6_SA_AT(vb6_type_X, arr, i).member,
+        // 不命中任何前缀表) 一律不拆 ⇒ C2440 (PhotoDemon pdDictionary.c 239/248:
+        // `dItem As Variant` 读进 String 变量 ⇒ 整只 vb6_VARIANT 交给 BSTR 形参)。
+        // AST 那一半 (isDefinitelyVariantExpr) 本来就答得对, 只是没被问到 ——
+        // node.value 就在手边, 不是「拿不到」 (旧注解那句 P1.3 判词不成立于本站)。
+        bool valueIsVariant = isVariantSlot(value, node.value.get());
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
             auto& id = static_cast<IdentifierExpr&>(*node.value);
             std::string idLower = id.name;

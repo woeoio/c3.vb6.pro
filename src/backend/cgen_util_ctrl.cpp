@@ -2636,7 +2636,12 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
                                  bool udtFixedField) {
     // Fix 038b-6: BSTR 目标 + Variant 值 → 先提取 BSTR
     // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-    bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
+    // 账 §56.40: 同 AssignmentStmt 那一处 (cgen_assign_value_sem.inc) 的改法 —— 问上
+    // AST 那一半 (rhs 是现成的形参, 不是「拿不到」)。不修这一格, 「UDT 字段声明为
+    // Variant」这一族 (C 文本 VB6_SA_AT(vb6_type_X, arr, i).member 不命中任何前缀表)
+    // 仍然不拆箱 ⇒ 整只 vb6_VARIANT 交给 vb6_BSTR_Assign ⇒ C2440
+    // (PhotoDemon pdDictionary.c 239/248: `dItem As Variant` 读进 String 变量)。
+    bool valueIsVariant = isVariantSlot(value, rhs);
     if (!valueIsVariant && rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
         auto& id = static_cast<IdentifierExpr&>(*rhs);
         std::string idLower = id.name;
