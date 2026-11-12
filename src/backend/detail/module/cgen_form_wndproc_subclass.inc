@@ -214,6 +214,33 @@
                                 + fn + "(&vb6_button, &vb6_shift, &vb6_x, &vb6_y); }");
                 }
             };
+            // 富贵竹 FIX-009 §7: 剩下六条转发臂 (_MouseDown/_MouseUp/_KeyPress/
+            // _KeyDown/_KeyUp/_DblClick) 的控件数组 Index 与 evCallMouseMove 同口径补齐。
+            // 命中判据 = 数组控件 + 处理器首形参名 Index + 形参数够"数组版完整签名"。
+            // 命中时首参传运行时下标 (安装侧 SetPropW(si+1) 读回再 -1)；未命中 (非数组、
+            // 或处理器没写 Index) ⇒ 发码与修前逐字相同，零回归。
+            // 形参名判据是必需的: _DblClick 单形参既可能是数组的 Index，也可能是 UC/OCX
+            // 的 Cancel 出参，只看 params.size() 会把 Cancel 当 Index 传成下标。
+            auto evIndexArm = [&](const char* suffix, size_t arrayParamCount) {
+                const Symbol* sym = symTab_.lookup(info.ctrlName + suffix);
+                return info.arrayIndex >= 0 && sym
+                    && sym->P().params.size() >= arrayParamCount
+                    && Symbol::toLower(sym->P().params[0].name) == "index";
+            };
+            // decl/args 是"非数组口径"的原型形参串与实参串；withIndex 时在两者前面各补
+            // 一枚 int16_t* 的运行时下标。调用方仍负责外层 { } 与局部变量声明。
+            auto emitEvCall = [&](const char* suffix, size_t arrayParamCount,
+                                  const std::string& decl, const std::string& args) {
+                std::string fn = eventHandlerFn(info.ctrlName, suffix);
+                if (evIndexArm(suffix, arrayParamCount)) {
+                    c_.emitLine("int16_t vb6_evindex = (int16_t)((INT_PTR)GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1);");
+                    c_.emitLine("extern void " + fn + "(int16_t*, " + decl + "); "
+                                + fn + "(&vb6_evindex, " + args + "); }");
+                } else {
+                    c_.emitLine("extern void " + fn + "(" + decl + "); "
+                                + fn + "(" + args + "); }");
+                }
+            };
             // GotFocus (WM_SETFOCUS)
             if (info.hasGotFocus) {
                 c_.emitLine("if (msg == WM_SETFOCUS) " + evCallBlock("_GotFocus"));
@@ -318,7 +345,6 @@
 
             // MouseDown
             if (info.hasMouseDown) {
-                std::string fn = eventHandlerFn(info.ctrlName, "_MouseDown");
                 c_.emitLine("if (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN || msg == WM_MBUTTONDOWN) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
@@ -327,13 +353,13 @@
                 c_.emitLine("else if (msg == WM_MBUTTONDOWN) vb6_button = 4;");
                 c_.emitLine("if (wp & MK_SHIFT) vb6_shift |= 1; if (wp & MK_CONTROL) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
                 c_.emitLine("float vb6_x = (float)(int16_t)LOWORD(lp); float vb6_y = (float)(int16_t)HIWORD(lp);");
-                c_.emitLine("extern void " + fn + "(int16_t*, int16_t*, float*, float*); " + fn + "(&vb6_button, &vb6_shift, &vb6_x, &vb6_y); }");
+                emitEvCall("_MouseDown", 5, "int16_t*, int16_t*, float*, float*",
+                           "&vb6_button, &vb6_shift, &vb6_x, &vb6_y");
                 c_.dedent();
                 c_.emitLine("}");
             }
             // MouseUp
             if (info.hasMouseUp) {
-                std::string fn = eventHandlerFn(info.ctrlName, "_MouseUp");
                 c_.emitLine("if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
@@ -342,40 +368,38 @@
                 c_.emitLine("else if (msg == WM_MBUTTONUP) vb6_button = 4;");
                 c_.emitLine("if (wp & MK_SHIFT) vb6_shift |= 1; if (wp & MK_CONTROL) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
                 c_.emitLine("float vb6_x = (float)(int16_t)LOWORD(lp); float vb6_y = (float)(int16_t)HIWORD(lp);");
-                c_.emitLine("extern void " + fn + "(int16_t*, int16_t*, float*, float*); " + fn + "(&vb6_button, &vb6_shift, &vb6_x, &vb6_y); }");
+                emitEvCall("_MouseUp", 5, "int16_t*, int16_t*, float*, float*",
+                           "&vb6_button, &vb6_shift, &vb6_x, &vb6_y");
                 c_.dedent();
                 c_.emitLine("}");
             }
 
             // KeyPress (WM_CHAR)
             if (info.hasKeyPress) {
-                std::string fn = eventHandlerFn(info.ctrlName, "_KeyPress");
                 c_.emitLine("if (msg == WM_CHAR) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keyascii = (int16_t)(unsigned char)wp;");
-                c_.emitLine("extern void " + fn + "(int16_t*); " + fn + "(&vb6_keyascii); }");
+                emitEvCall("_KeyPress", 2, "int16_t*", "&vb6_keyascii");
                 c_.dedent();
                 c_.emitLine("}");
             }
             // KeyDown (WM_KEYDOWN)
             if (info.hasKeyDown) {
-                std::string fn = eventHandlerFn(info.ctrlName, "_KeyDown");
                 c_.emitLine("if (msg == WM_KEYDOWN) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keycode = (int16_t)wp; int16_t vb6_shift = 0;");
                 c_.emitLine("if (GetKeyState(VK_SHIFT) & 0x8000) vb6_shift |= 1; if (GetKeyState(VK_CONTROL) & 0x8000) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
-                c_.emitLine("extern void " + fn + "(int16_t*, int16_t*); " + fn + "(&vb6_keycode, &vb6_shift); }");
+                emitEvCall("_KeyDown", 3, "int16_t*, int16_t*", "&vb6_keycode, &vb6_shift");
                 c_.dedent();
                 c_.emitLine("}");
             }
             // KeyUp (WM_KEYUP)
             if (info.hasKeyUp) {
-                std::string fn = eventHandlerFn(info.ctrlName, "_KeyUp");
                 c_.emitLine("if (msg == WM_KEYUP) {");
                 c_.indent();
                 c_.emitLine("{ int16_t vb6_keycode = (int16_t)wp; int16_t vb6_shift = 0;");
                 c_.emitLine("if (GetKeyState(VK_SHIFT) & 0x8000) vb6_shift |= 1; if (GetKeyState(VK_CONTROL) & 0x8000) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
-                c_.emitLine("extern void " + fn + "(int16_t*, int16_t*); " + fn + "(&vb6_keycode, &vb6_shift); }");
+                emitEvCall("_KeyUp", 3, "int16_t*, int16_t*", "&vb6_keycode, &vb6_shift");
                 c_.dedent();
                 c_.emitLine("}");
             }
@@ -387,8 +411,17 @@
                 // `C2198: 用于调用的参数太多`（实测：声明是 `static void vb6_sldM6_DblClick(int16_t* Cancel)`，
                 // arm 里却 `extern void vb6_sldM6_DblClick(); …`）。存量工程两种都见过
                 // （本仓夹具就写着无参的 `sld6_DblClick()`），所以按**处理器自己声明的形参数**发。
+                // 富贵竹 FIX-009 §7: 控件数组的 `_DblClick(Index As Integer)` 单形参是**下标**，
+                // 不是 Cancel ⇒ 首参名判据把它与 UC/OCX 的 Cancel 分开，前者传运行时下标。
                 const Symbol* symDc = symTab_.lookup(info.ctrlName + "_DblClick");
-                if (symDc && !symDc->P().params.empty()) {
+                if (evIndexArm("_DblClick", 1)) {
+                    const bool withCancel = symDc->P().params.size() >= 2;
+                    c_.emitLine("if (msg == WM_LBUTTONDBLCLK) { int16_t vb6_evindex = "
+                                "(int16_t)((INT_PTR)GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1);"
+                                + (withCancel ? std::string(" int16_t vb6_dblcancel = 0;") : std::string())
+                                + " extern void " + fn + "(int16_t*" + (withCancel ? ", int16_t*" : "") + "); "
+                                + fn + "(&vb6_evindex" + (withCancel ? ", &vb6_dblcancel" : "") + "); }");
+                } else if (symDc && !symDc->P().params.empty()) {
                     c_.emitLine("if (msg == WM_LBUTTONDBLCLK) { int16_t vb6_dblcancel = 0;"
                                 " extern void " + fn + "(int16_t*); " + fn + "(&vb6_dblcancel); }");
                 } else {

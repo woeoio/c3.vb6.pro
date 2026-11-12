@@ -110,3 +110,59 @@ End Sub
 Private Sub labPlain_MouseMove(Button As Integer, Shift As Integer, X As Single, Y As Single)
     Debug.Print "F9-PLAINMOVE"
 End Sub
+
+' FIX-009 section-7 (upstream FGZ). The six remaining dispatch arms need the
+' RUNTIME array index as first arg when the handler declares Index As Integer.
+'   lblItem  : container-hosted array -> all six handlers declare Index
+'   labPlain : non-array guard -> same six handlers WITHOUT Index; their
+'              emitted calls must stay byte-identical to the pre-s7 form.
+' DblClick is the tricky one: a lone parameter is the array Index here,
+' but a Cancel out-param on non-array UC/OCX handlers.
+Private Sub lblItem_MouseDown(Index As Integer, Button As Integer, Shift As Integer, X As Single, Y As Single)
+    Debug.Print "F9S7-ARR-MOUSEDOWN=" & CStr(Index)
+End Sub
+
+Private Sub lblItem_MouseUp(Index As Integer, Button As Integer, Shift As Integer, X As Single, Y As Single)
+    Debug.Print "F9S7-ARR-MOUSEUP=" & CStr(Index)
+End Sub
+
+Private Sub lblItem_KeyPress(Index As Integer, KeyAscii As Integer)
+    Debug.Print "F9S7-ARR-KEYPRESS=" & CStr(Index)
+End Sub
+
+Private Sub lblItem_KeyDown(Index As Integer, KeyCode As Integer, Shift As Integer)
+    Debug.Print "F9S7-ARR-KEYDOWN=" & CStr(Index)
+End Sub
+
+Private Sub lblItem_KeyUp(Index As Integer, KeyCode As Integer, Shift As Integer)
+    Debug.Print "F9S7-ARR-KEYUP=" & CStr(Index)
+End Sub
+
+Private Sub lblItem_DblClick(Index As Integer)
+    Debug.Print "F9S7-ARR-DBLCLICK=" & CStr(Index)
+End Sub
+
+Private Sub labPlain_MouseDown(Button As Integer, Shift As Integer, X As Single, Y As Single)
+    Debug.Print "F9S7-PLAIN-MOUSEDOWN"
+End Sub
+
+Private Sub labPlain_MouseUp(Button As Integer, Shift As Integer, X As Single, Y As Single)
+    Debug.Print "F9S7-PLAIN-MOUSEUP"
+End Sub
+
+Private Sub labPlain_KeyPress(KeyAscii As Integer)
+    Debug.Print "F9S7-PLAIN-KEYPRESS"
+End Sub
+
+Private Sub labPlain_KeyDown(KeyCode As Integer, Shift As Integer)
+    Debug.Print "F9S7-PLAIN-KEYDOWN"
+End Sub
+
+Private Sub labPlain_KeyUp(KeyCode As Integer, Shift As Integer)
+    Debug.Print "F9S7-PLAIN-KEYUP"
+End Sub
+
+Private Sub labPlain_DblClick()
+    Debug.Print "F9S7-PLAIN-DBLCLICK"
+End Sub
+

@@ -7771,6 +7771,38 @@ if ($Category -in @("all", "run", "vbp")) {
         'if (msg == WM_LBUTTONUP) { extern void vb6_labPlain_Click(); vb6_labPlain_Click(); }'
     )
     Test-VbpBuild "fgz_fix009_array_build" "$Tests\fgz_fix009\FgzFix009.vbp"
+    # 富贵竹 FIX-009 §7: 剩下六条转发臂的数组 Index 与 evCallMouseMove 同口径补齐。
+    # 判据 = 数组控件 + 处理器首形参名 Index + 形参数够数组版完整签名；
+    # 命中时首参传运行时下标 (安装侧 SetPropW(si+1) 读回 -1)。
+    # _DblClick 单形参既可能是数组 Index、也可能是非数组 UC/OCX 的 Cancel 出参，
+    # 所以必须按首形参名分开；labPlain 六臂是非数组逐字不变的护栏。
+    Test-EmitcShape "fgz_fix009_s7_array_index_arms" @("$Tests\fgz_fix009\FgzFix009.vbp") @(
+        'extern void vb6_lblItem_MouseDown(int16_t*, int16_t*, int16_t*, float*, float*); vb6_lblItem_MouseDown(&vb6_evindex, &vb6_button, &vb6_shift, &vb6_x, &vb6_y); }',
+        'extern void vb6_lblItem_MouseUp(int16_t*, int16_t*, int16_t*, float*, float*); vb6_lblItem_MouseUp(&vb6_evindex, &vb6_button, &vb6_shift, &vb6_x, &vb6_y); }',
+        'extern void vb6_lblItem_KeyPress(int16_t*, int16_t*); vb6_lblItem_KeyPress(&vb6_evindex, &vb6_keyascii); }',
+        'extern void vb6_lblItem_KeyDown(int16_t*, int16_t*, int16_t*); vb6_lblItem_KeyDown(&vb6_evindex, &vb6_keycode, &vb6_shift); }',
+        'extern void vb6_lblItem_KeyUp(int16_t*, int16_t*, int16_t*); vb6_lblItem_KeyUp(&vb6_evindex, &vb6_keycode, &vb6_shift); }',
+        'int16_t vb6_evindex = (int16_t)((INT_PTR)GetPropW(hwnd, L"VB6_CtrlArrIndex") - 1); extern void vb6_lblItem_DblClick(int16_t*);',
+        'vb6_lblItem_DblClick(&vb6_evindex); }'
+    )
+    Test-EmitcAbsent "fgz_fix009_s7_no_old_arms" @("$Tests\fgz_fix009\FgzFix009.vbp") @(
+        'vb6_lblItem_MouseDown(&vb6_button,',
+        'vb6_lblItem_MouseUp(&vb6_button,',
+        'vb6_lblItem_KeyPress(&vb6_keyascii); }',
+        'vb6_lblItem_KeyDown(&vb6_keycode,',
+        'vb6_lblItem_KeyUp(&vb6_keycode,',
+        'vb6_lblItem_DblClick(&vb6_dblcancel)',
+        'vb6_labPlain_MouseDown(&vb6_evindex,',
+        'vb6_labPlain_DblClick(&vb6_evindex'
+    )
+    Test-EmitcShape "fgz_fix009_s7_nonarray_guard" @("$Tests\fgz_fix009\FgzFix009.vbp") @(
+        'extern void vb6_labPlain_MouseDown(int16_t*, int16_t*, float*, float*); vb6_labPlain_MouseDown(&vb6_button, &vb6_shift, &vb6_x, &vb6_y); }',
+        'extern void vb6_labPlain_MouseUp(int16_t*, int16_t*, float*, float*); vb6_labPlain_MouseUp(&vb6_button, &vb6_shift, &vb6_x, &vb6_y); }',
+        'extern void vb6_labPlain_KeyPress(int16_t*); vb6_labPlain_KeyPress(&vb6_keyascii); }',
+        'extern void vb6_labPlain_KeyDown(int16_t*, int16_t*); vb6_labPlain_KeyDown(&vb6_keycode, &vb6_shift); }',
+        'extern void vb6_labPlain_KeyUp(int16_t*, int16_t*); vb6_labPlain_KeyUp(&vb6_keycode, &vb6_shift); }',
+        'if (msg == WM_LBUTTONDBLCLK) { extern void vb6_labPlain_DblClick(); vb6_labPlain_DblClick(); }'
+    )
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，
