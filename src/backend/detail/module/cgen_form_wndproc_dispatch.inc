@@ -532,7 +532,15 @@
                 if (subEmitted.count(childNameLower)) continue;
                 subEmitted.insert(childNameLower);
                 if (!needsSubclass(child)) continue;
-                c_.emitLine("vb6_RemoveControlSubclass((void*)vb6_hwnd_" + cIdent(child.controlName) + ");");
+                if (knownControlArrays_.count(childNameLower)) {
+                    // 富贵竹 FIX-009: 数组控件声明侧只有 vb6_arr_<名>, 没有 vb6_hwnd_<名>;
+                    // 旧发码引用未声明变量 ⇒ C2065, 而且只拆一个元素。与安装侧同一口径循环。
+                    c_.emitLine("{ int vb6_si; for (vb6_si = 0; vb6_si < VB6_CTRLARR_MAX; vb6_si++) {");
+                    c_.emitLine("  void* vb6_sub_hwnd = vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(child.controlName) + ", vb6_si);");
+                    c_.emitLine("  if (vb6_sub_hwnd) vb6_RemoveControlSubclass(vb6_sub_hwnd); } }");
+                } else {
+                    c_.emitLine("vb6_RemoveControlSubclass((void*)vb6_hwnd_" + cIdent(child.controlName) + ");");
+                }
             }
         }
     }

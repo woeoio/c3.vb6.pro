@@ -190,10 +190,29 @@
                 Symbol* evSym = symTab_.lookup(info.ctrlName + suffix);
                 std::string fn = eventHandlerFn(info.ctrlName, suffix);
                 if (evSym && !evSym->P().params.empty() && info.arrayIndex >= 0) {
+                    // 富贵竹 FIX-009 R2b: 下标不能再取编译期常量 info.arrayIndex
+                    // (40 个 Label 一律答 39)。安装侧逐元素打了 si+1, 这里读回再减 1。
                     return "{ extern void " + fn + "(int16_t*); int16_t vb6_evindex = "
-                         + std::to_string(info.arrayIndex) + "; " + fn + "(&vb6_evindex); }";
+                           "(int16_t)((INT_PTR)GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1); "
+                         + fn + "(&vb6_evindex); }";
                 }
                 return "{ extern void " + fn + "(); " + fn + "(); }";
+            };
+            // 富贵竹 FIX-009 R2b: MouseMove 的实参个数由处理器自己决定。
+            // 控件数组 + 处理器 5 形参 (Index, Button, Shift, X, Y) 必须发 5 实参;
+            // 旧发码恒按 4 实参发, MSVC /TC 只报 C4030/C4028 警告 ⇒ 运行时参数整体错位。
+            // 非数组 (4 形参) 与「数组但处理器未写 Index」保持原 4 实参, 逐字不变。
+            auto emitMouseMoveCall = [&]() {
+                Symbol* evSym = symTab_.lookup(info.ctrlName + "_MouseMove");
+                std::string fn = eventHandlerFn(info.ctrlName, "_MouseMove");
+                if (info.arrayIndex >= 0 && evSym && evSym->P().params.size() >= 5) {
+                    c_.emitLine("int16_t vb6_evindex = (int16_t)((INT_PTR)GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1);");
+                    c_.emitLine("extern void " + fn + "(int16_t*, int16_t*, int16_t*, float*, float*); "
+                                + fn + "(&vb6_evindex, &vb6_button, &vb6_shift, &vb6_x, &vb6_y); }");
+                } else {
+                    c_.emitLine("extern void " + fn + "(int16_t*, int16_t*, float*, float*); "
+                                + fn + "(&vb6_button, &vb6_shift, &vb6_x, &vb6_y); }");
+                }
             };
             // GotFocus (WM_SETFOCUS)
             if (info.hasGotFocus) {
@@ -260,12 +279,11 @@
                 c_.emitLine("}");
                 // 如果同时有MouseMove事件，也在这里分发
                 if (info.hasMouseMove) {
-                    std::string fn = eventHandlerFn(info.ctrlName, "_MouseMove");
                     c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
                     c_.emitLine("if (wp & MK_LBUTTON) vb6_button |= 1; if (wp & MK_RBUTTON) vb6_button |= 2; if (wp & MK_MBUTTON) vb6_button |= 4;");
                     c_.emitLine("if (wp & MK_SHIFT) vb6_shift |= 1; if (wp & MK_CONTROL) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
                     c_.emitLine("float vb6_x = (float)(int16_t)LOWORD(lp); float vb6_y = (float)(int16_t)HIWORD(lp);");
-                    c_.emitLine("extern void " + fn + "(int16_t*, int16_t*, float*, float*); " + fn + "(&vb6_button, &vb6_shift, &vb6_x, &vb6_y); }");
+                    emitMouseMoveCall();
                 }
                 c_.dedent();
                 c_.emitLine("}");
@@ -289,12 +307,11 @@
                 // 只有MouseMove没有MouseEnter/Leave
                 c_.emitLine("if (msg == WM_MOUSEMOVE) {");
                 c_.indent();
-                std::string fn = eventHandlerFn(info.ctrlName, "_MouseMove");
                 c_.emitLine("{ int16_t vb6_button = 0; int16_t vb6_shift = 0;");
                 c_.emitLine("if (wp & MK_LBUTTON) vb6_button |= 1; if (wp & MK_RBUTTON) vb6_button |= 2; if (wp & MK_MBUTTON) vb6_button |= 4;");
                 c_.emitLine("if (wp & MK_SHIFT) vb6_shift |= 1; if (wp & MK_CONTROL) vb6_shift |= 2; if (GetKeyState(VK_MENU) & 0x8000) vb6_shift |= 4;");
                 c_.emitLine("float vb6_x = (float)(int16_t)LOWORD(lp); float vb6_y = (float)(int16_t)HIWORD(lp);");
-                c_.emitLine("extern void " + fn + "(int16_t*, int16_t*, float*, float*); " + fn + "(&vb6_button, &vb6_shift, &vb6_x, &vb6_y); }");
+                emitMouseMoveCall();
                 c_.dedent();
                 c_.emitLine("}");
             }

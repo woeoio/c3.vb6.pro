@@ -7741,6 +7741,29 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp "fgz_fix010_timer_run" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-IVAL=50", "F10-EN0=False")
     Test-Vbp "fgz_fix010_timer_run_x86" "$Tests\fgz_fix010\FgzFix010.vbp" @("F10-IVAL=50", "F10-EN0=False") -Arch "x86"
     $IncArg = $fgzSavedIncArg
+    # 富贵竹 FIX-009 R2: 控件数组事件下标改走运行时窗口属性 (VB6_CtrlArrIndex,
+    # 存 si+1); MouseMove 按处理器形参数决定 4/5 实参; 容器子控件数组逐元素装卸。
+    # 旧发码的 WM_DESTROY 引用未声明的 vb6_hwnd_<数组名> ⇒ C2065, 由下面的
+    # Test-VbpBuild 真编译针钉住。R1 (容器不答 WM_CTLCOLORSTATIC) 当前 dev 已由
+    # vb6forms_picture_prop.c:686 修好、T2 (GA_ROOT 转发) 会打回另一会话的
+    # TeeChart 活线 ⇒ 两者都不移植。labPlain 是非数组逐字不变的护栏。
+    Test-EmitcShape "fgz_fix009_array_runtime_index" @("$Tests\fgz_fix009\FgzFix009.vbp") @(
+        'SetPropW((HWND)vb6_sub_hwnd, L"VB6_CtrlArrIndex", (HANDLE)(INT_PTR)(vb6_si + 1))',
+        'int16_t vb6_evindex = (int16_t)((INT_PTR)GetPropW(hwnd, L"VB6_CtrlArrIndex") - 1);',
+        'vb6_lblItem_MouseMove(&vb6_evindex, &vb6_button, &vb6_shift, &vb6_x, &vb6_y); }',
+        'if (vb6_sub_hwnd) vb6_RemoveControlSubclass(vb6_sub_hwnd); } }'
+    )
+    Test-EmitcAbsent "fgz_fix009_no_compiletime_index" @("$Tests\fgz_fix009\FgzFix009.vbp") @(
+        'int16_t vb6_evindex = 0;',
+        'vb6_InstallControlSubclass((void*)vb6_CtrlArr_GetAt(&vb6_arr_lblItem, 0),',
+        'vb6_RemoveControlSubclass((void*)vb6_hwnd_lblItem);',
+        'extern void vb6_lblItem_MouseMove(int16_t*, int16_t*, float*, float*);'
+    )
+    Test-EmitcShape "fgz_fix009_nonarray_guard" @("$Tests\fgz_fix009\FgzFix009.vbp") @(
+        'extern void vb6_labPlain_MouseMove(int16_t*, int16_t*, float*, float*);',
+        'if (msg == WM_LBUTTONUP) { extern void vb6_labPlain_Click(); vb6_labPlain_Click(); }'
+    )
+    Test-VbpBuild "fgz_fix009_array_build" "$Tests\fgz_fix009\FgzFix009.vbp"
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，

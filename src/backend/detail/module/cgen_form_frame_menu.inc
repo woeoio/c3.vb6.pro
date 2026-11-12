@@ -588,9 +588,12 @@
             std::string subProcName = "vb6_ctrl_subproc_" + cIdent(ctrl.controlName);
             if (knownControlArrays_.count(ctrlNameLower)) {
                 // P0-4修复: 控件数组遍历所有元素安装子类化
+                // 富贵竹 FIX-009 R2a: 每个元素打运行时索引属性, 事件臂才拿得到真实 Index。
+                // 存 si+1 (恒非 0) —— SetPropW(...,0) 等于删属性, 元素 0 会丢索引。
                 c_.emitLine("{ int vb6_si; for (vb6_si = 0; vb6_si < VB6_CTRLARR_MAX; vb6_si++) {");
                 c_.emitLine("  void* vb6_sub_hwnd = vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", vb6_si);");
-                c_.emitLine("  if (vb6_sub_hwnd) vb6_InstallControlSubclass(vb6_sub_hwnd, (void*)" + subProcName + "); } }");
+                c_.emitLine("  if (vb6_sub_hwnd) { SetPropW((HWND)vb6_sub_hwnd, L\"VB6_CtrlArrIndex\", (HANDLE)(INT_PTR)(vb6_si + 1));");
+                c_.emitLine("    vb6_InstallControlSubclass(vb6_sub_hwnd, (void*)" + subProcName + "); } } }");
             } else {
                 c_.emitLine("vb6_InstallControlSubclass((void*)vb6_hwnd_" + cIdent(ctrl.controlName) + ", (void*)" + subProcName + ");");
             }
@@ -605,8 +608,19 @@
                         subEmitted.insert(childNameLower);
                         if (needsSubclass(child)) {
                             std::string subProcName = "vb6_ctrl_subproc_" + cIdent(child.controlName);
-                            // Task #41: 数组成员用 GetAt (声明侧无 vb6_hwnd_<名>)
-                            c_.emitLine("vb6_InstallControlSubclass((void*)" + childHwndRead(child) + ", (void*)" + subProcName + ");");
+                            if (knownControlArrays_.count(childNameLower)) {
+                                // 富贵竹 FIX-009 R2a: 容器子控件的数组以前按名字去重后只装
+                                // 一个元素 (childHwndRead -> GetAt(..., index)), 其余元素收不到
+                                // WM_MOUSEMOVE/WM_LBUTTONUP ⇒ MouseMove/Click 全族失灵。
+                                // 与顶层安装同一口径: 逐元素打索引属性 + 安装子类化。
+                                c_.emitLine("{ int vb6_si; for (vb6_si = 0; vb6_si < VB6_CTRLARR_MAX; vb6_si++) {");
+                                c_.emitLine("  void* vb6_sub_hwnd = vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(child.controlName) + ", vb6_si);");
+                                c_.emitLine("  if (vb6_sub_hwnd) { SetPropW((HWND)vb6_sub_hwnd, L\"VB6_CtrlArrIndex\", (HANDLE)(INT_PTR)(vb6_si + 1));");
+                                c_.emitLine("    vb6_InstallControlSubclass(vb6_sub_hwnd, (void*)" + subProcName + "); } } }");
+                            } else {
+                                // Task #41: 数组成员用 GetAt (声明侧无 vb6_hwnd_<名>)
+                                c_.emitLine("vb6_InstallControlSubclass((void*)" + childHwndRead(child) + ", (void*)" + subProcName + ");");
+                            }
                         }
                     }
                     if (!child.children.empty() && controlIsContainerType(child)) {   // 账 #167
