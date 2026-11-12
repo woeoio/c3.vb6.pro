@@ -1159,7 +1159,8 @@
                     if (!pv) continue;
                     auto pic = FrxReader::readPicture(pv->frxOffset, true);
                     if (pic.data.empty()) continue;
-                    std::string varName = "vb6_frx_tabpic_" + cIdent(ctrl.controlName)
+                    // FIX-007: 同 vb6_frx_pic_ —— 必须带窗体名前缀避免跨模块 LNK2005。
+                    std::string varName = "vb6_frx_tabpic_" + cIdent(formName) + "_" + cIdent(ctrl.controlName)
                                         + "_" + std::to_string(idx2);
                     frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
                     h_.emitLine(bytesToHexArrayDecl(varName));

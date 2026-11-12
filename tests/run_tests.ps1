@@ -7681,6 +7681,19 @@ if ($Category -in @("all", "run", "vbp")) {
         '#include <stdint.h>',
         'vb6_mod_FrmCnU_init'
     )
+    # 富贵竹合并 FIX-007: frx 图片数组是 C 文件作用域 const, 默认外链接全局符号
+    #   (刻意不用 static —— 见 bytesToHexArray 注释, 否则会被每个 include .h 的 TU
+    #   各物化一份)。旧命名只带控件名, 两个窗体各放一个同名 Image1 就发两份
+    #   vb6_frx_pic_Image1 定义 ⇒ LNK2005。夹具 = 双窗体 + 同名 Image1 + 合法 frx
+    #   Picture, 钉两枚带窗体名前缀的定义/引用; 反面钉旧裸名连声明都不许残留。
+    Test-EmitcShape "fgz_fix007_frx_form_prefix" @("$Tests\fgz_fix007\FgzFrx7.vbp") @(
+        'vb6_frx_pic_FrxFormA_Image1',
+        'vb6_frx_pic_FrxFormB_Image1'
+    )
+    Test-EmitcAbsent "fgz_fix007_frx_no_bare_name" @("$Tests\fgz_fix007\FgzFrx7.vbp") @(
+        'vb6_frx_pic_Image1[]',
+        'vb6_frx_pic_Image1_size'
+    )
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，

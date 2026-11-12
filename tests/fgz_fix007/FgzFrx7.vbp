@@ -1,0 +1,7 @@
+Type=Exe
+Module=ModMain.bas; ModMain.bas
+Form=FrxFormA.frm
+Form=FrxFormB.frm
+Startup="Sub Main"
+ExeName32="FgzFrx7.exe"
+Name="FgzFrx7"

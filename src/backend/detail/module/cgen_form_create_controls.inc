@@ -187,7 +187,11 @@
                 if (picIt != ctrl.properties.end() && picIt->second.type == FrmValueType::FrxReference) {
                     auto pic = FrxReader::readPicture(picIt->second.frxOffset, false);
                     if (!pic.data.empty()) {
-                        std::string varName = "vb6_frx_pic_" + cIdent(ctrl.controlName);
+                        // 富贵竹合并 FIX-007: 控件名跨窗体不唯一 (每个窗体都可能有 Image1/Picture1),
+                        // 而这些 frx 数组是 C 文件作用域 const 外链接全局符号 (见 bytesToHexArray
+                        // 注释, 不能退回 static 否则会被每个 include .h 的 TU 各物化一份)。
+                        // 只带控件名会让两个窗体发同名定义 ⇒ LNK2005。必须带窗体名前缀消歧。
+                        std::string varName = "vb6_frx_pic_" + cIdent(formName) + "_" + cIdent(ctrl.controlName);
                         if (ctrl.index >= 0) varName += "_" + std::to_string(ctrl.index);
                         frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
                         h_.emitLine(bytesToHexArrayDecl(varName));
@@ -787,7 +791,8 @@
                         FrxPictureData pic = FrxReader::readPicture(picIt->second.frxOffset, true);
                         if (pic.data.empty()) continue;
                         imgIdx++;
-                        std::string varName = "vb6_frx_imglist_" + cIdent(ctrl.controlName)
+                        // FIX-007: 同 vb6_frx_pic_ —— 必须带窗体名前缀避免跨模块 LNK2005。
+                        std::string varName = "vb6_frx_imglist_" + cIdent(formName) + "_" + cIdent(ctrl.controlName)
                                             + "_" + std::to_string(imgIdx);
                         frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
                         h_.emitLine(bytesToHexArrayDecl(varName));
@@ -902,7 +907,8 @@
 
                                 // Generate byte array in .h file
                                 imgIdx++;
-                                std::string varName = "vb6_frx_imglist_" + cIdent(ctrl.controlName) + "_" + std::to_string(imgIdx);
+                                // FIX-007: 同 vb6_frx_pic_ —— 必须带窗体名前缀避免跨模块 LNK2005。
+                                std::string varName = "vb6_frx_imglist_" + cIdent(formName) + "_" + cIdent(ctrl.controlName) + "_" + std::to_string(imgIdx);
                                 frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
                                 h_.emitLine(bytesToHexArrayDecl(varName));
 
