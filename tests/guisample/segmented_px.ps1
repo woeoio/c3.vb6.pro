@@ -134,14 +134,19 @@ $env:C3_LATEBIND_MISS = "1"
 #   全绿 vs 43150418737/43152473320 全 0)。也就是说「开着诊断才绿」的那种绿是**扰动换来的**,
 #   不能拿来交差 ⇒ 诊断改成 -Diagnostics 显式开启, CI 默认跑**干净**的那条路。
 #   需要复现/二分时再加 -Diagnostics (工件规则 output/** 照样收 .err 与 ucdump)。
+#   ⚠ 外部已经设好的 C3_AD_TRACE **原样透传**给产物进程 (RTL 直接读那个环境变量),
+#     不被本脚本清掉 ⇒ 想在 CI 上开诊断跑一轮, 只要在 workflow 的 env 里加 C3_AD_TRACE=1,
+#     **不必改代码**。没设 (默认) ⇒ 干净那一路。
+$adTraceIn = $env:C3_AD_TRACE
+$ucDumpIn = $env:C3_UC_DUMPDIR
 if ($Diagnostics) {
     $env:C3_AD_TRACE = "1"
     $dumpDir = Join-Path $OutDir "ucdump"
     New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
     $env:C3_UC_DUMPDIR = $dumpDir
 } else {
-    $env:C3_AD_TRACE = $null
-    $env:C3_UC_DUMPDIR = $null
+    $env:C3_AD_TRACE = $adTraceIn
+    $env:C3_UC_DUMPDIR = $ucDumpIn
 }
 $proc = Start-Process -FilePath $exePath -WorkingDirectory $wd `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr -NoNewWindow -PassThru
