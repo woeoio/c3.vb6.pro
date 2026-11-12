@@ -1754,6 +1754,37 @@ void vb6_ShowForm(void* hwnd, int modal) {
      * 实测 Form4 'Drag & Drop': 不补发时 UC 的 Update 停在空树, 整窗空白。 */
     vb6_UC_FirePendingShows(hwnd);
 
+    /* 账 §56.44: VB6 语义 —— Form_Resize 在 **Form_Load 之后、首次绘制之前** 跑一次
+       (窗体从"没有尺寸"到"设计尺寸"的那一次)。C3 这一侧把"该跑 Form_Resize"完全挂在
+       Windows 的 WM_SIZE 通知上, 而首条 WM_SIZE **迟到**: 本机临时埋点实测 (那一刀已撤,
+       判据的诊断开关也改成默认关 —— 见 tests/guisample/segmented_px.ps1 的 -Diagnostics)
+         step pre-ShowWindow → queue posted (client=939x650) → step post-ShowWindow
+       ⇒ 首条 WM_SIZE 是**在 ShowWindow 里面**才到的, 于是 Form_Resize 排在窗口可见
+       之后 ⇒ 外部采样能撞见"拉伸前"的布局 (ucSegmentedControl 实测: uc1 读到
+       0,0 609x49, 真 VB6 参考是 0,0 751x49 —— Form_Resize 里那句
+       `ucSegmentedControl1.Move 0, 0, Me.ScaleWidth` 算对了、Move 也做了, 只是晚了)。
+       修法: 显示前按 VB6 语义把首个 Form_Resize 跑掉 ——
+         · 排队那条**排掉** (有就排): 派发走生成代码的 `case VB6_FORM_FR_MSG`
+           (vb6_DrainFormResize + Form_Resize 本体), 这是 WM_SIZE 早到那一档的走法;
+         · 排不到 (WM_SIZE 还没来, 即上面那条迟到路径) ⇒ **直接调** (rev29 的直调通道
+           vb6_InvokeFormResize: 存的就是生成代码的 `vb6_<Form>_Form_Resize` 地址,
+           不依赖 WM_SIZE, 正是"显示前跑一次"要的那个动作)。
+       ⚠ 撤出队列是必须的: 否则消息循环里那条还会再派发一次 (Form_Resize 跑两遍)。
+       ⚠ 直调走 rev29 的同窗体重入闸 (thread-local), Form_Resize 内部再 Move 子控件
+         回到 vb6_ControlMove 的那一发会被挡掉, 不会递归。 */
+    {
+        MSG msg;
+        int vb6_frdrain = 0;
+        while (PeekMessageW(&msg, (HWND)hwnd, VB6_FORM_FR_MSG, VB6_FORM_FR_MSG, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+            vb6_frdrain++;
+        }
+        if (vb6_frdrain == 0) {
+            vb6_InvokeFormResize(hwnd);   /* WM_SIZE 还没到 ⇒ 按 VB6 语义补跑首个 Form_Resize */
+        }
+    }
+
     ShowWindow((HWND)hwnd, SW_SHOWDEFAULT);
     UpdateWindow((HWND)hwnd);
 
@@ -1806,9 +1837,11 @@ void vb6_ShowForm(void* hwnd, int modal) {
     // (含子窗口), 让灰条出现。只做一次: 后续重绘仍由各子控件的 WM_ERASEBKGND 负责,
     // 不能每帧擦 (会与 AutoRedraw 记忆 DC 打架, 3DMenu 每 50ms 镜像一次)。
     if (!GetPropW((HWND)hwnd, L"VB6_AutoRedrawDC")) {
+        if (getenv("C3_AD_TRACE")) { fprintf(stderr, "[AD-fr] step pre-RedrawWindow\n"); fflush(stderr); }
         RedrawWindow((HWND)hwnd, NULL, NULL,
                      RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     }
+    if (getenv("C3_AD_TRACE")) { fprintf(stderr, "[AD-fr] step post-RedrawWindow\n"); fflush(stderr); }
 
     // Fix 137: VB6 启动的窗体会出现在最前并获得焦点; 我们只 ShowWindow 的话
     // 窗口常落在已有窗口后面 (双击 exe 时尤甚 —— 没有前台权限继承)。

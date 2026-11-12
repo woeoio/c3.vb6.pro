@@ -375,9 +375,10 @@ static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch, in
 static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
                              int32_t cw, int32_t ch, int composeBelow) {
     if (getenv("C3_AD_TRACE")) {
-        fprintf(stderr, "[AD-paint] type=%s cw=%d ch=%d paint=%p rdc=%p\n",
+        fprintf(stderr, "[AD-paint] type=%s cw=%d ch=%d paint=%p rdc=%p cb=%d\n",
                 r && r->desc ? r->desc->typeName : "?", (int)cw, (int)ch,
-                (void*)(r && r->desc ? (void*)r->desc->paint : NULL), (void*)(r ? (void*)r->hdc : NULL));
+                (void*)(r && r->desc ? (void*)r->desc->paint : NULL), (void*)(r ? (void*)r->hdc : NULL),
+                (int)composeBelow);
         fflush(stderr);
     }
     if (!r || !r->desc || !r->desc->paint || cw <= 0 || ch <= 0) return;
@@ -450,10 +451,11 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
     vb6_uc_trace("paint.end", r->desc->typeName, r->me);
     vb6_uc_pop(&saved);
 
+    int bltOk = 0;
     if (adc) {
-        BitBlt(target, 0, 0, cw, ch, adc, 0, 0, SRCCOPY);
+        bltOk = (int)BitBlt(target, 0, 0, cw, ch, adc, 0, 0, SRCCOPY);
     } else if (useDib) {
-        BitBlt(target, 0, 0, dib.w, dib.h, dib.memDC, 0, 0, SRCCOPY);
+        bltOk = (int)BitBlt(target, 0, 0, dib.w, dib.h, dib.memDC, 0, 0, SRCCOPY);
         // Fix 113h/123: 调试捕获 (C3_UC_DUMPDIR) —— 只在真实 WM_PAINT 路径做,
         // WM_PRINTCLIENT 是被兄弟合成调用的, 重复 dump 会淹没序号。
         const char* dumpDir113h = composeBelow ? getenv("C3_UC_DUMPDIR") : NULL;
@@ -467,6 +469,23 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
             vb6_uc_dumpFormComposite((HWND)GetAncestor(hwnd, GA_ROOT), dumpDir113h);
         }
         vb6_uc_dibDestroy(&dib);
+    }
+    /* 诊断刀 (C3_AD_TRACE): 把「DIB -> 窗口表面」这一步的每个可失败点摊开 ——
+       blt=0 表示 BitBlt 本身失败 (target 为 NULL / 无效); clip= 是 BeginPaint 给的
+       裁剪框 (全 0 => 更新区为空, 画了也被裁掉); px= 是 BitBlt 之后从 target 回读的
+       像素 (COLORREF 序 = 0x00BBGGRR, 0xFFFFFF = 纯白 = 只有 ambient)。 */
+    if (getenv("C3_AD_TRACE")) {
+        RECT cbox = { -1, -1, -1, -1 };
+        COLORREF px = 0xFFFFFFFF;
+        if (target) {
+            GetClipBox(target, &cbox);
+            px = GetPixel(target, 1, 1);
+        }
+        fprintf(stderr, "[AD-blit] type=%s blt=%d target=%p clip=%d,%d,%d,%d px=%06X adc=%p dib=%p\n",
+                r && r->desc ? r->desc->typeName : "?", bltOk, (void*)target,
+                (int)cbox.left, (int)cbox.top, (int)cbox.right, (int)cbox.bottom,
+                (unsigned)px, (void*)adc, (void*)(useDib ? dib.memDC : NULL));
+        fflush(stderr);
     }
     r->hdc = NULL;
     vb6_uc_activePaintDC = prevPaintDC;
@@ -636,12 +655,36 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             break;
         }
         case WM_PAINT: {
-            if (!r || !r->ready) break;
-            if (!r->desc || !r->desc->paint) break;
+            if (!r || !r->ready) {
+                if (getenv("C3_AD_TRACE")) {
+                    fprintf(stderr, "[AD-pm] type=%s SKIP not-ready\n",
+                            r && r->desc ? r->desc->typeName : "?");
+                    fflush(stderr);
+                }
+                break;
+            }
+            if (!r->desc || !r->desc->paint) {
+                if (getenv("C3_AD_TRACE")) {
+                    fprintf(stderr, "[AD-pm] type=%s SKIP no-paint\n",
+                            r->desc ? r->desc->typeName : "?");
+                    fflush(stderr);
+                }
+                break;
+            }
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             RECT crc;
             GetClientRect(hwnd, &crc);
+            /* 诊断刀: BeginPaint 的返回值 (NULL = 无更新区/窗口不可见 => 画了也白搭)、
+               更新区矩形 (全 0 = 空更新区)、父窗口与可见性, 一次摊开。 */
+            if (getenv("C3_AD_TRACE")) {
+                fprintf(stderr, "[AD-pm] type=%s hdc=%p parent=%p rc=%d,%d,%d,%d vis=%d\n",
+                        r->desc->typeName, (void*)hdc, (void*)GetParent(hwnd),
+                        (int)ps.rcPaint.left, (int)ps.rcPaint.top,
+                        (int)ps.rcPaint.right, (int)ps.rcPaint.bottom,
+                        (int)IsWindowVisible(hwnd));
+                fflush(stderr);
+            }
             vb6_UC_PaintEnter();
             vb6_uc_paintInto(hwnd, r, hdc,
                              (int32_t)(crc.right - crc.left),
@@ -664,6 +707,14 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             return 0;
         }
         case WM_ERASEBKGND:
+            /* 诊断刀: 擦底色这一步会把整块客户区刷成 ambient (白) —— 判据抓到的
+               「宿主矩形纯白」就可能是它干的 (真因是它之后的那次 paint 没落上)。 */
+            if (getenv("C3_AD_TRACE")) {
+                fprintf(stderr, "[AD-erase] type=%s ready=%d ambient=%08X\n",
+                        r && r->desc ? r->desc->typeName : "?", r ? (int)r->ready : 0,
+                        r ? (unsigned)r->ambientBack : 0u);
+                fflush(stderr);
+            }
             if (r && r->ready) {
                 /* 账 #492: 透明 UC 不擦背景 —— 一擦就是一块 ambient 灰, WM_PAINT
                    里的合成会覆盖它, 中间那一帧在屏幕上就是灰闪。*/
