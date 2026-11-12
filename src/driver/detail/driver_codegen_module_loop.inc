@@ -146,6 +146,7 @@
         cgen.setComMode(options.comMode);
         cgen.setComManifest(options.comManifest);
         cgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static
+        cgen.setShadowModuleVarNames(&shadowModuleVarNames);  // 富贵竹 FIX-004: 非 Public 副本影子名+宏
         cgen.setInterfaceImplementers(&ifaceImplementersMap);  // P6.4+: 接口唯一实现类映射
         cgen.setInterfaceAllImplementers(&ifaceAllImplementersMap);  // Fix <vbeclipse>: 接口全部实现类 (桩分派用)
         cgen.setLegacyIfaceShapes(&legacyIfaceShapeMap);  // 账 #305 新账 #464: legacy 接口槽表的形状归接口自己定

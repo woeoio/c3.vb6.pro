@@ -52,6 +52,7 @@ void CCodeGen::visit(VariableDecl& node) {
                 c_.emitLine(cType + " " + cName + " = NULL;");
                 moduleInitStmts_.push_back(cName + " = " + initCode + ";");
             } else {
+                emitShadowMacroIfAny(node);  // 富贵竹 FIX-004: 影子名宏先于定义
                 c_.emitLine("static " + cType + " " + cName + " = NULL;");
                 moduleInitStmts_.push_back(cName + " = " + initCode + ";");
             }
@@ -80,6 +81,7 @@ void CCodeGen::visit(VariableDecl& node) {
                 c_.emitLine(cType + " " + cName + " = NULL;");
                 moduleInitStmts_.push_back(cName + " = " + initCode + ";");
             } else {
+                emitShadowMacroIfAny(node);  // 富贵竹 FIX-004: 影子名宏先于定义
                 c_.emitLine("static " + cType + " " + cName + " = NULL;");
                 moduleInitStmts_.push_back(cName + " = " + initCode + ";");
             }
@@ -116,6 +118,7 @@ void CCodeGen::visit(VariableDecl& node) {
             h_.emitLine("extern " + cType + " " + cName + ";");
             c_.emitLine(cType + " " + cName + " = NULL;");
         } else {
+            emitShadowMacroIfAny(node);  // 富贵竹 FIX-004: 影子名宏先于定义
             c_.emitLine("static " + cType + " " + cName + " = NULL;");
         }
         // Fix 092w: Dim arr() As Byte = <初始化表达式> (twinbasic 兼容) — 文件作用域
@@ -480,6 +483,7 @@ void CCodeGen::visit(VariableDecl& node) {
         if (isPublicModuleDecl(node)) {
             c_.emitLine(cType + " " + cName + " = " + lastExpr_ + ";");
         } else {
+            emitShadowMacroIfAny(node);  // 富贵竹 FIX-004: 影子名宏先于定义
             c_.emitLine("static " + cType + " " + cName + " = " + lastExpr_ + ";");
         }
     } else {
@@ -531,6 +535,7 @@ void CCodeGen::visit(VariableDecl& node) {
         if (isPublicModuleDecl(node)) {
             c_.emitLine(cType + " " + cName + " = " + initVal + ";");
         } else {
+            emitShadowMacroIfAny(node);  // 富贵竹 FIX-004: 影子名宏先于定义
             c_.emitLine("static " + cType + " " + cName + " = " + initVal + ";");
         }
     }

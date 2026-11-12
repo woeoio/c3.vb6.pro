@@ -92,7 +92,12 @@ DeclPtr Parser::parseDeclaration() {
         case TokenKind::Event:    return parseEventDecl(AccessLevel::Default);
         case TokenKind::Delegate: return parseDelegateDecl(AccessLevel::Default);
         case TokenKind::Const:    return parseConstDeclList(AccessLevel::Default);
-        case TokenKind::Dim:      return parseVariableDeclList(AccessLevel::Default, false);
+        case TokenKind::Dim:
+            // 富贵竹 FIX-004 (账 #610 第340刀): 模块级裸 Dim = 模块私有 (与 Private 等价),
+            // 不再走 Default(=Public) 别名 —— 否则撞名统计把私有副本当真 Public 计数,
+            // Fix 093b 会把唯一的真全局也强制 static 且不发 extern (C2065/C2370 根因)。
+            // 显式 Public/Private/Global Dim 走下面那个 case, 不经过这里。
+            return parseVariableDeclList(AccessLevel::Implicit, false);
         case TokenKind::Static: {
             // 第一百六十一刀: 后面是 Sub / Function 就是过程头, 否则照旧是变量声明。
             if (auto d = tryParseStaticProcDecl(AccessLevel::Default, virt)) return d;

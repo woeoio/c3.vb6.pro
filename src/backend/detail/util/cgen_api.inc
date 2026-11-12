@@ -86,6 +86,37 @@
         return n.access == AccessLevel::Public;
     }
 
+    // 富贵竹 FIX-004 (账 #610 第340刀): 跨模块同名模块级变量集合 (小写名, **不分 access**),
+    // 由 driver 预扫描提供 (driver_codegen_dup_module_vars.inc 的 allVarOwners ≥2 张表)。
+    // 模块级非 Public 副本命中时: 定义改用影子名 vb6_shadow_<名>__<模块>, 并补
+    //   #define <名> vb6_shadow_<名>__<模块>
+    // 把本模块过程体/With/ReDim/moduleInit 里的全部裸名引用经宏换绑到自家副本 ——
+    // 即 VB6「模块内 Dim 遮蔽全局」语义; 真 Public 全局符号照常 extern, 供未遮蔽的
+    // 模块裸名引用。没有影子宏时, 本 TU 一旦 include 进声明方的 extern, 自家 static
+    // 定义就是 C2370/C2369 链接性冲突。
+    void setShadowModuleVarNames(const std::unordered_set<std::string>* names) {
+        shadowModuleVarNames_ = names;
+    }
+    // 名字(大小写不敏感)是否命中影子名集合
+    bool isShadowForcedVarName(const std::string& vb6Name) const {
+        if (!shadowModuleVarNames_) return false;
+        return shadowModuleVarNames_->count(Symbol::toLower(vb6Name)) != 0;
+    }
+    // 影子 C 名: vb6_shadow_<VB6名>__<模块名> (两段都过 cIdent, 模块名带 __ 分隔)
+    std::string shadowCNameFor(const std::string& vb6Name) const {
+        return "vb6_shadow_" + cIdent(vb6Name) + "__" + cIdent(moduleName_);
+    }
+    // 模块级非 Public 副本命中影子集合 → 定义前补一条 #define 宏。放在定义之前,
+    // 定义行自身与之后本 TU 的全部裸名引用 (过程体/With/ReDim/moduleInit) 都经宏
+    // 换绑到影子名 —— 不必逐发射点改写。真 Public (含被 093b 强制 static 的那份)
+    // 不补: 前者要保持 extern 供跨模块裸名引用, 后者两份都无 extern、互不相撞。
+    void emitShadowMacroIfAny(const VariableDecl& n) {
+        if (trackOnly_) return;
+        if (n.access == AccessLevel::Public) return;
+        if (!isShadowForcedVarName(n.name)) return;
+        c_.emitLine("#define " + cIdent(n.name) + " " + shadowCNameFor(n.name));
+    }
+
     // P6.6: 单独生成ActiveX DLL入口文件 (dll_entry.c)
     // 当DLL工程只有类模块(无标准模块)时, 由Driver调用此方法生成DLL导出代码
     // progId: DLL的ProgID前缀

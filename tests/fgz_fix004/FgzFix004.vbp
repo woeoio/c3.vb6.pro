@@ -1,0 +1,9 @@
+Type=Exe
+Form=FrmMain.frm
+Module=ModG; ModG.bas
+Module=ModU; ModU.bas
+Module=ModP; ModP.bas
+Module=ModQ; ModQ.bas
+Startup="FrmMain"
+ExeName32="FgzFix004.exe"
+Name="FgzFix004"

@@ -7816,6 +7816,22 @@ if ($Category -in @("all", "run", "vbp")) {
         'extern void vb6_labPlain_KeyUp(int16_t*, int16_t*); vb6_labPlain_KeyUp(&vb6_keycode, &vb6_shift); }',
         'if (msg == WM_LBUTTONDBLCLK) { extern void vb6_labPlain_DblClick(); vb6_labPlain_DblClick(); }'
     )
+    # 富贵竹 FIX-004 (账 #610 第340刀): 模块级裸 Dim 改落 AccessLevel::Implicit (= 模块私有)。
+    # 修前撞名统计不分 access, 「ModG 的 Public gShared + FrmMain 的 Dim gShared」把唯一
+    # 真全局连坐成 static 且无 extern ⇒ ModU 裸名引用 C2065 (本地探针
+    # .local/fgz-probes/fix004 实锤)。判据三面:
+    #   ① 形状正面: 真 .bas 全局发 extern (ModG.h 段) + 窗体 Dim 副本走影子名宏;
+    #   ② 形状反面: 双真 Public 撞名 (ModP/ModQ 的 gDuo) 仍各自 static —— Fix 093b 原意图
+    #      (防 LNK2005) 不回退, 两枚定义行都在;
+    #   ③ 运行针: F4-GLOBAL=41 (跨模块裸名读真全局) / F4-SHADOW=99 (窗体私有副本不被
+    #      全局污染) / F4-LOCAL=5 (局部同名遮蔽且不 #undef 影子宏) / F4-DUO=7 (093b 护栏)。
+    Test-EmitcShape "fgz_fix004_public_extern_shadow_macro" @("$Testsgz_fix004\FgzFix004.vbp") @(
+        'extern int32_t gShared;',
+        '#define gShared vb6_shadow_gShared__FrmMain',
+        'static int32_t gDuo = 0;'
+    )
+    Test-Vbp "fgz_fix004_run" "$Testsgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7")
+    Test-Vbp "fgz_fix004_run_x86" "$Testsgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7") -Arch "x86"
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，

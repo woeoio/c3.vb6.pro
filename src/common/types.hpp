@@ -71,6 +71,11 @@ enum class AccessLevel : uint8_t {
     Friend = 2,     // VB6无此关键字，保留
     Protected = 3,  // tB 扩展 (B08a): 只在类家族内可见。追加在末尾 —— Default=Public 是别名,
                     // 插在中间会牵动任何按数值比较的代码
+    Implicit = 4,   // 富贵竹 FIX-004 (账 #610 第340刀): 模块级裸 Dim 的档位 —— 真 VB6 中
+                    // `Dim x` 与 `Private x` 完全等价 (模块私有)。从前它落 Default(=Public)
+                    // 别名, 撞名统计把模块私有副本当成真 Public 计数, Fix 093b 的强制
+                    // static 反把唯一的真全局也连坐成 static 且无 extern (上游实测 3054
+                    // 个 MSVC 错误、C2065 1626 条)。追加在末尾, 不动现有数值。
     Default = Public,
 };
 

@@ -1206,6 +1206,12 @@
     // Fix 093b: 跨模块同名模块级变量集合(小写), 本体归 driver 所有
     const std::unordered_set<std::string>* staticModuleVarNames_ = nullptr;
 
+    // 富贵竹 FIX-004 (账 #610 第340刀): 跨模块同名模块级变量集合(小写, **不分 access**),
+    // 本体归 driver 所有。命中且本模块的副本非 Public 时, 定义改用影子名并补一条
+    // #define 宏把本模块全部裸名引用换绑到自家副本 (VB6「模块内 Dim 遮蔽全局」语义),
+    // 同时避开本 TU include 进来的 extern 声明与自家 static 定义的 C2370/C2369。
+    const std::unordered_set<std::string>* shadowModuleVarNames_ = nullptr;
+
     // Fix 093b: WithEvents 事件包装函数名 (带模块前缀).
     // 不同模块里的同名 WithEvents 变量 (如各处的 m_ListenSocket / m_socket) 会生成
     // 同名包装函数 → LNK2005; 包装函数只在本模块内使用 (sink 是 Set 处的函数内

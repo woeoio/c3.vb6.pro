@@ -16,6 +16,7 @@
         dllCgen.setModulePublicConsts(&modulePublicConsts);  // Fix 086
         dllCgen.setDesignerFiles(&frmFiles_);  // Fix 112
         dllCgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static
+        dllCgen.setShadowModuleVarNames(&shadowModuleVarNames);  // 富贵竹 FIX-004: 非 Public 副本影子名+宏
         dllCgen.setInterfaceImplementers(&ifaceImplementersMap);  // P6.4+: 接口唯一实现类映射
         dllCgen.setInterfaceAllImplementers(&ifaceAllImplementersMap);  // Fix <vbeclipse>: 接口全部实现类 (桩分派用)
         dllCgen.setDefaultInstanceClasses(&defaultInstanceClasses);  // P6.4+: 类模块默认实例
