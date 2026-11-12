@@ -523,6 +523,13 @@ if ($carrierShapeFiles.Count -ne 2) {
 #      R4 收口 (提交 43528bb8) 给**新式薄指针臂**也发同一枚 RTL 出口 (cgen_util_classtype.cpp:654
 #      `ivrefViewBoxExpr` 的发码串) ⇒ 位数 7 → **8** (仍是 7 份文件: 那一处与 legacy 那一臂同住
 #      cgen_util_classtype.cpp)。同问同一权威, 不是放宽 —— 台账 §56.38 A7 先例。
+#      G3 (提交 a6a5dc04) 给**UC 方法返回工程类**那一臂也发同一枚 RTL 出口
+#      (cgen_form_uc_methods.inc:342 的发码串) ⇒ 位数 8 → **11** / 7 份 → **8 份**文件
+#      (新住的那一份 = cgen_form_uc_methods.inc; 另外两处是那一臂的归因注释两行)。
+#      仍是「同问同一权威」: 那条臂的原生返回是 `vb6_cls_<X>*` 裸实例指针, 直接塞进
+#      vb6_VARIANT 就是 cl C2440 (PD 四处实测), 而裸实例指针装对象档的出口**只有**
+#      这一枚 ⇒ 不许另立第三种 (vb6_VariantFromValue 的 _Generic default 会把类结构体
+#      地址当 IDispatch ⇒ 0xC0000005)。
 #    再加一条反面的: .obj 那一截拼装**只许**住在 cgen_util_classtype.cpp —— 站点自己拼 = 第二位作者。
 $viewBoxQ = CountOf 'legacyViewBoxExpr'
 if ($viewBoxQ -ne 6) {
@@ -533,12 +540,12 @@ if ($viewBoxQFiles.Count -ne 4) {
     $fail += ("legacy view boxing question files = " + ($viewBoxQFiles -join ', ') + " (want exactly 3 files)")
 }
 $viewBoxRtl = CountOf 'vb6_VariantFromProjectInstance'
-if ($viewBoxRtl -ne 8) {
-    $fail += ("view boxing rtl 出口 sites = " + $viewBoxRtl + " (want exactly 8: RTL 声明 + 定义 + 发码串 + 生成物槽表一行 + cgen_util_type.cpp 的归因注释 + 第一百七十二刀两条注释 + R4 收口 (43528bb8) 给新式薄指针臂 ivrefViewBoxExpr 的那一发发码串)")
+if ($viewBoxRtl -ne 11) {
+    $fail += ("view boxing rtl 出口 sites = " + $viewBoxRtl + " (want exactly 11: RTL 声明 + 定义 + 发码串 + 生成物槽表一行 + cgen_util_type.cpp 的归因注释 + 第一百七十二刀两条注释 + R4 收口 (43528bb8) 给新式薄指针臂 ivrefViewBoxExpr 的那一发发码串 + G3 (a6a5dc04) 给 UC 方法返回工程类那一臂的发码串一条 + 那一臂的归因注释两条)")
 }
 $viewBoxRtlFiles = @(FilesOf 'vb6_VariantFromProjectInstance')
-if ($viewBoxRtlFiles.Count -ne 7) {
-    $fail += ("view boxing rtl 出口 files = " + ($viewBoxRtlFiles -join ', ') + " (want exactly 7 files: RTL 声明 + 定义 + 发码串 + 生成物槽表 + cgen_util_type.cpp 归因注释 + 第一百七十二刀两条注释)")
+if ($viewBoxRtlFiles.Count -ne 8) {
+    $fail += ("view boxing rtl 出口 files = " + ($viewBoxRtlFiles -join ', ') + " (want exactly 8 files: RTL 声明 + 定义 + 发码串 + 生成物槽表 + cgen_util_type.cpp 归因注释 + 第一百七十二刀两条注释 + G3 (a6a5dc04) 的 UC 方法返回工程类那一臂住的那一份 cgen_form_uc_methods.inc)")
 }
 # 新式兄弟 ivrefViewBoxExpr (薄指针臂) 本来没有任何位数普查 —— 顺手补上 (该臂的发码串 + 它住在哪几份文件)。
 $ivrefBoxQ = CountOf 'ivrefViewBoxExpr'
@@ -797,5 +804,5 @@ if ($fail.Count -gt 0) {
     foreach ($f in $fail) { Write-Host ("  - " + $f) }
     exit 1
 }
-Write-Host "CLASS-REFCOUNT-AUTHORITY OK (1 pair mint / 1 header / 2 leg consumers / 3+9 formals / 10 roster files / 6 literal files / 0 stale / 5 registry files + 2 registrants / 1+1 out-slot / 1+1 foreign-write drop / 1 field-teardown shape + file / 6 field-type questions (标量 + 数组两档) / 7 transfer-question sites in 2 files (第二百零三刀给字段槽那一臂加了第 4 处站点问句) / 1 view-leg hand-back + 2 QiSet calls / 1+2+1 transfer-arm questions / 3 static-gate sites in 1 file + 1 ivref registration / 1 arg-station hand-back + 4+4 helper sites in 4 files / 4+4 index-slot + project-class questions / 1 address-temp mint / 3 element-teardown sites + 4+4 carrier-destroy questions + 4 preserve-with-release sites in 4 files / 4+4 形A questions (out-slot class + owner pass) + 5 copy-in claim sites in 4 files / 3+4 carrier-destroy sites in 3 files / 8 hand-back stations (5 in cgen_redim.cpp + 过程出口) + 4 shape questions + 3 multidim export sites + 4+2 carrier-scope registrar + flag sites / 7+3 carrier-free flag + 5+5 escape pre-pass + 6 roster sites in 4 files + 1 LHS + 1 RHS exemption + 1 dst gate + 7+3 declaration-scope roster / 5 static gates / 4+3 ND Preserve-with-release export sites / 6 legacyViewBoxExpr sites in 4 files + 8 rtl-name sites in 7 files (槽表已进生成物; R4 收口给新式薄指针臂也发同一枚出口) + 3 ivrefViewBoxExpr sites in 3 files (新式臂的普查) + 9 wrap-name sites in 6 files + 6 view-slot sites in 5 files (㉘㉚，第一百七十二刀三站) + 14 view-name sites in 9 files + 5 view_from-name sites + 3 mint sites + 1 name-ruler (㉛，第一百七十四刀站A) / 3+3 late-return-slot claim sites (站点在 cgen_setlet_set_rhs.inc) + 1 shape in cgen_com.cpp + 4+4 object-pointer-slot questions + 3+3 local-handover questions (㉜，第三百十四刀)"
+Write-Host "CLASS-REFCOUNT-AUTHORITY OK (1 pair mint / 1 header / 2 leg consumers / 3+9 formals / 10 roster files / 6 literal files / 0 stale / 5 registry files + 2 registrants / 1+1 out-slot / 1+1 foreign-write drop / 1 field-teardown shape + file / 6 field-type questions (标量 + 数组两档) / 7 transfer-question sites in 2 files (第二百零三刀给字段槽那一臂加了第 4 处站点问句) / 1 view-leg hand-back + 2 QiSet calls / 1+2+1 transfer-arm questions / 3 static-gate sites in 1 file + 1 ivref registration / 1 arg-station hand-back + 4+4 helper sites in 4 files / 4+4 index-slot + project-class questions / 1 address-temp mint / 3 element-teardown sites + 4+4 carrier-destroy questions + 4 preserve-with-release sites in 4 files / 4+4 形A questions (out-slot class + owner pass) + 5 copy-in claim sites in 4 files / 3+4 carrier-destroy sites in 3 files / 8 hand-back stations (5 in cgen_redim.cpp + 过程出口) + 4 shape questions + 3 multidim export sites + 4+2 carrier-scope registrar + flag sites / 7+3 carrier-free flag + 5+5 escape pre-pass + 6 roster sites in 4 files + 1 LHS + 1 RHS exemption + 1 dst gate + 7+3 declaration-scope roster / 5 static gates / 4+3 ND Preserve-with-release export sites / 6 legacyViewBoxExpr sites in 4 files + 11 rtl-name sites in 8 files (槽表已进生成物; R4 收口给新式薄指针臂也发同一枚出口; G3 给 UC 方法返回工程类那一臂也发同一枚出口) + 3 ivrefViewBoxExpr sites in 3 files (新式臂的普查) + 9 wrap-name sites in 6 files + 6 view-slot sites in 5 files (㉘㉚，第一百七十二刀三站) + 14 view-name sites in 9 files + 5 view_from-name sites + 3 mint sites + 1 name-ruler (㉛，第一百七十四刀站A) / 3+3 late-return-slot claim sites (站点在 cgen_setlet_set_rhs.inc) + 1 shape in cgen_com.cpp + 4+4 object-pointer-slot questions + 3+3 local-handover questions (㉜，第三百十四刀)"
 exit 0
