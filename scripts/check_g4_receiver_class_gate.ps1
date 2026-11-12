@@ -19,7 +19,9 @@
 #       与 callee_params.inc 的 Fix 033/042b), 且每处都在 `if (tryAdoptReceiverClassParams(`
 #       守卫之内 —— 不许有绕开闸直接写 calleeParams 的第二条路。
 #   A4  两处 class-unaware 兜底**都还在**(闸的"回落"半边不许被删):
-#         a) cgen_call.cpp 的 Fix 254: `if (!byClassCS254)` 之后仍有 lookupModule(maExpr.memberName);
+#         a) cgen_call.cpp 的 Fix 254: `if (!byClassCS254) { … }` 那一块**里面**仍有
+#            lookupModule(maExpr.memberName)（取块的办法 = 花括号配平取 span，不是定宽窗口 ——
+#            理由与归因见 A4a 那段注释）;
 #         b) callee_params.inc 仍存在 lookupModule(maExpr.memberName) 兜底。
 #   A5  哨兵标记 C3-SENTINEL(g4-m1-gate) 在权威文件里恰好 1 处 (A2 的采纳点)。
 #
@@ -34,6 +36,29 @@ function Read-Text([string]$rel) {
     $p = Join-Path $root $rel
     if (-not (Test-Path -LiteralPath $p)) { return $null }
     return [System.IO.File]::ReadAllText($p)
+}
+
+# 取一段花括号平衡的块体 (start 指向块首 '{' 的位置)，返回**块内**文本。
+# 认字符串字面量：生成器源码里有把 '{' 写进串里的行，不认串就会把深度数错。
+function Get-BlockBody([string]$t, [int]$start) {
+    if ($start -lt 0 -or $start -ge $t.Length) { return $null }
+    $depth = 0
+    $inStr = $false
+    for ($j = $start; $j -lt $t.Length; $j++) {
+        $ch = $t[$j]
+        if ($inStr) {
+            if ($ch -eq '\') { $j++; continue }
+            if ($ch -eq '"') { $inStr = $false }
+            continue
+        }
+        if ($ch -eq '"') { $inStr = $true; continue }
+        if ($ch -eq '{') { $depth++ }
+        elseif ($ch -eq '}') {
+            $depth--
+            if ($depth -eq 0) { return $t.Substring($start + 1, $j - $start - 1) }
+        }
+    }
+    return $null
 }
 
 $authRel = "src\backend\cgen_util_classtype.cpp"
@@ -130,10 +155,29 @@ foreach ($rel in @($callRel, $paramRel)) {
 if ($callCount -ne 2) { $bad += ("A3 total guarded gate call sites = " + $callCount + " (want 2: Fix 254 + Fix 033/042b)") }
 
 # ---- A4: 两处 class-unaware 兜底仍在 ----
+# A4a 的口径 = 「`if (!byClassCS254) { … }` 那一块**里面**仍有 lookupModule(maExpr.memberName)」。
+#   取块的办法从「定宽窗口 `.{0,200}?`」改成「花括号配平取 span」，**判据形状只放宽取窗口的方式，
+#   不变量 (class-unaware 兜底不许被删) 一字未动** —— 兜底块里少了 lookupModule(maExpr.memberName)
+#   照样红。
+#   为什么必须改（归因已定，不重新调查）：§56.29（提交 6f923ac6）把「跨窗体语句调用先问模块限定
+#   二级键」那一块（cgen_call.cpp:595-614）插进了兜底块**里面**，于是两个关键点相距 **1338 字符**
+#   > 定宽窗口的 200 ⇒ 窗口永远跨不到 ⇒ 判据误红。代码比判据**更严**：兜底仍在（cgen_call.cpp:615
+#   `if (!sym) sym = symTab_.lookupModule(maExpr.memberName);` 就在那一块里）。
 $callText = Read-Text $callRel
 $paramText = Read-Text $paramRel
-if ($callText -and $callText -notmatch '(?s)if\s*\(\s*!\s*byClassCS254\s*\)\s*\{.{0,200}?lookupModule\(maExpr\.memberName\)') {
-    $bad += "A4a Fix 254 fallback gone: `if (!byClassCS254) { ... lookupModule(maExpr.memberName) ... }` not found in cgen_call.cpp"
+if ($callText) {
+    $gateM = [regex]::Match($callText, 'if\s*\(\s*!\s*byClassCS254\s*\)\s*\{')
+    if (-not $gateM.Success) {
+        $bad += "A4a Fix 254 fallback gone: `if (!byClassCS254) {` not found in cgen_call.cpp"
+    } else {
+        $openAt = $callText.IndexOf('{', $gateM.Index)
+        $blk = Get-BlockBody $callText $openAt
+        if ($null -eq $blk) {
+            $bad += "A4a the `if (!byClassCS254) {` block is not brace-balanced in cgen_call.cpp"
+        } elseif ($blk -notmatch 'lookupModule\(maExpr\.memberName\)') {
+            $bad += "A4a Fix 254 fallback gone: `if (!byClassCS254) { ... lookupModule(maExpr.memberName) ... }` not found in cgen_call.cpp"
+        }
+    }
 }
 if ($paramText -and $paramText -notmatch 'lookupModule\(maExpr\.memberName\)') {
     $bad += "A4b callee_params.inc fallback gone: lookupModule(maExpr.memberName) not found (the gate's fall back half was deleted)"
