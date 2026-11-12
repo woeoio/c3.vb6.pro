@@ -1,5 +1,6 @@
 ﻿#include "backend/msvc_driver.hpp"
 #include "common/encoding.hpp"
+#include "driver/detail/phase_timing.hpp"   // §56.54: cl 每段的墙钟 (C3_TIMING=1 才输出)
 
 #include <iostream>
 #include <fstream>
@@ -8,6 +9,7 @@
 #include <sstream>
 #include <filesystem>
 #include <unordered_map>
+#include <chrono>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -282,14 +284,48 @@ namespace {
         return objDir + "/" + stem + ".obj";
     }
 
+    // §56.54: cl 一段 (一次 cl 调用) 的墙钟 —— RAII, 成功/失败两条 return 都计时。
+    //
+    // 为什么要有这把尺子: §56.53 把 cl 从「一次调用」拆成「四段」, 而既有读数里
+    // c3PhaseMark("link") 因为 PD **链接失败**根本没打出来 (driver_compile.cpp:821
+    // 的早退) ⇒ cl 的那两百多秒在读数上是**黑盒**。下一刀往哪走 (RTL 那一族也吃
+    // PCH? codegen 瘦身? 增量路径?) 无从判断 —— **先有尺子, 再动手**。
+    //
+    // 口径: 只观测, 不改任何行为; C3_TIMING 没设时零输出 (只多一次 getenv)。
+    // 行格式 "C3: TIMING cl:<label> <ms> ms (<n> TU, <x> ms/TU)" —— label 带 "cl:"
+    // 前缀, 便于断言「哪些 TIMING 行是 cl 的」。
+    struct ClPhaseTimer {
+        std::string label;
+        size_t tuCount;
+        std::chrono::steady_clock::time_point t0;
+        ClPhaseTimer(const std::string& l, size_t n)
+            : label(l), tuCount(n), t0(std::chrono::steady_clock::now()) {}
+        ~ClPhaseTimer() {
+            if (label.empty() || !c3TimingOn()) return;
+            double ms = c3SpanMs(t0);
+            if (tuCount > 0) {
+                std::fprintf(stderr, "C3: TIMING cl:%s %.0f ms (%zu TU, %.1f ms/TU)\n",
+                             label.c_str(), ms, tuCount, ms / static_cast<double>(tuCount));
+            } else {
+                std::fprintf(stderr, "C3: TIMING cl:%s %.0f ms\n", label.c_str(), ms);
+            }
+            std::fflush(stderr);
+        }
+    };
+
     // 跑一次 cl: 写 rsp → 执行 → 失败时落 c3-error.log (命令 + rsp + cl 输出)。
     // §56.53: PCH 路径要跑好几段, 每段一份 rsp 与一份日志 (否则后一段会把前一段的
     // 现场覆盖掉, 报错时只剩最后一段 —— 离线无法定位是哪一段炸的)。
+    // §56.54: phaseLabel = 这一段叫什么 (计时用); tuCount = 这一段编几个 TU (只进
+    // 计时行, 不影响别的)。
     bool runMsvcInvocation(const std::string& cl, const std::string& args,
                             const std::string& rspPath, const std::string& tmpLogPath,
                             const MsvcDriverOptions& options,
                             const std::string& vcvarsPrefix, const std::string& tmpIsolation,
-                            bool appendErrorLog = false, bool keepLogOnSuccess = false) {
+                            bool appendErrorLog = false, bool keepLogOnSuccess = false,
+                            const std::string& phaseLabel = std::string(),
+                            size_t tuCount = 0) {
+        ClPhaseTimer phaseTimer(phaseLabel, tuCount);
         // Fix 196: 必须写成 UTF-16LE+BOM —— cl/link 按系统 ANSI 代码页读 @rsp,
         // 原样落 UTF-8 会把中文路径解成乱码 (详见 msvc_driver.hpp 的实测矩阵)。
         writeMsvcResponseFile(rspPath, args);
@@ -558,7 +594,8 @@ bool MsvcDriver::compileAndLink(const MsvcDriverOptions& options) {
     std::string tmpIsolation = "set \"TMP=" + tmpLogDir + "\" && set \"TEMP=" + tmpLogDir + "\" && ";
 
     if (!runMsvcInvocation(cl, cmd.str().substr(cl.length()), rspPath, tmpLogPath,
-                           options, vcvarsPrefix, tmpIsolation)) {
+                           options, vcvarsPrefix, tmpIsolation,
+                           false, false, "all", options.sourceFiles.size())) {
         return false;
     }
 
@@ -683,8 +720,9 @@ bool MsvcDriver::compileAndLinkPch(const MsvcDriverOptions& options) {
         std::string rsp = pchDir + "/_c3_cl_pch_" + b.stem + ".rsp";
         std::string log = pchDir + "/_c3_msvc_out_pch_" + b.stem + ".txt";
         // keepLogOnSuccess: 成功那段的输出留着 (失败时要并进 c3-error.log)
+        // §56.54: label = "pch-<档名>", TU 数 = 1 (建库只编一个 .c)
         if (!runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation,
-                               false, true))
+                               false, true, "pch-" + b.stem, 1))
             return false;
         okPhaseLogs.push_back({"[PCH 建库 " + b.stem + "]", log, c.str()});
     }
@@ -708,7 +746,7 @@ bool MsvcDriver::compileAndLinkPch(const MsvcDriverOptions& options) {
         std::string rsp = pchDir + "/_c3_cl_grp_" + b.stem + ".rsp";
         std::string log = pchDir + "/_c3_msvc_out_grp_" + b.stem + ".txt";
         bool okGrp = runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation,
-                                       failed, true);
+                                       failed, true, "grp-" + b.stem, b.sources->size());
         if (!okGrp) failed = true;
         else okPhaseLogs.push_back({"[PCH 组 " + b.stem + "]", log, c.str()});
     }
@@ -732,7 +770,7 @@ bool MsvcDriver::compileAndLinkPch(const MsvcDriverOptions& options) {
         std::string log = pchDir + "/_c3_msvc_out_rest.txt";
         // 同上: 前面几组失败也要把这一段编完 (老路是一次 cl 编全部 ⇒ RTL 的诊断也在同一份日志里)
         bool okRest = runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation,
-                                         failed, true);
+                                         failed, true, "rest", rest.size());
         if (!okRest) failed = true;
         else okPhaseLogs.push_back({"[无 PCH 其余 TU]", log, c.str()});
     }
@@ -785,7 +823,8 @@ bool MsvcDriver::compileAndLinkPch(const MsvcDriverOptions& options) {
     }
     std::string rsp = pchDir + "/_c3_cl_link.rsp";
     std::string log = pchDir + "/_c3_msvc_out_link.txt";
-    if (!runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation))
+    if (!runMsvcInvocation(cl, c.str(), rsp, log, options, vcvarsPrefix, tmpIsolation,
+                           false, false, "link", 0))
         return false;
 
     if (options.verbose) {

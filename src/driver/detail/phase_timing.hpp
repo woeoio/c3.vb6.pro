@@ -54,6 +54,24 @@ inline void c3PhaseMarkIf(const std::string& label, double minMs) {
     clk.last = now;
 }
 
+// ---- §56.54: 「一段外部调用」的自足计时 ----
+//
+// 为什么与 c3PhaseMark 分开: c3PhaseMark 打的是**距上一个 mark** 的差值, 而且
+// 共享 phaseClock 那一个时钟 ⇒ 在它前后插别的 mark 会把它的差值算错。cl 的每一段
+// (建 PCH / 分组编译 / 编其余 TU / 链接) 恰恰是「自足的一段」—— 它们前后还夹着
+// 别的相位, 插进 mark 序列会串扰。所以这里给一个**独立的**绝对计时: 只量自己这一段,
+// **不推** phaseClock 的时钟 ⇒ 既有 mark 序列一个字节都不变。
+//
+// 口径: C3_TIMING 没设时零输出、零开销 (只多一次 getenv); 行格式沿用
+// "C3: TIMING <label> <ms> ms" 同族 (cl 段的 label 统一带 "cl:" 前缀, 便于断言
+// 「哪些行是 cl 的」)。
+inline bool c3TimingOn() { return std::getenv("C3_TIMING") != nullptr; }
+
+inline double c3SpanMs(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+}
+
 // ---- 第二层: 热函数累计统计 (emitLine / inferExprType / emitExpr) ----
 // 口径: C3_TIMING=1 时按模块 dump 一行 STATS 并清零 (c3StatDump); 高调用量函数里
 // 用 RAII (C3ScopeTimer) 记账 —— 两次时钟读 ~60ns/次, 万级调用下忽略不计。
