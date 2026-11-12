@@ -291,9 +291,10 @@ fc86efb2  docs(handoff): §56.53 台账
 cfa440fd  docs(handoff): §56.54 补记 —— cl 阶段的内存账 + 本机硬约束
 86f03fd8  fix(cgen): §56.55 发码后放掉 AST 与语义产物
 032a0186  docs(handoff): §56.55 台账
+7e622360  docs(handoff): §56.55 收尾 —— 本文 + 三个工作流脚本进 scripts/
 ```
 
-- 探针分支 `probe/photodemon-emit` = `77b3e579`（含 §56.55 代码，落后 dev 两笔文档提交）。
+- 探针分支 `probe/photodemon-emit` = `66635c50`（已含 §56.55 代码 + 本文 + 三个脚本）。
 - 功能侧台账：`ai/C3_PHOTODEMON_HANDOFF.md`（含 §56.53 / §56.54 / §56.55 全节）。
 - 编译选项说明：`ai/C3_COMPILE_OPTIONS.md`（含 PCH 与 debug 裁剪的正确表述）。
 
