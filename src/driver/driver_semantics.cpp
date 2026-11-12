@@ -94,7 +94,7 @@ std::unordered_set<std::string> Driver::collectFormModuleNames() const {
 std::unordered_set<std::string> Driver::collectControlModuleNames() const {
     std::unordered_set<std::string> names;
     for (const auto& module : modules_) {
-        if (module && module->docKind == DocumentKind::UserControl && !module->moduleName.empty()) {
+        if (module && module->isUserControlDoc() && !module->moduleName.empty()) {
             names.insert(Symbol::toLower(module->moduleName));
         }
     }

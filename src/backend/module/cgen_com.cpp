@@ -200,6 +200,7 @@ void CCodeGen::emitClassFactory(Module& module) {
     bool hasEvents = moduleDeclaresEvents(module);
     if (hasEvents) {
         c_.emitLine("me->events = NULL;  /* P6.5: no event sink initially */");
+        c_.emitLine("me->eventsOwned = NULL;  /* 账 §56.48: 归本实例所有那枚汇 (堆上) */");
     }
 
     // tB Inherits (B09): 祖先的 Class_Initialize **先**跑 (链上根→叶), 再跑自家那份。
@@ -324,12 +325,12 @@ void CCodeGen::emitClassFactory(Module& module) {
         }
     }
 
-    // 账 §56.48: 事件汇归**源实例**所有 —— 类成员那一路 (宿主类里的 WithEvents 成员) 的汇是
-    // 堆上那枚, 由源类的 `events` 字段指着 (见 cgen_setlet_set_rhs.inc 的 Set 那一站)。
-    // 源实例没时那枚汇一起没, 否则每枚源实例漏一枚汇。`events` 这个字段只被那一路写成
-    // 堆上的汇 (出厂写 NULL, 别的路不碰它) ⇒ 这里放手的对象唯一。
+    // 账 §56.48: **归本实例所有**的那枚汇 (类成员 WithEvents 那一路, 堆上) 出厂时放手。
+    // 放的是 `eventsOwned` 而不是 `events` —— UC (.ctl) 那一路把 `events` 指向**函数内
+    // static 汇** (别人的内存), 对它 vb6_Free 就是 free 掉一块静态 ⇒ 实测 0xC0000374 堆损坏。
+    // `eventsOwned` 只有类成员那一路会写 ⇒ 放手的对象唯一。
     if (moduleDeclaresEvents(module)) {
-        c_.emitLine("if (me->events) { vb6_Free(me->events); me->events = NULL; }  /* 账 §56.48: 事件汇出厂放手 */");
+        c_.emitLine("if (me->eventsOwned) { vb6_Free(me->eventsOwned); me->eventsOwned = NULL; }  /* 账 §56.48: 事件汇出厂放手 */");
     }
 
     // 账 #481 = 第一百八十二刀: 登记腿的配对另一半 —— 表是「裸实例 → desc」的弱映射,

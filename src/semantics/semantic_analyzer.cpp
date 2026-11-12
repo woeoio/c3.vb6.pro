@@ -171,9 +171,9 @@ bool SemanticAnalyzer::analyze(Module& module) {
                     // 账 §56.47: 两路两口径 —— UC (.ctl) 那一路只认**显式** ByRef (语料里
                     // 几千处形状靠它冻结, 不动); 类事件 / 模块级 WithEvents 那一路用
                     // **VB6 默认** (没写 ByVal 就是 ByRef), 与同一枚处理器的定义同源。
-                    const bool ucLane47 = module.docKind == DocumentKind::UserControl;
+                    const bool ucLane47 = module.isUserControlDoc();
                     for (auto& p : e.params) {
-                        addrSlots.push_back(eventParamByAddressLane(
+                        addrSlots.push_back(eventParamByAddress(
                             p->isByRef, p->isByVal, ucLane47,
                             p->asType && p->asType->kind == ASTNodeKind::ArrayTypeRef) ? 1 : 0);
                     }
