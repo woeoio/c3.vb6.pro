@@ -5531,3 +5531,106 @@ CI 侧读数（run `43139994702`，head `5dca11e4`）：`Emit manifest (shape or
      从未被真参考验过）。本刀**没有**动这条判据 —— 采样面换了之后阈值含义会变，
      而真 VB6 参考图本机不可得 ⇒ 盲改会把「判据前提错」换成「阈值错」，两头都红。
 4. **形状门**：维持挂账，等用户批准 bless 时**一次**登记（本轮不动 `emit-manifest.expected.txt`）。
+
+## §56.42 ucSegmentedControl 像素红：定性改写（**推翻 §56.41 §六第 3 条**）+ CI 侧二分诊断刀
+
+### 一、本轮 CI 红面（run `43146002521`，head `aae75cf7`）
+
+21 个 job 里**只 2 红**：
+
+| 红 | 状态 |
+| --- | --- |
+| `Emit manifest (shape oracle)` | 仍红 18 行（VARIANT 族的合法形状变化）。**用户裁定：暂不 bless，挂账** |
+| `Tests (vbp #4)` `[GUI] ucSegmentedControl` 像素 | 仍红 —— **本节改写定性**（§56.41 §六第 3 条说它是「采样时刻不够」，**不成立**） |
+
+其余全绿：`Tests (vbp #11)` FlexGridX86（§56.41 收口生效）、vbp #1/#2/#3/#5~#10/#12、
+bas #1/#2、asm、smoke、syntax、compile #1/#2、`Build C3.exe`、`Baseline (M1)`。
+
+⇒ 当初 13 条红：**11 条 STATIC 全绿 + 1 条 GUI 转绿**，剩 2 条（1 条按用户裁定挂账 + 1 条本节）。
+
+### 二、CI 侧读数（job log，job id `130943996756`）
+
+- **布局侧全对**：`hosts visible=12 hidden=1`；12 个可见宿主的 rect 与 `Form1.frm` 的
+  设计期 twips/15 **逐条相符**；隐藏宿主 `216,104 217x209` 在位；按钮
+  `600,224 73x25 [<-- ItemVisible]` 在位；`window=767x559 client=751x520`（与运行期系统度量一致）。
+- **内容侧全空**：
+  - `uc2 vivid=0 blue=0`、`uc3 vivid=0 blue=0`、`uc4 vivid=0 blue=0`、
+    `uc11 vivid=0 blue=0`、`uc1 vivid=0 blue=0`；
+  - `accent highlight=#0078D4(0)` —— **运行期系统高亮色 0 像素**（选中段底色没画）；
+  - `CE00EF=0 magenta=0`（品红族 0）、`tab2 title textPx=0 barRowMax=0`；
+  - `checkbar icons uc6 darkPx=0`、`itemVisible firstMs=-1 settleMs=-1`、
+    `flatGradient uc3 deep=0->0->0`。
+- ⇒ **12 个 UC 宿主只画出了默认白底（`WM_ERASEBKGND` 的 ambient 填充），没画内容。**
+
+### 三、采样图（工件 `output/**/*.png`，§56.41 加的那一项第一次派上用场）
+
+- `segmented_c3.png` / `segmented_inter_0.png` / `segmented_inter_4.png`
+  **三张 MD5 完全相同**（`1B6C7A92E51F50BCFE2E2D166BC8EFFD`）⇒ 首帧与两次交互后是**同一张空壳**。
+- `segmented_inter_1.png` 略有不同（7662 字节）；`segmented_inter_3.png` 644,327 字节
+  —— **唯一有内容的一张**，内容 = **Form 自己的背景图（樱花风景壁纸）**。
+- 本机同一张壁纸也在（`.temp\segpx_local\segmented_inter_3.png`，1,507,797 字节，同一张图）
+  ⇒ **壁纸不是差异点，差异只在 UC 内容**。
+- ⇒ **§56.41 §六第 3 条的结论被本轮证据推翻**：那里的说法是「CI 上首张采样时 UC 子窗还没画进
+  那块面（400 ms 不够 / 那台 runner 慢），不是面里根本没有 UC 子窗」。**交互后的 7 张采样全都
+  没有 UC 内容**（6 张 MD5 相同；inter_3 有壁纸但 UC 仍是白块）⇒ **"时刻"解释不了**。
+
+### 四、同一次 CI 里普通控件是好的（把差异锁在 UC 路径）
+
+- vbp #8 的 **BalloonTooltips 像素判据全过**：`G1..G7` 全 `ok=True`，颜色/字体/尺寸读数齐全
+  （`#FFFFE1` / `#FFFF00` / `#00FFFF` / `#00FF00`，`face='Segoe UI' lfHeight=-12`）。
+- ⇒ CI 的普通 GDI 绘制环境**正常**；差异**专属 UserControl 绘制路径**。
+
+### 五、本机一侧（同一份源码、同一夹具：PASS，读数与真 VB6 参考值一致）
+
+- 五个 UC 区的彩色计数：`uc2 vivid=1087 blue=480`（真 VB6 1087/480）、
+  `uc3 1085/617`（真 1178/617）、`uc4 1665/1664`（真 1665/1664）、
+  `uc11 970/209`（真 970/209）、`uc1 488/161`（真 488/161）；
+  `accent highlight=#0078D7(10515)`。
+- 交互类读数也全过：`tab2 title textPx=154`、心形 `12x10 area=86`、`uc6 darkPx=382`、
+  `itemVisible firstMs=42 settleMs=109`、`flatGradient deep=3896->0->3896`。
+
+### 六、排除掉的一条假设：**本机 Debug vs CI Release**
+
+- **本机 `.build` 是 `CMAKE_BUILD_TYPE=Debug`，CI 是 `Release`（`/O2 /Ob2 /DNDEBUG`）** ——
+  本机 `C3.exe` 15,890,432 字节，CI 的 8,078,848 字节。
+  ⇒ **记账一条：以往"本机验收"用的产物与 CI 产物不同构**。凡涉及运行期行为差异，
+  先比 build type，别默认"同一份源码 = 同一枚二进制"。
+- 本轮专门建了 `.buildrel`（Release，131 TU）复跑：
+  - 本机 Release `C3.exe` = 8,073,728 字节（CI 8,078,848，差 5120 字节）；
+  - Release 产物编出的夹具 exe = **850,944 字节，与 Debug 编出的同尺寸**（哈希不同，PE 时间戳/调试目录）；
+  - **Release 产物跑同一夹具仍然 PASS**，读数与 Debug **逐字相同**
+    （`uc2 1087/480`、`uc4 1665/1664`、…）。
+  - ⇒ **Release/Debug 不是这条红的原因**。且 produced exe 的编译 flags 来自
+    `src/backend/msvc_driver.cpp`（与 C3.exe 自身 build type 无关）⇒ 本机与 CI 编产物用同一套
+    flags ⇒ 差异只剩**运行环境**（runner 的桌面/会话/字体/MSVC 版本）。
+- 本机另跑通 `C3_AD_TRACE` 基线：stderr 586 行 `[AD-paint]/[AD-use]`，每个 UC 都有
+  `paint=<非 NULL 指针>`。
+
+### 七、本刀改动（`93528f88`）
+
+- `tests/guisample/segmented_px.ps1`：Start-Process 之前 `$env:C3_AD_TRACE = "1"`。
+- 为什么这一行就够：RTL 自带 `C3_AD_TRACE` 开关，每次进 UC 绘制路径打一行
+  `[AD-paint] type=.. cw=.. ch=.. paint=<指针>` 到 stderr；而 **`output/**/*.err` 本来就在**
+  Upload test logs 的工件规则里（`.github/workflows/ci.yml:603`）⇒ 不用再动工件规则。
+- 判据**一行未动**；本机复跑仍 PASS（`EXIT=0`）。
+
+### 八、下一刀（接续点）
+
+1. **读 CI run `43148814717`（head `93528f88`）的 stderr**：
+   `output/ucSegmentedControl/pixels/segmented.err` 里的 `[AD-paint]` 行给**二分**：
+   - **没有** `[AD-paint]` 行 ⇒ WM_PAINT 根本没进宿主窗口（问题在窗口/桌面层：runner 无交互
+     桌面 ⇒ 子窗不被系统绘制，`RedrawWindow` 的 `RDW_ALLCHILDREN` 也没补上）⇒ 修法在 RTL 的
+     绘制触发（宿主创建后主动 `RedrawWindow` / `InvalidateRect`+`UpdateWindow`）；
+   - **有** `[AD-paint]` 且 `paint=` 非 NULL ⇒ paint 回调跑了但画空 ⇒ 问题在 .ctl 生成代码或
+     MSVC 那一侧（UB / 字体 / GDI+ 分支）⇒ 下一步加 `C3_UC_DUMPDIR` 拿 UC 的 DIB 原图。
+2. 顺带可查：**CI runner 的 MSVC 版本 vs 本机**（CI 用 `vswhere -latest`）—— 若不同，
+   produced exe 的编译工具链就不同，是「Release 暴露 UB」这条残余可能。
+3. **判据侧仍不动**：采样面/阈值要按真 VB6 参考重标，而真 VB6 参考图本机不可得
+   ⇒ 盲改会把「判据前提错」换成「阈值错」，两头都红。
+4. **VARIANT 族剩下的形状**（§56.41 §六第 1 条，本轮未动）：Optional `As Variant = <字面量>`
+   默认值没装箱（pdDictionary.c 258、pdSelection.c 155）；对象→Variant 返回槽初始化没装箱
+   （pdCanvas.c 165、pdStatusBar.c 160、pdTreeviewOD.c 126、pdTreeviewViewOD.c 109）；
+   零散两条（pdCBZ.c 411 VARIANT→VARIANT*、pdSpriteSheet.c 315 SafeArray1D*→VARIANT）。
+   收这一族时**判据要与发码侧同源**（限定形态的多态内置只有 `Choose`/`Switch` 被折成三目，
+   `IIf` 不是）。
+5. **形状门**：维持挂账，等用户批准 bless 时**一次**登记（本轮不动 `emit-manifest.expected.txt`）。
