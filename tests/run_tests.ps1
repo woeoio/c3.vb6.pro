@@ -7663,6 +7663,16 @@ if ($Category -in @("all", "run", "vbp")) {
         'void vb6_Main(void)',
         '\u4E2D\u6587\u503C'
     )
+    # 富贵竹合并 FIX-003: expectEndOfStatement 只消费第一个冒号, `A = 1:: B = 2`
+    #   的第二个冒号残留给 parseStatement 命中 default ⇒ VB2002 (修前 2 个错)。
+    #   正例钉「两条赋值都落地」, 负控钉「单冒号语义不变」。
+    Test-EmitcShape "fgz_fix003_colon_empty_stmt" @("$Tests\fgz_fix003\fgz_colon.bas") @(
+        'vb6_BSTR_AssignMove(&Ms, vb6_BSTR_FromStr(L""));',
+        'Ms_Save = (-9999);'
+    )
+    Test-EmitcShape "fgz_fix003_colon_control" @("$Tests\fgz_fix003\fgz_colon_control.bas") @(
+        'void vb6_Main(void)'
+    )
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，

@@ -345,6 +345,9 @@ bool Parser::expectEndOfStatement() {
         return true;
     }
     if (match(TokenKind::Colon)) {
+        // FGZ-FIX-003: VB6 允许连续冒号 `A = 1:: B = 2` —— 冒号之间是空语句。
+        // 只消费第一个会让第二个残留到 parseStatement 入口, 命中 default 报 VB2002。
+        while (cur_.kind == TokenKind::Colon) advance();
         skipNewLines();
         return true;
     }
