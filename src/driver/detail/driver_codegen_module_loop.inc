@@ -68,6 +68,8 @@
     };
     std::vector<ModArtifact> artifacts;
     artifacts.reserve(modules_.size());
+    // 账 §56.53: PCH 分组名单重新起算 (runCodeGeneration 只跑一趟, 但别让它继承上一次的残留)
+    pchFormModules_.clear();
     // key = moduleLower + '\x1f' + lower(typeName)
     std::unordered_map<std::string, UdtRec> projectUdtDefs;        // 全部定义 (含私有)
     std::unordered_map<std::string, UdtRec> projectPublicUdtDefs;  // 仅 Public, 按类型名
@@ -175,6 +177,12 @@
                                 options.isDll, options.dllProgId, frmDescPtr);
         if (!ok) return false;
         c3PhaseMark("gen " + baseName);   // ai/030 续: 逐模块发码计时 (含串料化)
+        // 账 §56.53: 前奏档位**由发码器报** (它知道 isFormModule / isDesignerModule_)。
+        // driver 不重判 —— 重判就多一处权威, 两边一旦分家, PCH 头与 TU 的前奏就对不上,
+        // 套用 PCH 后的预处理状态与不开 PCH 时不同构 ⇒ 编译结果可能变。
+        if (cgen.usesFormPrelude()) {
+            pchFormModules_.push_back(baseName);
+        }
         c3StatDump("mod " + baseName);    // ai/030 续: 本模块的热函数累计 (emitLine/infer/emitExpr)
 
         // ai/vb-asm-extension-spec: 回收本模块的 Asm 过程 (体=单个 Asm 块), 交 runLinker 生成 .asm

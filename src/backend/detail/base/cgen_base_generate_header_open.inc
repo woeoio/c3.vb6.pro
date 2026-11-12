@@ -12,17 +12,12 @@
     h_.emitLine("#ifndef " + guard);
     h_.emitLine("#define " + guard);
     h_.emitBlank();
-    h_.emitLine("#include <stdint.h>");
-    h_.emitLine("#include <stddef.h>");
-    h_.emitLine("#include <stdbool.h>");
-    h_.emitLine("#include <wchar.h>");
-    // P7: 窗体模式下windows.h必须在vb6rtl.h之前, 避免VARIANT重定义冲突
-    // Fix 110: .ctl/.pag 也需要 vb6forms.h — 设计期子控件数组用 vb6_CtrlArr.
-    if (module.isFormModule || isDesignerModule_) {
-        h_.emitLine("#include <windows.h>");
-        h_.emitLine("#include \"vb6forms.h\"");
+    // 账 §56.53: 前奏 include 块只有一处排法 (backend/cgen_pch.hpp) —— PCH 头必须与
+    // 这里**逐字一致**, 否则套用 PCH 后的预处理状态与 TU 自己解析出来的状态不同构。
+    // 发的行与原来逐字相同 (同一批 include、同一顺序), 故发码字节零变化。
+    for (const std::string& preludeLine : c3PreludeIncludeLines(module.isFormModule || isDesignerModule_)) {
+        h_.emitLine(preludeLine);
     }
-    h_.emitLine("#include \"vb6rtl.h\"");
     // Fix 020: 取消 C/Windows 标准宏定义, 防止与 VB6 字段/方法名冲突
     // 例: stdio.h 的 EOF 宏让 Db->Rs.EOF 被预处理展开为 Db->Rs.(-1) → C2059 语法错误
     // vb6rtl.h 此前的 transitive include (stdio.h/windows.h/oleauto.h 等) 已完成声明,
