@@ -6707,3 +6707,206 @@ IntDiv(void) / 晚绑定属性读被丢 / 事件 vtable 少 `_has_Cancel` / BSTR
 设计上的坑已记：PCH 头必须由**发码器自己写**（它才知道模块属「窗体前奏」还是「普通前奏」），
 否则 driver 要重复判定 `isFormModule || isDesignerModule_`（两处权威）；
 且 `/MP` 与 `/Yc`/`/Yu` 互斥（`src/backend/msvc_driver.cpp:290` 已注记）。
+
+> **更正（§56.53 实测，本条断言不成立）**：真 MSVC 14.29.30159 实测矩阵 ——
+> `/MP` + `/Yc` → rc=0，`.pch` 正常生成；`/MP` + `/Yu` + `/FI` → rc=0 且
+> **PCH 状态真被套用**（哨兵宏判据）⇒ **`/MP` 与 `/Yc`/`/Yu` 并不互斥**，
+> **不必**自己把 TU 切成 N 份、起 N 个 cl 进程。`src/backend/msvc_driver.cpp`
+> 那条旧注记已随之更正（见该文件 §56.53 注记）。
+>
+> **本刀已落地** ⇒ 见文末 **§56.53** 台账。
+
+---
+
+## §56.53 PCH（主刀：PD 整编 7.3 min → 5.5 min，**1.33 倍**）
+
+> 让 623 个 TU 复用 `windows.h` / `vb6rtl.h` 的公共前奏。**发码字节零变化**, 错误面逐码相等。
+
+### 一、这一刀要解决什么
+
+§56.52 之后, PD 整编 (623 个 TU + 65 个 RTL .c) 的 cl 阶段只剩 **436.5 s** (7.3 min,
+CI run `43198109044`)。这 436.5 s 里, 每个 TU 都要**重新解析一遍** `windows.h` +
+`vb6rtl.h` + `oleauto.h` —— 623 份同样的头文本。MSVC 的预编译头 (PCH) 正是为这件事
+准备的: 把这份公共前奏编一次, 之后每个 TU 直接复用那份已解析好的状态。
+
+本刀的判据纪律与 §56.52 同源:
+- **判据唯一权威 = 发码器**。「这个模块用哪一副前奏」只有发码器知道
+  (`module.isFormModule || isDesignerModule_`), driver 不重判。
+- **前奏的排法只有一处**。PCH 头的内容必须与 TU 自己的前奏**逐字一致**, 否则套用
+  PCH 后的预处理状态与不开 PCH 时不同构 ⇒ 编译结果可能变。这条不能靠人肉同步,
+  所以前奏的 include 块抽成**一个函数** (`src/backend/cgen_pch.hpp`), 模块 .h 的前奏
+  与 PCH 头的文件内容都从它取 ⇒ "逐字一致"是**结构上**成立的。
+- **形状门不受影响**。形状门只哈希 `--emit-c` 的 **stdout**
+  (`scripts/emit_manifest.ps1:131-136`), 而 PCH 头是**落盘**的文件, 不进 stdout ⇒
+  623 个发码文件**一字不动**, 形状门零影响 (对比: §56.52 改了 118 行)。
+
+### 二、实测矩阵 (本机, 真 MSVC 14.29.30159)
+
+台账 `src/backend/msvc_driver.cpp` 旧注记写着「/MP 与 /GL、/Yc、/Yu 不兼容」——
+**实测不成立**, 本刀据此更正该注记并保留 /MP。
+
+| 组合 | 结果 |
+|---|---|
+| `/Yc"c3_pch.h" /Fp"…"` (裸名) | rc=0, .pch 正常生成 |
+| `/FI"c3_pch.h" /Yu"c3_pch.h" /Fp"…"` | rc=0, **PCH 状态真被套用** (哨兵宏 `#error` 判据) |
+| `/MP` + `/Yc` | rc=0, .pch 正常生成 |
+| `/MP` + `/Yu` + `/FI` | rc=0 |
+| `/MP` + `/Yu` + `/FI` + `/Fo"dir/"` | rc=0 |
+| `/Yu` 无 `/FI` | **rc=2** (C2857: 源文件里没有 `#include` 那枚头) ⇒ `/FI` 是必需件 |
+| `/Yc"<绝对路径>"` | **rc=2** (C2857) ⇒ `/Yc`/`/Yu` 的名字必须与 `#include` 的**拼写**一致 |
+| `/Fo"dir\"` (尾反斜杠) | **rc=2** (D8003 缺少源文件名) ⇒ 尾反斜杠在 rsp 里会吃掉闭引号 ⇒ 用正斜杠 |
+| 链接时漏掉 PCH 自己的 .obj | **LNK2011** 未链接预编译对象 ⇒ 链接必须带上它 |
+
+⇒ 结论: **PCH 头用裸名 + 落在 include 路径上**; **`/FI` + `/Yu` + `/MP` 三者并存**;
+**`/Fo` 用正斜杠**; **链接带上 PCH 的 .obj**。
+
+单 TU 实测 (本机): 无 PCH 0.79 s/ TU ⇒ 有 PCH 0.04 s/ TU (**约 12 倍**)。
+
+### 三、设计
+
+```
+                       ┌─ 普通档前奏 (stdint/stddef/stdbool/wchar + vb6rtl.h)
+   前奏 include 块 ────┤
+   (唯一排法:          └─ 窗体档前奏 (上面 + windows.h + vb6forms.h)
+    cgen_pch.hpp)            ▲
+                             │ 同一个函数取 ⇒ 逐字一致 (结构保证)
+              ┌──────────────┴──────────────┐
+        模块 .h 的前奏                 PCH 头的文件内容
+     (cgen_base_generate_                (driver 写盘,
+      header_open.inc)                    msvc_driver.cpp)
+```
+
+**四段 cl** (一次 cl 调用**只能用一个 PCH** —— /Yc /Yu /Fp 都是调用级选项):
+
+| 段 | 命令 | 编什么 |
+|---|---|---|
+| 1 | `/c /Yc"c3_pch_std.h" /Fp"…"` | 建 PCH 库 (普通档) |
+| 1' | 同上 (窗体档) | 建 PCH 库 (窗体档) |
+| 2 | `/c /FI"c3_pch_std.h" /Yu"…" /Fp"…"` | 普通档那一组 TU |
+| 2' | 同上 (窗体档) | 窗体档那一组 TU |
+| 3 | `/c` (无 /FI) | **RTL 那一族** + driver 自产的 dll_entry.c / com_entry.c |
+| 4 | `.obj` 输入 + `/link …` | 链接收口 |
+
+**为什么 RTL 那一族不能用 PCH**: 各族前奏不一致 —— `vb6rtl_*.c` 引 `vb6rtl.h`,
+`vb6com.c` 引 `vb6com.h`, `vb6forms.c` 自带 `WIN32_LEAN_AND_MEAN` (连 windows.h 的
+形态都不一样) ⇒ 套上去的状态不同构。`dll_entry.c` / `com_entry.c` 是 driver 自产的,
+不是发码器 TU, 同样不用。
+
+**为什么窗体档要单独一份 PCH**: 窗体档前奏多两行 (windows.h + vb6forms.h), 且顺序
+不同 (P7: windows.h 必须在 vb6rtl.h 之前)。一份 PCH 套到另一档 ⇒ 状态不同构。
+
+**零语义变化的论证**: PCH 头 = 该组 TU 自己的前奏 ⇒ 套用后 TU 里那几行 include 变成
+空操作 (include guard 已定义), 之后的 Fix 020 的 `#undef` 块 / Fix 059 的 IID 重映射 /
+tB 接口契约 typedef **照旧在原位发生** ⇒ 预处理状态与不开 PCH 时**同构**。
+
+### 四、改动清单
+
+| 文件 | 改了什么 |
+|---|---|
+| `src/backend/cgen_pch.hpp` (新) | 前奏 include 块的**唯一排法** (`c3PreludeIncludeLines`) |
+| `src/backend/detail/base/cgen_base_generate_header_open.inc` | 前奏改从那个函数取 (发的行逐字相同 ⇒ 发码字节零变化) |
+| `src/backend/detail/util/cgen_api.inc` | `CCodeGen::usesFormPrelude()` —— PCH 分组的唯一判据 |
+| `src/backend/cgen_base.cpp` | 加 `#include "backend/cgen_pch.hpp"` |
+| `src/driver/driver.hpp` | 新成员 `pchFormModules_` (发码器报上来的窗体档名单) |
+| `src/driver/detail/driver_codegen_module_loop.inc` | 逐模块收 `cgen.usesFormPrelude()` |
+| `src/driver/driver_link.cpp` | 组两个 PCH 组 (内容取自 cgen_pch.hpp), 交给 msvc_driver |
+| `src/backend/msvc_driver.hpp` | `MsvcDriverOptions::PchGroup` + `pchGroups` + `compileAndLinkPch()` |
+| `src/backend/msvc_driver.cpp` | 命令行拆三段 (公共编译档/输出档/链接档) + PCH 四段路径 |
+
+**老路保留**: `pchGroups` 为空时仍走原来的「一次 cl 编译+链接」, 命令行**一字未改**
+(那三段 helper 是**抽出**共用段, 不是改写)。增量路径 (opt3, `msvc_driver_incremental.cpp`)
+是**另一条实现**, 本刀**不覆盖**它 (那条路的 obj store 是内容寻址的, PCH 得另做一份键设计)
+⇒ driver 侧显式不交组。
+
+### 五、本机验证
+
+- 多模块夹具 (`.temp/trimfix/`, 6 模块): rc=0, 出 exe, 跨模块 include 裁剪形状不变。
+- 带窗体夹具 ×3 (`tests/guisample` 11 模块 / `tests/ucTreeView` / `tests/acc/acc_fam`):
+  rc=0, 出 exe; **两份 PCH 都建出来** (`c3_pch_std.pch` 30.3 MB / `c3_pch_form.pch` 30.5 MB)
+  ⇒ 两档都走到了。
+- `scripts/check_module_order_authority.ps1` P1..P5 通过。
+- 形状门: 本机清单 678 输入, **数据行与 §56.52 基线逐行相同 (不同数 = 0)** ⇒ 零影响。
+  口径: §56.52 旧二进制 (`.temp/C3_nopch.exe`, 15927808 B, `0b47dabb…`) 跑出的清单
+  (`.temp/manifest_nopch.txt`) vs §56.53 新二进制 (`.temp/C3_pch.exe`, 15972352 B,
+  `bf1a6791…`) 跑出的清单 (`.temp/manifest_pch.txt`), **678 条数据行逐行对照**。
+  另: `tests/b189_gate/B189g.vbp` 的 emit 输出 13790 字节, **首个不同字节 = -1 (逐字相同)**。
+- **形状门仍挂账 122 行**, 本刀**零新增零减少** ⇒ 维持"暂不 bless"的处置。
+  口径照抄 §56.52 §七 (CI 那台的权威读数): 「本刀单独改 **118 行** (678 行中); 连同此前挂账的
+  **23 行** (旧基线 18 + §56.48 的 5), 距仓库里的期望文件共 **122 行**」—— 按用户裁定暂不 bless,
+  等批准时一次登记 (`scripts/rebless_emit_manifest.ps1 -Bless`)。
+  本机清单口径 123 行 (比 CI 多 1, 机器环境差, §56.50 已归因) ⇒ **权威只在 CI 那台**。
+  §56.53 之所以零新增: PCH 头是**落盘**文件, 不进 `--emit-c` 的 stdout。
+
+### 五之二、本地 A/B 读数为何不可用 (明写)
+
+- 带窗体夹具里最大的 `tests/guisample` 只有 **11 个项目 TU** (另外 65 个 RTL .c 不走 PCH),
+  本机 cl 阶段本来就只占几秒 ⇒ **本机测不出 PD 那个量级的收益**。
+- 有意义的读数**只在 CI 的 PD 整编上** (623 个 TU)。本机那几次计时还被并发 ninja 污染过
+  (pch#3 异常 98.7 s) ⇒ **不作为读数**, 只留作"没崩/出得了 exe"的存活证据。
+- 本机这一刀真正能证明的是: **发码字节零变化** + **两档 PCH 都建得出** + **四个夹具 rc=0**。
+
+### 六、GA 读数 (CI)
+
+**同口径对照**: run `43198109044` (§56.52 瘦身, **无** PCH) vs run `43214960135`
+(§56.53 PCH + 留档补全) —— 两边 C3 源码只差「这一刀 + 那一刀补刀」, 故差值**只归这一刀**。
+
+| 读数 | §56.52 基线 run `43198109044` (无 PCH) | §56.53 run `43214960135` (PCH + 补刀) |
+|---|---|---|
+| `BUILD_SECONDS` | **436.5 s = 7.3 min** | **328.3 s = 5.5 min** |
+| `BUILD_EXIT` | 1 | 1 |
+| `STDERR_LINES` | 7765 | 7767 |
+| `STDERR_BYTES` | — | 406696 |
+| `PEAK_TREE_WS_MB` | 9695 | 9681 |
+| `MIN_FREE_PHYS_MB` | 4162 | 4194 |
+| 错误码归总 (stderr 口径) | C2440 13 / C2198 8 / C2036 5 / C2095 4 / C2106 4 / C2069 2 / C2186 2 / C2197 1 / C2296 1 / C2040 0 | **逐码完全相同** |
+| 错误面 (`c3-error.log`) | 基准 | **逐码完全相同 (差异码种数 = 0)** |
+
+⇒ **1.33 倍** (436.5 s → 328.3 s, 省 108.2 s), 且**错误面逐码相等** ⇒ 这一刀既没引入
+新错误、也没顺手修掉旧的。
+
+**「逐码相等」是怎么证的** (`c3-error.log` 口径, 逐码计数, 新旧各条相等):
+
+- **错误 17 族全等**: C2036 34 / C2054 1 / C2059 7 / C2069 4 / C2095 5 / C2102 4 /
+  C2106 6 / C2113 3 / C2143 6 / C2172 4 / C2186 5 / C2197 1 / C2198 27 / C2223 3 /
+  C2296 13 / C2297 5 / C2371 1 / C2440 20
+- **警告 19 族全等**: C4005 16516 / C4013 35 / C4018 2 / C4022 373 / C4024 7186 /
+  C4028 560 / C4029 6 / C4030 6 / C4047 7978 / C4090 604 / C4101 6 / C4102 4037 /
+  C4113 20 / C4133 2869 / C4146 2185 / C4228 2 / C4244 9133 / C4305 143 / C4996 14 /
+  C5287 1
+- ⇒ **36 个码种, 差异 0 个**。
+
+**补刀的效果** (vs §56.53 首轮 run `43210287662`, 同一份 PCH, 只差留档补全):
+
+- 错误面: 17 族仍逐码相等 (差异 0)
+- 警告面: 首轮**少** 127 条, 补刀后**全部回归** —— C4244 +49 / C4113 +20 /
+  C4996 +14 / C4028 +9 / C4047 +8 / C4024 +7 / C4133 +7 / C4090 +5 / C4101 +3 /
+  C4018 +2 / C4005 +1 / C4305 +1 / C5287 +1
+  (首轮那份清单列了 126 条, **漏掉 C4090 (5) 与 C5287 (1) 两族** ⇒ 实测共 127 条;
+  "少" 的根因仍是同一个: 成功那几段的输出没落盘)
+- ⇒ 失败留档回到「全」的状态, 与 §56.52 基线**完全对齐**。
+
+**两轮 §56.53 读数之差** (344.9 s → 328.3 s, -16.6 s): **不归因给任何一刀** ——
+补刀只动日志留档, 不碰编译路径; 这是 runner 负载差 (§56.52 台账 §六 有同类先例:
+374.2 s → 436.5 s, +16.6%, 当时同样没归给代码)。**只认「同口径对照」那一对**。
+
+PD 仍然编不出 exe (`BUILD_EXIT=1`) —— 那是另几族已知错误 (IntDiv(void) / 晚绑定属性读 /
+事件 vtable 少 `_has_Cancel` / BSTR→double / void 表达式 / `=`: left operand /
+`void*` unknown size / 函数指针算术 / SafeArray1D*→Variant / LockIn 多参), 与本刀无关。
+
+stderr 归总里那条 `C1083 1` 是工作流脚本自己的**注释行** (`# cl: ... fatal error C1083: ...`),
+基线同样 1 条 ⇒ **假阳性**, 不算错误面。
+
+### 七、这一刀没有做的事 (明写)
+
+- **不覆盖增量路径** (opt3)。
+- **不给任何开关**。PCH 是固有行为 (与 §56.52 同口径)。唯一的"开关"是**内部**的
+  `pchGroups` 是否为空 (正常工程都非空 ⇒ 都走 PCH 路)。
+- **不做失败回退**。建 PCH 失败 = 编译器自己的问题, 直接判红 (回退会让时间读数
+  变成"没走 PCH 的那一档", 读数不可信)。
+- **RTL 那一族拿不到 PCH** (65 个 .c) —— 它们的收益留在以后。
+- **形状门不 bless** (仍挂账 122 行), 维持 §56.52 §七 的处置, 等用户批准时一次登记。
+- **debug 构建同样裁 / 同样走 PCH**。用户 2026-11-12 裁定:「只要裁剪不影响 debug 的
+  信息就没事」⇒ 理由 (裁的是整行 `#include`, 行号不变, 原型/类型照旧可见, PDB 里那些头的
+  类型记录由它们自己那份 TU 提供) 已写进 `ai/C3_COMPILE_OPTIONS.md`。
+- **不发码器一个字节**。PCH 只动 cl 的调用形状, 发码输出逐字不变 (本机 678 行清单
+  逐行对照, 不同数 = 0)。
