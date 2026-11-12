@@ -60,9 +60,13 @@
             && !(calleeIsBuiltinFuncName40 && (funcSym->kind == SymbolKind::PropertyGet
                  || funcSym->kind == SymbolKind::PropertyLet
                  || funcSym->kind == SymbolKind::PropertySet))
-            // 账 §56.50: 保留语句关键字一律让位给内建 (连 Sub/Function 也不采用) ——
+            // 账 §56.50: 保留语句关键字让位给内建, 但**只让位给用户成员** ——
             // 名字已经解析成内建出口 (vb6_Randomize 等), 形参表必须与之一致。
-            && !calleeIsReservedStmtKeyword) {
+            // ⚠ 只挡**用户**符号 (!funcSym->isBuiltin): `Load`/`Unload` 在语义层**本来**
+            // 就登记成内置符号, 让它也被挡掉会把 calleeIsBuiltin 从 true 翻成 false ⇒
+            // 那两枚内建的既有形状跟着变 (本机实测: guisample 的 `Unload Me.ActiveForm`
+            // 实参包装从有变无)。内置自己的登记一律不动。
+            && !(calleeIsReservedStmtKeyword && !funcSym->isBuiltin)) {
             // 重载变体 (O2): 语义层选定变体时, 形参表/返回类型以变体符号为准
             if (!node.calleeOvlSuffix.empty()) {
                 if (auto* ovSym = symTab_.lookupModuleOverloadBySuffix(

@@ -401,7 +401,10 @@ void SemanticAnalyzer::visit(IndexOrCallExpr& node) {
         // (PD pdRandomizeUI.ctl:301 `Me.Randomize`)。这里不挡一下, 同模块那枚 0 参成员
         // 会被当成被调方 ⇒ 假 VB3005「参数数量错误: 'Randomize' 需要 0-0 个参数」
         // (本机探针 .temp/probe/rnd4 实测)。口径问 common/reserved_stmt_keyword.hpp。
-        if (sym && isReservedStmtKeyword(ident->name)) sym = nullptr;
+        // ⚠ 只挡**用户**符号 (!sym->isBuiltin): `Load`/`Unload` 在语义层本来就登记成
+        // 内置符号 (那条登记正是它们顶不掉用户成员的原因), 把它也挡掉会改掉那两枚
+        // 内建的既有语义 (本机实测 guisample 的 `Unload` 实参包装会跟着变)。
+        if (sym && !sym->isBuiltin && isReservedStmtKeyword(ident->name)) sym = nullptr;
         if (sym) {
             sym->isReferenced = true;
             // 虚方法 (tB, B08d): 这条分支自己查符号、不走 visit(IdentifierExpr), 所以裸名
