@@ -5356,3 +5356,161 @@ Object / 指向工程类」⇒ 它身上的 `()` 是默认属性（或方法）�
    `iface_view_authority` 最重（名册现在有 7 个站点直问 `slotIvrefViewName`，绕过主人）。
 3. **`FlexGridX86` 那条产品缺口**（typelib 解析不到 ⇒ UDT 整体不生成）—— 优先级高于
    ucSegmentedControl，因为它是真的编不过。
+
+## §56.41 GA 红面收口：4 条 STATIC 全绿 + V11 真回归改发码 + FlexGridX86 两处产品缺口（2026-11-12）
+
+§56.40 留下的 4 个红脚本本刀**全部收掉**（提交 `7bfb3f35`），CI 侧已验证
+（run `43143237671`，head `7bfb3f35`：`Tests (compile #1)` / `Tests (compile #2)` 两枚
+STATIC 分片**转绿**）。本节记：① 四条红的逐条定性与处置；② 形状门 18 行的三方归因与
+用户裁决；③ FlexGridX86 那条**真编译失败**的根因（与 §56.40 的初判不同 —— 不是
+「typelib 解析不到 ⇒ UDT 整块不生成」，而是两个各自独立的真缺口，本机已复现并修掉）。
+
+### 一、四条 GA STATIC 红的逐条定性（与 §56.40 的初判有两处不同）
+
+| 红 | §56.40 的初判 | 本刀的取证结论 | 处置 |
+| --- | --- | --- | --- |
+| `builtin_opt_defaults`（R7） | 真回归 | **判据漂移**：R7 的例外名册写于 `ef978c0d`（2026-10-12，§B153），而 `vb6_Randomize` 那一段（裸 `Randomize` 改 callee = `vb6_RandomizeTimer` 并清空实参）加于 `fbc26f64`（2026-11-09）⇒ **名册比段旧** | 按 R7 自己的口径写进 `$notPadding` + 写清理由（改 callee，不是补档） |
+| `object_slot_boxing`（B11） | 真回归 | **判据漂移**：B11 原来钉的是 `procObjectFormals_.count` 的**总出现数 = 1**，而那一问量的是同一个字符串，量不到「否决」这个动作。`aa715a0d`（2026-11-10）与 `403f43d9`（2026-11-11）各加了一位**正向读者**（晚绑定接收者 / 跨模块同名成员借表），问的是**同一张表**、不是否决 ⇒ 总数 1→3 | 拆成三排：否决点恰好 1（`if (procObjectFormals_.count(lower)) return "";`，住 `cgen_util_classtype.cpp`）+ 正向读者恰好 2（**逐文件钉住**）+ 总数 = 两排之和（多一位读者立刻红） |
+| `legacy_view_arg_owners`（V11） | 真回归 ✓ | **真回归（确认）**：第三位消费者 = `src/backend/cgen_util_ctrl.cpp` 的 `emitUcDefaultPropLet`（UC 默认属性**写**那一腿，F1 收口 `356f21ae` 引入）绕过了既有权威 | **改发码**（判据一个字未动），见下 |
+| `iface_view_authority`（7 条子钉） | 真回归 | **判据漂移**：7 条子钉全部过期（2026-11-09/10 的 R4 收口与 Set 拆箱各加站点） | 逐条照实改数 + **逐文件钉住名单**（§56.38 A7 先例，不降级成「至少 N 处」） |
+
+#### V11 的发码收口（唯一动了发码的一条）
+
+- 病灶：同一枚型在两站可能给出两个打包器名 —— 「裸控件名折默认属性」那一支（`comPackExpr`）
+  带「折叠值只认那六档」的闸，`emitUcDefaultPropLet` 那一支**没有** ⇒ 站点与主人各说一遍。
+- 改法：新增**唯一一问** `comPackFnForDefaultPropType`（住权威那份文件 `cgen_util_com.cpp`），
+  把那道闸与那张配对表（`kComPackTiers`）合成一问；两处消费点都问它 ⇒
+  `comPackFnForVbType` 的读者回到 2 位（正向问位数仍是 4 = 定义 + 声明 + 两处消费），
+  **V11 的判据一个字未动**；另钉 **V11b** 钉住新问的读者名单（定义 1 + 声明 1 + 消费 2 = 4，
+  住处三份文件）。
+- 形状零改动：折叠值那六档两处原本就答得一样；UC 默认成员的返回型（`ucDefaultReadPlan`）
+  只放行 Double/Single/Long/Integer/Boolean/String/Date 七档，其中 Date 不在配对表里
+  ⇒ 两处都答空串 ⇒ 写那一腿照旧交回 `comPackExpr` 兜底。
+
+#### `iface_view_authority` 的 7 条子钉（照实改数 + 逐文件钉住）
+
+| 钉 | 旧 | 新 | 归因 |
+| --- | --- | --- | --- |
+| ② `ifaceViewOfExpr` 消费文件 | 5 | 6 | `650b7bac`（2026-11-10，R4 收口）给成员访问接收者的零参裸读那一臂接上同一位主人 |
+| ③ `"vb6_ivref_"` 字面量文件 | 6 | 7 | `43528bb8`（2026-11-09，R4 收口）给 With 那一站接上「临时量的 C 类型 = `vb6_ivref_<I>*`」 |
+| ⑤ `emitIvrefRefSet(target` 调用点 | 4 | 5 | `1075d990`（2026-11-10，Set `<接口变量> = <Variant/Object>` 走运行期类名拆箱） |
+| ⑨ `ivrefViewGetterReadExpr` 调用点 | 1 | 2 | `43528bb8` 给 Debug.Print 的 COM 属性读那一站接上同一位主人 |
+| ⑨ 视图属性读消费文件 | 1 份 | 2 份 | 同上 |
+| ⑨ `slotIvrefViewName` 出现数 | 3 | 10 | 名册的**文本投影**（第二百一十刀 S1）本就是给「手里只有发射文本、拿不到 AST」的那一族站点用的；R4 收口接进来的六处都属这一族 |
+| ⑨ 名册读者住处 | 2 份 | 8 份 | 同上 |
+
+其中 ⑨ 的「`slotIvrefViewName` 只许主人自己用」那一钉把**主人**与**读者**混成了一件事：
+名册（`knownIvrefVars_`）是**按名**那张表，而 `ifaceViewOfExpr` 是**按表达式**那一问；
+不变量「名册只由一个函数读」仍然成立（定义 1 + 声明 1），被读多少次是**读者名单**，
+名单是闭的 ⇒ 改成逐文件钉死（主人 3 + 声明 1 + 六位站点读者各 1 = 10）。
+
+### 二、形状门 18 行：三方归因 + 用户裁决「暂不 bless」
+
+CI 侧读数（run `43139994702`，head `5dca11e4`）：`Emit manifest (shape oracle)` **红**，
+678 份语料里 **18 行**与 checked-in 的 `emit-manifest.expected.txt` 不同。三方归因：
+
+| 比的一对 | 差几行 |
+| --- | --- |
+| blessed ↔ CI@`212d8427`（VARIANT 刀） | **19** |
+| blessed ↔ CI@`5dca11e4`（+ oracle 校准） | **18** |
+| CI@`212d8427` ↔ CI@`5dca11e4` | **1**（`tests/cls_inh/Inh.vbp` = oracle 校准回退的那一行） |
+
+⇒ 那 18 行**全部**来自 VARIANT 族的合法形状变化（oracle 校准只回退了第 19 行）。
+
+**用户裁决（本轮问过）**：**暂不 bless** —— 保持形状门红并记账，继续推进别的刀。
+（台账 §56.39 把「bless 既有形状」列为须单独批准的一项；本轮按此问了一次，答复是挂账。）
+
+**本机清单跑法**（形状门口径，§56.38 沿用）：本机 `scripts/emit_manifest.ps1` 跑完 678 份，
+与 **CI 那台** `5dca11e4` 的清单逐行比对 ⇒ 只差**那 4 条既知环境差异**
+（`tests/guisample/GUISample.vbp`、`tests/guisample/vb6ref/src/vc6/GUISample.vbp`、
+`tests/guisample/vb6ref/src/vs2015/GUISample.vbp`、`tests/TeeChartChartDisplay/DisplayProject.vbp`）
+⇒ 本刀（V11 收口）**零形状变化**；对 blessed 差 22 行 = 18（VARIANT）+ 4（环境）。
+
+### 三、FlexGridX86：那不是「typelib 解析不到 ⇒ UDT 整块不生成」
+
+§56.40 的初判写的是「CI runner 解析不到 `OLEGuids` 类型库 ⇒ 含 COM 字段的 UDT 整块不生成」。
+**本机复现后这个初判不成立**（或说只对了一半）：CI 与本机**同样**报
+`VB4001 TypeLib reference path not found: ...\Windows\SysWOW64\msdatsrc.tlb` 与三条
+`VB3044 Implements: interface 'OLEGuids.IObjectSafety' not found` ⇒ 那不是 CI 独有。
+真正的编译失败是**两个各自独立的真缺口**，本机已复现并修掉：
+
+#### 缺口 A：UDT 定义块排在它自己用到的前向 typedef **后面**（cl C2061/C2143/C2059）
+
+- 实物：`VTableHandle.h(26/27/28)` —— `vb6_type_VTableIPAODataStruct` 的两个字段声明成
+  早期绑定的接口类型（`vb6_ComIface_IOleInPlaceActiveObject*` /
+  `vb6_ComIface_IOleInPlaceActiveObjectVB*`），而那批前向 typedef
+  （`typedef struct vb6_ComIface_X vb6_ComIface_X;`）发在**它后面** ⇒
+  × 9 个 TU（C2061 缺标识符 + C2143 缺 `{` + C2059 缺 `}`）。
+- 机制：后端 epilogue（`cgen_base_generate_epilogue.inc` 的 P6.3 段）把前向 typedef 插在
+  `#include "vb6rtl.h"` **之后**；driver 阶段 2（`driver_codegen_module_loop.inc`，
+  账 §G1/§G1b）把 **UDT 定义块**也插在**同一个位置**，而它发生在后端之后 ⇒ UDT 块落在
+  那批 typedef **前面**。
+- 修法：driver 注入块前面的那份 `pre`（补 `vb6_cls_*` 前向 typedef 的那一位）**同补
+  `vb6_ComIface_*` 那一族** ⇒ 注入块自己带着它用到的 typedef（C11 允许同类型 typedef
+  重复声明 ⇒ 与后端那一批重发不冲突）。只影响「UDT 块里真的提到 `vb6_ComIface_*`」的
+  那几张头，别的头发码形状一字不动。
+
+#### 缺口 B：`VBA.Choose(...)` 的「整只 Variant 槽」误判（cl C2440）
+
+- 实物：`VBFlexGrid.c(5424/5501)` —— `vb6_VariantToLongPtr(<intptr_t>)` ⇒
+  C2440「无法从 intptr_t 转换为 vb6_VARIANT」。
+- 源码：`VBFlexGrid.ctl:3824` `hToolTip = VBA.Choose(j, VBFlexGridToolTipHandle,
+  VBFlexGridScrollTipHandle)`（两支都是 `As LongPtr`）。
+- 机制：`VBA.Choose` 被发码侧（P18-E 段）约简成**嵌套三目**
+  `((j)==1 ? (a) : ((j)==2 ? (b) : (NULL)))` ⇒ 真 C 类型由两支决定（此处 intptr_t），
+  **不是** `vb6_VARIANT`；而槽问句 `isDefinitelyVariantExpr` 的多态内置 denylist 只认
+  **裸名**（`iif`/`choose`/`switch`/`if`），限定形态落到递归分支 ⇒ 按 `VBA.Choose` 的
+  登记返回型（Variant）答「整只 Variant 槽」⇒ 读腿套 `vb6_VariantToLongPtr` ⇒ C2440。
+- 修法：限定形态（限定名只认 `VBA` / `VBA5`，与发码侧同一口径）的 `Choose` / `Switch`
+  在槽问句里答否。**IIf 不在这一族**：发码侧只对**裸名** `IIf(...)` 折成 `vb6_IIfXXX`，
+  限定形态不走那条路。用户自己的 `obj.Choose()` 方法不受影响（那不是内置，仍按声明返回型答）。
+
+#### 处置与读数
+
+- 本机可复现（`C3.exe tests\VBFlexGridDemo\VBFlexGridDemo.vbp --arch x86` ⇒ 修前
+  「编译失败 (exit code 2)」，错误落在 `%LOCALAPPDATA%\Temp\C3C\<戳>\` 里 —— 失败时
+  intermediates 保留在那儿，`_c3_msvc_out.txt` 是**编译器的原话**；CI 那边的
+  `output/FlexGridX86/c3-error.log` 是同一个东西）。
+- 修后：同一命令编过（**本机**；CI 上那台 runner 的 typelib 环境与本机略有差别，
+  最终以 CI 的 `Tests (vbp #11)` 为准）。
+- 这两刀都改发码 ⇒ 形状会变（VTableHandle.h 那张头多出两行前向 typedef + `VBA.Choose`
+  那一处少一层包装）⇒ 形状门那 18 行之外会**再增**（本轮同样**不 bless**，挂账）。
+
+### 四、形状门以外的 GA 红面（现状）
+
+| 红 | 状态 |
+| --- | --- |
+| 11 条 STATIC | **全绿**（7 条在 `e68a24be`，4 条在 `7bfb3f35`） |
+| `Emit manifest (shape oracle)` | **红 18 行**（VARIANT 族的合法形状变化）+ 本刀 FlexGrid 两处会再增几行。**用户裁定：暂不 bless，挂账** |
+| `Tests (vbp #11)` `[GUI] FlexGridX86` | 本机已修（缺口 A + B），等 CI 复核 |
+| `Tests (vbp #4)` `[GUI] ucSegmentedControl` 像素 | 仍红：**判据的采样面在 CI 上与本机不是同一张面**（CI 抓的是父窗体表面，12 个 UC 子窗各自的表面不在其中 ⇒ 逐控件彩色计数必然全 0；`openEditor whitePx=5617` 非零即是旁证）。不是渲染回归（上一轮基线 `43120794775` 读数逐字相同）。三条建议见 §56.40 §五 |
+
+### 五、本机读数（`7bfb3f35`）
+
+- 4 个脚本：`builtin_opt_defaults` PASS / `object_slot_boxing` PASS /
+  `legacy_view_arg_owners` PASS（V11 = 4/3/3，V11b 新钉 4 处）/
+  `iface_view_authority` PASS（11 条子钉全绿）。
+- 本机 678 份语料清单 vs CI 那台 `5dca11e4` 的清单：**逐行相同**（只差那 4 条既知环境差异）
+  ⇒ 本刀零形状变化。
+- `-Category syntax`：**PASS=227 FAIL=0**；`scripts\check_variant_unbox.ps1` PASS（R1..R7）。
+
+### 六、下一刀（接续点）
+
+1. **VARIANT 族剩下的形状**（§56.40 §六那三组，本刀未动）：
+   - **Optional `As Variant = <字面量>` 的默认值没装箱** ⇒ `'=' 无法从 int 转换为
+     vb6_VARIANT`（pdDictionary.c 258、pdSelection.c 155）。
+   - **对象 → Variant 返回槽的初始化没装箱** ⇒ `'initializing' 无法从 vb6_cls_X* 转换为
+     vb6_VARIANT`（pdCanvas.c 165、pdStatusBar.c 160、pdTreeviewOD.c 126、
+     pdTreeviewViewOD.c 109，**四处同形**）。
+   - 零散两条：`pdCBZ.c 411`（VARIANT → VARIANT*）、`pdSpriteSheet.c 315`
+     （SafeArray1D* → VARIANT）。
+   - ⚠ 本刀的缺口 B 属于**同一族**的另一面（槽问句把「不是槽」的表达式答成「整只槽」）——
+     下一刀收这一族时，**判据要与发码侧同源**（限定形态的多态内置只有 `Choose`/`Switch`
+     被折成三目，`IIf` 不是）。
+2. **FlexGridX86 在 CI 上的复核**（`Tests (vbp #11)`）：本机已编过，但 CI 那台 runner 的
+   typelib 环境与本机不同（`msdatsrc.tlb` 两边都找不到；`OLEGuids` 注册表两边也不同）⇒
+   若 CI 仍红，下一步是把 `Implements OLEGuids.IObjectSafety` 那三条 `VB3044` 也收掉
+   （限定名 `OLEGuids.IObjectSafety` 在符号表里是**平名** `IObjectSafety` ⇒
+   `semantic_analyzer.cpp:278` 的 `lookupModule(ifaceName)` 认不出限定名）。
+3. **ucSegmentedControl 像素判据**：采样面与阈值两件事（§56.40 §五的三条建议）。
+4. **形状门**：维持挂账，等用户批准 bless 时**一次**登记（本轮不动 `emit-manifest.expected.txt`）。
