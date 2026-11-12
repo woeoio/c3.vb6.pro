@@ -6304,3 +6304,48 @@ me->m_ZipArchive = (vb6_cls_cZipArchive*)vb6_ComObject_UnboxVb6Instance(…);
   `pdClipboardMain` / `pdAsyncPipe` / `pdInputKeyboard` / `pdPipe` / `pdEditBoxW` / `pdFlyout` …）
   会在整编里**第一次真的接上事件** ⇒ 运行期行为会变（原先一律不触发）。
   这一批只能在 PD 整编/运行期看，本机只能证到「发码形状 + 单工程运行期」。
+
+### 八、§56.48 补刀（同一刀的第二个 commit）：UC (.ctl) 源类不接线
+
+上一刀把类成员 WithEvents 的汇接上线之后，`ucTreeView/ClsTreeExplorer.cls` 的
+`Private WithEvents cTVP As ucTreeViewPlus`（**源类是 .ctl**）也被接上了 ——
+而 UC 那一路的包装器按值、处理器按地址（**既有**形状，本来就对不上）：
+
+```
+包装器: void vb6_evt_wrap_ClsTreeExplorer_ctvp_NodeClick(void* handler, vb6_cls_Node* Node);
+处理器: static void vb6_ClsTreeExplorer_cTVP_NodeClick(vb6_cls_ClsTreeExplorer* me, vb6_cls_Node** Node);
+```
+
+把汇接上线 = 把那个既有不一致**接活** ⇒ 运行期拿错指针。
+
+⇒ **源类在 UC (.ctl) 那一路 ⇒ 不接线**（与改前同形，连空壳 `if` 都不留）。
+判据 = 「这个源类是不是工程内的用户控件模块」：名单由**驱动**扫一遍 `modules_` 建
+（`collectControlModuleNames`，与既有的 `collectFormModuleNames` 同形），
+下发给每台 cgen（`knownControlModuleNames_`）—— 不许第二处各扫一遍 `modules_`。
+
+**走过的两条弯路（记在这里，免得有人再走一遍）**：
+
+1. 把口径做成**类符号上的标志**（`eventVb6DefaultLane`）⇒ **走不通** ——
+   UC 的事件声明**压根没进语义层那张主表**（UC typedef 的按值是**后端**按 `module.docKind`
+   定的，不是语义层算的），标志位根本没被置上；跨模块注入那段
+   （`driver_crossmod.cpp:414-424`）还要**逐字段**跟着拷，少一个字段就漏。已撤掉。
+2. 跳过时仍发一个空壳 `if (target) { }` ⇒ 发码里多两行（形状门会看到）⇒ 改成**一个字都不发**。
+
+### 九、形状门预计新增的行（bless 时一并登记）
+
+本刀唯一的形状变化 = 「**声明过事件的类**」的 `_Destroy` 里多一行：
+
+```c
+if (me->events) { vb6_Free(me->events); me->events = NULL; }  /* 账 §56.48: 事件汇出厂放手 */
+```
+
+清单（`emit-manifest`，678 个输入）里**含 8 个输入**（含声明过事件的类/UC 的工程）：
+`tests/m7_test/M7Main.bas`、`tests/m7_test/M7Test.vbp`、`tests/test_activex_dll/test_event_dll.vbp`、
+`tests/test_events/test_events.bas`、`tests/test_events/test_events.vbp`、
+`tests/ucSlider_2022/modIOleInPlaceActiveObject.bas`、`tests/ucSlider_2022/Proyecto1.vbp`、
+`tests/ucTreeView/Proyecto1.vbp`。
+
+⇒ 将来批准 bless 时，形状门的差异行 = **原有的 18 行 + 本刀的 8 行 = 26 行**，
+本刀的 8 行是**有意的形状变化**（事件汇归源实例所有 ⇒ 出厂时放手），
+不是回归。本机实测：ucTreeView / test_events / m7_test 三个工程的发码逐行 diff
+**只多这一行**，无别的变化。
