@@ -289,11 +289,14 @@ bool CCodeGen::generate(Module& module, const std::string& baseName,
 // 绝不往「少留」偏 —— 少留一个头就是 C2065 编译断):
 //   1) usedExternalModules_ —— 发码时登记 (过程/类/枚举三处收口), 构造上完备;
 //   2) 文本兜底 —— 本模块文本里出现的**带模块名**的标识符 (vb6_<Mod>_* /
-//      vb6_cls_<Class>_* / vb6_form_ctrl_<Mod>_* / vb6_form_hwnd_<Mod>);
-//   3) 符号表兜底 —— 本模块文本里出现的**裸名** ∩ 外部符号的裸名。跨模块 Public
-//      常量/变量发的是裸名 (定义方 .h 里的 #define / extern 才有那个标识符);
-//      枚举 (vb6_enum_<Type>_<Member>) 与类 (vb6_cls_<Class>) 的名字不带模块名,
-//      只能靠这一路认。
+//      vb6_cls_<Mod>_* / vb6_form_ctrl_<Mod>_* / vb6_form_hwnd_<Mod>);
+//   3) 符号表兜底 —— 本模块文本里出现过的标识符 ∩ 外部符号的名字。三档口径不同:
+//      * 公共变量/常量 ⇒ 整个 token 匹配 (发的是**裸名**, 靠定义方 .h 的 #define / extern);
+//      * 类 / 接口 / 枚举 ⇒ **组件**匹配 (名字**不带模块名**, 且嵌在长标识符里:
+//        vb6_cls_<C>_<member> / vb6_iv_thin_of_<C> / vb6_ivref_<I> / vb6_iface_<I> /
+//        vb6_iv_test_iid_<C> / vb6_enum_<T>_<Member> …);
+//      * 模块 ⇒ 只认**带模块名**的形态 (组件匹配在这儿不行: 每个模块的 .c 都有
+//        `vb6_mod_<X>_init()` ⇒ 模块名必然作为组件出现 ⇒ 那样判等于「全留」)。
 //
 // 裁掉一行 include 时必须补一行 init 前向声明: 每个模块的 .c 都会调**每个**别的模块的
 // `vb6_mod_<X>_init();` ⇒ include 掉了, 声明必须还在。
@@ -315,6 +318,7 @@ void CCodeGen::trimCrossModuleIncludes() {
     //   会把每个模块都误判成「被引用」⇒ 瘦身等于没做。
     std::unordered_set<std::string> tokens;
     std::unordered_set<std::string> prefixes;
+    std::unordered_set<std::string> components;
     {
         size_t pos = 0;
         while (pos < all.size()) {
@@ -341,7 +345,9 @@ void CCodeGen::trimCrossModuleIncludes() {
                         for (size_t k = tok.find('_'); k != std::string::npos;
                              k = tok.find('_', k + 1)) {
                             prefixes.insert(tok.substr(0, k));
+                            components.insert(tok.substr(0, k));
                         }
+                        components.insert(tok);
                         i = j;
                     } else {
                         ++i;
@@ -394,11 +400,20 @@ void CCodeGen::trimCrossModuleIncludes() {
             if (bare.empty()) continue;
             bool hit = false;
             if (sym->kind == SymbolKind::Variable || sym->kind == SymbolKind::Constant) {
+                // 公共变量/常量发的是**裸名** (定义方 .h 里的 #define / extern 才有那个标识符)
+                // ⇒ 按**整个 token** 认 (不做组件匹配: 组件匹配会把同名局部变量也算进来)。
                 hit = tokens.count(bare) > 0;
             } else if (sym->kind == SymbolKind::EnumType) {
-                hit = mentions("vb6_enum_" + bare);
+                // 枚举成员发成 vb6_enum_<Type>_<Member> —— **类型名**嵌在长标识符里。
+                hit = components.count(bare) > 0;
             } else {
-                hit = mentions("vb6_cls_" + bare);
+                // 类/接口: 名字**不带模块名**, 且嵌在一堆形态里 ——
+                //   vb6_cls_<C>_<member> / vb6_iv_thin_of_<C> / vb6_ivref_<I> /
+                //   vb6_iface_<I> / vb6_iv_test_iid_<C> / vb6_iv_from_iv_<C> ...
+                // ⇒ 必须按**组件**认 (token 按 '_' 切开后含 <C> 这一段)。
+                // ⚠ 不能拿组件匹配去认**模块**: 每个模块的 .c 都有 `vb6_mod_<X>_init()`
+                //    ⇒ 模块名必然作为组件出现 ⇒ 那样判等于「全留」。
+                hit = components.count(bare) > 0;
             }
             if (hit) needed.insert(owner);
         }
