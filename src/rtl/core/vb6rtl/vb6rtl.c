@@ -686,6 +686,31 @@ void vb6_RestoreErrState(void) {
     }
 }
 
+// 账 #611: VB6 的 `On Error GoTo 0` 只**关闭当前过程**的错误处理; 此后本过程里
+// 抛出的错误要继续往调用方的活动处理器传播 (VB6: 子过程关闸 ≠ 全局关闸)。
+// 带 On Error 的过程入口都压过一帧 vb6_SaveErrState(), 那一帧里就是调用方的
+// 状态 —— 这里不弹栈 (函数出口仍要 RestoreErrState 弹一次), 只把当前全局状态
+// 换成栈顶那份。改前发码是 `vb6_err_jmp_active = 0; vb6_error_jmp_set = 0;`,
+// 外层 setjmp 帧被一并作废 ⇒ 未处理错误直接 ExitProcess (JSonFast 第 5 按钮)。
+void vb6_ErrGoToZero(void) {
+    vb6_err_resume_next = 0;
+    if (vb6_err_stack_top > 0) {
+        const vb6_ErrFrame* caller = &vb6_err_stack[vb6_err_stack_top - 1];
+        vb6_error_jmp_ptr = caller->jmp_ptr;
+        vb6_error_jmp_set = caller->jmp_set;
+        vb6_err_jmp_active = caller->jmp_active;
+        vb6_err_resume_next = caller->resume_next;
+        vb6_err_resume_point = caller->resume_point;
+        vb6_err_resume_next_point = caller->resume_next_point;
+        vb6_err_in_handler = caller->in_handler;
+    } else {
+        vb6_error_jmp_ptr = NULL;
+        vb6_error_jmp_set = 0;
+        vb6_err_jmp_active = 0;
+        vb6_err_in_handler = 0;
+    }
+}
+
 // 账 #305 §B188 (第九十刀): 一截 VB 体跑在自己带的帧里, 抛出来的号交回调用方(声明见 vb6rtl_array.h)。
 // 登记顺序照 §B188 第八十刀那三行协议: 先 setjmp, 成功了才登记帧 —— 体里自己写了 On Error 的照常由
 // 体接住, 走到这里的是真没人管的那一类。Save/Restore 只管帧那一族, 不动 vb6_err 的内容, 所以返回时

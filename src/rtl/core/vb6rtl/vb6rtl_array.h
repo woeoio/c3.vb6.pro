@@ -464,6 +464,12 @@ extern int32_t vb6_err_in_handler;      // 当前在On Error GoTo处理器中
 #define VB6_ERR_STACK_SIZE 8
 void vb6_SaveErrState(void);      // 保存当前错误状态到栈 (函数入口调用)
 void vb6_RestoreErrState(void);   // 从栈恢复错误状态 (函数出口调用)
+// 账 #611: `On Error GoTo 0` —— 只关本过程的处理器, 把**调用方**那一帧还回去。
+// 不能只写 `vb6_err_jmp_active = 0`: 那会把外层 On Error GoTo label 的
+// setjmp 一并关掉, 使本过程后续 Err.Raise 变成未处理错误 → ExitProcess。
+// 实锤: JSonFast.cls Parse 里的 `On Error GoTo 0` 关掉了调用方
+// TryParseStrict 的 ParseError 处理器, 第 5 个按钮一点就整个进程退出。
+void vb6_ErrGoToZero(void);
 // 账 #305 §B188 (第九十刀): 把一截 VB 体跑在**自己带着的错误帧**里, 返回它抛出来的号
 // (0 = 干净跑完)。用途只有一处 = 发码里的 `vb6_cls_<X>_Destroy`: `Class_Terminate` 抛错时,
 // 体后面那三截尾巴(字段 BSTR / 数组字段 / `vb6_Free(me)`)照旧要走完 —— 边界装在**知道尾巴在

@@ -1,4 +1,10 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-14 (账 #611, JSonFast 第 5/7 按钮):
+//   · vb6rtl.c 新增 vb6_ErrGoToZero(): `On Error GoTo 0` 恢复调用方错误帧,
+//     不再把外层 On Error GoTo label 的 setjmp 一并关掉 (否则 Err.Raise 未处理).
+//   · vb6com.c 登记 CreateObject 的 ProgID <Class> 段, vb6rtl_conv.c 的
+//     vb6_TypeName 据此答 coclass 名 ("Scripting.Dictionary" → "Dictionary").
+//   本条注释只为触发 rc.exe 重嵌 src/rtl/** (check_rtl_embedded 的 stale-embed 判据)。
 // 2026-11-13 (账 #610 第344刀, GetXData 的 VT_ARRAY|VT_VARIANT 元素档):
 //   vb6rtl_com.c 的 vb6_VariantArrayIntoSlot 开 **VT_VARIANT 元素档**: 这一档
 //   落不进 blittable 白名单 (VARIANT 不能整块 memcpy), 但可以**逐枚深拷贝**

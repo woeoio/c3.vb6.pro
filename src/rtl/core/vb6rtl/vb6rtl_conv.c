@@ -46,6 +46,7 @@ extern void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value);
 extern void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef);
 extern void vb6_ComInit(void);
 extern BSTR vb6_ComObject_ClassNameBStr(void* v);   /* 账 #305 §B189: vb6comserver 那一族, 认不出交 NULL */
+extern BSTR vb6_ComCreatedTypeNameBStr(void* v);    /* 账 #611: CreateObject 产物的 coclass 名, 认不出交 NULL (RTL 内部调用, 生成码不直接用) */
 extern void vb6_ComExit(void);
 
 // ============================================================
@@ -572,6 +573,12 @@ BSTR vb6_TypeName(vb6_VARIANT v) {
          * 外部 IDispatch (VB6 答 "Dictionary", 要另开 ITypeInfo 那条腿)。 */
         { BSTR vb6_clsName = vb6_ComObject_ClassNameBStr(v.pdispVal);
           if (vb6_clsName) return vb6_clsName; }
+        /* 账 #611: 外部 CreateObject 产物按 ProgID 的 <Class> 段答 coclass 名
+         * ("Scripting.Dictionary" → "Dictionary"), 与 VB6 TypeName 同源。
+         * 只认 vb6_CreateObject 登记过的指针, 其它外部 IDispatch 仍答 "Object"
+         * —— 不碰通用 ITypeInfo 那条腿, 存量语料零变化。 */
+        { BSTR created611 = vb6_ComCreatedTypeNameBStr(v.pdispVal);
+          if (created611) return created611; }
     }
     /* 账 #305 §B155 格②（第四十六刀）: 数组那一支以前压根没有 —— 8204 落 default 答 "Variant"。
        VB6 答 "<元素名>()"（String 数组 "String()"、Variant 数组 "Variant()"）。元素名问上面那张表。 */

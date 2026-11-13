@@ -1178,6 +1178,53 @@ static void vb6_ComFailCreate(HRESULT hr, const wchar_t* progId) {
     vb6_RaiseError(vbErr ? vbErr : 429, desc);
 }
 
+// 账 #611: CreateObject 产物的 **coclass 名** (VB6 TypeName 的答案)。
+//
+// VB6 的 TypeName(CreateObject("Scripting.Dictionary")) 交 "Dictionary" ——
+// 不是 "Object"。C3 以前对 VT_DISPATCH 且非宿主/非工程类实例一律答 "Object"
+// (vb6rtl_conv.c 里明确留白: 「外部 IDispatch 要另开 ITypeInfo 那条腿」),
+// 于是 JSonWrite.Serialize 的 `ElseIf TypeName(objRef) = "Dictionary"` 落空,
+// 抛 "Unsupported object type: Object" (第 7 个按钮点一下进程就退出)。
+//
+// 这里走**最窄**的一条腿: 只在 vb6_CreateObject 成功那一刻记下 ProgID 的
+// <Class> 段 (ProgID 的最后一段就是 coclass 名, 与 VB6 从类型库取的答案同源),
+// TypeName 按 IDispatch* 反查。不做通用 ITypeInfo 查询 —— 那会把所有外部 COM
+// 对象的 TypeName 一起改掉, 现有语料 (test_com_latebound 等) 依赖 "Object"。
+// 表是进程内环形 64 格, 只按指针比对, 对象释放后残留项不会被别的对象命中
+// (指针复用时会由新的 CreateObject 覆盖写回)。
+#define VB6_CREATED_OBJ_MAX 64
+static struct { void* disp; wchar_t cls[64]; } vb6_created_objs[VB6_CREATED_OBJ_MAX];
+static int vb6_created_objs_count = 0;
+
+static void vb6_ComRememberProgID(void* disp, const wchar_t* progId) {
+    if (!disp || !progId) return;
+    const wchar_t* last = wcsrchr(progId, L'.');
+    const wchar_t* cls = last ? last + 1 : progId;
+    if (!*cls) return;
+    size_t n = wcslen(cls);
+    if (n > 63) n = 63;
+    for (int i = 0; i < vb6_created_objs_count; ++i) {
+        if (vb6_created_objs[i].disp == disp) {
+            wmemcpy(vb6_created_objs[i].cls, cls, n);
+            vb6_created_objs[i].cls[n] = L'\0';
+            return;
+        }
+    }
+    int slot = vb6_created_objs_count < VB6_CREATED_OBJ_MAX ? vb6_created_objs_count++ : 0;
+    vb6_created_objs[slot].disp = disp;
+    wmemcpy(vb6_created_objs[slot].cls, cls, n);
+    vb6_created_objs[slot].cls[n] = L'\0';
+}
+
+BSTR vb6_ComCreatedTypeNameBStr(void* disp) {
+    if (!disp) return NULL;
+    for (int i = 0; i < vb6_created_objs_count; ++i) {
+        if (vb6_created_objs[i].disp == disp && vb6_created_objs[i].cls[0])
+            return SysAllocString(vb6_created_objs[i].cls);
+    }
+    return NULL;
+}
+
 void* vb6_CreateObject(const wchar_t* progId) {
     if (!progId) return NULL;
 
@@ -1194,7 +1241,7 @@ void* vb6_CreateObject(const wchar_t* progId) {
             if (hit) {
                 HRESULT localHr = S_OK;
                 void* p = comLibCreateLocal(hit, &localHr);
-                if (p) return p;
+                if (p) { vb6_ComRememberProgID(p, progId); return p; }
                 /* 账 #305 §B186: 本地那一趟要是交回服务端自己 raise 的错误, 就地折给调用方 ——
                  * 再回退注册表会把「DLL 里抛了 7」读成「这台机器上没这个组件」(429)。
                  * 真·找不到 DLL/起不动的那些照旧往下回退, 便携分发那条路一行没动。 */
@@ -1225,6 +1272,7 @@ void* vb6_CreateObject(const wchar_t* progId) {
         return NULL;
     }
 
+    vb6_ComRememberProgID((void*)pDisp, progId);
     return (void*)pDisp;
 }
 
