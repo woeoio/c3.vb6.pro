@@ -8022,7 +8022,7 @@ if ($Category -in @("all", "run", "vbp")) {
         'static void vb6_Form1_ucSlider1_MouseEnter(int16_t INDEX);',
         'extern void vb6_Form1_ucSlider1_MouseEnter(int16_t);',
         'vb6_Form1_ucSlider1_MouseEnter(vb6_evindex);',
-        'GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1'
+        'GetPropW(hwnd, L"VB6_CtrlArrIndex") - 1'
     )
     Test-EmitcAbsent "fgz_ucslider_mouseenter_index_lesion" @("$Tests\ucSlider_2022\Proyecto1.vbp") @(
         'extern void vb6_Form1_ucSlider1_MouseEnter(int16_t); vb6_Form1_ucSlider1_MouseEnter(3);',
