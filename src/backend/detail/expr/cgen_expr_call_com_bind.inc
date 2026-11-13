@@ -688,6 +688,11 @@
             if (sv.found && hasArgs) {
                 const Symbol::ComMethodSig& sig = *sv.sig;
                 std::vector<std::string> packedArgs;
+                // 富贵竹 FIX-011 (账 #610 第341刀): [out] Variant 出参槽名册 ——
+                // 命中 vb6_ComPackVariantRef 的实参把槽记进来, 调用拼好后整包一层
+                // vb6_ComVariantOuts(call, n, &槽...) 把服务端写的真 SAFEARRAY
+                // 归一化回 C3 描述符 (晚绑定无签名那一路不登记, 维持按值)。
+                std::vector<std::string> variantOutSlots;
                 // Fix 160-com-byref: ByRef 对象出参 (Chilkat ObjectOf2/ArrayOf2 的 obj/arr 形参)。
                 // 这类形参 type=Object 且 !isByVal; 调用方必须以 void** 形式把变量地址传出,
                 // 才能接住方法写入的新对象指针 (VT_DISPATCH|VT_BYREF)。仅当实参是简单对象变量
@@ -757,8 +762,14 @@
                     // 账 #305 §B224 第二半 (第二百三十九刀): 早绑定已知签名 —— 声明是 ByRef 的
                     // 标量形参按引用发 (VT_BYREF|T)，与真 VB6 的写回语义对齐；ByVal 一律不取址。
                     if (i < sig.params.size() && !sig.params[i].isByVal) {
-                        std::string byRefArg = comByRefArgExpr(*node.positional[i], lastExpr_);
-                        if (!byRefArg.empty()) { packedArgs.push_back(byRefArg); continue; }
+                        std::string byRefArg = comByRefArgExpr(*node.positional[i], lastExpr_, true);
+                        if (!byRefArg.empty()) {
+                            // FIX-011: VariantRef 档把槽记进出参名册 (取址口径与打包内一致)
+                            if (byRefArg.rfind("vb6_ComPackVariantRef(", 0) == 0)
+                                variantOutSlots.push_back(byRefArg.substr(
+                                    22, byRefArg.size() - 23));
+                            packedArgs.push_back(byRefArg); continue;
+                        }
                     }
                     if (byRefObjectParamAt(i)
                         && node.positional[i]->kind == ASTNodeKind::IdentifierExpr
@@ -773,8 +784,14 @@
                     emitExpr(*named.value);
                     { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
                     if (byRefParamNamedAny(named.name)) {
-                        std::string byRefArg = comByRefArgExpr(*named.value, lastExpr_);
-                        if (!byRefArg.empty()) { packedArgs.push_back(byRefArg); continue; }
+                        std::string byRefArg = comByRefArgExpr(*named.value, lastExpr_, true);
+                        if (!byRefArg.empty()) {
+                            // FIX-011: 命名实参与位置实参同口径登记出参槽
+                            if (byRefArg.rfind("vb6_ComPackVariantRef(", 0) == 0)
+                                variantOutSlots.push_back(byRefArg.substr(
+                                    22, byRefArg.size() - 23));
+                            packedArgs.push_back(byRefArg); continue;
+                        }
                     }
                     if (byRefObjectParamNamed(named.name)
                         && named.value->kind == ASTNodeKind::IdentifierExpr
@@ -793,6 +810,19 @@
                 argsArray += "}";
                 std::string callArgs = objExpr + ", L\"" + memberName + "\", " + argsArray + ", " + std::to_string(argc);
                 lastExpr_ = comTypedCallExpr(sv, callArgs);
+                if (!variantOutSlots.empty()) {
+                    // FIX-011 收尾: 整个调用包一层 vb6_ComVariantOuts —— 第一个实参
+                    // (调用本身) 由 C 先求值, 返回值原样透传; 逐个把服务端写进出参槽的
+                    // 真 SAFEARRAY 归一化回 C3 描述符 (生成形如
+                    //   vb6_ComVariantOuts(vb6_ComCallObject(o, L"GetBoundingBox", ...),
+                    //                      2, &MinPt, &MaxPt);
+                    // )。vb6_ComPackVariantRef 递出前也反向换真 SAFEARRAY (FIX-012)。
+                    std::string outs = "vb6_ComVariantOuts(" + lastExpr_ + ", "
+                                     + std::to_string(variantOutSlots.size());
+                    for (auto& slot : variantOutSlots) outs += ", " + slot;
+                    outs += ")";
+                    lastExpr_ = outs;
+                }
                 isComMarker_ = false;
                 return;
             }

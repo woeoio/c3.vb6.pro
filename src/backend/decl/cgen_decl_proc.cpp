@@ -324,6 +324,22 @@ void CCodeGen::visit(SubDecl& node) {
         }
     }
 
+
+    // 富贵竹 FIX-012 (账 #610 第341刀): ByVal 串形参先进函数先拷副本 ——
+    // VB6 语义是「被调方拿到自己的副本」; 此前 C 签名 BSTR p 直接别名调用方的串,
+    // 体里任何一次赋值 (vb6_BSTR_Assign/AssignMove 都先 free 旧值) 就把调用方的串
+    // 放了 → 悬垂读出别的堆内容 (上游实测 AddText 画出 "*Model_Space")。
+    // 凡 ByVal String 形参一律拷, 不依赖「体里有没有赋值」的人工判断。
+    // 副本在过程退出时不释放 (与既有局部 BSTR 不释放同口径, 每调用泄一枚; 要收
+    // 需在 proc_exit 统一 free, 另开一格)。定长串 (String*N) 形参不在此列。
+    for (auto& p012 : node.params) {
+        if (!p012->isByVal || !p012->asType
+            || p012->asType->kind != ASTNodeKind::SimpleTypeRef) continue;
+        if (Symbol::toLower(static_cast<SimpleTypeRef&>(*p012->asType).name) != "string") continue;
+        std::string pn012 = cIdent(p012->name);
+        c_.emitLine(pn012 + " = vb6_BSTR_FromBSTR(" + pn012 + ");  /* FIX-012: ByVal 串副本 */");
+    }
+
     // VB6 Static Sub: 过程内所有局部变量都是static
     inStaticProc_ = node.isStatic;
 

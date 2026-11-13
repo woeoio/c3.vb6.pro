@@ -1,0 +1,6 @@
+Type=Exe
+Class=ClsEat; ClsEat.cls
+Module=ModMain; ModMain.bas
+Startup="Sub Main"
+ExeName32="Fix012Probe.exe"
+Name="Fix012Probe"

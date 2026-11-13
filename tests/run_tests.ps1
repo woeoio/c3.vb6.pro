@@ -2548,6 +2548,25 @@ function Test-DiagMessageText {
         $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
     }
 }
+
+# 富贵竹 FIX-011/012 (账 #610 第341刀): [out] VARIANT 出参通路的形状哨兵。
+# 这条不能靠形状门 —— 形状门只哈希 --emit-c 的 stdout, 看不见**头文件里有没有
+# 原型**; 而生成码只 include "vb6com.h", vb6_ComVariantOuts 若缺声明就是 C4013
+# 隐式声明 (返回 int 截断指针, x64 崩雷; GA 的 cl 19.51 还会把后续 argcount
+# 判成 C2172/C2197/C2198/C2224)。首轮真编译实测出现过 (ModProbe.c(19) C4013)。
+function Test-ComVariantOutRef {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] com_variant_out_ref ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_com_variant_out_ref.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 function Test-UcInstanceExit {
     $script:total++
     Write-Host -NoNewline "  [STATIC] uc_instance_exit ... "
@@ -7832,6 +7851,68 @@ if ($Category -in @("all", "run", "vbp")) {
     )
     Test-Vbp "fgz_fix004_run" "$Tests\fgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7")
     Test-Vbp "fgz_fix004_run_x86" "$Tests\fgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7") -Arch "x86"
+    # 富贵竹 FIX-012 (账 #610 第341刀): ByVal 串形参先进函数先拷副本。修前 C 签名
+    # BSTR p 别名调用方的串, 体里 vb6_BSTR_Assign/AssignMove 先 free 旧值 = 把调用
+    # 方的串放了 → 悬垂 (上游实测 AddText 画出 "*Model_Space")。运行针修前实测红:
+    # 被调方 free "AAA"(12B) 后, 同桶下一笔分配按释放序复用 ⇒ S=Q1; 修后副本语义
+    # ⇒ S=AAA。形状针钉序言行 (运行针若在 CI 堆上侥幸绿, 形状针兜底)。
+    Test-EmitcShape "fgz_fix012_byval_str_copy" @("$Tests\fgz_fix012\FgzFix012.vbp") @(
+        's = vb6_BSTR_FromBSTR(s);'
+    )
+    # 零回归对照: ByRef 串形参**不**拷副本 (ByRef 语义本就是别名, 拷了就断链)。
+    # 判据按**签名**分辨, 不能拿 `'s = vb6_BSTR_FromBSTR(s);'` 当反面针 ——
+    # ByVal 那处形参名也叫 s, 那枚串两边都出现 ⇒ 那样写会恒红 (真阳性但无意义)。
+    # ByRef 的 C 签名是**指针形** `BSTR* s`, 序言**不得**有副本行。
+    # ⚠ 生成 C 是 **CRLF** 行尾 ⇒ 跨行 needle 用双引号串 + `r`n 转义
+    #   (单引号串里 `n 是字面量, 不是换行)。
+    Test-EmitcAbsent "fgz_fix012_byref_str_no_copy" @("$Tests\fgz_fix012\FgzFix012.vbp") @(
+        "void vb6_ModMain_ByRefEat(BSTR* s) {`r`n    s = vb6_BSTR_FromBSTR(s);"
+    )
+    # 正向: ByRef 那处必须是指针形签名 (写回链路还在)。
+    Test-EmitcShape "fgz_fix012_byref_str_ptr_form" @("$Tests\fgz_fix012\FgzFix012.vbp") @(
+        'void vb6_ModMain_ByRefEat(BSTR* s)'
+    )
+    Test-Vbp "fgz_fix012_run" "$Tests\fgz_fix012\FgzFix012.vbp" @("S=AAA", "R=BBB!")
+    Test-Vbp "fgz_fix012_run_x86" "$Tests\fgz_fix012\FgzFix012.vbp" @("S=AAA", "R=BBB!") -Arch "x86"
+    # 富贵竹 FIX-011 (账 #610 第341刀): [out] Variant 出参按引用打包 + 收尾归一化。
+    # 修前 comByRefArgExpr 对 knownVariantVars_ 直接放弃 → 按值 vb6_ComPackValue →
+    # 服务端写副本, 调用方 MinPt/MaxPt 仍是 Empty (GetBoundingBox/GetXData 一族
+    # 92 处同根因; 上游语料 "多段线只画到第 3 个点位")。探针类型库 FgzOutTlb.tlb
+    # (MIDL 自 FgzOutTlb.odl 造, 入库先例 OLEGuids.tlb): 一枚 [in,out] VARIANT* 方法。
+    # 判据 = 上游 §6.3 的目标形状逐字; RTL 往返 (真 SAFEARRAY→描述符→递出前换回,
+    # 含服务端 VariantClear 不炸描述符) 由 .local/fgz-probes/fix011/rtl_probe.c
+    # 两轮 ALL GREEN 证 (本地探针, CI 无该 COM 服务, 不做运行判据)。
+    Test-EmitcShape "fgz_fix011_variant_out_ref" @("$Tests\fgz_fix011\FgzFix011.vbp") @(
+        'vb6_ComVariantOuts(vb6_ComCallObject(b, L"GetBox", (void*[]){vb6_ComPackVariantRef(&MinPt), vb6_ComPackVariantRef(&MaxPt)}, 2), 2, &MinPt, &MaxPt)',
+        'vb6_ComVariantOuts(vb6_ComCallObject(b, L"GetScalar", (void*[]){vb6_ComPackVariantRef(&V)}, 1), 1, &V)'
+    )
+    # 零回归对照: 标量五档 ByRef 打包器必须**一字未动** (修前修后发码只差 2 行,
+    # 这五处逐字节相同)。修前 comByRefArgExpr 的档位表是 Long/Integer/Boolean/
+    # Single/Double —— FIX-011 只补了第六档 (Variant), 前五档不许动。
+    Test-EmitcShape "fgz_fix011_scalar_byref_unchanged" @("$Tests\fgz_fix011\FgzFix011.vbp") @(
+        'vb6_ComPackIntRef(&nL)',
+        'vb6_ComPackIntegerRef(&nI)',
+        'vb6_ComPackBoolRef(&bB)',
+        'vb6_ComPackSingleRef(&nS)',
+        'vb6_ComPackDoubleRef(&nD)'
+    )
+    # 反面针: 标量那五处**不得**被 vb6_ComVariantOuts 包住 (VariantRef 档专属)。
+    Test-EmitcAbsent "fgz_fix011_scalar_not_variantouts" @("$Tests\fgz_fix011\FgzFix011.vbp") @(
+        'vb6_ComVariantOuts(vb6_ComCallInt(b, L"PutLong"'
+    )
+    # PARAMFLAG 对照臂 (账 #610 第341刀): 纯 [in] 形参**不得**被递成可写。
+    # 链路: wParamFlags -> ComParamDir(In/Out/InOut/RetVal) [typelib_parser_desc.cpp:319]
+    #        -> pi.isByVal = (direction == In) [driver_semantics.cpp 五处]
+    # => [in] ⇒ isByVal=true ⇒ 不进按引用档 ⇒ 按值打包, 且**不**被 ComVariantOuts 包住。
+    # (纯入参被递成 VT_BYREF|VT_VARIANT = 服务端往调用方纯入参槽里写东西 = 静默破坏。)
+    Test-EmitcShape "fgz_fix011_in_param_by_value" @("$Tests\fgz_fix011\FgzFix011.vbp") @(
+        'vb6_ComCallInt(b, L"GetInOnly", (void*[]){vb6_ComPackValue(Vin)}, 1)'
+    )
+    # 反面针: [in] 那条调用点上**不得**出现按引用打包/收尾。
+    Test-EmitcAbsent "fgz_fix011_in_param_not_byref" @("$Tests\fgz_fix011\FgzFix011.vbp") @(
+        'L"GetInOnly", (void*[]){vb6_ComPackVariantRef('
+    )
+    Test-VbpBuild "fgz_fix011_build" "$Tests\fgz_fix011\FgzFix011.vbp"
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，
@@ -12380,6 +12461,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-BstrBorrowSlot }
     if (Enter-StaticShard) { Test-EventHandlerNames }
     if (Enter-StaticShard) { Test-DiagMessageText }
+    if (Enter-StaticShard) { Test-ComVariantOutRef }
     if (Enter-StaticShard) { Test-UcInstanceExit }
     if (Enter-StaticShard) { Test-StaticSentinelRegistration }
     if (Enter-StaticShard) { Test-QuitPumpInvariant }

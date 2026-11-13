@@ -883,11 +883,19 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 // ③ 不是数组载体 / Variant / 对象 / 字符串 —— 那几档的写回要动所有权，在册欠项。
 // 返回值 = 完整实参表达式 (空 = 保持改前的按值打包)。
 // 若该标识符是**本过程**的 ByRef 形参，C 侧它已经是 T*，直接交指针，不再取一次地址。
-std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
+std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
+                                      bool allowVariantRef) {
     if (expr.kind != ASTNodeKind::IdentifierExpr) return "";
     auto& id = static_cast<const IdentifierExpr&>(expr);
     std::string lower = Symbol::toLower(id.name);
-    if (knownVariantVars_.count(lower) || knownObjectVars_.count(lower)) return "";
+    // 富贵竹 FIX-011 (账 #610 第341刀): Variant 实参从「直接放弃 → 按值打包 →
+    // [out] Variant 写回被丢」改为 —— **只在调用点已确知形参非 ByVal (有 TypeLib
+    // 签名) 时**发 vb6_ComPackVariantRef (VT_BYREF|VT_VARIANT, 服务端直写调用方槽);
+    // 晚绑定无签名那一路 (allowVariantRef=false) 仍按值, 避免把纯入参也变成可写。
+    // 上游实测影响面: GetBoundingBox / GetXData 一族 92 处, 读出参再按 (0)/(1) 取值
+    // 此前一律拿到 Empty (Empty(0)-Empty(0)=0 不抛错, On Error 也不跳)。
+    bool isVariantArg = knownVariantVars_.count(lower) != 0;
+    if (knownObjectVars_.count(lower)) return "";
     // 常量 (Const / Enum 成员) 在 C 侧是 `#define 文本`, `&CONST` 是 C2101 "constant &"
     // (ucTreeView ucScrollbar.c:2612/2617 `vb6_ComPackIntRef(&VALUE_DEF)` 实证);
     // 常量天然不能被写回, 保持按值打包。
@@ -895,18 +903,6 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
         if (cs->kind == SymbolKind::Constant || cs->kind == SymbolKind::EnumMember) return "";
     }
     if (isArrayCarrierArgName(lower, id.name)) return "";
-    std::string fn;
-    // Integer 必须问专属表: inferExprType 对 Integer 局部/形参答 Long (VB6 表达式提升),
-    // 而 C 存储只有 2 字节 —— 按 I4 打写回会越界写 4 字节。
-    Vb6Type refVt = knownIntVars_.count(lower) ? Vb6Type::Integer : inferExprType(expr);
-    switch (refVt) {
-        case Vb6Type::Long:    fn = "vb6_ComPackIntRef"; break;
-        case Vb6Type::Integer: fn = "vb6_ComPackIntegerRef"; break;
-        case Vb6Type::Boolean: fn = "vb6_ComPackBoolRef"; break;
-        case Vb6Type::Single:  fn = "vb6_ComPackSingleRef"; break;
-        case Vb6Type::Double:  fn = "vb6_ComPackDoubleRef"; break;
-        default: return "";
-    }
     // 文本必须是简单左值: 裸标识符 (局部/模块级/类字段 → me->字段) 才算。
     static const std::regex lvRe("^(?:[A-Za-z_][A-Za-z0-9_]*|me->[A-Za-z_][A-Za-z0-9_]*)$");
     if (!std::regex_match(argText, lvRe)) return "";
@@ -918,6 +914,22 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
                 break;
             }
         }
+    }
+    if (isVariantArg) {
+        if (!allowVariantRef) return "";
+        return "vb6_ComPackVariantRef(" + (isByRefParam ? argText : "&" + argText) + ")";
+    }
+    std::string fn;
+    // Integer 必须问专属表: inferExprType 对 Integer 局部/形参答 Long (VB6 表达式提升),
+    // 而 C 存储只有 2 字节 —— 按 I4 打写回会越界写 4 字节。
+    Vb6Type refVt = knownIntVars_.count(lower) ? Vb6Type::Integer : inferExprType(expr);
+    switch (refVt) {
+        case Vb6Type::Long:    fn = "vb6_ComPackIntRef"; break;
+        case Vb6Type::Integer: fn = "vb6_ComPackIntegerRef"; break;
+        case Vb6Type::Boolean: fn = "vb6_ComPackBoolRef"; break;
+        case Vb6Type::Single:  fn = "vb6_ComPackSingleRef"; break;
+        case Vb6Type::Double:  fn = "vb6_ComPackDoubleRef"; break;
+        default: return "";
     }
     return fn + "(" + (isByRefParam ? argText : "&" + argText) + ")";
 }

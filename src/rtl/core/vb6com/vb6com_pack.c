@@ -150,6 +150,24 @@ void* vb6_ComPackDoubleRef(double* p) {
     return (void*)pv;
 }
 
+/* 富贵竹 FIX-011/012 (账 #610 第341刀): Variant 出参按引用打包 —— 五档标量 Ref 族
+ * 缺的第六档。调用方槽是 vb6_VARIANT, 与 Windows VARIANT 同布局
+ * (vb6rtl_variant.h rev11), pvarVal 直接指它。FIX-012 闭环: 递出前先调
+ * vb6_VariantComSlotToRealArray 把槽里上一次调用留下的 C3 一维描述符换回
+ * 真 SAFEARRAY —— 服务端覆写出参前 VariantClear(槽) 是按 oleaut32 自家布局
+ * 行事的, 描述符递出去 = SafeArrayDestroy(垃圾) + double 数据区被当 BSTR
+ * 指针逐个 SysFreeString (描述符 fFeatures 的 FADF_BSTR 位是置起的)。 */
+void* vb6_ComPackVariantRef(void* pVar) {
+    VARIANT* pv;
+    vb6_VariantComSlotToRealArray(pVar);
+    pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    if (!pv) return NULL;
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_VARIANT;
+    pv->pvarVal = (VARIANT*)pVar;
+    return (void*)pv;
+}
+
 // Fix 104: 将"省略的实参"封装为 VARIANT (VT_ERROR + DISP_E_PARAMNOTFOUND).
 // VB6 对 IDispatch 调用省略实参时 (obj.Method a, , c) 传的正是该值, 接收方据此
 // 把"未提供"与"显式传 0/空串"区分开. 直接丢弃省略实参会让后续实参前移 (参数错位).

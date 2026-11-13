@@ -1133,6 +1133,11 @@ vb6_VARIANT vb6_VariantArrayGet(vb6_VARIANT* v, int32_t index) {
     memset(&result, 0, sizeof(result));
     result.vt = vb6_vtEmpty;
     if (!v || !(v->vt & vb6_vtArray) || !v->parray) return result;
+    /* 富贵竹 FIX-011 惰性兜底 (账 #610 第341刀): 槽里挂的其实是**真 SAFEARRAY**
+     * (vt 出参写了 oleaut32 自家布局) 而不是 C3 描述符 —— 走收尾函数
+     * vb6_ComVariantOuts 的调用点早已归一化, 这里兜住没走那条路站点:
+     * 不归一化就会把真 SAFEARRAY 当描述符读 (魔数位当字段 = 垃圾下界)。 */
+    if (vb6_SlotHasRealSafeArray(v)) vb6_VariantNormalizeComSlot(v);
     vb6_SafeArray1D* arr = v->parray;
     if (index < arr->lBound || index > arr->uBound) return result;
     return vb6_VariantElemFromSlotData(arr->data, index - arr->lBound, arr->elemType);
@@ -1146,6 +1151,8 @@ vb6_VARIANT vb6_VariantArrayGetND(vb6_VARIANT* v, int32_t rank, ...) {
     memset(&result, 0, sizeof(result));
     result.vt = vb6_vtEmpty;
     if (!v || !(v->vt & vb6_vtArray) || !v->parray || rank < 1 || rank > 16) return result;
+    /* 富贵竹 FIX-011 惰性兜底: 与一维那条同口径 (真 SAFEARRAY 先归一化再读)。 */
+    if (vb6_SlotHasRealSafeArray(v)) vb6_VariantNormalizeComSlot(v);
     vb6_SafeArrayND* nd = (vb6_SafeArrayND*)v->parray;
     int32_t idx[16];
     va_list ap;
@@ -1927,4 +1934,78 @@ int32_t vb6_IfaceSupports(void* ifacePtr, const void* iid) {
     if (vt->QueryInterface(ifacePtr, iid, &got) != 0 || !got) return 0;
     if (*(vb6_ivtbl_prefix**)got) (*(vb6_ivtbl_prefix**)got)->Release(got);
     return 1;
+}
+
+/* ============================================================
+ * 富贵竹 FIX-011/012 (账 #610 第341刀): [out] VARIANT 出参槽 ↔ C3 描述符 的两向适配。
+ *
+ * FIX-011 打开的通路: 代码生成对「签名非 ByVal 的 Variant 实参」发
+ *   vb6_ComPackVariantRef(&X)  (VT_BYREF|VT_VARIANT, 服务端直写调用方槽)
+ * 并把整个调用包进 vb6_ComVariantOuts(call, n, &X...)。服务端 (AutoCAD
+ * GetBoundingBox 一族) 往槽里写的是**真 SAFEARRAY** (oleaut32 自家布局),
+ * 而本仓的数组槽是 C3 自有描述符 (fFeatures=0xA1D1) —— 读侧归一化:
+ *   vb6_VariantNormalizeComSlot / vb6_ComVariantOuts 把真 SAFEARRAY 换回
+ *   C3 描述符 (走现成的 vb6_ComVariantIntoSlot, 连 VT_VARIANT 元素都逐枚收);
+ * 写侧 (FIX-012 闭环): 下一次 vb6_ComPackVariantRef 递出前
+ *   vb6_VariantComSlotToRealArray 把槽里的 C3 描述符换回真 SAFEARRAY ——
+ * 否则服务端覆写出参前 VariantClear(槽) 会把描述符当真 SAFEARRAY
+ * SafeArrayDestroy, 且描述符 fFeatures 里 FADF_BSTR 位是置起的, double
+ * 数据区被当 BSTR 指针逐个 SysFreeString → 堆损坏 / Invoke 静默失败。
+ * ============================================================ */
+
+/* 槽里挂的是不是**真** SAFEARRAY (C3 一维描述符 fFeatures=0xA1D1 不算, 判据与 vb6_SaIs1D 同源) */
+int vb6_SlotHasRealSafeArray(void* pVar) {
+    VARIANT* pv = (VARIANT*)pVar;
+    if (!pv) return 0;
+    if (!(pv->vt & VT_ARRAY) || !pv->parray) return 0;
+    return !vb6_SaIs1D(pv->parray);
+}
+
+/* 就地把槽里的真 SAFEARRAY 换成 C3 描述符 (非数组档与 Windows VARIANT 同布局, 原样)。
+ * 复制式转换 (steal=0): 元素另拷, 再 VariantClear 放掉真 SAFEARRAY —— 所有权干净。 */
+void vb6_VariantNormalizeComSlot(void* pVar) {
+    VARIANT* pv;
+    vb6_VARIANT conv;
+    if (!vb6_SlotHasRealSafeArray(pVar)) return;
+    pv = (VARIANT*)pVar;
+    conv = vb6_ComVariantIntoSlot(pv, 0);
+    VariantClear(pv);
+    /* 按**目标**类型取长度 (VARIANT), 不按源 (vb6_VARIANT): 两者当前同 sizeof
+     * (x64 24 / x86 16, 探针 layout_probe 实测), 但若将来某档布局分叉, 按目标取
+     * 才不会越界写 —— 记忆 §4.1 那条 "sizeof(vb6_VARIANT)≠sizeof(VARIANT) 只 x86 差
+     * (24/16) ⇒ 越界写堆" 就是按源取长度的后果。 */
+    memcpy(pv, &conv, sizeof(VARIANT));
+}
+
+/* FIX-011: 调用收尾。第一个实参是调用本身 (C 先求值), 返回值原样透传 ——
+ * Sub 形态的调用点当语句发, Function 形态的调用点值不断流。 */
+void* vb6_ComVariantOuts(void* result, int32_t n, ...) {
+    va_list ap;
+    int32_t i;
+    va_start(ap, n);
+    for (i = 0; i < n; i++) {
+        vb6_VariantNormalizeComSlot(va_arg(ap, void*));
+    }
+    va_end(ap);
+    return result;
+}
+
+/* FIX-012 闭环: 槽挂 C3 一维描述符时, 用现成的 vb6_ComPackArrayOut 复制成
+ * 真 SAFEARRAY、回收描述符、就地换槽 —— 下一次 VT_BYREF|VT_VARIANT 递出前
+ * 由 vb6_ComPackVariantRef 调用。ND 描述符作 COM 出参的形在语料中没有落点,
+ * 元素档转换失败时维持原状 (与改前同形, 不会更坏)。 */
+void vb6_VariantComSlotToRealArray(void* pVar) {
+    VARIANT* pv;
+    VARIANT built;            /* 必须用 Windows VARIANT: vb6_ComPackArrayOut 的形参是
+                                * VARIANT*, 产出的是**真 SAFEARRAY** (SAFEARRAY*)。 */
+    if (!pVar) return;
+    pv = (VARIANT*)pVar;
+    if (!(pv->vt & VT_ARRAY) || !pv->parray) return;
+    if (!vb6_SaIs1D(pv->parray)) return;   /* 真 SAFEARRAY / ND: 原样递出 */
+    VariantInit(&built);
+    vb6_ComPackArrayOut(pv->parray, &built);
+    if (!built.parray || built.vt == VT_EMPTY) return;   /* 元素档不在表内: 维持原状 */
+    vb6_SafeArrayDestroy1D((vb6_SafeArray1D*)pv->parray);   /* 回收 C3 描述符 (含数据区) */
+    pv->vt = built.vt;             /* Windows 侧标签 (VT_ARRAY|base) */
+    pv->parray = built.parray;     /* 真 SAFEARRAY, 归服务端 VariantClear */
 }

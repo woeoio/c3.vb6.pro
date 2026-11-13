@@ -412,6 +412,25 @@ void vb6_ArraySlotWriteBack(VARIANT *client, void *slot);
  * 同样必须在 vb6_VariantSlotRelease **之前**调用；BSTR/对象/Variant 三档不猜。 */
 void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot);
 
+/* 富贵竹 FIX-011/012 (账 #610 第341刀): [out] VARIANT 出参槽 ↔ C3 描述符 的两向适配。
+ *
+ * 读侧 (FIX-011): 服务端 (AutoCAD GetBoundingBox 一族) 往槽里写的是**真 SAFEARRAY**
+ *   (oleaut32 自家布局), 而本仓的数组槽是 C3 自有描述符 (fFeatures=0xA1D1) ⇒ 读之前
+ *   要归一化。vb6_SlotHasRealSafeArray 回答「槽里挂的是不是真 SAFEARRAY」(判据与
+ *   vb6_SaIs1D 同源); vb6_VariantNormalizeComSlot 就地把真 SAFEARRAY 换成 C3 描述符。
+ *   vb6_VariantArrayGet / vb6_VariantArrayGetND 入口各有一道**惰性兜底**(万一某条路
+ *   没走收尾函数, 读的时候也能自愈)。
+ * 写侧 (FIX-012 闭环): 下一次把槽递回服务端前, 要先把 C3 描述符换回真 SAFEARRAY,
+ *   否则服务端覆写出参前的 VariantClear 会把描述符当真 SAFEARRAY SafeArrayDestroy,
+ *   且描述符 fFeatures 里 FADF_BSTR 位是置起的 ⇒ double 数据区被当 BSTR 指针逐个
+ *   SysFreeString ⇒ 堆损坏 / Invoke 静默失败。该方向的换手在 vb6com.h
+ *   (vb6_VariantComSlotToRealArray), 因为递出点在 vb6com_pack.c。
+ *
+ * ⚠ 这两个声明**必须在本头**: vb6rtl_com.c 里的 vb6_VariantArrayGet 会调它们,
+ *   缺原型 ⇒ C4013 隐式声明 (返回 int 截断指针, x64 崩雷)。 */
+int vb6_SlotHasRealSafeArray(void* pVar);
+void vb6_VariantNormalizeComSlot(void* pVar);
+
 /* 账 #305 §B219(第二百二十刀): 入站实参「这一槽声明的是什么档」的那一问，值域就两样：
  * 一个真 VARTYPE(要换算到它)，或 VB6_ARGVT_SKIP(这一格本刀不问，槽里保持纯借用)。
  * 声明档不明 / ByRef / Variant / 数组 那几形交回 SKIP —— 它们的 C 存储是不是联合体那一格

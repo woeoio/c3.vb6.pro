@@ -144,6 +144,25 @@ void* vb6_ComPackBoolRef(int16_t* p);
 void* vb6_ComPackSingleRef(float* p);
 void* vb6_ComPackDoubleRef(double* p);
 
+// 富贵竹 FIX-011/012 (账 #610 第341刀): Variant 出参按引用打包 (VT_BYREF|VT_VARIANT)。
+// 服务端直写调用方槽 (GetBoundingBox / GetXData 一族); 打包前先经
+// vb6_VariantComSlotToRealArray 把槽里上一次调用留下的 C3 描述符换回真
+// SAFEARRAY (否则服务端覆写出参前 VariantClear 会把描述符当真 SAFEARRAY
+// 销毁, double 数据区被当 BSTR 指针逐个 SysFreeString → 堆损坏)。
+// 所有权: VT_BYREF 档 vb6_ComCall 的 epilogue 本来就跳过 VariantClear
+// (vb6com_invoke.c:250/:722), 槽归调用方。
+void* vb6_ComPackVariantRef(void* pVar);
+// 上者的写侧闭环 (实现在 vb6rtl_com.c): 槽挂 C3 一维描述符 → 复制成真
+// SAFEARRAY、回收描述符、就地换槽。非数组槽 / 真 SAFEARRAY / ND 原样。
+void vb6_VariantComSlotToRealArray(void* pVar);
+// FIX-011 调用收尾 (实现在 vb6rtl_com.c): 第一个实参是**调用本身** (C 先求值),
+// 返回值原样透传 (Sub 形态当语句发, Function 形态值不断流); 随后逐个把服务端
+// 写进出参槽的**真 SAFEARRAY** 归一化回 C3 描述符, 调用方才能按 (0)/(1) 取值。
+// ⚠ 本声明**必须留在本头**: 生成码只 include "vb6com.h" —— 缺原型 ⇒ C4013
+//   隐式声明, 返回值按 int 截断指针 (x64 崩雷, 记忆 §0 那条 "cl 19.51 直接把
+//   隐式声明判成 C2172/C2197/C2198/C2224" 同源)。
+void* vb6_ComVariantOuts(void* result, int32_t n, ...);
+
 // Fix 104: 将"省略的实参"封装为 VARIANT (VT_ERROR + DISP_E_PARAMNOTFOUND).
 // VB6 遇到 obj.Method a, , c 这类省略实参时, 对该形参位置传的正是这个值 ——
 // 接收方 (IDispatch 实现) 据此把"未提供"与"显式传 0/空串"区分开.

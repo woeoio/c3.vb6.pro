@@ -1,4 +1,7 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-13 (富贵竹 FIX-011/012): vb6rtl_com.c 出参槽两向适配 (真 SAFEARRAY ↔
+//   C3 描述符) + vb6com_pack.c vb6_ComPackVariantRef —— 本条注释只为触发 rc.exe
+//   重嵌 src/rtl/** (check_rtl_embedded 的 stale-embed 判据)。
 // 2026-11-13 (FIX-010): uc_hostmodel_setprop.inc —— VB6_TIMER 身份窗的晚绑定
 //   Enabled/Interval 改走 vb6_SetTimerEnabled / vb6_SetTimerInterval (写窗口属性
 //   并启停 g_timerTable)，此前落到 EnableWindow 一条 WM_TIMER 都发不出来。

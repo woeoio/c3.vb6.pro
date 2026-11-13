@@ -1,0 +1,6 @@
+Type=Exe
+Module=ModProbe; ModProbe.bas
+Reference=*\G{7E999999-8888-7777-6666-555544443333}#1.0#0#FgzOutTlb.tlb#FgzOutTlb 1.0 Type Library
+Startup="Sub Main"
+ExeName32="Fix011Probe.exe"
+Name="Fix011Probe"
