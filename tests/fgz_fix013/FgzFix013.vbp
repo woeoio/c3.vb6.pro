@@ -1,0 +1,5 @@
+Type=Exe
+Module=ModLeak013; ModLeak013.bas
+Startup="Sub Main"
+ExeName32="Fix013Probe.exe"
+Name="Fix013Probe"

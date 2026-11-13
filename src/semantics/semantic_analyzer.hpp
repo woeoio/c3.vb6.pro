@@ -174,6 +174,14 @@ public:
     void setProjectPublicConstNames(std::unordered_set<std::string> s) {
         projPublicConsts_ = std::move(s);
     }
+    // 账 #278 (§B118): 标准模块的**模块级 Public 变量** —— 与 Public 过程/常量同格, 裸名位就是
+    // 它的合法位置 (VB6 工程级全局)。缺这一档 = 跨模块引用必配一条假 VB3001 (PhotoDemon 里
+    // 3693 条的主因), 且类型退化成 Variant。只收 .bas 的 Public: 类/窗体模块的 Public 变量是
+    // **实例成员** (必须经对象名访问), 不是工程级裸名; Private 永远不跨模块; Friend 在标准模块
+    // 里 VB6 本来就不认, 不收。名单同样只由 driver 从已解析的 AST 算一次。
+    void setProjectPublicVarNames(std::unordered_set<std::string> s) {
+        projPublicVars_ = std::move(s);
+    }
     // 账 #278 (§B110): 工程内**窗体模块名**。窗体名在裸名位就是 VB6 的默认实例
     // （`Unload TmForm2` / `Set f = TmForm2`），发码侧 `cgen_expr_ident_symbol.inc` 那条支路答
     // `vb6_form_hwnd_<名>()`，两边同源 = Driver::collectFormModuleNames()（唯一建造点）。
@@ -186,6 +194,7 @@ public:
     std::unordered_set<std::string> projModuleNames_;
     std::unordered_set<std::string> projPublicProcs_;
     std::unordered_set<std::string> projPublicConsts_;
+    std::unordered_set<std::string> projPublicVars_;  // 账 #278 §B118: 标准模块 Public 变量
     std::unordered_set<std::string> projFormNames_;   // 账 #278 §B110: 窗体模块名 (默认实例)
 
     // 类继承 (tB, B08c): `obj.<成员>` 的 Protected 越权判定, 命中即报错并返回 true。
@@ -380,7 +389,12 @@ private:
     static std::string makeInternalName(const std::string& prefix, const std::string& name);
 
     // P14.1.4: 将Optional参数的默认值AST表达式转换为C表达式字符串
-    std::string evalOptionalDefault(ASTNode* defaultValue, Vb6Type paramType);
+    // 账 §56.43: isByVal —— ByVal Variant 的默认值必须**装箱** (vb6_VARIANT 是结构体,
+    // 裸字面量赋不上, cl C2440: "'=' 无法从 int 转换为 vb6_VARIANT"; PD pdDictionary.c 258 /
+    // pdSelection.c 155 两处都是 `Optional ByVal x As Variant = 0`)。装箱只在这一处做,
+    // 调用点一律把 isByVal 传进来; ByRef Variant **不装箱** —— 它的调用点是
+    // `&(vb6_VARIANT){...}` 复合字面量, C 只收常量。
+    std::string evalOptionalDefault(ASTNode* defaultValue, Vb6Type paramType, bool isByVal = false);
 };
 
 } // namespace vb6c3

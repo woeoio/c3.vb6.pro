@@ -124,7 +124,7 @@
                 // extern 引用不存在的 vb6_<cls>_<ev> → LNK2019. 事件不进方法表.
                 std::set<std::string> eventNamesLower;
                 for (const auto& en : authCls.eventNames) eventNamesLower.insert(Symbol::toLower(en));
-                for (auto& memberName : authCls.memberNames) {
+                for (auto& memberName : authCls.P().memberNames) {
                     if (!seenMemberNames.insert(Symbol::toLower(memberName)).second) continue;
                     if (eventNamesLower.count(Symbol::toLower(memberName))) continue;
                     // Try Sub/Function: 优先在类自身符号表搜索 (本类方法, 无碰撞)
@@ -205,11 +205,11 @@
                 // Class 符号), dispid 与 IID/CLSID 同源同锚.
                 const Symbol* dispidSym = (hostClsSym && hostClsSym->kind == SymbolKind::Class)
                     ? hostClsSym : sym.get();
-                for (auto& fname : authCls.publicFieldNames) {
+                for (auto& fname : authCls.P().publicFieldNames) {
                     info.publicFields.push_back(fname);
-                    auto itFd = dispidSym->memberFieldDispids.find(Symbol::toLower(fname));
+                    auto itFd = dispidSym->P().memberFieldDispids.find(Symbol::toLower(fname));
                     info.publicFieldDispids.push_back(
-                        (itFd != dispidSym->memberFieldDispids.end()) ? itFd->second : 0);
+                        (itFd != dispidSym->P().memberFieldDispids.end()) ? itFd->second : 0);
                 }
                 // P6.6.4: 收集事件信息
                 if (!authCls.eventNames.empty()) {
@@ -321,7 +321,7 @@
                     }
                 }
                 std::string params = "struct " + clsStruct + "*";
-                for (auto& p : methodSym->params) {
+                for (auto& p : methodSym->P().params) {
                     std::string pType = mapType(p.type);
                     // <vbeclipse>: 上面 Fix 184 只把**返回类型**的工程类补对了, 形参是
                     // 同一处毛病: `Sub Wire(ByVal h As DemoShape)` 的 p.type 是 Variant
@@ -342,7 +342,7 @@
                     params += ", " + pType;
                 }
                 // Optional 参数的 _has_ 标志
-                for (auto& p : methodSym->params) {
+                for (auto& p : methodSym->P().params) {
                     if (p.isOptional && !p.isParamArray) {
                         params += ", int _has_" + cIdent(p.name);
                     }
@@ -388,8 +388,8 @@
             //   必崩于 &((VARIANT*)NULL)->lVal. 现为每个参数生成 (argc > i) 三元:
             //   已提供取 VARIANT 字段, 未提供取零值哑元 (复合字面量, 同 Fix 089h 手法).
             std::string callArgs = "me";
-            for (int i = 0; i < (int)methodSym->params.size(); i++) {
-                const ParameterInfo& prm = methodSym->params[i];
+            for (int i = 0; i < (int)methodSym->P().params.size(); i++) {
+                const ParameterInfo& prm = methodSym->P().params[i];
                 Vb6Type pType = prm.type;
                 const std::string idx = std::to_string(i);
                 const std::string guard = "(argc > " + idx + ")";
@@ -474,8 +474,8 @@
             }
             // Fix 052: Optional 参数的 _has_ 标志
             // Fix 093: 改按实际实参个数判定 (此前恒为 1, 少传参数时被调方误以为收到了实参)
-            for (int i = 0; i < (int)methodSym->params.size(); i++) {
-                const ParameterInfo& p = methodSym->params[i];
+            for (int i = 0; i < (int)methodSym->P().params.size(); i++) {
+                const ParameterInfo& p = methodSym->P().params[i];
                 if (p.isOptional && !p.isParamArray) {
                     callArgs += ", ((argc > " + std::to_string(i) + ") ? 1 : 0)";
                 }

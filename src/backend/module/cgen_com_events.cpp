@@ -12,6 +12,10 @@ namespace {
 // 尾随一层下标 `[…]`；其余（带括号的调用、逗号、字面量、类型转换…）一律答否，
 // 由调用方落一枚临时量。刻意保守：答否只是少一次直递，答错才会发出非法 C。
 bool evtArgIsLvalue(const std::string& s) {
+    // C 常量不是左值: 省略位 / 默认值发 NULL(true/false/nullptr 同理) 时不能取地址,
+    // `&(NULL)` 会被 cl 判 C2101 ('&' on constant)。这一格是 defaultValue(String)=NULL
+    // 之后冒出来的 (VBFlexGrid.ctl 的 RaiseEvent 省略位, x86 C2101)。
+    if (s == "NULL" || s == "true" || s == "false" || s == "nullptr") return false;
     size_t p = 0;
     auto eatChar = [&s, &p](bool first) {
         if (p >= s.size()) return false;
@@ -118,10 +122,19 @@ void CCodeGen::visit(RaiseEventStmt& node) {
         // 账 #305 第二百五十六刀: 这一位形参按不按地址，问 src/common/event_param_abi.hpp
         // (与 emitEventSink 的 typedef / prelude 的 thunk / 处理器形参同源)。按地址那一档
         // 不走下面任何一条装箱 —— 那些出口发的是**右值**，取不了地址。
+        //
+        // 账 §56.47: 这里问的是 **VB6 默认口径** (没写 ByVal 就是 ByRef), 与同一枚
+        // 处理器的定义 (过程那一路, 读 isByVal) 同一答案 ⇒ 抬事件这一侧递出去的是地址,
+        // 处理器那边收的也是地址 ⇒ 不再 C2440 (PD 的 m_ZipArchive_BeforeExtract 实测)。
+        // 按地址那一档的实参位因此走下面「装箱槽 + 回写」那一条 (账 #305 第三百八刀):
+        // 处理器写进去的值要回到递出方 —— PD 靠它在解压前改掉文件名。
+        // ⚠ **UC (.ctl) 那一路不走这条**: 那一路的 prelude thunk 与容器侧处理器仍按值,
+        //   两边必须同口径 ⇒ 抬事件这一侧也维持按值 (ucLane47 = true ⇒ 只认显式 ByRef)。
+        const bool ucLane47 = currentModule_ && currentModule_->isUserControlDoc();
         const ParameterDecl* prm256 =
             (evtDecl && i < evtDecl->params.size()) ? evtDecl->params[i].get() : nullptr;
         const bool byAddr256 = prm256 && eventParamByAddress(
-            prm256->isByRef,
+            prm256->isByRef, prm256->isByVal, ucLane47,
             prm256->asType && prm256->asType->kind == ASTNodeKind::ArrayTypeRef);
         if (byAddr256) {
             /* 账 #305 第三百八刀: 形参声明的是**槽** (As Variant / 无型) 而实参在 C 侧不是槽 ——
@@ -220,6 +233,13 @@ void CCodeGen::visit(RaiseEventStmt& node) {
     for (const auto& d256 : evtRefTemps256) c_.emitLine(d256);
     c_.emitLine(call);
     for (const auto& p308 : evtPostCall308) c_.emitLine(p308);
+    c_.dedent();
+    /* ucTreeView (2026-11-06): sink 未挂 / 处理器未接时**必须留痕**。
+     * 以前这里只有 then 臂 —— 事件整条静默消失, 与"点了没反应"同现象。
+     * else 臂只计数 (+ C3_OCX_TRACE 一行), 不改分发语义。 */
+    c_.emitLine("} else {");
+    c_.indent();
+    c_.emitLine("vb6_UCEventMiss(L\"" + node.eventName + "\");");
     c_.dedent();
     c_.emitLine("}");
 
@@ -360,9 +380,17 @@ void CCodeGen::emitEventSink(Module& module) {
                 // 账 #305 第二百五十六刀: 「按不按地址」问的是**事件声明里那一位形参**，
                 // 主人 = src/common/event_param_abi.hpp。从前这里无条件 isByVal=true
                 // (注释「事件参数总是ByVal传递(跨对象边界)」)，把声明里明写的 ByRef 出参
-                // 一起按值发了；今天只有**没写 ByRef** 的那些维持按值 (语料里那几千处形状不动)。
+                // 一起按值发了。
+                //
+                // 账 §56.47: 口径改回 **VB6 默认** (没写 ByVal 就是 ByRef) —— 与处理器的
+                // 定义 (过程那一路, 读 isByVal) 同一答案 ⇒ typedef 与包装器/处理器同一形参表
+                // ⇒ 那一格不再一个按值一个按地址 (PD 的 m_ZipArchive_BeforeExtract 实测 C2440)。
+                // ⚠ **UC (.ctl) 那一路不动**: 本函数也吃 .ctl 的 EventDecl (ucTreeMaps 的
+                //   ItemClick 就是), 那一路的 prelude thunk 与容器侧处理器仍按值 ⇒ typedef
+                //   也必须按值, 否则两边靠一枚显式 cast 才编得过, 运行期把地址当 24B 槽读。
+                const bool ucLane47 = module.isUserControlDoc();
                 const bool byAddr256 = eventParamByAddress(
-                    param->isByRef,
+                    param->isByRef, param->isByVal, ucLane47,
                     param->asType && param->asType->kind == ASTNodeKind::ArrayTypeRef);
                 pi.isByVal = !byAddr256;
                 info.params.push_back(pi);
@@ -425,7 +453,7 @@ void CCodeGen::emitComVtableSinkDecls() {
         if (!srcClsSym || srcClsSym->kind != SymbolKind::ComClass) continue;
         if (!srcClsSym->comHasSourceIface) continue;
         if (srcClsSym->comSourceIfaceIsDispOnly) continue;  // dispinterface uses vb6_CreateEventSink
-        if (srcClsSym->comSourceMethods.empty()) continue;
+        if (srcClsSym->P().comSourceMethods.empty()) continue;
         if (srcClsSym->comSourceIfaceIid.empty()) continue;
         std::string createFn = "vb6_vsink_" + varLower + "_create";
         // Fix 095: 声明须与定义/调用一致 (void* handler)。原声明 (void) 导致
@@ -457,7 +485,7 @@ void CCodeGen::emitComVtableSinks() {
         if (!srcClsSym || srcClsSym->kind != SymbolKind::ComClass) continue;
         if (!srcClsSym->comHasSourceIface) continue;
         if (srcClsSym->comSourceIfaceIsDispOnly) continue;  // dispinterface uses vb6_CreateEventSink
-        if (srcClsSym->comSourceMethods.empty()) continue;
+        if (srcClsSym->P().comSourceMethods.empty()) continue;
         if (srcClsSym->comSourceIfaceIid.empty()) continue;
 
         std::string iidStr = srcClsSym->comSourceIfaceIid;
@@ -531,8 +559,8 @@ void CCodeGen::emitComVtableSinks() {
         // 及关联 C2099 (vtable 初始化器不是常量).
         for (auto& evtName : srcClsSym->eventNames) {
             std::string evtLower = Symbol::toLower(evtName);
-            auto itSig = srcClsSym->comSourceMethods.find(evtLower);
-            if (itSig == srcClsSym->comSourceMethods.end()) continue;
+            auto itSig = srcClsSym->P().comSourceMethods.find(evtLower);
+            if (itSig == srcClsSym->P().comSourceMethods.end()) continue;
             auto& sig = itSig->second;
 
             std::string handlerName = varName + "_" + evtName;
@@ -588,7 +616,7 @@ void CCodeGen::emitComVtableSinks() {
         c_.emitLine(sinkPrefix + "_QI, " + sinkPrefix + "_AddRef, " + sinkPrefix + "_Release,");
         for (auto& evtName : srcClsSym->eventNames) {
             std::string evtLower = Symbol::toLower(evtName);
-            if (srcClsSym->comSourceMethods.find(evtLower) == srcClsSym->comSourceMethods.end()) continue;
+            if (srcClsSym->P().comSourceMethods.find(evtLower) == srcClsSym->P().comSourceMethods.end()) continue;
             c_.emitLine(sinkPrefix + "_" + cIdent(evtName) + ",");
         }
         c_.dedent();

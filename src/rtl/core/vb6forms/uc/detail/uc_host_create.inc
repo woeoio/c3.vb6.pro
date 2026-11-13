@@ -6,6 +6,7 @@
     // 最前面**取: 后面 desc->init 内部还会为设计子控件再走一次 HostCreate, 那些实例要按
     // 原行为立即 Show/Resize (它们没有 bag, 也就没有"之后再激活"的机会)。
     int deferActivate = vb6_uc_deferActivateTake();
+    int ambientBackForInst = -1;   // Fix ucSlider 2026-11-08: 本实例的容器底色 (见下)
 
     vb6_uc_trace("create.begin", typeName, NULL);
     const vb6_UserControlDesc* desc = vb6_uc_findDesc(typeName);
@@ -23,7 +24,24 @@
             char parentClass[256] = {0};
             vb6_wideToU8Buf(parentClassW, parentClass, (int)sizeof(parentClass));
             int bg = vb6_Forms_QueryClassBg(parentClass);
-            if (bg >= 0) vb6_Ambient_BackColor = bg;
+            /* Fix ucSlider 2026-11-08: 类背景表只登记**窗体**(cgen 按窗体设计期 BackColor
+               登记), 容器控件 (PictureBox/Frame) 的类名不在表里 —— 只查类名必然 bg=-1,
+               ambient 于是保留上一次的窗体底色 (f0f0f0)。Picture1(#393939) 里那颗透明
+               UC (BackStyle=0) 就是被刷成 f0f0f0 (实测 #393939 占比 0.349, VB6 0.881)。
+               VB6 的 Ambient.BackColor 语义是"容器底色" ⇒ 类名查不到时回退取父窗口自身
+               的 BackColor; 只有它**没 Set 过**才维持旧值 (未设色的容器 = 系统 BTNFACE,
+               与类名路径同源)。 */
+            if (bg < 0 && GetPropW((HWND)hParent, L"VB6_BackColorSet"))
+                bg = vb6_GetControlBackColor((void*)hParent);
+            if (bg >= 0) { vb6_Ambient_BackColor = bg; ambientBackForInst = bg; }
+            if (ambientBackForInst < 0) ambientBackForInst = vb6_Ambient_BackColor;
+            // 账 <ambient-fore>: Ambient.ForeColor = **容器**的 ForeColor。.ctl 里
+            // `m_TextColor = .ReadProperty("TextColor", Ambient.ForeColor)` 就吃这一条 ——
+            // 以前全局恒 0(黑), 深色主题 (Form6 ForeColor=白) 的节点文字被画成黑字:
+            // 实测 Contact 列表文字 REF=(255,255,255)+ClearType 彩边, C3=(0,0,14) 一团黑。
+            // 与 BackColor 同源: 容器窗体的设计期 ForeColor 由 cgen 登记在类名上。
+            int fg = vb6_Forms_QueryClassFore(parentClass);
+            if (fg >= 0) vb6_Ambient_ForeColor = fg;
         }
     }
 
@@ -34,6 +52,7 @@
     memset(r, 0, sizeof(*r));
     r->desc = desc;
     r->parent = (HWND)hParent;
+    r->ambientBack = ambientBackForInst;   // Fix ucSlider 2026-11-08: 底色随实例定格
     r->enabled = -1;
     r->index = index;
     // Fix 119: 装入 cgen 预先设定的实例字体 (.frm BeginProperty Font)
@@ -82,7 +101,7 @@
     /* 账 #305 第二百七十八刀: VB6 的 UC 宿主窗口自己答字体 (参考那 29 枚每枚都带), C3 这一户
      * 以前一个都没发过。设计期 BeginProperty Font 走 r->font, 没有就交 NULL = VB6 默认档。
      * 必须在 desc->init 之前发: 初始化里就画第一帧的 UC 要看见自己那枚字体。 */
-    vb6_UC_ApplyFontToWindow(hwnd, r->font);
+    vb6_UC_ApplyFontToHostWindow(hwnd, r->font);
     }
     r->hwnd = hwnd;
     /* .ctl 头部 `AutoRedraw = -1 'True`: VB6 在控件创建时就把 UserControl.AutoRedraw

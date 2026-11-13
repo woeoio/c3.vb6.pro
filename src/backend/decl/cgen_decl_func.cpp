@@ -193,6 +193,11 @@ void CCodeGen::visit(FunctionDecl& node) {
             auto* pSym2 = symTab_.lookup(pLookup161f);
             if (pSym2 && pSym2->kind == SymbolKind::Class && pSym2->isInterface) {
                 knownIfaceVars_[pLower] = pSym2->name;
+                // 账 #305: 同一枚形参在**新式**那张名册里也要有名字。接口被 A2 归一之后它的
+                // C 类型是薄指针 `vb6_ivref_<I>*`, 没有 `.vtbl` / `.obj` 两格; 只登 legacy
+                // 名册会让 `target.Value()` 落成 `target.vtbl->Value(target.obj)` ⇒ cl C2039
+                // (k172_viewarg 实测, R4 放宽 A2 之后)。判据只问形状主人 ivrefCType, 不另立名单。
+                if (!ivrefCType(pSym2->name).empty()) knownIvrefVars_[pLower] = pSym2->name;
             }
             // Fix 161f: `Sub RefillList(lv As ListView)` —— 形参类型名就是内置
             // ListView 控件 (含 ComctlLib.ListView 这种限定写法, 与
@@ -305,6 +310,14 @@ void CCodeGen::visit(FunctionDecl& node) {
             // Fix 055: 注册UDT数组元素C类型
             std::string udtCType = resolveArrayUdtElemCType(p->asType.get());
             if (!udtCType.empty()) arrayUdtElemTypes_[pLower] = udtCType;
+            // Fix 192 补口: 类数组**形参** (`ByRef srcChannels() As pdPSPChannel`) 此前只进
+            // knownArrays_ / arrayElemTypes_, 没进 arrayClassElemTypes_ ⇒ `srcChannels(i).Method`
+            // 的接收者推断不出类, 通用成员访问发成 `VB6_SA_AT(void*, (*srcChannels), i).Method`
+            // ⇒ C2224 (void* 取成员)。与 cgen_decl_var.cpp:99 的局部/模块数组登记路对称。
+            {
+                std::string cls = resolveArrayClassElemType(p->asType.get());
+                if (!cls.empty()) arrayClassElemTypes_[pLower] = cls;
+            }
             // 账 #305 §B181 (第七十一刀): 形参这一档以前只进上面那几张表, **没进字节数组名单**
             // (knownByteArrayVars_ 的写者只有模块级两条 + 局部两条声明路) ⇒
             // `StrPtr(b)` / `StrConv(b, …)` 里 b 是 `ByRef b() As Byte` 时按裸名查不到,
@@ -313,6 +326,22 @@ void CCodeGen::visit(FunctionDecl& node) {
             if (elemType == Vb6Type::Byte) knownByteArrayVars_.insert(pLower);
             knownLocalVars_.insert(pLower);
         }
+    }
+
+
+    // 富贵竹 FIX-012 (账 #610 第341刀): ByVal 串形参先进函数先拷副本 ——
+    // VB6 语义是「被调方拿到自己的副本」; 此前 C 签名 BSTR p 直接别名调用方的串,
+    // 体里任何一次赋值 (vb6_BSTR_Assign/AssignMove 都先 free 旧值) 就把调用方的串
+    // 放了 → 悬垂读出别的堆内容 (上游实测 AddText 画出 "*Model_Space")。
+    // 凡 ByVal String 形参一律拷, 不依赖「体里有没有赋值」的人工判断。
+    // 副本在过程退出时不释放 (与既有局部 BSTR 不释放同口径, 每调用泄一枚; 要收
+    // 需在 proc_exit 统一 free, 另开一格)。定长串 (String*N) 形参不在此列。
+    for (auto& p012 : node.params) {
+        if (!p012->isByVal || !p012->asType
+            || p012->asType->kind != ASTNodeKind::SimpleTypeRef) continue;
+        if (Symbol::toLower(static_cast<SimpleTypeRef&>(*p012->asType).name) != "string") continue;
+        std::string pn012 = cIdent(p012->name);
+        c_.emitLine(pn012 + " = vb6_BSTR_FromBSTR(" + pn012 + ");  /* FIX-012: ByVal 串副本 */");
     }
 
     // VB6 Static Function: 过程内所有局部变量都是static
@@ -447,11 +476,17 @@ void CCodeGen::visit(FunctionDecl& node) {
     // This ensures the parameter variable has the correct default value
     // when the caller omits it, instead of the type's zero value.
     if (sym) {
-        for (auto& pi : sym->params) {
+        for (auto& pi : sym->P().params) {
             if (pi.isOptional && !pi.isParamArray && pi.hasDefaultValue && !pi.defaultValueExpr.empty()) {
                 std::string pName = cIdent(pi.name);
                 std::string hasFlag = "_has_" + pName;
                 if (pi.isByVal) {
+                    // 账 §56.43: ByVal Variant 的缺省回填在这里是**裸赋值** —— 但 vb6_VARIANT
+                    // 是结构体, 裸字面量赋不上 (cl C2440 "'=' 无法从 int 转换为 vb6_VARIANT")。
+                    // 装箱不在本处做: 语义层 (SemanticAnalyzer::evalOptionalDefault) 已按
+                    // 「ByVal + Variant + 显式默认值」把 defaultValueExpr 折成装箱形式
+                    // (vb6_VariantLong(N)), 这里照抄即可 —— **装箱口径只有那一个权威**。
+                    // (ByRef Variant 那一档在本分支之下, 仍由本文件自己按整数字面量判定。)
                     c_.emitLine("if (!" + hasFlag + ") " + pName + " = " + pi.defaultValueExpr + ";");
                 } else {
                     // ByRef Optional: dereference then assign default

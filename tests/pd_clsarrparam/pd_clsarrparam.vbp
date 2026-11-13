@@ -1,0 +1,4 @@
+Type=Exe
+Class=PdChannel; PdChannel.cls
+Module=Mod1; Mod1.bas
+Startup="Sub Main"

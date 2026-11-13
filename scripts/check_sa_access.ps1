@@ -91,7 +91,10 @@
 #       恰好 0。TypeName 那一张标量名单只许一份：`case vb6_vtEmpty:` 在 vb6rtl_conv.c 恰好 1，
 #   A19（§B159 第五十刀）出站那一半：白名单 vb6_ComSaVtOut 里批准的每一档，反向表必须认得（否则
 #       写进去真数组、读回来是别家档 = 半程往返，第五十刀的 Byte 那一档就是这么现形的）；真数组
-#       只许一处造（vb6_ComPackArrayOut 定义 1 / 调用 2 —— 第三十刀起多了一位消费者：数组形参的出站回写），数组那一问在 PackBorrow 的 switch 之前 1 处；
+#       只许一处造（vb6_ComPackArrayOut 定义 1 / 调用 3 —— 第三十刀起多了一位消费者：
+#       数组形参的出站回写；第四十一刀起又多一位：账 #610 第341刀 富贵竹 FIX-012 的
+#       出参槽换真 SAFEARRAY（vb6_VariantComSlotToRealArray，**复用**这枚出口）），
+#       数组那一问在 PackBorrow 的 switch 之前 1 处；
 #       入站那一臂同样只许一处认（vb6_VariantArrayIntoSlot 定义 1 / 调用 1），它造的 descriptor
 #       只许一处收（vb6_VariantSlotRelease 在服务端 free 槽阵列之前调一次）。
 #       抽出来的 vb6_TypeNameScalar 定义 1 / 调用恰好 2（数组那一支 + 标量那一条）。
@@ -537,7 +540,14 @@ foreach ($w in $whitelist) {
 $packDef = @([regex]::Matches($vCom, '(?m)^static void\s+vb6_ComPackArrayOut\s*\(')).Count
 $packAll = @([regex]::Matches($vCom, 'vb6_ComPackArrayOut\s*\(')).Count
 if ($packDef -ne 1) { $bad += ("A19 造真数组那枚出口的定义 = " + $packDef + " (恰好 1)") }
-if ($packAll - $packDef -ne 2) { $bad += ("A19 调用它的地方 = " + ($packAll - $packDef) + " 处 (恰好 2：PackBorrow 的数组那一臂 + 数组形参的出站回写；再多 = 第三个人也开始现造真数组)") }
+# 消费者数 2 -> 3 (账 #610 第341刀 / 富贵竹 FIX-012): 第三个消费者是
+#   vb6_VariantComSlotToRealArray —— 「[out] Variant 出参槽在**下一次递回服务端前**
+#   把 C3 一维描述符换回真 SAFEARRAY」那一步 (上游 FIX-012 §4 第3 条明确要求
+#   复用 vb6_ComPackArrayOut, 不许另造一处真数组)。
+# ⚠ 这条判据的**意图**是「真数组只许一处造 (vb6_ComPackArrayOut), 不许第二个人
+#   自己现造」—— 第三个消费者**正是复用那枚出口**, 意图未被破坏; 变的是消费者
+#   计数, 不是出口数 ($packDef 仍恰好 1)。故这里更新计数口径, 不是放宽阈值。
+if ($packAll - $packDef -ne 3) { $bad += ("A19 调用它的地方 = " + ($packAll - $packDef) + " 处 (恰好 3：PackBorrow 的数组那一臂 + 数组形参的出站回写 + FIX-012 出参槽换真 SAFEARRAY；再多 = 第四个人也开始现造真数组)") }
 # P3 缺口 (2026-11-04): 同一文件里新增了 vb6_VariantToObjectValChecked / vb6_VariantSetCopyChecked
 # 两枚出口, 它们也按 `if (v.vt & vb6_vtArray)` 问阵列位（形态与 PackBorrow 那一问逐字相同）。
 # 本判据问的是「**PackBorrow 里**恰好一问」⇒ 先把函数体切出来再数, 否则新出口会把计数

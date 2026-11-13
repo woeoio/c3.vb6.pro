@@ -872,53 +872,88 @@ static int32_t vb6_VarIsString(vb6_VARIANT* v) {
     return v && v->vt == (vb6_vartype)VT_BSTR;
 }
 
-int32_t vb6_VarCmpEq(vb6_VARIANT* a, vb6_VARIANT* b) {
-    if (vb6_VarIsString(a) && vb6_VarIsString(b)) {
-        // Fix 092v: 字符串 Variant 比较统一返回 VB6 Boolean (-1/0), 与数值分支一致.
-        int eq = (a->bstrVal && b->bstrVal) ? (wcscmp(a->bstrVal, b->bstrVal) == 0) : (a->bstrVal == b->bstrVal);
-        return eq ? -1 : 0;
+/* 账 §38 (ucTreeView Form3/Form5 文字截断的上游): VB6 的 Variant 比较对
+   **字符串 vs 数值**有专有次序 —— 数值侧恒小于字符串侧, 与字符串内容能否转数无关。
+   真 VB6 (/make 编译实测): "0" = 0 → False / "0" > 0 → True / "1" < 2 → False /
+   0 < "x" → True。旧实现把字符串按 wcstod 折成数值再比, 于是
+   ucTreeViewPlus.ctl:1487 的 `If N.Image > 0` (Image 是 Variant 字符串键
+   "John_Perez") 恒假 ⇒ 行框 Rect.Right 不加图片宽度 ⇒ 文字与图片重叠/被截断。
+   注意这**不**适用于类型化 String (`Dim s As String` vs 数值仍按数值转换, 实测
+   `0 = s` 为 True) —— 那条路 cgen 根本不进 VarCmp*, 由这里改动影响不到。
+   VT_EMPTY 是"随对方"档: 与数值比当 0, 与字符串比当 "". */
+static int32_t vb6_VarIsNumber(vb6_VARIANT* v) {
+    if (!v) return 0;
+    switch ((vb6_vartype)v->vt) {
+        case (vb6_vartype)VT_I1: case (vb6_vartype)VT_I2:
+        case (vb6_vartype)VT_I4: case (vb6_vartype)VT_I8:
+        case (vb6_vartype)VT_UI2: case (vb6_vartype)VT_UI4:
+        case (vb6_vartype)VT_UI8:
+        case (vb6_vartype)VT_R4: case (vb6_vartype)VT_R8:
+        case (vb6_vartype)VT_BOOL: case (vb6_vartype)VT_DECIMAL:
+        case (vb6_vartype)vb6_vtDate:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* 返回 a 相对 b 的次序: -1 / 0 / 1。六个比较出口共用这一份, 不留第二条口径。 */
+static int vb6_VarCmpOrder(vb6_VARIANT* a, vb6_VARIANT* b) {
+    int as = vb6_VarIsString(a), bs = vb6_VarIsString(b);
+    int ae = a && a->vt == (vb6_vartype)VT_EMPTY;
+    int be = b && b->vt == (vb6_vartype)VT_EMPTY;
+    if (as && (bs || be)) {
+        const wchar_t* sa = a->bstrVal ? a->bstrVal : L"";
+        const wchar_t* sb = (bs && b->bstrVal) ? b->bstrVal : L"";
+        int c = wcscmp(sa, sb);
+        return c < 0 ? -1 : (c > 0 ? 1 : 0);
+    }
+    if (bs && ae) {
+        const wchar_t* sb = b->bstrVal ? b->bstrVal : L"";
+        int c = wcscmp(L"", sb);
+        return c < 0 ? -1 : (c > 0 ? 1 : 0);
+    }
+    if (as && vb6_VarIsNumber(b)) return 1;   /* 数值 < 字符串 */
+    if (bs && vb6_VarIsNumber(a)) return -1;
+    double da = vb6_VarToDouble_internal(a);
+    double db = vb6_VarToDouble_internal(b);
+    return da < db ? -1 : (da > db ? 1 : 0);
+}
+
+int32_t vb6_VarCmpEq(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) == 0 ? -1 : 0; }
+int32_t vb6_VarCmpNe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) != 0 ? -1 : 0; }
+int32_t vb6_VarCmpLt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) <  0 ? -1 : 0; }
+int32_t vb6_VarCmpGt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) >  0 ? -1 : 0; }
+int32_t vb6_VarCmpLe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) <= 0 ? -1 : 0; }
+int32_t vb6_VarCmpGe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarCmpOrder(a, b) >= 0 ? -1 : 0; }
+
+/* Select Case 专用次序: 标签是**静态类型**的字面量时, 真 VB6 把主语先换成标签那一档再比
+   —— 与二进制比较那套"数值恒小于字符串"是两条口径 (实测 VB6 /make, 2026-11-07):
+     主语 7  + Case "07"  → 不命中 (CStr(7)="7" 与 "07" 串比)
+     主语 "07" + Case 7   → 命中   (主语换成数 7)
+     主语 7  + Case "abc" → 不命中, 不报错 (CStr(7) vs "abc")
+     主语 "s" + Case 7    → 不命中, 不报错 ("s"→0 数比)
+   所以标签箱是 BSTR 就串比, 否则数比。只给 cgen_select 的类型化标签那一支用;
+   标签本身是 Variant 槽时仍走 vb6_VarCmp* (那是 Variant-Variant 那一档)。 */
+static int vb6_VarSelOrderTyped(vb6_VARIANT* a, vb6_VARIANT* b) {
+    if (b && b->vt == (vb6_vartype)VT_BSTR) {
+        BSTR sa = vb6_CStr(*a);
+        const wchar_t* lb = b->bstrVal ? b->bstrVal : L"";
+        int c = wcscmp(sa ? sa : L"", lb);
+        if (sa) SysFreeString(sa);
+        return c < 0 ? -1 : (c > 0 ? 1 : 0);
     }
     double da = vb6_VarToDouble_internal(a);
     double db = vb6_VarToDouble_internal(b);
-    return (da == db) ? -1 : 0;
+    return da < db ? -1 : (da > db ? 1 : 0);
 }
-int32_t vb6_VarCmpNe(vb6_VARIANT* a, vb6_VARIANT* b) {
-    if (vb6_VarIsString(a) && vb6_VarIsString(b)) {
-        int ne = (a->bstrVal && b->bstrVal) ? (wcscmp(a->bstrVal, b->bstrVal) != 0) : (a->bstrVal != b->bstrVal);
-        return ne ? -1 : 0;
-    }
-    double da = vb6_VarToDouble_internal(a);
-    double db = vb6_VarToDouble_internal(b);
-    return (da != db) ? -1 : 0;
-}
-int32_t vb6_VarCmpLt(vb6_VARIANT* a, vb6_VARIANT* b) {
-    if (vb6_VarIsString(a) && vb6_VarIsString(b)) {
-        int lt = (a->bstrVal && b->bstrVal) ? (wcscmp(a->bstrVal, b->bstrVal) < 0) : 0;
-        return lt ? -1 : 0;
-    }
-    return (vb6_VarToDouble_internal(a) < vb6_VarToDouble_internal(b)) ? -1 : 0;
-}
-int32_t vb6_VarCmpGt(vb6_VARIANT* a, vb6_VARIANT* b) {
-    if (vb6_VarIsString(a) && vb6_VarIsString(b)) {
-        int gt = (a->bstrVal && b->bstrVal) ? (wcscmp(a->bstrVal, b->bstrVal) > 0) : 0;
-        return gt ? -1 : 0;
-    }
-    return (vb6_VarToDouble_internal(a) > vb6_VarToDouble_internal(b)) ? -1 : 0;
-}
-int32_t vb6_VarCmpLe(vb6_VARIANT* a, vb6_VARIANT* b) {
-    if (vb6_VarIsString(a) && vb6_VarIsString(b)) {
-        int le = (a->bstrVal && b->bstrVal) ? (wcscmp(a->bstrVal, b->bstrVal) <= 0) : 0;
-        return le ? -1 : 0;
-    }
-    return (vb6_VarToDouble_internal(a) <= vb6_VarToDouble_internal(b)) ? -1 : 0;
-}
-int32_t vb6_VarCmpGe(vb6_VARIANT* a, vb6_VARIANT* b) {
-    if (vb6_VarIsString(a) && vb6_VarIsString(b)) {
-        int ge = (a->bstrVal && b->bstrVal) ? (wcscmp(a->bstrVal, b->bstrVal) >= 0) : 0;
-        return ge ? -1 : 0;
-    }
-    return (vb6_VarToDouble_internal(a) >= vb6_VarToDouble_internal(b)) ? -1 : 0;
-}
+
+int32_t vb6_VarSelCmpEq(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) == 0 ? -1 : 0; }
+int32_t vb6_VarSelCmpNe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) != 0 ? -1 : 0; }
+int32_t vb6_VarSelCmpLt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) <  0 ? -1 : 0; }
+int32_t vb6_VarSelCmpGt(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) >  0 ? -1 : 0; }
+int32_t vb6_VarSelCmpLe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) <= 0 ? -1 : 0; }
+int32_t vb6_VarSelCmpGe(vb6_VARIANT* a, vb6_VARIANT* b) { return vb6_VarSelOrderTyped(a, b) >= 0 ? -1 : 0; }
 
 // Variant vs Long (常见场景: If v > 0 Then)
 int32_t vb6_VarCmpLongEq(vb6_VARIANT* a, int32_t b) { vb6_VARIANT vb; memset(&vb, 0, sizeof(vb)); vb.vt = (vb6_vartype)VT_I4; vb.lVal = b; return vb6_VarCmpEq(a, &vb); }

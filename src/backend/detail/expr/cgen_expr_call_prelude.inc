@@ -26,7 +26,7 @@
 
         auto& ident = static_cast<IdentifierExpr&>(*node.callee);
 
-        for (auto& p : currentProc_->params) {
+        for (auto& p : currentProc_->P().params) {
 
             if (p.isParamArray) {
 
@@ -127,7 +127,7 @@
             }
             // Fix 010r-6 rev2: ByRef array param needs dereference (*name) since it's now **
             if (currentProc_) {
-                for (auto& param : currentProc_->params) {
+                for (auto& param : currentProc_->P().params) {
                     if (Symbol::toLower(param.name) == lower && !param.isByVal
                         && (static_cast<uint16_t>(param.type) & static_cast<uint16_t>(Vb6Type::Array))) {
                         arrName = "(*" + arrName + ")";
@@ -149,7 +149,7 @@
                 }
                 // Fix 010r-6 rev2: ByRef array param needs dereference (*name) since it's now **
                 if (currentProc_) {
-                    for (auto& param : currentProc_->params) {
+                    for (auto& param : currentProc_->P().params) {
                         if (Symbol::toLower(param.name) == lower && !param.isByVal
                             && (static_cast<uint16_t>(param.type) & static_cast<uint16_t>(Vb6Type::Array))) {
                             arrName = "(*" + arrName + ")";
@@ -173,7 +173,7 @@
             // (cToolsArray prop_let_Extend/DeArray 的 Vars(i)/Arr(i)).
             std::string vArg = "&" + cIdent(vIdent.name);
             if (currentProc_) {
-                for (auto& p091k : currentProc_->params) {
+                for (auto& p091k : currentProc_->P().params) {
                     if (Symbol::toLower(p091k.name) != vLower) continue;
                     bool paArr091k = (static_cast<uint16_t>(p091k.type)
                                       & static_cast<uint16_t>(Vb6Type::Array)) != 0;
@@ -292,6 +292,23 @@
             actualDimCount = (int)node.positional.size();
         }
 
+        // 下标里含**晚绑定成员读**时 (`Arr(N.Childs(i).key)` / `Arr(N.Childs.Count)`),
+        // `emitExpr(下标)` 只在 lastExpr_ 里留下基对象 (`Item(i)`), 真正的读法挂在
+        // comObjExpr_/comMemberName_ 那条 "待解" 标记上 (isComMarker_)。
+        //   · 不解 ⇒ 下标成了对象指针 (`VB6_SA_AT(..., Item(i))`), 索引本身错;
+        //   · 标记还会**漏到数组元素之外**: 外层 (二元/实参/赋值) 见到 isComMarker_
+        //     就把整枚 `VB6_SA_AT(...)` 改写成 `vb6_ComGetStringProp(Item(i), L"key")`
+        //     —— 数组访问整段消失。实测 ucTreeView ClsTreeExplorer.OpenPath
+        //     `UCase(ArrIDLIST(N.Childs(i).key))` 发成 `UCase(Item(i).key)`,
+        //     路径逐级比对恒不等 ⇒ "Open Cursors folder" 只停在根节点、对话框文本为空。
+        // 解包档取 Variant 再交 toLongIfVariant: 与显式 `CLng(...)` 同一形
+        // (`vb6_VariantToLong(vb6_VariantFromComResult(...))`), 不另造一套转换。
+        auto emitIndexAsLong = [&](Expr& idxExpr) -> std::string {
+            emitExpr(idxExpr);
+            if (isComMarker_) resolveComValue("Variant");
+            return toLongIfVariant(std::move(lastExpr_), &idxExpr);
+        };
+
         // Fix 152: VB6 整体数组引用 `arr()` (空括号, 0 实参)。仅对 **2 维及以上**
         // 拦截为装箱: 此前 2D+ 落入下方按维数取元素的路径, 在 positional 为空时
         // 越界读 indices[0]/indices[1] → std::string 解引用垃圾 → 0xC0000005
@@ -321,30 +338,24 @@
             // 一维访问: arr(i) -> VB6_SA_AT(type, arr, i)
             std::string index = "0";
             if (!node.positional.empty()) {
-                emitExpr(*node.positional[0]);
                 // Fix 090an: Variant 下标 (如 CopyMemory 中 baBuffer(maxLen),
                 // maxLen As Optional Variant ByRef) — VB6_SA_AT 宏内 [(idx)-lBound]
                 // 对 vb6_VARIANT 做减法 → C2088. 与 084o 一致转 Long.
-                index = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
+                index = emitIndexAsLong(*node.positional[0]);
             }
             lastExpr_ = "VB6_SA_AT(" + elemCType + ", " + arrName + ", " + index + ")";
         } else if (actualDimCount == 2 && node.positional.size() == 2) {
             // 二维访问: arr(i, j) -> VB6_SA_ND_AT2(type, (vb6_SafeArrayND*)arr, i, j)
             // Fix 056: 动态数组声明为vb6_SafeArray1D*但ReDim后可能是ND, 需要强转
-            emitExpr(*node.positional[0]);
-            std::string idx0 = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
-            emitExpr(*node.positional[1]);
-            std::string idx1 = toLongIfVariant(std::move(lastExpr_), node.positional[1].get());
+            std::string idx0 = emitIndexAsLong(*node.positional[0]);
+            std::string idx1 = emitIndexAsLong(*node.positional[1]);
             std::string ndArr = "(vb6_SafeArrayND*)" + arrName;
             lastExpr_ = "VB6_SA_ND_AT2(" + elemCType + ", " + ndArr + ", " + idx0 + ", " + idx1 + ")";
         } else if (actualDimCount == 3 && node.positional.size() == 3) {
             // 三维访问: arr(i, j, k) -> VB6_SA_ND_AT3(type, (vb6_SafeArrayND*)arr, i, j, k)
-            emitExpr(*node.positional[0]);
-            std::string idx0 = std::move(lastExpr_);
-            emitExpr(*node.positional[1]);
-            std::string idx1 = std::move(lastExpr_);
-            emitExpr(*node.positional[2]);
-            std::string idx2 = std::move(lastExpr_);
+            std::string idx0 = emitIndexAsLong(*node.positional[0]);
+            std::string idx1 = emitIndexAsLong(*node.positional[1]);
+            std::string idx2 = emitIndexAsLong(*node.positional[2]);
             std::string ndArr = "(vb6_SafeArrayND*)" + arrName;
             lastExpr_ = "VB6_SA_ND_AT3(" + elemCType + ", " + ndArr + ", " + idx0 + ", " + idx1 + ", " + idx2 + ")";
         } else {
@@ -357,19 +368,14 @@
             // 现在交给运行期按 dimCount 问一句 (交回错误 9，不再拿越界的下标去寻址)。
             std::vector<std::string> indices;
             for (auto& arg : node.positional) {
-                emitExpr(*arg);
-                indices.push_back(std::move(lastExpr_));
-            }
-            std::string idxList;
-            for (size_t d = 0; d < indices.size(); d++) {
-                if (d) idxList += ", ";
-                idxList += "(int32_t)(" + indices[d] + ")";
+                indices.push_back(emitIndexAsLong(*arg));
             }
             lastExpr_ = "VB6_SA_ND_ATN(" + elemCType + ", (vb6_SafeArrayND*)" + arrName +
                         ", " + std::to_string(indices.size()) +
-                        ", ((const int32_t[]){" + idxList + "}))";
-            // 最外层那对括号不是装饰: 预处理器按顶层逗号切宏实参, `{a, b, c}` 里的花括号
-            // 挡不住它 —— 少了这对括号就是 cl C4002 "VB6_SA_ND_ATN 参数过多"(实测 P4.bas)。
+                        ndAtnSubscriptArg(indices);
+            // 下标实参 (含复合字面量外层括号与 VB6_SA_ND_ATN( 的收括号) 只在
+            // ndAtnSubscriptArg 里拼一次: 预处理器按顶层逗号切宏实参, `{a, b, c}` 里的花括号
+            // 挡不住它 —— 少了外层括号就是 cl C4002 "VB6_SA_ND_ATN 参数过多"(实测 P4.bas)。
         }
         return;
     }

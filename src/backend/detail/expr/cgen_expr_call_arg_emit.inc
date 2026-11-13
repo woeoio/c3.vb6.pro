@@ -67,6 +67,24 @@
                 suppressDefaultProp_ = true;
             }
         }
+        // 账 §42: 形参是**工程内 UserControl**（`ByRef tudSource As pdSpinner`）时与 Object 同档。
+        // 判据问 cParamClassPtrType —— "这个槽收不收类实例指针"的唯一口径：类形参在语义层被
+        // 折成 Variant，typeRefName 是空的，只有它答得出 `vb6_cls_X*`。
+        std::string ucParamCls;
+        if (i < calleeParams.size() && node.positional[i]
+            && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string slotCls042 = cParamClassPtrType(calleeParams[i]);
+            if (slotCls042.compare(0, 8, "vb6_cls_") == 0) {
+                std::string cls042 = slotCls042.substr(8);
+                while (!cls042.empty() && cls042.back() == '*') cls042.pop_back();
+                const std::string idLowerUc = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*node.positional[i]).name);
+                if (knownFormControls_.count(idLowerUc) && findUserControlSpec(cls042)) {
+                    suppressDefaultProp_ = true;
+                    ucParamCls = cls042;
+                }
+            }
+        }
         emitExpr(*node.positional[i]);
         suppressDefaultProp_ = savedSuppressProp;
       // COM属性标记残留: MsgBox dic.Count 等场景 — 参数是COM属性读取但标记未被消费
@@ -107,12 +125,30 @@
             }
         }
         std::string argVal = std::move(lastExpr_);
+        // 账 §42: 工程内 UC 形参收的是**实例指针**（`vb6_cls_<UC>*`），不是宿主窗口句柄 ——
+        // 设计槽 `vb6_hwnd_<名>` 存的是 vb6_UC_HostCreate 交回来的窗口，直接塞进类指针槽
+        // 会让被调方把 HWND 当结构体解引用。只改这一格（实参位），With/成员接收者那一族
+        // 的存量发码一字不动。
+        // 形状只在 ucInstanceThisPtrExpr 里拼一次 (账 #191 续: expr/ 不手拼 vb6_UC_InstanceOf)。
+        if (!ucParamCls.empty() && argVal.rfind("vb6_hwnd_", 0) == 0) {
+            argVal = ucInstanceThisPtrExpr("vb6_cls_" + cIdent(ucParamCls) + "*", argVal);
+        }
         /* Fix 296 / 4b: 实参位上的 Extender 成员读也走实例入口 (CoolBar.ctl
            `RaiseEvent HeightChanged` 发成 `onHeightChanged(h, Extender.Height)`,
            实测 ComCtlsDemo 1 处)。换道放在**捕获的那一刻** —— boxIntoLateSlot /
            VariantToString / wrapToBSTR / boxToVariant 那一层包装全在下面, 于是包装套在
            读入口**外面**, 与 4a "外层 vb6_ChkInt 照旧套着" 同款。 */
         argVal = extenderMemberReadExpr(argVal);
+        // Fix RND-SEQ: `Rnd(v)` / `Randomize v` 的种子在 VB6 运行期按 Variant→double 取
+        // (rtcRandomize 收 VARIANT*, rtcRandomNext 收 Single)。这两枚内置没登记
+        // calleeParams (见 builtin_funcs.inc 的说明), 所以 Variant 实参在这里显式提值 ——
+        // 否则把 vb6_VARIANT 结构体直接塞进 double 形参 = C2440。
+        if (i == 0 && (callee == "vb6_Rnd" || callee == "vb6_Randomize")
+            && i < node.positional.size() && node.positional[i]
+            && argVal.find("vb6_VariantToDouble(") == std::string::npos
+            && isVariantSlot(argVal, node.positional[i].get())) {
+            argVal = "vb6_VariantToDouble(" + argVal + ")";
+        }
         // 账 #305 第一百七十二刀 站B = 实例递进 legacy 接口的**视图形参**那一档。视图
         // (`vb6_iface_<I> { vtbl; obj; }`) 是一枚值结构体，C 里没有任何转换能把裸实例
         // `vb6_cls_<Impl>*` 喂进去 (实测 Ray.vbp: Sphere.c(146) / Plane.c(83) / Disk.c(110) /
@@ -289,13 +325,16 @@
         // 生成临时char*变量, 调用后释放, 无内存泄露
         if (isDeclareAnsiCall && i < calleeParams.size() && calleeParams[i].isByVal
             && calleeParams[i].type == Vb6Type::String) {
-          if (isVariantSlot(argVal, node.positional[i].get())) {
-            // ucSegmentedControl.ctl `ItemLoadImage(..., SrcImg As Variant)` 里
-            // `PathIsURL(SrcImg)`: 形参的 C 类型是 BSTR (makeParamCType: String→BSTR,
-            // A/W 由 RTL 转发桩处理)。旧路先 char* 再被 BSTR 化 = C2440 + 双重转码
-            // (`_ansi_N` 还得靠 vb6_VariantToString(char*) 收场)。Variant 实参直接解包成 BSTR。
+          // 账 #(2026-11-07): Variant 实参也必须编组成 ANSI, 不能只解包成 BSTR 就交给
+          // 转发桩。ucTreeViewPlus.ctl 的 `PathIsURL(SrcImg)` (SrcImg As Variant) 正是
+          // 这条: 旧路把 BSTR 原样递给 PathIsURLA (LPCSTR), 它看到的是 UTF-16 的
+          // 'h',0,'t',0… ⇒ 只认出一个字符 ⇒ 恒返回 0 ⇒ URL 分支永不进, 远程图片全丢。
+          // (RTL 的 shell 转发桩是 1:1 指针透传, 不做编码转换。)
+          const bool argIsVariantSlot = isVariantSlot(argVal, node.positional[i].get());
+          if (argIsVariantSlot) {
             argVal = "vb6_VariantToString(" + argVal + ")";
-          } else {
+          }
+          {
             std::string ansiVar = "_ansi_" + std::to_string(ansiCounter_++);
             // Fix 110x: BSTR 形参的实参若是 Variant 表达式 (后期绑定控件属性读
             // vb6_VariantFromComResult(vb6_ComGetProp(...)) 等), 直接交给
@@ -311,10 +350,17 @@
             // 正是靠这条)。仅当实参是**可赋值左值**(变量/数组元素)才回写 ——
             // 临时表达式 (如 String$(256,0)) 在 VB6 里也收不到回写, 保持一致。
             // 容量取实参当前字符串长度 (VB6 缓冲语义的近似; cap<=0 则由 NUL 定长)。
-            if (i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
+            // Variant 实参没有"可写 String 缓冲"语义 (它连 BSTR 左值都不是), 不回写。
+            if (!argIsVariantSlot && i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
                 && !isVariantSlot(argVal, nullptr) && isCLvalueExpr161c(argVal)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
-                // 回写目标须是 BSTR 左值 (交给 vb6_BSTR_Assign 的 BSTR*)
-                ansiOutParams_.push_back({ansiVar, argVal, "0"});  // cap=0: 由 NUL 定长
+                // 回写目标须是 BSTR 左值 (交给 vb6_BSTR_Assign 的 BSTR*)。
+                // 账 #118 续: 定长串实参 (`Dim sPath As String * 512`) 要整幅回写
+                // (含尾部 NUL), 否则 `InStr(sPath, Chr$(0))` 再也找不到终止符 ——
+                // ClsTreeExplorer.GetSpecialFolder 正是这样读的。
+                const std::string argFsLenPre = (i < node.positional.size() && node.positional[i])
+                    ? fixedStrLenOfExpr(*node.positional[i]) : std::string();
+                ansiOutParams_.push_back({ansiVar, argVal,
+                    argFsLenPre.empty() ? "0" : argFsLenPre});
             }
             argVal = ansiVar;
           }
@@ -413,11 +459,20 @@
                                   argVal);
         }
 
+        // 账 #118 续: UDT 定长串字段 (`tSHFI.szDisplayName`, char[N]) 的三条交接位。
+        // VB6 ABI 下它本身就是内联 ANSI 缓冲; 目标形参若是 String, 读/写各需换算。
+        const std::string argFsLen = (i < node.positional.size() && node.positional[i])
+            ? fixedStrLenOfExpr(*node.positional[i]) : std::string();
+        const bool argIsUdtFixedField = !argFsLen.empty() && i < node.positional.size()
+            && node.positional[i]
+            && (node.positional[i]->kind == ASTNodeKind::MemberAccessExpr
+                || node.positional[i]->kind == ASTNodeKind::WithMemberExpr);
         // ByVal String: 传 ANSI 缓冲的**地址**, 被调用方写入后按 NUL 截断回写。
         // C3 原先把 BSTR 变量的地址 (&buf, 即 BSTR*=wchar_t**) 直接交给期望 LPSTR
         // 的 A 版 API → 类型错配, 出参读不回来 (t5 实测 name=[)。这里改为生成
         // 临时 char* 缓冲 (先灌入原 BSTR 内容), 传其地址交给下面的 isByRef 加 &。
-        if (isDeclareAnsiCall && i < calleeParams.size() && !calleeParams[i].isByVal
+        if (isDeclareAnsiCall && !argIsUdtFixedField
+            && i < calleeParams.size() && !calleeParams[i].isByVal
             && !calleeParams[i].isParamArray && calleeParams[i].type == Vb6Type::String
             && node.byvalOverrides.count(i) == 0) {
             std::string ansiVarR = "_ansi_" + std::to_string(ansiCounter_++);
@@ -428,7 +483,8 @@
             // 登记回写: 目标为原左值 (仅当可赋值且非 Variant)
             if (i < node.positional.size() && isAssignableOutTarget161b(node.positional[i].get())
                 && !isVariantSlot(argVal, nullptr) && isCLvalueExpr161c(argVal)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
-                ansiOutParams_.push_back({ansiVarR, argVal, "0"});
+                ansiOutParams_.push_back({ansiVarR, argVal,
+                    argFsLen.empty() ? "0" : argFsLen});
             }
             argVal = ansiVarR;  // 已是 char* —— 正是 A 版 API 要的 LPSTR (见下方 isByRef 抑制)
         }
@@ -453,6 +509,44 @@
         }
         bool calleeParamIsArray = (i < calleeParams.size()
             && (static_cast<uint16_t>(calleeParams[i].type) & static_cast<uint16_t>(Vb6Type::Array)));
+        // Fix 431: 隐式 String → 数值实参 (工程内过程的 ByVal 数值形参)。
+        // VB6 允许 `Foo "123"` / 把 String 变量交给 ByVal Long 形参, 运行期按 CLng
+        // 规则解析; C 侧 BSTR 是 wchar_t*, 裸交给 int32_t 只会把指针低位截断成数
+        // (实测 `Echo(s)` 得 -911689592 = 0xC9A5DE88, 无报错), 交给 double 则 C2440。
+        // ucTreeView 的 `RGBtoARGB(N.BadgeBackColor, 100)` (BadgeBackColor 声明为
+        // String) 因此把 #51b453/#ff6961 画成 (156,45,91)/(92,53,91) 的噪声色;
+        // 同类文字行 band 也因徽标区域出现杂色而被并/拆, 见 handoff §45。
+        // 只覆盖**工程内过程**: Declare 路上历史代码把 BSTR 当指针直交的写法不在
+        // VB6 语义内 (要指针应写 StrPtr), 不并入本条以缩小影响面。
+        if (!isByRef && !calleeIsDeclare && !calleeIsBuiltin
+            && i < calleeParams.size() && i < node.positional.size()
+            && node.positional[i] && !calleeParamIsArray
+            && inferExprType(*node.positional[i]) == Vb6Type::String) {
+            switch (calleeParams[i].type) {
+                case Vb6Type::Long:     argVal = "vb6_CLng(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Integer:  argVal = "vb6_CInt(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Byte:     argVal = "vb6_CByte(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Boolean:  argVal = "vb6_BoolVal(" + argVal + ")"; break;
+                case Vb6Type::Single:   argVal = "vb6_CSng(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Double:   argVal = "vb6_CDbl(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Currency: argVal = "vb6_CCur(vb6_NumVal(" + argVal + "))"; break;
+                case Vb6Type::Date:     argVal = "vb6_DateVal(" + argVal + ")"; break;
+                case Vb6Type::LongLong: argVal = "vb6_CLngLng(vb6_NumVal(" + argVal + "))"; break;
+                default: break;
+            }
+        }
+        if (isByRef) {
+            // 账 #118 续: 工程内 `ByRef s As String` 形参收到 UDT 定长串字段
+            // (ClsTreeExplorer 的 `StripNulls(tSHFI.szDisplayName)`)。字段是
+            // char[N], 形参要 BSTR* —— 用复合字面量造一只临时 BSTR 指向字段内容
+            // (生存期覆盖本次调用, 与既有 &(vb6_VARIANT){...} 同族)。
+            if (!isDeclareAnsiCall && argIsUdtFixedField && i < calleeParams.size()
+                && calleeParams[i].type == Vb6Type::String
+                && !calleeParamIsArray) {
+                argVal = "&(BSTR){vb6_FixedStrToBSTR(" + argVal + ", " + argFsLen + ")}";
+                isByRef = false;
+            }
+        }
         if (isByRef) {
             // Fix 158b: ByRef **数组**形参 (C 形参 vb6_SafeArray1D**) 收到"整体数组引用"
             // 实参. 1 维 arr() (空括号) 在 prelude 生成 VB6_SA_AT(T, arr, 0) (元素左值);
@@ -614,7 +708,7 @@
                     bool isCurrentByRefParam = false;
                     Vb6Type curPType189 = Vb6Type::Unknown;
                     if (currentProc_) {
-                        for (auto& p : currentProc_->params) {
+                        for (auto& p : currentProc_->P().params) {
                             if (Symbol::toLower(p.name) == Symbol::toLower(innerName) && !p.isByVal && !p.isParamArray) {
                                 bool paramIsArray = (static_cast<uint16_t>(p.type) & static_cast<uint16_t>(Vb6Type::Array)) != 0;
                                 if (!paramIsArray) {
@@ -769,6 +863,17 @@
                         || (argValLv.size() > 4 && argValLv[0] == '(' && argValLv[1] == '*' && argValLv.back() == ')')
                         || isDerefFieldChain)
                         && !isConstMacro;
+                    // 工程内**返回 UDT 的函数调用** (ComplexNumbers.c_add(...)) 也是 UDT 右值,
+                    // 与 090q 的 Declare 那一档同形 —— funcUdtRetCType_ 只登记 Declare/已知表,
+                    // 内部函数不在其中, 于是落进下面的 intptr_t 兜底:
+                    //   intptr_t _vb6_anytmp0 = (intptr_t)(vb6_ComplexNumbers_c_add(...));
+                    // → C2440 'type cast': cannot convert from 'vb6_type_ComplexNumber' to
+                    // 'intptr_t' (PhotoDemon Filters_Area.c 3673…, FormDroste.c 1044…).
+                    // 用 AST 直接问 UDT 类型, 有就按 090q 同一条路落 UDT 临时再取址。
+                    std::string argUdtCtype090q = argUdtRetCType090q;
+                    if (argUdtCtype090q.empty() && i < node.positional.size() && node.positional[i]) {
+                        argUdtCtype090q = inferUdtTypeOfExpr(*node.positional[i]);
+                    }
                     if (isLValue) {
                         // 左值: 变量名、数组元素、me->field、(*ptr) 解引用 — 可以取地址
                         // 账 #305 §B218 (甲) 腿④ 第二道夹: 把一个**标识符**格子的地址交给外部
@@ -776,7 +881,7 @@
                         // 出口放手那张表里 (工程类那一档), 就把这一条撤掉 (只动类档, 视图档不动)。
                         if (isSimpleIdent) dropClassSlotRelease(argValLv);
                         argVal = "(void*)&(" + argVal + ")";
-                    } else if (!argUdtRetCType090q.empty()) {
+                    } else if (!argUdtCtype090q.empty()) {
                         // Fix 090q: 实参是返回 UDT 的函数调用 — VB6 把返回值拷入临时
                         // UDT 再传址 (As Any ByRef). C 不能直接强转 struct 值
                         // ((void*)(intptr_t)(struct) → C2440), 也不能用复合字面量
@@ -786,7 +891,7 @@
                         // 保证 "声明先于引用". 例: cZipArchive pvVfsSetEof 内
                         // SetFileTime(..., pvToFileTime(dLastWriteTime)) (FILETIME).
                         std::string tmpAny090q = "_vb6_anytmp" + std::to_string(tempCounter_++);
-                        c_.addPending(argUdtRetCType090q + " " + tmpAny090q
+                        c_.addPending(argUdtCtype090q + " " + tmpAny090q
                                       + " = " + argVal + ";");
                         argVal = "(void*)&" + tmpAny090q;
                     } else if (isConstMacro && argVal != "NULL") {
@@ -948,7 +1053,7 @@
                     bool argIsCurrentByRefParam = false;
                     Vb6Type argCurPType189 = Vb6Type::Unknown;
                     if (currentProc_) {
-                        for (auto& p : currentProc_->params) {
+                        for (auto& p : currentProc_->P().params) {
                             if (Symbol::toLower(p.name) == Symbol::toLower(argVal) && !p.isByVal && !p.isParamArray) {
                                 argIsCurrentByRefParam = true;
                                 argCurPType189 = p.type;
@@ -1143,6 +1248,18 @@
                                         argVal = "&" + tmp172e;
                                         break;
                                     }
+                                    // 账 #305 (R4 收口): 同一站的**新式**视图档 (薄指针)。
+                                    const std::string viewBoxR4 =
+                                        ivrefViewBoxExpr(node.positional[i].get(), argVal);
+                                    if (!viewBoxR4.empty()) {
+                                        const std::string tmpR4 = "_vb6_vararg_"
+                                            + std::to_string(ansiCounter_++);
+                                        c_.emitLine("vb6_VARIANT " + tmpR4 + " = " + viewBoxR4
+                                                    + ";  /* Fix <vbeclipse>: ByRef Variant 实参装箱 */");
+                                        boxTempsToClear_.push_back({tmpR4, c_.indentLevel()});
+                                        argVal = "&" + tmpR4;
+                                        break;
+                                    }
                                 }
                                 std::string argCls92y =
                                     isObjVar92y ? std::string()
@@ -1168,6 +1285,33 @@
                                     && currentReturnCType_.rfind("vb6_cls_", 0) == 0) {
                                     argCls92y = currentReturnCType_.substr(8);
                                     if (!argCls92y.empty() && argCls92y.back() == '*') argCls92y.pop_back();
+                                }
+                                // C2065 族① (`cmdFlyoutLock`): 整枚**控件数组**作 ByRef Variant
+                                // 实参 (`UserControls.ThemeFlyoutControls cmdFlyoutLock`, 13 个
+                                // Toolpanel 各一处)。单枚控件走下面 FromInstance 那条; 控件数组
+                                // 在 VB6 里交给 Variant 的是**一枚 Variant 数组** (元素是各控件
+                                // 对象)。照单枚口径包会把数组描述符当实例:
+                                // `(void*)(cmdFlyoutLock)` —— C 里只有 `vb6_arr_cmdFlyoutLock`,
+                                // 没有这个名字 ⇒ C2065。判据问 knownControlArrays_ (当前窗体
+                                // 的设计期控件数组表), 不认名字清单; 载体出口是
+                                // vb6_CtrlArrToVariantArray (与单枚同源, 借出包装器)。
+                                if (!isObjVar92y && !argLs92y.empty()
+                                    && knownControlArrays_.count(argLs92y)) {
+                                    // 数组变量名按**原拼写** (cgen_form 的声明就是
+                                    // `vb6_arr_<原拼写>`; cIdent 会折小写 ⇒ 大小写不符 = C2065)。
+                                    const std::string caOrig92y = argVal;
+                                    const std::string tmpCA92y = "_vb6_vararg_"
+                                        + std::to_string(ansiCounter_++);
+                                    c_.emitLine("vb6_VARIANT " + tmpCA92y
+                                        + ";  /* C2065 族①: 整枚控件数组 → Variant 数组 */");
+                                    c_.emitLine("vb6_CtrlArrToVariantArray(&" + tmpCA92y + ", &vb6_arr_"
+                                        + caOrig92y + ", "
+                                        + (argCls92y.empty() ? std::string("NULL")
+                                                             : ("\"" + argCls92y + "\""))
+                                        + ");");
+                                    boxTempsToClear_.push_back({tmpCA92y, c_.indentLevel()});
+                                    argVal = "&" + tmpCA92y;
+                                    break;
                                 }
                                 // Fix <VBFlexGridDemo>: 已知 **Variant 变量**不能走这两条
                                 // 装箱。cExprIsVariant 只认函数表达式 (vb6_VariantXxx( 前缀),
@@ -1576,6 +1720,47 @@
                             case Vb6Type::Date:
                                 argVal = "(&(vb6_VARIANT){.vt=VT_DATE, .dblVal=(double)(" + argVal + ")})";
                                 break;
+                            case Vb6Type::Object: {
+                                // 2026-11-07 (ucTreeView 五窗出图复验): VB6 的值语义 —— 对象表达式
+                                // 交给 Variant 形参时取该对象的**默认属性**。StdPicture 的默认成员
+                                // 是 Handle (OLE_HANDLE → Long), 所以这里必须交 vt=VT_I4:
+                                // 夹具的 LoadPictureEx 按 VarType 分派, `Case vbLong` 的注释就是
+                                // 'StdPicture.handle; vt=VT_DISPATCH(9) 落不进任何分支 ⇒ Agenda 的
+                                // 66 枚头像一张都不进 ImageList (真 VB6 基准 avatar=9793, C3 读 0)。
+                                // 也不能靠 VT_DISPATCH 走 GDI+ 流: IPicture 不是 IStream, 实测
+                                // GdipLoadImageFromStream 收到 IPicture 指针直接打崩进程 (0xC0000409)。
+                                if (lastExprIsComPicture_
+                                    && node.positional[i]
+                                    && node.positional[i]->kind == ASTNodeKind::IndexOrCallExpr) {
+                                    lastExprIsComPicture_ = false;  // consume the flag
+                                    argVal = "(&(vb6_VARIANT){.vt=VT_I4, .lVal=(int32_t)(intptr_t)"
+                                             "vb6_PictureHandleOf((void*)(" + argVal + "), (int32_t*)0)})";
+                                    break;
+                                }
+                                // ucTreeView (2026-11-06): **对象档实参不许按 BSTR 装箱**。
+                                // 实证 Form6.frm:113 `ucTreeViewPlus1.ImageListAddImage
+                                // GetContactImgProfile(ArrContacts(i), lColor)`，被调方形参是
+                                // `SrcImg As Variant`（ByRef ⇒ vb6_VARIANT*），而返回值是
+                                // `As StdPicture`（语义层 Fix 040a 判 Object ⇒ C 侧 void*）。
+                                // 改前发 (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=<IPicture*>})，
+                                // 被调方拿图片指针当 BSTR 解引用 ⇒ 0xC0000005。
+                                // 口径与上面 default 里「工程类实例必须经 FromInstance 包装」一字相同：
+                                // 晚绑定/内建对象（void* = IDispatch*）就是真 IDispatch；
+                                // 工程类实例的裸结构体指针必须先包成真 IDispatch，否则
+                                // vb6_VariantClear 会把首字段当 vtable 解引用（堆损坏）。
+                                // 这里**只借值、不取引用**：VB6 把非左值实参交给临时 Variant，
+                                // 临时量的引用由调用点自己的语句管；被调方要留就 VariantCopy/Set 自己加。
+                                // 因此不登记 boxTempsToClear_ —— 那条道的 authority 钉死"两站"
+                                // (knife 121 + 第一百七十二刀站E)，第三站会红 check_box_temp_reclaim。
+                                const std::string argClsObj =
+                                    inferClassTypeOfExpr(*node.positional[i]);
+                                const std::string boxedObj = argClsObj.empty()
+                                    ? ("(IDispatch*)(" + argVal + ")")
+                                    : ("(IDispatch*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc(\""
+                                       + argClsObj + "\"), (void*)(" + argVal + "))");
+                                argVal = "(&(vb6_VARIANT){.vt=VT_DISPATCH, .pdispVal=" + boxedObj + "})";
+                                break;
+                            }
                             default:
                                 // Fix 054: Variant 或未知类型
                                 // 1. 实参是 UDT 的 Variant 字段 (With 成员如 .SourceFile,

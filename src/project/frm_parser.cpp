@@ -576,7 +576,11 @@ std::filesystem::path resolveFrmResourceFile(const FrmFile& frm,
     // 1) 属性行里的引用名是权威 —— 且能容忍 .frm 被改名的场景
     //    (Form1.frm 改名成 Form1_copy.frm 后, 属性里写的仍是 "Form1.frx")
     if (!refs.empty() && !refs.front().fileName.empty()) {
-        auto named = candidate.parent_path() / refs.front().fileName;
+        // FGZ-ICE-001: refs.front().fileName 是 UTF-8 窄串, 直接喂给
+        // path::operator/(std::string) 会被 MSVC STL 按 ACP(936) 解释;
+        // UTF-8 多字节序列在 ACP 下非法 → _Convert_narrow_to_wide 抛
+        // filesystem_error → 无人接 → ICE。统一转宽路径后再拼接。
+        auto named = candidate.parent_path() / utf8ToPath(refs.front().fileName);
         std::error_code ec;
         if (std::filesystem::exists(named, ec)) return named;
     }

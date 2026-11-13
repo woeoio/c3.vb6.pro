@@ -49,7 +49,7 @@ std::string SemanticAnalyzer::computeOverloadFp(const Symbol& sym) const {
     }
     std::string fp;
     fp += (sym.kind == SymbolKind::Function) ? "F" : "S";
-    for (const auto& p : sym.params) {
+    for (const auto& p : sym.P().params) {
         if (p.isParamArray) return "";  // fbc 规则: vararg 过程不进重载组
         fp += ':';
         fp += std::to_string(static_cast<int>(p.type));
@@ -87,12 +87,12 @@ Symbol* SemanticAnalyzer::resolveOverload(Symbol* head, const std::vector<Vb6Typ
     for (auto* s : cands) {
         if (s->kind != head->kind) continue;
         size_t required = 0;
-        for (auto& p : s->params) if (!p.isOptional) required++;
-        if (n < required || n > s->params.size()) continue;
+        for (auto& p : s->P().params) if (!p.isOptional) required++;
+        if (n < required || n > s->P().params.size()) continue;
         int score = 0;
         bool ok = true;
         for (size_t i = 0; i < n; i++) {
-            int sc = ovlScoreParam(argT[i], s->params[i]);
+            int sc = ovlScoreParam(argT[i], s->P().params[i]);
             if (!sc) { ok = false; break; }
             score += sc;
         }
@@ -290,7 +290,7 @@ void SemanticAnalyzer::checkCallArgs(Symbol* procSym, IndexOrCallExpr& callNode)
     size_t optionalParams = 0;
     bool hasParamArray = false;
 
-    for (auto& p : procSym->params) {
+    for (auto& p : procSym->P().params) {
         if (p.isParamArray) {
             hasParamArray = true;
             continue;
@@ -333,7 +333,7 @@ void SemanticAnalyzer::checkCallArgs(Symbol* procSym, IndexOrCallExpr& callNode)
     for (auto& namedArg : callNode.named) {
         bool found = false;
         std::string lowerName = Symbol::toLower(namedArg.name);
-        for (auto& p : procSym->params) {
+        for (auto& p : procSym->P().params) {
             if (Symbol::toLower(p.name) == lowerName) {
                 found = true;
                 break;
@@ -389,10 +389,17 @@ void SemanticAnalyzer::checkUnreferencedSymbols() {
 // ============================================================
 // P14.1.4: Optional参数默认值求值
 // ============================================================
-std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type paramType) {
+std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type paramType, bool isByVal) {
     // 无显式默认值 -> 返回空字符串, cgen将使用类型零值
     if (!defaultValue) return "";
-    
+
+    // 账 §56.43: ByVal Variant 的默认值必须**装箱** —— vb6_VARIANT 是结构体, 裸字面量
+    // 赋不上 (cl C2440 "'=' 无法从 int 转换为 vb6_VARIANT")。装箱口径**只此一处**:
+    // 过程体的缺省回填 (cgen_decl_func/proc) 与调用点的省略实参 (12 处发码出口) 全部
+    // 照抄这里产出的表达式, 两头不会分叉。
+    // ByRef Variant 不装箱 —— 它的调用点是 `&(vb6_VARIANT){...}` 复合字面量, C 只收常量。
+    const bool box = (paramType == Vb6Type::Variant) && isByVal;
+
     // 将AST字面量表达式转换为C表达式字符串
     auto* lit = dynamic_cast<LiteralExpr*>(defaultValue);
     if (lit) {
@@ -401,9 +408,14 @@ std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type
                 // 账 #194: 按**数值**重打, 不抄 rawText —— 词法把 VB 的类型后缀 (`3%` / `0&` /
                 // `&H10&`) 留在 rawText 里, 抄进生成 C 就是 C2059 "bad suffix on number"
                 // (实测 ucTreeMaps PropPagFMR.c 723/923: `if (!_has_FontIndex) (*FontIndex) = 0&;`)。
-                return intLiteralText(static_cast<int64_t>(lit->intValue), false);
-            case LiteralKind::Long:
-                return intLiteralText(lit->longValue, true);
+                {
+                    std::string it = intLiteralText(static_cast<int64_t>(lit->intValue), false);
+                    return box ? ("vb6_VariantLong(" + it + ")") : it;
+                }
+            case LiteralKind::Long: {
+                std::string lt = intLiteralText(lit->longValue, true);
+                return box ? ("vb6_VariantLong(" + lt + ")") : lt;
+            }
             case LiteralKind::LongPtr: {
                 // Fix 082: rawText 带 VB 后缀 ("&H80000000^"), 原样返回会写进生成 C →
                 // C2059. 与 cgen_expr.cpp 的 LongPtr 分支同规则: LongPtr 是平台相关宽度
@@ -473,11 +485,16 @@ std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type
                             esc += (char)ch;
                         }
                     }
-                    return "vb6_BSTR_FromStr(L\"" + esc + "\")";
+                    return box ? ("vb6_VariantString(vb6_BSTR_FromStr(L\"" + esc + "\"))")
+                               : ("vb6_BSTR_FromStr(L\"" + esc + "\")");
                 }
             case LiteralKind::Boolean:
                 // VB6 True = -1, False = 0
-                return (lit->rawText == "True" || lit->rawText == "-1") ? "-1" : "0";
+                {
+                    bool bv = (lit->rawText == "True" || lit->rawText == "-1");
+                    if (box) return bv ? "vb6_VariantBool(-1)" : "vb6_VariantBool(0)";
+                    return bv ? "-1" : "0";
+                }
             case LiteralKind::Nothing:
                 return "NULL";
             case LiteralKind::Empty:
@@ -492,13 +509,18 @@ std::string SemanticAnalyzer::evalOptionalDefault(ASTNode* defaultValue, Vb6Type
     // UnaryExpr: 递归求值操作数, 加前缀 (P20-20)
     auto* unary = dynamic_cast<UnaryExpr*>(defaultValue);
     if (unary) {
-        std::string inner = evalOptionalDefault(unary->operand.get(), paramType);
+        // 账 §56.43: 递归**不装箱** —— 装箱要落在"数值算完之后"这一层,
+        // 否则内层已经折成 vb6_VariantLong(...) 时, 外层的取负/前缀就没法再算。
+        std::string inner = evalOptionalDefault(unary->operand.get(), paramType, false);
         if (inner.empty()) return "";
         switch (unary->op) {
             case UnaryOp::Negate:
                 // 数值型: "(-1)" "(-3.14)"
                 if (inner.find("vb6_") == 0) return "";  // 非数值C表达式, 暂不处理
-                return "(-" + inner + ")";
+                {
+                    std::string neg = "(-" + inner + ")";
+                    return box ? ("vb6_VariantLong(" + neg + ")") : neg;
+                }
             case UnaryOp::Not:
                 // Not表达式: 暂不常见做默认值, 返回空
                 return "";
@@ -768,6 +790,10 @@ bool SemanticAnalyzer::namesProjectLevel(const std::string& name) const {
     // 模块级 Public Const / Public Enum 成员: **裸名位就是它的合法位置** (VB6 工程级常量),
     // 所以不像模块名那样要挑位置。账 #278 §B106。
     if (projPublicConsts_.count(lk)) return true;
+    // 标准模块的模块级 Public 变量: 与 Public 过程/常量同格, 裸名位合法。账 #278 §B118。
+    // 只做**精确名字**匹配 (与上面两份同款, 仅大小写折叠), 所以拼错的名字照旧报 VB3001;
+    // 也别在这里加"前缀/驼峰"之类的宽松匹配 —— 那等于把误报换成漏报。
+    if (projPublicVars_.count(lk)) return true;
     // 工程内**窗体名**: VB6 里它就是默认实例，两个位都合法（`Unload TmForm2` 站在裸名位、
     // `TmForm2.Visible` 站在限定符位）。唯一的例外与发码侧同一处口径：窗体模块里指着**自己**
     // 那个名字不走那条路（`cgen_expr_ident_symbol.inc` 的 `lower != knownFormName_`），
@@ -783,6 +809,11 @@ bool SemanticAnalyzer::isDocumentHostObject(const std::string& name, bool qualif
     if (name.empty() || !currentModule_) return false;
     const std::string lk = ifaceLower(name);
     if (lk == "vba") return qualifierPos;   // VBA 全局库前缀, 但只有站在限定符位才有意义
+    // VBA.Math 是**VB6 自带 VBA 类型库里的真实模块**（不是 tB 专有写法；PhotoDemon
+    // 的 INSTALL.md 就是拿 VB6 IDE 编这份源码）。成员（Log/Abs/Cos/Sin/Sqr/Round…）
+    // 只是同一批内建函数的限定写法，发码折叠见 cgen_expr_member_precheck.inc。
+    // 与 VBA 同款：只有站在限定符位才算合法，值位的 `Math` 仍是未声明名字。
+    if (lk == "math") return qualifierPos;
     const DocumentKind k = currentModule_->docKind;
     // 文档对象**自己的名字**在 VB6 两个位都合法：`UserControl.hDC`（限定符位）与
     // `With UserControl`（值位，等价于 Me）。两档现在一起放（账 #278 §B115 的第二半）。
@@ -796,6 +827,11 @@ bool SemanticAnalyzer::isDocumentHostObject(const std::string& name, bool qualif
     if (lk == "usercontrol") return k == DocumentKind::UserControl;
     if (lk == "propertypage") return k == DocumentKind::PropertyPage;
     if (lk == "extender" || lk == "ambient") return k == DocumentKind::UserControl && qualifierPos;
+    // VB6 UserControl 内建 `Parent`：值是**宿主容器对象**（窗体 / 容器控件），不是容器
+    // 窗口句柄。两个位都合法（`Set p = Parent` / `Parent.Controls`），发码侧由
+    // vb6_UC_ParentObject() / vb6_UC_ParentControls() 两条码头回答（见 cgen 的 133u 与
+    // PD-Parent 那一支）。PhotoDemon pdCommandBar.ctl 的 7 处都是 `Parent.Controls`。
+    if (lk == "parent") return k == DocumentKind::UserControl;
     return false;
 }
 
@@ -928,7 +964,9 @@ bool SemanticAnalyzer::isDocumentBarePseudoMember(const std::string& name) const
         case DocumentKind::PropertyPage: obj = "PropertyPage"; break;
         default: return false;   // 标准模块 / 窗体没有这一族隐式文档成员
     }
-    return hostPseudoBareEligible(obj, name);
+    // 账 §40: 裸写的 HPF_METHOD (如 .ctl 里的 `Cls`) 与 HPF_BARE 同批放行 ——
+    // VB6 里它就是 `UserControl.Cls`。发码侧对这两档各有出口, 这里只停 VB3001。
+    return hostPseudoBareCallEligible(obj, name);
 }
 
 

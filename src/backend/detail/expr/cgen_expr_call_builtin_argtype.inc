@@ -146,4 +146,51 @@
     // 判据全部来自 src/common/owned_temp_keeps.hpp（表由 RTL 推导 ⇒ 哨兵双向对账）。
     hoistOwnedTempArgs(argList, callee);
 
+    // 账 §39 (C:/D: 少两行, 第 2 层): VB6 的 0 参 Function/PropertyGet 返回 Variant 时,
+    // `F(i)` 的 (i) 是**对返回数组的下标**, 不是调用实参 (真 VB6 实测 /make 通过:
+    // ucTreeView ClsTreeExplorer.cls:317 `GetDrive(i)`)。上面 Fix 041c 会把多出来的
+    // 实参按「超过形参个数」截掉 ⇒ 拿到整个数组 (探针实测 VarType=8200、GetDrive(0/1) 空)。
+    // 这里改发 vb6_VariantArrayGetVal(F(), i): F 收 0 个实参, 结果再取下标。
+    if (calleeZeroArgVariantSubscript && !node.positional.empty()) {
+        std::string selfCall = callee + "(" + argList + ")";
+        std::string idxExpr = args.empty() ? "0" : args[0];
+        lastExpr_ = "vb6_VariantArrayGetVal(" + selfCall + ", "
+                    + toLongIfVariant(idxExpr, node.positional[0].get()) + ")";
+        return;
+    }
+
+    // C3-SENTINEL(g4-value-member-empty-paren): 值成员被写成"带空括号"的收口点。
+    // §B94: `cmdOK.FontSize()`, `cboUpdates.UBound()`, `PDImages.GetActiveImage.Width()` ——
+    // 成员读取本身已经产出**完整** C 表达式 (尾部带"读法尾注"), 到这里再追加 `()` 就是
+    // 调用一个非函数 ⇒ cl C2064 (PhotoDemon 实测 9 条: options_Updates 4 / SelectionFilters 4 /
+    // pdCommandBarMini 1)。判据只认**产出尾注**, 不猜符号表:
+    //   · 有实参的调用不进这一格 (argList 非空);
+    //   · 真方法调用 (resolveClassMemberCall 有解) 在 callee 阶段就被折成函数名, 没有尾注;
+    //   · 尾注是这三条读法自己写的 (`/* ctrl prop read */`、`/* ctrl array U|LBound */`、
+    //     类字段的字段尾注) ⇒ 产出的是值访问, 空括号只是 VB6 的噪声写法。
+    if (argList.empty() && callee.size() > 3 && callee.compare(callee.size() - 2, 2, "*/") == 0) {
+        static const std::string kValueReadTails[] = {
+            "  /* ctrl prop read */",
+            "  /* ctrl array UBound */",
+            "  /* ctrl array LBound */",
+        };
+        bool valueReadNote = false;
+        for (const auto& tail : kValueReadTails) {
+            if (callee.size() >= tail.size()
+                && callee.compare(callee.size() - tail.size(), tail.size(), tail) == 0) {
+                valueReadNote = true;
+                break;
+            }
+        }
+        // 类字段读: 尾注里带字段名 —— 认这一问只许问 §B172 那个出口的识别半
+        // (cExprIsClassFieldRead), 不在这里认尾注文字。
+        if (!valueReadNote && cExprIsClassFieldRead(callee)) {
+            valueReadNote = true;
+        }
+        if (valueReadNote) {
+            lastExpr_ = callee;
+            return;
+        }
+    }
+
     lastExpr_ = callee + "(" + argList + ")";

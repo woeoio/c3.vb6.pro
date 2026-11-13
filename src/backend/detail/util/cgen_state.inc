@@ -81,6 +81,10 @@
         // 体内 `.成员` 是 VB6 的**内建**成员, 与控件自己声明的同名公开属性是两个东西
         // (见 CCodeGen::withHostPseudoIntrinsic)。
         std::string hostPseudoObj;
+        // ucSlider (Proyecto1.vbp): `.pag` 上设计期放置的工程内 UserControl 作 With 目标时,
+        // 记下控件名 —— 类实例档解析不到的成员 (Width/Height/Top/Left/Visible …) 是 VB6 的
+        // **Extender(控件)属性**, 必须改走 form_pseudo 读表并取 vb6_hwnd_<控件名> 宿主槽.
+        std::string designerCtrlName;
     };
     std::vector<WithObjInfo> withObjectInfoStack_;
     bool suppressDefaultProp_ = false;  // P17.1: With对象表达式时抑制默认属性读取
@@ -315,10 +319,20 @@
     // 在过程开头 knownUdtVars_.clear() 后同样会丢失, 导致 With m_uData 被误分类为 COM 对象.
     // 本集合在 generate() 扫描模块声明时填充, 过程开头 clear() 后恢复.
     std::unordered_map<std::string, std::string> moduleUdtMembers_;
-    // opt4: 裁剪标准模块.c中未实际引用的跨模块#include
-    bool trimIncludes_ = false;
-    // opt4: 当前模块实际引用的外部模块(小写), 由 driver 的 AST 收集器填充
-    std::unordered_set<std::string> trimModules_;
+    // 账 §56.52: 本模块**真正引用到**的外部模块(小写) —— 「跨模块 include 瘦身」的唯一权威。
+    //
+    // 为什么权威在这张表而不在 AST 扫描: AST 遍历走不到若干类型引用位点
+    // (VariableDecl / ParameterDecl / TypeDecl / TypeMember 里的类型引用), 靠扫 AST
+    // 得出的名单是**残缺**的 ⇒ 裁 include 会漏头 ⇒ 编译断。
+    // 而发码器自己知道每个外部符号的归属模块 (Symbol::sourceModule), 它在**发**出
+    // 引用那一刻登记 ⇒ 构造上完备: 「发了引用 ⇒ 一定要那头」。
+    //
+    // 记录点三处 (见 noteExternalModule 的调用处):
+    //   1) cProcName(..., sourceModule)   —— 外部过程/函数引用的唯一收口
+    //   2) 类成员调用的类名归一 (sourceModule) —— 外部类的原型
+    //   3) 枚举成员引用 (无常量值那一支)   —— 枚举 typedef 在定义方
+    // mutable: 记录发生在 const 成员函数 cProcName 里。
+    mutable std::unordered_set<std::string> usedExternalModules_;
     // 已知类实例变量名 → 类名映射 (小写var名 → 类名, 如 "me" → "cDialog")
     // 用于方法调用翻译 c.Method → vb6_cls_ClassName_Method(c)
     // Fix 010r-10: 从 unordered_set 改为 unordered_map 以支持类名查找
@@ -411,6 +425,13 @@
     // M22: ANSI临时变量待释放列表 (变量名) + 计数器
     // 在Declare ANSI函数调用前声明临时char*变量, 调用后立即FreeANSI
     std::vector<std::string> ansiTempsToFree_;
+    // 账 #610 第343刀: ByVal String 形参的**副本**登记表 { 形参名, 副本变量名 }。
+    // FIX-012 让被调方先拷副本 (VB6 语义: 被调方拿到自己的副本), 但副本此前**不释放**
+    // ⇒ 每调用泄一枚串。本刀把副本放进独立变量, 过程出口只在**形参仍是那枚副本时**
+    // 才 free (体里 vb6_BSTR_Assign 先 free 旧值 ⇒ 形参已不是副本 ⇒ 跳过 ⇒ 不双释放;
+    // ByRef 传出后被改写同理)。Function 侧不登记 (返回值可能是该形参 ⇒ free 会悬垂)。
+    std::vector<std::pair<std::string, std::string>> byValStrCopies_;
+
     // Fix <vbeclipse>: 本过程被 push_macro/#undef 隔离的隐式变量名 (出过程 pop 复原)
     std::vector<std::string> implicitMacroNames_;
     // Fix 161b-decl-out: Declare A 版 ByVal String **出参回写**登记表。
@@ -482,6 +503,19 @@
     // Fix 010: 已使用的VB6 UDT类型名 (如 "TypeLang")
     // 用于在.h文件中生成typedef前向声明, 使 vb6_type_<Name> 类型可用
     std::unordered_set<std::string> usedUdtTypes_;
+
+    // 账 §G1 / §G1b: 本模块自己落进 .h 的每个 UDT 定义块。
+    // 前向 typedef 只够指针用; 头里按值出现 (`vb6_type_RectL rcMonitor;`) 必须见到
+    // 完整 struct 体, 否则消费方一律 C2079 (PhotoDemon: 16,152 条 / 539 TU 全中).
+    // 由 driver 汇总成工程级表, 再按依赖序注入每个 .h 的顶部 —— 这样头自足,
+    // 不靠 vbp 的模块先后蒙过去.
+    //
+    // G1b: 原表按"类型名 → 块"汇总, 把不同模块的**模块私有 Type** 当成同一个类型,
+    // 同名先到者会把别人的字段名注入进本模块的头 (PhotoDemon: MergedEntry /
+    // BITMAPINFOHEADER 等 215 条 C2039)。现改按 (模块, 类型名) 归档并带上可见性:
+    // 本模块出现的同名类型一律取**自己的**块; 跨模块注入只放行 Public Type。
+    // 记录形状见 cgen_api.inc 的 UdtDefRecord (公开访问器要先用到这个类型)。
+    std::vector<UdtDefRecord> udtDefs_;
 
     // COM后期绑定中间状态 (P6.2)
     // MemberAccessExpr为COM对象设置此字段, IndexOrCallExpr/AssignmentStmt/SetStmt读取后清除

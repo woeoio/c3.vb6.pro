@@ -19,8 +19,41 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
+#pragma comment(lib, "psapi.lib")   // GetProcessMemoryInfo / EmptyWorkingSet
+#endif
 
 namespace vb6c3 {
+
+namespace {
+#ifdef _WIN32
+// 当前进程的内存读数 (MB)。WorkingSet = 物理驻留; PrivateUsage = 私有提交量。
+// 两个都要看: **释放对象**降的是 PrivateUsage, 而**工作集**要靠 EmptyWorkingSet
+// 才降 —— 只 clear() 的话, CI 的 mem.csv 一个字节都看不出来。
+struct ProcMem {
+    unsigned long long ws = 0;
+    unsigned long long priv = 0;
+};
+inline ProcMem readProcMem() {
+    ProcMem m;
+    // 用 EX 版: PrivateUsage 只在 PROCESS_MEMORY_COUNTERS_EX 里 (基础版没有那个字段)。
+    // 布局前段与基础版一致, 传 cb = sizeof(EX) 即可。
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    pmc.cb = sizeof(pmc);
+    if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),
+                              sizeof(pmc))) {
+        m.ws = pmc.WorkingSetSize / (1024ull * 1024ull);
+        m.priv = pmc.PrivateUsage / (1024ull * 1024ull);
+    }
+    return m;
+}
+#endif
+} // namespace
 
 // === 编译入口 ===
 
@@ -817,6 +850,14 @@ CompileResult Driver::compile(const CompileOptions& options) {
     }
 
     c3PhaseMark("codegen");
+
+    // 账 §56.55: 发码之后放掉 AST 与语义产物, **让 cl 拿到内存**。
+    // --emit-c 不跑 cl (driver_link.cpp:714 直接 return) ⇒ 那条路**不释放**,
+    // 形状门那条路径一个字节都不碰。
+    if (!effectiveOpts.emitC) {
+        releaseAstAfterCodegen();
+    }
+
     // === Stage 5: Link ===
     if (!runLinker(effectiveOpts, outputDir, intermediatesDir, session)) {
         std::cerr << diag_->toString();
@@ -847,6 +888,67 @@ CompileResult Driver::compile(const CompileOptions& options) {
     result.errorCount = diag_->errorCount();
     result.warningCount = diag_->warningCount();
     return result;
+}
+
+// === 账 §56.55: 发码后释放 AST 与语义产物, 让 cl 拿到内存 ===
+//
+// 为什么 (读数来自 PD 整编 CI run 43218740715 的 pd_build.mem.csv):
+//   cl 阶段 PEAK_TREE_WS_MB = 9678, 而其中 c3_ws_mb = 9451 —— **9.45 GB 全是 C3
+//   自己攥着的**: 623 个 TU 的 AST (modules_) + 539 份语义分析产物 (analyzers_,
+//   每个带一份 SymbolTable)。那些东西在 cl 编译期间**一个字节都用不到**, 却把机器
+//   的内存占着, 逼得 cl 的 4 个 c1.exe 在内存压力下跑那 190.5 s
+//   (= BUILD_SECONDS 308 s 的 62%)。
+//
+// 放什么 (边界是查过的, 不是猜的):
+//   · analyzers_ —— 539 份 SemanticAnalyzer。**link 阶段一个引用都没有**
+//     (driver_link.cpp 全文不提 analyzers_); 发码阶段用完 (driver_codegen_module_loop.inc:80)
+//     之后即可放。
+//   · 每个 Module 的 **AST 内容**: declarations / options / implements / interfaces /
+//     coclasses / defTypes / attributes。
+//   · **模块元数据一律保留** (moduleName / filename / isFormModule / classTypeParams /
+//     packageName / docKind / instancing …) —— driver_link.cpp 的收集段只读这些:
+//     driver_link.cpp:744-753 (classTypeParams + moduleName)、:818-820 (isFormModule)、
+//     :1274-1280 (isFormModule + moduleName + filename)。动了它们链接就找不到 .c。
+//
+// 顺带一条 Windows 的事实: **释放 ≠ 工作集变小**。malloc 拿到的页留在进程工作集里
+// 不还给系统 ⇒ 必须显式 EmptyWorkingSet, 否则 CI 的 mem.csv 一个字节都看不出来
+// (PEAK 是峰值, 释放也不会改它; 能看到的是采样列 tree_ws_mb / c3_ws_mb 在 cl 阶段掉下来)。
+void Driver::releaseAstAfterCodegen() {
+#ifdef _WIN32
+    ProcMem before = readProcMem();
+    auto t0 = std::chrono::steady_clock::now();
+#endif
+
+    // 1) 539 份语义分析产物 (每个含一份 SymbolTable) —— link 阶段没人用
+    analyzers_.clear();
+
+    // 2) 每个模块的 AST 内容 (元数据保留)
+    size_t cleared = 0;
+    for (auto& m : modules_) {
+        if (!m) continue;
+        m->declarations.clear();
+        m->options.clear();
+        m->implements.clear();
+        m->interfaces.clear();
+        m->coclasses.clear();
+        m->defTypes.clear();
+        m->attributes.clear();
+        ++cleared;
+    }
+
+#ifdef _WIN32
+    // 把空闲页还给系统 —— 否则"释放了"只是 PrivateUsage 降, 物理内存还占着
+    EmptyWorkingSet(GetCurrentProcess());
+    ProcMem after = readProcMem();
+    double ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    if (c3TimingOn()) {
+        std::fprintf(stderr,
+                     "C3: MEM ast-release modules=%zu cost=%.0f ms ws=%lluMB->%lluMB priv=%lluMB->%lluMB\n",
+                     cleared, ms, before.ws, after.ws, before.priv, after.priv);
+        std::fflush(stderr);
+    }
+#endif
 }
 
 } // namespace vb6c3

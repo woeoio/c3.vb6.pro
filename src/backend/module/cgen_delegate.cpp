@@ -110,7 +110,7 @@ void CCodeGen::emitDelegateDecls(Module& module) {
                     ")(" + makeParamList(del.params, true) + ");");
 
         if (!delSym) continue;
-        for (auto& t : delSym->delegateTargets) {
+        for (auto& t : delSym->P().delegateTargets) {
             Decl* proc = findDelegateTargetDecl(module, t.procName, t.procFp);
             if (!proc) continue;  // 语义层已校验目标存在, 防御性跳过
             std::string sig = (proc->kind == ASTNodeKind::FunctionDecl)
@@ -215,7 +215,7 @@ void CCodeGen::emitDelegateCall(IndexOrCallExpr& node) {
         emitExpr(*node.positional[i]);
         std::string e = lastExpr_;
         // ByRef 形参 + 变量实参 → 取地址 (与常规调用同形).
-        if (del && i < del->params.size() && !del->params[i].isByVal &&
+        if (del && i < del->P().params.size() && !del->P().params[i].isByVal &&
             node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
             e = "&" + cIdent(static_cast<IdentifierExpr&>(*node.positional[i]).name);
         }

@@ -17,6 +17,11 @@ void CCodeGen::visit(WithStmt& node) {
     // 这一格非空 = 接口名。它同时决定两件事: 临时量的**类型** (视图是值结构体, 不是 void*)
     // 和临时量自己要不要登记进名册 (体内成员那两路主人只认名册里的名字)。
     std::string viewIface177;
+    // 账 #305 (R4 收口): 上面那一位记的是 legacy 视图 (值结构体); 这一枚记的是**新式**视图
+    // (薄指针 vb6_ivref_<I>*)。R4 之后可创建的空体接口类也进 ivreg_, 同一份 With 夹具
+    // (k177/k178) 的接收者从值结构体变成薄指针; 不认这一档就落 COM 兜底 (编得过、读数 0)。
+    // 两档共用一个"是不是视图"的判定位, 只有 tempType 与登记哪张名册不同。
+    bool viewIvrefR4 = false;
 
     // 检测With对象类型: 遍历表达式判断
     if (node.object) {
@@ -53,7 +58,15 @@ void CCodeGen::visit(WithStmt& node) {
                     // 临时量是**值拷贝**, 体内成员交给视图那几位主人 (临时量自身登记进名册)。
                     viewIface177 = clsSym->name;
                     withInfo.kind = WithObjKind::COMObject;
-                    tempType = "vb6_iface_" + cIdent(clsSym->name);
+                    // 账 #305 (R4 收口): 同一枚接口若在 canonical 视图表 (ivreg_) 里, 值就是
+                    // 薄指针 —— 照 legacy 的 `vb6_iface_<I>` 声明会拿到一枚**未定义**的类型名
+                    // (k2947 的 `With MakeI()` / `With h.OwnView` 实测 C2065)。
+                    if (ivLookupIface(clsSym->name)) {
+                        viewIvrefR4 = true;
+                        tempType = "vb6_ivref_" + cIdent(clsSym->name) + "*";
+                    } else {
+                        tempType = "vb6_iface_" + cIdent(clsSym->name);
+                    }
                 }
             }
         }
@@ -146,9 +159,11 @@ void CCodeGen::visit(WithStmt& node) {
 
         // --- IdentifierExpr: 标识符With对象 ---
         std::string objNameLower;
+        std::string objOrigName;  // ucSlider: 设计期宏名保原始大小写 (vb6_hwnd_<Name>)
         if (node.object->kind == ASTNodeKind::IdentifierExpr) {
             auto& idExpr = static_cast<IdentifierExpr&>(*node.object);
             objNameLower = idExpr.name;
+            objOrigName = idExpr.name;
             std::transform(objNameLower.begin(), objNameLower.end(), objNameLower.begin(), ::tolower);
         }
 
@@ -161,6 +176,16 @@ void CCodeGen::visit(WithStmt& node) {
             if (!viewIface177.empty()) {
                 withInfo.kind = WithObjKind::COMObject;
                 tempType = "vb6_iface_" + cIdent(viewIface177);
+            } else {
+                // 账 #305 (R4 收口): 同一问的**新式**档 —— 同一张名册的主人 (slotIvrefViewName),
+                // 只是值是薄指针 (没有 `.vtbl` / `.obj` 两格)。kind 同样留 COMObject。
+                const std::string ifaceR4w = slotIvrefViewName(objNameLower);
+                if (!ifaceR4w.empty()) {
+                    viewIface177 = ifaceR4w;
+                    viewIvrefR4 = true;
+                    withInfo.kind = WithObjKind::COMObject;
+                    tempType = "vb6_ivref_" + cIdent(ifaceR4w) + "*";
+                }
             }
             // Fix 161f-extlist: `With lv` —— lv 是**形参/局部持有的 ListView**
             // (`Sub RefillList(lv As ListView)`)。ListView 是真窗口, C 侧槽变量本身
@@ -212,6 +237,25 @@ void CCodeGen::visit(WithStmt& node) {
                         withInfo.className = cIdent(itUCw->second);
                         withInfo.ctrlOrigName = withInfo.className;
                         tempType = "vb6_cls_" + withInfo.className + "*";
+                    }
+                    // ucSlider (Proyecto1.vbp): `.pag` 设计期放的工程内 UserControl 也走上面
+                    // 同一档 —— 但 emitDesignerControlDecls 没把它登记进 knownUserControlCtrlVars_
+                    // (那份登记只在 .frm 的注册表里做)。于是 `With ucSlider1` 的 tempType 停在
+                    // HWND, 体内 `.KnobWidth = ...` / `.LoadImgKnob ...` 全发成 `HWND.X = ...`
+                    // (C2039 "KnobWidth 不是 HWND__ 的成员")。这里按控件类型名查 .ctl 规格补上类实例档.
+                    if (isPropertyPageDesigner_ && withInfo.kind == WithObjKind::FormControl) {
+                        auto itTN = knownFormControlTypeNames_.find(objNameLower);
+                        if (itTN != knownFormControlTypeNames_.end()) {
+                            if (const FrmFile* ucSpec = findUserControlSpec(itTN->second)) {
+                                if (!ucSpec->form.formName.empty()) {
+                                    withInfo.kind = WithObjKind::ClassInstance;
+                                    withInfo.className = cIdent(ucSpec->form.formName);
+                                    withInfo.ctrlOrigName = withInfo.className;
+                                    withInfo.designerCtrlName = cIdent(objOrigName);
+                                    tempType = "vb6_cls_" + withInfo.className + "*";
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -758,6 +802,11 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
             // 用 ctrlOrigName 拼), 这里必须显式取 hwnd 实参再反查实例.
             lastExpr_ = "(vb6_cls_" + cIdent(itUCw2->second) + "*)vb6_UC_InstanceOf("
                       + makeCtrlHwndArg(Symbol::toLower(idW.name), withInfo.ctrlType) + ")";
+        } else if (isPropertyPageDesigner_ && !withInfo.designerCtrlName.empty()) {
+            // ucSlider (Proyecto1.vbp): `.pag` 上的工程内 UC —— emitExpr(IdentifierExpr) 发的是
+            // `me->ucSlider1` (设计期子控件字段), 但类实例 With 要的是实例指针; .pag 的槽就是
+            // `vb6_hwnd_<控件名>` (见 designer 框架 vb6_UC_DesignSlotOf), 直接按类指针落地.
+            lastExpr_ = "(vb6_cls_" + withInfo.className + "*)vb6_hwnd_" + withInfo.designerCtrlName;
         }
     }
 
@@ -839,14 +888,35 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
             // Fix 160w: 目标是 Function 返回 UDT (With GetAppVersionInfo()) —
             // 返回值是右值, &(fn()) → C2102 非法取址, 且 (void*) 强转 → C2440.
             // 用复合字面量承载拷贝再取址 (VB6 在 With <udtFunc> 的临时副本上读写).
+            // §56.38 F2: 「这个 UDT 表达式是**调用返回值**(右值)」—— 裸函数 `Fn()`、
+            // `obj.Method()`、以及 VB6 允许不写括号的 `obj.Method` / `Mod.Fn` 都算。
+            // 数组元素 `arr(i)` / UDT 字段链仍是左值, 不能进这条 (否则多铸一份拷贝,
+            // With 体写不到原槽)。
             bool isFnRet160w = false;
-            if (node.object->kind == ASTNodeKind::IndexOrCallExpr) {
-                auto& ioc160w = static_cast<IndexOrCallExpr&>(*node.object);
-                if (ioc160w.callee && ioc160w.callee->kind == ASTNodeKind::IdentifierExpr) {
-                    auto& fid160w = static_cast<IdentifierExpr&>(*ioc160w.callee);
-                    Symbol* fn160w = symTab_.lookupModule(fid160w.name);
-                    if (!fn160w) fn160w = symTab_.lookup(fid160w.name);
-                    isFnRet160w = (fn160w && fn160w->kind == SymbolKind::Function);
+            {
+                const ASTNode* obj160w = node.object.get();
+                auto memberIsUdtCall = [&](const MemberAccessExpr& m) -> bool {
+                    if (!m.object) return false;
+                    const std::string cls160w = inferClassTypeOfExpr(*m.object);
+                    return !cls160w.empty()
+                        && !udtReturnOfClassMember(cls160w, m.memberName).empty();
+                };
+                if (obj160w && obj160w->kind == ASTNodeKind::IndexOrCallExpr) {
+                    auto& ioc160w = static_cast<const IndexOrCallExpr&>(*obj160w);
+                    if (ioc160w.callee && ioc160w.callee->kind == ASTNodeKind::IdentifierExpr) {
+                        auto& fid160w = static_cast<const IdentifierExpr&>(*ioc160w.callee);
+                        Symbol* fn160w = symTab_.lookupModule(fid160w.name);
+                        if (!fn160w) fn160w = symTab_.lookup(fid160w.name);
+                        isFnRet160w = (fn160w && (fn160w->kind == SymbolKind::Function
+                                                  || fn160w->kind == SymbolKind::PropertyGet));
+                    } else if (ioc160w.callee
+                               && ioc160w.callee->kind == ASTNodeKind::MemberAccessExpr) {
+                        isFnRet160w = memberIsUdtCall(
+                            static_cast<const MemberAccessExpr&>(*ioc160w.callee));
+                    }
+                } else if (obj160w && obj160w->kind == ASTNodeKind::MemberAccessExpr) {
+                    isFnRet160w = memberIsUdtCall(
+                        static_cast<const MemberAccessExpr&>(*obj160w));
                 }
             }
             if (isFnRet160w) {
@@ -968,8 +1038,11 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     // listViewSlotVars_ 那一档同款口径。
     bool viewSlotRegistered177 = false;
     if (!viewIface177.empty()) {
-        viewSlotRegistered177 =
-            knownIfaceVars_.insert(std::make_pair(Symbol::toLower(tempVar), viewIface177)).second;
+        // 账 #305 (R4 收口): 两档各登自己那张名册 —— 体内那两位主人问的就是各自的名字表;
+        // 把新式视图登进 legacy 那张会让它们按 `.vtbl`/`.obj` 发码 (cl C2039)。
+        viewSlotRegistered177 = viewIvrefR4
+            ? knownIvrefVars_.insert(std::make_pair(Symbol::toLower(tempVar), viewIface177)).second
+            : knownIfaceVars_.insert(std::make_pair(Symbol::toLower(tempVar), viewIface177)).second;
     }
 
     // Fix 161f-extlist: With 目标是 ListView 槽 (形参/局部) 时, 把 _vb6_with_N 本身
@@ -992,7 +1065,10 @@ auto& idExpr = static_cast<IdentifierExpr&>(*callExpr.callee);
     withObjectVars_.pop_back();
     withObjectInfoStack_.pop_back();
     if (lvSlotRegistered161f) listViewSlotVars_.erase(Symbol::toLower(tempVar));
-    if (viewSlotRegistered177) knownIfaceVars_.erase(Symbol::toLower(tempVar));  // 站D′
+    if (viewSlotRegistered177) {
+        if (viewIvrefR4) knownIvrefVars_.erase(Symbol::toLower(tempVar));
+        else knownIfaceVars_.erase(Symbol::toLower(tempVar));  // 站D′
+    }
 }
 
 

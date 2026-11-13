@@ -389,7 +389,7 @@
                 std::string argLower = argName;
                 std::transform(argLower.begin(), argLower.end(), argLower.begin(), ::tolower);
                 if (currentProc_) {
-                    for (auto& p : currentProc_->params) {
+                    for (auto& p : currentProc_->P().params) {
                         std::string pLower = p.name;
                         std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
                         if (pLower == argLower && p.isOptional && !p.isParamArray) {

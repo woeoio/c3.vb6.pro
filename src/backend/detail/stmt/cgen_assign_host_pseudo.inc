@@ -37,10 +37,27 @@
                 maHp = static_cast<const MemberAccessExpr*>(icHp.callee.get());
             }
         }
-        if (maHp && maHp->object && maHp->object->kind == ASTNodeKind::IdentifierExpr
+        if (maHp && maHp->object
+            && (maHp->object->kind == ASTNodeKind::IdentifierExpr
+                || maHp->object->kind == ASTNodeKind::MemberAccessExpr)
             && isDesignerModule_) {
-            const std::string objNameHp =
-                static_cast<const IdentifierExpr&>(*maHp->object).name;
+            std::string objNameHp;
+            if (maHp->object->kind == ASTNodeKind::IdentifierExpr) {
+                objNameHp = static_cast<const IdentifierExpr&>(*maHp->object).name;
+            } else {
+                // 限定写法 `UserControl.Parent.<成员> = v` —— 与裸 `Parent.<成员> = v`
+                // 同一口径（Parent 静态类型 Object、真值顶层窗体、宿主模型按名答）。
+                // 以前这一形落通用赋值，发成 `vb6_UC_ParentObject().Visible = 0;`
+                // （对 void* 取字段，C2224；整编 pdCommandBar*.c）。
+                auto& innerHp = static_cast<const MemberAccessExpr&>(*maHp->object);
+                if (innerHp.object && innerHp.object->kind == ASTNodeKind::IdentifierExpr
+                    && Symbol::toLower(
+                           static_cast<const IdentifierExpr&>(*innerHp.object).name) == "usercontrol"
+                    && Symbol::toLower(innerHp.memberName) == "parent"
+                    && !knownLocalVars_.count("parent")) {
+                    objNameHp = "parent";
+                }
+            }
             const std::string objLowerHp = Symbol::toLower(objNameHp);
             const bool isParentHp = (objLowerHp == "parent");
             // 账 #278 §B120: 这一问由那张表答 (抄了五份的那一份就在这)。
@@ -133,6 +150,14 @@
                 /* `Set UserControl.Font = x` 走 SetStmt (cgen_setlet_set_rhs.inc) 那条路,
                    那里已接 vb6_UC_SetFont; 这里的裸赋值形态 (若有) 一并走同一入口。 */
                 if (tgtHp == "vb6_UserControl_Font") {
+                    /* ucSlider.ctl:1256 `UserControl.Font = .ReadProperty("Font", Ambient.Font)`
+                       是**裸赋值** (无 Set 关键字), 走这一站而不是 SetStmt。右值是
+                       `vb6_ComCall(propbag, L"ReadProperty", ...)` —— 堆 VARIANT*, 直接
+                       (void*) 硬转后 vb6_UC_SetFont 会把它当字体的结构体指针, 读到的
+                       Name 是 VARIANT 里的垃圾 ⇒ vb6_uc_fontLogFontImpl `wcslen(f->Name)` AV。
+                       与 Set 那一路 (cgen_setlet_set_rhs.inc 的 comObjectRefFromCallExpr /
+                       vb6_ComCallObject) 同一出口: 取对象引用形态。 */
+                    valHp = comObjectRefFromCallExpr(valHp);
                     c_.emitLine("vb6_UC_SetFont((void*)" + valHp
                                 + ");  /* UserControl.Font = v (DC 字体) */");
                     return;

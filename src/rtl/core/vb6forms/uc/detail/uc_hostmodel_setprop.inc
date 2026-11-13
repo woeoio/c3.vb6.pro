@@ -22,6 +22,23 @@
 
     if (!vb6_ho_find(obj) && !vb6_uc_findByHwnd(obj) && !IsWindow((HWND)obj)) return 0;
 
+    /* 账 #305 第三百五十二刀: 控件 `Font` 属性 —— `Set Text1.Font = Me.Font`
+       (StdFont 对象赋值)。以前没有这一臂 ⇒ 认成未知属性、写入被忽略
+       (C3_HOST_MEMBER_MISS site=SetProp name="Font"), 设计面的量字盒停在
+       设计期默认字体。
+       真 VB6 oracle (Proyecto1 参考 exe, Form3, 120dpi):
+         UC 宿主窗口 WM_GETFONT = -16|w700|cs0|q0|Segoe UI
+         Text1(隐藏)  WM_GETFONT = -16|w700|cs0|q0|Segoe UI  (逐字相同)
+       ⇒ 字面/字号/字重/字符集一起跟随, 质量档 DEFAULT (q0);
+       `Me.Font` 是 UC 自己的 Font 属性 (Form3.frx 里那枚设计期字体),
+       不是窗体 Ambient (Form3 自己是 MS Sans Serif 8.25/-13)。
+       质量档用 HostWindow 那一版(DEFAULT_QUALITY), 与 oracle 的 q0 对齐。 */
+    if (_wcsicmp(name, L"Font") == 0) {
+        void* fobj = NULL;
+        if (v && (v->vt == 9 || v->vt == 13)) fobj = vb6_UC_UnwrapHost((void*)v->pdispVal);
+        vb6_ComIface_Font* f = vb6_uc_fontOf(fobj);
+        if (f) { vb6_UC_ApplyFontToHostWindow((void*)obj, f); return 1; }
+    }
     if (_wcsicmp(name, L"Caption") == 0 || _wcsicmp(name, L"Text") == 0) {
         BSTR s = vb6_ho_variantToBstr(v);
         if (s) SetWindowTextW((HWND)obj, s);
@@ -37,6 +54,28 @@
         return 1;
     }
     if (_wcsicmp(name, L"Visible") == 0) { ShowWindow((HWND)obj, vb6_ho_variantToLong(v) ? SW_SHOW : SW_HIDE); return 1; }
+    /* FIX-010 (富贵竹): Timer 控件的晚绑定 Enabled / Interval。
+       `Dim t As Object : Set t = Timer1 : t.Enabled = True` 生成
+       vb6_ComSetProp(t, L"Enabled", ...)，t 就是 VB6_TIMER 身份窗 (vb6_hwnd_Timer1)。
+       以前落到下面那句 EnableWindow() —— 而计时器真实状态在 vb6forms.c 的 g_timerTable
+       (按这枚身份窗找回那一格)，EnableWindow 不会 SetTimer ⇒ 一条 WM_TIMER 都发不出来。
+       这里走**当前 dev 的 Timer 属性出口** vb6_SetTimerEnabled / vb6_SetTimerInterval：
+       它们既写 VB6_TimerEnabled / VB6_TimerInterval 窗口属性又启停定时器，与裸名写法
+       (cgen_util_ctrl.cpp 的 Control Property 表) 和读侧 vb6_GetTimerEnabled/
+       GetTimerInterval 共用同一份状态；富贵竹原补丁裸调 vb6_TimerSetEnabled/
+       SetPeriod 会漏写那两枚属性。分派必须排在通用 Enabled 分支之前。 */
+    if (IsWindow((HWND)obj)) {
+        wchar_t vb6_cls10[32] = {0};
+        if (GetClassNameW((HWND)obj, vb6_cls10, 32) > 0 &&
+            wcscmp(vb6_cls10, L"VB6_TIMER") == 0) {
+            if (_wcsicmp(name, L"Enabled") == 0) {
+                vb6_SetTimerEnabled(obj, vb6_ho_variantToLong(v) ? 1 : 0); return 1;
+            }
+            if (_wcsicmp(name, L"Interval") == 0) {
+                vb6_SetTimerInterval(obj, (int)vb6_ho_variantToLong(v)); return 1;
+            }
+        }
+    }
     if (_wcsicmp(name, L"Enabled") == 0) { EnableWindow((HWND)obj, vb6_ho_variantToLong(v) ? TRUE : FALSE); return 1; }
     // 账 #247: 与读侧同一个出口 —— 四档各写自己那一档 (单位 = 所在容器的 ScaleMode,
     // 并把写进去的数存进 VB 侧读数缓存)。以前这一支把四档一起读成缇、再整体 MoveWindow:
@@ -144,7 +183,7 @@
                 if (_wcsicmp(name, *k) == 0) return 1;
         }
     }
-    if (vb6_UC_OwnPropSet(obj, name, v)) return 1;
+    if (VB6_UC_OWN_SET(obj, name, v)) return 1;
 
     /* 账 #305 第二百六十二刀 (丙): 同 Call 那条 —— 不认识的属性名以前静默忽略。 */
     vb6_ho_reportUnknown(L"SetProp", name, obj);

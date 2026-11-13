@@ -21,10 +21,16 @@
                   bool isDll = false, const std::string& dllProgId = "",
                   const FrmFormDesc* frmDesc = nullptr);
 
-    // opt4: 裁剪标准模块.c中未实际引用的跨模块#include (降低预处理量, 加速cl编译)
-    void setTrimIncludes(bool b) { trimIncludes_ = b; }
-    // opt4: 设置"当前模块实际引用的外部模块"集合(小写), 由driver通过AST扫描提供
-    void setTrimModules(const std::unordered_set<std::string>& m) { trimModules_ = m; }
+    // 账 §56.52: 本模块真正引用到的外部模块(小写) —— 跨模块 include 瘦身的**唯一权威**,
+    // 由发码器在发出外部引用那一刻登记 (见 cgen_state.inc 的 usedExternalModules_)。
+    // 不用 AST 扫描 (扫描漏类型引用位点 ⇒ 会把还需要的头裁掉 ⇒ 编译断);
+    // 发码文本反查只作**兜底** (记漏时多留一个头, 而不是少留一个)。
+
+    // 账 §56.53: 本模块用哪一副前奏 (普通档 / 窗体档) —— PCH 分组的**唯一判据**。
+    // isDesignerModule_ (.ctl/.pag 设计期模块) 是发码器内部状态, driver 拿不到也
+    // 不该重判 —— driver 只**转述**这个结果去分两组, 再把组交给 msvc_driver 建两份
+    // PCH (两份前奏内容不同, 混用会让 PCH 状态与 TU 自己解析出来的状态不同构)。
+    bool usesFormPrelude() const { return isFormModule_ || isDesignerModule_; }
 
     // Fix 142: 设置 VBP 的 Startup= 启动对象 ("Sub Main" 或窗体模块名).
     // 多模块工程下仅该模块生成进程入口点 (WinMain/main), 其余模块不生成,
@@ -41,6 +47,10 @@
     // 跨模块窗体默认实例引用 (cLogs 里 FLogs.Visible / Unload FLogs) 需要知道
     // FLogs 是窗体, 才能生成 vb6_form_hwnd_FLogs() 访问器调用而非裸标识符.
     void setFormModuleNames(const std::unordered_set<std::string>& names) { knownFormModuleNames_ = names; }
+    // 账 §56.48: 工程内**用户控件 (.ctl) 模块名**（小写）—— 发码侧那一问
+    // 「这个 WithEvents 的源类是不是 UC」的唯一来源 (UC 那一路的汇不接上线:
+    // 那一路的包装器按值、处理器按地址, 本来就对不上, 接上线 = 把不一致接活)。
+    void setControlModuleNames(const std::unordered_set<std::string>& names) { knownControlModuleNames_ = names; }
     // Fix 086: 各模块 Public 常量表 (小写模块名 → 小写常量名 → 整数值).
     // 本地同名过程符号会阻止跨模块常量注入 (如 cSerialPort.Sub SetDTR 与
     // modSerialPortAPI.Const SETDTR), 此表兜底内联数值.
@@ -76,6 +86,37 @@
         return n.access == AccessLevel::Public;
     }
 
+    // 富贵竹 FIX-004 (账 #610 第340刀): 跨模块同名模块级变量集合 (小写名, **不分 access**),
+    // 由 driver 预扫描提供 (driver_codegen_dup_module_vars.inc 的 allVarOwners ≥2 张表)。
+    // 模块级非 Public 副本命中时: 定义改用影子名 vb6_shadow_<名>__<模块>, 并补
+    //   #define <名> vb6_shadow_<名>__<模块>
+    // 把本模块过程体/With/ReDim/moduleInit 里的全部裸名引用经宏换绑到自家副本 ——
+    // 即 VB6「模块内 Dim 遮蔽全局」语义; 真 Public 全局符号照常 extern, 供未遮蔽的
+    // 模块裸名引用。没有影子宏时, 本 TU 一旦 include 进声明方的 extern, 自家 static
+    // 定义就是 C2370/C2369 链接性冲突。
+    void setShadowModuleVarNames(const std::unordered_set<std::string>* names) {
+        shadowModuleVarNames_ = names;
+    }
+    // 名字(大小写不敏感)是否命中影子名集合
+    bool isShadowForcedVarName(const std::string& vb6Name) const {
+        if (!shadowModuleVarNames_) return false;
+        return shadowModuleVarNames_->count(Symbol::toLower(vb6Name)) != 0;
+    }
+    // 影子 C 名: vb6_shadow_<VB6名>__<模块名> (两段都过 cIdent, 模块名带 __ 分隔)
+    std::string shadowCNameFor(const std::string& vb6Name) const {
+        return "vb6_shadow_" + cIdent(vb6Name) + "__" + cIdent(moduleName_);
+    }
+    // 模块级非 Public 副本命中影子集合 → 定义前补一条 #define 宏。放在定义之前,
+    // 定义行自身与之后本 TU 的全部裸名引用 (过程体/With/ReDim/moduleInit) 都经宏
+    // 换绑到影子名 —— 不必逐发射点改写。真 Public (含被 093b 强制 static 的那份)
+    // 不补: 前者要保持 extern 供跨模块裸名引用, 后者两份都无 extern、互不相撞。
+    void emitShadowMacroIfAny(const VariableDecl& n) {
+        if (trackOnly_) return;
+        if (n.access == AccessLevel::Public) return;
+        if (!isShadowForcedVarName(n.name)) return;
+        c_.emitLine("#define " + cIdent(n.name) + " " + shadowCNameFor(n.name));
+    }
+
     // P6.6: 单独生成ActiveX DLL入口文件 (dll_entry.c)
     // 当DLL工程只有类模块(无标准模块)时, 由Driver调用此方法生成DLL导出代码
     // progId: DLL的ProgID前缀
@@ -89,6 +130,19 @@
     // 获取生成的代码
     const std::string& headerCode() const { return header_; }
     const std::string& sourceCode() const { return source_; }
+
+    // 账 §G1 / §G1b: UDT 定义块的内存形状 (由 driver 汇总后注入各 .h 顶部)。
+    // G1b: 带上模块与可见性 —— 同名但不同模块的模块私有 Type 是**不同的类型**。
+    struct UdtDefRecord {
+        std::string moduleLower;   // 定义模块 (lower)
+        std::string typeName;      // C 标识符 (cIdent 之后)
+        bool isPrivate = false;    // Private Type / 类、窗体模块内的 Type
+        std::string block;         // 完整定义块 (含 #ifndef 守卫)
+    };
+    // 账 §G1 / §G1b: 本模块生成过的 UDT 定义块 (模块 + 类型名 + 可见性 + 原样文本).
+    // driver 汇总成全工程表后注入各 .h 顶部, 让"头里按值用到 UDT"不再依赖模块先后;
+    // 同名类型按模块区分, 跨模块只注入 Public Type。
+    const std::vector<UdtDefRecord>& udtDefs() const { return udtDefs_; }
 
     // --- 声明 ---
     void visit(SubDecl& node) override;

@@ -92,9 +92,12 @@ if ($callSites -lt $CallFloor) {
 }
 if ($defBody -ne '') {
     $n = ([regex]::Matches($defBody, 'c_\.emitLine')).Count
-    if ($n -ne 6) { $bad += ('R1 出口本体有 ' + $n + ' 枚 emitLine (要恰好 6: 借用一路 1 + 自指一路 3 + 直发一路 2)') }
+    if ($n -ne 9) { $bad += ('R1 出口本体有 ' + $n + ' 枚 emitLine (要恰好 9: 借用一路 1 + 自指一路 3 + 直发一路 2 + 目标提存 3)') }
     if ($defBody.IndexOf('vb6_VariantAssign(&') -lt 0) { $bad += 'R1 出口缺了「右值是借来的」那一路 (vb6_VariantAssign)' }
     if ($defBody -match 'switch\s*\(') { $bad += 'R1 出口体里出现 switch —— 槽位写入不该再分档' }
+    # 目标提存那一站必须还在: 命中带副作用目标时把地址提出具名临时量 `_vtg_`, 两半句都读它
+    # (缺了就回到「目标求值两次」—— 实测 C3 树比 VB6 多插一行节点)。
+    if ($defBody.IndexOf('_vtg_') -lt 0) { $bad += 'R1 出口缺了目标提存那一站 (_vtg_) —— 带副作用目标会被求值两次' }
 }
 $wantFile = Split-Path $defFile -Leaf
 foreach ($g in ($handPairs | Group-Object)) {

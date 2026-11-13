@@ -24,7 +24,7 @@
         // currentProc_->params 中查找同名参数, 非数组, 非ParamArray, 类型为 Object/Variant.
         // ByRef Object 在 C 中是 void** → emitExpr emit "(*name)"; ByVal Object 是 void* → emit "name".
         if (!handled && currentProc_) {
-            for (auto& p : currentProc_->params) {
+            for (auto& p : currentProc_->P().params) {
                 if (Symbol::toLower(p.name) == nameLower) {
                     bool isArray = (static_cast<uint16_t>(p.type) & static_cast<uint16_t>(Vb6Type::Array)) != 0;
                     if (!isArray && !p.isParamArray
@@ -72,7 +72,7 @@
             && !(kBuiltinFuncNames.count(nameLower) && !node.positional.empty())) {
             // 确认 name 不是当前过程的参数 (Pattern F 已处理)
             bool isParam = false;
-            for (auto& p : currentProc_->params) {
+            for (auto& p : currentProc_->P().params) {
                 if (Symbol::toLower(p.name) == nameLower) { isParam = true; break; }
             }
             if (!isParam) {
@@ -214,13 +214,33 @@
         if (!handled && nameLower == "forms" && node.positional.size() == 1
             && currentProc_ && !knownLocalVars_.count(nameLower)) {
             bool isFormsParam = false;
-            for (auto& p : currentProc_->params) {
+            for (auto& p : currentProc_->P().params) {
                 if (Symbol::toLower(p.name) == nameLower) { isFormsParam = true; break; }
             }
             if (!isFormsParam) {
                 emitExpr(*node.positional[0]);
                 std::string idxForms = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
                 lastExpr_ = "vb6_Forms_Item((int32_t)(" + idxForms + "))";
+                handled = true;
+            }
+        }
+
+        // ---- Pattern M2: VB6 内置 Printers 集合索引 ----
+        // Printers(i) = Printers.Item(i)。元素按 vb6_PrinterInfo **结构体值**返回
+        // (DeviceName/Port/Copies/PrintQuality), 外层的 .DeviceName 就是普通字段读。
+        // 此前落通用索引路径原样发 `vb6_Printers_Collection(i)` —— 0 参函数被塞 1 个
+        // 实参, 且返回值是 void* ⇒ 外层取字段 = C2224 (Printing.bas:159/160、
+        // File_PrintXP.frm:240 实测)。
+        if (!handled && nameLower == "printers" && node.positional.size() == 1
+            && currentProc_ && !knownLocalVars_.count(nameLower)) {
+            bool isPrintersParam = false;
+            for (auto& p : currentProc_->P().params) {
+                if (Symbol::toLower(p.name) == nameLower) { isPrintersParam = true; break; }
+            }
+            if (!isPrintersParam) {
+                emitExpr(*node.positional[0]);
+                std::string idxPrn = toLongIfVariant(std::move(lastExpr_), node.positional[0].get());
+                lastExpr_ = "vb6_Printers_Item((int32_t)(" + idxPrn + "))";
                 handled = true;
             }
         }

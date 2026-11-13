@@ -7,10 +7,13 @@
 # 哪怕它要跑得先在本机注册 COM/OLE —— 那只是"不跑", 不是"不编"。本批因此出册 5 个
 # (c29data / olecon / test_validate / test_com_events_winhttp / diff_smoke, 每个都先实测
 # x64+x86 rc=0 且出 exe)。理由是 (a)/(b) 之外的一概不收。
-# 共 4 个。
+# 共 9 个。
 Charts 2020\ucProgressCircular\Proyecto1.vbp   # 刻意不列: 已知红 (B29③④ 的 25 条 C2198+C2084), 见 run_tests.ps1 里"刻意不列"那段
 vbman_host\vbman_host.vbp                      # 别处已覆盖: tests\run_vbman_test.ps1 (由 .github\workflows\ci_vbman.yml 驱动)
 vbp_project\TestVBP.vbp                        # 别处已覆盖: tests\regress_all.ps1 (真 VB6 与 C3 双编译对照工程)
 vbp_project\TestVBP2.vbp                       # 别处已覆盖: tests\regress_all.ps1 (真 VB6 与 C3 双编译对照工程)
 guisample\vb6ref\src\vc6\GUISample.vbp          # 刻意不列: VB6 参照工程 (vb6ref 采集源), 不是 C3 夹具 —— C3 编它等于把参照物当被测物
 guisample\vb6ref\src\vs2015\GUISample.vbp       # 刻意不列: 同上 (vs2015 那一份参照工程)
+pd_qualproc\qualproc.vbp                        # 刻意不列: 判据在 Test-CodegenNote (跨模块同名过程发码形状钉子), 不在整工程编译面
+pd_udtelem_clsfld\udtelem.vbp                   # 刻意不列: 同上 (UDT 元素成员形的 codegen 钉子)
+photodemon\PhotoDemon.vbp                       # 别处已覆盖: CI 的 PhotoDemon x86 full build / emit probe 两条 workflow (账 §0 连带入库那批)

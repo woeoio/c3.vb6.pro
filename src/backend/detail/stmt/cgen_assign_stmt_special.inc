@@ -3,6 +3,41 @@
 // 内容 = 原文件第 12~405 行，逐行未改。
 
     if (!node.target || !node.value) return;
+    // 账 #305 (R4 收口): 新式视图上的**带下标属性写** —— `x.Item(3) = v`。
+    // 目标形 = IndexOrCallExpr(callee = MemberAccessExpr(对象为裸标识符))。通用路把目标
+    // 当表达式发 ⇒ ivSlotKeyForMember 先问裸名、再问 `get_`，于是写成
+    // `x->vt->get_item(x, 3) = ...` = 把 getter 当左值 (k2947 实测 cl C2106)。
+    // 这里只问写那一档 (put_/putref_) 且形参数恰好对上才改道，否则原样下传。
+    if (node.target->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& icWr = static_cast<IndexOrCallExpr&>(*node.target);
+        if (icWr.callee && icWr.callee->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& maWr = static_cast<MemberAccessExpr&>(*icWr.callee);
+            if (maWr.object && maWr.object->kind == ASTNodeKind::IdentifierExpr) {
+                auto& oidWr = static_cast<IdentifierExpr&>(*maWr.object);
+                const std::string objWr = cIdent(oidWr.name);
+                if (!slotIvrefViewName(Symbol::toLower(objWr)).empty()) {
+                    bool argsOkWr = true;
+                    std::vector<std::string> idxWr;
+                    for (auto& aWr : icWr.positional) {
+                        if (!aWr) { argsOkWr = false; break; }
+                        emitExpr(*aWr);
+                        idxWr.push_back(std::move(lastExpr_));
+                    }
+                    if (argsOkWr) {
+                        emitExpr(*node.value);
+                        std::string valWr = std::move(lastExpr_);
+                        const std::string callWr = ivrefViewSetterCallExpr(
+                            objWr, maWr.memberName, valWr, ProcKind::PropertyLet, idxWr,
+                            node.value.get());
+                        if (!callWr.empty()) {
+                            c_.emitLine(callWr + ";  /* view property put (indexed) */");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // 账 #305 第三百三十三刀: 对象变量默认属性 Let (GUISample frmPropertyGrid:60
     // `Item = Item + 6`, Item 是 Dim As PropertyGridItem 的局部对象变量, 无 Set)。
     // VB6 语义: 两端都走 DISPID 0 默认属性 —— Item.<Def> = Item.<Def> + 6。
@@ -84,6 +119,23 @@
                         + itDefScalar->second->comDefaultMemberRealName
                         + "\", vb6_ComPackVariant(" + rhsScalar
                         + "));  /* default prop let (obj scalar) */");
+            return;
+        }
+    }
+    // 账 §42: 工程内 UserControl 设计期子控件的**默认成员 Let**（`tudWidth = newWidth`）。
+    // 改前这条落到类模块变量那一格，发成 `me->tudWidth = …`（C2039：结构体没有这枚成员）。
+    // 判据与读数走同一个出口 ctrlDefaultPropOf（isUcDefault 只在那条回落后置位）；
+    // 写 = vb6_ComSetProp(句柄, L"<默认成员>", 打包(RHS))。
+    if (node.target->kind == ASTNodeKind::IdentifierExpr) {
+        auto& tgtUc = static_cast<IdentifierExpr&>(*node.target);
+        const std::string tgtLowerUc = Symbol::toLower(tgtUc.name);
+        const bool isRetSlotUc = currentProc_
+                                 && Symbol::toLower(currentProc_->name) == tgtLowerUc;
+        CtrlDefaultProp foldUc = ctrlDefaultPropOf(tgtLowerUc);
+        if (!isRetSlotUc && !knownLocalVars_.count(tgtLowerUc)
+            && foldUc.folds && foldUc.isUcDefault
+            && emitUcDefaultPropLet(foldUc, makeCtrlHwndArg(tgtLowerUc, foldUc.ctrlType),
+                                    *node.value)) {
             return;
         }
     }
@@ -174,6 +226,22 @@
                                     + ", " + idxArg + "), " + valExpr
                                     + ");  /* ctrl array default prop write */");
                         return;
+                    }
+                    // 账 §42 续（F1）: 工程内 UC 的控件数组元素默认成员写 ——
+                    // `sltGamma(0) = 2.2` 旧落在普通数组元素赋值, 发出
+                    // `vb6_CtrlArr_GetAt(...) = 2.2`（C2440: double → void*）。
+                    // 接收者同一载体, 写腿与裸名那档共用 emitUcDefaultPropLet。
+                    CtrlDefaultProp foldCA = ctrlDefaultPropOf(caLower);
+                    if (foldCA.folds && foldCA.isUcDefault) {
+                        emitExpr(*caP.positional[0]);
+                        std::string idxCA = std::move(lastExpr_);
+                        std::string origName = knownFormControlOriginalNames_.count(caLower)
+                            ? knownFormControlOriginalNames_[caLower] : caId.name;
+                        if (emitUcDefaultPropLet(
+                                foldCA,
+                                "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(origName) + ", "
+                                    + idxCA + ")",
+                                *node.value)) return;
                     }
                 }
             }
@@ -311,6 +379,11 @@
                 emitExpr(*node.value);
                 if (memName == "currentx") { c_.emitLine("vb6_Printer_SetCurrentX((int32_t)(" + lastExpr_ + "));"); return; }
                 if (memName == "currenty") { c_.emitLine("vb6_Printer_SetCurrentY((int32_t)(" + lastExpr_ + "));"); return; }
+                // C2224: Printer.Copies / .PrintQuality 是数据属性 (PhotoDemon
+                // File_PrintXP.frm:196/197 写) —— 目标 emitExpr 会走读路径发
+                // vb6_Printer_Object().Copies = ... (void* 取字段), 这里改成具名写入口。
+                if (memName == "copies") { c_.emitLine("vb6_Printer_SetCopies((int32_t)(" + lastExpr_ + "));"); return; }
+                if (memName == "printquality") { c_.emitLine("vb6_Printer_SetPrintQuality((int32_t)(" + lastExpr_ + "));"); return; }
             }
             // Fix 161f: Screen.MousePointer 全局写入 (CWaitCursor 等类里用)。
             // 早先目标 emitExpr 走读路径生成 vb6_Screen_MousePointer() = ... →
@@ -517,6 +590,33 @@
                     c_.emitLine(wfEf + "(" + hwndEf + ", " + valEf + ");  /* external form prop write */");
                     return;
                 }
+                // 账 §54: 跨窗体**用户自定义 Property Let** (`dialog_ToneMapping.fi_HandleCopy
+                // = fi_Handle`, DialogManager.bas:356) —— 它不在窗体内建属性表里, 以前落
+                // Module.var 回退发裸 `fi_HandleCopy = …;` (整编 C2065, Dialogs.c:625)。
+                // 唯一出口与同窗体里的写法同一枚: `vb6_<窗体>_prop_let_<属性>(值)`。
+                // 归属判定抄 findModuleQualifiedFunction 那套 (isExternal + sourceModule),
+                // 不能只按裸名查模块表 —— 同名属性在别的窗体上也是合法名字。
+                if (wfEf.empty() && symTab_.moduleScope()) {
+                    const std::string memEf = Symbol::toLower(maExpr.memberName);
+                    const Symbol* letEf = nullptr;
+                    for (const auto& [keyEf, sEf] : symTab_.moduleScope()->symbols()) {
+                        if (!sEf || sEf->lowerName != memEf) continue;
+                        if (sEf->kind != SymbolKind::PropertyLet) continue;
+                        if (sEf->isExternal
+                            && Symbol::toLower(sEf->sourceModule) == objLower) {
+                            letEf = sEf.get();
+                            break;
+                        }
+                    }
+                    if (letEf) {
+                        emitExpr(*node.value);
+                        std::string valEf = std::move(lastExpr_);
+                        c_.emitLine("vb6_" + cIdent(objIdent.name) + "_prop_let_"
+                                    + cIdent(maExpr.memberName) + "(" + valEf
+                                    + ");  /* external form prop let */");
+                        return;
+                    }
+                }
             }
 
             bool isVarName = (objSym && (objSym->kind == SymbolKind::Variable || objSym->kind == SymbolKind::Parameter));
@@ -530,6 +630,10 @@
             if (!isVarName && knownObjectVars_.count(objLower)) isVarName = true;
             if (!isVarName && knownTypedComVars_.count(objLower)) isVarName = true;
             if (!isVarName && knownIfaceVars_.count(objLower)) isVarName = true;
+            // 账 #305 (R4 收口): 新式接口视图 (vb6_ivref_<I>*) 与 legacy 视图是同一句
+            // 「这枚裸名是对象、不是模块名」。此前只认 legacy 那张名册 ⇒ `x.Label = v`
+            // 落 Module.var 回退发 `vb6_x_Label` (k489 实测 C2065 ×2)。
+            if (!isVarName && knownIvrefVars_.count(objLower)) isVarName = true;
             // 自类型过程作赋值目标 (`RibbonBar.Minimized = ...` / `RibbonBar.FontHeight = n`,
             // frmMain:426/434/1042 — `Public Function RibbonBar() As RibbonBar` 过程名=
             // 返回的 typelib 类名)。先调过程得 IDispatch, 属性按 COM SetProp 写。

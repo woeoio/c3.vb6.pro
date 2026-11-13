@@ -3,10 +3,45 @@ name: VB6 C3 Regression
 on:
   # main 分支已删除 (内容全在 dev 里, 2026-09-25), 默认分支 = dev。
   # 注意 gate/* 分支不在此列 → 必须手动 `gh workflow run ci.yml --ref <branch>` 才会触发。
+  #
+  # ── 路径过滤规则（2026-11-09 起生效）────────────────────────────────────────
+  # 只有会改变「编译器产物」或「验证能力」的改动才跑这 22 个 job；
+  # 其余提交（纯文档 / handoff / 只改注释 / 纯排版）直接 skip，不空跑。
+  #
+  #   1. 白名单 = paths 下列条目。`src/**` 实质改动必定在名单内。
+  #   2. `tests/**` 也在名单内：改判据 / 夹具 / 像素门会改变「能红能绿」的能力本身，
+  #      必须跑一次来证明判据仍然有判别力。只改 tests 里的注释/排版时才可跳过。
+  #   3. `src/**` 内纯注释、纯格式、零语义变化的改动：提交信息带 `[skip ci]`
+  #      （GitHub Actions 原生识别；`[ci skip]` / `[no ci]` 同义）。
+  #   4. 需要强制跑一次：`gh workflow run ci.yml --ref dev`（workflow_dispatch 不受 paths 限制）。
+  #
+  # ⚠ 约定：**「没跑 CI」≠「绿」**。skip 只表示该提交按本规则不进入验证，
+  #   不表示它已验证通过。release / 对账 / 合并前必须以某次真实 run 的绿为准，
+  #   或显式 dispatch 一次补跑。
   push:
     branches: [dev]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - 'build.bat'
+      - 'build.sh'
+      - '.github/workflows/**'
+      - 'emit-manifest.expected.txt'
   pull_request:
     branches: [dev]
+    paths:
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - 'build.bat'
+      - 'build.sh'
+      - '.github/workflows/**'
+      - 'emit-manifest.expected.txt'
   workflow_dispatch:
 
 jobs:
@@ -575,5 +610,15 @@ jobs:
             # 覆盖构建失败时的其它日志。只动 artifact，不改任何判据。
             output/**/c3-error.log
             output/**/*.log
+            # 账 §56.41: **像素判据**那几枚 GUI 用例（ucSegmentedControl 等）把采样图存在
+            # output/<用例>/segmented_px/*.png。没有这一项 ⇒ CI 红了只能看见一串读数，看不见
+            # 那张图（读数是「几万个像素里有多少彩色」，图才看得出「面里到底有没有那个控件」）。
+            # 只加工件，不动任何判据。
+            output/**/*.png
+            # 账 §56.43: **UC 自己的离屏 DIB**（RTL 的 C3_UC_DUMPDIR 开关落的 bmp）。
+            # 读数只说得出「UC 区没画」，分不清「paint 回调没画」还是「画了没贴上」；
+            # 这张 DIB 就是那两者的分界 —— 空 DIB = 没画，有内容 = 贴丢了。
+            # 只加工件，不动任何判据。
+            output/**/*.bmp
           if-no-files-found: warn
           retention-days: 14

@@ -100,6 +100,16 @@
                     comMemberName_.clear();
                     return;
                 }
+                // 账 #305 (R4 收口): 同一问的新式那一臂 (薄指针 + putref_)。
+                const std::string vSetNothingR4 = ivrefViewSetterCallExpr(
+                    comObjExpr_, comMemberName_, "NULL", ProcKind::PropertySet, {},
+                    node.value.get());
+                if (!vSetNothingR4.empty()) {
+                    c_.emitLine(vSetNothingR4 + ";  /* Property Set Nothing (视图直槽) */");
+                    comObjExpr_.clear();
+                    comMemberName_.clear();
+                    return;
+                }
                 c_.emitLine("vb6_ComSetRef(" + comObjExpr_ + ", L\"" + comMemberName_ + "\", NULL);  /* COM SetRef Nothing */");
                 comObjExpr_.clear();
                 comMemberName_.clear();
@@ -405,6 +415,27 @@
         }
         if (_psSym) {
             std::string _objClass = inferClassTypeOfExpr(*_ma.object);
+            // 晚绑定接收者: 静态类型是 Object / Variant 时成员必走 IDispatch 派发
+            // (VB6 语义就是 DISPATCH_PROPERTYPUTREF)，不能按成员名全局命中某个工程类
+            // 的 Property Set 直发 —— 接收者的 C 存储是 void* (IDispatch* / 控件 HWND)，
+            // 直发等于把它当 `vb6_cls_<Cls>*` 实例指针。实测探针
+            //   Sub P2(ByVal o As Object): Set o.X = v
+            // 生成 `vb6_UCProbe_prop_set_X(o, …)` (o 实参是 UserControl 的 HWND)
+            // → 0xC0000005。置空符号交给下方 COM SetRef 分支 (vb6_ComSetRef)。
+            // 只在**推不出类名** (`_objClass` 空) 且不是窗体控件/UC 实例时降级 ——
+            // 后两者在 knownObjectVars_ 里也有登记, 但它们有静态类面 (Fix 160-E 那条
+            // `vb6_UC_InstanceOf` 直发) 必须保留。
+            bool _lateBoundRecv = false;
+            if (_objClass.empty() && _ma.object
+                && _ma.object->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string _oidLB = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*_ma.object).name);
+                const bool _isCtrlLB = knownFormControls_.count(_oidLB) > 0
+                    || knownUserControlCtrlVars_.count(_oidLB) > 0;
+                _lateBoundRecv = !_isCtrlLB
+                    && (procObjectFormals_.count(_oidLB) || knownVariantVars_.count(_oidLB)
+                        || knownObjectVars_.count(_oidLB));
+            }
             // Fix 084g-2: 外部注入的跨类属性符号 — 对象类型无法从符号表推断
             // (cgen阶段访问不到过程作用域局部变量) 时, 由外部符号提供 sourceModule.
             // Fix 084y-2: 同 P6.7 — 对象类与属性所属类不一致时, 属性是其他类的
@@ -412,12 +443,13 @@
             // PropertySet, 而 oCallback 是 cClientCallback, Socket 是数据字段) →
             // 跳过属性路径, 交给 visit(MemberAccessExpr) 生成 obj->field 字段赋值.
             bool _objClassMatchesProp = true;
-            if (!_objClass.empty() && _psSym->isExternal) {
+            if (!_lateBoundRecv && !_objClass.empty() && _psSym->isExternal) {
                 std::string _psModLower = Symbol::toLower(_psSym->sourceModule);
                 std::string _objClassLower = Symbol::toLower(_objClass);
                 _objClassMatchesProp = (_psModLower == _objClassLower);
             }
-            if (_objClassMatchesProp && (!_objClass.empty() || _psSym->isExternal)) {
+            if (!_lateBoundRecv && _objClassMatchesProp
+                && (!_objClass.empty() || _psSym->isExternal)) {
                 std::string _verb = (_psSym->kind == SymbolKind::PropertySet) ? "prop_set_" : "prop_let_";
                 std::string _src = _psSym->isExternal ? _psSym->sourceModule : _objClass;
                 std::string _fn = cProcName(_verb + _ma.memberName, _psSym->access, _src);
@@ -469,8 +501,8 @@
                     || (node.value && node.value->kind == ASTNodeKind::IdentifierExpr
                         && knownVariantVars_.count(Symbol::toLower(
                                static_cast<IdentifierExpr&>(*node.value).name)));
-                bool _psValVariant159 = !_psSym->params.empty()
-                    && _psSym->params.back().type == Vb6Type::Variant;
+                bool _psValVariant159 = !_psSym->P().params.empty()
+                    && _psSym->P().params.back().type == Vb6Type::Variant;
                 // Fix 166: 被调方形参是 **ByVal** 对象时, 其 C 形参就是单个指针
                 // (VBFlexGrid.ctl:3258 `Property Set Font(ByVal NewFont As StdFont)` →
                 // `prop_set_Font(vb6_cls_VBFlexGrid*, vb6_ComIface_Font* NewFont)`),
@@ -483,8 +515,8 @@
                 //   其首 8 字节恰为 &vb6_UserControl_FontObj → 当成 vtable 调用 →
                 //   RIP 落进 .data。**C 里 void** 传成 vb6_ComIface_Font* 只是指针不匹配
                 //   警告, 所以编译期全绿、错误数为 0 也照样崩。**别再加回无条件包装。**
-                bool _psValByVal166 = !_psSym->params.empty()
-                    && _psSym->params.back().isByVal;
+                bool _psValByVal166 = !_psSym->P().params.empty()
+                    && _psSym->P().params.back().isByVal;
                 // Fix 236b: 末形参在**语义层**记成 Variant、但 C 声明是 typed 对象指针
                 // (`Property Set SelectedItem(ByVal Value As LvwListItem)` →
                 // `prop_set_SelectedItem(cls* me, vb6_cls_LvwListItem* Value)`) 时
@@ -495,7 +527,7 @@
                 // 判据看字段/形参的**真实 C 类型**, 不看语义层那档 Variant。
                 bool _psValTypedPtr236 = false;
                 if (_psValVariant159) {
-                    const std::string& _trn236 = _psSym->params.back().typeRefName;
+                    const std::string& _trn236 = _psSym->P().params.back().typeRefName;
                     if (!_trn236.empty()
                         && cTypeForDeclaredTypeName(_trn236) != "vb6_VARIANT") {
                         _psValTypedPtr236 = true;
@@ -542,8 +574,14 @@
                 // 视图是值结构体 `vb6_iface_<I>`, 拼出来的 `vb6_<I>_prop_set_<m>(视图, …)`
                 // 首形参是 `vb6_cls_<I>*` ⇒ C2440。不合(非视图/没那一席/类型不同型)交空串,
                 // 下面那一发原样 = 不掩盖。
-                const std::string _vSetView185 = legacyViewSetterCallExpr(
+                std::string _vSetView185 = legacyViewSetterCallExpr(
                     _objE, _ma.memberName, _arg2, "void*", ProcKind::PropertySet);
+                // 账 #305 (R4 收口): legacy 那位答空时问新式那一臂 (薄指针 + putref_)。
+                if (_vSetView185.empty()) {
+                    _vSetView185 = ivrefViewSetterCallExpr(_objE, _ma.memberName, _arg2,
+                                                           ProcKind::PropertySet, {},
+                                                           node.value.get());
+                }
                 if (!_vSetView185.empty()) {
                     c_.emitLine(_vSetView185 + ";  /* Set Property (视图直槽) */");
                     return;
@@ -642,6 +680,15 @@
         if (!vSetView.empty()) {
             c_.emitLine(vSetView + ";  /* Property Set (视图直槽) */");
             return;
+        }
+        // 账 #305 (R4 收口): With 载体是新式视图时同一问 (临时量已登记 knownIvrefVars_)。
+        {
+            const std::string vSetViewR4 = ivrefViewSetterCallExpr(
+                objExpr, memberName, value, ProcKind::PropertySet, {}, node.value.get());
+            if (!vSetViewR4.empty()) {
+                c_.emitLine(vSetViewR4 + ";  /* Property Set (视图直槽) */");
+                return;
+            }
         }
         c_.emitLine("vb6_ComSetRef(" + objExpr + ", L\"" + memberName + "\", " + value + ");  /* COM SetRef */");
         return;
@@ -897,6 +944,59 @@
                         c_.dedent();
                         c_.emitLine("}");
                         return;
+                    }
+                    // 账 #305 新账: `Set <接口变量> = <Variant/Object 里装的对象>` —— VB6 语义是
+                    // **运行期 QI** (目标接口由实例的实际类决定, 不符 = 错误 13)。C 侧已有
+                    // 「运行期那一枚实例 → 本接口视图」的唯一主人 `vb6_ivref_<I>_from_class`
+                    // (emitIvrefIfaceViewFrom, 与 For Each 视图站同一发), 这里只要把 Variant
+                    // 拆成 (包装器 → 类名 + 裸实例) 即可。真实夹具: iface_wrap `Set f = v`
+                    // (v Variant 往返 Impl) / BalloonTooltips mdlSubclass `Set Subclass = vSubclass`
+                    // (ByVal Variant 形参)。
+                    // 次序是判据: 先问类名 (ClassNameA 内部走 IsBoxed 三闸, 对裸 HWND /
+                    // 外部 IDispatch 安全), 名字非空才敢 GetInstance (它头一句是 obj->vtable 裸读)。
+                    // 认不出 / 不动这一族接口 = **运行期 13 Type mismatch**, 目标槽保持原值 ——
+                    // 真 VB6 探针 (.temp/vb6probe_neg, VB6Mini 编) 四条读数:
+                    //   实现类实例(Variant/Object)=0 / 未实现类(Variant)=13 / 外部
+                    //   CreateObject("Scripting.Dictionary")(Variant/Object)=13 / Nothing=0;
+                    // 探针里 13 之后 `f Is Nothing=False` ⇒ 整条语句被放弃, 不是清空。
+                    if (node.value && !allImplementationClasses(v->name).empty()) {
+                        bool rhsVariant = isDefinitelyVariantExpr(*node.value);
+                        bool rhsObject = false;
+                        if (!rhsVariant && node.value->kind == ASTNodeKind::IdentifierExpr) {
+                            rhsObject = knownObjectVars_.count(Symbol::toLower(
+                                static_cast<IdentifierExpr&>(*node.value).name)) != 0;
+                        }
+                        if (rhsVariant || rhsObject) {
+                            const std::string ivSeq = std::to_string(ivrefSetSeq_++);
+                            const std::string ivBox = "__ivbox" + ivSeq;
+                            const std::string ivName = "__ivname" + ivSeq;
+                            const std::string ivViewVar = "__ivview" + ivSeq;
+                            const std::string ivView = ivrefIfaceViewFromFn(v->name) + "("
+                                + ivName + " ? vb6_ComObject_GetInstance(" + ivBox
+                                + ") : (void*)0, " + ivName + ")";
+                            c_.emitLine("void* " + ivBox + " = "
+                                + (rhsVariant ? "vb6_VariantToObjectValChecked(" + value + ")" : value)
+                                + ";  /* Set " + target + ": " + (rhsVariant ? "Variant" : "Object")
+                                + " 里的对象 */");
+                            c_.emitLine("const char* " + ivName
+                                + " = vb6_ComObject_ClassNameA(" + ivBox + ");");
+                            c_.emitLine("vb6_ivref_" + cIdent(v->name) + "* " + ivViewVar
+                                + " = " + ivView + ";");
+                            c_.emitLine("if (!" + ivViewVar + ") {  /* VB6 真值: 非实现者/外部对象 = 13 */");
+                            c_.indent();
+                            c_.emitLine("vb6_RaiseError(13, vb6_BSTR_FromStr(L\"Type mismatch\"));");
+                            c_.dedent();
+                            c_.emitLine("} else {");
+                            c_.indent();
+                            if (plainIvTarget) {
+                                emitIvrefRefSet(target, v->name, ivViewVar, false);
+                            } else {
+                                c_.emitLine(target + " = " + ivViewVar + ";  /* 视图直槽 (B04 口径) */");
+                            }
+                            c_.dedent();
+                            c_.emitLine("}");
+                            return;
+                        }
                     }
                     diag_.error(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
                         "Interface binding: Set " + target + " = <expr> needs a class instance,"

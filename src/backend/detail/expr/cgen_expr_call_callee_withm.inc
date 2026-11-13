@@ -84,14 +84,15 @@
                                         tempVar + "->" + cIdent(mi.name),
                                         node.positional, mi.arrayRank);
                                     isHandled = true;
-                                } else if (wIsDynArr && node.positional.size() == 1) {
-                                    // Pattern B: 动态数组字段 → VB6_SA_AT(elemCType, tempVar->member, idx)
+                                } else if (wIsDynArr && !node.positional.empty()) {
+                                    // Pattern B: 动态数组字段 → VB6_SA_AT / VB6_SA_ND_AT2|3|N
                                     // Fix 081j-2: With 块临时变量是指针，用 -> 访问成员
-                                    emitExpr(*node.positional[0]);
-                                    std::string idx = std::move(lastExpr_);
                                     // Fix 092s: 同 3626 — UDT 元素类型成员数组 (档位由出口答)
-                                    lastExpr_ = "VB6_SA_AT(" + madW.elemCType + ", "
-                                              + tempVar + "->" + cIdent(mi.name) + ", " + idx + ")";
+                                    // §38: 秩数由实参个数决定，出口与 member 站共用
+                                    // udtDynMemberIndex (秩 2 以前落空 ⇒ `.pixelData(0,0)` ⇒ C2064)。
+                                    lastExpr_ = udtDynMemberIndex(
+                                        madW.elemCType, tempVar + "->" + cIdent(mi.name),
+                                        node.positional);
                                     isHandled = true;
                                 }
                                 if (isHandled) return;
@@ -117,11 +118,11 @@
                     MemberArrayDecl madWc;
                     const bool wClsIsDynArr =
                         resolveMemberArrayDecl(std::string(), wCls, wmExpr.memberName, madWc);
-                    if (wClsIsDynArr && node.positional.size() == 1) {
-                        emitExpr(*node.positional[0]);
-                        const std::string idx = std::move(lastExpr_);
-                        lastExpr_ = "VB6_SA_AT(" + madWc.elemCType + ", "
-                                  + tempVar2 + "->" + cIdent(wmExpr.memberName) + ", " + idx + ")";
+                    if (wClsIsDynArr && !node.positional.empty()) {
+                        // §38: 与 UDT 那一支同一个出口 (秩数由实参个数决定)
+                        lastExpr_ = udtDynMemberIndex(
+                            madWc.elemCType, tempVar2 + "->" + cIdent(wmExpr.memberName),
+                            node.positional);
                         return;
                     }
                 }

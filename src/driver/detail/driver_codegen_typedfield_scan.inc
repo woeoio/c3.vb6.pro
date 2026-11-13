@@ -13,6 +13,9 @@
     // 账 #278 §B110: 建造点搬进 Driver::collectFormModuleNames() —— 语义层那份"裸名位放行"的
     // 名单与这里必须同源, 两边各扫一遍 modules_ 就是两份权威 (改一边漏一边 = 又一个"产物对、诊断错")。
     std::unordered_set<std::string> formModuleNames = collectFormModuleNames();
+    // 账 §56.48: 同形的第二张表 —— 工程内**用户控件 (.ctl) 模块名**。发码侧那一问
+    // 「这个 WithEvents 的源类是不是 UC」只读它 (UC 那一路的汇不接上线)。
+    std::unordered_set<std::string> controlModuleNames = collectControlModuleNames();
     // Fix 086: 收集各模块 Public 常量表 (小写模块名 → 小写常量名 → 值).
     // 当本地同名过程符号 (如 cSerialPort.Sub SetDTR) 阻止了跨模块常量注入时,
     // Module.Const (modSerialPortAPI.SetDTR) 引用仍能内联数值.

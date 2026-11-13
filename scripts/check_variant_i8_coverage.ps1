@@ -60,6 +60,8 @@ $must = @(
     # (数组那一支现在也拼同一串元素名)，vb6_TypeName 自己不再有 switch，挂着它的名字等于挂一条死规则。
     "vb6_TypeNameScalar", "vb6_IsNumeric", "vb6_VariantPackBorrow", "memVariantToI4",
     "vb6_ho_variantToLong", "vb6_ho_variantToDouble", "vb6_VarToDouble_internal",
+    # 9467654d: Variant 混比次序那一刀新立的「这枚槽是不是数值」表 —— I8/I1/UI2/Decimal 都答。
+    "vb6_VarIsNumber",
     # 账 #305 §B142 (第五十三刀): 往里读那一族的两枚公开名以前各抄一遍 23 档表(134 行 + 121 行)，
     # 现在表只住 vb6_ComVariantIntoSlot 一枚(下面 C1 钉这件事)；Format 那张分诊表住在 .inc 里，
     # 放宽扫描后它进了 census，两档都答(§B142 第三十四刀补的 Decimal + Task #44 补的 I8)。
@@ -83,7 +85,7 @@ $exempt = @{
 # Decimal 这一档（§B143）：同一张表要答两档，所以名单也列两份。
 $decMust = @(
     "vb6_VariantToLong", "vb6_VariantToLongPtr", "vb6_VariantToBool", "vb6_VariantToDouble",
-    "vb6_TypeNameScalar", "vb6_IsNumeric", "vb6_VarToDouble_internal",
+    "vb6_TypeNameScalar", "vb6_IsNumeric", "vb6_VarToDouble_internal", "vb6_VarIsNumber",
     # 账 #305 §B145: 「槽 -> 真 VARIANT」那张表唯一的住处(出站打包与 Variant 算术都读它)。
     "vb6_VariantPackBorrow",
     # 账 #305 §B142 (第五十三刀): 往里读那一枚核 + Format 那张分诊表(见上面 I8 名单同两条的理由)。
@@ -116,6 +118,7 @@ $smMust = @(
     "vb6_VariantToLong", "vb6_VariantToLongPtr", "vb6_VariantToBool", "vb6_VariantToDouble",
     "vb6_TypeNameScalar", "vb6_IsNumeric", "vb6_VarToDouble_internal", "vb6_VariantPackBorrow",
     "vb6_ComVariantIntoSlot", "vb6_Format", "memVariantToI4", "vb6_ho_variantToLong", "vb6_ho_variantToDouble",
+    "vb6_VarIsNumber",
     # Print#/Write# 的 Variant 档: VT_I1 / VT_UI2 各有独立一臂(不再被 _Generic 接成 VT_I4)
     "vb6_FileVariantText"
 )

@@ -49,11 +49,11 @@ bool SemanticAnalyzer::analyze(Module& module) {
                     auto& v092m = static_cast<VariableDecl&>(*decl);
                     // Fix 092p: 登记字段声明原名 — C 结构体成员名按声明生成, 访问点需
                     // 把源码里的大小写变体 (.socket) 规范化回该名.
-                    classSym->memberFieldNames[Symbol::toLower(v092m.name)] = v092m.name;
+                    classSym->W().memberFieldNames[Symbol::toLower(v092m.name)] = v092m.name;
                     // tB B08a: 记录访问级别 (Private 字段在真 VB6 里等价于 Dim, 也照样记)
-                    classSym->memberAccessLevels[Symbol::toLower(v092m.name)] = v092m.access;
+                    classSym->W().memberAccessLevels[Symbol::toLower(v092m.name)] = v092m.access;
                     if (v092m.asType && v092m.asType->kind == ASTNodeKind::SimpleTypeRef) {
-                        classSym->memberFieldTypes[Symbol::toLower(v092m.name)] =
+                        classSym->W().memberFieldTypes[Symbol::toLower(v092m.name)] =
                             static_cast<SimpleTypeRef*>(v092m.asType.get())->name;
                     }
                     // Fix 099: 显式 Public 字段 → COM 暴露清单 (见 Symbol::publicFieldNames).
@@ -68,32 +68,32 @@ bool SemanticAnalyzer::analyze(Module& module) {
                         && !v092m.isWithEvents
                         && !v092m.isDynamicArray
                         && v092m.dimensions.empty()) {
-                        classSym->publicFieldNames.push_back(v092m.name);
+                        classSym->W().publicFieldNames.push_back(v092m.name);
                     }
                     break;
                 }
                 case ASTNodeKind::SubDecl: {
                     auto& s = static_cast<SubDecl&>(*decl);
-                    classSym->memberNames.push_back(s.name);
+                    classSym->W().memberNames.push_back(s.name);
                     // Fix 016: Sub 写入 memberProcKinds (覆盖任意前值)
-                    classSym->memberProcKinds[Symbol::toLower(s.name)] = ProcKind::Sub;
-                    classSym->memberAccessLevels[Symbol::toLower(s.name)] = s.access;  // tB B08a
+                    classSym->W().memberProcKinds[Symbol::toLower(s.name)] = ProcKind::Sub;
+                    classSym->W().memberAccessLevels[Symbol::toLower(s.name)] = s.access;  // tB B08a
                     // Fix 033: memberParams 改在 Pass1 填充 (class init 阶段类型解析不完整, 导致 Variant 回归)
                     break;
                 }
                 case ASTNodeKind::FunctionDecl: {
                     auto& f = static_cast<FunctionDecl&>(*decl);
-                    classSym->memberNames.push_back(f.name);
+                    classSym->W().memberNames.push_back(f.name);
                     // Fix 015: 记录 Function 返回类型名(仅类型为命名类型 SimpleTypeRef 时)
                     // 用于跨模块 storageKey 冲突场景下的 method chaining 返回类型推断
                     if (f.returnType && f.returnType->kind == ASTNodeKind::SimpleTypeRef) {
-                        classSym->memberReturnTypes[Symbol::toLower(f.name)] =
+                        classSym->W().memberReturnTypes[Symbol::toLower(f.name)] =
                             static_cast<SimpleTypeRef*>(f.returnType.get())->name;
                     }
                     // Fix 016: Function 写入 memberProcKinds (覆盖任意前值 — 同类内
                     // 不允许 Function 与同名 Property 共存, 故此处覆盖无冲突风险)
-                    classSym->memberProcKinds[Symbol::toLower(f.name)] = ProcKind::Function;
-                    classSym->memberAccessLevels[Symbol::toLower(f.name)] = f.access;  // tB B08a
+                    classSym->W().memberProcKinds[Symbol::toLower(f.name)] = ProcKind::Function;
+                    classSym->W().memberAccessLevels[Symbol::toLower(f.name)] = f.access;  // tB B08a
                     // Fix 033: memberParams 改在 Pass1 填充 (class init 阶段类型解析不完整)
                     break;
                 }
@@ -103,17 +103,17 @@ bool SemanticAnalyzer::analyze(Module& module) {
                     {
                         std::string lower = Symbol::toLower(p.name);
                         bool found = false;
-                        for (auto& mn : classSym->memberNames) {
+                        for (auto& mn : classSym->W().memberNames) {
                             if (Symbol::toLower(mn) == lower) { found = true; break; }
                         }
-                        if (!found) classSym->memberNames.push_back(p.name);
+                        if (!found) classSym->W().memberNames.push_back(p.name);
                     }
                     // Fix 015: 仅 Property Get 有返回值; Let/Set 无返回类型不记录.
                     // 用前判 propKind==PropertyGet 避免被后续 Let/Set 覆盖 Get 的返回类型.
                     if (p.propKind == ProcKind::PropertyGet
                         && p.returnType
                         && p.returnType->kind == ASTNodeKind::SimpleTypeRef) {
-                        classSym->memberReturnTypes[Symbol::toLower(p.name)] =
+                        classSym->W().memberReturnTypes[Symbol::toLower(p.name)] =
                             static_cast<SimpleTypeRef*>(p.returnType.get())->name;
                     }
                     // Fix 016: 按 ProcKind 写入 memberProcKinds, 同名共存时按
@@ -125,30 +125,30 @@ bool SemanticAnalyzer::analyze(Module& module) {
                     //         在本阶段结束后已确定最终胜出者, Pass1 可直接据其判定 wins)
                     {
                         std::string lower = Symbol::toLower(p.name);
-                        auto it = classSym->memberProcKinds.find(lower);
+                        auto it = classSym->W().memberProcKinds.find(lower);
                         bool wins = false;
                         if (p.propKind == ProcKind::PropertyGet) {
                             wins = true;
                         } else if (p.propKind == ProcKind::PropertyLet) {
-                            if (it == classSym->memberProcKinds.end()
+                            if (it == classSym->W().memberProcKinds.end()
                                 || it->second == ProcKind::PropertyLet
                                 || it->second == ProcKind::PropertySet) {
                                 wins = true;
                             }
                         } else if (p.propKind == ProcKind::PropertySet) {
-                            if (it == classSym->memberProcKinds.end()
+                            if (it == classSym->W().memberProcKinds.end()
                                 || it->second == ProcKind::PropertySet) {
                                 wins = true;
                             }
                         }
                         if (wins) {
-                            classSym->memberAccessLevels[lower] = p.access;  // tB B08a
+                            classSym->W().memberAccessLevels[lower] = p.access;  // tB B08a
                             if (p.propKind == ProcKind::PropertyGet) {
-                                classSym->memberProcKinds[lower] = ProcKind::PropertyGet;
+                                classSym->W().memberProcKinds[lower] = ProcKind::PropertyGet;
                             } else if (p.propKind == ProcKind::PropertyLet) {
-                                classSym->memberProcKinds[lower] = ProcKind::PropertyLet;
+                                classSym->W().memberProcKinds[lower] = ProcKind::PropertyLet;
                             } else if (p.propKind == ProcKind::PropertySet) {
-                                classSym->memberProcKinds[lower] = ProcKind::PropertySet;
+                                classSym->W().memberProcKinds[lower] = ProcKind::PropertySet;
                             }
                         }
                     }
@@ -156,18 +156,29 @@ bool SemanticAnalyzer::analyze(Module& module) {
                 }
                 case ASTNodeKind::EventDecl: {
                     auto& e = static_cast<EventDecl&>(*decl);
-                    classSym->memberNames.push_back(e.name);
+                    classSym->W().memberNames.push_back(e.name);
                     classSym->eventNames.push_back(e.name);  // P6.5: 收集事件名
                     // 账 #305 256: 顺手把「哪几位形参是出参」算一次, 存进与 eventNames 同序的表
                     // (六处消费者必须同一个答案 —— 见 Symbol::eventParamByAddr 那段注释)
+                    //
+                    // 账 §56.47: 这一张表是**类事件 / 模块级 WithEvents** 那一路的主表
+                    // (模块级包装器的 .h 声明与 .c 定义都读它)。口径改回 **VB6 默认**:
+                    // 形参没写 ByVal 就是 ByRef —— 与同一枚处理器的**定义** (过程那一路,
+                    // 读 isByVal) 同一答案 ⇒ 包装器与处理器不再一个按值一个按地址。
+                    // 从前这里只认**显式** ByRef, 于是 PD 的 `File As Variant` (隐式 ByRef)
+                    // 在包装器那边按值、在处理器那边按地址 ⇒ cl C2440。
                     std::vector<char> addrSlots;
+                    // 账 §56.47: 两路两口径 —— UC (.ctl) 那一路只认**显式** ByRef (语料里
+                    // 几千处形状靠它冻结, 不动); 类事件 / 模块级 WithEvents 那一路用
+                    // **VB6 默认** (没写 ByVal 就是 ByRef), 与同一枚处理器的定义同源。
+                    const bool ucLane47 = module.isUserControlDoc();
                     for (auto& p : e.params) {
                         addrSlots.push_back(eventParamByAddress(
-                            p->isByRef,
+                            p->isByRef, p->isByVal, ucLane47,
                             p->asType && p->asType->kind == ASTNodeKind::ArrayTypeRef) ? 1 : 0);
                     }
                     classSym->eventParamByAddr.push_back(std::move(addrSlots));
-                    classSym->memberAccessLevels[Symbol::toLower(e.name)] = e.access;  // tB B08a
+                    classSym->W().memberAccessLevels[Symbol::toLower(e.name)] = e.access;  // tB B08a
                     break;
                 }
                 default:
@@ -285,17 +296,17 @@ bool SemanticAnalyzer::analyze(Module& module) {
                 ifaceSym->isInterface = true;
                 // 收集接口方法名
                 std::vector<std::string> ifaceMethodNames;
-                for (auto& m : ifaceSym->memberNames) {
+                for (auto& m : ifaceSym->P().memberNames) {
                     std::string lower = Symbol::toLower(m);
                     ifaceMethodNames.push_back(lower);
                     ifaceSym->interfaceMethodNames.push_back(lower);
                 }
                 // 验证实现类包含 InterfaceName_MethodName 方法
-                for (auto& m : ifaceSym->memberNames) {
+                for (auto& m : ifaceSym->P().memberNames) {
                     std::string required = ifaceName + "_" + m;
                     std::string lowerRequired = Symbol::toLower(required);
                     bool found = false;
-                    for (auto& cm : classSym->memberNames) {
+                    for (auto& cm : classSym->W().memberNames) {
                         if (Symbol::toLower(cm) == lowerRequired) {
                             found = true;
                             break;
@@ -351,11 +362,12 @@ void SemanticAnalyzer::dumpSymbols(std::ostream& os) const {
             else os << " (unused)";
             os << std::endl;
             // 过程参数
-            if (!sym->params.empty()) {
+            if (!sym->P().params.empty()) {
                 os << "    params: ";
-                for (size_t i = 0; i < sym->params.size(); i++) {
+                const auto& dumpParams = sym->P().params;
+                for (size_t i = 0; i < dumpParams.size(); i++) {
                     if (i > 0) os << ", ";
-                    auto& p = sym->params[i];
+                    auto& p = dumpParams[i];
                     os << (p.isByVal ? "ByVal " : "ByRef ") << p.name;
                     os << " As " << TypeSystem::typeToString(p.type);
                     if (p.isOptional) os << " Optional";

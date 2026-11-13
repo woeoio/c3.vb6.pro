@@ -28,7 +28,12 @@ std::string CCodeGen::defaultValue(Vb6Type type) const {
         case Vb6Type::Currency:
             return "0.0";   // Fix 126: Currency 值语义 (double)
         case Vb6Type::String:
-            return "vb6_BSTR_Empty()";
+            // VB6 里"未赋值的 String" 是 vbNullString (空指针), 不是一枚零长 BSTR:
+            // StrPtr 对前者答 0、对后者 (`s = ""`) 答非 0 —— 这是 VB6 唯一区分
+            // 空串/null 串的公开手段 (见 vb6rtl_compat.c 的 vb6_StrPtr 注释与
+            // BalloonTooltips 的 SetWindowTheme(hTT, StrPtr(""), StrPtr("")) 实测)。
+            // 发 NULL 同时覆盖: 局部/模块变量、函数返回槽、Optional 省略位。
+            return "NULL";
         case Vb6Type::Object:
             return "NULL";
         case Vb6Type::Variant:
@@ -57,6 +62,15 @@ std::string CCodeGen::defaultValueForParam(const ParameterInfo& p) const {
     // 与 cgen_base_naming.cpp 里既有的同款 const_cast 先例一致。
     const std::string clsPtr = const_cast<CCodeGen*>(this)->cParamClassPtrType(p);
     if (!clsPtr.empty()) return "NULL";
+    // ucTreeView (2026-11-06): `Optional ByVal x As Variant` 省略时, VB6 交进来的是
+    // **Missing** (VarType=vbError, scode=DISP_E_PARAMNOTFOUND), 不是 Empty。
+    // VB6 代码用它区分"实参没给"与"给了个空值" (`VarType(N.Image) = vbError`) ——
+    // 填 Empty 会让整族判断翻面 (实测: ucTreeViewPlus 展开时按 SelectedImage 作画,
+    // 根节点 icon 消失; 文本宽度也按"有图标"让位 ⇒ 文字被裁)。
+    // 只动"显式默认值也没有"的这一档; Optional = <expr> 仍走调用点的 defaultValueExpr。
+    if (p.type == Vb6Type::Variant && p.isOptional && !p.hasDefaultValue) {
+        return "vb6_VariantMissing()";
+    }
     return defaultValue(p.type);
 }
 
@@ -159,7 +173,7 @@ std::string CCodeGen::ucInstanceByRefArgExpr(const std::string& name) const {
 std::string CCodeGen::dataObjectArgExpr(const std::string& name) const {
     if (currentProc_) {
         const std::string want = Symbol::toLower(name);
-        for (const auto& p : currentProc_->params) {
+        for (const auto& p : currentProc_->P().params) {
             if (Symbol::toLower(p.name) == want)
                 return p.isByVal ? ("(void*)" + name) : ("(void*)(*" + name + ")");
         }
@@ -283,7 +297,7 @@ std::string CCodeGen::resolveArrayTargetIdent(const std::string& varName) {
         std::string objLower = objName;
         std::transform(objLower.begin(), objLower.end(), objLower.begin(), ::tolower);
         if (currentProc_) {
-            for (auto& p : currentProc_->params) {
+            for (auto& p : currentProc_->P().params) {
                 std::string pLower = p.name;
                 std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
                 if (pLower == objLower && !p.isByVal
@@ -411,7 +425,7 @@ std::string CCodeGen::wrapByRefVariantParamArg(const std::string& paramName,
     // vb6_ComObject_FromInstance 包成真 IDispatch (它的 1 个引用直接转移给 VARIANT)。
     // 接口槽 (`vb6_ivref_*`) 不走这条: 那不是 vb6_ComObject 包装, 保持原行为。
     if (currentProc_) {
-        for (const auto& p : currentProc_->params) {
+        for (const auto& p : currentProc_->P().params) {
             if (Symbol::toLower(p.name) != Symbol::toLower(paramName)) continue;
             if (p.isByVal || p.isParamArray) break;
             // cParamClassPtrType 非 const (它与 mapTypeRef 同族), 本函数是 const —— 只读调用.
@@ -466,10 +480,20 @@ std::string CCodeGen::wrapByRefVariantParamArg(const std::string& paramName,
     }
 }
 
+// 账 §56.52: 登记「本模块引用到的外部模块」。见 cgen_state.inc 的 usedExternalModules_
+// 那段注释 —— 它是「跨模块 include 瘦身」的唯一权威。空串 = 本模块自有符号, 不登记。
+void CCodeGen::noteExternalModule(const std::string& sourceModule) const {
+    if (sourceModule.empty()) return;
+    usedExternalModules_.insert(Symbol::toLower(sourceModule));
+}
+
 std::string CCodeGen::cProcName(const std::string& procName, AccessLevel access,
                                  const std::string& sourceModule) const {
     // 跨模块函数(外部符号): vb6_<ModuleName>_<ProcName>
     if (!sourceModule.empty()) {
+        // 账 §56.52: 这一处是「引用外部模块的过程」的**唯一收口** —— 凡是外部过程,
+        // 它的 C 名都要从这里过 ⇒ 在这里登记归属模块, 裁 include 时才不会把它漏掉。
+        noteExternalModule(sourceModule);
         return "vb6_" + cIdent(sourceModule) + "_" + cIdent(procName);
     }
     // 多模块项目:

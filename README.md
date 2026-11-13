@@ -229,6 +229,11 @@ c3.vb6.pro/
 | `run.bat` | `run <exename> [timeout]` | 运行 output/ 下的 EXE |
 | `dev.ps1` | `dev [-SkipBuild] [-SkipTest]` | 一键构建 + 测试 |
 | `env.ps1` | `. .\scripts\env.ps1` | dot-source 加载 MSVC 环境 |
+| `ga_dispatch_pd.ps1` | `ga_dispatch_pd.ps1 [-AlsoDevRegression]` | 派发 PD 整编 GA（按 headSha 认领 run），可选连带 dev 回归 |
+| `pd_readout.ps1` | `pd_readout.ps1 -Run <run> [-Baseline <run>]` | 取 PD 整编工件，一次读齐 meta / cl 四段 / MEM 行 / 内存曲线 / 错误面 |
+| `diff_c3error.ps1` | `diff_c3error.ps1 <oldRun> <newRun>` | 错误面**逐码**比对（判据唯一口径所在）；退出码 0 = 逐码相等 |
+
+> **PD 整编性能线**的工作流、读数口径与当前成绩见 [`ai/C3_PD_BUILD_PERF_HANDOFF.md`](../ai/C3_PD_BUILD_PERF_HANDOFF.md)。
 
 > **跨机器使用前必读**：`build.bat` / `env.ps1` 的路径配置（环境变量 `C3_VCVARSALL` / `C3_PROJECT_DIR`）说明见 [`scripts/README.md`](scripts/README.md)。
 

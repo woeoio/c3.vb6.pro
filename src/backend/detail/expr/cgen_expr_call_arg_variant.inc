@@ -146,7 +146,7 @@
                     && node.positional[i]->kind == ASTNodeKind::IdentifierExpr && currentProc_) {
                     std::string paLower091k = Symbol::toLower(
                         static_cast<IdentifierExpr&>(*node.positional[i]).name);
-                    for (auto& p091k : currentProc_->params) {
+                    for (auto& p091k : currentProc_->P().params) {
                         if (Symbol::toLower(p091k.name) == paLower091k) {
                             argIsPA091k = p091k.isParamArray;
                             break;
@@ -188,6 +188,15 @@
                     // (cZipArchive pvVfsOpen: pvToFileTime(me, arr(i)) 形参 ByVal Date)
                     argVal = "vb6_VariantToDouble(" + argVal + ")";
                 } else if (paramBase == Vb6Type::String) {
+                    // 账 #(2026-11-07): Declare 的 ByVal String 实参在 arg_emit 里已按 ANSI
+                    // 编组成 char* (Variant 来源也一样)。这里若再包一层 vb6_VariantToString
+                    // 会把 ANSI 转回 BSTR, 而转发桩按 LPCSTR (PathIsURLA 这类 A 版 API)
+                    // 收到 UTF-16 ⇒ 只认出首字符 (实测 `PathIsURL(SrcImg)` 恒 0 ⇒ URL
+                    // 分支永不进, 远程图片全丢)。已编组的一律原样留下。
+                    const bool declareAnsiByValString =
+                        isDeclareAnsiCall && i < calleeParams.size()
+                        && calleeParams[i].isByVal && calleeParams[i].type == Vb6Type::String;
+                    if (!declareAnsiByValString) {
                     // Fix 049b/092a: 仅当 C 表达式**顶层**已是 BSTR 时跳过提取.
                     // 旧实现用子串 find("vb6_BSTR") — 对"内部实参含
                     // vb6_BSTR_FromStr(...)"的 Variant 表达式天然命中 → 整体跳过
@@ -212,6 +221,7 @@
                     }
                     if (!topIsBstr092a) {
                         argVal = "vb6_VariantToString(" + argVal + ")";
+                    }
                     }
                 } else if (paramBase == Vb6Type::Object) {
                     // Fix 227: 形参 Type=Object 但实参**本身已是对象指针**时, 不能再包

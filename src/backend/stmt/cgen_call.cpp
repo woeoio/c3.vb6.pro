@@ -1,4 +1,5 @@
 #include "backend/cgen.hpp"
+#include "common/reserved_stmt_keyword.hpp"  // 账 §56.50: 保留语句关键字顶不掉 (与语义层同一处权威)
 #include <algorithm>
 #include <cctype>
 #include <iostream>
@@ -20,10 +21,29 @@ void CCodeGen::visit(CallStmt& node) {
         // (带实参的形态走 cgen_expr_call_callee_member.inc 的 IndexOrCallExpr 分支。)
         if (node.callee->kind == ASTNodeKind::MemberAccessExpr && isDesignerModule_) {
             auto& maParCs = static_cast<MemberAccessExpr&>(*node.callee);
+            // 两种写法同一口径：裸 `Parent.<方法>` 与限定 `UserControl.Parent.<方法>`
+            // （pdCommandBarMini.ctl:220 `UserControl.Parent.Hide` 走的是后者）。
+            // 例外 `Move`：限定写法在 cgen_base.cpp 的 fixupUserControlParentChain 里
+            // 已有专用通道 vb6_UC_ParentMove（VB 侧量纲换算也在 RTL 内），别再改派成
+            // 运行期 COM 调用。
+            bool isParentCs = false;
+            const bool parentMoveCs = Symbol::toLower(maParCs.memberName) == "move";
             if (maParCs.object && maParCs.object->kind == ASTNodeKind::IdentifierExpr
-                && Symbol::toLower(
-                       static_cast<IdentifierExpr&>(*maParCs.object).name) == "parent"
                 && !knownLocalVars_.count("parent")) {
+                isParentCs = Symbol::toLower(
+                    static_cast<IdentifierExpr&>(*maParCs.object).name) == "parent";
+            } else if (maParCs.object
+                       && maParCs.object->kind == ASTNodeKind::MemberAccessExpr) {
+                auto& innerCs = static_cast<MemberAccessExpr&>(*maParCs.object);
+                if (innerCs.object && innerCs.object->kind == ASTNodeKind::IdentifierExpr
+                    && !knownLocalVars_.count("parent") && !parentMoveCs) {
+                    isParentCs =
+                        Symbol::toLower(static_cast<IdentifierExpr&>(*innerCs.object).name)
+                            == "usercontrol"
+                        && Symbol::toLower(innerCs.memberName) == "parent";
+                }
+            }
+            if (isParentCs) {
                 c_.emitLine("vb6_ComCall(vb6_UC_ParentObject(), L\""
                             + escapeWideCString(maParCs.memberName)
                             + "\", NULL, 0);  /* Parent.<method> */");
@@ -174,6 +194,10 @@ void CCodeGen::visit(CallStmt& node) {
                                     // 交给站F 那位读者判「接收者是视图且这一席同型吗」，不合就留原发。
                                     std::string dbgLate = "vb6_ComGetStringProp(" + comObjExpr_ + ", L\"" + comMemberName_ + "\")";
                                     std::string dbgView = legacyViewGetterReadExpr(comObjExpr_, comMemberName_, dbgLate);
+                                    // 账 #305 (R4 收口): 同一个接收者的**新式**档 (薄指针) —— 与
+                                    // cgen_util_com.cpp:414 那一位的次序一字不差, 只补这处漏问的站点。
+                                    if (dbgView.empty())
+                                        dbgView = ivrefViewGetterReadExpr(comObjExpr_, comMemberName_, dbgLate);
                                     std::string comPropCall = dbgView.empty() ? dbgLate : std::move(dbgView);
                                     c_.emitLine("{");
                                     c_.indent();
@@ -196,7 +220,30 @@ void CCodeGen::visit(CallStmt& node) {
                                     // int32, 打印出 -150012728 这类垃圾数 (不是崩溃, 静默错)。
                                     // 补一条按 AST 的返回类型判定 (inferExprType 会查
                                     // symTab_ 里 Function 符号的返回类型)。
-                                    c_.emitLine("vb6_DebugWriteBSTR(" + val + ");");
+                                    // 账 #118 续: UDT 定长串字段 (r.f As String * N) 的 C 类型是
+                                    // char[N] (内联 ANSI), 直接塞进 BSTR 形参会把 ANSI 字节按 UTF-16
+                                    // 读 (test_fixedstr_decl 的 `Debug.Print r.f` 实测发成裸 r.f)。
+                                    // 统一过一次 wrapToBSTR —— 普通 BSTR 原样返回, 只有成员定长串被换算。
+                                    //
+                                    // 2026-11-10 (k178 形状针): `Debug.Print x.Label` 走视图/getter 读时,
+                                    // 形参拿到的是**刚刚分配**的 BSTR (vb6_*_prop_get_* 里 FromStr/ConcatFree
+                                    // 的结果, 所有权在 caller)。vb6_DebugWriteBSTR 不吃所有权 (只读不 free),
+                                    // 旧形在 isComMarker_ 那一路是显式 Free 的, 这里漏了 ⇒ 每打一行泄漏一只。
+                                    // 只对这一族"会新分配"的读点补 Free; 变量/字面量不走这条, 免得误放别名。
+                                    std::string dbgB = wrapToBSTR(val, *call.positional[j]);
+                                    bool dbgOwned = dbgB.find("->vt->get_") != std::string::npos
+                                                 || dbgB.find("_prop_get_") != std::string::npos;
+                                    if (dbgOwned) {
+                                        c_.emitLine("{");
+                                        c_.indent();
+                                        c_.emitLine("wchar_t* _dbg_com_bstr = " + dbgB + ";");
+                                        c_.emitLine("vb6_DebugWriteBSTR(_dbg_com_bstr);");
+                                        c_.emitLine("vb6_BSTR_Free(_dbg_com_bstr);");
+                                        c_.dedent();
+                                        c_.emitLine("}");
+                                    } else {
+                                        c_.emitLine("vb6_DebugWriteBSTR(" + dbgB + ");");
+                                    }
                                 } else if (inferExprType(*call.positional[j]) == Vb6Type::Date) {
                                     // Fix 175: Debug.Print d (d As Date) —— Date 变量同时
                                     // 登记在 knownDoubleVars_, isDoubleExpr 会抢先命中并
@@ -444,6 +491,22 @@ void CCodeGen::visit(CallStmt& node) {
                     return;
                 }
             }
+            // 账 #305 (R4 收口) 同一站的**新式**档: 接收者是薄指针 `vb6_ivref_<I>*` 时同上,
+            // 那一发也不许进 COM 兜底 (对一枚不是 IDispatch 的薄指针发 Invoke: 编得过、
+            // 跑起来一声不响 —— k175/k177 实测)。形状仍问那位唯一主人 ivrefVtableCall。
+            {
+                const std::string ifaceR4s = slotIvrefViewName(Symbol::toLower(comObjExpr_));
+                if (!ifaceR4s.empty()) {
+                    const std::string callR4 =
+                        ivrefVtableCall(ifaceR4s, comMemberName_, comObjExpr_, {});
+                    if (!callR4.empty()) {
+                        comObjExpr_.clear();
+                        comMemberName_.clear();
+                        c_.emitLine(callR4 + ";  /* 新式视图 ->vt->方法 (站D 零实参裸形) */");
+                        return;
+                    }
+                }
+            }
             // 无括号的COM方法调用: obj.Method → vb6_ComCall(obj, L"Method", NULL, 0)
             callExpr = "vb6_ComCall(" + comObjExpr_ + ", L\"" + comMemberName_ + "\", NULL, 0)";
             comObjExpr_.clear();
@@ -469,8 +532,14 @@ void CCodeGen::visit(CallStmt& node) {
                 }
                 if (sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
-                    || sym->kind == SymbolKind::PropertySet)) {
-                    calleeParams = sym->params;
+                    || sym->kind == SymbolKind::PropertySet)
+                    // 账 §56.50: 保留语句关键字 (Randomize/Kill/Load/Unload) 的**空形参表**
+                    // 不能当成被调方 —— 那枚**用户成员**顶不掉内建语句 (裸写永远是内建),
+                    // 采用它的形参表会让这一格补出多余的缺省实参。口径与语义层/表达式层
+                    // 同一处 (common/reserved_stmt_keyword.hpp)。⚠ 只挡用户符号:
+                    // `Load`/`Unload` 语义层本来就登记成内置, 那两份登记不动。
+                    && !(isReservedStmtKeyword(idExpr.name) && !sym->isBuiltin)) {
+                    calleeParams = sym->P().params;
                     calleeIsBuiltin = sym->isBuiltin;
                 }
             }
@@ -511,27 +580,50 @@ void CCodeGen::visit(CallStmt& node) {
                 // 不另立一套尺; 它答不出 (成员不属于该类 / 接收者不是工程类) 时逐字回落原路径。
                 bool byClassCS254 = false;
                 if (maExpr.object) {
-                    std::string chainClass254 = inferClassTypeOfExpr(*maExpr.object);
-                    if (!chainClass254.empty()) {
-                        std::vector<ParameterInfo> clsParams254;
-                        bool clsBuiltin254 = false;
-                        if (findClassMemberCallParams(chainClass254, maExpr.memberName,
-                                                      clsParams254, clsBuiltin254)) {
-                            calleeParams = clsParams254;
-                            calleeIsBuiltin = clsBuiltin254;
-                            byClassCS254 = true;
-                        }
+                    // G4/M1: 与 Fix 033/042b 共用**唯一的类感知采纳点** —— 接收者类解析
+                    // = inferClassTypeOfExpr + 控件/控件数组 → 工程 UserControl 类
+                    // (无括号语句式 `ddWhichFrame(1).AddItem ...` 的 object 是
+                    // IndexOrCallExpr, 旧路径推不出类 ⇒ 落到 class-unaware 兜底,
+                    // 命中跨类同名成员形参表 ⇒ 多发 Optional 缺省 + `_has_` 尾叜 ⇒ C2197)。
+                    std::vector<ParameterInfo> clsParams254;
+                    bool clsBuiltin254 = false;
+                    if (tryAdoptReceiverClassParams(*maExpr.object, maExpr.memberName,
+                                                    clsParams254, clsBuiltin254)) {
+                        calleeParams = std::move(clsParams254);
+                        calleeIsBuiltin = clsBuiltin254;
+                        byClassCS254 = true;
                     }
                 }
                 // Fix 084y-3 (原逻辑): 链式调用对象方法时 (X.Y(args).Z) 取类方法签名 ——
                 // 类感知已在上面先跑, 此处只剩"类推得出来但该类没这枚成员"的兜底,
                 // 以及"接收者不是 IdentifierExpr/推断不出类"时的原 lookupModule 行为。
                 if (!byClassCS254) {
-                Symbol* sym = symTab_.lookupModule(maExpr.memberName);
+                Symbol* sym = nullptr;
+                // C2197 §56.29: 跨窗体语句调用 `frmX.Proc` (无括号) 先问模块限定二级键
+                // `<form>_<proc>` —— 与 cgen_expr_call_callee_params.inc 同一张表
+                // (driver_crossmod 的 formQualifiedSyms)。多窗体同名过程时裸键
+                // lookupModule 命中的是注册最早那家, 缺省补齐按它算 ⇒ 实参比真正的
+                // 被调方多 (PD #9 options_*/layerpanel_* 一族 20 站 42 行)。
+                if (maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr
+                    && symTab_.moduleScope()) {
+                    const std::string qFormCS = Symbol::toLower(
+                        static_cast<IdentifierExpr&>(*maExpr.object).name);
+                    if (qFormCS != Symbol::toLower(moduleName_)
+                        && knownFormModuleNames_.count(qFormCS)) {
+                        Symbol* qSymCS = symTab_.moduleScope()->lookupLocal(
+                            qFormCS + "_" + Symbol::toLower(maExpr.memberName));
+                        if (qSymCS && qSymCS->isExternal
+                            && (qSymCS->kind == SymbolKind::Sub
+                                || qSymCS->kind == SymbolKind::Function)) {
+                            sym = qSymCS;
+                        }
+                    }
+                }
+                if (!sym) sym = symTab_.lookupModule(maExpr.memberName);
                 if (sym && (sym->kind == SymbolKind::Sub || sym->kind == SymbolKind::Function
                     || sym->kind == SymbolKind::PropertyGet || sym->kind == SymbolKind::PropertyLet
                     || sym->kind == SymbolKind::PropertySet)) {
-                    calleeParams = sym->params;
+                    calleeParams = sym->P().params;
                     calleeIsBuiltin = sym->isBuiltin;
                 }
                 }
@@ -623,11 +715,10 @@ void CCodeGen::visit(CallStmt& node) {
                     }
                 }
             }
-            // Fix 034: Builtin Sub statements with Optional ByVal 参 — 硬编码补默认值.
-            // calleeParams 未注册的 builtin (如 Randomize), bare-call 无参时补默认值.
-            // Randomize([seed]) — RTL vb6_Randomize(double seed); 不传参时 seed=0.0.
+            // Fix 034 / Fix RND-SEQ: 裸 `Randomize` 不是 `Randomize 0` —— 真 VB6 走
+            // rtcRandomize 的缺参分支: Timer → Single 位型 → 折半 XOR 播种。RTL 有专名。
             if (callExpr == "vb6_Randomize" && bareArgList.empty()) {
-                bareArgList = "0.0";
+                callExpr = "vb6_RandomizeTimer";
             }
             callExpr += "(" + bareArgList + ")";
             // 窗体裸名 `ZOrder` (= `Me.ZOrder`): `.frm` 里不带接收者写 `ZOrder` 是窗体自己
@@ -673,7 +764,22 @@ void CCodeGen::visit(CallStmt& node) {
                 && params090g.empty() && !builtin090g
                 && resolveClassMemberCall(cls090g, maExpr090g.memberName).empty()) {
                 emitExpr(*maExpr090g.object);
-                c_.emitLine("(void)" + lastExpr_ + ";  /* vbeclipse: "
+                // 账 §53: 接收者是**本窗体的设计期控件**时, 裸名不是 C 标识符 ——
+                // 它是"控件对象", 唯一出口仍是 ctrlObjectRefExpr (与 With 块 /
+                // `Is Nothing` / 对象形参同一答)。整编实测 FormExportLayers.c:754
+                // `cmdExportSettings.SetFocus` 落到这个空操作腿, 发成
+                // `(void)cmdExportSettings;` ⇒ C2065。
+                std::string recv090g = lastExpr_;
+                if (maExpr090g.object
+                    && maExpr090g.object->kind == ASTNodeKind::IdentifierExpr) {
+                    const auto& idR090g = static_cast<const IdentifierExpr&>(*maExpr090g.object);
+                    const std::string lowR090g = Symbol::toLower(idR090g.name);
+                    if (!knownLocalVars_.count(lowR090g)
+                        && knownFormControls_.count(lowR090g)) {
+                        recv090g = ctrlObjectRefExpr(lowR090g, idR090g.name);
+                    }
+                }
+                c_.emitLine("(void)" + recv090g + ";  /* vbeclipse: "
                             + maExpr090g.memberName
                             + " 未建模于 " + cls090g + ", 空操作 */");
                 return;

@@ -1,0 +1,3 @@
+Type=Exe
+Form=MenuArr
+Startup="MenuArr"

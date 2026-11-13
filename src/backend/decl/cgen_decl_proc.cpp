@@ -62,6 +62,7 @@ void CCodeGen::visit(SubDecl& node) {
     clearProcArrayTracking();
     ansiTempsToFree_.clear();
     ansiOutParams_.clear();
+    byValStrCopies_.clear();  // 账 #610 第343刀: ByVal 串副本登记表 (过程入口清一次)
     slotsToRelease_.clear();  // tB Interface B05 / 账 #305 §B218 (甲) 腿④
     // 账 #305 §B218 (甲) 第一百五十六刀: 「这档局部数组的载体能不能在出口销毁」在过程入口
     // 一次答完 (登记表在发尾之前没人再问), 登记口只照结论决定要不要发那一发销毁。
@@ -309,6 +310,12 @@ void CCodeGen::visit(SubDecl& node) {
             if (!udtCType.empty()) {
                 arrayUdtElemTypes_[pLower] = udtCType;
             }
+            // Fix 192 补口: 类数组**形参**没进 arrayClassElemTypes_ ⇒ `p(i).Method` 发成
+            // `VB6_SA_AT(void*, (*p), i).Method` C2224 (void* 取成员)。与 decl_var/localdecl 对称。
+            {
+                std::string cls = resolveArrayClassElemType(p->asType.get());
+                if (!cls.empty()) arrayClassElemTypes_[pLower] = cls;
+            }
             // 账 #305 B181 (knife 71): a ByRef Byte() FORMAL used to reach none of the two
             // byte-array name sets (only module-level + local declaration paths write them),
             // so StrPtr(b) / StrConv(b, ...) silently handed the SafeArray DESCRIPTOR pointer
@@ -316,6 +323,38 @@ void CCodeGen::visit(SubDecl& node) {
             if (elemType == Vb6Type::Byte) knownByteArrayVars_.insert(pLower);
             knownLocalVars_.insert(pLower);
         }
+    }
+
+
+    // 富贵竹 FIX-012 (账 #610 第341刀): ByVal 串形参先进函数先拷副本 ——
+    // VB6 语义是「被调方拿到自己的副本」; 此前 C 签名 BSTR p 直接别名调用方的串,
+    // 体里任何一次赋值 (vb6_BSTR_Assign/AssignMove 都先 free 旧值) 就把调用方的串
+    // 放了 → 悬垂读出别的堆内容 (上游实测 AddText 画出 "*Model_Space")。
+    // 凡 ByVal String 形参一律拷, 不依赖「体里有没有赋值」的人工判断。
+    // 账 #610 第343刀: 副本不再挂在形参身上, 而是**另立一个副本变量**, 形参指向它 ——
+    //   出口 (统一出口段, 标签之后 ⇒ Exit Sub 的 goto 也走到) 只在「形参仍是那枚副本」
+    //   时才 free: 体里 vb6_BSTR_Assign(p, …) 先 free 旧值 ⇒ p 已不是副本 ⇒ 跳过 ⇒
+    //   不二次释放; ByRef 传出后被改写同理 ⇒ 跳过。副本不再每次调用泄一枚。
+    //   Function 侧不登记 (返回值可能就是该形参 ⇒ free 它会让返回值悬垂) ⇒ 另开一格。
+    //   定长串 (String*N) 形参不在此列。
+    //
+    //   C89 约束: 副本变量是**带初始化的声明**, 必须落在块首 (任何语句之前)。
+    //   ⇒ 这里分两轮: 第一轮只发声明, 第二轮才发「形参指向副本」的赋值语句。
+    //   否则第二个 ByVal String 形参的声明会夹在第一个形参的赋值语句之后
+    //   ⇒ C2275/C2065 之类。变量名带形参名 ⇒ 多个形参互不撞名。
+    std::vector<std::pair<std::string, std::string>> copies343;  // (形参名, 副本变量名)
+    for (auto& p012 : node.params) {
+        if (!p012->isByVal || !p012->asType
+            || p012->asType->kind != ASTNodeKind::SimpleTypeRef) continue;
+        if (Symbol::toLower(static_cast<SimpleTypeRef&>(*p012->asType).name) != "string") continue;
+        std::string pn012 = cIdent(p012->name);
+        std::string copyVar012 = "vb6_byvalcopy_" + pn012;
+        c_.emitLine("BSTR " + copyVar012 + " = vb6_BSTR_FromBSTR(" + pn012 + ");  /* FIX-012: ByVal 串副本 */");
+        copies343.push_back({pn012, copyVar012});
+    }
+    for (auto& cp343 : copies343) {
+        c_.emitLine(cp343.first + " = " + cp343.second + ";  /* FIX-012: 形参指向自己的副本 */");
+        byValStrCopies_.push_back(cp343);
     }
 
     // VB6 Static Sub: 过程内所有局部变量都是static
@@ -337,11 +376,14 @@ void CCodeGen::visit(SubDecl& node) {
     // This ensures the parameter variable has the correct default value
     // when the caller omits it, instead of the type's zero value.
     if (sym) {
-        for (auto& pi : sym->params) {
+        for (auto& pi : sym->P().params) {
             if (pi.isOptional && !pi.isParamArray && pi.hasDefaultValue && !pi.defaultValueExpr.empty()) {
                 std::string pName = cIdent(pi.name);
                 std::string hasFlag = "_has_" + pName;
                 if (pi.isByVal) {
+                    // 账 §56.43: 装箱不在本处做 —— 语义层 (SemanticAnalyzer::evalOptionalDefault)
+                    // 已按「ByVal + Variant + 显式默认值」把 defaultValueExpr 折成装箱形式,
+                    // 这里照抄即可 (**装箱口径只有那一个权威**); 与 cgen_decl_func.cpp 同源。
                     c_.emitLine("if (!" + hasFlag + ") " + pName + " = " + pi.defaultValueExpr + ";");
                 } else {
                     std::string cType = mapType(pi.type);
@@ -436,6 +478,17 @@ void CCodeGen::visit(SubDecl& node) {
     ansiTempsToFree_.clear();
     ansiOutParams_.clear();
 
+    // 账 #610 第343刀: ByVal String 形参的**副本**在统一出口释放 (收掉「每调用泄一枚串」)。
+    //   位置在 vb6_proc_exit 标签**之后** ⇒ Exit Sub 的 goto 也走到这一段 (标签之前发
+    //   的话, goto 会跳过它 ⇒ 那条路径仍在漏)。
+    //   只在「形参仍是那枚副本」时才 free: 体里 vb6_BSTR_Assign(p, …) 先 free 旧值
+    //   ⇒ p 已不是副本 ⇒ 跳过 ⇒ 不二次释放; ByRef 传出后被改写同理 ⇒ 跳过。
+    //   副本变量只是地址比较用, 不解引用 ⇒ 即使它已被释放也只是悬垂指针, 安全。
+    for (auto& bc343 : byValStrCopies_) {
+        c_.emitLine("if (" + bc343.first + " == " + bc343.second + ") { vb6_BSTR_Free(" + bc343.first + "); }  /* FIX-012: 副本释放 */");
+    }
+    byValStrCopies_.clear();
+
     // 账 #305 §B166 (第五十六刀): 本次调用现造的 ParamArray 数组在统一出口销毁(口径见那枚出口)。
     // Exit Sub 那条形同 M22 的 ANSI 临时量, 走不到这一行。
     emitParamArrayReclaim(node.params);
@@ -497,8 +550,9 @@ void CCodeGen::applyEventHandlerAbi(SubDecl& node) {
         prm->isByVal = true;
     }
     if (auto* evtSym = symTab_.lookupModuleOverloadByLoc(node.name, node.loc)) {
-        for (size_t j = 0; j < evtSym->params.size(); ++j) {
-            auto& pi = evtSym->params[j];
+        auto& evtParams = evtSym->W().params;
+        for (size_t j = 0; j < evtParams.size(); ++j) {
+            auto& pi = evtParams[j];
             if (pi.isParamArray) continue;
             if (j < slots256.size() && slots256[j]) continue;
             pi.isByVal = true;

@@ -144,13 +144,17 @@
                 break;
             case FrmControlType::PictureBox:
                 // VB6 PictureBox: STATIC + SS_BITMAP + SS_CENTERIMAGE + border
-                style |= kSsBitmap | kSsCenterImg;
+                // FIX-010 (富贵竹): 必须带 SS_NOTIFY —— 不带这一位的 STATIC 在
+                // WM_NCHITTEST 上答 HTTRANSPARENT，鼠标交给父窗口，子类化 WndProc 收不到
+                // WM_LBUTTONDOWN/UP。与 cgen_util_ctrl.cpp 的 controlTypeStyleBits 同口径。
+                style |= kSsBitmap | kSsCenterImg | kSsNotify;
                 style |= kWsBorder;  // WS_BORDER for sunken border
                 createCaption = "";   // No text for picture controls
                 break;
             case FrmControlType::Image:
                 // VB6 Image: STATIC + SS_BITMAP + SS_CENTERIMAGE (no border)
-                style |= kSsBitmap | kSsCenterImg;
+                // FIX-010: 同上，SS_NOTIFY 是鼠标事件的前提。
+                style |= kSsBitmap | kSsCenterImg | kSsNotify;
                 createCaption = "";
                 break;
             case FrmControlType::ProgressBar:
@@ -1159,7 +1163,8 @@
                     if (!pv) continue;
                     auto pic = FrxReader::readPicture(pv->frxOffset, true);
                     if (pic.data.empty()) continue;
-                    std::string varName = "vb6_frx_tabpic_" + cIdent(ctrl.controlName)
+                    // FIX-007: 同 vb6_frx_pic_ —— 必须带窗体名前缀避免跨模块 LNK2005。
+                    std::string varName = "vb6_frx_tabpic_" + cIdent(formName) + "_" + cIdent(ctrl.controlName)
                                         + "_" + std::to_string(idx2);
                     frxArrayDefs_.push_back(bytesToHexArray(pic.data.data(), pic.data.size(), varName));
                     h_.emitLine(bytesToHexArrayDecl(varName));

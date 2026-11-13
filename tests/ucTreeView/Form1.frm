@@ -1136,13 +1136,13 @@ Private Sub Command1_Click()
     ucTreeViewPlus1.Nodes.Clear
     ucTreeViewPlus1.CheckBoxes = False
 
-    ' Convertir el nodo raíz del XML en un nodo de tu clase
+    ' Convertir el nodo raÃ­z del XML en un nodo de tu clase
     ConvertXMLNodeToNode xmlDoc.documentElement, ucTreeViewPlus1.Nodes
 
     ucTreeViewPlus1.Update
 End Sub
 
-' Función recursiva para convertir un nodo XML en un nodo de la clase Node
+' FunciÃ³n recursiva para convertir un nodo XML en un nodo de la clase Node
 Private Sub ConvertXMLNodeToNode(ByVal xmlNode As Object, ByVal parentNode As Node)
     Dim childNode As Object
     Dim newNode As Node

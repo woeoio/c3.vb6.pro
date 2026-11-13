@@ -13,6 +13,107 @@ namespace vb6c3 {
 // --- cgen_util_classtype.cpp: 类/UDT 类型推断与字段 C 类型 ---
 
 
+// G3: `Mod.Fn` 形态识别 —— 限定符是模块名 (跨模块 external 或本模块), Fn 是形参表
+// 为空的 Function/PropertyGet。E1 (接收者返回类推断) 与 E2 (值上下文补 `()`) 共用。
+const Symbol* CCodeGen::findModuleQualifiedNoArgFunction(const ASTNode& obj) const {
+    if (obj.kind != ASTNodeKind::MemberAccessExpr) return nullptr;
+    const auto& ma = static_cast<const MemberAccessExpr&>(obj);
+    if (!ma.object || ma.object->kind != ASTNodeKind::IdentifierExpr) return nullptr;
+    if (!symTab_.moduleScope()) return nullptr;
+    const std::string modLower =
+        Symbol::toLower(static_cast<const IdentifierExpr&>(*ma.object).name);
+    const std::string memLower = Symbol::toLower(ma.memberName);
+    for (const auto& [key, s] : symTab_.moduleScope()->symbols()) {
+        if (!s || s->lowerName != memLower) continue;
+        if (s->kind != SymbolKind::Function && s->kind != SymbolKind::PropertyGet) continue;
+        if (!s->P().params.empty()) continue;
+        const bool sameMod = !s->isExternal
+            && Symbol::toLower(moduleName_) == modLower;
+        const bool extMod = s->isExternal
+            && Symbol::toLower(s->sourceModule) == modLower;
+        if (sameMod || extMod) return s.get();
+    }
+    return nullptr;
+}
+
+// G4/M1: 调用点接收者类解析 (只服务形参表决策)。
+// 第一步沿用 inferClassTypeOfExpr 的既有语义 (不改它一处); 它答不出时再问一张只在
+// **设计期控件** 上有话可说的表: knownUserControlCtrlVars_ (控件名/控件数组基名 → .ctl 的
+// VB_Name, 见 cgen_form_ctrl_registry.inc:41 —— 控件数组登记的就是数组基名，
+// 所以 `ctlMany(1)` 的 callee 基名查得到类)。回答不出仍返回空串。
+std::string CCodeGen::inferCallReceiverClassForParams(const ASTNode& obj) const {
+    const std::string byClass = inferClassTypeOfExpr(obj);
+    if (!byClass.empty()) return byClass;
+    const ASTNode* recvNameNode = nullptr;
+    if (obj.kind == ASTNodeKind::IdentifierExpr) {
+        recvNameNode = &obj;
+    } else if (obj.kind == ASTNodeKind::IndexOrCallExpr) {
+        const auto& call = static_cast<const IndexOrCallExpr&>(obj);
+        if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr) {
+            recvNameNode = call.callee.get();
+        }
+    }
+    if (!recvNameNode) return "";
+    const std::string recvLower =
+        Symbol::toLower(static_cast<const IdentifierExpr&>(*recvNameNode).name);
+    auto it = knownUserControlCtrlVars_.find(recvLower);
+    if (it == knownUserControlCtrlVars_.end()) return "";
+    return it->second;
+}
+
+// G4/M1 闸: 唯一的类感知形参表采纳点。两道判据缺一不可 —— 接收者类答不出、或该类
+// 没有这枚成员, 都交回 false, 调用方随即逐字回落原 lookupModule 兜底 (不静默、不改写)。
+bool CCodeGen::tryAdoptReceiverClassParams(const ASTNode& recv,
+                                           const std::string& member,
+                                           std::vector<ParameterInfo>& outParams,
+                                           bool& outBuiltin) const {
+    const std::string recvCls = inferCallReceiverClassForParams(recv);
+    if (recvCls.empty()) return false;
+    // Fix 240b 同款方向闸: emit 侧把该成员解成 `prop_get_` 时, 形参表要取**读方向**那一份
+    // (Get/Let 并存时 findClassMemberCallParams 实测交回 Let 表, 会把 Let 末参 Value 的
+    // 默认值顶到 `_has_<param>` 上 ⇒ C2440)。
+    if (resolveClassMemberCall(recvCls, member).find("_prop_get_") != std::string::npos) {
+        std::vector<ParameterInfo> getParams;
+        if (findClassMemberGetParams(recvCls, member, getParams)) {
+            outParams = std::move(getParams);
+            outBuiltin = false;
+            return true;
+        }
+    }
+    std::vector<ParameterInfo> callParams;
+    bool callBuiltin = false;
+    // C3-SENTINEL(g4-m1-gate): 唯一采纳点 —— 未命中即回落, 见 scripts/check_g4_receiver_class_gate.ps1
+    if (!findClassMemberCallParams(recvCls, member, callParams, callBuiltin)) return false;
+    outParams = std::move(callParams);
+    outBuiltin = callBuiltin;
+    return true;
+}
+
+// §43 (C2039 族②): `Mod.Fn(...)` —— 限定符是**标准模块**（.bas，不是类实例），Fn 是
+// 带形参的 Function。返回值仍可以是项目类，链式访问 `Mod.Fn(x).Member` 的类型就是它。
+// 与 findModuleQualifiedNoArgFunction 同一张表、同一匹配口径（external 的 sourceModule
+// 或本模块名），只放开"形参表为空"这一条 —— 那一问服务的是 E1/E2 的值上下文补 `()`，
+// 这里服务的是接收者类推断。
+const Symbol* CCodeGen::findModuleQualifiedFunction(const ASTNode& obj) const {
+    if (obj.kind != ASTNodeKind::MemberAccessExpr) return nullptr;
+    const auto& ma = static_cast<const MemberAccessExpr&>(obj);
+    if (!ma.object || ma.object->kind != ASTNodeKind::IdentifierExpr) return nullptr;
+    if (!symTab_.moduleScope()) return nullptr;
+    const std::string modLower =
+        Symbol::toLower(static_cast<const IdentifierExpr&>(*ma.object).name);
+    const std::string memLower = Symbol::toLower(ma.memberName);
+    for (const auto& [key, s] : symTab_.moduleScope()->symbols()) {
+        if (!s || s->lowerName != memLower) continue;
+        if (s->kind != SymbolKind::Function) continue;
+        const bool sameMod = !s->isExternal
+            && Symbol::toLower(moduleName_) == modLower;
+        const bool extMod = s->isExternal
+            && Symbol::toLower(s->sourceModule) == modLower;
+        if (sameMod || extMod) return s.get();
+    }
+    return nullptr;
+}
+
 std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
     switch (expr.kind) {
         case ASTNodeKind::IdentifierExpr: {
@@ -204,7 +305,40 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             if (!ma.object) return "";
             // 递归推断对象表达式的类名
             std::string baseClassName = inferClassTypeOfExpr(*ma.object);
-            if (baseClassName.empty()) return "";
+            if (baseClassName.empty()) {
+                // §43 (C2039 族②): `Mod.Fn(x)` —— 限定符是**标准模块**（.bas），不是类实例，
+                // 所以上一步必然答空；但 Fn 的返回类就是接收者类。此前直接 `return ""`，
+                // 下游把 `.Member` 当结构体字段发 ⇒ `vb6_PDImages_GetImageByID(x).GetNumOfLayers`
+                // ⇒ C2039 "'GetNumOfLayers': is not a member of 'vb6_cls_pdImage'"（整编实测 47 条，
+                // 接收者全是 PDImages.GetImageByID/GetActiveImage 的链）。
+                // 返回类校验沿用 getClassMethodReturnType 的同一口径（返回名必须真是项目 Class，
+                // `As Object`/UDT/内置类型一律答空 ⇒ 链在此终止，交回 COM 路径）。
+                if (ma.object->kind == ASTNodeKind::IdentifierExpr) {
+                    const Symbol* fnSym43 = findModuleQualifiedFunction(*call.callee);
+                    if (fnSym43 && !fnSym43->variableTypeName.empty()) {
+                        // §56: 上一刀这里只走了 getClassMethodReturnType(模块名, 成员名),
+                        // 而那条路的"同模块"匹配闸是 `isClassModule_`（第 563 行）——
+                        // **标准模块自己**调用 `PDImages.GetImageByID(x)` 时
+                        // isClassModule_=false、符号又不是 external ⇒ 恒查不到 ⇒ 返回空
+                        // ⇒ 外层 `.Member` 落 `obj.member`（整编实测 PDImages.c
+                        // `IsSuspended`/`EstimateRAMUsage`/`SuspendImage` ×9 C2039，
+                        // 连带 Layers.bas 的 `MainSelection.GetCompositeBoundaryRect.Left`
+                        // 整条链不解析 ×2）。返回类**直接**取符号上的 variableTypeName，
+                        // 口径与 G3-E1 那一支（本文件 378-386 行）逐字同源。
+                        const std::string projHit43 =
+                            projectClassNameOf(fnSym43->variableTypeName);
+                        if (!projHit43.empty()) return projHit43;
+                        const Symbol* clsSym43 = symTab_.lookup(fnSym43->variableTypeName);
+                        if (clsSym43 && clsSym43->kind == SymbolKind::Class)
+                            return fnSym43->variableTypeName;
+                    }
+                    if (fnSym43) {
+                        return getClassMethodReturnType(
+                            static_cast<const IdentifierExpr&>(*ma.object).name, ma.memberName);
+                    }
+                }
+                return "";
+            }
             // 查找该方法的返回类型
             const std::string retCls242 = getClassMethodReturnType(baseClassName, ma.memberName);
             if (retCls242.empty()) return "";
@@ -250,7 +384,43 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
             auto& ma = static_cast<const MemberAccessExpr&>(expr);
             if (!ma.object) return "";
             std::string baseClassName = inferClassTypeOfExpr(*ma.object);
-            if (baseClassName.empty()) return "";
+            if (baseClassName.empty()) {
+                // C2197 §56.29: 接收者是 **UDT 值 / UDT 数组元素**时
+                // (`m_ImageCache(i).spriteNames.GetString(...)`), inferClassTypeOfExpr
+                // 推不出类 (元素是 UDT), 但成员的 C 类型 `vb6_cls_<X>*` 已是事实 ——
+                // 问同一枚 udtFieldObjCType, 否则外层调用落裸名表借到别模块同名过程
+                // (PD #9 pdSpriteSheet.c:264 一族)。与 With 分支同一判据。
+                const std::string baseUdtCU = inferUdtTypeOfExpr(*ma.object);
+                if (!baseUdtCU.empty()) {
+                    const std::string fldCM = udtFieldObjCType(
+                        baseUdtCU, Symbol::toLower(ma.memberName));
+                    static const std::string kClsPM = "vb6_cls_";
+                    if (fldCM.size() > kClsPM.size() + 1 && fldCM.back() == '*'
+                        && fldCM.compare(0, kClsPM.size(), kClsPM) == 0) {
+                        return fldCM.substr(kClsPM.size(), fldCM.size() - kClsPM.size() - 1);
+                    }
+                }
+                // G3-E1: **模块限定无参函数**当接收者 —— `Mod.Fn.Member` 的语义是
+                //   `(调用 Fn).Member`, 表达式的类是 Fn 的返回类, 不是"模块 Mod"。
+                //   此前这里只认 `inferClassTypeOfExpr(object)` (对象本身是类实例);
+                //   限定符是**标准模块名**时该问返回空 ⇒ 外层 `.Member` 落
+                //   `obj + "." + member` (实测 PhotoDemon `PDImages.GetActiveImage` /
+                //   `GetNumOfLayers` 一族 C2039)。与 Fix 218 (裸函数名, 同文件上一个
+                //   分支) 同一语义, 只是多了一层模块限定符; 只认**形参表为空**的
+                //   Function/PropertyGet, 且返回类型必须是工程类 —— 带参函数在 VB6 里
+                //   无括号引用是编译错误, 不在本刀范围。
+                if (const Symbol* fnSym = findModuleQualifiedNoArgFunction(expr)) {
+                    if (!fnSym->variableTypeName.empty()) {
+                        const std::string projHit =
+                            projectClassNameOf(fnSym->variableTypeName);
+                        if (!projHit.empty()) return projHit;
+                        const Symbol* clsSym = symTab_.lookup(fnSym->variableTypeName);
+                        if (clsSym && clsSym->kind == SymbolKind::Class)
+                            return fnSym->variableTypeName;
+                    }
+                }
+                return "";
+            }
             if (classTypedFieldMap_) {
                 auto it = classTypedFieldMap_->find(baseClassName);
                 if (it != classTypedFieldMap_->end()) {
@@ -323,6 +493,24 @@ std::string CCodeGen::inferClassTypeOfExpr(const ASTNode& expr) const {
                 // 特判, 此处不做方法返回类型推断以免误伤 String/Long 属性场景)
                 return info.className;
             }
+            // C2197 §56.29: `With <UDT>` 块内的 `.类字段.方法(...)` —— UDT 成员声明成
+            // `As <工程类>` 时 (pdMDTag.DB_StackIDs As pdStringStack), 此前这一形推不出类,
+            // 外层调用落裸名表借到别模块的同名过程 (pdSerialize.GetString 3 参) ⇒ 多补
+            // 缺省实参 (PD #9 68 行 / 17 站)。判据与 udtFieldCTypeOfTarget 同源:
+            // 只认 UDT (Unknown) 档, 且该字段的 C 类型确为 `vb6_cls_<X>*` 才答类名。
+            if (info.kind == WithObjKind::Unknown) {
+                auto itU = knownUdtVars_.find(Symbol::toLower(withObjectVars_.back()));
+                if (itU != knownUdtVars_.end()) {
+                    const std::string fldCU = udtFieldObjCType(
+                        itU->second,
+                        Symbol::toLower(static_cast<const WithMemberExpr&>(expr).memberName));
+                    static const std::string kClsP = "vb6_cls_";
+                    if (fldCU.size() > kClsP.size() + 1 && fldCU.back() == '*'
+                        && fldCU.compare(0, kClsP.size(), kClsP) == 0) {
+                        return fldCU.substr(kClsP.size(), fldCU.size() - kClsP.size() - 1);
+                    }
+                }
+            }
             return "";
         }
         default:
@@ -357,6 +545,35 @@ std::string CCodeGen::ifaceViewOfExpr(const ASTNode& expr) {
                 && !fs221->variableTypeName.empty()
                 && !ivrefCType(fs221->variableTypeName).empty()) {
                 return fs221->variableTypeName;
+            }
+        }
+        // 账 #305 (R4 收口): 接收者是**类成员属性**的那一形 (`h.OwnView`，解析器把零实参属性
+        // 读也铸成 IndexOrCallExpr)。按接收者的类问成员返回类型, 只有当返回类型是 canonical
+        // 视图时才认 (与上面形①③同一条判据: ivrefCType 非空)。此前这一形落到
+        // inferClassTypeOfExpr 的类兜底, 答成宿主类 (实测 n=[H2947]) ⇒ `.Has` 按类实例发。
+        if (call221.callee && call221.callee->kind == ASTNodeKind::MemberAccessExpr) {
+            const auto& maC221 = static_cast<const MemberAccessExpr&>(*call221.callee);
+            if (maC221.object) {
+                const std::string baseC221 = inferClassTypeOfExpr(*maC221.object);
+                if (!baseC221.empty()) {
+                    const std::string retC221 =
+                        getClassMethodReturnType(baseC221, maC221.memberName);
+                    if (!retC221.empty() && !ivrefCType(retC221).empty()) return retC221;
+                }
+            }
+        }
+    }
+    if (expr.kind == ASTNodeKind::WithMemberExpr) {
+        // 账 #305 (R4 收口): `With <类实例>: .View.Has` 里 `.View` 是 WithMemberExpr
+        // (无 object, 基类在 With 栈上)。成员返回 canonical 视图时认这一形 ——
+        // 此前落到 inferClassTypeOfExpr 的 With 类兜底 (答成宿主类 H2947) ⇒ `.Has`
+        // 按类实例发 `vb6_<I>_Has((void*)<视图>)`, 恒 0 (k2947-k 实测)。
+        if (!withObjectInfoStack_.empty()) {
+            const WithObjInfo& wiW = withObjectInfoStack_.back();
+            if (wiW.kind == WithObjKind::ClassInstance && !wiW.className.empty()) {
+                const std::string retW = getClassMethodReturnType(
+                    wiW.className, static_cast<const WithMemberExpr&>(expr).memberName);
+                if (!retW.empty() && !ivrefCType(retW).empty()) return retW;
             }
         }
     }
@@ -422,6 +639,19 @@ std::string CCodeGen::legacyViewBoxExpr(const ASTNode* expr, const std::string& 
     const auto& id = static_cast<const IdentifierExpr&>(*expr);
     if (!slotIsLegacyIfaceView(Symbol::toLower(id.name))) return std::string();
     return "vb6_VariantFromProjectInstance((void*)(" + cExpr + ").obj)";
+}
+
+// 账 #305 (R4 收口): 上面那一站的**新式**那一档。R4 去掉 `VB_Creatable` 闸之后, 可创建的
+// 空体接口类也进 ivreg_, 同一枚 `Dim v As IK172` 的 C 值从值结构体 (`vb6_iface_<I>`) 变成
+// 薄指针 (`vb6_ivref_<I>*`, 没有 `.obj` / `.vtbl` 两格)。装箱站不认这一档就把
+// `vb6_ivref_<I>**` 当 `vb6_VARIANT*` 交出去 —— k172_viewarg 站E 实测: 编得过, VarType
+// 读成 46832 (把指针的低 16 位当 vt)。身份仍按指针问, 与 legacy 那一臂同一句答案;
+// 哪一枚是视图只问既有主人 ifaceViewOfExpr, 不在这里另立名单。
+std::string CCodeGen::ivrefViewBoxExpr(ASTNode* expr, const std::string& cExpr) {
+    if (!expr || cExpr.empty()) return std::string();
+    if (cExprIsVariantCarrier(cExpr)) return std::string();
+    if (ifaceViewOfExpr(*expr).empty()) return std::string();
+    return "vb6_VariantFromProjectInstance((void*)(" + cExpr + "))";
 }
 
 // 账 #305 新账 #471 站D (第一百七十五刀): 「接收者是一枚视图，它的方法那一发怎么发」收成一处。
@@ -568,6 +798,51 @@ std::string CCodeGen::lateBoundReadOnVariantCarrier(const std::string& carrierEx
 
 
 
+// §56.38 F2: 类成员返回工程 UDT 的唯一判据.
+// 成员返回类型先问符号表的 variableTypeName (语义层已把返回类型名写在那一格),
+// 落空再问 Class 符号自身的 memberReturnTypes (storageKey 撞名时的回退, 与
+// getClassMethodReturnType 的 Fix 015 同源)。两条都要求最终能解析出
+// UserDefinedType 符号 —— 返回类/标量/接口的一律交回空串, 不能当 UDT 用。
+std::string CCodeGen::udtReturnOfClassMember(const std::string& clsC,
+                                             const std::string& memberName) const {
+    if (clsC.empty() || memberName.empty()) return "";
+    const std::string memLowerC = Symbol::toLower(memberName);
+    const std::string clsLowerC = Symbol::toLower(clsC);
+    std::string retNameC;
+    for (const auto& [kC, sC] : symTab_.moduleScope()->symbols()) {
+        if (sC->lowerName != memLowerC) continue;
+        if (sC->kind != SymbolKind::Function
+            && sC->kind != SymbolKind::PropertyGet) continue;
+        const bool mC = sC->isExternal
+            ? Symbol::toLower(sC->sourceModule) == clsLowerC
+            : (isClassModule_
+               && Symbol::toLower(moduleName_) == clsLowerC);
+        if (mC && !sC->variableTypeName.empty()) {
+            retNameC = sC->variableTypeName;
+            break;
+        }
+    }
+    if (retNameC.empty()) {
+        for (const auto& [kC, sC] : symTab_.moduleScope()->symbols()) {
+            if (sC->kind != SymbolKind::Class) continue;
+            const bool mC = sC->isExternal
+                ? Symbol::toLower(sC->sourceModule) == clsLowerC
+                : (isClassModule_
+                   && Symbol::toLower(moduleName_) == clsLowerC);
+            if (!mC) continue;
+            auto itR = sC->P().memberReturnTypes.find(memLowerC);
+            if (itR != sC->P().memberReturnTypes.end())
+                retNameC = itR->second;
+            break;
+        }
+    }
+    if (retNameC.empty()) return "";
+    Symbol* udtC = lookupTypeSymbol(retNameC);
+    if (udtC && udtC->kind == SymbolKind::UserDefinedType)
+        return "vb6_type_" + cIdent(retNameC);
+    return "";
+}
+
 // Fix 037: 递归推断表达式的 UDT C 类型标识符 (如 "vb6_type_UcsBuffer").
 // 支持 IdentifierExpr (knownUdtVars_ 直查) 和 MemberAccessExpr (嵌套 UDT 字段递归).
 // 返回空串表示非 UDT 表达式.
@@ -591,6 +866,21 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 && lower == Symbol::toLower(currentProc_->name)) {
                 return currentReturnCType_;
             }
+            // §56.38 F2: 裸名**零参调用不写括号** (`GUID_NULL` / `m_FillOutline.GetPathBoundariesF`
+            // 的实参位) 在 AST 里就是 IdentifierExpr —— 下面 IndexOrCallExpr 那条 (§56.30)
+            // 走不到, 于是外层按非 UDT 落 `(intptr_t)(vb6_type_X)` 兜底 (WIC.c 415/432 的
+            // C2440)。判据与那条同一张表: 模块作用域里的 Function/PropertyGet、无参、返回
+            // 类型能解析成工程 UDT。VB6 里零参调用本来就必须无参, 所以这条不会误伤带参函数。
+            if (const Symbol* fnSymF2 = symTab_.lookupModule(id.name)) {
+                if ((fnSymF2->kind == SymbolKind::Function
+                     || fnSymF2->kind == SymbolKind::PropertyGet)
+                    && fnSymF2->P().params.empty()
+                    && !fnSymF2->variableTypeName.empty()) {
+                    const Symbol* udtSymF2 = lookupTypeSymbol(fnSymF2->variableTypeName);
+                    if (udtSymF2 && udtSymF2->kind == SymbolKind::UserDefinedType)
+                        return "vb6_type_" + cIdent(fnSymF2->variableTypeName);
+                }
+            }
             return "";
         }
         // Fix 081i: IndexOrCallExpr — UDT数组元素访问 arr(idx).field
@@ -606,7 +896,7 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 // semantic_analyzer_decl 已把返回类型名写进 variableTypeName (与变量同一格)。
                 Symbol* fnSym = symTab_.lookupModule(id.name);
                 if (fnSym && fnSym->kind == SymbolKind::Function && !fnSym->variableTypeName.empty()) {
-                    Symbol* udtSym = symTab_.lookupModule(fnSym->variableTypeName);
+                    Symbol* udtSym = lookupTypeSymbol(fnSym->variableTypeName);
                     if (udtSym && udtSym->kind == SymbolKind::UserDefinedType)
                         return "vb6_type_" + cIdent(fnSym->variableTypeName);
                 }
@@ -628,6 +918,35 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
                 std::string elemUdt = inferUdtTypeOfExpr(*call.callee);
                 if (!elemUdt.empty()) return elemUdt;
             }
+            // C2440 §56.27: `Mod.Fn(...)` —— 限定符是标准模块名、Fn 是返回工程 UDT 的
+            // Function。上面 804 那条只认裸名 callee, 于是
+            // `c_add(b(j), ComplexNumbers.c_mul(a(j), b(j)))` 的**第二枚实参**落
+            // intptr_t 兜底 ⇒ `(intptr_t)(struct)` C2440 (PhotoDemon
+            // Filters_Area.c 3673…、FormDroste.c 1044…、Drawing.c 1248/1378)。
+            // 与 G3/§43 的 findModuleQualifiedFunction 同一张表、同一匹配口径。
+            if (call.callee && call.callee->kind == ASTNodeKind::MemberAccessExpr) {
+                const Symbol* fnSymQ = findModuleQualifiedFunction(*call.callee);
+                if (fnSymQ && !fnSymQ->variableTypeName.empty()) {
+                    Symbol* udtSymQ = lookupTypeSymbol(fnSymQ->variableTypeName);
+                    if (udtSymQ && udtSymQ->kind == SymbolKind::UserDefinedType)
+                        return "vb6_type_" + cIdent(fnSymQ->variableTypeName);
+                }
+            }
+            // C2440 §56.30: `obj.Method()` 返回工程 UDT 作 ByRef 实参 ——
+            // `m_BrushFill.SetBoundaryRect m_PolylineShape.GetPathBoundariesF()`
+            // (pdPSPShape `RectF`)。§56.27 那条只认 `Mod.Fn`; 类方法返回的 UDT
+            // 走类成员那两张表 (Function 符号的 variableTypeName / Class 符号的
+            // memberReturnTypes)。推断落空 ⇒ intptr_t 兜底 `(intptr_t)(struct)`
+            // (pdPSPShape.c 483/506、pdCompositor.c、WIC.c、pdPalette.c 一族)。
+            if (call.callee && call.callee->kind == ASTNodeKind::MemberAccessExpr) {
+                auto& maC = static_cast<const MemberAccessExpr&>(*call.callee);
+                const std::string clsC = maC.object
+                    ? inferClassTypeOfExpr(*maC.object) : std::string();
+                if (!clsC.empty()) {
+                    const std::string udtC = udtReturnOfClassMember(clsC, maC.memberName);
+                    if (!udtC.empty()) return udtC;
+                }
+            }
             return "";
         }
         case ASTNodeKind::MemberAccessExpr: {
@@ -635,25 +954,66 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
             if (!ma.object) return "";
             // 递归推断父对象的 UDT 类型
             std::string parentUdtCType = inferUdtTypeOfExpr(*ma.object);
-            if (parentUdtCType.empty()) return "";
             // parentUdtCType 形如 "vb6_type_UcsBuffer", 剥前缀得到 UDT 名
             const std::string prefix = "vb6_type_";
-            if (parentUdtCType.size() <= prefix.size()
-                || parentUdtCType.compare(0, prefix.size(), prefix) != 0) return "";
-            std::string udtName = parentUdtCType.substr(prefix.size());
-            Symbol* udtSym = symTab_.lookupModule(udtName);
-            if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return "";
-            std::string memLower = Symbol::toLower(ma.memberName);
-            for (auto& mi : udtSym->udtMembers) {
-                if (Symbol::toLower(mi.name) == memLower) {
-                    // 若该成员本身是 UDT (typeRefName 非空且能查到 UserDefinedType 符号)
-                    if (!mi.typeRefName.empty()) {
-                        Symbol* refSym = symTab_.lookupModule(mi.typeRefName);
-                        if (refSym && refSym->kind == SymbolKind::UserDefinedType) {
-                            return "vb6_type_" + cIdent(mi.typeRefName);
+            if (!parentUdtCType.empty()
+                && parentUdtCType.size() > prefix.size()
+                && parentUdtCType.compare(0, prefix.size(), prefix) == 0) {
+                std::string udtName = parentUdtCType.substr(prefix.size());
+                Symbol* udtSym = lookupTypeSymbol(udtName);
+                if (udtSym && udtSym->kind == SymbolKind::UserDefinedType) {
+                    std::string memLower = Symbol::toLower(ma.memberName);
+                    for (auto& mi : udtSym->udtMembers) {
+                        if (Symbol::toLower(mi.name) == memLower) {
+                            // 若该成员本身是 UDT (typeRefName 非空且能查到 UserDefinedType 符号)
+                            if (!mi.typeRefName.empty()) {
+                                Symbol* refSym = lookupTypeSymbol(mi.typeRefName);
+                                if (refSym && refSym->kind == SymbolKind::UserDefinedType) {
+                                    return "vb6_type_" + cIdent(mi.typeRefName);
+                                }
+                            }
+                            return "";  // 成员是标量/数组, 不是嵌套 UDT
                         }
                     }
-                    return "";  // 成员是标量/数组, 不是嵌套 UDT
+                }
+            }
+            // 账 §56.40: 工程类的成员若是 **UDT 数组**, 这一格以前答空 ——
+            // 父对象不是 UDT 变量 (它是类实例), 上面那条递归自然落空; 于是
+            // `me->m_Entries(0).dItem` (UDT 元素 + 声明为 Variant 的成员) 这一族
+            // 的**宿主类型**推不出来 ⇒ 字段那一问 (inferUdtFieldVb6Type) 够不着 ⇒
+            // 「这枚表达式是不是整只 Variant 槽」答否 ⇒ 读腿不套 vb6_VariantToString
+            // ⇒ C2440 (PhotoDemon pdDictionary.c 239/248: dItem As Variant 读进
+            // String 变量)。答案由 resolveMemberArrayDecl 给 —— 分配侧与访问侧同档
+            // (账 #305 §B154), 不另开第二张表。
+            if (ma.object) {
+                const std::string cls476 = inferClassTypeOfExpr(*ma.object);
+                if (!cls476.empty()) {
+                    MemberArrayDecl mad476;
+                    if (resolveMemberArrayDecl(std::string(), cls476, ma.memberName, mad476)
+                        && mad476.isUdt && !mad476.elemCType.empty()) {
+                        return mad476.elemCType;
+                    }
+                }
+            }
+            // §56.38 F2: 上面那条只认"父对象是 UDT 的字段"。`obj.Member` 这种
+            // **零参调用不写括号**的写法（VB6 合法）在 AST 里也是 MemberAccessExpr，
+            // Member 是返回工程 UDT 的 Function/PropertyGet ⇒ 旧路径答空 ⇒
+            // With 目标落 `(void*)` + ComGetProp（Drawing.c 1248/1378）、ByRef UDT
+            // 实参落 `(intptr_t)(struct)`（Tools_Crop/Tools_Fill 一族）。判据与
+            // IndexOrCallExpr 那条 (§56.30) 同一枚 udtReturnOfClassMember。
+            {
+                const std::string clsF2 = inferClassTypeOfExpr(*ma.object);
+                if (!clsF2.empty()) {
+                    const std::string udtF2 = udtReturnOfClassMember(clsF2, ma.memberName);
+                    if (!udtF2.empty()) return udtF2;
+                }
+            }
+            // `Mod.Fn` 形态（限定符是标准模块名）：与 §56.27 / G3 同一张表。
+            if (const Symbol* fnQF2 = findModuleQualifiedFunction(expr)) {
+                if (!fnQF2->variableTypeName.empty()) {
+                    const Symbol* udtQF2 = lookupTypeSymbol(fnQF2->variableTypeName);
+                    if (udtQF2 && udtQF2->kind == SymbolKind::UserDefinedType)
+                        return "vb6_type_" + cIdent(fnQF2->variableTypeName);
                 }
             }
             return "";
@@ -680,14 +1040,14 @@ std::string CCodeGen::inferUdtTypeOfExpr(const ASTNode& expr) const {
             if (parentUdtCType.size() <= prefix.size()
                 || parentUdtCType.compare(0, prefix.size(), prefix) != 0) return "";
             std::string udtName = parentUdtCType.substr(prefix.size());
-            Symbol* udtSym = symTab_.lookupModule(udtName);
+            Symbol* udtSym = lookupTypeSymbol(udtName);
             if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return "";
             auto& wm = static_cast<const WithMemberExpr&>(expr);
             std::string memLower = Symbol::toLower(wm.memberName);
             for (auto& mi : udtSym->udtMembers) {
                 if (Symbol::toLower(mi.name) == memLower) {
                     if (!mi.typeRefName.empty()) {
-                        Symbol* refSym = symTab_.lookupModule(mi.typeRefName);
+                        Symbol* refSym = lookupTypeSymbol(mi.typeRefName);
                         if (refSym && refSym->kind == SymbolKind::UserDefinedType) {
                             return "vb6_type_" + cIdent(mi.typeRefName);
                         }
@@ -745,7 +1105,11 @@ Vb6Type CCodeGen::inferUdtFieldVb6Type(const ASTNode* target, bool* outIsArray) 
     if (udtCType.size() <= prefix.size() || udtCType.compare(0, prefix.size(), prefix) != 0)
         return Vb6Type::Unknown;
     std::string udtName = udtCType.substr(prefix.size());
-    Symbol* udtSym = symTab_.lookupModule(udtName);
+    // 账 #478: 类型名与变量同名时 (`Private Rect As Rect`) `lookupModule` 先命中**变量**
+    // (SymbolKind::Variable) ⇒ 整个 UDT 字段分支落空: `Rect.Left = 7 / 2` 发成裸存
+    // (C 截断得 3), 真 VB6 走取整得 4。改问 lookupTypeSymbol —— 它内含 `$ty` 回退与
+    // 按 kind 的模块/本地查找, 是同名遮蔽下唯一能拿到 UserDefinedType 的那条路。
+    Symbol* udtSym = lookupTypeSymbol(udtName);
     if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return Vb6Type::Unknown;
     std::string memLower = Symbol::toLower(memName);
     for (auto& mi : udtSym->udtMembers) {
@@ -787,6 +1151,57 @@ std::string CCodeGen::udtFixedMemberIndex(const std::string& fieldExpr,
     return out;
 }
 
+std::string CCodeGen::udtDynMemberIndex(const std::string& elemCType,
+                                        const std::string& fieldExpr,
+                                        const std::vector<ExprPtr>& args) {
+    // C3-SENTINEL(g4-udt-member-nd): UDT 动态数组成员下标的**唯一**发码出口。
+    // 秩 = 实参个数：1 = VB6_SA_AT（存量形状不许动），2/3/>=4 = VB6_SA_ND_AT2/AT3/ATN。
+    // member 站与 With 站 (含 With 类成员那一臂) 都只调这里 —— 谁再自己拼一层 VB6_SA_*，
+    // 秩就会各自演化（§38 之前正是两站各写死一维，秩 2 全落空 ⇒ C2064 + 同站 C2197）。
+    std::vector<std::string> idxs;
+    idxs.reserve(args.size());
+    for (size_t k = 0; k < args.size(); k++) {
+        if (!args[k]) continue;
+        emitExpr(*args[k]);   // ⚠ emitExpr 覆写 lastExpr_，每枚下标当场取走
+        // 秩 1 保持存量形状 (裸表达式进 VB6_SA_AT)；秩 >=2 是这一刀新开的路，按变量路
+        // 同一口径把 Variant 下标转 Long (VB6_SA_ND_AT* 的形参是 int32_t)。
+        if (args.size() == 1) idxs.push_back(std::move(lastExpr_));
+        else idxs.push_back(toLongIfVariant(std::move(lastExpr_), args[k].get()));
+    }
+    if (idxs.empty()) return fieldExpr;   // 调用方应走"整数组"那支；这里只兜底
+    if (idxs.size() == 1) {
+        return "VB6_SA_AT(" + elemCType + ", " + fieldExpr + ", " + idxs[0] + ")";
+    }
+    // 动态数组字段的 C 声明恒为 vb6_SafeArray1D*，ReDim 后可能是 ND ⇒ 与变量路同样强转。
+    const std::string ndArr = "(vb6_SafeArrayND*)" + fieldExpr;
+    if (idxs.size() == 2) {
+        return "VB6_SA_ND_AT2(" + elemCType + ", " + ndArr + ", " + idxs[0] + ", " + idxs[1] + ")";
+    }
+    if (idxs.size() == 3) {
+        return "VB6_SA_ND_AT3(" + elemCType + ", " + ndArr + ", " + idxs[0] + ", " + idxs[1]
+             + ", " + idxs[2] + ")";
+    }
+    // 秩 >=4: 秩数与**全部**下标一次交全 (与变量路 VB6_SA_ND_ATN 同形；最外层那对括号
+    // 不是装饰 —— 预处理器按顶层逗号切宏实参)。
+    return "VB6_SA_ND_ATN(" + elemCType + ", " + ndArr + ", " + std::to_string(idxs.size())
+         + ndAtnSubscriptArg(idxs);
+}
+
+// A7 收口: `VB6_SA_ND_ATN` 的下标实参 (含最外层那对括号) 的唯一拼法。变量路
+// (cgen_expr_call_prelude.inc) 与 UDT 动态成员路 (上面 udtDynMemberIndex) 都只调这里。
+// 两条路各拼一遍的后果是实测过的: 少一层括号 ⇒ cl C4002 "VB6_SA_ND_ATN 参数过多"。
+std::string CCodeGen::ndAtnSubscriptArg(const std::vector<std::string>& idxExprs) const {
+    std::string idxList;
+    for (size_t d = 0; d < idxExprs.size(); d++) {
+        if (d) idxList += ", ";
+        idxList += "(int32_t)(" + idxExprs[d] + ")";
+    }
+    // 末尾两枚右括号: 第一枚收复合字面量的外层括号, 第二枚收 VB6_SA_ND_ATN( 本身 ——
+    // 两枚都在这里出, 调用方只做字符串拼接 (归并时曾漏掉收宏的那一枚: 全语料 33 处
+    // 秩 >=4 站点少一个 ')' 而未编译, 形状门按字符串哈希当场照出)。
+    return ", ((const int32_t[]){" + idxList + "}))";
+}
+
 // <vbeclipse> <VBFlexGridDemo>: 返回左值 UDT 字段的**声明类型名** (`mi.typeRefName`)。
 // 空串 = 无声明类型 (真 Variant 槽), 非空 = 声明了具体类型 (Object/接口/类/UDT)。
 // 与 Set-RHS 装箱 guard 配套 —— VTableHandle.bas `Set VTableIPAOData.OriginalIOleIPAO = This`
@@ -818,7 +1233,7 @@ std::string CCodeGen::udtFieldTypeRefNameOfTarget(const ASTNode* target) const {
         || udtCType.compare(0, prefix.size(), prefix) != 0)
         return std::string();
     std::string udtName = udtCType.substr(prefix.size());
-    Symbol* udtSym = symTab_.lookupModule(udtName);
+    Symbol* udtSym = lookupTypeSymbol(udtName);
     if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return std::string();
     std::string memLower = Symbol::toLower(memName);
     for (auto& mi : udtSym->udtMembers) {
@@ -869,7 +1284,7 @@ std::string CCodeGen::udtFieldObjCType(const std::string& udtCType,
     if (udtCType.size() <= prefix.size() || udtCType.compare(0, prefix.size(), prefix) != 0)
         return "";
     std::string udtName = udtCType.substr(prefix.size());
-    Symbol* udtSym = symTab_.lookupModule(udtName);
+    Symbol* udtSym = lookupTypeSymbol(udtName);
     if (!udtSym || udtSym->kind != SymbolKind::UserDefinedType) return "";
     std::string memLower = Symbol::toLower(memberLower);
     for (const auto& mi : udtSym->udtMembers) {
@@ -1065,7 +1480,14 @@ std::string CCodeGen::toLongIfVariant(const std::string& cExpr, const Expr* astE
     // 参与算术/整除前必须先按 VB6 语义取值 (与 unwrapBareComCall108 同口径)。
     if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
         return "vb6_VariantToLong(vb6_VariantFromComResult(" + cExpr + "))";
-    if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToLong(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
+    // 账 §56.40: 这一问原本传 nullptr (ast 不可得), 只剩**文本那一半** ——
+    // 于是「UDT 字段声明为 Variant」「项目/类函数返回 Variant」这一族 (C 文本是
+    // VB6_SA_AT(vb6_type_X, arr, i).member / vb6_<Cls>_<Fn>(...), 不命中任何
+    // 前缀表) 一律不拆箱 ⇒ 整只 vb6_VARIANT 交给 int32_t 形参 ⇒ C2440
+    // (PhotoDemon Evaluator.c 494/514: (int32_t)(vb6_Evaluator_Eval(l))、
+    // vb6_Pow(vb6_Evaluator_Eval(l), …))。astExpr 是现成的形参, 问上它 ——
+    // isDefinitelyVariantExpr 本来就答得对 (AST 那一半是权威)。
+    if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToLong(" + cExpr + ")";
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;
@@ -1088,12 +1510,35 @@ std::string CCodeGen::toDoubleIfVariant(const std::string& cExpr, const Expr* as
     // 同上 (Fix 156 的配套): 无类型 COM 属性读参与浮点除法时先解包成数值。
     if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
         return "vb6_VariantToDouble(vb6_VariantFromComResult(" + cExpr + "))";
-    if (isVariantSlot(cExpr, nullptr)) return "vb6_VariantToDouble(" + cExpr + ")";  // P1.3: ast 不可得 (cExpr 为形参)
+    // 账 §56.40: 与上面 toLongIfVariant 同一刀 —— 问上 AST 那一半 (astExpr 是
+    // 现成形参), 不再只剩文本投影 ⇒ 「UDT 字段声明为 Variant」「函数返回
+    // Variant」这一族在浮点上下文里也拆箱 (PhotoDemon Evaluator.c 514:
+    // vb6_Pow(vb6_Evaluator_Eval(l), …) —— 两个形参都是 double)。
+    if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToDouble(" + cExpr + ")";
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         if (knownVariantVars_.count(lower)) return "vb6_VariantToDouble(" + cExpr + ")";
+    }
+    return cExpr;
+}
+
+// 账 §56.40: toLongIfVariant 的**字符串**版 (第三枚)。与前两枚同构 —— 只把提取
+// 函数换成 vb6_VariantToString (BSTR 交出的是新分配的那一份, 与 RTL 的
+// vb6_BSTR_AssignMove 配对)。
+// 消费点: Like 运算符的两个操作数 (vb6_Like(BSTR, BSTR))。此前那一路把操作数
+// **原样**递进去 ⇒ 整只 vb6_VARIANT 结构体交给 BSTR 形参 ⇒ C2440
+// (PhotoDemon Evaluator.c 474: vb6_Like(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。
+std::string CCodeGen::toStringIfVariant(const std::string& cExpr, const Expr* astExpr) {
+    if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
+        return "vb6_VariantToString(vb6_VariantFromComResult(" + cExpr + "))";
+    if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToString(" + cExpr + ")";
+    if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
+        auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
+        std::string lower = ident.name;
+        std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (knownVariantVars_.count(lower)) return "vb6_VariantToString(" + cExpr + ")";
     }
     return cExpr;
 }

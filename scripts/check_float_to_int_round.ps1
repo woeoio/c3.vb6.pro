@@ -8,7 +8,9 @@
 #
 # 规则 (改坏了会红, 不是装饰):
 #   S1  取整出口只有一枚: vb6_FltToLng 在 src/rtl 里恰好定义一次，在 vb6rtl_builtin.h 里声明一次
-#   S2  那份 round() 也只许有一处: `(int64_t)round(` 在 src/rtl 里恰好 1 次，且住在 vb6_FltToLng 体内
+#   S2  半值取偶那一位也只许有一处: `((int64_t)f & 1) == 0` 在 src/rtl 里恰好 1 次，且住在
+#       vb6_FltToLng 体内; 旧的 `(int64_t)round(` 形必须为 0 (它现在是半个答案: 半值向外)。
+#       (Fix 431 把这里从 round() 改成 floor + 奇偶判定 —— 银行家舍入, 见 vb6rtl_conv.c 那条)
 #       (改前 vb6_CInt / vb6_CLng 各抄了一遍 —— 那正是"两个答案"的另一半)
 #   S3  显式转换与隐式赋值同源: vb6_CInt / vb6_CLng 的体内必须调 vb6_FltToLng (两处)
 #   S4  发码侧浮点档齐: narrowCheckAssign 里那一道取整分支必须认 Single / Double / Currency / Date 四档
@@ -93,22 +95,32 @@ if (@([regex]::Matches($hdrText, 'int64_t vb6_FltToLng\(double x\);')).Count -ne
     $bad += "S1 vb6_FltToLng is not declared exactly once in vb6rtl_builtin.h"
 }
 
-# ---- S2: round() 那一处只住在 helper 体内 ----
+# ---- S2: 半值取偶那一位只住在 helper 体内；旧的 round() 形不许回潮 ----
+$evenTag = '\(\(int64_t\)\s*f\s*&\s*1\)\s*==\s*0'
+$evenSites = @()
+$evenCount = 0
 $roundSites = @()
 $roundCount = 0
 foreach ($f in Get-SrcFiles $rtlDir) {
-    $n = @([regex]::Matches([System.IO.File]::ReadAllText($f.FullName), '\(int64_t\)\s*round\s*\(')).Count
-    if ($n -gt 0) { $roundSites += ($f.Name + "=" + $n); $roundCount += $n }
+    $t = [System.IO.File]::ReadAllText($f.FullName)
+    $n = @([regex]::Matches($t, $evenTag)).Count
+    if ($n -gt 0) { $evenSites += ($f.Name + "=" + $n); $evenCount += $n }
+    $r = @([regex]::Matches($t, '\(int64_t\)\s*round\s*\(')).Count
+    if ($r -gt 0) { $roundSites += ($f.Name + "=" + $r); $roundCount += $r }
 }
-if ($roundCount -ne 1) {
-    $bad += ("S2 (int64_t)round( sites in src/rtl = " + $roundCount + " (" + ($roundSites -join ",") +
+if ($evenCount -ne 1) {
+    $bad += ("S2 half-even tie-break sites in src/rtl = " + $evenCount + " (" + ($evenSites -join ",") +
              ", expected 1 -- the helper body; a second copy is the two-answers bug)")
+}
+if ($roundCount -ne 0) {
+    $bad += ("S2 (int64_t)round( sites in src/rtl = " + $roundCount + " (" + ($roundSites -join ",") +
+             ", expected 0 -- half-away-from-zero is the other answer Fix 431 removed)")
 }
 $mHelp = [regex]::Match($convText, 'int64_t\s+vb6_FltToLng\s*\([^)]*\)\s*\{[\s\S]*?\}')
 if (-not $mHelp.Success) {
     $bad += "S2 helper body not found in vb6rtl_conv.c"
-} elseif (@([regex]::Matches($mHelp.Value, '\(int64_t\)\s*round\s*\(')).Count -ne 1) {
-    $bad += "S2 the one remaining (int64_t)round( is not inside vb6_FltToLng's body"
+} elseif (@([regex]::Matches($mHelp.Value, $evenTag)).Count -ne 1) {
+    $bad += "S2 the one half-even tie-break is not inside vb6_FltToLng's body"
 }
 
 # ---- S3: CLng / CInt 同源 ----

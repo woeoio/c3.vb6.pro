@@ -259,7 +259,9 @@ std::unique_ptr<OptionStmt> Parser::parseOption() {
         if (match(TokenKind::Text)) {
             return std::make_unique<OptionStmt>(loc, OptionKind::CompareText);
         }
-        if (match(TokenKind::Binary2)) {
+        // 词法里 "binary" 一律归 TokenKind::Binary (Open ... For Binary 也用它),
+        // Option Compare 这里两种形态都接。
+        if (match(TokenKind::Binary2) || match(TokenKind::Binary)) {
             return std::make_unique<OptionStmt>(loc, OptionKind::CompareBinary);
         }
         // Option Compare 无后续 → 报错

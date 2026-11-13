@@ -147,7 +147,10 @@
     if (lower == "vbformfeed")     { lastExpr_ = "vb6_BSTR_FromStr(L\"\\f\")"; return; }
     if (lower == "vbverticaltab")  { lastExpr_ = "vb6_BSTR_FromStr(L\"\\v\")"; return; }
     if (lower == "vbnewline")      { lastExpr_ = "vb6_BSTR_FromStr(L\"\\r\\n\")"; return; }
-    if (lower == "vbnullstring")   { lastExpr_ = "vb6_BSTR_Empty()"; return; }
+    // vbNullString 是**空指针** BSTR (不是零长 BSTR): StrPtr(vbNullString)=0,
+    // 而 StrPtr("")!=0 —— 与 vb6rtl_compat.c 的 vb6_StrPtr 口径配套,
+    // 也是 defaultValue(String) 改发 NULL 的同一刀 (BalloonTooltips 家族)。
+    if (lower == "vbnullstring")   { lastExpr_ = "NULL"; return; }
     // vbempty is VarType constant 0, NOT vb6_VariantEmpty() — fixed in 010q
     if (lower == "vbnothing")      { lastExpr_ = "NULL"; return; }
     if (lower == "vbtrue")         { lastExpr_ = "(-1)"; return; }
@@ -220,7 +223,7 @@
 
     // ByRef参数: 最优先检查 (通过currentProc_->params, 不依赖符号表作用域)
     if (currentProc_) {
-        for (auto& param : currentProc_->params) {
+        for (auto& param : currentProc_->P().params) {
             if (Symbol::toLower(param.name) == lower) {
                 if (param.isParamArray) {
                     // P14.1.5: ParamArray is SAFEARRAY*, no dereference needed

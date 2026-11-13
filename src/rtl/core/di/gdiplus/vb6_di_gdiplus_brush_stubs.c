@@ -55,6 +55,20 @@ intptr_t __stdcall vb6_di_GdipCreateLineBrushFromRectWithAngleI(void* mRect, int
     return fn(mRect, mColor1, mColor2, mAngle, mIsAngleScalable, mWrapMode, mLineGradient);
 }
 
+/* GdipCreateLineBrushFromRectI (ucSlider Proyecto1.vbp) */
+intptr_t __stdcall vb6_di_GdipCreateLineBrushFromRectI(void* mRect, intptr_t mColor1, intptr_t mColor2, int32_t mMode, int32_t mWrapMode, int32_t* mLineGradient) {
+    intptr_t (WINAPI *fn)(void*, intptr_t, intptr_t, int32_t, int32_t, int32_t*) = (intptr_t (WINAPI *)(void*, intptr_t, intptr_t, int32_t, int32_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateLineBrushFromRectI");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mRect, mColor1, mColor2, mMode, mWrapMode, mLineGradient);
+}
+
+/* GdipSetPathGradientCenterColor (ucSlider Proyecto1.vbp) */
+intptr_t __stdcall vb6_di_GdipSetPathGradientCenterColor(intptr_t mBrush, intptr_t mColors) {
+    intptr_t (WINAPI *fn)(intptr_t, intptr_t) = (intptr_t (WINAPI *)(intptr_t, intptr_t))vb6_di_gdiplus_proc("GdipSetPathGradientCenterColor");
+    if (fn == NULL) { return (intptr_t)2; /* GpStatus InvalidParameter */ }
+    return fn(mBrush, mColors);
+}
+
 /* GdipCreateLineBrushFromRect */
 intptr_t __stdcall vb6_di_GdipCreateLineBrushFromRect(void* rect, intptr_t color1, intptr_t color2, intptr_t Mode, intptr_t wrapMode, int32_t* lineGradient) {
     intptr_t (WINAPI *fn)(void*, intptr_t, intptr_t, intptr_t, intptr_t, int32_t*) = (intptr_t (WINAPI *)(void*, intptr_t, intptr_t, intptr_t, intptr_t, int32_t*))vb6_di_gdiplus_proc("GdipCreateLineBrushFromRect");

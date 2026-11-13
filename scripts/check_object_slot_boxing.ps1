@@ -80,10 +80,20 @@
 #       修法两半: ① 读侧否决住在 inferClassTypeOfExpr 的标识符那一支, 且必须排在**按名的表**与#       符号表退路之前 (只挡表治不了折叠那一形 —— 表落空后那条退路会认下同名的模块级变量);#       ② 形参遮蔽那一站把表里那条 erase 掉 (治成员读那一形, 形状照仓里现成的 UDT 形参那一格)。
 #       ②要有底: 模块级那一档登记同步进 moduleClassVars_ 快照, 每张过程入口恢复一份 —— 少了这一句,
 #       被擦掉的名字在**后面**的过程里也一起没了 (P5 那枚模块级类变量的原生字段读就是这一条的针)。
-#       钉死: procObjectFormals_ 的 insert/clear/count = 3/3/1; 快照写者 6 + 恢复 3;
+#       钉死: procObjectFormals_ 的 insert/clear = 3/3; 快照写者 6 + 恢复 3;
 #       `knownClassVars_.erase(pLower)` 恰好 6 = UDT 形参 3 + Object 形参 3 (这张表的遮蔽站点只许这两族);
 #       否决那一行必须排在 knownClassVars_.find 与 symTab_.lookup(id.name) 之前; 夹具 + 三枚发码针
 #       + 两架构真跑都在 run_tests.ps1 里。
+#       ⚠ count 那一问在 2026-11-12 改钉 (第五十六刀): 原来钉的是 `procObjectFormals_.count` 的
+#       **总出现数 = 1** —— 那一问量的是同一个字符串, 量不到「否决」这个动作。2026-11-10 (aa715a0d)
+#       与 2026-11-11 (403f43d9) 两刀各加了一位**正向读者** (问「这一枚名字是不是 Object 形参」,
+#       用来判晚绑定接收者 / 跨模块同名成员借表), 它们问的是**同一张表**、不是**否决** ⇒ 总数 1→3,
+#       判据红。那一钉的真病灶是「否决只许有一处且排在两条退路之前」, 于是拆成两排:
+#         ① **否决点**: `if (procObjectFormals_.count(lower)) return "";` 恰好 1, 住在 cgen_util_classtype.cpp;
+#         ② **正向读者**: 恰好 2, 逐文件钉住 = cgen_setlet_set_prop.inc (晚绑定接收者那一问)
+#            + cgen_expr_call_callee_params.inc (跨模块同名成员借表那一问) —— 读者名单是闭的;
+#         ③ 总数 = ①+② (多出第三处读者立刻红, 不许悄悄多出)。
+#       钉法照 §56.38 A7 先例: 不降级成「至少 N 处」, 只把「总数」换成「总数 + 逐文件住处」。
 #
 # B12 「一枚工程类实例**进槽**该交什么」两臂归一 (§B216, 第一百一十九刀):
 #       行内 New 那一臂原来在 Set 站点里手抄文本判据 + 自己拼拥有型包器, 变量那一臂走唯一发码处 ——
@@ -127,6 +137,21 @@ function Count-InFiles([string]$dirRel, [string[]]$exts, [string]$pattern, [stri
             if ($t.StartsWith("//") -or $t.StartsWith("*")) { continue }
             $n += @([regex]::Matches($line, $pattern)).Count
         }
+    }
+    return $n
+}
+
+# 只数**一份文件**里代码行上的出现 (同上那套注释过滤)。用于「按文件钉住某一枚符号的
+# 读者」—— 计数一位 + 住处一位 = 那枚符号的读者名单是**闭**的 (§56.38 A7 先例:
+# 只钉总数会漏掉「少一处、多一处但总数不变」)。
+function Count-InFile([string]$rel, [string]$pattern) {
+    $p = Join-Path $root $rel
+    if (-not (Test-Path -LiteralPath $p)) { $script:bad += ("missing file " + $rel); return 0 }
+    $n = 0
+    foreach ($line in [System.IO.File]::ReadAllText($p) -split "`r?`n") {
+        $t = $line.TrimStart()
+        if ($t.StartsWith("//") -or $t.StartsWith("*")) { continue }
+        $n += @([regex]::Matches($line, $pattern)).Count
     }
     return $n
 }
@@ -366,12 +391,33 @@ $ctRel11 = "src\backend\cgen_util_classtype.cpp"
 $nFormalIns = Count-InFiles "src\backend" $srcExts "procObjectFormals_\.insert"
 $nFormalClr = Count-InFiles "src\backend" $srcExts "procObjectFormals_\.clear\(\)"
 $nFormalAsk = Count-InFiles "src\backend" $srcExts "procObjectFormals_\.count"
+# ⚠ 这一问的钉子原来只有「总数 = 1」，而总数这一问量的是**同一个字符串**在代码行上出现几次，
+#   它量不到「否决」这个动作本身。2026-11-10 (aa715a0d) 与 2026-11-11 (403f43d9) 两刀各自
+#   加了一位**正向读者** (问「这一枚名字是不是 Object 形参」, 用来判晚绑定接收者 / 跨模块
+#   同名成员借表) —— 那两处问的是**同一张表**, 不是**否决**, 于是总数从 1 涨到 3, 判据红。
+#   真病灶 (#408) 是「**否决**只许有一处且必须排在两条退路之前」, 那一条由下面这排
+#   「否决点」单独钉住; 正向读者另立一排, **逐文件钉住** (§56.38 A7 先例: 只钉总数会漏掉
+#   「少一处、多一处但总数不变」)。两排加起来 = 总数, 一枚不多一枚不少。
+$nFormalVeto = Count-InFiles "src\backend" $srcExts 'if\s*\(\s*procObjectFormals_\.count\(\s*lower\s*\)\s*\)\s*return\s+""\s*;'
+$nFormalVetoFile = Count-InFile $ctRel11 'if\s*\(\s*procObjectFormals_\.count\(\s*lower\s*\)\s*\)\s*return\s+""\s*;'
 $nSnapWrite = Count-InFiles "src\backend" $srcExts "moduleClassVars_\["
 $nSnapRestore = Count-InFiles "src\backend" $srcExts "knownClassVars_\.insert\(moduleClassVars_"
 $nShadowErase = Count-InFiles "src\backend" $srcExts "knownClassVars_\.erase\(pLower\)"
 if ($nFormalIns -ne 3) { $script:bad += ("B11 procObjectFormals_.insert = $nFormalIns (要 3: 三张形参循环各一处)") }
 if ($nFormalClr -ne 3) { $script:bad += ("B11 procObjectFormals_.clear = $nFormalClr (要 3: 每张过程入口重开一次)") }
-if ($nFormalAsk -ne 1) { $script:bad += ("B11 那一问的否决点数 = $nFormalAsk (要 1: 只许住在 inferClassTypeOfExpr)") }
+if ($nFormalVeto -ne 1 -or $nFormalVetoFile -ne 1) {
+    $script:bad += ("B11 那一问的**否决点** = $nFormalVeto (住在 inferClassTypeOfExpr 的那份 = $nFormalVetoFile) (要 1/1: 否决只许有一处 —— 多一处 = 两条退路被抢答, 少一处 = 形参作用域那两族病灶复发)")
+}
+# 正向读者 (问「这一枚名字是不是 Object 形参」, 答案取同一张表): 逐文件钉住。
+$nFormalAskTotal = Count-InFiles "src\backend" $srcExts "procObjectFormals_\.count"
+$nAskSetProp = Count-InFile "src\backend\detail\stmt\cgen_setlet_set_prop.inc" "procObjectFormals_\.count"
+$nAskCalleeParams = Count-InFile "src\backend\detail\expr\cgen_expr_call_callee_params.inc" "procObjectFormals_\.count"
+if ($nAskSetProp -ne 1 -or $nAskCalleeParams -ne 1) {
+    $script:bad += ("B11 那一问的**正向读者**住处 = cgen_setlet_set_prop.inc $nAskSetProp 处 + cgen_expr_call_callee_params.inc $nAskCalleeParams 处 (各要 1: 晚绑定接收者那一问 / 跨模块同名成员借表那一问 —— 读者名单是闭的)")
+}
+if ($nFormalAskTotal -ne ($nFormalVeto + $nAskSetProp + $nAskCalleeParams)) {
+    $script:bad += ("B11 procObjectFormals_.count 总数 = $nFormalAskTotal, 但否决 $nFormalVeto + 读者 ($nAskSetProp + $nAskCalleeParams) 对不上 —— 有一处读者没登记在册 (新读者必须进名单, 不许悄悄多出)")
+}
 if ($nSnapWrite -ne 6) { $script:bad += ("B11 快照写者 = $nSnapWrite (要 6: 模块级 Dim As 类 3 + 跨模块 2 + UserControl 子控件 1)") }
 if ($nSnapRestore -ne 3) { $script:bad += ("B11 过程入口恢复快照 = $nSnapRestore (要 3: 少了它, 形参擦的那条会在后面的过程一起没)") }
 if ($nShadowErase -ne 6) { $script:bad += ("B11 knownClassVars_.erase(pLower) = $nShadowErase (要 6: UDT 形参 3 + Object 形参 3; 这张表的遮蔽站点不许多)") }

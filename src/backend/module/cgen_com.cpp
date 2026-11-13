@@ -28,6 +28,15 @@ static std::string commentStripBlockComments(const std::string& s) {
 
 // --- cgen_com.cpp: COM类工厂 + 接口vtable + RaiseEvent + 事件接收器 ---
 
+// 账 §56.48: 「这个类声明过事件吗」只有**这一份**答案 —— 类工厂体 (出厂写 `me->events = NULL`)
+// 与出厂那一腿 (放走事件汇) 共用它, 不各答一遍。
+static bool moduleDeclaresEvents(Module& module) {
+    for (auto& decl : module.declarations) {
+        if (decl && decl->kind == ASTNodeKind::EventDecl) return true;
+    }
+    return false;
+}
+
 void CCodeGen::emitClassFactory(Module& module) {
     std::string clsStruct = "vb6_cls_" + cIdent(moduleName_);  // Fix 013: VB_Name
 
@@ -188,12 +197,10 @@ void CCodeGen::emitClassFactory(Module& module) {
     }
 
     // P6.5: 初始化事件接收器指针为NULL
-    bool hasEvents = false;
-    for (auto& decl : module.declarations) {
-        if (decl->kind == ASTNodeKind::EventDecl) { hasEvents = true; break; }
-    }
+    bool hasEvents = moduleDeclaresEvents(module);
     if (hasEvents) {
         c_.emitLine("me->events = NULL;  /* P6.5: no event sink initially */");
+        c_.emitLine("me->eventsOwned = NULL;  /* 账 §56.48: 归本实例所有那枚汇 (堆上) */");
     }
 
     // tB Inherits (B09): 祖先的 Class_Initialize **先**跑 (链上根→叶), 再跑自家那份。
@@ -318,6 +325,14 @@ void CCodeGen::emitClassFactory(Module& module) {
         }
     }
 
+    // 账 §56.48: **归本实例所有**的那枚汇 (类成员 WithEvents 那一路, 堆上) 出厂时放手。
+    // 放的是 `eventsOwned` 而不是 `events` —— UC (.ctl) 那一路把 `events` 指向**函数内
+    // static 汇** (别人的内存), 对它 vb6_Free 就是 free 掉一块静态 ⇒ 实测 0xC0000374 堆损坏。
+    // `eventsOwned` 只有类成员那一路会写 ⇒ 放手的对象唯一。
+    if (moduleDeclaresEvents(module)) {
+        c_.emitLine("if (me->eventsOwned) { vb6_Free(me->eventsOwned); me->eventsOwned = NULL; }  /* 账 §56.48: 事件汇出厂放手 */");
+    }
+
     // 账 #481 = 第一百八十二刀: 登记腿的配对另一半 —— 表是「裸实例 → desc」的弱映射,
     // 登记了就必须在实例真被拆掉之前撤下来。否则地址留在表里 (地址复用后按旧指针查会答旧类),
     // 且登记计数只增不减 ⇒ 累计建过 VB6_PROJCLASS_MAX 枚实例之后新实例一个都登记不进去。
@@ -387,10 +402,64 @@ void CCodeGen::emitClassFactory(Module& module) {
 // 先放旧会让 `Set a = a` 在自己还没换掉之前把自己拆掉。
 // rhsTransferred = 右侧那枚引用**已经带着对价交给这一格了**: 两种成因 (`New <类>` 与工程内过程
 // 的调用, 见 rhsTransfersProjectRef) ⇒ 移交、不 claim。
+// <ucSlider 双击崩溃>: 右值是**设计期放在窗体上的工程内 UserControl** 时, 它在生成 C 里
+// 没有同名实例变量, 只有宿主句柄槽 (`vb6_hwnd_<名>`) 或控件数组元素
+// (`vb6_CtrlArr_GetAt(&vb6_arr_<名>, idx)`)。这两种形态交回的都是 HWND, 而
+// vb6_ComObject_UnboxVb6Instance 对 HWND 是「原样交回」⇒ 下游 `vb6_cls_X_AddRef(HWND)`
+// 把窗口内存当引用计数写 = 0xC0000005 (ucSliderDemo 双击后鼠标移入控件即崩, 见 handoff)。
+// 按控件注册表 (knownUserControlCtrlVars_ = 控件名 → .ctl 自己的 VB_Name) 认名字, 认出来
+// 才换成 `vb6_UC_InstanceOf(句柄)` —— 与 ucInstanceThisPtrExpr 同一口径。
+static bool isUcCtrlHwndExprForClass(
+        const std::string& valueExpr, const std::string& className,
+        const std::unordered_map<std::string, std::string>& ucCtrlVars) {
+    if (valueExpr.empty() || ucCtrlVars.empty()) return false;
+    std::string core = valueExpr;
+    const size_t cm = core.find("  /*");
+    if (cm != std::string::npos) core = core.substr(0, cm);
+    const std::string hwndPfx = "vb6_hwnd_";
+    const std::string arrPfx = "vb6_CtrlArr_GetAt(&vb6_arr_";
+    std::string ctrlName;
+    if (core.compare(0, hwndPfx.size(), hwndPfx) == 0) {
+        ctrlName = core.substr(hwndPfx.size());
+    } else if (core.compare(0, arrPfx.size(), arrPfx) == 0) {
+        const size_t e = core.find_first_of(",)", arrPfx.size());
+        if (e == std::string::npos) return false;
+        ctrlName = core.substr(arrPfx.size(), e - arrPfx.size());
+    } else {
+        return false;
+    }
+    auto it = ucCtrlVars.find(Symbol::toLower(ctrlName));
+    if (it == ucCtrlVars.end()) return false;
+    return className.empty() || Symbol::toLower(it->second) == Symbol::toLower(className);
+}
+
 void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string& className,
                                    const std::string& valueExpr, bool rhsTransferred, bool outSlot,
                                    const std::string& slotElemType) {
     const std::string clsStruct = "vb6_cls_" + cIdent(className);
+    // 账 <ucTreeView 展开链>: 「class 槽收的是实例还是包装器」只在**这一位主人**里答。
+    // COM 交回来的工程类对象是 `vb6_ComObject` **包装器** (vb6_ComCallObject /
+    // vb6_ComGetObjectProp / Collection.Item 都交这一枚), 而 `vb6_cls_X*` 槽按字段读 ——
+    // 包装器当实例用 = 把它的 vtable 当第一个字段读。实测 tests/ucTreeView Form2:
+    //   `Set N = N.Childs(i)` 发成裸 `N = vb6_ComCallObject(...)` ⇒ 随后 `N.Childs.Count`
+    //   读成 0 (包装器 x86 偏移 12 才是实例), 三级路径一次都不往下走;
+    //   `Set x = r.Childs(1)` 后 `x.Text` 读出 0x44004300 一类的垃圾, Len() = 1140851328,
+    //   过程出口 `vb6_cls_Node_Release(包装器)` 直接 0xC0000374 (heap corruption)。
+    // 实参那一站早就做了这件事 (cgen_expr_call_arg_emit.inc 的 腿⑤ IsBoxed 块), 槽这一站
+    // 一直漏着 —— 两处同一问句, 这里不再手抄 IsBoxed/GetInstance 两行: UnboxVb6Instance
+    // 自带 IsWindow/可读/vtable 身份三闸, 不是包装器的值 (裸实例 / 外部 IDispatch / HWND)
+    // 原样交回, 所以对 `New`、裸类变量、rhsTransferred 各档都无害。
+    // 唯一的例外是**工程内 UserControl 的宿主句柄** (见下面 isUcCtrlHwndExprForClass):
+    // 它既不是包装器也不是实例, 必须先把句柄反查成实例再进 AddRef。
+    const bool ucHwndRhs = isUcCtrlHwndExprForClass(valueExpr, className,
+                                                   knownUserControlCtrlVars_);
+    auto slotValue = [&](const std::string& t) -> std::string {
+        if (ucHwndRhs) {
+            return "(" + t + ")vb6_ComObject_UnboxVb6Instance((void*)((" + clsStruct
+                 + "*)vb6_UC_InstanceOf(" + valueExpr + ")))";
+        }
+        return "(" + t + ")vb6_ComObject_UnboxVb6Instance((void*)(" + valueExpr + "))";
+    };
     if (outSlot) {
         // 腿②' = 写进一枚**活在本过程之外**的槽 (ByRef 出参那座桥的写回站)。这里的判断只有一条
         // 加法: 取走一枚引用。**不退旧值** —— 那种槽今天整个在计数系统外面, 退它 = 多退一次;
@@ -398,7 +467,7 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
         // 腿②': Set 出参槽
         c_.emitLine("{  /* 账 #305 (甲) 腿②': Set 出参槽 " + commentStripBlockComments(target) + " */");
         c_.indent();
-        c_.emitLine(target + " = " + valueExpr + ";");
+        c_.emitLine(target + " = " + slotValue("void*") + ";");
         if (!rhsTransferred) {
             c_.emitLine("if (" + target + ") " + clsStruct + "_AddRef(" + target + ");");
         }
@@ -415,13 +484,21 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
         // 悄悄改成 3 次：本机 VB-family 运行期对 `a(Bump())` 与 `a(Bump()+k-1)` 两形都答 1。
         const std::string addrSlot = "__clsaddr" + std::to_string(ivrefSetSeq_++);
         const std::string deref = "(*" + addrSlot + ")";
+        // 目标可以是 `VB6_SA_AT(<UDT>, arr, i)` **本身** (纯元素槽), 也可以是它后面挂一枚类字段
+        // (`…(i).Field`)。后一形里 classArraySlotElemType 只读得到宏的第一个实参 = **元素**档
+        // (整枚 UDT struct), 不是这一格的 C 档 —— 拿它落地址临时量, deref 出来就是整枚 struct:
+        // 实测 pdGIF `Set m_allFrames(i).frameDIB = …` 发成 `vb6_type_PD_GifFrame __clsoldN = …;
+        // if (__clsoldN) vb6_cls_pdDIB_Release(__clsoldN);` ⇒ cl C2083 + C2172 (+ C2440)。
+        // 这一格按类主人自己的 C 档 (`vb6_cls_<类>*`) 落, 元素档 `void*` / `vb6_cls_X*` 原样保留。
+        const bool elemIsUdtStruct = slotElemType.compare(0, 9, "vb6_type_") == 0;
+        const std::string addrTy = elemIsUdtStruct ? clsStruct + "*" : slotElemType;
         c_.emitLine("{  /* 账 #305 (甲) 腿" + legTag + ": Set 数组元素 " + commentStripBlockComments(target)
                     + " (地址落一次, 下标算术只算一次) */");
         c_.indent();
-        c_.emitLine(slotElemType + "* " + addrSlot + " = &(" + target + ");");
-        c_.emitLine(slotElemType + " " + oldSlot + " = " + deref + ";");
+        c_.emitLine(addrTy + "* " + addrSlot + " = &(" + target + ");");
+        c_.emitLine(addrTy + " " + oldSlot + " = " + deref + ";");
         if (!valueExpr.empty()) {
-            c_.emitLine(deref + " = " + valueExpr + ";");
+            c_.emitLine(deref + " = " + slotValue(addrTy) + ";");
             if (!rhsTransferred) {
                 c_.emitLine("if (" + deref + ") " + clsStruct + "_AddRef(" + deref + ");");
             }
@@ -437,7 +514,7 @@ void CCodeGen::emitClassSlotRefSet(const std::string& target, const std::string&
     c_.indent();
     c_.emitLine(clsStruct + "* " + oldSlot + " = " + target + ";");
     if (!valueExpr.empty()) {
-        c_.emitLine(target + " = " + valueExpr + ";");
+        c_.emitLine(target + " = " + slotValue(clsStruct + "*") + ";");
         if (!rhsTransferred) {
             c_.emitLine("if (" + target + ") " + clsStruct + "_AddRef(" + target + ");");
         }
@@ -829,8 +906,17 @@ void CCodeGen::emitClassFieldAccessors(Module& module) {
             //     指针 (Dictionary/Collection 等), 直接传出, 不做包装.
             fe.getLines.push_back("r = vb6_VariantObject((void*)me->" + fld + ");");
             fe.letLines.push_back("me->" + fld + " = (value.vt == vb6_vtDispatch) ? value.pdispVal : NULL;");
+        } else if (fvt == Vb6Type::Variant && fieldCT == "vb6_VARIANT") {
+            // (f) Variant 字段 → 深拷贝进出. 真 VB6 把 `Public key As Variant` 同样暴露成
+            //     Property Get/Let, 值语义是副本. 以前这一档落进下面的空体存根: getter 恒答
+            //     Empty, setter 丢弃写入.
+            //     实测 tests/ucTreeView: ClsTreeExplorer.OpenPath 逐级比对
+            //     `ArrIDLIST(N.Childs(i).key)`, 读回 Empty → ArrIDLIST(0) → 三级全不匹配
+            //     → "Open Cursors folder" 既不展开也不选中(只剩根节点), 对话框文本为空.
+            fe.getLines.push_back("vb6_VariantCopy(&r, &me->" + fld + ");");
+            fe.letLines.push_back("vb6_VariantAssign(&me->" + fld + ", value);");
         }
-        // 说明: 判不出可映射 C 类型的字段 (UDT / 接口值类型 / Variant / 未知外部类型)
+        // 说明: 判不出可映射 C 类型的字段 (UDT / 接口值类型 / 未知外部类型)
         // 不跳过, 而是生成**空体存根** —— getter 返回 r 的初值 (Empty), setter 忽略
         // 写入. 必须生成定义的原因: dll_entry.c 在另一个编译单元里为 publicFieldNames
         // 无条件建桥接 (那边看不到这里的类型判定), 少一个定义就是 LNK2019 (实测 96 个).

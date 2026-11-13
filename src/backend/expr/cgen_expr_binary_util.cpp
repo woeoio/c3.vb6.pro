@@ -79,6 +79,17 @@ bool CCodeGen::isScalarImplicitStr159(Vb6Type t) {
 }
 
 std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
+    // 账 #118 续: UDT 定长串字段 (`Type T: f As String * N` 的 `r.f`) 的 C 类型
+    // 是 char[N] (VB6 ABI 内联 ANSI), 进 BSTR 上下文必须换算。裸定长串变量仍是
+    // BSTR 模型 (上方 knownFixedStringLen_), 不在此列 —— 只认成员访问。
+    if (node.kind == ASTNodeKind::MemberAccessExpr
+        || node.kind == ASTNodeKind::WithMemberExpr) {
+        const std::string fsLen = fixedStrLenOfExpr(node);
+        if (!fsLen.empty()
+            && expr.compare(0, 19, "vb6_FixedStrToBSTR(") != 0) {
+            return "vb6_FixedStrToBSTR(" + expr + ", " + fsLen + ")";
+        }
+    }
     // P24-01: 后期绑定COM调用返回VARIANT*, 需解包为BSTR(必须在vb6_BSTR检查之前)
     // P24-02: Variant数组索引返回vb6_VARIANT, 需转BSTR
     if (isVariantSlotElemRead(expr)) {
@@ -115,7 +126,13 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
     // 判定改为**顶层前缀**: 只有表达式本身就是 BSTR 返回函数调用才直通 (092a 的修法)。
     if (isBstrReturningCall(expr)) return expr;
     // Fix 049a: VB6_SA_AT(BSTR, arr, idx) returns BSTR — no wrapping needed
-    if (expr.compare(0, 16, "VB6_SA_AT(BSTR,") == 0) return expr;
+    // 账 #118 续: 这里的长度曾写成 16 (字面量只有 15 个字符), 这枚守卫**从来没命中过**
+    // —— 实测 (同一台机器、同一份源码, 只改这一处) `tests/test_array.bas` 发码:
+    //   compare(0,16,…) ⇒ sha256=5edb5298… bytes=5407 (`vb6_CStr(vb6_VariantFromValue(VB6_SA_AT(…)))`)
+    //   compare(0,15,…) ⇒ sha256=dc61cfa7… bytes=5375 (裸 `VB6_SA_AT(BSTR, names, 1)`, 即期望形状)
+    // 守卫失效时 BSTR 数组元素被当 Variant 解包 ⇒ Debug.Print 打出指针而不是字符串。
+    // 长度必须与字面量逐字相同。
+    if (expr.compare(0, 15, "VB6_SA_AT(BSTR,") == 0) return expr;
     // vb6_Now() returns double (Date), NOT BSTR — removed early return
     // vb6_Now will fall through to inferExprType → Vb6Type::Date → vb6_CStrDate()
     // BSTR变量: 已知BSTR变量或者vb6_Module1_xxx 格式的BSTR

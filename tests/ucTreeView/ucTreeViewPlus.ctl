@@ -1264,21 +1264,21 @@ Private Sub UserControl_InitProperties()
 End Sub
 
 Private Sub UserControl_KeyPress(KeyAscii As Integer)
-    ' Calcular el tiempo desde la última pulsación de tecla
+    ' Calcular el tiempo desde la Ãºltima pulsaciÃ³n de tecla
     If Timer - lastKeyPressTime > searchResetTime Then
-        ' Si ha pasado más tiempo del límite, reiniciar la búsqueda
+        ' Si ha pasado mÃ¡s tiempo del lÃ­mite, reiniciar la bÃºsqueda
         searchText = ""
     End If
 
-    ' Acumular el texto de búsqueda
+    ' Acumular el texto de bÃºsqueda
     searchText = searchText & Chr(KeyAscii)
 
-    ' Actualizar el tiempo de la última pulsación
+    ' Actualizar el tiempo de la Ãºltima pulsaciÃ³n
     lastKeyPressTime = Timer
 
-    ' Buscar el siguiente ítem que coincida con el texto, desde la selección actual
+    ' Buscar el siguiente Ã­tem que coincida con el texto, desde la selecciÃ³n actual
     If Not FindNextNode(cNodes, False) Then
-        ' Si no se encuentra ningún nodo en la primera fase, buscar desde el principio
+        ' Si no se encuentra ningÃºn nodo en la primera fase, buscar desde el principio
         Call FindNextNode(cNodes, True)
     End If
     Rect.Top = lMargin
@@ -1309,7 +1309,7 @@ Private Function FindNextNode(TheNode As Node, bNext As Boolean) As Boolean
             bNext = True
         End If
 
-        ' Si el nodo está expandido, buscar en sus hijos
+        ' Si el nodo estÃ¡ expandido, buscar en sus hijos
         If N.Expanded Then
             If FindNextNode(N, bNext) Then
                 FindNextNode = True
@@ -1318,7 +1318,7 @@ Private Function FindNextNode(TheNode As Node, bNext As Boolean) As Boolean
         End If
     Next
     
-    ' Si no se encuentra ningún nodo, regresar falso
+    ' Si no se encuentra ningÃºn nodo, regresar falso
     
 End Function
 
@@ -1384,7 +1384,7 @@ Private Sub UserControl_Initialize()
 
     searchText = ""
 
-    searchResetTime = 1  ' 1 segundo para restablecer la búsqueda
+    searchResetTime = 1  ' 1 segundo para restablecer la bÃºsqueda
     lastKeyPressTime = 0
     
     Update

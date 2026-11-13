@@ -1,0 +1,6 @@
+Type=Exe
+Module=ModMain.bas; ModMain.bas
+Form=FrmCnU.frm
+Startup="Sub Main"
+ExeName32="FgzIce001.exe"
+Name="FgzIce001"

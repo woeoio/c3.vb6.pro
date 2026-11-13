@@ -6,6 +6,7 @@
 #include <sstream>
 #include <filesystem>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <string>
 #include <cstdlib>
@@ -56,32 +57,56 @@ std::string hashFile(const std::string& path) {
     return oss.str();
 }
 
-// 解析 .c 文件中的本地头文件 #include "xxx.h"，返回绝对路径列表
-// (opt3: 依赖跟踪 — 任一依赖头文件变化即触发该 .c 重编译)
-// srcDir: 生成代码目录; rtlDir: RTL 源码目录 (释放的 vb6rtl.h 等)
+// 解析 .c 及其递归包含的函数体片段中的本地 #include "xxx"，返回绝对路径列表。
+// (opt3: 依赖跟踪 — 任一依赖文本变化即触发该 .c 重编译)
+//
+// ⚠ .inc 不是头文件: 它们是**函数体内** #include 的代码片段, 例如
+// src/rtl/core/vb6forms/uc/detail/uc_hostmodel_setprop.inc 由 uc_hostmodel.c 在
+// vb6_Host_SetProp 的函数体里包含。预处理器照样整段展开 ⇒ 内容变化必须进键。
+// 只收 .h 时: 改了 .inc 而宿主 .c 没变 → 键不变 → --incremental 复用旧 obj →
+// 链进旧函数体。这是 FIX-010 前三轮 CI 红、本机却全绿的真因 (CI 带 -Incremental)。
+// 片段内还可能再 include 别的片段/头, 故按出现顺序 BFS 展开, expanded 防环;
+// incs 允许重复 (同一片段被包含两次), 与既有 .h 口径一致, 保持键的确定性。
+// srcDir: 生成代码目录; rtlDir: RTL 源码目录 (解包后 .c/.h/.inc 全部拍平在此)
 std::vector<std::string> collectLocalIncludes(const std::string& cPath, const std::string& srcDir,
                                               const std::string& rtlDir) {
     std::vector<std::string> incs;
-    std::ifstream f = ifstreamUtf8(cPath);
-    if (!f) return incs;
-    std::string line;
-    while (std::getline(f, line)) {
-        size_t hash = line.find('#');
-        if (hash == std::string::npos) continue;
-        size_t q1 = line.find('"', hash);
-        if (q1 == std::string::npos) continue;
-        size_t q2 = line.find('"', q1 + 1);
-        if (q2 == std::string::npos) continue;
-        std::string name = line.substr(q1 + 1, q2 - q1 - 1);
-        if (name.size() < 3) continue;
-        if (name.compare(name.size() - 2, 2, ".h") != 0) continue;
-        // 绝对路径: 优先 srcDir (生成代码头), 不存在则查 rtlDir (RTL 头)
+    std::vector<std::string> pending;             // 待展开的 .inc (BFS)
+    std::unordered_set<std::string> expanded;    // 已展开的 .inc, 防自包含/循环
+
+    auto resolve = [&](const std::string& name) {
         std::string p = srcDir + "/" + name;
         if (!std::filesystem::exists(utf8ToPath(p)) && !rtlDir.empty()) {
             p = rtlDir + "/" + name;
         }
-        incs.push_back(p);
-    }
+        return p;
+    };
+
+    auto scan = [&](const std::string& path) {
+        std::ifstream f = ifstreamUtf8(path);
+        if (!f) return;
+        std::string line;
+        while (std::getline(f, line)) {
+            size_t hash = line.find('#');
+            if (hash == std::string::npos) continue;
+            size_t q1 = line.find('"', hash);
+            if (q1 == std::string::npos) continue;
+            size_t q2 = line.find('"', q1 + 1);
+            if (q2 == std::string::npos) continue;
+            std::string name = line.substr(q1 + 1, q2 - q1 - 1);
+            if (name.size() < 3) continue;
+            const bool isHeader = name.compare(name.size() - 2, 2, ".h") == 0;
+            const bool isFragment = name.size() >= 4 &&
+                                    name.compare(name.size() - 4, 4, ".inc") == 0;
+            if (!isHeader && !isFragment) continue;
+            std::string p = resolve(name);
+            incs.push_back(p);
+            if (isFragment && expanded.insert(p).second) pending.push_back(p);
+        }
+    };
+
+    scan(cPath);
+    for (size_t i = 0; i < pending.size(); ++i) scan(pending[i]);
     return incs;
 }
 
@@ -236,6 +261,7 @@ bool MsvcDriver::compileAndLinkIncremental(const MsvcDriverOptions& options) {
     struct Pending { std::string src, objPath, storePath; };
     std::vector<Pending> rtlTodo, userTodo;
     int rtlHits = 0, userHits = 0;
+    int fragDeps = 0;   // 本轮纳入键的 .inc 片段数 (可断言的运行时读数, 见 tests/run_tests.ps1)
 
     for (const auto& src : options.sourceFiles) {
         std::filesystem::path sp(utf8ToPath(src));
@@ -245,7 +271,10 @@ bool MsvcDriver::compileAndLinkIncremental(const MsvcDriverOptions& options) {
         auto incs = collectLocalIncludes(src, isRtl ? std::string() : options.srcDir,
                                          options.rtlDir);
         std::string deps;
-        for (auto& inc : incs) deps += hashFile(inc);
+        for (auto& inc : incs) {
+            deps += hashFile(inc);
+            if (inc.size() >= 4 && inc.compare(inc.size() - 4, 4, ".inc") == 0) fragDeps++;
+        }
         std::string srcHash = hashFile(src);
         std::string key = srcHash.empty()
             ? std::string()
@@ -269,7 +298,8 @@ bool MsvcDriver::compileAndLinkIncremental(const MsvcDriverOptions& options) {
     // ASCII 读数: 命中面走这条 (可被断言), 中文那条留给人看
     std::cerr << "C3: OBJCACHE rtl=" << rtlHits << "/" << (rtlHits + static_cast<int>(rtlTodo.size()))
               << " user=" << userHits << "/" << (userHits + static_cast<int>(userTodo.size()))
-              << " total=" << hitCount << "/" << totalSrcs << std::endl;
+              << " total=" << hitCount << "/" << totalSrcs
+              << " frag=" << fragDeps << std::endl;
 
     if (options.verbose) {
         std::cout << "C3: 增量编译: " << hitCount << "/" << totalSrcs

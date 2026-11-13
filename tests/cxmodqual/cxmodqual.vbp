@@ -1,0 +1,4 @@
+Type=Exe
+Module=CxMod; ModCx.bas
+Module=CxUse; ModUse.bas
+Startup="CxUse"

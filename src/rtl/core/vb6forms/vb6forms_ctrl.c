@@ -165,10 +165,18 @@ int vb6_GetControlEnabled(void* hwnd) {
     return IsWindowEnabled((HWND)hwnd) ? -1 : 0;  // VB6: True=-1
 }
 
+/* UserControl 宿主: 窗口 Enabled 之外还要同步 r->enabled, 否则
+ * `UserControl.Enabled` (绘制里判禁用配色那一句) 读到的还是 -1。
+ * 见 uc_host.c::vb6_UC_SetHostEnabled。 */
+extern void vb6_UC_SetHostEnabled(void* hwnd, int enabled);
+
 void vb6_SetControlEnabled(void* hwnd, int enabled) {
-    hwnd = vb6_CtlWin(hwnd);
     if (!hwnd) return;
-    EnableWindow((HWND)hwnd, enabled ? TRUE : FALSE);
+    void* ctlWin = vb6_CtlWin(hwnd);
+    if (ctlWin) EnableWindow((HWND)ctlWin, enabled ? TRUE : FALSE);
+    /* 用**原始**参数: 无窗 UC 的槽里装的是实例指针, vb6_CtlWin 会答 NULL,
+     * 但那一枚实例记录照样要同步。 */
+    vb6_UC_SetHostEnabled(hwnd, enabled);
 }
 
 // C29-SL-l（账 #143）：VB6 的 `控件.SetFocus`。原生就一句 SetFocus(hwnd) —— 它动的是**本线程
@@ -953,6 +961,10 @@ void vb6_SetControlBackColor(void* hwnd, int color) {
     if (GetEnvironmentVariableA("C3_FORMS_TRACE", NULL, 0) > 0)
         fprintf(stderr, "[C3_F187] SetBackColor hwnd=%p color=%06X\r\n",
                 hwnd, (unsigned)color & 0xFFFFFFu);
+    // Fix <ucTreeView 五窗> 2026-11-07: AutoRedraw 控件/窗体的记忆位图是唯一绘图面,
+    // 改底色必须把那张位图重刷成新底色 (VB6 语义); 否则随后 Print 的内容与 .Image
+    // 交出去的图都停在创建时那一版 (Agenda 66 枚头像底色全 F0F0F0 的直接来源)。
+    vb6_AutoRedrawRepaintBackground(hwnd);
     InvalidateRect((HWND)hwnd, NULL, TRUE);
 }
 

@@ -5,6 +5,35 @@
     // --- COM后期绑定检测 (P6.2) + 前期绑定检测 (P6.3) + P6.4接口调用 ---
     // MemberAccessExpr为COM对象设置isComMarker_标志 + comObjExpr_/comMemberName_
     if (isComMarker_) {
+        // PD: `UserControl.Controls(name)` —— precheck 把限定写法折成
+        // `(void*)vb6_UC_Controls()` + 成员 "Item"（同裸 `Controls.Item(name)`）。
+        // 集合元素返回 Object，必须走 ComCallObject（返回 IDispatch*）而不是下面
+        // 泛 COM 方法那一格的 vb6_ComCall（返回 VARIANT*）——外层是
+        // `... Is ctlChild` 的对象比较，两边的指针档位必须一致。
+        if (comObjExpr_ == "(void*)vb6_UC_Controls()"
+            && Symbol::toLower(comMemberName_) == "item"
+            && !node.positional.empty()) {
+            std::string ucObj = comObjExpr_;
+            isComMarker_ = false;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            std::vector<std::string> ucArgs;
+            for (size_t i = 0; i < node.positional.size(); i++) {
+                std::string packFn = comPackExpr(*node.positional[i]);
+                emitExpr(*node.positional[i]);
+                { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
+                ucArgs.push_back(packArgValue(packFn, lastExpr_, node.positional[i].get()));
+            }
+            std::string ucArr = "(void*[]){";
+            for (size_t i = 0; i < ucArgs.size(); i++) {
+                if (i > 0) ucArr += ", ";
+                ucArr += ucArgs[i];
+            }
+            ucArr += "}";
+            lastExpr_ = "vb6_ComCallObject(" + ucObj + ", L\"Item\", " + ucArr
+                      + ", " + std::to_string(ucArgs.size()) + ")";
+            return;
+        }
         // 2026-09-30 (门 #233 c29sbevt): **控件的判据专用方法先落地**。
         // 位置: 必须在下面**所有**分支 (Sim 汇总那一块 / axSlotObj / Data / OLE) **之前** ——
         // 这些分支的顺序改过好几轮, 而 `StatusBar1.SimClick 1, 0` 一旦落进 axSlotObj 那条
@@ -609,7 +638,14 @@
         {
             std::string objLower = objExpr;
             std::transform(objLower.begin(), objLower.end(), objLower.begin(), ::tolower);
-            if (slotIsLegacyIfaceView(objLower) && !isEarlyBoundCom_) {
+            const bool isLegacyView454 = slotIsLegacyIfaceView(objLower);
+            // 账 #305 (R4 收口): 同一站的新式档 (薄指针 vb6_ivref_<I>*)。R4 之后可创建的空体
+            // 接口类也进 ivreg_, k177 的 `x.Twice(5)` / With 里的 `.Twice(3)` 就从值结构体
+            // 变成薄指针; 不认这一档就落 DispView/ComCall 兜底 —— 运行期 notdispatchable
+            // (编得过、读数全空)。形状仍交唯一主人 ivrefVtableCall, 这里只多问一次名册。
+            const std::string ifaceR4454 =
+                isLegacyView454 ? std::string() : slotIvrefViewName(objLower);
+            if ((isLegacyView454 || !ifaceR4454.empty()) && !isEarlyBoundCom_) {
                 // 生成参数列表
                 std::vector<std::string> callArgs;
                 for (size_t i = 0; i < node.positional.size(); i++) {
@@ -620,7 +656,9 @@
                     emitExpr(*named.value);
                     callArgs.push_back(lastExpr_);
                 }
-                const std::string p64Call = legacyViewCallExpr(objExpr, memberName, callArgs);
+                const std::string p64Call = isLegacyView454
+                    ? legacyViewCallExpr(objExpr, memberName, callArgs)
+                    : ivrefVtableCall(ifaceR4454, memberName, objExpr, callArgs);
                 if (!p64Call.empty()) {
                     lastExpr_ = p64Call;
                     return;
@@ -650,6 +688,11 @@
             if (sv.found && hasArgs) {
                 const Symbol::ComMethodSig& sig = *sv.sig;
                 std::vector<std::string> packedArgs;
+                // 富贵竹 FIX-011 (账 #610 第341刀): [out] Variant 出参槽名册 ——
+                // 命中 vb6_ComPackVariantRef 的实参把槽记进来, 调用拼好后整包一层
+                // vb6_ComVariantOuts(call, n, &槽...) 把服务端写的真 SAFEARRAY
+                // 归一化回 C3 描述符 (晚绑定无签名那一路不登记, 维持按值)。
+                std::vector<std::string> variantOutSlots;
                 // Fix 160-com-byref: ByRef 对象出参 (Chilkat ObjectOf2/ArrayOf2 的 obj/arr 形参)。
                 // 这类形参 type=Object 且 !isByVal; 调用方必须以 void** 形式把变量地址传出,
                 // 才能接住方法写入的新对象指针 (VT_DISPATCH|VT_BYREF)。仅当实参是简单对象变量
@@ -719,8 +762,14 @@
                     // 账 #305 §B224 第二半 (第二百三十九刀): 早绑定已知签名 —— 声明是 ByRef 的
                     // 标量形参按引用发 (VT_BYREF|T)，与真 VB6 的写回语义对齐；ByVal 一律不取址。
                     if (i < sig.params.size() && !sig.params[i].isByVal) {
-                        std::string byRefArg = comByRefArgExpr(*node.positional[i], lastExpr_);
-                        if (!byRefArg.empty()) { packedArgs.push_back(byRefArg); continue; }
+                        std::string byRefArg = comByRefArgExpr(*node.positional[i], lastExpr_, true);
+                        if (!byRefArg.empty()) {
+                            // FIX-011: VariantRef 档把槽记进出参名册 (取址口径与打包内一致)
+                            if (byRefArg.rfind("vb6_ComPackVariantRef(", 0) == 0)
+                                variantOutSlots.push_back(byRefArg.substr(
+                                    22, byRefArg.size() - 23));
+                            packedArgs.push_back(byRefArg); continue;
+                        }
                     }
                     if (byRefObjectParamAt(i)
                         && node.positional[i]->kind == ASTNodeKind::IdentifierExpr
@@ -735,8 +784,14 @@
                     emitExpr(*named.value);
                     { std::string resolved = resolveComMarkerForPack(packFn); if (!resolved.empty()) lastExpr_ = resolved; }
                     if (byRefParamNamedAny(named.name)) {
-                        std::string byRefArg = comByRefArgExpr(*named.value, lastExpr_);
-                        if (!byRefArg.empty()) { packedArgs.push_back(byRefArg); continue; }
+                        std::string byRefArg = comByRefArgExpr(*named.value, lastExpr_, true);
+                        if (!byRefArg.empty()) {
+                            // FIX-011: 命名实参与位置实参同口径登记出参槽
+                            if (byRefArg.rfind("vb6_ComPackVariantRef(", 0) == 0)
+                                variantOutSlots.push_back(byRefArg.substr(
+                                    22, byRefArg.size() - 23));
+                            packedArgs.push_back(byRefArg); continue;
+                        }
                     }
                     if (byRefObjectParamNamed(named.name)
                         && named.value->kind == ASTNodeKind::IdentifierExpr
@@ -755,6 +810,19 @@
                 argsArray += "}";
                 std::string callArgs = objExpr + ", L\"" + memberName + "\", " + argsArray + ", " + std::to_string(argc);
                 lastExpr_ = comTypedCallExpr(sv, callArgs);
+                if (!variantOutSlots.empty()) {
+                    // FIX-011 收尾: 整个调用包一层 vb6_ComVariantOuts —— 第一个实参
+                    // (调用本身) 由 C 先求值, 返回值原样透传; 逐个把服务端写进出参槽的
+                    // 真 SAFEARRAY 归一化回 C3 描述符 (生成形如
+                    //   vb6_ComVariantOuts(vb6_ComCallObject(o, L"GetBoundingBox", ...),
+                    //                      2, &MinPt, &MaxPt);
+                    // )。vb6_ComPackVariantRef 递出前也反向换真 SAFEARRAY (FIX-012)。
+                    std::string outs = "vb6_ComVariantOuts(" + lastExpr_ + ", "
+                                     + std::to_string(variantOutSlots.size());
+                    for (auto& slot : variantOutSlots) outs += ", " + slot;
+                    outs += ")";
+                    lastExpr_ = outs;
+                }
                 isComMarker_ = false;
                 return;
             }
@@ -1027,8 +1095,16 @@
         if (openPos > 0) {
             // callee = "funcName(existingArgs)" → 拆开
             std::string funcPart = callee.substr(0, openPos);
-            classMethodObjArg = callee.substr(openPos + 1, callee.size() - openPos - 2);
-            callee = funcPart;
+            // Fix RND-SEQ: `Rnd` 的无参形态在 ident 层已展开成 `vb6_Rnd(1)` (默认种子 1),
+            // 括号里那个 1 **不是接收者** —— `Rnd(x)` 的 x 是种子, 必须替代它而不是被前插,
+            // 否则发出 `vb6_Rnd(1, x)` (C2064/C2197)。VB6 内置里只有 Rnd 是这种形态。
+            if (funcPart == "vb6_Rnd") {
+                classMethodObjArg.clear();
+                callee = funcPart;
+            } else {
+                classMethodObjArg = callee.substr(openPos + 1, callee.size() - openPos - 2);
+                callee = funcPart;
+            }
             // Fix 086: 链式默认属性调用 — 内层是无参 prop_get_(如 .Root("data")) 或
             // COM 调用 (Dic(N)(RouteName)) 时, 内层返回 COM 对象, 外层索引是对返回
             // 对象的 Item 调用. 不能并入内层参数表 (C2197 参数太多).
@@ -1083,7 +1159,7 @@
                             propSym86 = symTab_.lookupModuleByKind(propName,
                                                                    SymbolKind::PropertyGet);
                         }
-                        if (propSym86 && propSym86->params.empty()) {
+                        if (propSym86 && propSym86->P().params.empty()) {
                             innerIsChainedObj = true;
                             // Fix 242b: 该无参属性返回**项目类集合**时记下项目类 Item 发射
                             // 函数 (下方走项目类路径)。判据用 getClassMethodReturnType(返回名,

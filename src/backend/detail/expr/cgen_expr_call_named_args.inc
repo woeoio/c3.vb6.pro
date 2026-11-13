@@ -45,7 +45,7 @@
                     bool piIsCurrentByRefParam = false;
                     Vb6Type piCurPType189 = Vb6Type::Unknown;
                     if (currentProc_) {
-                        for (auto& p : currentProc_->params) {
+                        for (auto& p : currentProc_->P().params) {
                             if (Symbol::toLower(p.name) == Symbol::toLower(innerName) && !p.isByVal && !p.isParamArray) {
                                 bool paramIsArray = (static_cast<uint16_t>(p.type) & static_cast<uint16_t>(Vb6Type::Array)) != 0;
                                 if (!paramIsArray) {
@@ -94,7 +94,7 @@
                     bool piArgIsCurrentByRefParam = false;
                     Vb6Type piArgCurPType189 = Vb6Type::Unknown;
                     if (currentProc_) {
-                        for (auto& p : currentProc_->params) {
+                        for (auto& p : currentProc_->P().params) {
                             if (Symbol::toLower(p.name) == Symbol::toLower(argVal) && !p.isByVal && !p.isParamArray) {
                                 piArgIsCurrentByRefParam = true;
                                 piArgCurPType189 = p.type;
@@ -392,12 +392,32 @@
                         && currentProc_) {
                         auto& paIdent = static_cast<IdentifierExpr&>(*node.positional[argIdx]);
                         std::string paIdentLow = Symbol::toLower(paIdent.name);
-                        for (auto& curP : currentProc_->params) {
+                        for (auto& curP : currentProc_->P().params) {
                             if (curP.isParamArray
                                 && Symbol::toLower(curP.name) == paIdentLow) {
                                 isParamArrayVarArg = true;
                                 break;
                             }
+                        }
+                    }
+
+                    // 账 §56.40: 实参是 **Variant 表达式** —— 整只 vb6_VARIANT 结构体
+                    // 递给 vb6_PA_SetLong/SetDouble (形参是 int32_t/double) = C2440
+                    // (PhotoDemon pdSpinner.c 919: vb6_PA_SetLong(_pa_2, 1,
+                    // vb6_Evaluator_Evaluate(...)); TextSupport.c 357/370/386/398:
+                    // vb6_PA_SetLong(_pa_0, 0, <Variant>))。按本组实参的既定档拆箱 ——
+                    // 字面量 Double → Double; 文本上是串 → 串; 其余默认 Long
+                    // (与下面那个 else 分支的默认档一致)。
+                    if (!isParamArrayVarArg && argIdx < (int)node.positional.size()
+                        && node.positional[argIdx]
+                        && isVariantSlot(paArgExpr, node.positional[argIdx].get())) {
+                        if (isDoubleArg) {
+                            paArgExpr = "vb6_VariantToDouble(" + paArgExpr + ")";
+                        } else if (paArgExpr.find("vb6_BSTR") != std::string::npos
+                                   || paArgExpr.find("L\"") != std::string::npos) {
+                            paArgExpr = "vb6_VariantToString(" + paArgExpr + ")";
+                        } else {
+                            paArgExpr = "vb6_VariantToLong(" + paArgExpr + ")";
                         }
                     }
 

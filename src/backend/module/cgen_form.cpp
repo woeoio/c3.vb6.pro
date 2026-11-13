@@ -5,6 +5,7 @@
 #include "common/frm_code_scan.hpp"          // .frm 过程定义判据 (注释行不算)
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
 #include "project/frx_reader.hpp"
 #include <algorithm>
 #include <cctype>
@@ -286,6 +287,7 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         const bool hasPaint = hasProc("UserControl_Paint");
         const bool hasShow = hasProc("UserControl_Show");
         const bool hasResize = hasProc("UserControl_Resize");
+        const bool hasTerminate = hasProc("UserControl_Terminate");
         // Fix 112d: InitProperties 负责成员数组的 ReDim/默认值 (如 ucProgressCircular
         // 的 m_PF_Colors). 运行期没有 PropertyBag, 按 VB6 语义 InitProperties 是
         // "无持久化数据时的属性初始化", 归入 init 一起调用, 否则 Draw 读未分配数组 → AV.
@@ -350,15 +352,18 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         // 句柄把上一个实例的 edit 隐藏掉 (czTextBox1 空白的根因)。
         // Timer 等暂不实例化 (相关 API 对 NULL 安全)。
         const bool noKids = getenv("C3_NO_DESIGNKIDS") != nullptr;
+        std::vector<const FrmControl*> madeKids;
         for (const auto& child : frmDesc.formControl.children) {
             auto iprop = [&](const char* k, int defv) -> int {
                 auto itc = child.properties.find(k);
                 return itc != child.properties.end() ? (int)itc->second.intValue : defv;
             };
+            bool madeKid = false;
             if (!noKids && child.controlType == FrmControlType::TextBox) {
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignEdit("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 400)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::Timer) {
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignTimer("
                     + "vb6_" + ctl + "_ucTimerThunk_" + cIdent(child.controlName) + ", me);");
@@ -371,12 +376,14 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
                     + std::to_string(iprop("Interval", 60000)) + ");");
                 c_.emitLine("    vb6_SetTimerEnabled(vb6_hwnd_" + cIdent(child.controlName) + ", "
                     + std::to_string(iprop("Enabled", 0)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::PictureBox) {
                 // Fix <vbeclipse>: ucFolder.ViewArea 等 PictureBox 设计子控件 → STATIC 子窗,
                 // 视图窗体靠 SetParent 挂进它。旧循环不建 → ViewArea 恒 NULL → 面板全空。
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignPicture("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::Label) {
                 // Fix <vbeclipse> rev32: 设计子控件里的 **VB.Label** (ucTab.lblCaption)。
                 // 此前这个种类不在发射循环里 ⇒ ucTab 的设计面一个子控件都没建
@@ -386,11 +393,13 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignLabel("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 400)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::Image) {
                 // 同上: **VB.Image** (ucTab.imgIcon)。`ucTab.Icon` setter 写它。
                 c_.emitLine("    vb6_hwnd_" + cIdent(child.controlName) + " = vb6_UC_CreateDesignImage("
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
+                madeKid = true;
             } else if (!noKids && child.controlType == FrmControlType::Unknown
                        && child.controlTypeName.find('.') != std::string::npos) {
                 // Fix <vbeclipse>: 设计子控件里"工程内 UserControl" (parseControlType 认不出的
@@ -403,6 +412,18 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
                     + "\"" + tn + "\", \"" + child.controlName + "\", "
                     + std::to_string(iprop("Left", 0)) + ", " + std::to_string(iprop("Top", 0)) + ", "
                     + std::to_string(iprop("Width", 2000)) + ", " + std::to_string(iprop("Height", 1500)) + ");");
+                madeKid = true;
+            }
+            // 账 #118 续: 设计面子控件的**设计期状态属性**此前整块丢弃 (只发了几何)。
+            // 实测 ucTreeViewPlus.ctl: Text1 / ucScrollbar1 / ucScrollbar2 三条都写着
+            // `Visible = 0`，一条都不发 ⇒ `.ctl` 代码里满篇 `If ucScrollbar1.Visible`
+            // (838/854/856/863/888…) 初值变 True ⇒ m_ClientWidth 少减一条滚动条宽，
+            // 树区宽度/换行/行数全偏；隐藏的辅助 TextBox 也会显示出来。
+            // 出口只有一个: 与 .frm 两条创建路共用 emitDesignerStateProps
+            // (create_controls.inc:365 / ctrl_style_apply.inc:395)，不新增第二处口径。
+            if (madeKid) {
+                emitDesignerStateProps(child, "vb6_hwnd_" + cIdent(child.controlName));
+                madeKids.push_back(&child);
             }
         }
         if (hasInit) c_.emitLine("    vb6_" + ctl + "_UserControl_Initialize((vb6_cls_" + ctl + "*)me);");
@@ -411,6 +432,42 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
             c_.emitLine("    if (!vb6_uc_skipIP) vb6_" + ctl + "_UserControl_InitProperties((vb6_cls_" + ctl + "*)me);");
         } else {
             c_.emitLine("    (void)vb6_uc_skipIP;");
+        }
+        // 账 #118 续 (第二批): 设计面子控件的**晚绑定**设计期属性 —— 必须排在
+        // Initialize/InitProperties **之后**。理由 (ucScrollbar.ctl 实测):
+        //   · 第 2186 行 `Let m_eOrientation = ORIENTATION_DEF` 在 UserControl_Initialize 里,
+        //     在它之前写 Orientation 会被这一句冲掉;
+        //   · 第 2290 行 `ReadProperty("Orientation", …)` 在 InitProperties 里, 而设计子控件
+        //     根本没有 PropertyBag (bag 只给 .frm 里的实例) ⇒ 取到的永远是默认值。
+        //   ⇒ 设计值只能由这里补, 且必须是最后一步。ucScrollbar2 的 Orientation=1
+        //   (横向, 4095×135) 缺了会按纵向建, m_eOrientation 停在 oVertical。
+        for (const FrmControl* pc : madeKids) {
+            const FrmControl& child = *pc;
+            const std::string dh = "vb6_hwnd_" + cIdent(child.controlName);
+            auto txIt = child.properties.find("Text");
+            if (txIt != child.properties.end() && txIt->second.type == FrmValueType::String) {
+                // .frm 的 rawText 带外层引号, 串内双引号写作 "" (与 style_apply:664 同口径)。
+                std::string raw = txIt->second.rawText;
+                std::string inner = raw;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"') {
+                    inner = raw.substr(1, raw.size() - 2);
+                }
+                std::string esc;
+                for (char ch : inner) {
+                    if (ch == '\\' || ch == '"') esc += '\\';
+                    esc += ch;
+                }
+                if (!esc.empty()) {
+                    c_.emitLine("    vb6_SetControlText((void*)" + dh + ", vb6_BSTR_FromStr(L\""
+                        + esc + "\"));  /* design Text */");
+                }
+            }
+            auto orIt = child.properties.find("Orientation");
+            if (orIt != child.properties.end() && orIt->second.type == FrmValueType::Integer
+                && child.controlType == FrmControlType::Unknown) {
+                c_.emitLine("    vb6_ComSetProp(" + dh + ", L\"Orientation\", vb6_ComPackInt("
+                    + std::to_string(orIt->second.intValue) + "));  /* design Orientation */");
+            }
         }
         c_.emitLine("}");
         c_.emitLine("static void vb6_" + ctl + "_ucHostPaint(void* me) {");
@@ -423,7 +480,16 @@ void CCodeGen::emitDesignerControlDecls(const FrmFormDesc& frmDesc, DocumentKind
         if (hasResize) c_.emitLine("    vb6_" + ctl + "_UserControl_Resize((vb6_cls_" + ctl + "*)me);");
         c_.emitLine("}");
         c_.emitLine("static void vb6_" + ctl + "_ucHostTerminate(void* me) {");
-        c_.emitLine("    vb6_cls_" + ctl + "_Destroy((vb6_cls_" + ctl + "*)me);");
+        // 账 (ucTreeView 重复点击刀, 2026-11-07): 宿主销毁**不能**直接 Destroy 实例。
+        // 实例是引用计数的 (`vb6_cls_X_New` 记 1, 窗体代码 `Set cTE.cTVP = TVP` 再 +1),
+        // 宿主只持有其中一枚; 直接 Destroy 会把还被外部对象握着的指针连内存一起放掉 ——
+        // 下一次 `Set cTE = New ClsTreeExplorer` 释放旧对象 → Release 那枚已释放的
+        // UC 实例 ⇒ 0xC0000005 / 0xC0000374 (重复开 Form2 必现)。
+        // 正解 = 先发 UserControl_Terminate, 再交回宿主那一枚引用; 最后一个引用
+        // 放手时 Release 自己走 Destroy。
+        if (hasTerminate)
+            c_.emitLine("    vb6_" + ctl + "_UserControl_Terminate((vb6_cls_" + ctl + "*)me);");
+        c_.emitLine("    vb6_cls_" + ctl + "_Release(me);");
         c_.emitLine("}");
 
         int ucScaleMode = 1;

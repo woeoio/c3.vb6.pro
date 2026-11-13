@@ -13,6 +13,11 @@
 - 仓库根完整性必须 Medium（否则启动弹"打开文件 - 安全警告"）；测试启动用 redirect/`-NoNewWindow`。
 - `SmoothScrollFactor` 无效值只告警不致命（与 VB6 一致），不得为消警告改夹具。
 - 流程：小步提交，推 `github`/`origin` 的 `dev`（快进、不 force），GA 22/22 全绿再进下一步。
+- **提交纪律（2026-11-10 起，两条线共用同一工作区，硬性）**：
+  - 一律按显式路径 `git add <具体文件>...`；**禁用** `git add -A` / `git add .` / `git commit -a`。
+  - `git add` 之后、`git commit` 之前必须 `git diff --cached --name-only` 逐条过目，只许出现本刀文件。
+  - `git status` 里出现不属于本刀的文件（哪怕别人未提交的在途改动）⇒ **停下报告，不得顺手带进去**。
+  - 起因见 §57.7：`tests/photodemon/*` 643 份被一次 `git add` 连带扫入 `7230557e`。
 
 ## 1. 已落盘修复（RTL 侧，已重建并验证内嵌）
 
@@ -1133,4 +1138,3077 @@ getter/setter 仍存/答 **VB6 Long 原值**（`&H8000000D&` 读回仍是 `-2147
     ⇒ 发码/打印正确，是本机宿主控制台代码页把中文降级；CI 那台按 ACP 选编码（见 run_tests
     `Get-C3ChildEncoding`），GA 该两格绿。
 
+
+
+
+## §26 BalloonTooltips 家族 — 工具提示的"主题皮"：StrPtr 空串口径（2026-11-06）
+
+### §26.1 夹具与"原始行"
+
+夹具落在 `tests\BalloonTooltips`（自包含 10 件；源工程 `D:\vb_yqt4qPac\BalloonTooltips`，
+参考产物 `BalloonTooltips.exe` 原样在该目录运行）。
+
+**`.frm` / `.vbp` 里没有任何 `BeginProperty ToolTip*` 块** —— 每个控件的 tooltip 颜色/标题
+是 `Form_Load` 里 `cTT.CreateToolTip` 的实参（末两位 = 前景色, 背景色；空 = 默认）：
+
+```
+frmBalloonTooltips.frm
+149: cTT.CreateToolTip cmbBalloonTooltip, "...", cmbBalloonTooltip.List(0), TTI_INFO
+150: cTT.CreateToolTip cmdBalloonTooltip, "...", cmdBalloonTooltip.Caption, TTI_WARNING_LARGE, vbRed, vbCyan, True
+151: cTT.CreateToolTip cmdButtonInPic, "...", cmdButtonInPic.Caption, TTI_WARNING_LARGE, vbMagenta, vbGreen, True
+152: cTT.CreateToolTip txtBalloonTooltip, "Help, I'm being repressed!", txtBalloonTooltip, TTI_ERROR_LARGE, vbBlue, vbYellow, True
+153: cTT.CreateToolTip lblBalloonTooltip, "...", lblBalloonTooltip, TTI_WARNING
+154: cTT.CreateToolTip lblInFrame, "...", lblInFrame, TTI_INFO
+139: (按钮改色后) cTT.CreateToolTip txtBalloonTooltip, "...", "Changed TextBox Tooltip", TTI_INFO_LARGE, vbBlack, &HE1FFFF, True, False
+140: (按钮改色后) cTT.CreateToolTip lblBalloonTooltip, "...", "Changed Label Tooltip", TTI_INFO_LARGE, , , True, False
+```
+
+窗体 `Font` 块是 `Microsoft Sans Serif / Size=12`，只喂窗体与控件，**不喂 tooltip**。
+
+根因两行在 `cTT.cls`：
+
+```
+107: lToolTipStyle = TTS_ALWAYSTIP Or TTS_NOPREFIX: If bBalloon Then lToolTipStyle = lToolTipStyle Or TTS_BALLOON
+108: hWndTT = CreateWindowExW(WS_EX_TOPMOST, StrPtr(TOOLTIPS_CLASS), 0, lToolTipStyle, ...)
+109: SetWindowTheme hWndTT, StrPtr(sEmpty), StrPtr(sEmpty)      ' sEmpty As String = ""
+139: If lForeColor > -1 Then SendMessageW hWndTT, TTM_SETTIPTEXTCOLOR, lForeColor, 0
+140: If lBackColor > -1 Then SendMessageW hWndTT, TTM_SETTIPBKCOLOR, lBackColor, 0
+```
+
+### §26.2 VB6 vs C3 逐组读数（`.temp\ttprobe.ps1`，120dpi，1920x1200）
+
+探针口径：`EnumWindows` 抓本进程可见 `tooltips_class32` → `GetWindowLongW(GWL_STYLE/EXSTYLE)`
+→ `TTM_GETTIPBKCOLOR/TTM_GETTIPTEXTCOLOR/TTM_GETMAXTIPWIDTH` → `WM_GETFONT` + `GetObjectW(LOGFONTW)`
+→ 字体上 `GetTextExtentPoint32W("Ag")` 当 TextHeight；像素主色用 **tooltip 自身 DC + BitBlt**
+（不受遮挡/主题外框影响，采样内部 1/3..边界避开标题与边框）。
+
+| # | 控件 (VB6 / C3 class) | 期望背色 | VB6 像素 / bk | C3 改前 像素 | C3 改后 像素 / bk | VB6 尺寸 | 改前 | 改后 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | PictureBox / Static（含 cmdButtonInPic） | #00FF00 | #00FF00 / 65280 | #FFFFFF | #00FF00 / 65280 | 291x99 | 294x107 | 291x99 |
+| 2 | CommandButton "Enable/Disable Tooltip" | #00FF00 | #00FF00 / 65280 | #FFFFFF | #00FF00 / 65280 | 291x99 | 294x107 | 291x99 |
+| 3 | Frame / Button（空标题） | #FFFFE1 | #FFFFE1 / 14811135 | #FFFFFF | #FFFFE1 / 14811135 | 298x99 | 298x107 | 298x99 |
+| 4 | Label In Frame / Static（VB6 无窗口） | #FFFFE1 | — | #FFFFFF | #FFFFE1 / 14811135 | — | 298x107 | 298x99 |
+| 5 | ComboBox | #FFFFE1 | #FFFFE1 / 14811135 | #FFFFFF | #FFFFE1 / 14811135 | 274x99 | 274x107 | 274x99 |
+| 6 | TextBox / Edit | #FFFF00 | #FFFF00 / 65535 | #FFFFFF | #FFFF00 / 65535 | 273x78 | 273x87 | 273x78 |
+| 7 | CommandButton "Change TextBox Tooltip" | #00FFFF | #00FFFF / 16776960 | #FFFFFF | #00FFFF / 16776960 | 327x99 | 327x107 | 327x99 |
+| 8 | Label "Label Tooltip" / Static（VB6 无窗口） | #FFFFE1 | — | #FFFFFF | #FFFFE1 / 14811135 | — | 262x107 | 262x99 |
+
+共同读数（VB6 / C3 改前 / C3 改后 三者**完全相同**的项）：
+
+- `style=0x94000043`（含 `TTS_ALWAYSTIP|TTS_NOPREFIX|TTS_BALLOON = 0x43`），`exstyle=0x8`，`TTM_GETMAXTIPWIDTH=200`
+- 字体 = 运行期 `NONCLIENTMETRICS.lfStatusFont`：**Microsoft YaHei UI / lfHeight -15 / weight 400 / charset 1**；`TextHeight("Ag")=20`
+- `TTM_GETTIPBKCOLOR` / `TTM_GETTIPTEXTCOLOR` 三者逐组相同（VB6 与 C3 的 UDT 参数一直是对的）
+
+唯一不同：`lfQuality` 改前 = **5**(ClearType, 主题皮) → 改后 = **0**；像素改前全白、客户区高 +8/宽 +3。
+
+### §26.3 根因（实测闭环，不猜）
+
+C3 旧 `vb6_StrPtr` 按 `SysStringLen` 判空 ⇒ `StrPtr("")` 答 0 ⇒
+`SetWindowTheme(hWndTT, NULL, NULL)`。对 uxtheme 来说 `NULL, NULL` 是"**清空主题名**"而不是
+"关视觉样式" ⇒ comctl32 v6 继续用主题皮 ⇒ 白底、客户区 +8/+9px、ClearType。
+VB6 的 `StrPtr("")` 是非 0（唯一答 0 的是 `vbNullString`）⇒ uxtheme 真的关样式 ⇒ 经典气泡，
+底色就是 `TTM_SETTIPBKCOLOR`。
+
+决定性控制实验（`.temp\tt_space.txt`）：只把夹具副本的 `sEmpty` 改成非空 1 字符串
+（`Const sEmpty As String = "1"`），C3 立刻与 VB6 **逐组全等**（颜色/尺寸/quality/字体），
+不碰 RTL。⇒ 差异机制就是这一枚指针，不是 UDT、不是 TTM 没调、不是字体、不是 DPI 折算。
+
+### §26.4 修改站点
+
+| 文件 | 改动 |
+|---|---|
+| `src/rtl/core/vb6rtl/vb6rtl_compat.c` | `vb6_StrPtr` 改直通 `return (void*)s;`；删掉"按长度判空"，注释写清 VB6 口径 |
+| `src/backend/cgen_base_naming.cpp` | `defaultValue(Vb6Type::String)` 由 `vb6_BSTR_Empty()` 改 `NULL`（未赋值 String / 返回槽 / Optional 省略位 = 空指针） |
+| `src/backend/detail/expr/cgen_expr_ident_dispatch.inc` | `vbnullstring` 字面量 → `NULL` |
+| `src/rtl/core/vb6rtl/vb6rtl_builtin.h` | `vb6_StrPtr` 声明注释同步 |
+| `src/backend/module/cgen_com_events.cpp` | `evtArgIsLvalue` 显式排除 `NULL/true/false/nullptr`（新语义在 `RaiseEvent` 省略位暴露 `&(NULL)` → C2101，见 §26.9） |
+| `scripts/owned_temp_keeps_164.txt` | `vb6_StrPtr` 的"为什么"栏随函数体变空（值仍 0） |
+| `emit-manifest.expected.txt` | 形状登记（253 行 + 4 行，见 §26.9） |
+
+### §26.5 guard（先落，先红后绿）
+
+`scripts/check_tooltip_authority.ps1`（挂在 `run_tests.ps1` 静态 census 段，`Test-ToolTipAuthority`）：
+
+| 规则 | 判据 |
+|---|---|
+| T1 | `vb6_StrPtr` **恰好 1 处定义**、函数体必须 `return (void*)s;`、不得出现长度判据（`SysStringLen`/`vb6_BSTR_Len`/`L` 前缀） |
+| T2 | `vb6_StrPtrVar` 必须转调 T1 的出口（不许自己解引用/判空） |
+| T3 | tooltip 底色/字色只许 `vb6_ToolTipApplyVisual` 一家发 `TTM_SETTIPBKCOLOR/TTM_SETTIPTEXTCOLOR`，且该函数内必须经 `vb6_ColorToColorRef`（系统色常量同一解析） |
+| T4 | tooltip 的 `WM_SETFONT` 同口径，只许 `vb6_ToolTipApplyVisual` |
+| T5 | `SetWindowTheme` 只许 DI 桩（测试注入）且**原样透传**两个指针，不许在 RTL 侧改判空 |
+| T6 | tooltip 宿主恰好 2 站：`vb6forms_style.c` + `vb6forms_slider.c`（新增第 3 站即红） |
+
+- 现状：T3/T4 散点 = **0**，白名单为空（无需豁免）；T5 桩 1 站；T6 宿主 2 站
+- **改前状态**（6e31fbdf 那棵树）：`FAIL T1 vb6_StrPtr reintroduced a length test…` ⇒ **红**（RC=1）
+- **改后**：`PASS tooltip authority: StrPtr 唯一出口 1 / tooltip 颜色散点 0 / tooltip 字体散点 0 / SetWindowTheme 站 1 / 宿主 2`（RC=0）
+
+### §26.6 断言
+
+`tests\guisample\balloontips_px.ps1`（UTF-8 BOM；`run_tests.ps1` 的 `$GuiCases` 里 BalloonTooltips
+用例已 `Arch="x86"` + `PixelAssert=@("guisample\balloontips_px.ps1")`）：
+
+- 8 组悬停（§26.2 的 8 行）+ 点 "Change TextBox Tooltip" 后重测 2 组（TextBox/Label → #FFFFE1）
+- 每组：`mode=#xxxxxx` 逐通道 **±3**；`TTM_GETTIPBKCOLOR == COLORREF(期望)`（精确）；
+  `style & 0x43 == 0x43`；字体面名 == 运行期 `lfStatusFont.face`；`|lfHeight - 参考| <= 1`
+- **旧产物红**：`output\BalloonTooltips_x86\BalloonTooltips.exe`（18:53，改前 x86）→ **rc=1**，
+  6/6 可悬停组都是 `mode=#FFFFFF` + 尺寸 107 高 + `quality=5`
+- **新产物绿**：`output\BalloonTooltips\BalloonTooltips.exe` → **rc=0**，8/8 全中
+- 首轮偶发不弹：3 轮"移开 → 回位抖 1px → WM_MOUSEMOVE"重试；3 轮都不弹仍 **FAIL**（不放宽）
+- 无交互桌面（屏幕 BitBlt 全黑 / 无可见窗口）→ **rc=2 SKIP**，harness 记 `PixelCheck=SKIP`
+
+### §26.7 构建 / 内嵌 RTL / 产物
+
+- `build.bat`（Ninja/Debug，VS2019 14.29 + SDK 10.0.19041）重建；`c3rtl.rc.res` 与 `C3.exe` 同批时间戳
+- `scripts\check_rtl_embedded.ps1`：内嵌 126 个资源与磁盘对象**逐字节一致** ⇒ 新 `vb6_StrPtr` 已进 `C3.exe`
+- `C3 --arch x86 tests\BalloonTooltips\prjBalloonTooltips.vbp --output-dir output\BalloonTooltips`；
+  PE machine = **0x014C**（与参考 VB6 产物同档）
+
+### §26.8 提交 / GA
+
+| 提交 | 内容 | GA |
+|---|---|---|
+| `6e31fbdf` | test(tooltip): T1..T6 哨兵 + 像素判据 + b180 新口径（改前 T1 红） | — |
+| `47093781` | fix(rtl): StrPtr 直通 + `defaultValue(String)=NULL` + `vbnullstring=NULL` | 42218842311（3 红） |
+| `d5410248` | fix(cgen): `evtArgIsLvalue` 排除 NULL 等常量（C2101） | 42225830556（1 红） |
+| `780316a6` | 登记：emit-manifest 4 行吃 CI 清单 | 42227322947 **22/22** |
+
+### §26.9 红项逐条归因（未放宽阈值、未删用例）
+
+**Round 1 — run 42218842311（head 47093781）3 红：**
+
+1. `Tests (compile #2)` `[STATIC] owned_temp_keeps`：K5 快照漂移 1 行 `~vb6_StrPtr|0`。
+   `keeps_pointer` 仍是 **0**（没变），变的只是"为什么"栏：旧函数体调 `vb6_BSTR_Len`
+   ⇒ 记 `handoff-reads:vb6_BSTR_Len`；新函数体无任何调用 ⇒ 空。`-Bless` 只改这一栏。
+2. `Tests (vbp #11)` `FlexGridX86 FAIL (compile)`：`VBFlexGrid.c` 的 `onBeforeClipboardAction`
+   省略位发出 `&(NULL)` ⇒ cl `error C2101: '&' on constant`。这是 `defaultValue(String)=NULL`
+   暴露的既有左值判定漏洞（`evtArgIsLvalue` 把 `NULL` 当标识符）。修 cgen（d5410248）后本地
+   x86 重编绿。
+3. `Emit manifest`：252/596 行形状变化 —— `defaultValue(String)` 由 `vb6_BSTR_Empty()` 改 `NULL`，
+   正是本次想要的形状；逐行登记。
+
+**Round 2 — run 42225830556（head d5410248）1 红：**
+
+- `Emit manifest`：596 行里 **4 行**与本机不同（`tests/guisample/GUISample.vbp` ×3 +
+  `TeeChartChartDisplay/DisplayProject.vbp`）。这 4 个夹具的发码含外部引用/路径形，
+  本机解析 ≠ runner。按脚本既定口径（`git fetch ci/emit-manifest` 取 CI 自己交回的数）
+  重登记（780316a6）。复算 596/596 相同，`check_manifest_coverage` K1..K3 绿。
+
+**Round 3 — run 42227322947（head 780316a6）：22/22。**
+
+### §26.10 与用户前提的两处实测校正（须记）
+
+1. `.frm` / `.vbp` 里**没有** tooltip 属性块 —— 每个控件的颜色来自 `cTT.CreateToolTip` 实参
+   （§26.1 行号）。而且用户记的 "change TextBox #00FFFF" 实测是 **"Change TextBox Tooltip"
+   按钮**的背色；TextBox 自己是 **#FFFF00**。
+2. 字体/字号**没有差**：VB6 与 C3（改前/改后）的 tooltip 字体都是
+   `Microsoft YaHei UI / lfHeight -15 / weight 400 / charset 1`，`TextHeight("Ag")=20`。
+   用户看到的"字号差异"实际是主题皮把气泡高度从 99 撑到 107（字号未变）。
+   窗体 Font 的 `Microsoft Sans Serif / 12` 不上 tooltip。
+
+## §27 ucTreeView 四条缺陷 — guard 落地与续跑基线（2026-11-06）
+
+### 27.1 guard 哨兵（已落盘、已跑）
+- 文件：`scripts/check_uctreeview_authority.ps1`（**UTF-8 BOM**，PowerShell 5 无 BOM 会把中文行断成语法错误）。
+- 注册：`tests/run_tests.ps1` → `Test-UcTreeViewAuthority`，STATIC shard，紧跟 `Test-ToolTipAuthority`。
+- 判据：T1 事件分派 miss 可观测 / T2 模态与对话框唯一出口 / T3 TreeView 槽位三件套 / T4 多窗体统一入口 + 控件数组容器转发。
+- 白名单：W1 夹具 `Form1.frm` 的用户 Declare（不扫 tests，天然不命中）；W2 `vb6forms_ctrl.c` 的 `vb6_CdShowColor`（ColorDialog/CommonShowColor 的唯一出口，放行但断言仍在）。
+- **实跑（当前工作树）：PASS**；**基线与 HEAD 956ce26c 的 worktree：FAIL 11 红**（T1×2、T3×7、T4×1），T2 全绿。
+- 改前/改后散点：RaiseEvent 静默分发 1→0；`vb6_VariantMissing` 0→1；`Is` 身份拆箱 0→2；槽位目标提存 0→1；数组容器转发 0→1；后端 `ShowWindow` 恒 0；`ChooseColor` 7 站全在 DI 桩 + 1 站唯一出口。
+
+### 27.2 四条缺陷各自状态
+1. **展开丢 icon（已确认根因/已改/已重编/已视觉验证绿，px 断言未加）**：省略 `Optional As Variant` 实参被填 `vb6_VariantEmpty()`，VB6 语义应为 **Missing**（`vt=10`,`0x80020004`）。改 `vb6rtl_variant.h` + `cgen_base_naming.cpp`。
+   - **子项不能切换（同属第 1 条，独立成因，已改/已验证）**：`Is` 生成裸 `==`，类实例 vs `vb6_ComCall` 的 VARIANT* 恒不等 ⇒ `RadioStyle` 单选恒清空。改 `cgen_expr_binary.cpp` + `vb6com_pack.c`（`vb6_ComResultIdentity`/`vb6_ComObjectUnbox`）。实测 `RADIO N=... eq=0` 全假 → 修后 Mostrar→Ocultar→(Disabled 不响应)→Mostrar 三态可达。
+   - **附带第 3 成因（已改/已验证）**：`With ... .Add(...).Image = 1` 的 `vb6_Node_Add` 被求值两次 ⇒ 多插一行（4 行 vs VB6 3 行）。改 `cgen_util_ctrl.cpp` 的 `emitVariantSlotStore`（`_vtg_` 提存）。
+2. **三点按钮不弹色选（已确认根因/已改/已重编/新绿旧红）**：`Picture1` 是**控件数组容器**，转发安装块 `if (!knownControlArrays_.count())` 整类跳过 ⇒ `Command2` 的 WM_COMMAND 留在 PictureBox。改 `cgen_form_frame_menu.inc` 逐元素 `vb6_fw` 转发。实测：新产物 `#32770 '颜色'` 弹出并 `WM_CLOSE` 后 `IsWindow=false`、主窗 `WM_NULL` 有响应；旧产物 `DIALOG=` 空。
+3. **LoadFromCustomXML 无效果（已确认根因/已改，px 断言未加）**：产物目录缺 `ejemplo.xml`，`xmlDoc.Load` 返回 False（`vt=11`,`parseError 0x800C0006`）。已在 `run_tests.ps1` 的 ucTreeView 注册加 `-AssetFile ejemplo.xml`；新产物点击后出现 `library` 根节点，旧产物无。
+4. **底部五按钮（部分定位，未闭合）**：id 101..105 逐一 PostMessage 均**进了事件**，`vb6_form_show_FormX` 的 modal=0 一致；
+   - Form3/Form5：`Form_Load` 内 `LoadFromXML App.Path\JerarquiaEmpresa.xml`、`menu.xml` 缺资产 ⇒ ctl 弹 `XML Load Error`（`#32770` 阻塞、窗体停在隐藏态）。资产在 `tests\ucTreeView` 里，只是没随 `-AssetFile` 复制。
+   - Form6（`Contact  List`）：**进程崩溃 = 0xC0000005（AV，不是干净退出）**。取证口径：
+     `$p.WaitForExit(8000)` → `ExitCode=-1073741819`；WER `Application` 日志
+     `异常代码 0xc0000005 / 错误偏移 0x0007cea0 / 模块 Proyecto1.exe`（偏移稳定可复现）。
+     早先记的"exit 0"是 PowerShell `$p.ExitCode` 为 `$null` 的读数假象。
+     插桩点：`enter → imagelist init → 67 张图 → nodes done`，随后在 `ExpandAllNodes` 内崩，
+     `update done` 未打印；`C3_NO_QUIT_IN_DOEVENTS=1` 仍崩；Form1 的 `WM_CLOSE/WM_DESTROY`
+     均未触发（`[F1DBG]` 无输出）。真 VB6 参考产物（`D:\vb_yqt4qPac\ucTreeView\Proyecto1.exe`）
+     同操作 Form6 **可见**。
+   - 确定性代码错（已定位未改）：Form6 把 `StdPicture` 返回值塞进 `VT_BSTR / .bstrVal=<IPicture*>` 传给 `ImageListAddImage(SrcImg As Variant)`（C4133）；插桩改成 `VT_DISPATCH` 后图像循环可跑完。
+
+### 27.3 已改但尚未验证/RTL 重建状态
+- RTL：`vb6rtl_variant.h`、`vb6com_pack.c`、`vb6comserver.h`、`vb6comserver_cp.c`（本轮新增 `vb6_UCEventMiss` 计数）—— **`c3rtl.res` 未重建**（必须先重跑 build，再 `scripts\check_rtl_embedded.ps1` 核对内嵌符号）。
+- cgen：`cgen_base_naming.cpp`、`cgen_expr_binary.cpp`、`cgen_util_ctrl.cpp`、`cgen_form_frame_menu.inc`、`cgen_com_events.cpp`（miss else 臂）。
+- tests：`run_tests.ps1`（ucTreeView 注册 `-AssetFile ejemplo.xml` + sentinel）。
+- 未验证项：本轮所有 cgen/RTL 改动的最终产物（`output\ucTreeView`）尚未重编；`uctreeview_px.ps1` 的四条新断言尚未扩；`c3rtl.res` 未重建。
+
+### 27.4 工作树
+- HEAD = `956ce26c`，**尚无提交**（本轮全部改动在工作树）。
+- 未提交：上述 RTL/cgen/tests + `scripts/check_uctreeview_authority.ps1`。
+- 诊断物（勿提交）：`.temp/uctv_dbg_sess`（插桩会话）、`.temp/relink_form1.ps1`（已扩 Form6.c + vb6rtl_system.c）、`.temp/uctv_f6_exit.ps1`、`.temp/uctv_clickcap.ps1`、`.temp/uctv_f4_ids.ps1`、`.temp/uctv_f4_all.ps1`、`.temp/uctv_forms.ps1`、`.temp/uctv_base`（基线 worktree）。
+- 另：不要提交未跟踪的 `.zcodeignore`。
+
+### 27.5 续跑顺序
+1. 定位 Form6 的 **AV（0xC0000005 @ 0x0007cea0）**（优先用**正式构建链**插桩；调试会话里
+   RTL 的 `[FDBG] Register/Unregister` 一条未出 ⇒ 该 obj 未必真正链入，结论不可靠）。
+2. 修 `IPicture* → Variant` 装箱（cgen：对象值必须 `VT_DISPATCH`），并重跑 Form6。
+3. 五按钮资产：`-AssetFile` 补 `JerarquiaEmpresa.xml`、`menu.xml`，并同步 `output\ucTreeView`。
+4. 扩 `tests/guisample/uctreeview_px.ps1`：icon 计数、三态切换、色选模态（`#32770` + `WM_CLOSE` + 10s 看门狗）、XML 节点数、五窗体标题；旧红新绿、无桌面 SKIP。
+5. `C3 --arch x86` 重编 → 重建 `c3rtl.res` → `check_rtl_embedded.ps1` → 产物到 `output\ucTreeView`。
+6. 双远端提交 + GA 22/22（红项逐条归因），补本文件读数。
+### 27.6 本次续跑落地读数（2026-11-06，接 §27 继续）
+
+**guard 实跑**：`scripts\check_uctreeview_authority.ps1` → 当前树 **PASS（0 红）**；
+基线 worktree `956ce26c` → **FAIL 11 红**（T1×2 / T3×7 / T4×1），T2 全绿；SKIP=0。
+判据落点：T2 的唯一出口断言收在 `vb6_ShowForm(` + `SW_SHOWDEFAULT` + `vb6_CdShowColor`（W2 白名单），
+T3 的"只求值一次"收在 `emitVariantSlotStore` 的 `_vtg_` 提存。
+
+**四条各自定位结论（本轮实测）**：
+1. 展开丢 icon + 子项不能切换：**两个成因均已改并视觉验证绿**；`uctreeview_px.ps1` 断言尚未扩。
+2. 三点按钮色选：**已改、旧红新绿**（新产物 `#32770 '颜色'` → `WM_CLOSE` → `IsWindow=false`）。
+3. LoadFromCustomXML：**已改、旧红新绿**（资产 `ejemplo.xml` 后出现 `library` 根节点）。
+4. 底部五按钮：**未闭合**。id 101..105 全部进事件且 `modal=0`；
+   Form3/Form5 缺 `JerarquiaEmpresa.xml` / `menu.xml`（`XML Load Error` 模态框阻塞 Form_Load）；
+   Form6 为 **AV 0xC0000005 @ 0x0007cea0**（WER 实证），崩点在 `ExpandAllNodes` 内。
+
+**Form6 的确定性代码错（生成码实证）**：
+`.temp\uctv_dbg_sess\Form6.c:425`
+`vb6_ucTreeViewPlus_ImageListAddImage(..., (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_Form6_GetContactImgProfile(...)}), &(vb6_VARIANT){0}, 0);`
+实参是 `As StdPicture` 的函数返回值（C 侧 `vb6_ComIface_Picture*`），被**当 BSTR 装箱**。
+发射站点 = `src/backend/detail/expr/cgen_expr_call_arg_emit.inc` 的 ByRef-Variant 复合字面量开关
+（`cType == "vb6_VARIANT"`，`switch (inferExprType(...))`，`default:` 末尾兜底发 `VT_BSTR`）。
+RTL 侧正确出口已存在：`vb6_VariantFromValue` 对任意指针走 `default: vb6_VariantObject`
+（`src/rtl/core/vb6rtl/vb6rtl_variant.h:263`，置 `vb6_vtDispatch` 且 `vb6_ComAddRefDispatch`）。
+
+**下一步（按此顺序，每步落盘）**：
+1. 修上述装箱站：对象/未知指针实参不得发 `VT_BSTR`（改发 `vb6_VariantFromValue(<expr>)` 或
+   `VT_DISPATCH + .pdispVal`），只对**确证是 BSTR** 的实参保留 `VT_BSTR`。
+2. 重编夹具 → 重跑 Form6：期望不再 AV；若 `ExpandAllNodes` 仍崩，再用正式构建链插桩定位。
+3. `-AssetFile` 补 `JerarquiaEmpresa.xml`、`menu.xml`；重跑 id 101..105，五个窗体逐一对账。
+4. 扩 `tests\guisample\uctreeview_px.ps1` 四条断言（含模态收口 + 10s 看门狗）。
+5. `C3 --arch x86` 重编 → 重建 `c3rtl.res` → `check_rtl_embedded.ps1` → 双远端提交 + GA 22/22。
+### 27.7 第 4 条闭合读数（2026-11-06 续跑）
+
+**根因（两处，均为生成侧，均有实测对照）**
+
+1. `As StdPicture` 返回值当 BSTR 装箱（AV 的直接前因）。
+   - 发射站：`src/backend/detail/expr/cgen_expr_call_arg_emit.inc` 的 ByRef-Variant 复合字面量
+     开关里 `default:` 之前（新增 `case Vb6Type::Object`）。
+   - 改前生成码（`.temp\uctv_new2\Form6.c:411`）：
+     `(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_Form6_GetContactImgProfile(...)})`
+   - 改后：`vb6_VARIANT _vb6_vararg_N = vb6_VariantFromValue((void*)(...));` 传 `&_vb6_vararg_N`
+     （`_Generic` default 臂 → `vb6_VariantObject`：`vt=VT_DISPATCH` + `vb6_ComAddRefDispatch`）。
+     工程类实例仍先经 `vb6_ComObject_FromInstance`（防 `VariantClear` 把裸结构体首字段当 vtable）。
+   - 读数：改前 WER `0xC0000005 / 偏移 0x0007cea0`；改后 AV 消失。
+
+2. UC 自有 Public 方法的按名桥**丢掉了 ByRef 标量形参**（438 的直接前因）。
+   - 发射站：`src/backend/detail/module/cgen_form_uc_methods.inc`。旧判据 `if (!pi.isByVal) ok=false`
+     把 `ucScrollbar.ctl:2222 Public Function TrackMouseWheelOnHwnd(lHwnd&)` 整条跳过
+     ⇒ 生成的 `vb6_ucScrollbar_ucMethods[]` 只有 7 项、无 `TrackMouseWheelOnHwnd`
+     ⇒ `ucTreeViewPlus.Update` 的 `With ucScrollbar1: .TrackMouseWheelOnHwnd UserControl.hwnd`
+     落进 `uc_hostmodel_call.inc` 末尾 ⇒ `[C3_HOST_438]` + `[C3_438] site=Call name="TrackMouseWheelOnHwnd"`
+     ⇒ **Run-time error '438'** 打断 Form_Load ⇒ Form6 停在隐藏态。
+   - 改法：ByRef **标量**形参加桥（局部临时量取址；引擎实参本来就是打包值，无可回写地址，
+     与 VB6 对非左值实参给临时量同义）；ByRef 对象/Variant/UDT/数组仍不发。
+     改后 ucMethods 表含 `{ L"TrackMouseWheelOnHwnd", 1, ... }`。
+
+**五窗体实测（新产物 `.temp\uctv_new3\Proyecto1.exe`，资产 3 份 XML + img）**
+`Corporate Hierarchy → VB6_Form_Form3 vis=True`；`Menu / Tools → Form5 vis=True`；
+`Contact  List → Form6 'Agenda tema oscuro' vis=True`；`Tree Explorer → Form2 vis=True`；
+`Drag and Drop → Form4 'Drag & Drop' vis=True`；全程无 `#32770`、进程存活。
+（Form6 改前：`vis=False` + `#32770 'VB6 Runtime Error' 438`；更早：AV 0xC0000005。）
+
+**嵌入 RTL**：`scripts\check_rtl_embedded.ps1` → PASS，126 个资源逐字节一致（`c3rtl.res` 已随
+`scripts\build.bat` 重建；本轮之后再改 RTL 需重跑同一脚本）。
+
+**残留（非第 4 条，另记）**：Form6 运行时 stderr 打 `THE IMAGE: 1..7 DON'T EXIST`
+（`ucTreeViewPlus.ctl:985` 的 `cImageList(index)=0` 分支）⇒ 联系人头像未进 ImageList。
+属于第 1 条 icon 家族的**另一实例**（key/索引口径），未在本轮闭合。
+### 27.8 断言扩写与旧红新绿读数（2026-11-06 续跑，缺陷 1/2/3/4 逐条）
+
+`tests\guisample\uctreeview_px.ps1` 追加**交互判据**段（缺陷 1/2/3/4 各自独立取样，红项并入
+同一条 FAIL 通道，不另开"软失败"）：
+
+| 判据 | 操作 | 阈值（不放宽） | 新产物实测 | 旧产物实测 |
+|---|---|---|---|---|
+| 1a 展开不丢图标 | 双击首行 Facebook 收起→展开，各量一次树区 | 展开态可见行 ≥ 收起态 + 3；**图标彩色像素**展开态 ≥ 收起态 + 20（粉底 255,180,180 已从 vivid 剔除） | t1=84 行/1715、t2=56 行/998 → 过 | 76/1552 vs 56/998 → 过（该旧产物已含缺陷 1 修复） |
+| 2 三点按钮 | BM_CLICK 第一个 `...` | `#32770` 3s 内出现；`WM_CLOSE` 后 `IsWindow=false`（3s，再 IDCANCEL 3s 兜底）；主窗 `WM_NULL` 2s 内应 | `'颜色'` 出现且 `close=True` | `colorDialog=none` → **红** |
+| 3 LoadFromCustomXML | 点击 `Load from custom XML` | ①无 `#32770` ②旧高亮 ≤100 ③勾选蓝(99,99,255) 从 >20 降到 ≤5 ④可见行数变化 ≥5 | `rows 56->12, chk 73->0, hl 0->0, dark 123` | 同口径过（该旧产物已含缺陷 3 修复） |
+| 4 底部五按钮 | 逐个 BM_CLICK 五个 caption | 每枚 3s 内出现**可见** `VB6_Form_*` 且 `WM_CLOSE` 3s 内消失；主窗 2s 内应 | Tree Explorer / Form3 / Drag & Drop / Form5 / Agenda tema oscuro 全过，五枚 close=True | `Corporate Hierarchy` 3s 无窗体，后续 caption 找不到，主窗不响应 → **红** |
+
+收口口径落实：所有"等窗口"上限 3s（`Wait-Until`/`Wait-Gone`），模态盒探测用
+`EnumWindows` 找 `#32770` 且要求 `IsWindowVisible`，关闭 = `PostMessage(WM_CLOSE)` →
+`IsWindow=false` 校验 → 失败再 `WM_COMMAND IDCANCEL` 3s；**无任何无界等待**。
+看门狗兜底仍由套件 `-RunTimeoutSec`（默认 60s，超时杀进程 + 诊断）。
+
+产物与哨兵：`output\ucTreeView\Proyecto1.exe`（833536 B，2026-11-07 00:58）→ px **PASS**；
+`scripts\check_uctreeview_authority.ps1` → PASS（RaiseEvent 1 / ChooseColor 7 / ShowWindow 散点 0）。
+`output\ucTreeView\` 同时补 `img\` + `ejemplo.xml` + `JerarquiaEmpresa.xml` + `menu.xml`。
+
+未闭合（不在四条口径内，另记）：Form6 的 `THE IMAGE: 1..7 DON'T EXIST`（联系人头像未进
+ImageList，`ucTreeViewPlus.ctl:985` 的 `cImageList(index)=0` 分支）。
+
+### 27.9 续跑状态快照（2026-11-07 01:15，中断点；可直接照此续跑）
+
+**A. guard 哨兵实际状态（三条，均本机实跑）**
+
+| 脚本 | 判据 | 实跑 | 读数 |
+|---|---|---|---|
+| `scripts\check_uctreeview_authority.ps1` | T1 RaiseEvent 事件分派 miss；T2 ChooseColor DI 出口唯一；T3 TreeView 槽位出口；T4 多窗体 + 控件数组转发；W2 白名单 | **PASS** | `RaiseEvent 分发 1`、`ChooseColor DI 站 7`、`后端 ShowWindow 散点 0`、`Missing+Is+槽位出口齐`、`数组容器转发齐`；白名单仅 `vb6_CdShowColor`（理由：ChooseColor 的 DI 桩，非后端散点）。基线 `956ce26c` 同一脚本 **FAIL 11 红**（T1×2 / T3×7 / T4×1）。 |
+| `scripts\check_box_temp_reclaim.ps1` | R1 登记站=2 / 声明=1 / 收回=1；R2 收回在同一语句尾；R3 缩进闸；R4 夹具 10 声明 / 9 收回 / 1 故意不收；R5 不重复释放、不用 VariantAssign | **PASS** | `decls=10 clears=9 unreclaimed=1 push=2 drain=1 guarded=1`（Object 分支改成不登记的复合字面量后回到 2 站）。 |
+| `scripts\check_builtin_slot_returns.ps1` | R2 漏登记；R8 派生对账 | **先 FAIL → 重跑 gen 后 PASS** | FAIL 时：`R2 漏登记 vb6_VariantMissing`、`R8 derived=42 current=41 added=1 removed=0`；重跑 `scripts\gen_variant_slot_prefixes.ps1` 后 `table=42` → PASS。 |
+
+`check_rtl_embedded.ps1` 上次为 **PASS 126 资源**（`c3rtl.res` 随 `scripts\build.bat` 重建）；
+本轮 RTL 源码**未再改**（`git status` 里只有两个 cgen 文件），故内嵌核对无需重跑即成立，
+重编后仍应复核一次。
+
+**B. 四条缺陷各自处在哪一步**
+
+| # | 缺陷 | 步骤状态 | 实测读数 |
+|---|---|---|---|
+| 1 | 展开丢图标 + 子项不能切换 | 已确认根因 / 已改代码 / 已重编 / 已跑断言（**绿**） | 三个独立成因：① `Optional As Variant` 省略实参填 `vb6_VariantEmpty()` 而非 `Missing` → ImageList key 口径失效；② `Is` 生成裸 `==`，工程类实例与 COM 包装指针不同层 ⇒ 单选恒 false；③ 槽位双求值多插一行。px：展开 `84 行 / 1715 vivid`，收起 `56 行 / 998 vivid`，断言 `≥+3 行 且 ≥+20 vivid`（粉底 255,180,180 已剔除）。 |
+| 2 | 三点按钮不弹色选 | 已确认根因 / 已改代码 / 已重编 / 已跑断言（**绿**） | 根因：`Picture1` 控件数组容器未逐元素转发 → `vb6_fw`。px：新产物 `#32770 '颜色'` 出现、`WM_CLOSE` 后 `colorClosed=True`；旧产物 `colorDialog=none`（红）。 |
+| 3 | LoadFromCustomXML 无效 | 已确认根因 / 已改代码 / 已重编 / 已跑断言（**绿**） | 根因：夹具缺 `ejemplo.xml` 资产 → `xmlDoc.Load` 失败。px：`rows 56->12`、`chk 73->0`、`hl 0->0`、`dark 123`、无 `#32770`。 |
+| 4 | 底部五按钮不弹窗体 | 已确认根因 / 已改代码 / 已重编 / 已跑断言（**绿**） | 两处生成侧根因：① `As StdPicture` 返值按 BSTR 装箱 → `0xC0000005 @ 0x0007cea0`；② 按名桥丢 ByRef 标量形参（`TrackMouseWheelOnHwnd`）→ `438`。px：五窗体 `vis=True` 且逐个可 `WM_CLOSE`；旧产物 `Corporate Hierarchy` 无窗体 + 主窗不响应（红）。 |
+
+**C. 本轮已改但尚未验证的文件（必须重编后才会生效）**
+
+| 文件 | 改了什么 | 是否已重编 |
+|---|---|---|
+| `src\backend\detail\expr\cgen_expr_call_arg_emit.inc` | `case Vb6Type::Object`：命名临时量 + `boxTempsToClear_` 登记 **改成** 不登记的复合字面量 `{...vt=VT_DISPATCH, .pdispVal=...}`（只为让 R1 回到 2 站） | **否**。`C3.exe` 时间 00:33，该文件 01:10 ⇒ 产物 `Proyecto1.exe`(00:58) 仍跑的是"命名临时量"版本，**该分支的运行时行为尚未验证**；重编后必须重跑 px 与五窗体判据。 |
+| `src\backend\detail\expr\cgen_variant_slot_prefixes.inc` | 重跑 gen 补 `vb6_VariantMissing`（41→42 名） | **否**（数据表，随 C3 重编生效）。 |
+| RTL（`vb6comserver*` / `vb6rtl_variant.h` / `vb6com_pack.c` / `c3rtl.res`） | 本轮未改；均为已提交内容 | `c3rtl.res` 已随上一次 build 重建；本次无 RTL 变更。 |
+
+**D. 工作树状态**
+
+- 已提交并已推 `origin dev` + `github dev`：`70267038`（四条修复 + 哨兵）、`99053716`（px 四条交互判据）。
+- 未提交：`src\backend\detail\expr\cgen_expr_call_arg_emit.inc`、`src\backend\detail\expr\cgen_variant_slot_prefixes.inc`（+10/-12）。
+- 未跟踪：`.zcodeignore`（**不提交**）。
+- GA 最近一次运行 `42257818768`：两格静态红（R8 派生不一致、R1 push=3），修法已落地待重编验证。
+
+**E. 下一步顺序（每完成一条落一次盘）**
+
+1. 重编 `C3.exe`（`.temp\build_crlf.bat` + `C3_VCVARSALL`）→ 确认 Object 分支能编译、`c3rtl.res` 重建；
+2. 重生成 `output\ucTreeView\Proyecto1.exe` → 重跑 `tests\guisample\uctreeview_px.ps1`（须仍 PASS：`act=[expand 84/1715 | xml 56->12 | colorDialog='颜色' close=True | 五窗体]`），若 Object 复合字面量版本破坏第 4 条则回退该分支并另找不改 R1 的写法；
+3. 重跑三条静态哨兵 + `check_rtl_embedded.ps1`；
+4. 提交（cgen 两文件 + 本节读数）→ 推双远端 → `gh run watch` 追 GA 到 22/22，红项逐条归因；
+5. 残留 `THE IMAGE: 1..7 DON'T EXIST` 不在四条口径内，待用户确认后再动。
+### 27.10 重编 + 两格静态红转绿（2026-11-07 01:30 落地读数）
+
+**重编**：`scripts/build.bat`（CRLF 副本 + `C3_VCVARSALL`）→ rc=0，`C3.exe` 时间 01:14:48。
+只重编两只 TU（`cgen_util_type.cpp` 含槽位表 `.inc`、`cgen_expr_call.cpp` 含实参发射 `.inc`），
+即两处改动都进二进制。重生成的 `output\ucTreeView\Proyecto1.exe` = 833536 B，01:26:09，
+PE x86；产物 C 里对象档实参已是 `(&(vb6_VARIANT){.vt=VT_DISPATCH, .pdispVal=(IDispatch*)...})`。
+
+**px 判据（新产物，实测 PASS）**：
+`act=[expand pre=56/1005 t1=84/1715 t2=56/998 | xml rows=56->12 chk=73->0 hl=0->0 dark=123 |
+colorDialog='颜色' colorClosed=True | form[Tree Explorer]='Tree Explorer' close=True |
+form[Corporate Hierarchy]='Form3' close=True | form[Drag and Drop]='Drag & Drop' close=True |
+form[Menu / Tools]='Form5' close=True | form[Contact  List]='Agenda tema oscuro' close=True]`
+⇒ 第 4 条（`Contact  List` → Form6）在**不登记**的复合字面量版本下仍绿，说明对象档不再按
+BSTR 装箱且不依赖 `boxTempsToClear_` 的第三站。
+
+**四条守卫（同一二进制，全绿）**
+- `check_uctreeview_authority.ps1` PASS
+- `check_builtin_slot_returns.ps1` PASS（`table=42`）
+- `check_box_temp_reclaim.ps1` PASS（`push=2 drain=1`，阈值未放宽）
+- `check_rtl_embedded.ps1` PASS（126 资源逐字节一致；本轮无 RTL 改动，未重建 `c3rtl.res`）
+
+### 27.11 GA 42262126054（head 35119006）红格归因与处置
+
+**红格清单（5 格 / 22）与原文证据**
+
+| job | 失败步骤 | 关键原文 | 归类 |
+|---|---|---|---|
+| Emit manifest (shape oracle) | 清单对表 | `发码清单比较: 期望 596 行 / 实得 596 行 / 相同 490 / 哈希不同 106 / 缺席 0 / 多出 0`；`处置… pwsh scripts/rebless_emit_manifest.ps1 -Bless` | **登记类**（含 1 条真形状修正：见下） |
+| Tests (compile #1) | STATIC | `[STATIC] variant_slot_store ... FAIL`：`R1 出口本体有 9 枚 emitLine (要恰好 6)` | **真形状变化**（本轮 hoist 提存加了 3 行）→ 哨兵按新形状重钉（未放宽：新增 `_vtg_` 存在性判据） |
+| Tests (compile #1) | STATIC | `[STATIC] owned_temp_keeps ... FAIL`：`K13c 推导出来的 owned 1 枚发码侧那份里没有: vb6_VariantMissing` | **登记类**（`src/common/owned_temp_keeps.hpp` 手写清单补 1 行） |
+| Tests (bas #1) | EMITC-SHAPE | `[EMITC-SHAPE] b164_slot_store_shape ... missing: vb6_VariantClear(&e);` | **真回归**（`clearArg` 被写成 `(&e)`）→ 改回逐字节旧形 `&<target>` |
+| Tests (bas #2) | EMITC-SHAPE | `[EMITC-SHAPE] b169_class_field_store_shape ... missing: vb6_VariantClear(&_vb6_with_0->PV)` | 同上（同一个 `clearArg` 根因） |
+| Tests (vbp #1) | `[VBP-BUILD] ucTreeView` 像素断言 | `FAIL 交互: 展开/收起无差异 (两次双击后可见行数都是 33/33…)`；读数 `dpi=96 … faceInstalled=Arial Narrow:no` | **环境/采集侧**（合成双击未进窗口）→ 修脚本可靠性 |
+
+**为什么 `&e` 那条是真回归**：本地复算 `C3.exe tests\test_fe_slot_leak.bas --emit-c` 曾见
+`vb6_VariantClear((&e))`（多一层括号），是 hoist 提存改造里把非提存路也包进 `"(&" + target + ")"`；
+改回 `"&" + target` 后逐字命中 `vb6_VariantClear(&e);`，b169 同批复算命中
+`vb6_VariantClear(&_vb6_with_0->PV);`。
+
+**双击那条为什么是采集侧而非业务**：`ucTreeViewPlus.ctl:1228` 的 `UserControl_DblClick`
+用 `GetCursorPos` + `ScreenToClient(UserControl.hwnd)` **自己取点**，不读 lParam；旧的
+`mouse_event` 在 CI 96dpi 桌面上没把两条消息送进宿主（两次读数 33/33），本地 120dpi 恰好能中。
+处置：改成「SetCursorPos + 向 UC 宿主 PostMessage MOVE/DOWN/UP/DBLCLK/UP」为主路
+（不依赖前台/焦点），台面鼠标为兜底；候选行最多 4 个、每步 800ms 有界；判据阈值未动。
+
+**同一提交的本地复算（修后）**
+- `check_variant_slot_store.ps1` PASS（`def 1 | calls 11 | violations 0`）
+- `check_owned_temp_keeps.ps1` PASS（`K13/K13b/K13c two-way`）
+- `uctreeview_px.ps1` PASS：`act=[expand pre=57/1005 a=84/1715 b=56/998 at=121,140 via=post | xml …
+  | colorDialog='颜色' colorClosed=True | 五窗体 close=True]`
+- `check_box_temp_reclaim.ps1` / `check_uctreeview_authority.ps1` 仍绿（收尾复跑见 §27.12）
+
+**补记**：上一次运行 `42257818768`（head `99053716`）同样是这 6 格红（Emit manifest / vbp #1 /
+bas #1 / bas #2 / compile #1 / compile #2），并非"只剩两格"——§27.9 的 D 段以此为准。
+
+### 27.12 GA 42285817255（head 9a2d3648）红格清单、归因与登记（2026-11-07）
+
+**run 与 head 核对**：`gh run list --branch dev --limit 5` → `42285817255` 的 `headSha=9a2d3648`，与本机
+`git rev-parse HEAD` 逐字相同（就是被推上去的那一笔）。22 格里红 2 格，其余 20 格 success。
+
+| job | 失败步骤 | 关键原文 | 归类 |
+|---|---|---|---|
+| Emit manifest (shape oracle) | Hash the emitted C of every corpus input | `expectation-check=FAIL rc=1`；`发码清单比较: 期望 596 行 / 实得 596 行 / 相同 575 / 哈希不同 21 / 缺席 0 / 多出 0` | **登记类**（见下逐行归因） |
+| Tests (vbp #1) | Run regression (vbp #1) | `pixels FAIL [uctreeview_px.ps1]: FAIL 交互: XML 载入后仍有旧选中高亮 4446 (Nodes.Clear 未生效); XML 载入后勾选框蓝仍在 52 (CheckBoxes=False 未生效); XML 载入前后可见节点行 33->33 几乎没变 (树没被 XML 重填)` | **采集侧**（点击没进事件/没刷屏）→ 修脚本可靠性 |
+
+同一行的 `act=` 读数（原文摘录）：`expand pre=33/660 a=58/1000 b=33/659 at=157,200 via=post
+hit=[VB6_UserControlHost|;VB6_UserControlHost|] | xml rows=33->33 chk=52->52 hl=4446->4446 dark=496 |
+colorDialog='Color' | colorClosed=True | 五窗体 close=True`。
+⇒ 展开那一段这次是**通的**（33→58→33，`via=post`，合成双击已进窗口）；只有 XML 按钮那一次点击
+在读数上完全没落地（整块树一模一样：行数/勾/高亮都不动），而它之后的 `...` 按钮 BM_CLICK 又是通的
+（`colorDialog='Color'`）⇒ 不是 BM_CLICK 机制坏，是**紧跟在合成鼠标输入之后的第一次点击被吞**。
+
+**21 份哈希的逐条归因（用 CI 自己交回的清单，不吃本机全量重跑）**
+
+`git fetch github ci/emit-manifest` 的提交注记 `ci: emit manifest head=9a2d3648`（祖先链逐笔都在），
+把三份清单逐行对齐后读数：
+
+| 对照 | 不同的行 |
+|---|---|
+| expected vs `99053716` 那轮清单 | 106 |
+| `99053716` → `35119006`（对象档实参改复合字面量） | 3（`tests/ucTreeView/Proyecto1.vbp`、`tests/Charts 2020/ucTreeMaps/Proyecto1.vbp`、`tests/Charts 2020/Proyecto1.vbp`） |
+| `35119006` → `9a2d3648`（`clearArg` 还原 `&target`） | 98 |
+| `9a2d3648` vs expected 剩余 | **21** |
+
+即：21 = 本轮 ucTreeView 四条缺陷那笔 cgen 改动（UC 方法/事件/命名/二元表达式）留下的形状（106 里
+85 份被 `clearArg` 还原救回）里，再叠加 3 份对象档复合字面量。**都是有意改的形状，不是行为回归**：
+- 3 份对象档：`As StdPicture` 等实参现在发 `(&(vb6_VARIANT){.vt=VT_DISPATCH, .pdispVal=…})`，
+  不再登记 `boxTempsToClear_`（authority 钉死的两站不许有第三站）；
+- 其余 18 份：UC/COM/控件数组重工程（ucChart*/ucProgressCircular/ucSegmentedControl/guisample/
+  VBFlexGrid/ve_list/ctrlstate/dbgdlg/test_events/cls_inh 等），形状随那笔 cgen 改动变。
+
+**本机复算（同一二进制 `.build\C3.exe`，只取这 21 里 6 份做逐字节核对，不跑全量）**
+
+```
+rc= sha256=941074de… bytes=2196162 tests/Charts 2020/Proyecto1.vbp
+rc= sha256=4ff592bd… bytes=280776  tests/Charts 2020/ucChartArea/Proyecto1.vbp
+rc= sha256=51652f25… bytes=32918   tests/cls_inh/InhMain.bas
+rc= sha256=986488957… bytes=239040 tests/czUI-main/czFormDemo.vbp
+rc= sha256=0d641cdc… bytes=16648   tests/m7_test/M7Test.vbp
+rc= sha256=42dd2780… bytes=24401   tests/test_activex_dll/test_event_dll.vbp
+```
+6/6 与 CI 清单的新哈希**逐字相同**（归一化口径照 `emit_manifest.ps1`：头部 `<PATH>`、根 `<ROOT>`、
+Latin-1 往返）⇒ 这台二进制与 CI 那台对同一输入给同一份 C，登记的是"CI 交回来的数"而不是"我这台的数"。
+
+**登记读数**（`scripts\rebless_emit_manifest.ps1 -Manifest .temp\ci_manifest.txt -Bless`）
+```
+已登记 emit-manifest.expected.txt：注脚 384 行（头部 37 + 末尾 347）+ 数据行 596 行（改写 21 / 新增 0 / 退场 0）
+发码清单比较: 期望 596 行 / 实得 596 行 / 相同 596 / 哈希不同 0 / 缺席 0 / 多出 0
+OK check_manifest_coverage: K1..K3 (inputs=596 [.vbp=221 .bas=375], registered=596, sets equal)
+```
+
+**XML 那条的处置（只动脚本可靠性，阈值一字未动）**
+
+`tests\guisample\uctreeview_px.ps1` 的缺陷 3 段加了三层隔离：
+1. 展开块结束后把光标挪到窗体左上（`SetCursorPos(wr.L+8, wr.T+5)`）——把"合成鼠标输入残留"最小化；
+2. 点击最多 3 次（每次 1200ms、每次重新按 caption 定位按钮），两次之间 `RedrawWindow(uc, 0x0181)`，
+   把「进了事件但没刷屏」与「压根没进事件」分开；
+3. 第 2/3 次改走**同步** `SendMessageTimeoutW(BM_CLICK, SMTO_ABORTIFHUNG=2, 3000ms)`，超时记
+   `sync-timeout;` —— 这一步能证明按钮窗口过程到底有没有处理这条消息；诊断串同时带
+   `cls=/en=/vis=/cap=/try=`，以及 `gone;`（按钮中途被重建）。
+断言仍按原口径：`hl<=100`、`chk<=5`、`|rowsΔ|>=5`、`dark>=30`，没有放宽、没有删用例。
+
+本地复跑（改后，120dpi，新产物）：`PASS … act=[expand pre=56/1005 a=84/1715 b=56/998 at=121,140
+via=post | xml rows=56->12 chk=73->0 hl=0->0 dark=122 try=1 cls=Button en=True vis=True cap=Load from
+custom XML | colorDialog='颜色' | colorClosed=True | 五窗体 close=True] · px_rc=0`。
+
+### 27.13 「合成鼠标输入之后第一次点击是否被吞」单发探针（2026-11-07）
+
+**探针**：`.temp\probe_click_once.ps1`（`-Mode c3|vb6`、`-Sc A,B,C,D,E,F,G,H`）。
+每个场景**只对目标按钮点一次**（无重试、无阈值放宽）；前序合成输入与这次点击分开记录。
+
+口径：
+- 画面读数 = `PrintWindow(PW_RENDERFULLCONTENT=2)` 离屏量树区 `hl`（严格 (255,180,180)）与 `dark`（lum<110），
+  与桌面上有没有窗口遮挡无关；
+- 捕获/焦点 = `GetGUIThreadInfo(线程id)` 与 `AttachThreadInput + GetCapture/GetFocus/GetActiveWindow` 双路；
+- 消息是否进 WndProc = 单发 `SendMessageTimeoutW(BM_CLICK, SMTO_ABORTIFHUNG=2, 3000ms)`，
+  返回非零即"按钮窗口过程已把这条消息处理完"，`sync=ok:<ms>`。
+
+**探针自身两处错误（先记，避免把工具读数当产品结论）**
+
+1. `TidOf` 曾返回 `GetWindowThreadProcessId` 的 **out 参数（进程 id）**，不是函数返回值（线程 id）
+   ⇒ `GetGUIThreadInfo` 恒 `err=87`、`AttachThreadInput` 恒 False。改成返回函数返回值后两条均正常
+   （本节所有 `cap/focus` 都是修后读数；§27.12 里"捕获/焦点采集不可用"的备注作废）。
+2. `HlPoint` 首版把落点存成数组，打印成 `pt=,`、落点退化为盲点 ⇒ 合成双击一次都没展开（`exp == fresh`）。
+   改为标量 `$px/$py`（粉底首点 +24,+6）后 `exp` 真正变化（`hl 6865→0, dark 671→1079`），
+   前序"合成输入"状态才真正成立。
+
+**C3 读数**（`.temp\uctv_new3\Proyecto1.exe`，本机 120dpi；每行 = 独立启动一次进程）
+
+原始行（`…` 处是重复的 `cap/focus/act` 字段，只做省略；B 场景复跑一次为 `HIT t=247`，其余数值同上）：
+```
+SC=A HIT t=272 fresh=[hl=6865 dark=671] exp=[na] mid=[hl=6865 dark=671] after=[hl=0 dark=122] tid=8556 cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1 | attach=True cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=B HIT t=254 fresh=[hl=6865 dark=671] exp=[hl=0 dark=1079] mid=[hl=0 dark=636] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=C HIT t=246 fresh=[hl=6865 dark=671] exp=[hl=0 dark=1079] mid=[hl=0 dark=636] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=D HIT t=268 fresh=[hl=6865 dark=671] exp=[hl=0 dark=1107] mid=[hl=0 dark=1107] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=E HIT t=274 fresh=[hl=6865 dark=671] exp=[hl=6865 dark=671] mid=[hl=6865 dark=671] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=F HIT t=269 fresh=[hl=6865 dark=671] exp=[hl=0 dark=1079] mid=[hl=0 dark=670] after=[hl=0 dark=122] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+SC=G HIT t=284 … mid=[hl=0 dark=636] after=[hl=0 dark=122] … dbg=… sync=ok:100
+SC=H STABLE 8s fresh=[hl=6865 dark=671] exp=[hl=0 dark=1079] mid=[hl=0 dark=636] after=[hl=0 dark=636] … cap=| focus=Button|AlternateNodeColors act=VB6_Form_Form1|Form1
+```
+
+| 场景 | 前序合成输入 | 单次点击 | 读数 | cap/focus/act |
+|---|---|---|---|---|
+| A 基线 | 无 | PostMessage BM_CLICK ×1 | **HIT t=272**，`6865/671 → 0/122` | `cap=`空 / `focus=Button\|AlternateNodeColors` / `act=VB6_Form_Form1\|Form1` |
+| B | Post 双击展开→双击收起→光标移出树区 | 同上 ×1 | **HIT t=254**，`mid 0/636 → after 0/122` | 同上 |
+| C | 同 B，但**光标留在树区**（复现 CI 失败态） | 同上 ×1 | **HIT t=246**，`mid 0/636 → after 0/122` | 同上 |
+| D | 只投一对 DOWN/UP（无 DBLCLK） | 同上 ×1 | **HIT t=268**，`mid 0/1107 → after 0/122` | 同上 |
+| E | `mouse_event` 真实输入队列双击 | 同上 ×1 | **HIT t=274**；但 `exp==fresh`（真实双击没进树，见下） | 同上 |
+| F | Post 双击后，单发**真实鼠标单击**按钮中心 | 真实单击 ×1 | **HIT t=269**，`mid 0/670 → after 0/122` | 同上 |
+| G | Post 双击后，单发**同步** BM_CLICK | 同步 ×1 | **HIT t=284**，`sync=ok:100`（消息 100ms 内被窗口过程处理完） | 同上 |
+| H 对照 | 同 B 的合成输入，**完全不点** | 无 | **STABLE 8s**，`after == mid == 0/636` | 同上 |
+
+E 的口径限制：本机 `SetForegroundWindow` 没能把进程提到真前台时，`mouse_event` 的真实双击
+不落在树上（`exp` 与 `fresh` 一模一样），所以 E 只能当"真实输入之后的再一次点击仍 HIT"，
+不能当"真实双击确实展开了树"的证据；该证据由 B/C/D 的 Post 路径提供。
+
+**真 VB6 对照读数**（`.temp\vb6probe\Probe.exe`：Form1 "Probe"、Go 按钮 = `Caption="CLICKED"`、
+Dbl 按钮 = `Caption="DBLCLK"`，VB6 `/make` 产物；同一探针只点一次）
+
+```
+SC=A HIT t=169 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Go  act=ThunderRT6FormDC|Probe
+SC=B HIT t=155 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+SC=C HIT t=159 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+SC=D HIT t=161 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Go  act=ThunderRT6FormDC|Probe
+SC=E HIT t=171 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Go  act=ThunderRT6FormDC|Probe
+SC=F HIT t=515 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+SC=G HIT t=170 sync=ok:7 cap='CLICKED' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+SC=H STABLE 8s cap='Probe' … cap=| focus=ThunderRT6CommandButton|Dbl act=ThunderRT6FormDC|Probe
+```
+
+**结论（明确口径）**
+
+1. **C3 不吞**：A/B/C/D/F/G **六个**场景（前序输入确已生效的）+ E（真实输入后的一次点击）里，
+   合成输入之后**唯一的那一次**点击都生效（HIT），包括把光标留在树区的 C 场景。H 对照组 8s 内
+   画面零变化（`after == mid`），证明 B/C 的 `636→122` 不能由"后台自己刷屏"解释，只能归因给那次点击。
+2. **捕获已释放**：所有 C3 读数 `cap=`（空），即点击发生前目标线程**没有鼠标捕获**；
+   `focus` 停在另一枚按钮、`act` 是主窗体。`uc_host_window.c:518-519` 的
+   `WM_LBUTTONDOWN→SetCapture` / `WM_LBUTTONUP→ReleaseCapture` 成对，双击序列的两次 UP
+   都把捕获放掉了 —— "捕获未释放"这一假设被实测否定。
+3. **消息确实进 WndProc**：G 场景单发同步 BM_CLICK，C3 `sync=ok:100`（VB6 `ok:7`），
+   且随后画面变成 `0/122`。不是"消息没进队列/窗口过程"，也不是"进了但事件没跑"。
+4. **真 VB6 同语义**：VB6 在 A..G 七个场景同样**全部 HIT**（`cap=` 空同样成立），H 稳定。
+   即"合成鼠标输入之后的第一次点击"在 Windows 上本来就该生效；没有任何 VB6 吞点击的行为可对照。
+5. 因此**结论 = 【重试是正当的】**：上一轮 CI 那次 XML 点击不落地，属**脚本时序/采集侧**
+   （同一提交的下一轮 `try=1` 一次点中即通过，§27.12 已记），不是 C3 消息处理的缺陷；
+   px 脚本的"最多 3 次 + 同步 BM_CLICK"是**对不可控桌面时序的容错**，不是掩盖产品缺陷。
+   判据阈值仍按原口径（`hl<=100`、`chk<=5`、`|rowsΔ|>=5`、`dark>=30`），未放宽、未删用例。
+
+**探针的局限（须记）**：本机 120dpi、有交互桌面；CI 是 96dpi，坐标/时序不可逐位复用，
+故本探针只在本机跑（未进 CI shard）。它回答的是"语义层"（C3 与 VB6 是否吞点击），
+不回答"CI 那台桌面在那一瞬的窗口是否被别的窗口抢焦点"——后者由 px 脚本的有界重试兜住。
+
+### 27.14 编码取证 + 真 VB6 基准升级 + 构建口径（2026-11-07）
+
+**全流程 pwsh 7**：本节所有采集/测试脚本一律 `pwsh -NoProfile -File …` 执行（不再有 5.1 分支）。
+
+#### 27.14.1 字节级取证（不推断）
+
+| 文件 | `D:\vb_yqt4qPac\ucTreeView\`（用户已转 UTF-8） | `tests\ucTreeView\`（仓库夹具） | 判定 |
+|---|---|---|---|
+| Form1.frm | 42417 B，无 BOM，**合法 UTF-8** | 42415 B，无 BOM，**非 UTF-8**；按 cp1252 合法（`ED 7A`=í、`F1`=ñ） | 仓库=原西语编码 |
+| ucTreeViewPlus.ctl | 106567 B，无 BOM，合法 UTF-8 | 106553 B，非 UTF-8；cp1252 合法（`FA 6C`=úl、`F3 6E`=ón） | 仓库=原西语编码 |
+| ucScrollbar.ctl | 145062 B，**纯 ASCII** | 145062 B，纯 ASCII | 两处**逐字节相同** |
+| Form2..6 / Cls / Node | — | 无 BOM、cp1252（Form6 含 `F1`） | 同上 |
+
+结论：**仓库夹具本身就是原编码（cp1252），不存在"夹具被转码"的保真缺陷**，不需要修夹具；
+用户 `D:\` 那份才是被转成 UTF-8 的副本。
+
+#### 27.14.2 `/make` 编码 A/B 对照（pwsh，VB6Mini `C:\Program Files (x86)\VB6Mini\bin\VB6.EXE`）
+
+| 模式 | 做法 | 退出码 | 日志原文（关键行） | 产物 |
+|---|---|---|---|---|
+| ansi | 原字节复制，0 字未改 | **1** | `Form1.log` 行 416 `不能加载控件 ucTreeViewPlus1`；`ucTreeViewPlus.log` 行 31 `属性 SmoothScrollFactor在 ucScrollbar2 中有无效值。` / 行 50 `…ucScrollbar1…` | 无 |
+| utf8 | Form1.frm + ucTreeViewPlus.ctl 解 cp1252 后写 UTF-8（无 BOM） | **1** | 与 ansi **逐字相同** | 无 |
+
+结论：**编码不是变量**（两种编码的失败日志一模一样）；根因是 `SmoothScrollFactor = 0,15` 的
+**逗号小数**（作者西语环境；本机 zh-CN 小数分隔符是 `.`，VB6 解析 `0,15` 为无效值）。
+VB6 IDE 把它当警告、命令行 `/make` 当致命错误 —— 与用户现场一致。
+
+#### 27.14.3 SmoothScrollFactor 合法性/等价性（先从 .ctl 查清，未猜）
+
+- `ucScrollbar.ctl`：`Public Property Get/Let SmoothScrollFactor() As Single`；
+  `PropBag.ReadProperty/WriteProperty("SmoothScrollFactor", 0.3)`（**默认 0.3**）；
+  `Initialize` 里写 `0.15`；`FixDec(S) = Val(Replace(S, ",", "."))` ⇒ 作者本意就是 **0.15**；
+  `If factor > 1 Then … / 100` ⇒ **1 = 关闭平滑**。
+- `ucTreeViewPlus.ctl` `UserControl_ReadProperties`（2705/2710 行）运行期强制
+  `ucScrollbar1/2.SmoothScrollFactor = 1` ⇒ 设计期 `0.15`→`0.15` **对行为中性**（被父 UC 覆盖）。
+- 基准副本：`.temp\vb6ref\ucTreeView`（原夹具复制），**字节级**把 `=   0,15` 改成 `=   0.15`
+  （ASCII 定位替换，非 ASCII 字节逐字节保留，不解码不重编码）。脚本：
+  `tests\guisample\uctv_vb6_baseline.ps1`。
+- 实测：`patched(bytes, 0,15->0.15): ucTreeViewPlus.ctl`；`vb6 exit=0 exe=True`；
+  产物 `.temp\vb6ref\ucTreeView\Proyecto1.exe` **331776 字节**（真 VB6 基准，x86 无关）。
+
+#### 27.14.4 C3 侧登记（同一份原编码夹具）
+
+- frm 解析把 `0,15` 判成 ident（`FrmValue::fromIdent`）；**嵌套 UC 的设计期非标准属性根本不 emit**
+  （只 emit `vb6_UC_CreateDesignUserControl(type,name,x,y,w,h)` 几何）⇒ **静默丢弃**：不警告、不报错。
+- 运行期回落 `ReadProperty("SmoothScrollFactor", 0.3)`，随后被父 UC 强制 `= 1` ⇒ 与 VB6 运行时等价；
+  **不会**把无效值当 0/负数用。
+- C3 读夹具走 `SourceBuffer::readAndConvertToUtf8`（GBK/UTF-8 均可），本轮 C3 编的正是仓库**原编码**
+  文件，`C3 exit=0`。⇒ 不存在"VB6 只吃原编码 / C3 只吃 UTF-8"的夹具层坑。
+
+#### 27.14.5 构建口径（必须记）
+
+- `.build\C3.exe` 是 **x64 宿主**，默认 `--arch x64` 产物启动即 `0xC0000409`（已知问题）；
+  **本夹具必须 `--arch x86`**：产物 833536→834048 字节、machine=0x14C、可正常启动。
+- 关闭 objcache 全量重编：`$env:C3_NO_OBJCACHE='1'` + `scripts\c3_build.ps1 -Extra "--arch x86"`。
+- RTL 有改 ⇒ 必须先 `scripts\_tmp_c3_rebuild.bat`（vcvars+cmake）重编 C3，再跑
+  `scripts\check_rtl_embedded.ps1`，最后编夹具。
+
+#### 27.14.6 真 VB6 基准读数（`.temp\vb6ref\ref_metrics.json`，UC 子窗 PrintWindow）
+
+| 窗 | w×h | textRows | firstTextW | vivid | photo | avatar | dark | 其它 | 字体 |
+|---|---|---|---|---|---|---|---|---|---|
+| Tree Explorer | 321×615 | 5 | 78 | 2354 | 1608 | 1225 | 1542 | white=191527 | Segoe UI -16 400 |
+| Form3 (Corporate) | 541×601 | 10 | 187 | 21768 | 9292 | 6498 | 5155 | greenRim=87 / green=13790 | Segoe UI -16 700 |
+| Drag & Drop | 301×441 | 5 | 98 | 2161 | 2484 | 927 | 529 | white=127827 | Arial Narrow -16 400 |
+| Form5 (Menu/Tools) | 563×584 | 15 | 77 | 41664 | 56127 | 108113 | 4778 | lightGreen=11285 | Segoe UI -16 700 |
+| Agenda tema oscuro | 331×491 | 1 | 331 | 7120 | 10955 | 9793 | 147049 | bg65=118627 | Segoe UI Semibold -14 700 |
+
+#### 27.14.7 C3 对真基准的红项（本轮 `.temp\guard_ref4.log`，EXIT=1）
+
+- **组 1（内容级，全部按真 VB6 读数判）**
+  - Tree：textRows 6≠5；firstTextW 7 < 78-2；vivid/photo/avatar 全 0；dark 168 < 1388。
+  - Form3：textRows 9≠10；firstTextW 127 < 185；vivid 13436 < 19591；photo 0 < 8363；avatar 54 < 5848；
+    dark 1448 < 4640；字体 `MS Sans Serif|-13|400` ≠ `Segoe UI|-16|700`。
+  - Drag & Drop：textRows/首行/四个颜色判据全 0（整窗空白）。
+  - Form5：textRows 5≠15；firstTextW 22 < 75；vivid 36728 < 37498；dark 1814 < 4300；字体同上错。
+  - Agenda：avatar 0 < 8814；字重 600 ≠ 700（face/字高已对）。
+- **组 2**：第 2 轮后进程崩溃 `code=0xc0000005 rva=0x19385`（av read 0x8d8a2），
+  同时 `THE IMAGE: 4/5/6 DON'T EXIST`（`outTail`）。WM_DESTROY 三行清理已加，尚未证明覆盖 UC 宿主/子窗销毁路径。
+- **组 3**：六枚 `pos`/`Value` 已随点击 ±1，`Text1` 也**真联动**（`guard_ref5.log`：
+  `num[BorderRadius] up: txt='5'->'6'` … 六枚全部 `txt` 与 `Max-Value+Min` 一致）。
+  ⚠ 上一轮判"txt 不联动"是**采集缺陷**：跨进程 `GetWindowText` 对 Edit 只回缓存标题，
+  `_Change` 早已把文本改掉也读不到；已改成 `WM_GETTEXT`（`[UP]::WTextReal`），与
+  `OBJCACHE` 那组"PS 5.1 吞 stderr"同类 —— 属采集侧，不是产品。
+  ~~真剩下的红只有 `NodeSpacing`/`MarginBottom` 两项树区像素未变 ⇒ setter 没触发重绘~~
+  **（2026-11-07 实测已推翻）** 用 `.temp\probe_ns2.ps1`（`WM_SETTEXT` 走
+  `Text1(i)._Change` 真路径 + `PrintWindow(2)` 打 UC 宿主，与遮挡无关）逐项 A/B：
+  - `MarginBottom` 0→1：C3 `ucDiff=4269` / 真 VB6 `4718` ⇒ 两边都重绘，只是真 VB6 的
+    `sig`（采集口径）没反映出来 —— 那半条是**采集侧**，判据改用逐字节 diff。
+  - `NodeSpacing` 16→17：C3 `ucDiff=0` / 真 VB6 `8732` ⇒ **真产品缺陷**，已定位修复（见 27.14.9）。
+    原因是 `Rect.Left = <Double 表达式>` 在 UDT 字段上被编成裸存（C 截断），真 VB6 是
+    取整：16/2=8 vs 17/2=8.5→9。`NS->18` 起 C3 也能变（截断把 8.5 吞成 8）。
+
+#### 27.14.8 pwsh 与 c29listview
+
+- `OBJCACHE`/`OBJCACHE-NEG`/`nonascii_missing_frx` 三项**待用 pwsh 重验**；若转绿须在此记明
+  "之前的红是 PS 5.1 采集缺陷，不是产品"。
+- `c29listview` 中文 `???`：该夹具 `C29ListView.frm` 是**无 BOM 合法 UTF-8**，与 ucTreeView 的
+  编码成因**不同源**，需单独归因（本轮未动）。
+
+#### 27.14.9 账 #478：UDT 字段赋浮点表达式被 C 截断（真 VB6 取整）
+
+**症状**：`NodeSpacing` 16→17 树区 `ucDiff=0`，真 VB6 `8732`（同一取样器、同一 `WM_SETTEXT`
+路径、同一 `PrintWindow(2)` 口径）。其余五枚数值控件两边都变。
+
+**最小复现**（`.temp\udtprobe\`，3 个文件，`--emit-c` 即可，不用 VB6）：
+```
+' TestCls.cls
+Private Type Rect
+    Left As Long
+End Type
+Private Rect As Rect          ' ← 变量名与类型名同名
+Private lLocal As Long
+Public Sub Test()
+    Rect.Left = 7 / 2         ' 修前: me->Rect.Left = vb6_Num_Div(7,2)      → 3 (截断)
+    lLocal = 7 / 2            ' 修前: me->lLocal = ChkLong(FltToLng(...))    → 4 (取整)
+End Sub
+```
+修后两条都发成 `vb6_ChkLong(vb6_FltToLng(vb6_Num_Div(7,2)))`。
+
+**根因**：`narrowTargetTypeOf → inferUdtFieldVb6Type` 用 `symTab_.lookupModule(udtName)`
+查 UDT 符号。`Private Rect As Rect` 这种**变量名 == 类型名**时，`lookupLocal("Rect")` 先命中
+变量（`SymbolKind::Variable`），`kind != UserDefinedType` ⇒ 整个 UDT 字段分支落空 ⇒
+`narrowCheckAssign` 答 Unknown，赋值走裸存。注意 `cgen_base_generate_state_scan.inc:144`
+早就为同一个同名坑在**登记侧**加了 `lookupTypeSymbol` 回退，**推断侧**漏了。
+
+**修复**（`src/backend/cgen_util_classtype.cpp`，5 处全改 `lookupTypeSymbol`）：
+- `inferUdtFieldVb6Type`（字段类型推断主路）
+- `inferUdtTypeOfExpr` 的 `MemberAccessExpr` / `WithMemberExpr` 分支（含嵌套 UDT 的 `refSym`）
+- `udtFieldTypeRefNameOfTarget`、`udtFieldObjCType`
+（`lookupTypeSymbol` 内含 `<name>$ty` 回退 + 按 kind 的模块/本地查找，是同名遮蔽下唯一能拿到
+`UserDefinedType` 的路。）
+
+**验证**（C3 vs 真 VB6，`.temp\probe_ns2.ps1` 扫 `NodeSpacing`，`ucDiff` 逐字节）：
+| 16→ | C3 修前 | C3 修后 | 真 VB6 |
+|---|---|---|---|
+| 17 | 0 | 7484 | 8732 |
+| 18 | 7484 | 7667 | 8732 |
+| 19 | 7667 | 7667 | 10005 |
+| 20 | 7667 | 8586 | 10511 |
+| 40 | 11884 | 11884 | — |
+两边量化相位一致（17≡18、19≡20 的成对关系对上），绝对字节数差异来自渲染/抗锯齿，属预期。
+`MarginBottom` 0→1：C3 4269 / VB6 4718，两边都重绘（原 `sig` 判据是采集侧）。
+
+**回归口径**：C3 重建（`scripts\_tmp_c3_rebuild.bat`，EXIT=0）；RTL 未动，无需
+`check_rtl_embedded.ps1`；夹具 `--arch x86` + `C3_NO_OBJCACHE=1` 重编 = 834560 字节。
+
+
+
+### 27.15 设计期 StdFont（`.frx` 引用）与 UC 窗口字体落地（2026-11-07）
+
+#### 27.15.1 红项（先出红）
+
+`guard_ref10.log`（**修前**，C3 产物 834560B / x86）：
+```
+Form3  font=[MS Sans Serif|-13|0|400]   firstTextW=127   真 VB6: Segoe UI|-16|0|700  187
+Form5  font=[MS Sans Serif|-13|0|400]   firstTextW=22    真 VB6: Segoe UI|-16|0|700   77
+```
+`.frm` 里 `font = "Form3.frx":0000` / `subtextfont = "Form3.frx":0028`，`.frx` 记录是
+**StdFont 序列化块**（不是 DocString、也不是 PropertyBag）。
+
+#### 27.15.2 根因（两条，独立）
+
+1. **`.frx` 的 StdFont 块被当成 DocString**：`readDocString` 只能取到 ASCII 名字
+   （"Segoe UI"），bag 里成了 `VT_BSTR`；`ucTreeViewPlus.ctl` 的 `ReadProperties`
+   是 `Set m_Font = .ReadProperty("Font", Ambient.Font)` —— 只有 `VT_DISPATCH(IFont)`
+   才认，字符串槽被忽略 ⇒ 整窗退回 ambient `MS Sans Serif 8.25pt 400`。
+2. **`font` 在 `kSkip` 名单里被无条件跳过**：`kSkip` 本是给 `BeginProperty Font`
+   复合块让路的，但 frx 引用形式没有 propertyBlock，跳过即整块丢失。
+
+#### 27.15.3 修（3 处）
+
+- `FrxReader::readFont(offset)`（`frx_reader.hpp/.cpp`）：逐字节核对
+  `[DWORD cbSize][GUID 0BE35203-8F91-11CE-9DE3-00AA004BB851][DWORD 版本 1/0x02000001]`
+  `[WORD 字重][DWORD 字号×10000][BYTE 标志][ASCII 名字+NUL]`；
+  name 起点 = 记录偏移 +31，`nameMax = cbSize - 27`，字号限 4pt..1000pt。
+- `cgen_form_create_controls.inc`：`emitFontObjFields(...)` 从 `emitFrmFontObj` 抽出
+  （emit 输出**零差异**）；`kSkip` 对 `Font`/`*Font` + `FrxReference` + `readFont().found`
+  精确豁免；frx 字体分支发 `vb6_UC_BagPutFont(_bag, <name>, IFont*)` 后 `continue`。
+- `uc_host_window.c`：`vb6_uc_syncHostFont(HFONT)` —— VB6 的 `UserControl.Font` 改的
+  是**控件窗口**字体（`WM_GETFONT` 读回的就是它）；先 `GetObjectW` 比对 LOGFONT 七字段，
+  相同则 return（否则每节点一次 `InvalidateRect`），不同才走
+  `vb6_SetControlFontFromLogFont`（句柄所有权仍归它的「只删自己造的」账）。
+
+#### 27.15.4 绿（`guard_ref12.log`）
+
+```
+Form3  font=[Segoe UI|-16|0|400]  firstTextW 127→175
+Form5  font=[Segoe UI|-16|0|400]  firstTextW  22→ 42
+Form6  font=[Segoe UI Semibold|-13|0|700]  全部通过
+```
+- 字高/字面已落地；Form3/Form5 的**字重仍 400 vs 真 VB6 700**（未闭环，见 27.14.7）。
+- `Form3` textRows 11 vs 真 10、`Form5` textRows 5 vs 真 15 —— 与字体无关，另有根因。
+
+#### 27.15.5 构建/门禁口径
+
+- RTL 有改 ⇒ `scripts\_tmp_c3_rebuild.bat` + `scripts\check_rtl_embedded.ps1`（本轮已过）。
+- 夹具：`C3_NO_OBJCACHE=1` + `scripts\c3_build.ps1 -Extra "--arch x86"` ⇒ 834560B。
+- **本地 GUI 判据的环境前提**：本机 Firefox（`MozillaWindowClass`）在**前台**时，
+  `Charts2020` 的 `ucdump` 恒 0 bmp（无真实 `WM_PAINT`），`segmented_px.ps1` 的光标
+  判据读到 `IDC_ARROW(65539)` 而不是 `IDC_NO(65559)`（`WindowFromPoint` 命中浏览器）。
+  这不是产品回归：把 Firefox 最小化后，同一 exe 手工带 `C3_UC_DUMPDIR` 启动 =
+  **27 张 bmp**（`.temp\chartprobe\ucdump`）。⇒ 本地跑 `test.bat gui` 前必须先最小化浏览器。
+
+### 27.16 UserControl_Show 延迟到"控件变可见"（Form4 整窗空白闭合，2026-11-07）
+
+#### 27.16.1 红项（修前，`guard_ref4.log` / `.temp\px_s1.log` 同口径）
+
+```
+Drag & Drop  textRows=0  firstTextW=0  vivid=0  photo=0  avatar=0  dark=0
+```
+即整窗空白（其余四窗已有内容，只有 Form4 全 0）。真 VB6 基准：`textRows=5 / firstTextW=98 /
+vivid=2161 / photo=2484 / avatar=927 / dark=529`（`.temp\vb6ref\ref_metrics.json`）。
+
+#### 27.16.2 根因（插桩实测，不猜）
+
+`C3_UC_TRACE` 插桩（`.temp\fx_f4dbg`，Latin1 字节级改副本，保原编码）逐条读数：
+
+- Form4 `Form_Load`：`F4LOAD → F4ADD×5 → F4DONE`（节点**确实**加进树里）；
+- `UserControl_Show` 触发的 `UPD/FONTOK/DRAW` **全部出现在 `F4LOAD` 之前** ——
+  此时 `m_Font` 尚未落地、树还空，`ucTreeViewPlus.Update` 开头 `If m_Font Is Nothing Then Exit Sub`
+  直接把绘制砍掉 ⇒ 整窗只剩背景。
+
+真 VB6 的事件顺序是 `Form_Load → 控件变可见 → UserControl_Show`；C3 原来在**建窗阶段**
+（父窗体还没 `Show`）就同步调 `desc->show`，顺序反了。
+
+#### 27.16.3 修（RTL 4 文件）
+
+- `vb6forms_uc_internal.h`：`vb6_UCRec` 新增 `int32_t pendingShow;`
+- `uc_host.c`：`vb6_uc_activate` 里 `desc->show` 段改为
+  `if (!IsWindowVisible(hwnd)) { r->pendingShow = 1; trace("show.defer") } else { 原地立即发 }`；
+  新增 `vb6_uc_fireShowCb`（`EnumChildWindows` 回调，逐控件 `pendingShow && ready && desc->show`
+  就 `vb6_uc_push → show → vb6_uc_pop → heap_probe`）；
+  `vb6_UC_FirePendingShows(parentHwnd)` 对外出口。
+- `vb6forms_controls.h`：声明 `void vb6_UC_FirePendingShows(void* parentHwnd);`
+- `vb6forms.c`：`vb6_ShowForm` 在**延迟 Form_Load 派发完**、`ShowWindow(SW_SHOWDEFAULT)` **之前**
+  调 `vb6_UC_FirePendingShows(hwnd)` ⇒ 对齐 VB6 的"Form_Load 先跑完，控件才变可见"。
+
+#### 27.16.4 绿（`.temp\px_s1.log`，本机 120dpi，真 VB6 读数作判据）
+
+| 窗 | 项 | 修前 | 修后 | 真 VB6 |
+|---|---|---|---|---|
+| Drag & Drop | textRows | 0 | **5** | 5 |
+| Drag & Drop | firstTextW | 0 | **99**（≥98−2） | 98 |
+| Drag & Drop | dark | 0 | **678**（≥529×0.9） | 529 |
+| Drag & Drop | avatar | 0 | **3089**（≥927×0.9） | 927 |
+
+插桩顺序也转正：`F4DONE` 之后才出现 `UPD/FONTOK/DRAW`。
+
+仍红（归 §27.17 图片/图标链路，与本修无关）：`vivid=1334 < 2161×0.9`、
+`photo=1339 < 2484×0.9`（Form4 的 `folderClose.png` 等 PNG 未上屏）。
+
+#### 27.16.5 构建口径
+
+RTL 有改 ⇒ `scripts\_tmp_c3_rebuild.bat`（EXIT=0）+ `scripts\check_rtl_embedded.ps1`
+（`R1..R3 OK, 126 RTL resources byte-identical, exe sha=b597e2af185d`）；
+夹具 `C3_NO_OBJCACHE=1` + `scripts\c3_build.ps1 -Extra "--arch x86"` ⇒ **835584B**（含 show defer）。
+本次 guard 全量读数：`.temp\px_s1.log`（EXIT=1，红项见 §27.14.7 + 本节）。
+
+### 28 现场快照（截断恢复，2026-11-07）
+
+#### 28.1 git 实况
+
+- HEAD `6cbecc78`（`fix(uctreeview): UserControl_Show 延迟到控件真正可见`，已推）。
+  其前：`97cd6c9a`（px 脚本 System.Drawing）、`807d5077`（设计期 StdFont）、`916b4a1a`（真 VB6 基准 + 账 #478 + 滚动条命中步进）。
+- 本轮未提交改动（9 个源文件，`git diff --stat` 125+/12-）：
+  `src/backend/decl/cgen_decl.cpp`、`src/backend/cgen_util_ctrl.cpp`、
+  `src/backend/detail/util/cgen_helpers.inc`、`src/backend/detail/stmt/cgen_assign_value_sem.inc`、
+  `src/backend/detail/expr/cgen_expr_call_arg_emit.inc`、`src/backend/stmt/cgen_stmt.cpp`、
+  `src/backend/expr/cgen_expr_binary_util.cpp`、
+  `src/rtl/core/vb6rtl/vb6rtl_bstr.h`、`src/rtl/core/vb6rtl/vb6rtl_string.c`。
+- 未跟踪：`.zcodeignore`（工具生成，未纳入）；`把`（0 字节误重定向产物，删后又被重现，待再删）。
+- stash：`stash@{0}` = WM_DESTROY 清槽（组 2，第 2 轮崩，未闭环）；`stash@{1}/{2}` 为历史无关项。
+
+#### 28.2 本轮已实测（全部来自实跑，未推断）
+
+1. **UDT 定长串 ABI（`As String * N` → `char[N]`）**
+   - 修前（`.temp\shtest.bas`，同一台机器）：`Len(tSHFI)=20`、`SHGetFileInfo ret=0`、`hIcon=0`。
+   - 修后：`Len=352`、`ret=1`、`hIcon≠0`、`name=[notepad.exe]`（flags `&H100 Or &H1 Or &H800 Or &H200`）。
+   - 发码：结构体侧 `char name[N]`；读侧 `vb6_FixedStrToBSTR`（`wrapToBSTR` 只认成员访问，
+     裸定长串仍走 BSTR 模型）；ByRef String 实参用 `&(BSTR){vb6_FixedStrToBSTR(...)}` 复合字面量；
+     写侧 `vb6_FixedStrAssign` / `vb6_FixedStrAssignFree`（`emitBstrSlotStore` 新增
+     `udtFixedField` 参数，仅 `value_sem` 传 true）。
+2. **`Chr$(0)` 语义**
+   - 修前（`.temp\chrtest.bas`）：`len(s)=4`、`lenchr=0`、`instr(s,Chr$(0))=1`。
+   - 修后：`len=5`、`lenchr=1`、`instr=4`。
+   - 动机：`ClsTreeExplorer.GetSpecialFolder = Left$(sPath, InStr(sPath, Chr$(0)) - 1)`；
+     `Chr$(0)` 为长度 1 的 NUL 串（原实现 `vb6_BSTR_FromStr` 经 `wcslen` 退化成空串）。
+3. **Declare 出参定长串整幅回写**（新 `vb6_BSTR_FromANSIBufFixed(buf, N)`，含尾部 NUL）
+   - 修前插桩：`GSF csidl=0 z=1 p=[]`（InStr 命中空 needle 规则返回 1）→ `INIT 1 f=[]` →
+     `SHGET ret=0 hIcon=0 len=20 path="\"`。
+   - 修后插桩（`.temp\fx_fs4`）：`GSF csidl=0/38/5 ret=1 n=512 z=31/23/33
+     p=[C:\Users\Administrator\Desktop]` 等；`SHGET ret=1 hIcon=5704179/5835251/73860413
+     len=352`。
+4. **guard 全量（`.temp\px_fs2.log`，EXIT=1，120dpi，`-RefJson .temp\vb6ref\ref_metrics.json`）**
+   - Tree Explorer：`textRows=4`(ref 5)、`firstTextW=79`、`vivid=562`、`photo=643`、
+     `avatar=314`、`dark=952`。修前 `firstTextW=7 / vivid=0 / photo=0 / avatar=0 / dark=168`。
+   - Corporate：`textRows=11`(ref 10)、`firstTextW=175`(ref 187)、`photo=0`、`avatar=58`、
+     `weight=400`(ref 700)。
+   - Drag & Drop：`textRows=5`、`firstTextW=99`、`dark=678`、`avatar=3089`；
+     `vivid=1334`(ref 2161)、`photo=1339`(ref 2484)。
+   - Menu/Tools：`textRows=5`(ref 15)、`firstTextW=42`(ref 77)、`weight=400`(ref 700)。
+   - Contract/Agenda：`vivid/photo/avatar=0`。
+   - 组 3（数值微调）：六枚 `up/dn` 各一轮 `pos/Value/Text1` 均联动（读数在日志）。
+   - 组 2（重复点击）：第 2 轮 5 个按钮全部 `OPEN-FAIL`；Menu/Tools 第 1 轮崩溃
+     `code=0xc0000005 rva=0x45dfc`，outTail 含 `THE IMAGE ... DON'T EXIST`。
+5. **构建口径**：`scripts\_tmp_c3_rebuild.bat` EXIT=0（含本轮 RTL/发码改动）；
+   夹具 `C3_NO_OBJCACHE=1` + `c3_build.ps1 -Extra "--arch x86"` EXIT=0；
+   `.temp\utv_fs2\Proyecto1.exe` 与 `.temp\fx_fs4` 均为本轮产线。
+
+#### 28.3 未验证（不补推断）
+
+- 未跑 `scripts\check_rtl_embedded.ps1`（RTL 已改）。
+- 未跑 GA，未核 `ci/emit-manifest`；未跑 tests 全量（`Chr$(0)`/定长串语义可能影响 golden）。
+- `GetDrive()` 实测 `GetDrivesCount drives=0`（UBound=0），盘符根未进树；未归因。
+- `Debug.Print ... & cInitialFolders.Count` 读出 `9039188`/`13836620` 这类指针值（Loop 上界走
+  `vb6_ComGetIntProp` 未受影响）；未归因。
+- `f = f & Chr$(0)` 后再 `InStr(f, Chr$(0))` = 0（定长串赋值/拼接路径丢 NUL）；未归因，fixture 不用此形态。
+- `c29listview` 中文 `???` 两条红未复核。
+- `.temp\fx_f4dbg` 为插桩副本（Latin1 保原编码），临时件不入库。
+
+#### 28.4 下一步
+
+1. 先跑 RTL 门禁 + GUI 10 例 + tests 全量，红项逐条归因；
+2. `GetDrive`/`Collection.Count`；Form3 头像与 `weight=700`、卡片右缘；Form5 `textRows=15` 与字体；
+   Contract 头像链；Drag & Drop `vivid/photo`；
+3. 组 2：先解 `stash@{0}` 的崩溃根因再重放 WM_DESTROY 清槽；
+4. 组 3 已绿，按 GA 结果确认后可关账。
+
+### 29 门禁实跑 + `/make` 编码 A/B 取证（2026-11-07）
+
+#### 29.1 门禁（本轮实跑）
+
+| 门禁 | 结果 | 证据 |
+|---|---|---|
+| `scripts\check_rtl_embedded.ps1` | **EXIT=0** | `R1..R3`；`126 RTL resources byte-identical`；`exe sha=b95d5637f72b` |
+| `tests\run_tests.ps1 -Category gui`（pwsh） | **PASS=10 FAIL=0 SKIP=0 TOTAL=10** | `.temp\gui_1.log`；含 Charts2020 / ucSegmentedControl |
+| `tests\run_tests.ps1 -Category all`（pwsh） | **进行中**（600s 超时转后台，日志 `.temp\all_1.log`），结果未取回 | 见下一节回填 |
+
+注：RTL 126 项与 GUI 10 例均为**改后新产物**读数；GUI 10/10 全绿，未出现定长串/`Chr$(0)` 引起的红。
+
+#### 29.2 `/make` 编码 A/B（pwsh 7，VB6Mini `C:\Program Files (x86)\VB6Mini\bin\VB6.EXE`）
+
+原件（`D:\vb_yqt4qPac\ucTreeView\`，**未改动**）与仓库副本（`tests\ucTreeView\`）的字节形态：
+
+| 文件 | 位置 | 长度 | BOM | 合法 UTF-8 | mtime |
+|---|---|---|---|---|---|
+| Form1.frm | `D:\vb_yqt4qPac\ucTreeView\` | 42417 | 无 | **是** | 2026-11-07 08:45:11 |
+| ucTreeViewPlus.ctl | `D:\vb_yqt4qPac\ucTreeView\` | 106567 | 无 | **是** | 2026-11-07 08:43:38 |
+| Form1.frm | `tests\ucTreeView\` | 42415 | 无 | **否**（cp1252/西语原编码） | 2024-09-10 |
+| ucTreeViewPlus.ctl | `tests\ucTreeView\` | 106553 | 无 | **否**（cp1252/西语原编码） | 2025-12-03 |
+
+A/B 做法（脚本 `.temp\enc_ab.ps1`；两份均在 `.temp\vb6enc\` 新建，源 = `tests\ucTreeView` 全量复制，
+无任何 `0,15` 补丁）：
+
+- `orig`：原字节（cp1252，无 BOM）；
+- `utf8`：同一副本仅把 `Form1.frm` + `ucTreeViewPlus.ctl` 由 cp1252 解成文本后写 **UTF-8 无 BOM**
+  （复现 `D:\` 现状：42417 / 106567，无 BOM，utf8valid=True）。
+
+| 模式 | 退出码 | 产出 exe | 日志（逐字相同） |
+|---|---|---|---|
+| orig（原编码） | **1** | **否** | `Form1.log` 行 416 `不能加载控件 ucTreeViewPlus1。`；`ucTreeViewPlus.log` 行 31 属性 SmoothScrollFactor在 ucScrollbar2 中有无效值。/ 行 50 …ucScrollbar1… |
+| utf8（UTF-8 无 BOM） | **1** | **否** | 与 orig 逐字相同（同上三行） |
+
+**结论（决定五窗基准可行性）**：
+
+1. **编码不是变量**：两种编码同样 `exit=1`、同样无 exe、同样两条 `SmoothScrollFactor` 无效值 +
+   `行 416` 不能加载控件。不存在"改成 UTF-8 才出现该错误日志"的差异（本机 VB6Mini 实测逐字一致）。
+2. 阻断点是 `ucScrollbar.ctl`/`ucTreeViewPlus.ctl` 里 **`=   0,15` 的逗号小数**：本机 zh-CN 小数分隔符为
+   `.`，VB6 命令行 `/make` 把 `Single` 的 `0,15` 判为无效值（IDE 只警告）。作者原意是 `0.15`
+   （`FixDec = Val(Replace(S, ",", "."))` 佐证），且运行期被父 UC 强制为 `1`（§27.14.3）。
+3. 因此**五窗可以用真 VB6 实拍当基准**：基准副本按字节把 `0,15`→`0.15` 后 `/make` 已 `exit=0`、
+   `Proyecto1.exe` 331776 B（§27.14.3，`tests\guisample\uctv_vb6_baseline.ps1`）；原夹具源码不动。
+4. C3 侧输入仍是原编码夹具（`tests\ucTreeView`），与真 VB6 基准只差一个逗号小数的**序列化**，
+   不构成语义差异。
+5. 附注：`D:\` 目录今天 08:46 存在 `Proyecto1.exe`（331776 B），与基准补丁产物同尺寸；该 exe 的生成
+   条件未在现场取证（`Form1.log`/`ucTreeViewPlus.log` 仍为失败内容），不作为基准证据。
+
+#### 29.3 真 VB6 基准登记（后续五窗对照一律用这枚）
+
+| 项 | 值 |
+|---|---|
+| 绝对路径 | `c:\Users\Administrator\Documents\c3.vb6.pro\.temp\vb6ref\ucTreeView\Proyecto1.exe` |
+| 大小 | 331776 B |
+| mtime | 2026-11-07 08:59:19 |
+| SHA256 | `24EAAFB2645C8C984D9D937494F703D3B993A870BFFD8FE73A8F04790E91CDFD` |
+| 来源 | `tests\ucTreeView` 原字节副本 + 仅把 `0,15`→`0.15`（`tests\guisample\uctv_vb6_baseline.ps1`） |
+
+### 30 夹具保真核对 + `0,15` 的 C3 语义（2026-11-07）
+
+#### 30.1 逐字节比对（`D:` 原件 vs `tests\ucTreeView` 夹具）
+
+方法（脚本 `.temp\cmp_fixture.ps1` / `.temp\nonascii_lines.ps1`）：把 `D:` 两份文件按 UTF-8 解码后
+**重编码为 cp1252**，与夹具原始字节逐字节比；再按行拆分比对文本。
+
+| 文件 | D 字节 | 夹具字节 | 差 | CRLF 行数 | 文本相等 | D→cp1252 后字节相等 |
+|---|---|---|---|---|---|---|
+| Form1.frm | 42417 | 42415 | +2 | 1313 / 1313 | **True** | **True** |
+| ucTreeViewPlus.ctl | 106567 | 106553 | +14 | 3003 / 3003 | **True** | **True** |
+
+差值来源逐字符清单（夹具 cp1252 偏移 / 行号 / 原文，全部是**西语注释**，无 UI 文案）：
+
+- Form1.frm（2 个）：`0x9143 'í'` 行 1139 `' Convertir el nodo raíz …`；`0x91DE 'ó'` 行 1145
+  `' Función recursiva …`。
+- ucTreeViewPlus.ctl（14 个）：`0xAAB4/0xAAC2 'ú/ó'` 行 1267；`0xAB1F/0xAB2E/0xAB43 'á/í/ú'` 行 1269；
+  `0xAB8F 'ú'` 行 1273；`0xABE8/0xABF6 'ú/ó'` 行 1276；`0xAC34/0xAC64 'í/ó'` 行 1279；
+  `0xACBD 'ú'` 行 1281；`0xB081 'á'` 行 1312；`0xB180 'ú'` 行 1321；`0xB999 'ú'` 行 1387。
+
+**结论**：`D:` 是夹具的**无损转码**（同文本、同行数，非 ASCII 字符单字节→双字节 UTF-8，恰好
++2/+14 字节）。**夹具没有转码损坏，也没有丢字符**（无"丢失/改字"项可还原），因此：
+不还原、不重编 C3、窗口文案不变；此前五窗的**文字差仍全部归编译器/RTL 侧**，不需要改归因。
+（唯一需要登记的更正：`D:` 与夹具"不等长"是编码造成的字节长度差，不是内容缺失。）
+
+#### 30.2 `=   0,15` 的解析实测（当前 `.build\C3.exe` 重新 `--emit-c`）
+
+取证：`.temp\emit_cur.ps1` → `--emit-c --arch x86`，`EXIT=0`，全文 `.temp\emit_cur.txt`（958418 B）。
+
+- `.ctl` 设计期子控件块（`ucTreeViewPlus.ctl:31/50` 两行 `SmoothScrollFactor=   0,15`）在发码里
+  **完全没有对应的值**；全文 `SmoothScrollFactor` 仅有两类：
+  1. `.temp\emit_cur.txt:7052/7057`：`vb6_ComSetProp(…, L"SmoothScrollFactor", vb6_ComPackInt(1))`
+     —— 来自源码 `UserControl_ReadProperties` 的 `ucScrollbar1/2.SmoothScrollFactor = 1`（运行期强制），
+     **不是**设计期值；
+  2. `.temp\emit_cur.txt:12196`：`me->m_SinSmoothScrollFactor = 0.14999999999999999;`
+     —— 来自 `ucScrollbar.ctl` 的 `Initialize` **代码**，同样不是设计期值。
+- 子 UC 的创建只有几何：`.temp\emit_cur.txt:2860/2861`
+  `vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", …, 240,3360,4095,135 / 4560,120,135,3015)`；
+  RTL 该函数签名也只收 `left/top/width/height`（`src\rtl\core\vb6forms\uc\uc_host.c:893`），无属性通道。
+  `L"Orientation"` 同理只出现在属性包读写默认值（`emit_cur.txt:12299/12349`），设计期值 `Orientation=1`
+  也没进发码。
+- 结论（C3 侧）：`0,15` **没有被解析成任何数**（既不是 `0`、不是 `15`、也不是 `0.15`），而是随整块
+  "设计期非几何属性"一起被**丢弃**；运行期实际生效值是 `1`（源码显式赋值）。
+- VB6 侧（实测）：原夹具 `/make` **exit=1**，`行 31/50 属性 SmoothScrollFactor 有无效值` ⇒ 本机 zh-CN
+  下 VB6 **不产生值**（逗号小数被拒）。逗号小数区域（作者环境）语义应为 `0.15`（`FixDec` 佐证），
+  但**无法用几何反推**：两侧运行期都会被 `ucTreeViewPlus` 的 `= 1` 覆盖。
+- 判定：这**不是 C3 的字面量（逗号小数）解析缺陷**（它根本没读该值），不需要为它单独立夹具；
+  真实差异是一条独立的"`.ctl` 设计期非几何属性不落地"缺口（Orientation/字体等同样受影响），
+  与五窗文字/字体差可能相关，登记待办，不在本轮混入五窗修复。
+
+### 31 GA 首轮红格归因与修复（run 42341942993 / 22 jobs，3 红）
+
+首轮 CI（HEAD `bfa56adf`，代码面 = `6d77c499`）22 个 job：19 绿，红 3 个：
+`Emit manifest (shape oracle)`、`Tests (compile #1)`、`Tests (vbp #1)`。逐条归因如下。
+
+#### 31.1 `Tests (compile #1)` = 2 条静态红
+
+**(a) `[STATIC] control_dc` D11 —— 真回归（已修）**
+
+- 红：`裸 WM_GETFONT 代码行 = 2（want 恰好 1）: vb6forms_ctrl.c:613 | uc_host_window.c:133`。
+- 归因：上一轮 UC 字体同步（`vb6_uc_syncHostFont`）用 `SendMessageW(hwnd, WM_GETFONT, …)`
+  问了**本类自己答**的那一问，等于第二处口径（该文件自己的注释也只许读 `vb6_ControlFontStored`）。
+- 修：`uc_host_window.c:133` 改为 `hCur = vb6_ControlFontStored(hwnd);`（读同一格存储）。
+- 复跑：`check_control_dc.ps1` **PASS**（定义 1 / 调用 3 / 出口 1 / 裸问 1 / 槽位写 1 读 1）。
+
+**(b) `[STATIC] owned_temp_keeps` K13/K13d/K5 —— 新 RTL 助手的权属登记（预期变化，已登记）**
+
+- 红：
+  - K13 missing-owned：`vb6_BSTR_FromANSIBufFixed`、`vb6_FixedStrToBSTR`（推导说它们返回**新造** BSTR，
+    `kOwnedBstrExports` 表里没有 ⇒ 发码侧可能把新造值当借用）；
+  - K13d missing-consumes：`vb6_FixedStrAssignFree|2`（第 3 参被函数内部放掉，表里没登记）；
+  - K5：表与快照漂移 2 行 `+vb6_FixedStrAssign|2, +vb6_FixedStrAssignFree|2`。
+- 修（`src\common\owned_temp_keeps.hpp`）：
+  - owned 表 +`vb6_BSTR_FromANSIBufFixed`（`FromANSIBuf` 与 `FromBSTR` 之间）、+`vb6_FixedStrToBSTR`
+    （`FileVariantText` 与 `FormatCurrency` 之间）；
+  - consumes 表 +`{ "vb6_FixedStrAssignFree", 2, '0' }`（0-based 第 3 参）；
+  - 快照经脚本 `-Bless` 重生成（`scripts\owned_temp_keeps_164.txt`，227 行）。
+- 复跑：`check_owned_temp_keeps.ps1` **PASS**（authority 24 / surface 227 / rows 227 / owned 118 /
+  alias 17 / consumes 9 格 / K13/K13b/K13c two-way / K14+K14b anchors 15）。
+
+#### 31.2 `Tests (vbp #1)` = 2 条红
+
+**(a) `[EMITC-SHAPE] fixedstr_emitc_decl` —— 预期形状变化 + 顺带修出一条真错发**
+
+- 预期形状（定长串 ABI 改动的直接结果）：UDT 成员由 `BSTR f;` 变为 `char f[8];`；
+  UDT 字段赋值由 `vb6_BSTR_AssignMove(&r.f, vb6_LSetFree(…, 8))` 变为
+  `vb6_FixedStrAssignFree(r.f, 8, vb6_BSTR_FromStr(L"ef"))`。
+- **真错发**（本轮新发现并修）：`Debug.Print r.f` 直接把 `char[8]` 塞进 `BSTR` 形参
+  （ANSI 字节会被按 UTF-16 读成垃圾）；修在
+  `src\backend\stmt\cgen_call.cpp`（`Debug.Print` 字符串分支统一过一次 `wrapToBSTR`）。
+  现发 `vb6_DebugWriteBSTR(vb6_FixedStrToBSTR(r.f, 8));`。
+- `tests\run_tests.ps1:7300-7316` 针更新：`char f[8];` / `FixedStrAssignFree(r.f, 8, …)` /
+  新增 `vb6_DebugWriteBSTR(vb6_FixedStrToBSTR(r.f, 8));`。
+- 本地 11 枚针复验：`MISS_COUNT=0`（`.temp\emit_fsdecl.txt` + `.temp\check_fsdecl_needles.ps1`）。
+
+**(b) `pixels FAIL [uctreeview_px.ps1]` —— 五窗已知红，按计划留到最后**
+
+- 内容与 §28.2/§27.15 同一批：Tree Explorer 部分指标、Drag&Drop vivid/photo、Corporate photo/weight、
+  Menu/Tools textRows/firstTextW、Contract/Agenda 全 0；属五窗期间的修，不在本轮。
+
+#### 31.3 `Emit manifest (shape oracle)` —— 17 行哈希变化（待 CI 下一轮清单登记）
+
+`ci/emit-manifest`（CI 交回，596 输入）与仓库 `emit-manifest.expected.txt` 逐行比：
+**17 个输入哈希变化**（其余 579 不变）：
+
+| # | 输入 | 与本轮改动的关联（源码里含 `As String *` / `Declare … String|As Any` / `Chr$(0)`） |
+|---|---|---|
+| 1-4 | `tests/Charts 2020/{Proyecto1, ucChartArea, ucProgressCircular, ucTreeMaps}/…vbp` | 各 UC `.ctl` 含定长串/Declare String（grep 命中 10 个模块） |
+| 5 | `tests/dbgdlg/dbgdlg.vbp` | `cDlg.cls` / `frmMain.frm` 含定长串/Declare String |
+| 6 | `tests/declare_out/declare_gmn_path_out.bas` | Declare 出参定长缓冲（整幅回写改动的直接夹具） |
+| 7-12 | `tests/guisample/{Definitions.bas,GUISample.vbp}` 及 `vb6ref/src/{vc6,vs2015}` 镜像 | `Definitions.bas` 含定长串/Declare String；镜像同源 |
+| 13-14 | `tests/k173_udtmem/{K173.vbp,K173Types.bas}` | UDT 定长串字段（`char[N]` ABI 改动的直接夹具） |
+| 15-16 | `tests/test_fixedstr_decl.bas`, `tests/test_fixedstr_sem.bas` | 定长串声明/语义直接夹具 |
+| 17 | `tests/ucTreeView/Proyecto1.vbp` | `SHFILEINFO` UDT 定长串 + `GetDrive` 出参 |
+
+- 处置：按纪律**不从本地手写**；等本轮修复推送后的 CI 新清单，逐行对照后由
+  `rebless_emit_manifest.ps1` 吃 CI 清单登记（禁手改 expected）。本轮先记 17 行归因。
+
+#### 31.4 本地门禁复跑（修复后）
+
+- `check_rtl_embedded.ps1`：**EXIT=0**，`126 RTL resources byte-identical`，exe sha `de9221544725`
+  （RTL 改 `uc_host_window.c` 后重建的 C3.exe）。
+- `check_control_dc.ps1` / `check_owned_temp_keeps.ps1`：PASS（见 31.1）。
+- `test_fixedstr_decl` 发码针：11/11 OK。
+
+#### 31.5 下一步
+
+1. 推送本修复 → 等 CI 22 job；
+2. CI 交回新 `ci/emit-manifest` 后逐行核对并登记（预期仍是上述 17 个输入，哈希按修复后重算）；
+3. `pixels` 五窗红按用户顺序放在 GA 之后收。
+
+---
+
+## §32 GA 第二轮收口：发码守卫长度缺陷（真缺陷）与 26 行登记口径
+
+#### 32.1 CI run 42344074260（head 8fc56916）读数
+
+- 22 job：**20 绿 / 2 红**。
+  - `compile #1` 已转绿（§31.1 的两处静态修复生效）。
+  - `Emit manifest (shape oracle)`：红。
+  - `Tests (vbp #1)`：红，但**唯一实质红项是 `pixels [uctreeview_px.ps1]`**
+    （`Results: PASS=44 FAIL=1 SKIP=0 TOTAL=67`）；同一 job 另有一条 harness 注解缺陷
+    （`harness tallied 1 failures but naming found only 0`）——计 1 条但命名 0 条，
+    属报告侧账目，不是新增失败。pixels 的逐条读数沿用 §31.3 的五窗红（Tree Explorer 节点行 4<5、
+    Corporate photo 0 / avatar 17 / greenRim 54、Form5 5<10、Contact photo 0、Agenda 字重 700≠600、
+    4 窗第 2 轮 OPEN-FAIL、Menu/Tools 看门狗超时 + 0xC0000005 rva=0x45fbc）。
+- 结论：**pixels 依赖五窗与设计期属性修复**，按用户排的顺序它只能后收；GA 22/22 待其后。
+
+#### 32.2 ci2 清单 19 行 → 抓到一枚真缺陷（`wrapToBSTR` 的 `VB6_SA_AT(BSTR,` 守卫）
+
+CI 交回清单（`.temp/ci_emit_manifest2.txt`，head=8fc56916）与 `emit-manifest.expected.txt`
+差 **19 行**；比首轮 17 行多出 `tests/test_array.bas`、`tests/test_redim_elem.bas`。
+差异定位到 `src/backend/expr/cgen_expr_binary_util.cpp` 的 `wrapToBSTR()`：
+
+```
+- if (expr.compare(0, 16, "VB6_SA_AT(BSTR,") == 0) return expr;   // 字面量只有 15 字符
++ if (expr.compare(0, 15, "VB6_SA_AT(BSTR,") == 0) return expr;
+```
+
+`std::string::compare(pos, n, s)` 在 MSVC 上**不会**把 n 截到 `size()-pos` 后再比长度，
+`n=16 > strlen(s)=15` ⇒ 恒返回非 0 ⇒ **这枚守卫从来没命中过**。旧路径之所以没暴露，
+是因为 `Debug.Print` 的字符串分支此前不统一过 `wrapToBSTR`；§31 把它统一之后，
+BSTR 数组元素被 `isVariantSlotElemRead` 判成 Variant，发成
+`vb6_CStr(vb6_VariantFromValue(VB6_SA_AT(BSTR, names, 1)))` —— 把 BSTR 槽当 Variant 解包。
+
+**A/B 实测**（同一台机、同一份源码，只改这一处；`tests/test_array.bas`）：
+
+| 守卫写法 | sha256 | bytes | 形状 |
+|---|---|---|---|
+| `compare(0,16,…)` | `5edb5298…` | 5407 | `vb6_CStr(vb6_VariantFromValue(VB6_SA_AT(…)))` |
+| `compare(0,15,…)` | `dc61cfa7…` | 5375 | `VB6_SA_AT(BSTR, names, 1)`（= 期望清单原值） |
+
+`tests/test_redim_elem.bas` 同步回到 `bafcd837…` / 22317（期望原值）。**这不是放宽阈值，是修缺陷。**
+
+#### 32.3 当前源码的全量清单：26 行，两族归因
+
+本机 `.build/C3.exe`（= 8fc56916 + 上述守卫修复）跑 `scripts/emit_manifest.ps1`，
+对 `emit-manifest.expected.txt` 差 **26 行**（596 输入 / 596 行，rc 全 0）：
+
+- **族 A（17 行，8fc56916 已含，CI 也看到）**：`Charts 2020` ×4、`tests/dbgdlg/dbgdlg.vbp`、
+  `tests/declare_out/declare_gmn_path_out.bas`、`tests/guisample` ×6、`tests/k173_udtmem` ×2、
+  `tests/test_fixedstr_decl.bas`、`tests/test_fixedstr_sem.bas`、`tests/ucTreeView/Proyecto1.vbp`。
+  成因见 §31.3（`Debug.Print` 统一过 `wrapToBSTR` + 定长串 ABI + `vb6_FixedStrToBSTR`）。
+- **族 B（9 行，由守卫修复新暴露）**：`tests/b190_memberarray/B190.vbp`、
+  `tests/b598_print_numeric/B598.vbp` + `B598Main.bas`、`tests/TeeChartChartDisplay/DisplayProject.vbp`、
+  `tests/test_byref_elem.bas`、`tests/ve_list/VeList.vbp` + `VeListMain.bas`、
+  `tests/VbQRCodegen-master` ×2。
+  全部同一形态：`VB6_SA_AT(BSTR,…)` 外层多裹了一层 `vb6_CStr(vb6_VariantFromValue(…))`，现回落到裸元素读。
+  逐项抽查（`b598` 18 行差、`b190` 6 行差）确认差异**只有**这一族 + `BSTR x = NULL;` 初始化形态，
+  无第二类漂移。
+- 字节数方向可自证：族 B 全是**变小**（去掉外裹），族 A 有增有减（新增定长串换算）。
+
+#### 32.4 登记口径（本轮不 -Bless）
+
+`ci_emit_manifest2.txt` 出自 head=8fc56916，**不含守卫修复**，其中
+`test_array`/`test_redim_elem` 两行是**坏形状**。若现在 `-Bless` 会把缺陷钉进期望，
+故本轮**不登记**：先推守卫修复，等 CI 在**新 head** 上重新交回清单，再
+`pwsh -File scripts/rebless_emit_manifest.ps1 -Manifest <新清单> -Bless` 并复算绿。
+
+#### 32.5 设计期非几何属性清单（第一版，`.temp/design_props.txt`）
+
+八份夹具（Form1~6 + ucScrollbar.ctl + ucTreeViewPlus.ctl）`Begin…End` 块内属性去重统计，
+按「当前 C3 是否落地」分档（证据见 `cgen_form.cpp`、`detail/module/cgen_form_create_controls.inc`、
+`cgen_util_ctrl.cpp`、`rtl/core/vb6forms/vb6forms_controls.h`）：
+
+| 属性 | 次数/文件 | C3 现状 | 影响的可视/行为结果 |
+|---|---|---|---|
+| `Left/Top/Width/Height` | 89/89/87/87 | 落地（几何） | 布局 |
+| `Name/Index/TabIndex` | 43/73/84 | 落地（身份/顺序） | 控件数组、Tab 顺序 |
+| `Caption`(45)、`Text`(7) | 45 / 7 | 落地（`ctrlCaption`/`ctrlText`，style_apply:41/347） | 窗体标题、静态文本 |
+| `Font` 的 `Name/Size/Charset/Weight/Underline/Italic/Strikethrough` | 43×7 | **落地**（`BeginProperty Font` 块 → `emitFrmFontObj` + `vb6_UC_SetPendingFont`，create_controls:282-287；实例侧走 `prop_let_Font`/bag） | 全部文字度量 |
+| `TextColor/BackColor/ForeColor/BorderColor/BorderStyle/BorderWidth` | 5/14/2/1/16 | 部分：宿主控件走 `cgen_util_ctrl.cpp` 的 style 表；**UC 实例属性只走 prop_let/bag** | 配色/边框 |
+| `PlusMinusColor/PlusMinusHotColor/SelectionColor/SubTextColor/ShowTreeLines/FullRowSelect/NodeSpacing/MinNodeHeight/MarginBottom/SubTextFont` | 6/6/2/1/2/3/3/1/1/2 | **走 UC 实例属性的 prop_let 直发或 bag**（create_controls:465-547 / 569-722） | 树线、加减号、行高、选择色 |
+| `_ExtentX/_ExtentY` | 8/8 | **丢弃**（在 `kSkip` 内，create_controls:376-381） | 设计器尺寸记录，运行期无影响 |
+| `ClientWidth/ClientHeight/ClientLeft/ClientTop`、`ScaleWidth/ScaleHeight/ScaleMode` | 8/8/8/8、33/33/4 | 部分：`.ctl` 顶层 `ScaleMode` → `desc.scaleMode`（cgen_form.cpp:429-431）；窗体 `Scale*` 用于换算 | 度量换算 |
+| `AutoRedraw` | 2 | 落地（`desc.autoRedraw`，cgen_form.cpp:445-448） | 离屏 DIB / hDC 是否常驻 |
+| `BackStyle=0` | — | 落地（`desc.transparent`，cgen_form.cpp:436-439） | 透明合成 |
+| `ControlContainer/Appearance/CanGetFocus/ClipControls/FillStyle/FontTransparent/ToolboxBitmap` | 各 1 | **丢弃**（不进 `vb6_UserControlDesc`；`CanGetFocus` 只在 `invisible_at_runtime.hpp` 表里影响建窗） | 焦点/填充样式（当前夹具未观察到差异） |
+| `StartUpPosition` | 6 | **丢弃** | 窗口初始位置（3 = Windows Default，恰好等价于现在的默认） |
+| `Visible` | 5 | **部分**：宿主控件有 `emitDesignerStateProps`；**`.ctl` 设计面子控件无出口**；`.ctl` 顶层实例属性走 prop_let | 隐藏的滚动条/文本框 |
+| `Enabled/Interval/Max/Min/Value/Locked` | 2/2/6/1/9/6 | 部分：Timer 的 `Interval`/`Enabled` 落地（cgen_form.cpp:370-373）；`Slider` 的 `Max/Min/Value` 落地（cgen_util_ctrl.cpp:1269-1288）；`Locked` 未见出口 | 数值控件初值 |
+| `Orientation` | 1 | **部分**：`Slider` 的样式位落地（cgen_util_ctrl.cpp:1491-1492）；**`.ctl` 设计面子控件（ucScrollbar2）的 `Orientation=1` 丢弃** | 滚动条方向 |
+| `SmoothScrollFactor` | 2 | **丢弃**（`.ctl` 设计面子控件属性整块不落地；运行期 `=1` 覆盖，实测 §30.2） | 平滑滚动步长 |
+| `ThumbTooltipFont`（BeginProperty 块） | 2 | **丢弃**（设计面子控件的 `BeginProperty` 块无出口） | 缩略图提示字体 |
+| `Picture/Stretch`、`ToolTipText`、`MousePointerHands`、`CheckBoxes/CheckBoxColor` | 1/1/1/2/1/1 | 部分（Picture 走 frx → bag；其余视控件族而定） | 图像/提示 |
+
+**按影响面排序（待修）**：
+1. `.ctl` 设计面子控件的**非几何属性**（`Orientation`、`SmoothScrollFactor`、`ThumbTooltipFont`、`Visible`、`Text`）——
+   影响 ucScrollbar 两条滚动条的方向/可见性/字体，是 `0,15` 症状所在。
+2. `.ctl` 顶层被丢弃属性（`Appearance/ClipControls/FillStyle/FontTransparent/CanGetFocus`）——
+   当前夹具无可见差，先记账不动。
+3. `StartUpPosition`（3 = Windows Default 与默认行为等价）、`Locked`、`_Extent*`——低优先。
+
+#### 32.6 下一步
+
+1. 提交守卫修复 + 本节，推 `github`/`origin` 的 `dev`；等 CI 在新 head 出清单后 `-Bless` 26 行并复算。
+2. 按 32.5 第 1 项开工：`.ctl` 设计面子控件非几何属性的落地通道（cgen_form.cpp:353-407 目前只发几何）。
+3. 五窗对照改用真 VB6 基准 `331776 B / 24EAAFB2…CDFD`（§29.3），每修一窗更新断言、旧产物必须红。
+
+#### 32.7 设计面子控件的落地缺口（实测发码，`emit_cur.txt:2857-2864`）
+
+`vb6_ucTreeViewPlus_ucHostInit` 目前**只有几何**：
+
+```
+vb6_hwnd_Text1        = vb6_UC_CreateDesignEdit(360, 480, 1335, 495);
+vb6_hwnd_ucScrollbar2 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar2", 240, 3360, 4095, 135);
+vb6_hwnd_ucScrollbar1 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar1", 4560, 120, 135, 3015);
+```
+
+对照夹具，被丢弃且**有可视后果**的四条：
+
+| 设计期属性 | 夹具 | C3 现状 | 后果 |
+|---|---|---|---|
+| `Visible = 0` | `Text1`、`ucScrollbar1/2` | 不发 | 隐藏的辅助 TextBox 与两条滚动条会**显示出来**；`.ctl` 代码满篇 `If ucScrollbar1.Visible`（838/854/856/863/888…），初值错 ⇒ `m_ClientWidth` 少减一条滚动条宽 ⇒ 树区宽度/换行/行数全偏 |
+| `Text = "Text1"` | `Text1` | 不发 | 辅助框内容为空 |
+| `Orientation = 1` | `ucScrollbar2` | 不发 | 横向滚动条按纵向建（`ucScrollbar.ctl` 的 Orientation 决定 TBS_VERT 样式位） |
+| `SmoothScrollFactor = 0,15` / `ThumbTooltipFont` | `ucScrollbar1/2` | 不发 | 平滑步长与缩略图字体取默认（运行期 `Initialize` 里 `m_SinSmoothScrollFactor = 0.1499…` 恰好兜住，可降级为低优先） |
+
+**修法（下一批，最小面）**：在 `cgen_form.cpp` 的设计子控件循环（353-407）里，每条 `CreateDesign*` 之后复用
+**已有唯一出口** `emitDesignerStateProps(child, "vb6_hwnd_" + cIdent(name))`
+（`cgen_util_ctrl.cpp:1225`，已覆盖 Enabled/Visible/Min/Max/Value，且是 `cgen_form_create_controls.inc:365`
+与 `cgen_form_ctrl_style_apply.inc:395` 两条创建路共用的那一份 ⇒ 不再新增第二处口径）；
+UC 子控件再补简单属性的 `prop_let`（`Orientation` 等），字体块复用 `emitFrmFontObj`。
+按纪律先加一条发码形状断言（期望 `CreateDesign*` 之后紧跟 `vb6_SetControlVisible(..., 0)`），
+先红后绿；旧产物必须红。
+
+
+---
+
+## §33 设计期属性第二批（Text / Orientation）与真 VB6 基准首轮读数
+
+#### 33.1 三条落地状态与顺序（`emit_design2.txt:2857-2869` 实测）
+
+```
+vb6_hwnd_Text1 = vb6_UC_CreateDesignEdit(360, 480, 1335, 495);
+vb6_SetControlVisible((void*)vb6_hwnd_Text1, 0);        /* design Visible=False */
+vb6_hwnd_ucScrollbar2 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar2", 240, 3360, 4095, 135);
+vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar2, 0);
+vb6_hwnd_ucScrollbar1 = vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar1", 4560, 120, 135, 3015);
+vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar1, 0);
+vb6_ucTreeViewPlus_UserControl_Initialize((vb6_cls_ucTreeViewPlus*)me);
+if (!vb6_uc_skipIP) vb6_ucTreeViewPlus_UserControl_InitProperties((vb6_cls_ucTreeViewPlus*)me);
+vb6_SetControlText((void*)vb6_hwnd_Text1, vb6_BSTR_FromStr(L"Text1"));       /* design Text */
+vb6_ComSetProp(vb6_hwnd_ucScrollbar2, L"Orientation", vb6_ComPackInt(1));    /* design Orientation */
+```
+
+三条的**位置**是刻意的：
+
+| 属性 | 位置 | 理由 |
+|---|---|---|
+| `Visible` | Initialize **之前** | VB6 语义就是设计值先于任何用户代码生效；`.ctl` 的 838/854/856/863/888 都直接读 `ucScrollbar1.Visible` |
+| `Text` | InitProperties **之后** | TextBox 的初值不参与 Initialize 的默认值计算，放后面无害且统一 |
+| `Orientation` | InitProperties **之后**（必须） | `ucScrollbar.ctl:2186` 的 `Let m_eOrientation = ORIENTATION_DEF` 在 `UserControl_Initialize` 里，**之前写会被冲掉**；`ucScrollbar.ctl:2290` 的 `ReadProperty("Orientation", …)` 在 `InitProperties` 里，而设计子控件**根本没有 PropertyBag**（bag 只给 .frm 里的 UC 实例）⇒ 取到的永远是默认值 `oVertical`。所以设计值只能由这一段补 |
+
+**`Orientation` 并不是"进 PropertyBag 落地"的那条路** —— 它是靠 `vb6_ComSetProp` 名字路由到
+`vb6_ucScrollbar_ucProps` 表（`emit_design2.txt:9967`
+`{ L"Orientation", vb6_ucScrollbar_ucPropGet_Orientation, vb6_ucScrollbar_ucPropSet_Orientation }`），
+在 `InitProperties` 之后补写。这一点必须与"bag 落地"区分开记。
+
+**运行期读值：未直接取证。** 现有证据只有三条间接的：①props 表有 Orientation 行；
+②发码顺序 = Initialize → InitProperties → 写 1；③`vb6_ComSetProp` 走 hostmodel 的名称路由。
+`C3_UC_TRACE` 只记生命周期（`uc_host.c:24-31`），不含属性值，故"运行期读到的 m_eOrientation 确实是 1"
+本轮**没有**实测；要坐实需插桩或加一条读回断言，列为下一轮待办。
+
+发码形状断言已扩到六枚针（`uctreeview_designkids_state`），旧产物（只发几何）必红。
+
+#### 33.2 三条读数分开记（真 VB6 基准 `331776 B / 24EAAFB2…CDFD`）
+
+本机 `tests/guisample/uctreeview_px.ps1 -RefExe .temp\vb6ref\ucTreeView\Proyecto1.exe`
+（C3 产物 `.temp/ucmeas/Proyecto1.exe` 837632 B）：
+
+| 项 | 基线（run 42344074260，无设计期属性） | 仅 `Visible=0`（head c6f01ddf） | +`Text`/`Orientation`（本机本次） | 真 VB6 |
+|---|---|---|---|---|
+| Tree Explorer 文字行 | 4 | 待 CI | **4** | 5 |
+| Tree Explorer firstTextW | — | — | **79** | 78 |
+| Tree Explorer vivid/photo/avatar/dark | — | — | **562 / 643 / 314 / 952** | 2354 / 1610 / 1225 / 1542 |
+| Form3 文字行 / firstTextW | 行数对不上 | 待 CI | **11 / 175** | 10 / 187 |
+| Form3 photo / avatar / dark | photo 0 | 待 CI | **0 / 58 / 1824** | 9292 / 6498 / 5155 |
+| Form3 字重 | — | — | **400** | 700 |
+| Form5 文字行 / firstTextW | 5 | 待 CI | **5 / 42** | 15 / 77 |
+| Form5 dark / 字重 | — | — | **1975 / 400** | 4778 / 700 |
+| Agenda vivid/photo/avatar | 全 0 | 待 CI | **0 / 0 / 0** | 7120 / 10955 / 9793 |
+| 第 2 轮重建 | 4 窗 OPEN-FAIL | 待 CI | **4 窗 OPEN-FAIL** | 全绿 |
+| Menu/Tools | 看门狗超时 + 0xC0000005 | 待 CI | **同左**（rva=0x1656c，av read 0x200024） | 绿 |
+
+**结论：这三条设计期属性对五窗像素读数没有可测影响**（Tree Explorer 4、Form5 5、Form3 photo 0 与改动前同值）。
+不能记成"变好了"。设计期属性这批的价值在**语义正确**（隐藏控件不再显示、横向滚动条按横向建），
+不在五窗收敛。
+
+#### 33.3 五窗内容缺失的真主因（本轮实测，需调整顺序）
+
+C3 进程 stdout 直接打出三条：
+
+```
+THE IMAGE: Lucy_Rodriguez DON'T EXIST
+THE IMAGE: Diego_Martinez DON'T EXIST
+THE IMAGE: Ana_Torres DON'T EXIST
+```
+
+`ucTreeViewPlus.ctl:985` 的这条消息只在 `cImageList(index) = 0` 时打印。对应数据来自
+`JerarquiaEmpresa.xml:5` 的 `<image src="https://randomuser.me/api/portraits/women/3.jpg" key="Lucy_Rodriguez"/>`，
+而 `LoadPictureEx`（同文件 2355-2410）对 `PathIsURL` 为真的分支走的是**远程流加载**（`GdipLoadImageFromStream`）。
+即：**URL 图片在 C3 里根本没拿到流** ⇒ `hImage=0` ⇒ 不入 Collection ⇒ 后续 `cImageList(key)` 取 0。
+Form3 `photo=0`、Agenda `vivid/photo/avatar` 全 0 全是这一条的下游。
+
+次要主因：Form3/Form5 的 `font="FormX.frx":…` 解析出来的字体**权重丢了**（C3 渲染 400，真 VB6 700），
+这是 frx 字体记录字段的问题，与设计期属性无关。
+
+> **§34 更正**：这句诊断是错的。frx 字体记录里 Weight 就是 **400**（字节实证见 §34.1），
+> `font=` 引用解析并没有丢字重；运行期 700 是 `UserControl.FontBold = True` 这条运行期赋值的结果，
+> 而它在 C3 里被 `CBool(晚绑定属性)` 的数值桥吞成了 False。改法是 §34.2，不在 frx_reader。
+
+⇒ **五窗要绿，必须先进 URL 图片加载这条**（原计划排在最后的 `GetDrive`/`Collection` 之后的第 4 段），
+否则 photo/avatar/vivid 三项永远追不上。建议顺序改为：URL 图片加载 → frx 字体权重 → 其余几何/文本。
+（顺序已按用户 2026-11-07 的批准改为：字重 → URL 图片 → CI 门控 → Orientation 实测 → GA 22/22 → 五窗。）
+
+## §34 frx 字重这条：实测是 `CBool(晚绑定属性)` 的数值桥，不是 frx 解析（2026-11-07）
+
+### 34.1 先钉事实：frx 记录里的 Weight 就是 400
+
+`Form3.frm` / `Form5.frm` 的控件字体是 `font = "Form3.frx":0000` 这种**引用**，不是 `BeginProperty`。
+`readFont`（`src/project/frx_reader.cpp`）按 `GUID 03005203-…` 认记录，字段偏移 = cbSize[0..3] / GUID[4..19] /
+ver[20..23] / **weight[24..25]** / size[26..29] / charset[30] / name[31..]。
+
+实测字节（本机 `[IO.File]::ReadAllBytes`）：
+
+| 文件 | 记录偏移 | cbSize | weight@+24 | size@+26 | name |
+|---|---|---|---|---|---|
+| `Form3.frx` | 0x0000 | 0x24 | **0x0190 = 400** | 97500 (9.75pt) | Segoe UI |
+| `Form5.frx` | 0x0000 | 0x24 | **0x0190 = 400** | 97500 (9.75pt) | Segoe UI |
+| `Form3.frx` | 0x0028 | 0x26 | **0x0190 = 400** | 90000 (9.0pt) | Segoe UI |
+
+全 `tests\` 下所有 `.frx` 字体记录扫一遍：**没有一条非 400**。C3 发码同样是 400：
+
+```
+_vb6_f120->Name = vb6_BSTR_FromStr(L"Arial Narrow");
+_vb6_f120->Size = 8.25f;
+_vb6_f120->Weight = 400;
+vb6_UC_BagPutFont(_bag, L"Font", (void*)_vb6_f120);
+```
+
+⇒ `font=` 引用解析 **Name/Size/Weight 三字段都落地**。真 VB6 的 `lfWeight=700` 不是设计值。
+
+### 34.2 真根因：`CBool(xmlAttr.Text)` 恒 False
+
+`ucTreeViewPlus.ctl` 的 `LoadFromXML` 用 `CBool(xmlAttr.Text)` 读 `FontBold/Expanded/Checked/
+FontUnderline/PlusButton/RadioStyle/HideCheck/Disabled` 共 10 处。C3 旧发码（10 行全同形）：
+
+```
+newNode->FontBold  /* class var .FontBold field */ =
+    vb6_CBool(vb6_VariantToDouble(vb6_VariantFromComResult(vb6_ComGetProp(xmlAttr, L"Text"))));
+```
+
+链路：`CBool` 的 C 形参是 `double` ⇒ 实参适配站把 `Object.Prop` 的 Variant 包成
+`vb6_VariantToDouble(...)` ⇒ `"True"` 走 `vb6_Val` 答 **0** ⇒ `CBool` 恒 False。
+真 VB6 `CBool("True") = True`（-1）。所以 `UserControl.FontBold` 永远没被置 True，
+Form3/Form5 的树节点字重停在 400。
+
+修法（`src/backend/detail/expr/cgen_expr_call_conv_numeric.inc`，只动 Boolean 那一档）：
+`convIsBool` 时若 `args[0]` 是 `vb6_VariantToDouble(<整只槽>)`，把 double 包装剥回去，
+让既有的 V 后缀机制接管 ⇒ 发 `vb6_CBoolV(<槽>)`（`vb6_CBoolV` 的 vtBSTR 分支走 `vb6_BoolVal`，
+认 `"True"/"False"`）。数值族（CInt/CLng/…）不动：它们问的是另一句话，不在本条范围。
+
+改后发码（完整 10 处同形，带 `_own_N` 临时量与语句末 `VariantClear`）：
+
+```
+vb6_VARIANT _own_47 = vb6_VariantFromComResult(vb6_ComGetProp(xmlAttr, L"Text"));
+newNode->FontBold  /* class var .FontBold field */ = vb6_CBoolV(_own_47);
+vb6_VariantClear(&_own_47);
+```
+
+### 34.3 改前/改后读数（本机同一脚本、同一真 VB6 基准 `331776 B / 24EAAFB2…CDFD`）
+
+`tests/guisample/uctreeview_px.ps1 -RefJson .temp/ucmeas/ref.json`（基准读数复用，不重跑 VB6）：
+
+| 读数 | 改前（`.temp/ucmeas/Proyecto1.exe` 837632 B） | 改后（`.temp/ucmeas2/Proyecto1.exe` 838144 B） | 真 VB6 |
+|---|---|---|---|
+| **Form3 `LOGFONT.lfWeight`** | **400** | **700** | 700 |
+| **Form5 `LOGFONT.lfWeight`** | **400** | **700** | 700 |
+| Tree Explorer `lfWeight` | 400 | 400（不变，应为 400） | 400 |
+| Form3 文字行 | 11 | **10** | 10 |
+| Form3 首行文本墨迹宽 | 175px | **189px** | 187px |
+| Form3 dark | 1824 | **2885** | 5155 |
+| Form5 文字行 | 5 | **12** | 15 |
+| Form5 首行文本墨迹宽 | 42px | **48px** | 77px |
+| Form5 dark | 1975 | **6378**（已过 4778*0.9） | 4778 |
+| Form5 vivid | 36686 | **38573**（已过 41664*0.9） | 41664 |
+
+⇒ 字重这条**有可测的文字墨迹变化**（不是"变好了"一句话）：Form3 行数 11→10 与参考一致、
+首行墨迹 175→189 越过 187-2 阈值；Form5 行数 5→12、dark 1975→6378、vivid 越过阈值。
+
+### 34.4 独立断言（旧产物必红）
+
+`tests/run_tests.ps1`（紧接 `uctreeview_designkids_state` 之后）：
+
+- `cbool_latebound_variant`（Test-EmitcShape）：必须出现
+  `newNode->FontBold  /* class var .FontBold field */ = vb6_CBoolV(`。
+  **旧产物实测 shape=False（红）**，改后 True。
+- `cbool_latebound_variant_numeric_bridge`（Test-EmitcAbsent）：不得出现
+  `vb6_CBool(vb6_VariantToDouble(vb6_VariantFromComResult(`。
+  **旧产物实测 absent_ok=False（红，10 处）**，改后 True。
+
+另：`uctreeview_px.ps1` 的 `字重` 判据本来就是拿真 VB6 基准比 `lfWeight`，改前 Form3/Form5 两行都在 FAIL 列表里，
+改后两行消失（剩 Tree Explorer 400 = 参考 400）。
+
+
+## §35 URL 图片加载链：两个实现缺口（不是环境不可达）（2026-11-07）
+
+真 VB6 基准 `photo=9292`（Form3）证明它确实把 `https://randomuser.me/...` 拉下来了。C3 侧断在
+**两处发码**，都已修；链上每一站的返回值都有独立夹具读数。
+
+### 35.1 最小夹具：逐步钉住返回值
+
+`tests/urlpic/UrlPicMain.bas`（`CreateObject("Microsoft.XMLHTTP")` → `.Open/.send` → `readyState`
+→ `.Status` → `.responseBody` → `Byte()` 赋值 → 前 4 字节；每站打印）＋
+`tests/urlpic/serve.ps1`（`TcpListener 127.0.0.1` 最小 HTTP，不需要管理员/URL ACL）＋
+`tests/urlpic/www/probe.png`（635 B，PNG 签名 137,80,78,71）。
+
+本地 loopback（真跑，必修）：
+
+```
+URL=http://127.0.0.1:8765/probe.png
+S1 create obj=1 err=0
+S2 open err=0
+S3 send err=0
+S4 readyState=4 polls=0 err=0
+S5 status=200 err=0
+S6a responseBody VarType=8209 e0=137 e1=80 err=0
+S6b assign err=0 lb=0 ub=634
+S7 b0=137 b1=80 b2=78 b3=71
+S8 DONE
+```
+
+真 URL（`https://randomuser.me/api/portraits/women/3.jpg`）同形：`S5 status=200`、
+`S6a VarType=8209 e0=255 e1=216`、`S6b lb=0 ub=6321`、`S7 255,216,255,224`。
+
+⇒ `CreateObject` 不是缺口（obj=1）；`responseBody` 不是缺口（VarType=8209）；断在 **`Byte() = obj.responseBody`**
+与 **`PathIsURL(SrcImg)`**。
+
+### 35.2 缺口①：`Byte() = obj.Prop` 被当 BSTR 解
+
+`src/backend/detail/stmt/cgen_assign_com_prop.inc`：整体数组目标（`DataArr() = ...`）此前几轮类型推断
+都认不出「数组目标」⇒ `unpackHint` 留空 ⇒ 默认档发 `vb6_ComGetStringProp`（BSTR）。
+MSXML 的 `responseBody` 是 `VT_ARRAY|VT_UI1`，当 BSTR 解就是一根乱指针（实测改前
+`lb=8 / ub=6619168`，元素读全 -999）。
+
+修法：数组目标一律取整只 VARIANT，交给值语义侧按 VB6 规则解封。
+
+改前：
+
+```
+DataArr = vb6_ComGetStringProp(oXMLHTTP, L"responseBody");
+```
+
+改后：
+
+```
+DataArr = vb6_ArrayAssign1D(DataArr,
+    vb6_VariantToByteArray(vb6_VariantFromComResult(vb6_ComCall(oXMLHTTP, L"responseBody", NULL, 0))));
+```
+
+### 35.3 缺口②：`PathIsURL(SrcImg)` 收到 UTF-16，恒返回 0（真根因）
+
+`PathIsURL` 声明 `Alias "PathIsURLA"`、`ByVal pszPath As String`。RTL 的 shell 转发桩是
+1:1 指针透传（`vb6_di_PathIsURLA(BSTR) → PathIsURLA((LPCSTR))`），不做编码转换，所以 C3 必须在
+调用点编组成 ANSI。
+
+旧发码在 `cgen_expr_call_arg_emit.inc` 里对 **Variant 实参**只做 `vb6_VariantToString(...)`（BSTR），
+随后 `cgen_expr_call_arg_variant.inc` 又把它按 String 形参包一层，最终：
+
+```
+BSTR _own_37 = vb6_VariantToString(_ansi_0);   /* 先把 ANSI 又转回 BSTR */
+if (vb6_lwa_PathIsURLA(_own_37)) { ... }        /* LPCSTR 看到 'h',0,'t',0… ⇒ 只认 "h" ⇒ 0 */
+```
+
+⇒ URL 分支永不进，全部远程头像落到 `GdipLoadImageFromFile("https://…")` 静默失败
+（改前 Form3 `photo=0`，日志是 `THE IMAGE: … DON'T EXIST`）。
+
+修法（两处配套）：
+
+1. `cgen_expr_call_arg_emit.inc`：Variant 实参也进 ANSI 编组（先 `vb6_VariantToString` 取 BSTR，
+   再 `vb6_BSTR_ToANSI_cap` 取 `_ansi_N`）；Variant 实参不做 out-param 回写（它没有可写 String 缓冲语义）。
+2. `cgen_expr_call_arg_variant.inc`：`isDeclareAnsiCall && calleeParams[i].isByVal && type==String`
+   时**原样保留** `arg_emit` 已编组的 `char*`，不再包 `vb6_VariantToString`。
+
+改后：
+
+```
+char* _ansi_0 = vb6_BSTR_ToANSI_cap(vb6_VariantToString((*SrcImg)));
+if (vb6_lwa_PathIsURLA(_ansi_0)) { ... }
+```
+
+### 35.4 真 App 读数（`tests/guisample/uctreeview_px.ps1`，同一份真 VB6 `ref_metrics.json`）
+
+临时插桩（已还原）在 `LoadPictureEx` / `LoadImageFromArray` 打点，Form3 的实际日志（节选）：
+
+```
+DBGIN vartype=8 s=https://randomuser.me/api/portraits/men/1.jpg
+DBGARR isDim=True stmNull=False
+DBGARR gs=0 h=60352128
+DBGURL status=200 ub=3597 h=60352128
+… 共 15 条 URL，全部 status=200 / gs=0 / h≠0
+```
+
+| 读数 | 改前 | 改后 | 真 VB6 |
+|---|---|---|---|
+| Form3 `photo` | **0** | **4080** | 9292（判据 ≥8363） |
+| Form3 `avatar` | 0 | 2130 | 6498（判据 ≥5848） |
+| Form3 文字行 | 10 | 9 | 10 |
+
+⇒ URL 图**已经加载并进入绘制**（photo 0→4080）；剩余差距是几何/列表尺寸与展开状态一类问题，
+不再是"图没拉到"。
+
+### 35.5 断言与门控
+
+`tests/run_tests.ps1`（VBP 段，紧接 `uctreeview_urlpic_responsebody`）：
+
+- `declare_ansi_variant_arg`（Shape）：必须出现 `vb6_lwa_PathIsURLA(_ansi_`。旧产物发 `_own_` ⇒ 红。
+- `declare_ansi_variant_arg_bstr`（Absent）：不得出现 `vb6_lwa_PathIsURLA(_own_`。旧产物必红。
+
+URL 夹具（`Test-UrlPicture`）：
+
+- `urlpic_local`：`-LocalServer`，真跑 loopback；**必须 PASS**。
+- `urlpic_net`：真 URL，先 3s 探 `host:port`；连不上记
+  `SKIP (asset/network: 连不上 …)`，**SKIP 不计入通过**；探得通但跑失败一律 FAIL。
+- 本地服务起不来记 `SKIP (asset/local-http: 127.0.0.1:8765 起不来)`，同样不算通过。
+
+本机实测：`urlpic_local` 与 `urlpic_net` 全部 needle 命中（见 35.1 两段日志）。
+
+### 35.6 `m_eOrientation` 运行期读回：**实测 == 1**（落地）
+
+发码侧（`ucTreeViewPlus` 生成码）在设计期子控件建好之后发：
+
+```
+vb6_UC_CreateDesignUserControl("Proyecto1.ucScrollbar", "ucScrollbar2", 240, 3360, 4095, 135);
+vb6_SetControlVisible((void*)vb6_hwnd_ucScrollbar2, 0);
+vb6_ComSetProp(vb6_hwnd_ucScrollbar2, L"Orientation", vb6_ComPackInt(1));  /* design Orientation */
+```
+
+临时探针（`ucScrollbar.ctl` 的 `InitProperties` / `ReadProperties` / `Property Let Orientation` /
+`Property Get Orientation` / `UserControl_Paint`，**已还原，`git diff` 0 差异**）在 Form3 进程里拿到：
+
+```
+DBGORI let=1      w=4095 h=135      ← 设计期 Orientation=1 到的是横向那个实例 (4095×135)
+DBGORI readback=1 w=4095 h=135      ← m_eOrientation 赋值后的读回 == 1
+DBGORI let=1      w=4095 h=135
+DBGORI readback=1 w=4095 h=135
+DBGORI paint=0    w=135  h=3015     ← 上屏的是纵向滚动条 (135×3015)，它没有 Orientation ⇒ 0 正确
+```
+
+⇒ `m_eOrientation == 1` 有直接证据（`readback=1`），且用尺寸区分了实例：`paint=0` 的那个是
+`ucScrollbar1`（纵向，设计期无 Orientation），不是失败。这条**落地**。
+
+（过程记录：第一次只打 `paint=` 没带尺寸，误判成「未落地」；补上 `w/h` 后实例身份明确，结论更正为落地。）
+
+
+### 35.7 本轮已知红 / 遗留
+
+- `manifest_coverage` K1 红：新夹具 `tests/urlpic/UrlPicMain.bas` 还没登记进
+  `emit-manifest.expected.txt`。按纪律**不手写**，等本次 head 的 CI `ci/emit-manifest` 产物回来逐行核对后登记。
+  **已登记，见 35.10**（597 = 597，K1..K3 绿）。
+- `conv_strict_parse` R4：本轮一度因 §34 新增一个 `convIsBool` 引用而报 3（want 2）；
+  已把该处改成等价的 `callee == "vb6_CBool"`（该点尚未改写 callee），哨兵保持 2，未改阈值。
+- Form3 `photo=4080`（真 VB6 9292）、`textRows=9`（真 10）：URL 图已加载上屏，剩余是几何/展开态差异，
+  归入五窗阶段，不在本条继续扩大。
+- `Menu / Tools` 第 2 轮 `OPEN-FAIL` + `0xc0000005 av read target=0x4`：第 1 轮正常出图，
+  崩在重复 `Show` 重建路径，与本条改动无关（改前同形），单独记。
+
+### 35.8 `Test-EmitcShape` 的 odd-literal 计数把 `L"\\"` 收尾引号误判成转义（判据 bug，已修）
+
+CI head `6be8fce3` 的三处红里有两条 `missing:` 为空、只报 `odd-literal-lines=19`：
+
+- `[EMITC-SHAPE] uctreeview_designkids_state`
+- `[EMITC-SHAPE] cbool_latebound_variant`
+
+不是发码坏，是**计数启发式**坏：旧写法 `(?<!\\)"` 把 `L"\\"` 的收尾引号也当成被转义
+（它前面确实有一个 `\`），于是只要产物里出现路径分隔符字面量，就恒有 19 行被判 odd。
+改成「引号前连续反斜杠个数为偶数才算字符串边界」。本机同一份产物（`.build\C3.exe
+tests\ucTreeView\Proyecto1.vbp --emit-c`，exit=0，18999 行）复算：
+
+```
+odd_old=19   ← 与 CI 读数逐字一致, 复现了那条红
+odd_new=0    ← 修正后
+```
+
+判据语义未放宽：真正漏进 C 源码的未转义换行（把字面量劈成两行）依然会红。
+
+### 35.9 夹具编码：`Form1.frm` 转 UTF-8（与 `ucTreeViewPlus.ctl` 同口径）
+
+`ucTreeViewPlus.ctl` 已在 `d975da2e` 转为 UTF-8（无 BOM）；`Form1.frm` 此前仍是 CP1252，
+两行西班牙语注释（`raíz` / `Función`）按 UTF-8 读是 U+FFFD。现已同样转为 UTF-8（无 BOM，
+CRLF 1313 不变，`git diff` 仅那 2 行）：
+
+```
+1139: ' Convertir el nodo raíz del XML en un nodo de tu clase
+1145: ' Función recursiva para convertir un nodo XML en un nodo de la clase Node
+```
+
+转换后 `--emit-c` exit=0（18999 行），夹具解析未受影响。
+
+### 35.10 发码清单登记（吃 CI 交回的 artifact，未手写）
+
+来源：run `42355909090`（head `97c70bf4`）的 `emit-manifest` artifact（`gh run download -n emit-manifest`）。
+先做来源核对：与 head `d975da2e`（run 42355462395）那份 artifact 的 597 条数据行**逐行相同** ——
+即本轮 `run_tests.ps1` / `Form1.frm` 编码改动**没有**改发码。
+
+`scripts/rebless_emit_manifest.ps1 -Manifest <artifact>`（先不带 `-Bless` 看，再登记）：
+
+```
+期望 596 行 / 实得 597 行 / 相同 567 / 哈希不同 29 / 缺席 0 / 多出 1
+新增: tests/urlpic/UrlPicMain.bas
+登记后: 相同 597 / 哈希不同 0 / 缺席 0 / 多出 0
+check_manifest_coverage: K1..K3 inputs=597 [.vbp=221 .bas=376] registered=597 sets equal
+```
+
+29 条变更的核对方式（不靠"看着差不多"）：
+
+- 本机用当前 `.build\C3.exe` 对每条重发 `--emit-c`，按 `emit_manifest.ps1` 同一套归一化
+  （`Generated by …` 折成 `<PATH>`、根目录折 `<ROOT>`、只哈希纯 ASCII 行）复算：
+  **26/29 的 ascii256 与 CI 逐字节相同**（含 `ucSegmentedControl`、`Charts 2020` 四份、
+  `czFormDemo`、`dbgdlg`、`declare_out`、`fixedstr`、`k173`、`ve_list`、`VbQRCodegen`、
+  `b190`、`b598`、`byref_elem`、`variant_boxing`、`Definitions.bas`）。
+- 余下 3 条是 `GUISample.vbp` 的三个副本（`tests/guisample` 与 `vb6ref/src/{vc6,vs2015}`）：
+  本机 emit 与 CI 不同源自**本机 OCX 注册状态**（stderr 有
+  `Duplicate ProgID ... RICHTEXT.RichtextCtrl.1 in both RICHTX32.OCX and RICHTX32.OCX`
+  与一串 `VB3001 未声明的标识符`），不是源码形状差异；CI 侧这三条均 `rc=0`、
+  字节 +48，与同族 `Definitions.bas`（本机已逐字节复现的 +48）同量级，属同一处 ANSI 编组改动。
+- 新夹具 `tests/urlpic/UrlPicMain.bas` 的关键形状已由 `uctreeview_urlpic_responsebody`
+  断言钉住（`DataArr = … vb6_VariantToByteArray(vb6_VariantFromComResult(vb6_ComCall(oXMLHTTP, L"responseBody", NULL, 0))))`）。
+
+⇒ `manifest_coverage` K1 这条红可以销账：登记数 = 语料数（597），不是靠删行/放宽。
+
+### 35.11 `uctreeview_px.ps1` 的「设计值口径」字重表按真 VB6 校正（400/600 → 700）
+
+CI head `fd9f47a0` 的 vbp #7 里出现两条**新**红：
+
+```
+'Form3' 字重 700 != 400
+'Form5' 字重 700 != 400
+'Agenda tema oscuro' 字重 700 != 600
+```
+
+不是发码回退，是脚本的**兜底口径过期**：脚本有两条字重判据 ——
+
+- 有 `-RefJson` 时按真 VB6 读数比（`.temp\vb6ref\ref_metrics.json`：Form3 `700`、Form5 `700`、
+  Agenda `700`、Tree Explorer `400`、Drag & Drop `400`），本机走这条，§34 之后是绿的；
+- CI 没有 ref 文件 ⇒ `ref=none(退回设计值口径)`，比的是 `$formSpecs[].weight` 里写死的
+  400/400/600 —— 那是**修 §34 之前** C3 的读数，自洽但已过时。
+
+按真 VB6 运行期值改为 700，并在表头写明「口径 = WM_GETFONT 的 lfWeight，不是 .frx 设计值」。
+判据没有放宽：旧产物（400）在这三条上反而必红，正是要求的「旧产物必红」。
+
+### 35.12 当前 HEAD 的 GA 状态与 26 行清单登记（2026-11-07 收尾核对）
+
+**提交链**（`github/dev` 与 `origin/dev` 均含，快进）：
+
+| commit | 内容 |
+|---|---|
+| `6be8fce3` | 字重根因修复：`CBool(<晚绑定>)` → `vb6_CBoolV`（§34），含两条旧产物必红的针 |
+| `d975da2e` | URL 链两处发码缺口（§35.1–35.7） |
+| `97c70bf4` | `Test-EmitcShape` odd-literal 判据修正 + `Form1.frm` 转 UTF-8（§35.8/35.9） |
+| `fd9f47a0` | 登记发码清单（CI artifact，30 条：新增 1 + 变更 29，§35.10） |
+| `9e0bb774` | `uctreeview_px.ps1` 兜底字重表 400/600 → 700（§35.11） |
+
+**GA 状态**：
+
+- head `9e0bb774`：run `42357614748` 刚入队（写作时 `queued`），结果未出。
+- head `fd9f47a0`：run `42356614425` = **21/22**，唯一红格 **vbp #7**，且红的就是
+  `[GUI] ucTreeView`（`uctreeview_px.ps1`）这一例。残留项（逐字取自 CI）：
+
+```
+'Tree Explorer' 节点文字行 4 < 5 (设计节点数)
+Corporate 卡片右缘被裁切 greenRim=54 > 5
+Contact 头像像素 0 < 3000*scale2 (头像全缺)
+'Tree Explorer' / 'Corporate Hierarchy' / 'Drag and Drop' 第 2 轮 3s 内没有弹出可见窗体
+'Menu / Tools' 第 1 轮 3s 内没有弹出可见窗体
+看门狗: 'Menu / Tools' 第 1 轮弹窗超时且主窗不响应 | crash 0xc0000005 av read target=0x740077 rva=0x4639c
+```
+
+  三条字重红（`700 != 400` / `700 != 600`）已在 `9e0bb774` 校正，新 run 应消失。
+
+  这条红**不是本轮改动引入的**：head `0a5843bf`（§34 之前）run `42349260232` 的 vbp #2 里同一例
+  就在红，残留族同形（头像 0 / greenRim / 第 2 轮 OPEN-FAIL / 看门狗 0xc0000005）。所以它属于
+  **五窗阶段**的待修项（重复 `Show` 重建 + URL 头像在 CI 无网环境下缺失），不阻塞本轮五条。
+
+**26 行清单（§32.3：族 A 17 + 族 B 9）登记状态**：已随 `fd9f47a0` 全部登记，口径为
+CI artifact（head `97c70bf4`，597 行）：
+
+- 29 条哈希变更的精确对账（旧期望 → CI 新清单）：
+  - **25 条**落在 §32.3 的 26 行清单内（族 A/族 B）；
+  - **4 条**是 §34/§35 新波及的：`tests/czUI-main/czFormDemo.vbp`、
+    `tests/declare_out/declare_cwex_lit_com.bas`、`tests/test_variant_boxing.bas`、
+    `tests/ucSegmentedControl/SegmentedControl.vbp`（`CBool` 数值桥 + `Declare` 的 ANSI 变体实参）；
+  - 26 行清单里 **`tests/TeeChartChartDisplay/DisplayProject.vbp` 在新 head 上哈希未再变**，
+    保持原登记值（不是漏登：它本就不在 29 条变更里）。
+- 1 条新增 = `tests/urlpic/UrlPicMain.bas`。
+- **坏形状两行没登记**：`tests/test_array.bas`（`dc61cfa7…` / 5375 B）与
+  `tests/test_redim_elem.bas`（`bafcd837…` / 22317 B）在新 head 的 CI 清单里与旧期望
+  **逐字节相同**，保持 §32.2 修正后的值；含坏形状的 `ci2`（head `8fc56916`）未使用。
+- `check_manifest_coverage` K1..K3：`inputs=597 [.vbp=221 .bas=376] registered=597`，sets equal。
+
+## 36. 五窗出图复验（第 1 块，2026-11-07）
+
+### 36.1 结论
+
+URL 图片链本身在 `d975da2e` 之后**已经全通**；本轮把"出图"剩下的两处缺口钉掉：
+
+| 缺口 | 站点 | 证据 |
+|------|------|------|
+| 对象实参装箱 | `cgen_expr_call_arg_emit.inc` `case Vb6Type::Object` | 生成码原样 `.vt=VT_DISPATCH`；夹具 `LoadPictureEx` 按 `VarType` 分派，`Case vbDataObject(13)` / `Case vbLong(3)` / `Case vbString(8)` 全不命中 ⇒ Agenda 66 枚头像 hImage1=0 |
+| AutoRedraw 绘图面 | `vb6forms_draw.c` `vb6_DrawAcquire` / `vb6forms_ctrl.c` `vb6_SetControlBackColor` | `[PRN]` 实测 `Picture1.Print` 的 `dc=…0CDC != ar=…0D90`（拿的是屏幕 DC），`pxAR=00F0F0F0`（记忆位图还是创建时那版底色） |
+
+### 36.2 逐步读数（诊断副本 `.temp\ucdiag*`，不入库；夹具原样未改）
+
+1. **URL 链**（Form3 `JerarquiaEmpresa.xml` 的 15 张 randomuser 图）：
+   `status=200` → `responseBody` `lb=0 ub=3597`（3598 B）→ `CreateStreamOnHGlobal` 非空 →
+   `GdipLoadImageFromStream rc=0` → `h1` 非 0 → `ImageListAddImage h` 非 0。逐项全绿。
+   本机 `Microsoft.XMLHTTP` 可用（PowerShell 侧独立复测 `status=200 len=3598`）。
+2. **Agenda 头像**：修前 `TRACE ILAI vt=9 h=0` ×73 —— 一条分支都没进。
+3. **对象档不能走 GDI+ 流**：把 `Case vbObject` 临时接上后 `GdipLoadImageFromStream(IPicture)` 直接
+   打崩进程（exit `0xC0000409`，连 `TRACE OBJ stream` 都没回来）。IPicture 不是 IStream。
+4. **默认属性口径**：改成 `.vt=VT_I4, .lVal=vb6_PictureHandleOf(...)` 后 `vt=3`、
+   `GetObjectType=7 (OBJ_BITMAP)`、`GdipCreateBitmapFromHBITMAP` 出图。
+   `run_tests.ps1:8222` 既有注记"VB6 对 Variant 形参取默认属性恰恰是对的"与拒绝 VB6 的
+   `Case vbLong 'StdPicture.handle` 一致 —— 这是实现缺口，不是夹具问题。
+5. **画上去之后仍是白圈**：`[PRN] dc!=ar` 证明 `Print` 没落记忆位图；`pxAR=00F0F0F0` 证明
+   `BackColor` 改了但记忆位图没重刷。两处修完，截图与 `ref_Contact__List.png` 目视同形
+   （独立 pastel 底 + 黑首字母）。
+
+### 36.3 五窗读数（`.temp\ucb4`，`-RefJson .temp\vb6ref\ref_metrics.json`，120dpi）
+
+| 窗口 | 指标 | C3 | 真 VB6 |
+|------|------|----|--------|
+| Tree Explorer | 文字行 / vivid / photo / avatar / dark | 4 / 562 / 643 / 314 / 952 | 5 / 2354 / 1608 / 1225 / 1542 |
+| Corporate Hierarchy (Form3) | 行 / vivid / photo / avatar | 9 / 17012 / 4080 / 2130 | 10 / 21768 / 9292 / 6498 |
+| Drag & Drop | vivid / photo / avatar | 1335 / 1340 / 70 | 2161 / 2484 / 927 |
+| Menu / Tools (Form5) | 行 / 首行墨迹宽 | 13 / 48px | 15 / 77px |
+| Agenda tema oscuro | vivid / photo / avatar | **4358 / 8107 / 8359** | 7120 / 10955 / 9793 |
+
+- Agenda 三档从 **0/0/0 → 4358/8107/8359**（本轮直接战果，截图目视一致）。
+- Form3 的 URL 头像**确实画出来了**（截图 5 枚头像齐全）；剩差在节点宽度/文字量：
+  文字截断成 `Joh` / `HR Ma` / `Lucy Rodrig` —— `TreeNodeTextWidth` 量宽偏小，
+  盒子跟着窄，photo/avatar 面积被压。与 Tree Explorer 的 `4<5`（节点枚举少了 C:/D: 两行，
+  第 4 行还重复"文档"且无图标）同属**下一层**，不在图片链上。
+
+### 36.4 本轮仍未绿（下一块/下一层）
+
+- 第 2 块：`MENU/TOOLS` 首轮 `0xc0000005`（本轮 run：`rva=0x6fa949ee base=00110000`、
+  `av read target=0x8b57ffbb`）+ 四条第 2 轮 `Show` 重建失败 —— 与"再次 Show 已销毁窗体"待取证。
+- 文本量宽偏小（Form3/Form5/Tree Explorer 行数），`ucTreeViewPlus.ctl(1347,5)`
+  `warning VB3001: 未声明的标识符 'Cls'`（UserControl.Cls 未实现）需另案。
+
+### 36.5 复现命令
+
+```powershell
+& .\.build\C3.exe tests\ucTreeView\Proyecto1.vbp --output-dir .temp\ucb4 --arch x86
+Copy-Item -Recurse -Force tests\ucTreeView\img .temp\ucb4\img
+Copy-Item -Force tests\ucTreeView\ejemplo.xml,tests\ucTreeView\JerarquiaEmpresa.xml,tests\ucTreeView\menu.xml .temp\ucb4
+$env:UCTV_SAVE_FORMS="1"
+pwsh -NoProfile -File tests\guisample\uctreeview_px.ps1 -Exe .temp\ucb4\Proyecto1.exe `
+     -OutDir .temp\ucb4\px -Sec 10 -RefJson .temp\vb6ref\ref_metrics.json
+```
+
+> RTL 改了 `vb6forms_draw.c` / `vb6forms_ctrl.c` 后**必须** `touch src\driver\c3rtl.rc` 再 build，
+> 否则 ninja 报 "no work to do"、`C3.exe` 时间戳不动（本轮踩过）。
+
+## 37. 重复点击 `0xc0000005` 闭环（第 2 块，2026-11-07）
+
+### 37.1 结论：不是一处，是三处
+
+| # | 现象 | 根因 | 落点 |
+|---|------|------|------|
+| A | `MENU/TOOLS` 首开 `0xc0000005`（`av read 0x740077`） | 晚绑定「IDispatch 视图偏移」按 **vtable** 缓存；MSXML6 的 DOM 节点偏移是**按实例**分配的（同一 vtable `6FB52600` 实测 `+0x2cd8` / `+0x6048`），命中旧偏移后 `disp+旧偏移` 直接 AddRef 野指针 | `vb6com_invoke.c` `vb6_ComDispViewIn` |
+| B | 第 2/3 轮 5 窗全 `OPEN-FAIL` | 窗体 WM_DESTROY **没清**默认实例槽；`vb6_form_load_X` 见 `hwnd` 非空直接早退，`ShowWindow` 打在死句柄上 | `cgen_form_wndproc_dispatch.inc` WM_DESTROY |
+| C | 重建第 2 轮 `0xC0000374`（page heap 下为 AV `read 0xbde2efc`） | UC 宿主销毁时**直接 `Destroy` 引用计数实例**，而 `ClsTreeExplorer.cTVP` 还握着它 ⇒ 下次 `Set cTE = New …` 释放旧对象时命中已释放内存 | `cgen_form.cpp` `vb6_<ctl>_ucHostTerminate` |
+
+### 37.2 取证（先红）
+
+探针 `.temp\probe_repeat.ps1`（不入库）按 `Form1!Command3(i)` 的 5 枚按钮同进程连点 3 轮，
+每步读 `Proyecto1.map` 里的 `_vb6_hwnd_/formLoaded_/formLoading_FormN` 三个静态槽（`ReadProcessMemory`）：
+
+```
+r1 Tree Explorer(Form2)  open=0x2a104fc 'Tree Explorer'   pre[hwnd=0x0 loaded=0 loading=0]
+      closed gone=True  post-close[hwnd=0x2a104fc loaded=1 loading=0]     <-- B: 销毁后槽没清
+r1 Corporate Hierarchy   open=... ok
+r1 Drag and Drop         open=... ok
+r1 Menu / Tools(Form5)   CLICK-ok=1 -> PROCESS-DIED                              <-- A
+```
+
+- **A 的读数**（`C3_COM_TRACE=1`）：崩溃前最后一条是
+  `[C3_COM] GetProp entry: name=childNodes`，接收者 `disp=05569F30`；
+  同一 vtable 的两个实例 QI 结果：
+  `DispViewQI vtbl=6FB52600 off=0x2cd8`（Form3 的 element，工作正常）vs
+  `off=0x6048`（Form5 的 element）。缓存命中的旧值 `0x2c30` 让
+  `05569F30+0x2c30=0556CB60`，其首 dword 是 `0x70` ⇒ AddRef 读 `[0x70+8]`
+  即 `av read target=0x78`，rva `0x46252`（`vb6_ComDispViewIn+0xf2`）。
+  把缓存关掉（临时 env `C3_COM_NOVIEWCACHE=1`）后 Form5 当场不再崩 —— 判据闭合。
+- **B 的读数**：如上 `post-close[hwnd=0x2a104fc loaded=1 loading=0]`；
+  第 2 轮 `Show` 走 `vb6_form_show_Form5+0x8` → `vb6_form_load_Form5+0x91`
+  （+0x91 已过 `if (vb6_hwnd_Form5) return;` 的早退，说明那次是真重建；
+  未修时这段根本不出现，直接 `OPEN-FAIL`）。
+- **C 的读数**：隔离跑 `-Only Form2`，第 2 次打开即死。
+  常规堆报 `0xC0000374`，检测点在 `vb6_BSTR_FromANSIBufFixed`（下一次分配）；
+  给 `Proyecto1.exe` 挂 IFEO page heap（`GlobalFlag=0x02000000`、`PageHeapFlags=0x3`，
+  用完已删）后立刻变成 **首次写入即 AV**，栈：
+  `vb6_cls_ucTreeViewPlus_Release ← vb6_cls_ClsTreeExplorer_Destroy+0x10b
+   ← vb6_cls_ClsTreeExplorer_Release+0x49 ← vb6_Form2_Form_Load+0x27`。
+
+### 37.3 修法
+
+1. `vb6_ComDispViewIn`：缓存只沉淀**类级结论**（"QI 返回同一指针" / "QI 不认"）；
+   异视图一律当场 QI 并直接持有那枚引用，删掉全部"预测偏移"算术。
+   宿主伪对象先于 `IsDispatchable` 拦下（首槽不是 vtable，不能解引用）。
+2. WM_DESTROY 末尾（在 `Form_Terminate` / `OLEDrop_RevokeAll` 之后）发
+   `vb6_hwnd_X = NULL; vb6_formLoaded_X = 0; vb6_formLoading_X = 0;`。
+3. `vb6_<ctl>_ucHostTerminate`：改成「先 `UserControl_Terminate`（若 .ctl 有），
+   再 `vb6_cls_<ctl>_Release(me)`」，宿主只交回自己那一枚引用。
+
+### 37.4 验证（后绿）
+
+- 探针 3 轮 × 5 窗 = **15/15 全开**，每个窗体 `post-close[hwnd=0x0 loaded=0]`，进程未死。
+- 像素夹具自带重复段（`tests\guisample\uctreeview_px.ps1`）：
+  `repeat[... 1/2/3]=open sync=True close=True` ×5 全 True。
+- 形状断言（`run_tests.ps1`，ucTreeView 段）：
+  `uctreeview_form_reload_reset`、`uctreeview_uc_host_terminate_release`、
+  `uctreeview_uc_host_terminate_no_force_destroy`。
+  旧产物红：旧编译器 `--emit-c` 三条复位行 0 命中、`…Destroy((vb6_cls_ucTreeViewPlus*)me)` 1 命中。
+- 像素读数与本轮 §36.3 逐项一致（Agenda `4358/8107/8359` 未回退）。
+
+### 37.5 遗留（不阻塞本块）
+
+- 销毁后窗体级类变量（`Form2.mExplorer`）仍留到下次 `Form_Load` 才释放 ⇒ 旧 UC 实例
+  多活一轮（只泄漏、不再崩）。要彻底对齐 VB6 的"Unload 即终止窗体实例"，
+  得给每个窗体生成 `vb6_form_terminate_X()` 统一释放模块级对象变量，另案。
+- 第 1 块的下一层（量宽偏小 / Tree Explorer 少 C:/D: 两行 / `UserControl.Cls`）
+  仍按 §36.4 挂账。
+
+### 37.6 复现命令
+
+```powershell
+& .\.build\C3.exe tests\ucTreeView\Proyecto1.vbp --output-dir .temp\ucb4 --arch x86
+pwsh -NoProfile -File .temp\probe_repeat.ps1                 # 3 轮 × 5 窗
+pwsh -NoProfile -File .temp\probe_repeat.ps1 -Only Form2     # 单窗隔离
+# page heap（仅诊断用，跑完删）：
+# HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\Proyecto1.exe
+#   GlobalFlag(REG_DWORD)=0x02000000, PageHeapFlags(REG_SZ)="0x3"
+```
+
+## §38 第 1 块的下一层：量宽偏小的真上游 = Variant 字符串/数值比较
+
+### 38.1 先钉 `TreeNodeTextWidth`：实测**不偏小**，原假设推翻
+
+同一字体（Segoe UI -16）、同一 DPI（120）下三路读数逐串一致：
+
+| 串 | DrawTextW(DT_CALCRECT) | GetTextExtentPoint32W | 独立 GDI 探针（CreateFontIndirect -16） |
+|---|---|---|---|
+| General Management | 165（单行 700） | 165 | 165 |
+| John Perez | 74 | 74 | 74 |
+| Maria Gomez | 93 | 93 | 93 |
+| Lucy Rodriguez | 107 | 107 | 107 |
+
+- 取数方式：临时在 `vb6_di_DrawTextW` 里加 `C3_DRAWTEXT_TRACE` 门控日志（env 指向文件），
+  记录 CALCRECT/DRAW、hdc、DC 当前 `LOGFONT`、rect 前后值、文本；跑完已**移除**
+  （`vb6_di_user32_stubs.c` 已回到 HEAD，无残留）。
+- 独立 GDI 探针（`.temp\gdi_textprobe.ps1`）不经过 C3，给出完全相同数值 ⇒
+  `TextWidth` 本身没有偏小，Form3/Form5 的截断另有上游。
+
+### 38.2 真上游：`If N.Image > 0`（Variant 字符串 vs 数值）
+
+- 真 VB6 `/make` 实测（`.temp\strnumcmp`）：`"John_Perez" > 0` = **True**、
+  `"0" = 0` = **False**、`"0" > 0` = True、`"1" < 2` = False、`0 < "x"` = True。
+  即 **Variant 的字符串侧与数值侧混比时，数值侧恒小于字符串侧**，与串内容能否转数无关。
+- 旧 C3：`vb6_VarCmp*` 走 `wcstod` 把串折成数 ⇒ `"John_Perez"` → 0 ⇒
+  `ucTreeViewPlus.ctl:1487` 的 `If N.Image > 0` 恒假 ⇒ `Rect.Right` 少加
+  `ImgLstWidth + lMargin` ⇒ 员工姓名被裁成 "Joh" / "HR Ma" / "Lucy Rodrig"。
+- 注意边界：类型化 `Dim s As String` 与数值比仍按数值转换（真机实测 `0 = s` 为 True），
+  那条路 cgen 不进 `VarCmp*`，本改动影响不到；`VT_EMPTY` 是「随对方」档。
+
+### 38.3 修法
+
+`src/rtl/core/vb6rtl/vb6rtl.c`：删掉六个比较函数各自的字符串/数值二分，新增
+`vb6_VarIsNumber` + `vb6_VarCmpOrder`，六个出口（Eq/Ne/Lt/Gt/Le/Ge）统一走这一份次序，
+不留第二条口径。
+
+### 38.4 断言（真 VB6 逐串对齐）
+
+`tests\varcmp_strnum\`（`vcs.vbp` + `vcs_main.bas`，`Debug.Print` 16 行）：
+`VCS-sgt0/slt0/seq0/sne0/sge0/sle0/str1lt2/str10gt9/n0lts/long-gt/long-eq/long-lt/
+empty-eq0/empty-eqs/empty-lts/DONE`，真 VB6 与 C3 逐行一致。
+
+### 38.5 后绿读数（局部）
+
+- Form3：John Perez / Maria Gomez / Lucy Rodriguez / Diego Martinez / Ana Torres 全部完整
+  （此前 "Joh"/"HR Ma"/"Lucy Rodrig"）。
+- Form5：`firstTextW` 48 → **77**（参考 78）。
+- 五窗全表见 §39.5（第 1、2 步合并复量）。
+
+## §39 C:/D: 少两行（与 §28「GetDrive 返回 0 个盘符」合并结案）
+
+### 39.1 真 VB6 与旧 C3 的实际读数（同一探针 `.temp\drvprobe`）
+
+| 读数 | 真 VB6 `/make` | 旧 C3 | 修后 C3 |
+|---|---|---|---|
+| `Count`（=`UBound(GetDrive)`） | **1** | **0** | **1** |
+| `GetDrive(0)` | `C:\` | `""` | `C:\` |
+| `VarType(GetDrive(0))` | **8**（vbString） | **8200**（数组） | **8** |
+| `GetDrive(1)` | `D:\` | `""` | `D:\` |
+| `Len(Left$(strDrives, 7))` | 7 | 3 | 7 |
+| `Left$(strDrives, 7)` | `C:\` + NUL + `D:\` | `C:\` | `C:\` + NUL + `D:\` |
+
+修后 C3 与真 VB6 的 `drv_out.txt` **逐字节一致**。
+
+### 39.2 两层成因
+
+1. **取子串按 NUL 截断**：`Dim strDrives As String * 255` 由
+   `GetLogicalDriveStrings` 写回 `"C:\0D:\0..."`。C3 侧
+   `Len(s)=255`、`Asc(Mid$(s,4,1))=0`、`InStr(s, Chr$(0))=4` 都正确，
+   但 `Left$` 出口走 `vb6_BSTR_FromStr`（`SysAllocString` → `wcslen`），
+   把 NUL 当串尾 ⇒ `Split` 只剩 `"C:\"`。
+2. **`GetDrive(i)` 不对返回数组做下标**：VB6 允许对**无参 Function 返回的 Variant 数组**
+   用 `f(i)` 取元素；cgen 把 `(i)` 当调用实参，按「超过形参个数」截掉
+   （`maxArgs=0`）⇒ 整个数组原样返回（VarType 8200）。这与第一层独立，
+   修完 `Left$` 也只能从 0 变 1 个盘符。
+
+### 39.3 修法
+
+- `src/rtl/core/vb6rtl/vb6rtl_string.c`：`vb6_Left/Right/Mid` 与
+  `vb6_LeftB/RightB/MidB` 六个出口统一改走 `vb6_BSTR_FromStrN(s+off, n)`
+  （`SysAllocStringLen`，不按 NUL 截断）。
+- `src/backend/detail/expr/cgen_expr_call_builtin_argtype.inc`：
+  「0 参且返回 Variant」的调用点，若带了 1 个实参，改发
+  `vb6_VariantArrayGetVal(callee(), i)`，不再把 `i` 塞进实参表。
+
+### 39.4 断言（真 VB6 逐行对齐）
+
+`tests\strnul_drive\`（`snd.vbp` + `snd_main.bas`）：
+`SND-nulcmp / leftlen / midlen / hasdrive / drive0 / drivevar / DONE`，
+真 VB6（写文件版探针）与 C3 的 `Debug.Print` 输出逐行一致。
+
+### 39.5 五窗复量（第 1、2 步合并后，对照真 VB6 `ref_metrics.json`）
+
+| 窗 | 文字行 C3/VB6 | firstTextW | vivid | photo | avatar | 其它 |
+|---|---|---|---|---|---|---|
+| Tree Explorer | **5 / 5 ✓**（§36.3 是 4） | 79 / 78 | 602 / 2354 ✗ | 653 / 1608 ✗ | 314 / 1225 ✗ | greenRim 0/0 ✓ |
+| Corporate Hierarchy (Form3) | 9 / 10 ✗ | 189 / 189 | 18045 / 21768 ✗ | 4080 / 9292 ✗ | 2130 / 6498 ✗ | greenRim 91/87 ✓ |
+| Drag & Drop | 5 / 5 ✓ | 99 / 99 | 1334 / 2161 ✗ | 1339 / 2484 ✗ | ✓ | — |
+| Menu / Tools (Form5) | 12 / 15 ✗ | 77 / 78 | ✓ | ✓ | ✓ | — |
+| Contact List | lightRows 7 / 8（容差内 ✓） | — | ✓ | ✓ | 8359 / 9793 ✗ | bg65 104318 / 118627 ✗ |
+
+- Tree Explorer 的 **C:/D: 两行已回来**（5 行），确认 §28 与 §39.2 是同一件事。
+- 仍红的共同形状是 `vivid/photo/avatar`（以及 Form3/Form5 行数、Contact 深底占比）：
+  都是**图像像素密度**类，与 §38/§39 的文字与盘符两层无关；下一步应单查
+  ImageList / 头像绘制的 alpha 与尺寸（真参考的 saturation 明显更高）。
+- 因此本轮**不宣布 GA**；像素例仍未真过。
+
+### 39.6 复现命令
+
+```powershell
+& .\.build\C3.exe .temp\drvprobe\c3\p.vbp --output-dir .temp\drvprobe\c3 --arch x86
+& .temp\drvprobe\c3\drv.exe            # 与 .temp\drvprobe\vb6\drv_out.txt 对照
+& .\.build\C3.exe .temp\sndref\p.vbp --output-dir .temp\sndref --arch x86   # 可选
+& .\.build\C3.exe tests\strnul_drive\snd.vbp --output-dir .temp\snd --arch x86
+& .\.build\C3.exe tests\ucTreeView\Proyecto1.vbp --output-dir .temp\ucb4 --arch x86
+pwsh -NoProfile -File tests\guisample\uctreeview_px.ps1 -Exe .temp\ucb4\Proyecto1.exe `
+  -RefJson .temp\vb6ref\ref_metrics.json -OutDir .temp\uctvpx
+```
+
+## §40 `UserControl.Cls`：裸写宿主伪对象方法（VB3001）
+
+### 40.1 症状与落点
+
+- `Option Explicit` 下 `ucTreeViewPlus.ctl` 的裸 `Cls`（实体第 **1408** 行；用户报的 1347
+  是 .ctl 头部/编码口径的行号偏差）配一条
+  `VB3001: 未声明的标识符: 'Cls'`。
+- 这是**语言/宿主能力**缺失，不是 RTL 缺符号：发码侧
+  `cgen_expr_ident_builtin.inc` 的 `hostPseudoMethodRtlName` 一直发得对
+  （`vb6_UserControl_Cls()`），只是被假诊断盖住。
+
+### 40.2 成因（单权威在表里）
+
+`src/common/host_pseudo.hpp` 的 UserControl 行 `{"UserControl","cls","Cls",Unknown,HPF_METHOD}`
+只有 `HPF_METHOD`，而语义层 `isDocumentBarePseudoMember` 只问
+`hostPseudoBareEligible`（只认 `HPF_BARE`）⇒ 裸 `Cls` 被判「未声明」。
+VB6 里 `.ctl/.pag` 的 `Cls` / `Refresh` / `Size` / `TextWidth` / `TextHeight` /
+`OLEDrag` / `CancelAsyncRead` 都可裸写，等价于 `<宿主对象>.<方法>`。
+
+### 40.3 修法
+
+- `host_pseudo.hpp`：新增 `hostPseudoBareCallEligible`（`HPF_BARE | HPF_METHOD`），
+  与 `hostPseudoBareEligible` 并列，注释写清两档只是发码形状不同。
+- `semantic_analyzer_util.cpp`：`isDocumentBarePseudoMember` 改问新助手。
+  语义层只停假诊断，发码拓扑零改动（`hostPseudoBareName` / `hostPseudoMethodRtlName`
+  仍各走各的出口）。
+
+### 40.4 断言（旧产物必红）
+
+`tests/run_tests.ps1` 的 ucTreeView 形状组：
+
+- 正：`Test-EmitcShape "uctreeview_usercontrol_cls_bare"` 命中 `vb6_UserControl_Cls();`
+- 负：`Test-EmitcAbsent "uctreeview_usercontrol_cls_no_vb3001"` 禁止
+  `未声明的标识符: 'Cls'` —— 旧产物在这条上必红。
+
+实测：`--emit-c` 18300 行、无 `VB3001`、`vb6_UserControl_Cls();` 恰 1 处；
+全量构建产出 `Proyecto1.exe`（841216 字节），链接通过（RTL 侧符号存在）。
+
+### 40.5 编码纪律（用户注）
+
+`tests\ucTreeView\Form1.frm` 与 `tests\ucTreeView\ucTreeViewPlus.ctl` 保持
+**UTF-8 无 BOM、CRLF**；否则真 VB6 `/make` 拿不到上面那份错误日志。
+
+
+
+
+
+
+
+
+## 41 图像像素密度（vivid/photo/avatar 只有参考 40% 上下）
+
+### 41.1 单头像像素级对照（先读数定性，不看外观）
+
+Form3 第一张头像框（x108..141 / y75..114）与 `Human Resources` 文本带
+（x99..240 / y150..166），C3 vs 真 VB6 `ref_Corporate_Hierarchy.png`：
+
+| 读数 | 真 VB6 | C3（改前） |
+| --- | --- | --- |
+| 头像 bbox（photo 色域） | x79..219 y75..219 n=1034 | x81..190 y85..219 n=404 |
+| 头像框 `sat>=8` / `sat>=60` | 1277 / 90 | 1281 / 90 |
+| 文本带 sat 直方图（15 一档） | 1869,121,14,83,27,139,98,63,0,0,0 | 2414,0,0,0,0,0,0,0,0,0,0 |
+| 文本带 maxSat / 采样点 | 112 @(165,152)=(95,155,207) | 9 @(102,153)=(95,99,104) |
+| 全图 photo / avatar | 9292 / 6498 | 4080 / 2130 |
+
+`avatar` 框内两图的饱和像素数**完全相同**（1277/90 vs 1281/90），逐像素 diff
+`meanAbsSum=133.47` 但 `nearSame(<=6)=13.2%`（位移/插值差，不是密度差）⇒
+排除 (a) alpha 混白、(b) 缩放裁剪、(c) 调色板量化、(d) 没画满。
+缺口全部落在**文字**：C3 文本带 2414 个像素 sat 全 `<=14`（`maxSat=9`），
+真 VB6 有 321 个 `sat>=60`、彩边到 112 —— C3 文字是 1-bit 硬边，没有子像素抗锯齿。
+
+### 41.2 ImageList / 绘制调用核对（用户第 2 点）
+
+- 素材全是 **PNG**（`tests\ucTreeView\img\*.png`），不是 JPEG；加载走
+  `GdipLoadImageFromFile` + 32bppPARGB 合成，alpha 通道存在且原样保留。
+- `ucTreeViewPlus.ctl` 的头像是 **GDI+ 自绘**（`GdipCreateImageAttributes` +
+  ColorMatrix 正常档 `M(0,0)=M(1,1)=M(2,2)=M(3,3)=1`），alpha 不丢；
+  不是 comctl ImageList，也不存在"JPEG 无 alpha 却半透明"那条。
+- RTL 的 comctl ImageList：`vb6_ImageList_Create` 用 `ILC_COLOR32 | ILC_MASK`
+  （`vb6forms_imagelist.c`），TreeView 同名两处同标志；全 RTL 无
+  `ImageList_DrawEx` 调用点（图标交给 `TreeView_SetImageList`），
+  `DrawIconEx` 只在 `picture_prop` / `statusbar`，与头像无关。
+
+### 41.3 根因 A：UC 字体质量档被写死 NONANTIALIASED
+
+`vb6_uc_fontHFontFor`（`uc_host_window.c:105`）、`Font.hFont`
+（`uc_controls.c:466`）、UC 宿主窗口字体（`uc_host_create.inc:85`）三处都递
+`NONANTIALIASED_QUALITY`。MS Sans Serif 是点阵字体，质量位对它无影响；但 .ctl 用的
+Segoe UI 一类**可缩放**字族在 VB6 里走 `DEFAULT_QUALITY`（本机 ClearType）。
+
+修法：上述三处改 `DEFAULT_QUALITY`；`vb6forms.c:167` 的 MS Sans Serif 默认 GUI 字体
+保持不动。`vb6_UC_ApplyFontToWindow`（原生控件共用，`cgen_form_create_controls.inc:147`）
+**保持** NONANTIALIASED，另开 `vb6_UC_ApplyFontToHostWindow` 给 UC 宿主窗口 ——
+否则 Form1 那批 Arial Narrow 原生控件会一起变平滑，推翻 Label 240 / 按钮行数判据。
+
+复量（`uctreeview_px.ps1`，`-RefJson .temp\vb6ref\ref_metrics.json`）：
+
+| 窗 | vivid C3/参考 | photo | avatar |
+| --- | --- | --- | --- |
+| Tree Explorer | 2354 / 2354 | 1608 / 1608 | 1225 / 1225 |
+| Corporate Hierarchy | 20772 / 21768 | 8594 / 9292 | 6266 / 6498 |
+| Drag & Drop | 2152 / 2161 | 2479 / 2484 | 3733 / 3733 |
+| Menu / Tools | 41304 / 41664 | 56036 | 106034 |
+
+`Form5` 文字行 12 → 14（参考 15）。
+
+### 41.4 根因 B：Ambient.ForeColor 恒 0（深色窗体文字被画成黑色）
+
+Contact 复量仍 vivid=4367（参考 7120）。逐行取样 y=194：
+真 VB6 `(129,195,255) (255,255,196) …`（白字 + ClearType 彩边），
+C3 `(57,44,25) (0,0,14) …`（近黑字）。
+
+`.ctl` 的 `m_TextColor = .ReadProperty("TextColor", Ambient.ForeColor)` 发码成
+`vb6_Ambient_ForeColor`，RTL 全局初值 0；窗体设计期 `ForeColor` 以前只进类背景刷，
+没有进运行期，于是 Form6（ForeColor=白）上的 UC 把 TextColor 读成黑色。
+
+修法（与 BackColor 同一条路，一个根因一刀）：
+
+- `cgen_form_prelude.inc` 读窗体 `ForeColor`（缺省 -1）；
+  `cgen_form_show.inc` 三个分支发 `vb6_RegisterFormClassFore(类名, ForeColor)`。
+- `vb6forms.c` 的类色表由 `{bg}` 扩成 `{bg,fg}`，新增
+  `vb6_RegisterFormClassFore` / `vb6_Forms_QueryClassFore`；
+  `uc_host_create.inc` 用它填 `vb6_Ambient_ForeColor`（`fg >= 0` 才覆盖）。
+
+复量：Contact vivid 4367 → 22606、photo 8117 → 26811、avatar 8359 → 9935
+（参考 7120 / 10955 / 9793）。
+
+### 41.5 按用户要求留到下一刀
+
+- `Form3` 文字行 9 != 10、`Form5` 文字行 14 != 15。
+- Contact 深底 `bg65=102676 < 118627*0.9`。
+
+## §42 Tree Explorer "Open cursor folder" 三级展开闭环（2026-11-07，第 1 块）
+
+### 42.1 状态固化（本轮开工先做）
+
+干净的 HEAD 基线 = `ffaef057`（SelNode ByRef 一修）。上一轮结尾被步数上限截断，
+工作区里留下的三处**都是完整改动**，逐一验证编译后按"一因一提交"落盘：
+
+| 提交 | 文件 | 根因 |
+| --- | --- | --- |
+| `91cbc76f` | `src/backend/cgen_base_type.cpp` | ByRef 类实参交 `vb6_ComCall` 而非对象档 |
+| `c893cc66` | `src/backend/detail/expr/cgen_expr_call_prelude.inc` | 数组下标里的晚绑定读被外层偷换 |
+| `8f4e4b24` | `src/backend/module/cgen_com.cpp` | 类槽收包装器；Public Variant 字段空体存根 |
+| `28aaf662` | `src/rtl/core/vb6rtl/vb6rtl_bstr.h` | BSTR 自赋值先释放后存回 |
+
+`cgen_expr_call_prelude.inc` 里那两处临时 `fprintf` 调试输出已删（属半截编辑，
+未留在提交里）。`.zcodeignore` 是工作区外产物，未跟踪、未提交。
+
+### 42.2 崩溃取证（先取证后改）
+
+- 崩溃：`0xC0000005`，模块 `Proyecto1.exe` 偏移 `0x000236E2`，落在
+  `vb6_ClsTreeExplorer_GetNodePath`：`N` 为 NULL 时读 `N+0x10` 的 `key`。
+  调用点 `Form2.Command1_Click` 的 `MsgBox cTE.GetNodePath(TVP.SelNode)`。
+- 结论：崩在**展开链之后**（`SelNode` 恒 Nothing），不是 Shell 浏览对话框的 COM。
+  对话框是 `MsgBox`（`#32770`，按钮"确定"，静态文本 = 路径）。
+
+### 42.3 四个下游根因（同一个"工程类对象经 IDispatch 往返"家族）
+
+1. **ByRef 类形参**（`ffaef057` 之前）：`cTVP.SelNode = N` 按值递裸指针，
+   `Set m_SelItem = *TheNode` 取到 `__comObj`（恒 NULL）⇒ SelNode 恒 Nothing。
+2. **Variant 公共字段**：Fix 099 对 `Public key As Variant` 生成空体存根 ⇒
+   `.key` 读回 Empty ⇒ `ArrIDLIST(0)`。
+3. **数组下标里的成员读**：`ArrIDLIST(N.Childs(i).key)` 整段被外层改写成
+   `ComGetStringProp(Item(i), "key")`，数组访问消失。
+4. **类槽收包装器**：`Set N = vb6_ComCallObject(...)` 落的是 `vb6_ComObject`
+   包装器，按 `vb6_cls_Node*` 读字段 ⇒ `N.Childs.Count` = 0；`Set x = 集合(1)`
+   后 `x.Text` 读到 0x44004300 一类的垃圾，`Len()=1140851328`，出口
+   `Release(包装器)` 直接 `0xC0000374`。
+5. **BSTR 自赋值**（RTL）：`NormalizePath` 的
+   `sData = IIf(Right$(sData,1)="\", sData, sData & "\")` 走 Self 分支时
+   `AssignMove` 先 Free 再存回 ⇒ 悬垂；随后 `FindFirstFile` 分配的 `"C:\*"`
+   复用该块 ⇒ 路径读成 `C:\*`，子节点登记成 `C:\*Program Files` 这类假路径，
+   三级比对恒不等。
+
+### 42.4 读数（`tests/ucTreeView` 真夹具 + 探针）
+
+修前：`HEAP_CORRUPTION 0xC0000374`；`afterSet=0`；`EX sp=C:\*`、`AFT=0`；
+j1 逐项 `C:\*PROGRAM FILES` / `C:\*WINDOWS`（无 HIT）；对话框静态文本为空。
+
+修后（`.temp/ucb13`，真夹具，未加任何探针）：
+
+```
+[dlg] #32770 title=Proyecto1
+[dlg-child] Static:C:\Windows\Cursors
+[path] OK contains C:\Windows\Cursors
+[close] dialog closed=True alive=True
+```
+
+探针读数（`.temp/ucprobe3u`）：
+
+```
+j0 HIT C:\        -> 展开 4 项: C:\Program Files / (x86) / C:\Users / C:\Windows
+j1 HIT C:\WINDOWS -> 展开项含 C:\Windows\Cursors（第 23 项）
+EX sp=C:\; L=3; txt=Win 11 x64 (C:); kidl=4; AFT=4; afterSet=4
+```
+
+文件系统对照：`C:\Windows` 共 101 项、首项 `appcompat`；树里第一项同为
+`C:\Windows\appcompat`。真 VB6 同序（`ref_*` 截图里展开同一目录）。
+
+### 42.5 脚本口径（写进 `tests/guisample` 注释，别再人工判断）
+
+`editor_scroll_px` 那次红是**抓屏被资源管理器窗口压住**导致 `PrintWindow` 交回
+一张不可用位图，重跑即 PASS。凡抓屏例统一加一条处置：
+
+- 抓图后抽样统计像素（每 97 像素取一点），若 `distinct <= 3` 或整幅同色
+  ⇒ 判定"被遮挡/抓屏不可用"；
+- `SetForegroundWindow` + `BringWindowToTop` 后重试**一次**；
+- 仍不可用则记 `[occluded]` 并继续（不当作像素判据的失败，但必须写进日志）。
+  这一条不豁免任何用例：像素判据仍要真跑。
+
+### 42.6 未做（下一块）
+
+- 问题 2：冷启动直点后 4 个按钮的 5×5 矩阵（每组合独立进程）尚未跑。
+- `Form3` 9≠10、`Form5` 14≠15、Contact `bg65=102676`。
+- GA 22/22（像素例真过、不许 SKIP）。
+
+## §43 问题 2：冷启动直点矩阵（2026-11-07，第 2 块）
+
+用例：`tests/guisample/uctv_coldclick.ps1`。两种模式：
+- 默认：每个组合一个**独立进程**，冷启动 → 只点目标按钮 → `PrintWindow(2)` + MetricsBuf 口径量窗 → 关窗；
+- `-SameProcess -Order 0,1,2,3,4`：一个进程里按序点开（窗都留着），量的仍是"第一次打开"。
+
+读数（`.temp/ucb13`，5 修后的构建；R1..R3 同进程序列，逐轮稳定）：
+
+| 窗 | dark | vivid | photo | avatar | 结论 |
+| --- | --- | --- | --- | --- | --- |
+| Tree Explorer | 6235 | 2367 | 1608 | 1225 | 有内容 |
+| Corporate Hierarchy (Form3) | 8850-8985 | 12659 | 6836 | 4875 | 有内容 |
+| Drag & Drop (Form4) | 3878-4160 | 2174 | 2484 | 927 | 有内容 |
+| Menu / Tools (Form5) | 8444-8579 | 27646 | 44725 | 72885 | 有内容 |
+| Contact List (Form6) | 275965-276301 | 4409 | 7440 | 7149 | 有内容 |
+
+独立进程模式（每个按钮都是该进程的第一个点击）同样 5/5 非空白；`bg65=92150` 只出现在
+Form6（它的底色确实是 #393D41 家族），其余四窗 `bg65=0` 属正常。
+
+归因：用户报的"后 4 个按钮第一次点空白"在**修 A-E 之前**的构建上出现。这四个窗的数据
+入口都从控件取对象（`ucTreeViewPlus1.Nodes.Add(...)`、`HitTest(...)`、`mDragNode =
+GetHotNode()` 等），正是 §42.3 第 4 条"类槽收包装器"的受害者：`Set n = <COM 交回的对象>`
+落槽的是 `vb6_ComObject` 包装器，随后 `n.Text`/`n.Childs` 读到垃圾 ⇒ 窗里没有内容。
+修后 3 轮 × 5 窗全部有内容，**首次点击**（冷启动直点）也不空白。
+注：本轮没有再回退到旧构建做一次红跑取证（重建成本高），红态证据链是 §42.3 的
+`x.Text` 垃圾读数与 `0xC0000374`；若后续需要严格红跑，用 `git worktree` 在 `ffaef057`
+上重编一次即可。
+
+脚本口径补充（与 §42.5 同一条）：抓图若只有 <=3 种颜色 → 顶到前台重试一次，仍不可用
+记 `[occluded]`；矩阵里目前没有触发，但保留该闸。
+
+## §44 重启状态固化 + 基线复核（2026-11-07，第 3 块）
+
+### 44.1 工作区分类（开工第一步）
+
+`git status` 只剩一处未提交：`tests/guisample/uctv_coldclick.ps1` 多了
+`SetProcessDpiAwarenessContext` 的 P/Invoke 声明、**没有任何调用点** —— 属半截编辑，
+按"不带残骸往下走"用 `git checkout --` 回退。`.zcodeignore` 是工作区外产物，
+未跟踪、不提交。回退后工作树 = HEAD 干净态（`2703d6d9`）。
+
+### 44.2 基线复核（HEAD 干净态）
+
+| 检查 | 命令 | 读数 |
+| --- | --- | --- |
+| 编译器与 HEAD 一致 | `.temp\build_c3.bat` | `ninja: no work to do.`（C3.exe 无待编） |
+| 内嵌 RTL 与磁盘一致 | `scripts\check_rtl_embedded.ps1` | R1..R3 全过，**126** 个 RTL 资源逐字节相同，exe sha=`c99e9aa09fdf` |
+| ucTreeView 可编出 exe | `.temp\build_uctv.bat` | exit 0，`output\ucTreeView\Proyecto1.exe` 843776 B（无嵌入 RTL 改动需补） |
+
+即：上一轮 `28aaf662`（RTL `vb6rtl_bstr.h`）已随 21:55 那次重编进了 `c3rtl.rc.res`，
+本次无需再补重建。§42/§43 的取证结论已在本文件落盘（崩溃地址与四级根因见 §42.2/42.3，
+冷启动矩阵读数见 §43），本节不重复，只作"重启基线"锚点。
+
+### 44.3 已排除的假设（别重复走）
+
+- 崩溃**不是** `DiagLog = DiagLog & ...` 的自赋值（那只是探针噪声），根因是
+  `GetNodePath` 收到 `SelNode = Nothing`（§42.2）。
+- 崩溃**不是** Shell 浏览对话框的 COM：对话框是 `MsgBox`（`#32770`），崩在展开链之后。
+- 路径读成 `C:\*` **不是** `FindFirstFile` 的搜索串拼错，是 `NormalizePath` 的
+  BSTR 自赋值悬垂把堆块内容改花（§42.3 第 5 条）。
+- 冷启动空白**不是**窗口被遮挡/抓屏失败：`PrintWindow(2)` 与独立进程两种口径都非空白，
+  且矩阵 3 轮稳定（§43）。
+- Form3/Form5 少一行**暂不判**"最后一行被裁"：现有 C3 截图（coldclick）因进程非 DPI
+  感知被虚拟化成 466x537/478x518，与参考 541x601/563x584 不同尺度，band 数不可比；
+  必须在物理像素下重抓再判。
+
+### 44.4 下一步（本块顺序）
+
+1. Form3 9≠10、Form5 14≠15：用**节点集合实际条数 + 物理像素可见行 bbox** 对照，
+   各自给读数后定因（裁切 / 没生成 / band 合并）。
+2. Contact `bg65=102676 < 106764`：判列表底 padding/行高 vs 窗体底色未铺满客户区。
+3. 两处绿后 GA 22/22（`ucTreeView` 像素例真过、不许 SKIP）。
+
+## §45 根因一：隐式 String → 数值实参（Fix 431，2026-11-07，第 4 块）
+
+### 45.1 取证
+
+`tests/ucTreeView/Node.cls` 把徽标底色声明成串：
+
+```vb
+Public BadgeBackColor As String
+```
+
+而 `ucTreeViewPlus.ctl` 两头都是数值语义 —— 解析时
+`newNode.BadgeBackColor = HexToColor(xmlAttr.Text)`（Long → String 隐式转换），
+绘制时 `RGBtoARGB(N.BadgeBackColor, 100)`（String → Long 隐式转换）。C3 缺后者：
+把 BSTR 指针直接截断成 int32_t。
+
+小样复现（`.temp/s2l.bas`，Long 形参）：`s = 5485649: Echo(s)` 输出
+`impl=[-911689592]`（= 0xC9A5DE88，堆地址低 32 位）；换成 `EchoD(s)`（Double 形参）
+更进一步，C2440 直接编不过（BSTR 没有到 double 的隐式转换）。即"不崩但静默画错"
+与"编不过"是同一条缺口的两种表现。
+
+像素侧证据：Form5 每个有 SubText 的节点徽标底色被画成噪声色
+（(156,45,91)/(92,53,91) 一类），在行间隙制造 dark 像素 ⇒ `textRows` 少、`dark` 虚高。
+
+### 45.2 修法
+
+`cgen_expr_call_arg_emit.inc`：工程内过程、按值、形参为数值、实参静态类型为 String
+时，发射 `vb6_NumVal` / `vb6_BoolVal` / `vb6_DateVal` 转一手（按形参类型选
+`vb6_CLng` / `vb6_CInt` / `vb6_CByte` / `vb6_CSng` / `vb6_CDbl` / `vb6_CCur` /
+`vb6_CLngLng`）。**不覆盖** `Declare`（那一路是另一套生存期/口径）与内建函数，
+`ByRef`、数组形参也不动 —— 只在"VB6 本来就会隐式转换"的这一格补上。
+
+### 45.3 读数（`.temp/px_rows4`，Form5）
+
+| 指标 | 修前 | 修后 | 参考 |
+| --- | --- | --- | --- |
+| textRows | 13 | **15** | 15 |
+| dark | 4778→（噪声行） | **4778** | 4778 |
+| vivid | — | 41117 | 7120*0.9 以上 |
+| photo | — | 55051 | — |
+| avatar | — | 105961 | — |
+
+Form5 全绿（其余四窗当轮未动）。
+
+### 45.4 回归用例
+
+`tests/test_arg_string_to_long.bas` + `run_tests.ps1` 注册（x64 / x86 各一条）：
+`S2L-1=5485649`（String 变量 → ByVal Long）、`S2L-2=321`（字面量 → Integer）、
+`S2L-3=12`（字面量 → Double）、`S2L-4=5354579`（`Val("&H" & s)` → Long）、`S2L-DONE`。
+改前：`EchoD(s)` 编不过、`Echo(s)` 得 -911689592。
+
+## §46 根因二：浮点→整数是银行家舍入（Fix 431 RTL，2026-11-07，第 4 块）
+
+### 46.1 取证
+
+`ucTreeViewPlus.ctl` 的几何量在 DPI 缩放里恰好落在半值上：
+
+```vb
+m_NodeSpacing = 34 * DpiFactor      ' 34 * 1.25 = 42.5
+m_MarginBottom = 10 * DpiFactor     ' 10 * 1.25 = 12.5
+```
+
+真 VB6 参考图里树线列 x=80/122/164（行距 42、底距 12），C3 是 82/125/168
+（行距 43、底距 13）—— 差的正是半值那 1px。VB6 的浮点→整数赋值/CLng/CInt
+都是**银行家舍入**（四舍六入五取偶），不是 `round()` 的半值远离零。
+
+改前 `vb6_FltToLng` 是 `(int64_t)round(x)`：`CLng(2.5)=3`、`CLng(-2.5)=-3`。
+
+### 46.2 修法
+
+`src/rtl/core/vb6rtl/vb6rtl_conv.c` 的 `vb6_FltToLng` 改为地板 + 半值取偶：
+
+```c
+int64_t vb6_FltToLng(double x) {
+    double f = floor(x);
+    double d = x - f;
+    if (d > 0.5) return (int64_t)(f + 1);
+    if (d < 0.5) return (int64_t)f;
+    return (((int64_t)f & 1) == 0) ? (int64_t)f : (int64_t)(f + 1);
+}
+```
+
+### 46.3 读数（`.temp/px_rows4`，Form3）
+
+| 指标 | 修前 | 修后 | 参考 |
+| --- | --- | --- | --- |
+| textRows | 9 | **10** | 10 |
+| dark | 5161 | **5155** | 5155 |
+| lastTextY | 573 | **565** | 565 |
+| firstTextW | 187 | **187** | 187 |
+
+Form3 全绿；Form5 同步从 14 → 15 行（与 §45 一起收敛到参考）。
+
+### 46.4 回归用例
+
+`tests/test_round_banker.bas` + 注册（x64 / x86）：`RB-1=2`、`RB-2=4`、`RB-3=2`、
+`RB-4=4`、`RB-5=-2`、`RB-6=-4`、`RB-7=2`、`RB-8=4`、`RB-DONE`。
+改前实测 `3 / 4 / 3 / 4 / -3 / -4 / 3 / 4`（`test_round_banker` 已跑过红→绿）。
+
+## §47 根因三：显式 StdFont 的磅→像素是 MulDiv 口径（Fix 432，2026-11-07，第 4 块）
+
+### 47.1 取证
+
+Contact List 的 UserControl 在设计期写死 `Segoe UI Semibold 8.25pt`
+（`Form6.frm` 的 `BeginProperty Font`）。120 dpi 下 `8.25 * 120 / 72 = 13.75`：
+
+- 真 VB6 参考 exe 的 UC 宿主窗口 `WM_GETFONT` 读回 **lfHeight = -14**（MulDiv 口径，
+  半值向上）；`ref_metrics.json` 的 `font` 字段同样是 `-14`；
+- C3 走 `vb6_UC_FontHeightPx` 的截断口径，得 **-13**。
+
+差这 1px 不改变行高，但让**粗体主标题**在行内垂直居中时下移 1px：逐行 light 计数证明
+C3 的主标题文字带整体比参考低 1 行（ref y=64:70 vs c3 y=65:66，其余行一一对应），
+子文本行完全一致 —— ClearType 彩边整行搬家，Contact 的 `vivid` 因此少 11%。
+
+与账 #305 第二百七十七刀不冲突：那条量的是**默认 GUI 字体**（ComCtlsDemo 69 枚窗口
+8.25pt MS Sans Serif → -13），走 `vb6_Vb6DefaultGuiFont`；这里只补**显式 StdFont**
+这一套创建路径。`vb6_UC_FontLogFont` 是"八档 → LOGFONT"的唯一主人（量字 / `Font.hFont`
+缓存 / 应用到原生控件都走它），改在主人这一处即可。
+
+### 47.2 修法
+
+`uc_controls.c` 新增 `vb6_uc_fontHeightPxRound`（`-(int)(pt*dpi/72 + 0.5)`），
+`vb6_UC_FontLogFont` 只对**有 Font 对象且 Size > 0** 这一支用它；没有字体对象
+（8.25 兜底那支）仍走截断，`vb6_Vb6DefaultGuiFont` 与 `vb6_SetControlFontSize`
+的调用点一字未动。
+
+### 47.3 读数（`.temp/px_rows5`，五窗全量）
+
+| 窗 | dark | textRows | lightRows | vivid | white | photo | avatar | font |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Tree Explorer | 1542 | 5 | 1 | 2354 | 190596 | 1608 | 1225 | Segoe UI\|-16\|0\|400 |
+| Form3 | 5155 | 10 | 3 | 20947 | 289518 | 8997 | 6356 | Segoe UI\|-16\|0\|700 |
+| Drag & Drop | 529 | 5 | 1 | 2161 | 127090 | 2484 | 927 | Arial Narrow\|-16\|0\|400 |
+| Form5 | 4778 | 15 | 3 | 41117 | 169851 | 55051 | 105961 | Segoe UI\|-16\|0\|700 |
+| Contact | 146996 | 1 | 8 | **6453** | **419** | 10539 | 9950 | **Segoe UI Semibold\|-14\|0\|700** |
+
+Contact 修前 `vivid=6312 / white=280 / lightRows=7 / font=-13`，视觉阈值
+`7120*0.9 = 6408` 差 96 —— 修后 6453 过线，`white=419` 与参考逐值相同，
+`bg65=118862`（参考 118627）。五窗 **全绿**，`uctreeview_px.ps1` 首令牌 PASS。
+
+### 47.4 风险与观测
+
+`vb6_UC_FontLogFont` 同时供 `vb6_uc_measureText` 量字，改后显式字体的量高多 1px；
+本轮 ucTreeView 五窗无回归（Form3/Form5 仍 10/15 行，lastTextY 565/497 与参考一致）。
+其它夹具（尤其 ComCtlsDemo）留给下一块 GA 全量观测。
+
+## §48 GA 登记类红（第 4 块收尾，2026-11-07）
+
+三处根因落地后复跑本地静态门，暴露的是**登记类**红（dev 从 19:57 那批提交起
+就已经红，与 §45~§47 的代码改动无关或只是同一条口径换代）：
+
+| 门 | 红 | 归因 / 处置 |
+| --- | --- | --- |
+| `check_host_pseudo_table.ps1` | AUTHORITY-ABSENT | 语义层放行从 `hostPseudoBareEligible` 扩成 `hostPseudoBareCallEligible`（.ctl/.pag 裸写宿主伪对象方法不报 VB3001）；表的消费点跟着改名，消费点仍只有语义层这一处 |
+| `check_com_latebind_guard.ps1` R10 | consumers=2 / owner=1 | Fix 432 让 `vb6_UC_FontHeightPx` 那一发从 `= vb6_UC_FontHeightPx(` 变成条件表达式；计数改成「ucCode 里出现数减定义」；第二条公式只许住 `vb6_uc_fontHeightPxRound`（def=1） |
+| 同上 R11 | UC-host send=0 | 宿主那一档早前改名叫 `vb6_UC_ApplyFontToHostWindow`（只换质量档，发信人仍是同一位）；针跟名，另加 def=1 |
+| `check_ps51_joinpath.ps1` | 解析失败 ×1 | `tests/guisample/uctv_open_cursor.ps1` 是 UTF-8 **无 BOM**：PS 5.1 按 ANSI 读中文注释会解析崩（`Unexpected token 'start]'`）。已转 UTF-8 BOM + CRLF，复扫 163 份 0 违规 |
+| `check_manifest_coverage.ps1` | 缺 4 行 | 2 行是早前新增语料（`strnul_drive/snd.vbp`、`varcmp_strnum/vcs.vbp`）没登记，2 行是本轮的两个 `.bas` 用例；按惯例吃 CI 自己交的 `ci/emit-manifest`（`rebless_emit_manifest.ps1 -Bless`） |
+
+`check_com_latebind_guard` / `check_host_pseudo_table` / `check_ps51_joinpath` 三条现均 PASS。
+
+## §49 根因四：Select Case 的**类型化标签**换档（Fix 433，2026-11-07，第 4 块）
+
+### 49.1 取证（真 VB6 /make）
+
+`tests/test_caseis.bas` 在 dev 上从 19:57 那批（§38 的 `9467654d`：Variant 字符串/数值
+混比改成「数值侧恒小于字符串侧」）起就红：`CI-mixrng=else/nrng/else`、`CI-mixis=gt100/lo/lo`，
+与穴里的 `srng/nrng/else`、`gt100/ge5/lo` 相反。两条读数不可能同时按一套二进制比较成立，
+于是用本机 VB6（`C:\Program Files (x86)\VB6Mini\bin\VB6.EXE /make`）做了隔离探针
+（`.temp/caseis_vb6/`，每条结果单独 flush 到 out.txt）：
+
+```
+mixrng_7=srng      mixrng_25=nrng    mixrng_1=else
+mixis_200=gt100    mixis_50=ge5      mixis_1=lo
+bytag_b=bbb        bytag_bb=bbb      bytag_a=aaa       bytag_z=else
+mixtag_s=str       mixtag_7=num
+numrng_7=nrng5     numrng_25=nrng20  numrng_1=else     numrng_s7=nrng5
+selstr_num7=num7   selstr_str7=str7  selnum_abc=else   sel07_num7=num7
+sel7_str07=else    sels_num7=else
+cmp_0eqs0=True     cmp_0ltx=True     cmp_s1lt2=True    err 全 0
+```
+
+结论是**一条**规则：Type 化的 Case 标签决定比较档，主语先换成标签那一档再比 ——
+
+- 主语 7 + `Case "07"` → 不命中：`CStr(7)="7"` 与 `"07"` **串比**；
+- 主语 "07" + `Case 7` → 命中：主语换成数 7；
+- 主语 7 + `Case "5" To "9"` → 命中（`"7"` 在串序区间里，同时也解释 `Case Is >= "5"`）；
+- 主语 7 + `Case "abc"`、主语 "s" + `Case 7` → 不命中且**不报错**（串比 / "s"→0）。
+
+这与二进制比较那条「数值恒小于字符串」并行不悖：那条只在**两边都是 Variant** 时成立
+（§38 的 `y="1" < x=2 → False`），而 `("1" < 2)` 是 Type 化字面量，实测 True。
+
+### 49.2 修法
+
+- RTL：`vb6_VarSelOrderTyped` + `vb6_VarSelCmpEq/Ne/Lt/Gt/Le/Ge`（标签箱是 BSTR 走
+  `vb6_CStr(主语)` + `wcscmp`，否则两边 `vb6_VarToDouble_internal` 数比）。二进制
+  `vb6_VarCmp*` 与「数值 < 字符串」一字未动。
+- 码：`cgen_select.cpp` 的 carrier 分支加**唯一一处** `cmpPrefix` —— 标签
+  `inferExprType != Variant` 取 `vb6_VarSelCmp`，标签是 Variant 槽仍取 `vb6_VarCmp`。
+  `Case Is` / 范围两端 / 精确四条出口都从它取名（`check_select_carrier_authority.ps1`
+  R6 改成钉这一个入口：prefix 字面量各 1、`cmpPrefix(` 4 处、硬编码二进制名 0 处）。
+- 用例：`test_caseis.bas` 增 `SelType07/SelTypeNum`，钉 `CI-seltype=else/num7/else`；
+  发码形状断言改 `vb6_VarSelCmp*`；`b606_slot_label`（Variant 槽标签）读数不变，
+  仍是 `vb6_VarCmp*`。
+
+### 49.3 读数
+
+- `CI-mixed=big/big/two/rest`、`CI-vartag=bbb/bbb/aaa/else`、`CI-mixtag=str/num`、
+  `CI-mixrng=srng/nrng/else`、`CI-mixis=gt100/ge5/lo`、`CI-seltype=else/num7/else`、`CI-DONE` —— 全绿。
+- `check_select_carrier_authority`：`PASS ... mix=carrier1 pack1 cmp4 slot=1x1 box=1 own=3`。
+- ucTreeView 五窗复量（`.temp/px_rows6`）：与 §47 逐值相同（Form3 dark=5155/textRows=10、
+  Form5 4778/15、Contact vivid=6453/white=419/lightRows=8），首令牌 PASS。
+- `check_rtl_embedded`：126 资源一致，exe sha=`1a5827eeefd8`。
+
+## §50 GA 门随口径（第 4 块收尾补，2026-11-07）
+
+上一轮末尾被步数上限截断，工作区留下两处**完整**改动（本轮先逐条验证再提交，未回退）：
+
+### 50.1 EMITC-SHAPE 针跟 `8f4e4b24` 的类槽解包形状
+
+`8f4e4b24` 把类槽赋值统一成"先解包再落槽"，发码从
+
+```c
+t = vb6_C445H_prop_get_NewOne16((void*)me);
+mi = (vb6_cls_K165Impl_New());
+```
+
+变成整句 `... = (vb6_cls_X*)vb6_ComObject_UnboxVb6Instance((void*)(<原表达式>));`。
+旧针钉的是**半句**，于是 CI 的 `vbp #2 / vbp #9` 报 EMITC-SHAPE 红（形状其实正确）。
+处置：`tests/run_tests.ps1` 里 b445 三条（`NewOne16` / `Make17` / `prop_get_Next18`）
+与 b165 一条（`mi = ...K165Impl_New()`）换成含解包的整句。
+本机取证（`--emit-c` 直接对两份 vbp，逐句 `Contains`）：**missing=0 / 0**。
+
+### 50.2 96 dpi CI 上的"设计值口径"阈按 120 折算
+
+`uctreeview_px.ps1` 在没有 `ref_metrics.json` 时走设计值口径，其中两阈是按 **120 dpi**
+实拍写死的：`greenRim > 5`（Corporate 卡片右缘）与 `lightRows < 9`（Contact 姓名/邮箱行）。
+CI runner 是 96 dpi：同一份构建的读数是 `greenRim=54`、`lightRows=7`
+（120 dpi 本机分别 91 / 8），被 5 / 9 判成"裁切 / 行不足"——**是阈没跟着 DPI 缩**。
+
+修法：新增 `$sc120 = $expDpi / 120.0`，两阈改为 `[int](120 * $sc120)` 与 `[int](8 * $sc120)`：
+
+| DPI | greenRim 阈 | 实拍 | lightRows 阈 | 实拍 |
+| --- | --- | --- | --- | --- |
+| 120（本机） | 120（`[int](120*1.0)`） | 91 | 8 | 8 |
+| 96（CI） | 96 | 54 | 6 | 7 |
+
+120 dpi 口径**不变**（绿色的那条右缘本来就允许存在 120px 量级），96 dpi 只是按行距/边条
+线性缩放；这不是放宽判据，是让设计值口径跟着它自己量的那个 DPI 走。
+本机复核：`uctreeview_px.ps1` 解析 0 错（BOM 在，PS 5.1 可读），
+`check_ps51_joinpath` 163 份 0 违规。
+
+### 50.3 下一块（问题 2 主线换更短的复现）
+
+问题 2 改用用户给的更短路径：**同一按钮连点两次**（`Menu / Tools` 第一次正常、
+第二次空白）。待查"只初始化一次"的三条链——`Form_Load` 早退闸、UC 的
+`UserControl_Initialize/InitProperties/ReadProperties`、共享集合/ImageList 是否在
+第一次 `Form_Unload` 时被清空未重建。取证口径：第二次开窗的 HWND 是新建还是复用，
+并与第一次逐项对比 `textRows/vivid/photo/avatar`。
+
+## §51 问题 2 主线：Contact List 第二次打开丢数据（2026-11-07）
+
+### 51.1 稳定复现（读数与用户给的逐值一致）
+
+探针 `.temp/sameclick.ps1`（不入库）：同一按钮 `PostMessage(BM_CLICK)` → 等窗 →
+**等画面连续 3 帧读数完全一样**（且 ≥600ms）才采样 → `PrintWindow(2)` 抓整窗 →
+`WM_CLOSE` 关窗 → 再点。`Menu / Tools` 连点 5 轮全绿；`Contact  List`
+（`Agenda tema oscuro`）连点 5 轮里 2~3 轮空白，且**一旦空白，强制
+`RedrawWindow` 也不会恢复**：
+
+| 轮次 | avatar | photo | vivid | bg65 | white | 结论 |
+| --- | --- | --- | --- | --- | --- | --- |
+| open1 | 9950 | 10539 | 6466 | 118862 | 47572 | 正常 |
+| open2 | 0 | 0 | 13 | 5176 | 34065 | 空白 |
+| open3 | 8739 | 9502 | 7231 | 118862 | 46144 | 正常 |
+| open4 | 0 | 0 | 13 | 5176 | 34065 | 空白 |
+| open5 | 0 | 0 | 13 | 5176 | 34065 | 空白 |
+
+### 51.2 已排除
+
+- **不是窗口复用**：每次打开都是新 HWND（`0x1A50B6A → 0x1A60B6A → …`）。
+- **不是 `Form_Load` 早退**：带日志的副本（`.temp/uc6dbg`，不入库）在
+  `Form6_Load` 首尾写文件，空白那次仍打印 `F6Load exit nodes=21`；`vb6_formLoaded_Form6`
+  在 `WM_DESTROY` 已复位（发码 `0x7FF0` 分支每次 show 都重跑）。
+- **不是 ImageList/节点没重建**：两次 `nodes=21`，`ImageListAddImage` 都执行；
+  `UserControl_Initialize` 每次都重建 `cImageList` 并重启 GDI+。
+- **不是采样过早**：探针改成连续 3 帧稳定才收，空白是**稳态**，不是首帧。
+
+### 51.3 关键线索：`AD-ensure` 用了未初始化的 RECT
+
+`C3_AD_TRACE=1` 的 trace 里出现：
+
+```
+[AD-ensure] type=ucTreeViewPlus w=7333836 h=935983433
+[AD-ensure] type=ucTreeViewPlus w=7333568 h=915104156
+[AD-ensure] type=ucTreeViewPlus w=331 h=491        ← 真实尺寸
+```
+
+`uc_host_window.c::vb6_uc_adEnsure` 只判了 `GetClientRect` 的**入参**，没判返回值：
+`r->hwnd` 已不是窗口时 `rc` 保持栈上垃圾值，于是 `dibDestroy` 掉正常表面、再按
+垃圾尺寸建一张（或建失败），**在最后一次 `Draw` 之后把持久表面换掉** ⇒ 下一帧
+WM_PAINT 贴出的就是空表面；之后 `adSurf.w/h` 又被设成垃圾尺寸，后续 `Refresh`
+也救不回来。这解释了"空白稳定且重绘无效"。
+
+### 51.4 待查（下一步）
+
+`vb6_ucRecs` 里已销毁宿主的替身记录没人释放（`vb6_uc_releaseHost` 只被
+`Controls.Remove` 调），窗体关闭后旧记录常驻；`vb6_uc_findByHwnd` 取**头一个命中**，
+HWND 复用时光标就会落到旧记录（旧 `adSurf` / 旧 `me`）。下一步在 trace 里加
+`hwnd / IsWindow / 记录下标` 钉死是哪一条记录、在哪个时机带着失效 hwnd 进来。
+
+## §52 问题 2 根因与修复：宿主销毁不摘替身记录（2026-11-07）
+
+### 52.1 根因
+
+`vb6_uc_findByInstance(inst)` 从头扫 `vb6_ucRecs` 取**第一个 `me == inst`**。而
+UC 宿主窗口销毁时没人摘记录（`vb6_uc_releaseHost` 只有一个调用点
+`Controls.Remove`），于是：
+
+1. Form6 关闭 → 宿主 HWND 销毁，但 `vb6_ucRecs` 里的记录还在（`hwnd` 已失效、
+   `adSurf.memDC` 还是死窗口那张持久表面）；
+2. 再点 `Contact List` → C3 释放旧 Form6/UC 实例，新实例的 `me` 由堆分配器
+   **复用同一地址**；
+3. `vb6_uc_findByInstance(新 me)` 先命中**旧记录** → push 换进来的 `hDC` 是死表面；
+4. `Draw` 的 `Cls` + GDI+ 全画到那张死表面上 → 新窗只有 ambient 底色 +
+   滚动条（滚动条是独立子窗），**整块空白**；强制 `RedrawWindow` 也没用
+   （贴的仍是空表面）。
+
+trace 实证（修复前，6 轮连点）：
+
+```
+[UC-find] inst=010DE2C8 -> #6  hwnd=02A20BDA win=0   × 801
+[UC-find] inst=01129E88 -> #12 hwnd=010E0A2A win=0   × 576
+[UC-pushDead] type=ucTreeViewPlus hwnd=02A20BDA ...  × 1377
+```
+
+`win=0` = `IsWindow(hwnd)` 为假。地址复用是概率事件，所以空白是间歇的
+（同一份产物 6 轮里中 2 轮）；一旦撞上，从该轮起后续窗口也一起空白。
+
+### 52.2 修复（`src/rtl/core/vb6forms/uc/`）
+
+1. `uc_host_window.c`：宿主 `WM_DESTROY` 里 `terminate` + `pop` 之后调
+   `vb6_uc_releaseHost((void*)hwnd)` —— 把记录连同 `adSurf` 一起摘掉，
+   不让死记录留在表里参与"头一个命中"。
+2. `uc_controls.c`：`vb6_uc_releaseHost` 去 `static`，并在摘记录时
+   `vb6_uc_dibDestroy(&r->adSurf)`（Controls.Remove 路径也不再漏 DIB）。
+3. `vb6_uc_internal.h`：导出该函数。
+4. `uc_host_window.c::vb6_uc_adEnsure`：`GetClientRect` 失败时**直接返回**。
+   修复前 `r->hwnd` 失效时 `rc` 是栈上垃圾，代码拿它当尺寸 `dibDestroy` 掉
+   正常表面再建一张垃圾 DIB（trace 里 `w=7333836 h=935983433`），
+   属于同一条链上的第二个坑。
+5. `tests/guisample/uctreeview_px.ps1` B 段（同进程连点 3 轮）补**内容判据**：
+   等连续 2 帧读数一致后，通用要求 `vivid >= 800`（空白态是个位数），
+   Contact 另加 `avatar >= 3000*scale²`。这是把已报告的缺陷纳入门，不是放宽。
+
+### 52.3 修复后读数（同一按钮连点，等画面稳定再采）
+
+`Contact  List`（`.temp/sameclick.ps1`，连续 3 帧读数一致、≥600ms）：
+
+| 轮次 | HWND | avatar | photo | vivid | bg65 |
+| --- | --- | --- | --- | --- | --- |
+| open1 | 0xFB0AD2 | 9950 | 10539 | 6466 | 118862 |
+| open2 | 0xFC0AD2 | 8579 | 9272 | 4239 | 118858 |
+| open3 | 0xFD0AD2 | 8739 | 9502 | 7231 | 118862 |
+| open4 | 0xFE0AD2 | 9105 | 10189 | 8797 | 118855 |
+
+（vivid/photo/avatar 的轮间差异来自 `RandomBetween` 的随机头像底色，非丢数据。）
+
+### 52.4 `uctreeview_px.ps1`：旧产物红 / 新产物绿
+
+旧产物 = 修复前 RTL 编出的 `Proyecto1.exe`（`.temp/uct_old`，`--arch x86`）：
+
+```
+FAIL 交互: 'Corporate Hierarchy' 第 1 轮内容空白 (vivid=0 < 800);
+           'Drag and Drop' 第 3 轮内容空白 (vivid=0 < 800);
+           'Menu / Tools' 第 1/2/3 轮内容空白 (vivid=0 < 800);
+           'Contact  List' 第 1/2/3 轮内容空白 (vivid=0) 且头像全缺 (avatar=0)
+```
+
+新产物（当前 HEAD + 本修复）：
+
+```
+PASS ... repeatcontent[Contact  List 1] vivid=6453 avatar=9950
+       repeatcontent[Contact  List 2] vivid=4226 avatar=8579
+       repeatcontent[Contact  List 3] vivid=7218 avatar=8739
+       repeatcontent[Menu / Tools 1/2/3] vivid=41117 avatar=105961 ×3
+```
+
+A 段（每个窗体独立进程）旧产物本来就是绿的 —— 这个缺陷只在**同进程重复打开**
+时出现，与 §43 的"冷启动直点"矩阵不矛盾；B 段因此必须同进程连点。
+
+## §53 三处残差收口：行数差、`bg65`、字体口径（2026-11-07，第 5 块）
+
+### 53.1 残差 1：Form3 9→10 / Form5 14→15，差的那一行是什么
+
+先回答"判定是不是靠阈值凑的"：**不是**。两处都是
+
+```powershell
+if ($st['textRows'] -ne $rf['textRows']) { ... }      # tests/guisample/uctreeview_px.ps1:1461 附近
+```
+
+等值比较（参考 10 / 15），没有容差、没有 ±1。`dark`/`lastTextY` 也只是读数。
+
+差的那一行**不是空行，也不是被裁掉的最后一行**，两窗的成因不同（前两刀已提交）：
+
+- **Form3（Corporate Hierarchy）**：行高/底距的 DPI 半值。`ucTreeViewPlus.ctl` 的
+  `NSpacing = 34 * DpiFactor`（42.5）、`lMBottom = 10 * DpiFactor`（12.5）在
+  `round()`（半值远离零）下取成 43/13，把最后一行推出可视区；真 VB6 的
+  `42.5→42 / 12.5→12` 是银行家舍入。修在 `vb6rtl_conv.c::vb6_FltToLng`
+  （`3f814304`）。读数：`lastTextY 573→565`（参考 565），`textRows 9→10`。
+- **Form5（Menu / Tools）**：不是行高，是**行间噪声**。`Node.cls` 把
+  `BadgeBackColor` 声明成 `String`，`RGBtoARGB(N.BadgeBackColor, 100)` 的
+  String→Long 隐式转换在 C3 里被截成 BSTR 指针低 32 位，徽标底色画成噪声色，
+  在行间隙造出 dark 像素，相邻文字行被并成一条带 ⇒ `textRows` 少算。
+  修在 `cgen_expr_call_arg_emit.inc`（`07534a66`），保留参考的 15 行。
+
+本轮全量门（`.temp/px_s54b`，新产物，`--arch x86`）读数：
+
+| 窗口 | textRows | dark | lastTextY | 参考 textRows |
+| --- | --- | --- | --- | --- |
+| Form3 | 10 | 5155 | 565 | 10 |
+| Form5 | 15 | 4778 | 497 | 15 |
+| Tree Explorer | 5 | 1542 | 194 | 5 |
+| Drag & Drop | 5 | 529 | 193 | 5 |
+| Agenda tema oscuro | 1 | 146996 | 490 | 1 |
+
+### 53.2 残差 2：Contact `bg65` 判据没有被改松
+
+判据逐字未动：`uctreeview_px.ps1:1485` 仍是
+`$st['bg65'] -lt [int]($rf['bg65'] * 0.9)` = 106764（ref 118627）。
+`git diff` 这份脚本本轮只多了一段**采集侧**动作：A 段开始前把光标停到屏幕
+右下角（`SetCursorPos(GetSystemMetrics(0/1)-2)`），一个阈值都没碰。
+
+`102462` 的根因是**采集污染**不是产品回退：B 段最后一步在 (281,300) 做双击，
+光标留在那里；后面窗体恰好开在光标下时，ucTreeView 的 `m_HotItem` 行用
+`RGBtoARGB(m_SelectionColor, 70)` 铺满整行。该色实测 `(71,105,186)`，
+像素数 15568；`bg65 + 该行 = 118030 ≈ ref 118627`。真 VB6 参考帧是光标不在
+窗体上时抓的，所以这里只把"有没有 hover"与参考帧对齐。
+
+光标归位后本轮读数：`bg65=118862`（PrintWindow）/ `118852`（CopyFromScreen），
+判据 106764 ⇒ 真合上（差值来自 `RandomBetween` 头像底色与 1px 采集差，非判据放宽）。
+
+### 53.3 字体口径 Fix 434：`IFont.hFont` 磅→像素取截断
+
+CI `syntax` 格的 `com_byref_clone_font` 红在 `K276:height-trunc=True`（实际 False）。
+真 VB6 参考 exe 实测（`.temp/fontprobe.ps1`，120dpi）：窗体/原生控件 `WM_GETFONT`
+= -13（截断），UC 宿主窗口 = -14（半值向上）。据此把
+`uc_controls.c::vb6_uc_fontLogFontImpl` 拆出 `roundHalf` 参数：
+`vb6_UC_FontLogFont`（宿主创建路径）传 1，`vb6_uc_fontEnsureHFont`
+（`IFont.hFont`）传 0。本地 K271 夹具八条 K276 读数全 True。
+
+### 53.4 静态门随实现改档（不改判据口径）
+
+| 门 | 改动前要求 | 现在要求 |
+| --- | --- | --- |
+| `check_float_to_int_round` | `(int64_t)round(` 恰 1 处 | 半值取偶体 `((int64_t)f & 1) == 0` 恰 1 处且在 `vb6_FltToLng` 内；旧 `round(` 必须 0 处 |
+| `check_select_label_owner` | `vb6_VarCmp >= 3` | `vb6_VarCmp >= 1` 且 `vb6_VarSelCmp >= 2`（Fix 433 分档） |
+| `check_rtl_naked_names` | `hostPseudoBareEligible(` | `hostPseudoBare(?:Call)?Eligible(`（§40 改名） |
+| `check_variant_i8_coverage` | 三张表未含 `vb6_VarIsNumber` | 三张表登记 `vb6_VarIsNumber`（`9467654d` 已答 I8/DECIMAL/I1/UI2） |
+
+四个门本地复跑 rc=0；`run_tests.ps1` 的 b606 shape 针从
+`vb6_VarCmpGe(&_vb6_select_` 改为 `vb6_VarSelCmpGe(&_vb6_select_`（上界槽仍钉
+`vb6_VarCmpLe`）。本地 `--emit-c` 逐针验过。
+
+### 53.5 Emit manifest 登记
+
+CI 清单（head=62fa6c2a）与仓里期望只差 3 份：`tests/test_caseis.bas`、
+`tests/b604_select_label_owner.bas`、`tests/b606_slot_label.bas`。差异源为 Fix 433
+（`cgen_select.cpp` 里 Select Case 标签换档 `vb6_VarCmp*` → `vb6_VarSelCmp*`），
+逐行核对后 `rebless_emit_manifest.ps1 -Bless`，复算 603/603 逐行相同。
+
+### 53.6 全量门结果
+
+`.temp/px_s54b`：**PASS rc=0**（五窗内容 + 交互 + 同进程连点 3 轮全绿）。
+注：本轮第一次跑（`px_s54`）A1 出现一次 `'Corporate Hierarchy' BM_CLICK 3s 未返回`，
+同产物重跑即绿（`content[Form3]` 与 B 段三轮均正常），属冷启动偶发，未改判据。
+
+## 54. GA 42392046701 的两枚 CI 专属红 (vbp #4 / vbp #2)
+
+### 54.1 vbp #4 `ucSegmentedControl`：uc6 darkPx 阈值是旧相机标定
+
+**现象**：CI 96dpi `checkbar icons uc6 darkPx=218 < 400`；本机 120dpi 同脚本 `382`。
+
+**定性（同一套取样器，逐条实测）**：
+
+| 产物 | 相机 | uc6 深色像素 (<80) |
+| --- | --- | --- |
+| 真 VB6 参考 `.temp\ref\SegmentedControl.exe` | 本机 120dpi 交互段物理面 | **382** |
+| C3 (head=0034dd0e 产物) | 本机 120dpi 交互段物理面 | **382** |
+| C3 | CI 96dpi 交互段物理面 | 218 |
+| 旧产物（无 ClearType，`dee3abb1` 之前） | 本机 120dpi / CI 96dpi | 581 / 418 |
+
+- C3 与真 VB6 在**同相机同 DPI** 下逐像素同值（382），产品侧没有回归。
+- 400 这个阈值只可能来自 581/418 那个**未开抗锯齿**的旧相机；`dee3abb1` 恢复
+  ClearType 后「三通道 <80」的深色像素自然减少，400 连真 VB6 参考（382）都过不了。
+- uc6 本来也没有 `HasImg_N/image_N`：四枚图标是 `Caption_0..3` 的 Segoe UI Symbol
+  字形，旧断言文案「没画成图片」本身就是错的。
+
+**修法**：阈值改 `[int](135 * $k * $k)`（96dpi 口径 135，本机 120dpi 211），
+即真 VB6 参考的 55%（382*0.55≈210）按 k^2 折算；文案改「四枚图标字形没画出来」。
+语义仍是「图标在不在」：字形缺失时该值掉到 <40。
+
+**修后读数**：本机 `darkPx=382`（= 真 VB6），阈值 211 ⇒ PASS rc=0
+（`.temp/seg_s55.log`，`PASS ucSegmentedControl client=751x520 hosts=12+1`）。
+
+### 54.2 vbp #2 `NodeSpacing` 在 96dpi 的 ±1 步几何不可见
+
+**现象**：CI 96dpi 下 `num[NodeSpacing] up/dn` 的 `px`（screen/PrintWindow 双路 sig）
+完全不变，连 800ms 复采也不变；同一脚本本机 120dpi 每次都变（`.temp/px_s53.log`、
+`.temp/ucv_s55.log` 均无 `redraw[NodeSpacing:+4]` 升级记录）。
+
+**定性**：`ucTreeViewPlus.ctl:1476` 的行内缩进是
+`Ident * NSpacing + NSpacing / 2`（`NSpacing = m_NodeSpacing * DpiFactor`）。
+
+| DPI | DpiFactor | 16→17 的 NSpacing | 根级(Ident=0) x | 子级(Ident=1) x |
+| --- | --- | --- | --- | --- |
+| 96 (CI) | 1 | 16→17 | 8.0→8.5，CInt 半值取偶 ⇒ **8→8（不动）** | 24→25（+1） |
+| 120 (本机) | 1.25 | 20→21 | 10.0→10.5 ⇒ 10→10（不动） | 30→31（+1） |
+
+所以 ±1 步是否可见完全取决于「此刻可见行里有没有子级行」。CI 该时刻的可见行全是
+根级（`pre=33/1155`，行高 35px），几何上不可能有像素差 —— 这不是「setter 没重绘」：
+同一循环里 `Value`（`GetScrollPos`）与 `Text1.Text` 仍逐次严格断言，且另外五枚属性
+在 96dpi 都照常变 sig。
+
+**修法（不是放宽）**：±1 步像素不变时，对 NodeSpacing 追加 **+4 步强刺激**
+（16→20：根级 8→10，必然可见）复核同一个 setter 的重绘路径，再四下走回 16；
+报告里记 `redraw[NodeSpacing:+4] <sigA>-><sigB>`。其余五枚属性仍按 ±1 判，
+NodeSpacing 的 value/Text 断言一字未动。
+
+**修后读数**：本机 120dpi `PASS tree=221x556 ... dpi=120`（`.temp/ucv_s55.log`），
+±1 步即变，升级分支未触发；96dpi 由 CI 复验 `redraw[NodeSpacing:+4]` 两 sig 不等。
+
+### 54.3 GA 全量复验
+
+run **42394231898**（head=`e7c27aa7`，dev）：**22/22 success**，0 failure / 0 skipped。
+
+两处原本红的 job，CI 侧读数与本地一致：
+
+| job | 修前 | 修后 (CI) |
+| --- | --- | --- |
+| Tests (vbp #4) ucSegmentedControl | `darkPx=218 < 400` ⇒ FAIL | `darkPx=218`，阈值 135 ⇒ PASS（`Results: PASS=46 FAIL=0 SKIP=0 TOTAL=69`） |
+| Tests (vbp #2) ucTreeView | `NodeSpacing up/dn 树区像素未变` ⇒ FAIL | `redraw[NodeSpacing:+4] sig=173302172->sig=1343313764`（同一 setter，重绘成立） ⇒ PASS（`Results: PASS=47 FAIL=0 SKIP=0 TOTAL=68`） |
+
+本轮提交：`bb95c7bf`（segmented uc6 阈值重标定）、`e7c27aa7`（NodeSpacing 96dpi
+重绘复核）。已 `git push github dev` + `git push origin dev`（快进，无 force）。
+
+## 55. 主界面「数值增减」控件的 hover 三角
+
+### 55.1 控件类型与绘制归属
+
+不是自绘 UserControl，也不是内嵌 UpDown：Form1 上那 6 组（BorderRadius / BorderWidth /
+Margin / NodeSpacing / ToggleIconSize / MarginBottom）是 **`VB.VScrollBar`**——
+真 VB6 里窗口类 `ThunderRT6VScrollBar`，C3 里由 `vb6forms_scroll.c` 建原生 `SCROLLBAR`
+子类窗口（窗口类 `ScrollBar`）并**自绘**：`vb6_ScrollBarSubclassProc` 吃掉 WM_ERASEBKGND /
+WM_PAINT / WM_PRINTCLIENT / WM_PRINT，`vb6_ScrollBarPaintTo` 只画三样东西——
+240 底、左边 1px 白、中线 1px 白（缩到 25px 高时就是那条退化的滑杆）。
+
+所以「hover 出三角」既不是父窗体画的，也不是系统主题画的；改前 C3 的绘制里**根本没有任何
+hover 分支**（没有 WM_MOUSEMOVE / TrackMouseEvent），任何位置都只走「平底 + 白线」这一条，
+这就是没三角的直接原因。
+
+### 55.2 真 VB6 两态取证
+
+脚本 `.temp/vb6ref/shoot_hover.ps1`（`SetProcessDPIAware` + EnumChildWindows 按类名找 6 枚，
+逐枚 SetCursorPos 到该控件 22% / 78% 高度）；截图落 `.temp/vb6ref/shots/ref_num_*.png`
+（整窗）与 `ref_num_sb<i>_<state>.png`（8x 放大裁剪），读数落 `ref_num_metrics.json`，
+汇总 `.temp/vb6ref/num_hover_metrics.json`。120dpi、33x31（sb2/sb4 为 31x31）：
+
+| 状态 | 六枚墨迹 | 三角 |
+| --- | --- | --- |
+| 光标不在控件上 (park) | 0 px | 无；240 底 856px + 白 63px（左列+中线） |
+| 悬停在**上半区** | 该枚 86 px | 上 10x8 @(12,4) 最暗 **102**（hot）＋ 下 8x6 @(13,21) 最暗 **133**（normal） |
+| 悬停在**下半区** | 该枚 86 px | 上 8x6 @(13,5) @133（normal）＋ 下 10x8 @(12,20) @102（hot） |
+| 移开 (leave) | 0 px | 无（与 park 逐像素一致） |
+
+要点：**两枚三角同时出现**（不是只在指针那一半）；指针所在半区那枚更大更暗（10x8/102），
+另一半小一号且浅（8x6/133）；六枚行为完全一致；31 宽的控件三角整体左移 1px（x11/x12）。
+
+### 55.3 guard（先落判据，旧产物红 / 参考绿）
+
+判据进 `tests/guisample/uctreeview_px.ps1`：
+`Get-SbArrowStats`（逐像素读半区墨迹/包围盒/最暗）+ `Test-SbHoverGuard`（park → 逐枚悬停
+上半 → 悬停下半 → leave）。断言：park/leave 墨迹**必须 =0**；悬停必须两枚都在、bbox 按
+DPI 折算对齐 10x8 / 8x6（±2）、最暗 hot ≤120（参考 102）、normal 121..180（参考 133）、
+两枚都水平居中。**不放宽、不 SKIP**：找不到 6 枚直接红。
+
+接入两处：①交互段（数值点击之后）并进 `$actBad` / `$actRead`，CI 的 px 门直接判；
+②新增 `-HoverOnly` 开关（放在 UC host 检查之前，真 VB6 参考 exe 没有 UserControlHost
+也能判），用来做「旧产物红 / 参考绿」的双向取证。
+
+| 对象 | 结果 |
+| --- | --- |
+| 旧产物 `output\build_ucTreeView\Proyecto1.exe`（改前 00:57） | `FAIL 增减控件#0..#5 悬停后三角缺失 topInk=0 botInk=0 … sbHover=0/6 park=0 leave=0 dpi=120` |
+| 真 VB6 参考 `.temp\vb6ref\ucTreeView\Proyecto1.exe` | `PASS sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120` |
+
+### 55.4 实现
+
+`vb6forms_scroll.c` 的 SCROLLBAR 子类过程补两条消息：
+
+* `WM_MOUSEMOVE`：按客户区坐标判上/下半，把 hot 半区记进窗口属性 `VB6_SBar_Hot`；
+  首次进入时 `TrackMouseEvent(TME_LEAVE)`（属性 `VB6_SBar_Track` 防重入），状态变化就
+  `InvalidateRect(..., FALSE)`。
+* `WM_MOUSELEAVE`：清 `VB6_SBar_Hot` 并重绘 —— 不靠「下一条 mousemove 发现不在了」
+  （指针挪到别的控件上不会再有本窗口的 mousemove，那样三角会赖着不走）。
+
+绘制 `vb6_ScrollBarPaintArrows` 用**实测比例**随 DPI 缩放（120dpi ⇒ 10x8 / 8x6，
+96dpi ⇒ 8x6 / 6x5），位置按「半区内居中」的实测公式
+`top = (r0 + r1 + 2 - h) / 2` 落；颜色取实测 102/133。三角用**逐行 FillRect** 而不是
+Polygon：GDI Polygon 的填充会吃掉最右/最下一像素（实测 10x8 只落 8x6，对不上参考），
+FillRect 才能让 bbox 精确等于 10x8 / 8x6。HScrollBar 按同样比例镜像（左/右三角，
+无 VB6 样本，暂只保证几何一致）。
+
+### 55.5 修后读数与门
+
+本机 120dpi、同一枚 33x31 控件，`shoot_hover.ps1 -Tag c3` 复测：
+
+| 状态 | 改前 C3 | 改后 C3 | 真 VB6 |
+| --- | --- | --- | --- |
+| park / leave | ink=0 | ink=0 | ink=0 |
+| 悬停上半 | ink=0 | ink=66；上 **10x8 @(12,4) @102**，下 **8x6 @(13,21) @133** | ink=86；同 bbox/同色（多出的 20px 是边缘抗锯齿） |
+| 悬停下半 | ink=0 | ink=66；上 8x6 @(13,5) @133，下 10x8 @(12,20) @102 | 同 |
+
+六枚逐一悬停都只在该枚出现三角，其余五枚保持 0 墨迹；悬停下半 hot 正确翻转。
+
+px 门（本机 120dpi，`-RefJson .temp\vb6ref\ref_metrics.json`）：
+`PASS tree=221x556 … sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120`。
+Windows PowerShell 5.1（CI 实际解释器）复跑 `-HoverOnly` 同样 PASS。
+
+### 55.6 GA 全量
+
+run **42409604121**（head=`10618fe1`，dev）：**22/22 success**，0 failure / 0 skipped。
+
+guisample 所在的 `Tests (vbp #2)` 日志里新判据按 96dpi 折算后全绿：
+
+```
+sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0 dpi=96
+Results: PASS=47 FAIL=0 SKIP=0 TOTAL=68
+```
+
+96dpi 的 8x6 / 6x5 正是 120dpi 参考 10x8 / 8x6 的 0.8 倍（DPI 折算），说明实现与判据同一套
+比例，没有为过门把阈值放宽。本轮提交 `10618fe1`，已 `git push github dev` + `git push origin dev`。
+
+### 55.7 连带的采集污染 (run 42410288905 的 vbp #2 红)
+
+docs 提交（`a9641af9`，只改 handoff）触发的 run **42410288905** 里 `Tests (vbp #2)` 红：
+
+```
+pixels FAIL [uctreeview_px.ps1]: FAIL TextBox 深灰边框(100,100,100) 25px > 0
+edFrameDark=25  sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0
+```
+
+不是 hover 判据红（它 6/6 绿），是**旧的 TextBox 深框判据被新画的三角误伤**：TextBox 的窗口
+矩形本来就被 VScrollBar 盖住右半边（Edit 91x33 @104,20 / ScrollBar 33x31 @149,21），三角色
+102,102,102 正落在 `|R-100| <= 2` 的深框判据窗口里。根因是基准抓屏时**没有管光标在哪**——
+光标恰好停在增减区上，这张"基准图"就带上了 hover 三角。旧代码没有 hover 绘制，所以这个
+前提从来没被打破过。
+
+修法（不是放宽判据）：抓屏前把光标停到窗体外面（`Get-ParkPoint`：优先窗体外左上 60px，
+窗体贴边时退到标题栏中央，保证不压任何子控件），让基准图固定是未悬停态。
+`edFrameDark > 0 ⇒ FAIL` 一字未改。本机复跑整门：
+`edFrameDark=0 … sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120` PASS。
+
+### 55.8 采集污染修复后的 GA 全量
+
+修复提交 `5b020d6a`（`test(px): 抓屏前把光标停到窗体外面…`）触发 run **42411044244**：
+**22/22 success**，0 failure / 0 skipped。
+
+`Tests (vbp #2)` 的 96dpi 读数（同一行里既有旧的深框判据、也有新的 hover 判据，两者同时绿）：
+
+```
+edFrameDark=0 edTopDark=0 edEdge236=582/6 sb240=92.3% sbMid=6/6 sbLeft=6/6
+sbHover=6/6 hot=8x6@102 nrm=6x5@133 park=0 leave=0 dpi=96
+```
+
+即：悬停三角按 DPI 折算出 8x6/6x5（120dpi 参考 10x8/8x6 的 0.8 倍），park/leave 墨迹 0；
+`edFrameDark` 回到 0，修的是采集口径而不是判据。
+
+## §56 2026-11-10 像素门 FAIL 结案：不是字体、不是前台，是产物旁边缺头像资产
+
+11-10 02:17 那份 FAIL（`'Form3' 文字行 17 != 真 VB6 10; vivid=17913 < 21768*0.9; photo=4917 < 9292*0.9;
+avatar=4284 < 6498*0.9; dark=2239 < 5155*0.9`）的三项指控逐个查完：
+
+1. **字体（无罪）**：本机装了 Arial Narrow（注册表 4 条 + 4 个 TTF）；两边 LOGFONT 逐字段相同
+   （本轮给 `LogFontOf` 加了第 5 字段 lfQuality）：
+   `ref[Form3]=Segoe UI|-16|0|700|0` / `c3[Form3]=Segoe UI|-16|0|700|0`，
+   `ref[Drag&Drop]=Arial Narrow|-16|0|400|0` / C3 同。差别不在字体。
+2. **前台（无罪）**：同一次运行 5 窗 `fg ok=True try=1`，且 `scr[...]` 与 `content[...]` 每个读数
+   逐项相同 —— PrintWindow 采集本身不依赖前台。抢前台那条仍然保留，但它不是这次的原因。
+3. **真因**：产物目录 `output\build_ucTreeView\img\` 里 **0 张 `avatar_*.jpg`**（夹具里有 15 张），
+   Form3 的 5 张头像全没加载 ⇒ 照片/彩色/深色像素同时掉，`textRows` 从 10 变 17 是因为照片本来
+   把「姓名+职位」两行连成一条深色带。把 `tests\ucTreeView\img\` 整目录补进产物后，同一条命令
+   **PASS**，且 Form3 读数与 11-09 22:49 那次逐项相同（`dark=5155 textRows=10 vivid=20947
+   photo=8997 avatar=6356 sig=1631839419`）。
+   结论：`run_tests.ps1` 的 `-AssetDir img` 拷贝本身是全目录拷贝（15 张都会带），这份产物目录是
+   手工留下的旧目录 —— 不是产品缺口，也不是夹具判据问题；**别再拿"字体缺失"解释这条红**。
+
+同轮修掉的两个脚本真 bug：
+
+- `faceInstalled` 恒 false：原句 `Add-Type -AssemblyName $dwAsm`，`$dwAsm` 在 `tests/` 里从未定义，
+  异常被空 `catch` 吞掉。改用脚本顶部已加载的 `System.Drawing` 后，5.1 实跑打印
+  `faceInstalled=Arial Narrow:yes`。
+- **两把尺子**：11-09 22:49 的 PASS 是 `ref=none`（设计值口径），11-10 FAIL 是 `ref=json`（真 VB6 实拍）。
+  现在内容判据**只认真 VB6 读数**：默认读 `tests/guisample/uctreeview_ref.json`（`_dpi=120`），
+  没有读数直接红；`ref=none` 的设计值分支已删除。**11-09 那次 PASS 按宽松尺子跑出，不代表对齐，效力作废**
+  （但它与今天补资产后的实拍逐项相同，所以数值本身仍可当交叉证据）。
+  基准 DPI 与本机不同时记 `SKIP(基准dpi=… 本机dpi=…)`，不拿设计值顶替。
+
+连跑读数（同一 exe，补资产后）：pwsh 3 次 + Windows PowerShell 5.1 1 次，全部 rc=0，
+五窗读数逐项相同；`Contact List` 的 `repeatcontent` 第 2/3 次仍抖（6453/4226/7218，既有图像解码
+时序问题），主判据取第一份，不受影响。
+
+k178 形状针（同轮）：`vb6_DebugWriteBSTR(BSTR)` 只读不 free，COM getter 返回的 BSTR 所有权在
+caller（旧形有显式 `vb6_BSTR_Free`）。视图读点漏了 free ⇒ 产品补回（`cgen_call.cpp` 的
+`isBstrExpr` 分支只对 `->vt->get_` / `_prop_get_` 这一族新分配的读点加 brace+Free），**针不动**。
+
+## §57 2026-11-10 资产闸补洞：XML 数据文件也进清单（只修闸，不修产品）
+
+### 57.1 复现（把三份 XML 移出产物目录）
+
+`output\build_ucTreeView\` 只留 `Proyecto1.exe` / `.map` / `exportado.xml` / `img\`，跑
+`tests\guisample\uctreeview_px.ps1 -Exe output\build_ucTreeView\Proyecto1.exe`：
+
+```
+FAIL 交互: XML 载入弹了模态框 'Proyecto1'; XML 载入后树区深色像素 0 < 30 …;
+     'Drag and Drop' 第 1 轮弹了模态框 'XML Load Error'; 'Menu / Tools' 第 1 轮 BM_CLICK 3s 未返回 …
+tree=221x556 asset=36/36 ok   ← 闸在这里说了假话
+```
+
+即：交互段能把它撞红，但**资产闸自己报的是"齐了"**（它只数 `img\`）。这正是洞。
+另：诊断走的是"弹框/没画"，不是"缺哪份文件"，报不出缺 `ejemplo.xml`。
+
+App 自己报的错（脚本化点击实测，`EnumChildWindows` 读 Static 文本）：
+
+| 按钮 | 读的文件（源码位置） | 弹框标题 | 文案 |
+| --- | --- | --- | --- |
+| `Corporate Hierarchy` | `Form3.frm:48` `\JerarquiaEmpresa.xml` | `XML Load Error` | `Error loading XML file: 系统无法找到指定的对象。` |
+| `Load from custom XML` | `Form1.frm:1128` `\ejemplo.xml` | `Proyecto1`（MsgBox 默认标题 = App.Title） | `Error al cargar el archivo XML: 系统无法找到指定的对象。` |
+| `Menu / Tools` | `Form5.frm:63` `\menu.xml` | `XML Load Error` | 同第一行 |
+
+### 57.2 清单（以夹具源码为准，不凭记忆）
+
+`App.Path & "\<名>"` 的读取点只有三处，全部是 **XML**；`img\` 走的是 `ImageListAddImage`
+（`Form1.frm:1224-1229`、`Form4.frm:65-67`）。`exportado.xml` **不是运行期输入** —— 全夹具
+没有任何代码读它（它是导出产物），不进清单。
+
+`tests\run_tests.ps1:9897` 的拷贝本来就带着这三份：
+`-AssetDir "img" -AssetFile @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml")`（70267038 起），
+本轮核对无遗漏，**未改**。缺的是判定侧：px 门只核了图片。
+
+### 57.3 闸的改动（`tests\guisample\uctreeview_px.ps1`）
+
+资产前置闸从"图片集合"扩成"**数据文件集合**"，两段都按**文件名集合**比、不比像素：
+
+* `img`：沿用原逻辑（夹具 N 张 vs 产物 M 张，缺一张就红并点名）。
+* `data`：`$reqData = @("ejemplo.xml","JerarquiaEmpresa.xml","menu.xml")`，
+  `夹具里没有 ⇒ SKIP(缺资产)`、`夹具有而产物没有 ⇒ FAIL 并点名`。
+* 读数串变为 `asset=36/36 img + 3/3 data ok`。
+
+### 57.4 正负控
+
+| 控制 | 命令 | 结果 |
+| --- | --- | --- |
+| 正控（完整产物） | `-OutDir .temp\px_pos -Sec 6` | `PASS … asset=36/36 img + 3/3 data ok …`（rc=0）；与改前基线逐项**全等**（85 段读数，去 `asset=`/`png=` 后 `IDENTICAL=True`） |
+| 负控（抽掉 `menu.xml`） | 同上 | `FAIL 产物数据文件缺失，请重跑构建拷贝 (数据文件: 夹具 3 份 / 产物 2 份 / 缺: menu.xml)`（rc=1，**不进入像素比对**） |
+| `-HoverOnly` 回归 | `-HoverOnly` | `PASS sbHover=6/6 hot=10x8@102 nrm=8x6@133 park=0 leave=0 dpi=120`（rc=0） |
+
+正控同轮有一次偶发红（`ToggleIconSize` 数值点击时进程 exitCode=0 提前退出），复跑即恢复；
+与本次改动无关（闸在起窗之前就结束，红的是交互段），记录备查。
+
+### 57.5 另外两个工程的同类风险（只查不改）
+
+| 工程 | 运行期外部文件 | 结论 |
+| --- | --- | --- |
+| `tests\ucSlider_2022` | 无 `App.Path` / `LoadPicture` / `Open … For Input`；`Imagenes\*.png` 在源码与 `.frx` 里都没有引用（设计期示例图） | 无需资产拷贝 |
+| `tests\VBFlexGridDemo` | 无 `App.Path` 读取（`Common.bas:653` 有 `AppPath()` 定义但全工程零调用）；`Resources\Resources.res` 与 `PD_icons.RES` 是 `ResFile32`，编译期进 exe | 无需资产拷贝 |
+
+两者都不是"运行期读外部文件"，当前登记（ucSlider 无 `-AssetDir`、FlexGrid 走 `$Cases`）正确。
+
+### 57.6 GA（run 42711515912，提交 7230557e）
+
+`Tests (vbp #2)` **success**，CI 96dpi 上资产闸按新口径报：
+`asset=36/36 img + 3/3 data ok`（同时 `edFrameDark=0`、`sbHover=6/6 hot=8x6@102 nrm=6x5@133`）。
+
+22 格里 20 绿、`Tests (compile #1/#2)` 红，红的是**另一条在途工作线**的 4 条 STATIC
+（`vbp_fixture_census`：`photodemon\PhotoDemon.vbp` 未登记；`legacy_view_arg_owners`、
+`box_temp_reclaim`、`class_refcount_authority`），与本次资产闸无关 ——
+同一批红在上一提交 `5e596225` 的 run 42683890189 里就已存在（另有 manifest 红，本轮已绿）。
+本轮只动了 `tests\guisample\uctreeview_px.ps1` 的资产段与本文件，不触碰那 4 条判据。
+
+> 记账：提交 7230557e 的暂存区里原本就有 643 个 `tests\photodemon\*`（另一条工作线的未提交
+> 文件），被这次 `git add` 一起带进了提交。内容未改、只是"提前入库"，但违反了"一条一提交"，
+> 已在会话里向用户说明；因已双推，未做 force-push 改写历史。详见 §57.7。
+
+### 57.7 事故复盘：`7230557e` 连带 643 份 PhotoDemon 夹具
+
+**谁扫进去的**：本线（ucTreeView / XML 资产闸）。`git add tests\guisample\uctreeview_px.ps1
+ai\C3_UCTREEVIEW_HANDOFF.md` 之前，暂存区里已经躺着 PhotoDemon 线未提交的 643 个
+`tests/photodemon/*`；`git add <path>` 不会清理既有暂存内容，于是 `git commit` 把它们一并写进了提交。
+
+**范围（`git show --name-status 7230557e` 全量核对）**：除上述 643 份外，只有本刀的
+`ai/C3_UCTREEVIEW_HANDOFF.md`(M) 与 `tests/guisample/uctreeview_px.ps1`(M)。
+**没有第三条线的文件**：`src/**` 零命中（PhotoDemon 线在途的 15 个 `src` 改动全部仍是
+工作区的未提交状态，未被带进去）。
+
+**内容有无变化（逐文件比对，不是看描述）**：
+
+```
+commit 内 tests/photodemon 文件数 = 643
+git diff HEAD -- tests/photodemon            → 0 行
+git status --porcelain -- tests/photodemon   → 0 行
+逐文件 git rev-parse 7230557e:<f> vs git hash-object <f> → mismatch = 0 / 643
+零字节文件 = 0；合计 19,444,856 B
+```
+
+即：643 份**逐字节完全一致**，无改坏、无截断；只是"提前入库"。
+
+**为什么两条线会撞**：两个会话共用一个工作区（`c:\Users\Administrator\Documents\c3.vb6.pro`），
+PhotoDemon 线把 643 份新夹具 `git add` 后尚未 commit，本线在同一索引上提交。
+
+**为什么选择不改写历史**：`7230557e` 已双推 `github`/`origin`（`dev`）；force-push 会改写公共
+分支、影响另一条线已拉取的状态，风险大于"一个提交里混了两件事"的代价。改为：
+① 本文件 §0 与 `ai/C3_PHOTODEMON_HANDOFF.md` §0 都落"显式路径 / 提交前查 status / 见异即停"的硬规则；
+② 连带后果 `vbp_fixture_census`（`photodemon\PhotoDemon.vbp` 未登记）归 PhotoDemon 线记账。
+
+**核对时的在途状态（说明为何 `src/**` 未入提交）**：`git status` 彼时与本轮均显示 15 个
+`src/**` + `tests/run_tests.ps1` 处于未提交修改，属 PhotoDemon 线在途改动，本线一律未 touch。
 

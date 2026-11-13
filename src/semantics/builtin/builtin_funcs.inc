@@ -45,7 +45,7 @@
             pi.type = std::get<1>(p);
             pi.isByVal = std::get<2>(p);
             pi.isOptional = std::get<3>(p);
-            sym->params.push_back(std::move(pi));
+            sym->W().params.push_back(std::move(pi));
         }
         symTab_.define(std::move(sym));
     };

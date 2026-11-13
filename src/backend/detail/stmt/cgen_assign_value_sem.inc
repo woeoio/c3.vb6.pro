@@ -144,7 +144,11 @@
         variantSlotTargetOf(node.target.get(), target, targetIsUdtVariantField232);
     if (targetIsBstr) {
         // 账 #305 §B169: 这一问只住 emitBstrSlotStore 一处 (With 块那一站共用同一枚)。
-        emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget);
+        // 账 #118 续: 定长串目标是 UDT 字段 (char[N]) 还是裸变量 (BSTR 模型) 要分开。
+        const bool fixedTgtIsUdtField = !fixedLenTarget.empty() && node.target
+            && (node.target->kind == ASTNodeKind::MemberAccessExpr
+                || node.target->kind == ASTNodeKind::WithMemberExpr);
+        emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget, fixedTgtIsUdtField);
     } else if (targetIsVariant) {
         // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
         emitVariantSlotAssign(target, node.value.get(), value, targetIsUdtVariantField232);
@@ -177,8 +181,14 @@
                 // 而 boxToVariant 给的是**值**。SafeArrayPutElement 会深拷贝
                 // (另配一只 BSTR/对象), 所以这里借用栈地址、发射后不额外释放,
                 // 也不调 VariantClear (那会把刚交给 SAFEARRAY 的副本再清一次)。
+                // C2440 §56.28: 临时必须是 vb6_VARIANT —— boxToVariant 的发码是
+                // `vb6_VariantFromValue(...)` / `vb6_VariantBool(...)`, 返回值都是
+                // vb6_VARIANT; 声明成 Win32 `VARIANT` 就 `initializing` C2440
+                // (PhotoDemon PDMath.c 825/831/837/843: ConvertArbitraryListTo* 的
+                // `listOfValues(i) = ...` 五处)。两者布局逐平台一致 (见
+                // vb6rtl_variant.h:35-75), 下面那枚 `(VARIANT*)&` 显式转换照旧。
                 std::string tmp091c = "_pav_" + std::to_string(tempCounter_++);
-                c_.emitLine("{ VARIANT " + tmp091c + " = " + boxToVariant(node.value.get(), value) + ";");
+                c_.emitLine("{ vb6_VARIANT " + tmp091c + " = " + boxToVariant(node.value.get(), value) + ";");
                 c_.emitLine("  vb6_PA_SetVariant(" + args091c + ", (VARIANT*)&" + tmp091c + "); }");
                 return;
             }
@@ -221,7 +231,15 @@
         //       VB6_SA_AT(BSTR, arr, i) = func() (func 返回 Variant)
         //       int32_t_var = vb6_VariantArrayGet(...)
         // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-        bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
+        // 账 §56.40: 这一问原本只问**文本那一半** (ast 传 nullptr) —— 于是
+        // 「RHS 是不是整只 Variant 槽」只在**文本上认得出**的那些形状 (RTL/项目
+        // 函数前缀 / VB6_SA_AT(vb6_VARIANT…) / 类字段尾注) 有拆箱, 而「UDT 字段
+        // 声明为 Variant」这一族 (C 文本是 VB6_SA_AT(vb6_type_X, arr, i).member,
+        // 不命中任何前缀表) 一律不拆 ⇒ C2440 (PhotoDemon pdDictionary.c 239/248:
+        // `dItem As Variant` 读进 String 变量 ⇒ 整只 vb6_VARIANT 交给 BSTR 形参)。
+        // AST 那一半 (isDefinitelyVariantExpr) 本来就答得对, 只是没被问到 ——
+        // node.value 就在手边, 不是「拿不到」 (旧注解那句 P1.3 判词不成立于本站)。
+        bool valueIsVariant = isVariantSlot(value, node.value.get());
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
             auto& id = static_cast<IdentifierExpr&>(*node.value);
             std::string idLower = id.name;

@@ -618,6 +618,45 @@ void* vb6_Printers_Collection(void) {
     return vb6_Collection_New();
 }
 
+// C2224 Printer/Printers 数据属性族 (声明与理由见 vb6rtl_builtin.h)。
+// Item 结构体里的两个 BSTR 用进程级共享空串: 它们只被当**结构体字段**读
+// (vb6_BSTR_Assign 复制落地, 发码侧不把字段当 mint 回收)。
+static BSTR vb6_prn_EmptyStr(void) {
+    static BSTR s_empty = NULL;
+    if (!s_empty) s_empty = SysAllocString(L"");
+    return s_empty;
+}
+
+static int32_t g_printerCopies = 1;        /* VB6 默认 Copies = 1 */
+static int32_t g_printerPrintQuality = 0;
+
+int32_t vb6_Printers_Count(void) {
+    return 0;  /* 尚未 EnumPrinters: 与集合空 (For Each 零次) 保持一致 */
+}
+
+vb6_PrinterInfo vb6_Printers_Item(int32_t index) {
+    vb6_PrinterInfo info;
+    (void)index;
+    info.DeviceName = vb6_prn_EmptyStr();
+    info.Port = vb6_prn_EmptyStr();
+    info.Copies = g_printerCopies;
+    info.PrintQuality = g_printerPrintQuality;
+    return info;
+}
+
+// 这两枚是**出口**：按 owned BSTR 交卷（K13 的 owned 名单在册），调用方语句末会放它
+// ⇒ 每次都得新造一枚，不能交共享的那一枚（否则回收刀放掉全局空串 ⇒ 堆损坏）。
+BSTR vb6_Printer_DeviceName(void) { return SysAllocString(L""); }
+BSTR vb6_Printer_Port(void) { return SysAllocString(L""); }
+int32_t vb6_Printer_Copies(void) { return g_printerCopies; }
+void vb6_Printer_SetCopies(int32_t copies) { g_printerCopies = copies; }
+int32_t vb6_Printer_PrintQuality(void) { return g_printerPrintQuality; }
+void vb6_Printer_SetPrintQuality(int32_t quality) { g_printerPrintQuality = quality; }
+
+// File_PrintXP.frm:422/423 的源量纲参数。Width/Height 一律按 twips 答 (P20-44),
+// 与 VB6 默认 ScaleMode = 1 (vbTwips) 同口径; 全语料没有写入点, 故只答常量。
+int32_t vb6_Printer_ScaleMode(void) { return 1; }
+
 // ============================================================
 // P18-C: Forms 集合
 // ============================================================

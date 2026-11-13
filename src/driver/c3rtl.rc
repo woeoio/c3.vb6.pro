@@ -1,4 +1,27 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-13 (账 #610 第344刀, GetXData 的 VT_ARRAY|VT_VARIANT 元素档):
+//   vb6rtl_com.c 的 vb6_VariantArrayIntoSlot 开 **VT_VARIANT 元素档**: 这一档
+//   落不进 blittable 白名单 (VARIANT 不能整块 memcpy), 但可以**逐枚深拷贝**
+//   (VariantCopy 一份私有副本 → 消耗式转换 → VariantClear 那份副本)。
+//   改前这一档令 allow==0 ⇒ 槽留 Empty ⇒ 客户端递进来的整枚数组全丢。
+// 2026-11-13 (账 #610 第342刀, 富贵竹 FIX-006 末节 LNK2019 那一族):
+//   vb6_di_user32_stubs.c 补 vb6_di_AttachThreadInput / vb6_di_IsIconic 两枚
+//   声明式桩。原型逐字取自 C3 生成头 (ByVal Boolean → int16_t, **不是**上游
+//   FIX-006 文档给的 intptr_t 全形 —— 那是它那个工程的 Declare 映射)。
+//   本条注释只为触发 rc.exe 重嵌 src/rtl/** (check_rtl_embedded 的 stale-embed 判据)。
+// 2026-11-13 (富贵竹 FIX-011/012 第二轮): vb6rtl_com.c vb6_SlotHasRealSafeArray
+//   的「是不是真 SAFEARRAY」判据改成上游口径 (cDims==1 且 fFeatures!=0xA1D1) ——
+//   原写法 !vb6_SaIs1D(parray) 会把 C3 的 ND 描述符 (二维数组) 也判成真 SAFEARRAY
+//   ⇒ 归一化对它调 VariantClear ⇒ 堆损坏 (GA 43347652260 实测三用例六枚红 +
+//   b175 段错误)。本条注释只为触发 rc.exe 重嵌 src/rtl/**。
+// 2026-11-13 (富贵竹 FIX-011/012): vb6rtl_com.c 出参槽两向适配 (真 SAFEARRAY ↔
+//   C3 描述符) + vb6com_pack.c vb6_ComPackVariantRef —— 本条注释只为触发 rc.exe
+//   重嵌 src/rtl/** (check_rtl_embedded 的 stale-embed 判据)。
+// 2026-11-13 (FIX-010): uc_hostmodel_setprop.inc —— VB6_TIMER 身份窗的晚绑定
+//   Enabled/Interval 改走 vb6_SetTimerEnabled / vb6_SetTimerInterval (写窗口属性
+//   并启停 g_timerTable)，此前落到 EnableWindow 一条 WM_TIMER 都发不出来。
+//   This touch exists only so rc.exe re-embeds src/rtl/** into C3.exe --
+//   check_rtl_embedded R1 catches the stale embed.
 // 2026-11-05 (账 <transparency>): vb6forms_picture_prop.c —— vb6_SetControlPictureFromCom
 //   不再给**窗体**窗口 (类名 VB6_Form_*) 装 Image 控件子类, 也不做 AutoRedraw 镜像。
 //   实测 ucSegmentedControl 的 uc11 Transparent: `Me.Picture = Me.Image` 之后

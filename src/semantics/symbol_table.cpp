@@ -20,6 +20,14 @@ bool Scope::define(std::unique_ptr<Symbol> sym, const std::string& keyOverride) 
 }
 
 Symbol* Scope::lookupLocal(const std::string& name) const {
+    // 本地优先: 命中即返回, 绝不落到共享层 (模块内同名遮蔽语义不变)。
+    if (Symbol* own = lookupOwnLocal(name)) return own;
+    // 本地用户声明已遮蔽共享层同名内建符号 (define 里删过本地副本) → 不回退
+    if (!sharedScope_ || isShadowed(Symbol::toLower(name))) return nullptr;
+    return sharedScope_->lookupOwnLocal(name);
+}
+
+Symbol* Scope::lookupOwnLocal(const std::string& name) const {
     std::string lower = Symbol::toLower(name);
     // 先查找非Property符号 (key == lowerName)
     auto it = symbols_.find(lower);
@@ -50,6 +58,12 @@ Symbol* Scope::lookupLocal(const std::string& name) const {
 }
 
 Symbol* Scope::lookupLocalByKind(const std::string& name, SymbolKind kind) const {
+    if (Symbol* own = lookupOwnLocalByKind(name, kind)) return own;
+    if (!sharedScope_ || isShadowed(Symbol::toLower(name))) return nullptr;
+    return sharedScope_->lookupOwnLocalByKind(name, kind);
+}
+
+Symbol* Scope::lookupOwnLocalByKind(const std::string& name, SymbolKind kind) const {
     std::string lower = Symbol::toLower(name);
     if (isPropertyKind(kind)) {
         // Property: 使用带后缀的键精确查找
@@ -145,7 +159,11 @@ bool SymbolTable::define(std::unique_ptr<Symbol> sym) {
             && sym->kind != SymbolKind::ComClass && sym->kind != SymbolKind::ComInterface
             && sym->kind != SymbolKind::ComModule && sym->kind != SymbolKind::ComGlobalNs) {
             // 移除COM类型符号, 允许用户变量覆盖
+            // 共享化: 内建 COM 符号不在本地表里时 (来自共享层), erase 是空操作 ——
+            // 记一条遮蔽, 让共享回退也看不见它 (等价于"已从本地删掉")。
+            const bool fromShared = current_->symbols_.find(lowerName) == current_->symbols_.end();
             current_->symbols_.erase(lowerName);
+            if (fromShared) current_->shadowShared(lowerName);
         }
     }
 
@@ -188,7 +206,10 @@ bool SymbolTable::define(std::unique_ptr<Symbol> sym) {
                 }
                 current_->symbols_.erase(itShadowed);
             } else {
+                // 共享化: 内建符号来自共享层 (本地没有副本) ⇒ erase 空操作,
+                // 改记遮蔽标记 —— 否则共享回退会把内建符号又递回来, 用户声明形同虚设.
                 current_->symbols_.erase(existing->storageKey());
+                current_->shadowShared(lowerName);
             }
         }
     }
@@ -325,12 +346,25 @@ Symbol* SymbolTable::lookup(const std::string& name) const {
 
 Symbol* SymbolTable::lookupLocal(const std::string& name) const {
     if (!current_) return nullptr;
-    return current_->lookupLocal(name);
+    if (Symbol* own = current_->lookupLocal(name)) return own;
+    // 当前是过程/块作用域时, current_->lookupLocal 看不到挂在模块作用域上的共享层;
+    // 这里补一次共享层查询 (只问共享层, 不吃模块本地符号 —— 保持 lookupLocal 的
+    // "局部"语义)。
+    if (current_ != moduleScope_ && moduleScope_) {
+        if (moduleScope_->isShadowed(Symbol::toLower(name))) return nullptr;
+        if (const Scope* sh = moduleScope_->sharedScope()) return sh->lookupLocal(name);
+    }
+    return nullptr;
 }
 
 Symbol* SymbolTable::lookupLocalByKind(const std::string& name, SymbolKind kind) const {
     if (!current_) return nullptr;
-    return current_->lookupLocalByKind(name, kind);
+    if (Symbol* own = current_->lookupLocalByKind(name, kind)) return own;
+    if (current_ != moduleScope_ && moduleScope_) {
+        if (moduleScope_->isShadowed(Symbol::toLower(name))) return nullptr;
+        if (const Scope* sh = moduleScope_->sharedScope()) return sh->lookupLocalByKind(name, kind);
+    }
+    return nullptr;
 }
 
 Symbol* SymbolTable::lookupModule(const std::string& name) const {
@@ -347,17 +381,31 @@ Symbol* SymbolTable::lookupModuleOverloadByLoc(const std::string& name,
                                                 const SourceLocation& loc) const {
     if (!moduleScope_) return nullptr;
     std::string lower = Symbol::toLower(name);
+    // 扫一张表: 位置命中就返回; 否则把"裸键 head"留在 outHead 里。
+    auto scan = [&](const Scope& sc, Symbol*& outHead) -> Symbol* {
+        for (const auto& [key, sym] : sc.symbols()) {
+            if (key == lower) {
+                outHead = sym.get();
+                if (outHead->location.line == loc.line && outHead->location.column == loc.column)
+                    return outHead;
+            } else if (key.size() > lower.size() + 4 &&
+                       key.compare(0, lower.size(), lower) == 0 &&
+                       key.compare(lower.size(), 4, "$ov$") == 0) {
+                if (sym->location.line == loc.line && sym->location.column == loc.column)
+                    return sym.get();
+            }
+        }
+        return nullptr;
+    };
     Symbol* head = nullptr;
-    for (const auto& [key, sym] : moduleScope_->symbols()) {
-        if (key == lower) {
-            head = sym.get();
-            if (head->location.line == loc.line && head->location.column == loc.column)
-                return head;
-        } else if (key.size() > lower.size() + 4 &&
-                   key.compare(0, lower.size(), lower) == 0 &&
-                   key.compare(lower.size(), 4, "$ov$") == 0) {
-            if (sym->location.line == loc.line && sym->location.column == loc.column)
-                return sym.get();
+    if (Symbol* hit = scan(*moduleScope_, head)) return hit;
+    // 本地没有裸键 head 时才看共享层 (类型库符号只占裸键, 无 $ov$ 变体)。
+    // 名字被本地用户声明遮蔽时同样不回退。
+    if (!head && !moduleScope_->isShadowed(lower)) {
+        if (const Scope* sh = moduleScope_->sharedScope()) {
+            Symbol* shHead = nullptr;
+            if (Symbol* hit = scan(*sh, shHead)) return hit;
+            if (shHead) return shHead;
         }
     }
     return head;  // 无位置命中 → 裸键 head (零重载模块 = 旧 lookupModule 行为)
@@ -368,12 +416,23 @@ std::vector<Symbol*> SymbolTable::lookupModuleOverloads(const std::string& name)
     if (!moduleScope_) return out;
     std::string lower = Symbol::toLower(name);
     Symbol* head = nullptr;
-    for (const auto& [key, sym] : moduleScope_->symbols()) {
-        if (key == lower) { head = sym.get(); }
-        else if (key.size() > lower.size() + 4 &&
-                 key.compare(0, lower.size(), lower) == 0 &&
-                 key.compare(lower.size(), 4, "$ov$") == 0) {
-            out.push_back(sym.get());
+    auto scan = [&](const Scope& sc) {
+        for (const auto& [key, sym] : sc.symbols()) {
+            if (key == lower) { head = sym.get(); }
+            else if (key.size() > lower.size() + 4 &&
+                     key.compare(0, lower.size(), lower) == 0 &&
+                     key.compare(lower.size(), 4, "$ov$") == 0) {
+                out.push_back(sym.get());
+            }
+        }
+    };
+    scan(*moduleScope_);
+    // 本地无裸键 head 时回退共享层 (与共享化之前的单表行为一致); 被遮蔽时不回退。
+    if (!head && !moduleScope_->isShadowed(lower)) {
+        if (const Scope* sh = moduleScope_->sharedScope()) {
+            for (const auto& [key, sym] : sh->symbols()) {
+                if (key == lower) { head = sym.get(); break; }
+            }
         }
     }
     if (head) out.insert(out.begin(), head);
@@ -384,10 +443,13 @@ Symbol* SymbolTable::lookupModuleOverloadBySuffix(const std::string& name,
                                                   const std::string& suffix) const {
     if (!moduleScope_) return nullptr;
     std::string lower = Symbol::toLower(name);
-    if (suffix.empty()) return moduleScope_->symbols().count(lower)
-                                  ? moduleScope_->symbols().at(lower).get() : nullptr;
-    auto it = moduleScope_->symbols().find(lower + suffix);
-    return it != moduleScope_->symbols().end() ? it->second.get() : nullptr;
+    auto it = moduleScope_->symbols().find(suffix.empty() ? lower : lower + suffix);
+    if (it != moduleScope_->symbols().end()) return it->second.get();
+    // 共享层只可能占裸键 (类型库 storageKey 无 $pg/$pl/$ps/$ov$ 后缀)。
+    if (suffix.empty()) {
+        if (const Scope* sh = moduleScope_->sharedScope()) return sh->peek(lower);
+    }
+    return nullptr;
 }
 
 int SymbolTable::scopeDepth() const {
@@ -415,16 +477,18 @@ bool SymbolTable::inProcedure() const {
 
 // --- 跨模块符号操作 ---
 
-void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom) {
+void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom,
+                                 const std::string& keyOverride) {
     // 在模块级作用域定义外部符号
     // 如果已存在同名符号（本地已有定义），跳过不覆盖
     if (!moduleScope_) return;
-    std::string key = sym->storageKey();
-    // Fix 103: 同名过程占用了裸键时, 外部 Type/Enum 改注入 "<name>$ty"
-    // (与 SymbolTable::define 的冲突处理一致), 避免跨模块 Public Type
-    // 与本地同名过程冲突后类型彻底不可见.
-    if (sym->kind == SymbolKind::UserDefinedType || sym->kind == SymbolKind::EnumType) {
-        if (moduleScope_->symbols_.find(key) != moduleScope_->symbols_.end()) {
+    std::string key = keyOverride.empty() ? sym->storageKey() : keyOverride;
+    // 限定键（`<mod>$x$<proc>`）不参与下面的类型 $ty 改键与内建替换 —— 它天然唯一。
+    if (keyOverride.empty()
+        && (sym->kind == SymbolKind::UserDefinedType || sym->kind == SymbolKind::EnumType)) {
+        // peek = 本地优先 + 共享层回退: 类型库内建 EnumType 占着裸键时也要让位到 $ty
+        // (与共享化之前"它就在本地表里"的行为一致)。
+        if (moduleScope_->peek(key)) {
             key = sym->lowerName + "$ty";
         }
     }
@@ -446,7 +510,40 @@ void SymbolTable::defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuilti
         // 本地已有定义，不注入外部符号
         return;
     }
+    // 共享层 (类型库) 占着这个名字: 与"本地已有定义"同义 —— 默认不注入。
+    // 例外仍是 replaceBuiltinCom: 工程类遮蔽类型库同名 coclass/接口, 但**只写本地影子**,
+    // 绝不改共享层 (那是所有模块共用的只读基座)。
+    if (Symbol* sh = moduleScope_->sharedScope() ? moduleScope_->sharedScope()->peek(key) : nullptr) {
+        if (replaceBuiltinCom && sym->kind == SymbolKind::Class
+            && !sym->isInterface && sh->isBuiltin
+            && (sh->kind == SymbolKind::ComClass
+                || sh->kind == SymbolKind::ComInterface)) {
+            moduleScope_->symbols_[key] = std::move(sym);
+        }
+        return;
+    }
     moduleScope_->symbols_[key] = std::move(sym);
+}
+
+// 账 #305 §56.35: `Mod.Proc` 的**自家形参表/返回类型** —— 裸键 storageKey 按先到先得
+// 只留一份，同名过程在别的标准模块里还有第二、第三份时，那几家的表在消费模块里原本
+// 根本不存在。driver_crossmod 现在给撞名各家补一份 `<mod>$x$<storageKey>`，这里按键前缀
+// 找回来（kind 后缀 $pg/$pl/$ps 任取）。
+Symbol* SymbolTable::lookupQualifiedProc(const std::string& modLower,
+                                         const std::string& procLower) const {
+    if (!moduleScope_ || modLower.empty() || procLower.empty()) return nullptr;
+    const std::string prefix = modLower + "$x$" + procLower;
+    for (const auto& [key, sym] : moduleScope_->symbols()) {
+        if (!sym) continue;
+        if (key.compare(0, prefix.size(), prefix) != 0) continue;
+        // 只认过程档，且必须是**该模块**注入的那一份（防止前缀撞上别的长名）
+        if (sym->kind != SymbolKind::Sub && sym->kind != SymbolKind::Function
+            && !isPropertyKind(sym->kind)) continue;
+        if (sym->isExternal && Symbol::toLower(sym->sourceModule) != modLower) continue;
+        if (key.size() > prefix.size() && key[prefix.size()] != '$') continue;
+        return sym.get();
+    }
+    return nullptr;
 }
 
 std::vector<const Symbol*> SymbolTable::getPublicSymbols() const {

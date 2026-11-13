@@ -220,16 +220,22 @@ void* vb6_UC_ControlsItemObjByName(void* coll, const wchar_t* name) {
     return inst ? inst : hw;
 }
 
-// 把宿主窗口从 vb6_ucHo / vb6_ucRecs 摘除 (Remove 时调用)。
+// 把宿主窗口从 vb6_ucHo / vb6_ucRecs 摘除 (Remove 与宿主 WM_DESTROY 时调用)。
 // 采用"末位填补"压缩数组; vb6_ucCurrent 若正好是被摘除项, 置 NULL (调用方
 // Remove 的必然是别的控件, 不会摘到自身, 故正常情况下不发生)。
-static void vb6_uc_releaseHost(void* hwnd) {
+//
+// 为什么 WM_DESTROY 也必须摘: 旧记录常驻时会挡住新实例 —— 窗体关闭后 UC 实例内存
+// 被释放, 下次打开时堆复用同一地址, vb6_uc_findByInstance 从头扫, 先命中的是旧记录
+// (hwnd 已销毁、adSurf 是死表面), 于是新实例的 Draw/Cls 全画到死窗口上 ⇒ 空白。
+// 见 handoff §51/§52 (Contact List 第二次打开丢数据)。
+void vb6_uc_releaseHost(void* hwnd) {
     if (!hwnd) return;
     for (int32_t i = 0; i < vb6_ucHoCount; i++) {
         if (vb6_ucHo[i].hwnd == hwnd) { vb6_ucHo[i] = vb6_ucHo[--vb6_ucHoCount]; break; }
     }
     for (int32_t i = 0; i < vb6_ucRecCount; i++) {
         if ((void*)vb6_ucRecs[i].hwnd == hwnd) {
+            if (vb6_ucRecs[i].adSurf.memDC) vb6_uc_dibDestroy(&vb6_ucRecs[i].adSurf);
             if (vb6_ucCurrent == &vb6_ucRecs[i]) vb6_ucCurrent = NULL;
             vb6_ucRecs[i] = vb6_ucRecs[--vb6_ucRecCount];
             break;
@@ -345,6 +351,20 @@ int32_t vb6_UC_FontHeightPx(double pt, int32_t dpiY) {
     return -(int)(pt * (double)dpi / 72.0);   /* 截断, 不四舍五入 —— 照 VB6 的读数 */
 }
 
+/* Fix 432: **显式 StdFont**（.frm/.ctl 里 BeginProperty Font 那一档）的磅→像素是
+ * MulDiv 口径 —— 半值向上取整，不是截断。依据是真 VB6 的 ucTreeView 参考产物：
+ * Contact List 那个 UserControl 的 Font 声明为 Segoe UI Semibold 8.25pt，参考 exe
+ * 的 UC 宿主窗口 WM_GETFONT 读回 lfHeight=-14（8.25*120/72=13.75 → 14），而 C3
+ * 截断成 -13；那 1px 让主标题文字在行内下移 1px、ClearType 彩边整行搬家，Contact
+ * 的 vivid 因此比参考少 11%。
+ * 与二百七十七刀的截断口径不冲突：那条量的是**默认 GUI 字体**（ComCtlsDemo 69 枚
+ * 窗口 8.25pt MS Sans Serif → -13），走 vb6_Vb6DefaultGuiFont，那个调用点一字未动。
+ * 两种字体来源在 VB6 里本来就是两套创建路径，这里只把"显式 StdFont"这一套补回来。 */
+static int32_t vb6_uc_fontHeightPxRound(double pt, int32_t dpiY) {
+    int dpi = (dpiY > 0) ? dpiY : 96;
+    return -(int)(pt * (double)dpi / 72.0 + 0.5);
+}
+
 vb6_ComIface_Font* vb6_uc_fontOf(void* p) {
     if (p == &vb6_UserControl_FontObj) return &vb6_UserControl_FontObj;
     for (vb6_UCFontRec* f = vb6_ucFonts; f; f = f->next)
@@ -378,7 +398,16 @@ int32_t vb6_UC_IsFont(const void* p) {
  *   或用户代码写 Bold ⇒ 后者正是本刀要它生效的那一种。
  * 参数按**void*** 收 (本头不含 wingdi.h 的调用方也能递栈上的 LOGFONTW), dpi/quality
  *   由调用方决定 —— 与账 #298 §B129 那条「公式只住一枚, DPI 从外面递进来」同口径。 */
-void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut) {
+/* Fix 434: 磅→像素的**第三位口径** —— `IFont.hFont` 这一格是截断。
+ * 同一个真 VB6 进程里量到两套 (2026-11-07, .temp/fontprobe.ps1 对参考 exe):
+ *   窗体/原生控件 WM_GETFONT  = -13 (8.25pt @120dpi, 13.75 截断);
+ *   UC 宿主窗口 WM_GETFONT    = -14 (13.75 半值向上, Fix 432 的那条);
+ *   `Font.hFont` (stdole IFont 自己那枚 GDI 句柄, 账 #305 276/277 的尺) = 截断。
+ * K276 夹具 (tests/combyref271, 8.75pt @120dpi = 14.58) 钉的就是最后这一格:
+ * 参考答 -14, 按 Fix 432 的 MulDiv 挡会答 -15。所以这里按**入口**分档:
+ * host window / 原生控件那两站仍走 half-up (caller 传 roundHalf=1),
+ * vb6_uc_fontEnsureHFont (hFont 缓存) 传 0 = 截断。 */
+static void vb6_uc_fontLogFontImpl(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut, int roundHalf) {
     const vb6_ComIface_Font* f = (const vb6_ComIface_Font*)fontFields;
     LOGFONTW* lf = (LOGFONTW*)lfOut;
     double pt;
@@ -386,7 +415,10 @@ void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* l
     if (!lf) return;
     memset(lf, 0, sizeof(*lf));
     pt = (f && f->Size > 0) ? (double)f->Size : 8.25;
-    lf->lfHeight    = vb6_UC_FontHeightPx(pt, dpi);
+    /* Fix 432: 显式 StdFont 走 MulDiv 口径 (半值向上), 不是截断 —— 见上面
+     * vb6_uc_fontHeightPxRound 的取证。默认 GUI 字体那一档仍走截断。 */
+    lf->lfHeight    = ((f && f->Size > 0) && roundHalf) ? vb6_uc_fontHeightPxRound(pt, dpi)
+                                                       : vb6_UC_FontHeightPx(pt, dpi);
     lf->lfWeight    = (f && f->Bold) ? 700 : ((f && f->Weight) ? f->Weight : 400);
     lf->lfItalic    = (BYTE)((f && f->Italic) ? 1 : 0);
     lf->lfUnderline = (BYTE)((f && f->Underline) ? 1 : 0);
@@ -414,6 +446,10 @@ void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* l
     } else {
         wcscpy(lf->lfFaceName, L"MS Sans Serif");
     }
+}
+
+void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut) {
+    vb6_uc_fontLogFontImpl(fontFields, dpiY, quality, lfOut, 1);
 }
 
 /* 快照与当前八档是否一致 (一致 = 缓存里那枚 HFONT 还代表这八档, 不用重造)。
@@ -453,17 +489,20 @@ static void vb6_uc_fontSigTake(vb6_ComIface_Font* f) {
  * ⚠ 不许把它交给 WM_SETFONT —— vb6forms_ctrl.c 的 vb6_SetControlFontFromLogFont
  *   换字体后无条件 DeleteObject(旧句柄) (vb6forms.c:147 那条注释记的就是这一格),
  *   递出去就等于把缓存换成悬空句柄。本 RTL 无任何调用点这么做。
- * 质量档 = NONANTIALIASED_QUALITY, 与 vb6_Vb6DefaultGuiFont 为窗口字体定下的那条
- * 「VB6 的 MS Sans Serif 是点阵字体, 从不抗锯齿」同口径 (量字那一位调用方维持它
- * 一直以来的 0, 不跟着动 —— Fix 113k 记过: 给 TextWidth/TextHeight 换字体度量会把
- * Charts 的图例/轴标签排布推坏)。 */
+ * 质量档 = DEFAULT_QUALITY (与 vb6rtl_com.c 的 Font.hFont 及 VB6 的 StdFont 同口径)。
+ * 以前写死 NONANTIALIASED 是照 vb6_Vb6DefaultGuiFont 那条「MS Sans Serif 是点阵字体」
+ * 一刀切, 但用户自定义的 Segoe UI 一类可缩放字族在 VB6 里是会平滑的 —— 实测真 VB6
+ * 节点文字带 ClearType 彩边, C3 全是硬边。MS Sans Serif 本身仍走点阵档, 质量位对它无效。 */
 static void* vb6_uc_fontEnsureHFont(vb6_ComIface_Font* f) {
     LOGFONTW lf;
     HFONT h;
     if (!f) return NULL;
     if (f->hFontCache && vb6_uc_fontSigSame(f)) return f->hFontCache;
     if (f->hFontCache) { DeleteObject((HFONT)f->hFontCache); f->hFontCache = NULL; }
-    vb6_UC_FontLogFont(f, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    /* DEFAULT_QUALITY: 与 vb6rtl_com.c 那条 Font.hFont (quality=0) 及 VB6 的 StdFont 同口径。
+       Fix 434: 这一格 (IFont.hFont) 的磅→像素是**截断** (K276: 8.75pt@120dpi 参考答 -14),
+       与 Fix 432 给 UC 宿主窗口的 MulDiv 半值向上是两条创建路径, 故传 roundHalf=0。 */
+    vb6_uc_fontLogFontImpl(f, vb6_DpiY(), DEFAULT_QUALITY, &lf, 0);
     h = CreateFontIndirectW(&lf);
     if (!h) return NULL;
     vb6_uc_fontSigTake(f);
@@ -481,14 +520,29 @@ void* vb6_UC_FontHFont(void* p) {
  * + 顶层 VB6_Form_*) 在同一把时间无关的尺上读回**空** —— 从没发过。发过之后它们的文字量、owner-draw
  * 与 .FontName 那一族读数才落在 VB6 那枚字体上, 不是 DC 默认字体。
  * 本站只拼答案: 八档 (fontFields = NULL 即 VB6 的默认档 8.25pt / MS Sans Serif / 400) 问第二百七十六刀
- * 那位主人, DPI 递真屏、质量档递 NONANTIALIASED (与窗口字体同口径); 发出去 / 自存 / 删旧 交给
+ * 那位主人, DPI 递真屏, 质量档由两个入口分别给 (原生控件 NONANTIALIASED / UC 宿主 DEFAULT); 发出去 / 自存 / 删旧 交给
  * vb6forms_ctrl.c 里那一位既有主人 —— 那一站自带「只删我们自己造的那张」的账, 不抄第二份。
  * ⚠ 也别顺手把第二百七十六刀那枚缓存句柄交出去: WM_SETFONT 的接手方换字体时 DeleteObject 旧句柄。 */
-void vb6_UC_ApplyFontToWindow(void* hwnd, const void* fontFields) {
+static void vb6_uc_applyFontToWindowQ(void* hwnd, const void* fontFields, int32_t quality) {
     LOGFONTW lf;
     if (!hwnd) return;
-    vb6_UC_FontLogFont((void*)fontFields, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    vb6_UC_FontLogFont((void*)fontFields, vb6_DpiY(), quality, &lf);
     vb6_SetControlFontFromLogFont((HWND)hwnd, &lf);
+}
+
+void vb6_UC_ApplyFontToWindow(void* hwnd, const void* fontFields) {
+    /* 这里**保持** NONANTIALIASED: 同一入口也被 cgen 用来给窗体上的原生控件
+       (Label/Button/CheckBox, cgen_form_create_controls.inc:147) 发设计期字体 ——
+       改这一档会让 Form1 那批 Arial Narrow 文字一起变平滑, 与本刀（UC 节点文字）
+       无关, 且会推翻 px 夹具按旧硬边标定的 Label 240 / 按钮行数判据。 */
+    vb6_uc_applyFontToWindowQ(hwnd, fontFields, NONANTIALIASED_QUALITY);
+}
+
+/* UC 宿主窗口 (ThunderRT6UserControl 那一户) 的 ambient 字体: VB6 的 StdFont 在 GDI 里
+   走默认质量档, 可缩放字族会按系统设置平滑。这一档**不能**并进上面那条 ——
+   上面那条还被原生控件共用。见 uc_host_create.inc:85 (AutoRedraw DC 的默认字体)。 */
+void vb6_UC_ApplyFontToHostWindow(void* hwnd, const void* fontFields) {
+    vb6_uc_applyFontToWindowQ(hwnd, fontFields, DEFAULT_QUALITY);
 }
 
 

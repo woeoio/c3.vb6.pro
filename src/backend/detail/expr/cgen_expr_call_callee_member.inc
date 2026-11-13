@@ -588,17 +588,18 @@
                                     lastExpr_ = udtFixedMemberIndex(fieldExpr, node.positional,
                                                                     mi.arrayRank);
                                     handled = true;
-                                } else if (memIsDynArr && node.positional.size() == 1) {
-                                    // Pattern B: 动态数组成员 → VB6_SA_AT(elemCType, obj.member, idx)
+                                } else if (memIsDynArr && !node.positional.empty()) {
+                                    // Pattern B: 动态数组成员 → VB6_SA_AT / VB6_SA_ND_AT2|3|N
                                     // Fix 092s: UDT 元素发 vb6_type_<UDT> (mapSaElemCType 对
                                     // UserDefinedType 会退化成 vb6_VARIANT ⇒ 元素大小/取址全错,
                                     // cTlsSocket 4086/4093) —— 这件事现在由那一枚出口答。
+                                    // §38: 秩数以前写死 1，秩 2 的成员 (`m_allFrames(i).pixelData(0,0)`)
+                                    // 落空后走通用调用路 ⇒ `field(0, 0)` ⇒ C2064 (+同站 C2197)。
+                                    // 现在秩数由实参个数决定，出口收在 udtDynMemberIndex 一处。
                                     emitExpr(*node.callee);
                                     std::string fieldExpr = std::move(lastExpr_);
-                                    emitExpr(*node.positional[0]);
-                                    std::string idx = std::move(lastExpr_);
-                                    lastExpr_ = "VB6_SA_AT(" + mad.elemCType + ", "
-                                              + fieldExpr + ", " + idx + ")";
+                                    lastExpr_ = udtDynMemberIndex(mad.elemCType, fieldExpr,
+                                                                  node.positional);
                                     handled = true;
                                 } else if (memIsDynArr && node.positional.empty()) {
                                     // 账 #476 §B190: 整数组读 (`v = t.Items`) —— 让字段指针原样

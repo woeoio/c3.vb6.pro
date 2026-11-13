@@ -549,8 +549,8 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                             ? (Symbol::toLower(csym->sourceModule) == clsLower)
                             : (Symbol::toLower(csym->name) == clsLower);
                         if (!hit) continue;
-                        auto it = csym->memberReturnTypes.find(memLowerCls);
-                        if (it != csym->memberReturnTypes.end()) {
+                        auto it = csym->P().memberReturnTypes.find(memLowerCls);
+                        if (it != csym->P().memberReturnTypes.end()) {
                             std::string rn = Symbol::toLower(it->second);
                             if (rn == "string")  return Vb6Type::String;
                             if (rn == "long")    return Vb6Type::Long;
@@ -809,6 +809,23 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                     return true;
                 }
                 if (kBuiltinFuncNames.count(bname)) return false;
+                // 账 §56.40 校准: **对象变量的默认属性调用** (`obj(9)`) —— 调用结果的
+                // 类型是**那个属性的返回档**, 不是变量自己的存储档 (类实例变量在符号表里
+                // 常记成 Variant/Object)。此前这一格直接 checkSym ⇒ 把 `m_up(9)` 答成
+                // 「整只 Variant 槽」⇒ 读腿给它套 vb6_VariantToString ⇒ C2440
+                // (tests/cls_inh InhHolder.ItemDefault: 那个默认属性返回 String, 交出去的
+                //  已经是 BSTR, 再包一层就是 BSTR→vb6_VARIANT 的反向 C2440)。
+                // 判据: 这枚符号是个**变量** (不是 Function/PropertyGet), 且它的类型是
+                // Object / 指向工程类 ⇒ 它身上的 `()` 是默认属性(或方法)调用, 不是取槽。
+                // 答否 = 保守方向 (与改前文本投影同答案), 不会把真 Variant 漏箱。
+                if (sym && sym->kind != SymbolKind::Function
+                    && sym->kind != SymbolKind::PropertyGet) {
+                    if (sym->type == Vb6Type::Object) return false;
+                    if (!sym->variableTypeName.empty()) {
+                        const Symbol* clsSymCall = lookupTypeSymbol(sym->variableTypeName);
+                        if (clsSymCall && clsSymCall->kind == SymbolKind::Class) return false;
+                    }
+                }
                 // 关键差异: sym==null (内置函数) 视为非 Variant
                 return checkSym(sym);
             }
@@ -828,6 +845,24 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                 std::string mname = Symbol::toLower(ma2.memberName);
                 if (!mname.empty() && mname.back() == '$') mname.pop_back();
                 if (kBuiltinFuncNames.count(mname)) return false;
+                // 账 §56.41 (FlexGridX86): 多态内置的**限定形态** (`VBA.Choose(...)` /
+                // `VBA.Switch(...)`) —— 发码侧 (cgen_expr_call_builtin_pre.inc 的 P18-E 段)
+                // 把它们**约简成嵌套三目** (`((idx)==1 ? (a) : ((idx)==2 ? (b) : (NULL)))`),
+                // 真 C 类型由**两支**决定, 不是 vb6_VARIANT ⇒ 槽问句必须答否。
+                // 此前只有**裸名**那一形进了 isPolymorphicBuiltin, 限定形态落到下方递归分支
+                // → `VBA.Choose` 的登记返回型是 Variant ⇒ 答"整只 Variant 槽" ⇒ 读腿给它套
+                // vb6_VariantToLongPtr(...) ⇒ cl C2440 "无法从 intptr_t 转换为 vb6_VARIANT"
+                // (VBFlexGrid.ctl:3824 `hToolTip = VBA.Choose(j, VBFlexGridToolTipHandle,
+                //  VBFlexGridScrollTipHandle)` —— 两支都是 LongPtr, 落臂 NULL ⇒ 三目 C 类型 intptr_t)。
+                // 限定名只认 VBA / VBA5 (与发码侧同一口径); 用户自己的 obj.Choose() 方法不受影响
+                // (那不是内置, 仍按声明返回型答)。
+                // IIf 不在这一族: 发码侧只对**裸名** IIf(...) 折成 vb6_IIfXXX, 限定形态不走那条路。
+                if ((mname == "choose" || mname == "switch") && ma2.object
+                    && ma2.object->kind == ASTNodeKind::IdentifierExpr) {
+                    const std::string objnm =
+                        Symbol::toLower(static_cast<IdentifierExpr&>(*ma2.object).name);
+                    if (objnm == "vba" || objnm == "vba5") return false;
+                }
             }
             // 类方法调用 a.Method(): 递归推断 callee 类型
             if (call.callee && call.callee->kind == ASTNodeKind::MemberAccessExpr) {
@@ -855,6 +890,16 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
             // 此前 memSym==null (UDT 字段) 被一律视为非 Variant, 导致
             // UBound(vb6_ret_X.BufferArray) 等不包装 vb6_VariantToSafeArray1D →
             // C2440 (无法从 vb6_VARIANT 转 vb6_SafeArray1D*).
+            //
+            // 账 §56.40: 这一格问的是 inferExprType, 它对 UDT 字段走的是
+            // symTab_.lookupModule(UDT 名) —— **跨模块 Public Type 解析不到** ⇒
+            // 答 Unknown ⇒ 整格答否 ⇒ 读腿不拆箱 ⇒ C2440 (PhotoDemon
+            // pdDictionary.c 239/248: `dItem As Variant` 读进 String 变量)。
+            // 字段**声明档位**的既有唯一出口是 inferUdtFieldVb6Type (它走
+            // lookupTypeSymbol, 带 $ty 回退与按 kind 查找) —— 与调用实参那条路
+            // (cgen_expr_call_arg_emit.inc 的 inferUdtFieldVb6Type(...) == Variant)
+            // 同一枚问句。先问它, 再落回原来的 inferExprType 那一格。
+            if (inferUdtFieldVb6Type(&expr) == Vb6Type::Variant) return true;
             if (!inferUdtTypeOfExpr(*ma.object).empty()) {
                 return inferExprType(expr) == Vb6Type::Variant;
             }
@@ -881,6 +926,18 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                 Vb6Type pt = Vb6Type::Unknown;
                 if (ctrlMemberPropType(ma.object.get(), ma.memberName, pt))
                     return pt == Vb6Type::Variant;
+            }
+            // 账 §56.40: 工程类成员的**方法**返回 Variant (`Evaluator.Evaluate(...)` /
+            // `pdLayer.GetTextLayerProperty(...)`) —— 上面那条字段表只管**字段**, 方法的
+            // 返回档在类符号的 memberReturnTypes 里。此前这一问落到下面那条「按裸成员名
+            // 查模块符号」⇒ 答否 ⇒ 实参/赋值不拆箱 ⇒ 整只 vb6_VARIANT 递给
+            // BSTR/double/int32_t 形参 ⇒ C2440 (PhotoDemon Evaluator.c 474/494/514、
+            // pdSpinner.c 919、TextSupport.c 357/370/386/398、toolpanel_TextBasic.c 1811)。
+            if (ma.object) {
+                const std::string clsVar = inferClassTypeOfExpr(*ma.object);
+                if (!clsVar.empty() && classMemberMethodReturnsVariant(clsVar, ma.memberName)) {
+                    return true;
+                }
             }
             auto* memSym = symTab_.lookupModule(ma.memberName);
             // 关键差异: memSym==null (UDT 字段访问或外部类成员) 视为非 Variant
@@ -1074,6 +1131,11 @@ std::string CCodeGen::builtinNoParamTableFormalCType(const std::string& callee, 
         // 交回 vb6_VARIANT —— Fix 175 闸按 cExprIsVariant 让位, 但本表此前没这
         // 一行, VARIANT 那条提取臂也进不来 ⇒ C2440。VB6 语义按当前子类型折字符串。
         {"vb6_Clipboard_SetText", {"BSTR"}},
+        // ucSlider (Proyecto1.vbp): `UserControl.TextWidth(i + Min)` —— TextWidth 的原型是
+        // `vb6_UC_TextWidthOf((void*)me, BSTR)`, 数值实参在 VB6 里按 CStr 隐式折算;
+        // 此前这一位没有登记 ⇒ 裸送 float ⇒ C2440 (ucSlider.c TextW = ...)。
+        {"vb6_UserControl_TextWidth", {"BSTR"}},
+        {"vb6_UserControl_TextHeight", {"BSTR"}},
         {"vb6_GetSetting",    {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key[, default])
         {"vb6_SaveSetting",   {"BSTR", "BSTR", "BSTR", "BSTR"}},   // (app, section, key, setting)
         {"vb6_DeleteSetting", {"BSTR", "BSTR", "BSTR"}},           // (app, section[, key])
@@ -1194,6 +1256,24 @@ bool CCodeGen::cExprIsVariantSlotFieldRead(const std::string& cExpr) const {
         && cExpr.compare(cExpr.size() - tail.size(), tail.size(), tail) == 0;
 }
 
+// §B172 同一出口的识别半: 「这枚 C 文本是不是类数据字段的读」。三种形态都由
+// classFieldReadExpr 拼出 (见上), 后缀只差 ` variant` / ` voidptr` 那一档 ——
+// 判据钉在**串尾**: 表达式可能是「内层调用 + 实参里的字段尾注」(Layers.c 两条 C2143
+// 就是这么长出来的), 按「包含」判会把它一并答成读。
+bool CCodeGen::cExprIsClassFieldRead(const std::string& cExpr) const {
+    static const char* const kTails[] = {
+        " field */", " field variant */", " field voidptr */",
+    };
+    for (const char* t : kTails) {
+        const std::string tail(t);
+        if (cExpr.size() >= tail.size()
+            && cExpr.compare(cExpr.size() - tail.size(), tail.size(), tail) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // 账 #305 第二百四十四刀: 「这发交回的 C 是不是裸晚绑定调用的结果」—— 唯一主人。
 //   口径 = 位置 0 的严格前缀 (不剥外层括号, 见 cgen_helpers.inc 那两条声明的理由)。
 // 账 #305 第二百四十六刀: 名单从四条缩成三条 —— 撤掉属性读那枚交回**对象指针**的出口。
@@ -1230,6 +1310,29 @@ std::string CCodeGen::conditionTruthExpr(const std::string& cExpr, Expr* cond) c
         return "vb6_VariantToBool(" + cExpr + ")";
     }
     return cExpr;
+}
+
+// 账 §56.40: 「这枚工程类成员的**方法**返回档是不是 Variant」—— 权威是类符号的
+// memberReturnTypes (与 inferExprType 的同名映射同源: cgen_util_type.cpp 里
+// 「类实例成员函数返回类型」那一节)。窄口径: 只认表里**明写 variant** 的那一档,
+// 不做别的推断 —— 判宽了会把非 Variant 实参套上 vb6_VariantToXxx, 反向 C2440。
+bool CCodeGen::classMemberMethodReturnsVariant(const std::string& className,
+                                                const std::string& memberName) const {
+    if (className.empty() || memberName.empty()) return false;
+    if (!symTab_.moduleScope()) return false;
+    const std::string memLower = Symbol::toLower(memberName);
+    const std::string clsLower = Symbol::toLower(className);
+    for (const auto& [k, csym] : symTab_.moduleScope()->symbols()) {
+        if (csym->kind != SymbolKind::Class) continue;
+        const bool hit = csym->isExternal
+            ? (Symbol::toLower(csym->sourceModule) == clsLower)
+            : (Symbol::toLower(csym->name) == clsLower);
+        if (!hit) continue;
+        auto it = csym->P().memberReturnTypes.find(memLower);
+        if (it == csym->P().memberReturnTypes.end()) return false;
+        return Symbol::toLower(it->second) == "variant";
+    }
+    return false;
 }
 
 // P1.2 三问之二: 「C 侧这段文本是不是**整只 vb6_VARIANT 槽**」(而不是槽的地址/指针)。

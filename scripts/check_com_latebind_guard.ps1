@@ -457,7 +457,7 @@ $ctrlCode  = Strip-Comments262 ((Read-Lines262 $ctrlC) -join "`n")
 $hwCode    = Strip-Comments262 ((Read-Lines262 $hostWinC) -join "`n")
 $nHDef2 = ([regex]::Matches($ucCode, 'int32_t\s+vb6_UC_FontHeightPx\s*\(')).Count
 if ($nHDef2 -ne 1) { $fail += ("R10 definition of vb6_UC_FontHeightPx = " + $nHDef2 + " (want 1)") }
-$nHUse2 = ([regex]::Matches($ucCode, '=\s*vb6_UC_FontHeightPx\(')).Count +
+$nHUse2 = (([regex]::Matches($ucCode, 'vb6_UC_FontHeightPx\(')).Count - $nHDef2) +
          ([regex]::Matches($formsCode, 'vb6_UC_FontHeightPx\(')).Count +
          ([regex]::Matches($ctrlCode, 'vb6_UC_FontHeightPx\(')).Count
 if ($nHUse2 -ne 3) {
@@ -465,10 +465,14 @@ if ($nHUse2 -ne 3) {
 }
 $nMulDiv = ([regex]::Matches($formsCode, 'MulDiv\(825')).Count
 $nHalf  = ([regex]::Matches($ctrlCode, '72\.0f\s*\+\s*0\.5f')).Count
+# Fix 432: 显式 StdFont 是 MulDiv 口径 (半值向上), 默认 GUI 字体是截断口径 —— 两种**来源**
+# 各有一条公式, 但第二条必须是有名有姓的唯一主人 vb6_uc_fontHeightPxRound, 不许再散落。
 $nHalf2 = ([regex]::Matches($ucCode, '72\.0\s*\+\s*0\.5')).Count
-if ($nMulDiv + $nHalf + $nHalf2 -ne 0) {
+$nRoundDef = ([regex]::Matches($ucCode, 'int32_t\s+vb6_uc_fontHeightPxRound\s*\(')).Count
+if ($nMulDiv + $nHalf -ne 0 -or $nHalf2 -ne $nRoundDef -or $nRoundDef -gt 1) {
     $fail += ("R10 the hand-copied conversions are back (muldiv=" + $nMulDiv +
-              " setter=" + $nHalf + " owner=" + $nHalf2 + ") (want 0) - 第二套口径就是第二套答案")
+              " setter=" + $nHalf + " owner=" + $nHalf2 + " roundOwners=" + $nRoundDef +
+              ") (want muldiv/setter=0, owner<=1 且只住 vb6_uc_fontHeightPxRound)")
 }
 $nName = ([regex]::Matches($hwCode, 'SysAllocString\(L"MS Sans Serif"\)')).Count
 $nOld  = ([regex]::Matches($hwCode, 'SysAllocString\(L"Segoe UI"\)')).Count
@@ -486,10 +490,15 @@ if ($nName -ne 1 -or $nOld -ne 0) {
 $createCode = Strip-Comments262 ((Read-Lines262 $ucCreateC) -join "`n")
 $nADef = ([regex]::Matches($ucCode, 'void\s+vb6_UC_ApplyFontToWindow\s*\(')).Count
 if ($nADef -ne 1) { $fail += ("R11 definition of vb6_UC_ApplyFontToWindow = " + $nADef + " (want 1)") }
-$nAUc = ([regex]::Matches($createCode, 'vb6_UC_ApplyFontToWindow\(hwnd, r->font\)')).Count
+$nAUc = ([regex]::Matches($createCode, 'vb6_UC_ApplyFontToHostWindow\(hwnd, r->font\)')).Count
 if ($nAUc -ne 1) {
     $fail += ("R11 UC-host send site (design-time font) = " + $nAUc +
               " (want 1 in uc_host_create.inc) - 这一户退回「没人发」就是尺上那 27 枚空字体")
+}
+$nAHostDef = ([regex]::Matches($ucCode, 'void\s+vb6_UC_ApplyFontToHostWindow\s*\(')).Count
+if ($nAHostDef -ne 1) {
+    $fail += ("R11 definition of vb6_UC_ApplyFontToHostWindow = " + $nAHostDef +
+              " (want 1: UC 宿主那一档只换质量档, 其余仍问同一位发信人)")
 }
 $nAForm = ([regex]::Matches($formsCode, 'vb6_UC_ApplyFontToWindow\(hwnd, NULL\)')).Count
 if ($nAForm -ne 1) {

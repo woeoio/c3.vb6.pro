@@ -1285,3 +1285,26 @@ intptr_t __stdcall vb6_di_GetThemeDocumentationProperty(intptr_t pszThemeName, i
 void __stdcall vb6_di_InitCommonControls(void) {
     ((void (WINAPI *)(void))InitCommonControls)();
 }
+
+/* === 账 #610 第342刀（富贵竹 FIX-006 末节 LNK2019 那一族）===
+ * 上游 FIX-006 原文: "编译清零后链接报 ... vb6_di_AttachThreadInput、vb6_di_IsIconic"
+ * ⇒ 补这两枚。di 桩是**声明式**的: C3 把用户的 `Declare ... Lib "user32"` 名字动态拼成
+ * `vb6_di_<name>` (cgen_decl_api.cpp), 静态清单扫不出来, 只有真链一次才以 LNK2019 现形
+ * ⇒ 正式夹具 tests/fgz_fix006di.bas 把这两个符号链出来当判据。
+ *
+ * ⚠ 原型**逐字取自 C3 生成头**(实测, tests/fgz_fix006di.bas 的 --emit-c):
+ *     extern int16_t __stdcall vb6_di_AttachThreadInput(intptr_t, intptr_t, int16_t);
+ *     extern int16_t __stdcall vb6_di_IsIconic(intptr_t);
+ *   上游 FIX-006 文档给的是 intptr_t 全形 —— 那是**它那个工程**的 Declare 映射
+ *   (ByVal Boolean 收成 intptr_t); 本项目的 Declare 映射把 Boolean 收成 int16_t
+ *   ⇒ 桩必须对齐 C3 生成头, 否则调用点的传参宽度与本定义不一致 (x86 stdcall 会栈错位)。
+ *
+ * ⚠ 内部再把 int16_t 提回 int 交给真 API: 真原型是 BOOL(4 字节),
+ *   按 int16_t 直接传在 x86 上高 2 字节是垃圾值。 */
+int16_t __stdcall vb6_di_AttachThreadInput(intptr_t idAttach, intptr_t idAttachTo, int16_t fAttach) {
+    return ((int16_t (WINAPI *)(intptr_t, intptr_t, int))AttachThreadInput)(idAttach, idAttachTo, (int)fAttach);
+}
+/* IsIconic — 原型同上: int16_t __stdcall vb6_di_IsIconic(intptr_t) */
+int16_t __stdcall vb6_di_IsIconic(intptr_t hWnd) {
+    return ((int16_t (WINAPI *)(intptr_t))IsIconic)(hWnd);
+}

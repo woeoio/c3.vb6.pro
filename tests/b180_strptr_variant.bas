@@ -65,13 +65,20 @@ Public Sub Main()
     vNum = 123456
     vEmptyStr = ""
 
-    ' the three pointer answers must not move: borrow must behave like the old unwrap did
+    ' borrow must hand out the slot's own BSTR (see P5); NULL-ness is a separate question:
+    ' VB6 的 StrPtr 只对 vbNullString 答 0 —— `e = ""` / `vEmptyStr = ""` 是**真的零长 BSTR**,
+    ' 必须非 0 (原口径按长度判空把这两档也压成 0, 已由 BalloonTooltips 的参考产物推翻:
+    ' `SetWindowTheme hTT, StrPtr(""), StrPtr("")` 在真 VB6 里关掉视觉样式, 气泡是经典彩色)。
     p1 = StrPtr(vStr)
     If p1 <> 0 Then Debug.Print "P1-var-string-nonzero=Y" Else Debug.Print "P1-var-string-nonzero=N"
     p1 = StrPtr(e)
-    Debug.Print "P2-empty-string=" & CLng(p1)
+    If p1 <> 0 Then Debug.Print "P2-empty-string-nonzero=Y" Else Debug.Print "P2-empty-string-nonzero=N"
     p1 = StrPtr(vEmptyStr)
-    Debug.Print "P3-variant-empty-string=" & CLng(p1)
+    If p1 <> 0 Then Debug.Print "P3-variant-empty-string-nonzero=Y" Else Debug.Print "P3-variant-empty-string-nonzero=N"
+    ' 未赋值的 String 才是 vbNullString (空指针): 这一档必须答 0
+    Dim u As String
+    p1 = StrPtr(u)
+    If p1 = 0 Then Debug.Print "P6-unassigned-string-null=Y" Else Debug.Print "P6-unassigned-string-null=N"
     p1 = StrPtr(vNum)
     If p1 <> 0 Then Debug.Print "P4-var-numeric-nonzero=Y" Else Debug.Print "P4-var-numeric-nonzero=N"
 

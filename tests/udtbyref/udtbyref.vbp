@@ -1,0 +1,4 @@
+Type=Exe
+Module=Cx; Cx.bas
+Module=Use; Use.bas
+Startup="Use"

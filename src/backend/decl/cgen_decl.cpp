@@ -476,6 +476,8 @@ void CCodeGen::visit(TypeDecl& node) {
     // 泛型模板 (tB, G2): 模板本体不发码 (特化副本由泛型器注入, 是普通 TypeDecl)
     if (!node.typeParams.empty()) return;
     std::string typeName = cIdent(node.name);
+    // 账 §G1 / §G1b: 记下本块在 .h 缓冲里的起点, 原样摘出来备案 (见 udtDefs_)
+    const size_t defStart = h_.size();
     bool hasPack = (node.packingAlignment > 0);
     if (hasPack) {
         h_.emitLine("#pragma pack(push, " + std::to_string(node.packingAlignment) + ")");
@@ -495,11 +497,19 @@ void CCodeGen::visit(TypeDecl& node) {
         // typeRefName 为空), 于是 `r.f = "ef"` 与 `Len(r.f)` 都无从知道该收口到 8。
         // 在这里按**声明**留一份 (键 = 结构体的 C 类型名), 供 fixedStrLenOfExpr 查。
         // 注意 emitExpr 会覆写 lastExpr_, 故先取长度再发字段行 (下面 mapTypeRef 已算完)。
-        if (member->type && member->type->kind == ASTNodeKind::FixedStringTypeRef) {
+        if (member->type && member->type->kind == ASTNodeKind::FixedStringTypeRef
+            && !member->arraySize && !member->isArrayDynamic) {
             auto& fsField = static_cast<FixedStringTypeRef&>(*member->type);
             emitExpr(*fsField.length);
             if (!lastExpr_.empty())
                 udtFixedStrFieldLen_["vb6_type_" + typeName][Symbol::toLower(member->name)] = lastExpr_;
+            // VB6 的 UDT 定长串在内存里是**内联 ANSI 字节** (String * 260 占 260 字节,
+            // 不是一只 BSTR 指针)。真 VB6 实测 SHFILEINFO 的 String * 260 / * 80 ⇒
+            // Len = 4+4+4+260+80 = 352; C3 原先发 BSTR ⇒ 20, SHGetFileInfoA 收
+            // cbFileInfo=20 直接返回 0 (hIcon=0) ⇒ Tree Explorer 图标全缺。
+            // 结构体侧必须按 ABI 发 char[N] (N 字节, 不含额外 NUL; VB6 亦如此)。
+            h_.emitLine("char " + memName + "[" + lastExpr_ + "];  /* fixed string (VB6 ABI: ANSI 内联) */");
+            continue;
         }
         // P15.2: 固定大小数组成员 (如 Buf(0 To 255) As Byte)
         if (member->arraySize) {
@@ -553,6 +563,19 @@ void CCodeGen::visit(TypeDecl& node) {
         h_.emitLine("#pragma pack(pop)");
     }
     h_.emitBlank();
+    // 账 §G1b: 同名 UDT 在多个模块各有一份声明时, 定义块内容可能不同 (各模块自己的
+    // 成员类型解析) —— 所以按 (模块, 类型名) 归档并带上可见性, 不再"同名先到者"。
+    // VB6 对象模块 (类/窗体) 里的 Type 一律模块私有 (Public Type 在对象模块非法);
+    // 标准模块里显式 Private 的同样不跨模块。只有标准模块的 Public Type 允许注入别处。
+    if (!typeName.empty()) {
+        UdtDefRecord rec;
+        rec.moduleLower = Symbol::toLower(moduleName_);
+        rec.typeName = typeName;
+        rec.isPrivate = (node.access == AccessLevel::Private)
+                        || isClassModule_ || isFormModule_;
+        rec.block = h_.substr(defStart);
+        udtDefs_.push_back(std::move(rec));
+    }
 }
 
 void CCodeGen::visit(TypeMember& node) {

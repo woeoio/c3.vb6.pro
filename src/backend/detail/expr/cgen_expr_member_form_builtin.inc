@@ -83,6 +83,31 @@
                 return;
             }
         }
+        // C2065 族①: `Me.<本窗体过程>` —— 窗体的自有 Sub/Function 用 Me 显式限定
+        // (`Me.ApplySepiaEffect params, True, pdFxPreview`, PhotoDemon 十余个效果窗体)。
+        // 语义就是本模块内的普通调用, 与裸名调用同一枚名字出口 (cProcName); 落进下面
+        // 「未知 Form 成员 → COM dispatch」那条宿主属性 stub 会先按属性去问 HWND, 再按
+        // 晚绑定打包实参 ⇒ 设计期控件名 (pdFxPreview/sltQuality) 被裸发成 C 标识符,
+        // C2065。判据只问模块作用域符号表 (本模块、非注入), 不靠名字清单。
+        {
+            Symbol* meProc = symTab_.lookupModule(node.memberName);
+            if (meProc && !meProc->isExternal
+                && (meProc->sourceModule.empty()
+                    || Symbol::toLower(meProc->sourceModule) == Symbol::toLower(moduleName_))
+                && (meProc->kind == SymbolKind::Sub || meProc->kind == SymbolKind::Function)) {
+                lastExpr_ = cProcName(node.memberName, meProc->access);
+                // 值上下文里 `x = Me.Fn` 是"无括号调用" (与 cgen_expr_ident_builtin.inc
+                // 同一条规则): callee 上下文由调用方追加实参表, 此处不重复。
+                if (!asCallCallee_ && meProc->kind == SymbolKind::Function) {
+                    bool hasRequired = false;
+                    for (const auto& p : meProc->P().params) {
+                        if (!p.isOptional && !p.isParamArray) { hasRequired = true; break; }
+                    }
+                    if (!hasRequired) lastExpr_ += "()";
+                }
+                return;
+            }
+        }
         // Form 的绘图状态属性 (CurrentX / CurrentY / DrawWidth) **不在这里答** ——
         // 上面那句 getControlPropReadFn(Form, 名) 就是唯一入口, 读写两侧成对登记在
         // cgen_util_ctrl.cpp 的那两张表里 (账 #233)。这里曾经另摆过四条硬编码:
@@ -320,7 +345,7 @@
                     //     vb6_frmMain_RibbonBar.FindTab C2065); 带 "()" 后外层按
                     //     COM 接收者续链。Sub 不能带 "()" —— 会被包成
                     //     vb6_ComCall(void 调用) (C2095, 实测)。
-                    bool xfZeroParams = xfSym->params.empty();
+                    bool xfZeroParams = xfSym->P().params.empty();
                     if (asCallCallee_ && (xfSym->kind == SymbolKind::Sub || !xfZeroParams)) {
                         lastExpr_ = xfCall;
                         return;
@@ -473,6 +498,24 @@
             // 绘图状态读 (CurrentX/CurrentY 上面已给, 这里补 ForeColor/DrawWidth)
             if (memLower == "forecolor") { lastExpr_ = "vb6_Printer_DrawGetForeColor()"; return; }
             if (memLower == "drawwidth") { lastExpr_ = "vb6_Printer_DrawGetWidth()"; return; }
+            // C2224: 四个**数据属性**。RTL 的 Printer 不是真 IDispatch,
+            // vb6_Printer_Object() 是 DC 指针 (void*) —— 落到下面的通用 COM 绑定
+            // 就是 `vb6_Printer_Object().DeviceName`, 在 void* 上取字段 = C2224
+            // (Printing.bas / File_PrintXP.frm 实测 5+1 条)。换成具名存取器。
+            if (memLower == "devicename") { lastExpr_ = "vb6_Printer_DeviceName()"; return; }
+            if (memLower == "port") { lastExpr_ = "vb6_Printer_Port()"; return; }
+            if (memLower == "copies") { lastExpr_ = "vb6_Printer_Copies()"; return; }
+            if (memLower == "printquality") { lastExpr_ = "vb6_Printer_PrintQuality()"; return; }
+            // File_PrintXP.frm:422/423 `Me.ScaleX(Printer.Width, Printer.ScaleMode, vbInches)`
+            // —— 源量纲。同一族 (void* 上取字段 = C2224), 走具名读出口。
+            if (memLower == "scalemode") { lastExpr_ = "vb6_Printer_ScaleMode()"; return; }
+        }
+
+        // C2224: Printers 集合的 Count。元素 Printers(i) 由 callee_ident 发
+        // vb6_Printers_Item(i) —— 返回 vb6_PrinterInfo **结构体值**, 其成员
+        // .DeviceName/.Port/.Copies/.PrintQuality 就是普通字段读, 不再进这里的表。
+        if (objLower == "printers") {
+            if (memLower == "count") { lastExpr_ = "vb6_Printers_Count()"; return; }
         }
 
         // P18-C: Forms 集合

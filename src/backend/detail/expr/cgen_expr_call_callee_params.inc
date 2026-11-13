@@ -36,6 +36,13 @@
         std::string idLower40 = Symbol::toLower(idExpr.name);
         if (!idLower40.empty() && idLower40.back() == '$') idLower40.pop_back();
         const bool calleeIsBuiltinFuncName40 = (kBuiltinFuncNames.count(idLower40) != 0);
+        // 账 §56.50: VB6 **保留语句关键字** (Randomize/Kill/Load/Unload) 顶不掉 ——
+        // 裸写永远是内建语句, 同名成员只能靠限定接收者调 (PD pdRandomizeUI.ctl:301
+        // `Me.Randomize`)。这一格若把那枚成员的**空形参表**当成被调方, 下游 Fix 041b
+        // 「实参多于形参就截断」会把种子实参全砍掉 ⇒ `vb6_Randomize()` ⇒ cl C2198
+        // 「too few arguments for call」(跨模块那枚; PD pdPaletteChild.cls:291-292 /
+        // pdRandomize.cls:118 三处)。口径问 common/reserved_stmt_keyword.hpp。
+        const bool calleeIsReservedStmtKeyword = isReservedStmtKeyword(idLower40);
         // 尝试多种查找方式: 先lookupModule(过程符号), 再lookup(嵌套作用域)
         Symbol* funcSym = symTab_.lookupModule(idExpr.name);
         if (!funcSym || (funcSym->kind != SymbolKind::Sub && funcSym->kind != SymbolKind::Function
@@ -52,7 +59,14 @@
             // 不采用属性的 (空) 形参表, 免得实参被清空。
             && !(calleeIsBuiltinFuncName40 && (funcSym->kind == SymbolKind::PropertyGet
                  || funcSym->kind == SymbolKind::PropertyLet
-                 || funcSym->kind == SymbolKind::PropertySet))) {
+                 || funcSym->kind == SymbolKind::PropertySet))
+            // 账 §56.50: 保留语句关键字让位给内建, 但**只让位给用户成员** ——
+            // 名字已经解析成内建出口 (vb6_Randomize 等), 形参表必须与之一致。
+            // ⚠ 只挡**用户**符号 (!funcSym->isBuiltin): `Load`/`Unload` 在语义层**本来**
+            // 就登记成内置符号, 让它也被挡掉会把 calleeIsBuiltin 从 true 翻成 false ⇒
+            // 那两枚内建的既有形状跟着变 (本机实测: guisample 的 `Unload Me.ActiveForm`
+            // 实参包装从有变无)。内置自己的登记一律不动。
+            && !(calleeIsReservedStmtKeyword && !funcSym->isBuiltin)) {
             // 重载变体 (O2): 语义层选定变体时, 形参表/返回类型以变体符号为准
             if (!node.calleeOvlSuffix.empty()) {
                 if (auto* ovSym = symTab_.lookupModuleOverloadBySuffix(
@@ -60,7 +74,7 @@
                     funcSym = ovSym;
                 }
             }
-            calleeParams = funcSym->params;
+            calleeParams = funcSym->P().params;
             calleeIsBuiltin = funcSym->isBuiltin;
             calleeParamsFound = true;
             // 0 参 Variant 返回值的下标形态 (见 calleeZeroArgVariantSubscript 注释)。
@@ -173,18 +187,23 @@
         // Use inferClassTypeOfExpr to determine the class type, then look up
         // member params. This enables Optional param padding for cross-module
         // method chain calls.
-        if (!classAwareResolved && maExpr.object
-            && maExpr.object->kind != ASTNodeKind::IdentifierExpr) {
-            std::string className = inferClassTypeOfExpr(*maExpr.object);
-            if (!className.empty()) {
-                std::vector<ParameterInfo> params;
-                bool isBuiltin = false;
-                if (findClassMemberCallParams(className, maExpr.memberName, params, isBuiltin)) {
-                    calleeParams = std::move(params);
-                    calleeIsBuiltin = isBuiltin;
-                    classAwareResolved = true;
-                    calleeParamsFound = true;
-                }
+        // G4/M1: 接收者类解析统一交给**唯一的类感知采纳点** tryAdoptReceiverClassParams
+        // (接收者类解析 = inferClassTypeOfExpr + 控件/控件数组 → 工程 UserControl 类)。
+        // 原判据只认 inferClassTypeOfExpr, 控件数组元素接收者 (`ddWhichFrame(1).AddItem ...`,
+        // object 是 IndexOrCallExpr) 推不出类 ⇒ 掉到下面 class-unaware 的
+        // lookupModule(memberName), 命中**跨类同名成员**的形参表 (pdListSupport.AddItem
+        // 5 参 vs pdDropDown.AddItem 4 参) ⇒ Optional 缺省多发一枚 + `_has_` 尾叜多一枚
+        // ⇒ 实参 11 枚打 9 参原型 ⇒ C2197 "too many arguments for call"。
+        // 门后的两条判据 (类答不出 / 类里没这枚成员) 仍逐字回落原兜底, 不静默改写。
+        if (!classAwareResolved && maExpr.object) {
+            std::vector<ParameterInfo> g4Params;
+            bool g4Builtin = false;
+            if (tryAdoptReceiverClassParams(*maExpr.object, maExpr.memberName,
+                                            g4Params, g4Builtin)) {
+                calleeParams = std::move(g4Params);
+                calleeIsBuiltin = g4Builtin;
+                classAwareResolved = true;
+                calleeParamsFound = true;
             }
         }
 
@@ -298,11 +317,57 @@
                     }
                 }
             }
+            // C2197: `Mod.Proc(...)` 的形参表不许借**本模块的同名过程**。本模块恰好有
+            // 一枚同名过程时 lookupModule 先命中它, 缺省/必填补齐按它的形参个数补,
+            // 于是实参比真正的被调方多一枚 —— 实测 Compression.bas:348
+            // `Plugin_libdeflate.GetDefaultCompressionLevel()` 本身 0 参, 被补成 1 参
+            // ⇒ `vb6_Plugin_libdeflate_GetDefaultCompressionLevel(0)` (整编 9 条)。
+            // 限定符不是本模块时, 宁可不补 (实参照原样发)。
+            // 只看**本地**符号: 注入的外部符号 (含窗体 `frm_proc` 那枚) 不能凭
+            // sourceModule 判掉 —— pd_meform 夹具里那枚的 sourceModule 是空/别名,
+            // 判掉会把 ByRef 类实例实参的 argtmp 转换整段丢掉。
+            //
+            // 宿主伪对象 (UserControl/Ambient/Extender/PropertyPage/Parent) 例外:
+            // `vb6_<伪对象>_<成员>` 的 C 签名就是**本类同名成员**的签名 (M22 分支),
+            // 这张表不但要借, 而且是唯一来源 —— 弃掉会把
+            // `vb6_Extender_Move(Left, Top, Width, Height, _has_Top, _has_Width, _has_Height)`
+            // 少发 3 枚 `_has_` 标志 (ucSegmentedControl.ctl / VBFlexGrid.ctl 实测)。
+            if (funcSym && !vbaQualifiedCallee216
+                && maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string qualLowerQ =
+                    Symbol::toLower(static_cast<IdentifierExpr&>(*maExpr.object).name);
+                if (!hostPseudoIsObject(qualLowerQ)
+                    && qualLowerQ != Symbol::toLower(moduleName_)) {
+                    if (!funcSym->isExternal) {
+                        funcSym = nullptr;
+                    } else if (!funcSym->sourceModule.empty()
+                               && Symbol::toLower(funcSym->sourceModule) != qualLowerQ
+                               && !knownLocalVars_.count(qualLowerQ)
+                               && !knownClassVars_.count(qualLowerQ)
+                               && !procObjectFormals_.count(qualLowerQ)) {
+                        // 同一族的另一半: 限定的 `Mod.Proc` 借到的是**别的模块**注入副本。
+                        // 跨模块注入按 storageKey (裸名) 去重、先注册者留, 所以同一裸名只有
+                        // 一份外部符号 —— 它可能来自另一个模块。实测 pdCanvas.ctl 里
+                        // Tools_Move/Tools_Zoom/Tools_Measure 三家都有 NotifyMouseMove,
+                        // 4 参那家借到 6 参那家的表 ⇒ 补两枚缺省 ⇒ C2197 (整编 22 条)。
+                        // 限定符是变量/形参时不适用: 变量名与类名本就不同源, 那条路是
+                        // `obj.Member(...)` 的 Optional 补齐, 弃了会变 C2198。
+                        //
+                        // 账 #305 §56.35: driver 现在给撞名的各家补了一份
+                        // `<mod>$x$<procKey>`, 先按它取**自家**形参表 —— 取到就不弃
+                        // (PD: Tools_Clone/Tools_Paint 的 GetModifiedUpdateRectF 曾有
+                        // C2198 + 返回 UDT 落 intptr_t 的 C2440)。取不到才维持原判。
+                        Symbol* qProc = symTab_.lookupQualifiedProc(
+                            qualLowerQ, Symbol::toLower(maExpr.memberName));
+                        funcSym = qProc ? qProc : nullptr;
+                    }
+                }
+            }
             if (funcSym && (funcSym->kind == SymbolKind::Sub || funcSym->kind == SymbolKind::Function
                 || funcSym->kind == SymbolKind::PropertyGet || funcSym->kind == SymbolKind::PropertyLet
                 || funcSym->kind == SymbolKind::PropertySet
                 || funcSym->kind == SymbolKind::DeclareSub || funcSym->kind == SymbolKind::DeclareFunc)) {
-                calleeParams = funcSym->params;
+                calleeParams = funcSym->P().params;
                 calleeIsBuiltin = funcSym->isBuiltin;
                 calleeParamsFound = true;
                 // Fix 042a: Track Declare functions for _has_ flag suppression
@@ -352,7 +417,7 @@
                     || wmSym210b->kind == SymbolKind::PropertyGet
                     || wmSym210b->kind == SymbolKind::PropertyLet
                     || wmSym210b->kind == SymbolKind::PropertySet)) {
-                    calleeParams = wmSym210b->params;
+                    calleeParams = wmSym210b->P().params;
                     calleeIsBuiltin = wmSym210b->isBuiltin;
                     calleeParamsFound = true;
                 }

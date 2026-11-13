@@ -98,6 +98,73 @@ struct ParameterInfo {
     std::string defaultValueExpr;       // C表达式字符串(如"10", "vb6_BSTR_FromStr(L\"hello\")", "-1"等)
 };
 
+// ============================================================
+// COM / Delegate 子结构 (命名空间作用域)
+// ============================================================
+// 这两个类型原本嵌套在 Symbol 内部。载荷共享第二刀要把 comMethods / comSourceMethods /
+// comModuleFunctions / delegateTargets 收进 SymbolPayload, 而载荷定义在 Symbol 之前 ——
+// 嵌套类型在那里不可见。故先做纯机械上提: 字段与方法签名一字不改, Symbol 内保留同名
+// using 别名, 既有 `Symbol::ComMethodSig` 写法继续有效 (零行为变化)。
+struct ComMethodSig {
+    std::string realName;         // 原始名称(保留大小写)
+    int32_t memid = 0;           // DISPID
+    int32_t vtableIndex = -1;    // vtable偏移
+    Vb6Type returnType = Vb6Type::Void;  // 返回类型
+    bool isPropertyGet = false;
+    bool isPropertyPut = false;
+    bool isPropertyPutRef = false;
+    std::vector<ParameterInfo> params;  // 参数列表(含方向/类型)
+};
+
+// 语义层在 AddressOf 绑定成功时登记的静态目标 (v1 限同模块过程).
+// cgen 按对子生成调用桩: 桩用委托约定的签名, 体内转调 cdecl 过程本体.
+struct DelegateTarget {
+    std::string procName;     // VB 过程名 (原样)
+    std::string procModule;   // "" = 当前模块 (v1 仅此形态)
+    // 绑定的具体重载变体指纹 (O2): "" = 该名字无重载组 (旧行为);
+    // 非空 = 组内 fp 精确匹配的那条 (含 head), cgen 据此找回声明并区分桩名.
+    std::string procFp;
+};
+
+// ============================================================
+// 不可变载荷 (SymbolPayload)
+// ============================================================
+// 这一批字段在**本模块分析结束**之后就不再变, 且跨模块注入时是逐字段深拷贝的大头
+// (每枚外部副本各带 11 张成员表)。把它们收进一份堆上载荷, 注入时只共享指针
+// (Symbol::sharePayloadFrom), 消费模块的壳只留 16 字节 —— 不再逐消费模块深拷贝。
+//
+// 读写纪律:
+//   · 读: `sym->P().memberNames`  (P() 返回 const 引用; 载荷为空时给全默认静态实例)
+//   · 写: `sym->W().memberNames`  (W() 先做 COW: 载荷与别人共享时先克隆一份)
+// 为什么写必须走 W(): 注入之后源模块与消费模块共享同一份载荷, 原地写会让 A 模块的
+// 回填补到 B 模块眼里 (跨模块串值, 无崩溃无诊断)。COW 保证"注入那一刻的快照"语义
+// 与逐字段深拷贝逐字节一致。
+struct SymbolPayload {
+    // --- 类成员表 (Fix 015/016/033/091a/092m/092p/099, tB B08a) ---
+    std::vector<std::string> memberNames;              // 类成员名称列表(方法+属性+事件)
+    std::unordered_map<std::string, std::string> memberReturnTypes;   // Fix 015
+    std::unordered_map<std::string, ProcKind> memberProcKinds;        // Fix 016
+    std::unordered_map<std::string, std::vector<ParameterInfo>> memberParams;  // Fix 033
+    std::unordered_map<std::string, std::string> memberFieldTypes;    // Fix 092m
+    std::unordered_map<std::string, std::string> memberFieldNames;    // Fix 092p
+    std::vector<std::string> publicFieldNames;                        // Fix 099
+    std::unordered_map<std::string, int32_t> memberFieldDispids;      // Fix 099
+    std::unordered_map<std::string, AccessLevel> memberAccessLevels;  // tB B08a
+    std::unordered_map<std::string, std::vector<ParameterInfo>> memberLetParams;  // Fix 091a
+    std::unordered_map<std::string, std::vector<ParameterInfo>> memberSetParams;  // Fix 091a
+    // --- COM 方法签名表 / Delegate 签名 (第二刀) ---
+    std::unordered_map<std::string, ComMethodSig> comMethods;          // key=小写方法名
+    std::unordered_map<std::string, ComMethodSig> comSourceMethods;    // source interface 方法签名
+    std::unordered_map<std::string, ComMethodSig> comModuleFunctions;  // P24-04: COM Module全局函数
+    ProcKind delegateProcKind = ProcKind::Sub;
+    CallConv delegateCallConv = CallConv::StdCall;
+    Vb6Type delegateReturnType = Vb6Type::Void;
+    std::vector<DelegateTarget> delegateTargets;
+    // --- 过程形参表 (第三刀) ---
+    // 跨模块注入时随载荷共享, 不再逐消费模块深拷贝 ParameterInfo 向量。
+    std::vector<ParameterInfo> params;
+};
+
 struct Symbol {
     std::string name;           // 原始名称 (保留大小写)
     std::string lowerName;      // 小写名称 (用于查找)
@@ -111,7 +178,7 @@ struct Symbol {
     AccessLevel access = AccessLevel::Public;
 
     // 过程相关
-    std::vector<ParameterInfo> params;
+    // 形参表已收进 SymbolPayload (见结构体定义), 读 `P().params`, 写 `W().params`。
     bool isStatic = false;      // Static Sub/Function
     bool isArray = false;       // 数组变量
     int32_t dimCount = 0;       // 数组维度数 (0=非数组, 1=一维, 2+=多维)
@@ -162,7 +229,9 @@ struct Symbol {
 
     // --- 类相关 (仅SymbolKind::Class) ---
     VBInstancing instancing = VBInstancing::Private;  // Instancing属性
-    std::vector<std::string> memberNames;              // 类成员名称列表(方法+属性+事件)
+    // 注: 下面这批成员表的**实际存储**已收进 SymbolPayload (见本文件顶部与 payload_ 处),
+    // 跟着它们的历史注释留在原位, 作为字段文档; 代码里一律用 `sym->P().<表名>` 读、
+    // `sym->W().<表名>` 写。
     // Fix 015: 成员返回类型表 — 仅记录 Function/PropertyGet 返回类型名为命名类型
     // (即 returnType 是 SimpleTypeRef 的成员) 的方法. key=成员名小写, value=返回类型名(源码原样).
     // 用于 method chaining: 当跨模块 storageKey 冲突导致消费模块符号表中找不到
@@ -173,7 +242,6 @@ struct Symbol {
     //     同名 Property Get/Let/Set 共用同一个 lowerName 键; 只在 Get 时写入,
     //     Let/Set 会覆盖. 因 Get 先于 Let/Set 处理, 同名共存时记录的是 Get 的返回类型
     //     (后者无返回类型, 不写入, 但会覆盖 — 故需在写入前判断 node.propKind==Get).
-    std::unordered_map<std::string, std::string> memberReturnTypes;
     // Fix 016: 成员过程类型表 — 解决 prop_get_ 前缀启发式误判 (Fix 014b 遗留).
     // 跨模块 storageKey 冲突场景下 resolveClassMemberCall 的 fallback 需要判断
     // 目标成员在目标类中到底是 Function/Sub (无前缀) 还是 Property Get/Let/Set
@@ -187,7 +255,6 @@ struct Symbol {
     // - PropertyLet → 仅在当前键不存在或为 Let/Set 时写入 (不覆盖 Get/Function)
     // - PropertySet → 仅在当前键不存在或为 Let 时写入    (不覆盖 Get/Function/Let)
     // 读上下文 (resolveClassMemberCall) 优先级: Get > Function > Sub > Let > Set.
-    std::unordered_map<std::string, ProcKind> memberProcKinds;
     // Fix 033: 成员参数表 — 解决 IndexOrCallExpr calleeParams 跨模块 storageKey 冲突.
     // 当 cTlsSocket.Create / cAsyncSocket.Create / cPassword.Create 共享 storageKey="create"
     // 时, driver.cpp 的 globalPublicSyms 按 storageKey 去重, 仅首个注册者的 sourceModule
@@ -196,7 +263,6 @@ struct Symbol {
     // 与 memberProcKinds 同一优先级 (Get > Function > Sub > Let > Set), 仅在 procKind 写入
     // 胜出时同步更新 memberParams, 确保表中存储的是该类该成员读上下文优先级最高的参数表.
     // 用于 IndexOrCallExpr 中 Optional 参数 _has_ 标志计数匹配, 避免 C2197.
-    std::unordered_map<std::string, std::vector<ParameterInfo>> memberParams;
     // Fix 092m: 成员数据字段类型表 — 类模块顶层变量 (仅 As <简单类型> 字段).
     // key=字段名小写, value=源码类型名 (原样, 如 "String"/"Long"/"Date"/"cTlsReMaster").
     // 用途: With 块类字段写 `temp->field = <COM 属性读>` 需按目标字段类型选择 COM
@@ -204,13 +270,11 @@ struct Symbol {
     // ComGetDoubleProp / Object→ComGetObjectProp). 此前无类型信息一律按默认 BSTR
     // 解包 → int32_t 字段收到 BSTR 指针 (cHttpServer 373 `.Port = m_oServer.RemotePort`
     // 编译通过但语义错); 且 COM 标记不消费会泄漏到下一条语句 (374 C2440).
-    std::unordered_map<std::string, std::string> memberFieldTypes;
     // Fix 092p: 成员数据字段的**声明原名**表 — key=字段名小写, value=声明时原样名
     // (如 "Socket"). C 结构体成员名按声明生成, 而 VB6 大小写不敏感: 源码里写
     // `.socket` (cHttpServerResponse 487 `Client.socket.SendData`) 也会指向同一字段,
     // cgen 直接 cIdent(源码名) → `me->Client->socket` C2039. 字段访问生成点用
     // canonicalClassFieldName() 规范化回声明名.
-    std::unordered_map<std::string, std::string> memberFieldNames;
     // Fix 099: 类模块**显式 Public** 数据字段清单 (ActiveX DLL 的 COM 暴露用).
     // 真 VB6 把类的 Public 字段暴露成 Property Get/Let 对; 此前 C3 只把
     // Sub/Function/Property 收进 memberNames, Public 字段完全不进 IDispatch 表
@@ -223,12 +287,10 @@ struct Symbol {
     // Private, 故必须排除 Default — 否则 cHttpServer 的 `Dim m_Sessions As ...`
     // 这类内部字段会被误暴露. 数组/WithEvents/As New 不暴露 (VB6 亦然).
     // 存声明原名, 保持声明顺序 (生成的表项顺序稳定).
-    std::vector<std::string> publicFieldNames;
     // Fix 099: Public 字段的 TypeLib DISPID (driver 在 TypeLib 阶段回写).
     // key=字段名小写, 0/缺省=尚未分配. dll_entry.c 的字段表读它, 保证与
     // TypeLib 中同名字段的 dispid 一致 (否则早绑定客户端按 TypeLib 的 dispid
     // 调 Invoke 会命中错项).
-    std::unordered_map<std::string, int32_t> memberFieldDispids;
     // Fix 091a: 成员写方向参数表 — memberParams 按读上下文优先级 (Get > Function >
     // Sub > Let > Set) 只存胜出者, 对「Get 有参 + Let 末参才是 value」的属性
     // (cJson.Item(key)/Let Item(key, Dat As Variant)) 会存成 Get 的 [key], 使
@@ -238,9 +300,24 @@ struct Symbol {
     // tB 类继承 (B08a): 成员小写键 -> 声明时的访问级别。既有 11 张成员表都不带访问级别,
     // 而 `Protected` 的语义 (家族内可见) 与 `Inherits` 的可见面裁决都要读它; 跨模块拷贝
     // (driver_crossmod) 与继承合并 (driver_classchain) 两处都得带上, 漏一张就是静默错判。
-    std::unordered_map<std::string, AccessLevel> memberAccessLevels;
-    std::unordered_map<std::string, std::vector<ParameterInfo>> memberLetParams;
-    std::unordered_map<std::string, std::vector<ParameterInfo>> memberSetParams;
+    // --- 不可变载荷 (上面 11 张成员表) ---
+    // 读走 P(), 写走 W(); 语义见 SymbolPayload 顶部注释。
+    // 跨模块注入用 sharePayloadFrom() 共享同一份, 不再逐消费模块深拷贝。
+    std::shared_ptr<SymbolPayload> payload_;
+
+    const SymbolPayload& P() const {
+        static const SymbolPayload kEmpty;
+        return payload_ ? *payload_ : kEmpty;
+    }
+    SymbolPayload& W() {
+        if (!payload_) {
+            payload_ = std::make_shared<SymbolPayload>();
+        } else if (payload_.use_count() > 1) {
+            payload_ = std::make_shared<SymbolPayload>(*payload_);  // COW: 与别人共享时先克隆
+        }
+        return *payload_;
+    }
+    void sharePayloadFrom(const Symbol& src) { payload_ = src.payload_; }
     bool isInterface = false;                          // 是否为接口类(纯抽象,无实现)
     std::vector<std::string> implementsNames;          // Implements列表: 该类实现的接口名
     // 接口方法(仅isInterface=true时有意义): 必须被实现类覆盖的方法签名
@@ -279,18 +356,9 @@ struct Symbol {
     std::unordered_map<std::string, int32_t> comEventDispids;  // 事件源方法名(lower)→DISPID
 
     // COM方法签名 (ComInterface用, 方法名小写→签名)
-    struct ComMethodSig {
-        std::string realName;         // 原始名称(保留大小写)
-        int32_t memid = 0;           // DISPID
-        int32_t vtableIndex = -1;    // vtable偏移
-        Vb6Type returnType = Vb6Type::Void;  // 返回类型
-        bool isPropertyGet = false;
-        bool isPropertyPut = false;
-        bool isPropertyPutRef = false;
-        std::vector<ParameterInfo> params;  // 参数列表(含方向/类型)
-    };
-    std::unordered_map<std::string, ComMethodSig> comMethods;  // key=小写方法名
-    std::unordered_map<std::string, ComMethodSig> comSourceMethods;  // source interface 方法签名 (key=小写方法名)
+    // 类型已上提到命名空间作用域 (见本文件上方), 这里保留同名别名以兼容 `Symbol::ComMethodSig`。
+    // 表本体已收进 SymbolPayload (见结构体定义), 读 `P().comMethods`, 写 `W().comMethods`。
+    using ComMethodSig = ::vb6c3::ComMethodSig;
 
     // P24-10: COM默认成员名 (DISPID_VALUE=0, 如 Dictionary.Item, Collection._Item)
     // VB6语义: obj(args) 等价于 obj.DefaultMember(args)
@@ -309,7 +377,7 @@ struct Symbol {
 
     // --- P24-04: COM Module全局函数 (SymbolKind::ComModule) ---
     std::string comModuleDllPath;    // 源DLL路径 (用于LoadLibrary)
-    std::unordered_map<std::string, ComMethodSig> comModuleFunctions;  // key=小写函数名
+    // comModuleFunctions 表已收进 SymbolPayload (见结构体定义), 读 `P()`, 写 `W()`。
 
     // --- P24-04: VB_GlobalNameSpace promoted函数 (SymbolKind::ComGlobalNs) ---
     // coclass的VB_GlobalNameSpace=True时, 默认接口的Public方法提升为全局符号
@@ -320,21 +388,11 @@ struct Symbol {
     std::string comGlobalNsMethodName;  // P24-04: 提升的方法名 (原始大小写, 如"VBMAN")
 
     // --- Delegate 签名 (仅 SymbolKind::Delegate) ---
-    // 委托值本身按 Vb6Type::LongPtr 表示 (位兼容), 签名细节存这里,
-    // 供赋值/传参/调用点的签名检查与后端桩生成使用.
-    ProcKind delegateProcKind = ProcKind::Sub;
-    CallConv delegateCallConv = CallConv::StdCall;
-    Vb6Type delegateReturnType = Vb6Type::Void;
-    // 语义层在 AddressOf 绑定成功时登记的静态目标 (v1 限同模块过程).
-    // cgen 按对子生成调用桩: 桩用委托约定的签名, 体内转调 cdecl 过程本体.
-    struct DelegateTarget {
-        std::string procName;     // VB 过程名 (原样)
-        std::string procModule;   // "" = 当前模块 (v1 仅此形态)
-        // 绑定的具体重载变体指纹 (O2): "" = 该名字无重载组 (旧行为);
-        // 非空 = 组内 fp 精确匹配的那条 (含 head), cgen 据此找回声明并区分桩名.
-        std::string procFp;
-    };
-    std::vector<DelegateTarget> delegateTargets;
+    // 委托值本身按 Vb6Type::LongPtr 表示 (位兼容), 签名细节存这个载荷 (见结构体定义),
+    // 供赋值/传参/调用点的签名检查与后端桩生成使用. 读 `P()`, 写 `W()`。
+    // 语义层在 AddressOf 绑定成功时登记的静态目标也收在同一载荷的 delegateTargets 里.
+    // 类型已上提到命名空间作用域, 这里保留同名别名以兼容 `Symbol::DelegateTarget`。
+    using DelegateTarget = ::vb6c3::DelegateTarget;
 
     // --- P20-21: UDT成员信息 (仅SymbolKind::UserDefinedType) ---
     struct UdtMemberInfo {
@@ -468,14 +526,43 @@ public:
     //              (类型符号改用 <name>$ty), 留空时按 Symbol::storageKey() 推导.
     bool define(std::unique_ptr<Symbol> sym, const std::string& keyOverride = std::string());
 
-    // 按名称查找 (本作用域, 不递归) - 返回第一个匹配
+    // 按名称查找 (本作用域 + 共享层, 不递归) - 返回第一个匹配
+    // 共享层 (sharedScope_, 仅模块级作用域会设置) 是**非拥有**的只读回退:
+    // 本地命中即返回, 本地未命中才问共享层。
     Symbol* lookupLocal(const std::string& name) const;
 
-    // 按名称+类别查找 (本作用域, 不递归) - 精确匹配
+    // 按名称+类别查找 (本作用域 + 共享层, 不递归) - 精确匹配
     Symbol* lookupLocalByKind(const std::string& name, SymbolKind kind) const;
 
     // 按名称查找 (递归向上搜索所有祖先作用域)
     Symbol* lookup(const std::string& name) const;
+
+    // 共享符号层 (非拥有). 只有模块级作用域设置, 由 SymbolTable::setSharedScope 下发。
+    void setSharedScope(const Scope* s) { sharedScope_ = s; }
+    const Scope* sharedScope() const { return sharedScope_; }
+
+    // 精确存储键查找: 本地优先, 未命中回退共享层.
+    // 用途: SymbolTable::define/defineExternal 的"这个名字是否已被占用"判定 ——
+    // 占键者可能在共享层 (类型库内建符号), 判占用必须看得见它。
+    Symbol* peek(const std::string& storageKey) const {
+        auto it = symbols_.find(storageKey);
+        if (it != symbols_.end()) return it->second.get();
+        if (!sharedScope_ || isShadowed(storageKey)) return nullptr;
+        return sharedScope_->peek(storageKey);
+    }
+
+    // 遮蔽标记: 本模块声明了用户符号 (过程/变量/常量/属性...) 与共享层的内建符号同名时,
+    // SymbolTable::define 会把内建符号从**本地表**里删掉 (VB6: 工程内声明优先于引用库).
+    // 共享化之后内建符号不在本地表里, 删不掉 —— 于是把名字记在这里, 让所有共享回退
+    // (lookupLocal / lookupLocalByKind / peek) 对该名字短路, 复现"内建符号已被删"的语义。
+    void shadowShared(const std::string& lowerName) { shadowedShared_.insert(lowerName); }
+    bool isShadowed(const std::string& storageKey) const {
+        if (shadowedShared_.empty()) return false;
+        if (shadowedShared_.count(storageKey)) return true;
+        const size_t dollar = storageKey.find('$');
+        return dollar != std::string::npos
+            && shadowedShared_.count(storageKey.substr(0, dollar)) != 0;
+    }
 
     // 获取所有符号
     const std::unordered_map<std::string, std::unique_ptr<Symbol>>& symbols() const {
@@ -486,8 +573,16 @@ public:
     Scope* parent() const { return parent_; }
 
 private:
+    // 只看本作用域 (不含共享层) 的查找实现 —— 供 lookupLocal/lookupLocalByKind 的
+    // 共享回退复用, 也保证共享层自身不会再递归回退。
+    Symbol* lookupOwnLocal(const std::string& name) const;
+    Symbol* lookupOwnLocalByKind(const std::string& name, SymbolKind kind) const;
+
     ScopeKind kind_;
     Scope* parent_;
+    const Scope* sharedScope_ = nullptr;  // 非拥有; 仅模块级作用域可非空
+    // 已被本地用户声明遮蔽的共享层名字 (小写裸名), 见 shadowShared().
+    std::unordered_set<std::string> shadowedShared_;
     std::unordered_map<std::string, std::unique_ptr<Symbol>> symbols_;  // key=storageKey()
 };
 
@@ -508,6 +603,15 @@ public:
 
     // 模块级作用域
     Scope* moduleScope() const { return moduleScope_; }
+
+    // 共享符号层 (非拥有, 只读): 模块作用域的查找回退。
+    // 只解决"同一批类型库符号被每模块各造一份"的重复; analyzers_ 自有符号仍各存各的。
+    void setSharedScope(const Scope* s) {
+        if (moduleScope_) moduleScope_->setSharedScope(s);
+    }
+    const Scope* sharedScope() const {
+        return moduleScope_ ? moduleScope_->sharedScope() : nullptr;
+    }
 
     // 定义符号 (当前作用域)
     bool define(std::unique_ptr<Symbol> sym);
@@ -558,7 +662,15 @@ public:
     // 在模块级作用域定义一个isExternal=true的符号
     // replaceBuiltinCom: 仅当同名占用者是**类型库内建** coclass/接口、且待注入的是
     // 工程 Class 时替换之 (VB6: 工程类遮蔽引用库同名 coclass; Fix <vbeclipse>)
-    void defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom = false);
+    // keyOverride: 非空时按该键落库（而不是 sym->storageKey()）。给"跨模块同名过程"
+    // 的**第二份起**用：裸键被先到者占着时，其余各家用 `<mod>$x$<storageKey>` 各自
+    // 保留一份，限定调用 `Mod.Proc` 才能拿到**自家**的形参表与返回类型。
+    void defineExternal(std::unique_ptr<Symbol> sym, bool replaceBuiltinCom = false,
+                        const std::string& keyOverride = std::string());
+
+    // 按 `<modLower>$x$<procLower>` 查"跨模块同名过程"的限定副本（任何 kind 后缀）。
+    // 只读本地模块作用域；裸键语义不变（裸名引用仍命中先到的那一份）。
+    Symbol* lookupQualifiedProc(const std::string& modLower, const std::string& procLower) const;
 
     // 获取所有模块级Public符号（供其他模块链接用）
     // 返回 name → Symbol* 的映射（仅Sub/Function/Variable/Constant, Public访问级别）

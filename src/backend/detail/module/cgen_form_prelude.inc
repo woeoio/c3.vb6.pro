@@ -90,11 +90,23 @@
     int formBackColor = -1;
     it = frmDesc.formControl.properties.find("BackColor");
     if (it != frmDesc.formControl.properties.end()) formBackColor = (int)it->second.intValue;
+    // 窗体级 ForeColor (OLE 色) — Ambient.ForeColor 的唯一来源 (UserControl 的环境属性
+    // = 容器前景色); 未指定时 -1, UC 侧保持原全局值不动.
+    int formForeColor = -1;
+    it = frmDesc.formControl.properties.find("ForeColor");
+    if (it != frmDesc.formControl.properties.end()) formForeColor = (int)it->second.intValue;
     // czUI fix: BorderStyle (默认 2=Sizable)。0=None 时 RTL 创建无边框窗口,
     // 否则自绘标题栏 (BorderStyle=None 的 .ctl 窗体) 会叠在系统标题栏下面。
     int formBorderStyle = 2;
     it = frmDesc.formControl.properties.find("BorderStyle");
     if (it != frmDesc.formControl.properties.end()) formBorderStyle = (int)it->second.intValue;
+    // 窗体级 OLEDropMode (0=无/1=Manual/2=Automatic): 设计期非 0 时, load 里把窗体
+    // 注册成 OLE 放置目标 (与控件那条同一出口, 见 cgen_form_ctrl_style_apply.inc)。
+    // 运行期由 `vb6_SetOLEDropMode` 切 —— Processor.bas 的
+    // `FormMain.OLEDropMode = vbOLEDropNone/vbOLEDropManual` 就是这一对。
+    int formOLEDropMode = 0;
+    it = frmDesc.formControl.properties.find("OLEDropMode");
+    if (it != frmDesc.formControl.properties.end()) formOLEDropMode = (int)it->second.intValue;
 
     // czUI fix: UC 事件接线 (文件作用域) — 对每个工程内 UserControl 实例:
     // 解析 .ctl 的 Public Event 声明, 若窗体代码定义了 <实例>_<事件> 处理器,
@@ -203,7 +215,8 @@
                             // (emitEventSink 的 typedef、thunk、处理器形参三处都问它)。
                             // 声明是这里从 .ctl 文本里切的，所以 ByRef 那一档也从同一段文本认。
                             ev.pbyaddr.push_back(eventParamByAddress(
-                                nameSeg.find("byref") != std::string::npos, isArrParam259) ? 1 : 0);
+                                nameSeg.find("byref") != std::string::npos, /*isByVal=*/false,
+                                /*isUserControl=*/true, isArrParam259) ? 1 : 0);
                             pcur = tEnd;
                         }
                     }

@@ -30,7 +30,7 @@
         Symbol* dsym = symTab_.lookupModule(node.name);
         if (dsym && (dsym->kind == SymbolKind::DeclareSub
                      || dsym->kind == SymbolKind::DeclareFunc)
-            && !dsym->params.empty()) {
+            && !dsym->P().params.empty()) {
             explicitDeclareWins = true;
         }
     }
@@ -137,7 +137,7 @@
         // 同一判定方式: 函数名以 "vb6_<本类>_" 前缀开头即本类成员方法.
         if (!asCallCallee_ && !std::getenv("C3_NO_BAREFN")) {
             bool hasRequired = false;
-            for (const auto& p : sym->params) {
+            for (const auto& p : sym->P().params) {
                 if (!p.isOptional && !p.isParamArray) { hasRequired = true; break; }
             }
             if (!hasRequired) {
@@ -261,6 +261,14 @@
         }
         if (lower == "extender") {
             lastExpr_ = "(&vb6_UserControl_Extender)";
+            return;
+        }
+        // VB6 UserControl 内建 `Parent`（宿主容器对象，不是容器窗口）：RTL 没有对应
+        // 全局，唯一答复是 vb6_UC_ParentObject()（Fix 133u 那条文本改写对裸符号也是
+        // 这个答案，这里先在 AST 侧落定，免得 `Parent.<成员>` 链拼出未声明的符号）。
+        // PhotoDemon pdCommandBar.ctl 的 7 处 `Parent.Controls` 由 member precheck 拦截。
+        if (lower == "parent") {
+            lastExpr_ = "vb6_UC_ParentObject()";
             return;
         }
         std::string rtlHp;

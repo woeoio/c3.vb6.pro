@@ -1,6 +1,13 @@
 ﻿param(
     [Parameter(Mandatory=$true)][string]$Exe,
     [string]$OutDir = "",
+    # 真 VB6 基准 exe (uctv_vb6_baseline.ps1 产出)。给了就先量它, 再用它的实拍读数判 C3。
+    [string]$RefExe = "",
+    # 基准读数落盘/复用路径。给了 RefExe 就写; 只给这个文件就读现成的 (省一次 VB6 起停)。
+    [string]$RefJson = "",
+    # 只跑「数值增减控件 hover 三角」这一条判据 (起窗 -> park/hover/leave -> 判定 -> 退出)。
+    # 用途: 旧产物必须红、真 VB6 参考 exe 必须绿 —— 两边用同一条断言, 不靠肉眼。
+    [switch]$HoverOnly,
     [int]$Sec = 10
 )
 # uctreeview_px.ps1 — ucTreeView 树区**上屏**判据 (本机验收夹具; -Category guisample 分片调用).
@@ -16,10 +23,19 @@
 # 改后实测 (设计期 AutoRedraw + Collection ByRef 两刀): white=48052 bg240=5446
 #            dark=15607 darkRows=445 hl=2521 vivid=3559
 #
-# 口径: 只有**缺产物 / 位宽不符 / 缺 img 资产 / 桌面捕获为空图**才 SKIP;
-# "窗口起了但树区没画" 一律 FAIL (那就是本判据要红的东西).
+# 口径: 只有**缺产物 / 位宽不符 / 缺资产(img 夹具或 XML 源文件不在) / 桌面捕获为空图**才 SKIP;
+# "窗口起了但树区没画"、"夹具在而产物少资产(图片或 XML)" 一律 FAIL (那就是本判据要红的东西).
 
-Add-Type -AssemblyName System.Drawing
+# pwsh 7.6 (.NET 10) 把 System.Drawing 拆成多个程序集, 且 **Add-Type 引不住它**:
+# 显式 -ReferencedAssemblies 会覆盖默认引用集 (CS0234/CS1069: Thread/Collections/Bitmap
+# 全都解析不出来)。因此 C# 段刻意**不用任何 System.Drawing 类型** —— 只留 P/Invoke +
+# byte[] 统计; 位图/抓屏/存 PNG 走 PowerShell 运行时 ([System.Drawing.Bitmap] 可直接用)。
+# 全流程统一 pwsh, 不再有 5.1 分支。
+# CI runner 的 pwsh 里**没有** System.Drawing.Common 这个程序集名 (实测
+# ASSEMBLY_NOT_FOUND → 后面 [System.Drawing.Bitmap] 全 TypeNotFound), 而本机 7.6
+# 两个名字都能装。以 System.Drawing 为主(= 其它 px 脚本统一口径), 失败再退 Common。
+try { Add-Type -AssemblyName System.Drawing -ErrorAction Stop }
+catch { Add-Type -AssemblyName System.Drawing.Common }
 Add-Type @"
 using System; using System.Text; using System.Runtime.InteropServices;
 public class UP {
@@ -34,6 +50,17 @@ public class UP {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  // 抬前台: 显示 + 还原 + TOPMOST + 置前. 前台锁可能拒绝, 调用方负责重试并校验
+  // GetForegroundWindow (raw 采集失败的那几次就是只调一次被拒).
+  public static bool ForceForeground(IntPtr h) {
+    if (h == IntPtr.Zero) return false;
+    if (IsIconic(h)) ShowWindow(h, 9);
+    ShowWindow(h, 5);
+    SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0003);  // HWND_TOPMOST|NOMOVE|NOSIZE
+    SetForegroundWindow(h);
+    return GetForegroundWindow() == h;
+  }
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, int flags);
   [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr h, IntPtr r, IntPtr rgn, int flags);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
@@ -68,12 +95,111 @@ public class UP {
     return sz.cx;
   }
   public struct RECT { public int L, T, R, B; }
-  // 残差 #8: WM_GETFONT → LOGFONT 一行读数 "面名|高度|字符集|字重"; 无字体返回 ""
+  // 残差 #8: WM_GETFONT → LOGFONT 一行读数 "面名|高度|字符集|字重|质量"; 无字体返回 ""。
+  // 2026-11-10: 第 5 字段 lfQuality 是这轮加上的 —— 字体名/高/重相同而渲染仍差时,
+  // 唯一还剩的字体侧变量就是 AA 质量档 (0=default/1=draft/2=proof/3=antialiased/4=cleartype)。
   public static string LogFontOf(IntPtr h) {
     IntPtr hf = SendMessageW(h, 0x0031, IntPtr.Zero, IntPtr.Zero);   // WM_GETFONT
     if (hf == IntPtr.Zero) return "";
     var lf = new LOGFONTW(); if (GetObjectW(hf, 92, ref lf) <= 0) return "";
-    return lf.lfFaceName + "|" + lf.lfHeight + "|" + lf.lfCharSet + "|" + lf.lfWeight;
+    return lf.lfFaceName + "|" + lf.lfHeight + "|" + lf.lfCharSet + "|" + lf.lfWeight + "|" + lf.lfQuality;
+  }
+  // --- ucTreeView 交互判据 (2026-11-06 缺陷 1/2/3/4) ---
+  // 口径: 所有"等窗口"都有上限 (调用方给 3s), 模态盒 (#32770) 一律 WM_CLOSE 收口并校验
+  // IsWindow=false; 主窗恢复响应用 SendMessageTimeout(WM_NULL, 2s) 单证。
+  [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder sb, int n);
+  [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr h, uint m, IntPtr w, IntPtr l, uint flags, uint timeout, out IntPtr res);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, IntPtr e);
+  public static string WText(IntPtr h) { var sb = new System.Text.StringBuilder(512); GetWindowTextW(h, sb, 512); return sb.ToString(); }
+  // 跨进程 GetWindowText 对 Edit **只回缓存标题**（2026-11-07 实测：_Change 早已把文本改掉，
+  // 但 GetWindowText 仍读到旧值 —— 组 3 的"txt 不联动"就是被这条采集缺陷骗出来的）。
+  // Edit 的真文本只能经 WM_GETTEXT 取（系统消息里少数跨进程会被封送的一枚）。
+  public static string WTextReal(IntPtr h) {
+    IntPtr buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(2048);
+    try { SendMessageW(h, 0x000D, (IntPtr)1024, buf); return System.Runtime.InteropServices.Marshal.PtrToStringUni(buf); }
+    finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+  }
+  public static void Click(IntPtr h) { PostMessageW(h, 0x00F5, IntPtr.Zero, IntPtr.Zero); }   // BM_CLICK
+  public static void CloseWin(IntPtr h) { PostMessageW(h, 0x0010, IntPtr.Zero, IntPtr.Zero); } // WM_CLOSE
+  public static void DoubleClickAt(int x, int y) {
+    SetCursorPos(x, y);
+    mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+    System.Threading.Thread.Sleep(40);
+    mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); mouse_event(0x0004, 0, 0, 0, IntPtr.Zero);
+  }
+  // --- 双击的两条路 (CI 96dpi 上 mouse_event 那一路实测不生效: 两次读数 33/33 无变化) ---
+  // 口径: PostMessage 合成 DOWN/UP + DBLCLK 到**光标下那个窗口** (换算出客户区坐标),
+  // 不依赖前台/焦点; 台面上鼠标那一路只作兜底。两路都打不动才算"展开不生效"。
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
+  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+  public static IntPtr HwndAt(int x, int y) { return WindowFromPoint(new POINT { X = x, Y = y }); }
+  [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
+  public static bool Enabled(IntPtr h) { return IsWindowEnabled(h); }
+  public static void Repaint(IntPtr h) { RedrawWindow(h, IntPtr.Zero, IntPtr.Zero, 0x0181); }
+  // 同步版 BM_CLICK: 直接等按钮窗口过程把这条消息处理完 (上限 3s, SMTO_ABORTIFHUNG)。
+  // 用来把「消息压根没进窗口过程/队列」与「进了但画面没变」分开 —— PostMessage 那一路
+  // 两者在读数上一模一样。返回 false = 3s 内没处理完 (窗口挂死或消息被丢弃)。
+  public static bool ClickSync(IntPtr h) {
+    IntPtr res = IntPtr.Zero;
+    IntPtr ok = SendMessageTimeoutW(h, 0x00F5, IntPtr.Zero, IntPtr.Zero, 0x0002, 3000, out res);
+    return ok != IntPtr.Zero;
+  }
+  public static string AtInfo(int x, int y) {
+    IntPtr h = WindowFromPoint(new POINT { X = x, Y = y });
+    if (h == IntPtr.Zero) return "none";
+    return Cls(h) + "|" + WText(h);
+  }
+  // 返回 true = 消息已投出; 换算失败 (点不在该窗口里) 返回 false 交给兜底那一路。
+  // ⚠ 必须先 SetCursorPos: 这枚控件 (ucTreeViewPlus.ctl:1228) 的 UserControl_DblClick
+  // 是**用 GetCursorPos 自己取点**, 不读 lParam —— 只投消息不动光标, 命中行永远是旧位置。
+  public static bool DblClickPost(IntPtr h, int sx, int sy) {
+    if (h == IntPtr.Zero) return false;
+    SetCursorPos(sx, sy);
+    System.Threading.Thread.Sleep(30);
+    var pt = new POINT { X = sx, Y = sy };
+    if (!ScreenToClient(h, ref pt)) return false;
+    IntPtr lp = (IntPtr)((pt.Y << 16) | (pt.X & 0xFFFF));
+    PostMessageW(h, 0x0200, IntPtr.Zero, lp);        // WM_MOUSEMOVE
+    System.Threading.Thread.Sleep(50);
+    PostMessageW(h, 0x0201, (IntPtr)1, lp);          // WM_LBUTTONDOWN
+    System.Threading.Thread.Sleep(60);
+    PostMessageW(h, 0x0202, IntPtr.Zero, lp);        // WM_LBUTTONUP
+    System.Threading.Thread.Sleep(60);
+    PostMessageW(h, 0x0203, (IntPtr)1, lp);          // WM_LBUTTONDBLCLK
+    System.Threading.Thread.Sleep(60);
+    PostMessageW(h, 0x0202, IntPtr.Zero, lp);        // WM_LBUTTONUP
+    return true;
+  }
+  // 窗体类名: C3 生成的 "VB6_Form_*"; 真 VB6 产物是 "ThunderRT6FormDC/ThunderRT6Form"
+  // (基准升级后同一套取样器要对两种 exe 通用, 否则 REF 段一个窗都找不到)
+  public static bool IsFormCls(string c) {
+    return c.StartsWith("VB6_Form_") || c.StartsWith("ThunderRT6Form");
+  }
+  // 除主窗以外**可见**的窗体 (底部五按钮各自要弹一枚)
+  public static IntPtr FindOtherForm(uint pid, IntPtr main) {
+    IntPtr f = IntPtr.Zero;
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);
+      if (p == pid && h != main && IsWindowVisible(h) && IsFormCls(Cls(h))) { f = h; return false; }
+      return true; }, IntPtr.Zero);
+    return f;
+  }
+  public static IntPtr FindDialog(uint pid) {
+    IntPtr f = IntPtr.Zero;
+    EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);
+      if (p == pid && IsWindowVisible(h) && Cls(h) == "#32770") { f = h; return false; }
+      return true; }, IntPtr.Zero);
+    return f;
+  }
+  public static bool Responds(IntPtr h) {
+    IntPtr res = IntPtr.Zero;
+    IntPtr ok = SendMessageTimeoutW(h, 0x0000, IntPtr.Zero, IntPtr.Zero, 0x0002, 2000, out res);  // SMTO_ABORTIFHUNG
+    return ok != IntPtr.Zero;
   }
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr GetPropW(IntPtr h, string n);
   // STATIC/Label 不答 WM_GETFONT (VB6 也一样), 但 RTL 把实际字体存进了窗口属性
@@ -90,7 +216,7 @@ public class UP {
     IntPtr best = IntPtr.Zero; long bestA = 0;
     EnumWindows((h, l) => {
       uint p; GetWindowThreadProcessId(h, out p);
-      if (p == pid && IsWindowVisible(h) && Cls(h).StartsWith("VB6_Form_")) {
+      if (p == pid && IsWindowVisible(h) && IsFormCls(Cls(h))) {
         RECT r; GetWindowRect(h, out r);
         long a = (long)(r.R - r.L) * (r.B - r.T);
         if (a > bestA) { bestA = a; best = h; }
@@ -99,15 +225,32 @@ public class UP {
     }, IntPtr.Zero);
     return best;
   }
-  // 树不是 SysTreeView32, 是 C3 的 UserControl 宿主窗 (自绘树)
+  // 树不是 SysTreeView32, 是 UserControl 宿主窗 (自绘树)。
+  // C3 = "VB6_UserControlHost"; 真 VB6 = "ThunderRT6UserControl*" (类名随 VB6 版本变),
+  // 所以再留一层兜底: 最大的"非标准控件"可见子窗 —— 判据不能绑死在某个类名上。
   public static IntPtr FindUcHost(IntPtr main) {
     IntPtr best = IntPtr.Zero; long bestA = 0;
     EnumChildWindows(main, (h, l) => {
-      if (IsWindowVisible(h) && Cls(h) == "VB6_UserControlHost") {
-        RECT r; GetWindowRect(h, out r);
-        long a = (long)(r.R - r.L) * (r.B - r.T);
-        if (a > bestA) { bestA = a; best = h; }
-      }
+      if (!IsWindowVisible(h)) return true;
+      string c = Cls(h);
+      if (!(c == "VB6_UserControlHost" || c.StartsWith("ThunderRT6UserControl"))) return true;
+      RECT r; GetWindowRect(h, out r);
+      long a = (long)(r.R - r.L) * (r.B - r.T);
+      if (a > bestA) { bestA = a; best = h; }
+      return true;
+    }, IntPtr.Zero);
+    if (best != IntPtr.Zero) return best;
+    bestA = 0;
+    EnumChildWindows(main, (h, l) => {
+      if (!IsWindowVisible(h)) return true;
+      string c = Cls(h);
+      if (c == "Button" || c.StartsWith("ThunderRT6CommandButton") ||
+          c == "Edit" || c.StartsWith("ThunderRT6TextBox") ||
+          c == "Static" || c.StartsWith("ThunderRT6Label") ||
+          c == "ScrollBar" || c.StartsWith("ThunderRT6ScrollBar")) return true;
+      RECT r; GetWindowRect(h, out r);
+      long a = (long)(r.R - r.L) * (r.B - r.T);
+      if (a > bestA) { bestA = a; best = h; }
       return true;
     }, IntPtr.Zero);
     return best;
@@ -151,9 +294,315 @@ public class UP {
     });
     return arr;
   }
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr h, IntPtr hdc, uint flags);
+  [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr d, int x, int y, int w, int h, IntPtr s, int sx, int sy, int rop);
+  [DllImport("user32.dll")] public static extern int GetScrollPos(IntPtr h, int bar);
+  public static void ClickAtClient(IntPtr h, int x, int y) {
+    IntPtr lp = (IntPtr)((y << 16) | (x & 0xFFFF));
+    PostMessageW(h, 0x0201, (IntPtr)1, lp);    // WM_LBUTTONDOWN
+    System.Threading.Thread.Sleep(40);
+    PostMessageW(h, 0x0202, IntPtr.Zero, lp);  // WM_LBUTTONUP
+  }
+  public static void SbmSetPos(IntPtr h, int pos) { SendMessageW(h, 0x00E0, (IntPtr)pos, (IntPtr)1); }
+  static bool IsGreenPx(int R, int G, int B) { return Math.Abs(R-34)<=20 && Math.Abs(G-170)<=25 && Math.Abs(B-85)<=25; }
+  static bool IsGreenish(int R, int G, int B) { return G > R+20 && G > B+20; }
+  static bool IsLightGreenG(int R, int G, int B) { return Math.Abs(R-119)<=25 && Math.Abs(G-221)<=25 && Math.Abs(B-119)<=25; }
+  // 内容级读数: 位图/抓屏/存 PNG 全在 PowerShell 侧 (pwsh 7 的 Add-Type 引不住
+  // System.Drawing —— Drawing 被拆成多程序集, 显式传 refs 又会把 Thread/Collections
+  // 解析断掉: CS0234/CS1069)。C# 只剩 P/Invoke + 这一段**纯 byte[] 统计**。
+  // buf = BGRA (Format32bppArgb) LockBits 出来的原始像素; 输出串与旧实现逐字一致.
+  public static string MetricsBuf(byte[] buf, int stride, int ox, int oy, int w, int hh, string mode) {
+    int dark=0, vivid=0, white=0, green=0, lightGreen=0, photo=0, avatar=0, bg65=0, greenRim=0;
+    int textRows=0, lightRows=0, firstTextW=0, lastTextY=0;
+    bool inText=false, firstDone=false, inLight=false;
+    int bandMin=99999, bandMax=-1, quiet=0;
+    uint sig = 0;
+    for (int y = oy; y < oy + hh; y++) {
+      int cd=0, cl=0, tmin=99999, tmax=-1;
+      for (int x = ox; x < ox + w; x++) {
+        int bi = y * stride + x * 4;
+        int B = buf[bi], G = buf[bi+1], R = buf[bi+2];
+        int rx = x - ox;
+        sig = sig * 131 + (uint)(R*7 + G*11 + B*13);
+        int lum = (R*299 + G*587 + B*114)/1000;
+        int mx = Math.Max(R, Math.Max(G, B)), mn = Math.Min(R, Math.Min(G, B));
+        if (lum < 110) { dark++; cd++; if (rx < tmin) tmin = rx; if (rx > tmax) tmax = rx; }
+        if (lum >= 200) cl++;
+        if (mx - mn >= 60) vivid++;
+        if (R >= 250 && G >= 250 && B >= 250) white++;
+        if (IsGreenPx(R,G,B)) { green++; if (rx >= w-14 && rx < w-5) greenRim++; }
+        if (IsLightGreenG(R,G,B)) lightGreen++;
+        if (mx-mn >= 40 && !IsGreenish(R,G,B) && mn >= 25) photo++;
+        if (mn >= 100 && mx >= 180 && (mx-mn) >= 25 && !IsGreenish(R,G,B)) avatar++;
+        if (Math.Abs(R-57)<=2 && Math.Abs(G-61)<=2 && Math.Abs(B-65)<=2) bg65++;
+      }
+      // 一行算"墨迹"的门槛 = 3: 展开符 '>' 这种细笔画每行只有 3-5 个暗像素,
+      // 用 >=6 会把"只有箭头没有文字"读成 0 行 (旧口径的采集侧误判)。
+      // 带内允许 1 行空隙 (字形间隙), 连续 2 行无墨迹才收带。
+      if (cd >= 3) {
+        if (!inText) { inText = true; textRows++; bandMin = tmin; bandMax = tmax; quiet = 0; }
+        else { if (tmin < bandMin) bandMin = tmin; if (tmax > bandMax) bandMax = tmax; quiet = 0; }
+        lastTextY = y - oy;
+      } else if (inText) {
+        quiet++;
+        if (quiet >= 2) { inText = false; if (!firstDone) { firstDone = true; firstTextW = bandMax-bandMin+1; } }
+      }
+      if (cl >= 6) { if (!inLight) { inLight = true; lightRows++; } } else inLight = false;
+    }
+    if (inText && !firstDone) { firstTextW = bandMax-bandMin+1; }
+    int bw = stride / 4, bh = buf.Length / stride;
+    int cx = Math.Min(ox + w/2, bw-1), cy = Math.Min(oy + hh/2, bh-1);
+    int pb = cy * stride + cx * 4;
+    return "w="+w+" h="+hh+" mode="+mode+" c="+buf[pb+2]+","+buf[pb+1]+","+buf[pb]
+      +" dark="+dark+" textRows="+textRows+" lightRows="+lightRows
+      +" vivid="+vivid+" white="+white+" green="+green+" lightGreen="+lightGreen
+      +" photo="+photo+" avatar="+avatar+" bg65="+bg65+" greenRim="+greenRim
+      +" firstTextW="+firstTextW+" lastTextY="+lastTextY+" sig="+sig;
+  }
 }
 "@
 [UP]::SetProcessDPIAware() | Out-Null
+
+# ============================================================
+# 残差 #9: 数值增减控件 (VB.VScrollBar) 的 hover 三角 —— 上屏像素判据
+# ============================================================
+# 真 VB6 取证 (.temp/vb6ref/shoot_hover.ps1, 120dpi, 6 枚 33x31 逐个悬停, 读数见
+# .temp/vb6ref/shots/ref_num_metrics.json): 六枚行为完全一致 ——
+#   光标不在控件上 (park) / 移开后 (leave): ink=0, 只剩 240 底 + 左边 1px 白 + 中线 1px 白
+#   悬停在该枚上: 上下两枚三角**同时**出现 (ink=86/枚);
+#     被悬停的那半 (hot) = bbox 10x8, 最暗 102,102,102
+#     另一半 (normal)     = bbox  8x6, 最暗 133,133,133
+#     (33 宽: hot x12..21, normal x13..20; 三角各自在所在半区内居中)
+# 判据 (不放宽): 不悬停 ink 必须=0; 悬停必须两枚三角同时出现, 尺寸/明暗/位置按 DPI 折算
+# 与参考对齐 (±2px)。C3 的 SCROLLBAR 是自绘 (vb6forms_scroll.c), 这条只能靠上屏像素判。
+function Get-SbArrowStats {
+    param([int]$Sx, [int]$Sy, [int]$Sw, [int]$Sh)
+    $bb = New-Object System.Drawing.Bitmap($Sw, $Sh)
+    $gg = [System.Drawing.Graphics]::FromImage($bb)
+    $gg.CopyFromScreen($Sx, $Sy, 0, 0, (New-Object System.Drawing.Size($Sw, $Sh)))
+    $gg.Dispose()
+    $mid = [int]($Sh / 2)
+    $t = @{ ink = 0; min = 999; x0 = 9999; x1 = -1; y0 = 9999; y1 = -1 }
+    $b = @{ ink = 0; min = 999; x0 = 9999; x1 = -1; y0 = 9999; y1 = -1 }
+    for ($yy = 0; $yy -lt $Sh; $yy++) {
+        for ($xx = 0; $xx -lt $Sw; $xx++) {
+            $c = $bb.GetPixel($xx, $yy)
+            $lum = [int](0.299 * $c.R + 0.587 * $c.G + 0.114 * $c.B)
+            $side = $null
+            if ($yy -lt $mid) { $side = $t } elseif ($yy -gt $mid) { $side = $b }
+            if ($null -ne $side -and $lum -lt 200) {
+                $side.ink++
+                if ($lum -lt $side.min) { $side.min = $lum }
+                if ($xx -lt $side.x0) { $side.x0 = $xx }
+                if ($xx -gt $side.x1) { $side.x1 = $xx }
+                if ($yy -lt $side.y0) { $side.y0 = $yy }
+                if ($yy -gt $side.y1) { $side.y1 = $yy }
+            }
+        }
+    }
+    $bb.Dispose()
+    return @{ top = $t; bot = $b; w = $Sw; h = $Sh; mid = $mid }
+}
+
+# 光标"停放点": 优先落在窗体外 (左上 60px); 窗体贴边时退到标题栏中央 ——
+# 两种情况都保证不压在任何子控件 (尤其是增减区) 上, 不会触发 hover 绘制。
+function Get-ParkPoint {
+    param($Rect)
+    $x = $Rect.L - 60; $y = $Rect.T - 60
+    if ($x -lt 0 -or $y -lt 0) { $x = [int](($Rect.L + $Rect.R) / 2); $y = $Rect.T + 6 }
+    return @($x, $y)
+}
+
+function Test-SbHoverGuard {
+    param([IntPtr]$Main, [int]$Dpi)
+    $bad = @(); $read = @()
+    $sbs = @([UP]::FindByClass($Main, "ScrollBar")) + @([UP]::FindByClass($Main, "ThunderRT6VScrollBar"))
+    if ($sbs.Length -lt 6) {
+        $bad += "数值增减控件定位失败 $($sbs.Length)/6 (ScrollBar|ThunderRT6VScrollBar)"
+        return @{ bad = $bad; read = $read }
+    }
+    $k = $Dpi / 120.0
+    $hotW = [int][Math]::Round(10 * $k); $hotH = [int][Math]::Round(8 * $k)
+    $nrmW = [int][Math]::Round(8 * $k);  $nrmH = [int][Math]::Round(6 * $k)
+    $wr = Get-WinRect $Main
+    $parkX, $parkY = Get-ParkPoint $wr
+    $parkX = [int]$parkX; $parkY = [int]$parkY
+
+    # 1) 不悬停: 六枚都必须一个墨迹像素都没有
+    [UP]::SetCursorPos($parkX, $parkY) | Out-Null
+    Start-Sleep -Milliseconds 550
+    $parkInk = 0
+    foreach ($h in $sbs) {
+        $r = Get-WinRect $h
+        $st = Get-SbArrowStats $r.L $r.T ($r.R - $r.L) ($r.B - $r.T)
+        $parkInk += ($st.top.ink + $st.bot.ink)
+    }
+    if ($parkInk -ne 0) { $bad += "未悬停时增减区出现墨迹 ${parkInk}px (参考 0: 只有 240 底+白线)" }
+
+    # 2) 逐枚悬停上半区: 上下三角必须同时出现, 且尺寸/明暗/位置对齐参考
+    $hoverOk = 0; $i = 0; $sample = ''
+    foreach ($h in $sbs) {
+        $r = Get-WinRect $h
+        $w = $r.R - $r.L; $hh = $r.B - $r.T
+        if ($w -le 4 -or $hh -le 4) { $bad += "增减控件#$i 矩形非法 ${w}x${hh}"; $i++; continue }
+        [UP]::SetCursorPos(($r.L + [int]($w / 2)), ($r.T + [int]($hh * 0.22))) | Out-Null
+        Start-Sleep -Milliseconds 450
+        $st = Get-SbArrowStats $r.L $r.T $w $hh
+        $t = $st.top; $b = $st.bot
+        $tw = $t.x1 - $t.x0 + 1; $th = $t.y1 - $t.y0 + 1
+        $bw = $b.x1 - $b.x0 + 1; $bh = $b.y1 - $b.y0 + 1
+        if ($t.ink -eq 0 -or $b.ink -eq 0) {
+            $bad += "增减控件#$i 悬停后三角缺失 topInk=$($t.ink) botInk=$($b.ink) (应两枚都在)"
+        } else {
+            $hoverOk++
+            if ([Math]::Abs($tw - $hotW) -gt 2 -or [Math]::Abs($th - $hotH) -gt 2) {
+                $bad += "增减控件#$i 悬停半区三角 ${tw}x${th} 偏离参考 ${hotW}x${hotH} 超过 ±2"
+            }
+            if ([Math]::Abs($bw - $nrmW) -gt 2 -or [Math]::Abs($bh - $nrmH) -gt 2) {
+                $bad += "增减控件#$i 另半区三角 ${bw}x${bh} 偏离参考 ${nrmW}x${nrmH} 超过 ±2"
+            }
+            if ($t.min -gt 120) { $bad += "增减控件#$i 悬停半区三角最暗 $($t.min) > 120 (参考 102)" }
+            if ($b.min -lt 121 -or $b.min -gt 180) { $bad += "增减控件#$i 另半区三角最暗 $($b.min) 不在 121..180 (参考 133)" }
+            if ([Math]::Abs(($t.x0 + $t.x1) - ($w - 1)) -gt 4) { $bad += "增减控件#$i 上三角未水平居中 x=$($t.x0)..$($t.x1)" }
+            if ([Math]::Abs(($b.x0 + $b.x1) - ($w - 1)) -gt 4) { $bad += "增减控件#$i 下三角未水平居中 x=$($b.x0)..$($b.x1)" }
+            if ($i -eq 0) { $sample = "hot=${tw}x${th}@$($t.min) nrm=${bw}x${bh}@$($b.min)" }
+        }
+        $i++
+    }
+
+    # 3) 悬停下半区: hot 必须翻到下半 (上半回到 normal)
+    $r0 = Get-WinRect $sbs[0]
+    $w0 = $r0.R - $r0.L; $h0 = $r0.B - $r0.T
+    [UP]::SetCursorPos(($r0.L + [int]($w0 / 2)), ($r0.T + [int]($h0 * 0.78))) | Out-Null
+    Start-Sleep -Milliseconds 450
+    $st = Get-SbArrowStats $r0.L $r0.T $w0 $h0
+    if ($st.bot.ink -eq 0 -or $st.top.ink -eq 0) {
+        $bad += "增减控件#0 下悬停三角缺失 topInk=$($st.top.ink) botInk=$($st.bot.ink)"
+    } else {
+        if ($st.bot.min -gt 120) { $bad += "增减控件#0 下悬停时下半区未变 hot (最暗 $($st.bot.min) > 120)" }
+        if ($st.top.min -lt 121) { $bad += "增减控件#0 下悬停时上半区仍为 hot (最暗 $($st.top.min))" }
+    }
+
+    # 4) 移开后必须回到 0 墨迹
+    [UP]::SetCursorPos($parkX, $parkY) | Out-Null
+    Start-Sleep -Milliseconds 550
+    $leaveInk = 0
+    foreach ($h in $sbs) {
+        $r = Get-WinRect $h
+        $st2 = Get-SbArrowStats $r.L $r.T ($r.R - $r.L) ($r.B - $r.T)
+        $leaveInk += ($st2.top.ink + $st2.bot.ink)
+    }
+    if ($leaveInk -ne 0) { $bad += "移开光标后增减区仍留墨迹 ${leaveInk}px (应 0)" }
+
+    $read += "sbHover=${hoverOk}/$($sbs.Length) $sample park=${parkInk} leave=${leaveInk} dpi=$Dpi"
+    return @{ bad = $bad; read = $read }
+}
+
+
+# --- 位图侧 (PowerShell): PrintWindow/CopyFromScreen -> Bitmap -> LockBits -> C# 统计 ---
+function Get-WinRect {
+    param([IntPtr]$Hwnd)
+    $r = New-Object 'UP+RECT'
+    if (-not [UP]::GetWindowRect($Hwnd, [ref]$r)) { return $null }
+    return $r
+}
+function New-RenderBmp {
+    param([IntPtr]$Hwnd, [int]$W, [int]$H)
+    $bmp = New-Object System.Drawing.Bitmap($W, $H, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $mode = 'pw2'
+    $dc = $g.GetHdc(); $ok = [UP]::PrintWindow($Hwnd, $dc, 2); $g.ReleaseHdc($dc)
+    if (-not $ok) {
+        $mode = 'pw0'
+        $dc = $g.GetHdc(); $ok = [UP]::PrintWindow($Hwnd, $dc, 0); $g.ReleaseHdc($dc)
+        if (-not $ok) { $mode = 'fail' }
+    }
+    $g.Dispose()
+    # "整片单色" 检测 (PrintWindow 对个别子窗只回父底色时退 BitBlt)
+    $flat = $true
+    $p00 = $bmp.GetPixel([int]($W / 2), [int]($H / 2))
+    $sx = [Math]::Max(1, [int]($W / 32)); $sy = [Math]::Max(1, [int]($H / 32))
+    for ($yy = 3; $yy -lt $H -and $flat; $yy += $sy) {
+        for ($xx = 3; $xx -lt $W -and $flat; $xx += $sx) {
+            $cc = $bmp.GetPixel($xx, $yy)
+            if ($cc.R -ne $p00.R -or $cc.G -ne $p00.G -or $cc.B -ne $p00.B) { $flat = $false }
+        }
+    }
+    if ($flat -or $mode -eq 'fail') {
+        $mode += '+blt'
+        try {
+            $src = [UP]::GetDC($Hwnd)
+            $g3 = [System.Drawing.Graphics]::FromImage($bmp)
+            $d3 = $g3.GetHdc()
+            [UP]::BitBlt($d3, 0, 0, $W, $H, $src, 0, 0, 0x00CC0020) | Out-Null
+            $g3.ReleaseHdc($d3); $g3.Dispose()
+            [UP]::ReleaseDC($Hwnd, $src) | Out-Null
+        } catch { $mode += '-err' }
+    }
+    return @{ Bmp = $bmp; Mode = $mode }
+}
+function Get-BmpStats {
+    param([System.Drawing.Bitmap]$Bmp, [int]$Ox, [int]$Oy, [int]$W, [int]$H, [string]$Mode)
+    $rect = New-Object System.Drawing.Rectangle(0, 0, $Bmp.Width, $Bmp.Height)
+    $data = $Bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
+                          [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $stride = $data.Stride
+    try {
+        $buf = New-Object byte[] ($stride * $Bmp.Height)
+        [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $buf, 0, $buf.Length)
+    } finally { $Bmp.UnlockBits($data) }
+    return [UP]::MetricsBuf($buf, $stride, $Ox, $Oy, $W, $H, $Mode)
+}
+function Get-StatsPrint {
+    param([IntPtr]$Hwnd)
+    if ($Hwnd -eq [IntPtr]::Zero) { return 'none' }
+    $r = Get-WinRect $Hwnd
+    if ($null -eq $r) { return 'rect-fail' }
+    $w = $r.R - $r.L; $h = $r.B - $r.T
+    if ($w -le 0 -or $h -le 0) { return 'empty' }
+    $rb = New-RenderBmp -Hwnd $Hwnd -W $w -H $h
+    $s = Get-BmpStats -Bmp $rb.Bmp -Ox 0 -Oy 0 -W $w -H $h -Mode $rb.Mode
+    $rb.Bmp.Dispose()
+    return $s
+}
+function Get-StatsScreen {
+    param([IntPtr]$Hwnd)
+    if ($Hwnd -eq [IntPtr]::Zero) { return 'none' }
+    $r = Get-WinRect $Hwnd
+    if ($null -eq $r) { return 'rect-fail' }
+    $w = $r.R - $r.L; $h = $r.B - $r.T
+    if ($w -le 0 -or $h -le 0) { return 'empty' }
+    $bmp = New-Object System.Drawing.Bitmap($w, $h, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.CopyFromScreen($r.L, $r.T, 0, 0, (New-Object System.Drawing.Size($w, $h)))
+    $g.Dispose()
+    $s = Get-BmpStats -Bmp $bmp -Ox 0 -Oy 0 -W $w -H $h -Mode 'screen'
+    $bmp.Dispose()
+    return $s
+}
+# 重绘判据的双路签名: 抓屏 (CopyFromScreen) 与自绘 (PrintWindow) 各取一枚 sig。
+# 2026-11-07 实测: `MarginBottom` 0→1 时 UC 真有 4269 字节差异 (PrintWindow 与
+# CopyFromScreen 都测得到), 但守卫只比抓屏 sig 时偶发读成相同 —— 抓屏这一路会被
+# 前台/遮挡/合成时机污染。两路任一变化即算"重绘", 两路都不变才红 (不放松阈值)。
+function Get-UcSigPair {
+  param([IntPtr]$Hwnd)
+  $s = ((Get-StatsScreen $Hwnd) -split ' ' | Where-Object { $_ -like 'sig=*' })
+  $q = ((Get-StatsPrint  $Hwnd) -split ' ' | Where-Object { $_ -like 'sig=*' })
+  return "$s|$q"
+}
+function Save-WinPng {
+    param([IntPtr]$Hwnd, [string]$Path)
+    try {
+        $r = Get-WinRect $Hwnd
+        if ($null -eq $r) { return $false }
+        $w = $r.R - $r.L; $h = $r.B - $r.T
+        if ($w -le 0 -or $h -le 0) { return $false }
+        $rb = New-RenderBmp -Hwnd $Hwnd -W $w -H $h
+        $rb.Bmp.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
+        $rb.Bmp.Dispose()
+        return $true
+    } catch { return $false }
+}
 
 $exePath = (Resolve-Path $Exe -ErrorAction SilentlyContinue)
 if (-not $exePath) { Write-Output "SKIP 缺产物 ($Exe 不存在)"; exit 2 }
@@ -166,8 +615,47 @@ $peOff = [BitConverter]::ToInt32($peBytes, 0x3C)
 $machine = [BitConverter]::ToUInt16($peBytes, $peOff + 4)
 if ($machine -eq 0x8664 -and [IntPtr]::Size -eq 4) { Write-Output "SKIP 位宽不符 (64 位产物, 32 位宿主)"; exit 2 }
 
-# 缺资产: App.Path\img 不在 exe 目录时, 图标必然取不到 —— 那是环境缺件
-if (-not (Test-Path (Join-Path $wd "img"))) { Write-Output "SKIP 缺资产 ($wd 下没有 img 目录)"; exit 2 }
+# 资产前置闸: 比对前先对账 App.Path 下的**运行期数据文件集合** = img\ 图片 + 各 XML。
+# 为什么必须前置 (2026-11-10): 产物目录少了 15 张 avatar 时, 五窗 photo/avatar/dark
+# 全掉, 读数看上去像"产品侧渲染缺口", 白查了一轮; 同一天又踩到 XML: 只核图片时,
+# 产物缺 ejemplo.xml 也报 "asset=36/36 ok", 直到弹框才暴露。缺资产下的读数没有意义 ——
+# 缺就立刻红, 不做比对 (按**文件名集合**比, 不比像素)。
+#   夹具目录缺失  = 源资产不在 ⇒ SKIP(缺资产才许 SKIP)
+#   夹具在、产物少 = 构建拷贝漏了 ⇒ FAIL(资产在却失败判红)
+#
+# 数据文件清单来源 = 夹具源码里真实的 App.Path 读取点 (不凭记忆):
+#   Form1.frm:1128  xmlDoc.Load    App.Path & "\ejemplo.xml"           按钮 "Load from custom XML"
+#   Form3.frm:48    .LoadFromXML   App.Path & "\JerarquiaEmpresa.xml"  按钮 "Corporate Hierarchy"
+#   Form5.frm:63    .LoadFromXML   App.Path & "\menu.xml"              按钮 "Menu / Tools"
+# exportado.xml **不在此列**: 夹具里没有任何代码读它 (它是导出产物, 不是运行期输入)。
+$fxRoot = Join-Path (Split-Path -Parent $PSScriptRoot) "ucTreeView"
+if (-not (Test-Path $fxRoot)) { Write-Output "SKIP 缺资产 (夹具 $fxRoot 不存在)"; exit 2 }
+$fxImg = Join-Path $fxRoot "img"
+if (-not (Test-Path $fxImg)) { Write-Output "SKIP 缺资产 (夹具 $fxImg 不存在)"; exit 2 }
+$fxNames = @(Get-ChildItem $fxImg -File | Select-Object -ExpandProperty Name)
+$pdImg = Join-Path $wd "img"
+$pdNames = @()
+if (Test-Path $pdImg) { $pdNames = @(Get-ChildItem $pdImg -File | Select-Object -ExpandProperty Name) }
+$assetMissing = @($fxNames | Where-Object { $pdNames -notcontains $_ })
+if ($assetMissing.Count -gt 0) {
+    $missShow = ($assetMissing | Select-Object -First 8) -join ', '
+    if ($assetMissing.Count -gt 8) { $missShow += " ...(共 $($assetMissing.Count) 张)" }
+    Write-Output ("FAIL 产物资产缺失，请重跑构建拷贝 (img: 夹具 $($fxNames.Count) 张 / 产物 $($pdNames.Count) 张 / 缺 $($assetMissing.Count) 张: $missShow)")
+    exit 1
+}
+# 数据文件: 夹具里没有这一份 = 源资产不在 ⇒ SKIP; 夹具有而产物没有 ⇒ FAIL 并点名。
+$reqData = @("ejemplo.xml", "JerarquiaEmpresa.xml", "menu.xml")
+$fxDataMissing = @($reqData | Where-Object { -not (Test-Path (Join-Path $fxRoot $_)) })
+if ($fxDataMissing.Count -gt 0) {
+    Write-Output ("SKIP 缺资产 (夹具 tests\ucTreeView 里没有: " + ($fxDataMissing -join ', ') + ")")
+    exit 2
+}
+$dataMissing = @($reqData | Where-Object { -not (Test-Path (Join-Path $wd $_)) })
+if ($dataMissing.Count -gt 0) {
+    Write-Output ("FAIL 产物数据文件缺失，请重跑构建拷贝 (数据文件: 夹具 $($reqData.Count) 份 / 产物 $($reqData.Count - $dataMissing.Count) 份 / 缺: " + ($dataMissing -join ', ') + ")")
+    exit 1
+}
+$assetRead = "asset=$($pdNames.Count)/$($fxNames.Count) img + $($reqData.Count)/$($reqData.Count) data ok"
 
 if (-not $OutDir) { $OutDir = Join-Path $wd "uctreeview_px" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -211,11 +699,26 @@ if ($main -eq [IntPtr]::Zero) {
 
 if ([UP]::IsIconic($main)) { [UP]::ShowWindow($main, 9) | Out-Null; Start-Sleep -Milliseconds 600 }
 [UP]::ShowWindow($main, 5) | Out-Null
-[UP]::SetForegroundWindow($main) | Out-Null
+[UP]::ForceForeground($main) | Out-Null
 [UP]::SetWindowPos($main, [IntPtr](-1), 0, 0, 0, 0, 0x0003) | Out-Null   # TOPMOST|NOMOVE|NOSIZE
 Start-Sleep -Milliseconds 900
 [UP]::RedrawWindow($main, [IntPtr]::Zero, [IntPtr]::Zero, 0x0185) | Out-Null
 Start-Sleep -Milliseconds 600
+
+# -HoverOnly: 只跑「增减区 hover 三角」这一条 (旧产物必须红 / 真 VB6 参考必须绿)
+# 放在 UC host 检查之前: 真 VB6 参考 exe 没有 VB6_UserControlHost, 但仍要能判这条。
+if ($HoverOnly) {
+    $hd = [UP]::GetDpiForWindow($main); if ($hd -lt 96) { $hd = 96 }
+    $hg = Test-SbHoverGuard $main $hd
+    if ($hg.bad.Count -gt 0) {
+        Write-Output ("FAIL " + ($hg.bad -join "; ") + " | " + ($hg.read -join " "))
+        try { $p.Kill() } catch {}
+        exit 1
+    }
+    Write-Output ("PASS " + ($hg.read -join " "))
+    try { $p.Kill() } catch {}
+    exit 0
+}
 
 $uc = [UP]::FindUcHost($main)
 if ($uc -eq [IntPtr]::Zero) {
@@ -233,6 +736,18 @@ if ($ww -le 0 -or $wh -le 0) {
     exit 1
 }
 
+# 抓屏前再抬一次, 避免终端/IDE 盖住主窗导致整幅读成遮挡窗口
+[UP]::SetWindowPos($main, [IntPtr](-1), 0, 0, 0, 0, 0x0003) | Out-Null
+Start-Sleep -Milliseconds 700
+# 残差 #9 配套: 增减区 hover 会画三角 (色值恰为 102,102,102), 而 TextBox 的窗口矩形与
+# VScrollBar 是**重叠**的 (TextBox 右侧被滚动条盖住) —— 光标若正好停在滚动条上, 三角就落进
+# TextBox 取样区, 被 "深灰边框 (100,100,100) ±2" 判据当成深框 (GA 42410288905: edFrameDark=25)。
+# 抓屏前必须把光标停到窗体外面, 让这张基准图固定是"未悬停"态。
+$parkX0, $parkY0 = Get-ParkPoint $wr
+[UP]::SetCursorPos($parkX0, $parkY0) | Out-Null
+Start-Sleep -Milliseconds 500
+[UP]::RedrawWindow($main, [IntPtr]::Zero, [IntPtr]::Zero, 0x0185) | Out-Null
+Start-Sleep -Milliseconds 400
 $bmp = New-Object System.Drawing.Bitmap($ww, $wh)
 $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($wr.L, $wr.T, 0, 0, (New-Object System.Drawing.Size($ww, $wh)))
@@ -392,9 +907,11 @@ $btnCaps = @("Tree Explorer", "Corporate Hierarchy", "Drag and Drop", "Menu / To
 # (行数 2/2/2/2/2), 所以拿本机 (有 Arial Narrow) 录的参考行数去判它是**判据失效**,
 # 不是产品缺陷: 这一条按"字体缺失"记 SKIP 并在读数里写明, 字体自洽判据 ($wantLines,
 # 用按钮自己的字体实测) 仍然照常执行 —— 断行逻辑本身的回归仍能抓到。
+# 2026-11-10: 这里原来写的是 `Add-Type -AssemblyName $dwAsm`，而 $dwAsm 在整个 tests/
+# 里从未定义 ⇒ 每次都抛、被空 catch 吞掉 ⇒ faceInstalled 恒 false（11-09 PASS 与 11-10 FAIL
+# 两份日志都打 no，但那台机器四条注册表记录都在）。System.Drawing 在脚本顶部已加载，直接用。
 $faceInstalled = $false
 try {
-    Add-Type -AssemblyName System.Drawing -ErrorAction Stop
     $faceInstalled = @((New-Object System.Drawing.Text.InstalledFontCollection).Families |
         Where-Object { $_.Name -eq "Arial Narrow" }).Count -gt 0
 } catch { }
@@ -635,6 +1152,776 @@ if ($expDpi -lt 96) { $expDpi = 96 }
 $expHl = [int][Math]::Round(41 * $expDpi / 120)
 $expPitch = [int][Math]::Round(44 * $expDpi / 120)
 
+# ============================================================
+# 交互判据 (2026-11-06 四条实测缺陷; 本机验收, CI 桌面无交互则本段自然红)
+#   缺陷1: 展开后 icon 不能丢 + 子项可独立切换 -> 双击首行(展开/收起)量 vivid/darkRows
+#   缺陷3: Load from custom XML 后树被重建     -> 高亮消失 + 可见节点行骤减
+#   缺陷4: 底部五按钮各自弹出目标窗体         -> 逐个 BM_CLICK + 找新可见 VB6_Form_* + WM_CLOSE 收口
+#   缺陷2: 三点按钮弹色选对话框               -> 等 #32770 (上限 3s) + WM_CLOSE + IsWindow=false
+# 模态收口口径: 一切等待均有上限 (3s); 关不掉就 FAIL 并记读数, 绝不无界等待; 兜底由套件
+# 看门狗 (/RunTimeoutSec + 进程 Kill) 收尾。
+# ============================================================
+$actBad = @(); $actRead = @()
+
+function Measure-TreePx([int]$rx0, [int]$ry0, [int]$rtw, [int]$rth) {
+    $bb = New-Object System.Drawing.Bitmap($rtw, $rth)
+    $gg = [System.Drawing.Graphics]::FromImage($bb)
+    $gg.CopyFromScreen($wr.L + $rx0, $wr.T + $ry0, 0, 0, (New-Object System.Drawing.Size($rtw, $rth)))
+    $gg.Dispose()
+    $v = 0; $dk = 0; $hlp = 0; $ck = 0
+    $rows = New-Object int[] $rth
+    for ($yy = 0; $yy -lt $rth; $yy++) {
+        for ($xx = 0; $xx -lt $rtw; $xx++) {
+            $c = $bb.GetPixel($xx, $yy)
+            $mx = [Math]::Max($c.R, [Math]::Max($c.G, $c.B)); $mn = [Math]::Min($c.R, [Math]::Min($c.G, $c.B))
+            # "vivid" 只收**低饱和排除后**的彩色: 选中行的粉底 (255,180,180) 不是图标,
+            # 它一消失就会把"图标还在"的读数整个吃掉 (改前实测 7922 里 6898 是粉底)。
+            $pastel = ($c.R -ge 240) -and ($c.G -ge 160) -and ($c.B -ge 160) -and ([Math]::Abs($c.G - $c.B) -le 25)
+            if (($mx - $mn) -ge 60 -and -not $pastel) { $v++ }
+            if ((0.299*$c.R + 0.587*$c.G + 0.114*$c.B) -lt 110) { $dk++; $rows[$yy]++ }
+            if ($c.R -eq 255 -and $c.G -eq 180 -and $c.B -eq 180) { $hlp++ }
+            if ($c.R -eq 99 -and $c.G -eq 99 -and $c.B -eq 255) { $ck++ }   # 勾选框蓝
+        }
+    }
+    $dr = 0
+    for ($yy = 0; $yy -lt $rth; $yy++) { if ($rows[$yy] -ge 3) { $dr++ } }
+    $bb.Dispose()
+    return @($v, $dk, $dr, $hlp, $ck)
+}
+function Wait-Until([scriptblock]$probe, [int]$ms) {
+    $end = (Get-Date).AddMilliseconds($ms)
+    while ((Get-Date) -lt $end) {
+        $h = & $probe
+        if ($h -ne [IntPtr]::Zero) { return $h }
+        Start-Sleep -Milliseconds 100
+    }
+    return [IntPtr]::Zero
+}
+function Wait-Gone([IntPtr]$h, [int]$ms) {
+    $end = (Get-Date).AddMilliseconds($ms)
+    while ((Get-Date) -lt $end) {
+        if (-not [UP]::IsWindow($h)) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+    return (-not [UP]::IsWindow($h))
+}
+# §B92 (2026-11-11): BM_CLICK 超时**不等于**消息被丢弃 —— SendMessageTimeoutW 只结束
+# "等窗口过程处理完"这件事, 那条消息仍然排在按钮自己的队列里, UI 线程回到消息泵就照常处理。
+# 现场 (dev CI `Tests (vbp #5)` job 130077321416): 新实例刚 WaitForInputIdle 就点
+# 'Contact  List', 3 s 未返回 ⇒ 旧口径当场判红; 但同一次运行里 10 s 后该实例的三个重复段
+# 全绿, 且 state=alive / out+err 全空 ⇒ 不是挂死, 是"点得太早 + 3 s 太短"(那一份样例的
+# Form_Load 最长)。判据不变: 按钮过程真的不处理仍然红; 这里只把"迟到"与"真挂死"分开,
+# 并把迟到量记进读数 jitter[...]=BM_CLICK(late=...ms) —— 抖动必须可识别, 不许静默吞掉。
+function Invoke-ClickSyncLate {
+    param([IntPtr]$Btn, [IntPtr]$Main, [int]$ProcId, [int]$ProbeMs = 3000, [int]$LateMs = 7000)
+    $r = @{ Sync = $false; Late = $false; Win = [IntPtr]::Zero; LateMs = 0 }
+    if ([UP]::ClickSync($Btn)) {
+        $r.Sync = $true
+        $r.Win = Wait-Until { [UP]::FindOtherForm([uint32]$ProcId, $Main) } $ProbeMs
+        return $r
+    }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $r.Win = Wait-Until { [UP]::FindOtherForm([uint32]$ProcId, $Main) } $LateMs
+    $r.LateMs = [int]$sw.ElapsedMilliseconds
+    $r.Late = ($r.Win -ne [IntPtr]::Zero)
+    return $r
+}
+# 看门狗: 任何一步超时都必须**杀进程 + 打诊断**, 不许留下半死进程继续跑后面的判据.
+# 注意 PowerShell 函数有自己的作用域, 红项必须写回 $script:actBad 才不会被丢掉.
+function Kill-ProcDiag {
+    param($Proc, [string]$why, [string]$OutLog = $logOut, [string]$ErrLog = $logErr)
+    $script:actBad += ("看门狗: " + $why + " | " + (Get-LaunchDiag $Proc $OutLog $ErrLog))
+    try { if ($Proc -and -not $Proc.HasExited) { $Proc.Kill() } } catch {}
+}
+
+if ($p.HasExited) {
+    $actBad += "交互前进程已退出 (崩溃/自退, 交互判据无法取样)"
+} else {
+    # ---- 缺陷1: 双击首行 Facebook (有 3 个子项) 收起再展开, 两态各量一次 ----
+    # 输入可靠性 (CI 96dpi 实测): mouse_event 那一路两次读数都是 33/33 —— 不是树没展开, 是
+    # 合成点击没进窗口。故先按"光标下那个窗口 + 客户区坐标"走 PostMessage 的
+    # DOWN/UP/DBLCLK (不依赖前台/焦点), 打不动再退回台面鼠标; 纵向最多试 4 个候选行。
+    # 全程有界 (4 行 x 2 路 x 800ms), 不引入任何无界等待, 判据阈值一字未动。
+    if ($hlMaxY -gt $hlMinY) {
+        $preV, $preD, $preR, $preH = Measure-TreePx $x0 $y0 $tw $th
+        $step = if ($pitch -gt 0) { $pitch } else { $expPitch }
+        if ($step -le 0) { $step = 32 }
+        $rows2try = @()
+        for ($k = 0; $k -lt 4; $k++) {
+            $yy = $wr.T + $y0 + $hlMinY + [int]($hlH / 2) + ($k * $step)
+            if ($yy -ge ($wr.T + $y0 + $th - 4)) { break }
+            $rows2try += ,@(($wr.L + $x0 + $hlMinX + 30), $yy)
+        }
+        $hitCls = @(); $toggle = $null
+        foreach ($mode in @('post', 'mouse')) {
+            if ($toggle) { break }
+            foreach ($pt in $rows2try) {
+                $px = $pt[0]; $py = $pt[1]
+                [UP]::ForceForeground($main) | Out-Null
+                if ($mode -eq 'post') {
+                    $hitCls += ([UP]::AtInfo($px, $py))
+                    # 目标优先级: 已定位的 UC 宿主 (不依赖 z 序/前台) → 光标下那个窗口
+                    $thw = $uc
+                    if ($thw -eq [IntPtr]::Zero) { $thw = [UP]::HwndAt($px, $py) }
+                    [UP]::DblClickPost($thw, $px, $py) | Out-Null
+                } else {
+                    [UP]::DoubleClickAt($px, $py)
+                }
+                Start-Sleep -Milliseconds 800
+                $aV, $aD, $aR, $aH = Measure-TreePx $x0 $y0 $tw $th
+                # 只有"可见节点行"真的变 (>=3 行) 才算命中: 选中/焦点重绘会让 vivid 抖几个像素
+                # (实测 1005→998), 拿它当命中信号会在第一行就误判成"已切换"。
+                if ([Math]::Abs($aR - $preR) -ge 3) {
+                    # 命中一个可展开节点: 再点同一处收回, 两态成对
+                    if ($mode -eq 'post') {
+                        [UP]::DblClickPost($thw, $px, $py) | Out-Null
+                    } else {
+                        [UP]::DoubleClickAt($px, $py)
+                    }
+                    Start-Sleep -Milliseconds 800
+                    $bV, $bD, $bR, $bH = Measure-TreePx $x0 $y0 $tw $th
+                    $toggle = @($aV, $aR, $bV, $bR, $px, $py, $mode)
+                    break
+                }
+            }
+        }
+        if (-not $toggle) {
+            $actRead += ("expand pre=$preR/$preV hit=[" + ($hitCls -join ';') + "] 无变化")
+            $actBad += "展开/收起无差异 (4 行 x 2 路合成点击后可见行数都停在 $preR, 双击未进窗口或展开不生效)"
+        } else {
+            $av = $toggle[0]; $ar = $toggle[1]; $bv = $toggle[2]; $br = $toggle[3]
+            if ($ar -ge $br) { $expR = $ar; $expV = $av; $colR = $br; $colV = $bv }
+            else { $expR = $br; $expV = $bv; $colR = $ar; $colV = $av }
+            $actRead += ("expand pre=$preR/$preV a=$ar/$av b=$br/$bv at=$($toggle[4]),$($toggle[5]) via=$($toggle[6]) hit=[" + ($hitCls -join ';') + "]")
+            if ($expR -lt ($colR + 3)) { $actBad += "展开后可见节点行 $expR < 收起态 $colR + 3" }
+            if ($expV -lt ($colV + 20)) { $actBad += "展开后图标彩色像素 $expV 未随子项增加 (收起态 $colV, 展开丢图标)" }
+        }
+    } else {
+        $actBad += "首行高亮未定位, 展开判据无法取样"
+    }
+
+    # 交互块之间把光标收回中性位 (挪出树区)。CI 上实测: 合成双击之后紧接 BM_CLICK 的
+    # XML 按钮不生效 (上一轮同一脚本 XML 是 33->10 通的), 先按最小口径隔离掉这个嫌疑。
+    [UP]::SetCursorPos(($wr.L + 8), ($wr.T + 5)) | Out-Null
+    Start-Sleep -Milliseconds 200
+
+    # ---- 主界面数值控件: 6 枚 VScrollBar + Text1(index) 联动 ----
+    # 三件事分开记: ①Value(=原生 pos) ②Text1(index).Text (Change 事件链的产物)
+    # ③树区像素签名 (重绘)。上/下各点一次, 每次点击后立即读数, 不用重试掩盖吞点击。
+    # ⚠ 顺序: 必须在「Load from custom XML」**之前**。实测(2026-11-07, 同一取样器,
+    #   PrintWindow 与 CopyFromScreen 双路): XML 重填后树只剩 12 行, `MarginBottom`
+    #   0→1/2/5/10 在 C3 与**真 VB6** 上都是 0 字节差异 (该属性只影响末行以下的留白);
+    #   在初始 56 行状态下两边都真有 ~4.3k/4.7k 差异。把数值段放在 XML 之后会让这条
+    #   判据对真 VB6 也判红 —— 是判据/顺序问题, 不是产品缺陷。
+    if (-not $p.HasExited -and -not $dead) {
+        $numSpecs = @(
+            @{ label='BorderRadius';   min=0; max=15; val=10 },
+            @{ label='BorderWidth';    min=0; max=5;  val=4  },
+            @{ label='Margin';         min=0; max=20; val=15 },
+            @{ label='NodeSpacing';    min=0; max=50; val=34 },
+            @{ label='ToggleIconSize'; min=4; max=20; val=14 },
+            @{ label='MarginBottom';   min=0; max=20; val=20 }
+        )
+        $sbAll = [UP]::FindByClass($main, "ScrollBar")
+        $edAll = [UP]::FindByClass($main, "Edit")
+        if ($sbAll.Length -lt 6) { $actBad += "数值控件定位失败 $($sbAll.Length)/6 (ScrollBar)" }
+        foreach ($ns in $numSpecs) {
+            $lab = [UP]::FindChildByText($main, $ns.label)
+            if ($lab -eq [IntPtr]::Zero) { $actBad += "找不到数值标签 '$($ns.label)'"; continue }
+            $lr = New-Object UP+RECT; [UP]::GetWindowRect($lab, [ref]$lr) | Out-Null
+            $sb = [IntPtr]::Zero; $bestd = 999999
+            foreach ($h in $sbAll) {
+                $r = New-Object UP+RECT; [UP]::GetWindowRect($h, [ref]$r) | Out-Null
+                if ($r.L -lt ($lr.R - 4)) { continue }
+                $d = [Math]::Abs($r.T - $lr.T)
+                if ($d -lt $bestd -and $d -le [int](20 * $expDpi / 96.0)) { $bestd = $d; $sb = $h }
+            }
+            if ($sb -eq [IntPtr]::Zero) { $actBad += "'$($ns.label)' 找不到对应 ScrollBar"; continue }
+            $sr = New-Object UP+RECT; [UP]::GetWindowRect($sb, [ref]$sr) | Out-Null
+            $sw = $sr.R - $sr.L; $sh = $sr.B - $sr.T
+            $ed = [IntPtr]::Zero; $bestE = 999999
+            foreach ($h in $edAll) {
+                $er = New-Object UP+RECT; [UP]::GetWindowRect($h, [ref]$er) | Out-Null
+                if ([Math]::Abs($er.T - $sr.T) -gt 10) { continue }
+                if ($er.L -ge $sr.L) { continue }
+                if ($er.L -lt $bestE) { $bestE = $er.L; $ed = $h }
+            }
+            if ($ed -eq [IntPtr]::Zero) { $actBad += "'$($ns.label)' 找不到对应 TextBox"; continue }
+            # Value 口径: Win32 ScrollBar 的原生 pos = Value - Min (VB6 把 Min 折进位置),
+            # 所以 Value = GetScrollPos + Min; Text1.Text = Max - Value + Min = Max - pos。
+            $pos0 = [UP]::GetScrollPos($sb, 2)
+            $v0 = $pos0 + $ns.min
+            $txt0 = [UP]::WTextReal($ed)
+            $sig0 = Get-UcSigPair $uc
+            if ($v0 -ne $ns.val) { $actBad += "'$($ns.label)' 初始 Value=$v0 != 设计 $($ns.val) (Value/文本失步)" }
+            $expTxt0 = [string]($ns.max - $pos0)
+            if ($txt0 -ne $expTxt0) { $actBad += "'$($ns.label)' 初始 Text='$txt0' != Max-Value+Min='$expTxt0'" }
+            [UP]::ClickAtClient($sb, [int]($sw/2), 3)
+            Start-Sleep -Milliseconds 700
+            $pos1 = [UP]::GetScrollPos($sb, 2); $txt1 = [UP]::WTextReal($ed)
+            $sig1 = Get-UcSigPair $uc
+            # 采集侧容错: 700ms 内没读到差异时再等 800ms 复采一次 (不重复点击、不改阈值)。
+            # 2026-11-07 实测: 同一枚 MarginBottom 单发探针 (先点一次再等 900ms) ucDiff=4269;
+            # 而在六枚连点之后同一操作在 700ms 上偶发读到相同 sig ⇒ 是刷新延迟, 不是"未重绘"。
+            if ($sig1 -eq $sig0) { Start-Sleep -Milliseconds 800; $sig1 = Get-UcSigPair $uc; $actRead += "resample[$($ns.label):up];" }
+            $actRead += ("num[$($ns.label)] up: pos=$pos0->$pos1 val=$v0->$($pos1+$ns.min) txt='$txt0'->'$txt1' px=$sig0->$sig1")
+            if (($pos0 - $pos1) -ne 1) { $actBad += "'$($ns.label)' 上箭头 Value $v0->$($pos1+$ns.min) 未 -1 (SmallChange 未生效)" }
+            $expTxt1 = [string]($ns.max - $pos1)
+            if ($txt1 -ne $expTxt1) { $actBad += "'$($ns.label)' 上箭头后 Text='$txt1' != '$expTxt1' (Change 未发/未联动)" }
+            if ($sig1 -eq $sig0) { $upSame = $true } else { $upSame = $false }
+            [UP]::ClickAtClient($sb, [int]($sw/2), ($sh - 4))
+            Start-Sleep -Milliseconds 700
+            $pos2 = [UP]::GetScrollPos($sb, 2); $txt2 = [UP]::WTextReal($ed)
+            $sig2 = Get-UcSigPair $uc
+            if ($sig2 -eq $sig1) { Start-Sleep -Milliseconds 800; $sig2 = Get-UcSigPair $uc; $actRead += "resample[$($ns.label):dn];" }
+            $actRead += ("num[$($ns.label)] dn: pos=$pos1->$pos2 val=$($pos1+$ns.min)->$($pos2+$ns.min) txt='$txt1'->'$txt2' px=$sig1->$sig2")
+            if (($pos2 - $pos1) -ne 1) { $actBad += "'$($ns.label)' 下箭头 Value $($pos1+$ns.min)->$($pos2+$ns.min) 未 +1 (SmallChange 未生效)" }
+            $expTxt2 = [string]($ns.max - $pos2)
+            if ($txt2 -ne $expTxt2) { $actBad += "'$($ns.label)' 下箭头后 Text='$txt2' != '$expTxt2' (Change 未发/未联动)" }
+            if ($sig2 -eq $sig1) { $dnSame = $true } else { $dnSame = $false }
+            # 像素重绘判据: 默认 ±1 步就该动。唯一例外是 NodeSpacing 在 96dpi (DpiFactor=1) 下的
+            # 半像素落地 —— 行内缩进 = Ident*NSpacing + NSpacing/2, 16->17 时根级 8.0->8.5 经
+            # CInt 半值取偶仍是 8 (真 VB6 同口径); 若此刻可见行全是根级 (Ident=0), 整屏几何上
+            # 不可能有差异。这不是"未重绘": value/Text 已逐条严格断言。此时改用 +4 步
+            # (16->20, 根级缩进 8->10, 必然可见) 复核**同一个 setter**, 再走回原值。
+            if ($upSame -or $dnSame) {
+                if ($ns.label -ne 'NodeSpacing') {
+                    if ($upSame) { $actBad += "'$($ns.label)' 上箭头后树区像素未变 (未重绘)" }
+                    if ($dnSame) { $actBad += "'$($ns.label)' 下箭头后树区像素未变 (未重绘)" }
+                } else {
+                    $sigA = Get-UcSigPair $uc
+                    for ($q = 0; $q -lt 4; $q++) { [UP]::ClickAtClient($sb, [int]($sw/2), 3); Start-Sleep -Milliseconds 250 }
+                    Start-Sleep -Milliseconds 500
+                    $sigB = Get-UcSigPair $uc
+                    $actRead += "redraw[$($ns.label):+4] $sigA->$sigB;"
+                    if ($sigB -eq $sigA) { $actBad += "'$($ns.label)' +4 步后树区像素仍未变 (setter 没重绘)" }
+                    for ($q = 0; $q -lt 4; $q++) { [UP]::ClickAtClient($sb, [int]($sw/2), ($sh - 4)); Start-Sleep -Milliseconds 250 }
+                    Start-Sleep -Milliseconds 300
+                }
+            }
+            if ($p.HasExited) { $actBad += "'$($ns.label)' 数值点击后进程崩溃"; Kill-ProcDiag $p "'$($ns.label)' 数值点击后进程退出" $logOut $logErr; break }
+        }
+    }
+
+    # ---- 残差 #9: 数值增减控件 hover 三角 (与 -HoverOnly 同一条断言, 直接并进 FAIL 通道) ----
+    if (-not $p.HasExited -and -not $dead) {
+        $hv = Test-SbHoverGuard $main $expDpi
+        $actBad += $hv.bad
+        $actRead += $hv.read
+    }
+
+    # ---- 缺陷3: Load from custom XML (按钮体里 Nodes.Clear + CheckBoxes=False + 递归重填) ----
+    # 可测量口径: ①旧选中高亮清零 (Clear 生效) ②勾选框蓝(99,99,255)清零 (CheckBoxes=False 生效)
+    # ③可见节点行数明显改变 (树被 XML 重填) ④无 #32770 解析错误框
+    $xmlBtn = [UP]::FindChildByText($main, "Load from custom XML")
+    if ($xmlBtn -eq [IntPtr]::Zero) {
+        $actBad += "找不到按钮 'Load from custom XML'"
+    } else {
+        $xbV, $xbD, $xbR, $xbH, $xbCk = Measure-TreePx $x0 $y0 $tw $th
+        # 点击最多 3 次 (1200ms/次, 每次重新定位按钮); 两次之间强制重绘一次, 把
+        # "改了没刷屏"与"根本没进事件"分开。诊断里带按钮的类/可用位/caption 与尝试次数。
+        $xdiag = ''
+        $xmlTry = 0; $xv = 0; $xd2 = 0; $xr = 0; $xhl = 0; $xck = 0
+        for ($ti = 1; $ti -le 3; $ti++) {
+            $b = $xmlBtn
+            if ($ti -gt 1) { $b = [UP]::FindChildByText($main, "Load from custom XML") }
+            if ($b -eq [IntPtr]::Zero) { $xdiag += 'gone;'; break }
+            if ($ti -eq 1) {
+                $xdiag = 'cls=' + [UP]::Cls($b) + ' en=' + [UP]::Enabled($b) +
+                    ' vis=' + [UP]::IsWindowVisible($b) + ' cap=' + [UP]::WText($b)
+            }
+            # 第 1 次走 PostMessage (与旧口径一致); 之后改走同步 BM_CLICK —— 同步版能确认
+            # 按钮窗口过程**真的处理过**这条消息 (3s 上限), 把"没进事件"从"没刷屏"里分出来。
+            if ($ti -eq 1) { [UP]::Click($b) }
+            else { if (-not [UP]::ClickSync($b)) { $xdiag += 'sync-timeout;' } }
+            Start-Sleep -Milliseconds 1200
+            $xd = [UP]::FindDialog([uint32]$p.Id)
+            if ($xd -ne [IntPtr]::Zero) {
+                $actBad += ("XML 载入弹了模态框 '" + [UP]::WText($xd) + "'")
+                [UP]::CloseWin($xd)
+                [UP]::IsWindow($xd) | Out-Null
+                Start-Sleep -Milliseconds 800
+                break
+            }
+            $xmlTry = $ti
+            $xv, $xd2, $xr, $xhl, $xck = Measure-TreePx $x0 $y0 $tw $th
+            if ([Math]::Abs($xr - $xbR) -ge 5) { break }
+            [UP]::Repaint($uc)
+            Start-Sleep -Milliseconds 300
+            $xv, $xd2, $xr, $xhl, $xck = Measure-TreePx $x0 $y0 $tw $th
+            if ([Math]::Abs($xr - $xbR) -ge 5) { $xdiag += 'repaint;'; break }
+        }
+        $actRead += "xml rows=$xbR->$xr chk=$xbCk->$xck hl=$xbH->$xhl dark=$xd2 try=$xmlTry $xdiag"
+        if ($xd2 -lt 30) { $actBad += "XML 载入后树区深色像素 $xd2 < 30 (连节点文字都没画)" }
+        if ($xhl -gt 100) { $actBad += "XML 载入后仍有旧选中高亮 $xhl (Nodes.Clear 未生效)" }
+        if ($xbCk -gt 20 -and $xck -gt 5) { $actBad += "XML 载入后勾选框蓝仍在 $xck (CheckBoxes=False 未生效)" }
+        if ([Math]::Abs($xr - $xbR) -lt 5) { $actBad += "XML 载入前后可见节点行 $xbR->$xr 几乎没变 (树没被 XML 重填)" }
+    }
+
+    # ---- 缺陷2: 三点按钮 -> 色选对话框 (#32770), 探测/收口各有上限 ----
+    $dotBtn = [UP]::FindChildByText($main, "...")
+    if ($dotBtn -eq [IntPtr]::Zero) {
+        $actBad += "找不到 '...' 按钮"
+    } else {
+        [UP]::Click($dotBtn)
+        $dlg = Wait-Until { [UP]::FindDialog([uint32]$p.Id) } 3000
+        if ($dlg -eq [IntPtr]::Zero) {
+            $actBad += "三点按钮未弹色选对话框 (#32770 3s 内未出现)"
+            $actRead += "colorDialog=none"
+        } else {
+            $dt = [UP]::WText($dlg)
+            $actRead += "colorDialog='" + $dt + "'"
+            [UP]::SetForegroundWindow($dlg) | Out-Null
+            [UP]::CloseWin($dlg)
+            $gone = Wait-Gone $dlg 3000
+            if (-not $gone) {
+                [UP]::PostMessageW($dlg, 0x0111, [IntPtr]2, [IntPtr]::Zero) | Out-Null   # WM_COMMAND IDCANCEL
+                $gone = Wait-Gone $dlg 3000
+            }
+            $actRead += "colorClosed=$gone"
+            if (-not $gone) { $actBad += "色选对话框 3s+3s 内关不掉 (模态框未收口)" }
+            if (-not [UP]::Responds($main)) { $actBad += "色选关闭后主窗不响应 (WM_NULL 2s 超时)" }
+        }
+    }
+
+    # ---- 缺陷4(本轮加严): 五按钮 —— ①逐窗内容级对照 ②同一按钮重复点击 3 轮 ----
+    # 两段各用独立实例 (见数值段之后的 A/B 段):
+    #   A) 每枚窗体一个新进程, 只点一次 → 内容读数不被前几枚窗体的 DestroyWindow 残留污染;
+    #   B) 一个进程里同一按钮连点 3 轮, 每轮必须关干净 → 钉住重复点击缺陷。
+    # 内容基准 = .frm/.frx 设计值(节点数/字体/边框色/头像) + 参考图内容清单;
+    # 参考图只用于确认"该有什么", 像素阈值按本机 DPI 折算, 不做 1:1 像素比对。
+    # weight 口径 = 真 VB6 运行期 WM_GETFONT 的 lfWeight (ref_metrics.json), 不是 .frx 设计值。
+    # Form3/Form5 设计期是 400, 运行期 UserControl 的 `FontBold = True` 把它顶到 700 ——
+    # 这条链在 §34 修好之前 C3 也报 400(所以旧表写 400 自洽), 修好后必须按真 VB6 的 700 判,
+    # 否则"修对了反而红"。Agenda 的 Semibold 同理: LOGFONT 是 700 而非 600。
+    $formSpecs = @(
+        @{ btn='Tree Explorer';       cap='Tree Explorer';     face='Segoe UI';          pt=9.75; weight=400; firstW=20 },
+        @{ btn='Corporate Hierarchy'; cap='Form3';             face='Segoe UI';          pt=9.75; weight=700; firstW=80 },
+        @{ btn='Drag and Drop';       cap='Drag & Drop';       face='Arial Narrow';      pt=9.75; weight=400; firstW=30 },
+        @{ btn='Menu / Tools';        cap='Form5';             face='Segoe UI';          pt=9.75; weight=700; firstW=25 },
+        @{ btn='Contact  List';       cap='Agenda tema oscuro'; face='Segoe UI Semibold'; pt=8.25; weight=700; firstW=0 }
+    )
+    $driveCount = @([System.IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -ne 'NoRootDirectory' }).Count
+    $expRows = @{ 'Tree Explorer' = 3 + $driveCount; 'Form3' = 9; 'Drag & Drop' = 5; 'Form5' = 10 }
+    $dead = $false
+
+}
+
+    # 主实例读数已取完 —— 后面 A/B 段各起独立实例, 必须先杀主实例, 否则它的 TOPMOST 主窗
+    # 会盖住新实例的非模态子窗体, 抓屏读到的是主窗像素 (实测 Tree 段读成了 Form1 的复选框区)。
+    try { if (-not $p.HasExited) { $p.Kill() } } catch {}
+    Start-Sleep -Milliseconds 800
+
+    # ---------- R) 真 VB6 基准: 用**同一套取样器**量真产物, 读数落盘成 ref_metrics.json ----------
+    # 基准升级 (用户手动 /make 成功): 五窗内容判据不再用"设计值 + 参考图", 而是逐项对
+    # 真 VB6 exe 的实拍读数 (行数/首行墨迹宽/彩色像素/照片/头像/底色/字体度量)。
+    # 参考图从此只用于"内容该有什么"的视觉确认, 不参与阈值。
+    # 注: 真 VB6 产物必须在 zh-CN 下把 .ctl/.frm 的 "0,15" 归一成 "0.15" 才能 /make
+    #     (见 uctv_vb6_baseline.ps1), 该归一不改变 Single 值。
+    # 2026-11-10 用户拍板: **基准只能有一个**。内容判据一律对真 VB6 实拍读数;
+    # 没给 -RefJson/-RefExe 时默认读脚本同目录的 uctreeview_ref.json; 两者都没有 ⇒ 红,
+    # 不再退回"设计值口径"。11-09 22:49 那次 PASS 是 ref=none(设计值口径) 跑的,
+    # 与今天 FAIL(ref=json) 不是同一把尺子 ⇒ 该 PASS **不代表对齐, 效力作废**。
+    if ($RefJson -eq '' -and $RefExe -eq '') {
+        $RefJson = Join-Path $PSScriptRoot 'uctreeview_ref.json'
+    }
+    $ref = @{}
+    $refDpi = 0
+    if ($RefJson -ne '' -and (Test-Path $RefJson)) {
+        try {
+            $raw = Get-Content $RefJson -Raw | ConvertFrom-Json
+            if ($null -ne $raw.PSObject.Properties['_dpi']) { $refDpi = [int]$raw._dpi }
+            foreach ($k in $raw.PSObject.Properties.Name) {
+                if ($k -eq '_dpi') { continue }
+                $h = @{}
+                foreach ($q in $raw.$k.PSObject.Properties) { $h[$q.Name] = $q.Value }
+                $ref[$k] = $h
+            }
+            $actRead += "ref=json:$RefJson dpi=$refDpi"
+        } catch { $actBad += "REF 读数文件解析失败 ($RefJson): $_" }
+    }
+    if ($ref.Count -eq 0 -and $RefExe -ne '') {
+        if (-not (Test-Path $RefExe)) {
+            $actBad += "REF exe 不存在 ($RefExe)"
+        } else {
+            $rw = Split-Path $RefExe
+            $ri = 0
+            foreach ($sp in $formSpecs) {
+                $ri++
+                $ro = Join-Path $OutDir "ref$ri.out"; $re = Join-Path $OutDir "ref$ri.err"
+                $pr = $null; $mr = [IntPtr]::Zero
+                try {
+                    $pr = Start-Process -FilePath $RefExe -WorkingDirectory $rw -PassThru `
+                          -RedirectStandardOutput $ro -RedirectStandardError $re
+                    try { $pr.WaitForInputIdle(15000) | Out-Null } catch {}
+                    $mr = Wait-Until { [UP]::FindMain([uint32]$pr.Id) } 8000
+                } catch {}
+                if (-not $pr -or $mr -eq [IntPtr]::Zero) {
+                    $actBad += "REF '$($sp.btn)': 真 VB6 8s 内未起主窗"
+                    if ($pr) { try { $pr.Kill() } catch {} }
+                    continue
+                }
+                $rb = [UP]::FindChildByText($mr, $sp.btn)
+                if ($rb -eq [IntPtr]::Zero) {
+                    $actBad += "REF '$($sp.btn)': 真 VB6 主窗里找不到这枚按钮"
+                    try { $pr.Kill() } catch {}
+                    continue
+                }
+                [UP]::ClickSync($rb) | Out-Null
+                $rfw = Wait-Until { [UP]::FindOtherForm([uint32]$pr.Id, $mr) } 3000
+                if ($rfw -eq [IntPtr]::Zero) {
+                    $actBad += "REF '$($sp.btn)': 真 VB6 3s 内没有弹出窗体"
+                    try { $pr.Kill() } catch {}
+                    continue
+                }
+                Start-Sleep -Milliseconds 2500
+                $ruc = [UP]::FindUcHost($rfw)
+                if ($ruc -eq [IntPtr]::Zero) {
+                    $actBad += "REF '$($sp.btn)': 真 VB6 窗体里找不到树控件子窗"
+                    try { $pr.Kill() } catch {}
+                    continue
+                }
+                $rlf = [UP]::LogFontOf($ruc)
+                if ($rlf -eq '') { $rlf = [UP]::PropLogFontOf($ruc) }
+                if ($rlf -eq '') { $rlf = [UP]::LogFontOf($rfw) }
+                $rstats = Get-StatsPrint $ruc
+                $actRead += ("refcontent[$($sp.cap)] " + $rstats + " font=[$rlf]")
+                $h = @{}; $h['font'] = $rlf
+                foreach ($tok in ($rstats -split ' ')) {
+                    $kv = $tok -split '='
+                    if ($kv.Count -eq 2 -and $kv[0] -ne 'mode' -and $kv[0] -ne 'c') { $h[$kv[0]] = [int64]$kv[1] }
+                }
+                if ($h.ContainsKey('w')) { $ref[$sp.cap] = $h } else { $actBad += "REF '$($sp.cap)' 取样失败 ($rstats)" }
+                if ($env:UCTV_SAVE_FORMS -eq '1' -and $OutDir -ne '') {
+                    $safe = ($sp.cap -replace '[^A-Za-z0-9]', '_')
+                    Save-WinPng $ruc (Join-Path $OutDir ("ref_$safe.png")) | Out-Null
+                }
+                [UP]::CloseWin($rfw) | Out-Null
+                [void](Wait-Gone $rfw 3000)
+                try { if (-not $pr.HasExited) { $pr.Kill() } } catch {}
+                Start-Sleep -Milliseconds 400
+            }
+            if ($RefJson -ne '' -and $ref.Count -gt 0) {
+                try {
+                    $ref | ConvertTo-Json -Depth 4 | Set-Content -Encoding UTF8 $RefJson
+                    $actRead += "ref=written:$RefJson"
+                } catch { $actBad += "REF 读数写出失败 ($RefJson): $_" }
+            }
+        }
+    }
+    if ($ref.Count -eq 0) { $actRead += "ref=none(退回设计值口径)" }
+
+    # ---------- A) 逐窗内容级对照: 每枚窗体一个**干净实例**, 只点一次再取样 ----------
+    # 为什么必须换新进程: 已定位的"重复点击"缺陷里, 每枚窗体关闭后 vb6_hwnd_FormN /
+    # vb6_formLoaded_FormN 都没清, 前几枚窗体的残留会把后面第 4/5 枚窗体的绘制带坏
+    # (实测同一实例里 Form5/Form6 只画出窗口底色)。内容对照与重复点击是两条独立成因,
+    # 所以内容段用一次性实例, 重复点击段单独再起一个实例连点 3 轮。
+    #
+    # 采集侧去污染 (2026-11-07): 交互段最后把光标停在 (281,300) 做双击, 后面的窗体若正好
+    # 开在光标底下, ucTreeView 的 hover 行会用 SelectionColor(alpha 70) 铺满整行 ——
+    # 真 VB6 参考帧是"光标不在窗体上"时抓的, 这一行会把 bg65 少算约 15.6k
+    # (Contact 实测 102462 vs 118030, 判据 0.9*ref=106764 因此偶发红)。判据一个都不动,
+    # 只把光标先停到屏幕右下角, 让"有没有 hover"与参考帧同条件 (也让本门不再随上一段
+    # 交互的落点漂: 同一份产物两次跑出过 118862 / 102462 两个数)。
+    [void][UP]::SetCursorPos(([UP]::GetSystemMetrics(0) - 2), ([UP]::GetSystemMetrics(1) - 2))
+    Start-Sleep -Milliseconds 300
+    $ai = 0
+    foreach ($sp in $formSpecs) {
+        $ai++
+        $oA = Join-Path $OutDir ("contentA$ai.out")
+        $eA = Join-Path $OutDir ("contentA$ai.err")
+        $pa = $null; $ma = [IntPtr]::Zero
+        try {
+            $pa = Start-Process -FilePath $exePath -WorkingDirectory $wd -PassThru `
+                 -RedirectStandardOutput $oA -RedirectStandardError $eA
+            try { $pa.WaitForInputIdle(15000) | Out-Null } catch {}
+            $ma = Wait-Until { [UP]::FindMain([uint32]$pa.Id) } 8000
+        } catch {}
+        if (-not $pa -or $ma -eq [IntPtr]::Zero) {
+            $actRead += "content[$($sp.btn)] boot=fail"
+            $actBad += "'$($sp.btn)' 内容段: 新实例 8s 内未起主窗"
+            if ($pa) { try { $pa.Kill() } catch {} }
+            continue
+        }
+        $fb = [UP]::FindChildByText($ma, $sp.btn)
+        if ($fb -eq [IntPtr]::Zero) {
+            $actBad += "'$($sp.btn)' 内容段: 干净实例里找不到按钮"
+            Kill-ProcDiag $pa "'$($sp.btn)' 内容段找不到按钮" $oA $eA
+            continue
+        }
+        $clk = Invoke-ClickSyncLate -Btn $fb -Main $ma -ProcId ([int]$pa.Id)
+        if ($clk.Late) {
+            $actRead += "jitter[$($sp.btn)]=BM_CLICK(late=$($clk.LateMs)ms resp=$([UP]::Responds($ma)))"
+            $fw = $clk.Win
+        } elseif ($clk.Sync) {
+            $fw = $clk.Win
+        } else {
+            $actBad += "'$($sp.btn)' 内容段: BM_CLICK 3s 未返回 + 迟到 7s 仍无窗体 (resp=$([UP]::Responds($ma)))"
+            Kill-ProcDiag $pa "'$($sp.btn)' 内容段 BM_CLICK 超时" $oA $eA
+            continue
+        }
+        if ($fw -eq [IntPtr]::Zero) {
+            $actRead += "content[$($sp.btn)]=OPEN-FAIL"
+            $actBad += "'$($sp.btn)' 内容段: 3s 内没有弹出可见窗体"
+            if (-not [UP]::Responds($ma)) { Kill-ProcDiag $pa "'$($sp.btn)' 内容段弹窗超时且主窗不响应" $oA $eA }
+            try { if (-not $pa.HasExited) { $pa.Kill() } } catch {}
+            continue
+        }
+        $fcap = [UP]::WText($fw)
+        # 非模态子窗体可能被主窗/终端盖住 —— 抓屏前必须置 TOPMOST + 置前。
+        # ⚠ 只发一次是**不够**的: 实测 A1(Tree) 第一轮 SetForegroundWindow 被前台锁
+        # 拒掉 (返回 false), 3s 后 CopyFromScreen 读到的是 IDE 的暗色文件树 (c=13,17,23)。
+        # 所以这里要**验证 + 最多 3 次重试**, 并把最终前台读数记进 actRead (fg=...) ——
+        # 判据不变, 只修采集侧: 没真正抬到前台就不许拿这张图当内容读数。
+        [UP]::SetWindowPos($fw, [IntPtr](-1), 0, 0, 0, 0, 0x0013) | Out-Null
+        $fgOk = $false
+        for ($fgTry = 1; $fgTry -le 3; $fgTry++) {
+            [UP]::ForceForeground($fw) | Out-Null
+            Start-Sleep -Milliseconds 900
+            if ([UP]::GetForegroundWindow() -eq $fw) { $fgOk = $true; break }
+        }
+        $fgNow = [UP]::GetForegroundWindow()
+        $fgTxt = [UP]::Cls($fgNow) + '|' + [UP]::WText($fgNow)
+        $actRead += "fg[$($sp.btn)] ok=$fgOk try=$fgTry now=$fgTxt"
+        # 抬不到前台**不再是红项**: 内容读数已改走 PrintWindow(2), 与 z-order 无关。
+        # 这里只留读数, 供"为什么抓屏那张图是遮挡像素"的归因使用。
+        [UP]::RedrawWindow($fw, [IntPtr]::Zero, [IntPtr]::Zero, 0x0185) | Out-Null
+        $dlgA = [UP]::FindDialog([uint32]$pa.Id)
+        if ($dlgA -ne [IntPtr]::Zero) {
+            $actBad += ("'$($sp.btn)' 内容段弹了模态框 '" + [UP]::WText($dlgA) + "'")
+            [UP]::CloseWin($dlgA) | Out-Null
+            [void](Wait-Gone $dlgA 3000)
+        }
+        if ($fcap -ne $sp.cap) { $actBad += "'$($sp.btn)' 窗体标题 '$fcap' != '$($sp.cap)'" }
+        # 给 Form_Load 异步链 (IMAGE/XML 载入) 留时间; 醒来后再确认一次前台没被抢
+        Start-Sleep -Milliseconds 3000
+        if ([UP]::GetForegroundWindow() -ne $fw) {
+            [UP]::ForceForeground($fw) | Out-Null
+            Start-Sleep -Milliseconds 600
+            $actRead += "fg[$($sp.btn)] re-$([UP]::GetForegroundWindow() -eq $fw)"
+        }
+        $ucp = [UP]::FindUcHost($fw)
+        if ($ucp -eq [IntPtr]::Zero) {
+            $actBad += "'$($sp.btn)' 窗体里没有 VB6_UserControlHost (树控件缺失)"
+        } else {
+            # 主路: PrintWindow(2) 取 UC 自身 (不受 z-order/前台影响); scr= 仅作诊断对照
+            $stats = Get-StatsPrint $ucp
+            $actRead += ("scr[$($sp.cap)] " + (Get-StatsScreen $ucp))
+            if ($env:UCTV_SAVE_FORMS -eq '1' -and $OutDir -ne '') {
+                $safe = ($sp.cap -replace '[^A-Za-z0-9]', '_')
+                Save-WinPng $ucp (Join-Path $OutDir ("form_$safe.png")) | Out-Null
+            }
+            $lf = [UP]::LogFontOf($ucp)
+            if ($lf -eq '') { $lf = [UP]::PropLogFontOf($ucp) }
+            $actRead += ("content[$($sp.cap)] " + $stats + " font=[$lf]")
+            $st = @{}
+            foreach ($tok in ($stats -split ' ')) {
+                $kv = $tok -split '='
+                if ($kv.Count -eq 2 -and $kv[0] -ne 'mode' -and $kv[0] -ne 'c') { $st[$kv[0]] = [int64]$kv[1] }
+            }
+            if (-not $st.ContainsKey('w')) {
+                $actBad += "'$($sp.btn)' 内容取样失败 ($stats)"
+            } else {
+                $sc = $expDpi / 96.0
+                $sc2 = $sc * $sc
+                # 设计值口径里与 DPI 线性同缩的读数 (行距/边条) 用 120dpi 基准折算:
+                # 参考读数与两个硬阈都是 120dpi 量的, 96dpi 的 CI 上必须跟着缩,
+                # 否则 54 会被 5 判成「裁切」、7 会被 9 判成「行不足」。
+                $sc120 = $expDpi / 120.0
+                # 基准优先级: 有真 VB6 实拍读数就逐项对读数 (强口径); 没有才退回设计值口径。
+                $rf = $ref[$sp.cap]
+                if ($refDpi -gt 0 -and $expDpi -ne $refDpi) {
+                    # 基准读数只在录它的 DPI 下有效。这里**不换尺子**: 记 SKIP, 不用设计值顶替。
+                    $actRead += "content[$($sp.cap)]=SKIP(基准dpi=$refDpi 本机dpi=$expDpi)"
+                } elseif ($rf -ne $null -and $rf.ContainsKey('w')) {
+                    if ($rf['w'] -ne $st['w'] -or $rf['h'] -ne $st['h']) {
+                        $actBad += "'$($sp.cap)' 树控件 $($st['w'])x$($st['h']) != 真 VB6 $($rf['w'])x$($rf['h'])"
+                    }
+                    if ($st['textRows'] -ne $rf['textRows']) {
+                        $actBad += "'$($sp.cap)' 文字行 $($st['textRows']) != 真 VB6 $($rf['textRows'])"
+                    }
+                    if ($rf['firstTextW'] -gt 0 -and $st['firstTextW'] -lt ($rf['firstTextW'] - 2)) {
+                        $actBad += "'$($sp.cap)' 首行文本墨迹宽 $($st['firstTextW'])px < 真 VB6 $($rf['firstTextW'])-2px (文字缺失/截断)"
+                    }
+                    if ($rf['lightRows'] -gt 0 -and $st['lightRows'] -lt ($rf['lightRows'] - 2)) {
+                        $actBad += "'$($sp.cap)' 浅色文字行 $($st['lightRows']) < 真 VB6 $($rf['lightRows'])-2"
+                    }
+                    foreach ($mk in @('vivid','photo','avatar','dark')) {
+                        if ($rf[$mk] -gt 0 -and $st[$mk] -lt [int]($rf[$mk] * 0.9)) {
+                            $actBad += "'$($sp.cap)' $mk=$($st[$mk]) < 真 VB6 $($rf[$mk])*0.9 (内容缺失)"
+                        }
+                    }
+                    if ($rf['bg65'] -gt 0 -and $st['bg65'] -lt [int]($rf['bg65'] * 0.9)) {
+                        $actBad += "'$($sp.cap)' 深底 bg65=$($st['bg65']) < 真 VB6 $($rf['bg65'])*0.9"
+                    }
+                    if ($st['greenRim'] -gt ($rf['greenRim'] + 8)) {
+                        $actBad += "'$($sp.cap)' 边框右缘被裁切 greenRim=$($st['greenRim']) > 真 VB6 $($rf['greenRim'])+8"
+                    }
+                    $rlp = ([string]$rf['font']) -split '\|'
+                    if ($rlp.Count -ge 4) {
+                        $lfParts = $lf -split '\|'
+                        if ($lfParts.Count -lt 4) {
+                            $actBad += "'$($sp.cap)' 取不到 UC 字体 (WM_GETFONT 空, 真 VB6 是 $($rf['font']))"
+                        } else {
+                            if ($lfParts[0] -ine $rlp[0]) {
+                                $actBad += "'$($sp.cap)' 字体 face '$($lfParts[0])' != 真 VB6 '$($rlp[0])'"
+                            }
+                            if ([Math]::Abs([int]$lfParts[1] - [int]$rlp[1]) -gt 1) {
+                                $actBad += "'$($sp.cap)' 字体高 $($lfParts[1]) != 真 VB6 $($rlp[1]) ±1"
+                            }
+                            if ([int]$lfParts[3] -ne [int]$rlp[3]) {
+                                $actBad += "'$($sp.cap)' 字重 $($lfParts[3]) != 真 VB6 $($rlp[3])"
+                            }
+                        }
+                    } else {
+                        $actBad += "'$($sp.cap)' 基准字体读数缺失 (REF font='$($rf['font'])')"
+                    }
+                } else {
+                # 2026-11-10: 这一段原来叫"设计值口径"(ref=none 时用), 已删除 ——
+                # 同一判定不许有两把尺子。没有真 VB6 读数就是红, 不拿更松的阈值顶上。
+                $actBad += "'$($sp.cap)' 基准缺读数 (ref json 无该窗口) —— 不退回设计值口径"
+                }
+                $lfParts = $lf -split '\|'
+                if ($lfParts.Count -lt 4) {
+                    $actBad += "'$($sp.cap)' 取不到 UC 字体 (WM_GETFONT 空)"
+                } else {
+                    $lfFace = $lfParts[0]; $lfH = [int]$lfParts[1]; $lfW = [int]$lfParts[3]
+                    $expFontH = [int][Math]::Round($sp.pt * $expDpi / 72.0)
+                    $faceOk = ($lfFace -ieq $sp.face)
+                    if (-not $faceOk -and $sp.face -eq 'Segoe UI Semibold' -and $lfFace -ieq 'Segoe UI' -and $lfW -ge 600) { $faceOk = $true }
+                    if (-not $faceOk) { $actBad += "'$($sp.cap)' 字体 face '$lfFace' != '$($sp.face)'" }
+                    if ([Math]::Abs([Math]::Abs($lfH) - $expFontH) -gt 1) {
+                        $actBad += "'$($sp.cap)' 字体高 $lfH 偏离设计 -$expFontH ±1"
+                    }
+                    if ($lfW -ne $sp.weight) { $actBad += "'$($sp.cap)' 字重 $lfW != $($sp.weight)" }
+                }
+                }
+            }
+        [UP]::CloseWin($fw) | Out-Null
+        $fgA = Wait-Gone $fw 3000
+        if (-not $fgA) {
+            [UP]::PostMessageW($fw, 0x0111, [IntPtr]2, [IntPtr]::Zero) | Out-Null   # WM_COMMAND IDCANCEL
+            $fgA = Wait-Gone $fw 3000
+        }
+        $actRead += "content[$($sp.btn)] close=$fgA"
+        if (-not $fgA) { $actBad += "'$($sp.btn)' 内容段窗体 3s+3s 内关不掉"; Kill-ProcDiag $pa "'$($sp.btn)' 内容段关窗超时" $oA $eA }
+        try { if (-not $pa.HasExited) { $pa.Kill() } } catch {}
+    }
+
+    # ---------- B) 重复点击: 同一进程, 5 按钮 x 3 轮, 每轮关干净 ----------
+    $oB = Join-Path $OutDir "contentB.out"
+    $eB = Join-Path $OutDir "contentB.err"
+    $pb = $null; $mb = [IntPtr]::Zero
+    try {
+        $pb = Start-Process -FilePath $exePath -WorkingDirectory $wd -PassThru `
+             -RedirectStandardOutput $oB -RedirectStandardError $eB
+        try { $pb.WaitForInputIdle(15000) | Out-Null } catch {}
+        $mb = Wait-Until { [UP]::FindMain([uint32]$pb.Id) } 8000
+    } catch {}
+    if (-not $pb -or $mb -eq [IntPtr]::Zero) {
+        $actRead += "repeat=boot-fail"
+        $actBad += "重复点击段: 第二实例 8s 内未起主窗"
+        if ($pb) { try { $pb.Kill() } catch {} }
+    } else {
+        $deadB = $false
+        foreach ($sp in $formSpecs) {
+            if ($deadB) { break }
+            for ($round = 1; $round -le 3; $round++) {
+                if ($deadB) { break }
+                $fb = [UP]::FindChildByText($mb, $sp.btn)
+                if ($fb -eq [IntPtr]::Zero) {
+                    $actRead += "repeat[$($sp.btn)] r$round btn=gone"
+                    $actBad += "'$($sp.btn)' 第 $round 轮找不到按钮 (主窗控件已失效)"
+                    break
+                }
+                $clk = Invoke-ClickSyncLate -Btn $fb -Main $mb -ProcId ([int]$pb.Id)
+                if ($clk.Late) {
+                    $actRead += "jitter[$($sp.btn)] r$round=BM_CLICK(late=$($clk.LateMs)ms)"
+                } elseif (-not $clk.Sync) {
+                    $actRead += "repeat[$($sp.btn)] r$round clickSync=false"
+                    $actBad += "'$($sp.btn)' 第 $round 轮 BM_CLICK 3s 未返回 + 迟到 7s 仍无窗体 (resp=$([UP]::Responds($mb)))"
+                    break
+                }
+                $fw = $clk.Win
+                if ($fw -eq [IntPtr]::Zero) {
+                    $actRead += "repeat[$($sp.btn)] r$round=OPEN-FAIL"
+                    $actBad += "'$($sp.btn)' 第 $round 轮 3s 内没有弹出可见窗体 (Show 重建失败)"
+                    if (-not [UP]::Responds($mb)) {
+                        Kill-ProcDiag $pb "'$($sp.btn)' 第 $round 轮弹窗超时且主窗不响应" $oB $eB
+                        $deadB = $true
+                    }
+                    break
+                }
+                $fcap = [UP]::WText($fw)
+                $dlgB = [UP]::FindDialog([uint32]$pb.Id)
+                if ($dlgB -ne [IntPtr]::Zero) {
+                    $actBad += "'$($sp.btn)' 第 $round 轮弹了模态框 '" + [UP]::WText($dlgB) + "'"
+                    [UP]::CloseWin($dlgB) | Out-Null
+                    [void](Wait-Gone $dlgB 3000)
+                }
+                # §51 (2026-11-07): **同一按钮连点** 每次都必须有内容。旧产物 (UC 替身记录
+                # 宿主销毁后不摘) 在第 2/3 次会把 Draw/Cls 落到已销毁窗口的持久表面上:
+                # 窗照样弹出来, 但整块空白 (Contact 实测 vivid=13 avatar=0 photo=0)。
+                # 口径: 等连续 2 帧读数一致再判; 通用底线 vivid>=800 (空白态是个位数),
+                # Contact 另加头像面积 >= 3000*scale2 (与 A 段同阈)。
+                $buc = [UP]::FindUcHost($fw)
+                if ($buc -eq [IntPtr]::Zero) {
+                    $actBad += "'$($sp.btn)' 第 $round 轮窗体里找不到 UC 宿主子窗"
+                } else {
+                    $bst = ''; $bprev = ''
+                    for ($bi = 0; $bi -lt 20; $bi++) {
+                        $bst = Get-StatsPrint $buc
+                        if ($bst -eq $bprev) { break }
+                        $bprev = $bst
+                        Start-Sleep -Milliseconds 150
+                    }
+                    $bm = @{}
+                    foreach ($tok in ($bst -split ' ')) {
+                        $kv = $tok -split '='
+                        if ($kv.Count -eq 2 -and $kv[0] -ne 'mode' -and $kv[0] -ne 'c') { $bm[$kv[0]] = [int64]$kv[1] }
+                    }
+                    $bv  = if ($bm.ContainsKey('vivid'))  { $bm['vivid'] }  else { -1 }
+                    $bav = if ($bm.ContainsKey('avatar')) { $bm['avatar'] } else { -1 }
+                    $actRead += "repeatcontent[$($sp.btn) $round] vivid=$bv avatar=$bav"
+                    if ($bv -lt 800) {
+                        $actBad += "'$($sp.btn)' 第 $round 轮内容空白 (vivid=$bv < 800)"
+                    }
+                    if ($sp.btn -eq 'Contact  List') {
+                        $bsc = [UP]::GetDpiForWindow($mb) / 96.0
+                        if ($bav -lt [int](3000 * $bsc * $bsc)) {
+                            $actBad += "'$($sp.btn)' 第 $round 轮头像全缺 (avatar=$bav < $([int](3000 * $bsc * $bsc)))"
+                        }
+                    }
+                }
+                [UP]::CloseWin($fw) | Out-Null
+                $fgB = Wait-Gone $fw 3000
+                if (-not $fgB) {
+                    [UP]::PostMessageW($fw, 0x0111, [IntPtr]2, [IntPtr]::Zero) | Out-Null
+                    $fgB = Wait-Gone $fw 3000
+                }
+                $actRead += "repeat[$($sp.btn) $round]=open:'$fcap' sync=$bsync close=$fgB"
+                if (-not $fgB) {
+                    $actBad += "'$($sp.btn)' 第 $round 轮弹窗 3s+3s 内关不掉"
+                    Kill-ProcDiag $pb "'$($sp.btn)' 第 $round 轮关窗超时" $oB $eB
+                    $deadB = $true
+                    break
+                }
+                Start-Sleep -Milliseconds 400
+                $left = [UP]::FindOtherForm([uint32]$pb.Id, $mb)
+                $ldlg = [UP]::FindDialog([uint32]$pb.Id)
+                if ($left -ne [IntPtr]::Zero -or $ldlg -ne [IntPtr]::Zero) {
+                    $actBad += "'$($sp.btn)' 第 $round 轮关闭后仍有残留窗体"
+                }
+                if ($pb.HasExited) {
+                    $actBad += "'$($sp.btn)' 第 $round 轮后进程崩溃"
+                    Kill-ProcDiag $pb "'$($sp.btn)' 第 $round 轮后进程已退出" $oB $eB
+                    $deadB = $true
+                    break
+                }
+            }
+        }
+        try { if (-not $pb.HasExited) { $pb.Kill() } } catch {}
+    }
 $bad = @()
 if (($white / $area) -lt 0.15) { $bad += "白底占比 $([Math]::Round(100*$white/$area,1))% < 15%" }
 if (($bg240 / $area) -gt 0.40) { $bad += "宿主灰底占比 $([Math]::Round(100*$bg240/$area,1))% > 40%" }
@@ -681,12 +1968,16 @@ else {
     }
 }
 
-$readout = "tree=${tw}x${th} white=$white bg240=$bg240 dark=$dark darkRows=$darkRows hl=$hl vivid=$vivid"
+# 交互判据 (缺陷 1/2/3/4) 的红项并入同一条 FAIL 通道, 不另开"软失败"
+if ($actBad.Count -gt 0) { $bad += ("交互: " + ($actBad -join "; ")) }
+
+$readout = "tree=${tw}x${th} $assetRead white=$white bg240=$bg240 dark=$dark darkRows=$darkRows hl=$hl vivid=$vivid"
 $readout += " selWhite=$selWhite selDark=$selDark selBlack=$selBlack hlH=${hlH}@${expHl} pitch=${pitch}@${expPitch} dpi=$expDpi"
 $readout += " swatches=[" + ($swatchRead -join " | ") + "] chk240=$([Math]::Round(100*$chk240,1))% chkWhite=$([Math]::Round(100*$chkWhite,1))% label240=$([Math]::Round(100*$labelRatio,1))% labelWhite=$([Math]::Round(100*$labelWhiteRatio,1))%"
 $readout += " edFrameDark=$edFrameDark edTopDark=$edTopDark edEdge236=$edEdge236/$($editHwnds.Length) sb240=$([Math]::Round(100*$sbR240,1))% sbWhite=$([Math]::Round(100*$sbRWhite,1))% sbMid=$sbMidOk/$sbCount sbLeft=$sbLeftOk/$sbCount"
 $readout += " btns=[" + ($btnRead -join " | ") + "] twoLine=$expTwoLine bottomBarRefDiff=$refDiff"
 $readout += " font=[" + ($fontRead -join " | ") + "] expFontH=$expFontH faceInstalled=$expFace" + $(if ($faceInstalled) { ":yes" } else { ":no(参考行数判据 SKIP)" })
+$readout += " act=[" + ($actRead -join " | ") + "]"
 if ($bad.Count -gt 0) {
     Write-Output ("FAIL " + ($bad -join "; ") + " | " + $readout + " | png=$pngPath")
     try { $p.Kill() } catch {}

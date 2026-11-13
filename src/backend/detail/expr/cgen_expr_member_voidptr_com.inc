@@ -12,8 +12,29 @@
     //   Db.Rs.EOF         → vb6_ComGetXXXProp(Db->Rs..., L"EOF")
     //   Db.Rs.FileExists()→ vb6_ComCallXXX(Db->Rs..., L"FileExists", args, argc)
     // 注: class_voidptr 的注释会被 MSVC 视为空白, 不影响 C 代码语义.
-    if (obj.find("/* class var .") != std::string::npos) {
-        if (obj.find(" voidptr */") != std::string::npos) {
+    //
+    // PhotoDemon C2143 收口: 尾注只认**末尾**那一枚。`obj` 可能是「内层调用 + 实参里的尾注」:
+    //   vb6_pdSelection_GetCompositeBoundaryRect((void*)…->MainSelection  /* 字段尾注 */)
+    // 那枚注释标的是**内层调用的接收者**, 不是外层成员要读的字段。此前按「包含字段尾注标记」
+    // 一命中就 substr 截断 + 拼 `->member`, 把这枚
+    // 调用从实参中间切开: `…GetCompositeBoundaryRect((void*)…->MainSelection->Left`
+    // (PhotoDemon Layers.bas:467/468 `…GetCompositeBoundaryRect.Left/Top`
+    //  ⇒ Layers.c 672/673 两条 C2143「缺少右括号」)。
+    // 判据: 尾注的 `*/` 之后只许剩空白 —— classFieldReadExpr 把它拼在**整串末尾**,
+    // 故"末尾"就是"这枚注释是对象本身的字段读标记"。
+    size_t mkTailPos = std::string::npos;
+    {
+        const size_t mkLast = obj.rfind("/* class var .");
+        if (mkLast != std::string::npos) {
+            const size_t mkEnd = obj.find("*/", mkLast);
+            if (mkEnd != std::string::npos
+                && obj.find_first_not_of(" \t\r\n", mkEnd + 2) == std::string::npos) {
+                mkTailPos = mkLast;
+            }
+        }
+    }
+    if (mkTailPos != std::string::npos) {
+        if (obj.find(" voidptr */", mkTailPos) != std::string::npos) {
             comObjExpr_ = obj;
             comMemberName_ = node.memberName;
             isComMarker_ = true;
@@ -28,7 +49,7 @@
         // 的成员). 例: oCallback.Socket.Accept requestId
         //   → vb6_cTlsReMaster_Accept((void*)oCallback->Socket, &requestId)
         std::string objExpr = obj;
-        size_t mkPos = obj.find("  /* class var .");
+        size_t mkPos = obj.rfind("  /* class var .");
         if (mkPos != std::string::npos) objExpr = obj.substr(0, mkPos);
         std::string fieldCls =
             node.object ? inferClassTypeOfExpr(*node.object) : "";

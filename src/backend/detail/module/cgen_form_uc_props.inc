@@ -33,7 +33,12 @@
 //         崩溃的最终根因在**调用点侧**的实参打包, 尚未定位 —— 见下方说明。
 
 {
-    struct UcPropPick { std::string name; std::string vbType; std::string getFn; std::string setFn; std::string objCType; std::string setSeg; };
+    // letSeg/setSeg 分开记: VB6 的 DISPATCH_PROPERTYPUT 与 DISPATCH_PROPERTYPUTREF
+    // 是**两条独立入口**, Property Let 与 Property Set 各自成体 (真 VB6 6.00.9782
+    // oracle 实测: `x.P = 5`→LET, `Set x.P = obj`→SET, `x.P = Nothing`→SET,
+    // `x.P = Empty`→LET, `x.P = obj`(无 Set)→LET)。所以同时声明两者的属性要发
+    // **两个** thunk, 分别落到各自的 prop_let_/prop_set_; 只声明一侧的保持单 thunk。
+    struct UcPropPick { std::string name; std::string vbType; std::string getFn; std::string setFn; std::string setRefFn; std::string objCType; std::string letSeg; std::string setSeg; bool letObj = false; bool setObj = false; };
     std::vector<UcPropPick> ucProps;
     ucHostPropCount_ = 0;
 
@@ -113,7 +118,7 @@
             UcPropPick pick;
             pick.name = ps->name;
             if (ps->kind == SymbolKind::PropertyGet) {
-                if (!ps->params.empty()) continue;              // 带参默认属性不走桥
+                if (!ps->P().params.empty()) continue;              // 带参默认属性不走桥
                 pick.vbType = vbScalarOfName(ps->variableTypeName);
                 if (pick.vbType.empty()) pick.vbType = vbScalarOfType(ps->type);
                 if (pick.vbType.empty()) {
@@ -141,8 +146,8 @@
                     pick.getFn = "vb6_" + ctl + "_ucPropGet_" + cIdent(ps->name);
                 }
             } else if (ps->kind == SymbolKind::PropertyLet || ps->kind == SymbolKind::PropertySet) {
-                if (ps->params.size() != 1) continue;
-                const ParameterInfo& pi = ps->params[0];
+                if (ps->P().params.size() != 1) continue;
+                const ParameterInfo& pi = ps->P().params[0];
                 pick.vbType = vbScalarOfName(pi.typeRefName);
                 if (pick.vbType.empty()) pick.vbType = vbScalarOfType(pi.type);
                 if (!pick.vbType.empty()) {
@@ -160,7 +165,13 @@
                 // (对象形参用 Let 赋值), 原生函数名是 prop_let_SelNode; 桥旧代码固定发
                 // prop_set_SelNode ⇒ LNK2019 `_vb6_ucTreeViewPlus_prop_set_SelNode`。
                 // 按符号种类记下真实动词, 发射时照抄。
-                pick.setSeg = (ps->kind == SymbolKind::PropertyLet) ? "prop_let_" : "prop_set_";
+                if (ps->kind == SymbolKind::PropertyLet) {
+                    pick.letSeg = "prop_let_";
+                    pick.letObj = pick.vbType.empty();
+                } else {
+                    pick.setSeg = "prop_set_";
+                    pick.setObj = pick.vbType.empty();
+                }
             } else {
                 continue;
             }
@@ -176,7 +187,12 @@
                 if (Symbol::toLower(m.name) == Symbol::toLower(p.name)) {
                     if (!p.getFn.empty()) m.getFn = p.getFn;
                     if (!p.setFn.empty()) m.setFn = p.setFn;
-                    if (!p.setSeg.empty()) m.setSeg = p.setSeg;
+                    // Let/Set 是两条独立入口, **不合并**。旧代码按 moduleScope()->symbols()
+                    // 的 unordered_map 遍历序只留一个 (谁先遍历到算谁), 共享化把类型库符号
+                    // 撤出该表后桶布局变了, 同一工程会从 prop_set 翻成 prop_let —— 那是
+                    // 哈希顺序的偶然, 不是语义。真 VB6 oracle 实测两条入口各走各的。
+                    if (!p.letSeg.empty()) { m.letSeg = p.letSeg; m.letObj = p.letObj; }
+                    if (!p.setSeg.empty()) { m.setSeg = p.setSeg; m.setObj = p.setObj; }
                     if (!p.vbType.empty()) m.vbType = p.vbType;
                     if (!p.objCType.empty()) m.objCType = p.objCType;
                     hit = true;
@@ -235,7 +251,9 @@
             }
         }
         if (!p.setFn.empty()) {
-            // 同上: 只有 setter **自己**是对象形参时才走对象分支 (vbType 空 = 标量档不中)。
+            // 发射一个 setter thunk: `seg` 是原生符号动词 (prop_let_ / prop_set_)。
+            // 对象形参档走 vb6_VariantToObjectVal, 标量档走 unboxUcSetter。
+            auto emitSetter = [&](const std::string& fnName, const std::string& seg) {
             if (!p.objCType.empty() && p.vbType.empty()) {
                 // Fix <vbeclipse> rev35: 借 vb6_VariantToObjectVal 拆箱, **不裸读 pdispVal**。
                 //   原症状: `ucTabStrip.Add(…, Optional Icon)` 的 `.Icon = Icon` 崩在
@@ -252,21 +270,39 @@
                 //   ⇒ 本条修的是"桥不该裸读 union", **不是**"Icon 崩溃的最终根因";
                 //   野值来自**调用点侧**对 `Optional Icon As Picture`(省略实参)的打包,
                 //   那才是下一步要查的地方。别因为 rev35 在链上就认为 Icon 已经修好。
-                c_.emitLine("static int32_t " + p.setFn + "(void* inst, const void* inV) {");
+                c_.emitLine("static int32_t " + fnName + "(void* inst, const void* inV) {");
                 c_.emitLine("    " + p.objCType + " _o = (" + p.objCType
                             + ")vb6_VariantToObjectVal(*(const vb6_VARIANT*)inV);");
-                c_.emitLine("    vb6_" + ctl + "_" + propFnSegment(p.setSeg.empty() ? "prop_set_" : p.setSeg, p.name)
+                c_.emitLine("    vb6_" + ctl + "_" + propFnSegment(seg, p.name)
                             + "((vb6_cls_" + ctl + "*)inst, &_o);");
                 c_.emitLine("    return 1;");
                 c_.emitLine("}");
             } else {
-            c_.emitLine("static int32_t " + p.setFn + "(void* inst, const void* inV) {");
-            c_.emitLine("    vb6_" + ctl + "_" + propFnSegment(p.setSeg.empty() ? "prop_let_" : p.setSeg, p.name)
+            c_.emitLine("static int32_t " + fnName + "(void* inst, const void* inV) {");
+            c_.emitLine("    vb6_" + ctl + "_" + propFnSegment(seg, p.name)
                         + "((vb6_cls_" + ctl
                         + "*)inst, "
                         + unboxUcSetter(p.vbType, "(*(const vb6_VARIANT*)inV)") + ");");
             c_.emitLine("    return 1;");
             c_.emitLine("}");
+            }
+            };
+            const std::string base = "vb6_" + ctl + "_";
+            const bool hasLet = !p.letSeg.empty();
+            const bool hasSet = !p.setSeg.empty();
+            if (hasLet && hasSet && p.letObj == p.setObj) {
+                // 两侧都声明且同族: VB6 是两条独立入口 (PROPERTYPUT / PROPERTYPUTREF),
+                // 各发一个 thunk, 写同一份属性存储。表里 put 槽 → Let, setref 槽 → Set。
+                p.setFn = base + "ucPropLet_" + cIdent(p.name);
+                p.setRefFn = base + "ucPropSet_" + cIdent(p.name);
+                emitSetter(p.setFn, p.letSeg);
+                emitSetter(p.setRefFn, p.setSeg);
+            } else {
+                // 只声明一侧: 保持现状 —— 单个 thunk, 两个入口都退到它 (不新造错误腿)。
+                const std::string seg = hasLet ? p.letSeg : p.setSeg;
+                p.setFn = base + "ucPropSet_" + cIdent(p.name);
+                p.setRefFn = p.setFn;
+                emitSetter(p.setFn, seg);
             }
         }
     }
@@ -275,7 +311,8 @@
         for (auto& p : ucProps) {
             c_.emitLine("    { L\"" + p.name + "\", "
                         + (p.getFn.empty() ? std::string("NULL") : p.getFn) + ", "
-                        + (p.setFn.empty() ? std::string("NULL") : p.setFn) + " },");
+                        + (p.setFn.empty() ? std::string("NULL") : p.setFn) + ", "
+                        + (p.setRefFn.empty() ? std::string("NULL") : p.setRefFn) + " },");
         }
         c_.emitLine("};");
     }

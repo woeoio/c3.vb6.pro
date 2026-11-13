@@ -154,6 +154,11 @@ if ($ast5) {
     # Needles 3 / Absent 0 / -Tail 2 枚臂 (BYREFARG= / BYVALARG=)
     'b231_byref_scalar'              = @(8, 3, 0, 2)
     'b231_byref_scalar_x86'          = @(10, 3, 0, 2)
+    # 账 #610 第344刀: 服务端入站 SAFEARRAY(VARIANT) 那一族 —— 客户端递真数组,
+    # 服务端体里逐枚读出来再拼回串; 两架构各一条, 位置面 8 (+2 = -Arch),
+    # Needles 3 (plain 读数 / byref 读数 / DONE) / Absent 0 / -Tail 2 枚臂 (ARRVAR= / ARRVAR=:b)。
+    'fgz_fix014_vararr_inbound'          = @(8, 3, 0, 2)
+    'fgz_fix014_vararr_inbound_x86'      = @(10, 3, 0, 2)
     'b230_arrout_writeback_x86'      = @(10, 3, 0, 2)
     'b188_terminate_error_frame'          = @(8, 6, 1, 1)
     'b188_terminate_error_frame_x86'     = @(10, 6, 1, 1)

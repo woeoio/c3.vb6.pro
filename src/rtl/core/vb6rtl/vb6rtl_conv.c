@@ -116,22 +116,61 @@ BSTR vb6_NumToBSTRDefault(double v, int isSingle) {
     MultiByteToWideChar(CP_ACP, 0, nbuf, -1, wbuf, 64);
     return vb6_BSTR_FromStr(wbuf);
 }
-// Fix 135: VB6 Rnd 的真实算法 —— 24-bit LCG (与 VBA 一致):
-//   state = (state * 1140671485 + 12820163) Mod 2^24
-//   Rnd   = state / 2^24
-// 初值 (未 Randomize) = 0x50000。序列与 VB6 逐值一致, 图表 demo 的数据
-// (Charts 2020 各控件 Random(Min,Max)) 因此与 VB6 参考图完全相同。
-// 此前用 C rand(): 序列不同 → 柱高/饼图占比/TreeMaps 布局全都对不上参考图。
+// Fix 135 / Fix RND-SEQ: VB6 Rnd/Randomize 的**真实**实现。
+// 依据 = MSVBVM60.dll 反汇编 (rtcRandomize @ RVA 0x486B1 / rtcRandomNext @ 0x4871A,
+// 折叠工人 0x660EDF4A) + 真 VB6 6.00.9782 探针逐值核对 (28 段序列全等)。
+//   状态: 24-bit LCG, state = (state * 1140671485 + 12820163) & 0xFFFFFF
+//   输出: state / 2^24        (Single, 24 位尾数可精确表示)
+//   初值: 0x50000
+//   Randomize n (有参):
+//       u = (double)n 的**高 32 位**; fold = ((u & 0xFFFF) << 8) ^ ((u >> 8) & 0xFFFF00)
+//       state = fold | (old_state & 0xFF0000FF)     ← 低字节沿用旧状态, 不是取整截断
+//   Randomize (无参): 同一 fold, 但输入是 Timer 的 **Single 位型** (VB6 先 fstp dword)
+//   Rnd(n<0): u = (float)n 的位型; state = (((uint32_t)u >> 24) + u) & 0xFFFFFF; 再走一步
+//   Rnd(0):   返回当前 state, 不推进
+//   Rnd(n>0)/Rnd: 走一步
+// 三条容易踩的: (1) 连投同一整数种子**不复现**序列 (低字节继承);
+//   (2) `Randomize 0` 是确定性的 fold=0, 不是 Timer; (3) 非整数种子的归一化是折半 XOR,
+//   不是 float→int 截断。
 static int32_t g_rndState135 = 0x50000;
 
-float vb6_Rnd(int32_t seed) {
-    if (seed < 0) {
-        g_rndState135 = (int32_t)(seed & 0xFFFFFF);   /* 负参: 重播种 */
-    } else if (seed == 0) {
-        return (float)g_rndState135 / 16777216.0f;    /* 0: 重复上一个 */
+static int32_t vb6_rndFoldState(uint32_t u) {
+    uint32_t fold = (((u & 0xFFFFu) << 8) ^ ((u >> 8) & 0xFFFF00u)) & 0xFFFFFFu;
+    return (int32_t)((fold | ((uint32_t)g_rndState135 & 0xFF0000FFu)) & 0xFFFFFFu);
+}
+
+static int32_t vb6_rndStep(int32_t s) {
+    return (int32_t)(((int64_t)s * 1140671485LL + 12820163LL) & 0xFFFFFF);
+}
+
+float vb6_Rnd(double seed) {
+    if (seed == 0.0) {
+        return (float)g_rndState135 / 16777216.0f;    /* 0: 重复上一个 (不推进) */
     }
-    g_rndState135 = (int32_t)(((int64_t)g_rndState135 * 1140671485LL + 12820163LL) & 0xFFFFFF);
+    if (seed < 0.0) {
+        /* 负参: 用 Single 位型重播种 —— MSVBVM60: ((u >> 24) + u) & 0xFFFFFF */
+        float f = (float)seed;
+        uint32_t u;
+        memcpy(&u, &f, sizeof(u));
+        g_rndState135 = (int32_t)(((u >> 24) + u) & 0xFFFFFFu);
+    }
+    g_rndState135 = vb6_rndStep(g_rndState135);
     return (float)g_rndState135 / 16777216.0f;
+}
+
+/* Randomize <expr>: u 取 double 的高 32 位 (rtcRandomize 先 __vbaR8Var 再 fstp qword) */
+void vb6_Randomize(double seed) {
+    uint64_t bits;
+    memcpy(&bits, &seed, sizeof(bits));
+    g_rndState135 = vb6_rndFoldState((uint32_t)(bits >> 32));
+}
+
+/* 裸 Randomize: VB6 用 Timer 的 **Single** 位型 (660486E4 调 Timer 后 fstp dword) */
+void vb6_RandomizeTimer(void) {
+    float f = (float)vb6_Timer();
+    uint32_t u;
+    memcpy(&u, &f, sizeof(u));
+    g_rndState135 = vb6_rndFoldState(u);
 }
 
 // ============================================================
@@ -148,8 +187,10 @@ float vb6_Rnd(int32_t seed) {
 // 范围值取自 VB6 手册: Byte 0~255 / Integer -32768~32767 / Long -2147483648~2147483647。
 //
 // 口径说明 (与 VB6 的两处差别, 都是**已知取舍**, 不是漏):
-//   (1) 取整仍沿用既有的 round() (半值远离零), 不改 —— CInt 的银行家舍入是另一条账,
-//       改它会动到全部既有读数。
+//   (1) 取整沿用 VB6 的**银行家舍入** (半值取偶), 见下方 vb6_FltToLng。
+//       rev37 那段曾把"半值远离零"写成保留取舍, Fix 431 已按真 VB6 读数改回:
+//       参考图 Corporate Hierarchy 里 `34 * 1.25 = 42.5` 落 42、
+//       `10 * 1.25 = 12.5` 落 12 (树线列 x=80/122/164, 半值远离零会是 82/125/168)。
 //   (2) `On Error Resume Next` 下 vb6_RaiseError 提前返回, 此时本函数返回**被截断**的
 //       值并真的存进目标; VB6 那边是**放弃这次赋值、目标保持原值**。表达式的形状
 //       (而不是语句块) 决定了这个差别: 同一个 vb6_ChkXxx 要同时服务赋值 / 函数返回 /
@@ -179,9 +220,18 @@ int32_t vb6_ChkLong(int64_t v) {
    截断转换，于是 `l = 6.73` 交 6、`l = 7 / 2` 交 3；而**同一句**写成 `l = CLng(7 / 2)`
    走 round() 交 4。同一件事两个答案，正是本仓反复量出来的"同一个决定抄了两遍"那一族
    (#234 拿 DC / #235 画笔色 / #239 笔位 / #247 几何宿主路) 的最新一例。
-   半值远离零（不是银行家舍入）是 rev37 那段注释里**写明保留**的取舍 —— 这一处只解决
-   "别再截断"，顺带把 CLng/CInt 与隐式赋值并到同一个答案上。 */
-int64_t vb6_FltToLng(double x) { return (int64_t)round(x); }
+   半值按 VB6 的**银行家舍入**（取偶）。rev37 曾把"半值远离零"写成保留取舍，Fix 431
+   用真 VB6 的参考图读数把它推翻了（见文件头的口径说明 (1)）：`34 * 1.25 = 42.5`
+   在 VB6 落 42、`10 * 1.25 = 12.5` 落 12，round() 会给出 43/13，Corporate Hierarchy
+   的树线列因此整列偏移 2px、首行文字上移 1px，文字行带被并成少一行。
+   负号这边同一条规则：`CLng(-2.5) = -2`、`CLng(-3.5) = -4`（floor 后看奇偶）。 */
+int64_t vb6_FltToLng(double x) {
+    double f = floor(x);
+    double d = x - f;                 // 0 <= d < 1
+    if (d > 0.5) return (int64_t)(f + 1);
+    if (d < 0.5) return (int64_t)f;
+    return (((int64_t)f & 1) == 0) ? (int64_t)f : (int64_t)(f + 1);
+}
 
 #ifdef vb6_CInt
 #undef vb6_CInt      // vb6rtl_builtin.h 的 _Generic 宏在定义处必须关闭
@@ -742,18 +792,9 @@ double vb6_Exp(double x) { return exp(x); }
 double vb6_Fix(double x) { return (x >= 0) ? floor(x) : ceil(x); }
 double vb6_Int(double x) { return floor(x); }
 
-void vb6_Randomize(double seed) {
-    /* Fix 135: VB6 Randomize 用 Timer 计时值作种 (省略参数时)。 */
-    if (seed == 0.0) {
-        g_rndState135 = (int32_t)((unsigned)(GetTickCount() & 0xFFFFFF));
-    } else {
-        g_rndState135 = (int32_t)((unsigned)(int32_t)seed & 0xFFFFFF);
-    }
-}
-
 float vb6_Rnd_Full(int32_t seed) {
     /* Fix 135: 与 vb6_Rnd 同一 LCG。 */
-    return vb6_Rnd(seed);
+    return vb6_Rnd((double)seed);
 }
 
 // 类型转换 (补充)

@@ -5,6 +5,8 @@
 #include <initializer_list>
 #include "semantics/semantic_analyzer_internal.h"
 #include "common/form_pseudo.hpp"  // 账 #278 §B109: 窗体裸写属性问那张表 (与 backend 同一处登记)
+#include "common/vba_math.hpp"     // VBA.Math 成员名单: Math.<成员> 的编译期收口
+#include "common/reserved_stmt_keyword.hpp"  // 账 §56.50: 保留语句关键字顶不掉 (与 backend 同一处权威)
 
 namespace vb6c3 {
 
@@ -132,6 +134,11 @@ void SemanticAnalyzer::visit(IdentifierExpr& node) {
                                    node.name));
         }
         lastExprType_ = sym->type;
+        // R2/R3 (PhotoDemon): 数组性在两处各记一半 —— 局部/模块动态数组记在 Symbol::isArray
+        // (类型只有元素类型), 形参 `dst() As Byte` / 函数返回 `As Byte()` 记在类型 Array 位上。
+        // 表达式类型统一把 Array 位补齐, 让"数组整体赋值"两侧都是数组类型 (否则一侧是裸元素
+        // 类型, 相容性判不成, 诊断打印成 `?`)。符号本身的类型不动 —— 发码层按符号读。
+        if (sym->isArray) lastExprType_ = TypeSystem::makeArrayType(lastExprType_);
     } else {
         // 未找到标识符
         // <vbeclipse>: 但"工程级已经有这个名字"不算未找到 —— 标准模块的 Public 过程
@@ -194,6 +201,21 @@ void SemanticAnalyzer::visit(MemberAccessExpr& node) {
     memberObjCtx_ = true;
     Vb6Type objType = analyzeExpr(*node.object);
     memberObjCtx_ = savedMemberObjCtx;
+    // VBA.Math 的成员收口（PhotoDemon `Math` 定案，handoff §10.4）。真 VB6 的 VBA.Math
+    // 标准模块只认 Abs/Atn/Cos/Exp/Log/Rnd/Round/Sgn/Sin/Sqr/Tan；Fix/Int 是**全局内建
+    // 函数**，不是它的成员，`Math.Fix(1.7)` 在真 VB6 里是编译期「未找到方法或数据成员」。
+    // 修前它们落进发码白名单，折成 vb6_vb6_Fix / vb6_vb6_Int 再到链接期 LNK2019。
+    // 正向对照：Math.Sin 等真成员照旧通过。接收者同名符号（用户自己的变量/类）在场时不判，
+    // 交给既有解析 —— 收紧只能收 VBA.Math 这一格。
+    if (pass_ == 2 && node.object && node.object->kind == ASTNodeKind::IdentifierExpr) {
+        auto& recvMat = static_cast<IdentifierExpr&>(*node.object);
+        if (vbaLibLower(recvMat.name) == "math" && !symTab_.lookup(recvMat.name)
+            && !symTab_.lookupModule(recvMat.name)
+            && vbaMathMemberNames().count(vbaLibLower(node.memberName)) == 0) {
+            diag_.error(DiagnosticID::SemMemberNotFound, node.loc,
+                "未找到方法或数据成员: '" + recvMat.name + "." + node.memberName + "'");
+        }
+    }
     // ai/084a M1/M2: 成员访问级别守卫 —— obj 为 Me / 类类型变量时解析接收者类,
     // Private 成员越界报 3028 (家族内放行; 解析不出接收者 → 静默, 维持旧行为)。
     checkMemberAccessGuard(*node.object, node.memberName, node.loc);
@@ -228,8 +250,8 @@ void SemanticAnalyzer::visit(MemberAccessExpr& node) {
         if (modSym && modSym->kind == SymbolKind::ComModule) {
             std::string memberLower = node.memberName;
             std::transform(memberLower.begin(), memberLower.end(), memberLower.begin(), ::tolower);
-            auto it = modSym->comModuleFunctions.find(memberLower);
-            if (it != modSym->comModuleFunctions.end()) {
+            auto it = modSym->P().comModuleFunctions.find(memberLower);
+            if (it != modSym->P().comModuleFunctions.end()) {
                 lastExprType_ = it->second.returnType;
                 return;
             }
@@ -374,6 +396,15 @@ void SemanticAnalyzer::visit(IndexOrCallExpr& node) {
     // 判断是函数调用还是数组索引
     if (auto* ident = dynamic_cast<IdentifierExpr*>(node.callee.get())) {
         auto* sym = symTab_.lookup(ident->name);
+        // 账 §56.50: VB6 **保留语句关键字** (Randomize/Kill/Load/Unload) 在语句位置
+        // 永远是内建语句, 工程里同名的成员顶不掉它 —— 那枚成员只能靠限定接收者调
+        // (PD pdRandomizeUI.ctl:301 `Me.Randomize`)。这里不挡一下, 同模块那枚 0 参成员
+        // 会被当成被调方 ⇒ 假 VB3005「参数数量错误: 'Randomize' 需要 0-0 个参数」
+        // (本机探针 .temp/probe/rnd4 实测)。口径问 common/reserved_stmt_keyword.hpp。
+        // ⚠ 只挡**用户**符号 (!sym->isBuiltin): `Load`/`Unload` 在语义层本来就登记成
+        // 内置符号 (那条登记正是它们顶不掉用户成员的原因), 把它也挡掉会改掉那两枚
+        // 内建的既有语义 (本机实测 guisample 的 `Unload` 实参包装会跟着变)。
+        if (sym && !sym->isBuiltin && isReservedStmtKeyword(ident->name)) sym = nullptr;
         if (sym) {
             sym->isReferenced = true;
             // 虚方法 (tB, B08d): 这条分支自己查符号、不走 visit(IdentifierExpr), 所以裸名
@@ -411,8 +442,8 @@ void SemanticAnalyzer::visit(IndexOrCallExpr& node) {
                     diag_.error(DiagnosticID::SemTypeMismatch, node.loc,
                         "Delegate 直调暂不支持命名参数 (v1)");
                 }
-                calleeType = (del->delegateProcKind == ProcKind::Function)
-                             ? del->delegateReturnType : Vb6Type::Variant;
+                calleeType = (del->P().delegateProcKind == ProcKind::Function)
+                             ? del->P().delegateReturnType : Vb6Type::Variant;
             } else if (sym->kind == SymbolKind::Function ||
                 sym->kind == SymbolKind::DeclareFunc) {
                 // 函数调用: 返回类型即为表达式类型
@@ -423,11 +454,11 @@ void SemanticAnalyzer::visit(IndexOrCallExpr& node) {
                 // Sub作为表达式调用 (VB6允许, 返回Variant)
                 calleeType = Vb6Type::Variant;
                 checkCallArgs(sym, node);
-            } else if (sym->isArray) {
-                // 数组索引: 元素类型
-                uint16_t baseType = static_cast<uint16_t>(sym->type) &
-                                    ~static_cast<uint16_t>(Vb6Type::Array);
-                calleeType = static_cast<Vb6Type>(baseType);
+            } else if (sym->isArray || TypeSystem::isArrayType(sym->type)) {
+                // 数组索引: 元素类型。数组性可能记在符号上 (局部/模块数组, 类型只有元素类型),
+                // 也可能只在类型 Array 位上 (ByRef 形参 `dst() As Byte`) —— R3 (PhotoDemon):
+                // 改前只认前者, 形参下标因此退回**数组类型本身**, 每处都报一条假 VB3003。
+                calleeType = TypeSystem::arrayElemType(sym->type);
             } else {
                 calleeType = sym->type;
             }
@@ -561,26 +592,26 @@ bool SemanticAnalyzer::checkDelegateSignature(Symbol* del, Symbol* proc, SourceL
         diag_.error(DiagnosticID::SemTypeMismatch, loc, msg);
         return false;
     };
-    if (del->delegateProcKind == ProcKind::Function) {
+    if (del->P().delegateProcKind == ProcKind::Function) {
         if (proc->kind != SymbolKind::Function)
             return fail("Delegate '" + del->name + "' 是 Function 签名, 目标 '" +
                         proc->name + "' 不是 Function");
-        if (proc->type != del->delegateReturnType)
+        if (proc->type != del->P().delegateReturnType)
             return fail("Delegate '" + del->name + "' 返回类型不符: 委托为 " +
-                        std::string(TypeSystem::typeToString(del->delegateReturnType)) +
+                        std::string(TypeSystem::typeToString(del->P().delegateReturnType)) +
                         ", 目标为 " + std::string(TypeSystem::typeToString(proc->type)));
     } else {
         if (proc->kind != SymbolKind::Sub)
             return fail("Delegate '" + del->name + "' 是 Sub 签名, 目标 '" +
                         proc->name + "' 不是 Sub");
     }
-    if (del->params.size() != proc->params.size())
+    if (del->P().params.size() != proc->P().params.size())
         return fail("Delegate '" + del->name + "' 参数个数不符: 委托 " +
-                    std::to_string(del->params.size()) + " 个, 目标 " +
-                    std::to_string(proc->params.size()) + " 个");
-    for (size_t i = 0; i < del->params.size(); i++) {
-        const auto& d = del->params[i];
-        const auto& p = proc->params[i];
+                    std::to_string(del->P().params.size()) + " 个, 目标 " +
+                    std::to_string(proc->P().params.size()) + " 个");
+    for (size_t i = 0; i < del->P().params.size(); i++) {
+        const auto& d = del->P().params[i];
+        const auto& p = proc->P().params[i];
         if (d.type != p.type)
             return fail("Delegate '" + del->name + "' 第" + std::to_string(i + 1) +
                         "个参数类型不符: 委托 " + std::string(TypeSystem::typeToString(d.type)) +
@@ -595,16 +626,16 @@ bool SemanticAnalyzer::checkDelegateSignature(Symbol* del, Symbol* proc, SourceL
 
 bool SemanticAnalyzer::matchesDelegateSignature(Symbol* del, Symbol* proc) {
     if (!del || !proc) return false;
-    if (del->delegateProcKind == ProcKind::Function) {
+    if (del->P().delegateProcKind == ProcKind::Function) {
         if (proc->kind != SymbolKind::Function) return false;
-        if (proc->type != del->delegateReturnType) return false;
+        if (proc->type != del->P().delegateReturnType) return false;
     } else {
         if (proc->kind != SymbolKind::Sub) return false;
     }
-    if (del->params.size() != proc->params.size()) return false;
-    for (size_t i = 0; i < del->params.size(); i++) {
-        if (del->params[i].type != proc->params[i].type) return false;
-        if (del->params[i].isByVal != proc->params[i].isByVal) return false;
+    if (del->P().params.size() != proc->P().params.size()) return false;
+    for (size_t i = 0; i < del->P().params.size(); i++) {
+        if (del->P().params[i].type != proc->P().params[i].type) return false;
+        if (del->P().params[i].isByVal != proc->P().params[i].isByVal) return false;
     }
     return true;
 }
@@ -665,12 +696,12 @@ void SemanticAnalyzer::bindDelegateAddressOf(const std::string& typeName, Expr& 
     aof.funcOvlSuffix = proc->ovlCount > 0 ? ("$ov$" + proc->overloadFp) : "";
     proc->isReferenced = true;
     // 幂等登记桩生成需求 (同一目标变体可能被多处赋值引用).
-    for (auto& t : del->delegateTargets) {
+    for (auto& t : del->P().delegateTargets) {
         if (Symbol::toLower(t.procName) == Symbol::toLower(proc->name) &&
             t.procFp == (proc->ovlCount > 0 ? proc->overloadFp : ""))
             return;
     }
-    del->delegateTargets.push_back(
+    del->W().delegateTargets.push_back(
         {proc->name, "", proc->ovlCount > 0 ? proc->overloadFp : ""});
 }
 

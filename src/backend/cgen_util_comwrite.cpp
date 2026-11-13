@@ -587,6 +587,18 @@ bool CCodeGen::tryRewriteCOMLvalue(const std::string& target, const std::string&
 // ============================================================
 std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExpr,
                                       const std::string& val) {
+    // ucSlider (Proyecto1.vbp): 形参写的是工程内 Public Enum (`As PictureAlignmentH`) 时,
+    // 符号层只留下枚举名、语义档折成 Variant, 但 C 形参是 int32_t; 照 Variant 装箱会
+    // 发 vb6_VariantFromValue(1) ⇒ C2440 (vb6_VARIANT → int32_t, PropPagLP.c 281/282).
+    // 枚举在 C 侧一律按 Long 槽装配.
+    if (lastP.type == Vb6Type::Variant && !lastP.typeRefName.empty()) {
+        Symbol* esP = symTab_.lookup(lastP.typeRefName);
+        if (!esP) esP = symTab_.lookupModule(lastP.typeRefName);
+        if (esP && esP->kind == SymbolKind::EnumType) {
+            if (lastP.isByVal) return "(int32_t)(" + val + ")";
+            return "(&(int32_t){(" + val + ")})";
+        }
+    }
     if (lastP.type != Vb6Type::Variant) {
         // Fix 185: ByRef 值类型形参 (Property Let v As String/Boolean/Long/...)
         // 的 C 侧是 <T>* (BSTR* / int16_t* / int32_t*) — VB6 默认 ByRef.
@@ -613,23 +625,35 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
         //   解箱档位与 cgen_expr_call_arg_variant.inc 的 Fix 092q/090r/049b 同口径
         //   (Long 档含 Integer/Byte/Boolean, Double 档含 Single/Date/Currency)。
         if (lastP.isByVal) {
-            if (!isVariantSlot(val, nullptr)) return val;  // P1.3: ast 不可得 (val 为形参)
+            // Fix 091x (C2440 void*→float/double): 裸晚绑定读 (vb6_ComCall 结果) 也是
+            // Variant 载体, 必须与本 switch 同口径解箱 —— 否则原样递进 float/int32_t
+            // 形参 ⇒ 'function': cannot convert from 'void *' to 'float'.
+            // 实测 PhotoDemon 每个 UserControl 的 UserControl_ReadProperties:
+            //   `With PropBag` 里 `FontSize = .ReadProperty("FontSize", 10)`
+            //   ⇒ vb6_pdDropDown_prop_let_FontSize(me, vb6_ComCall(...))
+            //   (pdDropDown.c 985/986, pdSlider.c 1114…, 共 30 + 13 条)。
+            const bool comRes091x = val.rfind("vb6_ComCall(", 0) == 0
+                || val.rfind("vb6_ComCallByDispid(", 0) == 0
+                || val.rfind("vb6_ComGetProp(", 0) == 0;
+            if (!comRes091x && !isVariantSlot(val, nullptr)) return val;  // P1.3: ast 不可得 (val 为形参)
+            const std::string varVal091x = comRes091x
+                ? ("vb6_VariantFromComResult(" + val + ")") : val;
             switch (lastP.type) {
                 case Vb6Type::String:
-                    return "vb6_VariantToString(" + val + ")";
+                    return "vb6_VariantToString(" + varVal091x + ")";
                 case Vb6Type::Integer:
                 case Vb6Type::Boolean:
-                    return "(int16_t)vb6_VariantToLong(" + val + ")";
+                    return "(int16_t)vb6_VariantToLong(" + varVal091x + ")";
                 case Vb6Type::Long:
-                    return "vb6_VariantToLong(" + val + ")";
+                    return "vb6_VariantToLong(" + varVal091x + ")";
                 case Vb6Type::Byte:
-                    return "(uint8_t)vb6_VariantToLong(" + val + ")";
+                    return "(uint8_t)vb6_VariantToLong(" + varVal091x + ")";
                 case Vb6Type::Single:
-                    return "(float)vb6_VariantToDouble(" + val + ")";
+                    return "(float)vb6_VariantToDouble(" + varVal091x + ")";
                 case Vb6Type::Double:
                 case Vb6Type::Date:
                 case Vb6Type::Currency:
-                    return "vb6_VariantToDouble(" + val + ")";
+                    return "vb6_VariantToDouble(" + varVal091x + ")";
                 default:
                     return val;
             }
@@ -650,6 +674,8 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
             case Vb6Type::Single:
                 return "(&(float){(" + val + ")})";
             case Vb6Type::Double:
+            case Vb6Type::Date:      // mapType: double
+            case Vb6Type::Currency:  // mapType: double（Fix 126 值语义）
                 return "(&(double){(" + val + ")})";
             default:
                 return val;
@@ -730,6 +756,33 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
     }
     const bool slotIsLateObj = (slotC == "void*");
     if (!writeDirResolved || lastP.type == Vb6Type::Empty) return value;
+    // ④ ByRef 具体标量槽：`Property Let ResizeWidth(newWidth As Double)`（VB6 默认 ByRef）
+    //    ⇒ C 形参是 <T>*，而这里递的是值 ⇒ cl C2440「cannot convert from 'double' to
+    //    'double *'」（整编 pdResize.c:1226/1227），枚举/整数槽则只是 C4047/C4133
+    //    （pdResize.c:1223/1224 的 UnitOfMeasurement/UnitOfResolution）。
+    //    **取址必须在下面 ③ 解箱之后**：`With .GetDouble("width", …)` 交回的是
+    //    裸 `vb6_ComCall(...)`（VARIANT*），先取址会得到 `&(double){void*}` 仍 C2440
+    //    （本机子集实测）。所以这里只算出"按哪个 C 标量档解箱"，两个出口都交
+    //    packLetValueArg 的 Fix 185 表（C99 复合字面量临时量），它同时负责 String 的
+    //    BSTR 形态。工程内 Public Enum 形参在语义档是 Variant + typeRefName，
+    //    C 侧按 Long 槽装配（见 packLetValueArg 开头）。
+    //    只在写方向解析成功时进来：Get 方向的末形参不是值槽，按它取址会错。
+    Vb6Type byrefBaseType = Vb6Type::Empty;
+    if (!lastP.isByVal && lastP.type != Vb6Type::Object
+        && lastP.type != Vb6Type::Empty && lastP.type != Vb6Type::Null
+        && !(static_cast<uint16_t>(lastP.type)
+             & static_cast<uint16_t>(Vb6Type::Array))) {
+        if (lastP.type == Vb6Type::Variant) {
+            if (!lastP.typeRefName.empty()) {
+                Symbol* esP = symTab_.lookup(lastP.typeRefName);
+                if (!esP) esP = symTab_.lookupModule(lastP.typeRefName);
+                if (esP && esP->kind == SymbolKind::EnumType) byrefBaseType = Vb6Type::Long;
+            }
+        } else {
+            byrefBaseType = lastP.type;
+        }
+    }
+    const bool byrefScalarSlot = (byrefBaseType != Vb6Type::Empty);
     // RHS 是不是整只 vb6_VARIANT —— 文本前缀表 + 已知 Variant 变量 (Fix 156-B 原判据)
     bool valIsVar = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
     if (!valIsVar && valueExpr && valueExpr->kind == ASTNodeKind::IdentifierExpr) {
@@ -767,6 +820,7 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
             && isScalarImplicitStr159(inferExprType(*valueExpr))) {
             return wrapToBSTR(value, *valueExpr);
         }
+        if (byrefScalarSlot) return packLetValueArg(lastP, valueExpr, value);
         return value;
     }
     // ③ 解箱表 (只此一份)。泛对象槽由 C 型先答 —— 语义档在 `As Picture` / 外部类型名 那一族
@@ -775,12 +829,14 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
                          & static_cast<uint16_t>(Vb6Type::Array)) != 0;
     const Vb6Type pBase = static_cast<Vb6Type>(
         static_cast<uint16_t>(lastP.type) & ~static_cast<uint16_t>(Vb6Type::Array));
+    // ByRef 标量槽按 ④ 算出的 C 档解箱（枚举 → Long）；其余照旧按语义档。
+    const Vb6Type pBaseEff = byrefScalarSlot ? byrefBaseType : pBase;
     const char* ext = nullptr;
     if (pIsArr) {
         ext = "vb6_VariantToSafeArray1D";
     } else if (slotIsLateObj) {
         ext = "vb6_VariantToObjectVal";
-    } else switch (pBase) {
+    } else switch (pBaseEff) {
         case Vb6Type::String:                          ext = "vb6_VariantToString";    break;
         case Vb6Type::Long:   case Vb6Type::Integer:
         case Vb6Type::Byte:   case Vb6Type::Boolean:                                   ext = "vb6_VariantToLong";     break;
@@ -790,6 +846,9 @@ std::string CCodeGen::writeValArgForParamSlot(const ParameterInfo& lastP,
         case Vb6Type::Object:                          ext = "vb6_VariantToObjectVal"; break;
         default: break;
     }
-    return ext ? std::string(ext) + "(" + valText + ")" : value;
+    std::string out = ext ? std::string(ext) + "(" + valText + ")" : value;
+    // ④ 的后半：值已解箱成目标标量，这里补 ByRef 取址（见本函数上方 byrefScalarSlot）。
+    if (byrefScalarSlot && ext) return packLetValueArg(lastP, valueExpr, out);
+    return out;
 }
 } // namespace vb6c3

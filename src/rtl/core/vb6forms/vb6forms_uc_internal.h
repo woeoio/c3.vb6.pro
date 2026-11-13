@@ -124,6 +124,9 @@ typedef struct vb6_UCRec {
     // (实测 czUI: m_ControlType 未恢复 = 0 = czTitleBar ⇒ 走错分支 ⇒ AV)。
     // 见 uc_host_create.inc 的 vb6_uc_activate 与 vb6_UC_ActivateHost。
     int32_t pendingActivate;
+    // VB6 的 UserControl_Show 是"控件变可见"事件: 建窗阶段父窗体还没显示 ⇒ 不发,
+    // 挂到 vb6_ShowForm 里延迟 Form_Load 派发完之后补发 (vb6_UC_FirePendingShows)。
+    int32_t pendingShow;
     // 账 #305 第二百九十二刀: VB6 `UserControl.AutoRedraw = True` 的持久表面。
     // 之前 hDC 只在 WM_PAINT 期间有效、Cls 恒空转 ⇒ 只在 Resize/Refresh 里画一次的
     // 控件 (ComCtlsDemo 的 FrameW) 永远是白板。adOn = VB 代码写过 .AutoRedraw = True。
@@ -138,6 +141,11 @@ typedef struct vb6_UCRec {
     // 灌入、SetFontFlag 时同步回这里, 否则下一次 paint 的 push 会把值清回默认。
     int16_t   fontBold;
     int16_t   fontUnderline;
+    // Fix ucSlider 2026-11-08: Ambient.BackColor 是**每实例**的容器底色, 不能只留
+    // 裸全局 vb6_Ambient_BackColor —— 那只在创建时写一次, 后建的控件 (Picture1 里
+    // ambient=#393939) 会把先建控件的后续重绘底色一起改掉 (实测 ucSlider1(4) 的
+    // 73 DIP 里整片被刷成 #393939, 参考 VB6 是窗体色 f0f0f0)。创建时定死, 重绘只读本格。
+    int32_t   ambientBack;
 } vb6_UCRec;
 
 // 缺陷 3: Refresh 的重入闸门。WM_PAINT/WM_PRINTCLIENT 进出时加减; Refresh 只在
@@ -160,6 +168,7 @@ typedef struct vb6_UCSaved {
        那套存取整个拆掉之后, 这个借位就断了(pop 读到已删除的字段 -> 整个 RTL 编译不过)。
        UserControl.<Member> 自己那两枚发码读了 1450 处, 必须自己存档, 所以单列。 */
     int32_t userWidth, userHeight;
+    int32_t drawWidth;            // ucSlider: UserControl.DrawWidth (与 scaleWidth 同族)
     /* Fix 296 / 3b: 这里曾有 15 个 ext* 字段(Left/Top/Width/Height/Align/Visible/
        DragMode/HelpContextID/WhatsThisHelpID/vb6_Default/Cancel/Tag/ToolTipText/
        Container/DragIcon), 用来在 push/pop 之间存取那 15 枚 vb6_Extender_* 全局。
@@ -243,11 +252,16 @@ extern vb6_ComIface_Font vb6_UserControl_FontObj;
 void vb6_uc_trace(const char* phase, const char* type, void* me);
 vb6_UCRec* vb6_uc_findByHwnd(const void* hwnd);
 vb6_UCRec* vb6_uc_findByInstance(const void* inst);
+// 宿主窗口销毁时摘掉替身记录 (否则旧记录会挡住地址复用的新实例, 见 §51)
+void vb6_uc_releaseHost(void* hwnd);
 
 // Fix <vbeclipse> rev18: UserControl 自有 Property 的按名桥 (晚绑定访问)。
 // obj 收 UC 实例指针或宿主 HWND; 命中返回 1。见 vb6forms_controls.h 的 vb6_UcPropDesc。
 int32_t vb6_UC_OwnPropGet(void* obj, const wchar_t* name, void* outV);
+// PUT: VB6 `x.P = v` → Property Let。PUTREF: `Set x.P = v` / `x.P = Nothing`
+// → Property Set。两条入口在 VB6 里从不合并 (oracle 实测), 表里是两个槽。
 int32_t vb6_UC_OwnPropSet(void* obj, const wchar_t* name, const void* inV);
+int32_t vb6_UC_OwnPropSetRef(void* obj, const wchar_t* name, const void* inV);
 
 // Fix <vbeclipse> rev22: 反查一个设计期子控件窗口属于哪个 UC 实例 + 槽位名。
 // vb6_ControlMove 改完尺寸后用它决定要不要触发 `<Ctrl>_Resize` 事件

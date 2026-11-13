@@ -3,6 +3,7 @@
 
 #include "com/typelib_parser.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <windows.h>
 #include <oleauto.h>
 
@@ -17,6 +18,20 @@ static std::wstring expandEnvironmentStrings(const std::wstring& src) {
     std::wstring result(len - 1, L'\\0');
     ExpandEnvironmentStringsW(src.c_str(), &result[0], len);
     return result;
+}
+
+// 诊断消息走窄串 (stderr / c3-error.log 是 ACP 口径) => 宽串按 **CP_ACP** 窄串化。
+// 不用 common/encoding.hpp 的 wideToUtf8: 那给 UTF-8, 非 ASCII 路径在 ACP 出口
+// 会乱码 —— 比「打注册表原值」更糟 (那一份本来就是 ANSI)。
+static std::string wideToAcpNarrow(const std::wstring& w) {
+    if (w.empty()) return std::string();
+    const int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), (int)w.size(),
+                                      nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return std::string();
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_ACP, 0, w.c_str(), (int)w.size(), &out[0], n,
+                        nullptr, nullptr);
+    return out;
 }
 
 // ============================================================
@@ -87,9 +102,16 @@ std::unique_ptr<TypeLibResult> TypeLibParser::loadByPath(const std::string& tlbP
     );
 
     if (FAILED(hr) || !pTypeLib) {
+        // 路径打**展开后**的那一份 (tlbPathW): 加载用的就是它, 消息若打注册表原值
+        // (含 %CommonProgramFiles%) 会被读成「路径写错」—— 实际错因常是 32/64 位
+        // 不匹配 (0x80029C4A = TYPE_E_CANTLOADLIBRARY: 32 位 DLL 在 64 位进程里必败)。
+        // HRESULT 打 8 位十六进制: std::to_string 给的是十进制 (-2147312566),
+        // 读不出这是个 HRESULT; 十六进制才是 HRESULT 的样子。
+        char hrHex[16];
+        snprintf(hrHex, sizeof(hrHex), "0x%08X", static_cast<unsigned int>(hr));
         diag_.warn(DiagnosticID::CodeGenUnsupportedFeature, SourceLocation{},
-                   "Failed to load TypeLib: " + tlbPath +
-                   " (hr=0x" + std::to_string(hr) + ")");
+                   "Failed to load TypeLib: " + wideToAcpNarrow(tlbPathW) +
+                   " (hr=" + hrHex + ")");
         return nullptr;
     }
 

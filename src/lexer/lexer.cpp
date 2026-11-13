@@ -59,7 +59,12 @@ bool Lexer::match(char expected) {
 }
 
 bool Lexer::isAlpha(char c) const {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    // FGZ-FIX-002: VB6 标识符可含中文字符。SourceBuffer 已把源码统一转成 UTF-8,
+    // 中文是多字节序列; 这里只认首字节 (0xC2-0xFD), continuation byte 交给
+    // isAlphaNumeric 承接, advance() 逐字节走完整条序列。
+    auto uc = static_cast<unsigned char>(c);
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' ||
+           (uc >= 0xC2 && uc <= 0xFD);
 }
 
 bool Lexer::isDigit(char c) const {
@@ -79,7 +84,10 @@ bool Lexer::isBinDigit(char c) const {
 }
 
 bool Lexer::isAlphaNumeric(char c) const {
-    return isAlpha(c) || isDigit(c);
+    // FGZ-FIX-002: UTF-8 continuation byte (0x80-0xBF) 也是标识符的一部分。
+    auto uc = static_cast<unsigned char>(c);
+    if (isAlpha(c) || isDigit(c)) return true;
+    return uc >= 0x80;
 }
 
 bool Lexer::isWhitespace(char c) const {

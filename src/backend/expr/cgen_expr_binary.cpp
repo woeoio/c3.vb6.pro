@@ -257,7 +257,11 @@ void CCodeGen::visit(BinaryExpr& node) {
 
     // 幂运算: VB6 ^ → pow()
     if (node.op == BinaryOp::Pow) {
-        lastExpr_ = "vb6_Pow(" + left + ", " + right + ")";
+        // 账 §56.40: 两个形参都是 double —— Variant 操作数整只结构体递进去
+        // = C2440 (PhotoDemon Evaluator.c 514:
+        // vb6_Pow(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。按上下文拆箱。
+        lastExpr_ = "vb6_Pow(" + toDoubleIfVariant(left, node.left.get())
+                    + ", " + toDoubleIfVariant(right, node.right.get()) + ")";
         return;
     }
 
@@ -309,7 +313,7 @@ void CCodeGen::visit(BinaryExpr& node) {
             std::string inner86 = Symbol::toLower(cExpr.substr(2, cExpr.size() - 3));
             if (knownVariantVars_.count(inner86)) return true;
             if (currentProc_) {
-                for (const auto& p : currentProc_->params) {
+                for (const auto& p : currentProc_->P().params) {
                     if (Symbol::toLower(p.name) == inner86
                         && (p.type == Vb6Type::Variant || p.type == Vb6Type::Empty)) {
                         return true;
@@ -431,9 +435,14 @@ void CCodeGen::visit(BinaryExpr& node) {
 
     // Like运算: VB6 Like → vb6_Like
     if (node.op == BinaryOp::Like) {
+        // 账 §56.40: 两个形参都是 BSTR —— Variant 操作数整只 vb6_VARIANT 结构体
+        // 递进去 = C2440 (PhotoDemon Evaluator.c 474:
+        // vb6_Like(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。按上下文拆箱。
         // <vbeclipse>: Option Compare Text 模块里 Like 的大小写与字符区间都按文本形
         lastExpr_ = std::string("vb6_Like") + (optionCompareText_ ? "C" : "")
-                    + "(" + left + ", " + right + (optionCompareText_ ? ", 1" : "") + ")";
+                    + "(" + toStringIfVariant(left, node.left.get())
+                    + ", " + toStringIfVariant(right, node.right.get())
+                    + (optionCompareText_ ? ", 1" : "") + ")";
         return;
     }
 
@@ -479,6 +488,23 @@ void CCodeGen::visit(BinaryExpr& node) {
         // 装箱腿 / Fix 179a) 而 typed 变量那侧是裸实例 —— 不剥就是 `If o Is f` 恒假
         // (VB6 交真)。判据问 varHoldsComWrapper (唯一那张登记表), 只认裸变量名那一形,
         // 两侧各自独立剥 (都装箱时剥回同一裸实例, 照样相等)。
+        // 账 §52: `Not <控件> Is Nothing` —— `Is` 比的是**对象同一性**, 不触发默认
+        // 成员, 所以裸控件名在这一格是"控件对象"而不是"控件默认属性值"。发码以前
+        // 把裸名原样交出去 ⇒ `HotkeyManager == NULL` (整编 C2065: FormMain.c:2455
+        // 的 `If (Not HotkeyManager Is Nothing) Then HotkeyManager.ReleaseResources`)。
+        // 唯一出口仍是 ctrlObjectRefExpr (With 块 / 对象形参 / Set 右值那一答):
+        // 设计期控件 → 句柄槽 (ListView/ImageList/Menu 各有各的拼法), 不手拼。
+        // 局部变量同名时让局部赢 (与同一文件里 activeform 那条同一条闸)。
+        auto ctrlOperand52 = [&](const Expr* ast, std::string& slotOut) {
+            if (!ast || ast->kind != ASTNodeKind::IdentifierExpr) return;
+            const auto& idC52 = static_cast<const IdentifierExpr&>(*ast);
+            const std::string lowC52 = Symbol::toLower(idC52.name);
+            if (knownLocalVars_.count(lowC52)) return;
+            if (!knownFormControls_.count(lowC52)) return;
+            slotOut = ctrlObjectRefExpr(lowC52, idC52.name);
+        };
+        ctrlOperand52(node.left.get(), left);
+        ctrlOperand52(node.right.get(), right);
         if (varHoldsComWrapper(left))  left  = unwrapComVarExpr(left);
         if (varHoldsComWrapper(right)) right = unwrapComVarExpr(right);
         // 账 #305 第一百七十二刀 站C: 操作数是一枚 legacy 接口的**视图** (值结构体
@@ -889,6 +915,31 @@ void CCodeGen::visit(BinaryExpr& node) {
         }
     }
 
+    // ucTreeView (2026-11-06): `X Is <晚绑定调用的结果>` —— 右侧发成 `vb6_ComCall(...)`,
+    // 交回的是一枚**堆上 VARIANT*** (VT_DISPATCH, 里面装的是 vb6_ComObject 包装器),
+    // 而左侧 X 是裸实例指针 (vb6_cls_Node*)。原样 `==` 是拿两种不同档的地址比 ⇒
+    // **恒假**。实测 Node.cls 的单选段 (RecurCalcNodeCheckBox 的 4 条
+    // `N Is TheNode.Childs(i)`) 全 eq=0 ⇒ 每次点选都把整组 Checked 清空。
+    // 出口两档:
+    //   · 堆 VARIANT 形态 (vb6_ComCall/ByDispid) ⇒ vb6_ComResultIdentity: 拆宿主包装 →
+    //     拆工程类包装 (UnboxVb6Instance) → 交出裸实例, 顺手收回那枚堆块;
+    //   · 已拆封的 object 视图 (vb6_ComCallObject / ComGetObjectProp) ⇒ 只拆工程类包装。
+    // 非调用形态 (裸实例 / Nothing / 宿主对象) 逐字不变。
+    if (node.op == BinaryOp::Is) {
+        auto identIsOperand = [](const std::string& e) -> std::string {
+            if (e.rfind("vb6_ComCall(", 0) == 0
+                || e.rfind("vb6_ComCallByDispid(", 0) == 0)
+                return "vb6_ComResultIdentity(" + e + ")";
+            if (e.rfind("vb6_ComCallObject(", 0) == 0
+                || e.rfind("vb6_ComCallObjectDefault(", 0) == 0
+                || e.rfind("vb6_ComGetObjectProp(", 0) == 0)
+                return "vb6_ComObjectUnbox(" + e + ")";
+            return e;
+        };
+        left = identIsOperand(left);
+        right = identIsOperand(right);
+    }
+
     std::string op = mapBinaryOp(node.op);
 
     // Fix 039: VB6 And/Or/Xor are bitwise operators that require integer operands.
@@ -1111,7 +1162,11 @@ void CCodeGen::visit(BinaryExpr& node) {
                           + asUnsignedOperand(right, *node.right, "uint32_t") + ")";
                 return;
             default:
-                lastExpr_ = "vb6_Num_Mod((int32_t)(" + left + "), (int32_t)(" + right + "))";
+                // 账 §56.40: (int32_t)(x) 对 vb6_VARIANT 结构体是 C2440
+                // (PhotoDemon Evaluator.c 494: (int32_t)(vb6_Evaluator_Eval(l))) ——
+                // 按上下文拆箱, 与整除那一路 (Fix 084o) 同一枚 toLongIfVariant。
+                lastExpr_ = "vb6_Num_Mod(" + toLongIfVariant(left, node.left.get())
+                          + ", " + toLongIfVariant(right, node.right.get()) + ")";
                 return;
         }
     }

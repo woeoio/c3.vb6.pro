@@ -21,10 +21,20 @@ namespace vb6c3 {
 // 与 P16 事后在发好的文本里截 "vb6_hwnd_"（只认 knownWithEventsCtrlVars_ 的目标）——
 // 于是泛对象槽 (`Dim o As Object`) 与 Variant 槽拿到的是一枚 BSTR / 一个 int。
 // 闸只在这一枚标识符上开：右值是表达式（`Set o = f(Text1)`）时子树照旧按值上下文，不顺着漏下去。
+// 账 §42 续（F1）：控件数组元素同属对象引用那一档（`Set mCtlSlider = ucSlider1(0)`），
+// 否则读腿的默认成员折叠（ctrlDefaultReadExpr）会把它折成标量。
 void CCodeGen::emitSetObjectRhs(const ExprPtr& value) {
     const bool bareIdent = value && value->kind == ASTNodeKind::IdentifierExpr;
+    bool ctrlArrElem = false;
+    if (value && value->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& idxSet = static_cast<IndexOrCallExpr&>(*value);
+        if (idxSet.callee && idxSet.callee->kind == ASTNodeKind::IdentifierExpr) {
+            auto& idSet = static_cast<IdentifierExpr&>(*idxSet.callee);
+            ctrlArrElem = knownControlArrays_.count(Symbol::toLower(idSet.name)) > 0;
+        }
+    }
     const bool savedSuppress = suppressDefaultProp_;
-    if (bareIdent) suppressDefaultProp_ = true;
+    if (bareIdent || ctrlArrElem) suppressDefaultProp_ = true;
     emitExpr(*value);
     suppressDefaultProp_ = savedSuppress;
 }
@@ -51,6 +61,9 @@ void CCodeGen::visit(LetStmt& node) {
                 emitExpr(*node.value);
                 if (memName == "currentx") { c_.emitLine("vb6_Printer_SetCurrentX((int32_t)(" + lastExpr_ + "));"); return; }
                 if (memName == "currenty") { c_.emitLine("vb6_Printer_SetCurrentY((int32_t)(" + lastExpr_ + "));"); return; }
+                // C2224: Printer.Copies / .PrintQuality 数据属性写入 (同 assign 那一格)。
+                if (memName == "copies") { c_.emitLine("vb6_Printer_SetCopies((int32_t)(" + lastExpr_ + "));"); return; }
+                if (memName == "printquality") { c_.emitLine("vb6_Printer_SetPrintQuality((int32_t)(" + lastExpr_ + "));"); return; }
             }
             // Fix 161f: Screen.MousePointer 全局写入 (CWaitCursor 等类里用;
             // 早先落进类成员 fallback → me->Screen.MousePointer = ... → C2039)。
@@ -272,7 +285,12 @@ void CCodeGen::visit(LetStmt& node) {
     } else {
         // Fix 038b-6/045: 具体类型目标 + Variant 值 → 自动提取 (同 AssignmentStmt 路径)
         // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-        bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 距 emitExpr 超 5 行)
+        // 账 §56.40: 与 AssignmentStmt 同一枚问句 (cgen_assign_value_sem.inc 同一处
+        // 改法) —— 旧注解「ast 不可得 (value 距 emitExpr 超 5 行)」在本站不成立:
+        // node.value 就在手边。问上 AST 那一半, 「UDT 字段声明为 Variant」这一族
+        // (C 文本不命中任何前缀表) 才认得出, 读腿才套 vb6_VariantToString/ToLong/
+        // ToDouble ⇒ 修 C2440 (PhotoDemon pdDictionary.c 239/248 同族)。
+        bool valueIsVariant = isVariantSlot(value, node.value.get());
         if (!valueIsVariant && node.value && node.value->kind == ASTNodeKind::IdentifierExpr) {
             auto& id = static_cast<IdentifierExpr&>(*node.value);
             std::string idLower = id.name;

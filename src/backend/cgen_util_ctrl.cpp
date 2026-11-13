@@ -3,6 +3,7 @@
 #include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
 #include "common/int_literal.hpp"   // 账 #194: 整数字面量的单一出口
 #include "common/canvas_drawing.hpp"  // 账 #232①: 画布动词的单一出口 (名字 / 接收者 / 实参形状)
+#include "common/event_param_abi.hpp" // 账 #610 第345刀: 事件形参「按不按地址递」的唯一权威
 #include "common/form_pseudo.hpp"     // 账 #278 §B109: 属性名→读函数的单一出口 (两层都问它)
 #include <algorithm>
 #include <cctype>
@@ -869,6 +870,16 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
         if (propLower == "visible") return "vb6_SetControlVisible";
         if (propLower == "enabled") return "vb6_SetControlEnabled";
         if (propLower == "scalemode") return "vb6_SetScaleMode";  // 账 #197: Me.ScaleMode 写得动
+        // 读侧 form_pseudo 表早就有 windowstate → vb6_GetWindowState；
+        // 写侧没登记 ⇒ `FormMain.WindowState = vbNormal` 落 Module.var 回退，
+        // 发出裸 `WindowState = 0;`（整编实测 C2065 ×4：Interface.c 2、
+        // Tools_ScreenVideo.c 1、Tools_ScreenVideoPrefs.c 1）。
+        if (propLower == "windowstate") return "vb6_SetWindowState";
+        // OLEDropMode 是窗体/控件的 VB6 属性, 但写侧从来没登记过 ⇒
+        // `FormMain.OLEDropMode = vbOLEDropNone` 落 Module.var 回退, 发出裸
+        // `OLEDropMode = 0;`(整编实测 C2065 ×2: Processor.c 1176/1185)。
+        // 配对出口走 RTL 的 OLE 放置目标开关 (0 → Revoke, 非 0 → Register)。
+        if (propLower == "oledropmode") return "vb6_SetOLEDropMode";
         // 账 #233: 与上面读侧成对 —— 赋值语句发 C 时**只问这张表**, 没登记就把读函数当左值。
         if (propLower == "currentx") return "vb6_SetCurrentX";
         if (propLower == "currenty") return "vb6_SetCurrentY";
@@ -2063,11 +2074,17 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
             if (sortIt != ctrl.properties.end() && sortIt->second.intValue != 0) style |= 0x0100L;
             break;
         }
+        // FIX-010 (富贵竹): PictureBox / Image 建的是 STATIC 类窗口，不带 SS_NOTIFY 的
+        // STATIC 在 WM_NCHITTEST 上答 HTTRANSPARENT，鼠标消息被交给父窗口 ⇒ 挂在它们
+        // 身上的子类化 WndProc 一条 WM_LBUTTONDOWN/UP 都收不到。Label 一直带着这一位，
+        // 所以「同一窗体里 Label_Click 活着、Image_MouseDown 全哑」正是这一位的对照。
+        // 这里是**容器子控件**那条创建路 (cgen_form_frame_menu.inc 调本函数)；顶层那条路
+        // 在 cgen_form_ctrl_style_apply.inc 有自己的第二份表，两处必须同口径。
         case FrmControlType::PictureBox:
-            style |= kSsBitmap | kSsCenterImg | kWsBorder;
+            style |= kSsBitmap | kSsCenterImg | kWsBorder | kSsNotify;
             break;
         case FrmControlType::Image:
-            style |= kSsBitmap | kSsCenterImg;
+            style |= kSsBitmap | kSsCenterImg | kSsNotify;
             break;
         // C29-SL-h: 此前这条路**压根没有 Slider 这一格** —— 容器里的滑杆连 TBS_AUTOTICKS 都没
         // 挂上（账 #83 那条"顶层专有项没铺到第二条创建路"的一个具体落点）。折算共用
@@ -2383,6 +2400,109 @@ std::string CCodeGen::ctrlObjectRefExpr(const std::string& lower,
 }
 
 // ============================================================
+// 账 §42: 工程内 UserControl 的**默认成员**（只读设计器代码段，不碰解析器）
+//
+// VB6 把默认成员写在 `.ctl` 的代码段里：
+//     Public Property Get Value() As Double
+//     Attribute Value.VB_UserMemId = 0
+//         Value = m_Value
+//     End Property
+// 判据只有这两行：`VB_UserMemId = 0` 给出成员名，同名 `Property Get … As <型>` 给出返回型。
+// 只认 `= 0`（VB 的 DISPID_VALUE）；`= -4` 之类是别的东西，一律不折。
+// ------------------------------------------------------------
+static std::string trimAscii(const std::string& s) {
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace((unsigned char)s[b])) ++b;
+    while (e > b && std::isspace((unsigned char)s[e - 1])) --e;
+    return s.substr(b, e - b);
+}
+
+static bool findUcDefaultMember(const std::string& code, std::string& propOut,
+                                std::string& typeOut) {
+    if (code.empty()) return false;
+    std::string low = code;
+    for (char& c : low) c = (char)std::tolower((unsigned char)c);
+
+    std::string prop;
+    size_t pos = 0;
+    while (pos < low.size()) {
+        size_t eol = low.find('\n', pos);
+        if (eol == std::string::npos) eol = low.size();
+        size_t start = pos;
+        while (start < eol && std::isspace((unsigned char)low[start])) ++start;
+        if (eol - start > 10 && low.compare(start, 10, "attribute ") == 0) {
+            size_t mem = low.find(".vb_usermemid", start);
+            if (mem != std::string::npos && mem < eol) {
+                size_t eq = low.find('=', mem);
+                if (eq != std::string::npos && eq < eol) {
+                    std::string val;
+                    for (size_t i = eq + 1; i < eol; ++i) {
+                        const char c = low[i];
+                        if (std::isdigit((unsigned char)c) || c == '-' || c == '+') val += c;
+                        else if (!val.empty()) break;
+                    }
+                    if (val == "0") {
+                        size_t nameStart = start + 10;
+                        while (nameStart < mem && std::isspace((unsigned char)low[nameStart])) ++nameStart;
+                        std::string name = trimAscii(code.substr(nameStart, mem - nameStart));
+                        if (!name.empty()) { prop = name; break; }
+                    }
+                }
+            }
+        }
+        pos = eol + 1;
+    }
+    if (prop.empty()) return false;
+    std::string lowNeedle = "property get " + prop;
+    for (char& c : lowNeedle) c = (char)std::tolower((unsigned char)c);
+    // 只认**非注释行**上的声明。旧写法把整个 codeSection（含注释）都当候选，`.ctl` 注释里
+    // 顺口提到 `Property Get <Prop>() As <型>` 就会把注释尾巴当型 ⇒ ucDefaultReadPlan
+    // 落空 ⇒ 静默不折（C2440 原样回来）。声明行在 VB6 里写在
+    // `Attribute <Prop>.VB_UserMemId = 0` **之前**，所以起点仍是 0，只加注释行过滤。
+    size_t g = 0;
+    while ((g = low.find(lowNeedle, g)) != std::string::npos) {
+        size_t after = g + lowNeedle.size();
+        if (after < low.size() && (std::isalnum((unsigned char)low[after]) || low[after] == '_')) {
+            g = after;
+            continue;
+        }
+        size_t ls = low.rfind('\n', g);
+        ls = (ls == std::string::npos) ? 0 : ls + 1;
+        while (ls < g && std::isspace((unsigned char)low[ls])) ++ls;
+        if (ls < low.size() && low[ls] == '\'') { g = after; continue; }   // 注释行不认
+        size_t eol = low.find('\n', after);
+        if (eol == std::string::npos) eol = low.size();
+        const std::string decl = low.substr(after, eol - after);
+        size_t asPos = decl.rfind(" as ");
+        if (asPos != std::string::npos) {
+            std::string ty = trimAscii(decl.substr(asPos + 4));
+            size_t cut = ty.find_first_of(" \t'(");
+            if (cut != std::string::npos) ty = ty.substr(0, cut);
+            if (!ty.empty()) {
+                propOut = prop;
+                typeOut = ty;
+                return true;
+            }
+        }
+        g = after;
+    }
+    return false;
+}
+
+// 默认成员的返回型 → COM 读数（只登记 PhotoDemon 与常见语料里出现过的型；其余不折、保持原样）
+static bool ucDefaultReadPlan(const std::string& typeLower, std::string& readFn,
+                              Vb6Type& vt, std::string& castTo) {
+    if (typeLower == "double")  { readFn = "vb6_ComGetDoubleProp"; vt = Vb6Type::Double;  return true; }
+    if (typeLower == "single")  { readFn = "vb6_ComGetDoubleProp"; vt = Vb6Type::Single;  castTo = "(float)"; return true; }
+    if (typeLower == "long")    { readFn = "vb6_ComGetIntProp";    vt = Vb6Type::Long;    return true; }
+    if (typeLower == "integer") { readFn = "vb6_ComGetIntProp";    vt = Vb6Type::Integer; return true; }
+    if (typeLower == "boolean") { readFn = "vb6_ComGetIntProp";    vt = Vb6Type::Boolean; return true; }
+    if (typeLower == "string")  { readFn = "vb6_ComGetStringProp"; vt = Vb6Type::String;  return true; }
+    if (typeLower == "date")    { readFn = "vb6_ComGetDoubleProp"; vt = Vb6Type::Date;    return true; }
+    return false;
+}
+
+// ============================================================
 // 账 #256: 「这枚裸控件名会被折成哪一枚默认属性读数、折出来是什么型」只此一处回答
 //         （声明与背景见 cgen_helpers.inc 的 CtrlDefaultProp）。
 // 两个消费点：① 标识符发码那条路（cgen_expr_ident_symbol.inc）拿 readFn/prop/ctrlType
@@ -2402,7 +2522,30 @@ CCodeGen::CtrlDefaultProp CCodeGen::ctrlDefaultPropOf(const std::string& lower) 
         isWE = true;
     }
     const char* prop = getDefaultPropertyName(it->second);
-    if (!prop) return r;
+    if (!prop) {
+        // 账 §42: 工程内 UserControl 的默认成员。`getDefaultPropertyName` 只认 13 个内置
+        // FrmControlType，工程内 UC 一律 Unknown ⇒ 这里回落到 `.ctl` 的 VB_UserMemId = 0。
+        if (isWE) return r;                       // WithEvents 变量不会指向工程内 UC
+        auto itTN = knownFormControlTypeNames_.find(lower);
+        if (itTN == knownFormControlTypeNames_.end()) return r;
+        const FrmFile* ucSpec = findUserControlSpec(itTN->second);
+        if (!ucSpec) return r;
+        std::string ucProp, ucType;
+        if (!findUcDefaultMember(ucSpec->codeSection, ucProp, ucType)) return r;
+        std::string readFn;
+        Vb6Type vt = Vb6Type::Unknown;
+        std::string castTo;
+        if (!ucDefaultReadPlan(ucType, readFn, vt, castTo)) return r;
+        r.folds = true;
+        r.ctrlType = it->second;
+        r.isUcDefault = true;
+        r.propName = std::move(ucProp);
+        r.readFn = std::move(readFn);
+        r.castTo = std::move(castTo);
+        r.readArgTail = ", L\"" + r.propName + "\"";   // COM getter 的第二档就是属性名
+        r.valueType = vt;
+        return r;
+    }
     std::string readFn = getControlPropReadFn(it->second, prop);
     if (readFn.empty()) return r;        // 没有读函数 ⇒ 发码那条路本来就不会折
     r.folds = true;
@@ -2412,6 +2555,32 @@ CCodeGen::CtrlDefaultProp CCodeGen::ctrlDefaultPropOf(const std::string& lower) 
     r.readFn = std::move(readFn);
     r.valueType = defaultPropType(it->second);
     return r;
+}
+
+// 账 §42 续（F1）: 默认成员的读数/写值两条发码腿收成这一对，消费点只有两档接收者：
+// 裸名（句柄）与控件数组元素（vb6_CtrlArr_GetAt(...)）。判据仍只住 ctrlDefaultPropOf，
+// 站点不许再各拼一份 `castTo + readFn` / `ComSetProp + L"<prop>"`。
+std::string CCodeGen::ctrlDefaultReadExpr(const std::string& lower,
+                                          const std::string& recvExpr) const {
+    CtrlDefaultProp fold = ctrlDefaultPropOf(lower);
+    if (!fold.folds || fold.isWithEvents) return std::string();
+    return fold.castTo + fold.readFn + "(" + recvExpr + fold.readArgTail
+         + ")  /* default prop: ." + fold.propText() + " */";
+}
+
+bool CCodeGen::emitUcDefaultPropLet(const CtrlDefaultProp& fold,
+                                    const std::string& recvExpr, Expr& valueExpr) {
+    if (!fold.folds || !fold.isUcDefault) return false;
+    emitExpr(valueExpr);
+    std::string valUc = std::move(lastExpr_);
+    // 装箱档问**唯一**那一问 (cgen_util_com.cpp 的 comPackFnForDefaultPropType) ——
+    // 它与「裸控件名折默认属性」那一支 (comPackExpr 里的同一问) 共用同一张配对表与同一道
+    // 六档闸 ⇒ 同一枚型不可能在两站给出两个打包器名 (第二百四十一刀 V11 记的真回归)。
+    std::string packUc = comPackFnForDefaultPropType(fold.valueType);
+    if (packUc.empty()) packUc = comPackExpr(valueExpr);
+    c_.emitLine("vb6_ComSetProp(" + recvExpr + ", L\"" + fold.propText() + "\", " + packUc
+                + "(" + valUc + "));  /* UC default prop let */");
+    return true;
 }
 
 
@@ -2431,15 +2600,40 @@ void CCodeGen::emitVariantSlotStore(const std::string& target, const std::string
         c_.emitLine("vb6_VariantAssign(&" + target + ", " + expr + ");");
         return;
     }
+    // ucTreeView (2026-11-06): `With 链`里写字段的目标**带副作用** —— 典型
+    //   With ucTreeViewPlus1.Nodes.Add("Facebook") : .Add("Ocultar").Image = 1
+    // 目标发成 `vb6_Node_Add(...)->Image`。下面两半句 (Clear / 赋值) 各写一次目标文本 ⇒
+    // 每写一枚字段就多调一次 Add (实测 C3 树比 VB6 多一行: "Ocultar" 出现两次)。
+    // 判据: 目标文本在**最后一级成员之前**出现过 '(' (函数调用/宏)。命中就把**地址**
+    // 提成具名临时量, 两半句都读它 ⇒ 目标恰好求值一次。纯左值形态 emit 逐字节不变。
+    auto needsAddrTemp = [](const std::string& t) -> bool {
+        size_t mem = t.rfind("->");
+        if (mem == std::string::npos) return false;
+        size_t lp = t.find('(');
+        return lp != std::string::npos && lp < mem;
+    };
+    const bool hoistTarget = needsAddrTemp(target);
+    std::string tgt = target;
+    // 非提存路**逐字节不变**: 就是 `vb6_VariantClear(&<target>)` —— 多处发码形状针
+    // (b164_slot_store_shape / b169_class_field_store_shape) 按原文逐字核这一行。
+    std::string clearArg = "&" + target;
+    if (hoistTarget) {
+        const std::string tp = "_vtg_" + std::to_string(tempCounter_++);
+        c_.emitLine("{ vb6_VARIANT* " + tp + " = &(" + target + ");");
+        tgt = "*" + tp;
+        clearArg = tp;
+    }
     if (viaTemp) {
         const std::string tmp = "_vc_" + std::to_string(tempCounter_++);
         c_.emitLine("{ vb6_VARIANT " + tmp + " = " + expr + ";");
-        c_.emitLine("  vb6_VariantClear(&" + target + ");");
-        c_.emitLine("  " + target + " = " + tmp + "; }");
+        c_.emitLine("  vb6_VariantClear(" + clearArg + ");");
+        c_.emitLine("  " + tgt + " = " + tmp + "; }");
+        if (hoistTarget) c_.emitLine("}");
         return;
     }
-    c_.emitLine("vb6_VariantClear(&" + target + ");");
-    c_.emitLine(target + " = " + expr + ";");
+    c_.emitLine("vb6_VariantClear(" + clearArg + ");");
+    c_.emitLine(tgt + " = " + expr + ";");
+    if (hoistTarget) c_.emitLine("}");
 }
 
 // 账 #305 §B169 (第六十刀): 「把这枚右值收进一处 BSTR 槽」收成这一枚出口 —— 原先这段
@@ -2448,10 +2642,16 @@ void CCodeGen::emitVariantSlotStore(const std::string& target, const std::string
 // 定长串收口 / 清旧值+拷新值), 在那里再抄一遍就是第四份答案 (与 §B164 第五十五刀把槽位写入
 // 收成 emitVariantSlotStore 同一手法)。行为逐字节不变 —— 语料 emit A/B 钉这一条。
 void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
-                                 std::string value, const std::string& fixedLen) {
+                                 std::string value, const std::string& fixedLen,
+                                 bool udtFixedField) {
     // Fix 038b-6: BSTR 目标 + Variant 值 → 先提取 BSTR
     // 使用 cExprIsVariant (C 字符串级) + knownVariantVars_ 检测.
-    bool valueIsVariant = isVariantSlot(value, nullptr);  // P1.3: ast 不可得 (value 为形参)
+    // 账 §56.40: 同 AssignmentStmt 那一处 (cgen_assign_value_sem.inc) 的改法 —— 问上
+    // AST 那一半 (rhs 是现成的形参, 不是「拿不到」)。不修这一格, 「UDT 字段声明为
+    // Variant」这一族 (C 文本 VB6_SA_AT(vb6_type_X, arr, i).member 不命中任何前缀表)
+    // 仍然不拆箱 ⇒ 整只 vb6_VARIANT 交给 vb6_BSTR_Assign ⇒ C2440
+    // (PhotoDemon pdDictionary.c 239/248: `dItem As Variant` 读进 String 变量)。
+    bool valueIsVariant = isVariantSlot(value, rhs);
     if (!valueIsVariant && rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
         auto& id = static_cast<IdentifierExpr&>(*rhs);
         std::string idLower = id.name;
@@ -2581,7 +2781,14 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         }
     }
     // #122 折出来的 `vb6_CStrXxx(...)` 是刚 alloc 的新块, 与字面量/拼接同属"自有"。
-    if (!fixedLen.empty()) {
+    if (!fixedLen.empty() && udtFixedField) {
+        // 账 #118 续: 目标是 UDT 定长串字段 (C 类型 char[N], VB6 ABI 内联 ANSI) ——
+        // 不能 &field 当 BSTR* 用。写侧按 N 右补空格/右截断 (与 LSet 同口径)。
+        // 自有临时串那一侧顺手释放 (与上面 vb6_LSetFree 的选择同一把尺)。
+        const std::string assignFn118u =
+            (valueOwned113 || wrapped122) ? "vb6_FixedStrAssignFree" : "vb6_FixedStrAssign";
+        c_.emitLine(assignFn118u + "(" + target + ", " + fixedLen + ", " + value + ");");
+    } else if (!fixedLen.empty()) {
         // 账 #118 ①: 定长串赋值的收口 —— 短则右侧补空格、长则截右 (VB6 手册 + 真机
         // CopyMemory 实测一致, 与 LSet 同口径)。必须先 fit 成一只**新** BSTR 再 move
         // 进目标: 先 Assign 再回头改长度会多留一只临时, 而裸赋值连长度都不对。

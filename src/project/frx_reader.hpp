@@ -61,6 +61,20 @@ struct FrxPropBagBlob {
     std::vector<uint8_t> bytes;         // 块负载 (cbSize 字节, 含 28B 前缀)
 };
 
+// .frx 里的设计期 StdFont 序列化块 (`.frm` 里的 `font = "Form3.frx":0000`)
+//   布局实测 (Form3/Form5.frx):
+//     [DWORD cbSize][GUID StdFont 16B][DWORD 版本][WORD 字重]
+//     [DWORD 字号×10000][BYTE 标志][ASCII 字体名 + NUL][填充到 cbSize]
+//   `.ctl` 的 ReadProperties 用 `Set m_Font = .ReadProperty("Font", Ambient.Font)`,
+//   属性包里必须是 VT_DISPATCH(IFont), 字符串槽会被忽略 → 退回 ambient 8.25pt。
+struct FrxFontData {
+    bool found = false;
+    std::string name;                   // 字体名 (ASCII, 与 VB6 一致)
+    double size = 8.25;                 // 字号 (pt)
+    int weight = 400;
+    int charset = 0;
+};
+
 // .frx 里的 "DocProperty 字节块" (UserControl 设计期二进制属性, 如 `image_1`)
 //   布局: [DWORD cbSize][1B 00][GUID 16B][WORD 00][WORD 01][DWORD nBytes]
 //         [4B 0][nBytes 负载]  ——  payload 起点 = offset+32, cbSize = 28+nBytes
@@ -113,6 +127,9 @@ public:
     //   该判据在实测的 InitPanels/InitBands/InitButtons/InitListImages/InitTabs
     //   上逐一命中, 且不会误伤 DocString / 图片块。
     static FrxPropBagBlob readPropBagBlob(size_t offset);
+
+    // 读取设计期 StdFont 序列化块 (见上面 FrxFontData 注释)
+    static FrxFontData readFont(size_t offset);
 
     // 读取设计器 OCX 的 `OleObjectBlob` (见上面 FrxOleBlob 注释)
     static FrxOleBlob readOleBlob(size_t offset);

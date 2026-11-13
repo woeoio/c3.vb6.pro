@@ -163,7 +163,27 @@ std::unique_ptr<ReDimStmt> Parser::parseReDimStmt() {
     if (match(TokenKind::Preserve)) {
         preserve = true;
     }
+    return parseReDimEntry(loc, preserve);
+}
 
+// ReDim 可一次声明多个数组 (VB6 允许 `ReDim a(0 To n) As Long, b(0 To n) As Long`)。
+// 逐项解析后包成 Block, 后续每个条目不再带 ReDim 关键字。
+StmtPtr Parser::parseReDimStmtList() {
+    auto loc = currentLoc();
+    auto first = parseReDimStmt();
+    if (cur_.kind != TokenKind::Comma) {
+        return first;
+    }
+    StmtList stmts;
+    stmts.push_back(std::move(first));
+    while (match(TokenKind::Comma)) {
+        stmts.push_back(parseReDimEntry(loc, false));
+    }
+    return std::make_unique<Block>(loc, std::move(stmts));
+}
+
+// 解析单个 ReDim 条目 (ReDim / Preserve 已由调用方消费)。
+std::unique_ptr<ReDimStmt> Parser::parseReDimEntry(SourceLocation loc, bool preserve) {
     // 解析变量名, 支持点访问: uOutput.Buffer 和 With块: .Member
     std::string varName;
     if (match(TokenKind::Dot)) {
@@ -240,7 +260,11 @@ std::unique_ptr<ReDimStmt> Parser::parseReDimStmt() {
             Token memTok = expectName("expected member name in ReDim target");
             targetExpr = std::make_unique<MemberAccessExpr>(
                 loc, std::move(targetExpr), memTok.text);
-            if (cur_.kind != TokenKind::LeftParen) break;
+            if (cur_.kind != TokenKind::LeftParen) {
+                // 成员链可以继续不带括号: ReDim a(i).b.c(n)
+                if (cur_.kind == TokenKind::Dot) continue;
+                break;
+            }
             advance();  // consume '('
             auto next = parseParenList();
             expect(TokenKind::RightParen, DiagnosticID::ParseExpectedToken,
@@ -648,6 +672,61 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
                 }
             }
         }
+        if ((*leafSlot)->kind == ASTNodeKind::IndexOrCallExpr
+            && cur_.kind == TokenKind::Comma) {
+            // C3-SENTINEL(np-call-firstarg-binop): 语句级无括号调用, 首参是**括号组 + 二元运算**,
+            // 且被调方是裸标识符 (不是 obj.Member):
+            //     fHSVtoRGB (x - trackRadius) / hueSpread, 1, 1, tmpR, tmpG, tmpB
+            // (PhotoDemon Controls/pdSliderStandalone.ctl:1135).
+            // VB6 语句级没有"表达式语句", 所以 `f (...)` 只能是调用; 括号是首参的**分组**,
+            // `/ hueSpread` 继续把首参写下去 ⇒ 该句 = f((x-trackRadius)/hueSpread, 1, 1, tmpR, tmpG, tmpB)。
+            // 表达式层却把 `(x - trackRadius)` 当成**实参表**吃掉 (f 只有一个实参), 再把
+            // `/ hueSpread` 绑到调用结果上, 语句层随后把整个 BinOp 当 callee、把 `, 1, 1, ...`
+            // 当它的实参 ⇒ 实参被塞进 `/` 的 helper:
+            //     vb6_Num_Div((double)(vb6_Colors_fHSVtoRGB(...)), (double)(hueSpread),
+            //                 vb6_VariantEmpty(), 1, 1, tmpR, tmpG, tmpB)   ⇒ C2197 (24 处)
+            // 与 Fix 110y 同一歧义、同一折叠法, 只是最左叶的 callee 是 IdentifierExpr 而非
+            // MemberAccessExpr; 判据同样要求"逗号后还有实参"(cur_ == Comma), 单独成句的
+            // `f (a)` 仍是正常调用, 不受影响。
+            auto& innerNb = static_cast<IndexOrCallExpr&>(**leafSlot);
+            if (innerNb.callee && innerNb.callee->kind == ASTNodeKind::IdentifierExpr
+                && innerNb.named.empty() && innerNb.positional.size() == 1) {
+                calleeOverride110y = std::move(innerNb.callee);
+                ExprPtr innerArgNb = std::move(innerNb.positional[0]);
+                *leafSlot = std::move(innerArgNb);
+                leadingArg110y = std::move(expr);
+            }
+        }
+    }
+    // C3-SENTINEL(np-call-firstarg-paren-binop): 同族但**没有二元运算符**的一格:
+    //     fHSVtoRGB (x - trackRadius), 1, 1, tmpR, tmpG, tmpB
+    // 表达式层把 `f (…)` 当"带 1 个实参的调用", 语句层把整个调用当 callee、把 `, 1, …`
+    // 挂到调用结果上 ⇒ 语义阶段按内层调用报 VB3005 (1/6), 发码成 `vb6_f(...)(1, 1, …)`。
+    // VB6 语句级这里括号只是首参的**分组**, 整句仍是 f((x-trackRadius), 1, 1, tmpR, tmpG, tmpB)。
+    // 只在首参**不是可寻址左值**时折叠: `f (v), x` 里的括号在 VB6 是"按值传一份临时",
+    // 折叠掉会变成按引用传原变量 —— 语义不同, 该形保持现状, 不在本条内改。
+    if (expr && !leadingArg110y && expr->kind == ASTNodeKind::IndexOrCallExpr
+        && cur_.kind == TokenKind::Comma) {
+        auto& nbParen = static_cast<IndexOrCallExpr&>(*expr);
+        bool argAddressable = false;
+        if (nbParen.positional.size() == 1) {
+            auto k = nbParen.positional[0]->kind;
+            argAddressable = (k == ASTNodeKind::IdentifierExpr
+                           || k == ASTNodeKind::MemberAccessExpr);
+        }
+        // C3-SENTINEL(np-call-firstarg-paren-binop): 被调方两种形态都收 —— 裸标识符
+        // (`fHSVtoRGB (…), 1, …`) 与 `obj.Member` (`m_Stream.SetPosition (…), 1`;
+        // PhotoDemon pdMBM.cls:781 / SelectionFilters.bas:732 实测被外层调用结果吞成
+        // `vb6_pdStream_SetPosition(me, expr, 0, 0, _own_1, 1)` ⇒ C2197 6 条)。
+        // 收窄条件同一套: 1 枚实参、首参不可寻址 (可寻址时括号表示"按值传临时",
+        // 折叠会改成按引用, 语义不同)。
+        if (nbParen.callee
+            && (nbParen.callee->kind == ASTNodeKind::IdentifierExpr
+                || nbParen.callee->kind == ASTNodeKind::MemberAccessExpr)
+            && nbParen.named.empty() && nbParen.positional.size() == 1 && !argAddressable) {
+            calleeOverride110y = std::move(nbParen.callee);
+            leadingArg110y = std::move(nbParen.positional[0]);
+        }
     }
     // Fix <vbeclipse>: 语句级 `obj.Method -30, -30, w, h` —— 无括号调用的首参是
     // 负数时, 表达式层把 `Method -30` 绑成中缀减法 Bin(Sub, MA, 30), 随后无括号
@@ -669,18 +748,30 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
         }
         if (aboveMA && (*leafSlot)->kind == ASTNodeKind::MemberAccessExpr) {
             auto& binNeg = static_cast<BinaryExpr&>(**aboveMA);
+            // C3-SENTINEL(g4-neg-first-arg): 语句级 `obj.M -<数值表达式>, ...` 的折叠点。
+            // §B93: 右操作数**不只字面数** —— PhotoDemon `baseArrow.AddTriangle
+            // -1 * triangleHalfWidth, ...` 解析成 `Sub(obj.M, Mul(1, x))`, 旧判据只认
+            // LiteralExpr ⇒ 整句落空, 仍发 `(callee - (1*x))(args)` ⇒ C2064
+            // (实测 9 处 / 7 TU: Dialog_GradientEditor、FormLevels、Interface、PD2D、
+            //  pdEdgeDetector、Tools_Clone、Tools_Gradient)。
+            // 语句级根本不存在"减法语句", 裸成员访问后跟 `-` 只能是调用语句的负数首参,
+            // 所以判据放宽到"任意非字符串/日期表达式" (与上面 Fix <vbeclipse> 同机理)。
+            bool negatable = true;
             if (binNeg.op == BinaryOp::Sub && binNeg.right
                 && binNeg.right->kind == ASTNodeKind::LiteralExpr) {
                 auto& litNeg = static_cast<LiteralExpr&>(*binNeg.right);
-                if (litNeg.literalKind != LiteralKind::String
-                    && litNeg.literalKind != LiteralKind::Date) {
-                    auto negArg = std::make_unique<UnaryExpr>(binNeg.right->loc,
-                        UnaryOp::Negate, std::move(binNeg.right));
-                    calleeOverride110y = std::move(*leafSlot);  // MemberAccess 作 callee
-                    *aboveMA = std::move(negArg);
-                    leadingArg110y = std::move(expr);
-                    negFirstArgCollapse = true;
-                }
+                negatable = (litNeg.literalKind != LiteralKind::String
+                          && litNeg.literalKind != LiteralKind::Date);
+            } else if (binNeg.op != BinaryOp::Sub || !binNeg.right) {
+                negatable = false;
+            }
+            if (negatable) {
+                auto negArg = std::make_unique<UnaryExpr>((*aboveMA)->loc,
+                    UnaryOp::Negate, std::move(binNeg.right));
+                calleeOverride110y = std::move(*leafSlot);  // MemberAccess 作 callee
+                *aboveMA = std::move(negArg);
+                leadingArg110y = std::move(expr);
+                negFirstArgCollapse = true;
             }
         }
     }

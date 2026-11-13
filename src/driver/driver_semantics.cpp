@@ -40,8 +40,8 @@ void insertComMethod(Symbol& sym, const std::string& key, Symbol::ComMethodSig s
                      ComMemberKind kind) {
     bool incomingSetter = (kind == ComMemberKind::PropertyPut
                         || kind == ComMemberKind::PropertyPutRef);
-    auto it = sym.comMethods.find(key);
-    if (incomingSetter && it != sym.comMethods.end() && it->second.isPropertyGet) {
+    auto it = sym.P().comMethods.find(key);
+    if (incomingSetter && it != sym.P().comMethods.end() && it->second.isPropertyGet) {
         return;  // 已有 getter, setter 不得覆盖
     }
     // 账 #245 / §B94 的政策就两条: ① getter 永远赢 over setter (上面那道闸, 两向都对); ② 其余的覆盖今天
@@ -51,7 +51,7 @@ void insertComMethod(Symbol& sym, const std::string& key, Symbol::ComMethodSig s
     // putref_Item 折成同一个小写键, 读形三项全同) —— 两种都不许响。响的只剩「读形真的变了、又不是
     // blessed 那一向」那一种 (实测语料 0 次)。
     {
-        bool exists = (it != sym.comMethods.end());
+        bool exists = (it != sym.P().comMethods.end());
         // 注意顺序: 先判存在, 再解引用 it->second —— 反过来就是把 end() 迭代器当元素读
         // (本机实测: 每台输入一进来就 0xC0000409 崩在 insertComMethod 里)。
         bool oldSetter = exists && (it->second.isPropertyPut || it->second.isPropertyPutRef);
@@ -70,7 +70,7 @@ void insertComMethod(Symbol& sym, const std::string& key, Symbol::ComMethodSig s
                       << std::endl;
         }
     }
-    sym.comMethods[key] = std::move(sig);
+    sym.W().comMethods[key] = std::move(sig);
 }
 
 } // namespace
@@ -87,6 +87,300 @@ std::unordered_set<std::string> Driver::collectFormModuleNames() const {
     return names;
 }
 
+// 账 §56.48: 工程内**用户控件 (.ctl) 模块名**（小写）的**唯一**建造点 —— 与
+// collectFormModuleNames 同形: 驱动扫一遍 modules_ 建一张表, 下发给每台 cgen。
+// 发码侧那一问「这个 WithEvents 的源类是不是 UC」只读它 (不许第二处各扫一遍 modules_
+// —— 那就是两份权威, 改一边漏一边)。
+std::unordered_set<std::string> Driver::collectControlModuleNames() const {
+    std::unordered_set<std::string> names;
+    for (const auto& module : modules_) {
+        if (module && module->isUserControlDoc() && !module->moduleName.empty()) {
+            names.insert(Symbol::toLower(module->moduleName));
+        }
+    }
+    return names;
+}
+
+// P6.3 共享化 (2026-11): 类型库符号的**唯一**建造点。
+//
+// 共享化之前这段代码在每个模块的循环里各跑一遍 —— 实测 539 模块 × 3042 符号
+// ≈ 164 万 Symbol ≈ 12 GB 峰值, PhotoDemon 在 16 GB runner 上只能勉强跑完。
+// 现在只造一份 SymbolTable (typelibTable_), 各模块的 SymbolTable 通过
+// setSharedScope() 以**非拥有只读回退**共享它; 本地符号永远优先命中。
+//
+// 为什么可以共享 (写点审计的结论): 类型库符号的 payload 字段 (comIidStr /
+// comVtblBase / comMethods / constIntValue / comSource* / comModule* / eventNames
+// 这一批) 全仓只有本函数一处写点; 分析与发码阶段对它们只读。唯一落在查表所得
+// Symbol 上的写是 isReferenced=true, 而它的消费者只认 Variable/Constant, 永不命中
+// 这 6 种 kind。scripts/check_typelib_payload_writers.ps1 把"payload 只读"钉成断言。
+void Driver::buildSharedTypelibSymbols() {
+    typelibTable_.reset();
+    if (!typelibParser_) return;
+    typelibTable_ = std::make_unique<SymbolTable>(*diag_);
+    SymbolTable& tab = *typelibTable_;
+
+    for (auto& tl : typelibParser_->cachedResults()) {
+        for (auto& cc : tl->coclasses) {
+            // 注册ComClass符号
+            auto sym = std::make_unique<Symbol>(
+                SymbolKind::ComClass, cc->name, Vb6Type::Object,
+                SourceLocation{}, AccessLevel::Public);
+            sym->isBuiltin = true;
+            sym->comClsidStr = cc->clsidStr;
+            sym->comProgId = cc->progId;
+            sym->comDefaultIfaceName = cc->defaultIfaceName;
+            sym->comIsAppObject = cc->isAppObject;
+
+            // 复制默认接口的方法签名到ComClass
+            if (cc->defaultIface) {
+                sym->comIidStr = cc->defaultIface->iidStr;
+                sym->comIsDual = cc->defaultIface->isDual;
+                sym->comVtblBase = cc->defaultIface->isDispatch ? 7 : 3;
+
+                // P24-10: 传播默认成员名 (DISPID_VALUE=0)
+                sym->comDefaultMemberName = cc->defaultIface->defaultMemberName;
+                sym->comDefaultMemberRealName = cc->defaultIface->defaultMemberRealName;
+
+                for (auto& member : cc->defaultIface->members) {
+                    Symbol::ComMethodSig sig;
+                    sig.realName = member.realName;
+                    sig.memid = member.memid;
+                    sig.vtableIndex = member.vtableIndex;
+                    sig.returnType = member.returnType;
+                    sig.isPropertyGet = (member.kind == ComMemberKind::PropertyGet);
+                    sig.isPropertyPut = (member.kind == ComMemberKind::PropertyPut);
+                    sig.isPropertyPutRef = (member.kind == ComMemberKind::PropertyPutRef);
+                    for (auto& param : member.params) {
+                        ParameterInfo pi;
+                        pi.name = param.name;
+                        pi.type = param.type;
+                        pi.isByVal = (param.direction == ComParamDir::In);
+                        pi.isOptional = param.isOptional;
+                        sig.params.push_back(std::move(pi));
+                    }
+                    insertComMethod(*sym, member.name, std::move(sig), member.kind);
+                }
+                // 填充memberNames (类成员名列表, 兼容现有逻辑)
+                for (auto& member : cc->defaultIface->members) {
+                    sym->W().memberNames.push_back(member.realName);
+                }
+            }
+
+            // P13.23: 填充事件源接口信息 (用于外部COM WithEvents)
+            if (!cc->defaultSourceIfaceName.empty()) {
+                sym->comHasSourceIface = true;
+                sym->comSourceIfaceName = cc->defaultSourceIfaceName;
+                if (cc->defaultSourceIface) {
+                    sym->comSourceIfaceIid = cc->defaultSourceIface->iidStr;
+                    sym->comSourceIfaceIsDispOnly = cc->defaultSourceIface->isDispatch;
+                    for (auto& member : cc->defaultSourceIface->members) {
+                        sym->eventNames.push_back(member.realName);
+                        sym->comEventDispids[Symbol::toLower(member.name)] = member.memid;
+                        Symbol::ComMethodSig sig;
+                        sig.realName = member.realName;
+                        sig.memid = member.memid;
+                        sig.vtableIndex = member.vtableIndex;
+                        sig.returnType = member.returnType;
+                        for (auto& param : member.params) {
+                            ParameterInfo pi;
+                            pi.name = param.name;
+                            pi.type = param.type;
+                            pi.isByVal = (param.direction == ComParamDir::In);
+                            pi.isOptional = param.isOptional;
+                            sig.params.push_back(pi);
+                        }
+                        sym->W().comSourceMethods[Symbol::toLower(member.name)] = std::move(sig);
+                    }
+                }
+            }
+            tab.define(std::move(sym));
+        }
+
+        // 也注册ComInterface符号
+        for (auto& iface : tl->interfaces) {
+            auto sym = std::make_unique<Symbol>(
+                SymbolKind::ComInterface, iface->name, Vb6Type::Object,
+                SourceLocation{}, AccessLevel::Public);
+            sym->isBuiltin = true;
+            sym->comIidStr = iface->iidStr;
+            sym->comIsDual = iface->isDual;
+            sym->comVtblBase = iface->isDispatch ? 7 : 3;
+
+            for (auto& member : iface->members) {
+                Symbol::ComMethodSig sig;
+                sig.realName = member.realName;
+                sig.memid = member.memid;
+                sig.vtableIndex = member.vtableIndex;
+                sig.returnType = member.returnType;
+                sig.isPropertyGet = (member.kind == ComMemberKind::PropertyGet);
+                sig.isPropertyPut = (member.kind == ComMemberKind::PropertyPut);
+                sig.isPropertyPutRef = (member.kind == ComMemberKind::PropertyPutRef);
+                for (auto& param : member.params) {
+                    ParameterInfo pi;
+                    pi.name = param.name;
+                    pi.type = param.type;
+                    pi.isByVal = (param.direction == ComParamDir::In);
+                    pi.isOptional = param.isOptional;
+                    sig.params.push_back(std::move(pi));
+                }
+                insertComMethod(*sym, member.name, std::move(sig), member.kind);
+            }
+
+            tab.define(std::move(sym));
+        }
+
+        // Fix 018: 注册COM枚举成员为EnumMember符号 (TextCompare/adStateClosed 等)
+        // COM 类型库的 TKIND_ENUM 解析后, 成员作为全局可见命名常量注入符号表.
+        // hasConstValue=true 使 cgen 发出数值 (经 Fix 017-P1/P3 路径), 避免裸名 C2065.
+        // Volume guard: 跳过枚举成员过多的类型库 (如 MSHTML 数千成员), 避免命名空间
+        // 污染、内存膨胀 (125 模块 × N 成员) 和跨 enum 同名碰撞. 小型库 (Scripting ~30,
+        // ADO ~200) 正常注册, 覆盖 TextCompare / adXXX 等已知 C2065.
+        size_t totalEnumMembers = 0;
+        for (auto& en : tl->enums) totalEnumMembers += en->members.size();
+        if (totalEnumMembers <= 1000) {
+            for (auto& en : tl->enums) {
+                // 枚举**类型名**也注册 (EnumType): 限定形式 `EnumType.成员`
+                // (XTPCommandBarsSpecialCommands.XTP_ID_RIBBONCONTROLTAB) 靠
+                // m22 Fix 084y-8 拦截, 判据是 object 标识符的符号 kind==EnumType。
+                // 此前只注册成员 ⇒ 类型名未声明 (VB3001) 且限定式发成
+                // vb6_<Enum>_<Member> 平铺名 (C2065, Outlook2013 frmMain:1080)。
+                {
+                    auto enumTypeSym = std::make_unique<Symbol>(
+                        SymbolKind::EnumType, en->name, Vb6Type::Long,
+                        SourceLocation{}, AccessLevel::Public);
+                    enumTypeSym->isBuiltin = true;
+                    tab.define(std::move(enumTypeSym));
+                }
+                for (auto& m : en->members) {
+                    auto enumSym = std::make_unique<Symbol>(
+                        SymbolKind::EnumMember, m.name, Vb6Type::Long,
+                        SourceLocation{}, AccessLevel::Public);
+                    enumSym->isBuiltin = true;
+                    enumSym->hasConstValue = true;
+                    enumSym->constIntValue = m.value;
+                    enumSym->constType = Vb6Type::Long;
+                    tab.define(std::move(enumSym));
+                }
+            }
+        }
+        // Fix 084m: ADODB 非标准别名。类型库 ExecuteOptionEnum 只有 adAsyncExecute(=16),
+        // 但源码 (cDatabase.Exec) 使用 adExecuteAsync; 未注册时生成裸名 → C2065。
+        {
+            std::string tlPathLower = tl->tlbPath;
+            std::transform(tlPathLower.begin(), tlPathLower.end(), tlPathLower.begin(), ::tolower);
+            bool isAdodb = tlPathLower.find("msado") != std::string::npos
+                || tl->typeLibProjectName.find("ADODB") != std::string::npos;
+            if (isAdodb) {
+                static const std::vector<std::pair<const char*, long>> adodbAliases = {
+                    {"adExecuteAsync", 16},
+                };
+                for (auto& al : adodbAliases) {
+                    std::string alLower = al.first;
+                    std::transform(alLower.begin(), alLower.end(), alLower.begin(), ::tolower);
+                    if (!tab.lookupModule(alLower)) {
+                        auto enumSym = std::make_unique<Symbol>(
+                            SymbolKind::EnumMember, al.first, Vb6Type::Long,
+                            SourceLocation{}, AccessLevel::Public);
+                        enumSym->isBuiltin = true;
+                        enumSym->hasConstValue = true;
+                        enumSym->constIntValue = al.second;
+                        enumSym->constType = Vb6Type::Long;
+                        tab.define(std::move(enumSym));
+                    }
+                }
+            }
+        }
+    }
+
+    // P24-04: 注册ComModule符号 (TKIND_MODULE → ActiveX DLL全局函数命名空间)
+    // VBMAN.Version() 这种调用: VBMAN是工程名/模块名, Version是全局函数
+    for (auto& tl : typelibParser_->cachedResults()) {
+        for (auto& mod : tl->modules) {
+            auto sym = std::make_unique<Symbol>(
+                SymbolKind::ComModule, mod->name, Vb6Type::Object,
+                SourceLocation{}, AccessLevel::Public);
+            sym->isBuiltin = true;
+            sym->comModuleDllPath = mod->dllPath;
+            for (auto& func : mod->functions) {
+                Symbol::ComMethodSig sig;
+                sig.realName = func.realName;
+                sig.memid = func.memid;
+                sig.vtableIndex = -1;  // 模块函数无vtable
+                sig.returnType = func.returnType;
+                sig.isPropertyGet = false;
+                sig.isPropertyPut = false;
+                sig.isPropertyPutRef = false;
+                for (auto& param : func.params) {
+                    ParameterInfo pi;
+                    pi.name = param.name;
+                    pi.type = param.type;
+                    pi.isByVal = (param.direction == ComParamDir::In);
+                    pi.isOptional = param.isOptional;
+                    sig.params.push_back(std::move(pi));
+                }
+                sym->W().comModuleFunctions[func.name] = std::move(sig);
+            }
+            tab.define(std::move(sym));
+        }
+    }
+
+    // P24-04: 注册VB_GlobalNameSpace promoted函数为ComGlobalNs符号
+    // GlobalNameSpace coclass (如sGlobal) 的默认接口Public方法提升为全局符号
+    // 示例: VBMAN库的sGlobal._sGlobal.VBMAN() → 全局"VBMAN"函数 (SymbolKind::ComGlobalNs)
+    // 代码生成: VBMAN() → vb6_ComCallObject(vb6_CreateObject(L"VBMANLIB.sGlobal"), L"VBMAN", NULL, 0)
+    for (auto& tl : typelibParser_->cachedResults()) {
+        for (auto& cc : tl->coclasses) {
+            if (!cc->isGlobalNamespace || !cc->defaultIface) continue;
+            // 只提升非标准方法 (排除 IUnknown/IDispatch 的标准方法)
+            // Fix 094: 改为按名过滤, 不再"跳过前 N 个". 接口 members 是否包含
+            // 标准方法取决于 TypeLib 的生成方 —— 真 VB6 生成的含(7 个),
+            // C3 自产的只含业务方法. 原先假设"前 7 个是标准方法"会让 C3 自产
+            // TypeLib 在 members.size() < 7 时整个循环不执行, 一个全局方法都
+            // 提升不了 (实测 sGlobal._sGlobal members=1 只有 VBMAN, 于是
+            // VBMAN.Version() 退化成 vb6_VBMAN_Version() → LNK2019).
+            static const std::unordered_set<std::string> stdMethodNames = {
+                "QueryInterface", "AddRef", "Release",
+                "GetTypeInfoCount", "GetTypeInfo", "GetIDsOfNames", "Invoke"
+            };
+            for (size_t mi = 0; mi < cc->defaultIface->members.size(); mi++) {
+                auto& member = cc->defaultIface->members[mi];
+                if (stdMethodNames.count(member.realName)) continue;
+                // 每个promoted方法注册为独立的ComGlobalNs符号
+                auto sym = std::make_unique<Symbol>(
+                    SymbolKind::ComGlobalNs, member.realName, member.returnType,
+                    SourceLocation{}, AccessLevel::Public);
+                sym->isBuiltin = true;
+                sym->comClsidStr = cc->clsidStr;
+                sym->comProgId = cc->progId;
+                sym->comDefaultIfaceName = cc->defaultIfaceName;
+                sym->comDefaultIfaceIid = cc->defaultIface->iidStr;
+                sym->comDefaultMemberName = cc->defaultIface->defaultMemberName;
+                sym->comDefaultMemberRealName = cc->defaultIface->defaultMemberRealName;
+                sym->comGlobalNsMethodName = member.realName;
+                // 复制方法签名
+                Symbol::ComMethodSig sig;
+                sig.realName = member.realName;
+                sig.memid = member.memid;
+                sig.vtableIndex = member.vtableIndex;
+                sig.returnType = member.returnType;
+                sig.isPropertyGet = (member.kind == ComMemberKind::PropertyGet);
+                sig.isPropertyPut = (member.kind == ComMemberKind::PropertyPut);
+                sig.isPropertyPutRef = (member.kind == ComMemberKind::PropertyPutRef);
+                for (auto& param : member.params) {
+                    ParameterInfo pi;
+                    pi.name = param.name;
+                    pi.type = param.type;
+                    pi.isByVal = (param.direction == ComParamDir::In);
+                    pi.isOptional = param.isOptional;
+                    sig.params.push_back(std::move(pi));
+                }
+                insertComMethod(*sym, member.name, std::move(sig), member.kind);
+                tab.define(std::move(sym));
+            }
+        }
+    }
+}
+
 bool Driver::runSemanticAnalysis(const CompileOptions& options) {
     // ai/084a M1: 类成员访问级别预计算表 (只读, 随后随各分析器下发)
     buildMemberAccessTable();
@@ -99,6 +393,10 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
     std::unordered_set<std::string> projModNames;
     std::unordered_set<std::string> projPubProcs;
     std::unordered_set<std::string> projPubConsts;
+    // 账 #278 §B118: 第五份 = 标准模块的模块级 Public 变量名（工程级裸名可见的全局）。
+    // 与前三份同源、同一时刻装配: 跨模块符号注入跑在逐模块分析之后, 等它来不及 ——
+    // 分析当刻查不到就落一条假 VB3001（PhotoDemon 全工程 3693 条的主因）。
+    std::unordered_set<std::string> projPubVars;
     // 账 #278 §B110: 第四份 = 工程内**窗体模块名**。VB6 里窗体名在裸名位就是它的默认实例
     // （`Unload TmForm2` / `Set f = TmForm2`），发码侧 `cgen_expr_ident_symbol.inc` 一直在答
     // `vb6_form_hwnd_TmForm2()`；语义层认不得 ⇒ 那条合法写法多配一条 VB3001（宽松模块里还会
@@ -110,6 +408,15 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
         // 只有标准模块的 Public 过程能被别处按**裸名**点到 (类/窗体的公开成员必须经
         // 实例名), 所以第二份只收 .bas 模块。
         if (module->isClassModule || module->isFormModule) continue;
+        // 包边界：本模块所在的包若在 manifest 里屏蔽了某些名字，这些名字不进工程级名单。
+        // 那份 manifest 规则的唯一权威是 packageBlockedNames_ —— 这里只"问一次"，点名的
+        // 三个分支（变量 / 常量 / 过程）共用同一份答案，不许各自再抄一遍
+        // (scripts/check_project_const_visibility.ps1 的 S3 钉的就是"全仓只有一处问")。
+        const std::map<std::string, std::string>* blockedForModule = nullptr;
+        if (!module->packageName.empty()) {
+            auto pit = packageBlockedNames_.find(Symbol::toLower(module->packageName));
+            if (pit != packageBlockedNames_.end()) blockedForModule = &pit->second;
+        }
         for (auto& d : module->declarations) {
             if (!d) continue;
             // 账 #278 (§B106): 同一格还漏了**模块级 Public Const / Public Enum 成员**。
@@ -132,6 +439,22 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                             projPubConsts.insert(Symbol::toLower(m->name));
                         }
                     }
+                }
+                continue;
+            }
+            // 账 #278 §B118: 模块级 **Public 变量**。VB6 里标准模块的 Public 变量与 Public
+            // 过程/常量同格 —— 裸名位就是它的合法位置（工程级全局）。缺这一档的后果与 §B106
+            // 同一对，但更脏: Option Explicit 下每个跨模块引用配一条假 VB3001（PhotoDemon 里
+            // g_Language 1266 条、workingDIB 691 条… 合计 3693），宽松模式下更实 —— 名字被
+            // 登记成一枚隐式 Variant 局部，把全局吃掉。
+            // 只收 Public（Private 不跨模块；标准模块里的 Friend VB6 本来就不认，不收；
+            // 类/窗体模块的 Public 变量是实例成员，得经对象名访问，不是工程级裸名 —— 那段
+            // 循环在 isClassModule/isFormModule 处已经 continue 掉了）。
+            if (d->kind == ASTNodeKind::VariableDecl) {
+                auto& v = static_cast<VariableDecl&>(*d);
+                if (v.access == AccessLevel::Public && !v.name.empty()) {
+                    const std::string lk = Symbol::toLower(v.name);
+                    if (!blockedForModule || !blockedForModule->count(lk)) projPubVars.insert(lk);
                 }
                 continue;
             }
@@ -162,21 +485,21 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
             if (!nm.empty() &&
                 (acc == AccessLevel::Public || acc == AccessLevel::Friend)) {
                 const std::string lk = Symbol::toLower(nm);
-                bool blockedByPkg = false;
-                if (!module->packageName.empty()) {
-                    auto pit = packageBlockedNames_.find(Symbol::toLower(module->packageName));
-                    if (pit != packageBlockedNames_.end()) blockedByPkg = pit->second.count(lk) > 0;
-                }
-                if (!blockedByPkg) projPubProcs.insert(lk);
+                if (!blockedForModule || !blockedForModule->count(lk)) projPubProcs.insert(lk);
             }
         }
     }
+    // P6.3 (共享化): 类型库符号只造一份, 且必须早于逐模块分析 —— 与共享化之前
+    // 同一时刻 (每个模块的 analyzer 在 analyze() 之前都能查到它们)。
+    buildSharedTypelibSymbols();
+
     for (auto& module : modules_) {
         auto analyzer = std::make_unique<SemanticAnalyzer>(*diag_, options.verbose);
         // <vbeclipse>: 工程级名字表 (见上面两份的注释)
         analyzer->setProjectModuleNames(projModNames);
         analyzer->setProjectPublicProcNames(projPubProcs);
         analyzer->setProjectPublicConstNames(projPubConsts);
+        analyzer->setProjectPublicVarNames(projPubVars);
         // 账 #278 §B110: 第四份 = 工程内窗体模块名（裸名位 = VB6 的默认实例引用）
         analyzer->setProjectFormNames(projFormNames);
         // 泛型 (tB, G3): 调用点推断需要模板只读视图 (runGenericsPrepass 已构建)
@@ -213,268 +536,10 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
             if (!blockedCls.empty()) analyzer->setBlockedPackageClasses(std::move(blockedCls));
         }
 
-        // P6.3: 如果有TypeLib解析结果, 注入COM类型信息到符号表
-        if (typelibParser_) {
-            for (auto& tl : typelibParser_->cachedResults()) {
-                for (auto& cc : tl->coclasses) {
-                    // 注册ComClass符号
-                    auto sym = std::make_unique<Symbol>(
-                        SymbolKind::ComClass, cc->name, Vb6Type::Object,
-                        SourceLocation{}, AccessLevel::Public);
-                    sym->isBuiltin = true;
-                    sym->comClsidStr = cc->clsidStr;
-                    sym->comProgId = cc->progId;
-                    sym->comDefaultIfaceName = cc->defaultIfaceName;
-                    sym->comIsAppObject = cc->isAppObject;
-
-                    // 复制默认接口的方法签名到ComClass
-                    if (cc->defaultIface) {
-                        sym->comIidStr = cc->defaultIface->iidStr;
-                        sym->comIsDual = cc->defaultIface->isDual;
-                        sym->comVtblBase = cc->defaultIface->isDispatch ? 7 : 3;
-
-                        // P24-10: 传播默认成员名 (DISPID_VALUE=0)
-                        sym->comDefaultMemberName = cc->defaultIface->defaultMemberName;
-                        sym->comDefaultMemberRealName = cc->defaultIface->defaultMemberRealName;
-
-                        for (auto& member : cc->defaultIface->members) {
-                            Symbol::ComMethodSig sig;
-                            sig.realName = member.realName;
-                            sig.memid = member.memid;
-                            sig.vtableIndex = member.vtableIndex;
-                            sig.returnType = member.returnType;
-                            sig.isPropertyGet = (member.kind == ComMemberKind::PropertyGet);
-                            sig.isPropertyPut = (member.kind == ComMemberKind::PropertyPut);
-                            sig.isPropertyPutRef = (member.kind == ComMemberKind::PropertyPutRef);
-                            for (auto& param : member.params) {
-                                ParameterInfo pi;
-                                pi.name = param.name;
-                                pi.type = param.type;
-                                pi.isByVal = (param.direction == ComParamDir::In);
-                                pi.isOptional = param.isOptional;
-                                sig.params.push_back(std::move(pi));
-                            }
-                            insertComMethod(*sym, member.name, std::move(sig), member.kind);
-                        }
-                        // 填充memberNames (类成员名列表, 兼容现有逻辑)
-                        for (auto& member : cc->defaultIface->members) {
-                            sym->memberNames.push_back(member.realName);
-                        }
-                    }
-
-                    // P13.23: 填充事件源接口信息 (用于外部COM WithEvents)
-                    if (!cc->defaultSourceIfaceName.empty()) {
-                        sym->comHasSourceIface = true;
-                        sym->comSourceIfaceName = cc->defaultSourceIfaceName;
-                        if (cc->defaultSourceIface) {
-                            sym->comSourceIfaceIid = cc->defaultSourceIface->iidStr;
-                            sym->comSourceIfaceIsDispOnly = cc->defaultSourceIface->isDispatch;
-                            for (auto& member : cc->defaultSourceIface->members) {
-                                sym->eventNames.push_back(member.realName);
-                                sym->comEventDispids[Symbol::toLower(member.name)] = member.memid;
-                                Symbol::ComMethodSig sig;
-                                sig.realName = member.realName;
-                                sig.memid = member.memid;
-                                sig.vtableIndex = member.vtableIndex;
-                                sig.returnType = member.returnType;
-                                for (auto& param : member.params) {
-                                    ParameterInfo pi;
-                                    pi.name = param.name;
-                                    pi.type = param.type;
-                                    pi.isByVal = (param.direction == ComParamDir::In);
-                                    pi.isOptional = param.isOptional;
-                                    sig.params.push_back(pi);
-                                }
-                                sym->comSourceMethods[Symbol::toLower(member.name)] = std::move(sig);
-                            }
-                        }
-                    }
-                    analyzer->symbolTable().define(std::move(sym));
-                }
-
-                // 也注册ComInterface符号
-                for (auto& iface : tl->interfaces) {
-                    auto sym = std::make_unique<Symbol>(
-                        SymbolKind::ComInterface, iface->name, Vb6Type::Object,
-                        SourceLocation{}, AccessLevel::Public);
-                    sym->isBuiltin = true;
-                    sym->comIidStr = iface->iidStr;
-                    sym->comIsDual = iface->isDual;
-                    sym->comVtblBase = iface->isDispatch ? 7 : 3;
-
-                    for (auto& member : iface->members) {
-                        Symbol::ComMethodSig sig;
-                        sig.realName = member.realName;
-                        sig.memid = member.memid;
-                        sig.vtableIndex = member.vtableIndex;
-                        sig.returnType = member.returnType;
-                        sig.isPropertyGet = (member.kind == ComMemberKind::PropertyGet);
-                        sig.isPropertyPut = (member.kind == ComMemberKind::PropertyPut);
-                        sig.isPropertyPutRef = (member.kind == ComMemberKind::PropertyPutRef);
-                        for (auto& param : member.params) {
-                            ParameterInfo pi;
-                            pi.name = param.name;
-                            pi.type = param.type;
-                            pi.isByVal = (param.direction == ComParamDir::In);
-                            pi.isOptional = param.isOptional;
-                            sig.params.push_back(std::move(pi));
-                        }
-                        insertComMethod(*sym, member.name, std::move(sig), member.kind);
-                    }
-
-                    analyzer->symbolTable().define(std::move(sym));
-                }
-
-                // Fix 018: 注册COM枚举成员为EnumMember符号 (TextCompare/adStateClosed 等)
-                // COM 类型库的 TKIND_ENUM 解析后, 成员作为全局可见命名常量注入符号表.
-                // hasConstValue=true 使 cgen 发出数值 (经 Fix 017-P1/P3 路径), 避免裸名 C2065.
-                // Volume guard: 跳过枚举成员过多的类型库 (如 MSHTML 数千成员), 避免命名空间
-                // 污染、内存膨胀 (125 模块 × N 成员) 和跨 enum 同名碰撞. 小型库 (Scripting ~30,
-                // ADO ~200) 正常注册, 覆盖 TextCompare / adXXX 等已知 C2065.
-                size_t totalEnumMembers = 0;
-                for (auto& en : tl->enums) totalEnumMembers += en->members.size();
-                if (totalEnumMembers <= 1000) {
-                    for (auto& en : tl->enums) {
-                        // 枚举**类型名**也注册 (EnumType): 限定形式 `EnumType.成员`
-                        // (XTPCommandBarsSpecialCommands.XTP_ID_RIBBONCONTROLTAB) 靠
-                        // m22 Fix 084y-8 拦截, 判据是 object 标识符的符号 kind==EnumType。
-                        // 此前只注册成员 ⇒ 类型名未声明 (VB3001) 且限定式发成
-                        // vb6_<Enum>_<Member> 平铺名 (C2065, Outlook2013 frmMain:1080)。
-                        {
-                            auto enumTypeSym = std::make_unique<Symbol>(
-                                SymbolKind::EnumType, en->name, Vb6Type::Long,
-                                SourceLocation{}, AccessLevel::Public);
-                            enumTypeSym->isBuiltin = true;
-                            analyzer->symbolTable().define(std::move(enumTypeSym));
-                        }
-                        for (auto& m : en->members) {
-                            auto enumSym = std::make_unique<Symbol>(
-                                SymbolKind::EnumMember, m.name, Vb6Type::Long,
-                                SourceLocation{}, AccessLevel::Public);
-                            enumSym->isBuiltin = true;
-                            enumSym->hasConstValue = true;
-                            enumSym->constIntValue = m.value;
-                            enumSym->constType = Vb6Type::Long;
-                            analyzer->symbolTable().define(std::move(enumSym));
-                        }
-                    }
-                }
-                // Fix 084m: ADODB 非标准别名。类型库 ExecuteOptionEnum 只有 adAsyncExecute(=16),
-                // 但源码 (cDatabase.Exec) 使用 adExecuteAsync; 未注册时生成裸名 → C2065。
-                {
-                    std::string tlPathLower = tl->tlbPath;
-                    std::transform(tlPathLower.begin(), tlPathLower.end(), tlPathLower.begin(), ::tolower);
-                    bool isAdodb = tlPathLower.find("msado") != std::string::npos
-                        || tl->typeLibProjectName.find("ADODB") != std::string::npos;
-                    if (isAdodb) {
-                        static const std::vector<std::pair<const char*, long>> adodbAliases = {
-                            {"adExecuteAsync", 16},
-                        };
-                        for (auto& al : adodbAliases) {
-                            std::string alLower = al.first;
-                            std::transform(alLower.begin(), alLower.end(), alLower.begin(), ::tolower);
-                            if (!analyzer->symbolTable().lookupModule(alLower)) {
-                                auto enumSym = std::make_unique<Symbol>(
-                                    SymbolKind::EnumMember, al.first, Vb6Type::Long,
-                                    SourceLocation{}, AccessLevel::Public);
-                                enumSym->isBuiltin = true;
-                                enumSym->hasConstValue = true;
-                                enumSym->constIntValue = al.second;
-                                enumSym->constType = Vb6Type::Long;
-                                analyzer->symbolTable().define(std::move(enumSym));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-            // P24-04: 注册ComModule符号 (TKIND_MODULE → ActiveX DLL全局函数命名空间)
-            // VBMAN.Version() 这种调用: VBMAN是工程名/模块名, Version是全局函数
-            for (auto& tl : typelibParser_->cachedResults()) {
-                for (auto& mod : tl->modules) {
-                    auto sym = std::make_unique<Symbol>(
-                        SymbolKind::ComModule, mod->name, Vb6Type::Object,
-                        SourceLocation{}, AccessLevel::Public);
-                    sym->isBuiltin = true;
-                    sym->comModuleDllPath = mod->dllPath;
-                    for (auto& func : mod->functions) {
-                        Symbol::ComMethodSig sig;
-                        sig.realName = func.realName;
-                        sig.memid = func.memid;
-                        sig.vtableIndex = -1;  // 模块函数无vtable
-                        sig.returnType = func.returnType;
-                        sig.isPropertyGet = false;
-                        sig.isPropertyPut = false;
-                        sig.isPropertyPutRef = false;
-                        for (auto& param : func.params) {
-                            ParameterInfo pi;
-                            pi.name = param.name;
-                            pi.type = param.type;
-                            pi.isByVal = (param.direction == ComParamDir::In);
-                            pi.isOptional = param.isOptional;
-                            sig.params.push_back(std::move(pi));
-                        }
-                        sym->comModuleFunctions[func.name] = std::move(sig);
-                    }
-                    analyzer->symbolTable().define(std::move(sym));
-                }
-            }
-
-            // P24-04: 注册VB_GlobalNameSpace promoted函数为ComGlobalNs符号
-            // GlobalNameSpace coclass (如sGlobal) 的默认接口Public方法提升为全局符号
-            // 示例: VBMAN库的sGlobal._sGlobal.VBMAN() → 全局"VBMAN"函数 (SymbolKind::ComGlobalNs)
-            // 代码生成: VBMAN() → vb6_ComCallObject(vb6_CreateObject(L"VBMANLIB.sGlobal"), L"VBMAN", NULL, 0)
-            for (auto& tl : typelibParser_->cachedResults()) {
-                for (auto& cc : tl->coclasses) {
-                    if (!cc->isGlobalNamespace || !cc->defaultIface) continue;
-                    // 只提升非标准方法 (排除 IUnknown/IDispatch 的标准方法)
-                    // Fix 094: 改为按名过滤, 不再"跳过前 N 个". 接口 members 是否包含
-                    // 标准方法取决于 TypeLib 的生成方 —— 真 VB6 生成的含(7 个),
-                    // C3 自产的只含业务方法. 原先假设"前 7 个是标准方法"会让 C3 自产
-                    // TypeLib 在 members.size() < 7 时整个循环不执行, 一个全局方法都
-                    // 提升不了 (实测 sGlobal._sGlobal members=1 只有 VBMAN, 于是
-                    // VBMAN.Version() 退化成 vb6_VBMAN_Version() → LNK2019).
-                    static const std::unordered_set<std::string> stdMethodNames = {
-                        "QueryInterface", "AddRef", "Release",
-                        "GetTypeInfoCount", "GetTypeInfo", "GetIDsOfNames", "Invoke"
-                    };
-                    for (size_t mi = 0; mi < cc->defaultIface->members.size(); mi++) {
-                        auto& member = cc->defaultIface->members[mi];
-                        if (stdMethodNames.count(member.realName)) continue;
-                        // 每个promoted方法注册为独立的ComGlobalNs符号
-                        auto sym = std::make_unique<Symbol>(
-                            SymbolKind::ComGlobalNs, member.realName, member.returnType,
-                            SourceLocation{}, AccessLevel::Public);
-                        sym->isBuiltin = true;
-                        sym->comClsidStr = cc->clsidStr;
-                        sym->comProgId = cc->progId;
-                        sym->comDefaultIfaceName = cc->defaultIfaceName;
-                        sym->comDefaultIfaceIid = cc->defaultIface->iidStr;
-                        sym->comDefaultMemberName = cc->defaultIface->defaultMemberName;
-                        sym->comDefaultMemberRealName = cc->defaultIface->defaultMemberRealName;
-                        sym->comGlobalNsMethodName = member.realName;
-                        // 复制方法签名
-                        Symbol::ComMethodSig sig;
-                        sig.realName = member.realName;
-                        sig.memid = member.memid;
-                        sig.vtableIndex = member.vtableIndex;
-                        sig.returnType = member.returnType;
-                        sig.isPropertyGet = (member.kind == ComMemberKind::PropertyGet);
-                        sig.isPropertyPut = (member.kind == ComMemberKind::PropertyPut);
-                        sig.isPropertyPutRef = (member.kind == ComMemberKind::PropertyPutRef);
-                        for (auto& param : member.params) {
-                            ParameterInfo pi;
-                            pi.name = param.name;
-                            pi.type = param.type;
-                            pi.isByVal = (param.direction == ComParamDir::In);
-                            pi.isOptional = param.isOptional;
-                            sig.params.push_back(std::move(pi));
-                        }
-                        insertComMethod(*sym, member.name, std::move(sig), member.kind);
-                        analyzer->symbolTable().define(std::move(sym));
-                    }
-                }
-            }
+        // P6.3 (共享化): 类型库符号只造一份 (typelibTable_), 本模块以非拥有只读回退
+        // 方式共享它。本地符号永远优先命中 (Scope::lookupLocal 的"本地→共享"顺序),
+        // 模块内同名遮蔽语义不变。
+        if (typelibTable_) analyzer->symbolTable().setSharedScope(typelibTable_->moduleScope());
         // P7.5: 注册窗体控件名为符号 (否则语义分析报"未声明的标识符")
         auto frmIt = frmFiles_.find(module->moduleName);
         if (frmIt != frmFiles_.end()) {

@@ -133,6 +133,13 @@ enum class DiagnosticID : uint16_t {
     // 分家出独立号, 才可以让 VB3001 的严重级单独动 (见 §B102 ③)。文案 ASCII (D12)。
     // 缺槽那条沿用既有的 SemInterfaceNotImplemented = 3012 (新式 Interface 那条路已在用)。
     SemImplementsInterfaceNotFound = 3044,  // Implements 的接口名在本工程内找不到
+    // VBA 标准库的两条编译期报错（PhotoDemon Math 定案，handoff §10.4）。真 VB6 逐条读过：
+    //   `Math.Fix(1)` → "未找到方法或数据成员"（Fix/Int 是内建函数，不是 VBA.Math 成员）
+    //   `Dim m As VBA.Math` → "Visual Basic 中不支持自动化类型"（标准模块不是类型）
+    // 修前 C3 两处都漏：前者折成内建函数（Int 那一路还是双前缀 vb6_vb6_Int）到链接期 LNK2019，
+    // 后者静默当 Variant 编过。
+    SemMemberNotFound = 3045,   // 限定符位上的成员不存在（VBA.Math 的真实成员表在 common/vba_math.hpp）
+    SemModuleAsType = 3046,     // 标准模块出现在 As 位置（标准模块不能当类型用）
 
     // 代码生成 (4xxx)
     CodeGenUnsupportedFeature = 4001,

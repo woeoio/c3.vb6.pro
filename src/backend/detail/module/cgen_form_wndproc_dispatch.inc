@@ -424,7 +424,7 @@
                 // (零参那一形在夹具 tests/ctrlrichtextbox/RtfForm.frm:560 就是这个形状,
                 //  且是既有 EMITC-SHAPE 针钉住的; 声明了 3 个形参的处理器才是 C2198 现场)。
                 // 选区从 RTL 取, SelType 交 0。
-                const size_t nSel258 = rtSelSym->params.size();
+                const size_t nSel258 = rtSelSym->P().params.size();
                 if (nSel258 == 0) {
                     c_.emitLine("{ extern void " + rtSelFn + "(); " + rtSelFn + "(); }");
                 } else {
@@ -532,7 +532,15 @@
                 if (subEmitted.count(childNameLower)) continue;
                 subEmitted.insert(childNameLower);
                 if (!needsSubclass(child)) continue;
-                c_.emitLine("vb6_RemoveControlSubclass((void*)vb6_hwnd_" + cIdent(child.controlName) + ");");
+                if (knownControlArrays_.count(childNameLower)) {
+                    // 富贵竹 FIX-009: 数组控件声明侧只有 vb6_arr_<名>, 没有 vb6_hwnd_<名>;
+                    // 旧发码引用未声明变量 ⇒ C2065, 而且只拆一个元素。与安装侧同一口径循环。
+                    c_.emitLine("{ int vb6_si; for (vb6_si = 0; vb6_si < VB6_CTRLARR_MAX; vb6_si++) {");
+                    c_.emitLine("  void* vb6_sub_hwnd = vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(child.controlName) + ", vb6_si);");
+                    c_.emitLine("  if (vb6_sub_hwnd) vb6_RemoveControlSubclass(vb6_sub_hwnd); } }");
+                } else {
+                    c_.emitLine("vb6_RemoveControlSubclass((void*)vb6_hwnd_" + cIdent(child.controlName) + ");");
+                }
             }
         }
     }
@@ -579,6 +587,17 @@
     // P20-44: 窗体销毁时撤销该窗体控件的 OLE 放置目标登记 (RevokeDragDrop 对
     // 已销毁的 hwnd 无害, 但不清表会留悬垂 hwnd 在 g_targets 里)。
     c_.emitLine("vb6_OLEDrop_RevokeAll();");
+    // 账 (ucTreeView 重复点击刀, 2026-11-07): 窗体销毁后必须把默认实例的三个槽
+    // 复位成「未加载」。此前不清 ⇒ 第二次 `F.Show` 拿到的是已销毁的 hwnd:
+    //   · `vb6_form_load_F` 见 hwnd 非空直接早退 (Form_Load 不重跑);
+    //   · `ShowWindow`/事件派发打在死句柄上 ⇒ 点了没反应 (OPEN-FAIL);
+    //   · 该 hwnd 值被系统复用给别的窗口时, 后续 WM_COMMAND 全打错对象。
+    // 实测 (UC 五窗夹具, 连续 3 轮): 第 1 轮 5 窗全开, 第 2/3 轮全部 OPEN-FAIL,
+    // 且销毁后读回 hwnd=0x1bf0bb8 / formLoaded=1。VB6 语义 = Unload 之后默认实例
+    // 回到未加载, 下次引用隐式重载 ⇒ 这里在 Form_Terminate 之后统一清空。
+    c_.emitLine("vb6_hwnd_" + cIdent(formName) + " = NULL;");
+    c_.emitLine("vb6_formLoaded_" + cIdent(formName) + " = 0;");
+    c_.emitLine("vb6_formLoading_" + cIdent(formName) + " = 0;");
     c_.emitLine("break;");
     c_.dedent();
     c_.emitLine("}");
@@ -666,21 +685,33 @@
     for (const FrmControl* ctrlPtr : scrollCtrlsM3) {
         const FrmControl& ctrl = *ctrlPtr;
         if (ctrl.controlType != FrmControlType::Slider) continue;
+        // G4/M2: 工程内 UserControl 的名字里带 "slider" 就会被 parseControlType 判成 Slider
+        // (frm_parser_util.cpp:206 pdSlider)，但它的 Change/Scroll 由 UC sink thunk 派发 ——
+        // thunk 已经把元素下标实参化了。这里再发一份既是 C2198，修好后还会重复派发 ⇒
+        // 与上面子控件收集那趟的口径对齐 (同一条 findUserControlSpec 门)，直接跳过。
+        if (findUserControlSpec(ctrl.controlTypeName)) continue;
         std::string slHwnd = "vb6_hwnd_" + cIdent(ctrl.controlName);
         std::string slScrollFn = eventHandlerFn(ctrl.controlName, "_Scroll");
         std::string slChangeFn = eventHandlerFn(ctrl.controlName, "_Change");
-        bool slHasScroll = symTab_.lookup(ctrl.controlName + "_Scroll") != nullptr;
-        bool slHasChange = symTab_.lookup(ctrl.controlName + "_Change") != nullptr;
-        if (!slHasScroll && !slHasChange) continue;
+        Symbol* slScrollSym = symTab_.lookup(ctrl.controlName + "_Scroll");
+        Symbol* slChangeSym = symTab_.lookup(ctrl.controlName + "_Change");
+        if (!slScrollSym && !slChangeSym) continue;
+        // 控件数组: 没有 `vb6_hwnd_<name>` 这一枚，句柄按元素取 (与 ScrollBar 臂同一口径)。
+        const bool slIsArr = knownControlArrays_.count(Symbol::toLower(ctrl.controlName)) > 0;
+        if (slIsArr) {
+            const int slIdx = ctrl.index >= 0 ? ctrl.index : 0;
+            slHwnd = "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", "
+                   + std::to_string(slIdx) + ")";
+        }
         c_.emitLine("if (scrollHwnd == (void*)" + slHwnd + ") {");
         c_.indent();
         // FireChange 只在**真挂了 Change 处理器**时才调：它会推进基准，白调一次等于吞掉一条 Change。
-        if (slHasChange)
-            c_.emitLine("if (vb6_Slider_FireChange((void*)" + slHwnd + ")) { extern void "
-                        + slChangeFn + "(); " + slChangeFn + "(); }");
-        if (slHasScroll)
-            c_.emitLine("if (scrollCode == 4 || scrollCode == 5) { extern void "
-                        + slScrollFn + "(); " + slScrollFn + "(); }");
+        if (slChangeSym)
+            c_.emitLine("if (vb6_Slider_FireChange((void*)" + slHwnd + ")) "
+                        + eventIndexCallText(slChangeFn, slChangeSym, slIsArr ? ctrl.index : -1));
+        if (slScrollSym)
+            c_.emitLine("if (scrollCode == 4 || scrollCode == 5) "
+                        + eventIndexCallText(slScrollFn, slScrollSym, slIsArr ? ctrl.index : -1));
         c_.dedent();
         c_.emitLine("}");
     }

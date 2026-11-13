@@ -228,6 +228,7 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     saved->ambientFont = vb6_Ambient_Font;
     saved->userWidth = vb6_UserControl_Width;
     saved->userHeight = vb6_UserControl_Height;
+    saved->drawWidth = vb6_UserControl_DrawWidth;
     /* Fix 296 / 3b: Extender 那 15 枚全局**刻意不**存取。发码侧全部走实例通道
        (vb6_UC_GetExtenderMemberNum/Str/Obj + vb6_UC_SetExtenderMember, 内部统一经
        vb6_UC_ExtenderField 落到当前实例记录 vb6_UCRec.ext*), 生成码里已经**一处**都
@@ -285,6 +286,7 @@ void vb6_uc_push(vb6_UCRec* r, vb6_UCSaved* saved) {
     vb6_UserControl_Extender.Left = r->extLeft;
     vb6_UserControl_Extender.Name = r->displayNameBstr;
     vb6_UserControl_Extender.ZOrder = vb6_UC_ExtenderZOrder;
+    vb6_UserControl_Extender.Index = r->index;      // §56: 控件数组下标 (-1=非数组)
     vb6_UserControl_FontBold = r->fontBold;
     vb6_UserControl_FontUnderline = r->fontUnderline;
     vb6_ucCurrent = r;
@@ -315,6 +317,7 @@ void vb6_uc_pop(const vb6_UCSaved* saved) {
        与 Extender 无关, 保留。 */
     vb6_UserControl_Width = saved->userWidth;        // Fix 162
     vb6_UserControl_Height = saved->userHeight;      // Fix 162
+    vb6_UserControl_DrawWidth = saved->drawWidth;    // ucSlider
     vb6_UserControl_hWnd = saved->hWnd;              // Fix 133u
     vb6_UserControl_AutoRedraw = saved->autoRedraw;  // Fix 133u
     vb6_UserControl_Extender = saved->ext;           // Fix 133u
@@ -610,16 +613,48 @@ static void vb6_uc_activate(vb6_UCRec* r) {
         vb6_heap_probe("after-resize", desc->typeName);
     }
     if (desc->show) {
-        vb6_UCSaved saved;
-        vb6_uc_push(r, &saved);
-        vb6_uc_trace("show.begin", desc->typeName, r->me);
-        desc->show(r->me);
-        vb6_uc_trace("show.end", desc->typeName, r->me);
-        vb6_uc_pop(&saved);
-        vb6_heap_probe("after-show", desc->typeName);
+        // VB6 的 UserControl_Show 是"控件**变可见**"事件: 建窗阶段父窗体还没 Show,
+        // 此刻触发等于在 Form_Load 之前跑 (实测 Form4: Update 面对空树 → 整窗空白)。
+        // 父窗已可见(运行期动态加控件)才立即发; 否则挂起到 vb6_ShowForm 派发完
+        // 延迟 Form_Load 之后统一补发 (vb6_UC_FirePendingShows)。
+        if (!IsWindowVisible(hwnd)) {
+            r->pendingShow = 1;
+            vb6_uc_trace("show.defer", desc->typeName, r->me);
+        } else {
+            vb6_UCSaved saved;
+            vb6_uc_push(r, &saved);
+            vb6_uc_trace("show.begin", desc->typeName, r->me);
+            desc->show(r->me);
+            vb6_uc_trace("show.end", desc->typeName, r->me);
+            vb6_uc_pop(&saved);
+            vb6_heap_probe("after-show", desc->typeName);
+        }
     }
     vb6_uc_trace("create.end", desc ? desc->typeName : "?", r->me);
     InvalidateRect(hwnd, NULL, FALSE);
+}
+
+// 补发挂起的 UserControl_Show: 由 vb6_ShowForm 在延迟 Form_Load 派发完、
+// ShowWindow 之前调用 —— 与 VB6 的 "Form_Load → 控件变可见 → UserControl_Show" 对齐。
+static BOOL CALLBACK vb6_uc_fireShowCb(HWND h, LPARAM lp) {
+    (void)lp;
+    vb6_UCRec* r = vb6_uc_findByHwnd((void*)h);
+    if (r && r->pendingShow && r->ready && r->desc && r->desc->show) {
+        r->pendingShow = 0;
+        vb6_UCSaved saved;
+        vb6_uc_push(r, &saved);
+        vb6_uc_trace("show.begin", r->desc->typeName, r->me);
+        r->desc->show(r->me);
+        vb6_uc_trace("show.end", r->desc->typeName, r->me);
+        vb6_uc_pop(&saved);
+        vb6_heap_probe("after-show", r->desc->typeName);
+    }
+    return TRUE;
+}
+
+void vb6_UC_FirePendingShows(void* parentHwnd) {
+    if (!parentHwnd) return;
+    EnumChildWindows((HWND)parentHwnd, vb6_uc_fireShowCb, 0);
 }
 
 void vb6_UC_ActivateHost(void* hwnd) {
@@ -670,6 +705,22 @@ int32_t vb6_UC_IsHostHwnd(void* hwnd) {
     return vb6_uc_findByHwnd(hwnd) != NULL;
 }
 
+/* 账 (ucSwitch_2022 / ucSwitch8): 设计期 `Enabled = 0` 由 cgen 发成
+ * `vb6_SetControlEnabled` —— 那一枚只做 EnableWindow, 而 `UserControl.Enabled`
+ * 读的是**本实例记录** r->enabled (vb6_uc_push: vb6_UserControl_Enabled = r->enabled),
+ * 那一位从来没人写过, 恒 -1。于是绘制里 `If UserControl.Enabled = False Then
+ * BkColor = &HD6D6D6` 永远不成立: 开关确实点不动 (窗口禁了), off 却画成默认红
+ * (m_TrackColorOff = vbRed) 而不是禁用灰。
+ * 窗口 Enabled 与 UserControl.Enabled 必须由同一位主人一起改。 */
+void vb6_UC_SetHostEnabled(void* hwnd, int enabled) {
+    if (!hwnd) return;
+    vb6_UCRec* r = vb6_uc_findByHwnd(hwnd);
+    /* 无窗宿主 (Windowless=-1) 交回的是实例指针而不是 HWND; 只有**不是窗口**
+     * 时才按实例回查, 免得某个真实 HWND 的数值碰巧等于别的实例的指针。 */
+    if (!r && !IsWindow((HWND)hwnd)) r = vb6_uc_findByInstance(hwnd);
+    if (r) r->enabled = enabled ? -1 : 0;
+}
+
 // Fix <vbeclipse> rev18: UserControl **自有 Property 的按名桥** (晚绑定访问用)。
 // 见 vb6forms_controls.h 里 vb6_UcPropDesc 的说明。obj 可以是 UC 实例指针, 也可以是
 // 宿主 HWND (两种形态的调用点都有); thunk 一律拿**实例**调用 (desc->props[i].get/set 的
@@ -713,6 +764,23 @@ int32_t vb6_UC_OwnPropSet(void* obj, const wchar_t* name, const void* inV) {
     vb6_UCSaved saved;
     if (r) vb6_uc_push(r, &saved);
     ok = pd->set(inst, inV) ? 1 : 0;
+    if (r) vb6_uc_pop(&saved);
+    return ok;
+}
+
+// PROPERTYPUTREF 入口 (`Set x.P = v` / `x.P = Nothing`)。属性若没声明 Property Set,
+// 退化到 put 槽 —— 与改动前的行为一致, 不新造错误 (oracle 只证明了两条入口各自
+// 存在, 没证明缺一侧时 VB6 会报什么)。
+int32_t vb6_UC_OwnPropSetRef(void* obj, const wchar_t* name, const void* inV) {
+    void* inst = NULL;
+    int32_t ok;
+    const vb6_UcPropDesc* pd = vb6_uc_ownPropLookup(obj, name, &inst);
+    if (!pd || !inst) return 0;
+    if (!pd->setref) return pd->set ? vb6_UC_OwnPropSet(obj, name, inV) : 0;
+    vb6_UCRec* r = vb6_uc_findByInstance(inst);
+    vb6_UCSaved saved;
+    if (r) vb6_uc_push(r, &saved);
+    ok = pd->setref(inst, inV) ? 1 : 0;
     if (r) vb6_uc_pop(&saved);
     return ok;
 }

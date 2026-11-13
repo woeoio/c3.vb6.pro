@@ -78,6 +78,8 @@ vb6_FileDateTime|0	0		0	open	BSTR
 vb6_FileLen|0	0		0	open	BSTR
 vb6_FileVariantText|0	0	handoff-to-plain:vb6_FileBoolText	0	open	VARIANT
 vb6_Filter|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_FixedStrAssign|2	0	handoff-reads:vb6_BSTR_ToANSI_cap	0	open	BSTR
+vb6_FixedStrAssignFree|2	0	handoff-reads:vb6_FixedStrAssign	0	open	BSTR
 vb6_Format|0	0		0	open	VARIANT
 vb6_Format|1	0		0	open	BSTR
 vb6_GetAllSettings|0	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
@@ -177,7 +179,7 @@ vb6_StrComp|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_StrConv|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_StrConvToByteArray|0	0	handoff-reads:vb6_StringToByteArray	0	open	BSTR
 vb6_StringToByteArray|0	0		0	open	BSTR
-vb6_StrPtr|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_StrPtr|0	0		0	open	BSTR
 vb6_StrPtrVar|0	0	handoff-reads:vb6_StrPtr	0	open	VARIANT
 vb6_StrReverse|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_TextFind|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
@@ -243,6 +245,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_BSTR_Empty BSTR
 [own] vb6_BSTR_FixedSTR BSTR
 [own] vb6_BSTR_FromANSIBuf BSTR
+[own] vb6_BSTR_FromANSIBufFixed BSTR
 [own] vb6_BSTR_FromBSTR BSTR
 [own] vb6_BSTR_FromStr BSTR
 [own] vb6_BSTR_FromStrN BSTR
@@ -283,6 +286,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_FileLongText BSTR
 [own] vb6_FileNumText BSTR
 [own] vb6_FileVariantText BSTR
+[own] vb6_FixedStrToBSTR BSTR
 [own] vb6_FormatCurrency BSTR
 [own] vb6_FormatDateTime BSTR
 [own] vb6_FormatNumber BSTR
@@ -339,6 +343,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_VariantInt VARIANT
 [own] vb6_VariantLong VARIANT
 [own] vb6_VariantLongLong VARIANT
+[own] vb6_VariantMissing VARIANT
 [own] vb6_VariantNull VARIANT
 [own] vb6_VariantSByte VARIANT
 [own] vb6_VariantSingle VARIANT
@@ -372,6 +377,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 # 条件性=1 ⇒ 放不放**看运行期分支**（IIf 那一族）⇒ 调用方无从知道 ⇒ 不许提名
 vb6_BSTR_ConcatFree|0	0	vb6_BSTR_Free	a
 vb6_BSTR_Free|0	0	SysFreeString	bstr
+vb6_FixedStrAssignFree|2	0	vb6_BSTR_Free	value
 vb6_IIfBSTR|1	1	vb6_BSTR_Free	truepart
 vb6_IIfBSTR|2	1	vb6_BSTR_Free	falsepart
 vb6_IIfVariant|1	1	vb6_VariantClear	truepart

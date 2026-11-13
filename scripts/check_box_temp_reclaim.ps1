@@ -6,8 +6,16 @@
 # statement. Rules below pin that the decision stays in exactly one place and that the reclaim
 # really lands AFTER the call, which is what the runtime reading alone cannot prove.
 #
-# R1 single authority   : push_back exactly 2 (knife 121 那一站 + 第一百七十二刀站E 第二位登记者),
-#                         declaration exactly 1, drain loop exactly 1 —— 登记可以多人，收回只许一处
+# R1 single authority   : push_back exactly 4 (登记可以多人，收回只许一处 —— 见下面那份点名册),
+#                         declaration exactly 1, drain loop exactly 1
+#   四名登记者 (逐处点名, 按名字各钉一处; 全在 src/backend/detail/expr/cgen_expr_call_arg_emit.inc):
+#     · tmp92y   —— knife 121 / §B217 #444 (提交 361ae811): 本刀那一站
+#     · tmp172e  —— 第一百七十二刀站E (提交 e83a1356): 第二位登记者
+#     · tmpR4    —— 提交 43528bb8 (R4 收口): 新式薄指针视图臂带来的第三位登记者
+#     · tmpCA92y —— 提交 e450cf15 (C2065 族①): 控件数组作 ByRef Variant 实参带来的第四位登记者
+#   声明 (cgen_state.inc) 与收回 (cgen_stmt.cpp 的语句末 drain) 各仍只许一处 ——
+#   "登记可以多人，收回只许一处" 的意思没破; 这次只把**登记那一格的位数** 2 → 4 (位数普查过期:
+#   多出来的是登记的人, 不是多了一份答案), 依据 = 台账 §56.38 A7 先例 (同问同一权威, 不是放宽)。
 # R2 drain placement    : the reclaim loop sits in the same per-statement tail as ansiTempsToFree_
 # R3 indent guard       : the drain only fires on the emitter's current indent level
 # R4 fixture shape      : 10 station temps / 9 reclaims, every reclaim after its last use,
@@ -31,7 +39,21 @@ $pushHits = @(Get-ChildItem -Recurse (Join-Path $root 'src') -Include *.inc,*.cp
               Select-String -Pattern 'boxTempsToClear_\.push_back').Count
 $declHits = @(Select-String -Path $state -Pattern 'std::vector<std::pair<std::string, int>> boxTempsToClear_').Count
 $drainHits = @(Select-String -Path $drainF -Pattern 'for \(auto& bt : boxTempsToClear_\)').Count
-if ($pushHits -ne 2) { $bad += "R1 push-back-sites=$pushHits want=2 (121 那一站 + 第一百七十二刀站E)" }
+if ($pushHits -ne 4) { $bad += "R1 push-back-sites=$pushHits want=4 (121 那一站 + 第一百七十二刀站E + 43528bb8 + e450cf15; 逐处点名册见文件头)" }
+# R1 逐处点名册: 四名登记者各许一处 push_back (哪一位不见了 / 哪一位又长出来了都会被点名)。
+#   登记可以多人, 收回只许一处 —— 下面 declaration/drain 两行守着后者, 本册守着前者。
+$pushRoster = @(
+    @('tmp92y',   'knife 121 / §B217 #444 (提交 361ae811)'),
+    @('tmp172e',  '第一百七十二刀站E (提交 e83a1356)'),
+    @('tmpR4',    '提交 43528bb8 (R4 收口) 新增的那一位'),
+    @('tmpCA92y', '提交 e450cf15 (C2065 族①) 新增的那一位')
+)
+foreach ($r in $pushRoster) {
+    $rp = 'boxTempsToClear_\.push_back\(\{' + $r[0] + ','
+    $rc = @(Get-ChildItem -Recurse (Join-Path $root 'src') -Include *.inc,*.cpp |
+            Select-String -Pattern $rp).Count
+    if ($rc -ne 1) { $bad += ("R1 登记者 " + $r[0] + ": push_back = " + $rc + " 处 (want exactly 1) —— " + $r[1]) }
+}
 if ($declHits -ne 1) { $bad += "R1 declaration-sites=$declHits want=1" }
 if ($drainHits -ne 1) { $bad += "R1 drain-sites=$drainHits want=1" }
 

@@ -1,10 +1,11 @@
 ﻿# DI 桩定义集基线 (scripts/check_di_stubs.ps1 的判据; -Update 重写)
 # 生成自: src/rtl/core/di/**/*.c 的函数定义; 少一个就是重生成丢了桩, 必须红。
 # 加桩请连同对应家族的 #pragma comment(lib, ...) 一起加。
-# 共 743 个。
+# 共 793 个。
 vb6_di_AbortDoc
 vb6_di_accept
 vb6_di_AddFontMemResourceEx
+vb6_di_AttachThreadInput
 vb6_di_BCryptCloseAlgorithmProvider
 vb6_di_BCryptDecrypt
 vb6_di_BCryptDeriveKeyPBKDF2
@@ -113,6 +114,7 @@ vb6_di_CryptImportPublicKeyInfo
 vb6_di_CryptReleaseContext
 vb6_di_CryptSetHashParam
 vb6_di_CryptSignHashW
+vb6_di_CryptStringToBinaryA
 vb6_di_CryptStringToBinaryW
 vb6_di_DeferWindowPos
 vb6_di_DefSubclassProc
@@ -171,7 +173,9 @@ vb6_di_FileTimeToSystemTime
 vb6_di_FillRect
 vb6_di_FillRgn
 vb6_di_FindClose
+vb6_di_FindFirstFileA
 vb6_di_FindFirstFileW
+vb6_di_FindNextFileA
 vb6_di_FindNextFileW
 vb6_di_FindTextW
 vb6_di_FindWindowExA
@@ -191,13 +195,17 @@ vb6_di_GdipAddPathLine
 vb6_di_GdipAddPathLine2I
 vb6_di_GdipAddPathLineI
 vb6_di_GdipAddPathPie
+vb6_di_GdipAddPathPolygon
 vb6_di_GdipAddPathRectangleI
 vb6_di_GdipAddPathString
+vb6_di_GdipBitmapGetPixel
 vb6_di_GdipBitmapLockBits
 vb6_di_GdipBitmapUnlockBits
+vb6_di_GdipCloneImage
 vb6_di_GdipClosePathFigure
 vb6_di_GdipClosePathFigures
 vb6_di_GdipCreateBitmapFromHBITMAP
+vb6_di_GdipCreateBitmapFromHICON
 vb6_di_GdipCreateBitmapFromScan0
 vb6_di_GdipCreateBitmapFromStream
 vb6_di_GdipCreateEffect
@@ -206,8 +214,10 @@ vb6_di_GdipCreateFontFamilyFromName
 vb6_di_GdipCreateFromHDC
 vb6_di_GdipCreateImageAttributes
 vb6_di_GdipCreateLineBrushFromRect
+vb6_di_GdipCreateLineBrushFromRectI
 vb6_di_GdipCreateLineBrushFromRectWithAngleI
 vb6_di_GdipCreateLineBrushI
+vb6_di_GdipCreateMatrix
 vb6_di_GdipCreatePath
 vb6_di_GdipCreatePathGradientFromPath
 vb6_di_GdipCreatePen1
@@ -252,13 +262,17 @@ vb6_di_GdipFillRectangleI
 vb6_di_GdipFlattenPath
 vb6_di_GdipGetGenericFontFamilySansSerif
 vb6_di_GdipGetGenericFontFamilySerif
+vb6_di_GdipGetImageDimension
 vb6_di_GdipGetImageGraphicsContext
 vb6_di_GdipGetImageHeight
+vb6_di_GdipGetImagePixelFormat
 vb6_di_GdipGetImageWidth
 vb6_di_GdipGetPathLastPoint
+vb6_di_GdipGetPathWorldBoundsI
 vb6_di_GdipGetPointCount
 vb6_di_GdipImageRotateFlip
 vb6_di_GdipIsVisiblePathPoint
+vb6_di_GdipLoadImageFromFile
 vb6_di_GdipLoadImageFromStream
 vb6_di_gdiplus_hand_proc
 vb6_di_gdiplus_proc
@@ -271,16 +285,21 @@ vb6_di_GdipResetClip
 vb6_di_GdipResetPath
 vb6_di_GdipResetWorldTransform
 vb6_di_GdipRestoreGraphics
+vb6_di_GdipRotateMatrix
 vb6_di_GdipRotatePathGradientTransform
 vb6_di_GdipRotateWorldTransform
 vb6_di_GdipSaveGraphics
+vb6_di_GdipSaveImageToStream
 vb6_di_GdipSetClipHrgn
 vb6_di_GdipSetClipPath
 vb6_di_GdipSetClipRectI
 vb6_di_GdipSetCompositingQuality
 vb6_di_GdipSetEffectParameters
 vb6_di_GdipSetImageAttributesColorMatrix
+vb6_di_GdipSetInterpolationMode
+vb6_di_GdipSetPathGradientCenterColor
 vb6_di_GdipSetPathGradientSurroundColorsWithCount
+vb6_di_GdipSetPenDashStyle
 vb6_di_GdipSetPenEndCap
 vb6_di_GdipSetPenMode
 vb6_di_GdipSetPenStartCap
@@ -293,6 +312,8 @@ vb6_di_GdipSetStringFormatHotkeyPrefix
 vb6_di_GdipSetStringFormatLineAlign
 vb6_di_GdipSetStringFormatTrimming
 vb6_di_GdipSetTextRenderingHint
+vb6_di_GdipTransformPath
+vb6_di_GdipTranslateMatrix
 vb6_di_GdipTranslatePathGradientTransform
 vb6_di_GdipTranslateTextureTransform
 vb6_di_GdipTranslateWorldTransform
@@ -318,6 +339,7 @@ vb6_di_GetCommState
 vb6_di_GetCommTimeouts
 vb6_di_GetCurrentProcess
 vb6_di_GetCurrentProcessId
+vb6_di_GetCurrentThemeName
 vb6_di_GetCursor
 vb6_di_GetCursorInfo
 vb6_di_GetCursorPos
@@ -338,6 +360,7 @@ vb6_di_GetFileVersionInfoSizeW
 vb6_di_GetFileVersionInfoW
 vb6_di_GetFocus
 vb6_di_GetForegroundWindow
+vb6_di_GetHGlobalFromStream
 vb6_di_gethostbyname
 vb6_di_gethostname
 vb6_di_GetIconInfo
@@ -350,6 +373,7 @@ vb6_di_GetLastError
 vb6_di_GetLayout
 vb6_di_GetLocaleInfoA
 vb6_di_GetLocaleInfoW
+vb6_di_GetLogicalDriveStringsA
 vb6_di_GetMem1
 vb6_di_GetMem2
 vb6_di_GetMem4
@@ -363,12 +387,15 @@ vb6_di_GetModuleFileNameW
 vb6_di_GetModuleHandleA
 vb6_di_GetModuleHandleW
 vb6_di_GetMonitorInfoW
+vb6_di_GetObjectA
+vb6_di_GetObjectType
 vb6_di_GetObjectW
 vb6_di_GetOpenFileNameA
 vb6_di_GetOpenFileNameW
 vb6_di_GetParent
 vb6_di_getpeername
 vb6_di_GetPixel
+vb6_di_GetPrivateProfileStringA
 vb6_di_GetProcAddress
 vb6_di_GetProcessHeap
 vb6_di_GetProfileStringW
@@ -398,6 +425,7 @@ vb6_di_GetTextMetricsW
 vb6_di_GetThemeAppProperties
 vb6_di_GetThemeBackgroundContentRect
 vb6_di_GetThemeBackgroundRegion
+vb6_di_GetThemeDocumentationProperty
 vb6_di_GetThemePartSize
 vb6_di_GetThemeTextExtent
 vb6_di_GetTickCount
@@ -407,6 +435,7 @@ vb6_di_GetUserDefaultLCID
 vb6_di_GetUserDefaultUILanguage
 vb6_di_GetUserNameA
 vb6_di_GetUserNameW
+vb6_di_GetVersionExA
 vb6_di_GetVersionExW
 vb6_di_GetVolumeInformationW
 vb6_di_GetVolumePathNameW
@@ -460,6 +489,8 @@ vb6_di_ImmSetConversionStatus
 vb6_di_ImmSetOpenStatus
 vb6_di_inet_addr
 vb6_di_inet_ntoa
+vb6_di_InflateRect
+vb6_di_InitCommonControls
 vb6_di_InitCommonControlsEx
 vb6_di_InitNetworkAddressControl
 vb6_di_InsertMenuItemA
@@ -473,6 +504,8 @@ vb6_di_IsBadCodePtr
 vb6_di_IsBadReadPtr
 vb6_di_IsClipboardFormatAvailable
 vb6_di_IsDialogMessageW
+vb6_di_IsEqualGUID
+vb6_di_IsIconic
 vb6_di_IsMenu
 vb6_di_IsRealComObject
 vb6_di_IsThemeActive
@@ -551,6 +584,8 @@ vb6_di_PageSetupDlgA
 vb6_di_PageSetupDlgW
 vb6_di_PatBlt
 vb6_di_PathGetArgsW
+vb6_di_PathIsDirectoryA
+vb6_di_PathIsURLA
 vb6_di_PathMatchSpecW
 vb6_di_PeekMessageA
 vb6_di_PeekMessageW
@@ -615,6 +650,7 @@ vb6_di_SetBkMode
 vb6_di_SetBrushOrgEx
 vb6_di_SetCapture
 vb6_di_SetCaretPos
+vb6_di_SetClassLongPtrW
 vb6_di_SetClassLongW
 vb6_di_SetClipboardData
 vb6_di_SetCommBreak
@@ -646,6 +682,7 @@ vb6_di_SetProcessDPIAware
 vb6_di_SetPropA
 vb6_di_SetPropW
 vb6_di_SetRect
+vb6_di_SetRectEmpty
 vb6_di_SetROP2
 vb6_di_SetScrollInfo
 vb6_di_setsockopt
@@ -666,12 +703,15 @@ vb6_di_SetWindowsHookExW
 vb6_di_SetWindowSubclass
 vb6_di_SetWindowTheme
 vb6_di_SHBrowseForFolder
+vb6_di_SHBrowseForFolderA
 vb6_di_SHBrowseForFolderW
 vb6_di_SHCreateDataObject
 vb6_di_ShellExecuteA
+vb6_di_SHGetFileInfoA
 vb6_di_SHGetFolderLocation
 vb6_di_SHGetPathFromIDListA
 vb6_di_SHGetPathFromIDListW
+vb6_di_SHGetSpecialFolderLocation
 vb6_di_ShowCaret
 vb6_di_ShowWindow
 vb6_di_shutdown
@@ -682,6 +722,7 @@ vb6_di_StgCreateDocfile
 vb6_di_StrCmpLogicalW
 vb6_di_StretchBlt
 vb6_di_StretchDIBits
+vb6_di_StringFromCLSID
 vb6_di_SwitchToThisWindow
 vb6_di_SysAllocString
 vb6_di_SysFreeString
@@ -694,6 +735,8 @@ vb6_di_SystemTimeToVariantTime
 vb6_di_TabbedTextOutW
 vb6_di_TextOutA
 vb6_di_TextOutW
+vb6_di_timeBeginPeriod
+vb6_di_timeEndPeriod
 vb6_di_timeGetTime
 vb6_di_TlsAlloc
 vb6_di_TlsFree
@@ -733,12 +776,19 @@ vb6_di_VkKeyScanW
 vb6_di_WaitCommEvent
 vb6_di_WaitForSingleObject
 vb6_di_WaitMessage
+vb6_di_waveOutClose
+vb6_di_waveOutOpen
+vb6_di_waveOutPrepareHeader
+vb6_di_waveOutReset
+vb6_di_waveOutUnprepareHeader
+vb6_di_waveOutWrite
 vb6_di_WideCharToMultiByte
 vb6_di_WindowFromDC
 vb6_di_WindowFromPoint
 vb6_di_WinHelpA
 vb6_di_WinHelpW
 vb6_di_WriteFile
+vb6_di_WritePrivateProfileStringA
 vb6_di_WSAAsyncGetHostByName
 vb6_di_WSAAsyncSelect
 vb6_di_WSACancelAsyncRequest

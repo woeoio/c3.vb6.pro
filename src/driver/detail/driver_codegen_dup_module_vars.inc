@@ -186,7 +186,21 @@
     //   FToastCenter.frm: 同名 Dim 一组
     // 命中的名字在生成端强制 static 内部链接 (见 CCodeGen::isPublicModuleDecl):
     // 各模块保留自己的副本, 语义与 VB6 一致, 且不再产生重复符号.
-    std::unordered_map<std::string, std::unordered_set<std::string>> moduleVarOwners;
+    //
+    // 富贵竹 FIX-004 (账 #610 第340刀): 撞名统计拆成两张表。从前这张表**不分 access**,
+    // 模块级裸 Dim (FIX-004 后落 AccessLevel::Implicit, 从前落 Default=Public 别名) 的
+    // 模块私有副本也被当"真 Public"计数 —— 于是「.bas 里唯一的真全局 Public gShared +
+    // 窗体里一个 Dim gShared」就把真全局也强制 static 且不发 extern, 别的模块裸名引用
+    // 全部 C2065 (本地小型探针 .local/fgz-probes/fix004 实锤: ModU.c(13) C2065)。
+    //   publicVarOwners —— **真 Public** (access == Public, 即显式 Public/Global 关键字)
+    //     的模块数, ≥2 才维持 Fix 093b 的强制 static (两份真 Public 同名 → LNK2005,
+    //     原意图不变)。
+    //   allVarOwners —— 所有模块级变量 (不分 access), ≥2 的名字进 shadowModuleVarNames:
+    //     非 Public 副本在生成端改用影子名 + #define 宏 (见 cgen_decl_var.cpp), 本模块
+    //     引用经宏换绑到本模块副本 —— 即 VB6「模块内 Dim 遮蔽全局」语义; 同时避开
+    //     本 TU include 进来的 extern 声明与自家 static 定义的 C2370/C2369 冲突。
+    std::unordered_map<std::string, std::unordered_set<std::string>> publicVarOwners;
+    std::unordered_map<std::string, std::unordered_set<std::string>> allVarOwners;
     for (size_t i = 0; i < modules_.size(); i++) {
         // 类模块的成员变量是结构体字段 (me->x), 不产生全局符号; 不能参与撞名判定
         // (否则 cVBMAN.cls 的 Public ToolsUtf8 会让 Tools.bas 的 Public ToolsUtf8
@@ -199,10 +213,15 @@
             auto& vd = static_cast<const VariableDecl&>(*decl);
             std::string lower = vd.name;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-            moduleVarOwners[lower].insert(modLower);
+            allVarOwners[lower].insert(modLower);
+            if (vd.access == AccessLevel::Public) publicVarOwners[lower].insert(modLower);
         }
     }
     std::unordered_set<std::string> dupModuleVarNames;
-    for (const auto& [varName, owners] : moduleVarOwners) {
+    for (const auto& [varName, owners] : publicVarOwners) {
         if (owners.size() > 1) dupModuleVarNames.insert(varName);
+    }
+    std::unordered_set<std::string> shadowModuleVarNames;
+    for (const auto& [varName, owners] : allVarOwners) {
+        if (owners.size() > 1) shadowModuleVarNames.insert(varName);
     }

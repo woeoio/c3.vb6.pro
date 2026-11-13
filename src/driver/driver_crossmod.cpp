@@ -123,10 +123,12 @@ const Symbol* lookupOwnModuleSymbol(const SymbolTable& symTab, const std::string
     const std::string lower = Symbol::toLower(name);
     static const char* const kSuffixes[] = { "", "$pg", "$pl", "$ps", "$ty" };
     for (const char* suf : kSuffixes) {
-        auto it = symTab.moduleScope()->symbols().find(lower + suf);
-        if (it != symTab.moduleScope()->symbols().end() && it->second
-            && !it->second->isExternal) {
-            return it->second.get();
+        // peek = 本地优先 + 共享层 (类型库) 回退。共享化之前类型库符号就在本地表里,
+        // 这里必须仍然看得见它们 —— replaceBuiltinCom 的判据 (内建 ComClass/ComInterface
+        // 占裸键) 依赖这一档。
+        const Symbol* hit = symTab.moduleScope()->peek(lower + suf);
+        if (hit && !hit->isExternal) {
+            return hit;
         }
     }
     return nullptr;
@@ -160,6 +162,18 @@ bool Driver::runCrossModuleResolution() {
     // 窗体 Public 过程的模块限定键表 (`<form>_<proc>`): 裸键先到先得之外,
     // 每家窗体各存一份 —— 限定调用 `frmX.Proc` 按限定符精确解析名字+形参表。
     std::unordered_map<std::string, std::pair<size_t, const Symbol*>> formQualifiedSyms;
+    // 账 #305 §56.35: 标准模块之间**同名过程**的模块限定副本表
+    // (`<modLower>$x$<storageKey>`)。裸键 globalPublicSyms 先到先得只留一份，
+    // 于是 PD 里 `GetModifiedUpdateRectF` 同时存在于 Tools_Pencil / Tools_Paint /
+    // Tools_Clone 三家时，后两家在消费模块里既没有形参表（缺省实参不补 → C2198）
+    // 也没有返回 UDT（`intptr_t` 兜底 → C2440）。这里给撞名的每家各存一份，
+    // 限定调用 `Mod.Proc` 按限定键精确取用；裸键路径零变化。
+    std::unordered_map<std::string, std::pair<size_t, const Symbol*>> qualifiedProcSyms;
+    auto isProcKind = [](SymbolKind k) {
+        return k == SymbolKind::Sub || k == SymbolKind::Function
+            || k == SymbolKind::PropertyGet || k == SymbolKind::PropertyLet
+            || k == SymbolKind::PropertySet;
+    };
     for (size_t i = 0; i < exportedSymbols.size(); i++) {
         for (const Symbol* sym : exportedSymbols[i]) {
             std::string sKey = sym->storageKey();
@@ -206,6 +220,28 @@ bool Driver::runCrossModuleResolution() {
                     if (curIsClass && !newIsClass) {
                         globalPublicSyms[sKey] = {i, sym};
                     }
+                }
+                // 共享化: 类模块 `Foo` 里有同名成员 (`Public Sub Foo`) 时, 两个符号的
+                // storageKey 都是裸名 "foo", 谁先被遍历到谁当代表 —— 而 getPublicSymbols()
+                // 走的是模块符号表 unordered_map 的遍历序, 共享化把类型库符号撤出该表后
+                // 桶布局变了, 顺序跟着翻 (实测 VeList: 基线的代表是 Class, 共享化后变成 Sub
+                // ⇒ 消费模块 lookup("VbPop") 不再是 Class ⇒ 头文件里 `#include "VbPop.h"`
+                // 从 crossmod 段掉进实现段, emit-manifest 形状门报警).
+                // 定序: 类型名只能解析到 Class (VB6 里类型名与过程名分属不同命名空间,
+                // 裸名作为类型时唯一来源就是 Class 符号), 所以 Class 优先, 与遍历序无关。
+                else if (sym->kind == SymbolKind::Class && existing->kind != SymbolKind::Class) {
+                    globalPublicSyms[sKey] = {i, sym};
+                }
+                // 账 #305 §56.35: 两个不同**标准模块**的同类过程撞名 —— 裸键只能留一份,
+                // 另一家的形参表/返回类型在消费模块里根本不存在。给每家各登记一份
+                // `<modLower>$x$<sKey>`, 下面单独注入; 裸键代表不变 (先到先得/上列规则)。
+                if (isProcKind(sym->kind) && isProcKind(existing->kind)
+                    && itExisting->second.first != i
+                    && !modules_[itExisting->second.first]->isClassModule
+                    && !modules_[i]->isClassModule) {
+                    qualifiedProcSyms[Symbol::toLower(moduleBaseNames[itExisting->second.first])
+                                      + "$x$" + sKey] = itExisting->second;
+                    qualifiedProcSyms[Symbol::toLower(moduleBaseNames[i]) + "$x$" + sKey] = {i, sym};
                 }
             }
             // 窗体 Public 过程的**模块限定键表** (`<form>_<procKey>`): 裸键
@@ -355,7 +391,8 @@ bool Driver::runCrossModuleResolution() {
             );
             extSym->isExternal = true;
             extSym->sourceModule = moduleBaseNames[srcIdx];
-            extSym->params = srcSym->params;  // 复制参数列表（函数调用需要）
+            // 形参表 (params) 已并入 SymbolPayload, 由下面的 sharePayloadFrom 一并共享,
+            // 不再单独逐字段深拷贝。
             extSym->isArray = srcSym->isArray;
             // 泛型 (G2) 暴露的存量洞: 跨模块 UDT 未复制成员表 → 消费模块成员
             // 类型全退化 Variant (普通 UDT 复现: g.V As String 被 Debug.Print
@@ -369,20 +406,13 @@ bool Driver::runCrossModuleResolution() {
             extSym->overloadFp = srcSym->overloadFp;
             extSym->isOverloadVariant = srcSym->isOverloadVariant;
             extSym->ovlCount = srcSym->ovlCount;
-            // 类符号: 复制instancing、memberNames、isInterface、implementsNames
+            // 类符号: 成员面 (memberNames/memberReturnTypes/memberProcKinds/…) 不再逐字段
+            // 深拷贝 —— 共享源符号的不可变载荷 (SymbolPayload), 注入只花一个 shared_ptr。
+            // 注入之后的写点一律走 Symbol::W() 的 COW, 因此"注入那一刻的快照"语义
+            // 与旧实现逐字节一致 (含 Fix 099 的 memberFieldDispids 快照)。
+            extSym->sharePayloadFrom(*srcSym);
             if (srcSym->kind == SymbolKind::Class) {
                 extSym->instancing = srcSym->instancing;
-                extSym->memberNames = srcSym->memberNames;
-                extSym->memberReturnTypes = srcSym->memberReturnTypes;  // Fix 015: 链式调用返回类型表
-                extSym->memberProcKinds = srcSym->memberProcKinds;       // Fix 016: 成员过程类型表
-                extSym->memberParams = srcSym->memberParams;             // Fix 033: 成员参数表 (calleeParams 跨模块精确查找)
-                extSym->memberFieldTypes = srcSym->memberFieldTypes;     // Fix 092m: 字段类型表 (With 字段写 COM 解包)
-                extSym->memberFieldNames = srcSym->memberFieldNames;     // Fix 092p: 字段声明原名表 (访问点大小写规范化)
-                extSym->publicFieldNames = srcSym->publicFieldNames;     // Fix 099: 显式 Public 字段清单 (COM 暴露)
-                extSym->memberFieldDispids = srcSym->memberFieldDispids; // Fix 099: Public 字段 TypeLib DISPID
-                extSym->memberLetParams = srcSym->memberLetParams;       // Fix 091a: Let 写方向参数表
-                extSym->memberSetParams = srcSym->memberSetParams;       // Fix 091a: Set 写方向参数表
-                extSym->memberAccessLevels = srcSym->memberAccessLevels; // tB B08a: 成员访问级别
                 extSym->isInterface = srcSym->isInterface;  // P6.4
                 extSym->implementsNames = srcSym->implementsNames;  // P6.4
                 extSym->interfaceMethodNames = srcSym->interfaceMethodNames;  // P6.4
@@ -435,10 +465,31 @@ bool Driver::runCrossModuleResolution() {
                 qSym->kind, qSym->name, qSym->type, qSym->location, qSym->access);
             qExt->isExternal = true;
             qExt->sourceModule = moduleBaseNames[qSrcIdx];
-            qExt->params = qSym->params;
+            qExt->W().params = qSym->P().params;
             qExt->variableTypeName = qSym->variableTypeName;
             qExt->access = qSym->access;
             symTab.moduleScope()->define(std::move(qExt), qKey);
+        }
+    }
+
+    // 账 #305 §56.35: 跨模块同名过程的模块限定副本 (`<modLower>$x$<procKey>`)。
+    // 与上面窗体那一段同构, 只有撞名的标准模块过程才在这里(表本身是稀疏的);
+    // 裸键 `lookup*`/`lookupModule*` 永不命中这种含 `$x$` 的键 ⇒ 非限定路径零变化。
+    for (size_t i = 0; i < analyzers_.size(); i++) {
+        SymbolTable& symTab = analyzers_[i]->symbolTable();
+        if (!symTab.moduleScope()) continue;
+        for (const auto& [qKey, qEntry] : qualifiedProcSyms) {
+            auto [qSrcIdx, qSym] = qEntry;
+            if (qSrcIdx == i) continue;   // 本模块自己的过程, 裸键已可见
+            if (!qSym || qSym->isOverloadVariant) continue;
+            auto qExt = std::make_unique<Symbol>(
+                qSym->kind, qSym->name, qSym->type, qSym->location, qSym->access);
+            qExt->isExternal = true;
+            qExt->sourceModule = moduleBaseNames[qSrcIdx];
+            qExt->W().params = qSym->P().params;
+            qExt->variableTypeName = qSym->variableTypeName;
+            qExt->access = qSym->access;
+            symTab.defineExternal(std::move(qExt), false, qKey);
         }
     }
 

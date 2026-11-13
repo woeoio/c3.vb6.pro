@@ -19,9 +19,16 @@
 #       call site is inside ctrlDefaultPropOf - the box a late-bound argument gets has to follow the
 #       value the emitter hands over, so the fold is the only place allowed to ask the default
 #       property's type. Asking controlPropType from there again = two tables for one question.
-#   A7 (256) ctrlDefaultPropOf = 4: definition + declaration + the TWO consumers (the identifier
-#       emission and the late-bound argument packing). Before this knife those two each carried
-#       their own copy of the decision, which is exactly how a BSTR ended up in a VT_DISPATCH slot.
+#   A7 (256) ctrlDefaultPropOf = 7: definition + declaration + the consumers.  §42 pinned 5
+#       (identifier emission / late-bound argument packing / the UC default-property **Let**
+#       station).  F1 (§56.37, 控件数组元素的 UC 默认成员读写) added two more, both asking the
+#       same authority instead of copying the fold:
+#         · cgen_util_ctrl.cpp = 2 -- the pair `ctrlDefaultReadExpr` (read leg) and
+#           `emitUcDefaultPropLet` (write leg) sit next to the authority and ask it once each;
+#         · cgen_assign_stmt_special.inc = 2 -- the second station is the control-array element
+#           write `sltGamma(0) = 2.2` (the old code emitted a bare array-element assignment).
+#       If any station ever grows its own decision (a copy of the table or of the cast), the
+#       per-file count changes and this sentinel names it; the totals are pinned, not relaxed.
 #   A8 (230 §B137) the table's LongPtr answer must be consumed on BOTH roads, and the numeric box
 #       it produces must not be re-flattened downstream:
 #         a) boxToVariant carries a `case Vb6Type::LongPtr:` arm that boxes through `(intptr_t)`
@@ -132,8 +139,8 @@ if ($foldBody -ne '') {
         $bad += 'A6 ctrlDefaultPropOf asks controlPropType again - two type tables for one question'
     }
 }
-$want7 = @{ 'cgen_util_ctrl.cpp' = 1; 'cgen_helpers.inc' = 1; 'cgen_util_com.cpp' = 1;
-            'cgen_expr_ident_symbol.inc' = 1 }
+$want7 = @{ 'cgen_util_ctrl.cpp' = 2; 'cgen_helpers.inc' = 1; 'cgen_util_com.cpp' = 1;
+            'cgen_expr_ident_symbol.inc' = 1; 'cgen_assign_stmt_special.inc' = 2 }
 $got7 = @{}
 foreach ($f in $files) {
     $c7 = @([regex]::Matches(([System.IO.File]::ReadAllText($f.FullName)), 'ctrlDefaultPropOf\s*\(')).Count
@@ -141,9 +148,9 @@ foreach ($f in $files) {
 }
 $tot7 = 0
 foreach ($k in $got7.Keys) { $tot7 += $got7[$k] }
-if ($tot7 -ne 4) {
+if ($tot7 -ne 7) {
     $bad += ('A7 ctrlDefaultPropOf mentioned ' + $tot7 +
-             ' times (want definition + declaration + the two consumers) -> ' +
+             ' times (want definition + declaration + the consumers; see the header pin) -> ' +
              (($got7.Keys | ForEach-Object { $_ + '=' + $got7[$_] }) -join ' '))
 }
 foreach ($k in $want7.Keys) {

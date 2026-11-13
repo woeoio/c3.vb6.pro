@@ -58,6 +58,48 @@
         return false;
     };
 
+    // Fix 091y: 接收者是**窗体对象值** (C 侧只有一枚 HWND void*) —— 属性读唯一出口是
+    // 窗体那张表 (getControlPropReadFn(FrmControlType::Form, …)), 不能拼 `obj.member`。
+    // 整编实测 C2224 "左侧必须具有结构/联合类型" ×16, 两种接收者形状:
+    //   Interface.GetModalOwner()  ← `Public Function GetModalOwner() As Form`
+    //       (Interface.bas:1392) ⇒ 此前 `vb6_Interface_GetModalOwner().hWnd`
+    //       (15 处: FileMenu/Saving/Palettes/Printing/Plugin_EZTwain/…)
+    //   Forms(0&)                  ← 内置 Forms 集合元素, 发射文本是 vb6_Forms_Item(i)
+    //       ⇒ 此前 `vb6_Forms_Item((int32_t)(0L)).hWnd` (OS.bas:1250)
+    // 判据刻意两半: ①接收者静态类型是窗体 (Form / 工程窗体模块 / 内置 Forms 元素);
+    //   ②成员名在窗体属性表里查得到。两条都成立才改道, 所以不会把 void* COM 对象的
+    //   同名成员误抢走 (那类要走晚绑定)。
+    auto receiverIsFormValue090 = [this](const ExprPtr& objAst,
+                                         const std::string& objText) -> bool {
+        // 内置 Forms 集合元素 (Pattern M 发射 vb6_Forms_Item(i)) 就是窗体 HWND。
+        if (objText.rfind("vb6_Forms_Item(", 0) == 0) return true;
+        if (!objAst) return false;
+        const ASTNode* calleeAst = nullptr;
+        if (objAst->kind == ASTNodeKind::IndexOrCallExpr) {
+            calleeAst = static_cast<const IndexOrCallExpr&>(*objAst).callee.get();
+        }
+        if (!calleeAst) return false;
+        std::string fnName;
+        std::string qualMod;
+        if (calleeAst->kind == ASTNodeKind::IdentifierExpr) {
+            fnName = static_cast<const IdentifierExpr&>(*calleeAst).name;
+        } else if (calleeAst->kind == ASTNodeKind::MemberAccessExpr) {
+            const auto& ma = static_cast<const MemberAccessExpr&>(*calleeAst);
+            fnName = ma.memberName;
+            if (ma.object && ma.object->kind == ASTNodeKind::IdentifierExpr) {
+                qualMod = static_cast<const IdentifierExpr&>(*ma.object).name;
+            }
+        }
+        if (fnName.empty()) return false;
+        const Symbol* fnSym = nullptr;
+        if (!qualMod.empty()) fnSym = symTab_.lookup(qualMod + "." + fnName);
+        if (!fnSym) fnSym = symTab_.lookup(fnName);
+        if (!fnSym || fnSym->variableTypeName.empty()) return false;
+        const std::string rtLower = Symbol::toLower(fnSym->variableTypeName);
+        return rtLower == "form" || rtLower == "vb.form"
+            || knownFormModuleNames_.count(rtLower) != 0;
+    };
+
     // Fix 010r-10: 类实例变量的成员访问 fallback
     // 需要区分: 数据字段(obj->member) vs 方法/属性(vb6_ClassName_MethodName(obj))
     // Fix 011r-1: 用 resolveClassMemberCall 精确解析 (避免原 vb6_cls_ 前缀bug
@@ -287,6 +329,16 @@
             lastExpr_ = ivRecv221;
             return;
         } else if (node.object) {
+            // G3-E2: 接收者是 `Mod.Fn` 且 Fn 为**无参**函数时, 值应是**调用结果**,
+            //   不是函数地址。这里一次性把 `()` 补齐, 下面两条腿 (成员调用 / 数据字段读)
+            //   共用同一个接收者文本 —— 此前只在成员调用那一支补, 字段读于是发出
+            //   `vb6_PDImages_GetActiveImage->MainSelection` ⇒ C2223 (left of '->' must
+            //   point to struct/union), 实测 PhotoDemon `PDImages.GetActiveImage.PublicField`
+            //   共 283 处。值上下文那一支另见 cgen_expr_member_class_module.inc。
+            if (findModuleQualifiedNoArgFunction(*node.object)
+                && (obj.size() < 2 || obj.compare(obj.size() - 2, 2, "()") != 0)) {
+                obj += "()";
+            }
             // Fix 088c: AST 层兜底推断 — obj 是 knownClassVars_ 未覆盖的类实例
             // 表达式文本 (prop_get 调用文本 vb6_cY_prop_get_Z(a)、类方法链返回、
             // WithMemberExpr 等). inferClassTypeOfExpr 走 AST 递归
@@ -302,6 +354,8 @@
                     // (`me->m_x` 这类) 与 ⑤ 同法接派发; 含调用的 (链式/属性返回对象) 由
                     // mustDispatch=true 出 VB3027 —— 这一支此前一律静默直调, 正是
                     // D27-13 那类"编得过、虚调用消失"的形状。
+                    // 接收者的 `()` 已由本分支开头的 G3-E2 统一补齐 (含 asCallCallee_
+                    // 上下文里提前发出的裸函数名)。
                     std::string thisArg088c = "(void*)" + obj;
                     if (!suppressVirtDispatch_
                         && resolvedFn.find("_prop_let_") == std::string::npos
@@ -375,6 +429,15 @@
                 // Fix 219: 表达式形状挪进 lateBoundReadOnVariantCarrier —— 上面
                 // clsFromAst 分支的同一个形状要与这里逐字一致, 不能再各写一遍。
                 lastExpr_ = lateBoundReadOnVariantCarrier(obj, node.memberName);
+            } else if (receiverIsFormValue090(node.object, obj)) {
+                // Fix 091y: 窗体值上的属性读 → 与 `FormMain.hWnd` 正例同一条出口。
+                const std::string formReadFn090 =
+                    getControlPropReadFn(FrmControlType::Form, node.memberName);
+                if (!formReadFn090.empty()) {
+                    lastExpr_ = formReadFn090 + "(" + obj + ")";
+                } else {
+                    lastExpr_ = obj + "." + cIdent(node.memberName);
+                }
             } else {
                 lastExpr_ = obj + "." + cIdent(node.memberName);
             }

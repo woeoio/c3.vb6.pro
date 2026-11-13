@@ -159,6 +159,10 @@ int32_t vb6_OcxHost_SetRect(void* ctlDisp, int32_t x, int32_t y, int32_t w, int3
 // WM_PAINT 镜像可见)。无 ARDC 时不动作 (非 AutoRedraw 窗体走原生直绘)。
 void vb6_FormPaintBlitAutoRedraw(void* hwndForm, void* hdc);
 
+// Fix <ucTreeView 五窗> 2026-11-07: AutoRedraw 表面是唯一绘图面 —— 改 BackColor 时
+// 记忆位图要重刷成新底色 (否则 .Image/Print 读到的是创建时那版旧底色)。
+void vb6_AutoRedrawRepaintBackground(void* hwnd);
+
 // 账 #305 第二百八十刀: 窗体自己的 WndProc 答「这枚窗口现在用什么字体」那一问。
 // 答案住在 vb6forms_ctrl.c 那位只读主人里（自注册的窗口类答不了；DefWindowProc 也不记，见探针实测）。
 void* vb6_FormAnswerGetFont(void* hwnd);
@@ -182,10 +186,14 @@ void* vb6_FormAnswerGetFont(void* hwnd);
 // ABI 用 void* 而不是 vb6_VARIANT*: 本头只 include <stdint.h>, 不想把 vb6rtl 拖进来;
 // thunk 自己把它当 vb6_VARIANT* 用。
 // get 返回非 NULL 表示命中; set 返回非 0 表示命中。
+// set  = DISPATCH_PROPERTYPUT   (VB6 `x.P = v`, 走 Property Let)
+// setref = DISPATCH_PROPERTYPUTREF (VB6 `Set x.P = v` / `x.P = Nothing`, 走 Property Set)
+// 只有同时声明 Let 与 Set 时两者才不同; 只声明一侧时两个槽指向同一个 thunk。
 typedef struct vb6_UcPropDesc {
     const wchar_t* name;                                    // 属性名 (VB6 原名)
     void* (*get)(void* inst, void* outV);                   // NULL = 只写
     int32_t (*set)(void* inst, const void* inV);            // NULL = 只读
+    int32_t (*setref)(void* inst, const void* inV);         // NULL = 退化到 set
 } vb6_UcPropDesc;
 
 // Fix <vbeclipse> rev21: UserControl **自有 Public Sub 的按名桥** (晚绑定方法调用用)。
@@ -337,6 +345,8 @@ int32_t vb6_Host_Error438Count(void);
 const wchar_t* vb6_Host_TypeNameOf(void* obj);
 int32_t vb6_Host_GetProp(void* obj, const wchar_t* name, void* outVariant);
 int32_t vb6_Host_SetProp(void* obj, const wchar_t* name, const void* inVariant);
+// PROPERTYPUTREF 入口 (`Set x.P = v` / `x.P = Nothing`)。
+int32_t vb6_Host_SetPropRef(void* obj, const wchar_t* name, const void* inVariant);
 int32_t vb6_Host_Call(void* obj, const wchar_t* name, int32_t argc,
                       void** argv, void* outVariant);
 // 账 <438>: 窗体/图片框内建方法 PaintPicture —— cgen 直接发到本入口
@@ -357,6 +367,9 @@ int   vb6_UC_SkipInitPropsConsume(void);
 // (VB6 顺序 Initialize → ReadProperties → Show/Resize)。窗体创建代码在 UC_ReadProps
 // 之后调用它; 非加载路径的实例在 HostCreate 内部就已激活, 这里会直接返回。
 void  vb6_UC_ActivateHost(void* hwnd);
+// 窗体 Show 时补发挂起的 UserControl_Show (VB6: Form_Load 之后、窗口真正可见时)。
+// vb6_ShowForm 在派发完延迟 Form_Load、ShowWindow 之前调用。
+void  vb6_UC_FirePendingShows(void* parentHwnd);
 // ---- czUI fix: 设计器子控件实例化 (.ctl 设计面上的 TextBox 等属于每个实例) ----
 // 在 ucHostInit (宿主实例初始化) 期间调用, 以当前 UC 宿主窗口为父创建真实子窗口。
 // left/top/width/height 单位为缇。返回子窗口句柄 (NULL = 失败)。
@@ -409,6 +422,8 @@ int32_t vb6_UC_FontHeightPx(double pt, int32_t dpiY);
 /* 账 #305 第二百七十八刀: 把一枚字体的答案发到窗口上 (UC 宿主窗口 / 窗体顶层创建期那两站)。
    fontFields = NULL 就是 VB6 的默认档; 真正的发 / 存 / 删在 vb6forms_ctrl.c 那一位主人里。 */
 void    vb6_UC_ApplyFontToWindow(void* hwnd, const void* fontFields);
+/* UC 宿主窗口专用: 同一枚字体块, 质量档走 DEFAULT_QUALITY (StdFont 语义, 允许平滑)。 */
+void    vb6_UC_ApplyFontToHostWindow(void* hwnd, const void* fontFields);
 void*   vb6_UC_FontHFont(void* p);
 // Fix 168: Extender 结构体同上 (With UserControl.Extender 的 Width/Height/Align)
 int32_t vb6_UC_IsExtender(const void* p);

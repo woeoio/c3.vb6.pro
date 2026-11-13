@@ -1,0 +1,4 @@
+Type=Exe
+Form=FormA
+Form=FormB
+Startup="FormB"

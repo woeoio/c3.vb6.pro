@@ -45,6 +45,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cctype>
+#include <cstring>
+#include <functional>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -58,59 +60,13 @@ namespace vb6c3 {
 Driver::Driver() : diag_(std::make_unique<Diagnostics>()) {}
 Driver::~Driver() = default;
 
-// opt4: AST 引用收集器 — 扫描模块 AST, 收集"实际引用的外部模块"(小写)。
-// 注: 符号表经 runCrossModuleResolution 全量注入, getExternalModuleNames()
-// 返回所有其他模块(而非实际引用), 因此裁剪 include 需基于 AST 实际引用。
-class ExternalRefCollector : public ASTVisitor {
-public:
-    SymbolTable& symTab;
-    const std::vector<std::string>& externalModules;  // 账 §B97: 有序名单 (工程声明序)
-    std::unordered_set<std::string>& refd;  // 输出: 小写模块名
-
-    ExternalRefCollector(SymbolTable& st, const std::vector<std::string>& ext,
-                         std::unordered_set<std::string>& out)
-        : symTab(st), externalModules(ext), refd(out) {}
-
-    void visit(IdentifierExpr& node) override {
-        // 点号限定形式 Mod.var / Mod.UDT
-        size_t dot = node.name.find('.');
-        if (dot != std::string::npos) {
-            std::string modPart = node.name.substr(0, dot);
-            for (const auto& em : externalModules) {
-                if (Symbol::toLower(em) == Symbol::toLower(modPart)) {
-                    refd.insert(Symbol::toLower(em));
-                    return;
-                }
-            }
-            return;
-        }
-        // 普通名称: 查符号表定位归属模块
-        if (Symbol* s = symTab.lookup(node.name)) {
-            if (s->isExternal && !s->sourceModule.empty()) {
-                refd.insert(Symbol::toLower(s->sourceModule));
-            }
-        }
-    }
-
-    void visit(SimpleTypeRef& node) override {
-        size_t dot = node.name.find('.');
-        if (dot != std::string::npos) {
-            std::string modPart = node.name.substr(0, dot);
-            for (const auto& em : externalModules) {
-                if (Symbol::toLower(em) == Symbol::toLower(modPart)) {
-                    refd.insert(Symbol::toLower(em));
-                    return;
-                }
-            }
-            return;
-        }
-        if (Symbol* s = symTab.lookup(node.name)) {
-            if (s->isExternal && !s->sourceModule.empty()) {
-                refd.insert(Symbol::toLower(s->sourceModule));
-            }
-        }
-    }
-};
+// 账 §56.52: 原来这里的 `ExternalRefCollector` (AST 引用收集器) 已**撤掉** ——
+// 它只覆写 visit(IdentifierExpr&) 与 visit(SimpleTypeRef&), 而 AST 遍历根本走不到
+// VariableDecl / ParameterDecl / TypeDecl / TypeMember 里的类型引用 ⇒ 那份名单是
+// **残缺**的, 拿来裁跨模块 include 会把还需要的头裁掉 ⇒ 编译断。
+// 判据现在只有一处: 发码器在发出外部引用那一刻登记 (见 cgen_state.inc 的
+// usedExternalModules_), 外加发码文本反查兜底 —— 见 src/backend/cgen_base.cpp 的
+// trimCrossModuleIncludes()。
 
 bool Driver::runCodeGeneration(const CompileOptions& options, const std::string& outputDir) {
 #include "driver/detail/driver_codegen_prelude.inc"

@@ -1,0 +1,61 @@
+// Fuguizhu FIX-011 probe type library.
+//
+// Two roles:
+//  (1) [in,out] VARIANT* arms -- the fix target (GetBoundingBox shape).
+//  (2) scalar ByRef arms -- the **zero-regression** controls: the existing
+//      five-tier ByRef packers (Long/Integer/Boolean/Single/Double) must keep
+//      emitting exactly what they emitted before the fix.
+//  (3) an [in]-only VARIANT* arm -- the PARAMFLAG control: PARAMFLAG_FIN alone
+//      maps to ComParamDir::In -> isByVal=true (driver_semantics.cpp: five
+//      sites) -> must NOT be emitted as by-ref.
+//
+// PARAMFLAG chain (verified by reading the source):
+//   wParamFlags (typelib_parser_desc.cpp:319-331)
+//     -> ComParamDir (In / Out / InOut / RetVal)
+//     -> pi.isByVal = (direction == In) (driver_semantics.cpp: five sites)
+//   So [in] => isByVal=true => not emitted by reference; [out]/[in,out] =>
+//   isByVal=false => vb6_ComPackVariantRef (VT_BYREF|VT_VARIANT).
+//
+// NOTE: keep this file pure ASCII. MIDL warns C4819 on non-936 characters and
+// then silently drops trailing content (measured: the [in] arm vanished).
+import "oaidl.idl";
+import "ocidl.idl";
+
+[
+  object,
+  uuid(7E111111-2222-3333-4444-555566667777),
+  dual,
+  oleautomation,
+  helpstring("IFgzBox Interface")
+]
+interface IFgzBox : IDispatch
+{
+  [id(1)] HRESULT GetBox([in,out] VARIANT* MinPt, [in,out] VARIANT* MaxPt);
+  [id(2)] HRESULT GetScalar([in,out] VARIANT* V);
+  // PARAMFLAG control: pure [in] -- must be packed by value.
+  [id(3)] HRESULT GetInOnly([in] VARIANT* V);
+  // Scalar ByRef controls: the five-tier ByRef packers must be unchanged.
+  [id(4)] HRESULT PutLong([in,out] LONG* V);
+  [id(5)] HRESULT PutInteger([in,out] SHORT* V);
+  [id(6)] HRESULT PutBool([in,out] VARIANT_BOOL* V);
+  [id(7)] HRESULT PutSingle([in,out] FLOAT* V);
+  [id(8)] HRESULT PutDouble([in,out] DOUBLE* V);
+};
+
+[
+  uuid(7E999999-8888-7777-6666-555544443333),
+  version(1.0),
+  helpstring("FgzOutTlb 1.0 Type Library")
+]
+library FGZOUTTLB
+{
+  importlib("stdole2.tlb");
+  [
+    uuid(7EAAAAAA-BBBB-CCCC-DDDD-EEEEFFFF0000),
+    helpstring("FgzBox Class")
+  ]
+  coclass FgzBox
+  {
+    [default] interface IFgzBox;
+  };
+};

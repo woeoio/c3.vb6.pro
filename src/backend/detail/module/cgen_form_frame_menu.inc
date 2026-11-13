@@ -299,12 +299,25 @@
                             if (pbB114.found) {
                                 emitFrxBagBlob(litName, pbB114.bytes);
                             } else {
+                            /* Fix ucSlider 2026-11-08: 容器内子控件的二进制属性 (`arrimgknob`
+                               这类图片槽) 走的是 .frx 的 **DocProperty** 块, 负载是 PNG/JPEG
+                               原始字节。此前这一路只试 DocString, 二进制过不了"UTF-16 可打印"
+                               校验 ⇒ 落到 BagPutStr 发成 `L"\uE874\uF9B1…"` 乱码 ⇒ 图片旋钮
+                               加载失败 (Picture1 里那颗 ucSlider 的旋钮变白色占位块)。与顶层
+                               同类分支 (cgen_form_create_controls.inc 的 dbB114) 同一判据:
+                               只有 detectFormat 认出图片格式才按原始字节进 bag。 */
+                            FrxBlobBytes dbB114 = FrxReader::readDocBlobBytes(kvb.second.frxOffset);
+                            if (dbB114.found && FrxReader::detectFormat(dbB114.bytes.data(), dbB114.bytes.size())
+                                    != FrxImageFormat::Unknown) {
+                                emitFrxBagBlob(litName, dbB114.bytes);
+                            } else {
                             FrxTextData dsB114 = FrxReader::readDocString(kvb.second.frxOffset);
                             if (!dsB114.text.empty()) {
                                 std::string tvB = dsB114.text;
                                 if (tvB.size() >= 2 && tvB.front() == '"' && tvB.back() == '"')
                                     tvB = tvB.substr(1, tvB.size() - 2);
                                 c_.emitLine("vb6_UC_BagPutStr(_bag, " + litName + ", L\"" + escapeWideCString(tvB) + "\");");
+                            }
                             }
                             }
                         }
@@ -575,9 +588,12 @@
             std::string subProcName = "vb6_ctrl_subproc_" + cIdent(ctrl.controlName);
             if (knownControlArrays_.count(ctrlNameLower)) {
                 // P0-4修复: 控件数组遍历所有元素安装子类化
+                // 富贵竹 FIX-009 R2a: 每个元素打运行时索引属性, 事件臂才拿得到真实 Index。
+                // 存 si+1 (恒非 0) —— SetPropW(...,0) 等于删属性, 元素 0 会丢索引。
                 c_.emitLine("{ int vb6_si; for (vb6_si = 0; vb6_si < VB6_CTRLARR_MAX; vb6_si++) {");
                 c_.emitLine("  void* vb6_sub_hwnd = vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", vb6_si);");
-                c_.emitLine("  if (vb6_sub_hwnd) vb6_InstallControlSubclass(vb6_sub_hwnd, (void*)" + subProcName + "); } }");
+                c_.emitLine("  if (vb6_sub_hwnd) { SetPropW((HWND)vb6_sub_hwnd, L\"VB6_CtrlArrIndex\", (HANDLE)(INT_PTR)(vb6_si + 1));");
+                c_.emitLine("    vb6_InstallControlSubclass(vb6_sub_hwnd, (void*)" + subProcName + "); } } }");
             } else {
                 c_.emitLine("vb6_InstallControlSubclass((void*)vb6_hwnd_" + cIdent(ctrl.controlName) + ", (void*)" + subProcName + ");");
             }
@@ -592,8 +608,19 @@
                         subEmitted.insert(childNameLower);
                         if (needsSubclass(child)) {
                             std::string subProcName = "vb6_ctrl_subproc_" + cIdent(child.controlName);
-                            // Task #41: 数组成员用 GetAt (声明侧无 vb6_hwnd_<名>)
-                            c_.emitLine("vb6_InstallControlSubclass((void*)" + childHwndRead(child) + ", (void*)" + subProcName + ");");
+                            if (knownControlArrays_.count(childNameLower)) {
+                                // 富贵竹 FIX-009 R2a: 容器子控件的数组以前按名字去重后只装
+                                // 一个元素 (childHwndRead -> GetAt(..., index)), 其余元素收不到
+                                // WM_MOUSEMOVE/WM_LBUTTONUP ⇒ MouseMove/Click 全族失灵。
+                                // 与顶层安装同一口径: 逐元素打索引属性 + 安装子类化。
+                                c_.emitLine("{ int vb6_si; for (vb6_si = 0; vb6_si < VB6_CTRLARR_MAX; vb6_si++) {");
+                                c_.emitLine("  void* vb6_sub_hwnd = vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(child.controlName) + ", vb6_si);");
+                                c_.emitLine("  if (vb6_sub_hwnd) { SetPropW((HWND)vb6_sub_hwnd, L\"VB6_CtrlArrIndex\", (HANDLE)(INT_PTR)(vb6_si + 1));");
+                                c_.emitLine("    vb6_InstallControlSubclass(vb6_sub_hwnd, (void*)" + subProcName + "); } } }");
+                            } else {
+                                // Task #41: 数组成员用 GetAt (声明侧无 vb6_hwnd_<名>)
+                                c_.emitLine("vb6_InstallControlSubclass((void*)" + childHwndRead(child) + ", (void*)" + subProcName + ");");
+                            }
                         }
                     }
                     if (!child.children.empty() && controlIsContainerType(child)) {   // 账 #167
@@ -616,7 +643,17 @@
             if (controlIsContainerType(ctrl) && !ctrl.children.empty()) {   // 账 #167
                 std::string nmLower = ctrl.controlName;
                 std::transform(nmLower.begin(), nmLower.end(), nmLower.begin(), ::tolower);
-                if (!knownControlArrays_.count(nmLower)) {
+                if (knownControlArrays_.count(nmLower)) {
+                    // ucTreeView (2026-11-06): 控件数组的容器以前在这里**被整个跳过**
+                    // (因为声明侧没有 `vb6_hwnd_<名>`), 于是住在数组容器里的子按钮
+                    // (Form1 的 Picture1(0..8) 里放 Command2(0..8) 三点按钮) 的
+                    // WM_COMMAND 停在 PictureBox 的 WndProc, 永远到不了窗体 ⇒
+                    // Command2_Click 不触发 (用户实测"三点按钮点了不弹色选对话框")。
+                    // 逐个元素安装, 与上面子类化那一站同一形态。
+                    c_.emitLine("{ int vb6_fw; for (vb6_fw = 0; vb6_fw < VB6_CTRLARR_MAX; vb6_fw++) {");
+                    c_.emitLine("  void* vb6_fw_hwnd = vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", vb6_fw);");
+                    c_.emitLine("  if (vb6_fw_hwnd) vb6_ForwardChildCommands(vb6_fw_hwnd); } }");
+                } else {
                     c_.emitLine("vb6_ForwardChildCommands((void*)vb6_hwnd_" + cIdent(ctrl.controlName) + ");");
                 }
             }
@@ -659,7 +696,10 @@
                     c_.emitLine("AppendMenuW(hMenuBar, MF_STRING, " + std::to_string(menuId) + ", L\"" + escapeWideCString(caption) + "\");");
                     menuId++;
                 } else {
+                    // Fix 092a (C2374): 同 cgen_form_menu.cpp —— 菜单控件数组要带 Index,
+                    // 否则同名的多枚弹出菜单在同一函数里重复定义。
                     std::string popupVar = "hPopup_" + cIdent(ctrl.controlName);
+                    if (ctrl.index >= 0) popupVar += "_" + std::to_string(ctrl.index);
                     c_.emitLine("HMENU " + popupVar + " = CreatePopupMenu();");
 
                     for (const auto& child : ctrl.children) {

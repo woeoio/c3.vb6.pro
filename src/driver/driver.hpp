@@ -110,9 +110,11 @@ struct CompileOptions {
     // ai/023 S05: --check-packages 只读模式 —— 解析 Package= 引用、逐文件
     // 校验 sha1/size, 打印结果后退出 (不编译)。用于 CI 里预检包完整性。
     bool checkPackagesOnly = false;
-
-    // 裁剪include (性能优化): 只include实际引用的外部模块, 降低cl预处理量
-    bool trimIncludes = false;
+    // §56.52: 跨模块 include 瘦身是**编译器固有行为**, 不提供开关 (用户 2026-11-12 定:
+    // 「副作用选项没啥好处」)。理由: 每个模块的头原本把全工程每个模块的头都包进来,
+    // 每个 TU 重解析全工程的头 (PD 539 模块, 623 个 TU 合计 6.5 GB 头文本 + 29 万次
+    // 头文件打开; 本机单 TU 实测带 include 0.94 s vs 去掉 0.06 s, 94% 是重复劳动)。
+    // 普通项目同样受益。
 };
 
 // 编译结果
@@ -152,6 +154,12 @@ public:
 private:
     std::unique_ptr<Diagnostics> diag_;
     std::vector<std::unique_ptr<Module>> modules_;  // 解析产出的AST
+
+    // 类型库符号共享层 (只造一份, 非拥有下发给各模块的 SymbolTable 作回退)。
+    // 共享化之前每个模块各自重造一份 (539 模块 × 3042 符号 ≈ 12 GB); 这里只保留基座。
+    // 声明在 analyzers_ 之前: 析构顺序 = 逆声明序 ⇒ analyzers_ 先销毁, 不会留下
+    // 指向已销毁共享层的裸指针。
+    std::unique_ptr<SymbolTable> typelibTable_;
 
     // 语义分析产出 (供代码生成使用)
     std::vector<std::unique_ptr<SemanticAnalyzer>> analyzers_;
@@ -197,6 +205,9 @@ private:
     // 经 setFormModuleNames 下发给每台 cgen）与语义层的"这名字工程里有"必须是同一个答案 ——
     // 两边各扫一遍 modules_ 就是两份权威，将来谁改判据谁漏改另一边。
     std::unordered_set<std::string> collectFormModuleNames() const;
+    // 账 §56.48: 工程内**用户控件 (.ctl) 模块名**（小写）的唯一建造点（同 collectFormModuleNames 的形）。
+    // 消费方 = 发码侧「这个 WithEvents 的源类是不是 UC」那一问。
+    std::unordered_set<std::string> collectControlModuleNames() const;
     void buildMemberAccessTable();
     // ai/084c: 类名(小写) → Class_Initialize 形参个数 (buildMemberAccessTable 顺带扫描,
     // 经 setCtorParamCounts 下发; 表内缺席 = 非本工程类, New 带实参在语义层报错)。
@@ -255,6 +266,12 @@ private:
     //   runCodeGeneration 逐模块从 CCodeGen::asmProcs() 回收, runLinker 生成 .asm
     //   并调 ml64 → .obj → MsvcDriverOptions::extraObjects。
     std::vector<EmittedAsmProc> asmProcs_;
+
+    // 账 §56.53: 用**窗体档前奏**的模块产物基名 (由发码器报, 见
+    // driver_codegen_module_loop.inc 里 cgen.usesFormPrelude()) —— PCH 分组的唯一判据。
+    // driver 不自己重判「这个模块算不算窗体/设计期」: isDesignerModule_ (.ctl/.pag)
+    // 是发码器内部状态, 重判就会出现两处权威。
+    std::vector<std::string> pchFormModules_;
 
     // Fix 143: vbp Object= 的 OCX 文件表 (CLSID 小写去花括号 → ocx 绝对路径).
     // 第三方 OCX 控件免注册加载用.
@@ -360,6 +377,9 @@ private:
     bool runPreprocess(const CompileOptions& options);
     bool runParser(const CompileOptions& options);
     bool runTypeLibImport(const CompileOptions& options);  // P6.3: 加载TypeLib+注册COM类型
+    // P6.3 共享化: 把类型库符号 (coclass/接口/枚举/模块函数/GlobalNs) 只造一份进
+    // typelibTable_, 各模块 SymbolTable 以非拥有回退方式共享 (见 SymbolTable::setSharedScope)。
+    void buildSharedTypelibSymbols();
     bool runSemanticAnalysis(const CompileOptions& options);
     bool runGenericsPrepass();  // 泛型 (tB): 模板登记 + 使用点物化 (G2)
     // Interface (tB, B02): stage 2.7 建接口契约登记表 (名字/Extends 链/展平槽表)
@@ -392,6 +412,11 @@ private:
     bool runCodeGeneration(const CompileOptions& options, const std::string& outputDir);
     void writeErrorLog(const std::string& logPath, const std::string& stage);
     bool runLinker(const CompileOptions& options, const std::string& outputDir, const std::string& intermediatesDir, SessionManager& session);
+    // 账 §56.55: 发码之后放掉 AST 与语义产物, **让 cl 拿到内存**。
+    // 实现在 driver_compile.cpp (与它的调用点同文件)。只放 AST 与 analyzers_,
+    // **模块元数据保留** —— driver_link.cpp 的收集段还要读 modules_[i] 的
+    // moduleName / filename / isFormModule / classTypeParams。
+    void releaseAstAfterCodegen();
 };
 
 } // namespace vb6c3

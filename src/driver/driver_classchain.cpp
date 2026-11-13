@@ -610,6 +610,7 @@ bool Driver::mergeInheritedMembers() {
         if (v.chainBroken || v.chain.size() < 2) continue;  // 无祖先 = 无合并
         Symbol* dst = classSymOf(v.mod, v.name);
         if (!dst) continue;
+        SymbolPayload& dstP = dst->W();   // 载荷 COW: 合并写本类自己的那份
 
         // 祖先序列: 自根到叶 (chain 末位是自身, 不含)
         std::vector<const ClassChainView*> anc;
@@ -652,28 +653,28 @@ bool Driver::mergeInheritedMembers() {
             const std::string& k = w.key;
             bool firstTime = mergedKeys.insert(k).second;
             if (firstTime && src) {
-                if (auto it = src->memberProcKinds.find(k); it != src->memberProcKinds.end()) {
-                    dst->memberProcKinds.emplace(k, it->second);
+                if (auto it = src->P().memberProcKinds.find(k); it != src->P().memberProcKinds.end()) {
+                    dstP.memberProcKinds.emplace(k, it->second);
                 }
-                if (auto it = src->memberAccessLevels.find(k); it != src->memberAccessLevels.end()) {
-                    dst->memberAccessLevels.emplace(k, it->second);  // tB B08a
+                if (auto it = src->P().memberAccessLevels.find(k); it != src->P().memberAccessLevels.end()) {
+                    dstP.memberAccessLevels.emplace(k, it->second);  // tB B08a
                 }
-                if (auto it = src->memberReturnTypes.find(k); it != src->memberReturnTypes.end()) {
-                    dst->memberReturnTypes.emplace(k, it->second);
+                if (auto it = src->P().memberReturnTypes.find(k); it != src->P().memberReturnTypes.end()) {
+                    dstP.memberReturnTypes.emplace(k, it->second);
                 }
-                if (auto it = src->memberParams.find(k); it != src->memberParams.end()) {
-                    dst->memberParams.emplace(k, it->second);
+                if (auto it = src->P().memberParams.find(k); it != src->P().memberParams.end()) {
+                    dstP.memberParams.emplace(k, it->second);
                 }
-                if (auto it = src->memberLetParams.find(k); it != src->memberLetParams.end()) {
-                    dst->memberLetParams.emplace(k, it->second);
+                if (auto it = src->P().memberLetParams.find(k); it != src->P().memberLetParams.end()) {
+                    dstP.memberLetParams.emplace(k, it->second);
                 }
-                if (auto it = src->memberSetParams.find(k); it != src->memberSetParams.end()) {
-                    dst->memberSetParams.emplace(k, it->second);
+                if (auto it = src->P().memberSetParams.find(k); it != src->P().memberSetParams.end()) {
+                    dstP.memberSetParams.emplace(k, it->second);
                 }
                 // memberNames 存祖先写的**原名** (大小写); 查表侧一律走小写键
-                for (const auto& n : src->memberNames) {
+                for (const auto& n : src->P().memberNames) {
                     if (ifaceLower(n) != k) continue;
-                    if (!keyIn(dst->memberNames, k)) dst->memberNames.push_back(n);
+                    if (!keyIn(dstP.memberNames, k)) dstP.memberNames.push_back(n);
                     break;
                 }
             }
@@ -691,14 +692,14 @@ bool Driver::mergeInheritedMembers() {
                 if (p.second) v.inhFields.push_back(p.second);
                 if (!src) continue;
                 const std::string& k = p.first;
-                if (auto it = src->memberFieldNames.find(k); it != src->memberFieldNames.end()) {
-                    dst->memberFieldNames.emplace(k, it->second);
+                if (auto it = src->P().memberFieldNames.find(k); it != src->P().memberFieldNames.end()) {
+                    dstP.memberFieldNames.emplace(k, it->second);
                 }
-                if (auto it = src->memberFieldTypes.find(k); it != src->memberFieldTypes.end()) {
-                    dst->memberFieldTypes.emplace(k, it->second);
+                if (auto it = src->P().memberFieldTypes.find(k); it != src->P().memberFieldTypes.end()) {
+                    dstP.memberFieldTypes.emplace(k, it->second);
                 }
-                if (auto it = src->memberAccessLevels.find(k); it != src->memberAccessLevels.end()) {
-                    dst->memberAccessLevels.emplace(k, it->second);  // tB B08a
+                if (auto it = src->P().memberAccessLevels.find(k); it != src->P().memberAccessLevels.end()) {
+                    dstP.memberAccessLevels.emplace(k, it->second);  // tB B08a
                 }
             }
         }

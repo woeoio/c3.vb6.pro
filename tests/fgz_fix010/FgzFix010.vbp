@@ -1,0 +1,5 @@
+Type=Exe
+Form=FrmMain.frm
+Startup="FrmMain"
+ExeName32="FgzFix010.exe"
+Name="FgzFix010"

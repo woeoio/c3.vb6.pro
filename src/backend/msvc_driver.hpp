@@ -78,6 +78,19 @@ struct MsvcDriverOptions {
     // ai/vb-asm-extension-spec: ml64 汇编产物的 .obj 路径 (Asm 块过程的降级目标)。
     // 与 sourceFiles 分开: cl 不吃 .asm, 这些是**已经汇编好的**目标文件, 只进链接。
     std::vector<std::string> extraObjects;
+
+    // === 账 §56.53: PCH (预编译头) ===
+    // 一组 = 一副前奏 (普通档 / 窗体档) + 用它的 TU 名单。
+    // 前奏的**内容**由发码器排 (backend/cgen_pch.hpp), driver 只**转述**分组 ——
+    // 「这个模块算不算窗体/设计期」只有发码器知道 (isDesignerModule_ 是它的内部状态),
+    // driver 重判就会出现两处权威, 两边一分家, PCH 头就与 TU 的前奏对不上。
+    // 空 pchGroups = 不走 PCH (原来的「一次 cl 编译+链接」原样保留)。
+    struct PchGroup {
+        std::string headerName;                 // 裸名 (c3_pch_std.h) —— /Yc /Yu /FI 都用它
+        std::vector<std::string> preludeLines;  // 前奏 include 块 (与 TU 的前奏同源, 逐字一致)
+        std::vector<std::string> sources;       // 用这档前奏的 .c
+    };
+    std::vector<PchGroup> pchGroups;
 };
 
 // 把用户静态库输入与搜索根追加到链接命令行。
@@ -181,6 +194,13 @@ private:
 
     // opt3: 增量编译 — 基于内容哈希跳过未变化的 .c 编译
     bool compileAndLinkIncremental(const MsvcDriverOptions& options);
+
+    // §56.53: PCH 路径 —— 「建 PCH → 分组编译 → 编其余 TU → 链接」四段 cl。
+    // 为什么必须分段: 一次 cl 调用**只能用一个 PCH** (/Yc /Yu /Fp 都是调用级选项),
+    // 而前奏有两副 (普通档 / 窗体档) + RTL 那一族根本不能用 PCH (各族前奏不一致,
+    // vb6forms.c 还自带 WIN32_LEAN_AND_MEAN ⇒ 状态不同构)。所以拆段是工具链的硬约束,
+    // 不是实现上的偏好。
+    bool compileAndLinkPch(const MsvcDriverOptions& options);
 };
 
 } // namespace vb6c3

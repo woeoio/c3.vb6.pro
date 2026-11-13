@@ -1,7 +1,8 @@
 ﻿param(
     [Parameter(Mandatory=$true)][string]$Exe,
     [string]$OutDir = "",
-    [int]$Sec = 10
+    [int]$Sec = 10,
+    [switch]$Diagnostics
 )
 # ucSegmentedControl 夹具的结构判据 (tests\ucSegmentedControl)。
 #
@@ -128,6 +129,25 @@ $logErr = Join-Path $OutDir "segmented.err"
 # 让 vb6com 在"COM 晚绑定成员解析失败(真 438)"时打印 [C3_438]; 宿主属性/方法解析失败则由
 # uc_hostmodel 无条件打印 [C3_HOST_438 #n] (HEAD 既有格式, 见 uc_hostmodel.c)。两者都算 438。
 $env:C3_LATEBIND_MISS = "1"
+# 账 §56.44: **诊断默认关**。这两枚开关各自往 stderr / 磁盘写东西, 会**扰动时序** ——
+#   实测: 开着 [AD-paint] 那几行时这枚用例像素全绿, 关着就是白块 (CI 轮 43153977014
+#   全绿 vs 43150418737/43152473320 全 0)。也就是说「开着诊断才绿」的那种绿是**扰动换来的**,
+#   不能拿来交差 ⇒ 诊断改成 -Diagnostics 显式开启, CI 默认跑**干净**的那条路。
+#   需要复现/二分时再加 -Diagnostics (工件规则 output/** 照样收 .err 与 ucdump)。
+#   ⚠ 外部已经设好的 C3_AD_TRACE **原样透传**给产物进程 (RTL 直接读那个环境变量),
+#     不被本脚本清掉 ⇒ 想在 CI 上开诊断跑一轮, 只要在 workflow 的 env 里加 C3_AD_TRACE=1,
+#     **不必改代码**。没设 (默认) ⇒ 干净那一路。
+$adTraceIn = $env:C3_AD_TRACE
+$ucDumpIn = $env:C3_UC_DUMPDIR
+if ($Diagnostics) {
+    $env:C3_AD_TRACE = "1"
+    $dumpDir = Join-Path $OutDir "ucdump"
+    New-Item -ItemType Directory -Force -Path $dumpDir | Out-Null
+    $env:C3_UC_DUMPDIR = $dumpDir
+} else {
+    $env:C3_AD_TRACE = $adTraceIn
+    $env:C3_UC_DUMPDIR = $ucDumpIn
+}
 $proc = Start-Process -FilePath $exePath -WorkingDirectory $wd `
     -RedirectStandardOutput $logOut -RedirectStandardError $logErr -NoNewWindow -PassThru
 if (-not $proc) { Write-Output "FAIL 无法启动 $exePath"; exit 1 }
@@ -536,17 +556,26 @@ for ($yy = $r9y; $yy -lt $r9y + $r9h; $yy++) { for ($xx = $r9x; $xx -lt $r9x + $
 Add-Read ("openEditor whitePx=$white9")
 if ($white9 -lt 100) { Add-Fail ("'OPEN EDITOR' 图例不是白字 (纯白像素 $white9 < 100, 被画成黑字?)") }
 
-# 缺陷5: uc6 (CtrlType=1 CheckBar, 设计期 16,304 185x33) 下方四个图标必须是 .frx 的图片,
-# 不是 Segoe UI Symbol 的 PUA 字形回退。判据 = 深色像素数 (三通道 < 80; 选中格的蓝底不计):
-# 真图标 (纸夹/软盘/地球/相机) 笔画粗、覆盖大, 字形回退只有细笔画。
-# 实测物理像素: 旧产物 (frx 扫描式定位) 230; 新产物 (DocProperty 精确定位) 581 ⇒ 阈值 400。
+# 缺陷5: uc6 (CtrlType=1 CheckBar, 设计期 16,304 185x33) 的四枚图标字形必须画出来。
+# 该实例没有 HasImg_N/image_N, 图标就是 .frx Caption_0..3 的 Segoe UI Symbol 字形
+# (纸夹/软盘/地球/相机), 所以判据只能是"深色像素数" (三通道 < 80; 选中格的蓝底不计)。
+# 标定 (2026-11-08, 同一相机 = 交互段 PMv2 物理面, 同一套取样器):
+#   · 真 VB6 参考 (.temp\ref\SegmentedControl.exe) 本机 120dpi = **382**;
+#   · C3 本机 120dpi = **382** (与参考逐像素一致);
+#   · CI 96dpi = **218** (96dpi 面被 DWM 放大 1.25 倍后才抓, 笔画边缘多出 <80 的像素,
+#     所以本机读数约为 CI 的 k^2 倍)。
+# 旧阈值 400 来自**未开抗锯齿**时代的读数 (旧产物 581@120dpi / 418@96dpi); dee3abb1 恢复
+# ClearType 后 <80 的像素自然减少, 400 连真 VB6 参考 (382) 都过不了 —— 那是拿旧相机当参照,
+# 不是更强的判据。现阈值 = 真 VB6 参考的 55% (382*0.55≈210@120dpi) 按 k^2 折算,
+# 96dpi 口径 135; 图标字形真缺失时该值掉到 <40, 仍会红。
+$dark6Min = [int](135 * $k * $k)
 $r6x = [int](16 * $k); $r6y = [int](304 * $k); $r6w = [int](185 * $k); $r6h = [int](33 * $k)
 $dark6 = 0
 for ($yy = $r6y; $yy -lt $r6y + $r6h; $yy++) { for ($xx = $r6x; $xx -lt $r6x + $r6w; $xx++) {
     $c = $b0.GetPixel($xx, $yy)
     if ($c.R -lt 80 -and $c.G -lt 80 -and $c.B -lt 80) { $dark6++ } } }
 Add-Read ("checkbar icons uc6 darkPx=$dark6")
-if ($dark6 -lt 400) { Add-Fail ("CheckBar 四个图标没画成图片 (uc6 深色像素 $dark6 < 400, 退回 Segoe UI Symbol 字形?)") }
+if ($dark6 -lt $dark6Min) { Add-Fail ("CheckBar 四枚图标字形没画出来 (uc6 深色像素 $dark6 < $dark6Min)") }
 
 # 缺陷3: <-- ItemVisible 按钮应显示/隐藏 uc4 的 Ok 图标。
 # 性能判据: 点击 -> uc4 区域首帧变化 + 稳定 (连续 3 次 20ms 采样一致)。真 VB6 实测
@@ -638,6 +667,18 @@ foreach ($bb in @($b0, $b1, $b2, $b3, $b4, $b5, $b6, $g4, $g5, $g6)) { $bb.Dispo
 try { [SegPx]::SetThreadDpiAwarenessContext($prevCtx) | Out-Null } catch { }
 
 try { if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(3000) | Out-Null } } catch { }
+
+# 收尾 (诊断): ucdump 里每个类型只留前 2 张 —— CI 上 paint 次数多 (本机一轮就 230 张),
+# 全留会让工件膨胀十几倍; 而「首帧那张」就能回答「UC 到底画没画」。进程已在上面 kill,
+# 不会再有新的 dump 落盘, 这里删是安全的。
+if (Test-Path $dumpDir) {
+    $kept = @{}
+    foreach ($f in @(Get-ChildItem $dumpDir -Filter *.bmp -ErrorAction SilentlyContinue | Sort-Object Name)) {
+        $t = ($f.Name -split "_")[0]
+        if (-not $kept.ContainsKey($t)) { $kept[$t] = 0 }
+        if ($kept[$t] -lt 2) { $kept[$t]++ } else { try { [System.IO.File]::Delete($f.FullName) } catch { } }
+    }
+}
 
 Write-Output ("读数: " + ($read -join "; "))
 if ($fail.Count -gt 0) {

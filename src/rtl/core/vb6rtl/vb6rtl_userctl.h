@@ -59,6 +59,9 @@ typedef vb6_ComIface_Font vb6_cls_StdFont;
 extern int32_t vb6_UserControl_ScaleWidth;   // 用户坐标宽度
 extern int32_t vb6_UserControl_ScaleHeight;  // 用户坐标高度
 extern int32_t vb6_UserControl_ScaleMode;    // 1=Twip 3=Pixel
+// ucSlider (Proyecto1.vbp): UserControl.DrawWidth (VB6 缺省 1; 与 ScaleWidth 同族,
+// push/pop 按实例存取). 绘制本身走 GDI+, 该值只承载宿主状态.
+extern int32_t vb6_UserControl_DrawWidth;
 extern void*   vb6_UserControl_hDC;          // 绘制 DC (Windowless: 容器客户区 DC)
 // Fix <vbeclipse>: UserControl.HasDC (ucTab.ctl:89 `HasDC = UserControl.HasDC`).
 // VB6 语义 = 当前是否有可用绘制 DC; 生成代码按**变量**读 (vb6_ret_HasDC = ...),
@@ -294,6 +297,10 @@ struct vb6_UserControl_Extender_Type {
     BSTR    Name;         // 控件实例名 (Ambient.DisplayName 同一份缓存)
     // `UserControl.Extender.ZOrder v` 生成成员函数调用形态 (2 实参: 值 + has 标记)。
     void  (*ZOrder)(int32_t* value, int32_t hasValue);
+    // §56: `UserControl.Extender.Index` —— pdButtonStrip.ctl / pdLabel.ctl 在
+    // `VBHacks.InControlArray(...)` 之后读它来区分数组里的哪一枚。push 时从
+    // 当前实例记录 r->index 灌入 (-1 = 非控件数组)。
+    int32_t Index;
 };
 extern struct vb6_UserControl_Extender_Type vb6_UserControl_Extender;
 /* Fix 294 / 3a: Extender.<成员> = v 的实例感知写入口(代码生成侧调用)。

@@ -185,7 +185,10 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 // Fix 084aa: #undef 防宏污染 — 模块常量被生成 #define 宏 (如 cStartUp 的
                 // #define K (vb6_BSTR_FromStr(...))), 同名局部变量声明会被宏展开破坏.
                 // 局部变量总是遮蔽模块常量, #undef 是安全且正确的.
-                c_.emitLine("#undef " + cName);
+                // 富贵竹 FIX-004: 影子名宏 (模块级非 Public 撞名副本) 不能 #undef ——
+                // 否则本 TU 之后的模块级裸名引用失去换绑 → C2065。同名局部用块作用域
+                // 遮蔽影子名, C 合法且正是 VB6「局部 Dim 遮蔽模块级 Dim」语义。
+                if (!isShadowForcedVarName(var.name)) c_.emitLine("#undef " + cName);
                 // Fix 092w: Dim arr() As Byte = <初始化表达式> — twinbasic 兼容.
                 // 动态数组初值来自字符串/StrConv 时改用字节数组 helper 生成内容,
                 // 否则保持 NULL 待 ReDim/赋值.
@@ -568,7 +571,8 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
 
             if (var.initializer) {
                 // Fix 084aa: #undef 防宏污染 (见 P8.1 动态数组处注释)
-                c_.emitLine("#undef " + cName);
+                // 富贵竹 FIX-004: 影子名宏命中时跳过 (见 P8.1 动态数组处的注)
+                if (!isShadowForcedVarName(var.name)) c_.emitLine("#undef " + cName);
                 emitExpr(*var.initializer);
                 c_.emitLine(storageClass + cType + " " + cName + " = " + lastExpr_ + ";");
             } else {
@@ -606,7 +610,8 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                     if (initVal == "vb6_BSTR_Empty()") initVal = "NULL";
                 }
                 // Fix 084aa: #undef 防宏污染 (见 P8.1 动态数组处注释)
-                c_.emitLine("#undef " + cName);
+                // 富贵竹 FIX-004: 影子名宏命中时跳过 (见 P8.1 动态数组处的注)
+                if (!isShadowForcedVarName(var.name)) c_.emitLine("#undef " + cName);
                 c_.emitLine(storageClass + cType + " " + cName + " = " + initVal + ";");
                 // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` 在**声明处**实例化。
                 //
@@ -739,7 +744,9 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 // 都是 windows.h 中的 #define, 否则 `const int32_t WHITE_BRUSH = 0;`
                 // 会被宏展开为 `const int32_t 0 = 0;` 引发 C2106).
                 // #undef 对没有定义为宏的名字是空操作, 无副作用.
-                c_.emitLine("#undef " + cName);
+                // 富贵竹 FIX-004: 影子名宏命中时跳过 (否则本 TU 之后的模块级裸名
+                // 引用失去换绑 → C2065; 同名局部 Const 用块作用域遮蔽影子名)。
+                if (!isShadowForcedVarName(con.name)) c_.emitLine("#undef " + cName);
                 c_.emitLine("const " + cType + " " + cName + " = " + lastExpr_ + ";");
             }
             break;

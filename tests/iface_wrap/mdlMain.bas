@@ -17,5 +17,20 @@ Sub Main()
     Else
         Debug.Print "IFACE-CALL-BAD"
     End If
+    ' 负控 (真 VB6 探针 .temp/vb6probe_neg 定真值): Variant/Object 里装的是
+    ' **没实现 IFoo 的类** 或 **外部对象** ⇒ 运行期 13 Type mismatch, 整条 Set 被放弃,
+    ' 目标保持原值 (不是静默 Nothing)。
+    Dim vNeg As Variant
+    On Error Resume Next
+    Set vNeg = New Other
+    Err.Clear
+    Set f = vNeg
+    Debug.Print "IFACE-NEG-KIND=" & CStr(Err.Number)
+    Err.Clear
+    Set vNeg = CreateObject("Scripting.Dictionary")
+    Set f = vNeg
+    Debug.Print "IFACE-NEG-EXT=" & CStr(Err.Number)
+    Debug.Print "IFACE-NEG-KEEP=" & CStr(f.Bar())
+    On Error GoTo 0
     Debug.Print "IFACE-DONE"
 End Sub

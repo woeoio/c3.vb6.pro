@@ -130,8 +130,8 @@
                     //       (_vb6_with_14/_vb6_with_15). 同 assign_com_prop Fix 110i.
                     if (isComMarker_) {
                         std::string hint160w = "BSTR";  // String 属性默认解 BSTR
-                        if (propLetSym && !propLetSym->params.empty()) {
-                            const Vb6Type pt160w = propLetSym->params.back().type;
+                        if (propLetSym && !propLetSym->P().params.empty()) {
+                            const Vb6Type pt160w = propLetSym->P().params.back().type;
                             if (pt160w == Vb6Type::Double || pt160w == Vb6Type::Single
                                 || pt160w == Vb6Type::Date || pt160w == Vb6Type::Currency) {
                                 hint160w = "Double";
@@ -257,6 +257,31 @@
                                     }
                                 }
                             }
+                            // 属性写方向的**值实参**声明成工程类时 (`Property Let SelNode(TheNode As Node)`,
+                            // VB6 参数默认 ByRef), C 形参是 `vb6_cls_X**`, 而下面统一出口按**值**递裸指针。
+                            // 被调方 `Set m_SelItem = *TheNode` 解引用到的是实例首字段 `__comObj`(未装箱恒 NULL)
+                            // ⇒ 属性永远存空; 再读出来就是 Nothing。实测 ucTreeView:
+                            //   `cTVP.SelNode = N` → `TVP.SelNode` 为 Nothing → `GetNodePath(Nothing)`
+                            //   读 `N+0x10` 崩 0xC0000005 (Open Cursors folder)。
+                            // 交付形状与调用实参那一站 (cgen_expr_call_arg_emit.inc 的 092r 臂) 同模板:
+                            // 复合字面量取址 = 一个自动存储期的指针槽, 所有权不增不减 (被调方自己 AddRef)。
+                            {
+                                const std::string clsSlotW = cParamClassPtrType(lastP091n);
+                                if (!clsSlotW.empty() && !lastP091n.isByVal
+                                    && !clsPtrIsViewSlot(clsSlotW)) {
+                                    valExpr = "&(" + clsSlotW + "){" + valExpr + "}";
+                                }
+                            }
+                            /* 写方向 String 形参**默认 ByRef** (VB6 参数缺省 ByRef ⇒ C 形参 BSTR*),
+                               调用点必须交一枚自动存储期的 BSTR 槽。实测 ucSlider_2022
+                               Form1.frm:298 `LP1.Caption = ucSlider6.Value` 发成
+                               vb6_LabelPlus_prop_let_Caption(inst, vb6_CStrLong(...)) —— 把 BSTR
+                               值当 BSTR* 传, 被调方 `(*New_Caption)` 把首字符 (wchar_t) 解成指针
+                               再进 vb6_StringToByteArray 的 SysStringLen ⇒ OLEAUT32 AV
+                               0xC0000005 (启动即崩)。与上面工程类指针槽同模板: 复合字面量取址。 */
+                            if (!lastP091n.isByVal && lastP091n.type == Vb6Type::String) {
+                                valExpr = "&(BSTR){" + valExpr + "}";
+                            }
                         }
                         // Fix 158h: 属性 Let/Set 写方向的**入口参数** (Optional ByRef
                         // After 等前置参数) 缺失 → 生成的 prop_let_ 调用 C2198 参数太少
@@ -306,6 +331,13 @@
                             ? std::string()
                             : legacyViewSetterCallExpr(objExpr, maExpr.memberName, valExpr, wantLet091n,
                                                        ProcKind::PropertyLet);
+                        // 账 #305 (R4 收口): legacy 那位答空时问新式那一臂 —— R4 之后同一枚
+                        // 接口变量是薄指针 (vb6_ivref_<I>*)，legacy 名册永远答空，不补这一问就
+                        // 落回 `vb6_<I>_prop_let_<M>(x, v)` (C2440)。
+                        if (vSet091n.empty()) {
+                            vSet091n = ivrefViewSetterCallExpr(objExpr, maExpr.memberName, valExpr,
+                                                               ProcKind::PropertyLet, {}, node.value.get());
+                        }
                         if (!vSet091n.empty()) {
                             c_.emitLine(vSet091n + ";  /* Property Let (视图直槽) */");
                         } else {
@@ -333,7 +365,7 @@
         {
             bool isLocalTarget = knownLocalVars_.count(tgtLower);
             if (!isLocalTarget && currentProc_) {
-                for (const auto& p : currentProc_->params) {
+                for (const auto& p : currentProc_->P().params) {
                     std::string pLower = p.name;
                     std::transform(pLower.begin(), pLower.end(), pLower.begin(), ::tolower);
                     if (pLower == tgtLower) { isLocalTarget = true; break; }
@@ -401,8 +433,8 @@
                     // (Fix 158h 教训), external 符号维持原发射不介入.
                     if (isClassModule_ && !propSym->isExternal
                         && propSym->kind == SymbolKind::PropertyLet
-                        && !propSym->params.empty()) {
-                        valExpr = packLetValueArg(propSym->params.back(),
+                        && !propSym->P().params.empty()) {
+                        valExpr = packLetValueArg(propSym->P().params.back(),
                                                   node.value.get(), valExpr);
                     }
                     c_.emitLine(funcName + (isClassModule_ ? "((void*)me, " : "(") + valExpr + ");  /* Property Let/Set (bare) */");
@@ -439,7 +471,7 @@
             && !knownLocalVars_.count(tgtLower)) {
             bool bareParamShadow329 = false;
             if (currentProc_) {
-                for (const auto& p : currentProc_->params) {
+                for (const auto& p : currentProc_->P().params) {
                     std::string pLower329 = p.name;
                     std::transform(pLower329.begin(), pLower329.end(), pLower329.begin(), ::tolower);
                     if (pLower329 == tgtLower) { bareParamShadow329 = true; break; }
@@ -567,10 +599,16 @@
             // 不合（非视图 / 那一席没有 / Set 档 / 类型不同型 / 打包器无单一对应）就保留
             // 下面那一发原样 = 仍红，不掩盖。
             Vb6Type tier181 = Vb6Type::Empty;
-            const std::string vWith181 = comVbTypeForPackFn(packFn, tier181)
+            std::string vWith181 = comVbTypeForPackFn(packFn, tier181)
                 ? legacyViewSetterCallExpr(tempVar, wmExpr.memberName, valExpr, mapType(tier181),
                                                   ProcKind::PropertyLet)
                 : std::string();
+            // 账 #305 (R4 收口): With 载体的新式那一档 —— 临时量已按视图登记进
+            // knownIvrefVars_ (cgen_with.cpp)，这里问同一张名册。
+            if (vWith181.empty()) {
+                vWith181 = ivrefViewSetterCallExpr(tempVar, wmExpr.memberName, valExpr,
+                                                   ProcKind::PropertyLet, {}, node.value.get());
+            }
             if (!vWith181.empty()) {
                 c_.emitLine(vWith181 + ";  /* Property Let (视图直槽, With) */");
                 return;
@@ -628,8 +666,8 @@
                     // packLetValueArg 现在对**按值具体类型形参 ← Variant 实参**也解箱
                     // (见 cgen_util_comwrite.cpp), 其余形状原样返回 ⇒ 无条件调用与
                     // 旧行为逐字等价, 只多出解箱那一档。
-                    if (letPropSym && !letPropSym->params.empty()) {
-                        lastExpr_ = packLetValueArg(letPropSym->params.back(),
+                    if (letPropSym && !letPropSym->P().params.empty()) {
+                        lastExpr_ = packLetValueArg(letPropSym->P().params.back(),
                                                     node.value.get(), lastExpr_);
                     }
                     // Fix <VBFlexGridDemo>: With 块这条 prop_let_ 与上面 Fix 158h 那条
@@ -694,8 +732,8 @@
                     // CommandButtonW.c:2955, OptionButtonW.c:2594, Pager.c:1836,
                     // UpDown.c:1930, PagerForm.c:187 …)。复用同一把尺 packLetValueArg,
                     // ByRef 槽的 `&(T){...}` / `&(vb6_VARIANT){...}` 也由它给。
-                    if (setPropSym && !setPropSym->params.empty()) {
-                        lastExpr_ = packLetValueArg(setPropSym->params.back(),
+                    if (setPropSym && !setPropSym->P().params.empty()) {
+                        lastExpr_ = packLetValueArg(setPropSym->P().params.back(),
                                                     node.value.get(), lastExpr_);
                     }
                     c_.emitLine(setFn + "(" + tempVar + ", " + lastExpr_ + ");  /* With class prop_set_ (fallback) */");
@@ -904,6 +942,14 @@
             emitExpr(*node.value);
             std::string valExpr = std::move(lastExpr_);
             std::string packFn = comPackExpr(*node.value);
+            // 与上面「Input 字段写」同一出口 (Fix 092m / 账 #260): 右值整枚是
+            // COM/typed-COM 成员读时必须先消费 COM 标记 —— 否则 lastExpr_ 只含
+            // 对象本体, 属性名整体丢失 = 编译通过但语义错, 且标记泄漏到下一条语句。
+            // 实测 ucSlider.ctl `Property Set Font`: `With UserControl.Font` 的
+            // `.Name = New_Font.Name` 被发成 `vb6_ComPackValue((*New_Font))` —
+            // UserControl.Font.Name 被写成对象指针, 随后 vb6_uc_fontLogFontImpl 的
+            // `wcslen(f->Name)` 崩溃 (0xC000041D)。
+            valExpr = comMarkerValueForWrite(packFn, valExpr);
             // Fix <vbeclipse> 2026-10-12: 同 `/* COM SetProp */` 那一支 —— 右值是
             // COM 调用结果时先拆堆 VARIANT* (见 comUnpackForPack)。
             valExpr = comUnpackForPack(packFn, valExpr);

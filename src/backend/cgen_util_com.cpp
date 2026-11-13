@@ -100,8 +100,8 @@ CCodeGen::ComSigView CCodeGen::comSigViewOf(const Symbol* comSym,
                                             const std::string& memberName) const {
     ComSigView sv;
     if (!comSym) return sv;
-    auto it = comSym->comMethods.find(Symbol::toLower(memberName));
-    if (it == comSym->comMethods.end()) return sv;
+    auto it = comSym->P().comMethods.find(Symbol::toLower(memberName));
+    if (it == comSym->P().comMethods.end()) return sv;
     sv.found = true;
     sv.isGet = it->second.isPropertyGet;
     sv.retCType = mapType(it->second.returnType);
@@ -454,8 +454,8 @@ std::string CCodeGen::classFieldComUnpackHint(const std::string& className,
         const Symbol* cs = kv.second.get();
         if (!cs || cs->kind != SymbolKind::Class) continue;
         if (Symbol::toLower(cs->name) != want) continue;
-        auto it = cs->memberFieldTypes.find(fld);
-        if (it == cs->memberFieldTypes.end()) return "BSTR";
+        auto it = cs->P().memberFieldTypes.find(fld);
+        if (it == cs->P().memberFieldTypes.end()) return "BSTR";
         const std::string tn = Symbol::toLower(it->second);
         if (tn == "string") return "BSTR";
         if (tn == "long" || tn == "integer" || tn == "boolean" || tn == "byte") return "Long";
@@ -480,8 +480,8 @@ std::string CCodeGen::canonicalClassFieldName(const std::string& className,
         if (!cs || cs->kind != SymbolKind::Class) continue;
         if (Symbol::toLower(cs->name) != want
             && Symbol::toLower(cs->sourceModule) != want) continue;
-        auto it = cs->memberFieldNames.find(fld);
-        return (it != cs->memberFieldNames.end()) ? it->second : memberName;
+        auto it = cs->P().memberFieldNames.find(fld);
+        return (it != cs->P().memberFieldNames.end()) ? it->second : memberName;
     }
     return memberName;
 }
@@ -674,7 +674,7 @@ bool CCodeGen::isOwnClassField(const std::string& memberName) const {
         if (!cs || cs->kind != SymbolKind::Class) continue;
         if (Symbol::toLower(cs->name) != want
             && Symbol::toLower(cs->sourceModule) != want) continue;
-        return cs->memberFieldNames.count(fld) > 0;
+        return cs->P().memberFieldNames.count(fld) > 0;
     }
     return false;
 }
@@ -694,7 +694,7 @@ std::string CCodeGen::canonicalClassMemberName(const std::string& className,
         if (!cs || cs->kind != SymbolKind::Class) continue;
         if (Symbol::toLower(cs->name) != want
             && Symbol::toLower(cs->sourceModule) != want) continue;
-        for (const auto& mn : cs->memberNames) {
+        for (const auto& mn : cs->P().memberNames) {
             if (Symbol::toLower(mn) == mem) return mn;
         }
         return memberName;
@@ -747,13 +747,10 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
         {
             CtrlDefaultProp fold256 = ctrlDefaultPropOf(lower);
             if (fold256.folds) {
-                switch (fold256.valueType) {
-                    case Vb6Type::String: case Vb6Type::Integer: case Vb6Type::Long:
-                    case Vb6Type::Boolean: case Vb6Type::Single: case Vb6Type::Double:
-                        return comPackFnForVbType(fold256.valueType);
-                    default:
-                        break;
-                }
+                // 折叠值那六档 → 晚绑定打包器: 问**唯一**那一问 (comPackFnForDefaultPropType),
+                // 不在这里自己 switch 一份 (答案与 UC 默认属性写那一腿必须一致)。
+                std::string packFold = comPackFnForDefaultPropType(fold256.valueType);
+                if (!packFold.empty()) return packFold;
             }
         }
         // 账 #305 §B159 (第五十刀): **数组本体当 COM 实参** —— 这一问必须排在下面那串「已知变量型」
@@ -886,11 +883,19 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
 // ③ 不是数组载体 / Variant / 对象 / 字符串 —— 那几档的写回要动所有权，在册欠项。
 // 返回值 = 完整实参表达式 (空 = 保持改前的按值打包)。
 // 若该标识符是**本过程**的 ByRef 形参，C 侧它已经是 T*，直接交指针，不再取一次地址。
-std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
+std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText,
+                                      bool allowVariantRef) {
     if (expr.kind != ASTNodeKind::IdentifierExpr) return "";
     auto& id = static_cast<const IdentifierExpr&>(expr);
     std::string lower = Symbol::toLower(id.name);
-    if (knownVariantVars_.count(lower) || knownObjectVars_.count(lower)) return "";
+    // 富贵竹 FIX-011 (账 #610 第341刀): Variant 实参从「直接放弃 → 按值打包 →
+    // [out] Variant 写回被丢」改为 —— **只在调用点已确知形参非 ByVal (有 TypeLib
+    // 签名) 时**发 vb6_ComPackVariantRef (VT_BYREF|VT_VARIANT, 服务端直写调用方槽);
+    // 晚绑定无签名那一路 (allowVariantRef=false) 仍按值, 避免把纯入参也变成可写。
+    // 上游实测影响面: GetBoundingBox / GetXData 一族 92 处, 读出参再按 (0)/(1) 取值
+    // 此前一律拿到 Empty (Empty(0)-Empty(0)=0 不抛错, On Error 也不跳)。
+    bool isVariantArg = knownVariantVars_.count(lower) != 0;
+    if (knownObjectVars_.count(lower)) return "";
     // 常量 (Const / Enum 成员) 在 C 侧是 `#define 文本`, `&CONST` 是 C2101 "constant &"
     // (ucTreeView ucScrollbar.c:2612/2617 `vb6_ComPackIntRef(&VALUE_DEF)` 实证);
     // 常量天然不能被写回, 保持按值打包。
@@ -898,6 +903,22 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
         if (cs->kind == SymbolKind::Constant || cs->kind == SymbolKind::EnumMember) return "";
     }
     if (isArrayCarrierArgName(lower, id.name)) return "";
+    // 文本必须是简单左值: 裸标识符 (局部/模块级/类字段 → me->字段) 才算。
+    static const std::regex lvRe("^(?:[A-Za-z_][A-Za-z0-9_]*|me->[A-Za-z_][A-Za-z0-9_]*)$");
+    if (!std::regex_match(argText, lvRe)) return "";
+    bool isByRefParam = false;
+    if (currentProc_ && argText.find("me->") != 0) {
+        for (auto& p : currentProc_->P().params) {
+            if (Symbol::toLower(p.name) == lower && !p.isByVal && !p.isParamArray) {
+                isByRefParam = true;
+                break;
+            }
+        }
+    }
+    if (isVariantArg) {
+        if (!allowVariantRef) return "";
+        return "vb6_ComPackVariantRef(" + (isByRefParam ? argText : "&" + argText) + ")";
+    }
     std::string fn;
     // Integer 必须问专属表: inferExprType 对 Integer 局部/形参答 Long (VB6 表达式提升),
     // 而 C 存储只有 2 字节 —— 按 I4 打写回会越界写 4 字节。
@@ -909,18 +930,6 @@ std::string CCodeGen::comByRefArgExpr(Expr& expr, const std::string& argText) {
         case Vb6Type::Single:  fn = "vb6_ComPackSingleRef"; break;
         case Vb6Type::Double:  fn = "vb6_ComPackDoubleRef"; break;
         default: return "";
-    }
-    // 文本必须是简单左值: 裸标识符 (局部/模块级/类字段 → me->字段) 才算。
-    static const std::regex lvRe("^(?:[A-Za-z_][A-Za-z0-9_]*|me->[A-Za-z_][A-Za-z0-9_]*)$");
-    if (!std::regex_match(argText, lvRe)) return "";
-    bool isByRefParam = false;
-    if (currentProc_ && argText.find("me->") != 0) {
-        for (auto& p : currentProc_->params) {
-            if (Symbol::toLower(p.name) == lower && !p.isByVal && !p.isParamArray) {
-                isByRefParam = true;
-                break;
-            }
-        }
     }
     return fn + "(" + (isByRefParam ? argText : "&" + argText) + ")";
 }
@@ -954,6 +963,27 @@ std::string CCodeGen::comPackFnForVbType(Vb6Type vt) {
         if (e.vt == vt) return e.fn;
     }
     return std::string();   // 这一型在这里答不了，交回调用方兜底
+}
+
+// 账 #256 / 账 #305 (第一百八十一刀补, 第五十六刀): 「一枚**折成默认属性读数**的值该按哪一档
+// 装箱」—— 这一问的**答案**是上面那张配对表 (comPackFnForVbType), 但**问它的地方**有两处:
+//   ① comPackExpr 的「裸控件名折默认属性」那一支 (读侧交出去的那枚值);
+//   ② 工程内 UserControl 默认属性的**写**那一腿 (cgen_util_ctrl.cpp 的 emitUcDefaultPropLet,
+//      写进去的那枚值)。
+// 两处若各自直接问那张表, 同一枚型可能给出两个打包器名 ⇒ 站点与主人各说一遍
+// (第二百四十一刀 V11 把这记成真回归: 走位的第三位消费者绕过了既有权威)。
+// 这里把「折叠值只认这六档」这道闸与那张表合成**一问**, 两处都问它。
+// ⚠ 形状零改动 (逐字节证): 折叠值那六档两处原本就答得一样; 而 UC 默认成员的返回型
+//   (ucDefaultReadPlan) 只放行 Double/Single/Long/Integer/Boolean/String/Date 七档,
+//   其中 Date 不在配对表里 ⇒ 两处都答空串 ⇒ 写那一腿照旧交回 comPackExpr 兜底。
+std::string CCodeGen::comPackFnForDefaultPropType(Vb6Type vt) {
+    switch (vt) {
+        case Vb6Type::String: case Vb6Type::Integer: case Vb6Type::Long:
+        case Vb6Type::Boolean: case Vb6Type::Single: case Vb6Type::Double:
+            return comPackFnForVbType(vt);
+        default:
+            return std::string();   // 不是折叠值那六档 ⇒ 这一档这里答不了
+    }
 }
 
 bool CCodeGen::comVbTypeForPackFn(const std::string& packFn, Vb6Type& out) {

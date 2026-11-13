@@ -19,6 +19,72 @@
         lastExpr_ = "(void*)vb6_UC_Controls()";
         return;
     }
+    // PD: `.ctl` 里的**显式限定** `UserControl.Controls(...)` —— 与上面裸 `Controls(...)`
+    // 同义。二十枚控件的 IsChildInControlArray 都是这一句
+    // (`Not UserControl.Controls(ctlChild.Name) Is ctlChild`)。此前落 M22 宿主伪对象
+    // 兜底，先拼出未声明的 `vb6_UserControl_Controls`，再被调用侧追加实参 ⇒
+    // cl C2063 "not a function"（整编 pdResize.c:277）。这里折成集合单例 + 默认成员 Item，
+    // 调用侧在 cgen_expr_call_com_bind.inc 的 UC-Control 那一格消费。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "usercontrol"
+        && Symbol::toLower(node.memberName) == "controls") {
+        comObjExpr_ = "(void*)vb6_UC_Controls()";
+        comMemberName_ = "Item";
+        isComMarker_ = true;
+        isEarlyBoundCom_ = false;
+        earlyBoundSym_ = nullptr;
+        lastExpr_ = comObjExpr_;
+        return;
+    }
+    // PD: `UserControl.<设计期子控件>.<成员>` —— pdResize.ctl:733/734/736/737 的
+    // `UserControl.cmbWidthUnit.ListIndex = ...`。此前 M22 把接收者拼成
+    // `vb6_UserControl_cmbWidthUnit`（RTL 无此符号 ⇒ C2065, 整编 pdResize.c 799-803），
+    // 而裸写 `cmbWidthUnit.ListIndex` 那条路本来就会发 COM SetProp。这里只把接收者换成
+    // 与裸名相同的控件槽，成员读写继续走外层已有路径。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "usercontrol") {
+        const std::string childLower = Symbol::toLower(node.memberName);
+        auto itChild = knownFormControls_.find(childLower);
+        if (itChild != knownFormControls_.end()) {
+            lastExpr_ = makeCtrlHwndArg(childLower, itChild->second);
+            return;
+        }
+    }
+    // PD-Parent: .ctl 里的裸 `Parent.Controls` —— VB6 的 `Parent` 是宿主容器对象，
+    // `.Controls` 就是**父容器的**控件集合（与 UserControl.ParentControls 同一件事，
+    // 同一枚码头 vb6_UC_ParentControls）。PhotoDemon pdCommandBar.ctl 7 处
+    // `For Each eControl In Parent.Controls`；此前通用路径把裸 `Parent` 拼成
+    // `vb6_Parent_Controls`（未声明符号）并配一条假 VB3001。
+    // 放在裸 `Controls` 那一支之后、其余类感知解析之前，理由与它相同。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "parent"
+        && Symbol::toLower(node.memberName) == "controls") {
+        // 与限定写法同形：交出那枚已同步的兼容全局（host init 里 vb6_uc_syncParentControls
+        // 每轮同步），For Each 发 `vb6_ForEach_Init(vb6_UserControl_ParentControls)`，
+        // `.Count` 一类链式成员由 generic_access 的 ParentControls 那一支换真实访问器。
+        // 不立 COM 标记 —— 集合对象已就绪，再解一层会发出 `...ComGetObjectProp(…, L"Controls")`。
+        isComMarker_ = false;
+        lastExpr_ = "vb6_UserControl_ParentControls";
+        return;
+    }
+    // PD-Parent 语义刀: .ctl 里裸 `Parent` 的**其余成员** (`Parent.Name` /
+    // `Parent.Caption` / `Parent.BackColor` / `Parent.hWnd` …)。
+    // VB6 里 `Parent` 的静态类型是 **Object**(晚绑定), 且真值是**顶层窗体对象** ——
+    // 不是"直接父容器"(那是 `Container`), 也不是 UC 窗口。RTL 那枚
+    // vb6_UC_ParentObject() 交的正是这个口径(GA_ROOT), 宿主模型按名答属性。
+    // 不立这一支的话, 通用路径会把这句当"模块名限定符"拼成 `vb6_Parent_Name`
+    // (RTL 里没有这枚符号 ⇒ C2065), 与 `Parent.Controls` 修前同病。
+    // 放在 `Parent.Controls` 之后: 集合那一支交的是已同步的兼容全局, 不能再解一层。
+    if (isDesignerModule_ && node.object && node.object->kind == ASTNodeKind::IdentifierExpr
+        && Symbol::toLower(static_cast<IdentifierExpr&>(*node.object).name) == "parent") {
+        comObjExpr_ = "(void*)vb6_UC_ParentObject()";
+        comMemberName_ = node.memberName;
+        isComMarker_ = true;
+        isEarlyBoundCom_ = false;
+        earlyBoundSym_ = nullptr;
+        lastExpr_ = "(void*)vb6_UC_ParentObject()";
+        return;
+    }
     // Fix 255: 上一支的**限定写法** —— `PropertyPage.Controls.Add(...)` /
     // `UserControl.Controls.Item(k)`. 上面的判据要求 node.object 是裸 `Controls`
     // 标识符, 而这里 node.object 是 MemberAccessExpr(`PropertyPage`.`Controls`),
@@ -35,6 +101,34 @@
             const std::string hostNameHp = Symbol::toLower(
                 static_cast<IdentifierExpr&>(*midHp.object).name);
             std::string chanDockHp;
+            // 限定写法 `UserControl.Parent.<成员>`：与上面裸 `Parent.<成员>` 同一口径。
+            // `Parent` 的静态类型是 Object(晚绑定)，真值是顶层窗体；成员由宿主模型按名答。
+            // 以前这一形落到通用路径，发成 `vb6_UC_ParentObject().Visible`（对 void* 取
+            // 字段，C2224；整编 pdCommandBar.c / pdCommandBarMini.c 6 条）。
+            //
+            // 例外：hWnd / Icon / Move / BackColor 这四档在 cgen_base.cpp 的
+            // fixupUserControlParentChain 里已有**专用通道**（vb6_UC_ParentHwnd /
+            // vb6_UC_ParentIconHandle / vb6_UC_ParentMove / vb6_Ambient_BackColor，
+            // 都是编译期直答，一处比 COM 派发少两次虚调用，且父窗体未必是 IDispatch）。
+            // 那一层是**写出前**的文本改写，走的仍是 `vb6_UserControl_Parent.<成员>`
+            // 这个中间符号；这里一旦先拦截成 `vb6_UC_ParentObject()`，它就匹配不上了
+            // （czUI 5 行 / ucTreeView 1 行 / ve_units 1 行实测回退）。故这四档不拦。
+            const std::string parentMemberHp = Symbol::toLower(node.memberName);
+            const bool parentDedicatedHp =
+                parentMemberHp == "hwnd" || parentMemberHp == "icon"
+                || parentMemberHp == "move" || parentMemberHp == "backcolor";
+            if (hostNameHp == "usercontrol"
+                && Symbol::toLower(midHp.memberName) == "parent"
+                && !parentDedicatedHp
+                && !knownLocalVars_.count("parent")) {
+                comObjExpr_ = "(void*)vb6_UC_ParentObject()";
+                comMemberName_ = node.memberName;
+                isComMarker_ = true;
+                isEarlyBoundCom_ = false;
+                earlyBoundSym_ = nullptr;
+                lastExpr_ = comObjExpr_;
+                return;
+            }
             if (hostPseudoIsObject(hostNameHp)
                 && hostPseudoChannel(hostNameHp, midHp.memberName, chanDockHp)) {
                 comObjExpr_ = "(void*)" + chanDockHp + "()";
@@ -44,6 +138,25 @@
                 earlyBoundSym_ = nullptr;
                 lastExpr_ = comObjExpr_;
                 return;
+            }
+            // PD: `UserControl.<设计期子控件>.<成员>` —— pdResize.ctl:733/734/736/737
+            // 的 `UserControl.cmbWidthUnit.ListIndex = ...`。内层接收者已在上面的分支
+            // 折成控件槽，但外层若继续走 generic 就会发成
+            // `vb6_hwnd_cmbWidthUnit.ListIndex = 3`（对 void* 取成员，C2224；
+            // 整编 pdResize.c 799-803）。裸写 `cmbResolution.ListIndex` 那条路本来
+            // 就是"控件槽 + COM 成员读写"，这里让限定写法立同一枚标记。
+            if (hostNameHp == "usercontrol") {
+                const std::string childLowerHp = Symbol::toLower(midHp.memberName);
+                auto itCtlHp = knownFormControls_.find(childLowerHp);
+                if (itCtlHp != knownFormControls_.end()) {
+                    comObjExpr_ = makeCtrlHwndArg(childLowerHp, itCtlHp->second);
+                    comMemberName_ = node.memberName;
+                    isComMarker_ = true;
+                    isEarlyBoundCom_ = false;
+                    earlyBoundSym_ = nullptr;
+                    lastExpr_ = comObjExpr_;
+                    return;
+                }
             }
         }
     }
@@ -166,7 +279,13 @@
         // C2065). 常量内联字面量; 函数生成裸 rtl 名 vb6_<member> (去 $ 后缀,
         // 如 VBA.Mid$ → vb6_Mid), 由外层 IndexOrCallExpr 的 Fix 033 回退
         // (lookupModule + lookup 全表) 解析参数表并填充 Optional 默认值.
-        if (_objLower == "vba" || _objLower == "vba5") {
+        // VBA.Math 是 VB6 自带 VBA 类型库里的真实模块（PhotoDemon 的 Math.Log/Abs/Cos）。
+        // 成员是同一批内建函数的限定写法 ⇒ 走与 VBA.<成员> 同一条折叠；成员名单的唯一出口
+        // 在 common/vba_math.hpp（语义层用同一张表拦"未找到方法或数据成员"）。
+        // 名单里刻意没有 fix/int：真 VB6 对 `Math.Fix` 报编译期错误，不是内建折叠。
+        const bool isVbaMath = (_objLower == "math"
+                                && vbaMathMemberNames().count(_memLower) != 0);
+        if (_objLower == "vba" || _objLower == "vba5" || isVbaMath) {
             static const std::unordered_map<std::string, std::string> vbaConsts = {
                 {"vbcr", "13"}, {"vblf", "10"}, {"vbtab", "9"},
                 {"vbnullchar", "vb6_BSTR_FromStrN(L\"\\000\", 1)"}, {"vbnullstring", "vb6_BSTR_FromStr(L\"\")"},
@@ -200,6 +319,14 @@
                 std::string fnLower86 = Symbol::toLower(fnCanon);
                 if (fnLower86 == "rnd") {
                     lastExpr_ = "vb6_Rnd(1)";
+                } else if (auto itB86 = builtinFuncs.find(fnLower86); itB86 != builtinFuncs.end()) {
+                    // 账 #478: RTL 名一律问内置表, 不再用 `"vb6_" + cIdent(...)` **现拼**。
+                    // `Int` 是 C 关键字 (cgen_base_naming.cpp 的 cKeywords), cIdent("Int") 先
+                    // 转成 `vb6_Int`, 再被这里拼一次前缀 ⇒ `vb6_vb6_Int` ⇒ `VBA.Int(1.7)`
+                    // LNK2019。`VBA.Fix` 只是恰好因为 "Fix" 不是关键字、cIdent 原样返回才名对。
+                    // 表里其余名字两种拼法逐字节相同, 所以这一改只动 Int 一格。
+                    lastExpr_ = itB86->second;
+                    if (vbaZeroArgFns.count(fnLower86)) lastExpr_ += "()";
                 } else if (vbaZeroArgFns.count(fnLower86)) {
                     lastExpr_ = "vb6_" + cIdent(fnCanon) + "()";
                 } else {

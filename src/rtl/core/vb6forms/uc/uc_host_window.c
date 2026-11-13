@@ -27,9 +27,9 @@ extern "C" {
 // 实测 (tests/Charts 2020): LabelPlus3 的 BackColorOpacity=0 只画文字, 之前宿主
 // 拿 ambient 灰 (Form2.BackColor=E5E5E5) 铺满整块 ⇒ 白色卡片 LabelPlus2 被盖成灰。
 // ---------------------------------------------------------------------------
-static void vb6_uc_fillAmbient(HDC dc, int32_t w, int32_t h) {
+static void vb6_uc_fillAmbient(HDC dc, int32_t w, int32_t h, int32_t oleAmbient) {
     RECT full = { 0, 0, w, h };
-    COLORREF cref = vb6_ColorToColorRef(vb6_Ambient_BackColor);
+    COLORREF cref = vb6_ColorToColorRef(oleAmbient);
     HBRUSH b = CreateSolidBrush(cref);
     FillRect(dc, &full, b);
     DeleteObject(b);
@@ -102,7 +102,11 @@ static HFONT vb6_uc_fontHFontFor(const void* fontPtr, int16_t bold, int16_t unde
     scratch = *f;                      /* 只改两档, 不污染共享 Font 对象 */
     scratch.Bold = bold ? -1 : 0;
     scratch.Underline = underline ? -1 : 0;
-    vb6_UC_FontLogFont(&scratch, vb6_DpiY(), NONANTIALIASED_QUALITY, &lf);
+    /* 质量档 = DEFAULT_QUALITY: VB6 的 `UserControl.Font` 是普通 StdFont, 交给 GDI 按
+       系统设置平滑 (本机 ClearType)。以前这里写死 NONANTIALIASED ⇒ 节点文字是全硬边
+       (实测真 VB6 "Human Resources" 一带 sat>=60 有 321 px、maxSat=112, C3 全是
+       sat<=14、maxSat=9), 五窗 vivid/photo/avatar 因此系统性偏少。 */
+    vb6_UC_FontLogFont(&scratch, vb6_DpiY(), DEFAULT_QUALITY, &lf);
     {
         HFONT hf = CreateFontIndirectW(&lf);
         if (hf && vb6_ucHfCacheN < VB6_UC_HF_CACHE_MAX) {
@@ -118,6 +122,31 @@ static HFONT vb6_uc_fontHFontFor(const void* fontPtr, int16_t bold, int16_t unde
    WM_PAINT 里是 r->hdc; 事件/度量里是 AutoRedraw 持久表面 (UserControl.hDC 就是它)。
    两处都必须落到, 否则 `Set UserControl.Font` 只在 paint 里生效 —— 而 ucTreeView
    的 Draw/度量全发生在事件里, 于是主文本/子文本一直用 ambient 字体。 */
+/* VB6 的 `UserControl.Font` / `FontBold` 改的是**控件窗口**的字体 (WM_GETFONT 读回的
+   就是它); C3 以前只把字体选进绘图 DC, 窗口字体一直停在创建时的设计值 —— 参考产物
+   Form3/Form5 读回 Segoe UI/-16/700 (最后一次 Draw 的 FontBold 状态), C3 却读回
+   ambient 8.25pt/400。这里把同一份字体发到窗口; 句柄所有权仍交既有的
+   `vb6_SetControlFontFromLogFont` (它自带「只删我们自己造的那张」的账, 不能把缓存
+   句柄直接递给 WM_SETFONT)。相同字体不重复发 —— 否则每个节点一次 InvalidateRect。 */
+static void vb6_uc_syncHostFont(HFONT hf) {
+    HWND hwnd = vb6_ucCurrent ? (HWND)vb6_ucCurrent->hwnd : NULL;
+    LOGFONTW want, cur;
+    HFONT hCur;
+    if (!hwnd || !hf) return;
+    if (!GetObjectW((HGDIOBJ)hf, sizeof(want), &want)) return;
+    /* 只许读那一格存储 (vb6_ControlFontStored), 不许裸问 WM_GETFONT ——
+       本类自己答那一问 (case WM_GETFONT), 裸问等于第二处口径 (check_control_dc D11)。 */
+    hCur = vb6_ControlFontStored(hwnd);
+    if (hCur && GetObjectW((HGDIOBJ)hCur, sizeof(cur), &cur)
+        && cur.lfHeight == want.lfHeight && cur.lfWeight == want.lfWeight
+        && cur.lfItalic == want.lfItalic && cur.lfUnderline == want.lfUnderline
+        && cur.lfCharSet == want.lfCharSet
+        && wcscmp(cur.lfFaceName, want.lfFaceName) == 0) {
+        return;
+    }
+    vb6_SetControlFontFromLogFont(hwnd, &want);
+}
+
 static void vb6_uc_applyFontNow(void) {
     HFONT hf;
     HDC dc;
@@ -129,6 +158,7 @@ static void vb6_uc_applyFontNow(void) {
     hf = vb6_uc_fontHFontFor(vb6_UserControl_Font, vb6_UserControl_FontBold,
                              vb6_UserControl_FontUnderline);
     if (hf && dc) SelectObject(dc, hf);
+    vb6_uc_syncHostFont(hf);
 }
 
 void vb6_UC_SetFont(void* font) {
@@ -168,14 +198,25 @@ void vb6_UC_ExtenderZOrder(int32_t* value, int32_t hasValue) {
 static void vb6_uc_adEnsure(vb6_UCRec* r) {
     if (!r || !r->hwnd) return;
     RECT rc;
-    GetClientRect(r->hwnd, &rc);
+    /* 宿主窗口销毁后 GetClientRect 失败而 rc 保持未初始化 —— 拿它当尺寸去
+       dibDestroy/dibCreate, 会把最后一次 Draw 画好的持久表面换成一张垃圾表面,
+       此后再怎么 Refresh 都是空白 (见 handoff §51: Contact List 第二次打开)。 */
+    if (!IsWindow((HWND)r->hwnd) || !GetClientRect((HWND)r->hwnd, &rc)) {
+        if (getenv("C3_AD_TRACE")) {
+            fprintf(stderr, "[AD-skip] type=%s hwnd=%p win=%d\n",
+                    r->desc ? r->desc->typeName : "?", (void*)r->hwnd,
+                    (int)IsWindow((HWND)r->hwnd));
+            fflush(stderr);
+        }
+        return;
+    }
     int32_t w = rc.right - rc.left, h = rc.bottom - rc.top;
     if (w <= 0 || h <= 0) return;
     if (r->adSurf.memDC && r->adSurf.w == w && r->adSurf.h == h) return;
     vb6_uc_dibDestroy(&r->adSurf);
     vb6_uc_dibCreate(&r->adSurf, NULL, w, h);
     if (r->adSurf.memDC) {
-        vb6_uc_fillAmbient(r->adSurf.memDC, w, h);
+        vb6_uc_fillAmbient(r->adSurf.memDC, w, h, r->ambientBack);
         /* VB6 的 hDC 默认 TRANSPARENT (GDI 新 DC 的默认是 OPAQUE + 白底), 且文本色
            跟着 UserControl.ForeColor。AutoRedraw 的绘制全发生在这张持久表面上,
            少这一步就会把每个字画成白底方块。 */
@@ -183,8 +224,8 @@ static void vb6_uc_adEnsure(vb6_UCRec* r) {
         SetTextColor(r->adSurf.memDC, vb6_uc_resolve_color(vb6_UserControl_ForeColor));
     }
     if (getenv("C3_AD_TRACE")) {
-        fprintf(stderr, "[AD-ensure] type=%s w=%d h=%d\n",
-                r->desc ? r->desc->typeName : "?", (int)w, (int)h);
+        fprintf(stderr, "[AD-ensure] type=%s hwnd=%p w=%d h=%d\n",
+                r->desc ? r->desc->typeName : "?", (void*)r->hwnd, (int)w, (int)h);
         fflush(stderr);
     }
 }
@@ -207,7 +248,7 @@ void vb6_uc_autoRedrawSet(vb6_UCRec* r, int32_t on) {
 
 void vb6_uc_autoRedrawCls(vb6_UCRec* r) {
     if (!r || !r->adSurf.memDC) return;
-    vb6_uc_fillAmbient(r->adSurf.memDC, r->adSurf.w, r->adSurf.h);
+    vb6_uc_fillAmbient(r->adSurf.memDC, r->adSurf.w, r->adSurf.h, r->ambientBack);
 }
 
 /* 当前正在绘制的 UC 目标 DC (NULL = 不在绘制中)。见 vb6_UC_SetForeColor。 */
@@ -275,12 +316,12 @@ void vb6_UC_SetMousePointer(int32_t pointer) {
     SetCursor(LoadCursorW(NULL, nm));
 }
 
-static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch) {
+static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch, int32_t ambient) {
     HWND sibs[64];
     int sibCount = 0;
     POINT self = { 0, 0 };
 
-    vb6_uc_fillAmbient(memDC, cw, ch);
+    vb6_uc_fillAmbient(memDC, cw, ch, ambient);
     if (!ClientToScreen(hwnd, &self)) return;
 
     /* 账 <transparency>: 真 VB6 的 UserControl 是 windowless, 控件的半透明填充
@@ -334,9 +375,10 @@ static void vb6_uc_composeBelow(HWND hwnd, HDC memDC, int32_t cw, int32_t ch) {
 static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
                              int32_t cw, int32_t ch, int composeBelow) {
     if (getenv("C3_AD_TRACE")) {
-        fprintf(stderr, "[AD-paint] type=%s cw=%d ch=%d paint=%p rdc=%p\n",
+        fprintf(stderr, "[AD-paint] type=%s cw=%d ch=%d paint=%p rdc=%p cb=%d\n",
                 r && r->desc ? r->desc->typeName : "?", (int)cw, (int)ch,
-                (void*)(r && r->desc ? (void*)r->desc->paint : NULL), (void*)(r ? (void*)r->hdc : NULL));
+                (void*)(r && r->desc ? (void*)r->desc->paint : NULL), (void*)(r ? (void*)r->hdc : NULL),
+                (int)composeBelow);
         fflush(stderr);
     }
     if (!r || !r->desc || !r->desc->paint || cw <= 0 || ch <= 0) return;
@@ -353,7 +395,15 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
 
     vb6_UCDib dib;
     memset(&dib, 0, sizeof(dib));
-    if (!adc) vb6_uc_dibCreate(&dib, target, cw, ch);
+    /* Fix B 2026-11-09: 「透明 UC 且 composeBelow==0」(正被别人 WM_PRINTCLIENT 合成) 这一路
+       **不建离屏 DIB**。那张 DIB 是零初始化的纯黑, 而本控件在这一路只画自己那点内容
+       (两个铺底 if 都不进), 末尾 `BitBlt(target, 0,0, dib.w,dib.h, dib.memDC, ...)` 就会把
+       没画过的黑底整块盖回 target —— 实测 ucSlider1(4) 顶部 221x21 纯黑条 = 上层兄弟宿主
+       (客户区 750..991 x 320..401) 与本控件 (750..981 x 380..471) 的交集, 正是兄弟合成时
+       把这枚透明 UC 画进自己 DIB 的那一路。target 里已经是合成好的下层 (调用方也已按本窗
+       矩形设好 viewport/clip), 直接画进去就是 VB6 windowless 的语义。 */
+    const int directTarget = (transparent && !composeBelow);
+    if (!adc && !directTarget) vb6_uc_dibCreate(&dib, target, cw, ch);
     if (!adc) vb6_uc_selectOwnFont(dib.memDC, hwnd);  /* 账 #305 300: 同上, 非 AutoRedraw 那一档 */
     const int useDib = (dib.memDC && dib.bits);
     HDC dc = adc ? adc : (useDib ? dib.memDC : target);
@@ -382,9 +432,9 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
 
     if (!adc) {
         if (transparent && composeBelow) {
-            if (useDib) vb6_uc_composeBelow(hwnd, dc, cw, ch);
+            if (useDib) vb6_uc_composeBelow(hwnd, dc, cw, ch, r->ambientBack);
         } else if (!transparent) {
-            vb6_uc_fillAmbient(dc, cw, ch);
+            vb6_uc_fillAmbient(dc, cw, ch, r->ambientBack);
         }
         /* 停写 AutoRedraw 之后那张位图当底图贴回去 (VB6 用 Picture=.Image 达到同一效果)。*/
         if (r->adSurf.memDC)
@@ -401,10 +451,11 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
     vb6_uc_trace("paint.end", r->desc->typeName, r->me);
     vb6_uc_pop(&saved);
 
+    int bltOk = 0;
     if (adc) {
-        BitBlt(target, 0, 0, cw, ch, adc, 0, 0, SRCCOPY);
+        bltOk = (int)BitBlt(target, 0, 0, cw, ch, adc, 0, 0, SRCCOPY);
     } else if (useDib) {
-        BitBlt(target, 0, 0, dib.w, dib.h, dib.memDC, 0, 0, SRCCOPY);
+        bltOk = (int)BitBlt(target, 0, 0, dib.w, dib.h, dib.memDC, 0, 0, SRCCOPY);
         // Fix 113h/123: 调试捕获 (C3_UC_DUMPDIR) —— 只在真实 WM_PAINT 路径做,
         // WM_PRINTCLIENT 是被兄弟合成调用的, 重复 dump 会淹没序号。
         const char* dumpDir113h = composeBelow ? getenv("C3_UC_DUMPDIR") : NULL;
@@ -418,6 +469,23 @@ static void vb6_uc_paintInto(HWND hwnd, vb6_UCRec* r, HDC target,
             vb6_uc_dumpFormComposite((HWND)GetAncestor(hwnd, GA_ROOT), dumpDir113h);
         }
         vb6_uc_dibDestroy(&dib);
+    }
+    /* 诊断刀 (C3_AD_TRACE): 把「DIB -> 窗口表面」这一步的每个可失败点摊开 ——
+       blt=0 表示 BitBlt 本身失败 (target 为 NULL / 无效); clip= 是 BeginPaint 给的
+       裁剪框 (全 0 => 更新区为空, 画了也被裁掉); px= 是 BitBlt 之后从 target 回读的
+       像素 (COLORREF 序 = 0x00BBGGRR, 0xFFFFFF = 纯白 = 只有 ambient)。 */
+    if (getenv("C3_AD_TRACE")) {
+        RECT cbox = { -1, -1, -1, -1 };
+        COLORREF px = 0xFFFFFFFF;
+        if (target) {
+            GetClipBox(target, &cbox);
+            px = GetPixel(target, 1, 1);
+        }
+        fprintf(stderr, "[AD-blit] type=%s blt=%d target=%p clip=%d,%d,%d,%d px=%06X adc=%p dib=%p\n",
+                r && r->desc ? r->desc->typeName : "?", bltOk, (void*)target,
+                (int)cbox.left, (int)cbox.top, (int)cbox.right, (int)cbox.bottom,
+                (unsigned)px, (void*)adc, (void*)(useDib ? dib.memDC : NULL));
+        fflush(stderr);
     }
     r->hdc = NULL;
     vb6_uc_activePaintDC = prevPaintDC;
@@ -511,7 +579,20 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 case WM_RBUTTONDOWN: hook = r->desc->mouseDown;  button = 2; break;
                 case WM_LBUTTONUP:   hook = r->desc->mouseUp;    button = 1; break;
                 case WM_RBUTTONUP:   hook = r->desc->mouseUp;    button = 2; break;
-                case WM_MOUSEMOVE:   hook = r->desc->mouseMove;  button = 0; break;
+                /* 账 #609: MouseMove 的 Button 形参在 VB6 里是"当前按住的键状态"
+                 * (1=左 2=右 4=中), 不是"哪个键触发了本条消息"。这里原来写死 0,
+                 * 于是 `If Button = vbLeftButton Then` 形态的拖动代码 (ucSlider 的
+                 * UserControl_MouseMove) 永远进不去 —— 按在轨道上能跳值 (MouseDown
+                 * 里直接调了一次 MouseMove, Button=1), 按住旋钮拖却纹丝不动
+                 * (实测: 真 VB6 拖 150px 旋钮上移 187px, 旧 C3 产物 0px)。
+                 * wParam 的 MK_* 就是这个状态, 直接映射。*/
+                case WM_MOUSEMOVE: {
+                    hook = r->desc->mouseMove;
+                    if (wParam & MK_LBUTTON) button |= 1;
+                    if (wParam & MK_RBUTTON) button |= 2;
+                    if (wParam & MK_MBUTTON) button |= 4;
+                    break;
+                }
             }
             if (!hook) break;
             // 捕获鼠标, 保证按下后拖出窗口仍能收到 UP/MOVE (VB6 隐式行为)
@@ -574,12 +655,36 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             break;
         }
         case WM_PAINT: {
-            if (!r || !r->ready) break;
-            if (!r->desc || !r->desc->paint) break;
+            if (!r || !r->ready) {
+                if (getenv("C3_AD_TRACE")) {
+                    fprintf(stderr, "[AD-pm] type=%s SKIP not-ready\n",
+                            r && r->desc ? r->desc->typeName : "?");
+                    fflush(stderr);
+                }
+                break;
+            }
+            if (!r->desc || !r->desc->paint) {
+                if (getenv("C3_AD_TRACE")) {
+                    fprintf(stderr, "[AD-pm] type=%s SKIP no-paint\n",
+                            r->desc ? r->desc->typeName : "?");
+                    fflush(stderr);
+                }
+                break;
+            }
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
             RECT crc;
             GetClientRect(hwnd, &crc);
+            /* 诊断刀: BeginPaint 的返回值 (NULL = 无更新区/窗口不可见 => 画了也白搭)、
+               更新区矩形 (全 0 = 空更新区)、父窗口与可见性, 一次摊开。 */
+            if (getenv("C3_AD_TRACE")) {
+                fprintf(stderr, "[AD-pm] type=%s hdc=%p parent=%p rc=%d,%d,%d,%d vis=%d\n",
+                        r->desc->typeName, (void*)hdc, (void*)GetParent(hwnd),
+                        (int)ps.rcPaint.left, (int)ps.rcPaint.top,
+                        (int)ps.rcPaint.right, (int)ps.rcPaint.bottom,
+                        (int)IsWindowVisible(hwnd));
+                fflush(stderr);
+            }
             vb6_UC_PaintEnter();
             vb6_uc_paintInto(hwnd, r, hdc,
                              (int32_t)(crc.right - crc.left),
@@ -602,13 +707,21 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             return 0;
         }
         case WM_ERASEBKGND:
+            /* 诊断刀: 擦底色这一步会把整块客户区刷成 ambient (白) —— 判据抓到的
+               「宿主矩形纯白」就可能是它干的 (真因是它之后的那次 paint 没落上)。 */
+            if (getenv("C3_AD_TRACE")) {
+                fprintf(stderr, "[AD-erase] type=%s ready=%d ambient=%08X\n",
+                        r && r->desc ? r->desc->typeName : "?", r ? (int)r->ready : 0,
+                        r ? (unsigned)r->ambientBack : 0u);
+                fflush(stderr);
+            }
             if (r && r->ready) {
                 /* 账 #492: 透明 UC 不擦背景 —— 一擦就是一块 ambient 灰, WM_PAINT
                    里的合成会覆盖它, 中间那一帧在屏幕上就是灰闪。*/
                 if (!r->desc || !r->desc->transparent) {
                     // 用容器底色填充, 避免重绘闪烁 (固定白色会在深色 UI 上闪白)
                     RECT rc; GetClientRect(hwnd, &rc);
-                    COLORREF cref = vb6_ColorToColorRef(vb6_Ambient_BackColor);
+                    COLORREF cref = vb6_ColorToColorRef(r->ambientBack);
                     HBRUSH b = CreateSolidBrush(cref);
                     FillRect((HDC)wParam, &rc, b);
                     DeleteObject(b);
@@ -659,6 +772,9 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
                 r->desc->terminate(r->me);
                 vb6_uc_pop(&saved);
             }
+            // §51: 宿主销毁后替身记录必须摘掉 —— 留着会被 vb6_uc_findByInstance
+            // 在下次打开时先扫到 (堆地址复用), 新实例的画全落到这张死表面上。
+            if (r) vb6_uc_releaseHost((void*)hwnd);
             break;
         default:
             break;

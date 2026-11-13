@@ -149,7 +149,8 @@
                     std::string weVarName = (itOrig != knownWithEventsCtrlOrigNames_.end()) ? itOrig->second : cName;
                     lastExpr_ = fold256.readFn + "(" + weVarName + ")  /* WithEvents ctrl default prop: ." + std::string(fold256.prop) + " */";
                 } else {
-                    lastExpr_ = fold256.readFn + "(" + makeCtrlHwndArg(lower, fold256.ctrlType) + ")  /* default prop: ." + std::string(fold256.prop) + " */";
+                    // 读数发码收在 ctrlDefaultReadExpr（控件数组元素那一档共用同一出口）。
+                    lastExpr_ = ctrlDefaultReadExpr(lower, makeCtrlHwndArg(lower, fold256.ctrlType));
                 }
                 return;
             }

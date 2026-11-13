@@ -150,6 +150,24 @@ void* vb6_ComPackDoubleRef(double* p) {
     return (void*)pv;
 }
 
+/* 富贵竹 FIX-011/012 (账 #610 第341刀): Variant 出参按引用打包 —— 五档标量 Ref 族
+ * 缺的第六档。调用方槽是 vb6_VARIANT, 与 Windows VARIANT 同布局
+ * (vb6rtl_variant.h rev11), pvarVal 直接指它。FIX-012 闭环: 递出前先调
+ * vb6_VariantComSlotToRealArray 把槽里上一次调用留下的 C3 一维描述符换回
+ * 真 SAFEARRAY —— 服务端覆写出参前 VariantClear(槽) 是按 oleaut32 自家布局
+ * 行事的, 描述符递出去 = SafeArrayDestroy(垃圾) + double 数据区被当 BSTR
+ * 指针逐个 SysFreeString (描述符 fFeatures 的 FADF_BSTR 位是置起的)。 */
+void* vb6_ComPackVariantRef(void* pVar) {
+    VARIANT* pv;
+    vb6_VariantComSlotToRealArray(pVar);
+    pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    if (!pv) return NULL;
+    VariantInit(pv);
+    pv->vt = VT_BYREF | VT_VARIANT;
+    pv->pvarVal = (VARIANT*)pVar;
+    return (void*)pv;
+}
+
 // Fix 104: 将"省略的实参"封装为 VARIANT (VT_ERROR + DISP_E_PARAMNOTFOUND).
 // VB6 对 IDispatch 调用省略实参时 (obj.Method a, , c) 传的正是该值, 接收方据此
 // 把"未提供"与"显式传 0/空串"区分开. 直接丢弃省略实参会让后续实参前移 (参数错位).
@@ -276,4 +294,30 @@ void vb6_ComVarClear(void* variant) {
 void vb6_ComVarFree(void* variant) {
     if (!variant) return;
     free(variant);  // 不调用VariantClear, 对象引用已转移给调用方
+}
+
+/* ucTreeView (2026-11-06): `X Is <晚绑定调用结果>` 的身份出口。
+ * vb6_ComCall / vb6_ComCallByDispid 交回的是**堆上 VARIANT*** (VT_DISPATCH),
+ * 里面装的是 vb6_ComObject 包装器; 而 `Is` 的另一侧是裸实例指针。两档地址直接
+ * `==` 恒假 (实测 Node.cls 单选段 4 条判断全 eq=0)。
+ * 这里做三件事, 顺序不可换:
+ *   ① vb6_ComUnpackObject: 宿主包装器 (字体/集合/UC 实例) 还原成宿主对象;
+ *   ② vb6_ComObject_UnboxVb6Instance: 工程类包装器还原成裸实例 (非包装器原样交回);
+ *   ③ 收回调用结果那枚堆块 (VariantClear 放掉它持有的那一个引用, 集合仍持有自己那份)。
+ * 用函数而不用宏: 三条的顺序与"只做一次"必须由 RTL 钉住。 */
+void* vb6_ComResultIdentity(void* variant) {
+    extern void* vb6_ComObject_UnboxVb6Instance(void* v);
+    void* obj;
+    if (!variant) return NULL;
+    obj = vb6_ComUnpackObject(variant);
+    obj = vb6_ComObject_UnboxVb6Instance(obj);
+    vb6_ComVarClear(variant);
+    return obj;
+}
+
+/* 已拆封的 object 视图 (vb6_ComCallObject / vb6_ComGetObjectProp 的结果) 只差
+ * "工程类包装器 → 裸实例"这一步; 堆块与引用由调用点自己管, 这里不收回。 */
+void* vb6_ComObjectUnbox(void* obj) {
+    extern void* vb6_ComObject_UnboxVb6Instance(void* v);
+    return vb6_ComObject_UnboxVb6Instance(obj);
 }

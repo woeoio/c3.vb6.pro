@@ -96,7 +96,9 @@ double vb6_Sqr(double x);
 double vb6_Round(double x, int32_t decimals);
 // Fix 117: VB6 默认数值→字符串 (最短往返表示; Single 最多 7 位有效数字)
 BSTR vb6_NumToBSTRDefault(double v, int isSingle);
-float vb6_Rnd(int32_t seed);
+// Fix RND-SEQ: 与 VB6 逐值一致 (24-bit LCG + Randomize 折半 XOR)。seed 收 double:
+//   有参 Randomize 取 double 高 32 位; Rnd(<0) 取 (float)seed 的位型; Rnd(0) 不推进。
+float vb6_Rnd(double seed);
 
 // 转换函数
 int16_t vb6_CInt(double x);
@@ -325,6 +327,7 @@ double vb6_Exp(double x);
 double vb6_Fix(double x);
 double vb6_Int(double x);
 void vb6_Randomize(double seed);
+void vb6_RandomizeTimer(void);   // Fix RND-SEQ: 裸 Randomize (Timer 的 Single 位型)
 float vb6_Rnd_Full(int32_t seed);
 
 // 日期时间函数
@@ -435,6 +438,31 @@ extern void* vb6_Screen_MouseIcon;         // Fix <vbeclipse>: Screen.MouseIcon 
 void*  vb6_Printer_hDC(void);
 void*  vb6_Printers_Collection(void);
 
+// C2224 Printer/Printers 数据属性族 (PhotoDemon Printing.bas / File_PrintXP.frm):
+//   VB6 里 `Printers(i)` 返回 Printer 对象, `.DeviceName`/`.Port`/`.Copies`/
+//   `.PrintQuality` 是**数据属性**而不是方法。RTL 没有真 IDispatch 可绑, 于是:
+//   · 集合元素按**结构体值**返回 ⇒ `Printers(i).DeviceName` 就是普通成员读 (`.` 合法);
+//   · 默认打印机那四个属性走独立存取器。
+//   空集合 (尚未 EnumPrinters) ⇒ 元素字段给空串/当前全局设置, 只为形状与语义默认值正确。
+typedef struct vb6_PrinterInfo {
+    BSTR    DeviceName;
+    BSTR    Port;
+    int32_t Copies;
+    int32_t PrintQuality;
+} vb6_PrinterInfo;
+
+int32_t         vb6_Printers_Count(void);
+vb6_PrinterInfo vb6_Printers_Item(int32_t index);
+BSTR    vb6_Printer_DeviceName(void);
+BSTR    vb6_Printer_Port(void);
+int32_t vb6_Printer_Copies(void);
+void    vb6_Printer_SetCopies(int32_t copies);
+int32_t vb6_Printer_PrintQuality(void);
+void    vb6_Printer_SetPrintQuality(int32_t quality);
+// File_PrintXP.frm:422/423 的 `Me.ScaleX(Printer.Width, Printer.ScaleMode, vbInches)` ——
+// 源量纲 (Width/Height 是 twips, 与 VB6 默认 ScaleMode = 1 一致)。全语料无写入点。
+int32_t vb6_Printer_ScaleMode(void);
+
 // P18-C: Forms 集合
 int32_t vb6_Forms_Count(void);
 void*  vb6_Forms_Item(int32_t index);  // 0-based
@@ -506,7 +534,10 @@ BSTR   vb6_StrConvFromByteArray(struct vb6_SafeArray1D* arr, int32_t conversion,
 BSTR   vb6_ByteArrayToString(struct vb6_SafeArray1D* arr);
 void*  vb6_SafeArrayDataPtr(struct vb6_SafeArray1D* arr);
 struct vb6_SafeArray1D* vb6_Filter(struct vb6_SafeArray1D* source, BSTR match, int32_t include, int32_t compare);
-void*    vb6_StrPtr(BSTR s);          // StrPtr: address of string data
+// StrPtr: BSTR 的数据地址。只有 NULL(vbNullString) 答 0; 零长但真实的 BSTR (`s = ""`) 答非 0
+// —— VB6 里 `StrPtr(vbNullString)=0, StrPtr("")!=0` 是唯一区分"空串/null 串"的手段
+// (BalloonTooltips: `SetWindowTheme hTT, StrPtr(sEmpty), StrPtr(sEmpty)` 靠它关视觉样式).
+void*    vb6_StrPtr(BSTR s);
 // 账 #305 §B180 (第六十九刀): StrPtr 收**整枚槽**那一档 —— vt 已是串时**借**槽里那枚 BSTR，
 // 不再像 `vb6_StrPtr(vb6_VariantToString(v))` 那样每调用现造一枚没人回收的临时串。
 // 发码侧由 arg_variant (撤回解包) 与 builtin_fixup (改 callee 名) 两站同归一处新问句决定，

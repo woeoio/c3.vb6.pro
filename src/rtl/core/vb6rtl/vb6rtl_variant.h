@@ -125,6 +125,21 @@ static inline vb6_VARIANT vb6_VariantNull(void) {
     return v;
 }
 
+/* ucTreeView (2026-11-06): VB6 的 **Missing** —— `Optional As Variant` 实参省略时由
+ * 调用方交进来。VarType(Missing) = vbError(10), 槽里是 DISP_E_PARAMNOTFOUND。
+ * 这是 VB6 代码区分"实参没给"与"给了个空值 (Empty/Null)"的**唯一公开手段**:
+ *   If Not VarType(N.Image) = vbError Then ...      ' 有图标才画
+ * 生成侧以前在省略位填 vb6_VariantEmpty() ⇒ 上面那条判断在 C3 里整族翻面
+ * (ucTreeViewPlus 展开时拿 SelectedImage 作画 ⇒ icon 丢失; 文本宽度也少算
+ * ImageList 宽 ⇒ 文字被裁)。lVal 与 Windows VARIANT 的 scode 是同一格。 */
+static inline vb6_VARIANT vb6_VariantMissing(void) {
+    vb6_VARIANT v;
+    memset(&v, 0, sizeof(v));
+    v.vt = vb6_vtError;
+    v.lVal = (int32_t)0x80020004;   /* DISP_E_PARAMNOTFOUND */
+    return v;
+}
+
 static inline vb6_VARIANT vb6_VariantInt(int16_t val) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
     v.vt = vb6_vtInteger; v.iVal = val; return v;
@@ -396,6 +411,25 @@ void vb6_ArraySlotWriteBack(VARIANT *client, void *slot);
 /* 账 #305 §B223(第二百三十三刀): ByRef 标量形参的出站回写(数值/布尔那几档)。
  * 同样必须在 vb6_VariantSlotRelease **之前**调用；BSTR/对象/Variant 三档不猜。 */
 void vb6_ByRefScalarWriteBack(VARIANT *client, void *slot);
+
+/* 富贵竹 FIX-011/012 (账 #610 第341刀): [out] VARIANT 出参槽 ↔ C3 描述符 的两向适配。
+ *
+ * 读侧 (FIX-011): 服务端 (AutoCAD GetBoundingBox 一族) 往槽里写的是**真 SAFEARRAY**
+ *   (oleaut32 自家布局), 而本仓的数组槽是 C3 自有描述符 (fFeatures=0xA1D1) ⇒ 读之前
+ *   要归一化。vb6_SlotHasRealSafeArray 回答「槽里挂的是不是真 SAFEARRAY」(判据与
+ *   vb6_SaIs1D 同源); vb6_VariantNormalizeComSlot 就地把真 SAFEARRAY 换成 C3 描述符。
+ *   vb6_VariantArrayGet / vb6_VariantArrayGetND 入口各有一道**惰性兜底**(万一某条路
+ *   没走收尾函数, 读的时候也能自愈)。
+ * 写侧 (FIX-012 闭环): 下一次把槽递回服务端前, 要先把 C3 描述符换回真 SAFEARRAY,
+ *   否则服务端覆写出参前的 VariantClear 会把描述符当真 SAFEARRAY SafeArrayDestroy,
+ *   且描述符 fFeatures 里 FADF_BSTR 位是置起的 ⇒ double 数据区被当 BSTR 指针逐个
+ *   SysFreeString ⇒ 堆损坏 / Invoke 静默失败。该方向的换手在 vb6com.h
+ *   (vb6_VariantComSlotToRealArray), 因为递出点在 vb6com_pack.c。
+ *
+ * ⚠ 这两个声明**必须在本头**: vb6rtl_com.c 里的 vb6_VariantArrayGet 会调它们,
+ *   缺原型 ⇒ C4013 隐式声明 (返回 int 截断指针, x64 崩雷)。 */
+int vb6_SlotHasRealSafeArray(void* pVar);
+void vb6_VariantNormalizeComSlot(void* pVar);
 
 /* 账 #305 §B219(第二百二十刀): 入站实参「这一槽声明的是什么档」的那一问，值域就两样：
  * 一个真 VARTYPE(要换算到它)，或 VB6_ARGVT_SKIP(这一格本刀不问，槽里保持纯借用)。

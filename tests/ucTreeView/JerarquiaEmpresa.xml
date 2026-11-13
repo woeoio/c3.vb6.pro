@@ -1,20 +1,20 @@
 <root>
     <images Width="40" Height="40" Radius="38">
-        <image src="https://randomuser.me/api/portraits/men/1.jpg" key="John_Perez"/>
-        <image src="https://randomuser.me/api/portraits/women/2.jpg" key="Maria_Gomez"/>
-        <image src="https://randomuser.me/api/portraits/women/3.jpg" key="Lucy_Rodriguez"/>
-        <image src="https://randomuser.me/api/portraits/men/8.jpg" key="Diego_Martinez"/>
-        <image src="https://randomuser.me/api/portraits/women/9.jpg" key="Ana_Torres"/>
-        <image src="https://randomuser.me/api/portraits/men/4.jpg" key="Carlos_Sanchez"/>
-        <image src="https://randomuser.me/api/portraits/men/5.jpg" key="Javier_Lopez"/>
-        <image src="https://randomuser.me/api/portraits/women/10.jpg" key="Sara_Nunez"/>
-        <image src="https://randomuser.me/api/portraits/women/11.jpg" key="Laura_Castillo"/>
-        <image src="https://randomuser.me/api/portraits/men/12.jpg" key="Jose_Ramirez"/>
-        <image src="https://randomuser.me/api/portraits/men/13.jpg" key="Michael_Torres"/>
-        <image src="https://randomuser.me/api/portraits/women/6.jpg" key="Andrea_Fernandez"/>
-        <image src="https://randomuser.me/api/portraits/men/7.jpg" key="Gabriel_Ruiz"/>
-        <image src="https://randomuser.me/api/portraits/women/14.jpg" key="Sofia_Rivas"/>
-        <image src="https://randomuser.me/api/portraits/women/15.jpg" key="Paula_Mendoza"/>
+        <image src="img\avatar_john_perez.jpg" key="John_Perez"/>
+        <image src="img\avatar_maria_gomez.jpg" key="Maria_Gomez"/>
+        <image src="img\avatar_lucy_rodriguez.jpg" key="Lucy_Rodriguez"/>
+        <image src="img\avatar_diego_martinez.jpg" key="Diego_Martinez"/>
+        <image src="img\avatar_ana_torres.jpg" key="Ana_Torres"/>
+        <image src="img\avatar_carlos_sanchez.jpg" key="Carlos_Sanchez"/>
+        <image src="img\avatar_javier_lopez.jpg" key="Javier_Lopez"/>
+        <image src="img\avatar_sara_nunez.jpg" key="Sara_Nunez"/>
+        <image src="img\avatar_laura_castillo.jpg" key="Laura_Castillo"/>
+        <image src="img\avatar_jose_ramirez.jpg" key="Jose_Ramirez"/>
+        <image src="img\avatar_michael_torres.jpg" key="Michael_Torres"/>
+        <image src="img\avatar_andrea_fernandez.jpg" key="Andrea_Fernandez"/>
+        <image src="img\avatar_gabriel_ruiz.jpg" key="Gabriel_Ruiz"/>
+        <image src="img\avatar_sofia_rivas.jpg" key="Sofia_Rivas"/>
+        <image src="img\avatar_paula_mendoza.jpg" key="Paula_Mendoza"/>
     </images>
     <nodes>
         <n Text="General Management" FontBold="True">

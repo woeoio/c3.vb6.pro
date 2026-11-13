@@ -81,3 +81,63 @@ git 凭据管理器（`gitcode.com`，`oauth2` 用户）。
 
 > 坑记录：GitCode PR 接口不接受含非 ASCII 字节的请求体（报 `Parameter description field contains
 > invalid byte sequence`），`pr.ps1` 会把 JSON 中 > U+007F 的字符统一转义成 `\uXXXX` 后再发送。
+
+## PD 整编性能线（§56.53–§56.55）
+
+这一组三个脚本是 **PhotoDemon 整编性能主线**的工作流固化版。
+PD 整编（623 个项目 TU + 65 个 RTL `.c`）在 CI 上**必然编不过**（PD 源码本身带真实错误），
+GA 判的不是"编过"，而是**错误面逐码相等** + **总时间下降**。
+当前成绩与完整台账见 [`ai/C3_PD_BUILD_PERF_HANDOFF.md`](../ai/C3_PD_BUILD_PERF_HANDOFF.md)。
+
+> **这三个脚本含中文，必须用 `pwsh`（PowerShell 7）跑**：`powershell`(5.1) 会按 GBK 误读
+> UTF-8 无 BOM 的源码，引号配对会错乱。
+
+### `ga_dispatch_pd.ps1` —— 派发 PD 整编 GA
+
+同步探针分支 → 推 **github**（不是 gitcode）→ 派发 `PhotoDemon x86 full build` →
+**按 headSha 认领 run** → 等结论。全程带 TLS 重试（hosts 把 github.com 指向 127.0.0.1，
+本地转发时有时无）。
+
+```powershell
+pwsh -NoProfile -File scripts\ga_dispatch_pd.ps1                        # 只派 PD 整编
+pwsh -NoProfile -File scripts\ga_dispatch_pd.ps1 -AlsoDevRegression     # 连带 dev 回归那 22 格
+pwsh -NoProfile -File scripts\ga_dispatch_pd.ps1 -NoWait                # 派完就走
+```
+
+| 参数 | 说明 |
+|------|------|
+| `-Ref` | 探针分支，默认 `probe/photodemon-emit` |
+| `-ProbeWorktree` | 探针 worktree，默认 `.temp\probe_sync`（另一个 clone） |
+| `-DevRef` / `-AlsoDevRegression` | dev 回归的分支与开关 |
+| `-SkipProbeSync` | 不做同步，按当前 HEAD 直接派 |
+| `-NoWait` | 派完不等待 |
+
+run id 会写进 `.temp\pd_run.txt`（`pd_readout.ps1` 默认读它）。
+
+### `pd_readout.ps1` —— 一次读齐这一刀的关键数
+
+取工件 `photodemon-full-build-logs` ⇒ 打印 `pd_build.meta`（`BUILD_SECONDS` /
+`MIN_FREE_PHYS_MB` / `PEAK_TREE_WS_MB`）、`C3: MEM` 行、**cl 四段耗时**、内存曲线，
+最后按 `-Baseline` 跑一次错误面逐码比对。
+
+```powershell
+pwsh -NoProfile -File scripts\pd_readout.ps1 -Run 43224386890 -Baseline 43218740715
+pwsh -NoProfile -File scripts\pd_readout.ps1            # 不给 -Run 就读 .temp\pd_run.txt
+```
+
+### `diff_c3error.ps1` —— 错误面**逐码**比对（判据唯一口径所在）
+
+口径只设这一处：正则 `(fatal error|error|warning)\s+(C\d{4})\s*:`。
+别的脚本 / 别的台账要判"错误面变了没有"，都必须调它，**不要另起一份正则**。
+
+```powershell
+pwsh -NoProfile -File scripts\diff_c3error.ps1 <oldRun> <newRun>
+pwsh -NoProfile -File scripts\diff_c3error.ps1 -OldLog a.log -NewLog b.log
+```
+
+退出码：`0` = 逐码相等（通过）/ `1` = 有差异 / `2` = 日志找不到（**没判**，不等于通过）。
+
+> **判据只认逐码计数**，不得把「恰好 N 处」降级成「至少 N 处」；
+> 也**不得声称字节数相等** —— 已实证不可比：cl 的 `/MP` 调度顺序一变，
+> 同一批 `compiling source file` 行就换位置，加上 session 目录名长度不同（16 vs 13 字符），
+> 字节数就会差上百 KB，而内容逐行看是等价的。
