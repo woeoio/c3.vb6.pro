@@ -8014,14 +8014,19 @@ if ($Category -in @("all", "run", "vbp")) {
     # 两种形参表 => MSVC 只给 C4133 警告、链接照过 => **运行期**把整数 3 当指针解引用 => 崩。
     # 修后: 派发按第一形参的真实 ByVal/ByRef 递 (ByRef => 传址), 且下标从
     # GetPropW(hwnd, "VB6_CtrlArrIndex") - 1 读**运行时**值 (不再是设计期常量 40 个 Label 答 39)。
+    # ⚠ 处理器名带 Form 前缀 (vb6_Form1_xxx) —— .vbp 工程里 Form 模块的过程都带前缀;
+    #   单文件 .frm emit 没有这层前缀 (那是**另一条**路径, 门禁语料里没有 .frm)。
+    # ⚠ 反面针必须**整段**钉: 产物里另有 6 行 `evtThunk_..._MouseEnter_N(...)` (UC 事件
+    #   thunk, 编译期元素号) 与旧派发形态**同形** ⇒ 只钉 `..._MouseEnter(3);` 会误命中它们。
     Test-EmitcShape "fgz_ucslider_mouseenter_index_dispatch" @("$Tests\ucSlider_2022\Proyecto1.vbp") @(
-        'extern void vb6_ucSlider1_MouseEnter(int16_t*);',
-        'vb6_ucSlider1_MouseEnter(&vb6_evindex);',
+        'static void vb6_Form1_ucSlider1_MouseEnter(int16_t INDEX);',
+        'extern void vb6_Form1_ucSlider1_MouseEnter(int16_t);',
+        'vb6_Form1_ucSlider1_MouseEnter(vb6_evindex);',
         'GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1'
     )
     Test-EmitcAbsent "fgz_ucslider_mouseenter_index_lesion" @("$Tests\ucSlider_2022\Proyecto1.vbp") @(
-        'vb6_ucSlider1_MouseEnter(int16_t);',
-        'vb6_ucSlider1_MouseEnter(3);'
+        'extern void vb6_Form1_ucSlider1_MouseEnter(int16_t); vb6_Form1_ucSlider1_MouseEnter(3);',
+        'vb6_Form1_ucSlider1_MouseEnter(int16_t* INDEX);'
     )
     # 富贵竹 FIX-012 (账 #610 第341刀): ByVal 串形参先进函数先拷副本。修前 C 签名
     # BSTR p 别名调用方的串, 体里 vb6_BSTR_Assign/AssignMove 先 free 旧值 = 把调用
