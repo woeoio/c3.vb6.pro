@@ -1255,6 +1255,10 @@
                   // DLL的ProgID前缀
 
 
+    // 账 #611: 工程级「类 → VB_UserMemId=0 默认成员名」表 (小写类名 → 成员原名)。
+    // 由 driver runCodeGeneration 预扫描 .cls 的 AttributeStmt 建好, 全程只读。
+    const std::unordered_map<std::string, std::string>* classDefaultMembers_ = nullptr;
+
     // Delegate (tB 扩展): decl pass 登记的桩定义文本, epilogue 统一发射
     std::vector<std::string> delegateThunkDefs_;
 

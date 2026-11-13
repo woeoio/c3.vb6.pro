@@ -152,6 +152,7 @@
         cgen.setLegacyIfaceShapes(&legacyIfaceShapeMap);  // 账 #305 新账 #464: legacy 接口槽表的形状归接口自己定
         cgen.setClassChainRegistry(&classes_);  // tB 类继承 (B07b): stage 2.8 只读链登记表
         cgen.setProjectClassNames(&projectClassNames);  // 工程级类名表 (不受同名成员遮蔽)
+        cgen.setClassDefaultMembers(&classDefaultMembers);  // 账 #611: 工程类 VB_UserMemId=0 默认成员
         cgen.setProjectCoclassNames(&projectCoclassNames);  // 账 #305 §B187: 装箱腿问"这类在 coclass 表里有没有一行"
         cgen.setProjectImplementedNames(&projectImplementedNames);  // 账 #305 §B189 第二档: 接口视图那一族不许按声明档折 TypeName
         cgen.setInterfaceRegistry(&ifaces_);  // tB Interface 契约 (B04): stage 2.7 只读登记表

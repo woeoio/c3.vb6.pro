@@ -23,6 +23,18 @@ void CCodeGen::visit(AssignmentStmt& node) {
     bool savedLetScalar = memObjLetScalar_;
     memObjLetScalar_ = true;
 
+    // 账 #611: 赋值左值是工程类**默认属性索引** (`writer("k") = v`) —— 把 callee
+    // 换成 `writer.Item`, 后面 P6.4+ 那一支 (cgen_assign_com_prop.inc) 才会按写
+    // 方向形参表发 prop_let_Item; 不改写则 emitExpr 产出 `writer(_own_N)` 这个非法
+    // 左值, cl C2063 + C2106。读侧在 cgen_expr_call_prelude.inc 用同一个改写器。
+    // 只换 callee、不换整枚节点 (同一枚节点会被多次 emitExpr, 掏空即崩)。
+    if (node.target && node.target->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& iocTgt611 = static_cast<IndexOrCallExpr&>(*node.target);
+        if (ExprPtr calleeTgt611 = makeClassDefaultMemberCallee(iocTgt611)) {
+            iocTgt611.callee = std::move(calleeTgt611);
+        }
+    }
+
     // 账 #305 第320刀 (账 #592): `App.Title = v` —— VB6 允许运行期改应用标题 (语料 16 行)。
     // 改前这里把读取侧的折算当左值: `vb6_App_EXEName() = vb6_BSTR_FromStr(L"...")` ⇒ C2106,
     // 整棵工程编不过。读写各一处出口: 写落 vb6_SetAppTitle (RTL 自持一份副本, 借入不交出),

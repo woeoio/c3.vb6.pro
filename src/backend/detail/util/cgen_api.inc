@@ -310,6 +310,20 @@
         auto it = projClassNames_->find(Symbol::toLower(name));
         return it == projClassNames_->end() ? std::string() : it->second;
     }
+    // 账 #611: 工程类 (.cls) 默认成员表, driver 侧从 `Attribute <M>.VB_UserMemId = 0`
+    // 扫出 (小写类名 → 成员原名)。工程类的 `obj(args)` 要按 `obj.<M>(args)` 发码。
+    void setClassDefaultMembers(const std::unordered_map<std::string, std::string>* m) {
+        classDefaultMembers_ = m;
+    }
+    // 变量是不是「有默认成员的工程类实例」; 是则返回默认成员原名, 否则空串。
+    // 只认 knownClassVars_ (Dim x As <工程类>), 不碰 COM 变量/数组 — 那两族各有主人。
+    std::string classDefaultMemberOf(const std::string& varLower) const {
+        if (!classDefaultMembers_ || varLower.empty()) return std::string();
+        auto itCls = knownClassVars_.find(varLower);
+        if (itCls == knownClassVars_.end()) return std::string();
+        auto it = classDefaultMembers_->find(Symbol::toLower(itCls->second));
+        return it == classDefaultMembers_->end() ? std::string() : it->second;
+    }
     // 账 #305 第320刀 (账 #592): 工程标题（.vbp 的 Title，空则 Name），driver 在模块循环前
     // 算好注入。入口点把它播种给 RTL 的 `vb6_SetAppTitle` —— App.Title 与 MsgBox 默认题头
     // 都只问那一格（见 vb6rtl_system.c 的所有权注释）。

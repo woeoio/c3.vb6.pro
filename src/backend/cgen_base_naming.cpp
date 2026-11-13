@@ -374,6 +374,16 @@ Vb6Type CCodeGen::constIdentType(const std::string& name) const {
 std::string CCodeGen::wrapConstArgForByRef(const std::string& argVal, Vb6Type paramVb6Type) const {
     if (paramVb6Type == Vb6Type::Variant || paramVb6Type == Vb6Type::Empty ||
         paramVb6Type == Vb6Type::Null || paramVb6Type == Vb6Type::Object) {
+        // 账 #611: Null / Empty 常量的 C 表达 (`vb6_VariantNull()` / `vb6_VariantEmpty()`)
+        // 已经是**整枚 vb6_VARIANT 值**, 不是标量常量。constIdentType 认不出它们,
+        // 原来落 default 发 `.vt=VT_I4, .lVal=(int32_t)(vb6_VariantNull())` ⇒
+        // cl C2440 (vb6_VARIANT 无法转 int32_t), 语义上还把 Null 变成了 Long。
+        // 例: JSonWrite `writer.Add "optionalTag", Null` (Add 的 vValue 是 ByRef Variant)。
+        // 用数组复合字面量取首元素地址, 把 RTL 构造出的那枚 VARIANT 原样交给
+        // ByRef 槽, 不猜 vb6_vtNull / vb6_vtEmpty 的枚举值。
+        if (argVal == "vb6_VariantNull()" || argVal == "vb6_VariantEmpty()") {
+            return "&((vb6_VARIANT[]){" + argVal + "})[0]";
+        }
         switch (constIdentType(argVal)) {
             case Vb6Type::String:
                 return "(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=" + argVal + "})";

@@ -10,7 +10,9 @@
 #      (2026-11-11: 无 binop 格也收 obj.Member —— `m_Stream.SetPosition (a + b), 1`
 #       原先整个落到"调用结果再调用", 发成 `vb6_...(me, expr, 0, 0, _own_1, 1)` ⇒ C2197);
 #   b) 内层调用恰好 1 个位置实参、无命名实参;
-#   c) 语句在逗号后还有实参 (`cur_.kind == TokenKind::Comma`) —— 单独成句的 `f (a)` 仍是正常调用;
+#   c) 语句在逗号后还有实参 (`cur_.kind == TokenKind::Comma`) **或已到语句结束符**
+#      (NewLine / Colon / EOF / Else / ElseIf, 账 #611) —— 单独成句的 `f (a)` 仍是正常调用,
+#      它的 expr 不是 BinaryExpr, 天然不进折叠分支, 不靠 Comma 判据保护;
 #   d) 无二元运算符那一格, 首参**不得是可寻址左值** (Identifier/MemberAccess):
 #      `f (v), x` 的括号在 VB6 是按值传临时, 折叠掉会变成按引用传原变量 —— 语义不同。
 #
@@ -38,10 +40,30 @@ if ($nMark -lt 1) {
     $bad += ("S1 sentinel marker missing in " + $rel)
 }
 
-# ---- S2: 两格折叠都必须挂 Comma 判据 ----
+# ---- S2: 两格折叠都必须挂 Comma 判据 (账 #611 起 Comma 可换/或语句结束符, 但
+#      Comma 这一支本身不许被删 —— 逗号续实参族仍要靠它) ----
 $nComma = @([regex]::Matches($text, 'cur_\.kind\s*==\s*TokenKind::Comma')).Count
 if ($nComma -lt 4) {
     $bad += ("S2 'cur_.kind == TokenKind::Comma' occurrences = " + $nComma + " (want >= 4: 110y 两格 + 本条两格)")
+}
+
+# ---- S5: 账 #611 —— binop 格必须同时认「语句结束符」, 且收口条件同源 ----
+# 只查标识符存在会被别处的同形串顶替; 这里逐字钉住折叠条件与收口条件两处字面。
+$s5Needles = @(
+    'cur_.kind == TokenKind::Comma || atStmtEnd110y',
+    'const bool atStmtEnd110y = cur_.kind == TokenKind::NewLine',
+    'cur_.kind == TokenKind::EndOfFile',
+    'cur_.kind == TokenKind::Else || cur_.kind == TokenKind::ElseIf'
+)
+foreach ($n in $s5Needles) {
+    if (-not $text.Contains($n)) {
+        $bad += ("S5 missing literal: " + $n)
+    }
+}
+# 收口条件必须与折叠条件同源 (否则单行 If 的 Then 折叠出来却不收口 ⇒ 畸形 CallStmt)
+$closePat = 'if \(leadingArg110y[\s\S]{0,320}?TokenKind::ElseIf'
+if (-not [regex]::IsMatch($text, $closePat)) {
+    $bad += "S5 leadingArg110y close-out must also accept Else/ElseIf"
 }
 
 # ---- S3: 裸标识符 callee + 恰 1 个位置实参 的判据在 (两格各一处) ----

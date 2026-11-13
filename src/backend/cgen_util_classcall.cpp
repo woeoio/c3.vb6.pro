@@ -840,4 +840,34 @@ bool CCodeGen::formShowForwarderParams(const std::string& calleeText,
     return true;
 }
 
+// ============================================================
+// 账 #611: 工程类实例的默认属性索引 `obj(args)`
+//
+// VB6 里 `Dim parser As JSonFast` + `parser("notes")` 等价于 `parser.Item("notes")`,
+// 前提是 JSonFast.cls 里 `Attribute Item.VB_UserMemId = 0`。此前 obj(args) 的分派只
+// 查 knownTypedComVars_ / knownObjectVars_ (P24-10) 与类字段 (Pattern L), 工程类
+// 局部变量一律落到兜底 `callee + "(" + args + ")"` ⇒ cl C2063「不是函数」。
+//
+// 这里不改任何发码规则: 只把 callee 换成显式 `.Item` 的形状 (MemberAccessExpr),
+// 后续 ident/member/withm 各分支自然按显式成员调用走 —— 读发
+// `vb6_JSonFast_prop_get_Item(parser, key)`, 赋值语句的 target 改写后命中
+// cgen_assign_com_prop.inc P6.4+ 分支 (按写方向形参表发 prop_let_Item)。
+// ⚠ 绝不能 move 原节点: 同一枚 IndexOrCallExpr 在本轮 visit 前/中会被 emitExpr 多次
+// 访问, 掏空 callee 会在 cgen_expr_call_callee_withm.inc:269 空指针解引用。
+// ⚠ 也不递归 emitExpr: 新 callee 是 MemberAccessExpr, 不满足本判据的 IdentifierExpr
+// 条件, 原地替换后继续走原流程即可。
+// ============================================================
+ExprPtr CCodeGen::makeClassDefaultMemberCallee(const IndexOrCallExpr& node) const {
+    if (!classDefaultMembers_) return nullptr;
+    if (!node.callee || node.callee->kind != ASTNodeKind::IdentifierExpr
+        || !node.named.empty() || node.positional.empty()) return nullptr;
+    const auto& id = static_cast<const IdentifierExpr&>(*node.callee);
+    const std::string defMember = classDefaultMemberOf(Symbol::toLower(id.name));
+    if (defMember.empty()) return nullptr;
+
+    // 复制标识符而不是移走: 原节点此后仍要被正常访问。
+    auto object = std::make_unique<IdentifierExpr>(node.loc, id.name, id.bracketed);
+    return std::make_unique<MemberAccessExpr>(node.loc, std::move(object), defMember);
+}
+
 } // namespace vb6c3

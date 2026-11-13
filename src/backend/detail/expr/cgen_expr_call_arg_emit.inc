@@ -1149,6 +1149,24 @@
                         }
                     } else if (i < calleeParams.size()
                                && !calleeParams[i].isByVal && !calleeParams[i].isParamArray
+                               && calleeParams[i].type == Vb6Type::Variant
+                               && node.positional[i]
+                               && node.positional[i]->kind == ASTNodeKind::LiteralExpr
+                               && (static_cast<const LiteralExpr*>(node.positional[i].get())->literalKind == LiteralKind::Null
+                                || static_cast<const LiteralExpr*>(node.positional[i].get())->literalKind == LiteralKind::Empty)) {
+                        // 账 #611: Null / Empty 字面量作 **ByRef Variant** 实参。
+                        // 它们的 C 表达 `vb6_VariantNull()` / `vb6_VariantEmpty()` 已经
+                        // 是整枚 vb6_VARIANT 值, 但 inferExprType 对这两个 LiteralKind
+                        // 缺省答 Long (与 cgen_util_com.cpp 的 Empty/Null 注释同一格),
+                        // 于是下面 Fix 092y 的分档落 Long 臂 ⇒
+                        //   `(&(vb6_VARIANT){.vt=VT_I4, .lVal=(int32_t)(vb6_VariantNull())})`
+                        // ⇒ cl C2440, 语义上还把 Null 变成了 Long。
+                        // 例: `writer.Add "optionalTag", Null` (JSonWrite.Add 的 vValue
+                        // 是 ByRef Variant)。用数组复合字面量取首元素地址, 把 RTL 构造
+                        // 出的那枚 VARIANT 原样交给 ByRef 槽, 不猜 vb6_vt* 枚举值。
+                        argVal = "&((vb6_VARIANT[]){" + argVal + "})[0]";
+                    } else if (i < calleeParams.size()
+                               && !calleeParams[i].isByVal && !calleeParams[i].isParamArray
                                && calleeParams[i].type == Vb6Type::Variant) {
                         // Fix 092y: ByRef Variant 形参 + 简单标识符实参.
                         // C 签名为 vb6_VARIANT*, 直接 &(BSTR) 会把字符串当 Variant
@@ -1180,7 +1198,13 @@
                                 break;
                             case Vb6Type::Long:
                             case Vb6Type::Integer:
-                                argVal = "(&(vb6_VARIANT){.vt=VT_I4, .lVal=(int32_t)(" + argVal + ")})";
+                                // 账 #611: Null/Empty 常量的 C 表达已是整枚 vb6_VARIANT
+                                // 值 (`vb6_VariantNull()`), inferExprType 却缺省答 Long
+                                // ⇒ `(int32_t)(vb6_VARIANT)` cl C2440, 且把 Null 变 Long。
+                                if (argVal == "vb6_VariantNull()" || argVal == "vb6_VariantEmpty()")
+                                    argVal = "&((vb6_VARIANT[]){" + argVal + "})[0]";
+                                else
+                                    argVal = "(&(vb6_VARIANT){.vt=VT_I4, .lVal=(int32_t)(" + argVal + ")})";
                                 break;
                             case Vb6Type::Double:
                             case Vb6Type::Single:
@@ -1705,7 +1729,13 @@
                                 break;
                             case Vb6Type::Long:
                             case Vb6Type::Integer:
-                                argVal = "(&(vb6_VARIANT){.vt=VT_I4, .lVal=(int32_t)(" + argVal + ")})";
+                                // 账 #611: Null/Empty 常量的 C 表达已是整枚 vb6_VARIANT
+                                // 值 (`vb6_VariantNull()`), inferExprType 却缺省答 Long
+                                // ⇒ `(int32_t)(vb6_VARIANT)` cl C2440, 且把 Null 变 Long。
+                                if (argVal == "vb6_VariantNull()" || argVal == "vb6_VariantEmpty()")
+                                    argVal = "&((vb6_VARIANT[]){" + argVal + "})[0]";
+                                else
+                                    argVal = "(&(vb6_VARIANT){.vt=VT_I4, .lVal=(int32_t)(" + argVal + ")})";
                                 break;
                             case Vb6Type::Double:
                             case Vb6Type::Single:

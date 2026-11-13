@@ -1551,6 +1551,14 @@
     std::string resolveClassMemberCall(const std::string& className,
                                        const std::string& memberName) const;
 
+    // 账 #611: `obj(args)` (obj 是有 VB_UserMemId=0 默认成员的工程类实例) 的等价
+    // callee `obj.<DefaultMember>`; 不适用则返回 nullptr。
+    // ⚠ 只**造一个新的 callee**, 不 move 原节点的任何成员 —— 同一枚 IndexOrCallExpr
+    // 会被 emitExpr 访问多次 (实参预发射 / 正式发射), 掏空它必然在
+    // cgen_expr_call_callee_withm.inc:269 对空 callee 解引用 ⇒ C0000005。
+    // 调用方拿返回值**原地替换** node.callee 即可复用显式 `.Item` 的全部读写路径。
+    ExprPtr makeClassDefaultMemberCallee(const IndexOrCallExpr& node) const;
+
     // Fix 033: 类感知方法/属性参数查找 (类符号 + memberParams 表的精确解析).
     // IndexOrCallExpr calleeParams 解析: 按 className 查找指定类的方法/属性参数表,
     // 避免跨模块 storageKey 冲突命中的首个注册者导致 Optional _has_ 标志数错 (→ C2197).

@@ -260,6 +260,13 @@
                       + argsArray + ", " + std::to_string(argc) + ")";
             return;
         }
+
+        // 账 #611: 工程类实例的默认属性索引 (`Dim p As JSonFast`: `p("k")`)。
+        // COM 两支都没命中才轮到这一支; 原地换成 `p.Item` 这个 callee, 后续
+        // ident/member/withm 各分支就按显式 `.Item("k")` 发码, 不另发一份调用串。
+        if (ExprPtr callee611 = makeClassDefaultMemberCallee(node)) {
+            node.callee = std::move(callee611);
+        }
     }
 
     }
