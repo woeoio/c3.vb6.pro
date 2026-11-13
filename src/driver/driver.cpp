@@ -55,6 +55,10 @@
 
 namespace vb6c3 {
 
+// 账 #611: 工程内 .cls 默认成员的解析只住在 backend/cgen_util_ctrl.cpp
+// (check_uc_default_member.ps1 的 R1 单一出口), driver 侧只调它填表。
+bool findClassDefaultMember(const Module& mod, std::string& propOut);
+
 // pathToUtf8/utf8ToWide/utf8ToPath moved to common/encoding.hpp
 
 Driver::Driver() : diag_(std::make_unique<Diagnostics>()) {}

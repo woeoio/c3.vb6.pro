@@ -862,7 +862,13 @@ ExprPtr CCodeGen::makeClassDefaultMemberCallee(const IndexOrCallExpr& node) cons
     if (!node.callee || node.callee->kind != ASTNodeKind::IdentifierExpr
         || !node.named.empty() || node.positional.empty()) return nullptr;
     const auto& id = static_cast<const IdentifierExpr&>(*node.callee);
-    const std::string defMember = classDefaultMemberOf(Symbol::toLower(id.name));
+    const std::string varLower611 = Symbol::toLower(id.name);
+    // ⚠ 控件数组元素 (`slt(0)`) 不是类实例的默认属性访问: 它走
+    // knownControlArrays_ / vb6_CtrlArr_GetAt + ctrlDefaultPropOf 那一族出口。
+    // 抢先改写成 `slt.Item` 会让 pd_ucctrlarr 的写腿丢掉 vb6_ComSetProp
+    // (GA 实测回归)。判据按登记表, 不按名字猜。
+    if (knownControlArrays_.count(varLower611)) return nullptr;
+    const std::string defMember = classDefaultMemberOf(varLower611);
     if (defMember.empty()) return nullptr;
 
     // 复制标识符而不是移走: 原节点此后仍要被正常访问。

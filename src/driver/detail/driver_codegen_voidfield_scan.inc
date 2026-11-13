@@ -33,83 +33,17 @@
     };
 
     // 账 #611: 工程内 .cls 的**默认成员**表 (小写类名 → 成员原名)。
-    //
-    // VB6 把默认成员写成过程体内的属性行:
-    //     Public Property Get Item(ByVal sPath As String) As String
-    //     Attribute Item.VB_UserMemId = 0
-    // 于是 `parser("notes")` 等价于 `parser.Item("notes")`, `writer("k") = v`
-    // 等价于 `writer.Item("k") = v`。此前 C3 只有两处认默认成员 —— 外部类型库
-    // (Symbol::comDefaultMemberName) 和工程内 UserControl (.ctl 文本扫描),
-    // 工程内 .cls 的这条 AttributeStmt 虽被 parser 收进过程体, 却无人消费:
-    // `Dim parser As JSonFast` 落在 knownClassVars_, obj(args) 分派不查它,
-    // 兜底发成 `parser(_own_1)` ⇒ cl C2063「parser 不是一个函数」。
-    //
-    // 判据逐字: 属性名以 `.VB_UserMemId` 结尾, 且值字面为 0 (DISPID_VALUE);
-    // `= -4` 是 NewEnum, 一律不折。成员名取点号前那段, 保留原始大小写
-    // (resolveClassMemberCall 按名字查符号表, 大小写不敏感但要能拼 C 名)。
+    // 解析只许一处 (scripts/check_uc_default_member.ps1 的 R1): 整份判据收在
+    // cgen_util_ctrl.cpp 的 findClassDefaultMember, driver 这里只负责填表。
+    // ⚠ UserControl (.ctl) 一律排除 —— 它们的默认成员与控件数组元素走
+    // ctrlDefaultPropOf / ctrlDefaultReadExpr / emitUcDefaultPropLet 那一族出口,
+    // 抢进本表会把 `slt(0).Value = v` 的控件数组路径改道 (pd_ucctrlarr 实测回归)。
     std::unordered_map<std::string, std::string> classDefaultMembers;
-    auto collectDefaultMember611 = [](const Module& mod611, std::string& out611) {
-        auto scanBody611 = [&out611](const StmtList& body611) {
-            for (const auto& s611 : body611) {
-                if (!s611 || s611->kind != ASTNodeKind::AttributeStmt) continue;
-                const auto& a611 = static_cast<const AttributeStmt&>(*s611);
-                const std::string low611 = Symbol::toLower(a611.attrName);
-                static const std::string kSuffix611 = ".vb_usermemid";
-                if (low611.size() <= kSuffix611.size()
-                    || low611.compare(low611.size() - kSuffix611.size(),
-                                      kSuffix611.size(), kSuffix611) != 0) continue;
-                if (!a611.value || a611.value->kind != ASTNodeKind::LiteralExpr) continue;
-                std::string raw611;
-                for (char c611 : static_cast<const LiteralExpr&>(*a611.value).rawText) {
-                    if (!std::isspace(static_cast<unsigned char>(c611))) raw611 += c611;
-                }
-                if (raw611 != "0") continue;   // 只认 DISPID_VALUE
-                const size_t dot611 = a611.attrName.find('.');
-                if (dot611 == std::string::npos || dot611 == 0) continue;
-                out611 = a611.attrName.substr(0, dot611);
-                return;
-            }
-        };
-        for (const auto& d611 : mod611.declarations) {
-            if (!d611) continue;
-            const StmtList* body611 = nullptr;
-            if (d611->kind == ASTNodeKind::PropertyDecl) {
-                body611 = &static_cast<const PropertyDecl&>(*d611).body;
-            } else if (d611->kind == ASTNodeKind::FunctionDecl) {
-                body611 = &static_cast<const FunctionDecl&>(*d611).body;
-            } else if (d611->kind == ASTNodeKind::SubDecl) {
-                body611 = &static_cast<const SubDecl&>(*d611).body;
-            }
-            if (!body611) continue;
-            scanBody611(*body611);
-            if (!out611.empty()) return;
-        }
-        // 少数工程把属性行留在模块头 (VB_Name 那一组), 同一判据再扫一遍。
-        for (const auto& a611 : mod611.attributes) {
-            if (!a611) continue;
-            const std::string low611 = Symbol::toLower(a611->attrName);
-            static const std::string kSuffix611b = ".vb_usermemid";
-            if (low611.size() <= kSuffix611b.size()
-                || low611.compare(low611.size() - kSuffix611b.size(),
-                                  kSuffix611b.size(), kSuffix611b) != 0) continue;
-            if (!a611->value || a611->value->kind != ASTNodeKind::LiteralExpr) continue;
-            std::string raw611;
-            for (char c611 : static_cast<const LiteralExpr&>(*a611->value).rawText) {
-                if (!std::isspace(static_cast<unsigned char>(c611))) raw611 += c611;
-            }
-            if (raw611 != "0") continue;
-            const size_t dot611 = a611->attrName.find('.');
-            if (dot611 == std::string::npos || dot611 == 0) continue;
-            out611 = a611->attrName.substr(0, dot611);
-            return;
-        }
-    };
     for (const auto& mod611 : modules_) {
         if (!mod611 || !mod611->isClassModule || mod611->isInterfaceModule
-            || mod611->moduleName.empty()) continue;
+            || mod611->isUserControlDoc() || mod611->moduleName.empty()) continue;
         std::string def611;
-        collectDefaultMember611(*mod611, def611);
-        if (!def611.empty()) {
+        if (findClassDefaultMember(*mod611, def611)) {
             classDefaultMembers[Symbol::toLower(mod611->moduleName)] = def611;
         }
     }

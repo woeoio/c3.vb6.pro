@@ -3398,4 +3398,56 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     }
     return "vb6_VariantFromValue(" + cExpr + ")";
 }
+
+// ============================================================
+// 账 #611: 工程内 .cls 的默认成员名 (AST 侧)。
+//
+// scripts/check_uc_default_member.ps1 的 R1 要求「认这条属性行的文件恰好一个」
+// —— 所以 .cls 这一支也住在本文件, driver 只调它填表, 不许在别处再写一份解析。
+// 与 findUcDefaultMember 同一份判据 (属性名后缀 + 值字面为 0 = DISPID_VALUE,
+// -4 是 NewEnum 不折, 成员名取点号前那段保留原大小写), 差别只在输入形态:
+//   · UC    —— .ctl 代码段文本, 还要同名 `Property Get ... As <型>` 定返回型;
+//   · .cls  —— parser 已把属性行收成过程体/模块头的 AttributeStmt, 且不要求
+//              同名 Property Get (JSonWrite.cls 的默认成员是 Property Let Item)。
+// ============================================================
+bool findClassDefaultMember(const Module& mod, std::string& propOut) {
+    auto scanOne611 = [&propOut](const AttributeStmt& a611) {
+        const std::string low611 = Symbol::toLower(a611.attrName);
+        static const std::string kSuffix611 = ".vb_usermemid";
+        if (low611.size() <= kSuffix611.size()
+            || low611.compare(low611.size() - kSuffix611.size(),
+                              kSuffix611.size(), kSuffix611) != 0) return false;
+        if (!a611.value || a611.value->kind != ASTNodeKind::LiteralExpr) return false;
+        std::string raw611;
+        for (char c611 : static_cast<const LiteralExpr&>(*a611.value).rawText) {
+            if (!std::isspace(static_cast<unsigned char>(c611))) raw611 += c611;
+        }
+        if (raw611 != "0") return false;   // 只认 DISPID_VALUE
+        const size_t dot611 = a611.attrName.find('.');
+        if (dot611 == std::string::npos || dot611 == 0) return false;
+        propOut = a611.attrName.substr(0, dot611);
+        return true;
+    };
+    for (const auto& d611 : mod.declarations) {
+        if (!d611) continue;
+        const StmtList* body611 = nullptr;
+        if (d611->kind == ASTNodeKind::PropertyDecl) {
+            body611 = &static_cast<const PropertyDecl&>(*d611).body;
+        } else if (d611->kind == ASTNodeKind::FunctionDecl) {
+            body611 = &static_cast<const FunctionDecl&>(*d611).body;
+        } else if (d611->kind == ASTNodeKind::SubDecl) {
+            body611 = &static_cast<const SubDecl&>(*d611).body;
+        }
+        if (!body611) continue;
+        for (const auto& s611 : *body611) {
+            if (!s611 || s611->kind != ASTNodeKind::AttributeStmt) continue;
+            if (scanOne611(static_cast<const AttributeStmt&>(*s611))) return true;
+        }
+    }
+    // 少数工程把属性行留在模块头 (VB_Name 那一组), 同一判据再扫一遍。
+    for (const auto& a611 : mod.attributes) {
+        if (a611 && scanOne611(*a611)) return true;
+    }
+    return false;
+}
 } // namespace vb6c3
