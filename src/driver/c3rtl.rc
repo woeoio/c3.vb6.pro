@@ -1,4 +1,9 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-13 (富贵竹 FIX-011/012 第二轮): vb6rtl_com.c vb6_SlotHasRealSafeArray
+//   的「是不是真 SAFEARRAY」判据改成上游口径 (cDims==1 且 fFeatures!=0xA1D1) ——
+//   原写法 !vb6_SaIs1D(parray) 会把 C3 的 ND 描述符 (二维数组) 也判成真 SAFEARRAY
+//   ⇒ 归一化对它调 VariantClear ⇒ 堆损坏 (GA 43347652260 实测三用例六枚红 +
+//   b175 段错误)。本条注释只为触发 rc.exe 重嵌 src/rtl/**。
 // 2026-11-13 (富贵竹 FIX-011/012): vb6rtl_com.c 出参槽两向适配 (真 SAFEARRAY ↔
 //   C3 描述符) + vb6com_pack.c vb6_ComPackVariantRef —— 本条注释只为触发 rc.exe
 //   重嵌 src/rtl/** (check_rtl_embedded 的 stale-embed 判据)。

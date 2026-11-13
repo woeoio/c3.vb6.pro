@@ -19,6 +19,11 @@
 #   R5  vb6rtl_com.c 里的 memcpy 必须按**目标**类型取长度 (sizeof(VARIANT)),
 #       不许按 sizeof(vb6_VARIANT) —— 两档当前相等 (探针 layout_probe 实测
 #       x64 24/24, x86 16/16), 但按源取长度就是 MEMORY 那条 "越界写堆" 的形状。
+#   R6  「槽里挂的是不是**真** SAFEARRAY」那一问的判据必须是上游口径:
+#       **cDims == 1 且 fFeatures != 0xA1D1**。写成 `!vb6_SaIs1D(parray)` 会把
+#       **C3 的 ND 描述符 (二维数组)** 也判成真 SAFEARRAY ⇒ 归一化对它调
+#       VariantClear ⇒ 把 ND 描述符当真 SAFEARRAY SafeArrayDestroy ⇒ 堆损坏。
+#       实测 (2026-11-13 GA 43347652260): 三个 bas 用例 x64+x86 六枚全红 + 段错误。
 #
 # 用法:  powershell -File scripts\check_com_variant_out_ref.ps1
 # 退出码: 0 = 全绿; 1 = 红
@@ -76,6 +81,21 @@ if ($bad.Count -eq 0) {
     if ($c1 -match 'memcpy\s*\(\s*pv\s*,\s*&conv\s*,\s*sizeof\s*\(\s*vb6_VARIANT\s*\)\s*\)') {
         $bad += 'R5 vb6rtl_com.c memcpy(pv, &conv, sizeof(vb6_VARIANT)) -- must use sizeof(VARIANT) (target type)'
     }
+
+    # --- R6: 「槽里是不是真 SAFEARRAY」那一问的判据 ---
+    # ⚠ 必须按上游 FIX-011 §6.2 的口径: **cDims == 1 且 fFeatures != 0xA1D1**。
+    #   写成 `!vb6_SaIs1D(parray)` 会把 **C3 的 ND 描述符 (二维数组)** 也判成真
+    #   SAFEARRAY ⇒ 归一化对它调 VariantClear ⇒ 把 ND 描述符当真 SAFEARRAY
+    #   SafeArrayDestroy ⇒ 堆损坏 / 段错误。
+    #   实测 (2026-11-13 GA 43347652260): b175_num_bstr / test_registry_settings /
+    #   test_redim_elem 三个用例 x64+x86 六枚全红, b175 直接段错误 (139) ——
+    #   崩在 GetAllSettings 之后读 v(0,1) (二维访问走 vb6_VariantArrayGetND)。
+    if ($c1 -match 'return\s+!\s*vb6_SaIs1D\s*\(\s*pv->parray\s*\)') {
+        $bad += 'R6 vb6_SlotHasRealSafeArray must test cDims==1 && fFeatures!=0xA1D1 (upstream FIX-011 6.2) -- `!vb6_SaIs1D(parray)` also matches the ND descriptor => VariantClear destroys it => heap corruption'
+    }
+    if ($c1 -notmatch 'a->cDims\s*!=\s*1' -or $c1 -notmatch 'a->fFeatures\s*!=\s*\(uint16_t\)VB6_SA1D_FFEATURES') {
+        $bad += 'R6 vb6_SlotHasRealSafeArray lost the cDims/fFeatures two-step test (one-dimensional AND not the C3 1D descriptor magic)'
+    }
 }
 
 if ($bad.Count -gt 0) {
@@ -83,5 +103,5 @@ if ($bad.Count -gt 0) {
     $bad | ForEach-Object { Write-Host ("  " + $_) }
     exit 1
 }
-Write-Host "OK check_com_variant_out_ref (R1..R5)"
+Write-Host "OK check_com_variant_out_ref (R1..R6)"
 exit 0

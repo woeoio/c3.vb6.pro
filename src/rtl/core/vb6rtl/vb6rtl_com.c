@@ -1953,12 +1953,35 @@ int32_t vb6_IfaceSupports(void* ifacePtr, const void* iid) {
  * 数据区被当 BSTR 指针逐个 SysFreeString → 堆损坏 / Invoke 静默失败。
  * ============================================================ */
 
-/* 槽里挂的是不是**真** SAFEARRAY (C3 一维描述符 fFeatures=0xA1D1 不算, 判据与 vb6_SaIs1D 同源) */
+/* 槽里挂的是不是**真** SAFEARRAY (服务端 oleaut32 自家布局)。
+ *
+ * ⚠ 判据必须按上游 FIX-011 §6.2 的口径: **一维 (cDims == 1) 且 fFeatures != 0xA1D1**。
+ *   0xA1D1 是 C3 自家 1D 描述符 (vb6_SafeArray1D) 的魔数 —— 真 SAFEARRAY 的
+ *   fFeatures 是 FADF_* 位集, 不会等于它。
+ *
+ * ⚠⚠ **别写成 `!vb6_SaIs1D(parray)`** —— 那是「不是 C3 一维描述符」, 把
+ *   **C3 的 ND 描述符 (二维数组)** 也算成真 SAFEARRAY: ND 描述符首字段是
+ *   int32 dimCount (2..16), 读成 uint16 的 cDims != 1 ⇒ vb6_SaIs1D 判 false
+ *   ⇒ 误判 ⇒ 上面的归一化对它调 VariantClear ⇒ 把 ND 描述符当真 SAFEARRAY
+ *   SafeArrayDestroy ⇒ **堆损坏**。
+ *   实测 (2026-11-13 GA 43347652260): b175_num_bstr / test_registry_settings /
+ *   test_redim_elem 三个用例 x64+x86 六枚全红, 且 b175 段错误 (139) —— 崩在
+ *   `GetAllSettings` 之后读 `v(0, 1)` (二维访问走 vb6_VariantArrayGetND)。
+ *
+ * 修法 (上游同口径): 命中判据 = cDims == 1 且 fFeatures != 0xA1D1。
+ *   · 真 SAFEARRAY 一维: cDims=1, fFeatures 是 FADF 位集 ⇒ 命中 ⇒ 归一化。
+ *   · C3 1D 描述符: cDims=1, fFeatures=0xA1D1 ⇒ 不命中 ⇒ 原样。
+ *   · C3 ND 描述符: cDims = dimCount (2..16) != 1 ⇒ 不命中 ⇒ 原样。
+ *   · 真 SAFEARRAY 多维: cDims >= 2 ⇒ 不命中 ⇒ 原样 (ND 档本轮不覆盖)。
+ */
 int vb6_SlotHasRealSafeArray(void* pVar) {
     VARIANT* pv = (VARIANT*)pVar;
+    const vb6_SafeArray1D* a;
     if (!pv) return 0;
     if (!(pv->vt & VT_ARRAY) || !pv->parray) return 0;
-    return !vb6_SaIs1D(pv->parray);
+    a = (const vb6_SafeArray1D*)pv->parray;
+    if (a->cDims != 1) return 0;                       /* ND 描述符 / 多维真数组 */
+    return a->fFeatures != (uint16_t)VB6_SA1D_FFEATURES;
 }
 
 /* 就地把槽里的真 SAFEARRAY 换成 C3 描述符 (非数组档与 Windows VARIANT 同布局, 原样)。
