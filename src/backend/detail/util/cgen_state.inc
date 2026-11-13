@@ -425,6 +425,13 @@
     // M22: ANSI临时变量待释放列表 (变量名) + 计数器
     // 在Declare ANSI函数调用前声明临时char*变量, 调用后立即FreeANSI
     std::vector<std::string> ansiTempsToFree_;
+    // 账 #610 第343刀: ByVal String 形参的**副本**登记表 { 形参名, 副本变量名 }。
+    // FIX-012 让被调方先拷副本 (VB6 语义: 被调方拿到自己的副本), 但副本此前**不释放**
+    // ⇒ 每调用泄一枚串。本刀把副本放进独立变量, 过程出口只在**形参仍是那枚副本时**
+    // 才 free (体里 vb6_BSTR_Assign 先 free 旧值 ⇒ 形参已不是副本 ⇒ 跳过 ⇒ 不双释放;
+    // ByRef 传出后被改写同理)。Function 侧不登记 (返回值可能是该形参 ⇒ free 会悬垂)。
+    std::vector<std::pair<std::string, std::string>> byValStrCopies_;
+
     // Fix <vbeclipse>: 本过程被 push_macro/#undef 隔离的隐式变量名 (出过程 pop 复原)
     std::vector<std::string> implicitMacroNames_;
     // Fix 161b-decl-out: Declare A 版 ByVal String **出参回写**登记表。

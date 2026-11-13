@@ -329,6 +329,30 @@ function Test-DiStubBooleanMap {
         $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
     }
 }
+# === 静态对表: ByVal String 副本的释放闭环 (账 #610 第343刀) ===
+# 判据在 scripts/check_byval_str_copy.ps1。为什么要这道:
+#   副本释放是**运行期**行为 (堆), 形状门 (只哈希 --emit-c 的 stdout) 看不见;
+#   而「出口释放带不带判等」「两轮发还是单轮发」「Function 侧有没有误 free」
+#   这几格形状门一个字都不管 ⇒ 必须有静态哨兵逐字钉住。
+#   ⚠ Function 侧零回归这一格**必须按过程作用域**判 (切函数体) —— 同一份产物里
+#   Sub 侧必然有那枚副本变量, 整文件 grep 判会恒红。
+# 解释器口径同 Test-DiStubCensus: 优先 pwsh, 没有就退回 Windows PowerShell, 不许自废。
+function Test-ByValStrCopy {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] byval_str_copy ... "
+    $psExe = "powershell"
+    $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($ps7) { $psExe = $ps7.Source }
+    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_byval_str_copy.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 # === 静态对表: .vbp 夹具 census (每个夹具都必须入册) ===
 # 判据与基线都在 scripts/check_vbp_fixture_census.ps1 + scripts/vbp_fixtures_unregistered.txt。
 # 由来 (2026-10-06, 与上面那条 di_stubs_census 是同一件事的两面):
@@ -7907,6 +7931,39 @@ if ($Category -in @("all", "run", "vbp")) {
     )
     Test-Vbp "fgz_fix005a_run" "$Tests\fgz_fix005a\FgzFix005a.vbp" @("DICT-L=7", "DICT-S=hello", "DICT-X=2.5")
     Test-Vbp "fgz_fix005a_run_x86" "$Tests\fgz_fix005a\FgzFix005a.vbp" @("DICT-L=7", "DICT-S=hello", "DICT-X=2.5") -Arch "x86"
+    # 富贵竹 FIX-012 续 (账 #610 第343刀): ByVal String 形参的**副本泄漏**。
+    # 修前: 第341刀让被调方先拷副本 (VB6 语义: 被调方拿到自己的副本), 但副本
+    # **在过程退出时不释放** ⇒ 每调用泄一枚 BSTR (本地量化探针 .temp/tools/
+    # probe_343.c 实测: 修前每调用净漏 1.000 枚 ⇒ 20 万次 ≈ 6 MB)。
+    # 修法: 副本**另立一个变量** (vb6_byvalcopy_<形参>), 形参指向它; 过程出口
+    # (统一出口段, 标签**之后** ⇒ Exit Sub 的 goto 也走到) 只在「形参仍是那枚
+    # 副本」时才 free ⇒ 体里赋值过的形参自动跳过 ⇒ 不双重释放。
+    # 形状针钉住三处逐字形态 (形状门只看 stdout, 跑不出堆 ⇒ 必须有形状针兜底)。
+    Test-EmitcShape "fgz_fix013_byval_copy_var" @("$Tests\fgz_fix013\FgzFix013.vbp") @(
+        'BSTR vb6_byvalcopy_s = vb6_BSTR_FromBSTR(s);  /* FIX-012: ByVal 串副本 */',
+        's = vb6_byvalcopy_s;  /* FIX-012: 形参指向自己的副本 */'
+    )
+    # 出口释放: 必须带**判等** (无条件 free 会双释放 —— 体里赋值时副本已被 free 过)。
+    Test-EmitcShape "fgz_fix013_exit_conditional_free" @("$Tests\fgz_fix013\FgzFix013.vbp") @(
+        'if (s == vb6_byvalcopy_s) { vb6_BSTR_Free(s); }  /* FIX-012: 副本释放 */'
+    )
+    # 反面针: 出口**不得**出现无条件 free 的形态 (双释放)。
+    Test-EmitcAbsent "fgz_fix013_exit_no_unconditional_free" @("$Tests\fgz_fix013\FgzFix013.vbp") @(
+        'vb6_BSTR_Free(s);  /* FIX-012: 副本释放 */'
+    )
+    # Exit Sub 那一档: goto 落在标签上 ⇒ 标签**之后**的释放段仍执行 ⇒
+    # 副本仍被释放 (若释放段被挪到标签之前, 这一档就会漏)。
+    Test-EmitcShape "fgz_fix013_exit_sub_label_order" @("$Tests\fgz_fix013\FgzFix013.vbp") @(
+        "    vb6_proc_exit:;`r`n    if (s == vb6_byvalcopy_s) { vb6_BSTR_Free(s); }  /* FIX-012: 副本释放 */"
+    )
+    # Function 侧**零回归**: 返回值可能就是该形参 ⇒ 本刀不发 free。
+    # ⚠ 这一格**不能**用整文件 grep 判: 同一份产物里 Sub 侧**必须**有那枚副本变量,
+    #   整文件找它必然命中 ⇒ 恒红 (假阳性)。按**过程作用域**判 ⇒ 落在
+    #   scripts/check_byval_str_copy.ps1 的 R5 (切函数体后 Function 体内不得有
+    #   副本变量 / 不得有 vb6_BSTR_Free)。
+    Test-VbpBuild "fgz_fix013_build" "$Tests\fgz_fix013\FgzFix013.vbp"
+    Test-Vbp "fgz_fix013_run" "$Tests\fgz_fix013\FgzFix013.vbp" @("LEAK13-OK=hello")
+    Test-Vbp "fgz_fix013_run_x86" "$Tests\fgz_fix013\FgzFix013.vbp" @("LEAK13-OK=hello") -Arch "x86"
     # 富贵竹 FIX-012 (账 #610 第341刀): ByVal 串形参先进函数先拷副本。修前 C 签名
     # BSTR p 别名调用方的串, 体里 vb6_BSTR_Assign/AssignMove 先 free 旧值 = 把调用
     # 方的串放了 → 悬垂 (上游实测 AddText 画出 "*Model_Space")。运行针修前实测红:
@@ -12426,6 +12483,7 @@ if ($Category -in @("all", "compile")) {
     Write-Host "--- Static Checks ---" -ForegroundColor Yellow
     if (Enter-StaticShard) { Test-DiStubCensus }
     if (Enter-StaticShard) { Test-DiStubBooleanMap }
+    if (Enter-StaticShard) { Test-ByValStrCopy }
     if (Enter-StaticShard) { Test-VbpFixtureCensus }
     if (Enter-StaticShard) { Test-UcScaleUnitsCensus }
     if (Enter-StaticShard) { Test-FormIconCensus }
