@@ -1148,6 +1148,10 @@ sha256=ee1430dde253555ef355041e7c9c051eaecc749e4b33624000558f5d1aaa425d ascii256
 sha256=c358c51c402d58538ce938390ade603b53a2ba84ff70c7e57b8af05d502cb9c2 ascii256=c1ebcd70ecc561bdb267e1f7e1ee6faf1bfbf193a4bb6c924e86c2d230ad179e rc=0 bytes=3797 tests/fgz_fix011/ModProbe.bas
 sha256=41e4ef8832c37bfe7178bc6abde97e405368474d17e708f777302195315c514e ascii256=70d846c5d04a90d5ae3a821bf1b3b3e98221420293aff068010a7acdb951bf29 rc=0 bytes=6032 tests/fgz_fix012/FgzFix012.vbp
 sha256=8ec424cd7bd35f4ae1e9b96b62274d7853de5457575050f150a8e3e7672d55ee ascii256=9873c11504c7d651c8d2bce0172f8f49cb21a7b707f3b0ebf5426a45293a316e rc=0 bytes=2124 tests/fgz_fix012/ModMain.bas
+sha256=ca8c52f46d0bc3759ab80295694e6a54d78e70fd70e2c6f07fe9773535354684 ascii256=333770320092907ab4918befb12dd9550691976c7a2d0449960aa422fda35eca rc=0 bytes=4392 tests/fgz_fix005a/FgzFix005a.vbp
+sha256=5a0442db987ac1a84362a366553f01dfdeeab18e2bacb7be2eb7d54863040573 ascii256=333770320092907ab4918befb12dd9550691976c7a2d0449960aa422fda35eca rc=0 bytes=4309 tests/fgz_fix005a/ModProbe005a.bas
+sha256=b4960a22e46eca15022e0e7a27bbd236d1422f1ee79c19d48051c1e8066f2119 ascii256=0998178d79b0af1a85215765cc1d9c181bd7be7abeabd87865c21d6aa1989697 rc=0 bytes=3905 tests/fgz_fix006di/FgzFix006Di.vbp
+sha256=b49615a9e77f6356f417ed8b04ee648fb475f8a982c75a52a4df555252fd3b7a ascii256=0998178d79b0af1a85215765cc1d9c181bd7be7abeabd87865c21d6aa1989697 rc=0 bytes=3821 tests/fgz_fix006di/ModDiProbe.bas
 # 2026-11-13 富贵竹 FIX-009 §7 登记来源：run 43304796761 / head 9ec08367，形状门读数
 #   期望 687 / 实得 687 / 相同 686 / 哈希不同 1 / 缺席 0 / 多出 0。
 #   按 CI 自交清单（github/ci/emit-manifest 提交 a03efcc2，head=9ec08367）登记。
@@ -1155,3 +1159,11 @@ sha256=8ec424cd7bd35f4ae1e9b96b62274d7853de5457575050f150a8e3e7672d55ee ascii256
 #   （lblItem 带 Index / labPlain 不带作零回归护栏）；全仓无存量语料写这六类数组事件
 #   ⇒ 其余 686 行哈希逐字未变，UNEXPLAINED=0。三枚 §7 针 + 原四枚 R2 针全绿，
 #   [VBP-BUILD] fgz_fix009_array_build PASS (633856 bytes)。
+# 2026-11-13 账 #610 第342刀（富贵竹 FIX-006 末节 di 桩两枚）登记来源：本机全量 emit 读数
+#   期望 696 / 实得 700 / 相同 692 / 哈希不同 4 / 缺席 0 / 多出 4。
+#   本刀只动 RTL（两枚 di 桩）与**新夹具**，不碰任何发码 ⇒ 既有 696 行逐字未动；
+#   多出的 4 行 = 两个新夹具 (fgz_fix005a / fgz_fix006di) 的 .vbp + .bas。
+#   哈希不同的 4 份 = guisample x3 + TeeChartChartDisplay x1 —— **机器侧差行**
+#   (上一刀已按 CI 自交清单登记过 ⇒ 期望清单里存的是 CI 那台的值, 本机算的不同)
+#   ⇒ 这 4 行**不在本刀登记范围**, 不动 (动了 CI 必红)。
+#   ⚠ 这 4 条新登记先按**本机值**写入; 若 CI 那台算出不同, 按 CI 自交清单改登记后重跑形状门。

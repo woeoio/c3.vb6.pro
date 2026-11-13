@@ -1,0 +1,5 @@
+Type=Exe
+Module=ModProbe005a; ModProbe005a.bas
+Startup="Sub Main"
+ExeName32="Fix005aProbe.exe"
+Name="Fix005aProbe"

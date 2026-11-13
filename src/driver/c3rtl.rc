@@ -1,4 +1,9 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-13 (账 #610 第342刀, 富贵竹 FIX-006 末节 LNK2019 那一族):
+//   vb6_di_user32_stubs.c 补 vb6_di_AttachThreadInput / vb6_di_IsIconic 两枚
+//   声明式桩。原型逐字取自 C3 生成头 (ByVal Boolean → int16_t, **不是**上游
+//   FIX-006 文档给的 intptr_t 全形 —— 那是它那个工程的 Declare 映射)。
+//   本条注释只为触发 rc.exe 重嵌 src/rtl/** (check_rtl_embedded 的 stale-embed 判据)。
 // 2026-11-13 (富贵竹 FIX-011/012 第二轮): vb6rtl_com.c vb6_SlotHasRealSafeArray
 //   的「是不是真 SAFEARRAY」判据改成上游口径 (cDims==1 且 fFeatures!=0xA1D1) ——
 //   原写法 !vb6_SaIs1D(parray) 会把 C3 的 ND 描述符 (二维数组) 也判成真 SAFEARRAY

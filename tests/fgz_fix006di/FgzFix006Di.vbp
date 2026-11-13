@@ -1,0 +1,5 @@
+Type=Exe
+Module=ModDiProbe; ModDiProbe.bas
+Startup="Sub Main"
+ExeName32="Fix006DiProbe.exe"
+Name="Fix006DiProbe"

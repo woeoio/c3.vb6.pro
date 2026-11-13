@@ -306,6 +306,29 @@ function Test-DiStubCensus {
     }
 }
 
+# === 静态对表: di 桩签名 ↔ C3 的 Declare→C 映射 (账 #610 第342刀) ===
+# 判据在 scripts/check_di_stub_boolean_map.ps1。为什么要这道:
+#   di 桩定义与 C3 生成的 extern 原型**分处两个翻译单元** ⇒ 链接期不检查类型 ⇒
+#   签名不一致时既不报错也不红, 只是 x86 stdcall 下参数宽度错位 (行为错, 运行时才炸)。
+#   本刀补的 vb6_di_AttachThreadInput / vb6_di_IsIconic 正好踩在这条缝上:
+#   上游 FIX-006 文档给的是 intptr_t 全形, 本项目 C3 实际生成 int16_t (Boolean 档)。
+# 解释器口径同 Test-DiStubCensus: 优先 pwsh, 没有就退回 Windows PowerShell, 不许自废。
+function Test-DiStubBooleanMap {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] di_stub_boolean_map ... "
+    $psExe = "powershell"
+    $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($ps7) { $psExe = $ps7.Source }
+    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_di_stub_boolean_map.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 # === 静态对表: .vbp 夹具 census (每个夹具都必须入册) ===
 # 判据与基线都在 scripts/check_vbp_fixture_census.ps1 + scripts/vbp_fixtures_unregistered.txt。
 # 由来 (2026-10-06, 与上面那条 di_stubs_census 是同一件事的两面):
@@ -7851,6 +7874,39 @@ if ($Category -in @("all", "run", "vbp")) {
     )
     Test-Vbp "fgz_fix004_run" "$Tests\fgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7")
     Test-Vbp "fgz_fix004_run_x86" "$Tests\fgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7") -Arch "x86"
+    # 富贵竹 FIX-006 末节 + FIX-005a (账 #610 第342刀): di 桩两枚 (AttachThreadInput /
+    # IsIconic) + 后期绑定默认成员的解包防回归。
+    #
+    # ① di 桩两枚 (上游 FIX-006 §6 末节: "链接报 vb6_di_AttachThreadInput、
+    #    vb6_di_IsIconic 未解析")。di 桩是**声明式**的 —— C3 把用户的
+    #    `Declare ... Lib "user32"` 名字动态拼成 `vb6_di_<name>`, 静态清单扫不出来,
+    #    只有真链一次才以 LNK2019 现形 ⇒ 判据 = **能链出 exe**。
+    #    修前实测(本机): LNK2019 vb6_di_AttachThreadInput / vb6_di_IsIconic + LNK1120。
+    # ② 形状针钉住 C3 侧生成头的**逐字原型**: Boolean 档是 int16_t
+    #    (src/backend/cgen_base_type.cpp 的 Boolean 档), **不是**上游 FIX-006 文档给的
+    #    intptr_t 全形 —— 照抄上游会让桩与生成头分处两个 TU 而链接期不查类型,
+    #    x86 stdcall 下第三个参数的栈槽宽度对不上。scripts/check_di_stub_boolean_map.ps1
+    #    钉住"两侧逐字一致"(C3 映射变了就红)。
+    Test-EmitcShape "fgz_fix006di_extern_stubs" @("$Tests\fgz_fix006di\FgzFix006Di.vbp") @(
+        'extern int16_t __stdcall vb6_di_AttachThreadInput(intptr_t idAttach, intptr_t idAttachTo, int16_t fAttach);',
+        'extern int16_t __stdcall vb6_di_IsIconic(intptr_t hWnd);'
+    )
+    Test-VbpBuild "fgz_fix006di_build" "$Tests\fgz_fix006di\FgzFix006Di.vbp"
+    Test-Vbp "fgz_fix006di_run" "$Tests\fgz_fix006di\FgzFix006Di.vbp" @("DI-OK")
+    Test-Vbp "fgz_fix006di_run_x86" "$Tests\fgz_fix006di\FgzFix006Di.vbp" @("DI-OK") -Arch "x86"
+    # ③ 后期绑定默认成员 (DISPID_VALUE) 的结果赋给标量槽, **必须**先拆箱:
+    #    `v = d("k")` (d 是 As Object) ⇒ vb6_ComCallByDispid 交回的是堆上 VARIANT*,
+    #    不拆就 void* 直接进 int32_t/BSTR 形参 ⇒ C2440。
+    #    ⚠ 这一格本地**本来就走另一条正确的路**(赋值站那张内联名单在当前路径上是死代码,
+    #    调用点早已被包过) ⇒ 本针是**防回归**, 不是修前红; 上游 FIX-005a 那族
+    #    (名单长度写错 ⇒ 恒假) 在本地度量 697 份语料后确认无暴露面 ⇒ 按"无判据不改"不修。
+    Test-EmitcShape "fgz_fix005a_default_member_unwrapped" @("$Tests\fgz_fix005a\FgzFix005a.vbp") @(
+        'vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComCallByDispid(',
+        'vb6_VariantToDouble(vb6_VariantFromComResult(vb6_ComCallByDispid(',
+        'vb6_VariantToString(vb6_VariantFromComResult(vb6_ComCallByDispid('
+    )
+    Test-Vbp "fgz_fix005a_run" "$Tests\fgz_fix005a\FgzFix005a.vbp" @("DICT-L=7", "DICT-S=hello", "DICT-X=2.5")
+    Test-Vbp "fgz_fix005a_run_x86" "$Tests\fgz_fix005a\FgzFix005a.vbp" @("DICT-L=7", "DICT-S=hello", "DICT-X=2.5") -Arch "x86"
     # 富贵竹 FIX-012 (账 #610 第341刀): ByVal 串形参先进函数先拷副本。修前 C 签名
     # BSTR p 别名调用方的串, 体里 vb6_BSTR_Assign/AssignMove 先 free 旧值 = 把调用
     # 方的串放了 → 悬垂 (上游实测 AddText 画出 "*Model_Space")。运行针修前实测红:
@@ -12369,6 +12425,7 @@ if ($Category -in @("all", "compile")) {
     # 这里改成每次 compile 段都静态对一遍基线 (不编译、不跑程序)。
     Write-Host "--- Static Checks ---" -ForegroundColor Yellow
     if (Enter-StaticShard) { Test-DiStubCensus }
+    if (Enter-StaticShard) { Test-DiStubBooleanMap }
     if (Enter-StaticShard) { Test-VbpFixtureCensus }
     if (Enter-StaticShard) { Test-UcScaleUnitsCensus }
     if (Enter-StaticShard) { Test-FormIconCensus }
