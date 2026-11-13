@@ -1163,6 +1163,14 @@ sha256=b49615a9e77f6356f417ed8b04ee648fb475f8a982c75a52a4df555252fd3b7a ascii256
 #   多出的 2 行 = 新夹具 tests/fgz_fix013/ 的 .vbp + .bas。
 sha256=df3551c04d0c1779aaeb837bce2ad433b740160279964b3dbf8610d884f9b70d ascii256=c2a81202c0f9edbce7cd890034fb208bba494029a36d046128ce37709ee4b6b5 rc=0 bytes=4629 tests/fgz_fix013/FgzFix013.vbp
 sha256=936a411e487a0217bc85080d0bcee4a3089d848a51ca3f51f7bf8ec0d8d83878 ascii256=c2a81202c0f9edbce7cd890034fb208bba494029a36d046128ce37709ee4b6b5 rc=0 bytes=4547 tests/fgz_fix013/ModLeak013.bas
+sha256=c0638067a3b85b08e3dfdb14bb485c49bae79dec583fca847c2e07c18393d7f1 ascii256=a2393704f3626cc23afb6fc4bdcbb2c345db2fb11321c80579f71fb433f1430b rc=0 bytes=6498 tests/fgz_fix014/FgzFix014.vbp
+sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ascii256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 rc=1 bytes=0 tests/fgz_fix014/DllBlocks.bas
+# 2026-11-13 账 #610 第344刀（VT_ARRAY|VT_VARIANT 入站档）登记来源：本机全量 emit 读数
+#   期望 702 / 实得 704 / 相同 698 / 哈希不同 4 / 缺席 0 / 多出 2。
+#   本刀**只动 RTL**（vb6_VariantArrayIntoSlot 的逐枚深拷贝那一支）⇒ C3 发码一个字节没变
+#   ⇒ 既有 702 行**逐字未动**；哈希不同的 4 份仍是 guisample x3 + TeeChart x1 那批
+#   **机器侧差行**（ascii256 也变 ⇒ 与本刀无关，期望清单里存的是 CI 侧的值）⇒ 不动。
+#   多出的 2 行 = 新夹具 tests/fgz_fix014/ 的 .vbp + .bas（手工 splice，非整表 Bless）。
 # 2026-11-13 富贵竹 FIX-009 §7 登记来源：run 43304796761 / head 9ec08367，形状门读数
 #   期望 687 / 实得 687 / 相同 686 / 哈希不同 1 / 缺席 0 / 多出 0。
 #   按 CI 自交清单（github/ci/emit-manifest 提交 a03efcc2，head=9ec08367）登记。

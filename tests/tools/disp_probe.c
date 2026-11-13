@@ -495,6 +495,152 @@ static void call_arrarg(IDispatch *disp, const char *spec, int byref) {
     else { VariantClear(&a[0]); }
 }
 
+/* Account #610 knife #344: SAFEARRAY(VARIANT) argument arm.
+ *
+ * Spec: ARRVAR=<Method>[:<byref>]
+ *   Builds a real one-element-per-slot SAFEARRAY(VARIANT) the way a real client builds
+ *   one (SafeArrayCreate + SafeArrayPutElement, no hand-written layout) and hands it
+ *   over as the single declared argument. The elements carry one of each kind we care
+ *   about:
+ *     slot 0 = VT_BSTR  "FGZ-STR"
+ *     slot 1 = VT_I4    4242
+ *     slot 2 = VT_R8    2.5
+ *     slot 3 = VT_BOOL  VARIANT_TRUE
+ * The callee reads them back; the arm prints the callee's answer verbatim so the
+ * harness can tell "the array arrived" from "the array arrived as Empty".
+ *
+ * Why this arm exists: the server-side inbound path (vb6_VariantBorrowIntoSlot ->
+ * vb6_VariantArrayIntoSlot) used to answer Empty for VT_ARRAY|VT_VARIANT, because
+ * VARIANT elements are not blittable and the array-level memcpy was refused.
+ */
+static void call_arrvar(IDispatch *disp, const char *spec) {
+    char name[64];
+    const char *colon;
+    VARIANT a[1];
+    VARIANT res;
+    DISPPARAMS dp;
+    EXCEPINFO ei;
+    DISPID id = DISPID_UNKNOWN;
+    LPOLESTR names[1];
+    UINT err = 0;
+    SAFEARRAY *psa;
+    HRESULT hr;
+    int byref = 0;
+    LONG l;
+
+    /* The name alone is the common case (ARRVAR=TakeVarArr); an optional ":b"
+     * suffix asks for the ByRef shape (what a VB6 client sends for a ByRef
+     * Variant array). */
+    colon = strchr(spec, ':');
+    if (colon) {
+        if ((size_t)(colon - spec) >= sizeof(name)) {
+            printf("ARRVAR=%s BADSPEC\n", spec);
+            return;
+        }
+        memcpy(name, spec, (size_t)(colon - spec));
+        name[colon - spec] = '\0';
+        if (colon[1] == 'b') byref = 1;
+    } else {
+        if (strlen(spec) >= sizeof(name)) {
+            printf("ARRVAR=%s BADSPEC\n", spec);
+            return;
+        }
+        strcpy(name, spec);
+    }
+
+    /* One SAFEARRAY(VARIANT) with four slots. */
+    {
+        SAFEARRAYBOUND sab;
+        sab.cElements = 4;
+        sab.lLbound = 0;
+        psa = SafeArrayCreate(VT_VARIANT, 1, &sab);
+    }
+    if (!psa) { printf("ARRVAR=%s SA=FAIL\n", name); return; }
+
+    {
+        VARIANT e;
+        LONG i;
+        /* slot 0: BSTR */
+        i = 0;
+        VariantInit(&e);
+        e.vt = VT_BSTR;
+        e.bstrVal = SysAllocString(L"FGZ-STR");
+        SafeArrayPutElement(psa, &i, (void *)&e);
+        VariantClear(&e);
+        /* slot 1: I4 */
+        i = 1;
+        VariantInit(&e);
+        e.vt = VT_I4;
+        e.lVal = 4242;
+        SafeArrayPutElement(psa, &i, (void *)&e);
+        VariantClear(&e);
+        /* slot 2: R8 */
+        i = 2;
+        VariantInit(&e);
+        e.vt = VT_R8;
+        e.dblVal = 2.5;
+        SafeArrayPutElement(psa, &i, (void *)&e);
+        VariantClear(&e);
+        /* slot 3: BOOL */
+        i = 3;
+        VariantInit(&e);
+        e.vt = VT_BOOL;
+        e.boolVal = VARIANT_TRUE;
+        SafeArrayPutElement(psa, &i, (void *)&e);
+        VariantClear(&e);
+    }
+
+    VariantInit(&a[0]);
+    if (byref) {
+        a[0].vt = (VARTYPE)(VT_ARRAY | VT_BYREF | VT_VARIANT);
+        a[0].pparray = &psa;
+    } else {
+        a[0].vt = (VARTYPE)(VT_ARRAY | VT_VARIANT);
+        a[0].parray = psa;
+    }
+
+    VariantInit(&res);
+    memset(&ei, 0, sizeof(ei));
+    memset(&dp, 0, sizeof(dp));
+    dp.rgvarg = a;
+    dp.cArgs = 1;
+    {
+        wchar_t wname[64];
+        if (MultiByteToWideChar(CP_ACP, 0, name, -1, wname, 64) <= 0) {
+            printf("ARRVAR=%s BADNAME\n", name);
+            VariantClear(&a[0]);
+            return;
+        }
+        names[0] = wname;
+        hr = IDispatch_GetIDsOfNames(disp, &IID_NULL, names, 1, LOCALE_USER_DEFAULT, &id);
+    }
+    if (SUCCEEDED(hr))
+        hr = IDispatch_Invoke(disp, id, &IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD,
+                              &dp, &res, &ei, &err);
+
+    printf("ARRVAR=%s mode=%s hr=0x%08lX", name, byref ? "byref" : "plain",
+           (unsigned long)hr);
+    /* The callee's answer, verbatim: a BSTR answer is printed as text, anything else
+     * by type. This is the witness -- "the array arrived" vs "the array arrived Empty". */
+    if (res.vt == VT_BSTR && res.bstrVal) {
+        printf(" ans=%ls", res.bstrVal);
+    } else if (res.vt == VT_I4) {
+        printf(" ans=I4:%ld", (long)res.lVal);
+    } else if (res.vt == VT_R8) {
+        printf(" ans=R8:%g", res.dblVal);
+    } else if (res.vt == VT_EMPTY || res.vt == VT_NULL) {
+        printf(" ans=EMPTY");
+    } else {
+        printf(" ans=vt%u", (unsigned)res.vt);
+    }
+    printf("\n");
+    VariantClear(&res);
+    /* ByRef: the VariantClear on the byref tag is a no-op, so the (possibly replaced)
+     * descriptor is ours to free; plain: VariantClear already destroyed it. */
+    VariantClear(&a[0]);
+    if (byref) { if (psa) SafeArrayDestroy(psa); }
+}
+
 /* Acct #305 SB223 (knife 231): scalar ByRef argument arm. Spec: BYREFARG=<Method>:<n>.
  * Hands over VT_BYREF|VT_I4 pointing at a client-owned LONG (what a VB6 client sends for
  * `ByRef v As Long`) and prints both the client's value after the call and the answer. */
@@ -814,6 +960,7 @@ int main(int argc, char **argv) {
     for (ai = 3; ai < argc; ai++) {
         if (strncmp(argv[ai], "ARRARG=", 7) == 0) call_arrarg(disp, argv[ai] + 7, 1);
         else if (strncmp(argv[ai], "ARRARGV=", 8) == 0) call_arrarg(disp, argv[ai] + 8, 0);
+        else if (strncmp(argv[ai], "ARRVAR=", 7) == 0) call_arrvar(disp, argv[ai] + 7);
         else if (strncmp(argv[ai], "BYREFARG=", 9) == 0) call_byrefarg(disp, argv[ai] + 9, 1);
         else if (strncmp(argv[ai], "BYVALARG=", 9) == 0) call_byrefarg(disp, argv[ai] + 9, 0);
     }

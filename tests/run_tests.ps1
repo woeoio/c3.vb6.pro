@@ -353,6 +353,28 @@ function Test-ByValStrCopy {
         $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
     }
 }
+# === 静态对表: VT_ARRAY|VT_VARIANT 入站档 (账 #610 第344刀) ===
+# 判据在 scripts/check_var_arr_inbound.ps1。为什么要这道:
+#   形状门只哈希 --emit-c 的 stdout => **RTL 内部**改了什么它一个字都不管;
+#   这一刀改的正是 RTL 内部 (逐枚深拷贝那一支) => 没有静态哨兵就只剩真 COM 客户端
+#   在场时才有证人。哨兵是兜底: 有人把逐枚那一支删掉/改回 memcpy => 立刻红。
+# 解释器口径同 Test-DiStubCensus: 优先 pwsh, 没有就退回 Windows PowerShell, 不许自废。
+function Test-VarArrInbound {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] var_arr_inbound ... "
+    $psExe = "powershell"
+    $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($ps7) { $psExe = $ps7.Source }
+    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_var_arr_inbound.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 # === 静态对表: .vbp 夹具 census (每个夹具都必须入册) ===
 # 判据与基线都在 scripts/check_vbp_fixture_census.ps1 + scripts/vbp_fixtures_unregistered.txt。
 # 由来 (2026-10-06, 与上面那条 di_stubs_census 是同一件事的两面):
@@ -10941,6 +10963,26 @@ if ($Category -in @("all", "run", "vbp")) {
         "DONE") @() `
         -Tail @("ARRARG=Fill:4", "ARRARGV=Fill:4") -Arch "x86"
 
+    # 账 #610 第344刀 (GetXData 的 VT_ARRAY|VT_VARIANT 元素档): 服务端**入站**那一格
+    # (vb6_VariantBorrowIntoSlot -> vb6_VariantArrayIntoSlot) 以前把整枚数组丢成 Empty ——
+    # VARIANT 元素不能整块 memcpy, 落在 blittable 白名单之外 (上游 FIX-011 §5 记着:
+    # 「GetXData 的 XDataValue 元素档是 VT_VARIANT ... 仍会转成 Empty」)。
+    # 修前实测 (本机): 服务端读 UBound(v) 直接抛异常 ⇒ hr=0x80020009 / ans=EMPTY。
+    # 修后: 逐枚深拷贝进来 ⇒ 四枚元素 (BSTR/I4/R8/BOOL) 全部读得出真值。
+    # 探针臂 ARRVAR= 递一个真 SAFEARRAY(VARIANT) (tests/tools/disp_probe.c 的 call_arrvar),
+    # 服务端把读到的拼成串交回来 —— 那串就是证人。
+    Test-DispatchInvoke "fgz_fix014_vararr_inbound" "$Tests\fgz_fix014\FgzFix014.vbp" "FgzFix014" `
+        "{44445555-6666-7777-8888-9999AAAA0144}" @(
+        "ARRVAR=TakeVarArr mode=plain hr=0x00000000 ans=n=4;t0=String;v0=FGZ-STR;t1=Long;v1=4242;t2=Double;v2=2.5;t3=Boolean;v3=True",
+        "ARRVAR=TakeVarArr mode=byref hr=0x00000000 ans=n=4;t0=String;v0=FGZ-STR;t1=Long;v1=4242;t2=Double;v2=2.5;t3=Boolean;v3=True",
+        "DONE") @() `
+        -Tail @("ARRVAR=TakeVarArr", "ARRVAR=TakeVarArr:b")
+    Test-DispatchInvoke "fgz_fix014_vararr_inbound_x86" "$Tests\fgz_fix014\FgzFix014.vbp" "FgzFix014" `
+        "{44445555-6666-7777-8888-9999AAAA0144}" @(
+        "ARRVAR=TakeVarArr mode=plain hr=0x00000000 ans=n=4;t0=String;v0=FGZ-STR;t1=Long;v1=4242;t2=Double;v2=2.5;t3=Boolean;v3=True",
+        "ARRVAR=TakeVarArr mode=byref hr=0x00000000 ans=n=4;t0=String;v0=FGZ-STR;t1=Long;v1=4242;t2=Double;v2=2.5;t3=Boolean;v3=True",
+        "DONE") @() `
+        -Tail @("ARRVAR=TakeVarArr", "ARRVAR=TakeVarArr:b") -Arch "x86"
     # 账 #305 SB223 (第二百三十三刀): ByRef **标量**形参的两半 —— 入槽按 pointee 拷值(体里读对) + 调用后
     # 按 pointee 的类型写回(客户读对)。改前: 客户端递 VT_BYREF|VT_I4 时体里读到的**是指针**(实测 ret 是
     # 指针低 32 位 + 1), 且客户变量一字未动。两条臂同在一趟里互为证人: BYREFARG 要 11/11(读对+写回),
@@ -12484,6 +12526,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-DiStubCensus }
     if (Enter-StaticShard) { Test-DiStubBooleanMap }
     if (Enter-StaticShard) { Test-ByValStrCopy }
+    if (Enter-StaticShard) { Test-VarArrInbound }
     if (Enter-StaticShard) { Test-VbpFixtureCensus }
     if (Enter-StaticShard) { Test-UcScaleUnitsCensus }
     if (Enter-StaticShard) { Test-FormIconCensus }

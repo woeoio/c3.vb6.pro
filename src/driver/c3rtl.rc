@@ -1,4 +1,9 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-13 (账 #610 第344刀, GetXData 的 VT_ARRAY|VT_VARIANT 元素档):
+//   vb6rtl_com.c 的 vb6_VariantArrayIntoSlot 开 **VT_VARIANT 元素档**: 这一档
+//   落不进 blittable 白名单 (VARIANT 不能整块 memcpy), 但可以**逐枚深拷贝**
+//   (VariantCopy 一份私有副本 → 消耗式转换 → VariantClear 那份副本)。
+//   改前这一档令 allow==0 ⇒ 槽留 Empty ⇒ 客户端递进来的整枚数组全丢。
 // 2026-11-13 (账 #610 第342刀, 富贵竹 FIX-006 末节 LNK2019 那一族):
 //   vb6_di_user32_stubs.c 补 vb6_di_AttachThreadInput / vb6_di_IsIconic 两枚
 //   声明式桩。原型逐字取自 C3 生成头 (ByVal Boolean → int16_t, **不是**上游

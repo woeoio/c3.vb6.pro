@@ -646,15 +646,26 @@ static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
     vb6_safearray_elemtype et;
     VARTYPE allow;
     LONG lo = 0, hi = 0;
-    int32_t n, esz;
+    int32_t n, esz, i;
     void* srcData = NULL;
     vb6_SafeArray1D* arr;
     void* data;
+    int isVarElem;
     s->vt = vb6_vtEmpty;
     if (!psa || SafeArrayGetDim(psa) != 1) return;          /* 多维: 描述符是另一套 (§B151) */
     et = vb6_SaElemTypeFromVt(base);
-    allow = vb6_ComSaVtBlittable(et);
-    if (!allow || allow != base) return;                   /* 白名单外 / 认不出 = 不猜 */
+    /* 账 #610 第344刀: **VT_VARIANT 元素档** —— 白名单放不进去 (VARIANT 不能整块 memcpy),
+     * 但它**可以逐枚深拷贝**。改前这一档落在 `allow == 0` 那句 ⇒ 槽留 Empty ⇒
+     * 客户端递进来的整枚数组**全丢** (上游 FIX-011 §5 记着: GetXData 的 XDataValue
+     * 元素档正是 VT_VARIANT, 「落在 blittable 白名单之外, 仍会转成 Empty」)。
+     * 这一档自己走下面那条逐枚分支, 不问白名单。 */
+    isVarElem = (base == VT_VARIANT);
+    if (isVarElem) {
+        allow = (VARTYPE)VT_VARIANT;
+    } else {
+        allow = vb6_ComSaVtBlittable(et);
+        if (!allow || allow != base) return;                   /* 白名单外 / 认不出 = 不猜 */
+    }
     SafeArrayGetLBound(psa, 1, &lo);
     SafeArrayGetUBound(psa, 1, &hi);
     n = hi - lo + 1;
@@ -671,7 +682,26 @@ static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
         SafeArrayUnaccessData(psa);
         return;
     }
-    memcpy(data, srcData, (size_t)n * (size_t)esz);
+    if (isVarElem) {
+        /* 逐枚深拷贝 —— 这一档**不能**整块 memcpy: 那样搬进来的是**对端拥有**的
+         * BSTR / SAFEARRAY 指针; 对端 free 掉槽阵列 (vb6comserver_obj.c 那句
+         * CoTaskMemFree) 之后 ours 就是悬垂 + 双释放。
+         * 每一枚: VariantCopy 一份**私有**副本 → 消耗式转换搬进我们的描述符 →
+         * VariantClear 那份私有副本 (消耗式已把里面的指针搬走并清空 ⇒ 不重复释放)。
+         * ⚠ 消耗式那一档 (steal=1) 只动**副本**里的指针, 对端的数组一个字节都不碰
+         *   —— 这一支是**入站**路径, 对端那份归对端自己释放。 */
+        for (i = 0; i < n; i++) {
+            VARIANT* srcElem = (VARIANT*)((char*)srcData + i * sizeof(VARIANT));
+            VARIANT elem;
+            vb6_VARIANT* dstElem = (vb6_VARIANT*)((char*)data + i * esz);
+            VariantInit(&elem);
+            VariantCopy(&elem, srcElem);
+            *dstElem = vb6_ComVariantIntoSlot(&elem, 1);
+            VariantClear(&elem);
+        }
+    } else {
+        memcpy(data, srcData, (size_t)n * (size_t)esz);
+    }
     SafeArrayUnaccessData(psa);
     vb6_Sa1DInit(arr);
     arr->elemType = et;

@@ -1,0 +1,6 @@
+Type=DLL
+Class=FgzVarArrCls; FgzVarArrCls.cls; {44445555-6666-7777-8888-9999AAAA0144}
+Module=DllBlocks; DllBlocks.bas
+Startup=""
+Command32=""
+Name="FgzFix014"
