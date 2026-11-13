@@ -7825,13 +7825,13 @@ if ($Category -in @("all", "run", "vbp")) {
     #      (防 LNK2005) 不回退, 两枚定义行都在;
     #   ③ 运行针: F4-GLOBAL=41 (跨模块裸名读真全局) / F4-SHADOW=99 (窗体私有副本不被
     #      全局污染) / F4-LOCAL=5 (局部同名遮蔽且不 #undef 影子宏) / F4-DUO=7 (093b 护栏)。
-    Test-EmitcShape "fgz_fix004_public_extern_shadow_macro" @("$Testsgz_fix004\FgzFix004.vbp") @(
+    Test-EmitcShape "fgz_fix004_public_extern_shadow_macro" @("$Tests\fgz_fix004\FgzFix004.vbp") @(
         'extern int32_t gShared;',
         '#define gShared vb6_shadow_gShared__FrmMain',
         'static int32_t gDuo = 0;'
     )
-    Test-Vbp "fgz_fix004_run" "$Testsgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7")
-    Test-Vbp "fgz_fix004_run_x86" "$Testsgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7") -Arch "x86"
+    Test-Vbp "fgz_fix004_run" "$Tests\fgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7")
+    Test-Vbp "fgz_fix004_run_x86" "$Tests\fgz_fix004\FgzFix004.vbp" @("F4-GLOBAL=41", "F4-SHADOW=99", "F4-LOCAL=5", "F4-DUO=7") -Arch "x86"
     # 账 #305 §B224 第二半 (第二百三十九刀): 晚绑定实参按引用打包。
     # 真 VB6 对带型变量递 VT_BYREF|T (ai/probes bool_string B4: `Dim o As Object` + `o.Bump(x)` ⇒ x=11);
     # 这里钉五档 Ref 取址 (Long/Integer/Single/Double/Boolean 各按 C 存储宽度选标签)，
