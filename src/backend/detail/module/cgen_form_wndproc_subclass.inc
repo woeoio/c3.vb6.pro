@@ -290,20 +290,44 @@
                 c_.indent();
                 c_.emitLine("SetPropW(hwnd, L\"VB6_MouseTracked\", (HANDLE)1);");
                 c_.emitLine("vb6_StartMouseTracking((void*)hwnd);");
-                // ucSlider: UC 的 MouseEnter/MouseLeave 处理器由 prepareEventHandlerProc
-                // 按事件 ABI 翻成 **ByVal 下标** (与上面 sink thunk 同形: fn(3)); 不能套用
-                // GotFocus/Click 那条 ByRef(&idx) 档, 否则原型冲突 + 处理器内数组下标悬空.
-                auto evCallBlockUcByVal = [&](const char* suffix) -> std::string {
+                // 账 #610 第345刀: MouseEnter/MouseLeave 的派发与**定义侧**同源。
+                //
+                // 修前 (ucSlider_2022 实测):
+                //   定义   static void vb6_ucSlider1_MouseEnter(int16_t* INDEX);   ← ByRef 指针
+                //   派发   { extern void vb6_ucSlider1_MouseEnter(int16_t); vb6_ucSlider1_MouseEnter(3); }
+                // 两处**两种形参表** ⇒ x86 stdcall 栈槽错位 (把整数 3 当指针解引用 ⇒ 段错误),
+                // x64 下读的是垃圾地址 ⇒ 同样崩。
+                // 根因: 此前那条注释的前提不成立 —— 「处理器由 prepareEventHandlerProc 翻成
+                // ByVal 下标」只在 **UC 自定义事件**那一路成立; **标准鼠标事件**这条路
+                // (MouseEnter/MouseLeave/…) 从不经过 applyEventHandlerAbi ⇒ 首形参保留
+                // VB6 默认 ByRef ⇒ 定义侧就是指针。
+                // 第二个错位: 实参取的是**编译期常量** info.arrayIndex (设计期下标) ⇒
+                // 40 个 Label 一律答 39; 运行时真下标在 GetPropW(hwnd, "VB6_CtrlArrIndex")。
+                // 修法 (与上面 evCallBlock / emitMouseMoveCall 同口径):
+                //   · 下标从 GetPropW 读回再减 1;
+                //   · 传值还是传址按**第一形参的真实 isByVal** 决定 ——
+                //     判据收在权威 eventParamByAddress; 这里 isUserControl=false,
+                //     因为问的是**过程那一路**(处理器定义, 读 isByVal, 与 makeParamCType
+                //     同一答案), 不是 .ctl 里那枚事件声明 ⇒ byRef = !isByVal。
+                //     ⇒ 用户显式写 ByVal Index 时定义侧是 int16_t ⇒ 传值;
+                //       没写 (VB6 默认 ByRef) ⇒ 定义侧是 int16_t* ⇒ 传址。
+                auto evCallBlockUcIndex = [&](const char* suffix) -> std::string {
                     Symbol* evSym = symTab_.lookup(info.ctrlName + suffix);
                     std::string fn = eventHandlerFn(info.ctrlName, suffix);
                     if (evSym && !evSym->P().params.empty() && info.arrayIndex >= 0) {
-                        return "{ extern void " + fn + "(int16_t); " + fn + "("
-                             + std::to_string(info.arrayIndex) + "); }";
+                        const bool byAddr = eventParamByAddress(
+                            /*declaredByRef=*/false, evSym->P().params[0].isByVal,
+                            /*isUserControl=*/false, /*arrayCarrier=*/false);
+                        const std::string decl = byAddr ? "int16_t*" : "int16_t";
+                        const std::string arg = byAddr ? "&vb6_evindex" : "vb6_evindex";
+                        return "{ extern void " + fn + "(" + decl + "); int16_t vb6_evindex = "
+                               "(int16_t)((INT_PTR)GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1); "
+                             + fn + "(" + arg + "); }";
                     }
                     return "{ extern void " + fn + "(); " + fn + "(); }";
                 };
                 if (info.hasMouseEnter) {
-                    c_.emitLine(evCallBlockUcByVal("_MouseEnter"));
+                    c_.emitLine(evCallBlockUcIndex("_MouseEnter"));
                 }
                 c_.dedent();
                 c_.emitLine("}");
@@ -321,7 +345,7 @@
                 c_.indent();
                 c_.emitLine("RemovePropW(hwnd, L\"VB6_MouseTracked\");");
                 if (info.hasMouseLeave) {
-                    c_.emitLine(evCallBlockUcByVal("_MouseLeave"));  // 控件数组: ByVal 下标
+                    c_.emitLine(evCallBlockUcIndex("_MouseLeave"));  // 控件数组: 下标按真实 ByVal/ByRef 递
                 }
                 c_.dedent();
                 c_.emitLine("}");

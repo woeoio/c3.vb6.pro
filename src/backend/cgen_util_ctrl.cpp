@@ -3,6 +3,7 @@
 #include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
 #include "common/int_literal.hpp"   // 账 #194: 整数字面量的单一出口
 #include "common/canvas_drawing.hpp"  // 账 #232①: 画布动词的单一出口 (名字 / 接收者 / 实参形状)
+#include "common/event_param_abi.hpp" // 账 #610 第345刀: 事件形参「按不按地址递」的唯一权威
 #include "common/form_pseudo.hpp"     // 账 #278 §B109: 属性名→读函数的单一出口 (两层都问它)
 #include <algorithm>
 #include <cctype>

@@ -375,6 +375,27 @@ function Test-VarArrInbound {
         $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
     }
 }
+# === 静态对表: MouseEnter/MouseLeave 数组档派发与定义侧同源 (账 #610 第345刀) ===
+# 判据在 scripts/check_mouse_enter_index.ps1。为什么要这道:
+#   形状门只哈希 --emit-c 的 stdout => 看得见"发码变了", 看不见"定义与派发是否自洽"。
+#   本刀修的正是自洽性 (定义 int16_t* INDEX vs 派发 int16_t 值) => 只有逐字钉住派发形态才抓得到。
+# 解释器口径同 Test-DiStubCensus: 优先 pwsh, 没有就退回 Windows PowerShell, 不许自废。
+function Test-MouseEnterIndex {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] mouse_enter_index ... "
+    $psExe = "powershell"
+    $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($ps7) { $psExe = $ps7.Source }
+    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_mouse_enter_index.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 # === 静态对表: .vbp 夹具 census (每个夹具都必须入册) ===
 # 判据与基线都在 scripts/check_vbp_fixture_census.ps1 + scripts/vbp_fixtures_unregistered.txt。
 # 由来 (2026-10-06, 与上面那条 di_stubs_census 是同一件事的两面):
@@ -7986,6 +8007,22 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-VbpBuild "fgz_fix013_build" "$Tests\fgz_fix013\FgzFix013.vbp"
     Test-Vbp "fgz_fix013_run" "$Tests\fgz_fix013\FgzFix013.vbp" @("LEAK13-OK=hello")
     Test-Vbp "fgz_fix013_run_x86" "$Tests\fgz_fix013\FgzFix013.vbp" @("LEAK13-OK=hello") -Arch "x86"
+    # 账 #610 第345刀: MouseEnter / MouseLeave 的**数组档**派发必须与处理器的定义侧同源。
+    # 修前 (ucSlider_2022 本机实测):
+    #   定义 static void vb6_ucSlider1_MouseEnter(int16_t* INDEX);            <- ByRef 指针
+    #   派发 { extern void vb6_ucSlider1_MouseEnter(int16_t); ..._MouseEnter(3); }  <- 传值 + 编译期常量
+    # 两种形参表 => MSVC 只给 C4133 警告、链接照过 => **运行期**把整数 3 当指针解引用 => 崩。
+    # 修后: 派发按第一形参的真实 ByVal/ByRef 递 (ByRef => 传址), 且下标从
+    # GetPropW(hwnd, "VB6_CtrlArrIndex") - 1 读**运行时**值 (不再是设计期常量 40 个 Label 答 39)。
+    Test-EmitcShape "fgz_ucslider_mouseenter_index_dispatch" @("$Tests\ucSlider_2022\Proyecto1.vbp") @(
+        'extern void vb6_ucSlider1_MouseEnter(int16_t*);',
+        'vb6_ucSlider1_MouseEnter(&vb6_evindex);',
+        'GetPropW(hwnd, L\"VB6_CtrlArrIndex\") - 1'
+    )
+    Test-EmitcAbsent "fgz_ucslider_mouseenter_index_lesion" @("$Tests\ucSlider_2022\Proyecto1.vbp") @(
+        'vb6_ucSlider1_MouseEnter(int16_t);',
+        'vb6_ucSlider1_MouseEnter(3);'
+    )
     # 富贵竹 FIX-012 (账 #610 第341刀): ByVal 串形参先进函数先拷副本。修前 C 签名
     # BSTR p 别名调用方的串, 体里 vb6_BSTR_Assign/AssignMove 先 free 旧值 = 把调用
     # 方的串放了 → 悬垂 (上游实测 AddText 画出 "*Model_Space")。运行针修前实测红:
@@ -12526,6 +12563,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-DiStubCensus }
     if (Enter-StaticShard) { Test-DiStubBooleanMap }
     if (Enter-StaticShard) { Test-ByValStrCopy }
+    if (Enter-StaticShard) { Test-MouseEnterIndex }
     if (Enter-StaticShard) { Test-VarArrInbound }
     if (Enter-StaticShard) { Test-VbpFixtureCensus }
     if (Enter-StaticShard) { Test-UcScaleUnitsCensus }
