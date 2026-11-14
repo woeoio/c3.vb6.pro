@@ -1804,8 +1804,8 @@
                                 // 账 #611 第346刀: **Variant 数组的裸元素**作 ByRef Variant 实参。
                                 // `m_ViewArr(i)` (`Private m_ViewArr() As Variant`) 发出来就是
                                 // `VB6_SA_AT(vb6_VARIANT, me->m_ViewArr, i)`, 而那一格**自己就是**
-                                // 可寻址的 vb6_VARIANT 左值 —— 问句归账 #305 §B164 收口的
-                                // byRefElementAddressExpr (元素档逐字等于形参档才答是)。
+                                // 可寻址的 vb6_VARIANT 左值 —— 问句归账 #305 §B164 收口的那一枚主人
+                                // (元素档逐字等于形参档才答是)。
                                 // 原先进下面 isVariantSlot 那一臂被压成
                                 //   (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(元素)})
                                 // ⇒ vt 身份当场丢掉: 嵌套数组交 ""、Boolean 交 "True"、日期/数值

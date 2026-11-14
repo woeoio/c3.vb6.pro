@@ -14,8 +14,12 @@
 #       那张元素宏名单恰好 4 枚 (1 维 + 2/3/4 维)；两道闸各一次 —— 右括号必须正好收在整枚文本
 #       末尾 (否则取址的是半枚表达式)、元素档必须**逐字等于**形参那一档 (否则交出去是错型指针)；
 #       答「是」那一路交出的形状 = 取址 + 原样文本 (不许偷偷改写内层)。
-#   R2  消费者恰好两站 (位置实参那一条臂 + 命名实参那一条臂)，全 src 里这个名字只许出现四处
-#       (定义 + 声明 + 两站调用) 且只住在四份文件里。第三站要接同一问，先改这条并说清为什么。
+#   R2  消费者恰好三站 (位置实参那一条臂 + 命名实参那一条臂 + M22 裸元素那一条臂)，全 src 里这个
+#       名字只许出现五处 (定义 + 声明 + 三站调用) 且只住在四份文件里 (同一份文件可以有两站)。
+#       账 #611 第346刀接的第三站: `default:` 臂在落 VT_BSTR 装箱**之前**先问同一句话 ——
+#       实参本身若就是形参那一档的裸元素 (`VB6_SA_AT(vb6_VARIANT, arr, i)`), 取址直传。不接这
+#       一问就只剩"压成 VT_BSTR"一条路, vt 身份当场丢 (嵌套数组交 ""、Boolean 交 "True")。
+#       当时 JSonFast 第 7 按钮就是这么错的。
 #   R3  两站「落副本」那一臂只能挂在主人答否之后：各恰好一次 addr253.empty() 那道闸，
 #       且调用主人的那一行必须**早于**拼复合字面量的那一行；两条臂的副本形状各只有一份
 #       (位置站那一份带外层括号 = 预处理器不吃宏实参里的逗号，命名站那一份不带)。
@@ -94,10 +98,11 @@ Expect 'R1 那道「右括号收在整枚文本末尾」闸' (Count-Pattern $own
 Expect 'R1 那道「元素档逐字等于形参档」闸' (Count-Pattern $own $rankGate) 1
 Expect 'R1 答是时交出的形状 (取址 + 原样文本)' (Count-Pattern $own $answer) 1
 
-Write-Host 'R2 消费者计数 (两臂各一站, 全 src 四处齐)'
+Write-Host 'R2 消费者计数 (三臂各一站, 全 src 五处齐)'
 Expect 'R2 位置实参那一站' (Count-Pattern $em $callTxt) 1
 Expect 'R2 命名实参那一站' (Count-Pattern $na $callTxt) 1
-Expect 'R2 主人四处齐 (定义 + 声明 + 两站调用)' (Count-Pattern ($own + $hel + $em + $na) $ownName) 4
+Expect 'R2 M22 裸元素那一站' (Count-Pattern $em ([regex]::Escape('byRefElementAddressExpr(argVal, "vb6_VARIANT")'))) 1
+Expect 'R2 主人五处齐 (定义 + 声明 + 三站调用)' (Count-Pattern ($own + $hel + $em + $na) $ownName) 5
 $srcRefs = @(Get-ChildItem -Path (Join-Path $root 'src') -Recurse -File -Include *.cpp, *.hpp, *.inc |
              Where-Object { (Read-FileText $_.FullName).Contains($ownName) })
 Expect 'R2 认这个名字的文件只许四份' $srcRefs.Count 4
