@@ -1167,6 +1167,7 @@ sha256=c0638067a3b85b08e3dfdb14bb485c49bae79dec583fca847c2e07c18393d7f1 ascii256
 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ascii256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 rc=1 bytes=0 tests/fgz_fix014/DllBlocks.bas
 sha256=bdd21337169c653f88b510535b231b92f68b9d03612d6c06dfb6b0414f327b89 ascii256=273c095ed9c0dc9c6ea3f42c75fc62ddc8e152d7e7f345b1feeaf5a782f54919 rc=0 bytes=5856 tests/jsonfast_611/ArrayLiteralVariants.bas
 sha256=5ca4d1c43252b478180f1df02a8a94ee1cde9cdd878aabe1ec20088e0efd31c4 ascii256=914e13918d375a29f576f465cafdaf1cb28c8b5e1d8677558fac11c1a23a53fc rc=0 bytes=2173 tests/jsonfast_611/CreatedObjectTypeName.bas
+sha256=e03bdc60e01210cd1ba001be37094b0fc1bbe4730cabd74ff7d801dcf92b85f6 ascii256=978ea15b070a8b76caf7e0916d70fe082f9e0e03cc4911ca756a429159563504 rc=0 bytes=8500 tests/jsonfast_611/NDVariantComRoundTrip.bas
 sha256=22a03803b55e27d2c869ed2fa1098b633aa7065b49f5a2a54f73884619c02d6c ascii256=fb3bf634db8c24c3f30345bbb3d58745fe2b4dc165415c88f04df4e49373b6c9 rc=0 bytes=3846 tests/jsonfast_611/OnErrorGotoZero.bas
 sha256=603154062d970d9cb81647d47548ffed69161ce44c495ad52fc194dedb9bcd31 ascii256=fa85ba2eebe92109e860c22cc3f54d093cf59c1936162e25d1aff52246d756e4 rc=0 bytes=3062 tests/jsonfast_611/probe_ArrayBounds.bas
 sha256=6e3046a34ff860cf1782d44c568cbe2994aeda98cad07a25c562f183299ec794 ascii256=ebb88256af573cd8ce4849a13bd9457748b88fc9537f7005c104377777d50b40 rc=0 bytes=4033 tests/jsonfast_611/probe_DictArrayRoundTrip.bas
@@ -1207,4 +1208,6 @@ sha256=75152c77f83d9ce7874a186ee8ed18b98ebee98e9fbcca19ac75512f881075b1 ascii256
 #   新增 3 行 = tests/jsonfast_611 的新夹具与两份探针。
 #   changed=2 added=3 kept-ci=4 total-data=709
 #   账 #611 第348刀: 新增 1 行 = tests/jsonfast_611/ArrayLiteralVariants.bas (Array() 元素档保真夹具)。
+#   按 scripts/emit_manifest.ps1 的哈希口径只算这一行, 既有数据行逐字未动; 本机值与 CI 侧如有差, 以 ci/emit-manifest 自交清单为准。
+#   账 #611 第349刀: 新增 1 行 = tests/jsonfast_611/NDVariantComRoundTrip.bas (ND Variant 数组经真外部 COM 往返夹具)。
 #   按 scripts/emit_manifest.ps1 的哈希口径只算这一行, 既有数据行逐字未动; 本机值与 CI 侧如有差, 以 ci/emit-manifest 自交清单为准。

@@ -313,6 +313,12 @@ void vb6_ReleasePicture(void* picture) {
 // 因此从来没被任何一枚走到过。现在数组只问 `vt & VT_ARRAY` 这一面旗标，认不出的标量
 // 统一走换 BSTR 那一格。
 // ============================================================
+/* 账 #611 第349刀: 真 OLE **多维** SAFEARRAY → C3 vb6_SafeArrayND 的唯一转换出口。
+ * 定义在 vb6_ComSaVtBlittable 之后 (那张白名单在 616 行), 这里先挂原型: 下面
+ * vb6_ComVariantIntoSlot 的数组臂要问它, 而它自己逐枚搬 VT_VARIANT 元素时又递归问
+ * vb6_ComVariantIntoSlot —— 两枚互相看得见才不用抄第二份搬运逻辑。 */
+static vb6_VARIANT vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt);
+
 static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
     vb6_VARIANT result;
     memset(&result, 0, sizeof(result));
@@ -325,7 +331,8 @@ static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
            元素档问 vb6_SaElemTypeFromVt(唯一那张反向表)、宽度交回 vb6_SaElemSize、标签交回
            vb6_SaVtFromElemType —— 这三张表吃同一个枚举，不在这里第二次答(§B159 第五十刀)。 */
         SAFEARRAY* psa = pv->parray;
-        if (psa && SafeArrayGetDim(psa) == 1) {
+        UINT cDims = psa ? SafeArrayGetDim(psa) : 0;
+        if (psa && cDims == 1) {
             LONG lBound = 0, uBound = 0;
             SafeArrayGetLBound(psa, 1, &lBound);
             SafeArrayGetUBound(psa, 1, &uBound);
@@ -379,6 +386,14 @@ static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
             }
             result.vt = (vb6_vartype)(vb6_vtArray | vb6_SaVtFromElemType(et));
             result.parray = arr;
+        } else if (psa && cDims >= 2 && cDims <= 16) {
+            /* 账 #611 第349刀: 改前这一格整个不接 —— 上面那一臂只认 cDims==1,
+             * 于是 result 留着 VT_ARRAY|码 的标签却 parray=NULL, 读侧一律 Empty。
+             * 多维那一问交给唯一转换出口(下面 vb6_ComNDArrayIntoSlot), 不在这里
+             * 抄第二份界/元素搬运。元素档认不出时那枚出口交回 vtEmpty, 与 §B144
+             * 「宁可少给, 不猜」同口径。 */
+            result = vb6_ComNDArrayIntoSlot(psa, cDims,
+                                            (VARTYPE)(pv->vt & VT_TYPEMASK));
         }
         if (steal) pv->parray = NULL;  /* 只有消耗式才动源里那一格 */
         return result;
@@ -627,6 +642,92 @@ static VARTYPE vb6_ComSaVtBlittable(vb6_safearray_elemtype et) {
     }
 }
 
+/* 账 #611 第349刀: 真 OLE **多维** SAFEARRAY → C3 vb6_SafeArrayND 的唯一转换出口。
+ * 两条进口都问它: ① vb6_ComVariantIntoSlot 的 COM 结果臂 (FIX-011 读侧);
+ *   ② vb6_VariantArrayIntoSlot 的服务端入站臂 (§B162)。口径 = **拷**: 自建描述符、
+ *   逐枚搬元素, 源 psa 一个字节都不动 —— 对端那一趟结束会 VariantClear 自己那份。
+ *
+ * ⚠ 不 cast 结构头, 只走 SafeArray API:
+ *   · psa->rgsabound[] 在内存里是**逆序**的 (rgsabound[0] = 最右维), 而 C3
+ *     vb6_SafeArrayND.bounds[d] 是正序 d=0..rank-1;
+ *   · SAFEARRAYBOUND 是 {cElements, lLbound}, C3 vb6_SafeArrayBound 是
+ *     {lBound, cElements} —— 字段序也反了 (账本 L5232 记着这一条)。
+ *   本机 .temp/nd349/sa_dim_probe.c 实测 (x64, VT_VARIANT 2D):
+ *     SafeArrayCreate(vt,2,rg) 的 rg[d] **正序**对应 SafeArrayGetLBound(psa,d+1);
+ *     psa->rgsabound[0] 反而是 rg[1]; 线性 elem(10+i,20+j)=i+2*j ⇒ d=0 最快变化,
+ *     与 vb6_SaNdElemPtr 的列主序同序 ⇒ 逐枚线性搬即可, **不重排**。
+ *
+ * 元素档: VT_VARIANT 逐枚 VariantCopy → vb6_ComVariantIntoSlot(steal=1) 深拷贝
+ *   (串/对象/嵌套数组都带权), 不能整块 memcpy; 其余只放行白名单那几档数值档
+ *   (宽与 SAFEARRAY 同值 ⇒ memcpy 正确); BSTR / UDT / 认不出的档一律交回 Empty,
+ *   与一维那一臂、与出站白名单同一口径, 本刀不扩档。 */
+static vb6_VARIANT vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt) {
+    vb6_VARIANT result;
+    vb6_SafeArrayND* nd;
+    vb6_SafeArrayBound bounds[16];
+    vb6_safearray_elemtype et;
+    VARTYPE allow;
+    int32_t esz, total, i;
+    LONG lo, hi;
+    UINT d;
+    void* srcData = NULL;
+    int isVarElem;
+
+    memset(&result, 0, sizeof(result));
+    result.vt = vb6_vtEmpty;
+    if (!psa || dim < 2 || dim > 16) return result;
+    isVarElem = (baseVt == VT_VARIANT);
+    if (isVarElem) {
+        et = vb6_sa_variant;
+        allow = (VARTYPE)VT_VARIANT;
+    } else {
+        et = vb6_SaElemTypeFromVt(baseVt);
+        allow = vb6_ComSaVtBlittable(et);
+        if (!allow || allow != baseVt) return result;   /* 白名单外 / 认不出 = 不猜 */
+    }
+    esz = vb6_SaElemSize(et);
+    if (esz <= 0 || (isVarElem && esz != (int32_t)sizeof(vb6_VARIANT))) return result;
+    total = 1;
+    for (d = 0; d < dim; d++) {
+        if (FAILED(SafeArrayGetLBound(psa, d + 1, &lo)) ||
+            FAILED(SafeArrayGetUBound(psa, d + 1, &hi))) return result;
+        bounds[d].lBound = (int32_t)lo;
+        bounds[d].cElements = (int32_t)(hi - lo + 1);
+        if (bounds[d].cElements <= 0) return result;
+        if ((int64_t)total * bounds[d].cElements > 0x7FFFFFFFll) return result;
+        total *= bounds[d].cElements;
+    }
+    if (FAILED(SafeArrayAccessData(psa, &srcData)) || !srcData) {
+        if (srcData) SafeArrayUnaccessData(psa);
+        return result;
+    }
+    nd = vb6_SafeArrayCreateND(et, (int32_t)dim, bounds);
+    if (!nd || !nd->data) {
+        if (nd) vb6_SafeArrayDestroyND(nd);
+        SafeArrayUnaccessData(psa);
+        return result;
+    }
+    if (isVarElem) {
+        /* 与 vb6_VariantArrayIntoSlot 的 1D variant 臂同一形: 私有副本 → 消耗式
+         * 转换搬进描述符 → VariantClear 私有副本 (指针已被搬走, 不重复释放)。 */
+        for (i = 0; i < total; i++) {
+            VARIANT* srcElem = (VARIANT*)((char*)srcData + (size_t)i * sizeof(VARIANT));
+            VARIANT elem;
+            vb6_VARIANT* dstElem = (vb6_VARIANT*)((char*)nd->data + (size_t)i * esz);
+            VariantInit(&elem);
+            VariantCopy(&elem, srcElem);
+            *dstElem = vb6_ComVariantIntoSlot(&elem, 1);
+            VariantClear(&elem);
+        }
+    } else {
+        memcpy(nd->data, srcData, (size_t)total * (size_t)esz);
+    }
+    SafeArrayUnaccessData(psa);
+    result.vt = (vb6_vartype)(vb6_vtArray | vb6_SaVtFromElemType(et));
+    result.parray = (struct vb6_SafeArray1D*)nd;
+    return result;
+}
+
 /* 账 #305 §B162 (第五十刀): 反向 —— 对端递进来的真 SAFEARRAY → 我们那一格的描述符。
  * 口径 = **拷**（自己建一枚描述符 + 原样搬元素），不是借：服务端这一趟结束就 free 掉槽阵列
  *   (vb6comserver_obj.c 那句 CoTaskMemFree)，而 VB 代码会把这枚 Variant 存进变量、带出这次调用,
@@ -652,7 +753,20 @@ static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
     void* data;
     int isVarElem;
     s->vt = vb6_vtEmpty;
-    if (!psa || SafeArrayGetDim(psa) != 1) return;          /* 多维: 描述符是另一套 (§B151) */
+    if (!psa) return;
+    /* 账 #611 第349刀: 多维不再是「描述符是另一套, 直接丢」—— 交给唯一转换出口。
+     * 改前这里按「维数不等于 1」一律早退 ⇒ 服务端被调方收到一枚真
+     * 二维 SAFEARRAY 时槽留 Empty (与出站那半合成完整的往返丢失)。
+     * 复用 vb6_ComNDArrayIntoSlot: 它自建 vb6_SafeArrayND + 逐枚深拷, 出的正是
+     * 本臂要交回的槽形态; VB6 数组按引用传的 BYREF 解引用已在 psa 那一句做完。 */
+    {
+        UINT cDims = SafeArrayGetDim(psa);
+        if (cDims >= 2) {
+            if (cDims <= 16) *s = vb6_ComNDArrayIntoSlot(psa, cDims, base);
+            return;                       /* >16 或元素档认不出: 不猜 */
+        }
+        if (cDims != 1) return;
+    }
     et = vb6_SaElemTypeFromVt(base);
     /* 账 #610 第344刀: **VT_VARIANT 元素档** —— 白名单放不进去 (VARIANT 不能整块 memcpy),
      * 但它**可以逐枚深拷贝**。改前这一档落在 `allow == 0` 那句 ⇒ 槽留 Empty ⇒
@@ -720,7 +834,15 @@ static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
 void vb6_VariantSlotRelease(void *slot) {
     vb6_VARIANT* s = (vb6_VARIANT*)slot;
     if (!s || !(s->vt & vb6_vtArray)) return;
-    vb6_SafeArrayDestroy1D(s->parray);
+    /* 账 #611 第349刀: 入站多维那一臂造的是 vb6_SafeArrayND, 两套描述符首字段
+     * 与尺寸都不同 —— 按 1D 销毁器读它会把 dimCount 当 cDims、把 elemType 当
+     * cbElements, 释放的 data 槽其实是 elemSize|totalElements 拼出来的假指针。
+     * 认载体仍只问 vb6_SaIs1D 那一位主人, 不新增第三种认法。 */
+    if (vb6_SaIs1D(s->parray)) {
+        vb6_SafeArrayDestroy1D(s->parray);
+    } else {
+        vb6_SafeArrayDestroyND((vb6_SafeArrayND*)s->parray);
+    }
     s->parray = NULL;
     s->vt = vb6_vtEmpty;
 }
@@ -785,10 +907,6 @@ static void vb6_ComPackArrayOut(const void* arrV, VARIANT* out) {
         int64_t total = 1;
         int32_t d;
         if (nd->dimCount < 1 || nd->dimCount > 16) return;
-        vt = vb6_ComSaVtBlittable(nd->elemType);
-        if (!vt) return;
-        esz = vb6_SaElemSize(nd->elemType);
-        if (nd->elemSize != esz || !nd->data) return;
         for (d = 0; d < nd->dimCount; d++) {
             if (nd->bounds[d].cElements <= 0) return;
             rg[d].lLbound = (ULONG)nd->bounds[d].lBound;
@@ -796,6 +914,43 @@ static void vb6_ComPackArrayOut(const void* arrV, VARIANT* out) {
             total *= nd->bounds[d].cElements;
             if (total > 0x7FFFFFFFll) return;   /* 溢出/零元素: 不搬 */
         }
+        if (!nd->data) return;
+        /* 账 #611 第349刀: ND **Variant 元素档** —— 与上面 1D variant 那一支同一口径。
+         * 改前这一档撞 vb6_ComSaVtBlittable 的 default ⇒ `!vt` ⇒ out 留 VT_EMPTY:
+         * `d.Add "two", a2` 交给 Dictionary 的是一枚空值, 读回 VarType=0 (探针
+         * probe_DictArrayRoundTrip.bas 修前读数), JSonFast 第 7 按钮第二段 owner
+         * 因此恒 null。VB6 的多维 Variant 数组 (Dim a(0 To 1, 0 To 1) As Variant)
+         * 正是这一档, 不是边缘形。
+         * 逐枚**带权**装箱 (vb6_VariantPackCopyInto: 串复制 / 对象 AddRef), 不能
+         * memcpy —— 收下这枚 VARIANT 的那一头会 VariantClear 整条 SAFEARRAY。
+         * 维序见 vb6_ComNDArrayIntoSlot 顶注的 sa_dim_probe 实测: rg[d] 正序、
+         * d=0 最快变化, 与 C3 ND 线性布局同序 ⇒ 逐枚线性搬, 不重排。 */
+        if (nd->elemType == vb6_sa_variant) {
+            int32_t i;
+            VARIANT* dst;
+            if (nd->elemSize != (int32_t)sizeof(vb6_VARIANT)
+                || total != nd->totalElements) return;
+            psa = SafeArrayCreate(VT_VARIANT, (ULONG)nd->dimCount, rg);
+            if (!psa) return;
+            if (FAILED(SafeArrayAccessData(psa, &pvData)) || !pvData) {
+                SafeArrayDestroy(psa);
+                return;
+            }
+            dst = (VARIANT*)pvData;
+            for (i = 0; i < (int32_t)total; i++)
+                vb6_VariantPackCopyInto(
+                    (const vb6_VARIANT*)((const char*)nd->data
+                                         + (size_t)i * (size_t)nd->elemSize),
+                    &dst[i]);
+            SafeArrayUnaccessData(psa);
+            out->vt = (VARTYPE)(VT_ARRAY | VT_VARIANT);
+            out->parray = psa;
+            return;
+        }
+        vt = vb6_ComSaVtBlittable(nd->elemType);
+        if (!vt) return;
+        esz = vb6_SaElemSize(nd->elemType);
+        if (nd->elemSize != esz) return;
         rank = nd->dimCount; n = (int32_t)total; data = nd->data;
     }
     psa = SafeArrayCreate(vt, (ULONG)rank, rg);

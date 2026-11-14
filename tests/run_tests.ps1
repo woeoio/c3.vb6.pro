@@ -2183,6 +2183,20 @@ function Test-ArrayLiteralVariants {
     }
 }
 
+function Test-NDVariantComRoundTrip {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] nd_variant_com_roundtrip ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_nd_variant_com_roundtrip.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 
 function Test-UdtCallretNoparens {
     $script:total++
@@ -6453,6 +6467,11 @@ if ($Category -in @("all", "run", "bas")) {
     # 读数来自真 VB6 口径: bool=11 / null=1 / empty=0 / nothing=9 / nested=8204 / date=7;
     # 末尾三枚是零回归护栏 (普通 Long/BSTR/Double 元素档必须逐字不动)。
     Add-BasTest "jsonfast_array_literal_variants" "$Tests\jsonfast_611\ArrayLiteralVariants.bas" @("AL-bt=11", "AL-bf=11", "AL-null=1", "AL-empty=0", "AL-nothing=9", "AL-nested=8204", "AL-nested-val=2", "AL-long=3", "AL-date=7", "AL-i4=3", "AL-bstr=8", "AL-r8=5", "AL-DONE")
+    # 账 #611 第349刀: 多维数组经真外部 COM (Scripting.Dictionary) 往返。修前出站
+    # vb6_ComPackArrayOut 的 ND 支只收 blittable 元素档, vb6_sa_variant 直接 return
+    # => VT_EMPTY; 入站两条臂又只认 cDims==1。读数: 2D 维界/列主序/混合元素档、
+    # 3D 秩数泛化; 首尾两枚是 1D 与 2D Long (既有 blittable memcpy 支) 零回归护栏。
+    Add-BasTest "jsonfast_nd_variant_com_roundtrip" "$Tests\jsonfast_611\NDVariantComRoundTrip.bas" @("NC-1d=8204/1", "NC-vt=8204", "NC-b1=0/1", "NC-b2=0/2", "NC-e00=k1", "NC-e10=v1", "NC-e01=3/42", "NC-e11=11", "NC-e02=1", "NC-e12=v3", "NC-3vt=8204", "NC-3b3=0/1", "NC-3e=ah", "NC-lvt=8195", "NC-le=44", "NC-DONE")
 
     Add-BasTest "test_com_optional" "$Tests\test_com_optional.bas" @("OP-1:OK", "OP-4:OK", "P24-11: 4/4")
     # 账 #245/§B94 的行为针（夹具 tests/test_com_variant_prop.bas）。类型库属性 Get 的返回档落在
@@ -12770,6 +12789,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-ComValueTwinAuthority }
     if (Enter-StaticShard) { Test-ByRefElementAddressAuthority }
     if (Enter-StaticShard) { Test-ArrayLiteralVariants }
+    if (Enter-StaticShard) { Test-NDVariantComRoundTrip }
     if (Enter-StaticShard) { Test-ClsidSyncAllCopies }
     if (Enter-StaticShard) { Test-OwnedTempKeeps }
     if (Enter-StaticShard) { Test-OwnedTempSemantics }
