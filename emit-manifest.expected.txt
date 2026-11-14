@@ -1165,6 +1165,7 @@ sha256=df3551c04d0c1779aaeb837bce2ad433b740160279964b3dbf8610d884f9b70d ascii256
 sha256=936a411e487a0217bc85080d0bcee4a3089d848a51ca3f51f7bf8ec0d8d83878 ascii256=c2a81202c0f9edbce7cd890034fb208bba494029a36d046128ce37709ee4b6b5 rc=0 bytes=4547 tests/fgz_fix013/ModLeak013.bas
 sha256=c0638067a3b85b08e3dfdb14bb485c49bae79dec583fca847c2e07c18393d7f1 ascii256=a2393704f3626cc23afb6fc4bdcbb2c345db2fb11321c80579f71fb433f1430b rc=0 bytes=6498 tests/fgz_fix014/FgzFix014.vbp
 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ascii256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 rc=1 bytes=0 tests/fgz_fix014/DllBlocks.bas
+sha256=bdd21337169c653f88b510535b231b92f68b9d03612d6c06dfb6b0414f327b89 ascii256=273c095ed9c0dc9c6ea3f42c75fc62ddc8e152d7e7f345b1feeaf5a782f54919 rc=0 bytes=5856 tests/jsonfast_611/ArrayLiteralVariants.bas
 sha256=5ca4d1c43252b478180f1df02a8a94ee1cde9cdd878aabe1ec20088e0efd31c4 ascii256=914e13918d375a29f576f465cafdaf1cb28c8b5e1d8677558fac11c1a23a53fc rc=0 bytes=2173 tests/jsonfast_611/CreatedObjectTypeName.bas
 sha256=22a03803b55e27d2c869ed2fa1098b633aa7065b49f5a2a54f73884619c02d6c ascii256=fb3bf634db8c24c3f30345bbb3d58745fe2b4dc165415c88f04df4e49373b6c9 rc=0 bytes=3846 tests/jsonfast_611/OnErrorGotoZero.bas
 sha256=603154062d970d9cb81647d47548ffed69161ce44c495ad52fc194dedb9bcd31 ascii256=fa85ba2eebe92109e860c22cc3f54d093cf59c1936162e25d1aff52246d756e4 rc=0 bytes=3062 tests/jsonfast_611/probe_ArrayBounds.bas
@@ -1205,3 +1206,5 @@ sha256=75152c77f83d9ce7874a186ee8ed18b98ebee98e9fbcca19ac75512f881075b1 ascii256
 #   guisample x3 + TeeChartChartDisplay x1 仍是机器侧差行, 保持 CI 侧原值不动。
 #   新增 3 行 = tests/jsonfast_611 的新夹具与两份探针。
 #   changed=2 added=3 kept-ci=4 total-data=709
+#   账 #611 第348刀: 新增 1 行 = tests/jsonfast_611/ArrayLiteralVariants.bas (Array() 元素档保真夹具)。
+#   按 scripts/emit_manifest.ps1 的哈希口径只算这一行, 既有数据行逐字未动; 本机值与 CI 侧如有差, 以 ci/emit-manifest 自交清单为准。

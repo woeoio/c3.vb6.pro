@@ -2169,6 +2169,21 @@ function Test-ByRefVariantElemArg {
     }
 }
 
+function Test-ArrayLiteralVariants {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] array_literal_variants ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_array_literal_variants.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
+
 function Test-UdtCallretNoparens {
     $script:total++
     Write-Host -NoNewline "  [STATIC] udt_callret_noparens ... "
@@ -6433,6 +6448,12 @@ if ($Category -in @("all", "run", "bas")) {
     # ② Variant() 元素交给 ByRef Variant 形参要整枚过去 ⇒ Boolean 交 vt11、嵌套数组交 vt8204
     # (修前一律压成 VT_BSTR ⇒ 全 vt8)。读数取自真 VB6 口径。
     Add-BasTest "jsonfast_variant_slot_elem" "$Tests\jsonfast_611\VariantSlotElement.bas" @("ub=2 d2=", "vt11 | vt8 | vt8204")
+    # 账 #611 第348刀: Array() 元素档保真 —— 非 Long/Double/BSTR 的字面量与嵌套 Array()
+    # 原本一律压成 SetLong (VT_I4), Nothing/嵌套数组还把指针塞进 int32 形参。
+    # 读数来自真 VB6 口径: bool=11 / null=1 / empty=0 / nothing=9 / nested=8204 / date=7;
+    # 末尾三枚是零回归护栏 (普通 Long/BSTR/Double 元素档必须逐字不动)。
+    Add-BasTest "jsonfast_array_literal_variants" "$Tests\jsonfast_611\ArrayLiteralVariants.bas" @("AL-bt=11", "AL-bf=11", "AL-null=1", "AL-empty=0", "AL-nothing=9", "AL-nested=8204", "AL-nested-val=2", "AL-long=3", "AL-date=7", "AL-i4=3", "AL-bstr=8", "AL-r8=5", "AL-DONE")
+
     Add-BasTest "test_com_optional" "$Tests\test_com_optional.bas" @("OP-1:OK", "OP-4:OK", "P24-11: 4/4")
     # 账 #245/§B94 的行为针（夹具 tests/test_com_variant_prop.bas）。类型库属性 Get 的返回档落在
     # mapType 的「未知」桶（这里是 VARIANT）时，唯一合法读法是 Variant 兜底 —— 不许按右值上下文猜成
@@ -12748,6 +12769,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-EventParamAbiAuthority }
     if (Enter-StaticShard) { Test-ComValueTwinAuthority }
     if (Enter-StaticShard) { Test-ByRefElementAddressAuthority }
+    if (Enter-StaticShard) { Test-ArrayLiteralVariants }
     if (Enter-StaticShard) { Test-ClsidSyncAllCopies }
     if (Enter-StaticShard) { Test-OwnedTempKeeps }
     if (Enter-StaticShard) { Test-OwnedTempSemantics }

@@ -299,6 +299,56 @@
                 for (int i = 0; i < count; i++) {
                     emitExpr(*node.positional[i]);
                     std::string argExpr = std::move(lastExpr_);
+                    // 账 #611 第348刀: Array() 元素档保真 —— 这一格原本「只认
+                    // Long/Double/BSTR 三档, 其余一律 SetLong」:
+                    //   Array(True)       → SetLong(-1)     ⇒ VT_I4, 丢了 vbBoolean(11)
+                    //   Array(Null/Empty) → SetLong(0)      ⇒ VT_I4, 丢了 vbNull(1)/vbEmpty(0)
+                    //   Array(Nothing)    → SetLong(NULL)   ⇒ 指针塞 int32 形参 (x64 截断)
+                    //   Array(Array(..))  → SetLong(_arr_N) ⇒ 同上, 且整枚嵌套数组丢失
+                    //   Array(#date#) / Array(1.5!)        ⇒ 日期/单精度档被压成 I4/R8
+                    // 现成出口 = vb6_ArraySetVariant (vb6rtl_date.c, 逐枚 VariantCopy)
+                    // + vb6_Variant* 工厂。只接「现有三档明确兜不住」的那几格,
+                    // 其余分支逐字不动 ⇒ 既有语料发码零变化 (全语料暴露面实测 0 处)。
+                    // Currency/Decimal 没有对应 VARIANT 工厂, 不在这刀 (另格)。
+                    std::string variantSetter;
+                    if (node.positional[i]->kind == ASTNodeKind::LiteralExpr) {
+                        auto& litSp = static_cast<LiteralExpr&>(*node.positional[i]);
+                        switch (litSp.literalKind) {
+                            case LiteralKind::Boolean:
+                                variantSetter = "vb6_VariantBool(" + argExpr + ")";
+                                break;
+                            case LiteralKind::Null:
+                            case LiteralKind::Empty:
+                                variantSetter = argExpr;  // emitExpr 已交整枚 vb6_VARIANT
+                                break;
+                            case LiteralKind::Nothing:
+                                // NULL 是 void* ⇒ _Generic default ⇒ vb6_VariantObject(NULL)
+                                variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
+                                break;
+                            case LiteralKind::Date:
+                                variantSetter = "vb6_VariantDate(" + argExpr + ")";
+                                break;
+                            case LiteralKind::Single:
+                                // float 文本 ⇒ _Generic float: ⇒ vb6_VariantSingle (VT_R4)
+                                variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
+                                break;
+                            default: break;
+                        }
+                    } else if (node.positional[i]->kind == ASTNodeKind::IndexOrCallExpr
+                               && argExpr.compare(0, 5, "_arr_") == 0) {
+                        auto& nestedSp = static_cast<IndexOrCallExpr&>(*node.positional[i]);
+                        if (nestedSp.callee && nestedSp.callee->kind == ASTNodeKind::IdentifierExpr) {
+                            std::string nestedName = static_cast<IdentifierExpr&>(*nestedSp.callee).name;
+                            std::transform(nestedName.begin(), nestedName.end(), nestedName.begin(), ::tolower);
+                            // 1D 描述符 ⇒ _Generic struct vb6_SafeArray1D*: ⇒ vb6_VariantArray
+                            if (nestedName == "array")
+                                variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
+                        }
+                    }
+                    if (!variantSetter.empty()) {
+                        c_.emitLine("vb6_ArraySetVariant(" + arrVar + ", " + std::to_string(i) + ", " + variantSetter + ");");
+                        continue;
+                    }
                     // Detect argument type for proper setter selection
                     bool isLongArg = false;
                     bool isDoubleArg = false;
