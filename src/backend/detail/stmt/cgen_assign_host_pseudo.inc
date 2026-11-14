@@ -162,6 +162,19 @@
                                 + ");  /* UserControl.Font = v (DC 字体) */");
                     return;
                 }
+                /* UserControl.Width/Height 是**实例对象**的尺寸, 必须落到窗口上。
+                   改前当作全局量赋值, AutoSize 算对了也不动窗口 (ucGIF: 1815 twips
+                   却停在 495 ⇒ 121x96 的 GIF 被裁在 33x33)。 */
+                if (tgtHp == "vb6_UserControl_Width" || tgtHp == "vb6_UserControl_Height") {
+                    if (isVariantSlot(valHp, nullptr)) {  // P1.3: ast 不可得
+                        valHp = "vb6_VariantToLong(" + valHp + ")";
+                    }
+                    c_.emitLine(std::string("vb6_UserControl_Set")
+                                + (tgtHp == "vb6_UserControl_Width" ? "Width" : "Height")
+                                + "((int32_t)(" + valHp
+                                + "));  /* UserControl.Width/Height = v (实例窗口) */");
+                    return;
+                }
                 c_.emitLine(tgtHp + " = " + valHp + ";  /* <host pseudo>.<prop> = v */");
                 return;
             }

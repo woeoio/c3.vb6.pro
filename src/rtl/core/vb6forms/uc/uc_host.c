@@ -402,6 +402,43 @@ void vb6_UC_PopInstance(void) {
     if (g_uc_ctxReal[slot]) vb6_uc_pop(&g_uc_ctxStack[slot]);
 }
 
+// `UserControl.Width/Height` 是**实例对象**的尺寸 (单位=容器的 ScaleMode), 不是一枚只读快照。
+// 改前发码只写全局量、窗口不动 ⇒ ucGIF 的 AutoSize 算对了 1815 twips 却停在 495 (33px),
+// 121x96 的 GIF 被裁在 33x33。
+// 顺序很重要: 先把 r->extWidth 写好, 再改窗口 —— WM_SIZE 里会被 `vb6_uc_push` 拿去做
+// `UserControl_Width`, 而 UserControl_Resize 的
+// `bdrSize = Width/15 - ScaleWidth` 就是靠这两枚**同一时刻同一口径**才收敛 (否则自我喂养)。
+void vb6_UserControl_SetWidth(int32_t twips) {
+    vb6_UCRec* r = vb6_ucCurrent;
+    vb6_UserControl_Width = twips;
+    if (!r || !r->hwnd) return;
+    r->extWidth = twips;
+    /* .ctl 里 `UserControl.Width` 与 `(vWindow.Width + bdrSize) * TwipsPerPixelX` 同尺 ⇒
+       缇。容器 ScaleMode 这枚在本工程不可靠地报 3, 所以按 .ctl 自己的口径除 ——
+       与 UserControl_Resize 的算式逐字一致。 */
+    int32_t tpx = vb6_Screen_TwipsPerPixelX(); if (tpx <= 0) tpx = 15;
+    int32_t px = (int32_t)((double)twips / (double)tpx);
+    if (px <= 0) return;
+    RECT rc; GetWindowRect((HWND)r->hwnd, &rc);
+    if ((rc.right - rc.left) == px) return;   /* 已到位: 不惊动窗口 */
+    SetWindowPos((HWND)r->hwnd, NULL, 0, 0, (int)px, rc.bottom - rc.top,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+void vb6_UserControl_SetHeight(int32_t twips) {
+    vb6_UCRec* r = vb6_ucCurrent;
+    vb6_UserControl_Height = twips;
+    if (!r || !r->hwnd) return;
+    r->extHeight = twips;
+    int32_t tpy = vb6_Screen_TwipsPerPixelY(); if (tpy <= 0) tpy = 15;
+    int32_t px = (int32_t)((double)twips / (double)tpy);
+    if (px <= 0) return;
+    RECT rc; GetWindowRect((HWND)r->hwnd, &rc);
+    if ((rc.bottom - rc.top) == px) return;
+    SetWindowPos((HWND)r->hwnd, NULL, 0, 0, rc.right - rc.left, (int)px,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 void vb6_UC_RefreshCurrent(void) {
     // czUI fix: WM_PAINT 内**不能** invalidate+update — UserControl_Paint/RedrawControl
     // 末尾的 `If AutoRedraw Then UserControl.Refresh` 会在 WM_PAINT 里强制同步重绘,
