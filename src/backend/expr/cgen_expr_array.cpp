@@ -218,31 +218,105 @@ bool CCodeGen::resolveMemberArrayDecl(const std::string& ownerUdtCType,
 // (§B220 记的就是这个病, 只是它只修了 UDT 那一半)。
 // As 子句与裸变量表那两条腿不动: 前者是 VB6 语义 (写了 As 就以它为准), 后者是
 // 六条声明路填的按名表 (本格管的是"成员", 不是裸变量)。
+// 账 #613 (第351刀): 「With 块里那枚动态数组成员的声明档」—— owner 解析收成一枚出口。
+// 顺序照访问侧 (cgen_expr_call_callee_withm.inc) 实测过的那条:
+//   ① UDT owner: With 临时量在 Fix 110c 那条被登记进 knownUdtVars_ (键 = 小写临时量名)
+//   ② 工程类 owner: info.className (ClassInstance 时有) → 否则 knownClassVars_[临时量]
+// 两边都落到**同一枚出口** resolveMemberArrayDecl ⇒ 分配侧与访问侧同档。
+bool CCodeGen::resolveWithMemberArrayDecl(const std::string& memberName,
+                                           WithMemberOwner& out) const {
+    out = WithMemberOwner();
+    if (memberName.empty()) return false;
+    if (withObjectVars_.empty() || withObjectInfoStack_.empty()) return false;
+    const std::string tempVar = withObjectVars_.back();
+    const std::string tempLower = Symbol::toLower(tempVar);
+    auto itu = knownUdtVars_.find(tempLower);
+    if (itu != knownUdtVars_.end() && itu->second.rfind("vb6_type_", 0) == 0) {
+        MemberArrayDecl mad;
+        if (resolveMemberArrayDecl(itu->second, std::string(), memberName, mad) && mad.ok) {
+            out.ok = true;
+            out.ownerIsUdt = true;
+            out.ownerCType = itu->second;
+            out.decl = mad;
+            return true;
+        }
+    }
+    std::string cls = withObjectInfoStack_.back().className;
+    if (cls.empty()) {
+        auto itc = knownClassVars_.find(tempLower);
+        if (itc != knownClassVars_.end()) cls = itc->second;
+    }
+    if (!cls.empty()) {
+        MemberArrayDecl mad;
+        if (resolveMemberArrayDecl(std::string(), cls, memberName, mad) && mad.ok) {
+            out.ok = true;
+            out.ownerIsUdt = false;
+            out.ownerCType = cls;
+            out.decl = mad;
+            return true;
+        }
+    }
+    return false;
+}
+
+// 账 #613 (第351刀): 「点号链目标那枚成员的声明档」—— 分配侧与访问侧共用的那一问。
+// 三种 owner: ① With 成员 (键以 '.' 开头) ② 工程类实例 (o.member) ③ UDT 变量 (t.member)。
+// 顺序: With → UDT → 类 (与访问侧 cgen_expr_call_callee_withm.inc / member 站实测过的口径一致)。
+bool CCodeGen::resolveDottedMemberDecl(const std::string& lowerVar,
+                                        DottedMemberInfo& out) const {
+    out = DottedMemberInfo();
+    if (lowerVar.empty()) return false;
+    if (lowerVar[0] == '.') {
+        if (lowerVar.size() < 2) return false;
+        WithMemberOwner wmo;
+        if (!resolveWithMemberArrayDecl(lowerVar.substr(1), wmo)) return false;
+        out.ok = true;
+        out.ownerIsUdt = wmo.ownerIsUdt;
+        out.ownerCType = wmo.ownerCType;
+        out.decl = wmo.decl;
+        return true;
+    }
+    const size_t dot = lowerVar.rfind('.');
+    if (dot == std::string::npos || dot == 0 || dot + 1 >= lowerVar.size()) return false;
+    const std::string owner = lowerVar.substr(0, dot);
+    const std::string member = lowerVar.substr(dot + 1);
+    auto itu = knownUdtVars_.find(owner);
+    if (itu != knownUdtVars_.end()) {
+        MemberArrayDecl mad;
+        if (resolveMemberArrayDecl(itu->second, std::string(), member, mad) && mad.ok) {
+            out.ok = true;
+            out.ownerIsUdt = true;
+            out.ownerCType = itu->second;
+            out.decl = mad;
+            return true;
+        }
+    }
+    auto itc = knownClassVars_.find(owner);
+    if (itc != knownClassVars_.end()) {
+        MemberArrayDecl mad;
+        if (resolveMemberArrayDecl(std::string(), itc->second, member, mad) && mad.ok) {
+            out.ok = true;
+            out.ownerIsUdt = false;
+            out.ownerCType = itc->second;
+            out.decl = mad;
+            return true;
+        }
+    }
+    return false;
+}
+
 Vb6Type CCodeGen::resolveReDimElemType(const std::string& lowerVar, ASTNode* typeRef) {
     if (typeRef) return resolveArrayElemType(typeRef);
     if (!lowerVar.empty()) {
         auto it = arrayElemTypes_.find(lowerVar);
         if (it != arrayElemTypes_.end()) return it->second;
-        const size_t dot = lowerVar.rfind('.');
-        if (dot != std::string::npos && dot > 0 && dot + 1 < lowerVar.size()) {
-            const std::string owner = lowerVar.substr(0, dot);
-            const std::string member = lowerVar.substr(dot + 1);
-            // UDT 腿: 走出口 resolveUdtMemberElemInfo → resolveMemberArrayDecl (单一答案, 满足账 #475/A8)
-            auto ou = knownUdtVars_.find(owner);
-            if (ou != knownUdtVars_.end()) {
-                Vb6Type et;
-                std::string uc;
-                if (resolveUdtMemberElemInfo(ou->second, member, et, uc)) return et;
-            }
-            // 工程类腿: 直接问出口 (§B190 新增, 腿①不再绕过出口)
-            auto oc = knownClassVars_.find(owner);
-            if (oc != knownClassVars_.end()) {
-                MemberArrayDecl mad;
-                if (resolveMemberArrayDecl(std::string(), oc->second, member, mad) && mad.ok) {
-                    return mad.elemType;
-                }
-            }
-        }
+        // 账 #613 (第351刀): 点号链 (With 成员 / 类实例 owner / UDT owner) 统一问**那一枚出口** ——
+        // 分配侧与访问侧从此同档 (§B190 的口径: 三处同问同一个出口)。
+        // With 成员的键以 '.' 开头 ⇒ 底下那条「按最后一个 . 切 owner/member」的腿要求 dot > 0,
+        // 以前整条不 firing ⇒ 元素档回落 Variant ⇒ 分配按 16/24 字节一步、访问按声明档走
+        // (UDT/类实例元素 ⇒ 越界写)。
+        DottedMemberInfo dmi;
+        if (resolveDottedMemberDecl(lowerVar, dmi)) return dmi.decl.elemType;
     }
     return Vb6Type::Variant;
 }

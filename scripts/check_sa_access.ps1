@@ -310,7 +310,7 @@ foreach ($f in $beFiles) {
         # 从前那个 900 字上限会在加了几行之后就量不到 arrayElemTypes_ (假红)。
         $blk = [regex]::Match($txt, 'Vb6Type\s+CCodeGen::resolveReDimElemType[\s\S]*?\r?\n\}')
         if ($blk.Value -match 'resolveArrayElemType\(\s*typeRef\s*\)' -and $blk.Value -match 'arrayElemTypes_\.find') { $rdBodyBoth++ }
-        if ($blk.Value -match 'resolveUdtMemberElemInfo\s*\(') { $rdBodyMember++ }
+        if ($blk.Value -match 'resolveDottedMemberDecl\s*\(') { $rdBodyDotted++ }
     }
 }
 if ($rdDef -ne 1) { $bad += ("A8 resolveReDimElemType 定义 = " + $rdDef + " (要求 1；两处定义 = 第二份答案)") }
@@ -318,7 +318,7 @@ if ($rdDecl -ne 1) { $bad += ("A8 resolveReDimElemType 声明(cgen_helpers.inc) 
 if ($rdCall -lt 1) { $bad += "A8 cgen_redim.cpp 不再调 resolveReDimElemType（ReDim 的元素档又回到只问 As 子句）" }
 if ($rdAsOnly -ne 0) { $bad += ("A8 cgen_redim.cpp 里「声明处只问 As」的老形状 = " + $rdAsOnly + " 处 (要求 0；那正是本刀改掉的那一行)") }
 if ($rdDef -eq 1 -and $rdBodyBoth -ne 1) { $bad += "A8 resolveReDimElemType 的体里没同时问 As 子句与 arrayElemTypes_（只剩一头 = 修前的形状）" }
-if ($rdDef -eq 1 -and $rdBodyMember -ne 1) { $bad += "A8 resolveReDimElemType 不再问点号链 UDT 成员（成员动态数组的元素档又回落 Variant ⇒ 账 #475 的 16/4 字节步长错位回来）" }
+if ($rdDef -eq 1 -and $rdBodyDotted -ne 1) { $bad += "A8 resolveReDimElemType 不再问点号链那一枚出口 resolveDottedMemberDecl（With 成员 / 类实例 owner / UDT owner 的元素档又回落 Variant ⇒ 账 #475/§B190 的 16/4 字节步长错位回来）" }
 
 # A20: UDT 成员动态数组的元素档只许一位主人 (账 #475 §B220, 第一百七十九刀)
 # 修前: `ReDim t.Items(1 To 3)` 走裸名回退, 分配 vb6_sa_variant, 访问 Pattern B 按
@@ -334,9 +334,40 @@ foreach ($f in $beFiles) {
         if ($t -match '\bresolveUdtMemberElemInfo\s*\(' -and $t -notmatch '^bool\s+(CCodeGen::)?resolveUdtMemberElemInfo') { $memAll++ }
     }
 }
-if ($memAll -ne 2) { $bad += ("A20 resolveUdtMemberElemInfo 调用点 = " + $memAll + " (恰 2: cgen_expr_array.cpp 点号链 + cgen_redim.cpp 复杂目标转调)") }
+if ($memAll -ne 1) { $bad += ("A20 resolveUdtMemberElemInfo 调用点 = " + $memAll + " (恰 1: cgen_redim.cpp 复杂目标转调 —— 点号链那一处已搬进 resolveDottedMemberDecl)") }
 if ($memDecl -ne 1) { $bad += ("A20 resolveUdtMemberElemInfo 的声明(cgen_helpers.inc) = " + $memDecl + " (恰好 1；0 = 点号链那一头又问不到成员表)") }
 if ($memDef -ne 1)  { $bad += ("A20 resolveUdtMemberElemInfo 的定义(cgen_redim.cpp) = " + $memDef + " (恰好 1；>1 = 第二份成员循环)") }
+
+# A20b (账 #613 第351刀): 「点号链目标那枚成员的声明档」收进**一枚新出口**
+# resolveDottedMemberDecl (With 成员 / 工程类实例 owner / UDT 变量 owner 三种走同一条),
+# 它直接问 resolveMemberArrayDecl —— 那张成员表的唯一主人。
+# 为什么单开这一格: 修前分配侧 (ReDim) 只认「按最后一个 . 切 owner/member」那一腿, 而
+#   ① With 成员的键是 ".member" (dot == 0) ⇒ 整条不 firing ⇒ 元素档回落 Variant;
+#   ② 类实例 owner 的 UDT 元素档没答案 ⇒ 分配按 variant 24 字节一步、访问按 sizeof(UDT) ⇒ 越界写。
+$dottedDef = 0; $dottedDecl = 0; $dottedOwner = 0; $withDef = 0; $withDecl = 0; $withOwner = 0
+foreach ($f in $beFiles) {
+    $txt = [System.IO.File]::ReadAllText($f.FullName)
+    foreach ($line in (Lines $f.FullName)) {
+        $t = $line.Trim()
+        if ($t.StartsWith("//")) { continue }
+        if ($f.Name -eq "cgen_helpers.inc" -and $t -match '^bool\s+resolveDottedMemberDecl\s*\(') { $dottedDecl++ }
+        if ($f.Name -eq "cgen_expr_array.cpp" -and $t -match '^bool\s+CCodeGen::resolveDottedMemberDecl\s*\(') { $dottedDef++ }
+        if ($f.Name -eq "cgen_helpers.inc" -and $t -match '^bool\s+resolveWithMemberArrayDecl\s*\(') { $withDecl++ }
+        if ($f.Name -eq "cgen_expr_array.cpp" -and $t -match '^bool\s+CCodeGen::resolveWithMemberArrayDecl\s*\(') { $withDef++ }
+    }
+    if ($f.Name -eq "cgen_expr_array.cpp") {
+        $blkD = [regex]::Match($txt, 'bool\s+CCodeGen::resolveDottedMemberDecl[\s\S]*?\r?\n\}')
+        $dottedOwner += [regex]::Matches($blkD.Value, 'resolveMemberArrayDecl\s*\(').Count
+        $blkW = [regex]::Match($txt, 'bool\s+CCodeGen::resolveWithMemberArrayDecl[\s\S]*?\r?\n\}')
+        $withOwner += [regex]::Matches($blkW.Value, 'resolveMemberArrayDecl\s*\(').Count
+    }
+}
+if ($dottedDef -ne 1) { $bad += ("A20b resolveDottedMemberDecl 的定义(cgen_expr_array.cpp) = " + $dottedDef + " (恰好 1；0 = 点号链那一问又散回各处)") }
+if ($dottedDecl -ne 1) { $bad += ("A20b resolveDottedMemberDecl 的声明(cgen_helpers.inc) = " + $dottedDecl + " (恰好 1)") }
+if ($dottedOwner -ne 2) { $bad += ("A20b resolveDottedMemberDecl 的体里问 resolveMemberArrayDecl = " + $dottedOwner + " 处 (恰好 2: UDT owner + 工程类 owner；少一处 = 那一族又回落)") }
+if ($withDef -ne 1) { $bad += ("A20b resolveWithMemberArrayDecl 的定义(cgen_expr_array.cpp) = " + $withDef + " (恰好 1)") }
+if ($withDecl -ne 1) { $bad += ("A20b resolveWithMemberArrayDecl 的声明(cgen_helpers.inc) = " + $withDecl + " (恰好 1)") }
+if ($withOwner -ne 2) { $bad += ("A20b resolveWithMemberArrayDecl 的体里问 resolveMemberArrayDecl = " + $withOwner + " 处 (恰好 2: UDT owner + 工程类 owner)") }
 
 
 # A9: 字面量兜底档的名单恰好三条

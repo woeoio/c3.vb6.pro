@@ -104,13 +104,13 @@ sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ascii256
 sha256=d00431bdb0d902462420cfe74b074820a90bf0eaf49f2f589845a67940120278 ascii256=31d5b5170b0ee6d0e918f072cbdbc08a176019b485528b9e2c1118c295de2a91 rc=0 bytes=5299 tests/cc_id/IdFold.vbp
 sha256=5347c812cabfff37c6592c899919a1f7a5422934682daa250fa1e2260c2e9341 ascii256=acf9b53b1834c0153f02a7a6cbfa391ae0e4ac35b513cceb3e3c9cb611ad5811 rc=0 bytes=3681 tests/cc_id/IdIfaces.bas
 sha256=ecb2d1df992330a8b4b7c7f4cdc26c13e2af28fd166f5c99ebf9889f91dc68b5 ascii256=530a8b0161884482dfedd034a6f65d69602ca71ee69a5f0e2b75c01c1711bf3f rc=0 bytes=1382 tests/cc_id/IdMain.bas
-sha256=7963e64af96572d4171a5f425dc7418742e02a6fb72d3319d78e619ed8699793 ascii256=22bfbd307ae9a248f0dd8c3d1ed0ea9e9f9b7183ebb7fc9143b0f4fcd1552bfd rc=0 bytes=2107907 tests/Charts 2020/Proyecto1.vbp
+sha256=62453278e947aba4d52e55184525a305d34fbd13e8ed2cbe6dd01de96fbb3a81 ascii256=3185fb945110391e2766361195afab92422abe15a1a6e8908e1a55debef617ed rc=0 bytes=2107906 tests/Charts 2020/Proyecto1.vbp
 sha256=3889a45151244a9b63ee0e84b4923114d7b5cf6d1ceee7ac10d696666f5316b0 ascii256=e42d6415936248ec14ffce7c25f47d1e692f853e4d65fe835feb860fce989763 rc=0 bytes=268764 tests/Charts 2020/ucChartArea/Proyecto1.vbp
 sha256=9d4240bcd0d42ad65fe65a4fb8c673d191e68627473843281989bb0543481549 ascii256=4978f6bf6425fd63a6362649c3341903eb204fff74fd7cff94e44b06c0ab8e05 rc=0 bytes=512396 tests/Charts 2020/ucChartBar/Proyecto1.vbp
 sha256=3ca810b0c9eac0b02e84ce405ada0ebc041251ad687081f8c4deba96ca2c0b82 ascii256=0d52a6d71b36345cc8ec50038f9e0ffe12bcbd38ef5d1a46d30c1432467703a5 rc=0 bytes=2846 tests/Charts 2020/ucPieChart/Module1.bas
 sha256=7870a8e8f2fb1c969a0890d75ba9c4b51ffab3b1e75a826cfcd876947aede644 ascii256=ce771eb87bfcd044b52ea7c241792bce75f60bd3943c7ad90b805bdea58ac378 rc=0 bytes=286340 tests/Charts 2020/ucPieChart/Proyecto1.vbp
 sha256=f0ba15753ef4a35c3da665a475467d0ec43c4a43ee27c45a217051862988bebe ascii256=491042607f7f9de03d4047e667493feb834e47f875188a0ea1f0265eb8f8f4ce rc=0 bytes=358483 tests/Charts 2020/ucProgressCircular/Proyecto1.vbp
-sha256=a7aca17382c25c1404b8b515b19878eab3ca9204dc618bfef9efda9630bd8ccc ascii256=b654fbdc951349c6eff2748d7a70a6dfa2a4bd92e69f6e8df781d8c8e7c0f2fa rc=0 bytes=992473 tests/Charts 2020/ucTreeMaps/Proyecto1.vbp
+sha256=49aa174d8ed6b7892d365184f18e16d80e1cd181de6f1406d40181ec8668731b ascii256=0d20ca72666b442dfbd171ab6a08bdda70e49cc5445e1a2fd41bbd001fd08906 rc=0 bytes=992472 tests/Charts 2020/ucTreeMaps/Proyecto1.vbp
 sha256=9a95066a7ea43f9cb6c2b87489ecca22cb7392c9a732770fb24d35597ad8ba1b ascii256=935d4abf952a953a50e09a2b4ee9a3d287012ca07d8185d388c7147b40f058e7 rc=0 bytes=99144 tests/cls_inh/Inh.vbp
 sha256=60cd8e43f597f94e2d2497b448f687987966d1633632ef039439d80a763ea75e ascii256=b8e9bacfefaa3e81883f0e1d1ea00515710750f2412a2de434ed4250ae34bf26 rc=0 bytes=33074 tests/cls_inh/InhMain.bas
 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ascii256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 rc=1 bytes=0 tests/cls_neg/ci_n02_not_class.bas
@@ -601,8 +601,10 @@ sha256=669b6e5e96424bd8738508234647a41093743bf1a714d2e0451fc0a084e81c56 ascii256
 sha256=dfd5137067905b41abf437dc80de61ac2e6f232108ae85fae01177733e2c0cf8 ascii256=6073cc4eb7ab1600c0277319d678eeae6d08028a24d8061026434571dafd2e9a rc=0 bytes=7115 tests/test_fileio_modstr.bas
 sha256=ad53da754817855623286d653b15e0af20b26764bbae3d1b1494ea40c4c810bc ascii256=972782bf1e1189671de603d49d2b22ff2832de7786becfb3a303450362de509c rc=0 bytes=3867 tests/b605_dllapp/B605k.vbp
 sha256=a581adb4ed5d0095a9ee6cca4a253ab3a3b549678e2b7b2d3897f86ed58b40dc ascii256=d7718f2a02d80a3d6970f161d9445766cdc2bfe05f9b85f7f5330fef26832582 rc=0 bytes=8371 tests/b611_printfn.bas
-sha256=7a32a312592519e2cd5413f565be64801731464acc44ac0cda9ae5a784e2996f ascii256=c3b84f3bf2e3877c2b6c174baa8cc643f8a0d8c2f2d1daa19bbd293ed5ee50ff rc=0 bytes=13123 tests/b612_redim_clsmem/B612.vbp
+sha256=9eb64f554cd63e7f31978d8bc6f842ec391c43b4f2390518f887a36fd614dde5 ascii256=21a52ed255941d3e6fa965a428729f0f24544af7387476e0088940f774cc8d45 rc=0 bytes=13120 tests/b612_redim_clsmem/B612.vbp
 sha256=bb53a1c759abbb9f7a46712b6cdeff64e3e018c27d3caf3628020fc3211bc331 ascii256=055d7553bbfba8011a59e217bb9aba62f863d141bbbb3c604cbae5af72a134a5 rc=0 bytes=7865 tests/b612_redim_clsmem/Main.bas
+sha256=153f4be9121be059005141efdcea0fae6900fec1d35f957fea559d942933bf9d ascii256=818e69932d6d8365f6cdd7890bd4df4ccbdfdd83b5948572c950e04a89ee0d99 rc=0 bytes=10716 tests/b613_with_redim/B613.vbp
+sha256=bd48ae7a63c2b1089d00e1b1fca997480f67dd4de9da5ee97fd24b9d4806333a ascii256=14ecfbaedbfc81faab6bb0c2e12726677fb8f7cd7eb6520627657273aee31b8c rc=0 bytes=7284 tests/b613_with_redim/Main.bas
 sha256=4beb491a0703f2143f89ffb3c1d68d167ff0c7cff288b8fd05c380eb26f5c421 ascii256=53ff214f149a1490656b8cef716d18d7dbb96b00faf46a57a0e147fa8177efa2 rc=0 bytes=18580 tests/ctlhostm3/HmApp.vbp
 sha256=382c68c76d186273acc8758bddd00d254b754bf3f21b2bacf7cfe1f6bcbd4532 ascii256=5a7efdf9af7428ea9d7668ab9cc9fa0dfce9a02f4d74cb7802c37ae06a44c13d rc=0 bytes=16956 tests/ctlident/IdApp.vbp
 sha256=811814cdceeb9af2d21e1c181eea4a24cc4dea5e6a21cfbcc04c23378bab55ee ascii256=032f17b7453f677dfd2a222fb514505f9f85eb8e44dc02d06e2d2061cbc60c48 rc=0 bytes=17139 tests/guisample/Definitions.bas
@@ -1218,4 +1220,12 @@ sha256=75152c77f83d9ce7874a186ee8ed18b98ebee98e9fbcca19ac75512f881075b1 ascii256
 #   存量 711 行**一行未动**，只新增本夹具 2 行（B612.vbp + Main.bas）。A/B 里另有 guisample×3 +
 #   TeeChartChartDisplay 共 4 行与期望不同 —— 那是 B5/第330刀那条已记录的**机器侧差**（本机可解析
 #   vendor OCX/typelib），pre/post 两台同值 ⇒ 不是本刀的移动，那 4 行继续留 CI 的数。
+#   本机多出的 tests/VBFlexGridDemo/bisect1..7.vbp 7 行是 .gitignore 忽略的旧探针，CI 看不见，刻意不登记。
+# 2026-11-14 第351刀（账 #613）的登记来源 = 本机全语料 A/B（pre = git archive HEAD `72c7b684` 冷编的那台
+#   C3.exe，post = 本工作树 .build/C3.exe；两台各对同一份 tests/ 跑 emit_manifest，按路径建 dict 比）：
+#   存量 713 行里**改写 3 行**（Charts 2020 两份 + 本批的 b612 那份 With 块）+ **新增 2 行**（本夹具），
+#   其余 710 行一行未动。那 3 行改写都是**同一处形状变了**：With 成员的 ReDim 元素档从 vb6_sa_variant
+#   改成声明档（Charts 2020 那处 = vb6_sa_single，访问侧 VB6_SA_AT(float, …) 本来就是 float ⇒ 步长对齐）。
+#   A/B 里另有 guisample×3 + TeeChartChartDisplay 共 4 行与期望不同 —— 那是 B5/第330刀那条已记录的
+#   **机器侧差**（本机可解析 vendor OCX/typelib），pre/post 两台同值 ⇒ 不是本刀的移动，继续留 CI 的数。
 #   本机多出的 tests/VBFlexGridDemo/bisect1..7.vbp 7 行是 .gitignore 忽略的旧探针，CI 看不见，刻意不登记。

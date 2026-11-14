@@ -1860,6 +1860,30 @@
                                const std::string& ownerClassName,
                                const std::string& memberName,
                                MemberArrayDecl& out) const;
+    // 账 #613 (第351刀): 「With 块里那枚动态数组成员的声明档」—— owner 解析的一枚出口。
+    // 访问侧 (cgen_expr_call_callee_withm.inc) 早就有这一问 (UDT 臂 knownUdtVars_[With 临时量]
+    // → 类臂 info.className → knownClassVars_[With 临时量]), 而**分配侧**压根没有: With 成员的
+    // 键是 ".member" ⇒ 那条「按最后一个 . 切 owner/member」的腿要求 dot > 0 ⇒ 不 firing ⇒
+    // 元素档回落 Variant ⇒ 分配 16/24 字节一步、访问按声明档走 (UDT/类实例元素 ⇒ 越界写)。
+    struct WithMemberOwner {
+        bool ok = false;
+        bool ownerIsUdt = false; // **owner** 是不是 UDT (别与 decl.isUdt —— 元素是不是 UDT —— 混)
+        std::string ownerCType;   // UDT → vb6_type_X;  工程类 → 类名
+        MemberArrayDecl decl;     // 那一枚成员的声明档 (只认**动态**数组)
+    };
+    bool resolveWithMemberArrayDecl(const std::string& memberName, WithMemberOwner& out) const;
+    // 账 #613 (第351刀): 「点号链目标那枚成员的声明档」——**分配侧与访问侧共用的那一问**。
+    // 三种 owner 走同一条: ① With 成员 (键以 '.' 开头) ② 工程类实例 (o.member)
+    // ③ UDT 变量 (t.member)。今天分配侧只有 ②③ 的一半（元素档），**UDT 元素档那一格没有** ⇒
+    // `ReDim o.Big(1 To 2)` (Big() As TBig) 分配按 variant 24 字节一步、访问按 sizeof(TBig)
+    // 64 字节走 ⇒ **越界写**（With 成员那一族更狠：元素档与步长两格都落空）。
+    struct DottedMemberInfo {
+        bool ok = false;
+        bool ownerIsUdt = false;  // **owner** 是不是 UDT (元素那一档是 decl.isUdt)
+        std::string ownerCType;   // UDT → vb6_type_X;  工程类 → 类名
+        MemberArrayDecl decl;     // 那一枚成员的声明档 (只认**动态**数组)
+    };
+    bool resolveDottedMemberDecl(const std::string& lowerVar, DottedMemberInfo& out) const;
     std::string mapSaElemCType(Vb6Type type) const;
     // 从ArrayTypeRef或asType获取元素Vb6Type
     Vb6Type resolveArrayElemType(ASTNode* typeRef) const;

@@ -7045,6 +7045,30 @@ if ($Category -in @("all", "run", "vbp")) {
                      "612-ctl-udt=[88]", "612-DONE")
     Test-Vbp 'b612_redim_clsmem' "$Tests\b612_redim_clsmem\B612.vbp" $b612Needles
     Test-Vbp 'b612_redim_clsmem_x86' "$Tests\b612_redim_clsmem\B612.vbp" $b612Needles -Arch "x86"
+    # 账 #613 (第351刀): With 块里 `ReDim .Member` 的元素档 —— 修前回落 variant:
+    #   ① 元素档错 ⇒ 分配 24 字节一步、访问按声明档走 (元素是 UDT 那一族 ⇒ **越界写**)
+    #   ② 整数组读进 Variant 的 VarType 答 8204 (vbArray|vbVariant) 而不是 8195 (vbArray|vbLong)
+    # 修法 = 点号链 (With 成员 / 类实例 owner / UDT owner) 收成一枚出口 resolveDottedMemberDecl,
+    #   它问 resolveMemberArrayDecl (成员表的唯一主人) ⇒ 分配侧与访问侧从此同档 (§B190 的口径)。
+    # 负控 = git archive HEAD 冷编那台对**同一份夹具**重发 ⇒ with-cls-vt 答 8204 (与期望 8195 不符)。
+    # 三枚对照组钉「没改过头」: 模块级数组 / 第350刀那一档的类外 ReDim / UDT owner 的 With 成员。
+    $b613Needles = @("613-ctl-mod=[8195]", "613-with-cls=[7]", "613-with-cls-vt=[8195]",
+                     "613-with-udt=[5]",
+                     "613-udtelem=[111,222,333,444,555,666,777,888]",
+                     "613-plain-cls-vt=[8195]", "613-DONE")
+    Test-Vbp 'b613_with_redim' "$Tests\b613_with_redim\B613.vbp" $b613Needles
+    Test-Vbp 'b613_with_redim_x86' "$Tests\b613_with_redim\B613.vbp" $b613Needles -Arch "x86"
+    Test-EmitcShape 'b613_with_redim_flavour' @("$Tests\b613_with_redim\B613.vbp") @(
+        '_vb6_with_0->L = vb6_SafeArrayReDim1D(vb6_sa_long, 1, 3);',
+        '_vb6_with_1->Items = vb6_SafeArrayReDim1D(vb6_sa_long, 1, 2);',
+        '_vb6_with_2->Big = vb6_SafeArrayReDim1D_Udt((int32_t)sizeof(vb6_type_TBig), 1, 2);',
+        'o->L  /* class var .L field */ = vb6_SafeArrayReDim1D(vb6_sa_long, 1, 4);'
+    )
+    Test-EmitcAbsent 'b613_with_redim_no_variant_flavour' @("$Tests\b613_with_redim\B613.vbp") @(
+        '_vb6_with_0->L = vb6_SafeArrayReDim1D(vb6_sa_variant, 1, 3);',
+        '_vb6_with_1->Items = vb6_SafeArrayReDim1D(vb6_sa_variant, 1, 2);',
+        '_vb6_with_2->Big = vb6_SafeArrayReDim1D(vb6_sa_variant, 1, 2);'
+    )
     Test-EmitcShape 'b612_redim_clsmem_lvalue' @("$Tests\b612_redim_clsmem\B612.vbp") @(
         'o->Digits  /* class var .Digits field */ = vb6_SafeArrayReDim1D(vb6_sa_long, 1, 4);',
         'vb6_SafeArrayReDimPreserve1D_T(vb6_sa_long, o->Digits  /* class var .Digits field */, 1, 6);',
