@@ -85,7 +85,9 @@
 # COM 就是错档）。TypeName 那边压根没有数组分支，8204 落 default 答 "Variant"。
 #   A17 新表 vb6_SaVtFromElemType 声明 1 / 定义 1 / 调用恰好 5（array.h 的 UDT 字节装箱 1 + com.c 那
 #       条进口 2 + array.c 自己那枚认载体的出口 2 + 出站白名单 1，第五十刀）；反向表 vb6_SaElemTypeFromVt
-#       声明 1 / 定义 1 / 调用恰好 3（com.c 那两条 VT_ARRAY 进口 + §B162 入站那一臂），手抄的元素 switch 回到 0 处；认载体那一问 vb6_SaVtOfArrayPtr 声明 1 / 定义 1 /
+#       声明 1 / 定义 1 / 调用恰好 3（第五十三刀 §B142 把两条进口并成一枚核后是 2：COM 进口那一枚核 +
+#       §B162 入站那一臂；账 #611 第349刀的 ND 入站唯一出口 vb6_ComNDArrayIntoSlot 又问同一张表一次 ⇒ 3），
+#       手抄的元素 switch 回到 0 处；认载体那一问 vb6_SaVtOfArrayPtr 声明 1 / 定义 1 /
 #       调用恰好 2（装箱 + GetAllSettings）；写死的 vb6_vtArray|vb6_vtVariant 恰好 2 且**只能在**
 #       vb6_SaVtOfArrayPtr 的两条兜底里（NULL 与认不出载体）；旧的三元折档形状 `vb6_vtArray | (baseVt`
 #       恰好 0。TypeName 那一张标量名单只许一份：`case vb6_vtEmpty:` 在 vb6rtl_conv.c 恰好 1，
@@ -510,8 +512,11 @@ $stiDef  = @([regex]::Matches($vC, '(?m)^vb6_safearray_elemtype\s+vb6_SaElemType
 $stiAll  = @([regex]::Matches($vH + $vC + $vCom, 'vb6_SaElemTypeFromVt\s*\(')).Count
 if ($stiDecl -ne 1) { $bad += ("A17 vb6_SaElemTypeFromVt 的声明(array.h) = " + $stiDecl + " (恰好 1；0 = 反向表还在但没人能问)") }
 if ($stiDef -ne 1)  { $bad += ("A17 vb6_SaElemTypeFromVt 的定义(array.c) = " + $stiDef + " (恰好 1；>1 = 第二张反向表)") }
-if ($stiAll - $stiDecl - $stiDef -ne 2) {
-    $bad += ("A17 问反向表的地方 = " + ($stiAll - $stiDecl - $stiDef) + " 处 (恰好 2：COM 进口那一枚核 1 + 入站那一臂 (§B162) 1；第五十三刀 §B142 把 com.c 那两条进口并成一枚核，所以 3 -> 2。多一处 = 又有人自己抄了一份元素 switch)")
+# 账 #611 第349刀: 多维入站唯一出口 vb6_ComNDArrayIntoSlot 也要把 OLE 元素档换成 C3
+# elemtype, 于是 2 -> 3。这不是「又有人自己抄了一份元素 switch」(那一格由下面
+# $stiHand 单独钉着, 仍须为 0) —— 多的是**问同一张表**的一次, 正是 A17 要的收口。
+if ($stiAll - $stiDecl - $stiDef -ne 3) {
+    $bad += ("A17 问反向表的地方 = " + ($stiAll - $stiDecl - $stiDef) + " 处 (恰好 3：COM 进口那一枚核 1 + 入站那一臂 (§B162) 1 + 账 #611 第349刀 ND 入站唯一出口 1；第五十三刀 §B142 把两条进口并成一枚核所以 3 -> 2。再多一处 = 又有人自己抄了一份元素 switch)")
 }
 $stiHand = @([regex]::Matches($vCom, 'case\s+VT_BSTR\s*:\s*et\s*=')).Count
 if ($stiHand -ne 0) { $bad += ("A17 手抄的元素 switch (case VT_BSTR: et =) = " + $stiHand + " 处 (要求 0：第五十刀把它并进反向表；回来就是两份答案)") }

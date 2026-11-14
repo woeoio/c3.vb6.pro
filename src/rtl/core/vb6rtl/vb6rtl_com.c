@@ -317,7 +317,8 @@ void vb6_ReleasePicture(void* picture) {
  * 定义在 vb6_ComSaVtBlittable 之后 (那张白名单在 616 行), 这里先挂原型: 下面
  * vb6_ComVariantIntoSlot 的数组臂要问它, 而它自己逐枚搬 VT_VARIANT 元素时又递归问
  * vb6_ComVariantIntoSlot —— 两枚互相看得见才不用抄第二份搬运逻辑。 */
-static vb6_VARIANT vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt);
+static void vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt,
+                                   vb6_VARIANT* s);
 
 static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
     vb6_VARIANT result;
@@ -392,8 +393,8 @@ static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
              * 多维那一问交给唯一转换出口(下面 vb6_ComNDArrayIntoSlot), 不在这里
              * 抄第二份界/元素搬运。元素档认不出时那枚出口交回 vtEmpty, 与 §B144
              * 「宁可少给, 不猜」同口径。 */
-            result = vb6_ComNDArrayIntoSlot(psa, cDims,
-                                            (VARTYPE)(pv->vt & VT_TYPEMASK));
+            vb6_ComNDArrayIntoSlot(psa, cDims,
+                                   (VARTYPE)(pv->vt & VT_TYPEMASK), &result);
         }
         if (steal) pv->parray = NULL;  /* 只有消耗式才动源里那一格 */
         return result;
@@ -661,71 +662,79 @@ static VARTYPE vb6_ComSaVtBlittable(vb6_safearray_elemtype et) {
  *   (串/对象/嵌套数组都带权), 不能整块 memcpy; 其余只放行白名单那几档数值档
  *   (宽与 SAFEARRAY 同值 ⇒ memcpy 正确); BSTR / UDT / 认不出的档一律交回 Empty,
  *   与一维那一臂、与出站白名单同一口径, 本刀不扩档。 */
-static vb6_VARIANT vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt) {
-    vb6_VARIANT result;
+static void vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt,
+                                   vb6_VARIANT* s) {
     vb6_SafeArrayND* nd;
     vb6_SafeArrayBound bounds[16];
-    vb6_safearray_elemtype et;
-    VARTYPE allow;
-    int32_t esz, total, i;
+    vb6_safearray_elemtype etNd;
+    VARTYPE allowNd;
+    int32_t eszNd, total, i;
     LONG lo, hi;
     UINT d;
     void* srcData = NULL;
-    int isVarElem;
+    int isVarNd;
 
-    memset(&result, 0, sizeof(result));
-    result.vt = vb6_vtEmpty;
-    if (!psa || dim < 2 || dim > 16) return result;
-    isVarElem = (baseVt == VT_VARIANT);
-    if (isVarElem) {
-        et = vb6_sa_variant;
-        allow = (VARTYPE)VT_VARIANT;
+    /* ⚠ 出口刻意是 `void` + 出参, **不返回** vb6_VARIANT: check_builtin_slot_returns.ps1
+     * 的 R8 会把「RTL 里声明返回 vb6_VARIANT 的函数」派生成 cgen_variant_slot_prefixes.inc
+     * 那张**发码**内置出口表 —— 这枚是纯内部搬运, 后端一次都不会发它的名字, 登记进去就是
+     * 「死名躺在表里骗人」(GA 43551067615 首个 compile #2 红项, derived=43 current=42)。
+     * 局部变量同样带 Nd 后缀: check_var_arr_inbound.ps1 的 R1/R5 用 Find-Line 全文找
+     * **第一次**出现的闸门形状, 且它不剥注释 —— 同名赋值出现在更靠前的位置(连注释里
+     * 引一次也算)就会把既有 §B162 那一臂的判据顶到本函数上 (GA 43551067615 的 R1 红项)。 */
+    memset(s, 0, sizeof(*s));
+    s->vt = vb6_vtEmpty;
+    if (!psa || dim < 2 || dim > 16) return;
+    isVarNd = (baseVt == VT_VARIANT);
+    if (isVarNd) {
+        etNd = vb6_sa_variant;
+        allowNd = (VARTYPE)VT_VARIANT;
     } else {
-        et = vb6_SaElemTypeFromVt(baseVt);
-        allow = vb6_ComSaVtBlittable(et);
-        if (!allow || allow != baseVt) return result;   /* 白名单外 / 认不出 = 不猜 */
+        etNd = vb6_SaElemTypeFromVt(baseVt);
+        allowNd = vb6_ComSaVtBlittable(etNd);
+        if (!allowNd || allowNd != baseVt) return;      /* 白名单外 / 认不出 = 不猜 */
     }
-    esz = vb6_SaElemSize(et);
-    if (esz <= 0 || (isVarElem && esz != (int32_t)sizeof(vb6_VARIANT))) return result;
+    eszNd = vb6_SaElemSize(etNd);
+    if (eszNd <= 0 || (isVarNd && eszNd != (int32_t)sizeof(vb6_VARIANT))) return;
     total = 1;
     for (d = 0; d < dim; d++) {
         if (FAILED(SafeArrayGetLBound(psa, d + 1, &lo)) ||
-            FAILED(SafeArrayGetUBound(psa, d + 1, &hi))) return result;
+            FAILED(SafeArrayGetUBound(psa, d + 1, &hi))) return;
         bounds[d].lBound = (int32_t)lo;
         bounds[d].cElements = (int32_t)(hi - lo + 1);
-        if (bounds[d].cElements <= 0) return result;
-        if ((int64_t)total * bounds[d].cElements > 0x7FFFFFFFll) return result;
+        if (bounds[d].cElements <= 0) return;
+        if ((int64_t)total * bounds[d].cElements > 0x7FFFFFFFll) return;
         total *= bounds[d].cElements;
     }
     if (FAILED(SafeArrayAccessData(psa, &srcData)) || !srcData) {
         if (srcData) SafeArrayUnaccessData(psa);
-        return result;
+        return;
     }
-    nd = vb6_SafeArrayCreateND(et, (int32_t)dim, bounds);
+    nd = vb6_SafeArrayCreateND(etNd, (int32_t)dim, bounds);
     if (!nd || !nd->data) {
         if (nd) vb6_SafeArrayDestroyND(nd);
         SafeArrayUnaccessData(psa);
-        return result;
+        return;
     }
-    if (isVarElem) {
+    if (isVarNd) {
         /* 与 vb6_VariantArrayIntoSlot 的 1D variant 臂同一形: 私有副本 → 消耗式
          * 转换搬进描述符 → VariantClear 私有副本 (指针已被搬走, 不重复释放)。 */
         for (i = 0; i < total; i++) {
             VARIANT* srcElem = (VARIANT*)((char*)srcData + (size_t)i * sizeof(VARIANT));
             VARIANT elem;
-            vb6_VARIANT* dstElem = (vb6_VARIANT*)((char*)nd->data + (size_t)i * esz);
+            vb6_VARIANT* dstElem = (vb6_VARIANT*)((char*)nd->data + (size_t)i * eszNd);
             VariantInit(&elem);
             VariantCopy(&elem, srcElem);
             *dstElem = vb6_ComVariantIntoSlot(&elem, 1);
             VariantClear(&elem);
         }
     } else {
-        memcpy(nd->data, srcData, (size_t)total * (size_t)esz);
+        memcpy(nd->data, srcData, (size_t)total * (size_t)eszNd);
     }
     SafeArrayUnaccessData(psa);
-    result.vt = (vb6_vartype)(vb6_vtArray | vb6_SaVtFromElemType(et));
-    result.parray = (struct vb6_SafeArray1D*)nd;
-    return result;
+    /* allowNd 本就是 vb6_ComSaVtBlittable 从唯一那张正向表问回来的档值, 不再多问一次
+     * (check_sa_access.ps1 A17 的正向表调用计数保持 5)。 */
+    s->vt = (vb6_vartype)(vb6_vtArray | allowNd);
+    s->parray = (struct vb6_SafeArray1D*)nd;
 }
 
 /* 账 #305 §B162 (第五十刀): 反向 —— 对端递进来的真 SAFEARRAY → 我们那一格的描述符。
@@ -762,7 +771,7 @@ static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
     {
         UINT cDims = SafeArrayGetDim(psa);
         if (cDims >= 2) {
-            if (cDims <= 16) *s = vb6_ComNDArrayIntoSlot(psa, cDims, base);
+            if (cDims <= 16) vb6_ComNDArrayIntoSlot(psa, cDims, base, s);
             return;                       /* >16 或元素档认不出: 不猜 */
         }
         if (cDims != 1) return;

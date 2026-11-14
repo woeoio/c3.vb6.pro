@@ -53,7 +53,7 @@ function Slice-Between([string]$text, [string]$from, [string]$to, [string]$label
 }
 
 $ndOut  = Slice-Between $s 'if (nd->elemType == vb6_sa_variant) {' 'vt = vb6_ComSaVtBlittable(nd->elemType);' 'R1'
-$ndIn   = Slice-Between $s 'static vb6_VARIANT vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt) {' 'static void vb6_VariantArrayIntoSlot' 'R4'
+$ndIn   = Slice-Between $s 'static void vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt,' 'static void vb6_VariantArrayIntoSlot' 'R4'
 $resArm = Slice-Between $s 'UINT cDims = psa ? SafeArrayGetDim(psa) : 0;' 'if (steal) pv->parray = NULL;' 'R6'
 $srvArm = Slice-Between $s 'static void vb6_VariantArrayIntoSlot' 'void vb6_VariantSlotRelease' 'R7'
 $rel    = Slice-Between $s 'void vb6_VariantSlotRelease(void *slot) {' 'static void vb6_ComPackArrayOut' 'R8'
@@ -85,10 +85,13 @@ if ($ndOut -ne '') {
     }
 }
 
-# ---- R3: one definition + one forward decl, two call sites ----
-$decl = 'static vb6_VARIANT vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt)'
+# ---- R3: one definition + one forward decl, two call sites, void+out-param ----
+$decl = 'static void vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt,'
 if (@([regex]::Matches($s, [regex]::Escape($decl))).Count -ne 2) {
     $bad += 'R3 ND conversion outlet needs exactly one forward decl + one definition'
+}
+if (@([regex]::Matches($s, '(?m)^static vb6_VARIANT\s+vb6_ComNDArrayIntoSlot')).Count -ne 0) {
+    $bad += 'R3 ND outlet must be void+out-param (a vb6_VARIANT return leaks into cgen_variant_slot_prefixes.inc)'
 }
 if (@([regex]::Matches($s, 'vb6_ComNDArrayIntoSlot\(psa, cDims')).Count -ne 2) {
     $bad += 'R3 both inbound arms must call the same ND conversion outlet'
@@ -98,10 +101,10 @@ if (@([regex]::Matches($s, 'vb6_ComNDArrayIntoSlot\(psa, cDims')).Count -ne 2) {
 if ($ndIn -ne '') {
     foreach ($needle in @('SafeArrayGetLBound(psa, d + 1, &lo)',
                           'SafeArrayGetUBound(psa, d + 1, &hi)',
-                          'vb6_SafeArrayCreateND(et, (int32_t)dim, bounds)',
+                          'vb6_SafeArrayCreateND(etNd, (int32_t)dim, bounds)',
                           'SafeArrayAccessData(psa, &srcData)',
-                          'vb6_SaVtFromElemType(et)',
-                          'result.parray = (struct vb6_SafeArray1D*)nd;')) {
+                          's->vt = (vb6_vartype)(vb6_vtArray | allowNd);',
+                          's->parray = (struct vb6_SafeArray1D*)nd;')) {
         if ($ndIn.IndexOf($needle) -lt 0) { $bad += "R4 ND outlet missing $needle" }
     }
     if ($ndIn.IndexOf('->rgsabound[0].cElements') -ge 0) {
@@ -112,7 +115,7 @@ if ($ndIn -ne '') {
                           'VariantClear(&elem)')) {
         if ($ndIn.IndexOf($needle) -lt 0) { $bad += "R5 ND outlet missing deep-copy step $needle" }
     }
-    if (@([regex]::Matches($ndIn, 'vb6_ComSaVtBlittable\(et\)')).Count -ne 1) {
+    if (@([regex]::Matches($ndIn, 'vb6_ComSaVtBlittable\(etNd\)')).Count -ne 1) {
         $bad += 'R5 ND outlet must consult the one blittable whitelist exactly once'
     }
 }
@@ -120,7 +123,7 @@ if ($ndIn -ne '') {
 # ---- R6: COM result arm ----
 if ($resArm -ne '') {
     foreach ($needle in @('psa && cDims >= 2 && cDims <= 16',
-                          'result = vb6_ComNDArrayIntoSlot(psa, cDims,')) {
+                          'vb6_ComNDArrayIntoSlot(psa, cDims,')) {
         if ($resArm.IndexOf($needle) -lt 0) { $bad += "R6 result arm missing $needle" }
     }
 }
@@ -130,7 +133,7 @@ if ($srvArm -ne '') {
     if ($srvArm.IndexOf('SafeArrayGetDim(psa) != 1') -ge 0) {
         $bad += 'R7 server inbound arm still hard-rejects cDims != 1'
     }
-    foreach ($needle in @('if (cDims >= 2) {', 'if (cDims <= 16) *s = vb6_ComNDArrayIntoSlot(psa, cDims, base);',
+    foreach ($needle in @('if (cDims >= 2) {', 'if (cDims <= 16) vb6_ComNDArrayIntoSlot(psa, cDims, base, s);',
                           'if (cDims != 1) return;')) {
         if ($srvArm.IndexOf($needle) -lt 0) { $bad += "R7 server inbound arm missing $needle" }
     }
