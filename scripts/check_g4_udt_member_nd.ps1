@@ -17,7 +17,8 @@
 #            **下标实参 (含那对括号) 的拼法住在 ndAtnSubscriptArg 一处**, udtDynMemberIndex
 #            只调它 —— 见 B3c;
 #         d) 秩 >=2 的索引过 toLongIfVariant (ND 出口的形参是 int32_t)。
-#   B4  调用面: 成员站 1 处、With 站 2 处 (UDT 臂 + 类成员臂), 其余 src 文件 0 处;
+#   B4  调用面: 成员站 2 处 (UDT 臂 + **类成员多维臂**, 账 #614 第352刀接上)、With 站 2 处
+#       (UDT 臂 + 类成员臂), 其余 src 文件 0 处;
 #       声明在 src/backend/detail/util/cgen_helpers.inc 恰 1 处。
 #   B5  两个站**都不许**再出现写死一维的判据 (`...DynArr && node.positional.size() == 1`)
 #       —— 那正是这一族的病根; 有它就是把秩 2 又推回通用调用路。
@@ -171,8 +172,8 @@ if ($defsInAuth -eq 1) {
 
 # ---- B4: 调用面 ----
 $cMem  = @([regex]::Matches((Read-Text $memRel),  'lastExpr_\s*=\s*udtDynMemberIndex\s*\(')).Count
-if ($cMem -ne 1) {
-    $bad += ("B4 " + $memRel + ": udtDynMemberIndex calls = " + $cMem + " (want 1: obj.arr(i,j) station)")
+if ($cMem -ne 2) {
+    $bad += ("B4 " + $memRel + ": udtDynMemberIndex calls = " + $cMem + " (want 2: UDT arm + class-owner multi-dim arm)")
 }
 $cWith = @([regex]::Matches((Read-Text $withRel), 'lastExpr_\s*=\s*udtDynMemberIndex\s*\(')).Count
 if ($cWith -ne 2) {
@@ -218,5 +219,5 @@ if ($bad.Count -gt 0) {
     $bad | ForEach-Object { Write-Host ("  " + $_) -ForegroundColor Red }
     exit 1
 }
-Write-Host ("PASS g4_udt_member_nd (authority=" + $authRel + ", member calls=1, with calls=2, ndAtnSubscriptArg helper=1, udtDynMemberIndex self-spelling=0)") -ForegroundColor Green
+Write-Host ("PASS g4_udt_member_nd (authority=" + $authRel + ", member calls=" + $cMem + ", with calls=" + $cWith + ", ndAtnSubscriptArg helper=1, udtDynMemberIndex self-spelling=0)") -ForegroundColor Green
 exit 0

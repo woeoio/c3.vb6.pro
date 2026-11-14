@@ -706,8 +706,9 @@
                     // 这一臂以前**不存在** —— `o.Items(i)` 于是落到底层通用路, 发成
                     // `o->Items(i)`: 那是在调用 `vb6_SafeArray1D*` 这个指针 (cl C2064,
                     // 11 处实测), 而 `v = o.Items` 发成 `vb6_VariantLong(o->Items)` (C2440)。
-                    // 只接**一维** (positional.size()==1) 与零参两种形状: 多维动态数组成员
-                    // 今天没有实物 (Pattern B 同样只发一维), 多维那形照旧落底层, 不猜。
+                    // 一维 (positional.size()==1) / 多维 (>=2, 账 #614 第352刀接上) / 零参
+                    // (整数组读) 三种形状; 秩 1 保持存量形状, 秩 >=2 走 udtDynMemberIndex
+                    // (与 UDT owner 那一臂同形)。
                     MemberArrayDecl madC;
                     const bool clsIsDynArr =
                         resolveMemberArrayDecl(std::string(), className, maExpr.memberName, madC);
@@ -728,6 +729,21 @@
                             lastExpr_ = "VB6_SA_AT(" + madC.elemCType + ", "
                                       + fieldExpr + ", " + idx + ")";
                         }
+                        handled = true;
+                    } else if (clsIsDynArr && node.positional.size() >= 2) {
+                        // 账 #614 (第352刀): **多维**类成员的元素访问 —— 这一臂以前只接一维
+                        // (`positional.size() == 1`), 于是 `o.M2(1, 2)` 落到底层通用路, 发成
+                        // `o->M2(1, 2)` = **调用 vb6_SafeArray1D* 这个指针** ⇒ cl C2064,
+                        // 整台 exe 编不出来 (UDT owner 那一臂早就对了: 它走
+                        // udtDynMemberIndex ⇒ VB6_SA_ND_AT2)。
+                        // 改法 = 交给**同一枚唯一出口** udtDynMemberIndex (秩 = 实参个数 ⇒
+                        // VB6_SA_ND_AT2/AT3/ATN), 与 UDT owner 那一臂**逐字同形**。
+                        // ⚠ 多维载体在 C 里的声明恒为 vb6_SafeArray1D* (仓里「1D 指针当载体」
+                        // 那条约定), ReDim ND 那侧也是那样强转的 ⇒ 两边一致。
+                        emitExpr(*node.callee);  // emits "obj->member" (带字段尾注)
+                        std::string fieldExpr = std::move(lastExpr_);
+                        lastExpr_ = udtDynMemberIndex(madC.elemCType, fieldExpr,
+                                                      node.positional);
                         handled = true;
                     } else if (clsIsDynArr && node.positional.empty()) {
                         // 整数组读: 字段指针原样进 vb6_VariantFromValue ⇒ _Generic 选

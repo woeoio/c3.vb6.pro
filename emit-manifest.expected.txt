@@ -605,6 +605,8 @@ sha256=9eb64f554cd63e7f31978d8bc6f842ec391c43b4f2390518f887a36fd614dde5 ascii256
 sha256=bb53a1c759abbb9f7a46712b6cdeff64e3e018c27d3caf3628020fc3211bc331 ascii256=055d7553bbfba8011a59e217bb9aba62f863d141bbbb3c604cbae5af72a134a5 rc=0 bytes=7865 tests/b612_redim_clsmem/Main.bas
 sha256=153f4be9121be059005141efdcea0fae6900fec1d35f957fea559d942933bf9d ascii256=818e69932d6d8365f6cdd7890bd4df4ccbdfdd83b5948572c950e04a89ee0d99 rc=0 bytes=10716 tests/b613_with_redim/B613.vbp
 sha256=bd48ae7a63c2b1089d00e1b1fca997480f67dd4de9da5ee97fd24b9d4806333a ascii256=14ecfbaedbfc81faab6bb0c2e12726677fb8f7cd7eb6520627657273aee31b8c rc=0 bytes=7284 tests/b613_with_redim/Main.bas
+sha256=664c57b87df19c12efa47218bba45b35b1ac20884a7f082256c45082ab8f5d6d ascii256=f6e65dd735551b5b385541030bb5d0c323fdf29d421c87fdd3ba4e0341370944 rc=0 bytes=8865 tests/b614_nd_member/B614.vbp
+sha256=efabde48b535f04d28fe5a3790d6992a9312c447bc154375a7cb899bec286746 ascii256=389c2c47bdb1abc478fa273b0cbd0663d058c443b8dcd4162b416165cee854fc rc=0 bytes=4963 tests/b614_nd_member/Main.bas
 sha256=4beb491a0703f2143f89ffb3c1d68d167ff0c7cff288b8fd05c380eb26f5c421 ascii256=53ff214f149a1490656b8cef716d18d7dbb96b00faf46a57a0e147fa8177efa2 rc=0 bytes=18580 tests/ctlhostm3/HmApp.vbp
 sha256=382c68c76d186273acc8758bddd00d254b754bf3f21b2bacf7cfe1f6bcbd4532 ascii256=5a7efdf9af7428ea9d7668ab9cc9fa0dfce9a02f4d74cb7802c37ae06a44c13d rc=0 bytes=16956 tests/ctlident/IdApp.vbp
 sha256=811814cdceeb9af2d21e1c181eea4a24cc4dea5e6a21cfbcc04c23378bab55ee ascii256=032f17b7453f677dfd2a222fb514505f9f85eb8e44dc02d06e2d2061cbc60c48 rc=0 bytes=17139 tests/guisample/Definitions.bas
@@ -1228,4 +1230,10 @@ sha256=75152c77f83d9ce7874a186ee8ed18b98ebee98e9fbcca19ac75512f881075b1 ascii256
 #   改成声明档（Charts 2020 那处 = vb6_sa_single，访问侧 VB6_SA_AT(float, …) 本来就是 float ⇒ 步长对齐）。
 #   A/B 里另有 guisample×3 + TeeChartChartDisplay 共 4 行与期望不同 —— 那是 B5/第330刀那条已记录的
 #   **机器侧差**（本机可解析 vendor OCX/typelib），pre/post 两台同值 ⇒ 不是本刀的移动，继续留 CI 的数。
+#   本机多出的 tests/VBFlexGridDemo/bisect1..7.vbp 7 行是 .gitignore 忽略的旧探针，CI 看不见，刻意不登记。
+# 2026-11-14 第352刀（账 #614）的登记来源 = 本机全语料 A/B（pre = git archive HEAD `8a29d766` 冷编的那台
+#   C3.exe，post = 本工作树 .build/C3.exe；两台各对同一份 tests/ 跑 emit_manifest，按路径建 dict 比）：
+#   存量 715 行**一行未动**，只新增本夹具 2 行（B614.vbp + Main.bas）。A/B 里另有 guisample×3 +
+#   TeeChartChartDisplay 共 4 行与期望不同 —— 那是 B5/第330刀那条已记录的**机器侧差**（本机可解析
+#   vendor OCX/typelib），pre/post 两台同值 ⇒ 不是本刀的移动，那 4 行继续留 CI 的数。
 #   本机多出的 tests/VBFlexGridDemo/bisect1..7.vbp 7 行是 .gitignore 忽略的旧探针，CI 看不见，刻意不登记。

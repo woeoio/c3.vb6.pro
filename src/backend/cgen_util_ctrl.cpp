@@ -3236,6 +3236,39 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         if (!viewBox171.empty()) return viewBox171;
     }
 
+    // 账 #615 (第353刀): **UDT 成员的整数组读** (`w = h.Items`) 的装箱档 ——
+    // 以前整枚落进下面那张 inferExprType 表, 而它对「成员是动态数组」答的是**元素**档 (Long)
+    // ⇒ 发 `vb6_VariantLong(h.Items)` = 把描述符指针截进 int32 (cl 一声不响, 运行期才炸)
+    // ⇒ VarType 答 3 而不是 8195 (VB6 那一形是数组)。
+    // 这一问必须排在那张表**之前** (同 §B163 裸数组名那一问的次序理由: 那张表答的是元素档)。
+    // ⚠ 只认**一维**: `vb6_VariantFromValue` 的 _Generic 没有 vb6_SafeArrayND* 那一档,
+    // 多维载体落 default = vb6_VariantObject ⇒ 对一枚描述符发 Release = 野 Release 堆损坏
+    // (台账 §B85 那一族) ⇒ 多维不接, 维持今天的形状。
+    if (valueNode->kind == ASTNodeKind::MemberAccessExpr
+        || valueNode->kind == ASTNodeKind::WithMemberExpr) {
+        std::string ownerUdt615;
+        std::string memberName615;
+        if (valueNode->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& ma615 = static_cast<MemberAccessExpr&>(*valueNode);
+            ownerUdt615 = inferUdtTypeOfExpr(*ma615.object);
+            memberName615 = ma615.memberName;
+        } else {
+            auto& wm615 = static_cast<WithMemberExpr&>(*valueNode);
+            memberName615 = wm615.memberName;
+            if (!withObjectVars_.empty()) {
+                auto itU615 = knownUdtVars_.find(Symbol::toLower(withObjectVars_.back()));
+                if (itU615 != knownUdtVars_.end()) ownerUdt615 = itU615->second;
+            }
+        }
+        if (!ownerUdt615.empty() && !memberName615.empty()) {
+            MemberArrayDecl mad615;
+            if (resolveMemberArrayDecl(ownerUdt615, std::string(), memberName615, mad615)
+                && mad615.ok && mad615.arrayRank <= 1) {
+                return "vb6_VariantFromValue(" + cExpr + ")";
+            }
+        }
+    }
+
     // 使用inferExprType推断表达式类型
     if (valueNode->kind == ASTNodeKind::BinaryExpr ||
         valueNode->kind == ASTNodeKind::UnaryExpr ||

@@ -7068,6 +7068,27 @@ if ($Category -in @("all", "run", "vbp")) {
         '_vb6_with_0->L = vb6_SafeArrayReDim1D(vb6_sa_variant, 1, 3);',
         '_vb6_with_1->Items = vb6_SafeArrayReDim1D(vb6_sa_variant, 1, 2);',
         '_vb6_with_2->Big = vb6_SafeArrayReDim1D(vb6_sa_variant, 1, 2);'
+    # 账 #614 (第352刀): 台账 §B190 剩下的两格 ——
+    #   ① 多维**类成员**的元素访问 `o.M2(1, 2)`: 修前那一臂只接一维 ⇒ 落底层通用路,
+    #      发成 `o->M2(1, 2)` = **调用 vb6_SafeArray1D* 这个指针** ⇒ cl C2064, 整台 exe 编不出来
+    #      (UDT owner 那一臂早走 udtDynMemberIndex ⇒ VB6_SA_ND_AT2, 是对照组)。
+    #   ② UDT 成员的**整数组读** `w = h.Items` 的装箱档: 修前落进 inferExprType 那张表, 它答的是
+    #      **元素**档 (Long) ⇒ 发 `vb6_VariantLong(h.Items)` = 指针截进 int32 ⇒ cl C2444/C2440、无 exe。
+    # 负控 = git archive HEAD 冷编那台对**同一份夹具**重发 ⇒ 2 × C2064 + 1 × C2440、无 exe。
+    # 三枚对照组钉「没改过头」: UDT owner 的多维 / 类实例的整数组读 / 模块级数组。
+    $b614Needles = @("614-cls-nd=[42]", "614-udt-nd=[43]", "614-udt-arr-vt=[8195]",
+                     "614-cls-arr-vt=[8195]", "614-cls-1d=[45]", "614-ctl-mod=[8195]",
+                     "614-DONE")
+    Test-Vbp 'b614_nd_member' "$Tests\b614_nd_member\B614.vbp" $b614Needles
+    Test-Vbp 'b614_nd_member_x86' "$Tests\b614_nd_member\B614.vbp" $b614Needles -Arch "x86"
+    Test-EmitcShape 'b614_nd_member_shapes' @("$Tests\b614_nd_member\B614.vbp") @(
+        'VB6_SA_ND_AT2(int32_t, (vb6_SafeArrayND*)o->M2  /* class var .M2 field */, 1, 2) = 42;',
+        'w = vb6_VariantFromValue(h.Items);'
+    )
+    Test-EmitcAbsent 'b614_nd_member_no_broken_shapes' @("$Tests\b614_nd_member\B614.vbp") @(
+        'o->M2  /* class var .M2 field */(1, 2) = 42;',
+        'w = vb6_VariantLong(h.Items);'
+    )
     )
     Test-EmitcShape 'b612_redim_clsmem_lvalue' @("$Tests\b612_redim_clsmem\B612.vbp") @(
         'o->Digits  /* class var .Digits field */ = vb6_SafeArrayReDim1D(vb6_sa_long, 1, 4);',
