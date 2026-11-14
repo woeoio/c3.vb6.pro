@@ -239,6 +239,25 @@
 
                 }
 
+                // 账 #611 第346刀: **Variant 槽**作首参时, 秩是**运行期**属性 ——
+                // 同一枚 ByRef Variant 形参这一趟装 1D, 下一趟可能装 2D。上面 #2 (按
+                // 调用点上写的维度常量) 与 #3 (按同一过程里别的调用登记的名字) 这两条
+                // 都是「按名字猜秩」, 对槽不成立: ND 版会把 1D 描述符当
+                // vb6_SafeArrayND 读 —— 1D 的 uBound 正好落在 ND 的
+                // bounds[0].cElements 上, 于是 UBound 交回 lBound+uBound-1
+                // (实测 Array("admin","auditor"): 1D uBound=1 ⇒ ND 算 0+1-1=0 ⇒
+                //  循环只走一枚; JSonFast #7 的 roles 只输出 "admin")。
+                // vb6_UBound/vb6_LBound 本身自带秩判别 (vb6_SaIs1D → 1D 字段, 否则
+                // 按 ND 的 dimCount 2..16 走 UBoundND/LBoundND), 所以槽这一档一律走
+                // 派发型。静态 Dim 声明 (#1) 仍然可信, 不在本条覆盖范围内。
+                if (useND && node.positional.size() >= 1 && node.positional[0]
+                    && isVariantSlot(args.empty() ? std::string() : args[0],
+                                     node.positional[0].get())) {
+
+                    useND = false;
+
+                }
+
                 if (useND) {
 
                     // 注册到过程内ND数组集合, 后续 UBound(arr,1) 也会用ND版本

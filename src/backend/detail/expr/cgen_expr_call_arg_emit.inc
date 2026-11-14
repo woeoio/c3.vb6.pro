@@ -1800,7 +1800,24 @@
                                 // 2. C 表达式已是 Variant (vb6_VariantArrayGet 等),
                                 //    提取 BSTR 值到 .bstrVal (避免 VARIANT→BSTR C2440)
                                 // 3. 其他未知类型保持原样 (UDT 等单独处理)
-                                if ((i < node.positional.size()
+                                //
+                                // 账 #611 第346刀: **Variant 数组的裸元素**作 ByRef Variant 实参。
+                                // `m_ViewArr(i)` (`Private m_ViewArr() As Variant`) 发出来就是
+                                // `VB6_SA_AT(vb6_VARIANT, me->m_ViewArr, i)`, 而那一格**自己就是**
+                                // 可寻址的 vb6_VARIANT 左值 —— 问句归账 #305 §B164 收口的
+                                // byRefElementAddressExpr (元素档逐字等于形参档才答是)。
+                                // 原先进下面 isVariantSlot 那一臂被压成
+                                //   (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(元素)})
+                                // ⇒ vt 身份当场丢掉: 嵌套数组交 ""、Boolean 交 "True"、日期/数值
+                                // 全变字面串。实测 JSonFast #7 (按钮 7):
+                                //   WriteArrayValue 里 `WriteVariantValue m_ViewArr(0&)` 递归,
+                                //   roles/owner 两个 String() 交 ""、active 交 "True"。
+                                // 取址直传后被调方拿到的是**元素本身**, vt 原样、ByRef 写回也落在元素上。
+                                const std::string addrElem611 =
+                                    byRefElementAddressExpr(argVal, "vb6_VARIANT");
+                                if (!addrElem611.empty()) {
+                                    argVal = addrElem611;
+                                } else if ((i < node.positional.size()
                                      && inferUdtFieldVb6Type(node.positional[i].get()) == Vb6Type::Variant)
                                     || cExprIsVariantSlotFieldRead(argVal)) {
                                     // 账 #305 §B171 (第六十二刀): 工程类里那枚 Variant 字段读走的是
@@ -1812,7 +1829,25 @@
                                     //   旧值)。地址那一档三样都保住, 且与 Variant 变量作实参同形 (&w)。
                                     argVal = "&(" + argVal + ")";
                                 } else if (isVariantSlot(argVal, nullptr)) {  // P1.3: ast 不可得 (argVal 距 emitExpr 超 5 行)
-                                    argVal = "(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(" + argVal + ")})";
+                                    // 账 #611 第346刀: **槽元素读右值** (`vb6_VariantArrayGet` /
+                                    // `vb6_VariantArrayGetND`, 见 isVariantSlotElemRead 那张收口表)
+                                    // 交出来的就是整枚 vb6_VARIANT **值**, 不是 BSTR —— 压成
+                                    // `.vt=VT_BSTR, .bstrVal=vb6_VariantToString(...)` 把 vt 身份
+                                    // 当场丢掉, 于是元素是嵌套数组 ⇒ ""、Boolean ⇒ "True"、
+                                    // 日期/数值 ⇒ 字面串; 被调方按 BSTR 走, 后续 VarType 分派全错。
+                                    // VB6 交的是「一枚装着原值的临时 Variant」—— 数组复合字面量取
+                                    // 首元素地址正是这一形 (与上面 Null/Empty 那条同姿势), 用的是
+                                    // 按值返回的那一枚 C 表达, 不必知道槽里的数组是 Variant 档还是
+                                    // 强类型档 (强类型档拿不到 vb6_VARIANT* 的真地址, ElemPtr 那一族
+                                    // 对非 vb6_sa_variant 的槽一律交 NULL)。
+                                    // 实测 JSonFast #7: WriteTypedArrayFallback 里
+                                    //   `WriteVariantValue vArr(i)` 递归, roles/owner 交 ""、
+                                    //   active 交 "True" (参考 exe 交 ["admin","auditor"] 与 true)。
+                                    if (isVariantSlotElemRead(argVal)) {
+                                        argVal = "&((vb6_VARIANT[]){" + argVal + "})[0]";
+                                    } else {
+                                        argVal = "(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(" + argVal + ")})";
+                                    }
                                 } else if (argVal.compare(0, 12, "vb6_ComCall(") == 0
                                            || argVal.compare(0, 20, "vb6_ComCallByDispid(") == 0
                                            || argVal.compare(0, 15, "vb6_ComGetProp(") == 0

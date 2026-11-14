@@ -2155,6 +2155,20 @@ function Test-CreatedObjectTypeName {
     }
 }
 
+function Test-ByRefVariantElemArg {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] byref_variant_elem_arg ... "
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_byref_variant_elem_arg.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -First 6 | ForEach-Object { Write-Host "  $_" }
+    }
+}
+
 function Test-UdtCallretNoparens {
     $script:total++
     Write-Host -NoNewline "  [STATIC] udt_callret_noparens ... "
@@ -6414,6 +6428,11 @@ if ($Category -in @("all", "run", "bas")) {
     # 账 #611: VB6 TypeName(CreateObject("Scripting.Dictionary")) 答 "Dictionary"。
     # 修前一律答 "Object" ⇒ JSonWrite.Serialize 抛 5020 (JSonFast 第 7 按钮)。
     Add-BasTest "jsonfast_created_typename" "$Tests\jsonfast_611\CreatedObjectTypeName.bas" @("tn=Dictionary", "item=v")
+    # 账 #611 (#7 保真): ① UBound/LBound 首参是 Variant 槽时报文里的秩是运行期属性, 必须
+    # 保留派发型 (被"按名字猜秩"改道成 ND 版 ⇒ 1D 按 ND 布局读 ⇒ UBound 交 0 ⇒ 只走一枚);
+    # ② Variant() 元素交给 ByRef Variant 形参要整枚过去 ⇒ Boolean 交 vt11、嵌套数组交 vt8204
+    # (修前一律压成 VT_BSTR ⇒ 全 vt8)。读数取自真 VB6 口径。
+    Add-BasTest "jsonfast_variant_slot_elem" "$Tests\jsonfast_611\VariantSlotElement.bas" @("ub=2 d2=", "vt11 | vt8 | vt8204")
     Add-BasTest "test_com_optional" "$Tests\test_com_optional.bas" @("OP-1:OK", "OP-4:OK", "P24-11: 4/4")
     # 账 #245/§B94 的行为针（夹具 tests/test_com_variant_prop.bas）。类型库属性 Get 的返回档落在
     # mapType 的「未知」桶（这里是 VARIANT）时，唯一合法读法是 Variant 兜底 —— 不许按右值上下文猜成
@@ -12667,6 +12686,7 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-UcDefaultMember }
     if (Enter-StaticShard) { Test-OnErrorGotoZero }
     if (Enter-StaticShard) { Test-CreatedObjectTypeName }
+    if (Enter-StaticShard) { Test-ByRefVariantElemArg }
     if (Enter-StaticShard) { Test-UdtCallretNoparens }
     if (Enter-StaticShard) { Test-VariantUnbox }
     if (Enter-StaticShard) { Test-CtrlPropTypeAuthority }

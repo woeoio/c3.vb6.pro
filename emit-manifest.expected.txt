@@ -431,7 +431,7 @@ sha256=417b075e60ebb03b8697d8080601377a58dd516ed51368215b7a61c41efa5716 ascii256
 sha256=fc258c6beb974462532c87e317aab451ed428b443c873023e9fc7ecd97a96d15 ascii256=4a4abd54cd767180631b3590f34c1d0be24c7fb750e6764683b2a783cbd27e7f rc=0 bytes=202026 tests/VBFlexGridDemo/Common/Common.bas
 sha256=6f5c897c93fd54e024c3a2b99b0b02afe887258bf969d2d6a533fd4b3e43f5f9 ascii256=6d3a354c3a189a55f119785fc9ece6a550835e387f6b85f7796588fa33488ecb rc=0 bytes=4669 tests/VBFlexGridDemo/Common/Startup.bas
 sha256=5133854a426b02ead2aecefe70e8040fa17a367b4f66115cbbb2af02051beb43 ascii256=d8b8a86d9624998938c7bc59ed60b040b51c8153a0ecbb524551955adb8a8378 rc=0 bytes=75621 tests/VBFlexGridDemo/Common/VisualStyles.bas
-sha256=8e830442c15eff86aca89199f90e69ea6cf87b2eeec919e4cd6eb1cde408ba94 ascii256=1286aea58b52a809b2de24ebfafac1988ca59539d8319acd9f9e9dbbc07f093d rc=0 bytes=5640701 tests/VBFlexGridDemo/VBFlexGridDemo.vbp
+sha256=ee88c2c4583c73a45beb06ed129587f1a4ead5daff2061c726d05fe422061640 ascii256=c32c57c73122c35048a135413aaf8b9c02c2463c247134fe50fd7cf39bcbf748 rc=0 bytes=5640219 tests/VBFlexGridDemo/VBFlexGridDemo.vbp
 sha256=3523b090667462c71217a4d38dd024955a4998573c61cae1c82411d51f3c8254 ascii256=a288dce5b40e72427f478b83d00090046fc629f72308e24514828f81f617d2eb rc=0 bytes=3477 tests/vbman_host/run_host.bas
 sha256=b68ba828397c0cabd139e7c7caf1e8c9265b92a8a7d4f9ad56a9b59bc666c7b1 ascii256=a288dce5b40e72427f478b83d00090046fc629f72308e24514828f81f617d2eb rc=0 bytes=3558 tests/vbman_host/vbman_host.vbp
 sha256=5f6d4159602806680561963237b24008263b38246332b50b3e814a333009d1a5 ascii256=5cd8103e73a1c07e2fece83539770603407213236bbf9822bd9b08ea74e7d778 rc=0 bytes=1763 tests/vbp_project/MainMod.bas
@@ -446,7 +446,7 @@ sha256=ff795a2f8784174ce15cd9a62106bd12188489f99a1f6c12a98dad6e1172b13a ascii256
 sha256=8b59ce352ee117481a18aa0d99118752a9ff2d7f72f71e98736b97af7435b00f ascii256=e6e7a6cd672a4120c4471a1728c3572396b598f72fb81a25454f90aa63091b95 rc=0 bytes=6649 tests/test_intrinsic_consts.bas
 sha256=0f9ed6f70c1d1bbd75380cd7db59f82977f6bf26cea29e33aecdfd42161adc25 ascii256=938b550086243372bebd318b7d9942b34a79283b11ec8c7d92aa466a37b55a26 rc=0 bytes=24683 tests/sbhm/SbHm.vbp
 sha256=8ecaaf2026fcd0672b0c213664c4b2a177a858faa91a6f9f20fe3d168b7ff0ff ascii256=a8a4ce0e37a73c25dc7ed4f12918e718e78bf9c271354c7e2336ebb7dc2bb128 rc=0 bytes=28975 tests/geomarr/GeomArr.vbp
-sha256=44140bbb0bbc124025076083de21138d40c0fd2793f1b688ea6899cf6eecbe11 ascii256=0ac57beff738cd9db97ced3b04e2e4840c47c21c66834e115ee4eba4216f80ce rc=0 bytes=6742 tests/test_registry_settings.bas
+sha256=1970163b9162d25b9439ddcddfbd1c6cea7c820a41f4c2ab793635653fbf28c6 ascii256=a7abeacce7957ecb0f3503bef3a5bfd437eb2ad21e81304a8409dc8e3a29dd86 rc=0 bytes=6654 tests/test_registry_settings.bas
 sha256=429a70e4a914d041572791124e47af196fc90deea419631fa049c1b170056b44 ascii256=d896e634ec090707d334fef6f2e84468013a969716614411f648177d09610e1d rc=0 bytes=22463 tests/test_redim_elem.bas
 sha256=f1805823453db6093a8b893826fc19e2a1587e2aa2e453d279ae8dc7ab3bcd4c ascii256=d933d2f0946419e32d07f1333b6f3601195dbc7c0b8667e158d904763bf2c4a6 rc=0 bytes=10452 tests/test_host_decimal.bas
 sha256=e36cf86c22280ba1ae2af7ec6c3ad51c8ec32dc14de8d058b34feaaa6264e401 ascii256=18ea55a66f24725402a788ca13a0c15dab80e393a4293d3877ee5c537fad5e94 rc=0 bytes=18572 tests/test_fe_slot_leak.bas
@@ -1167,6 +1167,9 @@ sha256=c0638067a3b85b08e3dfdb14bb485c49bae79dec583fca847c2e07c18393d7f1 ascii256
 sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ascii256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 rc=1 bytes=0 tests/fgz_fix014/DllBlocks.bas
 sha256=5ca4d1c43252b478180f1df02a8a94ee1cde9cdd878aabe1ec20088e0efd31c4 ascii256=914e13918d375a29f576f465cafdaf1cb28c8b5e1d8677558fac11c1a23a53fc rc=0 bytes=2173 tests/jsonfast_611/CreatedObjectTypeName.bas
 sha256=22a03803b55e27d2c869ed2fa1098b633aa7065b49f5a2a54f73884619c02d6c ascii256=fb3bf634db8c24c3f30345bbb3d58745fe2b4dc165415c88f04df4e49373b6c9 rc=0 bytes=3846 tests/jsonfast_611/OnErrorGotoZero.bas
+sha256=603154062d970d9cb81647d47548ffed69161ce44c495ad52fc194dedb9bcd31 ascii256=fa85ba2eebe92109e860c22cc3f54d093cf59c1936162e25d1aff52246d756e4 rc=0 bytes=3062 tests/jsonfast_611/probe_ArrayBounds.bas
+sha256=6e3046a34ff860cf1782d44c568cbe2994aeda98cad07a25c562f183299ec794 ascii256=ebb88256af573cd8ce4849a13bd9457748b88fc9537f7005c104377777d50b40 rc=0 bytes=4033 tests/jsonfast_611/probe_DictArrayRoundTrip.bas
+sha256=75152c77f83d9ce7874a186ee8ed18b98ebee98e9fbcca19ac75512f881075b1 ascii256=6ab680f86b26166b8a7e917b0dd0fed6434b0424dc79e3b54d7cbb569df4c449 rc=0 bytes=3763 tests/jsonfast_611/VariantSlotElement.bas
 # 2026-11-13 账 #610 第344刀（VT_ARRAY|VT_VARIANT 入站档）登记来源：本机全量 emit 读数
 #   期望 702 / 实得 704 / 相同 698 / 哈希不同 4 / 缺席 0 / 多出 2。
 #   本刀**只动 RTL**（vb6_VariantArrayIntoSlot 的逐枚深拷贝那一支）⇒ C3 发码一个字节没变
@@ -1194,3 +1197,11 @@ sha256=22a03803b55e27d2c869ed2fa1098b633aa7065b49f5a2a54f73884619c02d6c ascii256
 #   guisample x3 + TeeChartChartDisplay x1 仍是机器侧差行, 保持 CI 侧原值不动。
 #   新增 2 行 = tests/jsonfast_611 的两份夹具。
 #   changed=44 added=2 kept-ci=4 total-data=706
+# 2026-11-14 账 #611 (第346刀, JSonFast 第 7 按钮保真) 形状门登记:
+#   ByRef Variant 形参收实参的三处口径改了发码 —— ① Variant 数组裸元素
+#   (VB6_SA_AT(vb6_VARIANT,...)) 取址直传; ② 槽元素读右值换数组复合字面量;
+#   ③ UBound/LBound 首参是 Variant 槽时退回派发型。changed 行按本机全量 emit
+#   (jobs=2) 的实得值逐行 splice, 历史注脚原位保留。
+#   guisample x3 + TeeChartChartDisplay x1 仍是机器侧差行, 保持 CI 侧原值不动。
+#   新增 3 行 = tests/jsonfast_611 的新夹具与两份探针。
+#   changed=2 added=3 kept-ci=4 total-data=709
