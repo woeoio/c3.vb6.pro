@@ -358,22 +358,26 @@ foreach ($k in $askByFile171.Keys) {
         $bad += ('R9 名单外的新问点 ' + $k + ' x' + $askByFile171[$k] + ' —— 这一问又有人自己抄一份')
     }
 }
-# ---- R9c (第六十三刀 §B172): 成员读发文站四处, 每一处都只许调那条唯一出口 ----
+# ---- R9c (第六十三刀 §B172): 成员读发文站五处, 每一处都只许调那条唯一出口 ----
 # 第四站 = ucTreeView 的链式类字段读 (cgen_expr_member_voidptr_com.inc): 复合成员
 # (`oParent->Parent->Childs`) 此后也带 voidptr 尾注, 否则外层 .Count/.Add 直发结构体成员。
+# 第五站 = 账 #612 (第350刀) 的 ReDim/Erase 目标左值 (cgen_base_naming.cpp): 类实例的
+# 一维动态数组成员从类外 ReDim 时, 左值也问同一位主人 (从前折成从没声明的 o_Items ⇒ C2065)。
+# ⚠ 计数正则必须同时认 `= classFieldReadExpr(` 与 `return classFieldReadExpr(` ——
+# 只认赋值那一形时, 「把出口的答案直接 return 出去」的新站整个隐身 (本刀差点漏掉)。
 $WantStation172 = [ordered]@{ 'cgen_expr_member_class_fallback.inc' = 2; 'cgen_expr_with.cpp' = 1;
-                              'cgen_expr_member_voidptr_com.inc' = 1 }
+                              'cgen_expr_member_voidptr_com.inc' = 1; 'cgen_base_naming.cpp' = 1 }
 $stationByFile172 = @{}
 foreach ($f in $srcFiles168) {
     $t172 = [System.IO.File]::ReadAllText($f.FullName)
-    $n172 = [regex]::Matches($t172, '= classFieldReadExpr\(').Count
+    $n172 = [regex]::Matches($t172, '(?:=|return) classFieldReadExpr\(').Count
     if ($n172 -gt 0) { $stationByFile172[(Split-Path $f.FullName -Leaf)] = $n172 }
 }
 foreach ($k in $WantStation172.Keys) {
     $g172 = 0
     if ($stationByFile172.ContainsKey($k)) { $g172 = $stationByFile172[$k] }
     if ($g172 -ne $WantStation172[$k]) {
-        $bad += ('R9 ' + $k + ' 调 classFieldReadExpr ' + $g172 + ' 处, 名单钉的是 ' + $WantStation172[$k] + ' (点号 + 类形参 AST + With 三站)')
+        $bad += ('R9 ' + $k + ' 调 classFieldReadExpr ' + $g172 + ' 处, 名单钉的是 ' + $WantStation172[$k] + ' (点号 + 类形参 AST + With + 链式 voidptr + ReDim/Erase 左值 五站)')
     }
 }
 foreach ($k in $stationByFile172.Keys) {

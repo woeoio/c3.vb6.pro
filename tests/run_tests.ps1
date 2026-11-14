@@ -6800,6 +6800,33 @@ if ($Category -in @("all", "run", "bas")) {
                       "K483-udt-vt=8204/7,8", "K483-complex-vt=8195/9,10", "K483-DONE")
     Add-BasTest "k483_redim_member_elem" "$Tests\k483_redim_member_elem.bas" $k483Needles
     Add-BasTest "k483_redim_member_elem_x86" "$Tests\k483_redim_member_elem.bas" $k483Needles -Arch "x86"
+    # 账 #612 (第350刀): 类实例的一维动态数组成员从类外 ReDim / ReDim Preserve / Erase ——
+    #   改前目标左值被 cIdent 折成从没声明的 o_Digits / n_Digits / mo_Digits / o_Tags
+    #   (修复前那台 12×C2065、无 exe; 反面针在场数 9/2/2/2 → 0/0/0/0), 改后问同一位主人
+    #   classFieldReadExpr, 档位与秩问 resolveMemberArrayDecl (与分配侧/访问侧同一枚出口)。
+    #   读数取自真跑工件 .local/k613/b612fix_run.log; 两枚对照组 (模块级数组 / UDT 成员数组)
+    #   钉「没改过头」, 两枚 VarType 同值 8195 = 类成员与模块级同档。
+    $b612Needles = @("612-redim=[400]", "612-preserve=[400]", "612-preserve-new=[600]",
+                     "612-erase-reuse=[77]", "612-tags=[T612]", "612-formal=[50]",
+                     "612-sum=[50]", "612-module=[33]", "612-vartype=[8195]",
+                     "612-with=[55]", "612-ctl-mod=[77]", "612-ctl-vartype=[8195]",
+                     "612-ctl-udt=[88]", "612-DONE")
+    Test-Vbp 'b612_redim_clsmem' "$Tests\b612_redim_clsmem\B612.vbp" $b612Needles
+    Test-Vbp 'b612_redim_clsmem_x86' "$Tests\b612_redim_clsmem\B612.vbp" $b612Needles -Arch "x86"
+    Test-EmitcShape 'b612_redim_clsmem_lvalue' @("$Tests\b612_redim_clsmem\B612.vbp") @(
+        'o->Digits  /* class var .Digits field */ = vb6_SafeArrayReDim1D(vb6_sa_long, 1, 4);',
+        'vb6_SafeArrayReDimPreserve1D_T(vb6_sa_long, o->Digits  /* class var .Digits field */, 1, 6);',
+        'vb6_EraseArrayVar(&o->Digits  /* class var .Digits field */);',
+        'n->Digits  /* class var .Digits field */ = vb6_SafeArrayReDim1D(vb6_sa_long, 1, k);',
+        'mo->Digits  /* class var .Digits field */ = vb6_SafeArrayReDim1D(vb6_sa_long, 1, 3);',
+        'o->Tags  /* class var .Tags field */ = vb6_SafeArrayReDim1D(vb6_sa_bstr, 1, 2);'
+    )
+    Test-EmitcAbsent 'b612_redim_clsmem_no_folded_name' @("$Tests\b612_redim_clsmem\B612.vbp") @(
+        'o_Digits',
+        'n_Digits',
+        'mo_Digits',
+        'o_Tags'
+    )
     # 账 #305 第二百五十三刀: ByRef 形参吃「数组元素」那一形从前落进复合字面量 (元素当前值的副本),
     # 被调方那句"先退旧再存新"退掉的就是元素自己那一枚串 ⇒ 写回丢失 + 元素悬空。现在由唯一主人
     # byRefElementAddressExpr 直递那一格的地址。**行为面只能真跑** (改前 W1=OLD / W3=10 / W5=bad 2000,

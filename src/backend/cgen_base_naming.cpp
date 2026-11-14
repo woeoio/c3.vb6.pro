@@ -319,6 +319,22 @@ std::string CCodeGen::resolveArrayTargetIdent(const std::string& varName) {
             }
             return objName + "." + expandMemberPath(memberName);
         }
+        // 账 #612: owner 是本工程类实例 (局部 Dim / 类形参 / 模块级) 时, 成员左值问同一位主人
+        // classFieldReadExpr —— 元素访问侧 (Pattern C/D) 与整数组读早就这么发 (`o->Items`
+        // 带那条成员读尾注), 而这一枚以前只有 UDT 腿 ⇒
+        // `ReDim o.Items(1 To 4)` / `Erase o.Items` 掉进 cIdent 折成从没声明的 `o_Items`
+        // (C2065, 整台 exe 编不出来; 元素档那一半 §B190 已接对, 缺的只是左值)。
+        // 档位与秩都问 resolveMemberArrayDecl (与分配侧/访问侧同一枚出口), 只认**一维动态**成员:
+        // 多维类字段在结构体里是 vb6_SafeArrayND*, 而 cgen_redim 的 ND 两支按「1D 指针当载体」
+        // 强转 ⇒ 那一形今天仍答不上, 认不出就不猜 (维持原回落, 不新造 C2440)。
+        auto kc = knownClassVars_.find(objLower);
+        if (kc != knownClassVars_.end() && memberName.find('.') == std::string::npos) {
+            MemberArrayDecl mad;
+            if (resolveMemberArrayDecl(std::string(), kc->second, memberName, mad)
+                && mad.ok && mad.isDynamic && mad.arrayRank <= 1) {
+                return classFieldReadExpr(objName, kc->second, memberName, false, "class var");
+            }
+        }
     }
     return cIdent(varName);
 }

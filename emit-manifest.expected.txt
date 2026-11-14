@@ -601,6 +601,8 @@ sha256=669b6e5e96424bd8738508234647a41093743bf1a714d2e0451fc0a084e81c56 ascii256
 sha256=dfd5137067905b41abf437dc80de61ac2e6f232108ae85fae01177733e2c0cf8 ascii256=6073cc4eb7ab1600c0277319d678eeae6d08028a24d8061026434571dafd2e9a rc=0 bytes=7115 tests/test_fileio_modstr.bas
 sha256=ad53da754817855623286d653b15e0af20b26764bbae3d1b1494ea40c4c810bc ascii256=972782bf1e1189671de603d49d2b22ff2832de7786becfb3a303450362de509c rc=0 bytes=3867 tests/b605_dllapp/B605k.vbp
 sha256=a581adb4ed5d0095a9ee6cca4a253ab3a3b549678e2b7b2d3897f86ed58b40dc ascii256=d7718f2a02d80a3d6970f161d9445766cdc2bfe05f9b85f7f5330fef26832582 rc=0 bytes=8371 tests/b611_printfn.bas
+sha256=7a32a312592519e2cd5413f565be64801731464acc44ac0cda9ae5a784e2996f ascii256=c3b84f3bf2e3877c2b6c174baa8cc643f8a0d8c2f2d1daa19bbd293ed5ee50ff rc=0 bytes=13123 tests/b612_redim_clsmem/B612.vbp
+sha256=bb53a1c759abbb9f7a46712b6cdeff64e3e018c27d3caf3628020fc3211bc331 ascii256=055d7553bbfba8011a59e217bb9aba62f863d141bbbb3c604cbae5af72a134a5 rc=0 bytes=7865 tests/b612_redim_clsmem/Main.bas
 sha256=4beb491a0703f2143f89ffb3c1d68d167ff0c7cff288b8fd05c380eb26f5c421 ascii256=53ff214f149a1490656b8cef716d18d7dbb96b00faf46a57a0e147fa8177efa2 rc=0 bytes=18580 tests/ctlhostm3/HmApp.vbp
 sha256=382c68c76d186273acc8758bddd00d254b754bf3f21b2bacf7cfe1f6bcbd4532 ascii256=5a7efdf9af7428ea9d7668ab9cc9fa0dfce9a02f4d74cb7802c37ae06a44c13d rc=0 bytes=16956 tests/ctlident/IdApp.vbp
 sha256=811814cdceeb9af2d21e1c181eea4a24cc4dea5e6a21cfbcc04c23378bab55ee ascii256=032f17b7453f677dfd2a222fb514505f9f85eb8e44dc02d06e2d2061cbc60c48 rc=0 bytes=17139 tests/guisample/Definitions.bas
@@ -1211,3 +1213,9 @@ sha256=75152c77f83d9ce7874a186ee8ed18b98ebee98e9fbcca19ac75512f881075b1 ascii256
 #   按 scripts/emit_manifest.ps1 的哈希口径只算这一行, 既有数据行逐字未动; 本机值与 CI 侧如有差, 以 ci/emit-manifest 自交清单为准。
 #   账 #611 第349刀: 新增 1 行 = tests/jsonfast_611/NDVariantComRoundTrip.bas (ND Variant 数组经真外部 COM 往返夹具)。
 #   按 scripts/emit_manifest.ps1 的哈希口径只算这一行, 既有数据行逐字未动; 本机值与 CI 侧如有差, 以 ci/emit-manifest 自交清单为准。
+# 2026-11-14 第350刀（账 #612）的登记来源 = 本机全语料 A/B（pre = git archive HEAD `0da98b84` 冷编的那台
+#   C3.exe，post = 本工作树 .build/C3.exe；两台各对同一份 tests/ 跑 emit_manifest，按路径建 dict 比）：
+#   存量 711 行**一行未动**，只新增本夹具 2 行（B612.vbp + Main.bas）。A/B 里另有 guisample×3 +
+#   TeeChartChartDisplay 共 4 行与期望不同 —— 那是 B5/第330刀那条已记录的**机器侧差**（本机可解析
+#   vendor OCX/typelib），pre/post 两台同值 ⇒ 不是本刀的移动，那 4 行继续留 CI 的数。
+#   本机多出的 tests/VBFlexGridDemo/bisect1..7.vbp 7 行是 .gitignore 忽略的旧探针，CI 看不见，刻意不登记。
