@@ -181,8 +181,15 @@
             if (memLower152 == "additem") {
                 emitExpr(*node.positional[0]);
                 std::string item152 = std::move(lastExpr_);
-                lastExpr_ = "vb6_AddItem((void*)" + tempVar + ", "
-                          + wrapToBSTR(item152, *node.positional[0])
+                /* 2026-11-15: 第二枚实参是插入位置 (VB6 `AddItem item[, index]`)。
+                 * 旧口径只收 item ⇒ `AddItem "所有帧", 0` 被当成追加, 列表顺序反了。 */
+                std::string idx152 = "-1";
+                if (node.positional.size() > 1) {
+                    emitExpr(*node.positional[1]);
+                    idx152 = std::move(lastExpr_);
+                }
+                lastExpr_ = "vb6_AddItemAt((void*)" + tempVar + ", "
+                          + wrapToBSTR(item152, *node.positional[0]) + ", " + idx152
                           + ")  /* With ctrl .AddItem */";
                 return;
             }
@@ -354,6 +361,10 @@
             comMemberName_.clear();
             if (method == "additem") {
                 std::string itemArg = "0";
+                /* 2026-11-15: `AddItem item[, index]` —— 第二枚实参是插入位置。
+                 * 旧口径丢掉它, `AddItem "所有帧", 0` 落到列表末尾, 而随后的
+                 * `ListIndex = 0` 选中的是第一条帧 —— 默认显示值跟着错。 */
+                std::string idxArg = "-1";
                 if (!node.positional.empty()) {
                     emitExpr(*node.positional[0]);
                     // Fix 143: 实参是 COM 属性读 (cboThemes.AddItem iTheme.Name) —
@@ -377,7 +388,13 @@
                         itemArg = std::move(lastExpr_);
                     }
                 }
-                c_.emitLine("vb6_AddItem((void*)vb6_hwnd_" + ctrlName + ", " + itemArg + ");  /* ListBox.AddItem */");
+                /* 求值顺序与 VB 一致: 先 item 后 index (两者都可能带副作用,
+                 * 如 `AddItem "帧 " & fNr, nPos`)。 */
+                if (node.positional.size() > 1) {
+                    emitExpr(*node.positional[1]);
+                    idxArg = std::move(lastExpr_);
+                }
+                c_.emitLine("vb6_AddItemAt((void*)vb6_hwnd_" + ctrlName + ", " + itemArg + ", " + idxArg + ");  /* ListBox.AddItem */");
                 lastExpr_ = "0";
                 return;
             } else if (method == "removeitem") {

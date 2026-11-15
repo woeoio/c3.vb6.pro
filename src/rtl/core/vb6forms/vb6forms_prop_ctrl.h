@@ -22,6 +22,9 @@ void vb6_SetListIndex(void* hwnd, int index);
 void* vb6_GetListItem(void* hwnd, int index);
 // AddItem: add string to list
 void vb6_AddItem(void* hwnd, void* bstrItem);
+/* 2026-11-15: `AddItem item[, index]` 的 index 是插入位置 (VB6 语义),
+ * index < 0 = 追加。发码在两枚实参时走这枚。 */
+void vb6_AddItemAt(void* hwnd, void* bstrItem, int32_t index);
 // RemoveItem: remove item by index
 void vb6_RemoveItem(void* hwnd, int index);
 // Clear: remove all items

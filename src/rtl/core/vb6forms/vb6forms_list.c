@@ -102,23 +102,41 @@ void* vb6_GetListItem(void* hwnd, int index) {
     return (void*)bstr;
 }
 
-void vb6_AddItem(void* hwnd, void* bstrItem) {
+/* 2026-11-15 (VB6 语法): `AddItem item[, index]` 的第二枚实参是**插入位置**,
+ * 不是装饰 —— VB6 里 `cboFrame.AddItem "所有帧", 0` 把这一项插到**第一位**
+ * (aoGIF 工程就靠它把"所有帧"放在顶部, 随后 `ListIndex = 0` 默认选中)。
+ * 原因: 此处旧实现只收 (hwnd, item) 两枚, 发码把 index 丢掉 ⇒ 一律追加到末尾:
+ * 列表顺序反了(所有帧跑最后), 而 `ListIndex = 0` 选中的是第一条帧 —— 观感就是
+ * "默认显示值不对"。index < 0 或未给 = 追加 (与原口径同)。 */
+void vb6_AddItemAt(void* hwnd, void* bstrItem, int32_t index) {
     if (!hwnd) return;
     BSTR bs = (BSTR)bstrItem;
     if (!bs) {
         bs = SysAllocString(L"");
     }
     int isLB = vb6_IsListBox(hwnd);
-    LRESULT idx = isLB ? SendMessageW((HWND)hwnd, LB_ADDSTRING, 0, (LPARAM)bs)
-                       : SendMessageW((HWND)hwnd, CB_ADDSTRING, 0, (LPARAM)bs);
+    LRESULT idx;
+    if (index < 0) {
+        idx = isLB ? SendMessageW((HWND)hwnd, LB_ADDSTRING, 0, (LPARAM)bs)
+                   : SendMessageW((HWND)hwnd, CB_ADDSTRING, 0, (LPARAM)bs);
+    } else {
+        /* VB6: index 必须落在 0..ListCount —— 越界是错误 381。这里的口径是
+         * 交给控件的 INSERTSTRING: 超尾时 Windows 自己等价于追加 (比静默丢弃好)。 */
+        idx = isLB ? SendMessageW((HWND)hwnd, LB_INSERTSTRING, (WPARAM)index, (LPARAM)bs)
+                   : SendMessageW((HWND)hwnd, CB_INSERTSTRING, (WPARAM)index, (LPARAM)bs);
+    }
     if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
         int after = (int)SendMessageW((HWND)hwnd, isLB ? LB_GETCOUNT : CB_GETCOUNT, 0, 0);
-        fprintf(stderr, "[C3_LIST] AddItem hwnd=%p isLB=%d ret=%ld countAfter=%d text='%ls'\n",
-                hwnd, isLB, (long)idx, after, bs ? bs : L"(null)");
+        fprintf(stderr, "[C3_LIST] AddItem hwnd=%p isLB=%d at=%d ret=%ld countAfter=%d text='%ls'\n",
+                hwnd, isLB, (int)index, (long)idx, after, bs ? bs : L"(null)");
     }
     if (bstrItem == NULL) {
         SysFreeString(bs);
     }
+}
+
+void vb6_AddItem(void* hwnd, void* bstrItem) {
+    vb6_AddItemAt(hwnd, bstrItem, -1);
 }
 
 void vb6_RemoveItem(void* hwnd, int index) {
