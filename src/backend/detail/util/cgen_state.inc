@@ -422,6 +422,29 @@
     // 天然绕开 SDK 的 A/W 宏。
     std::unordered_map<std::string, std::string> declareAliasMap_;
 
+    // Fix 218-decl-xmod: Declare VB名(小写) → **项目级** DI 桩名 (vb6_di_<导出名>)。
+    // 由来 (江西省医保药品查询系统 实测): declareAliasMap_ 是**本模块**状态 ——
+    //   Module1.bas: `Declare Function HtmlHelp Lib "hhctrl.ocx" Alias "HtmlHelpA" ...`
+    //   main.frm    : `HtmlHelp(0, App.Path & "\help.chm", 0, "按名称查询.htm")`
+    // 别名路的 callTarget 是**声明模块头文件里的 static __inline vb6_lwa_***，跨模块
+    // 根本不可见；而 cgen 只为「已解析的跨模块符号」发 #include，main.frm 连
+    // Module1.h 都没包含。于是调用点 alias miss → 退到 cIdent(裸 VB 名) → 生成
+    //   HtmlHelp(0, ...)  ⇒ LNK2019: 无法解析的外部符号 HtmlHelp。
+    // 这张表跨模块可见，值取 cExportedIdent（RTL 里按名动态解析 DLL 导出的转发桩，
+    // 包装函数本身也是调它，符号必然存在），供调用点别名 miss 时兜底。
+    // 仅登记**别名路**：非别名路调用点走 `#define` 宏 + 裸 VB 名，跨模块发裸名至少
+    // 还能链到 SDK 导入库，改道反而会凭空多引一枚可能不存在的 vb6_di_*。
+    // 这张表必须是**进程内全局**：CCodeGen 是逐模块实例化的
+    // (src/driver/detail/driver_codegen_module_loop.inc:125 在模块循环体内 `CCodeGen cgen(...)`),
+    // 普通成员出了本模块就丢 —— 实测声明在 Module1.bas (先发) 、调用在 main.frm,
+    // 成员版 map 到 main.frm 已经空了 ⇒ 退裸名 ⇒ LNK2019: HtmlHelp。
+    // 所以只留两个 static 存取口，实体定义在 cgen_decl_api.cpp (函数内 static)。
+    // 生命周期: C3 一个进程只编一个工程 (run_tests / emit_manifest 都是逐夹具起进程),
+    // 不用清；真要在同进程编第二个工程再加 beginProject() 清表。
+    static const std::unordered_map<std::string, std::string>& declareDiTargets();
+    static void registerDeclareDiTarget(const std::string& lowerName,
+                                       const std::string& cTarget);
+
     // M22: ANSI临时变量待释放列表 (变量名) + 计数器
     // 在Declare ANSI函数调用前声明临时char*变量, 调用后立即FreeANSI
     std::vector<std::string> ansiTempsToFree_;
@@ -680,6 +703,11 @@
     std::string knownMenuFormHwnd_;  // 当前窗体HWND变量名 (如 "vb6_hwnd_Form1")
     // Fix <vbeclipse>: 菜单控件数组基址 (小写菜单名 → 首元素 menuId)
     std::unordered_map<std::string, int> knownMenuArrayBaseIds_;
+    // C30-8: 顶层**弹出菜单 (有子项的菜单) 在菜单栏里的位置** (小写菜单名 → 0-based 位置)。
+    // Win32 里 AppendMenuW(hMenuBar, MF_POPUP, hPopup, txt) 不给弹出项发命令 ID
+    // (GetMenuItemID 对它返 -1)，只能用**位置**操作 ⇒ 代理令牌用负数编码位置
+    // (-(pos+1))，见 vb6forms_menuproxy.c。
+    std::unordered_map<std::string, int> knownMenuPopupPos_;
 
     // P7.5: 窗体名 (小写)，用于识别 Form.Caption 等窗体自身属性
     std::string knownFormName_;

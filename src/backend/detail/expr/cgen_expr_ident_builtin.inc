@@ -115,7 +115,14 @@
             if (itAlias != declareAliasMap_.end()) {
                 lastExpr_ = itAlias->second;  // 已清洗好的 C 标识符 (含 ord_ 前缀等)
             } else {
-                lastExpr_ = cIdent(node.name);
+                // Fix 218-decl-xmod: 跨模块 Declare —— 本模块没有这条声明，别名表必然 miss。
+                // 别名路的 callTarget 是**声明模块头文件里的 static __inline vb6_lwa_***，
+                // 跨模块不可见 (调用方模块压根没 include 那个头 —— cgen 只为已解析的跨模块
+                // 符号发 include)，于是退到项目级 DI 桩名。不认这条就发裸 VB 名 ⇒
+                // LNK2019: 无法解析的外部符号 HtmlHelp (江西省医保药品查询系统 实测)。
+                auto& diTargets = CCodeGen::declareDiTargets();
+                auto itDi = diTargets.find(lower);
+                lastExpr_ = (itDi != diTargets.end()) ? itDi->second : cIdent(node.name);
             }
         } else if (sym->isExternal) {
             // 跨模块函数: 使用 vb6_<ModuleName>_<ProcName> 格式

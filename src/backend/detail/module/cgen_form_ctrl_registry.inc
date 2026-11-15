@@ -155,8 +155,42 @@
         // 跨窗体 `frmX.btnTab(0).Appearance` 引用 vb6_form_ctrl_<F>_<C>(idx)
         // (Outlook2013 frmMain:327-330, 数组访问器缺失 = LNK2019)。
         std::unordered_set<std::string> accEmitted;
+        bool emittedMenuProxyExtern = false;
         std::function<void(const FrmControl&)> accRec = [&](const FrmControl& ctrl) {
-            if (!ctrl.controlName.empty() && ctrl.controlType != FrmControlType::Menu) {
+            // C30-8: 菜单项也要发跨模块访问器。菜单不是窗口 (Menu 不建 HWND)，
+            // 旧规则在这里直接 continue ⇒ 别的模块写 `Main.Menu_Edit.Enabled = False`
+            // 时发 vb6_form_ctrl_Main_Menu_Edit() ⇒ LNK2019 (江西省医保药品
+            // 查询系统 frmlogin 实测 2 条)。现在发一枚**代理令牌**: 令牌里记
+            // (父菜单栏, 菜单命令ID)，vb6_ComSetProp/ComGetProp 在入口认它并把
+            // Enabled/Checked/Visible/Caption 换算成 vb6_SetMenu* —— 就是本模块
+            // 内那套 API 的同一套 (id 来源 knownMenuIds_ 与 emitMenuItem 同源)。
+            const bool isMenuAcc = (ctrl.controlType == FrmControlType::Menu);
+            std::string menuBaseId;
+            if (isMenuAcc && !ctrl.controlName.empty()) {
+                std::string mLower = Symbol::toLower(ctrl.controlName);
+                auto itMId = knownMenuIds_.find(mLower);
+                auto itMArr = knownMenuArrayBaseIds_.find(mLower);
+                if (itMId != knownMenuIds_.end()) {
+                    menuBaseId = std::to_string(itMId->second);
+                } else if (itMArr != knownMenuArrayBaseIds_.end()) {
+                    menuBaseId = std::to_string(itMArr->second);
+                } else {
+                    // C30-8: 顶层**弹出菜单** (Menu_Edit / Menu_Manage … 带子项的那些)。
+                    // Win32 里 MF_POPUP 项没有命令 ID (GetMenuItemID 返 -1)，只能按
+                    // 位置操作 ⇒ 令牌把位置编成 -1-(位置)，见 vb6forms_menuproxy.c。
+                    auto itPop = knownMenuPopupPos_.find(mLower);
+                    if (itPop != knownMenuPopupPos_.end()) {
+                        menuBaseId = std::to_string(-(itPop->second + 1));
+                    }
+                }
+                // 分隔符条目 (Caption == "-") 既无命令 ID 也不是弹出菜单
+                // —— 与 emitMenuItem 同口径，不发访问器。
+                if (menuBaseId.empty()) {
+                    for (const auto& child : ctrl.children) accRec(child);
+                    return;
+                }
+            }
+            if (!ctrl.controlName.empty() && (!isMenuAcc || !menuBaseId.empty())) {
                 std::string acc = "vb6_form_ctrl_" + cIdent(formName) + "_" + cIdent(ctrl.controlName);
                 // 兼容别名 `vb6_<Form>_<Ctrl>()`: 类成员调用机制 (Fix 015/088c 把
                 // 窗体当类、控件当成员) 与若干回退会按这个形状发码 —— 直接提供
@@ -166,6 +200,16 @@
                 if (ctrl.index < 0) {
                     h_.emitLine("void* " + acc + "(void);");
                     h_.emitLine("void* " + alias + "(void);");
+                    if (isMenuAcc) {
+                        if (!emittedMenuProxyExtern) {
+                            emittedMenuProxyExtern = true;
+                            h_.emitLine("/* C30-8: 菜单项代理令牌 (实现在 vb6forms_menuproxy.c) */");
+                            h_.emitLine("void* vb6_MenuProxyMake(void* hMenu, int32_t id);");
+                        }
+                        c_.emitLine("void* " + acc + "(void) { return vb6_MenuProxyMake((void*)GetMenu((HWND)vb6_form_hwnd_"
+                                  + cIdent(formName) + "()), " + menuBaseId + "); }");
+                        c_.emitLine("void* " + alias + "(void) { return " + acc + "(); }");
+                    } else {
                     // 族4b: ImageList 槽为 vb6_com_<Name> (IDispatch*); 其余控件回 vb6_hwnd_<Name>。
                     // 旧逻辑把 ImageList 排除, 但 comwrite 侧又发了 vb6_form_ctrl_<Form>_ImageListN()
                     // 的调用 -> 定义缺失 (LNK2019)。这里补上 ImageList 分支。
@@ -175,10 +219,25 @@
                         c_.emitLine("void* " + acc + "(void) { return vb6_hwnd_" + cIdent(ctrl.controlName) + "; }");
                     }
                     c_.emitLine("void* " + alias + "(void) { return " + acc + "(); }");
+                    }
                 } else if (!accEmitted.count(ctrl.controlName)) {
                     accEmitted.insert(ctrl.controlName);
                     h_.emitLine("void* " + acc + "(int32_t idx);");
                     h_.emitLine("void* " + alias + "(int32_t idx);");
+                    // 菜单控件数组: 令牌按 `基址 + idx` 现场算 (与语句级
+                    // `mnuX(i).Caption` 那条 knownMenuArrayBaseIds_ 同源)。
+                    if (isMenuAcc) {
+                        if (!emittedMenuProxyExtern) {
+                            emittedMenuProxyExtern = true;
+                            h_.emitLine("/* C30-8: 菜单项代理令牌 (实现在 vb6forms_menuproxy.c) */");
+                            h_.emitLine("void* vb6_MenuProxyMake(void* hMenu, int32_t id);");
+                        }
+                        c_.emitLine("void* " + acc + "(int32_t idx) { return vb6_MenuProxyMake((void*)GetMenu((HWND)vb6_form_hwnd_"
+                                  + cIdent(formName) + "()), " + menuBaseId + " + idx); }");
+                        c_.emitLine("void* " + alias + "(int32_t idx) { return " + acc + "(idx); }");
+                        for (const auto& child : ctrl.children) accRec(child);
+                        return;
+                    }
                     // 控件数组载体是 vb6_CtrlArr (hwnds[256] + count/lowerBound/upperBound),
                     // 不是 vb6_SafeArray1D*。用 VB6_SA_AT 会把裸 hwnds 数组当安全数组头解引用
                     // ⇒ 边界读成 lb=0 ub=0 ⇒ `pageBackstageSend.btnTab(1)` 直接

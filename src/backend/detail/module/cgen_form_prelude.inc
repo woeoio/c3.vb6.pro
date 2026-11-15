@@ -60,6 +60,18 @@
         };
         int collId = 1000;
         knownMenuFormHwnd_ = "vb6_hwnd_" + cIdent(formName);
+        // C30-8: 顶层菜单项在菜单栏里的位置 (0-based) —— 顶层弹出菜单只能按位置
+        // 操作 (MF_POPUP 项没有命令 ID)。与 cgen_form_frame_menu.inc 的建菜单循环
+        // 同一个枚举顺序: 每个 Menu 子项 (叶子/弹出/分隔符) 都占一个位置。
+        int mPos = 0;
+        for (const auto& ctrl : frmDesc.formControl.children) {
+            if (ctrl.controlType != FrmControlType::Menu) continue;
+            if (!ctrl.children.empty()) {
+                std::string pLower = Symbol::toLower(ctrl.controlName);
+                knownMenuPopupPos_[pLower] = mPos;
+            }
+            mPos++;
+        }
         for (const auto& ctrl : frmDesc.formControl.children) {
             if (ctrl.controlType == FrmControlType::Menu) collectMenuIds(ctrl, collId);
         }

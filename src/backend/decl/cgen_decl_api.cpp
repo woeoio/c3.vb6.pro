@@ -9,6 +9,30 @@ namespace vb6c3 {
 
 // --- cgen_decl_api.cpp: 外部 API 声明生成（DeclareDecl） ---
 
+// Fix 218-decl-xmod: 跨模块 Declare 的**进程级**目标表。
+// 存 VB 名(小写) → vb6_di_<导出名>。为什么不能是 CCodeGen 成员:
+//   src/driver/detail/driver_codegen_module_loop.inc:125 在模块循环体里新建
+//   `CCodeGen cgen(...)` ⇒ 一个模块一个实例，成员出了本模块就丢。
+//   实测 (江西省医保药品查询系统): Declare 在 Module1.bas、调用在 main.frm，
+//   成员版到 main.frm 已是空表 ⇒ 退裸名 `HtmlHelp(...)` ⇒
+//   LNK2019: 无法解析的外部符号 _HtmlHelp。
+// 为什么是静态: C3 一个进程只编一个工程 (run_tests / emit_manifest 都是逐夹具起进程);
+//   真要在同进程连编两个工程，再加 beginProject() 清表。
+static std::unordered_map<std::string, std::string>& diTargetStore() {
+    static std::unordered_map<std::string, std::string> m;
+    return m;
+}
+
+const std::unordered_map<std::string, std::string>& CCodeGen::declareDiTargets() {
+    return diTargetStore();
+}
+
+void CCodeGen::registerDeclareDiTarget(const std::string& lowerName,
+                                       const std::string& cTarget) {
+    // first-wins: 同一 VB 名在多个模块重复声明时，发码不随模块顺序漂移。
+    diTargetStore().emplace(lowerName, cTarget);
+}
+
 
 void CCodeGen::visit(DeclareDecl& node) {
     // 外部函数声明 (Declare Sub/Function ... Lib "xxx" [Alias "yyy"] [CDecl])
@@ -282,6 +306,13 @@ void CCodeGen::visit(DeclareDecl& node) {
         std::string funcLower2 = node.name;
         std::transform(funcLower2.begin(), funcLower2.end(), funcLower2.begin(), ::tolower);
         declareAliasMap_[funcLower2] = callTarget;
+        // Fix 218-decl-xmod: 另登记一枚**进程级**兜底目标给跨模块调用点。
+        // 别名路的 callTarget (vb6_lwa_*) 是声明模块头里的 static __inline，跨模块不可见；
+        // 调用方模块既查不到别名、也没 include 声明模块的头 ⇒ 只能发裸 VB 名 ⇒ LNK2019
+        // (江西省医保药品查询系统: HtmlHelp / 本机实测)。cExportedIdent 是
+        // vb6_di_<导出名>，RTL 转发桩里有真实现 (包装函数自己也调它，符号必然在)。
+        // first-wins: 同一 VB 名在多个模块重复声明时，发码不随模块顺序漂移。
+        CCodeGen::registerDeclareDiTarget(funcLower2, cExportedIdent);
     }
 
     // 2026-09-17: 把 Lib 家族写进生成头, 供 scripts/gen_di_stubs.ps1 按 DLL 家族

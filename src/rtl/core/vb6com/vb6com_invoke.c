@@ -1485,6 +1485,15 @@ void* vb6_ComCallObjectDefault(void* disp, void* args_void, int32_t argc) {
 }
 
 void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
+    /* C30-8: 菜单项代理令牌 (跨窗体 `Main.Menu_X.Prop`)。菜单项不是 IDispatch,
+     * 交给晚绑定会拿 (HMENU,id) 当 IDispatch* 解引用 ⇒ 必崩。令牌由生成码的
+     * vb6_form_ctrl_<F>_<Name>() 发 (见 vb6forms_menuproxy.c 文件头)。 */
+    {
+        void* mh = NULL; int32_t mid = 0;
+        extern int32_t vb6_MenuProxyDecode(void* p, void** hMenu, int32_t* id);
+        extern void* vb6_MenuProxyGetProp(void* hMenu, int32_t id, const wchar_t* propName);
+        if (vb6_MenuProxyDecode(disp, &mh, &mid)) return vb6_MenuProxyGetProp(mh, mid, propName);
+    }
     void* owned = NULL;
     void* r = vb6_ComGetPropRcv(vb6_ComDispViewIn(disp, &owned), propName);
     vb6_ComDispViewOut(owned);
@@ -1500,6 +1509,18 @@ void* vb6_ComGetPropArg(void* disp, const wchar_t* propName,
 }
 
 void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
+    /* C30-8: 菜单项代理令牌 —— `Main.Menu_Edit.Enabled = False` 这种跨窗体菜单写
+     * 落到这里 (cgen 对跨模块成员一律走晚绑定)。Enabled/Checked/Visible/Caption
+     * 四个属性由 vb6_MenuProxySetProp 换算成 vb6_SetMenu*; 其余属性名不接,
+     * 继续原有 COM 路径 (那时 disp 不是令牌, 不会误判)。 */
+    {
+        void* mh = NULL; int32_t mid = 0;
+        extern int32_t vb6_MenuProxyDecode(void* p, void** hMenu, int32_t* id);
+        extern int32_t vb6_MenuProxySetProp(void* hMenu, int32_t id, const wchar_t* propName, void* value_void);
+        if (vb6_MenuProxyDecode(disp, &mh, &mid)) {
+            if (vb6_MenuProxySetProp(mh, mid, propName, value_void)) return;
+        }
+    }
     void* owned = NULL;
     vb6_ComSetPropRcv(vb6_ComDispViewIn(disp, &owned), propName, value_void);
     vb6_ComDispViewOut(owned);

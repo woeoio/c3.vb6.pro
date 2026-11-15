@@ -39,6 +39,9 @@ static void addFormsSources(MsvcDriverOptions& opts, const std::string& rtlDir) 
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_webview.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_widget.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_widget_prop.c");
+    // C30-8: 跨模块菜单项代理令牌 (菜单不是窗口, 只能靠 (HMENU, id) 令牌把
+    // Enabled/Checked/Caption 换算成 vb6_SetMenu*, 见 src/rtl/core/vb6forms/vb6forms_menuproxy.c)
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_menuproxy.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_shape.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_progress.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_imagelist.c");

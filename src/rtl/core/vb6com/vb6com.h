@@ -307,6 +307,31 @@ void* vb6_ForEach_InitForms(void);
 int32_t vb6_ForEach_Next(void* enumPtr, VARIANT* outVar);  // Next element, returns 1=ok 0=done
 void vb6_ForEach_Release(void* enumPtr);  // Release IEnumVARIANT
 
+// ---- Fix 218-decl-xmod: 跨模块 Declare 的转发桩原型 ----
+// 由来 (江西省医保药品查询系统 实测): `Declare Function HtmlHelp Lib "hhctrl.ocx"
+// Alias "HtmlHelpA"` 写在 Module1.bas, 调用点却在 main.frm。cgen 的 Declare 包装
+// (vb6_lwa_*, 以及 vb6_di_* 的 extern 声明) 只发在**声明模块自己的头文件**里,
+// 而 cgen 只为「已解析的跨模块符号」发 #include —— 调用方模块根本看不到那两样。
+// 于是 cgen 侧改道发 vb6_di_<导出名> (见 cgen_decl_api.cpp 的 declareDiTargets),
+// 但**未声明的调用点会被 MSVC 当成 cdecl int 函数** ⇒ 期望 `_vb6_di_HtmlHelpA`,
+// 而 RTL 里的定义是 __stdcall ⇒ 实际符号 `_vb6_di_HtmlHelpA@16` ⇒ LNK2019:
+//   Main.obj : error LNK2019: 无法解析的外部符号 _vb6_di_HtmlHelpA
+// 所以原型必须出现在**每个生成 .c 都会包含**的头里。本头正是那个头
+// (生成代码固定 include "vb6com.h")。
+// 口子用与 cgen 生成的**同一枚 guard 名**与**同一串签名**: 两边同时可见时
+// 后到的那份被 guard 挡掉; 只有本头可见时调用点也拿得到 __stdcall 声明。
+// 签名必须与 src/rtl/core/di/vb6_di_stubs.c 的定义逐字一致 (stdcall 修饰名拼的是
+// 参数总字节数, 少一个参数就又是 LNK2019)。
+/* vb6_di_lib: hhctrl.ocx */
+#ifndef VB6_DI_HtmlHelpW_DEFINED
+#define VB6_DI_HtmlHelpW_DEFINED
+extern intptr_t __stdcall vb6_di_HtmlHelpW(intptr_t hwndCaller, BSTR pszFile, intptr_t uCommand, void* dwData);
+#endif
+#ifndef VB6_DI_HtmlHelpA_DEFINED
+#define VB6_DI_HtmlHelpA_DEFINED
+extern intptr_t __stdcall vb6_di_HtmlHelpA(intptr_t hwndCaller, BSTR pszFile, intptr_t uCommand, void* dwData);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

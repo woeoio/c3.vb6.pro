@@ -44,6 +44,17 @@
         return;
     }
 
+    // C30-8: 裸 `Error` —— VB6 的 Error **函数**（无参时返回当前 Err 的描述）。
+    // 真实例程实测（江西省医保药品查询系统，7 窗体，5 处）：
+    //     MsgBox Error, 16, Err.Number
+    // 过去落成 `vb6_MsgBox(Error, …)` → C2065「未声明的标识符」。
+    // 注意 `Error 17`（Error **语句**，抛错）是另一种形态，不归本支管；
+    // 这里只接表达式语境。`Error` 是 VB6 保留字，不会被用户用作变量名。
+    if (lower == "error") {
+        lastExpr_ = "vb6_ErrDescription()";
+        return;
+    }
+
     // Fix 161: 裸 Console 内置全局对象 (对齐 twinBASIC)。成员 (.WriteLine/
     // .Write/.ReadLine/.ReadKey/.Read) 由 MemberAccessExpr 的 Console 分支处理;
     // 裸名本身极少单独使用, 给个哨兵值避免落到未定义标识符。

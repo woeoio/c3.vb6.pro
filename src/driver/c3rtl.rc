@@ -609,6 +609,10 @@
 // vb6forms 家族再细分 (2026-09-17): Picture 属性 / Widget 属性
 139 RCDATA "../rtl/core/vb6forms/vb6forms_picture_prop.c"
 140 RCDATA "../rtl/core/vb6forms/vb6forms_widget_prop.c"
+// C30-8 (2026-11-16): 跨模块菜单项代理令牌 vb6forms_menuproxy.c —— 菜单不是窗口,
+// 另一窗体写 `Main.Menu_X.Enabled` 时只能靠 (HMENU, 命令ID) 令牌把属性名换算成
+// vb6_SetMenu* 家族 (江西省医保药品查询系统 frmlogin 实测 LNK2019 2 条)。
+246 RCDATA "../rtl/core/vb6forms/vb6forms_menuproxy.c"
 
 // DI 转发桩按 Lib 家族拆分 (2026-09-17): 由 scripts/gen_di_stubs.ps1 生成
 // 每个文件对应一组 DLL 家族, 由 C3 生成头里的 `/* vb6_di_lib: <lib> */` 标记驱动

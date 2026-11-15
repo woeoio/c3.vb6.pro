@@ -67,6 +67,8 @@ enum RtlResourceID {
     // vb6forms 家族再细分 (2026-09-17)
     RTL_VB6FORMS_PICTURE_PROP_C = 139,
     RTL_VB6FORMS_WIDGET_PROP_C  = 140,
+    // C30-8 (2026-11-16): 跨模块菜单项代理令牌
+    RTL_VB6FORMS_MENUPROXY_C    = 246,
 
     // DI 转发桩按 Lib 家族拆分 (2026-09-17); gdiplus 2026-09-20 再按对象域拆 5 份 (di/gdiplus/)
     RTL_VB6_DI_USER32_STUBS_C    = 141,

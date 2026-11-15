@@ -355,6 +355,11 @@
     static const char* const kOD_Round[]       = { nullptr, "0" };
     static const char* const kOD_Shell[]       = { nullptr, "2" };
     static const char* const kOD_AppActivate[] = { nullptr, "0" };
+    // C30-9: VB6 `SendKeys keys$[, wait]` —— wait 是 Optional，缺省 False。
+    // 真实例程实测（ADO+DataGrid 数据库全操作，5 窗体）：`SendKeys "{Home}+{End}"`
+    // 单参调用被直发进 2 参的 RTL 出口 ⇒ **cl C2198 参数太少**，整份工程编不过
+    // （同一工程共 20 处，占全部错误的 20/25）。
+    static const char* const kOD_SendKeys[]    = { nullptr, "0" };
     static const char* const kOD_GetSetting[]  = { nullptr, nullptr, nullptr, "vb6_BSTR_Empty()" };
     static const char* const kOD_InputBox[]    = { nullptr, "vb6_BSTR_Empty()", "vb6_BSTR_Empty()",
                                                    "0", "0", "vb6_BSTR_Empty()", "0" };
@@ -409,6 +414,7 @@ static const char* const kOD_Randomize[]   = { "0.0" };
         { "vb6_Round",           kOD_Round,       sizeof(kOD_Round) / sizeof(kOD_Round[0]),       false },
         { "vb6_Shell",           kOD_Shell,       sizeof(kOD_Shell) / sizeof(kOD_Shell[0]),       false },
         { "vb6_AppActivate",     kOD_AppActivate, sizeof(kOD_AppActivate) / sizeof(kOD_AppActivate[0]), false },
+        { "vb6_SendKeys",        kOD_SendKeys,    sizeof(kOD_SendKeys) / sizeof(kOD_SendKeys[0]),       false },
         { "vb6_GetSetting",      kOD_GetSetting,  sizeof(kOD_GetSetting) / sizeof(kOD_GetSetting[0]),   false },
         { "vb6_InputBox",        kOD_InputBox,    sizeof(kOD_InputBox) / sizeof(kOD_InputBox[0]),       false },
         { "vb6_NPer",            kOD_NPer,        sizeof(kOD_NPer) / sizeof(kOD_NPer[0]),               false },
