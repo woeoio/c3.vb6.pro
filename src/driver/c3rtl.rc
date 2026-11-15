@@ -560,6 +560,10 @@
 220 RCDATA "../rtl/core/vb6forms/vb6forms_winsock.c"
 // ai/029 C29-SL-a: Slider (原生 msctls_trackbar32，不加载 MSCOMCTL.OCX)
 221 RCDATA "../rtl/core/vb6forms/vb6forms_slider.c"
+// ai/029 C30-UD-a: UpDown (原生 msctls_updown32，不加载 MSCOMCTL.OCX)
+// 编号取 240（225 已被 vb6com_manifest.c 占用）；新号不要插在 221 之后顺延，
+// 因为已有资源的号是“先到者保号”的惯例（见上面 212/213 那一对）。
+240 RCDATA "../rtl/core/vb6forms/vb6forms_updown.c"
 131 RCDATA "../rtl/core/vb6forms/vb6forms_axsite.c"
 198 RCDATA "../rtl/core/vb6forms/vb6forms_axcontainer.c"
 // vb6forms_axsite.c 按功能家族拆分 (2026-09-20): 内部头 + 5 个族编译单元

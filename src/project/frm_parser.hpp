@@ -125,6 +125,7 @@ enum class FrmControlType {
     RichTextBox,        // MSFT_TextBox.RichTextBox — Win32 原生复刻 (RICHEDIT50W), C29-RT
     Winsock,            // MSWinsockLib.Winsock — Winsock2 原生复刻 (无外观控件), C29-WS
     Slider,             // MSComctlLib.Slider — Win32 原生复刻 (msctls_trackbar32), C29-SL
+    UpDown,             // MSComctlLib.UpDown — Win32 原生复刻 (msctls_updown32), C30-UD
     Unknown,            // 未识别的控件类型
 };
 

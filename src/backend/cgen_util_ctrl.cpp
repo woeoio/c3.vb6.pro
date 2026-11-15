@@ -190,6 +190,18 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
         // C29-MV-b：Date 那三格与 DTPicker 同一条口径（C 层就是裸 double，不装箱）。
         if (p == "value" || p == "selstart" || p == "selend") return Vb6Type::Date;
     }
+    // C30-UD-a: UpDown（原生 msctls_updown32）。值面四条 + 行为面两条都是 int32_t
+    // （getter 全是 int32_t，不登记就落到兜底那条按裸名查符号的路，判成 Variant/String）。
+    if (ctrlType == FrmControlType::UpDown) {
+        if (p == "min" || p == "max" || p == "value" || p == "increment"
+            || p == "alignment" || p == "orientation") {
+            return Vb6Type::Long;
+        }
+        // Wrap / SyncBuddy 在 VB6 是 Boolean ⇒ 按 #124 那条口径登记（getter 给 -1/0）。
+        if (p == "wrap" || p == "syncbuddy") return Vb6Type::Boolean;
+        // BuddyControl 是控件名字符串（类型库里是 VB_UserDefine 的引用位，运行时读回为空）
+        if (p == "buddycontrol") return Vb6Type::String;
+    }
     if (ctrlType == FrmControlType::Slider) {
         // C29-SL-a: vb6_Slider_Get* 全是 int32_t（两条证人读数也是数值），不登记就落到
         // 兜底那条按成员裸名查符号的路，判成 Variant/String 跟 C 层不匹配（SSTab1.Tab 那次
@@ -320,6 +332,9 @@ static uint32_t formPseudoKindBits(FrmControlType ctrlType) {
         case FrmControlType::CommonDialog:  bits |= vb6c3::FPQ_COMMON_DIALOG; break;
         case FrmControlType::Shape:         bits |= vb6c3::FPQ_SHAPE;         break;
         case FrmControlType::Line:          bits |= vb6c3::FPQ_LINE;          break;
+        // C30-UD-a: UpDown 的 Alignment 是自己那一档（UDS_ALIGNLEFT/RIGHT），
+        // 不能落进通用 `vb6_GetAlignment` / `vb6_SetAlignment`。
+        case FrmControlType::UpDown:        bits |= vb6c3::FPQ_UPDOWN;        break;
         default: break;
     }
     return bits;
@@ -652,6 +667,20 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
     // 按子串匹配的表里没有 "slider" ⇒ Unknown ⇒ 创建流程跳过），属性读回全空、写进去静默丢。
     // 两条 C3 扩展读数（TravelIsVert / TickPresent）是**控件侧证人**，判据靠它们把
     // "样式位写进去了"升级成"控件真按那一档在走"（channel 矩形那条是假证人，实测过）。
+    // C30-UD-a: UpDown 读侧（原生 msctls_updown32）。全部直问控件：range/pos/accel
+    // 都有回读消息，行为面四条就读窗口的样式位 —— 没有一条是自存的。
+    case FrmControlType::UpDown:
+        if (propLower == "min") return "vb6_UpDown_GetMin";
+        if (propLower == "max") return "vb6_UpDown_GetMax";
+        if (propLower == "value") return "vb6_UpDown_GetValue";
+        if (propLower == "increment") return "vb6_UpDown_GetIncrement";
+        if (propLower == "wrap") return "vb6_UpDown_GetWrap";
+        if (propLower == "alignment") return "vb6_UpDown_GetAlignment";
+        if (propLower == "orientation") return "vb6_UpDown_GetOrientation";
+        if (propLower == "syncbuddy") return "vb6_UpDown_GetSyncBuddy";
+        if (propLower == "visible") return "vb6_GetControlVisible";
+        if (propLower == "enabled") return "vb6_GetControlEnabled";
+        break;
     case FrmControlType::Slider:
         if (propLower == "orientation") return "vb6_Slider_GetOrientation";
         if (propLower == "tickfrequency") return "vb6_Slider_GetTickFrequency";
@@ -797,7 +826,10 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
     if (propLower == "forecolor") return "vb6_SetControlForeColor";
     if (propLower == "backcolor") return "vb6_SetControlBackColor";
     // P13.5: Alignment (all text controls)
-    if (propLower == "alignment") return "vb6_SetAlignment";
+    // C30-UD-a: UpDown 除外 —— 它的 Alignment 是 UDS_ALIGNLEFT/RIGHT 两位（自己那格），
+    // 不能被这条通用 ES_* 写路径抢走。实测：不除它，写 0 后读回 1，且它会拿旧样式重写
+    // GWL_STYLE，把刚立上的 UDS_WRAP 一起抹掉（夹具 UD10 就是那条红的证人）。
+    if (propLower == "alignment" && ctrlType != FrmControlType::UpDown) return "vb6_SetAlignment";
     // P13.6: TabIndex/TabStop (all visible controls)
     if (propLower == "tabindex") return "vb6_SetTabIndex";
     if (propLower == "tabstop") return "vb6_SetTabStop";
@@ -1071,6 +1103,20 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
         break;
     // C29-SL-a: Slider 写侧。Orientation 实测**运行期改有效**（写 TBS_VERT + SetWindowPos 换帧
     // 之后滑块位移轴跟着换，见 vb6forms_slider.c 文件头第 2 条）；两条证人读数刻意不给写口。
+    // C30-UD-a: UpDown 写侧。Wrap/Alignment/Orientation/SyncBuddy 四条都属于
+    // 「可运行期改」的样式位（RTL 里写完样式位再 SetWindowPos 重排一次）。
+    case FrmControlType::UpDown:
+        if (propLower == "min") return "vb6_UpDown_SetMin";
+        if (propLower == "max") return "vb6_UpDown_SetMax";
+        if (propLower == "value") return "vb6_UpDown_SetValue";
+        if (propLower == "increment") return "vb6_UpDown_SetIncrement";
+        if (propLower == "wrap") return "vb6_UpDown_SetWrap";
+        if (propLower == "alignment") return "vb6_UpDown_SetAlignment";
+        if (propLower == "orientation") return "vb6_UpDown_SetOrientation";
+        if (propLower == "syncbuddy") return "vb6_UpDown_SetSyncBuddy";
+        if (propLower == "visible") return "vb6_SetControlVisible";
+        if (propLower == "enabled") return "vb6_SetControlEnabled";
+        break;
     case FrmControlType::Slider:
         if (propLower == "orientation") return "vb6_Slider_SetOrientation";
         if (propLower == "tickfrequency") return "vb6_Slider_SetTickFrequency";
@@ -1515,7 +1561,38 @@ long CCodeGen::sliderStyleBits(const FrmControl& ctrl) const {
     return style;
 }
 
-// C29-SL-l（账 #143）: 把一条"控件对象表达式"折成 (控件类型, 那枚窗口的 C 表达式)。
+// C30-UD-a: UpDown 的创建样式位。顶层与容器子控件两条路共用这一处（账 #83：不许每路各写一张）。
+// 常量取自 commctrl.h：UDS_WRAP 0x1 / UDS_SETBUDDYINT 0x2 / UDS_ALIGNRIGHT 0x4 /
+// UDS_ALIGNLEFT 0x8 / UDS_ARROWKEYS 0x20 / UDS_HORZ 0x40 / UDS_HOTTRACK 0x100。
+// 两条默认值按 VB6 文档口径：Alignment = 1（右）、Orientation = 0（竖）。
+long CCodeGen::updownStyleBits(const FrmControl& ctrl) const {
+    constexpr long kUdsWrap       = 0x0001L;
+    constexpr long kUdsSetBuddy   = 0x0002L;
+    constexpr long kUdsAlignRight = 0x0004L;
+    constexpr long kUdsAlignLeft  = 0x0008L;
+    constexpr long kUdsArrowKeys  = 0x0020L;
+    constexpr long kUdsHorz       = 0x0040L;
+    constexpr long kUdsHotTrack   = 0x0100L;
+
+    // ARROWKEYS：VB6 里上下键能在 UpDown 上改值；HOTTRACK：悬停高亮（VB6 的观感）。
+    long style = kUdsArrowKeys | kUdsHotTrack;
+    auto ud = [&](const char* k) -> const FrmValue* {
+        auto it = ctrl.properties.find(k);
+        return it == ctrl.properties.end() ? nullptr : &it->second;
+    };
+    const FrmValue* v = ud("Wrap");
+    if (v && v->intValue) style |= kUdsWrap;
+    v = ud("Alignment");
+    if (v) style |= (v->intValue != 0) ? kUdsAlignRight : kUdsAlignLeft;
+    else   style |= kUdsAlignRight;
+    v = ud("Orientation");
+    if (v && v->intValue != 0) style |= kUdsHorz;
+    v = ud("SyncBuddy");
+    if (v && v->intValue) style |= kUdsSetBuddy;
+    return style;
+}
+
+// C29-SL-l（账 #143）: 把一条“控件对象表达式”折成 (控件类型, 那枚窗口的 C 表达式)。
 // 三种形态都要认，因为控件方法的发码有两条码头：
 //   · 表达式路给 `vb6_hwnd_List1`（裸槽，visit(IndexOrCallExpr) 的 marker）；
 //   · 语句路给裸小写名 `list1`（`List1.Clear` 那族已有的几支就按这个查）；
@@ -1639,6 +1716,13 @@ std::string CCodeGen::controlZeroArgMethod(FrmControlType ctrlType,
 std::string CCodeGen::controlOneArgMethod(FrmControlType ctrlType,
                                           const std::string& memberLower,
                                           int* outArgc) const {
+    // C30-UD-b: UpDown 的判据方法 SimDelta(delta) —— 造一条**真** UDN_DELTAPOS 递给父窗
+    // （与 Slider.SimNotify / DTPicker.SimChange 同先例，非 VB6 语义，不进手册方法表）。
+    // 它正好是“一个整型实参”，落在本表：带括号那形由 cgen_expr_call_com_bind.inc 拼成
+    // `vb6_UpDown_SimDelta((void*)hwnd, delta)`。**不带括号的语句形没接管** —— 语句路不查
+    // 这张表，`ud1.SimDelta 1` 会退化成“取属性 + 丢结果”，所以夹具只用带括号那形。
+    if (ctrlType == FrmControlType::UpDown && memberLower == "simdelta")
+        return controlExit("vb6_UpDown_SimDelta", 2, outArgc);
     if (memberLower != "textheight" && memberLower != "textwidth") return "";
     switch (ctrlType) {
         case FrmControlType::Form:
@@ -1820,7 +1904,33 @@ void CCodeGen::emitSliderDesignTimeInit(const FrmControl& ctrl, const std::strin
                 + slEndArg + ", " + slProp("SelectRange") + ");");
 }
 
-// 账 #83(a)（C29-SL-r）: VB6 的 `TabStop` 默认 True，而本项目**两条创建路以前都不立 WS_TABSTOP**
+// C30-UD-a: UpDown 设计期那一趟。参数序与 -999 哨兵口径只在 RTL 那一处定，这里只负责转述。
+// BuddyControl 在 .frm 里写的是**控件名字符串**（FrmValue 的 rawText 带引号）⇒ 这里折成
+// 那枚控件的句柄槽。折不出来（名字空 / 写了个不存在的控件）就传 NULL：宁可不挂 buddy，
+// 也不猜一个句柄出去。
+void CCodeGen::emitUpDownDesignTimeInit(const FrmControl& ctrl, const std::string& hwndExpr) {
+    auto udProp = [&](const char* key) -> std::string {
+        auto it = ctrl.properties.find(key);
+        if (it == ctrl.properties.end()) return "-999";
+        return intLiteralText(static_cast<int64_t>((int)it->second.intValue), true);
+    };
+    std::string buddy = "NULL";
+    auto bcIt = ctrl.properties.find("BuddyControl");
+    if (bcIt != ctrl.properties.end()) {
+        std::string nm = bcIt->second.rawText;
+        if (nm.size() >= 2 && nm.front() == '"' && nm.back() == '"') {
+            nm = nm.substr(1, nm.size() - 2);
+        }
+        if (!nm.empty()) buddy = "(void*)vb6_hwnd_" + cIdent(nm);
+    }
+    c_.emitLine("vb6_UpDown_Init((void*)" + hwndExpr + ", "
+                + udProp("Min") + ", " + udProp("Max") + ", " + udProp("Value") + ", "
+                + udProp("Increment") + ", " + udProp("Wrap") + ", "
+                + udProp("Alignment") + ", " + udProp("Orientation") + ", "
+                + udProp("SyncBuddy") + ", " + buddy + ");");
+}
+
+// 账 #83(a)（C29-SL-r）: VB6 的 `TabStop` 默认 True,而本项目**两条创建路以前都不立 WS_TABSTOP**
 // —— 探针 `.build/sltab` 实测：顶层按钮（`.frm` 没写 TabStop）读回 0、Frame 里的按钮与文本框也读回 0，
 // 只有"`.frm` 写了 `TabStop = 0`"那一枚碰巧对（因为它要的就是 0）。RTL 那边其实一直按"默认 True"写的
 // （`vb6_GetTabStop` 里 `!hwnd` 就回 -1），缺的只是创建时把这一位立上。
@@ -2091,6 +2201,11 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
         // sliderStyleBits，不留第二份表。
         case FrmControlType::Slider:
             style |= sliderStyleBits(ctrl);
+            break;
+        // C30-UD-a: UpDown 也和 Slider 同型 —— 容器里那枚以前连 ARROWKEYS 都没有，
+        // 折算共用 updownStyleBits，不留第二份表。
+        case FrmControlType::UpDown:
+            style |= updownStyleBits(ctrl);
             break;
         default:
             break;

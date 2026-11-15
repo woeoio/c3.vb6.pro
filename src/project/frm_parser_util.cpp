@@ -204,6 +204,10 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // （没有 "sstab"/"listview"/"treeview"/"progressbar" 之类的重叠），排在 Unknown 前即可。
     // VB6 侧另有 ProgID 写法 MSComctlLib.Slider.1，同样命中这条。
     if (lower.find("slider") != std::string::npos) return FrmControlType::Slider;
+    // C30-UD: UpDown (MSComctlLib.UpDown)。"updown" 与上面任何一条互不为子串
+    // ("updown" 里既没有 "dtpicker" 也没有 "monthview")，VB6 侧另有 ProgID 写法
+    // MSComctlLib.UpDown.1，同样命中这条。
+    if (lower.find("updown") != std::string::npos) return FrmControlType::UpDown;
 
     return FrmControlType::Unknown;
 }
@@ -265,6 +269,10 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // ICC_BAR_CLASSES 请求过 ⇒ 不需要 RTL 自注册兜底（探针 .build/slprobe 实测
         // CreateWindowEx 直接拿到句柄、类名读回就是 msctls_trackbar32）。
         case FrmControlType::Slider:       return "msctls_trackbar32";
+        // C30-UD-a: UpDown —— comctl32 注册的 msctls_updown32 (头里 UPDOWN_CLASSW)，
+        // 与 Slider/ProgressBar 同一族：类由 vb6forms.c 那次 InitCommonControlsEx 的
+        // ICC_BAR_CLASSES 请求过 ⇒ 不需要 RTL 自注册兜底。
+        case FrmControlType::UpDown:       return "msctls_updown32";
         // C29-1b: 文件系统三控件在 VB6 里本来就是公共控件的薄封装 —— Drive 是
         // CBS_DROPDOWNLIST 的组合框、Dir / File 是列表框。以前这三格缺映射, 创建流程
         // 把它们当"不可见控件"跳过, 于是 RTL 里那套 P20-37 填充 helper 从来没被喂过
@@ -320,6 +328,7 @@ const char* FrmParser::controlTypeToVb6Name(FrmControlType type) {
         case FrmControlType::TreeView:     return "TreeView";
         case FrmControlType::DTPicker:     return "DTPicker";
         case FrmControlType::MonthView:    return "MonthView";
+        case FrmControlType::UpDown:       return "UpDown";
         case FrmControlType::RichTextBox:  return "RichTextBox";
         case FrmControlType::Toolbar:      return "Toolbar";
         case FrmControlType::Shape:        return "Shape";

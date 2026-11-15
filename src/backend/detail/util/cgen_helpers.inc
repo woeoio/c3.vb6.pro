@@ -702,6 +702,8 @@
     // C29-SL-h: Slider 的创建样式位（TBS_AUTOTICKS / TBS_VERT / TickStyle 那三位）。
     // 顶层与容器子控件两条创建路各自都要它，所以单独一处折算、两处调用（账 #83）。
     long sliderStyleBits(const FrmControl& ctrl) const;
+    // C30-UD-a: UpDown 的创建样式位（UDS_*），同样两条创建路共用。
+    long updownStyleBits(const FrmControl& ctrl) const;
 
     // C29-SL-l（账 #143）: 控件的**零实参方法**（`SetFocus` / Slider 的 `ClearSel` 这一族）。
     // 一形带括号（走表达式路）、一形不带（走语句路），两条码头都调这两个函数，
@@ -766,6 +768,9 @@
     // Frame 内读回 0/100/0/1/20/0 = 原生默认档）。抽出来两条创建路共用，hwndExpr 由调用方给
     // （顶层那趟自己算槽、子控件那趟用 childHwndRead）。
     void emitSliderDesignTimeInit(const FrmControl& ctrl, const std::string& hwndExpr);
+    // C30-UD-a: UpDown 的设计期值面（Min/Max/Value/Increment/Wrap/Alignment/Orientation/
+    // SyncBuddy/BuddyControl）—— 与 Slider 同一条口径，两条创建路调同一个出口。
+    void emitUpDownDesignTimeInit(const FrmControl& ctrl, const std::string& hwndExpr);
 
     // VB6 PictureBox/Image 的 STATIC 控件不显示 Caption (标题在创建时应清空)。
     bool controlTypeClearsCaption(const FrmControl& ctrl) const;

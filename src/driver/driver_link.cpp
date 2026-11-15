@@ -64,6 +64,10 @@ static void addFormsSources(MsvcDriverOptions& opts, const std::string& rtlDir) 
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_winsock.c");
     // ai/029 C29-SL-a: Slider —— 第四处登记，少这行就是全线 LNK2019 找不到 vb6_Slider_*
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_slider.c");
+    // ai/029 C30-UD-a: UpDown —— 同样第四处登记（.rc / rtl_embedded.hpp 的 ID /
+    // rtl_embedded.cpp 的清单 / 这里）。少这一行的症状就是本批实测到的：
+    // 解包与内嵌都对，cl 根本不编它 ⇒ LNK2019 找不到 vb6_UpDown_*。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_updown.c");
     // 2026-10-06: Form/Printer 绘图方法家族 (PSet/Line/Circle/Point/Cls) ——
     // **第六处登记**。前五处 (c3rtl.rc / rtl_embedded.hpp 的 ID /
     // rtl_embedded.cpp 的清单 / vb6forms.h 的挂头 / .h 自身) 全对时,

@@ -7748,6 +7748,51 @@ if ($Category -in @("all", "run", "vbp")) {
                      "SQ1-dt=Arial/20", "SQ2-child-dt=20", "SQ3-real=Y")
     Test-Vbp "ctrlslider" "$Tests\ctrlslider\SlidApp.vbp" $slidNeedles
     Test-Vbp "ctrlslider_x86" "$Tests\ctrlslider\SlidApp.vbp" $slidNeedles -Arch "x86"
+
+    # ---- C30-UD-a / UD-b: UpDown（原生 msctls_updown32 复刻）----
+    # UD-a 钉属性面（值面四条 + 行为面四条 + 越界钳位 + 类型）；UD-b 把事件面接上：
+    # 夹具用 `SimDelta(格数)` 造一条**真** UDN_DELTAPOS 递到父窗，所以 UE* 那几行钉的
+    # 不只是值，而是「认来源 → 分流 → 调用」整段派发有没有把三个处理器真调到
+    # （处理器缺一枚，cgen 那条 -722 的 arm 根本不会生成）。UB* 钉 buddy 文本联动：
+    # ud3 是设计期挂的 buddy（BuddyControl="txtB" + SyncBuddy=-1），写值那一路与
+    # SimDelta 那一路各钉一次。
+    # UD5 是这一批最贵的一条：改之前 `alignment` 被 form_pseudo 那张通用表抢去，
+    # 读回 0/2 这种根本不是我们答的数；同时那些通用写路径还会拿旧样式重写 GWL_STYLE，
+    # 把刚立上的 UDS_WRAP 抹掉（UD10 第一格就是那条红的证人）。两处都补了排除。
+    $udNeedles = @(
+        "UD1-range=5/25", "UD2-value=10", "UD3-inc=3",
+        "UD4-wrap=False/True", "UD5-align=1/0", "UD6-ori=0/1",
+        "UD7-clampmax=25", "UD8-clampmin=5",
+        "UD9-rt=7/4/12", "UD10-rtstyle=True/0/1",
+        "UD11-sync=True/False", "UD12-type=Long/3",
+        # UD-b: 事件面（值 + 三个计数）。UE5 一次两格：iDelta 的大小不进处理器（VB6 那三条
+        # 本来就不带参数）只进值，所以上计数从 1 涨到 2、值 10→16。
+        "UE1-up=13", "UE2-cnt=1/0/1",
+        "UE3-dn=10", "UE4-cnt=1/1/2",
+        "UE5-two=16", "UE6-cnt=2/1/3",
+        # UD-c：同一串合成通知里的两条时间线。Change 处理器里读到的必须是**新值**（16），
+        # UpClick 里读到的必须是**旧值**（10）—— 前者改之前是 10（真实业务代码会差一格）。
+        "UE7-chgval=16", "UE8-upval=10",
+        # UD-b: buddy 文本联动（设计期 buddy + UDS_SETBUDDYINT）。
+        "UB1-buddy=20", "UB2-buddy=25/25",
+        "UPDOWN-DONE")
+    Test-Vbp "ctrlupdown" "$Tests\ctrlupdown\UpApp.vbp" $udNeedles
+    Test-Vbp "ctrlupdown_x86" "$Tests\ctrlupdown\UpApp.vbp" $udNeedles -Arch "x86"
+    # 发码形状：窗口类 + Init 参数序（-999 哨兵）+ 设计期那两枚各发一次 Init。
+    # 这三条不跑界面，因此在大批量回归里最便宜 —— 大批量一律放 GA，本地只跑单点。
+    Test-EmitcShape "ud_emitc_native" @("$Tests\ctrlupdown\UpApp.vbp") @(
+        '"msctls_updown32", "",',
+        'vb6_UpDown_Init((void*)vb6_hwnd_ud1, 5L, 25L, 10L, 3L, -999, -999, -999, -999, NULL);',
+        'vb6_UpDown_Init((void*)vb6_hwnd_ud2, -999, -999, -999, -999, -1L, 0L, 1L, -999, NULL);',
+        # UD-b: buddy 在 .frm 里写的是**名字**，cgen 折成那枚控件的句柄槽 —— 所以这一针
+        # 同时钉住「名字→槽」的折法与参数序（buddy 是第 9 枚实参）。
+        'vb6_UpDown_Init((void*)vb6_hwnd_ud3, 0L, 50L, -999, 5L, -999, -999, -999, -1L, (void*)vb6_hwnd_txtB);',
+        'vb6_UpDown_SimDelta((void*)vb6_hwnd_ud1, 1)',
+        # 事件号的形状门: **-722** 不是 -721。UDN_FIRST = 0U-721U、UDN_DELTAPOS = UDN_FIRST-1;
+        # 第一版两边都写成 -721 所以合成判据全绿, 真鼠标点击才露(值变、事件不到)。
+        # 这一针钉的就是“比对的号”本身 —— 右侧那个句柄名证明它落在 ud1 的 arm 上。
+        'pNM42->code == -722 && (void*)pNM42->hwndFrom == vb6_hwnd_ud1',
+        'vb6_UpDown_SetAlignment(vb6_hwnd_ud1, 0);')
     # 账 #468 §B164: 拼接站**自己**放掉左操作数（那一枚左操作数是「整枚就是一个 owned BSTR 档的 mint」
     #   ⇒ 那一站的发法从 Concat 变成 ConcatFree：值一个字没变，只是那一枚终于有人放了）⇒ 这几针随刀改钉。
     Test-EmitcShape "sl_emitc_native" @("$Tests\ctrlslider\SlidApp.vbp") @(
@@ -10675,6 +10720,35 @@ if ($Category -in @("all", "run", "vbp")) {
     # 对应三处差异: Picture1 内 UC 背景被刷成窗体底色 / 旋钮没画 .frx PNG / ucSlider1(4) 多一条黑条。
     Test-VbpBuild "ucSlider_2022" "$Tests\ucSlider_2022\Proyecto1.vbp" -Arch "x86" `
         -PixelAssert @("guisample\ucslider_px.ps1")
+
+    # GifcontrolSource (2026-11-15 入册): 老 GIF 用户控件示例（ucGIF.ctl 74KB + 7 张 gif + 属性页）。
+    # 它是全树十几处 "账 (prjNewAniGif …)" 的**真实来源**：`With ucGIF1 : .Move` 的 UC 成员发码、
+    # `ListIndex = 6` 赋值的 Click 语义、GetMapMode/SetMapMode 的 DI 桩、定长串 → BSTR 的换算、
+    # `ucGIF1.gifMinFrameDelay = Val(...)` 的属性写，都是在这个工程上被真实踩出来的。
+    # 以前它一直在 tests\ 里却**不在任何清单**里 ⇒ 编不编得过门禁不知道（与 dbgdlg 那条同源）。
+    #
+    # 外部 OCX 依赖交底（本轮实测，非推断）：.vbp 里两行引用 COMDLG32.OCX 与 DAO350.DLL，
+    # 但**代码零引用**（全工程搜不到 CommonDialog / DAO / Recordset）；CommonDialog 有原生复刻，
+    # DAO350 只是类型库路径缺失 → 只出 VB4001 警告、rc 照 0。emit-c 实测：
+    #   vb6_OcxHost_Create = 0、CoCreateInstance = 0（只有一条 Fix 143d 的 vb6_OcxHost_PaintAll，
+    #   那是每个窗体的通用重绘入口，不是 OCX 宿主）⇒ **不靠注册表、不靠 CoCreateInstance**。
+    #
+    # 只编不跑：GUI 工程、无 Timer、无自退出（Form_Load 只在缺 gif 时 Unload Me），
+    # 拿它跑得靠人点；而它的像素面已被 ucSlider/ucTreeView 那几条覆盖。所以两档：
+    #   ① 整工程 x64 + x86 编得过（不许退回编不过）；
+    #   ② 形状钉子 —— UC 方法/属性表真来自 .ctl 编译，且**不许**冒出 OCX 宿主。
+    Test-VbpBuild "gifcontrol"     "$Tests\GifcontrolSource\prjNewAniGif.vbp"
+    Test-VbpBuild "gifcontrol_x86" "$Tests\GifcontrolSource\prjNewAniGif.vbp" -Arch "x86"
+    Test-EmitcShape "gifcontrol_uc_native" @("$Tests\GifcontrolSource\prjNewAniGif.vbp") @(
+        'void vb6_ucGIF_UnloadGIF(vb6_cls_ucGIF* me);',
+        '{ L"gifMinFrameDelay", vb6_ucGIF_ucPropGet_gifMinFrameDelay, NULL, NULL },',
+        'vb6_ucGIF_LoadGIF((void*)me, gifFileName);'
+    )
+    # 反证：这个工程里一行 OCX 宿主都不允许出现（出现了就说明某个控件掉了回落路）。
+    Test-EmitcAbsent "gifcontrol_no_ocx_host" @("$Tests\GifcontrolSource\prjNewAniGif.vbp") @(
+        'vb6_OcxHost_Create(',
+        'CoCreateInstance('
+    )
 
     # <vbeclipse> 回归夹子 (dbgdlg) 2026-10-06: 「Alias 名与 VB 名相同」这条路上**真调用**过
     # DI 包装的那一份夹具 —— 只要求"编得过、链得出 exe"，不跑 (它是 GUI 工程，跑起来要人点)。

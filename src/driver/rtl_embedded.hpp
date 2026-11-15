@@ -192,6 +192,8 @@ enum RtlResourceID {
 
     // ai/029 C29-SL-a: VB6 Slider 控件 (原生 msctls_trackbar32, 不加载 MSCOMCTL.OCX)
     RTL_VB6FORMS_SLIDER_C                  = 221,
+    // ai/029 C30-UD-a: VB6 UpDown 控件 (原生 msctls_updown32, 不加载 MSCOMCTL.OCX)
+    RTL_VB6FORMS_UPDOWN_C                  = 240,
     // 账 #181: 崩溃轨迹每进程只记一次的闸 (零依赖头, 见文件头注释)
     RTL_VB6RTL_CRASH_H                     = 222,
 

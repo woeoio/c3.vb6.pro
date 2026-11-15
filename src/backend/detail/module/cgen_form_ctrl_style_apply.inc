@@ -292,6 +292,15 @@
                 style |= sliderStyleBits(ctrl);
                 break;
             }
+            case FrmControlType::UpDown: {
+                // C30-UD-a: msctls_updown32 的创建样式。折算整个搬进 updownStyleBits
+                // （controlTypeStyleBits 那格共用它，账 #83）。
+                // 注意：这枚控件的"外观位"很少，真正决定行为的是 range/pos/accel 三条消息，
+                // 那是 Init 干的活（见下面的 emitUpDownDesignTimeInit 调用点）。
+                createCaption = "";
+                style |= updownStyleBits(ctrl);
+                break;
+            }
             case FrmControlType::RichTextBox: {
                 // C29-RT-a: RICHEDIT50W 的创建样式。
                 //   · ES_MULTILINE 一律挂上：原生这枚控件不是多行就没有滚动条一说（与 TextBox
@@ -698,6 +707,19 @@
                  std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
                 ("vb6_hwnd_" + cIdent(ctrl.controlName));
             emitSliderDesignTimeInit(ctrl, slHwnd);
+        }
+
+        // C30-UD-a: UpDown 设计期值面（Min/Max/Value/Increment/Wrap/Alignment/
+        // Orientation/SyncBuddy + BuddyControl）。与 Slider 同一条口径：参数序与 -999
+        // 哨兵只住在 emitUpDownDesignTimeInit 一处，容器那条路（frame_menu）调同一个出口。
+        if (ctrl.controlType == FrmControlType::UpDown) {
+            std::string udLower = ctrl.controlName;
+            std::transform(udLower.begin(), udLower.end(), udLower.begin(), ::tolower);
+            std::string udHwnd = knownControlArrays_.count(udLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            emitUpDownDesignTimeInit(ctrl, udHwnd);
         }
 
         // C29-MV-a: MonthView 设计期的多月平铺。原生没有"行/列"这条消息 —— 平铺几个月完全

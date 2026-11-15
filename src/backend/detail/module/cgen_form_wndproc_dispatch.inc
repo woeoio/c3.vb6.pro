@@ -136,6 +136,15 @@
                 anyNotify = true;
                 break;
             }
+            // C30-UD-a: UpDown 的 UpClick / DownClick / Change 三条全走 UDN_DELTAPOS。
+            // 三条里只要有一条处理器存在，WM_NOTIFY 这个 case 就得建起来。
+            if (ctrl.controlType == FrmControlType::UpDown) {
+                if (!symTab_.lookup(ctrl.controlName + "_UpClick") &&
+                    !symTab_.lookup(ctrl.controlName + "_DownClick") &&
+                    !symTab_.lookup(ctrl.controlName + "_Change")) continue;
+                anyNotify = true;
+                break;
+            }
         }
         if (anyNotify) {
             c_.emitLine("case WM_NOTIFY: {");
@@ -225,6 +234,66 @@
                     c_.dedent();
                     c_.emitLine("}");
                 }
+            }
+            // ---- C30-UD-a: UpDown 的 UpClick / DownClick / Change ----
+            // 原生把 UDN_DELTAPOS(**-722**) 发到**父窗**（不是控件自己），NMUPDOWN.iDelta 的符号
+            // 决定往哪边：>0 = 加（UpClick）、<0 = 减（DownClick）；值真动了再点一次 Change。
+            // ⚠ 号是 -722 不是 -721：`UDN_FIRST = 0U-721U = -721`、`UDN_DELTAPOS = UDN_FIRST - 1`
+            // （SDK commctrl.h 逐行核对过）。本批第一版写成 -721，而合成助手 `SimDelta` 发的
+            // 是同一个错号 ⇒ 两边自洽、判据全绿；**真鼠标一点就露**：值照变、buddy 照跟，
+            // 事件一条不到（读数 tools/updown_manual/UpManual.log：seq=1、A v=10、up/dn/ch 全 0）。
+            // 三条处理器都没有形参（VB6 的 UpClick/DownClick/Change 就是无参的），
+            // 所以这里 extern 声明的形参表是 void、调用也不递实参。
+            // 返回值带两位信息（RTL 的 vb6_UpDown_OnNotify）：±1 = 值真动了、±2 = 点了但
+            // 值没动（顶到量程且没开 UDS_WRAP）。分流按 VB6 语义：点箭头的两条都该响，
+            // Change 只该在值真的变了时响 —— 早期这里写的是 `!= 0`，实测（tools/updown_manual
+            // 第一轮 #8~#11）在 10 上连点▲ 会报两条 Change 而值始终 10。
+            for (const auto& ctrl : frmDesc.formControl.children) {
+                if (ctrl.controlType != FrmControlType::UpDown) continue;
+                auto* upSym = symTab_.lookup(ctrl.controlName + "_UpClick");
+                auto* dnSym = symTab_.lookup(ctrl.controlName + "_DownClick");
+                auto* chSym = symTab_.lookup(ctrl.controlName + "_Change");
+                if (!upSym && !dnSym && !chSym) continue;
+                std::string udNameLower = ctrl.controlName;
+                std::transform(udNameLower.begin(), udNameLower.end(), udNameLower.begin(), ::tolower);
+                std::string udHwndVar = knownControlArrays_.count(udNameLower)
+                    ? ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", 0)")
+                    : ("vb6_hwnd_" + cIdent(ctrl.controlName));
+                c_.emitLine("if (pNM42->code == -722 && (void*)pNM42->hwndFrom == "
+                            + udHwndVar + ") {");
+                c_.indent();
+                c_.emitLine("int32_t vb6_udDelta30 = 0;");
+                c_.emitLine("int32_t vb6_udD30 = vb6_UpDown_OnNotify((void*)"
+                            + udHwndVar + ", -722, (void*)lParam, &vb6_udDelta30);");
+                c_.emitLine("if (vb6_udD30 != 0) {");
+                c_.indent();
+                if (upSym) {
+                    c_.emitLine("extern void " + cProcName(upSym->name, AccessLevel::Private) + "(void);");
+                    c_.emitLine("if (vb6_udD30 > 0) " + cProcName(upSym->name, AccessLevel::Private) + "();");
+                }
+                if (dnSym) {
+                    c_.emitLine("extern void " + cProcName(dnSym->name, AccessLevel::Private) + "(void);");
+                    c_.emitLine("if (vb6_udD30 < 0) " + cProcName(dnSym->name, AccessLevel::Private) + "();");
+                }
+                // C30-UD-c: 先把这次位移**真落下去**，再发 Change —— 于是 Change 处理器里读到的
+                // 是**新值**（真 VB6 的 Change 是“值已变”；早期这里直接调，读的是旧值）。
+                // 落定之后 `return 1` 把原生那一次实施取消掉，否则同一格会跳两次。
+                // ⚠ Commit 必须无条件落在 “±1” 里面：没有 Change 处理器时也得把位移落下去，
+                // 否则取消原生 = 值永远不动（这是本刀最容易踩的一脚）。
+                c_.emitLine("if (vb6_udD30 == 1 || vb6_udD30 == -1) {");
+                c_.indent();
+                c_.emitLine("vb6_UpDown_Commit((void*)" + udHwndVar + ", vb6_udDelta30);");
+                if (chSym) {
+                    c_.emitLine("extern void " + cProcName(chSym->name, AccessLevel::Private) + "(void);");
+                    c_.emitLine(cProcName(chSym->name, AccessLevel::Private) + "();");
+                }
+                c_.dedent();
+                c_.emitLine("}");
+                c_.emitLine("return 1;  /* 已自行落值，取消原生那一次 */");
+                c_.dedent();
+                c_.emitLine("}");
+                c_.dedent();
+                c_.emitLine("}");
             }
             // ---- C29-4: StatusBar 的 PanelClick / PanelDblClick ----
             // 原生 status bar 把**1 基面板号放在 NMHDR.idFrom**。RTL 的

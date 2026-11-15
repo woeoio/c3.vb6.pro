@@ -949,6 +949,23 @@
             // 设计期属性走 IPersistPropertyBag. IDispatch* 存入 vb6_hwnd_<name>,
             // 使 vb6_ComCall/ComSetProp(vb6_hwnd_<name>, ...) 走真实 IDispatch.
             {
+                // ai/034 §五-5: 未实现的原生复刻必须**有声音**。
+                // 静默跳过是本线最贵的教训 (029 §二-2): 句柄恒 NULL、属性读写全打空、
+                // 退出码照旧 0 —— 在 x64 上尤其致命 (32 位 OCX 根本装不进进程)。
+                // 一次编译内按 "类型名|控件名" 去重, 免得一个控件数组刷一屏。
+                // 判据**只限 Unknown**: Menu / WebBrowser / ImageList 的 win32Class 也是
+                // nullptr (它们各自有别的创建路), 不加这一条就会把每个菜单项都报一遍。
+                if (ctrl.controlType == FrmControlType::Unknown) {
+                    static std::unordered_set<std::string> noteDiag034;
+                    std::string key034 = ctrl.controlTypeName + "|" + ctrl.controlName;
+                    if (noteDiag034.insert(key034).second) {
+                        std::cerr << "C3: note: 控件 " << ctrl.controlName
+                                  << " 的类型 '" << ctrl.controlTypeName
+                                  << "' 没有内建原生复刻 —— 按外部 OCX 宿主创建; "
+                                  << "x64 进程里 32 位 OCX 无法加载, 该控件将静默不存在。"
+                                  << std::endl;
+                    }
+                }
                 Symbol* comSym143 = lookupDotted(ctrl.controlTypeName);
                 if (!comSym143 || comSym143->kind != SymbolKind::ComClass) {
                     size_t dot143 = ctrl.controlTypeName.find('.');

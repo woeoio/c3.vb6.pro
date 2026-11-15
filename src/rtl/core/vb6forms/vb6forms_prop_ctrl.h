@@ -894,6 +894,49 @@ void    vb6_Slider_SetSelEnd(void* hwnd, int32_t v);
 // TravelIsVert 的正解是把滑块推到量程两端各读一次 TBM_GETTHUMBRECT，看位移落在哪根轴。
 int32_t vb6_Slider_TravelIsVert(void* hwnd);
 int32_t vb6_Slider_TickPresent(void* hwnd);
+
+// C30-UD-a: VB6 UpDown —— 原生 msctls_updown32 复刻（不加载 MSCOMCTL.OCX）。
+// 值面/行为面全部直问直发控件（range/pos/accel 都有回读消息），不另存；
+// Orientation/Alignment/Wrap/SyncBuddy 四条就是样式位，读回问窗口自己。
+// Init 的 -999 哨兵口径与 Slider 同：没写过就不覆盖原生默认值。
+void    vb6_UpDown_Init(void* hwnd, long min, long max, long value, long increment,
+                        long wrap, long alignment, long orientation, long syncBuddy,
+                        void* buddy);
+int32_t vb6_UpDown_GetMin(void* hwnd);
+void    vb6_UpDown_SetMin(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetMax(void* hwnd);
+void    vb6_UpDown_SetMax(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetValue(void* hwnd);      // 越界由控件钳位，不再钳第二遍
+void    vb6_UpDown_SetValue(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetIncrement(void* hwnd);  // UDM_GET/SETACCEL
+void    vb6_UpDown_SetIncrement(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetWrap(void* hwnd);       // UDS_WRAP，读回 -1/0
+void    vb6_UpDown_SetWrap(void* hwnd, int32_t on);
+int32_t vb6_UpDown_GetAlignment(void* hwnd);  // 0=Left 1=Right（VB6 默认 1）
+void    vb6_UpDown_SetAlignment(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetOrientation(void* hwnd);// 0=Vertical 1=Horizontal
+void    vb6_UpDown_SetOrientation(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetSyncBuddy(void* hwnd);  // UDS_SETBUDDYINT
+void    vb6_UpDown_SetSyncBuddy(void* hwnd, int32_t on);
+void*   vb6_UpDown_GetBuddy(void* hwnd);
+void    vb6_UpDown_SetBuddy(void* hwnd, void* buddy);
+// 原生把 UDN_DELTAPOS(-722) 发到**父窗** ⇒ 由窗体的 WM_NOTIFY 那条 arm 转进来。
+// 通知到时控件**还没改值**（真手势实测：处理器里读到的是旧值），所以“会不会真动”
+// 由它自己按 老位置 + iDelta×Increment 推一格算（wrap 按环、否则钳量程）。
+// 返回值带两位：0 = 不是这条通知；**±1 = 动了（正=上 负=下）**；**±2 = 点了但值没动**。
+// outDelta 回交原始 iDelta（带大小）—— arm 里要靠它把位移自己落下去。
+// cgen 的用法：Up/Down 按符号在**值变更前**发（与真手势一致）；Change 只在 ±1 时、
+// 先调 vb6_UpDown_Commit 落值、再发（所以处理器里读到的是新值），最后 `return 1`
+// 把原生那次实施取消掉 —— 不取消就会跳两格。
+int32_t vb6_UpDown_OnNotify(void* hwnd, int32_t code, void* lParam, int32_t* outDelta);
+// C30-UD-c：按 delta 把位移落到控件上（wrap 按环、否则钳量程；buddy 文本随之同步），
+// 返回落定后的位置。只该在 OnNotify 返回 ±1 时调。
+int32_t vb6_UpDown_Commit(void* hwnd, int32_t delta);
+// C30-UD-b 判据专用助手（不对应 VB6 语义，与 Slider.SimNotify / DTPicker.SimChange 同先例）：
+// 按 delta 格数算目标值（乘 Increment、wrap 按环、否则钳量程），**先把一条真的
+// UDN_DELTAPOS 递给父窗、再落值** —— 与真手势同序（真手势下处理器读到的是旧值，
+// 见 vb6_UpDown_OnNotify 的注）。delta 单位是点击格数。返回落值后的实际位置。
+int32_t vb6_UpDown_SimDelta(void* hwnd, int32_t delta);
 // C29-SL-h：TickStyle 四档。VB6 那一张枚举的真值是从 OCX 自带的类型库读出来的
 // （0=sldBottomRight 1=sldTopLeft 2=sldBoth 3=sldNoTicks，探针 .build/slprobe/sltlb.cpp），
 // 与原生样式位 1:1（TBS_TOP==TBS_LEFT==0x4、TBS_BOTH==0x8、TBS_NOTICKS==0x10）。
