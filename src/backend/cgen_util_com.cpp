@@ -143,6 +143,92 @@ std::string CCodeGen::comTypedCallExpr(const ComSigView& sv, const std::string& 
     return "vb6_ComCall(" + callArgs + ")";   // 未知返回类型 / 表里没有: 返回 void*
 }
 
+// ============================================================
+// C30-2: TabStrip 集合链的唯一判形（读/写/类型共用）
+// ============================================================
+// 判形只认一张表：knownFormControls_ 里类型是 TabStrip 的控件（大小写不敏感）。
+// 控件数组元素不认 —— 它的句柄不是一个 `vb6_hwnd_<名>` 标量槽，交回旧路（见注释）。
+//
+// 为什么判形在 AST 而不是文本：实测 `Tabs` / `SelectedItem` 的 C 面文本在三条读路上
+// 长得不一样（`vb6_ComGetObjectProp(hwnd, …)` / `vb6_ComCallObject(hwnd, …)` / 裸槽），
+// 按前缀扫会漏；而 AST 里这三个形状是稳定的（下发三行写的就是这个子集）。
+bool CCodeGen::tabStripChainViewOf(const Expr* nodeExpr, TabChainView& v) const {
+    v = TabChainView();
+    if (!nodeExpr || nodeExpr->kind != ASTNodeKind::MemberAccessExpr) return false;
+    const auto& node = static_cast<const MemberAccessExpr&>(*nodeExpr);
+    if (!node.object) return false;
+
+    const Expr* base = node.object.get();
+    Expr* idxArg = nullptr;
+    // `<ctrl>.Tabs(a)` 多一层 IndexOrCallExpr；`<ctrl>.Tabs` 与 `<ctrl>.SelectedItem` 没有。
+    if (base->kind == ASTNodeKind::IndexOrCallExpr) {
+        const auto& call = static_cast<const IndexOrCallExpr&>(*base);
+        if (!call.callee) return false;
+        if (!call.positional.empty() && call.positional[0] && !call.omittedArgs.count(0))
+            idxArg = call.positional[0].get();
+        base = call.callee.get();
+    }
+    if (!base || base->kind != ASTNodeKind::MemberAccessExpr) return false;
+    const auto& inner = static_cast<const MemberAccessExpr&>(*base);
+    if (!inner.object || inner.object->kind != ASTNodeKind::IdentifierExpr) return false;
+
+    const std::string ctrlName = static_cast<const IdentifierExpr&>(*inner.object).name;
+    const std::string ctrlLower = Symbol::toLower(ctrlName);
+    auto it = knownFormControls_.find(ctrlLower);
+    if (it == knownFormControls_.end() || it->second != FrmControlType::TabStrip) return false;
+    // 控件数组元素：句柄跟 `vb6_CtrlArr_GetAt(&vb6_arr_<名>, i)` 走，本题不接。
+    if (knownControlArrays_.count(ctrlLower)) return false;
+
+    const std::string sub = Symbol::toLower(inner.memberName);
+    const std::string mem = Symbol::toLower(node.memberName);
+    if (sub == "tabs") {
+        // `Tabs` 本体只有 `.Count`；`Tabs(a)` 什么都行（读侧下面逐枚过滤）。
+        if (!idxArg && mem != "count") return false;
+    } else if (sub == "selecteditem") {
+        if (idxArg) return false;       // SelectedItem 没有下标
+    } else {
+        return false;
+    }
+    v.ctrl = ctrlName;
+    v.sub = sub;
+    v.member = mem;
+    v.idxArg = idxArg;
+    return true;
+}
+
+bool CCodeGen::tabStripChainReadExpr(const Expr* nodeExpr, std::string& out) {
+    TabChainView v;
+    if (!tabStripChainViewOf(nodeExpr, v)) return false;
+    const std::string hwnd = "vb6_hwnd_" + cIdent(v.ctrl);
+    // 当前选中页号（1 基，无选中=0）。RTL 那侧直接就是 TCM_GETCURSEL 的投影。
+    const std::string sel = "vb6_TabStrip_GetSelectedIndex((void*)" + hwnd + ")";
+
+    if (v.sub == "selecteditem") {
+        if (v.member == "index")   { out = sel; return true; }
+        if (v.member == "caption") { out = "vb6_TabStrip_GetTabCaption((void*)" + hwnd + ", " + sel + ")"; return true; }
+        if (v.member == "key")     { out = "vb6_TabStrip_GetTabKey((void*)" + hwnd + ", " + sel + ")"; return true; }
+        return false;
+    }
+    // <ctrl>.Tabs.Count
+    if (v.member == "count") { out = "vb6_TabStrip_TabsCount((void*)" + hwnd + ")"; return true; }
+    if (!v.idxArg) return false;
+
+    // Tabs(a)：数字按下标、字串按 Key（VB6 两种都吃）。
+    emitExpr(*v.idxArg);
+    const std::string arg = lastExpr_;
+    const std::string idx = (inferExprType(*v.idxArg) == Vb6Type::String)
+        ? ("vb6_TabStrip_GetTabIndexByKey((void*)" + hwnd + ", (void*)(" + arg + "))")
+        : ("((int32_t)(" + arg + "))");
+
+    if (v.member == "caption")  { out = "vb6_TabStrip_GetTabCaption((void*)" + hwnd + ", " + idx + ")"; return true; }
+    if (v.member == "key")      { out = "vb6_TabStrip_GetTabKey((void*)" + hwnd + ", " + idx + ")"; return true; }
+    if (v.member == "index")    { out = idx; return true; }
+    if (v.member == "image")    { out = "vb6_TabStrip_GetTabImage((void*)" + hwnd + ", " + idx + ")"; return true; }
+    // Tabs(i).Selected 是 VB6 的 Boolean；-1/0 是 VB6 的真值口径（与 Visible 那一族同）。
+    if (v.member == "selected") { out = "((" + sel + " == " + idx + ") ? -1 : 0)"; return true; }
+    return false;
+}
+
 std::string CCodeGen::resolveComValue(const std::string& unpackType) {
     // P24-07: 早期绑定 — 利用签名returnType选择正确的解包函数
     if (!isComMarker_) return lastExpr_;

@@ -93,9 +93,9 @@ Option Explicit
 '   3. 点标签 → TabStrip1_Click 把 PictureBox 的 Visible 翻过去，并刷新 lblInfo；
 '   4. lblInfo 同时回读 Tabs.Count / SelectedItem.Index / Tabs(n).Caption 三处。
 '
-' ⚠ 已知缺口（下一刀补）：链式读**直接当内建函数实参**时（`CStr(TabStrip1.SelectedItem.Index)`）
-'   仍走 COM 晚绑定 ⇒ 真跑会弹 Run-time error 438。本样例统一先读进 Long 变量再用，
-'   这也是 VB6 工程里更常见的写法。
+' ✅ 链式读当内建函数实参（`CStr(...)`）、当子过程实参（`ShowPage ...`）、写侧
+'   （`Tabs(i).Caption/Key/Image/Selected`、`SelectedItem.Index`）从 C30-2 收尾起全部
+'   直发 RTL；本样例故意写成 VB6 教科书的原样语法，一个变量中转都不用。
 
 Dim nSel As Long
 Dim nClicks As Long
@@ -105,7 +105,7 @@ Private Sub Form_Load()
     TabStrip1.Tabs.Add , "t2", "视图"
     TabStrip1.Tabs.Add , "t3", "高级"
     LayoutPages
-    ShowPage
+    ShowPage 1
 End Sub
 
 Private Sub LayoutPages()
@@ -123,42 +123,36 @@ Private Sub LayoutPages()
     picC.Height = picA.Height
 End Sub
 
-Private Sub ShowPage()
+Private Sub ShowPage(ByVal n As Long)
     Dim nCnt As Long
-    Dim nCur As Long
-    Dim sCap As String
     nCnt = TabStrip1.Tabs.Count
-    nCur = TabStrip1.SelectedItem.Index
-    If nCur < 1 Then nCur = 1
-    If nCur > nCnt Then nCur = nCnt
-    nSel = nCur
-    picA.Visible = (nCur = 1)
-    picB.Visible = (nCur = 2)
-    picC.Visible = (nCur = 3)
-    sCap = TabStrip1.Tabs(nCur).Caption
-    lblInfo.Caption = "tabs=" & CStr(nCnt) _
-        & "  sel=" & CStr(nCur) _
-        & "  cap=" & sCap _
+    If n < 1 Then n = 1
+    If n > nCnt Then n = nCnt
+    nSel = n
+    picA.Visible = (n = 1)
+    picB.Visible = (n = 2)
+    picC.Visible = (n = 3)
+    ' 三处都是“链式读直接当实参”—— 也是改前必然 438 的那三形
+    lblInfo.Caption = "tabs=" & CStr(TabStrip1.Tabs.Count) _
+        & "  sel=" & CStr(TabStrip1.SelectedItem.Index) _
+        & "  cap=" & TabStrip1.Tabs(n).Caption _
         & "  clicks=" & CStr(nClicks)
 End Sub
 
 Private Sub TabStrip1_Click()
     nClicks = nClicks + 1
-    ShowPage
+    ShowPage TabStrip1.SelectedItem.Index
 End Sub
 
 Private Sub cmdAdd_Click()
-    Dim nCnt As Long
-    nCnt = TabStrip1.Tabs.Count
-    TabStrip1.Tabs.Add , "t" & CStr(nCnt + 1), "新页" & CStr(nCnt + 1)
-    ShowPage
+    TabStrip1.Tabs.Add , "t" & CStr(TabStrip1.Tabs.Count + 1), "新页" & CStr(TabStrip1.Tabs.Count + 1)
+    ShowPage TabStrip1.SelectedItem.Index
 End Sub
 
 Private Sub cmdRemove_Click()
-    Dim nCnt As Long
-    nCnt = TabStrip1.Tabs.Count
-    If nCnt > 1 Then
-        TabStrip1.Tabs.Remove nSel
-        ShowPage
+    If TabStrip1.Tabs.Count > 1 Then
+        TabStrip1.Tabs.Remove TabStrip1.SelectedItem.Index
+        ' 删当前页后原生会选“顶上来那一页”；这里显式再选一下也只是同一页，不改变读数。
+        ShowPage TabStrip1.SelectedItem.Index
     End If
 End Sub

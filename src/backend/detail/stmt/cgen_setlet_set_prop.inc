@@ -592,6 +592,12 @@
         }
     }
 
+    // C30-2: TabStrip 集合链写 —— 与 AssignmentStmt 那条同源（两枚码头都要接，
+    // 缺一头就是“Let 能写、Set 不能写”这种只有客户端写 `Set` 时才露的洞）。
+    if (tryEmitTabStripChainWrite(node.target.get(), node.value.get())) {
+        return;
+    }
+
     // Fix 090ae: 链式 COM 默认属性索引写 (P25b helper) — SetStmt 原先缺失该分支,
     // Set Data(Line)(Col) = Dat 的 LHS 被 emitExpr 按链式读生成
     // vb6_VariantFromComResult(vb6_ComCall(...)) = value (非左值) → C2440.

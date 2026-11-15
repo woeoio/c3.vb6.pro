@@ -7813,6 +7813,14 @@ if ($Category -in @("all", "run", "vbp")) {
         "TS7-type=Long/String",
         "TS8-client=300x176",
         "TS9-flags=False/True/True",
+        # C30-2 收尾三面（不补全就无法按 VB 语法跑）：
+        #   TS11/TS12 = 集合链**当内建函数实参 / 子过程实参**（改前 438）；
+        #   TS13/TS14/TS15 = 写侧 Caption/Key/Image/Selected/SelectedItem.Index；
+        #   TS16/TS17 = Remove 的选中项语义（删前面的不跳页、删当前的选下一位）。
+        "TS11-arg=3/1", "TS12-sub=1",
+        "TS13-wcap=True/True/0",
+        "TS14-wsel=2/2", "TS15-selset=1",
+        "TS16-rmkeep=2/2/True", "TS17-rmcur=1/1",
         "TS10-clear=0/0",
         "TABSTRIP-DONE")
     # ExpectExitCode 0 是这一批的硬刑：TS10 第一版就死在 438 —— 输出前九行全在、
@@ -7830,6 +7838,17 @@ if ($Category -in @("all", "run", "vbp")) {
         # 这一针钉的就是“那条码头真的接上了”否则钉会回到 vb6_ComCall(…, L"Clear")
         'vb6_TabStrip_TabsClear((void*)vb6_hwnd_TabStrip1);',
         'vb6_TabStrip_GetSelectedIndex((void*)vb6_hwnd_TabStrip1)')
+    # C30-2 收尾：链当实参 + 写侧五形（改前这两族分别是 438 与静默无效）。
+    # 读侧这一针钉「子过程实参」那条路：形参位直接是 RTL 调用，没有任何
+    # vb6_ComGetProp / vb6_ComCallObject 残渣。
+    Test-EmitcShape "ts_emitc_chainarg" @("$Tests\ctrltabstrip\TabApp.vbp") @(
+        'vb6_ShowIdx(vb6_TabStrip_GetSelectedIndex((void*)vb6_hwnd_TabStrip1));',
+        'vb6_CStrLong(vb6_TabStrip_TabsCount((void*)vb6_hwnd_TabStrip1))',
+        # 写侧：三枚 Set + Selected 那道真值门（False 不发，VB6 没有“全不选”状态）。
+        'vb6_TabStrip_SetTabCaption((void*)vb6_hwnd_TabStrip1, ((int32_t)(1)), (void*)(vb6_BSTR_FromStr(L"\u65391")));',
+        'vb6_TabStrip_SetTabKey((void*)vb6_hwnd_TabStrip1, ((int32_t)(1)), (void*)(vb6_BSTR_FromStr(L"kk1")));',
+        'vb6_TabStrip_SetTabImage((void*)vb6_hwnd_TabStrip1, ((int32_t)(1)), (int32_t)(0));',
+        'vb6_TabStrip_SetSelectedIndex((void*)vb6_hwnd_TabStrip1, (int32_t)(1));  /* TabStrip.SelectedItem.Index */')
     # 账 #468 §B164: 拼接站**自己**放掉左操作数（那一枚左操作数是「整枚就是一个 owned BSTR 档的 mint」
     #   ⇒ 那一站的发法从 Concat 变成 ConcatFree：值一个字没变，只是那一枚终于有人放了）⇒ 这几针随刀改钉。
     Test-EmitcShape "sl_emitc_native" @("$Tests\ctrlslider\SlidApp.vbp") @(

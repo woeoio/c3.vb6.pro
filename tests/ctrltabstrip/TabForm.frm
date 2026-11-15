@@ -41,10 +41,11 @@ Option Explicit
 ' 这一件只钉**属性面 + Tabs 集合**：标签条的点击/切换要真鼠标（tools/tabstrip_manual
 ' 那一份 + .build/probe/verify_tab.ps1），这里不碰 _Click —— 免得“编得过、没人送消息”的绿。
 '
-' ⚠ 写法上的硬约束（实测出来的，不是风格）：凡是要当**内建函数实参**用的链式读
-'   （CStr(x) / TypeName(x) / Print x），一律先落到同型局部变量再喂；
-'   `CStr(TabStrip1.Tabs.Count)` 这一形以前走 COM 晚绑定 ⇒ 真跑 438。
-'   夹具这样写既避开缺口，也正好把“赋值形”这条通路的发码钉住。
+' 判据面（全部用 VB6 原样语法，不做“先落变量”那种绕行）：
+'   · 属性面（TS1..TS9）与 Tabs 集合（TS5/TS6/TS10）；
+'   · 集合链**当内建函数实参 / 子过程实参**（TS11/TS12）—— 改前这两形走 COM 晚绑定，真跑 438；
+'   · 写侧 Caption/Key/Image/Selected 与 SelectedItem.Index（TS13..TS15）；
+'   · Remove 的选中项语义（TS16/TS17）。
 '
 ' 1 基：Tabs(1..Count)、SelectedItem.Index(1..Count，无选中=0)。
 
@@ -52,6 +53,10 @@ Private Sub Form_Load()
     TabStrip1.Tabs.Add , "k1", "常规"
     TabStrip1.Tabs.Add , "k2", "视图"
     TabStrip1.Tabs.Add , "k3", "高级"
+End Sub
+
+Private Sub ShowIdx(ByVal i As Long)
+    Debug.Print "TS12-sub=" & CStr(i)
 End Sub
 
 Private Sub tGo_Timer()
@@ -106,6 +111,43 @@ Private Sub tGo_Timer()
 
     ' 行为面三枚：设计期 MultiRow=False / HotTracking=True / ShowTips=True。
     Debug.Print "TS9-flags=" & CStr(TabStrip1.MultiRow) & "/" & CStr(TabStrip1.HotTracking) & "/" & CStr(TabStrip1.ShowTips)
+
+    ' ---- 集合链当**内建函数实参** / 子过程实参（改前这两形走 COM 晚绑定 ⇒ 真跑 438）----
+    ' 这一格是 C30-2 收尾的硬判据：不再“先落局部变量再用”。
+    Debug.Print "TS11-arg=" & CStr(TabStrip1.Tabs.Count) & "/" & CStr(TabStrip1.SelectedItem.Index)
+    ShowIdx TabStrip1.SelectedItem.Index
+
+    ' ---- 写侧：Tabs(i) 的 Caption / Key / Image ----
+    TabStrip1.Tabs(1).Caption = "改1"
+    TabStrip1.Tabs(1).Key = "kk1"
+    TabStrip1.Tabs(1).Image = 0
+    c1 = TabStrip1.Tabs(1).Caption
+    k1 = TabStrip1.Tabs(1).Key
+    n = TabStrip1.Tabs(1).Image
+    Debug.Print "TS13-wcap=" & CStr(c1 = "改1") & "/" & CStr(k1 = "kk1") & "/" & CStr(n)
+
+    ' ---- 写侧：Tabs(i).Selected = True / SelectedItem.Index = n ----
+    TabStrip1.Tabs(2).Selected = True
+    n = TabStrip1.SelectedItem.Index
+    n2 = TabStrip1.Tabs(2).Index
+    Debug.Print "TS14-wsel=" & CStr(n) & "/" & CStr(n2)
+    TabStrip1.SelectedItem.Index = 1
+    n = TabStrip1.SelectedItem.Index
+    Debug.Print "TS15-selset=" & CStr(n)
+
+    ' ---- Remove 的选中项语义：选中第 3 页，删第 1 页 ⇒ 用户手上那页不变（序号 3→2）----
+    ' 注：此刻三页的标题已变成 [改1, 高级, 新页4]（TS13 改过第 1 页），所以“不变的那页”是“新页4”。
+    TabStrip1.SelectedItem.Index = 3
+    TabStrip1.Tabs.Remove 1
+    n = TabStrip1.Tabs.Count
+    n2 = TabStrip1.SelectedItem.Index
+    c1 = TabStrip1.SelectedItem.Caption
+    Debug.Print "TS16-rmkeep=" & CStr(n) & "/" & CStr(n2) & "/" & CStr(c1 = "新页4")
+    ' 删的就是当前页：顶上来那一页就地接管选中（VB6 的“删后选其下一位”）
+    TabStrip1.Tabs.Remove 2
+    n = TabStrip1.Tabs.Count
+    n2 = TabStrip1.SelectedItem.Index
+    Debug.Print "TS17-rmcur=" & CStr(n) & "/" & CStr(n2)
 
     ' Tabs.Clear：清空后 Count=0、SelectedItem.Index 回 0（VB6 的“无选中”）。
     TabStrip1.Tabs.Clear

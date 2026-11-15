@@ -253,6 +253,11 @@ void vb6_TabStrip_TabsRemove(void* hwnd, int32_t idx1) {
     t->count--;
     if (t->cap[t->count]) { /* 末位已随上移搬走，清指针避免二次释放 */ }
     t->cap[t->count] = NULL; t->key[t->count] = NULL; t->tip[t->count] = NULL; t->image[t->count] = -1;
+    // C30-2 修：删掉的页在**当前选中页之前**时，选中项要跟着往前顶一格，否则用户手上
+    // 那一页会“跳”到下一项（实测：3 页里选中第 3 页，删第 1 页后旧代码把第 3 页变成第 2 页
+    // 却仍然选中第 2 个下标 → 选中项换人）。删的就是当前页时**不动下标**：顶上来那一页
+    // 就地接管选中（＝ VB6 的“删除后选其下一位”）；删的是末页则钳到新的末项。
+    if (at < t->cur) t->cur--;
     if (t->cur >= t->count) t->cur = t->count - 1;
     tsRepopulate(t);
 }
@@ -289,6 +294,33 @@ void* vb6_TabStrip_GetTabKey(void* hwnd, int32_t idx1) {
     int i = idx1 - 1;
     if (!t || i < 0 || i >= t->count) return (void*)vb6_BSTR_Empty();
     return (void*)vb6_BSTR_FromStr(t->key[i] ? t->key[i] : L"");
+}
+
+// C30-2: Tabs(i).Key 写 / Tabs(i).Image 读写（VB6 的 Key 空串 = 无键；Image = ImageList 索引，
+// -1 = 无图标）。三枚都是“改自存 + 重灌原生项”，不回写控件自己（原生 tab 没有 Key 概念）。
+void vb6_TabStrip_SetTabKey(void* hwnd, int32_t idx1, void* bstr) {
+    Vb6TabStrip* t = tsFind(hwnd);
+    int i = idx1 - 1;
+    const wchar_t* s = (const wchar_t*)bstr;
+    if (!t || i < 0 || i >= t->count) return;
+    free(t->key[i]);
+    t->key[i] = (s && s[0]) ? tsWcsDup(s) : NULL;
+    tsRepopulate(t);
+}
+
+int32_t vb6_TabStrip_GetTabImage(void* hwnd, int32_t idx1) {
+    Vb6TabStrip* t = tsFind(hwnd);
+    int i = idx1 - 1;
+    if (!t || i < 0 || i >= t->count) return -1;
+    return t->image[i];
+}
+
+void vb6_TabStrip_SetTabImage(void* hwnd, int32_t idx1, int32_t iImage) {
+    Vb6TabStrip* t = tsFind(hwnd);
+    int i = idx1 - 1;
+    if (!t || i < 0 || i >= t->count) return;
+    t->image[i] = (iImage >= 0) ? iImage : -1;
+    tsRepopulate(t);
 }
 
 int32_t vb6_TabStrip_GetTabIndexByKey(void* hwnd, void* keyBstr) {

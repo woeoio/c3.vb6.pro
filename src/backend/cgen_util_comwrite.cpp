@@ -17,6 +17,70 @@ namespace vb6c3 {
 // (vb6_ComCallObject = ComCall+UnpackObject), 对最外层用 vb6_ComSetPropArg.
 // AssignmentStmt/SetStmt 共用.
 // ============================================================
+// C30-2: TabStrip 集合链的**写**侧（`Tabs(i).Caption = …` / `.Key` / `.Image` / `.Selected` /
+// `SelectedItem.Index = n`）。
+// 改前这五形全部落 `vb6_ComSetProp(vb6_ComCallObject(…), L"Caption", …)` —— 拿 HWND
+// 当 IDispatch，编得过、写进去一声不响（实测 .build/probe/p3 的发码基线）。
+// 两条 AssignmentStmt / SetStmt 码头各调一道（顺序：在本函数前排不掉的那几条链写之后）。
+bool CCodeGen::tryEmitTabStripChainWrite(Expr* targetNode, Expr* valueNode) {
+    TabChainView v;
+    if (!tabStripChainViewOf(targetNode, v)) return false;
+    if (!valueNode) return false;
+    const std::string hwnd = "vb6_hwnd_" + cIdent(v.ctrl);
+
+    // 值先算（VB6 先求右值；与既有 COM 写一致）
+    emitExpr(*valueNode);
+    const std::string val = lastExpr_;
+    const std::string sel = "vb6_TabStrip_GetSelectedIndex((void*)" + hwnd + ")";
+
+    if (v.sub == "selecteditem") {
+        if (v.member == "index") {
+            c_.emitLine("vb6_TabStrip_SetSelectedIndex((void*)" + hwnd + ", (int32_t)(" + val + "));"
+                        "  /* TabStrip.SelectedItem.Index */");
+            return true;
+        }
+        // SelectedItem.Caption / .Key 写 = 改当前选中那一页的标题/键
+        if (v.member == "caption" || v.member == "key") {
+            c_.emitLine(std::string(v.member == "caption" ? "vb6_TabStrip_SetTabCaption"
+                                                           : "vb6_TabStrip_SetTabKey")
+                        + "((void*)" + hwnd + ", " + sel + ", (void*)(" + val + "));"
+                          "  /* TabStrip.SelectedItem." + v.member + " */");
+            return true;
+        }
+        return false;
+    }
+    if (!v.idxArg) return false;
+    emitExpr(*v.idxArg);
+    const std::string arg = lastExpr_;
+    const std::string idx = (inferExprType(*v.idxArg) == Vb6Type::String)
+        ? ("vb6_TabStrip_GetTabIndexByKey((void*)" + hwnd + ", (void*)(" + arg + "))")
+        : ("((int32_t)(" + arg + "))");
+
+    if (v.member == "caption") {
+        c_.emitLine("vb6_TabStrip_SetTabCaption((void*)" + hwnd + ", " + idx
+                    + ", (void*)(" + val + "));  /* TabStrip.Tabs(i).Caption */");
+        return true;
+    }
+    if (v.member == "key") {
+        c_.emitLine("vb6_TabStrip_SetTabKey((void*)" + hwnd + ", " + idx
+                    + ", (void*)(" + val + "));  /* TabStrip.Tabs(i).Key */");
+        return true;
+    }
+    if (v.member == "image") {
+        c_.emitLine("vb6_TabStrip_SetTabImage((void*)" + hwnd + ", " + idx
+                    + ", (int32_t)(" + val + "));  /* TabStrip.Tabs(i).Image */");
+        return true;
+    }
+    if (v.member == "selected") {
+        // True → 选中该页。False **不发**：VB6 的 TabStrip 没有“全不选”这个状态，
+        // 照 TCM_SETCURSEL(-1) 写会让原生控件清掉选中，比 VB6 多出一个可观测差异。
+        c_.emitLine("if ((" + val + ") != 0) vb6_TabStrip_SetSelectedIndex((void*)" + hwnd
+                    + ", " + idx + ");  /* Tabs(i).Selected = True */");
+        return true;
+    }
+    return false;
+}
+
 bool CCodeGen::tryEmitChainedComWrite(Expr* targetNode, Expr* valueNode) {
     std::vector<IndexOrCallExpr*> chain;
     Expr* cur = targetNode;

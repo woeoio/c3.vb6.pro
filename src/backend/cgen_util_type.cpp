@@ -414,6 +414,20 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
         }
         case ASTNodeKind::MemberAccessExpr: {
             auto& ma = static_cast<MemberAccessExpr&>(expr);
+            // C30-2: TabStrip 集合链的类型 —— 必须排在下面所有分支之前。
+            // 为什么要紧：`CStr(TabStrip1.Tabs.Count)` 这形若判成 Unknown/Variant,
+            // 发码就套 `vb6_CStr(vb6_VariantFromValue(void*))` ⇒ 真跑打**空**（实测改前
+            // `"cap=" & Tabs(n).Caption` 就是这么空的）。
+            // 与读/写侧共用 tabStripChainViewOf 这一条判形，不另开名单。
+            {
+                TabChainView tvTs;
+                if (tabStripChainViewOf(&expr, tvTs)) {
+                    if (tvTs.sub == "tabs" && tvTs.member == "count") return Vb6Type::Long;
+                    if (tvTs.member == "index" || tvTs.member == "image") return Vb6Type::Long;
+                    if (tvTs.member == "caption" || tvTs.member == "key") return Vb6Type::String;
+                    if (tvTs.member == "selected") return Vb6Type::Boolean;
+                }
+            }
             // C29-1a + P20-42 + 账 #229 + 账 #231: 对象是窗体上的已知控件 (单枚**或**数组
             // 元素) 时, 属性类型**只问 controlPropType 这一张表**。
             // 为什么必须问在这条 case 的**最前面**: 兜底那条 lookupModule(memberName) 按成员

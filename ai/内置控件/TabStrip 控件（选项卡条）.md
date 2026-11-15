@@ -74,9 +74,12 @@ End Sub
 ### 6.2 支持面（1 基，与 VB6 一致）
 
 - 方法：`Tabs.Add [index], [key], [caption], [image]`（四位全可选，省略位按位置对齐）、`Tabs.Remove n|key`、`Tabs.Clear`
-- 读：`Tabs.Count`、`Tabs(i).Caption` / `.Key` / `.Index`、`SelectedItem.Index`
+- 读：`Tabs.Count`、`Tabs(i).Caption` / `.Key` / `.Index` / `.Image` / `.Selected`、`SelectedItem.Index` / `.Caption` / `.Key`
+- 写：`Tabs(i).Caption` / `.Key` / `.Image`、`Tabs(i).Selected = True`、`SelectedItem.Index = n`、`SelectedItem.Caption` / `.Key`
 - 属性：`MultiRow` / `HotTracking` / `ShowTips`（创建时进样式位）、`ClientLeft/Top/Width/Height`（页区矩形）、通用几何与 `Visible/Enabled`
 - 事件：`Click`（走通用控件子类的 `WM_LBUTTONUP`，与“点了一下”的 VB6 语义同）
+
+这些链式成员**在哪里都同样可用**：赋值右值、`CStr(...)` 之类内建函数实参、子过程/函数实参、`Debug.Print` 实参、`If` 比较项。形状认在 AST 上（`tabStripChainViewOf`，只认登记表里类型为 TabStrip 的控件），读 / 写 / 类型推断三面共用这一条判形 —— 不再存在“某种写法能跑、另一种不行”。
 
 ### 6.3 两处必须知道的实现口径
 
@@ -91,8 +94,13 @@ End Sub
 TS1-tabs=3        TS2-sel=1         TS3-cap=True/True/True   TS3-len=2/2/2
 TS4-key=k1        TS5-add=4/True    TS6-rm=3/True/True       TS7-type=Long/String
 TS8-client=300x176                  TS9-flags=False/True/True
+TS11-arg=3/1      TS12-sub=1        TS13-wcap=True/True/0
+TS14-wsel=2/2     TS15-selset=1     TS16-rmkeep=2/2/True     TS17-rmcur=1/1
 TS10-clear=0/0    TABSTRIP-DONE
 ```
+
+TS11 / TS12 就是“VB 原样写法”那两形（`CStr(TabStrip1.Tabs.Count)`、`ShowIdx TabStrip1.SelectedItem.Index`），
+TS13–TS17 是写侧与 `Remove` 语义；夹具本身不再用“先落局部变量”那种绕行写法。
 
 手动样例 `tools/tabstrip_manual`（真鼠标消息，`.build/probe/verify_tab.ps1`）：
 
@@ -106,8 +114,13 @@ T4 删当前页 : tabs=3  sel=1  cap=视图  clicks=3
 RESULT: 正常关闭 exit=0
 ```
 
+`frmTab.frm` 现在是**纯 VB6 教科书写法**（`ShowPage TabStrip1.SelectedItem.Index`、
+`CStr(TabStrip1.Tabs.Count)`、`CStr(TabStrip1.SelectedItem.Index)`、`TabStrip1.Tabs(n).Caption`），
+不再有任何“先落局部变量”的绕行。
+
 ### 6.5 已知缺口（写在这里，不装看不见）
 
-1. **链式读直接当内建函数实参**：`CStr(TabStrip1.SelectedItem.Index)` / `CStr(TabStrip1.Tabs.Count)` / `ShowPage TabStrip1.SelectedItem.Index` 这一形仍会折成 COM 晚绑定 ⇒ 真跑 438。先落到同型局部变量再喂（`Dim n As Long : n = TabStrip1.Tabs.Count`）就没事。为什么只修到这一层：`controlPropType` 认的是“控件.属性”一形，**不吃** `Tabs(i).Caption` 这种两跳成员；补它要在类型推断里加一层集合元素类型，是独立一刀。
-2. **`Tabs(i).Selected` / `SelectedItem.Index = n` 未支持**（改选中项目前只能用户点，或 RTL 侧 `vb6_TabStrip_SetSelectedIndex`）。
-3. **`Tabs.Remove` 之后选中项落在原序号上**（删掉第 3 页后，原第 4 页顶到第 3 位并被选中）。VB6 的行为未与本机逐格比对，先按“保序号 + 钳到有效区”实现，写在这里备查。
+1. **控件数组元素上的链式访问**（`TabsArr(0).Tabs(1).Caption`）仍走旧路：句柄不是标量槽，`tabStripChainViewOf` 显式回 false。单枚控件实例（正常用法）全部支持。
+2. **`Tabs(i).Selected = False` 不发码**：VB6 的 TabStrip 没有“全不选”状态，照 `TCM_SETCURSEL(-1)` 写会让原生控件清掉选中，反而比 VB6 多出可观测差异。`= True` 正常选中。
+3. **`Tabs.Remove` 之后的选中项**：删前面的页时保持“同一页仍选中”（序号自动前移），删当前页时顶上来那一页接管选中（等同 VB6 “选其下一位”），末页被删则钳到新的末项。已由 TS16/TS17 钉住。
+4. **`Tabs(i).ToolTipText` 尚未开**（RTL 侧有 `tip[]` 槽位，但没有读写出口与发码表项）。

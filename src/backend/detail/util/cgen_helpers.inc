@@ -1541,6 +1541,35 @@
     // AssignmentStmt/SetStmt 均调用 (090ae: SetStmt 原先缺失该分支 → LHS 被
     // emitExpr 生成值语义 vb6_VariantFromComResult(...) = ... → C2440).
     // 返回值: 若已识别并 emit, 返回 true; 否则 false (让调用者继续 fallback).
+    // ---- C30-2: TabStrip 集合链的**唯一判形**（读 / 写 / 类型三面共用）----
+    //
+    // 为什么要一个判形而不是三处各写一遍：读侧有三个互不相干的消费面
+    // （赋值语句 → resolveComValue、拼串/比较 → resolveComMarkerForPack、
+    //  内建函数与子过程实参 → 谁也不经过），写侧又与这三面无关，类型推断还得
+    // 单独答题。实测改前：`CStr(TabStrip1.SelectedItem.Index)` 与
+    // `ShowPage TabStrip1.SelectedItem.Index` 这两形一条 resolver 都不经过，直接
+    // 发成 `vb6_ComGetProp(vb6_ComGetObjectProp(hwnd, L"SelectedItem"), L"Index")`
+    // ⇒ Run-time error 438；写侧五形全部落 `vb6_ComSetProp(…)`（假 IDispatch，静默无效）。
+    // 把形状认在 AST 上、只认一张表（knownFormControls_ 里登记为 TabStrip 的控件）
+    // ⇒ 三面不可能给出两个答案。
+    //
+    // 认形范围：
+    //   <ctrl>.Tabs.<m>          (sub="tabs", idxArg=nullptr, 只认 m=count)
+    //   <ctrl>.Tabs(a).<m>       (sub="tabs", idxArg=a)
+    //   <ctrl>.SelectedItem.<m>  (sub="selecteditem")
+    // 不认：控件数组元素（`TabsArr(0).Tabs(1).Caption`）—— 句柄槽不是标量，交回旧路。
+    struct TabChainView {
+        std::string ctrl;       // 控件源码名（用于 cIdent 出 vb6_hwnd_<名>）
+        std::string sub;        // "tabs" / "selecteditem"
+        std::string member;     // 末尾成员（小写）
+        Expr* idxArg = nullptr; // Tabs 的下标实参（可空）
+    };
+    bool tabStripChainViewOf(const Expr* nodeExpr, TabChainView& v) const;
+    // 读：命中返回 true 并给出发码文本（已经是 RTL 调用，不再带 COM 标记）。
+    bool tabStripChainReadExpr(const Expr* nodeExpr, std::string& out);
+    // 写：命中就当场 emit 并返回 true（调用方 return）。
+    bool tryEmitTabStripChainWrite(Expr* targetNode, Expr* valueNode);
+
     bool tryEmitChainedComWrite(Expr* targetNode, Expr* valueNode);
 
     // Fix 011r-1: 类实例成员调用解析辅助

@@ -45,18 +45,19 @@ RESULT: 正常关闭 exit=0
    是相对 TagStrip 的页区矩形，不是整窗；`TabStrip` **不是容器**，页内容是自己摆上去的。
 3. `clicks=` 每点一次 +1（`Click` 从通用子类来）。
 
-## 写法上的硬约束（别改回去）
+## 写法（不再是限制，是判据）
 
-凡是链式读要**当内建函数的实参**用，一律先落到同型局部变量：
+这份窗体现在故意写成 **VB6 教科书的原样语法**，一个变量中转都不用：
 
 ```vb
-Dim n As Long
-n = TabStrip1.Tabs.Count          ' ✅ 赋值形 → vb6_TabStrip_TabsCount(...)
-Debug.Print CStr(TabStrip1.Tabs.Count)   ' ❌ 仍走 COM 晚绑定，真跑 438
+lblInfo.Caption = "sel=" & CStr(TabStrip1.SelectedItem.Index) _
+                & "  cap=" & TabStrip1.Tabs(n).Caption
+ShowPage TabStrip1.SelectedItem.Index
 ```
 
-这一条与本目录的 `frmTab.frm` 头注释、`ai/内置控件/TabStrip 控件（选项卡条）.md §6.5` 是同一件事，
-缺口修好之后三处一起改。
+C30-2 收尾之前这两形会折成 COM 晚绑定（真跑 `Run-time error 438`），当时只能先落局部变量；
+现在形状认在 AST 上（`tabStripChainViewOf`），读 / 写 / 类型三面同一条，所以这里写回原样。
+README 旧版那条“先落变量”的约束已作废。
 
 ## 文件
 

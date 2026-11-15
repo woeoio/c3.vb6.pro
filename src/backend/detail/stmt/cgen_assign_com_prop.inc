@@ -2,6 +2,12 @@
 // 由 src/backend/stmt/cgen_assign.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 829~1055 行，逐行未改。
 
+    // C30-2: TabStrip 集合链写（`Tabs(i).Caption/Key/Image/Selected`、`SelectedItem.Index`）。
+    // 必须排在 tryEmitChainedComWrite 之前：那一枚只认“根是 COM 变量”的默认成员链，
+    // 控件根它直接回 false，于是落下面那条通用臂 → `vb6_ComSetProp(vb6_ComCallObject(…))`。
+    if (tryEmitTabStripChainWrite(node.target.get(), node.value.get())) {
+        return;
+    }
     // ---- P25b: 链式 COM 默认属性索引赋值 ---- (实现提取为
     // tryEmitChainedComWrite, 090ae; AssignmentStmt/SetStmt 共用)
     if (tryEmitChainedComWrite(node.target.get(), node.value.get())) {
