@@ -31,6 +31,9 @@ Attribute VB_Exposed = False
 Private Sub Form_Load()
     Debug.Print "TC-BUILTIN-START"
     Debug.Print "TC-WIDTH=" & TChart1.Width
+    TChart1.AddSeries 5
+    TChart1.Series(0).FillSampleValues 4
+    Debug.Print "TC-SERIES=" & TChart1.SeriesCount
 End Sub
 
 Private Sub Timer1_Timer()
