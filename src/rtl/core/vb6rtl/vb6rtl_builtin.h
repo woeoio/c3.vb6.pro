@@ -281,6 +281,9 @@ double vb6_Pow(double base, double exp);
 void* vb6_NewObject(const wchar_t* className);
 int32_t vb6_TypeOf(void* obj, const wchar_t* typeName);
 void* vb6_DictAccess(void* obj, const wchar_t* key);
+// C30-7: `rst!Field = v`（Recordset 字段写）。vb6_DictAccess 是读侧糖，函数调用
+// 不是左值，赋值必须另走这里（否则 C2106）。实现见 vb6rtl_conv.c。
+void vb6_DictAssign(void* obj, const wchar_t* key, void* value);
 
 // 字符串函数 (补充)
 BSTR vb6_Replace(BSTR expr, BSTR find, BSTR rep, int32_t start, int32_t count, int32_t compare);

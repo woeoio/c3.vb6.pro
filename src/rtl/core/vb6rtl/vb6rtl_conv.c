@@ -40,6 +40,9 @@ extern void* vb6_GetObject(const wchar_t* pathName, const wchar_t* progId);
 extern int32_t vb6_IsNothing(void* obj);
 extern void vb6_ReleaseObject(void** objPtr);
 extern void* vb6_ComCall(void* disp, const wchar_t* methodName, void* args, int32_t argc);
+extern void* vb6_ComCallObject(void* disp, const wchar_t* methodName, void* args, int32_t argc);
+extern void* vb6_ComGetObjectProp(void* disp, const wchar_t* propName);
+extern void* vb6_ComPackBSTR(const wchar_t* bstr);
 extern void* vb6_ComCallByDispid(void* disp, int32_t dispid, void* args, int32_t argc);
 extern void* vb6_ComGetProp(void* disp, const wchar_t* propName);
 extern void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value);
@@ -686,6 +689,37 @@ int32_t vb6_TypeOf(void* obj, const wchar_t* typeName) {
 void* vb6_DictAccess(void* obj, const wchar_t* key) {
     (void)obj; (void)key;
     return NULL;
+}
+
+// ============================================================
+// C30-7: `rst!Field = value` —— Recordset 字段写
+//
+// VB6 里 `obj!Name` 是「默认成员按名取值」的糖；对 ADODB.Recordset 就是
+//     rst!F  ≡  rst.Fields("F")  ≡  rst.Fields("F").Value
+// 之前 cgen 把 **赋值目标** 也发成 vb6_DictAccess(obj, L"F") = value ——
+// 函数调用不是左值，C2106 直接编不过。真实例程实测：
+//   D:\vb_yqt4qPac\数据库\财务接口程序源码\...\diskinterface.vbp
+//   78 个 C 错误里 51 个是这条（diskinport.c:471-477,481-483,493-495,503-505,
+//   515,542-552 …，全部形如 `vb6_DictAccess(rst2, L"ND") = …`）。
+//
+// value 进来时已经是 cgen 的 packed 形态（vb6_ComPackInt / PackBSTR / …），
+// 与 vb6_ComSetProp 的第三个参数同一口径，直接往下传。
+//
+// 注：**读侧** vb6_DictAccess 仍是空实现（返回 NULL）—— 真实例程读字段
+// 几乎都写 rst.Fields("F").Value（那条已经是正确的 COM 链），所以读侧
+// `x = rst!F` 的语义留作挂账，不在这一刀里改（改它要连带动 cgen 的类型推断）。
+// ============================================================
+void vb6_DictAssign(void* obj, const wchar_t* key, void* value) {
+    void* fields;
+    void* field;
+    void* args[1];
+    if (!obj || !key) return;
+    fields = vb6_ComGetObjectProp(obj, L"Fields");
+    if (!fields) return;
+    args[0] = vb6_ComPackBSTR(key);
+    field = vb6_ComCallObject(fields, L"Item", args, 1);
+    if (!field) return;
+    vb6_ComSetProp(field, L"Value", value);
 }
 
 // ============================================================

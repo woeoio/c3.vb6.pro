@@ -442,6 +442,29 @@
         }
     }
 
+    // ============================================================
+    // C30-7: `rst!Field = value` —— Recordset 字段写。
+    // DictionaryAccessExpr 的 emit 只产出 vb6_DictAccess(obj, L"F")，那是**函数调用**，
+    // 后面拼上 " = ...;" 必然 C2106（左值要求）。真实例程实测：
+    //   D:\vb_yqt4qPac\数据库\财务接口程序源码\…\diskinterface.vbp
+    //   78 个 C 错误里 51 个是这条。VB6 语义是 rst.Fields("F").Value = v，
+    // 故改发 RTL 的 vb6_DictAssign（内部 Fields→Item→SetProp("Value")）。
+    // ============================================================
+    if (node.target && node.target->kind == ASTNodeKind::DictionaryAccessExpr && node.value) {
+        auto& daC307 = static_cast<DictionaryAccessExpr&>(*node.target);
+        // comPackExpr 必须在 emitExpr 之前求（它会消费/依赖部分 cgen 状态）
+        std::string packC307 = comPackExpr(*node.value);
+        emitExpr(*daC307.object);
+        std::string objC307 = std::move(lastExpr_);
+        emitExpr(*node.value);
+        std::string valC307 = std::move(lastExpr_);
+        valC307 = comMarkerValueForWrite(packC307, valC307);
+        valC307 = comUnpackForPack(packC307, valC307);
+        c_.emitLine("vb6_DictAssign(" + objC307 + ", L\"" + escapeWideCString(daC307.key)
+                    + "\", " + packC307 + "(" + valC307 + "));  /* Recordset !Field write */");
+        return;
+    }
+
     // Fix 170: 目标是 VB6 **整体数组** (`A() = expr`, 空括号) —— emit 期间置
     // wholeArrayLvalue_, 让 IndexOrCallExpr 发数组载体 (vb6_SafeArray1D*) 而不是
     // VB6_SA_AT(elem, A, 0)。值语义侧用 tgtIsWholeArray170 决定右侧是否需要深拷贝。
