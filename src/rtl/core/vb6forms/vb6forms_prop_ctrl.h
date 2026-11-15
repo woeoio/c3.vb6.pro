@@ -882,6 +882,25 @@ int32_t     vb6_MsComm_GetCDHolding(void* hwnd);
 int32_t     vb6_MsComm_GetTxTotal(void* hwnd);
 int32_t     vb6_MsComm_GetRxTotal(void* hwnd);
 
+// ---- C3 扩展：超时 / 任意设备名 / 信号线运行期控制 / 端口枚举 / 二进制（C30-4b）----
+// 这五组 VB6 都没有，恰好是"现代设备"最常要的几件。口径：能真下发就真下发，
+// 下不了（或 Settings 解析不了）就**首次上升为失败**，不静默吞。
+int32_t     vb6_MsComm_GetReadIntervalTimeout(void* hwnd);   // 帧间隙（ms），默认 50
+void        vb6_MsComm_SetReadIntervalTimeout(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetReadTotalTimeout(void* hwnd);      // 一次读的总上限（ms），默认 0
+void        vb6_MsComm_SetReadTotalTimeout(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetWriteTimeout(void* hwnd);          // 写超时（ms），默认 2000
+void        vb6_MsComm_SetWriteTimeout(void* hwnd, int32_t v);
+const void* vb6_MsComm_GetCommDevice(void* hwnd);            // BSTR；空 = 按 CommPort 拼 \\.\COM<n>
+void        vb6_MsComm_SetCommDevice(void* hwnd, const void* bstr);
+void        vb6_MsComm_SetBreak(void* hwnd, int32_t on);     // BREAK 电位（C3 扩展）
+int32_t     vb6_MsComm_SetDTRLine(void* hwnd, int32_t on);   // 运行期拉 DTR，返回是否发下去了
+int32_t     vb6_MsComm_SetRTSLine(void* hwnd, int32_t on);
+int32_t     vb6_MsComm_PortCount(void* hwnd);                // 枚举到的 COM 设备条数
+const void* vb6_MsComm_GetPortList(void* hwnd);              // BSTR "COM1;COM3;…"
+const void* vb6_MsComm_GetInputBytes(void* hwnd);            // BSTR，每字节一个字符（0..255）
+void        vb6_MsComm_SetOutputBytes(void* hwnd, const void* bstr);
+
 void  vb6_RegisterWinsockClass(void* hInstance);
 void* vb6_Ws_Create(void* hwnd);                      // 把身份窗认进实例表
 void  vb6_Ws_Destroy(void* hwnd);

@@ -84,6 +84,8 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
     // 没登记的症状与 MaskEdBox 同型：`s = MSComm1.Input` 被当 Variant 装箱成空串。
     if (ctrlType == FrmControlType::MSComm) {
         if (p == "settings" || p == "input") return Vb6Type::String;
+        // C30-4b：C3 扩展里的字符串那几档（PortList / CommDevice / InputBytes）
+        if (p == "commdevice" || p == "portlist" || p == "inputbytes") return Vb6Type::String;
         if (p == "portopen" || p == "dtrenable" || p == "rtsenable" || p == "eofenable"
             || p == "ctsholding" || p == "dsrholding" || p == "cdholding") return Vb6Type::Boolean;
         if (p == "commport" || p == "inputmode" || p == "inputlen"
@@ -91,7 +93,9 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
             || p == "inbuffersize" || p == "outbuffersize"
             || p == "rthreshold" || p == "sthreshold" || p == "handshaking"
             || p == "commevent"
-            || p == "txtotal" || p == "rxtotal") return Vb6Type::Long;
+            || p == "txtotal" || p == "rxtotal"
+            || p == "portcount" || p == "readintervaltimeout"
+            || p == "readtotaltimeout" || p == "writetimeout") return Vb6Type::Long;
     }
     // C30-2: TabStrip 的标量面。四个 Client* 与三条行为位的 RTL getter 都是 int32_t;
     // MultiRow/HotTracking/ShowTips 在 VB6 那边是 Boolean。
@@ -638,6 +642,14 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         // C3 扩展（不是 VB6 属性）：夹具证人 —— 真写/真收了多少字节。
         if (propLower == "txtotal")       return "vb6_MsComm_GetTxTotal";
         if (propLower == "rxtotal")       return "vb6_MsComm_GetRxTotal";
+        // C30-4b：超时 / 任意设备名 / 端口枚举 / 二进制（VB6 没有的几件）
+        if (propLower == "commdevice")    return "vb6_MsComm_GetCommDevice";
+        if (propLower == "readintervaltimeout") return "vb6_MsComm_GetReadIntervalTimeout";
+        if (propLower == "readtotaltimeout")    return "vb6_MsComm_GetReadTotalTimeout";
+        if (propLower == "writetimeout")   return "vb6_MsComm_GetWriteTimeout";
+        if (propLower == "portcount")      return "vb6_MsComm_PortCount";
+        if (propLower == "portlist")       return "vb6_MsComm_GetPortList";
+        if (propLower == "inputbytes")     return "vb6_MsComm_GetInputBytes";
         break;
     case FrmControlType::Data:  // C29-Data: ODBC 后端
         if (propLower == "recordset")    return "vb6_Data_RecordsetObj";  /* 真 IDispatch, 链走晚绑定 */
@@ -1138,6 +1150,12 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
         if (propLower == "dtrenable")     return "vb6_MsComm_SetDTREnable";
         if (propLower == "rtsenable")     return "vb6_MsComm_SetRTSEnable";
         if (propLower == "eofenable")     return "vb6_MsComm_SetEOFEnable";
+        // C30-4b：超时 / 设备名 / 二进制写
+        if (propLower == "commdevice")    return "vb6_MsComm_SetCommDevice";
+        if (propLower == "readintervaltimeout") return "vb6_MsComm_SetReadIntervalTimeout";
+        if (propLower == "readtotaltimeout")    return "vb6_MsComm_SetReadTotalTimeout";
+        if (propLower == "writetimeout")   return "vb6_MsComm_SetWriteTimeout";
+        if (propLower == "outputbytes")    return "vb6_MsComm_SetOutputBytes";
         break;
     case FrmControlType::Data:  // C29-Data 写表 (三属性先存后 Refresh 用)
         if (propLower == "databasename") return "vb6_Data_SetDatabaseName";

@@ -7809,6 +7809,14 @@ if ($Category -in @("all", "run", "vbp")) {
         'MC7-close=False',            # PortOpen=False 真关
         'MC8-reopen=True',            # 关掉再开：句柄/线程没漏
         'MC9-tx2=5',                  # 累计：2 + 3 = 5
+        # C30-4b 五项扩展：超时 / 任意设备名 / 端口枚举 / 二进制 / 运行期信号线
+        'MC10-close2=False',          # 改设备名前先关（开着改无效，与 CommPort 同口径）
+        'MC11-dev=True',              # CommDevice 属性往返（不经环境变量钩子）
+        'MC12-reopen=True|True',      # 用 CommDevice 重开；PortCount 不炸
+        'MC13-to=20|2000',            # ReadIntervalTimeout 往返；WriteTimeout 默认值
+        'MC14-bin=8',                  # OutputBytes 每字节一个字符：5 + 3
+        'MC15-inb=0',                  # InputBytes 空缓冲 → 空串
+        'MC16-ports=True',            # PortList 形状（空串或以 COM 开头）
         'MS-DONE')
     $env:C3_MSCOMM_DEVICE = '\.\NUL'
     try {

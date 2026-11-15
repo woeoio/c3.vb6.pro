@@ -74,11 +74,13 @@ struct vb6_MsComm {
     HWND      hwnd;                 // 身份窗；NULL = 空槽
     HANDLE    h;                    // 串口句柄（INVALID_HANDLE_VALUE = 关）
     HANDLE    th;                   // 读线程（同步 ReadFile，卡在里面等字节）
-    LONG      closing;              // 读线程退出旗（Interlocked）
+    HANDLE    thModem;              // 信号线/线路错误线程（WaitCommEvent）
+    LONG      closing;              // 两条线程共用的退出旗（Interlocked）
     CRITICAL_SECTION cs;            // 保护 rx 缓冲（读线程 append / 主线程 Input 取走）
     int       csReady;
 
-    int32_t   commPort;             // 1..16（VB6 口径），0 = 没写
+    int32_t   commPort;             // 1..16（VB6 口径），0 = 没写；**不钳 16**，COM100 也行
+    wchar_t   device[256];          // C3 扩展 CommDevice：任意设备名（\\\\.\\CNCA0 之类），空 = 按 CommPort 拼
     wchar_t   settings[64];         // 原样回读（VB6 的 Settings 就是"你写进来的那串"）
     int32_t   inputMode;            // 0 文本 / 1 二进制（本批只影响回读，见文件头）
     int32_t   inputLen;             // 0 = 一次读光
@@ -88,6 +90,9 @@ struct vb6_MsComm {
     int32_t   handshaking;
     int32_t   dtr, rts;
     int32_t   eofEnable;
+    // C3 扩展（VB6 没有超时属性）：三项超时 / 一个 BREAK 开关的存值。
+    // readInterval = -1 表示"没写过" ⇒ 打开时用默认 50ms。
+    int32_t   readInterval, readTotalConst, writeTimeout;
     int32_t   commEvent;            // 最近一次事件号（CommEvent 属性）
     int32_t   openOk;               // PortOpen
     int32_t   degraded;             // 打开成功但设备不认 DCB（NUL 那一类）
@@ -103,6 +108,8 @@ struct vb6_MsComm {
 
 static struct vb6_MsComm g_ms[VB6_MS_MAX];
 static LONG g_msCsGuard = 0;        // 0 未起 / 1 正在起 / 2 已起（每槽 cs 懒初始化）
+
+static DWORD WINAPI vb6_MsModemThread(LPVOID param);   // 定义在读线程之后（open 要先看见）
 
 static void vb6_MsEnsureCs(void) {
     int i;
@@ -136,6 +143,7 @@ static struct vb6_MsComm* vb6_MsSlot(HWND h) {
             // （懒初始化过的那把锁）一起抹掉，下一个 EnterCriticalSection 就死在未初始化上。
             s->h = INVALID_HANDLE_VALUE;
             s->th = NULL;
+            s->thModem = NULL;
             s->closing = 0;
             s->commPort = 0;
             s->inputMode = 0;
@@ -148,6 +156,10 @@ static struct vb6_MsComm* vb6_MsSlot(HWND h) {
             s->dtr = 0;
             s->rts = 0;
             s->eofEnable = 0;
+            s->readInterval = -1;
+            s->readTotalConst = -1;
+            s->writeTimeout = -1;
+            s->device[0] = 0;
             s->commEvent = 0;
             s->openOk = 0;
             s->degraded = 0;
@@ -231,12 +243,13 @@ static int32_t vb6_MsRxLen(struct vb6_MsComm* e) {
 // 通知到窗口：判 RThreshold 报 comEvReceive；EOF 那一档由读线程单独投一个负数哨兵。
 static void vb6_MsOnNotify(struct vb6_MsComm* e, LPARAM what) {
     if (!e) return;
-    if (what == -1) {                    // 读线程报的 EOF
-        if (e->eofEnable) vb6_MsFire(e, VB6_MS_EV_EOF);
-        return;
-    }
-    if (what < 0) {                      // 读错误：一律报 1008（comEventRxOver 那一档）
-        vb6_MsFire(e, VB6_MS_ERR_RXOVER);
+    if (what < 0) {
+        // 负数 = “某个事件号到了”（取反存）：-7 EOF / -3 CTS / -4 DSR / -5 CD /
+        // -1004 帧错 / -1006 超速 / -1008 收缓冲溢出 / -1009 校验错。
+        // 两张来源统一在这一格落：读线程（EOF / 读错误）与信号线线程（线路变化 / CE 错）。
+        int32_t code = (int32_t)(-what);
+        if (code == VB6_MS_EV_EOF && !e->eofEnable) return;   // EOFEnable=False 时不要这号
+        vb6_MsFire(e, code);
         return;
     }
     if (e->rThreshold > 0 && !e->rxSignaled && vb6_MsRxLen(e) >= e->rThreshold) {
@@ -267,7 +280,7 @@ static DWORD WINAPI vb6_MsReaderThread(LPVOID param) {
             // 0 字节 = 文件尾。真串口不会这样（同步读没数据是先超时再返回 0）；`\\.\NUL`
             // （夹具的降级设备）每次读到"文件尾"就是 0 字节 —— 报一次 EOF 就退出线程，
             // 不退会在 NUL 上空转成 100% CPU。
-            PostMessageW(e->hwnd, WM_MS_NOTIFY, 0, (LPARAM)-1);
+            PostMessageW(e->hwnd, WM_MS_NOTIFY, 0, (LPARAM)(-(intptr_t)VB6_MS_EV_EOF));
             break;
         }
         if (!vb6_MsRxAppend(e, buf, n)) {
@@ -275,6 +288,42 @@ static DWORD WINAPI vb6_MsReaderThread(LPVOID param) {
             break;
         }
         PostMessageW(e->hwnd, WM_MS_NOTIFY, 0, (LPARAM)(intptr_t)n);
+    }
+    return 0;
+}
+
+// 信号线变化 / 线路错误：WaitCommEvent 是阻塞的，所以单开一条线程（degraded 档不起）。
+// 关端口时主线程同样用 CancelSynchronousIo 叫醒它。NUL 这一类设备 SetCommMask 会失败
+// 或 WaitCommEvent 直接报错 ⇒ 歇 20ms 再来，不空转（夹具的降级路因此不会烧 CPU）。
+// CE_* → VB6 那几个错误号的映射：帧错 1004 / 超速 1006 / 收缓冲溢出 1008 / 校验错 1009。
+static DWORD WINAPI vb6_MsModemThread(LPVOID param) {
+    struct vb6_MsComm* e = (struct vb6_MsComm*)param;
+    if (!e) return 0;
+    SetCommMask(e->h, EV_CTS | EV_DSR | EV_RLSD | EV_ERR);
+    for (;;) {
+        DWORD got = 0;
+        if (InterlockedCompareExchange(&e->closing, 0, 0)) break;
+        if (!WaitCommEvent(e->h, &got, NULL)) {
+            DWORD err = GetLastError();
+            if (err == ERROR_OPERATION_ABORTED || err == ERROR_INVALID_HANDLE) break;
+            Sleep(20);
+            continue;
+        }
+        if (got & EV_CTS)  PostMessageW(e->hwnd, WM_MS_NOTIFY, 0, (LPARAM)(-(intptr_t)VB6_MS_EV_CTS));
+        if (got & EV_DSR)  PostMessageW(e->hwnd, WM_MS_NOTIFY, 0, (LPARAM)(-(intptr_t)VB6_MS_EV_DSR));
+        if (got & EV_RLSD) PostMessageW(e->hwnd, WM_MS_NOTIFY, 0, (LPARAM)(-(intptr_t)VB6_MS_EV_CD));
+        if (got & EV_ERR) {
+            DWORD errs = 0;
+            COMSTAT st;
+            int32_t code = 0;
+            if (ClearCommError(e->h, &errs, &st)) {
+                if (errs & CE_FRAME)         code = VB6_MS_ERR_FRAME;
+                else if (errs & CE_OVERRUN)  code = VB6_MS_ERR_OVERRUN;
+                else if (errs & CE_RXPARITY) code = VB6_MS_ERR_PARITY;
+                else if (errs & CE_RXOVER)   code = VB6_MS_ERR_RXOVER;
+            }
+            if (code) PostMessageW(e->hwnd, WM_MS_NOTIFY, 0, (LPARAM)(-(intptr_t)code));
+        }
     }
     return 0;
 }
@@ -290,6 +339,12 @@ static void vb6_MsClosePort(struct vb6_MsComm* e) {
         CloseHandle(e->th);
         e->th = NULL;
     }
+    if (e->thModem) {
+        CancelSynchronousIo(e->thModem);          // WaitCommEvent 同样要叫
+        WaitForSingleObject(e->thModem, 2000);
+        CloseHandle(e->thModem);
+        e->thModem = NULL;
+    }
     if (e->h != INVALID_HANDLE_VALUE && e->h) { CloseHandle(e->h); }
     e->h = INVALID_HANDLE_VALUE;
     e->openOk = 0;
@@ -297,24 +352,88 @@ static void vb6_MsClosePort(struct vb6_MsComm* e) {
     e->closing = 0;
 }
 
-// 打开：设备名 = C3_MSCOMM_DEVICE（夹具钩子）优先，否则 \\.\COM<CommPort>。
-// 返回 1 成功。DCB 那几步失败**不致命** —— NUL 那一类设备不认 DCB，但读写照走（降级档）。
+// Settings 解析："波特率,校验,数据位,停止位"（VB6 那一串）。返回 1 成功。
+// 为什么要自己拆而不用 BuildCommDCBW：那一条把**解析失败**吞成「返回 FALSE」，而它的
+// 高波特率（921600/1500000/3000000）在不同 SDK 版本上的接受度并不一致 —— 精度不够时
+// 就会让 DCB 停在 GetCommState 拿到的旧值（9600），形成一个**看着打开成功、实际跑错速度**
+// 的静默缺陷。这里自己拆、自己判，失败就硬失败（PortOpen=False）。
+static int vb6_MsParseSettings(const wchar_t* s, DCB* dcb) {
+    wchar_t buf[128];
+    wchar_t* ctx = NULL;
+    wchar_t* tok;
+    long baud;
+    int field = 0, databits = 8, stop = 0;
+    wchar_t parity = L'N';
+    if (!s || !*s || !dcb) return 0;
+    wcsncpy(buf, s, 127);
+    buf[127] = 0;
+    tok = wcstok(buf, L",", &ctx);
+    while (tok) {
+        // 去掉两侧空白（.frm 里常见 "9600, N, 8, 1"）
+        while (*tok == L' ' || *tok == L'\t') tok++;
+        { wchar_t* end = tok + wcslen(tok);
+          while (end > tok && (end[-1] == L' ' || end[-1] == L'\t')) *--end = 0; }
+        if (field == 0) {
+            wchar_t* endp = NULL;
+            baud = wcstol(tok, &endp, 10);
+            if (!endp || *endp || baud < 50 || baud > 12000000L) return 0;
+            dcb->BaudRate = (DWORD)baud;
+        } else if (field == 1) {
+            parity = (wchar_t)towupper(tok[0]);
+            if (!parity) return 0;
+        } else if (field == 2) {
+            databits = _wtoi(tok);
+            if (databits < 5 || databits > 8) return 0;
+        } else if (field == 3) {
+            if (wcscmp(tok, L"1") == 0) stop = 1;
+            else if (wcscmp(tok, L"1.5") == 0) stop = 2;
+            else if (wcscmp(tok, L"2") == 0) stop = 3;
+            else return 0;
+        }
+        field++;
+        tok = wcstok(NULL, L",", &ctx);
+    }
+    if (field < 4) return 0;
+    switch (parity) {
+    case L'N': dcb->Parity = NOPARITY;   dcb->fParity = FALSE; break;
+    case L'E': dcb->Parity = EVENPARITY; dcb->fParity = TRUE;  break;
+    case L'O': dcb->Parity = ODDPARITY;  dcb->fParity = TRUE;  break;
+    case L'M': dcb->Parity = MARKPARITY; dcb->fParity = TRUE;  break;
+    case L'S': dcb->Parity = SPACEPARITY; dcb->fParity = TRUE; break;
+    default: return 0;
+    }
+    dcb->ByteSize = (BYTE)databits;
+    dcb->StopBits = (stop == 1) ? ONESTOPBIT : (stop == 2 ? ONE5STOPBITS : TWOSTOPBITS);
+    dcb->fBinary = TRUE;
+    return 1;
+}
+
+// 打开：设备名 = CommDevice（C3 扩展）> C3_MSCOMM_DEVICE（夹具钩子）> \\.\COM<CommPort>。
+// 返回 1 成功。两种“不认 DCB”的情形分开处理：
+//   · GetCommState 失败 ⇒ 设备不是通讯设备（`\\.\NUL`、虚拟对的一半）⇒ **降级档**，读写照走；
+//   · GetCommState 成功但 Settings 解析/SetCommState 失败 ⇒ **硬失败**（关句柄、PortOpen=False），
+//     不再“PortOpen=True 但按旧 DCB 跑”那个静默错。
 static int vb6_MsOpenPort(struct vb6_MsComm* e) {
-    wchar_t dev[64];
-    wchar_t hook[64];
+    wchar_t dev[256];
+    wchar_t hook[256];
     HANDLE h;
     DCB dcb;
     COMMTIMEOUTS to;
     DWORD hookLen;
     if (!e) return 0;
     if (e->openOk) return 1;
-    hookLen = GetEnvironmentVariableW(L"C3_MSCOMM_DEVICE", hook, 64);
-    if (hookLen > 0 && hookLen < 64) {
-        wcscpy(dev, hook);
+    if (e->device[0]) {
+        wcsncpy(dev, e->device, 255);
+        dev[255] = 0;
     } else {
-        int port = e->commPort > 0 ? e->commPort : 1;
-        swprintf(dev, 64, L"\\\\.\\COM%d", port);
-        dev[63] = 0;
+        hookLen = GetEnvironmentVariableW(L"C3_MSCOMM_DEVICE", hook, 256);
+        if (hookLen > 0 && hookLen < 256) {
+            wcsncpy(dev, hook, 255);
+            dev[255] = 0;
+        } else {
+            int port = e->commPort > 0 ? e->commPort : 1;
+            swprintf(dev, 256, L"\\\\.\\COM%d", port);
+        }
     }
     h = CreateFileW(dev, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
                     FILE_ATTRIBUTE_NORMAL, NULL);
@@ -322,7 +441,12 @@ static int vb6_MsOpenPort(struct vb6_MsComm* e) {
     e->h = h;
     ZeroMemory(&dcb, sizeof(dcb));
     dcb.DCBlength = sizeof(dcb);
-    if (GetCommState(h, &dcb) && BuildCommDCBW(e->settings, &dcb)) {
+    e->degraded = 0;
+    if (GetCommState(h, &dcb)) {
+        if (!vb6_MsParseSettings(e->settings, &dcb)) {
+            CloseHandle(h); e->h = INVALID_HANDLE_VALUE;
+            return 0;                              // Settings 写错：硬失败，不再静默按旧 DCB 跑
+        }
         // Handshaking：0 无 / 1 XOnXOff / 2 RTS / 3 两者（VB6 那四个数）
         dcb.fOutxCtsFlow = (e->handshaking == 2 || e->handshaking == 3) ? TRUE : FALSE;
         dcb.fRtsControl = (e->handshaking == 2 || e->handshaking == 3)
@@ -330,22 +454,20 @@ static int vb6_MsOpenPort(struct vb6_MsComm* e) {
         dcb.fOutX = (e->handshaking == 1 || e->handshaking == 3) ? TRUE : FALSE;
         dcb.fInX  = (e->handshaking == 1 || e->handshaking == 3) ? TRUE : FALSE;
         dcb.fDtrControl = e->dtr ? DTR_CONTROL_ENABLE : DTR_CONTROL_DISABLE;
-        if (SetCommState(h, &dcb)) {
-            SetupComm(h, (DWORD)(e->inBufSize > 0 ? e->inBufSize : 1024),
-                          (DWORD)(e->outBufSize > 0 ? e->outBufSize : 512));
-        } else {
-            e->degraded = 1;
+        if (!SetCommState(h, &dcb)) {
+            CloseHandle(h); e->h = INVALID_HANDLE_VALUE;
+            return 0;                              // 设备不接这一档波特率：硬失败
         }
+        SetupComm(h, (DWORD)(e->inBufSize > 0 ? e->inBufSize : 1024),
+                      (DWORD)(e->outBufSize > 0 ? e->outBufSize : 512));
     } else {
         e->degraded = 1;               // NUL 这一类：不是通讯设备，DCB 问不出来
     }
     ZeroMemory(&to, sizeof(to));
-    // 同步读的"等数据但有上限"：间隔超时 50ms（新字节之间空这么久就返回），
-    // 总超时 0（不按总量截）—— 与 VB6 那套"到了就报"的行为对得上。
-    to.ReadIntervalTimeout = 50;
+    to.ReadIntervalTimeout = (DWORD)(e->readInterval >= 0 ? e->readInterval : 50);
     to.ReadTotalTimeoutMultiplier = 0;
-    to.ReadTotalTimeoutConstant = 0;
-    to.WriteTotalTimeoutConstant = 2000;
+    to.ReadTotalTimeoutConstant = (DWORD)(e->readTotalConst >= 0 ? e->readTotalConst : 0);
+    to.WriteTotalTimeoutConstant = (DWORD)(e->writeTimeout >= 0 ? e->writeTimeout : 2000);
     SetCommTimeouts(h, &to);            // 对 NUL 无效，无害
 
     InterlockedExchange(&e->closing, 0);
@@ -353,6 +475,11 @@ static int vb6_MsOpenPort(struct vb6_MsComm* e) {
     if (!e->th) {
         CloseHandle(h); e->h = INVALID_HANDLE_VALUE;
         return 0;
+    }
+    // 信号线变化事件那条线程（只在真串口上有意义；NUL 上 WaitCommEvent 会返回 FALSE
+    // 并歇下来，不空转 —— 见 vb6_MsModemThread 里的 Sleep）。
+    if (!e->degraded) {
+        e->thModem = CreateThread(NULL, 0, vb6_MsModemThread, e, 0, NULL);
     }
     e->openOk = 1;
     return 1;
@@ -517,11 +644,20 @@ void vb6_MsComm_SetInBufferCount(void* hwnd, int32_t v) {
     e->rxHead = e->rxLen = 0;
     e->rxSignaled = 0;
     LeaveCriticalSection(&e->cs);
+    // 驱动里那半也得倒：只清我们的缓冲，下一次 ReadFile 会把旧字节又读上来。
+    if (e->openOk && e->h != INVALID_HANDLE_VALUE) PurgeComm(e->h, PURGE_RXCLEAR);
 }
 
 int32_t vb6_MsComm_GetOutBufferCount(void* hwnd) {
-    (void)hwnd;
-    return 0;                              // 同步写 ⇒ 写完缓冲必空（与 VB6 观测一致）
+    // 同步写 ⇒ 我们这层没有队列，但**驱动里**可能还有没发完的（大块写 + 慢波特率）。
+    // 所以真去问 ClearCommError 的 cbOutQue，而不是恒答 0（那是“看不见”不是“没有”）。
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    COMSTAT st;
+    DWORD errs = 0;
+    if (!e || !e->openOk || e->h == INVALID_HANDLE_VALUE) return 0;
+    ZeroMemory(&st, sizeof(st));
+    if (!ClearCommError(e->h, &errs, &st)) return 0;
+    return (int32_t)st.cbOutQue;
 }
 
 void vb6_MsComm_SetOutBufferCount(void* hwnd, int32_t v) {
@@ -590,8 +726,12 @@ int32_t vb6_MsComm_GetDTREnable(void* hwnd) {
 
 void vb6_MsComm_SetDTREnable(void* hwnd, int32_t v) {
     struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
-    if (!e || e->openOk) return;
-    e->dtr = v;
+    if (!e) e = vb6_MsSlot((HWND)hwnd);
+    if (!e) return;
+    // 运行期生效（VB6 允许打开后改）：真串口直接拉线，降级设备只存值。
+    if (e->openOk && e->h != INVALID_HANDLE_VALUE && !e->degraded)
+        EscapeCommFunction(e->h, v ? SETDTR : CLRDTR);
+    e->dtr = v ? 1 : 0;
 }
 
 int32_t vb6_MsComm_GetRTSEnable(void* hwnd) {
@@ -601,8 +741,11 @@ int32_t vb6_MsComm_GetRTSEnable(void* hwnd) {
 
 void vb6_MsComm_SetRTSEnable(void* hwnd, int32_t v) {
     struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
-    if (!e || e->openOk) return;
-    e->rts = v;
+    if (!e) e = vb6_MsSlot((HWND)hwnd);
+    if (!e) return;
+    if (e->openOk && e->h != INVALID_HANDLE_VALUE && !e->degraded)
+        EscapeCommFunction(e->h, v ? SETRTS : CLRRTS);
+    e->rts = v ? 1 : 0;
 }
 
 int32_t vb6_MsComm_GetEOFEnable(void* hwnd) {
@@ -657,8 +800,185 @@ int32_t vb6_MsComm_GetRxTotal(void* hwnd) {
     return e ? e->rxTotal : 0;
 }
 
-#else  /* !_WIN32 */
+// ============================ C3 扩展：超时 / 设备名 / 信号线 / 枚举 / 二进制 ============================// 这五组都不是 VB6 的属性（VB6 的 MSComm 没有超时、没有枚举、没有 Break、没有二进制属性面），
+// 但它们恰好是“现代设备”最常要的几件：高波特率、USB CDC 的自定义设备名、帧间隙超时、
+// 用字节数组收发。口径一律：**能真下发就真下发，下不了就首次上升为失败，不静默吞**。
 
+static void vb6_MsApplyTimeouts(struct vb6_MsComm* e) {
+    COMMTIMEOUTS to;
+    if (!e || !e->openOk || e->h == INVALID_HANDLE_VALUE) return;
+    ZeroMemory(&to, sizeof(to));
+    to.ReadIntervalTimeout = (DWORD)(e->readInterval >= 0 ? e->readInterval : 50);
+    to.ReadTotalTimeoutMultiplier = 0;
+    to.ReadTotalTimeoutConstant = (DWORD)(e->readTotalConst >= 0 ? e->readTotalConst : 0);
+    to.WriteTotalTimeoutConstant = (DWORD)(e->writeTimeout >= 0 ? e->writeTimeout : 2000);
+    SetCommTimeouts(e->h, &to);
+}
+
+int32_t vb6_MsComm_GetReadIntervalTimeout(void* hwnd) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    return e ? (e->readInterval >= 0 ? e->readInterval : 50) : 50;
+}
+
+void vb6_MsComm_SetReadIntervalTimeout(void* hwnd, int32_t v) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    if (!e) e = vb6_MsSlot((HWND)hwnd);
+    if (!e) return;
+    e->readInterval = v < 0 ? 0 : v;      // 帧间隙：分帧协议把它当“一帧结束”的判据
+    vb6_MsApplyTimeouts(e);
+}
+
+int32_t vb6_MsComm_GetReadTotalTimeout(void* hwnd) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    return e ? (e->readTotalConst >= 0 ? e->readTotalConst : 0) : 0;
+}
+
+void vb6_MsComm_SetReadTotalTimeout(void* hwnd, int32_t v) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    if (!e) e = vb6_MsSlot((HWND)hwnd);
+    if (!e) return;
+    e->readTotalConst = v < 0 ? 0 : v;
+    vb6_MsApplyTimeouts(e);
+}
+
+int32_t vb6_MsComm_GetWriteTimeout(void* hwnd) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    return e ? (e->writeTimeout >= 0 ? e->writeTimeout : 2000) : 2000;
+}
+
+void vb6_MsComm_SetWriteTimeout(void* hwnd, int32_t v) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    if (!e) e = vb6_MsSlot((HWND)hwnd);
+    if (!e) return;
+    e->writeTimeout = v < 0 ? 0 : v;
+    vb6_MsApplyTimeouts(e);
+}
+
+// CommDevice：任意设备名（`\\.\CNCA0`、com0com 的 `\\.\CNCA0`、USB CDC 的 `\\.\COM120` 都行）。
+// 这就是“突破 MSComm 16 个端口限制”的正式口——CommPort 本身其实也没钳 16，但它只能表达“COM<n>”。
+const void* vb6_MsComm_GetCommDevice(void* hwnd) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    return SysAllocString(e ? e->device : L"");
+}
+
+void vb6_MsComm_SetCommDevice(void* hwnd, const void* bstr) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    const wchar_t* s = (const wchar_t*)bstr;
+    if (!e) e = vb6_MsSlot((HWND)hwnd);
+    if (!e || e->openOk) return;           // 开着改设备名与改 CommPort 同口径：先关
+    if (!s) { e->device[0] = 0; return; }
+    wcsncpy(e->device, s, 255);
+    e->device[255] = 0;
+}
+
+// BREAK 与两根信号线的**运行期**拉放（VB6 的 DTREnable/RTSEnable 只管打开那一刻）。
+void vb6_MsComm_SetBreak(void* hwnd, int32_t on) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    if (!e || !e->openOk || e->h == INVALID_HANDLE_VALUE || e->degraded) return;
+    EscapeCommFunction(e->h, on ? SETBREAK : CLRBREAK);
+}
+
+int32_t vb6_MsComm_SetDTRLine(void* hwnd, int32_t on) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    if (!e || !e->openOk || e->h == INVALID_HANDLE_VALUE || e->degraded) return 0;
+    e->dtr = on ? 1 : 0;
+    return EscapeCommFunction(e->h, on ? SETDTR : CLRDTR) ? 1 : 0;
+}
+
+int32_t vb6_MsComm_SetRTSLine(void* hwnd, int32_t on) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    if (!e || !e->openOk || e->h == INVALID_HANDLE_VALUE || e->degraded) return 0;
+    e->rts = on ? 1 : 0;
+    return EscapeCommFunction(e->h, on ? SETRTS : CLRRTS) ? 1 : 0;
+}
+
+// 端口枚举：QueryDosDeviceW(L"COM", …) 拿到的是双 NUL 结尾的多字符串
+// （"COM1\0COM3\0COM7\0\0"）—— 这台机器上**真实存在**的那些，不是注册表里的历史残留。
+// 友好名（"USB-SERIAL CH340 (COM7)"）需要 SetupDi 遍历，不在这一批（见文档 §5.5）。
+static DWORD vb6_MsEnumComPorts(wchar_t* buf, DWORD cch) {
+    DWORD n;
+    if (!buf || cch < 8) return 0;
+    n = QueryDosDeviceW(L"COM", buf, cch);
+    return n;                              // 0 = 失败（枚举不到任何 COM 设备也是 0）
+}
+
+int32_t vb6_MsComm_PortCount(void* hwnd) {
+    static wchar_t buf[16384];
+    DWORD n;
+    DWORD i = 0;
+    int32_t cnt = 0;
+    (void)hwnd;                            // 全局信息：接口形状统一成“控件成员读”才带这一参
+    n = vb6_MsEnumComPorts(buf, 16384);
+    while (i < n && buf[i]) {
+        cnt++;
+        i += (DWORD)wcslen(buf + i) + 1;
+    }
+    return cnt;
+}
+
+// PortList：`COM1;COM3;COM7`。VB6 侧没有枚举，所以这一形与 PortCount 都是 C3 扩展；
+// 用一条 BSTR 而不是 PortName(i) 是因为属性读写只能带一个 hwnd 实参（不支持下标）。
+const void* vb6_MsComm_GetPortList(void* hwnd) {
+    static wchar_t buf[16384];
+    wchar_t joined[16384];
+    DWORD n, i = 0;
+    int first = 1;
+    joined[0] = 0;
+    (void)hwnd;
+    n = vb6_MsEnumComPorts(buf, 16384);
+    while (i < n && buf[i]) {
+        if (!first) wcscat(joined, L";");
+        wcsncat(joined, buf + i, 16000);
+        first = 0;
+        i += (DWORD)wcslen(buf + i) + 1;
+    }
+    return SysAllocString(joined);
+}
+
+// 二进制收：**每字节一个字符**的 BSTR（码位 0..255，BSTR 长度前缀所以内嵌 NUL 也能装）。
+// 为什么不用 Byte() Variant：cgen 的属性面只支持标量/String 这一档，数组那一形要按目标类型
+// 分派（VB6 的 `v = .Input: b = v` 属于那条），本批先把“真字节不出错”落地 —— 取回后用
+// AscW(Mid$(s, i + 1, 1)) 就能还原每个字节（夹具里就是这么验的）。
+const void* vb6_MsComm_GetInputBytes(void* hwnd) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    BSTR res;
+    uint32_t take;
+    wchar_t* p;
+    uint32_t k;
+    if (!e || !e->csReady) return SysAllocString(L"");
+    EnterCriticalSection(&e->cs);
+    take = e->rxLen;
+    if (e->inputLen > 0 && (uint32_t)e->inputLen < take) take = (uint32_t)e->inputLen;
+    res = SysAllocStringLen(NULL, take);
+    p = res;
+    for (k = 0; k < take && p; k++) p[k] = (wchar_t)(unsigned char)e->rx[e->rxHead + k];
+    e->rxHead += take;
+    e->rxLen -= take;
+    if (!e->rxLen) e->rxHead = 0;
+    if (e->rxLen < (uint32_t)(e->rThreshold > 0 ? e->rThreshold : 1)) e->rxSignaled = 0;
+    LeaveCriticalSection(&e->cs);
+    return res ? res : SysAllocString(L"");
+}
+
+// 二进制发：交进来的 BSTR 每位取低 8 位写一个字节（不过码页）。
+void vb6_MsComm_SetOutputBytes(void* hwnd, const void* bstr) {
+    struct vb6_MsComm* e = vb6_MsOf((HWND)hwnd);
+    const wchar_t* s = (const wchar_t*)bstr;
+    char buf[1024];
+    int n, i;
+    DWORD written = 0;
+    if (!e || !s || !e->openOk || e->h == INVALID_HANDLE_VALUE) return;
+    n = (int)SysStringLen((BSTR)s);
+    if (n <= 0) return;
+    n = n > (int)sizeof(buf) ? (int)sizeof(buf) : n;
+    for (i = 0; i < n; i++) buf[i] = (char)(s[i] & 0xFF);
+    if (WriteFile(e->h, buf, (DWORD)n, &written, NULL) && written > 0) {
+        e->txTotal += (int32_t)written;
+        if (e->sThreshold > 0) vb6_MsFire(e, VB6_MS_EV_SEND);
+    }
+}
+
+#else  /* !_WIN32 */
 void vb6_RegisterMsCommClass(void* hInstance) { (void)hInstance; }
 
 #endif /* _WIN32 */

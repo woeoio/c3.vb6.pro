@@ -96,7 +96,35 @@ Private Sub tGo_Timer()
     MSComm1.Output = "ABC"
     Debug.Print "MC9-tx2=" & CStr(MSComm1.TxTotal)
 
-    ' 10) 收尾
+    ' 10) 关端口（下面要改设备名，开着改无效——与 CommPort 同口径）
+    MSComm1.PortOpen = False
+    Debug.Print "MC10-close2=" & CStr(MSComm1.PortOpen)
+
+    ' 11) C3 扩展：CommDevice —— 不经环境变量钩子，直接给任意设备名（这里仍是 NUL）
+    MSComm1.CommDevice = "\\.\NUL"
+    Debug.Print "MC11-dev=" & CStr(MSComm1.CommDevice = "\\.\NUL")
+
+    ' 12) 用 CommDevice 重开（PortCount/PortList 一并读，验枚举接口不炸）
+    MSComm1.PortOpen = True
+    Debug.Print "MC12-reopen=" & CStr(MSComm1.PortOpen) & "|" & CStr(MSComm1.PortCount >= 0)
+
+    ' 13) 超时往返：写下去后读回同一组数（默认写超时 2000）
+    MSComm1.ReadIntervalTimeout = 20
+    Debug.Print "MC13-to=" & CStr(MSComm1.ReadIntervalTimeout) & "|" & CStr(MSComm1.WriteTimeout)
+
+    ' 14) 二进制写：每字节一个字符（ &HAA &H01 &HFF ⇒ 3 字节；累计 5+3=8）
+    MSComm1.OutputBytes = ChrW(170) & ChrW(1) & ChrW(255)
+    Debug.Print "MC14-bin=" & CStr(MSComm1.TxTotal)
+
+    ' 15) 二进制读：NUL 上没有回包 ⇒ 空串（长度 0），不是崩
+    Debug.Print "MC15-inb=" & CStr(Len(MSComm1.InputBytes))
+
+    ' 16) PortList 形状：空串或 "COM…" 开头（本机可能一个 COM 也没有，两种都算对）
+    Dim pl As String
+    pl = MSComm1.PortList
+    Debug.Print "MC16-ports=" & CStr(Len(pl) = 0 Or InStr(pl, "COM") = 1)
+
+    ' 17) 收尾
     MSComm1.PortOpen = False
     Debug.Print "MS-DONE"
     Unload Me
