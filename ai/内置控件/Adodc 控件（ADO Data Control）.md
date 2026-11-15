@@ -124,5 +124,11 @@ AD10-grid2=1|3    DataGrid.ReBind 跟着换
 AD11-val=Bob      过滤后只剩 Ops 那条
 ```
 
-x86：本机没有 32 位 ACE，`run_tests` 用 `RequiresCom Microsoft.ACE.OLEDB.12.0` 打 SKIP；
+数据目录：夹具先读环境变量 `C3_ADO_DATA`（run_tests 给绝对路径），没设才退回 `App.Path & "\data"` ——
+这样不依赖"把 people.csv 拷到 exe 旁边"这一步。
+
+GA / 无 ACE 的机器：`run_tests` 先查 ODBC 驱动注册（`HKLM\SOFTWARE[\WOW6432Node]\ODBC\ODBCINST.INI\Microsoft Access Text Driver (*.txt, *.csv)`），
+缺就打 SKIP（不是 PASS，也不是 FAIL）—— ACE 是外装组件，GitHub runner 一般没有。
+
+x86：本机没有 32 位 ACE（`x86=False` 实测），`run_tests` 用 `RequiresCom Microsoft.ACE.OLEDB.12.0` + 驱动闸打 SKIP；
 手工跑会看到 `AD3-open=0` 且后续触碰 `Recordset` 抛 438 —— 这是"驱动缺失"的真实现场。

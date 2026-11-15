@@ -671,7 +671,11 @@ try { if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(3000) | Out-Nu
 # 收尾 (诊断): ucdump 里每个类型只留前 2 张 —— CI 上 paint 次数多 (本机一轮就 230 张),
 # 全留会让工件膨胀十几倍; 而「首帧那张」就能回答「UC 到底画没画」。进程已在上面 kill,
 # 不会再有新的 dump 落盘, 这里删是安全的。
-if (Test-Path $dumpDir) {
+# ⚠ $dumpDir 只在 -Diagnostics 那一支里赋值（默认关诊断 ⇒ 它是 $null）。
+# 以前这行只写 Test-Path $dumpDir，默认路径上每一轮都往 stderr 打一条
+# “Test-Path : Cannot bind argument to parameter 'Path' because it is null.” ——
+# 夹具本身照旧跑，但 GA 会把这一行当首条异常报出来（分片日志里看着像回归）。
+if ($dumpDir -and (Test-Path $dumpDir)) {
     $kept = @{}
     foreach ($f in @(Get-ChildItem $dumpDir -Filter *.bmp -ErrorAction SilentlyContinue | Sort-Object Name)) {
         $t = ($f.Name -split "_")[0]

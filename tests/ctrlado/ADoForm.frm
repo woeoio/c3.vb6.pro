@@ -52,7 +52,12 @@ Option Explicit
 ' 这一版只验"读"，编辑面（AllowUpdate 真写回）在 ai/029 里挂账。
 Private Sub Form_Load()
     Dim cs As String
-    cs = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" & App.Path & "\data" _
+    Dim dataDir As String
+    ' 数据目录：先看夹具钩子 C3_ADO_DATA（run_tests 给绝对路径，避免依赖“拷到 exe 旁边”），
+    ' 否则 App.Path & "\data"（真 VB6 工程把库放 exe 同目录的写法）。
+    dataDir = Environ("C3_ADO_DATA")
+    If Len(dataDir) = 0 Then dataDir = App.Path & "\data"
+    cs = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=" & dataDir _
        & ";Extended Properties=""text;HDR=Yes;FMT=Delimited"""
     Adodc1.ConnectionString = cs
     Adodc1.RecordSource = "SELECT id, name, dept FROM [people.csv] ORDER BY id"

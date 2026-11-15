@@ -265,6 +265,17 @@ if ($StaticShardTotal -gt 1) {
 # (中文/日文/韩文/英文四语种; 覆盖 WriteConsoleW 那条与“控制台代码页”那条字节路)。
 . (Join-Path $PSScriptRoot "console_enc.ps1")
 
+# === ODBC 驱动是否注册 ===
+# Adodc / DataGrid 夹具（C30-5）的底座是 ACE（Microsoft Access Database Engine），
+# 它是一个**外装的** ODBC 驱动，GitHub runner 上一般没有。缺失时真实现场是
+# `AD3-open=0` + 碰 `Recordset` 抛 438（不是产品回归）⇒ SKIP，不许降级成 PASS。
+# 视图与 Test-ComRegistered 同口径：32 位程序读 WOW6432Node。
+function Test-OdbcDriver {
+    param([string]$Name, [string]$Arch = "")
+    $view = if ($Arch -eq "x86") { "WOW6432Node\" } else { "" }
+    return (Test-Path -Path ("HKLM:\SOFTWARE\" + $view + "ODBC\ODBCINST.INI\" + $Name))
+}
+
 # === COM 测试前: 检查相关 COM 组件是否已注册 ===
 # 仅当所需的 COM 组件已注册时, 才执行对应的 COM 测试 (例如 VBMANLIB)
 # 若所需 COM 组件缺失: 相关用例 SKIP 而非 FAIL
@@ -7830,11 +7841,13 @@ if ($Category -in @("all", "run", "vbp")) {
     # 底座 = Microsoft Access Database Engine：本机实测 ACE 的 **ODBC** 驱动（Access/Text）64 位正常，
     # 而 ACE 的 OLEDB 路径在 adodb Recordset.Open 上报 0x80040154（Office C2R 虚拟注册，见
     # vb6forms_adodc.c 文件头）。32 位没有 ACE ∷ 靠 RequiresCom 打 SKIP。
-    # 数据：ACE Text 驱动读 tests\ctrlado\data\people.csv；夹具用 App.Path（= exe 目录），
-    # 所以先把数据旁置到输出目录 —— 与真 VB6 工程把 mdb 放 exe 旁边同一个道理。
+    # 数据：ACE Text 驱动读 tests\ctrlado\data\people.csv。夹具优先读环境变量 C3_ADO_DATA
+    # （绝对路径，下面给），不依赖“拷到输出目录”那一步；拷一份只是兑底 —— 有人手工跑 exe 时
+    # App.Path\data 那条也能用。
     $adoData = Join-Path $OutDir "data"
     if (-not (Test-Path $adoData)) { New-Item -ItemType Directory -Force $adoData | Out-Null }
     Copy-Item "$Tests\ctrlado\data\people.csv" $adoData -Force
+    $adoSrc = Join-Path $Tests "ctrlado\data"
     $adoNeedles = @(
         'AD1-conn=True',              # ConnectionString 原样回读（含 ACE.OLEDB）
         'AD2-src=True',               # RecordSource 回读
@@ -7848,10 +7861,28 @@ if ($Category -in @("all", "run", "vbp")) {
         'AD10-grid2=1|3',             # DataGrid.ReBind 跟着换
         'AD11-val=Bob',               # 过滤后只剩 Ops 那条
         'AD-DONE')
-    Test-Vbp "ctrlado" "$Tests\ctrlado\ADoApp.vbp" $adoNeedles -ExpectExitCode 0
-    Test-Vbp "ctrlado_x86" "$Tests\ctrlado\ADoApp.vbp" $adoNeedles -Arch "x86" `
-        -RequiresCom "Microsoft.ACE.OLEDB.12.0" -ExpectExitCode 0
-    # 发码形状：窗口类是 RTL 自注册的 VB6_MSCOMM（不是 OCX 宿主）、设计期 Init 一把带齐、
+    # 驱动闸：ACE 是外装组件。本机装了 ⇒ 真跑；GA runner 没装 ⇒ SKIP（见 Test-OdbcDriver 注释）。
+    $aceText = 'Microsoft Access Text Driver (*.txt, *.csv)'
+    $env:C3_ADO_DATA = $adoSrc
+    try {
+        if (Test-OdbcDriver $aceText) {
+            Test-Vbp "ctrlado" "$Tests\ctrlado\ADoApp.vbp" $adoNeedles -ExpectExitCode 0
+        } else {
+            $script:total++
+            $script:skip++
+            Write-Host "  [VBP] ctrlado ... SKIP (未安装 ACE ODBC Text 驱动)" -ForegroundColor Yellow
+        }
+        if (Test-OdbcDriver $aceText "x86") {
+            Test-Vbp "ctrlado_x86" "$Tests\ctrlado\ADoApp.vbp" $adoNeedles -Arch "x86" `
+                -RequiresCom "Microsoft.ACE.OLEDB.12.0" -ExpectExitCode 0
+        } else {
+            $script:total++
+            $script:skip++
+            Write-Host "  [VBP] ctrlado_x86 ... SKIP (32 位视图未安装 ACE ODBC Text 驱动)" -ForegroundColor Yellow
+        }
+    } finally {
+        Remove-Item Env:\C3_ADO_DATA -ErrorAction SilentlyContinue
+    }    # 发码形状：窗口类是 RTL 自注册的 VB6_MSCOMM（不是 OCX 宿主）、设计期 Init 一把带齐、
     # 事件是“注册回调”那一形（没有 WM_COMMAND 那条路可走）。
     Test-EmitcShape "ms_emitc_native" @("$Tests\ctrlmscomm\MsCommApp.vbp") @(
         '"VB6_MSCOMM", "",',
