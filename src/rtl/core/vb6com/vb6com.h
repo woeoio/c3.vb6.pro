@@ -152,9 +152,8 @@ void* vb6_ComPackDoubleRef(double* p);
 // 所有权: VT_BYREF 档 vb6_ComCall 的 epilogue 本来就跳过 VariantClear
 // (vb6com_invoke.c:250/:722), 槽归调用方。
 void* vb6_ComPackVariantRef(void* pVar);
-// 上者的写侧闭环 (实现在 vb6rtl_com.c): 槽挂 C3 1D / ND 描述符 → 复制成真
-// SAFEARRAY、按秩回收描述符、就地换槽 (账 #611 第350刀补 ND)。非数组槽 /
-// 真 SAFEARRAY / 认不出的指针原样。
+// 上者的写侧闭环 (实现在 vb6rtl_com.c): 槽挂 C3 一维描述符 → 复制成真
+// SAFEARRAY、回收描述符、就地换槽。非数组槽 / 真 SAFEARRAY / ND 原样。
 void vb6_VariantComSlotToRealArray(void* pVar);
 // FIX-011 调用收尾 (实现在 vb6rtl_com.c): 第一个实参是**调用本身** (C 先求值),
 // 返回值原样透传 (Sub 形态当语句发, Function 形态值不断流); 随后逐个把服务端

@@ -70,9 +70,8 @@ typedef struct vb6_SafeArray1D {
 } vb6_SafeArray1D;
 
 // 1D 描述符的 fFeatures 标记。真实 SAFEARRAY 的 fFeatures 是 FADF_* 位集，这里借它
-// 放一枚 C3 标记。`vb6_SaIs1D` / `vb6_SaIsND` 各认各的魔数，两族描述符都能被
-// **正向**认出来；真实 SAFEARRAY 的 fFeatures 是 FADF_* 位集 (保留位 0xF008 必须为 0)，
-// 不会等于 0xA1D1 / 0xA1D2 —— 这就是 FIX-012 写侧敢碰多维描述符的判据。
+// 放一枚 C3 标记：既让 `vb6_SaIs1D` 能把 1D 描述符与 `vb6_SafeArrayND`
+// (首字段 dimCount = 2..16，offset 2 恒 0) 区分开，又让 `.fFeatures` 保持非零。
 #define VB6_SA1D_FFEATURES 0xA1D1u
 
 // ⚠ 注意 offset 8 的 `elemType` 占的是 SAFEARRAY.cLocks 的位置。oleaut32 的
@@ -107,7 +106,7 @@ static inline void vb6_Sa1DInit(vb6_SafeArray1D* arr) {
     arr->fFeatures = (uint16_t)VB6_SA1D_FFEATURES;
 }
 
-// 这是不是 C3 的 1D 描述符？(ND 描述符首 WORD 是秩 1..16，第二个 WORD 是它自己的魔数)
+// 这是不是 C3 的 1D 描述符？(ND 描述符首 WORD 是 dimCount = 2..16，offset 2 恒 0)
 static inline int vb6_SaIs1D(const void* p) {
     const vb6_SafeArray1D* a = (const vb6_SafeArray1D*)p;
     return a != NULL && a->cDims == 1 && a->fFeatures == (uint16_t)VB6_SA1D_FFEATURES;
@@ -233,51 +232,14 @@ typedef struct vb6_SafeArrayBound {
     int32_t cElements;
 } vb6_SafeArrayBound;
 
-// 账 #611 第350刀 (FIX-012 写侧): ND 描述符也要能被**正向**认出来。
-//
-// 改前首 4 字节是一枚 int32_t dimCount (1..16)，高 16 位恒 0。按 OLE SAFEARRAY
-// 读就是 cDims=rank / fFeatures=0 —— 与「真多维 SAFEARRAY 且 fFeatures==0」这一形
-// **无法区分**。于是读侧 vb6_SlotHasRealSafeArray 只能守住 cDims==1 那一格，写侧
-// vb6_VariantComSlotToRealArray 只敢换算 1D；谁写 `!vb6_SaIs1D(parray)` 谁就把 C3
-// ND 描述符判成真 SAFEARRAY → VariantClear 当 SafeArrayDestroy 销毁 → 堆损坏
-// (GA 43347652260 实测三用例 x64+x86 六枚全红 + b175 段错误)。
-//
-// 修法与 1D 同构: 把首 4 字节**拆成两个 uint16**，低 16 仍是秩、高 16 放第二枚魔数。
-// 字段偏移、对齐、sizeof 全部逐字不变 (原本 int32 就是 4 字节)，所有 ND 构造点只需
-// 多写一次 fFeatures；dimCount 的读法仍是 1..16 的整数，比较/循环/printf 全不用改。
-// 真 SAFEARRAY 的 fFeatures 是 FADF_* 位集且 0xF008 保留位必须为 0，0xA1D2 落不进去。
 typedef struct vb6_SafeArrayND {
-    uint16_t dimCount;                  /* 0  [OLE cDims 槽]      秩 1..16 */
-    uint16_t fFeatures;                 /* 2  [OLE fFeatures 槽]  C3 标记 VB6_SAND_FFEATURES */
-    vb6_safearray_elemtype elemType;    /* 4 */
-    int32_t elemSize;                   /* 8 */
-    int32_t totalElements;              /* 12 */
-    void* data;                         /* 16 (x86/x64 同偏移) */
+    int32_t dimCount;
+    vb6_safearray_elemtype elemType;
+    int32_t elemSize;
+    int32_t totalElements;
+    void* data;
     vb6_SafeArrayBound bounds[16];
 } vb6_SafeArrayND;
-
-#define VB6_SAND_FFEATURES 0xA1D2u
-
-// 所有 ND 构造点共用 (CreateND / ReDimND_Udt 两处 calloc；Preserve 是就地改，魔数留在上面)。
-static inline void vb6_SaNdInit(vb6_SafeArrayND* arr) {
-    arr->fFeatures = (uint16_t)VB6_SAND_FFEATURES;
-}
-
-// 「这枚 parray 是不是 C3 自己的 ND 描述符」的唯一权威。只读首 4 字节 —— 对真
-// SAFEARRAY 调用也绝不会越界；秩=1 那一形 (某些 RTL 落点会造) 同样认得出来。
-// 与 vb6_SaIs1D 并列，两族合起来就是「C3 描述符」的完整集合。
-static inline int vb6_SaIsND(const void* p) {
-    const vb6_SafeArrayND* a = (const vb6_SafeArrayND*)p;
-    return a != NULL && a->dimCount >= 1 && a->dimCount <= 16
-           && a->fFeatures == (uint16_t)VB6_SAND_FFEATURES;
-}
-
-_Static_assert(offsetof(vb6_SafeArrayND, dimCount) == 0,  "ND dimCount 槽");
-_Static_assert(offsetof(vb6_SafeArrayND, fFeatures) == 2, "ND fFeatures 槽");
-_Static_assert(offsetof(vb6_SafeArrayND, elemType) == 4,  "ND elemType 槽");
-_Static_assert(offsetof(vb6_SafeArrayND, elemSize) == 8,  "ND elemSize 槽");
-_Static_assert(offsetof(vb6_SafeArrayND, totalElements) == 12, "ND totalElements 槽");
-_Static_assert(offsetof(vb6_SafeArrayND, data) == 16, "ND data 槽 (x86/x64 同偏移)");
 
 vb6_SafeArrayND* vb6_SafeArrayCreateND(vb6_safearray_elemtype elemType,
     int32_t dimCount, vb6_SafeArrayBound bounds[]);

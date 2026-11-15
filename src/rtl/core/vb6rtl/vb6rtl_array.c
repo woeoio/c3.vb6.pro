@@ -498,8 +498,7 @@ int32_t vb6_UBound(vb6_SafeArray1D* safeArray, int32_t dimension) {
         return -1;  /* 不可达: vb6_ErrRaise 必 longjmp 或 ExitProcess */
     }
     // 1D 描述符判定: cDims==1 且 fFeatures 是本 RTL 的标记 (见 vb6rtl_array.h)。
-    // ND 描述符首 WORD 是秩 (1..16)、第二个 WORD 是它自己的魔数 —— 两族各认各的,
-    // 不会混 (账 #611 第350刀之前 offset 2 恒 0, 只靠「不像 1D」反推, 不可靠)。
+    // ND 描述符首 WORD 是 dimCount (2..16)、offset 2 恒 0 —— 两者不会混。
     if (vb6_SaIs1D(safeArray)) {
         // Confirmed 1D array
         return safeArray->uBound;
@@ -613,8 +612,7 @@ vb6_SafeArrayND* vb6_SafeArrayCreateND(vb6_safearray_elemtype elemType,
     vb6_SafeArrayND* arr = (vb6_SafeArrayND*)calloc(1, sizeof(vb6_SafeArrayND));
     if (!arr) return NULL;
 
-    vb6_SaNdInit(arr);   /* 账 #611 第350刀: ND 魔数, 与 1D 的 vb6_Sa1DInit 同一位 */
-    arr->dimCount = (uint16_t)dimCount;
+    arr->dimCount = dimCount;
     arr->elemType = elemType;
     arr->elemSize = vb6_SaElemSize(elemType);
 
@@ -700,8 +698,7 @@ vb6_SafeArrayND* vb6_SafeArrayReDimND_Udt(int32_t elemSize,
     vb6_SafeArrayND* arr = (vb6_SafeArrayND*)calloc(1, sizeof(vb6_SafeArrayND));
     if (!arr) return NULL;
 
-    vb6_SaNdInit(arr);   /* 账 #611 第350刀: ND 魔数, 与 1D 的 vb6_Sa1DInit 同一位 */
-    arr->dimCount = (uint16_t)dimCount;
+    arr->dimCount = dimCount;
     arr->elemType = vb6_sa_udt;
     arr->elemSize = elemSize;
 
@@ -863,7 +860,7 @@ vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND_Tr(vb6_safearray_elemtype elemType
 
     if (arr->data) free(arr->data);
     arr->data = newData;
-    arr->dimCount = (uint16_t)dimCount;   /* 就地改界: 魔数留在 fFeatures 上, 不重写 */
+    arr->dimCount = dimCount;
     arr->totalElements = newTotal;
     for (int32_t d = 0; d < dimCount; d++)
         arr->bounds[d] = newBounds[d];
@@ -952,7 +949,7 @@ vb6_SafeArrayND* vb6_SafeArrayReDimPreserveND_Udt(int32_t elemSize,
 
     if (arr->data) free(arr->data);
     arr->data = newData;
-    arr->dimCount = (uint16_t)dimCount;   /* 就地改界: 魔数留在 fFeatures 上, 不重写 */
+    arr->dimCount = dimCount;
     arr->elemSize = elemSize;
     arr->totalElements = newTotal;
     for (int32_t d = 0; d < dimCount; d++)

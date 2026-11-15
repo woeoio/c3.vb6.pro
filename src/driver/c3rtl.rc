@@ -1,8 +1,4 @@
 // c3rtl.rc - RTL runtime library embedded as resources
-// 2026-11-14 (账 #611 第350刀, FIX-012 写侧 ND 出参): vb6rtl_array.h 给
-//   vb6_SafeArrayND 首 4 字节拆出 fFeatures 魔数 (VB6_SAND_FFEATURES) + vb6_SaIsND;
-//   vb6rtl_com.c 的 vb6_VariantComSlotToRealArray 增 ND 换算、vb6_SlotHasRealSafeArray
-//   增 ND 正向排除。本条注释只为触发 rc.exe 重嵌 src/rtl/** (stale-embed 判据)。
 // 2026-11-14 (账 #611, JSonFast 第 5/7 按钮):
 //   · vb6rtl.c 新增 vb6_ErrGoToZero(): `On Error GoTo 0` 恢复调用方错误帧,
 //     不再把外层 On Error GoTo label 的 setjmp 一并关掉 (否则 Err.Raise 未处理).
