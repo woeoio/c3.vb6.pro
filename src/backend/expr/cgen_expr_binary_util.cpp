@@ -284,6 +284,21 @@ std::string CCodeGen::controlPropValueExpr(const std::string& writeFn,
             return "vb6_VariantToObjectVal(" + valExpr + ")";
         }
     }
+    // 账 (prjNewAniGif ucGIF.ctl:1633): 晚绑定成员读默认发 vb6_ComGetStringProp
+    // (C 侧返回 wchar_t*, 即 BSTR), 而控件属性写的形参多是数值 —— 指针被当整数
+    // 直接递进去。实测 `tmrGIF.Interval = colFrames(uAniFrame).frameDelay`
+    // (frameDelay 声明 As Integer) 发成
+    //   vb6_SetTimerInterval(hwnd, vb6_ComGetStringProp(...))
+    // ⇒ SetTimer 周期 = BSTR 指针截断值, 定时器此后不再按 10ms 触发, 动画停在
+    //   帧 2 (标签 `帧: 2` 不再前进, 1.2s 内 192 采样点 moved=0)。
+    // 数值 setter 一律过 Variant 解箱 (BSTR 档走 vb6_Val, 与 VB6 的 CLng 同语义);
+    // 字符串落点的 setter 在上面两支已返回, 不受影响。
+    if (valExpr.rfind("vb6_ComGetStringProp(", 0) == 0
+        && writeFn.find("SetControlPicture") == std::string::npos
+        && writeFn.find("SetControlFontName") == std::string::npos
+        && writeFn.find("SetListItem") == std::string::npos) {
+        return "vb6_VariantToLong(vb6_VariantString(" + valExpr + "))";
+    }
     // 账 (Outlook2013 frmTimeZone:310/381): Boolean 档控件属性写
     // (`chk.Enabled = IsAutoAdjustDaylight_Exists(tzi)`) 的右值是 **Variant 回值
     // 过程调用** (VB 未声明返回类型 ⇒ C 侧交回 vb6_VARIANT 结构体) 时按 Bool 折算
