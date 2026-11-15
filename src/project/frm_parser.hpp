@@ -128,6 +128,7 @@ enum class FrmControlType {
     Slider,             // MSComctlLib.Slider — Win32 原生复刻 (msctls_trackbar32), C29-SL
     UpDown,             // MSComctlLib.UpDown — Win32 原生复刻 (msctls_updown32), C30-UD
     MaskEdBox,          // MSMask.MaskEdBox — Win32 EDIT + RTL 掩码引擎, C30-3
+    MSComm,             // MSCommLib.MSComm — Win32 串口 API + 读线程 (无外观控件), C30-4
     Unknown,            // 未识别的控件类型
 };
 

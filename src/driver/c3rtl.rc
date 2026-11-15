@@ -568,6 +568,9 @@
 // ai/029 C30-3: MaskEdBox (Win32 EDIT + RTL 掩码引擎，不加载 MSMASK32.OCX)
 // 编号取 241（240 是 UpDown，242 之前空着；新号不插队，保持先到者保号）。
 241 RCDATA "../rtl/core/vb6forms/vb6forms_maskededit.c"
+// ai/029 C30-4: MSComm (Win32 串口 API + 读线程，不加载 MSCOMM32.OCX)
+// 编号取 242（241 是 MaskEdBox；新号不插队，保持先到者保号）。
+242 RCDATA "../rtl/core/vb6forms/vb6forms_mscomm.c"
 131 RCDATA "../rtl/core/vb6forms/vb6forms_axsite.c"
 198 RCDATA "../rtl/core/vb6forms/vb6forms_axcontainer.c"
 // vb6forms_axsite.c 按功能家族拆分 (2026-09-20): 内部头 + 5 个族编译单元

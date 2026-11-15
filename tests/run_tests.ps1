@@ -7794,6 +7794,38 @@ if ($Category -in @("all", "run", "vbp")) {
         'pNM42->code == -722 && (void*)pNM42->hwndFrom == vb6_hwnd_ud1',
         'vb6_UpDown_SetAlignment(vb6_hwnd_ud1, 0);')
 
+    # ---- C30-4: MSComm（Win32 串口 API + 读线程）----
+    # 本机无串口硬件 ⇒ 用 C3 的测试钩子 C3_MSCOMM_DEVICE=\\.\NUL 走“开-写-计数-EOF-关”这一路。
+    # 钩子只给夹具用（不是 VB6 API），也只在“\\.\COM<n> 打不开”时才会被看到 —— 这一行同时
+    # 证明“主路径是 \\.\COM<n>”（真串口机器上把钩子去掉照样跑）。
+    # 判据刻意全是 ASCII：Debug.Print 出去的是 GBK 控制台字节，中文 needle 换个 locale 必红。
+    $msNeedles = @(
+        'MC1-prop=1|9600,N,8,1|0',    # 设计期属性回读（CommPort / Settings / InputLen）
+        'MC2-open=True',              # PortOpen=True 真开了句柄
+        'MC3-tx=2',                   # Output="AT" 真写出 2 字节（TxTotal 是 C3 证人）
+        'MC4-in=0|0',                 # 没回包：InBufferCount=0、Input 空串
+        'MC5-ev=7',                   # NUL 读到 0 字节 ⇒ comEvEOF(7)
+        'MC6-cnt=True',               # OnComm 至少到过一次（事件面接上了）
+        'MC7-close=False',            # PortOpen=False 真关
+        'MC8-reopen=True',            # 关掉再开：句柄/线程没漏
+        'MC9-tx2=5',                  # 累计：2 + 3 = 5
+        'MS-DONE')
+    $env:C3_MSCOMM_DEVICE = '\.\NUL'
+    try {
+        Test-Vbp "ctrlmscomm" "$Tests\ctrlmscomm\MsCommApp.vbp" $msNeedles -ExpectExitCode 0
+        Test-Vbp "ctrlmscomm_x86" "$Tests\ctrlmscomm\MsCommApp.vbp" $msNeedles -Arch "x86" -ExpectExitCode 0
+    } finally {
+        Remove-Item Env:\C3_MSCOMM_DEVICE -ErrorAction SilentlyContinue
+    }
+    # 发码形状：窗口类是 RTL 自注册的 VB6_MSCOMM（不是 OCX 宿主）、设计期 Init 一把带齐、
+    # 事件是“注册回调”那一形（没有 WM_COMMAND 那条路可走）。
+    Test-EmitcShape "ms_emitc_native" @("$Tests\ctrlmscomm\MsCommApp.vbp") @(
+        '"VB6_MSCOMM", "",',
+        'vb6_RegisterMsCommClass((void*)hInstance);',
+        'vb6_MsComm_Create((void*)vb6_hwnd_MSComm1);',
+        'vb6_MsComm_SetSettings((void*)vb6_hwnd_MSComm1, L"9600,N,8,1");',
+        'vb6_MsComm_SetEventHandler((void*)vb6_hwnd_MSComm1, 0, (void*)vb6_MSComm1_OnComm); }')
+
     # ---- C30-3: MaskEdBox（原生 EDIT + RTL 掩码引擎）----
     # 这一件钉的是**每一种掩码字符**至少一条断言（计划书 C30-3 那一格的口径）：
     #   MK1  Text 带固定符 / ClipText 只数字 / Mask 原样回读

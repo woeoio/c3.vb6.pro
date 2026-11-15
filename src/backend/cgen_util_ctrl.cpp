@@ -79,6 +79,20 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
         if (p == "promptinclude") return Vb6Type::Boolean;
         if (p == "selstart" || p == "sellength") return Vb6Type::Long;
     }
+    // C30-4: MSComm 的属性面。Settings / Input 走 RTL 的 BSTR（String）；PortOpen / dtrenable /
+    // RTSEnable / EOFEnable / CTS·DSR·CDHolding 在 VB6 那边是 Boolean；其余是 Long。
+    // 没登记的症状与 MaskEdBox 同型：`s = MSComm1.Input` 被当 Variant 装箱成空串。
+    if (ctrlType == FrmControlType::MSComm) {
+        if (p == "settings" || p == "input") return Vb6Type::String;
+        if (p == "portopen" || p == "dtrenable" || p == "rtsenable" || p == "eofenable"
+            || p == "ctsholding" || p == "dsrholding" || p == "cdholding") return Vb6Type::Boolean;
+        if (p == "commport" || p == "inputmode" || p == "inputlen"
+            || p == "inbuffercount" || p == "outbuffercount"
+            || p == "inbuffersize" || p == "outbuffersize"
+            || p == "rthreshold" || p == "sthreshold" || p == "handshaking"
+            || p == "commevent"
+            || p == "txtotal" || p == "rxtotal") return Vb6Type::Long;
+    }
     // C30-2: TabStrip 的标量面。四个 Client* 与三条行为位的 RTL getter 都是 int32_t;
     // MultiRow/HotTracking/ShowTips 在 VB6 那边是 Boolean。
     // ⚠ Tabs(i).Caption 这类**链式成员**不在本表（这一问只看“控件.属性”一形），
@@ -600,6 +614,31 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         if (propLower == "bytesreceived")  return "vb6_Ws_GetBytesReceived";
         if (propLower == "bytetransferred") return "vb6_Ws_GetByteTransferred";
         break;
+    case FrmControlType::MSComm:  // C30-4: 串口；一切状态在 RTL 实例表里
+        if (propLower == "commport")      return "vb6_MsComm_GetCommPort";
+        if (propLower == "settings")      return "vb6_MsComm_GetSettings";
+        if (propLower == "portopen")      return "vb6_MsComm_GetPortOpen";
+        if (propLower == "input")         return "vb6_MsComm_GetInput";
+        if (propLower == "inputmode")     return "vb6_MsComm_GetInputMode";
+        if (propLower == "inputlen")      return "vb6_MsComm_GetInputLen";
+        if (propLower == "inbuffercount") return "vb6_MsComm_GetInBufferCount";
+        if (propLower == "outbuffercount") return "vb6_MsComm_GetOutBufferCount";
+        if (propLower == "inbuffersize")  return "vb6_MsComm_GetInBufferSize";
+        if (propLower == "outbuffersize") return "vb6_MsComm_GetOutBufferSize";
+        if (propLower == "rthreshold")    return "vb6_MsComm_GetRThreshold";
+        if (propLower == "sthreshold")    return "vb6_MsComm_GetSThreshold";
+        if (propLower == "handshaking")   return "vb6_MsComm_GetHandshaking";
+        if (propLower == "dtrenable")     return "vb6_MsComm_GetDTREnable";
+        if (propLower == "rtsenable")     return "vb6_MsComm_GetRTSEnable";
+        if (propLower == "eofenable")     return "vb6_MsComm_GetEOFEnable";
+        if (propLower == "commevent")     return "vb6_MsComm_GetCommEvent";
+        if (propLower == "ctsholding")    return "vb6_MsComm_GetCTSHolding";
+        if (propLower == "dsrholding")    return "vb6_MsComm_GetDSRHolding";
+        if (propLower == "cdholding")     return "vb6_MsComm_GetCDHolding";
+        // C3 扩展（不是 VB6 属性）：夹具证人 —— 真写/真收了多少字节。
+        if (propLower == "txtotal")       return "vb6_MsComm_GetTxTotal";
+        if (propLower == "rxtotal")       return "vb6_MsComm_GetRxTotal";
+        break;
     case FrmControlType::Data:  // C29-Data: ODBC 后端
         if (propLower == "recordset")    return "vb6_Data_RecordsetObj";  /* 真 IDispatch, 链走晚绑定 */
         if (propLower == "databasename") return "vb6_Data_GetDatabaseName";
@@ -1080,6 +1119,25 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
         if (propLower == "protocol")   return "vb6_Ws_SetProtocol";
         if (propLower == "remotehost") return "vb6_Ws_SetRemoteHost";
         if (propLower == "remoteport") return "vb6_Ws_SetRemotePort";
+        break;
+    case FrmControlType::MSComm:  // C30-4 写表。只读那几条（CommEvent / InBufferCount 读侧、
+        // CTS·DSR·CDHolding）没有写口 —— 发一条"写得动但不改"的 setter 比不发更难查。
+        if (propLower == "commport")      return "vb6_MsComm_SetCommPort";
+        if (propLower == "settings")      return "vb6_MsComm_SetSettings";
+        if (propLower == "portopen")      return "vb6_MsComm_SetPortOpen";
+        if (propLower == "output")        return "vb6_MsComm_SetOutput";
+        if (propLower == "inputmode")     return "vb6_MsComm_SetInputMode";
+        if (propLower == "inputlen")      return "vb6_MsComm_SetInputLen";
+        if (propLower == "inbuffercount") return "vb6_MsComm_SetInBufferCount";
+        if (propLower == "outbuffercount") return "vb6_MsComm_SetOutBufferCount";
+        if (propLower == "inbuffersize")  return "vb6_MsComm_SetInBufferSize";
+        if (propLower == "outbuffersize") return "vb6_MsComm_SetOutBufferSize";
+        if (propLower == "rthreshold")    return "vb6_MsComm_SetRThreshold";
+        if (propLower == "sthreshold")    return "vb6_MsComm_SetSThreshold";
+        if (propLower == "handshaking")   return "vb6_MsComm_SetHandshaking";
+        if (propLower == "dtrenable")     return "vb6_MsComm_SetDTREnable";
+        if (propLower == "rtsenable")     return "vb6_MsComm_SetRTSEnable";
+        if (propLower == "eofenable")     return "vb6_MsComm_SetEOFEnable";
         break;
     case FrmControlType::Data:  // C29-Data 写表 (三属性先存后 Refresh 用)
         if (propLower == "databasename") return "vb6_Data_SetDatabaseName";

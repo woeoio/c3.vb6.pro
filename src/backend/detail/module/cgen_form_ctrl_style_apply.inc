@@ -831,6 +831,66 @@
             }
         }
 
+        // C30-4: MSComm 设计期。状态全在 RTL 实例表里（端口句柄 / 读线程 / 接收缓冲），
+        // 所以这里只做三件事：把身份窗认进表、灌 .frm 上写的那几条、把 OnComm 注册成函数指针 ——
+        // 串口通知进不了 WM_COMMAND / WM_NOTIFY（那是“往父窗投”那一路），只能是 Timer / Data /
+        // 网络控件那种“注册回调”的形状。
+        // ⚠ .frm 里的 Boolean 是 -1/0，RTL 那侧按 0/1 存（与 UpDown / TabStrip 那几处同口径）。
+        if (ctrl.controlType == FrmControlType::MSComm) {
+            std::string msLower = ctrl.controlName;
+            std::transform(msLower.begin(), msLower.end(), msLower.begin(), ::tolower);
+            std::string msHwnd = knownControlArrays_.count(msLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            auto msInt = [&](const char* k, int dflt) -> int {
+                auto it = ctrl.properties.find(k);
+                return (it == ctrl.properties.end()) ? dflt : (int)it->second.intValue;
+            };
+            auto msBool = [&](const char* k) -> int {
+                auto it = ctrl.properties.find(k);
+                return (it == ctrl.properties.end() || it->second.intValue == 0) ? 0 : 1;
+            };
+            auto msStr = [&](const char* k, const char* dflt) -> std::string {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end() || it->second.rawText.empty()) return std::string("L\"") + dflt + "\"";
+                std::string raw = it->second.rawText;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"')
+                    raw = raw.substr(1, raw.size() - 2);
+                return "L\"" + escapeWideCString(raw) + "\"";
+            };
+            c_.emitLine("vb6_MsComm_Create((void*)" + msHwnd + ");");
+            c_.emitLine("vb6_MsComm_SetCommPort((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("CommPort", 1)) + ");");
+            c_.emitLine("vb6_MsComm_SetSettings((void*)" + msHwnd + ", " + msStr("Settings", "9600,N,8,1") + ");");
+            c_.emitLine("vb6_MsComm_SetInputMode((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("InputMode", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetInputLen((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("InputLen", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetRThreshold((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("RThreshold", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetSThreshold((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("SThreshold", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetInBufferSize((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("InBufferSize", 1024)) + ");");
+            c_.emitLine("vb6_MsComm_SetOutBufferSize((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("OutBufferSize", 512)) + ");");
+            c_.emitLine("vb6_MsComm_SetHandshaking((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("Handshaking", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetDTREnable((void*)" + msHwnd + ", "
+                        + std::to_string(msBool("DTREnable")) + ");");
+            c_.emitLine("vb6_MsComm_SetRTSEnable((void*)" + msHwnd + ", "
+                        + std::to_string(msBool("RTSEnable")) + ");");
+            c_.emitLine("vb6_MsComm_SetEOFEnable((void*)" + msHwnd + ", "
+                        + std::to_string(msBool("EOFEnable")) + ");");
+            // 事件槽：只有 OnComm 一个（序号 0 = VB6_MS_EV_ONCOMM，发的是字面量）。
+            if (auto* sy = symTab_.lookup(ctrl.controlName + "_OnComm")) {
+                std::string evFn = cProcName(sy->name, AccessLevel::Private);
+                c_.emitLine("{ extern void " + evFn + "(void);");
+                c_.emitLine("  vb6_MsComm_SetEventHandler((void*)" + msHwnd + ", 0, (void*)" + evFn + "); }");
+            }
+        }
+
         // P20-40: StatusBar 设计期 —— Init 一次, 再按 Panels 集合逐项灌进去。
         // 未写进 .frm 的属性走 VB6 默认 (Align=2 靠下 / Style=0 多面板 / 无面板)。
         if (ctrl.controlType == FrmControlType::StatusBar) {

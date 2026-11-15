@@ -827,6 +827,61 @@ void    vb6_RTB_SetSelHangingIndent(void* hwnd, int32_t twips);
 #define VB6_WS_EV_ERROR            7   // Sub Winsock1_Error(...) —— WS-c
 #define VB6_WS_EV_COUNT            8
 
+// ===================== MSComm (ai/029 C30-4) =====================
+//   VB6 的 MSComm 只有一个事件（OnComm），原因全在 CommEvent 那个号里。事件槽序号 cgen 发字面量，
+//   顺序不许改；CommEvent 的号（1/2/3/4/5/6/7 与 1004/1006/1008/1009/1010）在 .c 文件头立着。
+//   与 Winsock 同一形状：控件自己的身份窗（类名 VB6_MSCOMM，注册在 vb6forms_mscomm.c），
+//   读线程把"有数据了"投成 WM_APP+0x16，窗口过程里判 RThreshold 再调 OnComm。
+//   测试钩子：环境变量 C3_MSCOMM_DEVICE（设备名，如 `\\.\NUL`）—— 本机无串口硬件时夹具靠它跑通
+//   "开-写-计数-关"这一路；它**不是** VB6 API，真工程里不设就不存在。
+#define VB6_MS_EV_ONCOMM           0
+#define VB6_MS_EV_COUNT            1
+
+void  vb6_RegisterMsCommClass(void* hInstance);
+void* vb6_MsComm_Create(void* hwnd);
+void  vb6_MsComm_Destroy(void* hwnd);
+void  vb6_MsComm_SetEventHandler(void* hwnd, int32_t kind, void* fn);
+
+int32_t     vb6_MsComm_GetCommPort(void* hwnd);
+void        vb6_MsComm_SetCommPort(void* hwnd, int32_t v);
+const void* vb6_MsComm_GetSettings(void* hwnd);          // BSTR（原样回读）
+void        vb6_MsComm_SetSettings(void* hwnd, const void* bstr);
+int32_t     vb6_MsComm_GetPortOpen(void* hwnd);
+void        vb6_MsComm_SetPortOpen(void* hwnd, int32_t v);   // 真开真关（CreateFileW / CloseHandle）
+int32_t     vb6_MsComm_GetInputMode(void* hwnd);
+void        vb6_MsComm_SetInputMode(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetInputLen(void* hwnd);
+void        vb6_MsComm_SetInputLen(void* hwnd, int32_t v);
+const void* vb6_MsComm_GetInput(void* hwnd);                  // BSTR（读后清空，文本 ACP）
+void        vb6_MsComm_SetOutput(void* hwnd, const void* bstr); // BSTR（ACP 落成字节）
+int32_t     vb6_MsComm_GetInBufferCount(void* hwnd);
+void        vb6_MsComm_SetInBufferCount(void* hwnd, int32_t v);   // 赋 0 = 清空
+int32_t     vb6_MsComm_GetOutBufferCount(void* hwnd);
+void        vb6_MsComm_SetOutBufferCount(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetInBufferSize(void* hwnd);
+void        vb6_MsComm_SetInBufferSize(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetOutBufferSize(void* hwnd);
+void        vb6_MsComm_SetOutBufferSize(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetRThreshold(void* hwnd);
+void        vb6_MsComm_SetRThreshold(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetSThreshold(void* hwnd);
+void        vb6_MsComm_SetSThreshold(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetHandshaking(void* hwnd);
+void        vb6_MsComm_SetHandshaking(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetDTREnable(void* hwnd);
+void        vb6_MsComm_SetDTREnable(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetRTSEnable(void* hwnd);
+void        vb6_MsComm_SetRTSEnable(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetEOFEnable(void* hwnd);
+void        vb6_MsComm_SetEOFEnable(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetCommEvent(void* hwnd);              // 最近一次事件号
+int32_t     vb6_MsComm_GetCTSHolding(void* hwnd);             // 只读；问不出来就答 0
+int32_t     vb6_MsComm_GetDSRHolding(void* hwnd);
+int32_t     vb6_MsComm_GetCDHolding(void* hwnd);
+// C3 扩展（不是 VB6 属性）：两条夹具证人 —— "写出去多少字节 / 收进来多少字节"。
+int32_t     vb6_MsComm_GetTxTotal(void* hwnd);
+int32_t     vb6_MsComm_GetRxTotal(void* hwnd);
+
 void  vb6_RegisterWinsockClass(void* hInstance);
 void* vb6_Ws_Create(void* hwnd);                      // 把身份窗认进实例表
 void  vb6_Ws_Destroy(void* hwnd);

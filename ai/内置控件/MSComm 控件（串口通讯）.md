@@ -69,3 +69,61 @@ End Sub
 ```
 
 > 坑：① RThreshold=0 永远不收事件；② 二进制协议用 Text 模式必乱码；③ 设备回包可能**粘包/拆包**，要按协议（定长/帧头帧尾/校验和）自己组包；④ 端口被占（已打开或他程序占用）时 PortOpen=True 会报 8005 错误。
+## 5. C3 的实现与口径（C30-4，2026-11-15）
+
+落点：**Win32 串口 API 直连** —— `CreateFileW(L"\\\\.\\COM<n>")` + `DCB`/`SetCommState` +
+`ReadFile` 读线程，RTL 文件 `src/rtl/core/vb6forms/vb6forms_mscomm.c`；不加载 `MSCOMM32.OCX`。
+
+### 5.1 为什么是“每端口一条读线程”
+
+`WaitCommEvent` 的 `EV_RXCHAR` 只报“有字符到了”一次，凑 `RThreshold` 还得自己数；而读线程
+`ReadFile` 阻塞等数据，天然就是“到多少给多少”。读线程里把“有数据了”投成一条私有消息
+（`WM_APP+0x16`）到控件自己的身份窗（类名 `VB6_MSCOMM`，RTL 自注册），窗口过程里再判
+`RThreshold` 去调 `OnComm` —— 与 Winsock 同一个形状。
+
+### 5.2 一处被废掉的设计（实测栽过）
+
+第一版用 `FILE_FLAG_OVERLAPPED` 打开 + `OVERLAPPED` 结构读写。夹具在 `\\.\NUL` 上的读数是
+`MC3-tx=0`（写没出去）与 `MC5-ev=1008`（读报错）：**overlapped 句柄上不带 `OVERLAPPED` 结构的
+读写一律 `ERROR_INVALID_PARAMETER`**。改成同步读写后：
+
+- 写：直接 `WriteFile`（同步句柄）；
+- 读：读线程同步 `ReadFile`，`COMMTIMEOUTS.ReadIntervalTimeout=50` —— “新字节之间空 50ms 就返回”，
+  所以线程会自然醒来一轮，不是死等；
+- 关：`CancelSynchronousIo(读线程句柄)` 把它从 `ReadFile` 里叫醒（`CloseHandle` 不会取消
+  正在进行的同步 I/O）。
+
+### 5.3 属性面
+
+`CommPort` / `Settings` / `PortOpen` / `Input` / `Output` / `InputMode` / `InputLen` /
+`InBufferCount`（赋 0 = 清空）/ `OutBufferCount` / `InBufferSize` / `OutBufferSize` /
+`RThreshold` / `SThreshold` / `Handshaking` / `DTREnable` / `RTSEnable` / `EOFEnable` /
+`CommEvent` / `CTSHolding` / `DSRHolding` / `CDHolding`，事件只有 `OnComm`。
+`CommEvent` 的号严格照 §3（正常 1–7、错误 1004/1006/1008/1009/1010）；`PortOpen` 打开失败时
+保持 `False`（VB6 那侧会抛 8005，C3 没有可捕获错误面）。
+
+### 5.4 实跑读数（`tests/ctrlmscomm`，x64 与 x86 逐字一致，`exit=0`）
+
+本机没有串口硬件，判据用 C3 的**测试钩子** `C3_MSCOMM_DEVICE=\\.\NUL`（只给夹具用，不是 VB6 API）：
+
+```
+MC1-prop=1|9600,N,8,1|0   CommPort / Settings / InputLen 回读
+MC2-open=True             PortOpen=True 真开出句柄
+MC3-tx=2                  Output="AT" 真写出 2 字节（TxTotal 是 C3 证人）
+MC4-in=0|0                InBufferCount=0、Input 空串
+MC5-ev=7                  NUL 读到 0 字节 ⇒ comEvEOF(7)
+MC6-cnt=True              OnComm 至少到过一次
+MC7-close=False           关端口
+MC8-reopen=True           关掉再开（句柄/线程没漏）
+MC9-tx2=5                 累计计数器：2 + 3
+```
+
+### 5.5 未覆盖（诚实口径）
+
+1. **二进制收发未做**：`InputMode` 只存与回读，`Input`/`Output` 一律按文本（ACP）走。
+   不上报“每字节一个字符”的假数组 —— 那种数据用户拿去 `Hex()` 会静默错。
+2. **握手线变化事件未做**：`comEvCTS/DSR/CD`（3/4/5）要 `WaitCommEvent` 的 `EV_CTS` 档，与
+   5.1 的选择冲突；三条 `*Holding` 属性照问不误。
+3. **`comEvRing`（6）/ `comEvSend`（1）**：前者要有振铃的设备，后者按“同步写完即缓冲空”报一次，
+   与 VB6 “降到 `SThreshold` 以下才报”的时机不是同一刻（差一次写）。
+4. **端口被占的 8005 错误**：C3 只表现为 `PortOpen=False`，没有可捕获的错误号。

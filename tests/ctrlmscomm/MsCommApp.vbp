@@ -1,0 +1,8 @@
+Type=Exe
+Form=MsForm.frm
+Reference=*\G{00020430-0000-0000-C000-000000000046}#2.0#0#..\..\Windows\System32\stdole2.tlb#OLE Automation
+Object={648A5603-2C6E-101B-82B6-000000000014}#1.1#0; MSCOMM32.OCX
+Startup="MsForm"
+Name="MsCommApp"
+Title="MsCommApp"
+ExeName32="MsCommApp.exe"

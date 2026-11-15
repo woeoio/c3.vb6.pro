@@ -216,6 +216,9 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // 互不为子串（既没有 "updown" 也没有 "mask" 开头的其他控件），VB6 侧另有
     // ProgID 写法 MSMask.MaskEdBox.1，同样命中这条。
     if (lower.find("maskedbox") != std::string::npos) return FrmControlType::MaskEdBox;
+    // C30-4: MSComm (MSCommLib.MSComm / MSCOMM32.OCX 的各种写法)。"mscomm" 与上面任何一条
+    // 互不为子串；VB6 侧另有 ProgID 写法 MSCommLib.MSComm.1，同样命中这条。
+    if (lower.find("mscomm") != std::string::npos) return FrmControlType::MSComm;
 
     return FrmControlType::Unknown;
 }
@@ -312,6 +315,9 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // C29-WS: Winsock —— 无外观，但**这枚的窗口要真收 WSAAsyncSelect 的 FD_\***，
         // 不像 Timer / CommonDialog 只是属性袋（类注册在 vb6forms_winsock.c）。
         case FrmControlType::Winsock:       return "VB6_WINSOCK";
+        // C30-4: MSComm —— 同样无外观，但**这枚的身份窗要真收读线程投的 WM_APP+0x16**，
+        // 所以也要一枚自注册类（注册在 vb6forms_mscomm.c）。Timer 那种纯属性袋不适用。
+        case FrmControlType::MSComm:        return "VB6_MSCOMM";
         case FrmControlType::Menu:         return nullptr;       // 菜单, 非窗口
         case FrmControlType::WebBrowser:  return nullptr;       // WebView2, 运行时动态创建
         default:                           return nullptr;
@@ -345,6 +351,7 @@ const char* FrmParser::controlTypeToVb6Name(FrmControlType type) {
         case FrmControlType::MonthView:    return "MonthView";
         case FrmControlType::UpDown:       return "UpDown";
         case FrmControlType::MaskEdBox:    return "MaskEdBox";
+        case FrmControlType::MSComm:       return "MSComm";
         case FrmControlType::RichTextBox:  return "RichTextBox";
         case FrmControlType::Toolbar:      return "Toolbar";
         case FrmControlType::Shape:        return "Shape";
