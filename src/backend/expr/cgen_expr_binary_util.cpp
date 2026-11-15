@@ -103,6 +103,19 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
     if (isVariantSlotElemRead(expr)) {
         return "vb6_VariantToString(" + expr + ")";
     }
+    // C30-9 实测（江西省医保药品查询系统 frmlogin.frm:189 `userpow = rs_login.Fields(2)`）:
+    // `Fields(n)` 的生成码是 vb6_ComCallObject(...)，交回的是**对象指针 (IDispatch*)**。
+    // 不带这一档时它会原样落进 vb6_BSTR_Assign(&s, <对象指针>) —— BSTR 拷贝例程把这枚
+    // 指针当字符串读, 栈回溯落在 libvcruntime 的 memcpy/memmove 里, 进程 0xC0000005
+    // (实测 av read target 0xa419f8c / 0x11df000, 每次不同 = 野指针)。
+    // VB6 语义: 对象当字符串用 ⇒ 取默认成员 (DISPID_VALUE) 再转串; 无默认成员或默认
+    // 成员又是对象 ⇒ 空串 (与 vb6_Format 的 dispatch 档同一口径, 只取一层防递归)。
+    // 所有权: vb6_ComGetDefaultValue 交回堆上 VARIANT (可能 NULL ⇒ FromComResult 认),
+    // FromComResult 吃掉那枚堆块, VariantToString = vb6_CStr = vb6_Format 现造新 BSTR。
+    if (expr.compare(0, 18, "vb6_ComCallObject(") == 0) {
+        return "vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetDefaultValue("
+               + expr + ")))";
+    }
     if (expr.find("vb6_ComCall(") == 0 || expr.find("vb6_ComCallByDispid(") == 0) {
         return "vb6_VariantToString(vb6_VariantFromComResult(" + expr + "))";
     }

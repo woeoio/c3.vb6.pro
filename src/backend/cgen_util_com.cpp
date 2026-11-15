@@ -1180,6 +1180,25 @@ std::string CCodeGen::comNewExprFor(const Symbol* comSym) {
     return "vb6_ComPack_" + impl + "(vb6_cls_" + impl + "_New())";
 }
 
+// C30-9: `As New <COM 类>` 的建对象表达式三档分流（所有自动实例化出口共用）。
+//   ① 工程类实现/同名遮蔽 → comNewExprFor（原生工厂，不动）
+//   ② 符号里带了 coclass CLSID → vb6_NewObjectClsid（**这条是本账修的那一格**）
+//   ③ 都没有 → 退回旧口径 vb6_NewObject(ProgID)
+// 为什么要有 ②：实测本机 HKLM\SOFTWARE\Classes\Wow6432Node 下
+// ADODB.Connection / ADODB.Connection.6.0 / ADODB.Recordset 的 ProgID 全没注册，
+// 而 CLSID {00000514-...} / {00000535-...} 与 msado15.dll 都在。VB6 编的同一份
+// 工程能登（typelib CLSID 直接 CoCreateInstance），我方按 ProgID 查 ⇒
+// CLSIDFromProgID 失败 ⇒ 未处理错误 #340 ⇒ conn/rs 恒 NULL ⇒ 登录必失败。
+std::string CCodeGen::comNewObjectExpr(const Symbol* comSym) {
+    if (!comSym) return "";
+    std::string projExpr = comNewExprFor(comSym);
+    if (!projExpr.empty()) return projExpr;
+    if (!comSym->comClsidStr.empty())
+        return "(void*)vb6_NewObjectClsid(L\"" + comSym->comClsidStr + "\")";
+    const std::string& progId = comSym->comProgId.empty() ? comSym->name : comSym->comProgId;
+    return "(void*)vb6_NewObject(L\"" + progId + "\")";
+}
+
 // P25: 解析COM标记为类型化属性取值, 用于COM调用参数打包
 // 当isComMarker_为true时, 根据packFnHint选择对应类型的COM属性取值函数
 // 如果isComMarker_为false, 返回空串

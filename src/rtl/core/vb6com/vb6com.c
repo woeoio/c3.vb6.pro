@@ -374,7 +374,24 @@ void vb6_ComInit(void) {
     // 免注册 COM 的 ActCtx 必须**先于** CoInitializeEx（因而也先于 OleInitialize 与
     // 任何 CoCreateInstance）就位；direct 模式下这一行是空操作，直加载逐字不变。
     vb6_ComActCtxEnter();
-    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    /* C30-9 实测：VB6 运行时用的是 **OleInitialize**（它不只是 STA，还把 OLE 子系统
+     * ——剪贴板/拖放/IStream·IPersistStream 那一族—— 一并初始化），而我们以前只调
+     * CoInitializeEx。二者在建 ADO 行集时的差别是真存在的（同一台机器、同一组 DLL：
+     * VB6 编的 exe 登录正常，C3 编的 exe 在 rs.Open 报 340「没有注册类」）。
+     * 所以改成与 VB6 同口径：先 OleInitialize，拿不到 STA 才退回 CoInitializeEx。 */
+    HRESULT hrInit = OleInitialize(NULL);
+    if (FAILED(hrInit)) hrInit = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    /* C30-9: 这条返回值以前是丢的 —— 线程早被别人初始化成 MTA 时这里会回
+     * RPC_E_CHANGED_MODE(0x80010106) 且静默继续跑在 MTA 里。ADO + Jet 在这种
+     * 情形下建行集会直接报 REGDB_E_CLASSNOTREG（VB6 错误 340「没有注册类」），
+     * 因为 Jet 是套间线程组件，跨套间要靠代理/存根。VB6 编的同一份工程是
+     * OleInitialize(STA) 所以正常。C3_COM_TRACE=1 时把它打出来，别再靠猜。 */
+    if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] ComInit tid=%lu hr=0x%08lX%s\n",
+                (unsigned long)GetCurrentThreadId(), (unsigned long)hrInit,
+                hrInit == RPC_E_CHANGED_MODE ? " (already MTA -> NOT STA)" : "");
+        fflush(stderr);
+    }
 }
 
 void vb6_ComExit(void) {
@@ -1273,6 +1290,28 @@ void* vb6_CreateObject(const wchar_t* progId) {
     }
 
     vb6_ComRememberProgID((void*)pDisp, progId);
+    return (void*)pDisp;
+}
+
+/* C30-9: 按 **coclass CLSID** 建对象 —— 与 VB6 `As New <typelib coclass>` 同一条路。
+ * 为什么要补这一枚（实测，江西省医保药品查询系统）：本机 32 位视图
+ * (HKLM\SOFTWARE\Classes\Wow6432Node) 里 `ADODB.Connection` /
+ * `ADODB.Connection.6.0` / `ADODB.Recordset` 的 **ProgID 根本没注册**，
+ * 而 CLSID {00000514-…} 与 msado15.dll 都在。VB6 编的同一份工程能登录 ——
+ * 它拿 typelib 的 CLSID 直接 CoCreateInstance，从不查 ProgID。
+ * 我方发 `vb6_NewObject(L"ADODB.Connection.6.0")` ⇒ CLSIDFromProgID 失败
+ * ⇒ 未处理错误 #340「没有注册类」（探针 loginprobe 实测 rc=340，栈顶就是
+ * 模块级 As New 的建对象）⇒ conn 恒 NULL ⇒ 登录永远失败。
+ * 失败口径与 vb6_CreateObject 一致（429/340 拉 Err）。 */
+void* vb6_NewObjectClsid(const wchar_t* clsidStr) {
+    if (!clsidStr || !*clsidStr) return NULL;
+    CLSID clsid;
+    HRESULT hr = CLSIDFromString((LPOLESTR)clsidStr, &clsid);
+    if (FAILED(hr)) { vb6_ComFailCreate(hr, clsidStr); return NULL; }
+    IDispatch* pDisp = NULL;
+    hr = CoCreateInstance(&clsid, NULL, CLSCTX_LOCAL_SERVER | CLSCTX_INPROC_SERVER,
+                          &IID_IDispatch, (void**)&pDisp);
+    if (FAILED(hr)) { vb6_ComFailCreate(hr, clsidStr); return NULL; }
     return (void*)pDisp;
 }
 

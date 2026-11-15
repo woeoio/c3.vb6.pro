@@ -648,7 +648,12 @@
             if (so == "sub main") postQuit = false;
         }
         if (postQuit) {
-            c_.emitLine("PostQuitMessage(0);  /* Fix 144: 仅启动窗体结束消息循环 */");
+            // C30-9 实测：这里原先是 PostQuitMessage(0)，而 WM_QUIT 投进队列就撤不回 ——
+            // frmlogin 的 `Unload Me` 紧跟 `Main.Show`（同一事件）时，主窗体刚建完就被这条
+            // 旧 quit 收工，进程退出码 0、登录“成功但窗口闪没”。改成运行时挂起意头：
+            // 泵顶每轮重新问 `vb6_Forms_QuitPending()`，而 `Main.Show` 一走 Register
+            // 就把它撤销（见 vb6rtl_system.c 的 g_formQuitPending）。
+            c_.emitLine("vb6_Forms_RequestQuit();  /* Fix 144/C30-9: 启动窗体销毁 ⇒ 请求退出 (延迟到泵顶判) */");
         }
     }
     // P20-43: Form_Terminate —— VB6 语义是"窗体实例被销毁时最后触发"。

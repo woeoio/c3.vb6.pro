@@ -15,6 +15,11 @@ extern "C" {
 // CreateObject(progId) - 通过ProgID创建COM对象，返回IDispatch*
 void* vb6_CreateObject(const wchar_t* progId);
 
+// C30-9: 按 **coclass CLSID** 建对象（VB6 `As New <typelib coclass>` 走的同一条路）。
+// ProgID 在某些机器上压根不注册（实测本机 32 位视图 ADODB.* 全没注册，只有 CLSID），
+// 此时 VB6 能跑、按 ProgID 查必挂 ⇒ 生成码带着符号里的 CLSID 就直接用这一枚。
+void* vb6_NewObjectClsid(const wchar_t* clsidStr);
+
 // typelib appobject 全局单例 (VB6 全局对象): 首次按 ProgID CoCreate 并缓存,
 // 之后每次调用复用同一实例 (VB6 GlobalMultiUse/appobject 的进程级单例语义 ——
 // 同一实例上的状态如 GlobalSettings.Icons 累积的位图在多次访问间保持)。
@@ -196,6 +201,10 @@ void* vb6_ComCallObject(void* disp, const wchar_t* methodName,
 // "Item"。名字表里没有 "Item" 时 (Codejock 的 ReportColumns/Actions 一族默认成员
 // 叫 Column/Action) 按名找一律 DISP_E_MEMBERNOTFOUND ⇒ 交回 NULL。
 void* vb6_ComCallObjectDefault(void* disp, void* args, int32_t argc);
+/* C30-9: 取对象的**默认成员值** (DISPID_VALUE) —— `Trim(rst.Fields(1))` /
+ * `CStr(obj)` 这类「对象当标量用」的唯一出口。返回堆上 VARIANT，
+ * 由调用方交 vb6_VariantFromComResult 吃掉；NULL = 无默认成员。 */
+void* vb6_ComGetDefaultValue(void* disp);
 // COM方法调用→BSTR (内部UnpackBSTR+VarClear)
 wchar_t* vb6_ComCallBSTR(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);

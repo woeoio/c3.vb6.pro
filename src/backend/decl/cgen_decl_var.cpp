@@ -344,6 +344,25 @@ void CCodeGen::visit(VariableDecl& node) {
             if (node.isNew && comSym->kind == SymbolKind::ComClass) {
                 knownNewVars_[lower] = cIdent(comSym->name);  // Fix 090v reg2
                 moduleNewVars_[lower] = cIdent(comSym->name);  // Fix 090v
+                // Fix 218c-decl-new (江西省医保药品查询系统 实测登录不了): 模块级
+                // `Public conn As New ADODB.Connection` 的惰性实例化守卫只在
+                // **使用点**发 (cgen_expr_ident_symbol.inc:217), 而声明模块里根本
+                // 没人用 conn —— 用它在 frmlogin.frm, 那里的 cgen 是另一个
+                // CCodeGen 实例, 不认识 Module1 的 knownNewVars_.
+                // 结果: conn 恒 NULL ⇒ frmlogin 的 conn.Open / rs.Open 全在空对象上
+                // 调 COM ⇒ 登录永远失败 (VB6 里正常)。
+                // 修法: 在**声明模块的模块初始化函数**里建好 (vb6_mod_<X>_init 由
+                // 入口点对所有模块逐个调用), 各模块的使用点就能直接拿到活对象。
+                // 语义代价: VB6 是首次使用时创建, 这里是进程启动后即创建 —— 对
+                // `As New` + 立即使用的写法等价。
+                {
+                    // void* → 具体接口指针在 C 里是隐式转换, 不需要转型。
+                    // C30-9: 建对象表达式交 comNewObjectExpr 三档分流 —— 带 coclass CLSID 的
+                    // 走 vb6_NewObjectClsid（本机 32 位视图里 ADODB 的 ProgID 没注册，
+                    // 按 ProgID 查会 340「没有注册类」，conn 恒 NULL ⇒ 登录必失败）。
+                    moduleInitStmts_.push_back("if (!" + cName + ") " + cName
+                        + " = " + comNewObjectExpr(comSym) + ";  /* As New 模块级实例化 */");
+                }
             }
             // P13.23: ComClass WithEvents -> knownWithEventsVars_
             if (node.isWithEvents && comSym->kind == SymbolKind::ComClass && comSym->comHasSourceIface) {

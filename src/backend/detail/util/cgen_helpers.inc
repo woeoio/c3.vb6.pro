@@ -1300,6 +1300,13 @@
     // vb6_ComPackVB6InstanceRaw 包装成真 IDispatch (与 ExeComBridge 03 同一通路).
     std::string comNewExprFor(const Symbol* comSym);
 
+    // C30-9: `As New <COM 类>` 的建对象表达式（优先级：工程类实现 > coclass CLSID > ProgID）。
+    // 为什么要中间那一档：实测本机 32 位视图里 `ADODB.Connection(.6.0)` / `ADODB.Recordset`
+    // 的 **ProgID 压根没注册**，只有 CLSID 与 msado15.dll；VB6 因为拿 typelib 的 CLSID
+    // 直接 CoCreateInstance 所以能登，我方按 ProgID 查 ⇒ CLSIDFromProgID 失败
+    // ⇒ 未处理错误 #340（探针 loginprobe 实测 rc=340）⇒ conn 恒 NULL。
+    std::string comNewObjectExpr(const Symbol* comSym);
+
     // P25: 解析COM标记为类型化属性取值, 用于COM调用参数打包
     // 当isComMarker_为true时调用, 根据packFnHint选择ComGetObjectProp/GetIntProp/GetStringProp等
     // packFnHint: comPackExpr返回的封装函数名, 用于推断所需属性类型

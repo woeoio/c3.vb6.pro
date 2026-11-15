@@ -128,6 +128,9 @@ void* vb6_ComCall(void* disp, const wchar_t* methodName,
 void* vb6_ComCallByDispid(void* disp, int32_t dispid,
                          void* args, int32_t argc);
 void* vb6_ComGetProp(void* disp, const wchar_t* propName);
+/* C30-9: 默认成员**值** (DISPID_VALUE)。生成码与 RTL 各 include 一份头 —— 这份给
+ * vb6rtl_format.c 的 vb6_Format 用 (对象当标量 ⇒ 取默认成员，以前交空串)。 */
+void* vb6_ComGetDefaultValue(void* disp);
 void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value);
 void vb6_ComSetPropArg(void* disp, const wchar_t* propName, void** args, int32_t argc, void* value);
 void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef);

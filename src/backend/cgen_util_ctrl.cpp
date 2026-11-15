@@ -3151,9 +3151,15 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     // 复用形参那条路 (Fix 159-B) 的同一个 wrapToBSTR, 不另开一套折算表。
     // 上面两支 (Variant 提取 / Byte() 还原) 已经把值转成了字符串, 不能再套一层。
     bool wrapped122 = false;
+    // C30-9: 对象→String 也在这一档收口。`s = rs.Fields(2)` 的右值是
+    // vb6_ComCallObject(...) (IDispatch*), inferExprType 给的是对象/未知档 ⇒
+    // isScalarImplicitStr159 为假, 不加这一条就发成 vb6_BSTR_Assign(&s, <对象指针>),
+    // BSTR 拷贝例程拿对象指针当串读 ⇒ 0xC0000005 (memcpy 野读, 实测两处 av target)。
+    // wrapToBSTR 里有同一口径的 vb6_ComCallObject 档 (取默认成员再转串)。
+    const bool objRhs122 = (value.compare(0, 18, "vb6_ComCallObject(") == 0);
     if (!valueIsVariant && !wrappedByteArr140 && rhs) {
         Vb6Type vt122 = inferExprType(*rhs);
-        if (isScalarImplicitStr159(vt122)) {
+        if (isScalarImplicitStr159(vt122) || objRhs122) {
             std::string w122 = wrapToBSTR(value, *rhs);
             if (w122 != value) {
                 value = w122;

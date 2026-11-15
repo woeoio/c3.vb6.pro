@@ -44,17 +44,6 @@
         return;
     }
 
-    // C30-8: 裸 `Error` —— VB6 的 Error **函数**（无参时返回当前 Err 的描述）。
-    // 真实例程实测（江西省医保药品查询系统，7 窗体，5 处）：
-    //     MsgBox Error, 16, Err.Number
-    // 过去落成 `vb6_MsgBox(Error, …)` → C2065「未声明的标识符」。
-    // 注意 `Error 17`（Error **语句**，抛错）是另一种形态，不归本支管；
-    // 这里只接表达式语境。`Error` 是 VB6 保留字，不会被用户用作变量名。
-    if (lower == "error") {
-        lastExpr_ = "vb6_ErrDescription()";
-        return;
-    }
-
     // Fix 161: 裸 Console 内置全局对象 (对齐 twinBASIC)。成员 (.WriteLine/
     // .Write/.ReadLine/.ReadKey/.Read) 由 MemberAccessExpr 的 Console 分支处理;
     // 裸名本身极少单独使用, 给个哨兵值避免落到未定义标识符。
@@ -140,6 +129,25 @@
 
     // 内置常量/枚举映射
     if (lower == "vbokonly")       { lastExpr_ = "0"; return; }
+
+    // C30-8: 裸 `Error` —— VB6 的 Error **函数**（无参时返回当前 Err 的描述）。
+    // 真实例程实测（江西省医保药品查询系统，7 窗体，5 处）：
+    //     MsgBox Error, 16, Err.Number
+    // 过去落成 `vb6_MsgBox(Error, …)` → C2065「未声明的标识符」。
+    // 注意 `Error 17`（Error **语句**，抛错）是另一种形态，不归本支管；
+    // 这里只接表达式语境。`Error` 是 VB6 保留字，不会被用户用作变量名。
+    //
+    // ⚠ 位置有讲究：static 哨兵 check_builtin_global_objects.ps1 把「内置常量锚点
+    // vbokonly **之前**」那段 `if (lower == "x")` 当作「内置全局对象」拦截表，
+    // 要求每个名字都在语义层 addObj 里登记。`Error` 是函数、不是全局对象
+    // (Err 那一族才是)，放锚点之前会被判成 S1「intercepts bare name error that
+    // the semantics list addObj does not register」—— GA 实测红过。
+    // 所以它排在常量段之后：既保住拦截，也不混进那张对象表。
+    if (lower == "error") {
+        lastExpr_ = "vb6_ErrDescription()";
+        return;
+    }
+
     if (lower == "vbcancel")       { lastExpr_ = "2"; return; }
     if (lower == "vbabortretryignore") { lastExpr_ = "2"; return; }
     if (lower == "vbyesnocancel")  { lastExpr_ = "3"; return; }
@@ -268,11 +276,8 @@
             std::string newExpr;
             auto itCom = knownTypedComVars_.find(lower);
             if (itCom != knownTypedComVars_.end()) {
-                newExpr = comNewExprFor(itCom->second);  // Fix 177b: 遮蔽→工程类工厂+IDispatch包装; 未遮蔽→空串
-                if (newExpr.empty()) {
-                    const std::string& _progId = itCom->second->comProgId.empty() ? itCom->second->name : itCom->second->comProgId;
-                    newExpr = "(void*)vb6_NewObject(L\"" + _progId + "\")";
-                }
+                // C30-9: 三档分流（工程类实现 > coclass CLSID > ProgID），见 comNewObjectExpr。
+                newExpr = comNewObjectExpr(itCom->second);
             } else {
                 newExpr = "vb6_cls_" + itNew->second + "_New()";
             }

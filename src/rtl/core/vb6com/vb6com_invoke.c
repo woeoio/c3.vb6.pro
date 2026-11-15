@@ -1484,6 +1484,25 @@ void* vb6_ComCallObjectDefault(void* disp, void* args_void, int32_t argc) {
     return r;
 }
 
+/* C30-9: 「对象当标量用」—— VB6 取它的**默认成员** (DISPID_VALUE)。
+ * 与隔壁 vb6_ComCallObjectDefault 的分工就看返回值形态：
+ *   那一枚要的是**对象** (结果解包成 IDispatch，非对象档还会 ChangeType 硬套)，
+ *   这一枚要的是**值** (`Trim(rst.Fields(1))` / `CStr(obj)` 这类标量语境)。
+ * 为什么不能复用 vb6_ComCallObjectDefault: ADODB.Field 的默认成员 Value 是 BSTR，
+ * 经它会被 VariantChangeType 拧成 IDispatch —— 值当场没了。
+ * 返回堆上 VARIANT (契约同 vb6_ComCallByDispid：调用方交
+ * vb6_VariantFromComResult 吃掉)，NULL = 没有默认成员 / 不是真 IDispatch。 */
+void* vb6_ComGetDefaultValue(void* disp) {
+    if (!disp) return NULL;
+    /* 宿主伪对象 (窗体/控件槽) 没有 IDispatch 默认成员这一说：强行 Invoke(0)
+     * 会落到宿主分派里被当成 `obj(…)` 调 Item，语义不对。 */
+    if (vb6_Host_IsHostObject(disp)) return NULL;
+    /* 与 Fix 191 同一道门：接收者不是真 COM 对象时 `pDisp->lpVtbl->Invoke`
+     * 就是野指针解引用，整个进程会被一枚坏接收者带走。 */
+    if (!vb6_ComIsDispatchable(disp)) return NULL;
+    return vb6_ComCallByDispid(disp, (int32_t)DISPID_VALUE, NULL, 0);
+}
+
 void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
     /* C30-8: 菜单项代理令牌 (跨窗体 `Main.Menu_X.Prop`)。菜单项不是 IDispatch,
      * 交给晚绑定会拿 (HMENU,id) 当 IDispatch* 解引用 ⇒ 必崩。令牌由生成码的
