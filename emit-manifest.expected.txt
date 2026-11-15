@@ -754,6 +754,9 @@ sha256=22a03803b55e27d2c869ed2fa1098b633aa7065b49f5a2a54f73884619c02d6c ascii256
 sha256=603154062d970d9cb81647d47548ffed69161ce44c495ad52fc194dedb9bcd31 ascii256=fa85ba2eebe92109e860c22cc3f54d093cf59c1936162e25d1aff52246d756e4 rc=0 bytes=3062 tests/jsonfast_611/probe_ArrayBounds.bas
 sha256=6e3046a34ff860cf1782d44c568cbe2994aeda98cad07a25c562f183299ec794 ascii256=ebb88256af573cd8ce4849a13bd9457748b88fc9537f7005c104377777d50b40 rc=0 bytes=4033 tests/jsonfast_611/probe_DictArrayRoundTrip.bas
 sha256=75152c77f83d9ce7874a186ee8ed18b98ebee98e9fbcca19ac75512f881075b1 ascii256=6ab680f86b26166b8a7e917b0dd0fed6434b0424dc79e3b54d7cbb569df4c449 rc=0 bytes=3763 tests/jsonfast_611/VariantSlotElement.bas
+sha256=135a458754a771a2f76f7e36da9021b573daefc450c2ad45002da1cbd4d7b497 ascii256=53e3713a40df0df322bd952f73e9c6d206ea50fa4b850e119073412a6424132b rc=0 bytes=18569 tests/ctrlupdown/UpApp.vbp
+sha256=0f188da350e669e3460b02b07799cedaba927d2b036010f76a4b291bde823cba ascii256=6ade040ab02feac51fd93c97395deffeeb54f49ddcf6bfd2ee800509d8528f1a rc=0 bytes=32677 tests/GifcontrolSource/modTileBlt.bas
+sha256=3993a1aa80845006cfa54427a00e45963e036a34d22789d992df2bcbb551568b ascii256=4664893cb81dc80a7bc876c6b736399f7d8044348b5873e8391724ff950cf34f rc=0 bytes=461939 tests/GifcontrolSource/prjNewAniGif.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
@@ -1239,3 +1242,4 @@ sha256=75152c77f83d9ce7874a186ee8ed18b98ebee98e9fbcca19ac75512f881075b1 ascii256
 #   TeeChartChartDisplay 共 4 行与期望不同 —— 那是 B5/第330刀那条已记录的**机器侧差**（本机可解析
 #   vendor OCX/typelib），pre/post 两台同值 ⇒ 不是本刀的移动，那 4 行继续留 CI 的数。
 #   本机多出的 tests/VBFlexGridDemo/bisect1..7.vbp 7 行是 .gitignore 忽略的旧探针，CI 看不见，刻意不登记。
+# 2026-11-15 登记来源（新增 3 / 改写 0 / 退场 0）：门 run 1368、head a93dfc91 的 Emit manifest 作业自交清单（github/ci/emit-manifest 提交 53afe128）。新增三行 = tests/ctrlupdown/UpApp.vbp（C30-UD 夹具）与 tests/GifcontrolSource/{prjNewAniGif.vbp,modTileBlt.bas}（老 GIF 用户控件示例入册）；其余 719 行逐字节未动 ⇒ UpDown 那一刀对既有语料的发码字节中性。
