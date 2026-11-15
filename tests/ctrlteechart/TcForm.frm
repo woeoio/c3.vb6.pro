@@ -34,6 +34,15 @@ Private Sub Form_Load()
     TChart1.AddSeries 5
     TChart1.Series(0).FillSampleValues 4
     Debug.Print "TC-SERIES=" & TChart1.SeriesCount
+    TChart1.Panel.Color = RGB(255, 240, 240)
+    Debug.Print "TC-PANEL=" & TChart1.Panel.Color
+    TChart1.Header.Caption = "内置图表"
+    Debug.Print "TC-HEADER=" & TChart1.Header.Caption
+    Debug.Print "TC-HEADERLEN=" & Len(TChart1.Header.Caption)
+    TChart1.Axis.Bottom.Title.Caption = "月份"
+    Debug.Print "TC-AXISTITLE=" & TChart1.Axis.Bottom.Title.Caption
+    Debug.Print "TC-AXTITLELEN=" & Len(TChart1.Axis.Bottom.Title.Caption)
+    Debug.Print "TC-MARGINR=" & TChart1.Panel.MarginRight
 End Sub
 
 Private Sub Timer1_Timer()

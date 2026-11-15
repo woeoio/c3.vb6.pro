@@ -7913,7 +7913,9 @@ if ($Category -in @("all", "run", "vbp")) {
     # `TChart1.AddSeries 5` 经通用晚绑定链（ComGetObjectProp → 方法对象 → Invoke）
     # 真落到图表状态上的读数（SeriesCount 读回 1）。
     # ⚠ 两档架构都跑：OCX 只有 32 位，x64 这条是内置实现独有的一面（宿主路线下链不上）。
-    $tcChartNeedles = @("TC-BUILTIN-START", "TC-WIDTH=3600", "TC-SERIES=1")
+    $tcChartNeedles = @("TC-BUILTIN-START", "TC-WIDTH=3600", "TC-SERIES=1",
+                        "TC-PANEL=15790335", "TC-HEADERLEN=4", "TC-AXTITLELEN=2",
+                        "TC-MARGINR=12")
     Test-Vbp "ctrlteechart" "$Tests\ctrlteechart\TcApp.vbp" $tcChartNeedles -ExpectExitCode 0
     Test-Vbp "ctrlteechart_x86" "$Tests\ctrlteechart\TcApp.vbp" $tcChartNeedles -Arch "x86" -ExpectExitCode 0
     Test-Vbp "ctrlmshflexgrid_x86" "$Tests\ctrlmshflexgrid\MfgApp.vbp" $mfgNeedles -Arch "x86" -ExpectExitCode 0    # 发码形状：窗口类是 RTL 自注册的 VB6_MSCOMM（不是 OCX 宿主）、设计期 Init 一把带齐、
