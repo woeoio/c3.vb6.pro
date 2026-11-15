@@ -1199,6 +1199,14 @@ void    vb6_RegisterMshFlexGridClass(void* hInstance);
 // （Series(i).AsPie.ExplodedSlice.Value(i)）下一步接 memberobj 的 IDispatch。
 void    vb6_RegisterTChartClass(void* hInstance);
 
+// C30-10 第二刀: 宿主模型尾叉（认不出返回 0，落回原来的 438 分支）。
+// 发码侧对 TChart1.Series(0).FillSampleValues 发的就是通用晚绑定链，
+// 这三位把“接收者是控件 HWND”这一事实接到真 IDispatch 上。
+int32_t vb6_TChart_HostGetProp(void* obj, const wchar_t* name, void* outVariant);
+int32_t vb6_TChart_HostSetProp(void* obj, const wchar_t* name, const void* inVariant);
+int32_t vb6_TChart_HostCall(void* obj, const wchar_t* name, int32_t argc, void** argv,
+                            void* outVariant);
+
 int32_t vb6_TChart_SeriesCount(void* hwnd);
 int32_t vb6_TChart_AddSeries(void* hwnd, int32_t type);
 int32_t vb6_TChart_SeriesAdd(void* hwnd, int32_t idx, double y);

@@ -185,6 +185,12 @@
     }
     if (VB6_UC_OWN_SET(obj, name, v)) return 1;
 
+    /* C30-10: 内置 TChart 的写面（目前只 HeaderText）。 */
+    {
+        extern int32_t vb6_TChart_HostSetProp(void*, const wchar_t*, const void*);
+        if (vb6_TChart_HostSetProp(obj, name, v)) return 1;
+    }
+
     /* 账 #305 第二百六十二刀 (丙): 同 Call 那条 —— 不认识的属性名以前静默忽略。 */
     vb6_ho_reportUnknown(L"SetProp", name, obj);
     return 1;   // 宿主对象: 未知属性写入一律忽略

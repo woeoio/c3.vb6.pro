@@ -327,5 +327,11 @@
        `.SelLength` 落成 [C3_LATEBIND_MISS] (GUISample 实测 274 条噪声)。
        这里改答 **-1 = 成员不存在**: 宿主模型的出口按 VB6 语义抛 error 438, 由
        `On Error Resume Next` 吞掉。已知成员仍走上面的 return 1 (行为不变)。 */
+    /* C30-10: 内置 TChart 的成员面（Series 集合 / Series / AddSeries）。
+       认不出返回 0 ⇒ 继续往下走原来的 438 分支，别的控件行为不变。 */
+    {
+        extern int32_t vb6_TChart_HostGetProp(void*, const wchar_t*, void*);
+        if (vb6_TChart_HostGetProp(obj, name, out)) return 1;
+    }
     vb6_ho_report438(L"GetProp", name, obj);
     return -1;   // 宿主对象: 成员不存在 (调用方按 VB6 语义抛 438)

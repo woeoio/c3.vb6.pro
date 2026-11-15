@@ -60,6 +60,9 @@ typedef struct {
     TcSeries ser[VB6_TC_MAXSER];
     int      nser;
     int      paints;             /* 绘制次数（C3_TCHART_TRACE 用） */
+    struct TcObj* obj[VB6_TC_MAXSER + 1];   /* 成员对象缓存 (0 = Series 集合) */
+    struct TcObj* meth[8];                  /* 方法对象缓存（AddSeries 那几枚） */
+    int      nmeth;
 } TcChart;
 
 static TcChart* g_tc[VB6_TC_MAXCTL];
@@ -115,6 +118,17 @@ static TcSeries* tcSeries(TcChart* c, int idx) {
         c->nser++;
     }
     return &c->ser[idx];
+}
+
+/* 尾叉用：先认窗口类再取（不认窗口就不碰 —— 宿主模型每枚控件都会问到这里）。
+ * 用 tcAttach 而不是 tcOf：Form_Load 里的调用**早于第一次 WM_PAINT**，
+ * 那时状态还没挂上；只看 tcOf 会在 Show 之前错答 438。 */
+static TcChart* tcOfClass(HWND h) {
+    wchar_t cls[64];
+    if (!h || !IsWindow(h)) return NULL;
+    if (!GetClassNameW(h, cls, 64)) return NULL;
+    if (wcscmp(cls, VB6_TC_CLASS) != 0) return NULL;
+    return tcAttach(h);
 }
 
 /* 默认调色板（与 TeeChart 出厂配色同序，够 P1 的判据用） */
@@ -482,4 +496,357 @@ void vb6_TChart_Repaint(void* hwnd) {
 int32_t vb6_TChart_PaintCount(void* hwnd) {
     TcChart* c = tcOf((HWND)hwnd);
     return c ? c->paints : 0;
+}
+
+/* ==================== 成员对象：Series 集合 / Series（C30-10 第二刀） ====================
+ *
+ * 发码侧零改动：cgen 对 `TChart1.Series(0).FillSampleValues 4` 发的已经是通用晚绑定链
+ * （vb6_ComGetObjectProp(hwnd,L"Series") → vb6_ComCall(默认成员) → vb6_ComCall(L"FillSampleValues")，
+ * 实测见 ai/内置控件/TeeChart* §3.1）。缺的只有“接收者是控件 HWND”这件事：
+ * 宿主管道已经会把 HWND 当宿主对象处理（vb6_Host_GetProp/Call），所以这里只补
+ * 一条支路：GetProp("Series") 交出一枚**真 IDispatch** 集合，后续每一跳都由这张
+ * vtbl 应答，不需要 cgen 特例。
+ *
+ * 为什么不往 vb6forms_memberobj.c 里加族：那一份是 1300 行的共用分派（文件头记了
+ * 一串“次序搞错就静默吞掉”的坑），为一块新控件往里插队风险大于收益。这里自带两张
+ * 名表 + 一次 Invoke 分派，形态与它一致（真 IDispatch，晚绑定/For Each 都认）。
+ *
+ * 生命周期：对象归图表所有（TcChart.obj[] 缓存），Release 只减计数、不归还内存，
+ * 窗口销毁时一并释放 —— 避免“交出去的引用被 VariantClear 放掉、调用方还在用”这类
+ * 双重释放；一枚对象 24 字节，按图缓存，不会随访问次数增长。
+ */
+#define TC_KIND_COLL    0
+#define TC_KIND_SERIES  1
+#define TC_KIND_METHOD  2   /* 根上的方法对象（AddSeries 那族） */
+
+typedef struct TcObj {
+    const IDispatchVtbl* lpVtbl;
+    LONG ref;
+    int  kind;      /* TC_KIND_* */
+    HWND hwnd;
+    int  index;     /* 系列下标（0 基）；集合为 -1 */
+    wchar_t mname[64];   /* TC_KIND_METHOD：要回放的方法名 */
+} TcObj;
+
+static const IDispatchVtbl tcObjVtbl;
+
+/* 名表顺序 = DISPID（下标 + 1），与 memberobj 同一口径。
+ * 只登记扁平层真做得动的成员：Marks / Pen / Brush / AsPie 这些放进来就是
+ * “看着支持、实则答错”，宁可留 438（文档 §5 已登记）。 */
+static const wchar_t* kTcCollNames[] = { L"Item", L"Count", NULL };
+static const wchar_t* kTcSerNames[]  = {
+    L"Add", L"AddXY", L"FillSampleValues", L"Clear",
+    L"Color", L"Title", L"SeriesType", L"Count", NULL };
+
+static void tcSetEmpty(VARIANT* o) { if (o) VariantInit(o); }
+static void tcSetL(VARIANT* o, int32_t v) {
+    if (!o) return; VariantInit(o); o->vt = VT_I4; o->lVal = v;
+}
+static void tcSetD(VARIANT* o, double v) {
+    if (!o) return; VariantInit(o); o->vt = VT_R8; o->dblVal = v;
+}
+static void tcSetStr(VARIANT* o, const wchar_t* s) {
+    if (!o) return; VariantInit(o); o->vt = VT_BSTR; o->bstrVal = SysAllocString(s ? s : L"");
+}
+static void tcSetObj(VARIANT* o, TcObj* p) {
+    if (!o) return; VariantInit(o);
+    if (!p) { o->vt = VT_EMPTY; return; }
+    InterlockedIncrement(&p->ref);   /* 交出去的这枚引用由调用方 VariantClear 放 */
+    o->vt = VT_DISPATCH; o->pdispVal = (IDispatch*)p;
+}
+
+/* 实参取值：VB6 递进来的可能是 I4/I2/R8/BSTR/ByRef，统一交给 VariantChangeType
+ * 换算，不手抄第二张表（uc_hostmodel 那两张表就是手抄的产物）。 */
+static int32_t tcArgL(VARIANT* v) {
+    VARIANT t; int32_t r = 0;
+    if (!v) return 0;
+    VariantInit(&t);
+    if (SUCCEEDED(VariantChangeType(&t, v, 0, VT_I4))) r = t.lVal;
+    VariantClear(&t);
+    return r;
+}
+static double tcArgD(VARIANT* v) {
+    VARIANT t; double r = 0.0;
+    if (!v) return 0.0;
+    VariantInit(&t);
+    if (SUCCEEDED(VariantChangeType(&t, v, 0, VT_R8))) r = t.dblVal;
+    VariantClear(&t);
+    return r;
+}
+
+static TcObj* tcObjFor(TcChart* c, int kind, int index);
+static int32_t tcRootCall(TcChart* c, void* hwnd, const wchar_t* name, int argc,
+                          VARIANT** a, VARIANT* out);
+static TcObj* tcMethodFor(TcChart* c, const wchar_t* name);
+
+static HRESULT STDMETHODCALLTYPE tcQI(IDispatch* d, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IDispatch)) {
+        *ppv = d; InterlockedIncrement(&((TcObj*)d)->ref); return S_OK;
+    }
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE tcAddRef(IDispatch* d) {
+    return (ULONG)InterlockedIncrement(&((TcObj*)d)->ref);
+}
+static ULONG STDMETHODCALLTYPE tcRelease(IDispatch* d) {
+    LONG r = InterlockedDecrement(&((TcObj*)d)->ref);
+    /* 不归还内存：对象归图表所有（见上面生命周期那段） */
+    return (ULONG)(r > 0 ? r : 0);
+}
+static HRESULT STDMETHODCALLTYPE tcGtiCount(IDispatch* d, UINT* n) {
+    (void)d; if (n) *n = 0; return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE tcGti(IDispatch* d, UINT i, LCID l, ITypeInfo** t) {
+    (void)d; (void)i; (void)l; if (t) *t = NULL; return E_NOTIMPL;
+}
+static HRESULT STDMETHODCALLTYPE tcGetIDs(IDispatch* d, REFIID riid, LPOLESTR* names,
+                                          UINT n, LCID lcid, DISPID* ids) {
+    TcObj* o = (TcObj*)d;
+    const wchar_t* const* tbl = (o->kind == TC_KIND_COLL) ? kTcCollNames : kTcSerNames;
+    (void)riid; (void)lcid;
+    if (!names || !ids) return E_POINTER;
+    for (UINT k = 0; k < n; k++) {
+        int i;
+        if (!names[k] || !names[k][0]) { ids[k] = DISPID_VALUE; continue; }
+        for (i = 0; tbl[i]; i++) if (_wcsicmp(tbl[i], names[k]) == 0) break;
+        if (tbl[i]) { ids[k] = (DISPID)(i + 1); continue; }
+        if (o->kind == TC_KIND_COLL && _wcsicmp(names[k], L"_NewEnum") == 0) {
+            ids[k] = DISPID_NEWENUM; continue;   /* Invoke 里答 E_NOTIMPL（缺口已登记） */
+        }
+        return DISP_E_UNKNOWNNAME;
+    }
+    return S_OK;
+}
+
+static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, LCID lcid,
+                                          WORD flags, DISPPARAMS* dp, VARIANT* res,
+                                          EXCEPINFO* ei, UINT* ae) {
+    TcObj* o = (TcObj*)d;
+    TcChart* c = tcOf(o->hwnd);
+    TcSeries* s;
+    int argc = dp ? (int)dp->cArgs : 0;
+    /* DISPPARAMS 的 rgvarg 是**逆序**：第一个实参在 rgvarg[argc-1]。 */
+    VARIANT* a0 = (argc >= 1) ? &dp->rgvarg[argc - 1] : NULL;
+    VARIANT* a1 = (argc >= 2) ? &dp->rgvarg[argc - 2] : NULL;
+    (void)riid; (void)lcid; (void)ei; (void)ae;
+    if (!c) return DISP_E_MEMBERNOTFOUND;
+    if (res) tcSetEmpty(res);
+
+    /* TC_KIND_METHOD：cgen 把 `TChart1.AddSeries 5` 发成
+     * vb6_ComGetObjectProp(hwnd,L"AddSeries") + vb6_ComCallObject(成员, NULL, 实参, 1)
+     * —— 即方法名先被当成**对象**取一次，随后对那个对象走默认成员。
+     * 所以 GetProp 要能交出“方法对象”，这里回放成根上的方法。 */
+    if (o->kind == TC_KIND_METHOD) {
+        VARIANT* av[8];
+        int i;
+        if (argc > 8) argc = 8;
+        for (i = 0; i < argc; i++) av[i] = &dp->rgvarg[argc - 1 - i];
+        if (!tcRootCall(c, o->hwnd, o->mname, argc, av, res)) return DISP_E_MEMBERNOTFOUND;
+        return S_OK;
+    }
+
+    if (o->kind == TC_KIND_COLL) {
+        switch (id) {
+        case DISPID_VALUE: {                   /* 默认成员 = Item(i)，0 基（TeeChart 口径） */
+            int idx = (int)tcArgL(a0);
+            if (idx < 0) idx = 0;
+            tcObjFor(c, TC_KIND_SERIES, idx);   /* 访问即建号，与 C 入口同一策略 */
+            tcSetObj(res, tcObjFor(c, TC_KIND_SERIES, idx));
+            return S_OK;
+        }
+        case 1: {                              /* Item(i) */
+            int idx = (int)tcArgL(a0);
+            if (idx < 0) idx = 0;
+            tcObjFor(c, TC_KIND_SERIES, idx);
+            tcSetObj(res, tcObjFor(c, TC_KIND_SERIES, idx));
+            return S_OK;
+        }
+        case 2:                                /* Count */
+            tcSetL(res, c->nser);
+            return S_OK;
+        case DISPID_NEWENUM:
+            return E_NOTIMPL;                   /* For Each 还没接（文档 §5） */
+        default:
+            return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+
+    /* TC_KIND_SERIES */
+    s = tcSeries(c, o->index);
+    if (!s) return DISP_E_MEMBERNOTFOUND;
+    switch (id) {
+    case 1:                                     /* Add(y) */
+        tcSetL(res, vb6_TChart_SeriesAdd(o->hwnd, o->index, tcArgD(a0)));
+        return S_OK;
+    case 2:                                     /* AddXY(x,y) */
+        tcSetL(res, vb6_TChart_SeriesAddXY(o->hwnd, o->index, tcArgD(a0), tcArgD(a1)));
+        return S_OK;
+    case 3:                                     /* FillSampleValues(n) */
+        tcSetL(res, vb6_TChart_FillSampleValues(o->hwnd, o->index, (int32_t)tcArgL(a0)));
+        return S_OK;
+    case 4:                                     /* Clear */
+        vb6_TChart_SeriesClear(o->hwnd, o->index);
+        return S_OK;
+    case 5:                                     /* Color */
+        if (flags & DISPATCH_PROPERTYPUT) {
+            vb6_TChart_SetSeriesColor(o->hwnd, o->index, (int32_t)tcArgL(a0));
+            return S_OK;
+        }
+        tcSetL(res, (int32_t)s->color);
+        return S_OK;
+    case 6:                                     /* Title */
+        if (flags & DISPATCH_PROPERTYPUT) {
+            BSTR b = NULL; VARIANT t;
+            VariantInit(&t);
+            if (a0 && SUCCEEDED(VariantChangeType(&t, a0, 0, VT_BSTR))) b = t.bstrVal;
+            vb6_TChart_SetSeriesTitle(o->hwnd, o->index, b ? b : L"");
+            VariantClear(&t);
+            return S_OK;
+        }
+        tcSetStr(res, s->title);
+        return S_OK;
+    case 7:                                     /* SeriesType */
+        if (flags & DISPATCH_PROPERTYPUT) { s->type = (int)tcArgL(a0); return S_OK; }
+        tcSetL(res, s->type);
+        return S_OK;
+    case 8:                                     /* Count = 点数 */
+        tcSetL(res, s->n);
+        return S_OK;
+    default:
+        return DISP_E_MEMBERNOTFOUND;
+    }
+}
+
+static const IDispatchVtbl tcObjVtbl = {
+    tcQI, tcAddRef, tcRelease, tcGtiCount, tcGti, tcGetIDs, tcInvoke
+};
+
+static TcObj* tcObjFor(TcChart* c, int kind, int index) {
+    int slot;
+    if (!c) return NULL;
+    slot = (kind == TC_KIND_COLL) ? 0 : (index + 1);
+    if (slot < 0 || slot > VB6_TC_MAXSER) return NULL;
+    if (!c->obj[slot]) {
+        TcObj* o = (TcObj*)calloc(1, sizeof(TcObj));
+        if (!o) return NULL;
+        o->lpVtbl = &tcObjVtbl;
+        o->ref    = 1;
+        o->kind   = kind;
+        o->hwnd   = c->hwnd;
+        o->index  = index;
+        c->obj[slot] = o;
+    }
+    return c->obj[slot];
+}
+
+/* 根上的方法名（GetProp 时交方法对象出去，Invoke 时回放） */
+static const wchar_t* const kTcMethodNames[] = {
+    L"AddSeries", L"Repaint", L"Refresh", L"Draw", L"RemoveAllSeries", NULL };
+
+/* 根方法分派：Host_Call 与 TC_KIND_METHOD 两条入口共用这一张表。
+ * 认不出返回 0（调用方回 438 / 继续往下走）。 */
+static int32_t tcRootCall(TcChart* c, void* hwnd, const wchar_t* name, int argc,
+                          VARIANT** a, VARIANT* out) {
+    if (!c || !name) return 0;
+    if (_wcsicmp(name, L"AddSeries") == 0) {
+        int32_t idx = vb6_TChart_AddSeries(hwnd, (argc >= 1) ? tcArgL(a[0]) : 0);
+        if (out) tcSetL(out, idx);
+        return 1;
+    }
+    if (_wcsicmp(name, L"Repaint") == 0 || _wcsicmp(name, L"Refresh") == 0
+        || _wcsicmp(name, L"Draw") == 0) {
+        vb6_TChart_Repaint(hwnd);
+        return 1;
+    }
+    if (_wcsicmp(name, L"RemoveAllSeries") == 0) {
+        c->nser = 0;
+        vb6_TChart_Repaint(hwnd);
+        return 1;
+    }
+    return 0;
+}
+
+static TcObj* tcMethodFor(TcChart* c, const wchar_t* name) {
+    int i;
+    if (!c || !name) return NULL;
+    for (i = 0; i < c->nmeth; i++) {
+        if (c->meth[i] && _wcsicmp(c->meth[i]->mname, name) == 0) return c->meth[i];
+    }
+    if (c->nmeth >= (int)(sizeof(c->meth) / sizeof(c->meth[0]))) return NULL;
+    {
+        TcObj* o = (TcObj*)calloc(1, sizeof(TcObj));
+        if (!o) return NULL;
+        o->lpVtbl = &tcObjVtbl;
+        o->ref    = 1;
+        o->kind   = TC_KIND_METHOD;
+        o->hwnd   = c->hwnd;
+        o->index  = -1;
+        wcsncpy(o->mname, name, 63);
+        c->meth[c->nmeth++] = o;
+        return o;
+    }
+}
+
+/* ==================== 宿主模型钩子（vb6_Host_GetProp/Call/SetProp 的尾叉） ====================
+ * 形状与 vb6_MenuProxyDecode 那一族一致：认不出返回 0，让宿主模型回到它原来的
+ * report438 分支 —— 对别的控件行为逐字不变。
+ */
+int32_t vb6_TChart_HostGetProp(void* obj, const wchar_t* name, void* outV) {
+    TcChart* c = tcOfClass((HWND)obj);
+    VARIANT* out = (VARIANT*)outV;
+    if (!c || !name || !out) return 0;
+    if (_wcsicmp(name, L"Series") == 0) {
+        tcSetObj(out, tcObjFor(c, TC_KIND_COLL, -1));
+        return 1;
+    }
+    if (_wcsicmp(name, L"SeriesCount") == 0) { tcSetL(out, c->nser); return 1; }
+    if (_wcsicmp(name, L"HeaderText") == 0 || _wcsicmp(name, L"Text") == 0) {
+        tcSetStr(out, c->header); return 1;
+    }
+    if (_wcsicmp(name, L"ChartWidth") == 0) {
+        RECT r; GetClientRect(c->hwnd, &r); tcSetL(out, r.right - r.left); return 1;
+    }
+    if (_wcsicmp(name, L"ChartHeight") == 0) {
+        RECT r; GetClientRect(c->hwnd, &r); tcSetL(out, r.bottom - r.top); return 1;
+    }
+    /* 方法名当对象取（见 tcInvoke 里 TC_KIND_METHOD 那段） */
+    {
+        int i;
+        for (i = 0; kTcMethodNames[i]; i++) {
+            if (_wcsicmp(name, kTcMethodNames[i]) == 0) {
+                tcSetObj(out, tcMethodFor(c, kTcMethodNames[i]));
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+int32_t vb6_TChart_HostCall(void* obj, const wchar_t* name, int32_t argc, void** argv,
+                            void* outV) {
+    TcChart* c = tcOfClass((HWND)obj);
+    VARIANT* av[8];
+    int i;
+    if (!c || !name) return 0;
+    if (argc > 8) argc = 8;
+    for (i = 0; i < argc; i++) av[i] = (argv && argv[i]) ? (VARIANT*)argv[i] : NULL;
+    return tcRootCall(c, obj, name, argc, av, (VARIANT*)outV);
+}
+
+int32_t vb6_TChart_HostSetProp(void* obj, const wchar_t* name, const void* inV) {
+    TcChart* c = tcOfClass((HWND)obj);
+    const VARIANT* v = (const VARIANT*)inV;
+    VARIANT t;
+    if (!c || !name) return 0;
+    if (_wcsicmp(name, L"HeaderText") == 0 && v) {
+        VariantInit(&t);
+        if (SUCCEEDED(VariantChangeType(&t, v, 0, VT_BSTR))) {
+            vb6_TChart_SetHeaderText(obj, t.bstrVal ? t.bstrVal : L"");
+        }
+        VariantClear(&t);
+        return 1;
+    }
+    return 0;
 }
