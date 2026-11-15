@@ -349,6 +349,55 @@
     }
 
     // ============================================================
+    // C30-6: MSHFlexGrid / MSFlexGrid 的方法调用（AddItem / RemoveItem / Clear /
+    // ClearStructure / Refresh）。与 C30-5 的 Adodc/DataGrid 同一个理由：这几条是 C3
+    // 自己实现的控件方法，**不能**落 COM 派发。实测（本夹具第一跑）：
+    //   `MSHFlexGrid1.AddItem "Bob" & vbTab & "Sales"` 会被发成
+    //   vb6_ComCallObject(vb6_ComGetObjectProp(vb6_hwnd_MSHFlexGrid1, L"AddItem"), …)
+    // 宿主在 HWND 上做 GetProp ⇒ 运行期抛 438，
+    //   [C3_HOST_438 #1] site=GetProp name="AddItem" cls=VB6_MSHFLEXGRID
+    // 带实参的方法走不到 cgen_call.cpp 那张无参表，所以在这里拦。
+    // ============================================================
+    if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maFg2 = static_cast<MemberAccessExpr&>(*node.callee);
+        if (maFg2.object && maFg2.object->kind == ASTNodeKind::IdentifierExpr
+            && node.named.empty()) {
+            auto& objIdFg2 = static_cast<IdentifierExpr&>(*maFg2.object);
+            std::string objLowerFg2 = Symbol::toLower(objIdFg2.name);
+            auto itFg2 = knownFormControls_.find(objLowerFg2);
+            if (itFg2 != knownFormControls_.end()
+                && itFg2->second == FrmControlType::MshFlexGrid) {
+                std::string memFg2 = Symbol::toLower(maFg2.memberName);
+                std::string hwFg2 = makeCtrlHwndArg(objLowerFg2, itFg2->second);
+                if (memFg2 == "additem" && node.positional.size() == 1) {
+                    emitExpr(*node.positional[0]);
+                    lastExpr_ = "vb6_MshFlexGrid_AddItem((void*)" + hwFg2 + ", "
+                              + lastExpr_ + ")  /* MSHFlexGrid.AddItem */";
+                    return;
+                }
+                if (memFg2 == "removeitem" && node.positional.size() == 1) {
+                    emitExpr(*node.positional[0]);
+                    lastExpr_ = "vb6_MshFlexGrid_RemoveItem((void*)" + hwFg2 + ", "
+                              + lastExpr_ + ")  /* MSHFlexGrid.RemoveItem */";
+                    return;
+                }
+                if (memFg2 == "clear" && node.positional.empty()) {
+                    lastExpr_ = "vb6_MshFlexGrid_Clear((void*)" + hwFg2 + ")";
+                    return;
+                }
+                if (memFg2 == "clearstructure" && node.positional.empty()) {
+                    lastExpr_ = "vb6_MshFlexGrid_ClearStructure((void*)" + hwFg2 + ")";
+                    return;
+                }
+                if (memFg2 == "refresh" && node.positional.empty()) {
+                    lastExpr_ = "vb6_MshFlexGrid_Refresh((void*)" + hwFg2 + ")";
+                    return;
+                }
+            }
+        }
+    }
+
+    // ============================================================
     // Fix 162a: X.Move l[, t[, w[, h]]] —— VB6 语言级方法 (Form/控件通用)。
     // 之前落 vb6_ComGetObjectProp(hwnd, L"Move") → 在 HWND 上取属性必失败,
     // Form_Load/Form_Resize 的布局全部静默失效 (extlist 实测: ListView 停在
@@ -572,6 +621,39 @@
                     std::string idxTs = std::move(lastExpr_);
                     lastExpr_ = fnTs + "(" + makeCtrlHwndArg(objLowerTs, itCtlTs->second)
                               + ", " + idxTs + ")  /* SSTab indexed prop */";
+                    return;
+                }
+            }
+        }
+
+        // ---- C30-6: MSHFlexGrid / MSFlexGrid 的带下标属性 ----
+        // TextMatrix(r,c)（两参）+ TextArray(i) / ColWidth(i) / RowHeight(i) / ColAlignment(i)（一参）。
+        // 不拦的后果与 SSTab 那组一样：掉到下面 COM 派发，发成 vb6_ComCall(vb6_hwnd_xxx, …)；
+        // 本地 hwnd 不是 IDispatch ⇒ 运行期静默空串。
+        // 写侧配 cgen_util_comwrite.cpp 的 Get→Set 改写（那边只换函数名、实参原样带）。
+        if (maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr
+            && (node.positional.size() == 1 || node.positional.size() == 2)) {
+            auto& objIdFg = static_cast<IdentifierExpr&>(*maExpr.object);
+            std::string objLowerFg = Symbol::toLower(objIdFg.name);
+            auto itCtlFg = knownFormControls_.find(objLowerFg);
+            if (itCtlFg != knownFormControls_.end()
+                && itCtlFg->second == FrmControlType::MshFlexGrid) {
+                std::string fnFg;
+                size_t nargFg = node.positional.size();
+                if (memLower == "textmatrix" && nargFg == 2)      fnFg = "vb6_MshFlexGrid_GetTextMatrix";
+                else if (memLower == "textarray" && nargFg == 1)  fnFg = "vb6_MshFlexGrid_GetTextArray";
+                else if (memLower == "colwidth" && nargFg == 1)   fnFg = "vb6_MshFlexGrid_GetColWidth";
+                else if (memLower == "rowheight" && nargFg == 1)  fnFg = "vb6_MshFlexGrid_GetRowHeight";
+                else if (memLower == "colalignment" && nargFg == 1) fnFg = "vb6_MshFlexGrid_GetColAlignment";
+                if (!fnFg.empty()) {
+                    std::string argsFg;
+                    for (size_t k = 0; k < nargFg; k++) {
+                        emitExpr(*node.positional[k]);
+                        if (k) argsFg += ", ";
+                        argsFg += lastExpr_;
+                    }
+                    lastExpr_ = fnFg + "(" + makeCtrlHwndArg(objLowerFg, itCtlFg->second)
+                              + ", " + argsFg + ")";
                     return;
                 }
             }

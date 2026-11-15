@@ -131,6 +131,7 @@ enum class FrmControlType {
     MSComm,             // MSCommLib.MSComm — Win32 串口 API + 读线程 (无外观控件), C30-4
     Adodc,              // MSAdodcLib.Adodc — ACE 底座 (ODBC 层) 的记录集控件 (无外观), C30-5
     DataGrid,           // MSDataGridLib.DataGrid — 自绘表格, 绑定 Adodc/Data 的记录集, C30-5
+    MshFlexGrid,        // MSHFlexGrid / MSFlexGrid — 字符串矩阵表格 (Rows×Cols 自存), C30-6
     Unknown,            // 未识别的控件类型
 };
 

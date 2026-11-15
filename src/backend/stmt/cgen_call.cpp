@@ -896,6 +896,13 @@ void CCodeGen::visit(CallStmt& node) {
                                 else if (meth == "ReBind")        rtlFn = "vb6_DataGrid_ReBind";
                                 else if (meth == "ClearSelRows")   rtlFn = "vb6_DataGrid_ClearSelRows";
                             }
+                            // C30-6: MSHFlexGrid —— 同样的三条无参方法（Clear/ClearStructure 也是
+                            // 语句形态，VB6 里不写括号）。
+                            else if (ctIt->second == FrmControlType::MshFlexGrid) {
+                                if (meth == "Refresh")          rtlFn = "vb6_MshFlexGrid_Refresh";
+                                else if (meth == "Clear")        rtlFn = "vb6_MshFlexGrid_Clear";
+                                else if (meth == "ClearStructure") rtlFn = "vb6_MshFlexGrid_ClearStructure";
+                            }
                             if (!rtlFn.empty()) {
                                 callExpr = rtlFn + "((void*)vb6_hwnd_" + ctrlNm + ")";
                             }

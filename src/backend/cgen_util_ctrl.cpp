@@ -112,8 +112,27 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
         if (p == "row" || p == "col" || p == "rowcount" || p == "colcount"
             || p == "rowheight" || p == "defcolwidth") return Vb6Type::Long;
     }
-    // C30-2: TabStrip 的标量面。四个 Client* 与三条行为位的 RTL getter 都是 int32_t;
-    // MultiRow/HotTracking/ShowTips 在 VB6 那边是 Boolean。
+    // C30-6: MSHFlexGrid / MSFlexGrid 的属性面。
+    // String：Text / TextMatrix(r,c) / TextArray(i) / FormatString / DataSource；
+    // Boolean：七条开关位；其余（含 ColWidth/RowHeight/ColAlignment 的**元素值**）是 Long。
+    // 不登记的症状与 Adodc 同：`s = grd.TextMatrix(1,2)` 被当 Variant 装箱成空串，
+    // 表格画得出来但读回全假。
+    if (ctrlType == FrmControlType::MshFlexGrid) {
+        if (p == "text" || p == "textmatrix" || p == "textarray"
+            || p == "formatstring" || p == "datasource") return Vb6Type::String;
+        if (p == "wordwrap" || p == "editable" || p == "focusrect"
+            || p == "allowuserresizing" || p == "mergecells" || p == "redraw") return Vb6Type::Boolean;
+        if (p == "rows" || p == "cols" || p == "fixedrows" || p == "fixedcols"
+            || p == "row" || p == "col" || p == "rowsel" || p == "colsel"
+            || p == "toprow" || p == "leftcol" || p == "colwidth" || p == "rowheight"
+            || p == "colalignment" || p == "rowheightmin" || p == "gridlines"
+            || p == "scrollbars" || p == "selectionmode" || p == "fillstyle"
+            || p == "backcolor" || p == "forecolor" || p == "fillcolor"
+            || p == "cellbackcolor" || p == "cellforecolor" || p == "mouserow"
+            || p == "mousecol" || p == "cellheight" || p == "cellwidth"
+            || p == "cellleft" || p == "celltop" || p == "sort") return Vb6Type::Long;
+    }
+    // C30-2: TabStrip 的标量面。四个 Client* 与三条行为位的 RTL getter 都是 int32_t;    // MultiRow/HotTracking/ShowTips 在 VB6 那边是 Boolean。
     // ⚠ Tabs(i).Caption 这类**链式成员**不在本表（这一问只看“控件.属性”一形），
     // 所以 `"cap=" & TabStrip1.Tabs(n).Caption` 这种接法仍会被当 Variant 装箱成空串；
     // 先读进 String 变量再用就对了（tools/tabstrip_manual 的写法）。
@@ -696,6 +715,46 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         if (propLower == "rowheight")     return "vb6_DataGrid_GetRowHeight";
         if (propLower == "defcolwidth")   return "vb6_DataGrid_GetDefColWidth";
         break;
+    case FrmControlType::MshFlexGrid:  // C30-6: 字符串矩阵表格（get）
+        // 带下标的 TextMatrix(r,c) / TextArray(i) / ColWidth(i) 三条走
+        // cgen_expr_call_callee_member.inc 的索引属性分支，不在这张表里。
+        if (propLower == "text")          return "vb6_MshFlexGrid_GetText";
+        if (propLower == "rows")          return "vb6_MshFlexGrid_GetRows";
+        if (propLower == "cols")          return "vb6_MshFlexGrid_GetCols";
+        if (propLower == "fixedrows")     return "vb6_MshFlexGrid_GetFixedRows";
+        if (propLower == "fixedcols")     return "vb6_MshFlexGrid_GetFixedCols";
+        if (propLower == "row")           return "vb6_MshFlexGrid_GetRow";
+        if (propLower == "col")           return "vb6_MshFlexGrid_GetCol";
+        if (propLower == "rowsel")        return "vb6_MshFlexGrid_GetRowSel";
+        if (propLower == "colsel")        return "vb6_MshFlexGrid_GetColSel";
+        if (propLower == "toprow")        return "vb6_MshFlexGrid_GetTopRow";
+        if (propLower == "leftcol")       return "vb6_MshFlexGrid_GetLeftCol";
+        if (propLower == "gridlines")     return "vb6_MshFlexGrid_GetGridLines";
+        if (propLower == "scrollbars")    return "vb6_MshFlexGrid_GetScrollBars";
+        if (propLower == "selectionmode") return "vb6_MshFlexGrid_GetSelectionMode";
+        if (propLower == "fillstyle")     return "vb6_MshFlexGrid_GetFillStyle";
+        if (propLower == "wordwrap")      return "vb6_MshFlexGrid_GetWordWrap";
+        if (propLower == "editable")      return "vb6_MshFlexGrid_GetEditable";
+        if (propLower == "focusrect")     return "vb6_MshFlexGrid_GetFocusRect";
+        if (propLower == "allowuserresizing") return "vb6_MshFlexGrid_GetAllowUserResizing";
+        if (propLower == "mergecells")    return "vb6_MshFlexGrid_GetMergeCells";
+        if (propLower == "redraw")        return "vb6_MshFlexGrid_GetRedraw";
+        if (propLower == "backcolor")     return "vb6_MshFlexGrid_GetBackColor";
+        if (propLower == "forecolor")     return "vb6_MshFlexGrid_GetForeColor";
+        if (propLower == "fillcolor")     return "vb6_MshFlexGrid_GetFillColor";
+        if (propLower == "cellbackcolor") return "vb6_MshFlexGrid_GetCellBackColor";
+        if (propLower == "cellforecolor") return "vb6_MshFlexGrid_GetCellForeColor";
+        if (propLower == "mouserow")      return "vb6_MshFlexGrid_GetMouseRow";
+        if (propLower == "mousecol")      return "vb6_MshFlexGrid_GetMouseCol";
+        if (propLower == "cellheight")    return "vb6_MshFlexGrid_GetCellHeight";
+        if (propLower == "cellwidth")     return "vb6_MshFlexGrid_GetCellWidth";
+        if (propLower == "cellleft")      return "vb6_MshFlexGrid_GetCellLeft";
+        if (propLower == "celltop")       return "vb6_MshFlexGrid_GetCellTop";
+        if (propLower == "formatstring")  return "vb6_MshFlexGrid_GetFormatString";
+        if (propLower == "datasource")    return "vb6_MshFlexGrid_GetDataSource";
+        if (propLower == "rowheightmin")  return "vb6_MshFlexGrid_GetRowHeightMin";
+        if (propLower == "sort")          return "vb6_MshFlexGrid_GetSort";
+        break;
     case FrmControlType::Data:  // C29-Data: ODBC 后端
         if (propLower == "recordset")    return "vb6_Data_RecordsetObj";  /* 真 IDispatch, 链走晚绑定 */
         if (propLower == "databasename") return "vb6_Data_GetDatabaseName";
@@ -1224,6 +1283,38 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
         if (propLower == "allowdelete")   return "vb6_DataGrid_SetAllowDelete";
         if (propLower == "rowheight")     return "vb6_DataGrid_SetRowHeight";
         if (propLower == "defcolwidth")   return "vb6_DataGrid_SetDefColWidth";
+        break;
+    case FrmControlType::MshFlexGrid:  // C30-6 写表（Text 写当前格；TextMatrix/ColWidth 走索引属性）
+        if (propLower == "text")          return "vb6_MshFlexGrid_SetText";
+        if (propLower == "rows")          return "vb6_MshFlexGrid_SetRows";
+        if (propLower == "cols")          return "vb6_MshFlexGrid_SetCols";
+        if (propLower == "fixedrows")     return "vb6_MshFlexGrid_SetFixedRows";
+        if (propLower == "fixedcols")     return "vb6_MshFlexGrid_SetFixedCols";
+        if (propLower == "row")           return "vb6_MshFlexGrid_SetRow";
+        if (propLower == "col")           return "vb6_MshFlexGrid_SetCol";
+        if (propLower == "rowsel")        return "vb6_MshFlexGrid_SetRowSel";
+        if (propLower == "colsel")        return "vb6_MshFlexGrid_SetColSel";
+        if (propLower == "toprow")        return "vb6_MshFlexGrid_SetTopRow";
+        if (propLower == "leftcol")       return "vb6_MshFlexGrid_SetLeftCol";
+        if (propLower == "gridlines")     return "vb6_MshFlexGrid_SetGridLines";
+        if (propLower == "scrollbars")    return "vb6_MshFlexGrid_SetScrollBars";
+        if (propLower == "selectionmode") return "vb6_MshFlexGrid_SetSelectionMode";
+        if (propLower == "fillstyle")     return "vb6_MshFlexGrid_SetFillStyle";
+        if (propLower == "wordwrap")      return "vb6_MshFlexGrid_SetWordWrap";
+        if (propLower == "editable")      return "vb6_MshFlexGrid_SetEditable";
+        if (propLower == "focusrect")     return "vb6_MshFlexGrid_SetFocusRect";
+        if (propLower == "allowuserresizing") return "vb6_MshFlexGrid_SetAllowUserResizing";
+        if (propLower == "mergecells")    return "vb6_MshFlexGrid_SetMergeCells";
+        if (propLower == "redraw")        return "vb6_MshFlexGrid_SetRedraw";
+        if (propLower == "backcolor")     return "vb6_MshFlexGrid_SetBackColor";
+        if (propLower == "forecolor")     return "vb6_MshFlexGrid_SetForeColor";
+        if (propLower == "fillcolor")     return "vb6_MshFlexGrid_SetFillColor";
+        if (propLower == "cellbackcolor") return "vb6_MshFlexGrid_SetCellBackColor";
+        if (propLower == "cellforecolor") return "vb6_MshFlexGrid_SetCellForeColor";
+        if (propLower == "formatstring")  return "vb6_MshFlexGrid_SetFormatString";
+        if (propLower == "datasource")    return "vb6_MshFlexGrid_SetDataSource";
+        if (propLower == "rowheightmin")  return "vb6_MshFlexGrid_SetRowHeightMin";
+        if (propLower == "sort")          return "vb6_MshFlexGrid_SetSort";
         break;
     case FrmControlType::Data:  // C29-Data 写表 (三属性先存后 Refresh 用)
         if (propLower == "databasename") return "vb6_Data_SetDatabaseName";

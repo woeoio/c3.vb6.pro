@@ -7882,7 +7882,31 @@ if ($Category -in @("all", "run", "vbp")) {
         }
     } finally {
         Remove-Item Env:\C3_ADO_DATA -ErrorAction SilentlyContinue
-    }    # 发码形状：窗口类是 RTL 自注册的 VB6_MSCOMM（不是 OCX 宿主）、设计期 Init 一把带齐、
+    }
+
+    # ---- C30-6: MSHFlexGrid / MSFlexGrid（字符串矩阵表格）----
+    # 与 C30-5 的 DataGrid 分界：DataGrid 是记录集的视图（底座 ACE，没装就 SKIP），
+    # 而本控件的数据就在 Rows×Cols 单元格里（TextMatrix 直接读写）⇒ **不依赖 ACE/ODBC**，
+    # GA runner 上也是真跑。判据全部 ASCII。
+    $mfgNeedles = @(
+        'FG1-shape=6|3|1|1',        # 设计期 Rows/Cols/FixedRows/FixedCols
+        'FG2-tm=Alice',             # TextMatrix(r,c) 写→读（两参索引属性）
+        'FG3-grow=8|Alice',         # 改 Rows 必须保留内容
+        'FG4-text=2,2|Qty7',        # Row/Col/Text（当前格）
+        'FG5-add=Bob|Sales',        # AddItem 按 Tab 拆列
+        'FG6-col=2400|1',           # ColWidth(i)/ColAlignment(i)
+        'FG7-sort=a1|c3',           # Sort 是属性（写 1 立即按当前列排）
+        'FG8-arr=a1',               # TextArray(i) 线性下标
+        'FG9-clear=6|0',            # Clear 只清内容
+        'FG10-cs=1|1',              # ClearStructure 收回冻结区
+        'FG11-misc=1|3|-1|False',   # GridLines|ScrollBars|MouseRow|Editable
+        'FG12-fmt=True',            # FormatString 设计期回读
+        'FG13-rm=4|keep3',          # RemoveItem 真删行
+        'FG14-cols=5|keep1',        # 改 Cols 保留内容
+        'FG-DONE'
+    )
+    Test-Vbp "ctrlmshflexgrid" "$Tests\ctrlmshflexgrid\MfgApp.vbp" $mfgNeedles -ExpectExitCode 0
+    Test-Vbp "ctrlmshflexgrid_x86" "$Tests\ctrlmshflexgrid\MfgApp.vbp" $mfgNeedles -Arch "x86" -ExpectExitCode 0    # 发码形状：窗口类是 RTL 自注册的 VB6_MSCOMM（不是 OCX 宿主）、设计期 Init 一把带齐、
     # 事件是“注册回调”那一形（没有 WM_COMMAND 那条路可走）。
     Test-EmitcShape "ms_emitc_native" @("$Tests\ctrlmscomm\MsCommApp.vbp") @(
         '"VB6_MSCOMM", "",',

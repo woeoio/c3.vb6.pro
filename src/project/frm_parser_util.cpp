@@ -225,6 +225,15 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // C30-5: DataGrid (MSDataGridLib.DataGrid / MSDATGRD.OCX)。必须排在 `vb.data` 之后才对
     // —— "msdatagridlib.datagrid" 里没有 "vb.data"，两条互斥；但**不能**用 "data" 当鱼网。
     if (lower.find("datagrid") != std::string::npos) return FrmControlType::DataGrid;
+    // C30-6: MSHFlexGrid / MSFlexGrid (MSHFLXGD.OCX / MSFLXGRD.OCX 的各种写法)。
+    // 四种写法都要接：ProgID (mshierarchicalflexgridlib.mshflexgrid / msflexgridlib.msflexgrid)
+    // 与 .frm 的 Object= 行里的 OCX 名 (mshflxgd / msflxgrd)。这两个控件共用一套 RTL ——
+    // MSHFlexGrid 是 MSFlexGrid 的超集，字符串矩阵那一面完全一样。
+    // 必须在 datagrid 之后：两串不互为子串，顺序只是“同类先到先得”的阅读顺序。
+    if (lower.find("mshflexgrid") != std::string::npos
+        || lower.find("msflexgrid") != std::string::npos
+        || lower.find("mshflxgd") != std::string::npos
+        || lower.find("msflxgrd") != std::string::npos) return FrmControlType::MshFlexGrid;
 
     return FrmControlType::Unknown;
 }
@@ -328,6 +337,8 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // DataGrid 要真画格线/表头/选中行，所以必须是一枚真窗口）。
         case FrmControlType::Adodc:         return "VB6_ADODC";
         case FrmControlType::DataGrid:      return "VB6_DATAGRID";
+    // C30-6: MSHFlexGrid / MSFlexGrid —— 自注册窗口类（字符串矩阵 + 自绘 + 键盘编辑）。
+    case FrmControlType::MshFlexGrid:   return "VB6_MSHFLEXGRID";
         case FrmControlType::Menu:         return nullptr;       // 菜单, 非窗口
         case FrmControlType::WebBrowser:  return nullptr;       // WebView2, 运行时动态创建
         default:                           return nullptr;
@@ -364,6 +375,7 @@ const char* FrmParser::controlTypeToVb6Name(FrmControlType type) {
         case FrmControlType::MSComm:       return "MSComm";
         case FrmControlType::Adodc:        return "Adodc";
         case FrmControlType::DataGrid:     return "DataGrid";
+    case FrmControlType::MshFlexGrid:  return "MSHFlexGrid";
         case FrmControlType::RichTextBox:  return "RichTextBox";
         case FrmControlType::Toolbar:      return "Toolbar";
         case FrmControlType::Shape:        return "Shape";

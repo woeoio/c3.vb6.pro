@@ -1197,6 +1197,89 @@
             c_.emitLine("vb6_DataGrid_SetDefColWidth((void*)" + gdHwnd + ", "
                       + std::to_string(gdInt("DefColWidth", 1200)) + ");");
         }
+        // C30-6: MSHFlexGrid 设计期。灌入顺序必须固定：
+        //   尺寸 (Rows/Cols) → 冻结区 → 列宽/对齐 → 外观位。
+        // 反过来的话 ColWidth(i) 的下标可能在 Cols 还是缺省 2 时就被写到第 3 列（丢）。
+        if (ctrl.controlType == FrmControlType::MshFlexGrid) {
+            std::string mfNLower = ctrl.controlName;
+            std::transform(mfNLower.begin(), mfNLower.end(), mfNLower.begin(), ::tolower);
+            std::string mfHwnd = knownControlArrays_.count(mfNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            // .frm 里的属性名大小写不一定统一（手写 frm 常全小写），查表一律不区分大小写
+            auto mfFind = [&](const char* k) -> const FrmValue* {
+                for (auto it = ctrl.properties.begin(); it != ctrl.properties.end(); ++it) {
+                    if (_stricmp(it->first.c_str(), k) == 0) return &it->second;
+                }
+                return nullptr;
+            };
+            auto mfInt = [&](const char* k, int defv) -> int {
+                const FrmValue* v = mfFind(k);
+                return v ? (int)v->intValue : defv;
+            };
+            auto mfBool = [&](const char* k, int defv) -> int {
+                const FrmValue* v = mfFind(k);
+                return v ? (v->intValue != 0 ? -1 : 0) : defv;
+            };
+            auto mfStr = [&](const char* k) -> std::string {
+                const FrmValue* v = mfFind(k);
+                if (!v) return std::string();
+                std::string s = v->rawText;
+                if (s.size() >= 2 && s.front() == '"' && s.back() == '"') s = s.substr(1, s.size() - 2);
+                return s;
+            };
+            c_.emitLine("vb6_MshFlexGrid_SetFixedRows((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("FixedRows", 1)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetFixedCols((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("FixedCols", 1)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetRows((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("Rows", 2)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetCols((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("Cols", 2)) + ");");
+            // ColWidth 在 .frm 里是空格分隔的一串（每列一值），缺省列取 1200。
+            {
+                std::string cw = mfStr("ColWidth");
+                if (!cw.empty()) {
+                    size_t i = 0, idx = 0;
+                    while (i < cw.size() && idx < 64) {
+                        while (i < cw.size() && (cw[i] == ' ' || cw[i] == '\t')) i++;
+                        if (i >= cw.size()) break;
+                        size_t b = i;
+                        while (i < cw.size() && cw[i] != ' ' && cw[i] != '\t') i++;
+                        std::string num = cw.substr(b, i - b);
+                        if (!num.empty()) {
+                            c_.emitLine("vb6_MshFlexGrid_SetColWidth((void*)" + mfHwnd + ", "
+                                      + std::to_string((int)idx) + ", " + num + ");");
+                        }
+                        idx++;
+                    }
+                }
+            }
+            c_.emitLine("vb6_MshFlexGrid_SetGridLines((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("GridLines", 1)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetScrollBars((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("ScrollBars", 3)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetSelectionMode((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("SelectionMode", 0)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetFillStyle((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("FillStyle", 0)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetRowHeight((void*)" + mfHwnd + ", -1, "
+                      + std::to_string(mfInt("RowHeight", 300)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetWordWrap((void*)" + mfHwnd + ", "
+                      + std::to_string(mfBool("WordWrap", 0)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetEditable((void*)" + mfHwnd + ", "
+                      + std::to_string(mfBool("Editable", 0)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetAllowUserResizing((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("AllowUserResizing", 0)) + ");");
+            {
+                std::string fs = mfStr("FormatString");
+                if (!fs.empty()) {
+                    c_.emitLine("vb6_MshFlexGrid_SetFormatString((void*)" + mfHwnd + ", L\""
+                              + escapeWideCString(fs) + "\");");
+                }
+            }
+        }
 
         // C29-OLE: OLE 容器设计期 —— Class/OLETypeAllowed/SizeMode/DisplayAsIcon/
         // AutoActivate/AutoVerbMenu/BorderStyle/SourceDoc/SourceItem 一次 Init 灌进去。

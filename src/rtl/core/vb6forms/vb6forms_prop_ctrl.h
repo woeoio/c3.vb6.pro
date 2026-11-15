@@ -1185,6 +1185,102 @@ void    vb6_Slider_SimNotify(void* hwnd, int32_t code, int32_t pos);
 // 窗口管理器自己发的 `WM_SETFOCUS` / `WM_KILLFOCUS`，伪造那两条反而验不到真链路。
 void    vb6_Slider_SimStdEvent(void* hwnd, int32_t kind, int32_t wParam);
 
+// ==================== C30-6: MSHFlexGrid / MSFlexGrid ====================
+// 字符串矩阵表格（MSHFLXGD.OCX 的 MSHFlexGrid、MSFLXGRD.OCX 的 MSFlexGrid 共用一套）。
+// 与 DataGrid 的分界：DataGrid 是“记录集的视图”，本控件是“Rows×Cols 自存字符串”，
+// TextMatrix(r,c) 直接读写 ⇒ 不依赖 ACE/ODBC，CI 上可真跑。
+// 类名 VB6_MSHFLEXGRID，注册在 vb6forms_mshflexgrid.c。
+void    vb6_RegisterMshFlexGridClass(void* hInstance);
+
+int32_t vb6_MshFlexGrid_GetRows(void* hwnd);
+void    vb6_MshFlexGrid_SetRows(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetCols(void* hwnd);
+void    vb6_MshFlexGrid_SetCols(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFixedRows(void* hwnd);
+void    vb6_MshFlexGrid_SetFixedRows(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFixedCols(void* hwnd);
+void    vb6_MshFlexGrid_SetFixedCols(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetRow(void* hwnd);
+void    vb6_MshFlexGrid_SetRow(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetCol(void* hwnd);
+void    vb6_MshFlexGrid_SetCol(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetRowSel(void* hwnd);
+void    vb6_MshFlexGrid_SetRowSel(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetColSel(void* hwnd);
+void    vb6_MshFlexGrid_SetColSel(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetTopRow(void* hwnd);
+void    vb6_MshFlexGrid_SetTopRow(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetLeftCol(void* hwnd);
+void    vb6_MshFlexGrid_SetLeftCol(void* hwnd, int32_t v);
+
+const void* vb6_MshFlexGrid_GetText(void* hwnd);
+void        vb6_MshFlexGrid_SetText(void* hwnd, const void* bstr);
+const void* vb6_MshFlexGrid_GetTextMatrix(void* hwnd, int32_t r, int32_t c);
+void        vb6_MshFlexGrid_SetTextMatrix(void* hwnd, int32_t r, int32_t c, const void* bstr);
+const void* vb6_MshFlexGrid_GetTextArray(void* hwnd, int32_t i);
+void        vb6_MshFlexGrid_SetTextArray(void* hwnd, int32_t i, const void* bstr);
+
+int32_t vb6_MshFlexGrid_GetColWidth(void* hwnd, int32_t i);
+void    vb6_MshFlexGrid_SetColWidth(void* hwnd, int32_t i, int32_t v);
+int32_t vb6_MshFlexGrid_GetRowHeight(void* hwnd, int32_t i);
+void    vb6_MshFlexGrid_SetRowHeight(void* hwnd, int32_t i, int32_t v);
+int32_t vb6_MshFlexGrid_GetColAlignment(void* hwnd, int32_t i);
+void    vb6_MshFlexGrid_SetColAlignment(void* hwnd, int32_t i, int32_t v);
+int32_t vb6_MshFlexGrid_GetRowHeightMin(void* hwnd);
+void    vb6_MshFlexGrid_SetRowHeightMin(void* hwnd, int32_t v);
+
+int32_t vb6_MshFlexGrid_GetGridLines(void* hwnd);
+void    vb6_MshFlexGrid_SetGridLines(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetScrollBars(void* hwnd);
+void    vb6_MshFlexGrid_SetScrollBars(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetSelectionMode(void* hwnd);
+void    vb6_MshFlexGrid_SetSelectionMode(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFillStyle(void* hwnd);
+void    vb6_MshFlexGrid_SetFillStyle(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetWordWrap(void* hwnd);
+void    vb6_MshFlexGrid_SetWordWrap(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetEditable(void* hwnd);
+void    vb6_MshFlexGrid_SetEditable(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFocusRect(void* hwnd);
+void    vb6_MshFlexGrid_SetFocusRect(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetAllowUserResizing(void* hwnd);
+void    vb6_MshFlexGrid_SetAllowUserResizing(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetMergeCells(void* hwnd);
+void    vb6_MshFlexGrid_SetMergeCells(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetRedraw(void* hwnd);
+void    vb6_MshFlexGrid_SetRedraw(void* hwnd, int32_t v);
+
+int32_t vb6_MshFlexGrid_GetBackColor(void* hwnd);
+void    vb6_MshFlexGrid_SetBackColor(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetForeColor(void* hwnd);
+void    vb6_MshFlexGrid_SetForeColor(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFillColor(void* hwnd);
+void    vb6_MshFlexGrid_SetFillColor(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetCellBackColor(void* hwnd);
+void    vb6_MshFlexGrid_SetCellBackColor(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetCellForeColor(void* hwnd);
+void    vb6_MshFlexGrid_SetCellForeColor(void* hwnd, int32_t v);
+
+int32_t vb6_MshFlexGrid_GetMouseRow(void* hwnd);
+int32_t vb6_MshFlexGrid_GetMouseCol(void* hwnd);
+int32_t vb6_MshFlexGrid_GetCellHeight(void* hwnd);
+int32_t vb6_MshFlexGrid_GetCellWidth(void* hwnd);
+int32_t vb6_MshFlexGrid_GetCellLeft(void* hwnd);
+int32_t vb6_MshFlexGrid_GetCellTop(void* hwnd);
+
+const void* vb6_MshFlexGrid_GetFormatString(void* hwnd);
+void        vb6_MshFlexGrid_SetFormatString(void* hwnd, const void* bstr);
+const void* vb6_MshFlexGrid_GetDataSource(void* hwnd);
+void        vb6_MshFlexGrid_SetDataSource(void* hwnd, const void* bstr);
+int32_t     vb6_MshFlexGrid_GetSort(void* hwnd);
+void        vb6_MshFlexGrid_SetSort(void* hwnd, int32_t v);
+
+void vb6_MshFlexGrid_AddItem(void* hwnd, const void* bstr);
+void vb6_MshFlexGrid_RemoveItem(void* hwnd, int32_t index);
+void vb6_MshFlexGrid_Clear(void* hwnd);
+void vb6_MshFlexGrid_ClearStructure(void* hwnd);
+void vb6_MshFlexGrid_Refresh(void* hwnd);
+
 
 #ifdef __cplusplus
 }

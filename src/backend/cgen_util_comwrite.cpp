@@ -275,6 +275,34 @@ bool CCodeGen::tryRewriteCOMLvalue(const std::string& target, const std::string&
         }
     }
 
+    // ---- C30-6: MSHFlexGrid / MSFlexGrid 的带下标属性写 ----
+    // 读侧 (cgen_expr_call_callee_member.inc) 已经发成 vb6_MshFlexGrid_GetXxx(hwnd, …)，
+    // 它既不是左值也不带 vb6_ComCall 前缀，Pattern A 匹配不到。这里只换函数名，
+    // 实参原样带（含两参的 TextMatrix(r,c)）—— RTL 的 Set 尾参收 const void*（字符串）
+    // 或 int32_t（数值），所以 value 不要再包 comPack。
+    {
+        static const char* kFgGet[6] = {
+            "vb6_MshFlexGrid_GetText(", "vb6_MshFlexGrid_GetTextMatrix(",
+            "vb6_MshFlexGrid_GetTextArray(", "vb6_MshFlexGrid_GetColWidth(",
+            "vb6_MshFlexGrid_GetRowHeight(", "vb6_MshFlexGrid_GetColAlignment(" };
+        static const char* kFgSet[6] = {
+            "vb6_MshFlexGrid_SetText(", "vb6_MshFlexGrid_SetTextMatrix(",
+            "vb6_MshFlexGrid_SetTextArray(", "vb6_MshFlexGrid_SetColWidth(",
+            "vb6_MshFlexGrid_SetRowHeight(", "vb6_MshFlexGrid_SetColAlignment(" };
+        for (int fgI = 0; fgI < 6; fgI++) {
+            std::string getPfx = kFgGet[fgI];
+            if (target.compare(0, getPfx.size(), getPfx) != 0) continue;
+            size_t fgOpen = target.find('(');
+            size_t fgClose = target.rfind(')');
+            if (fgOpen == std::string::npos || fgClose == std::string::npos
+                || fgClose < fgOpen) continue;
+            std::string fgArgs = target.substr(fgOpen + 1, fgClose - fgOpen - 1);
+            c_.emitLine(std::string(kFgSet[fgI]) + fgArgs + ", " + value
+                        + ");  /* MSHFlexGrid indexed prop assignment */");
+            return true;
+        }
+    }
+
     // ---- Pattern A: vb6_ComCall(obj, L"Item", args, n) = value ----
     // vb6_ComCall 返回 VARIANT*, 不是左值. 改走 vb6_ComSetPropArg (内部
     // DISPATCH_PROPERTYPUT|PUTREF).

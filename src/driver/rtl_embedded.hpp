@@ -203,6 +203,8 @@ enum RtlResourceID {
     // ai/029 C30-5: VB6 Adodc 控件 (ACE 底座，走 ODBC 层；不加载 MSADODC.OCX)
     RTL_VB6FORMS_ADODC_C                   = 243,
     RTL_VB6FORMS_GRID_C                    = 244,
+    // ai/029 C30-6: MSHFlexGrid / MSFlexGrid —— 字符串矩阵表格（Rows×Cols 自存，不依赖 ACE）
+    RTL_VB6FORMS_MSHFLEXGRID_C             = 245,
     // 账 #181: 崩溃轨迹每进程只记一次的闸 (零依赖头, 见文件头注释)
     RTL_VB6RTL_CRASH_H                     = 222,
 

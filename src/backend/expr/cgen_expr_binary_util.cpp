@@ -54,6 +54,14 @@ static const char* kBstrReturningCalls[] = {
     "vb6_SSTab_GetTabToolTipText",
     // P20-44: OLE 拖放 DataObject 取值 —— 同类 (void* 声明 / BSTR 语义)
     "vb6_oleDD_GetText",
+    // C30-6: MSHFlexGrid / MSFlexGrid 的字符串面 —— 同类 (void* 声明 / BSTR 语义)。
+    // 漏登记的现场：`s = grd.TextMatrix(1,2)` 看着写得进去（Set 端没事），读回来恒空串，
+    // 而 `Debug.Print grd.Text` 也空 —— 像“矩阵根本没存”。
+    "vb6_MshFlexGrid_GetText",
+    "vb6_MshFlexGrid_GetTextMatrix",
+    "vb6_MshFlexGrid_GetTextArray",
+    "vb6_MshFlexGrid_GetFormatString",
+    "vb6_MshFlexGrid_GetDataSource",
 };
 
 bool CCodeGen::isBstrReturningCall(const std::string& expr) {

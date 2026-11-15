@@ -351,13 +351,64 @@
     if (isComMarker_) {
         auto itCtrl = knownFormControls_.find(comObjExpr_);
         if (itCtrl != knownFormControls_.end() &&
-            (itCtrl->second == FrmControlType::Adodc || itCtrl->second == FrmControlType::DataGrid)) {
+            (itCtrl->second == FrmControlType::Adodc || itCtrl->second == FrmControlType::DataGrid
+             || itCtrl->second == FrmControlType::MshFlexGrid)) {
             isComMarker_ = false;
             std::string method = std::move(comMemberName_);
             std::string ctrlName = cIdent(knownFormControlOriginalNames_.count(comObjExpr_) ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
             FrmControlType ct = itCtrl->second;
             comObjExpr_.clear();
             comMemberName_.clear();
+            // C30-6: MSHFlexGrid —— 字符串矩阵的方法面（AddItem/RemoveItem/Clear/ClearStructure/Refresh）。
+            // 与 ListBox 那组同一个道理：不拦就发成 vb6_ComCall(hwnd, …)，静默无效。
+            if (ct == FrmControlType::MshFlexGrid) {
+                std::string hw = "vb6_hwnd_" + ctrlName;
+                if (method == "refresh") {
+                    lastExpr_ = "vb6_MshFlexGrid_Refresh((void*)" + hw + ")";
+                    return;
+                }
+                if (method == "clear") {
+                    c_.emitLine("vb6_MshFlexGrid_Clear((void*)" + hw + ");  /* MSHFlexGrid.Clear */");
+                    lastExpr_ = "0";
+                    return;
+                }
+                if (method == "clearstructure") {
+                    c_.emitLine("vb6_MshFlexGrid_ClearStructure((void*)" + hw + ");  /* MSHFlexGrid.ClearStructure */");
+                    lastExpr_ = "0";
+                    return;
+                }
+                if (method == "additem") {
+                    std::string itemArg = "0";
+                    if (!node.positional.empty()) {
+                        emitExpr(*node.positional[0]);
+                        if (isComMarker_) {   // 实参是 COM 属性读 ⇒ 直接取字符串属性
+                            isComMarker_ = false;
+                            isEarlyBoundCom_ = false;
+                            earlyBoundSym_ = nullptr;
+                            std::string objM = std::move(comObjExpr_);
+                            std::string memM = std::move(comMemberName_);
+                            comObjExpr_.clear();
+                            comMemberName_.clear();
+                            itemArg = "vb6_ComGetStringProp(" + objM + ", L\"" + memM + "\")";
+                        } else {
+                            itemArg = std::move(lastExpr_);
+                        }
+                    }
+                    c_.emitLine("vb6_MshFlexGrid_AddItem((void*)" + hw + ", " + itemArg + ");  /* MSHFlexGrid.AddItem */");
+                    lastExpr_ = "0";
+                    return;
+                }
+                if (method == "removeitem") {
+                    std::string idxArg = "0";
+                    if (!node.positional.empty()) {
+                        emitExpr(*node.positional[0]);
+                        idxArg = std::move(lastExpr_);
+                    }
+                    c_.emitLine("vb6_MshFlexGrid_RemoveItem((void*)" + hw + ", " + idxArg + ");  /* MSHFlexGrid.RemoveItem */");
+                    lastExpr_ = "0";
+                    return;
+                }
+            }
             if (ct == FrmControlType::Adodc && method == "refresh") {
                 lastExpr_ = "(void)vb6_Adodc_Refresh((void*)vb6_hwnd_" + ctrlName + ")";
                 return;

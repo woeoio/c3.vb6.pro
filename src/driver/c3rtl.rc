@@ -575,6 +575,9 @@
 // 编号取 243（242 是 MSComm；新号不插队，保持先到者保号）。
 243 RCDATA "../rtl/core/vb6forms/vb6forms_adodc.c"
 244 RCDATA "../rtl/core/vb6forms/vb6forms_grid.c"
+// ai/029 C30-6: MSHFlexGrid / MSFlexGrid —— 字符串矩阵表格（不依赖 ACE，CI 也能真跑）
+// 编号取 245（244 是 DataGrid；新号不插队，保持先到者保号）。
+245 RCDATA "../rtl/core/vb6forms/vb6forms_mshflexgrid.c"
 131 RCDATA "../rtl/core/vb6forms/vb6forms_axsite.c"
 198 RCDATA "../rtl/core/vb6forms/vb6forms_axcontainer.c"
 // vb6forms_axsite.c 按功能家族拆分 (2026-09-20): 内部头 + 5 个族编译单元
