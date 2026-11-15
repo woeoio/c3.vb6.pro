@@ -1303,8 +1303,17 @@ void* vb6_CreateObject(const wchar_t* progId) {
  * ⇒ 未处理错误 #340「没有注册类」（探针 loginprobe 实测 rc=340，栈顶就是
  * 模块级 As New 的建对象）⇒ conn 恒 NULL ⇒ 登录永远失败。
  * 失败口径与 vb6_CreateObject 一致（429/340 拉 Err）。 */
-void* vb6_NewObjectClsid(const wchar_t* clsidStr) {
+void* vb6_NewObjectClsid(const wchar_t* clsidStr, const wchar_t* className) {
     if (!clsidStr || !*clsidStr) return NULL;
+    /* C30-9 收口: VB6 运行时**自带实现**的类先答, 才轮到 CoCreateInstance。
+     * 实测 (tests/combyref271, 2026-11-16): 少了这一句, `Dim f As New StdFont` 会拿到
+     * oleaut32 里那枚真 StdFont —— 它只答 IDispatch 那一面, 而 IFont 的 `hFont` / `Clone`
+     * 是 vtable 成员 ⇒ 晚绑定 not found ⇒ 夹具十一行判据全 False + 两条 [C3_LATEBIND_MISS]
+     * (disp=NULL)。完整读数与原因见 vb6rtl_conv.c 的 vb6_NewVb6RuntimeClass。 */
+    {
+        void* builtin = vb6_NewVb6RuntimeClass(className);
+        if (builtin) return builtin;
+    }
     CLSID clsid;
     HRESULT hr = CLSIDFromString((LPOLESTR)clsidStr, &clsid);
     if (FAILED(hr)) { vb6_ComFailCreate(hr, clsidStr); return NULL; }

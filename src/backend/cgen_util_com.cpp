@@ -1182,19 +1182,26 @@ std::string CCodeGen::comNewExprFor(const Symbol* comSym) {
 
 // C30-9: `As New <COM 类>` 的建对象表达式三档分流（所有自动实例化出口共用）。
 //   ① 工程类实现/同名遮蔽 → comNewExprFor（原生工厂，不动）
-//   ② 符号里带了 coclass CLSID → vb6_NewObjectClsid（**这条是本账修的那一格**）
+//   ② 符号里带了 coclass CLSID → vb6_NewObjectClsid(CLSID, 类名)（**这条是本账修的那一格**）
 //   ③ 都没有 → 退回旧口径 vb6_NewObject(ProgID)
 // 为什么要有 ②：实测本机 HKLM\SOFTWARE\Classes\Wow6432Node 下
 // ADODB.Connection / ADODB.Connection.6.0 / ADODB.Recordset 的 ProgID 全没注册，
 // 而 CLSID {00000514-...} / {00000535-...} 与 msado15.dll 都在。VB6 编的同一份
 // 工程能登（typelib CLSID 直接 CoCreateInstance），我方按 ProgID 查 ⇒
 // CLSIDFromProgID 失败 ⇒ 未处理错误 #340 ⇒ conn/rs 恒 NULL ⇒ 登录必失败。
+// ② 的**第二枚实参**（源码类名）不是装饰：运行时自带的类（StdFont/PropertyBag/Collection）
+// 在我们这套运行时里是宿主模型对象，不是注册表里的组件 —— 只有类名能让 RTL 在 CLSID 之前
+// 认出它们。实测 (tests/combyref271): 不传类名时 `New StdFont` 拿到 oleaut32 的真 StdFont,
+// `Font.hFont`/`Font.Clone` 是 IFont 的 vtable 成员 ⇒ 晚绑定 not found ⇒ K271/K276 八行判据
+// 全变 False，多出两条 [C3_LATEBIND_MISS]。类名取源码里那个（comSym->name），
+// 因为内建模型是**按名字**登记的一张表（vb6_NewVb6RuntimeClass）。
 std::string CCodeGen::comNewObjectExpr(const Symbol* comSym) {
     if (!comSym) return "";
     std::string projExpr = comNewExprFor(comSym);
     if (!projExpr.empty()) return projExpr;
     if (!comSym->comClsidStr.empty())
-        return "(void*)vb6_NewObjectClsid(L\"" + comSym->comClsidStr + "\")";
+        return "(void*)vb6_NewObjectClsid(L\"" + comSym->comClsidStr + "\", L\"" +
+               comSym->name + "\")";
     const std::string& progId = comSym->comProgId.empty() ? comSym->name : comSym->comProgId;
     return "(void*)vb6_NewObject(L\"" + progId + "\")";
 }

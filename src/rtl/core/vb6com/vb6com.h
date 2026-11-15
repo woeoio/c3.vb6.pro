@@ -18,7 +18,15 @@ void* vb6_CreateObject(const wchar_t* progId);
 // C30-9: 按 **coclass CLSID** 建对象（VB6 `As New <typelib coclass>` 走的同一条路）。
 // ProgID 在某些机器上压根不注册（实测本机 32 位视图 ADODB.* 全没注册，只有 CLSID），
 // 此时 VB6 能跑、按 ProgID 查必挂 ⇒ 生成码带着符号里的 CLSID 就直接用这一枚。
-void* vb6_NewObjectClsid(const wchar_t* clsidStr);
+// className = 源码里那个类名: 运行时自带的类（Collection / StdFont / PropertyBag）必须先由
+// vb6_NewVb6RuntimeClass 答 —— 否则 `As New StdFont` 会拿到 oleaut32 的真 StdFont, IFont 的
+// hFont/Clone 那两个 vtable 成员就没人答了（tests/combyref271 实测八行据变 False）。
+void* vb6_NewObjectClsid(const wchar_t* clsidStr, const wchar_t* className);
+
+// C30-9: VB6 运行时自带实现的类（Collection / StdFont / PropertyBag）的**唯一**答案。
+// 命中返回新实例，未命中 NULL（= 不是自带类，调用方走注册表 / CLSID）。
+// 两条建对象出口（vb6_NewObject 按名 / vb6_NewObjectClsid 按 CLSID）都先问它。
+void* vb6_NewVb6RuntimeClass(const wchar_t* className);
 
 // typelib appobject 全局单例 (VB6 全局对象): 首次按 ProgID CoCreate 并缓存,
 // 之后每次调用复用同一实例 (VB6 GlobalMultiUse/appobject 的进程级单例语义 ——

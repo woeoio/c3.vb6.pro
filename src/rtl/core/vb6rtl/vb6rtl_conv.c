@@ -627,32 +627,58 @@ void vb6_Debug_PrintDouble(double d) {
 // 对象操作 (P6: COM互操作)
 // ============================================================
 
-void* vb6_NewObject(const wchar_t* className) {
+/* VB6 **运行时自带实现**的那几个类 (与注册表无关的三档) 的唯一答案。
+ *
+ * 为什么要有这一枚 (C30-9 收口, 实测 2026-11-16): `Dim f As New StdFont` 这枚建对象现在有
+ * **两条**出口 ——
+ *   ① vb6_NewObject(名字)               : 本函数命中 StdFont ⇒ 宿主字体模型 vb6_UC_NewFont()
+ *   ② vb6_NewObjectClsid(CLSID, 名字)   : C30-9 为 ADODB 补的那条 (typelib CLSID 直连 CoCreateInstance)
+ * ② 一开始只看 CLSID, 于是把 StdFont 交给 oleaut32 里那枚**真** StdFont。真 StdFont 只答
+ * IDispatch 那一面 (Bold/Size/Underline 有 dispid), 而 `Font.hFont` 与 `Font.Clone` 是
+ * **IFont 的 vtable 成员** (IFont 不是 IDispatch) ⇒ GetIDsOfNames 0x80020006 ⇒
+ * 我方晚绑定答 "not found"。夹具 tests/combyref271 (K271 三行 + K276 七行) 实测:
+ *   改前 (走 ①)             : 十一行判据全 True, stderr 0 条 [C3_LATEBIND_MISS]
+ *   只走 ② (本函数没接)     : 十一行判据全 False, 且两条 miss 都是 disp=00000000
+ *                             (site=ComSetProp name="Size" / site=ComGetProp name="hFont") ——
+ *                             Clone 没写回槽 ⇒ g 是 Nothing ⇒ 后续两发接收者全空
+ * 所以「这是不是运行时自带的类」这一问必须**先于** CLSID 答, 且两条出口共用同一个答案
+ * (同一个名字在两处各写一遍 = 下一次加内建类时只改一处的那种旧坑, 与 comPackFnForVbType
+ * 那条「问它的地方必须唯一」同族)。
+ * 返回 NULL = 不是运行时自带的类, 调用方各自走注册表 / CLSID。 */
+void* vb6_NewVb6RuntimeClass(const wchar_t* className) {
+    if (!className || !*className) return NULL;
     // Fix 112c: Collection 是 VB6 内建类, 不能走 CLSIDFromProgID (必失败 → 429 弹窗)
-    if (className && _wcsicmp(className, L"Collection") == 0) {
+    if (_wcsicmp(className, L"Collection") == 0) {
         return vb6_Collection_New();
     }
-    // Fix 112: StdFont → RTL 内建字体对象 (With m_TitleFont: .Size/.Bold 直接写结构体)
-    if (className && _wcsicmp(className, L"StdFont") == 0) {
+    // Fix 112: StdFont → RTL 内建字体对象 (With m_TitleFont: .Size/.Bold 直接写结构体)。
+    // 带 stdole. 前缀的那一写法同一档: VB 里 `As New stdole.StdFont` 指的仍是同一个类,
+    // 而「类名带不带库前缀」是 typelib 注入时定的, 不该让字体模型的有无跟着它漂。
+    if (_wcsicmp(className, L"StdFont") == 0 || _wcsicmp(className, L"stdole.StdFont") == 0) {
         return vb6_UC_NewFont();
     }
     // Fix <vbeclipse> 2026-10-12: **PropertyBag 同样是 VB6 内建类** (ProgID "PropertyBag",
-    // 由 VB 运行时内部实现, 从不注册) ⇒ CLSIDFromProgID 必失败 → 429。
+    // 由 VB 运行时内部实现, 从不注册) —> CLSIDFromProgID 必失败 → 429。
     // 工程标准手法 —— `With New PropertyBag` + `.Contents = PropBag.ReadProperty("InitX", 0)`
     // + `.ReadProperty("InitXCount", 0)` —— 出现在 ComCtlsDemo StatusBar / CoolBar /
     // ToolBar / TabStrip / ImageList 的 `UserControl_ReadProperties` 里; 该处 429
     // **未被 On Error 兜住** (只有 `.Contents =` 那一行在 Resume Next 里) ⇒
     // 直接"未处理错误"结束进程 (实测 EXIT=0x1AD)。
     // 复用 uc_propbag.c 那枚轻量 IDispatch bag (与外层 PropBag 同族, 同一张 vtbl)。
-    if (className && _wcsicmp(className, L"PropertyBag") == 0) {
+    if (_wcsicmp(className, L"PropertyBag") == 0 || _wcsicmp(className, L"VBA.PropertyBag") == 0) {
         return vb6_UC_PropBagCreate();
     }
-    // 对于未知类名，尝试通过COM创建 (Dim x As New ClassName，className不在已知类中)
-    // VB6中如果className不是项目内的类模块，则尝试COM创建
     // Fix 103: VB6 内建对象 (Collection 等) 实现于运行时内部, 不注册 ProgID —— 直接查
     // 注册表必然失败并抛 429 (实测 New Collection: ProgID: Collection, 0x800401F3)。
-    // 先探测 C3 运行时自带的内建实现, 未命中才回退到 COM 注册表。
-    void* builtin = vb6_NewBuiltinObject(className);
+    // 这一档接 VBA.Collection 与将来新加的内建名 (vb6com_collection.c 那张名单的主人)。
+    return vb6_NewBuiltinObject(className);
+}
+
+void* vb6_NewObject(const wchar_t* className) {
+    // 运行时自带的类先答 (Collection / StdFont / PropertyBag), 未命中才查 COM 注册表。
+    // 对于未知类名，尝试通过COM创建 (Dim x As New ClassName，className不在已知类中)
+    // VB6中如果className不是项目内的类模块，则尝试COM创建
+    void* builtin = vb6_NewVb6RuntimeClass(className);
     if (builtin) return builtin;
     return vb6_CreateObject(className);
 }
