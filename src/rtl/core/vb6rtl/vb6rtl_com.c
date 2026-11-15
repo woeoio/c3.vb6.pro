@@ -2149,24 +2149,25 @@ int32_t vb6_IfaceSupports(void* ifacePtr, const void* iid) {
 
 /* 槽里挂的是不是**真** SAFEARRAY (服务端 oleaut32 自家布局)。
  *
- * ⚠ 判据必须按上游 FIX-011 §6.2 的口径: **一维 (cDims == 1) 且 fFeatures != 0xA1D1**。
- *   0xA1D1 是 C3 自家 1D 描述符 (vb6_SafeArray1D) 的魔数 —— 真 SAFEARRAY 的
- *   fFeatures 是 FADF_* 位集, 不会等于它。
+ * 账 #611 第350刀之前, 这里只能守住「cDims == 1 且 fFeatures != 0xA1D1」这一格:
+ * C3 的 ND 描述符当时**没有自己的标记** (首 4 字节是 int32 dimCount, 高 16 位
+ * 恒 0), 按 OLE 读成 cDims=rank / fFeatures=0 —— 与「真多维 SAFEARRAY 且
+ * fFeatures==0」这一形无法区分。所以多维只能一律原样, 写侧也只敢换算 1D。
+ *
+ * 现在 vb6rtl_array.h 给 ND 描述符也放了魔数 (VB6_SAND_FFEATURES) 和唯一权威
+ * vb6_SaIsND(), 「是不是 C3 描述符」第一次可以**正向**回答:
+ *   · C3 1D 描述符           → vb6_SaIs1D 命中 ⇒ 原样
+ *   · C3 ND 描述符 (含秩=1)  → vb6_SaIsND 命中 ⇒ 原样
+ *   · 真 1D SAFEARRAY        → cDims==1 且 fFeatures != 0xA1D1 ⇒ 归一化
+ *   · 真 ND SAFEARRAY (2..16)→ cDims 在 2..16 且不是上面两族 ⇒ 归一化
  *
  * ⚠⚠ **别写成 `!vb6_SaIs1D(parray)`** —— 那是「不是 C3 一维描述符」, 把
- *   **C3 的 ND 描述符 (二维数组)** 也算成真 SAFEARRAY: ND 描述符首字段是
- *   int32 dimCount (2..16), 读成 uint16 的 cDims != 1 ⇒ vb6_SaIs1D 判 false
- *   ⇒ 误判 ⇒ 上面的归一化对它调 VariantClear ⇒ 把 ND 描述符当真 SAFEARRAY
- *   SafeArrayDestroy ⇒ **堆损坏**。
+ *   **C3 的 ND 描述符 (二维数组)** 也算成真 SAFEARRAY ⇒ 归一化对它调
+ *   VariantClear ⇒ 把 ND 描述符当真 SAFEARRAY SafeArrayDestroy ⇒ **堆损坏**。
  *   实测 (2026-11-13 GA 43347652260): b175_num_bstr / test_registry_settings /
  *   test_redim_elem 三个用例 x64+x86 六枚全红, 且 b175 段错误 (139) —— 崩在
  *   `GetAllSettings` 之后读 `v(0, 1)` (二维访问走 vb6_VariantArrayGetND)。
- *
- * 修法 (上游同口径): 命中判据 = cDims == 1 且 fFeatures != 0xA1D1。
- *   · 真 SAFEARRAY 一维: cDims=1, fFeatures 是 FADF 位集 ⇒ 命中 ⇒ 归一化。
- *   · C3 1D 描述符: cDims=1, fFeatures=0xA1D1 ⇒ 不命中 ⇒ 原样。
- *   · C3 ND 描述符: cDims = dimCount (2..16) != 1 ⇒ 不命中 ⇒ 原样。
- *   · 真 SAFEARRAY 多维: cDims >= 2 ⇒ 不命中 ⇒ 原样 (ND 档本轮不覆盖)。
+ *   同理也不许对「不是两族 C3 描述符」的全部指针一律放行 —— 秩先要落在 1..16。
  */
 int vb6_SlotHasRealSafeArray(void* pVar) {
     VARIANT* pv = (VARIANT*)pVar;
@@ -2174,7 +2175,11 @@ int vb6_SlotHasRealSafeArray(void* pVar) {
     if (!pv) return 0;
     if (!(pv->vt & VT_ARRAY) || !pv->parray) return 0;
     a = (const vb6_SafeArray1D*)pv->parray;
-    if (a->cDims != 1) return 0;                       /* ND 描述符 / 多维真数组 */
+    if (vb6_SaIsND(a)) return 0;            /* C3 ND 描述符: 正向排除, 含秩=1 那一形 */
+    if (a->cDims != 1) {
+        if (a->cDims < 2 || a->cDims > 16) return 0;   /* 不是 SAFEARRAY 形状, 别碰 */
+        return 1;                         /* 真多维 SAFEARRAY: 交唯一 ND 转换出口 */
+    }
     return a->fFeatures != (uint16_t)VB6_SA1D_FFEATURES;
 }
 
@@ -2207,22 +2212,30 @@ void* vb6_ComVariantOuts(void* result, int32_t n, ...) {
     return result;
 }
 
-/* FIX-012 闭环: 槽挂 C3 一维描述符时, 用现成的 vb6_ComPackArrayOut 复制成
- * 真 SAFEARRAY、回收描述符、就地换槽 —— 下一次 VT_BYREF|VT_VARIANT 递出前
- * 由 vb6_ComPackVariantRef 调用。ND 描述符作 COM 出参的形在语料中没有落点,
- * 元素档转换失败时维持原状 (与改前同形, 不会更坏)。 */
+/* FIX-012 闭环 (账 #611 第350刀补齐 ND): 槽挂 C3 描述符时, 用现成的
+ * vb6_ComPackArrayOut 复制成真 SAFEARRAY、回收描述符、就地换槽 —— 下一次
+ * VT_BYREF|VT_VARIANT 递出前由 vb6_ComPackVariantRef 调用。改前只认 1D:
+ * ND 描述符原样递出, 服务端覆写出参前 VariantClear(槽) 会按 oleaut32 布局
+ * SafeArrayDestroy 它 (ND 的 elemType 落在 cLocks 槽、totalElements 落在
+ * pvData 槽) ⇒ 堆损坏。现在认载体只问 vb6_SaIs1D / vb6_SaIsND 这两位主人,
+ * 真 SAFEARRAY 与认不出的指针一律原样 (与改前同形, 不会更坏)。
+ * 元素档转换失败时也维持原状。 */
 void vb6_VariantComSlotToRealArray(void* pVar) {
     VARIANT* pv;
     VARIANT built;            /* 必须用 Windows VARIANT: vb6_ComPackArrayOut 的形参是
                                 * VARIANT*, 产出的是**真 SAFEARRAY** (SAFEARRAY*)。 */
+    int is1D, isND;
     if (!pVar) return;
     pv = (VARIANT*)pVar;
     if (!(pv->vt & VT_ARRAY) || !pv->parray) return;
-    if (!vb6_SaIs1D(pv->parray)) return;   /* 真 SAFEARRAY / ND: 原样递出 */
+    is1D = vb6_SaIs1D(pv->parray);
+    isND = is1D ? 0 : vb6_SaIsND(pv->parray);
+    if (!is1D && !isND) return;    /* 真 SAFEARRAY / 认不出的: 原样递出 */
     VariantInit(&built);
     vb6_ComPackArrayOut(pv->parray, &built);
     if (!built.parray || built.vt == VT_EMPTY) return;   /* 元素档不在表内: 维持原状 */
-    vb6_SafeArrayDestroy1D((vb6_SafeArray1D*)pv->parray);   /* 回收 C3 描述符 (含数据区) */
+    if (is1D) vb6_SafeArrayDestroy1D((vb6_SafeArray1D*)pv->parray);
+    else      vb6_SafeArrayDestroyND((vb6_SafeArrayND*)pv->parray);
     pv->vt = built.vt;             /* Windows 侧标签 (VT_ARRAY|base) */
     pv->parray = built.parray;     /* 真 SAFEARRAY, 归服务端 VariantClear */
 }

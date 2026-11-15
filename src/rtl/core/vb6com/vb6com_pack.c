@@ -153,8 +153,8 @@ void* vb6_ComPackDoubleRef(double* p) {
 /* 富贵竹 FIX-011/012 (账 #610 第341刀): Variant 出参按引用打包 —— 五档标量 Ref 族
  * 缺的第六档。调用方槽是 vb6_VARIANT, 与 Windows VARIANT 同布局
  * (vb6rtl_variant.h rev11), pvarVal 直接指它。FIX-012 闭环: 递出前先调
- * vb6_VariantComSlotToRealArray 把槽里上一次调用留下的 C3 一维描述符换回
- * 真 SAFEARRAY —— 服务端覆写出参前 VariantClear(槽) 是按 oleaut32 自家布局
+ * vb6_VariantComSlotToRealArray 把槽里上一次调用留下的 C3 描述符 (1D / ND,
+ * 账 #611 第350刀补 ND) 换回真 SAFEARRAY —— 服务端覆写出参前 VariantClear(槽) 是按 oleaut32 自家布局
  * 行事的, 描述符递出去 = SafeArrayDestroy(垃圾) + double 数据区被当 BSTR
  * 指针逐个 SysFreeString (描述符 fFeatures 的 FADF_BSTR 位是置起的)。 */
 void* vb6_ComPackVariantRef(void* pVar) {
