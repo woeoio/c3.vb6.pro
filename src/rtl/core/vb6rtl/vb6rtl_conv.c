@@ -654,11 +654,32 @@ void* vb6_NewObject(const wchar_t* className) {
     return vb6_CreateObject(className);
 }
 
+/* 2026-11-15 (GIF overlay 背景图): TypeOf 原先是「恒 False」的空桩 —— 用它当分叉的
+ * 任何代码都被静默拨到 else 支。本工程 modTileBlt.bas:137 正是那一形:
+ *   If TypeOf sourcePicObjectOrHandle Is StdPicture Then  ' 走图片对象 (Width/Height/Render)
+ *   Else                                                  ' 当句柄 (GetGDIObject/GetIconInfo)
+ * 恒 False ⇒ 对象指针被当成 GDI 句柄 ⇒ 取不到宽高 ⇒ Exit Sub ⇒ overlay 背景一块砖都没铺
+ * (参考版铺满, 我方 Picture1 区域全白; 探针 Caption 实测 TO=False PH=67441129 W=4233)。
+ *
+ * 判据只认**能正向证实**的那一档: StdPicture 走 vb6_PictureIsRegistered —— 每一枚
+ * IPicture 的创建路径 (LoadPicture / LoadPictureFromMemory / 控件 Picture getter /
+ * UC 属性包) 都会登记进那张表, 所以「在表里」就是「确实是 Picture 对象」的充分条件;
+ * 表外一律答 False (与旧口径同, 不引入对任意 void* 的 QI —— C3 自己的类实例没有
+ * IUnknown vtable, 盲调 QueryInterface 会直接崩)。
+ * 返回 -1: VB6 的 Boolean 真值是 -1 (与本仓 vb6_CBool 同口径), 代码里 `If … Then`
+ * 只判非零, 但 `B = (TypeOf … Is …)` 之后再 CBool/CStr 打印就得是 True。 */
+extern int vb6_PictureIsRegistered(const void* picture);
+
 int32_t vb6_TypeOf(void* obj, const wchar_t* typeName) {
-    if (!obj) return 0;  // Nothing不匹配任何类型
-    // TypeOf的完整实现需要IDispatch/ITypeInfo，在vb6com.c中
-    // 简化版: 始终返回False (后续P6.2完善)
-    (void)typeName;
+    if (!obj || !typeName) return 0;  // Nothing不匹配任何类型
+    if (_wcsicmp(typeName, L"StdPicture") == 0 ||
+        _wcsicmp(typeName, L"Picture") == 0 ||
+        _wcsicmp(typeName, L"IPicture") == 0 ||
+        _wcsicmp(typeName, L"IPictureDisp") == 0) {
+        return vb6_PictureIsRegistered(obj) ? -1 : 0;
+    }
+    /* 其余类型名 (VB 控件类 / C3 类模块 / StdFont …) 仍答 False: 没有安全的正向判据,
+     * 宁可维持旧行为也不猜 —— 猜错就是把「不是」说成「是」, 比漏判更难查。 */
     return 0;
 }
 

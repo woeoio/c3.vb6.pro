@@ -669,19 +669,50 @@ static LRESULT CALLBACK vb6_ImageSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LP
                         (void*)hwnd,
                         (unsigned)(UINT_PTR)GetPropW(hwnd, L"VB6_BackColor") & 0xFFFFFFu,
                         GetPropW(hwnd, L"VB6_BackColorSet") ? 1 : 0, given ? 1 : 0);
-            vb6_ImagePaintHelper(hwnd, hdc);
-            /* Fix P-BMP-3D: 屏幕画完再补一张进 AutoRedraw 记忆位图, 保证
-             * `.hdc` 来源 (VB6_AutoRedrawDC) 与所见一致 — 也覆盖 AutoRedraw
-             * 在 .Picture 指派之后才建记忆 DC 的场景。 */
-            HDC arMirror = (HDC)GetPropW(hwnd, L"VB6_AutoRedrawDC");
-            if (arMirror && arMirror != hdc) vb6_ImagePaintHelper(hwnd, arMirror);
+            // 2026-11-15 (GIF overlay 背景图): AutoRedraw 且**没有** Picture 的控件，
+            // 记忆位图 (VB6_AutoRedrawDC) 就是屏幕上的唯一真相 —— 这是 VB6 的 AutoRedraw
+            // 语义，也是本工程 frmUCtest Case 6 那条路的落点:
+            //   TileBltRectEx Picture1.hdc, tileRect, Image1.Picture   ' 砖块写进 ARDC
+            //   Picture1.Visible = True                                ' 期望上屏
+            // 此前这一支**恒走** vb6_ImagePaintHelper (从 Picture 画)，没 Picture 就只
+            // 填一层背景，于是 ARDC 里铺好的砖块永远不露脸 (实测: ARDC 像素 777777,
+            // 屏上整片 F0F0F0)。有 Picture 的控件维持原路 — 那条路会反写 ARDC，
+            // 两边一致，改了反而多一层风险。
+            {
+                HDC arPaint = (HDC)GetPropW(hwnd, L"VB6_AutoRedrawDC");
+                int hasPic = (GetPropW(hwnd, L"VB6_IPicture") != NULL
+                              || GetPropW(hwnd, L"VB6_Picture") != NULL);
+                if (arPaint && !hasPic && arPaint != hdc) {
+                    RECT rcPaint; GetClientRect(hwnd, &rcPaint);
+                    BitBlt(hdc, 0, 0, rcPaint.right, rcPaint.bottom, arPaint, 0, 0, SRCCOPY);
+                } else {
+                    vb6_ImagePaintHelper(hwnd, hdc);
+                    /* Fix P-BMP-3D: 屏幕画完再补一张进 AutoRedraw 记忆位图, 保证
+                     * `.hdc` 来源 (VB6_AutoRedrawDC) 与所见一致 — 也覆盖 AutoRedraw
+                     * 在 .Picture 指派之后才建记忆 DC 的场景。 */
+                    if (arPaint && arPaint != hdc) vb6_ImagePaintHelper(hwnd, arPaint);
+                }
+            }
             if (!given) EndPaint(hwnd, &ps);
         }
         return 0;
     } else if (msg == WM_PRINTCLIENT) {
         /* Printing / theming asks us to render into the provided DC. */
         HDC hdc = (HDC)wp;
-        if (hdc) vb6_ImagePaintHelper(hwnd, hdc);
+        if (hdc) {
+            /* 2026-11-15: 与 WM_PAINT 同口径 —— 无 Picture 的 AutoRedraw 控件从
+             * 记忆位图贴 (PrintWindow/打印抓的就是这一趟; 否则截图里永远是背景色,
+             * 与屏上不一致)。 */
+            HDC arPrint = (HDC)GetPropW(hwnd, L"VB6_AutoRedrawDC");
+            int hasPicPrint = (GetPropW(hwnd, L"VB6_IPicture") != NULL
+                               || GetPropW(hwnd, L"VB6_Picture") != NULL);
+            if (arPrint && !hasPicPrint && arPrint != hdc) {
+                RECT rcPrint; GetClientRect(hwnd, &rcPrint);
+                BitBlt(hdc, 0, 0, rcPrint.right, rcPrint.bottom, arPrint, 0, 0, SRCCOPY);
+            } else {
+                vb6_ImagePaintHelper(hwnd, hdc);
+            }
+        }
         return 0;
     } else if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLOREDIT) {
         /* PictureBox 也是 STATIC 窗口类 ⇒ 它同时是**容器**: 放在里面的 Label/TextBox
