@@ -565,6 +565,9 @@
 // 编号取 240（225 已被 vb6com_manifest.c 占用）；新号不要插在 221 之后顺延，
 // 因为已有资源的号是“先到者保号”的惯例（见上面 212/213 那一对）。
 240 RCDATA "../rtl/core/vb6forms/vb6forms_updown.c"
+// ai/029 C30-3: MaskEdBox (Win32 EDIT + RTL 掩码引擎，不加载 MSMASK32.OCX)
+// 编号取 241（240 是 UpDown，242 之前空着；新号不插队，保持先到者保号）。
+241 RCDATA "../rtl/core/vb6forms/vb6forms_maskededit.c"
 131 RCDATA "../rtl/core/vb6forms/vb6forms_axsite.c"
 198 RCDATA "../rtl/core/vb6forms/vb6forms_axcontainer.c"
 // vb6forms_axsite.c 按功能家族拆分 (2026-09-20): 内部头 + 5 个族编译单元

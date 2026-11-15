@@ -933,6 +933,22 @@ int32_t vb6_UpDown_OnNotify(void* hwnd, int32_t code, void* lParam, int32_t* out
 // 返回落定后的位置。只该在 OnNotify 返回 ±1 时调。
 int32_t vb6_UpDown_Commit(void* hwnd, int32_t delta);
 
+// ---- C30-3: MaskEdBox (MSMask.MaskEdBox → Win32 EDIT + RTL 掩码引擎) ----
+// 显示串恒为一位掩码一位字符（固定符/用户字符/提示符），所以“显示下标 == 掩码位下标”。
+// Text 含固定符（PromptInclude=True 时还含提示符）；ClipText 只含用户字符。
+void    vb6_MaskEd_Init(void* hwnd, void* maskBstr, void* promptBstr,
+                        int32_t promptInclude, void* textBstr);
+void*   vb6_MaskEd_GetText(void* hwnd);
+void    vb6_MaskEd_SetText(void* hwnd, void* bstr);
+void*   vb6_MaskEd_GetClipText(void* hwnd);
+void    vb6_MaskEd_SetClipText(void* hwnd, void* bstr);
+void*   vb6_MaskEd_GetMask(void* hwnd);
+void    vb6_MaskEd_SetMask(void* hwnd, void* bstr);
+void*   vb6_MaskEd_GetPromptChar(void* hwnd);
+void    vb6_MaskEd_SetPromptChar(void* hwnd, void* bstr);
+int32_t vb6_MaskEd_GetPromptInclude(void* hwnd);
+void    vb6_MaskEd_SetPromptInclude(void* hwnd, int32_t v);
+
 // ---- C30-2: TabStrip (MSComctlLib.TabStrip → SysTabControl32) ----
 // 与 SSTab 的分工：TabStrip 不是容器，页内容由用户自己的 Click 切；
 // Tabs 集合与 SelectedItem.Index 都是 **1 基**（SSTab 的 .Tab 是 0 基）。

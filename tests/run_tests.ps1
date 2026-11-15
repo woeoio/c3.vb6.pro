@@ -7794,6 +7794,45 @@ if ($Category -in @("all", "run", "vbp")) {
         'pNM42->code == -722 && (void*)pNM42->hwndFrom == vb6_hwnd_ud1',
         'vb6_UpDown_SetAlignment(vb6_hwnd_ud1, 0);')
 
+    # ---- C30-3: MaskEdBox（原生 EDIT + RTL 掩码引擎）----
+    # 这一件钉的是**每一种掩码字符**至少一条断言（计划书 C30-3 那一格的口径）：
+    #   MK1  Text 带固定符 / ClipText 只数字 / Mask 原样回读
+    #   MK2  非法字符不落盘（字母进不了数字位）
+    #   MK3  固定符（括号 / 空格 / 连字符）与可选位 9
+    #   MK4  >  强制大写      MK5  <  强制小写
+    #   MK6  ?  可选字母（收不了的字符继续找后面的输入位）
+    #   MK7  #  接受正负号    MK8  \  转义固定符
+    #   MK9  &  任意字符必填  MK10 PromptChar / MK11 PromptInclude
+    #   MK12 ClipText 赋值回灌成带格式的 Text；MK13 SelStart/SelLength/SelText（显示坐标）
+    # 判据刻意全是 ASCII：Debug.Print 出去的是 GBK 控制台字节，中文 needle 换个 locale 必红。
+    $mkNeedles = @(
+        "MK1-date=31/12/2025|31122025|00/00/0000",
+        "MK2-bad=12/34/____|1234",
+        "MK3-phone=(010) 123-4567",
+        "MK4-upper=ABC-123456",
+        "MK5-lower=ab",
+        "MK6-opt=_5",
+        "MK7-sign=+7",
+        "MK8-esc=A7",
+        "MK9-any=a#",
+        "MK10-prompt=**",
+        "MK11-noincl=|0",
+        "MK12-clip=01/01/2026",
+        "MK13-sel=31|0",
+        # MK14 = Change 事件面：MaskEdBox 是 EDIT 类窗口，EN_CHANGE(768) 走 WM_COMMAND。
+        # 计数在 mDate 被反复赋值后必然 > 0；漏登枚举/派发两处表时这一行是 False。
+        "MK14-chg=True",
+        "MASKED-DONE")
+    Test-Vbp "ctrlmaskedbox" "$Tests\ctrlmaskedbox\MaskApp.vbp" $mkNeedles -ExpectExitCode 0
+    Test-Vbp "ctrlmaskedbox_x86" "$Tests\ctrlmaskedbox\MaskApp.vbp" $mkNeedles -Arch "x86" -ExpectExitCode 0
+    # 发码形状：窗口类是 Win32 的 EDIT（不是 OCX 宿主）、设计期 Init 一把带齐四参、
+    # Text 读写都走掩码引擎（直接 GetWindowText 拿到的是带提示符的显示串）。
+    Test-EmitcShape "mk_emitc_native" @("$Tests\ctrlmaskedbox\MaskApp.vbp") @(
+        '"EDIT", "",',
+        'vb6_MaskEd_Init((void*)vb6_hwnd_mDate, (void*)L"00/00/0000", (void*)L"_", 1, NULL);',
+        'vb6_MaskEd_SetText(vb6_hwnd_mDate, vb6_BSTR_FromStr(L"31122025"));',
+        'vb6_MaskEd_GetClipText(vb6_hwnd_mDate)  /* ctrl prop read */')
+
     # ---- C30-2: TabStrip（原生 SysTabControl32 复刻）----
     # 这一件钉三面：
     #   ① Tabs 集合（Add/Remove/Clear、1 基下标、Key 与 Caption 回读）——TS1..TS6/TS10；

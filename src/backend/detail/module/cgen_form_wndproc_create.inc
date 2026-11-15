@@ -378,8 +378,10 @@
                 c_.emitLine("}");
             }
         }
-        else if (ctrl.controlType == FrmControlType::TextBox) {
+        else if (ctrl.controlType == FrmControlType::TextBox ||
+                 ctrl.controlType == FrmControlType::MaskEdBox) {
             // P14.4.1: EN_CHANGE (code=0x0300=768) -> _Change() (仅当处理器存在时)
+            // C30-3: MaskEdBox 也是 EDIT 类窗口，EN_CHANGE 同样进这条（证人：夹具 MK14-chg）。
             if (symTab_.lookup(ctrl.controlName + "_Change")) {
                 std::string changeFn = eventHandlerFn(ctrl.controlName, "_Change");
                 c_.emitLine("if (id == " + std::to_string(ctrlId) + " && code == 768) {");
@@ -662,8 +664,10 @@
                     c_.dedent();
                     c_.emitLine("}");
                 }
-            } else if (ctrlType == FrmControlType::TextBox) {
-                // EN_CHANGE (code=768) → _Change()
+            } else if (ctrlType == FrmControlType::TextBox ||
+                       ctrlType == FrmControlType::MaskEdBox) {
+                // EN_CHANGE (code=768) → _Change()（C30-3: MaskEdBox 同属 EDIT 类；
+                // 容器内那一趟的证人同样是夹具 MK14-chg）
                 auto* changeSym = symTab_.lookup(varLower + "_change");
                 if (changeSym) {
                     std::string changeFn = cProcName(changeSym->name, AccessLevel::Private);

@@ -212,6 +212,10 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // ("updown" 里既没有 "dtpicker" 也没有 "monthview")，VB6 侧另有 ProgID 写法
     // MSComctlLib.UpDown.1，同样命中这条。
     if (lower.find("updown") != std::string::npos) return FrmControlType::UpDown;
+    // C30-3: MaskEdBox (MSMask.MaskEdBox / MaskEdBox)。"maskedbox" 与上面任何一条
+    // 互不为子串（既没有 "updown" 也没有 "mask" 开头的其他控件），VB6 侧另有
+    // ProgID 写法 MSMask.MaskEdBox.1，同样命中这条。
+    if (lower.find("maskedbox") != std::string::npos) return FrmControlType::MaskEdBox;
 
     return FrmControlType::Unknown;
 }
@@ -280,6 +284,9 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // 与 Slider/ProgressBar 同一族：类由 vb6forms.c 那次 InitCommonControlsEx 的
         // ICC_BAR_CLASSES 请求过 ⇒ 不需要 RTL 自注册兜底。
         case FrmControlType::UpDown:       return "msctls_updown32";
+        // C30-3: MaskEdBox —— 用 Win32 的 **EDIT**（类名就写 "EDIT"，与 TextBox 同一
+        // 个窗口类）。掩码不靠窗口类，靠 RTL 的 vb6forms_maskededit.c 那层状态机。
+        case FrmControlType::MaskEdBox:    return "EDIT";
         // C29-1b: 文件系统三控件在 VB6 里本来就是公共控件的薄封装 —— Drive 是
         // CBS_DROPDOWNLIST 的组合框、Dir / File 是列表框。以前这三格缺映射, 创建流程
         // 把它们当"不可见控件"跳过, 于是 RTL 里那套 P20-37 填充 helper 从来没被喂过
@@ -337,6 +344,7 @@ const char* FrmParser::controlTypeToVb6Name(FrmControlType type) {
         case FrmControlType::DTPicker:     return "DTPicker";
         case FrmControlType::MonthView:    return "MonthView";
         case FrmControlType::UpDown:       return "UpDown";
+        case FrmControlType::MaskEdBox:    return "MaskEdBox";
         case FrmControlType::RichTextBox:  return "RichTextBox";
         case FrmControlType::Toolbar:      return "Toolbar";
         case FrmControlType::Shape:        return "Shape";

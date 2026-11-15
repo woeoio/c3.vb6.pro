@@ -69,6 +69,16 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
     if (p == "visible" || p == "enabled") {
         return Vb6Type::Boolean;
     }
+    // C30-3: MaskEdBox 的属性面。Text/ClipText/Mask/PromptChar 都走 RTL 的 BSTR
+    // （String）；PromptInclude 在 VB6 那边是 Boolean；Sel* 与编辑控件同口径。
+    // 没有这一格时，`s = m.ClipText` 会被当成 Variant 走打包路 → 拿到的是空串
+    // （与 TabStrip 链式属性那条老坑同型）。
+    if (ctrlType == FrmControlType::MaskEdBox) {
+        if (p == "text" || p == "cliptext" || p == "mask"
+            || p == "promptchar" || p == "seltext") return Vb6Type::String;
+        if (p == "promptinclude") return Vb6Type::Boolean;
+        if (p == "selstart" || p == "sellength") return Vb6Type::Long;
+    }
     // C30-2: TabStrip 的标量面。四个 Client* 与三条行为位的 RTL getter 都是 int32_t;
     // MultiRow/HotTracking/ShowTips 在 VB6 那边是 Boolean。
     // ⚠ Tabs(i).Caption 这类**链式成员**不在本表（这一问只看“控件.属性”一形），
@@ -367,6 +377,20 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
     }
 
     switch (ctrlType) {
+    case FrmControlType::MaskEdBox:   // C30-3
+        // Text/ClipText 都必须走 RTL 掩码引擎：直接 GetWindowText 拿到的是带提示符的
+        // 显示串，不是 VB6 语义下的 Text。Mask/PromptChar/PromptInclude 是这枚控件独有。
+        if (propLower == "text")          return "vb6_MaskEd_GetText";
+        if (propLower == "cliptext")      return "vb6_MaskEd_GetClipText";
+        if (propLower == "mask")          return "vb6_MaskEd_GetMask";
+        if (propLower == "promptchar")    return "vb6_MaskEd_GetPromptChar";
+        if (propLower == "promptinclude") return "vb6_MaskEd_GetPromptInclude";
+        if (propLower == "selstart")      return "vb6_GetSelStart";
+        if (propLower == "sellength")     return "vb6_GetSelLength";
+        if (propLower == "seltext")       return "vb6_GetSelText";
+        if (propLower == "visible")       return "vb6_GetControlVisible";
+        if (propLower == "enabled")       return "vb6_GetControlEnabled";
+        break;
     case FrmControlType::TextBox:
         if (propLower == "text") return "vb6_GetControlText";
         if (propLower == "multiline") return "vb6_GetMultiLine";
@@ -869,6 +893,18 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
         && ctrlType != FrmControlType::Line) return "vb6_SetBorderStyle";
 
     switch (ctrlType) {
+    case FrmControlType::MaskEdBox:   // C30-3
+        if (propLower == "text")          return "vb6_MaskEd_SetText";
+        if (propLower == "cliptext")      return "vb6_MaskEd_SetClipText";
+        if (propLower == "mask")          return "vb6_MaskEd_SetMask";
+        if (propLower == "promptchar")    return "vb6_MaskEd_SetPromptChar";
+        if (propLower == "promptinclude") return "vb6_MaskEd_SetPromptInclude";
+        if (propLower == "selstart")      return "vb6_SetSelStart";
+        if (propLower == "sellength")     return "vb6_SetSelLength";
+        if (propLower == "seltext")       return "vb6_SetSelText";
+        if (propLower == "visible")       return "vb6_SetControlVisible";
+        if (propLower == "enabled")       return "vb6_SetControlEnabled";
+        break;
     case FrmControlType::TextBox:
         if (propLower == "text") return "vb6_SetControlText";
         if (propLower == "multiline") return "vb6_SetMultiLine";
@@ -1521,6 +1557,7 @@ void CCodeGen::emitDesignerScaleModeProp(const FrmControl& ctrl, const std::stri
 bool CCodeGen::controlFocusFromNativeNotify(FrmControlType ctrlType) {
     switch (ctrlType) {
     case FrmControlType::TextBox:
+    case FrmControlType::MaskEdBox:   // C30-3: EDIT 类，EN_SETFOCUS/EN_KILLFOCUS 走 WM_COMMAND
     case FrmControlType::ComboBox:
     case FrmControlType::ListBox:
     case FrmControlType::CommandButton:
@@ -2144,9 +2181,13 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
             }
             break;
         }
+        // C30-3: MaskEdBox —— 单行 EDIT（与 TextBox 单行那格同一套样式）。掩码不管样式，
+        // 掩码由 RTL 的 vb6_MaskEd_* 那层接管（显示串固定位对齐，不需要 ES_CENTER 之类）。
+        case FrmControlType::MaskEdBox:
+            style |= kEsAutoH;
+            break;
         case FrmControlType::VScrollBar: {
-            // SBS_VERT：缺这个方向位时 SCROLLBAR 默认走 SBS_HORZ(=0)，微调按钮区整块空白
-            // （实测 33x31 区 992/1023 纯白、无箭头）；VB6 VScrollBar 实测含此位。
+            // SBS_VERT：缺这个方向位时 SCROLLBAR 默认走 SBS_HORZ(=0)，微调按钮区整块空白            // （实测 33x31 区 992/1023 纯白、无箭头）；VB6 VScrollBar 实测含此位。
             style |= 0x0001L;
             break;
         }
@@ -2472,6 +2513,8 @@ const FrmControl* CCodeGen::findExternalFormControl(const std::string& formName,
 const char* CCodeGen::getDefaultPropertyName(FrmControlType ctrlType) {
     switch (ctrlType) {
     case FrmControlType::TextBox:      return "Text";
+    // C30-3: MaskEdBox 的默认成员也是 Text（`MaskEdBox1 = "138..."` 落到掩码上）
+    case FrmControlType::MaskEdBox:    return "Text";
     case FrmControlType::Label:        return "Caption";
     case FrmControlType::CommandButton: return "Caption";
     case FrmControlType::CheckBox:     return "Value";

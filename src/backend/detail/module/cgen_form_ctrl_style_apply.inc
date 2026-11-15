@@ -1202,6 +1202,42 @@
             }
         }
 
+        // C30-3: MaskEdBox 设计期 —— 掩码/提示符/初始文本一次性交给 RTL 掩码引擎。
+        // 顺序很重要：Text 必须在掩码解析之后灌（meApply 要按位对位），所以 Init 一把带齐
+        // 四个参数，不先 SetWindowText 再初始化（那样带格式的回显会被当成裸字符串对位）。
+        if (ctrl.controlType == FrmControlType::MaskEdBox) {
+            std::string meNLower = ctrl.controlName;
+            std::transform(meNLower.begin(), meNLower.end(), meNLower.begin(), ::tolower);
+            std::string meHwnd = knownControlArrays_.count(meNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            auto meLit = [](const std::map<std::string, FrmValue>& mp, const std::string& k) -> std::string {
+                auto it = mp.find(k);
+                if (it == mp.end() || it->second.type != FrmValueType::String) return std::string();
+                std::string raw = it->second.rawText;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"')
+                    raw = raw.substr(1, raw.size() - 2);
+                for (char& ch : raw) if (ch == '"') ch = '\'';
+                return raw;
+            };
+            auto meInt = [](const std::map<std::string, FrmValue>& mp, const std::string& k, int defv) -> int {
+                auto it = mp.find(k);
+                if (it == mp.end()) return defv;
+                return (int)it->second.intValue;
+            };
+            std::string meMask = meLit(ctrl.properties, "Mask");
+            std::string mePrompt = meLit(ctrl.properties, "PromptChar");
+            std::string meText = meLit(ctrl.properties, "Text");
+            // PromptInclude 缺省 = True（VB6 口径），未写不当作 False。
+            int mePi = meInt(ctrl.properties, "PromptInclude", 1);
+            c_.emitLine("vb6_MaskEd_Init((void*)" + meHwnd
+                      + ", (void*)L\"" + meMask + "\", (void*)L\"" + mePrompt + "\", "
+                      + std::to_string(mePi != 0 ? 1 : 0) + ", "
+                      + (meText.empty() ? std::string("NULL")
+                                        : ("(void*)L\"" + meText + "\"")) + ");");
+        }
+
         // C30-2: TabStrip 设计期 —— Init 一次，再把 BeginProperty Tabs {…} 里的页灌进去。
         // 与 SSTab 的根本区别：TabStrip **不是容器**，这里只造标签条，不动任何子控件的可见性；
         // 页内容由用户在 _Click 里自己切（ai/内置控件/TabStrip 控件（选项卡条）.md §5）。
