@@ -63,6 +63,16 @@ typedef struct {
     struct TcObj* obj[VB6_TC_MAXSER + 1];   /* 成员对象缓存 (0 = Series 集合) */
     struct TcObj* meth[8];                  /* 方法对象缓存（AddSeries 那几枚） */
     int      nmeth;
+    struct TcObj* extra[16];                /* Panel / Header / Axes / Axis / Title */
+    int      nextra;
+    /* 对象模型的标量面（C30-10 第三刀）。轴下标: 0=Left 1=Right 2=Top 3=Bottom */
+    int      panelBorder;
+    int      headerVisible;
+    int      axisShow[4];
+    int      axisTitleShow[4];
+    int      axisAuto[4];
+    double   axisMin[4], axisMax[4];
+    wchar_t  axisTitle[4][64];
 } TcChart;
 
 static TcChart* g_tc[VB6_TC_MAXCTL];
@@ -87,6 +97,7 @@ static TcChart* tcOf(HWND h) {
 
 static TcChart* tcAttach(HWND h) {
     TcChart* c;
+    int i;
     if (!h || !IsWindow(h)) return NULL;
     c = tcOf(h);
     if (c) return c;
@@ -99,6 +110,9 @@ static TcChart* tcAttach(HWND h) {
     c->marginT       = 12;
     c->marginB       = 12;
     c->showLegend    = 1;
+    c->panelBorder   = 1;
+    c->headerVisible = 1;
+    for (i = 0; i < 4; i++) { c->axisShow[i] = 1; c->axisTitleShow[i] = 1; c->axisAuto[i] = 1; }
     SetPropW(h, TC_SLOT, (HANDLE)c);
     if (g_tcN < VB6_TC_MAXCTL) g_tc[g_tcN++] = c;
     return c;
@@ -518,6 +532,11 @@ int32_t vb6_TChart_PaintCount(void* hwnd) {
 #define TC_KIND_COLL    0
 #define TC_KIND_SERIES  1
 #define TC_KIND_METHOD  2   /* 根上的方法对象（AddSeries 那族） */
+#define TC_KIND_PANEL   3
+#define TC_KIND_HEADER  4
+#define TC_KIND_AXES    5   /* Axis 集合（Axis.Bottom 这类具名也走它） */
+#define TC_KIND_AXIS    6   /* index = 0 Left / 1 Right / 2 Top / 3 Bottom */
+#define TC_KIND_TITLE   7   /* 轴标题（index = 轴下标） */
 
 typedef struct TcObj {
     const IDispatchVtbl* lpVtbl;
@@ -537,6 +556,30 @@ static const wchar_t* kTcCollNames[] = { L"Item", L"Count", NULL };
 static const wchar_t* kTcSerNames[]  = {
     L"Add", L"AddXY", L"FillSampleValues", L"Clear",
     L"Color", L"Title", L"SeriesType", L"Count", NULL };
+/* C30-10 第三刀：Panel / Header / Axis 三层。只登记真做得动的名字。 */
+static const wchar_t* kTcPanelNames[] = {
+    L"Color", L"MarginLeft", L"MarginRight", L"MarginTop", L"MarginBottom",
+    L"Visible", L"BorderVisible", NULL };
+static const wchar_t* kTcHeaderNames[] = { L"Text", L"Caption", L"Visible", NULL };
+/* Axis.Bottom / Left / Right / Top 是具名属性（DISPID 3..6），Item(i) 同集合 */
+static const wchar_t* kTcAxesNames[] = {
+    L"Item", L"Count", L"Bottom", L"Left", L"Right", L"Top", NULL };
+static const wchar_t* kTcAxisNames[] = {
+    L"Automatic", L"Minimum", L"Maximum", L"Visible", L"Title", NULL };
+static const wchar_t* kTcTitleNames[] = { L"Caption", L"Text", L"Visible", NULL };
+
+static const wchar_t* const* tcNames(int kind) {
+    switch (kind) {
+    case TC_KIND_COLL:   return kTcCollNames;
+    case TC_KIND_SERIES: return kTcSerNames;
+    case TC_KIND_PANEL:  return kTcPanelNames;
+    case TC_KIND_HEADER: return kTcHeaderNames;
+    case TC_KIND_AXES:   return kTcAxesNames;
+    case TC_KIND_AXIS:   return kTcAxisNames;
+    case TC_KIND_TITLE:  return kTcTitleNames;
+    default:             return NULL;
+    }
+}
 
 static void tcSetEmpty(VARIANT* o) { if (o) VariantInit(o); }
 static void tcSetL(VARIANT* o, int32_t v) {
@@ -575,6 +618,7 @@ static double tcArgD(VARIANT* v) {
 }
 
 static TcObj* tcObjFor(TcChart* c, int kind, int index);
+static TcObj* tcCached(TcChart* c, int kind, int index);
 static int32_t tcRootCall(TcChart* c, void* hwnd, const wchar_t* name, int argc,
                           VARIANT** a, VARIANT* out);
 static TcObj* tcMethodFor(TcChart* c, const wchar_t* name);
@@ -605,6 +649,8 @@ static HRESULT STDMETHODCALLTYPE tcGetIDs(IDispatch* d, REFIID riid, LPOLESTR* n
                                           UINT n, LCID lcid, DISPID* ids) {
     TcObj* o = (TcObj*)d;
     const wchar_t* const* tbl = (o->kind == TC_KIND_COLL) ? kTcCollNames : kTcSerNames;
+    const wchar_t* const* all = tcNames(o->kind);
+    if (all) tbl = all;
     (void)riid; (void)lcid;
     if (!names || !ids) return E_POINTER;
     for (UINT k = 0; k < n; k++) {
@@ -673,6 +719,109 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         }
     }
 
+    /* ===== C30-10 第三刀：Panel / Header / Axis(+Title) =====
+     * 这四层是像素判据的前置（真 VB6 读数里标题位置、图例边、轴线位置全由它们决定），
+     * 所以先把 MakeGet/MakePut 做成能读能写，绘制跟上在下一刀。 */
+    if (o->kind == TC_KIND_PANEL) {
+        switch (id) {
+        case 1: if (flags & DISPATCH_PROPERTYPUT) { c->panelColor = (COLORREF)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, (int32_t)c->panelColor); return S_OK;
+        case 2: if (flags & DISPATCH_PROPERTYPUT) { c->marginL = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, c->marginL); return S_OK;
+        case 3: if (flags & DISPATCH_PROPERTYPUT) { c->marginR = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, c->marginR); return S_OK;
+        case 4: if (flags & DISPATCH_PROPERTYPUT) { c->marginT = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, c->marginT); return S_OK;
+        case 5: if (flags & DISPATCH_PROPERTYPUT) { c->marginB = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, c->marginB); return S_OK;
+        case 6: if (flags & DISPATCH_PROPERTYPUT) return S_OK;   /* Visible: 控件本身可见性归宿主 */
+                tcSetL(res, 1); return S_OK;
+        case 7: if (flags & DISPATCH_PROPERTYPUT) { c->panelBorder = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, c->panelBorder); return S_OK;
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+
+    if (o->kind == TC_KIND_HEADER) {
+        switch (id) {
+        case 1: case 2:   /* Text / Caption */
+            if (flags & DISPATCH_PROPERTYPUT) {
+                VARIANT t; VariantInit(&t);
+                if (a0 && SUCCEEDED(VariantChangeType(&t, a0, 0, VT_BSTR)))
+                    vb6_TChart_SetHeaderText(c->hwnd, t.bstrVal ? t.bstrVal : L"");
+                VariantClear(&t);
+                return S_OK;
+            }
+            tcSetStr(res, c->header);
+            return S_OK;
+        case 3:   /* Visible */
+            if (flags & DISPATCH_PROPERTYPUT) { c->headerVisible = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            tcSetL(res, c->headerVisible);
+            return S_OK;
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+
+    if (o->kind == TC_KIND_AXES) {
+        switch (id) {
+        case DISPID_VALUE: case 1: {    /* Item(i)：0..3 = Left/Right/Top/Bottom */
+            int idx = (int)tcArgL(a0);
+            if (idx < 0) idx = 0;
+            if (idx > 3) idx = 3;
+            tcSetObj(res, tcCached(c, TC_KIND_AXIS, idx));
+            return S_OK;
+        }
+        case 2: tcSetL(res, 4); return S_OK;                 /* Count */
+        case 3: tcSetObj(res, tcCached(c, TC_KIND_AXIS, 3)); return S_OK;   /* Bottom */
+        case 4: tcSetObj(res, tcCached(c, TC_KIND_AXIS, 0)); return S_OK;   /* Left */
+        case 5: tcSetObj(res, tcCached(c, TC_KIND_AXIS, 1)); return S_OK;   /* Right */
+        case 6: tcSetObj(res, tcCached(c, TC_KIND_AXIS, 2)); return S_OK;   /* Top */
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+
+    if (o->kind == TC_KIND_AXIS) {
+        int ax = o->index;
+        if (ax < 0 || ax > 3) ax = 3;
+        switch (id) {
+        case 1: if (flags & DISPATCH_PROPERTYPUT) { c->axisAuto[ax] = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, c->axisAuto[ax]); return S_OK;
+        case 2: if (flags & DISPATCH_PROPERTYPUT) { c->axisMin[ax] = tcArgD(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetD(res, c->axisMin[ax]); return S_OK;
+        case 3: if (flags & DISPATCH_PROPERTYPUT) { c->axisMax[ax] = tcArgD(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetD(res, c->axisMax[ax]); return S_OK;
+        case 4: if (flags & DISPATCH_PROPERTYPUT) { c->axisShow[ax] = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, c->axisShow[ax]); return S_OK;
+        case 5: tcSetObj(res, tcCached(c, TC_KIND_TITLE, ax)); return S_OK;   /* Title */
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+
+    if (o->kind == TC_KIND_TITLE) {
+        int ax = o->index;
+        if (ax < 0 || ax > 3) ax = 3;
+        switch (id) {
+        case 1: case 2:   /* Caption / Text */
+            if (flags & DISPATCH_PROPERTYPUT) {
+                VARIANT t; VariantInit(&t);
+                if (a0 && SUCCEEDED(VariantChangeType(&t, a0, 0, VT_BSTR))) {
+                    wcsncpy(c->axisTitle[ax], t.bstrVal ? t.bstrVal : L"", 63);
+                    c->axisTitle[ax][63] = 0;
+                    InvalidateRect(c->hwnd, NULL, FALSE);
+                }
+                VariantClear(&t);
+                return S_OK;
+            }
+            tcSetStr(res, c->axisTitle[ax]);
+            return S_OK;
+        case 3:   /* Visible */
+            if (flags & DISPATCH_PROPERTYPUT) { c->axisTitleShow[ax] = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            tcSetL(res, c->axisTitleShow[ax]);
+            return S_OK;
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+
     /* TC_KIND_SERIES */
     s = tcSeries(c, o->index);
     if (!s) return DISP_E_MEMBERNOTFOUND;
@@ -722,6 +871,27 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
 static const IDispatchVtbl tcObjVtbl = {
     tcQI, tcAddRef, tcRelease, tcGtiCount, tcGti, tcGetIDs, tcInvoke
 };
+
+static TcObj* tcCached(TcChart* c, int kind, int index) {
+    int i;
+    if (!c) return NULL;
+    for (i = 0; i < c->nextra; i++) {
+        if (c->extra[i] && c->extra[i]->kind == kind && c->extra[i]->index == index)
+            return c->extra[i];
+    }
+    if (c->nextra >= (int)(sizeof(c->extra) / sizeof(c->extra[0]))) return NULL;
+    {
+        TcObj* o = (TcObj*)calloc(1, sizeof(TcObj));
+        if (!o) return NULL;
+        o->lpVtbl = &tcObjVtbl;
+        o->ref    = 1;
+        o->kind   = kind;
+        o->hwnd   = c->hwnd;
+        o->index  = index;
+        c->extra[c->nextra++] = o;
+        return o;
+    }
+}
 
 static TcObj* tcObjFor(TcChart* c, int kind, int index) {
     int slot;
@@ -802,6 +972,12 @@ int32_t vb6_TChart_HostGetProp(void* obj, const wchar_t* name, void* outV) {
         return 1;
     }
     if (_wcsicmp(name, L"SeriesCount") == 0) { tcSetL(out, c->nser); return 1; }
+    if (_wcsicmp(name, L"Panel") == 0) { tcSetObj(out, tcCached(c, TC_KIND_PANEL, 0)); return 1; }
+    if (_wcsicmp(name, L"Header") == 0) { tcSetObj(out, tcCached(c, TC_KIND_HEADER, 0)); return 1; }
+    if (_wcsicmp(name, L"Axis") == 0 || _wcsicmp(name, L"Axes") == 0) {
+        tcSetObj(out, tcCached(c, TC_KIND_AXES, 0));
+        return 1;
+    }
     if (_wcsicmp(name, L"HeaderText") == 0 || _wcsicmp(name, L"Text") == 0) {
         tcSetStr(out, c->header); return 1;
     }
