@@ -22,6 +22,10 @@
 #endif
 
 #include "vb6forms.h"
+// 账 #611 / 台账 §B12（D14）: 控件画字一律问**那位主人**（#204 的字体存储槽 vb6_ControlFont），
+// 不许自己 `GetStockObject(DEFAULT_GUI_FONT)` —— 那是这台机器的 GDI 缺省（本机实测 SimSun -12），
+// 而同一个 TabStrip 的窗口字体是 MS Sans Serif 8.25pt（-11）⇒ 画出来的标签与量出来的
+// 标签尺寸会对不上（自绘气泡测宽尤其明显）。本文件原先两处就是这么长的。
 #include "vb6forms_internal.h"
 #include "vb6rtl_bstr.h"
 
@@ -185,12 +189,16 @@ static LRESULT CALLBACK tsTipWndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
         }
         n = GetWindowTextW(h, buf, 512);
         if (n > 0) {
-            HFONT of = (HFONT)SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+            // 与 WM_SETFONT 发进窗口的那张**同一个**句柄 —— 但只许通过出口 vb6_ControlFont 问
+            //（D11：全 src/rtl 里裸问 WM_GETFONT 只许剩出口自己那一行）。它内部先问窗口
+            // 再问存储槽（#204），两问皆空才让你用 DC 自带字体。
+            HFONT f = vb6_ControlFont(h);
+            HFONT of = f ? (HFONT)SelectObject(dc, f) : NULL;
             rc.left += 4; rc.right -= 4; rc.top += 2; rc.bottom -= 2;
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, GetSysColor(COLOR_INFOTEXT));
             DrawTextW(dc, buf, n, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-            SelectObject(dc, of);
+            if (of) SelectObject(dc, of);
         }
         EndPaint(h, &ps);
         return 0;
@@ -215,15 +223,16 @@ static void tsTipShow(Vb6TabStrip* t, int i0) {
     if (!SendMessageW((HWND)t->hwnd, TCM_GETITEMRECT, (WPARAM)i0, (LPARAM)&rc)) return;
     SetWindowTextW(t->tipWnd, t->tip[i0]);
     // 量文本（DT_CALCRECT）后按内容定尺寸；贴在该页左下角，跟 VB6 观感一致。
+    // 字体必须与标签**同源**（否则气泡框比文字大一圈/小一圈）—— 走同一个出口 vb6_ControlFont（D11）。
     dc = GetDC(t->tipWnd);
-    of = (HFONT)SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+    of = vb6_ControlFont((HWND)t->hwnd);
+    of = of ? (HFONT)SelectObject(dc, of) : NULL;
     SetRect(&trc, 0, 0, 480, 0);
     DrawTextW(dc, t->tip[i0], -1, &trc, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
     w = (trc.right - trc.left) + 8;
     ht = (trc.bottom - trc.top) + 4;
     SelectObject(dc, of);
-    ReleaseDC(t->tipWnd, dc);
-    pt.x = rc.left; pt.y = rc.bottom;
+    ReleaseDC(t->tipWnd, dc);    pt.x = rc.left; pt.y = rc.bottom;
     ClientToScreen((HWND)t->hwnd, &pt);
     SetWindowPos(t->tipWnd, HWND_TOPMOST, pt.x, pt.y, w, ht,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
