@@ -45,6 +45,10 @@ typedef struct {
     int       multiRow;
     int       hotTrack;
     int       showTips;
+    HWND      tipWnd;       // 自建 track tooltip（ShowTips 气泡，见 tsTipShow）
+    int       tipShown;     // 正在弹的 1 基页序号；0 = 没弹
+    int       tipTracking;  // 已挂 TME_LEAVE
+    WNDPROC   prevProc;     // 子类链的下一层（原窗口过程）
 } Vb6TabStrip;
 
 static Vb6TabStrip g_ts[VB6_TS_MAX];
@@ -98,10 +102,14 @@ static int tsReserve(Vb6TabStrip* t, int need) {
 }
 
 // 把 RTL 的平行表整段重灌到 SysTabControl32 上（原生没有"改第 i 项"的便宜路）。
+// 重灌前先收气泡：项会被 TCM_DELETEALLITEMS 清掉，正弹着的那一枚就指向空气了。
+static void tsTipHide(Vb6TabStrip* t);
+
 static void tsRepopulate(Vb6TabStrip* t) {
     TCITEMW it;
     int i;
     if (!t || !t->hwnd) return;
+    tsTipHide(t);
     SendMessageW(t->hwnd, TCM_DELETEALLITEMS, 0, 0);
     for (i = 0; i < t->count; i++) {
         ZeroMemory(&it, sizeof(it));
@@ -112,6 +120,171 @@ static void tsRepopulate(Vb6TabStrip* t) {
     }
     if (t->cur >= t->count) t->cur = t->count - 1;
     if (t->cur >= 0) SendMessageW(t->hwnd, TCM_SETCURSEL, (WPARAM)t->cur, 0);
+}
+
+// ===================== ShowTips 气泡（C30-2 收尾之三）=====================
+// 为何自建：原生 SysTabControl32 在 TCS_TOOLTIPS 下的气泡文本**恒等于项文本**
+// （TCITEM.pszText），拿不到 Tabs(i).ToolTipText 这一枚。而托 comctl32 的 tooltip 去改
+// 也不行（实测两轮）：TTM_UPDATETIPTEXT+TTM_TRACKACTIVATE 那条路气泡压根不显；想拿
+// SetWindowTextW 打个标记也不行（tooltip 的类过程把 WM_SETTEXT 吃掉了，标题永远是空）。
+// ⇒ 干脆自绘一枚无激活弹出窗：类名 VB6_TabTipWnd、标题就是气泡文本（可跨进程 WM_GETTEXT 读），
+// 外观用系统提示色（COLOR_INFOBK/COLOR_INFOTEXT）。停在哪个页就弹哪个页的 ToolTipText，
+// **空则不弹**（VB6 口径：没写过 ToolTipText 的页没有气泡；不拿标题兜底）。
+#define VB6_TS_TIP_CLASSW L"VB6_TabTipWnd"
+
+static LRESULT CALLBACK tsTipProc(HWND h, UINT m, WPARAM wp, LPARAM lp);
+static LRESULT CALLBACK tsTipWndProc(HWND h, UINT m, WPARAM wp, LPARAM lp);
+
+static void tsTipHide(Vb6TabStrip* t) {
+    if (!t) return;
+    if (!t->tipShown) return;
+    if (t->tipWnd) ShowWindow(t->tipWnd, SW_HIDE);
+    t->tipShown = 0;
+}
+
+static void tsTipEnsure(Vb6TabStrip* t) {
+    WNDCLASSEXW wc;
+    HINSTANCE hi;
+    if (!t || !t->hwnd || t->tipWnd) return;
+    hi = (HINSTANCE)GetModuleHandleW(NULL);
+    ZeroMemory(&wc, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = tsTipWndProc;
+    wc.hInstance = hi;
+    if (!GetClassInfoExW(hi, VB6_TS_TIP_CLASSW, &wc)) {   // 已注册过就不重复注册
+        ZeroMemory(&wc, sizeof(wc));
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = tsTipWndProc;
+        wc.hInstance = hi;
+        wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+        wc.lpszClassName = VB6_TS_TIP_CLASSW;
+        if (!RegisterClassExW(&wc)) return;
+    }
+    t->tipWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                VB6_TS_TIP_CLASSW, L"",
+                                WS_POPUP | WS_BORDER,
+                                0, 0, 10, 10, (HWND)t->hwnd, NULL, hi, NULL);
+}
+
+// 自绘：系统提示色底 + 单行文本（VB6 气泡也是单行）。
+static LRESULT CALLBACK tsTipWndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    switch (m) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        RECT rc;
+        HDC dc = BeginPaint(h, &ps);
+        wchar_t buf[512];
+        int n;
+        GetClientRect(h, &rc);
+        {
+            HBRUSH br = CreateSolidBrush(GetSysColor(COLOR_INFOBK));
+            FillRect(dc, &rc, br);
+            DeleteObject(br);
+        }
+        n = GetWindowTextW(h, buf, 512);
+        if (n > 0) {
+            HFONT of = (HFONT)SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+            rc.left += 4; rc.right -= 4; rc.top += 2; rc.bottom -= 2;
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, GetSysColor(COLOR_INFOTEXT));
+            DrawTextW(dc, buf, n, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            SelectObject(dc, of);
+        }
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    }
+    return DefWindowProcW(h, m, wp, lp);
+}
+
+static void tsTipShow(Vb6TabStrip* t, int i0) {
+    RECT rc, trc;
+    POINT pt;
+    HDC dc;
+    HFONT of;
+    int w, ht;
+    if (!t || !t->hwnd || i0 < 0 || i0 >= t->count) return;
+    if (!t->tip || !t->tip[i0] || !t->tip[i0][0]) { tsTipHide(t); return; }
+    tsTipEnsure(t);
+    if (!t->tipWnd) return;
+    rc.left = rc.top = rc.right = rc.bottom = 0;
+    if (!SendMessageW((HWND)t->hwnd, TCM_GETITEMRECT, (WPARAM)i0, (LPARAM)&rc)) return;
+    SetWindowTextW(t->tipWnd, t->tip[i0]);
+    // 量文本（DT_CALCRECT）后按内容定尺寸；贴在该页左下角，跟 VB6 观感一致。
+    dc = GetDC(t->tipWnd);
+    of = (HFONT)SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT));
+    SetRect(&trc, 0, 0, 480, 0);
+    DrawTextW(dc, t->tip[i0], -1, &trc, DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX);
+    w = (trc.right - trc.left) + 8;
+    ht = (trc.bottom - trc.top) + 4;
+    SelectObject(dc, of);
+    ReleaseDC(t->tipWnd, dc);
+    pt.x = rc.left; pt.y = rc.bottom;
+    ClientToScreen((HWND)t->hwnd, &pt);
+    SetWindowPos(t->tipWnd, HWND_TOPMOST, pt.x, pt.y, w, ht,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    InvalidateRect(t->tipWnd, NULL, TRUE);
+    t->tipShown = i0 + 1;
+}
+
+// 命中：逐项比矩形（不用 TCM_HITTEST —— 它要“确实落在某页的绘制区”才算，
+// 页间分隔线上会回 -1；自己也占着一个 TCHITTESTINFO 结构，没必要）。
+static int tsItemAt(Vb6TabStrip* t, int x, int y) {
+    RECT rc;
+    int i;
+    if (!t || !t->hwnd) return -1;
+    for (i = 0; i < t->count; i++) {
+        rc.left = rc.top = rc.right = rc.bottom = 0;
+        if (!SendMessageW((HWND)t->hwnd, TCM_GETITEMRECT, (WPARAM)i, (LPARAM)&rc)) continue;
+        if (x >= rc.left && x < rc.right && y >= rc.top && y < rc.bottom) return i;
+    }
+    return -1;
+}
+
+static void tsTipHover(Vb6TabStrip* t, int x, int y) {
+    int i0;
+    if (!t) return;
+    if (!t->showTips) { tsTipHide(t); return; }
+    i0 = tsItemAt(t, x, y);
+    if (i0 < 0) { tsTipHide(t); return; }
+    if (t->tipShown == i0 + 1) return;   // 同页不重弹（否则每动一像素闪一下）
+    tsTipShow(t, i0);
+}
+
+// 子类：**自己链**下一层，不占 cgen 的 VB6_OrigProc 属性槽。
+// 理由（已实测，账面 #185）：vb6_InstallControlSubclass 见槽上有值就直接 return，
+// 而 cgen 是在 Init **之后**才装控件子类的 —— RTL 若先占坑，控件事件会整段哑掉。
+static LRESULT CALLBACK tsTipProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    Vb6TabStrip* t = tsFind((void*)h);
+    WNDPROC prev = t ? t->prevProc : NULL;
+    if (t) {
+        switch (m) {
+        case WM_MOUSEMOVE:
+            if (!t->tipTracking) {
+                TRACKMOUSEEVENT tme;
+                ZeroMemory(&tme, sizeof(tme));
+                tme.cbSize = sizeof(tme); tme.dwFlags = TME_LEAVE; tme.hwndTrack = h;
+                if (TrackMouseEvent(&tme)) t->tipTracking = 1;
+            }
+            tsTipHover(t, (int)(short)LOWORD(lp), (int)(short)HIWORD(lp));
+            break;
+        case WM_MOUSELEAVE:
+            t->tipTracking = 0;
+            tsTipHide(t);
+            break;
+        case WM_LBUTTONDOWN:
+        case WM_CAPTURECHANGED:
+        case WM_DESTROY:
+            tsTipHide(t);
+            break;
+        }
+    }
+    if (prev) return CallWindowProcW(prev, h, m, wp, lp);
+    return DefWindowProcW(h, m, wp, lp);
 }
 
 // ===================== 设计期 =====================
@@ -136,9 +309,15 @@ void vb6_TabStrip_Init(void* hwnd, int32_t multiRow, int32_t hotTrack, int32_t s
         LONG st = GetWindowLongW(h, GWL_STYLE);
         st = multiRow ? (st | TCS_MULTILINE) : (st & ~TCS_MULTILINE);
         st = hotTrack ? (st | TCS_HOTTRACK) : (st & ~TCS_HOTTRACK);
-        st = showTips ? (st | TCS_TOOLTIPS) : (st & ~TCS_TOOLTIPS);
+        st = hotTrack ? (st | TCS_HOTTRACK) : (st & ~TCS_HOTTRACK);
+        st &= ~TCS_TOOLTIPS;   // 气泡由 RTL 自建（tsTipShow）：原生那条只会说项文本
         SetWindowLongW(h, GWL_STYLE, st);
     }
+    if (!t->prevProc) {
+        WNDPROC old = (WNDPROC)SetWindowLongPtrW(h, GWLP_WNDPROC, (LONG_PTR)tsTipProc);
+        if (old && old != tsTipProc) t->prevProc = old;
+    }
+    tsTipEnsure(t);   // 气泡窗随控件预建（隐藏态），首次悬停只改文本/位置
 }
 
 int32_t vb6_TabStrip_GetMultiRow(void* hwnd)   { Vb6TabStrip* t = tsFind(hwnd); return t ? t->multiRow : 0; }
@@ -170,6 +349,12 @@ void vb6_TabStrip_SetShowTips(void* hwnd, int32_t v) {
     Vb6TabStrip* t = tsFind(hwnd);
     if (!t) return;
     t->showTips = v ? 1 : 0;
+    {
+        LONG st = GetWindowLongW((HWND)t->hwnd, GWL_STYLE);
+        st &= ~TCS_TOOLTIPS;   // 同上：这层气泡永远归 RTL 管
+        SetWindowLongW((HWND)t->hwnd, GWL_STYLE, st);
+    }
+    if (!t->showTips) tsTipHide(t);
 }
 
 // ===================== Client*（页面容器要用的那块矩形） =====================

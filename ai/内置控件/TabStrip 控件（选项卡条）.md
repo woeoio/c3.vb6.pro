@@ -76,6 +76,7 @@ End Sub
 - 方法：`Tabs.Add [index], [key], [caption], [image]`（四位全可选，省略位按位置对齐）、`Tabs.Remove n|key`、`Tabs.Clear`
 - 读：`Tabs.Count`、`Tabs(i).Caption` / `.Key` / `.Index` / `.Image` / `.Selected` / `.ToolTipText`、`SelectedItem.Index` / `.Caption` / `.Key`
 - 写：`Tabs(i).Caption` / `.Key` / `.Image` / `.ToolTipText`、`Tabs(i).Selected = True`、`SelectedItem.Index = n`、`SelectedItem.Caption` / `.Key`
+- `ShowTips = True` 时，`ToolTipText` 会真的弹出来（自绘提示窗，停到有文字的页上才弹；空文字的页不弹）
 - 属性：`MultiRow` / `HotTracking` / `ShowTips`（创建时进样式位）、`ClientLeft/Top/Width/Height`（页区矩形）、通用几何与 `Visible/Enabled`
 - 事件：`Click`（走通用控件子类的 `WM_LBUTTONUP`，与“点了一下”的 VB6 语义同）
 
@@ -98,6 +99,14 @@ TS11-arg=3/1      TS12-sub=1        TS13-wcap=True/True/0
 TS14-wsel=2/2     TS15-selset=1     TS16-rmkeep=2/2/True     TS17-rmcur=1/1
 TS18-arr=1/True/True                TS19-tip=True/True
 TS10-clear=0/0    TABSTRIP-DONE
+
+手动样例（`tools/tabstrip_manual`，`verify_tab.ps1` 真光标驱动），气泡部分：
+
+T0b 悬停第1页(有 tip-a) : 气泡可见=True 文本='tip-a'
+T5  悬停第1页(空)       : 气泡可见=False
+T6  悬停第2页(带 tip-c)  : 气泡可见=True 文本='tip-c'
+T6b 悬停第3页(空)       : 气泡可见=False
+T7  鼠标离开              : 气泡可见=False
 ```
 
 TS11 / TS12 就是“VB 原样写法”那两形（`CStr(TabStrip1.Tabs.Count)`、`ShowIdx TabStrip1.SelectedItem.Index`），
@@ -121,6 +130,6 @@ RESULT: 正常关闭 exit=0
 
 ### 6.5 已知缺口（写在这里，不装看不见）
 
-1. **`Tabs(i).ToolTipText` 的气泡文本**：读写往返一致（TS19 钉住），但原生 `TCS_TOOLTIPS` 的气泡显示的是**项文本**，不是这一枚；要让气泡真说 `ToolTipText` 得自建 track tooltip，另开一刀。
+1. **`Tabs(i).ToolTipText` 的气泡**：已实现（自绘 `VB6_TabTipWnd`，不走 comctl32 的 tooltip 类 —— 原生那条只会说项文本，且 `TTM_*` 激活与 `WM_SETTEXT` 都被它自己吃掉了，两轮实测都不显）。口径：**有文字才弹，空则不弹**（拿标题兜底会凭空多一枚气泡）；外观用系统提示色。实测读数（`verify_tab.ps1`）：`T0b 气泡可见=True 文本='tip-a'` / `T5 False` / `T6 文本='tip-c'` / `T6b False` / `T7 离开后 False`。
 2. **`Tabs(i).Selected = False` 不发码**：VB6 的 TabStrip 没有“全不选”状态，照 `TCM_SETCURSEL(-1)` 写会让原生控件清掉选中，反而比 VB6 多出可观测差异。`= True` 正常选中。
 3. **`Tabs.Remove` 之后的选中项**：删前面的页时保持“同一页仍选中”（序号自动前移），删当前页时顶上来那一页接管选中（等同 VB6 “选其下一位”），末页被删则钳到新的末项。已由 TS16/TS17 钉住。

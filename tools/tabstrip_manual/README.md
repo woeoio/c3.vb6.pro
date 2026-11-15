@@ -30,13 +30,26 @@ x 中心由 `.build/probe/scan_items.ps1` 扫出来（0–44 / 45–89 / 90–13
 
 ```
 T0 载入后   : tabs=3  sel=1  cap=常规  clicks=0   [原生 count=3 curSel=0]
+T0b 悬停第1页(有 tip-a) : 气泡可见=True 文本='tip-a'
 T1 点第2页  : tabs=3  sel=2  cap=视图  clicks=1
 T2 点第3页  : tabs=3  sel=3  cap=高级  clicks=2
 T2b 点第1页 : tabs=3  sel=1  cap=常规  clicks=3
 T3 加一页   : tabs=4  sel=1  cap=常规  clicks=3
 T4 删当前页 : tabs=3  sel=1  cap=视图  clicks=3
+T5 悬停第1页(空 ToolTipText)   : 气泡可见=False
+T6 悬停第2页(带 tip-c)         : 气泡可见=True 文本='tip-c'
+T6b 悬停第3页(空 ToolTipText)  : 气泡可见=False
+T7 鼠标离开              : 气泡可见=False
 RESULT: 正常关闭 exit=0
 ```
+
+两个坑（都在脚本里留了留痕注释）：
+
+- 气泡只能用**真光标**（`SetCursorPos`）验：用 `PostMessage(WM_MOUSEMOVE)` 假悬停会被
+  `TrackMouseEvent(TME_LEAVE)` 当场判成“已离开”（真光标不在控件上），气泡一显就收。
+- 不能拿 `TTM_GETTEXT` 读气泡文本：那条消息收 `TOOLINFO*`，跨进程时 USER32 不封送指针，
+  目标进程直接挂（同理 `TCM_GETITEMRECT`）。本例自绘的气泡把文本放在窗口标题上，
+  `WM_GETTEXT`（< WM_USER）会被封送，安全。
 
 人眼该看到的三件事：
 
@@ -44,6 +57,8 @@ RESULT: 正常关闭 exit=0
 2. 三个 `PictureBox` 严丝合缝贴在**页区**上 —— `ClientLeft/ClientTop/ClientWidth/ClientHeight`
    是相对 TagStrip 的页区矩形，不是整窗；`TabStrip` **不是容器**，页内容是自己摆上去的。
 3. `clicks=` 每点一次 +1（`Click` 从通用子类来）。
+4. 鼠标停在第 1 页 / 第 2 页上时，标签下方弹出一枚浅黄提示条（文字分别是 `tip-a` / 删页后的
+   `tip-c`）；停在**没写 ToolTipText** 的页上没有气泡。
 
 ## 写法（不再是限制，是判据）
 

@@ -104,6 +104,9 @@ Private Sub Form_Load()
     TabStrip1.Tabs.Add , "t1", "常规"
     TabStrip1.Tabs.Add , "t2", "视图"
     TabStrip1.Tabs.Add , "t3", "高级"
+    ' C30-2 收尾之三：气泡文本归 ToolTipText（不写 = 不弹，第 2 页故意不写做对照）。
+    TabStrip1.Tabs(1).ToolTipText = "tip-a"
+    TabStrip1.Tabs(3).ToolTipText = "tip-c"
     LayoutPages
     ShowPage 1
 End Sub
