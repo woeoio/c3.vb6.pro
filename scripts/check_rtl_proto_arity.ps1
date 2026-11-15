@@ -16,9 +16,11 @@
 #
 #   R3（账 #278 §B72）发码那几张控件方法表（cgen_util_ctrl.cpp 的 controlExit("vb6_…", 个数, outArgc)）
 #      三面都得对上：名字在 RTL 头里真有原型且个数相同（查不到原型也红 —— 没有声明就没有担保）、
-#      cgen_util_type.cpp 里那张运行时参数表若有同名行则个数相同、行数恰好 23（第十二刀 7 行 +
+#      cgen_util_type.cpp 里那张运行时参数表若有同名行则个数相同、行数恰好 24（第十二刀 7 行 +
 #      第十三刀的 Winsock 那 8 行 + 第十四刀并进零实参那张表的 8 行（两枚集合 Clear +
-#      CommonDialog 那六枚 Show*）；
+#      CommonDialog 那六枚 Show*），第十五刀 C30-UD-b 再加 UpDown 的 SimDelta 1 行 = 24）；
+#      ⚠ 以前那个 23 是第十四刀的数；UpDown 那一行**不**在 ctrlzero 夹具覆盖面里（由
+#      tests/ctrlupdown 的 UE1..UE6 真跑），所以下面 R4 的 exercised 钉仍为 22。
 #   R4 产物那一头：跑一次 --emit-c（只走前端，不起 cl）数 tests/ctrlzero/ZeroForm.frm 里实际发出
 #      的调用递了几枚实参，与表里的数对（夹具跑出 22 枚：零/一/换算三张表 6 枚 + Winsock 8 枚
 #      + 集合 Clear 2 枚 + CommonDialog Show* 6 枚）
@@ -160,7 +162,7 @@ if (-not (Test-Path -LiteralPath $tblPath)) {
 } else {
     $tblTxt = [IO.File]::ReadAllText($tblPath)
     $tbl = @([regex]::Matches($tblTxt, 'controlExit\("(vb6_[A-Za-z0-9_]+)",\s*(\d+),\s*outArgc\)'))
-    if ($tbl.Count -ne 23) { $viol += ('TABLE-ROWS: controlExit 答了 ' + $tbl.Count + ' 行 (恰好 23)') }
+    if ($tbl.Count -ne 24) { $viol += ('TABLE-ROWS: controlExit 答了 ' + $tbl.Count + ' 行 (恰好 24)') }
     $typArity = @{}
     if (Test-Path -LiteralPath $typPath) {
         $typTxt = [IO.File]::ReadAllText($typPath)
