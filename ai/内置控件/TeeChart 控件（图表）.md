@@ -160,10 +160,15 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
 
 ## 5. 缺口（P1 交付时必须写进本文档，不许口口相传）
 
-- **成员路由（P1 第二刀，最先做）**：`vb6_CtlDispatchOf` 钩子 + chart 根 IDispatch
-  （`Panel` / `Header` / `Series` / `SeriesCount` / `AddSeries` 五张 GetIDsOfNames 表）。
-  判据：夹具跑 `AddSeries 5` + `FillSampleValues 4` 后，`[TCHART] paint=… series=1`。
-- 饼图以外只到“画得出”：`Series(i).Marks` / `Axis.Title` / `Walls` 等取值面未接对象表。
+- **成员路由（P1 第二刀，已落 `a831ca57`）**：`vb6_TChart_HostGetProp/HostCall/HostSetProp`
+  三条宿主尾叉（认不出返 0 ⇒ 落回原 438 分支）+ 自带最小 IDispatch（集合/系列/根方法）。
+  判据已过：`[TCHART] paint=… series=1`、`TC-SERIES=1`。
+- **对象模型三层（P1 第三刀，已落 `579a7851`）**：Panel（Color/四边距/Visible/BorderVisible）、
+  Header（Text/Caption/Visible）、Axes（Item(i)/Count/Bottom/Left/Right/Top）、
+  Axis（Automatic/Minimum/Maximum/Visible/Title）、Title（Caption/Text/Visible）。
+  读数：`TC-PANEL=15790335` / `TC-HEADERLEN=4` / `TC-AXTITLELEN=2` / `TC-MARGINR=12`。
+- **仍未接**：`For Each s In TChart1.Series`（`_NewEnum` 答 E_NOTIMPL）、
+  `Marks` / `Pen` / `Brush` / `AsPie` 那族类型切面、`Walls` / 3D。
 - `AsSurface` / `AsCandle` / `AsHorizBar` 等按类型切面的属性：P3 之后逐族补，
   未补的走「认得出名字、值进 bag、不绘制」。
 - 3D（`Aspect.View3D` / `Walls` / `Perspective`）：P1 只记录不绘制。
