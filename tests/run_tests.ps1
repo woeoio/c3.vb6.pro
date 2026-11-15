@@ -7825,6 +7825,32 @@ if ($Category -in @("all", "run", "vbp")) {
     } finally {
         Remove-Item Env:\C3_MSCOMM_DEVICE -ErrorAction SilentlyContinue
     }
+
+    # ---- C30-5: Adodc + DataGrid（ACE 底座）----
+    # 底座 = Microsoft Access Database Engine：本机实测 ACE 的 **ODBC** 驱动（Access/Text）64 位正常，
+    # 而 ACE 的 OLEDB 路径在 adodb Recordset.Open 上报 0x80040154（Office C2R 虚拟注册，见
+    # vb6forms_adodc.c 文件头）。32 位没有 ACE ∷ 靠 RequiresCom 打 SKIP。
+    # 数据：ACE Text 驱动读 tests\ctrlado\data\people.csv；夹具用 App.Path（= exe 目录），
+    # 所以先把数据旁置到输出目录 —— 与真 VB6 工程把 mdb 放 exe 旁边同一个道理。
+    $adoData = Join-Path $OutDir "data"
+    if (-not (Test-Path $adoData)) { New-Item -ItemType Directory -Force $adoData | Out-Null }
+    Copy-Item "$Tests\ctrlado\data\people.csv" $adoData -Force
+    $adoNeedles = @(
+        'AD1-conn=True',              # ConnectionString 原样回读（含 ACE.OLEDB）
+        'AD2-src=True',               # RecordSource 回读
+        'AD3-open=-1',                # Refresh 真开（VB6 的 True 是 -1）
+        'AD4-rows=3',                 # Recordset.RecordCount（memberobj 晚绑定链）
+        'AD5-grid=3|3',               # DataGrid 绑定后的 RowCount|ColCount
+        'AD6-cell=Alice',             # 第 1 行第 2 列（ORDER BY id ⇒ 1|Alice|Eng）
+        'AD7-cell=Sales',             # 第 3 行第 3 列
+        'AD8-rs=Alice',               # Recordset.Fields("name").Value
+        'AD9-filter=1',               # 换 RecordSource 再 Refresh ⇒ 真重开
+        'AD10-grid2=1|3',             # DataGrid.ReBind 跟着换
+        'AD11-val=Bob',               # 过滤后只剩 Ops 那条
+        'AD-DONE')
+    Test-Vbp "ctrlado" "$Tests\ctrlado\ADoApp.vbp" $adoNeedles -ExpectExitCode 0
+    Test-Vbp "ctrlado_x86" "$Tests\ctrlado\ADoApp.vbp" $adoNeedles -Arch "x86" `
+        -RequiresCom "Microsoft.ACE.OLEDB.12.0" -ExpectExitCode 0
     # 发码形状：窗口类是 RTL 自注册的 VB6_MSCOMM（不是 OCX 宿主）、设计期 Init 一把带齐、
     # 事件是“注册回调”那一形（没有 WM_COMMAND 那条路可走）。
     Test-EmitcShape "ms_emitc_native" @("$Tests\ctrlmscomm\MsCommApp.vbp") @(

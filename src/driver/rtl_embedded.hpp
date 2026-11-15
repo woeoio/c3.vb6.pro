@@ -200,6 +200,9 @@ enum RtlResourceID {
     RTL_VB6FORMS_MASKEDEDIT_C              = 241,
     // ai/029 C30-4: VB6 MSComm 控件 (Win32 串口 API + 读线程, 不加载 MSCOMM32.OCX)
     RTL_VB6FORMS_MSCOMM_C                  = 242,
+    // ai/029 C30-5: VB6 Adodc 控件 (ACE 底座，走 ODBC 层；不加载 MSADODC.OCX)
+    RTL_VB6FORMS_ADODC_C                   = 243,
+    RTL_VB6FORMS_GRID_C                    = 244,
     // 账 #181: 崩溃轨迹每进程只记一次的闸 (零依赖头, 见文件头注释)
     RTL_VB6RTL_CRASH_H                     = 222,
 

@@ -129,6 +129,8 @@ enum class FrmControlType {
     UpDown,             // MSComctlLib.UpDown — Win32 原生复刻 (msctls_updown32), C30-UD
     MaskEdBox,          // MSMask.MaskEdBox — Win32 EDIT + RTL 掩码引擎, C30-3
     MSComm,             // MSCommLib.MSComm — Win32 串口 API + 读线程 (无外观控件), C30-4
+    Adodc,              // MSAdodcLib.Adodc — ACE 底座 (ODBC 层) 的记录集控件 (无外观), C30-5
+    DataGrid,           // MSDataGridLib.DataGrid — 自绘表格, 绑定 Adodc/Data 的记录集, C30-5
     Unknown,            // 未识别的控件类型
 };
 

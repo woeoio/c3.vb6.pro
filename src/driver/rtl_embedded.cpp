@@ -170,6 +170,8 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6FORMS_UPDOWN_C,       "vb6forms_updown.c" },
     { RTL_VB6FORMS_MASKEDEDIT_C,   "vb6forms_maskededit.c" },
     { RTL_VB6FORMS_MSCOMM_C,       "vb6forms_mscomm.c" },
+    { RTL_VB6FORMS_ADODC_C,        "vb6forms_adodc.c" },
+    { RTL_VB6FORMS_GRID_C,         "vb6forms_grid.c" },
 
     // 2026-10-06: Form/Printer 绘图方法家族。放在 slider 之后而不是紧邻 widget,
     // 因为它 include vb6forms.h (自身经 vb6forms_draw.h 互含), 排在后面时

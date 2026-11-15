@@ -571,6 +571,10 @@
 // ai/029 C30-4: MSComm (Win32 串口 API + 读线程，不加载 MSCOMM32.OCX)
 // 编号取 242（241 是 MaskEdBox；新号不插队，保持先到者保号）。
 242 RCDATA "../rtl/core/vb6forms/vb6forms_mscomm.c"
+// ai/029 C30-5: Adodc (ACE 底座；不加载 MSADODC.OCX)
+// 编号取 243（242 是 MSComm；新号不插队，保持先到者保号）。
+243 RCDATA "../rtl/core/vb6forms/vb6forms_adodc.c"
+244 RCDATA "../rtl/core/vb6forms/vb6forms_grid.c"
 131 RCDATA "../rtl/core/vb6forms/vb6forms_axsite.c"
 198 RCDATA "../rtl/core/vb6forms/vb6forms_axcontainer.c"
 // vb6forms_axsite.c 按功能家族拆分 (2026-09-20): 内部头 + 5 个族编译单元

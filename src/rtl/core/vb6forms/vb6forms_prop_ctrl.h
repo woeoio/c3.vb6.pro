@@ -901,6 +901,78 @@ const void* vb6_MsComm_GetPortList(void* hwnd);              // BSTR "COM1;COM3;
 const void* vb6_MsComm_GetInputBytes(void* hwnd);            // BSTR，每字节一个字符（0..255）
 void        vb6_MsComm_SetOutputBytes(void* hwnd, const void* bstr);
 
+// ======================== C30-5: Adodc（MSADODC.OCX） ========================
+// 底座 = ACE（Access Database Engine）的 **ODBC** 层，与 Data 控件同一个引擎：每枚 Adodc 自己建一枚
+// 隐藏的 VB6_DATA 窗口当引擎宿主，所以连接/游标/行缓存/字段读全在 vb6forms_data.c 一份。
+// ConnectionString 里的 ACE/Jet OLEDB 串由 vb6forms_adodc.c 翻成等价 ODBC 串（实测依据见该文件头）。
+// Recordset 交 vb6_Data_RecordsetObj(engine) 的 VB6_MEMK_RS —— Fields/MoveNext/RecordCount 原样可用。
+#define VB6_ADODC_EV_MOVECOMPLETE  0
+#define VB6_ADODC_EV_COUNT         1
+
+void  vb6_RegisterAdodcClass(void* hInstance);
+void  vb6_Adodc_Init(void* hwnd);
+void  vb6_Adodc_SetEventHandler(void* hwnd, int32_t kind, void* fn);
+
+const void* vb6_Adodc_GetConnectionString(void* hwnd);   // BSTR
+void        vb6_Adodc_SetConnectionString(void* hwnd, const void* bstr);
+const void* vb6_Adodc_GetRecordSource(void* hwnd);       // BSTR
+void        vb6_Adodc_SetRecordSource(void* hwnd, const void* bstr);
+int32_t     vb6_Adodc_GetCommandType(void* hwnd);
+void        vb6_Adodc_SetCommandType(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetCursorLocation(void* hwnd);
+void        vb6_Adodc_SetCursorLocation(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetCursorType(void* hwnd);
+void        vb6_Adodc_SetCursorType(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetLockType(void* hwnd);
+void        vb6_Adodc_SetLockType(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetMode(void* hwnd);
+void        vb6_Adodc_SetMode(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetMaxRecords(void* hwnd);
+void        vb6_Adodc_SetMaxRecords(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetBOFAction(void* hwnd);
+void        vb6_Adodc_SetBOFAction(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetEOFAction(void* hwnd);
+void        vb6_Adodc_SetEOFAction(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetLastRowCount(void* hwnd);       // C3 扩展：上次 Refresh 真拿到几行
+int32_t     vb6_Adodc_GetOpened(void* hwnd);             // C3 扩展：上次 Refresh 成不成
+int32_t     vb6_Adodc_Refresh(void* hwnd);
+void*       vb6_Adodc_Recordset(void* hwnd);             // 真 IDispatch（引擎的 VB6_MEMK_RS）
+void*       vb6_Adodc_Engine(void* hwnd);                // 隐藏引擎窗句柄（Data 族 API 的入参）
+
+// ======================== C30-5: DataGrid（MSDATGRD.OCX） ========================
+// 自绘表格（类 VB6_DATAGRID，注册在 vb6forms_grid.c）；数据源是 Adodc/Data 的**引擎窗**。
+// 绑定走 vb6_DataGrid_Bind(格窗, 引擎窗)：设计期 `DataSource = "Adodc1"` 由 cgen 解析成
+// vb6_Adodc_Engine(...)/Data 控件自身。单元格取值走 vb6_Data_FieldValueAt。
+void  vb6_RegisterDataGridClass(void* hInstance);
+void  vb6_DataGrid_Bind(void* hwnd, void* srcEngineHwnd);
+void  vb6_DataGrid_SetDataSourceName(void* hwnd, const wchar_t* name);
+const void* vb6_DataGrid_GetDataSourceName(void* hwnd);   // BSTR
+int32_t vb6_DataGrid_GetRowCount(void* hwnd);
+int32_t vb6_DataGrid_GetColCount(void* hwnd);
+int32_t vb6_DataGrid_GetRow(void* hwnd);
+void    vb6_DataGrid_SetRow(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetCol(void* hwnd);
+void    vb6_DataGrid_SetCol(void* hwnd, int32_t v);
+const void* vb6_DataGrid_GetText(void* hwnd);              // BSTR（当前格）
+int32_t vb6_DataGrid_GetColumnHeaders(void* hwnd);
+void    vb6_DataGrid_SetColumnHeaders(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetAllowAddNew(void* hwnd);
+void    vb6_DataGrid_SetAllowAddNew(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetAllowUpdate(void* hwnd);
+void    vb6_DataGrid_SetAllowUpdate(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetAllowDelete(void* hwnd);
+void    vb6_DataGrid_SetAllowDelete(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetRowHeight(void* hwnd);
+void    vb6_DataGrid_SetRowHeight(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetDefColWidth(void* hwnd);
+void    vb6_DataGrid_SetDefColWidth(void* hwnd, int32_t v);
+void    vb6_DataGrid_Refresh(void* hwnd);
+void    vb6_DataGrid_ReBind(void* hwnd);
+void    vb6_DataGrid_ClearSelRows(void* hwnd);
+
+// C30-5: 任意行取列值（DataGrid 画格子用；不动调用者当前行）
+void vb6_Data_FieldValueAt(void* hwnd, int32_t row1, int32_t col1, wchar_t* out, int32_t outCap);
+
 void  vb6_RegisterWinsockClass(void* hInstance);
 void* vb6_Ws_Create(void* hwnd);                      // 把身份窗认进实例表
 void  vb6_Ws_Destroy(void* hwnd);

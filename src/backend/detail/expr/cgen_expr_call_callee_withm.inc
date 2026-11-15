@@ -344,6 +344,41 @@
         }
     }
 
+    // C30-5: Adodc / DataGrid 的方法面。这两枚都是 C3 自己实现的控件，方法不走 COM，
+    // 也不走 vb6_Data_Self 那条已撤的透传路 —— 直接发 RTL 函数。
+    // Refresh 在 VB6 里是“真重新开”：Adodc 那条会重建连接+游标（翻译连接串），
+    // DataGrid 那条只重读行列数并重绘。
+    if (isComMarker_) {
+        auto itCtrl = knownFormControls_.find(comObjExpr_);
+        if (itCtrl != knownFormControls_.end() &&
+            (itCtrl->second == FrmControlType::Adodc || itCtrl->second == FrmControlType::DataGrid)) {
+            isComMarker_ = false;
+            std::string method = std::move(comMemberName_);
+            std::string ctrlName = cIdent(knownFormControlOriginalNames_.count(comObjExpr_) ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
+            FrmControlType ct = itCtrl->second;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            if (ct == FrmControlType::Adodc && method == "refresh") {
+                lastExpr_ = "(void)vb6_Adodc_Refresh((void*)vb6_hwnd_" + ctrlName + ")";
+                return;
+            }
+            if (ct == FrmControlType::DataGrid) {
+                if (method == "refresh") {
+                    lastExpr_ = "vb6_DataGrid_Refresh((void*)vb6_hwnd_" + ctrlName + ")";
+                    return;
+                }
+                if (method == "rebind") {
+                    lastExpr_ = "vb6_DataGrid_ReBind((void*)vb6_hwnd_" + ctrlName + ")";
+                    return;
+                }
+                if (method == "clearselrows") {
+                    lastExpr_ = "vb6_DataGrid_ClearSelRows((void*)vb6_hwnd_" + ctrlName + ")";
+                    return;
+                }
+            }
+        }
+    }
+
     // 账 #278 §B124: 这里原来有一格 `vb6_Data_Self(` 透传形态的直译 (Refresh/Move*/Fields)，
     // 与 cgen_expr_call_com_bind.inc / cgen_util_com.cpp / cgen_call.cpp 里那三格同属一代：
     // 那个前缀今天没有任何发射者 ⇒ 恒假，已随九形探针量过并撤掉。recordset 一律走

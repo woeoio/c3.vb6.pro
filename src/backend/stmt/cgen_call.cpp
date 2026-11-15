@@ -869,6 +869,42 @@ void CCodeGen::visit(CallStmt& node) {
             }
         }
 
+        // C30-5: Adodc / DataGrid 的方法**不是 COM 方法**（这两枚是 C3 自己实现的控件），
+        // 但 `Adodc1.Refresh` 这类无参调用走到这里时已经被拼成
+        // `vb6_ComCall(vb6_hwnd_X, L"Refresh", NULL, 0)` —— 在 HWND 上做 IDispatch 调用，
+        // 实测后果：一声不响（Adodc 的 Opened=0 / 行数=0；DataGrid 不重画）。
+        // 只就地换这三个名字，且**控件类对得上**才换；其余原样放行。
+        {
+            const std::string kHd = "vb6_ComCall(vb6_hwnd_";
+            if (callExpr.compare(0, kHd.size(), kHd) == 0) {
+                size_t nameEnd = callExpr.find(", L\"", kHd.size());
+                if (nameEnd != std::string::npos) {
+                    size_t methStart = nameEnd + 4;                 // 跳过 `, L"`
+                    size_t methEnd = callExpr.find('"', methStart);
+                    if (methEnd != std::string::npos) {
+                        std::string ctrlNm = callExpr.substr(kHd.size(), nameEnd - kHd.size());
+                        std::string meth = callExpr.substr(methStart, methEnd - methStart);
+                        std::string ctrlLow = ctrlNm;
+                        std::transform(ctrlLow.begin(), ctrlLow.end(), ctrlLow.begin(), ::tolower);
+                        auto ctIt = knownFormControls_.find(ctrlLow);
+                        if (ctIt != knownFormControls_.end()) {
+                            std::string rtlFn;
+                            if (ctIt->second == FrmControlType::Adodc && meth == "Refresh")
+                                rtlFn = "(void)vb6_Adodc_Refresh";
+                            else if (ctIt->second == FrmControlType::DataGrid) {
+                                if (meth == "Refresh")            rtlFn = "vb6_DataGrid_Refresh";
+                                else if (meth == "ReBind")        rtlFn = "vb6_DataGrid_ReBind";
+                                else if (meth == "ClearSelRows")   rtlFn = "vb6_DataGrid_ClearSelRows";
+                            }
+                            if (!rtlFn.empty()) {
+                                callExpr = rtlFn + "((void*)vb6_hwnd_" + ctrlNm + ")";
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (callExpr.find("vb6_ComCall(") == 0
             || callExpr.find("vb6_ComCallByDispid(") == 0) {
             // ComCall返回可能含对象的VARIANT*, 用VarFree避免Release对象

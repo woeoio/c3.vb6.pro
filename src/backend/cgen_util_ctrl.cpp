@@ -97,6 +97,21 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
             || p == "portcount" || p == "readintervaltimeout"
             || p == "readtotaltimeout" || p == "writetimeout") return Vb6Type::Long;
     }
+    // C30-5: Adodc 的属性面。ConnectionString / RecordSource 走 RTL 的 BSTR（String）；
+    // 其余都是枚举/数值（Long）。不登记的症状：`s = Adodc1.RecordSource` 被当 Variant 装箱成空串。
+    if (ctrlType == FrmControlType::Adodc) {
+        if (p == "connectionstring" || p == "recordsource") return Vb6Type::String;
+        if (p == "lastrowcount" || p == "opened") return Vb6Type::Long;   // recordset 不登记（对象，与 Data 同口径）
+    }
+    // C30-5: DataGrid 的属性面。Text / DataSource 是 String；ColumnHeaders/Allow* 是 Boolean；
+    // Row/Col/RowCount/ColCount/RowHeight/DefColWidth 是 Long。
+    if (ctrlType == FrmControlType::DataGrid) {
+        if (p == "text" || p == "datasource") return Vb6Type::String;
+        if (p == "columnheaders" || p == "allowaddnew" || p == "allowupdate"
+            || p == "allowdelete") return Vb6Type::Boolean;
+        if (p == "row" || p == "col" || p == "rowcount" || p == "colcount"
+            || p == "rowheight" || p == "defcolwidth") return Vb6Type::Long;
+    }
     // C30-2: TabStrip 的标量面。四个 Client* 与三条行为位的 RTL getter 都是 int32_t;
     // MultiRow/HotTracking/ShowTips 在 VB6 那边是 Boolean。
     // ⚠ Tabs(i).Caption 这类**链式成员**不在本表（这一问只看“控件.属性”一形），
@@ -651,6 +666,36 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         if (propLower == "portlist")       return "vb6_MsComm_GetPortList";
         if (propLower == "inputbytes")     return "vb6_MsComm_GetInputBytes";
         break;
+    case FrmControlType::Adodc:  // C30-5: ACE 底座（ODBC 层）；属性全在 RTL 实例表里
+        if (propLower == "connectionstring") return "vb6_Adodc_GetConnectionString";
+        if (propLower == "recordsource")  return "vb6_Adodc_GetRecordSource";
+        if (propLower == "commandtype")   return "vb6_Adodc_GetCommandType";
+        if (propLower == "cursorlocation") return "vb6_Adodc_GetCursorLocation";
+        if (propLower == "cursortype")    return "vb6_Adodc_GetCursorType";
+        if (propLower == "locktype")      return "vb6_Adodc_GetLockType";
+        if (propLower == "mode")          return "vb6_Adodc_GetMode";
+        if (propLower == "maxrecords")    return "vb6_Adodc_GetMaxRecords";
+        if (propLower == "bofaction")     return "vb6_Adodc_GetBOFAction";
+        if (propLower == "eofaction")     return "vb6_Adodc_GetEOFAction";
+        if (propLower == "lastrowcount")  return "vb6_Adodc_GetLastRowCount";
+        if (propLower == "opened")        return "vb6_Adodc_GetOpened";
+        // Recordset：真 IDispatch（引擎的 VB6_MEMK_RS），晚绑定链原样走
+        if (propLower == "recordset")     return "vb6_Adodc_Recordset";
+        break;
+    case FrmControlType::DataGrid:  // C30-5: 自绘表格
+        if (propLower == "datasource")    return "vb6_DataGrid_GetDataSourceName";
+        if (propLower == "rowcount")      return "vb6_DataGrid_GetRowCount";
+        if (propLower == "colcount")      return "vb6_DataGrid_GetColCount";
+        if (propLower == "row")           return "vb6_DataGrid_GetRow";
+        if (propLower == "col")           return "vb6_DataGrid_GetCol";
+        if (propLower == "text")          return "vb6_DataGrid_GetText";
+        if (propLower == "columnheaders") return "vb6_DataGrid_GetColumnHeaders";
+        if (propLower == "allowaddnew")   return "vb6_DataGrid_GetAllowAddNew";
+        if (propLower == "allowupdate")   return "vb6_DataGrid_GetAllowUpdate";
+        if (propLower == "allowdelete")   return "vb6_DataGrid_GetAllowDelete";
+        if (propLower == "rowheight")     return "vb6_DataGrid_GetRowHeight";
+        if (propLower == "defcolwidth")   return "vb6_DataGrid_GetDefColWidth";
+        break;
     case FrmControlType::Data:  // C29-Data: ODBC 后端
         if (propLower == "recordset")    return "vb6_Data_RecordsetObj";  /* 真 IDispatch, 链走晚绑定 */
         if (propLower == "databasename") return "vb6_Data_GetDatabaseName";
@@ -1156,6 +1201,29 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
         if (propLower == "readtotaltimeout")    return "vb6_MsComm_SetReadTotalTimeout";
         if (propLower == "writetimeout")   return "vb6_MsComm_SetWriteTimeout";
         if (propLower == "outputbytes")    return "vb6_MsComm_SetOutputBytes";
+        break;
+    case FrmControlType::Adodc:  // C30-5 写表（Recordset / LastRowCount / Opened 是只读）
+        if (propLower == "connectionstring") return "vb6_Adodc_SetConnectionString";
+        if (propLower == "recordsource")  return "vb6_Adodc_SetRecordSource";
+        if (propLower == "commandtype")   return "vb6_Adodc_SetCommandType";
+        if (propLower == "cursorlocation") return "vb6_Adodc_SetCursorLocation";
+        if (propLower == "cursortype")    return "vb6_Adodc_SetCursorType";
+        if (propLower == "locktype")      return "vb6_Adodc_SetLockType";
+        if (propLower == "mode")          return "vb6_Adodc_SetMode";
+        if (propLower == "maxrecords")    return "vb6_Adodc_SetMaxRecords";
+        if (propLower == "bofaction")     return "vb6_Adodc_SetBOFAction";
+        if (propLower == "eofaction")     return "vb6_Adodc_SetEOFAction";
+        break;
+    case FrmControlType::DataGrid:  // C30-5 写表（RowCount/ColCount/Text 只读）
+        if (propLower == "datasource")    return "vb6_DataGrid_SetDataSourceName";
+        if (propLower == "row")           return "vb6_DataGrid_SetRow";
+        if (propLower == "col")           return "vb6_DataGrid_SetCol";
+        if (propLower == "columnheaders") return "vb6_DataGrid_SetColumnHeaders";
+        if (propLower == "allowaddnew")   return "vb6_DataGrid_SetAllowAddNew";
+        if (propLower == "allowupdate")   return "vb6_DataGrid_SetAllowUpdate";
+        if (propLower == "allowdelete")   return "vb6_DataGrid_SetAllowDelete";
+        if (propLower == "rowheight")     return "vb6_DataGrid_SetRowHeight";
+        if (propLower == "defcolwidth")   return "vb6_DataGrid_SetDefColWidth";
         break;
     case FrmControlType::Data:  // C29-Data 写表 (三属性先存后 Refresh 用)
         if (propLower == "databasename") return "vb6_Data_SetDatabaseName";

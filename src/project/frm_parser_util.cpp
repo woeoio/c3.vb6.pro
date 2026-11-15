@@ -219,6 +219,12 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // C30-4: MSComm (MSCommLib.MSComm / MSCOMM32.OCX 的各种写法)。"mscomm" 与上面任何一条
     // 互不为子串；VB6 侧另有 ProgID 写法 MSCommLib.MSComm.1，同样命中这条。
     if (lower.find("mscomm") != std::string::npos) return FrmControlType::MSComm;
+    // C30-5: Adodc (MSAdodcLib.Adodc / MSADODC.OCX)。"adodc" 与上面任何一条互不为子串；
+    // VB6 侧另有 ProgID 写法 MSAdodcLib.Adodc.1，同样命中。
+    if (lower.find("adodc") != std::string::npos) return FrmControlType::Adodc;
+    // C30-5: DataGrid (MSDataGridLib.DataGrid / MSDATGRD.OCX)。必须排在 `vb.data` 之后才对
+    // —— "msdatagridlib.datagrid" 里没有 "vb.data"，两条互斥；但**不能**用 "data" 当鱼网。
+    if (lower.find("datagrid") != std::string::npos) return FrmControlType::DataGrid;
 
     return FrmControlType::Unknown;
 }
@@ -318,6 +324,10 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // C30-4: MSComm —— 同样无外观，但**这枚的身份窗要真收读线程投的 WM_APP+0x16**，
         // 所以也要一枚自注册类（注册在 vb6forms_mscomm.c）。Timer 那种纯属性袋不适用。
         case FrmControlType::MSComm:        return "VB6_MSCOMM";
+        // C30-5: Adodc / DataGrid —— 两枚都自注册（Adodc 是属性宿主 + 隐藏引擎窗；
+        // DataGrid 要真画格线/表头/选中行，所以必须是一枚真窗口）。
+        case FrmControlType::Adodc:         return "VB6_ADODC";
+        case FrmControlType::DataGrid:      return "VB6_DATAGRID";
         case FrmControlType::Menu:         return nullptr;       // 菜单, 非窗口
         case FrmControlType::WebBrowser:  return nullptr;       // WebView2, 运行时动态创建
         default:                           return nullptr;
@@ -352,6 +362,8 @@ const char* FrmParser::controlTypeToVb6Name(FrmControlType type) {
         case FrmControlType::UpDown:       return "UpDown";
         case FrmControlType::MaskEdBox:    return "MaskEdBox";
         case FrmControlType::MSComm:       return "MSComm";
+        case FrmControlType::Adodc:        return "Adodc";
+        case FrmControlType::DataGrid:     return "DataGrid";
         case FrmControlType::RichTextBox:  return "RichTextBox";
         case FrmControlType::Toolbar:      return "Toolbar";
         case FrmControlType::Shape:        return "Shape";

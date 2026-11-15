@@ -200,6 +200,8 @@
         obj.find("vb6_OleCon_GetObject(") == 0 ||
         // C29-Data: `Data1.Recordset` 的真 IDispatch 同理。
         obj.find("vb6_Data_RecordsetObj(") == 0 ||
+        // C30-5: `Adodc1.Recordset`（同一个 memberobj 的 RS 族）
+        obj.find("vb6_Adodc_Recordset(") == 0 ||
         // C29-8b: `TreeView1.Nodes` 的真 IDispatch 集合同理。
         obj.find("vb6_TreeView_Nodes(") == 0 ||
         // C29-5b: `Toolbar1.Buttons` 的真 IDispatch 集合同理。

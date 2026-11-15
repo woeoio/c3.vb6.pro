@@ -1120,6 +1120,84 @@
             }
         }
 
+        // C30-5: Adodc 设计期 —— ConnectionString/RecordSource/CommandType/Cursor*/LockType/
+        // Mode/MaxRecords/BOFAction/EOFAction 一次性灌进去。**不在这里 Refresh**：VB6 的
+        // Adodc 也是要代码里调 `Refresh` 才真开（设计与运行两段分明），夹具里能看到这个区分。
+        if (ctrl.controlType == FrmControlType::Adodc) {
+            std::string adNLower = ctrl.controlName;
+            std::transform(adNLower.begin(), adNLower.end(), adNLower.begin(), ::tolower);
+            std::string adHwnd = knownControlArrays_.count(adNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            auto adStr = [&](const std::string& k) -> std::string {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end() || it->second.rawText.empty()) return "L\"\"";
+                std::string raw = it->second.rawText;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"')
+                    raw = raw.substr(1, raw.size() - 2);
+                return "L\"" + escapeWideCString(raw) + "\"";
+            };
+            auto adInt = [&](const std::string& k, int defv) -> int {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end()) return defv;
+                return (int)it->second.intValue;
+            };
+            c_.emitLine("vb6_Adodc_Init((void*)" + adHwnd + ");");
+            c_.emitLine("vb6_Adodc_SetConnectionString((void*)" + adHwnd + ", (const void*)"
+                      + adStr("ConnectionString") + ");");
+            c_.emitLine("vb6_Adodc_SetRecordSource((void*)" + adHwnd + ", (const void*)"
+                      + adStr("RecordSource") + ");");
+            c_.emitLine("vb6_Adodc_SetCommandType((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("CommandType", 1)) + ");");
+            c_.emitLine("vb6_Adodc_SetCursorLocation((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("CursorLocation", 2)) + ");");
+            c_.emitLine("vb6_Adodc_SetCursorType((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("CursorType", 0)) + ");");
+            c_.emitLine("vb6_Adodc_SetLockType((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("LockType", 3)) + ");");
+            c_.emitLine("vb6_Adodc_SetMode((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("Mode", 3)) + ");");
+            c_.emitLine("vb6_Adodc_SetMaxRecords((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("MaxRecords", 0)) + ");");
+            c_.emitLine("vb6_Adodc_SetBOFAction((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("BOFAction", 0)) + ");");
+            c_.emitLine("vb6_Adodc_SetEOFAction((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("EOFAction", 0)) + ");");
+        }
+        // C30-5: DataGrid 设计期 —— 属性灌进去；DataSource 的**绑定**放到后面统一 pass
+        // （那时候 Adodc/Data 的 hwnd 才都创建好）。
+        if (ctrl.controlType == FrmControlType::DataGrid) {
+            std::string gdNLower = ctrl.controlName;
+            std::transform(gdNLower.begin(), gdNLower.end(), gdNLower.begin(), ::tolower);
+            std::string gdHwnd = knownControlArrays_.count(gdNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            auto gdInt = [&](const std::string& k, int defv) -> int {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end()) return defv;
+                return (int)it->second.intValue;
+            };
+            auto gdBool = [&](const std::string& k, int defv) -> int {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end()) return defv;
+                return it->second.intValue != 0 ? -1 : 0;
+            };
+            c_.emitLine("vb6_DataGrid_SetColumnHeaders((void*)" + gdHwnd + ", "
+                      + std::to_string(gdBool("ColumnHeaders", -1)) + ");");
+            c_.emitLine("vb6_DataGrid_SetAllowAddNew((void*)" + gdHwnd + ", "
+                      + std::to_string(gdBool("AllowAddNew", 0)) + ");");
+            c_.emitLine("vb6_DataGrid_SetAllowUpdate((void*)" + gdHwnd + ", "
+                      + std::to_string(gdBool("AllowUpdate", -1)) + ");");
+            c_.emitLine("vb6_DataGrid_SetAllowDelete((void*)" + gdHwnd + ", "
+                      + std::to_string(gdBool("AllowDelete", 0)) + ");");
+            c_.emitLine("vb6_DataGrid_SetRowHeight((void*)" + gdHwnd + ", "
+                      + std::to_string(gdInt("RowHeight", 300)) + ");");
+            c_.emitLine("vb6_DataGrid_SetDefColWidth((void*)" + gdHwnd + ", "
+                      + std::to_string(gdInt("DefColWidth", 1200)) + ");");
+        }
+
         // C29-OLE: OLE 容器设计期 —— Class/OLETypeAllowed/SizeMode/DisplayAsIcon/
         // AutoActivate/AutoVerbMenu/BorderStyle/SourceDoc/SourceItem 一次 Init 灌进去。
         // 不灌的话 OLETypeAllowed 会错成 2 (vbOLEEither) 之外任意值、SizeMode 错成 0。
@@ -1448,5 +1526,38 @@ ctrlId++;
             c_.emitLine("vb6_Data_Bind((void*)" + dHwnd + ", (void*)" + oHwnd
                       + ", L\"" + escapeWideCString(fldRaw) + "\");");
         }
+    }
+
+    // C30-5: DataGrid 的绑定 pass —— 同样在所有控件创建完之后。
+    // 为什么这里必须解析**源控件类型**：Adodc 的数据在隐藏引擎窗上，Data 控件自己就是引擎，
+    // 两种引擎句柄的取法不同（vb6_Adodc_Engine vs 控件 hwnd 本身），错一个就是空表格。
+    for (const auto& gridCtrl : frmDesc.formControl.children) {
+        if (gridCtrl.controlType != FrmControlType::DataGrid) continue;
+        auto dsIt = gridCtrl.properties.find("DataSource");
+        if (dsIt == gridCtrl.properties.end()) continue;
+        std::string ds = dsIt->second.rawText;
+        if (ds.size() >= 2 && ds.front() == '"' && ds.back() == '"')
+            ds = ds.substr(1, ds.size() - 2);
+        if (ds.empty()) continue;
+        // 找同名源控件（大小写不敏感，VB6 不分）
+        const FrmControl* srcCtl = nullptr;
+        for (const auto& other : frmDesc.formControl.children) {
+            if (_stricmp(other.controlName.c_str(), ds.c_str()) == 0) { srcCtl = &other; break; }
+        }
+        std::string gHwnd = "vb6_hwnd_" + cIdent(gridCtrl.controlName);
+        if (srcCtl && srcCtl->controlType == FrmControlType::Adodc) {
+            c_.emitLine("vb6_DataGrid_Bind((void*)" + gHwnd + ", vb6_Adodc_Engine((void*)vb6_hwnd_"
+                      + cIdent(srcCtl->controlName) + "));");
+        } else if (srcCtl && srcCtl->controlType == FrmControlType::Data) {
+            c_.emitLine("vb6_DataGrid_Bind((void*)" + gHwnd + ", (void*)vb6_hwnd_"
+                      + cIdent(srcCtl->controlName) + ");");
+        } else {
+            // 源控件不认识（第三方案件）—— 交个空绑定，表格自己会答 0 行 0 列，不崩。
+            c_.emitLine("/* DataGrid " + gridCtrl.controlName + " DataSource=" + ds
+                      + " 不是 Adodc/Data，未绑定 */");
+        }
+        // 名字也存一份（DataSource 属性回读用）
+        c_.emitLine("vb6_DataGrid_SetDataSourceName((void*)" + gHwnd + ", L\""
+                  + escapeWideCString(ds) + "\");");
     }
 

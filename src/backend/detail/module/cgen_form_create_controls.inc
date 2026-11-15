@@ -34,6 +34,8 @@
         bool hasShape = false, hasLine = false, hasCd = false, hasTmr = false, hasOle = false, hasData = false;
         bool hasWs = false;   // C29-WS-a
 bool hasMs = false;   // C30-4 MSComm（同上：身份窗要自收读线程投的通知）
+        bool hasAdodc = false;   // C30-5 Adodc（属性宿主；内部再自建隐藏的 VB6_DATA 引擎窗）
+        bool hasGrid = false;    // C30-5 DataGrid（要真画格线/表头/选中行）
         for (const auto& ctrl : frmDesc.formControl.children) {
             if (ctrl.controlType == FrmControlType::Shape) hasShape = true;
             if (ctrl.controlType == FrmControlType::Line) hasLine = true;
@@ -51,6 +53,9 @@ bool hasMs = false;   // C30-4 MSComm（同上：身份窗要自收读线程投�
             // C30-4: MSComm 同理 —— VB6_MSCOMM 类要先注册；它的身份窗要自收读线程
             // 投的 WM_APP+0x16（属性袋那一类不需要这条）。
             if (ctrl.controlType == FrmControlType::MSComm) hasMs = true;
+            // C30-5: Adodc / DataGrid —— 各自的类都要先注册，否则 CreateWindowExW 拿 NULL。
+            if (ctrl.controlType == FrmControlType::Adodc) hasAdodc = true;
+            if (ctrl.controlType == FrmControlType::DataGrid) hasGrid = true;
         }
         if (hasShape || hasLine) {
             c_.emitLine("vb6_RegisterShapeLineClasses((void*)hInstance);");
@@ -72,6 +77,12 @@ bool hasMs = false;   // C30-4 MSComm（同上：身份窗要自收读线程投�
         }
         if (hasMs) {
             c_.emitLine("vb6_RegisterMsCommClass((void*)hInstance);");
+        }
+        if (hasAdodc) {
+            c_.emitLine("vb6_RegisterAdodcClass((void*)hInstance);");
+        }
+        if (hasGrid) {
+            c_.emitLine("vb6_RegisterDataGridClass((void*)hInstance);");
         }
     }
     // 为每个控件生成CreateWindow调用
