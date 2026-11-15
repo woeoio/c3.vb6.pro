@@ -69,6 +69,16 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
     if (p == "visible" || p == "enabled") {
         return Vb6Type::Boolean;
     }
+    // C30-2: TabStrip 的标量面。四个 Client* 与三条行为位的 RTL getter 都是 int32_t;
+    // MultiRow/HotTracking/ShowTips 在 VB6 那边是 Boolean。
+    // ⚠ Tabs(i).Caption 这类**链式成员**不在本表（这一问只看“控件.属性”一形），
+    // 所以 `"cap=" & TabStrip1.Tabs(n).Caption` 这种接法仍会被当 Variant 装箱成空串；
+    // 先读进 String 变量再用就对了（tools/tabstrip_manual 的写法）。
+    if (ctrlType == FrmControlType::TabStrip) {
+        if (p == "clientleft" || p == "clienttop"
+            || p == "clientwidth" || p == "clientheight") return Vb6Type::Long;
+        if (p == "multirow" || p == "hottracking" || p == "showtips") return Vb6Type::Boolean;
+    }
     // C29-SL-e: `ToolTipText` / `Tag` 是 VB6 的 **String** 通用属性，但两条 RTL getter 原本
     // 声明成 `void*`，而装箱那一步用的是 C11 `_Generic`（`vb6rtl_variant.h` 的表：
     // "其他指针 (void*/class*/type*) -> VariantObject"）⇒ 裸指针被当**对象**装箱。
@@ -491,6 +501,17 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         if (propLower == "simpletext") return "vb6_StatusBar_GetSimpleText";
         if (propLower == "visible") return "vb6_GetControlVisible";
         if (propLower == "enabled") return "vb6_GetControlEnabled";
+        break;
+    case FrmControlType::TabStrip:  // C30-2
+        // Tabs / SelectedItem 是**集合/对象**，不走这张表（见 cgen 的集合改道）；
+        // 这里只有标量面：四枚 Client* + 三条行为位。
+        if (propLower == "clientleft")   return "vb6_TabStrip_GetClientLeft";
+        if (propLower == "clienttop")    return "vb6_TabStrip_GetClientTop";
+        if (propLower == "clientwidth")  return "vb6_TabStrip_GetClientWidth";
+        if (propLower == "clientheight") return "vb6_TabStrip_GetClientHeight";
+        if (propLower == "multirow")     return "vb6_TabStrip_GetMultiRow";
+        if (propLower == "hottracking")  return "vb6_TabStrip_GetHotTracking";
+        if (propLower == "showtips")     return "vb6_TabStrip_GetShowTips";
         break;
     case FrmControlType::SSTab:  // P20-42
         // TabCaption(i)/TabVisible(i) 是**带下标的索引属性**, 不是标量;
@@ -950,6 +971,11 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
         if (propLower == "simpletext") return "vb6_StatusBar_SetSimpleText";
         if (propLower == "visible") return "vb6_SetControlVisible";
         if (propLower == "enabled") return "vb6_SetControlEnabled";
+        break;
+    case FrmControlType::TabStrip:  // C30-2
+        if (propLower == "multirow")    return "vb6_TabStrip_SetMultiRow";
+        if (propLower == "hottracking") return "vb6_TabStrip_SetHotTracking";
+        if (propLower == "showtips")    return "vb6_TabStrip_SetShowTips";
         break;
     case FrmControlType::SSTab:  // P20-42
         if (propLower == "tabs")           return "vb6_SSTab_SetTabs";
@@ -1692,6 +1718,9 @@ std::string CCodeGen::controlZeroArgMethod(FrmControlType ctrlType,
         return controlExit("vb6_ImageList_ClearImages", 1, outArgc);
     if (memberLower == "clear" && ctrlType == FrmControlType::StatusBar)
         return controlExit("vb6_StatusBar_ClearPanels", 1, outArgc);
+    // C30-2: TabStrip 的 Tabs.Clear。
+    if (memberLower == "clear" && ctrlType == FrmControlType::TabStrip)
+        return controlExit("vb6_TabStrip_TabsClear", 1, outArgc);
     // CommonDialog 那六枚: 从前两条码头各自做一遍**字符串手术**
     // （`"vb6_CdShow" + toupper(m[4]) + m.substr(5)`）—— 命名规则住在调用点，正是 §B115 那句
     // "拼法只许来自表"要禁的形状；而且它对 `mCd[4]` 的依赖意味着名单加一枚就得信拼法还对。

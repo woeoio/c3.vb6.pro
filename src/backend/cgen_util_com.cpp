@@ -371,6 +371,60 @@ std::string CCodeGen::resolveComValue(const std::string& unpackType) {
         }
     }
 
+    // C30-2: TabStrip 原生复刻 —— Tabs.Count / Tabs(i).Caption|Key / SelectedItem.Index。
+    // objExpr 形如 `vb6_ComGetObjectProp(vb6_hwnd_TabStrip1, L"Tabs")`，带下标的还会跟一段
+    // `(void*[]){vb6_ComPackInt(2)}`。tabStripHwndVarOfExpr 按 `vb6_hwnd_<名>` 子串认宿主。
+    // ⚠ 必先判 L"Tabs"/L"SelectedItem"：TabStrip 的标量属性（MultiRow/ClientWidth/…）
+    // 走 cgen_util_ctrl 的读表，这里若也认会两头打架（且分不出 Tabs(i).Index 与控件 Index）。
+    {
+        std::string memLower = memberName;
+        std::transform(memLower.begin(), memLower.end(), memLower.begin(), ::tolower);
+        std::string hwnd = tabStripHwndVarOfExpr(objExpr);
+        const bool chainSel  = objExpr.find("L\"SelectedItem\"") != std::string::npos;
+        const bool chainTabs = objExpr.find("L\"Tabs\"") != std::string::npos;
+        if (!hwnd.empty() && (chainSel || chainTabs)) {
+            // SelectedItem.Index：VB6 口径 = 当前选中页号（1 基），无选中页时为 0。
+            // 这里不回退到 TCM_GETCURSEL 之外的东西 —— RTL 那侧已经就是它的直接投影。
+            if (chainSel && memLower == "index") {
+                lastExpr_ = "vb6_TabStrip_GetSelectedIndex((void*)" + hwnd + ")";
+                isComMarker_ = false;
+                return lastExpr_;
+            }
+            if (chainTabs) {
+                if (memLower == "count") {
+                    lastExpr_ = "vb6_TabStrip_TabsCount((void*)" + hwnd + ")";
+                    isComMarker_ = false;
+                    return lastExpr_;
+                }
+                // Tabs(i) / Tabs("Key") 的实参从参数包里抠（helper 一处答，pack 路径共用）。
+                std::string keyLit;
+                std::string idx = tabStripTabIndexArgOfExpr(objExpr, &keyLit);
+                if (!keyLit.empty() && idx.empty()) {
+                    idx = "vb6_TabStrip_GetTabIndexByKey((void*)" + hwnd
+                        + ", (void*)(vb6_BSTR_FromStr(L\"" + keyLit + "\")))";
+                }
+                if (!idx.empty()) {
+                    if (memLower == "caption") {
+                        lastExpr_ = "vb6_TabStrip_GetTabCaption((void*)" + hwnd + ", " + idx + ")";
+                        isComMarker_ = false;
+                        return lastExpr_;
+                    }
+                    if (memLower == "key") {
+                        lastExpr_ = "vb6_TabStrip_GetTabKey((void*)" + hwnd + ", " + idx + ")";
+                        isComMarker_ = false;
+                        return lastExpr_;
+                    }
+                    if (memLower == "index") {
+                        // Tabs(i).Index 就是那个 i 本身（1 基），不需要问 RTL。
+                        lastExpr_ = "((int32_t)(" + idx + "))";
+                        isComMarker_ = false;
+                        return lastExpr_;
+                    }
+                }
+            }
+        }
+    }
+
     // P24-07: 早期绑定推断 — 利用TypeLib签名的returnType决策
     if (isEarlyBoundCom_ && earlyBoundSym_) {
         isEarlyBoundCom_ = false;
@@ -1175,6 +1229,34 @@ std::string CCodeGen::resolveComMarkerForPack(const std::string& packFnHint) {
             std::string ddArg = dataObjectArgExpr(objExpr);
             if (memDD == "gettext")      return "vb6_oleDD_GetText(" + ddArg + ")";
             if (memDD == "getfilecount") return "vb6_oleDD_GetFileCount(" + ddArg + ")";
+        }
+    }
+
+    // C30-2: TabStrip 的集合链在**实参打包**这条路上也要拦。
+    // resolveComValue 只管"取值语句"那一条；拼字符串 / 当实参时走的是本函数，
+    // 不断的话 SelectedItem.Index 会发成
+    //   vb6_ComGetProp(vb6_ComGetObjectProp(hwnd, L"SelectedItem"), L"Index")
+    // ⇒ 运行期 Run-time error 438（实测 .build/probe/verify_tab.ps1 拓到的弹框）。
+    {
+        std::string memTs = Symbol::toLower(memName);
+        std::string hwndTs = tabStripHwndVarOfExpr(objExpr);
+        const bool selTs  = objExpr.find("L\"SelectedItem\"") != std::string::npos;
+        const bool tabsTs = objExpr.find("L\"Tabs\"") != std::string::npos;
+        if (!hwndTs.empty() && selTs && memTs == "index")
+            return "vb6_TabStrip_GetSelectedIndex((void*)" + hwndTs + ")";
+        if (!hwndTs.empty() && tabsTs && memTs == "count")
+            return "vb6_TabStrip_TabsCount((void*)" + hwndTs + ")";
+        if (!hwndTs.empty() && tabsTs && (memTs == "caption" || memTs == "key")) {
+            std::string keyLit;
+            std::string idx = tabStripTabIndexArgOfExpr(objExpr, &keyLit);
+            if (!keyLit.empty() && idx.empty())
+                idx = "vb6_TabStrip_GetTabIndexByKey((void*)" + hwndTs
+                    + ", (void*)(vb6_BSTR_FromStr(L\"" + keyLit + "\")))";
+            if (!idx.empty()) {
+                return std::string(memTs == "caption" ? "vb6_TabStrip_GetTabCaption"
+                                                    : "vb6_TabStrip_GetTabKey")
+                     + "((void*)" + hwndTs + ", " + idx + ")";
+            }
         }
     }
 

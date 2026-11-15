@@ -381,6 +381,24 @@ void CCodeGen::visit(CallStmt& node) {
                 c_.emitLine(fnSb + "((void*)" + sbHwnd + ");");
                 return;
             }
+            // C30-2: 同款 —— `TabStrip1.Tabs.Clear` **无实参**，也在这条语句路收尾。
+            // 带实参的 Add/Remove 走 cgen_expr_call_com_bind.inc 那一条；只挂一头就棳回
+            // `vb6_ComCall(vb6_ComGetObjectProp(…, L"Tabs"), L"Clear", NULL, 0)`
+            // —— 拿 HWND 当 IDispatch，编得过、跑起来真弹 438
+            // （tests/ctrltabstrip 的 TS10 就是那条红的证人：exit=438，TS10-clear 一行未出）。
+            {
+                std::string tsName = tabStripNameOfExpr(comObjExpr_);
+                std::string mTs = Symbol::toLower(comMemberName_);
+                std::string fnTs = tsName != ""
+                    ? controlZeroArgMethod(FrmControlType::TabStrip, mTs) : std::string();
+                if (!fnTs.empty()) {
+                    comObjExpr_.clear();
+                    comMemberName_.clear();
+                    c_.emitLine(fnTs + "((void*)vb6_hwnd_" + tsName + ");"
+                                "  /* TabStrip.Tabs." + mTs + " (原生 tab 控件) */");
+                    return;
+                }
+            }
             // D6 / C29-9: 无括号的 `CommonDialog1.ShowOpen` —— 与 List1.Clear 同一条
             // 语句路。不接这里的话会落到下面 `vb6_ComCall(dl1, L"ShowOpen")`：既编不过
             // (裸控制名)，也正是本批要拆掉的 OCX 形状。

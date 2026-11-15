@@ -162,6 +162,8 @@ enum RtlResourceID {
 
     // P20-42: VB6 SSTab 控件 (SysTabControl32 复刻, 不加载 TABCTL32.OCX)
     RTL_VB6FORMS_SSTAB_C                   = 209,
+    // C30-2: VB6 TabStrip 控件 (SysTabControl32 复刻, 不加载 MSCOMCTL.OCX)
+    RTL_VB6FORMS_TABSTRIP_C                = 226,
 
     // P20-44: OLE 拖放 (IDataObject/IDropSource/IDropTarget 复刻)
     RTL_VB6FORMS_OLEDD_C                   = 210,

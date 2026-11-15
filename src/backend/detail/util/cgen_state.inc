@@ -1069,6 +1069,96 @@
         std::string n = statusBarNameOfExpr(objExpr);
         return n.empty() ? "" : "vb6_hwnd_" + n;
     }
+    // C30-2: TabStrip 的裸名登记 —— `TabStrip1.Tabs.Add …` / `Tabs(i).Caption` /
+    // `SelectedItem.Index` 这三条链都要从 objExpr 里认回宿主窗口槽。手法同 StatusBar：
+    // 生成的不可求值文本形如 `vb6_ComGetObjectProp(vb6_hwnd_TabStrip1, L"Tabs")`，
+    // 按 `vb6_hwnd_<名>` 子串匹配即可穿过包裹层（前缀比较会漏）。
+    // 已知不覆盖：控件数组元素（槽是 vb6_CtrlArr_GetAt(&vb6_arr_X, i)）—— 与 StatusBar /
+    // Slider 同一处缺口，TabStrip 数组在语料里目前 0 例。
+    std::unordered_set<std::string> tabStripVars_;
+    // 识别法器照 statusBarNameOfExpr（同一张 heads 表 + 剥前缀）：集合表达式实际长这样
+    //   vb6_ComGetObjectProp(vb6_com_TabStrip1, L"Tabs")      OCX 占位槽是 vb6_com_
+    //   vb6_ComCallObject(vb6_hwnd_TabStrip1, L"Tabs", …)     真窗口槽是 vb6_hwnd_
+    // 只扫 `vb6_hwnd_<名>` 会两头都漏（首版就这么写：Tabs.Add 未拦 → 跑起来
+    // Run-time error 438，实测 .build/probe/enum_win.ps1 抓到的模态框）。
+    // 判据仍然是登记表，不是按前缀猜。
+    std::string tabStripNameOfExpr(const std::string& objExpr) const {
+        static const char* kHeads[] = { "vb6_ComGetObjectProp(vb6_", "vb6_ComCallObject(vb6_" };
+        for (const char* h : kHeads) {
+            size_t p = objExpr.find(h);
+            while (p != std::string::npos) {
+                size_t s = p + strlen(h);
+                size_t e = s;
+                while (e < objExpr.size()
+                       && (isalnum((unsigned char)objExpr[e]) || objExpr[e] == '_')) e++;
+                std::string n = objExpr.substr(s, e - s);
+                if (tabStripVars_.count(n)) return n;
+                static const char* kPrefixes[] = { "hwnd_", "com_", "arr_" };
+                for (const char* pf : kPrefixes) {
+                    size_t pl = strlen(pf);
+                    if (n.size() > pl && n.compare(0, pl, pf) == 0) {
+                        n = n.substr(pl);
+                        break;
+                    }
+                }
+                if (tabStripVars_.count(n)) return n;
+                p = objExpr.find(h, s);
+            }
+        }
+        if (tabStripVars_.count(objExpr)) return objExpr;
+        // 裸槽形态：`vb6_hwnd_TabStrip1`（直接落在宿主上的成员调用）。
+        {
+            static const char* kSlotPrefixes[] = { "vb6_hwnd_", "vb6_com_", "vb6_arr_" };
+            for (const char* pf : kSlotPrefixes) {
+                size_t pl = strlen(pf);
+                if (objExpr.size() > pl && objExpr.compare(0, pl, pf) == 0) {
+                    std::string bare = objExpr.substr(pl);
+                    if (bare.find_first_of("[(. ") == std::string::npos
+                        && tabStripVars_.count(bare)) {
+                        return bare;
+                    }
+                }
+            }
+        }
+        return "";
+    }
+    std::string tabStripHwndVarOfExpr(const std::string& objExpr) const {
+        std::string n = tabStripNameOfExpr(objExpr);
+        return n.empty() ? "" : "vb6_hwnd_" + n;
+    }
+    // C30-2: 从 `Tabs(i)` / `Tabs("Key")` 的不可求值文本里抠出 1 基下标表达式。
+    // 两种实参形态都要吃（实测箭两个都出现过）：
+    //   vb6_ComCallObject(…, (void*[]){vb6_ComPackInt(n)}, 1)   字面量与变量都过这个 packer
+    //   (void*[]){2}                                        少数直接给数字的场合
+    // 字串实参当 Key 处理 (keyOut 出参非空)，由调用侧换成 GetTabIndexByKey。
+    std::string tabStripTabIndexArgOfExpr(const std::string& objExpr, std::string* keyOut) const {
+        if (keyOut) keyOut->clear();
+        const std::string kArr = "(void*[]){";
+        size_t ia = objExpr.find(kArr);
+        if (ia == std::string::npos) return "";
+        size_t open = ia + kArr.size();
+        size_t close = objExpr.find('}', open);
+        std::string argTxt = (close == std::string::npos) ? objExpr.substr(open)
+                                                         : objExpr.substr(open, close - open);
+        const std::string kPack = "vb6_ComPackInt(";
+        size_t pi = argTxt.find(kPack);
+        if (pi != std::string::npos) {
+            size_t s = pi + kPack.size();
+            size_t e = argTxt.find(')', s);
+            if (e == std::string::npos) e = argTxt.size();
+            std::string v = argTxt.substr(s, e - s);
+            return v;
+        }
+        size_t qs = argTxt.find("L\"");
+        if (qs != std::string::npos) {
+            size_t qe = argTxt.find('\"', qs + 2);
+            if (qe != std::string::npos && keyOut) *keyOut = argTxt.substr(qs + 2, qe - qs - 2);
+            return "";
+        }
+        bool num = !argTxt.empty();
+        for (char ch : argTxt) if (!isdigit((unsigned char)ch)) { num = false; break; }
+        return num ? argTxt : std::string();
+    }
     // P20-40: `StatusBar1.Panels(i).Prop = v` 的**写**目标。读那边在 resolveComValue
     // 里改道了, 写这边不拦就会落到 vb6_ComSetProp(<HWND>, L"Text", …) —— 对假
     // IDispatch (HWND) 调 PutProp, 链接都过、运行静默无效。返回 RTL 写入函数名,

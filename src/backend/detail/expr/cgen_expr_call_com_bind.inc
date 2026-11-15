@@ -507,6 +507,80 @@
             }
         }
 
+        // C30-2: TabStrip 原生复刻 —— Tabs.Add / Tabs.Remove / Tabs.Clear 直接打在 RTL 上。
+        // 同 StatusBar 那条的理由：不拦就会拼成 `vb6_ComCall(vb6_ComGetObjectProp(…),
+        // L"Add", …)` —— 拿 HWND 当 IDispatch，编得过、跑起来一条标签都不出。
+        {
+            std::string tspMember = memberName;
+            std::transform(tspMember.begin(), tspMember.end(), tspMember.begin(), ::tolower);
+            std::string tspHwnd = tabStripHwndVarOfExpr(objExpr);
+            if (!tspHwnd.empty() && objExpr.find("L\"Tabs\"") != std::string::npos) {
+                if (tspMember == "add") {
+                    // Tabs.Add [index], [key], [caption], [image] —— 四个位置实参全可选。
+                    // 省略位按位置对齐（node.omittedArgs），否则 `Tabs.Add , "t1", "常规", 1`
+                    // 会把 "t1" 当 index 递进去。
+                    std::string idxTxt = "0";
+                    std::string imgTxt = "-1";
+                    std::string keyArg = "NULL";
+                    std::string capArg = "(void*)L\"\"";
+                    int hasIdx = 0, hasKey = 0, hasImg = 0;
+                    for (size_t i = 0; i < node.positional.size() && i < 4; i++) {
+                        // 省略位可能是 null 槽也可能是 omittedArgs 标记，两种都得放过：
+                        // `Tabs.Add , "t1", "常规"` 的第一位就是省略的。
+                        if (!node.positional[i]) continue;
+                        if (node.omittedArgs.count(i)) continue;
+                        emitExpr(*node.positional[i]);
+                        std::string v = lastExpr_;
+                        if (i == 0 || i == 3) {
+                            size_t pd = v.find('(');
+                            size_t rp = v.rfind(')');
+                            std::string inner = (pd != std::string::npos && rp != std::string::npos && rp > pd)
+                                ? v.substr(pd + 1, rp - pd - 1) : v;
+                            bool num = !inner.empty();
+                            for (char ch : inner) {
+                                if (!(isdigit((unsigned char)ch) || ch == '-')) { num = false; break; }
+                            }
+                            if (i == 0) { idxTxt = num ? inner : ("(int32_t)(" + v + ")"); hasIdx = 1; }
+                            else       { imgTxt = num ? inner : ("(int32_t)(" + v + ")"); hasImg = 1; }
+                        } else if (i == 1) {
+                            keyArg = "(void*)(" + v + ")"; hasKey = 1;
+                        } else {
+                            capArg = "(void*)(" + v + ")";
+                        }
+                    }
+                    lastExpr_ = "vb6_TabStrip_TabsAdd((void*)" + tspHwnd + ", " + idxTxt + ", "
+                              + keyArg + ", " + capArg + ", " + imgTxt + ", "
+                              + std::to_string(hasIdx) + ", " + std::to_string(hasKey) + ", "
+                              + std::to_string(hasImg) + ")";
+                    return;
+                }
+                if (tspMember == "remove") {
+                    std::string rmArg = "0";
+                    for (size_t i = 0; i < node.positional.size(); i++) {
+                        if (!node.positional[i]) continue;
+                        emitExpr(*node.positional[i]);
+                        rmArg = lastExpr_;
+                        break;
+                    }
+                    // VB6 的 Tabs.Remove 两种都吃：数字按下标、字串按 Key。
+                    // 字串必须走 GetTabIndexByKey —— 直接塞进 int32_t 形参是错答案。
+                    if (rmArg.find("L\"") != std::string::npos) {
+                        lastExpr_ = "vb6_TabStrip_TabsRemove((void*)" + tspHwnd
+                                  + ", vb6_TabStrip_GetTabIndexByKey((void*)" + tspHwnd
+                                  + ", (void*)(" + rmArg + ")))";
+                    } else {
+                        lastExpr_ = "vb6_TabStrip_TabsRemove((void*)" + tspHwnd
+                                  + ", (int32_t)(" + rmArg + "))";
+                    }
+                    return;
+                }
+                if (tspMember == "clear") {
+                    lastExpr_ = "vb6_TabStrip_TabsClear((void*)" + tspHwnd + ")";
+                    return;
+                }
+            }
+        }
+
         // P20-40: StatusBar 原生复刻 —— Panels.Add/Remove/Clear 直接打在 RTL 上。
         // 同样必须在通用 COM 分支**之前**拦下, 否则会拼出
         // `vb6_ComCall(vb6_ComGetObjectProp(vb6_com_X, L"Panels"), L"Add", ...)`。

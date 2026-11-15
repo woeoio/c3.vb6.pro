@@ -183,6 +183,10 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // P20-42: SSTab (TabDlg.SSTab)。必须排在 imagelist 之后、Unknown 之前;
     // "sstab" 是 TabDlg.SSTab / SSTab 两种写法的公共子串。
     if (lower.find("sstab") != std::string::npos) return FrmControlType::SSTab;
+    // C30-2: TabStrip (MSComctlLib.TabStrip / TabDlg.TabStrip)。"tabstrip" 与 "sstab"
+    // 互不为子串（一个是 ta-bs，一个是 ss-tab），但**必须在 sstab 之后**判：反过来的话
+    // "tabstrip" 也不会命中 "sstab"，两条其实互斥；这里保持"长的在后面"这个习惯。
+    if (lower.find("tabstrip") != std::string::npos) return FrmControlType::TabStrip;
     // P20-45/46: ListView / TreeView。按字符串长短排: 先 listview 再 treeview,
     // 两者互不为子串, 但都排在 sstab 之后以免误吃。
     if (lower.find("listview") != std::string::npos) return FrmControlType::ListView;
@@ -244,6 +248,9 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // (实测 x64/x86 进程里 GetClassInfoW 直接成功, InitCommonControlsEx 之前就在),
         // 所以这里不需要 RTL 自注册兜底。
         case FrmControlType::SSTab:        return "SysTabControl32";
+        // C30-2: TabStrip 用的也是 comctl32 注册好的 **SysTabControl32**（与 SSTab 同一个
+        // 窗口类，区别全在"我们不接管子控件"这一条语义上）；类已在，不需自注册兜底。
+        case FrmControlType::TabStrip:     return "SysTabControl32";
         // P20-45/46: ListView/TreeView —— 与 SSTab 同型, **comctl32 已注册**
         // (实测 GetClassInfoW 直接成功), 不需要 StatusBar 那套自注册兜底。
         case FrmControlType::ListView:     return "SysListView32";
@@ -324,6 +331,7 @@ const char* FrmParser::controlTypeToVb6Name(FrmControlType type) {
         case FrmControlType::ProgressBar:  return "ProgressBar";
         case FrmControlType::StatusBar:    return "StatusBar";
         case FrmControlType::SSTab:        return "SSTab";
+        case FrmControlType::TabStrip:     return "TabStrip";
         case FrmControlType::ListView:     return "ListView";
         case FrmControlType::TreeView:     return "TreeView";
         case FrmControlType::DTPicker:     return "DTPicker";

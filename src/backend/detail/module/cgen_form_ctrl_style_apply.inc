@@ -171,6 +171,11 @@
                 // (创建时读设计期属性容易与"未写即默认"的口径打架), 这里只给基类样式。
                 createCaption = "";   // 页标题走 TCM_INSERTITEM, 创建时不给标题
                 break;
+            case FrmControlType::TabStrip:   // C30-2: 同样 SysTabControl32
+                // 与 SSTab 同一套理由: TCS_MULTISELECT/HOTTRACK/TOOLTIPS 由 vb6_TabStrip_Init
+                // 在创建后改 GWL_STYLE；页标题一律走 TCM_INSERTITEM（Tabs.Add）。
+                createCaption = "";
+                break;
             case FrmControlType::DriveListBox:
                 // C29-1b: VB6 的 DriveListBox 外观就是"只能选、不能改"的组合框
                 style |= 0x0003L | kWsVscroll | kWsBorder;  // CBS_DROPDOWNLIST
@@ -1193,6 +1198,58 @@
                     c_.emitLine("vb6_SSTab_SetTabPicture((void*)" + tsHwnd + ", "
                               + std::to_string(idx2) + ", " + varName + ", "
                               + varName + "_size);");
+                }
+            }
+        }
+
+        // C30-2: TabStrip 设计期 —— Init 一次，再把 BeginProperty Tabs {…} 里的页灌进去。
+        // 与 SSTab 的根本区别：TabStrip **不是容器**，这里只造标签条，不动任何子控件的可见性；
+        // 页内容由用户在 _Click 里自己切（ai/内置控件/TabStrip 控件（选项卡条）.md §5）。
+        // 字串直接递宽字面量（RTL 只读不释放），不走 BSTR 包。
+        if (ctrl.controlType == FrmControlType::TabStrip) {
+            tabStripVars_.insert(ctrl.controlName);
+            std::string tspNLower = ctrl.controlName;
+            std::transform(tspNLower.begin(), tspNLower.end(), tspNLower.begin(), ::tolower);
+            std::string tspHwnd = knownControlArrays_.count(tspNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+
+            auto tspInt = [](const std::map<std::string, FrmValue>& mp, const std::string& k, int defv) -> int {
+                auto it = mp.find(k);
+                if (it == mp.end()) return defv;
+                return (int)it->second.intValue;
+            };
+            auto tspLit = [](const std::map<std::string, FrmValue>& mp, const std::string& k) -> std::string {
+                auto it = mp.find(k);
+                if (it == mp.end() || it->second.type != FrmValueType::String) return std::string();
+                std::string raw = it->second.rawText;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"')
+                    raw = raw.substr(1, raw.size() - 2);
+                for (char& ch : raw) if (ch == '"') ch = '\'';
+                return raw;
+            };
+
+            // MultiRow/HotTracking/ShowTips 缺省都是 0（VB6 TabStrip 三项设计期缺省为 False）。
+            c_.emitLine("vb6_TabStrip_Init((void*)" + tspHwnd + ", "
+                      + std::to_string(tspInt(ctrl.properties, "MultiRow", 0) != 0 ? 1 : 0) + ", "
+                      + std::to_string(tspInt(ctrl.properties, "HotTracking", 0) != 0 ? 1 : 0) + ", "
+                      + std::to_string(tspInt(ctrl.properties, "ShowTips", 0) != 0 ? 1 : 0) + ");");
+            // 设计期页：BeginProperty Tabs {…} → BeginProperty Tab1 {…} Caption/Key/Image
+            for (const auto& tb : ctrl.propertyBlocks) {
+                if (tb.blockName != "Tabs") continue;
+                int ord = 0;
+                for (const auto& page : tb.nestedBlocks) {
+                    ord++;
+                    std::string cap = tspLit(page.properties, "Caption");
+                    std::string key = tspLit(page.properties, "Key");
+                    std::string keyArg = key.empty() ? std::string("NULL")
+                                                     : ("(void*)L\"" + key + "\"");
+                    c_.emitLine("vb6_TabStrip_TabsAdd((void*)" + tspHwnd + ", "
+                              + std::to_string(ord) + ", " + keyArg + ", "
+                              + "(void*)L\"" + cap + "\", "
+                              + std::to_string(tspInt(page.properties, "Image", -1)) + ", 1, "
+                              + std::to_string(key.empty() ? 0 : 1) + ", 0);");
                 }
             }
         }

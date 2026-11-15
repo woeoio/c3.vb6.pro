@@ -58,3 +58,56 @@ End Sub
 ```
 
 > 坑：Client* 坐标是相对 TabStrip 的，Move 页面时要加上 TabStrip.Left/Top；页面容器建议用 PictureBox（可再嵌套控件）并设 BorderStyle=0 视觉无缝。
+
+## 6. 实现状态（C30-2，已落地）
+
+### 6.1 落在哪
+
+| 层 | 文件 | 干什么 |
+|----|------|--------|
+| RTL | `src/rtl/core/vb6forms/vb6forms_tabstrip.c` | 原生 `SysTabControl32` 的整套复刻（建窗、灌项、读写回、事件判据） |
+| 声明 | `src/rtl/core/vb6forms/vb6forms_prop_ctrl.h` | 全部出口原型（`check_rtl_proto_arity.ps1` 按这张表校实参个数） |
+| 登记 | `rtl_embedded.cpp` / `rtl_embedded.hpp` / `driver_link.cpp` / `CMakeLists.txt` / `c3rtl.rc`（`226 RCDATA`） | 编进 c3rtl 并随 exe 取出来 |
+| 解析 | `frm_parser*.cpp`、`form_pseudo.hpp` | `Begin MSComctlLib.TabStrip` → `FrmControlType::TabStrip` |
+| 发码 | `cgen_util_ctrl.cpp`（读写表 + `controlPropType`）、`cgen_state.inc`（名字/句柄/下标解析）、`cgen_form_ctrl_style_apply.inc`（`vb6_TabStrip_Init` + 设计期 `BeginProperty Tabs`）、`cgen_expr_call_com_bind.inc`（`Tabs.Add/Remove`）、`cgen_call.cpp`（无实参 `Tabs.Clear` 的语句码头） | 把 VB6 语句折成上面的出口 |
+
+### 6.2 支持面（1 基，与 VB6 一致）
+
+- 方法：`Tabs.Add [index], [key], [caption], [image]`（四位全可选，省略位按位置对齐）、`Tabs.Remove n|key`、`Tabs.Clear`
+- 读：`Tabs.Count`、`Tabs(i).Caption` / `.Key` / `.Index`、`SelectedItem.Index`
+- 属性：`MultiRow` / `HotTracking` / `ShowTips`（创建时进样式位）、`ClientLeft/Top/Width/Height`（页区矩形）、通用几何与 `Visible/Enabled`
+- 事件：`Click`（走通用控件子类的 `WM_LBUTTONUP`，与“点了一下”的 VB6 语义同）
+
+### 6.3 两处必须知道的实现口径
+
+1. **`Click` 不接 `TCN_SELCHANGE`**。`TCN_SELCHANGE`（`-551`）只在选中项**真的换了**时来，拿它当 `Click` 会漏报（点已选中的标签也该响）。两条都接是**一次点击两声**。RTL 的 `vb6_TabStrip_OnNotify` / `SimSelect` 留着给无头判据与以后真要区分“变页”的场合，不在派发链上。
+2. **`SelectedItem.Index` 回问原生**（`TCM_GETCURSEL`），不读缓存。早期版本答的是“我们上次设的值”，于是用户真点完标签读数恒 1（`verify_tab.ps1` 的 T1/T2 两行就是那条红的证人）。注意与 UpDown 那次的时序相反：原生 tab 是“先切、后通知”，通知里读到的已是新页。
+
+### 6.4 已实测（实证读数，非推断）
+
+无头夹具 `tests/ctrltabstrip`（`Test-Vbp` x64 + x86，`-ExpectExitCode 0`）：
+
+```
+TS1-tabs=3        TS2-sel=1         TS3-cap=True/True/True   TS3-len=2/2/2
+TS4-key=k1        TS5-add=4/True    TS6-rm=3/True/True       TS7-type=Long/String
+TS8-client=300x176                  TS9-flags=False/True/True
+TS10-clear=0/0    TABSTRIP-DONE
+```
+
+手动样例 `tools/tabstrip_manual`（真鼠标消息，`.build/probe/verify_tab.ps1`）：
+
+```
+T0 载入后   : tabs=3  sel=1  cap=常规  clicks=0   [原生 count=3 curSel=0]
+T1 点第2页  : tabs=3  sel=2  cap=视图  clicks=1
+T2 点第3页  : tabs=3  sel=3  cap=高级  clicks=2
+T2b 点第1页 : tabs=3  sel=1  cap=常规  clicks=3
+T3 加一页   : tabs=4  sel=1  cap=常规  clicks=3
+T4 删当前页 : tabs=3  sel=1  cap=视图  clicks=3
+RESULT: 正常关闭 exit=0
+```
+
+### 6.5 已知缺口（写在这里，不装看不见）
+
+1. **链式读直接当内建函数实参**：`CStr(TabStrip1.SelectedItem.Index)` / `CStr(TabStrip1.Tabs.Count)` / `ShowPage TabStrip1.SelectedItem.Index` 这一形仍会折成 COM 晚绑定 ⇒ 真跑 438。先落到同型局部变量再喂（`Dim n As Long : n = TabStrip1.Tabs.Count`）就没事。为什么只修到这一层：`controlPropType` 认的是“控件.属性”一形，**不吃** `Tabs(i).Caption` 这种两跳成员；补它要在类型推断里加一层集合元素类型，是独立一刀。
+2. **`Tabs(i).Selected` / `SelectedItem.Index = n` 未支持**（改选中项目前只能用户点，或 RTL 侧 `vb6_TabStrip_SetSelectedIndex`）。
+3. **`Tabs.Remove` 之后选中项落在原序号上**（删掉第 3 页后，原第 4 页顶到第 3 位并被选中）。VB6 的行为未与本机逐格比对，先按“保序号 + 钳到有效区”实现，写在这里备查。

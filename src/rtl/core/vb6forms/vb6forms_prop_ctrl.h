@@ -932,6 +932,36 @@ int32_t vb6_UpDown_OnNotify(void* hwnd, int32_t code, void* lParam, int32_t* out
 // C30-UD-c：按 delta 把位移落到控件上（wrap 按环、否则钳量程；buddy 文本随之同步），
 // 返回落定后的位置。只该在 OnNotify 返回 ±1 时调。
 int32_t vb6_UpDown_Commit(void* hwnd, int32_t delta);
+
+// ---- C30-2: TabStrip (MSComctlLib.TabStrip → SysTabControl32) ----
+// 与 SSTab 的分工：TabStrip 不是容器，页内容由用户自己的 Click 切；
+// Tabs 集合与 SelectedItem.Index 都是 **1 基**（SSTab 的 .Tab 是 0 基）。
+void    vb6_TabStrip_Init(void* hwnd, int32_t multiRow, int32_t hotTrack, int32_t showTips);
+int32_t vb6_TabStrip_GetMultiRow(void* hwnd);
+int32_t vb6_TabStrip_GetHotTracking(void* hwnd);
+int32_t vb6_TabStrip_GetShowTips(void* hwnd);
+void    vb6_TabStrip_SetMultiRow(void* hwnd, int32_t v);
+void    vb6_TabStrip_SetHotTracking(void* hwnd, int32_t v);
+void    vb6_TabStrip_SetShowTips(void* hwnd, int32_t v);
+int32_t vb6_TabStrip_GetClientLeft(void* hwnd);
+int32_t vb6_TabStrip_GetClientTop(void* hwnd);
+int32_t vb6_TabStrip_GetClientWidth(void* hwnd);
+int32_t vb6_TabStrip_GetClientHeight(void* hwnd);
+int32_t vb6_TabStrip_TabsCount(void* hwnd);
+void    vb6_TabStrip_TabsAdd(void* hwnd, int32_t index, void* keyBstr, void* capBstr,
+                             int32_t image, int32_t hasIndex, int32_t hasKey, int32_t hasImage);
+void    vb6_TabStrip_TabsRemove(void* hwnd, int32_t idx1);
+void    vb6_TabStrip_TabsClear(void* hwnd);
+void*   vb6_TabStrip_GetTabCaption(void* hwnd, int32_t idx1);
+void    vb6_TabStrip_SetTabCaption(void* hwnd, int32_t idx1, void* bstr);
+void*   vb6_TabStrip_GetTabKey(void* hwnd, int32_t idx1);
+int32_t vb6_TabStrip_GetTabIndexByKey(void* hwnd, void* keyBstr);
+int32_t vb6_TabStrip_GetSelectedIndex(void* hwnd);
+void    vb6_TabStrip_SetSelectedIndex(void* hwnd, int32_t idx1);
+// 无头判据助手：先落选中再发一条真 TCN_SELCHANGE（顺序与真手势一致）。
+int32_t vb6_TabStrip_SimSelect(void* hwnd, int32_t idx1);
+// WM_NOTIFY 换算：返回 1 = 选中项真变了（Click 该发）。
+int32_t vb6_TabStrip_OnNotify(void* hwnd, int32_t code, void* lParam);
 // C30-UD-b 判据专用助手（不对应 VB6 语义，与 Slider.SimNotify / DTPicker.SimChange 同先例）：
 // 按 delta 格数算目标值（乘 Increment、wrap 按环、否则钳量程），**先把一条真的
 // UDN_DELTAPOS 递给父窗、再落值** —— 与真手势同序（真手势下处理器读到的是旧值，

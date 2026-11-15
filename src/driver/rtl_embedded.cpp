@@ -154,6 +154,7 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6FORMS_IMAGELIST_C,    "vb6forms_imagelist.c" },
     { RTL_VB6FORMS_STATUSBAR_C,    "vb6forms_statusbar.c" },
     { RTL_VB6FORMS_SSTAB_C,        "vb6forms_sstab.c" },
+    { RTL_VB6FORMS_TABSTRIP_C,     "vb6forms_tabstrip.c" },
     { RTL_VB6FORMS_OLEDD_C,        "vb6forms_oledd.c" },
     { RTL_VB6FORMS_LISTVIEW_C,     "vb6forms_listview.c" },
     { RTL_VB6FORMS_MEMBEROBJ_C,    "vb6forms_memberobj.c" },

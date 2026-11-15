@@ -334,6 +334,14 @@
                 }
 
             }
+            // C30-2: TabStrip 的 _Click **不走这条 WM_NOTIFY**。
+            // 理由一（行为）：VB6 的 TabStrip.Click 是“控件被点了一下”，点已选中的标签也应响；
+            //   TCN_SELCHANGE(-551) 只在选中项**真的换了**时来，拿它当 Click 会漏报。
+            // 理由二（已实测）：生成码里 TabStrip 走通用子类 vb6_ctrl_subproc_<名>，
+            //   `if (msg == WM_LBUTTONUP) …_Click()` 那一路已经能把它发出来
+            //   （.build/probe/verify_tab.ps1：clicks 逐次 +1）。
+            // 两条如果都接就是一次点击两声 Click。RTL 的 vb6_TabStrip_OnNotify / SimSelect
+            // 留给无头判据与以后真的需要区分“变页”的场合，不在本条派发链上。
             // ---- C29-8c: TreeView 的 NodeClick / Expand / Collapse ----
             // TVN_SELCHANGEDW(-451) 走 NodeClick；TVN_ITEMEXPANDEDW(-455) 按 action 分给
             // Expand / Collapse。通知负载 NMTREEVIEWW 里的 itemNew.hItem 由 RTL 折成 1 基

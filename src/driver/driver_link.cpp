@@ -44,6 +44,7 @@ static void addFormsSources(MsvcDriverOptions& opts, const std::string& rtlDir) 
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_imagelist.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_statusbar.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_sstab.c");
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_tabstrip.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_oledd.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_listview.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_memberobj.c");

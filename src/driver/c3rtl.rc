@@ -537,6 +537,7 @@
 207 RCDATA "../rtl/core/vb6forms/vb6forms_imagelist.c"
 208 RCDATA "../rtl/core/vb6forms/vb6forms_statusbar.c"
 209 RCDATA "../rtl/core/vb6forms/vb6forms_sstab.c"
+226 RCDATA "../rtl/core/vb6forms/vb6forms_tabstrip.c"
 210 RCDATA "../rtl/core/vb6forms/vb6forms_oledd.c"
 211 RCDATA "../rtl/core/vb6forms/vb6forms_listview.c"
 // C29-3: 控件"成员对象/成员集合"的真 IDispatch (ListImages 立样)

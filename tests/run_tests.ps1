@@ -7793,6 +7793,43 @@ if ($Category -in @("all", "run", "vbp")) {
         # 这一针钉的就是“比对的号”本身 —— 右侧那个句柄名证明它落在 ud1 的 arm 上。
         'pNM42->code == -722 && (void*)pNM42->hwndFrom == vb6_hwnd_ud1',
         'vb6_UpDown_SetAlignment(vb6_hwnd_ud1, 0);')
+
+    # ---- C30-2: TabStrip（原生 SysTabControl32 复刻）----
+    # 这一件钉三面：
+    #   ① Tabs 集合（Add/Remove/Clear、1 基下标、Key 与 Caption 回读）——TS1..TS6/TS10；
+    #   ② 类型与几何面（Count/Index 是 Long、Caption 是 String；Client* 是**页区**不是整窗）
+    #      ——TS7/TS8；
+    #   ③ 三条行为位（MultiRow/HotTracking/ShowTips）的运行期回读 ——TS9。
+    # 不钉事件：TabStrip.Click 走通用子类（WM_LBUTTONUP），要真鼠标 —— 那一面在
+    # tools/tabstrip_manual + .build/probe/verify_tab.ps1，读数见 README。
+    # 判据刻意全是 ASCII：Debug.Print 出去的是 GBK 控制台字节，中文 needle 换个 locale 必红。
+    # TS3/TS5/TS6 因此钉“相等”（True/False）+ 长度，而不是“出现过”。
+    $tsNeedles = @(
+        "TS1-tabs=3", "TS2-sel=1",
+        "TS3-cap=True/True/True", "TS3-len=2/2/2",
+        "TS4-key=k1",
+        "TS5-add=4/True",
+        "TS6-rm=3/True/True",
+        "TS7-type=Long/String",
+        "TS8-client=300x176",
+        "TS9-flags=False/True/True",
+        "TS10-clear=0/0",
+        "TABSTRIP-DONE")
+    # ExpectExitCode 0 是这一批的硬刑：TS10 第一版就死在 438 —— 输出前九行全在、
+    # 只少最后两行，光看 needle 会以为是“少一行”。退出码第 438 那一下才是一耳光的。
+    Test-Vbp "ctrltabstrip" "$Tests\ctrltabstrip\TabApp.vbp" $tsNeedles -ExpectExitCode 0
+    Test-Vbp "ctrltabstrip_x86" "$Tests\ctrltabstrip\TabApp.vbp" $tsNeedles -Arch "x86" -ExpectExitCode 0
+    Test-EmitcShape "ts_emitc_native" @("$Tests\ctrltabstrip\TabApp.vbp") @(
+        '"SysTabControl32", "",',
+        'vb6_TabStrip_Init((void*)vb6_hwnd_TabStrip1, 0, 1, 1);',
+        # Add 的八枚形参序：(hwnd, index, key, cap, image, hasIdx, hasKey, hasImg)。
+        # 第一格 `0, …, -1, 0, 1, 0` 就是「index 与 image 省略」的编码，不是“默认值 0”。
+        'vb6_TabStrip_TabsAdd((void*)vb6_hwnd_TabStrip1, 0, (void*)(vb6_BSTR_FromStr(L"k1")), (void*)(vb6_BSTR_FromStr(L"\u5E38\u89C4")), -1, 0, 1, 0);',
+        'vb6_TabStrip_TabsRemove((void*)vb6_hwnd_TabStrip1, (int32_t)(2));',
+        # 无实参的 Tabs.Clear 走**语句码头**（cgen_call.cpp），不是表达式码头 ——
+        # 这一针钉的就是“那条码头真的接上了”否则钉会回到 vb6_ComCall(…, L"Clear")
+        'vb6_TabStrip_TabsClear((void*)vb6_hwnd_TabStrip1);',
+        'vb6_TabStrip_GetSelectedIndex((void*)vb6_hwnd_TabStrip1)')
     # 账 #468 §B164: 拼接站**自己**放掉左操作数（那一枚左操作数是「整枚就是一个 owned BSTR 档的 mint」
     #   ⇒ 那一站的发法从 Concat 变成 ConcatFree：值一个字没变，只是那一枚终于有人放了）⇒ 这几针随刀改钉。
     Test-EmitcShape "sl_emitc_native" @("$Tests\ctrlslider\SlidApp.vbp") @(

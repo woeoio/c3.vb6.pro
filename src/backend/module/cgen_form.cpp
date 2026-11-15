@@ -116,6 +116,8 @@ void CCodeGen::emitFormFramework(const FrmFormDesc& frmDesc, Module& module) {
             if (c.controlType == FrmControlType::MonthView) monthviewVars_.insert(c.controlName);
             // C29-SL-c: Slider 同批登记（判据方法 SimNotify 的宿主槽是真窗口）。
             if (c.controlType == FrmControlType::Slider) sliderVars_.insert(c.controlName);
+            // C30-2: TabStrip 同批登记（Tabs.Add / Tabs(i).Caption / SelectedItem.Index 认宿主用）。
+            if (c.controlType == FrmControlType::TabStrip) tabStripVars_.insert(c.controlName);
             // C29-8b: TreeView 同批登记 —— `tv1.Nodes` 那条链靠 treeViewVars_ 认出宿主,
             // 才能改道到 vb6_TreeView_Nodes( 的真 IDispatch 集合 (不认就发
             // vb6_ComGetObjectProp(vb6_hwnd_tv1, L"Nodes") = 拿 HWND 当 IDispatch 用)。
