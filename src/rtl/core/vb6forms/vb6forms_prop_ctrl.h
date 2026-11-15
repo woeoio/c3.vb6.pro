@@ -958,6 +958,8 @@ void*   vb6_TabStrip_GetTabKey(void* hwnd, int32_t idx1);
 void    vb6_TabStrip_SetTabKey(void* hwnd, int32_t idx1, void* bstr);
 int32_t vb6_TabStrip_GetTabImage(void* hwnd, int32_t idx1);
 void    vb6_TabStrip_SetTabImage(void* hwnd, int32_t idx1, int32_t iImage);
+void*   vb6_TabStrip_GetTabToolTipText(void* hwnd, int32_t idx1);
+void    vb6_TabStrip_SetTabToolTipText(void* hwnd, int32_t idx1, void* bstr);
 int32_t vb6_TabStrip_GetTabIndexByKey(void* hwnd, void* keyBstr);
 int32_t vb6_TabStrip_GetSelectedIndex(void* hwnd);
 void    vb6_TabStrip_SetSelectedIndex(void* hwnd, int32_t idx1);

@@ -22,6 +22,28 @@ Begin VB.Form TabForm
       MultiRow        =   0   'False
       ShowTips        =   -1  'True
    End
+   Begin MSComctlLib.TabStrip arrTab 
+      Height          =   600
+      Index           =   0
+      Left            =   120
+      TabIndex        =   7
+      Top             =   3000
+      Width           =   2200
+      _ExtentX        =   3881
+      _ExtentY        =   1058
+      _Version        =   393216
+   End
+   Begin MSComctlLib.TabStrip arrTab 
+      Height          =   600
+      Index           =   1
+      Left            =   2400
+      TabIndex        =   8
+      Top             =   3000
+      Width           =   2200
+      _ExtentX        =   3881
+      _ExtentY        =   1058
+      _Version        =   393216
+   End
    Begin VB.Timer tGo 
       Enabled         =   -1  'True
       Interval        =   60
@@ -53,6 +75,11 @@ Private Sub Form_Load()
     TabStrip1.Tabs.Add , "k1", "常规"
     TabStrip1.Tabs.Add , "k2", "视图"
     TabStrip1.Tabs.Add , "k3", "高级"
+    ' 控件数组元素（`arrTab(0)` / `arrTab(1)`）：句柄走 vb6_CtrlArr_GetAt，
+    ' 链式成员必须跟单枚实例**同一条**发码（C30-2 收尾第二项）。
+    arrTab(0).Tabs.Add , "a0", "A0"
+    arrTab(1).Tabs.Add , "a1", "A1"
+    arrTab(1).Tabs.Add , "a2", "A2"
 End Sub
 
 Private Sub ShowIdx(ByVal i As Long)
@@ -148,6 +175,19 @@ Private Sub tGo_Timer()
     n = TabStrip1.Tabs.Count
     n2 = TabStrip1.SelectedItem.Index
     Debug.Print "TS17-rmcur=" & CStr(n) & "/" & CStr(n2)
+
+    ' ---- 控件数组元素上的链式访问（读 + 写）----
+    n = arrTab(0).Tabs.Count
+    c1 = arrTab(0).Tabs(1).Caption
+    arrTab(1).Tabs(1).Caption = "B1"
+    k1 = arrTab(1).Tabs(1).Caption
+    Debug.Print "TS18-arr=" & CStr(n) & "/" & CStr(c1 = "A0") & "/" & CStr(k1 = "B1")
+
+    ' ---- Tabs(i).ToolTipText 往返 ----
+    arrTab(1).Tabs(2).ToolTipText = "tip2"
+    c1 = arrTab(1).Tabs(2).ToolTipText
+    c2 = arrTab(1).Tabs(1).ToolTipText
+    Debug.Print "TS19-tip=" & CStr(c1 = "tip2") & "/" & CStr(c2 = "")
 
     ' Tabs.Clear：清空后 Count=0、SelectedItem.Index 回 0（VB6 的“无选中”）。
     TabStrip1.Tabs.Clear

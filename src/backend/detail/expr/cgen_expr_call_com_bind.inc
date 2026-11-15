@@ -513,7 +513,7 @@
         {
             std::string tspMember = memberName;
             std::transform(tspMember.begin(), tspMember.end(), tspMember.begin(), ::tolower);
-            std::string tspHwnd = tabStripHwndVarOfExpr(objExpr);
+            std::string tspHwnd = tabStripHwndTextOfExpr(objExpr);
             if (!tspHwnd.empty() && objExpr.find("L\"Tabs\"") != std::string::npos) {
                 if (tspMember == "add") {
                     // Tabs.Add [index], [key], [caption], [image] —— 四个位置实参全可选。

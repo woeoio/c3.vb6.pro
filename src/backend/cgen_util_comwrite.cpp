@@ -26,7 +26,7 @@ bool CCodeGen::tryEmitTabStripChainWrite(Expr* targetNode, Expr* valueNode) {
     TabChainView v;
     if (!tabStripChainViewOf(targetNode, v)) return false;
     if (!valueNode) return false;
-    const std::string hwnd = "vb6_hwnd_" + cIdent(v.ctrl);
+    const std::string hwnd = tabStripHwndTextOf(v);
 
     // 值先算（VB6 先求右值；与既有 COM 写一致）
     emitExpr(*valueNode);
@@ -64,6 +64,11 @@ bool CCodeGen::tryEmitTabStripChainWrite(Expr* targetNode, Expr* valueNode) {
     if (v.member == "key") {
         c_.emitLine("vb6_TabStrip_SetTabKey((void*)" + hwnd + ", " + idx
                     + ", (void*)(" + val + "));  /* TabStrip.Tabs(i).Key */");
+        return true;
+    }
+    if (v.member == "tooltiptext" || v.member == "tooltip") {
+        c_.emitLine("vb6_TabStrip_SetTabToolTipText((void*)" + hwnd + ", " + idx
+                    + ", (void*)(" + val + "));  /* TabStrip.Tabs(i).ToolTipText */");
         return true;
     }
     if (v.member == "image") {

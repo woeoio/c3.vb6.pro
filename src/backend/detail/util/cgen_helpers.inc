@@ -1563,8 +1563,16 @@
         std::string sub;        // "tabs" / "selecteditem"
         std::string member;     // 末尾成员（小写）
         Expr* idxArg = nullptr; // Tabs 的下标实参（可空）
+        // 控件数组元素形态（`TabsArr(0).Tabs(1).Caption`）时非空：元素下标实参。
+        // 存非 const 指针是因为读出/写入两腿都要 emitExpr 这个下标；AST 在所有调用点
+        // 本来就可改（visit(MemberAccessExpr&) 给的就是非 const 节点），故两处 const_cast
+        // 是“形状查询是只读的、但引用的是可变树”，不是写穿。
+        Expr* arrIdx = nullptr;
     };
     bool tabStripChainViewOf(const Expr* nodeExpr, TabChainView& v) const;
+    // 句柄文本：单枚 = `vb6_hwnd_<名>`；控件数组元素 = `vb6_CtrlArr_GetAt(&vb6_arr_<名>, idx)`。
+    // 读 / 写两条腿共用这一个出口（数组下标会 emit，故非 const）。
+    std::string tabStripHwndTextOf(TabChainView& v);
     // 读：命中返回 true 并给出发码文本（已经是 RTL 调用，不再带 COM 标记）。
     bool tabStripChainReadExpr(const Expr* nodeExpr, std::string& out);
     // 写：命中就当场 emit 并返回 true（调用方 return）。

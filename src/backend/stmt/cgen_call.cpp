@@ -387,14 +387,15 @@ void CCodeGen::visit(CallStmt& node) {
             // —— 拿 HWND 当 IDispatch，编得过、跑起来真弹 438
             // （tests/ctrltabstrip 的 TS10 就是那条红的证人：exit=438，TS10-clear 一行未出）。
             {
-                std::string tsName = tabStripNameOfExpr(comObjExpr_);
+                // 句柄文本两种接收者都认（单枚 / 控件数组元素）—— 与 Add/Remove 同一条出口
+                std::string tsHwnd = tabStripHwndTextOfExpr(comObjExpr_);
                 std::string mTs = Symbol::toLower(comMemberName_);
-                std::string fnTs = tsName != ""
+                std::string fnTs = tsHwnd != ""
                     ? controlZeroArgMethod(FrmControlType::TabStrip, mTs) : std::string();
                 if (!fnTs.empty()) {
                     comObjExpr_.clear();
                     comMemberName_.clear();
-                    c_.emitLine(fnTs + "((void*)vb6_hwnd_" + tsName + ");"
+                    c_.emitLine(fnTs + "((void*)" + tsHwnd + ");"
                                 "  /* TabStrip.Tabs." + mTs + " (原生 tab 控件) */");
                     return;
                 }

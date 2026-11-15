@@ -308,8 +308,7 @@ void vb6_TabStrip_SetTabKey(void* hwnd, int32_t idx1, void* bstr) {
     tsRepopulate(t);
 }
 
-int32_t vb6_TabStrip_GetTabImage(void* hwnd, int32_t idx1) {
-    Vb6TabStrip* t = tsFind(hwnd);
+int32_t vb6_TabStrip_GetTabImage(void* hwnd, int32_t idx1) {    Vb6TabStrip* t = tsFind(hwnd);
     int i = idx1 - 1;
     if (!t || i < 0 || i >= t->count) return -1;
     return t->image[i];
@@ -320,6 +319,27 @@ void vb6_TabStrip_SetTabImage(void* hwnd, int32_t idx1, int32_t iImage) {
     int i = idx1 - 1;
     if (!t || i < 0 || i >= t->count) return;
     t->image[i] = (iImage >= 0) ? iImage : -1;
+    tsRepopulate(t);
+}
+
+// C30-2: Tabs(i).ToolTipText —— VB6 的 TabStrip 在 ShowTips=True 时气泡里显示的是**这一枚**，
+// 而原生 SysTabControl32 的 TCS_TOOLTIPS 只会在气泡里显示**项文本**（TCITEM.pszText）。
+// 实测口径：这里只保证**读写往返一致**（业务代码取值/赋值不回错、不失真），不谎称
+// “已经能改原生气泡文本”—— 真要让气泡说 ToolTipText 得自建 track tooltip，那是另一刀。
+void* vb6_TabStrip_GetTabToolTipText(void* hwnd, int32_t idx1) {
+    Vb6TabStrip* t = tsFind(hwnd);
+    int i = idx1 - 1;
+    if (!t || i < 0 || i >= t->count) return (void*)vb6_BSTR_Empty();
+    return (void*)vb6_BSTR_FromStr(t->tip[i] ? t->tip[i] : L"");
+}
+
+void vb6_TabStrip_SetTabToolTipText(void* hwnd, int32_t idx1, void* bstr) {
+    Vb6TabStrip* t = tsFind(hwnd);
+    int i = idx1 - 1;
+    const wchar_t* s = (const wchar_t*)bstr;
+    if (!t || i < 0 || i >= t->count) return;
+    free(t->tip[i]);
+    t->tip[i] = (s && s[0]) ? tsWcsDup(s) : NULL;
     tsRepopulate(t);
 }
 

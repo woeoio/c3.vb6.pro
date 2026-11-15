@@ -74,12 +74,12 @@ End Sub
 ### 6.2 支持面（1 基，与 VB6 一致）
 
 - 方法：`Tabs.Add [index], [key], [caption], [image]`（四位全可选，省略位按位置对齐）、`Tabs.Remove n|key`、`Tabs.Clear`
-- 读：`Tabs.Count`、`Tabs(i).Caption` / `.Key` / `.Index` / `.Image` / `.Selected`、`SelectedItem.Index` / `.Caption` / `.Key`
-- 写：`Tabs(i).Caption` / `.Key` / `.Image`、`Tabs(i).Selected = True`、`SelectedItem.Index = n`、`SelectedItem.Caption` / `.Key`
+- 读：`Tabs.Count`、`Tabs(i).Caption` / `.Key` / `.Index` / `.Image` / `.Selected` / `.ToolTipText`、`SelectedItem.Index` / `.Caption` / `.Key`
+- 写：`Tabs(i).Caption` / `.Key` / `.Image` / `.ToolTipText`、`Tabs(i).Selected = True`、`SelectedItem.Index = n`、`SelectedItem.Caption` / `.Key`
 - 属性：`MultiRow` / `HotTracking` / `ShowTips`（创建时进样式位）、`ClientLeft/Top/Width/Height`（页区矩形）、通用几何与 `Visible/Enabled`
 - 事件：`Click`（走通用控件子类的 `WM_LBUTTONUP`，与“点了一下”的 VB6 语义同）
 
-这些链式成员**在哪里都同样可用**：赋值右值、`CStr(...)` 之类内建函数实参、子过程/函数实参、`Debug.Print` 实参、`If` 比较项。形状认在 AST 上（`tabStripChainViewOf`，只认登记表里类型为 TabStrip 的控件），读 / 写 / 类型推断三面共用这一条判形 —— 不再存在“某种写法能跑、另一种不行”。
+这些链式成员**在哪里都同样可用**：赋值右值、`CStr(...)` 之类内建函数实参、子过程/函数实参、`Debug.Print` 实参、`If` 比较项；**单枚实例与控件数组元素一视同仁**（`arrTab(0).Tabs(1).Caption`，句柄走 `vb6_CtrlArr_GetAt`）。形状认在 AST 上（`tabStripChainViewOf`，只认登记表里类型为 TabStrip 的控件），读 / 写 / 类型推断三面共用这一条判形；`Tabs.Add/Remove/Clear` 走文本通道的那一侧问 `tabStripHwndTextOfExpr`，两种接收者也都认。
 
 ### 6.3 两处必须知道的实现口径
 
@@ -96,6 +96,7 @@ TS4-key=k1        TS5-add=4/True    TS6-rm=3/True/True       TS7-type=Long/Strin
 TS8-client=300x176                  TS9-flags=False/True/True
 TS11-arg=3/1      TS12-sub=1        TS13-wcap=True/True/0
 TS14-wsel=2/2     TS15-selset=1     TS16-rmkeep=2/2/True     TS17-rmcur=1/1
+TS18-arr=1/True/True                TS19-tip=True/True
 TS10-clear=0/0    TABSTRIP-DONE
 ```
 
@@ -120,7 +121,6 @@ RESULT: 正常关闭 exit=0
 
 ### 6.5 已知缺口（写在这里，不装看不见）
 
-1. **控件数组元素上的链式访问**（`TabsArr(0).Tabs(1).Caption`）仍走旧路：句柄不是标量槽，`tabStripChainViewOf` 显式回 false。单枚控件实例（正常用法）全部支持。
+1. **`Tabs(i).ToolTipText` 的气泡文本**：读写往返一致（TS19 钉住），但原生 `TCS_TOOLTIPS` 的气泡显示的是**项文本**，不是这一枚；要让气泡真说 `ToolTipText` 得自建 track tooltip，另开一刀。
 2. **`Tabs(i).Selected = False` 不发码**：VB6 的 TabStrip 没有“全不选”状态，照 `TCM_SETCURSEL(-1)` 写会让原生控件清掉选中，反而比 VB6 多出可观测差异。`= True` 正常选中。
 3. **`Tabs.Remove` 之后的选中项**：删前面的页时保持“同一页仍选中”（序号自动前移），删当前页时顶上来那一页接管选中（等同 VB6 “选其下一位”），末页被删则钳到新的末项。已由 TS16/TS17 钉住。
-4. **`Tabs(i).ToolTipText` 尚未开**（RTL 侧有 `tip[]` 槽位，但没有读写出口与发码表项）。

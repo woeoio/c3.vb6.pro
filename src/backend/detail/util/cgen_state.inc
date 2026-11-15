@@ -1126,6 +1126,39 @@
         std::string n = tabStripNameOfExpr(objExpr);
         return n.empty() ? "" : "vb6_hwnd_" + n;
     }
+    // C30-2: 从 C 文本取 TabStrip 的**句柄文本**（方法调用的那条文本通道专用）。
+    // 认两种接收者：
+    //   vb6_hwnd_<名>                          单枚实例
+    //   vb6_CtrlArr_GetAt(&vb6_arr_<名>, idx)  控件数组元素
+    // 两者外面都可能再包 `vb6_ComGetObjectProp(…, L"Tabs")` / `vb6_ComCallObject(…)`。
+    // 为什么要这一枚：`Tabs.Add / Remove / Clear` 走的是 cgen_expr_call_com_bind.inc 的
+    // **文本**判形（AST 侧只接读/写两腿）；那一版只认 `vb6_hwnd_` ⇒ `arrTab(0).Tabs.Add …`
+    // 整条掉回 vb6_ComCall（拿 HWND 当 IDispatch）⇒ 实测 Run-time error 438
+    // （tests/ctrltabstrip 加数组元素当场的那个 438）。
+    std::string tabStripHwndTextOfExpr(const std::string& objExpr) const {
+        static const std::string kArr = "vb6_CtrlArr_GetAt(&vb6_arr_";
+        size_t ap = objExpr.find(kArr);
+        while (ap != std::string::npos) {
+            size_t open = objExpr.find('(', ap);
+            if (open == std::string::npos) return std::string();
+            size_t close = open;
+            int depth = 0;
+            for (; close < objExpr.size(); close++) {
+                if (objExpr[close] == '(') depth++;
+                else if (objExpr[close] == ')') { depth--; if (depth == 0) break; }
+            }
+            if (close >= objExpr.size()) return std::string();
+            const std::string callTxt = objExpr.substr(ap, close - ap + 1);
+            const size_t ns = ap + kArr.size();
+            const size_t ne = objExpr.find_first_of(",) ", ns);
+            const std::string nm = objExpr.substr(ns, (ne == std::string::npos ? objExpr.size() : ne) - ns);
+            auto it = knownFormControls_.find(Symbol::toLower(nm));
+            if (it != knownFormControls_.end() && it->second == FrmControlType::TabStrip) return callTxt;
+            ap = objExpr.find(kArr, close);
+        }
+        std::string n = tabStripNameOfExpr(objExpr);
+        return n.empty() ? std::string() : ("vb6_hwnd_" + n);
+    }
     // C30-2: 从 `Tabs(i)` / `Tabs("Key")` 的不可求值文本里抠出 1 基下标表达式。
     // 两种实参形态都要吃（实测箭两个都出现过）：
     //   vb6_ComCallObject(…, (void*[]){vb6_ComPackInt(n)}, 1)   字面量与变量都过这个 packer

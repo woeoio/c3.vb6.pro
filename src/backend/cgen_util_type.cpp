@@ -424,7 +424,8 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                 if (tabStripChainViewOf(&expr, tvTs)) {
                     if (tvTs.sub == "tabs" && tvTs.member == "count") return Vb6Type::Long;
                     if (tvTs.member == "index" || tvTs.member == "image") return Vb6Type::Long;
-                    if (tvTs.member == "caption" || tvTs.member == "key") return Vb6Type::String;
+                    if (tvTs.member == "caption" || tvTs.member == "key"
+                        || tvTs.member == "tooltiptext" || tvTs.member == "tooltip") return Vb6Type::String;
                     if (tvTs.member == "selected") return Vb6Type::Boolean;
                 }
             }

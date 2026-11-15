@@ -7821,6 +7821,8 @@ if ($Category -in @("all", "run", "vbp")) {
         "TS13-wcap=True/True/0",
         "TS14-wsel=2/2", "TS15-selset=1",
         "TS16-rmkeep=2/2/True", "TS17-rmcur=1/1",
+        # 控件数组元素上的链式读/写（句柄走 vb6_CtrlArr_GetAt）+ ToolTipText 往返
+        "TS18-arr=1/True/True", "TS19-tip=True/True",
         "TS10-clear=0/0",
         "TABSTRIP-DONE")
     # ExpectExitCode 0 是这一批的硬刑：TS10 第一版就死在 438 —— 输出前九行全在、
@@ -7849,6 +7851,14 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_TabStrip_SetTabKey((void*)vb6_hwnd_TabStrip1, ((int32_t)(1)), (void*)(vb6_BSTR_FromStr(L"kk1")));',
         'vb6_TabStrip_SetTabImage((void*)vb6_hwnd_TabStrip1, ((int32_t)(1)), (int32_t)(0));',
         'vb6_TabStrip_SetSelectedIndex((void*)vb6_hwnd_TabStrip1, (int32_t)(1));  /* TabStrip.SelectedItem.Index */')
+    # C30-2 收尾之二：控件数组元素（句柄 = vb6_CtrlArr_GetAt）+ ToolTipText 往返。
+    # 这两针钉的是“方法调用那条**文本**通道也认数组元素”—— 它曾经只认 vb6_hwnd_
+    # ⇒ arrTab(0).Tabs.Add 直接发成 vb6_ComCall(HWND, …) → 真跑 438。
+    Test-EmitcShape "ts_emitc_arr" @("$Tests\ctrltabstrip\TabApp.vbp") @(
+        'vb6_TabStrip_TabsAdd((void*)vb6_CtrlArr_GetAt(&vb6_arr_arrTab, 0), 0, (void*)(vb6_BSTR_FromStr(L"a0")), (void*)(vb6_BSTR_FromStr(L"A0")), -1, 0, 1, 0);',
+        'vb6_TabStrip_SetTabCaption((void*)vb6_CtrlArr_GetAt(&vb6_arr_arrTab, 1), ((int32_t)(1)), (void*)(vb6_BSTR_FromStr(L"B1")));',
+        'vb6_TabStrip_SetTabToolTipText((void*)vb6_CtrlArr_GetAt(&vb6_arr_arrTab, 1), ((int32_t)(2)), (void*)(vb6_BSTR_FromStr(L"tip2")));',
+        'vb6_BSTR_Assign(&c1, vb6_TabStrip_GetTabToolTipText((void*)vb6_CtrlArr_GetAt(&vb6_arr_arrTab, 1), ((int32_t)(2))));')
     # 账 #468 §B164: 拼接站**自己**放掉左操作数（那一枚左操作数是「整枚就是一个 owned BSTR 档的 mint」
     #   ⇒ 那一站的发法从 Concat 变成 ConcatFree：值一个字没变，只是那一枚终于有人放了）⇒ 这几针随刀改钉。
     Test-EmitcShape "sl_emitc_native" @("$Tests\ctrlslider\SlidApp.vbp") @(

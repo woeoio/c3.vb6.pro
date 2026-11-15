@@ -170,14 +170,28 @@ bool CCodeGen::tabStripChainViewOf(const Expr* nodeExpr, TabChainView& v) const 
     }
     if (!base || base->kind != ASTNodeKind::MemberAccessExpr) return false;
     const auto& inner = static_cast<const MemberAccessExpr&>(*base);
-    if (!inner.object || inner.object->kind != ASTNodeKind::IdentifierExpr) return false;
 
-    const std::string ctrlName = static_cast<const IdentifierExpr&>(*inner.object).name;
+    // 根：`<ctrl>` 或 `<ctrlArr>(idx)`。控件数组元素的句柄不是标量槽，
+    // 走 `vb6_CtrlArr_GetAt(&vb6_arr_<名>, idx)`—— 与设计期 Init 那段同一口径
+    // （cgen_form_ctrl_style_apply.inc 的 TabStrip 块已经这么写了）。
+    const Expr* rootObj = inner.object.get();
+    Expr* arrIdx = nullptr;
+    if (rootObj && rootObj->kind == ASTNodeKind::IndexOrCallExpr) {
+        const auto& rootCall = static_cast<const IndexOrCallExpr&>(*rootObj);
+        if (!rootCall.callee || rootCall.callee->kind != ASTNodeKind::IdentifierExpr) return false;
+        if (rootCall.positional.empty() || !rootCall.positional[0]
+            || rootCall.omittedArgs.count(0)) return false;
+        arrIdx = const_cast<Expr*>(rootCall.positional[0].get());
+        rootObj = rootCall.callee.get();
+    }
+    if (!rootObj || rootObj->kind != ASTNodeKind::IdentifierExpr) return false;
+
+    const std::string ctrlName = static_cast<const IdentifierExpr&>(*rootObj).name;
     const std::string ctrlLower = Symbol::toLower(ctrlName);
     auto it = knownFormControls_.find(ctrlLower);
     if (it == knownFormControls_.end() || it->second != FrmControlType::TabStrip) return false;
-    // 控件数组元素：句柄跟 `vb6_CtrlArr_GetAt(&vb6_arr_<名>, i)` 走，本题不接。
-    if (knownControlArrays_.count(ctrlLower)) return false;
+    // 控件数组名不带下标当实例用是 VB6 的错写，不在这里接手
+    if (knownControlArrays_.count(ctrlLower) && !arrIdx) return false;
 
     const std::string sub = Symbol::toLower(inner.memberName);
     const std::string mem = Symbol::toLower(node.memberName);
@@ -193,13 +207,22 @@ bool CCodeGen::tabStripChainViewOf(const Expr* nodeExpr, TabChainView& v) const 
     v.sub = sub;
     v.member = mem;
     v.idxArg = idxArg;
+    v.arrIdx = arrIdx;
     return true;
+}
+
+std::string CCodeGen::tabStripHwndTextOf(TabChainView& v) {
+    auto oit = knownFormControlOriginalNames_.find(Symbol::toLower(v.ctrl));
+    const std::string orig = (oit != knownFormControlOriginalNames_.end()) ? oit->second : v.ctrl;
+    if (!v.arrIdx) return "vb6_hwnd_" + cIdent(orig);
+    emitExpr(*v.arrIdx);
+    return "vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(orig) + ", " + lastExpr_ + ")";
 }
 
 bool CCodeGen::tabStripChainReadExpr(const Expr* nodeExpr, std::string& out) {
     TabChainView v;
     if (!tabStripChainViewOf(nodeExpr, v)) return false;
-    const std::string hwnd = "vb6_hwnd_" + cIdent(v.ctrl);
+    const std::string hwnd = tabStripHwndTextOf(v);
     // 当前选中页号（1 基，无选中=0）。RTL 那侧直接就是 TCM_GETCURSEL 的投影。
     const std::string sel = "vb6_TabStrip_GetSelectedIndex((void*)" + hwnd + ")";
 
@@ -222,6 +245,8 @@ bool CCodeGen::tabStripChainReadExpr(const Expr* nodeExpr, std::string& out) {
 
     if (v.member == "caption")  { out = "vb6_TabStrip_GetTabCaption((void*)" + hwnd + ", " + idx + ")"; return true; }
     if (v.member == "key")      { out = "vb6_TabStrip_GetTabKey((void*)" + hwnd + ", " + idx + ")"; return true; }
+    if (v.member == "tooltiptext" || v.member == "tooltip")
+                                 { out = "vb6_TabStrip_GetTabToolTipText((void*)" + hwnd + ", " + idx + ")"; return true; }
     if (v.member == "index")    { out = idx; return true; }
     if (v.member == "image")    { out = "vb6_TabStrip_GetTabImage((void*)" + hwnd + ", " + idx + ")"; return true; }
     // Tabs(i).Selected 是 VB6 的 Boolean；-1/0 是 VB6 的真值口径（与 Visible 那一族同）。
