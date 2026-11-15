@@ -85,6 +85,8 @@ static void addFormsSources(MsvcDriverOptions& opts, const std::string& rtlDir) 
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_grid.c");
     // ai/029 C30-6: MSHFlexGrid —— 同第四处登记（少这一行 = 解包/内嵌都对，cl 不编它）。
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_mshflexgrid.c");
+    // ai/029 C30-10: TeeChart 内置图表 —— 同第六处登记（少这一行 = 解包/内嵌都对，cl 不编它）。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_teechart.c");
     // 2026-10-06: Form/Printer 绘图方法家族 (PSet/Line/Circle/Point/Cls) ——
     // **第六处登记**。前五处 (c3rtl.rc / rtl_embedded.hpp 的 ID /
     // rtl_embedded.cpp 的清单 / vb6forms.h 的挂头 / .h 自身) 全对时,

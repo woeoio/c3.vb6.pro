@@ -351,6 +351,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_maskededit.c # C30-3:
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_adodc.c # C30-5: Adodc (ACE 底座, ODBC 层)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_grid.c # C30-5: DataGrid (自绘表格)
 ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_mshflexgrid.c # C30-6: MSHFlexGrid (字符串矩阵, 不依赖 ACE)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_teechart.c # C30-10: TeeChart 内置图表 (自绘, 不加载 TeeChart5.ocx)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_axsite.c
 ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_axcontainer.c   # Fix 148/160 补登记 (遗漏, 改它不会触发 .rc 重编)
     # vb6forms_axsite 按族细分 (2026-09-20): 内部头 + axsite/ 下 5 个族编译单元

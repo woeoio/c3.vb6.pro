@@ -1192,6 +1192,27 @@ void    vb6_Slider_SimStdEvent(void* hwnd, int32_t kind, int32_t wParam);
 // 类名 VB6_MSHFLEXGRID，注册在 vb6forms_mshflexgrid.c。
 void    vb6_RegisterMshFlexGridClass(void* hInstance);
 
+// ==================== C30-10: TeeChart（内置图表） ====================
+// TeeChart.TChart 的内置实现（自注册窗口类 VB6_TCHART，不加载 TeeChart5.ocx）。
+// 为什么不再走 axsite：OCX 只有 32 位，--arch x64 永远链不上；内置后两档架构同一条路。
+// 接口面是 C 层的最小集（Series 自动建号 + 一次完整绘制），深成员
+// （Series(i).AsPie.ExplodedSlice.Value(i)）下一步接 memberobj 的 IDispatch。
+void    vb6_RegisterTChartClass(void* hInstance);
+
+int32_t vb6_TChart_SeriesCount(void* hwnd);
+int32_t vb6_TChart_AddSeries(void* hwnd, int32_t type);
+int32_t vb6_TChart_SeriesAdd(void* hwnd, int32_t idx, double y);
+int32_t vb6_TChart_SeriesAddXY(void* hwnd, int32_t idx, double x, double y);
+int32_t vb6_TChart_FillSampleValues(void* hwnd, int32_t idx, int32_t count);
+void    vb6_TChart_SeriesClear(void* hwnd, int32_t idx);
+void    vb6_TChart_SetSeriesColor(void* hwnd, int32_t idx, int32_t bgr);
+void    vb6_TChart_SetSeriesTitle(void* hwnd, int32_t idx, const wchar_t* title);
+void    vb6_TChart_SetHeaderText(void* hwnd, const wchar_t* text);
+void    vb6_TChart_SetPanelColor(void* hwnd, int32_t bgr);
+void    vb6_TChart_SetPanelMargin(void* hwnd, int32_t which, int32_t px);
+void    vb6_TChart_Repaint(void* hwnd);
+int32_t vb6_TChart_PaintCount(void* hwnd);
+
 int32_t vb6_MshFlexGrid_GetRows(void* hwnd);
 void    vb6_MshFlexGrid_SetRows(void* hwnd, int32_t v);
 int32_t vb6_MshFlexGrid_GetCols(void* hwnd);

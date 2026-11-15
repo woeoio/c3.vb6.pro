@@ -235,6 +235,12 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
         || lower.find("mshflxgd") != std::string::npos
         || lower.find("msflxgrd") != std::string::npos) return FrmControlType::MshFlexGrid;
 
+    // C30-10: TeeChart（TeeChart.TChart / TChart / TeeChart5.ocx 三族写法）。
+    // 命中这一格就不再走 ActiveX 宿主: OCX 只有 32 位, 宿主路线下 --arch x64 永远链不上。
+    // "tchart" 与上面任何一条互不为子串。
+    if (lower.find("teechart") != std::string::npos
+        || lower.find("tchart") != std::string::npos) return FrmControlType::TeeChart;
+
     return FrmControlType::Unknown;
 }
 
@@ -339,6 +345,8 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         case FrmControlType::DataGrid:      return "VB6_DATAGRID";
     // C30-6: MSHFlexGrid / MSFlexGrid —— 自注册窗口类（字符串矩阵 + 自绘 + 键盘编辑）。
     case FrmControlType::MshFlexGrid:   return "VB6_MSHFLEXGRID";
+    // C30-10: TeeChart —— 自注册窗口类 (comctl32 里没有这个类, 必须先注册)。
+    case FrmControlType::TeeChart:      return "VB6_TCHART";
         case FrmControlType::Menu:         return nullptr;       // 菜单, 非窗口
         case FrmControlType::WebBrowser:  return nullptr;       // WebView2, 运行时动态创建
         default:                           return nullptr;

@@ -207,6 +207,9 @@ enum RtlResourceID {
     RTL_VB6FORMS_GRID_C                    = 244,
     // ai/029 C30-6: MSHFlexGrid / MSFlexGrid —— 字符串矩阵表格（Rows×Cols 自存，不依赖 ACE）
     RTL_VB6FORMS_MSHFLEXGRID_C             = 245,
+    // ai/029 C30-10: TeeChart 内置图表（自绘窗口类 VB6_TCHART，不加载 TeeChart5.ocx）
+    // ⚠ id 必须与 src/driver/c3rtl.rc 的 247 对上。
+    RTL_VB6FORMS_TEECHART_C                = 247,
     // 账 #181: 崩溃轨迹每进程只记一次的闸 (零依赖头, 见文件头注释)
     RTL_VB6RTL_CRASH_H                     = 222,
 

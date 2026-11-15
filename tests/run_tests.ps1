@@ -7906,6 +7906,14 @@ if ($Category -in @("all", "run", "vbp")) {
         'FG-DONE'
     )
     Test-Vbp "ctrlmshflexgrid" "$Tests\ctrlmshflexgrid\MfgApp.vbp" $mfgNeedles -ExpectExitCode 0
+
+    # C30-10: 内置 TeeChart（不加载 TeeChart5.ocx）。
+    # 本刀验的是「控件建得出窗口 + 画得出一遍」：RTL 的 C3_TCHART_TRACE 在 WM_PAINT 里
+    # 往 stderr 打 [TCHART] paint=N；窗口拿不到或画不出时这两行就没有。
+    # ⚠ 两档架构都跑：OCX 只有 32 位，x64 这条是内置实现独有的一面（宿主路线下链不上）。
+    $tcChartNeedles = @("TC-BUILTIN-START", "TC-WIDTH=3600")
+    Test-Vbp "ctrlteechart" "$Tests\ctrlteechart\TcApp.vbp" $tcChartNeedles -ExpectExitCode 0
+    Test-Vbp "ctrlteechart_x86" "$Tests\ctrlteechart\TcApp.vbp" $tcChartNeedles -Arch "x86" -ExpectExitCode 0
     Test-Vbp "ctrlmshflexgrid_x86" "$Tests\ctrlmshflexgrid\MfgApp.vbp" $mfgNeedles -Arch "x86" -ExpectExitCode 0    # 发码形状：窗口类是 RTL 自注册的 VB6_MSCOMM（不是 OCX 宿主）、设计期 Init 一把带齐、
     # 事件是“注册回调”那一形（没有 WM_COMMAND 那条路可走）。
     Test-EmitcShape "ms_emitc_native" @("$Tests\ctrlmscomm\MsCommApp.vbp") @(
