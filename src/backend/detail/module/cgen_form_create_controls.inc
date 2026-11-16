@@ -283,6 +283,66 @@ bool hasMs = false;   // C30-4 MSComm（同上：身份窗要自收读线程投�
                     }
                 }
             }
+
+        // C30-10 P2-b: TeeChart 设计期外观。`.frm` 里那句
+        //   OleObjectBlob = "Xxx.frx":0000
+        // 指向的就是 Delphi TPF0 流（VB6 建完控件后拿它 IPersistStreamInit::Load 灌进 OCX）。
+        // 内置控件没有 OCX，这里在编译期解析、按结果发 AddSeries / SeriesColor / Title / Header。
+        if (ctrl.controlType == FrmControlType::TeeChart) {
+            auto obIt = ctrl.properties.find("OleObjectBlob");
+            if (obIt != ctrl.properties.end() && obIt->second.type == FrmValueType::FrxReference) {
+                FrxOleBlob ob = FrxReader::readOleBlob(obIt->second.frxOffset);
+                Tpf0Comp tpfRoot;
+                if (ob.found && Tpf0Reader::parse(ob.bytes, tpfRoot)) {
+                    // 根组件的 `Title.Text.Strings` = 图表标题（列表首元素）
+                    const Tpf0Value* ttl = Tpf0Reader::findProp(tpfRoot.props, "Title.Text.Strings");
+                    if (ttl && ttl->kind == Tpf0Kind::List && !ttl->items.empty()
+                        && !ttl->items[0].str.empty()) {
+                        c_.emitLine("{ wchar_t* vb6_tch = vb6_Utf8ToWide(\""
+                                    + escapeCString(ttl->items[0].str) + "\");");
+                        c_.emitLine("  if (vb6_tch) { vb6_TChart_SetHeaderText((void*)" + ctrlHwndVar
+                                    + ", vb6_tch); free(vb6_tch); } }");
+                    }
+                    int serIdx = 0;
+                    for (const auto& ch : tpfRoot.children) {
+                        int stype = -1;
+                        if (ch.cls == "TLineSeries") stype = 0;
+                        else if (ch.cls == "TBarSeries") stype = 1;
+                        else if (ch.cls == "THorizBarSeries") stype = 2;
+                        else if (ch.cls == "TAreaSeries") stype = 3;
+                        else if (ch.cls == "TPointSeries") stype = 4;
+                        else if (ch.cls == "TPieSeries") stype = 5;
+                        if (stype < 0) continue;   // 未接的类型不发明默认值
+                        c_.emitLine("vb6_TChart_AddSeries((void*)" + ctrlHwndVar + ", "
+                                    + std::to_string(stype) + ");");
+                        // SeriesColor 是 Delphi 颜色标识符（clRed…），TColor 与 COLORREF 同序
+                        const std::string cid = Tpf0Reader::propStr(ch.props, "SeriesColor");
+                        struct { const char* n; int v; } kMap[] = {
+                            {"clBlack",0x000000},{"clMaroon",0x000080},{"clGreen",0x008000},
+                            {"clOlive",0x008080},{"clNavy",0x800000},{"clPurple",0x800080},
+                            {"clTeal",0x808000},{"clGray",0x808080},{"clSilver",0xC0C0C0},
+                            {"clRed",0x0000FF},{"clLime",0x00FF00},{"clYellow",0x00FFFF},
+                            {"clBlue",0xFF0000},{"clFuchsia",0xFF00FF},{"clAqua",0xFFFF00},
+                            {"clWhite",0xFFFFFF},{nullptr,0}
+                        };
+                        for (int mi = 0; kMap[mi].n; ++mi) {
+                            if (_stricmp(cid.c_str(), kMap[mi].n) == 0) {
+                                c_.emitLine("vb6_TChart_SetSeriesColor((void*)" + ctrlHwndVar + ", "
+                                            + std::to_string(serIdx) + ", "
+                                            + std::to_string(kMap[mi].v) + ");");
+                                break;
+                            }
+                        }
+                        if (!ch.name.empty()) {
+                            c_.emitLine("vb6_TChart_SetSeriesTitle((void*)" + ctrlHwndVar + ", "
+                                        + std::to_string(serIdx) + ", L\""
+                                        + escapeCString(ch.name) + "\");");
+                        }
+                        serIdx++;
+                    }
+                }
+            }
+        }
     };
 
     // 账 #160: 声明序号 —— 设计期没写 `TabIndex` 时的回落值（见 emitDesignerTabIndexProp）。

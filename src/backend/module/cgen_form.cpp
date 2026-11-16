@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <vector>
 #include "project/frx_reader.hpp"
+#include "project/tpf0_reader.hpp"   // C30-10 P2: TeeChart 设计期外观（.frx 的 OleObjectBlob = Delphi TPF0 流）
 #include <algorithm>
 #include <cctype>
 #include <iostream>
