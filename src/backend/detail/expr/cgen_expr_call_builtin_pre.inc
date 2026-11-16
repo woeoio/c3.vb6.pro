@@ -373,24 +373,24 @@
                                 variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
                         }
                     }
+                    // C30-10 第三十六刀: Integer 档元素保真 —— VB6 的 `Array(1)(0)` 是
+                    // Variant/Integer (VarType 2 / TypeName "Integer"), 而下面的
+                    // `isLongArg ⇒ vb6_ArraySetLong` 把它写成 VT_I4 (VarType 3)。
+                    // 判据不在本处: 只问装箱权威 isNarrowIntExpr (小字面量 / `&H`≤0xFFFF /
+                    // `3%` / `As Integer` 变量 / Integer 档用户 Const 与内建那一族)。
+                    // 箱子与 wrapVariantValue 的 `case Long` 同一个 (vb6_VariantInt),
+                    // 而且**不新开出口**: 只填 variantSetter, 由上面那条唯一的
+                    // ArraySetVariant 发射行带出去 —— 静态哨兵 R2
+                    // (scripts/check_array_literal_variants.ps1) 按正则数出口, 要求恰好 1 处。
+                    if (variantSetter.empty() && isNarrowIntExpr(node.positional[i].get()))
+                        variantSetter = "vb6_VariantInt((int16_t)(" + argExpr + "))";
                     if (!variantSetter.empty()) {
                         c_.emitLine("vb6_ArraySetVariant(" + arrVar + ", " + std::to_string(i) + ", " + variantSetter + ");");
                         continue;
                     }
                     // Detect argument type for proper setter selection
-                    // C30-10 第三十六刀: Integer 档元素保真 —— VB6 的 `Array(1)(0)` 是
-                    // Variant/Integer (VarType 2 / TypeName "Integer"), 而这里原来的
-                    // `isLongArg ⇒ vb6_ArraySetLong` 把它写成 VT_I4 (VarType 3)。判据
-                    // 不在本处: 只问装箱权威 isNarrowIntExpr (小字面量 / `&H`≤0xFFFF /
-                    // `3%` / `As Integer` 变量 / Integer 档用户 Const 与内建那一族)。
-                    // 出口是 vb6_ArraySetVariant + vb6_VariantInt —— 与 wrapVariantValue 的
-                    // `case Long` 同一个箱子, 不新开档位表。
-                    if (isNarrowIntExpr(node.positional[i].get())) {
-                        c_.emitLine("vb6_ArraySetVariant(" + arrVar + ", " + std::to_string(i)
-                                    + ", vb6_VariantInt((int16_t)(" + argExpr + ")));");
-                        continue;
-                    }
-                    bool isLongArg = false;                    bool isDoubleArg = false;
+                    bool isLongArg = false;
+                    bool isDoubleArg = false;
                     if (node.positional[i]->kind == ASTNodeKind::LiteralExpr) {
                         auto& lit = static_cast<LiteralExpr&>(*node.positional[i]);
                         if (lit.literalKind == LiteralKind::Integer) isLongArg = true;

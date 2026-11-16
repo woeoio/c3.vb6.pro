@@ -4,7 +4,12 @@
 ' VT_ARRAY|VT_VARIANT(8204), and a date literal is VT_DATE(7).
 ' Before this knife every one of them went through vb6_ArraySetLong (VT_I4=3),
 ' and Nothing / a nested array pushed a pointer into an int32 parameter.
-' The plain Long/BSTR/Double arms below are the zero-regression guard:
+' C30-10 knife 36: an Integer-tier element (small literal / &H<=0xFFFF / 3% /
+' `As Integer` variable / user Const / the Integer-returning builtins) is now
+' boxed as VT_I2, which is what VB6 says: `Array(7)(0)` is VarType 2,
+' TypeName "Integer" (cscript cross-check: AL-long=2, AL-i4=2). So AL-long and
+' AL-i4 below answer 2, not 3.
+' The plain BSTR/Double arms below are the zero-regression guard:
 ' their emitted setter must stay byte-for-byte what it was.
 Option Explicit
 

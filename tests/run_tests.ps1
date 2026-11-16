@@ -6559,7 +6559,7 @@ if ($Category -in @("all", "run", "bas")) {
     # 原本一律压成 SetLong (VT_I4), Nothing/嵌套数组还把指针塞进 int32 形参。
     # 读数来自真 VB6 口径: bool=11 / null=1 / empty=0 / nothing=9 / nested=8204 / date=7;
     # 末尾三枚是零回归护栏 (普通 Long/BSTR/Double 元素档必须逐字不动)。
-    Add-BasTest "jsonfast_array_literal_variants" "$Tests\jsonfast_611\ArrayLiteralVariants.bas" @("AL-bt=11", "AL-bf=11", "AL-null=1", "AL-empty=0", "AL-nothing=9", "AL-nested=8204", "AL-nested-val=2", "AL-long=3", "AL-date=7", "AL-i4=3", "AL-bstr=8", "AL-r8=5", "AL-DONE")
+    Add-BasTest "jsonfast_array_literal_variants" "$Tests\jsonfast_611\ArrayLiteralVariants.bas" @("AL-bt=11", "AL-bf=11", "AL-null=1", "AL-empty=0", "AL-nothing=9", "AL-nested=8204", "AL-nested-val=2", "AL-long=2", "AL-date=7", "AL-i4=2", "AL-bstr=8", "AL-r8=5", "AL-DONE")
     # 账 #611 第349刀: 多维数组经真外部 COM (Scripting.Dictionary) 往返。修前出站
     # vb6_ComPackArrayOut 的 ND 支只收 blittable 元素档, vb6_sa_variant 直接 return
     # => VT_EMPTY; 入站两条臂又只认 cDims==1。读数: 2D 维界/列主序/混合元素档、
