@@ -13133,14 +13133,14 @@ if ($VbpShardTotal -gt 1) {
 # 不把「能编」当「跑了」: 这两条是真的把两侧都跑起来再逐行 diff。
 #   退出码契约（由测试脚本自己给）: 0=PASS, 2=SKIP（本机缺 cscript 的 VBScript 引擎/缺 python）, 其它=FAIL。
 #   SKIP 会进汇总行的 skip 计数，不算 PASS —— 但也不为此把判据降成「只编不跑」。
-function Test-RegexpTextCompare {
-    param([string]$Name, [string]$ScriptFile)
+function Test-TextCompare {
+    param([string]$Name, [string]$ScriptFile, [string]$SubDir = "regexp_native")
     $script:total++
     Write-Host -NoNewline ("  [TEXT] {0} ... " -f $Name)
     $psExe = "powershell"
     $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
     if ($ps7) { $psExe = $ps7.Source }
-    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Tests "regexp_native\$ScriptFile") -C3 $C3 2>&1
+    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Join-Path $Tests $SubDir) $ScriptFile) -C3 $C3 2>&1
     $code = $LASTEXITCODE
     $line = @($out | ForEach-Object { $_.ToString() } | Where-Object { $_ -match '^(PASS|FAIL|SKIP) ' } | Select-Object -First 1)
     if ($code -eq 0) {
@@ -13238,8 +13238,9 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }
     if (Enter-StaticShard) { Test-ComSigCollisionPolicy }
     # --- 文本对照 (C30-10): 真跑两侧再 diff，不是静态查表 ---
-    if (Enter-StaticShard) { Test-RegexpTextCompare "regexp_native" "run_compare.ps1" }
-    if (Enter-StaticShard) { Test-RegexpTextCompare "regexp_ext" "run_ext_compare.ps1" }
+    if (Enter-StaticShard) { Test-TextCompare "regexp_native" "run_compare.ps1" }
+    if (Enter-StaticShard) { Test-TextCompare "regexp_ext" "run_ext_compare.ps1" }
+    if (Enter-StaticShard) { Test-TextCompare "dict_native" "run_compare.ps1" "dict_native" }
     if (Enter-StaticShard) { Test-BuiltinConstAuthority }
     if (Enter-StaticShard) { Test-TestHelperIntegrity }
     if (Enter-StaticShard) { Test-ModuleOrderAuthority }

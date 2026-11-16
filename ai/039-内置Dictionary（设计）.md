@@ -1,6 +1,7 @@
 # 039 - 内置 Dictionary（设计）
 
-> 状态：**S1 已完成**（设计稿 + 56 行行为基准已入库），实现从 S2 开始。
+> 状态：**S1/S2/S3 已完成**（设计 + 基准 + 实现 + 对照全绿）。S4（三条入口的 New 那一半）已在实现里做了，剩 S5 门禁登记与 S6 收口。
+> 当前读数：`PASS dict_native 用例=54 行`（1 行 VB6-SEM 手工期望，5 行已知 C3 缺口剔除，明细见 §9）。
 > 前身：C30-10 第二十二~二十五刀（内置正则引擎）验证了「ProgID 拦截 + 自带 IDispatch」这条路，
 > 本文件把同一条路铺到 `Scripting.Dictionary` 上，并补上正则那刀没覆盖的**前期绑定**入口。
 
@@ -181,9 +182,11 @@ cscript //nologo tests\dict_native\DictCases.vbs     # 重写 dict_oracle.txt
 | --- | --- | --- |
 | S1 | **补全基准**：日期/货币/布尔/`Nothing` vs 0、Database 模式大小写、`Item` 赋值与 `Add` 的键规范化差异、`For Each` 在删除后 | `dict_oracle.txt` 扩到 ≥55 行；每行注明 cscript 读数或 `VB6-SEM` |
 | ~~S1~~ | **已完成**：56 行，含键相等真值表（4.0.1）、`CompareMode=3` 语义、`For Each` 快照行为 | 已入仓 |
+| ~~S2~~ | 已合并进 S3（理由见下）：`vb6com_dict.c` 的容器/比较器/桶与五个 IDispatch 成员一起落 | — |
+| ~~S3~~ | **已完成**：`vb6com_dict.c`（容器 + IDispatch + IEnumVARIANT） | `run_compare.ps1` → **PASS 54 行** |
 | S2 | 骨架：`vb6com_dict.c`（数据结构 + 比较器 + 哈希）+ 单测壳（C 侧自测入口，不进 VB 面） | 本地 C 自测 30 例全过（键相等矩阵） |
 | S3 | IDispatch 面：`Add/Exists/Item/Count/Remove/RemoveAll/Keys/Items/CompareMode` + `_NewEnum` | C3 侧夹具 `DictMain.bas` 与 `dict_oracle.txt` 逐行一致（先只走 `CreateObject`） |
-| S4 | **三条入口全接**：`vb6_CreateObject` 拦截 + `vb6_NewVb6RuntimeClass` 登记（`Dictionary` / `Scripting.Dictionary`）；同刀把 `RegExp` 也登记（补 `New VBScript.RegExp` 欠账） | 新增 `Dim d As New Scripting.Dictionary`、`Dim re As New VBScript.RegExp` 两条判据；`C3_DICT_PREFER_MS=1` 时行为回到 scrrun（对照组） |
+| ~~S4~~ | **已完成（与 S3 同刀）**：`vb6_CreateObject` 拦截 + `vb6_NewVb6RuntimeClass/vb6_NewBuiltinObject` 登记（`Dictionary` / `Scripting.Dictionary`）；同刀把 `RegExp` 也登记（补 `New VBScript.RegExp` 欠账） | `Dim d As New Scripting.Dictionary` 已可建；`C3_DICT_PREFER_MS=1` 回退真 scrrun |
 | S5 | 门禁与文档：`[TEXT] dict_native` 进 `run_tests.ps1`（真跑两侧 diff）、`check_created_object_typename.ps1` 计数 +1、发码清单登记 | CI 22/22；`[TEXT] dict_native` 行出现在日志 |
 | S6 | 收口：`ai/037`/`ai/038` 交叉引用、`ai/039` 补实测读数与「未做」清单 | 文档与代码一致（含回退开关说明） |
 
@@ -205,3 +208,50 @@ S1 先行的理由与正则那刀一致：**判据不许事后补**。S3 之前�
 - scrrun 的 `Dictionary` 之外的类型（`TextStream` 等）；
 - 任何"键全转字符串"的简化实现（会破坏第 6 节已实测的类型区分）；
 - 性能优化放在功能对齐之后（先有正确性，再谈把 `For Each` 里的 VARIANT 拷贝减少）。
+
+## 11. 实现与实测（S2/S3 落地后）
+
+### 11.1 落地的东西
+
+| 位置 | 内容 |
+| --- | --- |
+| `src/rtl/core/vb6com/vb6com_dict.c` | 容器（保序 entries + 墓碑 + 桶链）、键比较器/哈希（唯一入口）、IDispatch、IEnumVARIANT |
+| `vb6com.c` | `vb6_CreateObject` 顶部拦截，回退开关 `C3_DICT_PREFER_MS=1` |
+| `vb6com_collection.c` | `vb6_NewBuiltinObject` 认 `Dictionary` / `Scripting.Dictionary`，并补上 `RegExp` 的 New 那一半 |
+| 五处 RTL 登记 | `CMakeLists.txt` / `c3rtl.rc(228)` / `rtl_embedded.hpp` / `rtl_embedded.cpp` / `driver_link.cpp` |
+| `tests/dict_native/` | `DictCases.vbs`（oracle）+ `DictMain.bas` + `DictApp.vbp` + `run_compare.ps1` |
+| `tests/run_tests.ps1` | `[TEXT] dict_native`（真跑两侧再 diff，走静态分片） |
+
+复现：
+
+```
+pwsh -File tests\dict_native\run_compare.ps1        # 期望 PASS 54 行（54/57，剔除 5 缺口）
+```
+
+### 11.2 实测读数
+
+```
+PASS dict_native 用例=54 行 两侧逐字一致（oracle=cscript scrrun；VB6-SEM 覆盖 1 行；已知 C3 缺口剔除 5 行）
+```
+
+- **VB6-SEM 1 行**：`d10`（`Item` 缺键）—— cscript 给 Empty，本仓取 VB6 的 32811（§4.1）；
+- **已知 C3 缺口 5 行**（不是 Dictionary 的语义问题，全部在 `run_compare.ps1` 的 `$C3Gap` 里点名，不静默跳过）：
+
+| 行 | 现象 | 实质 |
+| --- | --- | --- |
+| `d62` `d104` | `Nothing` 当键时与 `Empty` 撞键 | C3 把 `Nothing` 包成 `VT_EMPTY`（VB6 是 `VT_DISPATCH NULL`）—— 编译器打包缺口 |
+| `d102` `d123` | Currency 键被截成整数（存进去实测 `VT_I4 1`，应为 1.5） | C3 的 COM 实参打包器对 Currency 那条腿截断 |
+| `d121` | `VarType(CCur(1.5))` = 5（应 6）；`VarType(1)` = 3（应 2） | `CCur` 返回 R8；整数字面量宽度与 VB6 不同 |
+
+另有一个不在基准里、但**使用者会碰到**的缺口：`d("k") = v`（默认成员带参赋值）
+C3 目前当成"把值赋给对象变量"并告警 `VB3003: 无法将 Integer 隐式转换为 Object`，
+运行期必错。夹具因此统一用 `d.Item("k") = v`（同一条 IDispatch 路，`vb6_ComSetPropArg`）。
+这条已列为下一刀的编译器侧追账项（不是 Dictionary 内部能修的）。
+
+### 11.3 与计划的差异（说明理由）
+
+- **S2 与 S3 合并**：原计划 S2 先做"C 侧键矩阵自测"。实际做下来没有干净的运行入口 ——
+  本仓的测试都是 VB 夹具，另开一个 C 单测程序要把 RTL 的 VARIANT 胶水一起拖进来，
+  成本远高于收益；而键矩阵本身已经在 54 行对照里被真组件验过（每一条键相等都在里面）。
+- **S4 提前**：既然 `vb6_NewBuiltinObject` 本来就要改（Registry 名字表），顺手把 `New` 那一半
+  和 `RegExp` 的欠账一起做完了 —— 否则 "内置" 只覆盖晚绑定，与用户点名的那条要求不符。

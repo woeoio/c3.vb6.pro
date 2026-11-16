@@ -7,7 +7,7 @@ d04|count=1
 d05|cmpmode=0
 d10|item_missing_err=0
 d11|add_dup_err=457
-d12|remove_missing_err=0
+d12|remove_missing_err=32811
 d20|keys_abc=a,b,c
 d21|items_abc=1,2,3
 d22|keys_after_remove_b=a,c
@@ -51,6 +51,9 @@ d109|item_set_existing: keys=a,b val=99
 d110|cmpmode3: err=0 readback=3
 d111|cmpmode_neg: err=5
 d112|vartypes: count=3 keys=8204 keyelem=8
+d121|vartype_ccur=6 dbl=5 int=2
+d122|ccur_value=1.5
+d123|stored_key: vartype=6 val=1.5
 d113|object_value: isobject=True typename=Dictionary
 d114|cm3_dedupe: add_lower_err=457 count=1 readback=3
 d115|empty_key_text: zero=True empty=True empStr=True

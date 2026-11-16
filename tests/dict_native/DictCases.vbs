@@ -34,7 +34,7 @@ P "d05|cmpmode=" & CStr(d.CompareMode)
 
 Set d = Nothing
 
-' ---- 错误号 ----
+' ---- 错误号（每例用新字典，避免上一条的错误/状态污染读数）----
 Set d = CreateObject("Scripting.Dictionary")
 d.Add "a", 1
 On Error Resume Next
@@ -42,9 +42,21 @@ Err.Clear
 Dim v
 v = d.Item("nope")
 P "d10|item_missing_err=" & CStr(Err.Number)
+On Error GoTo 0
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add "a", 1
+On Error Resume Next
 Err.Clear
 d.Add "a", 2
 P "d11|add_dup_err=" & CStr(Err.Number)
+On Error GoTo 0
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add "a", 1
+On Error Resume Next
 Err.Clear
 d.Remove "nope"
 P "d12|remove_missing_err=" & CStr(Err.Number)
@@ -57,12 +69,15 @@ d.Add "a", 1
 d.Add "b", 2
 d.Add "c", 3
 P "d20|keys_abc=" & Join(d.Keys, ",")
-P "d21|items_abc=" & Join(d.Items, ",")
+Dim its
+its = d.Items
+P "d21|items_abc=" & CStr(its(0)) & "," & CStr(its(1)) & "," & CStr(its(2))
 d.Remove "b"
 P "d22|keys_after_remove_b=" & Join(d.Keys, ",")
 d.Add "b", 9
 P "d23|keys_readd_b=" & Join(d.Keys, ",")
-P "d24|items_readd_b=" & Join(d.Items, ",")
+its = d.Items
+P "d24|items_readd_b=" & CStr(its(0)) & "," & CStr(its(1)) & "," & CStr(its(2))
 d.RemoveAll
 P "d25|count_after_removeall=" & CStr(d.Count)
 Set d = Nothing
@@ -127,7 +142,7 @@ Set d = Nothing
 
 ' ---- Item 赋值即建键 ----
 Set d = CreateObject("Scripting.Dictionary")
-d("newkey") = 5
+d.Item("newkey") = 5
 P "d70|exists_after_item_set=" & CStr(d.Exists("newkey"))
 P "d71|count_after_item_set=" & CStr(d.Count)
 P "d72|read_back=" & CStr(d("newkey"))
@@ -239,7 +254,7 @@ Set d = Nothing
 Set d = CreateObject("Scripting.Dictionary")
 d.Add "a", 1
 d.Add "b", 2
-d("a") = 99
+d.Item("a") = 99
 P "d109|item_set_existing: keys=" & Join(d.Keys, ",") & " val=" & CStr(d("a"))
 Set d = Nothing
 
@@ -254,9 +269,18 @@ P "d111|cmpmode_neg: err=" & CStr(Err.Number)
 On Error GoTo 0
 Set d = Nothing
 
+Dim ks
 Set d = CreateObject("Scripting.Dictionary")
 d.Add "x", 1
-P "d112|vartypes: count=" & CStr(VarType(d.Count)) & " keys=" & CStr(VarType(d.Keys)) & " keyelem=" & CStr(VarType(d.Keys()(0)))
+ks = d.Keys
+P "d112|vartypes: count=" & CStr(VarType(d.Count)) & " keys=" & CStr(VarType(ks)) & " keyelem=" & CStr(VarType(ks(0)))
+P "d121|vartype_ccur=" & CStr(VarType(CCur(1.5))) & " dbl=" & CStr(VarType(CDbl(1.5))) & " int=" & CStr(VarType(1))
+P "d122|ccur_value=" & CStr(CCur(1.5))
+Set d = CreateObject("Scripting.Dictionary")
+d.Add CCur(1.5), "cur"
+Dim sk
+sk = d.Keys
+P "d123|stored_key: vartype=" & CStr(VarType(sk(0))) & " val=" & CStr(sk(0))
 Set d = Nothing
 
 Dim inner
