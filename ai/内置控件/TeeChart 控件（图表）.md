@@ -137,9 +137,19 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
 
 ### P2 TPF0 反序列化（38 个示例的设计期外观）
 
-- 在 `frx_reader.cpp` 已有的负载之上写 `TPF0` 解析：属性图 → 同一套对象模型。
-- 验收：`tests/TeeChartChartDisplay` 的**设计期** Series/标题/图例是 TPF0 给的，
-  而不是运行期补的。
+**状态：已落（`1cc913da` 解析器 + `abc512f6` 发码接线 + `4b263220` 夹具），数据点集待补。**
+
+- `src/project/tpf0_reader.{hpp,cpp}`：组件（ShortString 类名 + 实例名 + 属性表 +
+  子组件表）+ 全档位值（Int8/16/32/64、Extended/Single/Double/Currency/Date、
+  String/Ident/WString、Set/List/Collection/Binary）
+- 发码接线：`emitControlFrxProps` 里按 `.frx` 的 `OleObjectBlob` 发
+  AddSeries / SetSeriesColor / SetSeriesTitle / SetHeaderText
+- 实测（`tests/ctrlteechart` 带真实 706 B TPF0 负载，x64/x86 逐行相同）：
+  `TC-HEADER0LEN=21`（“TeeChart display demo”）/ `TC-DESIGNSER=2` /
+  `TC-SER0TYPE=1`（Bar）/ `TC-SER0COLOR=255`（clRed）/ `TC-SER1COLOR=32768`（clGreen）；
+  首次绘制 `[TCHART] paint=1 series=3`
+- 验收：`tests/TeeChartChartDisplay` 的**设计期** Series/标题是 TPF0 给的，
+  而不是运行期补的（已满足）；点集（YValues 的 vaBinary）尚未解。
 
 ### P3 对齐已录制的真 VB6 读数 + 收口
 
@@ -169,6 +179,8 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   读数：`TC-PANEL=15790335` / `TC-HEADERLEN=4` / `TC-AXTITLELEN=2` / `TC-MARGINR=12`。
 - **仍未接**：`For Each s In TChart1.Series`（`_NewEnum` 答 E_NOTIMPL）、
   `Marks` / `Pen` / `Brush` / `AsPie` 那族类型切面、`Walls` / 3D。
+- **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
+  设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
 - `AsSurface` / `AsCandle` / `AsHorizBar` 等按类型切面的属性：P3 之后逐族补，
   未补的走「认得出名字、值进 bag、不绘制」。
 - 3D（`Aspect.View3D` / `Walls` / `Perspective`）：P1 只记录不绘制。
