@@ -896,6 +896,11 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_3d_px"; Vbp = "$Tests\ctrlteechart\Tc3dApp.vbp"; Mode = "close";
        WindowTitle = "TChart 3d"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_3d_px.ps1") },
+    # C30-10 透视判据：View3D+Perspective 时三根柱子的侧面色带宽成梯度（左厚右薄），
+    # 平行投影下三根一样宽 —— 只看一根柱子分不出“透视没做”和“深度常量改了”。
+    @{ Name = "ctrlteechart_persp_px"; Vbp = "$Tests\ctrlteechart\TcPerspApp.vbp"; Mode = "close";
+       WindowTitle = "TChart persp"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_persp_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
