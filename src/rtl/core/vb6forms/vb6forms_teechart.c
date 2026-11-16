@@ -70,6 +70,8 @@ typedef struct {
     int      showLegend;
     /* C30-10 第十刀：Zoom 的两个值（空实现里也照实存，读回才一致） */
     int      zoomEnable, zoomPercent;
+    /* C30-10 第十一刀：Aspect（3D）。深度只在 View3D 时非零 */
+    int      view3D, perspective, aspRot, aspElev;
     TcSeries ser[VB6_TC_MAXSER];
     int      nser;
     int      paints;             /* 绘制次数（C3_TCHART_TRACE 用） */
@@ -125,6 +127,10 @@ static TcChart* tcAttach(HWND h) {
     c->showLegend    = 1;
     c->zoomEnable    = 0;
     c->zoomPercent   = 100;
+    c->view3D        = 0;    /* 内置版默认 2D（与真控件默认 True 不同，台账 §5 已登记） */
+    c->perspective   = 1;
+    c->aspRot        = 30;
+    c->aspElev       = 15;
     c->panelBorder   = 1;
     c->headerVisible = 1;
     for (i = 0; i < 4; i++) { c->axisShow[i] = 1; c->axisTitleShow[i] = 1; c->axisAuto[i] = 1; }
@@ -172,6 +178,21 @@ static COLORREF tcPalette(int i) {
         RGB(128,0,255), RGB(0,192,192), RGB(255,0,255), RGB(128,128,0)
     };
     return p[i & 7];
+}
+
+/* 3D 柱的顶面/侧面：向白/黑方向拉一段（pct>0 变亮、<0 变暗） */
+static COLORREF tcShade(COLORREF c, int pct) {
+    int r = GetRValue(c), g = GetGValue(c), b = GetBValue(c);
+    if (pct > 0) {
+        r += (255 - r) * pct / 100;
+        g += (255 - g) * pct / 100;
+        b += (255 - b) * pct / 100;
+    } else {
+        r = r * (100 + pct) / 100;
+        g = g * (100 + pct) / 100;
+        b = b * (100 + pct) / 100;
+    }
+    return RGB(r, g, b);
 }
 
 /* ============================ 绘制 ============================ */
@@ -382,16 +403,42 @@ static void tcPaint(TcChart* c) {
         } else if (s->n > 0) {
             int bw, gap, k2;
             switch (s->type) {
-            case TC_SC_BAR:
+            case TC_SC_BAR: {
+                /* C30-10 第十一刀：View3D 时按 12px 深度画出顶面 + 右侧面（先画背面，
+                 * 再把正面矩形压在上面）。深度的选择定成常量，判据才能拿它当尺子量。 */
+                int depth = c->view3D ? 12 : 0;
                 bw  = (s->n > 0) ? ((x1 - x0) / (s->n * 2)) : 8;
                 gap = bw;
                 if (bw < 2) bw = 2;
                 for (k2 = 0; k2 < s->n; k2++) {
                     int bx = x0 + gap / 2 + k2 * (bw + gap);
                     int by = y1 - (int)((s->pt[k2].y - vmin) / (vmax - vmin) * (y1 - y0));
+                    if (depth > 0) {
+                        POINT top[4], side[4];
+                        HBRUSH tb = CreateSolidBrush(tcShade(fcol, 55));
+                        HBRUSH db = CreateSolidBrush(tcShade(fcol, -45));
+                        HGDIOBJ ob = SelectObject(dc, GetStockObject(NULL_PEN));
+                        side[0].x = bx + bw;         side[0].y = by;
+                        side[1].x = bx + bw + depth; side[1].y = by - depth;
+                        side[2].x = bx + bw + depth; side[2].y = y1 - depth;
+                        side[3].x = bx + bw;         side[3].y = y1;
+                        top[0].x = bx;               top[0].y = by;
+                        top[1].x = bx + depth;       top[1].y = by - depth;
+                        top[2].x = bx + bw + depth;  top[2].y = by - depth;
+                        top[3].x = bx + bw;          top[3].y = by;
+                        SelectObject(dc, db);
+                        Polygon(dc, side, 4);
+                        SelectObject(dc, tb);
+                        Polygon(dc, top, 4);
+                        SelectObject(dc, ob);
+                        DeleteObject(tb);
+                        DeleteObject(db);
+                        SelectObject(dc, sb);   /* 正面仍用系列/画刷色 */
+                    }
                     Rectangle(dc, bx, by, bx + bw, y1);
                 }
                 break;
+            }
             case TC_SC_POINT:
                 for (k2 = 0; k2 < s->n; k2++) {
                     int px = (s->n == 1) ? (x0 + x1) / 2
@@ -698,6 +745,7 @@ int32_t vb6_TChart_PaintCount(void* hwnd) {
 #define TC_KIND_PRINTER 14  /* 显式空实现：不打印，但不再 438 */
 #define TC_KIND_EXPORT  15
 #define TC_KIND_ZOOM    16
+#define TC_KIND_ASPECT  17
 
 typedef struct TcObj {
     const IDispatchVtbl* lpVtbl;
@@ -744,6 +792,9 @@ static const wchar_t* kTcExportNames[] = {
     L"SaveToFile", L"CopyToClipboard", L"Email", L"Picture", L"Width", L"Height", NULL };
 static const wchar_t* kTcZoomNames[] = {
     L"Enable", L"Percent", L"Direction", L"Point", L"SetMax", NULL };
+/* C30-10 第十一刀：3D 面（先让值存得住、读得回，再把柱形按深度画出来） */
+static const wchar_t* kTcAspectNames[] = {
+    L"View3D", L"Perspective", L"Rotation", L"Elevation", L"Orthogonal", NULL };
 
 static const wchar_t* const* tcNames(int kind) {
     switch (kind) {
@@ -763,6 +814,7 @@ static const wchar_t* const* tcNames(int kind) {
     case TC_KIND_PRINTER: return kTcPrinterNames;
     case TC_KIND_EXPORT:  return kTcExportNames;
     case TC_KIND_ZOOM:    return kTcZoomNames;
+    case TC_KIND_ASPECT:  return kTcAspectNames;
     default:             return NULL;
     }
 }
@@ -1010,6 +1062,26 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
             return S_OK;
         default: return DISP_E_MEMBERNOTFOUND;
         }
+    }
+
+    /* ===== 第十一刀：Aspect（3D 的开关与角度） ===== */
+    if (o->kind == TC_KIND_ASPECT) {
+        int* pv = NULL;
+        switch (id) {
+        case 1: pv = &c->view3D; break;
+        case 2: pv = &c->perspective; break;
+        case 3: pv = &c->aspRot; break;
+        case 4: pv = &c->aspElev; break;
+        case 5: if (res) tcSetL(res, 0); return S_OK;   /* Orthogonal：存不住，给 0 */
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
+        if (flags & DISPATCH_PROPERTYPUT) {
+            *pv = (int)tcArgL(a0);
+            InvalidateRect(c->hwnd, NULL, FALSE);
+            return S_OK;
+        }
+        if (res) tcSetL(res, *pv);
+        return S_OK;
     }
 
     /* ===== 第十刀：Printer / Export / Zoom —— 认名字、不动作，不静默 438 ===== */
@@ -1363,6 +1435,7 @@ int32_t vb6_TChart_HostGetProp(void* obj, const wchar_t* name, void* outV) {
         return 1;
     }
     if (_wcsicmp(name, L"SeriesCount") == 0) { tcSetL(out, c->nser); return 1; }
+    if (_wcsicmp(name, L"Aspect") == 0) { tcSetObj(out, tcCached(c, TC_KIND_ASPECT, 0)); return 1; }
     if (_wcsicmp(name, L"Printer") == 0) { tcSetObj(out, tcCached(c, TC_KIND_PRINTER, 0)); return 1; }
     if (_wcsicmp(name, L"Export") == 0)  { tcSetObj(out, tcCached(c, TC_KIND_EXPORT, 0)); return 1; }
     if (_wcsicmp(name, L"Zoom") == 0)    { tcSetObj(out, tcCached(c, TC_KIND_ZOOM, 0)); return 1; }
