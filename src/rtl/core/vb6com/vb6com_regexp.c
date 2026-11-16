@@ -46,6 +46,15 @@ extern HRESULT vb6_ComChangeType(VARIANT* dest, const VARIANT* src, VARTYPE want
 // ============================================================
 #define RE_MAX_GROUPS 64
 
+/* 逐节点冻结的选项位：SET 位 = “本节点自己说了算”，否则用对象上的 IgnoreCase/Multiline。
+ * 内联选项 (?i:...) / (?-i:...) 就是往这几位上写；不动 ReCtx。 */
+#define RE_F_IC_SET   1
+#define RE_F_IC       2
+#define RE_F_ML_SET   4
+#define RE_F_ML       8
+#define RE_F_DOT_SET  16
+#define RE_F_DOT      32
+
 enum {
     K_CHAR = 1, K_ANY, K_CLASS, K_SEQ, K_ALT, K_REP, K_GROUP,
     K_BOL, K_EOL, K_WORDB, K_NWORDB, K_BACKREF, K_LOOK, K_EMPTY,
@@ -73,6 +82,7 @@ typedef struct {
     int kind;
     int a, b, c, d;               /* a: 通用(字符/子节点/组号/断言类型)  b: child/min
                                      c: max(-1=∞)  d: greedy/negative */
+    int fl;                       /* 冻结的选项位（RE_F_*）：内联选项 (?i:...) 落在各原子上 */
     wchar_t ch;
     int setId;
     int kid;                      /* SEQ/ALT 的 kids 起始下标, 数量在 b */
@@ -134,6 +144,7 @@ typedef struct {
     ReProg* prog;
     int err;
     int ngroups;
+    int fl;              /* 当前生效的内联选项位（RE_F_*），进组时保存、出组时还原 */
 } ReParse;
 
 static int pAlt(ReParse* ps);
@@ -278,6 +289,7 @@ static int parseEscape(ReParse* ps, int inClass, ReSet* s, int* outNode, wchar_t
             if (outNode) {
                 int idx = progNode(ps->prog, K_BACKREF);
                 ps->prog->n[idx].a = g2;
+                ps->prog->n[idx].fl = ps->fl;
                 *outNode = idx;
             }
             return 0;
@@ -307,6 +319,7 @@ static int parseEscape(ReParse* ps, int inClass, ReSet* s, int* outNode, wchar_t
                 if (outNode) {
                     int idx = progNode(ps->prog, K_BACKREF);
                     ps->prog->n[idx].a = (int)(c - L'0');
+                    ps->prog->n[idx].fl = ps->fl;
                     *outNode = idx;
                 }
                 return 0;
@@ -320,12 +333,14 @@ static int parseEscape(ReParse* ps, int inClass, ReSet* s, int* outNode, wchar_t
         setAddSh(&ps->prog->sets[idx], sh);
         int nd = progNode(ps->prog, K_CLASS);
         ps->prog->n[nd].setId = idx;
+        ps->prog->n[nd].fl = ps->fl;
         if (outNode) *outNode = nd;
         return 0;
     }
     if (inClass) { if (litOut) *litOut = lit; return 1; }
     int nd = progNode(ps->prog, K_CHAR);
     ps->prog->n[nd].ch = lit;
+    ps->prog->n[nd].fl = ps->fl;
     if (outNode) *outNode = nd;
     return 0;
 }
@@ -378,6 +393,7 @@ static int parseClass(ReParse* ps) {
     }
     int nd = progNode(pg, K_CLASS);
     pg->n[nd].setId = sid;
+    pg->n[nd].fl = ps->fl;
     return nd;
 }
 
@@ -410,6 +426,7 @@ static int parseAtom(ReParse* ps) {
     switch (c) {
         case L'(' : {
             ps->i++;
+            int saveFl = ps->fl;
             int look = 0, neg = 0, noncap = 0, atomic = 0, behind = 0;
             const wchar_t* named = NULL; int namedLen = 0;
             if (ps->i < ps->len && ps->p[ps->i] == L'?') {
@@ -459,8 +476,43 @@ static int parseAtom(ReParse* ps) {
                         return nd2;
                     } else { ps->err = RE_ERR_SYNTAX; return -1; }
                 }
-                /* 其余 (?...) 形式（内联选项 (?i:)、条件组 (?(1))）本刀还没做：仍旧 5017 */
-                else { ps->err = RE_ERR_SYNTAX; return -1; }
+                /* ---- 内联选项 (?ims:...) / (?-ims:...) / (?ims) ----
+                 * 冻结到每个原子上（RE_F_* 位），不动 ReCtx —— 所以 (?i:a)b 里 b 仍按对象设置。 */
+                else {
+                    int j = ps->i + 1, nfl = ps->fl, negf = 0, anyf = 0;
+                    while (j < ps->len) {
+                        wchar_t f = ps->p[j];
+                        int setb, valb;
+                        if (f == L'-') { negf = 1; j++; continue; }
+                        if (f != L'i' && f != L'm' && f != L's') break;
+                        setb = (f == L'i') ? RE_F_IC_SET : (f == L'm') ? RE_F_ML_SET : RE_F_DOT_SET;
+                        valb = (f == L'i') ? RE_F_IC     : (f == L'm') ? RE_F_ML     : RE_F_DOT;
+                        if (negf) nfl = (nfl & ~valb) | setb;
+                        else      nfl = (nfl | valb) | setb;
+                        anyf = 1; j++;
+                    }
+                    if (!anyf) { ps->err = RE_ERR_SYNTAX; return -1; }
+                    if (j < ps->len && ps->p[j] == L':') {
+                        int child2, nd2;
+                        ps->i = j + 1;
+                        ps->fl = nfl;
+                        child2 = pAlt(ps);
+                        if (child2 < 0) return -1;
+                        if (ps->i >= ps->len || ps->p[ps->i] != L')') { ps->err = RE_ERR_MISSING_RP; return -1; }
+                        ps->i++;
+                        ps->fl = saveFl;
+                        nd2 = progNode(pg, K_GROUP);
+                        pg->n[nd2].a = 0;
+                        pg->n[nd2].b = child2;
+                        return nd2;
+                    }
+                    if (j < ps->len && ps->p[j] == L')') {
+                        ps->i = j + 1;
+                        ps->fl = nfl;          /* (?i) 作用于本组剩余部分（PCRE 也管后续分支），出组还原 */
+                        return progNode(pg, K_EMPTY);
+                    }
+                    ps->err = RE_ERR_SYNTAX; return -1;
+                }
             }
             /* VB 的 SubMatches 按**左括号出现顺序**编号 —— 外层组号必须先定，再解子模式。 */
             int g = 0;
@@ -476,6 +528,7 @@ static int parseAtom(ReParse* ps) {
             if (child < 0) return -1;
             if (ps->i >= ps->len || ps->p[ps->i] != L')') { ps->err = RE_ERR_MISSING_RP; return -1; }
             ps->i++;
+            ps->fl = saveFl;
             if (look) {
                 int nd;
                 if (behind) {
@@ -506,9 +559,9 @@ static int parseAtom(ReParse* ps) {
             }
         }
         case L'[' : ps->i++; return parseClass(ps);
-        case L'.' : ps->i++; return progNode(pg, K_ANY);
-        case L'^' : ps->i++; return progNode(pg, K_BOL);
-        case L'$' : ps->i++; return progNode(pg, K_EOL);
+        case L'.' : ps->i++; { int nd = progNode(pg, K_ANY); pg->n[nd].fl = ps->fl; return nd; }
+        case L'^' : ps->i++; { int nd = progNode(pg, K_BOL); pg->n[nd].fl = ps->fl; return nd; }
+        case L'$' : ps->i++; { int nd = progNode(pg, K_EOL); pg->n[nd].fl = ps->fl; return nd; }
         case L'\\': ps->i++; {
             int nd = -1;
             /* \Q...\E：里面全是字面量，直到 \E 或模式结尾 */
@@ -522,6 +575,7 @@ static int parseAtom(ReParse* ps) {
                     {
                         int ch = progNode(pg, K_CHAR);
                         pg->n[ch].ch = ps->p[ps->i];
+                        pg->n[ch].fl = ps->fl;
                         ps->i++;
                         progKid(pg, seq, ch);
                         cnt++;
@@ -539,6 +593,7 @@ static int parseAtom(ReParse* ps) {
             ps->i++;
             int nd = progNode(pg, K_CHAR);
             pg->n[nd].ch = c;
+            pg->n[nd].fl = ps->fl;
             return nd;
         }
     }
@@ -644,6 +699,7 @@ static ReProg* compilePattern(const wchar_t* pat, int* errOut) {
     ps.prog = pg;
     ps.err = 0;
     ps.ngroups = 0;
+    ps.fl = 0;          /* 必须显式置 0：栈上脏值会让 . / ^ / $ 随机按 DotAll 或 Multiline 跑 */
     int root = pAlt(&ps);
     if (root < 0 || ps.err) { *errOut = ps.err ? ps.err : RE_ERR_SYNTAX; progFree(pg); return NULL; }
     if (ps.i != ps.len) { *errOut = RE_ERR_SYNTAX; progFree(pg); return NULL; }  /* 多余的 ')' */
@@ -676,12 +732,25 @@ typedef struct {
 static int mRun(ReCtx* x, int node, int pos, Cont* k);
 static int mCont(ReCtx* x, Cont* k, int pos);
 
-static int chEq(ReCtx* x, wchar_t a, wchar_t b) {
+static int chEq(ReCtx* x, wchar_t a, wchar_t b, int ic) {
     if (a == b) return 1;
-    if (!x->icase) return 0;
+    if (!ic) return 0;
     if (towlower((wint_t)a) == towlower((wint_t)b)) return 1;
     if (towupper((wint_t)a) == towupper((wint_t)b)) return 1;
     return 0;
+}
+
+/* 逐节点生效的选项：节点自己冻结了就用它的，否则跟对象（IgnoreCase/Multiline）走。
+ * 这就是 (?i:...) 不污染外层的全部机关 —— ReCtx 一个字节都没动。 */
+static int nodeIC(const ReCtx* x, const RNode* n) {
+    return (n->fl & RE_F_IC_SET) ? ((n->fl & RE_F_IC) != 0) : x->icase;
+}
+static int nodeML(const ReCtx* x, const RNode* n) {
+    return (n->fl & RE_F_ML_SET) ? ((n->fl & RE_F_ML) != 0) : x->multiline;
+}
+static int nodeDOT(const ReCtx* x, const RNode* n) {
+    (void)x;
+    return (n->fl & RE_F_DOT_SET) ? ((n->fl & RE_F_DOT) != 0) : 0;
 }
 
 static int setHasSh(const ReSet* s, int want) {
@@ -718,9 +787,10 @@ static int classRaw(const ReSet* s, wchar_t c) {
     return hit;
 }
 
-static int classMatch(ReCtx* x, const ReSet* s, wchar_t c) {
+static int classMatch(ReCtx* x, const ReSet* s, wchar_t c, int ic) {
     int hit = classRaw(s, c);
-    if (!hit && x->icase) {
+    (void)x;
+    if (!hit && ic) {
         wchar_t u = (wchar_t)towupper((wint_t)c);
         wchar_t l = (wchar_t)towlower((wint_t)c);
         hit = classRaw(s, u) || classRaw(s, l);
@@ -794,13 +864,13 @@ static int mRun(ReCtx* x, int node, int pos, Cont* k) {
     switch (n->kind) {
         case K_EMPTY: return mCont(x, k, pos);
         case K_CHAR:
-            if (pos < x->len && chEq(x, x->s[pos], n->ch)) return mCont(x, k, pos + 1);
+            if (pos < x->len && chEq(x, x->s[pos], n->ch, nodeIC(x, n))) return mCont(x, k, pos + 1);
             return 0;
         case K_ANY:
-            if (pos < x->len && x->s[pos] != L'\n') return mCont(x, k, pos + 1);
+            if (pos < x->len && (nodeDOT(x, n) || x->s[pos] != L'\n')) return mCont(x, k, pos + 1);
             return 0;
         case K_CLASS:
-            if (pos < x->len && classMatch(x, &x->pg->sets[n->setId], x->s[pos]))
+            if (pos < x->len && classMatch(x, &x->pg->sets[n->setId], x->s[pos], nodeIC(x, n)))
                 return mCont(x, k, pos + 1);
             return 0;
         case K_SEQ: {
@@ -828,10 +898,10 @@ static int mRun(ReCtx* x, int node, int pos, Cont* k) {
             return 0;
         }
         case K_BOL:
-            if (pos == 0 || (x->multiline && x->s[pos - 1] == L'\n')) return mCont(x, k, pos);
+            if (pos == 0 || (nodeML(x, n) && x->s[pos - 1] == L'\n')) return mCont(x, k, pos);
             return 0;
         case K_EOL:
-            if (pos == x->len || (x->multiline && x->s[pos] == L'\n')) return mCont(x, k, pos);
+            if (pos == x->len || (nodeML(x, n) && x->s[pos] == L'\n')) return mCont(x, k, pos);
             return 0;
         case K_WORDB:
             if (isWordAt(x, pos - 1) != isWordAt(x, pos)) return mCont(x, k, pos);
@@ -847,7 +917,7 @@ static int mRun(ReCtx* x, int node, int pos, Cont* k) {
             if (pos + len > x->len) return 0;
             int i;
             for (i = 0; i < len; i++)
-                if (!chEq(x, x->s[pos + i], x->s[s0 + i])) return 0;
+                if (!chEq(x, x->s[pos + i], x->s[s0 + i], nodeIC(x, n))) return 0;
             return mCont(x, k, pos + len);
         }
         case K_LOOK: {
