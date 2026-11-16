@@ -231,17 +231,17 @@ pwsh -File tests\dict_native\run_compare.ps1        # 期望 PASS 54 行（54/57
 ### 11.2 实测读数
 
 ```
-PASS dict_native 用例=54 行 两侧逐字一致（oracle=cscript scrrun；VB6-SEM 覆盖 1 行；已知 C3 缺口剔除 5 行）
+PASS dict_native 用例=59 行 两侧逐字一致（oracle=cscript scrrun；VB6-SEM 覆盖 1 行；已知 C3 缺口剔除 0 行）
 ```
 
 - **VB6-SEM 1 行**：`d10`（`Item` 缺键）—— cscript 给 Empty，本仓取 VB6 的 32811（§4.1）；
-- **已知 C3 缺口 5 行**（不是 Dictionary 的语义问题，全部在 `run_compare.ps1` 的 `$C3Gap` 里点名，不静默跳过）：
+- **已知 C3 缺口 0 行**（第三十二刀把最后一格 `d121` 收回；`$C3Gap` 名单现为空，闸门仍在）：
 
 | 行 | 现象 | 实质 |
 | --- | --- | --- |
 | `d62` `d104` | ~~`Nothing` 当键时与 `Empty` 撞键~~ | **已修**（第二十九刀）：`vb6_ComPackNothing` ⇒ VT_DISPATCH NULL |
 | `d102` `d123` | ~~Currency 键被截成整数~~ | **已修**（第二十九刀）：`vb6_ComPackCur` ⇒ VT_CY（10000 倍定标） |
-| `d121` | `VarType(CCur(1.5))` = 5（应 6）；`VarType(1)` = 3（应 2） | 仍在：标量类型宽度那一层（C3 用 double 表 Currency、字面量默认装 I4） |
+| `d121` | ~~`VarType(CCur(1.5))` = 5（应 6）；`VarType(1)` = 3（应 2）~~ | **已修**（第三十二刀）：装箱站按 VB6 类型选档 —— Currency ⇒ `vb6_VariantCur`（VT_CY）、Integer 档 ⇒ `vb6_VariantInt`（VT_I2），见 §11.10 |
 
 另有一个不在基准里、但**使用者会碰到**的缺口：`d("k") = v`（默认成员带参赋值）
 ~~C3 目前当成"把值赋给对象变量"并告警~~ —— **已修**（第二十九刀）：发码本来就对
@@ -302,7 +302,7 @@ Dim r As New …RegExp   →  void* r = NULL;（无惰性初始化行）        
 | `d("k") = v` 假 VB3003 | 语义层：目标是「Object/Variant 变量的带参下标」时不做隐式转换检查 | 编译该形 **0 条告警**（修前 1 条） |
 | `As New` 外部 ProgID | **已修**（第三十刀）：局部声明那一支（`cgen_localdecl.cpp`）与模块级那一支（`cgen_decl_var.cpp`）都登记 ProgID 档，守卫发 `vb6_NewObject(L"<ProgID>")` | `[TEXT] newbinding` **4/4**（reg_exp 局部+模块级、dict 局部+模块级；stderr 0 条） |
 
-对照总读数：**58 行逐字一致**（VB6-SEM 1 行；仅 `d121` 因标量类型宽度剔除，见 §11.2）。
+对照总读数：**59 行逐字一致**（VB6-SEM 1 行；缺口名单已清空，见 §11.2 / §11.10）。
 
 ### 11.8 第三十刀：`As New <外部 ProgID>` 收口（含定位过程）
 
@@ -336,3 +336,69 @@ PASS newbinding 4/4（reg_exp 局部+模块级、dict 局部+模块级；stderr 
   成本远高于收益；而键矩阵本身已经在 54 行对照里被真组件验过（每一条键相等都在里面）。
 - **S4 提前**：既然 `vb6_NewBuiltinObject` 本来就要改（Registry 名字表），顺手把 `New` 那一半
   和 `RegExp` 的欠账一起做完了 —— 否则 "内置" 只覆盖晚绑定，与用户点名的那条要求不符。
+
+### 11.10 第三十二刀：标量宽度两格（Integer / Currency 装箱档）
+
+`d121` 那一行是三个读数（`VarType(CCur(1.5))` / `VarType(CDbl(1.5))` / `VarType(1)`），
+真组件 = `6 / 5 / 2`。修前 C3 = `5 / 5 / 3`。两根因，都在**装箱站**：
+
+| 格 | 根因 | 处置 |
+| --- | --- | --- |
+| Currency | C3 用 `double` 承载 Currency 值（`vb6_CCur`），装箱落 `_Generic` 的 `double:` 档 ⇒ VT_R8 | 新增 `vb6_VariantCur(double)`（VT_CY，10000 倍定点）；`boxToVariant` 加 `case Vb6Type::Currency` |
+| Integer | `inferExprType` 对字面量一律答 Long（C 侧 int32 的口径）；符号表把 `As Integer` 也记成 Long（真宽度在 `knownIntVars_`），于是 `case Long/Integer` 一律装 VT_I4 | `wrapVariantValue` 的 `case Integer` 改发 `vb6_VariantInt((int16_t)(…))`；字面量/`As Integer` 两形由 `isNarrowIntExpr` 判出、交给装箱权威 `boxToVariant` 装 VT_I2 |
+
+判据边界（写清是为了下次不再讨论）：
+
+- **只动装箱站**，`inferExprType` 一个字没改 —— 那张表同时喂算术/收窄/格式化，改它等于把
+  「16 位算术 + 溢出检查」整层一起打开（那是「算术全链」，另排期）。
+- 字面量那一半只认**纯十进制**书写（`rawText` 除数字不许有别的东西）；`&H`/`&O` 进制字面量、
+  类型后缀（`%`/`&`/`^`）维持现状。
+- 不用 `tryEvalConstInt`：那是常量折叠（`2 ^ 10` 也折成 1024，而 VB6 的 `^` 恒返 Double），
+  拿它当字面量类型会把幂/位运算的档一起改掉。
+
+探针读数（15 行，cscript 对照，临时 `.temp/litprobe`，不入库）：
+
+```
+p01 lit1  2/Integer  ✔（修前 3/Long）      p11 ccur       6/Currency ✔（修前 5/Double）
+p02 32767 2/Integer  ✔                     p12 slot_ccur  6/Currency ✔
+p03 32768 3/Long     ✔                     p13 cdbl       5/Double   ✔
+p04 -1    2/Integer  ✔                     p14 ccurround  6 / 1.2346 ✔
+p05 40000 3/Long     ✔                     p15 slot_mul   5/Double   ✔
+p08 slot_lit  2/Integer ✔                  p06 &HFFFF  3（真组件 2）   ← 留白
+p10 slot_intvar 2/Integer ✔                p09 v=1:v=v+1 3（真组件 2） ← 留白
+```
+
+两处留白（同一层但另排期）：
+
+1. **`&H` 进制字面量的宽度**：`&HFFFF` 真组件答 Integer(-1)，C3 答 Long(65535)。符号规则
+   VBScript 与 VB6 本身就不一致（`&H8000` 两台读数不同），所以没有拿 cscript 当判据；
+   要动就得先把 VB6 的「4 位十六进制按 16 位有符号解释」写成独立判据。
+2. **Variant 算术结果的宽度**：`v=1: v=v+1` 真组件仍 Integer，C3 答 Long（`vb6_VarAddV` 的
+   结果档由 RTL 算术定）。这就是「算术全链」那一层的第一格。
+
+影响面（发码清单，A/B 逐行看过）：49 份输入的发码真的变了，形态只有一种 ——
+`vb6_VariantLong(<字面量>)` → `vb6_VariantInt((int16_t)(<字面量>))`（3 份同时含
+`vb6_VariantCur`）。另有 5 份 GUI 工程（`GUISample`×3、`MsCommApp`、`DisplayProject`）
+在**改前就已与 CI 清单不一致**（old/new 两枚二进制发码哈希完全相同，只与 expected 不同）
+—— 本机环境漂移，不是本刀造成，登记时不得覆盖。
+
+### 11.11 CI 反馈：三个夹具期望原本钉的是旧答案（已按真 VB6 改口）
+
+第一轮 CI（run `43886597241`）读数：`Baseline (M1)` 绿、`Build` 绿；红的除了预期的
+`Emit manifest`（49 份形状变化，等登记），还有 5 个格子 —— 全部是**夹具期望写着旧答案**，
+不是新码算错。逐格核过 oracle 口径（VBScript 与 VB6 在「整数字面量装什么档」上一致：
+`VarType(1)`=2、`TypeName(1)`=`Integer`）：
+
+| 格子 | 旧期望 | 新期望 | 为什么新的是真 VB6 |
+| --- | --- | --- | --- |
+| `BD-variant`（`test_bodydecl`） | `Long/String/1` | `Integer/String/1` | 夹具里是 `Dim vA, vB: vA = 1` —— 小整数字面量进 Variant 就是 VT_I2 |
+| `B165-long`（`test_host_decimal`） | `3\|42` | `2\|42` | 夹具里是 `Dim l As Variant: l = 42`，同一根因 |
+| `B169-4`（`b169_class_field_store` 两台） | `ggg\|9\|3\|1` | `ggg\|9\|2\|1` | `With … .PV = 5`，`5` 是 Integer |
+| `b168_class_var_field_shape`（在场针） | `= vb6_VariantLong(7);` | `= vb6_VariantInt((int16_t)(7));` | 字面量 7 的发码形状本来就该跟着装箱档走 |
+| `b169_class_field_store_shape`（在场针） | `_vb6_with_0->PV = vb6_VariantLong(5);` | `_vb6_with_0->PV = vb6_VariantInt((int16_t)(5));` | 同上 |
+
+读数自证（本机、新码）：`BD-variant=Integer/String/1`、`B165-long=2|42`、
+`B169-4=ggg|9|2|1`；发码两侧各取 `--emit-c` 逐字核过在场针的新形。**没有回头改夹具源码**
+（注释与读数都在 runner 里，夹具本身一字未动）—— 期望该记的是真 VB6 的答案，不是 C3 上一版
+算出来的答案。
+

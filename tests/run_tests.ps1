@@ -5248,8 +5248,10 @@ if ($Category -in @("all", "run", "bas")) {
     # Dim 自己手写一遍展开(那份副本漏了 WithEvents 与「后缀即类型」)，Const/Static/体级 Public 把
     # MultiDecl 原样交给语义层(switch 不认) ⇒ 一枚名字都不登记、每条使用一条 VB3001(真工程一片 276 条)，
     # 而 `Dim a&, b&` 第二枚落回 Variant 是**真值差**(BD-empty 改前 3/0)。BD-* 其余六条是护栏(改前改后同)。
+    # 第三十二刀改口: `vA = 1` 这一枚 Variant 在真 VB6 里装的是 Integer(VT_I2) 而不是 Long ——
+    # BD-variant 以前记的是 C3 的旧答案(整数一律按 I4 装箱), 现在读 Integer。其余七格逐字未动。
     $bdNeedles = @("BD-dim=9", "BD-suffix=Long/Long/15", "BD-empty=3/3", "BD-const=345",
-        "BD-static=33", "BD-arr=13/2/3", "BD-variant=Long/String/1", "BD-DONE")
+        "BD-static=33", "BD-arr=13/2/3", "BD-variant=Integer/String/1", "BD-DONE")
     Add-BasTest "test_bodydecl" "$Tests\test_bodydecl.bas" $bdNeedles
     Add-BasTest "test_bodydecl_x86" "$Tests\test_bodydecl.bas" $bdNeedles -Arch "x86"
     # <vbeclipse> 账 #217 第一刀: `Case Is > 2` 里的 Is 不是标识符。改前 parser 造一枚
@@ -5421,9 +5423,11 @@ if ($Category -in @("all", "run", "bas")) {
     # 读回 2066035336255469780997 那一类数 —— B165-two 钉的就是「两枚 Decimal 各拿一份」。
     # B165-arr 是刻意不收的那一形(数组归 §B159/§B161), 读数与改前同为 0|Empty = 反面证人;
     # B165-str / B165-long / B165-rem 是「别把串那档与释放侧的收支改坏」的证人。
+    # 第三十二刀改口: `Dim l As Variant: l = 42` 那枚槽在真 VB6 里是 Integer(VT_I2), 旧读数 3
+    # 是「整数一律 I4」的旧答案。这一格仍是「整数那档别坏」的证人, 只是答案换成 2。
     $b165Needles = @("B165-box=14|Decimal|5", "B165-coll=14|Decimal|5", "B165-two=5/7",
         "B165-fe-1=14|Decimal|5", "B165-fe-2=14|Decimal|7", "B165-str=8|String|abc",
-        "B165-long=3|42", "B165-rem=3/7/42",
+        "B165-long=2|42", "B165-rem=3/7/42",
         "B165-elem=5/7", "B165-whole=5/7/5",
         "B165-arr=0|Empty", "B165-DONE")
     Add-BasTest "test_host_decimal" "$Tests\test_host_decimal.bas" $b165Needles
@@ -5584,7 +5588,9 @@ if ($Category -in @("all", "run", "bas")) {
         # 类内 Me.<字段> = ByRef Variant 形参 → 同一问同一答案
         'vb6_VariantAssign(&me->PV  /* class var .PV field variant */, vb6_VariantFromValue((*v)));',
         # 现造的整数/字面量串 → 清 + 搬, 不多拷一次
-        'h->PV  /* class var .PV field variant */ = vb6_VariantLong(7);',
+        # 第三十二刀（标量宽度）: 字面量 7 在真 VB6 里是 Integer ⇒ 装箱交 VT_I2, 这一针跟着
+        # 换形 (旧形 vb6_VariantLong(7) 是「一律按 I4 装」那个旧答案, 别再抄回来)。
+        'h->PV  /* class var .PV field variant */ = vb6_VariantInt((int16_t)(7));',
         'h->PW  /* class var .PW field variant */ = vb6_VariantString(vb6_BSTR_FromStr(L"noclause"));',
         # §B169 (第六十刀) 之后这一档不再是负控: 同类的 String 字段现在也认得了,
         # 交的是 BSTR 那一枚出口 (自有字面量 = 接管 + 旧值有人放); 剩下的负控只有 Long 字段
@@ -5613,7 +5619,7 @@ if ($Category -in @("all", "run", "bas")) {
         # 形① With 那一站: 同一张表答完三档, 各交各的唯一出口
         'vb6_BSTR_Assign(&_vb6_with_0->PS, w);',
         'vb6_VariantClear(&_vb6_with_0->PV);',
-        '_vb6_with_0->PV = vb6_VariantLong(5);',
+        '_vb6_with_0->PV = vb6_VariantInt((int16_t)(5));',   # 同上: 字面量 5 = Integer(VT_I2)
         '_vb6_with_0->PL = 9;  /* With class field write */',
         '_vb6_with_0->PK = 1;  /* With class field write */'
     )
@@ -10097,7 +10103,7 @@ if ($Category -in @("all", "run", "vbp")) {
     #   B169-1        跨对象写 String 字段 = 借来的源 → 必须自己那份 (改源头不许改字段)
     #   B169-2        连着写两次: 新值赢 + 旧值有人回收
     #   B169-3        类内 Me.<字段> = String 形参 (BASE 编得过的浅存别名那一形, 见 .build/k59_wit1.txt 同族)
-    #   B169-4/5      With 块四档各一枚: String / Long / Variant(VarType=3) / 枚举(按 Long 入表)
+    #   B169-4/5      With 块四档各一枚: String / Long / Variant(VarType=2 —— 字面量 5 是 Integer) / 枚举(按 Long 入表)
     # 夹子里刻意**没有**类内 `With Me` 写字段那形 —— 那一站现在解析成 COMObject, 发的是
     # vb6_ComSetProp(me, L"PS", ...) 而字段没有 dispid ⇒ 运行期一声 property not found 就丢了,
     # 那是另一格 (台账 §B169 形③), 不许把它的答案写进本夹子的期望里。
@@ -10105,7 +10111,7 @@ if ($Category -in @("all", "run", "vbp")) {
         "B169-1=aaa|3",
         "B169-2=ddd|3",
         "B169-3=eee|0|0|0|fff",
-        "B169-4=ggg|9|3|1",
+        "B169-4=ggg|9|2|1",
         "B169-5=ggg|9|1",
         "B169-DONE")
     Test-Vbp "b169_class_field_store" "$Tests\b169_cfw\B169.vbp" $b169Expected
