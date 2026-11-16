@@ -50,6 +50,8 @@ Private Sub Form_Load()
     Debug.Print "TC-FOREACH=" & nF
     TChart1.Series(0).Marks.Visible = False
     Debug.Print "TC-MARKS=" & TChart1.Series(0).Marks.Visible
+    TChart1.Series(0).Marks.Visible = True
+    Debug.Print "TC-MARKS2=" & TChart1.Series(0).Marks.Visible
     TChart1.Series(0).Pen.Color = RGB(0, 0, 255)
     Debug.Print "TC-PEN=" & TChart1.Series(0).Pen.Color
     TChart1.Series(0).Brush.Color = RGB(1, 2, 3)
