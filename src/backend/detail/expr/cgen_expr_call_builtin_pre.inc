@@ -81,6 +81,33 @@
                     val = std::string(extractFn) + "(" + val + ")";
                 }
             };
+            // C30-10 第四十二刀: **两支档不一致**时 VB6 的 IIf 答「被选中那一支自己的
+            // 子类型」，不是把两支升到公共档（用户真 VB6 日志 D03/D09/D10）:
+            //   IIf(True, 1, 40000) → Integer（选 1）     ← 以前 Long
+            //   IIf(True, Null, 1)  → Null                ← 以前 Long
+            //   IIf(False, Null, 1) → Integer             ← 以前 Long
+            // 两支本来就同档的那一族（D01/D02/D04/D05/D06/D07/D08/D11）不动 —— 它们今天
+            // 已经逐条对上，发码保持逐字节不变。
+            // 判据只认「静态能确定」的两形: 窄化与否不同，或某一支是 Null 字面量；BSTR
+            // 参与的混型维持原路（不把 BSTR 所有权拉进这一形）。落到 vb6_IIfVariant:
+            // 它把**被选中**那一枚原样交回、清掉另一枚，正是 VB6 的口径。
+            {
+                auto iifIsNullLit = [&](int idx) -> bool {
+                    auto* a = node.positional[idx].get();
+                    if (a && a->kind == ASTNodeKind::LiteralExpr)
+                        return static_cast<const LiteralExpr&>(*a).literalKind == LiteralKind::Null;
+                    return false;
+                };
+                const bool iifBstrAny = isBstrResult(trueVal) || isBstrResult(falseVal);
+                const bool iifNarrowDiff =
+                    isNarrowIntExpr(node.positional[1].get()) != isNarrowIntExpr(node.positional[2].get());
+                if (!iifBstrAny && (iifNarrowDiff || iifIsNullLit(1) || iifIsNullLit(2))) {
+                    lastExpr_ = "vb6_IIfVariant(" + cond + ", "
+                        + wrapVariantValue(node.positional[1].get(), trueVal) + ", "
+                        + wrapVariantValue(node.positional[2].get(), falseVal) + ")";
+                    return;
+                }
+            }
             if (isBstrResult(trueVal) || isBstrResult(falseVal)) {
                 extractVariantArg(trueVal, 1, "vb6_VariantToString");
                 extractVariantArg(falseVal, 2, "vb6_VariantToString");

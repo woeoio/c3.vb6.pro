@@ -3828,6 +3828,16 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         valueNode->kind == ASTNodeKind::IndexOrCallExpr ||
         valueNode->kind == ASTNodeKind::MemberAccessExpr) {
         Vb6Type vtype = inferExprType(static_cast<Expr&>(*valueNode));
+        // C30-10 第四十一刀: 存储站与实参站对齐（两站共用同一柄尺 isNarrowIntExpr）。
+        // 证据（用户真 VB6 日志 C20/C21/C22/H04/H05）：`t = Int(5)` / `Fix(5)` /
+        // `Abs(-5)` / `Abs(i)` 在 VB6 里全是 Integer；而这条路以前按 inferExprType 的
+        // Double 直接装 VT_R8 —— 第三十八刀只落到了实参站（本函数的 case Double 不查
+        // 窄化）。判据提到 switch 之前后：case Long / case Integer 两档发出的字符串与
+        // 末尾 boxToVariant 逐字相同（发码不变），只有 Int/Fix/Abs 这族由 VT_R8 变 VT_I2。
+        // ⚠ `Abs(v)`（Variant 实参）依旧不在内：静态不可知，要 RTL 按运行时子类型答，
+        //   那是另一刀（台账 §11.20 记着）。
+        if (isNarrowIntExpr(static_cast<const Expr*>(valueNode)))
+            return "vb6_VariantInt((int16_t)(" + cExpr + "))";
         // <vbeclipse>: 这张表只留"与 _Generic 结果一致"的四档 (String/Long/Integer/Double)。
         // Boolean/Byte/Single/Date/Currency 交给末尾的 boxToVariant —— 以前两份表各写一份
         // 档位 (账 #123 改了这份的 Byte、Fix 198 改了那份的 Boolean), 于是同一类型的装箱
