@@ -49,6 +49,17 @@ typedef struct {
     wchar_t title[64];
     TcPoint pt[VB6_TC_MAXPTS];
     int    n;
+    /* C30-10 第五刀：Marks / Pen / Brush / AsPie 的标量面 */
+    int      marksVisible;
+    COLORREF penColor;
+    int      penWidth;
+    int      penVisible;
+    COLORREF brushColor;
+    double   pieRotation;
+    int      sliceExplode[64];   /* AsPie.ExplodedSlice.Value(i) */
+    int      otherSliceStyle;    /* AsPie.OtherSlice.Style */
+    double   otherSliceValue;
+    int      otherSliceVisible;
 } TcSeries;
 
 typedef struct {
@@ -128,6 +139,11 @@ static TcSeries* tcSeries(TcChart* c, int idx) {
         memset(s, 0, sizeof(*s));
         s->type  = TC_SC_LINE;
         s->color = RGB(0, 128, 255);
+        s->penColor = s->color;
+        s->brushColor = s->color;
+        s->penWidth = 1;
+        s->penVisible = 1;
+        s->marksVisible = 1;
         wsprintfW(s->title, L"Series%d", c->nser);
         c->nser++;
     }
@@ -537,6 +553,12 @@ int32_t vb6_TChart_PaintCount(void* hwnd) {
 #define TC_KIND_AXES    5   /* Axis 集合（Axis.Bottom 这类具名也走它） */
 #define TC_KIND_AXIS    6   /* index = 0 Left / 1 Right / 2 Top / 3 Bottom */
 #define TC_KIND_TITLE   7   /* 轴标题（index = 轴下标） */
+#define TC_KIND_MARKS   8
+#define TC_KIND_PEN     9
+#define TC_KIND_BRUSH   10
+#define TC_KIND_ASPIE   11
+#define TC_KIND_OTHER   12  /* AsPie.OtherSlice */
+#define TC_KIND_SLICES  13  /* AsPie.ExplodedSlice（带参 Value(i)） */
 
 typedef struct TcObj {
     const IDispatchVtbl* lpVtbl;
@@ -555,7 +577,8 @@ static const IDispatchVtbl tcObjVtbl;
 static const wchar_t* kTcCollNames[] = { L"Item", L"Count", NULL };
 static const wchar_t* kTcSerNames[]  = {
     L"Add", L"AddXY", L"FillSampleValues", L"Clear",
-    L"Color", L"Title", L"SeriesType", L"Count", NULL };
+    L"Color", L"Title", L"SeriesType", L"Count",
+    L"Marks", L"Pen", L"Brush", L"AsPie", NULL };
 /* C30-10 第三刀：Panel / Header / Axis 三层。只登记真做得动的名字。 */
 static const wchar_t* kTcPanelNames[] = {
     L"Color", L"MarginLeft", L"MarginRight", L"MarginTop", L"MarginBottom",
@@ -567,6 +590,13 @@ static const wchar_t* kTcAxesNames[] = {
 static const wchar_t* kTcAxisNames[] = {
     L"Automatic", L"Minimum", L"Maximum", L"Visible", L"Title", NULL };
 static const wchar_t* kTcTitleNames[] = { L"Caption", L"Text", L"Visible", NULL };
+/* C30-10 第五刀：示例里最常见的四层（Series(i).Marks/Pen/Brush/AsPie） */
+static const wchar_t* kTcMarksNames[]  = { L"Visible", L"ArrowLength", L"TextStyle", NULL };
+static const wchar_t* kTcPenNames[]    = { L"Color", L"Width", L"Visible", NULL };
+static const wchar_t* kTcBrushNames[]  = { L"Color", L"Visible", NULL };
+static const wchar_t* kTcAsPieNames[]  = { L"RotationAngle", L"ExplodedSlice", L"OtherSlice", NULL };
+static const wchar_t* kTcOtherNames[]  = { L"Style", L"Value", L"Visible", NULL };
+static const wchar_t* kTcSlicesNames[] = { L"Value", NULL };
 
 static const wchar_t* const* tcNames(int kind) {
     switch (kind) {
@@ -577,6 +607,12 @@ static const wchar_t* const* tcNames(int kind) {
     case TC_KIND_AXES:   return kTcAxesNames;
     case TC_KIND_AXIS:   return kTcAxisNames;
     case TC_KIND_TITLE:  return kTcTitleNames;
+    case TC_KIND_MARKS:  return kTcMarksNames;
+    case TC_KIND_PEN:    return kTcPenNames;
+    case TC_KIND_BRUSH:  return kTcBrushNames;
+    case TC_KIND_ASPIE:  return kTcAsPieNames;
+    case TC_KIND_OTHER:  return kTcOtherNames;
+    case TC_KIND_SLICES: return kTcSlicesNames;
     default:             return NULL;
     }
 }
@@ -826,6 +862,88 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         }
     }
 
+    /* ===== 第五刀：Marks / Pen / Brush / AsPie / OtherSlice / ExplodedSlice ===== */
+    if (o->kind == TC_KIND_MARKS || o->kind == TC_KIND_PEN || o->kind == TC_KIND_BRUSH
+        || o->kind == TC_KIND_ASPIE || o->kind == TC_KIND_OTHER || o->kind == TC_KIND_SLICES) {
+        TcSeries* sr = tcSeries(c, o->index);
+        if (!sr) return DISP_E_MEMBERNOTFOUND;
+        if (o->kind == TC_KIND_MARKS) {
+            switch (id) {
+            case 1:
+                if (flags & DISPATCH_PROPERTYPUT) { sr->marksVisible = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, sr->marksVisible); return S_OK;
+            case 2: tcSetL(res, 8); return S_OK;    /* ArrowLength：认名字，不存值 */
+            case 3: tcSetL(res, 0); return S_OK;    /* TextStyle：同上 */
+            default: return DISP_E_MEMBERNOTFOUND;
+            }
+        }
+        if (o->kind == TC_KIND_PEN) {
+            switch (id) {
+            case 1:
+                if (flags & DISPATCH_PROPERTYPUT) { sr->penColor = (COLORREF)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, (int32_t)sr->penColor); return S_OK;
+            case 2:
+                if (flags & DISPATCH_PROPERTYPUT) { sr->penWidth = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, sr->penWidth); return S_OK;
+            case 3:
+                if (flags & DISPATCH_PROPERTYPUT) { sr->penVisible = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, sr->penVisible); return S_OK;
+            default: return DISP_E_MEMBERNOTFOUND;
+            }
+        }
+        if (o->kind == TC_KIND_BRUSH) {
+            switch (id) {
+            case 1:
+                if (flags & DISPATCH_PROPERTYPUT) { sr->brushColor = (COLORREF)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, (int32_t)sr->brushColor); return S_OK;
+            case 2: tcSetL(res, 1); return S_OK;
+            default: return DISP_E_MEMBERNOTFOUND;
+            }
+        }
+        if (o->kind == TC_KIND_ASPIE) {
+            switch (id) {
+            case 1:
+                if (flags & DISPATCH_PROPERTYPUT) { sr->pieRotation = tcArgD(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetD(res, sr->pieRotation); return S_OK;
+            case 2: tcSetObj(res, tcCached(c, TC_KIND_SLICES, o->index)); return S_OK;
+            case 3: tcSetObj(res, tcCached(c, TC_KIND_OTHER, o->index)); return S_OK;
+            default: return DISP_E_MEMBERNOTFOUND;
+            }
+        }
+        if (o->kind == TC_KIND_OTHER) {
+            switch (id) {
+            case 1:
+                if (flags & DISPATCH_PROPERTYPUT) { sr->otherSliceStyle = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, sr->otherSliceStyle); return S_OK;
+            case 2: tcSetD(res, sr->otherSliceValue); return S_OK;
+            case 3:
+                if (flags & DISPATCH_PROPERTYPUT) { sr->otherSliceVisible = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+                tcSetL(res, sr->otherSliceVisible); return S_OK;
+            default: return DISP_E_MEMBERNOTFOUND;
+            }
+        }
+        /* TC_KIND_SLICES：`AsPie.ExplodedSlice.Value(i)`。
+         * GET 只有 index 一个实参；PUT 的布局是 rgvarg[0]=新值、rgvarg[1]=下标
+         * （与 memberobj 那族同一口径，弄反了症状是“写进去了但写到别的小标上”）。 */
+        if (o->kind == TC_KIND_SLICES) {
+            int idx = 0;
+            if (id != 1) return DISP_E_MEMBERNOTFOUND;
+            if (flags & DISPATCH_PROPERTYPUT) {
+                int32_t val = (argc >= 1) ? tcArgL(&dp->rgvarg[0]) : 0;
+                if (argc >= 2) idx = (int)tcArgL(&dp->rgvarg[1]);
+                if (idx >= 0 && idx < 64) {
+                    sr->sliceExplode[idx] = val;
+                    InvalidateRect(c->hwnd, NULL, FALSE);
+                }
+                return S_OK;
+            }
+            idx = (int)tcArgL(a0);
+            tcSetL(res, (idx >= 0 && idx < 64) ? sr->sliceExplode[idx] : 0);
+            return S_OK;
+        }
+        return DISP_E_MEMBERNOTFOUND;
+    }
+
     /* TC_KIND_SERIES */
     s = tcSeries(c, o->index);
     if (!s) return DISP_E_MEMBERNOTFOUND;
@@ -867,6 +985,10 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
     case 8:                                     /* Count = 点数 */
         tcSetL(res, s->n);
         return S_OK;
+    case 9:  tcSetObj(res, tcCached(c, TC_KIND_MARKS, o->index)); return S_OK;
+    case 10: tcSetObj(res, tcCached(c, TC_KIND_PEN,   o->index)); return S_OK;
+    case 11: tcSetObj(res, tcCached(c, TC_KIND_BRUSH, o->index)); return S_OK;
+    case 12: tcSetObj(res, tcCached(c, TC_KIND_ASPIE, o->index)); return S_OK;
     default:
         return DISP_E_MEMBERNOTFOUND;
     }
