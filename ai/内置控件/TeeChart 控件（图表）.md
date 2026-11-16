@@ -151,6 +151,13 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
 - 验收：`tests/TeeChartChartDisplay` 的**设计期** Series/标题是 TPF0 给的，
   而不是运行期补的（已满足）；点集（YValues 的 vaBinary）尚未解。
 
+**覆盖面实测**（`D:\...\TeeV5Demo\*.frx`，186 个）：162 个是 TPF0 负载且**全部读通**，
+另 24 个不以 LB 开头（其它资源块）。修前是 154/161，卡在两处写法差异（`c99f63e2`）：
+1. 集合两种写法：Delphi 6+ 先写 Int32 count；TeeChart v5 这份流里 `CustomAxes`
+   直接是一串 vaList 项（无 count），以 vaNull 收尾
+2. `0x0E` 在样本里当集合用（枚举本应是 vaCurrency）—— 先试集合，试不通再回退 Currency
+另加尾部截断容错（`DrawlineByCode.frx` 末尾只剩 3 字节残尾）。
+
 ### P3 对齐已录制的真 VB6 读数 + 收口
 
 - `tests/guisample/teechart_display_px.ps1` 头部那组数（x86、96dpi 虚拟化、
@@ -181,6 +188,9 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `Marks` / `Pen` / `Brush` / `AsPie` 那族类型切面、`Walls` / 3D。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
+  优先级实测出来很低：186 个厂商示例里 **135 个在 Form_Load 里调 FillSampleValues**，
+  设计期带数据的只有 3 个，而那 3 个的 Binary 分别是 `BackImage.Data` /
+  `Brush.Image.Data`（图片，不是点集）——所以样本里根本没有设计期点集要解。
 - `AsSurface` / `AsCandle` / `AsHorizBar` 等按类型切面的属性：P3 之后逐族补，
   未补的走「认得出名字、值进 bag、不绘制」。
 - 3D（`Aspect.View3D` / `Walls` / `Perspective`）：P1 只记录不绘制。
