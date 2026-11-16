@@ -200,7 +200,8 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   Header（Text/Caption/Visible）、Axes（Item(i)/Count/Bottom/Left/Right/Top）、
   Axis（Automatic/Minimum/Maximum/Visible/Title）、Title（Caption/Text/Visible）。
   读数：`TC-PANEL=15790335` / `TC-HEADERLEN=4` / `TC-AXTITLELEN=2` / `TC-MARGINR=12`。
-- **仍未接**：`Walls` / 3D（`Aspect.View3D` / `Perspective`）—— P1 只记录不绘制。
+- **仍未接**：P1 当时整族 `Walls` / 3D 只记录不绘制 —— 已由 `6d9ef96d`（Aspect/3D 柱）、
+  `588caf2f`（透视）、`ae1c1d2c`（四壁）逐条补齐。
 - **Marks / Pen / Brush 已参与绘制**（`81148fff`）：笔色/笔宽取 `Pen`，填充取 `Brush`，
   `Marks.Visible` 逐点打值（饼图除外）；`[TCHART]` 痕迹带 `pen= brush= marks=` 可验。
 - **像素判据已落地**：`tests/ctrlteechart/tc_px.ps1` 拿真 VB6 的 401x257 结构读数判
@@ -226,7 +227,13 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
 - **透视已改几何**（`588caf2f`）：`View3D+Perspective` 时柱子的深度按横向位置缩放
   （`depth = 12 - 6t`，左端约 16、中间 12、右端约 9）；平行投影仍是常数 12。
   判据 `tc_persp_px.ps1`：三根柱的侧面色带宽 `15,11,8`。
-- **仍未做**：`Walls` 四壁本身；线/面积/点系列的 3D 化（现在只有柱形走 3D 路径）。
+- **四壁已落**（`ae1c1d2c`）：`Walls.Visible/Color` 存得住读得回（`Back/Bottom/Right` 暂指回同一
+  对象），3D 下画左壁 + 背板（灰 192）。判据 `tc_wall_px.ps1`：`wall n=24322
+  bbox=(28,15)-(313,219)`。
+  同一刀修了两个真 bug：① 墙画在轴线之后会把上轴盖掉（`tc_px` 轴线行点数 264→61）；
+  ② 全等值时 `vmin==vmax` 的兜底是 `0..1`，柱子因此爬出绘图区（改成 `vmin=0`、
+  `vmax` 保留正值，另加柱顶夹紧）。
+- **仍未做**：线/面积/点系列的 3D 化（现在只有柱形走 3D 路径）。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
@@ -235,6 +242,6 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `Brush.Image.Data`（图片，不是点集）——所以样本里根本没有设计期点集要解。
 - `AsSurface` / `AsCandle` / `AsHorizBar` 等按类型切面的属性：P3 之后逐族补，
   未补的走「认得出名字、值进 bag、不绘制」。
-- 3D 的 `Walls`（四壁本身）与 `Perspective` 的几何效果：只存值不绘制/不改几何。
+- 3D 下非柱系列（线/面积/点）仍按 2D 绘制。
 - 剪贴板 / JPEG 导出 / 打印：P3 空实现。
 - `Canvas`（`IsScreenHighColor` / `TextOut` 那族）：P3 起给只读标量。
