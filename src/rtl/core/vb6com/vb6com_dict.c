@@ -713,3 +713,12 @@ int32_t vb6_Dict_IsClassName(const wchar_t* className) {
     if (_wcsicmp(className, L"Scripting.Dictionary") == 0) return 1;
     return 0;
 }
+
+// C30-10 第二十八刀: 供 vb6_ComCreateTyped 判定「这枚指针是不是内置 Dictionary 实例」。
+// 声明成类名的槽位 (Dim d As Dictionary) 生成的是 vb6_ComCreateTyped(progId, iidStr),
+// 它会拿 scrrun 的 typelib IID 去 QI —— 内置实现没有那层接口, QI 必失败, 槽位就变 NULL。
+// 认亲只认首字段 vtable 指针: 不额外加字段、不改对象布局, 也不会误认别人的对象。
+int vb6_Dict_IsInstance(void* obj) {
+    if (!obj) return 0;
+    return *(void***)obj == (void**)&g_dictVtbl;
+}

@@ -19,10 +19,12 @@ void* vb6_CreateObject(const wchar_t* progId);
 // 实现见 vb6com_regexp.c（语法/行为以 cscript 跑的 VBScript.RegExp 为基准）。
 void* vb6_RegExp_New(void);
 int   vb6_RegExp_IsProgramId(const wchar_t* progId);
+int   vb6_RegExp_IsInstance(void* obj);
 // C30-10 第二十六刀：内置 Scripting.Dictionary
 void* vb6_Dict_New(void);
 int   vb6_Dict_IsProgramId(const wchar_t* progId);
 int   vb6_Dict_IsClassName(const wchar_t* className);
+int   vb6_Dict_IsInstance(void* obj);
 
 // C30-9: 按 **coclass CLSID** 建对象（VB6 `As New <typelib coclass>` 走的同一条路）。
 // ProgID 在某些机器上压根不注册（实测本机 32 位视图 ADODB.* 全没注册，只有 CLSID），

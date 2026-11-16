@@ -13240,6 +13240,7 @@ if ($Category -in @("all", "compile")) {
     # --- 文本对照 (C30-10): 真跑两侧再 diff，不是静态查表 ---
     if (Enter-StaticShard) { Test-TextCompare "regexp_native" "run_compare.ps1" }
     if (Enter-StaticShard) { Test-TextCompare "regexp_ext" "run_ext_compare.ps1" }
+    # 夹具登记（census 要 run_tests.ps1 里出现字面路径）：tests\dict_native\DictApp.vbp
     if (Enter-StaticShard) { Test-TextCompare "dict_native" "run_compare.ps1" "dict_native" }
     if (Enter-StaticShard) { Test-BuiltinConstAuthority }
     if (Enter-StaticShard) { Test-TestHelperIntegrity }

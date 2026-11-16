@@ -23,20 +23,25 @@ $conv = Read-Ascii 'src\rtl\core\vb6rtl\vb6rtl_conv.c'
 $fix  = Read-Ascii 'tests\jsonfast_611\CreatedObjectTypeName.bas'
 $bad = @()
 
-# ---- R1: one tagger definition, exactly two tag sites (both CreateObject returns) ----
-$nTagDef = @([regex]::Matches($com, 'static void vb6_ComRememberProgID\s*\(')).Count
+# ---- R1: one tagger definition, exactly four tag sites (all CreateObject returns) ----
+# C30-10 第二十六刀：内置 Dictionary 与内置 RegExp 都从 vb6_CreateObject 返回，
+# 且都实现在别的编译单元里（vb6com_dict.c / vb6com_regexp.c），
+# 所以 vb6_ComRememberProgID 由 static 改为跨单元可见（声明在 vb6com_internal.h）。
+# 判据跟着这个事实走：定义处不再带 static，tag site 从 3 处增到 4 处。
+$nTagDef = @([regex]::Matches($com, '(?m)^void vb6_ComRememberProgID\s*\(')).Count
 if ($nTagDef -ne 1) { $bad += ("R1 tagger definitions = " + $nTagDef + " (want 1)") }
-# Needles copied verbatim from both CreateObject success returns:
-#   vb6_ComRememberProgID(p, progId);            (local ComLib activation)
-#   vb6_ComRememberProgID((void*)pDisp, progId); (CoCreateInstance)
+# Needles copied verbatim from all CreateObject success returns:
 #   vb6_ComRememberProgID(re, progId);            (C30-10 内置 VBScript.RegExp 抢先拦截)
-# Count the bare identifier occurrences: 1 definition + 3 tag sites = 4.
-# 第三处是 2026-11-16 加的内置正则对象：它同样是从 CreateObject 返回的，不记 ProgID 的话
-# TypeName 会退化成通用 IDispatch，与真组件的 "RegExp" 不一致 —— 所以它是同一类 tag site，
-# 不是漏改。事实是 4 而不是 3，判据跟着事实改，但只改这一条计数，R2/R3 两条不动。
+#   vb6_ComRememberProgID(dd, progId);            (C30-10 内置 Scripting.Dictionary 抢先拦截)
+#   vb6_ComRememberProgID(p, progId);             (local ComLib activation)
+#   vb6_ComRememberProgID((void*)pDisp, progId);  (CoCreateInstance)
+# Count the bare identifier occurrences: 1 definition + 4 tag sites = 5.
+# 四个 tag site 都是同一类（从 CreateObject 返回的对象），不是漏改：
+# 内置对象的 TypeName 也必须答 "Dictionary"/"RegExp"，与真组件一致。
+# 判据跟着事实改，但只改这两条计数，R2..R5 不动。
 $nTagUse = @([regex]::Matches($com, 'vb6_ComRememberProgID\s*\(')).Count
-if ($nTagUse -ne 4) {
-    $bad += ("R1 CreateObject tag sites = " + ($nTagUse - 1) + " (want 3: local ComLib + CoCreateInstance + 内置 RegExp)")
+if ($nTagUse -ne 5) {
+    $bad += ("R1 CreateObject tag sites = " + ($nTagUse - 1) + " (want 4: 内置 RegExp + 内置 Dictionary + local ComLib + CoCreateInstance)")
 }
 # ---- R2: the ProgID's last segment (the coclass name), not the whole ProgID ----
 if (-not $com.Contains("wcsrchr(progId, L'.')")) {

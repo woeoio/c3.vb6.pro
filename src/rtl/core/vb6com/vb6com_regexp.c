@@ -1664,3 +1664,11 @@ static HRESULT reDoReplace(ReRegExp* r, VARIANT* strArg, VARIANT* repArg, VARIAN
 }
 
 
+
+// C30-10 第二十八刀: 供 vb6_ComCreateTyped 判定「这枚指针是不是内置 RegExp 实例」。
+// 理由与 vb6_Dict_IsInstance 同: Dim re As RegExp 声明成类名时走 ComCreateTyped,
+// 它按 vbscript.dll 的 typelib IID 去 QI, 内置实现答不出来 ⇒ 槽位变 NULL。
+int vb6_RegExp_IsInstance(void* obj) {
+    if (!obj) return 0;
+    return *(const void***)obj == (const void**)&reRegExpVtbl;
+}

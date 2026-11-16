@@ -240,6 +240,14 @@ void* vb6_ComQI(void* obj, const char* iidStr) {
 void* vb6_ComCreateTyped(const wchar_t* progId, const char* iidStr) {
     void* disp = vb6_CreateObject(progId);
     if (!disp) return NULL;
+    /* C30-10 第二十八刀：内置对象（Dictionary / RegExp）只实现 IDispatch ——
+     * scrrun / vbscript 的 typelib 接口（IID_IDictionary / IID_IRegExp2）我们并不实现，
+     * QI 必失败。而「声明成类名」的槽位（`Dim d As Dictionary`）生成的正是
+     * vb6_ComCreateTyped(progId, iidStr)：一旦按 QI 结果返回，槽位就变 NULL，
+     * 实测 tests/test_com_default_prop 的 7 条 [C3_LATEBIND_MISS] 就是这么来的。
+     * 下游成员调用全部按名字走（vb6_ComCall*），不靠那层类型化接口，
+     * 所以内置对象直接交回自己的 IDispatch（AddRef 已由创建时给到 1）。 */
+    if (vb6_Dict_IsInstance(disp) || vb6_RegExp_IsInstance(disp)) return disp;
     void* iface = vb6_ComQI(disp, iidStr);
     vb6_UnknownRelease(disp);
     return iface;
