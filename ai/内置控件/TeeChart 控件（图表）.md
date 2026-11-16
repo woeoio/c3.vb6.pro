@@ -209,7 +209,10 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `RotationAngle` 旋起始角；同一刀修了 GDI `Pie()` 端点给反导致“填 270° 补集”的老 bug
   （症状：最后一块颜色吃掉大半个圆，第二块看不见）。判据 `tc_pie_px.ps1`：
   `radius0=109.9(n=6790)`≈r+18、`r1=92.0 r2=94.0 r3=94.5`≈r=94。
-- **仍未画**：饼图的扇区标签（`Marks` 对 Pie 的语义不同，是标签不是数值）、`Walls` / 3D。
+- **饼图扇区标签已画**（`638b2988`）：Marks 对 Pie 是“每块一个标签”，位置在中线 0.65r、
+  跟着 ExplodedSlice 外移，计入痕迹 `marks=N`（四等份夹具 `marks=4`）。
+- **仍未接**：`Walls` / 3D；`ShowEditor` / `Printer` / `Export` / `Zoom` —— 这四条仍会落到 438
+  （台账 §4 P3 写的是“先落显式空实现”，还没做，别当成已落）。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
