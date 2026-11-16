@@ -7,10 +7,12 @@
 # VBScript 写不出来，两侧不可比）。判据是**VB6 语义的固定读数**，逐行断言：
 #   n1 local_re=True typename=RegExp
 #   n2 module_re=True typename=RegExp
-#   n3 local_dict=1                 （TypeName 见下，C3 目前答 Long）
+#   n3 local_dict=1 typename=Dictionary
 #   n4 module_dict=1 typename=Dictionary
 # 修前：局部/模块级都只发 `void* r = NULL;`，四条全是空/NULL，stderr 一堆
 #       [C3_LATEBIND_MISS ... kind=null]（取证见 ai/039 §11.7）。
+# 第三十一刀：n3 的 typename 从 Long 收成 Dictionary（局部接口指针被当 LongPtr 装箱的
+#       那一格），四行全部成为硬断言，原来那段「已知差异」报告分支已删。
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -48,7 +50,7 @@ $err = @(Get-Content (Join-Path $OutDir 'err.txt') -Encoding Default)
 $want = @(
     'n1 local_re=True typename=RegExp',
     'n2 module_re=True typename=RegExp',
-    'n3 local_dict=1',
+    'n3 local_dict=1 typename=Dictionary',
     'n4 module_dict=1 typename=Dictionary'
 )
 $bad = 0
@@ -66,11 +68,5 @@ if ($err.Count -gt 0) {
 }
 if ($bad -gt 0) { exit 1 }
 
-# TypeName 那一格单列：VB6 答 Dictionary，C3 目前答 Long（COM 接口指针被当 LongPtr 装箱）。
-# 不断言，只报告 —— 不把错值写成期望。
-$n3 = $out[2].Trim()
 Write-Output ("PASS newbinding 4/4（reg_exp 局部+模块级、dict 局部+模块级；stderr 0 条）" )
-if ($n3 -notmatch 'typename=Dictionary') {
-    Write-Output ("  已知差异（不影响功能）: " + $n3 + "  —— VB6 是 typename=Dictionary，C3 把接口指针当 LongPtr 装箱（ai/039 §11.7 追账）")
-}
 exit 0

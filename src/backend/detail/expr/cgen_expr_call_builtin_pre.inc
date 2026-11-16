@@ -239,6 +239,34 @@
                     return;
                 }
             }
+            // C30-10 第三十一刀: TypeName(<一枚前期绑定 COM 接口变量>) —— VB6 答的是**实际对象
+            // 的 coclass 名** (实测 `Dim d As New Scripting.Dictionary` → "Dictionary"),
+            // 而这一路改前把接口指针当 LongPtr 装箱: 局部声明把接口指针登记进
+            // knownLongPtrVars_ (x64 指针宽度那一问, cgen_decl_var.cpp:326), 于是
+            // wrapVariantValue 发 `vb6_VariantFromValue((intptr_t)d)` ⇒ VT_I8 ⇒ TypeName
+            // 答 "Long" (夹具 tests/dict_native/NewBind.bas 的 n3; 同一轮发码里的模块级
+            // gDict 与局部 RegExp 都对, 只错「局部 + 类型化接口」这一格 —— 前者不登记
+            // LongPtr、后者是 void*, 两条都不进 (intptr_t) 那一档)。
+            // 闸门只开在**这一站**: 装箱表 (wrapVariantValue/boxToVariant) 一个字不动 ——
+            // 那张表喂的是 Is Nothing / `Set v = d` 一类的**值语义**, 改它影响面大。
+            // 判据是 knownTypedComVars_ 那张**名字表** (工程类不在其中: 它们登记在
+            // knownClassVars_, 上面那一块已按声明档折过), 所以对撞名免疫。
+            // 显式转 void*: `vb6_VariantFromValue` 的 _Generic 没有 vb6_ComIface_* 那一档,
+            // 落 default = vb6_VariantObject (vt=VT_DISPATCH, 构造侧 AddRef) —— 这正是
+            // vb6_TypeName 里「宿主 HWND / 工程包装器 / CreateObject coclass」三问的入口,
+            // 取值语义与模块级那一格 (n4) 逐字同形。
+            {
+                const std::string tnLowLoc =
+                    Symbol::toLower(static_cast<IdentifierExpr&>(*node.positional[0]).name);
+                if (knownTypedComVars_.count(tnLowLoc)) {
+                    std::string tnKeepLoc = lastExpr_;
+                    emitExpr(*node.positional[0]);
+                    const std::string tnArgLoc = std::move(lastExpr_);
+                    lastExpr_ = tnKeepLoc;
+                    lastExpr_ = "vb6_TypeName(vb6_VariantFromValue((void*)(" + tnArgLoc + ")))";
+                    return;
+                }
+            }
         }
     }
 
