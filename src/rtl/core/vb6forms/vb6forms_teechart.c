@@ -210,10 +210,10 @@ static void tcDrawText(HDC dc, const wchar_t* s, RECT* r, int center, COLORREF c
                                    : (DT_LEFT | DT_VCENTER | DT_SINGLELINE));
 }
 
-static void tcPaint(TcChart* c) {
-    PAINTSTRUCT ps;
-    HDC dc;
-    RECT rc, plot;
+/* C30-10 第十五刀：把绘制体从“只认 WM_PAINT”里抽出来 —— 导出/剪贴板要能画到任意 DC。
+ * 只做机械拆分：BeginPaint/GetClientRect 留在 tcPaint，rc 由调用方给。 */
+static void tcRender(TcChart* c, HDC dc, RECT rc) {
+    RECT plot;
     HBRUSH br;
     HPEN   oldPen, pen;
     HGDIOBJ oldBr;
@@ -223,10 +223,7 @@ static void tcPaint(TcChart* c) {
     int headerH = 0, legendW = 0, legendLeft = 0, legendRight = 0;
     double vmin, vmax;
 
-    if (!c) return;
-    dc = BeginPaint(c->hwnd, &ps);
-    if (!dc) return;
-    GetClientRect(c->hwnd, &rc);
+    if (!c || !dc) return;
 
     /* 字体：TeeChart 的图例/标题用的是自己的字体（不是系统 GUI 字体）。
      * 直接沿用默认字体量出来的“Series0”宽 53px，而参照读数的图例框只有 61 宽
@@ -282,7 +279,6 @@ static void tcPaint(TcChart* c) {
     if (plot.right <= plot.left + 2 || plot.bottom <= plot.top + 2) {
         SelectObject(dc, fntOld); DeleteObject(fnt);
         SelectObject(dc, oldPen); DeleteObject(pen);
-        EndPaint(c->hwnd, &ps);
         return;
     }
 
@@ -638,7 +634,133 @@ static void tcPaint(TcChart* c) {
                 marksDrawn, pieRot, pieExp0, (void*)c->hwnd);
         fflush(stderr);
     }
+}
+
+static void tcPaint(TcChart* c) {
+    PAINTSTRUCT ps;
+    HDC dc;
+    RECT rc;
+    if (!c) return;
+    dc = BeginPaint(c->hwnd, &ps);
+    if (!dc) return;
+    GetClientRect(c->hwnd, &rc);
+    tcRender(c, dc, rc);
     EndPaint(c->hwnd, &ps);
+}
+
+/* ================= C30-10 第十五刀：导出 / 剪贴板 —— 真渲染，不再是空实现 =================
+ * 导出靠 tcRender 画到内存 DC，所以图形与屏幕同源（同一份绘制代码），
+ * 不会出现“屏幕一套、导出另一套”的分叉。 */
+typedef struct { HDC screen, mem; HBITMAP bmp; HGDIOBJ old; int w, h; } TcShot;
+
+static int tcShotTake(TcChart* c, TcShot* s) {
+    RECT r, rr;
+    memset(s, 0, sizeof *s);
+    if (!c) return 0;
+    GetClientRect(c->hwnd, &r);
+    s->w = r.right - r.left;
+    s->h = r.bottom - r.top;
+    if (s->w <= 0 || s->h <= 0) return 0;
+    s->screen = GetDC(NULL);
+    s->mem    = CreateCompatibleDC(s->screen);
+    s->bmp    = CreateCompatibleBitmap(s->screen, s->w, s->h);
+    if (!s->mem || !s->bmp) return 0;
+    s->old = SelectObject(s->mem, s->bmp);
+    rr.left = 0; rr.top = 0; rr.right = s->w; rr.bottom = s->h;
+    tcRender(c, s->mem, rr);
+    return 1;
+}
+
+static void tcShotFree(TcShot* s) {
+    if (s->mem) { if (s->old) SelectObject(s->mem, s->old); DeleteDC(s->mem); s->mem = NULL; }
+    if (s->screen) { ReleaseDC(NULL, s->screen); s->screen = NULL; }
+}
+
+/* 剪贴板：给 CF_BITMAP 必须是 DDB（DIB 段交过去会被拒绝/格式不符），
+ * 所以这里用 CreateCompatibleBitmap 而不是 CreateDIBSection。
+ *
+ * 坑：位图仍选在内存 DC 里时 SetClipboardData **会失败**（GDI 不允许把
+ * 正在用的位图交出去）。第一版就是先 Set 后 Free，结果剪贴板里什么都没有。
+ * 所以顺序必须是：渲染 → 脱离 DC → Set → 成功后所有权归剪贴板，不能再删。 */
+static int tcExportClipboard(TcChart* c) {
+    TcShot s;
+    int ok = 0;
+    if (!tcShotTake(c, &s)) return 0;
+    tcShotFree(&s);
+    if (OpenClipboard(c->hwnd) || OpenClipboard(NULL)) {
+        EmptyClipboard();
+        ok = SetClipboardData(CF_BITMAP, s.bmp) ? 1 : 0;
+        CloseClipboard();
+    }
+    if (tcTrace() > 0) {
+        fprintf(stderr, "[TCHART] clipboard %dx%d ok=%d\n", s.w, s.h, ok);
+        fflush(stderr);
+    }
+    if (!ok) DeleteObject(s.bmp);
+    return ok;
+}
+
+/* JPEG：走系统自带的 gdiplus.dll，动态加载而不是加链接依赖 ——
+ * 这张 .c 同时进 x86/x64 的 RTL，自己写一份基线 JPEG 编码器不值得。
+ *
+ * 编码器 CLSID 直接写死（{557CF401-1A04-11D3-9A73-0000F81EF32E} = image/jpeg），
+ * **不走 GdipGetImageEncoders 枚举**：实测两处都不对 —— 枚举返回的 size 与
+ * sizeof(ImageCodecInfo) 对不上（num=5 size=1264），按自己声明的结构体读，
+ * codec[2].MimeType 读到 null、循环后直接 AV。写死一个官方 CLSID 既短又稳。 */
+typedef struct {
+    UINT32 GdiplusVersion;
+    void*  DebugEventCallback;
+    BOOL   SuppressBackgroundThread;
+    BOOL   SuppressExternalCodecs;
+} TcGpInput;
+
+static const GUID kTcClsidJpeg =
+    { 0x557CF401, 0x1A04, 0x11D3, { 0x9A, 0x73, 0x00, 0x00, 0xF8, 0x1E, 0xF3, 0x2E } };
+
+typedef int (WINAPI* TcGpStartup)(ULONG_PTR*, const TcGpInput*, void*);
+typedef int (WINAPI* TcGpShutdown)(ULONG_PTR);
+typedef int (WINAPI* TcGpFromBmp)(HBITMAP, HPALETTE, void**);
+typedef int (WINAPI* TcGpSave)(void*, const wchar_t*, const GUID*, void*);
+typedef int (WINAPI* TcGpDispose)(void*);
+
+static int tcSaveJpeg(TcChart* c, const wchar_t* path) {
+    HMODULE dll;
+    TcGpStartup pStartup = NULL;
+    TcGpShutdown pShutdown = NULL;
+    TcGpFromBmp pFromBmp = NULL;
+    TcGpSave pSave = NULL;
+    TcGpDispose pDispose = NULL;
+    TcShot s;
+    TcGpInput in;
+    ULONG_PTR token = 0;
+    void* img = NULL;
+    int rc = 0;
+
+    if (!path || !path[0]) return 0;
+    dll = LoadLibraryW(L"gdiplus.dll");
+    if (!dll) return 0;
+    pStartup  = (TcGpStartup)GetProcAddress(dll, "GdiplusStartup");
+    pShutdown = (TcGpShutdown)GetProcAddress(dll, "GdiplusShutdown");
+    pFromBmp  = (TcGpFromBmp)GetProcAddress(dll, "GdipCreateBitmapFromHBITMAP");
+    pSave     = (TcGpSave)GetProcAddress(dll, "GdipSaveImageToFile");
+    pDispose  = (TcGpDispose)GetProcAddress(dll, "GdipDisposeImage");
+    if (!pStartup || !pShutdown || !pFromBmp || !pSave || !pDispose) {
+        FreeLibrary(dll);
+        return 0;
+    }
+    memset(&in, 0, sizeof in);
+    in.GdiplusVersion = 1;
+    if (pStartup(&token, &in, NULL) != 0) { FreeLibrary(dll); return 0; }
+    if (!tcShotTake(c, &s)) { pShutdown(token); FreeLibrary(dll); return 0; }
+    if (pFromBmp(s.bmp, NULL, &img) == 0 && img) {
+        if (pSave(img, path, &kTcClsidJpeg, NULL) == 0) rc = 1;
+        pDispose(img);
+    }
+    tcShotFree(&s);
+    DeleteObject(s.bmp);
+    pShutdown(token);
+    FreeLibrary(dll);
+    return rc;
 }
 
 static LRESULT CALLBACK vb6_TChartWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -868,7 +990,8 @@ static const wchar_t* kTcPrinterNames[] = {
     L"BeginDoc", L"EndDoc", L"Print", L"PrintPartial",
     L"PageWidth", L"PageHeight", L"PrintOrientation", L"Copies", NULL };
 static const wchar_t* kTcExportNames[] = {
-    L"SaveToFile", L"CopyToClipboard", L"Email", L"Picture", L"Width", L"Height", NULL };
+    L"SaveToFile", L"CopyToClipboard", L"Email", L"Picture", L"Width", L"Height",
+    L"SaveToJPEGFile", L"SaveToBitmapFile", NULL };
 static const wchar_t* kTcZoomNames[] = {
     L"Enable", L"Percent", L"Direction", L"Point", L"SetMax", NULL };
 /* C30-10 第十一刀：3D 面（先让值存得住、读得回，再把柱形按深度画出来） */
@@ -1196,7 +1319,31 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
             return S_OK;                                              /* 其余不动作 */
         }
         if (o->kind == TC_KIND_EXPORT) {
-            return S_OK;   /* SaveToFile / CopyToClipboard / Email 不动作 */
+            /* 第十五刀：两个真动作落地（参数按 VARIANT 取，BSTR 路径）。
+             * Email / Picture / Width / Height 仍不动作，台账注明。 */
+            const wchar_t* path = (argc >= 1 && a0 && V_VT(a0) == VT_BSTR) ? V_BSTR(a0) : NULL;
+            if (tcTrace() > 0) {
+                fprintf(stderr, "[TCHART] export id=%d argc=%d res=%d vt=%d\n",
+                        (int)id, argc, res ? 1 : 0,
+                        (argc >= 1 && a0) ? (int)V_VT(a0) : -1);
+                fflush(stderr);
+            }
+            switch (id) {
+            case 2:            /* CopyToClipboard */
+                if (res) tcSetL(res, tcExportClipboard(c) ? -1 : 0);
+                else     tcExportClipboard(c);
+                return S_OK;
+            case 1:            /* SaveToFile：只认 .jpg/.jpeg，其余不落盘 */
+                if (path && (wcsstr(path, L".jpg") || wcsstr(path, L".JPG"))) {
+                    if (res) tcSetL(res, tcSaveJpeg(c, path) ? -1 : 0);
+                }
+                return S_OK;
+            case 7:            /* SaveToJPEGFile */
+                if (res) tcSetL(res, (path && tcSaveJpeg(c, path)) ? -1 : 0);
+                return S_OK;
+            default:
+                return S_OK;
+            }
         }
         switch (id) {
         case 1:            /* Zoom.Enable */
