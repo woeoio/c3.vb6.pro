@@ -124,14 +124,21 @@ $read = New-Object System.Collections.Generic.List[string]
 if ($tw -ne 401 -or $th -ne 257) { $issues.Add("图表 ${tw}x${th} != 401x257") }
 if ($dpi -ne 96) { $issues.Add("DPI=$dpi != 96") }
 
-$wall = @(192, 192, 192)
+# C30-10 第二十刀起四壁按分面绘制并带明暗：背板 = WallsColor 原值 192，左壁 tcShade(-18%) = 158，
+# 底壁 tcShade(-10%) = 173。判据按「墙面色族」取包络 —— 只看背板灰会让左壁从掩码里消失，
+# 最左就退到 40（背板左缘），把「左壁没画」误判成几何变了。
+$wallShades = @(192, 158, 173)
 $cnt = 0; $minX = 9999; $maxX = -1; $minY = 9999; $maxY = -1
 for ($y = 0; $y -lt $th; $y++) {
     $row = $y * $stride
     for ($x = 0; $x -lt $tw; $x++) {
         $o = $row + $x * 4
         $b = [int]$buf[$o]; $g2 = [int]$buf[$o + 1]; $r2 = [int]$buf[$o + 2]
-        if ([Math]::Abs($r2 - $wall[0]) -le 6 -and [Math]::Abs($g2 - $wall[1]) -le 6 -and [Math]::Abs($b - $wall[2]) -le 6) {
+        $hit = $false
+        foreach ($ws in $wallShades) {
+            if ([Math]::Abs($r2 - $ws) -le 6 -and [Math]::Abs($g2 - $ws) -le 6 -and [Math]::Abs($b - $ws) -le 6) { $hit = $true; break }
+        }
+        if ($hit) {
             $cnt++
             if ($x -lt $minX) { $minX = $x }
             if ($x -gt $maxX) { $maxX = $x }

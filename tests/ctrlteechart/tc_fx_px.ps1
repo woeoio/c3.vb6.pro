@@ -1,7 +1,8 @@
 ﻿param(
     [Parameter(Mandatory=$true)][string]$Exe,
     [Parameter(Mandatory=$true)][ValidateSet('fx','walls')][string]$Mode,
-    [string]$OutDir = ""
+    [string]$OutDir = "",
+    [int]$Sec = 4      # run_tests 会传 -Sec（判据等待秒数），本脚本不使用
 )
 # C30-10 第二十刀：勾选框那批属性的**绘制**判据。对应 ChartDisplay 示例里
 #   Check1(渐变) / Check3(边框) / Check5(3D) / Check6(Frame) / Check11(Walls)
