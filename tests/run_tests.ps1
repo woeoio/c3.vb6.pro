@@ -926,6 +926,21 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_hbar_px"; Vbp = "$Tests\ctrlteechart\TcHbarApp.vbp"; Mode = "close";
        WindowTitle = "TChart hbar"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_hbar_px.ps1") },
+    # C30-10 三种新图表类型 + 不支持类型的报错口径（同一个探针，-Mode 分派）：
+    #   gantt：三条横带、包络 28..302；bubble：最大圆直径 24±6；
+    #   donut：圆心 = Panel 底色（有洞）、半径 70 处有环；badtype：Err.Number=5、Count=0。
+    @{ Name = "ctrlteechart_gantt_px"; Vbp = "$Tests\ctrlteechart\TcGanttApp.vbp"; Mode = "close";
+       WindowTitle = "TChart gantt"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_gantt_px.ps1") },
+    @{ Name = "ctrlteechart_bubble_px"; Vbp = "$Tests\ctrlteechart\TcBubbleApp.vbp"; Mode = "close";
+       WindowTitle = "TChart bubble"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_bubble_px.ps1") },
+    @{ Name = "ctrlteechart_donut_px"; Vbp = "$Tests\ctrlteechart\TcDonutApp.vbp"; Mode = "close";
+       WindowTitle = "TChart donut"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_donut_px.ps1") },
+    @{ Name = "ctrlteechart_badtype"; Vbp = "$Tests\ctrlteechart\TcBadTypeApp.vbp"; Mode = "close";
+       WindowTitle = "TChart badtype"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_badtype_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
