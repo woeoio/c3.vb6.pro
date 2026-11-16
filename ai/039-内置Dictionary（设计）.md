@@ -370,9 +370,10 @@ p10 slot_intvar 2/Integer ✔                p09 v=1:v=v+1 3（真组件 2） �
 
 两处留白（同一层但另排期）：
 
-1. **`&H` 进制字面量的宽度**：`&HFFFF` 真组件答 Integer(-1)，C3 答 Long(65535)。符号规则
-   VBScript 与 VB6 本身就不一致（`&H8000` 两台读数不同），所以没有拿 cscript 当判据；
-   要动就得先把 VB6 的「4 位十六进制按 16 位有符号解释」写成独立判据。
+1. ~~**`&H` 进制字面量的宽度**~~ **已修前半（第三十三刀，见 §11.12）**：`&H` 那一形已按 VB6 的
+   Integer 档装箱。**口径修正**：C3 的**值**早在第313刀就按 16 位补码折对了（`&HFFFF` = -1），
+   缺的只是**档** —— §11.10 当时写的「C3 答 Long(65535)」只对了前半（那是第313刀之前的读数）。
+   剩下的是 `&O`/`&B` 两形（无真组件读数，不敢按 hex 类推）。
 2. **Variant 算术结果的宽度**：`v=1: v=v+1` 真组件仍 Integer，C3 答 Long（`vb6_VarAddV` 的
    结果档由 RTL 算术定）。这就是「算术全链」那一层的第一格。
 
@@ -407,4 +408,56 @@ p10 slot_intvar 2/Integer ✔                p09 v=1:v=v+1 3（真组件 2） �
 `vb6_VariantCur` —— 新出口交回一枚**新造且归调用方所有**的 VARIANT，却没进
 `src/common/owned_temp_keeps.hpp` 的 `kOwned`/`kOwnedVariant`（那两份是手写面，哨兵 K13 双向对账）。
 补登后本地复跑 `scripts/check_owned_temp_keeps.ps1` = PASS（owned 121 / K13/K13b/K13c two-way）。
+
+### 11.12 第三十三刀：无后缀 `&H` 的**档**（离白 1 的前半）
+
+**病灶口径修正**：这一格原来记的是「C3 答 Long(65535)」—— 只对了前半。第313刀之后
+`&HFFFF` 的**值**已按 16 位补码折成 -1（`radixTierOf`），缺的只是**类型身份**：
+改前探针 `h01|lit_ffff vt=3 tn=Long val=-1`（值对、档错）。于是真组件与 C3 的差只在
+`VarType`/`TypeName` 上 —— 比原估计窄一格。
+
+判据（VB6 规则 — 与无后缀十进制同一条「装得下的最小有符号类型」口径）：
+
+| 写法 | VB6 档 | 值 | 实证 |
+| --- | --- | --- | --- |
+| `&HFF` / `&H7FFF` / `&H8000` / `&HFFFF` / `&HBF32` | Integer (VT_I2) | 255 / 32767 / -32768 / -1 / -16590 | 真组件对 `&HFFFF` 的读数 = Integer(-1) |
+| `&H10000`（5 位） | Long | 65536 | 位宽 > 0xFFFF，不参加 16 位折叠 |
+| `&HFFFFFFFF`（8 位） | **Long** | -1 | 值也在 int16 范围内，但档是 Long —— 所以判据必须看**位宽**而不是值 |
+| `&HFFFF&`（带 `&` 后缀） | Long | 65535 | `tests/intsuffix` 的证人；后缀不改 |
+
+**落点：一位主人，两次搬运，不抄第二遍**
+
+| 位置 | 改了什么 |
+| --- | --- |
+| `src/lexer/lexer_number.cpp` | `RadixTier` 多记一个 `narrow16`（只在真的走过 16 位补码折叠那一支为 true）；`makeRadixToken` 在 `tier.narrow16 && tagInt16` 时置 `tok.radixInt16` |
+| `src/lexer/lexer.hpp` / `token.hpp` | `makeRadixToken` 多一个 `tagInt16` 形参（只有 `&H` 那一支传 true）；`Token` 多一枚 `radixInt16` |
+| `src/parser/parser_expr.cpp` | `parseLiteral` 原样搬到 `LiteralExpr::radixInt16` |
+| `src/ast/detail/ast_expr.hpp` | `LiteralExpr` 多一枚 `radixInt16` |
+| `src/backend/cgen_util_ctrl.cpp` | `isNarrowIntExpr` 只问那一枚标记（不拿 rawText 重算规则） |
+
+为什么不在发码侧重算：那等于把 `radixTierOf` 抄第二遍，而第313刀的教训正是「抄一次漏一次」。
+也不进 `inferExprType`：那张表同时喂算术/收窄，改它就是把「16 位算术 + 溢出检查」整层打开。
+
+探针读数（`.temp/litprobe/HexProbe.bas`，17 行，改前 → 改后）：
+
+```
+h01 &HFFFF      3/Long/-1  →  2/Integer/-1  ✔      h06 &H10000   3/65536  不动 ✔
+h02 &H8000      3/-32768   →  2/-32768     ✔      h07 &HFFFF&   3/65535  不动 ✔（后缀证人）
+h03 &H7FFF      3/32767    →  2/32767     ✔      h08 &O177777  3/-1     不动（离白）
+h04 &HFF        3/255      →  2/255       ✔      h09 &O100000  3/-32768  不动（离白）
+h05 &HBF32      3/-16590   →  2/-16590    ✔      h12 slot_10000 3/65536 不动 ✔
+h10 slot_ffff   3/-1       →  2/-1        ✔      h13~h16 算术与转换逐字不变
+```
+
+影响面：**发码零变更**。CI run `43929396923` 的 `Emit manifest` 绿（748 份输入逐字相同），
+运行期也全绿 —— 22/22 success。语料里「≤ 4 位的 `&H` 字面量进 Variant 槽」那一形真的
+一处也没有（2120 处命中全是颜色、掩码、位运算与常量）。所以这一刀只有探针能看见它的效果，
+这也正是它敢开的理由：宽面（161 份文件）里没有一格落在装箱站上。
+
+同层剩下两格（已登记为离白）：
+
+1. `&O` / `&B` 的档 —— 值已按 16 位折叠（`&O177777` = -1），档仍 Long；真组件对这一形**没有读数**，
+   不按 hex 类推（`tagInt16=false` 就是那两道闸，见 `lexer_number.cpp` 两处注释）。
+2. `-&HFFFF` 这类**一元负号包着**的形仍按 Long 装（`isNarrowIntExpr` 只问裸字面量节点）；
+   VB6 应是 Integer(1)。要收就得给 `vb6IntConstantValue` 加一条进制的负号路 —— 目前语料 0 处，暂不开。
 
