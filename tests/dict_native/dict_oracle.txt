@@ -38,3 +38,19 @@ d83|items_isarray=True
 d90|foreach_keys=k1;k2;
 d95|cmpmode_change_with_items_err=5
 d96|array_value_elem=q
+d100|bool_key: true=True neg1=True one=False strTrue=False
+d101|date_key: same=True asnum=True asstr=False
+d102|cur_key: cur=True dbl=True int1=False
+d103|db_mode: lower=True pad=False leadpad=False
+d104|nothing_key: zero=False nothing=True empStr=False
+d105|empty_key: zero=True empty=True empStr=True null=False
+d106|null_key: null=True empty=False
+d107|int7_key: long7=True dbl7=True str7=False
+d108|foreach_remove: seq=a;b;c; err=0 count=2
+d109|item_set_existing: keys=a,b val=99
+d110|cmpmode3: err=0 readback=3
+d111|cmpmode_neg: err=5
+d112|vartypes: count=3 keys=8204 keyelem=8
+d113|object_value: isobject=True typename=Dictionary
+d114|cm3_dedupe: add_lower_err=457 count=1 readback=3
+d115|empty_key_text: zero=True empty=True empStr=True

@@ -1,6 +1,6 @@
 # 039 - 内置 Dictionary（设计）
 
-> 状态：设计稿（本文件入库这一刀只落「设计 + 行为基准」两件，不动实现）。
+> 状态：**S1 已完成**（设计稿 + 56 行行为基准已入库），实现从 S2 开始。
 > 前身：C30-10 第二十二~二十五刀（内置正则引擎）验证了「ProgID 拦截 + 自带 IDispatch」这条路，
 > 本文件把同一条路铺到 `Scripting.Dictionary` 上，并补上正则那刀没覆盖的**前期绑定**入口。
 
@@ -62,7 +62,7 @@
 
 夹具：`tests/dict_native/DictCases.vbs`（UTF-8 **无 BOM** + CRLF —— cscript 不认 UTF-8 BOM，
 第一版带 BOM 直接报「无效字符」，这是本文件踩过的第一个坑），基准输出
-`tests/dict_native/dict_oracle.txt`（40 行）。
+`tests/dict_native/dict_oracle.txt`（**56 行**）。
 
 复现：
 
@@ -91,6 +91,29 @@ cscript //nologo tests\dict_native\DictCases.vbs     # 重写 dict_oracle.txt
 | 键相等（Text 模式） | `Add "Key"` 后 `Exists("key")=True`（字符串大小写不敏感）；`Add CDbl(1)` 后 `Exists("1")=False`（**Text 不等于"全部转字符串"**） |
 | 尾随空格 | Binary / Text / Database 三档实测 `Exists("ab  ")` 均 False（scrrun 不裁剪空格） |
 | 数组值 | 可以存数组并读回（`d("arr")(1)` 那一形另见测试） |
+| 对象值 | 可以存对象，`IsObject` / `TypeName` 正常（存另一个 Dictionary 读回 `Dictionary`） |
+| `Count` 的 VarType | 3（VT_I4）；`Keys` 的 VarType 8204（Variant 数组），元素类型随键 |
+| `Item` 赋值到已有键 | 只改值，**不改变位置**（`keys=a,b`） |
+| `For Each` 中删除当前键 | 不报错，序列仍走完（`a;b;c`），结束后 `count=2` —— **枚举是快照语义** |
+
+### 4.0.1 键相等真值表（S1 实测，实现按此写）
+
+| 键 | 与之相等 | 与之不等 |
+| --- | --- | --- |
+| `Add True` | `True`、`-1` | `1`、`"True"` |
+| `Add CDate("2026-11-16 10:30")` | 同一个 `Date`、它的数值（`CDbl`） | 它的字符串形式 |
+| `Add CCur(1.5)` | `CCur(1.5)`、`CDbl(1.5)` | `1` |
+| `Add CInt(7)` | `CLng(7)`、`CDbl(7)` | `"7"` |
+| `Add Empty` | `Empty`、`0`、`""`（**三者互为同一个键**） | `Null` |
+| `Add Null` | `Null` | `Empty` |
+| `Add Nothing` | `Nothing` | `0`、`""` |
+
+读法：数值类（含 Bool/Date/Currency）跨类型互通；字符串只与字符串相等；
+`Empty` 是「零值」那种特例（与 `0` 和 `""` 都撞车），`Null` 与 `Nothing` 各自独立成类。
+
+另一个反直觉点：`CompareMode = 3` **不报错**（读回仍是 3），但判重行为等同 Text
+（`Add "A"` 后再 `Add "a"` → 457）。`CompareMode = -1` 才报 5。
+实现按实测走：接受 0..3，>0 一律按「大小写不敏感」处理，负数报 5。
 
 ### 4.1 口径分歧：`Item` 缺键（必须显式记账）
 
@@ -133,8 +156,8 @@ cscript //nologo tests\dict_native\DictCases.vbs     # 重写 dict_oracle.txt
 2. 字符串类（`VT_BSTR`）：Binary 模式逐字节；Text 模式按 **`CompareStringW(LOCALE_USER_DEFAULT,
    NORM_IGNORECASE)`**；Database 模式再加 `NORM_IGNOREWIDTH|NORM_IGNOREKANATYPE`。
 3. `VT_EMPTY` / `VT_NULL` / `VT_DISPATCH(NULL)` 各自独立成一类（实测三者互不相等且都能当键）。
-4. 日期（`VT_DATE`）：按底层 `double` 走数值类？**待补测**（本刀探针在 `.build` 里被脚本错误打断，
-   未取得读数；实现前必须补，不许猜）。
+4. 日期（`VT_DATE`）：**已实测** —— 与它的数值（`CDbl`）相等、与其字符串形式不等，
+   因此归入数值类（第 6 节口径正确，无需另设一类）。
 5. 字符串与数值之间**永不相等**（实测 `Exists("1")=False`）。
 
 哈希：对「类型类 + 规范化后的值」算 32 位 FNV-1a；桶内线性比对（桶数组 + 保序链表/向量），
@@ -157,6 +180,7 @@ cscript //nologo tests\dict_native\DictCases.vbs     # 重写 dict_oracle.txt
 | 步 | 内容 | 判据（必须真跑） |
 | --- | --- | --- |
 | S1 | **补全基准**：日期/货币/布尔/`Nothing` vs 0、Database 模式大小写、`Item` 赋值与 `Add` 的键规范化差异、`For Each` 在删除后 | `dict_oracle.txt` 扩到 ≥55 行；每行注明 cscript 读数或 `VB6-SEM` |
+| ~~S1~~ | **已完成**：56 行，含键相等真值表（4.0.1）、`CompareMode=3` 语义、`For Each` 快照行为 | 已入仓 |
 | S2 | 骨架：`vb6com_dict.c`（数据结构 + 比较器 + 哈希）+ 单测壳（C 侧自测入口，不进 VB 面） | 本地 C 自测 30 例全过（键相等矩阵） |
 | S3 | IDispatch 面：`Add/Exists/Item/Count/Remove/RemoveAll/Keys/Items/CompareMode` + `_NewEnum` | C3 侧夹具 `DictMain.bas` 与 `dict_oracle.txt` 逐行一致（先只走 `CreateObject`） |
 | S4 | **三条入口全接**：`vb6_CreateObject` 拦截 + `vb6_NewVb6RuntimeClass` 登记（`Dictionary` / `Scripting.Dictionary`）；同刀把 `RegExp` 也登记（补 `New VBScript.RegExp` 欠账） | 新增 `Dim d As New Scripting.Dictionary`、`Dim re As New VBScript.RegExp` 两条判据；`C3_DICT_PREFER_MS=1` 时行为回到 scrrun（对照组） |

@@ -175,4 +175,115 @@ back = d("arr")
 P "d96|array_value_elem=" & CStr(back(1))
 Set d = Nothing
 
+' ---- S1: key type truth table (all readings from real scrrun) ----
+Dim dv, dk, acc2, kk
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add True, "t"
+P "d100|bool_key: true=" & CStr(d.Exists(True)) & " neg1=" & CStr(d.Exists(-1)) & " one=" & CStr(d.Exists(1)) & " strTrue=" & CStr(d.Exists("True"))
+Set d = Nothing
+
+dv = CDate("2026-11-16 10:30:00")
+Set d = CreateObject("Scripting.Dictionary")
+d.Add dv, "dt"
+P "d101|date_key: same=" & CStr(d.Exists(dv)) & " asnum=" & CStr(d.Exists(CDbl(dv))) & " asstr=" & CStr(d.Exists(CStr(dv)))
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add CCur(1.5), "cur"
+P "d102|cur_key: cur=" & CStr(d.Exists(CCur(1.5))) & " dbl=" & CStr(d.Exists(CDbl(1.5))) & " int1=" & CStr(d.Exists(1))
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.CompareMode = 2
+d.Add "Abc", 1
+P "d103|db_mode: lower=" & CStr(d.Exists("abc")) & " pad=" & CStr(d.Exists("Abc ")) & " leadpad=" & CStr(d.Exists(" Abc"))
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add Nothing, "n"
+P "d104|nothing_key: zero=" & CStr(d.Exists(0)) & " nothing=" & CStr(d.Exists(Nothing)) & " empStr=" & CStr(d.Exists(""))
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add Empty, "e"
+P "d105|empty_key: zero=" & CStr(d.Exists(0)) & " empty=" & CStr(d.Exists(Empty)) & " empStr=" & CStr(d.Exists("")) & " null=" & CStr(d.Exists(Null))
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add Null, "nu"
+P "d106|null_key: null=" & CStr(d.Exists(Null)) & " empty=" & CStr(d.Exists(Empty))
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+dk = CInt(7)
+d.Add dk, "i"
+P "d107|int7_key: long7=" & CStr(d.Exists(CLng(7))) & " dbl7=" & CStr(d.Exists(CDbl(7))) & " str7=" & CStr(d.Exists("7"))
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add "a", 1
+d.Add "b", 2
+d.Add "c", 3
+On Error Resume Next
+Err.Clear
+acc2 = ""
+For Each kk In d
+    acc2 = acc2 & kk & ";"
+    If kk = "a" Then d.Remove "a"
+Next
+P "d108|foreach_remove: seq=" & acc2 & " err=" & CStr(Err.Number) & " count=" & CStr(d.Count)
+On Error GoTo 0
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add "a", 1
+d.Add "b", 2
+d("a") = 99
+P "d109|item_set_existing: keys=" & Join(d.Keys, ",") & " val=" & CStr(d("a"))
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+On Error Resume Next
+Err.Clear
+d.CompareMode = 3
+P "d110|cmpmode3: err=" & CStr(Err.Number) & " readback=" & CStr(d.CompareMode)
+Err.Clear
+d.CompareMode = -1
+P "d111|cmpmode_neg: err=" & CStr(Err.Number)
+On Error GoTo 0
+Set d = Nothing
+
+Set d = CreateObject("Scripting.Dictionary")
+d.Add "x", 1
+P "d112|vartypes: count=" & CStr(VarType(d.Count)) & " keys=" & CStr(VarType(d.Keys)) & " keyelem=" & CStr(VarType(d.Keys()(0)))
+Set d = Nothing
+
+Dim inner
+Set inner = CreateObject("Scripting.Dictionary")
+inner.Add "i", 1
+Set d = CreateObject("Scripting.Dictionary")
+d.Add "o", inner
+P "d113|object_value: isobject=" & CStr(IsObject(d("o"))) & " typename=" & TypeName(d("o"))
+Set d = Nothing
+Set inner = Nothing
+
+' CompareMode=3 was accepted silently (readback=3). What does it compare like?
+Set d = CreateObject("Scripting.Dictionary")
+On Error Resume Next
+d.CompareMode = 3
+Err.Clear
+d.Add "A", 1
+d.Add "a", 2
+P "d114|cm3_dedupe: add_lower_err=" & CStr(Err.Number) & " count=" & CStr(d.Count) & " readback=" & CStr(d.CompareMode)
+On Error GoTo 0
+Set d = Nothing
+
+' Empty key under Text mode: still equal to 0 and ""?
+Set d = CreateObject("Scripting.Dictionary")
+d.CompareMode = 1
+d.Add Empty, "e"
+P "d115|empty_key_text: zero=" & CStr(d.Exists(0)) & " empty=" & CStr(d.Exists(Empty)) & " empStr=" & CStr(d.Exists(""))
+Set d = Nothing
+
 gOut.Close
