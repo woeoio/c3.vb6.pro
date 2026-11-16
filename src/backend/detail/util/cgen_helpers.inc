@@ -170,6 +170,9 @@
     // boxToVariant 同一份判据 (字面量 / `As Integer` 变量两形)。两位调用者:
     // wrapVariantValue 的 `case Long` (它不能把这档抢去装 VT_I4) 与 boxToVariant 自己。
     bool isNarrowIntExpr(const Expr* e) const;
+    // C30-10 第三十五刀: 「这枚**内置函数**在 VB6 里返回 Integer、而 C 侧一个 int32_t」那条问。
+    // 数据在 cgen_builtin_return_type_table.inc 的 builtinReturnsVbInteger（只喂装箱站）。
+    bool builtinReturnsVbIntegerName(const std::string& name) const;
     // VB6标识符 → C全局函数名
     // 本模块: vb6_<ProcName>
     // 跨模块(外部): vb6_<ModuleName>_<ProcName>

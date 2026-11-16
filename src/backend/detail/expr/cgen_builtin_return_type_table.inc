@@ -57,3 +57,33 @@ static Vb6Type builtinReturnTypeFallback(const std::string& name) {
     if (it == table.end()) return Vb6Type::Unknown;
     return it->second;
 }
+
+// C30-10 第三十五刀: 「VB6 答 Integer、而 C 侧/inferExprType 答 Long」的内建那一族。
+//
+// 口径来源 = cscript 实测（`.temp/litprobe/W4.vbs` ↔ `W4.bas`，十四形逐条对上）
+// + VB6 文档：Asc/AscB/AscW、Sgn、VarType、StrComp、Month/Day/Year/Hour/Minute/Second/
+// Weekday、FreeFile 在 VB6 里都返回 **Integer**（VarType 2 / TypeName "Integer"）。
+// 同一个探针里反证四枚（InStr/InStrRev/RGB/UBound 答 3=Long）—— 别把它们拉进来。
+//
+// 为什么不直接改语义层 `builtin_funcs.inc`（那才是「真」表）：`inferExprType` 对这几枚
+// 答的 Long 是 **C 侧 int32 口径**，它同时喂算术/收窄/格式化。把档改窄会把「Integer 参
+// 与算术时 VB6 的升格规则」（`*` 升 Long、`+` 留 Integer、溢出错误 6）整层打开 —— 那是
+// 「算术全链」，不在本刀范围（同 §11.12/§11.13 那两道闸）。
+//
+// ⚠ 这是**过渡期的第二份答案**，只喂装箱站 (`isNarrowIntExpr`)。算链落账之后，应当把
+//   语义层那十四行改成 Integer、删掉本函数，让唯一来源仍是 `builtin_funcs.inc`。
+static bool builtinReturnsVbInteger(const std::string& name) {
+    std::string n = name;
+    std::transform(n.begin(), n.end(), n.begin(), ::tolower);
+    if (!n.empty() && n.back() == '$') n.pop_back();
+    static const std::unordered_set<std::string> kSet = {
+        "asc", "ascb", "ascw", "sgn", "vartype", "strcomp",
+        "month", "day", "year", "hour", "minute", "second", "weekday",
+        "freefile"
+    };
+    return kSet.count(n) != 0;
+}
+
+bool CCodeGen::builtinReturnsVbIntegerName(const std::string& name) const {
+    return builtinReturnsVbInteger(name);
+}

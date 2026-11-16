@@ -3662,13 +3662,37 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
         return lit.radixInt16 && lit.literalKind == LiteralKind::Integer
                && lit.intValue >= -32768 && lit.intValue <= 32767;
     }
-    if (e->kind == ASTNodeKind::IdentifierExpr)
-        return knownIntVars_.count(
-                   Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name)) > 0
-               // C30-10 第三十四刀: 用户 `Const` 的 Integer 档。两张表只在这里被问 ——
-               // 没有进 knownIntVars_, 所以 inferExprType / 收窄检查 / 算术那几层一字未动。
-               || knownIntConsts_.count(
-                      Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name)) > 0;
+    // C30-10 第三十五刀: 内建返回档那一族 (Asc/Sgn/VarType/StrComp/月日年时分秒/Weekday/
+    // FreeFile) —— VB6 答 Integer, 而语义层与 C 侧都答 int32。两形都要认:
+    //   * 带实参的调用形 `Asc("A")` → IndexOrCallExpr(callee=IdentifierExpr)；
+    //   * 零参、不带括号的 `FreeFile` → 就是一个 IdentifierExpr。后者必须先排除用户
+    //     变量同名的情况(符号表里是 Variable), 否则一枚名叫 `month` 的普通变量会被
+    //     白白截成 int16。
+    // ⚠ 标识符这一支只能有一个出口: 以前这里先写了 `if (kind==IdentifierExpr) return
+    //   knownIntVars_||knownIntConsts_;` 的提前返回，于是后面新加的内建支**永远走不到**
+    //   (`v = FreeFile` 实测仍答 3)。现在三源合一、一次答完。
+    if (e->kind == ASTNodeKind::IdentifierExpr) {
+        auto& id = static_cast<const IdentifierExpr&>(*e);
+        const std::string lower = Symbol::toLower(id.name);
+        if (knownIntVars_.count(lower) > 0) return true;
+        // C30-10 第三十四刀: 用户 `Const` 的 Integer 档。两张表只在这里被问 ——
+        // 没有进 knownIntVars_, 所以 inferExprType / 收窄检查 / 算术那几层一字未动。
+        if (knownIntConsts_.count(lower) > 0) return true;
+        if (!builtinReturnsVbIntegerName(id.name)) return false;
+        // 遮蔽判据: 用户同名的变量/属性必须是 Variable/Property*, 那就**不**算内建。
+        // 内置符号自己标了 isBuiltin (semantic_analyzer_builtin 那两枚 lambda), 但
+        // 零参内置在 codegen 的符号表里未必查得到 (实测 `FreeFile` 裸引用查回 nullptr,
+        // 而 `FreeFile()` 走调用形是对的) —— 所以 nullptr 也按内建看。
+        const Symbol* sym = symTab_.lookup(id.name);
+        return !sym || sym->isBuiltin;
+    }
+    if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& call = static_cast<const IndexOrCallExpr&>(*e);
+        if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr)
+            return builtinReturnsVbIntegerName(
+                static_cast<const IdentifierExpr&>(*call.callee).name);
+        return false;
+    }
     return false;
 }
 
