@@ -409,9 +409,23 @@ void* vb6_NewBuiltinObject(const wchar_t* className) {
     // 只拦 CreateObject 的话，`Dim d As New Scripting.Dictionary` 与
     // `Dim re As New VBScript.RegExp` 仍会去加载 scrrun.dll / vbscript.dll。
     // 两条 New 出口（vb6_NewObject / vb6_NewObjectClsid）都会先走到这里。
-    if (vb6_Dict_IsClassName(className)) return vb6_Dict_New();
-    if (vb6_RegExp_IsProgramId(className)) return vb6_RegExp_New();
-    if (_wcsicmp(className, L"RegExp") == 0) return vb6_RegExp_New();
+    if (vb6_Dict_IsClassName(className)) {
+        void* d = vb6_Dict_New();
+        // 不登记 ProgID 的话 TypeName 会答 Object —— vb6com.c 的 CreateObject 那条腿
+        // 已经替 Dictionary 登了，这里补 New 这条腿（同一个环形表，账 #611）。
+        if (d) vb6_ComRememberProgID(d, L"Scripting.Dictionary");
+        return d;
+    }
+    if (vb6_RegExp_IsProgramId(className)) {
+        void* r = vb6_RegExp_New();
+        if (r) vb6_ComRememberProgID(r, L"VBScript.RegExp");
+        return r;
+    }
+    if (_wcsicmp(className, L"RegExp") == 0) {
+        void* r = vb6_RegExp_New();
+        if (r) vb6_ComRememberProgID(r, L"VBScript.RegExp");
+        return r;
+    }
     if (!vb6_IsBuiltinObjectName(className)) return NULL;
     return vb6_NewBuiltinCollection();
 }

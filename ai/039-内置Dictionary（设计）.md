@@ -248,7 +248,22 @@ C3 目前当成"把值赋给对象变量"并告警 `VB3003: 无法将 Integer �
 运行期必错。夹具因此统一用 `d.Item("k") = v`（同一条 IDispatch 路，`vb6_ComSetPropArg`）。
 这条已列为下一刀的编译器侧追账项（不是 Dictionary 内部能修的）。
 
-### 11.3 与计划的差异（说明理由）
+### 11.4 New 那条腿的实测（2026-11-16，临时探针，不入库）
+
+`New` 与 `As New` 两条写法分开读，因为 C3 对它们走的是不同代码：
+
+| 写法 | Dictionary | RegExp |
+| --- | --- | --- |
+| `CreateObject("…")` | ✅ `TypeName=Dictionary` | ✅ `TypeName=RegExp` |
+| `Set x = New …` | ✅ `TypeName=Dictionary`，Add/Count/Item/Keys 均可用 | ✅ `TypeName=RegExp`（补了 ProgID 登记后） |
+| `Dim x As New …` | ⚠️ 对象能建（`Add`/`Count` 正常），但 `TypeName` 答 `Long` | ❌ 变量恒为 `Nothing`（`[C3_LATEBIND_MISS … kind=null]`） |
+
+结论：**内置实现本身没问题，是 `As New` 那条腿的代码生成有缺口**，
+且两个名字行为还不一致（字典能建、正则不能），说明它不是“外部 ProgID 统一不行”，而是另有分支。
+追账项：(a) `As New` 外部 ProgID 的惰性初始化；(b) `As New` 变量的 `TypeName` 与实际对象不符。
+在这两条修好之前，文档与夹具统一推荐 `Set x = New …`，不推荐 `Dim x As New …`。
+
+### 11.5 与计划的差异（说明理由）
 
 - **S2 与 S3 合并**：原计划 S2 先做"C 侧键矩阵自测"。实际做下来没有干净的运行入口 ——
   本仓的测试都是 VB 夹具，另开一个 C 单测程序要把 RTL 的 VARIANT 胶水一起拖进来，
