@@ -238,7 +238,12 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `front minY=27 topX=165 | back minY=16 topX=177`。
   探针踩过的坑：第一版量“最右像素”，前后闸都是 299（面积右缘就是 `plot.right`），
   改成量“最高那一行的起点 x”才真的反映平移量。
-- **仍未做**：线/点系列的 3D 化（没有体积，整条平移不算 3D；先得有可量的形状）。
+- **点系列也 3D 了**（`98b84898`）：每个点先画暗 45% 的偏移圆 `(+4,-4)`，再压正面圆，
+  成一枚扁墩。深度按**点径**定（4px，点本身 r=3），不是柱形的 12px —— 柱子有高度、
+  点只有大小；透视不参与（4px 再缩放只剩 1~2px，量不出也看不出）。判据 `tc_point3d_px.ps1`：
+  `dot n=50 minY=24 topX=164 | 3d n=26 minY=20 topX=168`。
+- **线的 3D 有意不做**：整条折线平移只是“画了两遍线”，形状完全相同、像素判据定
+  不住，所以线系列的 3D 只做 shell、不做体积。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
@@ -247,6 +252,7 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `Brush.Image.Data`（图片，不是点集）——所以样本里根本没有设计期点集要解。
 - `AsSurface` / `AsCandle` / `AsHorizBar` 等按类型切面的属性：P3 之后逐族补，
   未补的走「认得出名字、值进 bag、不绘制」。
-- 3D 下线与点系列仍按 2D 绘制（面积/柱形已走 3D）。
+- 3D 下线系列仍按 2D 绘制（有意为之：平移整条线形状不变、无法用像素判据验证；
+  柱形/面积/点已走 3D）。
 - 剪贴板 / JPEG 导出 / 打印：P3 空实现。
 - `Canvas`（`IsScreenHighColor` / `TextOut` 那族）：P3 起给只读标量。
