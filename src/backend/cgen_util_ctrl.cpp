@@ -3700,6 +3700,16 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
             if ((n == "int" || n == "fix" || n == "abs") && call.positional.size() == 1
                 && call.named.empty())
                 return isNarrowIntExpr(call.positional[0].get());
+            // C30-10 第三十九刀: `IIf(cond, a, b)` —— VB6 返回 Variant，**子类型随被选中
+            // 的那一支**（用户真 VB6 实测：`TypeName(IIf(True, 1, 2))` = Integer）。
+            // 静态只在「两支都是 Integer 档」时答 Integer；一支 Long 一支 Integer 时结果
+            // 取决于运行时走哪支，宁可答 false（退回现在的 Long 箱）也不发一个可能错的窄箱。
+            // ⚠ 不能把 `iif` 直接塞进 builtinReturnsVbInteger：那会连
+            // `IIf(True, 1&, 2&)` / `IIf(True, 1.5, 2.5)` 一起窄化。
+            // Choose/Switch 同构，但本机没有 oracle（VBScript 无此三枚），先不开。
+            if (n == "iif" && call.positional.size() == 3 && call.named.empty())
+                return isNarrowIntExpr(call.positional[1].get())
+                       && isNarrowIntExpr(call.positional[2].get());
             return false;
         }
         return false;
