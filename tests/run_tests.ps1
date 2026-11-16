@@ -885,6 +885,12 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_px"; Vbp = "$Tests\ctrlteechart\TcPxApp.vbp"; Mode = "close";
        WindowTitle = "TChart px"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_px.ps1") },
+    # C30-10 饼图掰开判据：四等份扇区、只掰第 0 块 18px ⇒ 它的可见半径 ≈ r+18，
+    # 其余三块 ≈ r（读数见 tc_pie_px.ps1 头部）。这同时挡住了“GDI Pie 扫反方向”那个坑：
+    # 扫反时最后一块颜色会吃掉大半个圆，第 0 块的可见半径会畸变成 270° 补集。
+    @{ Name = "ctrlteechart_pie_px"; Vbp = "$Tests\ctrlteechart\TcPieApp.vbp"; Mode = "close";
+       WindowTitle = "TChart pie"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_pie_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
