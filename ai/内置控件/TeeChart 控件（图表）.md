@@ -233,7 +233,12 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   同一刀修了两个真 bug：① 墙画在轴线之后会把上轴盖掉（`tc_px` 轴线行点数 264→61）；
   ② 全等值时 `vmin==vmax` 的兜底是 `0..1`，柱子因此爬出绘图区（改成 `vmin=0`、
   `vmax` 保留正值，另加柱顶夹紧）。
-- **仍未做**：线/面积/点系列的 3D 化（现在只有柱形走 3D 路径）。
+- **面积也 3D 了**（`d7c73504`）：`View3D+AREA` 时整块多边形先按 `(+12,-12)` 平移画一遍
+  （暗 45%）当后闸，再压上正常的前闸 —— 形成一条有厚度的带。判据 `tc_area3d_px.ps1`：
+  `front minY=27 topX=165 | back minY=16 topX=177`。
+  探针踩过的坑：第一版量“最右像素”，前后闸都是 299（面积右缘就是 `plot.right`），
+  改成量“最高那一行的起点 x”才真的反映平移量。
+- **仍未做**：线/点系列的 3D 化（没有体积，整条平移不算 3D；先得有可量的形状）。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
@@ -242,6 +247,6 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `Brush.Image.Data`（图片，不是点集）——所以样本里根本没有设计期点集要解。
 - `AsSurface` / `AsCandle` / `AsHorizBar` 等按类型切面的属性：P3 之后逐族补，
   未补的走「认得出名字、值进 bag、不绘制」。
-- 3D 下非柱系列（线/面积/点）仍按 2D 绘制。
+- 3D 下线与点系列仍按 2D 绘制（面积/柱形已走 3D）。
 - 剪贴板 / JPEG 导出 / 打印：P3 空实现。
 - `Canvas`（`IsScreenHighColor` / `TextOut` 那族）：P3 起给只读标量。
