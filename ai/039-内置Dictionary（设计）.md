@@ -396,9 +396,15 @@ p10 slot_intvar 2/Integer ✔                p09 v=1:v=v+1 3（真组件 2） �
 | `B169-4`（`b169_class_field_store` 两台） | `ggg\|9\|3\|1` | `ggg\|9\|2\|1` | `With … .PV = 5`，`5` 是 Integer |
 | `b168_class_var_field_shape`（在场针） | `= vb6_VariantLong(7);` | `= vb6_VariantInt((int16_t)(7));` | 字面量 7 的发码形状本来就该跟着装箱档走 |
 | `b169_class_field_store_shape`（在场针） | `_vb6_with_0->PV = vb6_VariantLong(5);` | `_vb6_with_0->PV = vb6_VariantInt((int16_t)(5));` | 同上 |
+| `NC-e01`（`jsonfast_nd_variant_com_roundtrip`） | `3/42` | `2/42` | 夹具里是 `a2(0, 1) = 42` —— Variant 数组元素装字面量 42 = VT_I2 |
 
 读数自证（本机、新码）：`BD-variant=Integer/String/1`、`B165-long=2|42`、
-`B169-4=ggg|9|2|1`；发码两侧各取 `--emit-c` 逐字核过在场针的新形。**没有回头改夹具源码**
+`B169-4=ggg|9|2|1`、`NC-e01=2/42`；发码两侧各取 `--emit-c` 逐字核过在场针的新形。**没有回头改夹具源码**
 （注释与读数都在 runner 里，夹具本身一字未动）—— 期望该记的是真 VB6 的答案，不是 C3 上一版
 算出来的答案。
+
+另有一格**不是期望值、而是登记面漏登**：`[STATIC] owned_temp_keeps` 的 K13/K13c 红在
+`vb6_VariantCur` —— 新出口交回一枚**新造且归调用方所有**的 VARIANT，却没进
+`src/common/owned_temp_keeps.hpp` 的 `kOwned`/`kOwnedVariant`（那两份是手写面，哨兵 K13 双向对账）。
+补登后本地复跑 `scripts/check_owned_temp_keeps.ps1` = PASS（owned 121 / K13/K13b/K13c two-way）。
 

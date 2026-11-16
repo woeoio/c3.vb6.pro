@@ -6564,7 +6564,7 @@ if ($Category -in @("all", "run", "bas")) {
     # vb6_ComPackArrayOut 的 ND 支只收 blittable 元素档, vb6_sa_variant 直接 return
     # => VT_EMPTY; 入站两条臂又只认 cDims==1。读数: 2D 维界/列主序/混合元素档、
     # 3D 秩数泛化; 首尾两枚是 1D 与 2D Long (既有 blittable memcpy 支) 零回归护栏。
-    Add-BasTest "jsonfast_nd_variant_com_roundtrip" "$Tests\jsonfast_611\NDVariantComRoundTrip.bas" @("NC-1d=8204/1", "NC-vt=8204", "NC-b1=0/1", "NC-b2=0/2", "NC-e00=k1", "NC-e10=v1", "NC-e01=3/42", "NC-e11=11", "NC-e02=1", "NC-e12=v3", "NC-3vt=8204", "NC-3b3=0/1", "NC-3e=ah", "NC-lvt=8195", "NC-le=44", "NC-DONE")
+    Add-BasTest "jsonfast_nd_variant_com_roundtrip" "$Tests\jsonfast_611\NDVariantComRoundTrip.bas" @("NC-1d=8204/1", "NC-vt=8204", "NC-b1=0/1", "NC-b2=0/2", "NC-e00=k1", "NC-e10=v1", "NC-e01=2/42", "NC-e11=11", "NC-e02=1", "NC-e12=v3", "NC-3vt=8204", "NC-3b3=0/1", "NC-3e=ah", "NC-lvt=8195", "NC-le=44", "NC-DONE")
 
     Add-BasTest "test_com_optional" "$Tests\test_com_optional.bas" @("OP-1:OK", "OP-4:OK", "P24-11: 4/4")
     # 账 #245/§B94 的行为针（夹具 tests/test_com_variant_prop.bas）。类型库属性 Get 的返回档落在
