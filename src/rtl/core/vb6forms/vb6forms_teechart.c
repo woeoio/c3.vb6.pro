@@ -28,6 +28,10 @@
 #include "vb6forms.h"
 #include "vb6forms_internal.h"
 
+/* 账 #305 §B224 的 R1：目的档 BSTR 的唯一出口是 vb6_ComChangeType（定义在 vb6rtl_com.c）。
+ * 本文件不 include vb6rtl_variant.h，与 vb6_ErrRaise 同一惯例就地声明。 */
+extern HRESULT vb6_ComChangeType(VARIANT* dest, const VARIANT* src, VARTYPE want);
+
 #define VB6_TC_CLASS     L"VB6_TCHART"
 #define VB6_TC_MAXCTL    32      /* 同进程最多几枚图表 */
 #define VB6_TC_MAXSER    32      /* 每图最多几条系列 */
@@ -1388,7 +1392,7 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         case 1: case 2:   /* Text / Caption */
             if (flags & DISPATCH_PROPERTYPUT) {
                 VARIANT t; VariantInit(&t);
-                if (a0 && SUCCEEDED(VariantChangeType(&t, a0, 0, VT_BSTR)))
+                if (a0 && SUCCEEDED(vb6_ComChangeType(&t, a0, VT_BSTR)))
                     vb6_TChart_SetHeaderText(c->hwnd, t.bstrVal ? t.bstrVal : L"");
                 VariantClear(&t);
                 return S_OK;
@@ -1445,7 +1449,7 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         case 1: case 2:   /* Caption / Text */
             if (flags & DISPATCH_PROPERTYPUT) {
                 VARIANT t; VariantInit(&t);
-                if (a0 && SUCCEEDED(VariantChangeType(&t, a0, 0, VT_BSTR))) {
+                if (a0 && SUCCEEDED(vb6_ComChangeType(&t, a0, VT_BSTR))) {
                     wcsncpy(c->axisTitle[ax], t.bstrVal ? t.bstrVal : L"", 63);
                     c->axisTitle[ax][63] = 0;
                     InvalidateRect(c->hwnd, NULL, FALSE);
@@ -1711,7 +1715,7 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         if (flags & DISPATCH_PROPERTYPUT) {
             BSTR b = NULL; VARIANT t;
             VariantInit(&t);
-            if (a0 && SUCCEEDED(VariantChangeType(&t, a0, 0, VT_BSTR))) b = t.bstrVal;
+            if (a0 && SUCCEEDED(vb6_ComChangeType(&t, a0, VT_BSTR))) b = t.bstrVal;
             vb6_TChart_SetSeriesTitle(o->hwnd, o->index, b ? b : L"");
             VariantClear(&t);
             return S_OK;
@@ -1990,7 +1994,7 @@ int32_t vb6_TChart_HostSetProp(void* obj, const wchar_t* name, const void* inV) 
     if (!c || !name) return 0;
     if (_wcsicmp(name, L"HeaderText") == 0 && v) {
         VariantInit(&t);
-        if (SUCCEEDED(VariantChangeType(&t, v, 0, VT_BSTR))) {
+        if (SUCCEEDED(vb6_ComChangeType(&t, v, VT_BSTR))) {
             vb6_TChart_SetHeaderText(obj, t.bstrVal ? t.bstrVal : L"");
         }
         VariantClear(&t);
