@@ -109,6 +109,7 @@ typedef struct {
     HWND     hwnd;
     COLORREF panelColor;
     int      marginL, marginR, marginT, marginB;   /* 像素 */
+    int      effMarginR, effMarginB;               /* 钳过自动下限后的值（只给绘制用） */
     wchar_t  header[256];
     int      showLegend;
     /* C30-10 第十刀：Zoom 的两个值（空实现里也照实存，读回才一致） */
@@ -118,13 +119,27 @@ typedef struct {
     /* C30-10 第十二刀：四壁 */
     int      wallsVisible;
     COLORREF wallsColor;
+    /* C30-10 第十九刀：ChartDisplay 官方示例要的成员。
+     * 这些值都“存得住、读得回”；真正接进绘制的只有 wallsVisible/wallsColor/panelBorder
+     * 那几个老的，其余（Frame 边框、渐变、分面尺寸/透明度、BevelWidth…）目前不改画面。 */
+    int      frameVisible;
+    int      gradVisible;
+    COLORREF gradStart, gradEnd;
+    int      panelBevelOffset, panelBevelWidth;
+    int      panelBevelInner, panelBevelOuter;
+    int      backImageInside;
+    int      chart3DPercent;
+    int      wallSize[4];          /* 0=Back 1=Bottom 2=Right 3=Left（TeeChart 是百分比，默认 3） */
+    int      wallTransparent[4];
+    COLORREF wallFaceColor[4];
+    COLORREF wallBrush[4];
     TcSeries ser[VB6_TC_MAXSER];
     int      nser;
     int      paints;             /* 绘制次数（C3_TCHART_TRACE 用） */
     struct TcObj* obj[VB6_TC_MAXSER + 1];   /* 成员对象缓存 (0 = Series 集合) */
     struct TcObj* meth[8];                  /* 方法对象缓存（AddSeries 那几枚） */
     int      nmeth;
-    struct TcObj* extra[16];                /* Panel / Header / Axes / Axis / Title */
+    struct TcObj* extra[32];                /* Panel / Header / Axes / Axis / Title / Frame / Gradient / 四壁分面 */
     int      nextra;
     /* 对象模型的标量面（C30-10 第三刀）。轴下标: 0=Left 1=Right 2=Top 3=Bottom */
     int      panelBorder;
@@ -180,6 +195,21 @@ static TcChart* tcAttach(HWND h) {
     c->wallsVisible  = 1;
     c->wallsColor    = RGB(192, 192, 192);
     c->panelBorder   = 1;
+    /* 第十九刀：默认值照 TeeChart 文档（Frame 可见、渐变关、Chart3DPercent 50、壁厚 3） */
+    c->frameVisible    = 1;
+    c->gradVisible     = 0;
+    c->gradStart       = RGB(255, 255, 255);
+    c->gradEnd         = RGB(192, 192, 192);
+    c->chart3DPercent  = 50;
+    {
+        int wi;
+        for (wi = 0; wi < 4; wi++) {
+            c->wallSize[wi]        = 3;
+            c->wallTransparent[wi] = 0;
+            c->wallFaceColor[wi]   = RGB(255, 255, 255);
+            c->wallBrush[wi]       = RGB(255, 255, 255);
+        }
+    }
     c->headerVisible = 1;
     for (i = 0; i < 4; i++) { c->axisShow[i] = 1; c->axisTitleShow[i] = 1; c->axisAuto[i] = 1; }
     SetPropW(h, TC_SLOT, (HANDLE)c);
@@ -302,6 +332,17 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
      *   图例 x=310..371 y=26、标题 bbox 中心 155.5）。
      */
     if (c->header[0]) headerH = 26;
+    /* C30-10 第十九刀：Margin* 的自动下限（绘制用局部值，不改存进去的原值 —— 读回仍是你设的数）。
+     * 凭据是 ChartDisplay 参照：它在 Load 里把 HScroll4/VScroll4 设成 32 ⇒ MarginRight/MarginBottom
+     * = 38-32 = 6，而真 VB6 的图例依旧 310..371、下轴依旧 y=220（与默认 3% 一模一样）——
+     * OCX 把过小的 Margin 钳在“能装下刻度文字”的下限。我们这四值以像素计、默认 12（就是 3% × 401），
+     * 下限取 12：设得更大照算，设得更小当 12。 */
+    {
+        int mr = (c->marginR < 12) ? 12 : c->marginR;
+        int mb = (c->marginB < 12) ? 12 : c->marginB;
+        c->effMarginR = mr;
+        c->effMarginB = mb;
+    }
     if (c->showLegend && c->nser > 0) {
         int tw = 0, k;
         for (k = 0; k < c->nser; k++) {
@@ -313,7 +354,7 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
             if (w > tw) tw = w;
         }
         legendW     = tw + 24;   /* 色块 10 + 缝 3 + 文字 + 右衬边（宽 61 时与参照图例 310..371 对齐） */
-        legendRight = rc.right - c->marginR - 18;
+        legendRight = rc.right - c->effMarginR - 18;
         legendLeft  = legendRight - legendW;
         if (legendLeft < rc.left + 60) legendLeft = rc.left + 60;   /* 太窄时给绘图区留地面 */
     }
@@ -321,8 +362,8 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
     plot = rc;
     plot.left   += c->marginL + 16;                       /* 左轴刻度文字位 */
     plot.top    = rc.top + headerH + 27;                  /* header 带 + 上轴带 */
-    plot.right  = (legendW > 0) ? (legendLeft - 8) : (rc.right - c->marginR);
-    plot.bottom = rc.bottom - 25 - c->marginB;            /* 下轴带 + MarginBottom */
+    plot.right  = (legendW > 0) ? (legendLeft - 8) : (rc.right - c->effMarginR);
+    plot.bottom = rc.bottom - 25 - c->effMarginB;            /* 下轴带 + MarginBottom */
     if (plot.right <= plot.left + 2 || plot.bottom <= plot.top + 2) {
         SelectObject(dc, fntOld); DeleteObject(fnt);
         SelectObject(dc, oldPen); DeleteObject(pen);
@@ -355,11 +396,19 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
     /* Header：横向居中于“客户区 - 图例”那段（参照读数 centerX=155.5 = 图例左边/2） */
     if (c->header[0]) {
         RECT hr;
+        /* C30-10 第十九刀：标题单独一支字体。判据参照的标题 bbox 宽 129px、高 (14..24)，
+         * 而图例文字那支 Arial -11 只量出 98px —— OCX 的 Header 和图例就不是同一号字。
+         * -14 是拿参考宽度反推的（98 × 14/11 ≈ 125），实测再微调。 */
+        HFONT fh  = CreateFontW(-14, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                                VARIABLE_PITCH | FF_SWISS, L"Arial");
+        HFONT fho = fh ? (HFONT)SelectObject(dc, fh) : NULL;
         hr.left   = rc.left;
         hr.right  = (legendW > 0) ? legendLeft : rc.right;
-        hr.top    = rc.top + 12;
+        hr.top    = rc.top + 11;
         hr.bottom = rc.top + 26;
         tcDrawText(dc, c->header, &hr, 1, RGB(0, 0, 0));
+        if (fh) { SelectObject(dc, fho); DeleteObject(fh); }
     }
 
     /* 上/下轴线：TeeChart 默认画在绘图区上下沿，且是**黑色**（不是面板边的灰） */
@@ -1123,6 +1172,11 @@ int32_t vb6_TChart_PaintCount(void* hwnd) {
 #define TC_KIND_ASSURF  23
 #define TC_KIND_ASAREA  24
 #define TC_KIND_ASPOINT 25
+/* C30-10 第十九刀：ChartDisplay 官方示例牵出来的四层 */
+#define TC_KIND_FRAME    26  /* 图表外框（Visible） */
+#define TC_KIND_GRADIENT 27  /* Panel.Gradient */
+#define TC_KIND_WALLFACE 28  /* Walls.Back/Bottom/Right/Left 各一面（index=0..3） */
+#define TC_KIND_WALLBRUSH 29 /* 分面的 Brush（Color/Visible），与系列的 Brush 分开存 */
 
 typedef struct TcObj {
     const IDispatchVtbl* lpVtbl;
@@ -1158,7 +1212,15 @@ static const wchar_t* kTcAsPointNames[] = { L"DotSize", L"Style", NULL };
 /* C30-10 第三刀：Panel / Header / Axis 三层。只登记真做得动的名字。 */
 static const wchar_t* kTcPanelNames[] = {
     L"Color", L"MarginLeft", L"MarginRight", L"MarginTop", L"MarginBottom",
-    L"Visible", L"BorderVisible", NULL };
+    L"Visible", L"BorderVisible",
+    /* 第十九刀：ChartDisplay 示例用到的那批（追加在尾部，1..7 的 DISPID 不动） */
+    L"Gradient", L"BevelOffset", L"BevelWidth",
+    L"BackImageInside", L"BackImageClear", L"BackImageLoad", L"BorderStyle",
+    L"BevelInner", L"BevelOuter", NULL };
+static const wchar_t* kTcFrameNames[]     = { L"Visible", L"Color", L"Width", L"Style", NULL };
+static const wchar_t* kTcGradNames[]      = { L"Visible", L"StartColor", L"EndColor", L"Direction", NULL };
+static const wchar_t* kTcWallFaceNames[]  = { L"Visible", L"Size", L"Transparent", L"Color", L"Brush", NULL };
+static const wchar_t* kTcWallBrushNames[] = { L"Color", L"Visible", NULL };
 static const wchar_t* kTcHeaderNames[] = { L"Text", L"Caption", L"Visible", NULL };
 /* Axis.Bottom / Left / Right / Top 是具名属性（DISPID 3..6），Item(i) 同集合 */
 static const wchar_t* kTcAxesNames[] = {
@@ -1184,11 +1246,13 @@ static const wchar_t* kTcZoomNames[] = {
     L"Enable", L"Percent", L"Direction", L"Point", L"SetMax", NULL };
 /* C30-10 第十一刀：3D 面（先让值存得住、读得回，再把柱形按深度画出来） */
 static const wchar_t* kTcAspectNames[] = {
-    L"View3D", L"Perspective", L"Rotation", L"Elevation", L"Orthogonal", NULL };
+    L"View3D", L"Perspective", L"Rotation", L"Elevation", L"Orthogonal",
+    L"Chart3DPercent", NULL };
 /* C30-10 第十二刀：四壁。Back/Bottom/Right 先指回同一对象（共用可见性/颜色），
  * 分面颜色留到有人真的需要时再拆 —— 现在拆了也画不出区别。 */
 static const wchar_t* kTcWallsNames[] = {
-    L"Visible", L"Color", L"Back", L"Bottom", L"Right", NULL };
+    L"Visible", L"Color", L"Back", L"Bottom", L"Right",
+    L"BackColor", L"Left", NULL };
 
 static const wchar_t* const* tcNames(int kind) {
     switch (kind) {
@@ -1217,6 +1281,10 @@ static const wchar_t* const* tcNames(int kind) {
     case TC_KIND_ASSURF:  return kTcAsSurfNames;
     case TC_KIND_ASAREA:  return kTcAsAreaNames;
     case TC_KIND_ASPOINT: return kTcAsPointNames;
+    case TC_KIND_FRAME:   return kTcFrameNames;
+    case TC_KIND_GRADIENT: return kTcGradNames;
+    case TC_KIND_WALLFACE: return kTcWallFaceNames;
+    case TC_KIND_WALLBRUSH: return kTcWallBrushNames;
     default:             return NULL;
     }
 }
@@ -1383,6 +1451,31 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
                 tcSetL(res, 1); return S_OK;
         case 7: if (flags & DISPATCH_PROPERTYPUT) { c->panelBorder = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
                 tcSetL(res, c->panelBorder); return S_OK;
+        /* 第十九刀：Gradient 返子对象；其余四个存/读；BackImage* 与 BorderStyle 见下注释 */
+        case 8: if (res) tcSetObj(res, tcCached(c, TC_KIND_GRADIENT, 0)); return S_OK;
+        case 9: if (flags & DISPATCH_PROPERTYPUT) { c->panelBevelOffset = (int)tcArgL(a0); return S_OK; }
+                tcSetL(res, c->panelBevelOffset); return S_OK;
+        case 10: if (flags & DISPATCH_PROPERTYPUT) { c->panelBevelWidth = (int)tcArgL(a0); return S_OK; }
+                tcSetL(res, c->panelBevelWidth); return S_OK;
+        case 11: if (flags & DISPATCH_PROPERTYPUT) { c->backImageInside = (int)tcArgL(a0); return S_OK; }
+                tcSetL(res, c->backImageInside); return S_OK;
+        case 12: return S_OK;   /* BackImageClear：没加载过背景图，无可清 */
+        case 13: return S_OK;   /* BackImageLoad(name)：不加载外部位图（台账已注明） */
+        case 15: case 16:       /* BevelInner / BevelOuter：斜角样式，只存 */
+                if (flags & DISPATCH_PROPERTYPUT) {
+                    if (id == 15) c->panelBevelInner = (int)tcArgL(a0);
+                    else          c->panelBevelOuter = (int)tcArgL(a0);
+                    return S_OK;
+                }
+                tcSetL(res, (id == 15) ? c->panelBevelInner : c->panelBevelOuter);
+                return S_OK;
+        case 14:                /* BorderStyle：bsSingle=1 / bsNone=0 → 落到已有的 panelBorder */
+                if (flags & DISPATCH_PROPERTYPUT) {
+                    c->panelBorder = (tcArgL(a0) != 0);
+                    InvalidateRect(c->hwnd, NULL, FALSE);
+                    return S_OK;
+                }
+                tcSetL(res, c->panelBorder); return S_OK;
         default: return DISP_E_MEMBERNOTFOUND;
         }
     }
@@ -1479,8 +1572,17 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
             if (res) tcSetL(res, (int32_t)c->wallsColor);
             return S_OK;
         case 3: case 4: case 5:
-            /* Back / Bottom / Right：暂时指回同一个对象（共用可见性/颜色） */
-            if (res) tcSetObj(res, o);
+            /* C30-10 第十九刀：Back / Bottom / Right 各给一个独立分面对象。
+             * 以前四壁指回 Walls 自己 —— 但 ChartDisplay 要 Walls.Back.Brush.Color /
+             * .Back.Size / .Back.Transparent，指回去会把这些名字当成 Walls 的成员。 */
+            if (res) tcSetObj(res, tcCached(c, TC_KIND_WALLFACE, (int)id - 3));   /* 0=Back 1=Bottom 2=Right */
+            return S_OK;
+        case 6:
+            if (flags & DISPATCH_PROPERTYPUT) { c->wallsColor = (COLORREF)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, (int32_t)c->wallsColor);
+            return S_OK;
+        case 7:
+            if (res) tcSetObj(res, tcCached(c, TC_KIND_WALLFACE, 3));              /* Left */
             return S_OK;
         default:
             return DISP_E_MEMBERNOTFOUND;
@@ -1496,6 +1598,14 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         case 3: pv = &c->aspRot; break;
         case 4: pv = &c->aspElev; break;
         case 5: if (res) tcSetL(res, 0); return S_OK;   /* Orthogonal：存不住，给 0 */
+        case 6:                                         /* Chart3DPercent（第十九刀） */
+            if (flags & DISPATCH_PROPERTYPUT) {
+                c->chart3DPercent = (int)tcArgL(a0);
+                InvalidateRect(c->hwnd, NULL, FALSE);
+                return S_OK;
+            }
+            if (res) tcSetL(res, c->chart3DPercent);
+            return S_OK;
         default: return DISP_E_MEMBERNOTFOUND;
         }
         if (flags & DISPATCH_PROPERTYPUT) {
@@ -1505,6 +1615,77 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         }
         if (res) tcSetL(res, *pv);
         return S_OK;
+    }
+
+    /* ===== 第十九刀：Frame / Panel.Gradient / 四壁分面 =====
+     * 起因：ChartDisplay 官方示例（tests\TeeChartChartDisplay）一行 TChart1.Frame.Visible
+     * 就抛 438 把整个窗体打退。这里只做到“名字认得、值存得住读得回”，
+     * 画面影响面在注释里逐个点名 —— 不让未实现的成员变成“看着支持、实则答错”。 */
+    if (o->kind == TC_KIND_FRAME) {
+        switch (id) {
+        case 1:
+            /* 画面上目前不单独画外框（Panel.BorderVisible/panelBorder 已在管边框） */
+            if (flags & DISPATCH_PROPERTYPUT) { c->frameVisible = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, c->frameVisible);
+            return S_OK;
+        case 2: if (flags & DISPATCH_PROPERTYPUT) return S_OK; if (res) tcSetL(res, (int32_t)RGB(0, 0, 0)); return S_OK;
+        case 3: if (flags & DISPATCH_PROPERTYPUT) return S_OK; if (res) tcSetL(res, 1); return S_OK;
+        case 4: if (flags & DISPATCH_PROPERTYPUT) return S_OK; if (res) tcSetL(res, 0); return S_OK;
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+    if (o->kind == TC_KIND_GRADIENT) {
+        switch (id) {
+        case 1:
+            if (flags & DISPATCH_PROPERTYPUT) { c->gradVisible = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, c->gradVisible);
+            return S_OK;
+        case 2:
+            if (flags & DISPATCH_PROPERTYPUT) { c->gradStart = (COLORREF)tcArgL(a0); return S_OK; }
+            if (res) tcSetL(res, (int32_t)c->gradStart);
+            return S_OK;
+        case 3:
+            if (flags & DISPATCH_PROPERTYPUT) { c->gradEnd = (COLORREF)tcArgL(a0); return S_OK; }
+            if (res) tcSetL(res, (int32_t)c->gradEnd);
+            return S_OK;
+        case 4: if (flags & DISPATCH_PROPERTYPUT) return S_OK; if (res) tcSetL(res, 0); return S_OK;   /* Direction */
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+    if (o->kind == TC_KIND_WALLFACE || o->kind == TC_KIND_WALLBRUSH) {
+        int f = (o->index >= 0 && o->index < 4) ? o->index : 0;
+        if (o->kind == TC_KIND_WALLBRUSH) {
+            switch (id) {
+            case 1:
+                if (flags & DISPATCH_PROPERTYPUT) { c->wallBrush[f] = (COLORREF)tcArgL(a0); return S_OK; }
+                if (res) tcSetL(res, (int32_t)c->wallBrush[f]);
+                return S_OK;
+            case 2: if (flags & DISPATCH_PROPERTYPUT) return S_OK; if (res) tcSetL(res, 1); return S_OK;
+            default: return DISP_E_MEMBERNOTFOUND;
+            }
+        }
+        switch (id) {
+        case 1:   /* 分面可见性：目前由 Walls.Visible 统管 */
+            if (flags & DISPATCH_PROPERTYPUT) return S_OK;
+            if (res) tcSetL(res, c->wallsVisible);
+            return S_OK;
+        case 2:
+            if (flags & DISPATCH_PROPERTYPUT) { c->wallSize[f] = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, c->wallSize[f]);
+            return S_OK;
+        case 3:
+            if (flags & DISPATCH_PROPERTYPUT) { c->wallTransparent[f] = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, c->wallTransparent[f]);
+            return S_OK;
+        case 4:
+            if (flags & DISPATCH_PROPERTYPUT) { c->wallFaceColor[f] = (COLORREF)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, (int32_t)c->wallFaceColor[f]);
+            return S_OK;
+        case 5:
+            if (res) tcSetObj(res, tcCached(c, TC_KIND_WALLBRUSH, f));
+            return S_OK;
+        default: return DISP_E_MEMBERNOTFOUND;
+        }
     }
 
     /* ===== 第十刀：Printer / Export / Zoom —— 认名字、不动作，不静默 438 ===== */
@@ -1805,6 +1986,14 @@ static int32_t tcRootCall(TcChart* c, void* hwnd, const wchar_t* name, int argc,
         if (out) tcSetL(out, idx);
         return 1;
     }
+    /* C30-10 第十九刀：`TChart1.Series(i)` 带变量下标时 cgen 发成 Call（常量下标走 GetProp）。
+     * 以前这里只认 GetProp，ChartDisplay 里就成了 438。 */
+    if (_wcsicmp(name, L"Series") == 0) {
+        int idx = (argc >= 1) ? (int)tcArgL(a[0]) : 0;
+        if (idx < 0 || idx >= c->nser) return 0;
+        if (out) tcSetObj(out, tcObjFor(c, TC_KIND_SERIES, idx));
+        return 1;
+    }
     if (_wcsicmp(name, L"Repaint") == 0 || _wcsicmp(name, L"Refresh") == 0
         || _wcsicmp(name, L"Draw") == 0) {
         vb6_TChart_Repaint(hwnd);
@@ -1944,6 +2133,10 @@ int32_t vb6_TChart_HostGetProp(void* obj, const wchar_t* name, void* outV) {
     }
     if (_wcsicmp(name, L"SeriesCount") == 0) { tcSetL(out, c->nser); return 1; }
     if (_wcsicmp(name, L"Walls") == 0)  { tcSetObj(out, tcCached(c, TC_KIND_WALLS, 0)); return 1; }
+    /* 第十九刀：ChartDisplay 示例的三个根成员 */
+    if (_wcsicmp(name, L"Frame") == 0)      { tcSetObj(out, tcCached(c, TC_KIND_FRAME, 0)); return 1; }
+    if (_wcsicmp(name, L"LeftWall") == 0)   { tcSetObj(out, tcCached(c, TC_KIND_WALLFACE, 3)); return 1; }
+    if (_wcsicmp(name, L"BottomWall") == 0) { tcSetObj(out, tcCached(c, TC_KIND_WALLFACE, 1)); return 1; }
     if (_wcsicmp(name, L"Aspect") == 0) { tcSetObj(out, tcCached(c, TC_KIND_ASPECT, 0)); return 1; }
     if (_wcsicmp(name, L"Printer") == 0) { tcSetObj(out, tcCached(c, TC_KIND_PRINTER, 0)); return 1; }
     if (_wcsicmp(name, L"Export") == 0)  { tcSetObj(out, tcCached(c, TC_KIND_EXPORT, 0)); return 1; }
