@@ -776,6 +776,8 @@ sha256=16a0b6e5b59fa6171b5c6e015dabb810db5469769b0824faa72d5cf03f2170bd ascii256
 sha256=9591f7a3b3d7a887391b83c86f99b6776e68db9e6fcc8c66903c37aae650ca69 ascii256=2e487306c84c3e486a4a92137c1e9c766be24d92a66ec77f55766b038cdd8f89 rc=0 bytes=9321 tests/ctrlteechart/TcBubbleApp.vbp
 sha256=3cfb4cab52409abb057bfc488490088180623acdf311aecd354fcdf87154b1c8 ascii256=44cb229d84932d6dc4bf7385d447a5dbf0a169e33e7610d8e0e72c6dff7a3bfe rc=0 bytes=8964 tests/ctrlteechart/TcDonutApp.vbp
 sha256=6bf5381ab541421762ea4b9d27ede3a029d5b5d959a31cb22ad98cfc0523ecc1 ascii256=cb3ebda426fd714f067b7382c4dfe5b0f0e6bb5384fb07367bf783dc5a67c6b9 rc=0 bytes=8184 tests/ctrlteechart/TcBadTypeApp.vbp
+sha256=071f75e14945dd6eef440e11be1d516d02e4fcdcd6d119e857191aa9eb9ff6b2 ascii256=5a93ddb578fa2369454fa4c23da9b3efdafb8aa0a2ad404df549f0a44a7b619a rc=0 bytes=9253 tests/ctrlteechart/TcFxApp.vbp
+sha256=1c7dc89a6926ee4a111c0488ba28c504167a891a3be1a582ad128cb7d4b857df ascii256=6062b894115479b7f6a76188c45b336d1f35079e49e2008f7301634aa945eef0 rc=0 bytes=9001 tests/ctrlteechart/TcFx2App.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；

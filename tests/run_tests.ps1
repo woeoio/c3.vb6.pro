@@ -882,6 +882,17 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_px"; Vbp = "$Tests\ctrlteechart\TcPxApp.vbp"; Mode = "close";
        WindowTitle = "TChart px"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_px.ps1") },
+    # C30-10 第二十刀：勾选框那批属性以前只存不画，勾了一个个都没反应。
+    # 夹具把渐变（红→蓝）/ 外框关 / 四壁关 / 2D 一次设成非默认值，判据量：
+    # (2,2) 红、(2,254) 蓝、绘图区右侧不再是墙灰。读数见 tc_fx_px.ps1 头部。
+    @{ Name = "ctrlteechart_fx_px"; Vbp = "$Tests\ctrlteechart\TcFxApp.vbp"; Mode = "close";
+       WindowTitle = "TChart fx"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_fx_fx.ps1") },
+    # 同一批：背板 Brush=vbGreen 必须真刷绿，LeftWall.Visible=False 必须整面消失
+    # （3D 下左壁那道斜带不能还在）。读数见 tc_fx_px.ps1 头部。
+    @{ Name = "ctrlteechart_fxwalls_px"; Vbp = "$Tests\ctrlteechart\TcFx2App.vbp"; Mode = "close";
+       WindowTitle = "TChart walls"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_fx_walls.ps1") },
     # C30-10 饼图掰开判据：四等份扇区、只掰第 0 块 18px ⇒ 它的可见半径 ≈ r+18，
     # 其余三块 ≈ r（读数见 tc_pie_px.ps1 头部）。这同时挡住了“GDI Pie 扫反方向”那个坑：
     # 扫反时最后一块颜色会吃掉大半个圆，第 0 块的可见半径会畸变成 270° 补集。
