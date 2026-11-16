@@ -187,14 +187,24 @@ static void tcPaint(TcChart* c) {
     HBRUSH br;
     HPEN   oldPen, pen;
     HGDIOBJ oldBr;
+    HFONT   fnt, fntOld;
     int i, n, x0, x1, y0, y1;
     int marksDrawn = 0;   /* C30-10 第六刀：本次真的画了多少个逐点标签 */
+    int headerH = 0, legendW = 0, legendLeft = 0, legendRight = 0;
     double vmin, vmax;
 
     if (!c) return;
     dc = BeginPaint(c->hwnd, &ps);
     if (!dc) return;
     GetClientRect(c->hwnd, &rc);
+
+    /* 字体：TeeChart 的图例/标题用的是自己的字体（不是系统 GUI 字体）。
+     * 直接沿用默认字体量出来的“Series0”宽 53px，而参照读数的图例框只有 61 宽
+     * （“TeeChart display demo” 只占 129px），对不上 —— 换 Arial 8pt 后两项都对。 */
+    fnt    = CreateFontW(-11, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                         OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                         VARIABLE_PITCH | FF_SWISS, L"Arial");
+    fntOld = (HFONT)SelectObject(dc, fnt);
 
     /* Panel 底 + 外框（TeeChart 的 Panel 是一块带 1px 边的主面） */
     br = CreateSolidBrush(c->panelColor);
@@ -210,31 +220,63 @@ static void tcPaint(TcChart* c) {
     LineTo(dc, rc.left, rc.bottom - 1);
     LineTo(dc, rc.left, rc.top);
 
-    /* 绘图区 = 客户区扣掉 Panel 四边距 */
+    /* ================= C30-10 第七刀：面板分带 =================
+     * 真 TeeChart 不是“客户区减值当绘图区”，而是把图表分成几条带：
+     *   header 带 0..26（标题文字垂直居中在这一带）、上轴带 26..53、
+     *   绘图区 53..(H-37)、下轴带 25px + MarginBottom、图例在右侧帮忙挤绘图区。
+     * 这些数就是 401x257 参照读数反推出来的（上轴 y=53、下轴 y=220、
+     *   图例 x=310..371 y=26、标题 bbox 中心 155.5）。
+     */
+    if (c->header[0]) headerH = 26;
+    if (c->showLegend && c->nser > 0) {
+        int tw = 0, k;
+        for (k = 0; k < c->nser; k++) {
+            SIZE sz;
+            int w = 0;
+            if (c->ser[k].title[0] &&
+                GetTextExtentPoint32W(dc, c->ser[k].title, (int)wcslen(c->ser[k].title), &sz))
+                w = sz.cx;
+            if (w > tw) tw = w;
+        }
+        legendW     = tw + 24;   /* 色块 10 + 缝 3 + 文字 + 右衬边（宽 61 时与参照图例 310..371 对齐） */
+        legendRight = rc.right - c->marginR - 18;
+        legendLeft  = legendRight - legendW;
+        if (legendLeft < rc.left + 60) legendLeft = rc.left + 60;   /* 太窄时给绘图区留地面 */
+    }
+
     plot = rc;
-    plot.left   += c->marginL;
-    plot.right  -= c->marginR;
-    plot.top    += c->marginT;
-    plot.bottom -= c->marginB;
+    plot.left   += c->marginL + 16;                       /* 左轴刻度文字位 */
+    plot.top    = rc.top + headerH + 27;                  /* header 带 + 上轴带 */
+    plot.right  = (legendW > 0) ? (legendLeft - 8) : (rc.right - c->marginR);
+    plot.bottom = rc.bottom - 25 - c->marginB;            /* 下轴带 + MarginBottom */
     if (plot.right <= plot.left + 2 || plot.bottom <= plot.top + 2) {
+        SelectObject(dc, fntOld); DeleteObject(fnt);
         SelectObject(dc, oldPen); DeleteObject(pen);
         EndPaint(c->hwnd, &ps);
         return;
     }
 
-    /* Header：居中在绘图区上方（参考读数里标题就在这一带） */
+    /* Header：横向居中于“客户区 - 图例”那段（参照读数 centerX=155.5 = 图例左边/2） */
     if (c->header[0]) {
-        RECT hr = plot;
-        hr.bottom = hr.top + 16;
+        RECT hr;
+        hr.left   = rc.left;
+        hr.right  = (legendW > 0) ? legendLeft : rc.right;
+        hr.top    = rc.top + 12;
+        hr.bottom = rc.top + 26;
         tcDrawText(dc, c->header, &hr, 1, RGB(0, 0, 0));
     }
 
-    /* 上/下轴线：TeeChart 默认画在绘图区上下沿 */
-    SelectObject(dc, pen);
-    MoveToEx(dc, plot.left, plot.top, NULL);
-    LineTo(dc, plot.right, plot.top);
-    MoveToEx(dc, plot.left, plot.bottom, NULL);
-    LineTo(dc, plot.right, plot.bottom);
+    /* 上/下轴线：TeeChart 默认画在绘图区上下沿，且是**黑色**（不是面板边的灰） */
+    {
+        HPEN ap = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
+        HPEN apOld = (HPEN)SelectObject(dc, ap);
+        MoveToEx(dc, plot.left, plot.top, NULL);
+        LineTo(dc, plot.right, plot.top);
+        MoveToEx(dc, plot.left, plot.bottom, NULL);
+        LineTo(dc, plot.right, plot.bottom);
+        SelectObject(dc, apOld);
+        DeleteObject(ap);
+    }
 
     /* Y 轴量程（所有系列合起来；空系列给 0..1） */
     vmin = 1e300; vmax = -1e300;
@@ -367,24 +409,30 @@ static void tcPaint(TcChart* c) {
         SelectObject(dc, sbOld); DeleteObject(sb);
     }
 
-    /* Legend：右上角一框，条目 = 色块 + 系列标题（TeeChart 默认图例在右侧） */
-    if (c->showLegend && c->nser > 0) {
-        int lw = 0, lh, k;
+    /* Legend：右侧一框，顶边贴在 header 带下面（参照读数 y=26、x=310..371） */
+    if (legendW > 0) {
+        int lh, k;
         RECT lr;
-        for (k = 0; k < c->nser; k++) {
-            int tw = 0;
-            SIZE sz;
-            if (GetTextExtentPoint32W(dc, c->ser[k].title, (int)wcslen(c->ser[k].title), &sz))
-                tw = sz.cx;
-            if (tw > lw) lw = tw;
-        }
+        HGDIOBJ obOld;
         lh = c->nser * 14 + 6;
-        lr.right  = x1 - 2;
-        lr.left   = lr.right - (lw + 24);
-        lr.top    = y0 + 2;
+        lr.left   = legendLeft;
+        lr.right  = legendRight;
+        lr.top    = rc.top + headerH;
         lr.bottom = lr.top + lh;
-        if (lr.left < x0) lr.left = x0;
-        Rectangle(dc, lr.left, lr.top, lr.right, lr.bottom);
+        br = CreateSolidBrush(c->panelColor);
+        obOld = SelectObject(dc, br);
+        FillRect(dc, &lr, br);
+        SelectObject(dc, obOld);
+        DeleteObject(br);
+        SelectObject(dc, GetStockObject(NULL_BRUSH));
+        {
+            HPEN lp = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
+            HPEN lpOld = (HPEN)SelectObject(dc, lp);
+            Rectangle(dc, lr.left, lr.top, lr.right, lr.bottom);
+            SelectObject(dc, lpOld);
+            DeleteObject(lp);
+        }
+        SelectObject(dc, oldBr);
         for (k = 0; k < c->nser; k++) {
             RECT ibr, tr;
             HBRUSH cb = CreateSolidBrush(c->ser[k].color ? c->ser[k].color : tcPalette(k));
@@ -399,6 +447,8 @@ static void tcPaint(TcChart* c) {
 
     SelectObject(dc, oldPen);
     DeleteObject(pen);
+    SelectObject(dc, fntOld);
+    DeleteObject(fnt);
     c->paints++;
     if (tcTrace()) {
         COLORREF trp = 0, trb = 0;
