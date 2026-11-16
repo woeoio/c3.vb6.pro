@@ -461,3 +461,56 @@ h10 slot_ffff   3/-1       →  2/-1        ✔      h13~h16 算术与转换逐�
 2. `-&HFFFF` 这类**一元负号包着**的形仍按 Long 装（`isNarrowIntExpr` 只问裸字面量节点）；
    VB6 应是 Integer(1)。要收就得给 `vb6IntConstantValue` 加一条进制的负号路 —— 目前语料 0 处，暂不开。
 
+### 11.13 第三十四刀：用户 `Const` 的档（上一刀探针扫出来的）
+
+上一刀收线后，同一层「标量宽度」再用一对探针（`.temp/litprobe/W2.vbs` = cscript 基准、
+`W2.bas` = C3）扫了 16 形，扫出三处真缺口 —— 值都对，只有**档**不对：
+
+| 读数 | 写法 | oracle (cscript) | C3 | 处置 |
+| --- | --- | --- | --- | --- |
+| w01 | `Const C1 = 1` | 2/Integer | 3/Long | **本刀修** |
+| w03 | `Const C3 = &HFFFF` | 2/Integer | 3/Long | **本刀修**（吃上一刀的 `radixInt16`） |
+| w07 | `VarType(Asc("A"))` | 2/Integer | 3/Long | 留白（内建返回档，另排期） |
+| w18 | `VarType(Array(1,"x")(0))` | 2/Integer | 3/Long | 留白（数组字面量的元素装箱走另一条路） |
+
+其余 12 形（CInt/Asc 以外的内建、CBool/CByte/CCur/CLng、Len/UBound/InStr、Round/Fix、`32768`）
+两边逐字相同 —— 它们本来就对。（另：`CByte(300)` 在两边都抛 Overflow 错误 6，C3 那一台打的是
+同一条 `Unhandled VB6 Error #6`，这形不算缺口。）
+
+**判据（VB6 常量取型）**：`Const K = <初始化器>` 的 VB6 类型 = 初始化器字面量的类型；
+写了 `As <型>` 就按那个型。于是 Integer 档共有四种写法，本刀全接：
+
+| 写法 | 档 | 依据 |
+| --- | --- | --- |
+| `Const K = 1` / `= -1` | Integer | 小十进制字面量（`vb6IntConstantValue`，含一元负号） |
+| `Const K = &HFFFF` | Integer | 无后缀 `&H` 且位宽 ≤ 0xFFFF（上一刀的 `radixInt16`） |
+| `Const K = 3%` | Integer | `%` 后缀是显式 Integer（账 #195 的记号） |
+| `Const K As Integer = 7` | Integer | 显式类型子句（`resolveArrayElemType`） |
+
+反证（必须保持 Long）：`Const K = 32768`、`Const K = 40000`、`Const K = 1&`、`Const K As Long = 1`
+—— 四条都在探针 w02/w05/w07/w09 里逐条钉住。
+
+**落点（只喂装箱站，两层名单）**
+
+| 位置 | 改了什么 |
+| --- | --- |
+| `cgen_state.inc` | 新增 `knownIntConsts_`（本过程可见）与 `moduleIntConsts_`（模块级持久，供回灌） |
+| `decl/cgen_decl.cpp` | 模块级 `visit(ConstDecl&)` 末尾登记；`As Integer` 与「初始化器本身是 Integer」两条判据，后者直接问 `isNarrowIntExpr`（不在这里重算） |
+| `decl/cgen_localdecl.cpp` | 局部 `Const` 同一口径登记 |
+| `decl/cgen_decl_{func,proc,prop}.cpp` | 过程入口 `knownIntConsts_.clear()` + 从 `moduleIntConsts_` 回灌（与 `knownNewVars_` 同一套生命周期） |
+| `cgen_util_ctrl.cpp` | `isNarrowIntExpr` 的标识符那一支多问一张表；`vb6IntConstantValue` 剥掉**一个**尾随 `%`（`&`/`^` 仍挡） |
+| 同上 | 副产物：`VarType(3%)` 从 3 变 2（显式 Integer 字面量本来就该是 2） |
+
+**为什么不进 `knownIntVars_`**：那张表同时喂 `inferExprType`、收窄检查与算术。把常量塞进去等于
+把「16 位算术 + 溢出检查」一起打开（例如 `Const K = 30000: x = K * 2` 从现在的 60000 变成
+溢出错误）—— 那是对的 VB6 行为，但属「算术全链」，不属于本刀。本刀只回答「装箱时这枚名字
+是什么档」。
+
+**读数**：`W3.bas`（15 行，本刀新增的 13 形 + 两个反证）：w01/w03/w04/w06/w08/w10/w12 全 2，
+w02/w05/w07/w09/w11/w13/w14 全按 oracle；`Probe.bas` 15 行与 `HexProbe.bas` 17 行逐字未变；
+`dict_native` PASS 59 行。发码：CI run `43933863593`（head `bda14980`）**22/22 全绿**，
+`Emit manifest` 也绿 —— 748 份输入逐字相同（语料里「常量进 Variant 槽」那一形同样极少）。
+
+同层剩下两格（已登记）：`Asc()` 的返回档、`Array()` 字面量的元素档 —— 两者都属「内建返回类型表」
+那一层，需要先看那张表还喂谁（与 `inferExprType` 同源），不能拿「只改装箱」的刀法套。
+
