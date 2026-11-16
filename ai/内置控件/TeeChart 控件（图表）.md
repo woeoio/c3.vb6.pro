@@ -218,9 +218,11 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   真正落盘导出（图片编码）仍未接。
 - **3D 已落**（`6d9ef96d`）：`Aspect.View3D/Perspective/Rotation/Elevation` 存得住读得回，
   `View3D` 时柱按 12px 深度画右侧面（暗 45%）+ 顶面（亮 55%）。判据 `tc_3d_px.ps1`：
-  `front maxX=274 minY=27 / side maxX=286 / top minY=15` ⇒ 两个 12px 都对上。
-- **已知差异（不是缺口，是选择）**：`View3D` 默认 0（2D），真控件默认 True ——
-  改默认会把已有 401x257 像素判据一夜改红，所以按夹具逐个开。
+  `front maxX=274 minY=39 / side maxX=286 / top minY=27` ⇒ 两个 12px 都对上。
+- **与真控件保持一致**（`e3b5a73d`）：`View3D` 默认 **True**（与真控件同）。
+  改默认时逐条重验了三套像素判据，都没红（`tc_px` 读数逐字不变、饼图不经柱路径、
+  `tc_3d_px` 两个 12px 仍对）。同时修了一个真问题：3D 柱顶面原本会伸出上轴线
+  （轴线行点数 251→239），改成值映射高度先减深度后回到 251。
 - **仍未做**：`Walls` 四壁本身、3D 的透视效果（`Perspective` 只存值不改几何）、
   线/面积系列的 3D 化。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
@@ -231,6 +233,6 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `Brush.Image.Data`（图片，不是点集）——所以样本里根本没有设计期点集要解。
 - `AsSurface` / `AsCandle` / `AsHorizBar` 等按类型切面的属性：P3 之后逐族补，
   未补的走「认得出名字、值进 bag、不绘制」。
-- 3D（`Aspect.View3D` / `Walls` / `Perspective`）：P1 只记录不绘制。
+- 3D 的 `Walls`（四壁本身）与 `Perspective` 的几何效果：只存值不绘制/不改几何。
 - 剪贴板 / JPEG 导出 / 打印：P3 空实现。
 - `Canvas`（`IsScreenHighColor` / `TextOut` 那族）：P3 起给只读标量。
