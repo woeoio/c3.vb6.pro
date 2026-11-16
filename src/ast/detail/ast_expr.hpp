@@ -43,6 +43,10 @@ class LiteralExpr : public Expr {
 public:
     LiteralKind literalKind;
     std::string rawText;  // 原始文本 (保留用户写法)
+    // C30-10 第三十三刀: 这枚字面量在 VB6 里是不是 **Integer** 档 —— 由 lexer 的
+    // `Token::radixInt16` 原样带过来 (只有无后缀 `&H` 且位宽 <= 0xFFFF 那一形会置位)。
+    // 只给装箱站问 (isNarrowIntExpr); 不进 inferExprType。
+    bool radixInt16 = false;
     union {
         int32_t intValue = 0;
         int64_t longValue;

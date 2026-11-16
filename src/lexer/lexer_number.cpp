@@ -61,18 +61,19 @@ std::string radixDigits(const std::string& s) {
 // allowNarrowFold 就是「这一发真的无后缀」那一问: &H 那一支的 & 后缀在更早处就返回了, 而 &O / &B
 // 两支从前把 & 吃进文本却不改档位 (实测语料 0 处落在 16 位档, .local/k313/octbin.txt) ⇒ 逐字保留
 // 它们今天的行为, 只把折叠让给无后缀那一形。
-struct RadixTier { TokenKind kind; int64_t value; };
+struct RadixTier { TokenKind kind; int64_t value; bool narrow16; };
 
 RadixTier radixTierOf(uint64_t magnitude, bool intSuffix, bool allowNarrowFold) {
-    if (intSuffix) return {TokenKind::IntegerLiteral, static_cast<int32_t>(magnitude)};
+    if (intSuffix) return {TokenKind::IntegerLiteral, static_cast<int32_t>(magnitude), false};
     if (allowNarrowFold && magnitude <= 0xFFFFu) {
         return {TokenKind::IntegerLiteral,
-                static_cast<int64_t>(magnitude) - ((magnitude & 0x8000u) ? 0x10000 : 0)};
+                static_cast<int64_t>(magnitude) - ((magnitude & 0x8000u) ? 0x10000 : 0),
+                true};
     }
     if (magnitude <= 0xFFFFFFFFu) {
-        return {TokenKind::IntegerLiteral, static_cast<int32_t>(static_cast<uint32_t>(magnitude))};
+        return {TokenKind::IntegerLiteral, static_cast<int32_t>(static_cast<uint32_t>(magnitude)), false};
     }
-    return {TokenKind::LongLiteral, static_cast<int64_t>(magnitude)};
+    return {TokenKind::LongLiteral, static_cast<int64_t>(magnitude), false};
 }
 
 } // namespace
@@ -82,7 +83,8 @@ RadixTier radixTierOf(uint64_t magnitude, bool intSuffix, bool allowNarrowFold) 
 // 量到的那一档缺口一次性存在于三处 —— 加一档要改三遍、漏一遍就是静默错值 (本刀的病灶正是漏了
 // 16 位那一档)。以后要动档位只许动 radixTierOf, 别在支路里再拼比较。
 Token Lexer::makeRadixToken(const std::string& text, uint32_t startLine, uint32_t startCol,
-                            uint64_t magnitude, bool intSuffix, bool allowNarrowFold) {
+                            uint64_t magnitude, bool intSuffix, bool allowNarrowFold,
+                            bool tagInt16) {
     const RadixTier tier = radixTierOf(magnitude, intSuffix, allowNarrowFold);
     Token tok = makeToken(tier.kind, text, startLine, startCol);
     if (tier.kind == TokenKind::IntegerLiteral) {
@@ -90,6 +92,11 @@ Token Lexer::makeRadixToken(const std::string& text, uint32_t startLine, uint32_
     } else {
         tok.longValue = tier.value;
     }
+    // C30-10 第三十三刀: 「这一发字面量在 VB6 里就是 Integer 档」那条身份只从**真的走过
+    // 16 位补码折叠**的那一档发出 (tier.narrow16), 且只给 `&H` 那一支 (tagInt16)。
+    // 两条闸都不许省: 少前者 => `&HFFFFFFFF` (Long 的 -1) 会被当成 Integer;
+    // 少后者 => `&O177777` 也会跟着改档, 而真组件那一形没有读数 (留白, 见 ai/039 §11.12)。
+    tok.radixInt16 = tier.narrow16 && tagInt16;
     return tok;
 }
 
@@ -302,7 +309,7 @@ Token Lexer::scanHexNumber() {
         // ai/032 §6.6 定下的阶梯 (>32 位归 LongLiteral) 与账 #305 第313刀补的 16 位补码那一档
         // 全住在 radixTierOf 那一处 —— 这里只许问它, 不许再抄一遍比较 (抄一次漏一次)。
         return makeRadixToken(text, startLine, startCol, static_cast<uint64_t>(v),
-                              intSuffix, /*allowNarrowFold=*/true);
+                              intSuffix, /*allowNarrowFold=*/true, /*tagInt16=*/true);
     }
 }
 
@@ -337,9 +344,10 @@ Token Lexer::scanOctNumber() {
         if (!parseIntLit(radixDigits(text), 8, v)) {
             return errorToken("八进制数字超出 64 位整数表示范围", startLine, startCol);
         }
-        /* 阶梯与值都问那一位主人 (账 #305 第313刀), 这里不许再抄一遍。 */
+        /* 阶梯与值都问那一位主人 (账 #305 第313刀), 这里不许再抄一遍。
+           tagInt16=**false**: `&O` 的 Integer 档身份没有真组件读数, 维持今天那一形。 */
         return makeRadixToken(text, startLine, startCol, static_cast<uint64_t>(v),
-                              intSuffix, /*allowNarrowFold=*/!longSuffix);
+                              intSuffix, /*allowNarrowFold=*/!longSuffix, /*tagInt16=*/false);
     }
 }
 
@@ -376,7 +384,7 @@ Token Lexer::scanBinNumber() {
         }
         /* 阶梯与值都问那一位主人 (账 #305 第313刀), 这里不许再抄一遍。 */
         return makeRadixToken(text, startLine, startCol, static_cast<uint64_t>(v),
-                              intSuffix, /*allowNarrowFold=*/!longSuffix);
+                              intSuffix, /*allowNarrowFold=*/!longSuffix, /*tagInt16=*/false);
     }
 }
 

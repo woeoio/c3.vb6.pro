@@ -320,6 +320,9 @@ ExprPtr Parser::parseLiteral() {
         case TokenKind::IntegerLiteral: {
             auto expr = std::make_unique<LiteralExpr>(loc, LiteralKind::Integer, tok.text);
             expr->intValue = static_cast<int32_t>(tok.intValue);
+            // C30-10 第三十三刀: 进制字面量的 VB6 档身份由 lexer 定 (它才知道位宽),
+            // 这里只做搬运 —— 别在 parser 里再拿 rawText 算一次。
+            expr->radixInt16 = tok.radixInt16;
             return expr;
         }
         case TokenKind::LongLiteral: {

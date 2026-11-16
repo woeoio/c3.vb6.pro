@@ -3604,8 +3604,11 @@ bool CCodeGen::hoistOwnedTempArgs(std::string& argList, const std::string& calle
 //   的 `^` 恒返 Double), 拿它当字面量类型会把幂/位运算的档一起改掉。
 // ⚠ 也不进 inferExprType: 那张表同时喂算术/收窄/格式化, 改它就是把「16 位算术 +
 //   溢出检查」那一整层一起打开 (那是「算术全链」, 另排期)。
-// 不认的写法 (维持现状, 台账另记): &H/&O 进制字面量 (VBScript 与 VB6 的符号规则不同,
-//   &H8000 两台读数就不一样)、带类型后缀的写法 (%/&/^ 等)。
+// 不认的写法 (维持现状, 台账另记): 带类型后缀的写法 (%/&/^ 等)；`&O`/`&B` 进制字面量
+//   (真组件只对 `&H` 量到读数, 其余两形仍是 Long 档 —— 留白列在 ai/039 §11.12)。
+//   `&H` 那一形已经接上：值早在第313刀按 16 位补码折过, 第三十三刀只把**档**接过来
+//   —— 两个字都不是在编��站重算的, 而是 lexer 在 Token::radixInt16 上一次性答完、
+//   parser 原样搬到 LiteralExpr::radixInt16。
 static bool vb6IntConstantValue(const Expr* e, int32_t* outVal) {
     if (!e) return false;
     if (e->kind == ASTNodeKind::UnaryExpr) {
@@ -3642,6 +3645,15 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
     if (!e) return false;
     int32_t v = 0;
     if (vb6IntConstantValue(e, &v)) return v >= -32768 && v <= 32767;
+    // C30-10 第三十三刀: 进制字面量那一半 —— 判据不在这里, 在 lexer (Token::radixInt16)。
+    // 这里只问那一枚标记。范围检查是**反证**而不是判据: 走过 16 位补码折叠的值必定在
+    // int16 里, 若哪天不在, 宁可退回 Long 档也不发出一个错的 (int16_t) 截断。
+    // （`&HFFFFFFFF` 那种 5~8 位的写法压根没有标记 —— 它在 VB6 里是 Long 的 -1。）
+    if (e->kind == ASTNodeKind::LiteralExpr) {
+        auto& lit = static_cast<const LiteralExpr&>(*e);
+        return lit.radixInt16 && lit.literalKind == LiteralKind::Integer
+               && lit.intValue >= -32768 && lit.intValue <= 32767;
+    }
     if (e->kind == ASTNodeKind::IdentifierExpr)
         return knownIntVars_.count(
                    Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name)) > 0;
