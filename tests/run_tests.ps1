@@ -901,6 +901,11 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_persp_px"; Vbp = "$Tests\ctrlteechart\TcPerspApp.vbp"; Mode = "close";
        WindowTitle = "TChart persp"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_persp_px.ps1") },
+    # C30-10 四壁判据：3D 下应当出现左壁 + 背板（墙色灰 192）。判据量墙的包络，
+    # 不量像素总数：最左=plot.left、最右=plot.right+12、最上=plot.top-12。
+    @{ Name = "ctrlteechart_wall_px"; Vbp = "$Tests\ctrlteechart\TcWallApp.vbp"; Mode = "close";
+       WindowTitle = "TChart walls"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_wall_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
