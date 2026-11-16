@@ -250,9 +250,39 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   优先级实测出来很低：186 个厂商示例里 **135 个在 Form_Load 里调 FillSampleValues**，
   设计期带数据的只有 3 个，而那 3 个的 Binary 分别是 `BackImage.Data` /
   `Brush.Image.Data`（图片，不是点集）——所以样本里根本没有设计期点集要解。
-- `AsSurface` / `AsCandle` / `AsHorizBar` 等按类型切面的属性：P3 之后逐族补，
+- **横向柱真画**（`93f6e53e`）：`AddSeries 2`（stHorizBar）以前落到 `default` 分支成折线
+  —— 不报错但图是错的。现在每根柱占一条水平带，长度按值映射。判据 `tc_hbar_px.ps1`：
+  `hb n=4185 x=28..301 | bands=9,9,9`。
+- **切面已开**（`93f6e53e`）：`AsBar / AsLine / AsHorizBar / AsCandle / AsSurface / AsArea /
+  AsPoint` 七个对象都有名字表，不再是 438。口径分两档：
+  - 真影响几何：`AsBar/AsHorizBar.BarWidthPercent`（判据里 40% 让横条厚度从 24 → 9）。
+  - 只存不画：`AsCandle.CandleWidth`（要 OHLC 四列）、`AsSurface.WireFrame`（要二维网格）、
+    `AsLine.Smoothed`、`AsPoint.DotSize`、`AsArea.Transparency` —— 我们的点集只有一列 y。
+- **导出/剪贴板真做**（`5a17207c`）：`Export.SaveToJPEGFile` / `Export.CopyToClipboard`
+  都由 `tcRender`（从 `tcPaint` 里抽出来的绘制体）往内存 DC 画一遍再落盘/交剪贴板，
+  所以导出与屏幕同源。JPEG 走动态加载的 gdiplus.dll（写死官方编码器 CLSID）。
+  判据 `tc_export_px.ps1`：`jpg bytes=9100 | size=401x257 | jpg barpx=3002 | clip=401x257 barpx=759`。
+  踩过的坑：位图还选在 DC 里时 `SetClipboardData` 必失败；`GdipGetImageEncodersSize`
+  返回的 size 与自己声明的 `ImageCodecInfo` 对不上，照结构体读会 AV —— 写死 CLSID 才稳。
+
+**图表类型覆盖（实测口径）**：`AddSeries` 只认 0..5，其余类型号一律被当成
+`stLine` 画（不报错！）：
+
+| 类型号 | 名称 | 状态 |
+|---|---|---|
+| 0 | Line | 真画（含 3D shell） |
+| 1 | Bar | 真画（含 3D、透视） |
+| 2 | HorizBar | 真画（`93f6e53e`） |
+| 3 | Area | 真画（含 3D 带） |
+| 4 | Point | 真画（含 3D 墩） |
+| 5 | Pie | 真画（含扇区标签/ ExplodedSlice） |
+| 6+ | Candle / Surface / Bubble / Gantt / Donut / Polar / Radar / … | **未支持**，落到 Line |
+
+缺口按“有没有数据模型”分两类：Candle 需 OHLC 四列、Surface 需二维网格（R2 数据模型
+要先扩）；Gantt/Bubble/Donut 只要额外字段，属于可补的活。
   未补的走「认得出名字、值进 bag、不绘制」。
 - 3D 下线系列仍按 2D 绘制（有意为之：平移整条线形状不变、无法用像素判据验证；
   柱形/面积/点已走 3D）。
-- 剪贴板 / JPEG 导出 / 打印：P3 空实现。
+- 剪贴板与 JPEG 导出已真做（`5a17207c`）；仍不动作的：`Export.Email` / `Export.Picture` /
+  `Export.Width` / `Export.Height`，以及 `SaveToFile` 对非 jpg 扩展名；打印（Printer）仍空实现。
 - `Canvas`（`IsScreenHighColor` / `TextOut` 那族）：P3 起给只读标量。
