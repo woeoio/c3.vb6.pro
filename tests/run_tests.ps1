@@ -921,6 +921,11 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_export_px"; Vbp = "$Tests\ctrlteechart\TcExportApp.vbp"; Mode = "close";
        WindowTitle = "TChart export"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_export_px.ps1") },
+    # C30-10 横向柱 + As* 切面判据：AddSeries 2 以前落到 default 成了折线（不报错、但图是错的）。
+    # 判据量横柱的包络 + x=40 竖扫出的窄带数/厚度，顺带核对切面读回值。
+    @{ Name = "ctrlteechart_hbar_px"; Vbp = "$Tests\ctrlteechart\TcHbarApp.vbp"; Mode = "close";
+       WindowTitle = "TChart hbar"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_hbar_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
