@@ -44,9 +44,17 @@ extern HRESULT vb6_ComChangeType(VARIANT* dest, const VARIANT* src, VARTYPE want
 // ============================================================
 // 编译产物：节点数组 + 子节点下标池 + 字符集池
 // ============================================================
+#define RE_MAX_GROUPS 64
+
 enum {
     K_CHAR = 1, K_ANY, K_CLASS, K_SEQ, K_ALT, K_REP, K_GROUP,
-    K_BOL, K_EOL, K_WORDB, K_NWORDB, K_BACKREF, K_LOOK, K_EMPTY
+    K_BOL, K_EOL, K_WORDB, K_NWORDB, K_BACKREF, K_LOOK, K_EMPTY,
+    /* C30-10 扩展档（默认开启，不设开关；语义基准 = PCRE2 / Python re，见 ai/038）： */
+    K_ATOMIC,     /* (?>...) 原子组、以及 x*+ 这类占有量词（= 原子化的贪婪 REP） */
+    K_LBEHIND,    /* (?<=...) / (?<!...)：定长后顾，a = 固定长度 */
+    K_STRBOL,     /* \A 串首 */
+    K_STREOL,     /* \z 串尾（绝对） */
+    K_STREOLZ     /* \Z 串尾（允许末尾一个 \n） */
 };
 
 typedef struct { wchar_t lo, hi; } ReRange;
@@ -75,11 +83,14 @@ typedef struct {
     int*    kids; int nk, kc;
     ReSet*  sets; int ns, sc;
     int     ngroups;   /* 捕获组个数（不含 0） */
+    wchar_t* gname[RE_MAX_GROUPS + 1];   /* 命名组的名字（下标 = 组号），malloc 的副本 */
     int     root;
 } ReProg;
 
 static void progFree(ReProg* p) {
     if (!p) return;
+    int g;
+    for (g = 0; g <= RE_MAX_GROUPS; g++) free(p->gname[g]);
     free(p->n); free(p->kids); free(p->sets); free(p);
 }
 
@@ -125,8 +136,6 @@ typedef struct {
     int ngroups;
 } ReParse;
 
-#define RE_MAX_GROUPS 64
-
 static int pAlt(ReParse* ps);
 
 static int isDigitW(wchar_t c) { return c >= L'0' && c <= L'9'; }
@@ -150,6 +159,63 @@ static void setAddRange(ReSet* s, wchar_t lo, wchar_t hi) {
 
 static void setAddSh(ReSet* s, int sh) {
     if (s->nsh < RE_SH_MAX) s->sh[s->nsh++] = sh;
+}
+
+// 命名组查号：只在**已定义**的组里找。前向引用（\k<x> 出现在 (?<x>) 之前）不支持，
+// 直接 5017 —— PCRE 允许前向引用，但 Python re 不允许，选择两边都能对上的那一半。
+static int reLookupName(ReParse* ps, const wchar_t* nm, int len) {
+    int g, i;
+    if (len <= 0) return 0;
+    for (g = 1; g <= ps->ngroups; g++) {
+        const wchar_t* t = ps->prog->gname[g];
+        if (!t) continue;
+        for (i = 0; i < len && t[i] && t[i] == nm[i]; i++) { }
+        if (i == len && t[i] == 0) return g;
+    }
+    return 0;
+}
+
+// 后顾只支持**定长**：算出节点的固定宽度（-1 = 变长，编译期报 5017）。
+// 零宽断言贡献 0，所以 (?<=(?=a)b) 这类也能算。
+static int reFixLen(const ReProg* pg, int node) {
+    const RNode* n;
+    if (node < 0) return -1;
+    n = &pg->n[node];
+    switch (n->kind) {
+        case K_CHAR: case K_ANY: case K_CLASS: return 1;
+        case K_EMPTY: case K_BOL: case K_EOL: case K_WORDB: case K_NWORDB:
+        case K_LOOK: case K_LBEHIND: case K_STRBOL: case K_STREOL: case K_STREOLZ:
+            return 0;
+        case K_BACKREF: return -1;
+        case K_GROUP: case K_ATOMIC: return reFixLen(pg, n->b);
+        case K_REP: {
+            int l;
+            if (n->b != n->c) return -1;
+            l = reFixLen(pg, n->a);
+            if (l < 0) return -1;
+            return l * n->b;
+        }
+        case K_SEQ: {
+            int t = 0, i;
+            for (i = 0; i < n->b; i++) {
+                int l = reFixLen(pg, pg->kids[n->kid + i]);
+                if (l < 0) return -1;
+                t += l;
+            }
+            return t;
+        }
+        case K_ALT: {
+            int first = -1, i;
+            for (i = 0; i < n->b; i++) {
+                int l = reFixLen(pg, pg->kids[n->kid + i]);
+                if (l < 0) return -1;
+                if (first < 0) first = l;
+                else if (l != first) return -1;
+            }
+            return first < 0 ? 0 : first;
+        }
+    }
+    return -1;
 }
 
 // 解析一个转义：返回 0 = 生成节点(下标在 *outNode)，1 = 往字符集里加(仅在类内)
@@ -181,6 +247,41 @@ static int parseEscape(ReParse* ps, int inClass, ReSet* s, int* outNode, wchar_t
             if (inClass) { lit = L'B'; break; }
             if (outNode) *outNode = progNode(ps->prog, K_NWORDB);
             return 0;
+        /* ---- 扩展档（默认开启）：\A \z \Z \k<name> ---- */
+        case L'A':
+            if (inClass) { lit = L'A'; break; }
+            if (outNode) *outNode = progNode(ps->prog, K_STRBOL);
+            return 0;
+        case L'z':
+            if (inClass) { lit = L'z'; break; }
+            if (outNode) *outNode = progNode(ps->prog, K_STREOL);
+            return 0;
+        case L'Z':
+            if (inClass) { lit = L'Z'; break; }
+            if (outNode) *outNode = progNode(ps->prog, K_STREOLZ);
+            return 0;
+        case L'k': {
+            wchar_t open, close; int st, g2;
+            if (inClass) { lit = L'k'; break; }
+            open = (ps->i < ps->len) ? p[ps->i] : 0;
+            if (open == L'<') close = L'>';
+            else if (open == L'\'') close = L'\'';
+            else if (open == L'{') close = L'}';
+            else { lit = L'k'; break; }        /* 不成形就当字面量 k */
+            ps->i++;
+            st = ps->i;
+            while (ps->i < ps->len && p[ps->i] != close) ps->i++;
+            if (ps->i >= ps->len) { ps->err = RE_ERR_SYNTAX; return -1; }
+            g2 = reLookupName(ps, p + st, ps->i - st);
+            ps->i++;
+            if (g2 <= 0) { ps->err = RE_ERR_SYNTAX; return -1; }
+            if (outNode) {
+                int idx = progNode(ps->prog, K_BACKREF);
+                ps->prog->n[idx].a = g2;
+                *outNode = idx;
+            }
+            return 0;
+        }
         case L'x': {
             int h1 = (ps->i < ps->len) ? hexVal(p[ps->i]) : -1;
             int h2 = (ps->i + 1 < ps->len) ? hexVal(p[ps->i + 1]) : -1;
@@ -309,40 +410,100 @@ static int parseAtom(ReParse* ps) {
     switch (c) {
         case L'(' : {
             ps->i++;
-            int look = 0, neg = 0, noncap = 0;
-            if (ps->i + 1 < ps->len && ps->p[ps->i] == L'?') {
-                wchar_t k = ps->p[ps->i + 1];
-                if (k == L'=') { look = 1; ps->i += 2; }
-                else if (k == L'!') { look = 1; neg = 1; ps->i += 2; }
-                else if (k == L':') { noncap = 1; ps->i += 2; }
-                else { ps->err = RE_ERR_SYNTAX; return -1; }   /* (?<x>) 等一律 5017 */
+            int look = 0, neg = 0, noncap = 0, atomic = 0, behind = 0;
+            const wchar_t* named = NULL; int namedLen = 0;
+            if (ps->i < ps->len && ps->p[ps->i] == L'?') {
+                wchar_t k1 = (ps->i + 1 < ps->len) ? ps->p[ps->i + 1] : 0;
+                if (k1 == L'=') { look = 1; ps->i += 2; }
+                else if (k1 == L'!') { look = 1; neg = 1; ps->i += 2; }
+                else if (k1 == L':') { noncap = 1; ps->i += 2; }
+                else if (k1 == L'>') { atomic = 1; ps->i += 2; }                  /* (?>...) */
+                else if (k1 == L'<') {
+                    wchar_t k2 = (ps->i + 2 < ps->len) ? ps->p[ps->i + 2] : 0;
+                    if (k2 == L'=') { behind = 1; look = 1; ps->i += 3; }         /* (?<= */
+                    else if (k2 == L'!') { behind = 1; look = 1; neg = 1; ps->i += 3; } /* (?<! */
+                    else {                                                        /* (?<name> */
+                        ps->i += 2; named = ps->p + ps->i;
+                        while (ps->i < ps->len && ps->p[ps->i] != L'>') ps->i++;
+                        if (ps->i >= ps->len) { ps->err = RE_ERR_MISSING_RP; return -1; }
+                        namedLen = (int)((ps->p + ps->i) - named);
+                        ps->i++;
+                    }
+                }
+                else if (k1 == L'\'') {                                          /* (?'name' */
+                    ps->i += 2; named = ps->p + ps->i;
+                    while (ps->i < ps->len && ps->p[ps->i] != L'\'') ps->i++;
+                    if (ps->i >= ps->len) { ps->err = RE_ERR_MISSING_RP; return -1; }
+                    namedLen = (int)((ps->p + ps->i) - named);
+                    ps->i++;
+                }
+                else if (k1 == L'P') {
+                    wchar_t k2 = (ps->i + 2 < ps->len) ? ps->p[ps->i + 2] : 0;
+                    if (k2 == L'<') {                                             /* (?P<name> */
+                        ps->i += 3; named = ps->p + ps->i;
+                        while (ps->i < ps->len && ps->p[ps->i] != L'>') ps->i++;
+                        if (ps->i >= ps->len) { ps->err = RE_ERR_MISSING_RP; return -1; }
+                        namedLen = (int)((ps->p + ps->i) - named);
+                        ps->i++;
+                    } else if (k2 == L'=') {                                      /* (?P=name) */
+                        const wchar_t* nm; int nlen, g2, nd2;
+                        ps->i += 3; nm = ps->p + ps->i;
+                        while (ps->i < ps->len && ps->p[ps->i] != L')') ps->i++;
+                        if (ps->i >= ps->len) { ps->err = RE_ERR_MISSING_RP; return -1; }
+                        nlen = (int)((ps->p + ps->i) - nm);
+                        ps->i++;
+                        g2 = reLookupName(ps, nm, nlen);
+                        if (g2 <= 0) { ps->err = RE_ERR_SYNTAX; return -1; }
+                        nd2 = progNode(pg, K_BACKREF);
+                        pg->n[nd2].a = g2;
+                        return nd2;
+                    } else { ps->err = RE_ERR_SYNTAX; return -1; }
+                }
+                /* 其余 (?...) 形式（内联选项 (?i:)、条件组 (?(1))）本刀还没做：仍旧 5017 */
+                else { ps->err = RE_ERR_SYNTAX; return -1; }
             }
             /* VB 的 SubMatches 按**左括号出现顺序**编号 —— 外层组号必须先定，再解子模式。 */
             int g = 0;
-            if (!look && !noncap) {
+            if (!look && !noncap && !atomic) {
                 g = ++ps->ngroups;
                 if (g > RE_MAX_GROUPS) { ps->err = RE_ERR_SYNTAX; return -1; }
+                if (namedLen > 0) {
+                    wchar_t* cp = (wchar_t*)malloc(sizeof(wchar_t) * (namedLen + 1));
+                    if (cp) { memcpy(cp, named, sizeof(wchar_t) * namedLen); cp[namedLen] = 0; pg->gname[g] = cp; }
+                }
             }
             int child = pAlt(ps);
             if (child < 0) return -1;
             if (ps->i >= ps->len || ps->p[ps->i] != L')') { ps->err = RE_ERR_MISSING_RP; return -1; }
             ps->i++;
             if (look) {
-                int nd = progNode(pg, K_LOOK);
+                int nd;
+                if (behind) {
+                    int flen = reFixLen(pg, child);
+                    /* 变长后顾：PCRE2 限量允许，Python 直接报错；这里报 5017（见 ai/038 限制） */
+                    if (flen < 0) { ps->err = RE_ERR_SYNTAX; return -1; }
+                    nd = progNode(pg, K_LBEHIND);
+                    pg->n[nd].a = flen;
+                    pg->n[nd].b = child;
+                    pg->n[nd].d = neg;
+                    return nd;
+                }
+                nd = progNode(pg, K_LOOK);
                 pg->n[nd].b = child;
                 pg->n[nd].d = neg;
                 return nd;
             }
-            if (noncap) {
-                int nd = progNode(pg, K_GROUP);
-                pg->n[nd].a = 0;
+            if (atomic) {
+                int nd = progNode(pg, K_ATOMIC);
                 pg->n[nd].b = child;
                 return nd;
             }
-            int nd = progNode(pg, K_GROUP);
-            pg->n[nd].a = g;
-            pg->n[nd].b = child;
-            return nd;
+            {
+                int nd = progNode(pg, K_GROUP);
+                pg->n[nd].a = noncap ? 0 : g;
+                pg->n[nd].b = child;
+                return nd;
+            }
         }
         case L'[' : ps->i++; return parseClass(ps);
         case L'.' : ps->i++; return progNode(pg, K_ANY);
@@ -350,6 +511,26 @@ static int parseAtom(ReParse* ps) {
         case L'$' : ps->i++; return progNode(pg, K_EOL);
         case L'\\': ps->i++; {
             int nd = -1;
+            /* \Q...\E：里面全是字面量，直到 \E 或模式结尾 */
+            if (ps->i < ps->len && ps->p[ps->i] == L'Q') {
+                int seq, start, cnt = 0;
+                ps->i++;
+                seq = progNode(pg, K_SEQ);
+                start = pg->nk;
+                while (ps->i < ps->len) {
+                    if (ps->p[ps->i] == L'\\' && ps->i + 1 < ps->len && ps->p[ps->i + 1] == L'E') { ps->i += 2; break; }
+                    {
+                        int ch = progNode(pg, K_CHAR);
+                        pg->n[ch].ch = ps->p[ps->i];
+                        ps->i++;
+                        progKid(pg, seq, ch);
+                        cnt++;
+                    }
+                }
+                pg->n[seq].kid = start;
+                pg->n[seq].b = cnt;
+                return seq;
+            }
             if (parseEscape(ps, 0, NULL, &nd, NULL) < 0) return -1;
             return nd;
         }
@@ -371,7 +552,7 @@ static int parseSeq(ReParse* ps) {
         int atom = parseAtom(ps);
         if (atom < 0) return -1;
         /* 量词 */
-        int min = -1, max = -1, greedy = 1;
+        int min = -1, max = -1, greedy = 1, poss = 0;
         if (ps->i < ps->len) {
             wchar_t q = ps->p[ps->i];
             if (q == L'*') { min = 0; max = -1; ps->i++; }
@@ -384,7 +565,10 @@ static int parseSeq(ReParse* ps) {
                 if (r < 0) return -1;
                 if (r == 0) { ps->i = save; min = -1; }   /* '{' 当字面量 */
             }
-            if (min >= 0 && ps->i < ps->len && ps->p[ps->i] == L'?') { greedy = 0; ps->i++; }
+            if (min >= 0 && ps->i < ps->len) {
+                if (ps->p[ps->i] == L'?') { greedy = 0; ps->i++; }
+                else if (ps->p[ps->i] == L'+') { poss = 1; ps->i++; }   /* x*+ 占有量词 */
+            }
         }
         if (min >= 0) {
             int rep = progNode(pg, K_REP);
@@ -393,6 +577,12 @@ static int parseSeq(ReParse* ps) {
             pg->n[rep].c = max;
             pg->n[rep].d = greedy;
             atom = rep;
+            /* 占有量词 = 原子化的贪婪重复（PCRE 的定义就是 ?>X*） */
+            if (poss) {
+                int at = progNode(pg, K_ATOMIC);
+                pg->n[at].b = rep;
+                atom = at;
+            }
         }
         if (nt == ct) { ct = ct ? ct * 2 : 8; tmp = (int*)realloc(tmp, sizeof(int) * ct); }
         tmp[nt++] = atom;
@@ -588,6 +778,12 @@ static int mCont(ReCtx* x, Cont* k, int pos) {
                 return mCont(x, k->next, pos);      /* 空迭代: 收手, 别死循环 */
             return repTry(x, node, count, pos, k->next);
         }
+        case 3:
+            k->c = pos;                              /* 原子组：只记第一次到这里的落点 */
+            return 2;
+        case 4:
+            if (pos != k->b) return 0;               /* 后顾：必须在锚点上正好收尾 */
+            return mCont(x, k->next, pos);
     }
     return 0;
 }
@@ -666,6 +862,37 @@ static int mRun(ReCtx* x, int node, int pos, Cont* k) {
             if (!hit) { memcpy(x->caps, saved, sizeof(saved)); return 0; }
             return mCont(x, k, pos);
         }
+        /* ---- 扩展档运行期（默认开启） ---- */
+        case K_ATOMIC: {
+            /* 原子组：拿子模式的**第一次**成功落点，之后再不回退进去。
+             * 用续延 kind=3 记落点，而不是看 mRun 的返回值 —— 中间层会把 2 归成 1，
+             * 靠返回值判断会在 "K_ALT/K_REP 包一层" 时错判。 */
+            Cont c; c.kind = 3; c.a = 0; c.b = 0; c.c = -1; c.next = NULL;
+            (void)mRun(x, n->b, pos, &c);
+            if (c.c < 0) return 0;
+            return mCont(x, k, c.c);
+        }
+        case K_LBEHIND: {
+            int saved[2 * (RE_MAX_GROUPS + 1)];
+            int L = n->a, hit = 0;
+            memcpy(saved, x->caps, sizeof(saved));
+            if (pos - L >= 0) {
+                Cont c; c.kind = 4; c.a = 0; c.b = pos; c.c = 0; c.next = NULL;
+                hit = (mRun(x, n->b, pos - L, &c) != 0);
+            }
+            if (n->d) {
+                memcpy(x->caps, saved, sizeof(saved));
+                if (hit) return 0;
+                return mCont(x, k, pos);
+            }
+            if (!hit) { memcpy(x->caps, saved, sizeof(saved)); return 0; }
+            return mCont(x, k, pos);
+        }
+        case K_STRBOL:  return pos == 0 ? mCont(x, k, pos) : 0;
+        case K_STREOL:  return pos == x->len ? mCont(x, k, pos) : 0;
+        case K_STREOLZ:
+            if (pos == x->len || (pos == x->len - 1 && x->s[pos] == L'\n')) return mCont(x, k, pos);
+            return 0;
     }
     return 0;
 }
