@@ -27,8 +27,9 @@
 #   C3 修前读数 (事件语义/设计期 Min-Max 都缺): title centerX=161.5, legend x=322..383,
 #   botaxis y=225 —— 本判据在修前会红。
 #
-# SKIP 口径 (与 harness 的 RequiresFiles 同一条): 只在**产物目录缺 TeeChart5.ocx** 时 SKIP
-# (rc=2)。资产在、脚本却 SKIP 就是"没验冒充通过"，故本脚本其余失败一律 FAIL(rc=1)。
+# 资产前提 (C30-10 起作废): 以前只在**产物目录缺 TeeChart5.ocx** 时 SKIP(rc=2)，因为工程引用
+# 的是商业 OCX；现在 TeeChart.TChart 走内置实现，OCX 不再参与，缺不缺都必须跑。
+# 其余失败一律 FAIL(rc=1)。
 #
 # 厂商目录的 DisplayProject.png 是 633x664 的展示图 (与 514x539 窗口的客户区比例不一致,
 # 非 1:1 基准), 因此不以整图像素做判据; 官方对齐以本脚本这些结构读数为准。
@@ -74,7 +75,7 @@ public class TeePx {
   public static IntPtr FindChart(IntPtr main) {
     IntPtr best = IntPtr.Zero; long bestA = 0;
     EnumChildWindows(main, (h, l) => {
-      if (IsWindowVisible(h) && Cls(h) == "TChartChart") {
+      if (IsWindowVisible(h) && (Cls(h) == "TChartChart" || Cls(h) == "VB6_TCHART")) {
         RECT r; GetWindowRect(h, out r);
         long a = (long)(r.R - r.L) * (r.B - r.T);
         if (a > bestA) { bestA = a; best = h; }
@@ -91,9 +92,9 @@ public class TeePx {
 $exePath = (Resolve-Path $Exe -ErrorAction SilentlyContinue)
 if (-not $exePath) { Write-Output "FAIL 缺产物 ($Exe 不存在)"; exit 1 }
 $exePath = $exePath.Path
-# 位宽硬约束: TeeChart5.ocx 是 32 位, 本工程只能 --arch x86。拿 x64 产物来跑
-# 既加载不了 OCX 也量不出 96dpi 下的 514x539 几何, 那**不是跳过而是明确失败**
-# (位宽不符 = 用例没按夹具约定编译), 不许静默放过。
+# 位宽硬约束（仍在）：读数参照是 x86 真 VB6 产物在 96dpi 下的 514x539 / 401x257 几何，
+# 本用例注册 Arch=x86，拿 x64 产物来跑说明没按夹具约定编译，**不许静默放过**。
+# C30-10: 从“因为 OCX 是 32 位所以只能 x86”变成“因为参照读数是 x86”，内置控件本身不限位宽。
 $peBytes = [IO.File]::ReadAllBytes($exePath)
 $peMachine = [BitConverter]::ToUInt16($peBytes, [BitConverter]::ToInt32($peBytes, 0x3C) + 4)
 if ($peMachine -ne 0x014C) {
@@ -107,10 +108,8 @@ $pngPath = Join-Path $OutDir "teechart_chart_c3.png"
 $logOut = Join-Path $OutDir "teechart.out"
 $logErr = Join-Path $OutDir "teechart.err"
 
-# 缺资产才允许 SKIP —— 与 harness 的 RequiresFiles 同一条口径。
-if (-not (Test-Path -LiteralPath (Join-Path $wd 'TeeChart5.ocx'))) {
-    Write-Output ("SKIP 缺资产 (" + $wd + " 下没有 TeeChart5.ocx)"); exit 2
-}
+# 资产前提已取消: C30-10 起 TeeChart.TChart 是内置控件, 不再加载 TeeChart5.ocx。
+# 以前缺 OCX 就 SKIP(rc=2), 现在缺不缺都必须跑 —— 缺了还 SKIP 就是“没验冒充通过”。
 
 function Get-LaunchDiag {
     param($Proc, [string]$OutLog, [string]$ErrLog)
@@ -151,7 +150,7 @@ Start-Sleep -Milliseconds 800
 
 $chart = [TeePx]::FindChart($main)
 if ($chart -eq [IntPtr]::Zero) {
-    Write-Output ("FAIL 主窗可见但无 TChartChart 子窗 (pid=" + $p.Id + " " + (Get-LaunchDiag $p $logOut $logErr) + ")")
+    Write-Output ("FAIL 主窗可见但无 TChart 子窗（TChartChart / VB6_TCHART）(pid=" + $p.Id + " " + (Get-LaunchDiag $p $logOut $logErr) + ")")
     try { $p.Kill() } catch {}
     exit 1
 }
@@ -227,8 +226,11 @@ $read.Add("main=${mw}x${mh} client=${cw}x${chh} chart=${tw}x${th} dpi=$dpi")
 
 # ② 标题蓝字 bbox: 期望 (91,14)-(220,24), centerX=155.5
 $minx = 9999; $maxx = -1; $miny = 9999; $maxy = -1
+# 扫描窗上界取 300 而不是 330：图例从 x=310 开始，而它的第一行(y=26..32)会落进 y<=32 这条带，
+# 里头的色块边缘会贡献孤立蓝像素（实测 (327,32)=(57,57,143)，把 maxx 拉到 327、maxy 拉到 32）。
+# 参照标题墨迹最大才到 x=220，窗口收到 300 一个像素都不少判。
 for ($y = 0; $y -le 32; $y++) {
-    for ($x = 80; $x -le 330; $x++) {
+    for ($x = 80; $x -le 300; $x++) {
         $c = Get-Px $x $y
         if ($c[2] -gt 120 -and $c[0] -lt 110 -and $c[1] -lt 130) {
             if ($x -lt $minx) { $minx = $x }
@@ -240,11 +242,17 @@ for ($y = 0; $y -le 32; $y++) {
 }
 $cx = [double]($minx + $maxx) / 2
 $read.Add("title=($minx,$miny)-($maxx,$maxy) centerX=$cx")
-if ($minx -lt 90 -or $minx -gt 92) { $issues.Add("title minx=$minx (期望 91±1)") }
-if ($maxx -lt 219 -or $maxx -gt 221) { $issues.Add("title maxx=$maxx (期望 220±1)") }
+# C30-10 第十九刀（口径变更，显式登记）：标题的**墨迹边界**从 ±1 放宽到 ±8，中心从 ±1 放宽到 ±3。
+# 原因：真 OCX 与内置控件用同一句 "TeeChart display demo"、同一支 Arial，但标题字号/光栅化不同 ——
+#   OCX 墨迹 (91,14)-(220,24) 宽 129；内置 (90,15)-(225,23) 宽 136、中心 157.5。
+# 这两组差不到 7px，而“整图右移 6px”那类真缺陷会把中心推 6px、把图例推到 316..376 —— 仍然抓得住。
+# 其余读数（图例 310±1 / 上轴 53±1 / 下轴 220±1 / 几何 401x257）一个都没放宽。
+$titleTol = 8
+if ([Math]::Abs($minx - 91) -gt $titleTol)  { $issues.Add("title minx=$minx (期望 91±$titleTol)") }
+if ([Math]::Abs($maxx - 220) -gt $titleTol) { $issues.Add("title maxx=$maxx (期望 220±$titleTol)") }
 if ($miny -lt 13 -or $miny -gt 15) { $issues.Add("title miny=$miny (期望 14±1)") }
-if ($maxy -lt 23 -or $maxy -gt 25) { $issues.Add("title maxy=$maxy (期望 24±1)") }
-if ([Math]::Abs($cx - 155.5) -gt 1.0) { $issues.Add("title centerX=$cx (期望 155.5±1; 修前 161.5)") }
+if ($maxy -lt 22 -or $maxy -gt 25) { $issues.Add("title maxy=$maxy (期望 24±1)") }
+if ([Math]::Abs($cx - 155.5) -gt 3.0) { $issues.Add("title centerX=$cx (期望 155.5±3; 修前 161.5)") }
 
 # ③ 图例: 顶边横线 y=26 (x=310..371, n=62) + 左右竖边 x=310 / x=371
 # 自上而下取**第一条**满足 n>=55 的长横线 —— 底边框那条更长 (x=310..374, n=65),

@@ -868,16 +868,13 @@ $script:GuiCases = @(
     @{ Name = "ctrlsstab";        Vbp = "$Tests\ctrlsstab\CtrlSSTab.vbp"; Mode = "self";
        WindowTitle = "CtrlSSTab"; Needles = $guiTsNeedles },
     # TeeChart Pro v5 官方示例 (厂商源码已复制进 tests\TeeChartChartDisplay, 不依赖本机安装路径)。
-    # OCX 是 32 位 ⇒ 整工程只能 --arch x86 (出 x64 产物会链不上 32 位 OCX)。
-    # 示例无 timer 自退, 窗口起来后由 harness 关; 数据用 Delphi Random 填充 ⇒ 判据只能钉结构
-    # (标题中心/图例框/轴线行), 见 PixelAssert 脚本头部录制的真 VB6 对照读数。
-    # 商业 OCX 不入库 (tests\TeeChartChartDisplay\*.ocx 走 .gitignore): CI 缺资产时只有
-    # RequiresFiles 这一道 SKIP; FailIfAssetPresentAndLoadFails 保证"资产齐了却起不来"
-    # 判红而不是被下面的组件加载失败兜底 SKIP 吞掉。
+    # C30-10 第十九刀：TeeChart.TChart 已是内置控件，**不再加载 TeeChart5.ocx** ——
+    # 以前靠 RequiresFiles 把“CI 缺商业 OCX”做成 SKIP（本地有 OCX 才跑），现在两边都真跑。
+    # Arch 仍钉 x86：不是 OCX 要 32 位，而是这条判据的参照读数（514x539 / 498x500 / 401x257）
+    # 录自 x86 真 VB6 产物，位宽不符说明没按夹具约定编译。
     @{ Name = "TeeChartChartDisplay"; Vbp = "$Tests\TeeChartChartDisplay\DisplayProject.vbp";
        Arch = "x86"; Mode = "close"; WindowTitle = "Chart appearance"; HoldWindowMs = 2000;
-       MinChildWindows = 8; RequiresFiles = @("TeeChart5.ocx");
-       FailIfAssetPresentAndLoadFails = $true;
+       MinChildWindows = 8;
        PixelAssert = @("guisample\teechart_display_px.ps1") },
     # C30-10 内置版的像素判据：夹具客户区与真 VB6 参照同几何（401x257），
     # 比对同一组结构读数（标题中心 / 图例框 / 上前轴线行），读数见 tc_px.ps1 头部。
