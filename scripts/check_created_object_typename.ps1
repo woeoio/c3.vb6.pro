@@ -29,10 +29,14 @@ if ($nTagDef -ne 1) { $bad += ("R1 tagger definitions = " + $nTagDef + " (want 1
 # Needles copied verbatim from both CreateObject success returns:
 #   vb6_ComRememberProgID(p, progId);            (local ComLib activation)
 #   vb6_ComRememberProgID((void*)pDisp, progId); (CoCreateInstance)
-# Count the bare identifier occurrences: 1 definition + 2 tag sites = 3.
+#   vb6_ComRememberProgID(re, progId);            (C30-10 内置 VBScript.RegExp 抢先拦截)
+# Count the bare identifier occurrences: 1 definition + 3 tag sites = 4.
+# 第三处是 2026-11-16 加的内置正则对象：它同样是从 CreateObject 返回的，不记 ProgID 的话
+# TypeName 会退化成通用 IDispatch，与真组件的 "RegExp" 不一致 —— 所以它是同一类 tag site，
+# 不是漏改。事实是 4 而不是 3，判据跟着事实改，但只改这一条计数，R2/R3 两条不动。
 $nTagUse = @([regex]::Matches($com, 'vb6_ComRememberProgID\s*\(')).Count
-if ($nTagUse -ne 3) {
-    $bad += ("R1 CreateObject tag sites = " + ($nTagUse - 1) + " (want 2: local ComLib + CoCreateInstance)")
+if ($nTagUse -ne 4) {
+    $bad += ("R1 CreateObject tag sites = " + ($nTagUse - 1) + " (want 3: local ComLib + CoCreateInstance + 内置 RegExp)")
 }
 # ---- R2: the ProgID's last segment (the coclass name), not the whole ProgID ----
 if (-not $com.Contains("wcsrchr(progId, L'.')")) {

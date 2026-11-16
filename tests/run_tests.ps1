@@ -8430,6 +8430,11 @@ if ($Category -in @("all", "run", "vbp")) {
         'if (msg == WM_LBUTTONUP) { extern void vb6_labPlain_Click(); vb6_labPlain_Click(); }'
     )
     Test-VbpBuild "fgz_fix009_array_build" "$Tests\fgz_fix009\FgzFix009.vbp"
+    # C30-10 内置正则引擎夹具：判据是**文本 diff**（tests\regexp_native\run_compare.ps1
+    # 拿 cscript 跑的真 VBScript.RegExp 逐行对），不进像素/窗口体系；这里只钉"编得过"。
+    # 它的第二个作用是 RTL 整体编译面探针 —— RTL 里一个 .c 编不过（比如 CL 版本差异下的
+    # 宏/隐式声明），就是所有用户工程全线红，而 C3.exe 自己的构建与 smoke 依然是绿的。
+    Test-VbpBuild "regexp_native_build" "$Tests\regexp_native\ReApp.vbp"
     # 富贵竹 FIX-009 §7: 剩下六条转发臂的数组 Index 与 evCallMouseMove 同口径补齐。
     # 判据 = 数组控件 + 处理器首形参名 Index + 形参数够数组版完整签名；
     # 命中时首参传运行时下标 (安装侧 SetPropW(si+1) 读回 -1)。
