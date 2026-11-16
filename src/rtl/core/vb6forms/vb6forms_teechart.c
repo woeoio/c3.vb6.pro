@@ -312,17 +312,25 @@ static void tcPaint(TcChart* c) {
         if (s->type == TC_SC_PIE) {
             /* 饼图：按 y 值占比切扇区（起始 -90°，与 TeeChart 默认同向）。
              * Pie() 的两个“终点”各自是扇区的起/止半径端点 —— 角度算错就会画出
-             * 整圆或零面积，所以这里统一用 cos/sin 落在圆周上。 */
-            double sum = 0, ang = -90.0;
-            int cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+             * 整圆或零面积，所以这里统一用 cos/sin 落在圆周上。
+             *
+             * C30-10 第八刀：AsPie 的两个值真的画出来——
+             *   RotationAngle 整体旋起始角；ExplodedSlice.Value(i) 把第 i 个扇区
+             *   沿它自己的中线往外掰这么多**像素**（TeeChart 的口径）。 */
+            double sum = 0, ang = -90.0 + s->pieRotation;
+            int cx0 = (x0 + x1) / 2, cy0 = (y0 + y1) / 2;
             int r  = ((x1 - x0) < (y1 - y0) ? (x1 - x0) : (y1 - y0)) / 2 - 2;
             if (r < 4) r = 4;
             for (k = 0; k < s->n; k++) sum += (s->pt[k].y > 0 ? s->pt[k].y : 0);
             if (sum <= 0) sum = 1;
             for (k = 0; k < s->n; k++) {
                 double sweep = (s->pt[k].y > 0 ? s->pt[k].y : 0) / sum * 360.0;
+                double amid  = (ang + sweep / 2.0) * 3.14159265358979323846 / 180.0;
                 double a0 = ang * 3.14159265358979323846 / 180.0;
                 double a1 = (ang + sweep) * 3.14159265358979323846 / 180.0;
+                int exp = (k < 64) ? s->sliceExplode[k] : 0;
+                int cx = cx0 + (int)(exp * cos(amid));
+                int cy = cy0 + (int)(exp * sin(amid));
                 int sx = cx + (int)(r * cos(a0)), sy = cy + (int)(r * sin(a0));
                 int ex = cx + (int)(r * cos(a1)), ey = cy + (int)(r * sin(a1));
                 HBRUSH pb = CreateSolidBrush(tcPalette(k));
@@ -331,11 +339,19 @@ static void tcPaint(TcChart* c) {
                 if (sweep >= 359.9) {
                     Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
                 } else if (sweep > 0.01) {
-                    Pie(dc, cx - r, cy - r, cx + r, cy + r, sx, sy, ex, ey);
+                    /* 端点顺序得反着给：GDI 的 Pie 默认按 AD_COUNTERCLOCKWISE 从
+                     * 第一个端点扫到第二个，而 y 轴向下 ⇒ 视觉上是顺时针。
+                     * 顺着给 (sx,sy)->(ex,ey) 会填出 270° 的补集（症状：最后一块
+                     * 颜色吃掉大半个圆，前面的颜色只剩镶边）。 */
+                    Pie(dc, cx - r, cy - r, cx + r, cy + r, ex, ey, sx, sy);
                 }
                 SelectObject(dc, ob);
                 SelectObject(dc, pbOld);
                 DeleteObject(pb);
+                if (getenv("TC_PIE_DEBUG")) {
+                    fprintf(stderr, "[TCHART-PIE] k=%d ang=%g sweep=%g pal=%d expl=%d c=%d,%d\n",
+                            k, ang, sweep, k & 7, exp, cx, cy);
+                }
                 ang += sweep;
             }
         } else if (s->n > 0) {
@@ -452,15 +468,24 @@ static void tcPaint(TcChart* c) {
     c->paints++;
     if (tcTrace()) {
         COLORREF trp = 0, trb = 0;
+        double pieRot = 0;
+        int pieExp0 = 0;
         if (c->nser > 0) {
             TcSeries* s0 = &c->ser[0];
             COLORREF c0 = (s0->color ? s0->color : tcPalette(0));
             trp = (s0->penVisible ? (s0->penColor ? s0->penColor : c0) : c0);
             trb = (s0->brushColor ? s0->brushColor : c0);
         }
-        fprintf(stderr, "[TCHART] paint=%d series=%d pen=%06X brush=%06X marks=%d hwnd=%p\n",
+        for (i = 0; i < c->nser; i++) {
+            if (c->ser[i].type == TC_SC_PIE) {      /* 第一张饼图的旋转/掰开量 */
+                pieRot  = c->ser[i].pieRotation;
+                pieExp0 = c->ser[i].sliceExplode[0];
+                break;
+            }
+        }
+        fprintf(stderr, "[TCHART] paint=%d series=%d pen=%06X brush=%06X marks=%d pie=%g/%d hwnd=%p\n",
                 c->paints, c->nser, (unsigned)trp, (unsigned)trb,
-                marksDrawn, (void*)c->hwnd);
+                marksDrawn, pieRot, pieExp0, (void*)c->hwnd);
         fflush(stderr);
     }
     EndPaint(c->hwnd, &ps);
