@@ -9,6 +9,7 @@ Option Explicit
 Dim gRe As Object
 Dim gF As Integer
 Dim gF2 As Integer
+Dim gIC As Boolean
 
 Sub Emit(s As String)
     Print #gF, s
@@ -69,7 +70,7 @@ Sub ExtCase(id As String, p As String, subj As String, mode As String)
     Err.Clear
     gRe.Pattern = p
     gRe.Global = False
-    gRe.IgnoreCase = False
+    gRe.IgnoreCase = gIC
     gRe.Multiline = False
     If mode = "t" Then
         If gRe.Test(subj) Then out = id & "|t|1" Else out = id & "|t|0"
@@ -96,6 +97,7 @@ End Sub
 Sub ExtCases()
     gF2 = FreeFile
     Open App.Path & "\re_c3_ext.txt" For Output As #gF2
+    gIC = False
     ' ---- 命名组 / 命名反向引用 ----
     ExtCase "e01", "(?<c>a)\k<c>", "aa", "t"
     ExtCase "e02", "(?P<c>a)(?P=c)", "aa", "t"
@@ -126,6 +128,24 @@ Sub ExtCases()
     ExtCase "e23", "\Qa.b\E", "a.b", "t"
     ExtCase "e24", "\Qa.b\E", "axb", "t"
     ExtCase "e25", "\Qa+b\E", "a+b", "t"
+    ' ---- 内联选项 (?i:...) (?-i:...) (?s:...) (?m:...) (?i) ----
+    ' gIC 是对象上的 IgnoreCase；内联选项应当能在它之上**局部**覆盖，且不影响外层。
+    gIC = False
+    ExtCase "e26", "(?i:abc)", "ABC", "t"
+    ExtCase "e27", "(?i:abc)d", "ABCd", "t"
+    ExtCase "e28", "(?i:abc)d", "ABCD", "t"          ' 作用域在 ) 处结束
+    ExtCase "e29", "(?i)(?<x>ab)", "AB", "t"          ' 与命名组叠加
+    ExtCase "e30", "(?-i:a)", "A", "t"               ' 对象开 IC、局部关
+    ExtCase "e31", "(?-i:a)", "a", "t"
+    ExtCase "e32", "(?s:.)", vbLf, "t"                 ' 局部 DotAll
+    ExtCase "e33", ".", vbLf, "t"                     ' 基线：. 不吃换行
+    ExtCase "e34", "(?m:^b$)", "a" & vbLf & "b", "t" ' 局部 Multiline
+    ExtCase "e35", "(?i)[a-z]+", "ABC", "m"           ' 类也认内联选项
+    ExtCase "e36", "(?i:(a)\1)", "aA", "t"            ' 反向引用在 icase 下也认大小写
+    gIC = True
+    ExtCase "e37", "abc", "ABC", "t"                  ' 对象级 IC 的基线
+    ExtCase "e38", "(?-i:abc)", "ABC", "t"            ' 对象开 IC、整串局部关
+    gIC = False
     Close #gF2
 End Sub
 
