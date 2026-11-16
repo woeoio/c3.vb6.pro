@@ -28,7 +28,8 @@ Private Sub Form_Load()
     Dim i As Long
     TChart1.AddSeries 5
     TChart1.Series(0).Title = "Series0"
-    TChart1.Series(0).Marks.Visible = False
+    ' 饼图的 Marks 是扇区标签：留着开，验证每块都打一个（痕迹 marks=4）
+    TChart1.Series(0).Marks.Visible = True
     For i = 1 To 4
         TChart1.Series(0).AddXY i, 25
     Next i
