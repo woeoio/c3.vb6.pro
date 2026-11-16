@@ -63,7 +63,8 @@ enum {
     K_LBEHIND,    /* (?<=...) / (?<!...)：定长后顾，a = 固定长度 */
     K_STRBOL,     /* \A 串首 */
     K_STREOL,     /* \z 串尾（绝对） */
-    K_STREOLZ     /* \Z 串尾（允许末尾一个 \n） */
+    K_STREOLZ,    /* \Z 串尾（允许末尾一个 \n） */
+    K_COND        /* (?(n)yes|no) 条件组：a = 组号，kids = [yes] 或 [yes, no] */
 };
 
 typedef struct { wchar_t lo, hi; } ReRange;
@@ -427,7 +428,7 @@ static int parseAtom(ReParse* ps) {
         case L'(' : {
             ps->i++;
             int saveFl = ps->fl;
-            int look = 0, neg = 0, noncap = 0, atomic = 0, behind = 0;
+            int look = 0, neg = 0, noncap = 0, atomic = 0, behind = 0, cond = 0;
             const wchar_t* named = NULL; int namedLen = 0;
             if (ps->i < ps->len && ps->p[ps->i] == L'?') {
                 wchar_t k1 = (ps->i + 1 < ps->len) ? ps->p[ps->i + 1] : 0;
@@ -476,6 +477,8 @@ static int parseAtom(ReParse* ps) {
                         return nd2;
                     } else { ps->err = RE_ERR_SYNTAX; return -1; }
                 }
+                /* ---- 条件组 (?(n)yes|no) / (?(<name>)yes|no)：本组不参与组号 ---- */
+                else if (k1 == L'(') { cond = 1; ps->i += 2; }
                 /* ---- 内联选项 (?ims:...) / (?-ims:...) / (?ims) ----
                  * 冻结到每个原子上（RE_F_* 位），不动 ReCtx —— 所以 (?i:a)b 里 b 仍按对象设置。 */
                 else {
@@ -516,6 +519,43 @@ static int parseAtom(ReParse* ps) {
             }
             /* VB 的 SubMatches 按**左括号出现顺序**编号 —— 外层组号必须先定，再解子模式。 */
             int g = 0;
+            if (cond) {
+                /* 条件组要先把"看哪个组"读出来，再用 parseSeq 分别解 yes/no 两支。
+                 * 不能用 pAlt：它会把 (?(1)a|b) 里的 | 当成自己的交替吞掉。 */
+                int cg = 0, yes, no = -1, knd, kids[2], nk = 0, t, start;
+                if (ps->i < ps->len && isDigitW(ps->p[ps->i])) {
+                    while (ps->i < ps->len && isDigitW(ps->p[ps->i])) { cg = cg * 10 + (ps->p[ps->i] - L'0'); ps->i++; }
+                } else if (ps->i < ps->len && (ps->p[ps->i] == L'<' || ps->p[ps->i] == L'\'')) {
+                    wchar_t close = (ps->p[ps->i] == L'<') ? L'>' : L'\'';
+                    const wchar_t* nm; int nlen;
+                    ps->i++;
+                    nm = ps->p + ps->i;
+                    while (ps->i < ps->len && ps->p[ps->i] != close) ps->i++;
+                    if (ps->i >= ps->len) { ps->err = RE_ERR_MISSING_RP; return -1; }
+                    nlen = (int)((ps->p + ps->i) - nm);
+                    ps->i++;
+                    cg = reLookupName(ps, nm, nlen);
+                    if (cg <= 0) { ps->err = RE_ERR_SYNTAX; return -1; }
+                } else { ps->err = RE_ERR_SYNTAX; return -1; }
+                if (ps->i >= ps->len || ps->p[ps->i] != L')') { ps->err = RE_ERR_MISSING_RP; return -1; }
+                ps->i++;
+                if (cg <= 0 || cg > ps->ngroups) { ps->err = RE_ERR_SYNTAX; return -1; }   /* 只能引用已存在的组 */
+                yes = parseSeq(ps);
+                if (yes < 0) return -1;
+                if (ps->i < ps->len && ps->p[ps->i] == L'|') { ps->i++; no = parseSeq(ps); if (no < 0) return -1; }
+                if (ps->i >= ps->len || ps->p[ps->i] != L')') { ps->err = RE_ERR_MISSING_RP; return -1; }
+                ps->i++;
+                ps->fl = saveFl;
+                kids[nk++] = yes;
+                if (no >= 0) kids[nk++] = no;
+                knd = progNode(pg, K_COND);
+                start = pg->nk;
+                for (t = 0; t < nk; t++) progKid(pg, knd, kids[t]);
+                pg->n[knd].kid = start;
+                pg->n[knd].b = nk;
+                pg->n[knd].a = cg;
+                return knd;
+            }
             if (!look && !noncap && !atomic) {
                 g = ++ps->ngroups;
                 if (g > RE_MAX_GROUPS) { ps->err = RE_ERR_SYNTAX; return -1; }
@@ -959,6 +999,14 @@ static int mRun(ReCtx* x, int node, int pos, Cont* k) {
             return mCont(x, k, pos);
         }
         case K_STRBOL:  return pos == 0 ? mCont(x, k, pos) : 0;
+        case K_COND: {
+            /* 条件组：看的组已经闭上就取 yes 支，否则取 no 支（没有 no 支就是空）。 */
+            int cg = n->a;
+            int done = (x->caps[2 * cg] >= 0 && x->caps[2 * cg + 1] >= 0);
+            if (done) return mRun(x, x->pg->kids[n->kid], pos, k);
+            if (n->b >= 2) return mRun(x, x->pg->kids[n->kid + 1], pos, k);
+            return mCont(x, k, pos);
+        }
         case K_STREOL:  return pos == x->len ? mCont(x, k, pos) : 0;
         case K_STREOLZ:
             if (pos == x->len || (pos == x->len - 1 && x->s[pos] == L'\n')) return mCont(x, k, pos);
