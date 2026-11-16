@@ -13241,7 +13241,9 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-TextCompare "regexp_native" "run_compare.ps1" }
     if (Enter-StaticShard) { Test-TextCompare "regexp_ext" "run_ext_compare.ps1" }
     # 夹具登记（census 要 run_tests.ps1 里出现字面路径）：tests\dict_native\DictApp.vbp
+    # 同上（C30-10 第三十刀）：tests\dict_native\NewBind.vbp
     if (Enter-StaticShard) { Test-TextCompare "dict_native" "run_compare.ps1" "dict_native" }
+    if (Enter-StaticShard) { Test-TextCompare "newbinding" "run_newbinding.ps1" "dict_native" }
     if (Enter-StaticShard) { Test-BuiltinConstAuthority }
     if (Enter-StaticShard) { Test-TestHelperIntegrity }
     if (Enter-StaticShard) { Test-ModuleOrderAuthority }

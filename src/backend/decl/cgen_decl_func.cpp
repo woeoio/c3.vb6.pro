@@ -62,7 +62,9 @@ void CCodeGen::visit(FunctionDecl& node) {
     knownLocalVars_.clear();
     procNonArrayLocalVars_.clear();
     knownNewVars_.clear();
-    knownNewVars_.insert(moduleNewVars_.begin(), moduleNewVars_.end());  // Fix 090v
+    knownNewVars_.insert(moduleNewVars_.begin(), moduleNewVars_.end());
+    // C30-10 第三十刀: 模块/类级的 As New <外部 ProgID> 惰性表同样带进过程作用域。
+    knownNewProgIdVars_.insert(moduleNewProgIdVars_.begin(), moduleNewProgIdVars_.end());  // Fix 090v
     // Fix 091m: 回灌模块级 Variant 变量 (knownVariantVars_ 已被 clear)
     knownVariantVars_.insert(moduleVariantVars_.begin(), moduleVariantVars_.end());
     knownByRefParams_.clear();  // Fix 081g

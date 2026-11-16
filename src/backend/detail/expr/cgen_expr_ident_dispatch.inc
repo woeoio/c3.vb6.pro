@@ -275,7 +275,12 @@
         if (itNew != knownNewVars_.end()) {
             std::string newExpr;
             auto itCom = knownTypedComVars_.find(lower);
-            if (itCom != knownTypedComVars_.end()) {
+            // C30-10 第三十刀: 外部 ProgID 档（未解析的 `Dim x As New VBScript.RegExp`）——
+            // 它没有 vb6_cls_ 工厂，也没有 typelib 符号，只能按 ProgID 建（这就是 VB6 的 New <ProgID>）。
+            auto itPid30 = knownNewProgIdVars_.find(lower);
+            if (itPid30 != knownNewProgIdVars_.end()) {
+                newExpr = "(void*)vb6_NewObject(L\"" + itPid30->second + "\")";
+            } else if (itCom != knownTypedComVars_.end()) {
                 // C30-9: 三档分流（工程类实现 > coclass CLSID > ProgID），见 comNewObjectExpr。
                 newExpr = comNewObjectExpr(itCom->second);
             } else {

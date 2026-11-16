@@ -193,6 +193,21 @@ void CCodeGen::visit(VariableDecl& node) {
                 std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                 knownNewVars_[lower] = "Collection";
                 moduleNewVars_[lower] = "Collection";
+            } else {
+                // C30-10 第三十刀: 模块/类级的 `Dim x As New <外部 ProgID>`
+                // （如 `Public g As New VBScript.RegExp`）—— 与局部那一支同口径：
+                // 带点的未解析名字按 VB6 `New <ProgID>` 登记，守卫处发 vb6_NewObject。
+                bool resolved30 = (clsSym && (clsSym->kind == SymbolKind::Class ||
+                                              clsSym->kind == SymbolKind::ComClass ||
+                                              clsSym->kind == SymbolKind::ComInterface));
+                if (!resolved30 && simple.name.find('.') != std::string::npos) {
+                    std::string lower = node.name;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    knownNewVars_[lower] = simple.name;
+                    moduleNewVars_[lower] = simple.name;
+                    knownNewProgIdVars_[lower] = simple.name;
+                    moduleNewProgIdVars_[lower] = simple.name;
+                }
             }
         }
     }

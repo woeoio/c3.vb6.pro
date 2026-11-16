@@ -91,6 +91,16 @@
 
     // P14.3.1: Dim As New自动实例化变量集合 (小写key → 类名C标识)
     std::unordered_map<std::string, std::string> knownNewVars_;
+    // C30-10 第三十刀: `Dim x As New <外部 ProgID>` 的惰性实例化表
+    // (小写**变量名** → 声明的 ProgID 原文, 如 "VBScript.RegExp")。
+    //
+    // 不能蹭 knownNewVars_: 那张表存的是 C 标识，守卫处一律拼 `vb6_cls_<名>_New()`——
+    // 工程类才成立。外部 ProgID 没有那个工厂，只能用 `vb6_NewObject(L"<ProgID>")`。
+    // 实测（--emit-c）：`Dim r As New VBScript.RegExp` 以前只发 `void* r = NULL;`，
+    // 一条惰性实例化都没有 ⇒ 成员访问全打 [C3_LATEBIND_MISS]。
+    std::unordered_map<std::string, std::string> knownNewProgIdVars_;
+    // 模块/类级同名表（过程入口带入 known*，与 moduleNewVars_ 同理）。
+    std::unordered_map<std::string, std::string> moduleNewProgIdVars_;
     // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` 的窗体实例化集合
     // (小写**变量名** → 窗体名的 C 标识)。
     // 与 knownNewVars_ 分开是因为**发的东西不同**: 窗体没有 vb6_cls_<F>_New(),

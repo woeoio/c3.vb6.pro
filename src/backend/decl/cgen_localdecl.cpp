@@ -438,6 +438,20 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                         knownNewVars_[lower] = "Collection";
                     }
                 }
+                // C30-10 第三十刀: `Dim x As New <外部 ProgID>`（如 VBScript.RegExp）。
+                // 局部声明这条路上，带点的未解析名字既不是 Class/工程类，也不是
+                // ComClass/Collection/窗体 ⇒ 以前**一条惰性实例化都不发**（实测 --emit-c：
+                // 只有 `void* r = NULL;`，随后 Pattern/Test 全打 [C3_LATEBIND_MISS]）。
+                // 按 VB6 `New <ProgID>` 语义登记成 ProgID 档，守卫处发 vb6_NewObject。
+                if (var.isNew && simple.name.find('.') != std::string::npos
+                    && (!clsSym || (clsSym->kind != SymbolKind::Class
+                                    && clsSym->kind != SymbolKind::ComClass
+                                    && clsSym->kind != SymbolKind::ComInterface))) {
+                    std::string lower = var.name;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    knownNewVars_[lower] = simple.name;
+                    knownNewProgIdVars_[lower] = simple.name;
+                }
                 // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` —— 窗体**也**要自动实例化。
                 //
                 // 症状链 (play78 --arch x86 实测, 探针 PC/PA 逐条对齐):

@@ -296,16 +296,40 @@ d("k") = 5             →  vb6_ComSetPropArg(d, 0, {key}, 1, …)      ← 发�
 Dim r As New …RegExp   →  void* r = NULL;（无惰性初始化行）          ← 仍在
 ```
 
-| 缺口 | 处置 | 读数 |
-| --- | --- | --- |
+| 缺口 | 处置 | 读数 || --- | --- | --- |
 | `Nothing` 包成 Empty | 新增 `vb6_ComPackNothing`（VT_DISPATCH NULL），`comPackExpr` 对 `LiteralKind::Nothing` 走它 | 对照回填 2 行（`d62`/`d104`） |
 | Currency 实参截断 | `kComPackTiers` 加 `Currency → vb6_ComPackCur`，RTL 按 `llround(v*10000)` 发 VT_CY | 对照回填 2 行（`d102`/`d123`） |
 | `d("k") = v` 假 VB3003 | 语义层：目标是「Object/Variant 变量的带参下标」时不做隐式转换检查 | 编译该形 **0 条告警**（修前 1 条） |
-| `As New` 外部 ProgID | **未修**（本轮只记录）：`Dim r As New VBScript.RegExp` 生成为 `void* r = NULL;`，**一条惰性实例化都没有**（Dictionary 有）⇒ 变量恒 NULL。取证见 §11.4 | — |
+| `As New` 外部 ProgID | **已修**（第三十刀）：局部声明那一支（`cgen_localdecl.cpp`）与模块级那一支（`cgen_decl_var.cpp`）都登记 ProgID 档，守卫发 `vb6_NewObject(L"<ProgID>")` | `[TEXT] newbinding` **4/4**（reg_exp 局部+模块级、dict 局部+模块级；stderr 0 条） |
 
 对照总读数：**58 行逐字一致**（VB6-SEM 1 行；仅 `d121` 因标量类型宽度剔除，见 §11.2）。
 
-### 11.8 与计划的差异（说明理由）
+### 11.8 第三十刀：`As New <外部 ProgID>` 收口（含定位过程）
+
+前一轮猜错了落点（以为在 `cgen_decl_var.cpp`），实测证明不是：加完登记后 `--emit-c` 一字未变。
+本轮用环境变量门控的诊断确认：`Dim r As New VBScript.RegExp`（过程内）**根本不进**
+`visit(VariableDecl&)`，只打印出模块级的 `g`。真正的局部声明发射在 `cgen_localdecl.cpp`。
+
+| 位置 | 处置 |
+| --- | --- |
+| `cgen_localdecl.cpp` | 局部 `Dim x As New <带点未解析名>` 登记 `knownNewVars_` + `knownNewProgIdVars_` |
+| `cgen_decl_var.cpp` | 模块/类级同一档登记（连同 `moduleNewProgIdVars_`） |
+| `cgen_decl_func/proc/prop.cpp` | 过程入口把模块级 ProgID 表带进 `knownNewProgIdVars_` |
+| `cgen_expr_ident_{symbol,dispatch}.inc`（4 处） | 守卫多一档：ProgID 命中就发 `(void*)vb6_NewObject(L"<ProgID>")` |
+
+读数（`tests/dict_native/run_newbinding.ps1`，VB6 语义固定期望）：
+
+```
+PASS newbinding 4/4（reg_exp 局部+模块级、dict 局部+模块级；stderr 0 条）
+  n3 local_dict=1 typename=Long  ← 仍差一格：VB6 答 Dictionary
+```
+
+修前：四条全是空/NULL，stderr 一片 `[C3_LATEBIND_MISS … kind=null]`。
+**残留一格**：局部 `Dim d As New Scripting.Dictionary` 的 `TypeName` 答 `Long`
+（模块级同一名字答 `Dictionary`）—— 接口指针被 `knownLongPtrVars_` 当 LongPtr 装箱，
+功能不受影响（`d.Add`/`d.Count` 全对），判据里不断言这一格、只报告。
+
+### 11.9 与计划的差异（说明理由）
 
 - **S2 与 S3 合并**：原计划 S2 先做"C 侧键矩阵自测"。实际做下来没有干净的运行入口 ——
   本仓的测试都是 VB 夹具，另开一个 C 单测程序要把 RTL 的 VARIANT 胶水一起拖进来，
