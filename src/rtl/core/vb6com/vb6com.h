@@ -15,6 +15,11 @@ extern "C" {
 // CreateObject(progId) - 通过ProgID创建COM对象，返回IDispatch*
 void* vb6_CreateObject(const wchar_t* progId);
 
+// 内置正则（C30-10）：顶掉 CreateObject("VBScript.RegExp") 对 vbscript.dll 的依赖。
+// 实现见 vb6com_regexp.c（语法/行为以 cscript 跑的 VBScript.RegExp 为基准）。
+void* vb6_RegExp_New(void);
+int   vb6_RegExp_IsProgramId(const wchar_t* progId);
+
 // C30-9: 按 **coclass CLSID** 建对象（VB6 `As New <typelib coclass>` 走的同一条路）。
 // ProgID 在某些机器上压根不注册（实测本机 32 位视图 ADODB.* 全没注册，只有 CLSID），
 // 此时 VB6 能跑、按 ProgID 查必挂 ⇒ 生成码带着符号里的 CLSID 就直接用这一枚。

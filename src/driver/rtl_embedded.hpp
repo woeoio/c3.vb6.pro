@@ -116,6 +116,8 @@ enum RtlResourceID {
     // Fix 103: VB6 内建对象 Collection 的 C 实现 (IDispatch + IEnumVARIANT)
     RTL_VB6COM_COLLECTION_C    = 177,
     RTL_VB6COM_COLLECTION_ENUM_C = 178,
+    // C30-10: 内置正则引擎（顶掉 CreateObject("VBScript.RegExp") 的 vbscript.dll 依赖）
+    RTL_VB6COM_REGEXP_C        = 227,
     // vb6forms_uc 按族细分 (2026-09-19): 内部头 + 6 族编译单元 + 7 个函数体片段
     RTL_VB6FORMS_UC_INTERNAL_H             = 179,
     RTL_UC_HOST_C                          = 180,

@@ -1,4 +1,5 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-16 (C30-10): 新增 vb6com_regexp.c（内置 VBScript.RegExp 替代）。本条只为触发 rc 重嵌。  (re-embed touch 142809)
 // 2026-11-14 (账 #611, JSonFast 第 5/7 按钮):
 //   · vb6rtl.c 新增 vb6_ErrGoToZero(): `On Error GoTo 0` 恢复调用方错误帧,
 //     不再把外层 On Error GoTo label 的 setjmp 一并关掉 (否则 Err.Raise 未处理).
@@ -667,6 +668,9 @@
 // 分两个编译单元: 容器 + IDispatch / _NewEnum 的 IEnumVARIANT
 177 RCDATA "../rtl/core/vb6com/vb6com_collection.c"
 178 RCDATA "../rtl/core/vb6com/vb6com_collection_enum.c"
+// C30-10: 内置正则引擎（顶掉 CreateObject("VBScript.RegExp") 的 vbscript.dll 依赖）。
+// 新号取 227（221..226 已满，不往后顺延，避免与后续刀撞号）。
+227 RCDATA "../rtl/core/vb6com/vb6com_regexp.c"
 // vb6forms_uc.c 按族细分 (2026-09-19): 内部头 + 6 个族编译单元 + 7 个函数体片段
 // 原单文件 1546 行 → 主文件仅作入口；uc/ 下为独立编译单元，uc/detail/ 为片段
 179 RCDATA "../rtl/core/vb6forms/vb6forms_uc_internal.h"

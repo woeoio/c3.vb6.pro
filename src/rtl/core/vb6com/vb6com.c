@@ -1245,6 +1245,19 @@ BSTR vb6_ComCreatedTypeNameBStr(void* disp) {
 void* vb6_CreateObject(const wchar_t* progId) {
     if (!progId) return NULL;
 
+    // C30-10: 内置正则引擎 —— CreateObject("VBScript.RegExp") 不再走 vbscript.dll。
+    // 与 TeeChart 内置控件同一条路线：先把已知 ProgID 接进自带实现，未命中才查注册表。
+    // 回退开关：C3_REGEXP_PREFER_MS=1 时照旧用 Microsoft 的组件（对照组用）。
+    {
+        static int preferMs = -1;
+        if (preferMs < 0)
+            preferMs = (GetEnvironmentVariableW(L"C3_REGEXP_PREFER_MS", NULL, 0) > 0) ? 1 : 0;
+        if (preferMs == 0 && vb6_RegExp_IsProgramId(progId)) {
+            void* re = vb6_RegExp_New();
+            if (re) { vb6_ComRememberProgID(re, progId); return re; }
+        }
+    }
+
     // Fix 160: ComLib= 免注册 — 本地 DLL 优先 (LoadLibrary+DllGetClassObject, 绕开注册表).
     // 表未声明 (ComLib= 为空) 时 vb6_ComLibLookup 恒返 NULL, 该块整体跳过,
     // 后续注册表路径与改动前完全一致 — 未声明组件零变化.
