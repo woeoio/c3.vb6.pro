@@ -211,8 +211,12 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `radius0=109.9(n=6790)`≈r+18、`r1=92.0 r2=94.0 r3=94.5`≈r=94。
 - **饼图扇区标签已画**（`638b2988`）：Marks 对 Pie 是“每块一个标签”，位置在中线 0.65r、
   跟着 ExplodedSlice 外移，计入痕迹 `marks=N`（四等份夹具 `marks=4`）。
-- **仍未接**：`Walls` / 3D；`ShowEditor` / `Printer` / `Export` / `Zoom` —— 这四条仍会落到 438
-  （台账 §4 P3 写的是“先落显式空实现”，还没做，别当成已落）。
+- **四条空实现已落**（`d5e739c8`）：`ShowEditor`/`ShowEditorModal` 认名字直接返回；
+  `Printer` 一律不动作（`PageWidth/PageHeight` 给 A4@96dpi 的 793/1122）；
+  `Export`（SaveToFile/CopyToClipboard/Email）不动作；`Zoom.Enable/Percent` 照实存取。
+  判据就在“调用后 marker 打得出来”：`TC-ED=ok` / `TC-PR=793` / `TC-EX=ok` / `TC-ZM=0`。
+  真正落盘导出（图片编码）仍未接。
+- **仍未接**：`Walls` / 3D。至此 §5 只剩下 3D 这一族。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
