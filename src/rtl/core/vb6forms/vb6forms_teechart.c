@@ -622,6 +622,7 @@ static TcObj* tcCached(TcChart* c, int kind, int index);
 static int32_t tcRootCall(TcChart* c, void* hwnd, const wchar_t* name, int argc,
                           VARIANT** a, VARIANT* out);
 static TcObj* tcMethodFor(TcChart* c, const wchar_t* name);
+static void* tcEnumNew(TcChart* c);
 
 static HRESULT STDMETHODCALLTYPE tcQI(IDispatch* d, REFIID riid, void** ppv) {
     if (!ppv) return E_POINTER;
@@ -713,7 +714,10 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
             tcSetL(res, c->nser);
             return S_OK;
         case DISPID_NEWENUM:
-            return E_NOTIMPL;                   /* For Each 还没接（文档 §5） */
+            /* For Each s In TChart1.Series —— 交一枚 IEnumVARIANT（C30-10 P1 第四刀）。
+             * 与 memberobj 那族同一口径：枚举器每次 Next 现建一枚系列对象。 */
+            tcSetObj(res, (TcObj*)tcEnumNew(c));
+            return S_OK;
         default:
             return DISP_E_MEMBERNOTFOUND;
         }
@@ -958,6 +962,93 @@ static TcObj* tcMethodFor(TcChart* c, const wchar_t* name) {
         return o;
     }
 }
+
+/* ==================== IEnumVARIANT（For Each s In TChart1.Series） ====================
+ * 与 vb6forms_memberobj.c 那族同一形态：真 IEnumVARIANT，Next 时现建一枚系列对象。
+ * 枚举器是**临时对象**（不归图表所有），Release 到 0 就 free。
+ */
+typedef struct TcEnum {
+    IEnumVARIANTVtbl* lpVtbl;
+    LONG ref;
+    HWND hwnd;
+    int  pos;     /* 0 基 */
+    int  total;
+} TcEnum;
+
+static const IEnumVARIANTVtbl tcEnumVtbl;
+
+static void* tcEnumNew(TcChart* c) {
+    TcEnum* e;
+    if (!c) return NULL;
+    e = (TcEnum*)calloc(1, sizeof(TcEnum));
+    if (!e) return NULL;
+    e->lpVtbl = (IEnumVARIANTVtbl*)&tcEnumVtbl;
+    e->ref    = 1;
+    e->hwnd   = c->hwnd;
+    e->pos    = 0;
+    e->total  = c->nser;
+    return (void*)e;
+}
+
+static HRESULT STDMETHODCALLTYPE tcEnumQI(IEnumVARIANT* d, REFIID riid, void** ppv) {
+    if (!ppv) return E_POINTER;
+    if (IsEqualIID(riid, &IID_IUnknown) || IsEqualIID(riid, &IID_IEnumVARIANT)) {
+        *ppv = d; InterlockedIncrement(&((TcEnum*)d)->ref); return S_OK;
+    }
+    *ppv = NULL;
+    return E_NOINTERFACE;
+}
+static ULONG STDMETHODCALLTYPE tcEnumAddRef(IEnumVARIANT* d) {
+    return (ULONG)InterlockedIncrement(&((TcEnum*)d)->ref);
+}
+static ULONG STDMETHODCALLTYPE tcEnumRelease(IEnumVARIANT* d) {
+    LONG r = InterlockedDecrement(&((TcEnum*)d)->ref);
+    if (r <= 0) free((TcEnum*)d);
+    return (ULONG)(r > 0 ? r : 0);
+}
+static HRESULT STDMETHODCALLTYPE tcEnumNext(IEnumVARIANT* d, ULONG celt, VARIANT* rg,
+                                            ULONG* fetched) {
+    TcEnum* e = (TcEnum*)d;
+    TcChart* c = tcOf(e->hwnd);
+    ULONG got = 0;
+    if (!c || !rg) { if (fetched) *fetched = 0; return E_POINTER; }
+    while (got < celt && e->pos < e->total) {
+        TcObj* so = tcObjFor(c, TC_KIND_SERIES, e->pos);
+        if (!so) break;
+        tcSetObj(&rg[got], so);
+        e->pos++;
+        got++;
+    }
+    if (fetched) *fetched = got;
+    return (got == celt) ? S_OK : S_FALSE;
+}
+static HRESULT STDMETHODCALLTYPE tcEnumSkip(IEnumVARIANT* d, ULONG celt) {
+    TcEnum* e = (TcEnum*)d;
+    e->pos += (int)celt;
+    if (e->pos > e->total) e->pos = e->total;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE tcEnumReset(IEnumVARIANT* d) {
+    ((TcEnum*)d)->pos = 0;
+    return S_OK;
+}
+static HRESULT STDMETHODCALLTYPE tcEnumClone(IEnumVARIANT* d, IEnumVARIANT** out) {
+    TcEnum* e = (TcEnum*)d;
+    TcEnum* n;
+    if (!out) return E_POINTER;
+    n = (TcEnum*)calloc(1, sizeof(TcEnum));
+    if (!n) return E_OUTOFMEMORY;
+    *n = *e;
+    n->ref = 1;
+    *out = (IEnumVARIANT*)n;
+    return S_OK;
+}
+static const IEnumVARIANTVtbl tcEnumVtbl = {
+    (HRESULT (STDMETHODCALLTYPE*)(IUnknown*, REFIID, void**))tcEnumQI,
+    (ULONG (STDMETHODCALLTYPE*)(IUnknown*))tcEnumAddRef,
+    (ULONG (STDMETHODCALLTYPE*)(IUnknown*))tcEnumRelease,
+    tcEnumNext, tcEnumSkip, tcEnumReset, tcEnumClone
+};
 
 /* ==================== 宿主模型钩子（vb6_Host_GetProp/Call/SetProp 的尾叉） ====================
  * 形状与 vb6_MenuProxyDecode 那一族一致：认不出返回 0，让宿主模型回到它原来的
