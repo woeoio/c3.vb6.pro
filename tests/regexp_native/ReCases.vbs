@@ -112,7 +112,8 @@ RunCase "a+b", False, True, True, "x", "pat", ""
 ' ---- 错误 ----
 RunCase "[", False, False, False, "a", "test", ""
 RunCase "a{3,2}", False, False, False, "a", "test", ""
-RunCase "(?<x>a)", False, False, False, "a", "test", ""
+' (?<x>a) 已从 VB 对照集移出：它原本是 5017（真组件不认命名组），
+' C30-10 把它做成**扩展语法默认成功**，判据改由 Python re 提供，见 ExtCases / ext_oracle.py。
 RunCase "(abc", False, False, False, "a", "test", ""
 RunCase "a)b", False, False, False, "a", "test", ""
 RunCase "((a)", False, False, False, "a", "test", ""

@@ -30,7 +30,7 @@ $vbp = Join-Path $proj 'ReApp.vbp'
 $env:C3_PROJECT_DIR = (Split-Path $root -Parent)
 $log = & cmd.exe /c "`"$c3exe`" `"$vbp`" --arch $Arch --output-dir `"$OutDir`" 2>&1"
 $exe = Join-Path $OutDir 'ReApp.exe'
-if (-not (Test-Path -LiteralPath $exe)) {
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
     Write-Output "FAIL 编译失败（没有 $exe）"
     $log | Select-Object -Last 12 | ForEach-Object { "  " + $_ }
     exit 1

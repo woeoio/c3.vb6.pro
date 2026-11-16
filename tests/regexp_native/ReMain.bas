@@ -8,6 +8,7 @@ Option Explicit
 
 Dim gRe As Object
 Dim gF As Integer
+Dim gF2 As Integer
 
 Sub Emit(s As String)
     Print #gF, s
@@ -56,6 +57,76 @@ Sub RunCase(p As String, gl As Boolean, ic As Boolean, ml As Boolean, subj As St
     Err.Clear
     On Error GoTo 0
     Emit p & " | " & mode & " | " & out
+End Sub
+
+' ----------------------------------------------------------------
+' 扩展语法用例（默认开启，不设开关）：判据不再来自 VBScript.RegExp，
+' 而是 Python re（见 ext_oracle.py）；输出格式 "id|mode|结果"，与 oracle 逐行比。
+' ----------------------------------------------------------------
+Sub ExtCase(id As String, p As String, subj As String, mode As String)
+    Dim out As String, mc As Object, m As Object, k As Long
+    On Error Resume Next
+    Err.Clear
+    gRe.Pattern = p
+    gRe.Global = False
+    gRe.IgnoreCase = False
+    gRe.Multiline = False
+    If mode = "t" Then
+        If gRe.Test(subj) Then out = id & "|t|1" Else out = id & "|t|0"
+    Else
+        Set mc = gRe.Execute(subj)
+        If Err.Number = 0 Then
+            If mc.Count = 0 Then
+                out = id & "|m|-"
+            Else
+                Set m = mc(0)
+                out = id & "|m|" & m.FirstIndex & ":" & m.Length
+                For k = 0 To m.SubMatches.Count - 1
+                    out = out & "|[" & m.SubMatches(k) & "]"
+                Next
+            End If
+        End If
+    End If
+    If Err.Number <> 0 Then out = id & "|err|" & Err.Number
+    Err.Clear
+    On Error GoTo 0
+    Print #gF2, out
+End Sub
+
+Sub ExtCases()
+    gF2 = FreeFile
+    Open App.Path & "\re_c3_ext.txt" For Output As #gF2
+    ' ---- 命名组 / 命名反向引用 ----
+    ExtCase "e01", "(?<c>a)\k<c>", "aa", "t"
+    ExtCase "e02", "(?P<c>a)(?P=c)", "aa", "t"
+    ExtCase "e03", "(?'x'b)\k'x'", "bb", "t"
+    ExtCase "e04", "(?<n>\d+)-(\w+)", "12-ab", "m"
+    ExtCase "e05", "(?<x>a)", "a", "t"
+    ExtCase "e06", "\k<x>(?<x>a)", "a", "t"      ' 前向引用：两边都报错
+    ' ---- 后顾（定长） ----
+    ExtCase "e07", "(?<=foo)bar", "foobar", "m"
+    ExtCase "e08", "(?<=\d{2})x", "a12x", "m"
+    ExtCase "e09", "(?<!foo)bar", "foobar", "t"
+    ExtCase "e10", "(?<!foo)bar", "xbar", "t"
+    ExtCase "e11", "(?<=a*)b", "ab", "t"        ' 变长后顾：5017
+    ' ---- 原子组 / 占有量词 ----
+    ExtCase "e12", "(?>a+)ab", "aaab", "t"
+    ExtCase "e13", "(?>a+)c", "aaac", "t"
+    ExtCase "e14", "a++ab", "aaab", "t"
+    ExtCase "e15", "a*+a", "aaa", "t"
+    ExtCase "e16", "\d++", "123", "t"
+    ' ---- \A \z \Z ----
+    ExtCase "e17", "\Aabc", "abc", "t"
+    ExtCase "e18", "\Aabc", "xabc", "t"
+    ExtCase "e19", "abc\z", "abc", "t"
+    ExtCase "e20", "abc\z", "abc" & vbLf, "t"
+    ExtCase "e21", "abc\Z", "abc" & vbLf, "t"
+    ExtCase "e22", "abc\Z", "abc", "t"
+    ' ---- \Q...\E ----
+    ExtCase "e23", "\Qa.b\E", "a.b", "t"
+    ExtCase "e24", "\Qa.b\E", "axb", "t"
+    ExtCase "e25", "\Qa+b\E", "a+b", "t"
+    Close #gF2
 End Sub
 
 Sub Main()
@@ -121,10 +192,10 @@ Sub Main()
     ' ---- 错误 ----
     RunCase "[", False, False, False, "a", "test", ""
     RunCase "a{3,2}", False, False, False, "a", "test", ""
-    RunCase "(?<x>a)", False, False, False, "a", "test", ""
     RunCase "(abc", False, False, False, "a", "test", ""
     RunCase "a)b", False, False, False, "a", "test", ""
     RunCase "((a)", False, False, False, "a", "test", ""
 
     Close #gF
+    ExtCases
 End Sub
