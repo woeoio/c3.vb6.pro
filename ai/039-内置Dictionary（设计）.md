@@ -514,3 +514,48 @@ w02/w05/w07/w09/w11/w13/w14 全按 oracle；`Probe.bas` 15 行与 `HexProbe.bas`
 同层剩下两格（已登记）：`Asc()` 的返回档、`Array()` 字面量的元素档 —— 两者都属「内建返回类型表」
 那一层，需要先看那张表还喂谁（与 `inferExprType` 同源），不能拿「只改装箱」的刀法套。
 
+### 11.14 第三十五刀：内建返回档那一族（`Asc`/`Sgn`/`VarType`/`StrComp`/月日年时分秒/`Weekday`/`FreeFile`）
+
+先把上一刀留下的两张留白摊开量：`.temp/litprobe/W4.vbs`（cscript 基准）↔ `W4.bas`，
+25 形逐行对。结论不是「两枚函数答错」，而是**一整族**内建在 VB6 里返回 Integer、C3 全按 Long 装：
+
+| 读数 | 写法 | oracle | C3（修前） |
+| --- | --- | --- | --- |
+| b01 | `Asc("A")` | 2/Integer | 3/Long |
+| b03 | `Sgn(-5)` | 2/Integer | 3/Long |
+| b04 | `VarType(1)` | 2/Integer | 3/Long |
+| b05 | `StrComp("a","a")` | 2/Integer | 3/Long |
+| b08~b12 | `Month`/`Day`/`Year`/`Hour`/`Weekday` | 2/Integer | 3/Long |
+| b17 | `FreeFile` | 2/Integer（VB6 文档；VBScript 无此函数，不进 oracle） | 3/Long |
+
+**反证（都已是 3/Long，不许拉进来）**：`InStr`、`InStrRev`、`RGB`、`UBound`、`Len`
+—— b06/b07/b16/b22/b23 本来就对。非整数族也全对：`IsNumeric`/`IsArray`=11 Boolean、
+`TypeName`=8 String、`Timer`=4 Single、`Abs`/`Int`=5 Double、`Left`=8 String。
+
+**为什么不动语义层 `builtin_funcs.inc`**（那里这十四行也确实写着 `Vb6Type::Long`）：
+`inferExprType` 对它们答的 Long 是「C 侧 int32 口径」，同时喂算术 / 收窄 / `Print#` 包装。
+把档改窄会把「Integer 参与算术时 VB6 的升格规则」整层打开（`*` 升 Long、`+` 留 Integer、
+溢出错误 6）—— 与 §11.13 同一道闸：那属「算术全链」，不属本刀。
+
+**落点**：`detail/expr/cgen_builtin_return_type_table.inc` 新增 `builtinReturnsVbInteger`（十四名一张
+`unordered_set`，剥 `$` 后小写比）+ `CCodeGen::builtinReturnsVbIntegerName` 成员（声明在
+`detail/util/cgen_helpers.inc`，紧挨 `isNarrowIntExpr`）；`cgen_util_ctrl.cpp::isNarrowIntExpr`
+多两支：`IndexOrCallExpr` 的 callee 是标识符且在表里（`Asc("A")` 这一形）、以及裸标识符
+（`FreeFile` 这一形，要求符号表里不是用户变量）。⚠ 该表是**过渡期的第二份答案**，只喂装箱站；
+算链落账后应把语义层那十四行改成 Integer、删掉这个函数 —— 文件头注已写这句。
+
+**本刀踩到并修掉的一处真 bug（值得记）**：`isNarrowIntExpr` 原先写的是
+`if (kind == IdentifierExpr) return knownIntVars_||knownIntConsts_;` —— 提前 `return`，于是
+后面新加的「内建标识符」支**永远走不到**。实测就是 `v = FreeFile` 仍答 3（而 `FreeFile()` 答 2），
+这正是 `W5.bas` 的 f01/f02 两行之差把我逼出来的。现在标识符这一支**只留一个出口**，三源
+（Integer 变量 / 用户 Const / 内建返回档）一次答完。
+
+**读数**：`W4.bas` 25 行里 b01/b03~b12/b17 全转 2/Integer，反证六行照旧；`W5.bas`
+f01/f02/f03 = 2、f04（用户 `Long` 变量）= 3；`Probe.bas` 15 行、`HexProbe.bas` 17 行逐字未变；
+`W3.bas` 15 行里只 w13（`Asc`）从 3 转 2，其余不动；`dict_native` PASS 59 行。
+发码：CI run `43940956600`（head `6c60a6c5`）**22/22 全绿**，`Emit manifest` 也绿 ——
+748 份输入逐字相同（语料里「内建整数结果直接进 Variant 槽」同样极少）。
+
+同层**只剩一格**：`Array(1,"x")(0)` 的元素档（b19/b20 实测仍 3/Long）。它不是「返回档」问题，
+而是数组字面量的**元素装箱**走了另一条路（`cgen_expr_array.cpp`），下一刀从那里入手。
+
