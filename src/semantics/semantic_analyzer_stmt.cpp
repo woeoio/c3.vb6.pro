@@ -44,6 +44,25 @@ void SemanticAnalyzer::visit(AssignmentStmt& node) {
     Vb6Type valueType = analyzeExpr(*node.value);
     Vb6Type targetType = analyzeExpr(*node.target);
 
+    // C30-10 第二十九刀：`d("k") = v` —— 对晚绑定对象的**默认成员带参赋值**。
+    // 这不是「把 v 赋给对象变量 d」：VB6 语义是 IDispatch::Invoke(DISPID_VALUE,
+    // PROPERTYPUT, {v})，值可以是任意 Variant 子类型。以前这里拿目标表达式的静态类型
+    // （Object）做隐式转换检查，于是每处都报一条假 VB3003
+    // （实测 DictMain.bas 的 d("newkey") = 5：发码本身是对的，见 .build/gapprobe 的
+    //  `vb6_ComSetPropArg(d, 0, {key}, 1, vb6_ComPackInt(5))`）。
+    // 收窄：只有「目标是对 Object/Variant 变量的带参下标」这一种形态跳过检查。
+    if (node.target->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& call = static_cast<IndexOrCallExpr&>(*node.target);
+        if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr) {
+            auto& calleeId = static_cast<IdentifierExpr&>(*call.callee);
+            Symbol* tgtSym = symTab_.lookup(calleeId.name);
+            if (tgtSym && tgtSym->kind == SymbolKind::Variable &&
+                (tgtSym->type == Vb6Type::Object || tgtSym->type == Vb6Type::Variant)) {
+                return;   // 晚绑定默认成员 put：值位不参与隐式转换检查
+            }
+        }
+    }
+
     // 类型兼容性检查
     if (targetType != Vb6Type::Unknown && valueType != Vb6Type::Unknown) {
         checkAssignment(targetType, valueType, node.loc, "assignment");

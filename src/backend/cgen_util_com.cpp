@@ -1007,6 +1007,12 @@ std::string CCodeGen::comPackExpr(Expr& expr) {
         auto& lit = static_cast<LiteralExpr&>(expr);
         if (lit.literalKind == LiteralKind::Empty || lit.literalKind == LiteralKind::Null)
             return "vb6_ComPackValue";
+        // C30-10 第二十九刀：Nothing 必须交 VT_DISPATCH NULL。
+        // 不单独接管时它落到默认档 → `vb6_ComPackInt(NULL)`（实测 .build/gapprobe 第 71 行），
+        // 对端收到 VT_I4 0 ⇒ 与 Empty / 0 撞成同一个键，而真组件里 Nothing 是独立一类
+        // （d.Add Nothing 与 d.Add Empty 两个键都在）。
+        if (lit.literalKind == LiteralKind::Nothing)
+            return "vb6_ComPackNothing";
     }
     // 根据表达式类型推断应该用的VARIANT封装函数
     Vb6Type vt = inferExprType(expr);
@@ -1118,6 +1124,12 @@ const ComPackTier kComPackTiers[] = {
     { Vb6Type::Boolean, "vb6_ComPackBool" },     // VB6 Boolean → VARIANT VT_BOOL
     { Vb6Type::Double,  "vb6_ComPackDouble" },   // double → VARIANT
     { Vb6Type::Single,  "vb6_ComPackDouble" },
+    // C30-10 第二十九刀：Currency 单独一档（以前没有这一档，CCur(x) 作为实参
+    // 落到默认的 vb6_ComPackInt 上被截成整数 —— 实测 .build/gapprobe：
+    // `d.Add CCur(1.5), "cur"` 生成 vb6_ComPackInt(vb6_CCur(1.5))，对端收到 VT_I4 1）。
+    // builtin 表里 CCur 的返回型就是 Vb6Type::Currency（builtin_funcs.inc:141），
+    // 所以这一档一加上，那个实参就从“默认整数封装”回到 VT_CY。
+    { Vb6Type::Currency, "vb6_ComPackCur" },
     { Vb6Type::Object,  "vb6_ComPackObject" },   // void* → VARIANT
     { Vb6Type::Variant, "vb6_ComPackValue" },    // Fix 030: _Generic 通用打包宏
 };

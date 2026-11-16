@@ -239,14 +239,14 @@ PASS dict_native 用例=54 行 两侧逐字一致（oracle=cscript scrrun；VB6-
 
 | 行 | 现象 | 实质 |
 | --- | --- | --- |
-| `d62` `d104` | `Nothing` 当键时与 `Empty` 撞键 | C3 把 `Nothing` 包成 `VT_EMPTY`（VB6 是 `VT_DISPATCH NULL`）—— 编译器打包缺口 |
-| `d102` `d123` | Currency 键被截成整数（存进去实测 `VT_I4 1`，应为 1.5） | C3 的 COM 实参打包器对 Currency 那条腿截断 |
-| `d121` | `VarType(CCur(1.5))` = 5（应 6）；`VarType(1)` = 3（应 2） | `CCur` 返回 R8；整数字面量宽度与 VB6 不同 |
+| `d62` `d104` | ~~`Nothing` 当键时与 `Empty` 撞键~~ | **已修**（第二十九刀）：`vb6_ComPackNothing` ⇒ VT_DISPATCH NULL |
+| `d102` `d123` | ~~Currency 键被截成整数~~ | **已修**（第二十九刀）：`vb6_ComPackCur` ⇒ VT_CY（10000 倍定标） |
+| `d121` | `VarType(CCur(1.5))` = 5（应 6）；`VarType(1)` = 3（应 2） | 仍在：标量类型宽度那一层（C3 用 double 表 Currency、字面量默认装 I4） |
 
 另有一个不在基准里、但**使用者会碰到**的缺口：`d("k") = v`（默认成员带参赋值）
-C3 目前当成"把值赋给对象变量"并告警 `VB3003: 无法将 Integer 隐式转换为 Object`，
-运行期必错。夹具因此统一用 `d.Item("k") = v`（同一条 IDispatch 路，`vb6_ComSetPropArg`）。
-这条已列为下一刀的编译器侧追账项（不是 Dictionary 内部能修的）。
+~~C3 目前当成"把值赋给对象变量"并告警~~ —— **已修**（第二十九刀）：发码本来就对
+（`vb6_ComSetPropArg(d, 0, {key}, 1, vb6_ComPackInt(5))`），错的是语义层那条假
+VB3003；现在对「目标是对 Object/Variant 变量的带参下标」不再做隐式转换检查。
 
 ### 11.4 New 那条腿的实测（2026-11-16，临时探针，不入库）
 
@@ -285,7 +285,27 @@ d = (vb6_ComIface_IDictionary*)vb6_ComCreateTyped(_own_1, "{42C642C1-97E1-11CF-9
 **跳过类型化 QI、直接交回自己的 IDispatch** —— 下游成员调用本来就全按名字走（`vb6_ComCall*`），
 不需要那一层接口。
 
-### 11.6 与计划的差异（说明理由）
+### 11.7 第二十九刀：清四条缺口（含取证）
+
+全部先 `--emit-c` 取证，再改：
+
+```
+d.Add Nothing,   "n"   →  vb6_ComPackInt(NULL)                      ← 根因：Nothing 落到默认整数档
+d.Add CCur(1.5), "cur" →  vb6_ComPackInt(vb6_CCur(1.5))             ← 根因：Currency 没有打包档
+d("k") = 5             →  vb6_ComSetPropArg(d, 0, {key}, 1, …)      ← 发码正确，错在假 VB3003
+Dim r As New …RegExp   →  void* r = NULL;（无惰性初始化行）          ← 仍在
+```
+
+| 缺口 | 处置 | 读数 |
+| --- | --- | --- |
+| `Nothing` 包成 Empty | 新增 `vb6_ComPackNothing`（VT_DISPATCH NULL），`comPackExpr` 对 `LiteralKind::Nothing` 走它 | 对照回填 2 行（`d62`/`d104`） |
+| Currency 实参截断 | `kComPackTiers` 加 `Currency → vb6_ComPackCur`，RTL 按 `llround(v*10000)` 发 VT_CY | 对照回填 2 行（`d102`/`d123`） |
+| `d("k") = v` 假 VB3003 | 语义层：目标是「Object/Variant 变量的带参下标」时不做隐式转换检查 | 编译该形 **0 条告警**（修前 1 条） |
+| `As New` 外部 ProgID | **未修**（本轮只记录）：`Dim r As New VBScript.RegExp` 生成为 `void* r = NULL;`，**一条惰性实例化都没有**（Dictionary 有）⇒ 变量恒 NULL。取证见 §11.4 | — |
+
+对照总读数：**58 行逐字一致**（VB6-SEM 1 行；仅 `d121` 因标量类型宽度剔除，见 §11.2）。
+
+### 11.8 与计划的差异（说明理由）
 
 - **S2 与 S3 合并**：原计划 S2 先做"C 侧键矩阵自测"。实际做下来没有干净的运行入口 ——
   本仓的测试都是 VB 夹具，另开一个 C 单测程序要把 RTL 的 VARIANT 胶水一起拖进来，

@@ -150,6 +150,19 @@ void* vb6_ComPackInt(int32_t val);
 void* vb6_ComPackBool(int32_t val);
 // 将double封装为VARIANT
 void* vb6_ComPackDouble(double val);
+/* C30-10 第二十九刀：Currency 实参必须走 VT_CY，而不是被默认档当成整数截断。
+ * 实测（.build/gapprobe）：`d.Add CCur(1.5), "cur"` 以前生成为
+ * `vb6_ComPackInt(vb6_CCur(1.5))` ⇒ 对端收到 VT_I4 1（真值 1.5 丢了 0.5）。
+ * 内置 Dictionary 存进去的键因此是 `VT_I4 1`，`Exists(CDbl(1.5))` 答 False ——
+ * 与真组件（VT_CY 1.5）不一致。C3 里 Currency 用 double 表示（vb6_CCurBSTR 同），
+ * 这一档负责把它换回 VT_CY 的 10000 倍定标整数。 */
+void* vb6_ComPackCur(double val);
+
+/* C30-10 第二十九刀：`Nothing` 进 Variant 实参必须是 VT_DISPATCH NULL。
+ * 实测（同探针）：以前 Nothing 字面量落到默认档，生成 `vb6_ComPackInt(NULL)`
+ * ⇒ 对端收到 VT_I4 0，与 Empty/0 撞成同一个键。本函数只吞掉那个
+ * `NULL` 实参（发码侧形状一形），产出 VT_DISPATCH + 空指针。 */
+void* vb6_ComPackNothing(void* ignored);
 
 // 将void*(IDispatch*)封装为VARIANT (用于对象参数)
 void* vb6_ComPackObject(void* obj);

@@ -31,11 +31,13 @@ $Vb6Sem = @{
 #   d62 / d104：`Nothing` 进 Variant 参数时 C3 目前包成 VT_EMPTY（VB6 是 VT_DISPATCH NULL），
 #                于是 d.Add Nothing 与 d.Add Empty 撞键。该行真组件读数为 Nothing 独立成键。
 #   （`d(k) = v` 那条默认成员带参赋值也是 C3 缺口，夹具改用 d.Item(k) = v，不列在这里。）
-$C3Gap = @('d62', 'd104', 'd102', 'd121', 'd123')
-#   另：d102 / d123 是 Currency 实参打包被截成整数（存进去的键实测 VT_I4 1，值本应 1.5）
-#       —— C3 的 COM 参数打包器对 Currency 那条腿的缺口；d121 同时盖住
-#       CCur 返回 R8（VB6 是 CY）与整数字面量类型（VT_I4 vs VT_I2）两件小事。
-#       三者都在 ai/039 §9 里挂了追账项。
+$C3Gap = @('d121')
+#   第二十九刀把下面四行修好了，从缺口名单里移除（判据回填）：
+#     d62 / d104  Nothing 以前被包成 VT_I4 0（与 Empty 撞键）—— 现在 vb6_ComPackNothing ⇒ VT_DISPATCH NULL
+#     d102 / d123  Currency 实参以前被 ComPackInt 截成整数 —— 现在 vb6_ComPackCur ⇒ VT_CY
+#   仍剩 d121：VarType(CCur(x)) 在 C3 里答 5(R8) 而真组件是 6(CY)、整数字面量答 3(I4) 而不是 2(I2)。
+#   这一格是**标量类型宽度**那一层的事（C3 用 double 表示 Currency、字面量默认装箱成 I4），
+#   与 Dictionary 行为无关，单列一笔（ai/039 §11.2）。
 
 # 1) 基准：cscript 跑真组件
 if (-not (Get-Command cscript -ErrorAction SilentlyContinue)) {
