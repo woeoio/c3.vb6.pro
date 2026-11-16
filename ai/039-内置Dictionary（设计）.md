@@ -697,3 +697,96 @@ RTL 里也**没有** `vb6_VariantNeg` / `vb6_VariantNot` 这类出口（全仓 g
 确认再动（`IIf` 是 cgen 里的多态内置，固定成任何一档都会答错，见
 `cgen_builtin_return_type_table.inc` 头注那句）。
 
+### 11.19 第三十九刀：`IIf` 两支都是 Integer 档 → VT_I2
+
+落点：`isNarrowIntExpr`（`cgen_util_ctrl.cpp`）的 `IndexOrCallExpr` 支。判据只有一句：
+`iif` + 三个位置实参 + 无命名实参，且 `isNarrowIntExpr(第 2 支) && isNarrowIntExpr(第 3 支)`。
+**不**把 `iif` 塞进 `builtinReturnsVbInteger` —— 那会把 `IIf(True, 1&, 2&)` / `IIf(True, 1.5, 2.5)`
+一起窄化。
+
+`W9.bas` 读数（`.build\k39_W9`）：i01/i02/i07/i08/i09 = 2/Integer，i03(mixed) = 3/Long，
+i04(str) = 8/String，i05(dbl) = 5/Double，i06(`1&`) = 3/Long。`W8b` a19 3→2；`W6`/`W3`/`W5`
+一个字没动；`dict_native` PASS 59；R2 哨兵 PASS。
+
+CI run `43961533512` = **21/22**，唯一红的是 `Emit manifest`（`tests/test_builtin_arity.bas`
+的 `v = IIf(True, 1, 2)` 发了 `vb6_VariantInt((int16_t)(vb6_IIfLong(...)))`）—— 当轮没登记，
+在 §11.20 一并登记。
+
+### 11.20 真 VB6 采集（138 行）+ 刀40/41 落地、刀42 撤回
+
+#### 11.20.1 采集器
+
+`C3Probe\ProbeVB6.bas`（标准 EXE 直接跑，日志落 `App.Path\c3_vb6_probe.log`），
+九段 A~H 共 138 行读数：`KEY vt=<VarType> tn=<TypeName> val=<值>`，出错行落 `KEY ERROR n <描述>`。
+用户回传的日志存于 `C:\Users\Administrator\.sclaw\workspace\C3Probe\c3_vb6_probe.log`。
+
+⚠ 采集器自身两个坑（已在文件里规避）：① 会溢出的那几条必须走**变量**，VB6 会把
+`30000 + 30000` 这种常量在编译期折叠并直接报错，整份日志都跑不起来；② `F07`(200*200)、
+`F08`(30000*2) 两行当时漏写 `Oops` 检查，溢出发生在实参求值、**打印前**就跳走了，
+所以日志里「缺行」= 该条是 ERROR 6，不是没测。
+
+#### 11.20.2 三个被推翻的旧结论
+
+| 旧说法 | 真 VB6 |
+|---|---|
+| `*` 把 Integer 升成 Long | ❌ Integer × Integer 仍是 Integer，`200*200`/`30000*2` 直接**错误 6** |
+| `VarType` 返回 Integer | ❌ 返回 **Long**（C04 vt=3）。cscript 同形答 2/Integer —— VBScript 与 VB6 在这一枚上不一致，以 VB6 为准 |
+| `Int`/`Fix`/`Abs` 已修好 | ⚠ 只修到「实参站」；`t = Int(5)` 的**存储站**仍答 Double |
+
+第三十八刀的读数当年取自 `Probe(key, expr)` 的 `ByRef Variant` 实参（`wrapVariantValue` 的实参分支），
+而 `t = expr` 走的是同一函数里 `switch (inferExprType)` 那条，`case Double` 不查窄化 —— 两站分叉。
+这轮的对照表用**两种写法各跑一遍**才把差异显出来（30 个缺口全部来自 `t = expr` 路径）。
+
+#### 11.20.3 刀40：`vartype` 退出 Integer 表
+
+`cgen_builtin_return_type_table.inc` 的 `builtinReturnsVbInteger` 删掉 `"vartype"`。
+依据是 C04（`t = VarType(1)` → vt=3/Long）。同一张表其余十三枚逐条被日志坐实
+（Asc/AscW/Sgn/StrComp/月日年时分秒/Weekday/FreeFile → Integer；InStr/InStrRev/Len/UBound/RGB → Long）。
+
+#### 11.20.4 刀41：存储站与实参站共用同一柄尺
+
+`wrapVariantValue` 在 `switch (inferExprType)` **之前**先问一次 `isNarrowIntExpr`，命中就发
+`vb6_VariantInt((int16_t)(...))`。与末尾 `boxToVariant` 的字符串逐字相同，所以 `case Long` /
+`case Integer` 两档**发码不变**；只有 `Int`/`Fix`/`Abs` 这族从 VT_R8 变 VT_I2。
+
+A/B 实证（`.temp\C3.old.exe`=HEAD `32148205`，`.temp\C3.new.exe`=本刀）：语料里 748 份输入
+**一份都没有** `t = Int(5)` 这类站点 → 发码零变化。`dict_native` PASS 59、R2 哨兵 PASS。
+
+#### 11.20.5 刀42（撤回）：`IIf` 混支 → `vb6_IIfVariant`
+
+真 VB6 的口径是「选哪支给哪支的原生子类型」：D03 `IIf(True,1,40000)` = Integer、
+D09 `IIf(True,Null,1)` = Null、D10 = Integer、D12~D15 的 Choose/Switch 同理。
+第一版实现把「两支窄化与否不同 / 某支是 Null 字面量」的 IIf 改发 `vb6_IIfVariant(cond, box(a), box(b))`，
+本机读数确实全对（30→21），但 CI `43968071126` 的 `Tests (vbp #5)` 红了：
+
+```
+tests/ucTreeView → ucTreeViewPlus.c(4415,4416): error C2440: cannot convert from 'vb6_VARIANT' to 'double'
+```
+
+根因：`IIf` 一旦是 Variant，夹在算术/数值内建里的用法会整体走 Variant 算术
+（`vb6_VarAddV/vb6_VarSubV`），而**消费站**（要求 double 的那侧）不会自动取回具体值。
+这层要统一收在消费站，不能靠逐点补 `vb6_VariantToDouble` 竞猜。
+故撤回，补丁留档 `.temp\k42_iif_variant.patch`；撤回后 `ucTreeView` 本机 `exe=True` 编译通过。
+
+后续这一刀的正确开法：先落「消费站把 Variant 实参取成目标档」这一条唯一出口，再让 IIf 走 Variant。
+
+#### 11.20.6 缺口账（126 键）
+
+30 → 21。已对齐：`VarType`、`Int/Fix/Abs`（实参站+存储站）、`IIf` 两同一型支、`Array()` 全段。
+剩余 21 键按成因分五组，就是下一轮的刀序：
+
+| 组 | 键 | VB6 | C3 |
+|---|---|---|---|
+| 「选中支原样」 | D12/D13 Choose、D14/D15 Switch（+ D03/D09/D10 需消费站） | Integer / Null | Long |
+| Integer 算术 + 溢出错误 6 | F01~F04、F06、F06b、F09、F11、F12、F14、F20、G09、H01、H02 | Integer，`30000+30000` 报 6 | Long |
+| `^` 返回 Double | F13 | Double | Long |
+| Single 装箱 | A12 `1.5!`、C19 `Timer`、C28 `CSng` | VT_R4 | VT_R8 |
+| `Abs(Variant)` 运行时子类型 | C23 | Integer | Double |
+| 一元 `-`/`Not`（整段编不过） | E01~E10、H06 | `-v` 保子类型、`Not v`→Integer(-6) | 编译失败 |
+
+#### 11.20.7 CI 记录
+
+- `43968071126`（含刀42）= 20/22：`Emit manifest` + `Tests (vbp #5)`(ucTreeView)
+- `36a85f19`（撤回刀42，只留 40/41）= **21/22**：仅 `Emit manifest` 红
+- 登记提交 `14579ca2`：`emit-manifest.expected.txt` 1 行（第三十九刀的遗留）
+
