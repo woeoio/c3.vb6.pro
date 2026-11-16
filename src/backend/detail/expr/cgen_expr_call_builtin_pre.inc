@@ -373,6 +373,16 @@
                                 variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
                         }
                     }
+                    // 实参是不是「整只 Variant」（Variant 变量 / Variant 数组元素 /
+                    // Variant 函数返回值）。这条问句要放在出口之前 —— 第三十七刀就是
+                    // 因为它原来排在下游，只能用 VariantToLong/ToString 收敛掉子类型。
+                    bool argIsVariant = isVariantSlot(argExpr, nullptr);
+                    if (!argIsVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
+                        auto& idArg = static_cast<IdentifierExpr&>(*node.positional[i]);
+                        std::string argLower = idArg.name;
+                        std::transform(argLower.begin(), argLower.end(), argLower.begin(), ::tolower);
+                        if (knownVariantVars_.count(argLower)) argIsVariant = true;
+                    }
                     // C30-10 第三十六刀: Integer 档元素保真 —— VB6 的 `Array(1)(0)` 是
                     // Variant/Integer (VarType 2 / TypeName "Integer"), 而下面的
                     // `isLongArg ⇒ vb6_ArraySetLong` 把它写成 VT_I4 (VarType 3)。
@@ -384,6 +394,15 @@
                     // (scripts/check_array_literal_variants.ps1) 按正则数出口, 要求恰好 1 处。
                     if (variantSetter.empty() && isNarrowIntExpr(node.positional[i].get()))
                         variantSetter = "vb6_VariantInt((int16_t)(" + argExpr + "))";
+                    // C30-10 第三十七刀: 实参本身就是**整只 Variant** ⇒ VB6 的 Array()
+                    // 元素保留运行时子类型（VariantCopy），不收敛到任何一档。这一格原来
+                    // 一律 `VariantToLong`/`VariantToString`（靠一个 looksLikeBSTR 猜），
+                    // 实测两个后果：`Dim vs As Variant: vs = "x": Array(vs)` 连**值**都没了
+                    // （答 VT_I4/0），`Array(vi)`（Variant 里装 Integer）答 3。
+                    // 出口仍复用同一条 ArraySetVariant：它按值收 vb6_VARIANT、内部 VariantCopy
+                    // ⇒ 子类型与 BSTR 引用计数都对。
+                    // oracle（cscript，W7.vbs）：Integer 2 / String 8 / Double 5 / Long 3。
+                    if (variantSetter.empty() && argIsVariant) variantSetter = argExpr;
                     if (!variantSetter.empty()) {
                         c_.emitLine("vb6_ArraySetVariant(" + arrVar + ", " + std::to_string(i) + ", " + variantSetter + ");");
                         continue;
@@ -396,18 +415,7 @@
                         if (lit.literalKind == LiteralKind::Integer) isLongArg = true;
                         else if (lit.literalKind == LiteralKind::Double) isDoubleArg = true;
                     }
-                    // Fix 038b-3: 检测 Variant 实参 — Array() 元素通过 vb6_ArraySetLong/
-                    // SetBSTR/SetDouble 设置, 这些函数期望具体类型. 当实参是 Variant
-                    // (如 vb6_VariantArrayGet, Variant 变量等) 时, 需要先提取具体值.
-                    // 仅使用 cExprIsVariant (C 字符串级) 和 knownVariantVars_ 检测.
-                    bool argIsVariant = isVariantSlot(argExpr, nullptr);  // P1.3: ast 不可得 (argExpr 距 emitExpr 超 5 行)
-                    if (!argIsVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
-                        auto& idArg = static_cast<IdentifierExpr&>(*node.positional[i]);
-                        std::string argLower = idArg.name;
-                        std::transform(argLower.begin(), argLower.end(), argLower.begin(), ::tolower);
-                        if (knownVariantVars_.count(argLower)) argIsVariant = true;
-                    }
-                    // 也检测 BSTR 变量
+                    // Fix 038b-3: 剩下的具体档（BSTR 变量的名字判定）
                     bool argIsBstr = false;
                     if (node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
                         auto& idArg = static_cast<IdentifierExpr&>(*node.positional[i]);
@@ -419,24 +427,6 @@
                         c_.emitLine("vb6_ArraySetLong(" + arrVar + ", " + std::to_string(i) + ", " + argExpr + ");");
                     } else if (isDoubleArg) {
                         c_.emitLine("vb6_ArraySetDouble(" + arrVar + ", " + std::to_string(i) + ", " + argExpr + ");");
-                    } else if (argIsVariant) {
-                        // Variant 实参: 无法确定具体类型, 统一用 VariantToLong 转换
-                        // (Array() 的元素通常是数值索引). 若为 BSTR Variant 则需
-                        // VariantToString, 但 Array() 上下文中 Long 是最常见的默认.
-                        // 更安全: 使用 vb6_VariantFromValue 让 _Generic 选择, 然后
-                        // 直接用 vb6_ArraySetVariant (如果存在) 或回退到 Long.
-                        bool looksLikeBSTR = (argExpr.find("vb6_BSTR") != std::string::npos ||
-                                              argExpr.find("L\"") != std::string::npos);
-                        // Fix 081i: 也用 inferExprType 检测 BSTR 类型
-                        if (!looksLikeBSTR) {
-                            Vb6Type argVt = inferExprType(*node.positional[i]);
-                            if (argVt == Vb6Type::String) looksLikeBSTR = true;
-                        }
-                        if (looksLikeBSTR) {
-                            c_.emitLine("vb6_ArraySetBSTR(" + arrVar + ", " + std::to_string(i) + ", vb6_VariantToString(" + argExpr + "));");
-                        } else {
-                            c_.emitLine("vb6_ArraySetLong(" + arrVar + ", " + std::to_string(i) + ", vb6_VariantToLong(" + argExpr + "));");
-                        }
                     } else if (argIsBstr) {
                         c_.emitLine("vb6_ArraySetBSTR(" + arrVar + ", " + std::to_string(i) + ", " + argExpr + ");");
                     } else {
