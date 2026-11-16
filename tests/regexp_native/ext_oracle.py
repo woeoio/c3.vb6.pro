@@ -67,10 +67,23 @@ CASES = [
     ("e36", r"(?i:(a)\1)",            r"(?i:(a)\1)",            "aA",      "t", None, 0),
     ("e37", r"abc",                   r"abc",                   "ABC",     "t", None, I),
     ("e38", r"(?-i:abc)",             r"(?-i:abc)",             "ABC",     "t", None, I),
+    # ---- 条件组 (?(n)yes|no) / (?(<name>)yes|no) ----
+    # Python re **没有**条件组（PCRE2/Perl/.NET 有），所以 e39..e44 全是**手工期望**，
+    # 按 PCRE2 语义："该组已在本趟尝试里闭合"取 yes 支，否则取 no 支；没有 no 支就是空。
+    ("e39", r"^(a)?(?(1)b|c)$",       None,                      "ab",     "t", "1",  0),
+    ("e40", r"^(a)?(?(1)b|c)$",       None,                      "c",      "t", "1",  0),
+    ("e41", r"^(a)?(?(1)b|c)$",       None,                      "ac",     "t", "0",  0),
+    ("e42", r"^(?<n>\d+)(?(<n>)x|y)$", None,                      "12x",    "t", "1",  0),
+    ("e43", r"^(a)(?(1)b)$",          None,                      "ab",     "t", "1",  0),
+    ("e44", r"^(a)(?(1)b|c)$",        None,                      "ac",     "t", "0",  0),
+    # 引用还没出现过的组：PCRE 允许前向引用（编译期知道总组数），本引擎只认已存组 -> 5017。
+    ("e45", r"(?(2)a|b)",             None,                      "a",      "t", "ERR", 0),
 ]
 
 
 def one(cid, pypat, subj, mode, manual, flags):
+    if manual == "ERR":
+        return f"{cid}|err|5017"
     if manual is not None:
         return f"{cid}|{mode}|{manual}"
     try:

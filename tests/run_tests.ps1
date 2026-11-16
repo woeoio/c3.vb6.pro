@@ -13129,6 +13129,33 @@ if ($VbpShardTotal -gt 1) {
     Write-Host ""
 }
 
+# === 文本对照: 内置正则引擎（C30-10） vs 真组件 / Python re ===
+# 不把「能编」当「跑了」: 这两条是真的把两侧都跑起来再逐行 diff。
+#   退出码契约（由测试脚本自己给）: 0=PASS, 2=SKIP（本机缺 cscript 的 VBScript 引擎/缺 python）, 其它=FAIL。
+#   SKIP 会进汇总行的 skip 计数，不算 PASS —— 但也不为此把判据降成「只编不跑」。
+function Test-RegexpTextCompare {
+    param([string]$Name, [string]$ScriptFile)
+    $script:total++
+    Write-Host -NoNewline ("  [TEXT] {0} ... " -f $Name)
+    $psExe = "powershell"
+    $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($ps7) { $psExe = $ps7.Source }
+    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Tests "regexp_native\$ScriptFile") -C3 $C3 2>&1
+    $code = $LASTEXITCODE
+    $line = @($out | ForEach-Object { $_.ToString() } | Where-Object { $_ -match '^(PASS|FAIL|SKIP) ' } | Select-Object -First 1)
+    if ($code -eq 0) {
+        $script:pass++
+        Write-Host ("PASS  " + $line) -ForegroundColor Green
+    } elseif ($code -eq 2) {
+        $script:skip++
+        Write-Host (("SKIP  " + $line)) -ForegroundColor Yellow
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host ("    " + $_) }
+    }
+}
+
 if ($Category -in @("all", "compile")) {
     # --- 静态对表: DI 桩 census (只许增, 不许静默减) ---
     # 见 scripts/check_di_stubs.ps1 头注释: 重生成 di 桩是按"跑它那次会话的引用面"发桩的,
@@ -13210,6 +13237,9 @@ if ($Category -in @("all", "compile")) {
     if (Enter-StaticShard) { Test-FormDrawState }
     if (Enter-StaticShard) { Test-ComPropTypeAuthority }
     if (Enter-StaticShard) { Test-ComSigCollisionPolicy }
+    # --- 文本对照 (C30-10): 真跑两侧再 diff，不是静态查表 ---
+    if (Enter-StaticShard) { Test-RegexpTextCompare "regexp_native" "run_compare.ps1" }
+    if (Enter-StaticShard) { Test-RegexpTextCompare "regexp_ext" "run_ext_compare.ps1" }
     if (Enter-StaticShard) { Test-BuiltinConstAuthority }
     if (Enter-StaticShard) { Test-TestHelperIntegrity }
     if (Enter-StaticShard) { Test-ModuleOrderAuthority }

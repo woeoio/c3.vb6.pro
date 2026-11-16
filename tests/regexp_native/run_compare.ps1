@@ -15,7 +15,13 @@ $proj = $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path (Split-Path $root -Parent) (".build\re_native_" + $Arch) }
 $work = Join-Path (Split-Path $root -Parent) ".build"
 
-# 1) 基准：cscript
+# 1) 基准：cscript 跑真组件
+#    环境缺件（没有 cscript / 没装 VBScript 功能）→ exit 2 = SKIP，不许当 PASS 混过去。
+if (-not (Get-Command cscript -ErrorAction SilentlyContinue)) {
+    Write-Output "SKIP regexp_native 本机没有 cscript"; exit 2
+}
+try { $null = New-Object -ComObject VBScript.RegExp }
+catch { Write-Output "SKIP regexp_native 本机没有 VBScript.RegExp（VBScript 功能未安装）"; exit 2 }
 $vbs = Join-Path $proj 'ReCases.vbs'
 $tmpVbs = Join-Path $work 're_cases_oracle.vbs'
 Copy-Item -LiteralPath $vbs -Destination $tmpVbs -Force
@@ -25,7 +31,7 @@ if ($LASTEXITCODE -ne 0) { Write-Output ("FAIL cscript 退出码 " + $LASTEXITCO
 
 # 2) C3 侧
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$c3exe = (Resolve-Path (Join-Path (Split-Path $root -Parent) $C3)).Path
+$c3exe = if ([IO.Path]::IsPathRooted($C3)) { $C3 } else { (Resolve-Path (Join-Path (Split-Path $root -Parent) $C3)).Path }  # harness 传绝对路径也在
 $vbp = Join-Path $proj 'ReApp.vbp'
 $env:C3_PROJECT_DIR = (Split-Path $root -Parent)
 $log = & cmd.exe /c "`"$c3exe`" `"$vbp`" --arch $Arch --output-dir `"$OutDir`" 2>&1"

@@ -1,4 +1,4 @@
-Attribute VB_Name = "ReMain"
+﻿Attribute VB_Name = "ReMain"
 Option Explicit
 
 ' C30-10 正则引擎的 C3 侧用例 —— 与 ReCases.vbs **逐行复刻**，输出写文件后与 cscript 的输出 diff。
@@ -146,11 +146,111 @@ Sub ExtCases()
     ExtCase "e37", "abc", "ABC", "t"                  ' 对象级 IC 的基线
     ExtCase "e38", "(?-i:abc)", "ABC", "t"            ' 对象开 IC、整串局部关
     gIC = False
+    ' ---- 条件组 (?(n)yes|no)：**没有 Python 对照**，按 PCRE2 语义手写期望（见 ext_oracle.py 注释）
+    ExtCase "e39", "^(a)?(?(1)b|c)$", "ab", "t"      ' 1 组已闭合 -> 走 yes 支
+    ExtCase "e40", "^(a)?(?(1)b|c)$", "c", "t"       ' 组未参与匹配 -> 走 no 支
+    ExtCase "e41", "^(a)?(?(1)b|c)$", "ac", "t"      ' 组已闭合但仍要 b -> 不匹配
+    ExtCase "e42", "^(?<n>\d+)(?(<n>)x|y)$", "12x", "t" ' 命名条件
+    ExtCase "e43", "^(a)(?(1)b)$", "ab", "t"           ' 无 no 支
+    ExtCase "e44", "^(a)(?(1)b|c)$", "ac", "t"
+    ExtCase "e45", "(?(2)a|b)", "a", "t"              ' 引用不存在的组 -> 5017
     Close #gF2
 End Sub
 
+Sub PerfRun()
+    ' 性能实测（不是门禁，是读数）：每项报 ms 并同时报“做了多少事”，
+    ' 免得“快”来自根本没匹配。Timer 步进 ~15.6ms，所以每项故意重复到 >=0.5s。
+    Dim re As Object, s As String, t0 As Single, ms As Single, i As Long, n As Long, mc As Object
+    gF = FreeFile
+    Open App.Path & "\re_perf.txt" For Output As #gF
+    Set re = CreateObject("VBScript.RegExp")
+    re.Global = True
+    re.IgnoreCase = False
+    re.Multiline = False
+
+    ' 1) 长串扫描：200k 字符，命中在末尾（最坏情况走完全程），20 轮
+    s = String$(200000, "x") & "needle"
+    re.Pattern = "needle"
+    n = 0
+    t0 = Timer
+    For i = 1 To 20
+        Set mc = re.Execute(s)
+        n = n + mc.Count
+    Next i
+    ms = (Timer - t0) * 1000
+    Print #gF, "perf|literal200k_x20|" & Fmt1(ms) & " ms|matches=" & n
+
+    ' 2) 高频 Execute：短串 20000 次
+    re.Pattern = "\d+"
+    n = 0
+    t0 = Timer
+    For i = 1 To 20000
+        Set mc = re.Execute("abc123def456")
+        n = n + mc.Count
+    Next i
+    ms = (Timer - t0) * 1000
+    Print #gF, "perf|execute_small_x20000|" & Fmt1(ms) & " ms|" & Fmt1(ms / 20) & " us/call|matches=" & n
+
+    ' 3) 灾难回溯：^(a+)+b$ 在 24 个 a 上（真组件指数燃；本引擎应在 RE_STEP_LIMIT 处认输）
+    re.Pattern = "^(a+)+b$"
+    n = 0
+    t0 = Timer
+    For i = 1 To 20
+        If re.Test(String$(24, "a")) Then n = n + 1
+    Next i
+    ms = (Timer - t0) * 1000
+    Print #gF, "perf|catastrophic_a24_x20|" & Fmt1(ms) & " ms|matched=" & n
+
+    ' 4) 灾难回溯加长：同样模式 40 个 a（超步数上限后应认输，而不是跑满）
+    n = 0
+    t0 = Timer
+    For i = 1 To 5
+        If re.Test(String$(40, "a")) Then n = n + 1
+    Next i
+    ms = (Timer - t0) * 1000
+    Print #gF, "perf|catastrophic_a40_x5|" & Fmt1(ms) & " ms|matched=" & n
+
+    ' 5) 交替回溯：^(a|aa)+$ 在 26 个 a 上（另一种经典燃法）
+    re.Pattern = "^(a|aa)+$"
+    n = 0
+    t0 = Timer
+    For i = 1 To 20
+        If re.Test(String$(26, "a")) Then n = n + 1
+    Next i
+    ms = (Timer - t0) * 1000
+    Print #gF, "perf|alternation_a26_x20|" & Fmt1(ms) & " ms|matched=" & n
+
+    ' 6) 全局找：\d+\s+\w+ 在 16k 字的串上、200 处命中，20 轮
+    s = ""
+    For i = 1 To 2000
+        s = s & "123 abc "
+    Next i
+    re.Pattern = "\d+\s+\w+"
+    n = 0
+    t0 = Timer
+    For i = 1 To 20
+        Set mc = re.Execute(s)
+        n = n + mc.Count
+    Next i
+    ms = (Timer - t0) * 1000
+    Print #gF, "perf|global_16k_x20|" & Fmt1(ms) & " ms|matches=" & n
+
+    Close #gF
+End Sub
+
+Function Fmt1(ByVal v As Single) As String
+    ' 一位小数，不依赖 Format$（免得为了一个读数把 RTL 面拖进来）
+    Dim k As Long
+    k = Int(v * 10 + 0.5)
+    Fmt1 = CStr(k \ 10) & "." & CStr(k Mod 10)
+End Function
+
 Sub Main()
     gF = FreeFile
+    If InStr(1, Command$, "/perf", vbTextCompare) > 0 Then
+        PerfRun
+        End
+    End If
     Open App.Path & "\re_c3.txt" For Output As #gF
     Set gRe = CreateObject("VBScript.RegExp")
 

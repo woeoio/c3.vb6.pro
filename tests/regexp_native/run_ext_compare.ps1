@@ -18,7 +18,7 @@ if (-not $OutDir) { $OutDir = Join-Path (Split-Path $root -Parent) (".build\re_n
 
 # 1) 基准：Python re
 $py = (Get-Command python -ErrorAction SilentlyContinue)
-if (-not $py) { Write-Output "FAIL 找不到 python（扩展语法判据依赖 Python re）"; exit 1 }
+if (-not $py) { Write-Output "SKIP regexp_ext 本机没有 python（扩展面判据依赖 Python re）"; exit 2 }
 $oracle = & python (Join-Path $proj 'ext_oracle.py') 2>&1
 $oracleLines = @($oracle | ForEach-Object { $_.ToString().TrimEnd() })
 if ($LASTEXITCODE -ne 0) {
@@ -29,7 +29,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # 2) C3 侧
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$c3exe = (Resolve-Path (Join-Path (Split-Path $root -Parent) $C3)).Path
+$c3exe = if ([IO.Path]::IsPathRooted($C3)) { $C3 } else { (Resolve-Path (Join-Path (Split-Path $root -Parent) $C3)).Path }  # harness 传绝对路径也在
 $vbp = Join-Path $proj 'ReApp.vbp'
 $env:C3_PROJECT_DIR = (Split-Path $root -Parent)
 $log = & cmd.exe /c "`"$c3exe`" `"$vbp`" --arch $Arch --output-dir `"$OutDir`" 2>&1"
