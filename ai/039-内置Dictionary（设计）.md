@@ -658,3 +658,42 @@ g14/g16 都不在装箱站，各自属于下层（算术全链 / 数组元素类
 同层从现在起**只剩一格**：`Array(1 + 1)` 这类「Integer 参与算术后进槽」——它不在装箱站，
 要的是「Integer 算术升格规则」（`+` 留 Integer、`*` 升 Long、溢出错误 6）整层，另排期。
 
+### 11.17 第三十八刀：`Int`/`Fix`/`Abs` 的返回档 = 实参的档
+
+算术那一格不动手，先把**挨着它的非算术位**量一遍：`.temp/litprobe/W8.vbs` ↔ `W8.bas`（19 行）。
+结果分三类：
+
+| 类别 | 读数 | 结论 |
+| --- | --- | --- |
+| 转换族全对 | `CInt(1.5)`=2、`CInt("7")`=2、`CByte`=17、`CLng`=3、`CSng`=4、`CDbl`=5、`CCur`=6、`CDate`=7、`CStr`=8、`CBool`=11 | 两边逐字相同，不动 |
+| **缺档（本刀）** | `Int(5)`=2、`Fix(5)`=2、`Abs(-5)`=2（而 `Int(1.7)`=5、`Abs(1.5)`=5） | C3 一律 5/Double |
+| 不动（算术） | `i + 0`、`i * 1` | 仍 3/Long，属算术全链 |
+| 不动（运行时） | `Abs(i)`，`i` 是装 5 的 Variant | VB6=2，C3=5：子类型要在运行时才有，静态不可知 |
+
+**判据（VB6 口径）**：`Int`/`Fix`/`Abs` 的返回类型 = **实参的类型**，不是固定 Double。
+
+**落点**：`cgen_util_ctrl.cpp::isNarrowIntExpr` 的 `IndexOrCallExpr` 支——名字是
+`int`/`fix`/`abs`、恰好 1 个位置实参、无命名实参时，**问实参自己**（`isNarrowIntExpr(arg0)`），
+不另建表。于是自动继承：字面量 / `&H`≤0xFFFF / `%` 后缀 / `As Integer` 变量 / 用户 `Const` /
+Integer 返回档内建。Variant 实参（`Abs(v)`）静态答不出，保留原样。
+
+**读数**：`W8b.bas` 的 a03/a04/a05 → 2/Integer，a06（Variant 实参）仍 5，a09/a10 仍 3，
+其余 13 行未变；`W4.bas` 里只有 b24（`Abs(-1)`）从 5 转 2，b25（`Int(1.7)`）仍 5；
+`W6`/`W3`/`W5`/`Probe`/`HexProbe` 五份逐字未变；`dict_native` PASS 59；R2 哨兵 PASS。
+发码：CI run `43958409386`（head `1da8632c`）**22/22 全绿**，`Emit manifest` 也绿 ——
+748 份输入零变更（语料里没有「Int/Fix/Abs(Integer 实参) 直接进 Variant 槽」的站点）。
+
+### 11.18 同批侦察挖到的两个真缺陷（未修，已登记）
+
+**① `-v` / `Not v`（v 是 Variant）根本编不过。** `W8.bas` 第一次编译就死在第 28 行：
+`error C2088: 「-」: 对于 struct 是非法的` 与 `C2198: vb6_VarType 参数太少`——
+也就是一元 `-` 直接打在 `vb6_VARIANT` 结构上，C 侧根本没有这条路。
+RTL 里也**没有** `vb6_VariantNeg` / `vb6_VariantNot` 这类出口（全仓 grep 为 0）。
+修它要新开一条 RTL 面（含 `owned_temp_keeps` 与签名表登记），属「Variant 参与运算符」层，
+不是本系列这种「只改装箱站」的刀法，另排期。
+
+**② `IIf(True, 1, 2)` 答 3/Long。** VB6 的 `IIf` 返回 Variant，子类型随选中的那一支（
+本例应为 Integer），C3 答 Long。VBScript 没有 `IIf`，本机拿不到 oracle，所以这条得先用真 VB6
+确认再动（`IIf` 是 cgen 里的多态内置，固定成任何一档都会答错，见
+`cgen_builtin_return_type_table.inc` 头注那句）。
+
