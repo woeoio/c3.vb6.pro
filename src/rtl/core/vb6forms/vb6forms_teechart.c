@@ -489,10 +489,25 @@ static void tcPaint(TcChart* c) {
                 break;
             }
             case TC_SC_POINT:
+                /* C30-10 第十四刀：点系列的 3D —— 每个点画成一枚有厚度的“扁墩”：先画
+                 * 暗色偏移轮寗，再压上正面。深度按点径定（常量 4，点本身就是 r=3），
+                 * 跟柱形那套 12px 不是一回事：柱子有高度，点只有大小。
+                 * 透视不参与 —— 4px 的偏移再缩放就只有 1~2px，量不出来也看不出。 */
                 for (k2 = 0; k2 < s->n; k2++) {
                     int px = (s->n == 1) ? (x0 + x1) / 2
                             : x0 + (int)((double)k2 / (s->n - 1) * (x1 - x0));
                     int py = y1 - (int)((s->pt[k2].y - vmin) / (vmax - vmin) * (y1 - y0));
+                    if (c->view3D) {
+                        HBRUSH pb = CreateSolidBrush(tcShade(fcol, -45));
+                        HGDIOBJ pbOld = SelectObject(dc, pb);
+                        HGDIOBJ ppOld = SelectObject(dc, GetStockObject(NULL_PEN));
+                        Ellipse(dc, px + 4 - 3, py - 4 - 3, px + 4 + 3, py - 4 + 3);
+                        SelectObject(dc, ppOld);
+                        SelectObject(dc, pbOld);
+                        DeleteObject(pb);
+                        SelectObject(dc, sb);   /* 正面回到系列/画刷色 */
+                        SelectObject(dc, sp);
+                    }
                     Ellipse(dc, px - 3, py - 3, px + 3, py + 3);
                 }
                 break;
