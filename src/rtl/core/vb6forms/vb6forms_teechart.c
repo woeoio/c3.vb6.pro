@@ -127,7 +127,7 @@ static TcChart* tcAttach(HWND h) {
     c->showLegend    = 1;
     c->zoomEnable    = 0;
     c->zoomPercent   = 100;
-    c->view3D        = 0;    /* 内置版默认 2D（与真控件默认 True 不同，台账 §5 已登记） */
+    c->view3D        = 1;    /* 与真控件默认一致（True）；受影响判据已按实测重录，见台账 §5 */
     c->perspective   = 1;
     c->aspRot        = 30;
     c->aspElev       = 15;
@@ -407,12 +407,16 @@ static void tcPaint(TcChart* c) {
                 /* C30-10 第十一刀：View3D 时按 12px 深度画出顶面 + 右侧面（先画背面，
                  * 再把正面矩形压在上面）。深度的选择定成常量，判据才能拿它当尺子量。 */
                 int depth = c->view3D ? 12 : 0;
+                /* 值映射的高度要先把深度让出来：不然最高的柱子的顶面会伸到
+                 * 上轴线外面去（实测 3D 打开后轴线行点数 251→239，就是被柱顶盖掉的）。 */
+                int bh = (y1 - y0) - depth;
+                if (bh < 8) bh = 8;
                 bw  = (s->n > 0) ? ((x1 - x0) / (s->n * 2)) : 8;
                 gap = bw;
                 if (bw < 2) bw = 2;
                 for (k2 = 0; k2 < s->n; k2++) {
                     int bx = x0 + gap / 2 + k2 * (bw + gap);
-                    int by = y1 - (int)((s->pt[k2].y - vmin) / (vmax - vmin) * (y1 - y0));
+                    int by = y1 - (int)((s->pt[k2].y - vmin) / (vmax - vmin) * bh);
                     if (depth > 0) {
                         POINT top[4], side[4];
                         HBRUSH tb = CreateSolidBrush(tcShade(fcol, 55));
