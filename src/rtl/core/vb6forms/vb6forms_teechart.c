@@ -60,6 +60,13 @@ typedef struct {
     int      otherSliceStyle;    /* AsPie.OtherSlice.Style */
     double   otherSliceValue;
     int      otherSliceVisible;
+    /* C30-10 第十七刀：切面里真影响几何 / 只存值的那几个 */
+    int      barPct;         /* AsBar/AsHorizBar.BarWidthPercent，默认 100 */
+    int      lineSmoothed;   /* AsLine.Smoothed（只存不画：平滑会改变折线点数） */
+    int      candleWidth;    /* AsCandle.CandleWidth（只存：没有 OHLC 数据可画） */
+    int      surfWire;       /* AsSurface.WireFrame（只存：没有网格数据可画） */
+    int      dotSize;        /* AsPoint.DotSize（只存，点径目前固定 r=3） */
+    int      asMiscA, asMiscB;
 } TcSeries;
 
 typedef struct {
@@ -159,6 +166,10 @@ static TcSeries* tcSeries(TcChart* c, int idx) {
         s->penWidth = 1;
         s->penVisible = 1;
         s->marksVisible = 1;
+        s->barPct = 100;        /* AsBar/AsHorizBar.BarWidthPercent 默认 */
+        s->candleWidth = 60;
+        s->surfWire = 1;
+        s->dotSize = 3;
         wsprintfW(s->title, L"Series%d", c->nser);
         c->nser++;
     }
@@ -432,6 +443,23 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
         } else if (s->n > 0) {
             int bw, gap, k2;
             switch (s->type) {
+            case TC_SC_HBAR: {
+                /* C30-10 第十七刀：横向柱真的横着画。之前 type=2 落到 default 成了折线，
+                 * 看着“不报错”、其实是画错的图 —— 像素判据一量就现形。
+                 * 每根柱占一条水平带，长度按值映射，宽度受 BarWidthPercent 控制。 */
+                int band = (s->n > 0) ? ((y1 - y0) / s->n) : (y1 - y0);
+                int bh = band * ((s->barPct > 0) ? s->barPct : 100) / 200;   /* 默认占带的一半 */
+                if (bh < 2) bh = 2;
+                if (bh > band) bh = band;
+                for (k2 = 0; k2 < s->n; k2++) {
+                    int by = y0 + k2 * band + (band - bh) / 2;
+                    int bx1 = x0 + (int)((s->pt[k2].y - vmin) / (vmax - vmin) * (x1 - x0));
+                    if (bx1 < x0) bx1 = x0;
+                    if (bx1 > x1) bx1 = x1;
+                    Rectangle(dc, x0, by, bx1, by + bh);
+                }
+                break;
+            }
             case TC_SC_BAR: {
                 /* C30-10 第十一刀：View3D 时按 12px 深度画出顶面 + 右侧面（先画背面，
                  * 再把正面矩形压在上面）。深度的选择定成常量，判据才能拿它当尺子量。 */
@@ -444,7 +472,8 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
                 int bh = (y1 - y0) - maxDepth;
                 if (bh < 8) bh = 8;
                 bw  = (s->n > 0) ? ((x1 - x0) / (s->n * 2)) : 8;
-                gap = bw;
+                bw  = bw * ((s->barPct > 0) ? s->barPct : 100) / 100;
+                gap = (s->n > 0) ? ((x1 - x0) / (s->n * 2)) : 8;   /* 间距固定：只缩柱子本身 */
                 if (bw < 2) bw = 2;
                 for (k2 = 0; k2 < s->n; k2++) {
                     int bx = x0 + gap / 2 + k2 * (bw + gap);
@@ -818,6 +847,15 @@ int32_t vb6_TChart_AddSeries(void* hwnd, int32_t type) {
     memset(s, 0, sizeof(*s));
     s->type  = (type >= TC_SC_LINE && type <= TC_SC_PIE) ? (int)type : TC_SC_LINE;
     s->color = tcPalette(c->nser);
+    /* 切面默认值必须在这里也补一遍：AddSeries 走的是这条 memset 路径，
+     * 不经过 tcSeries()，否则读 .AsCandle.CandleWidth 得到 0（夹具逮过）。 */
+    s->penWidth = 1;
+    s->penVisible = 1;
+    s->marksVisible = 1;
+    s->barPct = 100;
+    s->candleWidth = 60;
+    s->surfWire = 1;
+    s->dotSize = 3;
     wsprintfW(s->title, L"Series%d", c->nser);
     c->nser++;
     InvalidateRect((HWND)hwnd, NULL, FALSE);
@@ -947,6 +985,14 @@ int32_t vb6_TChart_PaintCount(void* hwnd) {
 #define TC_KIND_ZOOM    16
 #define TC_KIND_ASPECT  17
 #define TC_KIND_WALLS   18
+/* C30-10 第十七刀：按类型切换的切面（一个 kind 一族，成员表分开） */
+#define TC_KIND_ASBAR   19
+#define TC_KIND_ASLINE  20
+#define TC_KIND_ASHBAR  21
+#define TC_KIND_ASCANDLE 22
+#define TC_KIND_ASSURF  23
+#define TC_KIND_ASAREA  24
+#define TC_KIND_ASPOINT 25
 
 typedef struct TcObj {
     const IDispatchVtbl* lpVtbl;
@@ -966,7 +1012,18 @@ static const wchar_t* kTcCollNames[] = { L"Item", L"Count", NULL };
 static const wchar_t* kTcSerNames[]  = {
     L"Add", L"AddXY", L"FillSampleValues", L"Clear",
     L"Color", L"Title", L"SeriesType", L"Count",
-    L"Marks", L"Pen", L"Brush", L"AsPie", NULL };
+    L"Marks", L"Pen", L"Brush", L"AsPie",
+    /* C30-10 第十七刀：按类型切换的切面。几何真生效的只有横向柱与 BarWidthPercent，
+     * candle/surface 需要 OHLC / 网格数据（我们的点集只有一列 y），只开对象不绘制。 */
+    L"AsBar", L"AsLine", L"AsHorizBar", L"AsCandle", L"AsSurface", L"AsArea", L"AsPoint",
+    NULL };
+/* 切面自己的成员表 */
+static const wchar_t* kTcAsBarNames[]   = { L"BarWidthPercent", L"SideMargins", L"OffsetPercent", NULL };
+static const wchar_t* kTcAsLineNames[]  = { L"Smoothed", L"Stairs", NULL };
+static const wchar_t* kTcAsCandleNames[] = { L"CandleWidth", L"ShowOpen", L"ShowClose", NULL };
+static const wchar_t* kTcAsSurfNames[]  = { L"WireFrame", L"DotSize", NULL };
+static const wchar_t* kTcAsAreaNames[]  = { L"Transparency", L"Gradient", NULL };
+static const wchar_t* kTcAsPointNames[] = { L"DotSize", L"Style", NULL };
 /* C30-10 第三刀：Panel / Header / Axis 三层。只登记真做得动的名字。 */
 static const wchar_t* kTcPanelNames[] = {
     L"Color", L"MarginLeft", L"MarginRight", L"MarginTop", L"MarginBottom",
@@ -1022,6 +1079,13 @@ static const wchar_t* const* tcNames(int kind) {
     case TC_KIND_ZOOM:    return kTcZoomNames;
     case TC_KIND_ASPECT:  return kTcAspectNames;
     case TC_KIND_WALLS:   return kTcWallsNames;
+    case TC_KIND_ASBAR:   return kTcAsBarNames;
+    case TC_KIND_ASHBAR:  return kTcAsBarNames;   /* 横向柱共用同一族字段 */
+    case TC_KIND_ASLINE:  return kTcAsLineNames;
+    case TC_KIND_ASCANDLE: return kTcAsCandleNames;
+    case TC_KIND_ASSURF:  return kTcAsSurfNames;
+    case TC_KIND_ASAREA:  return kTcAsAreaNames;
+    case TC_KIND_ASPOINT: return kTcAsPointNames;
     default:             return NULL;
     }
 }
@@ -1359,6 +1423,57 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         }
     }
 
+    /* ===== 第十七刀：按类型切换的切面（AsBar / AsHorizBar / AsLine / AsCandle / AsSurface / AsArea / AsPoint）=====
+     * 口径分开写清楚：只有 barPct（BarWidthPercent）真的改几何；其余存得住、读得回但不绘制 ——
+     * candle 要 OHLC 四列、surface 要二维网格，我们现在一个系列只有一列 y。 */
+    if (o->kind >= TC_KIND_ASBAR && o->kind <= TC_KIND_ASPOINT) {
+        TcSeries* sr = tcSeries(c, o->index);
+        int* slot = NULL;
+        if (tcTrace() > 0) {
+            fprintf(stderr, "[TCHART] facet kind=%d id=%d idx=%d put=%d\n",
+                    o->kind, (int)id, o->index, (flags & DISPATCH_PROPERTYPUT) ? 1 : 0);
+            fflush(stderr);
+        }
+        if (!sr) return DISP_E_MEMBERNOTFOUND;
+        switch (o->kind) {
+        case TC_KIND_ASBAR:
+        case TC_KIND_ASHBAR:
+            if (id == 1) slot = &sr->barPct;
+            else if (id == 2) slot = &sr->asMiscA;
+            else if (id == 3) slot = &sr->asMiscB;
+            break;
+        case TC_KIND_ASLINE:
+            if (id == 1) slot = &sr->lineSmoothed;
+            else if (id == 2) slot = &sr->asMiscA;
+            break;
+        case TC_KIND_ASCANDLE:
+            if (id == 1) slot = &sr->candleWidth;
+            else if (id == 2) slot = &sr->asMiscA;
+            else if (id == 3) slot = &sr->asMiscB;
+            break;
+        case TC_KIND_ASSURF:
+            if (id == 1) slot = &sr->surfWire;
+            else if (id == 2) slot = &sr->dotSize;
+            break;
+        case TC_KIND_ASPOINT:
+            if (id == 1) slot = &sr->dotSize;
+            else if (id == 2) slot = &sr->asMiscA;
+            break;
+        default:   /* ASAREA：两个占位值 */
+            if (id == 1) slot = &sr->asMiscA;
+            else if (id == 2) slot = &sr->asMiscB;
+            break;
+        }
+        if (!slot) return S_OK;
+        if (flags & DISPATCH_PROPERTYPUT) {
+            *slot = (int)tcArgL(a0);
+            if (slot == &sr->barPct) InvalidateRect(c->hwnd, NULL, FALSE);
+            return S_OK;
+        }
+        if (res) tcSetL(res, *slot);
+        return S_OK;
+    }
+
     /* ===== 第五刀：Marks / Pen / Brush / AsPie / OtherSlice / ExplodedSlice ===== */
     if (o->kind == TC_KIND_MARKS || o->kind == TC_KIND_PEN || o->kind == TC_KIND_BRUSH
         || o->kind == TC_KIND_ASPIE || o->kind == TC_KIND_OTHER || o->kind == TC_KIND_SLICES) {
@@ -1486,6 +1601,13 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
     case 10: tcSetObj(res, tcCached(c, TC_KIND_PEN,   o->index)); return S_OK;
     case 11: tcSetObj(res, tcCached(c, TC_KIND_BRUSH, o->index)); return S_OK;
     case 12: tcSetObj(res, tcCached(c, TC_KIND_ASPIE, o->index)); return S_OK;
+    case 13: tcSetObj(res, tcCached(c, TC_KIND_ASBAR,    o->index)); return S_OK;
+    case 14: tcSetObj(res, tcCached(c, TC_KIND_ASLINE,   o->index)); return S_OK;
+    case 15: tcSetObj(res, tcCached(c, TC_KIND_ASHBAR,   o->index)); return S_OK;
+    case 16: tcSetObj(res, tcCached(c, TC_KIND_ASCANDLE, o->index)); return S_OK;
+    case 17: tcSetObj(res, tcCached(c, TC_KIND_ASSURF,   o->index)); return S_OK;
+    case 18: tcSetObj(res, tcCached(c, TC_KIND_ASAREA,   o->index)); return S_OK;
+    case 19: tcSetObj(res, tcCached(c, TC_KIND_ASPOINT,  o->index)); return S_OK;
     default:
         return DISP_E_MEMBERNOTFOUND;
     }
