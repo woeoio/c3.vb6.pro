@@ -265,8 +265,9 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   踩过的坑：位图还选在 DC 里时 `SetClipboardData` 必失败；`GdipGetImageEncodersSize`
   返回的 size 与自己声明的 `ImageCodecInfo` 对不上，照结构体读会 AV —— 写死 CLSID 才稳。
 
-**图表类型覆盖（实测口径）**：`AddSeries` 只认 0..5，其余类型号一律被当成
-`stLine` 画（不报错！）：
+**图表类型覆盖（实测口径，`f4442da9` 之后）**：`AddSeries` 接受下面 9 个类型号，
+其余一律抛 **错误 5**（调用/参数无效）—— 以前是把不认识的一律夹回 `stLine`，
+不报错但画错图（、018 刀改掉了）。
 
 | 类型号 | 名称 | 状态 |
 |---|---|---|
@@ -276,7 +277,13 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
 | 3 | Area | 真画（含 3D 带） |
 | 4 | Point | 真画（含 3D 墩） |
 | 5 | Pie | 真画（含扇区标签/ ExplodedSlice） |
-| 6+ | Candle / Surface / Bubble / Gantt / Donut / Polar / Radar / … | **未支持**，落到 Line |
+| 9 | Gantt | 真画（`AddXY` 的 x=开始、y=结束） |
+| 11 | Bubble | 真画（`AddBubble x,y,r`，半径映射 3..14px） |
+| 17 | Donut | 真画（饼图 + 50% 内洞） |
+| 其余 | Surface(7) / Candle(8) / Polar / Radar / … | **抛错误 5**，不画错图 |
+
+缺口只剩两类、且都卡在**数据模型**而非绘制：Candle 需 OHLC 四列、Surface 需二维
+网格；其余（Polar/Radar/Shape/Arrow 等）是纯画法活，可以按同一条路继续补。
 
 缺口按“有没有数据模型”分两类：Candle 需 OHLC 四列、Surface 需二维网格（R2 数据模型
 要先扩）；Gantt/Bubble/Donut 只要额外字段，属于可补的活。
