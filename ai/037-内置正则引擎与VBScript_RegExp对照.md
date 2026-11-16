@@ -1,6 +1,6 @@
 # 037 内置正则引擎（替代 VBScript.RegExp）
 
-> 状态：**首版可用，未达 100% 对齐**。对照 51 条用例中 42 条与真组件逐字一致；余下 9 条是本文件第 6 节列出的已知差距。
+> 状态：**首版完成，51/51 用例与真组件逐字一致**（oracle = cscript 跑的 VBScript.RegExp，夹具见 `tests/regexp_native`）。
 > 关联：`ai/036-VBScript_RegExp_完全参考手册.md`（真组件语义手册，本引擎的判据出处）。
 
 ## 1. 为什么要自己写
@@ -76,38 +76,35 @@ RTL 是 **RCDATA 嵌进 `C3.exe`** 的，新增一个 `.c` 必须五处同时登
 
 用例覆盖：字面量/`.`/类/量词（含惰性、`{n,m}`）/分组与嵌套/`(?:)`/`(?=)` `(?!)`/`^$`/`\b`/后向引用/`\xHH` `\uHHHH`/IgnoreCase/Multiline/Global/空匹配推进/`Replace` 各替换符/`SubMatches`/三类非法模式的错误号。
 
-当前读数：**51 行中 42 行一致**。
+当前读数：**51 行全部一致**（`PASS regexp_native 用例=51 行 两侧逐字一致`）。
 
-## 6. 已知差距（未对齐的 9 条）
+## 6. 两个把首版钉在 42/51 的坑（已修，留档）
 
-### 6.1 组捕获值（3 条）
+### 6.1 `SubMatches(i)` 恒取第 1 组 —— 参数是 `VT_VARIANT|VT_BYREF`
 
-| 模式 | 目标串 | 真组件 | 本引擎 |
-| --- | --- | --- | --- |
-| `(a)(b)?` | `a` | `s0=[a] s1=[]` | `s0=[a] s1=[a]` |
-| `(a)\|(b)` | `b` | `s0=[] s1=[b]` | `s0=[] s1=[]` |
-| `((a)(b))?` | `ab` | `s0=[ab] s1=[a]` | `s0=[a] s1=[a]` |
+症状：`(a)(b)?` 在 `a` 上，`SubMatches(1)` 返回 `a` 而不是空；`(a)|(b)` 在 `b` 上两个下标都空；`((a)(b))?` 的第 0 组返回 `a` 而不是 `ab`。
 
-症状统一：**`SubMatches(i)` 取到的永远是第 1 组的值**，而 `Count` 正确。两个候选原因都已在代码里改过一轮（`(i)` 参数经 `reArgIndex()` 拆 `VT_VARIANT`/`VT_BYREF` 两层；组号改成「左括号一出现就先分配」，让外层组号小于内层），**改动后读数一字未变** —— 说明还没打中真正的病灶，下一刀要从这里继续：
+根因：C3 生成的晚绑定调用把下标参数包成 `VT_VARIANT | VT_BYREF`，最初的取值代码只认裸 `VT_I2/VT_I4`，于是所有下标都落回默认值 0 —— 两个下标都读到第 1 组，表现出来就像「组号错了」。`MatchCollection.Item(i)` 没暴露这个问题，因为它的默认值 0 恰好是第一个元素。
 
-1. 打一条诊断用例，把 `m.SubMatches(0)`、`m.SubMatches(1)`、`m.SubMatches.Item(1)` 三种写法分别输出，确认 VB 侧到底是走「属性带参」还是「取对象再调默认成员」；
-2. 若确认走的是 `m_Invoke` 的 `DISPATCH_PROPERTYGET` 带参分支，则在分支里把 `reArgIndex` 的返回值也一并打印出来，确认参数解码；
-3. 顺带核 `K_GROUP` 节点在「可选/择一」分支里失败回退时 `caps[]` 是否被正确还原 —— `((a)(b))?` 的 `s0` 至今仍是 `a` 而不是 `ab`，很像外层组的 capture-end 没落。
+修法：`reArgIndex()` 逐层拆 `VT_BYREF`（`V_VARIANTREF` / `V_I2REF` / `V_I4REF` / `V_R8REF` / `V_BSTRREF`），带环路防护，最多拆 4 层；同时接住 `SubMatches` 的两种调用形态（「属性带参」与「取对象再调默认成员」），免得只支持一种时又静默读错。
 
-### 6.2 模式错误号（4 条）
+### 6.2 `V_VARIANT` 不是 oleauto.h 的宏 —— 本地能编、CI 全红
 
-| 模式 | 真组件 Err.Number | 本引擎 |
-| --- | --- | --- |
-| `[` | 5019 | 9 |
-| `a{3,2}` | 5017 | 9 |
-| `(?<x>a)` | 5017 | 9 |
-| `(abc` | 5020 | 9 |
+第一版 `reArgIndex()` 用了 `V_VARIANT(v)`，本机 VS2019 的 cl 放过（当成未声明函数，只在 `/W3` 下给 C4013 警告），CI 上 VS2022 的 cl 19.51 直接 `error C2102: '&' requires l-value`。RTL 是一个整体编译单元集合，**这一个文件编不过，整个 RTL 编不过，22 格全线红**（构建和 smoke 都过，因为 C3.exe 本身没受影响）。
 
-`9` 是 `DISP_E_EXCEPTION`（`0x80020009`）的低 16 位 —— 也就是**错误号在 HRESULT 里被当成 `DISP_E_*` 系解掉了**，没走到 `EXCEPINFO.scode`。代码里已从 `vb6_ComFailExcep(...)` 改成直接返回 `vb6_ComVbHresult(err)`（`0x800A0000|err`），读数仍是 9，说明这条腿的转换发生在更外层（`vb6_ComCheckError` 的取值顺序或调用方另有一套映射），下一刀要顺着 `vb6_ComCheckError → Err.Number` 全链走一遍。
+修法：只用 oleauto.h 里真有的宏；需要字符串形态的下标时走 `V_BSTRREF` + `_wtoi`（补 `#include <stdlib.h>`）。
 
-错误号分档已在解析器里落好：`RE_ERR_SYNTAX=5017`（通用语法错）、`RE_ERR_MISSING_RB=5019`（缺 `]`）、`RE_ERR_MISSING_RP=5020`（缺 `)`），只差把号送出去。
+教训：**RTL 改动不能只看本机构建**。本机 cl 与 CI cl 版本不同（19.29 vs 19.51），`/W3` 的「未声明函数当 extern int」老行为会掩盖真错误；每刀推之前要么把 CI 的 cl 版本对齐，要么至少用 CI 产物编一个最小工程验证。
 
-## 7. 扩展路线（借 PCRE2 / Python `re` 补 VB 没有的语法）
+## 7. 尚未覆盖（不影响 51/51，但要做）
+
+1. **未接 `run_tests.ps1`**：对照是文本 diff，不进 GUI 像素判据体系；跑法就是 `tests/regexp_native/run_compare.ps1`。要进 CI 得先给 harness 加一种 "text-compare" 模式。
+2. **性能未测**：>10 万字符长串、高频 `Execute`、`Replace` 大文本都没有基准数。
+3. **回溯无预算**：`(a+)+$` 这类灾难性模式会把线程跑满，与真组件一致（真组件也不设限）。缓解手段是第 8 节的原子组/占有量词。
+4. **语料仍偏薄**：`Global=True` 的末尾空匹配、`\b` 处空匹配、多行 `\r\n` 混排、`$0` 写法，覆盖条数还不够。
+5. **`Err.Description` 比对未做**：目前只钉 `Err.Number`（真组件给的是中文描述，跨 locale 比对字节没意义）。
+
+## 8. 扩展路线（借 PCRE2 / Python `re` 补 VB 没有的语法）
 
 现状是「严格 VB 兼容子集」：真组件不支持的写法，本引擎也报 `5017`，这样对照表才有意义。要往超集走，**必须是由属性/开关显式打开的第二档语义**，不能悄悄改默认行为（否则同一段 VB6 代码行为变了，违反兼容性红线）。建议：
 
@@ -136,9 +133,9 @@ re.Extended = True     ' 打开扩展语法档
 
 无论哪批，**每加一项都要先在 `ReCases.vbs` 里补一条对照用例**，并且注明「真组件此处报 5017，扩展档返回 X」——扩展档的判据由 PCRE2/Python 提供，不再由 VBScript 提供。
 
-## 8. 遗留与注意
+## 9. 遗留与注意
 
-- **回溯无预算**：`(a+)+$` 这类灾难性模式目前会把线程跑满，与真组件一致（真组件也不设限）。第 7 节第二批的原子组/占有量词是缓解手段；若要在默认档加步数上限，属于**语义变更**，必须在提交信息里点名，且默认关闭。
-- `Global=True` 时空匹配前进 1 字符的边界（末尾空匹配、`\b` 处空匹配）目前只用 4 条用例覆盖，语料还需要加长串/多空匹配的用例。
-- 未接 `run_tests.ps1`：对照是文本 diff，不进 GUI 像素判据体系；跑法是直接执行 `tests/regexp_native/run_compare.ps1`。
-- 性能未测：未做长串（>10 万字符）与高频 `Execute` 的基准。首版目标是「对得上」，不是「跑得快」。
+- 模式错误号分档：`RE_ERR_SYNTAX=5017`（通用语法错）、`RE_ERR_MISSING_RB=5019`（缺 `]`）、`RE_ERR_MISSING_RP=5020`（缺 `)`）。错误在**第一次 `Test/Execute/Replace`** 时抛（赋值不抛），与真组件一致；HRESULT 走 `vb6_ComVbHresult(err)`（`0x800A0000|err`），不走 `DISP_E_EXCEPTION` —— 否则 VB 侧只读到 9。
+- `IgnoreCase` 用 `towupper/towlower` 逐字符比较，没做完整大小写折叠（`ß` → `SS` 之类）；真组件也是这样。
+- 引擎只在 `CreateObject` 这一条腿上拦截；`New VBScript.RegExp`（VB6 里做不到，没有类型库）与 `GetObject` 不受影响。
+- 判据是**文本 diff**，不是像素；每改一次引擎都要重跑 `tests/regexp_native/run_compare.ps1`，并看一眼 `PASS ... 51 行` 这行字。

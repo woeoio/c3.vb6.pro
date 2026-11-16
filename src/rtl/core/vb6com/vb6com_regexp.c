@@ -28,6 +28,7 @@
 #include "vb6com_internal.h"
 #include <wchar.h>
 #include <wctype.h>
+#include <stdlib.h>
 
 extern HRESULT vb6_ComChangeType(VARIANT* dest, const VARIANT* src, VARTYPE want);
 
@@ -828,23 +829,29 @@ static const wchar_t* reErrDesc(int err) {
 }
 
 // 整数下标参数：VB 传过来的可能是 VT_VARIANT / VT_BYREF，逐层拆开
+// 只用 oleauto.h 里真有的宏（V_VARIANT 不存在，VS2022 的 cl 会报 C2102）
 static int reArgIndex(VARIANT* v, int dflt) {
-    while (v) {
-        if (V_VT(v) & VT_BYREF) {
-            if (V_VT(v) == (VT_VARIANT | VT_BYREF)) { v = V_VARIANTREF(v); continue; }
-            if (V_VT(v) == (VT_I2 | VT_BYREF)) return *V_I2REF(v);
-            if (V_VT(v) == (VT_I4 | VT_BYREF)) return *V_I4REF(v);
+    int guard = 0;
+    while (v && guard++ < 4) {
+        VARTYPE vt = V_VT(v);
+        if (vt & VT_BYREF) {
+            if (vt == (VT_VARIANT | VT_BYREF)) {
+                VARIANT* inner = V_VARIANTREF(v);
+                if (!inner || inner == v) return dflt;
+                v = inner;
+                continue;
+            }
+            if (vt == (VT_I2 | VT_BYREF)) return (int)*V_I2REF(v);
+            if (vt == (VT_I4 | VT_BYREF)) return (int)*V_I4REF(v);
+            if (vt == (VT_R8 | VT_BYREF)) return (int)*V_R8REF(v);
+            if (vt == (VT_BSTR | VT_BYREF)) return *V_BSTRREF(v) ? _wtoi(*V_BSTRREF(v)) : 0;
             return dflt;
         }
-        if (V_VT(v) == VT_VARIANT) {
-            VARIANT* inner = (VARIANT*)&V_VARIANT(v);
-            v = inner;
-            if (!v || V_VT(v) == VT_VARIANT) return dflt;
-            continue;
-        }
-        if (V_VT(v) == VT_I2) return V_I2(v);
-        if (V_VT(v) == VT_I4) return V_I4(v);
-        if (V_VT(v) == VT_R8) return (int)V_R8(v);
+        if (vt == VT_I2)   return (int)V_I2(v);
+        if (vt == VT_I4)   return (int)V_I4(v);
+        if (vt == VT_R8)   return (int)V_R8(v);
+        if (vt == VT_BSTR) return V_BSTR(v) ? _wtoi(V_BSTR(v)) : 0;
+        if (vt == VT_EMPTY || vt == VT_NULL) return 0;
         return dflt;
     }
     return dflt;
