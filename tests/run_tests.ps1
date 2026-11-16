@@ -906,6 +906,11 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_wall_px"; Vbp = "$Tests\ctrlteechart\TcWallApp.vbp"; Mode = "close";
        WindowTitle = "TChart walls"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_wall_px.ps1") },
+    # C30-10 面积 3D 带判据：3D 下整块面积向后上平移 12px 再画一遍（暗色）堆成“带”。
+    # 量两闸的相对位置（上缘差、顶行起点差）而不是面积，只中一条就说明画歪了。
+    @{ Name = "ctrlteechart_area3d_px"; Vbp = "$Tests\ctrlteechart\TcArea3dApp.vbp"; Mode = "close";
+       WindowTitle = "TChart area3d"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_area3d_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
