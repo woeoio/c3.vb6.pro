@@ -191,21 +191,23 @@ static TcChart* tcAttach(HWND h) {
     c->zoomPercent   = 100;
     c->view3D        = 1;    /* 与真控件默认一致（True）；受影响判据已按实测重录，见台账 §5 */
     c->perspective   = 1;
-    c->aspRot        = 30;
-    c->aspElev       = 15;
+    c->aspRot        = 345;   /* 第二十一刀：真 OCX 读数 rot=345 / elev=345 / persp=15 */
+    c->aspElev       = 345;
     c->wallsVisible  = 1;
     c->wallsColor    = RGB(192, 192, 192);
     c->panelBorder   = 1;
-    /* 第十九刀：默认值照 TeeChart 文档（Frame 可见、渐变关、Chart3DPercent 50、壁厚 3） */
+    /* 第十九刀：默认值照 TeeChart 文档（Frame 可见、渐变关）
+     * 第二十一刀：Chart3DPercent 与壁厚改成**真 OCX 读数**：示例 LOAD 行是 pct3d=15、
+     * leftSize=backSize=bottomSize=0（ChartDisplay 的 HScroll1/HScroll2 初值），旧值 50/3 是我反推的。 */
     c->frameVisible    = 1;
     c->gradVisible     = 0;
     c->gradStart       = RGB(255, 255, 255);
     c->gradEnd         = RGB(192, 192, 192);
-    c->chart3DPercent  = 50;
+    c->chart3DPercent  = 15;
     {
         int wi;
         for (wi = 0; wi < 4; wi++) {
-            c->wallSize[wi]        = 3;
+            c->wallSize[wi]        = 0;
             c->wallFaceVisible[wi] = 1;
             c->wallTransparent[wi] = 0;
             c->wallFaceColor[wi]   = RGB(255, 255, 255);
@@ -419,13 +421,13 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
      *   · Check11 管 Walls.Visible；Command4/5 管 LeftWall/BottomWall（分面 3 / 1）
      *   · Check4 管 Walls.Back.Transparent（透明就用面板底色，不再盖一层灰）
      *   · Command11 / Walls.Back.Brush.Color 改背板颜色
-     *   · HScroll2 管 Walls.*.Size；HScroll1 管 Aspect.Chart3DPercent（深度 = 12 × pct/50） */
+     *   · HScroll2 管 Walls.*.Size；HScroll1 管 Aspect.Chart3DPercent
+     *     （第二十一刀：深度 = pct × 4/5，依据 OCX 实测 pct=15 ⇒ 12px） */
     if (c->view3D && c->wallsVisible) {
         int pct = (c->chart3DPercent > 0) ? c->chart3DPercent : 1;
-        int d   = (c->perspective ? 18 : 12) * pct / 50;
-        if (c->wallSize[0] == 0)      d = 0;                 /* Size=0：墙贴平 */
-        else if (c->wallSize[0] > 3)  d += (c->wallSize[0] - 3);
-        if (d < 0)  d = 0;
+        int d   = pct * 4 / 5;
+        if (d < 2) d = 2;
+        if (c->wallSize[0] > 0) d += c->wallSize[0];   /* Size 0..7 单调加厚；每级 1px 尚未校准 */
         if (d > 40) d = 40;
         if (d > 0) {
             POINT back[4], lwall[4], bwall[4];
