@@ -879,6 +879,12 @@ $script:GuiCases = @(
        MinChildWindows = 8; RequiresFiles = @("TeeChart5.ocx");
        FailIfAssetPresentAndLoadFails = $true;
        PixelAssert = @("guisample\teechart_display_px.ps1") },
+    # C30-10 内置版的像素判据：夹具客户区与真 VB6 参照同几何（401x257），
+    # 比对同一组结构读数（标题中心 / 图例框 / 上前轴线行），读数见 tc_px.ps1 头部。
+    # 内置实现没有 32 位约束，x64 也照跑。
+    @{ Name = "ctrlteechart_px"; Vbp = "$Tests\ctrlteechart\TcPxApp.vbp"; Mode = "close";
+       WindowTitle = "TChart px"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
