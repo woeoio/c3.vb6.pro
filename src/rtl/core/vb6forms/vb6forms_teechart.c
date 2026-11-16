@@ -130,6 +130,7 @@ typedef struct {
     int      backImageInside;
     int      chart3DPercent;
     int      wallSize[4];          /* 0=Back 1=Bottom 2=Right 3=Left（TeeChart 是百分比，默认 3） */
+    int      wallFaceVisible[4];
     int      wallTransparent[4];
     COLORREF wallFaceColor[4];
     COLORREF wallBrush[4];
@@ -205,6 +206,7 @@ static TcChart* tcAttach(HWND h) {
         int wi;
         for (wi = 0; wi < 4; wi++) {
             c->wallSize[wi]        = 3;
+            c->wallFaceVisible[wi] = 1;
             c->wallTransparent[wi] = 0;
             c->wallFaceColor[wi]   = RGB(255, 255, 255);
             c->wallBrush[wi]       = RGB(255, 255, 255);
@@ -310,19 +312,61 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
                          VARIABLE_PITCH | FF_SWISS, L"Arial");
     fntOld = (HFONT)SelectObject(dc, fnt);
 
-    /* Panel 底 + 外框（TeeChart 的 Panel 是一块带 1px 边的主面） */
-    br = CreateSolidBrush(c->panelColor);
-    oldBr = SelectObject(dc, br);
-    FillRect(dc, &rc, br);
-    SelectObject(dc, oldBr);
-    DeleteObject(br);
+    /* Panel 底：Gradient.Visible 时竖直线性渐变（上 StartColor → 下 EndColor），否则纯色。
+     * C30-10 第二十刀：示例里 Check1/Option1..4 就管这个。 */
+    if (c->gradVisible) {
+        int yy, h = (rc.bottom > rc.top) ? (rc.bottom - rc.top) : 1;
+        int sr = GetRValue(c->gradStart), sg = GetGValue(c->gradStart), sb = GetBValue(c->gradStart);
+        int er = GetRValue(c->gradEnd),   eg = GetGValue(c->gradEnd),   eb = GetBValue(c->gradEnd);
+        for (yy = rc.top; yy < rc.bottom; yy++) {
+            int t = (yy - rc.top) * 100 / h;
+            RECT ln;
+            HBRUSH gb = CreateSolidBrush(RGB(sr + (er - sr) * t / 100,
+                                             sg + (eg - sg) * t / 100,
+                                             sb + (eb - sb) * t / 100));
+            ln.left = rc.left; ln.right = rc.right; ln.top = yy; ln.bottom = yy + 1;
+            FillRect(dc, &ln, gb);
+            DeleteObject(gb);
+        }
+    } else {
+        br = CreateSolidBrush(c->panelColor);
+        oldBr = SelectObject(dc, br);
+        FillRect(dc, &rc, br);
+        SelectObject(dc, oldBr);
+        DeleteObject(br);
+    }
+    /* Bevel：BevelWidth>0 时在面板内侧画斜角（左上亮、右下暗）。示例的 VScroll2 就在拖这个。 */
+    if (c->panelBevelWidth > 0) {
+        int bw = c->panelBevelWidth;
+        int k;
+        if (bw > 8) bw = 8;
+        for (k = 0; k < bw; k++) {
+            HPEN pl = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+            HPEN pd = CreatePen(PS_SOLID, 1, RGB(96, 96, 96));
+            HPEN po;
+            po = (HPEN)SelectObject(dc, pl);
+            MoveToEx(dc, rc.left + k, rc.bottom - 1 - k, NULL);
+            LineTo(dc, rc.left + k, rc.top + k);
+            LineTo(dc, rc.right - 1 - k, rc.top + k);
+            SelectObject(dc, pd);
+            MoveToEx(dc, rc.right - 1 - k, rc.top + k, NULL);
+            LineTo(dc, rc.right - 1 - k, rc.bottom - 1 - k);
+            LineTo(dc, rc.left + k, rc.bottom - 1 - k);
+            SelectObject(dc, po);
+            DeleteObject(pl);
+            DeleteObject(pd);
+        }
+    }
     pen = CreatePen(PS_SOLID, 1, RGB(128, 128, 128));
     oldPen = (HPEN)SelectObject(dc, pen);
-    MoveToEx(dc, rc.left, rc.top, NULL);
-    LineTo(dc, rc.right - 1, rc.top);
-    LineTo(dc, rc.right - 1, rc.bottom - 1);
-    LineTo(dc, rc.left, rc.bottom - 1);
-    LineTo(dc, rc.left, rc.top);
+    /* 外框：Panel.BorderStyle(Check3) 与 Frame.Visible(Check6) 任一开着就画 */
+    if (c->panelBorder || c->frameVisible) {
+        MoveToEx(dc, rc.left, rc.top, NULL);
+        LineTo(dc, rc.right - 1, rc.top);
+        LineTo(dc, rc.right - 1, rc.bottom - 1);
+        LineTo(dc, rc.left, rc.bottom - 1);
+        LineTo(dc, rc.left, rc.top);
+    }
 
     /* ================= C30-10 第七刀：面板分带 =================
      * 真 TeeChart 不是“客户区减值当绘图区”，而是把图表分成几条带：
@@ -371,26 +415,66 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
     }
 
     /* 四壁：3D 下才画，且必须在**轴线之前**（墙是背板，不是覆盖层）。
-     * 深度与柱子同一个常量，判据才能拿“墙左缘 plot.left、背板右缘 plot.right+d”当尺子。 */
+     * C30-10 第二十刀：从“一块灰板”改成按分面画：
+     *   · Check11 管 Walls.Visible；Command4/5 管 LeftWall/BottomWall（分面 3 / 1）
+     *   · Check4 管 Walls.Back.Transparent（透明就用面板底色，不再盖一层灰）
+     *   · Command11 / Walls.Back.Brush.Color 改背板颜色
+     *   · HScroll2 管 Walls.*.Size；HScroll1 管 Aspect.Chart3DPercent（深度 = 12 × pct/50） */
     if (c->view3D && c->wallsVisible) {
-        int d = (c->perspective ? 18 : 12);
-        POINT back[4], lwall[4];
-        HBRUSH wb = CreateSolidBrush(c->wallsColor);
-        HGDIOBJ wOld = SelectObject(dc, wb);
-        HGDIOBJ wpOld = SelectObject(dc, GetStockObject(NULL_PEN));
-        back[0].x = plot.left + d;  back[0].y = plot.top - d;
-        back[1].x = plot.right + d; back[1].y = plot.top - d;
-        back[2].x = plot.right + d; back[2].y = plot.bottom - d;
-        back[3].x = plot.left + d;  back[3].y = plot.bottom - d;
-        lwall[0].x = plot.left;     lwall[0].y = plot.top;
-        lwall[1].x = plot.left + d; lwall[1].y = plot.top - d;
-        lwall[2].x = plot.left + d; lwall[2].y = plot.bottom - d;
-        lwall[3].x = plot.left;     lwall[3].y = plot.bottom;
-        Polygon(dc, back, 4);
-        Polygon(dc, lwall, 4);
-        SelectObject(dc, wpOld);
-        SelectObject(dc, wOld);
-        DeleteObject(wb);
+        int pct = (c->chart3DPercent > 0) ? c->chart3DPercent : 1;
+        int d   = (c->perspective ? 18 : 12) * pct / 50;
+        if (c->wallSize[0] == 0)      d = 0;                 /* Size=0：墙贴平 */
+        else if (c->wallSize[0] > 3)  d += (c->wallSize[0] - 3);
+        if (d < 0)  d = 0;
+        if (d > 40) d = 40;
+        if (d > 0) {
+            POINT back[4], lwall[4], bwall[4];
+            int fc;
+            /* 背板颜色优先序：Brush.Color → Walls.Back.Color → Walls.BackColor → 墙上色 */
+            if (c->wallBrush[0] != RGB(255, 255, 255))     fc = (int)c->wallBrush[0];
+            else if (c->wallFaceColor[0] != RGB(255, 255, 255)) fc = (int)c->wallFaceColor[0];
+            else                                            fc = (int)c->wallsColor;
+            if (c->wallTransparent[0]) fc = (int)c->panelColor;   /* 透明：露面板底 */
+            back[0].x = plot.left + d;  back[0].y = plot.top - d;
+            back[1].x = plot.right + d; back[1].y = plot.top - d;
+            back[2].x = plot.right + d; back[2].y = plot.bottom - d;
+            back[3].x = plot.left + d;  back[3].y = plot.bottom - d;
+            lwall[0].x = plot.left;     lwall[0].y = plot.top;
+            lwall[1].x = plot.left + d; lwall[1].y = plot.top - d;
+            lwall[2].x = plot.left + d; lwall[2].y = plot.bottom - d;
+            lwall[3].x = plot.left;     lwall[3].y = plot.bottom;
+            bwall[0].x = plot.left;     bwall[0].y = plot.bottom;
+            bwall[1].x = plot.right;    bwall[1].y = plot.bottom;
+            bwall[2].x = plot.right + d; bwall[2].y = plot.bottom - d;
+            bwall[3].x = plot.left + d; bwall[3].y = plot.bottom - d;
+            if (c->wallFaceVisible[0]) {
+                HBRUSH wb = CreateSolidBrush((COLORREF)fc);
+                HGDIOBJ wOld = SelectObject(dc, wb);
+                HGDIOBJ wpOld = SelectObject(dc, GetStockObject(NULL_PEN));
+                Polygon(dc, back, 4);
+                SelectObject(dc, wpOld);
+                SelectObject(dc, wOld);
+                DeleteObject(wb);
+            }
+            if (c->wallFaceVisible[3]) {
+                HBRUSH wb = CreateSolidBrush(tcShade((COLORREF)fc, -18));
+                HGDIOBJ wOld = SelectObject(dc, wb);
+                HGDIOBJ wpOld = SelectObject(dc, GetStockObject(NULL_PEN));
+                Polygon(dc, lwall, 4);
+                SelectObject(dc, wpOld);
+                SelectObject(dc, wOld);
+                DeleteObject(wb);
+            }
+            if (c->wallFaceVisible[1]) {
+                HBRUSH wb = CreateSolidBrush(tcShade((COLORREF)fc, -10));
+                HGDIOBJ wOld = SelectObject(dc, wb);
+                HGDIOBJ wpOld = SelectObject(dc, GetStockObject(NULL_PEN));
+                Polygon(dc, bwall, 4);
+                SelectObject(dc, wpOld);
+                SelectObject(dc, wOld);
+                DeleteObject(wb);
+            }
+        }
     }
 
     /* Header：横向居中于“客户区 - 图例”那段（参照读数 centerX=155.5 = 图例左边/2） */
@@ -411,14 +495,28 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
         if (fh) { SelectObject(dc, fho); DeleteObject(fh); }
     }
 
-    /* 上/下轴线：TeeChart 默认画在绘图区上下沿，且是**黑色**（不是面板边的灰） */
+    /* 上/下/左/右轴线：TeeChart 默认画在绘图区四沿，且是**黑色**。
+     * C30-10 第二十刀：四根都受 Axis.X.Visible（示例的 Check7/8/9/10 与 Command2/3）控制 ——
+     * 以前 axisShow 只存不画，勾选框才一个个都没反应。下标: 0=Left 1=Right 2=Top 3=Bottom */
     {
         HPEN ap = CreatePen(PS_SOLID, 1, RGB(0, 0, 0));
         HPEN apOld = (HPEN)SelectObject(dc, ap);
-        MoveToEx(dc, plot.left, plot.top, NULL);
-        LineTo(dc, plot.right, plot.top);
-        MoveToEx(dc, plot.left, plot.bottom, NULL);
-        LineTo(dc, plot.right, plot.bottom);
+        if (c->axisShow[2]) {
+            MoveToEx(dc, plot.left, plot.top, NULL);
+            LineTo(dc, plot.right, plot.top);
+        }
+        if (c->axisShow[3]) {
+            MoveToEx(dc, plot.left, plot.bottom, NULL);
+            LineTo(dc, plot.right, plot.bottom);
+        }
+        if (c->axisShow[0]) {
+            MoveToEx(dc, plot.left, plot.top, NULL);
+            LineTo(dc, plot.left, plot.bottom);
+        }
+        if (c->axisShow[1]) {
+            MoveToEx(dc, plot.right, plot.top, NULL);
+            LineTo(dc, plot.right, plot.bottom);
+        }
         SelectObject(dc, apOld);
         DeleteObject(ap);
     }
@@ -1665,9 +1763,9 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
             }
         }
         switch (id) {
-        case 1:   /* 分面可见性：目前由 Walls.Visible 统管 */
-            if (flags & DISPATCH_PROPERTYPUT) return S_OK;
-            if (res) tcSetL(res, c->wallsVisible);
+        case 1:   /* 分面可见性（C30-10 第二十刀：Check11/Command4/5 真作用） */
+            if (flags & DISPATCH_PROPERTYPUT) { c->wallFaceVisible[f] = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, c->wallFaceVisible[f]);
             return S_OK;
         case 2:
             if (flags & DISPATCH_PROPERTYPUT) { c->wallSize[f] = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
