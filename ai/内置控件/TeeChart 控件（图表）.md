@@ -205,8 +205,11 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `Marks.Visible` 逐点打值（饼图除外）；`[TCHART]` 痕迹带 `pen= brush= marks=` 可验。
 - **像素判据已落地**：`tests/ctrlteechart/tc_px.ps1` 拿真 VB6 的 401x257 结构读数判
   内置控件（`169058d3`），读数见 §4 P3 对照表；`run_tests.ps1` 的 `ctrlteechart_px` 用例已挂上。
-- **仍未画**：饼图的扇区标签（`Marks` 对 Pie 的语义不同）、`AsPie` 的 Exploded 位移
-  （值存住了但扇区还没掰开）、`Walls` / 3D。
+- **饼图已按 `AsPie` 画**（`4f6352c7`）：`ExplodedSlice.Value(i)` 把第 i 块沿中线外移该像素数、
+  `RotationAngle` 旋起始角；同一刀修了 GDI `Pie()` 端点给反导致“填 270° 补集”的老 bug
+  （症状：最后一块颜色吃掉大半个圆，第二块看不见）。判据 `tc_pie_px.ps1`：
+  `radius0=109.9(n=6790)`≈r+18、`r1=92.0 r2=94.0 r3=94.5`≈r=94。
+- **仍未画**：饼图的扇区标签（`Marks` 对 Pie 的语义不同，是标签不是数值）、`Walls` / 3D。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
