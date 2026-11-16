@@ -378,8 +378,19 @@
                         continue;
                     }
                     // Detect argument type for proper setter selection
-                    bool isLongArg = false;
-                    bool isDoubleArg = false;
+                    // C30-10 第三十六刀: Integer 档元素保真 —— VB6 的 `Array(1)(0)` 是
+                    // Variant/Integer (VarType 2 / TypeName "Integer"), 而这里原来的
+                    // `isLongArg ⇒ vb6_ArraySetLong` 把它写成 VT_I4 (VarType 3)。判据
+                    // 不在本处: 只问装箱权威 isNarrowIntExpr (小字面量 / `&H`≤0xFFFF /
+                    // `3%` / `As Integer` 变量 / Integer 档用户 Const 与内建那一族)。
+                    // 出口是 vb6_ArraySetVariant + vb6_VariantInt —— 与 wrapVariantValue 的
+                    // `case Long` 同一个箱子, 不新开档位表。
+                    if (isNarrowIntExpr(node.positional[i].get())) {
+                        c_.emitLine("vb6_ArraySetVariant(" + arrVar + ", " + std::to_string(i)
+                                    + ", vb6_VariantInt((int16_t)(" + argExpr + ")));");
+                        continue;
+                    }
+                    bool isLongArg = false;                    bool isDoubleArg = false;
                     if (node.positional[i]->kind == ASTNodeKind::LiteralExpr) {
                         auto& lit = static_cast<LiteralExpr&>(*node.positional[i]);
                         if (lit.literalKind == LiteralKind::Integer) isLongArg = true;
