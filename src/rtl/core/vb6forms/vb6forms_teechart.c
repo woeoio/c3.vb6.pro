@@ -72,6 +72,9 @@ typedef struct {
     int      zoomEnable, zoomPercent;
     /* C30-10 第十一刀：Aspect（3D）。深度只在 View3D 时非零 */
     int      view3D, perspective, aspRot, aspElev;
+    /* C30-10 第十二刀：四壁 */
+    int      wallsVisible;
+    COLORREF wallsColor;
     TcSeries ser[VB6_TC_MAXSER];
     int      nser;
     int      paints;             /* 绘制次数（C3_TCHART_TRACE 用） */
@@ -131,6 +134,8 @@ static TcChart* tcAttach(HWND h) {
     c->perspective   = 1;
     c->aspRot        = 30;
     c->aspElev       = 15;
+    c->wallsVisible  = 1;
+    c->wallsColor    = RGB(192, 192, 192);
     c->panelBorder   = 1;
     c->headerVisible = 1;
     for (i = 0; i < 4; i++) { c->axisShow[i] = 1; c->axisTitleShow[i] = 1; c->axisAuto[i] = 1; }
@@ -281,6 +286,29 @@ static void tcPaint(TcChart* c) {
         return;
     }
 
+    /* 四壁：3D 下才画，且必须在**轴线之前**（墙是背板，不是覆盖层）。
+     * 深度与柱子同一个常量，判据才能拿“墙左缘 plot.left、背板右缘 plot.right+d”当尺子。 */
+    if (c->view3D && c->wallsVisible) {
+        int d = (c->perspective ? 18 : 12);
+        POINT back[4], lwall[4];
+        HBRUSH wb = CreateSolidBrush(c->wallsColor);
+        HGDIOBJ wOld = SelectObject(dc, wb);
+        HGDIOBJ wpOld = SelectObject(dc, GetStockObject(NULL_PEN));
+        back[0].x = plot.left + d;  back[0].y = plot.top - d;
+        back[1].x = plot.right + d; back[1].y = plot.top - d;
+        back[2].x = plot.right + d; back[2].y = plot.bottom - d;
+        back[3].x = plot.left + d;  back[3].y = plot.bottom - d;
+        lwall[0].x = plot.left;     lwall[0].y = plot.top;
+        lwall[1].x = plot.left + d; lwall[1].y = plot.top - d;
+        lwall[2].x = plot.left + d; lwall[2].y = plot.bottom - d;
+        lwall[3].x = plot.left;     lwall[3].y = plot.bottom;
+        Polygon(dc, back, 4);
+        Polygon(dc, lwall, 4);
+        SelectObject(dc, wpOld);
+        SelectObject(dc, wOld);
+        DeleteObject(wb);
+    }
+
     /* Header：横向居中于“客户区 - 图例”那段（参照读数 centerX=155.5 = 图例左边/2） */
     if (c->header[0]) {
         RECT hr;
@@ -314,7 +342,12 @@ static void tcPaint(TcChart* c) {
             if (s->pt[k].y > vmax) vmax = s->pt[k].y;
         }
     }
-    if (vmax <= vmin) { vmin = 0; vmax = 1; }
+    if (vmax <= vmin) {
+        /* 全等值（含全零）：vmin 归 0、vmax 保留正值 —— 之前直接给 0..1，
+         * 结果是“值 20 在 0..1 的轴上”把柱子画出绘图区（墙夹具第一版就这么红的）。 */
+        vmin = 0;
+        if (vmax <= 0) vmax = 1;
+    }
 
     x0 = plot.left; x1 = plot.right;
     y0 = plot.top;  y1 = plot.bottom;
@@ -427,6 +460,8 @@ static void tcPaint(TcChart* c) {
                         if (depth < 4) depth = 4;
                         if (depth > 20) depth = 20;
                     }
+                    /* 值超出量程（含全等值退化）时不让柱顶爬出绘图区 */
+                    if (by < y0 + depth) by = y0 + depth;
                     if (depth > 0) {
                         POINT top[4], side[4];
                         HBRUSH tb = CreateSolidBrush(tcShade(fcol, 55));
@@ -760,6 +795,7 @@ int32_t vb6_TChart_PaintCount(void* hwnd) {
 #define TC_KIND_EXPORT  15
 #define TC_KIND_ZOOM    16
 #define TC_KIND_ASPECT  17
+#define TC_KIND_WALLS   18
 
 typedef struct TcObj {
     const IDispatchVtbl* lpVtbl;
@@ -809,6 +845,10 @@ static const wchar_t* kTcZoomNames[] = {
 /* C30-10 第十一刀：3D 面（先让值存得住、读得回，再把柱形按深度画出来） */
 static const wchar_t* kTcAspectNames[] = {
     L"View3D", L"Perspective", L"Rotation", L"Elevation", L"Orthogonal", NULL };
+/* C30-10 第十二刀：四壁。Back/Bottom/Right 先指回同一对象（共用可见性/颜色），
+ * 分面颜色留到有人真的需要时再拆 —— 现在拆了也画不出区别。 */
+static const wchar_t* kTcWallsNames[] = {
+    L"Visible", L"Color", L"Back", L"Bottom", L"Right", NULL };
 
 static const wchar_t* const* tcNames(int kind) {
     switch (kind) {
@@ -829,6 +869,7 @@ static const wchar_t* const* tcNames(int kind) {
     case TC_KIND_EXPORT:  return kTcExportNames;
     case TC_KIND_ZOOM:    return kTcZoomNames;
     case TC_KIND_ASPECT:  return kTcAspectNames;
+    case TC_KIND_WALLS:   return kTcWallsNames;
     default:             return NULL;
     }
 }
@@ -1075,6 +1116,26 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
             tcSetL(res, c->axisTitleShow[ax]);
             return S_OK;
         default: return DISP_E_MEMBERNOTFOUND;
+        }
+    }
+
+    /* ===== 第十二刀：四壁（只 3D 下画）===== */
+    if (o->kind == TC_KIND_WALLS) {
+        switch (id) {
+        case 1:
+            if (flags & DISPATCH_PROPERTYPUT) { c->wallsVisible = (int)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, c->wallsVisible);
+            return S_OK;
+        case 2:
+            if (flags & DISPATCH_PROPERTYPUT) { c->wallsColor = (COLORREF)tcArgL(a0); InvalidateRect(c->hwnd, NULL, FALSE); return S_OK; }
+            if (res) tcSetL(res, (int32_t)c->wallsColor);
+            return S_OK;
+        case 3: case 4: case 5:
+            /* Back / Bottom / Right：暂时指回同一个对象（共用可见性/颜色） */
+            if (res) tcSetObj(res, o);
+            return S_OK;
+        default:
+            return DISP_E_MEMBERNOTFOUND;
         }
     }
 
@@ -1449,6 +1510,7 @@ int32_t vb6_TChart_HostGetProp(void* obj, const wchar_t* name, void* outV) {
         return 1;
     }
     if (_wcsicmp(name, L"SeriesCount") == 0) { tcSetL(out, c->nser); return 1; }
+    if (_wcsicmp(name, L"Walls") == 0)  { tcSetObj(out, tcCached(c, TC_KIND_WALLS, 0)); return 1; }
     if (_wcsicmp(name, L"Aspect") == 0) { tcSetObj(out, tcCached(c, TC_KIND_ASPECT, 0)); return 1; }
     if (_wcsicmp(name, L"Printer") == 0) { tcSetObj(out, tcCached(c, TC_KIND_PRINTER, 0)); return 1; }
     if (_wcsicmp(name, L"Export") == 0)  { tcSetObj(out, tcCached(c, TC_KIND_EXPORT, 0)); return 1; }
