@@ -216,7 +216,13 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   `Export`（SaveToFile/CopyToClipboard/Email）不动作；`Zoom.Enable/Percent` 照实存取。
   判据就在“调用后 marker 打得出来”：`TC-ED=ok` / `TC-PR=793` / `TC-EX=ok` / `TC-ZM=0`。
   真正落盘导出（图片编码）仍未接。
-- **仍未接**：`Walls` / 3D。至此 §5 只剩下 3D 这一族。
+- **3D 已落**（`6d9ef96d`）：`Aspect.View3D/Perspective/Rotation/Elevation` 存得住读得回，
+  `View3D` 时柱按 12px 深度画右侧面（暗 45%）+ 顶面（亮 55%）。判据 `tc_3d_px.ps1`：
+  `front maxX=274 minY=27 / side maxX=286 / top minY=15` ⇒ 两个 12px 都对上。
+- **已知差异（不是缺口，是选择）**：`View3D` 默认 0（2D），真控件默认 True ——
+  改默认会把已有 401x257 像素判据一夜改红，所以按夹具逐个开。
+- **仍未做**：`Walls` 四壁本身、3D 的透视效果（`Perspective` 只存值不改几何）、
+  线/面积系列的 3D 化。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
