@@ -223,8 +223,10 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   改默认时逐条重验了三套像素判据，都没红（`tc_px` 读数逐字不变、饼图不经柱路径、
   `tc_3d_px` 两个 12px 仍对）。同时修了一个真问题：3D 柱顶面原本会伸出上轴线
   （轴线行点数 251→239），改成值映射高度先减深度后回到 251。
-- **仍未做**：`Walls` 四壁本身、3D 的透视效果（`Perspective` 只存值不改几何）、
-  线/面积系列的 3D 化。
+- **透视已改几何**（`588caf2f`）：`View3D+Perspective` 时柱子的深度按横向位置缩放
+  （`depth = 12 - 6t`，左端约 16、中间 12、右端约 9）；平行投影仍是常数 12。
+  判据 `tc_persp_px.ps1`：三根柱的侧面色带宽 `15,11,8`。
+- **仍未做**：`Walls` 四壁本身；线/面积/点系列的 3D 化（现在只有柱形走 3D 路径）。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
