@@ -188,6 +188,7 @@ static void tcPaint(TcChart* c) {
     HPEN   oldPen, pen;
     HGDIOBJ oldBr;
     int i, n, x0, x1, y0, y1;
+    int marksDrawn = 0;   /* C30-10 第六刀：本次真的画了多少个逐点标签 */
     double vmin, vmax;
 
     if (!c) return;
@@ -256,9 +257,14 @@ static void tcPaint(TcChart* c) {
         TcSeries* s = &c->ser[i];
         int k;
         COLORREF col = (s->color ? s->color : tcPalette(i));
-        HPEN sp = CreatePen(PS_SOLID, 2, col);
+        /* C30-10 第六刀：真正的笔色/笔宽来自 Pen，填充色来自 Brush。
+         * Pen.Visible=False 就退回系列色（TeeChart 里那是“不描边≠不画”）。 */
+        COLORREF pcol = (s->penVisible ? (s->penColor ? s->penColor : col) : col);
+        int      pw   = (s->penWidth > 0 ? s->penWidth : 1);
+        COLORREF fcol = (s->brushColor ? s->brushColor : col);
+        HPEN sp = CreatePen(PS_SOLID, pw, pcol);
         HPEN spOld = (HPEN)SelectObject(dc, sp);
-        HBRUSH sb = CreateSolidBrush(col);
+        HBRUSH sb = CreateSolidBrush(fcol);
         HGDIOBJ sbOld = SelectObject(dc, sb);
 
         if (s->type == TC_SC_PIE) {
@@ -335,6 +341,28 @@ static void tcPaint(TcChart* c) {
                 break;
             }
         }
+        /* C30-10 第六刀：Marks.Visible=True 时逐点打值（饼图除外：那是扇区标签，
+         * 口径和图例不一样，留到下一刀）。点多于 64 不打，避免糊成一片。 */
+        if (s->marksVisible && s->type != TC_SC_PIE && s->n > 0 && s->n <= 64) {
+            int bw2 = 0;
+            if (s->type == TC_SC_BAR) {
+                bw2 = (x1 - x0) / (s->n * 2);
+                if (bw2 < 2) bw2 = 2;
+            }
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, pcol);
+            for (k = 0; k < s->n; k++) {
+                wchar_t mb[32];
+                int px, py;
+                if (s->type == TC_SC_BAR) px = x0 + bw2 / 2 + k * 2 * bw2 + bw2 / 2;
+                else px = (s->n == 1) ? (x0 + x1) / 2
+                        : x0 + (int)((double)k / (s->n - 1) * (x1 - x0));
+                py = y1 - (int)((s->pt[k].y - vmin) / (vmax - vmin) * (y1 - y0));
+                wsprintfW(mb, L"%d", (int)(s->pt[k].y + (s->pt[k].y >= 0 ? 0.5 : -0.5)));
+                TextOutW(dc, px - 4, py - 15, mb, (int)wcslen(mb));
+                marksDrawn++;
+            }
+        }
         SelectObject(dc, spOld); DeleteObject(sp);
         SelectObject(dc, sbOld); DeleteObject(sb);
     }
@@ -373,8 +401,16 @@ static void tcPaint(TcChart* c) {
     DeleteObject(pen);
     c->paints++;
     if (tcTrace()) {
-        fprintf(stderr, "[TCHART] paint=%d series=%d hwnd=%p\n",
-                c->paints, c->nser, (void*)c->hwnd);
+        COLORREF trp = 0, trb = 0;
+        if (c->nser > 0) {
+            TcSeries* s0 = &c->ser[0];
+            COLORREF c0 = (s0->color ? s0->color : tcPalette(0));
+            trp = (s0->penVisible ? (s0->penColor ? s0->penColor : c0) : c0);
+            trb = (s0->brushColor ? s0->brushColor : c0);
+        }
+        fprintf(stderr, "[TCHART] paint=%d series=%d pen=%06X brush=%06X marks=%d hwnd=%p\n",
+                c->paints, c->nser, (unsigned)trp, (unsigned)trb,
+                marksDrawn, (void*)c->hwnd);
         fflush(stderr);
     }
     EndPaint(c->hwnd, &ps);
