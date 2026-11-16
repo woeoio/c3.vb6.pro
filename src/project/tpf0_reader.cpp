@@ -160,16 +160,37 @@ bool readValue(Cursor& c, Tpf0Value& v, int depth) {
         v.dbl = (se & 0x8000) ? -val : val;
         return true;
     }
-    case Tpf0Kind::Currency: {
-        int64_t raw = c.i64();               // 以 1/10000 为单位的定点
-        if (!c.ok) return false;
-        v.dbl = (double)raw / 10000.0;
-        return true;
-    }
     case Tpf0Kind::Date: {
         int64_t raw = c.i64();               // Delphi TDateTime 的二进制（double）
         if (!c.ok) return false;
         double d; std::memcpy(&d, &raw, 8); v.dbl = d; return true;
+    }
+    case (Tpf0Kind)14: {   /* 0x0E：老版 Delphi / TeeChart 把集合写成这个档（见 Collection 那条）*/
+        size_t save = c.pos;                 /* kind 已读过，pos 指向负载首字节 */
+        Cursor u = c;
+        std::vector<std::vector<Tpf0Prop>> items;
+        bool sawAny = false;
+        for (;;) {
+            size_t s2 = u.pos;
+            uint8_t tag = u.u8();
+            if (!u.ok) break;
+            if (tag == (uint8_t)Tpf0Kind::Null) {
+                if (sawAny) { v.kind = Tpf0Kind::Collection; v.coll = std::move(items); c = u; return true; }
+                break;
+            }
+            if (tag != (uint8_t)Tpf0Kind::List) { u.pos = s2; break; }
+            std::vector<Tpf0Prop> item;
+            if (!readProps(u, item, depth + 1)) break;
+            items.push_back(std::move(item));
+            sawAny = true;
+        }
+        /* 不是集合就按字面的 Currency 读（8 字节定点） */
+        c.pos = save;
+        int64_t raw = c.i64();
+        if (!c.ok) return false;
+        v.kind = Tpf0Kind::Currency;
+        v.dbl = (double)raw / 10000.0;
+        return true;
     }
     case Tpf0Kind::Set:
         for (;;) {
@@ -180,18 +201,57 @@ bool readValue(Cursor& c, Tpf0Value& v, int depth) {
             v.items.push_back(std::move(item));
         }
     case Tpf0Kind::Collection: {
-        int32_t n = c.i32();                 // Delphi WriteCollection: Count 先行
-        if (!c.ok) return false;
-        if (n < 0 || n > 100000) { c.err = "Collection 计数非法"; c.ok = false; return false; }
-        for (int32_t i = 0; i < n; i++) {
-            uint8_t t = c.u8();              // 每项以 vaList 起
-            if (!c.ok) return false;
-            if (t != (uint8_t)Tpf0Kind::List) { c.err = "Collection 项不是 vaList"; c.ok = false; return false; }
-            std::vector<Tpf0Prop> item;
-            if (!readProps(c, item, depth + 1)) return false;
-            v.coll.push_back(std::move(item));
+        /* 两种写法都要接：
+         *   ① Delphi 6+ 的 WriteCollection —— 先 Int32 count，再每项 vaList+属性表；
+         *   ② TeeChart v5 这份流里的写法 —— **没有 count**，直接一串 vaList 项，
+         *      以 vaNull 收尾（实测 AxisOpaqueZoneForm.frx: CustomAxes 后面就是
+         *      `01 0A "Horizontal" 08 09 "OtherSide" 08 …`，前面没有计数字）。
+         * 两种都在真文件里见过，所以用“先试 A，失败回退 B”的写法，不猜。 */
+        const uint8_t* anchor = c.p;
+        size_t anchorLen = c.len;
+        std::string anchorErr = c.err;
+        size_t start = c.pos;
+        size_t afterKind = start - 1;   /* 调用方已读过 kind 字节 */
+        (void)anchor; (void)anchorLen;
+        {
+            Cursor t = c;
+            int32_t n = t.i32();
+            if (t.ok && n >= 0 && n <= 100000) {
+                bool good = true;
+                std::vector<std::vector<Tpf0Prop>> items;
+                for (int32_t i = 0; i < n; i++) {
+                    uint8_t tag = t.u8();
+                    if (!t.ok || tag != (uint8_t)Tpf0Kind::List) { good = false; break; }
+                    std::vector<Tpf0Prop> item;
+                    if (!readProps(t, item, depth + 1)) { good = false; break; }
+                    items.push_back(std::move(item));
+                }
+                if (good) { v.coll = std::move(items); c = t; return true; }
+            }
+            /* 回退：无 count 的写法 */
+            Cursor u = c; u.pos = start; u.ok = true; u.err = anchorErr;
+            std::vector<std::vector<Tpf0Prop>> items;
+            bool sawAny = false;
+            for (;;) {
+                size_t save = u.pos;
+                uint8_t tag = u.u8();
+                if (!u.ok) break;
+                if (tag == (uint8_t)Tpf0Kind::Null) {   /* 集合结束 */
+                    if (sawAny) { v.coll = std::move(items); c = u; return true; }
+                    break;
+                }
+                if (tag != (uint8_t)Tpf0Kind::List) { u.pos = save; break; }
+                std::vector<Tpf0Prop> item;
+                if (!readProps(u, item, depth + 1)) break;
+                items.push_back(std::move(item));
+                sawAny = true;
+            }
+            c.pos = afterKind + 1;
+            c.err = anchorErr;
         }
-        return true;
+        c.err = "Collection 两种写法都读不下去";
+        c.ok = false;
+        return false;
     }
     default:
         c.err = "未知的 TValueType";
@@ -216,7 +276,14 @@ bool readComp(Cursor& c, Tpf0Comp& comp, int depth) {
         if (b == 0) return true;             // 子组件表结束（vaNull）
         c.pos = save;
         Tpf0Comp child;
-        if (!readComp(c, child, depth + 1)) return false;
+        if (!readComp(c, child, depth + 1)) {
+            /* 尾部截断容错：有几个真样本（DrawlineByCode.frx）在最后一条系列之后
+             * 只剩几个字节的残尾，按长度读名字会越界。此时**保留已解析的那部分**
+             * （标题/系列都已在），比整块丢掉好 —— 设计期外观本来就是尽力而为。 */
+            c.ok = true;
+            c.err.clear();
+            return true;
+        }
         if (child.cls.empty()) return true;
         comp.children.push_back(std::move(child));
     }
