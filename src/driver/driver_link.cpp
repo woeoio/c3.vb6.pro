@@ -882,6 +882,7 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_collection_enum.c");
     // C30-10: 内置正则引擎（CreateObject("VBScript.RegExp") 抢先拦截，不加载 vbscript.dll）
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_regexp.c");
+    msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_dict.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6_di_stubs.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6_di_win32_stubs.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6_di_user32_stubs.c");

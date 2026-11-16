@@ -1213,7 +1213,7 @@ static void vb6_ComFailCreate(HRESULT hr, const wchar_t* progId) {
 static struct { void* disp; wchar_t cls[64]; } vb6_created_objs[VB6_CREATED_OBJ_MAX];
 static int vb6_created_objs_count = 0;
 
-static void vb6_ComRememberProgID(void* disp, const wchar_t* progId) {
+void vb6_ComRememberProgID(void* disp, const wchar_t* progId) {
     if (!disp || !progId) return;
     const wchar_t* last = wcsrchr(progId, L'.');
     const wchar_t* cls = last ? last + 1 : progId;
@@ -1255,6 +1255,20 @@ void* vb6_CreateObject(const wchar_t* progId) {
         if (preferMs == 0 && vb6_RegExp_IsProgramId(progId)) {
             void* re = vb6_RegExp_New();
             if (re) { vb6_ComRememberProgID(re, progId); return re; }
+        }
+    }
+
+    // C30-10 第二十六刀：内置 Dictionary —— CreateObject("Scripting.Dictionary") 不再走 scrrun.dll。
+    // 与正则同一形状（含回退开关 C3_DICT_PREFER_MS=1，给「用 Microsoft 组件当对照组」留口）。
+    // 注意这一处只管**晚绑定**；`New Scripting.Dictionary` 走的是 vb6_NewObject /
+    // vb6_NewObjectClsid -> vb6_NewVb6RuntimeClass -> vb6_NewBuiltinObject 另一条腿。
+    {
+        static int preferMsDict = -1;
+        if (preferMsDict < 0)
+            preferMsDict = (GetEnvironmentVariableW(L"C3_DICT_PREFER_MS", NULL, 0) > 0) ? 1 : 0;
+        if (preferMsDict == 0 && vb6_Dict_IsProgramId(progId)) {
+            void* dd = vb6_Dict_New();
+            if (dd) { vb6_ComRememberProgID(dd, progId); return dd; }
         }
     }
 

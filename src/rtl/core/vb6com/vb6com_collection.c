@@ -405,6 +405,13 @@ int32_t vb6_IsBuiltinObjectName(const wchar_t* className) {
 
 // 内建对象统一构造入口: 命中返回新实例, 未命中返回 NULL (调用方回退到 COM 注册表)。
 void* vb6_NewBuiltinObject(const wchar_t* className) {
+    // C30-10 第二十六刀：Dictionary 与 RegExp 也要能从 **New 那条腿**进来。
+    // 只拦 CreateObject 的话，`Dim d As New Scripting.Dictionary` 与
+    // `Dim re As New VBScript.RegExp` 仍会去加载 scrrun.dll / vbscript.dll。
+    // 两条 New 出口（vb6_NewObject / vb6_NewObjectClsid）都会先走到这里。
+    if (vb6_Dict_IsClassName(className)) return vb6_Dict_New();
+    if (vb6_RegExp_IsProgramId(className)) return vb6_RegExp_New();
+    if (_wcsicmp(className, L"RegExp") == 0) return vb6_RegExp_New();
     if (!vb6_IsBuiltinObjectName(className)) return NULL;
     return vb6_NewBuiltinCollection();
 }

@@ -306,6 +306,7 @@ set(C3RTL_EMBEDDED_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_collection.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_collection_enum.c
 ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_regexp.c
+${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_dict.c
     # vb6comserver
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6comserver/vb6comserver.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6comserver/vb6comserver.c
