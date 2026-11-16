@@ -33,21 +33,53 @@
 #define VB6_TC_MAXSER    32      /* 每图最多几条系列 */
 #define VB6_TC_MAXPTS    4096    /* 每条系列最多几个点 */
 
-/* TeeChart 的 SeriesType 常数（真 OCX 的 scLine..scPie 取值，示例里直接写数字也要对得上） */
+/* TeeChart 的 SeriesType 常数（真 OCX 的 scLine..scPie 取值，示例里直接写数字也要对得上）
+ *
+ * C30-10 第十八刀：以前没接的类型号一律被当成 stLine 静默画成折线（不报错、但图是错的）。
+ * 现在改成两档：下面这 9 个真画，其余一律抛 VB 错误 5（调用/参数无效）。
+ * 编号按 TeeChart 的 ESeriesType 顺序（0..5 与已有实现完全对得上就是佐证）：
+ *   6 scFastLine  7 scSurface  8 scCandle  9 scGantt  10 scShape
+ *   11 scBubble  12 scArrow  13 scPolar  14 scRadar  15 scPolarBar
+ *   16 scBezier  17 scDonut  18 scErrorBar …
+ * 仍未做的（Candle 要 OHLC 四列、Surface 要二维网格）现在会明确报错，不再画错图。 */
 #define TC_SC_LINE      0
 #define TC_SC_BAR       1
 #define TC_SC_HBAR      2
 #define TC_SC_AREA      3
 #define TC_SC_POINT     4
 #define TC_SC_PIE       5
+#define TC_SC_GANTT     9
+#define TC_SC_BUBBLE    11
+#define TC_SC_DONUT     17
 
 typedef struct { double x, y; } TcPoint;
+
+/* C30-10 第十八刀：RTL 的报错入口（vb6rtl_array.c 实现）。只声明用得到的这一个，
+ * 不为了一行调用把 vb6rtl 头拖进来。 */
+extern void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description);
+
+/* 真能画的那几个类型号（其余一律报错，见 vb6_TChart_AddSeries） */
+static int tcTypeSupported(int t) {
+    switch (t) {
+    case TC_SC_LINE: case TC_SC_BAR: case TC_SC_HBAR: case TC_SC_AREA:
+    case TC_SC_POINT: case TC_SC_PIE: case TC_SC_GANTT: case TC_SC_BUBBLE:
+    case TC_SC_DONUT:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/* 气泡图的第三列（半径）。按需分配：绝大多数图表没有气泡系列，
+ * 每系列常驻 16KB 太浪费（32 系列 × 32 图）。 */
+#define TC_IS_PIE(t)   ((t) == TC_SC_PIE || (t) == TC_SC_DONUT)
 
 typedef struct {
     int    type;                 /* TC_SC_* */
     COLORREF color;
     wchar_t title[64];
     TcPoint pt[VB6_TC_MAXPTS];
+    double* rad;                  /* C30-10 第十八刀：气泡半径（惰性分配，见 AddBubble） */
     int    n;
     /* C30-10 第五刀：Marks / Pen / Brush / AsPie 的标量面 */
     int      marksVisible;
@@ -343,7 +375,7 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
     for (i = 0; i < c->nser; i++) {
         TcSeries* s = &c->ser[i];
         int k;
-        if (s->type == TC_SC_PIE) continue;
+        if (TC_IS_PIE(s->type)) continue;
         for (k = 0; k < s->n; k++) {
             if (s->pt[k].y < vmin) vmin = s->pt[k].y;
             if (s->pt[k].y > vmax) vmax = s->pt[k].y;
@@ -374,7 +406,7 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
         HBRUSH sb = CreateSolidBrush(fcol);
         HGDIOBJ sbOld = SelectObject(dc, sb);
 
-        if (s->type == TC_SC_PIE) {
+        if (TC_IS_PIE(s->type)) {
             /* 饼图：按 y 值占比切扇区（起始 -90°，与 TeeChart 默认同向）。
              * Pie() 的两个“终点”各自是扇区的起/止半径端点 —— 角度算错就会画出
              * 整圆或零面积，所以这里统一用 cos/sin 落在圆周上。
@@ -440,9 +472,77 @@ static void tcRender(TcChart* c, HDC dc, RECT rc) {
                     a += sweep;
                 }
             }
+            /* C30-10 第十八刀：Donut 就是“饼图中间挖个洞”。几何与饼图完全同源，
+             * 只是最后用 Panel 底色把内圆盖掉（洞半径固定 50%，与 TeeChart 默认同量级）。 */
+            if (s->type == TC_SC_DONUT) {
+                int ir = r / 2;
+                HBRUSH hb = CreateSolidBrush(c->panelColor);
+                HGDIOBJ hbOld = SelectObject(dc, hb);
+                HGDIOBJ hpOld = SelectObject(dc, GetStockObject(NULL_PEN));
+                Ellipse(dc, cx0 - ir, cy0 - ir, cx0 + ir, cy0 + ir);
+                SelectObject(dc, hpOld);
+                SelectObject(dc, hbOld);
+                DeleteObject(hb);
+                SelectObject(dc, sb);
+                SelectObject(dc, sp);
+            }
         } else if (s->n > 0) {
             int bw, gap, k2;
             switch (s->type) {
+            case TC_SC_GANTT: {
+                /* C30-10 第十八刀：甘特图 —— 每个点是一条任务：AddXY 的 x=开始、y=结束。
+                 * 横轴用本系列自己的 x 定义域（[min,max] 含两列），纵向一点一条带。
+                 * 这是第一个真正用到 pt.x 的图 —— 其他系列仍按点序排。 */
+                double xmin = 0, xmax = 0;
+                int band = (s->n > 0) ? ((y1 - y0) / s->n) : (y1 - y0);
+                int bh = band / 2;
+                if (bh < 2) bh = 2;
+                xmin = xmax = s->pt[0].x;
+                for (k2 = 0; k2 < s->n; k2++) {
+                    if (s->pt[k2].x < xmin) xmin = s->pt[k2].x;
+                    if (s->pt[k2].x > xmax) xmax = s->pt[k2].x;
+                    if (s->pt[k2].y < xmin) xmin = s->pt[k2].y;
+                    if (s->pt[k2].y > xmax) xmax = s->pt[k2].y;
+                }
+                if (xmax <= xmin) xmax = xmin + 1;
+                for (k2 = 0; k2 < s->n; k2++) {
+                    int by = y0 + k2 * band + (band - bh) / 2;
+                    int gx0 = x0 + (int)((s->pt[k2].x - xmin) / (xmax - xmin) * (x1 - x0));
+                    int gx1 = x0 + (int)((s->pt[k2].y - xmin) / (xmax - xmin) * (x1 - x0));
+                    if (gx1 < gx0) { int t2 = gx0; gx0 = gx1; gx1 = t2; }
+                    if (gx1 - gx0 < 2) gx1 = gx0 + 2;
+                    Rectangle(dc, gx0, by, gx1, by + bh);
+                }
+                break;
+            }
+            case TC_SC_BUBBLE: {
+                /* C30-10 第十八刀：气泡图 —— 位置由 (x,y) 定，半径来自 AddBubble 的第三列。
+                 * 半径没给的按 0 处理（画成最小点），不猜。 */
+                double xmin = s->pt[0].x, xmax = s->pt[0].x;
+                double rmin = 0, rmax = 0;
+                for (k2 = 0; k2 < s->n; k2++) {
+                    if (s->pt[k2].x < xmin) xmin = s->pt[k2].x;
+                    if (s->pt[k2].x > xmax) xmax = s->pt[k2].x;
+                    if (s->rad) {
+                        if (s->rad[k2] < rmin) rmin = s->rad[k2];
+                        if (s->rad[k2] > rmax) rmax = s->rad[k2];
+                    }
+                }
+                if (xmax <= xmin) xmax = xmin + 1;
+                if (rmax <= rmin) rmax = rmin + 1;
+                for (k2 = 0; k2 < s->n; k2++) {
+                    int bx = x0 + (int)((s->pt[k2].x - xmin) / (xmax - xmin) * (x1 - x0));
+                    int by = y1 - (int)((s->pt[k2].y - vmin) / (vmax - vmin) * (y1 - y0));
+                    int rr = 3;
+                    if (s->rad) {
+                        rr = 3 + (int)((s->rad[k2] - rmin) / (rmax - rmin) * 9.0);
+                        if (rr < 2) rr = 2;
+                        if (rr > 14) rr = 14;
+                    }
+                    Ellipse(dc, bx - rr, by - rr, bx + rr, by + rr);
+                }
+                break;
+            }
             case TC_SC_HBAR: {
                 /* C30-10 第十七刀：横向柱真的横着画。之前 type=2 落到 default 成了折线，
                  * 看着“不报错”、其实是画错的图 —— 像素判据一量就现形。
@@ -838,14 +938,40 @@ int32_t vb6_TChart_SeriesCount(void* hwnd) {
     return c ? c->nser : 0;
 }
 
+int32_t vb6_TChart_SeriesAddBubble(void* hwnd, int32_t idx, double x, double y, double r) {
+    TcChart* c = tcOf((HWND)hwnd);
+    TcSeries* s;
+    if (!c) return 0;
+    s = tcSeries(c, (int)idx);
+    if (!s || s->n >= VB6_TC_MAXPTS) return 0;
+    if (!s->rad) {
+        s->rad = (double*)calloc(VB6_TC_MAXPTS, sizeof(double));
+        if (!s->rad) return 0;
+    }
+    s->pt[s->n].x = x;
+    s->pt[s->n].y = y;
+    s->rad[s->n] = r;
+    s->n++;
+    InvalidateRect((HWND)hwnd, NULL, FALSE);
+    return s->n;
+}
+
+int32_t vb6_TChart_SeriesAddBubble(void* hwnd, int32_t idx, double x, double y, double r);
 int32_t vb6_TChart_AddSeries(void* hwnd, int32_t type) {
     TcChart* c = tcAttach((HWND)hwnd);
     TcSeries* s;
     if (!c) return -1;
     if (c->nser >= VB6_TC_MAXSER) return -1;
+    /* C30-10 第十八刀：不支持的类型号不再静默降级成折线 —— 静默降级会“不报错但画错图”，
+     * 比直接报错危险得多。错误 5 = 调用/参数无效（与 VB6 对非法枚举的惯用法一致）。 */
+    if (!tcTypeSupported((int)type)) {
+        vb6_ErrRaise(5, SysAllocString(L"C3.TChart"),
+                        SysAllocString(L"Invalid series type (supported: 0-5, 9 Gantt, 11 Bubble, 17 Donut)"));
+        return -1;
+    }
     s = &c->ser[c->nser];
     memset(s, 0, sizeof(*s));
-    s->type  = (type >= TC_SC_LINE && type <= TC_SC_PIE) ? (int)type : TC_SC_LINE;
+    s->type  = (int)type;   /* 合法性已在上面校验过，这里不再夹回 Line */
     s->color = tcPalette(c->nser);
     /* 切面默认值必须在这里也补一遍：AddSeries 走的是这条 memset 路径，
      * 不经过 tcSeries()，否则读 .AsCandle.CandleWidth 得到 0（夹具逮过）。 */
@@ -1016,6 +1142,7 @@ static const wchar_t* kTcSerNames[]  = {
     /* C30-10 第十七刀：按类型切换的切面。几何真生效的只有横向柱与 BarWidthPercent，
      * candle/surface 需要 OHLC / 网格数据（我们的点集只有一列 y），只开对象不绘制。 */
     L"AsBar", L"AsLine", L"AsHorizBar", L"AsCandle", L"AsSurface", L"AsArea", L"AsPoint",
+    L"AddBubble",       /* C30-10 第十八刀：气泡图第三列（半径） */
     NULL };
 /* 切面自己的成员表 */
 static const wchar_t* kTcAsBarNames[]   = { L"BarWidthPercent", L"SideMargins", L"OffsetPercent", NULL };
@@ -1186,7 +1313,8 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
     /* DISPPARAMS 的 rgvarg 是**逆序**：第一个实参在 rgvarg[argc-1]。 */
     VARIANT* a0 = (argc >= 1) ? &dp->rgvarg[argc - 1] : NULL;
     VARIANT* a1 = (argc >= 2) ? &dp->rgvarg[argc - 2] : NULL;
-    (void)riid; (void)lcid; (void)ei; (void)ae;
+    VARIANT* a2 = (argc >= 3) ? &dp->rgvarg[argc - 3] : NULL;
+    (void)riid; (void)lcid; (void)ei; (void)ae; (void)a2;
     if (!c) return DISP_E_MEMBERNOTFOUND;
     if (res) tcSetEmpty(res);
 
@@ -1608,6 +1736,9 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
     case 17: tcSetObj(res, tcCached(c, TC_KIND_ASSURF,   o->index)); return S_OK;
     case 18: tcSetObj(res, tcCached(c, TC_KIND_ASAREA,   o->index)); return S_OK;
     case 19: tcSetObj(res, tcCached(c, TC_KIND_ASPOINT,  o->index)); return S_OK;
+    case 20:                                    /* AddBubble(x,y,r) */
+        tcSetL(res, vb6_TChart_SeriesAddBubble(o->hwnd, o->index, tcArgD(a0), tcArgD(a1), tcArgD(a2)));
+        return S_OK;
     default:
         return DISP_E_MEMBERNOTFOUND;
     }
