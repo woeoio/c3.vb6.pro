@@ -891,6 +891,11 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_pie_px"; Vbp = "$Tests\ctrlteechart\TcPieApp.vbp"; Mode = "close";
        WindowTitle = "TChart pie"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_pie_px.ps1") },
+    # C30-10 3D 判据：View3D 打开后柱形要真按深度画 —— 侧面右缘比正面右缘多 12px、
+    # 顶面上缘比柱顶高 12px（深度常量当尺子）。读数见 tc_3d_px.ps1 头部。
+    @{ Name = "ctrlteechart_3d_px"; Vbp = "$Tests\ctrlteechart\Tc3dApp.vbp"; Mode = "close";
+       WindowTitle = "TChart 3d"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_3d_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
