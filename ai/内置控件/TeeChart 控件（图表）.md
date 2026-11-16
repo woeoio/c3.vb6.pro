@@ -185,8 +185,10 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
   Axis（Automatic/Minimum/Maximum/Visible/Title）、Title（Caption/Text/Visible）。
   读数：`TC-PANEL=15790335` / `TC-HEADERLEN=4` / `TC-AXTITLELEN=2` / `TC-MARGINR=12`。
 - **仍未接**：`Walls` / 3D（`Aspect.View3D` / `Perspective`）—— P1 只记录不绘制。
-- **Marks / Pen / Brush 只到值面**：`Series(i).Marks.Pen.Brush/AsPie` 的标量都能
-  存能读能触发重绘（`ff655f7a`），但渲染侧还没把这四层画出来（逐点标签、独立笔色）。
+- **Marks / Pen / Brush 已参与绘制**（`81148fff`）：笔色/笔宽取 `Pen`，填充取 `Brush`，
+  `Marks.Visible` 逐点打值（饼图除外）；`[TCHART]` 痕迹带 `pen= brush= marks=` 可验。
+- **仍未画**：饼图的扇区标签（`Marks` 对 Pie 的语义不同）、`AsPie` 的 Exploded 位移
+  （值存住了但扇区还没掰开）、`Walls` / 3D。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
 - **TPF0 点集未解**：系列的数据（`YValues` 的 vaBinary 负载）还没接，
   设计期只到“系列在、类型/颜色/标题对”——要真点就用 FillSampleValues/Add。
