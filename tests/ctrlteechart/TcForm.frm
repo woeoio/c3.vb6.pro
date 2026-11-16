@@ -48,6 +48,15 @@ Private Sub Form_Load()
         nF = nF + 1
     Next s
     Debug.Print "TC-FOREACH=" & nF
+    TChart1.Series(0).Marks.Visible = False
+    Debug.Print "TC-MARKS=" & TChart1.Series(0).Marks.Visible
+    TChart1.Series(0).Pen.Color = RGB(0, 0, 255)
+    Debug.Print "TC-PEN=" & TChart1.Series(0).Pen.Color
+    TChart1.Series(0).Brush.Color = RGB(1, 2, 3)
+    Debug.Print "TC-BRUSH=" & TChart1.Series(0).Brush.Color
+    TChart1.Series(2).AsPie.ExplodedSlice.Value(0) = 15
+    Debug.Print "TC-SLICE=" & TChart1.Series(2).AsPie.ExplodedSlice.Value(0)
+    Debug.Print "TC-ROT=" & TChart1.Series(2).AsPie.RotationAngle
     TChart1.Panel.Color = RGB(255, 240, 240)
     Debug.Print "TC-PANEL=" & TChart1.Panel.Color
     TChart1.Header.Caption = "内置图表"
