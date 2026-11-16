@@ -559,3 +559,68 @@ f01/f02/f03 = 2、f04（用户 `Long` 变量）= 3；`Probe.bas` 15 行、`HexPr
 同层**只剩一格**：`Array(1,"x")(0)` 的元素档（b19/b20 实测仍 3/Long）。它不是「返回档」问题，
 而是数组字面量的**元素装箱**走了另一条路（`cgen_expr_array.cpp`），下一刀从那里入手。
 
+### 11.15 第三十六刀：`Array()` 字面量的元素档（用户实测补的一刀）
+
+用户真 VB6 读数：`TypeName(Array(1, "x")(0))` 答 **`Integer`**（VarType 2）—— 与 `W2`/`W4`
+里 cscript 的读数一致，把上一刀留的最后一格坐实。
+
+**判据**：`Array(arglist)` 的每个元素保留它在 VB6 里的类型；「Integer 档」这件事**不在本处重写**，
+只问装箱权威 `isNarrowIntExpr` —— 于是自动继承了前四刀的积累：小十进制字面量（含一元负号）、
+`&H` 且位宽 ≤ 0xFFFF、`3%` 后缀、`As Integer` 变量、Integer 档用户 `Const`、
+Integer 返回档的内建那一族（`Asc`/`Sgn`/`VarType`/月日年时分秒…）。
+
+**落点**：`detail/expr/cgen_expr_call_builtin_pre.inc` 的 `Array` 分支。原来整数元素落
+`isLongArg ⇒ vb6_ArraySetLong`（VT_I4）；现在在选 setter 之前加一闸，只往 `variantSetter`
+里填 `vb6_VariantInt((int16_t)(expr))`，由本块**唯一**那条 `ArraySetVariant` 发射行带出去。
+
+**踩到的两条硬约束（都是先红后改）**：
+
+1. 第一版自己 `emitLine("vb6_ArraySetVariant(...)")` 直接发 ⇒ 静态哨兵 R2
+   （`scripts/check_array_literal_variants.ps1`，要求该出口恰好 1 处）红成 `call sites = 2`。
+   处置**不是放宽阈值**，而是复用同一个出口。
+2. 改完仍红：因为那句注释里写了 `vb6_ArraySetVariant(` 字面量，被正则当成第二个调用点。
+   注释里把括号去掉才绿 —— 记一笔：这类按正则数的哨兵，注释也算数。
+
+**读数**（`W6.bas` 17 行；oracle = `W6.vbs` 13 行）：
+
+| 读数 | 写法 | VB6 / cscript | 修前 | 修后 |
+| --- | --- | --- | --- | --- |
+| g01 | `Array(1,…)(0)` | 2/Integer | 3 | **2** |
+| g02 | 第二个元素 `2` | 2/Integer | 3 | **2** |
+| g03 | `32768` | 3/Long | 3 | 3 ✔ |
+| g04 | `&HFFFF` | 2/Integer(-1) | 3 | **2** |
+| g05/g06/g07 | `"x"` / `1.5` / `True` | 8 / 5 / 11 | 同 | 同 ✔ |
+| g08 | `Array(i)`，`i As Integer` | 2/Integer | 2 | 2 ✔ |
+| g09 | `Array(l)`，`l As Long` | 3/Long（VBScript 那行不可比：它的 `l` 是无类型 Variant） | 3 | 3 ✔ |
+| g10/g11 | `3%` / `1&` | 2 / 3 | 2 / 3 | 2 / 3 ✔ |
+| g12 | 用户 `Const KC = 5` | 2/Integer | 2 | 2 ✔ |
+| g13 | `Asc("A")` | 2/Integer | 2 | 2 ✔ |
+| g15 | `-1` | 2/Integer | 2 | 2 ✔ |
+| g14 | `1 + 1` | 2/Integer | 3 | 3 ✗ 留白 |
+| g16 | `Array(1)(0)` 嵌在 Array 里 | 2/Integer | 3 | 3 ✗ 留白 |
+
+g14/g16 都不在装箱站，各自属于下层（算术全链 / 数组元素类型表），已登记。
+`W4.bas` 的 b19/b20、`W3.bas` 的 w14 同步从 3 转 2；`Probe.bas` 15 行、`HexProbe.bas` 17 行
+逐字未变；`dict_native` PASS 59 行。
+
+**随之改的两处夹具（按 cscript 口径，不是「改期望让门变绿」）**：
+
+* `tests/run_tests.ps1` 的 `jsonfast_array_literal_variants`：`AL-long` 与 `AL-i4` 3 → 2
+  （`.temp/litprobe/AL.vbs` 实测就是 2、c(1)=8、c(2)=5 均未变）；
+* 同一夹具 `.bas` 头注释里那句「plain Long arm 是零回归护栏」不再成立，改成记录本刀与两条 cscript 读数。
+
+**发码**：11 份输入形状变了。本机做了 A/B（`.temp/C3_pre36.exe` = `dd6cdfbf` 那一刀 vs 新二进制，
+逐输入 `--emit-c` 逐行 diff，脚本 `.temp/ab36/run.ps1`）：`test_arr_empty` 3/3 行、
+`test_joinfilter` 3/3、`test_split_result_subscript` 3/3、`test_whole_array_copy` 3/3、
+`P2Main` / `p2_array_variant.vbp` 各 12/12、`ArrayLiteralVariants` 4/4、三份 GUISample 各 2/2 ——
+**每一行都是 `ArraySetLong(x, i, N)` → `ArraySetVariant(x, i, vb6_VariantInt((int16_t)(N)))`，无其它差异**。
+确认后 `rebless_emit_manifest.ps1 -Bless` 改写 11 行（数据行 748 不变、复算绿、coverage K1..K3 绿）。
+三份 GUISample 行也是真变了（`Array(..., -1)` 站点），不是本机环境漂移。
+
+**CI**：`43944415872`（head `1b093a9d`）= 3 红（manifest 11 行 + 夹具 `jsonfast_array_literal_variants`
+输出不符 + R2 哨兵）；修完 `43947217474`（head `d4c5e479`）= 只剩 manifest 那格红（已预料）；
+登记后 `43949530645`（head `35eee3a2`）= **22/22 全绿**。
+
+同层还剩两格（都不在装箱站）：`Array(1 + 1)` 元素（算术全链）、`Array(Array(1)(2))(0)` 的索引结果档
+（数组元素类型表）。
+
