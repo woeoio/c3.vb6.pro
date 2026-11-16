@@ -59,6 +59,16 @@ Private Sub Form_Load()
     TChart1.Series(2).AsPie.ExplodedSlice.Value(0) = 15
     Debug.Print "TC-SLICE=" & TChart1.Series(2).AsPie.ExplodedSlice.Value(0)
     Debug.Print "TC-ROT=" & TChart1.Series(2).AsPie.RotationAngle
+    ' 文档 §5 那四条未接成员：显式空实现（认名字、不动作，不许 438）
+    TChart1.ShowEditor
+    Debug.Print "TC-ED=ok"
+    TChart1.Printer.BeginDoc
+    TChart1.Printer.EndDoc
+    Debug.Print "TC-PR=" & TChart1.Printer.PageWidth
+    TChart1.Export.SaveToFile "tc-export.png"
+    Debug.Print "TC-EX=ok"
+    TChart1.Zoom.Enable = False
+    Debug.Print "TC-ZM=" & TChart1.Zoom.Enable
     TChart1.Panel.Color = RGB(255, 240, 240)
     Debug.Print "TC-PANEL=" & TChart1.Panel.Color
     TChart1.Header.Caption = "内置图表"
