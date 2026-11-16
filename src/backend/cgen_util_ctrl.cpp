@@ -3688,9 +3688,20 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
     }
     if (e->kind == ASTNodeKind::IndexOrCallExpr) {
         auto& call = static_cast<const IndexOrCallExpr&>(*e);
-        if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr)
-            return builtinReturnsVbIntegerName(
-                static_cast<const IdentifierExpr&>(*call.callee).name);
+        if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr) {
+            auto& cid = static_cast<const IdentifierExpr&>(*call.callee);
+            if (builtinReturnsVbIntegerName(cid.name)) return true;
+            // C30-10 第三十八刀: `Int`/`Fix`/`Abs` 的返回档 = **实参的档**（VB6 口径；
+            // cscript 实测 `VarType(Int(5))`=2、`Fix(5)`=2、`Abs(-5)`=2，而
+            // `Int(1.7)`=5、`Abs(1.5)`=5 —— 后两个本来就是对）。
+            // 只对「实参本身就是 Integer 档」那一形答 true；Variant 实参靠运行时子类型
+            // 传播（`Abs(v)`，v 装 5 时答 2），静态不可知，留白。
+            const std::string n = Symbol::toLower(cid.name);
+            if ((n == "int" || n == "fix" || n == "abs") && call.positional.size() == 1
+                && call.named.empty())
+                return isNarrowIntExpr(call.positional[0].get());
+            return false;
+        }
         return false;
     }
     return false;
