@@ -68,6 +68,8 @@ typedef struct {
     int      marginL, marginR, marginT, marginB;   /* 像素 */
     wchar_t  header[256];
     int      showLegend;
+    /* C30-10 第十刀：Zoom 的两个值（空实现里也照实存，读回才一致） */
+    int      zoomEnable, zoomPercent;
     TcSeries ser[VB6_TC_MAXSER];
     int      nser;
     int      paints;             /* 绘制次数（C3_TCHART_TRACE 用） */
@@ -121,6 +123,8 @@ static TcChart* tcAttach(HWND h) {
     c->marginT       = 12;
     c->marginB       = 12;
     c->showLegend    = 1;
+    c->zoomEnable    = 0;
+    c->zoomPercent   = 100;
     c->panelBorder   = 1;
     c->headerVisible = 1;
     for (i = 0; i < 4; i++) { c->axisShow[i] = 1; c->axisTitleShow[i] = 1; c->axisAuto[i] = 1; }
@@ -691,6 +695,9 @@ int32_t vb6_TChart_PaintCount(void* hwnd) {
 #define TC_KIND_ASPIE   11
 #define TC_KIND_OTHER   12  /* AsPie.OtherSlice */
 #define TC_KIND_SLICES  13  /* AsPie.ExplodedSlice（带参 Value(i)） */
+#define TC_KIND_PRINTER 14  /* 显式空实现：不打印，但不再 438 */
+#define TC_KIND_EXPORT  15
+#define TC_KIND_ZOOM    16
 
 typedef struct TcObj {
     const IDispatchVtbl* lpVtbl;
@@ -729,6 +736,14 @@ static const wchar_t* kTcBrushNames[]  = { L"Color", L"Visible", NULL };
 static const wchar_t* kTcAsPieNames[]  = { L"RotationAngle", L"ExplodedSlice", L"OtherSlice", NULL };
 static const wchar_t* kTcOtherNames[]  = { L"Style", L"Value", L"Visible", NULL };
 static const wchar_t* kTcSlicesNames[] = { L"Value", NULL };
+/* C30-10 第十刀：文档 §5 那四条未接成员 → 显式空实现（认名字、不动作） */
+static const wchar_t* kTcPrinterNames[] = {
+    L"BeginDoc", L"EndDoc", L"Print", L"PrintPartial",
+    L"PageWidth", L"PageHeight", L"PrintOrientation", L"Copies", NULL };
+static const wchar_t* kTcExportNames[] = {
+    L"SaveToFile", L"CopyToClipboard", L"Email", L"Picture", L"Width", L"Height", NULL };
+static const wchar_t* kTcZoomNames[] = {
+    L"Enable", L"Percent", L"Direction", L"Point", L"SetMax", NULL };
 
 static const wchar_t* const* tcNames(int kind) {
     switch (kind) {
@@ -745,6 +760,9 @@ static const wchar_t* const* tcNames(int kind) {
     case TC_KIND_ASPIE:  return kTcAsPieNames;
     case TC_KIND_OTHER:  return kTcOtherNames;
     case TC_KIND_SLICES: return kTcSlicesNames;
+    case TC_KIND_PRINTER: return kTcPrinterNames;
+    case TC_KIND_EXPORT:  return kTcExportNames;
+    case TC_KIND_ZOOM:    return kTcZoomNames;
     default:             return NULL;
     }
 }
@@ -994,6 +1012,30 @@ static HRESULT STDMETHODCALLTYPE tcInvoke(IDispatch* d, DISPID id, REFIID riid, 
         }
     }
 
+    /* ===== 第十刀：Printer / Export / Zoom —— 认名字、不动作，不静默 438 ===== */
+    if (o->kind == TC_KIND_PRINTER || o->kind == TC_KIND_EXPORT || o->kind == TC_KIND_ZOOM) {
+        if (o->kind == TC_KIND_PRINTER) {
+            if (id == 5) { if (res) tcSetL(res, 793); return S_OK; }   /* PageWidth (A4@96dpi) */
+            if (id == 6) { if (res) tcSetL(res, 1122); return S_OK; }  /* PageHeight */
+            return S_OK;                                              /* 其余不动作 */
+        }
+        if (o->kind == TC_KIND_EXPORT) {
+            return S_OK;   /* SaveToFile / CopyToClipboard / Email 不动作 */
+        }
+        switch (id) {
+        case 1:            /* Zoom.Enable */
+            if (flags & DISPATCH_PROPERTYPUT) { c->zoomEnable = (int)tcArgL(a0); return S_OK; }
+            if (res) tcSetL(res, c->zoomEnable);
+            return S_OK;
+        case 2:            /* Zoom.Percent */
+            if (flags & DISPATCH_PROPERTYPUT) { c->zoomPercent = (int)tcArgL(a0); return S_OK; }
+            if (res) tcSetL(res, c->zoomPercent);
+            return S_OK;
+        default:
+            return S_OK;
+        }
+    }
+
     /* ===== 第五刀：Marks / Pen / Brush / AsPie / OtherSlice / ExplodedSlice ===== */
     if (o->kind == TC_KIND_MARKS || o->kind == TC_KIND_PEN || o->kind == TC_KIND_BRUSH
         || o->kind == TC_KIND_ASPIE || o->kind == TC_KIND_OTHER || o->kind == TC_KIND_SLICES) {
@@ -1188,6 +1230,10 @@ static int32_t tcRootCall(TcChart* c, void* hwnd, const wchar_t* name, int argc,
         vb6_TChart_Repaint(hwnd);
         return 1;
     }
+    /* C30-10 第十刀：文档 §5 那四条 —— 认名字、不动作，但不许静默 438。 */
+    if (_wcsicmp(name, L"ShowEditor") == 0 || _wcsicmp(name, L"ShowEditorModal") == 0) {
+        return 1;   /* 编辑器是 OCX 自带对话框，内置版不提供 */
+    }
     if (_wcsicmp(name, L"RemoveAllSeries") == 0) {
         c->nser = 0;
         vb6_TChart_Repaint(hwnd);
@@ -1317,6 +1363,9 @@ int32_t vb6_TChart_HostGetProp(void* obj, const wchar_t* name, void* outV) {
         return 1;
     }
     if (_wcsicmp(name, L"SeriesCount") == 0) { tcSetL(out, c->nser); return 1; }
+    if (_wcsicmp(name, L"Printer") == 0) { tcSetObj(out, tcCached(c, TC_KIND_PRINTER, 0)); return 1; }
+    if (_wcsicmp(name, L"Export") == 0)  { tcSetObj(out, tcCached(c, TC_KIND_EXPORT, 0)); return 1; }
+    if (_wcsicmp(name, L"Zoom") == 0)    { tcSetObj(out, tcCached(c, TC_KIND_ZOOM, 0)); return 1; }
     if (_wcsicmp(name, L"Panel") == 0) { tcSetObj(out, tcCached(c, TC_KIND_PANEL, 0)); return 1; }
     if (_wcsicmp(name, L"Header") == 0) { tcSetObj(out, tcCached(c, TC_KIND_HEADER, 0)); return 1; }
     if (_wcsicmp(name, L"Axis") == 0 || _wcsicmp(name, L"Axes") == 0) {
