@@ -120,6 +120,7 @@ add_library(vb6c3-core STATIC
     src/project/frm_parser.cpp
     src/project/frm_parser_util.cpp
     src/project/frx_reader.cpp
+    src/project/tpf0_reader.cpp   # C30-10 P2: TeeChart 设计期外观（.frx 的 OleObjectBlob = Delphi TPF0 流）
     src/project/frx_extract.cpp        # Fix 195: .frx 设计期取值 -> VB 代码 (--extract-frx)
     src/com/typelib_parser.cpp
     src/com/typelib_parser_parse.cpp
