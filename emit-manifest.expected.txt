@@ -770,6 +770,7 @@ sha256=dbe2e746ad8dbdd05eb75f31b5232e0f5d9cea4db55b3227d66e9b1ea71386ac ascii256
 sha256=b673adcd1c1d3d718aedce80a79c84ab5397b059fb89f553f9136a41fc33f6da ascii256=42e8bf992d7663aef1b369bce1538d8d173f57b60200e27cb6c4878b0e0b2919 rc=0 bytes=9519 tests/ctrlteechart/TcWallApp.vbp
 sha256=e145212681860734cd82a54a14a54d1ca8886d3dbc987bc0e62edefc393df60b ascii256=41ed373134a76d5bdc9be12f668bf801a15185c019d02e373d2448528e7c513e rc=0 bytes=9321 tests/ctrlteechart/TcArea3dApp.vbp
 sha256=f80ec03db11a157303c9a173fc3f541cb90c59bb6ec409c4e43a78361716817b ascii256=88cca838e71e3c9eff2b4159d488a8b0227a9e55cd3c2d8e8450ff01238d7dfc rc=0 bytes=9323 tests/ctrlteechart/TcPoint3dApp.vbp
+sha256=621141f069096096a0a11f17f453c1a222591084083b0b711dd2ab001768c228 ascii256=7dae82a6778de8d79fc41d5eaa550f6c9b49a46b1d8aa5254de714e8bc725080 rc=0 bytes=9040 tests/ctrlteechart/TcExportApp.vbp
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；

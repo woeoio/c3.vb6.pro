@@ -916,6 +916,11 @@ $script:GuiCases = @(
     @{ Name = "ctrlteechart_point3d_px"; Vbp = "$Tests\ctrlteechart\TcPoint3dApp.vbp"; Mode = "close";
        WindowTitle = "TChart point3d"; HoldWindowMs = 2000; MinChildWindows = 1;
        PixelAssert = @("ctrlteechart\tc_point3d_px.ps1") },
+    # C30-10 导出判据：Form_Load 里真存 JPEG + 真拷剪贴板。判据回头看两样东西——
+    # 文件要能解码且柱色还在，剪贴板要有 CF_BITMAP 且尺寸/像素对得上。
+    @{ Name = "ctrlteechart_export_px"; Vbp = "$Tests\ctrlteechart\TcExportApp.vbp"; Mode = "close";
+       WindowTitle = "TChart export"; HoldWindowMs = 2000; MinChildWindows = 1;
+       PixelAssert = @("ctrlteechart\tc_export_px.ps1") },
     # VB6 用户控件工程 (ucSegmentedControl.ctl 900 行, 5 个窗体实例 + 属性页)。
     # 参考产物是真 VB6 编出的 SegmentedControl.exe: 窗口 766x558 / 客户区 751x520,
     # 12 个可见 UC 实例的 rect 全等于 Form1.frm 的设计期 twips/15。UC 在真 VB6 里是
