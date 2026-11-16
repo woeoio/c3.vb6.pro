@@ -172,6 +172,22 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
 
   修前读数（`Panel.MarginRight/Bottom` 丢事件时）：`centerX=161.5`、图例 `x=322..383`、
   底轴 `y=225`。这三个差异就是 P3 的判红面。
+
+**内置控件侧的落地（`a3fc028a` + `169058d3`）**：同一组读数已在 401x257 的
+同几何夹具上复现（`tests/ctrlteechart/TcPxApp.vbp` + `tc_px.ps1`）：
+
+| 判据 | 真 VB6 | 内置控件（x64/x86 相同） |
+|---|---|---|
+| 标题 bbox 中心 | 155.5 | **153.5**（`(100,15)-(207,24)`，字宽随字体差 22px） |
+| 图例上边 | `y=26 x=310..371` | **`y=26 x=310..370`** |
+| 顶轴线 | `y=53..54` | **`y=53`**（n=251） |
+| 底轴线 | `y=220..221` | **`y=220`**（n=262） |
+
+做法是把“客户区减 margin”换成**分带**：header 带 0..26（标题居中于“客户区 − 图例”，
+这就是 155.5 = 图例左边/2 的来历）、上轴带 26..53、下轴带 25px + `MarginBottom`、
+图例 `right = 右 − MarginRight − 18`、宽 = 最长标题 + 24；轴线/图例框改黑色（原为 128 灰，
+像素判据挡不到），文字换 Arial 8pt（默认 GUI 字体量出 `Series0` 宽 53px，图例框装不下参照的 61px）。
+
 - `ShowEditor` / `Printer` / `Export` / `Zoom` 先落**显式空实现并登记缺口**（返回 0 / 不动作，
   不静默 438），文档 §缺口 逐条列。
 
@@ -187,6 +203,8 @@ if (!isComObject(p)) { void* d = vb6_CtlDispatchOf(p); if (d) p = d; }
 - **仍未接**：`Walls` / 3D（`Aspect.View3D` / `Perspective`）—— P1 只记录不绘制。
 - **Marks / Pen / Brush 已参与绘制**（`81148fff`）：笔色/笔宽取 `Pen`，填充取 `Brush`，
   `Marks.Visible` 逐点打值（饼图除外）；`[TCHART]` 痕迹带 `pen= brush= marks=` 可验。
+- **像素判据已落地**：`tests/ctrlteechart/tc_px.ps1` 拿真 VB6 的 401x257 结构读数判
+  内置控件（`169058d3`），读数见 §4 P3 对照表；`run_tests.ps1` 的 `ctrlteechart_px` 用例已挂上。
 - **仍未画**：饼图的扇区标签（`Marks` 对 Pie 的语义不同）、`AsPie` 的 Exploded 位移
   （值存住了但扇区还没掰开）、`Walls` / 3D。
 - `For Each s In TChart1.Series` 已通（`df4e781f`，夹具 `TC-FOREACH=3`）。
