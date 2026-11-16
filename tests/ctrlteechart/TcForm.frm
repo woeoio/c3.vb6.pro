@@ -30,6 +30,7 @@ Attribute VB_Exposed = False
 ' C30-10 夹具：内置 TChart 控件（不加载 TeeChart5.ocx）。
 ' 本刀只验「控件建得出窗口 + 画得出一遍」：绘制次数由 RTL 的 C3_TCHART_TRACE 打点。
 Private Sub Form_Load()
+    Dim s As Object, nF As Long
     Debug.Print "TC-BUILTIN-START"
     Debug.Print "TC-WIDTH=" & TChart1.Width
     ' TPF0（TcBlob.frx）里的设计期外观：两条系列 + 标题，Form_Load 之前就该在
@@ -42,6 +43,11 @@ Private Sub Form_Load()
     TChart1.AddSeries 5
     TChart1.Series(0).FillSampleValues 4
     Debug.Print "TC-SERIES=" & TChart1.SeriesCount
+    nF = 0
+    For Each s In TChart1.Series
+        nF = nF + 1
+    Next s
+    Debug.Print "TC-FOREACH=" & nF
     TChart1.Panel.Color = RGB(255, 240, 240)
     Debug.Print "TC-PANEL=" & TChart1.Panel.Color
     TChart1.Header.Caption = "内置图表"

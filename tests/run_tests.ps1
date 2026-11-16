@@ -7916,6 +7916,7 @@ if ($Category -in @("all", "run", "vbp")) {
     $tcChartNeedles = @("TC-BUILTIN-START", "TC-WIDTH=3600",
                         "TC-HEADER0LEN=21", "TC-DESIGNSER=2", "TC-SER0TYPE=1",
                         "TC-SER0COLOR=255", "TC-SER1COLOR=32768", "TC-SERIES=3",
+                        "TC-FOREACH=3",
                         "TC-PANEL=15790335", "TC-HEADERLEN=4", "TC-AXTITLELEN=2",
                         "TC-MARGINR=12")
     Test-Vbp "ctrlteechart" "$Tests\ctrlteechart\TcApp.vbp" $tcChartNeedles -ExpectExitCode 0
