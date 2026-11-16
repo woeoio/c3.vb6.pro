@@ -498,6 +498,9 @@ static void tcPaint(TcChart* c) {
                 break;
             default:   /* LINE / AREA：折线（AREA 再填充到基线） */
                 if (s->type == TC_SC_AREA) {
+                    /* C30-10 第十三刀：3D 下的面积把整块向后上平移一遭（暗色）当“带”的后闸，
+                     * 再画前闸 —— 前闸压后闸，看起来就是一条有厚度的带。 */
+                    int d = c->view3D ? 12 : 0;
                     POINT* poly = (POINT*)malloc(sizeof(POINT) * (s->n + 2));
                     if (poly) {
                         for (k2 = 0; k2 < s->n; k2++) {
@@ -507,6 +510,17 @@ static void tcPaint(TcChart* c) {
                         }
                         poly[s->n].x = poly[s->n - 1].x; poly[s->n].y = y1;
                         poly[s->n + 1].x = poly[0].x;    poly[s->n + 1].y = y1;
+                        if (d > 0) {
+                            HBRUSH rb = CreateSolidBrush(tcShade(fcol, -45));
+                            HGDIOBJ rbOld = SelectObject(dc, rb);
+                            HGDIOBJ rpOld = SelectObject(dc, GetStockObject(NULL_PEN));
+                            for (k2 = 0; k2 <= s->n + 1; k2++) { poly[k2].x += d; poly[k2].y -= d; }
+                            Polygon(dc, poly, s->n + 2);
+                            for (k2 = 0; k2 <= s->n + 1; k2++) { poly[k2].x -= d; poly[k2].y += d; }
+                            SelectObject(dc, rpOld);
+                            SelectObject(dc, rbOld);
+                            DeleteObject(rb);
+                        }
                         Polygon(dc, poly, s->n + 2);
                         free(poly);
                     }
