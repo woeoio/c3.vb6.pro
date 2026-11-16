@@ -354,6 +354,27 @@ static void tcPaint(TcChart* c) {
                 }
                 ang += sweep;
             }
+            /* C30-10 第九刀：饼图的 Marks 是**扇区标签**（不是逐点数值）。
+             * 位置取各块中线 0.65r 处，文字用黑色（用系列色会在同色扇区上看不见）。 */
+            if (s->marksVisible) {
+                double a = -90.0 + s->pieRotation;
+                SetBkMode(dc, TRANSPARENT);
+                SetTextColor(dc, RGB(0, 0, 0));
+                for (k = 0; k < s->n; k++) {
+                    double sweep = (s->pt[k].y > 0 ? s->pt[k].y : 0) / sum * 360.0;
+                    double amid  = (a + sweep / 2.0) * 3.14159265358979323846 / 180.0;
+                    int exp = (k < 64) ? s->sliceExplode[k] : 0;
+                    wchar_t lb[32];
+                    int lx = (x0 + x1) / 2 + (int)((exp + r * 0.65) * cos(amid));
+                    int ly = (y0 + y1) / 2 + (int)((exp + r * 0.65) * sin(amid));
+                    int lw;
+                    wsprintfW(lb, L"%d", (int)(s->pt[k].y + (s->pt[k].y >= 0 ? 0.5 : -0.5)));
+                    lw = (int)wcslen(lb) * 7;
+                    TextOutW(dc, lx - lw / 2, ly - 6, lb, (int)wcslen(lb));
+                    marksDrawn++;
+                    a += sweep;
+                }
+            }
         } else if (s->n > 0) {
             int bw, gap, k2;
             switch (s->type) {
