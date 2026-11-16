@@ -624,3 +624,37 @@ g14/g16 都不在装箱站，各自属于下层（算术全链 / 数组元素类
 同层还剩两格（都不在装箱站）：`Array(1 + 1)` 元素（算术全链）、`Array(Array(1)(2))(0)` 的索引结果档
 （数组元素类型表）。
 
+### 11.16 第三十七刀：`Array()` 的整只 Variant 实参保真（修的是**丢值**，不只是档）
+
+继续同层往下量（`W7.vbs` ↔ `W7.bas`，11 行）挖出的不是「档不对」而是**值真的丢了**：
+
+| 读数 | 写法 | oracle(cscript) | 修前 | 修后 |
+| --- | --- | --- | --- | --- |
+| h05 | `Array(vi)`，`vi` 是装 Integer 的 Variant | 2/Integer | 3 | **2** |
+| h06 | `Array(vs)`，`vs` 是装 `"x"` 的 Variant | 8/String | **3/Long（值变 0）** | **8/String** |
+| h07 | `Array(vd)`，装 1.5 | 5/Double | 3 | **5** |
+| h08 | `Array(vl)`，装 70000 | 3/Long | 3 | 3 ✔ |
+| h04 | `Array(Array(1)(0))` | 2/Integer | 3 | **2** |
+| h01/h02 | `1 + 1` / `32767 + 0` | 2/Integer | 3 | 3 ✗ 算术全链留白 |
+
+**根因**：`argIsVariant` 那一支一律 `vb6_ArraySetLong(…, vb6_VariantToLong(expr))`，
+靠一个 `looksLikeBSTR` 猜字符串；猜不中就把整只 Variant 压成 int32 —— 装字符串的那格
+连值都没了。
+
+**改法**：把「实参是不是整只 Variant」这条问句**提到出口之前**，命中时装
+`variantSetter = argExpr`，与第三十六刀的 Integer 档共用同一条 `ArraySetVariant` 发射行
+（哨兵 R2 仍 1 处）；下游那个 `else if (argIsVariant)` 臂整段删掉。`ArraySetVariant` 按值收
+`vb6_VARIANT`、内部 VariantCopy ⇒ 子类型与 BSTR 引用计数都对。
+
+**读数**：`W7.bas` 11 行里 h04/h05/h06/h07 四项转正，h08/h09/h10 不动，h01/h02 仍留白；
+`W6.bas` 里只 g16（嵌在 Array 里的索引）从 3 转 2、其余 16 行未动；`W4`/`W3`/`W5` 三份逐字未变；
+`Probe.bas` 15 行与 `HexProbe.bas` 17 行未变；`dict_native` PASS 59；R2 哨兵 PASS。
+
+**发码**：CI run `43953077180`（head `a9659cf0`）**22/22 全绿**，`Emit manifest` 也绿 ——
+748 份输入零变更（语料里没有 `Array(<Variant 表达式>)` 这种站点；有这一形的代码本来就很少）。
+备查：本刀做了 k36/k37 两台二进制（`.temp/C3_k36.exe` / `C3_k37.exe`，用 W7 的 h05/h06 钉住
+到底是哪一台），将来真需要 A/B 时可直接拿。
+
+同层从现在起**只剩一格**：`Array(1 + 1)` 这类「Integer 参与算术后进槽」——它不在装箱站，
+要的是「Integer 算术升格规则」（`+` 留 Integer、`*` 升 Long、溢出错误 6）整层，另排期。
+
