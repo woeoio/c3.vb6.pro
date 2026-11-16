@@ -7913,7 +7913,9 @@ if ($Category -in @("all", "run", "vbp")) {
     # `TChart1.AddSeries 5` 经通用晚绑定链（ComGetObjectProp → 方法对象 → Invoke）
     # 真落到图表状态上的读数（SeriesCount 读回 1）。
     # ⚠ 两档架构都跑：OCX 只有 32 位，x64 这条是内置实现独有的一面（宿主路线下链不上）。
-    $tcChartNeedles = @("TC-BUILTIN-START", "TC-WIDTH=3600", "TC-SERIES=1",
+    $tcChartNeedles = @("TC-BUILTIN-START", "TC-WIDTH=3600",
+                        "TC-HEADER0LEN=21", "TC-DESIGNSER=2", "TC-SER0TYPE=1",
+                        "TC-SER0COLOR=255", "TC-SER1COLOR=32768", "TC-SERIES=3",
                         "TC-PANEL=15790335", "TC-HEADERLEN=4", "TC-AXTITLELEN=2",
                         "TC-MARGINR=12")
     Test-Vbp "ctrlteechart" "$Tests\ctrlteechart\TcApp.vbp" $tcChartNeedles -ExpectExitCode 0

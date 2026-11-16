@@ -11,6 +11,7 @@ Begin VB.Form Form1
    Begin TeeChart.TChart TChart1 
       Height          =   2400
       Left            =   120
+      OleObjectBlob   =   "TcBlob.frx":0000
       TabIndex        =   0
       Top             =   120
       Width           =   3600
@@ -31,6 +32,13 @@ Attribute VB_Exposed = False
 Private Sub Form_Load()
     Debug.Print "TC-BUILTIN-START"
     Debug.Print "TC-WIDTH=" & TChart1.Width
+    ' TPF0（TcBlob.frx）里的设计期外观：两条系列 + 标题，Form_Load 之前就该在
+    Debug.Print "TC-HEADER0=" & TChart1.Header.Caption
+    Debug.Print "TC-HEADER0LEN=" & Len(TChart1.Header.Caption)
+    Debug.Print "TC-DESIGNSER=" & TChart1.SeriesCount
+    Debug.Print "TC-SER0TYPE=" & TChart1.Series(0).SeriesType
+    Debug.Print "TC-SER0COLOR=" & TChart1.Series(0).Color
+    Debug.Print "TC-SER1COLOR=" & TChart1.Series(1).Color
     TChart1.AddSeries 5
     TChart1.Series(0).FillSampleValues 4
     Debug.Print "TC-SERIES=" & TChart1.SeriesCount
