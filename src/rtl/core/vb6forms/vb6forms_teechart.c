@@ -407,9 +407,12 @@ static void tcPaint(TcChart* c) {
                 /* C30-10 第十一刀：View3D 时按 12px 深度画出顶面 + 右侧面（先画背面，
                  * 再把正面矩形压在上面）。深度的选择定成常量，判据才能拿它当尺子量。 */
                 int depth = c->view3D ? 12 : 0;
-                /* 值映射的高度要先把深度让出来：不然最高的柱子的顶面会伸到
-                 * 上轴线外面去（实测 3D 打开后轴线行点数 251→239，就是被柱顶盖掉的）。 */
-                int bh = (y1 - y0) - depth;
+                /* 透视：越靠近绘图区左侧（远端）深度越大，右侧（近端）越小，
+                 * 整幅形成 16→8 的梯度（差 8px，判据量得出来）。
+                 * 值映射必须按**最大**深度让位，否则最左边那根柱子的顶面又会
+                 * 伸出上轴线（上一刀刚修过同一个毛病）。 */
+                int maxDepth = depth + ((c->view3D && c->perspective) ? 6 : 0);
+                int bh = (y1 - y0) - maxDepth;
                 if (bh < 8) bh = 8;
                 bw  = (s->n > 0) ? ((x1 - x0) / (s->n * 2)) : 8;
                 gap = bw;
@@ -417,6 +420,13 @@ static void tcPaint(TcChart* c) {
                 for (k2 = 0; k2 < s->n; k2++) {
                     int bx = x0 + gap / 2 + k2 * (bw + gap);
                     int by = y1 - (int)((s->pt[k2].y - vmin) / (vmax - vmin) * bh);
+                    if (depth > 0 && c->perspective) {
+                        int cxm = (x0 + x1) / 2;
+                        double t = (double)(bx + bw / 2 - cxm) / ((x1 - x0) / 2.0);
+                        depth = 12 - (int)(6.0 * t);   /* 左端约 16、右端约 9 */
+                        if (depth < 4) depth = 4;
+                        if (depth > 20) depth = 20;
+                    }
                     if (depth > 0) {
                         POINT top[4], side[4];
                         HBRUSH tb = CreateSolidBrush(tcShade(fcol, 55));
