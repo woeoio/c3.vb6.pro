@@ -619,6 +619,24 @@ void CCodeGen::visit(ConstDecl& node) {
                 knownVariantVars_.insert(lower);
             }
         }
+        // C30-10 第三十四刀: 「这一枚 Const 在 VB6 里是 Integer 档」那一问 —— 只喂装箱站。
+        // 判据只认两种能当场坐实的形: ① 写了 `As Integer`; ② 无 As 类型、初始化器本身
+        // 就是 VB6 的 Integer（小十进制字面量 / `%` 后缀 / 位宽≤ 0xFFFF 的无后缀 `&H`，
+        // 均交给 isNarrowIntExpr 那一位主人答）。算式初始化器（`Const K = 1 + 1`）不在此列:
+        // VB6 会常量折叠后取型，而 C3 这边是发码，折叠归 tryEvalConstInt（另一种间），
+        // 拉进来就把折叠的档一起改了（留白，见 ai/039 §11.13）。
+        {
+            bool narrowConst = false;
+            if (node.asType) {
+                narrowConst = (resolveArrayElemType(node.asType.get()) == Vb6Type::Integer);
+            } else if (node.value) {
+                narrowConst = isNarrowIntExpr(node.value.get());
+            }
+            if (narrowConst) {
+                knownIntConsts_.insert(lower);
+                moduleIntConsts_.insert(lower);   // 过程级那张会 clear, 模块级留着回灌
+            }
+        }
     }
 
     if (node.value) {

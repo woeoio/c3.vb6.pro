@@ -713,6 +713,21 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                 knownLocalVars_.insert(lower);
             }
+            // C30-10 第三十四刀: 局部 Const 的 Integer 档 —— 口径与 cgen_decl.cpp 的模块级
+            // 那一支同源 (同一枚 isNarrowIntExpr 主人，不在这里重算)。
+            {
+                bool narrowConstLocal = false;
+                if (con.asType) {
+                    narrowConstLocal = (resolveArrayElemType(con.asType.get()) == Vb6Type::Integer);
+                } else if (con.value) {
+                    narrowConstLocal = isNarrowIntExpr(con.value.get());
+                }
+                if (narrowConstLocal) {
+                    std::string lower = con.name;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    knownIntConsts_.insert(lower);
+                }
+            }
             // Fix 049: Register local constant to type-specific known*Vars_ sets.
             // Same logic as Dim (cgen_decl.cpp:749-767). Without this, inferExprType
             // falls back to Variant for unknown identifiers, causing wrapToBSTR to

@@ -3625,8 +3625,16 @@ static bool vb6IntConstantValue(const Expr* e, int32_t* outVal) {
         return false;
     // 只认纯十进制书写: rawText 里除数字与空白不许有别的东西 (进制前缀 &H/&O、类型后缀
     // %/&、小数点、指数全在这里被挡下)。
+    // C30-10 第三十四刀: `3%` 是 VB6 的**显式 Integer** 字面量 (账 #195 已把它认成
+    // IntegerLiteral), 但文本带着 `%`, 上面那道闸把它挡在外面 ⇒ `VarType(3%)` 答 3。
+    // 现在剥掉**一个**尾随 `%` 再走同一道闸; `&`/`^` 仍挡在外面 (Long / LongPtr)。
     if (lit.rawText.empty()) return false;
-    for (char ch : lit.rawText) {
+    std::string digits = lit.rawText;
+    while (!digits.empty() && std::isspace(static_cast<unsigned char>(digits.back())))
+        digits.pop_back();
+    if (!digits.empty() && digits.back() == '%') digits.pop_back();
+    if (digits.empty()) return false;
+    for (char ch : digits) {
         if (std::isspace(static_cast<unsigned char>(ch))) continue;
         if (ch < '0' || ch > '9') return false;
     }
@@ -3656,7 +3664,11 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
     }
     if (e->kind == ASTNodeKind::IdentifierExpr)
         return knownIntVars_.count(
-                   Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name)) > 0;
+                   Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name)) > 0
+               // C30-10 第三十四刀: 用户 `Const` 的 Integer 档。两张表只在这里被问 ——
+               // 没有进 knownIntVars_, 所以 inferExprType / 收窄检查 / 算术那几层一字未动。
+               || knownIntConsts_.count(
+                      Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name)) > 0;
     return false;
 }
 

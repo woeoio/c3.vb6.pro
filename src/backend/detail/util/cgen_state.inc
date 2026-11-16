@@ -196,6 +196,16 @@
     // **并存**, 消费点先判它, 以免既有整数路径失去变量。
     std::unordered_set<std::string> knownIntVars_;
 
+    // C30-10 第三十四刀: 用户 `Const` 的 Integer 档名单。VB6 里 `Const K = 1` / `Const K = &HFFFF`
+    // / `Const K = 3%` 交出去的是 Integer(VT_I2)，而 C3 把常量一律登记进 knownLongVars_
+    // （它同时还喂 inferExprType）⇒ 装箱答 Long（探针 W2 的 w01/w03：oracle 2，C3 3）。
+    // 这两张表**只喂装箱站** (isNarrowIntExpr)，不进 knownIntVars_ / inferExprType ——
+    // 那会连「16 位算术 + 溢出检查」那一层一起打开（算术全链，另排期）。
+    // 分两级的原因同 knownNewVars_/moduleNewVars_：过程入口会把过程级表清空，
+    // 模块级那一份署名留在模块作用域里回灌。
+    std::unordered_set<std::string> knownIntConsts_;
+    std::unordered_set<std::string> moduleIntConsts_;
+
     // ai/032: 无符号/窄整型 (SByte/UInteger/ULong/ULongLong) 的局部/形参/返回槽专属登记表
     // (小写名 → 真 Vb6Type)。口径同上面 knownByteVars_ / knownBoolVars_:
     // 这四档的 C 型 (int8_t / uint16_t / uint32_t / uint64_t) 都不在既有的
