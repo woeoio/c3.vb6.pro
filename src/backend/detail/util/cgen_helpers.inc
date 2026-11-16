@@ -166,7 +166,10 @@
     // 逐字节回退到 vb6_VariantFromValue(原样) —— 非布尔路径的生成码不变.
     // expr 允许为 nullptr (该位置没有 AST 实参, 如命名实参) → 按原样装箱.
     std::string boxToVariant(Expr* expr, const std::string& cExpr) const;
-
+    // C30-10 第三十二刀: 「这枚节点在 VB6 里是 Integer 档 (VarType 2)」——与装箱权威
+    // boxToVariant 同一份判据 (字面量 / `As Integer` 变量两形)。两位调用者:
+    // wrapVariantValue 的 `case Long` (它不能把这档抢去装 VT_I4) 与 boxToVariant 自己。
+    bool isNarrowIntExpr(const Expr* e) const;
     // VB6标识符 → C全局函数名
     // 本模块: vb6_<ProcName>
     // 跨模块(外部): vb6_<ModuleName>_<ProcName>

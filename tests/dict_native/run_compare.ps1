@@ -31,13 +31,16 @@ $Vb6Sem = @{
 #   d62 / d104：`Nothing` 进 Variant 参数时 C3 目前包成 VT_EMPTY（VB6 是 VT_DISPATCH NULL），
 #                于是 d.Add Nothing 与 d.Add Empty 撞键。该行真组件读数为 Nothing 独立成键。
 #   （`d(k) = v` 那条默认成员带参赋值也是 C3 缺口，夹具改用 d.Item(k) = v，不列在这里。）
-$C3Gap = @('d121')
+$C3Gap = @()
 #   第二十九刀把下面四行修好了，从缺口名单里移除（判据回填）：
 #     d62 / d104  Nothing 以前被包成 VT_I4 0（与 Empty 撞键）—— 现在 vb6_ComPackNothing ⇒ VT_DISPATCH NULL
 #     d102 / d123  Currency 实参以前被 ComPackInt 截成整数 —— 现在 vb6_ComPackCur ⇒ VT_CY
-#   仍剩 d121：VarType(CCur(x)) 在 C3 里答 5(R8) 而真组件是 6(CY)、整数字面量答 3(I4) 而不是 2(I2)。
-#   这一格是**标量类型宽度**那一层的事（C3 用 double 表示 Currency、字面量默认装箱成 I4），
-#   与 Dictionary 行为无关，单列一笔（ai/039 §11.2）。
+#   第三十二刀把最后一格 d121 也收回来了（整张名单现在是空的，闸门仍在，以后再出缺口往这里加）：
+#     VarType(CCur(x)) 以前答 5(R8)、整数字面量答 3(I4) —— 现在 6(CY) / 2(I2)，与真组件同读数。
+#     口径 = 装箱站按 **VB6 类型** 选档（Currency 走 vb6_VariantCur、Integer 档走
+#     vb6_VariantInt），算术/比较/格式化仍吃 C 侧的 double/int32（不引入 16 位算术）。
+#     仍留白：&H 进制字面量的宽度（&HFFFF 真组件答 Integer，C3 仍答 Long）与
+#     **Variant 算术结果**的宽度（v=1: v=v+1 真组件仍 Integer，C3 答 Long）—— 台账另记。
 
 # 1) 基准：cscript 跑真组件
 if (-not (Get-Command cscript -ErrorAction SilentlyContinue)) {

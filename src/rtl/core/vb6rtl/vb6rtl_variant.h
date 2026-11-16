@@ -197,6 +197,21 @@ static inline vb6_VARIANT vb6_VariantDate(double val) {
     v.vt = vb6_vtDate; v.dblVal = val; return v;   // 与 vtDate 的既有约定同: 序列号放 dblVal
 }
 
+// C30-10 第三十二刀: Currency 的 Variant 装箱 (VT_CY —— VarType 6 / TypeName "Currency")。
+// C3 用 double 承载 Currency 的**值** (vb6_CCur / vb6_CCurBSTR 都如此, 见 vb6rtl_misc.c),
+// 于是 `v = CCur(1.5)` 以前落 _Generic 的 `double:` 档 ⇒ VT_R8 (VarType 5 / "Double";
+// 夹具 tests/dict_native 的 d121: ccur=5, 真组件 6)。这一档按 VB6 的 10000 倍定点
+// 换回 VT_CY —— 口径与 COM 实参那一站 (vb6com_pack.c 的 vb6_ComPackCur) 同一份,
+// 读取端 (ToDouble/ToLong/CStr/Format/比较/COM 包与拆) 本来就有 vtCurrency 臂。
+// 不用 llround 是为了本头不引入 <math.h>: 生成码到处 include 它。
+static inline vb6_VARIANT vb6_VariantCur(double val) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    const double scaled = val * 10000.0;
+    v.vt = vb6_vtCurrency;
+    v.cyVal = (int64_t)(scaled < 0 ? scaled - 0.5 : scaled + 0.5);
+    return v;
+}
+
 static inline vb6_VARIANT vb6_VariantString(BSTR val) {
     vb6_VARIANT v; memset(&v, 0, sizeof(v));
     v.vt = vb6_vtBSTR; v.bstrVal = val; return v;

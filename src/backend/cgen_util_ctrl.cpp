@@ -3594,6 +3594,60 @@ bool CCodeGen::hoistOwnedTempArgs(std::string& argList, const std::string& calle
     }
     return true;
 }
+// C30-10 第三十二刀: **常整数**的 VB6 类型宽度 (字面量类型, 不是常量折叠)。
+// VB6 的整数字面量不是「一律 Long」: 无后缀十进制、值落在 Integer 范围 ⇒ Integer
+// (VarType 2 / TypeName "Integer")。C3 的 inferExprType 对字面量一律答 Long —— 那是
+// C 侧 int32 的口径 (收窄检查要用), 于是装箱站把 `1` 装成 VT_I4 (夹具 tests/dict_native
+// 的 d121: int=3, 真组件 2)。这里只回答「这枚节点是不是一枚**字面量**整数、值是多少」,
+// 分档仍由装箱站那一处给。
+// ⚠ 刻意**不**用 tryEvalConstInt: 那一枚是常量折叠 (它把 `2 ^ 10` 也折成 1024, 而 VB6
+//   的 `^` 恒返 Double), 拿它当字面量类型会把幂/位运算的档一起改掉。
+// ⚠ 也不进 inferExprType: 那张表同时喂算术/收窄/格式化, 改它就是把「16 位算术 +
+//   溢出检查」那一整层一起打开 (那是「算术全链」, 另排期)。
+// 不认的写法 (维持现状, 台账另记): &H/&O 进制字面量 (VBScript 与 VB6 的符号规则不同,
+//   &H8000 两台读数就不一样)、带类型后缀的写法 (%/&/^ 等)。
+static bool vb6IntConstantValue(const Expr* e, int32_t* outVal) {
+    if (!e) return false;
+    if (e->kind == ASTNodeKind::UnaryExpr) {
+        auto& u = static_cast<const UnaryExpr&>(*e);
+        if (u.op != UnaryOp::Negate || !u.operand) return false;
+        int32_t inner = 0;
+        if (!vb6IntConstantValue(u.operand.get(), &inner)) return false;
+        if (outVal) *outVal = -inner;
+        return true;
+    }
+    if (e->kind != ASTNodeKind::LiteralExpr) return false;
+    auto& lit = static_cast<const LiteralExpr&>(*e);
+    if (lit.literalKind != LiteralKind::Integer && lit.literalKind != LiteralKind::Long)
+        return false;
+    // 只认纯十进制书写: rawText 里除数字与空白不许有别的东西 (进制前缀 &H/&O、类型后缀
+    // %/&、小数点、指数全在这里被挡下)。
+    if (lit.rawText.empty()) return false;
+    for (char ch : lit.rawText) {
+        if (std::isspace(static_cast<unsigned char>(ch))) continue;
+        if (ch < '0' || ch > '9') return false;
+    }
+    const int64_t v = (lit.literalKind == LiteralKind::Integer)
+                          ? static_cast<int64_t>(lit.intValue) : lit.longValue;
+    if (v < -2147483648LL || v > 2147483647LL) return false;
+    if (outVal) *outVal = static_cast<int32_t>(v);
+    return true;
+}
+
+// C30-10 第三十二刀: 「这枚节点在 VB6 里是 **Integer** 档 (VarType 2)、而 inferExprType 答
+// Long」的那两形, 收成一句判据 —— 字面量那一半见上面 vb6IntConstantValue 的话;
+// `As Integer` 那一半靠 knownIntVars_ : 符号表把 Integer 记成 Long (C 侧另发 int16_t),
+// 真宽度在那张表里 (inferExprType 也从它答 Integer, 见 cgen_util_type.cpp)。
+bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
+    if (!e) return false;
+    int32_t v = 0;
+    if (vb6IntConstantValue(e, &v)) return v >= -32768 && v <= 32767;
+    if (e->kind == ASTNodeKind::IdentifierExpr)
+        return knownIntVars_.count(
+                   Symbol::toLower(static_cast<const IdentifierExpr&>(*e).name)) > 0;
+    return false;
+}
+
 std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cExpr) const {
     if (!valueNode) return "vb6_VariantEmpty()";
     
@@ -3712,7 +3766,14 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         switch (vtype) {
             case Vb6Type::String:    return "vb6_VariantString(" + cExpr + ")";
             case Vb6Type::Long:
-            case Vb6Type::Integer:   return "vb6_VariantLong(" + cExpr + ")";
+                // C30-10 第三十二刀: 这档里有两形 VB6 答的是 **Integer** (字面量按值取型;
+                // `As Integer` 变量符号表记成 Long), 不在这一站抢装 VT_I4 —— 交给末尾那个
+                // 唯一权威 boxToVariant (判据 = isNarrowIntExpr, 两位共用一处)。
+                if (isNarrowIntExpr(static_cast<const Expr*>(valueNode))) break;
+                return "vb6_VariantLong(" + cExpr + ")";
+            // `Dim i As Integer` / CInt(...) 这一族以前也装成 VT_I4 (同一行 d121 的
+            // int=3)。VB6 对 Integer 就是 VT_I2 —— 显式收窄, 不靠 _Generic 猜 short。
+            case Vb6Type::Integer:   return "vb6_VariantInt((int16_t)(" + cExpr + "))";
             case Vb6Type::Double:    return "vb6_VariantDouble(" + cExpr + ")";
             default: break;
         }
@@ -3813,6 +3874,12 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // 已经是 VARIANT 的表达式交给 _Generic 的 vb6_VariantIdentity 档恒等直传,
     // 绝不再按 VB 类型强装 (否则就是上面那条双装)。
     if (cExprIsVariantCarrier(cExpr)) return "vb6_VariantFromValue(" + cExpr + ")";
+    // C30-10 第三十二刀 格①: 常整数 / `As Integer` 变量按 VB6 的**Integer 档**装箱。
+    // inferExprType 对 `1` 与 `As Integer` 变量都答 Long (C 侧 int32 的口径), 落 _Generic
+    // 的 `int:` 档 ⇒ VT_I4 (VarType 3 / TypeName "Long"); VB6 答 Integer (夹具
+    // tests/dict_native d121 的 int=3, 真值 2)。判据与口径见 isNarrowIntExpr 那段话。
+    if (isNarrowIntExpr(expr))
+        return "vb6_VariantInt((int16_t)(" + cExpr + "))";
     switch (inferExprType(*expr)) {
     case Vb6Type::Boolean:
         // 形参是 int16_t: 显式收窄, 兼容 _Bool/int 两种 C 侧布尔表示.
@@ -3823,6 +3890,11 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
         return "vb6_VariantSingle((float)(" + cExpr + "))";
     case Vb6Type::Date:
         return "vb6_VariantDate(" + cExpr + ")";
+    // C30-10 第三十二刀 格②: Currency (C3 用 double 承载值, 见 vb6rtl_misc.c 的
+    // vb6_CCur) 以前落 _Generic 的 `double:` 档 ⇒ VT_R8 (VarType 5 / "Double"),
+    // VB6 是 VT_CY (6 / "Currency")。出口是 vb6_VariantCur (10000 倍定点)。
+    case Vb6Type::Currency:
+        return "vb6_VariantCur(" + cExpr + ")";
     /* ai/032 §6.9 收口: C3 扩展的无符号/小整型族 (SByte 8 / UInteger 16 / ULong 32 /
      * ULongLong 64 —— `U<x>` 恒等于「<x> 的无符号版」, 见 types.hpp:41-49)。
      *   以前这四档**没有臂**, 全落 default -> vb6_VariantFromValue, 也就是交给
