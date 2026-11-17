@@ -1221,3 +1221,43 @@ oracle 说槽、`ChkLong` 当标量吃）。
 ① 探针 S 段 16/16；② `VbQRCodegen` / `VBFlexGridDemo` / `pcline` 本机 RC=0；
 ③ bas 181 例 + syntax 227 + smoke 1/1 全绿，且发码形状变动逐一登记。
 
+### 11.30 第五十五刀（落地）：Choose/Switch 一律变体三目 + 属性 Let 值站取数
+
+按 §11.29 记的入场条件做完了。三处改动：
+
+1. **发码**（`cgen_expr_call_builtin_pre.inc`）：删掉「同档走标量三目」那一半，
+   `Choose`/`Switch` **两形都发整只 `vb6_VARIANT`** —— 逐支 `wrapVariantValue` 装箱、
+   越界/无匹配交 `vb6_VariantNull()`。S07/S08/S15 那种「同一支里既要原样又要 Null」
+   只有整只变体表达得出来。
+2. **问句与发码同口径**：`isDefinitelyVariantExpr` 的 `isPolymorphicBuiltin` 只留 `iif`/`if`；
+   账 §56.41「限定形态 `VBA.Choose`/`VBA.Switch` 答不是槽」那条豁免**撤销**；
+   `isNarrowIntExpr` 删 choose/switch 两臂（子类型是运行期的，答窄档会把 struct 塞进
+   `vb6_VariantInt((int16_t)(<整只 VARIANT>))`）。
+3. **消费面补一站**（`src/backend/detail/stmt/cgen_assign_prop_write.inc`）：属性 Let/Set 写方向的
+   **值形参**若落在数值档、而右值是整只 VARIANT，按形参档取数 —— 整型档 `vb6_VariantToLong`、
+   浮点档 `vb6_VariantToDouble`，位置放在那条 ByRef 复合字面量取址**之前**（先取数、再收窄取址）。
+
+定位过程留两条账，省下一次重犯：
+
+  - 红点真身是**属性写站**，不是调用实参站。上一刀试过的两种「实参站兜底」都实测失败：
+    放在 Fix 431 之后 → `vb6_VariantToLong(vb6_VariantToLong(x))` 双套；
+    放在文件末尾 → 反向 `int32_t → vb6_VARIANT` 的 C2440（`Common.c(183/1632/1633)` 等）。
+  - 表里那一发的名字是 `prop_let_` + 成员名，但**文件路径不是** `src/backend/assign/…`
+    （猜错一轮），真实路径 `src/backend/detail/stmt/cgen_assign_prop_write.inc`，
+    出口就是 `funcName + "(" + objExpr + ", " + valExpr + ");  /* Property Let */"` 那一行。
+
+工具面有一条必须记住：**Ninja 不跟踪 `.inc`**。改完 `.inc` 要 touch 真正 `#include` 它的 `.cpp`；
+这一回的宿主是 `src/backend/stmt/cgen_assign.cpp`（不是 `cgen_stmt.cpp`，touch 错了就是白跑一轮，
+实测代价一整轮编译 + 一轮语料）。
+
+验收（本轮按用户新规：本机只跑小量，全量交 GA）：
+  - 探针 U 的 S 段 **16/16** 全对（S07/S08/S15 都是 1/Null）；
+  - `VbQRCodegen` / `VBFlexGridDemo` / `pcline` 本机 **RC=0**（FG 修前是
+    `MainForm.c(970/975)` 的两条 C2440：`vb6_VBFlexGrid_prop_let_Sort(..., <整只 VARIANT>)`）；
+  - smoke 1/1 PASS；变体七份普查全 PASS（`variant_i8_coverage` / `variant_slot_store` /
+    `prop_write_value_slot` / `variant_unbox` / `variant_cmp_boxing` /
+    `variant_to_string_authority` / `manifest_coverage`）。
+
+发码形状必定动了（两形都变变体三目 + 属性值站取数），`emit-manifest.expected.txt` 待本轮
+分支 PR 的 CI 清单回来后 `-Bless` 登记；门也以同一 PR 的 22 作业为准。
+
