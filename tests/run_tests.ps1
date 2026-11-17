@@ -4960,9 +4960,12 @@ if ($Category -in @("all", "run", "bas")) {
     # VT_BOOL (真工程里 MainForm 的 Render(hdc Or 0, ...) 就是这一条)。两头钉：数值档按数答
     # (BF-or/xor/and/not/eqv/imp/byte*/int-not/dblnot)，两侧都是 Boolean 时**仍**是 Boolean
     # (BF-bool-or / BF-bool-and / BF-boolbox)，条件位照旧当真假用 (BF-cond) —— 拦反向错。
+    # C30-10 第五十三刀: `BF-byte-not` 从 -86 改成 **170** —— `Not <Byte>` 在真 VB6 里是
+    # **Byte 档的 8 位取反**（采集器 U 的 N03 `Not CByte(200)` = 17/Byte 55；200=0xC8 取反
+    # 0x37=55），不是 Integer 档的 -86。by1=85(0x55) ⇒ 0xAA = 170。
     $bitsNeedles = @("BF-or-lit=51", "BF-or-var=51", "BF-xor=17", "BF-and=34", "BF-not=-6",
         "BF-int-or=3", "BF-mixed=-1", "BF-cstr=51", "BF-left=51", "BF-byte-and=80",
-        "BF-byte-or=95", "BF-byte-not=-86", "BF-int-not=-2", "BF-dblnot=-3", "BF-eqv=-7",
+        "BF-byte-or=95", "BF-byte-not=170", "BF-int-not=-2", "BF-dblnot=-3", "BF-eqv=-7",
         "BF-imp=-5", "BF-assigned=51", "BF-bool-or=True", "BF-bool-and=False", "BF-boolbox=False",
         "BF-cond=hit", "BF-boolcond=miss", "BF-sum=85", "BF-DONE")
     Add-BasTest "test_bitops" "$Tests\test_bitops.bas" $bitsNeedles
