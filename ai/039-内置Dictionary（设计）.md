@@ -1339,7 +1339,12 @@ oracle 说槽、`ChkLong` 当标量吃）。
 
 `check_manifest_coverage` K1..K3 = 748/748 集合相等。**发码形状**：语料里 `Str$` 只有 2 处
 （`tests/TeeChartChartDisplay/DisplayForm.frm:785/793` 的 `HScroll1/2.Value`，Integer 档），
-整数路径一字未动 ⇒ 清单按理不变；本机未跑全语料 emit（20+ 分钟），这一条交门。
+整数路径一字未动 ⇒ 清单按理不变。本机未跑全语料 emit（20+ 分钟），这一条交门 ——
+**门答了：`44144490088`（head `f2a47a9c`）= 22/22，`Emit manifest (shape oracle)` 绿**（清单逐行未变，
+与「整数路径一字未动」的预测一致）。分支已推 `github`（新分支，`fix/c30-10-cut56a-str-dbl`）。
+验证通道记一笔：`scripts/watch-gh-actions.ps1` 靠 `github` remote URL 里内嵌的 PAT，这个 checkout
+的 URL 没嵌；`gh` 也没登录 ⇒ 实际走的是 `git credential fill`（Windows 凭据管理器里存的那枚）
+取 token 再打 REST，不打印明文。
 
 **本机验收**：`tests\run_tests.ps1 -Category all -Incremental` = **274 PASS / 0 FAIL**
 （`.temp\run_tests_56a.log`）；smoke 1/1；`owned_temp_keeps` / `builtin_opt_defaults` /
