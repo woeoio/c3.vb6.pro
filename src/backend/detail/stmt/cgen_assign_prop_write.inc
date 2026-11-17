@@ -290,6 +290,27 @@
                                  `ucGIF1.gifMinFrameDelay = Val(cboMinDelay.Text)`
                                (Property Let gifMinFrameDelay(newDelay As Integer))
                                ⇒ C2440 double → int16_t*。 */
+                            /* C30-10 第五十五刀: 写方向**数值形参** ← 整只 VARIANT 值。
+                               `Choose`/`Switch` 现在一律交 `vb6_VARIANT`（选中支原样 + 越界 Null，
+                               真 VB6 采集器 U 的 S 段 16 行），裸交就是 C2440 —— 语料实测：
+                               `VBFlexGrid1.Sort = VBA.Choose(...)`（MainForm.frm 567/571,
+                               `Property Let Sort(ByVal Col As Long)`）。
+                               取数口径沿用调用实参那两站（Fix 029 ByVal / 090d ByRef）的**同一个
+                               词**：整型档 `vb6_VariantToLong`、浮点档 `vb6_VariantToDouble` ——
+                               不新造名字（下游靠文本前缀认「已经取过值」）。
+                               ⚠ 必须放在下面那条 ByRef 复合字面量**之前**：先取数、再按形参档
+                               收窄取址，否则就是 `(int32_t)(<整只 VARIANT>)`。 */
+                            if (isVariantSlot(valExpr, node.value.get())) {
+                                const std::string ctW55 = mapType(lastP091n.type);
+                                if (ctW55 == "int8_t" || ctW55 == "uint8_t" || ctW55 == "int16_t"
+                                    || ctW55 == "uint16_t" || ctW55 == "int32_t"
+                                    || ctW55 == "uint32_t" || ctW55 == "int64_t"
+                                    || ctW55 == "LONG") {
+                                    valExpr = "vb6_VariantToLong(" + valExpr + ")";
+                                } else if (ctW55 == "double" || ctW55 == "float") {
+                                    valExpr = "vb6_VariantToDouble(" + valExpr + ")";
+                                }
+                            }
                             if (!lastP091n.isByVal && !lastP091n.isParamArray) {
                                 const std::string ctW = mapType(lastP091n.type);
                                 if (ctW == "int8_t" || ctW == "uint8_t" || ctW == "int16_t"
