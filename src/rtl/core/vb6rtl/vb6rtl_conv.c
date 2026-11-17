@@ -96,13 +96,54 @@ BSTR vb6_NumToBSTRDefault(double v, int isSingle) {
     // Fix 117d: Double 若恰好是 Single 精度值 (由 Single 运算/赋值/Round 提升而来),
     // 按 VB6 的 Single 规则打印 7 位有效数字。否则 Round(v!, 1)/Single 除法等会把
     // float 二进制噪声整个暴露出来 (如 "10.3999996185"、"36.9000015")。
-    if (!isSingle && v == (double)(float)v) isSingle = 1;
+    // C30-10 第四十七刀: 只对**非整数**那一形启用。真 VB6 probe H 的 H21 `CStr(12345678#)`
+    // = "12345678"（Double 的 8 位整数原样打），而 12345678 恰好也是 float 精确值 ——
+    // 旧的无条件启发式会把它当 Single 打成 "1.234568E+07"。噪声只来自不能精确表示的
+    // 小数（21.1000003814697），整数没有这一味。
+    if (!isSingle && v == (double)(float)v && v != floor(v)) isSingle = 1;
     int maxPrec = isSingle ? 7 : 15;
     char nbuf[64] = "0";
     double av = fabs(v);
-    // VB6 只在极大/极小时用指数记法; 其余一律定点 (CStr(30!) = "30" 而非 "3e+01")
     int useExp = (av >= 1e15) || (av != 0.0 && av < 1e-4);
-    for (int prec = 1; prec <= maxPrec; prec++) {
+    if (isSingle) {
+        // C30-10 第四十七刀: 真 VB6 probe H 的 22 行读数（ai/039 §11.24）。三条口径：
+        //   ① 有效数字恒 **7 位**（1/3 → 0.3333333、1234567.5 → 1234568）；
+        //      不是「最短且能往返」—— 1/7 在 VB6 是 0.1428571，不是 0.14285715。
+        //   ② 只有**高位**才转指数：7 位舍入后 |x| >= 1e7 ⇒ "1E+07" / "1.677722E+07"；
+        //      低位一律定点（0.00001 → "0.00001"，不是 "1E-05"）。
+        //   ③ 指数是大写 E + 两位（"3.4E+38"）。
+        if (v == 0.0) {
+            nbuf[0] = '0'; nbuf[1] = 0;
+        } else {
+            char ebuf[64];
+            snprintf(ebuf, sizeof(ebuf), "%.6e", v);   /* 7 位有效数字 */
+            char* ep = strchr(ebuf, 'e');
+            int exp10 = ep ? atoi(ep + 1) : 0;
+            if (ep) *ep = 0;                            /* ebuf = 尾数（含符号与小数点） */
+            if (exp10 >= 7) {
+                char m[64];
+                strcpy(m, ebuf);
+                char* dot = strchr(m, '.');
+                if (dot) {
+                    char* z = m + strlen(m) - 1;
+                    while (z > dot && *z == '0') *z-- = 0;
+                    if (z == dot) *z = 0;
+                }
+                snprintf(nbuf, sizeof(nbuf), "%sE%+03d", m, exp10);
+            } else {
+                int dec = 6 - exp10;
+                if (dec < 0) dec = 0;
+                if (dec > 20) dec = 20;
+                snprintf(nbuf, sizeof(nbuf), "%.*f", dec, v);
+                char* dot = strchr(nbuf, '.');
+                if (dot) {
+                    char* z = nbuf + strlen(nbuf) - 1;
+                    while (z > dot && *z == '0') *z-- = 0;
+                    if (z == dot) *z = 0;
+                }
+            }
+        }
+    } else for (int prec = 1; prec <= maxPrec; prec++) {
         snprintf(nbuf, sizeof(nbuf), "%.*g", prec, v);
         if (!useExp && (strchr(nbuf, 'e') || strchr(nbuf, 'E'))) {
             // "%.*g" 选了指数 → 换算成对应的定点小数位再试
