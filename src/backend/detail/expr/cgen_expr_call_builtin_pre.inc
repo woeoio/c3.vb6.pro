@@ -319,21 +319,40 @@
         if (csLower == "choose" && node.positional.size() >= 2) {
             emitExpr(*node.positional[0]);
             std::string idx = std::move(lastExpr_);
-            std::string result = "NULL";
+            // C30-10 第五十三刀: 候选支**逐支装箱**，越界交 `vb6_VariantNull()`。
+            // 真 VB6 采集器 U 的 S 段读数（每行 err/vt/tn/val）:
+            //   Choose(1, 1, 40000&)      → Integer 1     （选中支自己的子类型，不升公共档）
+            //   Choose(2, 1, 40000&)      → Long 40000
+            //   Choose(1, Null, 1)        → Null
+            //   Choose(2, Null, 1)        → Integer 1
+            //   Choose(1, 1.5!, 1.7)      → Single 1.5
+            //   Choose(2, 1.5!, 1.7)      → Double 1.7
+            //   Choose(3, 1, 2) / (0,1,2) → Null（越界）
+            //   Choose(1, "a", 1)         → String "a"
+            //   Choose(1, True, 1)        → Boolean True
+            // 旧站把三支原样摻进一个三目，C 编译器只能取公共档（S01 答 Long），
+            // 混入 Null/浮点时直接 C2440（`vb6_VariantNull()` 与 int 同在三目里）。
+            std::string result = "vb6_VariantNull()";
             for (int i = (int)node.positional.size() - 1; i >= 1; i--) {
                 emitExpr(*node.positional[i]);
-                result = "((" + idx + ")==" + std::to_string(i) + " ? (" + lastExpr_ + ") : (" + result + "))";
+                std::string brBox = wrapVariantValue(node.positional[i].get(), lastExpr_);
+                result = "((" + idx + ")==" + std::to_string(i) + " ? (" + brBox + ") : (" + result + "))";
             }
             lastExpr_ = result;
             return;
         }
         if (csLower == "switch" && node.positional.size() >= 2 && node.positional.size() % 2 == 0) {
-            std::string result = "NULL";
+            // C30-10 第五十三刀: 同 Choose —— 选中支原样、无匹配交 Null。
+            //   Switch(True,1,True,40000&) → Integer 1   Switch(False,1,True,40000&) → Long 40000
+            //   Switch(True,Null,True,1)   → Null         Switch(False,Null,True,1)   → Integer 1
+            //   Switch(False,1,False,2)    → Null        Switch(True,1.5!,True,1.7)  → Single 1.5
+            std::string result = "vb6_VariantNull()";
             for (int i = (int)node.positional.size() - 2; i >= 0; i -= 2) {
                 emitExpr(*node.positional[i]);
                 std::string cond = "((" + lastExpr_ + ")!=0)";
                 emitExpr(*node.positional[i + 1]);
-                result = "(" + cond + " ? (" + lastExpr_ + ") : (" + result + "))";
+                std::string brBox = wrapVariantValue(node.positional[i + 1].get(), lastExpr_);
+                result = "(" + cond + " ? (" + brBox + ") : (" + result + "))";
             }
             lastExpr_ = result;
             return;

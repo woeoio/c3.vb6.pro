@@ -1229,36 +1229,77 @@ vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(1, a
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(2, a, b); }
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(3, a, b); }
 
-/* C30-10 第四十五刀: 一元 `-` 打在 Variant 上。
-   口径 = 用户真 VB6 日志 E01~E04 / E10：
-     -v(装 Integer 5) → 2/Integer -5      -v(装 Long)   → 3/Long
-     -v(装 Double)    → 5/Double          -v(装 "x")    → 错误 13
+/* C30-10 第四十五刀 / 第五十三刀: 一元 `-` 打在 Variant 上。
+   口径 = 用户真 VB6 采集器 U 的 A 段读数（逐档）:
+     -CByte(5)      → 2/Integer -5      -CInt(5)   → 2/Integer -5
+     -CLng(70000)   → 3/Long            -CSng(1.5) → 4/Single
+     -CDbl(1.7)     → 5/Double          -CCur(2.5) → 6/Currency
+     -CBool(True)   → 2/Integer 1       -CDate(#1/2/2000#) → 7/Date
+     -Empty         → 2/Integer 0       -Null      → 1/Null
+     -"5"           → 5/Double -5       -"x"       → 错误 13
+     -(-32768)(Integer) → 2/Integer -32768（回绕，不报 6）
    即**子类型保持**（与二元那四个不同：它们要升格，这里不要）。
-   为什么单开出口：`-` 直接打在 vb6_VARIANT 结构上是 C2088，整段编不过。 */
+   Byte/Boolean/Empty 走 Integer 是 VB6 的读法（U01/U07/U09）而不是 Byte/Boolean 本身。 */
 vb6_VARIANT vb6_VarNegV(vb6_VARIANT a) {
+    if (a.vt == vb6_vtEmpty) return vb6_VariantInt(0);
     switch (a.vt) {
-    case vb6_vtEmpty: return vb6_VariantInt(0);
     case vb6_vtNull:  return vb6_VariantNull();
-    case vb6_vtInteger: {
-        int32_t r = -(int32_t)a.iVal;
-        if (r < -32768 || r > 32767) { vb6_ErrRaiseNumber(6); return vb6_VariantEmpty(); }
-        return vb6_VariantInt((int16_t)r);
-    }
+    case vb6_vtByte:  return vb6_VariantInt((int16_t)(-(int32_t)a.bVal));
+    case vb6_vtInteger:
+        /* U14: Integer 的 -32768 取负仍然答 Integer -32768（回绕），不报溢出 */
+        return vb6_VariantInt((int16_t)(-(int32_t)a.iVal));
     case vb6_vtLong:
         if (a.lVal == INT32_MIN) { vb6_ErrRaiseNumber(6); return vb6_VariantEmpty(); }
         return vb6_VariantLong(-a.lVal);
     case vb6_vtSingle: return vb6_VariantSingle(-a.fltVal);
     case vb6_vtDouble: return vb6_VariantDouble(-a.dblVal);
+    case vb6_vtCurrency: return vb6_VariantCur(-(double)a.cyVal / 10000.0);
     case vb6_vtBoolean: return vb6_VariantInt((int16_t)(a.boolVal ? 1 : 0));
+    case vb6_vtDate: return vb6_VariantDate(-a.dblVal);
     case vb6_vtBSTR:
-        vb6_ErrRaiseNumber(13);   /* 类型不符 —— VB6 不把串隐式当数来取负 */
+        /* U11/U12: 数字串按 Double 取负；非数字串才是错误 13 */
+        if (a.bstrVal && vb6_IsNumericText(a.bstrVal))
+            return vb6_VariantDouble(-vb6_VariantToDouble(a));
+        vb6_ErrRaiseNumber(13);
         return vb6_VariantEmpty();
     default: break;
     }
-    /* 其余标量档 (Byte/LongLong/Date/Currency/Decimal/SByte/UInteger) 按数值取负（问权威换算
+    /* 其余标量档 (LongLong/Decimal/SByte/UInteger) 按数值取负（问权威换算
        vb6_VariantToDouble，不是自己再抄一张按档表）；与 VB6 的「先按数值读再取负」一致，
        子类型不保的那几档另开一刀（census 的 I8/Decimal/SByte/UInteger 四条豁免写的即这一句）。 */
     return vb6_VariantDouble(-vb6_VariantToDouble(a));
+}
+
+/* C30-10 第五十三刀: 一元 `Not` 打在 Variant 上。
+   真 VB6 采集器 U 的 C 段读数:
+     Not CBool(True)  → 11/Boolean False   Not CBool(False) → 11/Boolean True   （Boolean 是**逻辑非**）
+     Not CByte(200)   → 17/Byte 55         Not CInt(5)      → 2/Integer -6     （整型是**位非**，且保档）
+     Not CLng(70000)  → 3/Long -70001
+     Not CSng(1.5)    → 3/Long -3          Not CDbl(1.7) → 3/Long -3
+     Not CCur(2.5)    → 3/Long -3          Not CDate(#1/2/2000#) → 3/Long -36528
+     Not Empty        → 2/Integer -1       Not Null     → 1/Null
+     Not "5"          → 3/Long -6
+   浮点/货币/日期先按 VB6 的 CLng（银行家舍入：1.5→2、1.7→2、2.5→2）取整再位非，得 Long。 */
+vb6_VARIANT vb6_VarNotV(vb6_VARIANT a) {
+    if (a.vt == vb6_vtEmpty) return vb6_VariantInt(-1);
+    switch (a.vt) {
+    case vb6_vtNull:    return vb6_VariantNull();
+    case vb6_vtBoolean: return vb6_VariantBool((int16_t)(a.boolVal ? 0 : -1));
+    case vb6_vtByte:    return vb6_VariantByte((uint8_t)(~(uint32_t)a.bVal & 0xFFu));
+    case vb6_vtInteger: return vb6_VariantInt((int16_t)(~(int32_t)a.iVal));
+    case vb6_vtLong:    return vb6_VariantLong(~a.lVal);
+    case vb6_vtSingle:  return vb6_VariantLong(~vb6_CLng((double)a.fltVal));
+    case vb6_vtDouble:  return vb6_VariantLong(~vb6_CLng(a.dblVal));
+    case vb6_vtCurrency: return vb6_VariantLong(~vb6_CLng((double)a.cyVal / 10000.0));
+    case vb6_vtDate:    return vb6_VariantLong(~vb6_CLng(a.dblVal));
+    case vb6_vtBSTR:
+        if (a.bstrVal && vb6_IsNumericText(a.bstrVal))
+            return vb6_VariantLong(~vb6_CLng(vb6_VariantToDouble(a)));
+        vb6_ErrRaiseNumber(13);
+        return vb6_VariantEmpty();
+    default: break;
+    }
+    return vb6_VariantLong(~vb6_CLng(vb6_VariantToDouble(a)));
 }
 
 

@@ -484,6 +484,8 @@ vb6_VARIANT vb6_VarAddV(vb6_VARIANT a, vb6_VARIANT b);
    （-Integer→Integer、-Long→Long、-Double→Double），而 -BSTR 是错误 13。
    后端 visit(UnaryExpr) 以前直接发 `(-<struct>)` —— C2088，整段编不过。 */
 vb6_VARIANT vb6_VarNegV(vb6_VARIANT a);
+// C30-10 第五十三刀: 一元 `Not` 打在 Variant 上（Boolean 逻辑非 / 整型位非并保档 / Null 原样）。
+vb6_VARIANT vb6_VarNotV(vb6_VARIANT a);
 vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);

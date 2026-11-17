@@ -259,6 +259,17 @@ void CCodeGen::visit(UnaryExpr& node) {
                 // `(-operand)`，而 operand 是整只 vb6_VARIANT 结构 ⇒ C2088「- 对于 struct
                 // 非法」，用户真 VB6 日志的 E 段整整十行都因此编不过。
                 lastExpr_ = "vb6_VarNegV(" + operand + ")";
+            } else if (node.operand && inferExprType(*node.operand) == Vb6Type::String) {
+                // C30-10 第五十三刀: `- "5"` / `- "x"` —— 串操作数不能直接取负（cl C2171：
+                // `-` 对 BSTR 非法）。真 VB6 采集器 U 的读数: `-"5"` → Double -5、`-"x"` → 错误 13，
+                // 所以先按串装箱（不拷、不动所有权），交给同一条 Variant 阶梅。
+                lastExpr_ = "vb6_VarNegV(vb6_VariantString(" + operand + "))";
+            } else if (node.operand
+                       && (inferExprType(*node.operand) == Vb6Type::Byte
+                           || inferExprType(*node.operand) == Vb6Type::Boolean)) {
+                // C30-10 第五十三刀: `-CByte(5)` → **Integer** -5、`-CBool(True)` → **Integer** 1
+                // （采集器 U 的 U01/U07）。以前按操作数自己的档装箱 ⇒ 17/Byte 251 与 11/Boolean True。
+                lastExpr_ = "vb6_VariantInt((int16_t)(-(int32_t)(" + operand + ")))";
             } else {
                 lastExpr_ = "(-" + operand + ")";
             }
@@ -303,13 +314,34 @@ void CCodeGen::visit(UnaryExpr& node) {
                 break;
             }
             if (isVariantSlot(operand, nullptr)) {  // P1.3: ast 不可得 (operand 距 emitExpr 超 5 行)
-                lastExpr_ = "(~vb6_VariantToLong(" + operand + "))";
+                // C30-10 第五十三刀: `Not <Variant>` 走运行时阶梅（Boolean 逻辑非、Byte/Integer/Long
+                // 位非并保档、Single/Double/Currency/Date 先 CLng 再位非得 Long、Empty→Integer -1、
+                // Null 原样）—— 真 VB6 采集器 U 的 C 段 14 行读数。以前一律
+                // `(~vb6_VariantToLong(...))` ⇒ N03 答 Long -201 而 VB6 是 Byte 55。
+                lastExpr_ = "vb6_VarNotV(" + operand + ")";
+            } else if (node.operand && inferExprType(*node.operand) == Vb6Type::Byte) {
+                // C30-10 第五十三刀: `Not CByte(200)` → **Byte 55**（采集器 U 的 N03），即 8 位位非保档。
+                lastExpr_ = "vb6_VariantByte((uint8_t)(~(uint32_t)(" + operand + ") & 0xFFu))";
+            } else if (node.operand && inferExprType(*node.operand) == Vb6Type::String) {
+                // C30-10 第五十三刀: `Not "5"` → Long -6（N12）。以前落到 `~(int32_t)(BSTR)` = 把指针
+                // 按位取反（实测 -636494793）。按串装箱后交给 Variant 阶梅。
+                lastExpr_ = "vb6_VarNotV(vb6_VariantString(" + operand + "))";
+            } else if (node.operand
+                       && (inferExprType(*node.operand) == Vb6Type::Single
+                           || inferExprType(*node.operand) == Vb6Type::Double
+                           || inferExprType(*node.operand) == Vb6Type::Currency
+                           || inferExprType(*node.operand) == Vb6Type::Date)) {
+                // C30-10 第五十三刀: `Not CSng(1.5)` / `Not CDbl(1.7)` / `Not CCur(2.5)` /
+                // `Not CDate(#1/2/2000#)` 都是 **Long**，且先按 VB6 的银行家舍入取整再位非
+                // （采集器 U 的 N06/N07 = -3、N08 = -3、N09 = -36528）。
+                // 以前落到 `~(int32_t)operand` ⇒ 截断：`Not CSng(1.5)` 答 -2（VB6 是 -3）。
+                lastExpr_ = "vb6_VariantLong(~vb6_CLng((double)(" + operand + ")))";
             } else if (node.operand && node.operand->kind == ASTNodeKind::IdentifierExpr) {
                 auto& ident = static_cast<IdentifierExpr&>(*node.operand);
                 std::string lower = ident.name;
                 std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                 if (knownVariantVars_.count(lower)) {
-                    lastExpr_ = "(~vb6_VariantToLong(" + operand + "))";
+                    lastExpr_ = "vb6_VarNotV(" + operand + ")";
                 } else {
                     lastExpr_ = "(~(int32_t)(" + operand + "))";
                 }

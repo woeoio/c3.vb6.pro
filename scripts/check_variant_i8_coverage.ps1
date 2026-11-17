@@ -90,6 +90,10 @@ $exempt = @{
     #   I8/Decimal/SByte/UInteger 四档真 VB6 的 Variant 造不出来（只有 COM 能交进来）。
     #   ⇒ 不开 case、不往 must 里挂名（挂了就得写一臂自己不能证的口径），落 default。
     "vb6_AbsV" = "Abs 的保档只覆盖 AB 段 13 档 oracle；I8 落 default = vb6_VariantToDouble 取绝对值（权威换算，不是静默交 0），保 LongLong 档无 oracle"
+    # C30-10 第五十三刀: Not(Variant) 同取舍 —— 采集器 U 的 C 段只给了 Byte/Integer/Long/
+    #   Single/Double/Currency/Date/Boolean/Empty/Null/BSTR 十一档读数；I8 落 default =
+    #   vb6_CLng(vb6_VariantToDouble) 位非（权威换算，不是静默交 0）。
+    "vb6_VarNotV" = "Not(Variant) 的保档只覆盖采集器 U 的 C 段 oracle；I8 落 default = vb6_CLng(vb6_VariantToDouble) 位非得 Long（权威换算，不是静默交 0），保 LongLong 档无 oracle"
 }
 
 # Decimal 这一档（§B143）：同一张表要答两档，所以名单也列两份。
@@ -122,6 +126,8 @@ $decExempt = @{
     "vb6_VarNegV" = "一元取负的保档只有 E 段那四档；Decimal 落 default = vb6_VariantToDouble 取负 ⇒ 答 Double，96 位精度要保得先有 oracle（另开一刀）"
     # C30-10 第五十二刀: 同上（Abs(Variant)）—— Decimal 档无 oracle，落 default 取绝对值。
     "vb6_AbsV" = "Abs 的保档只有 AB 段那 13 档；Decimal 落 default = vb6_VariantToDouble 取绝对值 ⇒ 答 Double，96 位精度要保得先有 oracle"
+    # C30-10 第五十三刀: 同上（Not(Variant)）—— Decimal 档无 oracle，落 default 取 Long。
+    "vb6_VarNotV" = "Not(Variant) 的保档只覆盖 U 段 C 那批；Decimal 落 default = vb6_CLng(vb6_VariantToDouble) 位非 ⇒ 答 Long，96 位精度要保得先有 oracle"
 }
 
 # ai/032 §6.9: 小整型两档（VT_I1 / VT_UI2）—— 同一张表要答的第四、五档，名单也各列一份。
@@ -147,6 +153,8 @@ $smExempt = @{
     "vb6_VarNegV"         = "一元取负：SByte/UInteger 两档是 C3 扩展，真 VB6 无对应 oracle；default 按数值取负交 Double"
     # C30-10 第五十二刀: 同上（Abs(Variant)）。
     "vb6_AbsV"            = "Abs：SByte/UInteger 两档是 C3 扩展，真 VB6 无对应 oracle；default 按数值取绝对值交 Double"
+    # C30-10 第五十三刀: 同上（Not(Variant)）。
+    "vb6_VarNotV"         = "Not(Variant)：SByte/UInteger 两档是 C3 扩展，真 VB6 无对应 oracle；default 按数值取位非交 Long"
 }
 
 $fnRe     = [regex]'^[A-Za-z_][A-Za-z0-9_ \*]*?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*\{\s*$'

@@ -3651,6 +3651,14 @@ static bool vb6IntConstantValue(const Expr* e, int32_t* outVal) {
 // 真宽度在那张表里 (inferExprType 也从它答 Integer, 见 cgen_util_type.cpp)。
 bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
     if (!e) return false;
+    // C30-10 第五十三刀: 一元负号**先于常量折叠**判 —— 采集器 U 的 U13 `-32768` 在 VB6 里是
+    // **Long**（量字面 32768 自己就装不进 Integer），而 U14 `-iMin`（Integer 变量）仍是 Integer。
+    // 以前走下面的 vb6IntConstantValue 把负号折进去 ⇒ -32768 落在 int16 范围 ⇒ 错发 Integer。
+    if (e->kind == ASTNodeKind::UnaryExpr) {
+        const auto& unNeg = static_cast<const UnaryExpr&>(*e);
+        if (unNeg.op == UnaryOp::Negate && unNeg.operand)
+            return isNarrowIntExpr(unNeg.operand.get());
+    }
     int32_t v = 0;
     if (vb6IntConstantValue(e, &v)) return v >= -32768 && v <= 32767;
     // C30-10 第三十三刀: 进制字面量那一半 —— 判据不在这里, 在 lexer (Token::radixInt16)。
@@ -3749,24 +3757,11 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
             if (n == "iif" && call.positional.size() == 3 && call.named.empty())
                 return isNarrowIntExpr(call.positional[1].get())
                        && isNarrowIntExpr(call.positional[2].get());
-            // C30-10 第四十四刀: `Choose`/`Switch` 的同一条规律，但只开**静态能确定**的那一半：
-            // 候选支（Choose 从第 1 位起；Switch 的奇数位）**全是 Integer 档** ⇒ 不管运
-            // 行时选哪一支，结果都是 Integer（真 VB6 日志 D12 `Choose(1,1,2)` = 2/Integer、
-            // D14 `Switch(True,1,False,2)` = 2/Integer）。
-            // 一支宽一支窄的（D13 `Choose(1,1,40000)`、D15 同形）**不开** —— 那要按「选中支
-            // 原样」发码，得把每支装箱、并决定未选中支的 BSTR 归属，而且三目是惰性求值
-            // 而 IIf 是悉数求值，先不碰；发码一字不变。
-            if (n == "choose" && call.positional.size() >= 2 && call.named.empty()) {
-                for (size_t i = 1; i < call.positional.size(); i++)
-                    if (!isNarrowIntExpr(call.positional[i].get())) return false;
-                return true;
-            }
-            if (n == "switch" && call.positional.size() >= 2
-                && call.positional.size() % 2 == 0 && call.named.empty()) {
-                for (size_t i = 1; i < call.positional.size(); i += 2)
-                    if (!isNarrowIntExpr(call.positional[i].get())) return false;
-                return true;
-            }
+            // C30-10 第五十三刀: Choose/Switch 现在**逐支装箱**（选中支原样，越界 Null），
+            // 表达式本身已经是 `vb6_VARIANT` ⇒ 这里**不能再答 true**：
+            // 答 true 会让存储站发 `vb6_VariantInt((int16_t)(<三目>))`，而三目里已经是
+            // `vb6_VariantNull()`（struct）⇒ C2440（真 VB6 采集器 U 的 S15 就是这么红的）。
+            // 子类型由每一支自己的装箱决定（S01 选 1 ⇒ Integer），不需要这层。
             return false;
         }
         return false;
