@@ -971,3 +971,58 @@ smoke 1/1、syntax 227/227、bas 181/181。
 （H05/H06/H08 的 fmt 列）、`Str$` 浮点走 `vb6_Str(int32_t)` 截断（H01 打 `1`）、
 Double 低位 `1e-5` 仍打 `1e-05`（只有一行读数，待补两点再定）。
 
+#### 11.25 第四十八/四十九刀：Format$ 与 Str$ 的 Single 分出口
+
+两刀都不动“怎么打”，只动“递进去的是什么”。前一刀（第四十七刀）已经把 7 位口径落在
+`vb6_NumToBSTRDefault` 的 `isSingle` 支，可这两个内建函数从旧站拿到的是**错档的值**。
+
+**第四十八刀（`ee83b83c`）— Format$ 首参**
+
+`src/backend/detail/expr/cgen_expr_call_conv_output.inc` 原来是一臂：
+`argType == Double || argType == Single` → `vb6_VariantDouble(...)`。Single 被装成 VT_R8，
+于是 RTL 里 `vb6_NumToBSTRDefault(numVal, expr.vt == vb6_vtSingle)` 的 `isSingle`
+**从这一站根本走不到**。真 VB6 探针 H05/H06/H08 的 `fmt` 列是
+`1.234568E+07` / `1.677722E+07` / `1E+07`，C3 旧打 `12345678` / `16777216` / `10000000`。
+改为 Double 一臂、Single 单独一臂并问权威 `boxToVariant`（同文件 Boolean 的 Fix 198、
+Date 的账 #430 都是这个做法，零新形状）。
+
+> 弯路记一笔：先猜“模块级 `As Single` 在过程入口被 `knownSingleVars_.clear()` 后没有回灌口”，
+> 加了 `moduleSingleVars_`（声明处登记 + 三处过程入口回灌）。改完重编重跑 **一行未变**，
+> 再做对照探针 `P48.bas`（局部 Single + 模块级 Single 各一枚）发现**两者都**发成
+> `vb6_VariantDouble` —— 局部变量根本不经那条路，假设被判死。四处改动全部 `git checkout` 撤回，
+> 才找到上面那一臂。**取证顺序：先造对照，再改假设。**
+
+**第四十九刀（`461b9093`）— Str$ 实参**
+
+`vb6_Str` 的形参一直是 `int32_t`，浮点实参在 C 侧就被截断（H01 `Str$(1.5!)` 打 `1`、
+H10 `Str$(0.00001!)` 打 `0`、H14 `Str$(3.4E+38!)` 打 `-2147483648`）。RTL 新增
+`vb6_StrSng(float)`：数字部分复用 `vb6_CStrSingle`（7 位口径）+ **非负数前一个空格**
++ **`|x|<1` 去前导 0**（`0.1` → ` .1`、`-0.00001` → `-.00001`）；后端在
+`cgen_expr_call_builtin_fixup.inc` 里只把**静态类型确实是 Single** 的调用改 callee 名，
+整数那一档一字未动。
+
+读数（C3 跑同一份 HProbe）：**`cstr` / `str` / `fmt` 三列 × 20 行 Single 全部与 VB6 逐行一致**
+（H01~H20）。
+
+**两道静态普查门（两次红都不是产品缺陷，但都是该登记的东西没登记）**
+
+| 门 | 报什么 | 处置 |
+|---|---|---|
+| `[STATIC] owned_temp_keeps` K13 | 「推导出来的 owned 1 枚发码侧那份里没有: `vb6_StrSng`」 | 登记进 `src/common/owned_temp_keeps.hpp` 的权威表（`96656bf8`） |
+| `[STATIC] builtin_opt_defaults` R7 | 「名单过期/新增段: `vb6_Str`」 | 在 `$notPadding` 里补 `vb6_Str` 并写清依据（`461b9093`） |
+
+R7 的规矩值得记住：**发码侧“按实参做决定（改 callee / 重排 / 截断）”的名字，必须恰好等于
+那份带理由的名单** —— 多一个就红（新写了硬编码），少一个也红（名单过期）。这里不是补缺省档，
+所以不进 opt-defaults 表，只写理由。
+
+**另一个坑：提交信息不要内联**。`git commit -m "… Str$(Single) …"` 在 PowerShell 里会把
+`$(Single)` 当子表达式展开，提交信息静默变成 `Str\ …`。本刀第一次提交就是这样坏掉的，
+用 `--amend -F <文件> --force-with-lease` 修回（`c50a08d5` → `7ff613da`）。**此后一律 `-F 文件`**。
+
+门：`44030372892`（head `ee83b83c`）= 22/22；`44038320685`（head `461b9093`）= 22/22。
+本机：smoke 1/1、syntax 227/227、SG 18/19（只剩 SG11）。
+
+**剩余键（3 + 2 条新残）**：`Abs(Single/Variant)`（C23，SG11）、D13/D15、一元 `-`/`Not`
+（E01~E10 + H06）；新残：Double 的 `Str$` 仍走 `int32_t` 截断（H21 `12345678` / H22 `0`，
+与 Double 低位 `1e-5` 打 `1e-05` 一起等下一批 Double 读数）。
+
