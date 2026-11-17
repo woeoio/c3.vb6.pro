@@ -273,6 +273,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Space",
         "vb6_Spc",
         "vb6_Str",
+        "vb6_StrSng",
         "vb6_StrConv",
         "vb6_StrConvFromByteArray",
         "vb6_String",
