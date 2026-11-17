@@ -304,6 +304,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_VariantULong",
         "vb6_VariantULongLong",
         "vb6_VarMulV",
+        "vb6_VarNegV",
         "vb6_VarSubV",
         "vb6_WeekdayName",
         // >>> END-GENERATED-OWNED-EXITS <<<
@@ -333,6 +334,7 @@ inline const char* const* ownedTempOwnedVariantExits() {
         "vb6_VarAddV",
         "vb6_VarDivV",
         "vb6_VarMulV",
+        "vb6_VarNegV",
         "vb6_VarSubV",
         "vb6_VariantBool",
         "vb6_VariantByte",

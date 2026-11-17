@@ -483,7 +483,8 @@ vb6_VARIANT vb6_VarAddV(vb6_VARIANT a, vb6_VARIANT b);
    原有的四个 vb6_Var*V 只管二元运算，一元取负在 VB6 里是**保子类型**的
    （-Integer→Integer、-Long→Long、-Double→Double），而 -BSTR 是错误 13。
    后端 visit(UnaryExpr) 以前直接发 `(-<struct>)` —— C2088，整段编不过。 */
-vb6_VARIANT vb6_VarNegV(vb6_VARIANT a);vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
+vb6_VARIANT vb6_VarNegV(vb6_VARIANT a);
+vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);
 // Fix 029: Variant → SafeArray extraction (variant holding array).

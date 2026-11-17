@@ -1255,8 +1255,9 @@ vb6_VARIANT vb6_VarNegV(vb6_VARIANT a) {
         return vb6_VariantEmpty();
     default: break;
     }
-    /* 其余标量档 (Byte/Date/Currency/Decimal) 按数值取负；
-       与 VB6 的「先按数值读再取负」一致，子类型不保的那几档另开一刀。 */
+    /* 其余标量档 (Byte/LongLong/Date/Currency/Decimal/SByte/UInteger) 按数值取负（问权威换算
+       vb6_VariantToDouble，不是自己再抄一张按档表）；与 VB6 的「先按数值读再取负」一致，
+       子类型不保的那几档另开一刀（census 的 I8/Decimal/SByte/UInteger 四条豁免写的即这一句）。 */
     return vb6_VariantDouble(-vb6_VariantToDouble(a));
 }
 

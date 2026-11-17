@@ -226,6 +226,7 @@ vb6_VariantToSafeArray1D|0	0		0	open	VARIANT
 vb6_VariantToString|0	0	handoff-reads:vb6_CStr	0	open	VARIANT
 vb6_VarMulV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarMulV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
+vb6_VarNegV|0	0	handoff-to-plain:vb6_VariantLong	0	open	VARIANT
 vb6_VarSubV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarSubV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarType|0	0		0	open	VARIANT
@@ -314,6 +315,8 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_Oct BSTR
 [own] vb6_PA_GetBSTR BSTR
 [own] vb6_Partition BSTR
+[own] vb6_Printer_DeviceName BSTR
+[own] vb6_Printer_Port BSTR
 [own] vb6_Replace BSTR
 [own] vb6_Right BSTR
 [own] vb6_RightB BSTR
@@ -353,6 +356,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_VariantULong VARIANT
 [own] vb6_VariantULongLong VARIANT
 [own] vb6_VarMulV VARIANT
+[own] vb6_VarNegV VARIANT
 [own] vb6_VarSubV VARIANT
 [own] vb6_WeekdayName BSTR
 # --- 返回侧所有权：alias = 交出去的是**别名**（指着调用方的内存或一个全局）⇒ 不许放它 ---
