@@ -923,7 +923,7 @@ F12/F14/F20/G09/H01/H02 共 14）、`^` 返 Double（F13）、一元 `-`/`Not`�
 真 VB6 读数来自 `.temp/litprobe/GProbe.bas` / `HProbe.bas`（用户在本机 VB6 跑，日志
 `c3_vb6_probe_G.log` / `c3_vb6_probe_H.log`）。两个提交：
 
-- `99f6e567`（**未推**）类型面：`Token::singleSuffix` + lexer `case '!'` + parser 出
+- `99f6e567` 类型面：`Token::singleSuffix` + lexer `case '!'` + parser 出
   `LiteralKind::Single`；`inferExprType` 认 Single→Single，`/` 走 Single 规则、`^` 恒 Double；
   Single 参与的四则按 `(float)((float)L op (float)R)` 落 float，`\` 的浮点实参走 `vb6_FltToLng`。
 - `4f1e4621` 格式化面：`vb6_NumToBSTRDefault` 的 `isSingle` 支重写。
@@ -953,6 +953,18 @@ float 精确值 —— 旧的无条件「float 精确 ⇒ 按 Single 打」会�
 
 本机验证：HProbe 的 20 行 Single 与 VB6 逐行一致；SGProbe SG **18/19**（只剩 SG11）；
 smoke 1/1、syntax 227/227、bas 181/181。
+
+**推送经过（两个坑，记下来）**：
+1. 三个提交一起推上去，**一个 CI 都没跑** —— tip 提交 `036c3baf` 的信息带 `[skip ci]`，GitHub 按它跳过**整次 push**。
+2. 补一个空提交 `1b11aa4b` 敲门也不行 —— `ci.yml` 有 `paths` 白名单，空提交不改任何文件 ⇒ 不命中。
+   正路是 `POST /actions/workflows/ci.yml/dispatches {ref:dev}`（= `gh workflow run ci.yml --ref dev`，
+   workflow_dispatch 不受 paths 限制）。那轮 `44025035809` = **21/22**，唯一红就是发码形状门（意料之中）。
+3. A/B 归因后才登记：worktree 在父提交 `aa821acf` 自编一台 `.temp/base47/.buildrel/C3.exe`，
+   `tests/test_types.bas` 只 1 行变（`2 ^ 10` 变 `vb6_ChkLong(vb6_FltToLng(vb6_Pow(2, 10)))`）；
+   `tests/Charts 2020/ucChartArea/Proyecto1.vbp` **85 增 85 减、1:1 换行无增删语句**，
+   差异全是 Single 那一味（`(float)((float)L op (float)R)`、`\` 的实参过 `vb6_FltToLng`）。
+4. 登记 `054b97e0`（`rebless_emit_manifest.ps1 -Bless`：改写 21 行，748/748 相同，K1..K3 集合相等），
+   推送后门 **`44027063943`（head `054b97e0`）= 22/22 success**。
 
 **剩余键（5 → 3 + 3 条新残）**：`Abs(Variant/Single)`（C23，含 SG11）、D13/D15、
 一元 `-`/`Not`（E01~E10 + H06）；新残：Format$ 空格式那一支没透传 Single 标志
