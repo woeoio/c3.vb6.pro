@@ -459,16 +459,32 @@
                     } else {
                         // 账 (Outlook2013 frmInbox:224/227): Move 实参是**未声明类型的
                         // 隐式变量** (nTop = IIf(...)) — C 侧 vb6_VARIANT 槽裸传
-                        // vb6_ControlMove 的 double 形参 (C2440 ×2)。裸标识符
-                        // (无括号/无成员链) + Variant 档 → 折 Double。
+                        // vb6_ControlMove 的 double 形参 (C2440 ×2)。
+                        //
+                        // C30-10 第四十三刀: 判据从【文本像裸标识符】换成【问表达式自己】。
+                        // 原来那套 `find('(')==npos && find('-')==npos …` 只能接住**裸变量**；
+                        // 一旦实参是 Variant **算术/选择**的结果，文本必然带括号，于是漏过：
+                        //   ScaleHeight - (BW*2) - IIf(...)  →  vb6_VarSubV(vb6_VariantFromValue(…), vb6_IIfVariant(…))
+                        //   ⇒ ucTreeViewPlus.c(4415/4416) C2440 「vb6_VARIANT → double」。
+                        // 现问 isVariantSlot（前缀表里已含 vb6_VarAddV/SubV/MulV/DivV 与
+                        // vb6_IIfVariant，且早已排除 vb6_VariantTo* 那一族），落到一个判据。
+                        // ⚠ vb6_ControlMove 四个槽清一色 double，所以这里只取 Double 档。
                         const std::string& aMVarg = lastExpr_;
-                        bool bareIdentMV = !aMVarg.empty()
+                        // 两条判据各管一段，互不干扰：
+                        //   ① isVariantSlot：**发出来的 C 文本就是整只槽** —— Variant 算术
+                        //      (vb6_VarSubV/vb6_VarAddV…) 与选择 (vb6_IIfVariant) 都在这张前缀表里。
+                        //   ② 裸标识符 + inferExprType=Variant：未声明类型的隐式变量
+                        //      (Outlook2013 frmInbox 那一形)，文本里没有函数名可问。
+                        // ⚠ 不能把 ② 的 inferExprType 单独推广到任意形：`Me.ScaleWidth - 200`
+                        //   会被答成 Variant，而它明明是 int（实测 Form5.c(240) C2440 int→VARIANT）。
+                        const bool bareIdentMV = !aMVarg.empty()
                             && aMVarg.find('(') == std::string::npos
                             && aMVarg.find('-') == std::string::npos
                             && aMVarg.find('.') == std::string::npos
                             && aMVarg.find('>') == std::string::npos;
-                        if (bareIdentMV
-                            && inferExprType(*node.positional[i]) == Vb6Type::Variant) {
+                        if (isVariantSlot(aMVarg, nullptr)
+                            || (bareIdentMV
+                                && inferExprType(*node.positional[i]) == Vb6Type::Variant)) {
                             lastExpr_ = "vb6_VariantToDouble(" + aMVarg + ")";
                         }
                     }
