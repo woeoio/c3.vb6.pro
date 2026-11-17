@@ -3710,6 +3710,24 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
             if (n == "iif" && call.positional.size() == 3 && call.named.empty())
                 return isNarrowIntExpr(call.positional[1].get())
                        && isNarrowIntExpr(call.positional[2].get());
+            // C30-10 第四十四刀: `Choose`/`Switch` 的同一条规律，但只开**静态能确定**的那一半：
+            // 候选支（Choose 从第 1 位起；Switch 的奇数位）**全是 Integer 档** ⇒ 不管运
+            // 行时选哪一支，结果都是 Integer（真 VB6 日志 D12 `Choose(1,1,2)` = 2/Integer、
+            // D14 `Switch(True,1,False,2)` = 2/Integer）。
+            // 一支宽一支窄的（D13 `Choose(1,1,40000)`、D15 同形）**不开** —— 那要按「选中支
+            // 原样」发码，得把每支装箱、并决定未选中支的 BSTR 归属，而且三目是惰性求值
+            // 而 IIf 是悉数求值，先不碰；发码一字不变。
+            if (n == "choose" && call.positional.size() >= 2 && call.named.empty()) {
+                for (size_t i = 1; i < call.positional.size(); i++)
+                    if (!isNarrowIntExpr(call.positional[i].get())) return false;
+                return true;
+            }
+            if (n == "switch" && call.positional.size() >= 2
+                && call.positional.size() % 2 == 0 && call.named.empty()) {
+                for (size_t i = 1; i < call.positional.size(); i += 2)
+                    if (!isNarrowIntExpr(call.positional[i].get())) return false;
+                return true;
+            }
             return false;
         }
         return false;
