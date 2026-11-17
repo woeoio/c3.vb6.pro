@@ -46,9 +46,6 @@ struct OwnedTempException {
 //   与 scripts/owned_temp_keeps_164.txt 的 K5/K12 双向对账同源；登记为例外 = 不提名，不放宽）。
 inline const OwnedTempException* ownedTempExceptions() {
     static const OwnedTempException kRows[] = {
-        // C30-10 第五十一刀: `vb6_AbsV(vb6_VARIANT v)` 交出的是**新造**的一枚 VARIANT，
-        // 档号由返回侧定（'V' / ret），与 vb6_VarNegV 同族。
-        { "vb6_AbsV",            0, '1', "ret" },
         { "vb6_ArraySetVariant",  2, '1', "write" },
         { "vb6_BSTR_AssignMove",  1, '1', "write" },
         { "vb6_CDec",             0, '1', "ret" },
@@ -277,7 +274,6 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Spc",
         "vb6_Str",
         "vb6_StrSng",
-        "vb6_AbsV",
         "vb6_StrConv",
         "vb6_StrConvFromByteArray",
         "vb6_String",
@@ -333,7 +329,6 @@ inline bool ownedTempReturnIsOwned(const char* exitName) {
 // 这张名单是 owned 那张的**子集**（哨兵 K13 双向对账 ⇒ 漂不了）。
 inline const char* const* ownedTempOwnedVariantExits() {
     static const char* const kOwnedVariant[] = {
-        "vb6_AbsV",          // C30-10 第五十一刀: Abs(Variant) 交出一枚**新造**的 VARIANT
         "vb6_CallByName",
         "vb6_CVErr",
         "vb6_LoadResString",

@@ -4,7 +4,6 @@
 # persists_data = 这条形参的数据有没有落到比调用活得久的地方（**不参与回收**）
 # gate=closed = **不进提名面**（注册表那一族：CI 红未归因 ⇒ 停机）
 # 用户过程与晚绑定 COM 不在表里（不是具名出口）⇒ 按规则归 U，见 check_owned_temp_keeps.ps1
-vb6_AbsV|0	1	ret	0	open	VARIANT
 vb6_AppActivate|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_ArraySetBSTR|2	0	handoff-reads:vb6_BSTR_FromBSTR	0	open	BSTR
 vb6_ArraySetVariant|2	1	write	0	open	VARIANT
@@ -238,7 +237,6 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [borrow] vb6_ErrSource
 [borrow] vb6_ho_variantToBstr
 # --- 返回侧所有权：owned = 这一枚交出去的是**新造且归调用方所有**（调用方可以放它）---
-[own] vb6_AbsV VARIANT
 [own] vb6_App_EXEName BSTR
 [own] vb6_App_HelpFile BSTR
 [own] vb6_App_Path BSTR

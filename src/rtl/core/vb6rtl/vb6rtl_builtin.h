@@ -95,8 +95,6 @@ static inline int32_t vb6_MsgBox1(BSTR prompt) {
 double vb6_Abs(double x);
 // C30-10 第五十刀: Abs 的 Single 出口（VB6 的 Abs 返回实参那一档）。
 float vb6_AbsSng(float x);
-// C30-10 第五十一刀: Abs(Variant) 的运行时子类型阶梯（保留子类型，不一律降 Double）。
-vb6_VARIANT vb6_AbsV(vb6_VARIANT v);
 int32_t vb6_Sgn(double x);
 double vb6_Sqr(double x);
 double vb6_Round(double x, int32_t decimals);

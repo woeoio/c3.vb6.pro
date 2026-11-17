@@ -535,27 +535,6 @@ static const char* const kOD_Randomize[]   = { "0.0" };
         && inferExprType(*node.positional[0]) == Vb6Type::Single) {
         callee = "vb6_AbsSng";
     }
-    // C30-10 第五十一刀（撤回）: `Abs(Variant)` 改 callee = vb6_AbsV 那一版在**数值位**上
-    // 会变成「把一枚 vb6_VARIANT 当 double 用」—— 门里 6 个作业红（vbp #5~#8 跑报错、
-    // compile #1/#2 的 [STATIC] builtin_slot_returns），因为这一站看不到**消费侧**：
-    // `VarType(Abs(v))` 要的是变体，`Abs(v) * 2` 要的是 double。
-    // RTL 的 `vb6_AbsV` 梯子与 kOwned/kOwnedVariant/kRows 登记**保留**（无入口即惰性），
-    // 等“按消费侧决定要不要改名”那一刀再接回来 —— 台账 §11.26 记着这笔。
-#if 0
-    if (callee == "vb6_Abs" && !node.positional.empty()
-        && inferExprType(*node.positional[0]) == Vb6Type::Variant) {
-        callee = "vb6_AbsV";
-        const std::string wrapA = "vb6_VariantToDouble(";
-        std::string a = args[0];
-        if (a.size() > wrapA.size() + 1 && a.compare(0, wrapA.size(), wrapA) == 0
-            && a.back() == ')') {
-            std::string inner = a.substr(wrapA.size(), a.size() - wrapA.size() - 1);
-            size_t pos = argList.find(a);
-            if (pos != std::string::npos) argList.replace(pos, a.size(), inner);
-            args[0] = inner;
-        }
-    }
-#endif
     // C30-10 第四十九刀: `Str$(Single)` 改道到浮点出口。
     // vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01/H10/H14 打
     // "1"/"0"/"-2147483648"，真 VB6 是 " 1.5"/" .00001"/" 3.4E+38"）。
