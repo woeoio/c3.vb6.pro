@@ -790,3 +790,38 @@ tests/ucTreeView → ucTreeViewPlus.c(4415,4416): error C2440: cannot convert fr
 - `36a85f19`（撤回刀42，只留 40/41）= **21/22**：仅 `Emit manifest` 红
 - 登记提交 `14579ca2`：`emit-manifest.expected.txt` 1 行（第三十九刀的遗留）
 
+### 11.21 第四十三刀：接回刀42 + `Move` 实参按 Variant 槽取 Double
+
+刀42 被 `ucTreeView` 的 C2440 打回后，定位到的不是「IIf 该不该是 Variant」，而是**消费站缺一条取档出口**：
+
+```c
+vb6_ControlMove(hwnd, x, y, w,
+    (vb6_VarSubV(vb6_VariantFromValue(A), vb6_IIfVariant(…))), 15);
+//  C2440: vb6_VARIANT → double   (ucTreeViewPlus.c:4415/4416)
+```
+
+`vb6_ControlMove` 四个槽清一色 `double`，而实参是 **Variant 算术**的结果。这一形不是刀42 造的新东西：
+任何 `v + 1`（v 是 Variant）喂给 typed 形参本来就会撞，只是语料里没踩到。
+
+落点：`cgen_expr_call_callee_member.inc` 的 `Move` 特例。原来那套判据是**文本启发式**
+（`find('(')==npos && find('-')==npos && find('.')==npos && find('>')==npos` + `inferExprType==Variant`），
+只能接住「裸变量」，Variant 算术/选择的文本必然带括号 ⇒ 漏过。
+
+现判据：
+1. `isVariantSlot(aMVarg, nullptr)` —— 前缀表里已含 `vb6_VarAddV/SubV/MulV/DivV` 与 `vb6_IIfVariant`，
+   且早已排除 `vb6_VariantTo*`，所以「这段 C 文本是整只槽」这一问只有一个出口；
+2. 裸标识符 + `inferExprType==Variant`（Outlook2013 frmInbox 那种未声明类型的隐式变量，文本里没函数名可问）。
+
+⚠ 不能把第 2 条单独推广到任意形：`Me.ScaleWidth - 200` 会被 `inferExprType` 答成 Variant，
+而它明明是 `int` —— 实测 `Form5.c(240) C2440: int → vb6_VARIANT`（当时把 `vb6_VariantToDouble` 套在 int 上）。
+
+本机验证：`ucTreeView`/`ucSlider_2022`/`ucSegmentedControl`/`VBFlexGridDemo`/`VbQRCodegen` 五份
+受影响样本全 `exe=True`；`dict_native` PASS 59；R2 哨兵 PASS。
+
+读数：仍 21 个缺口（D03/D09/D10 已回位 —— 刀42 保住了），剩的是 `Choose`/`Switch`（D12~D15）、
+Integer 算术全链（13 键 + `^` 返回 Double）、Single 装箱（A12/C19/C28）、`Abs(Variant)`（C23）、
+一元 `-`/`Not`（E 段 + H06）。
+
+发码：CI run `43989114687`（head `6744bea5`）= **21/22**，仅 `Emit manifest` 红；
+登记提交 `8263d2e5` 改写 10 行 → CI run `43990410456` = **22/22 全绿**。
+
