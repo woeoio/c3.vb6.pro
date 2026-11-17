@@ -918,3 +918,44 @@ F12/F14/F20/G09/H01/H02 共 14）、`^` 返 Double（F13）、一元 `-`/`Not`�
 `1.5!`（A12）、`Abs(Variant)`（C23）、D13/D15、一元 `-`/`Not`（E01~E10 + H06）。
 `^`（F13）已从名单里划掉：实测本来是 Double。
 
+#### 11.24 第四十七刀：`1.5!` 认 Single 档 + Single→String 的 7 位口径
+
+真 VB6 读数来自 `.temp/litprobe/GProbe.bas` / `HProbe.bas`（用户在本机 VB6 跑，日志
+`c3_vb6_probe_G.log` / `c3_vb6_probe_H.log`）。两个提交：
+
+- `99f6e567`（**未推**）类型面：`Token::singleSuffix` + lexer `case '!'` + parser 出
+  `LiteralKind::Single`；`inferExprType` 认 Single→Single，`/` 走 Single 规则、`^` 恒 Double；
+  Single 参与的四则按 `(float)((float)L op (float)R)` 落 float，`\` 的浮点实参走 `vb6_FltToLng`。
+- `4f1e4621` 格式化面：`vb6_NumToBSTRDefault` 的 `isSingle` 支重写。
+
+**Single→String 三条口径**（H01~H20 全量对过，不是「最短往返」）：
+
+| 读数 | VB6 | 旧 C3 |
+|---|---|---|
+| `CStr(1/3)` | `0.3333333` | 同（碰巧） |
+| `CStr(1234567.5)` | `1234568` | 同（碰巧） |
+| `CStr(12345678!)` | `1.234568E+07` | `12345678` |
+| `CStr(1e7!)` | `1E+07` | `10000000` |
+| `CStr(16777216!)` | `1.677722E+07` | `16777216` |
+| `CStr(0.00001!)` | `0.00001` | `1e-05` |
+| `CStr(3.4E+38!)` | `3.4E+38` | `3.4e+38` |
+
+即：① 有效数字恒 **7 位**；② 7 位舍入后 `|x| >= 1e7` 才转指数，低位一律定点；
+③ 指数大写 `E` + 两位。`Str$` 另有两条口径：非负前一空格（`" 1.5"`）、`|x|<1` 去前导 0（`" .1"`）。
+
+**Fix 117d 的启发式加门槛**：`CStr(12345678#)` 真读数是 `"12345678"`，而这个值恰好也是
+float 精确值 —— 旧的无条件「float 精确 ⇒ 按 Single 打」会把它变成 `1.234568E+07`。
+改成只对**非整数**float 精确值启用（噪声只来自 21.1000003814697 这一味）。
+
+**坑（务必记住）**：`vb6rtl_conv.c` 在 `C3RTL_EMBEDDED_FILES` 里、`src/driver/c3rtl.rc` 也挂着
+`OBJECT_DEPENDS`，但 **Ninja 下改 RTL 源不会重编 .rc**。必须显式 `touch src/driver/c3rtl.rc`，
+否则「改完 → 重编 → 重跑」输出一字不变，会误判成「这条路径没人走」。
+
+本机验证：HProbe 的 20 行 Single 与 VB6 逐行一致；SGProbe SG **18/19**（只剩 SG11）；
+smoke 1/1、syntax 227/227、bas 181/181。
+
+**剩余键（5 → 3 + 3 条新残）**：`Abs(Variant/Single)`（C23，含 SG11）、D13/D15、
+一元 `-`/`Not`（E01~E10 + H06）；新残：Format$ 空格式那一支没透传 Single 标志
+（H05/H06/H08 的 fmt 列）、`Str$` 浮点走 `vb6_Str(int32_t)` 截断（H01 打 `1`）、
+Double 低位 `1e-5` 仍打 `1e-05`（只有一行读数，待补两点再定）。
+
