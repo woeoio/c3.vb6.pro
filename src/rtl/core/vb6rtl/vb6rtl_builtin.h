@@ -93,6 +93,8 @@ static inline int32_t vb6_MsgBox1(BSTR prompt) {
 
 // 数值函数
 double vb6_Abs(double x);
+// C30-10 第五十刀: Abs 的 Single 出口（VB6 的 Abs 返回实参那一档）。
+float vb6_AbsSng(float x);
 int32_t vb6_Sgn(double x);
 double vb6_Sqr(double x);
 double vb6_Round(double x, int32_t decimals);

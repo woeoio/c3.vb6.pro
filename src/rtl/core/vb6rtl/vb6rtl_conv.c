@@ -76,6 +76,13 @@ int32_t vb6_MsgBox(BSTR prompt, int32_t buttons, BSTR title, BSTR helpfile, int3
 // ============================================================
 
 double vb6_Abs(double x) { return fabs(x); }
+
+// C30-10 第五十刀: Abs 的 Single 出口。VB6 的 Abs 返回**实参那一档** ——
+// 真 VB6 探针 SG11 `Abs(1.5!)` = VarType 4 / Single（C3 旧站只有 double 出口，
+// 发成 `vb6_VariantFromValue(vb6_Abs(1.5f))`，_Generic 看到 double ⇒ 装 VT_R8，实测 5）。
+// AB 段同一族读数: Abs(Byte) = Byte(17)、Abs(Boolean) = Integer、Abs(Empty) = Integer 0、
+// Abs(Date) = Date(7)、Abs(CInt(-32768)) = Long —— 那几档是另一刀，本刀只开 Single 一格。
+float vb6_AbsSng(float x) { return fabsf(x); }
 int32_t vb6_Sgn(double x) { return (x > 0) ? 1 : (x < 0) ? -1 : 0; }
 double vb6_Sqr(double x) { return sqrt(x); }
 double vb6_Round(double x, int32_t decimals) {

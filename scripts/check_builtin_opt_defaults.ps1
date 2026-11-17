@@ -176,6 +176,10 @@ $notPadding = @{
     #   int32_t，浮点实参在 C 侧就被截断 —— 真 VB6 探针 H 读数: Str$(1.5!) = " 1.5"、
     #   Str$(0.00001!) = " .00001"、Str$(-1.5!) = "-1.5"。按**静态类型**分出口，不补缺省档。
     'vb6_Str'            = '静态类型是 Single 时改 callee = vb6_StrSng (7 位口径 + 非负前导空格 + 去前导 0)'
+    # C30-10 第五十刀 (2026-11-17): Abs(Single) 改 callee = vb6_AbsSng。VB6 的 Abs 返回
+    #   实参那一档 —— 真探针 SG11 `Abs(1.5!)` = VarType 4 / Single（旧站按 double 装 VT_R8）。
+    #   同族的 Abs(Byte/Boolean/Empty/Date/Variant) 各档是另一刀，不在此处。
+    'vb6_Abs'            = '静态类型是 Single 时改 callee = vb6_AbsSng (Abs 返回实参那一档)'
     # 账 #305 第二百四十刀 (fbc26f64, 2026-11-09): 裸 `Randomize` 走**缺参分支** ——
     #   真 VB6 是 rtcRandomize 拿 Timer 播种 (走 vb6_RandomizeTimer), 不是 `Randomize 0`。
     #   这一段改的是 callee 名 + 清空实参, **不补档** ⇒ 它不进那张表, 但按 R7 必须在这里写理由。

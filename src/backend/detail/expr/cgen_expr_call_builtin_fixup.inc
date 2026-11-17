@@ -528,6 +528,13 @@ static const char* const kOD_Randomize[]   = { "0.0" };
             callee = "vb6_StrConvFromByteArray";
         }
     }
+    // C30-10 第五十刀: `Abs(Single)` 走实参那一档的出口。真 VB6 SG11 `Abs(1.5!)`
+    // = VarType 4 / Single；旧站只有 `vb6_Abs(double)` ⇒ `vb6_VariantFromValue(vb6_Abs(1.5f))`
+    // 按 double 装 VT_R8（实测 5）。只在静态类型确实是 Single 时改道。
+    if (callee == "vb6_Abs" && !node.positional.empty()
+        && inferExprType(*node.positional[0]) == Vb6Type::Single) {
+        callee = "vb6_AbsSng";
+    }
     // C30-10 第四十九刀: `Str$(Single)` 改道到浮点出口。
     // vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01/H10/H14 打
     // "1"/"0"/"-2147483648"，真 VB6 是 " 1.5"/" .00001"/" 3.4E+38"）。
