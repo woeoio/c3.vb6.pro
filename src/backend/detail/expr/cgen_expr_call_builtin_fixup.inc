@@ -535,18 +535,16 @@ static const char* const kOD_Randomize[]   = { "0.0" };
         && inferExprType(*node.positional[0]) == Vb6Type::Single) {
         callee = "vb6_AbsSng";
     }
-    // C30-10 第五十一刀: `Abs(Variant)` 走运行时子类型阶梯（C23）。
-    // 真 VB6 AB 段: Abs(Byte)→Byte(17)、Abs(Integer)→Integer、Abs(Integer 最小)→Long、
-    // Abs(Long)→Long、Abs(Single)→Single、Abs(Double)→Double、Abs(Currency)→Currency、
-    // Abs(Boolean)→Integer、Abs(Empty)→Integer 0、Abs(Null)→Null、Abs(Date)→Date、
-    // Abs("5")→Double、Abs("x")→错误 13。旧站一律降 VT_R8。
+    // C30-10 第五十一刀（撤回）: `Abs(Variant)` 改 callee = vb6_AbsV 那一版在**数值位**上
+    // 会变成「把一枚 vb6_VARIANT 当 double 用」—— 门里 6 个作业红（vbp #5~#8 跑报错、
+    // compile #1/#2 的 [STATIC] builtin_slot_returns），因为这一站看不到**消费侧**：
+    // `VarType(Abs(v))` 要的是变体，`Abs(v) * 2` 要的是 double。
+    // RTL 的 `vb6_AbsV` 梯子与 kOwned/kOwnedVariant/kRows 登记**保留**（无入口即惰性），
+    // 等“按消费侧决定要不要改名”那一刀再接回来 —— 台账 §11.26 记着这笔。
+#if 0
     if (callee == "vb6_Abs" && !node.positional.empty()
         && inferExprType(*node.positional[0]) == Vb6Type::Variant) {
         callee = "vb6_AbsV";
-        // Fix 108c 那一站在本文件之前就把 Variant 实参折成了 double
-        // （`vb6_Abs(vb6_VariantToDouble(v))`），而 `vb6_AbsV` 要的是**原样的 VARIANT**
-        // —— 子类型阶梯全靠 vt 说话。把那一层剥回去；args 与 argList 两处一起改
-        // （下游按 argList 发码，只改 args 不生效 —— 实测 C2440 double→vb6_VARIANT）。
         const std::string wrapA = "vb6_VariantToDouble(";
         std::string a = args[0];
         if (a.size() > wrapA.size() + 1 && a.compare(0, wrapA.size(), wrapA) == 0
@@ -557,6 +555,7 @@ static const char* const kOD_Randomize[]   = { "0.0" };
             args[0] = inner;
         }
     }
+#endif
     // C30-10 第四十九刀: `Str$(Single)` 改道到浮点出口。
     // vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01/H10/H14 打
     // "1"/"0"/"-2147483648"，真 VB6 是 " 1.5"/" .00001"/" 3.4E+38"）。
