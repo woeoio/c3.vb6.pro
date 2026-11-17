@@ -37,8 +37,15 @@
         Vb6Type argType = inferExprType(*node.positional[0]);
         if (argType == Vb6Type::Long || argType == Vb6Type::Integer) {
             args[0] = "vb6_VariantLong(" + args[0] + ")";
-        } else if (argType == Vb6Type::Double || argType == Vb6Type::Single) {
+        } else if (argType == Vb6Type::Double) {
             args[0] = "vb6_VariantDouble(" + args[0] + ")";
+        } else if (argType == Vb6Type::Single) {
+            // C30-10 第四十八刀: Single 以前与 Double 挤在同一臂里, 发成
+            // vb6_VariantDouble(sg) ⇒ Format$ 的形参 vt 是 VT_R8 ⇒ RTL 那条
+            // isSingle 分支永远走不到, 按 Double 口径打 "12345678";
+            // 真 VB6 探针 H05/H06/H08 的 fmt 列是 "1.234568E+07" / "1.677722E+07" / "1E+07"。
+            // 改问唯一权威 boxToVariant (与同文件 Boolean/Date 两档同一个做法)。
+            args[0] = boxToVariant(node.positional[0].get(), args[0]);
         } else if (argType == Vb6Type::String) {
             args[0] = "vb6_VariantString(" + args[0] + ")";
         } else if (argType == Vb6Type::Boolean) {
