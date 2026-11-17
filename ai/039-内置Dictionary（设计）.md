@@ -1258,6 +1258,17 @@ oracle 说槽、`ChkLong` 当标量吃）。
     `prop_write_value_slot` / `variant_unbox` / `variant_cmp_boxing` /
     `variant_to_string_authority` / `manifest_coverage`）。
 
-发码形状必定动了（两形都变变体三目 + 属性值站取数），`emit-manifest.expected.txt` 待本轮
-分支 PR 的 CI 清单回来后 `-Bless` 登记；门也以同一 PR 的 22 作业为准。
+发码形状必定动了（两形都变变体三目 + 属性值站取数），`emit-manifest.expected.txt` 已按 CI 交回的
+清单 `-Bless` 登记（改写 4 行）：`tests/test_builtin_arity.bas`、
+`tests/VbQRCodegen-master/src/mdQRCodegen.bas`、`tests/VbQRCodegen-master/test/Project1.vbp`、
+`tests/VBFlexGridDemo/VBFlexGridDemo.vbp`。登记后本机复算 748/748 逐行相同；
+逐行看过形态：`Choose(1, "a")` 现在发
+`vb6_VariantFromValue(((1)==1 ? (vb6_VariantString(vb6_BSTR_FromStr(L"a"))) : (vb6_VariantNull())))`
+（`test_builtin_arity.c:109` 实测），与探针 S 段同一形状。
+
+门（全量按用户新规走 GA，本机只留小量）：
+  - 分支 PR 的 dispatch run `44091780671`（`big/variant-consumers`）= **21/22**，
+    唯一红的就是 `Emit manifest (shape oracle)`（预期中的未登记）；bas #1/#2、syntax、smoke、
+    asm、12 片 vbp 全绿 —— 也就是说“大改没伤别处”这一条是 GA 答的，不是本机答的；
+  - 登记提交 `90f8dd5e` 推 dev 后 run `44094326716` = **22/22**（零红）。
 
