@@ -528,6 +528,14 @@ static const char* const kOD_Randomize[]   = { "0.0" };
             callee = "vb6_StrConvFromByteArray";
         }
     }
+    // C30-10 第四十九刀: `Str$(Single)` 改道到浮点出口。
+    // vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01/H10/H14 打
+    // "1"/"0"/"-2147483648"，真 VB6 是 " 1.5"/" .00001"/" 3.4E+38"）。
+    // 只在静态类型确实是 Single 时改道，整数那一档一字不动。
+    if (callee == "vb6_Str" && !node.positional.empty()
+        && inferExprType(*node.positional[0]) == Vb6Type::Single) {
+        callee = "vb6_StrSng";
+    }
     // Fix 140: StrPtr(Byte数组) → 数组数据指针 (而非 SafeArray1D* 结构体指针).
     // 场景: LabelPlus.ctl GdipMeasureString/GdipAddPathString(StrPtr(m_Caption), -1, ...)
     // — m_Caption 是 Byte() 数组, 但 GDI+ 需要 UTF-16 字符指针, 必须取 arr->data.

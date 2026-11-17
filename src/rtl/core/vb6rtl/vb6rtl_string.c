@@ -449,6 +449,31 @@ BSTR vb6_Str(int32_t n) {
     return vb6_BSTR_FromStr(buf);
 }
 
+// C30-10 第四十九刀: Str$(Single) 的浮点出口。
+// vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01 `Str$(1.5!)` 打 "1"、
+// H10 `Str$(0.00001!)` 打 "0"、H14 `Str$(3.4E+38!)` 打 "-2147483648"，而真 VB6 是
+// " 1.5" / " .00001" / " 3.4E+38"）。
+// VB6 的 Str$ 口径 = CStr 的数字口径（直接复用 vb6_CStrSingle 的 7 位规则）
+//                  + 非负数前一个空格（负数不加）
+//                  + |x| < 1 时去掉前导 "0"（"0.1" → " .1"、"-0.00001" → "-.00001"）。
+BSTR vb6_StrSng(float x) {
+    BSTR num = vb6_CStrSingle(x);
+    if (!num) return vb6_BSTR_FromStr(L" ");
+    const wchar_t* p = num;
+    wchar_t buf[96];
+    size_t n = 0;
+    if (p[0] == L'-') {
+        if (p[1] == L'0' && p[2] == L'.') { buf[n++] = L'-'; p += 2; }
+    } else {
+        buf[n++] = L' ';
+        if (p[0] == L'0' && p[1] == L'.') p += 1;
+    }
+    while (*p && n < 94) buf[n++] = *p++;
+    buf[n] = 0;
+    SysFreeString(num);
+    return vb6_BSTR_FromStr(buf);
+}
+
 // ============================================================
 // 字符串函数 (补充)
 // ============================================================

@@ -67,6 +67,8 @@ int32_t vb6_NumTryParse(BSTR s, double* out);
 int32_t vb6_IsNumericText(BSTR s);   // = vb6_NumTryParse 的成功本身，**不许报错**
 int16_t vb6_BoolVal(BSTR s);      // 账 #416: Boolean 那一档问的是 VarBoolFromStr ("True" 算话)
 BSTR vb6_Str(int32_t n);
+// C30-10 第四十九刀: Str$(Single) 的浮点出口 (7 位口径 + 非负前导空格 + 去前导 0)。
+BSTR vb6_StrSng(float x);
 BSTR vb6_Format(vb6_VARIANT expr, BSTR fmt, int32_t firstDayOfWeek, int32_t firstWeekOfYear);
 // 账 #428 (§B202): 这枚出口被内置表点名，cgen 把它**直接发进用户 TU**。头里没声明时 C 只当它「返回 int 的隐式声明」—— 两台都照编照链，所以这一格从形状上看不见: x86 把截断后的低 32 位当指针用恰好还通，x64 交出去的就是废指针 ⇒ vb6_BSTR_AssignMove 一解引用就 AV(0xC0000005)。判据里那枚 VarType 针把它在两台上都钉住: 缺声明时答 3 (VT_I4)，有了才答 8 (VT_BSTR)。
 BSTR vb6_FormatDateTime(double dateSerial, int32_t namedFormat);
