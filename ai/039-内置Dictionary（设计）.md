@@ -825,3 +825,38 @@ Integer 算术全链（13 键 + `^` 返回 Double）、Single 装箱（A12/C19/C
 发码：CI run `43989114687`（head `6744bea5`）= **21/22**，仅 `Emit manifest` 红；
 登记提交 `8263d2e5` 改写 10 行 → CI run `43990410456` = **22/22 全绿**。
 
+### 11.22 第四十四刀：`Choose`/`Switch` 全窄候选支 → VT_I2（+ 两处探针失真订正）
+
+判据（`isNarrowIntExpr` 的 `IndexOrCallExpr` 支）：`choose` 的第 1 位起、`switch` 的奇数位
+**全部**是 Integer 档 ⇒ 不管运行时选哪一支，结果必是 Integer → 发 `vb6_VariantInt`。
+依据：真 VB6 D12 `Choose(1,1,2)` = 2/Integer、D14 `Switch(True,1,False,2)` = 2/Integer。
+
+**不开的一半**：D13 `Choose(1,1,40000)`、D15 `Switch(True,1,40000)`（一支宽一支窄）——
+那条要求「选中支原样」，得把每支装箱、处置未选中支的 BSTR 归属；且现有发码是**嵌套三目**
+（惰性求值），而 `IIf` 是悉数求值，换形会改求值时机，没有 oracle 之前不碰。发码一字不变。
+
+发码：CI run `43992894092`（head `0146f350`）= **22/22 全绿**（`Emit manifest` 也绿 ——
+语料里没有「全窄候选支」的 Choose/Switch 站点，所以发码零变化）。
+
+#### 11.22.1 两处必须订正的读数（镜像 helper 的失真）
+
+`Probe(key, expr)` / `P(key, val)` 的形参是 **`ByRef Variant`**。C3 在这一站把
+**VT_R4 转成了 VT_R8**，于是镜像里 C19(`Timer`)、C28(`CSng(5)`) 看起来答 Double。
+直接打印（不过 helper）的实测：
+
+```
+csng=4/Single
+timer=4/Single
+snglit=5/Double     ← 1.5! 是真缺口：发码 vb6_VariantDouble(1.5)
+dbl=5/Double
+```
+
+⇒ C19/C28 不是 C3 缺口；真正的 Single 缺口只剩 `1.5!` 字面量的档（词法吃掉了 `!` 但没记下
+Single 档，要词法→AST→inferExprType 一路补）。另：`ByRef Variant` 形参丢 VT_R4 本身
+也是一条待查的 C3 行为（没进本刀）。
+
+#### 11.22.2 剩余 19 键
+
+`1.5!`（A12）、`Abs(Variant)`（C23）、D13/D15、Integer 算术全链（F01~F04/F06/F06b/F09/F11/
+F12/F14/F20/G09/H01/H02 共 14）、`^` 返 Double（F13）、一元 `-`/`Not`（E01~E10 + H06）。
+
