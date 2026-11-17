@@ -275,6 +275,10 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Spc",
         "vb6_Str",
         "vb6_StrSng",
+        // C30-10 第五十六刀: Str$ 的两枚新出口同样是「mint 一枚新 BSTR」的站，
+        // 不进这张表就没人管它的所有权（单实参调用会被 hoistOwnedTemp 放掉）。
+        "vb6_StrDbl",
+        "vb6_StrBool",
         "vb6_VarNotV",
         "vb6_AbsV",
         "vb6_StrConv",

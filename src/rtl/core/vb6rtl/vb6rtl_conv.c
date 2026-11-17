@@ -145,18 +145,12 @@ double vb6_Round(double x, int32_t decimals) {
 // 21.100000381 / 32.700000763。
 BSTR vb6_NumToBSTRDefault(double v, int isSingle) {
     if (v != v) return vb6_BSTR_FromStr(L"");   // NaN → 空串 (VB6 不会出现 NaN)
-    // Fix 117d: Double 若恰好是 Single 精度值 (由 Single 运算/赋值/Round 提升而来),
-    // 按 VB6 的 Single 规则打印 7 位有效数字。否则 Round(v!, 1)/Single 除法等会把
-    // float 二进制噪声整个暴露出来 (如 "10.3999996185"、"36.9000015")。
-    // C30-10 第四十七刀: 只对**非整数**那一形启用。真 VB6 probe H 的 H21 `CStr(12345678#)`
-    // = "12345678"（Double 的 8 位整数原样打），而 12345678 恰好也是 float 精确值 ——
-    // 旧的无条件启发式会把它当 Single 打成 "1.234568E+07"。噪声只来自不能精确表示的
-    // 小数（21.1000003814697），整数没有这一味。
-    if (!isSingle && v == (double)(float)v && v != floor(v)) isSingle = 1;
-    int maxPrec = isSingle ? 7 : 15;
-    char nbuf[64] = "0";
-    double av = fabs(v);
-    int useExp = (av >= 1e15) || (av != 0.0 && av < 1e-4);
+    // C30-10 第五十六刀: 旧值域启发式（「恰可被 float 精确表示且非整数 ⇒ 按 Single 打 7 位」）
+    // **已删**。真 VB6 第二轮读数把它钉死了: D02 `CStr(1234567.5#)` = "1234567.5"（8 位有效
+    // 数字），而旧启发式会命中它打成 "1234568"。噪声与真值在**值域上不可分**（两者都是
+    // float 精确值），所以这条兜底只能靠发码侧「这枚 Double 是 Single 提升来的」标记，
+    // 不靠值反推 —— 那一位属于过程入口/发码的问题（账 §11.25），不在本刀。
+    char nbuf[128] = "0";
     if (isSingle) {
         // C30-10 第四十七刀: 真 VB6 probe H 的 22 行读数（ai/039 §11.24）。三条口径：
         //   ① 有效数字恒 **7 位**（1/3 → 0.3333333、1234567.5 → 1234568）；
@@ -195,22 +189,54 @@ BSTR vb6_NumToBSTRDefault(double v, int isSingle) {
                 }
             }
         }
-    } else for (int prec = 1; prec <= maxPrec; prec++) {
-        snprintf(nbuf, sizeof(nbuf), "%.*g", prec, v);
-        if (!useExp && (strchr(nbuf, 'e') || strchr(nbuf, 'E'))) {
-            // "%.*g" 选了指数 → 换算成对应的定点小数位再试
-            int exp10 = (av > 0.0) ? (int)floor(log10(av)) : 0;
+    } else if (v == 0.0) {
+        nbuf[0] = '0'; nbuf[1] = 0;
+    } else {
+        // C30-10 第五十六刀: Double 的 CStr 口径 —— 真 VB6 第二轮读数 (A/B/C 段) 钉的三条:
+        //   ① 有效数字恒 **15 位**（1/3 → 0.333333333333333、0.12345678901234567 →
+        //      0.123456789012346、123456789012346 落回 15 位整数）；
+        //   ② 定点区间 = 舍入后的十进制指数 exp10 在 **[-15, 14]**：
+        //      1E-15 → "0.000000000000001"（定点）、1E-16 → "1E-16"（指数），
+        //      999999999999999 (15 个 9) → 定点，回 1E+15 起为指数（见③）。
+        //   ③ 阈值必须用**舍入之后**的指数判：H01 `999999999999999.9` 本身 <1E+15，
+        //      先舍到 15 位有效数字变成 1.00000000000000E+15 才转指数（读数 "1E+15"）。
+        //      旧的 `av >= 1e15 || av < 1e-4` 两个门槛都不对：-4 太低（真机到 -15 还是定点）、
+        //      1e15 判在舍入前（H01 漏判）。
+        //   ④ 指数走**大写 E + 符号 + 至少两位**（%+03d）: "1E+07"/"1E-20"/"1E-300"。
+        //      旧路径用 %.*g 兜底，直接吐小写 e。
+        char ebuf[64];
+        // 位数不用「最短往返」搜: 真 VB6 是**恒 15 位有效数字再剥尾零**。两种写法只在次正规数上分家
+        // —— A20 读数: 4.94065645841247E-324 (15 位)；而「最短往返」在 1 位就满足
+        // ("5e-324" 能往返解回同一枚次正规数)，于是打成 "5E-324"。也正因为是 15 位后剥零，
+        // 1234567.5 / 2.675 / 1.005 / 0.1+0.2 才会各自落回 "1234567.5"/"2.675"/"1.005"/"0.3"。
+        const int prec = 15;
+        snprintf(ebuf, sizeof(ebuf), "%.*e", prec - 1, v);
+        char* ep = strchr(ebuf, 'e');
+        int exp10 = ep ? atoi(ep + 1) : 0;
+        if (ep) *ep = 0;                                        // ebuf = 尾数（带符号）
+        if (exp10 >= -15 && exp10 <= 14) {
             int dec = prec - 1 - exp10;
             if (dec < 0) dec = 0;
-            if (dec > 20) dec = 20;
+            if (dec > 60) dec = 60;
             snprintf(nbuf, sizeof(nbuf), "%.*f", dec, v);
+            char* dot = strchr(nbuf, '.');
+            if (dot) {
+                char* z = nbuf + strlen(nbuf) - 1;
+                while (z > dot && *z == '0') *z-- = 0;
+                if (z == dot) *z = 0;
+            }
+        } else {
+            char* dot = strchr(ebuf, '.');
+            if (dot) {
+                char* z = ebuf + strlen(ebuf) - 1;
+                while (z > dot && *z == '0') *z-- = 0;
+                if (z == dot) *z = 0;
+            }
+            snprintf(nbuf, sizeof(nbuf), "%sE%+03d", ebuf, exp10);
         }
-        double back = strtod(nbuf, NULL);
-        if (isSingle) { if ((float)back == (float)v) break; }
-        else          { if (back == v) break; }
     }
-    wchar_t wbuf[64];
-    MultiByteToWideChar(CP_ACP, 0, nbuf, -1, wbuf, 64);
+    wchar_t wbuf[128];
+    MultiByteToWideChar(CP_ACP, 0, nbuf, -1, wbuf, 128);
     return vb6_BSTR_FromStr(wbuf);
 }
 // Fix 135 / Fix RND-SEQ: VB6 Rnd/Randomize 的**真实**实现。
