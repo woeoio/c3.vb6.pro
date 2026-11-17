@@ -2192,6 +2192,12 @@ std::string CCodeGen::narrowCheckAssign(Expr* target, Expr* value,
         vt == Vb6Type::Date)
         return std::string(fn) + "(vb6_FltToLng(" + cValue + "))";
 
+    // C30-10 第四十六刀: `+ - * \ Mod` 两侧都是 Integer 档那条路，**发码里已经逐步套过
+    // vb6_ChkInt**（越界即错误 6）⇒ 这里再套一层只是把同一个检查做两遍（热循环里每个
+    // `i = i + 1` 多一次 RTL 调用）。判据问 AST，不认文本。
+    if (value && value->kind == ASTNodeKind::BinaryExpr && isNarrowIntExpr(value))
+        return cValue;
+
     // §B138b: LongPtr 的宽度跟目标架构走 (x86=32 / x64=64), 见 cgenIntBits 处注释。
     const int ptrBits138 = (targetArch_ == "x86") ? 32 : 64;
     int srcBits = value ? cgenIntBits(vt, ptrBits138) : 0;

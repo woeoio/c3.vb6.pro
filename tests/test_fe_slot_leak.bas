@@ -97,12 +97,15 @@ Sub Main()
     Debug.Print "B164-delta-coll=" & (pf1 - pf0)
     Debug.Print "B164-delta-arr=" & (pf3 - pf2)
     If pf0 >= 0 And pf1 >= 0 And pf2 >= 0 And pf3 >= 0 Then
-        If (pf1 - pf0) < 8 * (500 * 40) Then
+        ' C30-10 第四十六刀: 阈值里的 `8` 原本写成 Integer 字面量，而 `500 * 40` 也是 Integer
+        ' ⇒ VB6 的 Integer × Integer 在 `8 * 20000` 这一步就报错误 6（常量表达式还是**编译期**报），
+        ' 能算出 160000 只因为旧 C3 把它升成了 Long。阈值要的是 Long 数学 ⇒ 显式 `8&`。
+        If (pf1 - pf0) < 8& * (500 * 40) Then
             Debug.Print "B164-coll-ok=Y"
         Else
             Debug.Print "B164-coll-ok=N"
         End If
-        If (pf3 - pf2) < 8 * (500 * 40) Then
+        If (pf3 - pf2) < 8& * (500 * 40) Then
             Debug.Print "B164-arr-ok=Y"
         Else
             Debug.Print "B164-arr-ok=N"

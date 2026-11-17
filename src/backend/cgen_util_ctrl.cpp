@@ -3683,6 +3683,24 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
         }
         return false;
     }
+    // C30-10 第四十六刀: `+ - * \ Mod` 两侧都是 Integer 档 ⇒ 结果仍是 **Integer**
+    // （用户真 VB6 日志 F01~F04 / F06 / F06b / F09 / F11 / F12 / F14 / F20 / G09 /
+    // H01 / H02 全是 2/Integer）。溢出那一半不在这句判据里 —— 值由发码侧每一步
+    // 的 vb6_ChkInt 查（F05/F07/F08/F19 在 VB6 是错误 6），这里只答「档」。
+    // `/` 与 `^` 刻意不在内: VB6 那两条返回 Double（F10/F13）。
+    if (e->kind == ASTNodeKind::BinaryExpr) {
+        auto& bin = static_cast<const BinaryExpr&>(*e);
+        switch (bin.op) {
+        case BinaryOp::Add:
+        case BinaryOp::Sub:
+        case BinaryOp::Mul:
+        case BinaryOp::IntDiv:
+        case BinaryOp::Mod:
+            return isNarrowIntExpr(bin.left.get()) && isNarrowIntExpr(bin.right.get());
+        default:
+            return false;
+        }
+    }
     // C30-10 第三十五刀: 内建返回档那一族 (Asc/Sgn/VarType/StrComp/月日年时分秒/Weekday/
     // FreeFile) —— VB6 答 Integer, 而语义层与 C 侧都答 int32。两形都要认:
     //   * 带实参的调用形 `Asc("A")` → IndexOrCallExpr(callee=IdentifierExpr)；

@@ -6154,7 +6154,9 @@ if ($Category -in @("all", "run", "bas")) {
     Test-EmitcShape 'b182_intformal_shape' @(
         "$Tests\b182_intformal.bas") @(
         '(*fi) = vb6_ChkInt(40000)',
-        'fv = vb6_ChkInt((fv + 1))',
+        # C30-10 第四十六刀: `fv + 1` 两侧都是 Integer 档 ⇒ 发码逐步套 vb6_ChkInt（越界错误 6），
+        # 而赋值那一层的闸不再重套一次（同一个检查只做一遍）。
+        'fv = vb6_ChkInt((int32_t)(fv) + (int32_t)(1))',
         'li = vb6_ChkInt(40000)',
         'gi = vb6_ChkInt(40000)',
         '(*lg) = 40000'
@@ -14381,7 +14383,10 @@ if ($Category -in @("all", "syntax")) {
         "l = vb6_ChkLong(vb6_FltToLng(vb6_Num_Div((double)(7), (double)(2))));",
         "i = vb6_ChkInt(vb6_FltToLng(6.7300000000000004));",
         "r.Px = vb6_ChkLong(vb6_FltToLng(6.7300000000000004));",
-        "r.Pi = vb6_ChkInt(vb6_FltToLng(vb6_Num_Div((double)(((4 * 1) + 3)), (double)(4))));",
+        # C30-10 第四十六刀: 这条里的 `(4 * 1) + 3` 两侧都是 Integer 档 ⇒ 发码改成
+        # 每一步 `vb6_ChkInt(...)`（VB6 的 Integer ⊕ Integer 仍是 Integer、越界即错误 6）。
+        # 钉的是**取整出口没变**（`vb6_FltToLng` / `vb6_ChkInt` 那层原样），只跟发码形状。
+        "r.Pi = vb6_ChkInt(vb6_FltToLng(vb6_Num_Div((double)(vb6_ChkInt((int32_t)(vb6_ChkInt((int32_t)(4) * (int32_t)(1))) + (int32_t)(3))), (double)(4))));",
         "r.Pb = vb6_ChkByte(vb6_FltToLng(6.7300000000000004));",
         "VB6_SA_AT(int32_t, arr, 0) = vb6_ChkLong(vb6_FltToLng(6.7300000000000004));",
         "VB6_SA_AT(uint8_t, bArr, 1) = vb6_ChkByte(vb6_FltToLng(6.7300000000000004));",
