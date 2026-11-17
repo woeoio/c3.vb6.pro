@@ -860,3 +860,61 @@ Single 档，要词法→AST→inferExprType 一路补）。另：`ByRef Variant
 `1.5!`（A12）、`Abs(Variant)`（C23）、D13/D15、Integer 算术全链（F01~F04/F06/F06b/F09/F11/
 F12/F14/F20/G09/H01/H02 共 14）、`^` 返 Double（F13）、一元 `-`/`Not`（E01~E10 + H06）。
 
+### 11.23 第四十六刀：Integer 算术留 Integer（逐步错误 6）
+
+#### 11.23.1 判据（真 VB6 F 段，17 键）
+
+直印探针 `.temp/litprobe/FProbe.bas`（不过 `ByRef Variant` helper ⇒ 没有 §11.22.1 那种失真）：
+
+- **2/Integer**：F01~F04、F06、F06b、F09、F11、F12、F14、F20、G09、H01、H02（14 键）。
+  改前一律 **3/Long** —— C3 把 `Integer + Integer` 升成了 Long。
+- **错误 6**：F05（`30000+30000`）、F07（`200*200`）、F08（`30000*2`）、F19。
+  改前这四枚静默算出 60000 / 40000 / 60000 这类数。
+- **5/Double**：F10（`/`）、F13（`^`）。F13 改前**就是** Double ⇒ §11.22.2 那一行
+  「`^` 返 Double 是缺口」**作废**（刀40 之前那次采集的 stale 行）。
+
+#### 11.23.2 改法：同一个问句一个出口
+
+1. `isNarrowIntExpr`（`cgen_util_ctrl.cpp`）加 `BinaryExpr` 支：`+ - * \ Mod` 且两侧窄 ⇒
+   这枚节点在 VB6 里就是 Integer。`/`、`^` 刻意**不收**（真 VB6 那两枚答 Double）。
+   这一枚同时喂三处：算术档、Variant 装箱档（F20）、赋值闸的「装得下不套」。
+2. 发码的值那一半（`cgen_expr_binary.cpp`）：`+ - *` 两侧窄时显式抬 int32 算完再交
+   `vb6_ChkInt` 收回 16 位；`\`、`Mod` 的两个操作数先过 `vb6_ChkInt`（越界的**输入**
+   也要响），结果再包一层。int16 参与 C 运算会被整型提升成 int（结果悄悄变 Long），
+   `(int16_t)` 硬截又会静默回卷 —— 两条都不是 VB6，所以中间量只能留 int32。
+   步长逐格：`vb6_ChkInt((int32_t)(L) op (int32_t)(R))`，`L`/`R` 自己若是窄表达式则已包过
+   ⇒ `2 + 3 * 4` 发成 `ChkInt(2 + ChkInt(3*4))`，每一格各响一次，与 VB6 从左到右一致。
+3. `boxVariant86` 把窄操作数装成 `vb6_VariantInt((int16_t)(…))`（VT_I2）。改前走
+   `vb6_VariantFromValue`，`_Generic` 把 int 装成 VT_I4 ⇒ `VarAdd` 一路升到 Long
+   （F20 `arr(1) + 1` 因此以前答 3/Long）。
+4. `narrowCheckAssign` 对「已经逐步套过 ChkInt」的窄算术**不再重套**：否则热循环里
+   `i = i + 1` 每句两次 RTL 调用。判据问 AST（`BinaryExpr && isNarrowIntExpr`），不认文本。
+
+#### 11.23.3 两处夹具订正（都是旧 C3 把 Integer 算术当 Long 才成立的口径）
+
+- `tests/test_fe_slot_leak.bas` 的阈值 `8 * (500 * 40)`：`500*40 = 20000` 是 Integer，
+  `8 * 20000` 在 VB6 是 Integer 乘法越界（常量表达式还是**编译期**错误 6）⇒ 改 `8&`。
+  这一行以前只是靠 C3 升 Long 才算得出 160000；本刀一上就真跑 `Unhandled VB6 Error #6`
+  （第一次跑就是这个堆栈），是夹具自己的问题、不是回归。
+- 发码针 `f2lng_round`（`(4 * 1) + 3`）与 `b182_intformal_shape`（`fv + 1`）按新形状改。
+
+#### 11.23.4 门与登记
+
+- 门 **`44012205343`**（head `98557825`）：**21/22**，唯一红 = `Emit manifest (shape oracle)`
+  —— 报「存量 35 份发码真的变了」。
+- A/B 逐行归因（BASE = 父提交 `a09b5c78` 本机自编 `.temp/base46/.buildrel`，NEW = 本刀）：
+  35 份里每份 removed == added（**无增删语句**，只有 1:1 换行），新增 **281** 行全部带
+  `vb6_ChkInt` / `vb6_VariantInt`，撤下 147 行是它们被包之前的样子。抽样：
+  `result = (2 + (3 * 4));` → `vb6_ChkInt((int32_t)(2) + (int32_t)(vb6_ChkInt((int32_t)(3) * (int32_t)(4))))`；
+  `vb6_IntDiv(10, 3)` → `vb6_ChkInt(vb6_IntDiv(10, 3))`；`vb6_VariantFromValue(1)` → `vb6_VariantInt((int16_t)(1))`。
+- 登记 `ada4c6b7`（`rebless_emit_manifest.ps1 -Bless`，吃 CI 那台自己交回来的清单）：
+  748/748 行相同、`K1..K3` 集合相等。
+- 验证轮 **`44013912679`**（head `ada4c6b7`）：**22/22 success**。
+- 本机回归：smoke 1/1、syntax 227/227、asm 14/14、compile #1 88/88、compile #2 77/77、
+  bas #1 181/181（含两条发码针）。
+
+#### 11.23.5 剩余键（19 → 5）
+
+`1.5!`（A12）、`Abs(Variant)`（C23）、D13/D15、一元 `-`/`Not`（E01~E10 + H06）。
+`^`（F13）已从名单里划掉：实测本来是 Double。
+
