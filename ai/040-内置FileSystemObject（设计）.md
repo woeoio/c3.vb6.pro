@@ -98,20 +98,20 @@ FileSystemObject
 | `GetTempName()` | String | 待：形如 `radXXXXX.tmp`（长度/字符集要读数） |
 | `GetSpecialFolder(n)` | Folder | 待：0=Windows、1=System、2=Temp（本机 `GetSpecialFolder(0).Path` 是 `C:\Windows`，见语料 `declare_cwex_lit_com.bas:35`） |
 
-### 刀 2（对象面）
+### 刀 2（对象面，已落 2026-11-18）
 
 `GetDrive` / `GetFolder` / `GetFile` / `Drives` / `Folder.{Name,Path,ShortPath,Type,Size,DateCreated,DateLastModified,DateLastAccessed,Attributes,Files,SubFolders,IsRootFolder,ParentFolder,Drive,CreateTextFile,Delete,Copy,Move}` /
 `File.{Name,Path,ShortPath,Size,Type,DateCreated,DateLastModified,DateLastAccessed,Attributes,ParentFolder,Drive,Copy,Move,Delete,OpenAsTextStream}`。
 
-### 刀 3（TextStream）
+### 刀 3（TextStream，已落 2026-11-18）
 
 `CreateTextFile` / `OpenTextFile` / `TextStream.{Read,ReadLine,ReadAll,Skip,SkipLine,Write,WriteLine,WriteBlankLines,Close,AtEndOfStream,AtEndOfLine,Line,Column}` + `Files` 集合的 `IEnumVARIANT`。
 
-### 刀 4（写面 + 集合增删）
+### 刀 4（写面 + 集合增删，已落 2026-11-18，`CopyFolder`/`MoveFolder` 未做）
 
 `CreateFolder` / `DeleteFile` / `DeleteFolder` / `CopyFile` / `CopyFolder` / `MoveFile` / `MoveFolder`。
 
-### 刀 5（默认翻面）
+### 刀 5（默认翻面，已落 2026-11-18 —— 按用户要求提前翻）
 
 成员面覆盖语料后把**默认**从 scrrun 翻到内建（`C3_FSO_PREFER_MS=1` 保留为对照组），
 并补一条 `fso_native` 夹具（真机 vs C3 双跑对账）。
@@ -149,13 +149,17 @@ FileSystemObject
 - `DateLastModified` 等是 `Date`（Double 序列号）：FILETIME → 本地时间 → OLE 序列号。
   `[待读数]` 取舍：秒以下是否截断（VB6 的 FSO 文档说"精度到秒"，要真机验）。
 - `File.Size` = 字节数（`Long`，>2GB 时 VB6 报错/溢出，待读数）。
-- `Folder.Size` = **0**（VB6 文档：文件夹的 Size 无意义，返回 0），待读数。
+- `Folder.Size` = **递归内容总和**。手册说"文件夹的 Size 无意义、返回 0"，**实测反驳**：
+  刀 2/3 探针里 `GetFolder(<本目录>).Size` 两边同为 `4846545`；自造目录 `a.txt(3)+b.txt(5)+sub1\c.txt(5)`
+  两边同为 `13`。回的是 `VT_R8`（Large），不是 Long。
 
 ### 5.4 `Type` 字符串
 
-`File.Type` 取注册表 `HKEY_CLASSES_ROOT\.<ext>` 的默认值描述（如 `"Text Document"`），
-取不到就回 `"<EXT> File"`；`Folder.Type` 恒 `"File folder"`；`Drive.Type` 见 §5.6。
-`[待读数]` 这一格对 CJK 系统（本机中文）会返回中文描述 —— 夹具断言要按真机字符串写，不能写英文。
+**主口径是 shell 的类型名**（`SHGetFileInfoW(SHGFI_TYPENAME|SHGFI_USEFILEATTRIBUTES)`），不是注册表：
+实测本机 `folder.Type` = `文件夹`、`a.txt.Type` = `文本文档`，两边逐字相同；
+而 `HKCR\Directory` 默认值是英文 `File Folder`、`HKCR\.txt` 默认值只是 ProgID `txtfile`
+—— 走注册表会答错。注册表两级查询（`.ext` → ProgID → 描述）只留作 shell 答不出时的兜底。
+`Drive.Type` 见 §5.6。
 
 ### 5.5 TextStream 编码与换行
 
@@ -163,8 +167,11 @@ FileSystemObject
   与 VB6 的 `Open ... For Output` 不是一回事（后者写 ANSI 也写 CRLF）。
 - 换行恒 `CRLF`；`ReadAll` 把 `CRLF`、`LF`、`CR` 都当行尾（`ReadLine` 会吃掉行尾）。
 - `unicode = True` ⇒ 写 UTF-16LE **带 BOM**（`FF FE`），`ReadAll` 要能识别 BOM。
-- 读的时候 `Tristate` 参数（`OpenTextFile(path, iomode, create, format)` 的 `format`）：
-  `-2` 系统默认 / `-1` Unicode / `0` ASCII，`[待读数]` 缺省 `-2` 的实际行为。
+- 读的时候 `Tristate` 参数（`OpenTextFile(path, iomode, create, format)` 的 `format`）**就是解码开关**，
+  而且**不嗅 BOM**：实测 `CreateTextFile(p, True, True)` 写出的 UTF-16 文件，用 `OpenTextFile(p, 1)`
+  （Format 缺省 = TristateUseDefault）读回来是**一行乱码**，内建实现按 `format == -1` 才按 UTF-16 解码后
+  两边逐字节相同；`OpenTextFile(p, 1, False, -1)` 才读回 `wide`。所以内建实现也只认 `format`，
+  不比 scrrun "聪明"。
 
 ### 5.6 枚举顺序与 `Drive`
 
@@ -265,8 +272,8 @@ End Sub
 3. **`C3_FSO_PREFER_MS` 对照开关**必须留着（Dictionary 的 `C3_DICT_PREFER_MS` 同款），
    否则真机对照跑不了。
 4. **长路径 / UNC**：`\\?\` 前缀与 UNC `\\server\share` 的路径代数要单独读数，本刀不碰。
-5. **默认翻面时机**：刀 5。在成员面没覆盖语料之前，**默认仍走 scrrun**，
-   内建实现只在 `C3_FSO_NATIVE=1` 下启用 —— 语料 12 份的形状与行为一格不变。
+5. **默认已翻面（2026-11-18）**：`vb6_Fso_NativeEnabled()` 默认返回 1，`C3_FSO_PREFER_MS=1`
+   回退到真 scrrun（对照与退路）。翻面发生在刀 2/3/4 落地之后，语料 12 份全部仍需真编真跑验过（见 §8）。
 
 ---
 
@@ -291,6 +298,36 @@ End Sub
 14 行路径/存在性读数（`A01`~`A10`、`B01`~`B05`）两边**逐字相同**，唯一差异是 `GetTempName` 的
 随机字母本身。过程中改掉一个真 bug：`GetAbsolutePathName` 折叠段时在盘符后没补反斜杠，
 `C:\Users\x` 会展开成 `C:Users\x`（已修，修后与 scrrun 一致）。
+
+## 7.6 刀2/刀3/刀4 实测（2026-11-18，本机）
+
+同一份 `FsoProbe3.bas`（`.temp\fso_probe1/`）编出一个 exe，只差环境变量跑两遍：默认 = 内建，
+`C3_FSO_PREFER_MS=1` = 真 scrrun。逐行 `Compare-Object` 后**只剩两格不一样**：
+
+| 行 | 内建 | scrrun 腿 | 结论 |
+|---|---|---|---|
+| `G04`/`G06`（`Files.Item(1)` / `SubFolders.Item(1)`）| `err=0 a.txt|3` / `err=0 sub1|False` | `err=87` 且接收者为 `Nothing`（`C3_LATEBIND_MISS`）| **C3 晚绑定 + scrrun 自身的洞**：同一份源码里 `coll.Item("b.txt")` 两腿都正常（`G05`），只有**整数索引**这一形在 scrrun 腿上拿不到集合对象。真 VB6 给的是内建这组答案 |
+
+其余全部逐字相同（Drive/Folder/File/集合/TextStream/写面）：`D01`–`D05`、`G00`–`G03`、`G10`–`G15`、
+`H01`–`H05`、`P01`–`P03`、`S01`–`S14`、`W01`–`W06`。
+
+实测得到、与手册不一致的几条（已按读数改代码）：
+
+1. **`Folder.Size` 是递归内容总和**，不是 0（§5.3）。
+2. **`Type` 是 shell 的本地化类型名**（`文件夹` / `文本文档`），不是注册表英文值也不是 ProgID（§5.4）。
+3. **读 TextStream 不嗅 BOM**，`Tristate` 实参就是解码开关；`OpenTextFile(p, 1)` 读 UTF-16 文件
+   两边都是同一行乱码，`(p, 1, False, -1)` 两边都是 `wide`（§5.5）。
+4. **`DeepFolder` 不存在时 `CreateTextFile` 报 76**（不是 70）：先查父目录存不存在，再报权限。
+5. **`DeleteFolder` 是递归的**：目录里还剩文件时 `RemoveDirectoryW` 会失败，第一版就在这里发了 76。
+6. `TypeName` 两腿不同（内建 `Drive`/`Folder`/`File`，scrrun 腿 `Object`）。这是 C3 的
+   `vb6_ComCreatedTypeNameBStr` 只认**自己 CreateObject 出来**的对象所致；真 VB6 答 `Drive`/`Folder`/`File`
+   —— 内建这组才是对的，夹具不断言 scrrun 那一侧。
+
+顺带发现、不在本刀的两件事：
+
+- `Set coll = <scrrun 的 Files>` 后 `.Item(1)` 拿不到对象（上表）；内建没有这个洞。
+- `如果 drv.TotalSize > 0` 这类"Variant(R8) 与整数比"在 C3 里答 False，而 `CStr(drv.TotalSize)` 值是对的
+  —— 是表达式层的 Variant 比较问题，不是 FSO 的，另记账。
 
 ## 8. 验收
 
