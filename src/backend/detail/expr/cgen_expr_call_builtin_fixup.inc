@@ -535,6 +535,28 @@ static const char* const kOD_Randomize[]   = { "0.0" };
         && inferExprType(*node.positional[0]) == Vb6Type::Single) {
         callee = "vb6_AbsSng";
     }
+    // C30-10 第五十一刀: `Abs(Variant)` 走运行时子类型阶梯（C23）。
+    // 真 VB6 AB 段: Abs(Byte)→Byte(17)、Abs(Integer)→Integer、Abs(Integer 最小)→Long、
+    // Abs(Long)→Long、Abs(Single)→Single、Abs(Double)→Double、Abs(Currency)→Currency、
+    // Abs(Boolean)→Integer、Abs(Empty)→Integer 0、Abs(Null)→Null、Abs(Date)→Date、
+    // Abs("5")→Double、Abs("x")→错误 13。旧站一律降 VT_R8。
+    if (callee == "vb6_Abs" && !node.positional.empty()
+        && inferExprType(*node.positional[0]) == Vb6Type::Variant) {
+        callee = "vb6_AbsV";
+        // Fix 108c 那一站在本文件之前就把 Variant 实参折成了 double
+        // （`vb6_Abs(vb6_VariantToDouble(v))`），而 `vb6_AbsV` 要的是**原样的 VARIANT**
+        // —— 子类型阶梯全靠 vt 说话。把那一层剥回去；args 与 argList 两处一起改
+        // （下游按 argList 发码，只改 args 不生效 —— 实测 C2440 double→vb6_VARIANT）。
+        const std::string wrapA = "vb6_VariantToDouble(";
+        std::string a = args[0];
+        if (a.size() > wrapA.size() + 1 && a.compare(0, wrapA.size(), wrapA) == 0
+            && a.back() == ')') {
+            std::string inner = a.substr(wrapA.size(), a.size() - wrapA.size() - 1);
+            size_t pos = argList.find(a);
+            if (pos != std::string::npos) argList.replace(pos, a.size(), inner);
+            args[0] = inner;
+        }
+    }
     // C30-10 第四十九刀: `Str$(Single)` 改道到浮点出口。
     // vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01/H10/H14 打
     // "1"/"0"/"-2147483648"，真 VB6 是 " 1.5"/" .00001"/" 3.4E+38"）。

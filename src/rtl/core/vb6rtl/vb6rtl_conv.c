@@ -83,6 +83,46 @@ double vb6_Abs(double x) { return fabs(x); }
 // AB 段同一族读数: Abs(Byte) = Byte(17)、Abs(Boolean) = Integer、Abs(Empty) = Integer 0、
 // Abs(Date) = Date(7)、Abs(CInt(-32768)) = Long —— 那几档是另一刀，本刀只开 Single 一格。
 float vb6_AbsSng(float x) { return fabsf(x); }
+
+// C30-10 第五十一刀: Abs(Variant) 的运行时子类型阶梯（C23）。
+// 真 VB6 GProbe AB 段的读数（每档 Abs 后的 VarType / TypeName）:
+//   CByte(5)→17 Byte、CInt(-5)→2 Integer、CLng(-70000)→3 Long、CSng(-1.5)→4 Single、
+//   CDbl(-1.7)→5 Double、CCur(-2.5)→6 Currency、CBool(True)→2 Integer 1、
+//   CByte(200)→17、CInt(-32768)→**3 Long 32768**（Integer 装不下）、
+//   Empty→2 Integer 0、Null→1 Null、Date→7（序列号的绝对值）、
+//   "5"→5 Double 5、"x"→错误 13（类型不符）。
+// C3 旧站只有 double 出口 ⇒ 上面每一档都堆成 VT_R8（实测 AB01~AB15 全是 5）。
+vb6_VARIANT vb6_AbsV(vb6_VARIANT v) {
+    int64_t i;
+    switch (v.vt) {
+    case vb6_vtByte:    return vb6_VariantByte(v.bVal);
+    case vb6_vtInteger:
+        if (v.iVal == -32768) return vb6_VariantLong(32768);   /* Integer 装不下 ⇒ Long */
+        return vb6_VariantInt((int16_t)(v.iVal < 0 ? -v.iVal : v.iVal));
+    case vb6_vtLong:
+        i = v.lVal; if (i < 0) i = -i;
+        if (i > 2147483647LL) { vb6_RaiseError(6, vb6_BSTR_FromStr(L"Overflow")); return vb6_VariantEmpty(); }
+        return vb6_VariantLong((int32_t)i);
+    case vb6_vtSingle:  return vb6_VariantSingle(fabsf(v.fltVal));
+    case vb6_vtDouble:  return vb6_VariantDouble(fabs(v.dblVal));
+    case vb6_vtCurrency: {
+        double d = (double)v.cyVal / 10000.0;
+        return vb6_VariantCur(fabs(d));
+    }
+    case vb6_vtBoolean: return vb6_VariantInt(v.boolVal ? 1 : 0);
+    case vb6_vtEmpty:   return vb6_VariantInt(0);
+    case vb6_vtNull:    return v;
+    case vb6_vtDate:    return vb6_VariantDate(fabs(v.dblVal));
+    case vb6_vtBSTR:
+        if (v.bstrVal && vb6_IsNumericText(v.bstrVal))
+            return vb6_VariantDouble(fabs(vb6_VariantToDouble(v)));
+        vb6_RaiseError(13, vb6_BSTR_FromStr(L"Type mismatch"));
+        return vb6_VariantEmpty();
+    default:
+        vb6_RaiseError(13, vb6_BSTR_FromStr(L"Type mismatch"));
+        return vb6_VariantEmpty();
+    }
+}
 int32_t vb6_Sgn(double x) { return (x > 0) ? 1 : (x < 0) ? -1 : 0; }
 double vb6_Sqr(double x) { return sqrt(x); }
 double vb6_Round(double x, int32_t decimals) {
