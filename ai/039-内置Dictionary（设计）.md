@@ -1195,3 +1195,29 @@ builtin_opt_defaults 全 PASS。
 `faf5c28c`（第五十四刀）红 2 个（manifest + bas#1）；
 `740af326`（登记 + 读数订正）= **22/22**。
 
+### 11.29 第五十五刀（试探未落地）：Choose/Switch 全变体化能收下 S07/S08/S15，但消费站要一起改
+
+试着把「同档走标量三目」那一半拆了：`Choose`/`Switch` **一律**发变体三目，同时
+`inferExprType` 对它们答 Variant、`isDefinitelyVariantExpr` 的
+多态内置 denylist 把 choose/switch 拿走（只留 `iif`/`if`）、`isNarrowIntExpr` 那两段删掉。
+
+结果：
+  - **探针 S 段 16/16 全对**（S07/S08/S15 都是 1/Null）—— 语义上就是这一条路；
+  - FlexGrid 语料当场红两条（本机 RC=1，`error C2440`）：
+      ① `MainForm.c(970/975)`：`vb6_VBFlexGrid_prop_let_Sort(..., <整只 VARIANT>)` ——
+         属性 Let 的 `Long` 形参那一站**根本不换算**（标量隐式转换就行，struct 不行）；
+      ② `VBFlexGrid.c(5471/5548)`：`hToolTip = <整只 VARIANT>` —— `hToolTip` 是 LongPtr，
+         普通赋值站同样不换算。
+
+所以这条路要连着改**消费面**：属性 Let 实参站、普通赋值站（至少 Long/LongPtr 两档）都得问
+「源是不是 Variant」再出 `vb6_VariantToLong` / `vb6_VariantToLongPtr`；另外
+`isDefinitelyVariantExpr` 里 §56.41 那条「限定形态 `VBA.Choose`/`VBA.Switch` 答否」也要一起
+拿掉（发码侧现在两形都发变体，问句与发码必须同一口径，否则又回到 §B147 那一族：
+oracle 说槽、`ChkLong` 当标量吃）。
+
+这不是没量到，是**代价被量出来了**：为一个越界子项（S07/S08/S15）动全语料的数值消费面，
+风险远大于收益 —— 所以本刀退回 `740af326` 的形状（同档标量 / 异档变体，S 段 13/16），
+把这条路作为下一刀的入场条件记在这里。下次做的时候验收口径已定：
+① 探针 S 段 16/16；② `VbQRCodegen` / `VBFlexGridDemo` / `pcline` 本机 RC=0；
+③ bas 181 例 + syntax 227 + smoke 1/1 全绿，且发码形状变动逐一登记。
+
