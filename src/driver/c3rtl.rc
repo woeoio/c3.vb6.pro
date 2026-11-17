@@ -674,6 +674,8 @@
 227 RCDATA "../rtl/core/vb6com/vb6com_regexp.c"
 // 2026-11-16 (C30-10 第二十六刀): 内置 Scripting.Dictionary（vb6com_dict.c）
 228 RCDATA "../rtl/core/vb6com/vb6com_dict.c"
+// 2026-11-18 (C30-11 第一刀): 内置 Scripting.FileSystemObject（vb6com_fso.c）
+229 RCDATA "../rtl/core/vb6com/vb6com_fso.c"
 // vb6forms_uc.c 按族细分 (2026-09-19): 内部头 + 6 个族编译单元 + 7 个函数体片段
 // 原单文件 1546 行 → 主文件仅作入口；uc/ 下为独立编译单元，uc/detail/ 为片段
 179 RCDATA "../rtl/core/vb6forms/vb6forms_uc_internal.h"

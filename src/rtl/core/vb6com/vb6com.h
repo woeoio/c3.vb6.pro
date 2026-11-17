@@ -26,6 +26,14 @@ int   vb6_Dict_IsProgramId(const wchar_t* progId);
 int   vb6_Dict_IsClassName(const wchar_t* className);
 int   vb6_Dict_IsInstance(void* obj);
 
+// C30-11: 内置 Scripting.FileSystemObject（ai/040）。第一刀只落纯路径面与存在性；
+// 默认**关**（仍走 scrrun，语料 12 份行为一格不变），C3_FSO_NATIVE=1 才抢先拦截。
+void* vb6_Fso_New(void);
+int   vb6_Fso_IsProgramId(const wchar_t* progId);
+int   vb6_Fso_IsClassName(const wchar_t* className);
+int   vb6_Fso_IsInstance(void* obj);
+int   vb6_Fso_NativeEnabled(void);
+
 // C30-9: 按 **coclass CLSID** 建对象（VB6 `As New <typelib coclass>` 走的同一条路）。
 // ProgID 在某些机器上压根不注册（实测本机 32 位视图 ADODB.* 全没注册，只有 CLSID），
 // 此时 VB6 能跑、按 ProgID 查必挂 ⇒ 生成码带着符号里的 CLSID 就直接用这一枚。
