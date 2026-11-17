@@ -1135,3 +1135,63 @@ Currency 保 CY、Boolean→Integer、Date→取序列号绝对值、BSTR 先 `v
 
 门：ea766ea = **22/22**（manifest 未动，无需 rebless）。
 
+### 11.28 第五十三/五十四刀：一元 `-`/`Not` 逐档子类型 + `Choose`/`Switch` 选中支原样
+
+来源：用户跑的真 VB6 采集器 `ProbeVB6_U.bas`（47 行，日志 `.temp/litprobe/c3_vb6_probe_u.log`），
+C3 侧镜像 `UProbe_C3.bas` 逐行同键。改前：U/N 段 7 行错（含 `-32768` 报错误 6、
+`Not CByte(200)` 答 -201、`Not "5"` 把 BSTR 指针取反）、S 段 3 行压根编译不过（C2440）。
+
+**一元负号**（`vb6_VarNegV` 逐档扩，src/rtl/core/vb6rtl/vb6rtl_com.c）与**一元 `Not`**
+（新出口 `vb6_VarNotV`）的读数已逐行对完；`Not` 的三条口径要点：
+  - Boolean ⇒ **逻辑非**（11/Boolean）；
+  - Byte/Integer/Long ⇒ **位非且保档**（`Not CByte(200)` = 17/Byte 55，8 位取反）；
+  - Single/Double/Currency/Date ⇒ 先按 VB6 **银行家舍入**取整再位非，答 Long
+    （1.5→2、1.7→2、2.5→2 ⇒ -3）；
+  - Empty ⇒ Integer -1、Null ⇒ Null、`"5"` ⇒ Long -6、`"x"` ⇒ 错误 13。
+
+发码侧（src/backend/expr/cgen_expr.cpp）：串操作数不能直接取反（cl C2171）⇒ 先按串装箱
+交给同一条阶梯；`- <Byte|Boolean>` → Integer；`Not <Byte>` → Byte；
+`Not <Single|Double|Currency|Date>` → Long；`Not <Variant>` 从前一律
+`(~vb6_VariantToLong(...))` 改走 `vb6_VarNotV`。
+
+`-32768` 这一行的档在 `isNarrowIntExpr`：一元负号必须**先于常量折叠**判
+（量字面 32768 自己装不进 Integer ⇒ 整个表达式是 Long）。
+
+**Choose/Switch 走了两刀才落地，第二刀是纠偏：**
+  第五十三刀一律「逐支装箱 + `vb6_VariantNull()` 兜底」⇒ S 段语义对，但把语料数值位写法全打红：
+  CI 里 `VbQRCodegen`/`FlexGridX86` 双双 FAIL (compile)，本机复现
+  `error C2440: 无法从 vb6_VARIANT 转换为 int64_t` / `error C2088: 「*」: 对 struct 非法`
+  （`Choose(lIdx, 10, 12, 14)` 赋 Long、`Choose(...) * 8`）。
+  第五十四刀改成**站点自己判**：各支同档 ⇒ 发旧标量三目（发码与改前逐字节相同）；
+  异档 / 带 Null·Empty 字面量 ⇒ 逐支装箱。
+  「同档」必须按 **VB6 的档**算：`1`(Integer) 与 `40000&`(Long) 在 inferExprType 里都是 Long，
+  比较里要带上 `isNarrowIntExpr`（否则 S01 又答 Long）；Null/Empty 字面量的类型也是 Long，
+  得单独问 LiteralKind（否则 `Choose(1, Null, 1)` 仍把 struct 与 `(1)` 摞进一个三目）。
+
+**残留 3 行（已量到、没对，写在明面上）**：S07 `Choose(3,1,2)`、S08 `Choose(0,1,2)`、
+S15 `Switch(False,1,False,2)` —— 真 VB6 是 **Null**，C3 现在答 Integer 0。
+根因：这三行的候选支全是窄档 ⇒ 走标量三目，而标量三目给不出「越界交 Null」（两支同型）。
+要对它们就得让**消费面知道这是个 Variant**（`inferExprType(choose/switch)` 答 Variant，
+赋值/算术站出换算），那是下一刀。
+
+harness 一处读数订正：`test_bitops` 的 `BF-byte-not` 从 `-86` 改为 **170**
+（`Not <Byte>` 是 8 位取反：by1=85=0x55 ⇒ 0xAA=170，与 N03 `Not CByte(200)`=17/Byte 55 同口径）。
+
+静态普查（一刀补齐）：`gen_variant_slot_prefixes` 补 `vb6_VarNotV(`（46 名）；
+owned 表只登 kOwned / kOwnedVariant，**不进 kRows** —— 派生面说 `vb6_VarNotV|0` 的
+`keeps_pointer=0`、`handoff-to-plain:vb6_VariantLong`（与 `vb6_VarNegV` 同族，登记了反而 K12 报多一行）；
+`check_variant_i8_coverage` 三张豁免表（I8 / Decimal / SByte·UInteger）逐条写理由：
+无 oracle ⇒ 落 `default` 走 `vb6_CLng(vb6_VariantToDouble)` 权威换算，不是静默交 0。
+
+验证：U 段 47 行里 **44 行对上**（S 段 16 行对 13 行，见上面残留 3 行）；
+语料 `VbQRCodegen-master\test\Project1.vbp`、`VBFlexGridDemo\VBFlexGridDemo.vbp`、
+`pcline\PcDraw.vbp` 本机编译 RC=0；smoke 1/1；syntax 227/227；
+owned_temp_keeps(230) / variant_i8_coverage / sa_access / builtin_slot_returns /
+builtin_opt_defaults 全 PASS。
+发码形状动了 7 份（一元 `-`/`Not` 的档位变化 + `Choose`/`Switch` 异档站点），
+已按 `scripts/rebless_emit_manifest.ps1 -Bless` 从 CI 那份清单登记。
+
+门：`94e6e7d2`（第五十三刀）红 4 个作业（manifest + bas#1 + vbp#4 + vbp#8）；
+`faf5c28c`（第五十四刀）红 2 个（manifest + bas#1）；
+`740af326`（登记 + 读数订正）= **22/22**。
+
