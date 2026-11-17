@@ -292,8 +292,22 @@ void CCodeGen::visit(BinaryExpr& node) {
                           + asUnsignedOperand(right, *node.right, "uint32_t") + ")";
                 return;
             default: {
-                std::string core = "vb6_IntDiv(" + toLongIfVariant(left, node.left.get())
-                          + ", " + toLongIfVariant(right, node.right.get()) + ")";
+                // C30-10 第四十七刀: `\` 的操作数先按 VB 的**取整**口径折成整型。
+                // 真 VB6 SG09 `7.9! \ 2` = 4/Long —— 7.9 先舍到 8（不是截成 7）。
+                // C 的 `(int32_t)` 是向零截断，两者差一格；vb6_FltToLng 内部走 round()。
+                // ⚠ `Mod` 同属这一族但**没量过**（本刀不加，台账里开着），
+                //   不拿未量的口径搭车。
+                auto roundFloatOperand = [&](std::string& c, const Expr* a) {
+                    Vb6Type t = inferExprType(const_cast<Expr&>(*a));
+                    if (t == Vb6Type::Single || t == Vb6Type::Double ||
+                        t == Vb6Type::Currency || t == Vb6Type::Decimal)
+                        c = "vb6_FltToLng(" + c + ")";
+                };
+                std::string lStr = toLongIfVariant(left, node.left.get());
+                std::string rStr = toLongIfVariant(right, node.right.get());
+                roundFloatOperand(lStr, node.left.get());
+                roundFloatOperand(rStr, node.right.get());
+                std::string core = "vb6_IntDiv(" + lStr + ", " + rStr + ")";
                 // C30-10 第四十六刀: 两操作数都是 Integer 档 ⇒ 结果也是 Integer
                 // （真 VB6 F11 `7 \ 2` = 2/Integer）。除法本身仍走既有出口（零除/
                 // 舍入口径不变），外面只套一次 16 位越界检查。
@@ -1219,6 +1233,15 @@ void CCodeGen::visit(BinaryExpr& node) {
         // 这里显式抬到 int32 算（int16×int16 ≤ 2^30，中间量不会先溢出），再交
         // vb6_ChkInt 收回 16 位 ——— vb6_OvfChk 越界就 vb6_RaiseError(6)。
         lastExpr_ = "vb6_ChkInt((int32_t)(" + left + ") " + op + " (int32_t)(" + right + "))";
+    } else if ((node.op == BinaryOp::Add || node.op == BinaryOp::Sub
+                || node.op == BinaryOp::Mul || node.op == BinaryOp::Div)
+               && inferExprType(node) == Vb6Type::Single) {
+        // C30-10 第四十七刀: Single 档的**每一步**都在 32 位浮点里做。真 VB6 读数：
+        //   SG15 `16777216! + 1!` = 1.677722E+07（仍是 16777216，24 位尾数已溢）
+        //   SG16 `1.1! * 3` = 3.3（Single 的 7 位有效数字，不是 3.3000000000000003）
+        // C 侧裸发会把两侧提成 double（整数操作数也提），多出来的尾数就是与 VB6 的差。
+        // 两侧都显式落回 float，结果再收一次 —— 与 vb6_CStrSingle / VT_R4 装籍同一档。
+        lastExpr_ = "(float)((float)(" + left + ") " + op + " (float)(" + right + "))";
     } else {
         lastExpr_ = "(" + left + " " + op + " " + right + ")";
     }

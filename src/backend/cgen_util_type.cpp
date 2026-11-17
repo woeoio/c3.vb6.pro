@@ -254,7 +254,11 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
         case ASTNodeKind::LiteralExpr: {
             auto& lit = static_cast<LiteralExpr&>(expr);
             if (lit.literalKind == LiteralKind::String) return Vb6Type::String;
-            if (lit.literalKind == LiteralKind::Double || lit.literalKind == LiteralKind::Single
+            // C30-10 第四十七刀: `!` 后缀那一档是真的 Single（真 VB6 SG01/SG11/SG17 = 4/Single）。
+            // 改前它被下面那一行连带答成 Double —— 而 `!` 在词法里已被吃掉，
+            // 于是 `1.5!` 从字面量到装箱一路都是 VT_R8。
+            if (lit.literalKind == LiteralKind::Single) return Vb6Type::Single;
+            if (lit.literalKind == LiteralKind::Double
                 || lit.literalKind == LiteralKind::Currency || lit.literalKind == LiteralKind::Decimal)
                 return Vb6Type::Double;
             if (lit.literalKind == LiteralKind::Boolean) return Vb6Type::Boolean;
@@ -307,6 +311,22 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             if (bin.op == BinaryOp::Div) {
                 if (isVariantType(bin.left.get()) || isVariantType(bin.right.get()))
                     return Vb6Type::Variant;
+                // C30-10 第四十七刀: Single 参与时 `/` 仍答 **Single**（真 VB6 SG07
+                // `1.5!/2` = 4/Single、SG08 `1.5!/1.5!` = 4）；纯整型才升 Double
+                // （F10 `7/2`、F18 = 5/Double）。Double/Currency/Decimal 参与时按原口径答
+                // Double —— 那三档没在真 VB6 上量过，不猜。
+                {
+                    Vb6Type lt = inferExprType(*bin.left);
+                    Vb6Type rt = inferExprType(*bin.right);
+                    const bool lSingle = (lt == Vb6Type::Single);
+                    const bool rSingle = (rt == Vb6Type::Single);
+                    auto widerThanSingle = [](Vb6Type t) {
+                        return t == Vb6Type::Double || t == Vb6Type::Currency ||
+                               t == Vb6Type::Decimal;
+                    };
+                    if ((lSingle || rSingle) && !widerThanSingle(lt) && !widerThanSingle(rt))
+                        return Vb6Type::Single;
+                }
                 return Vb6Type::Double;
             }
 
@@ -333,6 +353,15 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             {
                 Vb6Type lt = inferExprType(*bin.left);
                 Vb6Type rt = inferExprType(*bin.right);
+                // C30-10 第四十七刀: `^` 恒答 **Double**，与操作数档无关 —— 真 VB6
+                // F13 `2^2` = 5/Double（刀四十六已钉）、SG10 `1.5!^2` = 5/Double。
+                // 改前它走 promote ⇒ Single 参与时答 Single（SG10 实测 4）。
+                if (bin.op == BinaryOp::Pow) {
+                    if (inferExprType(*bin.left) == Vb6Type::Variant ||
+                        inferExprType(*bin.right) == Vb6Type::Variant)
+                        return Vb6Type::Variant;
+                    return Vb6Type::Double;
+                }
                 // Fix 175: VB6 日期算术 —— `Date ± 数值` 仍是 Date, `Date - Date` 是
                 // 天数差 (Double), `*` `\` `Mod` `^` 无日期语义按数值处理。
                 // TypeSystem::isNumeric(Date)==false, 交给 promote 会掉出数值阶梯。

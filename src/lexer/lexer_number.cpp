@@ -175,6 +175,7 @@ Token Lexer::scanNumber() {
     bool isLong = false;
     bool isLongPtr = false;
     bool isInteger = false;   // 账 #195: `%` = Integer 档
+    bool singleSuffix = false; // C30-10 第四十七刀: `!` = Single 档（见 Token::singleSuffix）
     if (offset_ < content_.size()) {
         char c = peek();
         switch (c) {
@@ -186,7 +187,7 @@ Token Lexer::scanNumber() {
                     isLongPtr = true;
                 }
                 break;
-            case '!': text += advance(); isFloat = true; break;
+            case '!': text += advance(); isFloat = true; singleSuffix = true; break;
             case '#': text += advance(); isFloat = true; break;
             case '@': text += advance(); {
                 Token tok = makeToken(TokenKind::DecimalLiteral, text, startLine, startCol);
@@ -200,6 +201,8 @@ Token Lexer::scanNumber() {
     if (isFloat) {
         Token tok = makeToken(TokenKind::FloatLiteral, text, startLine, startCol);
         try { tok.doubleValue = std::stod(text); } catch (...) {}
+        // C30-10 第四十七刀: 只搬「带 ! 后缀」这一位; 档位怎么用是 parser/infer 的事。
+        tok.singleSuffix = singleSuffix;
         return tok;
     }
 

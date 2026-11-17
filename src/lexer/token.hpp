@@ -365,6 +365,12 @@ struct Token {
     // ⚠ 这是一条**类型身份**标记, 不是捷径: 值早在第313刀就对了, 缺的只是装箱那一步的档。
     bool radixInt16 = false;
 
+    // C30-10 第四十七刀: 「这枚浮点字面量带 `!` 后缀 ⇒ 它在 VB6 里是 **Single** 档」
+    // 那一问的载体。改前 lexer 也吃掉 `!`，但只置 isFloat —— 档位就丢在词法这一站，
+    // 一路到装箱都是 VT_R8（真 VB6 SG01 实测 4/Single）。
+    // ⚠ `#`（Double）与 `@`（Decimal）各走各的 TokenKind，不碰这个标记。
+    bool singleSuffix = false;
+
     bool isKeyword() const;
     bool isOperator() const;
     bool isLiteral() const;

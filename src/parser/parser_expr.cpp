@@ -353,6 +353,13 @@ ExprPtr Parser::parseLiteral() {
             return expr;
         }
         case TokenKind::FloatLiteral: {
+            // C30-10 第四十七刀: `1.5!` 在 VB6 里是 **Single**（真 VB6 SG01 = 4/Single）。
+            // 改前这一站一律造 Double —— `!` 已在词法里吃掉，档位就永远追不回来了。
+            if (tok.singleSuffix) {
+                auto expr = std::make_unique<LiteralExpr>(loc, LiteralKind::Single, tok.text);
+                expr->floatValue = static_cast<float>(tok.doubleValue);
+                return expr;
+            }
             auto expr = std::make_unique<LiteralExpr>(loc, LiteralKind::Double, tok.text);
             expr->doubleValue = tok.doubleValue;
             return expr;
