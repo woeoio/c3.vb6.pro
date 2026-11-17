@@ -3662,6 +3662,27 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
         return lit.radixInt16 && lit.literalKind == LiteralKind::Integer
                && lit.intValue >= -32768 && lit.intValue <= 32767;
     }
+    // C30-10 第四十五刀: `Not <Variant>` 的结果在 VB6 里恒为 **Integer**（用户真 VB6 日志
+    // E06: `v = 5` 时 `VarType(Not v)` = 2、值 -6）。而 `Not <Boolean>` 是 **Boolean**
+    // （E05: 11/False）—— 两形不能混谈，所以这里只认「操作数本身是 Variant」那一形。
+    // 值那一半早就是对的（发码 `~vb6_VariantToLong(v)`），缺的只是装箱时的档。
+    if (e->kind == ASTNodeKind::UnaryExpr) {
+        auto& un = static_cast<const UnaryExpr&>(*e);
+        if (!un.operand) return false;
+        // `- <Integer 档>` → Integer（用户日志 E10/H06: `-i`(Integer) = 2/Integer）。
+        // 以前发码是 `(-i)`（int16 在 C 里提成 int）→ 装箱当 Long。
+        // ⚠ 已知差: `-(-32768)` 在 VB6 报错误 6，这里只会回卷 —— 编译期看不到值，
+        //   要真报错得在 RTL 那条路上（本轮不开）。
+        if (un.op == UnaryOp::Negate) return isNarrowIntExpr(un.operand.get());
+        if (un.op == UnaryOp::Not) {
+            // `Not <Variant>` / `Not <Integer 档>` → Integer（E06: -6/Integer；E08: `Not 0`
+            // 也是 2/Integer）。而 `Not <Boolean>` 是 Boolean（E05: 11/False）——
+            // Boolean 不在 narrow 表里，所以那一条自动落在外面。
+            return inferExprType(*un.operand) == Vb6Type::Variant
+                   || isNarrowIntExpr(un.operand.get());
+        }
+        return false;
+    }
     // C30-10 第三十五刀: 内建返回档那一族 (Asc/Sgn/VarType/StrComp/月日年时分秒/Weekday/
     // FreeFile) —— VB6 答 Integer, 而语义层与 C 侧都答 int32。两形都要认:
     //   * 带实参的调用形 `Asc("A")` → IndexOrCallExpr(callee=IdentifierExpr)；

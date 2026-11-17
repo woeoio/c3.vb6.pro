@@ -115,6 +115,23 @@ ExprPtr Parser::parseNullDenotation() {
             return std::make_unique<UnaryExpr>(loc, UnaryOp::Negate, std::move(operand));
         }
 
+        // C30-10 第四十五刀: 一元 `+`。以前直接拒（VB2003），于是 `t = +v` 整文件过不了
+        // 语法层 —— 用户真 VB6 日志 E09 就卡在这里（`+v` → 2/Integer/5）。
+        // VB6 的一元 `+` 是**值不变**：不转档、不升格（`+v` 装的是 Integer 就还是 Integer），
+        // 所以这里只吃掉那个 `+`、原样返回操作数，**不造节点** —— 造了反而要再定一遍档。
+        // 绑定强度与下面一元 `-` 同级（r_bp=19）。
+        case TokenKind::Plus: {
+            auto loc = currentLoc();
+            advance(); // consume '+'
+            auto operand = parseExpression(19);
+            if (!operand) {
+                diag_.error(DiagnosticID::ParseExpectedExpression, loc,
+                    "expected expression after unary '+'");
+                return nullptr;
+            }
+            return operand;
+        }
+
         case TokenKind::Not: {
             auto loc = currentLoc();
             advance(); // consume 'Not'

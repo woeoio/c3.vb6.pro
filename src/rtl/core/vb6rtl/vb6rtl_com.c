@@ -1229,6 +1229,37 @@ vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(1, a
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(2, a, b); }
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(3, a, b); }
 
+/* C30-10 第四十五刀: 一元 `-` 打在 Variant 上。
+   口径 = 用户真 VB6 日志 E01~E04 / E10：
+     -v(装 Integer 5) → 2/Integer -5      -v(装 Long)   → 3/Long
+     -v(装 Double)    → 5/Double          -v(装 "x")    → 错误 13
+   即**子类型保持**（与二元那四个不同：它们要升格，这里不要）。
+   为什么单开出口：`-` 直接打在 vb6_VARIANT 结构上是 C2088，整段编不过。 */
+vb6_VARIANT vb6_VarNegV(vb6_VARIANT a) {
+    switch (a.vt) {
+    case vb6_vtEmpty: return vb6_VariantInt(0);
+    case vb6_vtNull:  return vb6_VariantNull();
+    case vb6_vtInteger: {
+        int32_t r = -(int32_t)a.iVal;
+        if (r < -32768 || r > 32767) { vb6_ErrRaiseNumber(6); return vb6_VariantEmpty(); }
+        return vb6_VariantInt((int16_t)r);
+    }
+    case vb6_vtLong:
+        if (a.lVal == INT32_MIN) { vb6_ErrRaiseNumber(6); return vb6_VariantEmpty(); }
+        return vb6_VariantLong(-a.lVal);
+    case vb6_vtSingle: return vb6_VariantSingle(-a.fltVal);
+    case vb6_vtDouble: return vb6_VariantDouble(-a.dblVal);
+    case vb6_vtBoolean: return vb6_VariantInt((int16_t)(a.boolVal ? 1 : 0));
+    case vb6_vtBSTR:
+        vb6_ErrRaiseNumber(13);   /* 类型不符 —— VB6 不把串隐式当数来取负 */
+        return vb6_VariantEmpty();
+    default: break;
+    }
+    /* 其余标量档 (Byte/Date/Currency/Decimal) 按数值取负；
+       与 VB6 的「先按数值读再取负」一致，子类型不保的那几档另开一刀。 */
+    return vb6_VariantDouble(-vb6_VariantToDouble(a));
+}
+
 
 /* Fix 084f: Variant数组嵌套索引按值版本 (见 vb6rtl.h 说明) */
 vb6_VARIANT vb6_VariantArrayGetVal(vb6_VARIANT v, int32_t index) {

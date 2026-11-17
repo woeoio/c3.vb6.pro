@@ -253,6 +253,12 @@ void CCodeGen::visit(UnaryExpr& node) {
                 // Fix 092r: 晚绑定 COM 属性读取结果 (vb6_VARIANT) 取负 →
                 // -(vb6_VARIANT) C2440. 先转数值再取负.
                 lastExpr_ = "(-vb6_VariantToDouble(" + operand + "))";
+            } else if (isVariantSlot(operand, node.operand.get())) {
+                // C30-10 第四十五刀: `-<Variant>` —— VB6 子类型保持（-Integer→Integer、
+                // -Long→Long、-Double→Double、-"x"→错误 13）。以前落到下面那条通用
+                // `(-operand)`，而 operand 是整只 vb6_VARIANT 结构 ⇒ C2088「- 对于 struct
+                // 非法」，用户真 VB6 日志的 E 段整整十行都因此编不过。
+                lastExpr_ = "vb6_VarNegV(" + operand + ")";
             } else {
                 lastExpr_ = "(-" + operand + ")";
             }
