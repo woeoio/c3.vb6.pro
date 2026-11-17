@@ -3757,11 +3757,23 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
             if (n == "iif" && call.positional.size() == 3 && call.named.empty())
                 return isNarrowIntExpr(call.positional[1].get())
                        && isNarrowIntExpr(call.positional[2].get());
-            // C30-10 第五十三刀: Choose/Switch 现在**逐支装箱**（选中支原样，越界 Null），
-            // 表达式本身已经是 `vb6_VARIANT` ⇒ 这里**不能再答 true**：
-            // 答 true 会让存储站发 `vb6_VariantInt((int16_t)(<三目>))`，而三目里已经是
-            // `vb6_VariantNull()`（struct）⇒ C2440（真 VB6 采集器 U 的 S15 就是这么红的）。
-            // 子类型由每一支自己的装箱决定（S01 选 1 ⇒ Integer），不需要这层。
+            // C30-10 第五十三刀: Choose/Switch 的**同档标量三目**那一半仍然要这一句 ——
+            // 各支全是 Integer 档时发的是旧标量三目（`(i==1?1:…)`），子类型由这一句定成 Integer
+            // （真 VB6 日志 D12 `Choose(1,1,2)` = 2/Integer、D14 同形）。
+            // **异档**那一半不走这里：那种形被改发「逐支装箱 + Null 兜底」的变体三目，
+            // 子类型由每支自己的装箱决定（S01 选 1 ⇒ Integer），答 true 反而会把 struct
+            // 塞进 `vb6_VariantInt((int16_t)(…))` ⇒ C2440（S15 就是这么红的）。
+            if (n == "choose" && call.positional.size() >= 2 && call.named.empty()) {
+                for (size_t i = 1; i < call.positional.size(); i++)
+                    if (!isNarrowIntExpr(call.positional[i].get())) return false;
+                return true;
+            }
+            if (n == "switch" && call.positional.size() >= 2
+                && call.positional.size() % 2 == 0 && call.named.empty()) {
+                for (size_t i = 1; i < call.positional.size(); i += 2)
+                    if (!isNarrowIntExpr(call.positional[i].get())) return false;
+                return true;
+            }
             return false;
         }
         return false;

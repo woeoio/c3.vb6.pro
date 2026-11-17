@@ -319,19 +319,52 @@
         if (csLower == "choose" && node.positional.size() >= 2) {
             emitExpr(*node.positional[0]);
             std::string idx = std::move(lastExpr_);
-            // C30-10 第五十三刀: 候选支**逐支装箱**，越界交 `vb6_VariantNull()`。
-            // 真 VB6 采集器 U 的 S 段读数（每行 err/vt/tn/val）:
-            //   Choose(1, 1, 40000&)      → Integer 1     （选中支自己的子类型，不升公共档）
-            //   Choose(2, 1, 40000&)      → Long 40000
-            //   Choose(1, Null, 1)        → Null
-            //   Choose(2, Null, 1)        → Integer 1
-            //   Choose(1, 1.5!, 1.7)      → Single 1.5
-            //   Choose(2, 1.5!, 1.7)      → Double 1.7
-            //   Choose(3, 1, 2) / (0,1,2) → Null（越界）
-            //   Choose(1, "a", 1)         → String "a"
-            //   Choose(1, True, 1)        → Boolean True
-            // 旧站把三支原样摻进一个三目，C 编译器只能取公共档（S01 答 Long），
-            // 混入 Null/浮点时直接 C2440（`vb6_VariantNull()` 与 int 同在三目里）。
+            // C30-10 第五十三刀: `Choose` 的候选支**同档 ⇒ 走旧标量三目（发码逐字节不变）**，
+            // **异档/带 Null ⇒ 逐支装箱**。为何一定要分两路：真 VB6 采集器 U 的 S 段读数
+            // （Choose(1, 1, 40000&) → Integer 1、Choose(1, Null, 1) → Null、…）要求「选中支
+            // 原样」，而语料里大量 `Choose(i, 10, 12, 14) * 8` 这类**数值位**写法 —— 一律装箱
+            // 就成了「把 vb6_VARIANT 与 8 相乘」：实测 VbQRCodegen/FlexGridX86 编译红
+            // （C2440 vb6_VARIANT→int64_t / C2088 `*` 对 struct 非法）。
+            bool variantShape = false;
+            {
+                // Null/Empty 字面量在 inferExprType 里与数值同档（都答 Long），光比类型会把
+                // `Choose(1, Null, 1)` 当成同档 ⇒ 三目里 `vb6_VariantNull()` 与 `(1)` 相撞
+                // ⇒ cl C2440（实测）。所以字面量先单独问一遍。
+                auto isNullOrEmptyLit = [&](size_t k) -> bool {
+                    auto* a = node.positional[k].get();
+                    if (a && a->kind == ASTNodeKind::LiteralExpr) {
+                        auto lk = static_cast<const LiteralExpr&>(*a).literalKind;
+                        return lk == LiteralKind::Null || lk == LiteralKind::Empty;
+                    }
+                    return false;
+                };
+                for (size_t i = 1; i < node.positional.size(); i++)
+                    if (isNullOrEmptyLit(i)) { variantShape = true; break; }
+                if (!variantShape) {
+                    // 「同档」要按 **VB6 的档**算，不是按 C 侧类型：`1` 是 Integer 档、`40000&` 是
+                    // Long 档，inferExprType 两者都答 Long（C 侧 int32），光比它会误判成同档
+                    // ⇒ S01 又答 Long（VB6 是 Integer）。所以把「是否窄档」也带进比较：
+                    // 窄档 vs 宽档 不同 ⇒ 走变体三目。
+                    Vb6Type prev = inferExprType(*node.positional[1]);
+                    bool prevNarrow = isNarrowIntExpr(node.positional[1].get());
+                    for (size_t i = 2; i < node.positional.size(); i++) {
+                        if (inferExprType(*node.positional[i]) != prev
+                            || isNarrowIntExpr(node.positional[i].get()) != prevNarrow) {
+                            variantShape = true; break;
+                        }
+                    }
+                }
+            }
+            if (!variantShape) {
+                std::string result = "NULL";
+                for (int i = (int)node.positional.size() - 1; i >= 1; i--) {
+                    emitExpr(*node.positional[i]);
+                    result = "((" + idx + ")==" + std::to_string(i) + " ? (" + lastExpr_ + ") : (" + result + "))";
+                }
+                lastExpr_ = result;
+                return;
+            }
+            // 异档：越界交 `vb6_VariantNull()`（S07/S08 读数：Choose(3,1,2) / (0,1,2) 都是 Null）。
             std::string result = "vb6_VariantNull()";
             for (int i = (int)node.positional.size() - 1; i >= 1; i--) {
                 emitExpr(*node.positional[i]);
@@ -342,10 +375,42 @@
             return;
         }
         if (csLower == "switch" && node.positional.size() >= 2 && node.positional.size() % 2 == 0) {
-            // C30-10 第五十三刀: 同 Choose —— 选中支原样、无匹配交 Null。
-            //   Switch(True,1,True,40000&) → Integer 1   Switch(False,1,True,40000&) → Long 40000
-            //   Switch(True,Null,True,1)   → Null         Switch(False,Null,True,1)   → Integer 1
-            //   Switch(False,1,False,2)    → Null        Switch(True,1.5!,True,1.7)  → Single 1.5
+            // C30-10 第五十三刀: 同 Choose —— 同档走旧标量三目，异档/带 Null 逐支装箱。
+            bool variantShape = false;
+            {
+                auto isNullOrEmptyLit = [&](size_t k) -> bool {
+                    auto* a = node.positional[k].get();
+                    if (a && a->kind == ASTNodeKind::LiteralExpr) {
+                        auto lk = static_cast<const LiteralExpr&>(*a).literalKind;
+                        return lk == LiteralKind::Null || lk == LiteralKind::Empty;
+                    }
+                    return false;
+                };
+                for (size_t i = 1; i < node.positional.size(); i += 2)
+                    if (isNullOrEmptyLit(i)) { variantShape = true; break; }
+                if (!variantShape) {
+                    Vb6Type prev = inferExprType(*node.positional[1]);
+                    bool prevNarrow = isNarrowIntExpr(node.positional[1].get());
+                    for (size_t i = 3; i < node.positional.size(); i += 2) {
+                        if (inferExprType(*node.positional[i]) != prev
+                            || isNarrowIntExpr(node.positional[i].get()) != prevNarrow) {
+                            variantShape = true; break;
+                        }
+                    }
+                }
+            }
+            if (!variantShape) {
+                std::string result = "NULL";
+                for (int i = (int)node.positional.size() - 2; i >= 0; i -= 2) {
+                    emitExpr(*node.positional[i]);
+                    std::string cond = "((" + lastExpr_ + ")!=0)";
+                    emitExpr(*node.positional[i + 1]);
+                    result = "(" + cond + " ? (" + lastExpr_ + ") : (" + result + "))";
+                }
+                lastExpr_ = result;
+                return;
+            }
+            // 异档：无匹配交 `vb6_VariantNull()`（S15 读数）。
             std::string result = "vb6_VariantNull()";
             for (int i = (int)node.positional.size() - 2; i >= 0; i -= 2) {
                 emitExpr(*node.positional[i]);
