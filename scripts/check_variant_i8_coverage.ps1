@@ -85,6 +85,11 @@ $exempt = @{
     #   保子类型的口径只覆盖 E01~E04/E10 那四档（Integer/Long/Single/Double，有 oracle）；
     #   其余档要不要保子类型没有 oracle ⇒ 不开 case、不往 must 里挂名（挂了就得写一臂自己不能证的口径）。
     "vb6_VarNegV" = "一元取负只对 E 段 oracle 的 Integer/Long/Single/Double 保子类型；I8 落 default = vb6_VariantToDouble 取负（权威换算，不是静默交 0），保 LongLong 档无 oracle"
+    # C30-10 第五十二刀: Abs(Variant) 与第四十五刀的一元取负同一取舍 —— AB 段只给了
+    #   13 档读数（Byte/Integer/Long/Single/Double/Currency/Boolean/Empty/Null/Date/BSTR），
+    #   I8/Decimal/SByte/UInteger 四档真 VB6 的 Variant 造不出来（只有 COM 能交进来）。
+    #   ⇒ 不开 case、不往 must 里挂名（挂了就得写一臂自己不能证的口径），落 default。
+    "vb6_AbsV" = "Abs 的保档只覆盖 AB 段 13 档 oracle；I8 落 default = vb6_VariantToDouble 取绝对值（权威换算，不是静默交 0），保 LongLong 档无 oracle"
 }
 
 # Decimal 这一档（§B143）：同一张表要答两档，所以名单也列两份。
@@ -115,6 +120,8 @@ $decExempt = @{
     "pb_Read" = "ActiveX 属性包(IPropertyBag::Read)只把**设计期存过的属性**交回容器，写侧那几档由 C3 自己的下发决定；语料里 Decimal/I8 走到属性包的读数 0 处，要补先证明可达"
     # C30-10 第四十五刀: 同上一节那条 —— default 走权威换算取负，不是漏档。
     "vb6_VarNegV" = "一元取负的保档只有 E 段那四档；Decimal 落 default = vb6_VariantToDouble 取负 ⇒ 答 Double，96 位精度要保得先有 oracle（另开一刀）"
+    # C30-10 第五十二刀: 同上（Abs(Variant)）—— Decimal 档无 oracle，落 default 取绝对值。
+    "vb6_AbsV" = "Abs 的保档只有 AB 段那 13 档；Decimal 落 default = vb6_VariantToDouble 取绝对值 ⇒ 答 Double，96 位精度要保得先有 oracle"
 }
 
 # ai/032 §6.9: 小整型两档（VT_I1 / VT_UI2）—— 同一张表要答的第四、五档，名单也各列一份。
@@ -138,6 +145,8 @@ $smExempt = @{
     "pb_Read"             = "ActiveX 属性包只交回设计期存过的属性；UI2 那档它本来就答，I1 要补先证明语料可达"
     # C30-10 第四十五刀: SByte/UInteger 是 C3 扩展档，真 VB6 没有对应 oracle ⇒ 不在这里凭空定保档口径。
     "vb6_VarNegV"         = "一元取负：SByte/UInteger 两档是 C3 扩展，真 VB6 无对应 oracle；default 按数值取负交 Double"
+    # C30-10 第五十二刀: 同上（Abs(Variant)）。
+    "vb6_AbsV"            = "Abs：SByte/UInteger 两档是 C3 扩展，真 VB6 无对应 oracle；default 按数值取绝对值交 Double"
 }
 
 $fnRe     = [regex]'^[A-Za-z_][A-Za-z0-9_ \*]*?([A-Za-z_][A-Za-z0-9_]*)\s*\([^;]*\)\s*\{\s*$'

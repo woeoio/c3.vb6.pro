@@ -4010,6 +4010,37 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // 已经是 VARIANT 的表达式交给 _Generic 的 vb6_VariantIdentity 档恒等直传,
     // 绝不再按 VB 类型强装 (否则就是上面那条双装)。
     if (cExprIsVariantCarrier(cExpr)) return "vb6_VariantFromValue(" + cExpr + ")";
+    // C30-10 第五十二刀: `Abs(Variant)` 的**变体位**（装箱站）走运行时子类型阶梅（C23）。
+    // 真 VB6 GProbe AB 段: Abs(Byte)=Byte(17) / Abs(Integer)=Integer / Abs(CInt(-32768))=Long /
+    // Abs(Long)=Long / Abs(Single)=Single / Abs(Double)=Double / Abs(Currency)=Currency /
+    // Abs(Boolean)=Integer / Abs(Empty)=Integer 0 / Abs(Null)=Null / Abs(Date)=Date /
+    // Abs("5")=Double / Abs("x")=错误 13。旧站只有 double 出口 ⇒ 13 档全堆成 VT_R8。
+    //
+    // **只在这一站改名，绝不在调用站改名**：`Abs` 的结果有两副消费面 ——
+    // 变体位（`VarType/TypeName/赋 Variant/CStr`）过装箱站，数值位
+    // （`Abs(v) < 0.001`、`Abs(v) * 2`、比较、赋 Double）**不过**这一站。
+    // 上一版把改名放进调用站 fixup，实测 pclinedraw 当场红：
+    // `vb6_AbsV(...) < 0.001` ⇒ cl C2440（float→vb6_VARIANT）+ C2088（struct 不能比）。
+    if (expr && expr->kind == ASTNodeKind::IndexOrCallExpr) {
+        const auto& call52 = static_cast<const IndexOrCallExpr&>(*expr);
+        if (call52.positional.size() == 1 && call52.callee
+            && call52.callee->kind == ASTNodeKind::IdentifierExpr
+            && Symbol::toLower(static_cast<const IdentifierExpr&>(*call52.callee).name) == "abs"
+            && inferExprType(*call52.positional[0]) == Vb6Type::Variant) {
+            // 实参已经被 Fix 108c 那站折成 `vb6_VariantToDouble(v)`；`vb6_AbsV` 要的是
+            // **原样的 VARIANT**（子类型阶梅全靠 vt 说话），所以把那一层剥回去。
+            const std::string pre52 = "vb6_Abs(vb6_VariantToDouble(";
+            size_t s52 = 0;
+            while (s52 < cExpr.size() && (cExpr[s52] == '(' || cExpr[s52] == ' ')) s52++;
+            if (cExpr.compare(s52, pre52.size(), pre52) == 0
+                && cExpr.size() >= s52 + pre52.size() + 2 && cExpr.back() == ')') {
+                // 尾部两层右括号（一层 ToDouble、一层 Abs）一并剥掉。
+                std::string inner52 = cExpr.substr(s52 + pre52.size(),
+                                                   cExpr.size() - s52 - pre52.size() - 2);
+                return "vb6_AbsV(" + inner52 + ")";
+            }
+        }
+    }
     // C30-10 第三十二刀 格①: 常整数 / `As Integer` 变量按 VB6 的**Integer 档**装箱。
     // inferExprType 对 `1` 与 `As Integer` 变量都答 Long (C 侧 int32 的口径), 落 _Generic
     // 的 `int:` 档 ⇒ VT_I4 (VarType 3 / TypeName "Long"); VB6 答 Integer (夹具
