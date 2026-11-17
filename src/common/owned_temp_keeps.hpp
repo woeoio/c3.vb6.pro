@@ -131,6 +131,10 @@ inline const OwnedTempConsumes* ownedTempConsumes() {
         { "vb6_IIfVariant",      1, '1' },
         { "vb6_IIfVariant",      2, '1' },
         { "vb6_LSetFree",        0, '0' },
+        // C30-10 第五十六刀: Str$ 数值档的共用尾巴（static，只活在 RTL 里）—— 它接管并
+        // SysFreeString 掉 CStr 交来的那枚数字文本。普查从 RTL 实读得到这一格，
+        // 这里不登记就报 K13d（发码侧会双放）；名字进不了用户 TU，所以这行是**对账用**的。
+        { "vb6_StrFromNumText",  0, '0' },
         { "vb6_VariantAssign",   0, '0' },
         { nullptr, 0, '0' },    // 空哨兵：遍历靠它收尾
     };
@@ -275,6 +279,10 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Spc",
         "vb6_Str",
         "vb6_StrSng",
+        // C30-10 第五十六刀: Str$ 的两枚新出口同样是「mint 一枚新 BSTR」的站，
+        // 不进这张表就没人管它的所有权（单实参调用会被 hoistOwnedTemp 放掉）。
+        "vb6_StrDbl",
+        "vb6_StrBool",
         "vb6_VarNotV",
         "vb6_AbsV",
         "vb6_StrConv",

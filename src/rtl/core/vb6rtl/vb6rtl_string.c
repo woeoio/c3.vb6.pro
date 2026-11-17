@@ -443,9 +443,35 @@ int16_t vb6_BoolVal(BSTR s) {
     return b ? -1 : 0;   /* VB6 True = -1，与 vb6_CBool 同一个答法 */
 }
 
+// C30-10 第五十六刀: Str$(整数档) 的正数前导空格。
+// 真 VB6 读数（第二轮探针 A0 段）: Str$(12345678&) = " 12345678"、Str$(0&) = " 0"、
+// Str$(12345%) = " 12345"、Str$(200B) = " 200"，而 Str$(-5&) = "-5"（负数不加）。
+// 这是 Str$ 与 CStr 的唯一分歧点: CStr(0) = "0"，Str$(0) = " 0"。
 BSTR vb6_Str(int32_t n) {
     wchar_t buf[32];
-    swprintf(buf, 32, L"%d", n);
+    swprintf(buf, 32, n >= 0 ? L" %d" : L"%d", n);
+    return vb6_BSTR_FromStr(buf);
+}
+
+// C30-10 第五十六刀: Str$ 数值档的**唯一**尾巴 —— 「非负数前一个空格 + |x| < 1 去掉前导 0」。
+// 三个出口 (Single / Double / Boolean 另计) 共用这一份，别在别处抄第二遍:
+//   Str$(0.1)   = " .1"      Str$(-0.00001) = "-.00001"
+//   Str$(1.5)   = " 1.5"     Str$(1E+15)    = " 1E+15"
+// 入参 num 是 CStr 口径的纯数字文本 (vb6_CStrSingle / vb6_CStrDbl)，本函数接管它。
+static BSTR vb6_StrFromNumText(BSTR num) {
+    if (!num) return vb6_BSTR_FromStr(L" ");
+    const wchar_t* p = num;
+    wchar_t buf[160];
+    size_t n = 0;
+    if (p[0] == L'-') {
+        if (p[1] == L'0' && p[2] == L'.') { buf[n++] = L'-'; p += 2; }
+    } else {
+        buf[n++] = L' ';
+        if (p[0] == L'0' && p[1] == L'.') p += 1;
+    }
+    while (*p && n < 158) buf[n++] = *p++;
+    buf[n] = 0;
+    SysFreeString(num);
     return vb6_BSTR_FromStr(buf);
 }
 
@@ -457,21 +483,24 @@ BSTR vb6_Str(int32_t n) {
 //                  + 非负数前一个空格（负数不加）
 //                  + |x| < 1 时去掉前导 "0"（"0.1" → " .1"、"-0.00001" → "-.00001"）。
 BSTR vb6_StrSng(float x) {
-    BSTR num = vb6_CStrSingle(x);
-    if (!num) return vb6_BSTR_FromStr(L" ");
-    const wchar_t* p = num;
-    wchar_t buf[96];
-    size_t n = 0;
-    if (p[0] == L'-') {
-        if (p[1] == L'0' && p[2] == L'.') { buf[n++] = L'-'; p += 2; }
-    } else {
-        buf[n++] = L' ';
-        if (p[0] == L'0' && p[1] == L'.') p += 1;
-    }
-    while (*p && n < 94) buf[n++] = *p++;
-    buf[n] = 0;
-    SysFreeString(num);
-    return vb6_BSTR_FromStr(buf);
+    return vb6_StrFromNumText(vb6_CStrSingle(x));
+}
+
+// C30-10 第五十六刀: Str$(Double)。真 VB6 第二轮读数 (A/B/C 段) 给的口径:
+//   Str$(0.000001) = " .000001"（1e-15 都还是定点）  Str$(1E-16) = " 1E-16"
+//   Str$(1234567.5) = " 1234567.5"                  Str$(1E+15) = " 1E+15"
+// 数值那一半完全复用 CStr 的 Double 口径 (vb6_CStrDbl ⇒ vb6_NumToBSTRDefault)，
+// 所以 CStr/Format/Str$ 三处不会各写一套阈值。
+BSTR vb6_StrDbl(double x) {
+    return vb6_StrFromNumText(vb6_CStrDbl(x));
+}
+
+// C30-10 第五十六刀: Str$(Boolean)。真 VB6 读数 A06: `Str$(True)` = " True"
+// （CStr(True) = "True"，又是差在那个前导空格上；C 侧 Boolean 与 Integer 同型 int16_t，
+//  不另开出口就只能被 vb6_Str(int32_t) 打成 " -1"）。
+// False 那一格**没有真机读数**（本轮探针只测了 True），按同构先写 " False"。
+BSTR vb6_StrBool(int16_t x) {
+    return vb6_BSTR_FromStr(x ? L" True" : L" False");
 }
 
 // ============================================================

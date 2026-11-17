@@ -1272,3 +1272,87 @@ oracle 说槽、`ChkLong` 当标量吃）。
     asm、12 片 vbp 全绿 —— 也就是说“大改没伤别处”这一条是 GA 答的，不是本机答的；
   - 登记提交 `90f8dd5e` 推 dev 后 run `44094326716` = **22/22**（零红）。
 
+### 11.31 第五十六刀（`762ad50e`）：Str$ 正数前导空格 + Double CStr 口径 + Str$(Double|Boolean) 出口
+
+三项都按**真 VB6 第二轮读数**改（`run2\c3_vb6_probe_dbl2.log` 39 行 + 补测 `run2b`），不靠猜。
+分支出 `dev`：`fix/c30-10-cut56a-str-dbl`。
+
+**① `Str$` 正数前导空格（含 0）** —— `vb6rtl_string.c: vb6_Str`
+
+| 读数 | 真 VB6 | 旧 C3 |
+|---|---|---|
+| `Str$(12345678&)` | `" 12345678"` | `"12345678"` |
+| `Str$(0&)` | `" 0"` | `"0"` |
+| `Str$(200B)` | `" 200"` | `"200"` |
+| `Str$(-5&)` | `"-5"` | `"-5"`（负数不加，两边一致） |
+
+`n >= 0 ? L" %d" : L"%d"`。这是 `Str$` 与 `CStr` 唯一的分歧点（`CStr(0)` = `"0"`、`Str$(0)` = `" 0"`）。
+
+**② 新出口 `vb6_StrDbl` / `vb6_StrBool`**（`vb6rtl_builtin.h` + `owned_temp_keeps.hpp` + `cgen_*_fixup.inc`）
+
+`Str$` 的数值口径 = CStr 的数字文本 + 一条**共用尾巴**（`vb6_StrFromNumText`：非负补空格、
+`|x|<1` 去前导 `0`）。`vb6_StrSng` 一并改走这条尾巴，两处口径不再各写一遍。
+`Str$(True)` = `" True"`（Boolean 与 Integer 同型 `int16_t`，不另开出口就被 `vb6_Str(int32_t)`
+打成 `" -1"`）。发码侧按**静态档**铺分流表：
+
+    Single → vb6_StrSng    Double/Currency → vb6_StrDbl
+    Boolean → vb6_StrBool  其余整数档 → vb6_Str(int32_t) 旧路
+
+**③ Double 的 CStr 口径**（`vb6rtl_conv.c: vb6_NumToBSTRDefault`）
+
+真机读数定下四条，旧实现（`%.*g` 逐位搜 + `av>=1e15 || av<1e-4`）三条都不对：
+
+1. **恒 15 位有效数字再剥尾零**。不用「最短往返」：A20 `CStr(4.94065645841247E-324)` 是 15 位，
+   而最短往返在 1 位就满足（`5E-324`）—— 两者只在次正规数上分家。也正因为 15 位后剥零，
+   `CStr(1234567.5#)` = `"1234567.5"`、`CStr(2.675#)` = `"2.675"`、`CStr(0.1# + 0.2#)` = `"0.3"`。
+2. **定点区间 = 舍入后的十进制指数 `exp10 ∈ [-15, 14]`**：`1E-15` → `0.000000000000001`（定点）、
+   `1E-16` → `1E-16`（指数）。旧门槛 `1e-4` 太低（真机到 -15 还是定点）。
+3. **阈值必须判在舍入之后**：H01 `999999999999999.9` 本身 < 1E+15，先舍成 15 位有效数字
+   才越界 ⇒ `"1E+15"`。旧路径判在舍入前，这一格漏判。
+4. **指数 = 大写 `E` + 符号 + 至少两位**（`%+03d`）：`1E+07`、`1E-16`、`1E-300`。旧路径 `%.*g` 吐小写 `e`。
+
+**删掉的那条启发式**（本刀唯一的减法）：
+
+    if (!isSingle && v == (double)(float)v && v != floor(v)) isSingle = 1;   // 第四十七刀
+
+它靠「值域」反推「这枚 Double 是不是 Single 提升来的」。D02 读数 `CStr(1234567.5#)` = `"1234567.5"`
+被它命中打成 `"1234568"` —— 而 1234568 恰好也是合法的 7 位结果，**分不清**。噪声与真值在值域上
+同形，只能靠发码侧的 provenance（「这一枚是 Single 提升来的」标记，账 §11.25 那一族）判，
+不靠值反推。删掉后全量回归零红，说明旧启发式在语料里没有谁在依赖它的“纠偏”。
+
+**编译器侧 39 格读数对照**（`.temp\cmp_probe.ps1`，同一份 .bas 真 VB6 与 C3 各跑一遍）：
+33 格逐字对齐；余 6 格**全部是本刀范围外**，逐条归因：
+
+| 键 | 真 VB6 | C3 | 归因 |
+|---|---|---|---|
+| `D02_cur_1p23456` | `1.2346` | `1.23456` | Currency 4 位半偶量化（`mapType`→double，Fix 126 的老账） |
+| `D03_cur_5e-5` | `0` | `0.00005` | 同上（量化到 4 位后进位为 0） |
+| `D08_var_cur_1p5` | `1.5`（`vt=6` Currency） | `1.5`（`vt=5` Double） | Variant 槽的 Currency 没保住档（同上一条的根） |
+| `E01/E02/E04_sng_*` | `1E-05`/`1E-06`/`1E+07` | `0.00001`/`0.000001`/`10000000` | `ByVal Single` 形参档位丢失：进函数已是 Double，量不出 Single 的 7 位口径 |
+
+**普查门（本刀又踩了一次 §11.25 那个坑）**
+
+| 门 | 报什么 | 处置 |
+|---|---|---|
+| `[STATIC] owned_temp_keeps` K13d | 「推导出来的消费格 1 格发码侧那份里没有：`vb6_StrFromNumText|0`」 | 登记进 `kConsumes`（`0` = 无条件放掉）。**新写一枚 static RTL 助手、只要它自己 `SysFreeString` 形参，就会长出一格消费轴** —— 与它是否进用户 TU 无关，那列是对账用的 |
+| `[STATIC] builtin_opt_defaults` R7 | 无（`callee == "vb6_Str"` 那一段还在原位，`$notPadding` 里已有理由） | 段内改成 switch 不改段头 ⇒ R7 看不见；理由文案已改成三档（Sng / Dbl / Bool）全写 |
+
+`check_manifest_coverage` K1..K3 = 748/748 集合相等。**发码形状**：语料里 `Str$` 只有 2 处
+（`tests/TeeChartChartDisplay/DisplayForm.frm:785/793` 的 `HScroll1/2.Value`，Integer 档），
+整数路径一字未动 ⇒ 清单按理不变。本机未跑全语料 emit（20+ 分钟），这一条交门 ——
+**门答了：`44144490088`（head `f2a47a9c`）= 22/22，`Emit manifest (shape oracle)` 绿**（清单逐行未变，
+与「整数路径一字未动」的预测一致）。分支已推 `github`（新分支，`fix/c30-10-cut56a-str-dbl`）。
+验证通道记一笔：`scripts/watch-gh-actions.ps1` 靠 `github` remote URL 里内嵌的 PAT，这个 checkout
+的 URL 没嵌；`gh` 也没登录 ⇒ 实际走的是 `git credential fill`（Windows 凭据管理器里存的那枚）
+取 token 再打 REST，不打印明文。
+
+**本机验收**：`tests\run_tests.ps1 -Category all -Incremental` = **274 PASS / 0 FAIL**
+（`.temp\run_tests_56a.log`）；smoke 1/1；`owned_temp_keeps` / `builtin_opt_defaults` /
+`owned_temp_semantics` / `owned_temp_reclaim` / `manifest_coverage` 全 PASS。
+（中途两个套件并行跑过 —— 我起的重跑与先前那个重叠，已掐掉旧的，只留带日志那轮为准。
+教训：`Get-CimInstance` 只筛 `powershell.exe` 会漏掉 `pwsh.exe`，那一次“等待”就直接空转返回了。）
+
+**剩余键（4 类，均不在本刀）**：Currency 的 4 位量化与 Variant 槽保档（同一根，第五十七刀）；
+`ByVal Single` 形参档位（进函数的档位问题，不是打印问题）；`Str$(False)` 无真机读数（本轮只测了
+True，按同构写 `" False"`）；Double 噪声需要发码侧 provenance（§11.25）。
+

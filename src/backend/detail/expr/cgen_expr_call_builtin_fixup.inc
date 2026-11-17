@@ -538,10 +538,22 @@ static const char* const kOD_Randomize[]   = { "0.0" };
     // C30-10 第四十九刀: `Str$(Single)` 改道到浮点出口。
     // vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01/H10/H14 打
     // "1"/"0"/"-2147483648"，真 VB6 是 " 1.5"/" .00001"/" 3.4E+38"）。
-    // 只在静态类型确实是 Single 时改道，整数那一档一字不动。
-    if (callee == "vb6_Str" && !node.positional.empty()
-        && inferExprType(*node.positional[0]) == Vb6Type::Single) {
-        callee = "vb6_StrSng";
+    //
+    // C30-10 第五十六刀: 分流表按**静态档**铺开（真 VB6 第二轮读数）:
+    //   Single             → vb6_StrSng  (7 位)
+    //   Double / Currency   → vb6_StrDbl  (CStr 口径 + 前导空格；Currency 在 C 侧就是
+    //                         double，CStr 也走 vb6_CStrDbl，两处口径因此一致)
+    //   Boolean             → vb6_StrBool (" True"/" False")，否则被当成 int16 打 " -1"
+    //   其余整数档 (Integer/Long/Byte/SByte/UInteger/ULong) 一律留 vb6_Str(int32_t)。
+    // 只动静态档确实判得出的那几形；判不准的 (Variant 槽/UDT 字段失配) 保持 int32 旧路。
+    if (callee == "vb6_Str" && !node.positional.empty()) {
+        switch (inferExprType(*node.positional[0])) {
+            case Vb6Type::Single:   callee = "vb6_StrSng";  break;
+            case Vb6Type::Double:
+            case Vb6Type::Currency: callee = "vb6_StrDbl";  break;
+            case Vb6Type::Boolean:  callee = "vb6_StrBool"; break;
+            default: break;
+        }
     }
     // Fix 140: StrPtr(Byte数组) → 数组数据指针 (而非 SafeArray1D* 结构体指针).
     // 场景: LabelPlus.ctl GdipMeasureString/GdipAddPathString(StrPtr(m_Caption), -1, ...)
