@@ -1084,3 +1084,54 @@ Integer 最小值升 Long、Currency 留 CY、Date 取序列号绝对值、BSTR 
 门：`2aaa9104` 15/22、`01fd4ca5` 21/22、`4b0989ca` 21/22、`cf26609d` **22/22**（全撤后回绿）。
 本机：smoke 1/1、syntax 227/227、owned_temp_keeps(228) / builtin_slot_returns / sa_access /
 variant_i8_coverage 全 PASS。
+
+### 11.27 第五十二刀：Abs(Variant) 改在**装箱站**分档（C23 收口）
+
+Abs(Variant) 改在**装箱站**分档（C23，AB 段 13 行对齐，pcline 不再红）
+
+上一刀（第五十一刀）在调用站把 `vb6_Abs` 改名成 `vb6_AbsV`，本地 AB 探针 13 行全对，
+门里却红 6 个作业。本机复现拿到实证（`.build\pre\tests\pcline` 的 PcDrawForm.c）：
+
+    okCls   = (-(vb6_AbsV(vb6_GetCurrentY(vb6_hwnd_picP)) < 0.001));   ← cl C2440 + C2088
+    okTwip  = (-(vb6_AbsV((dtw - vb6_ControlTextHeight(...))) < 0.001));
+    okStack = (-(vb6_AbsV((stk - (2 * vb6_ControlTextHeight(...)))) < 0.001));
+
+根因：`Abs` 的结果有**两副消费面** —— 变体位（`VarType`/`TypeName`/赋 Variant/`CStr`）
+过装箱站；数值位（比较、算术、赋 Double）**不过**装箱站，直接吃 double 标量出口。
+调用站看不到结果往哪儿去，一律改名 = 把一枚 `vb6_VARIANT` 当标量比。
+
+改法（本刀）：把分档搬进**装箱站** `CCodeGen::boxToVariant`（src/backend/cgen_util_ctrl.cpp）：
+
+  - 判据：表达式是 `IndexOrCallExpr`、被调名 Abs（大小写不敏感）、恰好 1 个位置实参、
+    该实参静态类型是 Variant；
+  - 实参侧 Fix 108c 已折出的 `vb6_VariantToDouble(...)` 一层剥回原样（子类型阶梯全靠 vt 说话），
+    发 `vb6_AbsV(<原样 VARIANT>)`；
+  - 数值位根本不经过这一站 ⇒ 照旧 `vb6_Abs(double)`，pcline 那三行恢复原形。
+
+RTL `vb6_AbsV(vb6_VARIANT)`（src/rtl/core/vb6rtl/vb6rtl_conv.c）：按 vt 分档
+Byte→Byte、Integer→Integer（-32768 升 Long）、Long→Long（溢出错误 6）、Single/Double 各自保档、
+Currency 保 CY、Boolean→Integer、Date→取序列号绝对值、BSTR 先 `vb6_IsNumericText`
+（否则 `vb6_RaiseError(13)`）、Null 原样、Empty 答 Integer 0；
+**其余档（I1/UI2/UI4/I8/UI8/DECIMAL）不写保档臂**，落 `default` = `vb6_VariantToDouble`
+取绝对值（权威换算，不是静默交 0）—— 与第四十五刀 `vb6_VarNegV` 同一取舍（无 oracle 不定口径）。
+
+静态普查（这一刀一次对齐，避免上一刀那样一轮红一个）：
+  - `check_variant_i8_coverage`：`vb6_AbsV` 进 I8 / Decimal / SByte·UInteger 三张**豁免**表，
+    理由照 `vb6_VarNegV` 的写法逐条写清；
+  - `check_sa_access` A17：`case vb6_vtEmpty:` 只许出现在 TypeName 那份名单 ⇒ 本刀用
+    前置 `if (v.vt == vb6_vtEmpty)` 收掉；
+  - `gen_variant_slot_prefixes.ps1`：RTL 多了一枚返回槽 ⇒ 派生表从 44 名补到 45 名；
+  - `owned_temp_keeps`：`vb6_AbsV` 登记进 kOwned / kOwnedVariant / kRows（'V' / ret），
+    快照一并 -Bless（229 行）。
+
+验证（真 VB6 GProbe AB 段 ↔ C3 镜像探针 ABProbe_C3.bas 逐行同键）：
+  AB01 17 Byte 5 / AB02 2 Integer 5 / AB03 3 Long 70000 / AB04 4 Single 1.5 /
+  AB05 5 Double 1.7 / AB06 6 Currency 2.5 / AB08 2 Integer 1 / AB09 17 Byte 200 /
+  AB10 3 Long 32768 / AB11 2 Integer 0 / AB12 1 Null / AB15 7 Date / AB14 5 Double 5，
+  AB13（"x"）按 VB6 抛错误 13 终止（探针进程 exit 1）。
+本机：`pcline\PcDraw.vbp` 编译 RC=0（上一刀在这里 C2440）；smoke 1/1；syntax 227/227；
+      variant_i8_coverage / sa_access / builtin_slot_returns / owned_temp_keeps /
+      builtin_opt_defaults 全 PASS。
+
+门：ea766ea = **22/22**（manifest 未动，无需 rebless）。
+
