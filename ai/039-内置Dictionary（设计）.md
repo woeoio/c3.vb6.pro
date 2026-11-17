@@ -1026,3 +1026,61 @@ R7 的规矩值得记住：**发码侧“按实参做决定（改 callee / 重�
 （E01~E10 + H06）；新残：Double 的 `Str$` 仍走 `int32_t` 截断（H21 `12345678` / H22 `0`，
 与 Double 低位 `1e-5` 打 `1e-05` 一起等下一批 Double 读数）。
 
+
+### 11.26 第五十一刀（`Abs(Variant)`）：整刀撤回 —— 入口形状选错了
+
+**读数（真 VB6 GProbe AB 段，Abs 之后问 VarType / TypeName / 值）**，这批读数**保留**，
+下一刀直接拿来对账：
+
+| 源 | VarType | TypeName | 值 |
+|---|---|---|---|
+| `CByte(5)` | 17 | Byte | 5 |
+| `CInt(-5)` | 2 | Integer | 5 |
+| `CLng(-70000)` | 3 | Long | 70000 |
+| `CSng(-1.5)` | 4 | Single | 1.5 |
+| `CDbl(-1.7)` | 5 | Double | 1.7 |
+| `CCur(-2.5)` | 6 | Currency | 2.5 |
+| `CBool(True)` | 2 | Integer | 1 |
+| `CByte(200)` | 17 | Byte | 200 |
+| `CInt(-32768)` | 3 | Long | 32768（Integer 装不下 ⇒ 升 Long） |
+| `Empty` | 2 | Integer | 0 |
+| `Null` | 1 | Null | — |
+| `#1/2/2000#` | 7 | Date | 序列号绝对值 |
+| `"5"` | 5 | Double | 5 |
+| `"x"` | — | — | 错误 13 |
+
+旧站只有 `vb6_Abs(double)` 一个出口 ⇒ 上面 13 行全塌成 VT_R8（实测 AB01~AB15 全是 5）。
+
+**试过的做法**：RTL 加 `vb6_VARIANT vb6_AbsV(vb6_VARIANT v)`（按 vt 分档：Byte 留 Byte、
+Integer 最小值升 Long、Currency 留 CY、Date 取序列号绝对值、BSTR 先 `vb6_IsNumericText`
+否则 `vb6_RaiseError(13)`、Null 原样、Empty 答 Integer 0），后端 fixup 里静态类型是 Variant
+时改名 `vb6_Abs` → `vb6_AbsV`，并把 Fix 108c 那一站先折出来的 `vb6_VariantToDouble(...)`
+剥回原样（**只改 `args[0]` 不改 `argList` 不生效**，下游按 `argList` 发码）。
+
+本地 AB 段 13 行全对，但门里连红三次，逐条归因：
+
+1. `2aaa9104`：15/22 —— vbp #5~#8 跑报错、compile #1/#2 红。
+   **根因：`Abs` 的结果有两副消费面** —— `VarType(Abs(v))` / `TypeName(...)` / `CStr(...)`
+   要一枚**变体**，而 `Abs(v) * 2`、比较、赋 `Double` 要**标量**。fixup 那一站只看得到
+   **实参**的静态类型，看不到结果往哪儿去；一律改名 = 把 `vb6_VARIANT` 当 double 算。
+2. `01fd4ca5`（只把改名段 `#if 0`，RTL 与登记保留）：21/22 —— compile #1/#2 的
+   `[STATIC] builtin_slot_returns` R2/R8：`cgen_variant_slot_prefixes.inc` 是**生成物**，
+   RTL 多了一枚返回槽却没重跑 `scripts/gen_variant_slot_prefixes.ps1`。
+3. `4b0989ca`（补跑生成脚本，表 45 名）：21/22 —— compile #1 的 `[STATIC] sa_access` A17
+   （新 switch 里的 `case vb6_vtEmpty:` 让「TypeName 标量名单」数成 2 处）与
+   `[STATIC] variant_i8_coverage` V2/D1/S1/S2（新 vt switch 把 I1/UI2/I8/DECIMAL 四档
+   掉进 `default`；这张表要求**要么写 case、要么进带理由的豁免表**）。
+
+**结论**：本刀的**入口形状**是错的，因此整刀撤回（`cf26609d`），树回到 `b4005273` 的发码形状
+（`git diff b4005273 -- src` 只剩快照里那一行 `[own] vb6_StrSng`，那是第四十九刀的正当登记）。
+下一刀要满足两条才动：
+- **按消费侧分档**：变体位（`VarType`/`TypeName`/`CStr`/赋 Variant）改名走 `vb6_AbsV`，
+  数值位保持 `vb6_Abs(double)` 出口 —— 或者干脆让 `vb6_AbsV` 另起一个名字、只在变体位发码；
+- **新 vt switch 一次写全**：I1/UI2/I8/UI8/DECIMAL 要么写 case，要么按
+  `check_variant_i8_coverage.ps1` 的豁免表写清理由（VB6 的 Variant 造不出 I8/DECIMAL，
+  只有 COM 能交进来 —— 这是可以写进豁免表的正当理由）；`case vb6_vtEmpty:` 只许出现在
+  TypeName 那份标量名单里，AbsV 那侧用前置 `if (v.vt == vb6_vtEmpty)` 收掉。
+
+门：`2aaa9104` 15/22、`01fd4ca5` 21/22、`4b0989ca` 21/22、`cf26609d` **22/22**（全撤后回绿）。
+本机：smoke 1/1、syntax 227/227、owned_temp_keeps(228) / builtin_slot_returns / sa_access /
+variant_i8_coverage 全 PASS。
