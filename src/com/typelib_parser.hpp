@@ -238,6 +238,12 @@ public:
                                                const std::string& version = "1.0");
 
     // 获取已解析的TypeLib缓存
+    // C30-11 第十二刀（只给自测开关用）: 按路径子串从缓存里剔掉已加载的类型库。
+    // 为什么需要: 只拦 ProgID 预取并不等于「这台机器没有 scrrun」—— wshom.ocx
+    // (WScript.Shell) 的类型库会把 scrrun 的 coclass 一并带进来（FileSystemObject 带着
+    // 真 CLSID 出现），于是内建兜底永远不触发、开关等于空转。
+    void dropCachedClassesByProgId(const std::string& progIdPrefix);
+
     const std::vector<std::unique_ptr<TypeLibResult>>& cachedResults() const {
         return cache_;
     }

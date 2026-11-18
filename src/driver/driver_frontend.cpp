@@ -389,6 +389,9 @@ bool Driver::runTypeLibImport(const CompileOptions& options) {
                 typelibParser_->loadByProgId(progId, true);
             }
         }
+        // 开关打开时还得把“绕路进来”的那份扣掉: wshom.ocx 的类型库 import 了 scrrun，
+        // 只拦 ProgID 预取的话 FileSystemObject 依旧带着真 CLSID 在表里，内建兜底永不触发。
+        if (skipScrrunTlb) typelibParser_->dropCachedClassesByProgId("scripting.");
         // C30-11 第七刀: 真类型库不在时用内建类名表兜底 —— `Dim x As FileSystemObject`
         // 与 `New FileSystemObject` 从此不依赖 scrrun 类型库 (成员走运行期 by-name)。
         // 真类型库在 (含工程里 Reference= 显式引了 scrrun) 就不会走到这里。
@@ -539,6 +542,104 @@ bool Driver::runTypeLibImport(const CompileOptions& options) {
         }
     }
     return true;  // TypeLib加载失败不阻断编译
+}
+
+// ============================================================
+// C30-11 第十一刀: --dump-com-sigs（只读诊断）
+// ============================================================
+// 为什么要有它: 内建兜底表（registerBuiltinScriptingTypelib）现在只登类名，
+// 接口是空的 —— 没 scrrun 的机器上成员就只能运期 by-name。要真签名，就得跟**本机真库**
+// 逐成员对齐；手抄 76+ 个成员迟早走偏。这里只负责把已加载的库原样吐出来，
+// 表由它生成、由 C30-11 第十二刀的「两种编译发码逐字节相同」把关。
+namespace {
+
+const char* dumpTypeName(Vb6Type t) {
+    switch (t) {
+        case Vb6Type::Empty: return "Empty";
+        case Vb6Type::Null: return "Null";
+        case Vb6Type::Integer: return "Integer";
+        case Vb6Type::Long: return "Long";
+        case Vb6Type::Single: return "Single";
+        case Vb6Type::Double: return "Double";
+        case Vb6Type::Currency: return "Currency";
+        case Vb6Type::Date: return "Date";
+        case Vb6Type::String: return "String";
+        case Vb6Type::Object: return "Object";
+        case Vb6Type::Error: return "Error";
+        case Vb6Type::Boolean: return "Boolean";
+        case Vb6Type::Variant: return "Variant";
+        case Vb6Type::DataObject: return "DataObject";
+        case Vb6Type::Decimal: return "Decimal";
+        case Vb6Type::Byte: return "Byte";
+        case Vb6Type::ULong: return "ULong";
+        case Vb6Type::LongPtr: return "LongPtr";
+        case Vb6Type::LongLong: return "LongLong";
+        case Vb6Type::SByte: return "SByte";
+        case Vb6Type::UInteger: return "UInteger";
+        case Vb6Type::ULongLong: return "ULongLong";
+        case Vb6Type::UserDefinedType: return "UserDefinedType";
+        case Vb6Type::Void: return "Void";
+        default: return "Unknown";
+    }
+}
+
+const char* dumpKindName(ComMemberKind k) {
+    switch (k) {
+        case ComMemberKind::Method: return "Method";
+        case ComMemberKind::PropertyGet: return "PropertyGet";
+        case ComMemberKind::PropertyPut: return "PropertyPut";
+        case ComMemberKind::PropertyPutRef: return "PropertyPutRef";
+    }
+    return "Method";
+}
+
+const char* dumpDirName(ComParamDir d) {
+    switch (d) {
+        case ComParamDir::In: return "In";
+        case ComParamDir::Out: return "Out";
+        case ComParamDir::InOut: return "InOut";
+        case ComParamDir::RetVal: return "RetVal";
+    }
+    return "In";
+}
+
+} // namespace
+
+void Driver::dumpComSigs(std::ostream& os, const std::string& filter) {
+    if (!typelibParser_) return;
+    for (auto& tl : typelibParser_->cachedResults()) {
+        if (!filter.empty() && tl->name.find(filter) == std::string::npos &&
+            tl->tlbPath.find(filter) == std::string::npos) {
+            bool any = false;
+            for (auto& cc : tl->coclasses)
+                if (cc->name.find(filter) != std::string::npos || cc->progId.find(filter) != std::string::npos) any = true;
+            if (!any) continue;
+        }
+        os << "TL\t" << tl->name << "\t" << tl->version << "\t" << tl->tlbPath << "\n";
+        for (auto& cc : tl->coclasses) {
+            if (!filter.empty() && cc->name.find(filter) == std::string::npos &&
+                cc->progId.find(filter) == std::string::npos &&
+                tl->name.find(filter) == std::string::npos) continue;
+            os << "CC\t" << cc->name << "\t" << cc->progId << "\t" << cc->clsidStr << "\t"
+               << cc->defaultIfaceName << "\t" << (cc->defaultIface ? 1 : 0) << "\n";
+            if (!cc->defaultIface) continue;
+            const ComInterfaceInfo& ifc = *cc->defaultIface;
+            os << "IF\t" << cc->name << "\t" << ifc.name << "\t" << ifc.iidStr << "\t"
+               << "dual=" << (ifc.isDual ? 1 : 0) << "\tdispatch=" << (ifc.isDispatch ? 1 : 0)
+               << "\tdefault=" << ifc.defaultMemberName << "\n";
+            for (auto& m : ifc.members) {
+                os << "MB\t" << cc->name << "\t" << m.realName << "\t" << dumpKindName(m.kind)
+                   << "\t" << dumpTypeName(m.returnType) << "\t" << m.memid << "\t" << m.vtableIndex
+                   << "\t" << m.params.size() << "\n";
+                for (size_t pi = 0; pi < m.params.size(); pi++) {
+                    const ComParamInfo& pa = m.params[pi];
+                    os << "PA\t" << cc->name << "\t" << m.realName << "\t" << pa.name << "\t"
+                       << dumpTypeName(pa.type) << "\t" << dumpDirName(pa.direction) << "\t"
+                       << "opt=" << (pa.isOptional ? 1 : 0) << "\n";
+                }
+            }
+        }
+    }
 }
 
 } // namespace vb6c3

@@ -340,6 +340,28 @@ function Test-DiStubBooleanMap {
         $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
     }
 }
+# === 静态对表 + 两腿 emit: 内建 Scripting 签名表 (C30-11 第十二刀) ===
+# 判据在 scripts/check_builtin_com_sigs.ps1。为什么要这道:
+#   内建表只在「这台机器没有 scrrun 类型库」时生效。签名差一档（Boolean 写成 Long）
+#   不会让任何静态检查红，只会让无库的机器发出另一发调用（ComCallBool ⇄ ComCallInt），
+#   运行期表现为 VarType/CStr 与有库时不同。所以除了数成员，还要拿一份探针
+#   在「默认」与 C3_TEST_NO_SCRRUN_TLB=1 两种编译下逐字节对 emit。
+function Test-BuiltinComSigs {
+    $script:total++
+    Write-Host -NoNewline "  [STATIC] builtin_com_sigs ... "
+    $psExe = "powershell"
+    $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($ps7) { $psExe = $ps7.Source }
+    $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File "$Root\scripts\check_builtin_com_sigs.ps1" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:pass++
+        Write-Host "PASS" -ForegroundColor Green
+    } else {
+        $script:fail++
+        Write-Host "FAIL" -ForegroundColor Red
+        $out | Select-Object -Last 14 | ForEach-Object { Write-Host "  $_" }
+    }
+}
 # === 静态对表: ByVal String 副本的释放闭环 (账 #610 第343刀) ===
 # 判据在 scripts/check_byval_str_copy.ps1。为什么要这道:
 #   副本释放是**运行期**行为 (堆), 形状门 (只哈希 --emit-c 的 stdout) 看不见;
@@ -13180,6 +13202,7 @@ if ($Category -in @("all", "compile")) {
     Write-Host "--- Static Checks ---" -ForegroundColor Yellow
     if (Enter-StaticShard) { Test-DiStubCensus }
     if (Enter-StaticShard) { Test-DiStubBooleanMap }
+    if (Enter-StaticShard) { Test-BuiltinComSigs }
     if (Enter-StaticShard) { Test-ByValStrCopy }
     if (Enter-StaticShard) { Test-MouseEnterIndex }
     if (Enter-StaticShard) { Test-VarArrInbound }

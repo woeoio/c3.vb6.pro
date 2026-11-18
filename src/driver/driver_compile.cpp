@@ -666,6 +666,14 @@ CompileResult Driver::compile(const CompileOptions& options) {
         }
     }
 
+    // C30-11 第十一刀（只读诊断）: --dump-com-sigs —— 把已加载类型库的类型逐条打到 stdout 后退出。
+    // 存在的理由只有一个: 内建兜底表要用**本机真库**生成, 不能手抄。
+    if (effectiveOpts.dumpComSigs) {
+        dumpComSigs(std::cout, effectiveOpts.dumpComSigsFilter);
+        result.success = true;
+        return result;
+    }
+
     // === 阶段2.6: 泛型单态化 (tB 扩展, G2) — 模板登记 + 使用点物化.
     // 必须早于语义: 注入的特化声明要作为普通声明被注册/发码.
     if (!runGenericsPrepass()) {

@@ -565,6 +565,39 @@ UNC（本机管理共享不可达，两边都照样跑）：`GetDriveName("\\\\l
 同一批探针在「默认」与「开关」两种编译下**发出来的 C 必须逐字节相同**（今天不成立，今天差在
 `ComCall*` 那几档；补签名后才应该成立）。这一步是一个独立刀口，未开工。
 
+## 7.13 第十二刀：内建签名表（把早期绑定补完）
+
+上一节（7.12）把账算清楚了：没 scrrun 类型库时成员只能运行期 by-name，行为对但编译期不查。
+这一刀把签名补上，而且**不靠手抄**：
+
+1. 新只读诊断 `--dump-com-sigs [过滤子串]`：把已加载类型库的 coclass/接口/成员/参数逐条
+   打成 TSV 后退出（不编译任何东西）。
+2. `scripts/gen_builtin_com_sigs.ps1` 把 TSV 机械转成 `src/com/builtin_scripting_sigs.inc`：
+   **9 个 coclass / 109 个成员**（剔除 IUnknown/IDispatch 那 7 个继承成员与本运行期不实现的 Encoder）。
+3. `registerBuiltinScriptingTypelib()` 不再只登类名，改从这张表登：realName/memid/vtableIndex/
+   返回类型/参数（名、型、方向、Optional）/IID/dual/dispatch/默认成员，逐字段对齐真库。clsidStr
+   仍然**故意**留空（内建表不该进 ComLib=/Object= 那几条免注册表路）。
+
+### 顺手修掉的一个“假哨兵”
+
+`C3_TEST_NO_SCRRUN_TLB=1` 原来只拦 ProgID 预取，但 **wshom.ocx（WScript.Shell）的类型库会把
+scrrun 的 coclass 一并 import 进来**——实测 `FileSystemObject` 带着真 CLSID
+`{0D43FE01-…}` 出现在表里，于是内建兜底永远不触发、开关等于空转。现在开关会再按 ProgID 前缀
+`scripting.` 把绕路进来的 coclass 扣掉（按 tlbPath 扣不掉，因为它们是合并进 wshom 那份结果的）。
+改完后开关下真的只剩 3 个真库 + 内建表 9 类。
+
+### 验收（两条，都跑了）
+
+* **发码逐字节相同**：14 份探针（`test_earlybound.bas`、Fso7–Fso12、FsoProbe1–3、FsoWho、
+  两个 Dictionary/最小探针）在「默认」与「开关」两种编译下 `--emit-c` **14/14 逐字节相同**。
+  固化成 `scripts/check_builtin_com_sigs.ps1`（R1 生成物标记/9 类、R2 每类成员数与数组行数对齐/
+  总数 109、R3 探针两腿 emit 逐字节比对），并接进 `tests/run_tests.ps1` 的静态哨兵段。
+* **四种组合跑同一份读**：编译期（有库/内建表）× 运行期（内建实现/scrrun）四种组合跑
+  Fso10 与 Fso8：`builtin/native` 与 `tlb/native` **逐字相同**。
+  剩下唯一的差异是 `tlb/ms` 下 `TypeName(TextStream)` 答 `Object` 而 cscript 答 `TextStream` ——
+  这是**旧有的有意限制**（只给 `vb6_CreateObject` 的结果打 coclass 名，不做通用 ITypeInfo 查询，
+  否则会改动整个语料的 TypeName），与本刀无关。
+
 ## 8. 验收
 
 - 刀 1/2/3 各自：`fso_native` 夹具（同一份 .bas 真机与 C3 双跑，逐行 diff）；
