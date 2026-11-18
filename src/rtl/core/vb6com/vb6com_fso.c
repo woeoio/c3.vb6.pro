@@ -27,6 +27,7 @@
 #include <wchar.h>
 #include <stdio.h>
 #include <shellapi.h>   // SHGetFileInfoW（Type 属性；shell32.lib 三个链接分支本就都带）
+#include <winver.h>     // GetFileVersionInfoSizeW / VerQueryValueW（C30-11 第七刀；链接要加 version.lib）
 
 // ============================================================
 // 对象种类
@@ -69,6 +70,11 @@ enum {
 #define FD_CREATETEXTFILE   21
 #define FD_OPENTEXTFILE     22
 #define FD_GETDRIVENAME     23   // C30-11 第六刀：盘符抽取（读数 "C:\a\b"->"C:"、UNC->"\\srv\share"、相对->""）
+// C30-11 第七刀（留白四枚）：读数见 ai/040 §7.8，照真引擎 cscript 钉过的那 14 条写
+#define FD_COPYFOLDER       24   // CopyFolder src,dst[,overwrite]：递归；缺源->76、源是文件->76、缺父级自建、目标已存在也 err=0
+#define FD_MOVEFOLDER       25   // MoveFolder src,dst：缺源->76、目标已存在->58（不覆盖）
+#define FD_GETFILEVERSION   26   // GetFileVersion：a.b.c.d；无资源/目录->"" err=0；缺文件->"" 且 Err=0x80070002 原样
+#define FD_GETSTANDARDSTREAM 27  // GetStandardStream(0|1|2,[Format])：TextStream 直写 std；3->E_HANDLE 0x80070006 但仍交对象
 // 集合
 #define FD_COUNT            30
 #define FD_ITEM             31
@@ -144,6 +150,7 @@ typedef struct vb6_FsoObj {
     wchar_t name[512];          // 集合里的名字（Files/Folders 的 Item 用）
     // TextStream
     int    reading, writing, unicode;
+    int    stdHandle;           // 第七刀：0=普通文件流；1/2=GetStandardStream 的 stdout/stderr（直写，不落盘）
     wchar_t* buf;               // 全文缓冲（读：解码后；写：待落盘）
     int    len, cap, pos;
     int    line, lineStart;
@@ -566,6 +573,31 @@ static int ts_flush(vb6_FsoObj* o) {
     return 1;
 }
 
+// 标准流（GetStandardStream，C30-11 第七刀）：写多少发多少 —— 真引擎的 stdout TextStream 不缓冲，
+// 写一句就跟一句，不等 Close。path 为空（ts_flush 会跳过）正是为了不走落盘那条路。
+static void ts_stdFlush(vb6_FsoObj* o) {
+    if (!o->stdHandle || !o->writing || o->len <= 0) return;
+    HANDLE h = (o->stdHandle == 2) ? GetStdHandle(STD_ERROR_HANDLE) : GetStdHandle(STD_OUTPUT_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE) {
+        DWORD wrote = 0;
+        if (o->unicode) {
+            WriteFile(h, o->buf, (DWORD)((size_t)o->len * sizeof(wchar_t)), &wrote, NULL);
+        } else {
+            int need = WideCharToMultiByte(CP_ACP, 0, o->buf, o->len, NULL, 0, NULL, NULL);
+            if (need > 0) {
+                char* mb = (char*)malloc((size_t)need);
+                if (mb) {
+                    WideCharToMultiByte(CP_ACP, 0, o->buf, o->len, mb, need, NULL, NULL);
+                    WriteFile(h, mb, (DWORD)need, &wrote, NULL);
+                    free(mb);
+                }
+            }
+        }
+    }
+    o->len = 0; o->pos = 0;
+    if (o->buf) o->buf[0] = 0;
+}
+
 // 父目录是否存在（CreateTextFile/OpenTextFile 失败时区分 76 / 70）
 static int fso_parentExists(const wchar_t* path) {
     wchar_t parent[1024];
@@ -933,6 +965,162 @@ static HRESULT fso_doMoveFile(DISPPARAMS* pdp, EXCEPINFO* pexcep) {
 }
 
 // ============================================================
+// C30-11 第七刀：留白四枚（CopyFolder / MoveFolder / GetFileVersion / GetStandardStream）
+// 读数 = 真引擎 cscript 现跑（.temp/leftover/oracle_missing.vbs，已记 ai/040 §7.8）：
+//   F01 copy 后 **dst 自己就是那个文件夹**（dst\a.txt + dst\sub\b.txt）
+//   F04 缺源 -> 76（不建目标）; F06 拿文件当源 -> 76
+//   F02/F03 目标已存在（不管给不给 overwrite）-> err=0
+//   M01 源消失、文件跟着走; M02 目标已存在 -> 58; M03 缺源 -> 76
+//   V01/V04 "a.b.c.d"；V02 无版本资源、V04 目录 -> "" err=0；V03 缺文件 -> "" 且 Err=0x80070002 原样
+//   S07 类型 3 -> Err=0x80070006，**不交对象**（旧读数里的 obj=TextStream 是上一句留下的旧变量，已更正）
+// ============================================================
+
+// 原样 HRESULT 进 Err.Number（0x80070002 -> -2147024894 那种档）。
+// 不走 vb6_ComVbHresult：那一档会把号搬到 0x800Axxxx 的 VB 错误区间，读者就不是「原样」了。
+static HRESULT fso_failRaw(EXCEPINFO* pexcep, uint32_t scode) {
+    if (pexcep) {
+        pexcep->scode = (SCODE)scode;
+        pexcep->bstrSource = NULL;
+        pexcep->bstrHelpFile = NULL;
+        pexcep->dwHelpContext = 0;
+        pexcep->bstrDescription = SysAllocString(L"");
+    }
+    return DISP_E_EXCEPTION;
+}
+
+// 逐级建目录（含缺失的父级）
+static int fso_makeTree(const wchar_t* dir) {
+    wchar_t tmp[1024];
+    size_t n = wcslen(dir);
+    if (n == 0 || n >= 1023) return 0;
+    wcsncpy(tmp, dir, 1023); tmp[1023] = 0;
+    for (size_t i = 3; i <= n; i++) {          // 从 "C:\" 之后开始切
+        if (tmp[i] == L'\\' || tmp[i] == 0) {
+            wchar_t c = tmp[i];
+            tmp[i] = 0;
+            if (!fso_existsKind(tmp, 1)) CreateDirectoryW(tmp, NULL);
+            tmp[i] = c;
+            if (!c) break;
+        }
+    }
+    return fso_existsKind(dir, 1);
+}
+
+// 递归把 src 的**内容**复制进 dst（dst 自己已经在调用方建好）
+static int fso_copyTree(const wchar_t* src, const wchar_t* dst, int overwrite) {
+    WIN32_FIND_DATAW fd;
+    wchar_t pat[1200], s[1200], d[1200];
+    fso_join(pat, 1200, src, L"*");
+    HANDLE h = FindFirstFileW(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 1;   // 空目录
+    int ok = 1;
+    do {
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+        fso_join(s, 1200, src, fd.cFileName);
+        fso_join(d, 1200, dst, fd.cFileName);
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            if (!fso_existsKind(d, 1)) fso_makeTree(d);
+            if (!fso_copyTree(s, d, overwrite)) { ok = 0; break; }
+        } else if (!CopyFileW(s, d, overwrite ? FALSE : TRUE)) {
+            ok = 0; break;
+        }
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    return ok;
+}
+
+static HRESULT fso_doCopyFolder(DISPPARAMS* pdp, EXCEPINFO* pexcep) {
+    wchar_t* src = fso_argStr(pdp, 0);
+    wchar_t* dst = fso_argStr(pdp, 1);
+    long overwrite = fso_argLong(pdp, 2, -1);       // 缺省 = True（与真引擎一致）
+    if (!src || !dst) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }
+    fso_stripQuotes(src); fso_stripQuotes(dst);
+    fso_stripTrailSep(src); fso_stripTrailSep(dst);
+    // 缺源、源是文件 -> 都是 76（F04/F06），且不建目标
+    if (!fso_existsKind(src, 1)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }
+    if (!fso_existsKind(dst, 1) && !fso_makeTree(dst)) {
+        free(src); free(dst); return fso_fail(pexcep, FSO_ERR_PERMISSION);
+    }
+    int ok = fso_copyTree(src, dst, overwrite == 0 ? 0 : 1);
+    free(src); free(dst);
+    if (!ok) return fso_fail(pexcep, FSO_ERR_PERMISSION);
+    return S_OK;
+}
+
+static HRESULT fso_doMoveFolder(DISPPARAMS* pdp, EXCEPINFO* pexcep) {
+    wchar_t* src = fso_argStr(pdp, 0);
+    wchar_t* dst = fso_argStr(pdp, 1);
+    if (!src || !dst) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }
+    fso_stripQuotes(src); fso_stripQuotes(dst);
+    fso_stripTrailSep(src); fso_stripTrailSep(dst);
+    if (!fso_existsKind(src, 1)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }   // 76
+    if (fso_existsKind(dst, 1)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_ALREADY_EXISTS); }    // 58
+    int ok = MoveFileW(src, dst);
+    if (!ok) {                                  // 跳盘等：退化成「复制 + 删源」
+        if (fso_makeTree(dst) && fso_copyTree(src, dst, 1)) {
+            ok = 1;
+            wchar_t pat[1200];
+            WIN32_FIND_DATAW fd;
+            fso_join(pat, 1200, src, L"*");
+            HANDLE h = FindFirstFileW(pat, &fd);
+            if (h != INVALID_HANDLE_VALUE) { FindClose(h); }
+            fso_deleteTree(src);
+        }
+    }
+    free(src); free(dst);
+    if (!ok) return fso_fail(pexcep, FSO_ERR_PERMISSION);
+    return S_OK;
+}
+
+static HRESULT fso_doGetFileVersion(DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO* pexcep) {
+    wchar_t* p = fso_argStr(pdp, 0);
+    if (!p) return E_OUTOFMEMORY;
+    fso_stripQuotes(p);
+    fso_setBstr(pResult, L"");                 // 先给 ""：无资源/目录都停在这一点上且 err=0
+    if (!fso_existsKind(p, 0)) {                // 不是文件
+        int isDir = fso_existsKind(p, 1);
+        free(p);
+        if (isDir) return S_OK;                 // V04 目录 -> "" err=0
+        return fso_failRaw(pexcep, 0x80070002u); // V03 缺文件 -> "" 且 Err 原样 0x80070002
+    }
+    DWORD dummy = 0;
+    DWORD sz = GetFileVersionInfoSizeW(p, &dummy);
+    if (sz == 0) { free(p); return S_OK; }      // V02 无版本资源 -> "" err=0
+    void* buf = malloc(sz);
+    if (!buf) { free(p); return E_OUTOFMEMORY; }
+    if (!GetFileVersionInfoW(p, 0, sz, buf)) { free(buf); free(p); return S_OK; }
+    VS_FIXEDFILEINFO* vi = NULL;
+    UINT viLen = 0;
+    if (VerQueryValueW(buf, L"\\", (LPVOID*)&vi, &viLen) && vi && viLen >= sizeof(VS_FIXEDFILEINFO)) {
+        wchar_t out[64];
+        swprintf_s(out, 64, L"%u.%u.%u.%u",
+                   (unsigned)(vi->dwFileVersionMS >> 16), (unsigned)(vi->dwFileVersionMS & 0xFFFF),
+                   (unsigned)(vi->dwFileVersionLS >> 16), (unsigned)(vi->dwFileVersionLS & 0xFFFF));
+        fso_setBstr(pResult, out);
+    }
+    free(buf); free(p);
+    return S_OK;
+}
+
+// GetStandardStream(0|1|2,[Format])：交一枚 TextStream，写时直发 std（不落盘）
+static HRESULT fso_doGetStandardStream(DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO* pexcep) {
+    long which = fso_argLong(pdp, 0, -1);
+    long fmt = fso_argLong(pdp, 1, 0);
+    if (which < 0 || which > 2)                 // S07：类型 3 -> Err 0x80070006，不交对象
+        return fso_failRaw(pexcep, 0x80070006u);
+    vb6_FsoObj* o = fso_objNew(FSO_K_TEXTSTREAM);
+    if (!o) return E_OUTOFMEMORY;
+    o->path[0] = 0;                             // ts_flush 见空路径就跳过（不落盘）
+    o->stdHandle = (int)which + 1;              // 1/2/3 -> stdout/stderr/stdin
+    o->unicode = (fmt == -1) ? 1 : 0;
+    o->reading = (which == 0);                  // 0 = stdin：只读
+    o->writing = (which != 0);
+    ts_reserve(o, 16);
+    fso_setObj(pResult, o);
+    return S_OK;
+}
+
+// ============================================================
 // GetDriveName（C30-11 第六刀）
 // ============================================================
 // 真引擎读数（.temp/leftover/oracle_members.vbs R05-R08）：
@@ -1219,15 +1407,18 @@ static HRESULT ts_doMember(vb6_FsoObj* o, int dispId, DISPPARAMS* pdp, VARIANT* 
             ts_append(o, s, (int)wcslen(s));
             if (dispId == FD_WRITELINE) ts_append(o, L"\r\n", 2);
             free(s);
+            ts_stdFlush(o);                 // 标准流立即下发（普通文件流这里什么都不做）
             return S_OK;
         }
         case FD_WRITEBLANKLINES: {
             long n = fso_argLong(pdp, 0, 0);
             for (long i = 0; i < n; i++) ts_append(o, L"\r\n", 2);
+            ts_stdFlush(o);
             return S_OK;
         }
         case FD_CLOSE: {
             if (o->writing && !ts_flush(o)) return fso_fail(pexcep, FSO_ERR_PERMISSION);
+            ts_stdFlush(o);
             o->writing = 0; o->reading = 0;
             return S_OK;
         }
@@ -1325,6 +1516,10 @@ static int fso_nameToDispid(int kind, const wchar_t* n) {
         if (!_wcsicmp(n, L"GetParentFolderName")) return FD_GETPARENTFOLDER;
         if (!_wcsicmp(n, L"GetAbsolutePathName")) return FD_GETABSOLUTEPATH;
         if (!_wcsicmp(n, L"GetDriveName")) return FD_GETDRIVENAME;
+        if (!_wcsicmp(n, L"CopyFolder")) return FD_COPYFOLDER;
+        if (!_wcsicmp(n, L"MoveFolder")) return FD_MOVEFOLDER;
+        if (!_wcsicmp(n, L"GetFileVersion")) return FD_GETFILEVERSION;
+        if (!_wcsicmp(n, L"GetStandardStream")) return FD_GETSTANDARDSTREAM;
         if (!_wcsicmp(n, L"FileExists")) return FD_FILEEXISTS;
         if (!_wcsicmp(n, L"FolderExists")) return FD_FOLDEREXISTS;
         if (!_wcsicmp(n, L"DriveExists")) return FD_DRIVEEXISTS;
@@ -1494,6 +1689,10 @@ static HRESULT STDMETHODCALLTYPE fso_Invoke(IDispatch* pDisp, DISPID dispIdMembe
             case FD_GETPARENTFOLDER:  return fso_doGetParentFolderName(pdp, pVarResult, pexcep);
             case FD_GETABSOLUTEPATH:  return fso_doGetAbsolutePathName(pdp, pVarResult, pexcep);
             case FD_GETDRIVENAME:     return fso_doGetDriveName(pdp, pVarResult, pexcep);
+            case FD_COPYFOLDER:       return fso_doCopyFolder(pdp, pexcep);
+            case FD_MOVEFOLDER:       return fso_doMoveFolder(pdp, pexcep);
+            case FD_GETFILEVERSION:   return fso_doGetFileVersion(pdp, pVarResult, pexcep);
+            case FD_GETSTANDARDSTREAM: return fso_doGetStandardStream(pdp, pVarResult, pexcep);
             case FD_FILEEXISTS:       return fso_doFileExists(pdp, pVarResult, pexcep);
             case FD_FOLDEREXISTS:     return fso_doFolderExists(pdp, pVarResult, pexcep);
             case FD_DRIVEEXISTS:      return fso_doDriveExists(pdp, pVarResult, pexcep);

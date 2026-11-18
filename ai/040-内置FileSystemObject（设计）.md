@@ -409,24 +409,35 @@ End Sub
 |---|---|
 | `CopyFolder(src, dst)` | err=0，**递归**（子目录与文件都到位）；dst 已存在且不给 Overwrite 也 err=0（合并/覆盖）|  
 | `CopyFolder(src, dst, False)` | 同上；但源若是**文件** → **76** |
-| `CopyFolder(缺失, dst)` | **76**（不报 53）|  
-| `CopyFolder(src, dst\deeper)`（父级不存在）| err=0，父级会被建出来 |
+| `CopyFolder(缺失, dst)` | **76**（不报 53），目标不建 |  
+| `CopyFolder(src, dst\deeper)` | err=0，**deeper 被建出来**（这一条只证明了末级目录会建；父级当时已存在，**没测出「缺失父级」**）|  
 | `MoveFolder(src, dst)` | err=0，源消失、文件跟着走 |
 | `MoveFolder(src, 已存在的 dst)` | **58**（不覆盖）|  
 | `MoveFolder(缺失, dst)` | **76** |
-| `GetFileVersion(notepad.exe)` | `10.0.26100.8328`（a.b.c.d，取 VS_FIXEDFILEINFO）|  
+| `GetFileVersion(notepad.exe)` | `10.0.26100.8328`（a.b.c.d，取 VS_FIXEDFILEINFO 的 `dwFileVersionMS/LS`）|  
 | `GetFileVersion(无版本资源的 txt)` | `""`，err=0 |  
 | `GetFileVersion(目录)` | `""`，err=0 |  
 | `GetFileVersion(缺失文件)` | 值 `""`，err=**-2147024894**（0x80070002 原样露在 Err.Number）|  
-| `GetStandardStream(1/2/0)` | 都交 `TextStream`；`Write`/`WriteLine` 立即到控制台 |  
-| `GetStandardStream(3)` | 仍交 `TextStream`，err=**-2147024890**（0x80070006 E_HANDLE）|  
+| `GetStandardStream(1/2/0)` | 都交 `TextStream`；`Write`/`WriteLine` 立即到控制台 |
+| `GetStandardStream(3)` | err=**-2147024890**（0x80070006 E_HANDLE），**不交对象** |  
 
-实现要点（下刀照做）：`CopyFolder` = 建全路径（含缺失父级）+ 递归 CopyFile，源不存在→76、
-源是文件→76；`MoveFolder` = 先判源 76 / 目标已存在 58；`GetFileVersion` 走
-`GetFileVersionInfoSizeW/GetFileVersionInfoW/VerQueryValueW(L"\\")`（**链接要加 version.lib**，
-当前三条链接命令行都没有）；`GetStandardStream` = TextStream 加 `stdHandle` 档，写时绕开缓冲直发
-stdout/stderr（`Format=True` 直写 UTF-16）。两个「原样 HRESULT」错误档与我们的
-`vb6_ComFailExcep(errNum)` 口径不同，实现时要单列一条口径说明，不能默默变成一个普通错误号。
+两处更正（重跑读数时发现，旧记录写错了）：
+
+1. **S07 旧读数「仍交 TextStream」是假的** —— oracle 里 `so` 上一句刚被赋成 stdin 流，赋值失败后变量留旧值，
+   `TypeName(so)` 打印的是上一句那个对象。真语义：类型 3 报 E_HANDLE，不交对象。
+2. **V01 两个位数读数不同不算偏差** —— cscript 是 64 位，看到 `System32\notepad.exe`（10.0.*）；
+   我们的 exe 是 32 位，`System32` 被重定向到 `SysWOW64`，看到的是 32 位 notepad（6.2.*）。
+
+实现要点（本刀已照做）：`CopyFolder` = 建目标（`fso_makeTree`）+ 递归 CopyFile，源不存在→76、
+源是文件→76；`MoveFolder` = 先判源 76 / 目标已存在 58，再 `MoveFileW`（跳盘退化复制+删源）；
+`GetFileVersion` 走 `GetFileVersionInfoSizeW/GetFileVersionInfoW/VerQueryValueW(L"\\")`
+（**链接已加 version.lib**：`msvc_driver.cpp` / `msvc_driver_incremental.cpp` 四条链接命令行全覆盖）；
+`GetStandardStream` = TextStream 加 `stdHandle` 档，写时绕开缓冲直发 stdout/stderr（`Format=True` 直写 UTF-16）。
+
+**仍然对不上的两格（都是客户端归一化，不是 FSO 本体）**：V03 与 S07 的 `Err.Number`。
+真引擎把 HRESULT 原样露成负数（-2147024894 / -2147024890），我们经 `vb6_ComFailExcep` 落到
+客户端映射后变成 **2 / 6**。要修正得住客户端那条 HRESULT→Err.Number 的归一化规则，
+影响面远大于 FSO 本体，本刀只登记不改。
 
 ## 8. 验收
 
