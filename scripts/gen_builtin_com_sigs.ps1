@@ -1,4 +1,4 @@
-# gen_builtin_com_sigs.ps1 - 生成 src\com\builtin_scripting_sigs.inc (C30-11 第十二刀)
+﻿# gen_builtin_com_sigs.ps1 - 生成 src\com\builtin_scripting_sigs.inc (C30-11 第十二刀)
 #
 # 这张表是**生成物**，用途见 TypeLibParser::registerBuiltinScriptingTypelib()：
 # 没装 scrrun 类型库的机器上，`Dim x As FileSystemObject` 也要拿到与有库时完全相同的编译期类型。

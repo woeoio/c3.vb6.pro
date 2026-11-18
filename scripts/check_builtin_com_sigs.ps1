@@ -1,4 +1,4 @@
-# check_builtin_com_sigs.ps1 - C30-11 第十二刀: 内建 Scripting 签名表
+﻿# check_builtin_com_sigs.ps1 - C30-11 第十二刀: 内建 Scripting 签名表
 #
 # 背景: TypeLibParser::registerBuiltinScriptingTypelib() 原本只登类名（默认接口是空的），
 # 于是「这台机器没有 scrrun 类型库」时 `Dim x As FileSystemObject` 的成员只能运行期 by-name：
