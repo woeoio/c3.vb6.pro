@@ -1500,4 +1500,61 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
    （生成 `vb6_ArraySetBSTR(..., vb6_CDate(...))` → C2440）。本刀探针一律先落 Variant 变量绕开，
    这条单独记在这里。
 
+### 11.34 第六十刀：`Array()` 的元素打包（对象 / Byte / Date / Currency / Single）
+
+§11.33 记的第 2 条（`Array(<对象>)` 被存成 Long，`TypeName=Long`）和第 5 条
+（`Array(CDate/CByte)` C2440）是**同一处发码**：`cgen_expr_call_builtin_pre.inc` 里的
+`Array()` 元素 setter 选择链是「认 Long/Double 字面量 + 猜 BSTR + 其余一律 Long」。
+
+#### 一、读数（`.temp/arr/oracle_arr2.vbs` + `.temp/arr/ArrElem.bas`）
+
+| 实参 | 真值 | 改动前发码 |
+|---|---|---|
+| `CByte(65)` | **17** | `ArraySetLong` → 3 |
+| `CDate("2020-01-02")` | **7** | `ArraySetBSTR` → **C2440 编不过**（实参里含 `L"..."`，被 `looksLikeBSTR` 猜中） |
+| `CCur(1.2345)` | **6** | `ArraySetLong` → 3 |
+| `CSng(1.5)` | **4** | `ArraySetLong` → 3 |
+| `CLng(5)` / `CInt(7)` | 3 / 2 | 3 / 2（本来就对） |
+| `True` / `Empty` / `Null` | 11 / 0 / 1 | 已对（第 348 刀） |
+| 混排 `Array(1,"x",True,Empty,Null)` | `2,8,11,0,1` | 已对 |
+| **`Array(<对象>)`** | **9，`IsObject=True`，`TypeName=Dictionary`** | `ArraySetLong(d)` → 3，`TypeName=Long`（指针当数） |
+| **`Array(Nothing)`** | **9，`IsObject=True`** | `vb6_VariantFromValue(NULL)` → 非对象档 |
+
+对象那两格**不能拿 cscript 当真值**：VBScript 把对象实参自动取默认属性（`Array(d)` 装进去的是
+`d` 的默认成员值，不是引用）。真值口径来自 VB6 语义（`Array` 存引用），并与既有实测
+`Join(d.Items)`（值为对象）→ **450** 互洽。
+
+#### 二、实现
+
+1. **选择链**（同文件，仍在 `variantSetter` 这条唯一出口附近）：新增
+   - `Nothing` 字面量：改发 `vb6_ArraySetObject(arr, i, NULL)`（原来那句注释假设 `_Generic` 会落
+     `vb6_VariantObject`，实测没落）；
+   - `knownObjectVars_` 里的标识符 或 `inferExprType` 答 Object/DataObject → 对象出口；
+   - `inferExprType` 答 Byte/Date/Currency/Single → `vb6_VariantByte/VariantDate/VariantCur/VariantSingle`。
+   **`knownObjectVars_` 是必须的**：`inferExprType` 对局部 `As Object` 答不出来（它只看 `symTab_`，
+   局部变量在那里不可达）。
+2. **新增 RTL 出口** `vb6_ArraySetObject()`（`vb6rtl_date.c` + `vb6rtl_array.h`）：清槽后
+   `vt=VT_DISPATCH` + **一次** `vb6_ComAddRefDispatch`。
+   没有发成 `vb6_ArraySetVariant(arr, i, vb6_VariantObject(p))`：那条是 `VariantCopy` 且**不清源**，
+   临时值没人 `VariantClear` ⇒ 每个对象元素泄漏一份引用。
+3. 副作用（正向）：`Join(Array(obj))` 现在真的走到 **450** —— 改动前对象已被压成 Long，
+   450 那条分支根本不可达（§11.33 因此把它记成「Join 的缺口」，实则不是）。
+
+#### 三、验收
+
+- `.temp/arr/ArrElem.bas` 19 条：A1/A2/A3 对象档 9/True、A4 17、A5 7、A6 6、A7 `2,8,11,0,1`、
+  A9 `Join(Array(obj))`=450、A10 4、A11 3、A15/16/17 11/0/1 —— 与真值逐条一致。
+- `Array(CreateObject("..."))` → 9/True；`Array(o, 1)` → `9,2`（另一条表达式形态，也通）。
+- 夹具 `tests/jsonfast_611/ArrayLiteralVariants.bas` 补 `AL-obj/AL-obj-is/AL-nothing-is/AL-byte/
+  AL-cy/AL-sng/AL-date2` 七条，`run_tests.ps1` 期望表同步；本机 19 行输出与真值逐字一致。
+- 哨兵 `scripts/check_array_literal_variants.ps1`：R4 的 `vb6_VariantDate(` 计数 1→2（第二个是
+  `Array(<Date 值>)` 的真出口），新增 **R11** 钉对象/Byte/Cur/Single 四个出口的出现次数，
+  R9/R10 补新针。PASS。
+
+#### 四、仍遗留
+
+- §11.33 的 #1（Null→String 该给 94 的强制转换站）、#3（`Filter` 遇到数值元素仍抛 13）、
+  #4（`Join(arr, 0)` 数字分隔符 C2440）**未动**。
+- 新发现：`CVar("x")` 链接失败（`LNK2019: vb6_CVar`，内建整族里没有 CVar）。
+
 

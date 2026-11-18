@@ -388,9 +388,12 @@
                                 variantSetter = argExpr;  // emitExpr 已交整枚 vb6_VARIANT
                                 break;
                             case LiteralKind::Nothing:
-                                // NULL 是 void* ⇒ _Generic default ⇒ vb6_VariantObject(NULL)
-                                variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
-                                break;
+                                // 第六十刀: 原来给 vb6_VariantFromValue(NULL), 注释假设 "_Generic
+                                // default ⇒ vb6_VariantObject(NULL)" —— 实测没落那一支，元素成了非对象档。
+                                // 真 VB6 的 Array(Nothing)(0) 是 VarType 9 / IsObject=True。
+                                // 走对象专属出口，免得 VariantCopy 多留一份引用。
+                                c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", NULL);");
+                                continue;
                             case LiteralKind::Date:
                                 variantSetter = "vb6_VariantDate(" + argExpr + ")";
                                 break;
@@ -441,6 +444,47 @@
                     // ⇒ 子类型与 BSTR 引用计数都对。
                     // oracle（cscript，W7.vbs）：Integer 2 / String 8 / Double 5 / Long 3。
                     if (variantSetter.empty() && argIsVariant) variantSetter = argExpr;
+                    // C30-11 第六十刀: 认得出档的实参一律走 Variant 出口，不落进下面"默认 Long"。
+                    // 读数（.temp/arr/oracle_arr2.vbs）：CByte→17 / CDate→7 / CCur→6 / CSng→4；
+                    // 改动前这四档分别写成 Long(3)/BSTR(8, 并因实参里含 L"..." 而 C2440)/Long/Long。
+                    // 对象档：Array(<对象>) 在 VB6 里存**引用**（VarType 9, IsObject=True），
+                    // 旧路径 ArraySetLong 把 IDispatch* 当整数存 —— Array(obj) 于是答 TypeName=Long，
+                    // Join(Array(obj)) 也走不到 450 那条（对象元素判定）。
+                    // Nothing 字面量的 argExpr 不是指针（旧写法先造了一枚空 Variant），单列一格。
+                    if (variantSetter.empty()) {
+                        bool isNothingLit = false;
+                        if (node.positional[i]->kind == ASTNodeKind::LiteralExpr) {
+                            isNothingLit = (static_cast<LiteralExpr&>(*node.positional[i]).literalKind == LiteralKind::Nothing);
+                        }
+                        // 对象变量：inferExprType 对局部 `As Object` 答不出来（它只看 symTab_，
+                        // 局部变量在那里不可达），得问 knownObjectVars_ —— 那是 Set/成员调用
+                        // 共用的同一张表。
+                        bool isObjVar = false;
+                        if (!isNothingLit && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
+                            std::string ol = static_cast<IdentifierExpr&>(*node.positional[i]).name;
+                            std::transform(ol.begin(), ol.end(), ol.begin(), ::tolower);
+                            isObjVar = (knownObjectVars_.count(ol) != 0);
+                        }
+                        if (isNothingLit || isObjVar) {
+                            c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", "
+                                        + (isNothingLit ? std::string("NULL") : "(void*)(" + argExpr + ")") + ");");
+                            continue;
+                        } else {
+                            Vb6Type elemVt = inferExprType(*node.positional[i]);
+                            if (elemVt == Vb6Type::Object || elemVt == Vb6Type::DataObject) {
+                                c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", (void*)(" + argExpr + "));");
+                                continue;
+                            }
+                            else if (elemVt == Vb6Type::Byte)
+                                variantSetter = "vb6_VariantByte((uint8_t)(" + argExpr + "))";
+                            else if (elemVt == Vb6Type::Date)
+                                variantSetter = "vb6_VariantDate(" + argExpr + ")";
+                            else if (elemVt == Vb6Type::Currency)
+                                variantSetter = "vb6_VariantCur(" + argExpr + ")";
+                            else if (elemVt == Vb6Type::Single)
+                                variantSetter = "vb6_VariantSingle((float)(" + argExpr + "))";
+                        }
+                    }
                     if (!variantSetter.empty()) {
                         c_.emitLine("vb6_ArraySetVariant(" + arrVar + ", " + std::to_string(i) + ", " + variantSetter + ");");
                         continue;

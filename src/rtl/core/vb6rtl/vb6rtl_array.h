@@ -223,6 +223,10 @@ void vb6_ArraySetLong(vb6_SafeArray1D* arr, int32_t index, int32_t val);
 void vb6_ArraySetDouble(vb6_SafeArray1D* arr, int32_t index, double val);
 void vb6_ArraySetBSTR(vb6_SafeArray1D* arr, int32_t index, BSTR val);
 void vb6_ArraySetVariant(vb6_SafeArray1D* arr, int32_t index, vb6_VARIANT val);
+// C30-11 第六十刀: Array(<对象>) 的对象档出口。与 vb6_ArraySetBSTR 同形（清槽 + 只取一次引用）。
+// 不能拿 vb6_VariantObject(...) 走 ArraySetVariant：那条是 VariantCopy（不清源），
+// 临时值没人 VariantClear ⇒ 每个对象元素泄漏一份引用。
+void vb6_ArraySetObject(vb6_SafeArray1D* arr, int32_t index, void* val);
 // ============================================================
 // SAFEARRAY ND - VB6 多维数组
 // ============================================================
