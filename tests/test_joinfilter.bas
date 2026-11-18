@@ -49,6 +49,28 @@ Public Sub Main()
     cy1 = CCur(1.2345): cy2 = 2
     Debug.Print "JF-cy=["; Join(Array(cy1, cy2), ","); "]"
 
+    ' 第六十一刀：Filter 的元素读数（.temp/filt/oracle_filt.vbs 逐条）。
+    ' 真引擎：命中按文本比、结果数组**逐元素保留子类型**；Null 元素不报错也不参与命中。
+    ' 改前这四条分别是 13 / 13 / 13 / 撞崩（结果数组固定 BSTR 档）。
+    Dim fn1 As Variant, fr As Variant
+    fn1 = Array(1, 2, 21)
+    fr = Filter(fn1, "1", True)
+    Debug.Print "JF-fnum="; UBound(fr) - LBound(fr) + 1; "/"; VarType(fr(0)); "/"; Join(fr, "|")
+
+    fn1 = Array(1, "x1", True)
+    fr = Filter(fn1, "1", True)
+    Debug.Print "JF-fmix="; UBound(fr) - LBound(fr) + 1; "/"; VarType(fr(0)); ","; VarType(fr(1)); "/"; Join(fr, "|")
+
+    fn1 = Array(Empty, 1)
+    fr = Filter(fn1, "", True)
+    Debug.Print "JF-fempty="; UBound(fr) - LBound(fr) + 1; "/"; VarType(fr(0))
+
+    On Error Resume Next
+    Err.Clear
+    fn1 = Array(Null, 1)
+    fr = Filter(fn1, "1", True)
+    Debug.Print "JF-fnull="; UBound(fr) - LBound(fr) + 1; "/"; Err.Number
+
     ' 错误面：Null 元素 → 13；非数组 → 13；二维数组 → 13
     On Error Resume Next
     Dim e1 As Variant

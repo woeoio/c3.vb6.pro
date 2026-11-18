@@ -1557,4 +1557,57 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
   #4（`Join(arr, 0)` 数字分隔符 C2440）**未动**。
 - 新发现：`CVar("x")` 链接失败（`LNK2019: vb6_CVar`，内建整族里没有 CVar）。
 
+### 11.35 第六十一刀：`Filter` 的元素档（结果数组逐元素保子类型）
+
+§11.33 记的第 3 条：`Filter` 遇数值元素抛 13、结果数组恒为 BSTR 档。真引擎不是这样：
+**命中按文本比，结果逐元素保留自己的档**。
+
+#### 一、读数（`.temp/filt/oracle_filt.vbs`，15 条）
+
+| 条件 | 真引擎 |
+|---|---|
+| `Filter(Array(1,2,21),"1",True)` | n=2, LBound 0, **t=2(Integer)**, `1|21` |
+| 同上 `include=False` | n=1, t=2, `2` |
+| `Filter(Array(1.5,2.25,11.5),"1.5",True)` | n=2, **t=5(Double)**, `1.5|11.5` |
+| `Filter(Array("ab","cd","ae"),"a",True)` | n=2, t=8, `ab|ae` |
+| `Filter(Array(True,False),"True",True)` | n=1, **t=11(Boolean)** |
+| `Filter(Array(1,"x1",True),"1",True)` | n=2, **t=2,8（各元素各自不变）**, `1|x1` |
+| 零命中 | LBound 0 / UBound **-1** |
+| 空匹配串 `""` | 全命中 |
+| 文本/二进制比较 | 1 / 0 命中 |
+| `Filter(5,"x")` | **13** |
+| `Filter(Array(Empty,1),"",True)` | n=2, **t=0(Empty)** |
+| `Filter(Array(Null,1),"1",True)` | n=1, **err=0**（Null 元素不报错、不命中） |
+| `Filter(Null,"x")` | **94** |
+
+#### 二、实现（`src/rtl/core/vb6rtl/vb6rtl_compat.c`）
+
+1. 新增 `vb6_SA_ReadFilterText()`：元素→文本，多一个 `hasText` 出参 —— `Null` / 数组元素 /
+   对象元素 `hasText=0`（不报错，只是不参与命中），其余按 CStr 口径转。**没有**复用
+   `vb6_SA_ReadJoinStrAt`：Join 对 Null 元素**抛 13**（已实测），两边口径不同。
+2. 新增 `vb6_SA_ReadVariantAt()`：命中元素读成一枚 Variant（类型化数组按自己档装）。
+3. `vb6_Filter()` 重写：
+   - 结果数组档：源是 `vb6_sa_bstr` ⇒ 仍是 BSTR 数组（既有口径，零回归）；其余 ⇒ **Variant 数组**，
+     逐元素 `vb6_VariantCopy`（这条就是 F1/F3/F5/F6/F12 的根）。
+   - 两遗的谓词统一：`hasText && match` 才算，空匹配串全命中，`owned` 的临时串两遗都释。
+4. 顺带堵一个既有崩溃：发码对非数组实参**不一定做转换**，`Filter(5,"x")` 发成
+   `vb6_Filter(5, ...)`（整数当指针）⇒ 旧写法 `source->lBound` 直接 0xC0000005（实测改动前
+   F11 之后进程退出码 1）。现在 `vb6_FilterSourceUsable()` 用 SEH 探一下再解引用，野指针兜成 13。
+
+#### 三、验收
+
+- 15 条并排：**14 条逐字一致**（F1–F13、F15）；F11 由崩变 13（与真引擎一致）。
+- 夹具 `tests/test_joinfilter.bas` 补 `JF-fnum`/`JF-fmix`/`JF-fempty`/`JF-fnull`，
+  `run_tests.ps1` 期望表同步；本机输出与真引擎逐字一致。
+- 零回归：`test_builtin_arity` 的 `AR-filter=[abc]`（字符串源，走 BSTR 结果档）不变。
+- 门（GA）见提交信息。
+
+#### 四、遗留
+
+1. **`Filter(Null, …)` 真引擎给 94，我们 13**：Null 在 `vb6_VariantToSafeArray1D` 里和普通
+   非数组一样化成 NULL，两者在本函数里分不开。要修得动「Variant → 数组」那一站，
+   与 `Join(Null)` 该给 94（§11.33 #1 的第二半）同一格。
+2. **对象元素 / 数组元素参与 `Filter` 的判定未测**：cscript 传对象会取默认属性，拿不到真值。
+3. 类型化数组作源（如 `Dim l() As Long`）本机不再报错、结果给 Variant 数组，但真 VB6 口径未测。
+
 
