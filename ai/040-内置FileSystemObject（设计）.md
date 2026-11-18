@@ -401,6 +401,33 @@ End Sub
 2. `CStr(<直接表达式的 Boolean>)` 答 `-1`，而 `CStr(已落变量的 Variant(True))` 答 `True`
    （VB6 两种写法都是 `True`）。属转换层，另记账。
 
+## 7.8 第七刀留白读数（2026-11-18，真引擎 `cscript`，`.temp/leftover/oracle_missing.vbs`）
+
+四个尚未实现的成员，先把读数钉住（下一刀照这个写，不靠猜）：
+
+| 调用 | 真引擎读数 |
+|---|---|
+| `CopyFolder(src, dst)` | err=0，**递归**（子目录与文件都到位）；dst 已存在且不给 Overwrite 也 err=0（合并/覆盖）|  
+| `CopyFolder(src, dst, False)` | 同上；但源若是**文件** → **76** |
+| `CopyFolder(缺失, dst)` | **76**（不报 53）|  
+| `CopyFolder(src, dst\deeper)`（父级不存在）| err=0，父级会被建出来 |
+| `MoveFolder(src, dst)` | err=0，源消失、文件跟着走 |
+| `MoveFolder(src, 已存在的 dst)` | **58**（不覆盖）|  
+| `MoveFolder(缺失, dst)` | **76** |
+| `GetFileVersion(notepad.exe)` | `10.0.26100.8328`（a.b.c.d，取 VS_FIXEDFILEINFO）|  
+| `GetFileVersion(无版本资源的 txt)` | `""`，err=0 |  
+| `GetFileVersion(目录)` | `""`，err=0 |  
+| `GetFileVersion(缺失文件)` | 值 `""`，err=**-2147024894**（0x80070002 原样露在 Err.Number）|  
+| `GetStandardStream(1/2/0)` | 都交 `TextStream`；`Write`/`WriteLine` 立即到控制台 |  
+| `GetStandardStream(3)` | 仍交 `TextStream`，err=**-2147024890**（0x80070006 E_HANDLE）|  
+
+实现要点（下刀照做）：`CopyFolder` = 建全路径（含缺失父级）+ 递归 CopyFile，源不存在→76、
+源是文件→76；`MoveFolder` = 先判源 76 / 目标已存在 58；`GetFileVersion` 走
+`GetFileVersionInfoSizeW/GetFileVersionInfoW/VerQueryValueW(L"\\")`（**链接要加 version.lib**，
+当前三条链接命令行都没有）；`GetStandardStream` = TextStream 加 `stdHandle` 档，写时绕开缓冲直发
+stdout/stderr（`Format=True` 直写 UTF-16）。两个「原样 HRESULT」错误档与我们的
+`vb6_ComFailExcep(errNum)` 口径不同，实现时要单列一条口径说明，不能默默变成一个普通错误号。
+
 ## 8. 验收
 
 - 刀 1/2/3 各自：`fso_native` 夹具（同一份 .bas 真机与 C3 双跑，逐行 diff）；
