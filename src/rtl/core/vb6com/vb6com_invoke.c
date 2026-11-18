@@ -253,6 +253,9 @@ static void vb6_ComDropPackedArgs(VARIANT** a, int32_t argc) {
 }
 
 static DISPID vb6_getDispid(IDispatch* pDisp, const wchar_t* name) {
+    // NULL 名字是「默认成员」的写法（见 vb6_ComSetPropArgRcv 的默认成员分支）。
+    // 这里必须当场挡掉：下面的缓存遍历用 wcscmp(..., name)，NULL 会读 0x0（曾经就是这样 AV 的）。
+    if (!name) return DISPID_UNKNOWN;
     // 先查缓存
     for (int32_t i = 0; i < vb6_dispid_cache_count; i++) {
         if (vb6_dispid_cache[i].obj == (void*)pDisp &&
@@ -1337,10 +1340,16 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
     if (!disp) { free(value_void); return; }
     IDispatch* pDisp = (IDispatch*)disp;
 
-    DISPID dispid = vb6_getDispid(pDisp, propName);
+    // Fix <default-put-null>: 参数化默认成员赋值 `d("k") = v` 的代码生成把成员名发成 NULL
+    // （cgen_util_comwrite.cpp L196 的 defMemLit25），而真语义就是 DISPID_VALUE(0)：
+    // 默认成员不能按名字查（各库叫法不一）。以前 NULL 直接进 vb6_getDispid → 缓存 wcscmp
+    // 读 0x0 → 0xC0000005；现在 NULL/空名一律当场用 DISPID_VALUE。
+    // 实测（.temp/dict/MinPut.bas）：修前 S2 处 AV，修后 err=0 且 count/get 都对得上 cscript。
+    DISPID dispid = (!propName || !propName[0]) ? DISPID_VALUE : vb6_getDispid(pDisp, propName);
     if (dispid == DISPID_UNKNOWN) {
         free(value_void);
-        fwprintf(stderr, L"vb6_ComSetPropArg: property \"%ls\" not found\n", propName);
+        fwprintf(stderr, L"vb6_ComSetPropArg: property \"%ls\" not found\n",
+                 propName ? propName : L"(default)");
         return;
     }
 
@@ -1391,24 +1400,28 @@ static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) 
     // 先把 objRef 包成 VT_DISPATCH 的 Win VARIANT, 转成 vb6_VARIANT 交给 Host_SetProp,
     // 后者落到 vb6_UC_OwnPropSet 的名字桥 (uc_hostmodel_setprop.inc)。
     /* 账 (Outlook2013 左面板 VisualTheme): 控件窗口 → 控件 IDispatch (只换控件自有成员) */
-    { void* ocxRcv = vb6_ComOcxRcvOf(disp, propName); if (ocxRcv) disp = ocxRcv; }
+    // Fix <default-put-null>: 同 vb6_ComSetPropArgRcv —— 默认成员写参引用时成员名为 NULL。
+    // 宿主/OCX 那两条分支需要名字，用 L"Item" 当默认成员名（与取值腿 vb6_ComCallObjectDefaultRcv
+    // 的旧口径一致）；真 IDispatch 则直接走 DISPID_VALUE，不按名字查。
+    const wchar_t* dispName = (propName && propName[0]) ? propName : L"Item";
+    { void* ocxRcv = vb6_ComOcxRcvOf(disp, dispName); if (ocxRcv) disp = ocxRcv; }
     if (vb6_Host_IsHostObject(disp)) {
         if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
-            fprintf(stderr, "[C3_COM] SetRef '%ls' rcv=%p -> HOST\n", propName, disp);
+            fprintf(stderr, "[C3_COM] SetRef '%ls' rcv=%p -> HOST\n", dispName, disp);
             fflush(stderr);
         }
         VARIANT winObj; VariantInit(&winObj);
         winObj.vt = VT_DISPATCH; winObj.pdispVal = (IDispatch*)objRef;
         char hin[64];
         vb6_Host_FromWinVariant(&winObj, hin);
-        vb6_Host_SetPropRef(disp, propName, hin);
+        vb6_Host_SetPropRef(disp, dispName, hin);
         vb6_Host_ClearVariant(hin);
         return;
     }
 
-    DISPID dispid = vb6_getDispid(pDisp, propName);
+    DISPID dispid = (!propName || !propName[0]) ? DISPID_VALUE : vb6_getDispid(pDisp, dispName);
     if (dispid == DISPID_UNKNOWN) {
-        fwprintf(stderr, L"vb6_ComSetRef: property \"%ls\" not found\n", propName);
+        fwprintf(stderr, L"vb6_ComSetRef: property \"%ls\" not found\n", dispName);
         return;
     }
 

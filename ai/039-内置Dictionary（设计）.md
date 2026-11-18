@@ -1356,3 +1356,90 @@ oracle 说槽、`ChkLong` 当标量吃）。
 `ByVal Single` 形参档位（进函数的档位问题，不是打印问题）；`Str$(False)` 无真机读数（本轮只测了
 True，按同构写 `" False"`）；Double 噪声需要发码侧 provenance（§11.25）。
 
+### 11.32 第五十八刀：`Key`（改名）与 `HashVal` + DISPID 对齐真库（顺带修一条默认成员写的 AV）
+
+留白普查（§7.15 of `ai/040`，109 个真库成员按名字对实现）只剩 Dictionary 两个名字没出现：
+`Key`（属性写）与 `HashVal`（只读）。本刀补齐，并把 DISPID 对齐真库。
+
+#### 一、读数先于实现（探针 `.temp/dict/`）
+
+| 用例 | 真引擎（cscript + 真 scrrun） |
+|---|---|
+| 改名 `d.Key("a") = "b"` | err=0；旧键消失、新键在、值不变 |
+| 旧键不存在（非空字典 / 空字典） | **32811**，字典原样不动（不顺手新建） |
+| 新键已被别的键占用 | **457**，两边都不动，Count 不变 |
+| 枚举顺序 | **位置不动**（`d.Add a,b,c` 后改 a→z 得 `z,b,c`） |
+| 改名成同名（按 CompareMode 判等） | err=0，**空操作**（不报 457） |
+| 默认（Binary）比较下改大小写 `Key("A")` | **32811**（找不到）；文本比较下可以 |
+| 数值键 / 空串键 | 都能改（`1→2`、`""→"k"`），值跟着走 |
+| `HashVal("a")` / `("abc")` / `("hello")` | Long：97 / 974 / 283；**不查存在性**（缺键、空字典也照算，err=0） |
+
+`HashVal` 的字符串算法是**反推出来的**（`probe_hash.vbs` 13 条）：
+
+```
+h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先取小写
+```
+
+`""`=0、`"a"`=97、`"A"`=65、`"aa"`=545、`"abc"`=974、`"abcd"`=1045、`"abcde"`=1052、
+`"hello"`=283、`"zz"`=995 全部命中；文本比较下 `HashVal("a")` 与 `HashVal("A")` 都得 97
+（按小写折）。
+
+#### 二、实现（`src/rtl/core/vb6com/vb6com_dict.c`）
+
+1. **DISPID 对齐真库 memid**：Item0 / Add1 / **Count2** / Exists3 / Items4 / **Key5** / Keys6 /
+   Remove7 / RemoveAll8 / CompareMode9 / **HashVal10** / _NewEnum-4。以前是自编号
+   （Exists2/Items3/Keys4/Remove5/RemoveAll6/CompareMode7/**Count8**）。改的理由不是洁癖：
+   上一刀已经按真库注册了签名表（`src/com/builtin_scripting_sigs.inc`，带真 memid），
+   DISPID 再自编就会出现「同一个成员两个号」，任何按 memid 走的路（外部宿主、缓存了
+   DISPID 的早期绑定码）都会指到错成员。`vb6_ForEach_Init` 只要求 Count 的 dispid > 0，2 满足。
+2. `Key`（属性写，dispid 5）：旧键查不到→32811；新键与旧键按 `dict_keyEq` 判等→空操作；
+   新键被别人占用→457；否则**摘链→换键→重新入链**，槽位不动 ⇒ 枚举/Keys/Items 顺序不变、值不动。
+3. `HashVal`（dispid 10）：上表算法，返回 VT_I4（真库签名写的是 Variant，实测 `TypeName` = Long）。
+
+#### 三、对拍结果（`.temp/dict/run_key.ps1`、`run_reg.ps1`）
+
+- 成员面 52 条并排比：**行为/字符串 38 条逐条一致**（K1–K8、H1–H7、M1/M2、O1/O2、U1/U2、
+  S[\*]13 条、C1–C3）。
+- DISPID 重排回归 21 条：18 条一致；3 条差异全部与 Dispid 无关，逐条交代见「四」。
+- `C3_FSO_PREFER_MS` **只管 FSO**（`vb6com_fso.c:2066`），对 Dictionary 无效 ⇒ Dictionary 只有
+  内建一条实现腿，对照轴是「cscript+真 scrrun」对「内建」。这点以前在 FSO 刀的脚本里容易被误读成两腿对照。
+
+#### 四、没对齐 / 没修的，逐条记账
+
+1. **非字符串键的 `HashVal` 未对齐**（本刀只给 0）。真引擎数值键另有一套：`0→0`、`1→161`、`2→985`、
+   `3→196`、`-1→930`、`1.5→573`、`65536→134`。穷举 VARIANT 布局（vt 在前/值在偏移 4 或 8）×
+   宽度 4/8 × 字节序 × seed 候选全不命中（`.temp/dict/derive_num.ps1`），**不猜**，直接记缺口。
+   影响面：`HashVal` 是未文档化成员，语料零引用，只有「主动拿数值键调 HashVal」才会看到差别。
+2. **`Join` 遇到数值元素抛 13**（旧缺口，未修）：`Join(Array(1,2,3), "|")` 真引擎给 `1|2|3`，
+   我们报 13（`.temp/dict/JoinNum.bas`）。不是 Dictionary 的事（`Keys`/`Items` 返回的就是
+   Variant 数组，字符串元素能 Join）。
+3. **链式默认成员取值** `d("outer")("inner")` 两条腿都得不到值：真引擎 7，我们抛 5
+   （`.temp/dict/NestProbe.bas`）。生成的 C 里那条赋值被整体折叠成 `v`（`--emit-c` 可看），
+   与本次改的入口无关，属既有缺口。
+
+#### 五、顺带修掉的一条既有 AV（`d("k") = v`）
+
+回归探针在 `d("k") = "v"` 处 `0xC0000005`。取证三步：
+
+1. **不是我改出来的**：把本刀的 `vb6com_dict.c` stash 掉重编，同一探针仍 AV（退出码相同）；
+2. `C3_COM_TRACE=1` 的最后一行为 `getDispid("(null)") … dispid=-1`，随后 AV `read target=0x0`；
+3. `--emit-c` 的生成码是 `vb6_ComSetPropArg(d, 0, …)` —— 参数化**默认成员**赋值把成员名发成 NULL
+   （`cgen_util_comwrite.cpp` 的 `defMemLit25`）。
+
+于是链条是：`vb6_getDispid(pDisp, NULL)` → 缓存遍历 `wcscmp(…, NULL)`（或错误分支
+`fwprintf("%ls", NULL)`）→ 读 0x0。修法（`vb6com_invoke.c`）：
+
+- `vb6_getDispid` 开头 `if (!name) return DISPID_UNKNOWN;`（防 NULL 进 `wcscmp`）；
+- `vb6_ComSetPropArgRcv` / `vb6_ComSetRefRcv`：成员名为 NULL/空 **一律按 DISPID_VALUE(0)** 发送，
+  不按名字查（默认成员在各库里叫法不同，真语义就是 0）；日志对 NULL 做兜底。
+- `SetRef` 的宿主/OCX 两条分支仍要名字，用 `L"Item"` 当默认成员名（与取值腿
+  `vb6_ComCallObjectDefaultRcv` 的旧口径一致）。
+
+修后：`S2 put ok count=1` / `S3 get=v`，exit=0；回归探针 R10/R10b 与真引擎一致。
+
+#### 六、本刀验收
+
+编译绿；`.temp/dict/run_key.ps1` 行为/字符串差异 0；`run_reg.ps1` 只剩上述 3 条已记账差异；
+门（GA）见提交信息。
+
+

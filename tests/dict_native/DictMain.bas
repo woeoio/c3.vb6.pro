@@ -1,4 +1,4 @@
-﻿Attribute VB_Name = "DictMain"
+Attribute VB_Name = "DictMain"
 Option Explicit
 
 ' C30-10 内置 Dictionary 的 C3 侧夹具 —— 与 tests/dict_native/DictCases.vbs 逐行对应。
@@ -307,6 +307,89 @@ Sub Main()
     d.Add Empty, "e"
     P "d115|empty_key_text: zero=" & B2S(d.Exists(0)) & " empty=" & B2S(d.Exists(Empty)) & " empStr=" & B2S(d.Exists(""))
     Set d = Nothing
+    ' ---- Key（属性写，改名）与 HashVal（未文档化成员）；第五十八刀 ----
+    Set d = CreateObject("Scripting.Dictionary")
+    d.Add "a", 1
+    On Error Resume Next
+    d.Key("a") = "b"
+    P "d116|key_rename: err=" & CStr(Err.Number) & " hasB=" & B2S(d.Exists("b")) & " hasA=" & B2S(d.Exists("a")) & " val=" & CStr(d("b"))
+    On Error GoTo 0
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.Add "a", 1
+    On Error Resume Next
+    d.Key("zz") = "yy"
+    P "d117|key_missing: err=" & CStr(Err.Number) & " count=" & CStr(d.Count)
+    On Error GoTo 0
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.Add "a", 1
+    d.Add "b", 2
+    On Error Resume Next
+    d.Key("a") = "b"
+    P "d118|key_collision: err=" & CStr(Err.Number) & " count=" & CStr(d.Count) & " a=" & CStr(d("a")) & " b=" & CStr(d("b"))
+    On Error GoTo 0
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.Add "a", 1
+    d.Add "b", 2
+    d.Add "c", 3
+    On Error Resume Next
+    d.Key("a") = "z"
+    P "d119|key_order: keys=" & Join(d.Keys, ",")
+    On Error GoTo 0
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.Add "a", 1
+    On Error Resume Next
+    d.Key("a") = "a"
+    P "d120|key_same_name: err=" & CStr(Err.Number) & " count=" & CStr(d.Count)
+    On Error GoTo 0
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.Add "a", 1
+    On Error Resume Next
+    d.Key("A") = "b"
+    P "d121|key_case_binary: err=" & CStr(Err.Number)
+    On Error GoTo 0
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.CompareMode = 1
+    d.Add "a", 1
+    On Error Resume Next
+    d.Key("A") = "b"
+    P "d122|key_case_text: err=" & CStr(Err.Number) & " hasB=" & B2S(d.Exists("b"))
+    On Error GoTo 0
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.Add 1, "x"
+    On Error Resume Next
+    d.Key(1) = 2
+    P "d123|key_numkey: err=" & CStr(Err.Number) & " has2=" & B2S(d.Exists(2)) & " val=" & CStr(d(2))
+    On Error GoTo 0
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    d.Add "a", 1
+    d.Add "abc", 2
+    P "d124|hashval_str: a=" & CStr(d.HashVal("a")) & " abc=" & CStr(d.HashVal("abc")) & " hello=" & CStr(d.HashVal("hello")) & " empty=" & CStr(d.HashVal(""))
+    P "d125|hashval_missing: val=" & CStr(d.HashVal("nope")) & " type=" & TypeName(d.HashVal("nope"))
+    Set d = Nothing
+
+    Set d = CreateObject("Scripting.Dictionary")
+    On Error Resume Next
+    d("k") = "v"
+    P "d126|default_put: err=" & CStr(Err.Number) & " count=" & CStr(d.Count) & " val=" & CStr(d("k"))
+    On Error GoTo 0
+    Set d = Nothing
 
     Close #gOut
 End Sub
+
