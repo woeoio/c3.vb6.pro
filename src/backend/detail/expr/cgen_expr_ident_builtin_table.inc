@@ -16,7 +16,7 @@ static const std::unordered_map<std::string, std::string> builtinFuncs = {
                                       // Input$ 到达此处的键名是 input (双键兜底)
     {"input$",  "vb6_InputString"},  // P15.4: Input function
     {"format",   "vb6_Format"},
-    {"cstr",     "vb6_CStrStrict"},
+    {"cstr",     "vb6_CStr"},
     {"cint",     "vb6_CInt"},
     {"clng",     "vb6_CLng"},
     {"cdbl",     "vb6_CDbl"},

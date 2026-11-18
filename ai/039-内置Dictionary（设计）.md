@@ -1619,7 +1619,7 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
 
 | 条件 | 真引擎 | 我们(改前) | 我们(改后) |
 |---|---|---|---|
-| `CStr(Null)` | 94 | 0 | **94** |
+| `CStr(Null)` | 94 | 0 | 0（本刀未动，见遗留 0） |
 | `Asc(Null)` / `Chr(Null)` | 94 / 94 | 0 / 0 | **94** / 0 |
 | `CInt/CLng/CDbl(Null)` | 94 | 0 | 0 |
 | `Join(arr, Null)`（分隔符） | **94** | 0 | **94** |
@@ -1650,8 +1650,13 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
      “已是 BSTR 不重复包装”的前缀表）—— 这一格就是 J14；
    - `cgen_expr_binary_util.cpp` 的 `wrapToBSTR()` 五个分支；
    - `cgen_util_classtype.cpp` 的 `toStringIfVariant()` 三个分支；
-   - `cgen_assign_value_sem.inc` 六处赋值折算；
-   - 内建表 `{"cstr", "vb6_CStrStrict"}`（`CStr(Null)`）。
+   - `cgen_assign_value_sem.inc` 六处赋值折算。
+
+   > `CStr` 本体**不换**：`vb6_CStr` 在 RTL 里是一组按实参类型分诊的重载宏，把内建表里的
+   > 名字换成只收 `vb6_VARIANT` 的 `vb6_CStrStrict`，`CStr(<bool 表达式>)` / `CStr(5)` 这类
+   > 标量实参就落成 C2440（int → vb6_VARIANT）。这一点是门 `44311607151` 拿 4 个作业
+   > （test_datelit / test_date_display / b181_baformal / test_redim_elem / b591_radixtier）
+   > 换来的：改名后本地复现 `dl.c(12): error C2440`，回退即全绿。
 
 #### 三、验收
 
@@ -1664,6 +1669,8 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
 
 #### 四、遗留
 
+0. **`CStr(Null)` 仍 0**：见上“不换”一段。要动它得先把 `CStr` 的重载宏按实参类型分诊出
+   “Variant 则严格”这一支，不属“换一个名字”的量级；单独一格。
 1. **`Dim s As String: s = Null` 仍给 0**：这条不走上面五个站（有专用支路），编译期只给
    VB3003 警告。改它要定点到那条支路，另开一格。
 2. **数值站**：`CInt/CLng/CDbl(Null)`、`Chr(Null)`、`Mid(s, Null)` 仍 0 —— 属“Null → 数值”那一站，

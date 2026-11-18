@@ -73,13 +73,11 @@ Public Sub Main()
 
     ' 第六十二刀：Null 转换站。VB6 口径：Variant(Null) 隐式转 String 一律 **94**
     ' （读数 .temp/null/oracle_null.vbs）。改前这一批全是 0（静默空串）。
+    ' 注：`CStr(Null)` **不在本刀**（CStr 走自己的重载宏，改名的代价已实测太大，
+    ' 门 44311607151 红过；已记入 ai/039 §11.36 遗留）。
     Err.Clear
     Dim nv2 As Variant, nc As Variant
     nv2 = Null
-    nc = CStr(nv2)
-    Debug.Print "JF-nullcstr="; Err.Number
-
-    Err.Clear
     nc = Asc(nv2)
     Debug.Print "JF-nullasc="; Err.Number
 
