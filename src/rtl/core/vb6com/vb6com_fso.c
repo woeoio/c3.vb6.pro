@@ -1368,22 +1368,33 @@ static HRESULT fso_collectionMember(vb6_FsoObj* o, int dispId, DISPPARAMS* pdp,
     if (dispId == FD_COUNT) {
         fso_setLong(pResult, n);
     } else if (dispId == FD_ITEM) {
+        /* C30-11 后记（遗留问题①）: scrrun 的 Files/Folders/Drives.Item 是**按名字**取项，
+         * 不认序号 —— 真 VB 引擎读数（VBScript，与 VB6 同一套 oleaut32 晚绑定）:
+         *   files.Item(1)        -> 运行错误 5「无效的过程调用或参数」
+         *   files.Item("a.txt")  -> a.txt
+         * 第二刀曾把数字索引当 1 基序号受理（比 VB6 宽松，读数是 a.txt）；
+         * 现在按读数对齐: 非 BSTR 实参一律错误 5，按名字找不到也是 5。
+         * 换言之 `coll(i)` / `coll.Item(i)` 在 VB6 里本来就不成立，正确形状是
+         * `For Each` 或 `coll.Item(名字)`。 */
         VARIANT* v = fso_argRaw(pdp, 0);
-        int idx = -1;
+        const wchar_t* key = NULL;
         if (v) {
-            VARIANT tmp; VariantInit(&tmp);
-            if (V_VT(v) == VT_BSTR) {
-                for (int i = 0; i < n; i++) {
-                    const wchar_t* base = fso_lastComponent(paths[i]);
-                    if (_wcsicmp(base, V_BSTR(v) ? V_BSTR(v) : L"") == 0) { idx = i; break; }
-                }
-            } else if (SUCCEEDED(VariantChangeType(&tmp, v, 0, VT_I4))) {
-                int want = V_I4(&tmp);
-                if (want >= 1 && want <= n) idx = want - 1;
-                VariantClear(&tmp);
-            } else VariantClear(&tmp);
+            if (V_VT(v) == VT_BSTR) key = V_BSTR(v);
+            else if (V_VT(v) == (VT_BSTR | VT_BYREF)) key = V_BSTRREF(v) ? *V_BSTRREF(v) : NULL;
         }
-        if (idx < 0) hr = fso_fail(pexcep, 5);
+        int idx = -1;
+        if (key) {
+            for (int i = 0; i < n; i++) {
+                const wchar_t* base = fso_lastComponent(paths[i]);
+                if (_wcsicmp(base, key) == 0) { idx = i; break; }
+            }
+        }
+        if (idx < 0) {
+            /* 两档分开: 实参根本不是名字（数字等）-> 5「无效的过程调用或参数」；
+             * 名字给了但集合里没有 -> 53「文件未找到」（真 VB 引擎读数:
+             * files.Item("1") 就是 53，与数字实参的 5 是两个号）。 */
+            hr = fso_fail(pexcep, key ? 53 : 5);
+        }
         else {
             int kind = (o->kind == FSO_K_FOLDERS) ? FSO_K_FOLDER
                      : (o->kind == FSO_K_FILES) ? FSO_K_FILE : FSO_K_DRIVE;
@@ -1446,6 +1457,11 @@ static HRESULT STDMETHODCALLTYPE fso_Invoke(IDispatch* pDisp, DISPID dispIdMembe
 
     if (o->kind == FSO_K_DRIVES || o->kind == FSO_K_FOLDERS || o->kind == FSO_K_FILES) {
         if (dispIdMember == FD_NEWENUM) { fso_enumMake(o, pVarResult); return S_OK; }
+        /* C30-11 后记（遗留问题①）: `coll(x)` 在 VB6 里编到**默认成员** DISPID_VALUE(0)，
+         * 而这三族的默认成员就是 Item。以前 0 号落到本函数后既不匹配 Count 也不匹配 Item，
+         * 交回 Nothing（本机读数 `coll(1)` -> TypeName=Nothing）。收到 Item 上，
+         * 后面就按 Item 的口径答（数字实参 = 错误 5，与 VB6 一致）。 */
+        if (dispIdMember == DISPID_VALUE) dispIdMember = FD_ITEM;
         return fso_collectionMember(o, dispIdMember, pdp, pVarResult, pexcep);
     }
 

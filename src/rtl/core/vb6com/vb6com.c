@@ -261,6 +261,11 @@ static int32_t vb6_HresultToErrNum(long hr) {
     case 0x8002000EUL: return 450;  // DISP_E_BADPARAMCOUNT  → 参数个数错误
     case 0x8002000FUL: return 449;  // DISP_E_PARAMNOTOPTIONAL → 参数不是可选的
     case 0x8002000BUL: return 451;  // DISP_E_BADINDEX       → 对象不是集合
+    /* C30-11 后记（遗留问题①的第二个不一致）: E_INVALIDARG(0x80070057) 的低 16 位是 87，
+     * 旧口径直接截低字 → 报出 87「参数错误」。真 VB 引擎读数（VBScript 晚绑定 scrrun）:
+     *   files.Item(1) -> Err.Number = 5「无效的过程调用或参数」
+     * 即 VB 把 E_INVALIDARG 归到 5，而不是 Win32 的 87。本条只动这一枚 HRESULT。 */
+    case 0x80070057UL: return 5;    // E_INVALIDARG          → 无效的过程调用或参数
     default: {
         int32_t errNum = (int32_t)((unsigned long)hr & 0xFFFF);  // VB6错误号 = HRESULT低16位
         if (errNum == 0) errNum = (int32_t)hr;  // 非标准HRESULT直接用整个值
@@ -275,6 +280,12 @@ void vb6_ComCheckError(HRESULT hr, EXCEPINFO* excep, const wchar_t* context) {
     // 优先使用EXCEPINFO中的scode (OLE自动化错误码; DISP_E_EXCEPTION 时携带真实错误号)
     if (excep && excep->scode) {
         errNum = vb6_HresultToErrNum((long)excep->scode);
+    }
+    if (excep && GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] CheckError hr=0x%08lX scode=0x%08lX wCode=%u helpCtx=%lu ctx=%ls\n",
+                (unsigned long)hr, (unsigned long)excep->scode, (unsigned)excep->wCode,
+                (unsigned long)excep->dwHelpContext, context ? context : L"?");
+        fflush(stderr);
     }
 
     // 构造错误描述BSTR — 四级fallback:
