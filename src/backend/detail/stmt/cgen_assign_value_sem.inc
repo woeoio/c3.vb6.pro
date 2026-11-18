@@ -198,7 +198,7 @@
                 } else if (kind091c == "Double") {
                     conv091c = "vb6_VariantToDouble(" + value + ")";
                 } else if (kind091c == "BSTR") {
-                    conv091c = "vb6_VariantToString(" + value + ")";
+                    conv091c = "vb6_CStrStrict(" + value + ")";
                 }
             }
             c_.emitLine("vb6_PA_Set" + kind091c + "(" + args091c + ", " + conv091c + ");");
@@ -400,7 +400,7 @@
                 return;
             }
             if (tgtCt124 == "BSTR") {
-                c_.emitLine(target + " = vb6_VariantToString(" + unwrapped + ");");
+                c_.emitLine(target + " = vb6_CStrStrict(" + unwrapped + ");");
                 return;
             }
             // 目标类型未知 (void*/对象等) → 不动, 维持原赋值路径.
@@ -411,7 +411,7 @@
             bool udtFieldIsArray114 = false;
             if (target.find("VB6_SA_AT(BSTR,") != std::string::npos
                 || target.find("VB6_SA_ND_AT2(BSTR,") != std::string::npos) {
-                convertedValue = "vb6_VariantToString(" + value + ")";
+                convertedValue = "vb6_CStrStrict(" + value + ")";
             } else if (target.find("VB6_SA_AT(int32_t,") != std::string::npos
                        || target.find("VB6_SA_AT(int16_t,") != std::string::npos
                        || target.find("VB6_SA_AT(uint8_t,") != std::string::npos
@@ -441,7 +441,7 @@
                 if (retCt092f == "vb6_SafeArray1D*") {
                     convertedValue = "vb6_VariantToSafeArray1D(" + value + ")";
                 } else if (retCt092f == "BSTR") {
-                    convertedValue = "vb6_VariantToString(" + value + ")";
+                    convertedValue = "vb6_CStrStrict(" + value + ")";
                 } else if (retCt092f == "void*") {
                     convertedValue = "vb6_VariantToObjectVal(" + value + ")";
                 } else if (retCt092f == "double" || retCt092f == "float") {
@@ -463,7 +463,7 @@
                     // 元素档压成 Long。`m_Items(Index).ImgArr = SrcImg` 实测。
                     convertedValue = "vb6_VariantToSafeArray1D(" + value + ")";
                 } else if (udtFieldT == Vb6Type::String) {
-                    convertedValue = "vb6_VariantToString(" + value + ")";
+                    convertedValue = "vb6_CStrStrict(" + value + ")";
                 } else if (udtFieldT == Vb6Type::LongPtr) {
                     convertedValue = "vb6_VariantToLongPtr(" + value + ")";
                 } else if (udtFieldT == Vb6Type::Long || udtFieldT == Vb6Type::Integer
@@ -574,7 +574,7 @@
                     case Vb6Type::Currency: case Vb6Type::Date:
                         convertedValue = "vb6_VariantToDouble(" + value + ")"; break;
                     case Vb6Type::String:
-                        convertedValue = "vb6_VariantToString(" + value + ")"; break;
+                        convertedValue = "vb6_CStrStrict(" + value + ")"; break;
                     default: break;
                     }
                 }

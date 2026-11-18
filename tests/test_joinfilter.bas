@@ -71,6 +71,38 @@ Public Sub Main()
     fr = Filter(fn1, "1", True)
     Debug.Print "JF-fnull="; UBound(fr) - LBound(fr) + 1; "/"; Err.Number
 
+    ' 第六十二刀：Null 转换站。VB6 口径：Variant(Null) 隐式转 String 一律 **94**
+    ' （读数 .temp/null/oracle_null.vbs）。改前这一批全是 0（静默空串）。
+    Err.Clear
+    Dim nv2 As Variant, nc As Variant
+    nv2 = Null
+    nc = CStr(nv2)
+    Debug.Print "JF-nullcstr="; Err.Number
+
+    Err.Clear
+    nc = Asc(nv2)
+    Debug.Print "JF-nullasc="; Err.Number
+
+    Err.Clear
+    nc = Join(Array(1, 2), nv2)
+    Debug.Print "JF-nulldelim="; Err.Number
+
+    Err.Clear
+    nc = Split(nv2, ",")
+    Debug.Print "JF-nullsplit="; Err.Number
+
+    Err.Clear
+    nc = Replace(nv2, "a", "b")
+    Debug.Print "JF-nullrep="; Err.Number
+
+    ' 与上面相反的一侧（不能误伤）：`&` 走的是宽松口径、`IsNull` 照旧
+    Err.Clear
+    nc = "x" & "y"
+    Debug.Print "JF-concat-ok="; nc; "/"; Err.Number
+
+    Err.Clear
+    Debug.Print "JF-isnull="; IsNull(nv2); "/"; Err.Number
+
     ' 错误面：Null 元素 → 13；非数组 → 13；二维数组 → 13
     On Error Resume Next
     Dim e1 As Variant

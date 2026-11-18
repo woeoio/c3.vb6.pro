@@ -1610,4 +1610,69 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
 2. **对象元素 / 数组元素参与 `Filter` 的判定未测**：cscript 传对象会取默认属性，拿不到真值。
 3. 类型化数组作源（如 `Dim l() As Long`）本机不再报错、结果给 Variant 数组，但真 VB6 口径未测。
 
+### 11.36 第六十二刀：Null 转换站（Variant(Null) → String 一律 94）
+
+§11.33 #1 与 §11.35 遗留 1 指向同一处：Variant 里的 Null 在被当成**字符串**用时，
+真引擎报 **94**，我们静默给空串（J14 的 `Join(arr, Null)` 就是这一格的影子）。
+
+#### 一、读数（`.temp/null/oracle_null.vbs` 27 条 + `.temp/null/NullProbe.bas`）
+
+| 条件 | 真引擎 | 我们(改前) | 我们(改后) |
+|---|---|---|---|
+| `CStr(Null)` | 94 | 0 | **94** |
+| `Asc(Null)` / `Chr(Null)` | 94 / 94 | 0 / 0 | **94** / 0 |
+| `CInt/CLng/CDbl(Null)` | 94 | 0 | 0 |
+| `Join(arr, Null)`（分隔符） | **94** | 0 | **94** |
+| `Join(Null, "\|")`（源） | 94 | 13 | 13 |
+| `Split(Null, ",")` | 94 | 0 | **94** |
+| `Replace(Null, …)` | 94 | 0 | **94** |
+| `UBound(Null)` | 13 | 9 | 9 |
+| `Len/Trim/UCase/Mid/Left/LCase(Null)` | cscript 0 | 0 | **94** |
+| `Val(Null)` | cscript 13 | 0 | **94** |
+| `Null & "x"` / `"x" & Null` | VB6：结果是 **Null**（cscript 是宿主口径，不当真值） | `"x"` | `"x"` |
+| `Null = ""` | Null | False | False |
+| `Null + 1` | Null | Null | Null ✓ |
+| `IsNull(Null)` | True | True ✓ | True ✓ |
+| `CStr(Empty)` | `""` | `""` ✓ | `""` ✓ |
+| `Dim s As String: s = Null` | 94 | 0 | 0 |
+
+口径说明：VB6 的通用规则是「String 形参 / String 目标收 Null ⇒ 94」。cscript 对
+`Len/Trim/UCase/Left/Mid` 宽松成 0、`Val` 给 13 属 VBScript 宿主差异——这几格按 VB6 规则
+统一取 94，并在探针文件头注明“不当真值”。
+
+#### 二、实现
+
+1. **RTL**：新增 `vb6_CStrStrict(vb6_VARIANT)`（`vb6rtl_conv.c` + `vb6rtl_builtin.h`）：
+   `vt == Null` ⇒ 抛 94（`Invalid use of Null`），否则委托 `vb6_CStr`。
+   特意**不改** `vb6_CStr`：`&` 与 `Debug.Print` 走的是它，两者口径另算。
+2. **五个站换成严格出口**：
+   - `cgen_expr_call_arg_variant.inc`：“Variant 实参 → String 形参”总口（并把它加进
+     “已是 BSTR 不重复包装”的前缀表）—— 这一格就是 J14；
+   - `cgen_expr_binary_util.cpp` 的 `wrapToBSTR()` 五个分支；
+   - `cgen_util_classtype.cpp` 的 `toStringIfVariant()` 三个分支；
+   - `cgen_assign_value_sem.inc` 六处赋值折算；
+   - 内建表 `{"cstr", "vb6_CStrStrict"}`（`CStr(Null)`）。
+
+#### 三、验收
+
+- 探针 `NullProbe.bas` 29 条：String 面全部到位（上表加粗格）。
+- 夹具 `tests/test_joinfilter.bas` 补 `JF-nullcstr=94 / JF-nullasc=94 / JF-nulldelim=94 /
+  JF-nullsplit=94 / JF-nullrep=94`，并用 `JF-concat-ok=xy/0`、`JF-isnull=True/0` 钉反向（不许误伤
+  宽松口径）；本机输出与真值一致。
+- 零回归抽检：`test_builtin_arity` 的 `AR-join1` / `AR-filter` 不变。
+- 门（GA）见提交信息。
+
+#### 四、遗留
+
+1. **`Dim s As String: s = Null` 仍给 0**：这条不走上面五个站（有专用支路），编译期只给
+   VB3003 警告。改它要定点到那条支路，另开一格。
+2. **数值站**：`CInt/CLng/CDbl(Null)`、`Chr(Null)`、`Mid(s, Null)` 仍 0 —— 属“Null → 数值”那一站，
+   影响面比 String 站大（比较/算术都用它），单独一刀量。
+3. **`&` 与比较符的 Null 传播**：VB6 是 `Null & "x"` → Null、`Null = ""` → Null；
+   我们现在分别给 `"x"` 与 False（VBScript 口径）。要改得动运算符发码，不能靠转换站。
+4. **`Join(Null, …)` 源**仍 13（真 94）、`UBound(Null)` 仍 9（真 13）：这两格归
+   “Variant → 数组”那一站，与 §11.35 遗留 1 同一处。
+5. 编译器当前对 `Len(Null)` / `Join(Null, …)` / `UBound(Null)` 这类**字面量**直接报编译期错
+   （VB4001 / VB3043），所以读数一律用装着 Null 的 Variant 变量取。
+
 

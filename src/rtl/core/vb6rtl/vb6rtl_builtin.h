@@ -117,6 +117,12 @@ int16_t vb6_CInt(double x);
 int32_t vb6_CLng(double x);
 double vb6_CDbl(double x);
 BSTR vb6_CStr(vb6_VARIANT x);
+// C30-11 第六十二刀: Null 转换站。VB6 口径: Variant(Null) 隐式转 String 一律 **94**
+// (Invalid use of Null) —— 读数 .temp/null/oracle_null.vbs: CStr 94 / Asc 94 / Replace 94 /
+// Join 分隔符 94 / Split 源 94。散落在 "Variant 实参 → String 形参" 那一站与 CStr 内建。
+// 与 vb6_CStr 分开的理由: & 运算与 Debug.Print 仍然按"宽松"走(各自另有口径,
+// 后者 VB6 打的是文本 "Null"), 不能一刀切。
+BSTR vb6_CStrStrict(vb6_VARIANT x);
 // M22: typed CStr overloads
 BSTR vb6_CStrLong(int32_t x);
 BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 Variant 解包入口

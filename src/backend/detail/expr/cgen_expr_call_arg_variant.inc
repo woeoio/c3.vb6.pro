@@ -211,6 +211,7 @@
                         "vb6_BSTR_",
                         "VB6_SA_AT(BSTR,",
                         "vb6_VariantToString(",
+                        "vb6_CStrStrict(",
                         "vb6_BSTR_FromStr("};
                     bool topIsBstr092a = false;
                     for (auto* bp092a : bstrTopPrefixes092a) {
@@ -220,7 +221,11 @@
                         }
                     }
                     if (!topIsBstr092a) {
-                        argVal = "vb6_VariantToString(" + argVal + ")";
+                        // C30-11 第六十二刀: 这一站是"Variant 实参 → String 形参"的总口，
+                        // 按 VB6 口径 Null 该给 **94**（读数：Asc 94 / Replace 94 /
+                        // Join 分隔符 94 / Split 源 94），旧写法 vb6_VariantToString 静默给空串
+                        // ⇒ 第五十九刀记的 J14（Join(arr, Null) 真 94 / 我们 0）就是这里。
+                        argVal = "vb6_CStrStrict(" + argVal + ")";
                     }
                     }
                 } else if (paramBase == Vb6Type::Object) {

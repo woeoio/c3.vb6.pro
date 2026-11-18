@@ -101,7 +101,9 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
     // P24-01: 后期绑定COM调用返回VARIANT*, 需解包为BSTR(必须在vb6_BSTR检查之前)
     // P24-02: Variant数组索引返回vb6_VARIANT, 需转BSTR
     if (isVariantSlotElemRead(expr)) {
-        return "vb6_VariantToString(" + expr + ")";
+        // C30-11 第六十二刀: String 目标收 Null ⇒ **94**（VB6 口径）。本函数是
+        // "→ BSTR" 的总口（赋值站 / 实参站 / COM 写均经此），统一改严格出口。
+        return "vb6_CStrStrict(" + expr + ")";
     }
     // C30-9 实测（江西省医保药品查询系统 frmlogin.frm:189 `userpow = rs_login.Fields(2)`）:
     // `Fields(n)` 的生成码是 vb6_ComCallObject(...)，交回的是**对象指针 (IDispatch*)**。
@@ -113,17 +115,17 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
     // 所有权: vb6_ComGetDefaultValue 交回堆上 VARIANT (可能 NULL ⇒ FromComResult 认),
     // FromComResult 吃掉那枚堆块, VariantToString = vb6_CStr = vb6_Format 现造新 BSTR。
     if (expr.compare(0, 18, "vb6_ComCallObject(") == 0) {
-        return "vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetDefaultValue("
+        return "vb6_CStrStrict(vb6_VariantFromComResult(vb6_ComGetDefaultValue("
                + expr + ")))";
     }
     if (expr.find("vb6_ComCall(") == 0 || expr.find("vb6_ComCallByDispid(") == 0) {
-        return "vb6_VariantToString(vb6_VariantFromComResult(" + expr + "))";
+        return "vb6_CStrStrict(vb6_VariantFromComResult(" + expr + "))";
     }
     // Fix 092w: 链式默认属性访问结果 (vb6_VariantFromComResult(vb6_ComCall(...))) 是
     // vb6_VARIANT — BSTR 上下文需提取为字符串, 否则 C2440 (Demo_Database 506)。
     // 必须放在 vb6_BSTR 子串检查之前 (实参中可能含 vb6_BSTR_FromStr)。
     if (expr.find("vb6_VariantFromComResult(") == 0) {
-        return "vb6_VariantToString(" + expr + ")";
+        return "vb6_CStrStrict(" + expr + ")";
     }
     // P24-01: COM属性返回int/double, 需转BSTR
     // ⚠ 必须是**顶层前缀**判定 (与 Fix 100a / 100d 同一族修法)。原来这里是未锚定的
@@ -201,7 +203,8 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
             size_t p091i = expr.find('(');
             if (p091i != std::string::npos
                 && variantReturnFuncs_->count(expr.substr(0, p091i))) {
-                return "vb6_VariantToString(" + expr + ")";
+                // 第六十二刀: 同一站统一走严格出口（Null → 94）
+                return "vb6_CStrStrict(" + expr + ")";
             }
         }
         // Fix 100b: 原为 `return expr; // 其他vb6_函数假定为BSTR` —— 清单外且无字符串

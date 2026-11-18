@@ -454,6 +454,21 @@ BSTR vb6_CStr(vb6_VARIANT x) {
     return vb6_Format(x, NULL, 1, 1);
 }
 
+// C30-11 第六十二刀: Null 转换站（VB6 口径：Null → String 一律 94）。
+// 读数 .temp/null/oracle_null.vbs: CStr 94 / Asc 94 / Replace 94 / Join 分隔符 94 /
+// Split 源 94（VB6 的通用规则是"String 形参收 Null ⇒ 94"，VBScript 对 Len/Trim 那几格
+// 宽松成 0，按宿主差异记账，不当真值）。
+// 为什么单独开一枚而不改 vb6_CStr：`&` 与 Debug.Print 仍走宽松口径
+// （前者 VB6 是 Null 传播、后者打印文本 "Null"，两格都另算）。
+BSTR vb6_CStrStrict(vb6_VARIANT x) {
+    if (x.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return vb6_BSTR_Empty();  /* 不可达 */
+    }
+    return vb6_CStr(x);
+}
+
 // M22: typed CStr overloads (C has no overloading, use suffix)
 #ifdef vb6_CStrLong
 #undef vb6_CStrLong   // vb6rtl_builtin.h 的 _Generic 宏在这里必须关闭, 否则函数定义被宏改写
