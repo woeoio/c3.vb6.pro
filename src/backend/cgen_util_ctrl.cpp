@@ -3860,8 +3860,11 @@ static void collectSlotAddrs65(const std::string& s, std::vector<std::string>& o
     }
 }
 
-static std::string cmpNullGuardV(const ASTNode* node, const std::string& cExpr) {
+std::string cgNullGuardCmpV(const ASTNode* node, const std::string& cExpr) {
     if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    // 幂等：实参站会被套两层（boxToVariant 之后又有一层装箱），第二层拿到的
+    // 已经是 vb6_VCmpNullV(...)；再包一次会变成 VARIANT 当 int32_t → C2440（实测）。
+    if (cExpr.find("vb6_VCmpNullV(") != std::string::npos) return std::string();
     const auto& bin = static_cast<const BinaryExpr&>(*node);
     if (!isCmpOp65(bin.op)) return std::string();
 
@@ -3887,6 +3890,70 @@ static std::string cmpNullGuardV(const ASTNode* node, const std::string& cExpr) 
     return "vb6_VCmpNullV(" + a + ", " + b + ", " + inner + ")";
 }
 
+std::string cgNullGuardConcatV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    // 幂等：同上，第二层拿到的已经是 vb6_VarConcatNullV(...)，不能再包。
+    if (cExpr.find("vb6_VarConcatNullV(") != std::string::npos) return std::string();
+    const auto& bin = static_cast<const BinaryExpr&>(*node);
+    if (bin.op != BinaryOp::Concat) return std::string();
+
+    // 只认「两侧都是整枚 Variant 槽转出的 CStr」这一形；其它形（字面量/数值/嵌套拼接）
+    // 一律不动 —— 那些格的真值本来就等于零期值（读数 R4..R6/R10/R12）。
+    static const std::string kSlotPre = "vb6_CStr(vb6_VariantFromValue(";
+    auto slotOf = [](const std::string& s) -> std::string {
+        if (s.compare(0, kSlotPre.size(), kSlotPre) != 0) return std::string();
+        if (s.size() < kSlotPre.size() + 3) return std::string();
+        if (s.compare(s.size() - 2, 2, "))") != 0) return std::string();
+        std::string id = s.substr(kSlotPre.size(), s.size() - kSlotPre.size() - 2);
+        for (char ch : id) {
+            bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '_';
+            if (!ok) return std::string();
+        }
+        return id;
+    };
+
+    size_t s = 0;
+    while (s < cExpr.size() && (cExpr[s] == '(' || cExpr[s] == ' ')) s++;
+    std::string body;
+    static const std::string kVStr = "vb6_VariantString(";
+    if (cExpr.compare(s, kVStr.size(), kVStr) == 0 && cExpr.back() == ')') {
+        body = cExpr.substr(s + kVStr.size(), cExpr.size() - s - kVStr.size() - 1);
+    } else {
+        body = cExpr.substr(s);
+    }
+
+    static const std::string kConcat = "vb6_BSTR_ConcatFree(";
+    if (body.compare(0, kConcat.size(), kConcat) != 0 || body.back() != ')')
+        return std::string();
+    std::string args = body.substr(kConcat.size(), body.size() - kConcat.size() - 1);
+    // 只在「两个实参都是槽 CStr」时分：按 `, ` 切一次，且两侧都不能再含未配对括号。
+    size_t comma = std::string::npos;
+    int depth = 0;
+    for (size_t i = 0; i < args.size(); ++i) {
+        char ch = args[i];
+        if (ch == '(') ++depth;
+        else if (ch == ')') { if (--depth < 0) return std::string(); }
+        else if (ch == '"') {  // 跳过字符串字面量
+            for (++i; i < args.size() && args[i] != '"'; ++i) {}
+        } else if (ch == ',' && depth == 0) { comma = i; break; }
+    }
+    if (comma == std::string::npos || depth != 0) return std::string();
+    std::string a = args.substr(0, comma);
+    std::string b = args.substr(comma + 1);
+    auto trim = [](std::string& x) {
+        size_t p = x.find_first_not_of(' ');
+        size_t q = x.find_last_not_of(' ');
+        x = (p == std::string::npos) ? std::string() : x.substr(p, q - p + 1);
+    };
+    trim(a);
+    trim(b);
+    const std::string idA = slotOf(a);
+    const std::string idB = slotOf(b);
+    if (idA.empty() || idB.empty()) return std::string();
+    return "vb6_VarConcatNullV(&" + idA + ", &" + idB + ", " + a + ", " + b + ")";
+}
+
 std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cExpr) const {
     if (!valueNode) return "vb6_VariantEmpty()";
     
@@ -3910,10 +3977,17 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         if (!mathV64.empty()) return mathV64;
     }
 
+    // C30-11 第六十六刀: `&` 的双 Null 折叠（同上，要在 switch 之前；
+    // 那张表对这一形答 String，答了就成 vb6_VariantString 再也没机会折 Null）。
+    {
+        std::string catV66 = cgNullGuardConcatV(valueNode, cExpr);
+        if (!catV66.empty()) return catV66;
+    }
+
     // C30-11 第六十五刀: 比较符的 Null 传播（同上，必须在 switch 之前；
     // 那张表对比较答 Boolean，答了就变回 Double 包）。
     {
-        std::string cmpV65 = cmpNullGuardV(valueNode, cExpr);
+        std::string cmpV65 = cgNullGuardCmpV(valueNode, cExpr);
         if (!cmpV65.empty()) return cmpV65;
     }
 
@@ -4102,8 +4176,13 @@ bool CCodeGen::cExprIsVariantCarrier(const std::string& cExpr) const {
 std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // C30-11 第六十五刀: 实参站的比较符 Null 传播（与存储站同一个判据）。
     {
-        std::string cmpV65 = cmpNullGuardV(expr, cExpr);
+        std::string cmpV65 = cgNullGuardCmpV(expr, cExpr);
         if (!cmpV65.empty()) return cmpV65;
+    }
+    // C30-11 第六十六刀: 实参站的 `&` 双 Null 折叠（拿到的是裸 vb6_BSTR_ConcatFree(...)）。
+    {
+        std::string catV66 = cgNullGuardConcatV(expr, cExpr);
+        if (!catV66.empty()) return catV66;
     }
     // Fix <VBFlexGridDemo>: 实参是裸 COM 调用结果 (vb6_ComCall / vb6_ComGetProp /
     // vb6_ComGetObjectProp 返回 void*, 承载一个 COM VARIANT*) 时, 必须先用

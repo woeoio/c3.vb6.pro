@@ -489,6 +489,9 @@ vb6_VARIANT vb6_VarNotV(vb6_VARIANT a);
 // C30-11 第六十五刀: 比较符的 Null 传播 —— 任一侧槽是 Null ⇒ 整枚 Null；
 // 否则就是已算好的布尔结果（VB6 True = -1）。读数 .temp/null/oracle_ops.vbs O5..O10。
 vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond);
+// C30-11 第六十六刀: `&` 的双 Null 折叠 —— 两侧槽都是 Null ⇒ Null，否则就是正常拼接。
+// 读数 .temp/null/oracle_ops3.vbs R1/R4..R6/R10/R12（只有两侧同时 Null 才折）。
+vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb);
 vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);

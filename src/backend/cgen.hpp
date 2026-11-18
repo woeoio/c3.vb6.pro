@@ -58,4 +58,11 @@ private:
 #include "backend/detail/util/cgen_helpers.inc"
 };
 
+// C30-11 第六十五/六十六刀：变体上下文的 Null 传播判据。
+// 两个发码站（wrapVariantValue / boxToVariant）与 CStr 站共用同一份判据 ——
+// CStr 站在另一个 TU（cgen_expr_call_conv_cstr.inc），所以这两个不能留在 .cpp 里当 static。
+// 返回空串 = 这一形不归它管（调用方原样发码）。实现在 cgen_util_ctrl.cpp。
+std::string cgNullGuardCmpV(const ASTNode* node, const std::string& cExpr);
+std::string cgNullGuardConcatV(const ASTNode* node, const std::string& cExpr);
+
 } // namespace vb6c3

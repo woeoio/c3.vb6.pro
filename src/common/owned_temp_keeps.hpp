@@ -140,6 +140,11 @@ inline const OwnedTempConsumes* ownedTempConsumes() {
         // SysFreeString 掉 CStr 交来的那枚数字文本。普查从 RTL 实读得到这一格，
         // 这里不登记就报 K13d（发码侧会双放）；名字进不了用户 TU，所以这行是**对账用**的。
         { "vb6_StrFromNumText",  0, '0' },
+        // C30-11 第六十六刀: `&` 双 Null 折叠站 —— 两个 BSTR 实参都由**这一枚**接管
+        // （两条路都放：折 Null 时两颗都放，不折时先 Concat 再两颗都放）。
+        // 所以**无条件**消费（'0'）：调用方不能再放，否则双放。
+        { "vb6_VarConcatNullV",  2, '0' },
+        { "vb6_VarConcatNullV",  3, '0' },
         { "vb6_VariantAssign",   0, '0' },
         { nullptr, 0, '0' },    // 空哨兵：遍历靠它收尾
     };

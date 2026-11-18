@@ -1859,3 +1859,60 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
 `vb6_VCmpNullV` 是"返回侧 owned VARIANT" ⇒ 进 `ownedTempOwnedReturnExits` +
 `ownedTempOwnedVariantExits`，`cgen_variant_slot_prefixes.inc` 重新派生（51 名）；
 `owned_temp_keeps_164.txt` `-Bless`（235 行 / owned 131）。
+### 11.40 第六十六刀：`&` 的双 Null 折叠 + `CStr(<这两形>)` 的 94
+
+上一节"未做的格"的前两行。读数 `.temp/null/oracle_ops3.vbs`（真引擎）：
+
+| 条件 | 真值 |
+|---|---|
+| `Null & Null` | Null（TypeName 也答 Null） |
+| `Null & "x"` / `"x" & Null` / `Null & 1` / `Null & Empty` | `"x"` / `"x"` / `"1"` / `""`（Null 当空串） |
+| `"a" & Null & "b"` / `Null & "a" & Null` / `Null & Null & "b"` | `"ab"` / `"a"` / `"b"` |
+| `Null & Null & Null` | Null |
+| `CStr(Null & Null)` | 94 |
+| `CStr(Null = "")` | 94（上一节记的那一格） |
+
+**规则**：只有**两侧同时**是 Null 才折 Null；任一侧不是（含 Empty、数字、字符串）就按空串拼。
+链式因为左结合 + 中间结果已是字符串，真值自动对得上（`Null & Null & "b"` = `"" & "b"` = `"b"`）；
+`Null & Null & Null` 这一格仍差（我们的中间结果已经是空串，信息丢了）——记为遗留。
+
+#### 一、实现
+
+1. RTL `vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb)`
+   （`vb6rtl_com.c`，原型 `vb6rtl_variant.h`）：两槽都是 Null ⇒ 放掉两个串、返回 `VariantNull()`；
+   否则 `vb6_BSTR_Concat(sa, sb)` 后**两个串都放**，再 `vb6_VariantString(result)`。
+   注意不能直接用 `vb6_BSTR_ConcatFree`：它只放左操作数（右操作数会漏），第一版就是这么写的。
+2. 发码侧 `cgNullGuardConcatV(node, text)`：只认"两侧都是整枚 `vb6_CStr(vb6_VariantFromValue(<ident>))`"
+   这一形（`vb6_VariantString(vb6_BSTR_ConcatFree(A, B))` 或裸 `vb6_BSTR_ConcatFree(A, B)`）；
+   其它形原样不动（那些格的真值本就等于现值为：读数 R4–R6、R10、R12）。
+3. CStr 站（`cgen_expr_call_conv_cstr.inc`）：`CStr(<比较>)` / `CStr(<双槽拼接>)` 先让守卫给出变体位，
+   再交给 `vb6_CStrStrict`（Null ⇒ 94、其余按 Variant 档格式化，布尔仍 True/False）。
+   必须放在"`CStr(String)` 是无操作"那条分支**之前** —— `CStr(<拼接>)` 的推断类型正是 String。
+
+#### 二、两个坑（都实测过）
+
+1. **重复套壳**：实参站会被套两层（`boxToVariant` 之后又有一层装箱），第二层拿到的已经是
+   `vb6_VCmpNullV(...)`，再包一次就成"VARIANT 当 int32_t" ⇒ C2440。两个守卫都加了**幂等**检查
+   （文本里已有自己的出口名就返回空）。
+2. **CStr 站在另一个 TU**：`cmpNullGuardV` / `concatNullGuardV` 原来是 `cgen_util_ctrl.cpp` 里的
+   `static`，CStr 站调不到 ⇒ 改名 `cgNullGuardCmpV` / `cgNullGuardConcatV` 并在 `backend/cgen.hpp`
+   里声明（三个 TU 都能看见）。
+3. 消费轴登记：`vb6_VarConcatNullV` 的第 2、3 格**无条件**消费（两条路都放）⇒ `kConsumes` 两行 '0'；
+   第一版写 '1' 被 K13d 抓到（表 0 / 头 1 不一致）。
+
+#### 三、读数
+
+| 条件 | 真值 | 改前 | 改后 |
+|---|---|---|---|
+| `Null & Null` | Null | `""` | **Null** |
+| `CStr(Null & Null)` | 94 | `""`/0 | **94** |
+| `CStr(Null = "")` | 94 | `"True"`/0 | **94** |
+| `Null & "a"` | `"a"` | `"a"` | `"a"` |
+| `Null & 1` | `"1"` | `"1"` | `"1"` |
+
+#### 四、遗留
+
+1. `Null & Null & Null`（三链）→ 真值 Null，我们 `""`：中间结果已是 BSTR，槽信息丢失。要动拼接站的
+   结果档（BSTR → 可 Null 的 Variant），单独一刀。
+2. 逻辑位 `Null Or True` = True、`Null Or False` = Null、`Null And False` = False、
+   `Null And True` = Null（现全是 94）—— 下一刀。

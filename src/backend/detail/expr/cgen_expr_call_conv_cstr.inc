@@ -68,6 +68,17 @@
 
             // 非标识符表达式: 推断类型选择CStr变体
             Vb6Type argType = inferExprType(*firstArg);
+            // C30-11 第六十六刀: CStr(<比较>) / CStr(<双槽拼接>) —— 这两形的结果**可能是 Null**，
+            // 真引擎读数 oracle_ops.vbs O16（CStr(Null="") = 94）、oracle_ops3.vbs R3
+            // （CStr(Null&Null) = 94）都是 94。先让守卫把变体位交出来，再走
+            // vb6_CStrStrict（Null ⇒ 94；其余档照旧按 Variant 格式化成字符串，
+            // 布尔仍是 True/False）。放在 String 无操作那条分支**之前**：
+            // CStr(<拼接>) 的 inferExprType 正是 String，先问这一句才能拦下。
+            if (!args.empty()) {
+                std::string g66 = cgNullGuardCmpV(firstArg.get(), args[0]);
+                if (g66.empty()) g66 = cgNullGuardConcatV(firstArg.get(), args[0]);
+                if (!g66.empty()) { lastExpr_ = "vb6_CStrStrict(" + g66 + ")"; return; }
+            }
             if (argType == Vb6Type::String) {
                 // Fix 056b: CStr(String) 是空操作 → 直接使用参数
                 // (否则生成 vb6_CStr(BSTR) → C2440: 无法从BSTR转换为vb6_VARIANT)

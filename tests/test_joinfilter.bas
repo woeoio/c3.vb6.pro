@@ -174,6 +174,24 @@ Public Sub Main()
     nc = ("a" = "a")
     Debug.Print "JF-cmpstr="; IsNull(nc); "/"; CStr(nc); "/"; Err.Number
 
+    ' 第六十六刀：`&` 的双 Null 折叠（只有两侧同时是 Null 才是 Null）
+    Err.Clear
+    nc = nv2 & nv2
+    Debug.Print "JF-nullcat="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = nv2 & "a"
+    Debug.Print "JF-nullcatone="; IsNull(nc); "/"; CStr(nc); "/"; Err.Number
+
+    ' CStr(<比较>) / CStr(<拼接>) —— Null 进 CStr 那一站是 94
+    Err.Clear
+    nc = CStr(nv2 & nv2)
+    Debug.Print "JF-nullcatcstr="; Err.Number
+
+    Err.Clear
+    nc = CStr(nv2 = "")
+    Debug.Print "JF-nullcmpcstr="; Err.Number
+
     ' 反向钉：Empty 不是 Null（必须还是 0），算术传播仍是 Null
     Err.Clear
     nc = CInt(Empty)

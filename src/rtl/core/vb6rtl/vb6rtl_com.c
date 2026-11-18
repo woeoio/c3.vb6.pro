@@ -1315,6 +1315,28 @@ vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond) {
     return vb6_VariantBool((int16_t)(cond ? -1 : 0));
 }
 
+/* C30-11 第六十六刀: `&` 的**双 Null 折叠**。
+   读数 .temp/null/oracle_ops3.vbs（真引擎）: R1/R2 —— Null & Null 是 **Null**（TypeName 也答 Null）；
+   但 R4..R6、R10、R12 说明只有**两侧同时**是 Null 才折，任一侧不是（含 Empty、"x"、数字）
+   就把 Null 当空串拼。R3: CStr(Null & Null) = 94（那是 Null 进 CStr 那一站）。
+   两侧的 BSTR 已由调用方造好（它们是各自槽的 CStr），这里只管“折不折”与所有权：
+   折 Null 时两个串都要放，不折时交给 ConcatFree（它自己会放掉左操作数）。 */
+vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb) {
+    if (a && b && a->vt == vb6_vtNull && b->vt == vb6_vtNull) {
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantNull();
+    }
+    /* 两侧实参都由本函数接管（无条件）：vb6_BSTR_ConcatFree 只放左操作数，
+       所以右操作数要自己放 —— 不放就是非 Null 路上的漏。 */
+    {
+        BSTR result = vb6_BSTR_Concat(sa, sb);
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantString(result);
+    }
+}
+
 /* Fix 084f: Variant数组嵌套索引按值版本 (见 vb6rtl.h 说明) */
 vb6_VARIANT vb6_VariantArrayGetVal(vb6_VARIANT v, int32_t index) {
     return vb6_VariantArrayGet(&v, index);
