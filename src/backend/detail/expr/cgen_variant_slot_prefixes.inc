@@ -18,7 +18,7 @@
 //   - vb6_VariantFromUdtBytes -- RTL 内部 UDT 字节串 -> Variant 的装箱辅助, 后端走 vb6_VariantFromValue
 //   - vb6_VariantArrayElemPtr, vb6_VariantArrayElemPtrND -- 指针返回
 //
-// 条数: 50
+// 条数: 51
 // ============================================================================
 static const std::vector<std::string> variantPrefixes = {
     "vb6_AbsV(",
@@ -71,4 +71,5 @@ static const std::vector<std::string> variantPrefixes = {
     "vb6_VarNegV(",
     "vb6_VarNotV(",
     "vb6_VarSubV(",
+    "vb6_VCmpNullV(",
 };

@@ -1800,3 +1800,62 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
    （Null → Double）。这一格与「赋值站数值目标收 Null」同族。
 
 
+
+### 11.39 第六十五刀：比较符的 Null 传播
+
+上一节遗留 1 的前半（`&` 那半留下的读数见下"未做的格"）。读数 `.temp/null/oracle_ops.vbs`
+（真引擎）：**`= <> < > <= >=` 只要任一侧是 Null，结果就是 Null**，包括 `Null = Null`；
+`CStr(Null = "")` 则是 94（那是 Null 进 CStr 那一站）。
+
+#### 一、为什么不在比较发码处直接改成变体位
+
+比较的 C 类型现在是 `int32_t`：`If` 条件、赋值给 Boolean、`And/Or/Not`、`Print` 全按标量吃它。
+把它整体换成 `vb6_VARIANT` 会连带一整片调用方，且 `If Null Then` 这一格**没有 VB6 读数**
+（VBScript 答 false、不报错；VB6 文档口径是 94）——没读数的地方不收。
+
+#### 二、实现（与第六十四刀同一形：变体上下文那两站各加一道守卫）
+
+1. RTL 新增 `vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond)`
+   （`vb6rtl_com.c`，原型 `vb6rtl_variant.h`）：任一侧槽是 Null ⇒ `vb6_VariantNull()`，
+   否则 `vb6_VariantBool(cond ? -1 : 0)`（VB6 True 是 -1）。
+2. 发码侧 `cmpNullGuardV(node, text)`（`cgen_util_ctrl.cpp`）：AST 是比较运算、且能从文本里
+   抽出至少一枚 **Variant 槽地址**（`vb6_VarCmp*(&nv, …)` 的 `&nv`，或
+   `vb6_VariantFromValue(nv)` 里的 `nv`）才动手；抽出两枚就都插进去，只有一枚另一侧给
+   `(vb6_VARIANT*)0`。三条不齐原样返回（宁可不变）。
+3. 两个站各调一次：`wrapVariantValue`（拿到的是已包好的 `vb6_VariantBool(<bool>)`，剥一层）
+   与 `boxToVariant`（拿到的是**裸 bool 表达式**，直接当条件交出去）。两条形都要认，
+   否则实参站那条永远不命中。
+
+发码形状：
+```
+改前  r = vb6_VariantBool((int16_t)((-(vb6_StrCmp(vb6_CStr(vb6_VariantFromValue(nv)), vb6_BSTR_FromStr(L"")) == 0))));
+改后  r = vb6_VCmpNullV(&nv, (vb6_VARIANT*)0, (-(vb6_StrCmp(vb6_CStr(vb6_VariantFromValue(nv)), vb6_BSTR_FromStr(L"")) == 0)));
+```
+
+#### 三、读数
+
+| 条件 | 真值 | 改前 | 改后 |
+|---|---|---|---|
+| `Null = ""` | Null | True | **Null** |
+| `Null <> ""` | Null | False | **Null** |
+| `Null < 1` | Null | True | **Null** |
+| `Null = Null` | Null | True | **Null** |
+| `Empty = ""` | True | True | True ✓ |
+| `"a" = "a"` | True | True | True ✓ |
+| `Null & "x"` / `"x" & Null` | `"x"` | `"x"` | `"x"` ✓（真值如此，不是 Null） |
+
+#### 四、未做的格（都有读数，留作下一刀）
+
+| 条件 | 真值 | 现在 | 为什么没在本刀做 |
+|---|---|---|---|
+| `Null & Null` | Null | `""` | `&` 两侧都是槽时结果才是 Null（任一侧不是就按空串拼）；要动拼接站发码，且 `CStr(Null & Null)` 真值是 94 |
+| `CStr(Null = "")` | 94 | `"True"` | 判据在 CStr 站（另一个 TU），要把 `cmpNullGuardV` 提成共享头 |
+| `Null Or True` / `Null Or False` | True / Null | 94 | 逻辑位是另一族真值表（`Null And False` = False、`Null And True` = Null） |
+| `Null And False` / `Null And True` | False / Null | 94 | 同上 |
+| `If Null Then` | 无 VB6 读数（VBScript 答 false/0） | false | 没读数不收 |
+
+#### 五、静态门
+
+`vb6_VCmpNullV` 是"返回侧 owned VARIANT" ⇒ 进 `ownedTempOwnedReturnExits` +
+`ownedTempOwnedVariantExits`，`cgen_variant_slot_prefixes.inc` 重新派生（51 名）；
+`owned_temp_keeps_164.txt` `-Bless`（235 行 / owned 131）。

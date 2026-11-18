@@ -239,6 +239,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         // VARIANT 子表那一侧同名单，见 ownedTempOwnedVariantExits）。
         "vb6_FixV",
         "vb6_IntV",
+        "vb6_VCmpNullV",
         "vb6_CurDir",
         "vb6_CVErr",
         "vb6_DecimalToBSTR",
@@ -358,6 +359,7 @@ inline const char* const* ownedTempOwnedVariantExits() {
         // 推导为 alias/store，走 ownedTempExceptions）。
         "vb6_FixV",
         "vb6_IntV",
+        "vb6_VCmpNullV",
         "vb6_LoadResString",
         "vb6_VarAddV",
         "vb6_VarDivV",

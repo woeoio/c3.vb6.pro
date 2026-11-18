@@ -3808,6 +3808,85 @@ static std::string mathNullFamilyV(const ASTNode* node, const std::string& cExpr
     return std::string();
 }
 
+// C30-11 第六十五刀: 比较符的 Null 传播。
+//
+// 读数 .temp/null/oracle_ops.vbs O5..O10：`= <> < > <= >=` 任一侧是 Null 就是 **Null**
+// （含 Null = Null，改前我们答 True）。Q12 = CStr(Null="") ⇒ 94（Null 转字符串那一站）。
+//
+// 为什么不在比较发码处直接换成变体位：比较的 C 类型现在是 int32_t，`If` 条件、
+// 赋值给 Boolean、And/Or 都按标量吃它；直接换会连带一整片调用方。
+// 本刀只动“**变体上下文**”那两站（wrapVariantValue 存储站 / boxToVariant 实参站），
+// 与第六十四刀同一形：已 emit 的 bool 结果**不动**，只把槽地址插进去一层守卫。
+//
+// 判据：① AST 是比较运算；② 发码文本是 `vb6_VariantBool(<bool>)`；
+//   ③ 能从里面抽出至少一个 **Variant 槽地址**（两种形：
+//   `vb6_VarCmp*(&nv, …)` 的 `&nv`，或 `vb6_VariantFromValue(nv)` 里的 nv）。
+// 三条不齐就不动（宁可不变，不让发码形状凭空变）。
+static bool isCmpOp65(BinaryOp op) {
+    return op == BinaryOp::Eq || op == BinaryOp::Neq || op == BinaryOp::Lt
+        || op == BinaryOp::Gt || op == BinaryOp::Le || op == BinaryOp::Ge;
+}
+
+// 从 `vb6_VariantFromValue(nv)` / `(&nv` 两种形里抽槽地址，最多两枚。
+static void collectSlotAddrs65(const std::string& s, std::vector<std::string>& out) {
+    auto pushIfNew = [&out](const std::string& a) {
+        if (a.empty() || out.size() >= 2) return;
+        for (const auto& e : out) if (e == a) return;
+        out.push_back(a);
+    };
+    auto isIdentStart = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    };
+    auto isIdentChar = [&](char c) {
+        return isIdentStart(c) || (c >= '0' && c <= '9');
+    };
+    static const std::string kFromVal = "vb6_VariantFromValue(";
+    for (size_t p = s.find(kFromVal); p != std::string::npos;
+         p = s.find(kFromVal, p + 1)) {
+        size_t q = p + kFromVal.size();
+        if (q >= s.size() || !isIdentStart(s[q])) continue;
+        size_t e = q;
+        while (e < s.size() && isIdentChar(s[e])) e++;
+        if (e < s.size() && s[e] == ')') pushIfNew("&" + s.substr(q, e - q));
+    }
+    // `(&ident,` / `(&ident)` ：只认变体比较那一族（vb6_VarCmp*）的实参位。
+    for (size_t p = s.find("(&"); p != std::string::npos; p = s.find("(&", p + 1)) {
+        size_t q = p + 2;
+        if (q >= s.size() || !isIdentStart(s[q])) continue;
+        size_t e = q;
+        while (e < s.size() && isIdentChar(s[e])) e++;
+        if (e < s.size() && (s[e] == ',' || s[e] == ')' || s[e] == ' '))
+            pushIfNew("&" + s.substr(q, e - q));
+    }
+}
+
+static std::string cmpNullGuardV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    const auto& bin = static_cast<const BinaryExpr&>(*node);
+    if (!isCmpOp65(bin.op)) return std::string();
+
+    size_t s = 0;
+    while (s < cExpr.size() && (cExpr[s] == '(' || cExpr[s] == ' ')) s++;
+    static const std::string kWrap = "vb6_VariantBool(";
+    std::string inner;
+    if (cExpr.compare(s, kWrap.size(), kWrap) == 0 && cExpr.back() == ')') {
+        // 存储站那一支：拿到的是已经包好的 `vb6_VariantBool(<bool>)`。
+        inner = cExpr.substr(s + kWrap.size(),
+                             cExpr.size() - s - kWrap.size() - 1);
+    } else {
+        // 实参站那一支：拿到的是**裸 bool 表达式**（vb6_VariantBool 还没包），
+        // 直接把它当条件交给守卫 —— 守卫自己产变体。
+        inner = cExpr;
+    }
+
+    std::vector<std::string> slots;
+    collectSlotAddrs65(inner, slots);
+    if (slots.empty()) return std::string();
+    const std::string a = slots[0];
+    const std::string b = slots.size() > 1 ? slots[1] : "(vb6_VARIANT*)0";
+    return "vb6_VCmpNullV(" + a + ", " + b + ", " + inner + ")";
+}
+
 std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cExpr) const {
     if (!valueNode) return "vb6_VariantEmpty()";
     
@@ -3824,11 +3903,18 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         // (字面量落在 inferExprType 的白名单里, 见下面那个 kind 判断。)
     }
 
-    // C30-11 第六十四刀: Abs/Int/Fix/Hex/Oct 的 Null 传播（必须在下面的
+    // C30-11 第六十五刀: Abs/Int/Fix/Hex/Oct 的 Null 传播（必须在下面的
     // inferExprType switch 之前问，否则被 case Double/String 提前收掉）。
     {
         std::string mathV64 = mathNullFamilyV(valueNode, cExpr);
         if (!mathV64.empty()) return mathV64;
+    }
+
+    // C30-11 第六十五刀: 比较符的 Null 传播（同上，必须在 switch 之前；
+    // 那张表对比较答 Boolean，答了就变回 Double 包）。
+    {
+        std::string cmpV65 = cmpNullGuardV(valueNode, cExpr);
+        if (!cmpV65.empty()) return cmpV65;
     }
 
     // Fix 090d2: C 表达式顶层已是 vb6_VARIANT 时直接返回, 不再包装 —
@@ -4014,6 +4100,11 @@ bool CCodeGen::cExprIsVariantCarrier(const std::string& cExpr) const {
 // 不显式改写的 (Integer/Long/Double/String/Object) 在 _Generic 下与 VB6 同档, 保持
 // 原样以免动到存量发码。
 std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
+    // C30-11 第六十五刀: 实参站的比较符 Null 传播（与存储站同一个判据）。
+    {
+        std::string cmpV65 = cmpNullGuardV(expr, cExpr);
+        if (!cmpV65.empty()) return cmpV65;
+    }
     // Fix <VBFlexGridDemo>: 实参是裸 COM 调用结果 (vb6_ComCall / vb6_ComGetProp /
     // vb6_ComGetObjectProp 返回 void*, 承载一个 COM VARIANT*) 时, 必须先用
     // vb6_VariantFromComResult 解引用成 vb6_VARIANT (深拷贝并释放原 VARIANT*),

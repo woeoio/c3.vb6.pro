@@ -1303,6 +1303,18 @@ vb6_VARIANT vb6_VarNotV(vb6_VARIANT a) {
 }
 
 
+/* C30-11 第六十五刀: 比较符的 Null 传播。
+   读数 .temp/null/oracle_ops.vbs（真引擎）: O5..O10 —— `= <> < > <= >=` 只要
+   任一侧是 Null，结果就是 **Null**（包括 Null = Null），不是 False/True。
+   本站吃的是“已经算好的布尔结果 + 两条槽”，槽是 Null 就整枚折成 Null：
+   这样比较本身的发码不必改（它照旧算 bool），只在**变体上下文**（装箱站/
+   实参站）把它换成这一枚。VB6 True 是 -1，cond 非零统一收成 -1。 */
+vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond) {
+    if ((a && a->vt == vb6_vtNull) || (b && b->vt == vb6_vtNull))
+        return vb6_VariantNull();
+    return vb6_VariantBool((int16_t)(cond ? -1 : 0));
+}
+
 /* Fix 084f: Variant数组嵌套索引按值版本 (见 vb6rtl.h 说明) */
 vb6_VARIANT vb6_VariantArrayGetVal(vb6_VARIANT v, int32_t index) {
     return vb6_VariantArrayGet(&v, index);

@@ -77,7 +77,9 @@ Public Sub Main()
     ' 门 44311607151 红过；已记入 ai/039 §11.36 遗留）。
     Err.Clear
     Dim nv2 As Variant, nc As Variant
+    Dim ne2 As Variant
     nv2 = Null
+    ne2 = Empty
     nc = Asc(nv2)
     Debug.Print "JF-nullasc="; Err.Number
 
@@ -145,6 +147,32 @@ Public Sub Main()
     Err.Clear
     nc = Hex(255)
     Debug.Print "JF-hex255="; CStr(nc); "/"; Err.Number
+
+    ' 第六十五刀：比较符的 Null 传播 —— 任一侧是 Null ⇒ 结果 Null（不是 False/True）
+    Err.Clear
+    nc = (nv2 = "")
+    Debug.Print "JF-cmpeq="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 <> "")
+    Debug.Print "JF-cmpne="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 < 1)
+    Debug.Print "JF-cmplt="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 = nv2)
+    Debug.Print "JF-cmpeqeq="; IsNull(nc); "/"; Err.Number
+
+    ' 反向钉：Empty 不是 Null，普通比较仍出布尔
+    Err.Clear
+    nc = (ne2 = "")
+    Debug.Print "JF-cmpempty="; IsNull(nc); "/"; CStr(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = ("a" = "a")
+    Debug.Print "JF-cmpstr="; IsNull(nc); "/"; CStr(nc); "/"; Err.Number
 
     ' 反向钉：Empty 不是 Null（必须还是 0），算术传播仍是 Null
     Err.Clear

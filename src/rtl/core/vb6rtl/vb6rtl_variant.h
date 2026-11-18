@@ -486,6 +486,9 @@ vb6_VARIANT vb6_VarAddV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarNegV(vb6_VARIANT a);
 // C30-10 第五十三刀: 一元 `Not` 打在 Variant 上（Boolean 逻辑非 / 整型位非并保档 / Null 原样）。
 vb6_VARIANT vb6_VarNotV(vb6_VARIANT a);
+// C30-11 第六十五刀: 比较符的 Null 传播 —— 任一侧槽是 Null ⇒ 整枚 Null；
+// 否则就是已算好的布尔结果（VB6 True = -1）。读数 .temp/null/oracle_ops.vbs O5..O10。
+vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond);
 vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);

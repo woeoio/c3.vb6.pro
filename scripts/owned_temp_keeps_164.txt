@@ -373,6 +373,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_VarNegV VARIANT
 [own] vb6_VarNotV VARIANT
 [own] vb6_VarSubV VARIANT
+[own] vb6_VCmpNullV VARIANT
 [own] vb6_WeekdayName BSTR
 # --- 返回侧所有权：alias = 交出去的是**别名**（指着调用方的内存或一个全局）⇒ 不许放它 ---
 [alias] vb6_CDec VARIANT
