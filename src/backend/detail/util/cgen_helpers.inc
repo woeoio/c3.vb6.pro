@@ -2021,3 +2021,7 @@
     // 递归版 (stack 防自引用); needVoidPtrWrapper 的传递闭包在 emitUdtCopyBlock 里重算。
     bool udtHasOwnedMembersR(const std::string& udtCType,
                              std::vector<std::string>& stack) const;
+    // C30-11 第六十七刀: Or/And 的 Null 真值表守卫（变体上下文两站共用）。
+    // 是成员（不是自由函数）只为一件事: 字面量那侧要问 inferExprType 才知道是不是 Boolean ——
+    // VB6 里 Null Or True 是 Boolean True，而 C 的 (int32_t)((-1)) 分不出 Boolean 与整数。
+    std::string cgNullGuardLogicV(const ASTNode* node, const std::string& cExpr) const;

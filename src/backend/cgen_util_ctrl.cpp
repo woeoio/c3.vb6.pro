@@ -3970,7 +3970,7 @@ std::string cgNullGuardConcatV(const ASTNode* node, const std::string& cExpr) {
 //   vb6_VariantFromValue(( vb6_VariantToLong(X) | vb6_VariantToLong(Y) )) ← 两槽
 // 任一侧不是「槽」也不是「(int32_t)(…) 字面档」就不动（宁可不变）。
 // 惰性求值：只传槽**地址**，VariantToLong 在 RTL 里算 —— 当实参先算会先报 94。
-static std::string cgNullGuardLogicV(const ASTNode* node, const std::string& cExpr) {
+std::string CCodeGen::cgNullGuardLogicV(const ASTNode* node, const std::string& cExpr) const {
     if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
     const auto& bin = static_cast<const BinaryExpr&>(*node);
     const bool isAnd = (bin.op == BinaryOp::And);
@@ -4046,8 +4046,34 @@ static std::string cgNullGuardLogicV(const ASTNode* node, const std::string& cEx
     const std::string lit = !litL.empty() ? litL : (!litR.empty() ? litR : "0");
     const int mask = (idL.empty() ? 0 : 1) | (idR.empty() ? 0 : 2);
     if (mask == 0) return std::string();
+    // 字面量那一侧的静态类型：VB6 里 `Null Or True` = Boolean True、`Null And False`
+    // = Boolean False，而 C 的 `(int32_t)((-1))` 分不出 Boolean 与整数 ⇒ 在发码时问 AST。
+    int litIsBool = 0;
+    {
+        const auto& be = static_cast<const BinaryExpr&>(*node);
+        const Expr* litSide = !litL.empty() ? be.left.get() : (!litR.empty() ? be.right.get() : nullptr);
+        if (litSide) {
+            const Vb6Type lt = inferExprType(const_cast<Expr&>(*litSide));
+            // 0 = Long（默认）, 1 = Boolean（Null Or True ⇒ Boolean True）,
+            // 2 = Integer（Null Or 5 ⇒ **Integer** 5，VB6 IDE 实测的类型）。
+            // 先看字面量自己的档：inferExprType 对无后缀整数答 Long，
+            // 而 VB6 的 `5` 是 Integer ⇒ 以 LiteralKind 为准。
+            if (litSide->kind == ASTNodeKind::LiteralExpr) {
+                switch (static_cast<const LiteralExpr&>(*litSide).literalKind) {
+                case LiteralKind::Boolean: litIsBool = 1; break;
+                case LiteralKind::Integer: litIsBool = 2; break;
+                default: break;
+                }
+            } else if (lt == Vb6Type::Boolean) {
+                litIsBool = 1;
+            } else if (lt == Vb6Type::Integer) {
+                litIsBool = 2;
+            }
+        }
+    }
     return "vb6_VarLogicNullV(" + std::string(isAnd ? "1" : "0") + ", " + slotA + ", "
-         + slotB + ", " + lit + ", " + std::to_string(mask) + ")";
+         + slotB + ", " + lit + ", " + std::to_string(mask) + ", "
+         + std::to_string(litIsBool) + ")";
 }
 
 std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cExpr) const {

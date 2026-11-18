@@ -5338,7 +5338,8 @@ if ($Category -in @("all", "run", "bas")) {
     Add-BasTest "test_joinfilter" "$Tests\test_joinfilter.bas" @("JF-var=[abc|xyz|abd]", "JF-var-def=[abc xyz abd]", "JF-str=[abc|xyz|abd]", "JF-f-lb=0 ub=1", "JF-f=[abc|abd]", "JF-none-ub=-1", "JF-excl-ub=0", "JF-excl=[xyz]", "JF-num=[1,2,3]", "JF-mix=[1.5,2.25,True,]", "JF-byte=[65-66]", "JF-cy=[1.2345,2]", "JF-null-err=13", "JF-nonarr-err=13", "JF-2d-err=13", "JF-fnum=2/2/1|21", "JF-fmix=2/2,8/1|x1", "JF-fempty=2/0", "JF-fnull=1/0", "JF-nullasc=94", "JF-nulldelim=94", "JF-nullsplit=94", "JF-nullrep=94", "JF-nullcint=94", "JF-nullclng=94", "JF-nullchr=94", "JF-nullmid=94", "JF-nullccur=94", "JF-ccur25=2.5/0", "JF-nullabs=True/0", "JF-nullint=True/0", "JF-nullfix=True/0", "JF-nullhex=True/0", "JF-nulloct=True/0", "JF-hex255=FF/0",
 "JF-cmpeq=True/0", "JF-cmpne=True/0", "JF-cmplt=True/0", "JF-cmpeqeq=True/0", "JF-cmpempty=False/True/0", "JF-cmpstr=False/True/0",
 "JF-nullcat=True/0", "JF-nullcatone=False/a/0", "JF-nullcatcstr=94", "JF-nullcmpcstr=94",
-"JF-nullortrue=False/True/0", "JF-nullorfalse=True/0", "JF-nullandfalse=False/False/0", "JF-nullandtrue=True/0", "JF-cmplogic=False/True/0", "JF-cintempty=0/0", "JF-nullplus=True/0", "JF-concat-ok=xy/0", "JF-isnull=True/0", "JF-DONE")
+"JF-nullortrue=False/True/0", "JF-nullorfalse=True/0", "JF-nullandfalse=False/False/0", "JF-nullandtrue=True/0", "JF-cmplogic=False/True/0",
+"JF-nullor5=False/5/Integer/0", "JF-nulland0=False/0/Integer/0", "JF-nullor0=True/0", "JF-nulland5=True/0", "JF-cintempty=0/0", "JF-nullplus=True/0", "JF-concat-ok=xy/0", "JF-isnull=True/0", "JF-DONE")
     # <vbeclipse>: 内置函数 VB6 合法最小实参形 (Format(x)/Filter(a,x)/GetAttr/SetAttr) 的
     # 编译面护栏 —— 价值在"整条用例能编过", needle 只取 locale 无关读数
     # (AR-fmt2 走小数点, 随区域设置变, 故不入 needle)。

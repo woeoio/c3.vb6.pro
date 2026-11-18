@@ -214,6 +214,23 @@ Public Sub Main()
     nc = (True Or False)
     Debug.Print "JF-cmplogic="; IsNull(nc); "/"; CStr(nc); "/"; Err.Number
 
+    ' 数值侧：VB6 IDE 实测 Null Or 5 = Integer 5、Null And 0 = Integer 0
+    Err.Clear
+    nc = (nv2 Or 5)
+    Debug.Print "JF-nullor5="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 And 0)
+    Debug.Print "JF-nulland0="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 Or 0)
+    Debug.Print "JF-nullor0="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 And 5)
+    Debug.Print "JF-nulland5="; IsNull(nc); "/"; Err.Number
+
     ' 反向钉：Empty 不是 Null（必须还是 0），算术传播仍是 Null
     Err.Clear
     nc = CInt(Empty)

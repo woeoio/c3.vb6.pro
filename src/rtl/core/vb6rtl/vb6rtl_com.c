@@ -1338,17 +1338,21 @@ vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb)
 }
 
 /* C30-11 第六十七刀: `Or`/`And` 的 Null 真值表。
-   读数 .temp/null/oracle_logic.vbs（真引擎）:
+   读数：.temp/null/oracle_logic.vbs（VBScript）+ **真实 VB6 IDE 实测（用户，2026-11-19）**
      Null Or True  = True      Null Or False  = Null     True Or Null  = True   False Or Null = Null
      Null And False = False    Null And True  = Null     False And Null = False True And Null = Null
      Null Or Null  = Null      Null And Null  = Null
-   口径（与 VB6 文档同）: Or 只有“另一侧是 True”才确定成 True，其余 Null；
-   And 只有“另一侧是 False”才确定成 False，其余 Null。
-   ⚠ 数值侧宿主差异：VBScript 把 `Null Or 5` 答成 5、`Null Or 0` 答成 Null（位“已定位”模型），
-   VB6 文档只有 True/False 两行；本仓按文档口径（非 True 一律 Null），该差异记账。
-   求值顺序：只传**槽地址**，VariantToLong 在函数里惰性算 —— 作为实参先算会先报 94。 */
+     **Null Or 5 = Integer 5**  **Null And 0 = Integer 0**（VB6 IDE 实测；VBScript 同）
+     Null Or 0 = Null          Null And 5 = Null
+   统一规则（两侧对得上，且比文档那两行更宽）:
+     Or  : 另一侧非零 ⇒ **结果就是那一侧的值**；另一侧零 ⇒ Null
+     And : 另一侧零   ⇒ **结果就是那一侧的值（0）**；另一侧非零 ⇒ Null
+   即“决定性那一侧辐到结果”：“Or 的另一侧非零”和“And 的另一侧为零”分别是两种确定情形，
+   其余（含两侧都 Null）一律 Null。
+   ⚠ 求值顺序：只传**槽地址**，VariantToLong 在函数里惰性算 —— 作为实参先算会先报 94。
+   ⚠ 类型：结果按“另一侧”的档给（布尔侧答 Boolean，否则 Long），不动。 */
 vb6_VARIANT vb6_VarLogicNullV(int32_t isAnd, vb6_VARIANT* a, vb6_VARIANT* b,
-                              int32_t litBits, int32_t mask) {
+                              int32_t litBits, int32_t mask, int32_t litIsBool) {
     const int aIsSlot = (mask & 1) != 0;
     const int bIsSlot = (mask & 2) != 0;
     const int aNull = aIsSlot && a && a->vt == vb6_vtNull;
@@ -1356,12 +1360,28 @@ vb6_VARIANT vb6_VarLogicNullV(int32_t isAnd, vb6_VARIANT* a, vb6_VARIANT* b,
     if ((aIsSlot && aNull) || (bIsSlot && bNull)) {
         if (aNull && bNull) return vb6_VariantNull();
         {
-            const int32_t other = aNull ? (bIsSlot ? vb6_VariantToLong(*b) : litBits)
-                                        : (aIsSlot ? vb6_VariantToLong(*a) : litBits);
+            /* 哪一侧是“另一侧”（非 Null 那一侧） */
+            vb6_VARIANT* otherSlot = aNull ? (bIsSlot ? b : 0) : (aIsSlot ? a : 0);
+            const int32_t other = otherSlot ? vb6_VariantToLong(*otherSlot) : litBits;
+            /* 类型按“另一侧”的档给：VB6 IDE 里 Null Or True 是 Boolean True、
+               Null And False 是 Boolean False。字面量那侧在 C 里只有 int，
+               所以发码侧把它静态类型（Boolean?）当 litIsBool 传进来。 */
+            const int otherIsBool = otherSlot ? (otherSlot->vt == vb6_vtBoolean)
+                                              : (litIsBool == 1);
+            const int otherIsInt = otherSlot ? (otherSlot->vt == vb6_vtInteger)
+                                             : (litIsBool == 2);
             if (!isAnd) {
-                if (other == -1) return vb6_VariantBool((int16_t)-1);
+                if (other != 0) {
+                    if (otherIsBool) return vb6_VariantBool((int16_t)-1);
+                    if (otherIsInt) return vb6_VariantInt((int16_t)other);
+                    return vb6_VariantLong(other);
+                }
             } else {
-                if (other == 0) return vb6_VariantBool((int16_t)0);
+                if (other == 0) {
+                    if (otherIsBool) return vb6_VariantBool((int16_t)0);
+                    if (otherIsInt) return vb6_VariantInt((int16_t)0);
+                    return vb6_VariantLong(0);
+                }
             }
             return vb6_VariantNull();
         }

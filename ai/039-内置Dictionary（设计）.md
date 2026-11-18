@@ -1969,5 +1969,32 @@ False，其余一律 Null**。
 |---|---|---|---|
 | `Null Xor True/False`、`Null Eqv True/False` | Null | 94 | 同一族但只有"恒 Null"一列；要另开 Xor/Eqv 两条出口 |
 | `Null Imp True` / `False Imp Null` | True | 94 | Imp 三态（x=False ⇒ True；y=True ⇒ True；其余 Null） |
-| `Null Or 5` | VBScript 答 5、`Null Or 0` 答 Null | Null/94 | **宿主差异**：VBScript 按"位已知/未知"模型，VB6 文档只有 True/False 两行；本仓按文档口径，记账 |
-| `Null And 0` | VBScript 答 0，本仓答 False | False | 同上（值等价，类型不同） |
+#### 五、修正：数值侧按**真实 VB6 IDE 读数**重写（本刀收尾）
+
+上一版按 VB6 文档的 True/False 两行做，把 `Null Or 5` 答成 Null、`Null And 0` 答成 False。
+**用户 2026-11-19 在真实 VB6 IDE 里实测：`Null Or 5` = Integer 5、`Null And 0` = Integer 0**
+（VBScript 同）—— 文档那两行是**不完整的**。统一规则因此改成"决定性那一侧辐到结果"：
+
+| 运算 | 另一侧 | 结果 |
+|---|---|---|
+| `Or` | 非零 | **就是那一侧的值**（`Null Or 5` = 5、`Null Or True` = True） |
+| `Or` | 零 | Null（`Null Or 0`、`Null Or False`） |
+| `And` | 零 | **就是那一侧的值**（`Null And 0` = 0、`Null And False` = False） |
+| `And` | 非零 | Null（`Null And 5`、`Null And True`） |
+| 两侧都 Null | — | Null |
+
+结果**档位跟另一侧走**（VB6 IDE 实测 `Null Or 5` 是 Integer、`Null Or True` 是 Boolean），
+所以 `vb6_VarLogicNullV` 多收一个 `litIsBool`（0=Long / 1=Boolean / 2=Integer）：
+槽侧看 `vt`，字面量侧由发码时问 AST 的 `LiteralKind`（`inferExprType` 对无后缀整数答 Long，
+而 VB6 的 `5` 是 Integer —— 以 `LiteralKind` 为准）。为此该守卫改成 **`CCodeGen` 成员函数**
+（自由函数拿不到 `inferExprType`）。
+
+实测（`.temp/null/LogicNum.bas`）：
+
+| 条件 | VB6 | 改后 |
+|---|---|---|
+| `Null Or 5` | Integer 5 | Integer 5 ✓ |
+| `Null And 0` | Integer 0 | Integer 0 ✓ |
+| `Null Or True` | Boolean True | Boolean True ✓ |
+| `Null And False` | Boolean False | Boolean False ✓ |
+| `Null Or 0` / `Null And 5` | Null | Null ✓ |
