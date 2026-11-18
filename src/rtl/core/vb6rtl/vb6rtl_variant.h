@@ -492,6 +492,10 @@ vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond);
 // C30-11 第六十六刀: `&` 的双 Null 折叠 —— 两侧槽都是 Null ⇒ Null，否则就是正常拼接。
 // 读数 .temp/null/oracle_ops3.vbs R1/R4..R6/R10/R12（只有两侧同时 Null 才折）。
 vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb);
+// C30-11 第六十七刀: Or/And 的 Null 真值表（Or 只有另一侧 True 才确定，And 只有另一侧 False）。
+// isAnd=0 走 Or、1 走 And；mask 的 bit0/bit1 表示 a/b 是不是槽（不是槽的那侧用 litBits）。
+vb6_VARIANT vb6_VarLogicNullV(int32_t isAnd, vb6_VARIANT* a, vb6_VARIANT* b,
+                              int32_t litBits, int32_t mask);
 vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);

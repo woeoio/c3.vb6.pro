@@ -371,6 +371,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_VariantUInteger VARIANT
 [own] vb6_VariantULong VARIANT
 [own] vb6_VariantULongLong VARIANT
+[own] vb6_VarLogicNullV VARIANT
 [own] vb6_VarMulV VARIANT
 [own] vb6_VarNegV VARIANT
 [own] vb6_VarNotV VARIANT

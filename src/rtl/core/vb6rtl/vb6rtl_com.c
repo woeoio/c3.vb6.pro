@@ -1337,6 +1337,42 @@ vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb)
     }
 }
 
+/* C30-11 第六十七刀: `Or`/`And` 的 Null 真值表。
+   读数 .temp/null/oracle_logic.vbs（真引擎）:
+     Null Or True  = True      Null Or False  = Null     True Or Null  = True   False Or Null = Null
+     Null And False = False    Null And True  = Null     False And Null = False True And Null = Null
+     Null Or Null  = Null      Null And Null  = Null
+   口径（与 VB6 文档同）: Or 只有“另一侧是 True”才确定成 True，其余 Null；
+   And 只有“另一侧是 False”才确定成 False，其余 Null。
+   ⚠ 数值侧宿主差异：VBScript 把 `Null Or 5` 答成 5、`Null Or 0` 答成 Null（位“已定位”模型），
+   VB6 文档只有 True/False 两行；本仓按文档口径（非 True 一律 Null），该差异记账。
+   求值顺序：只传**槽地址**，VariantToLong 在函数里惰性算 —— 作为实参先算会先报 94。 */
+vb6_VARIANT vb6_VarLogicNullV(int32_t isAnd, vb6_VARIANT* a, vb6_VARIANT* b,
+                              int32_t litBits, int32_t mask) {
+    const int aIsSlot = (mask & 1) != 0;
+    const int bIsSlot = (mask & 2) != 0;
+    const int aNull = aIsSlot && a && a->vt == vb6_vtNull;
+    const int bNull = bIsSlot && b && b->vt == vb6_vtNull;
+    if ((aIsSlot && aNull) || (bIsSlot && bNull)) {
+        if (aNull && bNull) return vb6_VariantNull();
+        {
+            const int32_t other = aNull ? (bIsSlot ? vb6_VariantToLong(*b) : litBits)
+                                        : (aIsSlot ? vb6_VariantToLong(*a) : litBits);
+            if (!isAnd) {
+                if (other == -1) return vb6_VariantBool((int16_t)-1);
+            } else {
+                if (other == 0) return vb6_VariantBool((int16_t)0);
+            }
+            return vb6_VariantNull();
+        }
+    }
+    {
+        const int32_t av = aIsSlot ? vb6_VariantToLong(*a) : litBits;
+        const int32_t bv = bIsSlot ? vb6_VariantToLong(*b) : litBits;
+        return vb6_VariantLong(isAnd ? (av & bv) : (av | bv));
+    }
+}
+
 /* Fix 084f: Variant数组嵌套索引按值版本 (见 vb6rtl.h 说明) */
 vb6_VARIANT vb6_VariantArrayGetVal(vb6_VARIANT v, int32_t index) {
     return vb6_VariantArrayGet(&v, index);

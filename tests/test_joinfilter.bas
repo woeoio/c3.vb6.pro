@@ -192,6 +192,28 @@ Public Sub Main()
     nc = CStr(nv2 = "")
     Debug.Print "JF-nullcmpcstr="; Err.Number
 
+    ' 第六十七刀：Or/And 的 Null 真值表
+    Err.Clear
+    nc = (nv2 Or True)
+    Debug.Print "JF-nullortrue="; IsNull(nc); "/"; CStr(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 Or False)
+    Debug.Print "JF-nullorfalse="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 And False)
+    Debug.Print "JF-nullandfalse="; IsNull(nc); "/"; CStr(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 And True)
+    Debug.Print "JF-nullandtrue="; IsNull(nc); "/"; Err.Number
+
+    ' 反向钉：非 Null 的逻辑位不受影响
+    Err.Clear
+    nc = (True Or False)
+    Debug.Print "JF-cmplogic="; IsNull(nc); "/"; CStr(nc); "/"; Err.Number
+
     ' 反向钉：Empty 不是 Null（必须还是 0），算术传播仍是 Null
     Err.Clear
     nc = CInt(Empty)

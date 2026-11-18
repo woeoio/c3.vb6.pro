@@ -1916,3 +1916,58 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
    结果档（BSTR → 可 Null 的 Variant），单独一刀。
 2. 逻辑位 `Null Or True` = True、`Null Or False` = Null、`Null And False` = False、
    `Null And True` = Null（现全是 94）—— 下一刀。
+### 11.41 第六十七刀：`Or`/`And` 的 Null 真值表
+
+读数 `.temp/null/oracle_logic.vbs` + `oracle_logic2.vbs`（真引擎）：
+
+| 条件 | 真值 | | 条件 | 真值 |
+|---|---|---|---|---|
+| `Null Or True` | True | | `Null And False` | False |
+| `Null Or False` | Null | | `Null And True` | Null |
+| `True Or Null` | True | | `False And Null` | False |
+| `False Or Null` | Null | | `True And Null` | Null |
+| `Null Or Null` | Null | | `Null And Null` | Null |
+| `Null Xor True/False` | Null | | `Null Eqv True/False` | Null |
+| `Null Imp True` | True | | `Null Imp False` | Null |
+| `False Imp Null` | True | | `True Imp Null` | Null |
+| `Not Null` | Null（早已对） | | | |
+
+口径与 VB6 文档一致：**Or 只有"另一侧是 True"才确定成 True，And 只有"另一侧是 False"才确定成
+False，其余一律 Null**。
+
+#### 一、实现
+
+1. RTL `vb6_VarLogicNullV(isAnd, a, b, litBits, mask)`（`vb6rtl_com.c`）：
+   mask 的 bit0/bit1 表示 a/b 是不是槽；**不是槽的那侧**用 `litBits`。
+   求值顺序是这一格的要害：只传槽**地址**，`vb6_VariantToLong` 在函数里惰性算 ——
+   当实参先算会在 Null 上先报 94（改前就是这么答 94 的）。
+2. 发码侧 `cgNullGuardLogicV`：认四种实测形
+   `vb6_VariantFromValue((vb6_VariantToLong(X) |/& (int32_t)(Y)))`、
+   反向 `((int32_t)(Y) | vb6_VariantToLong(X))`、两槽 `vb6_VariantToLong(X) | vb6_VariantToLong(Y)`，
+   以及**裸**形（FromValue 还没包）。某一侧既不是槽也不是 `(int32_t)(…)` 就不动。
+
+#### 二、踩到的坑
+
+1. **首字符是括号**：三个守卫（比较 / 拼接 / 逻辑）开头都写了
+   `while (cExpr[s] == '(' || cExpr[s] == ' ') s++`，对裸形 `(<左> | <右>)` 会把配对括号吃掉，
+   前缀判据全落空 ⇒ 静默不命中（本刀第一版就是这样，发码一字未变）。改成只跳空格。
+2. 又一次是"两条形都得认"：存储站拿到的已包 `vb6_VariantFromValue(...)`，实参站拿裸式子。
+3. 幂等：实参站会被套两层，第二层拿到的已经是 `vb6_VarLogicNullV(...)` ⇒ 返回空。
+
+#### 三、验收
+
+- 探针 `LogicNull.bas` 九格全对（L1 True/0、L2 Null、L3 True/0、L4 False/0、L5 Null、L6 Null、L7 Null、L8 True、L9 1）。
+- 回归：`OpsNull.bas` 十四格里 Q8/Q9 也从 `-1/94`、`0/94` 变成 `True/0`、`False/0`，其余不变；
+  `CatNull.bas` 六格不变。
+- 夹具补 `JF-nullortrue=False/True/0`、`JF-nullorfalse=True/0`、
+  `JF-nullandfalse=False/False/0`、`JF-nullandtrue=True/0`、`JF-cmplogic=False/True/0`。
+- 四门本机 PASS（keeps 237 行 / 提名 193 / slot_returns 53 名 / conv_strict_parse / reclaim）。
+
+#### 四、遗留（都有读数，暂未做）
+
+| 条件 | 真值 | 现在 | 原因 |
+|---|---|---|---|
+| `Null Xor True/False`、`Null Eqv True/False` | Null | 94 | 同一族但只有"恒 Null"一列；要另开 Xor/Eqv 两条出口 |
+| `Null Imp True` / `False Imp Null` | True | 94 | Imp 三态（x=False ⇒ True；y=True ⇒ True；其余 Null） |
+| `Null Or 5` | VBScript 答 5、`Null Or 0` 答 Null | Null/94 | **宿主差异**：VBScript 按"位已知/未知"模型，VB6 文档只有 True/False 两行；本仓按文档口径，记账 |
+| `Null And 0` | VBScript 答 0，本仓答 False | False | 同上（值等价，类型不同） |
