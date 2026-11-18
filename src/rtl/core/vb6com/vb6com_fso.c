@@ -454,6 +454,18 @@ static void fso_setObj(VARIANT* pResult, vb6_FsoObj* o) {
 // 文件系统查询小工具
 // ============================================================
 // 目录/文件是否存在（区分种类）
+// C30-11 第十刀（读数 ai/040 §7.11）：真引擎 scrrun 就是 **MAX_PATH 语义**，不是长路径支持。
+// 实测边界（构造恰好 259/260/261 字符的目录）：**259 可见，260 起一律不可见**。
+// 且「太长」交的号**逐方法不同**，逐条量过：
+//   FileExists / FolderExists -> False，err=0（安静地看不见）
+//   GetFile / DeleteFile      -> 53（真去开文件，拿到 ERROR_FILE_NOT_FOUND）
+//   GetFolder / DeleteFolder / CreateFolder / CreateTextFile / OpenTextFile
+//   / CopyFile / MoveFile     -> 76（先解路径，拿到 ERROR_PATH_NOT_FOUND）
+//   GetFileVersion            -> ""，err=0
+//   GetFileName / GetParentFolderName / BuildPath / GetAbsolutePathName / GetDriveName
+//                             -> 纯字符串运算，照常（不看文件系统）
+static int fso_pathTooLong(const wchar_t* p) { return wcslen(p) >= 260; }
+
 static int fso_existsKind(const wchar_t* path, int wantDir) {
     DWORD a = path && path[0] ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
     if (a == INVALID_FILE_ATTRIBUTES) return 0;
@@ -856,7 +868,9 @@ static HRESULT fso_doGetDrive(DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO* pexc
     if (!p) return fso_fail(pexcep, FSO_ERR_INVALID_ARG);
     fso_stripQuotes(p);
     // C30-11 第九刀读数：GetDrive("") -> 5；GetDrive("Q:")（盘不存在）-> 68，不是 76
+    // C30-11 第十刀：UNC（"\\\\server\\share"）真引擎给 **76**（读数 U4），不是 68
     if (!p[0]) { free(p); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }
+    if (p[0] == L'\\' && p[1] == L'\\') { free(p); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }
     wchar_t root[8] = L"C:\\";
     root[0] = p[0];
     if (GetDriveTypeW(root) == DRIVE_NO_ROOT_DIR) { free(p); return fso_fail(pexcep, FSO_ERR_DEVICE_UNAVAILABLE); }
@@ -901,6 +915,7 @@ static HRESULT fso_doCreateFolder(DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO* 
     wchar_t* p = fso_argStr(pdp, 0);
     if (!p) return fso_fail(pexcep, FSO_ERR_INVALID_ARG);
     fso_stripQuotes(p);
+    if (fso_pathTooLong(p)) { free(p); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }   // 260+ -> 76
     if (fso_existsKind(p, 1) || fso_existsKind(p, 0)) { free(p); return fso_fail(pexcep, FSO_ERR_ALREADY_EXISTS); }
     if (!CreateDirectoryW(p, NULL)) { free(p); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }
     vb6_FsoObj* o = fso_objNew(FSO_K_FOLDER);
@@ -917,6 +932,7 @@ static HRESULT fso_doCreateTextFile(DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO
     long unicode = fso_argLong(pdp, 2, 0);
     if (!p) return fso_fail(pexcep, FSO_ERR_INVALID_ARG);
     fso_stripQuotes(p);
+    if (fso_pathTooLong(p)) { free(p); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }   // 260+ -> 76
     if (fso_existsKind(p, 0) && overwrite == 0) { free(p); return fso_fail(pexcep, FSO_ERR_ALREADY_EXISTS); }
     if (!fso_parentExists(p)) { free(p); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }
     vb6_FsoObj* ts = ts_open(p, 2, 1, unicode ? -1 : 0);
@@ -933,6 +949,7 @@ static HRESULT fso_doOpenTextFile(DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO* 
     long format = fso_argLong(pdp, 3, -2);
     if (!p) return fso_fail(pexcep, FSO_ERR_INVALID_ARG);
     fso_stripQuotes(p);
+    if (fso_pathTooLong(p)) { free(p); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }   // 260+ -> 76
     if (!fso_existsKind(p, 0) && iomode == 1) { free(p); return fso_fail(pexcep, FSO_ERR_FILE_NOT_FOUND); }
     if (!fso_parentExists(p)) { free(p); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }
     vb6_FsoObj* ts = ts_open(p, (int)iomode, (int)create, (int)format);
@@ -994,6 +1011,7 @@ static HRESULT fso_doCopyFile(DISPPARAMS* pdp, EXCEPINFO* pexcep) {
     long overwrite = fso_argLong(pdp, 2, -1);
     if (!src || !dst) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }
     fso_stripQuotes(src); fso_stripQuotes(dst);
+    if (fso_pathTooLong(src) || fso_pathTooLong(dst)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }   // 260+ -> 76（读数 L8）
     if (!fso_existsKind(src, 0)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_FILE_NOT_FOUND); }
     if (fso_existsKind(dst, 1)) {   // 目标是目录 ⇒ 拼文件名
         wchar_t joined[1200];
@@ -1011,6 +1029,7 @@ static HRESULT fso_doMoveFile(DISPPARAMS* pdp, EXCEPINFO* pexcep) {
     wchar_t* dst = fso_argStr(pdp, 1);
     if (!src || !dst) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }
     fso_stripQuotes(src); fso_stripQuotes(dst);
+    if (fso_pathTooLong(src) || fso_pathTooLong(dst)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }   // 260+ -> 76（读数 M6）
     if (!fso_existsKind(src, 0)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_FILE_NOT_FOUND); }
     int ok = MoveFileW(src, dst);
     free(src); free(dst);
@@ -1143,6 +1162,8 @@ static HRESULT fso_doGetFileVersion(DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO
     wchar_t* p = fso_argStr(pdp, 0);
     if (!p) return E_OUTOFMEMORY;
     fso_stripQuotes(p);
+    // 260+ 的路径真引擎交 "" 且 err=0（读数 M9），而**短的**缺文件才是 0x80070002（V03）。
+    if (fso_pathTooLong(p)) { free(p); fso_setBstr(pResult, L""); return S_OK; }
     fso_setBstr(pResult, L"");                 // 先给 ""：无资源/目录都停在这一点上且 err=0
     if (!fso_existsKind(p, 0)) {                // 不是文件
         int isDir = fso_existsKind(p, 1);

@@ -506,6 +506,39 @@ stdin 用重定向喂 `alpha\r\nbeta\r\n`）：**内建腿 0 差异、scrrun 腿
 另回归：`Fso7`（四枚留白）两腿差异仍是已知的 TypeName 那一类，`Fso8`（HRESULT 读数）28/28 全对，
 9 份 COM 夹具 9/9 exit=0。
 
+## 7.11 第十刀：长路径与 UNC（2026-11-18）
+
+真引擎读数（`.temp/leftover/oracle_long.vbs` / `oracle_long3.vbs` / `oracle_259.vbs`，cscript）：
+**scrrun 本身就是 MAX_PATH 语义，不是长路径支持**。构造恰好 259/260/261 字符的目录实测：
+**259 可见，260 起一律不可见**。
+
+「太长」交的号**逐方法不同**（全是量过的，不是推断）：
+
+| 方法 | 260+ 时的真引擎 |
+|---|---|
+| `FileExists` / `FolderExists` | False，err=0（安静地看不见） |
+| `GetFile` / `DeleteFile` | **53** |
+| `GetFolder` / `DeleteFolder` / `CreateFolder` / `CreateTextFile` / `OpenTextFile` / `CopyFile` / `MoveFile` | **76** |
+| `GetFileVersion` | `""`，err=0 |
+| `GetFileName` / `GetParentFolderName` / `BuildPath` / `GetAbsolutePathName` / `GetDriveName` | 纯字符串运算，照常（不看文件系统） |
+
+短路径下的对照（证明 53/76 不是长路径特例）：`CopyFile` 缺源 53、`CopyFile` 源是目录 53、
+`MoveFile` 缺源 53。
+
+UNC（本机管理共享不可达，两边都照样跑）：`GetDriveName("\\\\localhost\\C$\\Windows\\System32")`
+→ `\\localhost\C$`；`GetParentFolderName` / `BuildPath` 同口径；**`GetDrive("\\localhost\C$")` → 76**
+（不是 68——68 只给「盘符存在不了」的 `GetDrive("Q:")`）。
+
+改动（`vb6com_fso.c`）：新增 `fso_pathTooLong()`（`wcslen >= 260`）并在
+`CreateFolder` / `CreateTextFile` / `OpenTextFile` / `CopyFile` / `MoveFile` / `GetFileVersion` 六个入口
+按上表分档；`GetDrive` 增加 UNC 前缀（`\\`）→ 76。其余方法本来就从 `fso_existsKind` 落回
+53/76，不用额外分支。
+
+两腿实测（`.temp/fso7/Fso11.bas` 长路径/UNC 14 项 + `Fso12.bas` 文件级 11 项）：
+**内建腿 0 差异、scrrun 腿 0 差异**。顺手捉到一个探针自己的坑：`fso.M base & "\\x"` 在 VBScript/VB6 里
+会解析成 `fso.M(base) & "\\x"`，`oracle_long2` 就是因此崩的；早前一条 `B9 CopyFile(1 arg) → 450`
+也是这么来的（用括号重测后仍然是 450，结论不变，但依据现在站得住）。
+
 ## 8. 验收
 
 - 刀 1/2/3 各自：`fso_native` 夹具（同一份 .bas 真机与 C3 双跑，逐行 diff）；
