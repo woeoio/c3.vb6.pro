@@ -277,6 +277,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_CStrLongFromVariant BSTR
 [own] vb6_CStrLongLong BSTR
 [own] vb6_CStrSingle BSTR
+[own] vb6_CStrStrict BSTR
 [own] vb6_CStrULong BSTR
 [own] vb6_CStrULongFromVariant BSTR
 [own] vb6_CStrULongLong BSTR
