@@ -231,6 +231,51 @@ Public Sub Main()
     nc = (nv2 And 5)
     Debug.Print "JF-nulland5="; IsNull(nc); "/"; Err.Number
 
+    ' 第六十八刀：Xor/Eqv 任一侧 Null 恒 Null；Imp = (Not x) Or y
+    Err.Clear
+    nc = (nv2 Xor 5)
+    Debug.Print "JF-nullxor="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (True Xor nv2)
+    Debug.Print "JF-nullxor2="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 Eqv 5)
+    Debug.Print "JF-nulleqv="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (False Eqv nv2)
+    Debug.Print "JF-nulleqv2="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 Imp 5)
+    Debug.Print "JF-nullimp5="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 Imp True)
+    Debug.Print "JF-nullimptrue="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 Imp False)
+    Debug.Print "JF-nullimpfalse="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (5 Imp nv2)
+    Debug.Print "JF-nullimpnot="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (False Imp nv2)
+    Debug.Print "JF-notimptrue="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (True Imp nv2)
+    Debug.Print "JF-notimpnull="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 Or -1)
+    Debug.Print "JF-nullorneg="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
+
     ' 反向钉：Empty 不是 Null（必须还是 0），算术传播仍是 Null
     Err.Clear
     nc = CInt(Empty)

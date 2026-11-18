@@ -1998,3 +1998,56 @@ False，其余一律 Null**。
 | `Null Or True` | Boolean True | Boolean True ✓ |
 | `Null And False` | Boolean False | Boolean False ✓ |
 | `Null Or 0` / `Null And 5` | Null | Null ✓ |
+
+### 11.42 第六十八刀：`Xor` / `Eqv` / `Imp` 的 Null（VB6 IDE 实测）
+
+探针 `tests/vb6probe/NullOpsProbe.bas`（用户手动在真实 VB6 IDE 跑，56 格）把这一族一次问清。
+
+#### 一、读数
+
+| 段 | VB6 实测 |
+|---|---|
+| `Xor`（X1..X7） | **任一侧 Null ⇒ Null**，`err=0`（含 `Null Xor 5`、`5 Xor Null`） |
+| `Eqv`（E1..E8） | **任一侧 Null ⇒ Null**，`err=0` |
+| `Imp`（I1..I8） | `Null Imp True`=**True(Boolean)**、`Null Imp 5`=**5(Integer)**、`Null Imp False/0`=Null、`Null Imp Null`=Null、`True Imp Null`=Null、`False Imp Null`=**True(Boolean)**、`5 Imp Null`=**-6(Integer)** |
+
+#### 二、`Imp` 的口径：`x Imp y` = `(Not x) Or y`
+
+`Imp` 不是三态表，而是先 `Not x` 再走 11.41 的 `Or` 规则（`Not Null` 仍是 Null）：
+
+| 情形 | 推导 | 读数 |
+|---|---|---|
+| x Null、y 非零 | `Null Or y` ⇒ y | `Null Imp True`=True、`Null Imp 5`=5 ✓ |
+| x Null、y 为零 | `Null Or 0` ⇒ Null | `Null Imp False`、`Null Imp 0` ✓ |
+| y Null、~x≠0 | `(~x) Or Null` ⇒ ~x | `5 Imp Null`=~5=**-6**、`False Imp Null`=~0=-1=**True** ✓ |
+| y Null、~x=0 | `0 Or Null` ⇒ Null | `True Imp Null`=~(-1)=0 ⇒ Null ✓ |
+
+三条读数（`-6`、`True`、`Null`）只有这一种解释，反而比“另开一张三态表”更省。
+
+#### 三、实现（不新增出口）
+
+`vb6_VarLogicNullV` 第一枚形参由 `isAnd` 扩成 **op 码**（0=Or 1=And 2=Xor 3=Eqv 4=Imp），
+已有 Or/And 的调用发码逐字节不变（仍发 `0`/`1`）。守卫 `cgNullGuardLogicV` 按 AST 的运算符
+取 op 码，并认三种发码形：
+
+| 运算 | 发码形 | 守卫怎么拆 |
+|---|---|---|
+| Or / And / Xor | `(L \| R)`、`(L & R)`、`(L ^ R)` | 剥外层全包括号后深度 0 找 `\| & ^` |
+| Eqv | `~(A ^ B)` | 首两字符 `~(` ⇒ 剥掉再找顶层 `^` |
+| Imp | `((~A) \| B)` | 顶层 `\|` 左侧是 `(~A)` ⇒ x 取 A |
+
+文本形与 AST 运算符**必须对上**（`effOp != opCode` 就不命中），宁可不发也不发错。
+非 Null 路径照旧复现原发码（`av^bv`、`~(av^bv)`、`(~av)\|bv`、`av&bv`、`av\|bv`）。
+
+#### 四、同时修的一格：`Null Or -1` 的档位
+
+读数 D5：`Null Or -1` 是 **Integer -1**（不是 Long）。`-1` 在 AST 里是一元负 + Integer
+字面量，`inferExprType` 答 Long，所以字面量档位再加一条：一元 `Negate` 且操作数是 Integer
+字面量 ⇒ Integer。
+
+#### 五、验收
+
+- 探针复跑（C3 自己跑同一份 .bas）：X1..X7、E1..E8、I1..I8、D1..D6 **28 格与 VB6 逐格一致**。
+- 夹具新增 11 针：`JF-nullxor`/`-nullxor2`/`-nulleqv`/`-nulleqv2`、`JF-nullimp5`/`-nullimptrue`/
+  `-nullimpfalse`/`-nullimpnot`/`-notimptrue`/`-notimpnull`、`JF-nullorneg`。
+- 四门本机 PASS（keeps 237 行 / 提名 193 / slot_returns / conv_strict_parse / reclaim）。

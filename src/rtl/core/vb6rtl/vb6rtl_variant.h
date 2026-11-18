@@ -494,8 +494,8 @@ vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond);
 vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb);
 // C30-11 第六十七刀: Or/And 的 Null 真值表（Or 只有另一侧 True 才确定，And 只有另一侧 False）。
 // isAnd=0 走 Or、1 走 And；mask 的 bit0/bit1 表示 a/b 是不是槽（不是槽的那侧用 litBits）。
-vb6_VARIANT vb6_VarLogicNullV(int32_t isAnd, vb6_VARIANT* a, vb6_VARIANT* b,
-                              int32_t litBits, int32_t mask, int32_t litIsBool);
+vb6_VARIANT vb6_VarLogicNullV(int32_t op, vb6_VARIANT* a, vb6_VARIANT* b,
+                              int32_t litBits, int32_t mask, int32_t litType);
 vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);

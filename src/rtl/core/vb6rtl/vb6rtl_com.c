@@ -1350,27 +1350,61 @@ vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb)
    即“决定性那一侧辐到结果”：“Or 的另一侧非零”和“And 的另一侧为零”分别是两种确定情形，
    其余（含两侧都 Null）一律 Null。
    ⚠ 求值顺序：只传**槽地址**，VariantToLong 在函数里惰性算 —— 作为实参先算会先报 94。
-   ⚠ 类型：结果按“另一侧”的档给（布尔侧答 Boolean，否则 Long），不动。 */
-vb6_VARIANT vb6_VarLogicNullV(int32_t isAnd, vb6_VARIANT* a, vb6_VARIANT* b,
-                              int32_t litBits, int32_t mask, int32_t litIsBool) {
+   ⚠ 类型：结果按“另一侧”的档给（布尔侧答 Boolean，否则 Long），不动。
+
+   C30-11 第六十八刀：同一枚出口再收 `Xor`(2)/`Eqv`(3)/`Imp`(4)。
+   读数（真实 VB6 IDE，用户 2026-11-19，tests/vb6probe/NullOpsProbe.bas）：
+     X1..X7  Xor：任一侧 Null ⇒ **Null**，err 0（含 Null Xor 5、5 Xor Null）
+     E1..E8  Eqv：任一侧 Null ⇒ **Null**，err 0
+     I1  Null Imp True  = True（Boolean）      I4  Null Imp 5     = 5（Integer）
+     I2  Null Imp False = Null                 I3  Null Imp 0     = Null
+     I7  False Imp Null = True（Boolean）      I6  True Imp Null  = Null
+     I8  5 Imp Null     = **-6（Integer）**     I5  Null Imp Null  = Null
+   Imp 这三条只有一种解释：`x Imp y` 就是 `(Not x) Or y`，Not 传播 Null，再走本表的 Or 规则 ——
+     x Null ⇒ 结果 = `Null Or y` =（y 非零则 y，否则 Null）
+     y Null ⇒ 结果 = `(~x) Or Null` =（~x 非零则 ~x，否则 Null；~5 = -6、~(-1) = 0、~0 = -1）
+   结果档同样跟“值那一侧”走（x 是 Boolean ⇒ Not x 仍是 Boolean）。 */
+vb6_VARIANT vb6_VarLogicNullV(int32_t op, vb6_VARIANT* a, vb6_VARIANT* b,
+                              int32_t litBits, int32_t mask, int32_t litType) {
     const int aIsSlot = (mask & 1) != 0;
     const int bIsSlot = (mask & 2) != 0;
     const int aNull = aIsSlot && a && a->vt == vb6_vtNull;
     const int bNull = bIsSlot && b && b->vt == vb6_vtNull;
-    if ((aIsSlot && aNull) || (bIsSlot && bNull)) {
+    const int isXor = (op == 2);
+    const int isEqv = (op == 3);
+    const int isImp = (op == 4);
+    if (aNull || bNull) {
+        /* Xor / Eqv：只有“任一侧 Null ⇒ Null”这一条，不看另一侧的值 */
+        if (isXor || isEqv) return vb6_VariantNull();
         if (aNull && bNull) return vb6_VariantNull();
         {
-            /* 哪一侧是“另一侧”（非 Null 那一侧） */
+            /* 哪一侧是“另一侧”（非 Null 那一侧）。注意非槽侧就是字面量（已知）。 */
             vb6_VARIANT* otherSlot = aNull ? (bIsSlot ? b : 0) : (aIsSlot ? a : 0);
             const int32_t other = otherSlot ? vb6_VariantToLong(*otherSlot) : litBits;
-            /* 类型按“另一侧”的档给：VB6 IDE 里 Null Or True 是 Boolean True、
-               Null And False 是 Boolean False。字面量那侧在 C 里只有 int，
-               所以发码侧把它静态类型（Boolean?）当 litIsBool 传进来。 */
             const int otherIsBool = otherSlot ? (otherSlot->vt == vb6_vtBoolean)
-                                              : (litIsBool == 1);
+                                              : (litType == 1);
             const int otherIsInt = otherSlot ? (otherSlot->vt == vb6_vtInteger)
-                                             : (litIsBool == 2);
-            if (!isAnd) {
+                                             : (litType == 2);
+            if (isImp) {
+                if (aNull) {
+                    /* x 未知 ⇒ Not x 也是 Null ⇒ 只剩 `Null Or y`：y 决定 */
+                    if (other != 0)
+                        return otherIsBool ? vb6_VariantBool((int16_t)other)
+                             : otherIsInt  ? vb6_VariantInt((int16_t)other)
+                                           : vb6_VariantLong(other);
+                    return vb6_VariantNull();
+                }
+                /* y 未知 ⇒ `(~x) Or Null`：~x 非零就辐出去，零才 Null */
+                {
+                    const int32_t n = ~other;
+                    if (n != 0)
+                        return otherIsBool ? vb6_VariantBool((int16_t)n)
+                             : otherIsInt  ? vb6_VariantInt((int16_t)n)
+                                           : vb6_VariantLong(n);
+                    return vb6_VariantNull();
+                }
+            }
+            if (op == 0) {
                 if (other != 0) {
                     if (otherIsBool) return vb6_VariantBool((int16_t)-1);
                     if (otherIsInt) return vb6_VariantInt((int16_t)other);
@@ -1389,7 +1423,10 @@ vb6_VARIANT vb6_VarLogicNullV(int32_t isAnd, vb6_VARIANT* a, vb6_VARIANT* b,
     {
         const int32_t av = aIsSlot ? vb6_VariantToLong(*a) : litBits;
         const int32_t bv = bIsSlot ? vb6_VariantToLong(*b) : litBits;
-        return vb6_VariantLong(isAnd ? (av & bv) : (av | bv));
+        if (isXor) return vb6_VariantLong(av ^ bv);
+        if (isEqv) return vb6_VariantLong(~(av ^ bv));
+        if (isImp) return vb6_VariantLong((~av) | bv);
+        return vb6_VariantLong(op == 1 ? (av & bv) : (av | bv));
     }
 }
 

@@ -3973,8 +3973,16 @@ std::string cgNullGuardConcatV(const ASTNode* node, const std::string& cExpr) {
 std::string CCodeGen::cgNullGuardLogicV(const ASTNode* node, const std::string& cExpr) const {
     if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
     const auto& bin = static_cast<const BinaryExpr&>(*node);
-    const bool isAnd = (bin.op == BinaryOp::And);
-    if (!isAnd && bin.op != BinaryOp::Or) return std::string();
+    // 第六十八刀：op 码表 —— 0=Or 1=And 2=Xor 3=Eqv 4=Imp（RTL 侧同一枚出口）
+    int opCode = -1;
+    switch (bin.op) {
+    case BinaryOp::Or:  opCode = 0; break;
+    case BinaryOp::And: opCode = 1; break;
+    case BinaryOp::Xor: opCode = 2; break;
+    case BinaryOp::Eqv: opCode = 3; break;
+    case BinaryOp::Imp: opCode = 4; break;
+    default: return std::string();
+    }
     if (cExpr.find("vb6_VarLogicNullV(") != std::string::npos) return std::string();
 
     size_t s = 0;
@@ -3995,25 +4003,59 @@ std::string CCodeGen::cgNullGuardLogicV(const ASTNode* node, const std::string& 
         return std::string();
     inner = inner.substr(1, inner.size() - 2);
 
-    // 深度 0 上找 | 或 &
-    size_t opPos = std::string::npos;
-    int depth = 0;
-    for (size_t i = 0; i < inner.size(); ++i) {
-        char ch = inner[i];
-        if (ch == '(') ++depth;
-        else if (ch == ')') --depth;
-        else if (ch == '"') { for (++i; i < inner.size() && inner[i] != '"'; ++i) {} }
-        else if (depth == 0 && (ch == '|' || ch == '&')) { opPos = i; break; }
-    }
-    if (opPos == std::string::npos) return std::string();
-
     auto trim2 = [](std::string x) {
         size_t p = x.find_first_not_of(' ');
         size_t q = x.find_last_not_of(' ');
         return (p == std::string::npos) ? std::string() : x.substr(p, q - p + 1);
     };
-    std::string left = trim2(inner.substr(0, opPos));
-    std::string right = trim2(inner.substr(opPos + 1));
+
+    // 深度 0 上找运算符（引号内的不算）
+    auto findTop = [](const std::string& s, const std::string& ops) -> size_t {
+        int depth = 0;
+        for (size_t i = 0; i < s.size(); ++i) {
+            char ch = s[i];
+            if (ch == '(') ++depth;
+            else if (ch == ')') --depth;
+            else if (ch == '"') { for (++i; i < s.size() && s[i] != '"'; ++i) {} }
+            else if (depth == 0 && ops.find(ch) != std::string::npos) return i;
+        }
+        return std::string::npos;
+    };
+
+    std::string left, right;
+    int effOp = -1;
+    if (inner.compare(0, 2, "~(") == 0 && inner.back() == ')') {
+        // Eqv 的发码形：~(A ^ B)（外层那对全包括号已剥）
+        const std::string sub = inner.substr(2, inner.size() - 3);
+        const size_t p = findTop(sub, "^");
+        if (p == std::string::npos) return std::string();
+        left = trim2(sub.substr(0, p));
+        right = trim2(sub.substr(p + 1));
+        effOp = 3;
+    } else {
+        const size_t p = findTop(inner, "|&^");
+        if (p == std::string::npos) return std::string();
+        const std::string rhs = trim2(inner.substr(p + 1));
+        if (inner[p] == '|') {
+            const std::string l = trim2(inner.substr(0, p));
+            // Imp 的发码形：(~A) | B
+            if (l.size() > 4 && l.compare(0, 2, "(~") == 0 && l.back() == ')') {
+                left = trim2(l.substr(2, l.size() - 3));
+                right = rhs;
+                effOp = 4;
+            } else {
+                left = l;
+                right = rhs;
+                effOp = 0;
+            }
+        } else {
+            left = trim2(inner.substr(0, p));
+            right = rhs;
+            effOp = (inner[p] == '&') ? 1 : 2;
+        }
+    }
+    // 文本形与 AST 运算符必须对上，否则说明歧义（宁可不命中也不发错）
+    if (effOp != opCode) return std::string();
 
     static const std::string kToLong = "vb6_VariantToLong(";
     auto slotOfSide = [&](const std::string& x) -> std::string {
@@ -4064,6 +4106,16 @@ std::string CCodeGen::cgNullGuardLogicV(const ASTNode* node, const std::string& 
                 case LiteralKind::Integer: litIsBool = 2; break;
                 default: break;
                 }
+            } else if (litSide->kind == ASTNodeKind::UnaryExpr) {
+                // `-1` 这种：AST 是一元负 + Integer 字面量，VB6 里它的档仍是 Integer
+                // （Null Or -1 = Integer -1，VB6 IDE 实测 D5）。
+                const auto& ue = static_cast<const UnaryExpr&>(*litSide);
+                if (ue.op == UnaryOp::Negate && ue.operand
+                    && ue.operand->kind == ASTNodeKind::LiteralExpr) {
+                    const auto lk = static_cast<const LiteralExpr&>(*ue.operand).literalKind;
+                    if (lk == LiteralKind::Boolean) litIsBool = 1;
+                    else if (lk == LiteralKind::Integer) litIsBool = 2;
+                }
             } else if (lt == Vb6Type::Boolean) {
                 litIsBool = 1;
             } else if (lt == Vb6Type::Integer) {
@@ -4071,7 +4123,7 @@ std::string CCodeGen::cgNullGuardLogicV(const ASTNode* node, const std::string& 
             }
         }
     }
-    return "vb6_VarLogicNullV(" + std::string(isAnd ? "1" : "0") + ", " + slotA + ", "
+    return "vb6_VarLogicNullV(" + std::to_string(opCode) + ", " + slotA + ", "
          + slotB + ", " + lit + ", " + std::to_string(mask) + ", "
          + std::to_string(litIsBool) + ")";
 }
