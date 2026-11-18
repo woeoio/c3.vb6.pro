@@ -471,6 +471,41 @@ V03 现在是 `-2147024894`、S07 是 `-2147024890`，与真引擎逐位一致�
 | H15 `GetDrive("Q:")` | 68 | 76 | 档位选错（应当是「设备不可用」） |
 | H16 `CopyFolder(src, src\sub\deep)` | 5 | 70 | 没拦「往自己子树里复制」，落到 OS 权限错 |
 
+**这四条已在第九刀收掉（读数与改动见 §7.10）。**
+
+## 7.10 第九刀：参数/边界四枚 + stdin 真读（2026-11-18）
+
+真引擎读数（`.temp/leftover/oracle_hr2.vbs`，cscript，stdin 用 `<` 重定向喂）：
+
+| 段 | 情形 | 真引擎 |
+|---|---|---|
+| A1–A3 | `GetFileName(obj)` / `BuildPath(obj,"x")` / `FileExists(dict)` | **13**（一律类型不匹配）|
+| B1–B10 | `GetFileName()`、`GetBaseName()`、`GetDrive()`、`CopyFile(1 arg)` … | **450**（一律）|
+| C1 | `GetDrive("Q:")` | **68** |
+| C2 | `GetDrive("")` | **5** |
+| C3 | `DriveExists("Q:")` | False，err=0 |
+| D1 | `CopyFolder(src, src\sub\deep)` | **5** |
+| D2 | `CopyFolder(src, src)` | **0**（同路径算空操作）|
+| D3 | `MoveFolder(src, src\sub\mv)` | **5** |
+| D4 | `CopyFile` 往自己子树 | **0**（文件这条路没限制）|
+| E2–E5 | `GetStandardStream(0)`：AtEndOfStream=False → ReadLine=`alpha` → ReadAll=`beta\r\n` → AtEnd=True | 真读 stdin |
+
+改动（全在 `vb6com_fso.c`）：
+
+1. `fso_argStr`：字符串形参收到对象（`VT_DISPATCH/VT_UNKNOWN/数组`）→ 抛 13 + 交空串
+   （与 438 那把刀同口径：抛完仍给可用值，Resume Next 能往下走）。
+2. 新增 `fso_minArgs(dispId)` 表 + Invoke 入口判定：实参数少于必填数 → 450。
+3. `GetDrive`：空串 → 5；盘不存在 → 68（以前两项都是 76）。
+4. 新增 `fso_isInside(dst, src)`：往自己子树里 Copy/Move → 5；**同路径直接 S_OK**（D2）。
+5. `GetStandardStream(0)`：`stdHandle` 编号修正为 0=非标准流/1=stdout/2=stderr/**3=stdin**，
+   并新增 `ts_stdLoad`（首次读时把 stdin 整体灌入缓冲），读侧五个成员（AtEndOfStream/
+   Read/ReadLine/ReadAll/Skip…）现在都走真输入。
+
+两腿实测（`.temp/fso7/Fso10.bas`，A1–A3 / B1–B10 / C1–C3 / D1–D4 / E1–E5 共 25 项，
+stdin 用重定向喂 `alpha\r\nbeta\r\n`）：**内建腿 0 差异、scrrun 腿 0 差异**。
+另回归：`Fso7`（四枚留白）两腿差异仍是已知的 TypeName 那一类，`Fso8`（HRESULT 读数）28/28 全对，
+9 份 COM 夹具 9/9 exit=0。
+
 ## 8. 验收
 
 - 刀 1/2/3 各自：`fso_native` 夹具（同一份 .bas 真机与 C3 双跑，逐行 diff）；

@@ -138,6 +138,10 @@ enum {
 #define FSO_ERR_ALREADY_EXISTS 58
 #define FSO_ERR_BAD_FILE_NAME 52
 #define FSO_ERR_NO_MEMBER   438
+// C30-11 第九刀（读数 ai/040 §7.10）：三个以前没有的档
+#define FSO_ERR_TYPE_MISMATCH 13   // 字符串形参收到对象 —— A1/A2/A3 读数全是 13
+#define FSO_ERR_ARGS        450   // 少给必填实参 —— B1–B10 读数全是 450
+#define FSO_ERR_DEVICE_UNAVAILABLE 68  // GetDrive("Q:") 不存在 -> 68（不是 76）
 
 // ============================================================
 // 对象
@@ -154,6 +158,7 @@ typedef struct vb6_FsoObj {
     wchar_t* buf;               // 全文缓冲（读：解码后；写：待落盘）
     int    len, cap, pos;
     int    line, lineStart;
+    int    stdLoaded;           // 第九刀：stdin 的 TextStream 只在首次读时整体灌入一次
 } vb6_FsoObj;
 
 static IDispatchVtbl g_fsoVtbl;
@@ -173,11 +178,22 @@ static VARIANT* fso_argRaw(DISPPARAMS* pdp, int32_t formalIdx) {
 }
 
 // 取一枚字符串实参（malloc 的副本，调用方 free）。Empty/Null 当空串。
+// C30-11 第九刀：字符串形参收到**对象**（VT_DISPATCH/VT_UNKNOWN/数组）时，真引擎给 13
+// 类型不匹配（A1 GetFileName(obj) / A2 BuildPath(obj,str) / A3 FileExists(dict) 都是 13），
+// 而不是静默当空串。与 438 那把刀同口径：抛完仍交一枚空串可用值，让 Resume Next 往下走。
 static wchar_t* fso_argStr(DISPPARAMS* pdp, int32_t formalIdx) {
     VARIANT* v = fso_argRaw(pdp, formalIdx);
     wchar_t* out = (wchar_t*)calloc(1, sizeof(wchar_t) * 1024);
     if (!out) return NULL;
     if (!v || V_VT(v) == VT_EMPTY || V_VT(v) == VT_NULL) return out;
+    {
+        VARTYPE vt = (VARTYPE)(V_VT(v) & ~VT_BYREF);
+        if (vt == VT_DISPATCH || vt == VT_UNKNOWN || (vt & VT_ARRAY)) {
+            vb6_RaiseError(FSO_ERR_TYPE_MISMATCH,
+                           SysAllocString(L"Type mismatch"));
+            return out;
+        }
+    }
     if (V_VT(v) == VT_BSTR) { wcsncpy(out, V_BSTR(v) ? V_BSTR(v) : L"", 1023); return out; }
     {
         VARIANT tmp; VariantInit(&tmp);
@@ -598,6 +614,42 @@ static void ts_stdFlush(vb6_FsoObj* o) {
     if (o->buf) o->buf[0] = 0;
 }
 
+// C30-11 第九刀：GetStandardStream(0)（stdin）真能读。读数（ai/040 §7.10 E1–E5）：
+//   AtEndOfStream=False -> ReadLine 得 "alpha" -> ReadAll 得余下 "beta\r\n" -> AtEnd=True
+// 我们的 TextStream 读的是 o->buf，所以在**第一次读**时把 stdin 整体灌进来（只灌一次）。
+static void ts_stdLoad(vb6_FsoObj* o) {
+    if (o->stdHandle != 3 || !o->reading || o->stdLoaded) return;
+    o->stdLoaded = 1;
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    if (!h || h == INVALID_HANDLE_VALUE) return;
+    size_t cap = 4096, len = 0;
+    char* raw = (char*)malloc(cap);
+    if (!raw) return;
+    for (;;) {
+        if (len + 1024 > cap) {
+            size_t ncap = cap * 2;
+            char* grown = (char*)realloc(raw, ncap);
+            if (!grown) { free(raw); return; }
+            raw = grown; cap = ncap;
+        }
+        DWORD got = 0;
+        if (!ReadFile(h, raw + len, (DWORD)(cap - len), &got, NULL) || got == 0) break;
+        len += got;
+    }
+    if (len == 0) { free(raw); return; }
+    if (o->unicode) {
+        int n = (int)(len / 2);
+        if (ts_reserve(o, n + 1)) { memcpy(o->buf, raw, (size_t)n * 2); o->len = n; o->buf[n] = 0; }
+    } else {
+        int n = MultiByteToWideChar(CP_ACP, 0, raw, (int)len, NULL, 0);
+        if (n > 0 && ts_reserve(o, n + 1)) {
+            MultiByteToWideChar(CP_ACP, 0, raw, (int)len, o->buf, n);
+            o->len = n; o->buf[n] = 0;
+        }
+    }
+    free(raw);
+}
+
 // 父目录是否存在（CreateTextFile/OpenTextFile 失败时区分 76 / 70）
 static int fso_parentExists(const wchar_t* path) {
     wchar_t parent[1024];
@@ -803,9 +855,11 @@ static HRESULT fso_doGetDrive(DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO* pexc
     wchar_t* p = fso_argStr(pdp, 0);
     if (!p) return fso_fail(pexcep, FSO_ERR_INVALID_ARG);
     fso_stripQuotes(p);
+    // C30-11 第九刀读数：GetDrive("") -> 5；GetDrive("Q:")（盘不存在）-> 68，不是 76
+    if (!p[0]) { free(p); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }
     wchar_t root[8] = L"C:\\";
-    if (p[0]) root[0] = p[0];
-    if (GetDriveTypeW(root) == DRIVE_NO_ROOT_DIR) { free(p); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }
+    root[0] = p[0];
+    if (GetDriveTypeW(root) == DRIVE_NO_ROOT_DIR) { free(p); return fso_fail(pexcep, FSO_ERR_DEVICE_UNAVAILABLE); }
     vb6_FsoObj* o = fso_objNew(FSO_K_DRIVE);
     if (!o) { free(p); return E_OUTOFMEMORY; }
     wcsncpy(o->path, root, 1023);
@@ -1029,6 +1083,16 @@ static int fso_copyTree(const wchar_t* src, const wchar_t* dst, int overwrite) {
     return ok;
 }
 
+// dst 是不是严格在 src 的子树里（**同路径不算** —— D2 读数 CopyFolder(src,src) err=0）。
+// 读数（ai/040 §7.10 D1/D3）：CopyFolder / MoveFolder 往自己子树里搬 -> 5；
+// CopyFile 往自己子树里拷 -> 0（文件这条路没这条限制，不许一刀切）。
+static int fso_isInside(const wchar_t* child, const wchar_t* parent) {
+    size_t n = wcslen(parent);
+    if (n == 0) return 0;
+    if (_wcsnicmp(child, parent, n) != 0) return 0;
+    return child[n] == L'\\' || child[n] == L'/';
+}
+
 static HRESULT fso_doCopyFolder(DISPPARAMS* pdp, EXCEPINFO* pexcep) {
     wchar_t* src = fso_argStr(pdp, 0);
     wchar_t* dst = fso_argStr(pdp, 1);
@@ -1036,6 +1100,8 @@ static HRESULT fso_doCopyFolder(DISPPARAMS* pdp, EXCEPINFO* pexcep) {
     if (!src || !dst) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }
     fso_stripQuotes(src); fso_stripQuotes(dst);
     fso_stripTrailSep(src); fso_stripTrailSep(dst);
+    if (fso_isInside(dst, src)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }   // D1 -> 5
+    if (!_wcsicmp(dst, src)) { free(src); free(dst); return S_OK; }        // D2 读数: 同路径 -> err=0（空操作）
     // 缺源、源是文件 -> 都是 76（F04/F06），且不建目标
     if (!fso_existsKind(src, 1)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }
     if (!fso_existsKind(dst, 1) && !fso_makeTree(dst)) {
@@ -1053,6 +1119,7 @@ static HRESULT fso_doMoveFolder(DISPPARAMS* pdp, EXCEPINFO* pexcep) {
     if (!src || !dst) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }
     fso_stripQuotes(src); fso_stripQuotes(dst);
     fso_stripTrailSep(src); fso_stripTrailSep(dst);
+    if (fso_isInside(dst, src)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_INVALID_ARG); }   // D3 -> 5
     if (!fso_existsKind(src, 1)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_PATH_NOT_FOUND); }   // 76
     if (fso_existsKind(dst, 1)) { free(src); free(dst); return fso_fail(pexcep, FSO_ERR_ALREADY_EXISTS); }    // 58
     int ok = MoveFileW(src, dst);
@@ -1111,7 +1178,7 @@ static HRESULT fso_doGetStandardStream(DISPPARAMS* pdp, VARIANT* pResult, EXCEPI
     vb6_FsoObj* o = fso_objNew(FSO_K_TEXTSTREAM);
     if (!o) return E_OUTOFMEMORY;
     o->path[0] = 0;                             // ts_flush 见空路径就跳过（不落盘）
-    o->stdHandle = (int)which + 1;              // 1/2/3 -> stdout/stderr/stdin
+    o->stdHandle = (which == 0) ? 3 : (int)which;  // 0->3=stdin, 1=stdout, 2=stderr（0 == 非标准流）
     o->unicode = (fmt == -1) ? 1 : 0;
     o->reading = (which == 0);                  // 0 = stdin：只读
     o->writing = (which != 0);
@@ -1506,6 +1573,24 @@ static HRESULT STDMETHODCALLTYPE fso_GetTypeInfo(IDispatch* pDisp, UINT iTInfo,
     return E_NOTIMPL;
 }
 
+// C30-11 第九刀：每个方法**最少几个实参**。读数（ai/040 §7.10 B1–B10）：少给必填参数时
+// 真引擎一律 450（GetFileName() / GetBaseName() / GetDrive() / CopyFile(1 arg) … 十条全是 450），
+// 而不是静默当空串。以前 fso_argStr 把缺位当 ""，于是 Err 停在 0。
+static int fso_minArgs(int dispId) {
+    switch (dispId) {
+    case FD_BUILDPATH: return 2;
+    case FD_GETFILENAME: case FD_GETBASENAME: case FD_GETEXTENSIONNAME:
+    case FD_GETPARENTFOLDER: case FD_GETABSOLUTEPATH: case FD_GETDRIVENAME:
+    case FD_FILEEXISTS: case FD_FOLDEREXISTS: case FD_DRIVEEXISTS:
+    case FD_GETFOLDER: case FD_GETFILE: case FD_GETDRIVE: case FD_GETSPECIALFOLDER:
+    case FD_CREATEFOLDER: case FD_DELETEFILE: case FD_DELETEFOLDER:
+    case FD_CREATETEXTFILE: case FD_OPENTEXTFILE:
+    case FD_GETFILEVERSION: case FD_GETSTANDARDSTREAM: return 1;
+    case FD_COPYFILE: case FD_MOVEFILE: case FD_COPYFOLDER: case FD_MOVEFOLDER: return 2;
+    default: return 0;          // 0 枚必填（GetTempName / Drives）或不检
+    }
+}
+
 // 名字 → DISPID（按对象种类）
 static int fso_nameToDispid(int kind, const wchar_t* n) {
     if (kind == FSO_K_FSO) {
@@ -1681,6 +1766,10 @@ static HRESULT STDMETHODCALLTYPE fso_Invoke(IDispatch* pDisp, DISPID dispIdMembe
 
     if (o->kind == FSO_K_FSO) {
         if (!isCall) return fso_fail(pexcep, FSO_ERR_NO_MEMBER);
+        {
+            int minA = fso_minArgs(dispIdMember);
+            if (minA > 0 && (int)pdp->cArgs < minA) return fso_fail(pexcep, FSO_ERR_ARGS);
+        }
         switch (dispIdMember) {
             case FD_BUILDPATH:        return fso_doBuildPath(pdp, pVarResult, pexcep);
             case FD_GETFILENAME:      return fso_doGetFileName(pdp, pVarResult, pexcep);
@@ -1720,6 +1809,7 @@ static HRESULT STDMETHODCALLTYPE fso_Invoke(IDispatch* pDisp, DISPID dispIdMembe
         if (dispIdMember == FD_WRITE || dispIdMember == FD_WRITELINE || dispIdMember == FD_WRITEBLANKLINES ||
             dispIdMember == FD_CLOSE || dispIdMember == FD_SKIP || dispIdMember == FD_SKIPLINE)
             if (!(wFlags & DISPATCH_METHOD)) return fso_fail(pexcep, FSO_ERR_NO_MEMBER);
+        if (o->reading) ts_stdLoad(o);   // stdin 只在首次读时灌一次；文件流此路是空操作
         return ts_doMember(o, dispIdMember, pdp, pVarResult, pexcep);
     }
 
