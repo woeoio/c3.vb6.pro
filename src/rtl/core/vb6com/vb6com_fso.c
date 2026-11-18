@@ -170,7 +170,10 @@ static wchar_t* fso_argStr(DISPPARAMS* pdp, int32_t formalIdx) {
     if (V_VT(v) == VT_BSTR) { wcsncpy(out, V_BSTR(v) ? V_BSTR(v) : L"", 1023); return out; }
     {
         VARIANT tmp; VariantInit(&tmp);
-        if (SUCCEEDED(VariantChangeType(&tmp, v, 0, VT_BSTR)) && V_VT(&tmp) == VT_BSTR)
+        // R1（账 #305 §B224）: 目的档是 BSTR 时**只许问 vb6_ComChangeType** ——
+        // oleaut32 的 VariantChangeType 把 True/False 交成 "-1"/"0"，与 VB6 的
+        // "True"/"False" 不同口径。静态门 check_variant_to_string_authority 就盯这一格。
+        if (SUCCEEDED(vb6_ComChangeType(&tmp, v, VT_BSTR)) && V_VT(&tmp) == VT_BSTR)
             wcsncpy(out, V_BSTR(&tmp) ? V_BSTR(&tmp) : L"", 1023);
         VariantClear(&tmp);
     }

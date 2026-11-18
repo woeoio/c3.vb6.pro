@@ -33,15 +33,16 @@ if ($nTagDef -ne 1) { $bad += ("R1 tagger definitions = " + $nTagDef + " (want 1
 # Needles copied verbatim from all CreateObject success returns:
 #   vb6_ComRememberProgID(re, progId);            (C30-10 内置 VBScript.RegExp 抢先拦截)
 #   vb6_ComRememberProgID(dd, progId);            (C30-10 内置 Scripting.Dictionary 抢先拦截)
+#   vb6_ComRememberProgID(fo, progId);            (C30-11 内置 Scripting.FileSystemObject 抢先拦截)
 #   vb6_ComRememberProgID(p, progId);             (local ComLib activation)
 #   vb6_ComRememberProgID((void*)pDisp, progId);  (CoCreateInstance)
-# Count the bare identifier occurrences: 1 definition + 4 tag sites = 5.
-# 四个 tag site 都是同一类（从 CreateObject 返回的对象），不是漏改：
-# 内置对象的 TypeName 也必须答 "Dictionary"/"RegExp"，与真组件一致。
+# Count the bare identifier occurrences: 1 definition + 5 tag sites = 6.
+# 五个 tag site 都是同一类（从 CreateObject 返回的对象），不是漏改：
+# 内置对象的 TypeName 也必须答 "Dictionary"/"RegExp"/"FileSystemObject"，与真组件一致。
 # 判据跟着事实改，但只改这两条计数，R2..R5 不动。
 $nTagUse = @([regex]::Matches($com, 'vb6_ComRememberProgID\s*\(')).Count
-if ($nTagUse -ne 5) {
-    $bad += ("R1 CreateObject tag sites = " + ($nTagUse - 1) + " (want 4: 内置 RegExp + 内置 Dictionary + local ComLib + CoCreateInstance)")
+if ($nTagUse -ne 6) {
+    $bad += ("R1 CreateObject tag sites = " + ($nTagUse - 1) + " (want 5: 内置 RegExp + 内置 Dictionary + 内置 FileSystemObject + local ComLib + CoCreateInstance)")
 }
 # ---- R2: the ProgID's last segment (the coclass name), not the whole ProgID ----
 if (-not $com.Contains("wcsrchr(progId, L'.')")) {
