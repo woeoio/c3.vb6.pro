@@ -287,6 +287,17 @@ void CCodeGen::visit(CallStmt& node) {
                                     // 改前 LongLong 局部不在任何 known 表里 (类型答 Variant),
                                     // 于是这条路也走不到; 登记之后必须补上这一档。
                                     c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrLongLong(" + val + "));");
+                                } else if (cExprIsBareComResult(val)) {
+                                    // C30-11 后记: `Debug.Print "标签"; <晚绑定调用>; "]"` ——
+                                    // 裸晚绑定出口交回的是**堆上 VARIANT\*** (void*), 以前落进
+                                    // DebugWriteLong((int32_t)(...)) 把那个指针当整数打
+                                    // (实测打出 1503978576 这种地址), VB6 打的是值的字符串形。
+                                    // 同一份源码里 `"标签"; v; "]"` (v 是 Variant 变量) 一直是对的。
+                                    c_.emitLine("vb6_DebugWriteBSTR(vb6_VariantToString(vb6_VariantFromComResult(" + val + ")));");
+                                } else if (val.compare(0, 17, "vb6_ComCallBool(") == 0) {
+                                    // C30-11 后记: 前期绑定 Boolean 方法返回 (-1/0 int32) ——
+                                    // VB6 打 True/False, 不是 -1/0。
+                                    c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrBool(" + val + "));");
                                 } else {
                                     // 整数/布尔值, 用DebugWriteLong输出
                                     c_.emitLine("vb6_DebugWriteLong((int32_t)(" + val + "));");

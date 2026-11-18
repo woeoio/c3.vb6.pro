@@ -3993,6 +3993,17 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
                    || (cExpr.compare(cs, 15, "vb6_ComGetProp(") == 0);
         if (comRes) return "vb6_VariantFromComResult(" + cExpr + ")";
     }
+    // C30-11 后记: 前期绑定 COM 方法的 Boolean 返回 (vb6_ComCallBool) —— 同一发调用、
+    // 只是名字分档。VB6 的 `v = fso.FileExists(p)` 里 v 是 Variant(Boolean), 默认档会
+    // 装成 VT_I4(-1)/VT_I2; 这里让它进 Boolean 那一档 (VB6_CStr / VarType 才看得对)。
+    {
+        size_t bs = 0;
+        while (bs < cExpr.size()
+               && (cExpr[bs] == '(' || cExpr[bs] == ' ' || cExpr[bs] == '\t'
+                   || cExpr[bs] == '\n' || cExpr[bs] == '\r')) bs++;
+        if (cExpr.compare(bs, 17, "vb6_ComCallBool(") == 0)
+            return "vb6_VariantBool((int16_t)(" + cExpr + "))";
+    }
     // 账 #305 新账 #407 第一百七十一刀: 与上面 wrapVariantValue 同一问、同一出口 (视图值进装箱站)。
     // 这一站也必须在 inferExprType 之前问: 它对视图名给的是接口模块名，不是 C 侧那一档。
     {

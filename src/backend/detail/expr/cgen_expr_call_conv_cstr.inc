@@ -113,6 +113,13 @@
             // P25: COM属性取值已在args[0]中, 根据取值函数选择CStr变体或跳过
             if (!args.empty()) {
                 const std::string& a0 = args[0];
+                // C30-11 后记: 前期绑定 COM 方法的 Boolean 返回 —— 名字即类型。
+                // 落默认那条 vb6_CStr(vb6_VariantFromValue(...)) 会答 "-1" (int32 档),
+                // VB6 答 "True"/"False"。
+                if (a0.compare(0, 17, "vb6_ComCallBool(") == 0) {
+                    lastExpr_ = "vb6_CStrBool(" + a0 + ")";
+                    return;
+                }
                 if (a0.find("vb6_ComGetStringProp") == 0 || a0.find("vb6_ComCallBSTR") == 0) {
                     Vb6Type cstrArgType = inferExprType(*firstArg);
                     if (cstrArgType == Vb6Type::Date && a0.find("vb6_ComGetStringProp") == 0) {

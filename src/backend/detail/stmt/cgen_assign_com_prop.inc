@@ -760,6 +760,9 @@
             std::string lower = idExpr.name;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
             if (knownLongVars_.count(lower)) comCallType = "Int";
+            // C30-11 后记: 目标是 Boolean 变量 —— 晚绑定结果解封后要保住 Boolean 档
+            // (VarType=11 / CStr 答 True), 与前期绑定那一路 (vb6_ComCallBool) 同口径。
+            else if (knownBoolVars_.count(lower)) comCallType = "Bool";
             else if (knownDoubleVars_.count(lower)) comCallType = "Double";
             else if (knownBstrVars_.count(lower)) comCallType = "BSTR";
             else if (knownObjectVars_.count(lower)) comCallType = "Object";

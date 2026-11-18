@@ -173,6 +173,9 @@ wchar_t* vb6_ComCallBSTR(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);
 int32_t vb6_ComCallInt(void* disp, const wchar_t* methodName,
                        void* args, int32_t argc);
+// C30-11 后记: COM方法调用→VB6 Boolean (-1/0; 与 ComCallInt 同一发调用, 只为分档)
+int32_t vb6_ComCallBool(void* disp, const wchar_t* methodName,
+                        void* args, int32_t argc);
 double vb6_ComCallDouble(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);
 // Fix 140: COM调用结果→Byte() 数组. 结果持 BSTR 时按 VB6 语义转字节数组

@@ -443,6 +443,23 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
         }
         case ASTNodeKind::MemberAccessExpr: {
             auto& ma = static_cast<MemberAccessExpr&>(expr);
+            // C30-11 后记: 前期绑定 COM 成员的 **Boolean 返回** —— 只开这一档, 其余返回类型
+            // 保持原判 (整张表一键放宽影响面太大)。为什么要答: `v = fso.FileExists(p)` /
+            // CStr(...) / Debug.Print 都按 inferExprType 选档, 以前一律答 Variant ⇒
+            // 装箱成 VT_I4(-1) / CStr 答 "-1", 而 VB6 是 Variant(Boolean) / "True"。
+            {
+                if (ma.object && ma.object->kind == ASTNodeKind::IdentifierExpr) {
+                    auto& ro = static_cast<IdentifierExpr&>(*ma.object);
+                    auto itc = knownTypedComVars_.find(Symbol::toLower(ro.name));
+                    if (itc != knownTypedComVars_.end() && itc->second) {
+                        auto itm = itc->second->P().comMethods.find(Symbol::toLower(ma.memberName));
+                        if (itm != itc->second->P().comMethods.end()
+                            && itm->second.returnType == Vb6Type::Boolean) {
+                            return Vb6Type::Boolean;
+                        }
+                    }
+                }
+            }
             // C30-2: TabStrip 集合链的类型 —— 必须排在下面所有分支之前。
             // 为什么要紧：`CStr(TabStrip1.Tabs.Count)` 这形若判成 Unknown/Variant,
             // 发码就套 `vb6_CStr(vb6_VariantFromValue(void*))` ⇒ 真跑打**空**（实测改前

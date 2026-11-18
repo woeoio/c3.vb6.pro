@@ -136,6 +136,10 @@ std::string CCodeGen::comGetterExprForRetCType(const std::string& retCType,
 std::string CCodeGen::comTypedCallExpr(const ComSigView& sv, const std::string& callArgs) const {
     if (sv.found) {
         if (sv.retCType == "BSTR") return "vb6_ComCallBSTR(" + callArgs + ")";
+        // C30-11 后记: Boolean 返回单独一档 —— C 侧同是 int32_t, 不按名字分档的话
+        // 装箱 (boxToVariant) / CStr / Debug.Print 三站分不出「Boolean」与「Integer」,
+        // 实测 `v = fso.FileExists(p)` 的 VarType 是 3(-1) 而不是 11, CStr 答 "-1"。
+        if (sv.sig && sv.sig->returnType == Vb6Type::Boolean) return "vb6_ComCallBool(" + callArgs + ")";
         if (sv.retCType == "int32_t" || sv.retCType == "int16_t") return "vb6_ComCallInt(" + callArgs + ")";
         if (sv.retCType == "double" || sv.retCType == "float") return "vb6_ComCallDouble(" + callArgs + ")";
         if (sv.retCType == "void*") return "vb6_ComCallObject(" + callArgs + ")";
