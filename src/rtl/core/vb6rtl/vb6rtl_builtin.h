@@ -150,7 +150,17 @@ float vb6_CSng(double v);
 // vb6_VariantToDouble —— 它对 vtBSTR 走 vb6_Val(宽松)，于是同一个 `CInt(x)` 对
 // 「x 是 String 变量」报 13、对「x 是装着同一串文本的 Variant」静默给 0，两半答两种。
 // 数值/布尔之外的档仍归 vb6_VariantToDouble 那一枚权威，这里只把文本那一档改问严格解析。
+// C30-11 第六十三刀: 这枚 inline 要抛 94 ⇒ 必须先有 ErrRaise 的原型，否则 C11 里先生成
+// 隐式声明 int()，随后 vb6rtl_array.h 的 void(...) 就成了 C2371 冲突定义。
+void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description);
 static inline double vb6_VariantConvNum(vb6_VARIANT v) {
+    // C30-11 第六十三刀: Variant(Null) 进 CInt/CLng/CDbl/CSng/CCur/CByte/CBool/CSByte/
+    // CUInt/CULng/CUIntLng/CLngLng/CLngPtr 这一族 = **94**（VB6 口径；读数
+    // .temp/null/oracle_num.vbs 全部 94）。Null 不是“数值 0”，以前落到 default 静默给 0。
+    if (v.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+    }
     return (v.vt == vb6_vtBSTR) ? vb6_NumVal(v.bstrVal) : vb6_VariantToDouble(v);
 }
 static inline int16_t vb6_CIntV(vb6_VARIANT v) { return vb6_CInt(vb6_VariantConvNum(v)); }
@@ -159,6 +169,12 @@ static inline double vb6_CDblV(vb6_VARIANT v) { return vb6_VariantConvNum(v); }
 static inline uint8_t vb6_CByteV(vb6_VARIANT v) { return vb6_CByte(vb6_VariantConvNum(v)); }
 static inline float vb6_CSngV(vb6_VARIANT v) { return (float)vb6_VariantConvNum(v); }
 static inline int16_t vb6_CBoolV(vb6_VARIANT v) {
+    // C30-11 第六十三刀: CBool(Null) = 94（读数 oracle_num.vbs）。这一档自己那两条
+    // 早退路不走 vb6_VariantConvNum，Null 会落最后一行静默给 0。
+    if (v.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+    }
     if (v.vt == vb6_vtBoolean) return v.boolVal;
     if (v.vt == vb6_vtBSTR) return vb6_BoolVal(v.bstrVal);
     return vb6_CBool(vb6_VariantToDouble(v));

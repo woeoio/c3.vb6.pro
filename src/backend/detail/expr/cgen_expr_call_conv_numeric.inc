@@ -68,6 +68,10 @@
             else if (callee == "vb6_CByte") callee = "vb6_CByteV";
             else if (callee == "vb6_CSng") callee = "vb6_CSngV";
             else if (callee == "vb6_CBool") callee = "vb6_CBoolV";
+            // C30-11 第六十三刀: CCur 以前没进这张表 —— `CCur(Null)` 发成
+            // vb6_CCur(vb6_VariantToDouble(v))，Null 在这里已经变成 0（读数 oracle_num.vbs
+            // 要 94）。CCurV 走 vb6_VariantConvNum，与 CInt/CLng 同口径。
+            else if (callee == "vb6_CCur")  callee = "vb6_CCurV";
             // ai/032: 四档无符号/窄整型同上
             else if (callee == "vb6_CSByte")   callee = "vb6_CSByteV";
             else if (callee == "vb6_CUInt")    callee = "vb6_CUIntV";

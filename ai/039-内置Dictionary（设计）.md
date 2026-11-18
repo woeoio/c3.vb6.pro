@@ -1685,4 +1685,56 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
 5. 编译器当前对 `Len(Null)` / `Join(Null, …)` / `UBound(Null)` 这类**字面量**直接报编译期错
    （VB4001 / VB3043），所以读数一律用装着 Null 的 Variant 变量取。
 
+### 11.37 第六十三刀：数值/位置站（Variant(Null) → 数值 = 94）
+
+§11.36 遗留 2 那一格。读数 `.temp/null/oracle_num.vbs`（40 条）+ `.temp/null/NumNull.bas`。
+
+#### 一、读数
+
+| 条件 | 真值 | 我们(改前) | 我们(改后) |
+|---|---|---|---|
+| `CInt/CLng/CDbl/CSng/CByte/CBool/CDate(Null)` | 94 | 0 | **94** |
+| `CCur(Null)` | 94 | 0 | 0（遗留 1） |
+| `Chr(Null)` / `Mid("abc", Null)` / `Mid(s,1,Null)` | 94 | 0 | **94** |
+| `Left/Right(s, Null)` / `Space(Null)` / `String(Null, "a")` | 94 | 0 | **94** |
+| `Abs/Int/Fix(Null)` | **Null** | 0 | 0（遗留 2） |
+| `Hex/Oct(Null)` | **Null** | 0 | 94（遗留 3：变成报错了） |
+| `Len/Trim/InStr(Null)` | cscript 给 Null，VB6 按 String 形参给 94 | 94（上一刀） | 94 ✓ |
+| `1 + Null` / `Null * 2` / `-Null` | Null | Null ✓ | Null ✓ |
+| `CInt(Empty)` / `CInt(12)` | 0 / 12 | 0 / 12 ✓ | 0 / 12 ✓ |
+
+#### 二、实现（三枚闸）
+
+1. `vb6_VariantConvNum`（`vb6rtl_builtin.h`）：`vt == vb6_vtNull` ⇒ `ErrRaise(94)`。
+   `CInt/CLng/CDbl/CSng/CByte/CSByte/CUInt/CULng/CULngLng/CLngLng/CLngPtr/CCur` 的 `*V` 变体
+   全走它 ⇒ 一格改完一整族。同文件补 `vb6_ErrRaise` 原型：不补的话 C11 先生成隐式
+   `int(...)`，随后 `vb6rtl_array.h` 的 `void(...)` 就成了 C2371 冲突定义。
+2. `vb6_CBoolV`：它自己那两条早退路（Boolean/BSTR）不走 ConvNum，所以在函数头另加同类闸。
+3. `vb6_VariantToLong`（`vb6rtl.c`）：`case vb6_vtNull` ⇒ 94。这一枚是「Variant → 整数」的
+   形参站/长度站共用的门：`Chr` 的 code、`Mid/Left/Right` 的 start/len、`Space/String` 的
+   计数全经它，于是 M9–M15 一格全开。
+4. `vb6_CDate`（`vb6rtl_conv.c`）：原本 `vtNull` 和 `vtEmpty` 一起返 0，现在只放行 Empty。
+
+#### 三、验收
+
+- 探针 25 条：上表加粗格到位；反向格（`CInt(Empty)=0`、`1 + Null = Null`）未被带跑。
+- 夹具 `tests/test_joinfilter.bas` 补 `JF-nullcint/clng/chr/mid=94`，并用 `JF-cintempty=0/0`、
+  `JF-nullplus=True/0` 钉反向；本机输出与针全一致。
+- 零回归抽检（编译面）：test_joinfilter / test_builtin_arity / test_datelit / test_date_display /
+  b181_baformal / test_redim_elem / ArrayLiteralVariants 全过。
+- 门（GA）见提交信息。
+
+#### 四、遗留
+
+1. **`CCur(Null)` 仍 0**：`CCur` 的 Variant 实参没走 V 变体（发码直接 `vb6_CCur(vb6_VariantToDouble(v))`，
+   Null 在提取时已经变成 0，到 CCur 就看不出 Null）。在 `cgen_expr_call_conv_numeric.inc` 里加的
+   `vb6_CCur → vb6_CCurV` 那段没生效（该站 firstArgIsVariant 为 false，转换在上游双参数站已经做了）⇒
+   要改得动上游站，单开一格。
+2. **`Abs/Int/Fix(Null)` 仍 0（真值 Null）**：它们收的是 `double`，Null 在 `vb6_VariantToDouble`
+   就已丢了；要回 Null 得在“Variant 返回侧”做传播站（整个表达式要是 Variant），与 §11.36 遗留 3
+   （`&`/比较符传播）同一族。
+3. **`Hex/Oct(Null)` 从 0 变成 94**：真值是 Null。根因同遗留 2 —— 它们与长度站共用
+   `vb6_VariantToLong`。这一格是**刻意接受的退步**（0 与 94 都错，94 至少不再静默），
+   等传播站做完再改回 Null。
+
 

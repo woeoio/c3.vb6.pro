@@ -306,6 +306,13 @@ void vb6_Free(void* ptr) {
 
 int32_t vb6_VariantToLong(vb6_VARIANT v) {
     switch (v.vt) {
+        // C30-11 第六十三刀: Null 进 Long 提取 = **94**（VB6 口径）。这一枚是所有
+        // “Variant → 整数”的形参站/长度站（Chr / Mid / Left / Right / Space / String /
+        // InStr start 等）共用的那道门，Null 以前落 default 静默给 0。
+        case vb6_vtNull:
+            vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                         vb6_BSTR_FromStr(L"Invalid use of Null"));
+            return 0;  /* 不可达 */
         case vb6_vtBoolean: return v.boolVal ? -1 : 0;
         case vb6_vtByte:    return (int32_t)v.bVal;
         case vb6_vtInteger: return (int32_t)v.iVal;

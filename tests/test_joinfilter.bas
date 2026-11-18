@@ -93,6 +93,33 @@ Public Sub Main()
     nc = Replace(nv2, "a", "b")
     Debug.Print "JF-nullrep="; Err.Number
 
+    ' 第六十三刀：数值/位置站。VB6 口径 CInt/CLng/CDbl/Chr/Mid(s, Null) 一律 **94**
+    ' （读数 .temp/null/oracle_num.vbs）。改前这一批静默给 0。
+    Err.Clear
+    nc = CInt(nv2)
+    Debug.Print "JF-nullcint="; Err.Number
+
+    Err.Clear
+    nc = CLng(nv2)
+    Debug.Print "JF-nullclng="; Err.Number
+
+    Err.Clear
+    nc = Chr(nv2)
+    Debug.Print "JF-nullchr="; Err.Number
+
+    Err.Clear
+    nc = Mid("abc", nv2)
+    Debug.Print "JF-nullmid="; Err.Number
+
+    ' 反向钉：Empty 不是 Null（必须还是 0），算术传播仍是 Null
+    Err.Clear
+    nc = CInt(Empty)
+    Debug.Print "JF-cintempty="; nc; "/"; Err.Number
+
+    Err.Clear
+    nc = 1 + nv2
+    Debug.Print "JF-nullplus="; IsNull(nc); "/"; Err.Number
+
     ' 与上面相反的一侧（不能误伤）：`&` 走的是宽松口径、`IsNull` 照旧
     Err.Clear
     nc = "x" & "y"

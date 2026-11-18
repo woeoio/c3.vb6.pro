@@ -1045,7 +1045,14 @@ double vb6_CDate(vb6_VARIANT v) {
     // 数值面统一走 vb6_VariantToDouble (它已含 vtDate/vtCurrency/vtByte 各档),
     // 这里只排除"非数值"的几档, 免得又写一份平行表。
     if (v.vt == vb6_vtEmpty || v.vt == vb6_vtNull
-        || v.vt == vb6_vtDispatch || v.vt == vb6_vtError) return 0.0;
+        || v.vt == vb6_vtDispatch || v.vt == vb6_vtError) {
+        // C30-11 第六十三刀: CDate(Null) = **94**（读数 oracle_num.vbs）。Empty 仍是 0。
+        if (v.vt == vb6_vtNull) {
+            vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                         vb6_BSTR_FromStr(L"Invalid use of Null"));
+        }
+        return 0.0;
+    }
     if (v.vt == vb6_vtBSTR) return vb6_DateVal(v.bstrVal);   /* 账 #417: 文本按日期解析，落不到再按严格数值 */
     return vb6_VariantToDouble(v);
 }
