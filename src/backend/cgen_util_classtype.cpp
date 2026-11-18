@@ -1549,18 +1549,17 @@ std::string CCodeGen::toDoubleIfVariant(const std::string& cExpr, const Expr* as
 // **原样**递进去 ⇒ 整只 vb6_VARIANT 结构体交给 BSTR 形参 ⇒ C2440
 // (PhotoDemon Evaluator.c 474: vb6_Like(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。
 std::string CCodeGen::toStringIfVariant(const std::string& cExpr, const Expr* astExpr) {
-    // C30-11 第六十二刀: 这一站是"Variant → String 上下文"的第三个总口
-    // （前两个：wrapToBSTR 与实参站）。VB6 口径下 Variant(Null) → String = **94**，
-    // 读数 .temp/null/oracle_null.vbs: CStr 94 / Asc 94 / Replace 94 / Split 源 94，
-    // 且 `Dim s As String: s = Null` 也答 94（本编译器只在编译期给 VB3003 警告）。
+    // 第六十二刀: `Like` 这一站**不纳入严格口径**。VB6 的 `Null Like "a"` 结果是 Null
+    // （不是 94），而本刀所有读数都没量过 Like；没读数的格子不许顺手收紧，
+    // 否则就是拿一个错换另一个错。故这里保持原宽松出口。
     if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
-        return "vb6_CStrStrict(vb6_VariantFromComResult(" + cExpr + "))";
-    if (isVariantSlot(cExpr, astExpr)) return "vb6_CStrStrict(" + cExpr + ")";
+        return "vb6_VariantToString(vb6_VariantFromComResult(" + cExpr + "))";
+    if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToString(" + cExpr + ")";
     if (astExpr && astExpr->kind == ASTNodeKind::IdentifierExpr) {
         auto& ident = static_cast<IdentifierExpr&>(const_cast<Expr&>(*astExpr));
         std::string lower = ident.name;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (knownVariantVars_.count(lower)) return "vb6_CStrStrict(" + cExpr + ")";
+        if (knownVariantVars_.count(lower)) return "vb6_VariantToString(" + cExpr + ")";
     }
     return cExpr;
 }

@@ -5697,7 +5697,7 @@ if ($Category -in @("all", "run", "bas")) {
         # 账 #464 §B164: 那一格 (Len 的实参) 现在是**一枚具名带权临时量** ——
         # 转换本身 (vb6_VariantToString) 没变, 只是它落进了临时量的声明里, 语句末按档收回。
         # ⇒ 钉的形状从「内联」改成「声明 + 引用」两枚 (档 = BSTR ⇒ 收回用 vb6_BSTR_Free)。
-        'BSTR _own_1 = vb6_VariantToString(h->PV  /* class var .PV field variant */);',
+        'BSTR _own_1 = vb6_CStrStrict(h->PV  /* class var .PV field variant */);',
         'vb6_CStrLong(vb6_Len(_own_1))',
         'vb6_B171Main_EchoBack((&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=h->PS  /* class var .PS field */}))'
     )
@@ -5718,7 +5718,7 @@ if ($Category -in @("all", "run", "bas")) {
         "$Tests\b172_paramslot\B172Main.bas", "$Tests\b172_paramslot\B172Holder.cls") @(
         'vb6_InStr(1, vb6_VariantToString((*h)->PV  /* class var .PV field variant */)',
         'vb6_InStr(1, vb6_VariantToString((*h)->PZ  /* class var .PZ field variant */)',
-        'vb6_Replace(vb6_VariantToString((*h)->PV  /* class var .PV field variant */)',
+        'vb6_Replace(vb6_CStrStrict((*h)->PV  /* class var .PV field variant */)',
         'vb6_InStr(1, vb6_VariantToString((*h)->PN  /* class var .PN field variant */)',
         'vb6_InStr(1, vb6_VariantToString(_vb6_with_0->PZ  /* With class .PZ field variant */)',
         'vb6_InStr(1, (*h)->PS  /* class var .PS field */,',
@@ -5750,7 +5750,7 @@ if ($Category -in @("all", "run", "bas")) {
         # 账 #464 §B164: 这两格 (Len 的实参 / needle 位的字面量) 现在是**具名带权临时量** ——
         # 转换与字面量本身没变, 只是落进了临时量的声明里, 语句末按档收回 ⇒ 钉的形状改成
         # 「声明 + 引用」两枚 (档 = BSTR ⇒ 收回用 vb6_BSTR_Free)。
-        'BSTR _own_1 = vb6_VariantToString(u.UV);',
+        'BSTR _own_1 = vb6_CStrStrict(u.UV);',
         'vb6_CStrLong(vb6_Len(_own_1))',
         'BSTR _own_4 = vb6_BSTR_FromStr(L"t");',
         'vb6_InStr(1, s, _own_4)'
@@ -6606,7 +6606,7 @@ if ($Category -in @("all", "run", "bas")) {
         'vb6_BSTR_Assign(&s2, vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetProp(at, L"value"))));',
         # 账 #464 §B164: 那一格 (Len 的实参) 现在是**一枚具名带权临时量** ——
         # 转换本身没变, 只是它落进了临时量的声明里, 语句末按档收回。
-        'BSTR _own_1 = vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetProp(at, L"value")));',
+        'BSTR _own_1 = vb6_CStrStrict(vb6_VariantFromComResult(vb6_ComGetProp(at, L"value")));',
         'n = vb6_Len(_own_1);'
     )
     # 两面钉：证人（同一次读取里 nodeName 是真 BSTR 档，必须仍走 GetStringProp）+ 反面 —— 一旦有人

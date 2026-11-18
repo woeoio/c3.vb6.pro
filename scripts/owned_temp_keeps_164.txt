@@ -44,6 +44,7 @@ vb6_CStrDateFromBSTR|0	0	handoff-to-plain:vb6_CStrDate	0	open	BSTR
 vb6_CStrDblFromBSTR|0	0	handoff-to-plain:vb6_CStrDbl	0	open	BSTR
 vb6_CStrDblFromVariant|0	0	handoff-to-plain:vb6_CStrDbl	0	open	VARIANT
 vb6_CStrLongFromVariant|0	0		0	open	VARIANT
+vb6_CStrStrict|0	0	handoff-reads:vb6_CStr	0	open	VARIANT
 vb6_CStrULongFromVariant|0	0		0	open	VARIANT
 vb6_CStrULongLongFromVariant|0	0		0	open	VARIANT
 vb6_CUIntBSTR|0	0	handoff-to-plain:vb6_CUInt	0	open	BSTR

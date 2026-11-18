@@ -214,6 +214,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Console_ReadKey",
         "vb6_Console_ReadLine",
         "vb6_CStr",
+"vb6_CStrStrict",
         "vb6_CStrBool",
         "vb6_CStrByte",
         "vb6_CStrDate",

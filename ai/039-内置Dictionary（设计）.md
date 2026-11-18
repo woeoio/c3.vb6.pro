@@ -1658,6 +1658,9 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
    > （test_datelit / test_date_display / b181_baformal / test_redim_elem / b591_radixtier）
    > 换来的：改名后本地复现 `dl.c(12): error C2440`，回退即全绿。
 
+   > `Like` 这一站（`toStringIfVariant`，只有 `Like` 用）**不纳入**严格口径：VB6 的
+   > `Null Like "a"` 结果是 Null（不是 94），而本刀读数没量过 Like —— 没读数的格不顺手收紧。
+
 #### 三、验收
 
 - 探针 `NullProbe.bas` 29 条：String 面全部到位（上表加粗格）。
