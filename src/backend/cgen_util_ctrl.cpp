@@ -3767,6 +3767,47 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
     return false;
 }
 
+// C30-11 第六十四刀: Abs/Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位判据。
+//
+// 这两站（wrapVariantValue 存储站 / boxToVariant 实参站）都要先问这一句，且在**各自的
+// inferExprType switch 之前**问：那张表对 Int/Fix 答 Double、对 Hex/Oct 答 String，
+// 一旦先返回 vb6_VariantDouble(...)/vb6_VariantString(...)，就再也到不了这里了
+// （本刀第一版只改了 boxToVariant，实测发码一字未变，就是被 wrapVariantValue 的
+//  `case Vb6Type::Double` 提前收掉了）。
+//
+// 判据是**文本前缀**而不是 inferExprType(实参)==Variant：`vb6_Abs(vb6_VariantToDouble(`
+// 这串本身就证明上游那一站真把 Variant 槽折进来了，而那次推断对 `Dim nv As Variant`
+// 的局部答不出 Variant（第五十二刀那条 AbsV 分支就是这么被挡掉的）。
+static std::string mathNullFamilyV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::IndexOrCallExpr) return std::string();
+    const auto& call = static_cast<const IndexOrCallExpr&>(*node);
+    if (call.positional.size() != 1 || !call.callee
+        || call.callee->kind != ASTNodeKind::IdentifierExpr) return std::string();
+    const std::string fn = Symbol::toLower(
+        static_cast<const IdentifierExpr&>(*call.callee).name);
+    static const struct { const char* vb; const char* pre; const char* out; } kTbl[] = {
+        {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
+        {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
+        {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_FixV("},
+        {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
+        {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
+    };
+    for (const auto& m : kTbl) {
+        if (fn != m.vb) continue;
+        const std::string pre = m.pre;
+        size_t s = 0;
+        while (s < cExpr.size() && (cExpr[s] == '(' || cExpr[s] == ' ')) s++;
+        if (cExpr.compare(s, pre.size(), pre) == 0
+            && cExpr.size() >= s + pre.size() + 2 && cExpr.back() == ')') {
+            // 尾部两层右括号（一层提取、一层调用）一并剥掉。
+            std::string inner = cExpr.substr(s + pre.size(),
+                                             cExpr.size() - s - pre.size() - 2);
+            return std::string(m.out) + inner + ")";
+        }
+    }
+    return std::string();
+}
+
 std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cExpr) const {
     if (!valueNode) return "vb6_VariantEmpty()";
     
@@ -3781,6 +3822,13 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         // 现在字面量也落到 inferExprType → boxToVariant 这一处权威: 后者对 Boolean
         // 发的是同一个 `(int16_t)` 收窄形, 所以发码逐字节不变, 但**档位只有一份**。
         // (字面量落在 inferExprType 的白名单里, 见下面那个 kind 判断。)
+    }
+
+    // C30-11 第六十四刀: Abs/Int/Fix/Hex/Oct 的 Null 传播（必须在下面的
+    // inferExprType switch 之前问，否则被 case Double/String 提前收掉）。
+    {
+        std::string mathV64 = mathNullFamilyV(valueNode, cExpr);
+        if (!mathV64.empty()) return mathV64;
     }
 
     // Fix 090d2: C 表达式顶层已是 vb6_VARIANT 时直接返回, 不再包装 —
@@ -4026,22 +4074,40 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // 上一版把改名放进调用站 fixup，实测 pclinedraw 当场红：
     // `vb6_AbsV(...) < 0.001` ⇒ cl C2440（float→vb6_VARIANT）+ C2088（struct 不能比）。
     if (expr && expr->kind == ASTNodeKind::IndexOrCallExpr) {
-        const auto& call52 = static_cast<const IndexOrCallExpr&>(*expr);
-        if (call52.positional.size() == 1 && call52.callee
-            && call52.callee->kind == ASTNodeKind::IdentifierExpr
-            && Symbol::toLower(static_cast<const IdentifierExpr&>(*call52.callee).name) == "abs"
-            && inferExprType(*call52.positional[0]) == Vb6Type::Variant) {
-            // 实参已经被 Fix 108c 那站折成 `vb6_VariantToDouble(v)`；`vb6_AbsV` 要的是
-            // **原样的 VARIANT**（子类型阶梅全靠 vt 说话），所以把那一层剥回去。
-            const std::string pre52 = "vb6_Abs(vb6_VariantToDouble(";
-            size_t s52 = 0;
-            while (s52 < cExpr.size() && (cExpr[s52] == '(' || cExpr[s52] == ' ')) s52++;
-            if (cExpr.compare(s52, pre52.size(), pre52) == 0
-                && cExpr.size() >= s52 + pre52.size() + 2 && cExpr.back() == ')') {
-                // 尾部两层右括号（一层 ToDouble、一层 Abs）一并剥掉。
-                std::string inner52 = cExpr.substr(s52 + pre52.size(),
-                                                   cExpr.size() - s52 - pre52.size() - 2);
-                return "vb6_AbsV(" + inner52 + ")";
+        const auto& call64 = static_cast<const IndexOrCallExpr&>(*expr);
+        if (call64.positional.size() == 1 && call64.callee
+            && call64.callee->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string fn64 = Symbol::toLower(
+                static_cast<const IdentifierExpr&>(*call64.callee).name);
+            // C30-11 第六十四刀: 这一族真值都是“Null 进、Null 出”（读数 oracle_num.vbs：
+            // Abs/Int/Fix/Hex/Oct(Null) = Null）。它们以前全落在下方装箱表里，Null 到那里
+            // 已被折成 0（Hex/Oct 还要先过第六十三刀新加的 vb6_VariantToLong 严格门 ⇒ 94）。
+            // 处置：整只槽交给 RTL 的 *V 出口，先判 vtNull 再算。
+            //
+            // ⚠ 判据是**文本前缀**而不是 inferExprType：`vb6_Abs(vb6_VariantToDouble(` 这串
+            //   本身就证明上游那一站真把 Variant 槽折进来了。旧版（第五十二刀的 Abs 那一分支）
+            //   还要再问一句 inferExprType(实参)==Variant，而这个推断对 `Dim nv As Variant`
+            //   的局部答不出 Variant ⇒ 整条路根本没走到（本刀实测：改前发码仍是
+            //   vb6_VariantDouble(vb6_Abs(vb6_VariantToDouble(nv)))，Abs(Null) 给 0）。
+            static const struct { const char* vb; const char* pre; const char* out; } k64[] = {
+                {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
+                {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
+                {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_FixV("},
+                {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
+                {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
+            };
+            for (const auto& m64 : k64) {
+                if (fn64 != m64.vb) continue;
+                const std::string pre64 = m64.pre;
+                size_t s64 = 0;
+                while (s64 < cExpr.size() && (cExpr[s64] == '(' || cExpr[s64] == ' ')) s64++;
+                if (cExpr.compare(s64, pre64.size(), pre64) == 0
+                    && cExpr.size() >= s64 + pre64.size() + 2 && cExpr.back() == ')') {
+                    // 尾部两层右括号（一层提取、一层调用）一并剥掉。
+                    std::string inner64 = cExpr.substr(s64 + pre64.size(),
+                                                       cExpr.size() - s64 - pre64.size() - 2);
+                    return std::string(m64.out) + inner64 + ")";
+                }
             }
         }
     }

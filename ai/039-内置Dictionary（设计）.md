@@ -1738,4 +1738,65 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
    `vb6_VariantToLong`。这一格是**刻意接受的退步**（0 与 94 都错，94 至少不再静默），
    等传播站做完再改回 Null。
 
+### 11.38 第六十四刀：Abs/Int/Fix/Hex/Oct 的 Null 传播
+
+§11.37 遗留 2/3 那一族。真值是「Null 进、Null 出」（读数 `.temp/null/oracle_num.vbs`）。
+
+#### 一、根因（两条，都使第五十二刀既有的 `vb6_AbsV` 白写了）
+
+1. `boxToVariant` 里那条 Abs 分支多问了一句 `inferExprType(实参)==Variant`；实测它对
+   `Dim nv As Variant` 的局部答不出 Variant ⇒ 分支不进，发码仍是
+   `vb6_VariantDouble(vb6_Abs(vb6_VariantToDouble(nv)))`。
+2. 更早的一道门在 `wrapVariantValue`：它自己的 `switch (inferExprType)` 对 Int/Fix 先答
+   `Double`、对 Hex/Oct 先答 `String` 并**直接 return**，于是根本轮不到 `boxToVariant`。
+   只改 boxToVariant 时发码一字未变，就是这个原因。
+
+#### 二、实现
+
+1. 抽一个共用判据 `mathNullFamilyV(node, cExpr)`（`cgen_util_ctrl.cpp`）：对 Abs/Int/Fix/Hex/Oct
+   把 `vb6_X(vb6_VariantTo…(槽))` 剥回 `vb6_XV(槽)`。**判据是文本前缀**——
+   `vb6_Abs(vb6_VariantToDouble(` 这串本身已证明上游真折了 Variant 槽，比那次推断硬。
+2. `wrapVariantValue` 与 `boxToVariant` 都**在那张 inferExprType 表之前**先问它。
+3. RTL 新增四个 `static inline vb6_VARIANT vb6_IntV/FixV/HexV/OctV`（`vb6rtl_builtin.h`）：
+   `vtNull` ⇒ `vb6_VariantNull()`，否则维持原算法。⚠ 位置必须在这四枚真原型**之后**，
+   否则 C11 的隐式 `int()` 声明会让它们成 C2371/C2040（本刀实测）。
+
+#### 三、读数
+
+| 条件 | 真值 | 改前 | 改后 |
+|---|---|---|---|
+| `Abs/Int/Fix/Hex/Oct(Null)`（变体位） | Null | 0（Hex/Oct 在上一刀后是 94） | **Null** |
+| `Abs(-3)` / `Abs(-3.5)` | 3 / 3.5 | 同 | 3 / 3.5 ✓ |
+| `Int(3.7)` / `Fix(-3.7)` | 3 / -3 | 同 | 3 / -3 ✓ |
+| `Hex(255)` / `Oct(8)` | "FF" / "10" | 同 | "FF" / "10" ✓ |
+| 数值位（`Abs(v) < 0.001` 这类，不过装箱站） | — | 不变 | 不变 |
+
+#### 四、静态门登记（三面都红过，逐面归因）
+
+1. `check_conv_strict_parse` R2：本来是**本数**（RTL 头里取 Double 的两条路各钉常数）。
+   把这四枚写成头文件 `inline` 时，`vb6_IntV/FixV` 各多一个站点 ⇒ 红。
+   **改法：头里只留原型，身子挪到 `vb6rtl_conv.c`（与 `vb6_AbsV` 同文件）**；
+   `vb6_IntV/FixV` 走 `vb6_VariantConvNum`（文本档按 `vb6_NumVal` 严格解析，与转换站同源）。
+2. `check_owned_temp_keeps`：推导器把 `vb6_FixV/IntV` 判为 **owned VARIANT**（`handoff-to-plain`），
+   把 `vb6_HexV/OctV` 判为 **alias / store**（BSTR 进了 `vb6_VariantString`）。
+   ⇒ 前两枚进 `ownedTempOwnedReturnExits` + `ownedTempOwnedVariantExits` 两张表，
+   后两枚进 `ownedTempExceptions`（'1'/"store"，不提名）；`-Bless` 重写快照（235 行）。
+3. `check_builtin_slot_returns`：派生表 `cgen_variant_slot_prefixes.inc` 依赖重跑
+   `scripts/gen_variant_slot_prefixes.ps1`（50 名）。
+
+#### 五、验收
+
+- 探针全 30 条：M16–M19 变 `isnull=True`；M1–M15/M20–M22 与上一刀逐条相同。
+- 夹具 `tests/test_joinfilter.bas` 补 `JF-nullabs/int/fix/hex/oct=True/0`，并用
+  `JF-hex255=FF/0` 钉非 Null 路；本机输出与针一致。
+- 门（GA）见提交信息。
+
+#### 六、遗留
+
+1. **`&` 与比较符的 Null 传播**（§11.36 遗留 3）：`Null & "x"` → 应为 Null（现 `"x"`）、
+   `Null = ""` → 应为 Null（现 False）。要改运算符发码，且结果档要从 `BSTR`/`bool` 变 Variant，
+   单独一刀。
+2. **数值位的 Null**（`Dim d As Double: d = Abs(nv)`）：不经过装箱站，仍给 0；VB6 是 94
+   （Null → Double）。这一格与「赋值站数值目标收 Null」同族。
+
 

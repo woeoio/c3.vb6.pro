@@ -531,6 +531,17 @@ double vb6_CDate(vb6_VARIANT v);
 BSTR vb6_Hex(int32_t n);
 BSTR vb6_Oct(int32_t n);
 
+// C30-11 第六十四刀: Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位。
+// 读数 .temp/null/oracle_num.vbs：这四格真值都是 **Null**（不是 0，也不是 94）。
+// ⚠ 位置只能放在 vb6_Int/vb6_Fix/vb6_Hex/vb6_Oct 四个原型**之后**；
+// ⚠ 只用 inline 不行：check_conv_strict_parse 的 R2 是本数（header 里取 Double 的两条路
+//   各自的出现数都钉死），把取数写进头会多出站点。
+//   所以头里只留**原型**，身子在 vb6rtl_conv.c（与 vb6_AbsV 同文件）。
+vb6_VARIANT vb6_IntV(vb6_VARIANT v);
+vb6_VARIANT vb6_FixV(vb6_VARIANT v);
+vb6_VARIANT vb6_HexV(vb6_VARIANT v);
+vb6_VARIANT vb6_OctV(vb6_VARIANT v);
+
 // P18-A: 兼容性填平 — 新增RTL函数
 double vb6_CCur(double v);             // Fix 126: CCur 值语义 (4 位小数)
 vb6_VARIANT vb6_CDec(vb6_VARIANT v);     // P20-07: CDec返回真实DECIMAL (vt=14)

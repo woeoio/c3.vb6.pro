@@ -120,6 +120,32 @@ Public Sub Main()
     nc = CCur(2.5)
     Debug.Print "JF-ccur25="; CStr(nc); "/"; Err.Number
 
+    ' 第六十四刀：Abs/Int/Fix/Hex/Oct 是“Null 进、Null 出”（真值 Null，不是 0，也不是 94）
+    Err.Clear
+    nc = Abs(nv2)
+    Debug.Print "JF-nullabs="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = Int(nv2)
+    Debug.Print "JF-nullint="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = Fix(nv2)
+    Debug.Print "JF-nullfix="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = Hex(nv2)
+    Debug.Print "JF-nullhex="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = Oct(nv2)
+    Debug.Print "JF-nulloct="; IsNull(nc); "/"; Err.Number
+
+    ' 非 Null 路未动（变体位只在实参是 Variant 槽时接手）
+    Err.Clear
+    nc = Hex(255)
+    Debug.Print "JF-hex255="; CStr(nc); "/"; Err.Number
+
     ' 反向钉：Empty 不是 Null（必须还是 0），算术传播仍是 Null
     Err.Clear
     nc = CInt(Empty)

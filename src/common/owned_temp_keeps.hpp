@@ -55,6 +55,10 @@ inline const OwnedTempException* ownedTempExceptions() {
         { "vb6_DecimalToR8",      0, '1', "store" },
         { "vb6_DecSetTag",        0, 'U', "handoff-unknown:vb6_DEC_VT" },
         { "vb6_ErrRaise",         1, '1', "store" },
+        // C30-11 第六十四刀: HexV/OctV 把 vb6_Hex/Oct 的 BSTR 交给 vb6_VariantString
+        // （那一枚已登记为 store ⇒ 指针落进比调用活得久的壳）⇒ 本表按 statically 推导的
+        // '1'/'store' 登记 = 不提名。与 scripts/owned_temp_keeps_164.txt 的 K5/K12 同源。
+        { "vb6_HexV",             0, '1', "store" },
         { "vb6_ErrRaise",         2, '1', "store" },
         { "vb6_ho_setVariantBstr",1, '1', "store" },
         { "vb6_IIfVariant",       1, '1', "ret+write" },
@@ -64,6 +68,7 @@ inline const OwnedTempException* ownedTempExceptions() {
         { "vb6_LoadResPicture",   0, '1', "write" },
         { "vb6_LoadResPicture",   1, '1', "write" },
         { "vb6_LoadResString",    0, '1', "write" },
+        { "vb6_OctV",             0, '1', "store" },
         { "vb6_RaiseError",       1, '1', "store" },
         { "vb6_SendKeys",         0, '1', "write" },
         { "vb6_VariantArrayGetVal",0, '1', "write" },
@@ -230,6 +235,10 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_CStrULongFromVariant",
         "vb6_CStrULongLong",
         "vb6_CStrULongLongFromVariant",
+        // C30-11 第六十四刀: Int/Fix 的变体位（返回侧 OWNED，VARIANT 档；
+        // VARIANT 子表那一侧同名单，见 ownedTempOwnedVariantExits）。
+        "vb6_FixV",
+        "vb6_IntV",
         "vb6_CurDir",
         "vb6_CVErr",
         "vb6_DecimalToBSTR",
@@ -345,6 +354,10 @@ inline const char* const* ownedTempOwnedVariantExits() {
         "vb6_AbsV",          // C30-10 第五十二刀: Abs(Variant) 交出一枚**新造**的 VARIANT
         "vb6_CallByName",
         "vb6_CVErr",
+        // C30-11 第六十四刀: Int/Fix 的变体位各交出一枚新造的 VARIANT（其余四枚 HexV/OctV
+        // 推导为 alias/store，走 ownedTempExceptions）。
+        "vb6_FixV",
+        "vb6_IntV",
         "vb6_LoadResString",
         "vb6_VarAddV",
         "vb6_VarDivV",

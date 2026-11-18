@@ -82,6 +82,7 @@ vb6_FileVariantText|0	0	handoff-to-plain:vb6_FileBoolText	0	open	VARIANT
 vb6_Filter|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_FixedStrAssign|2	0	handoff-reads:vb6_BSTR_ToANSI_cap	0	open	BSTR
 vb6_FixedStrAssignFree|2	0	handoff-reads:vb6_FixedStrAssign	0	open	BSTR
+vb6_FixV|0	0	handoff-to-plain:vb6_VariantDouble	0	open	VARIANT
 vb6_Format|0	0		0	open	VARIANT
 vb6_Format|1	0		0	open	BSTR
 vb6_GetAllSettings|0	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
@@ -91,6 +92,7 @@ vb6_GetSetting|0	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
 vb6_GetSetting|1	0	handoff-reads:vb6_RegBuildKey	0	closed	BSTR
 vb6_GetSetting|2	0		0	closed	BSTR
 vb6_GetSetting|3	0		0	closed	BSTR
+vb6_HexV|0	1	store	0	open	VARIANT
 vb6_ho_setVariantBstr|1	1	store	0	open	BSTR
 vb6_IIfBSTR|1	0	handoff-reads:vb6_BSTR_Free	0	open	BSTR
 vb6_IIfBSTR|2	0	handoff-reads:vb6_BSTR_Free	0	open	BSTR
@@ -110,6 +112,7 @@ vb6_InStrVar|1	0	handoff-reads:vb6_InStrC	0	open	BSTR
 vb6_InStrVar|2	0	handoff-reads:vb6_VariantToString	0	open	VARIANT
 vb6_InStrVarC|1	0	handoff-reads:vb6_InStrC	0	open	BSTR
 vb6_InStrVarC|2	0	handoff-reads:vb6_VariantToString	0	open	VARIANT
+vb6_IntV|0	0	handoff-to-plain:vb6_VariantDouble	0	open	VARIANT
 vb6_IsArray|0	0		0	open	VARIANT
 vb6_IsDate|0	0	handoff-reads:vb6_DateCanParse	0	open	VARIANT
 vb6_IsEmpty|0	0		0	open	VARIANT
@@ -152,6 +155,7 @@ vb6_Name|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_Name|1	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_NumTryParse|0	0		0	open	BSTR
 vb6_NumVal|0	0	handoff-reads:vb6_NumTryParse	0	open	BSTR
+vb6_OctV|0	1	store	0	open	VARIANT
 vb6_Open|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_PA_SetBSTR|2	0		0	open	BSTR
 vb6_Print|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
@@ -293,6 +297,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_FileNumText BSTR
 [own] vb6_FileVariantText BSTR
 [own] vb6_FixedStrToBSTR BSTR
+[own] vb6_FixV VARIANT
 [own] vb6_FormatCurrency BSTR
 [own] vb6_FormatDateTime BSTR
 [own] vb6_FormatNumber BSTR
@@ -302,6 +307,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_InputB BSTR
 [own] vb6_InputBox BSTR
 [own] vb6_InputString BSTR
+[own] vb6_IntV VARIANT
 [own] vb6_Join BSTR
 [own] vb6_LCase BSTR
 [own] vb6_LCase_str BSTR
@@ -330,8 +336,10 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_Space BSTR
 [own] vb6_Spc BSTR
 [own] vb6_Str BSTR
+[own] vb6_StrBool BSTR
 [own] vb6_StrConv BSTR
 [own] vb6_StrConvFromByteArray BSTR
+[own] vb6_StrDbl BSTR
 [own] vb6_String BSTR
 [own] vb6_StrReverse BSTR
 [own] vb6_StrSng BSTR
@@ -370,10 +378,12 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_CDec VARIANT
 [alias] vb6_ErrDescription BSTR
 [alias] vb6_ErrSource BSTR
+[alias] vb6_HexV VARIANT
 [alias] vb6_IIfBSTR BSTR
 [alias] vb6_IIfVariant VARIANT
 [alias] vb6_LoadResData VARIANT
 [alias] vb6_LoadResPicture VARIANT
+[alias] vb6_OctV VARIANT
 [alias] vb6_VariantArray VARIANT
 [alias] vb6_VariantArrayGet VARIANT
 [alias] vb6_VariantArrayGetND VARIANT
@@ -395,4 +405,5 @@ vb6_IIfBSTR|2	1	vb6_BSTR_Free	falsepart
 vb6_IIfVariant|1	1	vb6_VariantClear	truepart
 vb6_IIfVariant|2	1	vb6_VariantClear	falsepart
 vb6_LSetFree|0	0	vb6_BSTR_Free	str
+vb6_StrFromNumText|0	0	SysFreeString	num
 vb6_VariantAssign|0	0	vb6_VariantClear	dst

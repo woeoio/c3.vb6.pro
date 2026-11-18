@@ -128,6 +128,28 @@ vb6_VARIANT vb6_AbsV(vb6_VARIANT v) {
         return vb6_VariantDouble(fabs(vb6_VariantToDouble(v)));
     }
 }
+// C30-11 第六十四刀: Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位。
+// 真值读数 .temp/null/oracle_num.vbs：四格都是 Null（不是 0，Hex/Oct 也不是上一刀后的 94）。
+// 身子放在这里而不是头文件的 inline，原因有二：
+//   1. check_conv_strict_parse 的 R2 把 head 里 vb6_VariantToDouble(v) /
+//      vb6_VariantConvNum 的出现数钉成常数，写进头会多出站点；
+//   2. check_builtin_slot_returns 与 owned-temp 表都从 RTL 头派生，原型在头里就够了。
+vb6_VARIANT vb6_IntV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantDouble(vb6_Int(vb6_VariantConvNum(v)));
+}
+vb6_VARIANT vb6_FixV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantDouble(vb6_Fix(vb6_VariantConvNum(v)));
+}
+vb6_VARIANT vb6_HexV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Hex(vb6_VariantToLong(v)));
+}
+vb6_VARIANT vb6_OctV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Oct(vb6_VariantToLong(v)));
+}
 int32_t vb6_Sgn(double x) { return (x > 0) ? 1 : (x < 0) ? -1 : 0; }
 double vb6_Sqr(double x) { return sqrt(x); }
 double vb6_Round(double x, int32_t decimals) {
