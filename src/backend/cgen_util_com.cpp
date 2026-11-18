@@ -109,6 +109,13 @@ CCodeGen::ComSigView CCodeGen::comSigViewOf(const Symbol* comSym,
     return sv;
 }
 
+// C30-11 后记: 只答「返回类型是不是 Boolean」—— 转调 comSigViewOf, 不另开一条读表路
+// (C4 口径: comMethods 只许 comSigViewOf 那一处 find)。
+bool CCodeGen::comMemberReturnsBoolean(const Symbol* comSym, const std::string& memberName) const {
+    ComSigView sv = comSigViewOf(comSym, memberName);
+    return sv.found && sv.sig && sv.sig->returnType == Vb6Type::Boolean;
+}
+
 std::string CCodeGen::comGetterExpr(const ComSigView& sv, const std::string& objExpr,
                                     const std::string& memberName) const {
     if (!sv.found || !sv.isGet) return "";   // put/method/未登记 ⇒ 调用方走晚绑定

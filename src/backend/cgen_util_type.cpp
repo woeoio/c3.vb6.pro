@@ -451,12 +451,11 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                 if (ma.object && ma.object->kind == ASTNodeKind::IdentifierExpr) {
                     auto& ro = static_cast<IdentifierExpr&>(*ma.object);
                     auto itc = knownTypedComVars_.find(Symbol::toLower(ro.name));
-                    if (itc != knownTypedComVars_.end() && itc->second) {
-                        auto itm = itc->second->P().comMethods.find(Symbol::toLower(ma.memberName));
-                        if (itm != itc->second->P().comMethods.end()
-                            && itm->second.returnType == Vb6Type::Boolean) {
-                            return Vb6Type::Boolean;
-                        }
+                    // C4 口径: comMethods 只有 comSigViewOf 一个读出口 —— 这里问
+                    // comMemberReturnsBoolean (它内部转调那一个出口)。
+                    if (itc != knownTypedComVars_.end()
+                        && comMemberReturnsBoolean(itc->second, ma.memberName)) {
+                        return Vb6Type::Boolean;
                     }
                 }
             }
