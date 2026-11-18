@@ -213,6 +213,8 @@ vb6_VarAddV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarAddV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarConcatNullV|2	0	handoff-reads:vb6_BSTR_Free	0	open	BSTR
 vb6_VarConcatNullV|3	0	handoff-reads:vb6_BSTR_Free	0	open	BSTR
+vb6_VarConcatNullVV|0	0	handoff-reads:vb6_CStr	0	open	VARIANT
+vb6_VarConcatNullVV|1	0	handoff-reads:vb6_CStr	0	open	VARIANT
 vb6_VarDivV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarDivV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VariantArrayGetVal|0	1	write	0	open	VARIANT
@@ -389,6 +391,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_LoadResPicture VARIANT
 [alias] vb6_OctV VARIANT
 [alias] vb6_VarConcatNullV VARIANT
+[alias] vb6_VarConcatNullVV VARIANT
 [alias] vb6_VariantArray VARIANT
 [alias] vb6_VariantArrayGet VARIANT
 [alias] vb6_VariantArrayGetND VARIANT

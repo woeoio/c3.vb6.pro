@@ -3894,27 +3894,106 @@ std::string cgNullGuardCmpV(const ASTNode* node, const std::string& cExpr) {
     return "vb6_VCmpNullV(" + a + ", " + b + ", " + inner + ")";
 }
 
+namespace {
+// 下面四枚只服务 cgNullGuardConcatV 的“链”解析（第六十九刀）。
+bool cgIsIdentText(const std::string& s) {
+    if (s.empty()) return false;
+    for (char ch : s) {
+        bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+            || (ch >= '0' && ch <= '9') || ch == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+bool cgIsVariantValuedText(const std::string& s) {
+    if (cgIsIdentText(s)) return true;
+    if (s.compare(0, 20, "vb6_VarConcatNullVV(") == 0) return true;
+    if (s.compare(0, 19, "vb6_VarConcatNullV(") == 0) return true;
+    return false;
+}
+
+// `vb6_CStr(vb6_VariantFromValue(X))` → X（X 允许是任意括号配平的 Variant 值表达式）
+bool cgVariantOfCStr(const std::string& s, std::string& x) {
+    static const std::string kPre = "vb6_CStr(vb6_VariantFromValue(";
+    if (s.compare(0, kPre.size(), kPre) != 0) return false;
+    if (s.size() < kPre.size() + 3 || s.back() != ')') return false;
+    if (s.compare(s.size() - 2, 2, "))") != 0) return false;
+    x = s.substr(kPre.size(), s.size() - kPre.size() - 2);
+    int depth = 0;
+    for (size_t i = 0; i < x.size(); ++i) {
+        if (x[i] == '(') ++depth;
+        else if (x[i] == ')') { if (--depth < 0) return false; }
+        else if (x[i] == '"') { for (++i; i < x.size() && x[i] != '"'; ++i) {} }
+    }
+    return depth == 0;
+}
+
+// 把 `vb6_BSTR_ConcatFree(A, B)` 的左结合树拆成叶子表（发码的链就是这形：
+// `ConcatFree(ConcatFree(a,b),c)`），叶子必须是整只 Variant 的 CStr。
+bool cgFlattenConcatLeaves(const std::string& s, std::vector<std::string>& out) {
+    static const std::string kCF = "vb6_BSTR_ConcatFree(";
+    size_t sp = 0;
+    while (sp < s.size() && s[sp] == ' ') sp++;
+    const std::string body = s.substr(sp);
+    if (body.compare(0, kCF.size(), kCF) == 0 && !body.empty() && body.back() == ')') {
+        const std::string args = body.substr(kCF.size(), body.size() - kCF.size() - 1);
+        size_t comma = std::string::npos;
+        int depth = 0;
+        for (size_t i = 0; i < args.size(); ++i) {
+            char ch = args[i];
+            if (ch == '(') ++depth;
+            else if (ch == ')') { if (--depth < 0) return false; }
+            else if (ch == '"') { for (++i; i < args.size() && args[i] != '"'; ++i) {} }
+            else if (ch == ',' && depth == 0) { comma = i; break; }
+        }
+        if (comma == std::string::npos || depth != 0) return false;
+        return cgFlattenConcatLeaves(args.substr(0, comma), out)
+            && cgFlattenConcatLeaves(args.substr(comma + 1), out);
+    }
+    std::string x;
+    if (!cgVariantOfCStr(body, x) || !cgIsVariantValuedText(x)) return false;
+    out.push_back(x);
+    return true;
+}
+}  // namespace
+
 std::string cgNullGuardConcatV(const ASTNode* node, const std::string& cExpr) {
     if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
     // 幂等：同上，第二层拿到的已经是 vb6_VarConcatNullV(...)，不能再包。
     if (cExpr.find("vb6_VarConcatNullV(") != std::string::npos) return std::string();
+    if (cExpr.find("vb6_VarConcatNullVV(") != std::string::npos) return std::string();
     const auto& bin = static_cast<const BinaryExpr&>(*node);
     if (bin.op != BinaryOp::Concat) return std::string();
 
     // 只认「两侧都是整枚 Variant 槽转出的 CStr」这一形；其它形（字面量/数值/嵌套拼接）
     // 一律不动 —— 那些格的真值本来就等于零期值（读数 R4..R6/R10/R12）。
     static const std::string kSlotPre = "vb6_CStr(vb6_VariantFromValue(";
-    auto slotOf = [](const std::string& s) -> std::string {
+    // 从 vb6_CStr(vb6_VariantFromValue(X)) 里取回 X。第六十九刀之前只认 X = 一个标识符，
+    // 所以 `(Null & Null) & Null` 这种链永远不命中（左操作数是内层守卫的调用）。
+    // 现在 X 允许是任意 Variant 值表达式（括号要配平）。
+    auto varOf = [](const std::string& s) -> std::string {
         if (s.compare(0, kSlotPre.size(), kSlotPre) != 0) return std::string();
-        if (s.size() < kSlotPre.size() + 3) return std::string();
+        if (s.size() < kSlotPre.size() + 3 || s.back() != ')') return std::string();
         if (s.compare(s.size() - 2, 2, "))") != 0) return std::string();
-        std::string id = s.substr(kSlotPre.size(), s.size() - kSlotPre.size() - 2);
-        for (char ch : id) {
+        std::string x = s.substr(kSlotPre.size(), s.size() - kSlotPre.size() - 2);
+        int depth = 0;
+        for (size_t i = 0; i < x.size(); ++i) {
+            if (x[i] == '(') ++depth;
+            else if (x[i] == ')') { if (--depth < 0) return std::string(); }
+            else if (x[i] == '"') { for (++i; i < x.size() && x[i] != '"'; ++i) {} }
+        }
+        if (depth != 0) return std::string();
+        return x;
+    };
+    auto isIdent = [](const std::string& s) -> bool {
+        if (s.empty()) return false;
+        for (char ch : s) {
             bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
                 || (ch >= '0' && ch <= '9') || ch == '_';
-            if (!ok) return std::string();
+            if (!ok) return false;
         }
-        return id;
+        return true;
     };
 
     size_t s = 0;
@@ -3954,10 +4033,16 @@ std::string cgNullGuardConcatV(const ASTNode* node, const std::string& cExpr) {
     };
     trim(a);
     trim(b);
-    const std::string idA = slotOf(a);
-    const std::string idB = slotOf(b);
-    if (idA.empty() || idB.empty()) return std::string();
-    return "vb6_VarConcatNullV(&" + idA + ", &" + idB + ", " + a + ", " + b + ")";
+    std::vector<std::string> leaves;
+    if (!cgFlattenConcatLeaves(body, leaves) || leaves.size() < 2) return std::string();
+    if (leaves.size() == 2 && cgIsIdentText(leaves[0]) && cgIsIdentText(leaves[1]))
+        return "vb6_VarConcatNullV(&" + leaves[0] + ", &" + leaves[1] + ", " + a + ", " + b + ")";
+    // 链（≥3 叶）或叶子不是变量槽 ⇒ 整枚版逐级左结合：
+    //   ((Null & Null) & Null) 与 VB6 的链完全同一个折叠顺序。
+    std::string acc = leaves[0];
+    for (size_t i = 1; i < leaves.size(); ++i)
+        acc = "vb6_VarConcatNullVV(" + acc + ", " + leaves[i] + ")";
+    return acc;
 }
 
 // C30-11 第六十七刀: `Or`/`And` 的 Null 真值表（变体上下文那两站）。

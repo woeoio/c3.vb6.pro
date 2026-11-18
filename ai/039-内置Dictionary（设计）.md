@@ -2051,3 +2051,69 @@ False，其余一律 Null**。
 - 夹具新增 11 针：`JF-nullxor`/`-nullxor2`/`-nulleqv`/`-nulleqv2`、`JF-nullimp5`/`-nullimptrue`/
   `-nullimpfalse`/`-nullimpnot`/`-notimptrue`/`-notimpnull`、`JF-nullorneg`。
 - 四门本机 PASS（keeps 237 行 / 提名 193 / slot_returns / conv_strict_parse / reclaim）。
+
+### 11.43 第六十九刀：拼接链的 Null 折叠（`Null & Null & Null`）
+
+第二批探针（`tests/vb6probe/NullFamilyProbe.bas`，用户真实 VB6 IDE）的 G 段六格：
+
+| 格 | 条件 | VB6 实测 |
+|---|---|---|
+| G1 | `Null & Null & Null & Null` | **Null** |
+| G3 | `(Null & Null) & (Null & Null)` | **Null** |
+| G2 | `Null & Null & 1` | `"1"`（String） |
+| G4 | `Null & Null & "b" & Null` | `"b"`（String） |
+| G5 | `"" & Null & "" & Null` | `""`（String） |
+| G6 | `Null & Empty` | `""`（String） |
+
+即：`&` 仍按左结合二叉树逐步合并，**只在某个节点两侧同时为 Null 时**该节点折 Null，
+折出来的 Null 再往上当左操作数继续走 —— 与 11.40 的两槽规则是同一条。
+
+#### 一、根因
+
+发码器把链**摊平成 n 元**：`Null & Null & Null` 发成
+`vb6_VariantString(vb6_BSTR_ConcatFree(vb6_BSTR_ConcatFree(A, B), C))`。
+而 11.40 的守卫只认“两个实参都是 `vb6_CStr(vb6_VariantFromValue(<标识符>))`”这一形，
+链的左操作数是**内层拼接子树**而不是一个槽 ⇒ 永不命中（第一版就是这样，C2 仍答 `""`）。
+
+#### 二、修法
+
+1. 守卫改成**递归拆 `vb6_BSTR_ConcatFree` 树**收集叶子（叶子必须能取回一枚整只 Variant），
+   再按左结合逐级折；叶子是两个变量槽时仍走原来的指针版（发码不变）。
+2. 新增整枚接收出口 `vb6_VARIANT vb6_VarConcatNullVV(vb6_VARIANT, vb6_VARIANT)`：
+   两侧都 Null ⇒ Null，否则自己 `vb6_CStr` 两串、拼接、两颗都放。
+   **为什么另开一枚**：两槽版收 `vb6_VARIANT*`，而链上的操作数是内层调用的**右值**，
+   取地址就得先落临时，而那枚临时里的 BSTR 没人放（漏）。
+3. 叶子只认「变量槽」与「本守卫自己链出来的结果」两形；字面量档 `(int32_t)(5)`、
+   BSTR 表达式一律不碰（真值已由 G2/G4/G5 覆盖）—— 它们的 C 类型不是 `vb6_VARIANT`，
+   递给整枚版就是 C2440。
+
+#### 三、登记（这一刀最贵的一步）
+
+新增“返回 VARIANT”的出口会撞两门：`check_owned_temp_keeps` 与 `check_builtin_slot_returns`。
+按规矩不能往白名单塞名字，先归因：推导把 `vb6_VarConcatNullVV` 判为 **alias**
+（与已在册的 `vb6_VarConcatNullV` 同族 —— 它们的返回表达式都落到 `vb6_VariantString(...)`，
+推导不把这一形认作 mint）。所以正确做法是**撤名**：两枚都不进 `ownedTempOwned*` 两份名单。
+slot 表由 `gen_variant_slot_prefixes.ps1` 重生成（53 → **54** 名）。
+
+#### 四、验收
+
+- 探针复跑：G1..G6 六格与 VB6 逐格一致。
+- 夹具补 `JF-nullcat3=True/0`、`JF-nullcat4=True/0`、`JF-nullcat4g=True/0`、
+  `JF-nullcat3b=False/1/String/0`；原有 `JF-nullcat=True/0`、`JF-nullcatone=False/a/0`、
+  `JF-nullcatcstr=94` 全未变。
+- 四门本机 PASS（keeps 239 行 / 提名 195 / slot_returns 54 名 / conv_strict_parse / reclaim）。
+
+#### 五、下一批（读数已齐，未做）
+
+| 族 | VB6 实测 | 现在 |
+|---|---|---|
+| `Len/Trim/LTrim/RTrim/UCase/LCase(Null)` | **Null**、err 0（A1/B1/B4/B5/B6/B7） | 0/`""`、err 94 |
+| `Len(Empty)` / `Trim(Empty)` | 0（Long）/ `""` | — |
+| `Len(<Long 变量>)` | **4（Integer）**（A3/A5） | — |
+| `Val(Null)` / `Asc(Null)` | **94** | 94（值待核） |
+| `Asc(Empty)` | **5** | 待核 |
+| `UBound/LBound(Null/Empty/数字)` | **13**（D1..D5） | 9 |
+| `s = Null` / `s = CStr(Null)` / `s = Hex(Null)` | **94**，目标不变（S1/S4/S5、E6/E7） | err 0 |
+| `d = Null` / `d = Abs(Null)` / `d = Null*1` | **94**，目标不变（N1..N4） | 0、err 0 |
+| `d = <字符串表达式>` | **13**（F2） | 编译期 C2440 |
+| `b = Null` / `b = (Null = "")` | **94**（F6/F7） | True、err 0 |

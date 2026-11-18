@@ -1337,6 +1337,32 @@ vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb)
     }
 }
 
+/* C30-11 第六十九刀: 拼接链的 Null 折叠（`Null & Null & Null`）。
+   读数（真实 VB6 IDE，用户 2026-11-19，tests/vb6probe/NullFamilyProbe.bas）：
+     G1  Null & Null & Null & Null      = Null
+     G3  (Null & Null) & (Null & Null)  = Null
+     G2  Null & Null & 1                = "1" (String)
+     G4  Null & Null & "b" & Null       = "b" (String)
+     G5  "" & Null & "" & Null          = ""  (String)
+     G6  Null & Empty                   = ""  (String)
+   即：`&` 仍是左结合二叉树，**只在某个节点两侧同时为 Null 时**该节点折 Null；
+   折出来的 Null 再当左操作数继续往上走 —— 与上面两槽版完全同一个规则，
+   差别只在“操作数可以是一枚已折好的 Null”而不只是变量槽。
+   为什么另开一枚：两槽版收的是 `vb6_VARIANT*`，而链上的操作数是**内层守卫调用的
+   返回值**（右值），拿不到地址。取址就得先落一个临时，而那枚临时里带的 BSTR
+   没人放（漏）。改成整枚接收 + 自己造串，所有权只在函数内部走一趟。 */
+vb6_VARIANT vb6_VarConcatNullVV(vb6_VARIANT a, vb6_VARIANT b) {
+    if (a.vt == vb6_vtNull && b.vt == vb6_vtNull) return vb6_VariantNull();
+    {
+        BSTR sa = vb6_CStr(a);
+        BSTR sb = vb6_CStr(b);
+        BSTR r = vb6_BSTR_Concat(sa, sb);
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantString(r);
+    }
+}
+
 /* C30-11 第六十七刀: `Or`/`And` 的 Null 真值表。
    读数：.temp/null/oracle_logic.vbs（VBScript）+ **真实 VB6 IDE 实测（用户，2026-11-19）**
      Null Or True  = True      Null Or False  = Null     True Or Null  = True   False Or Null = Null

@@ -5343,7 +5343,8 @@ if ($Category -in @("all", "run", "bas")) {
 "JF-nullxor=True/0", "JF-nullxor2=True/0", "JF-nulleqv=True/0", "JF-nulleqv2=True/0",
 "JF-nullimp5=False/5/Integer/0", "JF-nullimptrue=False/True/Boolean/0", "JF-nullimpfalse=True/0",
 "JF-nullimpnot=False/-6/Integer/0", "JF-notimptrue=False/True/Boolean/0", "JF-notimpnull=True/0",
-"JF-nullorneg=False/-1/Integer/0", "JF-cintempty=0/0", "JF-nullplus=True/0", "JF-concat-ok=xy/0", "JF-isnull=True/0", "JF-DONE")
+"JF-nullorneg=False/-1/Integer/0",
+"JF-nullcat3=True/0", "JF-nullcat4=True/0", "JF-nullcat4g=True/0", "JF-nullcat3b=False/1/String/0", "JF-cintempty=0/0", "JF-nullplus=True/0", "JF-concat-ok=xy/0", "JF-isnull=True/0", "JF-DONE")
     # <vbeclipse>: 内置函数 VB6 合法最小实参形 (Format(x)/Filter(a,x)/GetAttr/SetAttr) 的
     # 编译面护栏 —— 价值在"整条用例能编过", needle 只取 locale 无关读数
     # (AR-fmt2 走小数点, 随区域设置变, 故不入 needle)。

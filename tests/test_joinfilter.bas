@@ -310,5 +310,21 @@ Public Sub Main()
     e1 = Join(two, ",")
     Debug.Print "JF-2d-err="; Err.Number
     On Error GoTo 0
+    ' 第六十九刀：拼接链（VB6 IDE 实测 G1..G6）
+    Err.Clear
+    nc = (nv2 & nv2 & nv2)
+    Debug.Print "JF-nullcat3="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 & nv2 & nv2 & nv2)
+    Debug.Print "JF-nullcat4="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = ((nv2 & nv2) & (nv2 & nv2))
+    Debug.Print "JF-nullcat4g="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = (nv2 & nv2 & 1)
+    Debug.Print "JF-nullcat3b="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
     Debug.Print "JF-DONE"
 End Sub
