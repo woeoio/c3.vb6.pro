@@ -142,6 +142,7 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6COM_COLLECTION_ENUM_C, "vb6com_collection_enum.c" },
     { RTL_VB6COM_REGEXP_C,          "vb6com_regexp.c" },
     { RTL_VB6COM_DICT_C,            "vb6com_dict.c" },
+    { RTL_VB6COM_FSO_C,             "vb6com_fso.c" },
     { RTL_VB6FORMS_INTERNAL_H,     "vb6forms_internal.h" },
     { RTL_VB6FORMS_CTRL_C,         "vb6forms_ctrl.c" },
     { RTL_VB6FORMS_LIST_C,         "vb6forms_list.c" },

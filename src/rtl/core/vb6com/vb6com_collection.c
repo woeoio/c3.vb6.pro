@@ -416,6 +416,13 @@ void* vb6_NewBuiltinObject(const wchar_t* className) {
         if (d) vb6_ComRememberProgID(d, L"Scripting.Dictionary");
         return d;
     }
+    // C30-11 第一刀：内置 FileSystemObject 的 New 那条腿（同样默认关，C3_FSO_NATIVE=1 才拦）。
+    // 不登记 ProgID 的话 TypeName 会答 "Object"。
+    if (vb6_Fso_NativeEnabled() && vb6_Fso_IsClassName(className)) {
+        void* f = vb6_Fso_New();
+        if (f) vb6_ComRememberProgID(f, L"Scripting.FileSystemObject");
+        return f;
+    }
     if (vb6_RegExp_IsProgramId(className)) {
         void* r = vb6_RegExp_New();
         if (r) vb6_ComRememberProgID(r, L"VBScript.RegExp");

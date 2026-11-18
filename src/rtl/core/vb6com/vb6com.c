@@ -1272,6 +1272,15 @@ void* vb6_CreateObject(const wchar_t* progId) {
         }
     }
 
+    // C30-11 第一刀：内置 FileSystemObject。
+    // **默认关**（vb6_Fso_NativeEnabled() 只认 C3_FSO_NATIVE=1）—— 成员面还在刀1，
+    // 现在抢先拦截就会把 GetFolder/Drives/OpenTextFile 那几格变成 438。
+    // 刀5 成员面盖住语料后才翻默认，并让 C3_FSO_PREFER_MS 当对照组（ai/040 §7.5）。
+    if (vb6_Fso_NativeEnabled() && vb6_Fso_IsProgramId(progId)) {
+        void* fo = vb6_Fso_New();
+        if (fo) { vb6_ComRememberProgID(fo, progId); return fo; }
+    }
+
     // Fix 160: ComLib= 免注册 — 本地 DLL 优先 (LoadLibrary+DllGetClassObject, 绕开注册表).
     // 表未声明 (ComLib= 为空) 时 vb6_ComLibLookup 恒返 NULL, 该块整体跳过,
     // 后续注册表路径与改动前完全一致 — 未声明组件零变化.

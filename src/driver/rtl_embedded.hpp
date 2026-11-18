@@ -120,6 +120,8 @@ enum RtlResourceID {
     RTL_VB6COM_REGEXP_C        = 227,
     // C30-10 第二十六刀：内置 Scripting.Dictionary
     RTL_VB6COM_DICT_C          = 228,
+    // C30-11 第一刀：内置 Scripting.FileSystemObject
+    RTL_VB6COM_FSO_C           = 229,
     // vb6forms_uc 按族细分 (2026-09-19): 内部头 + 6 族编译单元 + 7 个函数体片段
     RTL_VB6FORMS_UC_INTERNAL_H             = 179,
     RTL_UC_HOST_C                          = 180,
