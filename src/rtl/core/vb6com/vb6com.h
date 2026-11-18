@@ -251,6 +251,9 @@ wchar_t* vb6_ComCallBSTR(void* disp, const wchar_t* methodName,
 // COM方法调用→int32_t (内部UnpackInt+VarClear)
 int32_t vb6_ComCallInt(void* disp, const wchar_t* methodName,
                        void* args, int32_t argc);
+// C30-11 后记: COM方法调用→VB6 Boolean (-1/0; 与 ComCallInt 同一发调用, 只为分档)
+int32_t vb6_ComCallBool(void* disp, const wchar_t* methodName,
+                        void* args, int32_t argc);
 // COM方法调用→double (内部UnpackDouble+VarClear)
 double vb6_ComCallDouble(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);

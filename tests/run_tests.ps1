@@ -7617,9 +7617,13 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_TreeView_NotifyExpanded((void*)lParam) == -1',
         # 账 #88: 比较上下文里字符串成员必须按 BSTR 解包 (TV35 那条链式形态)。
         'vb6_CStr(vb6_VariantFromValue(vb6_ComGetStringProp(vb6_ComCallObject(vb6_TreeView_Nodes(',
-        # 同一条判据的选择性那一半: 数值成员 (Index) 照旧走 int 档 —— 这条在修复前后都在,
+        # 同一条判据的选择性那一半: 数值成员走**数值档**，不许被改成 BSTR 档 ——
         # 它的作用是挡住"为了修字符串把两档一起改成 BSTR"那种反向过度修正。
-        'vb6_ComGetIntProp(vb6_ComCallObject(vb6_TreeView_Nodes((void*)vb6_hwnd_tv1), L"Item", (void*[]){vb6_ComPackInt(2)}, 1), L"Index")',
+        # C30-11 后记（遗留问题②）: 关系比较的晚绑定属性改按 Double 解封 ——
+        # 真引擎读数 `drv.TotalSize > 0` = True（TypeName=Double/VarType=5），
+        # 旧口径发 IntProp 会把 254 GB 截成 0 答 False。所以这里钉的是 DoubleProp，
+        # int 档不再出现于关系比较（算术运算仍按 Long，未变）。
+        'vb6_ComGetDoubleProp(vb6_ComCallObject(vb6_TreeView_Nodes((void*)vb6_hwnd_tv1), L"Item", (void*[]){vb6_ComPackInt(2)}, 1), L"Index")',
         'vb6_CStrBool(vb6_TreeView_GetCheckBoxes('
     )
     Test-EmitcAbsent "tv_emitc_no_com_fallback" @("$Tests\ctrltreeview\TvfApp.vbp") @(

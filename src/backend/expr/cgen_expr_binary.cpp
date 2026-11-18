@@ -78,7 +78,18 @@ void CCodeGen::visit(BinaryExpr& node) {
             return "BSTR";
         }
         if (inferExprType(*sib) == Vb6Type::String) return "BSTR";
-        return "Long";
+        // C30-11 后记（遗留问题②）: 关系比较的对侧是**数值**时，这一侧按 Double 解封。
+        // 读数（真 VB 引擎 VBScript 作参照，宿主同一套 oleaut32 晚绑定）:
+        //   drv.TotalSize -> VarType=5 (R8), CStr=254467371008
+        //   drv.TotalSize > 0  => True      drv.TotalSize = 0  => False
+        // C3 之前这两行是 False / True —— 因为默认按 "Long" 解封，发的是
+        //   vb6_ComGetIntProp(drv, L"TotalSize") > 0
+        // 而 ComGetIntProp 内部是 VariantChangeType(VT_R8 -> VT_I4)，254 GB 截成 int32 后
+        // 落回 0（本机读数 A5/A7 就是这个形状）。VB6 的拓宽规则是 R8 胜过 I2/Long，
+        // 所以未知成员类型的关系比较按 Double 问，不再猜整数。
+        // 不受影响的两族: ① 算术运算（上面 `!isCmp88` 那句仍答 "Long"，P24-02 口径不变）;
+        // ② 早绑定成员（comGetterExpr 按 typelib 签名选 getter，根本走不到这里）。
+        return "Double";
     };
     // 账 #464 §B164: 拼接站那条判据读的是**左操作数的发码文本**（"左文本里含
     // vb6_BSTR_Concat 子串" ⇒ 发 vb6_BSTR_ConcatFree，而 ConcatFree 会放掉左操作数）

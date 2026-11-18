@@ -12,9 +12,17 @@
 与内置 `Scripting.Dictionary`、`VBScript.RegExp` 同一条腿：目标机不装 Scripting Runtime
 （`scrrun.dll`）也能跑，语义由我们这边钉死，而不是由机器上装的是哪个版本的 scrrun 说话。
 
-**不做的**（写清楚，免得下一刀顺手扩）：`IFileSystem3`/`IFileSystem2` 的 `GetObject`、
-`ShortPath`/`ShortName` 的 8.3 折叠在 NTFS 关掉 8.3 时的边角、`CopyFile` 的进度回调、
-`TextStream` 的 Unicode 写（`CreateTextFile(..., True)` 那一格先按 BOM 落地，见 §5.5）。
+**不做的**（写清楚，免得下一刀顺手扩）：`CopyFolder` / `MoveFolder` / `GetFileVersion` /
+`GetStandardStream`（四个方法）、`ShortPath`/`ShortName` 的 8.3 折叠在 NTFS 关掉 8.3 时的边角、
+`CopyFile` 的进度回调、`TextStream` 的 Unicode 写（`CreateTextFile(..., True)` 那一格先按 BOM 落地，见 §5.5）。
+
+> 勘误（C30-11 后记）：这里原来写的是「`IFileSystem3`/`IFileSystem2` 的 `GetObject`」，**是错的**。
+> scrrun 的 `Scripting.FileSystemObject` 类型库里根本没有 `GetObject` 成员（Get-Member 读数：
+> BuildPath CopyFile CopyFolder CreateFolder CreateTextFile DeleteFile DeleteFolder DriveExists Drives
+> FileExists FolderExists GetAbsolutePathName GetBaseName GetDrive GetDriveName GetExtensionName GetFile
+> GetFileName GetFileVersion GetFolder GetParentFolderName GetSpecialFolder GetStandardStream GetTempName
+> MoveFile MoveFolder OpenTextFile —— 无 GetObject）。用户问的 `GetObject(, "Excel.Application")`
+> 是 **VB6 语言级函数**，C3 走 `vb6_GetObject`（vb6com.c），与本对象无关。
 
 ---
 
@@ -107,9 +115,47 @@ FileSystemObject
 
 `CreateTextFile` / `OpenTextFile` / `TextStream.{Read,ReadLine,ReadAll,Skip,SkipLine,Write,WriteLine,WriteBlankLines,Close,AtEndOfStream,AtEndOfLine,Line,Column}` + `Files` 集合的 `IEnumVARIANT`。
 
-### 刀 4（写面 + 集合增删，已落 2026-11-18，`CopyFolder`/`MoveFolder` 未做）
+### 刀 4（写面 + 集合增删，已落 2026-11-18；`CopyFolder` / `MoveFolder` **未做**）
 
-`CreateFolder` / `DeleteFile` / `DeleteFolder` / `CopyFile` / `CopyFolder` / `MoveFile` / `MoveFolder`。
+`CreateFolder` / `DeleteFile` / `DeleteFolder` / `CopyFile` / `MoveFile`。
+（源文件头注释曾经把 `CopyFolder`/`MoveFolder` 写成已落，是错的；名字表里从来没有这两个名字 ——
+真 scrrun 的成员面里它们确实存在，所以是「该做但没做」，已在 §0 与源文件头注明。）
+
+### 刀 6（第六刀：只读成员 + 写属性面 + 编译期类名兜底，已落 2026-11-18）
+
+三块，全部先取真引擎读数再实现（`.temp/leftover/oracle_members.vbs`，下表 `R01`~`R37`）：
+
+**(a) 只读成员**
+
+| 成员 | 读数 | 实现 |
+|---|---|---|
+| `Folder.ShortName` | `rd2`（名字，不是路径）| `GetShortPathNameW` 后取最后一段 |
+| `File.ShortName` | `orig.txt` | 同上 |
+| `Drive.ShareName` | 本地盘 `""` | 非 UNC 恒空串；UNC 拆 share 名 |
+| `FileSystemObject.GetDriveName(p)` | `C:\a\b`→`C:`；`C:`→`C:`；`\\srv\share\x`→`\\srv\share`；相对 `a\b`→`""` | 同左，不带尾反斜杠 |
+
+**(b) 写属性面**（此前 put 直接落进读分支，静默忽略写、交回旧值 —— 真 bug）
+
+| 表达式 | 读数 | 实现 |
+|---|---|---|
+| `File.Name = "x"` | err=0；撞已有文件 **覆盖**（R12）；改完 `f.Path` 就是新名（R11）| `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` + 回写 `o->path` |
+| `Folder.Name = "x"` | err=0；撞已有目录 **58**（R20/R37）| `MoveFileW`（不覆盖）|
+| `File.Attributes = n` | 写 32→读 32；写 1→读 1；写 0→读 0（R31-R33）| `SetFileAttributesW`，目录位不参与 |
+| `Folder.Attributes = n` | 写 32→读 **48**；写 16→读 16（R35/R36）| 同上，目录恒补 `FILE_ATTRIBUTE_DIRECTORY` |
+| `Drive.ShareName = "x"` 之类只读 put | 真引擎直接抛错（R40）| 438（`FSO_ERR_NO_MEMBER`）|
+
+**(c) 编译期类名兜底（不依赖 scrrun 类型库）**
+
+`TypeLibParser::registerBuiltinScriptingTypelib()`：当 auto-load 之后缓存里仍没有
+`Scripting.FileSystemObject` 时，塞一份**只含类名**的合成类型库（9 个 coclass：
+FileSystemObject / Dictionary / Drive / Drives / File / Files / Folder / Folders / TextStream，
+默认接口空成员、`isDispatch=true`、`clsidStr` 留空）。成员一律走运行期 by-name，
+正好是内置 FSO/Dictionary 的绑定口径；`clsidStr` 留空保证不被 ComLib=/Object= 那几条路收进去。
+真类型库在（包括工程 `Reference=` 显式引了 scrrun）**不会**走到这里 ⇒ 发码零变化。
+
+自测开关：`C3_TEST_NO_SCRRUN_TLB=1` 假装机器上没有 scrrun 类型库。验证结果：
+`.temp/leftover/ClassProbe.bas`（`Dim fso As FileSystemObject` / `New FileSystemObject` /
+按名字取成员 / `Dim d As Dictionary` + `d.Add` + `d("k")`）两条腿 6 行输出**逐字相同**。
 
 ### 刀 5（默认翻面，已落 2026-11-18 —— 按用户要求提前翻）
 
@@ -264,9 +310,9 @@ End Sub
 
 ## 7. 风险与留白
 
-1. **编译期类型名**：`Dim fso As FileSystemObject` 现在靠 scrrun 的类型库给符号。
-   目标机/CI 无 scrrun 时，语义分析会报未定义类型。兜底方案（下一刀）：
-   在内置类名表里登记 `FileSystemObject` 及其 7 个伴生类名，与 `vb6_Dict_IsClassName` 同款。
+1. **编译期类型名**（**已在第六刀解决**，2026-11-18）：`Dim fso As FileSystemObject` 不再依赖
+   scrrun 类型库 —— 见 §4 刀 6(c) 的 `registerBuiltinScriptingTypelib()`；
+   真类型库在时一行不改（走原 typelib 导入），`C3_TEST_NO_SCRRUN_TLB=1` 可复现兜底路。
 2. **早期绑定 DISPID**：走类型库直接发 DISPID 的路径不认我们自有的编号表 ⇒ `[待查]`
    是否需要在 typelib 导入阶段把 scrrun 的 coclass 换成"内建"标记。
 3. **`C3_FSO_PREFER_MS` 对照开关**必须留着（Dictionary 的 `C3_DICT_PREFER_MS` 同款），
@@ -306,7 +352,7 @@ End Sub
 
 | 行 | 内建 | scrrun 腿 | 结论 |
 |---|---|---|---|
-| `G04`/`G06`（`Files.Item(1)` / `SubFolders.Item(1)`）| `err=0 a.txt|3` / `err=0 sub1|False` | `err=87` 且接收者为 `Nothing`（`C3_LATEBIND_MISS`）| **C3 晚绑定 + scrrun 自身的洞**：同一份源码里 `coll.Item("b.txt")` 两腿都正常（`G05`），只有**整数索引**这一形在 scrrun 腿上拿不到集合对象。真 VB6 给的是内建这组答案 |
+| `G04`/`G06`（`Files.Item(1)` / `SubFolders.Item(1)`）| `err=5`（`Item` 只认键）| `err=87` 且接收者为 `Nothing`（`C3_LATEBIND_MISS`）| **已由 VBScript 神谕推翻早先结论**：真 VB6 对 `files.Item(1)` 报 **5**（`Item("1")` 报 **53**），`Item("a.txt")` 正常。内建已改成键码，两腿对齐（见 §7.7）|
 
 其余全部逐字相同（Drive/Folder/File/集合/TextStream/写面）：`D01`–`D05`、`G00`–`G03`、`G10`–`G15`、
 `H01`–`H05`、`P01`–`P03`、`S01`–`S14`、`W01`–`W06`。
@@ -329,6 +375,137 @@ End Sub
 - `如果 drv.TotalSize > 0` 这类"Variant(R8) 与整数比"在 C3 里答 False，而 `CStr(drv.TotalSize)` 值是对的
   —— 是表达式层的 Variant 比较问题，不是 FSO 的，另记账。
 
+## 7.7 刀6 实测（2026-11-18，本机）
+
+读数来源：真引擎 `cscript` 跑 `.temp/leftover/oracle_members.vbs`（同一脚本两次运行：
+第二次因目录已存在，`Folder.Name` 那格读到 58 —— 与「撞名 58」同一语义，不矛盾）。
+两腿对照：`.temp/leftover/MemProbe.bas` 编一个 exe，默认 = 内建、`C3_FSO_PREFER_MS=1` = 真 scrrun，
+22 行输出**逐字相同**：
+
+| 行 | 答案 | 行 | 答案 |
+|---|---|---|---|
+| `R01` `Folder.ShortName` | `rd2` | `R30`/`R31`/`R32`/`R33` | `32 / 32 / 1 / 0` |
+| `R02` `File.ShortName` | `orig.txt` | `R34`/`R35`/`R36` | `16 / 48 / 16` |
+| `R04` `Drive.ShareName` | `[]`（空）| `R10`/`R11`/`R12` | err=0、新名 True、旧名 False |
+| `R05`/`R06` `GetDriveName` | `C:` / `C:` | `R13` `Path` | 改名后的完整路径 |
+| `R07` UNC | `\\srv\share` | `R20`/`R21`/`R22` | err=0、旧 False、新 True |
+| `R08` 相对路径 | `[]` | | |
+
+编译期兜底腿：`C3_TEST_NO_SCRRUN_TLB=1` 下编 `.temp/leftover/ClassProbe.bas` 并运行，
+与真类型库腿 6 行输出逐字相同。
+
+顺带确认的两件**不属于本刀**的既有毛病（都不是第六刀引入）：
+
+1. `Debug.Print "标签"; <晚绑定调用>` 打出来是**地址**（老成员 `GetFileName` 一样，两腿同病）；
+   用 `&` 拼接或先落变量就对。记账，未修。
+2. `CStr(<直接表达式的 Boolean>)` 答 `-1`，而 `CStr(已落变量的 Variant(True))` 答 `True`
+   （VB6 两种写法都是 `True`）。属转换层，另记账。
+
+## 7.8 第七刀留白读数（2026-11-18，真引擎 `cscript`，`.temp/leftover/oracle_missing.vbs`）
+
+四个尚未实现的成员，先把读数钉住（下一刀照这个写，不靠猜）：
+
+| 调用 | 真引擎读数 |
+|---|---|
+| `CopyFolder(src, dst)` | err=0，**递归**（子目录与文件都到位）；dst 已存在且不给 Overwrite 也 err=0（合并/覆盖）|  
+| `CopyFolder(src, dst, False)` | 同上；但源若是**文件** → **76** |
+| `CopyFolder(缺失, dst)` | **76**（不报 53），目标不建 |  
+| `CopyFolder(src, dst\deeper)` | err=0，**deeper 被建出来**（这一条只证明了末级目录会建；父级当时已存在，**没测出「缺失父级」**）|  
+| `MoveFolder(src, dst)` | err=0，源消失、文件跟着走 |
+| `MoveFolder(src, 已存在的 dst)` | **58**（不覆盖）|  
+| `MoveFolder(缺失, dst)` | **76** |
+| `GetFileVersion(notepad.exe)` | `10.0.26100.8328`（a.b.c.d，取 VS_FIXEDFILEINFO 的 `dwFileVersionMS/LS`）|  
+| `GetFileVersion(无版本资源的 txt)` | `""`，err=0 |  
+| `GetFileVersion(目录)` | `""`，err=0 |  
+| `GetFileVersion(缺失文件)` | 值 `""`，err=**-2147024894**（0x80070002 原样露在 Err.Number）|  
+| `GetStandardStream(1/2/0)` | 都交 `TextStream`；`Write`/`WriteLine` 立即到控制台 |
+| `GetStandardStream(3)` | err=**-2147024890**（0x80070006 E_HANDLE），**不交对象** |  
+
+两处更正（重跑读数时发现，旧记录写错了）：
+
+1. **S07 旧读数「仍交 TextStream」是假的** —— oracle 里 `so` 上一句刚被赋成 stdin 流，赋值失败后变量留旧值，
+   `TypeName(so)` 打印的是上一句那个对象。真语义：类型 3 报 E_HANDLE，不交对象。
+2. **V01 两个位数读数不同不算偏差** —— cscript 是 64 位，看到 `System32\notepad.exe`（10.0.*）；
+   我们的 exe 是 32 位，`System32` 被重定向到 `SysWOW64`，看到的是 32 位 notepad（6.2.*）。
+
+实现要点（本刀已照做）：`CopyFolder` = 建目标（`fso_makeTree`）+ 递归 CopyFile，源不存在→76、
+源是文件→76；`MoveFolder` = 先判源 76 / 目标已存在 58，再 `MoveFileW`（跳盘退化复制+删源）；
+`GetFileVersion` 走 `GetFileVersionInfoSizeW/GetFileVersionInfoW/VerQueryValueW(L"\\")`
+（**链接已加 version.lib**：`msvc_driver.cpp` / `msvc_driver_incremental.cpp` 四条链接命令行全覆盖）；
+`GetStandardStream` = TextStream 加 `stdHandle` 档，写时绕开缓冲直发 stdout/stderr（`Format=True` 直写 UTF-16）。
+
+**这两格已在第八刀修好**（即客户端 HRESULT→Err.Number 规则，见 §7.9）：
+V03 现在是 `-2147024894`、S07 是 `-2147024890`，与真引擎逐位一致。
+
+## 7.9 第八刀：HRESULT→Err.Number 全局规则（2026-11-18）
+
+真引擎读数（`.temp/leftover/oracle_hr.vbs` H1–H16，cscript）：
+
+| 情形 | 真引擎 Err.Number |
+|---|---|
+| `E_INVALIDARG` 0x80070057（`Files.Item(1)`） | 5 |
+| `DISP_E_MEMBERNOTFOUND`（`fso.NoSuchMethod`） | 438 |
+| `DISP_E_TYPEMISMATCH`（`fso.FolderExists(fso)`） | 13 |
+| 参数个数不对（`fso.GetFileName()`） | 450 |
+| CLASS_E_CLASSNOTAVAILABLE 0x800401F3 | 429 |
+| `E_HANDLE` 0x80070006（`GetStandardStream(3)`） | **-2147024890（原样）** |
+| `E_FILE_NOT_FOUND` 0x80070002（`GetFileVersion(缺文件)`） | **-2147024894（原样）** |
+| 服务端自己 raise 的 VB 号（缺文件 53 / 缺目录 76 / 盘不存在 68） | 就交那个号 |
+
+结论：VB 的规则是「**一张显式表 + 其余一律原样负数**」，不是截 HRESULT 的低 16 位。
+
+改动两处：
+
+1. `vb6_HresultToErrNum`（`src/rtl/core/vb6com/vb6com.c`）的 default 由「取低 16 位」改成
+   「原样交 `(int32_t)hr`」；表里的 DISP_E_* / `E_INVALIDARG→5` 不动（那些有读数）。
+2. `vb6_ComCallRcv`（`vb6com_invoke.c`）名字查找失败原本只打一行 stderr 就 NULL 回去（Err 仍是 0），
+   改成抛 438 + 交一枚空 VARIANT（与宿主模型那条 438 同口径），并用 `g_com_438_dangling` 吸收链尾 miss。
+
+两腿实测（`.temp/fso7/Fso8.bas`，14 项）：走 scrrun 那条腿 **14/14 与真引擎逐条一致**；
+内建那条腿 10/14，剩下四条都是**成员自身行为**不是映射规则：
+
+| 项 | 真引擎 | 内建 | 性质 |
+|---|---|---|---|
+| H8 `FolderExists(fso)` 传对象 | 13 | 0 | 内建把对象实参当空串缩小了，没报 13 |
+| H14 `GetFileName()` 少参数 | 450 | 0 | 内建取成空串，不报 450 |
+| H15 `GetDrive("Q:")` | 68 | 76 | 档位选错（应当是「设备不可用」） |
+| H16 `CopyFolder(src, src\sub\deep)` | 5 | 70 | 没拦「往自己子树里复制」，落到 OS 权限错 |
+
+**这四条已在第九刀收掉（读数与改动见 §7.10）。**
+
+## 7.10 第九刀：参数/边界四枚 + stdin 真读（2026-11-18）
+
+真引擎读数（`.temp/leftover/oracle_hr2.vbs`，cscript，stdin 用 `<` 重定向喂）：
+
+| 段 | 情形 | 真引擎 |
+|---|---|---|
+| A1–A3 | `GetFileName(obj)` / `BuildPath(obj,"x")` / `FileExists(dict)` | **13**（一律类型不匹配）|
+| B1–B10 | `GetFileName()`、`GetBaseName()`、`GetDrive()`、`CopyFile(1 arg)` … | **450**（一律）|
+| C1 | `GetDrive("Q:")` | **68** |
+| C2 | `GetDrive("")` | **5** |
+| C3 | `DriveExists("Q:")` | False，err=0 |
+| D1 | `CopyFolder(src, src\sub\deep)` | **5** |
+| D2 | `CopyFolder(src, src)` | **0**（同路径算空操作）|
+| D3 | `MoveFolder(src, src\sub\mv)` | **5** |
+| D4 | `CopyFile` 往自己子树 | **0**（文件这条路没限制）|
+| E2–E5 | `GetStandardStream(0)`：AtEndOfStream=False → ReadLine=`alpha` → ReadAll=`beta\r\n` → AtEnd=True | 真读 stdin |
+
+改动（全在 `vb6com_fso.c`）：
+
+1. `fso_argStr`：字符串形参收到对象（`VT_DISPATCH/VT_UNKNOWN/数组`）→ 抛 13 + 交空串
+   （与 438 那把刀同口径：抛完仍给可用值，Resume Next 能往下走）。
+2. 新增 `fso_minArgs(dispId)` 表 + Invoke 入口判定：实参数少于必填数 → 450。
+3. `GetDrive`：空串 → 5；盘不存在 → 68（以前两项都是 76）。
+4. 新增 `fso_isInside(dst, src)`：往自己子树里 Copy/Move → 5；**同路径直接 S_OK**（D2）。
+5. `GetStandardStream(0)`：`stdHandle` 编号修正为 0=非标准流/1=stdout/2=stderr/**3=stdin**，
+   并新增 `ts_stdLoad`（首次读时把 stdin 整体灌入缓冲），读侧五个成员（AtEndOfStream/
+   Read/ReadLine/ReadAll/Skip…）现在都走真输入。
+
+两腿实测（`.temp/fso7/Fso10.bas`，A1–A3 / B1–B10 / C1–C3 / D1–D4 / E1–E5 共 25 项，
+stdin 用重定向喂 `alpha\r\nbeta\r\n`）：**内建腿 0 差异、scrrun 腿 0 差异**。
+另回归：`Fso7`（四枚留白）两腿差异仍是已知的 TypeName 那一类，`Fso8`（HRESULT 读数）28/28 全对，
+9 份 COM 夹具 9/9 exit=0。
+
 ## 8. 验收
 
 - 刀 1/2/3 各自：`fso_native` 夹具（同一份 .bas 真机与 C3 双跑，逐行 diff）；
@@ -338,3 +515,6 @@ End Sub
   编译产物只多一条 `#include`，如果连这条也不加，形状完全不动）；
 - 静态普查：`owned_temp_keeps`（BSTR 出口）、`builtin_opt_defaults`（若改 callee）、
   `manifest_coverage`。
+- 刀 6 追加：`MemProbe.bas` 两腿 22 行逐字相同；`ClassProbe.bas` 在 `C3_TEST_NO_SCRRUN_TLB=1`
+  下能编能跑；写面（`Name`/`Attributes` 的 put）与只读成员（`ShortName`/`ShareName`/`GetDriveName`）
+  都在对比表里逐行钉住；老成员回归仍走 §8 那 12 份夹具 + COM 语料 9 例（exit=0 / miss=0）。

@@ -242,13 +242,20 @@ int32_t vb6_ComVbErrFromHr(HRESULT hr) {
 // excep: EXCEPINFO结构 (可能包含scode/bstrDescription)
 // context: 调用上下文 (用于默认错误描述, 如L"ComCall" / L"ComSetProp")
 // Fix 177: HRESULT → VB6 错误号。
-// "低16位即VB6错误号" 只对 0x8004xxxx (标准 COM) 与 0x800Axxxx (VB6 运行时) 成立,
-// 对 DISP_E_* 系列 (0x8002xxxx) 不成立 —— 其低16位落在 DISPID 子码空间: 例如
-// DISP_E_MEMBERNOTFOUND (0x80020003) 的低16位 = 3, 会被当成 VB6 错误 3
-// "没有GoSub时的Return", 与真实原因 (对象不支持该属性/方法) 毫无关系。
-// 实测: VBMAN 对 Scripting.Dictionary 调自有扩展 API 时即报出这个假象,
-// 把排查方向引到 GoSub/Return 上。此处显式映射 DISP_E_* 到 VB6 官方错误号
-// (描述表 vb6_StdErrorDesc 中 438/449/450/451 均已有条目)。
+// 「低 16 位即 VB6 错误号」**只对 0x800Axxxx（VB 运行时自己发的号）成立**。
+// C30-11 第八刀把它全局收尾，读数（cscript，.temp/leftover/oracle_hr.vbs H1–H16）：
+//   H1  E_INVALIDARG 0x80070057            -> 5
+//   H3/H4/H12/H13  服务端自己 raise 的 VB 号 -> 53 / 76（仍是 VB 号，不经此表）
+//   H7  DISP_E_MEMBERNOTFOUND             -> 438
+//   H8  DISP_E_TYPEMISMATCH               -> 13
+//   H9  CLASS_E_CLASSNOTAVAILABLE 0x800401F3 -> 429（CreateObject 那条腿，vb6_ComFailCreate）
+//   H10 E_HANDLE            0x80070006    -> **-2147024890（原样）**
+//   H11 E_FILE_NOT_FOUND    0x80070002    -> **-2147024894（原样）**
+//   H14 参数个数不对                      -> 450
+// 即：VB 的规则是「一张显式表 + 其余一律原样负数」，**不是截低 16 位**。
+// 旧口径（default 取低字）把 E_FILE_NOT_FOUND 读成 2、E_HANDLE 读成 6、
+// E_ACCESSDENIED 读成 5 —— 都是把 Win32 号伪装成毫不相干的 VB 号（2 = "未找到指定的文件"
+// 那个 2 根本不是 VB 的错误码），排查方向直接被引偏。
 static int32_t vb6_HresultToErrNum(long hr) {
     /* 账 #305 §B186: 「这一枚 hr 是不是服务端交回的 VB 错误、是哪一号」只问上面那唯一一枚认腿,
      * 不在这里再抄一遍低 16 位的算法 (抄出来的两份会漂)。认不出那一档才往下走原路。 */
@@ -261,11 +268,16 @@ static int32_t vb6_HresultToErrNum(long hr) {
     case 0x8002000EUL: return 450;  // DISP_E_BADPARAMCOUNT  → 参数个数错误
     case 0x8002000FUL: return 449;  // DISP_E_PARAMNOTOPTIONAL → 参数不是可选的
     case 0x8002000BUL: return 451;  // DISP_E_BADINDEX       → 对象不是集合
-    default: {
-        int32_t errNum = (int32_t)((unsigned long)hr & 0xFFFF);  // VB6错误号 = HRESULT低16位
-        if (errNum == 0) errNum = (int32_t)hr;  // 非标准HRESULT直接用整个值
-        return errNum;
-    }
+    /* C30-11 后记（遗留问题①的第二个不一致）: E_INVALIDARG(0x80070057) 的低 16 位是 87，
+     * 旧口径直接截低字 → 报出 87「参数错误」。真 VB 引擎读数（VBScript 晚绑定 scrrun）:
+     *   files.Item(1) -> Err.Number = 5「无效的过程调用或参数」
+     * 即 VB 把 E_INVALIDARG 归到 5，而不是 Win32 的 87。本条只动这一枚 HRESULT。 */
+    case 0x80070057UL: return 5;    // E_INVALIDARG          → 无效的过程调用或参数
+    default:
+        /* C30-11 第八刀: 不在表里就**原样交负的 HRESULT**（H10/H11 读数）。
+         * 不许再截低 16 位 —— 那一刀把 0x80070002 读成 2、把 0x80070006 读成 6，
+         * 两个都不是 VB 的错误号，却看起来煞有介事。 */
+        return (int32_t)hr;
     }
 }
 
@@ -275,6 +287,12 @@ void vb6_ComCheckError(HRESULT hr, EXCEPINFO* excep, const wchar_t* context) {
     // 优先使用EXCEPINFO中的scode (OLE自动化错误码; DISP_E_EXCEPTION 时携带真实错误号)
     if (excep && excep->scode) {
         errNum = vb6_HresultToErrNum((long)excep->scode);
+    }
+    if (excep && GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] CheckError hr=0x%08lX scode=0x%08lX wCode=%u helpCtx=%lu ctx=%ls\n",
+                (unsigned long)hr, (unsigned long)excep->scode, (unsigned)excep->wCode,
+                (unsigned long)excep->dwHelpContext, context ? context : L"?");
+        fflush(stderr);
     }
 
     // 构造错误描述BSTR — 四级fallback:

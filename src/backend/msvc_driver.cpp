@@ -1,4 +1,4 @@
-﻿#include "backend/msvc_driver.hpp"
+#include "backend/msvc_driver.hpp"
 #include "common/encoding.hpp"
 #include "driver/detail/phase_timing.hpp"   // §56.54: cl 每段的墙钟 (C3_TIMING=1 才输出)
 
@@ -217,7 +217,7 @@ namespace {
             if (!options.defFile.empty()) {
                 cmd << " /DEF:\"" << options.defFile << "\"";
             }
-            cmd << " ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib shell32.lib gdi32.lib";
+            cmd << " ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib shell32.lib gdi32.lib version.lib";
         } else if (options.isGui) {
             // P7: GUI程序 (Win32窗口)
             // Fix 165: /ENTRY 取决于代码生成实际发出的入口 (窗体启动=WinMain / Sub Main=main)
@@ -235,7 +235,7 @@ namespace {
             if (!options.userResFile.empty()) {
                 cmd << " \"" << options.userResFile << "\"";
             }
-            cmd << " user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib advapi32.lib comctl32.lib";
+            cmd << " user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib advapi32.lib comctl32.lib version.lib";
         } else {
             // 控制台程序
             cmd << " /link /SUBSYSTEM:CONSOLE";
@@ -251,7 +251,7 @@ namespace {
             if (!options.userResFile.empty()) {
                 cmd << " \"" << options.userResFile << "\"";
             }
-            cmd << " ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib shell32.lib gdi32.lib";
+            cmd << " ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib shell32.lib gdi32.lib version.lib";
         }
 
         // ai/024 T02: 用户静态库 (归档) 的搜索根与库文件本体。

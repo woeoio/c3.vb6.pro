@@ -1366,6 +1366,13 @@
     };
     ComSigView comSigViewOf(const Symbol* comSym, const std::string& memberName) const;
 
+    // C30-11 后记: 「这枚 COM 成员的返回类型是不是 Boolean」—— 只问返回类型的那一粒，
+    // 不把签名/形参交出去。**_这里也只是转调 comSigViewOf**（C4 口径：comMethods
+    // 只许那一个出口读，静态普查 check_com_prop_type_authority.ps1 把这条钉死）。
+    // inferExprType 那一站要它: 以前前期绑定的 Boolean 返回一律答 Variant ⇒ 装箱成
+    // VT_I4(-1)、CStr 答 "-1"，而 VB6 是 Variant(Boolean)、答 "True"。
+    bool comMemberReturnsBoolean(const Symbol* comSym, const std::string& memberName) const;
+
     // 属性 getter 的类型化解包表达式（哨兵 C3 的口径）：非确认的 getter ⇒ 返回空串，调用方
     // 保留自己的晚绑定路；类型未知 ⇒ 交回原生 VARIANT，绝不按上下文猜一档。
     std::string comGetterExpr(const ComSigView& sv, const std::string& objExpr,

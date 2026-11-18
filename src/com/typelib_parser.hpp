@@ -245,6 +245,15 @@ public:
     // 查找已缓存中某个coclass (跨所有已加载TypeLib)
     ComCoClassInfo* findCachedCoClass(const std::string& name) const;
 
+    // C30-11 第七刀: 内建 Scripting Runtime 类名兜底。
+    // 机器上缺 scrrun 类型库 (注册表被裁 / 精简系统) 时, `Dim x As FileSystemObject`
+    // 会报「用户定义类型未定义」。这里塞一份**只含类名**的合成类型库进缓存:
+    // coclass 齐了 9 个名字 (FileSystemObject/Dictionary/Drive/Drives/File/Files/
+    // Folder/Folders/TextStream), 默认接口空成员 —— 成员一律走运行期 by-name,
+    // 正是内置 FSO/Dictionary 实现 (IDispatch 按名字答) 的绑定口径。
+    // 真类型库在时**不会**调用本函数 (见 driver_frontend 的 auto-load 处), 发码零变化。
+    void registerBuiltinScriptingTypelib();
+
 private:
     Diagnostics& diag_;
 

@@ -656,7 +656,18 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
         VariantClear(&defv336);
         vb6_ComDropPackedArgs(args, argc);   /* 账 #305 第二百八十九刀: 早退之前清点来路 */
         fwprintf(stderr, L"vb6_ComCall: method \"%ls\" not found\n", methodName);
-        return NULL;
+        /* C30-11 第八刀（H7 读数）: 真接收者（真 IDispatch、真没有这名成员）上，
+           VB 引擎的 Err.Number = **438**，而不是 0。以前这里只打一行 stderr 就 NULL 回去，
+           夹具里 `On Error Resume Next` 之后读到 0，反向用例走不到 438 分支。
+           与宿主模型 438 那把刀同口径: 抛完仍交一枚空 VARIANT（不能交 NULL，
+           链尾访问会 AV），并立起「刚抛过 438」的标记吸收链尾那一次 miss。 */
+        g_com_438_dangling = 1;
+        vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        {
+            VARIANT* empty438 = (VARIANT*)calloc(1, sizeof(VARIANT));
+            if (empty438) VariantInit(empty438);
+            return (void*)empty438;
+        }
     }
 
     /* 收窄必须发生在抄进 DISPPARAMS 之前 —— dp.rgvarg 是逐枚 VARIANT 的**值拷贝**,

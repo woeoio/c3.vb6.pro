@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <unordered_set>
 
 namespace vb6c3 {
@@ -377,12 +378,22 @@ bool Driver::runTypeLibImport(const CompileOptions& options) {
             "MSXML2.DOMDocument",           // MSXML
         };
 
+        // C3_TEST_NO_SCRRUN_TLB=1: 自测开关 —— 假装这台机器上没有 scrrun 类型库,
+        // 用来验证下面的「内建类名兜底」真的兜得住。正常构建/回归不设它, 一字不变。
+        static const bool skipScrrunTlb = (std::getenv("C3_TEST_NO_SCRRUN_TLB") != nullptr);
         for (const auto& progId : commonProgIds) {
+            if (skipScrrunTlb && progId.compare(0, 10, "Scripting.") == 0) continue;
             // 仅在缓存中不存在时加载; silent=true: 缺失是预期(用户未显式引用),
             // 不报VB4001避免污染c3-error.log
             if (!typelibParser_->findCachedCoClass(progId)) {
                 typelibParser_->loadByProgId(progId, true);
             }
+        }
+        // C30-11 第七刀: 真类型库不在时用内建类名表兜底 —— `Dim x As FileSystemObject`
+        // 与 `New FileSystemObject` 从此不依赖 scrrun 类型库 (成员走运行期 by-name)。
+        // 真类型库在 (含工程里 Reference= 显式引了 scrrun) 就不会走到这里。
+        if (!typelibParser_->findCachedCoClass("Scripting.FileSystemObject")) {
+            typelibParser_->registerBuiltinScriptingTypelib();
         }
     }
 

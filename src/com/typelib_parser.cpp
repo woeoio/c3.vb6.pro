@@ -315,6 +315,53 @@ ComCoClassInfo* TypeLibParser::findCachedCoClass(const std::string& name) const 
 }
 
 // ============================================================
+// C30-11 第七刀: 内建 Scripting Runtime 类名兜底 (无 scrrun 类型库时)
+// ============================================================
+// 只登记**类名**: coclass + 空成员默认接口。不带成员签名是有意的 ——
+// 内置 vb6com_fso.c / vb6com_dict.c 在运行期按名字 (GetIDsOfNames) 答，
+// 编译期不需要 (也不应该) 再铺一份可能与实现走偏的签名表。
+// clsidStr 留空: ComLib=/Object= 免注册表那几条路都要求 clsidStr 非空，
+// 这里不该进去; 实例化走 comProgId (cgen_expr.cpp 的 New 分支)。
+void TypeLibParser::registerBuiltinScriptingTypelib() {
+    struct BuiltinClass { const char* cls; const char* progId; const char* iface; };
+    static const BuiltinClass rows[] = {
+        { "FileSystemObject", "Scripting.FileSystemObject", "IFileSystem3" },
+        { "Dictionary",       "Scripting.Dictionary",       "IDictionary"   },
+        { "Drive",            "Scripting.Drive",            "IDrive"        },
+        { "Drives",           "Scripting.Drives",           "IDrives"       },
+        { "File",             "Scripting.File",             "IFile"         },
+        { "Files",            "Scripting.Files",            "IFiles"        },
+        { "Folder",           "Scripting.Folder",           "IFolder"       },
+        { "Folders",          "Scripting.Folders",          "IFolders"      },
+        { "TextStream",       "Scripting.TextStream",       "ITextStream"   },
+    };
+
+    auto tl = std::unique_ptr<TypeLibResult>(new TypeLibResult());
+    tl->name = "Microsoft Scripting Runtime";
+    tl->version = "1.0";
+    tl->tlbPath = "<builtin:scripting>";
+    tl->canonPath = "<builtin:scripting>";
+    tl->typeLibProjectName = "Scripting";
+
+    for (const auto& r : rows) {
+        auto iface = std::unique_ptr<ComInterfaceInfo>(new ComInterfaceInfo());
+        iface->name = r.iface;
+        iface->isDispatch = true;    // 纯 IDispatch: comVtblBase = 7, 不碰 vtable 直调
+        const ComInterfaceInfo* ifacePtr = iface.get();
+        tl->interfaces.push_back(std::move(iface));
+
+        auto cc = std::unique_ptr<ComCoClassInfo>(new ComCoClassInfo());
+        cc->name = r.cls;
+        cc->progId = r.progId;
+        cc->defaultIfaceName = r.iface;
+        cc->defaultIface = ifacePtr;
+        tl->coclasses.push_back(std::move(cc));
+    }
+
+    cache_.push_back(std::move(tl));
+}
+
+// ============================================================
 // 内部: ProgID → TypeLib路径
 // ============================================================
 

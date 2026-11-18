@@ -69,6 +69,22 @@ int32_t vb6_ComCallInt(void* disp, const wchar_t* methodName,
     return result;
 }
 
+// C30-11 后记: COM方法调用, 返回 **VB6 Boolean** (-1/0) —— 与 vb6_ComCallInt 同一发调用,
+// 只在**名字**上分档。为什么要单独一枚:
+//   前期绑定的 Boolean 返回以前发 vb6_ComCallInt, 交回 int32_t ⇒ 装箱站给它装成
+//   VT_I4(-1) / VT_I2, 而 VB6 里 `v = fso.FileExists(p)` 的 VarType(v) 是 11(Boolean);
+//   于是 CStr(v) 答 "-1" 而不是 "True"。装箱 / CStr / Debug.Print 三站按这个**前缀**
+//   分诊 (与 ComGetStringProp / ComCallBSTR 那几档同一手法), 不发码就分不出 Boolean
+//   与 Integer (两者 C 侧同为 int32_t)。语义 (真值、-1/0、算术 Not) 一字不改。
+int32_t vb6_ComCallBool(void* disp, const wchar_t* methodName,
+                        void* args_void, int32_t argc) {
+    VARIANT* pv = (VARIANT*)vb6_ComCall(disp, methodName, args_void, argc);
+    if (!pv) return 0;
+    int32_t result = vb6_ComUnpackInt(pv);
+    vb6_ComVarClear(pv);
+    return result ? -1 : 0;
+}
+
 // COM方法调用, 返回double — 内部完成Unpack+VarClear
 double vb6_ComCallDouble(void* disp, const wchar_t* methodName,
                          void* args_void, int32_t argc) {
