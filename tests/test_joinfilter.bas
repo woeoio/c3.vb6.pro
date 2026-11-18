@@ -111,6 +111,15 @@ Public Sub Main()
     nc = Mid("abc", nv2)
     Debug.Print "JF-nullmid="; Err.Number
 
+    Err.Clear
+    nc = CCur(nv2)
+    Debug.Print "JF-nullccur="; Err.Number
+
+    ' CCur 的非 Null 路不许被 V 后缀带跑（BSTR 档靠 vb6_NumVal 解析）
+    Err.Clear
+    nc = CCur(2.5)
+    Debug.Print "JF-ccur25="; CStr(nc); "/"; Err.Number
+
     ' 反向钉：Empty 不是 Null（必须还是 0），算术传播仍是 Null
     Err.Clear
     nc = CInt(Empty)

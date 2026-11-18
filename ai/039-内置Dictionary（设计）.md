@@ -1726,10 +1726,11 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
 
 #### 四、遗留
 
-1. **`CCur(Null)` 仍 0**：`CCur` 的 Variant 实参没走 V 变体（发码直接 `vb6_CCur(vb6_VariantToDouble(v))`，
-   Null 在提取时已经变成 0，到 CCur 就看不出 Null）。在 `cgen_expr_call_conv_numeric.inc` 里加的
-   `vb6_CCur → vb6_CCurV` 那段没生效（该站 firstArgIsVariant 为 false，转换在上游双参数站已经做了）⇒
-   要改得动上游站，单开一格。
+1. ~~**`CCur(Null)` 仍 0**~~ —— **已修（本刀续）**。根因是 `CCur` 不在 `cgen_expr_call_conv_numeric.inc`
+   那道 V 后缀门的名单里（实参早已被上游包成 `vb6_VariantToDouble(...)`，所以 `firstArgIsVariant`
+   是 false）。处置：名单加上 `vb6_CCur`，并把那里“剥回 double 包装”的检测（原先只服务 CBool）
+   扩到 CCur。现发码 `vb6_VariantCur(vb6_CCurV(nv))`，读数 M5=94；非 Null 路未动
+   （`CCur(2.5)=2.5`、`CCur("12")=12`、`CCur(1)/4=0.25` 实测）。
 2. **`Abs/Int/Fix(Null)` 仍 0（真值 Null）**：它们收的是 `double`，Null 在 `vb6_VariantToDouble`
    就已丢了；要回 Null 得在“Variant 返回侧”做传播站（整个表达式要是 Variant），与 §11.36 遗留 3
    （`&`/比较符传播）同一族。
