@@ -434,10 +434,42 @@ End Sub
 （**链接已加 version.lib**：`msvc_driver.cpp` / `msvc_driver_incremental.cpp` 四条链接命令行全覆盖）；
 `GetStandardStream` = TextStream 加 `stdHandle` 档，写时绕开缓冲直发 stdout/stderr（`Format=True` 直写 UTF-16）。
 
-**仍然对不上的两格（都是客户端归一化，不是 FSO 本体）**：V03 与 S07 的 `Err.Number`。
-真引擎把 HRESULT 原样露成负数（-2147024894 / -2147024890），我们经 `vb6_ComFailExcep` 落到
-客户端映射后变成 **2 / 6**。要修正得住客户端那条 HRESULT→Err.Number 的归一化规则，
-影响面远大于 FSO 本体，本刀只登记不改。
+**这两格已在第八刀修好**（即客户端 HRESULT→Err.Number 规则，见 §7.9）：
+V03 现在是 `-2147024894`、S07 是 `-2147024890`，与真引擎逐位一致。
+
+## 7.9 第八刀：HRESULT→Err.Number 全局规则（2026-11-18）
+
+真引擎读数（`.temp/leftover/oracle_hr.vbs` H1–H16，cscript）：
+
+| 情形 | 真引擎 Err.Number |
+|---|---|
+| `E_INVALIDARG` 0x80070057（`Files.Item(1)`） | 5 |
+| `DISP_E_MEMBERNOTFOUND`（`fso.NoSuchMethod`） | 438 |
+| `DISP_E_TYPEMISMATCH`（`fso.FolderExists(fso)`） | 13 |
+| 参数个数不对（`fso.GetFileName()`） | 450 |
+| CLASS_E_CLASSNOTAVAILABLE 0x800401F3 | 429 |
+| `E_HANDLE` 0x80070006（`GetStandardStream(3)`） | **-2147024890（原样）** |
+| `E_FILE_NOT_FOUND` 0x80070002（`GetFileVersion(缺文件)`） | **-2147024894（原样）** |
+| 服务端自己 raise 的 VB 号（缺文件 53 / 缺目录 76 / 盘不存在 68） | 就交那个号 |
+
+结论：VB 的规则是「**一张显式表 + 其余一律原样负数**」，不是截 HRESULT 的低 16 位。
+
+改动两处：
+
+1. `vb6_HresultToErrNum`（`src/rtl/core/vb6com/vb6com.c`）的 default 由「取低 16 位」改成
+   「原样交 `(int32_t)hr`」；表里的 DISP_E_* / `E_INVALIDARG→5` 不动（那些有读数）。
+2. `vb6_ComCallRcv`（`vb6com_invoke.c`）名字查找失败原本只打一行 stderr 就 NULL 回去（Err 仍是 0），
+   改成抛 438 + 交一枚空 VARIANT（与宿主模型那条 438 同口径），并用 `g_com_438_dangling` 吸收链尾 miss。
+
+两腿实测（`.temp/fso7/Fso8.bas`，14 项）：走 scrrun 那条腿 **14/14 与真引擎逐条一致**；
+内建那条腿 10/14，剩下四条都是**成员自身行为**不是映射规则：
+
+| 项 | 真引擎 | 内建 | 性质 |
+|---|---|---|---|
+| H8 `FolderExists(fso)` 传对象 | 13 | 0 | 内建把对象实参当空串缩小了，没报 13 |
+| H14 `GetFileName()` 少参数 | 450 | 0 | 内建取成空串，不报 450 |
+| H15 `GetDrive("Q:")` | 68 | 76 | 档位选错（应当是「设备不可用」） |
+| H16 `CopyFolder(src, src\sub\deep)` | 5 | 70 | 没拦「往自己子树里复制」，落到 OS 权限错 |
 
 ## 8. 验收
 
