@@ -404,6 +404,14 @@ CompileResult Driver::compile(const CompileOptions& options) {
                 }
             }
             // Object= GUID (ActiveX controls) -> loadByClsid
+            //
+            // 口径（2026-11-18 澄清，只改注释）: **Object= 是 VB6 原生的组件声明行**，不是 C3 的扩展。
+            // VB6 自己这两种写法我们都原样解析（vbp_parser.cpp）：
+            //   Object={GUID}#maj#min#0; 文件.ocx   —— 组件（OCX）引用（仓库 400 个 vbp / 25 条实测全是这种）
+            //   Object=*\A相对路径.vbp             —— 私有控件工程引用
+            // 「免注册」**不是给它安的第二个语义**，只是拿这一行本来就带的文件路径去做运行期优先策略：
+            // 命中则 LoadLibrary+DllGetClassObject，未命中/表空则回到原注册表路径（ax_host.c 注释同口径）。
+            // C3 独有的免注册扩展只有一个名字: ComLib=（下方 Fix 160）。
             for (const auto& obj : project.objects) {
                 if (!obj.guid.empty()) {
                     effectiveOpts.typelibRefs.push_back(obj.guid);

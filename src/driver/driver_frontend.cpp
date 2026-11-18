@@ -458,7 +458,8 @@ bool Driver::runTypeLibImport(const CompileOptions& options) {
         }
     }
 
-    // 2.6 Fix <vbeclipse> 2026-10-06: Object= 免注册 OCX 表收集
+    // 2.6 Fix <vbeclipse> 2026-10-06: VB6 原生 Object= 行（组件声明）的 OCX → 免注册表收集
+    // 「免注册」是运行期优先策略，不是给 Object= 另安的语义（它本来就带着文件路径）。
     // 只有 vbp 里 Object= 显式声明过的 OCX 进表 — 普通 Reference= / auto-typelib 加载的
     // typelib 一律不进。与 ComLib= 同构: 表为空时产物不调 vb6_OcxRefRegister,
     // 运行期 vb6_Form_ControlsAdd 走原注册表路径, 一字不改.

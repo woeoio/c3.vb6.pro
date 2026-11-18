@@ -324,8 +324,10 @@ ComCoClassInfo* TypeLibParser::findCachedCoClass(const std::string& name) const 
 // (src/com/builtin_scripting_sigs.inc，从本机 scrrun.dll 用 --dump-com-sigs 吐出来)，
 // 且验收口径是「有库/无库两种编译发出的 C 必须逐字节相同」，不靠人盯，不会走偏。
 // 于是成员签名一并登，没有 scrrun 的机器也能拿到与有库完全相同的编译期类型。
-// clsidStr 留空: ComLib=/Object= 免注册表那几条路都要求 clsidStr 非空，
-// 这里不该进去; 实例化走 comProgId (cgen_expr.cpp 的 New 分支)。
+// clsidStr 留空: 免注册表那几条路都要求 clsidStr 非空。这里要说准确 —— 那几条路是
+// C3 扩展 ComLib=（免注册 COM DLL）与 VB6 原生 Object= 行带来的 OCX 免注册激活，
+// 两者都靠「真 CLSID」吃饭；内建表是「这台机器没有 scrrun」的兜底，恰恰不该进那几条路。
+// 实例化走 comProgId (cgen_expr.cpp 的 New 分支)，不靠 clsidStr。
 static std::string builtinLowerAscii(std::string s) {
     for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     return s;

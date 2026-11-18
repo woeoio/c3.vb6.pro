@@ -598,6 +598,56 @@ scrrun 的 coclass 一并 import 进来**——实测 `FileSystemObject` 带着�
   这是**旧有的有意限制**（只给 `vb6_CreateObject` 的结果打 coclass 名，不做通用 ITypeInfo 查询，
   否则会改动整个语料的 TypeName），与本刀无关。
 
+## 7.14 TypeName：把那条旧限制单独量了一遂（2026-11-18）
+
+旧限制写在 `scripts/check_created_object_typename.ps1` 头注释里：TypeName **只给
+`vb6_CreateObject` 的结果**打 coclass 名，不做通用 ITypeInfo 查询（否则会改动整个语料的 TypeName）。
+这一节把它量成数字。探针：`.temp/typename/oracle_tn.vbs`（cscript）+ `Tn.bas`（同一批调用），
+15 条覆盖 CreateObject / GetFolder / GetFile / GetDrive / Drives / GetSpecialFolder /
+Files / SubFolders / CreateTextFile / OpenTextFile / 布尔返回值 / Nothing / ParentFolder。
+
+| | cscript（真引擎） | 内建腿 | scrrun 腿 |
+|---|---|---|---|
+| 与真引擎一致 | — | **14 / 15** | **4 / 15** |
+
+具体差在两类：
+
+1. **外部 COM 返回的对象一律答 `Object`**（scrrun 腿 T4–T12 + T15 共 11 条）：
+   `TypeName(fso.GetFolder(p))` 真引擎答 `Folder`，我们答 `Object`。内建腿反而全对 ——
+   因为我们自己的对象知道自己的 coclass。
+2. **CreateObject("WScript.Shell") → 我们答 `Shell`，真引擎答 `IWshShell3`**（两腿都差）：
+   我们是「ProgID 最后一段」，而真引擎对 wshom 给的是**接口名**。
+
+这两类看起来是同一个机制的两个面：scrrun 的对象实现了 IProvideClassInfo（能给出 coclass，
+所以答 `FileSystemObject`/`Folder`），wshom 没实现（只能拿到 IDispatch 的 ITypeInfo，
+所以答 `IWshShell3`）。**这是假设，未验证** —— 验证办法就是先拿一个只问
+`IProvideClassInfo2::GetClassInfo` 的探针把两类对象各问一遍，再决定要不要改 `vb6_TypeName`。
+先量后改：这条限制是当年为了不动语料而收的，改之前得先知道语料里有多少处 TypeName 依赖它。
+
+## 7.15 FSO 剩余留白：拿真库表逐个类对了一遍（2026-11-18）
+
+手上有 109 成员的真库表后，留白可以机械数了（`.temp/census_fso.ps1`）：从
+`builtin_scripting_sigs.inc` 取每个类的成员名，再与 `vb6com_fso.c` / `vb6com_dict.c` 里的
+分派字面量做并集比对。
+
+| 类 | 真库成员 | 名字未出现 | 缺哪些 |
+|---|---|---|---|
+| FileSystemObject | 27 | 0 | — |
+| Drive / Drives | 12 / 3 | 0 / 0 | — |
+| Folder / Folders | 19 / 4 | 0 / 0 | — |
+| File / Files | 16 / 3 | 0 / 0 | — |
+| TextStream | 13 | 0 | — |
+| Dictionary | 12 | **2** | **`Key`（属性写）/ `HashVal`（只读）** |
+
+口径要说清（否则这张表会被误读）：实现是**按名字**分派的，一个 .c 同时实现多个类，所以这是
+**名字并集**比对 —— 同名成员在某一个类上没实现（例如 `Folder.Path` 缺而 `Drive.Path` 有）
+会被算作已实现，因此上面这列是**低估**：列出的“缺”是确定缺，“有”只能说名字出现过。
+FSO 那 8 个类在名字层面已经齐了；剩下的差异只能是**语义**层（错误码/边界），
+那些已经由前九刀的读数逐条量过。
+
+Dictionary 那两枚是真缺：`d.Key(x) = v`（给已有键改名）与 `d.HashVal(x)`（VB6 里长期
+未文档化但存在的只读属性）。下一刀可从这里接。
+
 ## 8. 验收
 
 - 刀 1/2/3 各自：`fso_native` 夹具（同一份 .bas 真机与 C3 双跑，逐行 diff）；
