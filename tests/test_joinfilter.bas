@@ -30,13 +30,41 @@ Public Sub Main()
     Debug.Print "JF-excl-ub="; UBound(h)
     Debug.Print "JF-excl=["; Join(h, "|"); "]"
 
+    ' 第五十九刀：数值/布尔/货币/字节元素按 CStr 转（真引擎读数 .temp/join/oracle_join.vbs）。
+    ' 旧写法把 `Join(Array(1,2,3), ",")` 钉成 "JF-err=13" —— 那是真机读数的**反面**
+    ' （VB6 立即窗口和 cscript 都给 1,2,3）。
     Dim n As Variant
     n = Array(1, 2, 3)
-    On Error GoTo TypeMis
     Debug.Print "JF-num=["; Join(n, ","); "]"
-    Debug.Print "JF-DONE"
-    Exit Sub
-TypeMis:
-    Debug.Print "JF-err="; Err.Number
+
+    Dim mm As Variant
+    mm = Array(1.5, 2.25, True, Empty)
+    Debug.Print "JF-mix=["; Join(mm, ","); "]"
+
+    Dim a1 As Variant, a2 As Variant
+    a1 = CByte(65): a2 = CByte(66)
+    Debug.Print "JF-byte=["; Join(Array(a1, a2), "-"); "]"
+
+    Dim cy1 As Variant, cy2 As Variant
+    cy1 = CCur(1.2345): cy2 = 2
+    Debug.Print "JF-cy=["; Join(Array(cy1, cy2), ","); "]"
+
+    ' 错误面：Null 元素 → 13；非数组 → 13；二维数组 → 13
+    On Error Resume Next
+    Dim e1 As Variant
+    Err.Clear
+    e1 = Join(Array(Null, 1), ",")
+    Debug.Print "JF-null-err="; Err.Number
+    Err.Clear
+    Dim sv As Variant
+    sv = 5
+    e1 = Join(sv, ",")
+    Debug.Print "JF-nonarr-err="; Err.Number
+    Err.Clear
+    Dim two(1, 1) As Variant
+    two(0, 0) = 1
+    e1 = Join(two, ",")
+    Debug.Print "JF-2d-err="; Err.Number
+    On Error GoTo 0
     Debug.Print "JF-DONE"
 End Sub

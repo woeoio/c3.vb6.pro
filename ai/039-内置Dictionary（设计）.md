@@ -1410,8 +1410,8 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
    `3→196`、`-1→930`、`1.5→573`、`65536→134`。穷举 VARIANT 布局（vt 在前/值在偏移 4 或 8）×
    宽度 4/8 × 字节序 × seed 候选全不命中（`.temp/dict/derive_num.ps1`），**不猜**，直接记缺口。
    影响面：`HashVal` 是未文档化成员，语料零引用，只有「主动拿数值键调 HashVal」才会看到差别。
-2. **`Join` 遇到数值元素抛 13**（旧缺口，未修）：`Join(Array(1,2,3), "|")` 真引擎给 `1|2|3`，
-   我们报 13（`.temp/dict/JoinNum.bas`）。不是 Dictionary 的事（`Keys`/`Items` 返回的就是
+2. **`Join` 遇到数值元素抛 13**（旧缺口，**第五十九刀已修**，见 §11.33）：`Join(Array(1,2,3), "|")`
+   真引擎给 `1|2|3`，我们报 13（`.temp/dict/JoinNum.bas`）。不是 Dictionary 的事（`Keys`/`Items` 返回的就是
    Variant 数组，字符串元素能 Join）。
 3. **链式默认成员取值** `d("outer")("inner")` 两条腿都得不到值：真引擎 7，我们抛 5
    （`.temp/dict/NestProbe.bas`）。生成的 C 里那条赋值被整体折叠成 `v`（`--emit-c` 可看），
@@ -1441,5 +1441,63 @@ h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先�
 
 编译绿；`.temp/dict/run_key.ps1` 行为/字符串差异 0；`run_reg.ps1` 只剩上述 3 条已记账差异；
 门（GA）见提交信息。
+
+### 11.33 第五十九刀：`Join` 的元素按 CStr 口径转（用户拿 VB6 立即窗口点的那条）
+
+§11.32 记的「`Join` 遇数值元素抛 13」被用户当场验证了：VB6 立即窗口里
+`?join(array(1,2,3),"|")` 与 `?vba.join(array(1,2,3),"|")` 都答 `1|2|3`。旧夹具
+`tests/test_joinfilter.bas` 里那条 `JF-err=13` 是把**错的行为钉成了期望值**，本刀改回。
+
+#### 一、读数（`.temp/join/oracle_join.vbs` 23 条 + 类型化数组 4 条 + 非数组/Null 5 条）
+
+| 元素类型 | 真引擎 |
+|---|---|
+| Long / Integer / Byte | `1\|2\|3` / `-1\|-2` / `65\|66` |
+| Single / Double | `1.5\|2.25` / `1.5\|1E+20`（`0.000001\|0.1` 也对） |
+| Currency | `1.2345\|-2` |
+| Boolean | `True\|False` |
+| Empty | 空串（`Array(Empty,1)` → `\|1`） |
+| **Null 元素** | **13** |
+| Date | 本地化文本（`2020/1/2 3:04:05`） |
+| 混排 | `a-1-True-` |
+| **对象元素** | **450** |
+| **数组元素** | **13** |
+| 类型化数组 `Long()/Integer()/Double()/String()` | 一律转文本，不报错 |
+| **非数组**（`Join(5)` / `Join("abc")` / `Join(Empty)`） | **13** |
+| **二维数组** | **13** |
+| 分隔符 Empty / 只给一个参数 | 拼接 / 默认空格 |
+| **分隔符 Null** / **整体 Null** | **94** |
+
+#### 二、实现（`src/rtl/core/vb6rtl/vb6rtl_compat.c`）
+
+1. 新增 `vb6_SA_ReadJoinStrAt()`：**Join 专用**的元素读取。字符串数组直取；Variant 数组按 vt 分派
+   （Empty→空、BSTR→原值、Null→13、数组→13、对象→450、其余→交给 `vb6_CStr`）；
+   类型化数组按 elemType 造等价 Variant 再走 `vb6_CStr`（打印口径与 CStr 单一主人）。
+   **故意不合并**进 `vb6_SA_ReadStrAt`（那是 `Filter` 的旧口径，只吃字符串/Empty）。
+2. `vb6_Join()`：`!arr || cDims != 1` → 13（旧写法落入 `count<=0` 分支静默返回空串，等于把错当对）；
+   元素拼接改成可增长缓冲区，现造的元素串用完即释放。
+
+#### 三、对拍与夹具
+
+- 23 条并排：**J01–J18 全部逐字一致**（数值/布尔/货币/字节/Empty/混排/长整型/P 维）；
+  错误面 J19/J20/J22（非数组/二维/数组元素 → 13）也一致。
+- `tests/test_joinfilter.bas` 补了 `JF-num/JF-mix/JF-byte/JF-cy/JF-null-err/JF-nonarr-err/JF-2d-err`，
+  并用等价 VBS 逐条复核过真机值；`tests/run_tests.ps1` 的期望表同步（删 `JF-err=13`）。
+
+#### 四、本刀发现但**未修**的（均与本刀改动无关，逐条留证）
+
+1. **分隔符为 Null 时的 94 丢了**（J14：真引擎 94，我们 err=0 并给 `12`）。根因不在 Join：
+   发码把实参转成 `vb6_VariantToString(vb6_VariantNull())`，那条转换站对 Null 静默给空串。
+   真 VB6 的「Null → String」是 94；要改就得改强制转换站，影响面比 Join 大，另开一刀。
+2. **`Array(<对象>)` 把对象存成 Long**（V1：`VarType=3`、`TypeName=Long`、`IsObject=False`，���出的“值”
+   是指针数）。这才是 J21（`Join(Array(obj))`）的根因；Join 自己的 450 分支是通的 ——
+   用 `Join(d.Items, "|")`（值为对象）实测得到 450。
+3. **`Filter` 遇数值元素仍抛 13**（J23：真引擎 err=0）。真机行为是「按文本匹配、结果**保留原元素类型**」
+   （`Filter(Array(1,2,21),"1",True)` → 2 个元素、`TypeName` 还是 Integer）；我们的结果数组是 BSTR 型，
+   要修必须改结果数组的元素型，属结构性改动。
+4. **数字做分隔符 `Join(arr, 0)` 编译不过**（C2440: double→BSTR），真引擎给 `102`。
+5. 附带发现：`Array(CDate("..."))` / `Array(CByte(..))` 裸写会撞元素 setter 类型推断
+   （生成 `vb6_ArraySetBSTR(..., vb6_CDate(...))` → C2440）。本刀探针一律先落 Variant 变量绕开，
+   这条单独记在这里。
 
 
