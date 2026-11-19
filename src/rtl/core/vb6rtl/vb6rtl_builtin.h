@@ -86,6 +86,19 @@ BSTR vb6_FormatDateTime(double dateSerial, int32_t namedFormat);
 #endif
 BSTR vb6_LTrimVar(vb6_VARIANT s);
 
+// C30-11 第七十一刀: Len/Trim/LTrim/RTrim/UCase/LCase 的「Null 进、Null 出」变体位。
+// 真 VB6 IDE 读数 (tests/vb6probe/NullFamilyProbe.bas A1/B1/B4/B5/B6/B7): 六格都是
+// **Null**、Err 0; Empty 那几格维持原档 (Len 0 / Trim "")。
+// 只在实参是**整只 Variant 槽**时改道到这几枚 (cgen_expr_call_arg_variant.inc),
+// 其余实参照旧交给 BSTR 形参 —— 两条路的读数不同, 不能合成一条。
+// ⚠ 头里只留原型, 身子在 vb6rtl_string.c (与 vb6_Trim 同文件): 理由同 IntV/FixV。
+vb6_VARIANT vb6_LenV(vb6_VARIANT v);
+vb6_VARIANT vb6_TrimV(vb6_VARIANT v);
+vb6_VARIANT vb6_LTrimV(vb6_VARIANT v);
+vb6_VARIANT vb6_RTrimV(vb6_VARIANT v);
+vb6_VARIANT vb6_UCaseV(vb6_VARIANT v);
+vb6_VARIANT vb6_LCaseV(vb6_VARIANT v);
+
 // 消息框
 // 账 #490 §B178: 原型收满 VB6 的五参形 (prompt, buttons, title, helpfile, context),
 //   与 vb6_InputBox 同款 —— 那一位早就是七参全签名。改前是三参, 而发码对

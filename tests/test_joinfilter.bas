@@ -326,5 +326,71 @@ Public Sub Main()
     Err.Clear
     nc = (nv2 & nv2 & 1)
     Debug.Print "JF-nullcat3b="; IsNull(nc); "/"; CStr(nc); "/"; TypeName(nc); "/"; Err.Number
+    ' 第七十一刀: Len/Trim/LTrim/RTrim/UCase/LCase 的 Null → Null
+    ' (真 VB6 IDE 读数 A1/B1/B4/B5/B6/B7: 六格都是 Null、Err 0)。
+    ' 反向钉: 非 Null 的 Variant 与 Empty 仍走原档 (变体位不是"一律 Null")。
+    Dim sv2 As Variant
+    sv2 = "  ab  "
+    Dim ev2 As Variant
+    ev2 = Empty
+    Dim iv As Long
+
+    ' 这几格有会真报错的那一条 (数值目标收 Null ⇒ 94), 所以本段自带 Resume Next。
+    On Error Resume Next
+
+    Err.Clear
+    nc = Len(nv2)
+    Debug.Print "JF-lenv-null="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = Trim(nv2)
+    Debug.Print "JF-trimv-null="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = LTrim(nv2)
+    Debug.Print "JF-ltrimv-null="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = RTrim(nv2)
+    Debug.Print "JF-rtrimv-null="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = UCase(nv2)
+    Debug.Print "JF-ucasev-null="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = LCase(nv2)
+    Debug.Print "JF-lcasev-null="; IsNull(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = Len(nv2)
+    Debug.Print "JF-lenv-tn="; TypeName(nc); "/"; Err.Number
+
+    Err.Clear
+    nc = Trim(sv2)
+    Debug.Print "JF-trimv-str=["; nc; "]/"; Err.Number
+
+    Err.Clear
+    nc = UCase(sv2)
+    Debug.Print "JF-ucasev-str=["; nc; "]/"; Err.Number
+
+    Err.Clear
+    nc = Len(sv2)
+    Debug.Print "JF-lenv-str="; nc; "/"; Err.Number
+
+    Err.Clear
+    nc = Len(ev2)
+    Debug.Print "JF-lenv-empty="; nc; "/"; Err.Number
+
+    Err.Clear
+    nc = Trim(ev2)
+    Debug.Print "JF-trimv-empty=["; nc; "]/"; Err.Number
+
+    ' 数值目标收 Null ⇒ 94 (与第六十三刀数值站同口径; 变体位交回的是 Null, 不是 0)
+    Err.Clear
+    iv = Len(nv2)
+    Debug.Print "JF-lenv-long="; Err.Number
+    On Error GoTo 0
+
     Debug.Print "JF-DONE"
 End Sub

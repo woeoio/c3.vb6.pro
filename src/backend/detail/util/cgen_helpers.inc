@@ -1023,6 +1023,12 @@
     // 旧名只是既有站点的投影, 判据各只有一份 (定义见 cgen_util_type.cpp)。
     bool isVariantType(const Expr* e) const;
     bool isVariantSlot(const std::string& text, const Expr* ast) const;
+    // 账 #305 §B219 (第七十一刀): 「这发 Len/Trim/LTrim/RTrim/UCase/LCase 要不要改道到
+    // 变体位」的唯一判据 —— 发码站 (cgen_expr_call_arg_variant.inc) 与类型 oracle
+    // (inferExprTypeImpl 的 IndexOrCallExpr 分支) **共用**同一条: 两边要么同时改道、要么
+    // 同时不改。不同步的代价是 C2440 或静默错值 (账 §B147 那条方向性教训)。
+    // 答非空 = 该发的 C 名 (vb6_LenV 等); 空 = 不改道。
+    std::string nullFamilyVExitCName(const IndexOrCallExpr& call) const;
     bool isSafeArrayCarrier(const std::string& text) const;
 
     // <vbeclipse>: 装箱权威用它判断"这个 C 表达式顶层已经是 vb6_VARIANT 了"。

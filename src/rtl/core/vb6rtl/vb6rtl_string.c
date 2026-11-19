@@ -823,3 +823,48 @@ BSTR vb6_Partition(int64_t number, int64_t start, int64_t stop, int64_t interval
     return vb6_BSTR_FromStr(buf);
 }
 
+
+// ============================================================
+// C30-11 第七十一刀: Len/Trim/LTrim/RTrim/UCase/LCase 的「Null 进、Null 出」变体位
+//
+// 真 VB6 IDE 读数 (tests/vb6probe/NullFamilyProbe.bas, 2026-11-19 复量):
+//   A1 Len(Null)  / B1 Trim(Null) / B4 LTrim(Null) / B5 RTrim(Null) /
+//   B6 UCase(Null) / B7 LCase(Null) —— 六格全是 **Null**、Err **0**。
+// C3 改前这六格都报 94: 实参站把它们当成「String 形参收 Variant」的通用格,
+// 先折 vb6_CStrStrict(Null) ⇒ 94 (第六十二刀的口径), 而那一条对 Asc/Replace/
+// Join/Split 是对的, 对 Len/Trim 这一族不是 —— 它们**不把 Null 折成串**, 而是
+// 把 Null 原样交回去。字节/数值口径 (Len(Empty)=0 等) 仍走 base 函数。
+//
+// 交付档: Len 答 Variant(Long) —— 与 AbsV/IntV 同档; Trim 一族答 Variant(String)。
+// 发码侧只在实参是整只 Variant 槽时走这里 (见 cgen_expr_call_arg_variant.inc),
+// 所以 BSTR 形参那条老路 (含它自己的 94) 一字未动。
+// ============================================================
+vb6_VARIANT vb6_LenV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantLong(vb6_Len(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_TrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Trim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_LTrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_LTrim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_RTrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_RTrim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_UCaseV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_UCase(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_LCaseV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_LCase(vb6_VariantToString(v)));
+}

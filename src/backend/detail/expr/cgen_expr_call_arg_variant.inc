@@ -231,11 +231,25 @@
                         }
                     }
                     if (!topIsBstr092a) {
+                        // C30-11 第七十一刀: Len/Trim/LTrim/RTrim/UCase/LCase 收到**整只槽**时
+                        // 改道到变体位 (vb6_LenV/... 收 VARIANT、Null 进 Null 出)。
+                        // 为什么必须在**这一站**改道, 而不是学 AbsV 等到装箱站再改名:
+                        //   这一站的通用口会先折 vb6_CStrStrict(槽), 而 hoistOwnedTempArgs
+                        //   把那枚串提成 `BSTR _own_N = vb6_CStrStrict(nv);` 一条**独立语句**;
+                        //   装箱站那时只看到 `vb6_Len(_own_N)`, 既认不出实参、也删不掉那条语句
+                        //   ⇒ 94 在造临时量时就抛了 (这正是 §11.44 第六节记的那个坑)。
+                        // 判据不在这里另写: 与 oracle 共用 nullFamilyVExitCName。
+                        const std::string vexit71 = nullFamilyVExitCName(node);
+                        if (!vexit71.empty()) {
+                            callee = vexit71;
+                            // argVal 原样 (整只槽) —— 不造临时量, 也就没有 94。
+                        } else {
                         // C30-11 第六十二刀: 这一站是"Variant 实参 → String 形参"的总口，
                         // 按 VB6 口径 Null 该给 **94**（读数：Asc 94 / Replace 94 /
                         // Join 分隔符 94 / Split 源 94），旧写法 vb6_VariantToString 静默给空串
                         // ⇒ 第五十九刀记的 J14（Join(arr, Null) 真 94 / 我们 0）就是这里。
                         argVal = "vb6_CStrStrict(" + argVal + ")";
+                        }
                     }
                     }
                 } else if (paramBase == Vb6Type::Object) {

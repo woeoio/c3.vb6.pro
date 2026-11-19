@@ -424,6 +424,14 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
                 if (sym && isPropShadowingBuiltinFunc(sym, id.name)) {
                     return cgenTypeForShadowedBuiltin(id.name);
                 }
+                // 账 #305 §B219 (第七十一刀): 六枚 Null 传播族 (Len/Trim/LTrim/RTrim/UCase/LCase)
+                // 在实参是整只 Variant 槽时, 发码站改道到 *V 出口 —— 交回来的是整只 VARIANT,
+                // 所以**返回档就是 Variant** (不是 Long/String)。判据只许问 nullFamilyVExitCName
+                // (发码站同用), 不许在这里另写一份名单。
+                // 缺这一格时实测: `For i = 1 To Len(nv)` ⇒ `int32_t i_end = vb6_LenV(nv)`,
+                // `Debug.Print UCase(nv)` ⇒ vb6_DebugWriteBSTR(VARIANT), `If Trim(nv) = "a"`
+                // ⇒ vb6_StrCmp(VARIANT, BSTR) —— 三形都是 C2440。
+                if (!nullFamilyVExitCName(call).empty()) return Vb6Type::Variant;
                 if (sym) return sym->type;
                 // 语义层 builtin_funcs.inc 没登记、但 cgen 发射表里有名字的那一族
                 // (LenB / InStrB / LeftB / TypeOf / LoadRes* …)。没有这一问时它们一律
@@ -867,6 +875,10 @@ bool CCodeGen::isDefinitelyVariantExpr(Expr& expr, bool* isArrOut) const {
                     if (isArrOut) *isArrOut = true;
                     return true;
                 }
+                // 账 #305 §B219 (第七十一刀): Len/Trim/LTrim/RTrim/UCase/LCase 的实参是整只
+                // Variant 槽时, 发码站改道到 *V 出口 (交回整只 VARIANT) ⇒ oracle 必须同步
+                // 答 Variant。判据与发码站同一处 (nullFamilyVExitCName), 不许在这里另问一遍。
+                if (!nullFamilyVExitCName(call).empty()) return true;
                 if (kBuiltinFuncNames.count(bname)) return false;
                 // 账 §56.40 校准: **对象变量的默认属性调用** (`obj(9)`) —— 调用结果的
                 // 类型是**那个属性的返回档**, 不是变量自己的存储档 (类实例变量在符号表里
@@ -1471,6 +1483,42 @@ bool CCodeGen::isVariantSlot(const std::string& cExpr, const Expr* ast) const {
 // 逐字一致; P1.3 才逐站替换成带 AST 的命名接口。
 bool CCodeGen::cExprIsVariant(const std::string& cExpr) const {
     return isVariantSlot(cExpr, nullptr);
+}
+
+// 账 #305 §B219 (第七十一刀): Len/Trim/LTrim/RTrim/UCase/LCase 的「Null 进、Null 出」变体位。
+// 真 VB6 IDE 读数 (tests/vb6probe/NullFamilyProbe.bas): A1/B1/B4/B5/B6/B7 六格都是
+// Null、Err 0。C3 改前六格都报 94 —— 实参站把 Variant 折成 BSTR 形参 (vb6_CStrStrict),
+// 94 在造那枚临时量时就抛了, vb6_Len/vb6_Trim 根本见不到 Null。
+//
+// 判据只一条, 两站共用 (发码站与类型 oracle): 被调名 ∈ 六枚 ∧ 恰好一个实参 ∧
+// 那个实参的 **VB 类型是 Variant** (数组本体不算: 那一档没读数, 保持原路)。
+// 为什么必须共用: 发码站把调用名改成 *V 之后交回的是整只 VARIANT 槽, 而 oracle 要是
+// 仍答 Long/String, 消费点 (比较/算术/Print#/MsgBox) 就会把结构体当标量发 ——
+// 第五十二刀 Abs 那一版在**调用站**改名的实测教训正是这个 (vb6_AbsV(...) < 0.001
+// 当场 C2440 + C2088)。反过来 oracle 答 Variant 而发码没改道, 就会给裸 int32 套
+// vb6_VariantToLong ⇒ 同一类 C2440。
+std::string CCodeGen::nullFamilyVExitCName(const IndexOrCallExpr& call) const {
+    if (!call.callee || call.callee->kind != ASTNodeKind::IdentifierExpr) return std::string();
+    std::string n = Symbol::toLower(static_cast<const IdentifierExpr&>(*call.callee).name);
+    if (!n.empty() && n.back() == '$') n.pop_back();
+    static const std::unordered_map<std::string, std::string> kExit = {
+        {"len",   "vb6_LenV"},
+        {"trim",  "vb6_TrimV"},
+        {"ltrim", "vb6_LTrimV"},
+        {"rtrim", "vb6_RTrimV"},
+        {"ucase", "vb6_UCaseV"},
+        {"lcase", "vb6_LCaseV"},
+    };
+    auto it = kExit.find(n);
+    if (it == kExit.end()) return std::string();
+    if (call.positional.size() != 1 || !call.positional[0]) return std::string();
+    // 只认整只槽: 空实参/数组本体都走原路 (读数没量过那一档, 不动)。
+    const Vb6Type at = inferExprType(*call.positional[0]);
+    if (static_cast<uint16_t>(at) & static_cast<uint16_t>(Vb6Type::Array)) return std::string();
+    const Vb6Type base = static_cast<Vb6Type>(
+        static_cast<uint16_t>(at) & ~static_cast<uint16_t>(Vb6Type::Array));
+    if (base != Vb6Type::Variant) return std::string();
+    return it->second;
 }
 
 // 账 #305 §B147: 「这枚表达式交出来的 C 是不是整只槽」的 AST 那一半 (另一半天然是
