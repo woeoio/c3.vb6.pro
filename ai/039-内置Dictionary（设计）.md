@@ -2783,33 +2783,47 @@ GA 的 `Tests (vbp #9)` 报 `PASS=54 FAIL=1 SKIP=2`，注解（check-runs/annota
 `[COMPILE-FAIL] iface_multi_incomplete_negcontrol`）—— 同一 HEAD 上 CI 这两格是 PASS，属本机环境差
 （OCX/编译器可用性），与发码无关。
 
-### 11.55 第七十八刀：`Asc("")` / `Asc(Empty)` ⇒ **5**（账 #B226）
+### 11.55 第七十八刀（已撤回）：`Asc("")` / `Asc(Empty)` 报 5 试过，与 94 那条路揭不开
 
-#### 一、读数（`.temp/k78/lena.bas`，本机 C3）
+#### 一、本机读数（`.temp/k78/lena.bas`）
 
 ```
-改前: L1 n = Asc("")     | n=0 err=0       改后: n=0 err=5
-      L2 n = Asc(Empty) | n=0 err=0             n=0 err=5
+改前: L1 n = Asc("") | n=0 err=0     L2 n = Asc(Empty) | n=0 err=0
+真机: 两格都是 5（Invalid procedure call or argument）
 ```
 
-真 VB6：两格都是 **5**（Invalid procedure call or argument）。Empty 进 String 形参就是空串，
-所以两格同一个出口。
+#### 二、改法与 GA 红
 
-#### 二、改法
+`vb6_Asc` 对空串先 `vb6_ErrRaise(5, …)` 再 `return 0`。本机探针两格都变 err=5。
+但 GA `4454*****` 上 `[RUN] test_joinfilter: output mismatch`：
 
-`vb6_Asc` 原来对空串（含 NULL 指针）静默 `return 0`。改成先 `vb6_ErrRaise(5, …)` 再 return 0。
-**为什么不顺手把值也“不写目标”**：那属「语句级中止」（§11.54 三），需错误序号 + 赋值站守卫，
-另开一刀；本刀只收错误号，与 W/C 那六格同一笔账。
+```
+JF-nullasc=94   （期望）  →  实测 5
+```
 
-#### 三、门禁与清单
+原因（发码逐字看的）：
 
-- RTL-only，**发码一变不变** ⇒ 发码清单零行变动（不登记）。
-- 四道门禁全 PASS；`-Category syntax` PASS=227 FAIL=0。
-- 全语料里 `Asc(` 的调用点对手抄一遍：`test_types.bas:133` / `test_str_cnum_assign.bas:42` /
-  `test_joinfilter.bas:83` / `photodemon Plugin_LittleCMS.bas` ×2 / `VbQRCodegen mdQRCodegen.bas` /
-  `VBFlexGridDemo Common.bas:816` —— 全部是「Mid(...) 取 1 个字符」或字面量，不会落到空串；
-  探针 `tests/vb6probe/NullFamilyProbe.bas` 的 C5 格读数从 `err=0` 变 `err=5`（与真机一致），
-  该文件不在任何用例的期望里（它只用于人工对照），无需改针。
+```c
+BSTR _own_6 = vb6_CStrStrict(nv2);              /* nv2 = Null ⇒ raise 94, 交回空串 */
+nc = vb6_VariantInt((int16_t)(vb6_Asc(_own_6)));
+```
+
+`Asc(<Null>)` 到 `vb6_Asc` 手上时，94 已经报过了，手上的就是一个空串 ——
+**两个来源在 BSTR 层不可分**，在这里再报 5 就把 94 盖掉。
+“把 CStrStrict 失败时改交 NULL” 也试不得：`vb6_CStrStrict` 的返回值被下游
+`Mid/Left/UCase/Len` 那一片直接当字符串用（C6–C8 就是它们），换 NULL 等于拿空指针去换
+一堆未审计的解引用。
+
+#### 三、结论
+
+撤回本刀（`vb6_Asc` 回到“空串静默 0”，仅留注释记下来龙去脉），
+`Asc("")=5` **与 W4b/W5b/W6b、C6/C7/C8 同一笔账**：都要“语句级中止”——
+转换一 raise，整条语句就停，`vb6_Asc` 根本不会跑，两种来源自然分开。
+那一刀落地后，本格只需把 `vb6_ErrRaise(5, …)` 加回去。
+
+教训：RTL 层的“补一个 raise”不是局部改动 —— 它改的是**错误号**，
+而上游可能已经报过更具体的错误。凡是不确定“到这一步时 Err 是什么”的格，先写探针把
+整条链路（包括上游转换）的 Err 读数拿齐，再决定报不报。
 
 
 
