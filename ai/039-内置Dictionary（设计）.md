@@ -2926,3 +2926,44 @@ C8  s = UCase(Null)   | s=[keep] err=94
   `run_tests.ps1` 的形状针（5809、8811–8813）。
 - 定长串目标（`udtFixedField` / `fixedLen`）那两站没有守卫：它们的写出口是
   `vb6_FixedStrAssign*` / `vb6_LSet*`，这一刀没碰。
+
+### 11.57 GA 44565667912 红的两格：登记时把「机器侧 5 行」换成了本机数 + 一条 runner 争用
+
+#### 一、形状门（真错，已修）
+
+CI 判词只有 5 行：`tests/guisample/GUISample.vbp`、`…/vb6ref/src/vc6/GUISample.vbp`、
+`…/vs2015/GUISample.vbp`、`tests/TeeChartChartDisplay/DisplayProject.vbp`、
+`tests/ctrlmscomm/MsCommApp.vbp`。这 5 份输入在 CI 与本机**本来就不同答**
+（引用本机注册过的类型库/OCX 的那一档），所以清单里它们一直存的是 **CI 那台机器给的值**。
+
+第七十九刀让它们的发码也变了（多出同一批守卫），`rebless_emit_manifest.ps1 -Bless`
+只会用**手上这份清单**改写，于是把它们一起换成了本机数 —— 745 行对，5 行不对。
+
+修法：从这次 run 的 `emit-manifest` 工件（`actions/artifacts/14551349391`）取 CI 自己那份，
+只把 5 行按路径换回去，其余 745 行一个字不动；换完拿 CI 那份清单喂
+`compare_emit_manifest.ps1` ⇒ 750/750 相同。
+
+教训（补进清单纪律）：**-Bless 只许在没有机器侧行的改动上用**。凡本轮动到那 5 份输入，
+登记后必须再用 CI 的清单复算一遍，不能只看本机 `相同 750`。
+（本机现在跑 compare 会报这 5 行不同 —— 那是**本机口径差**，不是回归；
+判红只能用 CI 自己那台二进制交回来的清单。）
+
+#### 二、Tests (vbp #5) 红：`[PIXELS] uctreeview_px.ps1`（本机同一 HEAD 复跑 PASS）
+
+CI 读数：`'Tree Explorer' 内容段: BM_CLICK 3s 未返回 + 迟到 7s 仍无窗体 (resp=False)`，
+同一条详情的后半段是 `jitter[Corporate Hierarchy]=BM_CLICK(late=4954ms resp=True)`
+—— 后一个按钮**迟到了 4.9 秒才响应**，说明那台机器当时被挤得很厉害（3 秒同步窗是硬判据）。
+
+本机复现（同一 HEAD、同一 C3.exe）：手工按 `Test-VbpBuild` 的口径重建
+`tests/ucTreeView/Proyecto1.vbp --arch x86`（拷 `img\` + `ejemplo.xml`/`JerarquiaEmpresa.xml`/`menu.xml`），
+再跑 `tests/guisample/uctreeview_px.ps1`：**rc=0 PASS**，五段内容全开、3 轮重复全开，
+一次 `BM_CLICK` 超时都没有（`fg[...] ok=True try=1`，各 `repeat[...] open sync= close=True`）。
+
+所以归因=**runner 争用**（该 run 同时跑了 21 个 job），不是这一刀的发码。处置：不改判据、
+不改超时窗，重跑；若同一格再红，再回头看是不是夹具有真的时序耦合。
+
+#### 三、留给下一次的读法
+
+`-Category vbp -VbpShard 5` 在本机这台机器上**不会重建** `output\build_ucTreeView`
+（那目录 2026-11-10 就在，说明那一格在本机走的是缓存/跳过），所以「本机分片绿」不能当
+「这一格跑过」的凭证 —— 要点名复跑像素夹具时，照上面那三行手工重建 + 单跑脚本。
