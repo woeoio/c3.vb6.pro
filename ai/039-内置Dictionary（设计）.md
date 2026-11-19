@@ -2758,6 +2758,31 @@ P4  s = c(1)          | keep / 94   ✅（P1/P2/P3 不变）
 （`vb6_ErrRaise` 自增），赋值/输出站在写目标前比一次，若本语句里 raise 过则不写。
 这会给**每条赋值**加一层守卫 ⇒ 发码形状大面换；必须单独一刀、单独登记，不能混在本刀里。
 
+#### 四、GA run 44532858724 的红：`fgz_fix005a_default_member_unwrapped`（已修）
+
+GA 的 `Tests (vbp #9)` 报 `PASS=54 FAIL=1 SKIP=2`，注解（check-runs/annotations）点名：
+
+```
+[EMITC-SHAPE] fgz_fix005a_default_member_unwrapped ... exit=0
+  missing: vb6_VariantToString(vb6_VariantFromComResult(vb6_ComCallByDispid(
+```
+
+就是本刀换掉的那个形状：那条针钉的是「默认成员结果先拆成整只变体再落槽」，而本刀把 String 槽那一支
+从 `vb6_VariantToString(...)` 改成 `vb6_BSTR_AssignFromVariant(&s, ...)`。「先拆箱」这个意思没变，
+变的只是落槽那一枚出口 —— 针跟着改：
+
+```
+'vb6_BSTR_AssignFromVariant(&s, vb6_VariantFromComResult(vb6_ComCallByDispid('
+```
+
+（本机发码逐字核过：`vb6_BSTR_AssignFromVariant(&s, vb6_VariantFromComResult(vb6_ComCallByDispid(d, 0, ...`。）
+
+教训（记下来）：这类 `[EMITC-SHAPE]` 用例住在 **vbp** 类里，`-Category syntax` 看不到 ——
+以后改了「写槽」那一层，本机至少要跑 `-Category vbp -VbpShard <CI 红的那一片> -VbpShardTotal 12`。
+本机重跑 9/12 片：本针不再报缺；另有两格本机红（`[VBP] c29listview`、
+`[COMPILE-FAIL] iface_multi_incomplete_negcontrol`）—— 同一 HEAD 上 CI 这两格是 PASS，属本机环境差
+（OCX/编译器可用性），与发码无关。
+
 
 
 

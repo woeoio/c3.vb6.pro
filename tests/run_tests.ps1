@@ -8569,10 +8569,13 @@ if ($Category -in @("all", "run", "vbp")) {
     #    ⚠ 这一格本地**本来就走另一条正确的路**(赋值站那张内联名单在当前路径上是死代码,
     #    调用点早已被包过) ⇒ 本针是**防回归**, 不是修前红; 上游 FIX-005a 那族
     #    (名单长度写错 ⇒ 恒假) 在本地度量 697 份语料后确认无暴露面 ⇒ 按"无判据不改"不修。
+    # 第七十七刀 (§B225) 换掉第三条针: String 槽那一支不再发 `vb6_VariantToString(...)`
+    # (那一步把 Null 提前折成空串, 真机 W6 是 94 且目标不变), 改建 `vb6_BSTR_AssignFromVariant`。
+    # 针的意思不变: 默认成员的结果**必须先拆成整只变体**再落槽, 不许拿 void* 直拼。
     Test-EmitcShape "fgz_fix005a_default_member_unwrapped" @("$Tests\fgz_fix005a\FgzFix005a.vbp") @(
         'vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComCallByDispid(',
         'vb6_VariantToDouble(vb6_VariantFromComResult(vb6_ComCallByDispid(',
-        'vb6_VariantToString(vb6_VariantFromComResult(vb6_ComCallByDispid('
+        'vb6_BSTR_AssignFromVariant(&s, vb6_VariantFromComResult(vb6_ComCallByDispid('
     )
     Test-Vbp "fgz_fix005a_run" "$Tests\fgz_fix005a\FgzFix005a.vbp" @("DICT-L=7", "DICT-S=hello", "DICT-X=2.5")
     Test-Vbp "fgz_fix005a_run_x86" "$Tests\fgz_fix005a\FgzFix005a.vbp" @("DICT-L=7", "DICT-S=hello", "DICT-X=2.5") -Arch "x86"
