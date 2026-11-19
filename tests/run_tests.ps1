@@ -5710,7 +5710,9 @@ if ($Category -in @("all", "run", "bas")) {
         # 转换本身 (vb6_VariantToString) 没变, 只是它落进了临时量的声明里, 语句末按档收回。
         # ⇒ 钉的形状从「内联」改成「声明 + 引用」两枚 (档 = BSTR ⇒ 收回用 vb6_BSTR_Free)。
         'BSTR _own_1 = vb6_CStrStrict(h->PV  /* class var .PV field variant */);',
-        'vb6_CStrLong(vb6_Len(_own_1))',
+        # 第七十一刀 (账 #305 §B219): Len 的整只变体槽实参改道 vb6_LenV —— 这一格不再造
+        # 串临时量, 消费形状变成 CStr(VariantFromValue(LenV(...))); 那枚 _own_1 现在归 Left。
+        'vb6_CStr(vb6_VariantFromValue(vb6_LenV(h->PV  /* class var .PV field variant */)))',
         'vb6_B171Main_EchoBack((&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=h->PS  /* class var .PS field */}))'
     )
     Test-EmitcAbsent 'b171_class_slot_arg_lesion' @(
@@ -5763,9 +5765,11 @@ if ($Category -in @("all", "run", "bas")) {
         # 转换与字面量本身没变, 只是落进了临时量的声明里, 语句末按档收回 ⇒ 钉的形状改成
         # 「声明 + 引用」两枚 (档 = BSTR ⇒ 收回用 vb6_BSTR_Free)。
         'BSTR _own_1 = vb6_CStrStrict(u.UV);',
-        'vb6_CStrLong(vb6_Len(_own_1))',
-        'BSTR _own_4 = vb6_BSTR_FromStr(L"t");',
-        'vb6_InStr(1, s, _own_4)'
+        # 第七十一刀 (账 #305 §B219): Len(u.UV) 走 vb6_LenV, 少造一枚串临时量 ⇒
+        # 后面两枚 needle 的 _own_N 编号前移一位 (4 → 3)。
+        'vb6_CStr(vb6_VariantFromValue(vb6_LenV(u.UV)))',
+        'BSTR _own_3 = vb6_BSTR_FromStr(L"t");',
+        'vb6_InStr(1, s, _own_3)'
     )
     Test-EmitcAbsent 'b173_udt_slot_arg_lesion' @(
         "$Tests\b173_udtarg\B173Main.bas", "$Tests\b173_udtarg\B173Holder.cls") @(
@@ -5793,10 +5797,11 @@ if ($Category -in @("all", "run", "bas")) {
         # 账 #464 §B164: 这两格 (Left 的实参 / needle 位的字面量) 现在是**具名带权临时量** ——
         # 转换与字面量本身没变, 只是落进了临时量的声明里, 语句末按档收回 ⇒ 钉的形状改成
         # 「声明 + 引用」两枚 (档 = BSTR ⇒ 收回用 vb6_BSTR_Free)。
-        'BSTR _own_6 = vb6_CStrULong(q);',
-        'vb6_Left(_own_6, 10)',
-        'BSTR _own_7 = vb6_BSTR_FromStr(L"t");',
-        'vb6_InStr(2, s, _own_7)',
+        # 第七十一刀 (账 #305 §B219): 前面 Len 改道后少造一枚串临时量 ⇒ 这两组编号前移一位。
+        'BSTR _own_5 = vb6_CStrULong(q);',
+        'vb6_Left(_own_5, 10)',
+        'BSTR _own_6 = vb6_BSTR_FromStr(L"t");',
+        'vb6_InStr(2, s, _own_6)',
         '(int32_t)sizeof(n)',
         '(int32_t)sizeof(vb6_type_U74)'
     )

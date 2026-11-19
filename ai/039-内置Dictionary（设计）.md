@@ -2236,6 +2236,11 @@ vb6_BSTR_Free(_own_1);
   改前/改后两台二进制发码 diff 过，差异只有 `*V` 改道与 `_own_N` 计数位移；另 **5 行**是已记的机器侧差
   （guisample×3 + TeeChartChartDisplay + ctrlmscomm）—— 这 5 份本机改前改后逐字节相同，与这一刀无关，
   保持 CI 侧原值不抹平。
+- 用例内形状断言：`b171_class_slot_arg_shape` / `b173_udt_slot_arg_shape` / `b174_num_str_arg_shape`
+  三针钉的是改道前的文本（`vb6_CStrLong(vb6_Len(_own_1))`，以及 `_own_4`/`_own_6`/`_own_7` 那几枚临时量）；
+  本刀少造两枚串临时量后编号前移、Len 那格变成 `CStr(VariantFromValue(LenV(...)))`，遂 GA 两个 bas 分片
+  都在这三针上红（同一组三条，非分片差异）。已按改后真实发码更新，并用 Test-EmitcShape 同一判据
+  （子串包含 + exit=0）复算三例全中。
 
 #### 六、踩到的第二个坑：oracle 的“Variant”不能用 inferExprType 问
 
