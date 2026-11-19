@@ -357,7 +357,15 @@ BSTR vb6_Chr(int32_t code) {
 }
 
 int32_t vb6_Asc(BSTR s) {
-    if (!s || vb6_BSTR_Len(s) == 0) return 0;
+    if (!s || vb6_BSTR_Len(s) == 0) {
+        // C30-11 第七十八刀 (§B226): 真 VB6 对空串报 **5** (Invalid procedure call or
+        // argument)。以前这里静默返回 0 ⇒ `Asc("")` / `Asc(Empty)` 都是 0/err=0
+        // (探针 .temp/k78/lena.bas 的 L1/L2 读数)。Empty 进 String 形参就是空串,
+        // 所以两格同一个出口。
+        vb6_ErrRaise(5, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid procedure call or argument"));
+        return 0;
+    }
     return (int32_t)s[0];
 }
 

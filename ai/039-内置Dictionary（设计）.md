@@ -2783,6 +2783,34 @@ GA 的 `Tests (vbp #9)` 报 `PASS=54 FAIL=1 SKIP=2`，注解（check-runs/annota
 `[COMPILE-FAIL] iface_multi_incomplete_negcontrol`）—— 同一 HEAD 上 CI 这两格是 PASS，属本机环境差
 （OCX/编译器可用性），与发码无关。
 
+### 11.55 第七十八刀：`Asc("")` / `Asc(Empty)` ⇒ **5**（账 #B226）
+
+#### 一、读数（`.temp/k78/lena.bas`，本机 C3）
+
+```
+改前: L1 n = Asc("")     | n=0 err=0       改后: n=0 err=5
+      L2 n = Asc(Empty) | n=0 err=0             n=0 err=5
+```
+
+真 VB6：两格都是 **5**（Invalid procedure call or argument）。Empty 进 String 形参就是空串，
+所以两格同一个出口。
+
+#### 二、改法
+
+`vb6_Asc` 原来对空串（含 NULL 指针）静默 `return 0`。改成先 `vb6_ErrRaise(5, …)` 再 return 0。
+**为什么不顺手把值也“不写目标”**：那属「语句级中止」（§11.54 三），需错误序号 + 赋值站守卫，
+另开一刀；本刀只收错误号，与 W/C 那六格同一笔账。
+
+#### 三、门禁与清单
+
+- RTL-only，**发码一变不变** ⇒ 发码清单零行变动（不登记）。
+- 四道门禁全 PASS；`-Category syntax` PASS=227 FAIL=0。
+- 全语料里 `Asc(` 的调用点对手抄一遍：`test_types.bas:133` / `test_str_cnum_assign.bas:42` /
+  `test_joinfilter.bas:83` / `photodemon Plugin_LittleCMS.bas` ×2 / `VbQRCodegen mdQRCodegen.bas` /
+  `VBFlexGridDemo Common.bas:816` —— 全部是「Mid(...) 取 1 个字符」或字面量，不会落到空串；
+  探针 `tests/vb6probe/NullFamilyProbe.bas` 的 C5 格读数从 `err=0` 变 `err=5`（与真机一致），
+  该文件不在任何用例的期望里（它只用于人工对照），无需改针。
+
 
 
 
