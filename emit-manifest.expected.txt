@@ -784,7 +784,7 @@ sha256=e967278e68ada6e043c5dd5d98ab533aa6cfba7743869133f297c5cc365eee74 ascii256
 sha256=97f9301cdca5951b708146e0d55725e489a4048f3c8a1a14f6ea78642c1120eb ascii256=0eec7de0cd9c1b3c4fde0734296a8ed4cde19fd36479489d6a09307a794ed071 rc=0 bytes=62332 tests/dict_native/DictMain.bas
 sha256=a448d4a5477cf34c74d4313dae842e7e6220b5454e9995e6a45513b53bda519b ascii256=7e5d0087097d393991bfe737f2950ffe66571f63f890d8308377ff3483eda19e rc=0 bytes=5074 tests/dict_native/NewBind.bas
 sha256=b21e64c1f01be5dfa09518c3396b102df5a12e2b7b5a65482da5407097582471 ascii256=b7789fa8539537270d56eba67eb6f1c4ca1ba11e425e0a640a34b401e8f7b109 rc=0 bytes=23921 tests/vb6probe/NullOpsProbe.bas
-sha256=3fdb603cde32db17a32f86f9c1ed9084e31a2fa516ca8819d86b54b223333731 ascii256=12b782ebdca6f897e67989a3dffe23c98e9e3e67fade0180edac639958e381d0 rc=0 bytes=30464 tests/vb6probe/NullFamilyProbe.bas
+sha256=c7cfcd8836cb21c027bbcd0911b47046b95f937da1248b6dcee851fea79e90e4 ascii256=798b7b2ab898d9ae872d74fe85698cf47761adc18595ccaa497449e7e2b7536d rc=0 bytes=30512 tests/vb6probe/NullFamilyProbe.bas
 # 账 #305 SB222（第二百三十刀）：tests/b230_arrout 是数组形参**出站回写**那两格的夹具（两台各一条真跑）；
 # 新增两份输入的哈希取自本机复算 —— 本刀 534 行逐行零移动（RTL 头不进 --emit-c），所以没等门上的数。
 # 账 #305 SB223（第二百三十三刀）：tests/b231_byrefparam 是 ByRef 标量回写那两格的夹具（两台各一条真跑）；
