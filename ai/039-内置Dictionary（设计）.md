@@ -2455,6 +2455,52 @@ R7 原本用 `emitLine("vb6_BSTR_Assign` 前缀匹配，把本刀新增的
 `-Category syntax` 整段 PASS=227 FAIL=0（含 `variant_unbox_shapes`）；
 `cvp_emitc_variant_fallback` 的针按本机发码逐字核对（bas 整段本机超 30 分钟上限，交 CI）。
 
+### 11.49 第七十四刀：`s = CStr(Null)` ⇒ 94 且目标不变（E9）
+
+#### 一、读数
+
+探针 E9（`s` 先置 "keep"）：改前 `len=0 val=[] err=0`，改后 `len=4 val=[keep] err=94`。
+真 VB6 是 94 —— 与 E6/E7/E8 同一族（第七十三刀），只是入口站在 CStr 那一侧。
+
+#### 二、归因
+
+`s = CStr(x)` 的发码是 `vb6_BSTR_AssignMove(&s, vb6_CStr(<x>))`：CStr 内建对变体走的是
+**宽松口** `vb6_CStr`（`vb6_Format`，Null ⇒ ""）。所以两个错同时存在：值被清成空串（目标变了）
++ err=0（该报的 94 没报）。而这条路根本不经过 `emitBstrSlotStore` 的变体折叠 ——
+右值在发码表里已是 BSTR，产业是「自有临时串」⇒ 走 AssignMove。
+
+不能把 `vb6_CStr` 改严：`&` 与 `Debug.Print` 仍靠它的宽松口径（前者 Null 传播，后者打印 "Null"）；
+也不能改成 `vb6_CStrStrict`：它 raise 后交回空串，写进目标就是「94 + 目标被清空」。
+
+#### 三、实施
+
+`emitBstrSlotStore` 在变体折叠那一支之前多问一句：右值是**单实参 CStr 调用**、
+那一枚实参推出来是**变体档**、且发码确实是 `vb6_CStr(` ⇒ 置
+`strictVarAssign221` + `rawVarValue221 = <CStr 括号里那一段>`，交给第七十三刀那枚出口
+`vb6_BSTR_AssignFromVariant`。出口内部就是 `AssignMove(target, vb6_CStr(src))` ⇒
+非 Null 逐字节等价，Null 报 94 后直接返回。
+
+边界（都是刻意不动）：
+
+- 第六十六刀那两条 `vb6_CStrStrict(<比较>)` / `vb6_CStrStrict(<拼接>)` —— 前缀就不是 `vb6_CStr(`。
+- 定长串（`fixedLen` 非空）—— 读数未量，仍走原路。
+- 目标不是 String（`F3 d = CStr(Null)`）—— 那是另一个站（double 目标），仍编译期 C2440，留在 F 段。
+
+#### 四、清单
+
+11 份变：逐份 base/new 对照（`git stash push -- src/` → rebuild → emit → pop → rebuild），
+**6 份是真变**，形状全部同为 `AssignMove(&X, vb6_CStr(v))` → `AssignFromVariant(&X, v)`：
+B168 1 处、GCCache 8 处、test_fe_slot_leak 1 处、test_pa_reclaim 1 处、
+NullFamilyProbe 3 处、NullOpsProbe 2 处。另 5 份（guisample×3 / ctrlmscomm / TeeChart）
+本机 base 与 new **逐字节相同** ⇒ 它们只是长期存在的机器侧行，不是本刀改的。
+
+#### 五、门禁
+
+`check_builtin_slot_returns` / `check_conv_strict_parse` / `check_variant_slot_store` /
+`check_owned_temp_keeps` 四道全 PASS；`-Category syntax` PASS=227 FAIL=0；
+两枚受影响用例 `test_fe_slot_leak` / `test_pa_reclaim` 实跑 rc=0。
+
+
 
 
 

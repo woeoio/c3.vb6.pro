@@ -3092,6 +3092,30 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         std::transform(rhsMember.begin(), rhsMember.end(), rhsMember.begin(), ::tolower);
         if (classVariantMembers_.count(rhsMember)) valueIsVariant = true;
     }
+    // C30-11 第七十四刀 (§B222): `s = CStr(<Variant>)` —— CStr 内建对变体走的是**宽松口**
+    // vb6_CStr (Null ⇒ "")。读数 (探针 E9): 真 VB6 是 94 且**目标不变**; 这里 err=0 且目标
+    // 被清成空串 —— 与第七十三刀 E6/E7/E8 是同一个错, 只是入口在 CStr 那一道站, 不在槽位折叠。
+    // 形状恰好是 vb6_CStr(<变体表达式>) ⇒ 把「CStr 口径」连同那枚变体一起交给同一枚严格出口:
+    // 出口内部就是 AssignMove(target, vb6_CStr(src)) ⇒ 非 Null 逐字节等价, Null 报 94 后
+    // 直接返回、目标不动。只认**单实参 + 实参是变体档 + 发码确实是 vb6_CStr(**那一形;
+    // 第六十六刀那两条 vb6_CStrStrict(<比较>/<拼接>) 不在此列 (前缀就不是 vb6_CStr();
+    // 定长串那一档读数未量, 仍走原路。
+    if (!valueIsVariant && fixedLen.empty() && rhs
+        && rhs->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& call74 = static_cast<IndexOrCallExpr&>(*rhs);
+        if (call74.callee && call74.callee->kind == ASTNodeKind::IdentifierExpr
+            && call74.positional.size() == 1 && call74.named.empty()
+            && value.size() > 10 && value.compare(0, 9, "vb6_CStr(") == 0
+            && value.back() == ')') {
+            std::string name74 = static_cast<IdentifierExpr&>(*call74.callee).name;
+            std::transform(name74.begin(), name74.end(), name74.begin(), ::tolower);
+            if (name74 == "cstr"
+                && inferExprType(*call74.positional[0]) == Vb6Type::Variant) {
+                strictVarAssign221 = true;
+                rawVarValue221 = value.substr(9, value.size() - 10);
+            }
+        }
+    }
     if (valueIsVariant) {
         // C30-11 第七十三刀 (§B221): Variant 右值 → String 槽走**严格**出口。
         // 读数 (探针 E6/E7/E8): `s = Trim(Null)` / `s = Len(Null)` / `s = Null` 在真 VB6
