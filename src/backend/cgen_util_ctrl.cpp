@@ -3136,14 +3136,30 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         bool comResBstr = value.compare(0, 12, "vb6_ComCall(") == 0
             || value.compare(0, 20, "vb6_ComCallByDispid(") == 0
             || value.compare(0, 15, "vb6_ComGetProp(") == 0;
+        // C30-11 第七十七刀 (§B225): 这里原来是**先转串再赋**:
+        //   value = "vb6_VariantToString(vb6_VariantFromComResult(<调用>))"
+        // 真机读数 (W6 `s = c(1)`, Collection.Item 装的是 Null): **94 且 s 还是 [keep]**；
+        // 而 VariantToString(Null) 不 raise、交回空串 ⇒ 这里变成 err=0 + 目标被清成 ""，
+        // 两个错同时存在。Null 必须在**赋值那一瞬**才判 (与第七十三刀同一个道理): 把整只
+        // 变体交给 vb6_BSTR_AssignFromVariant (< 非 Null 走 vb6_CStr, 与 VariantToString 逐字节同口径)。
+        // 定长串目标 (char[N]) 那一档不能套这枚出口, 仍走原来的转串路径。
+        std::string comVarVal77;
         if (comResBstr) {
-            value = "vb6_VariantToString(vb6_VariantFromComResult(" + value + "))";
+            comVarVal77 = "vb6_VariantFromComResult(" + value + ")";
         } else if (value.compare(0, 21, "vb6_ComGetObjectProp(") == 0) {
             // 账 (M3 身份刀): 对象读交回 IDispatch* 本体, 不能当堆上 VARIANT* 解引用。
             // 换到同一成员的值孪生 (vb6_ComGetProp) 再按字符串提取 —— 成员名一字不动。
             std::string twinObjStr = comValueTwinForObjectReadExpr(value);
             if (!twinObjStr.empty())
-                value = "vb6_VariantToString(vb6_VariantFromComResult(" + twinObjStr + "))";
+                comVarVal77 = "vb6_VariantFromComResult(" + twinObjStr + ")";
+        }
+        if (!comVarVal77.empty()) {
+            if (fixedLen.empty()) {
+                strictVarAssign221 = true;
+                rawVarValue221 = comVarVal77;
+            } else {
+                value = "vb6_VariantToString(" + comVarVal77 + ")";
+            }
         }
     }
     // Fix 140: RHS 是 Byte() 数组 (类成员 m_Caption 或已知字节数组变量) 且目标是

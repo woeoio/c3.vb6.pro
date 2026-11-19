@@ -2701,6 +2701,63 @@ Cache hit for restore-key: c3build-v2-cd3dc6b4114ad...       ← 兜底命中**�
   然后 `Configuring done`，rc=0。
 - `cmake --fresh` 本机 4.4.4 可用（文档要求 ≥ 3.24），runner 是 4.5.0。
 
+### 11.54 第七十七刀：`s = c(1)`（Collection.Item 是 Null）⇒ 94 且目标不变（W6）
+
+#### 一、复测读数（本机 C3，探针 `.temp/k77/wc.bas`，改前）
+
+真机读数取自 §11.51 的 W/C 段。改前 C3：
+
+```
+W4  s = a(0)          | keep / 94   ✅ 同真机
+W4b n = Len(a(0))     | n=0  / 94   ✗ 真机 n 保持 -1
+W5  s = FNull()       | keep / 94   ✅
+W5b n = Len(FNull())  | n=0  / 94   ✗
+W6  s = c(1)          | ""   / 0    ✗✗ 真机 keep / 94
+W6b n = Len(c(1))     | n=0  / 94   ✗
+C6  s = Mid(Null,1)   | ""   / 94   ✗ 真机 keep
+C7  s = Left(Null,1)  | ""   / 94   ✗
+C8  s = UCase(Null)   | ""   / 94   ✗
+```
+
+两类缺陷：
+
+1. **W6 连错误号都没有**：入口确属 Null（`.temp/k77/w6.bas` 的 P1：`w = c(1)` ⇒ `isnull=True`），
+   P3 `s = <Null 变量>` 已经是 keep/94（第七十三刀），P4/W6 `s = c(1)` 却是 ""/0。
+2. **其余六格的 94 对了，目标却被写了**：`n = Len(...)` → 0、`s = Mid/Left/UCase(Null)` → 空串。
+   真机是「语句在出错处中止，赋值根本没发生」。
+
+#### 二、W6 的归因（本刀修的）
+
+发码：
+
+```c
+vb6_BSTR_Assign(&s, vb6_VariantToString(vb6_VariantFromComResult(vb6_ComCallByDispid(c, 0, ...))));
+```
+
+缺口在 `emitBstrSlotStore` 的 COM 裸结果那一支：它把变体**提前**折成串再赋。
+`vb6_VariantToString(Null)` 不 raise、交回空串 ⇒ err=0 + 目标被清成 ""，两个错同时存在。
+Null 必须在**赋值那一瞬**才判：改成把整只变体交给 `vb6_BSTR_AssignFromVariant`
+（非 Null 走 `vb6_CStr`，与 `VariantToString` 同口径；定长串目标仍走原来的转串路）。
+改后：
+
+```
+W6  s = c(1)          | keep / 94   ✅
+P4  s = c(1)          | keep / 94   ✅（P1/P2/P3 不变）
+```
+
+门禁：四道全 PASS；`-Category syntax` PASS=227 FAIL=0。发码清单：全语料 750 行本机 8 行动
+（Charts×3 / fgz_fix005a×2 / test_com_latebound / ucSegmentedControl / ucTreeView），
+逐份 base/new 归因（base==expect ∧ base!=new）；机器侧 5 行本刀 **base==new**（本机发码一字未动），
+保持 CI 原值。
+
+#### 三、还欠的（下一刀）——“94 之后不许写目标”
+
+剩下六格全是同一件事：**语句级中止**。现在发码是
+`BSTR _own = vb6_CStrStrict(<Null>); n = vb6_Len(_own);` —— CStrStrict raise 后交回空串，
+赋值站照写。真 VB6 是「出错即中止本语句」。要真修需引入一个单调的**错误序号**
+（`vb6_ErrRaise` 自增），赋值/输出站在写目标前比一次，若本语句里 raise 过则不写。
+这会给**每条赋值**加一层守卫 ⇒ 发码形状大面换；必须单独一刀、单独登记，不能混在本刀里。
+
 
 
 
