@@ -63,7 +63,24 @@ jobs:
             }
           }
           $buildDir = Join-Path $env:RUNNER_TEMP "c3build"
-          cmake -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release
+          # 2026-11-19（GA run 44521823896）：restore-keys 兜底恢复的构建目录里，CMakeCache.txt 钉着
+          # 另一台镜像的绝对 cl.exe 路径 ⇒ 镜像一换工具集目录就 "is not a full path to an existing
+          # compiler tool"。编译器每次显式给值，不让缓存的 CMakeCache 代决定。
+          $clPath = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\cl.exe"
+          if (-not (Test-Path $clPath)) { throw "cl.exe not found under VCToolsInstallDir=$env:VCToolsInstallDir" }
+          $cmakeArgs = @()
+          $cacheFile = Join-Path $buildDir "CMakeCache.txt"
+          if (Test-Path $cacheFile) {
+            $cachedCl = (Select-String -Path $cacheFile -Pattern '^CMAKE_CXX_COMPILER:[A-Z]+=(.+)$' | Select-Object -First 1)
+            if ($cachedCl) {
+              $cachedClPath = $cachedCl.Matches[0].Groups[1].Value.Trim().Replace('/', '\')
+              if ($cachedClPath -ne $clPath) {
+                Write-Host "c3build cache from another image ($cachedClPath) -> cmake --fresh"
+                $cmakeArgs += '--fresh'
+              }
+            }
+          }
+          cmake @cmakeArgs -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$clPath"
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build $buildDir
           if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
@@ -134,10 +151,14 @@ jobs:
             }
           }
           $buildDir = Join-Path $env:RUNNER_TEMP "c3build"
+          # 同上（2026-11-19）：编译器每次显式给值，不让恢复的 CMakeCache 代决定。
+          $clPath = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\cl.exe"
+          if (-not (Test-Path $clPath)) { throw "cl.exe not found under VCToolsInstallDir=$env:VCToolsInstallDir" }
           if (Test-Path (Join-Path $buildDir "build.ninja")) {
             cmake --build $buildDir
           } else {
-            cmake -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release
+            # 跑到这里说明恢复回来的目录里没有 build.ninja（半截缓存）—— 直接重建配置。
+            cmake --fresh -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$clPath"
             if ($LASTEXITCODE -ne 0) { throw "heal: cmake configure failed" }
             cmake --build $buildDir
           }

@@ -145,7 +145,25 @@ jobs:
           # configure 行里：本 workflow 的构建配置由本 workflow 自己决定，不让恢复的 CMakeCache 代决定。
           $launcher = ""
           if ($env:USE_SCCACHE -and (Test-Path $env:USE_SCCACHE)) { $launcher = $env:USE_SCCACHE }
-          cmake -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher"
+          # 2026-11-19: 同一个坑的第二面 —— restore-keys 兜底恢复的 c3build 目录里，CMakeCache.txt 钉着
+          # 另一台镜像的绝对 cl.exe 路径，镜像一换工具集目录就 "is not a full path to an existing compiler
+          # tool"（GA run 44521823896）。所以编译器也像 launcher 一样：每次显式给值，不让 CMakeCache 代决定。
+          $clPath = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\cl.exe"
+          if (-not (Test-Path $clPath)) { throw "cl.exe not found under VCToolsInstallDir=$env:VCToolsInstallDir" }
+          # 与 ci.yml 同一手：旧镜像的构建目录整份作废（CMakeCache 里的 linker/ar 同样是旧路径）。
+          $cmakeArgs = @()
+          $cacheFile = Join-Path $buildDir "CMakeCache.txt"
+          if (Test-Path $cacheFile) {
+            $cachedCl = (Select-String -Path $cacheFile -Pattern '^CMAKE_CXX_COMPILER:[A-Z]+=(.+)$' | Select-Object -First 1)
+            if ($cachedCl) {
+              $cachedClPath = $cachedCl.Matches[0].Groups[1].Value.Trim().Replace('/', '\')
+              if ($cachedClPath -ne $clPath) {
+                Write-Host "c3build cache from another image ($cachedClPath) -> cmake --fresh"
+                $cmakeArgs += '--fresh'
+              }
+            }
+          }
+          cmake @cmakeArgs -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$clPath" "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher"
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build $buildDir
           if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }

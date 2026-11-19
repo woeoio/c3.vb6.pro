@@ -2646,6 +2646,61 @@ F9  b = Null        | b=True err=94
 - 已知噪声（下一刀顺手收）：`b = Null` 仍报编译警告 **VB3003**「无法将 Null 隐式转换为 Boolean」，
   但运行期口径已与 A4 一致；F7 仍在（`b = (Null = "")` ⇒ True/0，真机 94/True）。
 
+### 11.53 GA run 44521823896 的 build 红：不是源码，是构建目录缓存跨镜像（已修）
+
+#### 一、现象
+
+手动 GA 在 `Build C3.exe` 这一格红，失败步骤是**第 8 步里的 cmake configure**（不是编译）：
+
+```
+-- The CXX compiler identification is unknown
+CMake Error at CMakeLists.txt:11 (project):
+  The CMAKE_CXX_COMPILER:
+    C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
+  is not a full path to an existing compiler tool.
+```
+
+同一格的前两行是 `cmake version 4.5.0` 与 `MSVC install: C:\Program Files\Microsoft Visual Studio\18\Enterprise`
+—— 镜像里 VS 在，只是**工具集版本目录换了**，而 14.51.36231 那条路径已经不在了。
+
+#### 二、归因（读日志，不猜）
+
+```
+Cache not found for input keys: c3exe-v2-766b6f97...          ← 本提交没有 C3.exe 缓存
+key: c3build-v2-766b6f97...   restore-keys: c3build-v2-
+Cache hit for restore-key: c3build-v2-cd3dc6b4114ad...       ← 兜底命中**旧提交**留下的构建目录
+```
+
+所以链条是：本刀的 `src/` 改动的 key 没命中 ⇒ `actions/cache` 的 restore-keys 兜底 ⇒ 恢复回来的是
+另一台镜像（旧的 VS 18 / MSVC 14.51）留下的 `$RUNNER_TEMP/c3build`，它的 `CMakeCache.txt` 钉着那台镜像的
+**绝对** `cl.exe` 路径 ⇒ 现镜像上该路径不存在 ⇒ cmake 4.5 在 `project()` 处直接拒。
+与本次改的 RTL/发码无关，也和 14.5 与 14.29 的差异无关：**同一个坑对任何一次 src 改动都成立**，
+只是这一次轮到了。
+
+#### 三、修法（四处 configure 站一起改）
+
+1. **编译器每次显式给值**：`$clPath = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\cl.exe"`
+   （vcvars 已导出该变量），并把 `"-DCMAKE_CXX_COMPILER=$clPath"` 写进 configure 行 —— 命令行 `-D`
+   覆盖缓存项（与 launcher 那条同一个思路：不让恢复的 CMakeCache 代决定）。
+2. **旧镜像的目录整份作废**：恢复回来的 `CMakeCache.txt` 里若记的编译器路径与本次不同，
+   则 configure 加 `--fresh`（文档语义：丢掉 CMakeCache.txt 与 CMakeFiles，不动源码、不动 `.build`）。
+   只覆盖编译器不够：`CMAKE_LINKER` / `CMAKE_AR` 同样是旧镜像的绝对路径，链接期会变成 "cannot find file"。
+   路径相同则照旧走快速路。
+3. 四个站：`ci.yml`（Build C3.exe）、`ci_t0.yml`（T0 构建）、`ci_vbman.yml` 两处（其中 else 支没有
+   `build.ninja`，说明是半截缓存，直接 `--fresh`）。三份 YAML 都过 `yaml.safe_load`。
+
+#### 四、本机复现与验证（不是“看着像就这么改”）
+
+- **复现**：把一份配好的 `CMakeCache.txt` 的 `CMAKE_CXX_COMPILER` 改成 `C:/nonexistent/msvc/cl.exe`，
+  按 CI 原样重配 ⇒ 一字不差的 `is not a full path to an existing compiler tool`，rc=1。
+- **验证 1（只加 -D）**：把同一份缓存里的路径改成「另一台镜像的 VS 18 / 14.51.36231」，加
+  `-DCMAKE_CXX_COMPILER=<本机 cl>` 重配 ⇒ `identification is MSVC 19.29...` / `Configuring done`，rc=0。
+- **验证 2（整段脚本）**：把 workflow 里那十几行原样跑一遍（vcvars 注入环境 → 读 CMakeCache → 判定
+  跨镜像 → `cmake @cmakeArgs ...`），输出
+  `c3build cache from another image (C:\Program Files\Microsoft Visual Studio\18\...\14.51.36231\...cl.exe) -> cmake --fresh`
+  然后 `Configuring done`，rc=0。
+- `cmake --fresh` 本机 4.4.4 可用（文档要求 ≥ 3.24），runner 是 4.5.0。
+
 
 
 
