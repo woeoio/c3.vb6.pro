@@ -2326,3 +2326,55 @@ run `44454593300` / `e4aa570d` = **success**（`Tests (bas #1)`、`Tests (bas #2
 3. **F2/F3 的 13**（现在编译期 C2440）与 **F7**。
 4. W4/W5/W6（需先取 VB6 读数）、C5 `Asc(Empty)=5`、A3/A5 的 Integer 档。
 
+### 11.47 第七十二刀：`With` 体内成员的变体槽（编译期 C2440 → Null 传播）
+
+#### 一、读数与病根
+
+探针 W 段（真 VB6 读数待回，C3 侧是先量的）：`With tw`（`Type TWV: V As Variant`）体内的
+`Len(.V)` 改前发成 `vb6_Len(_vb6_with_0->V)` —— 整只 `vb6_VARIANT` 进 `BSTR` 形参 = cl
+**C2440**，改前就没有 exe（不是运行时 94）。同一探针里 W1 `Len(tw.V)`（UDT 成员）一直正常。
+
+根因：`With` 体内成员在 AST 里是 **`WithMemberExpr`**，而 `nullFamilyVExitCName` 只认
+`IdentifierExpr` / `MemberAccessExpr`，`isDefinitelyVariantExpr` 也没有这一 `case` ⇒
+实参站判「不是变体」⇒ 既不造串临时量、也不改道。
+
+#### 二、第一版（改全局判据）与它踩的坑
+
+第一版直接把 `WithMemberExpr` 加进 `isDefinitelyVariantExpr`。B171 与探针都对了，但
+**Charts 2020 / ucTreeMaps 两台当场编译不过**：
+
+```
+int32_t j_end = vb6_UBound(vb6_VariantToSafeArray1DStrict(_vb6_with_2->Values), 1);
+                                        ^ vb6_SafeArray1D* → vb6_VARIANT = C2440
+```
+
+原因：`isDefinitelyVariantExpr` 是**全局**判据（UBound 的数组槽、装箱站、比较站都吃它），
+而 `With` 成员里既有 `As Variant` 字段，也有 `SafeArray` 字段。教它认 With 成员，等于把
+`.Values` 也判成变体槽。
+
+#### 三、改法：只让 Len 族那一格认（两处，同一问）
+
+1. `nullFamilyVExitCName`：`WithMemberExpr` **只在这一格**认 —— 档位问
+   `inferUdtFieldVb6Type`（`With <UDT>`，它自己就认 With 帧 + `knownUdtVars_`）或
+   `classFieldKind`（`With <类实例>` 的字段）；数组本体与「属性 Get」一律不收。
+2. 发码站（`cgen_expr_call_arg_variant.inc`）：在 `argIsVariant` 那句之后加一枚
+   `vexit72 = nullFamilyVExitCName(node)`，问到即视为变体槽。没有这一枚，String 支根本进不去
+   （`isVariantSlot` 的文本前缀不认识 `_vb6_with_N->F`），整只 VARIANT 会被裸递给 `vb6_Len`。
+
+口径：只影响六枚内置的单实参调用；`isDefinitelyVariantExpr` 一个字没改。
+
+#### 四、验收
+
+- B171：`vb6_LenV(_vb6_with_0->PZ  /* With class .PZ field variant */)`，且那枚
+  `_own_2 = vb6_CStrStrict(...)` 消失（`bytes` 12727 → **12600**）。形状针新增一枚钉住这一格。
+- Charts 2020 / ucTreeMaps：发码改前改后 **diff=0**（逐字节相同），编译恢复 `rc=0`。
+- 探针：W2 `Len(.V)` / W3 `Trim(.V)` = **Null / 0**（改前 C2440），W1 不变。
+- 门：`check_builtin_slot_returns` PASS（table=60）、`check_conv_strict_parse` PASS。
+- 清单：750 行里 7 行变 = 本刀 2 行（B171 + 探针）+ 5 行已记的机器侧差；只登记那 2 行。
+
+#### 五、留下的
+
+- W4/W5/W6（Variant 数组元素 / 返回 Null 的函数 / `Collection.Item`）仍 94 —— 读数未取。
+- `With <类实例>` 的**方法**（属性 Get）返 Null 不在本刀：字段表只认字段。
+
+

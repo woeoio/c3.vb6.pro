@@ -5713,6 +5713,10 @@ if ($Category -in @("all", "run", "bas")) {
         # 第七十一刀 (账 #305 §B219): Len 的整只变体槽实参改道 vb6_LenV —— 这一格不再造
         # 串临时量, 消费形状变成 CStr(VariantFromValue(LenV(...))); 那枚 _own_1 现在归 Left。
         'vb6_CStr(vb6_VariantFromValue(vb6_LenV(h->PV  /* class var .PV field variant */)))',
+        # 第七十二刀 (账 #305 §B220): `With h` 体内的 `Len(.PZ)` 以前不走改道 —— 发出来是
+        # `vb6_Len(_vb6_with_0->PZ)` (整只 VARIANT 进 BSTR 形参) = cl C2440, 改前就没 exe。
+        # 现在与 h->PV 同一形状, 同时**不再造**那枚 `_own_2` 串临时量。
+        'vb6_CStr(vb6_VariantFromValue(vb6_LenV(_vb6_with_0->PZ  /* With class .PZ field variant */)))',
         'vb6_B171Main_EchoBack((&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=h->PS  /* class var .PS field */}))'
     )
     Test-EmitcAbsent 'b171_class_slot_arg_lesion' @(

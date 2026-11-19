@@ -1518,7 +1518,8 @@ std::string CCodeGen::nullFamilyVExitCName(const IndexOrCallExpr& call) const {
     // `vb6_VariantToString(vb6_RTrim(VB6_SA_AT(BSTR, lns, 14)))` (BSTR 再套一层变形,
     // 而这个文件的语义一行没变)。所以判据收缩到发码站真会改道的那一形。
     const ASTNodeKind ak = call.positional[0]->kind;
-    if (ak != ASTNodeKind::IdentifierExpr && ak != ASTNodeKind::MemberAccessExpr) {
+    if (ak != ASTNodeKind::IdentifierExpr && ak != ASTNodeKind::MemberAccessExpr
+        && ak != ASTNodeKind::WithMemberExpr) {
         return std::string();
     }
     // 判据的**类型那一半**必须与发码站同一问: 发码站在
@@ -1529,6 +1530,31 @@ std::string CCodeGen::nullFamilyVExitCName(const IndexOrCallExpr& call) const {
     // ucSlider_2022 / Charts 2020 四份因此多出 `vb6_VariantToLong(((int32_t)sizeof(bmp)))` 这类
     // 无意义外包。
     bool argIsArray = false;
+    if (ak == ASTNodeKind::WithMemberExpr) {
+        // 账 #305 §B220 (第七十二刀): `With` 体内的 `.成员` —— 这一形**只在本格**认。
+        // 为什么不把它教给 isDefinitelyVariantExpr: 那个判据是全局的 (UBound 的数组槽、
+        // 装箱站、比较站都吃它), 而 `With c : UBound(.Values)` 里的 `.Values` 是
+        // SafeArray 字段 —— 判成变体槽就会被包成 `vb6_VariantToSafeArray1DStrict(
+        // vb6_SafeArray1D*)` = C2440 (Charts 2020 / ucTreeMaps 两台实测, 改前是好的)。
+        // 档位仍问 UDT 字段那个唯一出口 inferUdtFieldVb6Type (它自己就认 WithMemberExpr),
+        // 与 MemberAccessExpr 那一形同一个函数、同一口径。
+        const Vb6Type tw = inferUdtFieldVb6Type(call.positional[0].get(), &argIsArray);
+        if (tw != Vb6Type::Variant || argIsArray) {
+            // UDT 表答不出 = 不是 `With <UDT>`; 类实例的 With 看字段表 (classFieldKind 只认
+            // 字段, 不认方法 —— 属性 Get 交回来的是 getter 调用, 不是 VARIANT 存储)。
+            if (!withObjectInfoStack_.empty()) {
+                const auto& infoW = withObjectInfoStack_.back();
+                if (infoW.kind == WithObjKind::ClassInstance && !infoW.className.empty()
+                    && classFieldKind(infoW.className,
+                                     static_cast<WithMemberExpr&>(*call.positional[0]).memberName)
+                           == Vb6Type::Variant) {
+                    return it->second;
+                }
+            }
+            return std::string();
+        }
+        return it->second;
+    }
     if (!isDefinitelyVariantExpr(*call.positional[0], &argIsArray) || argIsArray) {
         return std::string();
     }

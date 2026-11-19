@@ -101,6 +101,15 @@
             if (!argIsVariant) {
                 argIsVariant = isDefinitelyVariantExpr(*node.positional[i], &argIsVariantArr);
             }
+            // 账 #305 §B220 (第七十二刀): With 体内成员的整只槽 —— isVariantSlot 的两半都不认
+            // 这一形 (文本前缀认不出 `_vb6_with_N->F`; AST 那半句问的 isDefinitelyVariantExpr
+            // 是**全局**判据, 不能教它认 With 成员: UBound 的数组槽也吃它, `.Values` 这类
+            // SafeArray 字段会被判成变体槽 ⇒ vb6_VariantToSafeArray1DStrict(vb6_SafeArray1D*)
+            // = C2440, Charts 2020 两台实测)。所以只有 Len 族这一格认: 直接问 nullFamilyVExitCName
+            // (它自带「WithMemberExpr 只认 UDT/类字段且档位= Variant」那一条), 问到了就是
+            // 变体槽 —— 不改道的话这里会把整只 VARIANT 递给 vb6_Len(BSTR) = 同一个 C2440。
+            const std::string vexit72 = nullFamilyVExitCName(node);
+            if (!vexit72.empty()) argIsVariant = true;
             // Fix 113i: 形参是**具体类型** (String/数值) 而实参是**裸 COM 结果**
             // (vb6_ComCall / vb6_ComCallByDispid / vb6_ComGetProp 返回 void*,
             // 承载一个 COM VARIANT*) — 语义即 Variant, 必须判为 Variant 才能触发

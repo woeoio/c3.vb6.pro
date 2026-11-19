@@ -18,6 +18,16 @@ Option Explicit
 '   <id>  <label> | isnull= val= tn= err=
 ' ============================================================================
 
+' 第七十一刀 后记 (W 段): 本刀的判据只认「整只槽 = 简单变量 / 成员」。下面几形读数未取 ——
+' 先量再决定要不要放宽（宁可留缺口，也不拿没量过的格子去改口径）。
+Private Type TWV
+    V As Variant
+End Type
+
+Private Function FNullV() As Variant
+    FNullV = Null
+End Function
+
 Private Function S(ByVal v As Variant) As String
     On Error Resume Next
     If IsNull(v) Then
@@ -56,6 +66,9 @@ Public Sub ProbeNullFamily()
     Dim b As Boolean
     Dim a(1 To 3) As Long
     Dim cnt As Long
+    Dim tw As TWV
+    Dim av(1 To 1) As Variant
+    Dim col As Collection
 
     nv = Null
     ev = Empty
@@ -111,6 +124,23 @@ Public Sub ProbeNullFamily()
     s = "keep": Err.Clear: s = "" & nv:       Debug.Print "E5  s = """" & Null           | len=" & Len(s) & " val=[" & s & "] err=" & Err.Number
     s = "keep": Err.Clear: s = Trim(nv):      Debug.Print "E6  s = Trim(Null)          | len=" & Len(s) & " val=[" & s & "] err=" & Err.Number
     s = "keep": Err.Clear: s = Len(nv):       Debug.Print "E7  s = Len(Null)           | len=" & Len(s) & " val=[" & s & "] err=" & Err.Number
+    s = "keep": Err.Clear: s = nv:            Debug.Print "E8  s = Null                | len=" & Len(s) & " val=[" & s & "] err=" & Err.Number
+    s = "keep": Err.Clear: s = CStr(nv):      Debug.Print "E9  s = CStr(Null)          | len=" & Len(s) & " val=[" & s & "] err=" & Err.Number
+    s = "keep": Err.Clear: s = Hex(nv):       Debug.Print "E10 s = Hex(Null)           | len=" & Len(s) & " val=[" & s & "] err=" & Err.Number
+
+    Debug.Print "-- W. shapes the 71st cut did not cover --"
+    tw.V = Null
+    r = "<<stale>>": Err.Clear: r = Len(tw.V):          PF "W1", "Len(udt.Variant member)", r, Err.Number
+    With tw
+        r = "<<stale>>": Err.Clear: r = Len(.V):        PF "W2", "Len(.V) inside With", r, Err.Number
+        r = "<<stale>>": Err.Clear: r = Trim(.V):       PF "W3", "Trim(.V) inside With", r, Err.Number
+    End With
+    av(1) = Null
+    r = "<<stale>>": Err.Clear: r = Len(av(1)):         PF "W4", "Len(Variant array element)", r, Err.Number
+    r = "<<stale>>": Err.Clear: r = Len(FNullV()):      PF "W5", "Len(function returning Null)", r, Err.Number
+    Set col = New Collection
+    col.Add Null
+    r = "<<stale>>": Err.Clear: r = Len(col.Item(1)):   PF "W6", "Len(Collection.Item(1))", r, Err.Number
 
     Debug.Print "-- F. numeric / boolean target --"
     d = 1.5: Err.Clear: d = ev:          Debug.Print "F1  d = Empty               | d=" & d & " err=" & Err.Number
