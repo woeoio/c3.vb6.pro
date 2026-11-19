@@ -6580,7 +6580,7 @@ if ($Category -in @("all", "run", "bas")) {
     # 3/"Long"（描述符指针被折进标量档），现在与 ml 同形 8195/"Long()"。两条负控都跑过：
     # 把那条秩数护栏从 <= 1 改成 <= 0（等于关掉这一问）⇒ 这一条退回 3/"Long"；
     # 把这一问挪到那张 inferExprType 表之后 ⇒ 哨兵 A18 新加的「赋值站顺序」那条报红。
-    Add-BasTest "test_com_latebound" "$Tests\test_com_latebound.bas" @("LB-1:OK", "LB-2:OK", "LB-3:OK", "LB-4:OK", "LB-5:OK", "P24-10b: 5/5", "VB-b159-ml=8195/Long()/3/7002", "VB-b159-mb=8209/Byte()/2/66", "VB-b159-mx=8195/Long()/3/7022", "VB-b159-bl=8203/Boolean()/1/True", "VB-b159-sg=8196/Single()/1/1.25", "VB-b159-loc=8195/Long()/1/7100", "VB-b159-mu=0/Empty/-1(e9)", "VB-b159-ms=0/Empty/-1(e9)", "VB-b159-va=8195/Long()/3/7002")
+    Add-BasTest "test_com_latebound" "$Tests\test_com_latebound.bas" @("LB-1:OK", "LB-2:OK", "LB-3:OK", "LB-4:OK", "LB-5:OK", "P24-10b: 5/5", "VB-b159-ml=8195/Long()/3/7002", "VB-b159-mb=8209/Byte()/2/66", "VB-b159-mx=8195/Long()/3/7022", "VB-b159-bl=8203/Boolean()/1/True", "VB-b159-sg=8196/Single()/1/1.25", "VB-b159-loc=8195/Long()/1/7100", "VB-b159-mu=0/Empty/-1(e13)", "VB-b159-ms=0/Empty/-1(e13)", "VB-b159-va=8195/Long()/3/7002")
     # 账 #611: `On Error GoTo 0` 只关本过程 —— 之后的 Err.Raise 必须落到调用方的
     # On Error GoTo label。修前 C3 清的是全局 jmp 标志, 外层 setjmp 一并作废 ⇒
     # vb6_ErrRaise 走 "Unhandled error" → ExitProcess (JSonFast 第 5 按钮一点就死)。
