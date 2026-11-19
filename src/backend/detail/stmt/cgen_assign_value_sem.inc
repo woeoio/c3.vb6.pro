@@ -619,6 +619,32 @@
             // Fix 170: 整体数组目标 (`A() = expr`) 右侧若非新建载体则深拷贝, 不制造别名
             if (tgtIsWholeArray170 && !value.empty())
                 value = wrapWholeArrayAssign(target, value, node.target.get());
+            // C30-11 第七十五刀 (§B223): Double 目标 ← String 右值。真 VB6 走隐式
+            // String→Double: 数字串折成数, 其余（含空串）报 **13** 且目标不变。
+            // 这一形以前把 BSTR 裸交给 double ⇒ 编译期 C2440（探针 F2 `d = Null & ""` /
+            // F3 `d = CStr(Null)`，真引擎两格都是 13）—— 没有存量「编译通过」的依赖可破坏。
+            // 只认 Double 目标: Single/Currency 的 C 类型不同, Date 另有 knownDateVars_ 那一道
+            // (vb6_DateVal, CDate 口径), 都不在这一刀。
+            if (node.value && node.target
+                && inferExprType(*node.value) == Vb6Type::String) {
+                // 目标是不是 Double：先问语义档，再回查按名表 (局部变量在语义层可能只答
+                // Unknown —— F1 那一格就是靠 knownDoubleVars_ 才折成 VariantToDouble)。
+                bool tgtDbl75 = (inferExprType(*node.target) == Vb6Type::Double);
+                if (!tgtDbl75) {
+                    std::string t75 = target;
+                    if (t75.compare(0, 4, "me->") == 0) t75 = t75.substr(4);
+                    if (t75.size() > 4 && t75[0] == '(' && t75[1] == '*'
+                        && t75.back() == ')') {
+                        t75 = t75.substr(2, t75.size() - 3);
+                    }
+                    std::transform(t75.begin(), t75.end(), t75.begin(), ::tolower);
+                    tgtDbl75 = (knownDoubleVars_.count(t75) != 0);
+                }
+                if (tgtDbl75) {
+                    c_.emitLine("vb6_Dbl_AssignFromBSTR(&" + target + ", " + value + ");");
+                    return;
+                }
+            }
             // ai/009 5.10: 同上, Variant 目标分支同样收窄检查
             c_.emitLine(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
                                                              value) + ";");

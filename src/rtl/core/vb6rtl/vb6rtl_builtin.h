@@ -140,6 +140,11 @@ BSTR vb6_CStrStrict(vb6_VARIANT x);
 // 报 94 且**目标不变** (E6/E7/E8 读数: err=94、s 仍是赋前的值)。单开一枚而不是直接用
 // vb6_CStrStrict: 后者 raise 后交回空串, 赋值方会把空串写进目标 —— 与 VB6 不同。
 void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src);
+// C30-11 第七十五刀 (§B223): 「String 右值 → Double 目标」。
+// 真 VB6 是隐式 String→Double: 数字串折成数, 其余含空串 ⇒ **13** 且目标不变。
+// 以前把 BSTR 裸交给 double ⇒ 编译期 C2440 (探针 F2 `d = Null & ""` /
+// F3 `d = CStr(Null)`), 所以没有存量编译通过的依赖。
+void vb6_Dbl_AssignFromBSTR(double* target, BSTR src);
 // M22: typed CStr overloads
 BSTR vb6_CStrLong(int32_t x);
 BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 Variant 解包入口

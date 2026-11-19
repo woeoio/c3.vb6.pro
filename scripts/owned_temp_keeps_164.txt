@@ -60,6 +60,7 @@ vb6_DatePart|0	0	handoff-reads:vb6_parse_interval	0	open	BSTR
 vb6_DateSet|0	0		0	open	BSTR
 vb6_DateVal|0	0	handoff-reads:vb6_TryDateFromStr	0	open	BSTR
 vb6_DateValue|0	0	handoff-reads:vb6_DateParse	0	open	BSTR
+vb6_Dbl_AssignFromBSTR|1	0		0	open	BSTR
 vb6_Debug_Print|0	0		0	open	BSTR
 vb6_DebugPrint|0	0	handoff-reads:vb6_DebugPrintStr	0	open	BSTR
 vb6_DebugPrintStr|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR

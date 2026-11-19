@@ -2500,6 +2500,44 @@ NullFamilyProbe 3 处、NullOpsProbe 2 处。另 5 份（guisample×3 / ctrlmsco
 `check_owned_temp_keeps` 四道全 PASS；`-Category syntax` PASS=227 FAIL=0；
 两枚受影响用例 `test_fe_slot_leak` / `test_pa_reclaim` 实跑 rc=0。
 
+### 11.50 第七十五刀：`d = Null & ""` / `d = CStr(Null)` ⇒ 13（F2/F3）
+
+#### 一、读数
+
+探针 `d` 先置 1.5：改前**编译期 C2440**（BSTR 裸赋 double，两处）；
+改后 `d=1.5 err=13`（目标不变），与真 VB6 两格都是 13 一致。
+
+#### 二、归因
+
+Double 目标 ← String 右值这条路上**根本没有转换站**：Variant 右值有 `vb6_VariantToDouble`
+（F1 `d = Empty` 就走那一条），而 String 右值（拼接、`CStr(...)`）被原样交给 double ⇒ C2440。
+真 VB6 是隐式 String→Double：数字串折成数、其余（含空串）报 **13**，且**目标不变**。
+
+#### 三、实施
+
+- RTL 新出口 `vb6_Dbl_AssignFromBSTR(double* target, BSTR src)`：去首尾空白后 `wcstod`，
+  整串吃完才算数；否则 `ErrRaise(13, "VBA.Information", "Type mismatch")` 后直接返回。
+  **不用** `vb6_NumVal`：那是 Val 口径（永不报错，`"2.5abc"` 也折 2.5），而 VB6 的赋值转换是严格的。
+- 发码站（`cgen_assign_value_sem.inc` 非 Variant 那一支的末尾）：右值语义档 = String、
+  目标 = Double（先问 `inferExprType`，再回查 `knownDoubleVars_` —— 局部变量在语义层可能只答
+  Unknown）⇒ 改发 `vb6_Dbl_AssignFromBSTR(&target, value)`。
+
+边界（刻意不动）：Single / Currency 目标（C 类型不同）、Date 目标（已有 `knownDateVars_` +
+`vb6_DateVal` 的 CDate 口径）、Variant 目标（走装箱那一支）。
+
+#### 四、清单与 KEEPS
+
+全量 750 行：**只有 `tests/vb6probe/NullFamilyProbe.bas` 一行变**（就是 F2/F3 那两句的发码），
+另 5 份（guisample×3 / TeeChart / ctrlmscomm）是长期存在的机器侧行，本刀没动它们。
+KEEPS 新行 `vb6_Dbl_AssignFromBSTR|1  0  (空通道)  0  open  BSTR` —— keeps_pointer=0，
+**不是例外行**，所以 `src/common/owned_temp_keeps.hpp` 这份发码侧表不动（K12 仍然绿）。
+
+#### 五、门禁
+
+`check_builtin_slot_returns` / `check_conv_strict_parse` / `check_variant_slot_store` /
+`check_owned_temp_keeps` 四道 PASS；`-Category syntax` PASS=227 FAIL=0。
+
+
 
 
 

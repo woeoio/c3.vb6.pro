@@ -491,6 +491,30 @@ BSTR vb6_CStrStrict(vb6_VARIANT x) {
     return vb6_CStr(x);
 }
 
+// C30-11 第七十五刀 (§B223): 「String 右值 → Double 目标」赋值站。
+// 真 VB6 是隐式 String→Double: 数字串折成数 ("1.5" ⇒ 1.5), 其余含空串 ⇒ **13**
+// (Type mismatch), 且**目标不变** (与 94 那一族同一口径)。以前这一形把 BSTR 裸交给
+// double ⇒ 编译期 C2440 (探针 F2 `d = Null & ""` / F3 `d = CStr(Null)`, 真引擎两格
+// 都是 13) —— 也就是说没有存量「编译通过」的依赖可破坏, 所以这里直接按 VB6 口径补上。
+// 不改成 `vb6_NumVal` (Val 口径, 永不报错、2.5abc 也折 2.5): VB6 的赋值转换是**严格**的。
+void vb6_Dbl_AssignFromBSTR(double* target, BSTR src) {
+    const wchar_t* p = src ? src : L"";
+    while (*p == L' ' || *p == L'\t' || *p == L'\r' || *p == L'\n') p++;
+    wchar_t* end = NULL;
+    double v = wcstod(p, &end);
+    int ok = (end != p);
+    if (ok) {
+        while (*end == L' ' || *end == L'\t' || *end == L'\r' || *end == L'\n') end++;
+        ok = (*end == L'\0');
+    }
+    if (!ok) {
+        vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Type mismatch"));
+        return;   /* 目标一字不动 */
+    }
+    *target = v;
+}
+
 // M22: typed CStr overloads (C has no overloading, use suffix)
 #ifdef vb6_CStrLong
 #undef vb6_CStrLong   // vb6rtl_builtin.h 的 _Generic 宏在这里必须关闭, 否则函数定义被宏改写
