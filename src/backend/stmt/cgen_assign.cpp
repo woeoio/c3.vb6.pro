@@ -17,11 +17,56 @@ namespace vb6c3 {
 // 五个 .inc 是「函数体片段」，在 visit() 函数体内被 #include（C++ 允许），故不用 .cpp/.hpp 后缀 ——
 // 它们不是独立编译单元，单独 include 会编译不过。片段局部变量原样不动，逐行未改 → 零行为改动。
 
+void CCodeGen::emitGuardedStore(const std::string& line) {
+    // 本语句有守卫 ⇒ 只有「序号没变」才写目标（变了 = 本语句里 raise 过，VB6 语句级中止）。
+    if (stmtAbortGuard_.empty()) { c_.emitLine(line); return; }
+    c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) " + line);
+}
+
 void CCodeGen::visit(AssignmentStmt& node) {
     // C29-3: Let 赋值期间成员对象要取默认属性 (见 memObjLetScalar_ 的说明)。
     // `Set` 语句走 visit(SetStmt&)，不受影响。
     bool savedLetScalar = memObjLetScalar_;
     memObjLetScalar_ = true;
+
+    // C30-11 第七十九刀 (§B227): 可能 raise 的赋值语句加一道「语句级中止」守卫。
+    // 判据 = 右值是一枚调用、且它的某个实参静态类型是 Variant —— 那一步会发
+    // vb6_CStrStrict(<变体>)，Null 进来就在赋值之前把 94 报掉（真机 W4b/W5b/W6b 的
+    // `n = Len(...)` 全是这个形）。只给**整型标量目标**发守卫（String 目标那一族另开一刀，
+    // 因为它的保存/恢复要连所有权一起算）。
+    struct StmtAbortScope {
+        CCodeGen* g;
+        ~StmtAbortScope() { g->stmtAbortGuard_.clear(); }
+    } stmtAbortScope{this};
+    stmtAbortGuard_.clear();
+    {
+        const Vb6Type tgtT79 = node.target ? inferExprType(*node.target) : Vb6Type::Unknown;
+        const bool tgtInt79 = tgtT79 == Vb6Type::Integer || tgtT79 == Vb6Type::Long
+                           || tgtT79 == Vb6Type::Byte;
+        const bool tgt79179 = tgtInt79 || tgtT79 == Vb6Type::String;
+        bool mayRaise79 = false;
+        if (tgt79179 && node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr) {
+            auto& call79 = static_cast<IndexOrCallExpr&>(*node.value);
+            for (const auto& a79 : call79.positional) {
+                if (!a79) continue;
+                const Vb6Type at79 = inferExprType(*a79);
+                // Variant 实参要过 vb6_CStrStrict；`Null`/`Empty` 字面量也一样（转串就是 94）。
+                // 字面量那一路 inferExprType 给的档位不稳（Null 可能落成 Empty/兜底），
+                // 所以直接看语法形。
+                bool lit79 = false;
+                if (a79->kind == ASTNodeKind::LiteralExpr) {
+                    const LiteralKind lk79 = static_cast<const LiteralExpr&>(*a79).literalKind;
+                    lit79 = lk79 == LiteralKind::Null || lk79 == LiteralKind::Empty;
+                }
+                if (lit79 || at79 == Vb6Type::Variant || at79 == Vb6Type::Null
+                    || at79 == Vb6Type::Empty) { mayRaise79 = true; break; }
+            }
+        }
+        if (mayRaise79) {            const std::string gv79 = "_e" + std::to_string(stmtAbortSeq_++);
+            c_.emitLine("const int32_t " + gv79 + " = vb6_ErrSerial();");
+            stmtAbortGuard_ = gv79;
+        }
+    }
 
     // 账 #611: 赋值左值是工程类**默认属性索引** (`writer("k") = v`) —— 把 callee
     // 换成 `writer.Item`, 后面 P6.4+ 那一支 (cgen_assign_com_prop.inc) 才会按写

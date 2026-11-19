@@ -799,7 +799,14 @@ BSTR vb6_ErrSource(void) { return vb6_err.source; }
 int32_t vb6_ErrLastDllError(void) { return vb6_err.lastDllError; }
 void vb6_ErrSetLastDllError(int32_t code) { vb6_err.lastDllError = code; }
 
+// C30-11 第七十九刀 (§B227): 错误序号。VB6 的 On Error Resume Next 只中止**当前语句**，
+// 出错前已求值的保留、赋值不发生；C3 现在把转换失败之后的赋值照样执行 (n=0 / s="")。
+// 赋值站在可能 raise 的语句里先存一份序号，随后比一次：变了 == 这条语句 raise 过 ⇒ 不写目标。
+int32_t vb6_err_serial = 0;
+int32_t vb6_ErrSerial(void) { return vb6_err_serial; }
+
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
+    ++vb6_err_serial;
     vb6_err.number = errNum;
     vb6_err.source = source;
     vb6_err.description = description;

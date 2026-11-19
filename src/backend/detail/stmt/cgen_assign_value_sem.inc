@@ -203,7 +203,7 @@
             }
             c_.emitLine("vb6_PA_Set" + kind091c + "(" + args091c + ", " + conv091c + ");");
         } else {
-            c_.emitLine(target + " = " + value + ";");
+            emitGuardedStore(target + " = " + value + ";");
         }
     } else if (isVariantSlotElemRead(target)) {
         // Fix 038 Group 2 + 账 #305 §B150: 槽元素读改写成那一**对**写出口 —— 一维 Get->Set,
@@ -597,7 +597,7 @@
                 convertedValue = wrapWholeArrayAssign(target, convertedValue, node.target.get());
             // ai/009 5.10: 窄整型目标 (`Byte`/`Integer`/`Long`) 收窄赋值前查溢出。
             // 整体数组目标不是整型, narrowCheckAssign 内部按目标类型判掉, 不会套上。
-            c_.emitLine(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
+            emitGuardedStore(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
                                                              convertedValue) + ";");
         } else {
             // Fix 091l: Variant 目标 ← 具体类型值 (SafeArray1D*/数组载体/标量/COM 结果).
@@ -658,7 +658,7 @@
                 }
             }
             // ai/009 5.10: 同上, Variant 目标分支同样收窄检查
-            c_.emitLine(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
+            emitGuardedStore(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
                                                              value) + ";");
         }
     }

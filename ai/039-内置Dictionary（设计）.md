@@ -2831,3 +2831,98 @@ nc = vb6_VariantInt((int16_t)(vb6_Asc(_own_6)));
 
 
 
+
+### 11.56 第七十九刀：语句级中止 —— 错误序号 + 赋值站守卫（W4b/W5b/W6b、C6/C7/C8 六格一次收口）
+
+#### 一、这一刀买的是什么
+
+VB6 里 `On Error Resume Next` 中止的是**当前语句**：出错之前已经求值的一切保留，
+但**赋值不发生**。C3 原来把「转换失败」之后的那一发赋值照样发出去，于是真机读数是
+
+```
+真机:  W4b n = Len(a(0))   → n=-1  err=94      C3 改前: n=0   err=94
+       W5b n = Len(FNull())              n=-1            n=0
+       W6b n = Len(c(1))                 n=-1            n=0
+       C6  s = Mid(Null,1)      → s=[keep] err=94      s=""
+       C7  s = Left(Null,1)              [keep]          s=""
+       C8  s = UCase(Null)               [keep]          s=""
+```
+
+六格的错号早就对了（94），错的是**目标被写成了一个空值**。所以这一刀不改转换、
+不改 Err：只加一句「本语句 raise 过就别写目标」。
+
+#### 二、机制（两半，各一枚出口）
+
+1. **RTL 侧：错误序号**（`vb6rtl.c` / `vb6rtl_array.h`）
+   `int32_t vb6_err_serial`，`vb6_ErrRaise` 一进门就 `++`；`vb6_ErrSerial()` 读它。
+   序号而不是 `Err.Number`：程序自己 `Err.Clear`、或者两次同号错（都是 94）都区分不开，
+   「本语句有没有 raise 过」只有单调计数答得准。
+2. **发码侧：一句守卫**（`cgen_state.inc` 的 `stmtAbortGuard_` + `emitGuardedStore`）
+   赋值站开头（`visit(AssignmentStmt&)` 第一句之后）判一次：目标档位是
+   **整型标量**（Integer/Long/Byte）或 **String**，且右值是一枚调用、它的某个实参档是
+   `Variant`/`Null`/`Empty`（`Null`/`Empty` 另外直接看 `LiteralExpr::literalKind`，
+   因为字面量那一路 `inferExprType` 的档位不稳）。命中就发
+
+   ```c
+   const int32_t _e7 = vb6_ErrSerial();
+   ...
+   if (_e7 == vb6_ErrSerial()) n = vb6_Len(_own_1);
+   ```
+
+   `StmtAbortScope`（局部 RAII）在 `visit` 任何出口清空守卫名，所以早期 `return`
+   的那几十条支路不会把守卫漏给下一条语句。
+   String 目标那一支走 `emitBstrSlotStore` 的两个出口：借来的值只深拷贝 ⇒ 直接不发；
+   **自有临时串**（`valueOwned113 || wrapped122`）⇒ 不发就必须自己释放：
+
+   ```c
+   if (_e0 == vb6_ErrSerial()) vb6_BSTR_AssignMove(&s, vb6_Mid(_own_4, 1, -1));
+   else                        vb6_BSTR_Free(vb6_Mid(_own_4, 1, -1));
+   ```
+
+   `vb6_BSTR_Assign` 那一发仍写在原处（R7 名单钉的是「这一站还是手写的」，
+   改成 `emitGuardedStore` 会让 R7 数少一处，等于用改门禁来通过改动 —— 不取）。
+
+#### 三、本机读数（`.temp/k77/wc.bas`，改后）
+
+```
+W4  s = a(0)          | s=[keep] err=94     W4b n = Len(a(0))     | n=-1 err=94
+W5  s = FNull()       | s=[keep] err=94     W5b n = Len(FNull())  | n=-1 err=94
+W6  s = c(1)          | s=[keep] err=94     W6b n = Len(c(1))     | n=-1 err=94
+C6  s = Mid(Null,1)   | s=[keep] err=94
+C7  s = Left(Null,1)  | s=[keep] err=94
+C8  s = UCase(Null)   | s=[keep] err=94
+```
+
+九格全中真机口径（W4/W5/W6 上一刀已经对，这一刀没动它们）。
+
+#### 四、门禁
+
+- `-Category syntax`：PASS=227 FAIL=0。
+- `-Category vbp -VbpShard 9 -VbpShardTotal 12`：PASS=56 FAIL=1，红的仍是本机已知
+  `[VBP] c29listview`（同一 HEAD 的 CI 是 PASS，OCX/编译器可得性的本机环境差）。
+- 四道静态门：`builtin_slot_returns` / `conv_strict_parse` / `variant_slot_store` /
+  `bstr_borrow_slot` 全绿（R7 三次试跑后回到 3 处手抄）。
+- 发码清单：78 行哈希变化，逐行看过差异 —— 只有两种新增
+  `const int32_t _eN = vb6_ErrSerial();` 与包在 `if (_eN == vb6_ErrSerial())` 里的
+  原赋值行（`else` 那半只有自有临时串的释放）；对应 78 份输入重新登记。
+
+#### 五、为什么守卫发得比想象的多（523 处），以及为什么这不是白名单
+
+判据是「右值是调用 + 某个实参档落在 Variant/Null/Empty」，而 `inferExprType` 的
+**兜底答案就是 Variant**（见 `cgen_file_io.cpp` 那段注释），于是 `x = Foo(未知形参)`
+这类语句也吃到守卫。语义上这是对的：VB6 里**任何**错都会中止当前语句，不只 94；
+守卫的代价只是多一行声明和多一次整数比较，而被它挡住的一定是「真 raise 过」的语句。
+反过来把判据收窄成「只认 94 那几族」才是白名单思路 —— 错号一换就漏。
+
+#### 六、这一刀没做的（写清楚，别当成已完成）
+
+- `n = Asc("")` / `n = Asc(Empty)` 仍读 `n=0 err=0`（真机 5）。机制已经就位：
+  `vb6_Asc` 里补一句「空串 ⇒ `vb6_ErrRaise(5, …)`」不会再盖掉上游 94，因为
+  `Asc(<Null>)` 那一路的上游转换一 raise，整条语句的赋值就不发了 —— 但**Asc 自己
+  仍然会跑**（RHS 求值不会停），它照样会把 Err 从 94 改成 5。要分开得让
+  `vb6_Asc` 只在「本语句还没 raise 过」时报 5，也就是把序号带进 RTL 的读侧 ——
+  下一刀再说，别在这里猜。
+- `Len` 两档（数值实参 ⇒ Integer，字符串 ⇒ Long）仍是 backlog：会动
+  `run_tests.ps1` 的形状针（5809、8811–8813）。
+- 定长串目标（`udtFixedField` / `fixedLen`）那两站没有守卫：它们的写出口是
+  `vb6_FixedStrAssign*` / `vb6_LSet*`，这一刀没碰。

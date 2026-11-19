@@ -3282,9 +3282,23 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + fitFn118 + "(" + value
                     + ", " + fixedLen + "));");
     } else if (valueOwned113 || wrapped122) {
-        c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + value + ");");
+        // C30-11 第七十九刀 (§B227): 语句级中止 —— 本语句里 raise 过就不写目标；
+        // RHS 是**自有临时串**，不 move 进去就得自己释放，否则每次中止漏一块。
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + value + ");");
+        } else {
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_AssignMove(&" + target
+                        + ", " + value + "); else vb6_BSTR_Free(" + value + ");");
+        }
     } else {
-        c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
+        // C30-11 第七十九刀 (§B227): 语句级中止 —— 借来的值只深拷贝, 不写就不写,
+        // 没有要回收的东西。手抄这一发仍留在原处 (R7 名单钉的是「这一站还是手写的」)。
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
+        } else {
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_Assign(&" + target
+                        + ", " + value + ");");
+        }
     }
 }
 

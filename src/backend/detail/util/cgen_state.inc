@@ -753,6 +753,15 @@
     // visit (AssignmentStmt vs SetStmt), 天然分开 —— 所以这个标志只在 Let 期间置真。
     bool memObjLetScalar_ = false;
 
+    // C30-11 第七十九刀 (§B227): **语句级中止**。VB6 的 On Error Resume Next 只中止当前语句:
+    // 出错前已经求值的一切保留，**赋值不发生**。C3 原来把转换失败（vb6_CStrStrict 报 94）
+    // 之后的赋值照样发 ⇒ 真机 `n` 保持 -1 / `s` 保持 [keep] 的格，这里被写成 0 / ""。
+    // 赋值站在可能 raise 的语句开头发一句 `const int32_t _eN = vb6_ErrSerial();`，
+    // 写目标前比一次：序号变了 == 本语句 raise 过 ⇒ 不写。空串 = 本语句无守卫。
+    std::string stmtAbortGuard_;
+    int stmtAbortSeq_ = 0;
+    void emitGuardedStore(const std::string& line);
+
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。
     // ⚠ ListView 是**真窗口**, 所以 RTL 各函数第一参要的是 **HWND 槽 vb6_hwnd_X** ——
     // 与 ImageList 那族的 vb6_com_X (无窗口, 槽里是复刻实例指针) 不同, 别照抄。
