@@ -1512,7 +1512,27 @@ std::string CCodeGen::nullFamilyVExitCName(const IndexOrCallExpr& call) const {
     auto it = kExit.find(n);
     if (it == kExit.end()) return std::string();
     if (call.positional.size() != 1 || !call.positional[0]) return std::string();
-    // 只认整只槽: 空实参/数组本体都走原路 (读数没量过那一档, 不动)。
+    // 只认**整只槽变量**(简单变量/成员) —— 下标实参 (`RTrim$(lns(14))`, lns 是 String 数组)
+    // 必须留原路: 那一形在实参站的 top 前缀判据 (`VB6_SA_AT(BSTR,`) 已经命中, 不会改道;
+    // 若 oracle 这里仍答 Variant, 两边就不同步 —— 实测 b598_print_numeric 当场变成
+    // `vb6_VariantToString(vb6_RTrim(VB6_SA_AT(BSTR, lns, 14)))` (BSTR 再套一层变形,
+    // 而这个文件的语义一行没变)。所以判据收缩到发码站真会改道的那一形。
+    const ASTNodeKind ak = call.positional[0]->kind;
+    if (ak != ASTNodeKind::IdentifierExpr && ak != ASTNodeKind::MemberAccessExpr) {
+        return std::string();
+    }
+    // 判据的**类型那一半**必须与发码站同一问: 发码站在
+    // cgen_expr_call_arg_variant.inc 用的是 isVariantSlot(文本) || isDefinitelyVariantExpr(节点),
+    // 这里拿不到文本, 就用后半句。**不能用 inferExprType** —— 它对 UDT 变量 / 对象 / 属性读
+    // 一律回退成 Variant (该站第 77 行那条注释记的就是这个坑): 实测 Len(<UDT>) 会被判成变体位,
+    // 而发码那边仍是 `((int32_t)sizeof(x))`, 两边当场不同步 —— modTileBlt / test_memdim /
+    // ucSlider_2022 / Charts 2020 四份因此多出 `vb6_VariantToLong(((int32_t)sizeof(bmp)))` 这类
+    // 无意义外包。
+    bool argIsArray = false;
+    if (!isDefinitelyVariantExpr(*call.positional[0], &argIsArray) || argIsArray) {
+        return std::string();
+    }
+    // 数组本体不算 (读数没量过那一档, 不动)。
     const Vb6Type at = inferExprType(*call.positional[0]);
     if (static_cast<uint16_t>(at) & static_cast<uint16_t>(Vb6Type::Array)) return std::string();
     const Vb6Type base = static_cast<Vb6Type>(
