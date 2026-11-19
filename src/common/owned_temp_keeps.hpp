@@ -48,6 +48,9 @@ inline const OwnedTempException* ownedTempExceptions() {
     static const OwnedTempException kRows[] = {
         { "vb6_AbsV",            0, '1', "ret" },
         { "vb6_ArraySetVariant",  2, '1', "write" },
+        // C30-11 第七十六刀 (§B224): Boolean 目标上的 Null —— 报 94 且目标不变
+        // (真机 NullExtProbe A4)。派生侧给的是 keeps=1 'store' ⇒ 不提名。
+        { "vb6_Bool_AssignFromVariant", 1, '1', "store" },
         { "vb6_BSTR_AssignFromVariant", 1, '1', "store" },
         { "vb6_BSTR_AssignMove",  1, '1', "write" },
         { "vb6_CDec",             0, '1', "ret" },
