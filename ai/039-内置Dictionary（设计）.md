@@ -2117,3 +2117,49 @@ slot 表由 `gen_variant_slot_prefixes.ps1` 重生成（53 → **54** 名）。
 | `d = Null` / `d = Abs(Null)` / `d = Null*1` | **94**，目标不变（N1..N4） | 0、err 0 |
 | `d = <字符串表达式>` | **13**（F2） | 编译期 C2440 |
 | `b = Null` / `b = (Null = "")` | **94**（F6/F7） | True、err 0 |
+
+### 11.44 第七十刀：`UBound` / `LBound` 的变体实参（VB6 IDE 实测 → 13）
+
+#### 一、读数（D1..D7，真 VB6 IDE）
+
+`UBound(Null)` / `LBound(Null)` / `UBound(Empty)` / `UBound(装 5 的 Variant)` = **13 Type mismatch**；
+`UBound(a)`（a 是 `1 To 3`）= 3、`LBound(a)` = 1。
+
+#### 二、病根：不是 13 也没归到 13，是**被 9 盖掉了**
+
+变体实参站把槽投成 `vb6_VariantToSafeArray1D(...)`，那枚宽松提取对非数组一律交回 NULL，
+`vb6_UBound(NULL,1)` 于是自己抛 9 —— 所以 C3 报的是 9。
+
+#### 三、改法与踩到的坑
+
+1. 新出口 `vb6_VariantToSafeArray1DStrict`（`vb6rtl.c` + `vb6rtl_variant.h`）：不是数组 ⇒ 抛 13。
+2. 只在 `vb6_UBound` / `vb6_LBound` 的变体实参站用它（`cgen_expr_call_arg_variant.inc` 的
+   `paramIsArray` 分支按 `callee` 分流）；同一站还给 `Join` / `ReDim` 等用，那些格读数不同
+   （`Join(Null)` = 94，§11.35），**不能**一起换。
+3. **坑**：`vb6_ErrRaise` 在 `On Error Resume Next` 下只记号、不跳转
+   （`vb6rtl.c: if (vb6_err_resume_next) return;`）。所以抛完 13 **绝不能交回 NULL** ——
+   调用方 `vb6_UBound` 会再抛一个 9，把刚记下的 13 盖掉（探针第一版实测 D1..D4 全 `err=9`，
+   而发码已经是 Strict，看着像“没生效”）。改为交回一枚**静态空 1D 描述符**
+   （`cDims=1` + `VB6_SA1D_FFEATURES`、`uBound=-1`）：UBound/LBound 直接读边界值、不再发错，
+   Err 保住 13。
+
+#### 四、口径未动（两条负控）
+
+- 未分配的真动态数组 `UBound(d)` 仍旧 **9**（首参不是槽，不进变体站）；
+- 真数组 `UBound(a)` = 3 / `LBound(a)` = 1 不变（D5/D6）。
+
+#### 五、登记与验收
+
+- K5 新行直接归因、不塞白名单：`vb6_VariantToSafeArray1DStrict|0  0  <空通道>  0  open  VARIANT`
+  —— 与孪生 `vb6_VariantToSafeArray1D` 同格（两者都只把入参那枚 `parray` 交回）。keeps 表 239 → **240** 行。
+- 夹具：`tests/test_arr_empty.bas` 增 `UbVariantStation`，七针写入期望：
+  `UB-null=13`、`UB-lnull=13`、`UB-empty=13`、`UB-scalar=13`、`UB-arr=3/0`、`UB-larr=1/0`、`UB-unalloc=9`。
+- 本机：探针 D1..D7 与 VB6 逐格一致；`check_owned_temp_keeps` PASS（240 行 / 提名 196）、
+  `check_builtin_slot_returns` PASS（54 名）、发码清单 750 行与 CI 逐行相同（不用重登记）。
+
+#### 六、下一刀（已定型，未做）
+
+`Len/Trim/LTrim/RTrim/UCase/LCase(Null)`：这一族不能只在变体站加守卫 —— 实参先被
+`hoistOwnedTempArgs` 折成 `_own_N` **BSTR 临时量**，94 在造临时量那一步就抛了，`vb6_Len` 根本见不到 Null。
+要另开一族变体出口（`vb6_LenV/TrimV/...` 返回 VARIANT）＋在调用站改道跳过临时量，
+新出口走 `gen_variant_slot_prefixes.ps1` 自动进槽表。

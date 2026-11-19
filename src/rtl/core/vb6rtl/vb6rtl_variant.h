@@ -504,6 +504,10 @@ vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);
 // Fix 029: Variant → SafeArray extraction (variant holding array).
 // 用于调用点反向强制: callee 期望 vb6_SafeArray1D* 但实参是 vb6_VARIANT.
 struct vb6_SafeArray1D* vb6_VariantToSafeArray1D(vb6_VARIANT v);
+// 账 #305 §B172 (第七十刀): UBound/LBound 变体实参站的**严格**提取 —— 不是数组
+// (含 Null / Empty / 标量) 一律抛 13 Type mismatch (真 VB6 IDE 读数), 与上面那枚
+// 宽松版 (返回 NULL) 分家, 因为宽松版还被 Byte()/Filter 的探测路径共用。
+struct vb6_SafeArray1D* vb6_VariantToSafeArray1DStrict(vb6_VARIANT v);
 // Fix 140: Variant → Byte() 数组. Variant 持数组时返回其 parray; 持 BSTR 时
 // 按 VB6 语义把字符串转成字节数组 (vb6_StringToByteArray). 用于 Byte() 字段
 // 从字符串 Variant 赋值 (LabelPlus.ctl `m_Caption = .ReadProperty("Caption", ...)`

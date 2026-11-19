@@ -166,7 +166,17 @@
                     && (paramBase == Vb6Type::Variant || paramBase == Vb6Type::Byte
                     || paramBase == Vb6Type::String || paramBase == Vb6Type::Long)) {
                     // 数组参数: 从 Variant 提取 SafeArray1D*
-                    argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
+                    // 账 #305 §B172 (第七十刀): UBound/LBound 的变体实参站换**严格**提取 ——
+                    //   真 VB6 IDE 读数: UBound(Null) / UBound(Empty) / UBound(装 5 的 Variant)
+                    //   三格全是 13 Type mismatch; 宽松版只交回 NULL, 到 vb6_UBound 里报成 9。
+                    //   只认这两枚 callee: 同一站还给 Join / ReDim 等用, 那些格读数不同
+                    //   (Join(Null) = 94, ai/039 §11.35), 不能跟着一起换。
+                    //   真数组但未分配不走这一站 (首参是载体不是槽), 仍旧 9 (口径未动)。
+                    if (callee == "vb6_UBound" || callee == "vb6_LBound") {
+                        argVal = "vb6_VariantToSafeArray1DStrict(" + argVal + ")";
+                    } else {
+                        argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
+                    }
                 } else if (paramBase == Vb6Type::Long || paramBase == Vb6Type::Integer
                            || paramBase == Vb6Type::Byte || paramBase == Vb6Type::Boolean) {
                     // Fix 092q: Long/Integer/Byte/Boolean ByVal 形参接收 Variant →
@@ -560,7 +570,17 @@
                             argVal = "vb6_VariantToObjectVal(" + argVal + ")";
                         }
                     } else if (rtParamType == "vb6_SafeArray1D*") {
-                        argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
+                        // 账 #305 §B172 (第七十刀): UBound/LBound 的变体实参站换成**严格**提取。
+                        //   真 VB6 IDE 读数: `UBound(nv)` / `UBound(Empty)` / `UBound(装 5 的 Variant)`
+                        //   三格全是 13 Type mismatch；宽松版交回 NULL, 到 vb6_UBound 里只能报 9。
+                        //   只认这两枚 callee —— 同一站还给 Join / ReDim 等用，那些格的读数不同
+                        //   (Join(Null) = 94, ai/039 §11.35), 不能跟着一起换。
+                        //   真数组但未分配不走这一站 (首参不是槽), 仍旧 9 (口径未动)。
+                        if (callee == "vb6_UBound" || callee == "vb6_LBound") {
+                            argVal = "vb6_VariantToSafeArray1DStrict(" + argVal + ")";
+                        } else {
+                            argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
+                        }
                     }
                 }
             }

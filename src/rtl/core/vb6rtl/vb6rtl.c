@@ -514,6 +514,40 @@ struct vb6_SafeArray1D* vb6_VariantToSafeArray1D(vb6_VARIANT v) {
     return NULL;
 }
 
+// 账 #305 §B172 (第七十刀): UBound/LBound 的变体实参站。
+//   真 VB6 IDE 读数 (2026-11-19 实测): `UBound(nv)` / `UBound(Empty)` / `UBound(nv5)`
+//   三格 (nv=Null, nv5 装 5) 全是 **13 Type mismatch**, 而 C3 走上面那枚宽松提取 ——
+//   非数组一律交回 NULL, 再由 UBound 报 **9 Subscript out of range**。
+//   宽松版不能就地改: 它还被「Variant 里的 Byte()/PropertyBag」等路径当作探测用
+//   (vb6_VariantToByteArray 的注释、vb6_Filter 的源探测)。所以另开一枚**严格**提取,
+//   只在 UBound/LBound 的变体实参站用: 不是数组 (含 Null / Empty / 标量) ⇒ 抛 13。
+//   注意**真数组但未分配**不走这里: 那条路首参是数组本体, 不进变体站, 仍旧 9 (口径未动)。
+struct vb6_SafeArray1D* vb6_VariantToSafeArray1DStrict(vb6_VARIANT v) {
+    if ((v.vt & vb6_vtArray) && v.parray) {
+        return v.parray;
+    }
+    // 抛完 13 **必须交回一枚能用的空描述符**，不能交 NULL。
+    //   理由（实测踩到）: vb6_ErrRaise 在 `On Error Resume Next` 下**只记号不跳转**
+    //   （见 vb6rtl.c 的 `if (vb6_err_resume_next) return;`），于是本函数会继续返回。
+    //   返回 NULL 的话调用方 vb6_UBound 自己又抛一个 **9**，把刚记下的 13 盖掉 ——
+    //   探针实测 D1..D4 全报 err=9 正是这条。交回空 1D 描述符（cDims=1 + 本 RTL 标记、
+    //   uBound=-1）后 UBound/LBound 直接读边界值、不再发错，Err 保住 13。
+    static struct vb6_SafeArray1D vb6_saStrictEmpty1D = {
+        1,                     /* cDims   */
+        VB6_SA1D_FFEATURES,    /* fFeatures (C3 标记, vb6_SaIs1D 认它) */
+        (int32_t)sizeof(vb6_VARIANT), /* elemSize */
+        vb6_sa_variant,        /* elemType */
+        NULL,                  /* data     */
+        0,                     /* count    */
+        0,                     /* lBound   */
+        -1,                    /* uBound   */
+        0                      /* isDynamic */
+    };
+    vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                 vb6_BSTR_FromStr(L"Type mismatch"));
+    return &vb6_saStrictEmpty1D;
+}
+
 // Fix 029: vb6_VariantToObject 的右值兼容版本.
 // vb6_VariantToObject 接受 vb6_VARIANT* (要求实参左值), 而调用点包装的实参
 // 经常是函数返回值 (vb6_VariantArrayGet(...) 等) 无法取址. 这里提供按值版本.

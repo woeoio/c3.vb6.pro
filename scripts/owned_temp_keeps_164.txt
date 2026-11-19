@@ -233,6 +233,7 @@ vb6_VariantToLongPtr|0	1	write	0	open	VARIANT
 vb6_VariantToObjectVal|0	0		0	open	VARIANT
 vb6_VariantToObjectValChecked|0	0	handoff-reads:vb6_VariantToObjectVal	0	open	VARIANT
 vb6_VariantToSafeArray1D|0	0		0	open	VARIANT
+vb6_VariantToSafeArray1DStrict|0	0		0	open	VARIANT
 vb6_VariantToString|0	0	handoff-reads:vb6_CStr	0	open	VARIANT
 vb6_VarMulV|0	0	handoff-reads:vb6_VarArith	0	open	VARIANT
 vb6_VarMulV|1	0	handoff-reads:vb6_VarArith	0	open	VARIANT
