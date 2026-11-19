@@ -2363,6 +2363,12 @@ int32_t j_end = vb6_UBound(vb6_VariantToSafeArray1DStrict(_vb6_with_2->Values), 
 
 口径：只影响六枚内置的单实参调用；`isDefinitelyVariantExpr` 一个字没改。
 
+3. 类实例那一支**问投影不问底层表**：`classFieldIsVariantSlot`（它自己转问 `classFieldKind`，
+   是同一个答案的唯一出口）。第一版直接调 `classFieldKind`，GA 当场红在
+   `[STATIC] variant_slot_store` 的 **R8**：`cgen_util_type.cpp` 的直接问点被钉成 4 处
+   （读侧三站 + §B184 写侧一问），我这一调就成了第 5 处。不改那个数（它就是用来防「读侧
+   又多长一个问点」的），改问投影即归位，发码逐字节不变。
+
 #### 四、验收
 
 - B171：`vb6_LenV(_vb6_with_0->PZ  /* With class .PZ field variant */)`，且那枚

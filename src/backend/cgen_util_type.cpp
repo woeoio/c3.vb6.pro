@@ -1540,14 +1540,15 @@ std::string CCodeGen::nullFamilyVExitCName(const IndexOrCallExpr& call) const {
         // 与 MemberAccessExpr 那一形同一个函数、同一口径。
         const Vb6Type tw = inferUdtFieldVb6Type(call.positional[0].get(), &argIsArray);
         if (tw != Vb6Type::Variant || argIsArray) {
-            // UDT 表答不出 = 不是 `With <UDT>`; 类实例的 With 看字段表 (classFieldKind 只认
-            // 字段, 不认方法 —— 属性 Get 交回来的是 getter 调用, 不是 VARIANT 存储)。
+            // UDT 表答不出 = 不是 `With <UDT>`; 类实例的 With 看字段表 —— 问**投影**不问底层表
+            // (classFieldIsVariantSlot 就是「这枚成员声明档是 Variant」那一问; 直接调 classFieldKind
+            //  会在 R8 那张「读侧三站 + 写侧一问 = 4」的名单里多长出第 5 处, 而这一问本来就有出口)。
             if (!withObjectInfoStack_.empty()) {
                 const auto& infoW = withObjectInfoStack_.back();
                 if (infoW.kind == WithObjKind::ClassInstance && !infoW.className.empty()
-                    && classFieldKind(infoW.className,
-                                     static_cast<WithMemberExpr&>(*call.positional[0]).memberName)
-                           == Vb6Type::Variant) {
+                    && classFieldIsVariantSlot(
+                           infoW.className,
+                           static_cast<WithMemberExpr&>(*call.positional[0]).memberName)) {
                     return it->second;
                 }
             }
