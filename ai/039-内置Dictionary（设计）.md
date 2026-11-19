@@ -2230,9 +2230,30 @@ vb6_BSTR_Free(_own_1);
   `JF-lenv-null/trimv-null/ltrimv-null/rtrimv-null/ucasev-null/lcasev-null=True/0`、
   `JF-lenv-tn=Null/0`、`JF-trimv-str=[ab]/0`、`JF-ucasev-str=[  AB  ]/0`、`JF-lenv-str=6/0`、
   `JF-lenv-empty=0/0`、`JF-trimv-empty=[]/0`；负控 `JF-lenv-long=94`（变体位交回的是 Null，不是 0）。
-- 发码清单：整语料 `--emit-c` 重跑后按 CI 那份逐行登记（见提交说明）。
+- 发码清单：整语料重跑后逐行列。本机与期望不同 **24 行**：其中 **19 行**是本刀的改道
+  （b171/b172/b173×2/b174×2/b432×2/dbgdlg/bodydecl/bstr_borrow_slot/fe_slot_leak/joinfilter/
+  pa_reclaim/ucSegmentedControl/ucTreeView/NullFamilyProbe/NullOpsProbe/VBFlexGridDemo），逐份用
+  改前/改后两台二进制发码 diff 过，差异只有 `*V` 改道与 `_own_N` 计数位移；另 **5 行**是已记的机器侧差
+  （guisample×3 + TeeChartChartDisplay + ctrlmscomm）—— 这 5 份本机改前改后逐字节相同，与这一刀无关，
+  保持 CI 侧原值不抹平。
 
-#### 六、下一刀
+#### 六、踩到的第二个坑：oracle 的“Variant”不能用 inferExprType 问
+
+第一版判据写的是 `inferExprType(实参) == Variant`。它对 UDT 变量 / 对象 / 属性读一律**回退成 Variant**
+（实参站第 77 行那条注释记的就是这个坑），于是发码没改道的形也被 oracle 判成变体位，两边不同步：
+
+| 形 | 发码站实际 | oracle 第一版 | 后果 |
+|---|---|---|---|
+| `Len(bmp)`（bmp 是 UDT） | `((int32_t)sizeof(bmp))` | Variant | `vb6_VariantToLong(((int32_t)sizeof(bmp)))` |
+| `RTrim$(lns(14))`（String 数组元素） | `VB6_SA_AT(BSTR, lns, 14)` 已命中 top 前缀 ⇒ 不改道 | Variant | `vb6_VariantToString(vb6_RTrim(...))` |
+| `Len(ctrl.Text)`（属性读） | `vb6_Len(vb6_GetControlText(...))` | Variant | 多出 `vb6_VariantToLong(...)` 外包 |
+
+这 26 行“假改动”带动了 47 份发码。改法（仍只一处判据）：实参节点必须是**整只槽**
+（`IdentifierExpr` / `MemberAccessExpr`），类型那一半改成 `isDefinitelyVariantExpr` —— 与实参站
+`isVariantSlot(文本) || isDefinitelyVariantExpr(节点)` 的**后半句同一问**。改后重发 47 份：
+只剩 19 份与 base 不同，且每份的差异全是 `*V` 改道。
+
+#### 七、下一刀
 
 读数已齐、未做的一族仍在 §11.43 第五节：`Len(Empty)`/`Trim(Empty)`（本刀已钉住不变）、
 `Len(<Long 变量>)` 的 **Integer** 档（A3/A5）、`Val(Null)`/`Asc(Null)`、`Asc(Empty)`。
