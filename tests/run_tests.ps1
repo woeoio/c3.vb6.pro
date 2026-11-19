@@ -5806,7 +5806,7 @@ if ($Category -in @("all", "run", "bas")) {
         'vb6_Left(_own_5, 10)',
         'BSTR _own_6 = vb6_BSTR_FromStr(L"t");',
         'vb6_InStr(2, s, _own_6)',
-        '(int32_t)sizeof(n)',
+        '(int16_t)sizeof(n)',
         '(int32_t)sizeof(vb6_type_U74)'
     )
     Test-EmitcAbsent 'b174_num_str_arg_lesion' @(
@@ -8808,9 +8808,9 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_CStrLong(vb6_Len(gS))',                    # 模块级 String：字符数
         'vb6_CStrLong(vb6_Len(gE))',                    # 模块级空串：0
         'vb6_CStrLong(vb6_Len(lS))',                    # 局部 String
-        'vb6_CStrLong(((int32_t)sizeof(gL))))',         # Long：存储宽度
-        'vb6_CStrLong(((int32_t)sizeof(gI))))',         # Integer：存储宽度
-        'vb6_CStrLong(((int32_t)sizeof(gB))))'          # Byte：存储宽度(LEN-BYTE 那条崩溃的反证)
+        'vb6_CStrLong(((int16_t)sizeof(gL))))',         # Long：存储宽度（第八十刀：档收成 Integer）
+        'vb6_CStrLong(((int16_t)sizeof(gI))))',         # Integer：存储宽度
+        'vb6_CStrLong(((int16_t)sizeof(gB))))'          # Byte：存储宽度(LEN-BYTE 那条崩溃的反证)
     )
     Test-EmitcAbsent "len_emitc_no_ptr_width" @("$Tests\test_len_width.bas") @(
         '((int32_t)sizeof(gS))',                        # 修复前的形状：x64 读 8、x86 读 4

@@ -2967,3 +2967,60 @@ CI 读数：`'Tree Explorer' 内容段: BM_CLICK 3s 未返回 + 迟到 7s 仍无
 `-Category vbp -VbpShard 5` 在本机这台机器上**不会重建** `output\build_ucTreeView`
 （那目录 2026-11-10 就在，说明那一格在本机走的是缓存/跳过），所以「本机分片绿」不能当
 「这一格跑过」的凭证 —— 要点名复跑像素夹具时，照上面那三行手工重建 + 单跑脚本。
+
+### 11.58 第八十刀：`Len(<数值变量>)` 的档位收成 Integer（两档分开）
+
+#### 一、真机口径（`.temp/k78/lena.bas`，用户真机采）
+
+```
+D1  lv = Len(<Integer>) | val=2 tn=Integer
+D2  lv = Len(<Long>)    | val=4 tn=Integer
+D3  lv = Len("abc")     | val=3 tn=Long
+D4  lv = Len(Empty)     | val=0 tn=Long
+```
+
+值一直是 C3 早就对的（sizeof），错的是**档**：C3 原来四格全答 Long。
+为什么数值那两格是 Integer 而不是 Len 声明的 Long：`Len(<数值变量>)` 在 VB6 里是
+**编译期常量**（存储宽度），而 VB6 把装得下的常量定为 Integer —— 与「Len 返回 Long」
+不矛盾，两档必须分开走。
+
+#### 二、改法（两半，缺一不可）
+
+1. **发码**（`cgen_expr_call_builtin_pre.inc`）：数值支的 `((int32_t)sizeof(x))` 收成
+   `((int16_t)sizeof(x))` —— 三处：数组元素、标量数值、非字符串兜底桶。
+   UDT 那一支仍是 int32_t（长度会超 32767），定长串那一支也不动（那是 String 族）。
+2. **推理**（`cgen_util_type.cpp` 的 `inferExprType`，IndexOrCallExpr 分支开头）：
+   `Len(<数值档实参>)` 答 **Integer**；字符串 / Variant / 对象 / 未知一概不拦（仍答 Long）。
+   只改这一问，`builtin_funcs.inc` 那张表（Len = Long）不动 —— 表答的是「声明」，
+   而这里答的是「这一枚常量表达式的档」，两句话并存。
+
+光改发码不够：装箱由**推理档**决定，实测改前发 `vb6_VariantLong(((int16_t)sizeof(i1)))`
+⇒ TypeName 仍答 Long（D1 正确之前那一版就是这样）。两处都改后装箱落
+`vb6_VariantFromValue(((int16_t)sizeof(i1)))` 的 `_Generic` Integer 档。
+
+#### 三、读数（改后，本机）
+
+```
+D1 val=2 tn=Integer    D2 val=4 tn=Integer
+D3 val=3 tn=Long       D4 val=0 tn=Long
+W4b/W5b/W6b n=-1 err=94，C6/C7/C8 keep err=94（第七十九刀的九格未被本刀动到）
+```
+
+#### 四、门禁与本机读数
+
+- `-Category syntax`：PASS=227 FAIL=0。
+- `-Category vbp -VbpShard 9`：PASS=56 FAIL=1（仍只有本机已知 `[VBP] c29listview`）。
+- 四道静态门全绿。
+- 形状针同步：`run_tests.ps1:5809`（b174 的 `Len(n)`）与 `8811–8813`
+  （`len_emitc_width` 的 gL/gI/gB）从 `int32_t` 改成 `int16_t`；
+  `8848` 的定长串 `gT` 与 `5810` 的 UDT **不动**（那两档没变，正是本刀要守住的边界）。
+- 发码清单：11 份输入变化 —— 除 `test_len_width` / `test_memdim` / `b174` / `dbgdlg` /
+  `NullFamilyProbe` 五份本机可复算的以外，另外 5 份是**机器侧行**
+  （guisample×3 / TeeChart / ctrlmscomm）。它们的 CI 散列只能吃 CI 那台二进制交回来的数：
+  先按本机数登记（闸会红在那 5 行），再从那次 run 的 `emit-manifest` 工件把 5 行换回去
+  —— 与 §11.57 同一条流程，多跑一趟 GA 是这一步的固有成本。
+
+#### 五、下一步
+
+`n = Asc("")` ⇒ 5 仍留着（§11.56 末）：要 `vb6_Asc` 只在「本语句还没 raise 过」时报 5，
+即把错误序号带进 RTL 读侧。

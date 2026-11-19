@@ -691,7 +691,10 @@
                 // 数组元素表达式 (VB6_SA_AT 展开成 ((T*)data)[i-lBound] 或
                 // Byte 数组的指针下标) 已是左值形态, sizeof 取其 C 存储宽度 ——
                 // 与标量分支同口径; sizeof 不求值, 下标副作用不被重复执行。
-                lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                // 第八十刀 (§B228): 档位收成 **int16_t** —— 真机 `Len(<数值变量>)` 是编译期
+                // 常量, VB6 把能装下的常量定为 **Integer**（探针 D1/D2：TypeName = Integer，
+                // 字符串那一档才是 Long）。C 侧 int16_t 让装箱的 _Generic 落到 VT_I2。
+                lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                 return;
             }
             // 只拦**标量数值**; String / Variant / Object / 未知一律走原 vb6_Len 路径。
@@ -713,7 +716,8 @@
                 //   vb6_Len(uint8_t) 把 200 当 BSTR 指针解引用 → 0xC0000005 (LEN-BYTE 实测)。
                 // sizeof 不求值其操作数, 故 Len(Foo()) 不会重复调用 (VB6 会求值一次;
                 // 数值实参求值无可观测副作用的场景占绝大多数, 这里取不崩优先)。
-                lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                // 第八十刀 (§B228): 同数组元素那一支，档收成 int16_t（真机答 Integer）。
+                lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                 return;
             }
             // Byte / Currency / LongLong / 枚举 之类**不落任何登记桶**
@@ -739,7 +743,9 @@
                     && !knownFixedStringLen_.count(low44)
                     && tLen44 != Vb6Type::String) {
                     emitExpr(*node.positional[0]);
-                    lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                    // 第八十刀 (§B228): 这一支同样收成 int16_t（Byte/Currency/枚举 都是
+                    // “编译期常量”那一档，真机 TypeName 答 Integer）。
+                    lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                     return;
                 }
             }

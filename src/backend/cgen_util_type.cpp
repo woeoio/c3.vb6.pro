@@ -393,6 +393,27 @@ Vb6Type CCodeGen::inferExprTypeImpl(Expr& expr) const {
             // 函数调用: 返回函数返回类型
             auto& call = static_cast<IndexOrCallExpr&>(expr);
 
+            // C30-11 第八十刀 (§B228): `Len(<数值变量>)` 的真机档位是 **Integer**。
+            // 真机探针 (`.temp/k78/lena.bas` D1/D2): Len(Integer 变)=2 / Len(Long 变)=4，
+            // TypeName 都答 **Integer**；Len("abc") 与 Len(<Variant>) 仍答 **Long**。
+            // 为什么是 Integer: 这两格在 VB6 里是**编译期常量**（存储宽度），而 VB6 把
+            // 装得下的常量定为 Integer—— 与 Len 的声明返回 Long 不矛盾。
+            // 只认「一个实参 + 数值档」，字符串/Variant/对象一概不拦（那两档仍走 Long）。
+            if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr
+                && call.positional.size() == 1) {
+                auto& idLen80 = static_cast<IdentifierExpr&>(*call.callee);
+                if (Symbol::toLower(idLen80.name) == "len") {
+                    const Vb6Type tArg80 = inferExprType(*call.positional[0]);
+                    if (tArg80 == Vb6Type::Byte || tArg80 == Vb6Type::Boolean
+                        || tArg80 == Vb6Type::Integer || tArg80 == Vb6Type::Long
+                        || tArg80 == Vb6Type::LongPtr || tArg80 == Vb6Type::LongLong
+                        || tArg80 == Vb6Type::Single || tArg80 == Vb6Type::Double
+                        || tArg80 == Vb6Type::Currency || tArg80 == Vb6Type::Date) {
+                        return Vb6Type::Integer;
+                    }
+                }
+            }
+
             // C3 扩展 (ai/032): `If(cond, a, b)` 三元的结果类型必须**自己算**, 不能
             // 沿用 addBuiltinFunc 登记的 Variant 兜底 —— 那个登记只是让语义层知道
             // "这个名字存在"。发码层发的是 C 的 `?:`, 真实 C 类型由两个分支按通常
