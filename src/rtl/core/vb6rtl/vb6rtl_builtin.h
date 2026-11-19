@@ -145,6 +145,10 @@ void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src);
 // 以前把 BSTR 裸交给 double ⇒ 编译期 C2440 (探针 F2 `d = Null & ""` /
 // F3 `d = CStr(Null)`), 所以没有存量编译通过的依赖。
 void vb6_Dbl_AssignFromBSTR(double* target, BSTR src);
+// C30-11 第七十六刀 (§B224): Null → Boolean / Double 目标 —— 报 94 且**目标不变**
+// (真机 A2/A4)。与 vb6_BSTR_AssignFromVariant 同一口径。
+void vb6_Bool_AssignFromVariant(int16_t* target, vb6_VARIANT src);
+void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src);
 // M22: typed CStr overloads
 BSTR vb6_CStrLong(int32_t x);
 BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 Variant 解包入口

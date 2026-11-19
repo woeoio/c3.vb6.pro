@@ -515,6 +515,28 @@ void vb6_Dbl_AssignFromBSTR(double* target, BSTR src) {
     *target = v;
 }
 
+// C30-11 第七十六刀 (§B224): Null 落到 Boolean / Double 目标上 —— 真机读数
+// (NullExtProbe A2 `d = (Null = "")` ⇒ d 不变 / err=94; A4 `b = (Null = "")` ⇒ b 不变 /
+// err=94) 是「报 94 且**目标不变**」。以前发 `b = vb6_VariantToLong(...)`，raise 之后
+// 照常把 0 / False 写进目标 —— 错误号对了、值被清了。与第七十三刀那枚 BSTR 出口同一个口径。
+void vb6_Bool_AssignFromVariant(int16_t* target, vb6_VARIANT src) {
+    if (src.vt == (vb6_vartype)vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    *target = (int16_t)vb6_VariantToLong(src);
+}
+
+void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src) {
+    if (src.vt == (vb6_vartype)vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    *target = vb6_VariantToDouble(src);
+}
+
 // M22: typed CStr overloads (C has no overloading, use suffix)
 #ifdef vb6_CStrLong
 #undef vb6_CStrLong   // vb6rtl_builtin.h 的 _Generic 宏在这里必须关闭, 否则函数定义被宏改写

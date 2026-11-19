@@ -406,6 +406,18 @@
             // 目标类型未知 (void*/对象等) → 不动, 维持原赋值路径.
         }
         if (valueIsVariant) {
+            // C30-11 第七十六刀 (§B224): Null 落到 Boolean / Double 目标时按 VB6 口径
+            // 「报 94 且目标不变」(真机 NullExtProbe: A2 `d` 仍 1.5 / err=94, A4 `b` 仍 True /
+            // err=94)。以前发 `target = vb6_VariantToLong/VariantToDouble(...)`，raise 之后
+            // 照样把 0 / False 写进目标 —— 错误号对了，值被清了。
+            if (node.target && inferExprType(*node.target) == Vb6Type::Boolean) {
+                c_.emitLine("vb6_Bool_AssignFromVariant(&" + target + ", " + value + ");");
+                return;
+            }
+            if (node.target && inferExprType(*node.target) == Vb6Type::Double) {
+                c_.emitLine("vb6_Dbl_AssignFromVariant(&" + target + ", " + value + ");");
+                return;
+            }
             // 检查目标类型
             std::string convertedValue = value;
             bool udtFieldIsArray114 = false;

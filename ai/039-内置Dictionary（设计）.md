@@ -2537,6 +2537,116 @@ KEEPS 新行 `vb6_Dbl_AssignFromBSTR|1  0  (空通道)  0  open  BSTR` —— ke
 `check_builtin_slot_returns` / `check_conv_strict_parse` / `check_variant_slot_store` /
 `check_owned_temp_keeps` 四道 PASS；`-Category syntax` PASS=227 FAIL=0。
 
+### 11.51 Null 扩展探针读数（VB6 IDE 实跑，`ai/vb6probe/NullExtProbe.bas`）
+
+真机一次跑完 A/W/C/D 四段（`On Error Resume Next`，每格前 `Err.Clear`，`s` 先置 `keep`）：
+
+```
+A1  v = (Null = "")  | isnull=True val=<Null> tn=Null err=0
+A2  d = (Null = "")  | d=1.5 err=94
+A3  s = (Null = "")  | s=[keep] err=94
+A4  b = (Null = "")  | b=True err=94
+A5  v = (Null <> "") | isnull=True val=<Null> tn=Null err=0
+A6  v = (Null = Null) | isnull=True val=<Null> tn=Null err=0
+A7  v = (Null = 0)    | isnull=True val=<Null> tn=Null err=0
+A8  v = (Null > 0)    | isnull=True val=<Null> tn=Null err=0
+A9  s = (Null <> "") | s=[keep] err=94
+W4  s = a(0)          | s=[keep] err=94      (变体数组元素)
+W4b n = Len(a(0))     | n=-1 err=94
+W5  s = FNull()       | s=[keep] err=94      (返回 Null 的函数)
+W5b n = Len(FNull())  | n=-1 err=94
+W6  s = c(1)          | s=[keep] err=94      (Collection.Item)
+W6b n = Len(c(1))     | n=-1 err=94
+W7  v = a(0)          | isnull=True val=<Null> tn=Null err=0   (入口确实是 Null)
+C6  s = Mid(Null,1)   | s=[keep] err=94
+C7  s = Left(Null,1)  | s=[keep] err=94
+C8  s = UCase(Null)   | s=[keep] err=94
+D1  lv = Len(<Integer var>) | val=2 tn=Integer err=0
+D2  lv = Len(<Long var>)    | val=4 tn=Integer err=0
+D3  lv = Len("abc")          | val=3 tn=Long    err=0
+```
+
+四条结论（直接改写 F7 与 Len 两条的做法）：
+
+1. **比较结果本身就是 Null**：`A1/A5/A6/A7/A8` 全 Null（连 `Null = Null` 也是 Null）⇒
+   Null 传播适用于**全部**比较运算符，不限于 `=`。C3 现在发 `vb6_StrCmp(...) == 0` ⇒ True/err=0，
+   所以 F7 要动的是**比较站**，不是赋值站。
+2. **Null 落到目标上一律 94 且目标不变**（A2 Double / A3 String / A4 Boolean）。
+   这与 F2/F3 的 13 不冲突：那是**字符串** `""` 进 Double（严格数值解析 13），
+   这是**Null** 进 Double（变体通道 94）—— 两条路必须分开。
+3. **W 段三入口同口径**（变体数组元素 / 返回 Null 的函数 / Collection.Item）：
+   赋给 String 与 `Len(...)` 都是 94 且目标不变。第七十三刀的严格出口已覆盖这一形，
+   所以 W4/W5/W6 很可能**已经是绿的**，只需复测确认；C6/C7/C8 （Mid/Left/UCase）那一道站
+   则是旧口径，未改成 94。
+4. **Len 的档位按实参类别分**：`Len(<Integer/Long 变量>)` ⇒ **Integer**（2 / 4），
+   `Len("abc")` ⇒ **Long**（3）。所以 §11.46 那句“值对、档差一档”要改成**两档**：
+   数值实参发 Integer（VT_I2），字符串实参发 Long；一刀切两向都会错一格。
+
+### 11.52 第七十六刀：`b = Null` / `d = Null` ⇒ 94 且目标不变（A4/A2）
+
+#### 一、读数（本机 C3）
+
+`tests/vb6probe/NullFamilyProbe.bas` 的 F 段（改后）：
+
+```
+F1  d = Empty       | d=0   err=0
+F2  d = Null & ""    | d=1.5 err=13
+F3  d = CStr(Null)  | d=1.5 err=13
+F4  d = 0           | d=0   err=0
+F5  i = Empty       | i=0   err=0
+F6  b = Null        | b=True err=94      (改前 b=False err=0)
+F7  b = (Null = "")| b=True err=0       (没改，见三)
+```
+
+另加一份临时探针（`.temp/k76/f8.bas`，不入清单）补 A2 的 Double 格：
+
+```
+F8  d = Null        | d=1.5 err=94
+F9  b = Null        | b=True err=94
+```
+
+对得上真机 A2/A4：**报 94 且目标不动**（改前 `target = vb6_VariantToLong(...)` 是先 raise
+再写 0/False，两半都错：错成 0、还把目标清了）。
+
+#### 二、改了什么
+
+- RTL 两枚严格出口：`vb6_Bool_AssignFromVariant(int16_t*, vb6_VARIANT)` /
+  `vb6_Dbl_AssignFromVariant(double*, vb6_VARIANT)` —— `vtNull` ⇒ `vb6_ErrRaise(94)` 后**直接 return**
+  （目标一个字节都不写）；否则走原来的 `VbVariantToLong` / `VbVariantToDouble`；`Empty` ⇒ 0。
+- `cgen_assign_value_sem.inc` 的 `valueIsVariant` 支首：按 `inferExprType(*node.target)` 是
+  Boolean / Double 就改发上面两枚。目标类型问不出来就**维持原路**（不猜）。
+- 与 13 那条路分开：字符串右值进 Double 仍走第七十五刀的 `vb6_Dbl_AssignFromBSTR`（严格解析，`""` ⇒ 13）；
+  变体右值进 Double 走本刀这枚（Null ⇒ 94）。
+
+#### 三、F7 为什么没一起改（改到一半撤回的证据）
+
+先按 A1/A5–A8 的结论动**比较站**（`cgen_expr_binary.cpp`）：任一侧是变体就发
+`vb6_VarCmpNullV(a, b, op)` 交出一整只 VARIANT，想靠前缀表让下游按目标类型走 94 通道。三条硬红：
+
+1. `-Category syntax` 的 `varcmp_scalar_boxed` 红：数字比较也被改道了，缺 `vb6_VarCmpEq(&v, `。
+2. 同批 `variant_unbox_shapes` 红：Double 目标的形状换了（那一行本刀**确实**该换，已重钉）。
+3. 最硬的一条：把**有字符串一侧**的比较收窄改道之后，`tests/test_varcmp_scalar.bas` 的发码里出现
+   `vb6_VCmpNullV(&v, &s, vb6_VarCmpNullV(...))` 与 `(int32_t)(vb6_VarCmpNullV(...))` ——
+   这两处包装站把**比较结果当 int 用** ⇒ C2440，整份工程编不过。
+
+所以 F7 不是「再加一条出口」：比较站一交出 VARIANT，`vb6_VCmpNullV` 的第 3 实参、`(int32_t)(...)`
+这两类包装站都得先能接 VARIANT（或者改成由包装站决定内层比较怎么发）。本刀**整体回退**：
+`vb6_VarCmpNullV` 的 RTL / 声明 / 前缀表 / KEEPS 行一起撤，不留死代码。F7 留给下一刀。
+
+#### 四、登记与门禁
+
+- KEEPS：新增 2 行（`vb6_Bool_AssignFromVariant|1 1 store` 例外行 + `vb6_Dbl_AssignFromVariant|1 0 handoff-reads:vb6_VariantToDouble`），
+  `check_owned_temp_keeps.ps1` PASS（surface 250 / owned 133）。
+- 发码清单：全语料 750 行里**本机 5 行动**，逐份 base/new 归因（`git stash push -- src/` 那套）全是本刀的改道文本：
+  NullFamilyProbe（4 行：`d = vb6_VariantToDouble(ev)`→`vb6_Dbl_AssignFromVariant(&d, ev)`、`b = vb6_VariantToLong(nv)`→`vb6_Bool_AssignFromVariant(&b, nv)`）、
+  NullOpsProbe（6 行）、test_variant_boxing（4 行）、VBFlexGridDemo/Common/Common.bas（2 行）、VBFlexGridDemo.vbp（项目级）。
+  机器侧 5 行（guisample×3 / TeeChart / ctrlmscomm）**base==new**，一律不动。
+- 门禁：`builtin_slot_returns` / `conv_strict_parse` / `variant_slot_store` / `owned_temp_keeps` 全 PASS；
+  `-Category syntax` PASS=227 FAIL=0 SKIP=0。
+- 已知噪声（下一刀顺手收）：`b = Null` 仍报编译警告 **VB3003**「无法将 Null 隐式转换为 Boolean」，
+  但运行期口径已与 A4 一致；F7 仍在（`b = (Null = "")` ⇒ True/0，真机 94/True）。
+
+
 
 
 

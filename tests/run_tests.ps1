@@ -14659,7 +14659,8 @@ if ($Category -in @("all", "syntax")) {
         # 第七十三刀 (§B221): 同一格改走严格出口 (Variant 右值 ⇒ .Null 报 94 且目标不变)
         "vb6_BSTR_AssignFromVariant(&s, VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem)",
         "vb6_BSTR_AssignFromVariant(&vb6_ret_ReadToReturnString, VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem)",
-        "d = vb6_VariantToDouble(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem);",
+        # 第七十六刀 (§B224): Double 目标改走「Null ⇒ 94 且目标不变」的严格出口
+        "vb6_Dbl_AssignFromVariant(&d, VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem);",
         "l = vb6_ChkLong(vb6_VariantToLong(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem));",
         "vb6_Like(vb6_VariantToString(",
         "vb6_Num_Mod(vb6_VariantToLong(",
