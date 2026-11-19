@@ -2163,3 +2163,77 @@ slot 表由 `gen_variant_slot_prefixes.ps1` 重生成（53 → **54** 名）。
 `hoistOwnedTempArgs` 折成 `_own_N` **BSTR 临时量**，94 在造临时量那一步就抛了，`vb6_Len` 根本见不到 Null。
 要另开一族变体出口（`vb6_LenV/TrimV/...` 返回 VARIANT）＋在调用站改道跳过临时量，
 新出口走 `gen_variant_slot_prefixes.ps1` 自动进槽表。
+
+### 11.45 第七十一刀：`Len`/`Trim`/`LTrim`/`RTrim`/`UCase`/`LCase(Null)` → Null
+
+#### 一、读数（A1/B1/B4/B5/B6/B7，真 VB6 IDE）
+
+| 格 | 调用 | 真 VB6 | C3 改前 |
+|---|---|---|---|
+| A1 | `Len(Null)` | **Null**、err 0 | 0、err 94 |
+| B1 | `Trim(Null)` | **Null**、err 0 | `""`、err 94 |
+| B4/B5 | `LTrim/RTrim(Null)` | **Null**、err 0 | `""`、err 94 |
+| B6/B7 | `UCase/LCase(Null)` | **Null**、err 0 | `""`、err 94 |
+
+这一族**不把 Null 折成串**：它把 Null 原样交回去。第六十二刀那条「String 形参收 Variant(Null) ⇒ 94」
+对 `Asc`/`Replace`/`Join` 分隔符/`Split` 源是对的，对这一族不是 —— 两族在同一个实参站上，口径相反。
+
+#### 二、病根：94 在造临时量那一步就抛了
+
+§11.44 第六节预判的那一格被证实。改前发码是**三条语句**：
+
+```c
+BSTR _own_1 = vb6_CStrStrict(nv);
+r = vb6_VariantLong(vb6_Len(_own_1));
+vb6_BSTR_Free(_own_1);
+```
+
+`vb6_CStrStrict(Null)` 当场抛 94，`vb6_Len` 根本见不到那个槽。也因此**不能**学 `AbsV` 那一刀
+「等到装箱站再改名」：装箱站那时只看见 `vb6_Len(_own_1)`，既认不出实参、也删不掉已经发出去的临时量语句。
+
+#### 三、改法（四处，同一判据）
+
+1. **RTL 六枚变体出口**（`vb6rtl_string.c` + `vb6rtl_builtin.h`）：`vb6_LenV/TrimV/LTrimV/RTrimV/UCaseV/LCaseV`，
+   收 `vb6_VARIANT`、交 `vb6_VARIANT`；`vt == Null` ⇒ `vb6_VariantNull()`，其余交 base 函数的结果
+   （Len 交 `VariantLong`，Trim 一族交 `VariantString`）。Empty 不经这一族（`Len(Empty)` 仍是 0，走原路）。
+2. **实参站改道**（`cgen_expr_call_arg_variant.inc`）：`paramBase == String` 那一支里，
+   判据成立就不折 `vb6_CStrStrict`、不造 `_own_N`，直接把整只槽交给 `*V` 出口并改 `callee`。
+3. **类型 oracle 同步**（`cgen_util_type.cpp`）：`inferExprTypeImpl` 与 `isDefinitelyVariantExpr`
+   的 `IndexOrCallExpr` 分支各加一格 —— 判据成立就答 Variant。
+4. **For 终止值/步进折箱**（`cgen_control.cpp`）：`int32_t <var>_end = <槽>` 是 C2440；
+   终止值/步进过既有那枚 `toLongIfVariant`（非 Variant 文本原样返回 ⇒ 其余语句逐字节不变）。
+
+判据只有一处：`nullFamilyVExitCName(call)`（账 §B219）—— 被调名 ∈ 六枚 ∧ 恰一个实参 ∧
+该实参的 VB 类型是 Variant（数组本体不算）。发码站与 oracle **共用**这一问：
+两边不同步的代价两个方向都踩得到（oracle 说 Long ⇒ `vb6_VariantLong(vb6_LenV(nv))` C2440；
+发码没改道而 oracle 说 Variant ⇒ 给裸 int32 套 `vb6_VariantToLong`）。
+
+#### 四、踩到的坑：这四个消费面各自要一格
+
+第一版只改「实参站 + 装箱」，`r = Len(nv)` 已经对；把消费面铺开后四形全红：
+
+| 消费面 | 改前发码 | 处置 |
+|---|---|---|
+| 字符串比较 `Trim(nv) = "a"` | `vb6_StrCmp(vb6_TrimV(nv), …)` | `isDefinitelyVariantExpr` 那一格（→ `vb6_CStr(...)`） |
+| 拼接 `"x" & Len(nv)` | `vb6_CStrLong(vb6_LenV(nv))` | `inferExprTypeImpl` 那一格（→ `vb6_CStr(...)`） |
+| `Debug.Print` / `Print #` | `vb6_DebugWriteBSTR(VARIANT)` | 同上（→ `vb6_VariantToString` / `vb6_FileVariantText`） |
+| `For i = 1 To Len(nv)` | `int32_t i_end = vb6_LenV(nv)` | For 站过 `toLongIfVariant` |
+
+#### 五、登记与验收
+
+- 槽表：`gen_variant_slot_prefixes.ps1` 从 RTL 派生，54 → **60** 名（六枚自动进表；
+  `check_builtin_slot_returns` PASS：table=60 / rtlSlot=62 / ∩emit=58）。
+- keeps：新行**直接归因**、不塞白名单 —— `vb6_LenV` 推导为 owned（与 `IntV` 同格，进两份 owned 名单），
+  `TrimV/LTrimV/RTrimV/UCaseV/LCaseV` 推导为 `'1'/'store'`（BSTR 交给 `vb6_VariantString`，与 `HexV/OctV` 同理）。
+  keeps 表 240 → **246** 行，提名 196 → **197**，`unclassified 0`。
+- 夹具：`tests/test_joinfilter.bas` 新增 13 针并写入期望（本机实测与本表一致）：
+  `JF-lenv-null/trimv-null/ltrimv-null/rtrimv-null/ucasev-null/lcasev-null=True/0`、
+  `JF-lenv-tn=Null/0`、`JF-trimv-str=[ab]/0`、`JF-ucasev-str=[  AB  ]/0`、`JF-lenv-str=6/0`、
+  `JF-lenv-empty=0/0`、`JF-trimv-empty=[]/0`；负控 `JF-lenv-long=94`（变体位交回的是 Null，不是 0）。
+- 发码清单：整语料 `--emit-c` 重跑后按 CI 那份逐行登记（见提交说明）。
+
+#### 六、下一刀
+
+读数已齐、未做的一族仍在 §11.43 第五节：`Len(Empty)`/`Trim(Empty)`（本刀已钉住不变）、
+`Len(<Long 变量>)` 的 **Integer** 档（A3/A5）、`Val(Null)`/`Asc(Null)`、`Asc(Empty)`。
+`Mid/Left/Right(Null)` 与这一族同形（Null 传播），但读数未取，不跟着顺手改。

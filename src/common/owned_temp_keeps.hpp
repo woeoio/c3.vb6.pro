@@ -59,6 +59,14 @@ inline const OwnedTempException* ownedTempExceptions() {
         // （那一枚已登记为 store ⇒ 指针落进比调用活得久的壳）⇒ 本表按 statically 推导的
         // '1'/'store' 登记 = 不提名。与 scripts/owned_temp_keeps_164.txt 的 K5/K12 同源。
         { "vb6_HexV",             0, '1', "store" },
+        // C30-11 第七十一刀: Trim/LTrim/RTrim/UCase/LCase 的变体位把 base 函数造的 BSTR
+        // 交给 vb6_VariantString（那一枚已登记为 store）⇒ 同 HexV/OctV 同档，'1'/'store'
+        // = 不提名。vb6_LenV 不在此表：它推导为 owned（见下方 owned 名单）。
+        { "vb6_TrimV",            0, '1', "store" },
+        { "vb6_LTrimV",           0, '1', "store" },
+        { "vb6_RTrimV",           0, '1', "store" },
+        { "vb6_UCaseV",           0, '1', "store" },
+        { "vb6_LCaseV",           0, '1', "store" },
         { "vb6_ErrRaise",         2, '1', "store" },
         { "vb6_ho_setVariantBstr",1, '1', "store" },
         { "vb6_IIfVariant",       1, '1', "ret+write" },
@@ -244,6 +252,9 @@ inline const char* const* ownedTempOwnedReturnExits() {
         // VARIANT 子表那一侧同名单，见 ownedTempOwnedVariantExits）。
         "vb6_FixV",
         "vb6_IntV",
+        // C30-11 第七十一刀: Len 的变体位交回一枚新造的 VARIANT(Long)。
+        // （Trim 一族不在此名单: 它们推导为 '1'/'store', 走 ownedTempExceptions。）
+        "vb6_LenV",
         "vb6_VCmpNullV",
         "vb6_VarLogicNullV",
         "vb6_CurDir",
@@ -365,6 +376,7 @@ inline const char* const* ownedTempOwnedVariantExits() {
         // 推导为 alias/store，走 ownedTempExceptions）。
         "vb6_FixV",
         "vb6_IntV",
+        "vb6_LenV",          // C30-11 第七十一刀: Len(Variant) 交出一枚新造的 VARIANT
         "vb6_VCmpNullV",
         "vb6_VarLogicNullV",
         "vb6_LoadResString",

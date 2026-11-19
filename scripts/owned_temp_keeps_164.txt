@@ -125,10 +125,12 @@ vb6_Join|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_Kill|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_LCase_str|0	0	handoff-reads:vb6_LCase	0	open	BSTR
 vb6_LCase|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LCaseV|0	1	store	0	open	VARIANT
 vb6_Left|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LeftB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_Len|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LenB_BSTR|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LenV|0	0	handoff-to-plain:vb6_VariantLong	0	open	VARIANT
 vb6_Like|0	0	handoff-reads:vb6_LikeC	0	open	BSTR
 vb6_Like|1	0	handoff-reads:vb6_LikeC	0	open	BSTR
 vb6_LikeC|0	0		0	open	BSTR
@@ -142,6 +144,7 @@ vb6_LoadResString|0	1	write	0	open	VARIANT
 vb6_LSet|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_LSetFree|0	0	handoff-reads:vb6_LSet	0	open	BSTR
 vb6_LTrim|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_LTrimV|0	1	store	0	open	VARIANT
 vb6_LTrimVar|0	0	handoff-reads:vb6_LTrim	0	open	VARIANT
 vb6_Mid|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_MidB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
@@ -170,6 +173,7 @@ vb6_RightB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_RmDir|0	0	handoff-reads:vb6_path_from	0	open	BSTR
 vb6_RSet|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_RTrim|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_RTrimV|0	1	store	0	open	VARIANT
 vb6_SavePicture|1	0		0	open	BSTR
 vb6_SaveSetting|0	0	handoff-reads:vb6_RegBuildKey	U	closed	BSTR
 vb6_SaveSetting|1	0	handoff-reads:vb6_RegBuildKey	U	closed	BSTR
@@ -197,9 +201,11 @@ vb6_TextMatchAt|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_TimeSet|0	0		0	open	BSTR
 vb6_TimeValue|0	0	handoff-reads:vb6_DateParse	0	open	BSTR
 vb6_Trim|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_TrimV|0	1	store	0	open	VARIANT
 vb6_TypeName|0	0	handoff-to-plain:vb6_Host_TypeNameOf	0	open	VARIANT
 vb6_UCase_str|0	0	handoff-reads:vb6_UCase	0	open	BSTR
 vb6_UCase|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
+vb6_UCaseV|0	1	store	0	open	VARIANT
 vb6_UserControl_AsyncRead|0	0		0	open	BSTR
 vb6_UserControl_AsyncRead|2	0		0	open	BSTR
 vb6_UserControl_CancelAsyncRead|0	0		0	open	BSTR
@@ -318,6 +324,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [own] vb6_LCase_str BSTR
 [own] vb6_Left BSTR
 [own] vb6_LeftB BSTR
+[own] vb6_LenV VARIANT
 [own] vb6_LineInput BSTR
 [own] vb6_LoadResString VARIANT
 [own] vb6_LSet BSTR
@@ -388,9 +395,14 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 [alias] vb6_HexV VARIANT
 [alias] vb6_IIfBSTR BSTR
 [alias] vb6_IIfVariant VARIANT
+[alias] vb6_LCaseV VARIANT
 [alias] vb6_LoadResData VARIANT
 [alias] vb6_LoadResPicture VARIANT
+[alias] vb6_LTrimV VARIANT
 [alias] vb6_OctV VARIANT
+[alias] vb6_RTrimV VARIANT
+[alias] vb6_TrimV VARIANT
+[alias] vb6_UCaseV VARIANT
 [alias] vb6_VarConcatNullV VARIANT
 [alias] vb6_VarConcatNullVV VARIANT
 [alias] vb6_VariantArray VARIANT
