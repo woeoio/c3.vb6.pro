@@ -2428,5 +2428,33 @@ R7 原本用 `emitLine("vb6_BSTR_Assign` 前缀匹配，把本刀新增的
 （Null ⇒ 94 且目标不变），不是裸赋值；改判据为显式两枚（`Assign(` / `AssignMove(`），
 名单仍是 3 —— 没有放宽，只是不再把不同函数名当成同一件事。
 
+#### 七、GA 红（run 44486983023，head `ce5bcfa1`）五处，逐处归因
+
+| 格 | 读数 | 归因 |
+|---|---|---|
+| `Tests (bas #1)` / `(bas #2)` | `[EMITC-SHAPE] cvp_emitc_variant_fallback ... missing` 两条旧形状 | 夹具针钉的是改前的 `Assign(&sN, VariantToString(...))`；本刀这两格正在改道 → 换针 |
+| `Tests (syntax)` | `[CODEGEN-NOTE] variant_unbox_shapes ... missing` 两条旧形状 | 同一类：`Assign(&s, VariantToString(VB6_SA_AT(...).dItem))` 已改走严格出口 |
+| `Tests (compile #1)` | `[STATIC] owned_temp_keeps`：K12 一枚例外行发码侧没有 / K5 漂移 `+vb6_BSTR_AssignFromVariant|1` | 新 RTL 出口是**带权形参位**（第 1 格 VARIANT 带 `store` 通道）——表与发码侧头都得有这一行，我前一刀只跑了三道门禁、没跑 KEEPS 双向对账 |
+| `Emit manifest` | 相同 747 / 哈希不同 3 = guisample 三份 | 就是上一条预告的机器侧三行；按 CI 自己那份 `ci/emit-manifest`（head 同为 `ce5bcfa1`）登记，不用本机数 |
+
+三处都是**未登记的后果**，不是改道的逻辑错：形状针与 KEEPS 表是“同一件事的另外两处记账点”，
+这一刀的遗漏在于只跑了源码侧三道门禁（slot_returns / conv_strict_parse / variant_slot_store），
+没跑 `check_owned_temp_keeps.ps1` 与两条形状针所在的类别。
+
+修法（都不放宽判据）：
+
+- 两条形状针逐字换成实测新发码（`vb6_BSTR_AssignFromVariant(&s1, vb6_VariantFromComResult(...))`、
+  `... (&s, VB6_SA_AT(...).dItem)`），改由本机 `--emit-c` 逐字核对，不凭猜。
+- KEEPS：`-Bless` 让推导侧把新行落进快照 `scripts/owned_temp_keeps_164.txt`
+  （`vb6_BSTR_AssignFromVariant|1  1  store  0  open  VARIANT`），
+  再在发码侧 `src/common/owned_temp_keeps.hpp` 同步一行（`{ "vb6_BSTR_AssignFromVariant", 1, '1', "store" }`）。
+  K12 与 K5 的性质是**同一份事实的两侧**，只补一侧仍然红。
+- 清单三行取 CI 的值（本机那台 `bytes` 比 CI 多 10，跨机器差的常态）。
+
+本机复核：`check_owned_temp_keeps` PASS（surface 247 / rows 247 / nomination 197）；
+`-Category syntax` 整段 PASS=227 FAIL=0（含 `variant_unbox_shapes`）；
+`cvp_emitc_variant_fallback` 的针按本机发码逐字核对（bas 整段本机超 30 分钟上限，交 CI）。
+
+
 
 

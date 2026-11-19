@@ -13,6 +13,7 @@ vb6_AscB|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_AscW|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_BoolVal|0	0		0	open	BSTR
 vb6_BSTR_Assign|1	0	handoff-reads:vb6_BSTR_FromBSTR	0	open	BSTR
+vb6_BSTR_AssignFromVariant|1	1	store	0	open	VARIANT
 vb6_BSTR_AssignMove|1	1	write	0	open	BSTR
 vb6_BSTR_Concat|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_BSTR_Concat|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR

@@ -6623,8 +6623,10 @@ if ($Category -in @("all", "run", "bas")) {
     # 打包那条）。s1 与 s2 只差变量名 —— 两支必须交回同一个读数：拼法不选档。
     Test-EmitcShape "cvp_emitc_variant_fallback" @("$Tests\test_com_variant_prop.bas") @(
         'v = vb6_VariantFromComResult(vb6_ComGetProp(at, L"value"));',
-        'vb6_BSTR_Assign(&s1, vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetProp(at, L"value"))));',
-        'vb6_BSTR_Assign(&s2, vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetProp(at, L"value"))));',
+        # 第七十三刀 (§B221): 这两格从宽松口改到**严格出口** —— Variant 右值进 String 槽时
+        # Null 在 VB6 里是 94 且目标不变, 不再先折成 vb6_VariantToString("")
+        'vb6_BSTR_AssignFromVariant(&s1, vb6_VariantFromComResult(vb6_ComGetProp(at, L"value")));',
+        'vb6_BSTR_AssignFromVariant(&s2, vb6_VariantFromComResult(vb6_ComGetProp(at, L"value")));',
         # 账 #464 §B164: 那一格 (Len 的实参) 现在是**一枚具名带权临时量** ——
         # 转换本身没变, 只是它落进了临时量的声明里, 语句末按档收回。
         'BSTR _own_1 = vb6_CStrStrict(vb6_VariantFromComResult(vb6_ComGetProp(at, L"value")));',
@@ -14654,8 +14656,9 @@ if ($Category -in @("all", "syntax")) {
     # 裸 (int32_t)() 强转 / 没拆箱的 Like 操作数。
     Test-CodegenNote "variant_unbox_shapes" @("$Tests\pd_variant_unbox\VbUdtField.cls",
                                               "$Tests\pd_variant_unbox\VbVariantOps.cls") @(
-        "vb6_BSTR_Assign(&s, vb6_VariantToString(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem))",
-        "vb6_BSTR_Assign(&vb6_ret_ReadToReturnString, vb6_VariantToString(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem))",
+        # 第七十三刀 (§B221): 同一格改走严格出口 (Variant 右值 ⇒ .Null 报 94 且目标不变)
+        "vb6_BSTR_AssignFromVariant(&s, VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem)",
+        "vb6_BSTR_AssignFromVariant(&vb6_ret_ReadToReturnString, VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem)",
         "d = vb6_VariantToDouble(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem);",
         "l = vb6_ChkLong(vb6_VariantToLong(VB6_SA_AT(vb6_type_VbEntry, me->m_Entries, 0).dItem));",
         "vb6_Like(vb6_VariantToString(",
