@@ -136,6 +136,10 @@ BSTR vb6_CStr(vb6_VARIANT x);
 // 与 vb6_CStr 分开的理由: & 运算与 Debug.Print 仍然按"宽松"走(各自另有口径,
 // 后者 VB6 打的是文本 "Null"), 不能一刀切。
 BSTR vb6_CStrStrict(vb6_VARIANT x);
+// C30-11 第七十三刀 (§B221): 「把一枚 Variant 右值收进 String 槽」—— Null 按 VB6 口径
+// 报 94 且**目标不变** (E6/E7/E8 读数: err=94、s 仍是赋前的值)。单开一枚而不是直接用
+// vb6_CStrStrict: 后者 raise 后交回空串, 赋值方会把空串写进目标 —— 与 VB6 不同。
+void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src);
 // M22: typed CStr overloads
 BSTR vb6_CStrLong(int32_t x);
 BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 Variant 解包入口

@@ -2383,4 +2383,50 @@ int32_t j_end = vb6_UBound(vb6_VariantToSafeArray1DStrict(_vb6_with_2->Values), 
 - W4/W5/W6（Variant 数组元素 / 返回 Null 的函数 / `Collection.Item`）仍 94 —— 读数未取。
 - `With <类实例>` 的**方法**（属性 Get）返 Null 不在本刀：字段表只认字段。
 
+### 11.48 第七十三刀：Null 进 String 目标 ⇒ 94，且**目标不变**
+
+#### 一、读数
+
+探针 E 段：`s = Trim(Null)` / `s = Len(Null)` / `s = Null` = **94**，且 `s` 仍是赋前的值
+（“keep”、len=4）—— 赋值根本没发生。与 §11.43 第五节 S1/S4/S5 同一族。
+
+#### 二、改前：两个错同时存在
+
+`emitBstrSlotStore`（String 槽收值的唯一出口）把 Variant 右值一律折成
+`vb6_VariantToString`：Null 变 `""`、赋值照做 —— 既丢值，也不报 94。
+
+#### 三、改法
+
+1. RTL 新出口 `vb6_BSTR_AssignFromVariant(BSTR*, vb6_VARIANT)`：`vt == Null` ⇒
+   `vb6_ErrRaise(94, "VBA.Conversion", "Invalid use of Null")` 后**直接 return**
+   （目标一字不动）；否则 `vb6_CStr` + `AssignMove`。
+   为什么不直接用 `vb6_CStrStrict`：它 raise 后交回空串，赋值方会把空串写进目标，
+   变成“94 + 目标被清空”——与 VB6 不同。
+2. `emitBstrSlotStore`：`valueIsVariant` 时留下未折的表达式，定长串以外的赋值改发这枚出口。
+   定长串（`fixedLen` 非空）那一档读数未量，保持原路。
+
+#### 四、验收
+
+- 探针：E6/E7/E8 = `err=94 val=[keep]`（改前 `err=0 val=[]`）；E1/E4/E5/E10 不变。
+- 发码清单：20 行变 = **15 行本刀归因**（逐份看过，全部是
+  `Assign(&X, vb6_VariantToString(E))` → `AssignFromVariant(&X, E)`；dbgdlg 10 处、
+  VBFlexGridDemo 9 处、Charts 2020 4 处为最大三份）+ 5 行已记的机器侧差。
+- 门：`check_builtin_slot_returns` PASS（table=60）、`check_conv_strict_parse` PASS、
+  `check_variant_slot_store` PASS。
+
+#### 五、留下的（按 §11.47 的排序）
+
+- **E9 `s = CStr(Null)`** 不在本刀：它走 CStr 内建那一站（`vb6_CStr` 宽松），要动得先决定
+  “CStr(Null) 报 94 之后赋值是否跳过”——同一组读数、另一个站，另立一刀。
+- F2/F3（13，现为编译期 C2440）、F7（94）、C5 `Asc(Empty)=5`、A3/A5 的 Integer 档。
+- W4/W5/W6（Variant 数组元素 / 返回 Null 的函数 / `Collection.Item`）仍 94，读数未取。
+
+#### 六、R7 的前缀误伤
+
+R7 原本用 `emitLine("vb6_BSTR_Assign` 前缀匹配，把本刀新增的
+`vb6_BSTR_AssignFromVariant` 也算成一枚“手抄裸赋值”（3 → 4）。新出口是**另一个契约**
+（Null ⇒ 94 且目标不变），不是裸赋值；改判据为显式两枚（`Assign(` / `AssignMove(`），
+名单仍是 3 —— 没有放宽，只是不再把不同函数名当成同一件事。
+
+
 

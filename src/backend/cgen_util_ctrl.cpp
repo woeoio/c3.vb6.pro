@@ -3076,6 +3076,8 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     // 仍然不拆箱 ⇒ 整只 vb6_VARIANT 交给 vb6_BSTR_Assign ⇒ C2440
     // (PhotoDemon pdDictionary.c 239/248: `dItem As Variant` 读进 String 变量)。
     bool valueIsVariant = isVariantSlot(value, rhs);
+    bool strictVarAssign221 = false;   // 第七十三刀: 右值是 Variant 槽 ⇒ 走严格赋值出口
+    std::string rawVarValue221;        // 未折成 BSTR 的那枚 Variant 表达式
     if (!valueIsVariant && rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
         auto& id = static_cast<IdentifierExpr&>(*rhs);
         std::string idLower = id.name;
@@ -3091,6 +3093,12 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         if (classVariantMembers_.count(rhsMember)) valueIsVariant = true;
     }
     if (valueIsVariant) {
+        // C30-11 第七十三刀 (§B221): Variant 右值 → String 槽走**严格**出口。
+        // 读数 (探针 E6/E7/E8): `s = Trim(Null)` / `s = Len(Null)` / `s = Null` 在真 VB6
+        // 里都是 94 且目标不变；而这里以前折成 vb6_VariantToString(Null) = "" ⇒ err 0、
+        // 目标被清成空串 —— 两个错同时存在 (值丢 + 错误不报)。
+        strictVarAssign221 = true;
+        rawVarValue221 = value;
         value = "vb6_VariantToString(" + value + ")";
     }
     // Fix P24-10b: RHS 是裸晚绑定调用结果 (vb6_ComCallByDispid → void* 指向
@@ -3211,6 +3219,11 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         }
     }
     // #122 折出来的 `vb6_CStrXxx(...)` 是刚 alloc 的新块, 与字面量/拼接同属"自有"。
+    if (strictVarAssign221 && fixedLen.empty()) {
+        // 定长串那一档读数未量, 仍走原路 (只认普通 String 槽)。
+        c_.emitLine("vb6_BSTR_AssignFromVariant(&" + target + ", " + rawVarValue221 + ");");
+        return;
+    }
     if (!fixedLen.empty() && udtFixedField) {
         // 账 #118 续: 目标是 UDT 定长串字段 (C 类型 char[N], VB6 ABI 内联 ANSI) ——
         // 不能 &field 当 BSTR* 用。写侧按 N 右补空格/右截断 (与 LSet 同口径)。

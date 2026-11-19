@@ -868,3 +868,16 @@ vb6_VARIANT vb6_LCaseV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
     return vb6_VariantString(vb6_LCase(vb6_VariantToString(v)));
 }
+
+// C30-11 第七十三刀 (§B221): String 目标收 Variant 右值的唯一出口。
+// 读数 (tests/vb6probe/NullFamilyProbe.bas E6/E7/E8): `s = Trim(Null)` / `s = Len(Null)` /
+// `s = Null` 在真 VB6 里都是 **94**，且 s **还是赋前的那个值** —— 赋值根本没发生。
+// 所以不能套 vb6_CStrStrict 再赋: 它 raise 后交回空串，写进目标就变成「94 + 目标被清空」。
+void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src) {
+    if (src.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    vb6_BSTR_AssignMove(target, vb6_CStr(src));
+}
