@@ -2263,3 +2263,66 @@ vb6_BSTR_Free(_own_1);
 读数已齐、未做的一族仍在 §11.43 第五节：`Len(Empty)`/`Trim(Empty)`（本刀已钉住不变）、
 `Len(<Long 变量>)` 的 **Integer** 档（A3/A5）、`Val(Null)`/`Asc(Null)`、`Asc(Empty)`。
 `Mid/Left/Right(Null)` 与这一族同形（Null 传播），但读数未取，不跟着顺手改。
+
+### 11.46 第七十一刀 收尾：GA 绿之后的复跑归因（探针 C3 侧读数 + With 形的编译期缺口）
+
+#### 一、GA 收口
+
+run `44454593300` / `e4aa570d` = **success**（`Tests (bas #1)`、`Tests (bas #2)`、`Emit manifest` 三个作业全绿）。
+上一轮 `44446684530` / `df18526b` 红的只是用例内三条形状断言，已在本刀第 5 个提交里跟上改道。
+
+#### 二、把探针在 C3 上实跑，逐格对台账
+
+`tests/vb6probe/NullFamilyProbe.bas` 现在**整份编译不过**（F2/F3 两格 C2440，见下方第 4 条），
+所以去掉那两行后实跑，得到 C3 侧现状：
+
+| 格 | VB6 读数 | C3 实测 | 判定 |
+|---|---|---|---|
+| A1 `Len(Null)` | Null / 0 | Null / 0 | ✓（本刀） |
+| A2 `Len(Empty)` | 0 | 0 | ✓ |
+| A3/A5 `Len(<Long>)` | **4（Integer）** | 4，但 `TypeName=Long` | 值对、**返回档差一档** |
+| B1..B7 / B8 | Null / `""` | Null / `""` | ✓（本刀） |
+| C1 `Val(Null)` / C4 `Asc(Null)` | 94 | 94 | ✓ |
+| C2 `Val(Empty)` | 0 | 0 | ✓ |
+| C5 `Asc(Empty)` | **5** | 0 | ✗ |
+| C6 `Mid(Null,1)` | 未取 | `""` / 94 | 待读数 |
+| D1..D5 / D6..D7 | 13 / 3、1 | 13 / 3、1 | ✓ |
+| E6 `s = Trim(Null)` / E7 `s = Len(Null)` | **94，目标不变** | `""` / 0 | ✗（台账改前也是 0，非本刀引入） |
+| E8 `s = Null` / E9 `s = CStr(Null)` | 94（S1/S4/S5 同族） | `""` / 0 | ✗ |
+| E10 `s = Hex(Null)` | 94 | 94 | ✓ |
+| F1 / F5 | 0 | 0 | ✓ |
+| F2 `d = Null & ""` / F3 `d = CStr(Null)` | **13** | **编译期 C2440** | ✗ |
+| F6 `b = Null` | 94 | 94 | ✓ |
+| F7 `b = (Null = "")` | **94** | True / 0 | ✗ |
+| G1..G6 | 见 §11.43 | 与第六十九刀口径一致 | ✓ |
+
+#### 三、新发现：`With` 体内成员是**编译期** C2440，不是运行时 94
+
+在探针末尾临时加了 W 段（`With tw` + `Type TWV: V As Variant`），六格实测：
+
+| 格 | 形状 | C3 发码 | 结果 |
+|---|---|---|---|
+| W1 | `Len(tw.V)`（UDT 成员） | `vb6_LenV(tw.V)` | ✓ Null / 0 |
+| W2 | `Len(.V)`（With 体内） | `vb6_Len(_vb6_with_0->V)` | **C2440** |
+| W3 | `Trim(.V)`（With 体内） | `vb6_Trim(_vb6_with_0->V)` | **C2440** |
+| W4 | `Len(av(1))`（Variant 数组元素） | 原路 | 0 / **94** |
+| W5 | `Len(FNullV())`（函数返回 Null） | 原路 | 0 / **94** |
+| W6 | `Len(col.Item(1))`（Collection） | 原路 | 0 / **94** |
+
+根因只有一条：`With` 体内成员在 AST 里是 **`WithMemberExpr`**，而 `nullFamilyVExitCName` 只认
+`IdentifierExpr` / `MemberAccessExpr`，`isDefinitelyVariantExpr` 也没有这一 `case` ⇒ 实参站判
+「不是变体」⇒ 既不造串临时量、也不改道 ⇒ 把整只 `VARIANT` 递给 `vb6_Len(BSTR)`。
+**这是改前就有的**（改道只加路，不加则与改前同形状），不是本刀回归。
+
+探针本体**没有**入仓：`NullFamilyProbe.bas` 是发码清单在册行（`bytes=25468`），加格必须与
+清单重登记同一刀；扩展版留在 `.temp/k72/NullFamilyProbe.ext.bas`，改道修好那一刀再一并登记。
+
+#### 四、下一刀的排序（按硬度，不按族）
+
+1. **With 成员（编译不过）** —— 给 `WithMemberExpr` 补一条解析（With 帧里取目标档位），
+   同时进 `nullFamilyVExitCName` 与 `isDefinitelyVariantExpr`，两处必须同一问。
+2. **String 目标收 Null ⇒ 94**（E6/E7/E8/E9）：`Trim(Null)` 本刀已交真 Null，这一站再静默转空串
+   就与本刀口径自相矛盾。
+3. **F2/F3 的 13**（现在编译期 C2440）与 **F7**。
+4. W4/W5/W6（需先取 VB6 读数）、C5 `Asc(Empty)=5`、A3/A5 的 Integer 档。
+
