@@ -108,7 +108,7 @@ vb6_InputBox|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_InputBox|5	0		0	open	BSTR
 vb6_InStr|1	0	handoff-reads:vb6_InStrC	0	open	BSTR
 vb6_InStr|2	0	handoff-reads:vb6_InStrC	0	open	BSTR
-vb6_InStrC|1	0	handoff-reads:vb6_TextFind	0	open	BSTR
+vb6_InStrC|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_InStrC|2	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_InStrRev|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_InStrRev|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR

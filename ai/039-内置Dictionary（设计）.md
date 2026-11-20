@@ -3441,3 +3441,51 @@ T2/T3/T5/T7/T8 全部变成 `keep / 5`；T1/T4/T6/T9/T10 一格未动。
   这是**另一条**口径（不是本刀的 < 1），单列 backlog。
 - `InStrB` 的「起点是 Null」以及 Byte 数组的越界档没有真机对照（VBScript 无 InStrB），只按 InStr 同口径推。
 - 定长串目标（`udtFixedField`/`fixedLen`）、`Len` 两档仍在 backlog。
+
+### 11.66 第八十八刀：`InStr` 的空 needle / `InStrRev` 的 `start > Len` 答错
+
+#### 一、病（`.temp/k88/edge.bas`，x64，改前 = 第八十七刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| E1 | `InStr(4, "abc", "")` | `4` | `0` | 0 |
+| E2 | `InStr(3, "abc", "")` | `3` | `3` | 3 |
+| E4 | `InStrRev("abc", "", 2)` | `3` | `2` | 2 |
+| E5 | `InStrRev("abc", "", 4)` | `3` | `0` | 0 |
+| E6 | `InStrRev("abc", "b", 4)` | `2` | `0` | 0 |
+| E7 | `InStrRev("abc", "b", 99)` | `2` | `0` | 0 |
+| E9 | `InStrRev("", "", 1)` | `0` | `0` | 0 |
+| E3/E8/E10 | `InStr(1,"abc","")` / `InStrRev("abc","b",3)` / `InStrRev("abc","")` | 1 / 2 / 3 | 不变 | 1 / 2 / 3 |
+
+真机读数：`.temp/k88/oracle_instr_edge.vbs`（E1/E2）、`oracle_rev2.vbs`（rev 4/99/空 needle）、
+`oracle_rev3.vbs`（`InStrRev("abc","",2)`⇒2、`("abc","",1)`⇒1 —— 空 needle 交回的是**起点**，不是 Len）。
+
+#### 二、改法（纯 RTL，不动发射侧）
+
+`vb6rtl_string.c`：
+
+1. `vb6_InStrC`：空 needle 交回 `start`，但 `start > Len` 时交 0
+   （`return (start > vb6_BSTR_Len(haystack)) ? 0 : start;`）。旧写法无条件 `return start`。
+2. `vb6_InStrB`：Byte 数组形与 BSTR 形同口径（无真机对照，按 InStr 同族推）。
+3. `vb6_InStrRev`：
+   - 空 needle ⇒ `return start`（旧写法交 `hLen`）；
+   - `start > hLen` ⇒ **先于空 needle** 判 `return 0`（旧写法夹成 `hLen` 继续查）。
+
+#### 三、读数（`.temp/k88/edge.bas` 改后）
+
+E1–E10 逐格与真机一致（见上表「改后」列）。第八十七刀的 13 格探针
+（`.temp/k87/instr.bas`，`start < 1` 那一族）在改后二进制上逐字不变。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- 静态门 9 枚全 PASS。**发码清单不变**（本刀只改 RTL 行为，不改任何语句的发射形状）。
+- `check_owned_temp_keeps`（CI 的 `[STATIC]` 那一格）：首轮红一枚 `~vb6_InStrC|1`。
+  归因：空 needle 分支多读一次 `vb6_BSTR_Len(haystack)`，表里那一行的「代表读目标」
+  于是从 `vb6_TextFind` 换成 `vb6_BSTR_Len`；指针轴仍是 `keeps_pointer=0`（形参不外逃），
+  与快照逐列对过后 `-Bless` 登记（净变 1 行）。
+
+#### 五、本刀没做的
+
+- `InStrB` 的空 needle / 越界两格没有真机对照（VBScript 无 InStrB）。
+- 定长串目标（`udtFixedField`/`fixedLen`）、`Len` 两档仍在 backlog。

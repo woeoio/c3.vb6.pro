@@ -226,7 +226,9 @@ int32_t vb6_InStrC(int32_t start, BSTR haystack, BSTR needle, int32_t compare) {
     }
     if (!haystack || !needle) return 0;
     int32_t nlen = vb6_BSTR_Len(needle);
-    if (nlen == 0) return start;
+    // C30-11 第八十八刀: 空 needle 交回的是**查找起点**，但起点超过 Len 时真机交 0
+    // （oracle: InStr(4,"abc","") => 0，InStr(3,…) => 3）。旧写法无条件 return start。
+    if (nlen == 0) return (start > vb6_BSTR_Len(haystack)) ? 0 : start;
     int32_t i = vb6_TextFind(haystack, needle, start - 1, compare);
     return (i < 0) ? 0 : i + 1;   // VB6 的 InStr 返回 1 基
 }
@@ -278,7 +280,8 @@ int32_t vb6_InStrB(int32_t start, void* haystack, void* needle) {
         if (vb6_SaIs1D(ha) && vb6_SaIs1D(ne)) {
             int32_t hlen = ha->count * ha->elemSize;
             int32_t nlen = ne->count * ne->elemSize;
-            if (nlen == 0) return start;
+            // 第八十八刀: 与 vb6_InStr 同口径（空 needle ⇒ 起点，起点 > Len ⇒ 0）。
+            if (nlen == 0) return (start > hlen) ? 0 : start;
             if (!ha->data || !ne->data) return 0;
             for (int32_t i = start - 1; i <= hlen - nlen; i++) {
                 if (memcmp((const uint8_t*)ha->data + i, ne->data, (size_t)nlen) == 0) {
@@ -293,7 +296,7 @@ int32_t vb6_InStrB(int32_t start, void* haystack, void* needle) {
         BSTR n = (BSTR)needle;
         int32_t hlen = vb6_BSTR_Len(h);
         int32_t nlen = vb6_BSTR_Len(n);
-        if (nlen == 0) return start;
+        if (nlen == 0) return (start > hlen) ? 0 : start;
         for (int32_t i = start - 1; i <= hlen - nlen; i++) {
             if (memcmp(h + i, n, (size_t)nlen * sizeof(wchar_t)) == 0) {
                 return i * 2 + 1;  // 字节偏移
@@ -764,9 +767,13 @@ int32_t vb6_InStrRev(BSTR haystack, BSTR needle, int32_t start, int32_t compare)
         if (!vb6_ArgConvertFailed()) vb6_ErrRaiseNumber(5);
         return 0;
     }
-    if (nLen == 0) return hLen;
+    // C30-11 第八十八刀: 起点 > Len 真机交 0（oracle: InStrRev("abc","b",4/99) => 0 且无错），
+    // 且这条**先于空 needle**（InStrRev("abc","",4) => 0，InStrRev("","",1) => 0）。
+    // 旧写法把它夹成 hLen 继续查 —— 于是 4 与 99 都答 2。
+    if (start > hLen) return 0;
+    // 空 needle 交回查找起点（oracle: InStrRev("abc","",2) => 2、省略 => 3 = hLen）。
+    if (nLen == 0) return start;
     if (nLen > hLen) return 0;
-    if (start > hLen) start = hLen;
     // <vbeclipse>: compare 形参此前被 (void) 丢掉; 改走共用查找核 (二进制形逐字不变)。
     int32_t i = vb6_TextFindRev(haystack, needle, start - nLen, compare);
     return (i < 0) ? 0 : i + 1;   // VB6 的 1 基
