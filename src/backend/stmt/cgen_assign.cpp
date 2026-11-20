@@ -169,9 +169,13 @@ void CCodeGen::visit(AssignmentStmt& node) {
             // 第八十一刀: Asc/AscB/AscW 自己会在**空串**上报 5 —— 那条路不靠变体转换，
             // 所以上面的实参档判据看不见它。不把这三枚算进来的话，`n = Asc("")` 会是
             // 「先报 5、再把目标写成 0」（真机: 目标不动）。
+            std::string cn79;
             if (call79.callee && call79.callee->kind == ASTNodeKind::IdentifierExpr) {
-                const std::string cn79 =
-                    Symbol::toLower(static_cast<IdentifierExpr&>(*call79.callee).name);
+                cn79 = Symbol::toLower(static_cast<IdentifierExpr&>(*call79.callee).name);
+            }
+            // 第九十一刀: 本刀只给 Len/LenB 这两档开临时量（见下面那段注）。
+            const bool lenFam91 = (cn79 == "len" || cn79 == "lenb");
+            if (!cn79.empty()) {
                 if (cn79 == "asc" || cn79 == "ascb" || cn79 == "ascw") {
                     mayRaise79 = true;
                     // 它 raise 在**调用内部**（不是前置转换）⇒ 这一档要发临时量形。
@@ -196,7 +200,34 @@ void CCodeGen::visit(AssignmentStmt& node) {
                     lit79 = lk79 == LiteralKind::Null || lk79 == LiteralKind::Empty;
                 }
                 if (lit79 || at79 == Vb6Type::Variant || at79 == Vb6Type::Null
-                    || at79 == Vb6Type::Empty) { mayRaise79 = true; break; }
+                    || at79 == Vb6Type::Empty) {
+                    // C30-11 第九十一刀: 这一形（前置转换 raise）以前只发守卫、**不发临时量** —— 守卫是
+                    // `if (_e0 == vb6_ErrSerial()) n = <RHS>;`，序号在**条件求值那一步**还没变，于是
+                    // RHS 里 vb6_CStrStrict/vb6_VariantToLong 报出 94、语句照样把 0 写进目标
+                    // （真机 `n = Len(Null)`：94 + 目标不动）。
+                    //
+                    // ⚠ 临时量那一半**不许按 inferExprType 放**：它对 UDT / 数组 / 属性读 / 对象一律
+                    // 回退成 Variant（cgen_util_type.cpp:near 1530 那段注释记的就是这个坑）——
+                    // 实测那样一放，`LenB(<UDT>)`（发的是 sizeof）、`UBound(arr, 1)`、`LenB(<定长串字段>)`
+                    // 这些**根本不可能 raise** 的右值全部被套上 `_av` 中间量（750 行清单当场 54 行变动）。
+                    // 这一半只认**真的整只 Variant 槽**：与发码站同一问 (isDefinitelyVariantExpr)，
+                    // 数组本体那档它自己会用 isArr 标出来，不算。
+                    // 也不许放宽到「所有内建 + 整型目标」：拿本机 750 行清单量过，宽到那一档要拖动
+                    // 25 行，其中 `n = VarType(v)`（根本不会 raise）与 `n = UBound(v), 1)` 这类口径未量
+                    // 的右值也被套上 `_av`。本刀的判据只做到 Len/LenB —— 有真机读数的两枚；那一族
+                    // （`n = CLng(v)` / `CInt(v)` / `UBound(v)` …）登在 §11.69 末，不在这里泛化。
+                    bool varSlot91 = false;
+                    if (!lit79 && (a79->kind == ASTNodeKind::IdentifierExpr
+                                   || a79->kind == ASTNodeKind::MemberAccessExpr
+                                   || a79->kind == ASTNodeKind::WithMemberExpr)) {
+                        bool arr91 = false;
+                        varSlot91 = isDefinitelyVariantExpr(*a79, &arr91) && !arr91;
+                    }
+                    if (tgtInt79 && lenFam91 && (lit79 || varSlot91)) {
+                        stmtAbortTmp_ = true; stmtAbortTmpType_ = mapType(tgtT79);
+                    }
+                    mayRaise79 = true; break;
+                }
             }
         }
         // 第八十三/八十四/八十五刀: 顶层判据没命中、但右值树里有「本语句内直接 raise」的东西

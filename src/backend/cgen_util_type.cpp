@@ -1524,6 +1524,10 @@ std::string CCodeGen::nullFamilyVExitCName(const IndexOrCallExpr& call) const {
     if (!n.empty() && n.back() == '$') n.pop_back();
     static const std::unordered_map<std::string, std::string> kExit = {
         {"len",   "vb6_LenV"},
+        // C30-11 第九十一刀: LenB 与 Len 同一问（VB6 手册把两枚的 Variant 实参都按 String 看）
+        // —— 它以前不在表里，`n = LenB(v)`（v=Null）于是走 `vb6_LenB(VariantToString(v))`
+        // = 静默 0 / Err 0，而真机与 Len 同一条：94 且目标不动。
+        {"lenb",  "vb6_LenBV"},
         {"trim",  "vb6_TrimV"},
         {"ltrim", "vb6_LTrimV"},
         {"rtrim", "vb6_RTrimV"},

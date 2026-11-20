@@ -259,6 +259,9 @@ inline const char* const* ownedTempOwnedReturnExits() {
         // C30-11 第七十一刀: Len 的变体位交回一枚新造的 VARIANT(Long)。
         // （Trim 一族不在此名单: 它们推导为 '1'/'store', 走 ownedTempExceptions。）
         "vb6_LenV",
+        // C30-11 第九十一刀: LenB 的变体位 —— 与 vb6_LenV 同一形（Null 进 Null 出，
+        // 其余交回一枚新造的 VARIANT(Long)），VARIANT 子表那一侧同名。
+        "vb6_LenBV",
         "vb6_VCmpNullV",
         "vb6_VarLogicNullV",
         "vb6_CurDir",
@@ -381,6 +384,7 @@ inline const char* const* ownedTempOwnedVariantExits() {
         "vb6_FixV",
         "vb6_IntV",
         "vb6_LenV",          // C30-11 第七十一刀: Len(Variant) 交出一枚新造的 VARIANT
+        "vb6_LenBV",         // C30-11 第九十一刀: LenB(Variant) 同档（新造的 VARIANT(Long)）
         "vb6_VCmpNullV",
         "vb6_VarLogicNullV",
         "vb6_LoadResString",

@@ -909,6 +909,18 @@ vb6_VARIANT vb6_LenV(vb6_VARIANT v) {
     return vb6_VariantLong(vb6_Len(vb6_VariantToString(v)));
 }
 
+// C30-11 第九十一刀: LenB 的变体位。口径与 vb6_LenV 同一句（手册: Len/LenB 收到
+// Variant 都按 String 看 ⇒ Null 原样交出），差别只在字节数那一档: 串实参走
+// vb6_LenB_BSTR（宽字符 ×2），**不是** `sizeof(vb6_VARIANT)` —— 后者是 vb6_LenB 宏
+// 对非 BSTR 实参的默认臂，拿它答 Variant 槽会答成 24/20。
+vb6_VARIANT vb6_LenBV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    BSTR s = vb6_VariantToString(v);
+    int32_t n = vb6_LenB_BSTR(s);
+    vb6_BSTR_Free(s);          // VariantToString 现造一枚；只读长度，就地收回
+    return vb6_VariantLong(n);
+}
+
 vb6_VARIANT vb6_TrimV(vb6_VARIANT v) {
     if (v.vt == vb6_vtNull) return vb6_VariantNull();
     return vb6_VariantString(vb6_Trim(vb6_VariantToString(v)));

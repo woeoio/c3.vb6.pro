@@ -3583,3 +3583,84 @@ T7/T8 由 `err=0` 变 `err=94`（目标仍 `keep`），T1/T2/T5/T6 仍是 `keep/
 #### 六、本刀没做的
 
 - `Len` 两档仍在 backlog。
+
+### 11.69 第九十一刀：`Len` / `LenB` 收 `Null` 的位置（94 落到整型目标那一瞬）与 `LenB` 缺变体位
+
+#### 一、真机口径（`.temp/k91/oracle_len.vbs`，VBScript／同一套 VBA 串运行期）
+
+```
+A Len(v=Null)      val=(Null) tn=Null  err=0     ← Len 本身把 Null 原样交回
+B Len(Null)        val=(Null) tn=Null  err=0
+C Len(Empty)=0     D Len("abc")=3    E Len(42)=2    F Len(v="hello")=5    G Len(True)=4
+```
+
+⇒ `Len(<Null>)` **不 raise**，答 **Null**；落到整型目标那一瞬才报 **94**、目标不动
+（与第七十九刀那批 `W4b/W5b/W6b` 同一条口径）。`LenB` 那半没有 VBScript 入口，
+按手册同一句（「Variant 一律按 String 看」）与 `Len` 同族推：`n = LenB(v)`（v=Null）也是 **94 + 目标不动**。
+
+#### 二、病（`.temp/k91/len.bas`，x64，改前 = 第九十刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `n = Len(v)`（v = Null） | `n=0 err=94` | **`n=-1 err=94`** | 目标不动, 94 |
+| T12 | `n = LenB(v)`（v = Null） | `n=0 err=0` | **`n=-1 err=94`** | 同 T1 |
+| T2 | `vv = Len(v)`（v = Null，Variant 目标） | `isnull=True vt=1` | 同（本来就对） | Null |
+| T3–T7 | `Len(v="hello")` / `Len("abc")` / `Len(模块级 String * 5)` / `Len(u.f)` / `LenB(模块级 String * 5)` | 5 / 3 / 5 / 5 / 10 | 同 | 同 |
+| T11 | `Len(v=Empty)` | 0 | 0 | 0 |
+| T13 | `LenB("")` | 0 | 0 | 0 |
+
+两处成因分得很开：
+
+1. **T1 是「守卫发了、临时量没发」**。第七十九刀那条判据（右值是一枚调用、某实参静态类型是
+   Variant）本来就看得到这一形，于是发了 `const int32_t _e0 = vb6_ErrSerial();`
+   —— 但守卫形是 `if (_e0 == vb6_ErrSerial()) n = <RHS>;`，序号在**条件求值那一步**还没变，
+   RHS 里的 `vb6_VariantToLong(vb6_LenV(v))` 就在条件之后把 94 报出来、语句照样把 0 写进目标。
+   只有 Asc 族（第八十一/八十三刀）和除零（第八十五刀）打开了 `stmtAbortTmp_`，Len 这一族一直没打开。
+2. **T12 是 `LenB` 压根没有变体位**。`vb6_LenV` 是第七十一刀给 `Len` 造的（Null 进 Null 出），
+   `LenB` 没有对应出口 ⇒ 实参落到运行时签名表那一站，按 `BSTR` 折成
+   `vb6_LenB(vb6_VariantToString(v))`（宽松折串，Null → 空串）⇒ 静默 0 / Err 0。
+
+#### 三、改法（三半，缺一不可）
+
+1. **发码侧打开临时量**（`stmt/cgen_assign.cpp`，在原来那个 `lit79 || 变体档` 的循环里）：
+   整型标量目标 + 本刀的两枚（`len` / `lenb`）+ 实参是**真的整只 Variant 槽** ⇒ `stmtAbortTmp_`。
+   ⚠ 两个**不许放宽**的方向，都用 750 行清单量过：
+   - 不许按 `inferExprType` 认变体档：它对 UDT / 数组 / 属性读一律回退成 Variant ⇒
+     `LenB(<UDT>)`（发的是 `sizeof`）、`UBound(arr, 1)` 这些**不可能 raise** 的右值全被套上 `_av`
+     （第一版就是这么放的，当场 **54 行**变动）。改成与发码站同一问 `isDefinitelyVariantExpr` + 不用 `isArr` 那档。
+   - 也不许一宽到「所有内建 + 整型目标」：那样仍有 **25 行**，其中 `n = VarType(v)`（根本不会 raise）与
+     `n = UBound(vb6_VariantToSafeArray1DStrict(v), 1)` 这类**口径没量过**的右值也被套上 `_av`。
+     本刀的判据只做到这两枚有真机读数的地方 —— 那一族见第六节的待办。
+2. **RTL 补 `vb6_LenBV`**（`vb6rtl_string.c` + `vb6rtl_builtin.h`）：Null ⇒ Null；否则
+   `vb6_LenB_BSTR(vb6_VariantToString(v))` 并把折出来的那枚串就地放掉。**不许**走 `vb6_LenB` 那个
+   `_Generic` 宏 —— 它对非 BSTR 实参走 `default: sizeof(x)`，拿它答 Variant 槽会给 24/20。
+3. **两处改道口都要认它**：`nullFamilyVExitCName` 表 +`{"lenb","vb6_LenBV"}`；
+   并且 `cgen_expr_call_arg_variant.inc` 里 `rtParamType == "BSTR"` 那一站也要问一遍
+   （`LenB` 在**运行时 C 签名表**里那一格写的是宏的第一臂，不是内置函数的形参档 ⇒ 它不走
+   `paramBase == String` 那条改道口；只改表不改这一站，实测发出来还是 `vb6_LenB(VariantToString(v))`）。
+   `scripts/gen_variant_slot_prefixes.ps1` 重跑：60 → **61 名**（`+ vb6_LenBV`）。
+
+#### 四、读数（改后，本机 x64）
+
+```
+T1 n=-1 err=94    T2 isnull=True vt=1 err=0    T3 n=5    T4 n=3    T5 n=5
+T6 n=5            T7 n=10                       T8 n=10   T11 n=0   T12 n=-1 err=94   T13 n=0
+```
+
+#### 五、登记
+
+- 发码清单全量重算 750 行（跳过机器侧 5 行），净变 **3 行**：`tests/vb6probe/NullOpsProbe.bas`、
+  `tests/test_joinfilter.bas`、`tests/VBFlexGridDemo/VBFlexGridDemo.vbp` —— 三行都是同一形状
+  `if (_eN == serial) i = …(LenV(槽));` → `int32_t _avN = (_eN == serial) ? (…) : 0; if (_eN == serial) i = _avN;`。
+- `check_owned_temp_keeps`：新增一枚 RTL 出口 ⇒ ① 手写名单 `src/common/owned_temp_keeps.hpp`
+  两处 +`vb6_LenBV`（K13/K13c 双向对账的那一侧，**脚本不许改写**）；② 推导快照 `-Bless` **+1 行**
+  （`+vb6_LenBV|0`）。`rtl_proto_arity` 1783 → 1784 对。
+
+#### 六、本刀没做的（都已量过、登在这里）
+
+1. **`LenB(<UDT 定长字段>)` 答 10，真机口径未量**：UDT 字段在本仓是内联 `char[N]`（ANSI），
+   发的是 `vb6_LenB(vb6_FixedStrToBSTR(u.f, 5))` = 宽字符 ×2 = 10；真机是 5 还是 10 **没有读数**
+   （VBScript 不支持定长串，采不到），本刀按「不猜」留原样，等真机采一次再定。
+2. **`n = CLng(v)` / `CInt(v)` / `UBound(v)` 这一族**（Variant 实参 + 整型目标）同样有「94/13 报出来、
+   目标被写 0」的形状，本机 750 行清单的宽度已量到 **25 行**；本刀刻意只做到 Len/LenB，
+   泛化留给下一刀（判据要能分开「会 raise 的转换」与 `VarType` 这种不会 raise 的）。
