@@ -3288,7 +3288,11 @@ T1/T2 是本刀的行为面，T4/T5/T6 是零回归护栏。
 #### 五、登记（发码清单）
 
 候选集不从全语料猜：本刀的触发面 = 右值树里有 Asc 族且目标是整型标量/String，所以取**清单里
-源文件正文出现 `Asc(` / `AscB(` / `AscW(` 的 7 份**逐份重发。实际变动 **1 行**：
-`tests/VbQRCodegen-master/src/mdQRCodegen.bas`。发码逐字看过（`.temp/k84/md_old.c` vs `md_new.c`）：
-两处 `lDigit = vb6_ChkInt((int32_t)(vb6_Asc(_own_N)) - 48);` 变成临时量形，同一文件后面两处
-`_e17/_e18` 顺移到 `_e19/_e20`（守卫序号按语句顺序发，不重排）。
+源文件正文出现 `Asc(` / `AscB(` / `AscW(` 的 7 份**逐份重发。实际变动 **2 行**：
+`tests/VbQRCodegen-master/src/mdQRCodegen.bas` 与 `tests/VbQRCodegen-master/test/Project1.vbp`。
+发码逐字看过（`.temp/k84/md_old.c` vs `md_new.c`）：两处 `lDigit = vb6_ChkInt((int32_t)(vb6_Asc(_own_N)) - 48);`
+变成临时量形，同一文件后面两处 `_e17/_e18` 顺移到 `_e19/_e20`（守卫序号按语句顺序发，不重排）。
+
+⚠ 第一次只登记了 1 行，CI 的形状门回来打脸：`tests/VbQRCodegen-master/test/Project1.vbp` 也是红。
+原因是我那份候选集只 grep 了 `.vbp` **文件自己的正文** —— 工程的模块（`mdQRCodegen.bas`）不在里面，
+所以含 Asc 的工程整份漏掉了。下次扫工程得把它的模块一起看，别只读 `.vbp` 本体。
