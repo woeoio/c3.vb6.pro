@@ -29,7 +29,15 @@
 // ============================================================
 
 int32_t vb6_AscW(BSTR s) {
-    if (!s || vb6_BSTR_Len(s) == 0) return 0;
+    // C30-11 第八十二刀: 空串 / NULL ⇒ 错误 5（与 vb6_Asc 同族同口径，真机三格意义一样）。
+    // 第七十八刀在 vb6_Asc 上踩过的那个坑这里同样存在: 上游 `vb6_CStrStrict(Null)` 报完 94
+    // 交回来的也是一只空串 —— `vb6_conv_fail_serial` 仍是当前序号时说明这只是转换失败
+    // 交回来的，不再报 5（标记的登记处见 vb6rtl.c 的 vb6_ConvFailMark，`Err.Clear` 清掉）。
+    if (!s || vb6_BSTR_Len(s) == 0) {
+        if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+        vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     return (int32_t)s[0];  // Unicode code point (same as Asc for BMP)
 }
 
@@ -39,7 +47,12 @@ BSTR vb6_ChrW(int32_t code) {
 }
 
 int32_t vb6_AscB(BSTR s) {
-    if (!s || vb6_BSTR_Len(s) == 0) return 0;
+    // 第八十二刀：与 vb6_AscW / vb6_Asc 同一口径（空串/Empty ⇒ 5，转换失败的空串不再报）。
+    if (!s || vb6_BSTR_Len(s) == 0) {
+        if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+        vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     return (int32_t)(s[0] & 0xFF);  // Low byte of first character
 }
 

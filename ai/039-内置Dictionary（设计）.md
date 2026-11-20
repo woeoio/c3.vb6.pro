@@ -3094,3 +3094,64 @@ W4b/W5b/W6b n=-1 err=94，C6/C7/C8 keep err=94（第七十九刀的九格未被�
 `String` 目标的形（`s = CStr(Asc(...))`）仍走第七十九刀那套 `if (...) AssignMove else Free`
 的**双算**：`Asc` 会在 else 分支再跑一次（`Err.Number` 仍是 5、目标仍不动，只是多发一次）。
 它与 `s = CStr(UBound(...))` 同形同口径，本刀不扩，留给「String 目标也吃临时量」那一刀。
+
+### 11.60 第八十二刀：`AscB("")` / `AscW("")` / `AscW(Empty)` ⇒ 5（Asc 同族的尾巴）
+
+#### 一、改前读数（同一台 `.build/C3.exe`，改前）
+
+`.temp/k82/ascb.bas`：
+
+| 格 | 源 | 改前 | 真机 |
+|---|---|---|---|
+| B1 | `w = AscW("")` | `w=0 err=0` | `w` 不动，5 |
+| B2 | `b = AscB("")` | `b=0 err=0` | `b` 不动，5 |
+| B3 | `w = AscW(Empty)` | `w=0 err=0` | `w` 不动，5 |
+| B4 | `b = AscB(<Null>)` | `b=-1 err=94` | 94（本已对） |
+| B5 | `AscW("A")` / `AscB("A")` | `65 / 65 err=0` | 同 |
+
+归因：`vb6_AscW` / `vb6_AscB`（`vb6rtl_compat.c:31/41`）对空串是**静默 return 0** ——
+第八十一刀只修了 `vb6_Asc`，这两枚同族函数各走各的身子，所以尾巴还在。
+`B4` 之所以早已对，是上游 `vb6_CStrStrict(Null)` 先报了 94，这里只是没去盖它。
+
+#### 二、改法
+
+两枚函数都按 `vb6_Asc` 的同一口径补上：
+
+```c
+if (!s || vb6_BSTR_Len(s) == 0) {
+    if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+    vb6_ErrRaiseNumber(5);
+    return 0;
+}
+```
+
+「转换失败交回来的空串不报 5」那一句必须照抄 —— 少了它，`B4` 会从 94 掉成 5
+（第七十八刀在 `vb6_Asc` 上撤回的正是这个坑）。
+
+**发码一侧不需要动**：第八十一刀已把 `ascb/ascw` 纳入赋值站的守卫判据，整型标量目标
+走临时量三元形，所以「报 5 之后目标不写」这一半本刀免费得到 —— 读数里 B1/B2/B3 的
+`w`/`b` 都停在 -1 就是这个守卫在起作用（改前是 0，因为根本没 raise）。
+
+#### 三、改后读数
+
+```
+B1 AscW(empty)  | w=-1 n=-1 err=5
+B2 AscB(empty)  | b=-1 err=5
+B3 AscW(Empty)  | w=-1 err=5
+B4 AscB(Null)   | b=-1 err=94
+B5 AscW/AscB(A) | w=65 b=65 err=0
+```
+
+非回归：`.temp/k81/asc.bas`（`A1` 94 / `A2` 5）、`.temp/k78/lena.bas`（`L1/L2` 5、
+`D1–D4` Len 两档一字未动）、`.temp/k77/wc.bas` 九格全不变。
+
+#### 四、门
+
+- `-Category syntax`：227/227。
+- `-Category vbp -VbpShard 9 -VbpShardTotal 12`：55 PASS / 2 FAIL —— 与第八十一刀同一对
+  （`c29listview` 本机已知非回归红；`iface_multi_incomplete_negcontrol` 归一 HEAD 手工复跑
+  得 VB3012 + rc=1 的 runner 争用）。
+- 静态门 6 枚全 PASS：`rtl_naked_names`、`rtl_proto_arity`、`conv_strict_parse`、
+  `builtin_slot_returns`、`rtl_embedded`、`emitted_declared`。
+- 发码清单：**一行未动**（750 行里只有那 5 行机器侧差，与上一刀登记后的本机状态相同）
+  ⇒ 本刀不需要第二个「登记」提交。RTL 只在链接期进产物，不改 `.c` 文本这一层。
