@@ -1059,6 +1059,11 @@ int32_t vb6_VarCmpLongGe(vb6_VARIANT* a, int32_t b) { vb6_VARIANT vb; memset(&vb
 
 
 void vb6_RaiseError(int32_t errNum, BSTR description) {
+    // C30-11 第九十三刀: 与 vb6_ErrRaise 同一句 —— **报错就要动序号**。
+    // 以前这两枚对序号的态度不一样（ErrRaise ++、RaiseError 不动），于是凡走这一枚报出来的
+    // 错误（全仓 34 处 / 15 份文件：COM 429/438、FSO、`vb6_NumVal` 的文本 13 …）在赋值站的
+    // 语句级守卫那里**一律不可见** ⇒ 语句照样把 0 写进目标。真机口径一成不变：报错即中止语句。
+    ++vb6_err_serial;
     vb6_err.number = errNum;
     vb6_err.description = description;
     if (vb6_err_resume_next) {

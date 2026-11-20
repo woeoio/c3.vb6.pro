@@ -3734,3 +3734,61 @@ U3（`n = CLng("abc")`）改后仍是 `n=0 err=13`。根因不在赋值站，而
 - 发码清单：24 行（列表见 `.temp/k92/rehash92.log`），无机器侧 5 行。
 - `check_owned_temp_keeps`：本刀不动 RTL ⇒ 253 行不变，全绿。
 - 静态门 9 枚全 PASS（`rtl_proto_arity` 1784 对）；`-Category syntax` **227/227**。
+
+### 11.71 第九十三刀：`vb6_RaiseError` 不打错误序号 —— 34 处报错对语句级守卫全是隐形的
+
+#### 一、病（`.temp/k93/vb6probe/RealMachineProbe.bas`，C3 侧读数，改前 = 第九十二刀那枚二进制）
+
+```
+C5 | CLng(v=abc) into Long = [0]  err=13      ← 目标被写 0
+```
+
+真机口径（同族，第九十二刀 `.temp/k92/oracle_conv.vbs` E/I 两格）：**13 报出来、目标一字不动**。
+
+根因不在赋值站，而在 RTL 有**两枚**报错出口，对「错误序号」的态度不一致：
+
+| 出口 | 打 `vb6_err_serial` | 用它的地方 |
+|---|---|---|
+| `vb6_ErrRaise(errNum, source, description)` | **打**（`++vb6_err_serial`） | 第九十一/九十二刀那两族转换失败（94 等） |
+| `vb6_RaiseError(errNum, description)` | **不打** | 全仓 34 处 / 15 份文件：COM `429`/`438`（`vb6com.c`、`vb6com_invoke.c`）、`vb6com_fso.c`、`vb6_NumVal` 的文本 13（`vb6rtl_string.c:462`）… |
+
+赋值站的语句级守卫判的是「序号变没变」（第七十九刀），所以凡走第二枚报出来的错误，守卫**一律看不见** ⇒
+语句接着把转换失败交回的 0 / 空串写进目标。CBool/CLng 那条文本档（`vb6_NumVal`）是最常见的门面，
+但同一族还盖着 COM 的 429/438 —— 那一半今天也同样是「报错 + 目标被写」。
+
+#### 二、改法（一处，一行）
+
+`vb6rtl.c` 的 `vb6_RaiseError` 开头补 `++vb6_err_serial;`，与 `vb6_ErrRaise` 同一句「**报错就要动序号**」。
+两枚出口的其余行为（`vb6_err_resume_next` 早退、`On Error GoTo` 的 longjmp、未处理时打 stderr/弹框）一字未动。
+
+#### 三、读数（C3 侧，改后）
+
+```
+C5 | CLng(v=abc) into Long = [-1]  err=13      ← 修好：目标不动
+B3/B4 Len/LenB(Null) = [-1] err=94 ; C1/C2 CLng/CInt(Null) = [-1] err=94 ; C6 UBound(非数组) = [-1] err=13
+D1..D3/D5 不变（Asc 94 / Mid 5 / Left 5 / InStr 5，目标都不动）
+```
+
+同一枚探针还量到两处**本轮不修**的洞（真机读数一到就开下一刀）：
+
+1. `n = Int(v=Null)` / `n = Abs(v=Null)` ⇒ 本仓 `[0] err=0`。发的是
+   `vb6_ChkLong(vb6_FltToLng(vb6_Int(vb6_VariantToDouble(v))))` —— `vb6_VariantToDouble` 是**宽松**口
+   （Null → 0.0、不报错），而 `Int`/`Abs` 的 Variant 档在 VB6 是 **Null 进 Null 出**（`.temp/k92` J 格：
+   `n = Int(Null)` ⇒ Null、err 0），落到整型目标才 94。宽严两档的选择在这一族还没量过。
+2. `TypeName(<UDT 的 String*N 字段>)` ⇒ 本仓答 `Object`（应为 `String`）：固定长度字段是 `char[N]`，
+   `vb6_TypeName` 只认 BSTR 槽。已登在 §11.72 之下的待办清单。
+
+#### 四、登记与门
+
+- 发码清单全量重算 750 行：**净变 0 行**（本刀只动 RTL 运行期语义，一个字都不在发码面上）。
+- `check_owned_temp_keeps`：253 行不变（没有新出口、没有改签名），K13/K14 全绿。
+- 静态门 9 枚全 PASS（`rtl_proto_arity` 1784 对；`rtl_embedded` 138 份资源与应用内嵌逐字节相同）。
+- `-Category syntax`：**227/227**。
+
+#### 五、下一刀的两笔（都已量、等真机）
+
+- **真机探针已出**：`.temp/k93/vb6probe/RealMachineProbe.bas`（一行一格，`LABEL | what = [value] err=N`；
+  A 段定长串 `Len`/`LenB`（模块/局部/UDT 字段/整枚 UDT）、B 段 Variant 各档、C 段转换族、D 段串内建边界）。
+  它在 C3 侧已经跑通，读数留在 `.temp/k93/vb6probe/probe_out.txt` —— 真机读数回来后逐格对表。
+- 待办：`LenB(<定长串>)` 的 10/5（A2/A4/A6）、`LenB(<整枚 UDT>)`（A8 本仓 5 而 A10 12）、
+  `TypeName(<UDT 定长字段>)`（A12 本仓 `Object`）、`Int/Abs(<Null>)`（C3/C4）。
