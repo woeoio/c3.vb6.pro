@@ -65,7 +65,11 @@ int32_t vb6_LenB_BSTR(BSTR s) {  // Fix 048: LenB for BSTR — byte length (wcha
 }
 
 BSTR vb6_Left(BSTR s, int32_t n) {
-    if (!s || n <= 0) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: `Left(s, -1)` 在 VB6 里报 5 (Invalid procedure call or argument)，
+    // 旧实现把 n<=0 一律当空串 —— 于是「该 raise 没 raise」，赋值站也就不会中止语句。
+    if (!s) return vb6_BSTR_Empty();
+    if (n < 0) { vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
+    if (n == 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
     /* 账 §39 (C:/D: 少两行): 取子串必须按**定长**建结果 —— vb6_BSTR_FromStr 走
@@ -75,14 +79,20 @@ BSTR vb6_Left(BSTR s, int32_t n) {
 }
 
 BSTR vb6_Right(BSTR s, int32_t n) {
-    if (!s || n <= 0) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 与 Left 同口径 —— 负长度报 5，0 才是空串。
+    if (!s) return vb6_BSTR_Empty();
+    if (n < 0) { vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
+    if (n == 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
     return vb6_BSTR_FromStrN(s + len - n, n);
 }
 
 BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
-    if (!s || start < 1) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 起点 < 1 ⇒ 5 (VB6 的 Mid("abc", 0) 报 5)。
+    // len < 0 是 cgen 对省略 length 参数 (Mid$(s, n)) 的哨兵，不当错误。
+    if (!s) return vb6_BSTR_Empty();
+    if (start < 1) { vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
     int32_t slen = vb6_BSTR_Len(s);
     int32_t offset = start - 1;  // VB6是1-based
     if (offset >= slen) return vb6_BSTR_Empty();
@@ -103,21 +113,29 @@ BSTR vb6_Mid(BSTR s, int32_t start, int32_t len) {
 // 账 §39: 与上面 Left/Right/Mid 同口径 —— 取子串按**定长**建结果, 不许走
 // vb6_BSTR_FromStr (wcslen 会把内嵌 NUL 当串尾)。
 BSTR vb6_LeftB(BSTR s, int32_t n) {
-    if (!s || n <= 0) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 与 vb6_Left 同口径。
+    if (!s) return vb6_BSTR_Empty();
+    if (n < 0) { vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
+    if (n == 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
     return vb6_BSTR_FromStrN(s, n);
 }
 
 BSTR vb6_RightB(BSTR s, int32_t n) {
-    if (!s || n <= 0) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 与 vb6_Right 同口径。
+    if (!s) return vb6_BSTR_Empty();
+    if (n < 0) { vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
+    if (n == 0) return vb6_BSTR_Empty();
     int32_t len = vb6_BSTR_Len(s);
     if (n > len) n = len;
     return vb6_BSTR_FromStrN(s + len - n, n);
 }
 
 BSTR vb6_MidB(BSTR s, int32_t start, int32_t len) {
-    if (!s || start < 1) return vb6_BSTR_Empty();
+    // C30-11 第八十六刀: 与 vb6_Mid 同口径（起点 < 1 ⇒ 5；len<0 是哨兵）。
+    if (!s) return vb6_BSTR_Empty();
+    if (start < 1) { vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
     int32_t slen = vb6_BSTR_Len(s);
     int32_t offset = start - 1;  // VB6 是 1-based 字节下标
     if (offset >= slen) return vb6_BSTR_Empty();
@@ -344,6 +362,9 @@ BSTR vb6_RTrim(BSTR s) {
 }
 
 BSTR vb6_Chr(int32_t code) {
+    // C30-11 第八十六刀: 码点越界 ⇒ 5（VB6: Chr(-1) / Chr(70000) 都报 5）。
+    // 合法区间是 0..65535；Chr$(0) 仍是长度 1 的字符串（见下），不是空串。
+    if (code < 0 || code > 65535) { vb6_ErrRaiseNumber(5); return vb6_BSTR_Empty(); }
     // 账 #118 续: Chr$(0) 在 VB6 里是**长度 1** 的字符串 (内容为 NUL), 不是空串。
     // 原实现走 vb6_BSTR_FromStr → wcslen 见到首字符 NUL 就返回 0, 于是
     // `Len(Chr$(0))=0`、`InStr(sPath, Chr$(0))` 命中空 needle 规则返回 1、
