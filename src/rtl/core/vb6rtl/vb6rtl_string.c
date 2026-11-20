@@ -946,3 +946,34 @@ void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src) {
     }
     vb6_BSTR_AssignMove(target, vb6_CStr(src));
 }
+
+// C30-11 第九十刀: **定长串目标**收 Variant 右值 (UDT `String * N` 字段与模块级 `String * N`)。
+// 与 vb6_BSTR_AssignFromVariant 同一口径: Null ⇒ 94 且目标**一字不动**; 其余档先按 vb6_CStr
+// 折成串 (与旧的宽松口逐字节相同), 再走定长那两条既有写侧 (右补空格 / 右截断)。
+//
+// 为什么要单独开出口: 定长串目标以前绕开了严格赋值站 (第七十三/七十四刀那两枚只看普通
+// BSTR 槽), 于是 `u.f = CStr(Null)` / `g = Null` 都变成「err=0 + 字段被抹成空格」。
+void vb6_FixedStrAssignFromVariant(char* buf, int32_t cap, vb6_VARIANT src) {
+    if (src.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* buf 一字不动 */
+    }
+    BSTR s = vb6_CStr(src);
+    vb6_FixedStrAssign(buf, cap, s);
+    vb6_BSTR_Free(s);
+}
+
+// 模块级 `String * N` (BSTR 模型) 的同一口径: 先把变体折成串, 再 fit 成 N 长度并换进目标;
+// Null 那一档 raise 94 后直接返回 —— 目标还是旧值 (不能交 Entry 让调用方 AssignMove 空串)。
+void vb6_LSetFromVariant(BSTR* target, int32_t cap, vb6_VARIANT src) {
+    if (src.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* *target 一字不动 */
+    }
+    BSTR s = vb6_CStr(src);
+    BSTR fit = vb6_LSet(s, cap);
+    vb6_BSTR_Free(s);
+    vb6_BSTR_AssignMove(target, fit);
+}

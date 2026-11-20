@@ -3100,7 +3100,7 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     // 直接返回、目标不动。只认**单实参 + 实参是变体档 + 发码确实是 vb6_CStr(**那一形;
     // 第六十六刀那两条 vb6_CStrStrict(<比较>/<拼接>) 不在此列 (前缀就不是 vb6_CStr();
     // 定长串那一档读数未量, 仍走原路。
-    if (!valueIsVariant && fixedLen.empty() && rhs
+    if (!valueIsVariant && rhs
         && rhs->kind == ASTNodeKind::IndexOrCallExpr) {
         auto& call74 = static_cast<IndexOrCallExpr&>(*rhs);
         if (call74.callee && call74.callee->kind == ASTNodeKind::IdentifierExpr
@@ -3262,6 +3262,20 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     if (strictVarAssign221 && fixedLen.empty()) {
         // 定长串那一档读数未量, 仍走原路 (只认普通 String 槽)。
         c_.emitLine("vb6_BSTR_AssignFromVariant(&" + target + ", " + rawVarValue221 + ");");
+        return;
+    }
+    // C30-11 第九十刀: 定长串目标收到 Variant 右值 —— 两支各走一枚**原子**出口
+    // (Null ⇒ 94 且目标一字不动; 其余档折成串后按 N 补空格/截右)。
+    // 不套上面的 vb6_BSTR_AssignFromVariant 是因为定长串的写侧有自己的形状:
+    // UDT 字段是内联 char[N] (不能当 BSTR* 用), 模块级是 BSTR 槽但多一道 fit。
+    if (strictVarAssign221 && !fixedLen.empty()) {
+        if (udtFixedField) {
+            c_.emitLine("vb6_FixedStrAssignFromVariant(" + target + ", " + fixedLen + ", "
+                        + rawVarValue221 + ");");
+        } else {
+            c_.emitLine("vb6_LSetFromVariant(&" + target + ", " + fixedLen + ", "
+                        + rawVarValue221 + ");");
+        }
         return;
     }
     if (!fixedLen.empty() && udtFixedField) {
