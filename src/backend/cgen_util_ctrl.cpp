@@ -3287,17 +3287,32 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         if (stmtAbortGuard_.empty()) {
             c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + value + ");");
         } else {
+            // C30-11 第八十三刀：右值**只算一次**。原形把 value 在 if/else 两支各写一遍，
+            // 守卫不过时 else 那一支又把右值算了一遍（`s = CStr(F(v))` 会调 F 两次）。
+            // 现在先算进临时量（只在本语句还没 raise 时算），再拿序号决定是并进目标还是收回。
+            const std::string tmp83 = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp83 + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + value + ") : NULL;");
             c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_AssignMove(&" + target
-                        + ", " + value + "); else vb6_BSTR_Free(" + value + ");");
+                        + ", " + tmp83 + "); else vb6_BSTR_Free(" + tmp83 + ");");
         }
     } else {
         // C30-11 第七十九刀 (§B227): 语句级中止 —— 借来的值只深拷贝, 不写就不写,
         // 没有要回收的东西。手抄这一发仍留在原处 (R7 名单钉的是「这一站还是手写的」)。
+        //
+        // C30-11 第八十三刀 (§B227 续): 借来的值也要**只算一次** —— 与上面自有支同一形。
+        // 原形把 value 直接写在 if 里, 而条件是**求值之前**比的：右值自己 raise（`Asc("")`
+        // 报 5、实参位的 `vb6_CStrStrict(<Null>)` 报 94）时条件早就过了 ⇒ 赋值照样发生,
+        // 目标被清成 ""，而真机是「报错 + 目标不动」。现在先算进临时量, 再拿**算完之后**
+        // 的序号决定写不写；借来的指针不归我们, 所以没有 else 要回收的东西。
         if (stmtAbortGuard_.empty()) {
             c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
         } else {
+            const std::string tmp83b = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp83b + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + value + ") : NULL;");
             c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_Assign(&" + target
-                        + ", " + value + ");");
+                        + ", " + tmp83b + ");");
         }
     }
 }

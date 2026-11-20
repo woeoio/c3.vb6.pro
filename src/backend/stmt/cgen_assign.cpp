@@ -40,6 +40,50 @@ void CCodeGen::emitGuardedStore(const std::string& line) {
     c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) " + line);
 }
 
+namespace {
+// C30-11 第八十三刀 (§B227 续): 右值表达式树里有没有 Asc/AscB/AscW 调用。
+// 只认这三枚 —— 它们 raise 在**本语句的表达式求值里**（空串直接 vb6_ErrRaiseNumber(5)），
+// 不会被哪个被调方内部用 `On Error Resume Next` 吞掉，所以「序号一变 = 真中止」对它们成立。
+// 不要再放宽成「任何嵌套调用」（见调用点注）：那一版把「被调方内部已处理的错误」也当成
+// 中止信号，实测在 `[VBP] fdrawstate_x86` 上翻红。
+bool ascCallInTree(const Expr* e) {
+    if (!e) return false;
+    switch (e->kind) {
+        case ASTNodeKind::IndexOrCallExpr: {
+            const auto& c = static_cast<const IndexOrCallExpr&>(*e);
+            if (c.callee && c.callee->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string n =
+                    Symbol::toLower(static_cast<const IdentifierExpr&>(*c.callee).name);
+                if (n == "asc" || n == "ascb" || n == "ascw") return true;
+            }
+            if (ascCallInTree(c.callee.get())) return true;
+            for (const auto& a : c.positional) if (ascCallInTree(a.get())) return true;
+            for (const auto& a : c.named) if (ascCallInTree(a.value.get())) return true;
+            return false;
+        }
+        case ASTNodeKind::BinaryExpr: {
+            const auto& b = static_cast<const BinaryExpr&>(*e);
+            return ascCallInTree(b.left.get()) || ascCallInTree(b.right.get());
+        }
+        case ASTNodeKind::UnaryExpr:
+            return ascCallInTree(static_cast<const UnaryExpr&>(*e).operand.get());
+        case ASTNodeKind::MemberAccessExpr:
+            return ascCallInTree(static_cast<const MemberAccessExpr&>(*e).object.get());
+        case ASTNodeKind::DictionaryAccessExpr:
+            return ascCallInTree(static_cast<const DictionaryAccessExpr&>(*e).object.get());
+        case ASTNodeKind::NewExpr: {
+            const auto& n = static_cast<const NewExpr&>(*e);
+            for (const auto& a : n.args) if (ascCallInTree(a.get())) return true;
+            return false;
+        }
+        case ASTNodeKind::TypeOfExpr:
+            return ascCallInTree(static_cast<const TypeOfExpr&>(*e).object.get());
+        default:
+            return false;
+    }
+}
+} // namespace
+
 void CCodeGen::visit(AssignmentStmt& node) {
     // C29-3: Let 赋值期间成员对象要取默认属性 (见 memObjLetScalar_ 的说明)。
     // `Set` 语句走 visit(SetStmt&)，不受影响。
@@ -68,6 +112,18 @@ void CCodeGen::visit(AssignmentStmt& node) {
                            || tgtT79 == Vb6Type::Byte;
         const bool tgt79179 = tgtInt79 || tgtT79 == Vb6Type::String;
         bool mayRaise79 = false;
+        // C30-11 第八十三刀：String 目标那一形（`s = CStr(Asc(""))`）在**顶层**看不见 ——
+        // 右值的外套是 CStr/CLng 这类转换函数，实参档是 Integer（不是 Variant）⇒ 第七十九/
+        // 八十一刀那条判据一律不 fire，语句照样把 "" 写进目标（真机：5 + 目标不动）。
+        // 补一条**只认 Asc 族**的树扫描，理由见 ascCallInTree 顶注。
+        // ⚠ 不要放宽成「右值里任何嵌套调用」：那一版实测在 `[VBP] fdrawstate_x86` 上翻红
+        // （同一分片改前两次都是 2 红：c29listview + iface 那一枚争用）。成因是判据分不清
+        // 两种「序号变了」——① 错误往外传（无处理器）⇒ 真机语句级中止，目标不动；
+        // ② 错误在被调方内部被 `On Error Resume Next` 吃掉 ⇒ 真机语句照执行，目标该写。
+        // `vb6_ErrSerial()` 对两者一视同仁地自增 ⇒ 递归一宽，② 就被误当成 ①；要宽到那一层
+        // 得先给 RTL 一枚「错误是否还在往外爬」的信号，那是另一刀的事。
+        const bool ascInRhs83 =
+            (tgtT79 == Vb6Type::String) && ascCallInTree(node.value.get());
         if (tgt79179 && node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr) {
             auto& call79 = static_cast<IndexOrCallExpr&>(*node.value);
             // 第八十一刀: Asc/AscB/AscW 自己会在**空串**上报 5 —— 那条路不靠变体转换，
@@ -79,7 +135,8 @@ void CCodeGen::visit(AssignmentStmt& node) {
                 if (cn79 == "asc" || cn79 == "ascb" || cn79 == "ascw") {
                     mayRaise79 = true;
                     // 它 raise 在**调用内部**（不是前置转换）⇒ 这一档要发临时量形。
-                    // 只给整型标量目标发（BSTR 目标的右值是数值时还要过串档，不在此列）。
+                    // 只给整型标量目标发（BSTR 目标那一半由串档自己发临时量，见
+                    // 第八十三刀的 emitBstrSlotStore）。
                     if (tgtInt79) {
                         stmtAbortTmp_ = true;
                         stmtAbortTmpType_ = mapType(tgtT79);
@@ -102,6 +159,9 @@ void CCodeGen::visit(AssignmentStmt& node) {
                     || at79 == Vb6Type::Empty) { mayRaise79 = true; break; }
             }
         }
+        // 第八十三刀: 顶层判据没命中、但右值树里有 Asc 族 ⇒ String 目标也发守卫
+        //（它的临时量由 emitBstrSlotStore 的两支各自发，见那里的第八十三刀注）。
+        if (ascInRhs83) mayRaise79 = true;
         if (mayRaise79) {            const std::string gv79 = "_e" + std::to_string(stmtAbortSeq_++);
             c_.emitLine("const int32_t " + gv79 + " = vb6_ErrSerial();");
             stmtAbortGuard_ = gv79;
