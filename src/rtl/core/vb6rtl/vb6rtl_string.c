@@ -216,10 +216,17 @@ int32_t vb6_TextFindRev(BSTR haystack, BSTR needle, int32_t from0, int32_t compa
 
 // compare 版实现 (vbBinaryCompare = 0 走原 memcmp 路, 行为逐字不变)。
 int32_t vb6_InStrC(int32_t start, BSTR haystack, BSTR needle, int32_t compare) {
+    // C30-11 第八十七刀: 起点 < 1 ⇒ 5。真机读数（.temp/k87/oracle_instr.vbs）：
+    //   InStr(0,"abc","b") / InStr(-1,…) => 5 且目标不动；
+    //   InStr(0,"abc","") 也是先校起点（=> 5），所以这道校验必须在“空 needle”之前。
+    // 旧写法把 start 悄悄夹成 1 —— 于是 `n = InStr(0,h,s)` 既不报错、还把 n 写成 2。
+    if (start < 1) {
+        if (!vb6_ArgConvertFailed()) vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     if (!haystack || !needle) return 0;
     int32_t nlen = vb6_BSTR_Len(needle);
     if (nlen == 0) return start;
-    if (start < 1) start = 1;
     int32_t i = vb6_TextFind(haystack, needle, start - 1, compare);
     return (i < 0) ? 0 : i + 1;   // VB6 的 InStr 返回 1 基
 }
@@ -258,8 +265,13 @@ int32_t vb6_InStrVarC(int32_t start, BSTR haystack, vb6_VARIANT needle, int32_t 
 // 用 1D 描述符判定 (cDims==1 + fFeatures 标记, 见 vb6rtl_array.h) 区分两种载体,
 // 避免在 RTL 里区分运行时指针类型. 旧写法是比 signature == 0x5A1D.
 int32_t vb6_InStrB(int32_t start, void* haystack, void* needle) {
+    // C30-11 第八十七刀: 与 vb6_InStr 同口径（起点 < 1 ⇒ 5）。“先校起点再判空 needle”
+    // 这一点两边一致（真机 InStrB 是 InStr 的字节版，缺省起点也是 1）。
+    if (start < 1) {
+        if (!vb6_ArgConvertFailed()) vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     if (!haystack || !needle) return 0;
-    if (start < 1) start = 1;
     {
         const vb6_SafeArray1D* ha = (const vb6_SafeArray1D*)haystack;
         const vb6_SafeArray1D* ne = (const vb6_SafeArray1D*)needle;
@@ -743,9 +755,18 @@ int32_t vb6_InStrRev(BSTR haystack, BSTR needle, int32_t start, int32_t compare)
     if (!haystack || !needle) return 0;
     int32_t hLen = vb6_BSTR_Len(haystack);
     int32_t nLen = vb6_BSTR_Len(needle);
+    // C30-11 第八十七刀: start 的合法档只有 -1（从尾部，等同省略）与 >= 1。
+    // 真机读数: InStrRev(…,0) / InStrRev(…,-2) => 5 且目标不动；-1 与省略 => 2。
+    // 旧写法把 <=0 一律夹成 hLen —— 0 与 -2 因此既不报错还答了 2。
+    if (start == -1) {
+        start = hLen;
+    } else if (start < 1) {
+        if (!vb6_ArgConvertFailed()) vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     if (nLen == 0) return hLen;
     if (nLen > hLen) return 0;
-    if (start <= 0 || start > hLen) start = hLen;
+    if (start > hLen) start = hLen;
     // <vbeclipse>: compare 形参此前被 (void) 丢掉; 改走共用查找核 (二进制形逐字不变)。
     int32_t i = vb6_TextFindRev(haystack, needle, start - nLen, compare);
     return (i < 0) ? 0 : i + 1;   // VB6 的 1 基
