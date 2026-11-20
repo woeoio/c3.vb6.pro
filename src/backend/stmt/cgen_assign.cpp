@@ -75,7 +75,14 @@ bool raiseInTree85(const Expr* e) {
             if (c.callee && c.callee->kind == ASTNodeKind::IdentifierExpr) {
                 const std::string n =
                     Symbol::toLower(static_cast<const IdentifierExpr&>(*c.callee).name);
-                if (n == "asc" || n == "ascb" || n == "ascw") return true;
+                // 第八十六刀: 除 Asc 族外，又把**实参越界就报 5** 的几枚应收进来
+                // （RTL 侧本刀才补上 raise，之前它们是静默返回空串/截断值）。
+                // 只收“命目在 RTL 里直接 raise”的内建，不收用户函数。
+                if (n == "asc" || n == "ascb" || n == "ascw" ||
+                    n == "chr" || n == "chr$" || n == "chrw" || n == "chrb" ||
+                    n == "left" || n == "left$" || n == "leftb" ||
+                    n == "right" || n == "right$" || n == "rightb" ||
+                    n == "mid" || n == "mid$" || n == "midb") return true;
             }
             if (raiseInTree85(c.callee.get())) return true;
             for (const auto& a : c.positional) if (raiseInTree85(a.get())) return true;

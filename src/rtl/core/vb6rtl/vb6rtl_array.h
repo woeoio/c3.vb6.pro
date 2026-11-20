@@ -455,6 +455,9 @@ void vb6_ErrRaiseNumber(int32_t errNum);
 int32_t vb6_ErrSerial(void);
 // C30-11 第八十一刀: Variant→String 转换失败的标记（与错误序号同源）。
 void vb6_ConvFailMark(void);
+// C30-11 第八十六刀: 本语句刚有一次实参转换失败⇒ 1（Mid/Left/Right/Chr 用它决定
+// 要不要拿自己的 5 盖掉上游的 94）。
+int vb6_ArgConvertFailed(void);
 extern int32_t vb6_err_serial;
 extern int32_t vb6_conv_fail_serial;
 

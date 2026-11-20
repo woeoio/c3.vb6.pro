@@ -3338,3 +3338,58 @@ T1/T2 是本刀的行为面，T4/T5/T6 是零回归护栏。
 本刀的触发面是「右值里有除法算符」——语料里到处都是，候选集法不再够用，所以这刀**本机全量重算**：
 `.temp/k85/full_rehash85.ps1` 把 750 行逐份重发（跳过 5 行机器侧差），归一化口径与 CI 同源。
 净变 **17 行**（宽松版曾 28 行，补字面量判据后有 9 行回到原值）。
+
+### 11.64 第八十六刀：`Chr(-1)` / `Left(s,-1)` / `Mid(s,0)` 该报 5 却静默
+
+#### 一、病（`.temp/k86/builtin.bas`，x64）
+
+| 格 | 源 | 改前 | 真机 |
+|---|---|---|---|
+| T2 | `s = Chr(-1)` | `s=\uFFFF err=0` | 5，s 不动 |
+| T3 | `s = Chr(70000)` | `s=<乱码> err=0` | 5，s 不动 |
+| T5 | `s = Mid("abc", 0, 1)` | `s="" err=0` | 5，s 不动 |
+| T7 | `s = Left("abc", -1)` | `s="" err=0` | 5，s 不动 |
+| T8 | `s = Right("abc", -1)` | `s="" err=0` | 5，s 不动 |
+| T9 | `n = InStr(0, "abc", "b")` | `n=2 err=0` | 5，n 不动（**本刀不做**） |
+
+T1(`CStr(Null)`⇒94)、T4(`Chr(65)`)、T6(`Mid(...,2,1)`)、T10 本来就对，作护栏。
+
+#### 二、改法
+
+1. RTL（`vb6rtl_string.c`）：`vb6_Chr` 码点越界（<0 或 >65535）⇒ 5；`vb6_Left`/`vb6_Right`
+   （含 B 族）负长度 ⇒ 5，0 仍是空串；`vb6_Mid`/`vb6_MidB` 起点 < 1 ⇒ 5（`len < 0` 仍是 cgen
+   对「省略 length」的哨兵，不当错误）。
+2. 发射侧：`raiseInTree85` 的白名单从 Asc 族扩到 `chr/chrw/chrb`、`left/leftb`、`right/rightb`、
+   `mid/midb`（含 `$` 后缀）。**不扩的话 RTL 报 5 之后目标还是被写成空串** —— raise 与中止
+   是两半，缺一不可。
+
+#### 三、读数（改后）
+
+T2/T3/T5/T7/T8 全部变成 `keep / 5`；T1/T4/T6/T9/T10 一格未动。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**（白名单扩了 10 个名字，形状针一枚没红）。
+- 静态门 9 枚全 PASS（含 `rtl_embedded` 138 枚资源与磁盘一致、`rtl_proto_arity` 1780 对）。
+
+#### 五、登记（发码清单）
+
+白名单一类改动的触发面比「除法」还宽（`Left/Mid/Right` 满地都是），继续全量重算 750 行：
+净变 **23 行**（跳过 5 行机器侧差）。
+
+#### 六、本刀没做的
+
+- `InStr(<起点<1>, …)` 仍 clamp 到 1（真机报 5）—— 它不在 `VBA.Strings` 的取子串族里，
+  单独一刀再动（要同时看 `InStrB`/`InStrRev` 的口径）。
+- 定长串目标（`udtFixedField`/`fixedLen`）仍无守卫；`Len` 两档仍是 backlog。
+
+#### 七、CI 回执（run 44699767997，红两份）
+
+- `[RUN] test_joinfilter`：`JF-nullmid=5`（期望 94）。成因与本刀同形：`Mid("abc", <Null>)` 的
+  起点走 `vb6_VariantToLong` 报 94，随后 Mid 自己的 5 又把它盖了。修法：`vb6_VariantToLong`
+  的 Null 分支也打 `vb6_ConvFailMark()`，并新增 `vb6_ArgConvertFailed()`（标记仍等于当前序号 =
+  本语句刚有一次实参转换失败）—— Mid/Left/Right/Chr（含 B 族）raise 前先问它，是就不报 5。
+- `[EMITC-SHAPE] k3060_set_variant_shape`：`bt = CByte("&H" & Mid(hx,1,2))` 的右值里有 Mid，
+  现在走整型临时量形 —— 针按前几刀的办法拆两截重钉。
+- 本机复现：`test_joinfilter` 87/87 行全对（`missing=0 extra=0`）、K3060 四条针全在场；
+  `-Category syntax` 仍 227/227；静态门 9 枚全 PASS。

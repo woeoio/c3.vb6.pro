@@ -8858,7 +8858,10 @@ if ($Category -in @("all", "run", "vbp")) {
     #   136 行那条循环体 (Left 的自有临时) / 定长串 String$ / ByRef 形参解引用目标
     #   / 借用侧 (变量赋给变量) 必须**留在**深拷贝 —— 它错了就是悬垂, 不是泄漏。
     Test-EmitcShape "strleak_emitc_move" @("$Tests\test_str_leak.bas") @(
-        'vb6_BSTR_AssignMove(&s, vb6_Left(gBig, 64));',
+        # 第八十六刀: Left 进了守卫白名单 ⇒ 这行变成“先算进 BSTR 临时量、再移动”，
+        # 针拆两截：取值那一行原样在场 + 目标吃临时量。
+        '? (vb6_Left(gBig, 64)) : NULL;',
+        'vb6_BSTR_AssignMove(&s, _av',
         'vb6_BSTR_AssignMove(&t, vb6_String((*n), 67));',
         'vb6_BSTR_AssignMove(&(*o), vb6_MakeTag((&(int32_t){3})));',
         'vb6_BSTR_Assign(&d, s);'
@@ -10482,7 +10485,10 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcShape "k3060_set_variant_shape" @("$Tests\k3060_setvariant\K3060.vbp") @(
         'vb6_VARIANT leak = vb6_VariantEmpty();',
         'leak = vb6_VariantFromValue(vb6_',
-        'bt = vb6_CByte(vb6_NumVal(_own_'
+        # 第八十六刀: `bt = CByte("&H" & Mid(...))` 的右值里有 Mid ⇒ 现在走整型临时量形，
+        # 针拆两截：取值那一行原样在场 + 目标吃临时量。
+        '? (vb6_CByte(vb6_NumVal(_own_',
+        ') bt = _av'
     )
     Test-EmitcAbsent "k3060_set_variant_lesion" @("$Tests\k3060_setvariant\K3060.vbp") @(
         '= leak;',
