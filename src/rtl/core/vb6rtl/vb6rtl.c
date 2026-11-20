@@ -785,6 +785,7 @@ BSTR vb6_ErrDescription(void) { return vb6_err.description; }
 void vb6_ErrClear(void) {
     vb6_err.number = 0; vb6_err.description = NULL; vb6_err.source = NULL;
     vb6_err.lastDllError = 0;
+    vb6_conv_fail_serial = -1;
 }
 
 // P21-27: Erl — 出错行号 (声明见 vb6rtl_class_com.h)
@@ -804,6 +805,16 @@ void vb6_ErrSetLastDllError(int32_t code) { vb6_err.lastDllError = code; }
 // 赋值站在可能 raise 的语句里先存一份序号，随后比一次：变了 == 这条语句 raise 过 ⇒ 不写目标。
 int32_t vb6_err_serial = 0;
 int32_t vb6_ErrSerial(void) { return vb6_err_serial; }
+
+// C30-11 第八十一刀: 「最近一次错误就是那次 Variant→String 转换失败」的标记。
+// 为什么需要它: `vb6_CStrStrict(Null)` 报 94 之后交回的是一只**空串**, 而 `vb6_Asc`
+// 对空串要报 5 —— BSTR 层分不出这两种空。赋值站的语句级中止能挡掉大部分, 但目标
+// 是 Variant 的那一形 (test_joinfilter 的 `nc = Asc(nv2)`) 不走那条守卫, 所以这里
+// 再给 RTL 一个确定性判据: 转换失败时记下**当时的序号**, Asc 只有在该序号仍等于
+// 当前序号 (即中间没有别的 raise) 时才[不]报 5。`Err.Clear` 把标记清掉 ——
+// 那是「这一次错误已经被程序处理完」的唯一信号。
+int32_t vb6_conv_fail_serial = -1;
+void vb6_ConvFailMark(void) { vb6_conv_fail_serial = vb6_err_serial; }
 
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
     ++vb6_err_serial;

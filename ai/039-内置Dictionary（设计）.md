@@ -3024,3 +3024,73 @@ W4b/W5b/W6b n=-1 err=94，C6/C7/C8 keep err=94（第七十九刀的九格未被�
 
 `n = Asc("")` ⇒ 5 仍留着（§11.56 末）：要 `vb6_Asc` 只在「本语句还没 raise 过」时报 5，
 即把错误序号带进 RTL 读侧。
+
+
+### 11.59 第八十一刀：`Asc("")` / `Asc(Empty)` ⇒ 5（目标不动，且不吞掉上游的 94）
+
+#### 一、真机口径
+
+`.temp/k81/asc.bas`（本机探针）与 `.temp/k78/lena.bas` 的 A/L 两组：
+
+| 格 | 源 | 真机 |
+|---|---|---|
+| A1 | `n = Asc(<Null>)` | `n` 不动，`Err.Number=94` |
+| A2 | `n = Asc("")` | `n` 不动，`Err.Number=5` |
+| L1 | `n = Asc("")`（`Err.Clear` 之后） | `n` 不动，5 |
+| L2 | `n = Asc(Empty)` | `n` 不动，5 |
+
+第七十八刀在 RTL 里直接 `ErrRaiseNumber(5)` 那一版被撤回（§11.55），原因是
+`Asc(<Null>)` 到 `vb6_Asc` 手上时**已经**被上游 `vb6_CStrStrict` 报过 94、交回的只是一只
+空串 —— 两个来路在 BSTR 层长得一模一样，于是 5 把 94 盖掉。本刀把这两条路分开。
+
+#### 二、三处改动（缺一不可）
+
+1. **RTL 报 5**：`vb6_Asc`（`vb6rtl_string.c:359`）空串/NULL ⇒ `vb6_ErrRaiseNumber(5); return 0;`。
+2. **赋值站的语句级守卫覆盖 Asc 族**（`cgen_assign.cpp`）：判据里加 `asc/ascb/ascw`。
+   但第七十九刀那形「先比序号、再执行 store」**挡不住它** —— `Asc` 自己 raise 发生在
+   store 那一行的表达式内部，号是在 store 之后才变的。所以整型标量目标改走**临时量形**：
+
+   ```c
+   const int32_t _e1 = vb6_ErrSerial();
+   int32_t _av2 = (_e1 == vb6_ErrSerial()) ? (vb6_Asc(_own_2)) : (int32_t)0;
+   if (_e1 == vb6_ErrSerial()) n = _av2;
+   ```
+
+   两条性质都在这一形里：① 右值先算进临时量（raise 之后就能判）；② 三元的第一支才真跑
+   `vb6_Asc` —— 上游转换已经报过 94 时，这里的调用**根本不发生**，5 也就没机会盖 94。
+   （第一版少了那个三元，实测 `A1` 直接答 `err=5` —— 是本刀当场量出来的红，不是推测。）
+   `cgen_state.inc` 为此加 `stmtAbortTmp_` / `stmtAbortTmpType_`（`StmtAbortScope` 一并清）。
+3. **目标不是整型标量那一形**：`nc = Asc(nv2)`（`nc` 是 Variant）发不出第 2 条的守卫 ——
+   `test_joinfilter` 的 `JF-nullasc` 当场从 94 掉到 5。RTL 侧补一枚确定性判据：
+   `vb6_CStrStrict` 报 94 之后 `vb6_ConvFailMark()`（记下当时的错误序号），`vb6_Asc` 见空串
+   且该序号**仍等于**当前序号 ⇒ 判定「这只是转换失败交回来的」，不再报 5；
+   `vb6_ErrClear` 把标记清掉（那是「这次错误已被程序处理完」的唯一信号）。
+   `.temp/manifest` 的读侧不受影响：`vb6_err_serial` / `vb6_conv_fail_serial` 声明进
+   `vb6rtl_array.h`（`check_rtl_proto_arity` 已把它算进 1780 对签名）。
+
+#### 三、读数
+
+- `A1 Asc(Null) n=-1 err=94`、`A2 Asc("") n=-1 err=5`、`L1/L2 = n=-1 err=5`。
+- `D1–D4`（第八十刀的 Len 两档）与 `W4..W6b` / `C6..C8` 九格**一字未动**。
+- `test_joinfilter`：`JF-nullasc=94`（另 20 余格 null* 不动）。
+
+#### 四、门
+
+- `-Category syntax`：227/227。
+- `-Category vbp -VbpShard 9 -VbpShardTotal 12`：55 PASS / 2 FAIL。
+  `[VBP] c29listview` 是本机已知非回归红；`[COMPILE-FAIL] iface_multi_incomplete_negcontrol`
+  在同一 HEAD 手工复跑得 `VB3012` + rc=1 + 无 exe（正是该针要的），归 runner 争用。
+- 静态门 8 枚全 PASS：`variant_slot_store`（R7=3 保住）、`conv_strict_parse`（cells=4）、
+  `builtin_slot_returns`、`rtl_naked_names`、`rtl_proto_arity`、`owned_temp_keeps`、
+  `implicit_cstr_station`、`emitted_declared`。
+- 发码清单：6 行变化（`tests/Charts 2020/Proyecto1.vbp`、同目录 `ucTreeMaps/Proyecto1.vbp`、
+  `tests/dbgdlg/dbgdlg.vbp`、`tests/test_str_cnum_assign.bas`、`tests/VBFlexGridDemo/Common/Common.bas`、
+  `tests/VBFlexGridDemo/VBFlexGridDemo.vbp`），逐份看过：只多出守卫那两三行（+121..+328 字节）。
+  同批把第八十刀按本机数登记的 5 行机器侧差（guisample×3 / TeeChart / ctrlmscomm）
+  **换回 CI run `44631595167` 的工件值**，本机复算于是只剩这 5 行红（预期，CI 侧 750/750）。
+
+#### 五、遗留
+
+`String` 目标的形（`s = CStr(Asc(...))`）仍走第七十九刀那套 `if (...) AssignMove else Free`
+的**双算**：`Asc` 会在 else 分支再跑一次（`Err.Number` 仍是 5、目标仍不动，只是多发一次）。
+它与 `s = CStr(UBound(...))` 同形同口径，本刀不扩，留给「String 目标也吃临时量」那一刀。

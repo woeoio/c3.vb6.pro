@@ -453,6 +453,10 @@ void vb6_ErrRaiseNumber(int32_t errNum);
 // C30-11 第七十九刀 (§B227): 错误序号 —— 每次 vb6_ErrRaise 自增。赋值站用它判
 // 断「本语句里 raise 过吗」：变了就不写目标（VB6 的语句级中止）。
 int32_t vb6_ErrSerial(void);
+// C30-11 第八十一刀: Variant→String 转换失败的标记（与错误序号同源）。
+void vb6_ConvFailMark(void);
+extern int32_t vb6_err_serial;
+extern int32_t vb6_conv_fail_serial;
 
 // 全局错误处理状态 (由cgen生成的代码直接使用)
 extern int32_t vb6_err_resume_next;  // On Error Resume Next 标志

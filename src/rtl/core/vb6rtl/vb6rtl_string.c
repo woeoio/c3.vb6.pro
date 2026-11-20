@@ -357,13 +357,20 @@ BSTR vb6_Chr(int32_t code) {
 }
 
 int32_t vb6_Asc(BSTR s) {
-    // C30-11 第七十八刀的回退（原案已撤，见台账 §11.55）：这里本想对空串报 **5**
-    // (真机 `Asc("")` = 5)，但 `Asc(<Null>)` 那一格到达这里时**已经**被上游的
-    // `vb6_CStrStrict` 报过 94、交回的就是一只空串 —— 两个来源在 BSTR 层不可分，
-    // 在这里再报 5 会把 94 盖掉（GA 实测：test_joinfilter 的 JF-nullasc 从 94 变 5）。
-    // 要真分开，得靠「语句级中止」：转换一 raise，整条语句就停，Asc 根本不跑 ——
-    // 那一刀落地后再把空串报 5 补上。
-    if (!s || vb6_BSTR_Len(s) == 0) return 0;
+    // C30-11 第八十一刀: 空串 / NULL ⇒ 错误 5 (Invalid procedure call or argument)。
+    // 第七十八刀试过又撤的那一版 (台账 §11.55) 会把上游 `vb6_CStrStrict(Null)` 已报的
+    // 94 盖成 5 —— 现在不会再发生: 赋值站的**语句级中止**守卫 (第七十九刀) 把
+    // `n = Asc(<Variant>)` 发成 `if (_eN == vb6_ErrSerial()) n = vb6_Asc(...)`,
+    // 转换一 raise, 这一发调用根本不跑 (台账 §11.56 二)。而 `n = Asc("")` 这一格
+    // 本刀把 Asc 族也纳入守卫判据 ⇒ 报 5 之后目标不写, 与真机同形。
+    // 目标不是整型标量的形 (`nc = Asc(nv2)`, nc 是 Variant) 发不出那条守卫 —— 那一路
+    // 靠 `vb6_conv_fail_serial`: 这只空串是刚才那次转换失败交回来的 ⇒ 不再报 5。
+    // `Err.Clear` 清标记 (vb6_ErrClear)，旧痕迹不会无限期流传。
+    if (!s || vb6_BSTR_Len(s) == 0) {
+        if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+        vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     return (int32_t)s[0];
 }
 

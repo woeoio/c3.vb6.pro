@@ -486,6 +486,10 @@ BSTR vb6_CStrStrict(vb6_VARIANT x) {
     if (x.vt == vb6_vtNull) {
         vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
                      vb6_BSTR_FromStr(L"Invalid use of Null"));
+        // 第八十一刀: 给读侧（vb6_Asc）一个可判的痕迹 —— 这只空串是「转换失败」
+        // 交回来的，不是程序里真的空了。目标不是整型标量、发不出语句级中止守卫的
+        // 那一形（`nc = Asc(nv2)`，nc 是 Variant）靠这个标记把 94 与 5 分开。
+        vb6_ConvFailMark();
         return vb6_BSTR_Empty();  /* 不可达 */
     }
     return vb6_CStr(x);

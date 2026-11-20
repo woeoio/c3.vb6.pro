@@ -20,6 +20,23 @@ namespace vb6c3 {
 void CCodeGen::emitGuardedStore(const std::string& line) {
     // 本语句有守卫 ⇒ 只有「序号没变」才写目标（变了 = 本语句里 raise 过，VB6 语句级中止）。
     if (stmtAbortGuard_.empty()) { c_.emitLine(line); return; }
+    if (stmtAbortTmp_ && !stmtAbortTmpType_.empty()) {
+        // 右值自己会 raise（Asc/AscB/AscW 对空串报 5）：先算进临时量，再拿序号判是否写目标。
+        // 只接二元形 "<target> = <expr>;"，接不上就退回旧行为（宁可不改形状，不造错码）。
+        const std::string sep = " = ";
+        const size_t eq = line.find(sep);
+        if (eq != std::string::npos && line.size() > 2 && line.back() == ';') {
+            const std::string tgt = line.substr(0, eq);
+            const std::string rhs = line.substr(eq + sep.size(), line.size() - eq - sep.size() - 1);
+            const std::string tmp = "_av" + std::to_string(stmtAbortSeq_);
+            // 右值**先算**，但只在本语句还没 raise 时算 —— 否则 `Asc(<Null>)` 的上游 94
+            // 会被 Asc 自己那句 5 盖掉（第七十八刀撤回的正是这个）。
+            c_.emitLine(stmtAbortTmpType_ + " " + tmp + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + rhs + ") : (" + stmtAbortTmpType_ + ")0;");
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) " + tgt + " = " + tmp + ";");
+            return;
+        }
+    }
     c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) " + line);
 }
 
@@ -36,9 +53,15 @@ void CCodeGen::visit(AssignmentStmt& node) {
     // 因为它的保存/恢复要连所有权一起算）。
     struct StmtAbortScope {
         CCodeGen* g;
-        ~StmtAbortScope() { g->stmtAbortGuard_.clear(); }
+        ~StmtAbortScope() {
+            g->stmtAbortGuard_.clear();
+            g->stmtAbortTmp_ = false;
+            g->stmtAbortTmpType_.clear();
+        }
     } stmtAbortScope{this};
     stmtAbortGuard_.clear();
+    stmtAbortTmp_ = false;
+    stmtAbortTmpType_.clear();
     {
         const Vb6Type tgtT79 = node.target ? inferExprType(*node.target) : Vb6Type::Unknown;
         const bool tgtInt79 = tgtT79 == Vb6Type::Integer || tgtT79 == Vb6Type::Long
@@ -47,7 +70,24 @@ void CCodeGen::visit(AssignmentStmt& node) {
         bool mayRaise79 = false;
         if (tgt79179 && node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr) {
             auto& call79 = static_cast<IndexOrCallExpr&>(*node.value);
+            // 第八十一刀: Asc/AscB/AscW 自己会在**空串**上报 5 —— 那条路不靠变体转换，
+            // 所以上面的实参档判据看不见它。不把这三枚算进来的话，`n = Asc("")` 会是
+            // 「先报 5、再把目标写成 0」（真机: 目标不动）。
+            if (call79.callee && call79.callee->kind == ASTNodeKind::IdentifierExpr) {
+                const std::string cn79 =
+                    Symbol::toLower(static_cast<IdentifierExpr&>(*call79.callee).name);
+                if (cn79 == "asc" || cn79 == "ascb" || cn79 == "ascw") {
+                    mayRaise79 = true;
+                    // 它 raise 在**调用内部**（不是前置转换）⇒ 这一档要发临时量形。
+                    // 只给整型标量目标发（BSTR 目标的右值是数值时还要过串档，不在此列）。
+                    if (tgtInt79) {
+                        stmtAbortTmp_ = true;
+                        stmtAbortTmpType_ = mapType(tgtT79);
+                    }
+                }
+            }
             for (const auto& a79 : call79.positional) {
+                if (mayRaise79) break;
                 if (!a79) continue;
                 const Vb6Type at79 = inferExprType(*a79);
                 // Variant 实参要过 vb6_CStrStrict；`Null`/`Empty` 字面量也一样（转串就是 94）。

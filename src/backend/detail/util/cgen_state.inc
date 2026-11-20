@@ -760,6 +760,11 @@
     // 写目标前比一次：序号变了 == 本语句 raise 过 ⇒ 不写。空串 = 本语句无守卫。
     std::string stmtAbortGuard_;
     int stmtAbortSeq_ = 0;
+    // 第八十一刀: 有些右值是**自己会 raise 的调用**（Asc/AscB/AscW 对空串报 5）——
+    // 「先比序号、再执行 store」挡不住它（号是 store 那一行才变的）。这一档改成
+    // 「先把右值算进临时量、再拿序号判是否写目标」，与真机「报错就不赋值」同形。
+    bool stmtAbortTmp_ = false;
+    std::string stmtAbortTmpType_;
     void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。
