@@ -3533,3 +3533,53 @@ E1–E10 逐格与真机一致（见上表「改后」列）。第八十七刀�
   Variant → String 仍走**宽松**的 `vb6_CStr`（Null 折成空串），raise 压根没发生，所以守卫也无从生效。
   真机是 `94 + 目标不动`。这是**转换口径**那一刀，另列 backlog。
 - `Len` 两档仍在 backlog。
+
+### 11.68 第九十刀：定长串目标上的 `94`（Variant → String 走的是宽松口）
+
+#### 一、病（`.temp/k90/strict.bas` + `.temp/k89/fixed.bas`，x64，改前 = 第八十九刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `u.f = CStr(Null)`（UDT `String * 5` 字段） | `f=[     ] err=0` | `f=[keep ] err=94` | keep, 94 |
+| T2 | `g = CStr(Null)`（模块级 `String * 5`） | `g=[     ] err=0` | `g=[keep ] err=94` | keep, 94 |
+| T3 | `u.f = v`（v = Null） | `f=[     ] err=0` | `f=[keep ] err=94` | keep, 94 |
+| T4 | `g = v`（v = Null） | `g=[     ] err=0` | `g=[keep ] err=94` | keep, 94 |
+| T5 | `v = 42; u.f = v / g = v` | `42   `（err=0） | `42   ` | `42   ` |
+| T7 | `v = "abc"; u.f = v` | `abc  ` | `abc  ` | `abc  ` |
+| T8 | `v = 7; u.f = CStr(v) / g = CStr(v)` | `7    ` | `7    ` | `7    ` |
+| T9 | `v = "abcdefg"; u.f = v` | `abcde` | `abcde` | `abcde` |
+
+成因：严格赋值站（第七十三刀 `valueIsVariant` / 第七十四刀 `s = CStr(<Variant>)`）两处都带
+`fixedLen.empty()` 的前提，定长串目标因此整档绕开 —— 走的是宽松 `vb6_CStr` / `vb6_VariantToString`
+（`Null` 折成空串），所以 **raise 压根没发生**，第八十九刀那道中止门也就无从生效。
+
+#### 二、改法
+
+1. RTL（`vb6rtl_string.c` + `vb6rtl_builtin.h`）新增两枚**原子**出口，口径与
+   `vb6_BSTR_AssignFromVariant` 一致（Null ⇒ 94、目标一字不动）：
+   - `vb6_FixedStrAssignFromVariant(char* buf, int32_t cap, vb6_VARIANT src)` —— UDT 内联 `char[N]`；
+   - `vb6_LSetFromVariant(BSTR* target, int32_t cap, vb6_VARIANT src)` —— 模块级 `String * N`（BSTR 模型）。
+   两枚内部都是「Null 先拦 → 否则 `vb6_CStr` 折串 → 既有定长写侧（右补空格 / 右截断）→ 收回折串临时」。
+2. 发射侧（`emitBstrSlotStore`）：① 第七十四刀那条 `CStr(<Variant>)` 识别去掉 `fixedLen.empty()`
+   前提；② 严格赋值站之后补一条定长串分支，按 UDT 字段 / 裸槽分别发上面两枚出口。
+   守卫那行（`_eN`）照旧发，但这两枚出口自己是原子的（raise 即返回），所以中止不依赖它。
+
+#### 三、读数
+
+`.temp/k90/strict.bas` 九格全对（见上表）；第八十九刀的 `.temp/k89/fixed.bas` 十三格复跑：
+T7/T8 由 `err=0` 变 `err=94`（目标仍 `keep`），T1/T2/T5/T6 仍是 `keep/5`，对照格不变。
+
+#### 四、登记
+
+- 发码清单全量重算 750 行，净变 **1 行**（`tests/GifcontrolSource/prjNewAniGif.vbp`）。
+- `check_owned_temp_keeps`：新增两枚 RTL 出口 ⇒ 快照 +2 行
+  （`+vb6_FixedStrAssignFromVariant|2`、`+vb6_LSetFromVariant|2`，两行都是 `keeps_pointer=0`、
+  `handoff-reads:vb6_CStr`）—— 归因后 `-Bless`；`rtl_proto_arity` 由 1781 变 1783 对。
+
+#### 五、门
+
+- `-Category syntax`：**227/227**；静态门 9 枚全 PASS。
+
+#### 六、本刀没做的
+
+- `Len` 两档仍在 backlog。
