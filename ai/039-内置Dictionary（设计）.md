@@ -3489,3 +3489,47 @@ E1–E10 逐格与真机一致（见上表「改后」列）。第八十七刀�
 
 - `InStrB` 的空 needle / 越界两格没有真机对照（VBScript 无 InStrB）。
 - 定长串目标（`udtFixedField`/`fixedLen`）、`Len` 两档仍在 backlog。
+
+### 11.67 第八十九刀：定长串目标（UDT `String * N` 字段 / 模块级 `String * N`）没有语句级中止
+
+#### 一、病（`.temp/k89/fixed.bas`，x64，改前 = 第八十八刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `u.f = Left("abc", -1)`（UDT 定长字段） | `f=[     ] err=5` | `f=[keep ] err=5` | keep, 5 |
+| T2 | `g = Left("abc", -1)`（模块级 `String * 5`） | `g=[     ] err=5` | `g=[keep ] err=5` | keep, 5 |
+| T5 | `u.f = Chr(-1)` | `f=[     ] err=5` | `f=[keep ] err=5` | keep, 5 |
+| T6 | `g = Chr(-1)` | `g=[     ] err=5` | `g=[keep ] err=5` | keep, 5 |
+| T3/T4 | 对照 `"hi"` | `hi   ` | 不变 | `hi   ` |
+| T9/T10 | 对照 截断/补空格 | `abcde` / `ab   ` len=5 | 不变 | 同 |
+
+成因：守卫**已经发了**（`const int32_t _e0 = vb6_ErrSerial();`），但定长串那两条发码支根本不看它 ——
+`vb6_FixedStrAssignFree(u.f, 5, vb6_Left(...))` / `vb6_BSTR_AssignMove(&g, vb6_LSetFree(..., 5))`
+照写，于是「报 5 + 目标被抹成空格」。普通 BSTR 槽（第七十九/八十三刀）早就两半齐全，定长串这一档漏了。
+
+#### 二、改法（`emitBstrSlotStore`，`cgen_util_ctrl.cpp`）
+
+两条定长串分支各补一道与普通槽**同构**的门：右值**只算一次**进临时量，再拿算完之后的序号决定写不写。
+
+- UDT 定长字段：`BSTR _avN = (guard == vb6_ErrSerial()) ? (rhs) : NULL;` +
+  `if (…) vb6_FixedStrAssignFree/Assign(u.f, N, _avN); [else vb6_BSTR_Free(_avN);]`
+  （自有串那一支要 else 收回，借来的没有可回收的东西）
+- 模块级定长串：`BSTR _avN = (…) ? (vb6_LSet(Free)(rhs, N)) : NULL;` +
+  `if (…) vb6_BSTR_AssignMove(&g, _avN); else vb6_BSTR_Free(_avN);`
+
+#### 三、登记（发码清单）
+
+全量重算 750 行，净变 **1 行**（`tests/Charts 2020/ucTreeMaps/Proyecto1.vbp`）——
+语料里「定长串目标 + 会 raise 的右值」本来就少。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- 静态门 9 枚全 PASS；`check_owned_temp_keeps` PASS（本刀不动 RTL，K5 无漂移）。
+
+#### 五、本刀没做的
+
+- T7/T8：`u.f = CStr(Null)` / `g = CStr(Null)` 改前改后都是 `[     ] err=0` —— 定长串目标上
+  Variant → String 仍走**宽松**的 `vb6_CStr`（Null 折成空串），raise 压根没发生，所以守卫也无从生效。
+  真机是 `94 + 目标不动`。这是**转换口径**那一刀，另列 backlog。
+- `Len` 两档仍在 backlog。
