@@ -144,6 +144,12 @@ std::pair<CompileOptions, int> Driver::parseArgs(int argc, char* argv[]) {
         else if (arg == "--compat-check") {
             opts.compatCheck = true;
         }
+        else if (arg == "--dump-com-sigs") {
+            // C30-11 第十一刀（只读诊断）: 把已加载类型库的成员签名逐条打出来。
+            // 下一参数可选: 过滤子串（如 "Scripting"），不写则全打。
+            opts.dumpComSigs = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') opts.dumpComSigsFilter = argv[++i];
+        }
         else if ((arg == "-ComMode" || arg == "--com-mode") && i + 1 < argc) {
             // 免注册 COM 运行期模式。direct = 既有直加载（逐字不变）；
             // manifest = ActCtx（缺 identity/无内嵌清单即明确失败，不回退）；

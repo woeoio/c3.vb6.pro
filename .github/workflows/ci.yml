@@ -180,7 +180,34 @@ jobs:
           # 同理：sccache 装不上时（best-effort 失败）USE_SCCACHE 为空，这一次也会把残留值清掉。
           $launcher = ""
           if ($env:USE_SCCACHE -and (Test-Path $env:USE_SCCACHE)) { $launcher = $env:USE_SCCACHE }
-          cmake -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher"
+          # 2026-11-19（修 GA run 44521823896 的 configure 红）：c3build 缓存**不是**本提交的 key 时，
+          # actions/cache 的 restore-keys 会兜底恢复**另一台镜像**留下的构建目录；它的 CMakeCache.txt
+          # 钉着那台镜像的绝对 cl.exe 路径（实录：`...\VS\18\Enterprise\VC\Tools\MSVC\14.51.36231\
+          # bin\Hostx64\x64\cl.exe`）。镜像一换工具集版本目录，这条路径就不存在了，cmake 4.5 在
+          # `project()` 处直接报 "is not a full path to an existing compiler tool" ⇒ configure 红，
+          # 与源码无关（日志里 "The CXX compiler identification is unknown" 就是它的先导句）。
+          # 修法：编译器**每次显式给值**，取自本次 vcvars 导出的 VCToolsInstallDir。命令行 -D 覆盖缓存项
+          # —— 本机已实测：把 CMakeCache.txt 改成不存在的 cl.exe 路径后，加这条 -D 重配即恢复
+          # （identification 重新走一遍，rc=0）。
+          $clPath = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\cl.exe"
+          if (-not (Test-Path $clPath)) { throw "cl.exe not found under VCToolsInstallDir=$env:VCToolsInstallDir" }
+          # 恢复回来的构建目录可能整份都是另一台镜像的：CMakeCache 里**不止编译器**一项钉着旧路径
+          # （linker / ar 同样在里面）。只覆盖编译器能过 configure，却可能在链接期变成
+          # "cannot find file" ⇒ 这种目录整个作废：cmake --fresh（文档语义：丢掉 CMakeCache.txt
+          # 与 CMakeFiles，不动源码、不动 .build）。路径相同则照旧走快速路。
+          $cmakeArgs = @()
+          $cacheFile = Join-Path $buildDir "CMakeCache.txt"
+          if (Test-Path $cacheFile) {
+            $cachedCl = (Select-String -Path $cacheFile -Pattern '^CMAKE_CXX_COMPILER:[A-Z]+=(.+)$' | Select-Object -First 1)
+            if ($cachedCl) {
+              $cachedClPath = $cachedCl.Matches[0].Groups[1].Value.Trim().Replace('/', '\')
+              if ($cachedClPath -ne $clPath) {
+                Write-Host "c3build cache from another image ($cachedClPath) -> cmake --fresh"
+                $cmakeArgs += '--fresh'
+              }
+            }
+          }
+          cmake @cmakeArgs -S . -B $buildDir -G Ninja -DVB6C3_ENABLE_LLVM=OFF -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CXX_COMPILER=$clPath" "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher"
           if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
           cmake --build $buildDir
           if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }

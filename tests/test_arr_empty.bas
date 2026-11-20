@@ -51,6 +51,7 @@ Public Sub Main()
     EaUdtWith 5
     EaAfterErase 6
     EaLoop 7
+    UbVariantStation
 
     Dim u() As Long
     On Error GoTo Miss
@@ -164,4 +165,59 @@ Private Sub EaLoop(ByVal n As Long)
         sum = sum + v(i)
     Next i
     Debug.Print "EA-ea-loop="; sum
+End Sub
+
+' ============================================================
+' 账 #305 §B172 (第七十刀): UBound/LBound 的**变体实参站**。
+'   真 VB6 IDE 读数: UBound(Null) / LBound(Null) / UBound(Empty) /
+'   UBound(装 5 的 Variant) 四格全是 13 (Type mismatch); C3 之前走宽松提取,
+'   非数组一律交回 NULL, 到 vb6_UBound 里报成 9。
+'   负控两枚:
+'     UB-arr / UB-larr —— 真数组照旧给 3 / 1 (检查若误伤就红在这里);
+'     UB-unalloc       —— **未分配的真动态数组仍为 9** (那条路首参不是槽,
+'                         不经过变体站, 本刀没动它)。
+' ============================================================
+Private Sub UbVariantStation()
+    Dim nv As Variant
+    Dim r As Long
+    Dim a(1 To 3) As Long
+    Dim d() As Long
+    a(1) = 7
+    a(2) = 8
+    a(3) = 9
+
+    On Error Resume Next
+
+    nv = Null
+    Err.Clear
+    r = UBound(nv)
+    Debug.Print "UB-null="; Err.Number
+
+    Err.Clear
+    r = LBound(nv)
+    Debug.Print "UB-lnull="; Err.Number
+
+    nv = Empty
+    Err.Clear
+    r = UBound(nv)
+    Debug.Print "UB-empty="; Err.Number
+
+    nv = 5
+    Err.Clear
+    r = UBound(nv)
+    Debug.Print "UB-scalar="; Err.Number
+
+    Err.Clear
+    r = UBound(a)
+    Debug.Print "UB-arr="; r; "/"; Err.Number
+
+    Err.Clear
+    r = LBound(a)
+    Debug.Print "UB-larr="; r; "/"; Err.Number
+
+    Err.Clear
+    r = UBound(d)
+    Debug.Print "UB-unalloc="; Err.Number
+
+    On Error GoTo 0
 End Sub

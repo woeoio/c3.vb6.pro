@@ -30,6 +30,15 @@ void CCodeGen::visit(ForStmt& node) {
         step = emitForExpr092n(*node.step);
     }
 
+    // 账 #305 §B219 (第七十一刀): 终止值/步进若交回的是**整只 VARIANT 槽**
+    // (`For i = 1 To Len(nv)` 的变体位、任何 Variant 表达式), 裸写进
+    // `int32_t <var>_end = <槽>` 就是 C2440。只用既有那枚折箱口 (toLongIfVariant),
+    // 非 Variant 文本原样返回 ⇒ 其余语句逐字节不变。两条支路 (Variant 循环变量 /
+    // 普通循环变量) 共用这一对已折好的值。
+    const std::string endLong = toLongIfVariant(end, node.end.get());
+    const std::string stepLong =
+        toLongIfVariant(step, node.step ? node.step.get() : nullptr);
+
     std::string var = cIdent(node.varName);
 
     // Fix 022: For 循环变量若为类成员必须以 me->var 形式 emit.
@@ -78,8 +87,8 @@ void CCodeGen::visit(ForStmt& node) {
         collectForBodyLabels(node.body, forSplitLabelStack_.back());
         c_.emitLine("{");
         c_.indent();
-        c_.emitLine("int32_t " + var + "_end = " + end + ";");
-        c_.emitLine("int32_t " + var + "_step = " + step + ";");
+        c_.emitLine("int32_t " + var + "_end = " + endLong + ";");
+        c_.emitLine("int32_t " + var + "_step = " + stepLong + ";");
         c_.emitLine(varAcc + " = vb6_VariantFromValue(" + start + ");");
         c_.emitLine("if (" + var + "_step > 0) {");
         c_.indent();
@@ -117,8 +126,8 @@ void CCodeGen::visit(ForStmt& node) {
     collectForBodyLabels(node.body, forSplitLabelStack_.back());
     c_.emitLine("{");
     c_.indent();
-    c_.emitLine("int32_t " + var + "_end = " + end + ";");
-    c_.emitLine("int32_t " + var + "_step = " + step + ";");
+    c_.emitLine("int32_t " + var + "_end = " + endLong + ";");
+    c_.emitLine("int32_t " + var + "_step = " + stepLong + ";");
     c_.emitLine(varAcc + " = " + start + ";");
     c_.emitLine("if (" + var + "_step > 0) {");
     c_.indent();

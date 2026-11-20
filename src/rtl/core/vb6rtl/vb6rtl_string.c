@@ -357,7 +357,20 @@ BSTR vb6_Chr(int32_t code) {
 }
 
 int32_t vb6_Asc(BSTR s) {
-    if (!s || vb6_BSTR_Len(s) == 0) return 0;
+    // C30-11 第八十一刀: 空串 / NULL ⇒ 错误 5 (Invalid procedure call or argument)。
+    // 第七十八刀试过又撤的那一版 (台账 §11.55) 会把上游 `vb6_CStrStrict(Null)` 已报的
+    // 94 盖成 5 —— 现在不会再发生: 赋值站的**语句级中止**守卫 (第七十九刀) 把
+    // `n = Asc(<Variant>)` 发成 `if (_eN == vb6_ErrSerial()) n = vb6_Asc(...)`,
+    // 转换一 raise, 这一发调用根本不跑 (台账 §11.56 二)。而 `n = Asc("")` 这一格
+    // 本刀把 Asc 族也纳入守卫判据 ⇒ 报 5 之后目标不写, 与真机同形。
+    // 目标不是整型标量的形 (`nc = Asc(nv2)`, nc 是 Variant) 发不出那条守卫 —— 那一路
+    // 靠 `vb6_conv_fail_serial`: 这只空串是刚才那次转换失败交回来的 ⇒ 不再报 5。
+    // `Err.Clear` 清标记 (vb6_ErrClear)，旧痕迹不会无限期流传。
+    if (!s || vb6_BSTR_Len(s) == 0) {
+        if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+        vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     return (int32_t)s[0];
 }
 
@@ -823,3 +836,61 @@ BSTR vb6_Partition(int64_t number, int64_t start, int64_t stop, int64_t interval
     return vb6_BSTR_FromStr(buf);
 }
 
+
+// ============================================================
+// C30-11 第七十一刀: Len/Trim/LTrim/RTrim/UCase/LCase 的「Null 进、Null 出」变体位
+//
+// 真 VB6 IDE 读数 (tests/vb6probe/NullFamilyProbe.bas, 2026-11-19 复量):
+//   A1 Len(Null)  / B1 Trim(Null) / B4 LTrim(Null) / B5 RTrim(Null) /
+//   B6 UCase(Null) / B7 LCase(Null) —— 六格全是 **Null**、Err **0**。
+// C3 改前这六格都报 94: 实参站把它们当成「String 形参收 Variant」的通用格,
+// 先折 vb6_CStrStrict(Null) ⇒ 94 (第六十二刀的口径), 而那一条对 Asc/Replace/
+// Join/Split 是对的, 对 Len/Trim 这一族不是 —— 它们**不把 Null 折成串**, 而是
+// 把 Null 原样交回去。字节/数值口径 (Len(Empty)=0 等) 仍走 base 函数。
+//
+// 交付档: Len 答 Variant(Long) —— 与 AbsV/IntV 同档; Trim 一族答 Variant(String)。
+// 发码侧只在实参是整只 Variant 槽时走这里 (见 cgen_expr_call_arg_variant.inc),
+// 所以 BSTR 形参那条老路 (含它自己的 94) 一字未动。
+// ============================================================
+vb6_VARIANT vb6_LenV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantLong(vb6_Len(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_TrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Trim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_LTrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_LTrim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_RTrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_RTrim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_UCaseV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_UCase(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_LCaseV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_LCase(vb6_VariantToString(v)));
+}
+
+// C30-11 第七十三刀 (§B221): String 目标收 Variant 右值的唯一出口。
+// 读数 (tests/vb6probe/NullFamilyProbe.bas E6/E7/E8): `s = Trim(Null)` / `s = Len(Null)` /
+// `s = Null` 在真 VB6 里都是 **94**，且 s **还是赋前的那个值** —— 赋值根本没发生。
+// 所以不能套 vb6_CStrStrict 再赋: 它 raise 后交回空串，写进目标就变成「94 + 目标被清空」。
+void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src) {
+    if (src.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    vb6_BSTR_AssignMove(target, vb6_CStr(src));
+}

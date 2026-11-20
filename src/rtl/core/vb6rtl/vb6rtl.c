@@ -306,6 +306,13 @@ void vb6_Free(void* ptr) {
 
 int32_t vb6_VariantToLong(vb6_VARIANT v) {
     switch (v.vt) {
+        // C30-11 第六十三刀: Null 进 Long 提取 = **94**（VB6 口径）。这一枚是所有
+        // “Variant → 整数”的形参站/长度站（Chr / Mid / Left / Right / Space / String /
+        // InStr start 等）共用的那道门，Null 以前落 default 静默给 0。
+        case vb6_vtNull:
+            vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                         vb6_BSTR_FromStr(L"Invalid use of Null"));
+            return 0;  /* 不可达 */
         case vb6_vtBoolean: return v.boolVal ? -1 : 0;
         case vb6_vtByte:    return (int32_t)v.bVal;
         case vb6_vtInteger: return (int32_t)v.iVal;
@@ -505,6 +512,40 @@ struct vb6_SafeArray1D* vb6_VariantToSafeArray1D(vb6_VARIANT v) {
     }
     /* Variant 不持有数组时返回 NULL (与 VB6 行为一致; 调用方需 NULL 检查) */
     return NULL;
+}
+
+// 账 #305 §B172 (第七十刀): UBound/LBound 的变体实参站。
+//   真 VB6 IDE 读数 (2026-11-19 实测): `UBound(nv)` / `UBound(Empty)` / `UBound(nv5)`
+//   三格 (nv=Null, nv5 装 5) 全是 **13 Type mismatch**, 而 C3 走上面那枚宽松提取 ——
+//   非数组一律交回 NULL, 再由 UBound 报 **9 Subscript out of range**。
+//   宽松版不能就地改: 它还被「Variant 里的 Byte()/PropertyBag」等路径当作探测用
+//   (vb6_VariantToByteArray 的注释、vb6_Filter 的源探测)。所以另开一枚**严格**提取,
+//   只在 UBound/LBound 的变体实参站用: 不是数组 (含 Null / Empty / 标量) ⇒ 抛 13。
+//   注意**真数组但未分配**不走这里: 那条路首参是数组本体, 不进变体站, 仍旧 9 (口径未动)。
+struct vb6_SafeArray1D* vb6_VariantToSafeArray1DStrict(vb6_VARIANT v) {
+    if ((v.vt & vb6_vtArray) && v.parray) {
+        return v.parray;
+    }
+    // 抛完 13 **必须交回一枚能用的空描述符**，不能交 NULL。
+    //   理由（实测踩到）: vb6_ErrRaise 在 `On Error Resume Next` 下**只记号不跳转**
+    //   （见 vb6rtl.c 的 `if (vb6_err_resume_next) return;`），于是本函数会继续返回。
+    //   返回 NULL 的话调用方 vb6_UBound 自己又抛一个 **9**，把刚记下的 13 盖掉 ——
+    //   探针实测 D1..D4 全报 err=9 正是这条。交回空 1D 描述符（cDims=1 + 本 RTL 标记、
+    //   uBound=-1）后 UBound/LBound 直接读边界值、不再发错，Err 保住 13。
+    static struct vb6_SafeArray1D vb6_saStrictEmpty1D = {
+        1,                     /* cDims   */
+        VB6_SA1D_FFEATURES,    /* fFeatures (C3 标记, vb6_SaIs1D 认它) */
+        (int32_t)sizeof(vb6_VARIANT), /* elemSize */
+        vb6_sa_variant,        /* elemType */
+        NULL,                  /* data     */
+        0,                     /* count    */
+        0,                     /* lBound   */
+        -1,                    /* uBound   */
+        0                      /* isDynamic */
+    };
+    vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                 vb6_BSTR_FromStr(L"Type mismatch"));
+    return &vb6_saStrictEmpty1D;
 }
 
 // Fix 029: vb6_VariantToObject 的右值兼容版本.
@@ -744,6 +785,7 @@ BSTR vb6_ErrDescription(void) { return vb6_err.description; }
 void vb6_ErrClear(void) {
     vb6_err.number = 0; vb6_err.description = NULL; vb6_err.source = NULL;
     vb6_err.lastDllError = 0;
+    vb6_conv_fail_serial = -1;
 }
 
 // P21-27: Erl — 出错行号 (声明见 vb6rtl_class_com.h)
@@ -758,7 +800,24 @@ BSTR vb6_ErrSource(void) { return vb6_err.source; }
 int32_t vb6_ErrLastDllError(void) { return vb6_err.lastDllError; }
 void vb6_ErrSetLastDllError(int32_t code) { vb6_err.lastDllError = code; }
 
+// C30-11 第七十九刀 (§B227): 错误序号。VB6 的 On Error Resume Next 只中止**当前语句**，
+// 出错前已求值的保留、赋值不发生；C3 现在把转换失败之后的赋值照样执行 (n=0 / s="")。
+// 赋值站在可能 raise 的语句里先存一份序号，随后比一次：变了 == 这条语句 raise 过 ⇒ 不写目标。
+int32_t vb6_err_serial = 0;
+int32_t vb6_ErrSerial(void) { return vb6_err_serial; }
+
+// C30-11 第八十一刀: 「最近一次错误就是那次 Variant→String 转换失败」的标记。
+// 为什么需要它: `vb6_CStrStrict(Null)` 报 94 之后交回的是一只**空串**, 而 `vb6_Asc`
+// 对空串要报 5 —— BSTR 层分不出这两种空。赋值站的语句级中止能挡掉大部分, 但目标
+// 是 Variant 的那一形 (test_joinfilter 的 `nc = Asc(nv2)`) 不走那条守卫, 所以这里
+// 再给 RTL 一个确定性判据: 转换失败时记下**当时的序号**, Asc 只有在该序号仍等于
+// 当前序号 (即中间没有别的 raise) 时才[不]报 5。`Err.Clear` 把标记清掉 ——
+// 那是「这一次错误已经被程序处理完」的唯一信号。
+int32_t vb6_conv_fail_serial = -1;
+void vb6_ConvFailMark(void) { vb6_conv_fail_serial = vb6_err_serial; }
+
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description) {
+    ++vb6_err_serial;
     vb6_err.number = errNum;
     vb6_err.source = source;
     vb6_err.description = description;

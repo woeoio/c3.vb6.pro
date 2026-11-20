@@ -506,6 +506,148 @@ stdin 用重定向喂 `alpha\r\nbeta\r\n`）：**内建腿 0 差异、scrrun 腿
 另回归：`Fso7`（四枚留白）两腿差异仍是已知的 TypeName 那一类，`Fso8`（HRESULT 读数）28/28 全对，
 9 份 COM 夹具 9/9 exit=0。
 
+## 7.11 第十刀：长路径与 UNC（2026-11-18）
+
+真引擎读数（`.temp/leftover/oracle_long.vbs` / `oracle_long3.vbs` / `oracle_259.vbs`，cscript）：
+**scrrun 本身就是 MAX_PATH 语义，不是长路径支持**。构造恰好 259/260/261 字符的目录实测：
+**259 可见，260 起一律不可见**。
+
+「太长」交的号**逐方法不同**（全是量过的，不是推断）：
+
+| 方法 | 260+ 时的真引擎 |
+|---|---|
+| `FileExists` / `FolderExists` | False，err=0（安静地看不见） |
+| `GetFile` / `DeleteFile` | **53** |
+| `GetFolder` / `DeleteFolder` / `CreateFolder` / `CreateTextFile` / `OpenTextFile` / `CopyFile` / `MoveFile` | **76** |
+| `GetFileVersion` | `""`，err=0 |
+| `GetFileName` / `GetParentFolderName` / `BuildPath` / `GetAbsolutePathName` / `GetDriveName` | 纯字符串运算，照常（不看文件系统） |
+
+短路径下的对照（证明 53/76 不是长路径特例）：`CopyFile` 缺源 53、`CopyFile` 源是目录 53、
+`MoveFile` 缺源 53。
+
+UNC（本机管理共享不可达，两边都照样跑）：`GetDriveName("\\\\localhost\\C$\\Windows\\System32")`
+→ `\\localhost\C$`；`GetParentFolderName` / `BuildPath` 同口径；**`GetDrive("\\localhost\C$")` → 76**
+（不是 68——68 只给「盘符存在不了」的 `GetDrive("Q:")`）。
+
+改动（`vb6com_fso.c`）：新增 `fso_pathTooLong()`（`wcslen >= 260`）并在
+`CreateFolder` / `CreateTextFile` / `OpenTextFile` / `CopyFile` / `MoveFile` / `GetFileVersion` 六个入口
+按上表分档；`GetDrive` 增加 UNC 前缀（`\\`）→ 76。其余方法本来就从 `fso_existsKind` 落回
+53/76，不用额外分支。
+
+两腿实测（`.temp/fso7/Fso11.bas` 长路径/UNC 14 项 + `Fso12.bas` 文件级 11 项）：
+**内建腿 0 差异、scrrun 腿 0 差异**。顺手捉到一个探针自己的坑：`fso.M base & "\\x"` 在 VBScript/VB6 里
+会解析成 `fso.M(base) & "\\x"`，`oracle_long2` 就是因此崩的；早前一条 `B9 CopyFile(1 arg) → 450`
+也是这么来的（用括号重测后仍然是 450，结论不变，但依据现在站得住）。
+
+## 7.12 早期绑定（typelib）那条路的现状（2026-11-18）
+
+量法：用两个已有开关把三种环境区分开，再看同一份源码发出来的 C。
+
+| 环境 | 开关 | TypeLib import 统计 | `b = fso.FolderExists("C:\")` 发什么 |
+|---|---|---|---|
+| 真 typelib | 默认 | 50 coclasses / 135 ifaces / 4 tlb | `vb6_ComCallBool(...)` |
+| 只剩内建类名表 | `C3_TEST_NO_SCRRUN_TLB=1` | 40 / 124 / 3 tlb | `vb6_ComCallBool(...)` |
+| 什么也没有 | `--no-auto-typelib` | 0 / 0 / 0 | `vb6_ComCall(...)`（返回 VARIANT） |
+
+（第二行仍发 `ComCallBool` 但不是签名给的：`b = <COM 调用>` 这一站本来就把「Boolean 目标」发成
+`ComCallBool`；换成 `Dim o As Object` 再调同一个成员就落回 `ComCallInt`。判据是变量的静态类型，
+不是成员签名。）
+
+**关键一条：运行期行为与有没有 typelib 无关。** 同一份 `Fso10.bas` 在「默认」与「内建兜底」两种
+编译下各跑一遍，**25 行输出逐字相同**。所以早期绑定那条路今天缺的不是正确性，而是**编译期诊断**：
+
+* 成员不存在：VB6 早期绑定在编译期就报「方法或数据成员未找到」；我们现在要到运行期才 438。
+* 参数个数/类型：VB6 编译期就查；我们现在要到运行期才 450。
+
+要把这两条补上，唯一干净的办法是给内建那张表填**真签名**（现在 9 个 coclass 的默认接口是空的，
+列表在 `TypeLibParser::registerBuiltinScriptingTypelib()`，注释里写明了「不铺签名是有意的」）。
+铺了就必须与本机 scrrun 真库逐成员对得上，否则没库的机器反而会误报——量尺很现成：
+同一批探针在「默认」与「开关」两种编译下**发出来的 C 必须逐字节相同**（今天不成立，今天差在
+`ComCall*` 那几档；补签名后才应该成立）。这一步是一个独立刀口，未开工。
+
+## 7.13 第十二刀：内建签名表（把早期绑定补完）
+
+上一节（7.12）把账算清楚了：没 scrrun 类型库时成员只能运行期 by-name，行为对但编译期不查。
+这一刀把签名补上，而且**不靠手抄**：
+
+1. 新只读诊断 `--dump-com-sigs [过滤子串]`：把已加载类型库的 coclass/接口/成员/参数逐条
+   打成 TSV 后退出（不编译任何东西）。
+2. `scripts/gen_builtin_com_sigs.ps1` 把 TSV 机械转成 `src/com/builtin_scripting_sigs.inc`：
+   **9 个 coclass / 109 个成员**（剔除 IUnknown/IDispatch 那 7 个继承成员与本运行期不实现的 Encoder）。
+3. `registerBuiltinScriptingTypelib()` 不再只登类名，改从这张表登：realName/memid/vtableIndex/
+   返回类型/参数（名、型、方向、Optional）/IID/dual/dispatch/默认成员，逐字段对齐真库。clsidStr
+   仍然**故意**留空（内建表不该进 ComLib=/Object= 那几条免注册表路）。
+
+### 顺手修掉的一个“假哨兵”
+
+`C3_TEST_NO_SCRRUN_TLB=1` 原来只拦 ProgID 预取，但 **wshom.ocx（WScript.Shell）的类型库会把
+scrrun 的 coclass 一并 import 进来**——实测 `FileSystemObject` 带着真 CLSID
+`{0D43FE01-…}` 出现在表里，于是内建兜底永远不触发、开关等于空转。现在开关会再按 ProgID 前缀
+`scripting.` 把绕路进来的 coclass 扣掉（按 tlbPath 扣不掉，因为它们是合并进 wshom 那份结果的）。
+改完后开关下真的只剩 3 个真库 + 内建表 9 类。
+
+### 验收（两条，都跑了）
+
+* **发码逐字节相同**：14 份探针（`test_earlybound.bas`、Fso7–Fso12、FsoProbe1–3、FsoWho、
+  两个 Dictionary/最小探针）在「默认」与「开关」两种编译下 `--emit-c` **14/14 逐字节相同**。
+  固化成 `scripts/check_builtin_com_sigs.ps1`（R1 生成物标记/9 类、R2 每类成员数与数组行数对齐/
+  总数 109、R3 探针两腿 emit 逐字节比对），并接进 `tests/run_tests.ps1` 的静态哨兵段。
+* **四种组合跑同一份读**：编译期（有库/内建表）× 运行期（内建实现/scrrun）四种组合跑
+  Fso10 与 Fso8：`builtin/native` 与 `tlb/native` **逐字相同**。
+  剩下唯一的差异是 `tlb/ms` 下 `TypeName(TextStream)` 答 `Object` 而 cscript 答 `TextStream` ——
+  这是**旧有的有意限制**（只给 `vb6_CreateObject` 的结果打 coclass 名，不做通用 ITypeInfo 查询，
+  否则会改动整个语料的 TypeName），与本刀无关。
+
+## 7.14 TypeName：把那条旧限制单独量了一遂（2026-11-18）
+
+旧限制写在 `scripts/check_created_object_typename.ps1` 头注释里：TypeName **只给
+`vb6_CreateObject` 的结果**打 coclass 名，不做通用 ITypeInfo 查询（否则会改动整个语料的 TypeName）。
+这一节把它量成数字。探针：`.temp/typename/oracle_tn.vbs`（cscript）+ `Tn.bas`（同一批调用），
+15 条覆盖 CreateObject / GetFolder / GetFile / GetDrive / Drives / GetSpecialFolder /
+Files / SubFolders / CreateTextFile / OpenTextFile / 布尔返回值 / Nothing / ParentFolder。
+
+| | cscript（真引擎） | 内建腿 | scrrun 腿 |
+|---|---|---|---|
+| 与真引擎一致 | — | **14 / 15** | **4 / 15** |
+
+具体差在两类：
+
+1. **外部 COM 返回的对象一律答 `Object`**（scrrun 腿 T4–T12 + T15 共 11 条）：
+   `TypeName(fso.GetFolder(p))` 真引擎答 `Folder`，我们答 `Object`。内建腿反而全对 ——
+   因为我们自己的对象知道自己的 coclass。
+2. **CreateObject("WScript.Shell") → 我们答 `Shell`，真引擎答 `IWshShell3`**（两腿都差）：
+   我们是「ProgID 最后一段」，而真引擎对 wshom 给的是**接口名**。
+
+这两类看起来是同一个机制的两个面：scrrun 的对象实现了 IProvideClassInfo（能给出 coclass，
+所以答 `FileSystemObject`/`Folder`），wshom 没实现（只能拿到 IDispatch 的 ITypeInfo，
+所以答 `IWshShell3`）。**这是假设，未验证** —— 验证办法就是先拿一个只问
+`IProvideClassInfo2::GetClassInfo` 的探针把两类对象各问一遍，再决定要不要改 `vb6_TypeName`。
+先量后改：这条限制是当年为了不动语料而收的，改之前得先知道语料里有多少处 TypeName 依赖它。
+
+## 7.15 FSO 剩余留白：拿真库表逐个类对了一遍（2026-11-18）
+
+手上有 109 成员的真库表后，留白可以机械数了（`.temp/census_fso.ps1`）：从
+`builtin_scripting_sigs.inc` 取每个类的成员名，再与 `vb6com_fso.c` / `vb6com_dict.c` 里的
+分派字面量做并集比对。
+
+| 类 | 真库成员 | 名字未出现 | 缺哪些 |
+|---|---|---|---|
+| FileSystemObject | 27 | 0 | — |
+| Drive / Drives | 12 / 3 | 0 / 0 | — |
+| Folder / Folders | 19 / 4 | 0 / 0 | — |
+| File / Files | 16 / 3 | 0 / 0 | — |
+| TextStream | 13 | 0 | — |
+| Dictionary | 12 | **2** | **`Key`（属性写）/ `HashVal`（只读）** |
+
+口径要说清（否则这张表会被误读）：实现是**按名字**分派的，一个 .c 同时实现多个类，所以这是
+**名字并集**比对 —— 同名成员在某一个类上没实现（例如 `Folder.Path` 缺而 `Drive.Path` 有）
+会被算作已实现，因此上面这列是**低估**：列出的“缺”是确定缺，“有”只能说名字出现过。
+FSO 那 8 个类在名字层面已经齐了；剩下的差异只能是**语义**层（错误码/边界），
+那些已经由前九刀的读数逐条量过。
+
+Dictionary 那两枚是真缺：`d.Key(x) = v`（给已有键改名）与 `d.HashVal(x)`（VB6 里长期
+未文档化但存在的只读属性）。下一刀可从这里接。
+
 ## 8. 验收
 
 - 刀 1/2/3 各自：`fso_native` 夹具（同一份 .bas 真机与 C3 双跑，逐行 diff）；

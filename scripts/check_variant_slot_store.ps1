@@ -264,7 +264,12 @@ $WantBstr169 = [ordered]@{
 $bstrByFile169 = @{}
 foreach ($f in $srcFiles168) {
     $t = [System.IO.File]::ReadAllText($f.FullName)
-    $n169 = [regex]::Matches($t, 'c_\.emitLine\("vb6_BSTR_Assign').Count
+    # 名单点的是**裸赋值**那两枚出口 (Assign / AssignMove)。这里不能用前缀匹配: 第七十三刀
+    # 新增的 vb6_BSTR_AssignFromVariant 是**另一个契约**的出口 (Null ⇒ 94 且目标不变),
+    # 不是手抄裸赋值 —— 前缀匹配会把它也算成一枚, 逼着把名单从 3 改成 4, 而那 4 里
+    # 有一处根本不是这条规则要防的东西。
+    $n169 = ([regex]::Matches($t, 'c_\.emitLine\("vb6_BSTR_Assign\(')).Count +
+            ([regex]::Matches($t, 'c_\.emitLine\("vb6_BSTR_AssignMove\(')).Count
     if ($n169 -gt 0) { $bstrByFile169[(Split-Path $f.FullName -Leaf)] = $n169 }
 }
 foreach ($k in $WantBstr169.Keys) {

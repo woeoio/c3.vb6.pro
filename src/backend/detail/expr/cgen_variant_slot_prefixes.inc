@@ -18,7 +18,7 @@
 //   - vb6_VariantFromUdtBytes -- RTL 内部 UDT 字节串 -> Variant 的装箱辅助, 后端走 vb6_VariantFromValue
 //   - vb6_VariantArrayElemPtr, vb6_VariantArrayElemPtrND -- 指针返回
 //
-// 条数: 46
+// 条数: 60
 // ============================================================================
 static const std::vector<std::string> variantPrefixes = {
     "vb6_AbsV(",
@@ -26,13 +26,25 @@ static const std::vector<std::string> variantPrefixes = {
     "vb6_CDec(",
     "vb6_CVErr(",
     "vb6_DispCallByVtbl(",
+    "vb6_FixV(",
     "vb6_GetAllSettings(",
+    "vb6_HexV(",
     "vb6_IIfVariant(",
+    "vb6_IntV(",
+    "vb6_LCaseV(",
+    "vb6_LenV(",
     "vb6_LoadResData(",
     "vb6_LoadResPicture(",
     "vb6_LoadResString(",
+    "vb6_LTrimV(",
+    "vb6_OctV(",
     "vb6_PA_GetVariant(",
+    "vb6_RTrimV(",
+    "vb6_TrimV(",
+    "vb6_UCaseV(",
     "vb6_VarAddV(",
+    "vb6_VarConcatNullV(",
+    "vb6_VarConcatNullVV(",
     "vb6_VarDivV(",
     "vb6_VariantArray(",
     "vb6_VariantArrayGet(",
@@ -63,8 +75,10 @@ static const std::vector<std::string> variantPrefixes = {
     "vb6_VariantUInteger(",
     "vb6_VariantULong(",
     "vb6_VariantULongLong(",
+    "vb6_VarLogicNullV(",
     "vb6_VarMulV(",
     "vb6_VarNegV(",
     "vb6_VarNotV(",
     "vb6_VarSubV(",
+    "vb6_VCmpNullV(",
 };

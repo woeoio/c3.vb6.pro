@@ -101,6 +101,15 @@
             if (!argIsVariant) {
                 argIsVariant = isDefinitelyVariantExpr(*node.positional[i], &argIsVariantArr);
             }
+            // 账 #305 §B220 (第七十二刀): With 体内成员的整只槽 —— isVariantSlot 的两半都不认
+            // 这一形 (文本前缀认不出 `_vb6_with_N->F`; AST 那半句问的 isDefinitelyVariantExpr
+            // 是**全局**判据, 不能教它认 With 成员: UBound 的数组槽也吃它, `.Values` 这类
+            // SafeArray 字段会被判成变体槽 ⇒ vb6_VariantToSafeArray1DStrict(vb6_SafeArray1D*)
+            // = C2440, Charts 2020 两台实测)。所以只有 Len 族这一格认: 直接问 nullFamilyVExitCName
+            // (它自带「WithMemberExpr 只认 UDT/类字段且档位= Variant」那一条), 问到了就是
+            // 变体槽 —— 不改道的话这里会把整只 VARIANT 递给 vb6_Len(BSTR) = 同一个 C2440。
+            const std::string vexit72 = nullFamilyVExitCName(node);
+            if (!vexit72.empty()) argIsVariant = true;
             // Fix 113i: 形参是**具体类型** (String/数值) 而实参是**裸 COM 结果**
             // (vb6_ComCall / vb6_ComCallByDispid / vb6_ComGetProp 返回 void*,
             // 承载一个 COM VARIANT*) — 语义即 Variant, 必须判为 Variant 才能触发
@@ -166,7 +175,17 @@
                     && (paramBase == Vb6Type::Variant || paramBase == Vb6Type::Byte
                     || paramBase == Vb6Type::String || paramBase == Vb6Type::Long)) {
                     // 数组参数: 从 Variant 提取 SafeArray1D*
-                    argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
+                    // 账 #305 §B172 (第七十刀): UBound/LBound 的变体实参站换**严格**提取 ——
+                    //   真 VB6 IDE 读数: UBound(Null) / UBound(Empty) / UBound(装 5 的 Variant)
+                    //   三格全是 13 Type mismatch; 宽松版只交回 NULL, 到 vb6_UBound 里报成 9。
+                    //   只认这两枚 callee: 同一站还给 Join / ReDim 等用, 那些格读数不同
+                    //   (Join(Null) = 94, ai/039 §11.35), 不能跟着一起换。
+                    //   真数组但未分配不走这一站 (首参是载体不是槽), 仍旧 9 (口径未动)。
+                    if (callee == "vb6_UBound" || callee == "vb6_LBound") {
+                        argVal = "vb6_VariantToSafeArray1DStrict(" + argVal + ")";
+                    } else {
+                        argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
+                    }
                 } else if (paramBase == Vb6Type::Long || paramBase == Vb6Type::Integer
                            || paramBase == Vb6Type::Byte || paramBase == Vb6Type::Boolean) {
                     // Fix 092q: Long/Integer/Byte/Boolean ByVal 形参接收 Variant →
@@ -211,6 +230,7 @@
                         "vb6_BSTR_",
                         "VB6_SA_AT(BSTR,",
                         "vb6_VariantToString(",
+                        "vb6_CStrStrict(",
                         "vb6_BSTR_FromStr("};
                     bool topIsBstr092a = false;
                     for (auto* bp092a : bstrTopPrefixes092a) {
@@ -220,7 +240,25 @@
                         }
                     }
                     if (!topIsBstr092a) {
-                        argVal = "vb6_VariantToString(" + argVal + ")";
+                        // C30-11 第七十一刀: Len/Trim/LTrim/RTrim/UCase/LCase 收到**整只槽**时
+                        // 改道到变体位 (vb6_LenV/... 收 VARIANT、Null 进 Null 出)。
+                        // 为什么必须在**这一站**改道, 而不是学 AbsV 等到装箱站再改名:
+                        //   这一站的通用口会先折 vb6_CStrStrict(槽), 而 hoistOwnedTempArgs
+                        //   把那枚串提成 `BSTR _own_N = vb6_CStrStrict(nv);` 一条**独立语句**;
+                        //   装箱站那时只看到 `vb6_Len(_own_N)`, 既认不出实参、也删不掉那条语句
+                        //   ⇒ 94 在造临时量时就抛了 (这正是 §11.44 第六节记的那个坑)。
+                        // 判据不在这里另写: 与 oracle 共用 nullFamilyVExitCName。
+                        const std::string vexit71 = nullFamilyVExitCName(node);
+                        if (!vexit71.empty()) {
+                            callee = vexit71;
+                            // argVal 原样 (整只槽) —— 不造临时量, 也就没有 94。
+                        } else {
+                        // C30-11 第六十二刀: 这一站是"Variant 实参 → String 形参"的总口，
+                        // 按 VB6 口径 Null 该给 **94**（读数：Asc 94 / Replace 94 /
+                        // Join 分隔符 94 / Split 源 94），旧写法 vb6_VariantToString 静默给空串
+                        // ⇒ 第五十九刀记的 J14（Join(arr, Null) 真 94 / 我们 0）就是这里。
+                        argVal = "vb6_CStrStrict(" + argVal + ")";
+                        }
                     }
                     }
                 } else if (paramBase == Vb6Type::Object) {
@@ -555,7 +593,17 @@
                             argVal = "vb6_VariantToObjectVal(" + argVal + ")";
                         }
                     } else if (rtParamType == "vb6_SafeArray1D*") {
-                        argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
+                        // 账 #305 §B172 (第七十刀): UBound/LBound 的变体实参站换成**严格**提取。
+                        //   真 VB6 IDE 读数: `UBound(nv)` / `UBound(Empty)` / `UBound(装 5 的 Variant)`
+                        //   三格全是 13 Type mismatch；宽松版交回 NULL, 到 vb6_UBound 里只能报 9。
+                        //   只认这两枚 callee —— 同一站还给 Join / ReDim 等用，那些格的读数不同
+                        //   (Join(Null) = 94, ai/039 §11.35), 不能跟着一起换。
+                        //   真数组但未分配不走这一站 (首参不是槽), 仍旧 9 (口径未动)。
+                        if (callee == "vb6_UBound" || callee == "vb6_LBound") {
+                            argVal = "vb6_VariantToSafeArray1DStrict(" + argVal + ")";
+                        } else {
+                            argVal = "vb6_VariantToSafeArray1D(" + argVal + ")";
+                        }
                     }
                 }
             }

@@ -128,6 +128,28 @@ vb6_VARIANT vb6_AbsV(vb6_VARIANT v) {
         return vb6_VariantDouble(fabs(vb6_VariantToDouble(v)));
     }
 }
+// C30-11 第六十四刀: Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位。
+// 真值读数 .temp/null/oracle_num.vbs：四格都是 Null（不是 0，Hex/Oct 也不是上一刀后的 94）。
+// 身子放在这里而不是头文件的 inline，原因有二：
+//   1. check_conv_strict_parse 的 R2 把 head 里 vb6_VariantToDouble(v) /
+//      vb6_VariantConvNum 的出现数钉成常数，写进头会多出站点；
+//   2. check_builtin_slot_returns 与 owned-temp 表都从 RTL 头派生，原型在头里就够了。
+vb6_VARIANT vb6_IntV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantDouble(vb6_Int(vb6_VariantConvNum(v)));
+}
+vb6_VARIANT vb6_FixV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantDouble(vb6_Fix(vb6_VariantConvNum(v)));
+}
+vb6_VARIANT vb6_HexV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Hex(vb6_VariantToLong(v)));
+}
+vb6_VARIANT vb6_OctV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Oct(vb6_VariantToLong(v)));
+}
 int32_t vb6_Sgn(double x) { return (x > 0) ? 1 : (x < 0) ? -1 : 0; }
 double vb6_Sqr(double x) { return sqrt(x); }
 double vb6_Round(double x, int32_t decimals) {
@@ -452,6 +474,71 @@ intptr_t vb6_CLngPtrBSTR(BSTR s) { return vb6_CLngPtr(vb6_NumVal(s)); }
 
 BSTR vb6_CStr(vb6_VARIANT x) {
     return vb6_Format(x, NULL, 1, 1);
+}
+
+// C30-11 第六十二刀: Null 转换站（VB6 口径：Null → String 一律 94）。
+// 读数 .temp/null/oracle_null.vbs: CStr 94 / Asc 94 / Replace 94 / Join 分隔符 94 /
+// Split 源 94（VB6 的通用规则是"String 形参收 Null ⇒ 94"，VBScript 对 Len/Trim 那几格
+// 宽松成 0，按宿主差异记账，不当真值）。
+// 为什么单独开一枚而不改 vb6_CStr：`&` 与 Debug.Print 仍走宽松口径
+// （前者 VB6 是 Null 传播、后者打印文本 "Null"，两格都另算）。
+BSTR vb6_CStrStrict(vb6_VARIANT x) {
+    if (x.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        // 第八十一刀: 给读侧（vb6_Asc）一个可判的痕迹 —— 这只空串是「转换失败」
+        // 交回来的，不是程序里真的空了。目标不是整型标量、发不出语句级中止守卫的
+        // 那一形（`nc = Asc(nv2)`，nc 是 Variant）靠这个标记把 94 与 5 分开。
+        vb6_ConvFailMark();
+        return vb6_BSTR_Empty();  /* 不可达 */
+    }
+    return vb6_CStr(x);
+}
+
+// C30-11 第七十五刀 (§B223): 「String 右值 → Double 目标」赋值站。
+// 真 VB6 是隐式 String→Double: 数字串折成数 ("1.5" ⇒ 1.5), 其余含空串 ⇒ **13**
+// (Type mismatch), 且**目标不变** (与 94 那一族同一口径)。以前这一形把 BSTR 裸交给
+// double ⇒ 编译期 C2440 (探针 F2 `d = Null & ""` / F3 `d = CStr(Null)`, 真引擎两格
+// 都是 13) —— 也就是说没有存量「编译通过」的依赖可破坏, 所以这里直接按 VB6 口径补上。
+// 不改成 `vb6_NumVal` (Val 口径, 永不报错、2.5abc 也折 2.5): VB6 的赋值转换是**严格**的。
+void vb6_Dbl_AssignFromBSTR(double* target, BSTR src) {
+    const wchar_t* p = src ? src : L"";
+    while (*p == L' ' || *p == L'\t' || *p == L'\r' || *p == L'\n') p++;
+    wchar_t* end = NULL;
+    double v = wcstod(p, &end);
+    int ok = (end != p);
+    if (ok) {
+        while (*end == L' ' || *end == L'\t' || *end == L'\r' || *end == L'\n') end++;
+        ok = (*end == L'\0');
+    }
+    if (!ok) {
+        vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Type mismatch"));
+        return;   /* 目标一字不动 */
+    }
+    *target = v;
+}
+
+// C30-11 第七十六刀 (§B224): Null 落到 Boolean / Double 目标上 —— 真机读数
+// (NullExtProbe A2 `d = (Null = "")` ⇒ d 不变 / err=94; A4 `b = (Null = "")` ⇒ b 不变 /
+// err=94) 是「报 94 且**目标不变**」。以前发 `b = vb6_VariantToLong(...)`，raise 之后
+// 照常把 0 / False 写进目标 —— 错误号对了、值被清了。与第七十三刀那枚 BSTR 出口同一个口径。
+void vb6_Bool_AssignFromVariant(int16_t* target, vb6_VARIANT src) {
+    if (src.vt == (vb6_vartype)vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    *target = (int16_t)vb6_VariantToLong(src);
+}
+
+void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src) {
+    if (src.vt == (vb6_vartype)vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    *target = vb6_VariantToDouble(src);
 }
 
 // M22: typed CStr overloads (C has no overloading, use suffix)
@@ -1030,7 +1117,14 @@ double vb6_CDate(vb6_VARIANT v) {
     // 数值面统一走 vb6_VariantToDouble (它已含 vtDate/vtCurrency/vtByte 各档),
     // 这里只排除"非数值"的几档, 免得又写一份平行表。
     if (v.vt == vb6_vtEmpty || v.vt == vb6_vtNull
-        || v.vt == vb6_vtDispatch || v.vt == vb6_vtError) return 0.0;
+        || v.vt == vb6_vtDispatch || v.vt == vb6_vtError) {
+        // C30-11 第六十三刀: CDate(Null) = **94**（读数 oracle_num.vbs）。Empty 仍是 0。
+        if (v.vt == vb6_vtNull) {
+            vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                         vb6_BSTR_FromStr(L"Invalid use of Null"));
+        }
+        return 0.0;
+    }
     if (v.vt == vb6_vtBSTR) return vb6_DateVal(v.bstrVal);   /* 账 #417: 文本按日期解析，落不到再按严格数值 */
     return vb6_VariantToDouble(v);
 }

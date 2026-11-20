@@ -57,3 +57,14 @@ d123|stored_key: vartype=6 val=1.5
 d113|object_value: isobject=True typename=Dictionary
 d114|cm3_dedupe: add_lower_err=457 count=1 readback=3
 d115|empty_key_text: zero=True empty=True empStr=True
+d116|key_rename: err=0 hasB=True hasA=False val=1
+d117|key_missing: err=32811 count=1
+d118|key_collision: err=457 count=2 a=1 b=2
+d119|key_order: keys=z,b,c
+d120|key_same_name: err=0 count=1
+d121|key_case_binary: err=32811
+d122|key_case_text: err=0 hasB=True
+d123|key_numkey: err=0 has2=True val=x
+d124|hashval_str: a=97 abc=974 hello=283 empty=0
+d125|hashval_missing: val=436 type=Long
+d126|default_put: err=0 count=1 val=v

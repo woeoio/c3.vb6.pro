@@ -223,6 +223,10 @@ void vb6_ArraySetLong(vb6_SafeArray1D* arr, int32_t index, int32_t val);
 void vb6_ArraySetDouble(vb6_SafeArray1D* arr, int32_t index, double val);
 void vb6_ArraySetBSTR(vb6_SafeArray1D* arr, int32_t index, BSTR val);
 void vb6_ArraySetVariant(vb6_SafeArray1D* arr, int32_t index, vb6_VARIANT val);
+// C30-11 第六十刀: Array(<对象>) 的对象档出口。与 vb6_ArraySetBSTR 同形（清槽 + 只取一次引用）。
+// 不能拿 vb6_VariantObject(...) 走 ArraySetVariant：那条是 VariantCopy（不清源），
+// 临时值没人 VariantClear ⇒ 每个对象元素泄漏一份引用。
+void vb6_ArraySetObject(vb6_SafeArray1D* arr, int32_t index, void* val);
 // ============================================================
 // SAFEARRAY ND - VB6 多维数组
 // ============================================================
@@ -446,6 +450,13 @@ int32_t vb6_ErrLastDllError(void);
 void vb6_ErrSetLastDllError(int32_t code);
 void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description);
 void vb6_ErrRaiseNumber(int32_t errNum);
+// C30-11 第七十九刀 (§B227): 错误序号 —— 每次 vb6_ErrRaise 自增。赋值站用它判
+// 断「本语句里 raise 过吗」：变了就不写目标（VB6 的语句级中止）。
+int32_t vb6_ErrSerial(void);
+// C30-11 第八十一刀: Variant→String 转换失败的标记（与错误序号同源）。
+void vb6_ConvFailMark(void);
+extern int32_t vb6_err_serial;
+extern int32_t vb6_conv_fail_serial;
 
 // 全局错误处理状态 (由cgen生成的代码直接使用)
 extern int32_t vb6_err_resume_next;  // On Error Resume Next 标志

@@ -1,4 +1,6 @@
 #include "backend/cgen.hpp"
+#include <cstdlib>
+#include <cstdio>
 #include "common/owned_temp_keeps.hpp"  // 账 #464 §B164: 回收刀的**唯一权威**（那张表由 RTL 推导 ⇒ 哨兵双向对账）
 #include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
 #include "common/int_literal.hpp"   // 账 #194: 整数字面量的单一出口
@@ -3074,6 +3076,8 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     // 仍然不拆箱 ⇒ 整只 vb6_VARIANT 交给 vb6_BSTR_Assign ⇒ C2440
     // (PhotoDemon pdDictionary.c 239/248: `dItem As Variant` 读进 String 变量)。
     bool valueIsVariant = isVariantSlot(value, rhs);
+    bool strictVarAssign221 = false;   // 第七十三刀: 右值是 Variant 槽 ⇒ 走严格赋值出口
+    std::string rawVarValue221;        // 未折成 BSTR 的那枚 Variant 表达式
     if (!valueIsVariant && rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
         auto& id = static_cast<IdentifierExpr&>(*rhs);
         std::string idLower = id.name;
@@ -3088,7 +3092,37 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         std::transform(rhsMember.begin(), rhsMember.end(), rhsMember.begin(), ::tolower);
         if (classVariantMembers_.count(rhsMember)) valueIsVariant = true;
     }
+    // C30-11 第七十四刀 (§B222): `s = CStr(<Variant>)` —— CStr 内建对变体走的是**宽松口**
+    // vb6_CStr (Null ⇒ "")。读数 (探针 E9): 真 VB6 是 94 且**目标不变**; 这里 err=0 且目标
+    // 被清成空串 —— 与第七十三刀 E6/E7/E8 是同一个错, 只是入口在 CStr 那一道站, 不在槽位折叠。
+    // 形状恰好是 vb6_CStr(<变体表达式>) ⇒ 把「CStr 口径」连同那枚变体一起交给同一枚严格出口:
+    // 出口内部就是 AssignMove(target, vb6_CStr(src)) ⇒ 非 Null 逐字节等价, Null 报 94 后
+    // 直接返回、目标不动。只认**单实参 + 实参是变体档 + 发码确实是 vb6_CStr(**那一形;
+    // 第六十六刀那两条 vb6_CStrStrict(<比较>/<拼接>) 不在此列 (前缀就不是 vb6_CStr();
+    // 定长串那一档读数未量, 仍走原路。
+    if (!valueIsVariant && fixedLen.empty() && rhs
+        && rhs->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& call74 = static_cast<IndexOrCallExpr&>(*rhs);
+        if (call74.callee && call74.callee->kind == ASTNodeKind::IdentifierExpr
+            && call74.positional.size() == 1 && call74.named.empty()
+            && value.size() > 10 && value.compare(0, 9, "vb6_CStr(") == 0
+            && value.back() == ')') {
+            std::string name74 = static_cast<IdentifierExpr&>(*call74.callee).name;
+            std::transform(name74.begin(), name74.end(), name74.begin(), ::tolower);
+            if (name74 == "cstr"
+                && inferExprType(*call74.positional[0]) == Vb6Type::Variant) {
+                strictVarAssign221 = true;
+                rawVarValue221 = value.substr(9, value.size() - 10);
+            }
+        }
+    }
     if (valueIsVariant) {
+        // C30-11 第七十三刀 (§B221): Variant 右值 → String 槽走**严格**出口。
+        // 读数 (探针 E6/E7/E8): `s = Trim(Null)` / `s = Len(Null)` / `s = Null` 在真 VB6
+        // 里都是 94 且目标不变；而这里以前折成 vb6_VariantToString(Null) = "" ⇒ err 0、
+        // 目标被清成空串 —— 两个错同时存在 (值丢 + 错误不报)。
+        strictVarAssign221 = true;
+        rawVarValue221 = value;
         value = "vb6_VariantToString(" + value + ")";
     }
     // Fix P24-10b: RHS 是裸晚绑定调用结果 (vb6_ComCallByDispid → void* 指向
@@ -3102,14 +3136,30 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         bool comResBstr = value.compare(0, 12, "vb6_ComCall(") == 0
             || value.compare(0, 20, "vb6_ComCallByDispid(") == 0
             || value.compare(0, 15, "vb6_ComGetProp(") == 0;
+        // C30-11 第七十七刀 (§B225): 这里原来是**先转串再赋**:
+        //   value = "vb6_VariantToString(vb6_VariantFromComResult(<调用>))"
+        // 真机读数 (W6 `s = c(1)`, Collection.Item 装的是 Null): **94 且 s 还是 [keep]**；
+        // 而 VariantToString(Null) 不 raise、交回空串 ⇒ 这里变成 err=0 + 目标被清成 ""，
+        // 两个错同时存在。Null 必须在**赋值那一瞬**才判 (与第七十三刀同一个道理): 把整只
+        // 变体交给 vb6_BSTR_AssignFromVariant (< 非 Null 走 vb6_CStr, 与 VariantToString 逐字节同口径)。
+        // 定长串目标 (char[N]) 那一档不能套这枚出口, 仍走原来的转串路径。
+        std::string comVarVal77;
         if (comResBstr) {
-            value = "vb6_VariantToString(vb6_VariantFromComResult(" + value + "))";
+            comVarVal77 = "vb6_VariantFromComResult(" + value + ")";
         } else if (value.compare(0, 21, "vb6_ComGetObjectProp(") == 0) {
             // 账 (M3 身份刀): 对象读交回 IDispatch* 本体, 不能当堆上 VARIANT* 解引用。
             // 换到同一成员的值孪生 (vb6_ComGetProp) 再按字符串提取 —— 成员名一字不动。
             std::string twinObjStr = comValueTwinForObjectReadExpr(value);
             if (!twinObjStr.empty())
-                value = "vb6_VariantToString(vb6_VariantFromComResult(" + twinObjStr + "))";
+                comVarVal77 = "vb6_VariantFromComResult(" + twinObjStr + ")";
+        }
+        if (!comVarVal77.empty()) {
+            if (fixedLen.empty()) {
+                strictVarAssign221 = true;
+                rawVarValue221 = comVarVal77;
+            } else {
+                value = "vb6_VariantToString(" + comVarVal77 + ")";
+            }
         }
     }
     // Fix 140: RHS 是 Byte() 数组 (类成员 m_Caption 或已知字节数组变量) 且目标是
@@ -3209,6 +3259,11 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         }
     }
     // #122 折出来的 `vb6_CStrXxx(...)` 是刚 alloc 的新块, 与字面量/拼接同属"自有"。
+    if (strictVarAssign221 && fixedLen.empty()) {
+        // 定长串那一档读数未量, 仍走原路 (只认普通 String 槽)。
+        c_.emitLine("vb6_BSTR_AssignFromVariant(&" + target + ", " + rawVarValue221 + ");");
+        return;
+    }
     if (!fixedLen.empty() && udtFixedField) {
         // 账 #118 续: 目标是 UDT 定长串字段 (C 类型 char[N], VB6 ABI 内联 ANSI) ——
         // 不能 &field 当 BSTR* 用。写侧按 N 右补空格/右截断 (与 LSet 同口径)。
@@ -3227,9 +3282,38 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + fitFn118 + "(" + value
                     + ", " + fixedLen + "));");
     } else if (valueOwned113 || wrapped122) {
-        c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + value + ");");
+        // C30-11 第七十九刀 (§B227): 语句级中止 —— 本语句里 raise 过就不写目标；
+        // RHS 是**自有临时串**，不 move 进去就得自己释放，否则每次中止漏一块。
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + value + ");");
+        } else {
+            // C30-11 第八十三刀：右值**只算一次**。原形把 value 在 if/else 两支各写一遍，
+            // 守卫不过时 else 那一支又把右值算了一遍（`s = CStr(F(v))` 会调 F 两次）。
+            // 现在先算进临时量（只在本语句还没 raise 时算），再拿序号决定是并进目标还是收回。
+            const std::string tmp83 = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp83 + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + value + ") : NULL;");
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_AssignMove(&" + target
+                        + ", " + tmp83 + "); else vb6_BSTR_Free(" + tmp83 + ");");
+        }
     } else {
-        c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
+        // C30-11 第七十九刀 (§B227): 语句级中止 —— 借来的值只深拷贝, 不写就不写,
+        // 没有要回收的东西。手抄这一发仍留在原处 (R7 名单钉的是「这一站还是手写的」)。
+        //
+        // C30-11 第八十三刀 (§B227 续): 借来的值也要**只算一次** —— 与上面自有支同一形。
+        // 原形把 value 直接写在 if 里, 而条件是**求值之前**比的：右值自己 raise（`Asc("")`
+        // 报 5、实参位的 `vb6_CStrStrict(<Null>)` 报 94）时条件早就过了 ⇒ 赋值照样发生,
+        // 目标被清成 ""，而真机是「报错 + 目标不动」。现在先算进临时量, 再拿**算完之后**
+        // 的序号决定写不写；借来的指针不归我们, 所以没有 else 要回收的东西。
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
+        } else {
+            const std::string tmp83b = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp83b + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + value + ") : NULL;");
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_Assign(&" + target
+                        + ", " + tmp83b + ");");
+        }
     }
 }
 
@@ -3767,6 +3851,450 @@ bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
     return false;
 }
 
+// C30-11 第六十四刀: Abs/Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位判据。
+//
+// 这两站（wrapVariantValue 存储站 / boxToVariant 实参站）都要先问这一句，且在**各自的
+// inferExprType switch 之前**问：那张表对 Int/Fix 答 Double、对 Hex/Oct 答 String，
+// 一旦先返回 vb6_VariantDouble(...)/vb6_VariantString(...)，就再也到不了这里了
+// （本刀第一版只改了 boxToVariant，实测发码一字未变，就是被 wrapVariantValue 的
+//  `case Vb6Type::Double` 提前收掉了）。
+//
+// 判据是**文本前缀**而不是 inferExprType(实参)==Variant：`vb6_Abs(vb6_VariantToDouble(`
+// 这串本身就证明上游那一站真把 Variant 槽折进来了，而那次推断对 `Dim nv As Variant`
+// 的局部答不出 Variant（第五十二刀那条 AbsV 分支就是这么被挡掉的）。
+static std::string mathNullFamilyV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::IndexOrCallExpr) return std::string();
+    const auto& call = static_cast<const IndexOrCallExpr&>(*node);
+    if (call.positional.size() != 1 || !call.callee
+        || call.callee->kind != ASTNodeKind::IdentifierExpr) return std::string();
+    const std::string fn = Symbol::toLower(
+        static_cast<const IdentifierExpr&>(*call.callee).name);
+    static const struct { const char* vb; const char* pre; const char* out; } kTbl[] = {
+        {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
+        {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
+        {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_FixV("},
+        {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
+        {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
+    };
+    for (const auto& m : kTbl) {
+        if (fn != m.vb) continue;
+        const std::string pre = m.pre;
+        size_t s = 0;
+        while (s < cExpr.size() && (cExpr[s] == '(' || cExpr[s] == ' ')) s++;
+        if (cExpr.compare(s, pre.size(), pre) == 0
+            && cExpr.size() >= s + pre.size() + 2 && cExpr.back() == ')') {
+            // 尾部两层右括号（一层提取、一层调用）一并剥掉。
+            std::string inner = cExpr.substr(s + pre.size(),
+                                             cExpr.size() - s - pre.size() - 2);
+            return std::string(m.out) + inner + ")";
+        }
+    }
+    return std::string();
+}
+
+// C30-11 第六十五刀: 比较符的 Null 传播。
+//
+// 读数 .temp/null/oracle_ops.vbs O5..O10：`= <> < > <= >=` 任一侧是 Null 就是 **Null**
+// （含 Null = Null，改前我们答 True）。Q12 = CStr(Null="") ⇒ 94（Null 转字符串那一站）。
+//
+// 为什么不在比较发码处直接换成变体位：比较的 C 类型现在是 int32_t，`If` 条件、
+// 赋值给 Boolean、And/Or 都按标量吃它；直接换会连带一整片调用方。
+// 本刀只动“**变体上下文**”那两站（wrapVariantValue 存储站 / boxToVariant 实参站），
+// 与第六十四刀同一形：已 emit 的 bool 结果**不动**，只把槽地址插进去一层守卫。
+//
+// 判据：① AST 是比较运算；② 发码文本是 `vb6_VariantBool(<bool>)`；
+//   ③ 能从里面抽出至少一个 **Variant 槽地址**（两种形：
+//   `vb6_VarCmp*(&nv, …)` 的 `&nv`，或 `vb6_VariantFromValue(nv)` 里的 nv）。
+// 三条不齐就不动（宁可不变，不让发码形状凭空变）。
+static bool isCmpOp65(BinaryOp op) {
+    return op == BinaryOp::Eq || op == BinaryOp::Neq || op == BinaryOp::Lt
+        || op == BinaryOp::Gt || op == BinaryOp::Le || op == BinaryOp::Ge;
+}
+
+// 从 `vb6_VariantFromValue(nv)` / `(&nv` 两种形里抽槽地址，最多两枚。
+static void collectSlotAddrs65(const std::string& s, std::vector<std::string>& out) {
+    auto pushIfNew = [&out](const std::string& a) {
+        if (a.empty() || out.size() >= 2) return;
+        for (const auto& e : out) if (e == a) return;
+        out.push_back(a);
+    };
+    auto isIdentStart = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    };
+    auto isIdentChar = [&](char c) {
+        return isIdentStart(c) || (c >= '0' && c <= '9');
+    };
+    static const std::string kFromVal = "vb6_VariantFromValue(";
+    for (size_t p = s.find(kFromVal); p != std::string::npos;
+         p = s.find(kFromVal, p + 1)) {
+        size_t q = p + kFromVal.size();
+        if (q >= s.size() || !isIdentStart(s[q])) continue;
+        size_t e = q;
+        while (e < s.size() && isIdentChar(s[e])) e++;
+        if (e < s.size() && s[e] == ')') pushIfNew("&" + s.substr(q, e - q));
+    }
+    // `(&ident,` / `(&ident)` ：只认变体比较那一族（vb6_VarCmp*）的实参位。
+    for (size_t p = s.find("(&"); p != std::string::npos; p = s.find("(&", p + 1)) {
+        size_t q = p + 2;
+        if (q >= s.size() || !isIdentStart(s[q])) continue;
+        size_t e = q;
+        while (e < s.size() && isIdentChar(s[e])) e++;
+        if (e < s.size() && (s[e] == ',' || s[e] == ')' || s[e] == ' '))
+            pushIfNew("&" + s.substr(q, e - q));
+    }
+}
+
+std::string cgNullGuardCmpV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    // 幂等：实参站会被套两层（boxToVariant 之后又有一层装箱），第二层拿到的
+    // 已经是 vb6_VCmpNullV(...)；再包一次会变成 VARIANT 当 int32_t → C2440（实测）。
+    if (cExpr.find("vb6_VCmpNullV(") != std::string::npos) return std::string();
+    const auto& bin = static_cast<const BinaryExpr&>(*node);
+    if (!isCmpOp65(bin.op)) return std::string();
+
+    size_t s = 0;
+    // 只跳空格：不能跳 ( —— 裸形的首字符就是配对括号，跳掉它前缀判据就全部落空
+    // （第六十七刀第一版就是这么静默不命中的）。
+    while (s < cExpr.size() && cExpr[s] == ' ') s++;
+    static const std::string kWrap = "vb6_VariantBool(";
+    std::string inner;
+    if (cExpr.compare(s, kWrap.size(), kWrap) == 0 && cExpr.back() == ')') {
+        // 存储站那一支：拿到的是已经包好的 `vb6_VariantBool(<bool>)`。
+        inner = cExpr.substr(s + kWrap.size(),
+                             cExpr.size() - s - kWrap.size() - 1);
+    } else {
+        // 实参站那一支：拿到的是**裸 bool 表达式**（vb6_VariantBool 还没包），
+        // 直接把它当条件交给守卫 —— 守卫自己产变体。
+        inner = cExpr;
+    }
+
+    std::vector<std::string> slots;
+    collectSlotAddrs65(inner, slots);
+    if (slots.empty()) return std::string();
+    const std::string a = slots[0];
+    const std::string b = slots.size() > 1 ? slots[1] : "(vb6_VARIANT*)0";
+    return "vb6_VCmpNullV(" + a + ", " + b + ", " + inner + ")";
+}
+
+namespace {
+// 下面四枚只服务 cgNullGuardConcatV 的“链”解析（第六十九刀）。
+bool cgIsIdentText(const std::string& s) {
+    if (s.empty()) return false;
+    for (char ch : s) {
+        bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+            || (ch >= '0' && ch <= '9') || ch == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+bool cgIsVariantValuedText(const std::string& s) {
+    if (cgIsIdentText(s)) return true;
+    if (s.compare(0, 20, "vb6_VarConcatNullVV(") == 0) return true;
+    if (s.compare(0, 19, "vb6_VarConcatNullV(") == 0) return true;
+    return false;
+}
+
+// `vb6_CStr(vb6_VariantFromValue(X))` → X（X 允许是任意括号配平的 Variant 值表达式）
+bool cgVariantOfCStr(const std::string& s, std::string& x) {
+    static const std::string kPre = "vb6_CStr(vb6_VariantFromValue(";
+    if (s.compare(0, kPre.size(), kPre) != 0) return false;
+    if (s.size() < kPre.size() + 3 || s.back() != ')') return false;
+    if (s.compare(s.size() - 2, 2, "))") != 0) return false;
+    x = s.substr(kPre.size(), s.size() - kPre.size() - 2);
+    int depth = 0;
+    for (size_t i = 0; i < x.size(); ++i) {
+        if (x[i] == '(') ++depth;
+        else if (x[i] == ')') { if (--depth < 0) return false; }
+        else if (x[i] == '"') { for (++i; i < x.size() && x[i] != '"'; ++i) {} }
+    }
+    return depth == 0;
+}
+
+// 把 `vb6_BSTR_ConcatFree(A, B)` 的左结合树拆成叶子表（发码的链就是这形：
+// `ConcatFree(ConcatFree(a,b),c)`），叶子必须是整只 Variant 的 CStr。
+bool cgFlattenConcatLeaves(const std::string& s, std::vector<std::string>& out) {
+    static const std::string kCF = "vb6_BSTR_ConcatFree(";
+    size_t sp = 0;
+    while (sp < s.size() && s[sp] == ' ') sp++;
+    const std::string body = s.substr(sp);
+    if (body.compare(0, kCF.size(), kCF) == 0 && !body.empty() && body.back() == ')') {
+        const std::string args = body.substr(kCF.size(), body.size() - kCF.size() - 1);
+        size_t comma = std::string::npos;
+        int depth = 0;
+        for (size_t i = 0; i < args.size(); ++i) {
+            char ch = args[i];
+            if (ch == '(') ++depth;
+            else if (ch == ')') { if (--depth < 0) return false; }
+            else if (ch == '"') { for (++i; i < args.size() && args[i] != '"'; ++i) {} }
+            else if (ch == ',' && depth == 0) { comma = i; break; }
+        }
+        if (comma == std::string::npos || depth != 0) return false;
+        return cgFlattenConcatLeaves(args.substr(0, comma), out)
+            && cgFlattenConcatLeaves(args.substr(comma + 1), out);
+    }
+    std::string x;
+    if (!cgVariantOfCStr(body, x) || !cgIsVariantValuedText(x)) return false;
+    out.push_back(x);
+    return true;
+}
+}  // namespace
+
+std::string cgNullGuardConcatV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    // 幂等：同上，第二层拿到的已经是 vb6_VarConcatNullV(...)，不能再包。
+    if (cExpr.find("vb6_VarConcatNullV(") != std::string::npos) return std::string();
+    if (cExpr.find("vb6_VarConcatNullVV(") != std::string::npos) return std::string();
+    const auto& bin = static_cast<const BinaryExpr&>(*node);
+    if (bin.op != BinaryOp::Concat) return std::string();
+
+    // 只认「两侧都是整枚 Variant 槽转出的 CStr」这一形；其它形（字面量/数值/嵌套拼接）
+    // 一律不动 —— 那些格的真值本来就等于零期值（读数 R4..R6/R10/R12）。
+    static const std::string kSlotPre = "vb6_CStr(vb6_VariantFromValue(";
+    // 从 vb6_CStr(vb6_VariantFromValue(X)) 里取回 X。第六十九刀之前只认 X = 一个标识符，
+    // 所以 `(Null & Null) & Null` 这种链永远不命中（左操作数是内层守卫的调用）。
+    // 现在 X 允许是任意 Variant 值表达式（括号要配平）。
+    auto varOf = [](const std::string& s) -> std::string {
+        if (s.compare(0, kSlotPre.size(), kSlotPre) != 0) return std::string();
+        if (s.size() < kSlotPre.size() + 3 || s.back() != ')') return std::string();
+        if (s.compare(s.size() - 2, 2, "))") != 0) return std::string();
+        std::string x = s.substr(kSlotPre.size(), s.size() - kSlotPre.size() - 2);
+        int depth = 0;
+        for (size_t i = 0; i < x.size(); ++i) {
+            if (x[i] == '(') ++depth;
+            else if (x[i] == ')') { if (--depth < 0) return std::string(); }
+            else if (x[i] == '"') { for (++i; i < x.size() && x[i] != '"'; ++i) {} }
+        }
+        if (depth != 0) return std::string();
+        return x;
+    };
+    auto isIdent = [](const std::string& s) -> bool {
+        if (s.empty()) return false;
+        for (char ch : s) {
+            bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '_';
+            if (!ok) return false;
+        }
+        return true;
+    };
+
+    size_t s = 0;
+    // 只跳空格：不能跳 ( —— 裸形的首字符就是配对括号，跳掉它前缀判据就全部落空
+    // （第六十七刀第一版就是这么静默不命中的）。
+    while (s < cExpr.size() && cExpr[s] == ' ') s++;
+    std::string body;
+    static const std::string kVStr = "vb6_VariantString(";
+    if (cExpr.compare(s, kVStr.size(), kVStr) == 0 && cExpr.back() == ')') {
+        body = cExpr.substr(s + kVStr.size(), cExpr.size() - s - kVStr.size() - 1);
+    } else {
+        body = cExpr.substr(s);
+    }
+
+    static const std::string kConcat = "vb6_BSTR_ConcatFree(";
+    if (body.compare(0, kConcat.size(), kConcat) != 0 || body.back() != ')')
+        return std::string();
+    std::string args = body.substr(kConcat.size(), body.size() - kConcat.size() - 1);
+    // 只在「两个实参都是槽 CStr」时分：按 `, ` 切一次，且两侧都不能再含未配对括号。
+    size_t comma = std::string::npos;
+    int depth = 0;
+    for (size_t i = 0; i < args.size(); ++i) {
+        char ch = args[i];
+        if (ch == '(') ++depth;
+        else if (ch == ')') { if (--depth < 0) return std::string(); }
+        else if (ch == '"') {  // 跳过字符串字面量
+            for (++i; i < args.size() && args[i] != '"'; ++i) {}
+        } else if (ch == ',' && depth == 0) { comma = i; break; }
+    }
+    if (comma == std::string::npos || depth != 0) return std::string();
+    std::string a = args.substr(0, comma);
+    std::string b = args.substr(comma + 1);
+    auto trim = [](std::string& x) {
+        size_t p = x.find_first_not_of(' ');
+        size_t q = x.find_last_not_of(' ');
+        x = (p == std::string::npos) ? std::string() : x.substr(p, q - p + 1);
+    };
+    trim(a);
+    trim(b);
+    std::vector<std::string> leaves;
+    if (!cgFlattenConcatLeaves(body, leaves) || leaves.size() < 2) return std::string();
+    if (leaves.size() == 2 && cgIsIdentText(leaves[0]) && cgIsIdentText(leaves[1]))
+        return "vb6_VarConcatNullV(&" + leaves[0] + ", &" + leaves[1] + ", " + a + ", " + b + ")";
+    // 链（≥3 叶）或叶子不是变量槽 ⇒ 整枚版逐级左结合：
+    //   ((Null & Null) & Null) 与 VB6 的链完全同一个折叠顺序。
+    std::string acc = leaves[0];
+    for (size_t i = 1; i < leaves.size(); ++i)
+        acc = "vb6_VarConcatNullVV(" + acc + ", " + leaves[i] + ")";
+    return acc;
+}
+
+// C30-11 第六十七刀: `Or`/`And` 的 Null 真值表（变体上下文那两站）。
+// 读数 oracle_logic.vbs：Or 只有另一侧是 True 才确定成 True、And 只有另一侧是 False 才确定成
+// False，其余全是 Null；`Null Or Null`/`Null And Null` 也是 Null。
+// 只认发码器自己产的那一形（实测）：
+//   vb6_VariantFromValue(( vb6_VariantToLong(X) | (int32_t)(Y) ))
+//   vb6_VariantFromValue(( vb6_VariantToLong(X) & (int32_t)(Y) ))
+//   vb6_VariantFromValue(( (int32_t)(Y) | vb6_VariantToLong(X) ))      ← 反向
+//   vb6_VariantFromValue(( vb6_VariantToLong(X) | vb6_VariantToLong(Y) )) ← 两槽
+// 任一侧不是「槽」也不是「(int32_t)(…) 字面档」就不动（宁可不变）。
+// 惰性求值：只传槽**地址**，VariantToLong 在 RTL 里算 —— 当实参先算会先报 94。
+std::string CCodeGen::cgNullGuardLogicV(const ASTNode* node, const std::string& cExpr) const {
+    if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    const auto& bin = static_cast<const BinaryExpr&>(*node);
+    // 第六十八刀：op 码表 —— 0=Or 1=And 2=Xor 3=Eqv 4=Imp（RTL 侧同一枚出口）
+    int opCode = -1;
+    switch (bin.op) {
+    case BinaryOp::Or:  opCode = 0; break;
+    case BinaryOp::And: opCode = 1; break;
+    case BinaryOp::Xor: opCode = 2; break;
+    case BinaryOp::Eqv: opCode = 3; break;
+    case BinaryOp::Imp: opCode = 4; break;
+    default: return std::string();
+    }
+    if (cExpr.find("vb6_VarLogicNullV(") != std::string::npos) return std::string();
+
+    size_t s = 0;
+    // 只跳空格：不能跳 ( —— 裸形的首字符就是配对括号，跳掉它前缀判据就全部落空
+    // （第六十七刀第一版就是这么静默不命中的）。
+    while (s < cExpr.size() && cExpr[s] == ' ') s++;
+    static const std::string kFrom = "vb6_VariantFromValue(";
+    std::string inner;
+    if (cExpr.compare(s, kFrom.size(), kFrom) == 0 && cExpr.back() == ')') {
+        inner = cExpr.substr(s + kFrom.size(), cExpr.size() - s - kFrom.size() - 1);
+    } else {
+        // 实参站/存储站拿到的可能是**裸**的 `(<左> | <右>)`（FromValue 还没包）——
+        // 与第六十五/六十六刀同一个坑：两条形都得认，否则永远不命中。
+        inner = cExpr.substr(s);
+    }
+    // 剥掉外层那对全包括号
+    if (inner.size() < 3 || inner.front() != '(' || inner.back() != ')')
+        return std::string();
+    inner = inner.substr(1, inner.size() - 2);
+
+    auto trim2 = [](std::string x) {
+        size_t p = x.find_first_not_of(' ');
+        size_t q = x.find_last_not_of(' ');
+        return (p == std::string::npos) ? std::string() : x.substr(p, q - p + 1);
+    };
+
+    // 深度 0 上找运算符（引号内的不算）
+    auto findTop = [](const std::string& s, const std::string& ops) -> size_t {
+        int depth = 0;
+        for (size_t i = 0; i < s.size(); ++i) {
+            char ch = s[i];
+            if (ch == '(') ++depth;
+            else if (ch == ')') --depth;
+            else if (ch == '"') { for (++i; i < s.size() && s[i] != '"'; ++i) {} }
+            else if (depth == 0 && ops.find(ch) != std::string::npos) return i;
+        }
+        return std::string::npos;
+    };
+
+    std::string left, right;
+    int effOp = -1;
+    if (inner.compare(0, 2, "~(") == 0 && inner.back() == ')') {
+        // Eqv 的发码形：~(A ^ B)（外层那对全包括号已剥）
+        const std::string sub = inner.substr(2, inner.size() - 3);
+        const size_t p = findTop(sub, "^");
+        if (p == std::string::npos) return std::string();
+        left = trim2(sub.substr(0, p));
+        right = trim2(sub.substr(p + 1));
+        effOp = 3;
+    } else {
+        const size_t p = findTop(inner, "|&^");
+        if (p == std::string::npos) return std::string();
+        const std::string rhs = trim2(inner.substr(p + 1));
+        if (inner[p] == '|') {
+            const std::string l = trim2(inner.substr(0, p));
+            // Imp 的发码形：(~A) | B
+            if (l.size() > 4 && l.compare(0, 2, "(~") == 0 && l.back() == ')') {
+                left = trim2(l.substr(2, l.size() - 3));
+                right = rhs;
+                effOp = 4;
+            } else {
+                left = l;
+                right = rhs;
+                effOp = 0;
+            }
+        } else {
+            left = trim2(inner.substr(0, p));
+            right = rhs;
+            effOp = (inner[p] == '&') ? 1 : 2;
+        }
+    }
+    // 文本形与 AST 运算符必须对上，否则说明歧义（宁可不命中也不发错）
+    if (effOp != opCode) return std::string();
+
+    static const std::string kToLong = "vb6_VariantToLong(";
+    auto slotOfSide = [&](const std::string& x) -> std::string {
+        if (x.compare(0, kToLong.size(), kToLong) != 0 || x.back() != ')')
+            return std::string();
+        std::string id = x.substr(kToLong.size(), x.size() - kToLong.size() - 1);
+        if (id.empty()) return std::string();
+        for (char ch : id) {
+            bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '_';
+            if (!ok) return std::string();
+        }
+        return id;
+    };
+    static const std::string kLit = "(int32_t)(";
+    auto litOfSide = [&](const std::string& x) -> std::string {
+        if (x.compare(0, kLit.size(), kLit) != 0 || x.back() != ')')
+            return std::string();
+        return x.substr(kLit.size(), x.size() - kLit.size() - 1);
+    };
+
+    const std::string idL = slotOfSide(left);
+    const std::string idR = slotOfSide(right);
+    const std::string litL = idL.empty() ? litOfSide(left) : std::string();
+    const std::string litR = idR.empty() ? litOfSide(right) : std::string();
+    if (idL.empty() && litL.empty()) return std::string();
+    if (idR.empty() && litR.empty()) return std::string();
+    const std::string slotA = idL.empty() ? "(vb6_VARIANT*)0" : ("&" + idL);
+    const std::string slotB = idR.empty() ? "(vb6_VARIANT*)0" : ("&" + idR);
+    const std::string lit = !litL.empty() ? litL : (!litR.empty() ? litR : "0");
+    const int mask = (idL.empty() ? 0 : 1) | (idR.empty() ? 0 : 2);
+    if (mask == 0) return std::string();
+    // 字面量那一侧的静态类型：VB6 里 `Null Or True` = Boolean True、`Null And False`
+    // = Boolean False，而 C 的 `(int32_t)((-1))` 分不出 Boolean 与整数 ⇒ 在发码时问 AST。
+    int litIsBool = 0;
+    {
+        const auto& be = static_cast<const BinaryExpr&>(*node);
+        const Expr* litSide = !litL.empty() ? be.left.get() : (!litR.empty() ? be.right.get() : nullptr);
+        if (litSide) {
+            const Vb6Type lt = inferExprType(const_cast<Expr&>(*litSide));
+            // 0 = Long（默认）, 1 = Boolean（Null Or True ⇒ Boolean True）,
+            // 2 = Integer（Null Or 5 ⇒ **Integer** 5，VB6 IDE 实测的类型）。
+            // 先看字面量自己的档：inferExprType 对无后缀整数答 Long，
+            // 而 VB6 的 `5` 是 Integer ⇒ 以 LiteralKind 为准。
+            if (litSide->kind == ASTNodeKind::LiteralExpr) {
+                switch (static_cast<const LiteralExpr&>(*litSide).literalKind) {
+                case LiteralKind::Boolean: litIsBool = 1; break;
+                case LiteralKind::Integer: litIsBool = 2; break;
+                default: break;
+                }
+            } else if (litSide->kind == ASTNodeKind::UnaryExpr) {
+                // `-1` 这种：AST 是一元负 + Integer 字面量，VB6 里它的档仍是 Integer
+                // （Null Or -1 = Integer -1，VB6 IDE 实测 D5）。
+                const auto& ue = static_cast<const UnaryExpr&>(*litSide);
+                if (ue.op == UnaryOp::Negate && ue.operand
+                    && ue.operand->kind == ASTNodeKind::LiteralExpr) {
+                    const auto lk = static_cast<const LiteralExpr&>(*ue.operand).literalKind;
+                    if (lk == LiteralKind::Boolean) litIsBool = 1;
+                    else if (lk == LiteralKind::Integer) litIsBool = 2;
+                }
+            } else if (lt == Vb6Type::Boolean) {
+                litIsBool = 1;
+            } else if (lt == Vb6Type::Integer) {
+                litIsBool = 2;
+            }
+        }
+    }
+    return "vb6_VarLogicNullV(" + std::to_string(opCode) + ", " + slotA + ", "
+         + slotB + ", " + lit + ", " + std::to_string(mask) + ", "
+         + std::to_string(litIsBool) + ")";
+}
+
 std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cExpr) const {
     if (!valueNode) return "vb6_VariantEmpty()";
     
@@ -3781,6 +4309,33 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         // 现在字面量也落到 inferExprType → boxToVariant 这一处权威: 后者对 Boolean
         // 发的是同一个 `(int16_t)` 收窄形, 所以发码逐字节不变, 但**档位只有一份**。
         // (字面量落在 inferExprType 的白名单里, 见下面那个 kind 判断。)
+    }
+
+    // C30-11 第六十五刀: Abs/Int/Fix/Hex/Oct 的 Null 传播（必须在下面的
+    // inferExprType switch 之前问，否则被 case Double/String 提前收掉）。
+    {
+        std::string mathV64 = mathNullFamilyV(valueNode, cExpr);
+        if (!mathV64.empty()) return mathV64;
+    }
+
+    // C30-11 第六十七刀: Or/And 的 Null 真值表（同上，要在 switch 之前）。
+    {
+        std::string lgV67 = cgNullGuardLogicV(valueNode, cExpr);
+        if (!lgV67.empty()) return lgV67;
+    }
+
+    // C30-11 第六十六刀: `&` 的双 Null 折叠（同上，要在 switch 之前；
+    // 那张表对这一形答 String，答了就成 vb6_VariantString 再也没机会折 Null）。
+    {
+        std::string catV66 = cgNullGuardConcatV(valueNode, cExpr);
+        if (!catV66.empty()) return catV66;
+    }
+
+    // C30-11 第六十五刀: 比较符的 Null 传播（同上，必须在 switch 之前；
+    // 那张表对比较答 Boolean，答了就变回 Double 包）。
+    {
+        std::string cmpV65 = cgNullGuardCmpV(valueNode, cExpr);
+        if (!cmpV65.empty()) return cmpV65;
     }
 
     // Fix 090d2: C 表达式顶层已是 vb6_VARIANT 时直接返回, 不再包装 —
@@ -3966,6 +4521,21 @@ bool CCodeGen::cExprIsVariantCarrier(const std::string& cExpr) const {
 // 不显式改写的 (Integer/Long/Double/String/Object) 在 _Generic 下与 VB6 同档, 保持
 // 原样以免动到存量发码。
 std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
+    // C30-11 第六十五刀: 实参站的比较符 Null 传播（与存储站同一个判据）。
+    {
+        std::string cmpV65 = cgNullGuardCmpV(expr, cExpr);
+        if (!cmpV65.empty()) return cmpV65;
+    }
+    // C30-11 第六十七刀: 实参站的 Or/And Null 真值表。
+    {
+        std::string lgV67 = cgNullGuardLogicV(expr, cExpr);
+        if (!lgV67.empty()) return lgV67;
+    }
+    // C30-11 第六十六刀: 实参站的 `&` 双 Null 折叠（拿到的是裸 vb6_BSTR_ConcatFree(...)）。
+    {
+        std::string catV66 = cgNullGuardConcatV(expr, cExpr);
+        if (!catV66.empty()) return catV66;
+    }
     // Fix <VBFlexGridDemo>: 实参是裸 COM 调用结果 (vb6_ComCall / vb6_ComGetProp /
     // vb6_ComGetObjectProp 返回 void*, 承载一个 COM VARIANT*) 时, 必须先用
     // vb6_VariantFromComResult 解引用成 vb6_VARIANT (深拷贝并释放原 VARIANT*),
@@ -4026,22 +4596,40 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // 上一版把改名放进调用站 fixup，实测 pclinedraw 当场红：
     // `vb6_AbsV(...) < 0.001` ⇒ cl C2440（float→vb6_VARIANT）+ C2088（struct 不能比）。
     if (expr && expr->kind == ASTNodeKind::IndexOrCallExpr) {
-        const auto& call52 = static_cast<const IndexOrCallExpr&>(*expr);
-        if (call52.positional.size() == 1 && call52.callee
-            && call52.callee->kind == ASTNodeKind::IdentifierExpr
-            && Symbol::toLower(static_cast<const IdentifierExpr&>(*call52.callee).name) == "abs"
-            && inferExprType(*call52.positional[0]) == Vb6Type::Variant) {
-            // 实参已经被 Fix 108c 那站折成 `vb6_VariantToDouble(v)`；`vb6_AbsV` 要的是
-            // **原样的 VARIANT**（子类型阶梅全靠 vt 说话），所以把那一层剥回去。
-            const std::string pre52 = "vb6_Abs(vb6_VariantToDouble(";
-            size_t s52 = 0;
-            while (s52 < cExpr.size() && (cExpr[s52] == '(' || cExpr[s52] == ' ')) s52++;
-            if (cExpr.compare(s52, pre52.size(), pre52) == 0
-                && cExpr.size() >= s52 + pre52.size() + 2 && cExpr.back() == ')') {
-                // 尾部两层右括号（一层 ToDouble、一层 Abs）一并剥掉。
-                std::string inner52 = cExpr.substr(s52 + pre52.size(),
-                                                   cExpr.size() - s52 - pre52.size() - 2);
-                return "vb6_AbsV(" + inner52 + ")";
+        const auto& call64 = static_cast<const IndexOrCallExpr&>(*expr);
+        if (call64.positional.size() == 1 && call64.callee
+            && call64.callee->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string fn64 = Symbol::toLower(
+                static_cast<const IdentifierExpr&>(*call64.callee).name);
+            // C30-11 第六十四刀: 这一族真值都是“Null 进、Null 出”（读数 oracle_num.vbs：
+            // Abs/Int/Fix/Hex/Oct(Null) = Null）。它们以前全落在下方装箱表里，Null 到那里
+            // 已被折成 0（Hex/Oct 还要先过第六十三刀新加的 vb6_VariantToLong 严格门 ⇒ 94）。
+            // 处置：整只槽交给 RTL 的 *V 出口，先判 vtNull 再算。
+            //
+            // ⚠ 判据是**文本前缀**而不是 inferExprType：`vb6_Abs(vb6_VariantToDouble(` 这串
+            //   本身就证明上游那一站真把 Variant 槽折进来了。旧版（第五十二刀的 Abs 那一分支）
+            //   还要再问一句 inferExprType(实参)==Variant，而这个推断对 `Dim nv As Variant`
+            //   的局部答不出 Variant ⇒ 整条路根本没走到（本刀实测：改前发码仍是
+            //   vb6_VariantDouble(vb6_Abs(vb6_VariantToDouble(nv)))，Abs(Null) 给 0）。
+            static const struct { const char* vb; const char* pre; const char* out; } k64[] = {
+                {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
+                {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
+                {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_FixV("},
+                {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
+                {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
+            };
+            for (const auto& m64 : k64) {
+                if (fn64 != m64.vb) continue;
+                const std::string pre64 = m64.pre;
+                size_t s64 = 0;
+                while (s64 < cExpr.size() && (cExpr[s64] == '(' || cExpr[s64] == ' ')) s64++;
+                if (cExpr.compare(s64, pre64.size(), pre64) == 0
+                    && cExpr.size() >= s64 + pre64.size() + 2 && cExpr.back() == ')') {
+                    // 尾部两层右括号（一层提取、一层调用）一并剥掉。
+                    std::string inner64 = cExpr.substr(s64 + pre64.size(),
+                                                       cExpr.size() - s64 - pre64.size() - 2);
+                    return std::string(m64.out) + inner64 + ")";
+                }
             }
         }
     }

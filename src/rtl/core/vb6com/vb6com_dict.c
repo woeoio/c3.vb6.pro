@@ -21,16 +21,23 @@
 
 // ============================================================
 // DISPID 约定（GetIDsOfNames 返回什么，Invoke 就按什么分发）
+// **与真 scrrun.dll 的 Scripting.Dictionary 逐号对齐**（读数取自真库 memid，即
+// src/com/builtin_scripting_sigs.inc 的 kBM_Dictionary）。我们既然已经按真库注册了
+// 签名表，DISPID 就不能再自编号：否则任何按 memid 走的路径（外部宿主、缓存了
+// DISPID 的早期绑定代码）会指到错成员。曾用编号: Exists2/Items3/Keys4/Remove5/
+// RemoveAll6/CompareMode7/Count8 —— 已按真库改掉。
 // ============================================================
 #define DICT_DISPID_ITEM        0        // 默认成员 DISPID_VALUE，支持 d("k")
 #define DICT_DISPID_ADD         1
-#define DICT_DISPID_EXISTS      2
-#define DICT_DISPID_ITEMS       3
-#define DICT_DISPID_KEYS        4
-#define DICT_DISPID_REMOVE      5
-#define DICT_DISPID_REMOVEALL   6
-#define DICT_DISPID_COMPAREMODE 7
-#define DICT_DISPID_COUNT       8        // 必须为正数: vb6_ForEach_Init 用 dispid>0 判定 Count 可用
+#define DICT_DISPID_COUNT       2        // 必须为正数: vb6_ForEach_Init 用 dispid>0 判定 Count 可用
+#define DICT_DISPID_EXISTS      3
+#define DICT_DISPID_ITEMS       4
+#define DICT_DISPID_KEY         5        // 属性写: d.Key(旧键) = 新键（改名）
+#define DICT_DISPID_KEYS        6
+#define DICT_DISPID_REMOVE      7
+#define DICT_DISPID_REMOVEALL   8
+#define DICT_DISPID_COMPAREMODE 9
+#define DICT_DISPID_HASHVAL     10       // 真库有、文档没有的成员
 #define DICT_DISPID_NEWENUM     (-4)     // DISPID_NEWENUM
 
 // VB6 错误号（描述文本复用 vb6com.c 的 vb6_StdErrorDesc 表）
@@ -408,6 +415,74 @@ static HRESULT dict_doRemove(vb6_BuiltinDict* d, DISPPARAMS* pdp, EXCEPINFO* pex
     return S_OK;
 }
 
+// Key —— 属性写: d.Key(旧键) = 新键（改名）。实测（.temp/dict/oracle_key.vbs）:
+//   K1 改名成功: 旧键消失、新键出现、值不动；K5 枚举位置不变（Keys = z,b,c）
+//   K2/K4 旧键不存在: 32811，字典原样不动（不会顺手新建）
+//   K3 新键已被别的键占用: 457，两边都不动
+//   K6 默认（Binary）比较改大小写不算找到 → 32811；K7 文本比较可以
+//   同名改名（新旧按 CompareMode 判等）: 空操作 err=0，不报 457
+//   数值键/空串键同样可改（numkey 1→2、emptykey ""→"k"）
+static HRESULT dict_doKeyPut(vb6_BuiltinDict* d, DISPPARAMS* pdp, EXCEPINFO* pexcep) {
+    if (!pdp || pdp->cArgs < 2 || !pdp->rgvarg) return dict_fail(pexcep, DICT_ERR_INVALID_ARG);
+    VARIANT* pNew = &pdp->rgvarg[0];              // 值（新键）在最前（DISPATCH 反序约定）
+    VARIANT* pOld = &pdp->rgvarg[1];
+    int32_t at = dict_find(d, pOld);
+    if (at < 0) return dict_fail(pexcep, DICT_ERR_NOT_FOUND);
+    if (dict_keyEq(d, &d->entries[at].key, pNew)) return S_OK;   // 同名: 什么都不动
+    int32_t other = dict_find(d, pNew);
+    if (other >= 0 && other != at) return dict_fail(pexcep, DICT_ERR_KEY_EXISTS);
+
+    // 摘链 → 换键 → 重新入链。槽位（entries 下标）不动，所以枚举顺序与 Keys/Items 顺序都不变。
+    uint32_t h0 = dict_keyHash(d, &d->entries[at].key) & (uint32_t)(d->nbuckets - 1);
+    int32_t prev = -1, cur = d->buckets[h0];
+    while (cur >= 0 && cur != at) { prev = cur; cur = d->entries[cur].next; }
+    if (cur == at) {
+        if (prev < 0) d->buckets[h0] = d->entries[at].next;
+        else          d->entries[prev].next = d->entries[at].next;
+    }
+    d->entries[at].next = -1;
+
+    VariantClear(&d->entries[at].key);
+    VariantInit(&d->entries[at].key);
+    if (FAILED(VariantCopy(&d->entries[at].key, pNew))) return E_OUTOFMEMORY;
+
+    uint32_t h1 = dict_keyHash(d, &d->entries[at].key) & (uint32_t)(d->nbuckets - 1);
+    d->entries[at].next = d->buckets[h1];
+    d->buckets[h1] = at;
+    return S_OK;
+}
+
+// HashVal —— 真引擎的字符串算法是反推出来的（.temp/dict/probe_hash.vbs）：
+//   h = 0; 每个字符 h = (h * 17 + c) mod 1201; CompareMode != 0 时先取小写。
+//   实测: ""=0 "a"=97 "A"=65 "abc"=974 "abcd"=1045 "abcde"=1052 "hello"=283
+//         "zz"=995；文本比较下 "a"/"A" 都得 97（按小写折）。
+// **不查存在性**（这是真引擎的行为，不是省事）: 键不存在、甚至空字典也照样算，err=0
+//   （"nope"=436 = fold17("nope"); 空字典 HashVal("a")=97）。
+// 已知未对齐: **非字符串键**。真引擎自称一套（0→0、1→161、2→985、3→196、-1→930、
+//   1.5→573、65536→134 …），穷举 VARIANT 布局×宽度×字节序×seed 全不命中
+//   （.temp/dict/derive_num.ps1），故不猜，一律给 0 并在 ai/039 §11.32 记明。
+//   语料零引用、成员本身未文档化，影响面仅限“主动调 HashVal 传数值键”。
+static int32_t dict_vb6HashVal(const vb6_BuiltinDict* d, const VARIANT* v) {
+    if (!v || dict_class(v) != DK_STR) return 0;
+    const wchar_t* s = V_BSTR(v) ? V_BSTR(v) : L"";
+    int32_t h = 0;
+    for (const wchar_t* p = s; *p; p++) {
+        wchar_t ch = (d->cmpMode != 0) ? (wchar_t)towlower((wint_t)*p) : *p;
+        h = (h * 17 + (int32_t)ch) % 1201;
+    }
+    return h;
+}
+
+static HRESULT dict_doHashVal(vb6_BuiltinDict* d, DISPPARAMS* pdp, VARIANT* pResult, EXCEPINFO* pexcep) {
+    VARIANT* pKey = dict_argRaw(pdp, 0);
+    if (!pKey) return dict_fail(pexcep, DICT_ERR_INVALID_ARG);
+    if (pResult) {
+        V_VT(pResult) = VT_I4;                    // 真库签名写的是 Variant，实测 TypeName = Long
+        V_I4(pResult) = (LONG)dict_vb6HashVal(d, pKey);
+    }
+    return S_OK;
+}
+
 static HRESULT dict_doRemoveAll(vb6_BuiltinDict* d) {
     for (int32_t i = 0; i < d->used; i++) {
         VariantClear(&d->entries[i].key);
@@ -493,13 +568,15 @@ static HRESULT STDMETHODCALLTYPE dict_GetIDsOfNames(IDispatch* pDisp, REFIID rii
         if (!n) { rgDispId[i] = DISPID_UNKNOWN; continue; }
         if      (_wcsicmp(n, L"Item")        == 0) rgDispId[i] = DICT_DISPID_ITEM;
         else if (_wcsicmp(n, L"Add")         == 0) rgDispId[i] = DICT_DISPID_ADD;
+        else if (_wcsicmp(n, L"Count")       == 0) rgDispId[i] = DICT_DISPID_COUNT;
         else if (_wcsicmp(n, L"Exists")      == 0) rgDispId[i] = DICT_DISPID_EXISTS;
         else if (_wcsicmp(n, L"Items")       == 0) rgDispId[i] = DICT_DISPID_ITEMS;
+        else if (_wcsicmp(n, L"Key")         == 0) rgDispId[i] = DICT_DISPID_KEY;
         else if (_wcsicmp(n, L"Keys")        == 0) rgDispId[i] = DICT_DISPID_KEYS;
         else if (_wcsicmp(n, L"Remove")      == 0) rgDispId[i] = DICT_DISPID_REMOVE;
         else if (_wcsicmp(n, L"RemoveAll")   == 0) rgDispId[i] = DICT_DISPID_REMOVEALL;
         else if (_wcsicmp(n, L"CompareMode") == 0) rgDispId[i] = DICT_DISPID_COMPAREMODE;
-        else if (_wcsicmp(n, L"Count")       == 0) rgDispId[i] = DICT_DISPID_COUNT;
+        else if (_wcsicmp(n, L"HashVal")     == 0) rgDispId[i] = DICT_DISPID_HASHVAL;
         else if (_wcsicmp(n, L"_NewEnum")    == 0) rgDispId[i] = DICT_DISPID_NEWENUM;
         else {
             rgDispId[i] = DISPID_UNKNOWN;
@@ -571,6 +648,12 @@ static HRESULT STDMETHODCALLTYPE dict_Invoke(IDispatch* pDisp, DISPID dispIdMemb
             return S_OK;
         case DICT_DISPID_NEWENUM:
             return dict_doNewEnum(d, pVarResult);
+        case DICT_DISPID_KEY:
+            // 只有属性写；按方法调用 d.Key(x) 在真引擎里也报 438（这里保持一致）
+            if (!(wFlags & (DISPATCH_PROPERTYPUT | DISPATCH_PROPERTYPUTREF))) break;
+            return dict_doKeyPut(d, pdp, pexcep);
+        case DICT_DISPID_HASHVAL:
+            return dict_doHashVal(d, pdp, pVarResult, pexcep);
         case DICT_DISPID_ITEM:
             if (wFlags & (DISPATCH_PROPERTYPUT | DISPATCH_PROPERTYPUTREF))
                 return dict_doItemPut(d, pdp, pexcep);

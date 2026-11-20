@@ -1549,6 +1549,9 @@ std::string CCodeGen::toDoubleIfVariant(const std::string& cExpr, const Expr* as
 // **原样**递进去 ⇒ 整只 vb6_VARIANT 结构体交给 BSTR 形参 ⇒ C2440
 // (PhotoDemon Evaluator.c 474: vb6_Like(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。
 std::string CCodeGen::toStringIfVariant(const std::string& cExpr, const Expr* astExpr) {
+    // 第六十二刀: `Like` 这一站**不纳入严格口径**。VB6 的 `Null Like "a"` 结果是 Null
+    // （不是 94），而本刀所有读数都没量过 Like；没读数的格子不许顺手收紧，
+    // 否则就是拿一个错换另一个错。故这里保持原宽松出口。
     if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
         return "vb6_VariantToString(vb6_VariantFromComResult(" + cExpr + "))";
     if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToString(" + cExpr + ")";

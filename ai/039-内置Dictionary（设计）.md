@@ -1356,3 +1356,1890 @@ oracle 说槽、`ChkLong` 当标量吃）。
 `ByVal Single` 形参档位（进函数的档位问题，不是打印问题）；`Str$(False)` 无真机读数（本轮只测了
 True，按同构写 `" False"`）；Double 噪声需要发码侧 provenance（§11.25）。
 
+### 11.32 第五十八刀：`Key`（改名）与 `HashVal` + DISPID 对齐真库（顺带修一条默认成员写的 AV）
+
+留白普查（§7.15 of `ai/040`，109 个真库成员按名字对实现）只剩 Dictionary 两个名字没出现：
+`Key`（属性写）与 `HashVal`（只读）。本刀补齐，并把 DISPID 对齐真库。
+
+#### 一、读数先于实现（探针 `.temp/dict/`）
+
+| 用例 | 真引擎（cscript + 真 scrrun） |
+|---|---|
+| 改名 `d.Key("a") = "b"` | err=0；旧键消失、新键在、值不变 |
+| 旧键不存在（非空字典 / 空字典） | **32811**，字典原样不动（不顺手新建） |
+| 新键已被别的键占用 | **457**，两边都不动，Count 不变 |
+| 枚举顺序 | **位置不动**（`d.Add a,b,c` 后改 a→z 得 `z,b,c`） |
+| 改名成同名（按 CompareMode 判等） | err=0，**空操作**（不报 457） |
+| 默认（Binary）比较下改大小写 `Key("A")` | **32811**（找不到）；文本比较下可以 |
+| 数值键 / 空串键 | 都能改（`1→2`、`""→"k"`），值跟着走 |
+| `HashVal("a")` / `("abc")` / `("hello")` | Long：97 / 974 / 283；**不查存在性**（缺键、空字典也照算，err=0） |
+
+`HashVal` 的字符串算法是**反推出来的**（`probe_hash.vbs` 13 条）：
+
+```
+h = 0;  对每个字符:  h = (h * 17 + c) mod 1201;   CompareMode != 0 时先取小写
+```
+
+`""`=0、`"a"`=97、`"A"`=65、`"aa"`=545、`"abc"`=974、`"abcd"`=1045、`"abcde"`=1052、
+`"hello"`=283、`"zz"`=995 全部命中；文本比较下 `HashVal("a")` 与 `HashVal("A")` 都得 97
+（按小写折）。
+
+#### 二、实现（`src/rtl/core/vb6com/vb6com_dict.c`）
+
+1. **DISPID 对齐真库 memid**：Item0 / Add1 / **Count2** / Exists3 / Items4 / **Key5** / Keys6 /
+   Remove7 / RemoveAll8 / CompareMode9 / **HashVal10** / _NewEnum-4。以前是自编号
+   （Exists2/Items3/Keys4/Remove5/RemoveAll6/CompareMode7/**Count8**）。改的理由不是洁癖：
+   上一刀已经按真库注册了签名表（`src/com/builtin_scripting_sigs.inc`，带真 memid），
+   DISPID 再自编就会出现「同一个成员两个号」，任何按 memid 走的路（外部宿主、缓存了
+   DISPID 的早期绑定码）都会指到错成员。`vb6_ForEach_Init` 只要求 Count 的 dispid > 0，2 满足。
+2. `Key`（属性写，dispid 5）：旧键查不到→32811；新键与旧键按 `dict_keyEq` 判等→空操作；
+   新键被别人占用→457；否则**摘链→换键→重新入链**，槽位不动 ⇒ 枚举/Keys/Items 顺序不变、值不动。
+3. `HashVal`（dispid 10）：上表算法，返回 VT_I4（真库签名写的是 Variant，实测 `TypeName` = Long）。
+
+#### 三、对拍结果（`.temp/dict/run_key.ps1`、`run_reg.ps1`）
+
+- 成员面 52 条并排比：**行为/字符串 38 条逐条一致**（K1–K8、H1–H7、M1/M2、O1/O2、U1/U2、
+  S[\*]13 条、C1–C3）。
+- DISPID 重排回归 21 条：18 条一致；3 条差异全部与 Dispid 无关，逐条交代见「四」。
+- `C3_FSO_PREFER_MS` **只管 FSO**（`vb6com_fso.c:2066`），对 Dictionary 无效 ⇒ Dictionary 只有
+  内建一条实现腿，对照轴是「cscript+真 scrrun」对「内建」。这点以前在 FSO 刀的脚本里容易被误读成两腿对照。
+
+#### 四、没对齐 / 没修的，逐条记账
+
+1. **非字符串键的 `HashVal` 未对齐**（本刀只给 0）。真引擎数值键另有一套：`0→0`、`1→161`、`2→985`、
+   `3→196`、`-1→930`、`1.5→573`、`65536→134`。穷举 VARIANT 布局（vt 在前/值在偏移 4 或 8）×
+   宽度 4/8 × 字节序 × seed 候选全不命中（`.temp/dict/derive_num.ps1`），**不猜**，直接记缺口。
+   影响面：`HashVal` 是未文档化成员，语料零引用，只有「主动拿数值键调 HashVal」才会看到差别。
+2. **`Join` 遇到数值元素抛 13**（旧缺口，**第五十九刀已修**，见 §11.33）：`Join(Array(1,2,3), "|")`
+   真引擎给 `1|2|3`，我们报 13（`.temp/dict/JoinNum.bas`）。不是 Dictionary 的事（`Keys`/`Items` 返回的就是
+   Variant 数组，字符串元素能 Join）。
+3. **链式默认成员取值** `d("outer")("inner")` 两条腿都得不到值：真引擎 7，我们抛 5
+   （`.temp/dict/NestProbe.bas`）。生成的 C 里那条赋值被整体折叠成 `v`（`--emit-c` 可看），
+   与本次改的入口无关，属既有缺口。
+
+#### 五、顺带修掉的一条既有 AV（`d("k") = v`）
+
+回归探针在 `d("k") = "v"` 处 `0xC0000005`。取证三步：
+
+1. **不是我改出来的**：把本刀的 `vb6com_dict.c` stash 掉重编，同一探针仍 AV（退出码相同）；
+2. `C3_COM_TRACE=1` 的最后一行为 `getDispid("(null)") … dispid=-1`，随后 AV `read target=0x0`；
+3. `--emit-c` 的生成码是 `vb6_ComSetPropArg(d, 0, …)` —— 参数化**默认成员**赋值把成员名发成 NULL
+   （`cgen_util_comwrite.cpp` 的 `defMemLit25`）。
+
+于是链条是：`vb6_getDispid(pDisp, NULL)` → 缓存遍历 `wcscmp(…, NULL)`（或错误分支
+`fwprintf("%ls", NULL)`）→ 读 0x0。修法（`vb6com_invoke.c`）：
+
+- `vb6_getDispid` 开头 `if (!name) return DISPID_UNKNOWN;`（防 NULL 进 `wcscmp`）；
+- `vb6_ComSetPropArgRcv` / `vb6_ComSetRefRcv`：成员名为 NULL/空 **一律按 DISPID_VALUE(0)** 发送，
+  不按名字查（默认成员在各库里叫法不同，真语义就是 0）；日志对 NULL 做兜底。
+- `SetRef` 的宿主/OCX 两条分支仍要名字，用 `L"Item"` 当默认成员名（与取值腿
+  `vb6_ComCallObjectDefaultRcv` 的旧口径一致）。
+
+修后：`S2 put ok count=1` / `S3 get=v`，exit=0；回归探针 R10/R10b 与真引擎一致。
+
+#### 六、本刀验收
+
+编译绿；`.temp/dict/run_key.ps1` 行为/字符串差异 0；`run_reg.ps1` 只剩上述 3 条已记账差异；
+门（GA）见提交信息。
+
+### 11.33 第五十九刀：`Join` 的元素按 CStr 口径转（用户拿 VB6 立即窗口点的那条）
+
+§11.32 记的「`Join` 遇数值元素抛 13」被用户当场验证了：VB6 立即窗口里
+`?join(array(1,2,3),"|")` 与 `?vba.join(array(1,2,3),"|")` 都答 `1|2|3`。旧夹具
+`tests/test_joinfilter.bas` 里那条 `JF-err=13` 是把**错的行为钉成了期望值**，本刀改回。
+
+#### 一、读数（`.temp/join/oracle_join.vbs` 23 条 + 类型化数组 4 条 + 非数组/Null 5 条）
+
+| 元素类型 | 真引擎 |
+|---|---|
+| Long / Integer / Byte | `1\|2\|3` / `-1\|-2` / `65\|66` |
+| Single / Double | `1.5\|2.25` / `1.5\|1E+20`（`0.000001\|0.1` 也对） |
+| Currency | `1.2345\|-2` |
+| Boolean | `True\|False` |
+| Empty | 空串（`Array(Empty,1)` → `\|1`） |
+| **Null 元素** | **13** |
+| Date | 本地化文本（`2020/1/2 3:04:05`） |
+| 混排 | `a-1-True-` |
+| **对象元素** | **450** |
+| **数组元素** | **13** |
+| 类型化数组 `Long()/Integer()/Double()/String()` | 一律转文本，不报错 |
+| **非数组**（`Join(5)` / `Join("abc")` / `Join(Empty)`） | **13** |
+| **二维数组** | **13** |
+| 分隔符 Empty / 只给一个参数 | 拼接 / 默认空格 |
+| **分隔符 Null** / **整体 Null** | **94** |
+
+#### 二、实现（`src/rtl/core/vb6rtl/vb6rtl_compat.c`）
+
+1. 新增 `vb6_SA_ReadJoinStrAt()`：**Join 专用**的元素读取。字符串数组直取；Variant 数组按 vt 分派
+   （Empty→空、BSTR→原值、Null→13、数组→13、对象→450、其余→交给 `vb6_CStr`）；
+   类型化数组按 elemType 造等价 Variant 再走 `vb6_CStr`（打印口径与 CStr 单一主人）。
+   **故意不合并**进 `vb6_SA_ReadStrAt`（那是 `Filter` 的旧口径，只吃字符串/Empty）。
+2. `vb6_Join()`：`!arr || cDims != 1` → 13（旧写法落入 `count<=0` 分支静默返回空串，等于把错当对）；
+   元素拼接改成可增长缓冲区，现造的元素串用完即释放。
+
+#### 三、对拍与夹具
+
+- 23 条并排：**J01–J18 全部逐字一致**（数值/布尔/货币/字节/Empty/混排/长整型/P 维）；
+  错误面 J19/J20/J22（非数组/二维/数组元素 → 13）也一致。
+- `tests/test_joinfilter.bas` 补了 `JF-num/JF-mix/JF-byte/JF-cy/JF-null-err/JF-nonarr-err/JF-2d-err`，
+  并用等价 VBS 逐条复核过真机值；`tests/run_tests.ps1` 的期望表同步（删 `JF-err=13`）。
+
+#### 四、本刀发现但**未修**的（均与本刀改动无关，逐条留证）
+
+1. **分隔符为 Null 时的 94 丢了**（J14：真引擎 94，我们 err=0 并给 `12`）。根因不在 Join：
+   发码把实参转成 `vb6_VariantToString(vb6_VariantNull())`，那条转换站对 Null 静默给空串。
+   真 VB6 的「Null → String」是 94；要改就得改强制转换站，影响面比 Join 大，另开一刀。
+2. **`Array(<对象>)` 把对象存成 Long**（V1：`VarType=3`、`TypeName=Long`、`IsObject=False`，���出的“值”
+   是指针数）。这才是 J21（`Join(Array(obj))`）的根因；Join 自己的 450 分支是通的 ——
+   用 `Join(d.Items, "|")`（值为对象）实测得到 450。
+3. **`Filter` 遇数值元素仍抛 13**（J23：真引擎 err=0）。真机行为是「按文本匹配、结果**保留原元素类型**」
+   （`Filter(Array(1,2,21),"1",True)` → 2 个元素、`TypeName` 还是 Integer）；我们的结果数组是 BSTR 型，
+   要修必须改结果数组的元素型，属结构性改动。
+4. **数字做分隔符 `Join(arr, 0)` 编译不过**（C2440: double→BSTR），真引擎给 `102`。
+5. 附带发现：`Array(CDate("..."))` / `Array(CByte(..))` 裸写会撞元素 setter 类型推断
+   （生成 `vb6_ArraySetBSTR(..., vb6_CDate(...))` → C2440）。本刀探针一律先落 Variant 变量绕开，
+   这条单独记在这里。
+
+### 11.34 第六十刀：`Array()` 的元素打包（对象 / Byte / Date / Currency / Single）
+
+§11.33 记的第 2 条（`Array(<对象>)` 被存成 Long，`TypeName=Long`）和第 5 条
+（`Array(CDate/CByte)` C2440）是**同一处发码**：`cgen_expr_call_builtin_pre.inc` 里的
+`Array()` 元素 setter 选择链是「认 Long/Double 字面量 + 猜 BSTR + 其余一律 Long」。
+
+#### 一、读数（`.temp/arr/oracle_arr2.vbs` + `.temp/arr/ArrElem.bas`）
+
+| 实参 | 真值 | 改动前发码 |
+|---|---|---|
+| `CByte(65)` | **17** | `ArraySetLong` → 3 |
+| `CDate("2020-01-02")` | **7** | `ArraySetBSTR` → **C2440 编不过**（实参里含 `L"..."`，被 `looksLikeBSTR` 猜中） |
+| `CCur(1.2345)` | **6** | `ArraySetLong` → 3 |
+| `CSng(1.5)` | **4** | `ArraySetLong` → 3 |
+| `CLng(5)` / `CInt(7)` | 3 / 2 | 3 / 2（本来就对） |
+| `True` / `Empty` / `Null` | 11 / 0 / 1 | 已对（第 348 刀） |
+| 混排 `Array(1,"x",True,Empty,Null)` | `2,8,11,0,1` | 已对 |
+| **`Array(<对象>)`** | **9，`IsObject=True`，`TypeName=Dictionary`** | `ArraySetLong(d)` → 3，`TypeName=Long`（指针当数） |
+| **`Array(Nothing)`** | **9，`IsObject=True`** | `vb6_VariantFromValue(NULL)` → 非对象档 |
+
+对象那两格**不能拿 cscript 当真值**：VBScript 把对象实参自动取默认属性（`Array(d)` 装进去的是
+`d` 的默认成员值，不是引用）。真值口径来自 VB6 语义（`Array` 存引用），并与既有实测
+`Join(d.Items)`（值为对象）→ **450** 互洽。
+
+#### 二、实现
+
+1. **选择链**（同文件，仍在 `variantSetter` 这条唯一出口附近）：新增
+   - `Nothing` 字面量：改发 `vb6_ArraySetObject(arr, i, NULL)`（原来那句注释假设 `_Generic` 会落
+     `vb6_VariantObject`，实测没落）；
+   - `knownObjectVars_` 里的标识符 或 `inferExprType` 答 Object/DataObject → 对象出口；
+   - `inferExprType` 答 Byte/Date/Currency/Single → `vb6_VariantByte/VariantDate/VariantCur/VariantSingle`。
+   **`knownObjectVars_` 是必须的**：`inferExprType` 对局部 `As Object` 答不出来（它只看 `symTab_`，
+   局部变量在那里不可达）。
+2. **新增 RTL 出口** `vb6_ArraySetObject()`（`vb6rtl_date.c` + `vb6rtl_array.h`）：清槽后
+   `vt=VT_DISPATCH` + **一次** `vb6_ComAddRefDispatch`。
+   没有发成 `vb6_ArraySetVariant(arr, i, vb6_VariantObject(p))`：那条是 `VariantCopy` 且**不清源**，
+   临时值没人 `VariantClear` ⇒ 每个对象元素泄漏一份引用。
+3. 副作用（正向）：`Join(Array(obj))` 现在真的走到 **450** —— 改动前对象已被压成 Long，
+   450 那条分支根本不可达（§11.33 因此把它记成「Join 的缺口」，实则不是）。
+
+#### 三、验收
+
+- `.temp/arr/ArrElem.bas` 19 条：A1/A2/A3 对象档 9/True、A4 17、A5 7、A6 6、A7 `2,8,11,0,1`、
+  A9 `Join(Array(obj))`=450、A10 4、A11 3、A15/16/17 11/0/1 —— 与真值逐条一致。
+- `Array(CreateObject("..."))` → 9/True；`Array(o, 1)` → `9,2`（另一条表达式形态，也通）。
+- 夹具 `tests/jsonfast_611/ArrayLiteralVariants.bas` 补 `AL-obj/AL-obj-is/AL-nothing-is/AL-byte/
+  AL-cy/AL-sng/AL-date2` 七条，`run_tests.ps1` 期望表同步；本机 19 行输出与真值逐字一致。
+- 哨兵 `scripts/check_array_literal_variants.ps1`：R4 的 `vb6_VariantDate(` 计数 1→2（第二个是
+  `Array(<Date 值>)` 的真出口），新增 **R11** 钉对象/Byte/Cur/Single 四个出口的出现次数，
+  R9/R10 补新针。PASS。
+
+#### 四、仍遗留
+
+- §11.33 的 #1（Null→String 该给 94 的强制转换站）、#3（`Filter` 遇到数值元素仍抛 13）、
+  #4（`Join(arr, 0)` 数字分隔符 C2440）**未动**。
+- 新发现：`CVar("x")` 链接失败（`LNK2019: vb6_CVar`，内建整族里没有 CVar）。
+
+### 11.35 第六十一刀：`Filter` 的元素档（结果数组逐元素保子类型）
+
+§11.33 记的第 3 条：`Filter` 遇数值元素抛 13、结果数组恒为 BSTR 档。真引擎不是这样：
+**命中按文本比，结果逐元素保留自己的档**。
+
+#### 一、读数（`.temp/filt/oracle_filt.vbs`，15 条）
+
+| 条件 | 真引擎 |
+|---|---|
+| `Filter(Array(1,2,21),"1",True)` | n=2, LBound 0, **t=2(Integer)**, `1|21` |
+| 同上 `include=False` | n=1, t=2, `2` |
+| `Filter(Array(1.5,2.25,11.5),"1.5",True)` | n=2, **t=5(Double)**, `1.5|11.5` |
+| `Filter(Array("ab","cd","ae"),"a",True)` | n=2, t=8, `ab|ae` |
+| `Filter(Array(True,False),"True",True)` | n=1, **t=11(Boolean)** |
+| `Filter(Array(1,"x1",True),"1",True)` | n=2, **t=2,8（各元素各自不变）**, `1|x1` |
+| 零命中 | LBound 0 / UBound **-1** |
+| 空匹配串 `""` | 全命中 |
+| 文本/二进制比较 | 1 / 0 命中 |
+| `Filter(5,"x")` | **13** |
+| `Filter(Array(Empty,1),"",True)` | n=2, **t=0(Empty)** |
+| `Filter(Array(Null,1),"1",True)` | n=1, **err=0**（Null 元素不报错、不命中） |
+| `Filter(Null,"x")` | **94** |
+
+#### 二、实现（`src/rtl/core/vb6rtl/vb6rtl_compat.c`）
+
+1. 新增 `vb6_SA_ReadFilterText()`：元素→文本，多一个 `hasText` 出参 —— `Null` / 数组元素 /
+   对象元素 `hasText=0`（不报错，只是不参与命中），其余按 CStr 口径转。**没有**复用
+   `vb6_SA_ReadJoinStrAt`：Join 对 Null 元素**抛 13**（已实测），两边口径不同。
+2. 新增 `vb6_SA_ReadVariantAt()`：命中元素读成一枚 Variant（类型化数组按自己档装）。
+3. `vb6_Filter()` 重写：
+   - 结果数组档：源是 `vb6_sa_bstr` ⇒ 仍是 BSTR 数组（既有口径，零回归）；其余 ⇒ **Variant 数组**，
+     逐元素 `vb6_VariantCopy`（这条就是 F1/F3/F5/F6/F12 的根）。
+   - 两遗的谓词统一：`hasText && match` 才算，空匹配串全命中，`owned` 的临时串两遗都释。
+4. 顺带堵一个既有崩溃：发码对非数组实参**不一定做转换**，`Filter(5,"x")` 发成
+   `vb6_Filter(5, ...)`（整数当指针）⇒ 旧写法 `source->lBound` 直接 0xC0000005（实测改动前
+   F11 之后进程退出码 1）。现在 `vb6_FilterSourceUsable()` 用 SEH 探一下再解引用，野指针兜成 13。
+
+#### 三、验收
+
+- 15 条并排：**14 条逐字一致**（F1–F13、F15）；F11 由崩变 13（与真引擎一致）。
+- 夹具 `tests/test_joinfilter.bas` 补 `JF-fnum`/`JF-fmix`/`JF-fempty`/`JF-fnull`，
+  `run_tests.ps1` 期望表同步；本机输出与真引擎逐字一致。
+- 零回归：`test_builtin_arity` 的 `AR-filter=[abc]`（字符串源，走 BSTR 结果档）不变。
+- 门（GA）见提交信息。
+
+#### 四、遗留
+
+1. **`Filter(Null, …)` 真引擎给 94，我们 13**：Null 在 `vb6_VariantToSafeArray1D` 里和普通
+   非数组一样化成 NULL，两者在本函数里分不开。要修得动「Variant → 数组」那一站，
+   与 `Join(Null)` 该给 94（§11.33 #1 的第二半）同一格。
+2. **对象元素 / 数组元素参与 `Filter` 的判定未测**：cscript 传对象会取默认属性，拿不到真值。
+3. 类型化数组作源（如 `Dim l() As Long`）本机不再报错、结果给 Variant 数组，但真 VB6 口径未测。
+
+### 11.36 第六十二刀：Null 转换站（Variant(Null) → String 一律 94）
+
+§11.33 #1 与 §11.35 遗留 1 指向同一处：Variant 里的 Null 在被当成**字符串**用时，
+真引擎报 **94**，我们静默给空串（J14 的 `Join(arr, Null)` 就是这一格的影子）。
+
+#### 一、读数（`.temp/null/oracle_null.vbs` 27 条 + `.temp/null/NullProbe.bas`）
+
+| 条件 | 真引擎 | 我们(改前) | 我们(改后) |
+|---|---|---|---|
+| `CStr(Null)` | 94 | 0 | 0（本刀未动，见遗留 0） |
+| `Asc(Null)` / `Chr(Null)` | 94 / 94 | 0 / 0 | **94** / 0 |
+| `CInt/CLng/CDbl(Null)` | 94 | 0 | 0 |
+| `Join(arr, Null)`（分隔符） | **94** | 0 | **94** |
+| `Join(Null, "\|")`（源） | 94 | 13 | 13 |
+| `Split(Null, ",")` | 94 | 0 | **94** |
+| `Replace(Null, …)` | 94 | 0 | **94** |
+| `UBound(Null)` | 13 | 9 | 9 |
+| `Len/Trim/UCase/Mid/Left/LCase(Null)` | cscript 0 | 0 | **94** |
+| `Val(Null)` | cscript 13 | 0 | **94** |
+| `Null & "x"` / `"x" & Null` | VB6：结果是 **Null**（cscript 是宿主口径，不当真值） | `"x"` | `"x"` |
+| `Null = ""` | Null | False | False |
+| `Null + 1` | Null | Null | Null ✓ |
+| `IsNull(Null)` | True | True ✓ | True ✓ |
+| `CStr(Empty)` | `""` | `""` ✓ | `""` ✓ |
+| `Dim s As String: s = Null` | 94 | 0 | 0 |
+
+口径说明：VB6 的通用规则是「String 形参 / String 目标收 Null ⇒ 94」。cscript 对
+`Len/Trim/UCase/Left/Mid` 宽松成 0、`Val` 给 13 属 VBScript 宿主差异——这几格按 VB6 规则
+统一取 94，并在探针文件头注明“不当真值”。
+
+#### 二、实现
+
+1. **RTL**：新增 `vb6_CStrStrict(vb6_VARIANT)`（`vb6rtl_conv.c` + `vb6rtl_builtin.h`）：
+   `vt == Null` ⇒ 抛 94（`Invalid use of Null`），否则委托 `vb6_CStr`。
+   特意**不改** `vb6_CStr`：`&` 与 `Debug.Print` 走的是它，两者口径另算。
+2. **五个站换成严格出口**：
+   - `cgen_expr_call_arg_variant.inc`：“Variant 实参 → String 形参”总口（并把它加进
+     “已是 BSTR 不重复包装”的前缀表）—— 这一格就是 J14；
+   - `cgen_expr_binary_util.cpp` 的 `wrapToBSTR()` 五个分支；
+   - `cgen_util_classtype.cpp` 的 `toStringIfVariant()` 三个分支；
+   - `cgen_assign_value_sem.inc` 六处赋值折算。
+
+   > `CStr` 本体**不换**：`vb6_CStr` 在 RTL 里是一组按实参类型分诊的重载宏，把内建表里的
+   > 名字换成只收 `vb6_VARIANT` 的 `vb6_CStrStrict`，`CStr(<bool 表达式>)` / `CStr(5)` 这类
+   > 标量实参就落成 C2440（int → vb6_VARIANT）。这一点是门 `44311607151` 拿 4 个作业
+   > （test_datelit / test_date_display / b181_baformal / test_redim_elem / b591_radixtier）
+   > 换来的：改名后本地复现 `dl.c(12): error C2440`，回退即全绿。
+
+   > `Like` 这一站（`toStringIfVariant`，只有 `Like` 用）**不纳入**严格口径：VB6 的
+   > `Null Like "a"` 结果是 Null（不是 94），而本刀读数没量过 Like —— 没读数的格不顺手收紧。
+
+#### 三、验收
+
+- 探针 `NullProbe.bas` 29 条：String 面全部到位（上表加粗格）。
+- 夹具 `tests/test_joinfilter.bas` 补 `JF-nullcstr=94 / JF-nullasc=94 / JF-nulldelim=94 /
+  JF-nullsplit=94 / JF-nullrep=94`，并用 `JF-concat-ok=xy/0`、`JF-isnull=True/0` 钉反向（不许误伤
+  宽松口径）；本机输出与真值一致。
+- 零回归抽检：`test_builtin_arity` 的 `AR-join1` / `AR-filter` 不变。
+- 门（GA）见提交信息。
+
+#### 四、遗留
+
+0. **`CStr(Null)` 仍 0**：见上“不换”一段。要动它得先把 `CStr` 的重载宏按实参类型分诊出
+   “Variant 则严格”这一支，不属“换一个名字”的量级；单独一格。
+1. **`Dim s As String: s = Null` 仍给 0**：这条不走上面五个站（有专用支路），编译期只给
+   VB3003 警告。改它要定点到那条支路，另开一格。
+2. **数值站**：`CInt/CLng/CDbl(Null)`、`Chr(Null)`、`Mid(s, Null)` 仍 0 —— 属“Null → 数值”那一站，
+   影响面比 String 站大（比较/算术都用它），单独一刀量。
+3. **`&` 与比较符的 Null 传播**：VB6 是 `Null & "x"` → Null、`Null = ""` → Null；
+   我们现在分别给 `"x"` 与 False（VBScript 口径）。要改得动运算符发码，不能靠转换站。
+4. **`Join(Null, …)` 源**仍 13（真 94）、`UBound(Null)` 仍 9（真 13）：这两格归
+   “Variant → 数组”那一站，与 §11.35 遗留 1 同一处。
+5. 编译器当前对 `Len(Null)` / `Join(Null, …)` / `UBound(Null)` 这类**字面量**直接报编译期错
+   （VB4001 / VB3043），所以读数一律用装着 Null 的 Variant 变量取。
+
+### 11.37 第六十三刀：数值/位置站（Variant(Null) → 数值 = 94）
+
+§11.36 遗留 2 那一格。读数 `.temp/null/oracle_num.vbs`（40 条）+ `.temp/null/NumNull.bas`。
+
+#### 一、读数
+
+| 条件 | 真值 | 我们(改前) | 我们(改后) |
+|---|---|---|---|
+| `CInt/CLng/CDbl/CSng/CByte/CBool/CDate(Null)` | 94 | 0 | **94** |
+| `CCur(Null)` | 94 | 0 | 0（遗留 1） |
+| `Chr(Null)` / `Mid("abc", Null)` / `Mid(s,1,Null)` | 94 | 0 | **94** |
+| `Left/Right(s, Null)` / `Space(Null)` / `String(Null, "a")` | 94 | 0 | **94** |
+| `Abs/Int/Fix(Null)` | **Null** | 0 | 0（遗留 2） |
+| `Hex/Oct(Null)` | **Null** | 0 | 94（遗留 3：变成报错了） |
+| `Len/Trim/InStr(Null)` | cscript 给 Null，VB6 按 String 形参给 94 | 94（上一刀） | 94 ✓ |
+| `1 + Null` / `Null * 2` / `-Null` | Null | Null ✓ | Null ✓ |
+| `CInt(Empty)` / `CInt(12)` | 0 / 12 | 0 / 12 ✓ | 0 / 12 ✓ |
+
+#### 二、实现（三枚闸）
+
+1. `vb6_VariantConvNum`（`vb6rtl_builtin.h`）：`vt == vb6_vtNull` ⇒ `ErrRaise(94)`。
+   `CInt/CLng/CDbl/CSng/CByte/CSByte/CUInt/CULng/CULngLng/CLngLng/CLngPtr/CCur` 的 `*V` 变体
+   全走它 ⇒ 一格改完一整族。同文件补 `vb6_ErrRaise` 原型：不补的话 C11 先生成隐式
+   `int(...)`，随后 `vb6rtl_array.h` 的 `void(...)` 就成了 C2371 冲突定义。
+2. `vb6_CBoolV`：它自己那两条早退路（Boolean/BSTR）不走 ConvNum，所以在函数头另加同类闸。
+3. `vb6_VariantToLong`（`vb6rtl.c`）：`case vb6_vtNull` ⇒ 94。这一枚是「Variant → 整数」的
+   形参站/长度站共用的门：`Chr` 的 code、`Mid/Left/Right` 的 start/len、`Space/String` 的
+   计数全经它，于是 M9–M15 一格全开。
+4. `vb6_CDate`（`vb6rtl_conv.c`）：原本 `vtNull` 和 `vtEmpty` 一起返 0，现在只放行 Empty。
+
+#### 三、验收
+
+- 探针 25 条：上表加粗格到位；反向格（`CInt(Empty)=0`、`1 + Null = Null`）未被带跑。
+- 夹具 `tests/test_joinfilter.bas` 补 `JF-nullcint/clng/chr/mid=94`，并用 `JF-cintempty=0/0`、
+  `JF-nullplus=True/0` 钉反向；本机输出与针全一致。
+- 零回归抽检（编译面）：test_joinfilter / test_builtin_arity / test_datelit / test_date_display /
+  b181_baformal / test_redim_elem / ArrayLiteralVariants 全过。
+- 门（GA）见提交信息。
+
+#### 四、遗留
+
+1. ~~**`CCur(Null)` 仍 0**~~ —— **已修（本刀续）**。根因是 `CCur` 不在 `cgen_expr_call_conv_numeric.inc`
+   那道 V 后缀门的名单里（实参早已被上游包成 `vb6_VariantToDouble(...)`，所以 `firstArgIsVariant`
+   是 false）。处置：名单加上 `vb6_CCur`，并把那里“剥回 double 包装”的检测（原先只服务 CBool）
+   扩到 CCur。现发码 `vb6_VariantCur(vb6_CCurV(nv))`，读数 M5=94；非 Null 路未动
+   （`CCur(2.5)=2.5`、`CCur("12")=12`、`CCur(1)/4=0.25` 实测）。
+2. **`Abs/Int/Fix(Null)` 仍 0（真值 Null）**：它们收的是 `double`，Null 在 `vb6_VariantToDouble`
+   就已丢了；要回 Null 得在“Variant 返回侧”做传播站（整个表达式要是 Variant），与 §11.36 遗留 3
+   （`&`/比较符传播）同一族。
+3. **`Hex/Oct(Null)` 从 0 变成 94**：真值是 Null。根因同遗留 2 —— 它们与长度站共用
+   `vb6_VariantToLong`。这一格是**刻意接受的退步**（0 与 94 都错，94 至少不再静默），
+   等传播站做完再改回 Null。
+
+### 11.38 第六十四刀：Abs/Int/Fix/Hex/Oct 的 Null 传播
+
+§11.37 遗留 2/3 那一族。真值是「Null 进、Null 出」（读数 `.temp/null/oracle_num.vbs`）。
+
+#### 一、根因（两条，都使第五十二刀既有的 `vb6_AbsV` 白写了）
+
+1. `boxToVariant` 里那条 Abs 分支多问了一句 `inferExprType(实参)==Variant`；实测它对
+   `Dim nv As Variant` 的局部答不出 Variant ⇒ 分支不进，发码仍是
+   `vb6_VariantDouble(vb6_Abs(vb6_VariantToDouble(nv)))`。
+2. 更早的一道门在 `wrapVariantValue`：它自己的 `switch (inferExprType)` 对 Int/Fix 先答
+   `Double`、对 Hex/Oct 先答 `String` 并**直接 return**，于是根本轮不到 `boxToVariant`。
+   只改 boxToVariant 时发码一字未变，就是这个原因。
+
+#### 二、实现
+
+1. 抽一个共用判据 `mathNullFamilyV(node, cExpr)`（`cgen_util_ctrl.cpp`）：对 Abs/Int/Fix/Hex/Oct
+   把 `vb6_X(vb6_VariantTo…(槽))` 剥回 `vb6_XV(槽)`。**判据是文本前缀**——
+   `vb6_Abs(vb6_VariantToDouble(` 这串本身已证明上游真折了 Variant 槽，比那次推断硬。
+2. `wrapVariantValue` 与 `boxToVariant` 都**在那张 inferExprType 表之前**先问它。
+3. RTL 新增四个 `static inline vb6_VARIANT vb6_IntV/FixV/HexV/OctV`（`vb6rtl_builtin.h`）：
+   `vtNull` ⇒ `vb6_VariantNull()`，否则维持原算法。⚠ 位置必须在这四枚真原型**之后**，
+   否则 C11 的隐式 `int()` 声明会让它们成 C2371/C2040（本刀实测）。
+
+#### 三、读数
+
+| 条件 | 真值 | 改前 | 改后 |
+|---|---|---|---|
+| `Abs/Int/Fix/Hex/Oct(Null)`（变体位） | Null | 0（Hex/Oct 在上一刀后是 94） | **Null** |
+| `Abs(-3)` / `Abs(-3.5)` | 3 / 3.5 | 同 | 3 / 3.5 ✓ |
+| `Int(3.7)` / `Fix(-3.7)` | 3 / -3 | 同 | 3 / -3 ✓ |
+| `Hex(255)` / `Oct(8)` | "FF" / "10" | 同 | "FF" / "10" ✓ |
+| 数值位（`Abs(v) < 0.001` 这类，不过装箱站） | — | 不变 | 不变 |
+
+#### 四、静态门登记（三面都红过，逐面归因）
+
+1. `check_conv_strict_parse` R2：本来是**本数**（RTL 头里取 Double 的两条路各钉常数）。
+   把这四枚写成头文件 `inline` 时，`vb6_IntV/FixV` 各多一个站点 ⇒ 红。
+   **改法：头里只留原型，身子挪到 `vb6rtl_conv.c`（与 `vb6_AbsV` 同文件）**；
+   `vb6_IntV/FixV` 走 `vb6_VariantConvNum`（文本档按 `vb6_NumVal` 严格解析，与转换站同源）。
+2. `check_owned_temp_keeps`：推导器把 `vb6_FixV/IntV` 判为 **owned VARIANT**（`handoff-to-plain`），
+   把 `vb6_HexV/OctV` 判为 **alias / store**（BSTR 进了 `vb6_VariantString`）。
+   ⇒ 前两枚进 `ownedTempOwnedReturnExits` + `ownedTempOwnedVariantExits` 两张表，
+   后两枚进 `ownedTempExceptions`（'1'/"store"，不提名）；`-Bless` 重写快照（235 行）。
+3. `check_builtin_slot_returns`：派生表 `cgen_variant_slot_prefixes.inc` 依赖重跑
+   `scripts/gen_variant_slot_prefixes.ps1`（50 名）。
+
+#### 五、验收
+
+- 探针全 30 条：M16–M19 变 `isnull=True`；M1–M15/M20–M22 与上一刀逐条相同。
+- 夹具 `tests/test_joinfilter.bas` 补 `JF-nullabs/int/fix/hex/oct=True/0`，并用
+  `JF-hex255=FF/0` 钉非 Null 路；本机输出与针一致。
+- 门（GA）见提交信息。
+
+#### 六、遗留
+
+1. **`&` 与比较符的 Null 传播**（§11.36 遗留 3）：`Null & "x"` → 应为 Null（现 `"x"`）、
+   `Null = ""` → 应为 Null（现 False）。要改运算符发码，且结果档要从 `BSTR`/`bool` 变 Variant，
+   单独一刀。
+2. **数值位的 Null**（`Dim d As Double: d = Abs(nv)`）：不经过装箱站，仍给 0；VB6 是 94
+   （Null → Double）。这一格与「赋值站数值目标收 Null」同族。
+
+
+
+### 11.39 第六十五刀：比较符的 Null 传播
+
+上一节遗留 1 的前半（`&` 那半留下的读数见下"未做的格"）。读数 `.temp/null/oracle_ops.vbs`
+（真引擎）：**`= <> < > <= >=` 只要任一侧是 Null，结果就是 Null**，包括 `Null = Null`；
+`CStr(Null = "")` 则是 94（那是 Null 进 CStr 那一站）。
+
+#### 一、为什么不在比较发码处直接改成变体位
+
+比较的 C 类型现在是 `int32_t`：`If` 条件、赋值给 Boolean、`And/Or/Not`、`Print` 全按标量吃它。
+把它整体换成 `vb6_VARIANT` 会连带一整片调用方，且 `If Null Then` 这一格**没有 VB6 读数**
+（VBScript 答 false、不报错；VB6 文档口径是 94）——没读数的地方不收。
+
+#### 二、实现（与第六十四刀同一形：变体上下文那两站各加一道守卫）
+
+1. RTL 新增 `vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond)`
+   （`vb6rtl_com.c`，原型 `vb6rtl_variant.h`）：任一侧槽是 Null ⇒ `vb6_VariantNull()`，
+   否则 `vb6_VariantBool(cond ? -1 : 0)`（VB6 True 是 -1）。
+2. 发码侧 `cmpNullGuardV(node, text)`（`cgen_util_ctrl.cpp`）：AST 是比较运算、且能从文本里
+   抽出至少一枚 **Variant 槽地址**（`vb6_VarCmp*(&nv, …)` 的 `&nv`，或
+   `vb6_VariantFromValue(nv)` 里的 `nv`）才动手；抽出两枚就都插进去，只有一枚另一侧给
+   `(vb6_VARIANT*)0`。三条不齐原样返回（宁可不变）。
+3. 两个站各调一次：`wrapVariantValue`（拿到的是已包好的 `vb6_VariantBool(<bool>)`，剥一层）
+   与 `boxToVariant`（拿到的是**裸 bool 表达式**，直接当条件交出去）。两条形都要认，
+   否则实参站那条永远不命中。
+
+发码形状：
+```
+改前  r = vb6_VariantBool((int16_t)((-(vb6_StrCmp(vb6_CStr(vb6_VariantFromValue(nv)), vb6_BSTR_FromStr(L"")) == 0))));
+改后  r = vb6_VCmpNullV(&nv, (vb6_VARIANT*)0, (-(vb6_StrCmp(vb6_CStr(vb6_VariantFromValue(nv)), vb6_BSTR_FromStr(L"")) == 0)));
+```
+
+#### 三、读数
+
+| 条件 | 真值 | 改前 | 改后 |
+|---|---|---|---|
+| `Null = ""` | Null | True | **Null** |
+| `Null <> ""` | Null | False | **Null** |
+| `Null < 1` | Null | True | **Null** |
+| `Null = Null` | Null | True | **Null** |
+| `Empty = ""` | True | True | True ✓ |
+| `"a" = "a"` | True | True | True ✓ |
+| `Null & "x"` / `"x" & Null` | `"x"` | `"x"` | `"x"` ✓（真值如此，不是 Null） |
+
+#### 四、未做的格（都有读数，留作下一刀）
+
+| 条件 | 真值 | 现在 | 为什么没在本刀做 |
+|---|---|---|---|
+| `Null & Null` | Null | `""` | `&` 两侧都是槽时结果才是 Null（任一侧不是就按空串拼）；要动拼接站发码，且 `CStr(Null & Null)` 真值是 94 |
+| `CStr(Null = "")` | 94 | `"True"` | 判据在 CStr 站（另一个 TU），要把 `cmpNullGuardV` 提成共享头 |
+| `Null Or True` / `Null Or False` | True / Null | 94 | 逻辑位是另一族真值表（`Null And False` = False、`Null And True` = Null） |
+| `Null And False` / `Null And True` | False / Null | 94 | 同上 |
+| `If Null Then` | 无 VB6 读数（VBScript 答 false/0） | false | 没读数不收 |
+
+#### 五、静态门
+
+`vb6_VCmpNullV` 是"返回侧 owned VARIANT" ⇒ 进 `ownedTempOwnedReturnExits` +
+`ownedTempOwnedVariantExits`，`cgen_variant_slot_prefixes.inc` 重新派生（51 名）；
+`owned_temp_keeps_164.txt` `-Bless`（235 行 / owned 131）。
+### 11.40 第六十六刀：`&` 的双 Null 折叠 + `CStr(<这两形>)` 的 94
+
+上一节"未做的格"的前两行。读数 `.temp/null/oracle_ops3.vbs`（真引擎）：
+
+| 条件 | 真值 |
+|---|---|
+| `Null & Null` | Null（TypeName 也答 Null） |
+| `Null & "x"` / `"x" & Null` / `Null & 1` / `Null & Empty` | `"x"` / `"x"` / `"1"` / `""`（Null 当空串） |
+| `"a" & Null & "b"` / `Null & "a" & Null` / `Null & Null & "b"` | `"ab"` / `"a"` / `"b"` |
+| `Null & Null & Null` | Null |
+| `CStr(Null & Null)` | 94 |
+| `CStr(Null = "")` | 94（上一节记的那一格） |
+
+**规则**：只有**两侧同时**是 Null 才折 Null；任一侧不是（含 Empty、数字、字符串）就按空串拼。
+链式因为左结合 + 中间结果已是字符串，真值自动对得上（`Null & Null & "b"` = `"" & "b"` = `"b"`）；
+`Null & Null & Null` 这一格仍差（我们的中间结果已经是空串，信息丢了）——记为遗留。
+
+#### 一、实现
+
+1. RTL `vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb)`
+   （`vb6rtl_com.c`，原型 `vb6rtl_variant.h`）：两槽都是 Null ⇒ 放掉两个串、返回 `VariantNull()`；
+   否则 `vb6_BSTR_Concat(sa, sb)` 后**两个串都放**，再 `vb6_VariantString(result)`。
+   注意不能直接用 `vb6_BSTR_ConcatFree`：它只放左操作数（右操作数会漏），第一版就是这么写的。
+2. 发码侧 `cgNullGuardConcatV(node, text)`：只认"两侧都是整枚 `vb6_CStr(vb6_VariantFromValue(<ident>))`"
+   这一形（`vb6_VariantString(vb6_BSTR_ConcatFree(A, B))` 或裸 `vb6_BSTR_ConcatFree(A, B)`）；
+   其它形原样不动（那些格的真值本就等于现值为：读数 R4–R6、R10、R12）。
+3. CStr 站（`cgen_expr_call_conv_cstr.inc`）：`CStr(<比较>)` / `CStr(<双槽拼接>)` 先让守卫给出变体位，
+   再交给 `vb6_CStrStrict`（Null ⇒ 94、其余按 Variant 档格式化，布尔仍 True/False）。
+   必须放在"`CStr(String)` 是无操作"那条分支**之前** —— `CStr(<拼接>)` 的推断类型正是 String。
+
+#### 二、两个坑（都实测过）
+
+1. **重复套壳**：实参站会被套两层（`boxToVariant` 之后又有一层装箱），第二层拿到的已经是
+   `vb6_VCmpNullV(...)`，再包一次就成"VARIANT 当 int32_t" ⇒ C2440。两个守卫都加了**幂等**检查
+   （文本里已有自己的出口名就返回空）。
+2. **CStr 站在另一个 TU**：`cmpNullGuardV` / `concatNullGuardV` 原来是 `cgen_util_ctrl.cpp` 里的
+   `static`，CStr 站调不到 ⇒ 改名 `cgNullGuardCmpV` / `cgNullGuardConcatV` 并在 `backend/cgen.hpp`
+   里声明（三个 TU 都能看见）。
+3. 消费轴登记：`vb6_VarConcatNullV` 的第 2、3 格**无条件**消费（两条路都放）⇒ `kConsumes` 两行 '0'；
+   第一版写 '1' 被 K13d 抓到（表 0 / 头 1 不一致）。
+
+#### 三、读数
+
+| 条件 | 真值 | 改前 | 改后 |
+|---|---|---|---|
+| `Null & Null` | Null | `""` | **Null** |
+| `CStr(Null & Null)` | 94 | `""`/0 | **94** |
+| `CStr(Null = "")` | 94 | `"True"`/0 | **94** |
+| `Null & "a"` | `"a"` | `"a"` | `"a"` |
+| `Null & 1` | `"1"` | `"1"` | `"1"` |
+
+#### 四、遗留
+
+1. `Null & Null & Null`（三链）→ 真值 Null，我们 `""`：中间结果已是 BSTR，槽信息丢失。要动拼接站的
+   结果档（BSTR → 可 Null 的 Variant），单独一刀。
+2. 逻辑位 `Null Or True` = True、`Null Or False` = Null、`Null And False` = False、
+   `Null And True` = Null（现全是 94）—— 下一刀。
+### 11.41 第六十七刀：`Or`/`And` 的 Null 真值表
+
+读数 `.temp/null/oracle_logic.vbs` + `oracle_logic2.vbs`（真引擎）：
+
+| 条件 | 真值 | | 条件 | 真值 |
+|---|---|---|---|---|
+| `Null Or True` | True | | `Null And False` | False |
+| `Null Or False` | Null | | `Null And True` | Null |
+| `True Or Null` | True | | `False And Null` | False |
+| `False Or Null` | Null | | `True And Null` | Null |
+| `Null Or Null` | Null | | `Null And Null` | Null |
+| `Null Xor True/False` | Null | | `Null Eqv True/False` | Null |
+| `Null Imp True` | True | | `Null Imp False` | Null |
+| `False Imp Null` | True | | `True Imp Null` | Null |
+| `Not Null` | Null（早已对） | | | |
+
+口径与 VB6 文档一致：**Or 只有"另一侧是 True"才确定成 True，And 只有"另一侧是 False"才确定成
+False，其余一律 Null**。
+
+#### 一、实现
+
+1. RTL `vb6_VarLogicNullV(isAnd, a, b, litBits, mask)`（`vb6rtl_com.c`）：
+   mask 的 bit0/bit1 表示 a/b 是不是槽；**不是槽的那侧**用 `litBits`。
+   求值顺序是这一格的要害：只传槽**地址**，`vb6_VariantToLong` 在函数里惰性算 ——
+   当实参先算会在 Null 上先报 94（改前就是这么答 94 的）。
+2. 发码侧 `cgNullGuardLogicV`：认四种实测形
+   `vb6_VariantFromValue((vb6_VariantToLong(X) |/& (int32_t)(Y)))`、
+   反向 `((int32_t)(Y) | vb6_VariantToLong(X))`、两槽 `vb6_VariantToLong(X) | vb6_VariantToLong(Y)`，
+   以及**裸**形（FromValue 还没包）。某一侧既不是槽也不是 `(int32_t)(…)` 就不动。
+
+#### 二、踩到的坑
+
+1. **首字符是括号**：三个守卫（比较 / 拼接 / 逻辑）开头都写了
+   `while (cExpr[s] == '(' || cExpr[s] == ' ') s++`，对裸形 `(<左> | <右>)` 会把配对括号吃掉，
+   前缀判据全落空 ⇒ 静默不命中（本刀第一版就是这样，发码一字未变）。改成只跳空格。
+2. 又一次是"两条形都得认"：存储站拿到的已包 `vb6_VariantFromValue(...)`，实参站拿裸式子。
+3. 幂等：实参站会被套两层，第二层拿到的已经是 `vb6_VarLogicNullV(...)` ⇒ 返回空。
+
+#### 三、验收
+
+- 探针 `LogicNull.bas` 九格全对（L1 True/0、L2 Null、L3 True/0、L4 False/0、L5 Null、L6 Null、L7 Null、L8 True、L9 1）。
+- 回归：`OpsNull.bas` 十四格里 Q8/Q9 也从 `-1/94`、`0/94` 变成 `True/0`、`False/0`，其余不变；
+  `CatNull.bas` 六格不变。
+- 夹具补 `JF-nullortrue=False/True/0`、`JF-nullorfalse=True/0`、
+  `JF-nullandfalse=False/False/0`、`JF-nullandtrue=True/0`、`JF-cmplogic=False/True/0`。
+- 四门本机 PASS（keeps 237 行 / 提名 193 / slot_returns 53 名 / conv_strict_parse / reclaim）。
+
+#### 四、遗留（都有读数，暂未做）
+
+| 条件 | 真值 | 现在 | 原因 |
+|---|---|---|---|
+| `Null Xor True/False`、`Null Eqv True/False` | Null | 94 | 同一族但只有"恒 Null"一列；要另开 Xor/Eqv 两条出口 |
+| `Null Imp True` / `False Imp Null` | True | 94 | Imp 三态（x=False ⇒ True；y=True ⇒ True；其余 Null） |
+#### 五、修正：数值侧按**真实 VB6 IDE 读数**重写（本刀收尾）
+
+上一版按 VB6 文档的 True/False 两行做，把 `Null Or 5` 答成 Null、`Null And 0` 答成 False。
+**用户 2026-11-19 在真实 VB6 IDE 里实测：`Null Or 5` = Integer 5、`Null And 0` = Integer 0**
+（VBScript 同）—— 文档那两行是**不完整的**。统一规则因此改成"决定性那一侧辐到结果"：
+
+| 运算 | 另一侧 | 结果 |
+|---|---|---|
+| `Or` | 非零 | **就是那一侧的值**（`Null Or 5` = 5、`Null Or True` = True） |
+| `Or` | 零 | Null（`Null Or 0`、`Null Or False`） |
+| `And` | 零 | **就是那一侧的值**（`Null And 0` = 0、`Null And False` = False） |
+| `And` | 非零 | Null（`Null And 5`、`Null And True`） |
+| 两侧都 Null | — | Null |
+
+结果**档位跟另一侧走**（VB6 IDE 实测 `Null Or 5` 是 Integer、`Null Or True` 是 Boolean），
+所以 `vb6_VarLogicNullV` 多收一个 `litIsBool`（0=Long / 1=Boolean / 2=Integer）：
+槽侧看 `vt`，字面量侧由发码时问 AST 的 `LiteralKind`（`inferExprType` 对无后缀整数答 Long，
+而 VB6 的 `5` 是 Integer —— 以 `LiteralKind` 为准）。为此该守卫改成 **`CCodeGen` 成员函数**
+（自由函数拿不到 `inferExprType`）。
+
+实测（`.temp/null/LogicNum.bas`）：
+
+| 条件 | VB6 | 改后 |
+|---|---|---|
+| `Null Or 5` | Integer 5 | Integer 5 ✓ |
+| `Null And 0` | Integer 0 | Integer 0 ✓ |
+| `Null Or True` | Boolean True | Boolean True ✓ |
+| `Null And False` | Boolean False | Boolean False ✓ |
+| `Null Or 0` / `Null And 5` | Null | Null ✓ |
+
+### 11.42 第六十八刀：`Xor` / `Eqv` / `Imp` 的 Null（VB6 IDE 实测）
+
+探针 `tests/vb6probe/NullOpsProbe.bas`（用户手动在真实 VB6 IDE 跑，56 格）把这一族一次问清。
+
+#### 一、读数
+
+| 段 | VB6 实测 |
+|---|---|
+| `Xor`（X1..X7） | **任一侧 Null ⇒ Null**，`err=0`（含 `Null Xor 5`、`5 Xor Null`） |
+| `Eqv`（E1..E8） | **任一侧 Null ⇒ Null**，`err=0` |
+| `Imp`（I1..I8） | `Null Imp True`=**True(Boolean)**、`Null Imp 5`=**5(Integer)**、`Null Imp False/0`=Null、`Null Imp Null`=Null、`True Imp Null`=Null、`False Imp Null`=**True(Boolean)**、`5 Imp Null`=**-6(Integer)** |
+
+#### 二、`Imp` 的口径：`x Imp y` = `(Not x) Or y`
+
+`Imp` 不是三态表，而是先 `Not x` 再走 11.41 的 `Or` 规则（`Not Null` 仍是 Null）：
+
+| 情形 | 推导 | 读数 |
+|---|---|---|
+| x Null、y 非零 | `Null Or y` ⇒ y | `Null Imp True`=True、`Null Imp 5`=5 ✓ |
+| x Null、y 为零 | `Null Or 0` ⇒ Null | `Null Imp False`、`Null Imp 0` ✓ |
+| y Null、~x≠0 | `(~x) Or Null` ⇒ ~x | `5 Imp Null`=~5=**-6**、`False Imp Null`=~0=-1=**True** ✓ |
+| y Null、~x=0 | `0 Or Null` ⇒ Null | `True Imp Null`=~(-1)=0 ⇒ Null ✓ |
+
+三条读数（`-6`、`True`、`Null`）只有这一种解释，反而比“另开一张三态表”更省。
+
+#### 三、实现（不新增出口）
+
+`vb6_VarLogicNullV` 第一枚形参由 `isAnd` 扩成 **op 码**（0=Or 1=And 2=Xor 3=Eqv 4=Imp），
+已有 Or/And 的调用发码逐字节不变（仍发 `0`/`1`）。守卫 `cgNullGuardLogicV` 按 AST 的运算符
+取 op 码，并认三种发码形：
+
+| 运算 | 发码形 | 守卫怎么拆 |
+|---|---|---|
+| Or / And / Xor | `(L \| R)`、`(L & R)`、`(L ^ R)` | 剥外层全包括号后深度 0 找 `\| & ^` |
+| Eqv | `~(A ^ B)` | 首两字符 `~(` ⇒ 剥掉再找顶层 `^` |
+| Imp | `((~A) \| B)` | 顶层 `\|` 左侧是 `(~A)` ⇒ x 取 A |
+
+文本形与 AST 运算符**必须对上**（`effOp != opCode` 就不命中），宁可不发也不发错。
+非 Null 路径照旧复现原发码（`av^bv`、`~(av^bv)`、`(~av)\|bv`、`av&bv`、`av\|bv`）。
+
+#### 四、同时修的一格：`Null Or -1` 的档位
+
+读数 D5：`Null Or -1` 是 **Integer -1**（不是 Long）。`-1` 在 AST 里是一元负 + Integer
+字面量，`inferExprType` 答 Long，所以字面量档位再加一条：一元 `Negate` 且操作数是 Integer
+字面量 ⇒ Integer。
+
+#### 五、验收
+
+- 探针复跑（C3 自己跑同一份 .bas）：X1..X7、E1..E8、I1..I8、D1..D6 **28 格与 VB6 逐格一致**。
+- 夹具新增 11 针：`JF-nullxor`/`-nullxor2`/`-nulleqv`/`-nulleqv2`、`JF-nullimp5`/`-nullimptrue`/
+  `-nullimpfalse`/`-nullimpnot`/`-notimptrue`/`-notimpnull`、`JF-nullorneg`。
+- 四门本机 PASS（keeps 237 行 / 提名 193 / slot_returns / conv_strict_parse / reclaim）。
+
+### 11.43 第六十九刀：拼接链的 Null 折叠（`Null & Null & Null`）
+
+第二批探针（`tests/vb6probe/NullFamilyProbe.bas`，用户真实 VB6 IDE）的 G 段六格：
+
+| 格 | 条件 | VB6 实测 |
+|---|---|---|
+| G1 | `Null & Null & Null & Null` | **Null** |
+| G3 | `(Null & Null) & (Null & Null)` | **Null** |
+| G2 | `Null & Null & 1` | `"1"`（String） |
+| G4 | `Null & Null & "b" & Null` | `"b"`（String） |
+| G5 | `"" & Null & "" & Null` | `""`（String） |
+| G6 | `Null & Empty` | `""`（String） |
+
+即：`&` 仍按左结合二叉树逐步合并，**只在某个节点两侧同时为 Null 时**该节点折 Null，
+折出来的 Null 再往上当左操作数继续走 —— 与 11.40 的两槽规则是同一条。
+
+#### 一、根因
+
+发码器把链**摊平成 n 元**：`Null & Null & Null` 发成
+`vb6_VariantString(vb6_BSTR_ConcatFree(vb6_BSTR_ConcatFree(A, B), C))`。
+而 11.40 的守卫只认“两个实参都是 `vb6_CStr(vb6_VariantFromValue(<标识符>))`”这一形，
+链的左操作数是**内层拼接子树**而不是一个槽 ⇒ 永不命中（第一版就是这样，C2 仍答 `""`）。
+
+#### 二、修法
+
+1. 守卫改成**递归拆 `vb6_BSTR_ConcatFree` 树**收集叶子（叶子必须能取回一枚整只 Variant），
+   再按左结合逐级折；叶子是两个变量槽时仍走原来的指针版（发码不变）。
+2. 新增整枚接收出口 `vb6_VARIANT vb6_VarConcatNullVV(vb6_VARIANT, vb6_VARIANT)`：
+   两侧都 Null ⇒ Null，否则自己 `vb6_CStr` 两串、拼接、两颗都放。
+   **为什么另开一枚**：两槽版收 `vb6_VARIANT*`，而链上的操作数是内层调用的**右值**，
+   取地址就得先落临时，而那枚临时里的 BSTR 没人放（漏）。
+3. 叶子只认「变量槽」与「本守卫自己链出来的结果」两形；字面量档 `(int32_t)(5)`、
+   BSTR 表达式一律不碰（真值已由 G2/G4/G5 覆盖）—— 它们的 C 类型不是 `vb6_VARIANT`，
+   递给整枚版就是 C2440。
+
+#### 三、登记（这一刀最贵的一步）
+
+新增“返回 VARIANT”的出口会撞两门：`check_owned_temp_keeps` 与 `check_builtin_slot_returns`。
+按规矩不能往白名单塞名字，先归因：推导把 `vb6_VarConcatNullVV` 判为 **alias**
+（与已在册的 `vb6_VarConcatNullV` 同族 —— 它们的返回表达式都落到 `vb6_VariantString(...)`，
+推导不把这一形认作 mint）。所以正确做法是**撤名**：两枚都不进 `ownedTempOwned*` 两份名单。
+slot 表由 `gen_variant_slot_prefixes.ps1` 重生成（53 → **54** 名）。
+
+#### 四、验收
+
+- 探针复跑：G1..G6 六格与 VB6 逐格一致。
+- 夹具补 `JF-nullcat3=True/0`、`JF-nullcat4=True/0`、`JF-nullcat4g=True/0`、
+  `JF-nullcat3b=False/1/String/0`；原有 `JF-nullcat=True/0`、`JF-nullcatone=False/a/0`、
+  `JF-nullcatcstr=94` 全未变。
+- 四门本机 PASS（keeps 239 行 / 提名 195 / slot_returns 54 名 / conv_strict_parse / reclaim）。
+
+#### 五、下一批（读数已齐，未做）
+
+| 族 | VB6 实测 | 现在 |
+|---|---|---|
+| `Len/Trim/LTrim/RTrim/UCase/LCase(Null)` | **Null**、err 0（A1/B1/B4/B5/B6/B7） | 0/`""`、err 94 |
+| `Len(Empty)` / `Trim(Empty)` | 0（Long）/ `""` | — |
+| `Len(<Long 变量>)` | **4（Integer）**（A3/A5） | — |
+| `Val(Null)` / `Asc(Null)` | **94** | 94（值待核） |
+| `Asc(Empty)` | **5** | 待核 |
+| `UBound/LBound(Null/Empty/数字)` | **13**（D1..D5） | 9 |
+| `s = Null` / `s = CStr(Null)` / `s = Hex(Null)` | **94**，目标不变（S1/S4/S5、E6/E7） | err 0 |
+| `d = Null` / `d = Abs(Null)` / `d = Null*1` | **94**，目标不变（N1..N4） | 0、err 0 |
+| `d = <字符串表达式>` | **13**（F2） | 编译期 C2440 |
+| `b = Null` / `b = (Null = "")` | **94**（F6/F7） | True、err 0 |
+
+### 11.44 第七十刀：`UBound` / `LBound` 的变体实参（VB6 IDE 实测 → 13）
+
+#### 一、读数（D1..D7，真 VB6 IDE）
+
+`UBound(Null)` / `LBound(Null)` / `UBound(Empty)` / `UBound(装 5 的 Variant)` = **13 Type mismatch**；
+`UBound(a)`（a 是 `1 To 3`）= 3、`LBound(a)` = 1。
+
+#### 二、病根：不是 13 也没归到 13，是**被 9 盖掉了**
+
+变体实参站把槽投成 `vb6_VariantToSafeArray1D(...)`，那枚宽松提取对非数组一律交回 NULL，
+`vb6_UBound(NULL,1)` 于是自己抛 9 —— 所以 C3 报的是 9。
+
+#### 三、改法与踩到的坑
+
+1. 新出口 `vb6_VariantToSafeArray1DStrict`（`vb6rtl.c` + `vb6rtl_variant.h`）：不是数组 ⇒ 抛 13。
+2. 只在 `vb6_UBound` / `vb6_LBound` 的变体实参站用它（`cgen_expr_call_arg_variant.inc` 的
+   `paramIsArray` 分支按 `callee` 分流）；同一站还给 `Join` / `ReDim` 等用，那些格读数不同
+   （`Join(Null)` = 94，§11.35），**不能**一起换。
+3. **坑**：`vb6_ErrRaise` 在 `On Error Resume Next` 下只记号、不跳转
+   （`vb6rtl.c: if (vb6_err_resume_next) return;`）。所以抛完 13 **绝不能交回 NULL** ——
+   调用方 `vb6_UBound` 会再抛一个 9，把刚记下的 13 盖掉（探针第一版实测 D1..D4 全 `err=9`，
+   而发码已经是 Strict，看着像“没生效”）。改为交回一枚**静态空 1D 描述符**
+   （`cDims=1` + `VB6_SA1D_FFEATURES`、`uBound=-1`）：UBound/LBound 直接读边界值、不再发错，
+   Err 保住 13。
+
+#### 四、口径未动（两条负控）
+
+- 未分配的真动态数组 `UBound(d)` 仍旧 **9**（首参不是槽，不进变体站）；
+- 真数组 `UBound(a)` = 3 / `LBound(a)` = 1 不变（D5/D6）。
+
+#### 五、登记与验收
+
+- K5 新行直接归因、不塞白名单：`vb6_VariantToSafeArray1DStrict|0  0  <空通道>  0  open  VARIANT`
+  —— 与孪生 `vb6_VariantToSafeArray1D` 同格（两者都只把入参那枚 `parray` 交回）。keeps 表 239 → **240** 行。
+- 夹具：`tests/test_arr_empty.bas` 增 `UbVariantStation`，七针写入期望：
+  `UB-null=13`、`UB-lnull=13`、`UB-empty=13`、`UB-scalar=13`、`UB-arr=3/0`、`UB-larr=1/0`、`UB-unalloc=9`。
+- 本机：探针 D1..D7 与 VB6 逐格一致；`check_owned_temp_keeps` PASS（240 行 / 提名 196）、
+  `check_builtin_slot_returns` PASS（54 名）、发码清单 750 行与 CI 逐行相同（不用重登记）。
+
+#### 六、下一刀（已定型，未做）
+
+`Len/Trim/LTrim/RTrim/UCase/LCase(Null)`：这一族不能只在变体站加守卫 —— 实参先被
+`hoistOwnedTempArgs` 折成 `_own_N` **BSTR 临时量**，94 在造临时量那一步就抛了，`vb6_Len` 根本见不到 Null。
+要另开一族变体出口（`vb6_LenV/TrimV/...` 返回 VARIANT）＋在调用站改道跳过临时量，
+新出口走 `gen_variant_slot_prefixes.ps1` 自动进槽表。
+
+### 11.45 第七十一刀：`Len`/`Trim`/`LTrim`/`RTrim`/`UCase`/`LCase(Null)` → Null
+
+#### 一、读数（A1/B1/B4/B5/B6/B7，真 VB6 IDE）
+
+| 格 | 调用 | 真 VB6 | C3 改前 |
+|---|---|---|---|
+| A1 | `Len(Null)` | **Null**、err 0 | 0、err 94 |
+| B1 | `Trim(Null)` | **Null**、err 0 | `""`、err 94 |
+| B4/B5 | `LTrim/RTrim(Null)` | **Null**、err 0 | `""`、err 94 |
+| B6/B7 | `UCase/LCase(Null)` | **Null**、err 0 | `""`、err 94 |
+
+这一族**不把 Null 折成串**：它把 Null 原样交回去。第六十二刀那条「String 形参收 Variant(Null) ⇒ 94」
+对 `Asc`/`Replace`/`Join` 分隔符/`Split` 源是对的，对这一族不是 —— 两族在同一个实参站上，口径相反。
+
+#### 二、病根：94 在造临时量那一步就抛了
+
+§11.44 第六节预判的那一格被证实。改前发码是**三条语句**：
+
+```c
+BSTR _own_1 = vb6_CStrStrict(nv);
+r = vb6_VariantLong(vb6_Len(_own_1));
+vb6_BSTR_Free(_own_1);
+```
+
+`vb6_CStrStrict(Null)` 当场抛 94，`vb6_Len` 根本见不到那个槽。也因此**不能**学 `AbsV` 那一刀
+「等到装箱站再改名」：装箱站那时只看见 `vb6_Len(_own_1)`，既认不出实参、也删不掉已经发出去的临时量语句。
+
+#### 三、改法（四处，同一判据）
+
+1. **RTL 六枚变体出口**（`vb6rtl_string.c` + `vb6rtl_builtin.h`）：`vb6_LenV/TrimV/LTrimV/RTrimV/UCaseV/LCaseV`，
+   收 `vb6_VARIANT`、交 `vb6_VARIANT`；`vt == Null` ⇒ `vb6_VariantNull()`，其余交 base 函数的结果
+   （Len 交 `VariantLong`，Trim 一族交 `VariantString`）。Empty 不经这一族（`Len(Empty)` 仍是 0，走原路）。
+2. **实参站改道**（`cgen_expr_call_arg_variant.inc`）：`paramBase == String` 那一支里，
+   判据成立就不折 `vb6_CStrStrict`、不造 `_own_N`，直接把整只槽交给 `*V` 出口并改 `callee`。
+3. **类型 oracle 同步**（`cgen_util_type.cpp`）：`inferExprTypeImpl` 与 `isDefinitelyVariantExpr`
+   的 `IndexOrCallExpr` 分支各加一格 —— 判据成立就答 Variant。
+4. **For 终止值/步进折箱**（`cgen_control.cpp`）：`int32_t <var>_end = <槽>` 是 C2440；
+   终止值/步进过既有那枚 `toLongIfVariant`（非 Variant 文本原样返回 ⇒ 其余语句逐字节不变）。
+
+判据只有一处：`nullFamilyVExitCName(call)`（账 §B219）—— 被调名 ∈ 六枚 ∧ 恰一个实参 ∧
+该实参的 VB 类型是 Variant（数组本体不算）。发码站与 oracle **共用**这一问：
+两边不同步的代价两个方向都踩得到（oracle 说 Long ⇒ `vb6_VariantLong(vb6_LenV(nv))` C2440；
+发码没改道而 oracle 说 Variant ⇒ 给裸 int32 套 `vb6_VariantToLong`）。
+
+#### 四、踩到的坑：这四个消费面各自要一格
+
+第一版只改「实参站 + 装箱」，`r = Len(nv)` 已经对；把消费面铺开后四形全红：
+
+| 消费面 | 改前发码 | 处置 |
+|---|---|---|
+| 字符串比较 `Trim(nv) = "a"` | `vb6_StrCmp(vb6_TrimV(nv), …)` | `isDefinitelyVariantExpr` 那一格（→ `vb6_CStr(...)`） |
+| 拼接 `"x" & Len(nv)` | `vb6_CStrLong(vb6_LenV(nv))` | `inferExprTypeImpl` 那一格（→ `vb6_CStr(...)`） |
+| `Debug.Print` / `Print #` | `vb6_DebugWriteBSTR(VARIANT)` | 同上（→ `vb6_VariantToString` / `vb6_FileVariantText`） |
+| `For i = 1 To Len(nv)` | `int32_t i_end = vb6_LenV(nv)` | For 站过 `toLongIfVariant` |
+
+#### 五、登记与验收
+
+- 槽表：`gen_variant_slot_prefixes.ps1` 从 RTL 派生，54 → **60** 名（六枚自动进表；
+  `check_builtin_slot_returns` PASS：table=60 / rtlSlot=62 / ∩emit=58）。
+- keeps：新行**直接归因**、不塞白名单 —— `vb6_LenV` 推导为 owned（与 `IntV` 同格，进两份 owned 名单），
+  `TrimV/LTrimV/RTrimV/UCaseV/LCaseV` 推导为 `'1'/'store'`（BSTR 交给 `vb6_VariantString`，与 `HexV/OctV` 同理）。
+  keeps 表 240 → **246** 行，提名 196 → **197**，`unclassified 0`。
+- 夹具：`tests/test_joinfilter.bas` 新增 13 针并写入期望（本机实测与本表一致）：
+  `JF-lenv-null/trimv-null/ltrimv-null/rtrimv-null/ucasev-null/lcasev-null=True/0`、
+  `JF-lenv-tn=Null/0`、`JF-trimv-str=[ab]/0`、`JF-ucasev-str=[  AB  ]/0`、`JF-lenv-str=6/0`、
+  `JF-lenv-empty=0/0`、`JF-trimv-empty=[]/0`；负控 `JF-lenv-long=94`（变体位交回的是 Null，不是 0）。
+- 发码清单：整语料重跑后逐行列。本机与期望不同 **24 行**：其中 **19 行**是本刀的改道
+  （b171/b172/b173×2/b174×2/b432×2/dbgdlg/bodydecl/bstr_borrow_slot/fe_slot_leak/joinfilter/
+  pa_reclaim/ucSegmentedControl/ucTreeView/NullFamilyProbe/NullOpsProbe/VBFlexGridDemo），逐份用
+  改前/改后两台二进制发码 diff 过，差异只有 `*V` 改道与 `_own_N` 计数位移；另 **5 行**是已记的机器侧差
+  （guisample×3 + TeeChartChartDisplay + ctrlmscomm）—— 这 5 份本机改前改后逐字节相同，与这一刀无关，
+  保持 CI 侧原值不抹平。
+- 用例内形状断言：`b171_class_slot_arg_shape` / `b173_udt_slot_arg_shape` / `b174_num_str_arg_shape`
+  三针钉的是改道前的文本（`vb6_CStrLong(vb6_Len(_own_1))`，以及 `_own_4`/`_own_6`/`_own_7` 那几枚临时量）；
+  本刀少造两枚串临时量后编号前移、Len 那格变成 `CStr(VariantFromValue(LenV(...)))`，遂 GA 两个 bas 分片
+  都在这三针上红（同一组三条，非分片差异）。已按改后真实发码更新，并用 Test-EmitcShape 同一判据
+  （子串包含 + exit=0）复算三例全中。
+
+#### 六、踩到的第二个坑：oracle 的“Variant”不能用 inferExprType 问
+
+第一版判据写的是 `inferExprType(实参) == Variant`。它对 UDT 变量 / 对象 / 属性读一律**回退成 Variant**
+（实参站第 77 行那条注释记的就是这个坑），于是发码没改道的形也被 oracle 判成变体位，两边不同步：
+
+| 形 | 发码站实际 | oracle 第一版 | 后果 |
+|---|---|---|---|
+| `Len(bmp)`（bmp 是 UDT） | `((int32_t)sizeof(bmp))` | Variant | `vb6_VariantToLong(((int32_t)sizeof(bmp)))` |
+| `RTrim$(lns(14))`（String 数组元素） | `VB6_SA_AT(BSTR, lns, 14)` 已命中 top 前缀 ⇒ 不改道 | Variant | `vb6_VariantToString(vb6_RTrim(...))` |
+| `Len(ctrl.Text)`（属性读） | `vb6_Len(vb6_GetControlText(...))` | Variant | 多出 `vb6_VariantToLong(...)` 外包 |
+
+这 26 行“假改动”带动了 47 份发码。改法（仍只一处判据）：实参节点必须是**整只槽**
+（`IdentifierExpr` / `MemberAccessExpr`），类型那一半改成 `isDefinitelyVariantExpr` —— 与实参站
+`isVariantSlot(文本) || isDefinitelyVariantExpr(节点)` 的**后半句同一问**。改后重发 47 份：
+只剩 19 份与 base 不同，且每份的差异全是 `*V` 改道。
+
+#### 七、下一刀
+
+读数已齐、未做的一族仍在 §11.43 第五节：`Len(Empty)`/`Trim(Empty)`（本刀已钉住不变）、
+`Len(<Long 变量>)` 的 **Integer** 档（A3/A5）、`Val(Null)`/`Asc(Null)`、`Asc(Empty)`。
+`Mid/Left/Right(Null)` 与这一族同形（Null 传播），但读数未取，不跟着顺手改。
+
+### 11.46 第七十一刀 收尾：GA 绿之后的复跑归因（探针 C3 侧读数 + With 形的编译期缺口）
+
+#### 一、GA 收口
+
+run `44454593300` / `e4aa570d` = **success**（`Tests (bas #1)`、`Tests (bas #2)`、`Emit manifest` 三个作业全绿）。
+上一轮 `44446684530` / `df18526b` 红的只是用例内三条形状断言，已在本刀第 5 个提交里跟上改道。
+
+#### 二、把探针在 C3 上实跑，逐格对台账
+
+`tests/vb6probe/NullFamilyProbe.bas` 现在**整份编译不过**（F2/F3 两格 C2440，见下方第 4 条），
+所以去掉那两行后实跑，得到 C3 侧现状：
+
+| 格 | VB6 读数 | C3 实测 | 判定 |
+|---|---|---|---|
+| A1 `Len(Null)` | Null / 0 | Null / 0 | ✓（本刀） |
+| A2 `Len(Empty)` | 0 | 0 | ✓ |
+| A3/A5 `Len(<Long>)` | **4（Integer）** | 4，但 `TypeName=Long` | 值对、**返回档差一档** |
+| B1..B7 / B8 | Null / `""` | Null / `""` | ✓（本刀） |
+| C1 `Val(Null)` / C4 `Asc(Null)` | 94 | 94 | ✓ |
+| C2 `Val(Empty)` | 0 | 0 | ✓ |
+| C5 `Asc(Empty)` | **5** | 0 | ✗ |
+| C6 `Mid(Null,1)` | 未取 | `""` / 94 | 待读数 |
+| D1..D5 / D6..D7 | 13 / 3、1 | 13 / 3、1 | ✓ |
+| E6 `s = Trim(Null)` / E7 `s = Len(Null)` | **94，目标不变** | `""` / 0 | ✗（台账改前也是 0，非本刀引入） |
+| E8 `s = Null` / E9 `s = CStr(Null)` | 94（S1/S4/S5 同族） | `""` / 0 | ✗ |
+| E10 `s = Hex(Null)` | 94 | 94 | ✓ |
+| F1 / F5 | 0 | 0 | ✓ |
+| F2 `d = Null & ""` / F3 `d = CStr(Null)` | **13** | **编译期 C2440** | ✗ |
+| F6 `b = Null` | 94 | 94 | ✓ |
+| F7 `b = (Null = "")` | **94** | True / 0 | ✗ |
+| G1..G6 | 见 §11.43 | 与第六十九刀口径一致 | ✓ |
+
+#### 三、新发现：`With` 体内成员是**编译期** C2440，不是运行时 94
+
+在探针末尾临时加了 W 段（`With tw` + `Type TWV: V As Variant`），六格实测：
+
+| 格 | 形状 | C3 发码 | 结果 |
+|---|---|---|---|
+| W1 | `Len(tw.V)`（UDT 成员） | `vb6_LenV(tw.V)` | ✓ Null / 0 |
+| W2 | `Len(.V)`（With 体内） | `vb6_Len(_vb6_with_0->V)` | **C2440** |
+| W3 | `Trim(.V)`（With 体内） | `vb6_Trim(_vb6_with_0->V)` | **C2440** |
+| W4 | `Len(av(1))`（Variant 数组元素） | 原路 | 0 / **94** |
+| W5 | `Len(FNullV())`（函数返回 Null） | 原路 | 0 / **94** |
+| W6 | `Len(col.Item(1))`（Collection） | 原路 | 0 / **94** |
+
+根因只有一条：`With` 体内成员在 AST 里是 **`WithMemberExpr`**，而 `nullFamilyVExitCName` 只认
+`IdentifierExpr` / `MemberAccessExpr`，`isDefinitelyVariantExpr` 也没有这一 `case` ⇒ 实参站判
+「不是变体」⇒ 既不造串临时量、也不改道 ⇒ 把整只 `VARIANT` 递给 `vb6_Len(BSTR)`。
+**这是改前就有的**（改道只加路，不加则与改前同形状），不是本刀回归。
+
+探针本体**没有**入仓：`NullFamilyProbe.bas` 是发码清单在册行（`bytes=25468`），加格必须与
+清单重登记同一刀；扩展版留在 `.temp/k72/NullFamilyProbe.ext.bas`，改道修好那一刀再一并登记。
+
+#### 四、下一刀的排序（按硬度，不按族）
+
+1. **With 成员（编译不过）** —— 给 `WithMemberExpr` 补一条解析（With 帧里取目标档位），
+   同时进 `nullFamilyVExitCName` 与 `isDefinitelyVariantExpr`，两处必须同一问。
+2. **String 目标收 Null ⇒ 94**（E6/E7/E8/E9）：`Trim(Null)` 本刀已交真 Null，这一站再静默转空串
+   就与本刀口径自相矛盾。
+3. **F2/F3 的 13**（现在编译期 C2440）与 **F7**。
+4. W4/W5/W6（需先取 VB6 读数）、C5 `Asc(Empty)=5`、A3/A5 的 Integer 档。
+
+### 11.47 第七十二刀：`With` 体内成员的变体槽（编译期 C2440 → Null 传播）
+
+#### 一、读数与病根
+
+探针 W 段（真 VB6 读数待回，C3 侧是先量的）：`With tw`（`Type TWV: V As Variant`）体内的
+`Len(.V)` 改前发成 `vb6_Len(_vb6_with_0->V)` —— 整只 `vb6_VARIANT` 进 `BSTR` 形参 = cl
+**C2440**，改前就没有 exe（不是运行时 94）。同一探针里 W1 `Len(tw.V)`（UDT 成员）一直正常。
+
+根因：`With` 体内成员在 AST 里是 **`WithMemberExpr`**，而 `nullFamilyVExitCName` 只认
+`IdentifierExpr` / `MemberAccessExpr`，`isDefinitelyVariantExpr` 也没有这一 `case` ⇒
+实参站判「不是变体」⇒ 既不造串临时量、也不改道。
+
+#### 二、第一版（改全局判据）与它踩的坑
+
+第一版直接把 `WithMemberExpr` 加进 `isDefinitelyVariantExpr`。B171 与探针都对了，但
+**Charts 2020 / ucTreeMaps 两台当场编译不过**：
+
+```
+int32_t j_end = vb6_UBound(vb6_VariantToSafeArray1DStrict(_vb6_with_2->Values), 1);
+                                        ^ vb6_SafeArray1D* → vb6_VARIANT = C2440
+```
+
+原因：`isDefinitelyVariantExpr` 是**全局**判据（UBound 的数组槽、装箱站、比较站都吃它），
+而 `With` 成员里既有 `As Variant` 字段，也有 `SafeArray` 字段。教它认 With 成员，等于把
+`.Values` 也判成变体槽。
+
+#### 三、改法：只让 Len 族那一格认（两处，同一问）
+
+1. `nullFamilyVExitCName`：`WithMemberExpr` **只在这一格**认 —— 档位问
+   `inferUdtFieldVb6Type`（`With <UDT>`，它自己就认 With 帧 + `knownUdtVars_`）或
+   `classFieldKind`（`With <类实例>` 的字段）；数组本体与「属性 Get」一律不收。
+2. 发码站（`cgen_expr_call_arg_variant.inc`）：在 `argIsVariant` 那句之后加一枚
+   `vexit72 = nullFamilyVExitCName(node)`，问到即视为变体槽。没有这一枚，String 支根本进不去
+   （`isVariantSlot` 的文本前缀不认识 `_vb6_with_N->F`），整只 VARIANT 会被裸递给 `vb6_Len`。
+
+口径：只影响六枚内置的单实参调用；`isDefinitelyVariantExpr` 一个字没改。
+
+3. 类实例那一支**问投影不问底层表**：`classFieldIsVariantSlot`（它自己转问 `classFieldKind`，
+   是同一个答案的唯一出口）。第一版直接调 `classFieldKind`，GA 当场红在
+   `[STATIC] variant_slot_store` 的 **R8**：`cgen_util_type.cpp` 的直接问点被钉成 4 处
+   （读侧三站 + §B184 写侧一问），我这一调就成了第 5 处。不改那个数（它就是用来防「读侧
+   又多长一个问点」的），改问投影即归位，发码逐字节不变。
+
+#### 四、验收
+
+- B171：`vb6_LenV(_vb6_with_0->PZ  /* With class .PZ field variant */)`，且那枚
+  `_own_2 = vb6_CStrStrict(...)` 消失（`bytes` 12727 → **12600**）。形状针新增一枚钉住这一格。
+- Charts 2020 / ucTreeMaps：发码改前改后 **diff=0**（逐字节相同），编译恢复 `rc=0`。
+- 探针：W2 `Len(.V)` / W3 `Trim(.V)` = **Null / 0**（改前 C2440），W1 不变。
+- 门：`check_builtin_slot_returns` PASS（table=60）、`check_conv_strict_parse` PASS。
+- 清单：750 行里 7 行变 = 本刀 2 行（B171 + 探针）+ 5 行已记的机器侧差；只登记那 2 行。
+
+#### 五、留下的
+
+- W4/W5/W6（Variant 数组元素 / 返回 Null 的函数 / `Collection.Item`）仍 94 —— 读数未取。
+- `With <类实例>` 的**方法**（属性 Get）返 Null 不在本刀：字段表只认字段。
+
+### 11.48 第七十三刀：Null 进 String 目标 ⇒ 94，且**目标不变**
+
+#### 一、读数
+
+探针 E 段：`s = Trim(Null)` / `s = Len(Null)` / `s = Null` = **94**，且 `s` 仍是赋前的值
+（“keep”、len=4）—— 赋值根本没发生。与 §11.43 第五节 S1/S4/S5 同一族。
+
+#### 二、改前：两个错同时存在
+
+`emitBstrSlotStore`（String 槽收值的唯一出口）把 Variant 右值一律折成
+`vb6_VariantToString`：Null 变 `""`、赋值照做 —— 既丢值，也不报 94。
+
+#### 三、改法
+
+1. RTL 新出口 `vb6_BSTR_AssignFromVariant(BSTR*, vb6_VARIANT)`：`vt == Null` ⇒
+   `vb6_ErrRaise(94, "VBA.Conversion", "Invalid use of Null")` 后**直接 return**
+   （目标一字不动）；否则 `vb6_CStr` + `AssignMove`。
+   为什么不直接用 `vb6_CStrStrict`：它 raise 后交回空串，赋值方会把空串写进目标，
+   变成“94 + 目标被清空”——与 VB6 不同。
+2. `emitBstrSlotStore`：`valueIsVariant` 时留下未折的表达式，定长串以外的赋值改发这枚出口。
+   定长串（`fixedLen` 非空）那一档读数未量，保持原路。
+
+#### 四、验收
+
+- 探针：E6/E7/E8 = `err=94 val=[keep]`（改前 `err=0 val=[]`）；E1/E4/E5/E10 不变。
+- 发码清单：20 行变 = **15 行本刀归因**（逐份看过，全部是
+  `Assign(&X, vb6_VariantToString(E))` → `AssignFromVariant(&X, E)`；dbgdlg 10 处、
+  VBFlexGridDemo 9 处、Charts 2020 4 处为最大三份）+ 5 行已记的机器侧差。
+- 门：`check_builtin_slot_returns` PASS（table=60）、`check_conv_strict_parse` PASS、
+  `check_variant_slot_store` PASS。
+
+#### 五、留下的（按 §11.47 的排序）
+
+- **E9 `s = CStr(Null)`** 不在本刀：它走 CStr 内建那一站（`vb6_CStr` 宽松），要动得先决定
+  “CStr(Null) 报 94 之后赋值是否跳过”——同一组读数、另一个站，另立一刀。
+- F2/F3（13，现为编译期 C2440）、F7（94）、C5 `Asc(Empty)=5`、A3/A5 的 Integer 档。
+- W4/W5/W6（Variant 数组元素 / 返回 Null 的函数 / `Collection.Item`）仍 94，读数未取。
+
+#### 六、R7 的前缀误伤
+
+R7 原本用 `emitLine("vb6_BSTR_Assign` 前缀匹配，把本刀新增的
+`vb6_BSTR_AssignFromVariant` 也算成一枚“手抄裸赋值”（3 → 4）。新出口是**另一个契约**
+（Null ⇒ 94 且目标不变），不是裸赋值；改判据为显式两枚（`Assign(` / `AssignMove(`），
+名单仍是 3 —— 没有放宽，只是不再把不同函数名当成同一件事。
+
+#### 七、GA 红（run 44486983023，head `ce5bcfa1`）五处，逐处归因
+
+| 格 | 读数 | 归因 |
+|---|---|---|
+| `Tests (bas #1)` / `(bas #2)` | `[EMITC-SHAPE] cvp_emitc_variant_fallback ... missing` 两条旧形状 | 夹具针钉的是改前的 `Assign(&sN, VariantToString(...))`；本刀这两格正在改道 → 换针 |
+| `Tests (syntax)` | `[CODEGEN-NOTE] variant_unbox_shapes ... missing` 两条旧形状 | 同一类：`Assign(&s, VariantToString(VB6_SA_AT(...).dItem))` 已改走严格出口 |
+| `Tests (compile #1)` | `[STATIC] owned_temp_keeps`：K12 一枚例外行发码侧没有 / K5 漂移 `+vb6_BSTR_AssignFromVariant|1` | 新 RTL 出口是**带权形参位**（第 1 格 VARIANT 带 `store` 通道）——表与发码侧头都得有这一行，我前一刀只跑了三道门禁、没跑 KEEPS 双向对账 |
+| `Emit manifest` | 相同 747 / 哈希不同 3 = guisample 三份 | 就是上一条预告的机器侧三行；按 CI 自己那份 `ci/emit-manifest`（head 同为 `ce5bcfa1`）登记，不用本机数 |
+
+三处都是**未登记的后果**，不是改道的逻辑错：形状针与 KEEPS 表是“同一件事的另外两处记账点”，
+这一刀的遗漏在于只跑了源码侧三道门禁（slot_returns / conv_strict_parse / variant_slot_store），
+没跑 `check_owned_temp_keeps.ps1` 与两条形状针所在的类别。
+
+修法（都不放宽判据）：
+
+- 两条形状针逐字换成实测新发码（`vb6_BSTR_AssignFromVariant(&s1, vb6_VariantFromComResult(...))`、
+  `... (&s, VB6_SA_AT(...).dItem)`），改由本机 `--emit-c` 逐字核对，不凭猜。
+- KEEPS：`-Bless` 让推导侧把新行落进快照 `scripts/owned_temp_keeps_164.txt`
+  （`vb6_BSTR_AssignFromVariant|1  1  store  0  open  VARIANT`），
+  再在发码侧 `src/common/owned_temp_keeps.hpp` 同步一行（`{ "vb6_BSTR_AssignFromVariant", 1, '1', "store" }`）。
+  K12 与 K5 的性质是**同一份事实的两侧**，只补一侧仍然红。
+- 清单三行取 CI 的值（本机那台 `bytes` 比 CI 多 10，跨机器差的常态）。
+
+本机复核：`check_owned_temp_keeps` PASS（surface 247 / rows 247 / nomination 197）；
+`-Category syntax` 整段 PASS=227 FAIL=0（含 `variant_unbox_shapes`）；
+`cvp_emitc_variant_fallback` 的针按本机发码逐字核对（bas 整段本机超 30 分钟上限，交 CI）。
+
+### 11.49 第七十四刀：`s = CStr(Null)` ⇒ 94 且目标不变（E9）
+
+#### 一、读数
+
+探针 E9（`s` 先置 "keep"）：改前 `len=0 val=[] err=0`，改后 `len=4 val=[keep] err=94`。
+真 VB6 是 94 —— 与 E6/E7/E8 同一族（第七十三刀），只是入口站在 CStr 那一侧。
+
+#### 二、归因
+
+`s = CStr(x)` 的发码是 `vb6_BSTR_AssignMove(&s, vb6_CStr(<x>))`：CStr 内建对变体走的是
+**宽松口** `vb6_CStr`（`vb6_Format`，Null ⇒ ""）。所以两个错同时存在：值被清成空串（目标变了）
++ err=0（该报的 94 没报）。而这条路根本不经过 `emitBstrSlotStore` 的变体折叠 ——
+右值在发码表里已是 BSTR，产业是「自有临时串」⇒ 走 AssignMove。
+
+不能把 `vb6_CStr` 改严：`&` 与 `Debug.Print` 仍靠它的宽松口径（前者 Null 传播，后者打印 "Null"）；
+也不能改成 `vb6_CStrStrict`：它 raise 后交回空串，写进目标就是「94 + 目标被清空」。
+
+#### 三、实施
+
+`emitBstrSlotStore` 在变体折叠那一支之前多问一句：右值是**单实参 CStr 调用**、
+那一枚实参推出来是**变体档**、且发码确实是 `vb6_CStr(` ⇒ 置
+`strictVarAssign221` + `rawVarValue221 = <CStr 括号里那一段>`，交给第七十三刀那枚出口
+`vb6_BSTR_AssignFromVariant`。出口内部就是 `AssignMove(target, vb6_CStr(src))` ⇒
+非 Null 逐字节等价，Null 报 94 后直接返回。
+
+边界（都是刻意不动）：
+
+- 第六十六刀那两条 `vb6_CStrStrict(<比较>)` / `vb6_CStrStrict(<拼接>)` —— 前缀就不是 `vb6_CStr(`。
+- 定长串（`fixedLen` 非空）—— 读数未量，仍走原路。
+- 目标不是 String（`F3 d = CStr(Null)`）—— 那是另一个站（double 目标），仍编译期 C2440，留在 F 段。
+
+#### 四、清单
+
+11 份变：逐份 base/new 对照（`git stash push -- src/` → rebuild → emit → pop → rebuild），
+**6 份是真变**，形状全部同为 `AssignMove(&X, vb6_CStr(v))` → `AssignFromVariant(&X, v)`：
+B168 1 处、GCCache 8 处、test_fe_slot_leak 1 处、test_pa_reclaim 1 处、
+NullFamilyProbe 3 处、NullOpsProbe 2 处。另 5 份（guisample×3 / ctrlmscomm / TeeChart）
+本机 base 与 new **逐字节相同** ⇒ 它们只是长期存在的机器侧行，不是本刀改的。
+
+#### 五、门禁
+
+`check_builtin_slot_returns` / `check_conv_strict_parse` / `check_variant_slot_store` /
+`check_owned_temp_keeps` 四道全 PASS；`-Category syntax` PASS=227 FAIL=0；
+两枚受影响用例 `test_fe_slot_leak` / `test_pa_reclaim` 实跑 rc=0。
+
+### 11.50 第七十五刀：`d = Null & ""` / `d = CStr(Null)` ⇒ 13（F2/F3）
+
+#### 一、读数
+
+探针 `d` 先置 1.5：改前**编译期 C2440**（BSTR 裸赋 double，两处）；
+改后 `d=1.5 err=13`（目标不变），与真 VB6 两格都是 13 一致。
+
+#### 二、归因
+
+Double 目标 ← String 右值这条路上**根本没有转换站**：Variant 右值有 `vb6_VariantToDouble`
+（F1 `d = Empty` 就走那一条），而 String 右值（拼接、`CStr(...)`）被原样交给 double ⇒ C2440。
+真 VB6 是隐式 String→Double：数字串折成数、其余（含空串）报 **13**，且**目标不变**。
+
+#### 三、实施
+
+- RTL 新出口 `vb6_Dbl_AssignFromBSTR(double* target, BSTR src)`：去首尾空白后 `wcstod`，
+  整串吃完才算数；否则 `ErrRaise(13, "VBA.Information", "Type mismatch")` 后直接返回。
+  **不用** `vb6_NumVal`：那是 Val 口径（永不报错，`"2.5abc"` 也折 2.5），而 VB6 的赋值转换是严格的。
+- 发码站（`cgen_assign_value_sem.inc` 非 Variant 那一支的末尾）：右值语义档 = String、
+  目标 = Double（先问 `inferExprType`，再回查 `knownDoubleVars_` —— 局部变量在语义层可能只答
+  Unknown）⇒ 改发 `vb6_Dbl_AssignFromBSTR(&target, value)`。
+
+边界（刻意不动）：Single / Currency 目标（C 类型不同）、Date 目标（已有 `knownDateVars_` +
+`vb6_DateVal` 的 CDate 口径）、Variant 目标（走装箱那一支）。
+
+#### 四、清单与 KEEPS
+
+全量 750 行：**只有 `tests/vb6probe/NullFamilyProbe.bas` 一行变**（就是 F2/F3 那两句的发码），
+另 5 份（guisample×3 / TeeChart / ctrlmscomm）是长期存在的机器侧行，本刀没动它们。
+KEEPS 新行 `vb6_Dbl_AssignFromBSTR|1  0  (空通道)  0  open  BSTR` —— keeps_pointer=0，
+**不是例外行**，所以 `src/common/owned_temp_keeps.hpp` 这份发码侧表不动（K12 仍然绿）。
+
+#### 五、门禁
+
+`check_builtin_slot_returns` / `check_conv_strict_parse` / `check_variant_slot_store` /
+`check_owned_temp_keeps` 四道 PASS；`-Category syntax` PASS=227 FAIL=0。
+
+### 11.51 Null 扩展探针读数（VB6 IDE 实跑，`ai/vb6probe/NullExtProbe.bas`）
+
+真机一次跑完 A/W/C/D 四段（`On Error Resume Next`，每格前 `Err.Clear`，`s` 先置 `keep`）：
+
+```
+A1  v = (Null = "")  | isnull=True val=<Null> tn=Null err=0
+A2  d = (Null = "")  | d=1.5 err=94
+A3  s = (Null = "")  | s=[keep] err=94
+A4  b = (Null = "")  | b=True err=94
+A5  v = (Null <> "") | isnull=True val=<Null> tn=Null err=0
+A6  v = (Null = Null) | isnull=True val=<Null> tn=Null err=0
+A7  v = (Null = 0)    | isnull=True val=<Null> tn=Null err=0
+A8  v = (Null > 0)    | isnull=True val=<Null> tn=Null err=0
+A9  s = (Null <> "") | s=[keep] err=94
+W4  s = a(0)          | s=[keep] err=94      (变体数组元素)
+W4b n = Len(a(0))     | n=-1 err=94
+W5  s = FNull()       | s=[keep] err=94      (返回 Null 的函数)
+W5b n = Len(FNull())  | n=-1 err=94
+W6  s = c(1)          | s=[keep] err=94      (Collection.Item)
+W6b n = Len(c(1))     | n=-1 err=94
+W7  v = a(0)          | isnull=True val=<Null> tn=Null err=0   (入口确实是 Null)
+C6  s = Mid(Null,1)   | s=[keep] err=94
+C7  s = Left(Null,1)  | s=[keep] err=94
+C8  s = UCase(Null)   | s=[keep] err=94
+D1  lv = Len(<Integer var>) | val=2 tn=Integer err=0
+D2  lv = Len(<Long var>)    | val=4 tn=Integer err=0
+D3  lv = Len("abc")          | val=3 tn=Long    err=0
+```
+
+四条结论（直接改写 F7 与 Len 两条的做法）：
+
+1. **比较结果本身就是 Null**：`A1/A5/A6/A7/A8` 全 Null（连 `Null = Null` 也是 Null）⇒
+   Null 传播适用于**全部**比较运算符，不限于 `=`。C3 现在发 `vb6_StrCmp(...) == 0` ⇒ True/err=0，
+   所以 F7 要动的是**比较站**，不是赋值站。
+2. **Null 落到目标上一律 94 且目标不变**（A2 Double / A3 String / A4 Boolean）。
+   这与 F2/F3 的 13 不冲突：那是**字符串** `""` 进 Double（严格数值解析 13），
+   这是**Null** 进 Double（变体通道 94）—— 两条路必须分开。
+3. **W 段三入口同口径**（变体数组元素 / 返回 Null 的函数 / Collection.Item）：
+   赋给 String 与 `Len(...)` 都是 94 且目标不变。第七十三刀的严格出口已覆盖这一形，
+   所以 W4/W5/W6 很可能**已经是绿的**，只需复测确认；C6/C7/C8 （Mid/Left/UCase）那一道站
+   则是旧口径，未改成 94。
+4. **Len 的档位按实参类别分**：`Len(<Integer/Long 变量>)` ⇒ **Integer**（2 / 4），
+   `Len("abc")` ⇒ **Long**（3）。所以 §11.46 那句“值对、档差一档”要改成**两档**：
+   数值实参发 Integer（VT_I2），字符串实参发 Long；一刀切两向都会错一格。
+
+### 11.52 第七十六刀：`b = Null` / `d = Null` ⇒ 94 且目标不变（A4/A2）
+
+#### 一、读数（本机 C3）
+
+`tests/vb6probe/NullFamilyProbe.bas` 的 F 段（改后）：
+
+```
+F1  d = Empty       | d=0   err=0
+F2  d = Null & ""    | d=1.5 err=13
+F3  d = CStr(Null)  | d=1.5 err=13
+F4  d = 0           | d=0   err=0
+F5  i = Empty       | i=0   err=0
+F6  b = Null        | b=True err=94      (改前 b=False err=0)
+F7  b = (Null = "")| b=True err=0       (没改，见三)
+```
+
+另加一份临时探针（`.temp/k76/f8.bas`，不入清单）补 A2 的 Double 格：
+
+```
+F8  d = Null        | d=1.5 err=94
+F9  b = Null        | b=True err=94
+```
+
+对得上真机 A2/A4：**报 94 且目标不动**（改前 `target = vb6_VariantToLong(...)` 是先 raise
+再写 0/False，两半都错：错成 0、还把目标清了）。
+
+#### 二、改了什么
+
+- RTL 两枚严格出口：`vb6_Bool_AssignFromVariant(int16_t*, vb6_VARIANT)` /
+  `vb6_Dbl_AssignFromVariant(double*, vb6_VARIANT)` —— `vtNull` ⇒ `vb6_ErrRaise(94)` 后**直接 return**
+  （目标一个字节都不写）；否则走原来的 `VbVariantToLong` / `VbVariantToDouble`；`Empty` ⇒ 0。
+- `cgen_assign_value_sem.inc` 的 `valueIsVariant` 支首：按 `inferExprType(*node.target)` 是
+  Boolean / Double 就改发上面两枚。目标类型问不出来就**维持原路**（不猜）。
+- 与 13 那条路分开：字符串右值进 Double 仍走第七十五刀的 `vb6_Dbl_AssignFromBSTR`（严格解析，`""` ⇒ 13）；
+  变体右值进 Double 走本刀这枚（Null ⇒ 94）。
+
+#### 三、F7 为什么没一起改（改到一半撤回的证据）
+
+先按 A1/A5–A8 的结论动**比较站**（`cgen_expr_binary.cpp`）：任一侧是变体就发
+`vb6_VarCmpNullV(a, b, op)` 交出一整只 VARIANT，想靠前缀表让下游按目标类型走 94 通道。三条硬红：
+
+1. `-Category syntax` 的 `varcmp_scalar_boxed` 红：数字比较也被改道了，缺 `vb6_VarCmpEq(&v, `。
+2. 同批 `variant_unbox_shapes` 红：Double 目标的形状换了（那一行本刀**确实**该换，已重钉）。
+3. 最硬的一条：把**有字符串一侧**的比较收窄改道之后，`tests/test_varcmp_scalar.bas` 的发码里出现
+   `vb6_VCmpNullV(&v, &s, vb6_VarCmpNullV(...))` 与 `(int32_t)(vb6_VarCmpNullV(...))` ——
+   这两处包装站把**比较结果当 int 用** ⇒ C2440，整份工程编不过。
+
+所以 F7 不是「再加一条出口」：比较站一交出 VARIANT，`vb6_VCmpNullV` 的第 3 实参、`(int32_t)(...)`
+这两类包装站都得先能接 VARIANT（或者改成由包装站决定内层比较怎么发）。本刀**整体回退**：
+`vb6_VarCmpNullV` 的 RTL / 声明 / 前缀表 / KEEPS 行一起撤，不留死代码。F7 留给下一刀。
+
+#### 四、登记与门禁
+
+- KEEPS：新增 2 行（`vb6_Bool_AssignFromVariant|1 1 store` 例外行 + `vb6_Dbl_AssignFromVariant|1 0 handoff-reads:vb6_VariantToDouble`），
+  `check_owned_temp_keeps.ps1` PASS（surface 250 / owned 133）。
+- 发码清单：全语料 750 行里**本机 5 行动**，逐份 base/new 归因（`git stash push -- src/` 那套）全是本刀的改道文本：
+  NullFamilyProbe（4 行：`d = vb6_VariantToDouble(ev)`→`vb6_Dbl_AssignFromVariant(&d, ev)`、`b = vb6_VariantToLong(nv)`→`vb6_Bool_AssignFromVariant(&b, nv)`）、
+  NullOpsProbe（6 行）、test_variant_boxing（4 行）、VBFlexGridDemo/Common/Common.bas（2 行）、VBFlexGridDemo.vbp（项目级）。
+  机器侧 5 行（guisample×3 / TeeChart / ctrlmscomm）**base==new**，一律不动。
+- 门禁：`builtin_slot_returns` / `conv_strict_parse` / `variant_slot_store` / `owned_temp_keeps` 全 PASS；
+  `-Category syntax` PASS=227 FAIL=0 SKIP=0。
+- 已知噪声（下一刀顺手收）：`b = Null` 仍报编译警告 **VB3003**「无法将 Null 隐式转换为 Boolean」，
+  但运行期口径已与 A4 一致；F7 仍在（`b = (Null = "")` ⇒ True/0，真机 94/True）。
+
+### 11.53 GA run 44521823896 的 build 红：不是源码，是构建目录缓存跨镜像（已修）
+
+#### 一、现象
+
+手动 GA 在 `Build C3.exe` 这一格红，失败步骤是**第 8 步里的 cmake configure**（不是编译）：
+
+```
+-- The CXX compiler identification is unknown
+CMake Error at CMakeLists.txt:11 (project):
+  The CMAKE_CXX_COMPILER:
+    C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
+  is not a full path to an existing compiler tool.
+```
+
+同一格的前两行是 `cmake version 4.5.0` 与 `MSVC install: C:\Program Files\Microsoft Visual Studio\18\Enterprise`
+—— 镜像里 VS 在，只是**工具集版本目录换了**，而 14.51.36231 那条路径已经不在了。
+
+#### 二、归因（读日志，不猜）
+
+```
+Cache not found for input keys: c3exe-v2-766b6f97...          ← 本提交没有 C3.exe 缓存
+key: c3build-v2-766b6f97...   restore-keys: c3build-v2-
+Cache hit for restore-key: c3build-v2-cd3dc6b4114ad...       ← 兜底命中**旧提交**留下的构建目录
+```
+
+所以链条是：本刀的 `src/` 改动的 key 没命中 ⇒ `actions/cache` 的 restore-keys 兜底 ⇒ 恢复回来的是
+另一台镜像（旧的 VS 18 / MSVC 14.51）留下的 `$RUNNER_TEMP/c3build`，它的 `CMakeCache.txt` 钉着那台镜像的
+**绝对** `cl.exe` 路径 ⇒ 现镜像上该路径不存在 ⇒ cmake 4.5 在 `project()` 处直接拒。
+与本次改的 RTL/发码无关，也和 14.5 与 14.29 的差异无关：**同一个坑对任何一次 src 改动都成立**，
+只是这一次轮到了。
+
+#### 三、修法（四处 configure 站一起改）
+
+1. **编译器每次显式给值**：`$clPath = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\cl.exe"`
+   （vcvars 已导出该变量），并把 `"-DCMAKE_CXX_COMPILER=$clPath"` 写进 configure 行 —— 命令行 `-D`
+   覆盖缓存项（与 launcher 那条同一个思路：不让恢复的 CMakeCache 代决定）。
+2. **旧镜像的目录整份作废**：恢复回来的 `CMakeCache.txt` 里若记的编译器路径与本次不同，
+   则 configure 加 `--fresh`（文档语义：丢掉 CMakeCache.txt 与 CMakeFiles，不动源码、不动 `.build`）。
+   只覆盖编译器不够：`CMAKE_LINKER` / `CMAKE_AR` 同样是旧镜像的绝对路径，链接期会变成 "cannot find file"。
+   路径相同则照旧走快速路。
+3. 四个站：`ci.yml`（Build C3.exe）、`ci_t0.yml`（T0 构建）、`ci_vbman.yml` 两处（其中 else 支没有
+   `build.ninja`，说明是半截缓存，直接 `--fresh`）。三份 YAML 都过 `yaml.safe_load`。
+
+#### 四、本机复现与验证（不是“看着像就这么改”）
+
+- **复现**：把一份配好的 `CMakeCache.txt` 的 `CMAKE_CXX_COMPILER` 改成 `C:/nonexistent/msvc/cl.exe`，
+  按 CI 原样重配 ⇒ 一字不差的 `is not a full path to an existing compiler tool`，rc=1。
+- **验证 1（只加 -D）**：把同一份缓存里的路径改成「另一台镜像的 VS 18 / 14.51.36231」，加
+  `-DCMAKE_CXX_COMPILER=<本机 cl>` 重配 ⇒ `identification is MSVC 19.29...` / `Configuring done`，rc=0。
+- **验证 2（整段脚本）**：把 workflow 里那十几行原样跑一遍（vcvars 注入环境 → 读 CMakeCache → 判定
+  跨镜像 → `cmake @cmakeArgs ...`），输出
+  `c3build cache from another image (C:\Program Files\Microsoft Visual Studio\18\...\14.51.36231\...cl.exe) -> cmake --fresh`
+  然后 `Configuring done`，rc=0。
+- `cmake --fresh` 本机 4.4.4 可用（文档要求 ≥ 3.24），runner 是 4.5.0。
+
+### 11.54 第七十七刀：`s = c(1)`（Collection.Item 是 Null）⇒ 94 且目标不变（W6）
+
+#### 一、复测读数（本机 C3，探针 `.temp/k77/wc.bas`，改前）
+
+真机读数取自 §11.51 的 W/C 段。改前 C3：
+
+```
+W4  s = a(0)          | keep / 94   ✅ 同真机
+W4b n = Len(a(0))     | n=0  / 94   ✗ 真机 n 保持 -1
+W5  s = FNull()       | keep / 94   ✅
+W5b n = Len(FNull())  | n=0  / 94   ✗
+W6  s = c(1)          | ""   / 0    ✗✗ 真机 keep / 94
+W6b n = Len(c(1))     | n=0  / 94   ✗
+C6  s = Mid(Null,1)   | ""   / 94   ✗ 真机 keep
+C7  s = Left(Null,1)  | ""   / 94   ✗
+C8  s = UCase(Null)   | ""   / 94   ✗
+```
+
+两类缺陷：
+
+1. **W6 连错误号都没有**：入口确属 Null（`.temp/k77/w6.bas` 的 P1：`w = c(1)` ⇒ `isnull=True`），
+   P3 `s = <Null 变量>` 已经是 keep/94（第七十三刀），P4/W6 `s = c(1)` 却是 ""/0。
+2. **其余六格的 94 对了，目标却被写了**：`n = Len(...)` → 0、`s = Mid/Left/UCase(Null)` → 空串。
+   真机是「语句在出错处中止，赋值根本没发生」。
+
+#### 二、W6 的归因（本刀修的）
+
+发码：
+
+```c
+vb6_BSTR_Assign(&s, vb6_VariantToString(vb6_VariantFromComResult(vb6_ComCallByDispid(c, 0, ...))));
+```
+
+缺口在 `emitBstrSlotStore` 的 COM 裸结果那一支：它把变体**提前**折成串再赋。
+`vb6_VariantToString(Null)` 不 raise、交回空串 ⇒ err=0 + 目标被清成 ""，两个错同时存在。
+Null 必须在**赋值那一瞬**才判：改成把整只变体交给 `vb6_BSTR_AssignFromVariant`
+（非 Null 走 `vb6_CStr`，与 `VariantToString` 同口径；定长串目标仍走原来的转串路）。
+改后：
+
+```
+W6  s = c(1)          | keep / 94   ✅
+P4  s = c(1)          | keep / 94   ✅（P1/P2/P3 不变）
+```
+
+门禁：四道全 PASS；`-Category syntax` PASS=227 FAIL=0。发码清单：全语料 750 行本机 8 行动
+（Charts×3 / fgz_fix005a×2 / test_com_latebound / ucSegmentedControl / ucTreeView），
+逐份 base/new 归因（base==expect ∧ base!=new）；机器侧 5 行本刀 **base==new**（本机发码一字未动），
+保持 CI 原值。
+
+#### 三、还欠的（下一刀）——“94 之后不许写目标”
+
+剩下六格全是同一件事：**语句级中止**。现在发码是
+`BSTR _own = vb6_CStrStrict(<Null>); n = vb6_Len(_own);` —— CStrStrict raise 后交回空串，
+赋值站照写。真 VB6 是「出错即中止本语句」。要真修需引入一个单调的**错误序号**
+（`vb6_ErrRaise` 自增），赋值/输出站在写目标前比一次，若本语句里 raise 过则不写。
+这会给**每条赋值**加一层守卫 ⇒ 发码形状大面换；必须单独一刀、单独登记，不能混在本刀里。
+
+#### 四、GA run 44532858724 的红：`fgz_fix005a_default_member_unwrapped`（已修）
+
+GA 的 `Tests (vbp #9)` 报 `PASS=54 FAIL=1 SKIP=2`，注解（check-runs/annotations）点名：
+
+```
+[EMITC-SHAPE] fgz_fix005a_default_member_unwrapped ... exit=0
+  missing: vb6_VariantToString(vb6_VariantFromComResult(vb6_ComCallByDispid(
+```
+
+就是本刀换掉的那个形状：那条针钉的是「默认成员结果先拆成整只变体再落槽」，而本刀把 String 槽那一支
+从 `vb6_VariantToString(...)` 改成 `vb6_BSTR_AssignFromVariant(&s, ...)`。「先拆箱」这个意思没变，
+变的只是落槽那一枚出口 —— 针跟着改：
+
+```
+'vb6_BSTR_AssignFromVariant(&s, vb6_VariantFromComResult(vb6_ComCallByDispid('
+```
+
+（本机发码逐字核过：`vb6_BSTR_AssignFromVariant(&s, vb6_VariantFromComResult(vb6_ComCallByDispid(d, 0, ...`。）
+
+教训（记下来）：这类 `[EMITC-SHAPE]` 用例住在 **vbp** 类里，`-Category syntax` 看不到 ——
+以后改了「写槽」那一层，本机至少要跑 `-Category vbp -VbpShard <CI 红的那一片> -VbpShardTotal 12`。
+本机重跑 9/12 片：本针不再报缺；另有两格本机红（`[VBP] c29listview`、
+`[COMPILE-FAIL] iface_multi_incomplete_negcontrol`）—— 同一 HEAD 上 CI 这两格是 PASS，属本机环境差
+（OCX/编译器可用性），与发码无关。
+
+### 11.55 第七十八刀（已撤回）：`Asc("")` / `Asc(Empty)` 报 5 试过，与 94 那条路揭不开
+
+#### 一、本机读数（`.temp/k78/lena.bas`）
+
+```
+改前: L1 n = Asc("") | n=0 err=0     L2 n = Asc(Empty) | n=0 err=0
+真机: 两格都是 5（Invalid procedure call or argument）
+```
+
+#### 二、改法与 GA 红
+
+`vb6_Asc` 对空串先 `vb6_ErrRaise(5, …)` 再 `return 0`。本机探针两格都变 err=5。
+但 GA `4454*****` 上 `[RUN] test_joinfilter: output mismatch`：
+
+```
+JF-nullasc=94   （期望）  →  实测 5
+```
+
+原因（发码逐字看的）：
+
+```c
+BSTR _own_6 = vb6_CStrStrict(nv2);              /* nv2 = Null ⇒ raise 94, 交回空串 */
+nc = vb6_VariantInt((int16_t)(vb6_Asc(_own_6)));
+```
+
+`Asc(<Null>)` 到 `vb6_Asc` 手上时，94 已经报过了，手上的就是一个空串 ——
+**两个来源在 BSTR 层不可分**，在这里再报 5 就把 94 盖掉。
+“把 CStrStrict 失败时改交 NULL” 也试不得：`vb6_CStrStrict` 的返回值被下游
+`Mid/Left/UCase/Len` 那一片直接当字符串用（C6–C8 就是它们），换 NULL 等于拿空指针去换
+一堆未审计的解引用。
+
+#### 三、结论
+
+撤回本刀（`vb6_Asc` 回到“空串静默 0”，仅留注释记下来龙去脉），
+`Asc("")=5` **与 W4b/W5b/W6b、C6/C7/C8 同一笔账**：都要“语句级中止”——
+转换一 raise，整条语句就停，`vb6_Asc` 根本不会跑，两种来源自然分开。
+那一刀落地后，本格只需把 `vb6_ErrRaise(5, …)` 加回去。
+
+教训：RTL 层的“补一个 raise”不是局部改动 —— 它改的是**错误号**，
+而上游可能已经报过更具体的错误。凡是不确定“到这一步时 Err 是什么”的格，先写探针把
+整条链路（包括上游转换）的 Err 读数拿齐，再决定报不报。
+
+
+
+
+
+
+
+
+### 11.56 第七十九刀：语句级中止 —— 错误序号 + 赋值站守卫（W4b/W5b/W6b、C6/C7/C8 六格一次收口）
+
+#### 一、这一刀买的是什么
+
+VB6 里 `On Error Resume Next` 中止的是**当前语句**：出错之前已经求值的一切保留，
+但**赋值不发生**。C3 原来把「转换失败」之后的那一发赋值照样发出去，于是真机读数是
+
+```
+真机:  W4b n = Len(a(0))   → n=-1  err=94      C3 改前: n=0   err=94
+       W5b n = Len(FNull())              n=-1            n=0
+       W6b n = Len(c(1))                 n=-1            n=0
+       C6  s = Mid(Null,1)      → s=[keep] err=94      s=""
+       C7  s = Left(Null,1)              [keep]          s=""
+       C8  s = UCase(Null)               [keep]          s=""
+```
+
+六格的错号早就对了（94），错的是**目标被写成了一个空值**。所以这一刀不改转换、
+不改 Err：只加一句「本语句 raise 过就别写目标」。
+
+#### 二、机制（两半，各一枚出口）
+
+1. **RTL 侧：错误序号**（`vb6rtl.c` / `vb6rtl_array.h`）
+   `int32_t vb6_err_serial`，`vb6_ErrRaise` 一进门就 `++`；`vb6_ErrSerial()` 读它。
+   序号而不是 `Err.Number`：程序自己 `Err.Clear`、或者两次同号错（都是 94）都区分不开，
+   「本语句有没有 raise 过」只有单调计数答得准。
+2. **发码侧：一句守卫**（`cgen_state.inc` 的 `stmtAbortGuard_` + `emitGuardedStore`）
+   赋值站开头（`visit(AssignmentStmt&)` 第一句之后）判一次：目标档位是
+   **整型标量**（Integer/Long/Byte）或 **String**，且右值是一枚调用、它的某个实参档是
+   `Variant`/`Null`/`Empty`（`Null`/`Empty` 另外直接看 `LiteralExpr::literalKind`，
+   因为字面量那一路 `inferExprType` 的档位不稳）。命中就发
+
+   ```c
+   const int32_t _e7 = vb6_ErrSerial();
+   ...
+   if (_e7 == vb6_ErrSerial()) n = vb6_Len(_own_1);
+   ```
+
+   `StmtAbortScope`（局部 RAII）在 `visit` 任何出口清空守卫名，所以早期 `return`
+   的那几十条支路不会把守卫漏给下一条语句。
+   String 目标那一支走 `emitBstrSlotStore` 的两个出口：借来的值只深拷贝 ⇒ 直接不发；
+   **自有临时串**（`valueOwned113 || wrapped122`）⇒ 不发就必须自己释放：
+
+   ```c
+   if (_e0 == vb6_ErrSerial()) vb6_BSTR_AssignMove(&s, vb6_Mid(_own_4, 1, -1));
+   else                        vb6_BSTR_Free(vb6_Mid(_own_4, 1, -1));
+   ```
+
+   `vb6_BSTR_Assign` 那一发仍写在原处（R7 名单钉的是「这一站还是手写的」，
+   改成 `emitGuardedStore` 会让 R7 数少一处，等于用改门禁来通过改动 —— 不取）。
+
+#### 三、本机读数（`.temp/k77/wc.bas`，改后）
+
+```
+W4  s = a(0)          | s=[keep] err=94     W4b n = Len(a(0))     | n=-1 err=94
+W5  s = FNull()       | s=[keep] err=94     W5b n = Len(FNull())  | n=-1 err=94
+W6  s = c(1)          | s=[keep] err=94     W6b n = Len(c(1))     | n=-1 err=94
+C6  s = Mid(Null,1)   | s=[keep] err=94
+C7  s = Left(Null,1)  | s=[keep] err=94
+C8  s = UCase(Null)   | s=[keep] err=94
+```
+
+九格全中真机口径（W4/W5/W6 上一刀已经对，这一刀没动它们）。
+
+#### 四、门禁
+
+- `-Category syntax`：PASS=227 FAIL=0。
+- `-Category vbp -VbpShard 9 -VbpShardTotal 12`：PASS=56 FAIL=1，红的仍是本机已知
+  `[VBP] c29listview`（同一 HEAD 的 CI 是 PASS，OCX/编译器可得性的本机环境差）。
+- 四道静态门：`builtin_slot_returns` / `conv_strict_parse` / `variant_slot_store` /
+  `bstr_borrow_slot` 全绿（R7 三次试跑后回到 3 处手抄）。
+- 发码清单：78 行哈希变化，逐行看过差异 —— 只有两种新增
+  `const int32_t _eN = vb6_ErrSerial();` 与包在 `if (_eN == vb6_ErrSerial())` 里的
+  原赋值行（`else` 那半只有自有临时串的释放）；对应 78 份输入重新登记。
+
+#### 五、为什么守卫发得比想象的多（523 处），以及为什么这不是白名单
+
+判据是「右值是调用 + 某个实参档落在 Variant/Null/Empty」，而 `inferExprType` 的
+**兜底答案就是 Variant**（见 `cgen_file_io.cpp` 那段注释），于是 `x = Foo(未知形参)`
+这类语句也吃到守卫。语义上这是对的：VB6 里**任何**错都会中止当前语句，不只 94；
+守卫的代价只是多一行声明和多一次整数比较，而被它挡住的一定是「真 raise 过」的语句。
+反过来把判据收窄成「只认 94 那几族」才是白名单思路 —— 错号一换就漏。
+
+#### 六、这一刀没做的（写清楚，别当成已完成）
+
+- `n = Asc("")` / `n = Asc(Empty)` 仍读 `n=0 err=0`（真机 5）。机制已经就位：
+  `vb6_Asc` 里补一句「空串 ⇒ `vb6_ErrRaise(5, …)`」不会再盖掉上游 94，因为
+  `Asc(<Null>)` 那一路的上游转换一 raise，整条语句的赋值就不发了 —— 但**Asc 自己
+  仍然会跑**（RHS 求值不会停），它照样会把 Err 从 94 改成 5。要分开得让
+  `vb6_Asc` 只在「本语句还没 raise 过」时报 5，也就是把序号带进 RTL 的读侧 ——
+  下一刀再说，别在这里猜。
+- `Len` 两档（数值实参 ⇒ Integer，字符串 ⇒ Long）仍是 backlog：会动
+  `run_tests.ps1` 的形状针（5809、8811–8813）。
+- 定长串目标（`udtFixedField` / `fixedLen`）那两站没有守卫：它们的写出口是
+  `vb6_FixedStrAssign*` / `vb6_LSet*`，这一刀没碰。
+
+### 11.57 GA 44565667912 红的两格：登记时把「机器侧 5 行」换成了本机数 + 一条 runner 争用
+
+#### 一、形状门（真错，已修）
+
+CI 判词只有 5 行：`tests/guisample/GUISample.vbp`、`…/vb6ref/src/vc6/GUISample.vbp`、
+`…/vs2015/GUISample.vbp`、`tests/TeeChartChartDisplay/DisplayProject.vbp`、
+`tests/ctrlmscomm/MsCommApp.vbp`。这 5 份输入在 CI 与本机**本来就不同答**
+（引用本机注册过的类型库/OCX 的那一档），所以清单里它们一直存的是 **CI 那台机器给的值**。
+
+第七十九刀让它们的发码也变了（多出同一批守卫），`rebless_emit_manifest.ps1 -Bless`
+只会用**手上这份清单**改写，于是把它们一起换成了本机数 —— 745 行对，5 行不对。
+
+修法：从这次 run 的 `emit-manifest` 工件（`actions/artifacts/14551349391`）取 CI 自己那份，
+只把 5 行按路径换回去，其余 745 行一个字不动；换完拿 CI 那份清单喂
+`compare_emit_manifest.ps1` ⇒ 750/750 相同。
+
+教训（补进清单纪律）：**-Bless 只许在没有机器侧行的改动上用**。凡本轮动到那 5 份输入，
+登记后必须再用 CI 的清单复算一遍，不能只看本机 `相同 750`。
+（本机现在跑 compare 会报这 5 行不同 —— 那是**本机口径差**，不是回归；
+判红只能用 CI 自己那台二进制交回来的清单。）
+
+#### 二、Tests (vbp #5) 红：`[PIXELS] uctreeview_px.ps1`（本机同一 HEAD 复跑 PASS）
+
+CI 读数：`'Tree Explorer' 内容段: BM_CLICK 3s 未返回 + 迟到 7s 仍无窗体 (resp=False)`，
+同一条详情的后半段是 `jitter[Corporate Hierarchy]=BM_CLICK(late=4954ms resp=True)`
+—— 后一个按钮**迟到了 4.9 秒才响应**，说明那台机器当时被挤得很厉害（3 秒同步窗是硬判据）。
+
+本机复现（同一 HEAD、同一 C3.exe）：手工按 `Test-VbpBuild` 的口径重建
+`tests/ucTreeView/Proyecto1.vbp --arch x86`（拷 `img\` + `ejemplo.xml`/`JerarquiaEmpresa.xml`/`menu.xml`），
+再跑 `tests/guisample/uctreeview_px.ps1`：**rc=0 PASS**，五段内容全开、3 轮重复全开，
+一次 `BM_CLICK` 超时都没有（`fg[...] ok=True try=1`，各 `repeat[...] open sync= close=True`）。
+
+所以归因=**runner 争用**（该 run 同时跑了 21 个 job），不是这一刀的发码。处置：不改判据、
+不改超时窗，重跑；若同一格再红，再回头看是不是夹具有真的时序耦合。
+
+#### 三、留给下一次的读法
+
+`-Category vbp -VbpShard 5` 在本机这台机器上**不会重建** `output\build_ucTreeView`
+（那目录 2026-11-10 就在，说明那一格在本机走的是缓存/跳过），所以「本机分片绿」不能当
+「这一格跑过」的凭证 —— 要点名复跑像素夹具时，照上面那三行手工重建 + 单跑脚本。
+
+### 11.58 第八十刀：`Len(<数值变量>)` 的档位收成 Integer（两档分开）
+
+#### 一、真机口径（`.temp/k78/lena.bas`，用户真机采）
+
+```
+D1  lv = Len(<Integer>) | val=2 tn=Integer
+D2  lv = Len(<Long>)    | val=4 tn=Integer
+D3  lv = Len("abc")     | val=3 tn=Long
+D4  lv = Len(Empty)     | val=0 tn=Long
+```
+
+值一直是 C3 早就对的（sizeof），错的是**档**：C3 原来四格全答 Long。
+为什么数值那两格是 Integer 而不是 Len 声明的 Long：`Len(<数值变量>)` 在 VB6 里是
+**编译期常量**（存储宽度），而 VB6 把装得下的常量定为 Integer —— 与「Len 返回 Long」
+不矛盾，两档必须分开走。
+
+#### 二、改法（两半，缺一不可）
+
+1. **发码**（`cgen_expr_call_builtin_pre.inc`）：数值支的 `((int32_t)sizeof(x))` 收成
+   `((int16_t)sizeof(x))` —— 三处：数组元素、标量数值、非字符串兜底桶。
+   UDT 那一支仍是 int32_t（长度会超 32767），定长串那一支也不动（那是 String 族）。
+2. **推理**（`cgen_util_type.cpp` 的 `inferExprType`，IndexOrCallExpr 分支开头）：
+   `Len(<数值档实参>)` 答 **Integer**；字符串 / Variant / 对象 / 未知一概不拦（仍答 Long）。
+   只改这一问，`builtin_funcs.inc` 那张表（Len = Long）不动 —— 表答的是「声明」，
+   而这里答的是「这一枚常量表达式的档」，两句话并存。
+
+光改发码不够：装箱由**推理档**决定，实测改前发 `vb6_VariantLong(((int16_t)sizeof(i1)))`
+⇒ TypeName 仍答 Long（D1 正确之前那一版就是这样）。两处都改后装箱落
+`vb6_VariantFromValue(((int16_t)sizeof(i1)))` 的 `_Generic` Integer 档。
+
+#### 三、读数（改后，本机）
+
+```
+D1 val=2 tn=Integer    D2 val=4 tn=Integer
+D3 val=3 tn=Long       D4 val=0 tn=Long
+W4b/W5b/W6b n=-1 err=94，C6/C7/C8 keep err=94（第七十九刀的九格未被本刀动到）
+```
+
+#### 四、门禁与本机读数
+
+- `-Category syntax`：PASS=227 FAIL=0。
+- `-Category vbp -VbpShard 9`：PASS=56 FAIL=1（仍只有本机已知 `[VBP] c29listview`）。
+- 四道静态门全绿。
+- 形状针同步：`run_tests.ps1:5809`（b174 的 `Len(n)`）与 `8811–8813`
+  （`len_emitc_width` 的 gL/gI/gB）从 `int32_t` 改成 `int16_t`；
+  `8848` 的定长串 `gT` 与 `5810` 的 UDT **不动**（那两档没变，正是本刀要守住的边界）。
+- 发码清单：11 份输入变化 —— 除 `test_len_width` / `test_memdim` / `b174` / `dbgdlg` /
+  `NullFamilyProbe` 五份本机可复算的以外，另外 5 份是**机器侧行**
+  （guisample×3 / TeeChart / ctrlmscomm）。它们的 CI 散列只能吃 CI 那台二进制交回来的数：
+  先按本机数登记（闸会红在那 5 行），再从那次 run 的 `emit-manifest` 工件把 5 行换回去
+  —— 与 §11.57 同一条流程，多跑一趟 GA 是这一步的固有成本。
+
+#### 五、下一步
+
+`n = Asc("")` ⇒ 5 仍留着（§11.56 末）：要 `vb6_Asc` 只在「本语句还没 raise 过」时报 5，
+即把错误序号带进 RTL 读侧。
+
+
+### 11.59 第八十一刀：`Asc("")` / `Asc(Empty)` ⇒ 5（目标不动，且不吞掉上游的 94）
+
+#### 一、真机口径
+
+`.temp/k81/asc.bas`（本机探针）与 `.temp/k78/lena.bas` 的 A/L 两组：
+
+| 格 | 源 | 真机 |
+|---|---|---|
+| A1 | `n = Asc(<Null>)` | `n` 不动，`Err.Number=94` |
+| A2 | `n = Asc("")` | `n` 不动，`Err.Number=5` |
+| L1 | `n = Asc("")`（`Err.Clear` 之后） | `n` 不动，5 |
+| L2 | `n = Asc(Empty)` | `n` 不动，5 |
+
+第七十八刀在 RTL 里直接 `ErrRaiseNumber(5)` 那一版被撤回（§11.55），原因是
+`Asc(<Null>)` 到 `vb6_Asc` 手上时**已经**被上游 `vb6_CStrStrict` 报过 94、交回的只是一只
+空串 —— 两个来路在 BSTR 层长得一模一样，于是 5 把 94 盖掉。本刀把这两条路分开。
+
+#### 二、三处改动（缺一不可）
+
+1. **RTL 报 5**：`vb6_Asc`（`vb6rtl_string.c:359`）空串/NULL ⇒ `vb6_ErrRaiseNumber(5); return 0;`。
+2. **赋值站的语句级守卫覆盖 Asc 族**（`cgen_assign.cpp`）：判据里加 `asc/ascb/ascw`。
+   但第七十九刀那形「先比序号、再执行 store」**挡不住它** —— `Asc` 自己 raise 发生在
+   store 那一行的表达式内部，号是在 store 之后才变的。所以整型标量目标改走**临时量形**：
+
+   ```c
+   const int32_t _e1 = vb6_ErrSerial();
+   int32_t _av2 = (_e1 == vb6_ErrSerial()) ? (vb6_Asc(_own_2)) : (int32_t)0;
+   if (_e1 == vb6_ErrSerial()) n = _av2;
+   ```
+
+   两条性质都在这一形里：① 右值先算进临时量（raise 之后就能判）；② 三元的第一支才真跑
+   `vb6_Asc` —— 上游转换已经报过 94 时，这里的调用**根本不发生**，5 也就没机会盖 94。
+   （第一版少了那个三元，实测 `A1` 直接答 `err=5` —— 是本刀当场量出来的红，不是推测。）
+   `cgen_state.inc` 为此加 `stmtAbortTmp_` / `stmtAbortTmpType_`（`StmtAbortScope` 一并清）。
+3. **目标不是整型标量那一形**：`nc = Asc(nv2)`（`nc` 是 Variant）发不出第 2 条的守卫 ——
+   `test_joinfilter` 的 `JF-nullasc` 当场从 94 掉到 5。RTL 侧补一枚确定性判据：
+   `vb6_CStrStrict` 报 94 之后 `vb6_ConvFailMark()`（记下当时的错误序号），`vb6_Asc` 见空串
+   且该序号**仍等于**当前序号 ⇒ 判定「这只是转换失败交回来的」，不再报 5；
+   `vb6_ErrClear` 把标记清掉（那是「这次错误已被程序处理完」的唯一信号）。
+   `.temp/manifest` 的读侧不受影响：`vb6_err_serial` / `vb6_conv_fail_serial` 声明进
+   `vb6rtl_array.h`（`check_rtl_proto_arity` 已把它算进 1780 对签名）。
+
+#### 三、读数
+
+- `A1 Asc(Null) n=-1 err=94`、`A2 Asc("") n=-1 err=5`、`L1/L2 = n=-1 err=5`。
+- `D1–D4`（第八十刀的 Len 两档）与 `W4..W6b` / `C6..C8` 九格**一字未动**。
+- `test_joinfilter`：`JF-nullasc=94`（另 20 余格 null* 不动）。
+
+#### 四、门
+
+- `-Category syntax`：227/227。
+- `-Category vbp -VbpShard 9 -VbpShardTotal 12`：55 PASS / 2 FAIL。
+  `[VBP] c29listview` 是本机已知非回归红；`[COMPILE-FAIL] iface_multi_incomplete_negcontrol`
+  在同一 HEAD 手工复跑得 `VB3012` + rc=1 + 无 exe（正是该针要的），归 runner 争用。
+- 静态门 8 枚全 PASS：`variant_slot_store`（R7=3 保住）、`conv_strict_parse`（cells=4）、
+  `builtin_slot_returns`、`rtl_naked_names`、`rtl_proto_arity`、`owned_temp_keeps`、
+  `implicit_cstr_station`、`emitted_declared`。
+- 发码清单：6 行变化（`tests/Charts 2020/Proyecto1.vbp`、同目录 `ucTreeMaps/Proyecto1.vbp`、
+  `tests/dbgdlg/dbgdlg.vbp`、`tests/test_str_cnum_assign.bas`、`tests/VBFlexGridDemo/Common/Common.bas`、
+  `tests/VBFlexGridDemo/VBFlexGridDemo.vbp`），逐份看过：只多出守卫那两三行（+121..+328 字节）。
+  同批把第八十刀按本机数登记的 5 行机器侧差（guisample×3 / TeeChart / ctrlmscomm）
+  **换回 CI run `44631595167` 的工件值**，本机复算于是只剩这 5 行红（预期，CI 侧 750/750）。
+
+#### 五、遗留
+
+`String` 目标的形（`s = CStr(Asc(...))`）仍走第七十九刀那套 `if (...) AssignMove else Free`
+的**双算**：`Asc` 会在 else 分支再跑一次（`Err.Number` 仍是 5、目标仍不动，只是多发一次）。
+它与 `s = CStr(UBound(...))` 同形同口径，本刀不扩，留给「String 目标也吃临时量」那一刀。
+
+### 11.60 第八十二刀：`AscB("")` / `AscW("")` / `AscW(Empty)` ⇒ 5（Asc 同族的尾巴）
+
+#### 一、改前读数（同一台 `.build/C3.exe`，改前）
+
+`.temp/k82/ascb.bas`：
+
+| 格 | 源 | 改前 | 真机 |
+|---|---|---|---|
+| B1 | `w = AscW("")` | `w=0 err=0` | `w` 不动，5 |
+| B2 | `b = AscB("")` | `b=0 err=0` | `b` 不动，5 |
+| B3 | `w = AscW(Empty)` | `w=0 err=0` | `w` 不动，5 |
+| B4 | `b = AscB(<Null>)` | `b=-1 err=94` | 94（本已对） |
+| B5 | `AscW("A")` / `AscB("A")` | `65 / 65 err=0` | 同 |
+
+归因：`vb6_AscW` / `vb6_AscB`（`vb6rtl_compat.c:31/41`）对空串是**静默 return 0** ——
+第八十一刀只修了 `vb6_Asc`，这两枚同族函数各走各的身子，所以尾巴还在。
+`B4` 之所以早已对，是上游 `vb6_CStrStrict(Null)` 先报了 94，这里只是没去盖它。
+
+#### 二、改法
+
+两枚函数都按 `vb6_Asc` 的同一口径补上：
+
+```c
+if (!s || vb6_BSTR_Len(s) == 0) {
+    if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+    vb6_ErrRaiseNumber(5);
+    return 0;
+}
+```
+
+「转换失败交回来的空串不报 5」那一句必须照抄 —— 少了它，`B4` 会从 94 掉成 5
+（第七十八刀在 `vb6_Asc` 上撤回的正是这个坑）。
+
+**发码一侧不需要动**：第八十一刀已把 `ascb/ascw` 纳入赋值站的守卫判据，整型标量目标
+走临时量三元形，所以「报 5 之后目标不写」这一半本刀免费得到 —— 读数里 B1/B2/B3 的
+`w`/`b` 都停在 -1 就是这个守卫在起作用（改前是 0，因为根本没 raise）。
+
+#### 三、改后读数
+
+```
+B1 AscW(empty)  | w=-1 n=-1 err=5
+B2 AscB(empty)  | b=-1 err=5
+B3 AscW(Empty)  | w=-1 err=5
+B4 AscB(Null)   | b=-1 err=94
+B5 AscW/AscB(A) | w=65 b=65 err=0
+```
+
+非回归：`.temp/k81/asc.bas`（`A1` 94 / `A2` 5）、`.temp/k78/lena.bas`（`L1/L2` 5、
+`D1–D4` Len 两档一字未动）、`.temp/k77/wc.bas` 九格全不变。
+
+#### 四、门
+
+- `-Category syntax`：227/227。
+- `-Category vbp -VbpShard 9 -VbpShardTotal 12`：55 PASS / 2 FAIL —— 与第八十一刀同一对
+  （`c29listview` 本机已知非回归红；`iface_multi_incomplete_negcontrol` 归一 HEAD 手工复跑
+  得 VB3012 + rc=1 的 runner 争用）。
+- 静态门 6 枚全 PASS：`rtl_naked_names`、`rtl_proto_arity`、`conv_strict_parse`、
+  `builtin_slot_returns`、`rtl_embedded`、`emitted_declared`。
+- 发码清单：**一行未动**（750 行里只有那 5 行机器侧差，与上一刀登记后的本机状态相同）
+  ⇒ 本刀不需要第二个「登记」提交。RTL 只在链接期进产物，不改 `.c` 文本这一层。
+
+### 11.61 第八十三刀：String 目标的守卫真中止 —— 右值只算一次，且算完再判
+
+#### 一、病（第七十九刀留下的两半）
+
+第七十九刀给「可能 raise 的赋值语句」发了守卫，但 String 目标那一支的形状是
+`if (<序号没变>) <写/释放>(<右值>); else <释放>(<右值>);`：
+
+1. **条件是求值之前比的** —— 右值自己 raise（`Asc("")` 报 5、实参位的 `vb6_CStrStrict(<Null>)`
+   报 94）时条件早就过了 ⇒ 赋值照样发生，目标被清成 `""`，而真机是「报错 + 目标不动」。
+2. **else 那一支把右值又算了一遍** —— 中止之后还会再触发一次右值的副作用。
+
+#### 二、改法（两处）
+
+1. `emitBstrSlotStore`（`cgen_util_ctrl.cpp`）两攮同形：右值先算进 `BSTR _av<N>`，
+   只在**本语句还没 raise 时**算（三元的第一支）；然后拿**算完之后**的序号决定
+   `AssignMove`（自有）还是 `Free`（自有且中止），借来的值只 `Assign`（不回收）。
+2. `cgen_assign.cpp` 补一条**只认 Asc 族**的树扫描（`ascCallInTree`）：String 目标的
+   `s = CStr(Asc(""))` 这一形外层是转换函数、实参档是 Integer，顶层判据看不见它。
+   Asc/AscB/AscW 的 raise 发生在**本语句的表达式求值里**，不会被被调方内部
+   `On Error Resume Next` 吞掉 ⇒ 「序号一变 = 真中止」对这三枚成立。
+
+⚠ **撤回的那一版不在这刀里**：递归扫「右值里**任何**嵌套调用」实测在 `[VBP] fdrawstate_x86`
+上翻红（成因：分不清「错误往外传」与「被调方内部已吃掉」两种序号自增）⇒ 留作另刀，
+要宽到那一层得先给 RTL 一枚「错误是否还在往外爬」的信号。
+
+#### 三、读数（`.temp/k83/stra.bas`，x64，改前 `C3_base.exe` vs 改后 `.build/C3.exe`）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `s = CStr(Asc(""))` | `s=0 err=5` | `s=keep err=5` | keep, 5 |
+| T2 | `s = FBoom(Null)`（被调方内部报 94） | `s= err=94` | `s=keep err=94` | keep, 94 |
+| T3 | `s = Trim(Null)` | `s=keep err=94` | `s=keep err=94` | keep, 94 |
+| T4 | `n = Asc("")`（整型守卫） | `n=-1 err=5` | `n=-1 err=5` | -1, 5 |
+| T5 | `s = CStr(FSeven(nv))` | `s=7 cnt=1` | `s=7 cnt=1` | 7, 1 |
+| T6 | `s = "A" & "B"` | `s=AB` | `s=AB` | AB |
+
+T1/T2 是本刀的行为面，T4/T5/T6 是零回归护栏。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- `-Category vbp -VbpShard 9 -VbpShardTotal 12`：54 PASS / 3 FAIL / 1 SKIP。三红逐条：
+  `iface_multi_incomplete_negcontrol` = 本机已知 runner 争用（同一 HEAD 手工复跑得 VB3012 + rc=1）；
+  `b448_arg_station_returns_transferred_ref` / `b156_local_carrier_destroy_shapes` = 该轮把 stdout
+  重定向到文件后中文 needle 的解码差（**工件不是读数**：同一份 `.build/C3.exe` 手工复现两条 needle
+  全在场，见 `.temp/k83/chk_shape.ps1` 的 `present=True`）⇒ 不是发码回归。
+- 静态门 9 枚全 PASS：`rtl_naked_names`、`rtl_proto_arity`（1780 对）、`conv_strict_parse`、
+  `builtin_slot_returns`、`emitted_declared`、`manifest_coverage`（K1..K3 inputs=750）、
+  `static_sentinel_registration`（148）、`test_helper_integrity`、`rtl_embedded`。
+- 发码清单：见下节「登记」。
+
+#### 五、登记（发码清单）
+
+本刀只改**带语句级守卫的 String 目标**那几行不字，所以候选集不从全语料猜，而是两源取并：
+① 第七十九刀 / 第八十一刀登记过的 78 行（凡是带守卫的行都在里面）；② 语料里出现 `Asc/AscB/AscW`
+调用的输入（本机 7 份，含它们的 `.vbp`）—— 新守卫只可能从这两个源里长出来。
+
+逐份重发后实际变动 **23 行**（`git diff --numstat` = 23+/23-）：`cls_inh/Inh.vbp`、`dbgdlg/dbgdlg.vbp`、
+`geomcache/GCCache.vbp`、`test_builtin_arity.bas`、`test_splitjoin.bas`、`test_str_cnum_assign.bas`、
+`VBFlexGridDemo/VBFlexGridDemo.vbp`、`VbQRCodegen-master/src/mdQRCodegen.bas`、
+`VbQRCodegen-master/test/Project1.vbp`、`b181_baformal.bas`、`b187_box/B187d.vbp`、`b189_gate/B189g.vbp`、
+`b190_scope/B190.vbp`、`b190_scope/B190Main.bas`、`b433/B433.vbp`、`b433/B433Main.bas`、
+`k481_sat/K481Sat.vbp`、`b598_print_numeric/B598.vbp`、`b598_print_numeric/B598Main.bas`、
+`ucTreeView/Proyecto1.vbp`、`GifcontrolSource/prjNewAniGif.vbp`、`vb6probe/NullOpsProbe.bas`、
+`vb6probe/NullFamilyProbe.bas`。差异形状只有两类：① 自有支从
+`if (ok) AssignMove(&s, <值>) else Free(<值>)` 变成 `BSTR _avN = (ok) ? (<值>) : NULL;` +
+`if (ok) AssignMove(&s, _avN) else Free(_avN)`；② 借用支从 `if (ok) Assign(&s, <值>)` 变成同样先算进
+`_avN` 再 `Assign`。**不登记**的 5 行机器侧差（`guisample` 三份 `GUISample.vbp` + `TeeChartChartDisplay`
++ `ctrlmscomm`）在重算时被回退成 HEAD（CI 工件）值 —— 本机 14.29 与 CI 14.52 的发码在这 5 份上天生不同，
+不能拿本机数 bless。
+
+⚠ 本机未能跑完整语料 `emit_manifest`（`Start-Process -Wait` 在该会话里逐份派生子进程后挂住，
+两次都在中途被杀），所以上面用「候选集 + 逐份重发」代替全量：候选集的两源已覆盖本刀全部触发面
+（守卫存在 + Asc 族），且重发比的是与 CI 同一份归一化哈希（`// Generated by vb6c3` 行归位 +
+根路径替换 + ascii256 双列）。下一步全量对齐交给 CI 的形状门。
+
+#### 六、CI 回执（run 44675509943）
+
+12 个 vbp 分片里 2 片红，两类读数，都不是语义回归：
+
+- `b189_gate_same_name_slot_pair` / `b190_typename_of_object_formal_stays_runtime` 两枚
+  `[EMITC-SHAPE]` 针钉的是旧形 `AssignMove(&目标, <右值>)`，被本刀的临时量行挤开。
+  针按新形拆两截重钉：`? (<右值>) : NULL;`（右值原样在场 = 不许折常量，正是这两条的靶子）
+  + `AssignMove(&目标, _av`（目标吃那枚临时量）。本机按 `Test-EmitcShape` 同一口径复算：
+  两例 PASS，`missing=[] odd=0`。
+- 同片另有几行 `[GUI] ... pixels: PASS ...` 被标注机制打成 `::error::`（读数以 png 路径收尾，
+  不是 PASS/SKIP 收尾）——`Results: FAIL=1` 里不含它们，属注解口径噪声，不是用例红。

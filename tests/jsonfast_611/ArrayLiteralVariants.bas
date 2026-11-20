@@ -9,6 +9,10 @@
 ' boxed as VT_I2, which is what VB6 says: `Array(7)(0)` is VarType 2,
 ' TypeName "Integer" (cscript cross-check: AL-long=2, AL-i4=2). So AL-long and
 ' AL-i4 below answer 2, not 3.
+' C30-11 第六十刀: 认得出档的实参（对象 / Nothing / Byte / Currency / Single / Date 值）
+' 不再走"默认 Long"：真 VB6 的 Array(obj)(0) 是 VT_DISPATCH(9)、Array(CByte(65))(0) 是
+' 17、CCur→6、CSng→4、CDate→7。AL-obj / AL-obj-is / AL-nothing-is / AL-byte / AL-cy /
+' AL-sng / AL-date2 就是这七条读数。
 ' The plain BSTR/Double arms below are the zero-regression guard:
 ' their emitted setter must stay byte-for-byte what it was.
 Option Explicit
@@ -39,6 +43,28 @@ Public Sub Main()
     v = c(0): Debug.Print "AL-i4="; VarType(v)
     v = c(1): Debug.Print "AL-bstr="; VarType(v)
     v = c(2): Debug.Print "AL-r8="; VarType(v)
+
+    ' C30-11 第六十刀: 认得出档的实参不再落进"默认 vb6_ArraySetLong"。
+    ' 真值取自 cscript (.temp/arr/oracle_arr2.vbs): CByte→17 / CCur→6 / CSng→4 / CDate→7；
+    ' 对象档按 VB6 语义: Array(obj)(0) 是 VT_DISPATCH(9), IsObject=True（VBScript 传对象会取
+    ' 默认属性，所以对象那两格不能拿 cscript 当真值；理由同 ai/039 §11.34）。
+    Dim o As Object
+    Dim e As Variant
+    Dim f As Variant
+    Set o = CreateObject("Scripting.Dictionary")
+    e = Array(o)
+    v = e(0): Debug.Print "AL-obj="; VarType(v)
+    Debug.Print "AL-obj-is="; IsObject(e(0))
+    f = Array(Nothing)
+    Debug.Print "AL-nothing-is="; IsObject(f(0))
+    e = Array(CByte(65))
+    v = e(0): Debug.Print "AL-byte="; VarType(v)
+    e = Array(CCur(1.2345))
+    v = e(0): Debug.Print "AL-cy="; VarType(v)
+    e = Array(CSng(1.5))
+    v = e(0): Debug.Print "AL-sng="; VarType(v)
+    e = Array(CDate("2020-01-02"))
+    v = e(0): Debug.Print "AL-date2="; VarType(v)
 
     Debug.Print "AL-DONE"
 End Sub

@@ -388,9 +388,12 @@
                                 variantSetter = argExpr;  // emitExpr 已交整枚 vb6_VARIANT
                                 break;
                             case LiteralKind::Nothing:
-                                // NULL 是 void* ⇒ _Generic default ⇒ vb6_VariantObject(NULL)
-                                variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
-                                break;
+                                // 第六十刀: 原来给 vb6_VariantFromValue(NULL), 注释假设 "_Generic
+                                // default ⇒ vb6_VariantObject(NULL)" —— 实测没落那一支，元素成了非对象档。
+                                // 真 VB6 的 Array(Nothing)(0) 是 VarType 9 / IsObject=True。
+                                // 走对象专属出口，免得 VariantCopy 多留一份引用。
+                                c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", NULL);");
+                                continue;
                             case LiteralKind::Date:
                                 variantSetter = "vb6_VariantDate(" + argExpr + ")";
                                 break;
@@ -441,6 +444,47 @@
                     // ⇒ 子类型与 BSTR 引用计数都对。
                     // oracle（cscript，W7.vbs）：Integer 2 / String 8 / Double 5 / Long 3。
                     if (variantSetter.empty() && argIsVariant) variantSetter = argExpr;
+                    // C30-11 第六十刀: 认得出档的实参一律走 Variant 出口，不落进下面"默认 Long"。
+                    // 读数（.temp/arr/oracle_arr2.vbs）：CByte→17 / CDate→7 / CCur→6 / CSng→4；
+                    // 改动前这四档分别写成 Long(3)/BSTR(8, 并因实参里含 L"..." 而 C2440)/Long/Long。
+                    // 对象档：Array(<对象>) 在 VB6 里存**引用**（VarType 9, IsObject=True），
+                    // 旧路径 ArraySetLong 把 IDispatch* 当整数存 —— Array(obj) 于是答 TypeName=Long，
+                    // Join(Array(obj)) 也走不到 450 那条（对象元素判定）。
+                    // Nothing 字面量的 argExpr 不是指针（旧写法先造了一枚空 Variant），单列一格。
+                    if (variantSetter.empty()) {
+                        bool isNothingLit = false;
+                        if (node.positional[i]->kind == ASTNodeKind::LiteralExpr) {
+                            isNothingLit = (static_cast<LiteralExpr&>(*node.positional[i]).literalKind == LiteralKind::Nothing);
+                        }
+                        // 对象变量：inferExprType 对局部 `As Object` 答不出来（它只看 symTab_，
+                        // 局部变量在那里不可达），得问 knownObjectVars_ —— 那是 Set/成员调用
+                        // 共用的同一张表。
+                        bool isObjVar = false;
+                        if (!isNothingLit && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
+                            std::string ol = static_cast<IdentifierExpr&>(*node.positional[i]).name;
+                            std::transform(ol.begin(), ol.end(), ol.begin(), ::tolower);
+                            isObjVar = (knownObjectVars_.count(ol) != 0);
+                        }
+                        if (isNothingLit || isObjVar) {
+                            c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", "
+                                        + (isNothingLit ? std::string("NULL") : "(void*)(" + argExpr + ")") + ");");
+                            continue;
+                        } else {
+                            Vb6Type elemVt = inferExprType(*node.positional[i]);
+                            if (elemVt == Vb6Type::Object || elemVt == Vb6Type::DataObject) {
+                                c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", (void*)(" + argExpr + "));");
+                                continue;
+                            }
+                            else if (elemVt == Vb6Type::Byte)
+                                variantSetter = "vb6_VariantByte((uint8_t)(" + argExpr + "))";
+                            else if (elemVt == Vb6Type::Date)
+                                variantSetter = "vb6_VariantDate(" + argExpr + ")";
+                            else if (elemVt == Vb6Type::Currency)
+                                variantSetter = "vb6_VariantCur(" + argExpr + ")";
+                            else if (elemVt == Vb6Type::Single)
+                                variantSetter = "vb6_VariantSingle((float)(" + argExpr + "))";
+                        }
+                    }
                     if (!variantSetter.empty()) {
                         c_.emitLine("vb6_ArraySetVariant(" + arrVar + ", " + std::to_string(i) + ", " + variantSetter + ");");
                         continue;
@@ -647,7 +691,10 @@
                 // 数组元素表达式 (VB6_SA_AT 展开成 ((T*)data)[i-lBound] 或
                 // Byte 数组的指针下标) 已是左值形态, sizeof 取其 C 存储宽度 ——
                 // 与标量分支同口径; sizeof 不求值, 下标副作用不被重复执行。
-                lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                // 第八十刀 (§B228): 档位收成 **int16_t** —— 真机 `Len(<数值变量>)` 是编译期
+                // 常量, VB6 把能装下的常量定为 **Integer**（探针 D1/D2：TypeName = Integer，
+                // 字符串那一档才是 Long）。C 侧 int16_t 让装箱的 _Generic 落到 VT_I2。
+                lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                 return;
             }
             // 只拦**标量数值**; String / Variant / Object / 未知一律走原 vb6_Len 路径。
@@ -669,7 +716,8 @@
                 //   vb6_Len(uint8_t) 把 200 当 BSTR 指针解引用 → 0xC0000005 (LEN-BYTE 实测)。
                 // sizeof 不求值其操作数, 故 Len(Foo()) 不会重复调用 (VB6 会求值一次;
                 // 数值实参求值无可观测副作用的场景占绝大多数, 这里取不崩优先)。
-                lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                // 第八十刀 (§B228): 同数组元素那一支，档收成 int16_t（真机答 Integer）。
+                lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                 return;
             }
             // Byte / Currency / LongLong / 枚举 之类**不落任何登记桶**
@@ -695,7 +743,9 @@
                     && !knownFixedStringLen_.count(low44)
                     && tLen44 != Vb6Type::String) {
                     emitExpr(*node.positional[0]);
-                    lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                    // 第八十刀 (§B228): 这一支同样收成 int16_t（Byte/Currency/枚举 都是
+                    // “编译期常量”那一档，真机 TypeName 答 Integer）。
+                    lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                     return;
                 }
             }

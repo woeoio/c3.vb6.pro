@@ -18,6 +18,7 @@
 #   R8  the runtime signature table still declares vb6_ArraySetVariant's 3rd arg
 #   R9  the harness registers the fixture and its discriminating needles
 #   R10 the fixture itself still contains those needles
+#   R11 (第六十刀) the other four kind-fidelity outlets: ArraySetObject x3, Byte/Cur/Single x1
 # Usage: powershell -File scripts\check_array_literal_variants.ps1  (PASS = exit 0)
 
 $ErrorActionPreference = "Stop"
@@ -55,10 +56,23 @@ if ($a -lt 0 -or $b -le $a) {
     }
 
     # ---- R4: factories with exact counts ----
-    foreach ($pair in @(@('vb6_VariantBool(', 1), @('vb6_VariantDate(', 1),
+    # vb6_VariantDate( = 2 是 C30-11 第六十刀加的：字面量 `#1/2/2000#` 一格 +
+    # `Array(<Date 值>)`（如 CDate(...) / Date 变量）一格，两条都是真出口。
+    foreach ($pair in @(@('vb6_VariantBool(', 1), @('vb6_VariantDate(', 2),
                         @('vb6_VariantFromValue(', 3))) {
         $n = @([regex]::Matches($blk, [regex]::Escape($pair[0]))).Count
         if ($n -ne $pair[1]) { $bad += ("R4 " + $pair[0] + " count = $n (want " + $pair[1] + ")") }
+    }
+
+    # ---- R11 (第六十刀): 档保真的其余四个出口 ----
+    # 对象/ Nothing 走 vb6_ArraySetObject（3 个调用点：Nothing 字面量、knownObjectVars_、
+    # inferExprType==Object），Byte/Currency/Single 各一个 Variant 工厂。
+    # 钉住理由：这四档曾经全落进"默认 vb6_ArraySetLong"（Array(obj) 答 TypeName=Long，
+    # Array(CByte(65)) 答 VarType 3，Array(CDate(..)) 更因实参里含 L"..." 被猜成 BSTR ⇒ C2440）。
+    foreach ($pair in @(@('vb6_ArraySetObject(', 3), @('vb6_VariantByte(', 1),
+                        @('vb6_VariantCur(', 1), @('vb6_VariantSingle(', 1))) {
+        $n = @([regex]::Matches($blk, [regex]::Escape($pair[0]))).Count
+        if ($n -ne $pair[1]) { $bad += ("R11 " + $pair[0] + " count = $n (want " + $pair[1] + ")") }
     }
 
     # ---- R5: nested Array() detection ----
@@ -87,12 +101,14 @@ if ($sigLine.Count -ne 1 -or $sigLine[0] -notmatch 'vb6_VARIANT') {
 
 # ---- R9: harness registration ----
 foreach ($needle in @('ArrayLiteralVariants.bas', 'AL-bt=11', 'AL-nothing=9',
-                      'AL-nested=8204', 'AL-date=7')) {
+                      'AL-nested=8204', 'AL-date=7', 'AL-obj=9', 'AL-byte=17',
+                      'AL-cy=6', 'AL-sng=4', 'AL-date2=7')) {
     if ($h.IndexOf($needle) -lt 0) { $bad += "R9 harness missing $needle" }
 }
 
 # ---- R10: fixture needles ----
-foreach ($needle in @('AL-bt=', 'AL-nothing=', 'AL-nested=', 'AL-DONE')) {
+foreach ($needle in @('AL-bt=', 'AL-nothing=', 'AL-nested=', 'AL-obj=', 'AL-byte=',
+                      'AL-cy=', 'AL-sng=', 'AL-date2=', 'AL-DONE')) {
     if ($f.IndexOf($needle) -lt 0) { $bad += "R10 fixture missing $needle" }
 }
 

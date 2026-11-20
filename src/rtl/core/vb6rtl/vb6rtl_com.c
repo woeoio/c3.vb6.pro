@@ -1303,6 +1303,159 @@ vb6_VARIANT vb6_VarNotV(vb6_VARIANT a) {
 }
 
 
+/* C30-11 第六十五刀: 比较符的 Null 传播。
+   读数 .temp/null/oracle_ops.vbs（真引擎）: O5..O10 —— `= <> < > <= >=` 只要
+   任一侧是 Null，结果就是 **Null**（包括 Null = Null），不是 False/True。
+   本站吃的是“已经算好的布尔结果 + 两条槽”，槽是 Null 就整枚折成 Null：
+   这样比较本身的发码不必改（它照旧算 bool），只在**变体上下文**（装箱站/
+   实参站）把它换成这一枚。VB6 True 是 -1，cond 非零统一收成 -1。 */
+vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond) {
+    if ((a && a->vt == vb6_vtNull) || (b && b->vt == vb6_vtNull))
+        return vb6_VariantNull();
+    return vb6_VariantBool((int16_t)(cond ? -1 : 0));
+}
+
+/* C30-11 第六十六刀: `&` 的**双 Null 折叠**。
+   读数 .temp/null/oracle_ops3.vbs（真引擎）: R1/R2 —— Null & Null 是 **Null**（TypeName 也答 Null）；
+   但 R4..R6、R10、R12 说明只有**两侧同时**是 Null 才折，任一侧不是（含 Empty、"x"、数字）
+   就把 Null 当空串拼。R3: CStr(Null & Null) = 94（那是 Null 进 CStr 那一站）。
+   两侧的 BSTR 已由调用方造好（它们是各自槽的 CStr），这里只管“折不折”与所有权：
+   折 Null 时两个串都要放，不折时交给 ConcatFree（它自己会放掉左操作数）。 */
+vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb) {
+    if (a && b && a->vt == vb6_vtNull && b->vt == vb6_vtNull) {
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantNull();
+    }
+    /* 两侧实参都由本函数接管（无条件）：vb6_BSTR_ConcatFree 只放左操作数，
+       所以右操作数要自己放 —— 不放就是非 Null 路上的漏。 */
+    {
+        BSTR result = vb6_BSTR_Concat(sa, sb);
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantString(result);
+    }
+}
+
+/* C30-11 第六十九刀: 拼接链的 Null 折叠（`Null & Null & Null`）。
+   读数（真实 VB6 IDE，用户 2026-11-19，tests/vb6probe/NullFamilyProbe.bas）：
+     G1  Null & Null & Null & Null      = Null
+     G3  (Null & Null) & (Null & Null)  = Null
+     G2  Null & Null & 1                = "1" (String)
+     G4  Null & Null & "b" & Null       = "b" (String)
+     G5  "" & Null & "" & Null          = ""  (String)
+     G6  Null & Empty                   = ""  (String)
+   即：`&` 仍是左结合二叉树，**只在某个节点两侧同时为 Null 时**该节点折 Null；
+   折出来的 Null 再当左操作数继续往上走 —— 与上面两槽版完全同一个规则，
+   差别只在“操作数可以是一枚已折好的 Null”而不只是变量槽。
+   为什么另开一枚：两槽版收的是 `vb6_VARIANT*`，而链上的操作数是**内层守卫调用的
+   返回值**（右值），拿不到地址。取址就得先落一个临时，而那枚临时里带的 BSTR
+   没人放（漏）。改成整枚接收 + 自己造串，所有权只在函数内部走一趟。 */
+vb6_VARIANT vb6_VarConcatNullVV(vb6_VARIANT a, vb6_VARIANT b) {
+    if (a.vt == vb6_vtNull && b.vt == vb6_vtNull) return vb6_VariantNull();
+    {
+        BSTR sa = vb6_CStr(a);
+        BSTR sb = vb6_CStr(b);
+        BSTR r = vb6_BSTR_Concat(sa, sb);
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantString(r);
+    }
+}
+
+/* C30-11 第六十七刀: `Or`/`And` 的 Null 真值表。
+   读数：.temp/null/oracle_logic.vbs（VBScript）+ **真实 VB6 IDE 实测（用户，2026-11-19）**
+     Null Or True  = True      Null Or False  = Null     True Or Null  = True   False Or Null = Null
+     Null And False = False    Null And True  = Null     False And Null = False True And Null = Null
+     Null Or Null  = Null      Null And Null  = Null
+     **Null Or 5 = Integer 5**  **Null And 0 = Integer 0**（VB6 IDE 实测；VBScript 同）
+     Null Or 0 = Null          Null And 5 = Null
+   统一规则（两侧对得上，且比文档那两行更宽）:
+     Or  : 另一侧非零 ⇒ **结果就是那一侧的值**；另一侧零 ⇒ Null
+     And : 另一侧零   ⇒ **结果就是那一侧的值（0）**；另一侧非零 ⇒ Null
+   即“决定性那一侧辐到结果”：“Or 的另一侧非零”和“And 的另一侧为零”分别是两种确定情形，
+   其余（含两侧都 Null）一律 Null。
+   ⚠ 求值顺序：只传**槽地址**，VariantToLong 在函数里惰性算 —— 作为实参先算会先报 94。
+   ⚠ 类型：结果按“另一侧”的档给（布尔侧答 Boolean，否则 Long），不动。
+
+   C30-11 第六十八刀：同一枚出口再收 `Xor`(2)/`Eqv`(3)/`Imp`(4)。
+   读数（真实 VB6 IDE，用户 2026-11-19，tests/vb6probe/NullOpsProbe.bas）：
+     X1..X7  Xor：任一侧 Null ⇒ **Null**，err 0（含 Null Xor 5、5 Xor Null）
+     E1..E8  Eqv：任一侧 Null ⇒ **Null**，err 0
+     I1  Null Imp True  = True（Boolean）      I4  Null Imp 5     = 5（Integer）
+     I2  Null Imp False = Null                 I3  Null Imp 0     = Null
+     I7  False Imp Null = True（Boolean）      I6  True Imp Null  = Null
+     I8  5 Imp Null     = **-6（Integer）**     I5  Null Imp Null  = Null
+   Imp 这三条只有一种解释：`x Imp y` 就是 `(Not x) Or y`，Not 传播 Null，再走本表的 Or 规则 ——
+     x Null ⇒ 结果 = `Null Or y` =（y 非零则 y，否则 Null）
+     y Null ⇒ 结果 = `(~x) Or Null` =（~x 非零则 ~x，否则 Null；~5 = -6、~(-1) = 0、~0 = -1）
+   结果档同样跟“值那一侧”走（x 是 Boolean ⇒ Not x 仍是 Boolean）。 */
+vb6_VARIANT vb6_VarLogicNullV(int32_t op, vb6_VARIANT* a, vb6_VARIANT* b,
+                              int32_t litBits, int32_t mask, int32_t litType) {
+    const int aIsSlot = (mask & 1) != 0;
+    const int bIsSlot = (mask & 2) != 0;
+    const int aNull = aIsSlot && a && a->vt == vb6_vtNull;
+    const int bNull = bIsSlot && b && b->vt == vb6_vtNull;
+    const int isXor = (op == 2);
+    const int isEqv = (op == 3);
+    const int isImp = (op == 4);
+    if (aNull || bNull) {
+        /* Xor / Eqv：只有“任一侧 Null ⇒ Null”这一条，不看另一侧的值 */
+        if (isXor || isEqv) return vb6_VariantNull();
+        if (aNull && bNull) return vb6_VariantNull();
+        {
+            /* 哪一侧是“另一侧”（非 Null 那一侧）。注意非槽侧就是字面量（已知）。 */
+            vb6_VARIANT* otherSlot = aNull ? (bIsSlot ? b : 0) : (aIsSlot ? a : 0);
+            const int32_t other = otherSlot ? vb6_VariantToLong(*otherSlot) : litBits;
+            const int otherIsBool = otherSlot ? (otherSlot->vt == vb6_vtBoolean)
+                                              : (litType == 1);
+            const int otherIsInt = otherSlot ? (otherSlot->vt == vb6_vtInteger)
+                                             : (litType == 2);
+            if (isImp) {
+                if (aNull) {
+                    /* x 未知 ⇒ Not x 也是 Null ⇒ 只剩 `Null Or y`：y 决定 */
+                    if (other != 0)
+                        return otherIsBool ? vb6_VariantBool((int16_t)other)
+                             : otherIsInt  ? vb6_VariantInt((int16_t)other)
+                                           : vb6_VariantLong(other);
+                    return vb6_VariantNull();
+                }
+                /* y 未知 ⇒ `(~x) Or Null`：~x 非零就辐出去，零才 Null */
+                {
+                    const int32_t n = ~other;
+                    if (n != 0)
+                        return otherIsBool ? vb6_VariantBool((int16_t)n)
+                             : otherIsInt  ? vb6_VariantInt((int16_t)n)
+                                           : vb6_VariantLong(n);
+                    return vb6_VariantNull();
+                }
+            }
+            if (op == 0) {
+                if (other != 0) {
+                    if (otherIsBool) return vb6_VariantBool((int16_t)-1);
+                    if (otherIsInt) return vb6_VariantInt((int16_t)other);
+                    return vb6_VariantLong(other);
+                }
+            } else {
+                if (other == 0) {
+                    if (otherIsBool) return vb6_VariantBool((int16_t)0);
+                    if (otherIsInt) return vb6_VariantInt((int16_t)0);
+                    return vb6_VariantLong(0);
+                }
+            }
+            return vb6_VariantNull();
+        }
+    }
+    {
+        const int32_t av = aIsSlot ? vb6_VariantToLong(*a) : litBits;
+        const int32_t bv = bIsSlot ? vb6_VariantToLong(*b) : litBits;
+        if (isXor) return vb6_VariantLong(av ^ bv);
+        if (isEqv) return vb6_VariantLong(~(av ^ bv));
+        if (isImp) return vb6_VariantLong((~av) | bv);
+        return vb6_VariantLong(op == 1 ? (av & bv) : (av | bv));
+    }
+}
+
 /* Fix 084f: Variant数组嵌套索引按值版本 (见 vb6rtl.h 说明) */
 vb6_VARIANT vb6_VariantArrayGetVal(vb6_VARIANT v, int32_t index) {
     return vb6_VariantArrayGet(&v, index);

@@ -73,6 +73,12 @@ struct CompileOptions {
     std::vector<std::string> typelibRefs;    // TypeLib路径或ProgID列表
     bool autoTypelib = true;                 // 自动从源码中提取COM类型并加载TypeLib
 
+    // C30-11 第十一刀（只读诊断）: 把已加载类型库的 coclass/默认接口成员逐条打印出来后退出。
+    // 用途只有一个 —— 用**本机真库**生成内建签名表（内置兜底那段），不靠手抄。
+    // 不影响正常编译: 不设这个开关时一行不打印、一行不改。
+    bool dumpComSigs = false;
+    std::string dumpComSigsFilter;            // 可选: 只打包含该子串的类型库/coclass
+
     // 免注册 COM 运行期模式 (2026-11-04): 空 = 未指定（不注入任何行，行为与改动前一致）
     std::string comMode;                     // direct | manifest | auto
     std::string comManifest;                 // 客户端 manifest 路径（manifest/auto 用）
@@ -377,6 +383,10 @@ private:
     bool runPreprocess(const CompileOptions& options);
     bool runParser(const CompileOptions& options);
     bool runTypeLibImport(const CompileOptions& options);  // P6.3: 加载TypeLib+注册COM类型
+
+    // C30-11 第十一刀: --dump-com-sigs 的唯一实现 —— 把已加载类型库的 coclass/默认接口/
+    // 成员逐条打到 os（tab 分隔，生成内建签名表用）。filter 非空时只打名字含它的类型库/coclass。
+    void dumpComSigs(std::ostream& os, const std::string& filter);
     // P6.3 共享化: 把类型库符号 (coclass/接口/枚举/模块函数/GlobalNs) 只造一份进
     // typelibTable_, 各模块 SymbolTable 以非拥有回退方式共享 (见 SymbolTable::setSharedScope)。
     void buildSharedTypelibSymbols();

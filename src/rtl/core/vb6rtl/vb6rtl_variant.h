@@ -486,12 +486,28 @@ vb6_VARIANT vb6_VarAddV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarNegV(vb6_VARIANT a);
 // C30-10 第五十三刀: 一元 `Not` 打在 Variant 上（Boolean 逻辑非 / 整型位非并保档 / Null 原样）。
 vb6_VARIANT vb6_VarNotV(vb6_VARIANT a);
+// C30-11 第六十五刀: 比较符的 Null 传播 —— 任一侧槽是 Null ⇒ 整枚 Null；
+// 否则就是已算好的布尔结果（VB6 True = -1）。读数 .temp/null/oracle_ops.vbs O5..O10。
+vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond);
+// C30-11 第六十六刀: `&` 的双 Null 折叠 —— 两侧槽都是 Null ⇒ Null，否则就是正常拼接。
+// 读数 .temp/null/oracle_ops3.vbs R1/R4..R6/R10/R12（只有两侧同时 Null 才折）。
+vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb);
+// C30-11 第六十七刀: Or/And 的 Null 真值表（Or 只有另一侧 True 才确定，And 只有另一侧 False）。
+// isAnd=0 走 Or、1 走 And；mask 的 bit0/bit1 表示 a/b 是不是槽（不是槽的那侧用 litBits）。
+vb6_VARIANT vb6_VarConcatNullVV(vb6_VARIANT a, vb6_VARIANT b);
+
+vb6_VARIANT vb6_VarLogicNullV(int32_t op, vb6_VARIANT* a, vb6_VARIANT* b,
+                              int32_t litBits, int32_t mask, int32_t litType);
 vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b);
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b);
 // Fix 029: Variant → SafeArray extraction (variant holding array).
 // 用于调用点反向强制: callee 期望 vb6_SafeArray1D* 但实参是 vb6_VARIANT.
 struct vb6_SafeArray1D* vb6_VariantToSafeArray1D(vb6_VARIANT v);
+// 账 #305 §B172 (第七十刀): UBound/LBound 变体实参站的**严格**提取 —— 不是数组
+// (含 Null / Empty / 标量) 一律抛 13 Type mismatch (真 VB6 IDE 读数), 与上面那枚
+// 宽松版 (返回 NULL) 分家, 因为宽松版还被 Byte()/Filter 的探测路径共用。
+struct vb6_SafeArray1D* vb6_VariantToSafeArray1DStrict(vb6_VARIANT v);
 // Fix 140: Variant → Byte() 数组. Variant 持数组时返回其 parray; 持 BSTR 时
 // 按 VB6 语义把字符串转成字节数组 (vb6_StringToByteArray). 用于 Byte() 字段
 // 从字符串 Variant 赋值 (LabelPlus.ctl `m_Caption = .ReadProperty("Caption", ...)`

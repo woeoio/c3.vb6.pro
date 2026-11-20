@@ -29,7 +29,15 @@
 // ============================================================
 
 int32_t vb6_AscW(BSTR s) {
-    if (!s || vb6_BSTR_Len(s) == 0) return 0;
+    // C30-11 第八十二刀: 空串 / NULL ⇒ 错误 5（与 vb6_Asc 同族同口径，真机三格意义一样）。
+    // 第七十八刀在 vb6_Asc 上踩过的那个坑这里同样存在: 上游 `vb6_CStrStrict(Null)` 报完 94
+    // 交回来的也是一只空串 —— `vb6_conv_fail_serial` 仍是当前序号时说明这只是转换失败
+    // 交回来的，不再报 5（标记的登记处见 vb6rtl.c 的 vb6_ConvFailMark，`Err.Clear` 清掉）。
+    if (!s || vb6_BSTR_Len(s) == 0) {
+        if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+        vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     return (int32_t)s[0];  // Unicode code point (same as Asc for BMP)
 }
 
@@ -39,7 +47,12 @@ BSTR vb6_ChrW(int32_t code) {
 }
 
 int32_t vb6_AscB(BSTR s) {
-    if (!s || vb6_BSTR_Len(s) == 0) return 0;
+    // 第八十二刀：与 vb6_AscW / vb6_Asc 同一口径（空串/Empty ⇒ 5，转换失败的空串不再报）。
+    if (!s || vb6_BSTR_Len(s) == 0) {
+        if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+        vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     return (int32_t)(s[0] & 0xFF);  // Low byte of first character
 }
 
@@ -305,44 +318,209 @@ static BSTR vb6_SA_ReadStrAt(struct vb6_SafeArray1D* arr, int32_t index) {
     return NULL;  /* 不可达: vb6_ErrRaise 必 longjmp 或 ExitProcess */
 }
 
+// ============================================================
+// Join 的元素→字符串（VB6 口径，读数 .temp/join/oracle_join.vbs 23 条）
+//   数值/布尔/日期/货币/字节 → 与 CStr 同一套（vb6_CStr）
+//   Empty → ""；字符串 → 原值；Null 元素 → 13；对象元素 → 450；数组元素 → 13
+// 返回的串若为现造（*owned=1）由调用方释放。
+// 与上面 vb6_SA_ReadStrAt 分开的理由: 那个是 Filter 的旧口径（只吃字符串/Empty），
+// 本函数是 Join 的 VB6 口径（全类型按 CStr 转）。两边已验证的真读数不同，不合并。
+// ============================================================
+static BSTR vb6_SA_ReadJoinStrAt(struct vb6_SafeArray1D* arr, int32_t index, int32_t* owned) {
+    if (owned) *owned = 0;
+    void* slot = (char*)arr->data + (size_t)(index - arr->lBound) * (size_t)arr->elemSize;
+    if (arr->elemType == vb6_sa_bstr) return *(BSTR*)slot;
+
+    vb6_VARIANT v;
+    memset(&v, 0, sizeof(v));
+    if (arr->elemType == vb6_sa_variant) {
+        v = *(vb6_VARIANT*)slot;
+        if (v.vt == vb6_vtEmpty) return vb6_BSTR_Empty();
+        if (v.vt == vb6_vtBSTR) return v.bstrVal ? v.bstrVal : vb6_BSTR_Empty();
+        if (v.vt == vb6_vtNull) {  /* 实测 J09: Null 元素 → 13 */
+            vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                         vb6_BSTR_FromStr(L"Type mismatch"));
+            return NULL;
+        }
+        if (v.vt & vb6_vtArray) {  /* 实测 J22: 元素又是数组 → 13 */
+            vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                         vb6_BSTR_FromStr(L"Type mismatch"));
+            return NULL;
+        }
+        if (v.vt == vb6_vtDispatch || v.vt == VT_UNKNOWN) {  /* 实测 J21: 对象元素 → 450 */
+            vb6_ErrRaise(450, vb6_BSTR_FromStr(L"VBA.Information"),
+                         vb6_BSTR_FromStr(L"Wrong number of arguments or invalid property assignment"));
+            return NULL;
+        }
+    } else {
+        /* 类型化数组（Long()/Integer()/Double()/Byte()/Boolean()/Currency()/Date()）
+         * 实测 T1..T4：真引擎一律按值转文本，不报错。按 elemType 造一枚等价 Variant，
+         * 其余交给 CStr —— 打印口径与 CStr 保持单一主人。 */
+        switch (arr->elemType) {
+            case vb6_sa_int:      v.vt = vb6_vtInteger;  v.iVal = *(int16_t*)slot; break;
+            case vb6_sa_long:     v.vt = vb6_vtLong;     v.lVal = *(int32_t*)slot; break;
+            case vb6_sa_byte:     v.vt = vb6_vtByte;     v.bVal = *(uint8_t*)slot; break;
+            case vb6_sa_bool:     v.vt = vb6_vtBoolean;  v.boolVal = *(int16_t*)slot; break;
+            case vb6_sa_single:   v.vt = vb6_vtSingle;   v.fltVal = *(float*)slot; break;
+            case vb6_sa_double:   v.vt = vb6_vtDouble;   v.dblVal = *(double*)slot; break;
+            case vb6_sa_currency: v.vt = vb6_vtCurrency; v.cyVal = *(int64_t*)slot; break;
+            default:
+                vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                             vb6_BSTR_FromStr(L"Type mismatch"));
+                return NULL;
+        }
+    }
+    if (owned) *owned = 1;
+    return vb6_CStr(v);
+}
+
+// ============================================================
+// Filter 的元素口径（读数 .temp/filt/oracle_filt.vbs F1..F15）
+//   F1/F3/F5/F6/F12 命中判定按**文本**（与 CStr 同一套），结果数组是 Variant 数组，
+//                    逐元素保留自己的档：Integer 2 / Double 5 / Boolean 11 / Empty 0 /
+//                    混排时各元素各自不变（F6 = 2,8）。
+//   F13  Null 元素**不报错**，只是不参与命中。
+//   F7   零命中 ⇒ LBound 0 / UBound -1。
+//   F11  源非数组 ⇒ 13。
+// 与 vb6_SA_ReadStrAt（旧口径：只吃字符串/Empty，其余抛 13）分开 —— 真读数不同，不合并。
+// ============================================================
+static BSTR vb6_SA_ReadFilterText(struct vb6_SafeArray1D* arr, int32_t index,
+                                  int32_t* owned, int32_t* hasText) {
+    if (owned) *owned = 0;
+    if (hasText) *hasText = 1;
+    void* slot = (char*)arr->data + (size_t)(index - arr->lBound) * (size_t)arr->elemSize;
+    if (arr->elemType == vb6_sa_bstr) return *(BSTR*)slot;
+
+    vb6_VARIANT v;
+    memset(&v, 0, sizeof(v));
+    if (arr->elemType == vb6_sa_variant) {
+        v = *(vb6_VARIANT*)slot;
+        if (v.vt == vb6_vtEmpty) return vb6_BSTR_Empty();
+        if (v.vt == vb6_vtBSTR) return v.bstrVal ? v.bstrVal : vb6_BSTR_Empty();
+        // 实测 F13: Null / 数组 / 对象元素都不报错，只是"没有可比较文本"
+        if (v.vt == vb6_vtNull || (v.vt & vb6_vtArray) ||
+            v.vt == vb6_vtDispatch || v.vt == VT_UNKNOWN) {
+            if (hasText) *hasText = 0;
+            return vb6_BSTR_Empty();
+        }
+    } else {
+        switch (arr->elemType) {
+            case vb6_sa_int:      v.vt = vb6_vtInteger;  v.iVal = *(int16_t*)slot; break;
+            case vb6_sa_long:     v.vt = vb6_vtLong;     v.lVal = *(int32_t*)slot; break;
+            case vb6_sa_byte:     v.vt = vb6_vtByte;     v.bVal = *(uint8_t*)slot; break;
+            case vb6_sa_bool:     v.vt = vb6_vtBoolean;  v.boolVal = *(int16_t*)slot; break;
+            case vb6_sa_single:   v.vt = vb6_vtSingle;   v.fltVal = *(float*)slot; break;
+            case vb6_sa_double:   v.vt = vb6_vtDouble;   v.dblVal = *(double*)slot; break;
+            case vb6_sa_currency: v.vt = vb6_vtCurrency; v.cyVal = *(int64_t*)slot; break;
+            default:
+                if (hasText) *hasText = 0;
+                return vb6_BSTR_Empty();
+        }
+    }
+    if (owned) *owned = 1;
+    return vb6_CStr(v);
+}
+
+// 拷贝命中元素用：把源元素读成一枚 Variant（类型化数组按自己的档装，Variant 数组原样借出）。
+static void vb6_SA_ReadVariantAt(struct vb6_SafeArray1D* arr, int32_t index, vb6_VARIANT* out) {
+    void* slot = (char*)arr->data + (size_t)(index - arr->lBound) * (size_t)arr->elemSize;
+    memset(out, 0, sizeof(*out));
+    if (arr->elemType == vb6_sa_variant) { *out = *(vb6_VARIANT*)slot; return; }
+    if (arr->elemType == vb6_sa_bstr) { out->vt = vb6_vtBSTR; out->bstrVal = *(BSTR*)slot; return; }
+    switch (arr->elemType) {
+        case vb6_sa_int:      out->vt = vb6_vtInteger;  out->iVal = *(int16_t*)slot; break;
+        case vb6_sa_long:     out->vt = vb6_vtLong;     out->lVal = *(int32_t*)slot; break;
+        case vb6_sa_byte:     out->vt = vb6_vtByte;     out->bVal = *(uint8_t*)slot; break;
+        case vb6_sa_bool:     out->vt = vb6_vtBoolean;  out->boolVal = *(int16_t*)slot; break;
+        case vb6_sa_single:   out->vt = vb6_vtSingle;   out->fltVal = *(float*)slot; break;
+        case vb6_sa_double:   out->vt = vb6_vtDouble;   out->dblVal = *(double*)slot; break;
+        case vb6_sa_currency: out->vt = vb6_vtCurrency; out->cyVal = *(int64_t*)slot; break;
+        default: out->vt = vb6_vtEmpty; break;
+    }
+}
+
+// 源指针能不能安全当 vb6_SafeArray1D* 用。
+// 为什么要问：发码对"非数组实参"不一定做转换 —— 实测 `Filter(5, "x")` 发成
+// `vb6_Filter(5, ...)`（把整数当指针），旧写法直接 `source->lBound` → 0xC0000005。
+// 真正的口径（非数组 ⇒ 13 / Null ⇒ 94）应该由"Variant → 数组"那一站答，
+// 那站在本刀范围外（ai/039 §11.35 遗留 1）；这里只把野指针兜成 13，不崩。
+static int vb6_FilterSourceUsable(struct vb6_SafeArray1D* source) {
+    if (!source) return 0;
+#ifdef _MSC_VER
+    __try {
+        volatile int32_t lb = source->lBound;
+        volatile int32_t ub = source->uBound;
+        volatile int32_t et = source->elemType;
+        (void)lb; (void)ub; (void)et;
+        return 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+#else
+    return 1;
+#endif
+}
+
 struct vb6_SafeArray1D* vb6_Filter(struct vb6_SafeArray1D* source, BSTR match, int32_t include, int32_t compare) {
-    if (!source) return NULL;
+    if (!vb6_FilterSourceUsable(source)) {
+        // 读数 F11: Filter(5, "x") → 13。
+        // F14（源是 Null ⇒ 94）到不了这儿：Null 在 vb6_VariantToSafeArray1D 里也化成 NULL，
+        // 两种源在本函数里分不开 —— 要修得动"Variant → 数组"那一站，与 Join(Null)=94 同一格
+        // （ai/039 §11.35 遗留 1）。宁可抛 13 也不返回 NULL：旧写法返回 NULL 后调用点直接崩
+        // （实测 F11 之后进程退出码 1）。
+        vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Type mismatch"));
+        return NULL;  /* 不可达: vb6_ErrRaise 必 longjmp 或 ExitProcess */
+    }
     // <vbeclipse>: VB6 的 Filter 只吃**字符串数组** —— String() 数组 (vb6_sa_bstr) 或
     // Array("a","b") 这种 Variant 数组 (槽是 16 字节 vb6_VARIANT)。旧代码无条件按
     // BSTR* 取槽, 对 Variant 数组就把 VARIANT 的前 8 字节当指针用 → 垃圾 → 崩溃。
     // 命中判定走共用查找核 vb6_TextFind ⇒ vbTextCompare 时大小写不敏感。
     int32_t wantInclude = (include != 0) ? 1 : 0;  // VB6 的 True = -1, 按非零归一
+    int32_t matchIsEmpty = (match != NULL && vb6_BSTR_Len(match) == 0);  // 实测 F8: 空匹配串 ⇒ 全命中
     /* First pass: count matching elements */
     int32_t matchCount = 0;
     for (int32_t i = source->lBound; i <= source->uBound; i++) {
-        BSTR elem = vb6_SA_ReadStrAt(source, i);
+        int32_t owned = 0, hasText = 0;
+        BSTR elem = vb6_SA_ReadFilterText(source, i, &owned, &hasText);
         int32_t found = 0;
-        if (elem && match) {
-            int32_t matchLen = vb6_BSTR_Len(match);
-            if (matchLen == 0) { found = 1; }
+        if (hasText && match) {
+            if (matchIsEmpty) { found = 1; }
             else if (vb6_TextFind(elem, match, 0, compare) >= 0) { found = 1; }
         }
+        if (owned) vb6_BSTR_Free(elem);
         if (found == wantInclude) matchCount++;
     }
     /* Create result array */
     // 零命中 ⇒ VB6 的空数组: uBound = -1 (与 vb6_ArrayCreate(0)/Split 同形),
     // 旧写法夹到 0 ⇒ 凭空多出一个幻影元素, `UBound(x)+1` 读出 1。
-    struct vb6_SafeArray1D* result = vb6_SafeArrayCreate1D(vb6_sa_bstr, 0, matchCount - 1);
+    // 结果档: 源是 BSTR 数组 ⇒ BSTR 结果(既有口径, 零回归);
+    // 其余(Variant 数组 / 类型化数组) ⇒ Variant 结果, 逐元素保子类型(读数 F1/F3/F5/F6/F12)。
+    int32_t resVariant = (source->elemType != vb6_sa_bstr);
+    struct vb6_SafeArray1D* result = vb6_SafeArrayCreate1D(
+        resVariant ? vb6_sa_variant : vb6_sa_bstr, 0, matchCount - 1);
     if (!result) return NULL;
     /* Second pass: copy matching elements — 判定必须与计数段同一个谓词 */
     int32_t idx = 0;
     for (int32_t i = source->lBound; i <= source->uBound; i++) {
-        BSTR elem = vb6_SA_ReadStrAt(source, i);
+        int32_t owned = 0, hasText = 0;
+        BSTR elem = vb6_SA_ReadFilterText(source, i, &owned, &hasText);
         int32_t found = 0;
-        if (elem && match) {
-            int32_t matchLen = vb6_BSTR_Len(match);
-            if (matchLen == 0) { found = 1; }
+        if (hasText && match) {
+            if (matchIsEmpty) { found = 1; }
             else if (vb6_TextFind(elem, match, 0, compare) >= 0) { found = 1; }
         }
         if (found == wantInclude) {
-            VB6_SA_AT(BSTR, result, idx + result->lBound) = elem ? SysAllocString(elem) : vb6_BSTR_Empty();
+            if (resVariant) {
+                vb6_VARIANT tmp;
+                vb6_SA_ReadVariantAt(source, i, &tmp);
+                vb6_VariantCopy(&VB6_SA_AT(vb6_VARIANT, result, idx + result->lBound), &tmp);
+            } else {
+                VB6_SA_AT(BSTR, result, idx + result->lBound) = elem ? SysAllocString(elem) : vb6_BSTR_Empty();
+            }
             idx++;
         }
+        if (owned) vb6_BSTR_Free(elem);
     }
     return result;
 }
@@ -684,38 +862,50 @@ vb6_SafeArray1D* vb6_Split(BSTR expr, BSTR delimiter, int32_t limit, int32_t com
 BSTR vb6_Join(vb6_SafeArray1D* arr, BSTR delimiter) {
     BSTR defaultDelim = NULL;
     if (!delimiter) { defaultDelim = vb6_BSTR_FromStr(L" "); delimiter = defaultDelim; }
-    if (!arr || arr->count <= 0) { if (defaultDelim) vb6_BSTR_Free(defaultDelim); return vb6_BSTR_Empty(); }
-    
-    int32_t delimLen = vb6_BSTR_Len(delimiter);
-    
-    // Calculate total length
-    // <vbeclipse>: 槽位改走 vb6_SA_ReadStrAt (按 elemType 读) —— 旧写法对 Array("a","b")
-    // 的 Variant 槽按 BSTR* 取指针, 实测 `Join(Array("abc","xyz"), "|")` 直接段错误。
-    int32_t totalLen = 0;
-    for (int32_t i = 0; i < arr->count; i++) {
-        BSTR elem = vb6_SA_ReadStrAt(arr, i + arr->lBound);
-        totalLen += elem ? vb6_BSTR_Len(elem) : 0;
-        if (i < arr->count - 1) totalLen += delimLen;
+
+    // 非数组 / 多维 → 13（实测 J19 Join(5)、J20 Join(二维)、N1 Join(Empty)、N3 Join("abc")
+    // 都是 13；旧写法落进 arr->count<=0 分支静默返回空串，等于把错当成对）。
+    if (!arr || arr->cDims != 1) {
+        if (defaultDelim) vb6_BSTR_Free(defaultDelim);
+        vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Type mismatch"));
+        return NULL;  /* 不可达 */
     }
-    
-    // Build result
-    wchar_t* buf = (wchar_t*)malloc((totalLen + 1) * sizeof(wchar_t));
-    if (!buf) { if (defaultDelim) vb6_BSTR_Free(defaultDelim); return vb6_BSTR_Empty(); }
-    int32_t pos = 0;
+    if (arr->count <= 0) { if (defaultDelim) vb6_BSTR_Free(defaultDelim); return vb6_BSTR_Empty(); }
+
+    int32_t delimLen = vb6_BSTR_Len(delimiter);
+
+    // 元素→文本走 vb6_SA_ReadJoinStrAt（VB6 口径: 全类型按 CStr 转）。
+    // 旧写法只有 BSTR/Empty 能过，`Join(Array(1,2,3),"|")` 直接抛 13 —— 真引擎给 1|2|3
+    // （用户在 VB6 立即窗口复现过，读数见 .temp/join/oracle_join.vbs）。
+    wchar_t* buf = NULL;
+    int32_t cap = 0, pos = 0;
     for (int32_t i = 0; i < arr->count; i++) {
-        BSTR elem = vb6_SA_ReadStrAt(arr, i + arr->lBound);
-        if (elem) {
-            int32_t elemLen = vb6_BSTR_Len(elem);
-            memcpy(buf + pos, elem, elemLen * sizeof(wchar_t));
-            pos += elemLen;
+        int32_t owned = 0;
+        BSTR elem = vb6_SA_ReadJoinStrAt(arr, i + arr->lBound, &owned);
+        int32_t elemLen = elem ? vb6_BSTR_Len(elem) : 0;
+        int32_t need = pos + elemLen + delimLen + 1;
+        if (need > cap) {
+            int32_t ncap = (need > cap * 2) ? need : cap * 2;
+            if (ncap < 64) ncap = 64;
+            wchar_t* grown = (wchar_t*)realloc(buf, (size_t)ncap * sizeof(wchar_t));
+            if (!grown) {
+                free(buf);
+                if (defaultDelim) vb6_BSTR_Free(defaultDelim);
+                return vb6_BSTR_Empty();
+            }
+            buf = grown;
+            cap = ncap;
         }
+        if (elemLen > 0) { memcpy(buf + pos, elem, (size_t)elemLen * sizeof(wchar_t)); pos += elemLen; }
+        if (owned) vb6_BSTR_Free(elem);
         if (i < arr->count - 1 && delimLen > 0) {
-            memcpy(buf + pos, delimiter, delimLen * sizeof(wchar_t));
+            memcpy(buf + pos, delimiter, (size_t)delimLen * sizeof(wchar_t));
             pos += delimLen;
         }
     }
-    buf[totalLen] = L'\0';
-    BSTR result = vb6_BSTR_FromStr(buf);
+    if (!buf) { if (defaultDelim) vb6_BSTR_Free(defaultDelim); return vb6_BSTR_Empty(); }
+    BSTR result = SysAllocStringLen(buf, (UINT)pos);
     free(buf);
     if (defaultDelim) vb6_BSTR_Free(defaultDelim);
     return result;
