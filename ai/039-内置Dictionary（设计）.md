@@ -3480,6 +3480,10 @@ E1–E10 逐格与真机一致（见上表「改后」列）。第八十七刀�
 
 - `-Category syntax`：**227/227**。
 - 静态门 9 枚全 PASS。**发码清单不变**（本刀只改 RTL 行为，不改任何语句的发射形状）。
+- `check_owned_temp_keeps`（CI 的 `[STATIC]` 那一格）：首轮红一枚 `~vb6_InStrC|1`。
+  归因：空 needle 分支多读一次 `vb6_BSTR_Len(haystack)`，表里那一行的「代表读目标」
+  于是从 `vb6_TextFind` 换成 `vb6_BSTR_Len`；指针轴仍是 `keeps_pointer=0`（形参不外逃），
+  与快照逐列对过后 `-Bless` 登记（净变 1 行）。
 
 #### 五、本刀没做的
 
