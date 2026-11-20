@@ -11842,9 +11842,14 @@ if ($Category -in @("all", "run", "vbp")) {
     # 一枚 As 工程类 (要折)、一枚 As Variant (不许折)。这一双钉的就是"按名那张类表会跨过程漏"
     # —— 实物 = 本刀护栏那台 A/B 上唯一一处真语料移动 (VBFlexGrid.ctl 的 `ByVal Value As Variant`
     # 被另一过程同名的 `As IVBFlexDataSource` 折成了常量, `TypeName(Value) = "ImageList"` 变恒假)。
+    # 第八十三刀: String 目标的守卫改成「先算进临时量 BSTR _avN、再按序号决定写不写」⇒ 右值那一行
+    # 从 `AssignMove(&目标, <右值>)` 变成 `BSTR _avN = (<守卫>) ? (<右值>) : NULL;`。针拆两截钉同一件事:
+    # ① 右值原样在场 (不许折成常量 —— 这就是本条用例的靶子); ② 目标吃的是那枚临时量。
     Test-EmitcShape "b189_gate_same_name_slot_pair" @("$Tests\b189_gate\B189g.vbp") @(
-        'AssignMove(&vb6_ret_F4, (((Value) != NULL) ? vb6_BSTR_FromStr(L"B189Impl") : vb6_BSTR_FromStr(L"Nothing")))',
-        'AssignMove(&vb6_ret_F3, vb6_TypeName(')
+        '? ((((Value) != NULL) ? vb6_BSTR_FromStr(L"B189Impl") : vb6_BSTR_FromStr(L"Nothing"))) : NULL;',
+        'vb6_BSTR_AssignMove(&vb6_ret_F4, _av',
+        '? (vb6_TypeName(vb6_VariantFromValue(Value))) : NULL;',
+        'vb6_BSTR_AssignMove(&vb6_ret_F3, _av')
 
     # 账 #305 #408 (第八十九刀第五试): 按名那张类表 (knownClassVars_) 全程不清空, 于是**上一过程**
     # 里 `ByVal Item As <工程类>` 登记的 "item" 会替**本过程**那枚 `ByVal Item As Object` 答题。两形病灶
@@ -11863,8 +11868,10 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_ret_ShadowParam, Item->Alpha',
         'vb6_ret_UsesObj, Thing->Alpha',
         '(((Thing) != NULL) ? vb6_BSTR_FromStr(L"B190A")')
+    # 第八十三刀: 同上 —— 右值挪进临时量行, 针改成「这枚形参的 TypeName 仍在运行期算」+「目标吃临时量」。
     Test-EmitcShape "b190_typename_of_object_formal_stays_runtime" @("$Tests\b190_scope\B190.vbp") @(
-        'vb6_BSTR_AssignMove(&vb6_ret_TnShadow, vb6_TypeName(')
+        '? (vb6_TypeName(vb6_VariantFromValue(vb6_VariantFromValue(Thing)))) : NULL;',
+        'vb6_BSTR_AssignMove(&vb6_ret_TnShadow, _av')
     # 两台真跑只钉 VB6 也答得出的那五条: P1/P2 = 类形参照旧早绑定 (负条件, 否决不许过界),
     # P5 = 模块级同名变量没被撤走, P6 = 折叠那一支的 NULL 头, DONE = 进程活着。
     # P3/P4/P7-P12 今天交空串与 "Object" —— 那不是本刀的靶子, 是 #412 (Type=Exe 工程里 Set 工程实例
