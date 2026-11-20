@@ -3873,3 +3873,49 @@ C3 侧基线 = 同文件在 `C3.exe` 下跑出来的 `probe_out.txt`（第九十
 
 第九十三刀只把**可见性**接上了；每一族"报错之后目标动不动"还得像 C 段这样逐格量。
 今天量到的是干净的两格（C5 = -1/13、C6 = -1/13），COM 429/438 那两族**还没有探针格**。
+
+### 11.73 第九十五刀：`Int`/`Fix`/`Abs`(<整只 Variant 槽>) 落整型目标 —— 真机 94、本仓 0
+
+#### 一、病（真机 C3/C4 vs 改前本仓）
+
+```
+真机: C3 Int(v=Null) into Long = [-1] err=94    C4 Abs(v=Null) = [-1] err=94
+改前: C3 = [0] err=0                            C4 = [0] err=0
+```
+
+发的是 `vb6_ChkLong(vb6_FltToLng(vb6_Int(vb6_VariantToDouble(v))))`。赋值站的守卫与临时量
+（第七十九/八十一/九十二刀那套）其实**已经全在**——问题是 RHS **一声不响**：`vb6_VariantToDouble`
+是宽松口（Null → 0.0、不报错、不动序号），"Null 进 Null 出"这条语义在中途就被抹平了，
+到了守卫那里序号没变 ⇒ 照样把 0 写进目标。
+
+第六十四刀那张 `mathNullFamilyV` 表（`vb6_IntV`/`vb6_AbsV`/`vb6_FixV`）只在**变体上下文**两站生效
+（`wrapVariantValue` 存储站 / `boxToVariant` 实参站）；落到**整型标量目标**的这条路上没有改道口。
+
+#### 二、改法（三处，各一句话）
+
+1. `cgen_state.inc`：新增 `bool nullFamIntTarget_`（本语句域，由 `StmtAbortScope` 统一清除）。
+2. `cgen_assign.cpp`：整型目标 + 右值顶层调用是 `int`/`fix`/`abs` + 实参是**整只 Variant 槽**
+   （`isDefinitelyVariantExpr && !isArr`，与第九十二刀同一问）⇒ 置位。
+   —— 只有赋值站知道"目标是整型标量"，所以标一声。
+3. `cgen_expr_call_builtin_pre.inc`：置位时改道成
+   `vb6_VariantToLong(vb6_IntV(x))`（`fix`→`vb6_FixV`、`abs`→`vb6_AbsV`）。
+   `IntV` 把 Null 原样带出来，`VariantToLong` 那一站报 94 —— 与 Len/LenB 那一形
+   （`vb6_LenV` → `VariantToLong` → `ChkLong`）完全同构；外层的 `ChkLong`/`FltToLng` 一字未动。
+   只改道一次（右值顶层那一枚），嵌套复用不会重入。
+
+#### 三、读数与登记
+
+```
+改后 C1..C8 逐格与真机一致: C1/C2 -1/94, C3/C4 -1/94(本刀), C5 -1/13, C6 -1/13, C7 1/err0, C8 0/err0
+```
+
+- 发码清单 750 行全量重算：**净变 0 行**（真语料里没有"整只 Variant 槽喂 Int/Fix/Abs 再落整型目标"这一形）。
+- 静态门 9 枚全 PASS；`check_owned_temp_keeps` 253 行不变（无新出口、无签名改动）；`-Category syntax` **227/227**。
+- 本刀只认 `Integer`/`Long`/`Byte` 目标。`Double` 目标的同一格（`d = Int(Null)`）**还没量**，
+  要动它得先决定"整条 `vb6_VariantToDouble` 是否转严格"——那是另一个面，已登记。
+
+#### 四、剩下三笔待办（§11.72 起就已带数）
+
+1. `Len`/`LenB(<整枚 UDT>)`：真机按成员逐段算（Len 5/9，LenB 10/16），本仓发 `sizeof`（5/12）。
+2. `vb6_VariantToDouble` 的宽松面：`d = Int(Null)` / 其它双精度目标同族还没量。
+3. COM 429/438 那两族"报错后目标动不动"还没有探针格。

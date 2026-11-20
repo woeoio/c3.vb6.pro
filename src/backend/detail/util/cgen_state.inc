@@ -765,6 +765,11 @@
     // 「先把右值算进临时量、再拿序号判是否写目标」，与真机「报错就不赋值」同形。
     bool stmtAbortTmp_ = false;
     std::string stmtAbortTmpType_;
+    // C30-11 第九十五刀: 本语句的右值顶层是 Int/Fix/Abs 且实参是**整只 Variant 槽**、目标又是整型
+    // 标量 —— 这一形要在发码站改道（Int(VariantToDouble(x)) ⇒ VariantToLong(IntV(x))），
+    // 因为 vb6_VariantToDouble 宽松（Null → 0.0、不报错），守卫与临时量都白设。
+    // 只在本条赋值语句内有效，由 StmtAbortScope 统一清除。
+    bool nullFamIntTarget_ = false;
     void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。

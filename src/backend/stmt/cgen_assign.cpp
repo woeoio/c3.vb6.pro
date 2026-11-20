@@ -137,11 +137,13 @@ void CCodeGen::visit(AssignmentStmt& node) {
             g->stmtAbortGuard_.clear();
             g->stmtAbortTmp_ = false;
             g->stmtAbortTmpType_.clear();
+            g->nullFamIntTarget_ = false;
         }
     } stmtAbortScope{this};
     stmtAbortGuard_.clear();
     stmtAbortTmp_ = false;
     stmtAbortTmpType_.clear();
+    nullFamIntTarget_ = false;
     {
         const Vb6Type tgtT79 = node.target ? inferExprType(*node.target) : Vb6Type::Unknown;
         const bool tgtInt79 = tgtT79 == Vb6Type::Integer || tgtT79 == Vb6Type::Long
@@ -176,6 +178,23 @@ void CCodeGen::visit(AssignmentStmt& node) {
             // 第九十一刀: Len/LenB 那两枚先开的口子；第九十二刀把判据统一到「整只 Variant 槽」这一问上，
             // 不再按 callee 名分族（那两枚自然被包含在内）。
             if (!cn79.empty()) {
+                // C30-11 第九十五刀: `n = Int(v)` / `n = Fix(v)` / `n = Abs(v)`（v 是整只 Variant 槽）
+                // —— 真机 Null 进 ⇒ 94 + 目标不动（.temp/k93/vb6probe 真机 C3/C4），本仓改前 0/err0。
+                // 这一形与 Len 不同：发码是 vb6_Int(vb6_VariantToDouble(v))，而 VariantToDouble
+                // **宽松**（Null → 0.0、不报错）⇒ 下面那套守卫/临时量都白设。这里只**标一声**，
+                // 真正的改道在 BuiltinPre 那一站（那里才知道 vb6_Int 的 C 形参是 double）。
+                if (tgtInt79 && (cn79 == "int" || cn79 == "fix" || cn79 == "abs")
+                    && call79.positional.size() == 1 && call79.positional[0]) {
+                    Expr& a95 = *call79.positional[0];
+                    if (a95.kind == ASTNodeKind::IdentifierExpr
+                        || a95.kind == ASTNodeKind::MemberAccessExpr
+                        || a95.kind == ASTNodeKind::WithMemberExpr) {
+                        bool arr95 = false;
+                        if (isDefinitelyVariantExpr(a95, &arr95) && !arr95) {
+                            nullFamIntTarget_ = true;
+                        }
+                    }
+                }
                 if (cn79 == "asc" || cn79 == "ascb" || cn79 == "ascw") {
                     mayRaise79 = true;
                     // 它 raise 在**调用内部**（不是前置转换）⇒ 这一档要发临时量形。
