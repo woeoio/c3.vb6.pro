@@ -83,6 +83,9 @@ bool raiseInTree85(const Expr* e) {
                     n == "left" || n == "left$" || n == "leftb" ||
                     n == "right" || n == "right$" || n == "rightb" ||
                     n == "mid" || n == "mid$" || n == "midb") return true;
+                // 第八十七刀: 起点 < 1 就报 5 的三枚查找族（真机 InStr(0,…) /
+                // InStrRev(…,0) 都是 5，且目标不动）。
+                if (n == "instr" || n == "instrb" || n == "instrrev") return true;
             }
             if (raiseInTree85(c.callee.get())) return true;
             for (const auto& a : c.positional) if (raiseInTree85(a.get())) return true;

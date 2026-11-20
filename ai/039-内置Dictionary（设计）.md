@@ -3393,3 +3393,51 @@ T2/T3/T5/T7/T8 全部变成 `keep / 5`；T1/T4/T6/T9/T10 一格未动。
   现在走整型临时量形 —— 针按前几刀的办法拆两截重钉。
 - 本机复现：`test_joinfilter` 87/87 行全对（`missing=0 extra=0`）、K3060 四条针全在场；
   `-Category syntax` 仍 227/227；静态门 9 枚全 PASS。
+
+### 11.65 第八十七刀：`InStr(0,…)` / `InStrRev(…,0)` 该报 5 却把起点悄悄夹成 1
+
+#### 一、病（`.temp/k87/instr.bas`，x64，改前 = 第八十六刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `n = InStr(0, "abc", "b")` | `n=2 err=0` | `n=-1 err=5` | -1, 5 |
+| T2 | `n = InStr(-1, "abc", "b")` | `n=2 err=0` | `n=-1 err=5` | -1, 5 |
+| T5 | `n = InStr(0, "abc", "")` | `n=0 err=0` | `n=-1 err=5` | -1, 5 |
+| T6 | `n = InStrRev("abc", "b", 0)` | `n=2 err=0` | `n=-1 err=5` | -1, 5 |
+| T8 | `n = InStrRev("abc", "b", -2)` | `n=2 err=0` | `n=-1 err=5` | -1, 5 |
+| T10 | `n = InStrB(0, a, b)` | `n=2 err=0` | `n=-1 err=5` | 5 |
+
+对照格（T3 `InStr(1,…)`⇒2、T4 `InStr(4,…)`⇒0、T7 `InStrRev(-1)`⇒2、T9 省略⇒2、T11 `InStrB(1,…)`⇒2）
+改后逐字不变；T12（String 目标 `s = CStr(InStr(0,…))`）⇒ `keep/5`，T13（起点是 Null）⇒ `n=-1 err=94`
+（起点转换的 94 不被 5 盖掉，走第八十六刀那枚 `vb6_ArgConvertFailed`）。
+
+真机读数是 `.temp/k87/oracle_instr.vbs`（VBScript 的 `InStr`/`InStrRev` 与 VB6 同一套 VBA 字符串运行时；
+`InStrB` 只有 VB6 有，按 InStr 同口径推）。
+
+#### 二、改法
+
+1. RTL（`vb6rtl_string.c`）：
+   - `vb6_InStrC` 起点 < 1 ⇒ 5（`return 0`）。**校验顺序按真机**：先校起点，再判空 needle
+     —— 真机 `InStr(0,"abc","")` 也是 5，不是 0。
+   - `vb6_InStrB`（Byte 数组形与 BSTR 形公用入口）同一道门。
+   - `vb6_InStrRev`：`-1` 是「从尾部」的合法档（等同省略）⇒ 夹成 `hLen`；其余 < 1（0、-2…）⇒ 5。
+2. 发射侧：`raiseInTree85` 白名单再加 `instr/instrb/instrrev`。**raise 与中止是两半**：
+   不登记的话 RTL 报了 5，`n = …` 照样把目标写成 0/2。
+
+#### 三、登记（发码清单）
+
+触发面同为「右值里有内建调用」，仍走本机全量重发（`.temp/k85/full_rehash85.ps1`，750 行、跳过 5 行机器侧差）：
+净变 **13 行**（`ucSegmentedControl`、`ucSlider_2022` 等含 `InStr` 赋值的模块）。
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- 静态门 9 枚全 PASS（`manifest_coverage` 750/750、`rtl_proto_arity` 1781 对、
+  `rtl_embedded` 138 份字节一致）。
+
+#### 五、本刀没做的
+
+- `InStrRev` 的 `start > hLen`：真机答 0（oracle I 格），C3 仍夹成 `hLen` 后照样查找。
+  这是**另一条**口径（不是本刀的 < 1），单列 backlog。
+- `InStrB` 的「起点是 Null」以及 Byte 数组的越界档没有真机对照（VBScript 无 InStrB），只按 InStr 同口径推。
+- 定长串目标（`udtFixedField`/`fixedLen`）、`Len` 两档仍在 backlog。
