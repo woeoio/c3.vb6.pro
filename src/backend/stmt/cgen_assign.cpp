@@ -173,8 +173,8 @@ void CCodeGen::visit(AssignmentStmt& node) {
             if (call79.callee && call79.callee->kind == ASTNodeKind::IdentifierExpr) {
                 cn79 = Symbol::toLower(static_cast<IdentifierExpr&>(*call79.callee).name);
             }
-            // 第九十一刀: 本刀只给 Len/LenB 这两档开临时量（见下面那段注）。
-            const bool lenFam91 = (cn79 == "len" || cn79 == "lenb");
+            // 第九十一刀: Len/LenB 那两枚先开的口子；第九十二刀把判据统一到「整只 Variant 槽」这一问上，
+            // 不再按 callee 名分族（那两枚自然被包含在内）。
             if (!cn79.empty()) {
                 if (cn79 == "asc" || cn79 == "ascb" || cn79 == "ascw") {
                     mayRaise79 = true;
@@ -212,10 +212,14 @@ void CCodeGen::visit(AssignmentStmt& node) {
                     // 这些**根本不可能 raise** 的右值全部被套上 `_av` 中间量（750 行清单当场 54 行变动）。
                     // 这一半只认**真的整只 Variant 槽**：与发码站同一问 (isDefinitelyVariantExpr)，
                     // 数组本体那档它自己会用 isArr 标出来，不算。
-                    // 也不许放宽到「所有内建 + 整型目标」：拿本机 750 行清单量过，宽到那一档要拖动
-                    // 25 行，其中 `n = VarType(v)`（根本不会 raise）与 `n = UBound(v), 1)` 这类口径未量
-                    // 的右值也被套上 `_av`。本刀的判据只做到 Len/LenB —— 有真机读数的两枚；那一族
-                    // （`n = CLng(v)` / `CInt(v)` / `UBound(v)` …）登在 §11.69 末，不在这里泛化。
+                    // 第九十二刀: 本档**不再按 callee 名分族**。真机读数（.temp/k92/oracle_conv.vbs）：
+                    // `n = CLng(Null)` / `CInt(Null)` ⇒ 94 + 目标不动；`n = CLng("abc")` / `UBound(<非数组>)`
+                    // ⇒ 13 + 目标不动。本质上与 Len 同一句：**整只槽交给非 Variant 形参**那一步的
+                    // 转换会 raise，而 raise 之后 RHS 仍会交回 0。所以判据 = 整型标量目标 + 顶层调用
+                    // + 该调用某实参是整只 Variant 槽（或 Null/Empty 字面量）。
+                    // 代价已量：750 行清单 24 行变动、57 个 `_av` 格；其中 `n = VarType(v)`（6 格，
+                    // 形参本来就是 VARIANT、不转换）与 Declare 的 `DispCallFunc`（8 格）只是多一枚
+                    // **无害**局部量，值一行不变（真机与改前逐格对照见 §11.70）。
                     bool varSlot91 = false;
                     if (!lit79 && (a79->kind == ASTNodeKind::IdentifierExpr
                                    || a79->kind == ASTNodeKind::MemberAccessExpr
@@ -223,7 +227,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
                         bool arr91 = false;
                         varSlot91 = isDefinitelyVariantExpr(*a79, &arr91) && !arr91;
                     }
-                    if (tgtInt79 && lenFam91 && (lit79 || varSlot91)) {
+                    if (tgtInt79 && (lit79 || varSlot91)) {
                         stmtAbortTmp_ = true; stmtAbortTmpType_ = mapType(tgtT79);
                     }
                     mayRaise79 = true; break;
