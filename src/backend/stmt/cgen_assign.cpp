@@ -41,12 +41,33 @@ void CCodeGen::emitGuardedStore(const std::string& line) {
 }
 
 namespace {
-// C30-11 第八十三刀 (§B227 续): 右值表达式树里有没有 Asc/AscB/AscW 调用。
-// 只认这三枚 —— 它们 raise 在**本语句的表达式求值里**（空串直接 vb6_ErrRaiseNumber(5)），
-// 不会被哪个被调方内部用 `On Error Resume Next` 吞掉，所以「序号一变 = 真中止」对它们成立。
+// 第八十五刀: 这一枚除法节点会不会 raise（除数不是能静态看出非零的字面量）。
+bool divRaises85(const BinaryExpr& b) {
+    if (b.op != BinaryOp::Div && b.op != BinaryOp::IntDiv && b.op != BinaryOp::Mod)
+        return false;
+    const Expr* r = b.right.get();
+    if (r && r->kind == ASTNodeKind::LiteralExpr) {
+        const auto& l = static_cast<const LiteralExpr&>(*r);
+        switch (l.literalKind) {
+            case LiteralKind::Integer:  if (l.intValue != 0) return false; break;
+            case LiteralKind::Long:     if (l.longValue != 0) return false; break;
+            case LiteralKind::Single:   if (l.floatValue != 0.0f) return false; break;
+            case LiteralKind::Double:   if (l.doubleValue != 0.0) return false; break;
+            default: break;   // Boolean/Currency/其他挡位不猜，按会 raise 算
+        }
+    }
+    return true;
+}
+
+// C30-11 第八十三刀 (§B227 续) / 第八十五刀: 右值表达式树里有没有「**本语句内直接 raise**」的东西。
+// 两族：
+//   ① Asc/AscB/AscW —— 空串直接 vb6_ErrRaiseNumber(5)（第八十三刀）;
+//   ② `/` `\` `Mod` —— 除数为 0 时 vb6_Div/vb6_IntDiv/vb6_DivMod 直接报 11（第八十五刀）。
+// 共性是它们都 raise 在**本语句自己的求值里**，不会被哪个被调方内部用 `On Error Resume Next`
+// 吞掉，所以「序号一变 = 真中止」对它们成立。
 // 不要再放宽成「任何嵌套调用」（见调用点注）：那一版把「被调方内部已处理的错误」也当成
 // 中止信号，实测在 `[VBP] fdrawstate_x86` 上翻红。
-bool ascCallInTree(const Expr* e) {
+bool raiseInTree85(const Expr* e) {
     if (!e) return false;
     switch (e->kind) {
         case ASTNodeKind::IndexOrCallExpr: {
@@ -56,28 +77,33 @@ bool ascCallInTree(const Expr* e) {
                     Symbol::toLower(static_cast<const IdentifierExpr&>(*c.callee).name);
                 if (n == "asc" || n == "ascb" || n == "ascw") return true;
             }
-            if (ascCallInTree(c.callee.get())) return true;
-            for (const auto& a : c.positional) if (ascCallInTree(a.get())) return true;
-            for (const auto& a : c.named) if (ascCallInTree(a.value.get())) return true;
+            if (raiseInTree85(c.callee.get())) return true;
+            for (const auto& a : c.positional) if (raiseInTree85(a.get())) return true;
+            for (const auto& a : c.named) if (raiseInTree85(a.value.get())) return true;
             return false;
         }
         case ASTNodeKind::BinaryExpr: {
             const auto& b = static_cast<const BinaryExpr&>(*e);
-            return ascCallInTree(b.left.get()) || ascCallInTree(b.right.get());
+            // 除零：VB6 三枚除法算符在除数为 0 时都报 11（Division by zero），
+            // 而 C3 的 RTL 照样会交回 0 —— 不中止就是「报 11 + 目标被写成 0」。
+            // 除数能静态看出**非零字面量**时不可能 raise，不为此发守卫
+            // （否则 `l = 7 / 2` 这类常量式子全要换形，纯噪声）。
+            if (divRaises85(b)) return true;
+            return raiseInTree85(b.left.get()) || raiseInTree85(b.right.get());
         }
         case ASTNodeKind::UnaryExpr:
-            return ascCallInTree(static_cast<const UnaryExpr&>(*e).operand.get());
+            return raiseInTree85(static_cast<const UnaryExpr&>(*e).operand.get());
         case ASTNodeKind::MemberAccessExpr:
-            return ascCallInTree(static_cast<const MemberAccessExpr&>(*e).object.get());
+            return raiseInTree85(static_cast<const MemberAccessExpr&>(*e).object.get());
         case ASTNodeKind::DictionaryAccessExpr:
-            return ascCallInTree(static_cast<const DictionaryAccessExpr&>(*e).object.get());
+            return raiseInTree85(static_cast<const DictionaryAccessExpr&>(*e).object.get());
         case ASTNodeKind::NewExpr: {
             const auto& n = static_cast<const NewExpr&>(*e);
-            for (const auto& a : n.args) if (ascCallInTree(a.get())) return true;
+            for (const auto& a : n.args) if (raiseInTree85(a.get())) return true;
             return false;
         }
         case ASTNodeKind::TypeOfExpr:
-            return ascCallInTree(static_cast<const TypeOfExpr&>(*e).object.get());
+            return raiseInTree85(static_cast<const TypeOfExpr&>(*e).object.get());
         default:
             return false;
     }
@@ -125,8 +151,9 @@ void CCodeGen::visit(AssignmentStmt& node) {
         // 第八十四刀: 同一判据扩到**整型标量目标** —— `n = CLng(Asc(""))`、
         // `n = Asc("") + 0`、`n2 = Len(CStr(Asc("")))` 三种形的顶层都不是 Asc（外套是转换函数
         // 或运算符），第七十九/八十一刀那条顶层判据一律不 fire ⇒ 目标被写成 0（真机：5 + 目标不动）。
-        const bool ascInRhs84 =
-            (tgtInt79 || tgtT79 == Vb6Type::String) && ascCallInTree(node.value.get());
+        // 第八十五刀: 树里出现 `/` `\` `Mod` 同理 —— 除零报 11 之后 RTL 交回 0，目标照样被写。
+        const bool raiseInRhs85 =
+            (tgtInt79 || tgtT79 == Vb6Type::String) && raiseInTree85(node.value.get());
         if (tgt79179 && node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr) {
             auto& call79 = static_cast<IndexOrCallExpr&>(*node.value);
             // 第八十一刀: Asc/AscB/AscW 自己会在**空串**上报 5 —— 那条路不靠变体转换，
@@ -162,11 +189,11 @@ void CCodeGen::visit(AssignmentStmt& node) {
                     || at79 == Vb6Type::Empty) { mayRaise79 = true; break; }
             }
         }
-        // 第八十三/八十四刀: 顶层判据没命中、但右值树里有 Asc 族 ⇒ 发守卫。
-        // String 目标的临时量由 emitBstrSlotStore 的两支各自发（见那里的第八十三刀注）;
-        // 整型目标必须显式打开 stmtAbortTmp_ —— 否则 emitGuardedStore 只发 `if (ok) t = expr;`，
-        // 而序号是 store 那一行才变的，挡不住右值自己 raise。
-        if (ascInRhs84) {
+        // 第八十三/八十四/八十五刀: 顶层判据没命中、但右值树里有「本语句内直接 raise」的东西
+        //（Asc 族或除零算符）⇒ 发守卫。String 目标的临时量由 emitBstrSlotStore 的两支各自发
+        //（见那里的第八十三刀注）; 整型目标必须显式打开 stmtAbortTmp_ —— 否则 emitGuardedStore
+        // 只发 `if (ok) t = expr;`，而序号是 store 那一行才变的，挡不住右值自己 raise。
+        if (raiseInRhs85) {
             mayRaise79 = true;
             if (tgtInt79) {
                 stmtAbortTmp_ = true;
