@@ -575,7 +575,18 @@
                             return false;
                         };
                         if (!exprTopIsBstr(argVal)) {
-                            argVal = "vb6_VariantToString(" + argVal + ")";
+                            // C30-11 第九十一刀: LenB 没有走上面那个 `paramBase == String` 的改道口
+                            // （它在**运行时 C 签名表**里的那一格写的是 BSTR 宏的第一臂，而不是
+                            // 内置函数的形参档），于是整只 VARIANT 槽到这一站才被折。同一句问一遍：
+                            // 这枚调用的实参是整只槽、且它有无出变体口 ⇒ 改名 + 原样交槽。
+                            // 不改名的话 `n = LenB(v)`（v=Null）发成 vb6_LenB(VariantToString(v))
+                            // = 静默 0 / Err 0，真机与 Len 同一条 = 94 且目标不动。
+                            const std::string vexit91 = nullFamilyVExitCName(node);
+                            if (!vexit91.empty()) {
+                                callee = vexit91;
+                            } else {
+                                argVal = "vb6_VariantToString(" + argVal + ")";
+                            }
                         }
                     } else if (rtParamType == "void*") {
                         // 账 (Outlook2013): `Unload <外部窗体名>` 的实参站在 call_arg_emit

@@ -93,6 +93,11 @@ BSTR vb6_LTrimVar(vb6_VARIANT s);
 // 其余实参照旧交给 BSTR 形参 —— 两条路的读数不同, 不能合成一条。
 // ⚠ 头里只留原型, 身子在 vb6rtl_string.c (与 vb6_Trim 同文件): 理由同 IntV/FixV。
 vb6_VARIANT vb6_LenV(vb6_VARIANT v);
+// C30-11 第九十一刀: LenB 的变体位 —— 与 vb6_LenV 同一口径（Null 进 Null 出，
+// Empty 那档按 0），因为 VB6 手册把 Len/LenB 的 Variant 实参都按 String 看。
+// 缺这一枚时 `n = LenB(v)`（v=Null）发的是 vb6_LenB(vb6_VariantToString(v)) ⇒
+// 静默 0、Err 0；真机与 Len 同一条 = 94 且目标不动。
+vb6_VARIANT vb6_LenBV(vb6_VARIANT v);
 vb6_VARIANT vb6_TrimV(vb6_VARIANT v);
 vb6_VARIANT vb6_LTrimV(vb6_VARIANT v);
 vb6_VARIANT vb6_RTrimV(vb6_VARIANT v);
