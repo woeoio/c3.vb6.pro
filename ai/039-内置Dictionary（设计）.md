@@ -3382,3 +3382,14 @@ T2/T3/T5/T7/T8 全部变成 `keep / 5`；T1/T4/T6/T9/T10 一格未动。
 - `InStr(<起点<1>, …)` 仍 clamp 到 1（真机报 5）—— 它不在 `VBA.Strings` 的取子串族里，
   单独一刀再动（要同时看 `InStrB`/`InStrRev` 的口径）。
 - 定长串目标（`udtFixedField`/`fixedLen`）仍无守卫；`Len` 两档仍是 backlog。
+
+#### 七、CI 回执（run 44699767997，红两份）
+
+- `[RUN] test_joinfilter`：`JF-nullmid=5`（期望 94）。成因与本刀同形：`Mid("abc", <Null>)` 的
+  起点走 `vb6_VariantToLong` 报 94，随后 Mid 自己的 5 又把它盖了。修法：`vb6_VariantToLong`
+  的 Null 分支也打 `vb6_ConvFailMark()`，并新增 `vb6_ArgConvertFailed()`（标记仍等于当前序号 =
+  本语句刚有一次实参转换失败）—— Mid/Left/Right/Chr（含 B 族）raise 前先问它，是就不报 5。
+- `[EMITC-SHAPE] k3060_set_variant_shape`：`bt = CByte("&H" & Mid(hx,1,2))` 的右值里有 Mid，
+  现在走整型临时量形 —— 针按前几刀的办法拆两截重钉。
+- 本机复现：`test_joinfilter` 87/87 行全对（`missing=0 extra=0`）、K3060 四条针全在场；
+  `-Category syntax` 仍 227/227；静态门 9 枚全 PASS。

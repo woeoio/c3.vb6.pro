@@ -10482,7 +10482,10 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcShape "k3060_set_variant_shape" @("$Tests\k3060_setvariant\K3060.vbp") @(
         'vb6_VARIANT leak = vb6_VariantEmpty();',
         'leak = vb6_VariantFromValue(vb6_',
-        'bt = vb6_CByte(vb6_NumVal(_own_'
+        # 第八十六刀: `bt = CByte("&H" & Mid(...))` 的右值里有 Mid ⇒ 现在走整型临时量形，
+        # 针拆两截：取值那一行原样在场 + 目标吃临时量。
+        '? (vb6_CByte(vb6_NumVal(_own_',
+        ') bt = _av'
     )
     Test-EmitcAbsent "k3060_set_variant_lesion" @("$Tests\k3060_setvariant\K3060.vbp") @(
         '= leak;',
