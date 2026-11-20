@@ -122,8 +122,11 @@ void CCodeGen::visit(AssignmentStmt& node) {
         // ② 错误在被调方内部被 `On Error Resume Next` 吃掉 ⇒ 真机语句照执行，目标该写。
         // `vb6_ErrSerial()` 对两者一视同仁地自增 ⇒ 递归一宽，② 就被误当成 ①；要宽到那一层
         // 得先给 RTL 一枚「错误是否还在往外爬」的信号，那是另一刀的事。
-        const bool ascInRhs83 =
-            (tgtT79 == Vb6Type::String) && ascCallInTree(node.value.get());
+        // 第八十四刀: 同一判据扩到**整型标量目标** —— `n = CLng(Asc(""))`、
+        // `n = Asc("") + 0`、`n2 = Len(CStr(Asc("")))` 三种形的顶层都不是 Asc（外套是转换函数
+        // 或运算符），第七十九/八十一刀那条顶层判据一律不 fire ⇒ 目标被写成 0（真机：5 + 目标不动）。
+        const bool ascInRhs84 =
+            (tgtInt79 || tgtT79 == Vb6Type::String) && ascCallInTree(node.value.get());
         if (tgt79179 && node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr) {
             auto& call79 = static_cast<IndexOrCallExpr&>(*node.value);
             // 第八十一刀: Asc/AscB/AscW 自己会在**空串**上报 5 —— 那条路不靠变体转换，
@@ -159,9 +162,17 @@ void CCodeGen::visit(AssignmentStmt& node) {
                     || at79 == Vb6Type::Empty) { mayRaise79 = true; break; }
             }
         }
-        // 第八十三刀: 顶层判据没命中、但右值树里有 Asc 族 ⇒ String 目标也发守卫
-        //（它的临时量由 emitBstrSlotStore 的两支各自发，见那里的第八十三刀注）。
-        if (ascInRhs83) mayRaise79 = true;
+        // 第八十三/八十四刀: 顶层判据没命中、但右值树里有 Asc 族 ⇒ 发守卫。
+        // String 目标的临时量由 emitBstrSlotStore 的两支各自发（见那里的第八十三刀注）;
+        // 整型目标必须显式打开 stmtAbortTmp_ —— 否则 emitGuardedStore 只发 `if (ok) t = expr;`，
+        // 而序号是 store 那一行才变的，挡不住右值自己 raise。
+        if (ascInRhs84) {
+            mayRaise79 = true;
+            if (tgtInt79) {
+                stmtAbortTmp_ = true;
+                stmtAbortTmpType_ = mapType(tgtT79);
+            }
+        }
         if (mayRaise79) {            const std::string gv79 = "_e" + std::to_string(stmtAbortSeq_++);
             c_.emitLine("const int32_t " + gv79 + " = vb6_ErrSerial();");
             stmtAbortGuard_ = gv79;
