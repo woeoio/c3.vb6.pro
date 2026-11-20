@@ -3792,3 +3792,84 @@ D1..D3/D5 不变（Asc 94 / Mid 5 / Left 5 / InStr 5，目标都不动）
   它在 C3 侧已经跑通，读数留在 `.temp/k93/vb6probe/probe_out.txt` —— 真机读数回来后逐格对表。
 - 待办：`LenB(<定长串>)` 的 10/5（A2/A4/A6）、`LenB(<整枚 UDT>)`（A8 本仓 5 而 A10 12）、
   `TypeName(<UDT 定长字段>)`（A12 本仓 `Object`）、`Int/Abs(<Null>)`（C3/C4）。
+
+### 11.72 真机读数回来了：34 格逐格对表（`LenB` 定长串结案，`TypeName` 定长串修好，UDT 尺寸 / Int·Abs 两族开账）
+
+真机输出 = `.temp/k93/vb6probe/RealMachineProbe.bas` 在真 VB6 上跑出来的一整段（A/B/C/D 四段 34 格），
+C3 侧基线 = 同文件在 `C3.exe` 下跑出来的 `probe_out.txt`（第九十三刀那枚二进制）。
+
+#### 一、对表（真机 vs 改前 C3）
+
+| 格 | 真机 | 改前 C3 | 判 |
+|---|---|---|---|
+| A1 `Len(模块 String*5="ab")` | 5 | 5 | ✓ |
+| A2 `LenB(模块 String*5)` | **10** | 10 | ✓ |
+| A3/A4 `Len`/`LenB`(局部 String*5) | 5 / **10** | 5 / 10 | ✓ |
+| A5/A6 `Len`/`LenB`(UDT 字段 String*5) | 5 / **10** | 5 / 10 | ✓ |
+| A7 `Len(整枚 UDT {String*5})` | 5 | 5 | ✓ |
+| A8 `LenB(整枚 UDT {String*5})` | **10** | **5** | ✗ |
+| A9 `Len(整枚 UDT {String*5, Long})` | **9** | **12** | ✗ |
+| A10 `LenB(整枚 UDT {String*5, Long})` | **16** | **12** | ✗ |
+| A11 `TypeName(模块 String*5)` | **String** | **Object** | ✗→本刀修 |
+| A12 `TypeName(UDT 字段 String*5)` | **String** | **Object** | ✗→本刀修 |
+| A14 `Len(越界赋值 "abcdefgh" 后)` | 5 | 5 | ✓ |
+| A15 `LenB(同 A14)` | **10** | 10 | ✓ |
+| A16 越界赋值后内容 | `<abcde>` | `<abcde>` | ✓ |
+| B1–B10 `Len`/`LenB` 收 Variant（Null/Empty/123/"abc"） | `Null`/1/0/0/0 各格 | 逐格同 | ✓ |
+| B3/B4 `Len`/`LenB(v=Null)` 落 Long | **-1 / 94** | -1 / 94 | ✓ |
+| C1/C2 `CLng`/`CInt(Null)` 落 Long | **-1 / 94** | -1 / 94 | ✓ |
+| C3/C4 `Int`/`Abs(v=Null)` 落 Long | **-1 / 94** | **0 / 0** | ✗ |
+| C5 `CLng("abc")` 落 Long | **-1 / 13** | -1 / 13 | ✓（第九十三刀修好） |
+| C6 `UBound(非数组)` 落 Long | **-1 / 13** | -1 / 13 | ✓ |
+| C7/C8 `VarType(Null)` / `CLng(Empty)` | 1 / 0，err 0 | 同 | ✓ |
+| D1 `Asc(Null)` | **-1 / 94** | -1 / 94 | ✓ |
+| D2/D3 `Mid(_,0,1)` / `Left(_,-1)` | 目标不动 / 5 | 同 | ✓ |
+| D4 `Chr(0)` | len=1，err 0 | 同 | ✓ |
+| D5 `InStr(0,…)` | **-1 / 5** | -1 / 5 | ✓ |
+
+**§11.69 那条悬案结案**：`LenB(<定长串>)` 真机就是 **10**（UTF-16 口径：5 字符 × 2 字节），
+本仓第九十一刀那一版**本来就对** —— 当初"5 vs 10"的疑点是拿 ANSI `char[N]` 的内联尺寸当答案猜出来的，
+真机一量即消。`Len` = 5、`LenB` = 10 两条一起立住。
+
+#### 二、第九十四刀：`TypeName(<定长串>)` ⇒ `"String"`
+
+- 病：定长串在 C 侧是内联 `char[N]`，装槽时退化成 `char*` ⇒ `vb6_VariantFromValue` 只认 BSTR 槽、
+  指针按对象包 ⇒ `vb6_TypeName` 答 `Object`。
+- 改：`cgen_expr_call_builtin_pre.inc` 的 TypeName 折叠区（与 `TypeName(Me)` / `TypeName(类变量)` 同一形）
+  加一条闸：实参 `fixedStrLenOfExpr` 非空 ⇒ 编译期折成 `vb6_BSTR_FromStr(L"String")`。
+  真机上这答案是**声明档常量**（A14/A16 越界赋值后仍是 String），绕运行期那问没有意义。
+- 读数：A11 `Object` → `String`、A12 `Object` → `String`，其余 32 格逐字不变。
+- 发码清单 750 行全量重算 **净变 0 行**（真语料 9949 份里没有 `TypeName(<定长串>)` 这一形）。
+
+#### 三、本刀登记、不修的三笔（都有真机数，档已齐）
+
+**① `Len`/`LenB(<整枚 UDT>)` 走的是 `sizeof`，而真机是"按成员逐段算"**
+
+```
+真机: Len ({String*5})       = 5    LenB = 10     Len ({String*5,Long})       = 9    LenB = 16
+本仓: 5（sizeof char[5] 巧合对）      5            12（sizeof 结构体）                 12
+```
+
+由 A8/A9/A10 三格反推出来的真机规则：
+
+- `Len(<UDT>)` = **各成员 Len 之和**（定长串按 N 字符算、Long 按 4）⇒ 5+4 = **9**。
+- `LenB(<UDT>)` = **各成员 LenB 之和，成员之间按 4 字节对齐、尾部不补齐**
+  ⇒ `{String*5}`：10（不补齐 ⇒ 不是 12）；`{String*5, Long}`：10 + 补 2 + 4 = **16**。
+- 本仓现在发 `sizeof(<C 结构体>)`。两边的**内存布局本来就不同**（C3 定长串内联 ANSI `char[N]`，
+  VB6 存 UTF-16），所以这一格不能"改成 sizeof 的另一种算法"，得在发码侧按**声明档**逐成员求值
+  —— 与 `udtFixedStrFieldLen_` 那张表同一个来源，但要连数值成员一起走一遍布局。
+  这一刀牵到 `Len` 的 UDT 兜底、`LenB` 的 UDT 兜底两处，单独开。
+
+**② `Int`/`Abs`(/`Fix`) 收 Null：本仓 `0 / err 0`，真机 `-1 / 94`**
+
+发的是 `vb6_ChkLong(vb6_FltToLng(vb6_Int(vb6_VariantToDouble(v))))` —— `vb6_VariantToDouble` 是**宽松**口
+（Null → 0.0、不报错），所以"Null 进 Null 出"这条语义在中途就被抹平了。
+第六十四刀那张 `mathNullFamilyV` 表（`vb6_IntV`/`vb6_AbsV`/`vb6_FixV`）只在**变体上下文**两站生效
+（`wrapVariantValue` 存储站 / `boxToVariant` 实参站）；落到**整型目标**的赋值站没有这道改道口。
+下一刀要在这条路上补一个出口：实参是整枚 Variant 槽 ⇒ 走 `vb6_IntV(v)` 再 `VariantToLong` 落到整数，
+与 Len/LenB 那一形（`vb6_LenV(v)` → `vb6_VariantToLong` → `vb6_ChkLong`）完全同构。
+
+**③ `vb6_RaiseError` 那 34 处虽已打序号（第九十三刀），但"报错 + 目标被写"的另一半要逐族验**
+
+第九十三刀只把**可见性**接上了；每一族"报错之后目标动不动"还得像 C 段这样逐格量。
+今天量到的是干净的两格（C5 = -1/13、C6 = -1/13），COM 429/438 那两族**还没有探针格**。

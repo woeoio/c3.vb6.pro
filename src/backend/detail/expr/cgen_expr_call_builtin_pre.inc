@@ -205,6 +205,27 @@
         }
     }
 
+    // C30-11 第九十四刀: TypeName(<定长串>) —— 真机答 "String"。
+    //
+    // 读数 (.temp/k93/vb6probe/RealMachineProbe.bas 真机输出):
+    //   A11 TypeName(module String*5)     = [String] err=0
+    //   A12 TypeName(UDT field String*5)  = [String] err=0
+    // 改前本仓 A11/A12 都答 "Object": 定长串在 C 侧是内联 `char[N]`，装进 Variant 的是
+    // 数组退化的那枚 `char*` —— vb6_VariantFromValue 只认 BSTR 槽，指针按对象包 ⇒ TypeName 答 Object。
+    // 定长串的 TypeName 在真机上是**不变的常量**（声明档决定，与装着几个字符无关；
+    // A14/A16 越界赋值后仍是 String），所以与上面 TypeName(Me)/TypeName(类变量) 同一形：
+    // 编译期折成字面量，不绕运行期那一问。
+    if (node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
+        && node.named.empty() && node.positional.size() == 1 && node.positional[0]) {
+        auto& tnIdent94 = static_cast<IdentifierExpr&>(*node.callee);
+        std::string tnLow94 = tnIdent94.name;
+        std::transform(tnLow94.begin(), tnLow94.end(), tnLow94.begin(), ::tolower);
+        if (tnLow94 == "typename" && !fixedStrLenOfExpr(*node.positional[0]).empty()) {
+            lastExpr_ = "vb6_BSTR_FromStr(L\"String\")";
+            return;
+        }
+    }
+
     // Fix 092t: TypeName(Me) — Me 在 C 侧是类指针 (vb6_cls_pvSubClass*), 而
     // vb6_TypeName 形参是 vb6_VARIANT → C2440 (pvSubClass 543/544,
     // clsSubClass.cls 497/498: App.LogEvent TypeName(Me) & ...).
