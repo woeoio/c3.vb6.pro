@@ -3664,3 +3664,73 @@ T6 n=5            T7 n=10                       T8 n=10   T11 n=0   T12 n=-1 err
 2. **`n = CLng(v)` / `CInt(v)` / `UBound(v)` 这一族**（Variant 实参 + 整型目标）同样有「94/13 报出来、
    目标被写 0」的形状，本机 750 行清单的宽度已量到 **25 行**；本刀刻意只做到 Len/LenB，
    泛化留给下一刀（判据要能分开「会 raise 的转换」与 `VarType` 这种不会 raise 的）。
+
+### 11.70 第九十二刀：整型目标上「整只 Variant 槽 → 非 Variant 形参」那一族（`CLng` / `CInt` / `UBound` …）
+
+#### 一、真机口径（`.temp/k92/oracle_conv.vbs`，VBScript／同一套 VBA 运行期）
+
+```
+A vv = CLng(v=Null)  → vv=Empty, err=94        B n = CLng(Null)  → n 不动, 94
+C n = CInt(Null)     → n 不动, 94              D n = CLng(Empty) → 0
+E n = UBound(v=1)    → n 不动, 13（非数组）     F n = UBound(a)   → 1
+G/H n = VarType(v)   → 2 / 1, err=0（不转换）   I n = CLng("abc") → n 不动, 13
+J n = Int(Null)      → Null（err 0，Null 传播族）
+```
+
+⇒ 与第九十一刀同一句，只是不限于 `Len`：**整只槽交给一个「非 Variant」形参**时，那一步的转换
+（`VariantToDouble` / `NumVal` / `VariantToSafeArray1DStrict` / `VariantToLong`）会 raise 94 或 13，
+raise 之后 RHS 仍会交回 0 —— 目标不该被写。`VarType` 是这条判据的反面：它的形参**本来就是** `VARIANT`，
+没有转换，所以那一格只该多一枚无害局部量、值一行不许变。
+
+#### 二、病（`.temp/k92/conv.bas`，x64，改前 = 第九十一刀那枚二进制）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| U1 | `n = CLng(v)`（v = Null） | `n=0 err=94` | **`n=-1 err=94`** | 目标不动, 94 |
+| U2 | `n = CInt(v)`（v = Null） | `n=0 err=94` | **`n=-1 err=94`** | 目标不动, 94 |
+| U3 | `n = CLng(v)`（v = "abc"） | `n=0 err=13` | `n=0 err=13` ✗ | 目标不动, 13 |
+| U4 | `n = UBound(v)`（v = 1，非数组） | `n=-1 err=13` | 同（本来就对） | 目标不动, 13 |
+| U5 | `n = VarType(v)`（v = Null） | 1 / err 0 | 同 | 1 / err 0 |
+| U6 | `n = CLng(Empty)` | 0 | 0 | 0 |
+| U7 | `n = CLng("42")` | 42 | 42 | 42 |
+
+第九十一刀的判据按 callee 名分族（只认 `len` / `lenb`）⇒ U1/U2 那两枚不在族里，一条也不 fire。
+
+#### 三、改法（一处，判据收成一句）
+
+`stmt/cgen_assign.cpp`：把第九十一刀那个 `lenFam91` 的族别去掉 —— 判据回到
+**整型标量目标 + 右值顶层是调用 + 该调用某个实参是「真的整只 Variant 槽」（或 Null/Empty 字面量）**。
+
+- 「真的整只槽」仍只问 `isDefinitelyVariantExpr` + 剔掉数组本体（`inferExprType` 那一半的坑见 §11.69）。
+- 两个「不许放宽」的方向原样保留（按 `inferExprType` 认变体档 ⇒ 54 行噪声；这一条已写死在注释里）。
+
+#### 四、这刀的代价（宽度先量后写）
+
+750 行清单全量重算，净变 **24 行**、`_av` 格 **57 个**（`.temp/k92/census3.ps1` 逐格归因）：
+
+| callee | 格数 | 性质 |
+|---|---|---|
+| `vb6_UBound` / `vb6_LBound` | 17 / 10 | 形参是 `SafeArray1D*`，实参是槽 ⇒ 会报 13；U4 那一格已证明 |
+| `vb6_CLngV` / `vb6_CIntV` / `vb6_ChkLong` | 6 / 1 / 1 | 94 那一族（U1/U2） |
+| Declare `SelectObject` / 工程内过程（6 枚） | 2 / 6 | 形参有具体档，实参是槽 ⇒ 会 raise |
+| `vb6_VarType` | 6 | **无害**：形参就是 `VARIANT`，值一格没变（U5） |
+| Declare `DispCallFunc` | 8 | **无害**：C 侧不 raise，只是多一枚局部量 |
+
+⇒ 57 格里 14 格是「多一枚无害局部量」，43 格是真口径。
+
+#### 五、本刀没修的：13 那条路守卫看不见（已量，下一刀）
+
+U3（`n = CLng("abc")`）改后仍是 `n=0 err=13`。根因不在赋值站，而在 RTL 有两枚 raise 出口：
+
+- `vb6_ErrRaise(errNum, source, description)` —— **`++vb6_err_serial`**（守卫看得见）；
+- `vb6_RaiseError(errNum, description)` —— **不打序列**（守卫看不见）。
+
+`vb6_NumVal` 的「文本认不出」走的正是后者（`vb6rtl_string.c:462`）。全仓 `vb6_RaiseError(` **34 处 / 15 份文件**
+（`vb6com.c` 429/438、`vb6com_invoke.c`、`vb6com_fso.c` …），凡是走它报出来的错误，第九十一/九十二刀这两道
+守卫一律无效 —— 这一族是下一刀的入口，**不许**在这一刀里顺手改 raise 管线（那是另一条轴，要逐枚读「该不该让守卫看见」）。
+
+#### 六、登记与门
+
+- 发码清单：24 行（列表见 `.temp/k92/rehash92.log`），无机器侧 5 行。
+- `check_owned_temp_keeps`：本刀不动 RTL ⇒ 253 行不变，全绿。
+- 静态门 9 枚全 PASS（`rtl_proto_arity` 1784 对）；`-Category syntax` **227/227**。
