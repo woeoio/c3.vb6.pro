@@ -226,6 +226,34 @@
         }
     }
 
+    // C30-11 第九十五刀: 整型目标上的 Int/Fix/Abs(<整只 Variant 槽>) —— 真机 Null 进 ⇒ 94 + 目标不动。
+    //
+    // 读数 (.temp/k93/vb6probe/RealMachineProbe.bas 真机输出):
+    //   C3 Int(v=Null) into Long = [-1] err=94
+    //   C4 Abs(v=Null) into Long = [-1] err=94
+    // 改前本仓这两格都是 [0] err=0：发的是 vb6_Int(vb6_VariantToDouble(v))，而
+    // vb6_VariantToDouble **宽松**（Null → 0.0、不报错），于是「标记 + 临时量」那套守卫白设。
+    //
+    // 这一问必须由赋值站先标（只有它知道目标是整型标量，见 nullFamIntTarget_ 的说明）；
+    // 本站只负责改道，与 Len/LenB 那一形同构：`vb6_VariantToLong(vb6_IntV(x))` ——
+    // IntV 把 Null 原样带出来，VariantToLong 那一站报 94，外层 ChkLong/FltToLng 原样不动。
+    if (nullFamIntTarget_ && node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
+        && node.named.empty() && node.positional.size() == 1 && node.positional[0]) {
+        auto& ni95 = static_cast<IdentifierExpr&>(*node.callee);
+        std::string fn95 = ni95.name;
+        std::transform(fn95.begin(), fn95.end(), fn95.begin(), ::tolower);
+        const char* vName95 = fn95 == "abs" ? "vb6_AbsV("
+                            : fn95 == "fix" ? "vb6_FixV("
+                            : fn95 == "int" ? "vb6_IntV(" : nullptr;
+        if (vName95) {
+            // 只改道一次 —— 右值顶层那一枚。
+            nullFamIntTarget_ = false;
+            emitExpr(*node.positional[0]);
+            lastExpr_ = std::string("vb6_VariantToLong(") + vName95 + lastExpr_ + "))";
+            return;
+        }
+    }
+
     // Fix 092t: TypeName(Me) — Me 在 C 侧是类指针 (vb6_cls_pvSubClass*), 而
     // vb6_TypeName 形参是 vb6_VARIANT → C2440 (pvSubClass 543/544,
     // clsSubClass.cls 497/498: App.LogEvent TypeName(Me) & ...).
