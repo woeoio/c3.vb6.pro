@@ -244,6 +244,10 @@ extern int32_t vb6_Extender_Height;
 // `Extender.Width` 是两个不同的标识符, 而 VB6 里是同一个值 (控件外框, 容器缇)。
 // 两者由 vb6_uc_push 一起同步。
 extern int32_t vb6_UserControl_Width;
+// 写侧: `UserControl.Width/Height = v` 是**实例属性**写, 必须落到窗口上
+// (只写全局量的话 AutoSize 算对了也不动窗口, 控件永远停在设计期尺寸)。
+void vb6_UserControl_SetWidth(int32_t twips);
+void vb6_UserControl_SetHeight(int32_t twips);
 extern int32_t vb6_UserControl_Height;
 extern int16_t vb6_Extender_Visible;
 extern BSTR    vb6_Extender_Tag;

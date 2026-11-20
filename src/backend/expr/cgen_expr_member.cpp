@@ -34,6 +34,27 @@ namespace vb6c3 {
 // 它们不是独立编译单元，单独 include 会编译不过。片段内容逐行未改（含原缩进层级）→ 零行为改动。
 
 void CCodeGen::visit(MemberAccessExpr& node) {
+    // C30-2: TabStrip 的集合链读（`<ctrl>.Tabs.Count` / `Tabs(i|Key).m` / `SelectedItem.m`）
+    // **在 AST 入口一刀截住**。
+    // 为什么不能在消费面拦：读侧现有三处 resolver 各管一条路 —— 赋值语句走
+    // resolveComValue，拼串/比较走 resolveComMarkerForPack，而**内建函数实参**
+    // （`CStr(x)`）与**子过程实参**（`ShowPage x`）、`Debug.Print x` 这三条一条都不经过，
+    // 实测改前直接发成 `vb6_ComGetProp(vb6_ComGetObjectProp(hwnd, L"SelectedItem"), L"Index")`
+    // ⇒ Run-time error 438。形状认在 AST 上（tabStripChainViewOf，只认登记表里的 TabStrip），
+    // 当实参 / 当比较项 / 当赋值右值都是同一发。
+    if (!suppressVirtDispatch_) {
+        std::string tsChain;
+        if (tabStripChainReadExpr(&node, tsChain)) {
+            isComMarker_ = false;
+            isEarlyBoundCom_ = false;
+            earlyBoundSym_ = nullptr;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            pendingChainObj_.clear();
+            lastExpr_ = tsChain;
+            return;
+        }
+    }
     // Fix 262: 窗体的**控件 Picture 属性**上的成员访问 ——
     //   `<控件>.Picture` 的 C 面是 `vb6_GetControlPicture(hwnd)` (返回 void*,
     //   即 IPictureDisp 的 C 表示), 它的成员 (Handle/Type/Width/Height/hPal…)

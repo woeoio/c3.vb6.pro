@@ -1,4 +1,4 @@
-﻿#include "backend/msvc_driver.hpp"
+#include "backend/msvc_driver.hpp"
 #include "common/encoding.hpp"
 
 #include <iostream>
@@ -413,19 +413,19 @@ bool MsvcDriver::compileAndLinkIncremental(const MsvcDriverOptions& options) {
         if (!options.versionInfoResFile.empty()) linkCmd << " \"" << options.versionInfoResFile << "\"";
         if (!options.userResFile.empty()) linkCmd << " \"" << options.userResFile << "\"";
         if (!options.defFile.empty()) linkCmd << " /DEF:\"" << options.defFile << "\"";
-        linkCmd << " ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib shell32.lib gdi32.lib";
+        linkCmd << " ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib shell32.lib gdi32.lib version.lib";
     } else if (options.isGui) {
         if (!options.typelibResFile.empty()) linkCmd << " \"" << options.typelibResFile << "\"";
         if (!options.versionInfoResFile.empty()) linkCmd << " \"" << options.versionInfoResFile << "\"";
         if (!options.manifestResFile.empty()) linkCmd << " \"" << options.manifestResFile << "\"";
         if (!options.userResFile.empty()) linkCmd << " \"" << options.userResFile << "\"";
-        linkCmd << " user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib advapi32.lib comctl32.lib";
+        linkCmd << " user32.lib gdi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib advapi32.lib comctl32.lib version.lib";
     } else {
         if (!options.typelibResFile.empty()) linkCmd << " \"" << options.typelibResFile << "\"";
         if (!options.versionInfoResFile.empty()) linkCmd << " \"" << options.versionInfoResFile << "\"";
         if (!options.manifestResFile.empty()) linkCmd << " \"" << options.manifestResFile << "\"";
         if (!options.userResFile.empty()) linkCmd << " \"" << options.userResFile << "\"";
-        linkCmd << " ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib shell32.lib gdi32.lib";
+        linkCmd << " ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib shell32.lib gdi32.lib version.lib";
     }
     // ai/024 T02: 用户静态库 (归档) 的搜索根与库文件本体 — 与 msvc_driver.cpp 的
     // cl /link 路径共用同一个追加函数, 保证增量/非增量两条路径的链接输入一致。

@@ -404,6 +404,14 @@ CompileResult Driver::compile(const CompileOptions& options) {
                 }
             }
             // Object= GUID (ActiveX controls) -> loadByClsid
+            //
+            // 口径（2026-11-18 澄清，只改注释）: **Object= 是 VB6 原生的组件声明行**，不是 C3 的扩展。
+            // VB6 自己这两种写法我们都原样解析（vbp_parser.cpp）：
+            //   Object={GUID}#maj#min#0; 文件.ocx   —— 组件（OCX）引用（仓库 400 个 vbp / 25 条实测全是这种）
+            //   Object=*\A相对路径.vbp             —— 私有控件工程引用
+            // 「免注册」**不是给它安的第二个语义**，只是拿这一行本来就带的文件路径去做运行期优先策略：
+            // 命中则 LoadLibrary+DllGetClassObject，未命中/表空则回到原注册表路径（ax_host.c 注释同口径）。
+            // C3 独有的免注册扩展只有一个名字: ComLib=（下方 Fix 160）。
             for (const auto& obj : project.objects) {
                 if (!obj.guid.empty()) {
                     effectiveOpts.typelibRefs.push_back(obj.guid);
@@ -664,6 +672,14 @@ CompileResult Driver::compile(const CompileOptions& options) {
         if (effectiveOpts.verbose) {
             std::cerr << "C3: note: TypeLib import skipped, using late binding" << std::endl;
         }
+    }
+
+    // C30-11 第十一刀（只读诊断）: --dump-com-sigs —— 把已加载类型库的类型逐条打到 stdout 后退出。
+    // 存在的理由只有一个: 内建兜底表要用**本机真库**生成, 不能手抄。
+    if (effectiveOpts.dumpComSigs) {
+        dumpComSigs(std::cout, effectiveOpts.dumpComSigsFilter);
+        result.success = true;
+        return result;
     }
 
     // === 阶段2.6: 泛型单态化 (tB 扩展, G2) — 模板登记 + 使用点物化.

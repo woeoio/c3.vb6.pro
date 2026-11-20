@@ -253,6 +253,9 @@ static void vb6_ComDropPackedArgs(VARIANT** a, int32_t argc) {
 }
 
 static DISPID vb6_getDispid(IDispatch* pDisp, const wchar_t* name) {
+    // NULL 名字是「默认成员」的写法（见 vb6_ComSetPropArgRcv 的默认成员分支）。
+    // 这里必须当场挡掉：下面的缓存遍历用 wcscmp(..., name)，NULL 会读 0x0（曾经就是这样 AV 的）。
+    if (!name) return DISPID_UNKNOWN;
     // 先查缓存
     for (int32_t i = 0; i < vb6_dispid_cache_count; i++) {
         if (vb6_dispid_cache[i].obj == (void*)pDisp &&
@@ -656,7 +659,18 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
         VariantClear(&defv336);
         vb6_ComDropPackedArgs(args, argc);   /* 账 #305 第二百八十九刀: 早退之前清点来路 */
         fwprintf(stderr, L"vb6_ComCall: method \"%ls\" not found\n", methodName);
-        return NULL;
+        /* C30-11 第八刀（H7 读数）: 真接收者（真 IDispatch、真没有这名成员）上，
+           VB 引擎的 Err.Number = **438**，而不是 0。以前这里只打一行 stderr 就 NULL 回去，
+           夹具里 `On Error Resume Next` 之后读到 0，反向用例走不到 438 分支。
+           与宿主模型 438 那把刀同口径: 抛完仍交一枚空 VARIANT（不能交 NULL，
+           链尾访问会 AV），并立起「刚抛过 438」的标记吸收链尾那一次 miss。 */
+        g_com_438_dangling = 1;
+        vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        {
+            VARIANT* empty438 = (VARIANT*)calloc(1, sizeof(VARIANT));
+            if (empty438) VariantInit(empty438);
+            return (void*)empty438;
+        }
     }
 
     /* 收窄必须发生在抄进 DISPPARAMS 之前 —— dp.rgvarg 是逐枚 VARIANT 的**值拷贝**,
@@ -1326,10 +1340,16 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
     if (!disp) { free(value_void); return; }
     IDispatch* pDisp = (IDispatch*)disp;
 
-    DISPID dispid = vb6_getDispid(pDisp, propName);
+    // Fix <default-put-null>: 参数化默认成员赋值 `d("k") = v` 的代码生成把成员名发成 NULL
+    // （cgen_util_comwrite.cpp L196 的 defMemLit25），而真语义就是 DISPID_VALUE(0)：
+    // 默认成员不能按名字查（各库叫法不一）。以前 NULL 直接进 vb6_getDispid → 缓存 wcscmp
+    // 读 0x0 → 0xC0000005；现在 NULL/空名一律当场用 DISPID_VALUE。
+    // 实测（.temp/dict/MinPut.bas）：修前 S2 处 AV，修后 err=0 且 count/get 都对得上 cscript。
+    DISPID dispid = (!propName || !propName[0]) ? DISPID_VALUE : vb6_getDispid(pDisp, propName);
     if (dispid == DISPID_UNKNOWN) {
         free(value_void);
-        fwprintf(stderr, L"vb6_ComSetPropArg: property \"%ls\" not found\n", propName);
+        fwprintf(stderr, L"vb6_ComSetPropArg: property \"%ls\" not found\n",
+                 propName ? propName : L"(default)");
         return;
     }
 
@@ -1380,24 +1400,28 @@ static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) 
     // 先把 objRef 包成 VT_DISPATCH 的 Win VARIANT, 转成 vb6_VARIANT 交给 Host_SetProp,
     // 后者落到 vb6_UC_OwnPropSet 的名字桥 (uc_hostmodel_setprop.inc)。
     /* 账 (Outlook2013 左面板 VisualTheme): 控件窗口 → 控件 IDispatch (只换控件自有成员) */
-    { void* ocxRcv = vb6_ComOcxRcvOf(disp, propName); if (ocxRcv) disp = ocxRcv; }
+    // Fix <default-put-null>: 同 vb6_ComSetPropArgRcv —— 默认成员写参引用时成员名为 NULL。
+    // 宿主/OCX 那两条分支需要名字，用 L"Item" 当默认成员名（与取值腿 vb6_ComCallObjectDefaultRcv
+    // 的旧口径一致）；真 IDispatch 则直接走 DISPID_VALUE，不按名字查。
+    const wchar_t* dispName = (propName && propName[0]) ? propName : L"Item";
+    { void* ocxRcv = vb6_ComOcxRcvOf(disp, dispName); if (ocxRcv) disp = ocxRcv; }
     if (vb6_Host_IsHostObject(disp)) {
         if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
-            fprintf(stderr, "[C3_COM] SetRef '%ls' rcv=%p -> HOST\n", propName, disp);
+            fprintf(stderr, "[C3_COM] SetRef '%ls' rcv=%p -> HOST\n", dispName, disp);
             fflush(stderr);
         }
         VARIANT winObj; VariantInit(&winObj);
         winObj.vt = VT_DISPATCH; winObj.pdispVal = (IDispatch*)objRef;
         char hin[64];
         vb6_Host_FromWinVariant(&winObj, hin);
-        vb6_Host_SetPropRef(disp, propName, hin);
+        vb6_Host_SetPropRef(disp, dispName, hin);
         vb6_Host_ClearVariant(hin);
         return;
     }
 
-    DISPID dispid = vb6_getDispid(pDisp, propName);
+    DISPID dispid = (!propName || !propName[0]) ? DISPID_VALUE : vb6_getDispid(pDisp, dispName);
     if (dispid == DISPID_UNKNOWN) {
-        fwprintf(stderr, L"vb6_ComSetRef: property \"%ls\" not found\n", propName);
+        fwprintf(stderr, L"vb6_ComSetRef: property \"%ls\" not found\n", dispName);
         return;
     }
 
@@ -1484,7 +1508,35 @@ void* vb6_ComCallObjectDefault(void* disp, void* args_void, int32_t argc) {
     return r;
 }
 
+/* C30-9: 「对象当标量用」—— VB6 取它的**默认成员** (DISPID_VALUE)。
+ * 与隔壁 vb6_ComCallObjectDefault 的分工就看返回值形态：
+ *   那一枚要的是**对象** (结果解包成 IDispatch，非对象档还会 ChangeType 硬套)，
+ *   这一枚要的是**值** (`Trim(rst.Fields(1))` / `CStr(obj)` 这类标量语境)。
+ * 为什么不能复用 vb6_ComCallObjectDefault: ADODB.Field 的默认成员 Value 是 BSTR，
+ * 经它会被 VariantChangeType 拧成 IDispatch —— 值当场没了。
+ * 返回堆上 VARIANT (契约同 vb6_ComCallByDispid：调用方交
+ * vb6_VariantFromComResult 吃掉)，NULL = 没有默认成员 / 不是真 IDispatch。 */
+void* vb6_ComGetDefaultValue(void* disp) {
+    if (!disp) return NULL;
+    /* 宿主伪对象 (窗体/控件槽) 没有 IDispatch 默认成员这一说：强行 Invoke(0)
+     * 会落到宿主分派里被当成 `obj(…)` 调 Item，语义不对。 */
+    if (vb6_Host_IsHostObject(disp)) return NULL;
+    /* 与 Fix 191 同一道门：接收者不是真 COM 对象时 `pDisp->lpVtbl->Invoke`
+     * 就是野指针解引用，整个进程会被一枚坏接收者带走。 */
+    if (!vb6_ComIsDispatchable(disp)) return NULL;
+    return vb6_ComCallByDispid(disp, (int32_t)DISPID_VALUE, NULL, 0);
+}
+
 void* vb6_ComGetProp(void* disp, const wchar_t* propName) {
+    /* C30-8: 菜单项代理令牌 (跨窗体 `Main.Menu_X.Prop`)。菜单项不是 IDispatch,
+     * 交给晚绑定会拿 (HMENU,id) 当 IDispatch* 解引用 ⇒ 必崩。令牌由生成码的
+     * vb6_form_ctrl_<F>_<Name>() 发 (见 vb6forms_menuproxy.c 文件头)。 */
+    {
+        void* mh = NULL; int32_t mid = 0;
+        extern int32_t vb6_MenuProxyDecode(void* p, void** hMenu, int32_t* id);
+        extern void* vb6_MenuProxyGetProp(void* hMenu, int32_t id, const wchar_t* propName);
+        if (vb6_MenuProxyDecode(disp, &mh, &mid)) return vb6_MenuProxyGetProp(mh, mid, propName);
+    }
     void* owned = NULL;
     void* r = vb6_ComGetPropRcv(vb6_ComDispViewIn(disp, &owned), propName);
     vb6_ComDispViewOut(owned);
@@ -1500,6 +1552,18 @@ void* vb6_ComGetPropArg(void* disp, const wchar_t* propName,
 }
 
 void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value_void) {
+    /* C30-8: 菜单项代理令牌 —— `Main.Menu_Edit.Enabled = False` 这种跨窗体菜单写
+     * 落到这里 (cgen 对跨模块成员一律走晚绑定)。Enabled/Checked/Visible/Caption
+     * 四个属性由 vb6_MenuProxySetProp 换算成 vb6_SetMenu*; 其余属性名不接,
+     * 继续原有 COM 路径 (那时 disp 不是令牌, 不会误判)。 */
+    {
+        void* mh = NULL; int32_t mid = 0;
+        extern int32_t vb6_MenuProxyDecode(void* p, void** hMenu, int32_t* id);
+        extern int32_t vb6_MenuProxySetProp(void* hMenu, int32_t id, const wchar_t* propName, void* value_void);
+        if (vb6_MenuProxyDecode(disp, &mh, &mid)) {
+            if (vb6_MenuProxySetProp(mh, mid, propName, value_void)) return;
+        }
+    }
     void* owned = NULL;
     vb6_ComSetPropRcv(vb6_ComDispViewIn(disp, &owned), propName, value_void);
     vb6_ComDispViewOut(owned);

@@ -166,7 +166,13 @@
     // 逐字节回退到 vb6_VariantFromValue(原样) —— 非布尔路径的生成码不变.
     // expr 允许为 nullptr (该位置没有 AST 实参, 如命名实参) → 按原样装箱.
     std::string boxToVariant(Expr* expr, const std::string& cExpr) const;
-
+    // C30-10 第三十二刀: 「这枚节点在 VB6 里是 Integer 档 (VarType 2)」——与装箱权威
+    // boxToVariant 同一份判据 (字面量 / `As Integer` 变量两形)。两位调用者:
+    // wrapVariantValue 的 `case Long` (它不能把这档抢去装 VT_I4) 与 boxToVariant 自己。
+    bool isNarrowIntExpr(const Expr* e) const;
+    // C30-10 第三十五刀: 「这枚**内置函数**在 VB6 里返回 Integer、而 C 侧一个 int32_t」那条问。
+    // 数据在 cgen_builtin_return_type_table.inc 的 builtinReturnsVbInteger（只喂装箱站）。
+    bool builtinReturnsVbIntegerName(const std::string& name) const;
     // VB6标识符 → C全局函数名
     // 本模块: vb6_<ProcName>
     // 跨模块(外部): vb6_<ModuleName>_<ProcName>
@@ -702,6 +708,8 @@
     // C29-SL-h: Slider 的创建样式位（TBS_AUTOTICKS / TBS_VERT / TickStyle 那三位）。
     // 顶层与容器子控件两条创建路各自都要它，所以单独一处折算、两处调用（账 #83）。
     long sliderStyleBits(const FrmControl& ctrl) const;
+    // C30-UD-a: UpDown 的创建样式位（UDS_*），同样两条创建路共用。
+    long updownStyleBits(const FrmControl& ctrl) const;
 
     // C29-SL-l（账 #143）: 控件的**零实参方法**（`SetFocus` / Slider 的 `ClearSel` 这一族）。
     // 一形带括号（走表达式路）、一形不带（走语句路），两条码头都调这两个函数，
@@ -766,6 +774,9 @@
     // Frame 内读回 0/100/0/1/20/0 = 原生默认档）。抽出来两条创建路共用，hwndExpr 由调用方给
     // （顶层那趟自己算槽、子控件那趟用 childHwndRead）。
     void emitSliderDesignTimeInit(const FrmControl& ctrl, const std::string& hwndExpr);
+    // C30-UD-a: UpDown 的设计期值面（Min/Max/Value/Increment/Wrap/Alignment/Orientation/
+    // SyncBuddy/BuddyControl）—— 与 Slider 同一条口径，两条创建路调同一个出口。
+    void emitUpDownDesignTimeInit(const FrmControl& ctrl, const std::string& hwndExpr);
 
     // VB6 PictureBox/Image 的 STATIC 控件不显示 Caption (标题在创建时应清空)。
     bool controlTypeClearsCaption(const FrmControl& ctrl) const;
@@ -1012,6 +1023,12 @@
     // 旧名只是既有站点的投影, 判据各只有一份 (定义见 cgen_util_type.cpp)。
     bool isVariantType(const Expr* e) const;
     bool isVariantSlot(const std::string& text, const Expr* ast) const;
+    // 账 #305 §B219 (第七十一刀): 「这发 Len/Trim/LTrim/RTrim/UCase/LCase 要不要改道到
+    // 变体位」的唯一判据 —— 发码站 (cgen_expr_call_arg_variant.inc) 与类型 oracle
+    // (inferExprTypeImpl 的 IndexOrCallExpr 分支) **共用**同一条: 两边要么同时改道、要么
+    // 同时不改。不同步的代价是 C2440 或静默错值 (账 §B147 那条方向性教训)。
+    // 答非空 = 该发的 C 名 (vb6_LenV 等); 空 = 不改道。
+    std::string nullFamilyVExitCName(const IndexOrCallExpr& call) const;
     bool isSafeArrayCarrier(const std::string& text) const;
 
     // <vbeclipse>: 装箱权威用它判断"这个 C 表达式顶层已经是 vb6_VARIANT 了"。
@@ -1295,6 +1312,13 @@
     // vb6_ComPackVB6InstanceRaw 包装成真 IDispatch (与 ExeComBridge 03 同一通路).
     std::string comNewExprFor(const Symbol* comSym);
 
+    // C30-9: `As New <COM 类>` 的建对象表达式（优先级：工程类实现 > coclass CLSID > ProgID）。
+    // 为什么要中间那一档：实测本机 32 位视图里 `ADODB.Connection(.6.0)` / `ADODB.Recordset`
+    // 的 **ProgID 压根没注册**，只有 CLSID 与 msado15.dll；VB6 因为拿 typelib 的 CLSID
+    // 直接 CoCreateInstance 所以能登，我方按 ProgID 查 ⇒ CLSIDFromProgID 失败
+    // ⇒ 未处理错误 #340（探针 loginprobe 实测 rc=340）⇒ conn 恒 NULL。
+    std::string comNewObjectExpr(const Symbol* comSym);
+
     // P25: 解析COM标记为类型化属性取值, 用于COM调用参数打包
     // 当isComMarker_为true时调用, 根据packFnHint选择ComGetObjectProp/GetIntProp/GetStringProp等
     // packFnHint: comPackExpr返回的封装函数名, 用于推断所需属性类型
@@ -1347,6 +1371,13 @@
         const Symbol::ComMethodSig* sig = nullptr;  // 签名本体（形参表等细节仍要问它）
     };
     ComSigView comSigViewOf(const Symbol* comSym, const std::string& memberName) const;
+
+    // C30-11 后记: 「这枚 COM 成员的返回类型是不是 Boolean」—— 只问返回类型的那一粒，
+    // 不把签名/形参交出去。**_这里也只是转调 comSigViewOf**（C4 口径：comMethods
+    // 只许那一个出口读，静态普查 check_com_prop_type_authority.ps1 把这条钉死）。
+    // inferExprType 那一站要它: 以前前期绑定的 Boolean 返回一律答 Variant ⇒ 装箱成
+    // VT_I4(-1)、CStr 答 "-1"，而 VB6 是 Variant(Boolean)、答 "True"。
+    bool comMemberReturnsBoolean(const Symbol* comSym, const std::string& memberName) const;
 
     // 属性 getter 的类型化解包表达式（哨兵 C3 的口径）：非确认的 getter ⇒ 返回空串，调用方
     // 保留自己的晚绑定路；类型未知 ⇒ 交回原生 VARIANT，绝不按上下文猜一档。
@@ -1536,6 +1567,43 @@
     // AssignmentStmt/SetStmt 均调用 (090ae: SetStmt 原先缺失该分支 → LHS 被
     // emitExpr 生成值语义 vb6_VariantFromComResult(...) = ... → C2440).
     // 返回值: 若已识别并 emit, 返回 true; 否则 false (让调用者继续 fallback).
+    // ---- C30-2: TabStrip 集合链的**唯一判形**（读 / 写 / 类型三面共用）----
+    //
+    // 为什么要一个判形而不是三处各写一遍：读侧有三个互不相干的消费面
+    // （赋值语句 → resolveComValue、拼串/比较 → resolveComMarkerForPack、
+    //  内建函数与子过程实参 → 谁也不经过），写侧又与这三面无关，类型推断还得
+    // 单独答题。实测改前：`CStr(TabStrip1.SelectedItem.Index)` 与
+    // `ShowPage TabStrip1.SelectedItem.Index` 这两形一条 resolver 都不经过，直接
+    // 发成 `vb6_ComGetProp(vb6_ComGetObjectProp(hwnd, L"SelectedItem"), L"Index")`
+    // ⇒ Run-time error 438；写侧五形全部落 `vb6_ComSetProp(…)`（假 IDispatch，静默无效）。
+    // 把形状认在 AST 上、只认一张表（knownFormControls_ 里登记为 TabStrip 的控件）
+    // ⇒ 三面不可能给出两个答案。
+    //
+    // 认形范围：
+    //   <ctrl>.Tabs.<m>          (sub="tabs", idxArg=nullptr, 只认 m=count)
+    //   <ctrl>.Tabs(a).<m>       (sub="tabs", idxArg=a)
+    //   <ctrl>.SelectedItem.<m>  (sub="selecteditem")
+    // 不认：控件数组元素（`TabsArr(0).Tabs(1).Caption`）—— 句柄槽不是标量，交回旧路。
+    struct TabChainView {
+        std::string ctrl;       // 控件源码名（用于 cIdent 出 vb6_hwnd_<名>）
+        std::string sub;        // "tabs" / "selecteditem"
+        std::string member;     // 末尾成员（小写）
+        Expr* idxArg = nullptr; // Tabs 的下标实参（可空）
+        // 控件数组元素形态（`TabsArr(0).Tabs(1).Caption`）时非空：元素下标实参。
+        // 存非 const 指针是因为读出/写入两腿都要 emitExpr 这个下标；AST 在所有调用点
+        // 本来就可改（visit(MemberAccessExpr&) 给的就是非 const 节点），故两处 const_cast
+        // 是“形状查询是只读的、但引用的是可变树”，不是写穿。
+        Expr* arrIdx = nullptr;
+    };
+    bool tabStripChainViewOf(const Expr* nodeExpr, TabChainView& v) const;
+    // 句柄文本：单枚 = `vb6_hwnd_<名>`；控件数组元素 = `vb6_CtrlArr_GetAt(&vb6_arr_<名>, idx)`。
+    // 读 / 写两条腿共用这一个出口（数组下标会 emit，故非 const）。
+    std::string tabStripHwndTextOf(TabChainView& v);
+    // 读：命中返回 true 并给出发码文本（已经是 RTL 调用，不再带 COM 标记）。
+    bool tabStripChainReadExpr(const Expr* nodeExpr, std::string& out);
+    // 写：命中就当场 emit 并返回 true（调用方 return）。
+    bool tryEmitTabStripChainWrite(Expr* targetNode, Expr* valueNode);
+
     bool tryEmitChainedComWrite(Expr* targetNode, Expr* valueNode);
 
     // Fix 011r-1: 类实例成员调用解析辅助
@@ -1550,6 +1618,14 @@
     // 返回空串表示该类中无对应方法/属性, 调用者应视为数据字段访问 (obj->member)
     std::string resolveClassMemberCall(const std::string& className,
                                        const std::string& memberName) const;
+
+    // 账 #611: `obj(args)` (obj 是有 VB_UserMemId=0 默认成员的工程类实例) 的等价
+    // callee `obj.<DefaultMember>`; 不适用则返回 nullptr。
+    // ⚠ 只**造一个新的 callee**, 不 move 原节点的任何成员 —— 同一枚 IndexOrCallExpr
+    // 会被 emitExpr 访问多次 (实参预发射 / 正式发射), 掏空它必然在
+    // cgen_expr_call_callee_withm.inc:269 对空 callee 解引用 ⇒ C0000005。
+    // 调用方拿返回值**原地替换** node.callee 即可复用显式 `.Item` 的全部读写路径。
+    ExprPtr makeClassDefaultMemberCallee(const IndexOrCallExpr& node) const;
 
     // Fix 033: 类感知方法/属性参数查找 (类符号 + memberParams 表的精确解析).
     // IndexOrCallExpr calleeParams 解析: 按 className 查找指定类的方法/属性参数表,
@@ -1852,6 +1928,30 @@
                                const std::string& ownerClassName,
                                const std::string& memberName,
                                MemberArrayDecl& out) const;
+    // 账 #613 (第351刀): 「With 块里那枚动态数组成员的声明档」—— owner 解析的一枚出口。
+    // 访问侧 (cgen_expr_call_callee_withm.inc) 早就有这一问 (UDT 臂 knownUdtVars_[With 临时量]
+    // → 类臂 info.className → knownClassVars_[With 临时量]), 而**分配侧**压根没有: With 成员的
+    // 键是 ".member" ⇒ 那条「按最后一个 . 切 owner/member」的腿要求 dot > 0 ⇒ 不 firing ⇒
+    // 元素档回落 Variant ⇒ 分配 16/24 字节一步、访问按声明档走 (UDT/类实例元素 ⇒ 越界写)。
+    struct WithMemberOwner {
+        bool ok = false;
+        bool ownerIsUdt = false; // **owner** 是不是 UDT (别与 decl.isUdt —— 元素是不是 UDT —— 混)
+        std::string ownerCType;   // UDT → vb6_type_X;  工程类 → 类名
+        MemberArrayDecl decl;     // 那一枚成员的声明档 (只认**动态**数组)
+    };
+    bool resolveWithMemberArrayDecl(const std::string& memberName, WithMemberOwner& out) const;
+    // 账 #613 (第351刀): 「点号链目标那枚成员的声明档」——**分配侧与访问侧共用的那一问**。
+    // 三种 owner 走同一条: ① With 成员 (键以 '.' 开头) ② 工程类实例 (o.member)
+    // ③ UDT 变量 (t.member)。今天分配侧只有 ②③ 的一半（元素档），**UDT 元素档那一格没有** ⇒
+    // `ReDim o.Big(1 To 2)` (Big() As TBig) 分配按 variant 24 字节一步、访问按 sizeof(TBig)
+    // 64 字节走 ⇒ **越界写**（With 成员那一族更狠：元素档与步长两格都落空）。
+    struct DottedMemberInfo {
+        bool ok = false;
+        bool ownerIsUdt = false;  // **owner** 是不是 UDT (元素那一档是 decl.isUdt)
+        std::string ownerCType;   // UDT → vb6_type_X;  工程类 → 类名
+        MemberArrayDecl decl;     // 那一枚成员的声明档 (只认**动态**数组)
+    };
+    bool resolveDottedMemberDecl(const std::string& lowerVar, DottedMemberInfo& out) const;
     std::string mapSaElemCType(Vb6Type type) const;
     // 从ArrayTypeRef或asType获取元素Vb6Type
     Vb6Type resolveArrayElemType(ASTNode* typeRef) const;
@@ -1927,3 +2027,7 @@
     // 递归版 (stack 防自引用); needVoidPtrWrapper 的传递闭包在 emitUdtCopyBlock 里重算。
     bool udtHasOwnedMembersR(const std::string& udtCType,
                              std::vector<std::string>& stack) const;
+    // C30-11 第六十七刀: Or/And 的 Null 真值表守卫（变体上下文两站共用）。
+    // 是成员（不是自由函数）只为一件事: 字面量那侧要问 inferExprType 才知道是不是 Boolean ——
+    // VB6 里 Null Or True 是 Boolean True，而 C 的 (int32_t)((-1)) 分不出 Boolean 与整数。
+    std::string cgNullGuardLogicV(const ASTNode* node, const std::string& cExpr) const;

@@ -140,6 +140,9 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6COM_FOREACH_C,        "vb6com_foreach.c" },
     { RTL_VB6COM_COLLECTION_C,     "vb6com_collection.c" },
     { RTL_VB6COM_COLLECTION_ENUM_C, "vb6com_collection_enum.c" },
+    { RTL_VB6COM_REGEXP_C,          "vb6com_regexp.c" },
+    { RTL_VB6COM_DICT_C,            "vb6com_dict.c" },
+    { RTL_VB6COM_FSO_C,             "vb6com_fso.c" },
     { RTL_VB6FORMS_INTERNAL_H,     "vb6forms_internal.h" },
     { RTL_VB6FORMS_CTRL_C,         "vb6forms_ctrl.c" },
     { RTL_VB6FORMS_LIST_C,         "vb6forms_list.c" },
@@ -154,6 +157,7 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6FORMS_IMAGELIST_C,    "vb6forms_imagelist.c" },
     { RTL_VB6FORMS_STATUSBAR_C,    "vb6forms_statusbar.c" },
     { RTL_VB6FORMS_SSTAB_C,        "vb6forms_sstab.c" },
+    { RTL_VB6FORMS_TABSTRIP_C,     "vb6forms_tabstrip.c" },
     { RTL_VB6FORMS_OLEDD_C,        "vb6forms_oledd.c" },
     { RTL_VB6FORMS_LISTVIEW_C,     "vb6forms_listview.c" },
     { RTL_VB6FORMS_MEMBEROBJ_C,    "vb6forms_memberobj.c" },
@@ -166,6 +170,14 @@ static const RtlFileEntry kRtlFiles[] = {
     { RTL_VB6FORMS_RICHTEXTBOX_C,  "vb6forms_richtextbox.c" },
     { RTL_VB6FORMS_WINSOCK_C,      "vb6forms_winsock.c" },
     { RTL_VB6FORMS_SLIDER_C,       "vb6forms_slider.c" },
+    { RTL_VB6FORMS_UPDOWN_C,       "vb6forms_updown.c" },
+    { RTL_VB6FORMS_MASKEDEDIT_C,   "vb6forms_maskededit.c" },
+    { RTL_VB6FORMS_MSCOMM_C,       "vb6forms_mscomm.c" },
+    { RTL_VB6FORMS_ADODC_C,        "vb6forms_adodc.c" },
+    { RTL_VB6FORMS_GRID_C,         "vb6forms_grid.c" },
+    { RTL_VB6FORMS_MSHFLEXGRID_C,  "vb6forms_mshflexgrid.c" },
+    // ai/029 C30-10: TeeChart 内置图表 —— 不加载 TeeChart5.ocx（OCX 只有 32 位，x64 链不上）
+    { RTL_VB6FORMS_TEECHART_C,     "vb6forms_teechart.c" },
 
     // 2026-10-06: Form/Printer 绘图方法家族。放在 slider 之后而不是紧邻 widget,
     // 因为它 include vb6forms.h (自身经 vb6forms_draw.h 互含), 排在后面时
@@ -198,6 +210,8 @@ static const RtlFileEntry kRtlFiles[] = {
     // vb6forms 家族再细分 (2026-09-17)
     { RTL_VB6FORMS_PICTURE_PROP_C,        "vb6forms_picture_prop.c" },
     { RTL_VB6FORMS_WIDGET_PROP_C,         "vb6forms_widget_prop.c" },
+    // C30-8 (2026-11-16): 跨模块菜单项代理令牌
+    { RTL_VB6FORMS_MENUPROXY_C,           "vb6forms_menuproxy.c" },
 
     // vb6forms.h 按功能域拆分 (2026-09-17)
     { RTL_VB6FORMS_WINDOW_H,              "vb6forms_window.h" },

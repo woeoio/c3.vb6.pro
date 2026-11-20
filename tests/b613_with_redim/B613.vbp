@@ -1,0 +1,5 @@
+Type=Exe
+Class=K613; K613.cls
+Module=Main; Main.bas
+Startup="Sub Main"
+ExeName32="B613.exe"

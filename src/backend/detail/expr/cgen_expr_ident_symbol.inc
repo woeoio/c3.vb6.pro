@@ -169,12 +169,14 @@
                     {
                 std::string newExpr;
                 auto itCom = knownTypedComVars_.find(lower);
-                if (itCom != knownTypedComVars_.end()) {
-                    newExpr = comNewExprFor(itCom->second);  // Fix 177b: 遮蔽→工程类工厂+IDispatch包装
-                    if (newExpr.empty()) {
-                        const std::string& _progId = itCom->second->comProgId.empty() ? itCom->second->name : itCom->second->comProgId;
-                        newExpr = "(void*)vb6_NewObject(L\"" + _progId + "\")";
-                    }
+                // C30-10 第三十刀: 外部 ProgID 档（未解析的 `Dim x As New VBScript.RegExp`）——
+                // 它没有 vb6_cls_ 工厂，也没有 typelib 符号，只能按 ProgID 建（这就是 VB6 的 New <ProgID>）。
+                auto itPid30 = knownNewProgIdVars_.find(lower);
+                if (itPid30 != knownNewProgIdVars_.end()) {
+                    newExpr = "(void*)vb6_NewObject(L\"" + itPid30->second + "\")";
+                } else if (itCom != knownTypedComVars_.end()) {
+                    // C30-9: 三档分流（工程类实现 > coclass CLSID > ProgID），见 comNewObjectExpr。
+                    newExpr = comNewObjectExpr(itCom->second);
                 } else {
                     newExpr = "vb6_cls_" + itNewM->second + "_New()";
                 }
@@ -192,18 +194,24 @@
             {
             std::string newExpr;
             auto itCom = knownTypedComVars_.find(lower);
-            if (itCom != knownTypedComVars_.end()) {
-                newExpr = comNewExprFor(itCom->second);  // Fix 177b: 遮蔽→工程类工厂+IDispatch包装; 未遮蔽→空串
-                if (newExpr.empty()) {
-                    const std::string& _progId = itCom->second->comProgId.empty() ? itCom->second->name : itCom->second->comProgId;
-                    newExpr = "(void*)vb6_NewObject(L\"" + _progId + "\")";
-                }
+            // C30-10 第三十刀: 外部 ProgID 档（未解析的 `Dim x As New VBScript.RegExp`）——
+            // 它没有 vb6_cls_ 工厂，也没有 typelib 符号，只能按 ProgID 建（这就是 VB6 的 New <ProgID>）。
+            auto itPid30 = knownNewProgIdVars_.find(lower);
+            if (itPid30 != knownNewProgIdVars_.end()) {
+                newExpr = "(void*)vb6_NewObject(L\"" + itPid30->second + "\")";
+            } else if (itCom != knownTypedComVars_.end()) {
+                // C30-9: 三档分流（工程类实现 > coclass CLSID > ProgID），见 comNewObjectExpr。
+                newExpr = comNewObjectExpr(itCom->second);
                 // Fix 090v-com: 类型化COM接口指针 (vb6_ComIface_X*) 转型:
-                // vb6_NewObject 返回 void*, 直接赋给类型化指针在 C 下是约束违例 → 编译失败.
+                // 旧写法把尾部 * 剥掉再转 ⇒ `(vb6_ComIface__Connection)(void*)…` 把**指针
+                // 硬转成结构体值**，MSVC C2440。实测 (C30-9 探针 loginprobe)：模块级
+                // `Public conn As New ADODB.Connection` 在本模块内被使用时 3 处全报
+                // (Module1.c 15/19/47)。C 里 void* → T* 本就是隐式转换（同文件局部变量
+                // `rs` 一直这么发），故指针档不转型；非指针的按值档保留原行为。
                 if (knownTypedComVarCType_.count(lower)) {
-                    std::string _t = knownTypedComVarCType_[lower];
-                    if (!_t.empty() && _t.back() == '*') _t.pop_back();
-                    if (_t.find("vb6_ComIface_") != std::string::npos) newExpr = "(" + _t + ")" + newExpr;
+                    const std::string& _t = knownTypedComVarCType_[lower];
+                    if (!_t.empty() && _t.back() != '*' && _t.find("vb6_ComIface_") != std::string::npos)
+                        newExpr = "(" + _t + ")" + newExpr;
                 }
             } else {
                 newExpr = "vb6_cls_" + itNew->second + "_New()";
@@ -231,18 +239,24 @@
             {
             std::string newExpr;
             auto itCom = knownTypedComVars_.find(lower);
-            if (itCom != knownTypedComVars_.end()) {
-                newExpr = comNewExprFor(itCom->second);  // Fix 177b: 遮蔽→工程类工厂+IDispatch包装; 未遮蔽→空串
-                if (newExpr.empty()) {
-                    const std::string& _progId = itCom->second->comProgId.empty() ? itCom->second->name : itCom->second->comProgId;
-                    newExpr = "(void*)vb6_NewObject(L\"" + _progId + "\")";
-                }
+            // C30-10 第三十刀: 外部 ProgID 档（未解析的 `Dim x As New VBScript.RegExp`）——
+            // 它没有 vb6_cls_ 工厂，也没有 typelib 符号，只能按 ProgID 建（这就是 VB6 的 New <ProgID>）。
+            auto itPid30 = knownNewProgIdVars_.find(lower);
+            if (itPid30 != knownNewProgIdVars_.end()) {
+                newExpr = "(void*)vb6_NewObject(L\"" + itPid30->second + "\")";
+            } else if (itCom != knownTypedComVars_.end()) {
+                // C30-9: 三档分流（工程类实现 > coclass CLSID > ProgID），见 comNewObjectExpr。
+                newExpr = comNewObjectExpr(itCom->second);
                 // Fix 090v-com: 类型化COM接口指针 (vb6_ComIface_X*) 转型:
-                // vb6_NewObject 返回 void*, 直接赋给类型化指针在 C 下是约束违例 → 编译失败.
+                // 旧写法把尾部 * 剥掉再转 ⇒ `(vb6_ComIface__Connection)(void*)…` 把**指针
+                // 硬转成结构体值**，MSVC C2440。实测 (C30-9 探针 loginprobe)：模块级
+                // `Public conn As New ADODB.Connection` 在本模块内被使用时 3 处全报
+                // (Module1.c 15/19/47)。C 里 void* → T* 本就是隐式转换（同文件局部变量
+                // `rs` 一直这么发），故指针档不转型；非指针的按值档保留原行为。
                 if (knownTypedComVarCType_.count(lower)) {
-                    std::string _t = knownTypedComVarCType_[lower];
-                    if (!_t.empty() && _t.back() == '*') _t.pop_back();
-                    if (_t.find("vb6_ComIface_") != std::string::npos) newExpr = "(" + _t + ")" + newExpr;
+                    const std::string& _t = knownTypedComVarCType_[lower];
+                    if (!_t.empty() && _t.back() != '*' && _t.find("vb6_ComIface_") != std::string::npos)
+                        newExpr = "(" + _t + ")" + newExpr;
                 }
             } else {
                 newExpr = "vb6_cls_" + itNew->second + "_New()";

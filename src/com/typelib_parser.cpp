@@ -315,6 +315,92 @@ ComCoClassInfo* TypeLibParser::findCachedCoClass(const std::string& name) const 
 }
 
 // ============================================================
+// C30-11 第七刀: 内建 Scripting Runtime 类名兜底 (无 scrrun 类型库时)
+// ============================================================
+// 只登记**类名**: coclass + 空成员默认接口。不带成员签名是有意的 ——
+// 内置 vb6com_fso.c / vb6com_dict.c 在运行期按名字 (GetIDsOfNames) 答，
+// 编译期不需要 (也不应该) 再铺一份可能与实现走偏的签名表。
+// C30-11 第十二刀: 上面那段理由已被新事实推翻 —— 表现在是**生成物**
+// (src/com/builtin_scripting_sigs.inc，从本机 scrrun.dll 用 --dump-com-sigs 吐出来)，
+// 且验收口径是「有库/无库两种编译发出的 C 必须逐字节相同」，不靠人盯，不会走偏。
+// 于是成员签名一并登，没有 scrrun 的机器也能拿到与有库完全相同的编译期类型。
+// clsidStr 留空: 免注册表那几条路都要求 clsidStr 非空。这里要说准确 —— 那几条路是
+// C3 扩展 ComLib=（免注册 COM DLL）与 VB6 原生 Object= 行带来的 OCX 免注册激活，
+// 两者都靠「真 CLSID」吃饭；内建表是「这台机器没有 scrrun」的兜底，恰恰不该进那几条路。
+// 实例化走 comProgId (cgen_expr.cpp 的 New 分支)，不靠 clsidStr。
+static std::string builtinLowerAscii(std::string s) {
+    for (auto& ch : s) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return s;
+}
+
+// C30-11 第十二刀（自测开关专用）: 按 ProgID 前缀抠掉缓存里的 coclass。
+// 为什么需要: `C3_TEST_NO_SCRRUN_TLB=1` 只拦 ProgID 预取，而 wshom.ocx (WScript.Shell)
+// 的类型库会把 scrrun 的 coclass 一并 import 进来（实测 FileSystemObject 带真 CLSID
+// {0D43FE01-...} 出现）；而且它们是**合并进 wshom 那份结果**的，按 tlbPath 扣不掉。
+// 所以只能按 ProgID 前缀（"scripting."）扣类。
+void TypeLibParser::dropCachedClassesByProgId(const std::string& progIdPrefix) {
+    const std::string prefix = builtinLowerAscii(progIdPrefix);
+    for (auto& tl : cache_) {
+        if (!tl) continue;
+        auto& ccs = tl->coclasses;
+        ccs.erase(std::remove_if(ccs.begin(), ccs.end(), [&](const std::unique_ptr<ComCoClassInfo>& c) {
+            return c && builtinLowerAscii(c->progId).compare(0, prefix.size(), prefix) == 0;
+        }), ccs.end());
+    }
+}
+
+void TypeLibParser::registerBuiltinScriptingTypelib() {
+#include "builtin_scripting_sigs.inc"
+
+    auto tl = std::unique_ptr<TypeLibResult>(new TypeLibResult());
+    tl->name = "Microsoft Scripting Runtime";
+    tl->version = "1.0";
+    tl->tlbPath = "<builtin:scripting>";
+    tl->canonPath = "<builtin:scripting>";
+    tl->typeLibProjectName = "Scripting";
+
+    for (const auto& r : kBuiltinClasses) {
+        auto iface = std::unique_ptr<ComInterfaceInfo>(new ComInterfaceInfo());
+        iface->name = r.iface;
+        iface->iidStr = r.iid;
+        iface->isDual = r.dual;          // 真库两样都是 true，照抄不自行简化
+        iface->isDispatch = r.dispatch;  // comVtblBase = 7，不碰 vtable 直调
+        iface->defaultMemberName = r.dfltName;        // P24-10: DISPID_VALUE=0 那枚
+        iface->defaultMemberRealName = r.dfltReal;
+        for (int i = 0; i < r.nmembers; i++) {
+            const BuiltinMember& bm = r.members[i];
+            ComMemberInfo m;
+            m.realName = bm.real;
+            m.name = builtinLowerAscii(bm.real);   // 与 parseInterface 一致: name 小写, realName 原样
+            m.kind = bm.kind;
+            m.returnType = bm.ret;
+            m.memid = bm.memid;
+            m.vtableIndex = bm.vtbl;
+            for (int pi = 0; pi < bm.nparams; pi++) {
+                ComParamInfo pa;
+                pa.name = bm.params[pi].name;
+                pa.type = bm.params[pi].type;
+                pa.direction = bm.params[pi].dir;
+                pa.isOptional = bm.params[pi].opt;
+                m.params.push_back(std::move(pa));
+            }
+            iface->members.push_back(std::move(m));
+        }
+        const ComInterfaceInfo* ifacePtr = iface.get();
+        tl->interfaces.push_back(std::move(iface));
+
+        auto cc = std::unique_ptr<ComCoClassInfo>(new ComCoClassInfo());
+        cc->name = r.cls;
+        cc->progId = r.progId;
+        cc->defaultIfaceName = r.iface;
+        cc->defaultIface = ifacePtr;
+        tl->coclasses.push_back(std::move(cc));
+    }
+
+    cache_.push_back(std::move(tl));
+}
+
+// ============================================================
 // 内部: ProgID → TypeLib路径
 // ============================================================
 

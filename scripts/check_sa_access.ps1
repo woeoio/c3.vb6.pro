@@ -85,7 +85,9 @@
 # COM 就是错档）。TypeName 那边压根没有数组分支，8204 落 default 答 "Variant"。
 #   A17 新表 vb6_SaVtFromElemType 声明 1 / 定义 1 / 调用恰好 5（array.h 的 UDT 字节装箱 1 + com.c 那
 #       条进口 2 + array.c 自己那枚认载体的出口 2 + 出站白名单 1，第五十刀）；反向表 vb6_SaElemTypeFromVt
-#       声明 1 / 定义 1 / 调用恰好 3（com.c 那两条 VT_ARRAY 进口 + §B162 入站那一臂），手抄的元素 switch 回到 0 处；认载体那一问 vb6_SaVtOfArrayPtr 声明 1 / 定义 1 /
+#       声明 1 / 定义 1 / 调用恰好 3（第五十三刀 §B142 把两条进口并成一枚核后是 2：COM 进口那一枚核 +
+#       §B162 入站那一臂；账 #611 第349刀的 ND 入站唯一出口 vb6_ComNDArrayIntoSlot 又问同一张表一次 ⇒ 3），
+#       手抄的元素 switch 回到 0 处；认载体那一问 vb6_SaVtOfArrayPtr 声明 1 / 定义 1 /
 #       调用恰好 2（装箱 + GetAllSettings）；写死的 vb6_vtArray|vb6_vtVariant 恰好 2 且**只能在**
 #       vb6_SaVtOfArrayPtr 的两条兜底里（NULL 与认不出载体）；旧的三元折档形状 `vb6_vtArray | (baseVt`
 #       恰好 0。TypeName 那一张标量名单只许一份：`case vb6_vtEmpty:` 在 vb6rtl_conv.c 恰好 1，
@@ -308,7 +310,7 @@ foreach ($f in $beFiles) {
         # 从前那个 900 字上限会在加了几行之后就量不到 arrayElemTypes_ (假红)。
         $blk = [regex]::Match($txt, 'Vb6Type\s+CCodeGen::resolveReDimElemType[\s\S]*?\r?\n\}')
         if ($blk.Value -match 'resolveArrayElemType\(\s*typeRef\s*\)' -and $blk.Value -match 'arrayElemTypes_\.find') { $rdBodyBoth++ }
-        if ($blk.Value -match 'resolveUdtMemberElemInfo\s*\(') { $rdBodyMember++ }
+        if ($blk.Value -match 'resolveDottedMemberDecl\s*\(') { $rdBodyDotted++ }
     }
 }
 if ($rdDef -ne 1) { $bad += ("A8 resolveReDimElemType 定义 = " + $rdDef + " (要求 1；两处定义 = 第二份答案)") }
@@ -316,7 +318,7 @@ if ($rdDecl -ne 1) { $bad += ("A8 resolveReDimElemType 声明(cgen_helpers.inc) 
 if ($rdCall -lt 1) { $bad += "A8 cgen_redim.cpp 不再调 resolveReDimElemType（ReDim 的元素档又回到只问 As 子句）" }
 if ($rdAsOnly -ne 0) { $bad += ("A8 cgen_redim.cpp 里「声明处只问 As」的老形状 = " + $rdAsOnly + " 处 (要求 0；那正是本刀改掉的那一行)") }
 if ($rdDef -eq 1 -and $rdBodyBoth -ne 1) { $bad += "A8 resolveReDimElemType 的体里没同时问 As 子句与 arrayElemTypes_（只剩一头 = 修前的形状）" }
-if ($rdDef -eq 1 -and $rdBodyMember -ne 1) { $bad += "A8 resolveReDimElemType 不再问点号链 UDT 成员（成员动态数组的元素档又回落 Variant ⇒ 账 #475 的 16/4 字节步长错位回来）" }
+if ($rdDef -eq 1 -and $rdBodyDotted -ne 1) { $bad += "A8 resolveReDimElemType 不再问点号链那一枚出口 resolveDottedMemberDecl（With 成员 / 类实例 owner / UDT owner 的元素档又回落 Variant ⇒ 账 #475/§B190 的 16/4 字节步长错位回来）" }
 
 # A20: UDT 成员动态数组的元素档只许一位主人 (账 #475 §B220, 第一百七十九刀)
 # 修前: `ReDim t.Items(1 To 3)` 走裸名回退, 分配 vb6_sa_variant, 访问 Pattern B 按
@@ -332,9 +334,40 @@ foreach ($f in $beFiles) {
         if ($t -match '\bresolveUdtMemberElemInfo\s*\(' -and $t -notmatch '^bool\s+(CCodeGen::)?resolveUdtMemberElemInfo') { $memAll++ }
     }
 }
-if ($memAll -ne 2) { $bad += ("A20 resolveUdtMemberElemInfo 调用点 = " + $memAll + " (恰 2: cgen_expr_array.cpp 点号链 + cgen_redim.cpp 复杂目标转调)") }
+if ($memAll -ne 1) { $bad += ("A20 resolveUdtMemberElemInfo 调用点 = " + $memAll + " (恰 1: cgen_redim.cpp 复杂目标转调 —— 点号链那一处已搬进 resolveDottedMemberDecl)") }
 if ($memDecl -ne 1) { $bad += ("A20 resolveUdtMemberElemInfo 的声明(cgen_helpers.inc) = " + $memDecl + " (恰好 1；0 = 点号链那一头又问不到成员表)") }
 if ($memDef -ne 1)  { $bad += ("A20 resolveUdtMemberElemInfo 的定义(cgen_redim.cpp) = " + $memDef + " (恰好 1；>1 = 第二份成员循环)") }
+
+# A20b (账 #613 第351刀): 「点号链目标那枚成员的声明档」收进**一枚新出口**
+# resolveDottedMemberDecl (With 成员 / 工程类实例 owner / UDT 变量 owner 三种走同一条),
+# 它直接问 resolveMemberArrayDecl —— 那张成员表的唯一主人。
+# 为什么单开这一格: 修前分配侧 (ReDim) 只认「按最后一个 . 切 owner/member」那一腿, 而
+#   ① With 成员的键是 ".member" (dot == 0) ⇒ 整条不 firing ⇒ 元素档回落 Variant;
+#   ② 类实例 owner 的 UDT 元素档没答案 ⇒ 分配按 variant 24 字节一步、访问按 sizeof(UDT) ⇒ 越界写。
+$dottedDef = 0; $dottedDecl = 0; $dottedOwner = 0; $withDef = 0; $withDecl = 0; $withOwner = 0
+foreach ($f in $beFiles) {
+    $txt = [System.IO.File]::ReadAllText($f.FullName)
+    foreach ($line in (Lines $f.FullName)) {
+        $t = $line.Trim()
+        if ($t.StartsWith("//")) { continue }
+        if ($f.Name -eq "cgen_helpers.inc" -and $t -match '^bool\s+resolveDottedMemberDecl\s*\(') { $dottedDecl++ }
+        if ($f.Name -eq "cgen_expr_array.cpp" -and $t -match '^bool\s+CCodeGen::resolveDottedMemberDecl\s*\(') { $dottedDef++ }
+        if ($f.Name -eq "cgen_helpers.inc" -and $t -match '^bool\s+resolveWithMemberArrayDecl\s*\(') { $withDecl++ }
+        if ($f.Name -eq "cgen_expr_array.cpp" -and $t -match '^bool\s+CCodeGen::resolveWithMemberArrayDecl\s*\(') { $withDef++ }
+    }
+    if ($f.Name -eq "cgen_expr_array.cpp") {
+        $blkD = [regex]::Match($txt, 'bool\s+CCodeGen::resolveDottedMemberDecl[\s\S]*?\r?\n\}')
+        $dottedOwner += [regex]::Matches($blkD.Value, 'resolveMemberArrayDecl\s*\(').Count
+        $blkW = [regex]::Match($txt, 'bool\s+CCodeGen::resolveWithMemberArrayDecl[\s\S]*?\r?\n\}')
+        $withOwner += [regex]::Matches($blkW.Value, 'resolveMemberArrayDecl\s*\(').Count
+    }
+}
+if ($dottedDef -ne 1) { $bad += ("A20b resolveDottedMemberDecl 的定义(cgen_expr_array.cpp) = " + $dottedDef + " (恰好 1；0 = 点号链那一问又散回各处)") }
+if ($dottedDecl -ne 1) { $bad += ("A20b resolveDottedMemberDecl 的声明(cgen_helpers.inc) = " + $dottedDecl + " (恰好 1)") }
+if ($dottedOwner -ne 2) { $bad += ("A20b resolveDottedMemberDecl 的体里问 resolveMemberArrayDecl = " + $dottedOwner + " 处 (恰好 2: UDT owner + 工程类 owner；少一处 = 那一族又回落)") }
+if ($withDef -ne 1) { $bad += ("A20b resolveWithMemberArrayDecl 的定义(cgen_expr_array.cpp) = " + $withDef + " (恰好 1)") }
+if ($withDecl -ne 1) { $bad += ("A20b resolveWithMemberArrayDecl 的声明(cgen_helpers.inc) = " + $withDecl + " (恰好 1)") }
+if ($withOwner -ne 2) { $bad += ("A20b resolveWithMemberArrayDecl 的体里问 resolveMemberArrayDecl = " + $withOwner + " 处 (恰好 2: UDT owner + 工程类 owner)") }
 
 
 # A9: 字面量兜底档的名单恰好三条
@@ -510,8 +543,11 @@ $stiDef  = @([regex]::Matches($vC, '(?m)^vb6_safearray_elemtype\s+vb6_SaElemType
 $stiAll  = @([regex]::Matches($vH + $vC + $vCom, 'vb6_SaElemTypeFromVt\s*\(')).Count
 if ($stiDecl -ne 1) { $bad += ("A17 vb6_SaElemTypeFromVt 的声明(array.h) = " + $stiDecl + " (恰好 1；0 = 反向表还在但没人能问)") }
 if ($stiDef -ne 1)  { $bad += ("A17 vb6_SaElemTypeFromVt 的定义(array.c) = " + $stiDef + " (恰好 1；>1 = 第二张反向表)") }
-if ($stiAll - $stiDecl - $stiDef -ne 2) {
-    $bad += ("A17 问反向表的地方 = " + ($stiAll - $stiDecl - $stiDef) + " 处 (恰好 2：COM 进口那一枚核 1 + 入站那一臂 (§B162) 1；第五十三刀 §B142 把 com.c 那两条进口并成一枚核，所以 3 -> 2。多一处 = 又有人自己抄了一份元素 switch)")
+# 账 #611 第349刀: 多维入站唯一出口 vb6_ComNDArrayIntoSlot 也要把 OLE 元素档换成 C3
+# elemtype, 于是 2 -> 3。这不是「又有人自己抄了一份元素 switch」(那一格由下面
+# $stiHand 单独钉着, 仍须为 0) —— 多的是**问同一张表**的一次, 正是 A17 要的收口。
+if ($stiAll - $stiDecl - $stiDef -ne 3) {
+    $bad += ("A17 问反向表的地方 = " + ($stiAll - $stiDecl - $stiDef) + " 处 (恰好 3：COM 进口那一枚核 1 + 入站那一臂 (§B162) 1 + 账 #611 第349刀 ND 入站唯一出口 1；第五十三刀 §B142 把两条进口并成一枚核所以 3 -> 2。再多一处 = 又有人自己抄了一份元素 switch)")
 }
 $stiHand = @([regex]::Matches($vCom, 'case\s+VT_BSTR\s*:\s*et\s*=')).Count
 if ($stiHand -ne 0) { $bad += ("A17 手抄的元素 switch (case VT_BSTR: et =) = " + $stiHand + " 处 (要求 0：第五十刀把它并进反向表；回来就是两份答案)") }

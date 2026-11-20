@@ -136,6 +136,16 @@ void CCodeGen::visit(ReDimStmt& node) {
         // Fix 180: 裸名回退漏掉的点号链目标 (ReDim h1.Items(0 To 1) 不带 As)
         udtCType = resolveUdtMemberArrayCType(lowerVar);
     }
+    if (udtCType.empty()) {
+        // 账 #613 (第351刀): 点号链 (**类实例** owner / With 成员) 的 UDT 元素档 —— 这一格
+        // 以前没答案 ⇒ 分配按 variant(24 字节) 一步、访问按 sizeof(UDT) 走 ⇒ **越界写**
+        // (实测 `ReDim o.Big(1 To 2)` (Big() As TBig) 与 `With o: ReDim .Big(1 To 2)` 两形)。
+        // 问同一枚 owner 解析出口 (与元素档那一问、访问侧同源)。
+        DottedMemberInfo dmi613;
+        if (resolveDottedMemberDecl(lowerVar, dmi613) && dmi613.decl.isUdt) {
+            udtCType = dmi613.decl.elemCType;
+        }
+    }
     bool isUdtArray = !udtCType.empty();
 
     // Fix 084a/090m: ReDim 目标是否为 Variant 数组 — 逻辑见成员函数 isVariantArrayTarget

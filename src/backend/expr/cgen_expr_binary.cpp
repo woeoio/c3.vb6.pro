@@ -78,7 +78,18 @@ void CCodeGen::visit(BinaryExpr& node) {
             return "BSTR";
         }
         if (inferExprType(*sib) == Vb6Type::String) return "BSTR";
-        return "Long";
+        // C30-11 后记（遗留问题②）: 关系比较的对侧是**数值**时，这一侧按 Double 解封。
+        // 读数（真 VB 引擎 VBScript 作参照，宿主同一套 oleaut32 晚绑定）:
+        //   drv.TotalSize -> VarType=5 (R8), CStr=254467371008
+        //   drv.TotalSize > 0  => True      drv.TotalSize = 0  => False
+        // C3 之前这两行是 False / True —— 因为默认按 "Long" 解封，发的是
+        //   vb6_ComGetIntProp(drv, L"TotalSize") > 0
+        // 而 ComGetIntProp 内部是 VariantChangeType(VT_R8 -> VT_I4)，254 GB 截成 int32 后
+        // 落回 0（本机读数 A5/A7 就是这个形状）。VB6 的拓宽规则是 R8 胜过 I2/Long，
+        // 所以未知成员类型的关系比较按 Double 问，不再猜整数。
+        // 不受影响的两族: ① 算术运算（上面 `!isCmp88` 那句仍答 "Long"，P24-02 口径不变）;
+        // ② 早绑定成员（comGetterExpr 按 typelib 签名选 getter，根本走不到这里）。
+        return "Double";
     };
     // 账 #464 §B164: 拼接站那条判据读的是**左操作数的发码文本**（"左文本里含
     // vb6_BSTR_Concat 子串" ⇒ 发 vb6_BSTR_ConcatFree，而 ConcatFree 会放掉左操作数）
@@ -291,10 +302,31 @@ void CCodeGen::visit(BinaryExpr& node) {
                           + asUnsignedOperand(left,  *node.left,  "uint32_t") + ", "
                           + asUnsignedOperand(right, *node.right, "uint32_t") + ")";
                 return;
-            default:
-                lastExpr_ = "vb6_IntDiv(" + toLongIfVariant(left, node.left.get())
-                          + ", " + toLongIfVariant(right, node.right.get()) + ")";
+            default: {
+                // C30-10 第四十七刀: `\` 的操作数先按 VB 的**取整**口径折成整型。
+                // 真 VB6 SG09 `7.9! \ 2` = 4/Long —— 7.9 先舍到 8（不是截成 7）。
+                // C 的 `(int32_t)` 是向零截断，两者差一格；vb6_FltToLng 内部走 round()。
+                // ⚠ `Mod` 同属这一族但**没量过**（本刀不加，台账里开着），
+                //   不拿未量的口径搭车。
+                auto roundFloatOperand = [&](std::string& c, const Expr* a) {
+                    Vb6Type t = inferExprType(const_cast<Expr&>(*a));
+                    if (t == Vb6Type::Single || t == Vb6Type::Double ||
+                        t == Vb6Type::Currency || t == Vb6Type::Decimal)
+                        c = "vb6_FltToLng(" + c + ")";
+                };
+                std::string lStr = toLongIfVariant(left, node.left.get());
+                std::string rStr = toLongIfVariant(right, node.right.get());
+                roundFloatOperand(lStr, node.left.get());
+                roundFloatOperand(rStr, node.right.get());
+                std::string core = "vb6_IntDiv(" + lStr + ", " + rStr + ")";
+                // C30-10 第四十六刀: 两操作数都是 Integer 档 ⇒ 结果也是 Integer
+                // （真 VB6 F11 `7 \ 2` = 2/Integer）。除法本身仍走既有出口（零除/
+                // 舍入口径不变），外面只套一次 16 位越界检查。
+                if (isNarrowIntExpr(node.left.get()) && isNarrowIntExpr(node.right.get()))
+                    core = "vb6_ChkInt(" + core + ")";
+                lastExpr_ = core;
                 return;
+            }
         }
     }
 
@@ -326,8 +358,14 @@ void CCodeGen::visit(BinaryExpr& node) {
     // 装箱: 已经是 Variant 的直接交出去，其余按 vb6_VariantFromValue 的 _Generic 造一枚槽
     // （它自带 vb6_VARIANT 那档的恒等臂，所以两头都不用知道对方是什么）。
     auto boxVariant86 = [&](const std::string& cExpr, const Expr* astExpr) -> std::string {
-        return isVariantOperand86(cExpr, astExpr)
-                   ? cExpr : "vb6_VariantFromValue(" + cExpr + ")";
+        if (isVariantOperand86(cExpr, astExpr)) return cExpr;
+        // C30-10 第四十六刀: Integer 档的实参进 Variant 算术要装 **VT_I2**，否则
+        // `vb6_VariantFromValue` 的 _Generic 把 int 装成 VT_I4 ⇒ VarAdd 升格成 Long
+        // （真 VB6 F20 `v + 0`（v 装 Integer）= 2/Integer）。与 wrapVariantValue /
+        // boxToVariant 同一柄尺（isNarrowIntExpr）。
+        if (isNarrowIntExpr(astExpr))
+            return "vb6_VariantInt((int16_t)(" + cExpr + "))";
+        return "vb6_VariantFromValue(" + cExpr + ")";
     };
     // 账 #305 §B147: **改道那一问**吃「AST ∪ 文本」，而上面的 isVariantOperand86 刻意维持
     // 「文本 ∪ 已知变量」不变 —— 它还供着 Fix 086 那条提取 (vb6_VariantToLong(...))，那一档
@@ -1161,13 +1199,19 @@ void CCodeGen::visit(BinaryExpr& node) {
                           + asUnsignedOperand(left,  *node.left,  "uint32_t") + ", "
                           + asUnsignedOperand(right, *node.right, "uint32_t") + ")";
                 return;
-            default:
+            default: {
                 // 账 §56.40: (int32_t)(x) 对 vb6_VARIANT 结构体是 C2440
                 // (PhotoDemon Evaluator.c 494: (int32_t)(vb6_Evaluator_Eval(l))) ——
                 // 按上下文拆箱, 与整除那一路 (Fix 084o) 同一枚 toLongIfVariant。
-                lastExpr_ = "vb6_Num_Mod(" + toLongIfVariant(left, node.left.get())
+                std::string core = "vb6_Num_Mod(" + toLongIfVariant(left, node.left.get())
                           + ", " + toLongIfVariant(right, node.right.get()) + ")";
+                // C30-10 第四十六刀: 与 `\` 同一条 —— 两侧 Integer 档 ⇒ 结果 Integer
+                // （真 VB6 F12 `7 Mod 2` = 2/Integer）。
+                if (isNarrowIntExpr(node.left.get()) && isNarrowIntExpr(node.right.get()))
+                    core = "vb6_ChkInt(" + core + ")";
+                lastExpr_ = core;
                 return;
+            }
         }
     }
 
@@ -1191,6 +1235,24 @@ void CCodeGen::visit(BinaryExpr& node) {
     };
     if (relOps092v.count(op)) {
         lastExpr_ = "(-(" + left + " " + op + " " + right + "))";
+    } else if ((node.op == BinaryOp::Add || node.op == BinaryOp::Sub
+                || node.op == BinaryOp::Mul)
+               && isNarrowIntExpr(node.left.get()) && isNarrowIntExpr(node.right.get())) {
+        // C30-10 第四十六刀: VB6 的 Integer ⊕ Integer 仍是 **Integer**，而且**每一步**
+        // 越界即错误 6（真 VB6 F05 30000+30000 / F07 200*200 / F08 30000*2 / F19 同 F05）。
+        // C 侧 int16 参与运算会被提成 int ⇒ 结果悄悄变 Long，`(int16_t)` 硬截又会静默回卷；
+        // 这里显式抬到 int32 算（int16×int16 ≤ 2^30，中间量不会先溢出），再交
+        // vb6_ChkInt 收回 16 位 ——— vb6_OvfChk 越界就 vb6_RaiseError(6)。
+        lastExpr_ = "vb6_ChkInt((int32_t)(" + left + ") " + op + " (int32_t)(" + right + "))";
+    } else if ((node.op == BinaryOp::Add || node.op == BinaryOp::Sub
+                || node.op == BinaryOp::Mul || node.op == BinaryOp::Div)
+               && inferExprType(node) == Vb6Type::Single) {
+        // C30-10 第四十七刀: Single 档的**每一步**都在 32 位浮点里做。真 VB6 读数：
+        //   SG15 `16777216! + 1!` = 1.677722E+07（仍是 16777216，24 位尾数已溢）
+        //   SG16 `1.1! * 3` = 3.3（Single 的 7 位有效数字，不是 3.3000000000000003）
+        // C 侧裸发会把两侧提成 double（整数操作数也提），多出来的尾数就是与 VB6 的差。
+        // 两侧都显式落回 float，结果再收一次 —— 与 vb6_CStrSingle / VT_R4 装籍同一档。
+        lastExpr_ = "(float)((float)(" + left + ") " + op + " (float)(" + right + "))";
     } else {
         lastExpr_ = "(" + left + " " + op + " " + right + ")";
     }

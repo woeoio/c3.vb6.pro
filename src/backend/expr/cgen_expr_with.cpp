@@ -450,7 +450,16 @@ void CCodeGen::visit(WithMemberExpr& node) {
         if (!memSym) {
             memSym = symTab_.lookup(node.memberName);
         }
-        if (memSym) {
+        // Fix 218b: 内置函数名**不是** With 接收者的成员。
+        // 实测 (江西省医保药品查询系统 frmmedicmanage.frm:607):
+        //   With Adodc1.Recordset
+        //       If Not .EOF And Not .BOF Then
+        // `.BOF` 不是内置名 ⇒ 落到下方 COM marker ⇒ vb6_ComGetIntProp(rs, L"BOF")。
+        // 而 `.EOF` 撞上内置函数 eof(filenumber) —— 符号表里它就一条带形参表的
+        // Function 符号 ⇒ 这一支把 With 临时变量当实参，发成
+        // vb6_frmmedicmanage_EOF(_vb6_with_0) ⇒ LNK2019 (模块里没有这个函数)。
+        // VB6 的 `.X` 永远不是“本模块过程 X 带动当前对象”, 所以 builtin 符号一律跳过。
+        if (memSym && !memSym->isBuiltin) {
             if (memSym->kind == SymbolKind::PropertyGet || memSym->kind == SymbolKind::PropertyLet
                 || memSym->kind == SymbolKind::PropertySet || memSym->kind == SymbolKind::Sub
                 || memSym->kind == SymbolKind::Function) {

@@ -54,6 +54,14 @@ static const char* kBstrReturningCalls[] = {
     "vb6_SSTab_GetTabToolTipText",
     // P20-44: OLE 拖放 DataObject 取值 —— 同类 (void* 声明 / BSTR 语义)
     "vb6_oleDD_GetText",
+    // C30-6: MSHFlexGrid / MSFlexGrid 的字符串面 —— 同类 (void* 声明 / BSTR 语义)。
+    // 漏登记的现场：`s = grd.TextMatrix(1,2)` 看着写得进去（Set 端没事），读回来恒空串，
+    // 而 `Debug.Print grd.Text` 也空 —— 像“矩阵根本没存”。
+    "vb6_MshFlexGrid_GetText",
+    "vb6_MshFlexGrid_GetTextMatrix",
+    "vb6_MshFlexGrid_GetTextArray",
+    "vb6_MshFlexGrid_GetFormatString",
+    "vb6_MshFlexGrid_GetDataSource",
 };
 
 bool CCodeGen::isBstrReturningCall(const std::string& expr) {
@@ -93,16 +101,31 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
     // P24-01: 后期绑定COM调用返回VARIANT*, 需解包为BSTR(必须在vb6_BSTR检查之前)
     // P24-02: Variant数组索引返回vb6_VARIANT, 需转BSTR
     if (isVariantSlotElemRead(expr)) {
-        return "vb6_VariantToString(" + expr + ")";
+        // C30-11 第六十二刀: String 目标收 Null ⇒ **94**（VB6 口径）。本函数是
+        // "→ BSTR" 的总口（赋值站 / 实参站 / COM 写均经此），统一改严格出口。
+        return "vb6_CStrStrict(" + expr + ")";
+    }
+    // C30-9 实测（江西省医保药品查询系统 frmlogin.frm:189 `userpow = rs_login.Fields(2)`）:
+    // `Fields(n)` 的生成码是 vb6_ComCallObject(...)，交回的是**对象指针 (IDispatch*)**。
+    // 不带这一档时它会原样落进 vb6_BSTR_Assign(&s, <对象指针>) —— BSTR 拷贝例程把这枚
+    // 指针当字符串读, 栈回溯落在 libvcruntime 的 memcpy/memmove 里, 进程 0xC0000005
+    // (实测 av read target 0xa419f8c / 0x11df000, 每次不同 = 野指针)。
+    // VB6 语义: 对象当字符串用 ⇒ 取默认成员 (DISPID_VALUE) 再转串; 无默认成员或默认
+    // 成员又是对象 ⇒ 空串 (与 vb6_Format 的 dispatch 档同一口径, 只取一层防递归)。
+    // 所有权: vb6_ComGetDefaultValue 交回堆上 VARIANT (可能 NULL ⇒ FromComResult 认),
+    // FromComResult 吃掉那枚堆块, VariantToString = vb6_CStr = vb6_Format 现造新 BSTR。
+    if (expr.compare(0, 18, "vb6_ComCallObject(") == 0) {
+        return "vb6_CStrStrict(vb6_VariantFromComResult(vb6_ComGetDefaultValue("
+               + expr + ")))";
     }
     if (expr.find("vb6_ComCall(") == 0 || expr.find("vb6_ComCallByDispid(") == 0) {
-        return "vb6_VariantToString(vb6_VariantFromComResult(" + expr + "))";
+        return "vb6_CStrStrict(vb6_VariantFromComResult(" + expr + "))";
     }
     // Fix 092w: 链式默认属性访问结果 (vb6_VariantFromComResult(vb6_ComCall(...))) 是
     // vb6_VARIANT — BSTR 上下文需提取为字符串, 否则 C2440 (Demo_Database 506)。
     // 必须放在 vb6_BSTR 子串检查之前 (实参中可能含 vb6_BSTR_FromStr)。
     if (expr.find("vb6_VariantFromComResult(") == 0) {
-        return "vb6_VariantToString(" + expr + ")";
+        return "vb6_CStrStrict(" + expr + ")";
     }
     // P24-01: COM属性返回int/double, 需转BSTR
     // ⚠ 必须是**顶层前缀**判定 (与 Fix 100a / 100d 同一族修法)。原来这里是未锚定的
@@ -180,7 +203,8 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
             size_t p091i = expr.find('(');
             if (p091i != std::string::npos
                 && variantReturnFuncs_->count(expr.substr(0, p091i))) {
-                return "vb6_VariantToString(" + expr + ")";
+                // 第六十二刀: 同一站统一走严格出口（Null → 94）
+                return "vb6_CStrStrict(" + expr + ")";
             }
         }
         // Fix 100b: 原为 `return expr; // 其他vb6_函数假定为BSTR` —— 清单外且无字符串
@@ -265,7 +289,15 @@ std::string CCodeGen::wrapToBSTR(const std::string& expr, Expr& node) {
 std::string CCodeGen::controlPropValueExpr(const std::string& writeFn,
                                            const std::string& valExpr, Expr& valueNode) {
     if (writeFn.find("SetControlText") != std::string::npos
-        || writeFn.find("SetMenuCaption") != std::string::npos) {
+        || writeFn.find("SetMenuCaption") != std::string::npos
+        // 账 (LVStyles FLVStyles.frm Option1_Click): `Frame1.Tag = Index` 的 RHS 是
+        // **Integer**，Tag 在 VB6 里是 String ⇒ 必须 CStr 后传 BSTR。此前 Tag/
+        // ToolTipText 不在本表内，值原样当指针透传，`vb6_SetControlTag(hwnd, 2)`
+        // 里 SysAllocString((BSTR)2) 直接解引用地址 2 → 访问违例，进程无提示退出
+        // (点「Collection Lookup Sort」/「IListItem Hack」两个单选即复现)。
+        // 两支 setter 的第二形参都是 void* bstrText/bstrTag，语义同为 BSTR。
+        || writeFn.find("SetControlTag") != std::string::npos
+        || writeFn.find("SetToolTipText") != std::string::npos) {
         return wrapToBSTR(valExpr, valueNode);
     }
     // Fix <vbeclipse> 2026-10-06: Picture 属性写遇到 Variant 载体实参 (如
@@ -275,6 +307,21 @@ std::string CCodeGen::controlPropValueExpr(const std::string& writeFn,
         if (isVariantSlot(valExpr, nullptr)) {  // P1.3: ast 不可得 (valExpr 为形参, 与 valueNode 对应关系非本地可见)
             return "vb6_VariantToObjectVal(" + valExpr + ")";
         }
+    }
+    // 账 (prjNewAniGif ucGIF.ctl:1633): 晚绑定成员读默认发 vb6_ComGetStringProp
+    // (C 侧返回 wchar_t*, 即 BSTR), 而控件属性写的形参多是数值 —— 指针被当整数
+    // 直接递进去。实测 `tmrGIF.Interval = colFrames(uAniFrame).frameDelay`
+    // (frameDelay 声明 As Integer) 发成
+    //   vb6_SetTimerInterval(hwnd, vb6_ComGetStringProp(...))
+    // ⇒ SetTimer 周期 = BSTR 指针截断值, 定时器此后不再按 10ms 触发, 动画停在
+    //   帧 2 (标签 `帧: 2` 不再前进, 1.2s 内 192 采样点 moved=0)。
+    // 数值 setter 一律过 Variant 解箱 (BSTR 档走 vb6_Val, 与 VB6 的 CLng 同语义);
+    // 字符串落点的 setter 在上面两支已返回, 不受影响。
+    if (valExpr.rfind("vb6_ComGetStringProp(", 0) == 0
+        && writeFn.find("SetControlPicture") == std::string::npos
+        && writeFn.find("SetControlFontName") == std::string::npos
+        && writeFn.find("SetListItem") == std::string::npos) {
+        return "vb6_VariantToLong(vb6_VariantString(" + valExpr + "))";
     }
     // 账 (Outlook2013 frmTimeZone:310/381): Boolean 档控件属性写
     // (`chk.Enabled = IsAutoAdjustDaylight_Exists(tzi)`) 的右值是 **Variant 回值

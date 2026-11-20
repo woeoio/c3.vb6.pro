@@ -39,11 +39,15 @@ static void addFormsSources(MsvcDriverOptions& opts, const std::string& rtlDir) 
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_webview.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_widget.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_widget_prop.c");
+    // C30-8: 跨模块菜单项代理令牌 (菜单不是窗口, 只能靠 (HMENU, id) 令牌把
+    // Enabled/Checked/Caption 换算成 vb6_SetMenu*, 见 src/rtl/core/vb6forms/vb6forms_menuproxy.c)
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_menuproxy.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_shape.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_progress.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_imagelist.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_statusbar.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_sstab.c");
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_tabstrip.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_oledd.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_listview.c");
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_memberobj.c");
@@ -64,6 +68,25 @@ static void addFormsSources(MsvcDriverOptions& opts, const std::string& rtlDir) 
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_winsock.c");
     // ai/029 C29-SL-a: Slider —— 第四处登记，少这行就是全线 LNK2019 找不到 vb6_Slider_*
     opts.sourceFiles.push_back(rtlDir + "/vb6forms_slider.c");
+    // ai/029 C30-UD-a: UpDown —— 同样第四处登记（.rc / rtl_embedded.hpp 的 ID /
+    // rtl_embedded.cpp 的清单 / 这里）。少这一行的症状就是本批实测到的：
+    // 解包与内嵌都对，cl 根本不编它 ⇒ LNK2019 找不到 vb6_UpDown_*。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_updown.c");
+    // ai/029 C30-3: MaskEdBox —— 同样第四处登记（.rc / rtl_embedded.hpp 的 ID /
+    // rtl_embedded.cpp 的清单 / 这里）。少这一行的症状：解包与内嵌都对，cl 根本不编它
+    // ⇒ LNK2019 找不到 vb6_MaskEd_*（与 UpDown 那一刀同型）。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_maskededit.c");
+    // ai/029 C30-4: MSComm —— 同样第四处登记。少这一行的症状：解包与内嵌都对，cl 根本不编它
+    // ⇒ LNK2019 找不到 vb6_MsComm_*。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_mscomm.c");
+    // ai/029 C30-5: Adodc —— 同第四处登记。少这一行 = 解包与内嵌都对、cl 不编它
+    // ⇒ LNK2019 找不到 vb6_Adodc_*。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_adodc.c");
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_grid.c");
+    // ai/029 C30-6: MSHFlexGrid —— 同第四处登记（少这一行 = 解包/内嵌都对，cl 不编它）。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_mshflexgrid.c");
+    // ai/029 C30-10: TeeChart 内置图表 —— 同第六处登记（少这一行 = 解包/内嵌都对，cl 不编它）。
+    opts.sourceFiles.push_back(rtlDir + "/vb6forms_teechart.c");
     // 2026-10-06: Form/Printer 绘图方法家族 (PSet/Line/Circle/Point/Cls) ——
     // **第六处登记**。前五处 (c3rtl.rc / rtl_embedded.hpp 的 ID /
     // rtl_embedded.cpp 的清单 / vb6forms.h 的挂头 / .h 自身) 全对时,
@@ -857,6 +880,11 @@ bool Driver::runLinker(const CompileOptions& options, const std::string& outputD
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_foreach.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_collection.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_collection_enum.c");
+    // C30-10: 内置正则引擎（CreateObject("VBScript.RegExp") 抢先拦截，不加载 vbscript.dll）
+    msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_regexp.c");
+    msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_dict.c");
+    // C30-11: 内置 Scripting.FileSystemObject（默认关，C3_FSO_NATIVE=1 开启）
+    msvcOpts.sourceFiles.push_back(rtlDir + "/vb6com_fso.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6_di_stubs.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6_di_win32_stubs.c");
     msvcOpts.sourceFiles.push_back(rtlDir + "/vb6_di_user32_stubs.c");

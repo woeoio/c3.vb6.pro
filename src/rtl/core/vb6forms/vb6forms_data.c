@@ -451,8 +451,7 @@ void vb6_Data_FieldValue(void* hwnd, const wchar_t* nameOrIndex, wchar_t* out, i
 // 两枚出口从此全仓 0 个调用者 ⇒ 一起撤。Recordset 成员面唯一的路是 vb6_Data_RecordsetObj
 // (下面 20 行) → RTL memberobj 的真 IDispatch；Fields("x") / BOF / RecordCount 都由那张成员名表应答。
 // 按下标取字段值 (Field.Value 的后端) —— 走整行缓存 (SQLGetData 列序约束)
-void vb6_Data_FieldValueByIdx(void* hwnd, int32_t idx, wchar_t* out, int32_t outCap) {
-    Vb6Data* s = dataFromHwnd((HWND)hwnd);
+void vb6_Data_FieldValueByIdx(void* hwnd, int32_t idx, wchar_t* out, int32_t outCap) {    Vb6Data* s = dataFromHwnd((HWND)hwnd);
     out[0] = 0;
     if (!s || !s->open || idx < 1 || idx > s->colCount) return;
     if (s->curRow < 1 || s->curRow > s->rowCount) return;
@@ -485,3 +484,28 @@ void vb6_Data_SetRepositionHandler(void* hwnd, void* fn) {
     if (s) s->repositionFn = (void (*)(void))fn;
 }
 
+
+// C30-5: 任意行取列值（DataGrid 画格子用）。**不动调用者的当前行**：
+// 记下 curRow，FIRST+NEXT 走到目标行读一格，再走回原行。
+// 为什么不用 SQL_FETCH_ABSOLUTE：各 ODBC 驱动支持不齐（ACE Text 驱动实测只
+// 有 FIRST/NEXT/PRIOR 可靠），而这里的行数不大，走法笨但确定。
+void vb6_Data_FieldValueAt(void* hwnd, int32_t row1, int32_t col1, wchar_t* out, int32_t outCap) {
+    Vb6Data* s = dataFromHwnd((HWND)hwnd);
+    int32_t save, i;
+    if (!out || outCap <= 0) return;
+    out[0] = 0;
+    if (!s || !s->open || row1 < 1 || col1 < 1 || col1 > s->colCount) return;
+    save = s->curRow;
+    if (!dataGoto(s, SQL_FETCH_FIRST, 1)) return;
+    for (i = 1; i < row1; i++) {
+        if (!dataGoto(s, SQL_FETCH_NEXT, i + 1)) { dataGoto(s, SQL_FETCH_FIRST, 1); return; }
+    }
+    vb6_Data_FieldValueByIdx(hwnd, col1, out, outCap);
+    // 走回原行：save==0（BOF 之前）就停在第一行；否则 FIRST + (save-1) 个 NEXT。
+    if (save >= 1) {
+        dataGoto(s, SQL_FETCH_FIRST, 1);
+        for (i = 1; i < save; i++) { if (!dataGoto(s, SQL_FETCH_NEXT, i + 1)) break; }
+    } else {
+        dataGoto(s, SQL_FETCH_FIRST, 1);
+    }
+}

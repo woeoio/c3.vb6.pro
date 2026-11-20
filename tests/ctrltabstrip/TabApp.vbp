@@ -1,0 +1,8 @@
+Type=Exe
+Form=TabForm.frm
+Reference=*\G{00020430-0000-0000-C000-000000000046}#2.0#0#..\..\Windows\System32\stdole2.tlb#OLE Automation
+Object={831FDD16-0C5C-11D2-A9FC-0000F8754DA1}#2.0#0; MSCOMCTL.OCX
+Startup="TabForm"
+Name="TabApp"
+Title="TabApp"
+ExeName32="TabApp.exe"

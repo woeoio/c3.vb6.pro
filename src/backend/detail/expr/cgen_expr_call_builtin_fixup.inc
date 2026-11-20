@@ -239,6 +239,25 @@
 
                 }
 
+                // 账 #611 第346刀: **Variant 槽**作首参时, 秩是**运行期**属性 ——
+                // 同一枚 ByRef Variant 形参这一趟装 1D, 下一趟可能装 2D。上面 #2 (按
+                // 调用点上写的维度常量) 与 #3 (按同一过程里别的调用登记的名字) 这两条
+                // 都是「按名字猜秩」, 对槽不成立: ND 版会把 1D 描述符当
+                // vb6_SafeArrayND 读 —— 1D 的 uBound 正好落在 ND 的
+                // bounds[0].cElements 上, 于是 UBound 交回 lBound+uBound-1
+                // (实测 Array("admin","auditor"): 1D uBound=1 ⇒ ND 算 0+1-1=0 ⇒
+                //  循环只走一枚; JSonFast #7 的 roles 只输出 "admin")。
+                // vb6_UBound/vb6_LBound 本身自带秩判别 (vb6_SaIs1D → 1D 字段, 否则
+                // 按 ND 的 dimCount 2..16 走 UBoundND/LBoundND), 所以槽这一档一律走
+                // 派发型。静态 Dim 声明 (#1) 仍然可信, 不在本条覆盖范围内。
+                if (useND && node.positional.size() >= 1 && node.positional[0]
+                    && isVariantSlot(args.empty() ? std::string() : args[0],
+                                     node.positional[0].get())) {
+
+                    useND = false;
+
+                }
+
                 if (useND) {
 
                     // 注册到过程内ND数组集合, 后续 UBound(arr,1) 也会用ND版本
@@ -336,6 +355,11 @@
     static const char* const kOD_Round[]       = { nullptr, "0" };
     static const char* const kOD_Shell[]       = { nullptr, "2" };
     static const char* const kOD_AppActivate[] = { nullptr, "0" };
+    // C30-9: VB6 `SendKeys keys$[, wait]` —— wait 是 Optional，缺省 False。
+    // 真实例程实测（ADO+DataGrid 数据库全操作，5 窗体）：`SendKeys "{Home}+{End}"`
+    // 单参调用被直发进 2 参的 RTL 出口 ⇒ **cl C2198 参数太少**，整份工程编不过
+    // （同一工程共 20 处，占全部错误的 20/25）。
+    static const char* const kOD_SendKeys[]    = { nullptr, "0" };
     static const char* const kOD_GetSetting[]  = { nullptr, nullptr, nullptr, "vb6_BSTR_Empty()" };
     static const char* const kOD_InputBox[]    = { nullptr, "vb6_BSTR_Empty()", "vb6_BSTR_Empty()",
                                                    "0", "0", "vb6_BSTR_Empty()", "0" };
@@ -390,6 +414,7 @@ static const char* const kOD_Randomize[]   = { "0.0" };
         { "vb6_Round",           kOD_Round,       sizeof(kOD_Round) / sizeof(kOD_Round[0]),       false },
         { "vb6_Shell",           kOD_Shell,       sizeof(kOD_Shell) / sizeof(kOD_Shell[0]),       false },
         { "vb6_AppActivate",     kOD_AppActivate, sizeof(kOD_AppActivate) / sizeof(kOD_AppActivate[0]), false },
+        { "vb6_SendKeys",        kOD_SendKeys,    sizeof(kOD_SendKeys) / sizeof(kOD_SendKeys[0]),       false },
         { "vb6_GetSetting",      kOD_GetSetting,  sizeof(kOD_GetSetting) / sizeof(kOD_GetSetting[0]),   false },
         { "vb6_InputBox",        kOD_InputBox,    sizeof(kOD_InputBox) / sizeof(kOD_InputBox[0]),       false },
         { "vb6_NPer",            kOD_NPer,        sizeof(kOD_NPer) / sizeof(kOD_NPer[0]),               false },
@@ -501,6 +526,33 @@ static const char* const kOD_Randomize[]   = { "0.0" };
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
         if (knownByteArrayVars_.count(lower)) {
             callee = "vb6_StrConvFromByteArray";
+        }
+    }
+    // C30-10 第五十刀: `Abs(Single)` 走实参那一档的出口。真 VB6 SG11 `Abs(1.5!)`
+    // = VarType 4 / Single；旧站只有 `vb6_Abs(double)` ⇒ `vb6_VariantFromValue(vb6_Abs(1.5f))`
+    // 按 double 装 VT_R8（实测 5）。只在静态类型确实是 Single 时改道。
+    if (callee == "vb6_Abs" && !node.positional.empty()
+        && inferExprType(*node.positional[0]) == Vb6Type::Single) {
+        callee = "vb6_AbsSng";
+    }
+    // C30-10 第四十九刀: `Str$(Single)` 改道到浮点出口。
+    // vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01/H10/H14 打
+    // "1"/"0"/"-2147483648"，真 VB6 是 " 1.5"/" .00001"/" 3.4E+38"）。
+    //
+    // C30-10 第五十六刀: 分流表按**静态档**铺开（真 VB6 第二轮读数）:
+    //   Single             → vb6_StrSng  (7 位)
+    //   Double / Currency   → vb6_StrDbl  (CStr 口径 + 前导空格；Currency 在 C 侧就是
+    //                         double，CStr 也走 vb6_CStrDbl，两处口径因此一致)
+    //   Boolean             → vb6_StrBool (" True"/" False")，否则被当成 int16 打 " -1"
+    //   其余整数档 (Integer/Long/Byte/SByte/UInteger/ULong) 一律留 vb6_Str(int32_t)。
+    // 只动静态档确实判得出的那几形；判不准的 (Variant 槽/UDT 字段失配) 保持 int32 旧路。
+    if (callee == "vb6_Str" && !node.positional.empty()) {
+        switch (inferExprType(*node.positional[0])) {
+            case Vb6Type::Single:   callee = "vb6_StrSng";  break;
+            case Vb6Type::Double:
+            case Vb6Type::Currency: callee = "vb6_StrDbl";  break;
+            case Vb6Type::Boolean:  callee = "vb6_StrBool"; break;
+            default: break;
         }
     }
     // Fix 140: StrPtr(Byte数组) → 数组数据指针 (而非 SafeArray1D* 结构体指针).

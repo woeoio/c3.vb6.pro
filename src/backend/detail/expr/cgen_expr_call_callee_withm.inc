@@ -2,6 +2,29 @@
 // 由 src/backend/expr/cgen_expr_call.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 1010~1167 行，逐行未改。
 
+    // ---- 账 (prjNewAniGif): `With <工程内 UserControl 实例> : .Move l,t,w,h` ——
+    // .ctl 类自己没有 Move ⇒ 它是**容器 Extender** 方法。此处直接拼成一次完整调用
+    // (四个位置参数自己发, 不走 callee/pendingChainObj 协议 —— 那条路会把首参
+    // 当成 this 拼进去)。缺省参数按 0 处理。
+    if (node.callee && node.callee->kind == ASTNodeKind::WithMemberExpr
+        && Symbol::toLower(static_cast<WithMemberExpr&>(*node.callee).memberName) == "move"
+        && node.named.empty() && !node.positional.empty() && node.positional.size() <= 4
+        && !withObjectVars_.empty() && !withObjectInfoStack_.empty()) {
+        const auto& infoMw = withObjectInfoStack_.back();
+        if (infoMw.kind == WithObjKind::ClassInstance && !infoMw.designerCtrlName.empty()) {
+            std::string amw[4] = { "0", "0", "0", "0" };
+            for (size_t i = 0; i < node.positional.size(); i++) {
+                emitExpr(*node.positional[i]);
+                if (isComMarker_) lastExpr_ = resolveComValue("Double");
+                amw[i] = std::move(lastExpr_);
+            }
+            lastExpr_ = "{ vb6_UCInstMove(vb6_hwnd_" + infoMw.designerCtrlName + ", "
+                      + amw[0] + ", " + amw[1] + ", " + amw[2] + ", " + amw[3]
+                      + "); (void)0; }";
+            return;
+        }
+    }
+
     // ---- Fix 158c: WithMemberExpr callee 带 **空括号** — With 块 UDT 动态/固定
     // 数组成员整体引用 .member() → 裸数组表达式 tempVar->member (不带调用括号).
     // 与下方 Fix 060 Pattern B 相同判定, 但不消费 positional (空).
@@ -158,8 +181,15 @@
             if (memLower152 == "additem") {
                 emitExpr(*node.positional[0]);
                 std::string item152 = std::move(lastExpr_);
-                lastExpr_ = "vb6_AddItem((void*)" + tempVar + ", "
-                          + wrapToBSTR(item152, *node.positional[0])
+                /* 2026-11-15: 第二枚实参是插入位置 (VB6 `AddItem item[, index]`)。
+                 * 旧口径只收 item ⇒ `AddItem "所有帧", 0` 被当成追加, 列表顺序反了。 */
+                std::string idx152 = "-1";
+                if (node.positional.size() > 1) {
+                    emitExpr(*node.positional[1]);
+                    idx152 = std::move(lastExpr_);
+                }
+                lastExpr_ = "vb6_AddItemAt((void*)" + tempVar + ", "
+                          + wrapToBSTR(item152, *node.positional[0]) + ", " + idx152
                           + ")  /* With ctrl .AddItem */";
                 return;
             }
@@ -314,6 +344,92 @@
         }
     }
 
+    // C30-5: Adodc / DataGrid 的方法面。这两枚都是 C3 自己实现的控件，方法不走 COM，
+    // 也不走 vb6_Data_Self 那条已撤的透传路 —— 直接发 RTL 函数。
+    // Refresh 在 VB6 里是“真重新开”：Adodc 那条会重建连接+游标（翻译连接串），
+    // DataGrid 那条只重读行列数并重绘。
+    if (isComMarker_) {
+        auto itCtrl = knownFormControls_.find(comObjExpr_);
+        if (itCtrl != knownFormControls_.end() &&
+            (itCtrl->second == FrmControlType::Adodc || itCtrl->second == FrmControlType::DataGrid
+             || itCtrl->second == FrmControlType::MshFlexGrid)) {
+            isComMarker_ = false;
+            std::string method = std::move(comMemberName_);
+            std::string ctrlName = cIdent(knownFormControlOriginalNames_.count(comObjExpr_) ? knownFormControlOriginalNames_[comObjExpr_] : comObjExpr_);
+            FrmControlType ct = itCtrl->second;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            // C30-6: MSHFlexGrid —— 字符串矩阵的方法面（AddItem/RemoveItem/Clear/ClearStructure/Refresh）。
+            // 与 ListBox 那组同一个道理：不拦就发成 vb6_ComCall(hwnd, …)，静默无效。
+            if (ct == FrmControlType::MshFlexGrid) {
+                std::string hw = "vb6_hwnd_" + ctrlName;
+                if (method == "refresh") {
+                    lastExpr_ = "vb6_MshFlexGrid_Refresh((void*)" + hw + ")";
+                    return;
+                }
+                if (method == "clear") {
+                    c_.emitLine("vb6_MshFlexGrid_Clear((void*)" + hw + ");  /* MSHFlexGrid.Clear */");
+                    lastExpr_ = "0";
+                    return;
+                }
+                if (method == "clearstructure") {
+                    c_.emitLine("vb6_MshFlexGrid_ClearStructure((void*)" + hw + ");  /* MSHFlexGrid.ClearStructure */");
+                    lastExpr_ = "0";
+                    return;
+                }
+                if (method == "additem") {
+                    std::string itemArg = "0";
+                    if (!node.positional.empty()) {
+                        emitExpr(*node.positional[0]);
+                        if (isComMarker_) {   // 实参是 COM 属性读 ⇒ 直接取字符串属性
+                            isComMarker_ = false;
+                            isEarlyBoundCom_ = false;
+                            earlyBoundSym_ = nullptr;
+                            std::string objM = std::move(comObjExpr_);
+                            std::string memM = std::move(comMemberName_);
+                            comObjExpr_.clear();
+                            comMemberName_.clear();
+                            itemArg = "vb6_ComGetStringProp(" + objM + ", L\"" + memM + "\")";
+                        } else {
+                            itemArg = std::move(lastExpr_);
+                        }
+                    }
+                    c_.emitLine("vb6_MshFlexGrid_AddItem((void*)" + hw + ", " + itemArg + ");  /* MSHFlexGrid.AddItem */");
+                    lastExpr_ = "0";
+                    return;
+                }
+                if (method == "removeitem") {
+                    std::string idxArg = "0";
+                    if (!node.positional.empty()) {
+                        emitExpr(*node.positional[0]);
+                        idxArg = std::move(lastExpr_);
+                    }
+                    c_.emitLine("vb6_MshFlexGrid_RemoveItem((void*)" + hw + ", " + idxArg + ");  /* MSHFlexGrid.RemoveItem */");
+                    lastExpr_ = "0";
+                    return;
+                }
+            }
+            if (ct == FrmControlType::Adodc && method == "refresh") {
+                lastExpr_ = "(void)vb6_Adodc_Refresh((void*)vb6_hwnd_" + ctrlName + ")";
+                return;
+            }
+            if (ct == FrmControlType::DataGrid) {
+                if (method == "refresh") {
+                    lastExpr_ = "vb6_DataGrid_Refresh((void*)vb6_hwnd_" + ctrlName + ")";
+                    return;
+                }
+                if (method == "rebind") {
+                    lastExpr_ = "vb6_DataGrid_ReBind((void*)vb6_hwnd_" + ctrlName + ")";
+                    return;
+                }
+                if (method == "clearselrows") {
+                    lastExpr_ = "vb6_DataGrid_ClearSelRows((void*)vb6_hwnd_" + ctrlName + ")";
+                    return;
+                }
+            }
+        }
+    }
+
     // 账 #278 §B124: 这里原来有一格 `vb6_Data_Self(` 透传形态的直译 (Refresh/Move*/Fields)，
     // 与 cgen_expr_call_com_bind.inc / cgen_util_com.cpp / cgen_call.cpp 里那三格同属一代：
     // 那个前缀今天没有任何发射者 ⇒ 恒假，已随九形探针量过并撤掉。recordset 一律走
@@ -331,6 +447,10 @@
             comMemberName_.clear();
             if (method == "additem") {
                 std::string itemArg = "0";
+                /* 2026-11-15: `AddItem item[, index]` —— 第二枚实参是插入位置。
+                 * 旧口径丢掉它, `AddItem "所有帧", 0` 落到列表末尾, 而随后的
+                 * `ListIndex = 0` 选中的是第一条帧 —— 默认显示值跟着错。 */
+                std::string idxArg = "-1";
                 if (!node.positional.empty()) {
                     emitExpr(*node.positional[0]);
                     // Fix 143: 实参是 COM 属性读 (cboThemes.AddItem iTheme.Name) —
@@ -354,7 +474,13 @@
                         itemArg = std::move(lastExpr_);
                     }
                 }
-                c_.emitLine("vb6_AddItem((void*)vb6_hwnd_" + ctrlName + ", " + itemArg + ");  /* ListBox.AddItem */");
+                /* 求值顺序与 VB 一致: 先 item 后 index (两者都可能带副作用,
+                 * 如 `AddItem "帧 " & fNr, nPos`)。 */
+                if (node.positional.size() > 1) {
+                    emitExpr(*node.positional[1]);
+                    idxArg = std::move(lastExpr_);
+                }
+                c_.emitLine("vb6_AddItemAt((void*)vb6_hwnd_" + ctrlName + ", " + itemArg + ", " + idxArg + ");  /* ListBox.AddItem */");
                 lastExpr_ = "0";
                 return;
             } else if (method == "removeitem") {

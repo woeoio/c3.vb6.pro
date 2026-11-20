@@ -26,7 +26,9 @@ std::string simpleTypeRefName(const ASTNode* typeRef) {
 // 后果: `Optional ByVal EventMask As ... = ucsSfdAll` 的缺省值被写成 6,
 // WSAAsyncSelect 拿不到 FD_ACCEPT → 服务器永不 accept 连接.
 // 运算语义与后端 CCodeGen::tryEvalConstInt 保持一致 ('/' 为浮点除法故不求值).
-static bool evalEnumMemberConstInt(ASTNode* expr, int64_t& result) {
+static bool evalEnumMemberConstInt(ASTNode* expr, int64_t& result, const Scope* scope = nullptr,
+                                   const SymbolTable* st = nullptr,
+                                   const std::map<std::string, int64_t>* localConsts = nullptr) {
     if (!expr) return false;
 
     switch (expr->kind) {
@@ -40,10 +42,41 @@ static bool evalEnumMemberConstInt(ASTNode* expr, int64_t& result) {
         default: return false;   // 浮点/字符串等不参与整数折叠
         }
     }
+    // 账 #612: 枚举成员值里引用 **模块级 Const / 其它枚举成员** 时必须真求值。
+    // 例: `Private Const LVS_EX_FULLROWSELECT = &H20` 之后
+    //     `Public Enum LVStylesEx : FullRowSelect = LVS_EX_FULLROWSELECT`
+    // 原先走不到这里 → 求值失败 → 回落「上一成员 + 1」，整块枚举静默变成 0,1,2,3,4,5，
+    // 于是 LVStyles 勾 HighlightRow(`FullRowSelect`) 实际只置了 1(GridLines) 的位，
+    // 行选中永远不生效。
+    case ASTNodeKind::IdentifierExpr: {
+        auto* id = static_cast<IdentifierExpr*>(expr);
+        if (scope) {
+            if (const Symbol* s = scope->lookup(id->name)) {
+                if (s->hasConstValue) { result = s->constIntValue; return true; }
+            }
+            // 方括号转义引用 `[sGoogle]` ↔ 声明 `sGoogle`: 与声明侧同口径地两头都试。
+            const std::string bracketed = "[" + id->name + "]";
+            if (const Symbol* s2 = scope->lookup(bracketed)) {
+                if (s2->hasConstValue) { result = s2->constIntValue; return true; }
+            }
+        }
+        // 跨模块 (Fix 197 预注册) 那一趟没有作用域链: 先查调用方给的常量表 (定义模块里
+        // 的 Private Const, 此时还没进符号表), 再退到模块级符号表。
+        if (localConsts) {
+            auto it = localConsts->find(Symbol::toLower(id->name));
+            if (it != localConsts->end()) { result = it->second; return true; }
+        }
+        if (st) {
+            if (const Symbol* s3 = st->lookupModule(Symbol::toLower(id->name))) {
+                if (s3->hasConstValue) { result = s3->constIntValue; return true; }
+            }
+        }
+        return false;
+    }
     case ASTNodeKind::UnaryExpr: {
         auto* unary = static_cast<UnaryExpr*>(expr);
         int64_t v = 0;
-        if (!evalEnumMemberConstInt(unary->operand.get(), v)) return false;
+        if (!evalEnumMemberConstInt(unary->operand.get(), v, scope, st, localConsts)) return false;
         switch (unary->op) {
         case UnaryOp::Negate: result = -v;  return true;
         case UnaryOp::Not:    result = ~v;  return true;
@@ -53,8 +86,8 @@ static bool evalEnumMemberConstInt(ASTNode* expr, int64_t& result) {
     case ASTNodeKind::BinaryExpr: {
         auto* bin = static_cast<BinaryExpr*>(expr);
         int64_t l = 0, r = 0;
-        if (!evalEnumMemberConstInt(bin->left.get(), l)) return false;
-        if (!evalEnumMemberConstInt(bin->right.get(), r)) return false;
+        if (!evalEnumMemberConstInt(bin->left.get(), l, scope, st, localConsts)) return false;
+        if (!evalEnumMemberConstInt(bin->right.get(), r, scope, st, localConsts)) return false;
         switch (bin->op) {
         case BinaryOp::Add:    result = l + r; return true;
         case BinaryOp::Sub:    result = l - r; return true;
@@ -170,7 +203,7 @@ void SemanticAnalyzer::visit(EnumDecl& node) {
                 // 求值失败才沿用「上一成员值 + 1」的 VB6 递增语义.
                 // Fix 082 合并决议: LongPtr (^ 后缀) 字面量纳入求值器.
                 int64_t evaluated = 0;
-                if (evalEnumMemberConstInt(member->value.get(), evaluated)) {
+                if (evalEnumMemberConstInt(member->value.get(), evaluated, symTab_.currentScope())) {
                     nextValue = evaluated;
                 }
             }
@@ -194,6 +227,32 @@ void SemanticAnalyzer::visit(EnumDecl& node) {
             }
 
             symTab_.define(std::move(memberSym));
+        }
+    } else if (pass_ == 2) {
+        // 账 #612: pass 1 时模块级 Const 不一定已进表 (声明顺序 / 子趟顺序),
+        // 于是 `FullRowSelect = LVS_EX_FULLROWSELECT` 求值失败 → 回落到「上一成员+1」的
+        // 序号。pass 2 符号已齐, 重算一遍直接覆写成员符号的常量值。
+        int64_t nextValue = 0;
+        for (auto& member : node.members) {
+            if (member->value) {
+                int64_t evaluated = 0;
+                if (evalEnumMemberConstInt(member->value.get(), evaluated, symTab_.currentScope())) {
+                    nextValue = evaluated;
+                }
+            }
+            if (Symbol* s = symTab_.lookup(member->name)) {
+                s->hasConstValue = true;
+                s->constType = Vb6Type::Long;
+                s->constIntValue = nextValue;
+                const std::string raw = member->name;
+                if (raw.size() >= 2 && raw.front() == '[' && raw.back() == ']') {
+                    if (Symbol* a = symTab_.lookup(raw.substr(1, raw.size() - 2))) {
+                        a->hasConstValue = true;
+                        a->constIntValue = nextValue;
+                    }
+                }
+            }
+            nextValue++;
         }
     }
 }
@@ -312,8 +371,10 @@ void SemanticAnalyzer::visit(ParameterDecl& node) {
 
 // Fix 197: 对外入口 — Driver 在 Pass 1 前预注册跨模块 Public 枚举成员时
 // 复用同一求值器 (evalOptionalDefault 查符号表发生在 Pass 1 期间).
-bool SemanticAnalyzer::evalEnumConstIntForDriver(ASTNode* expr, int64_t& result) {
-    return evalEnumMemberConstInt(expr, result);
+bool SemanticAnalyzer::evalEnumConstIntForDriver(ASTNode* expr, int64_t& result,
+                                                const SymbolTable* st,
+                                                const std::map<std::string, int64_t>* localConsts) {
+    return evalEnumMemberConstInt(expr, result, nullptr, st, localConsts);
 }
 
 } // namespace vb6c3

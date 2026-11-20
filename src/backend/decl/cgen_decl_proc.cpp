@@ -76,6 +76,7 @@ void CCodeGen::visit(SubDecl& node) {
     knownBoolVars_.clear();     // ai/022 W1
     knownByteVars_.clear();     // 账 #123
     knownIntVars_.clear();       // ai/009 5.10
+    knownIntConsts_.clear();     // C30-10 第三十四刀: Const 的 Integer 档名单 (per-过程)
     knownNarrowIntVars_.clear(); // ai/032: SByte/UInteger/ULong/ULongLong 专属表
     knownLongVars_.clear();
     knownLongPtrVars_.clear();  // Bug #2 fix: 也清空LongPtr集合
@@ -87,7 +88,9 @@ void CCodeGen::visit(SubDecl& node) {
     knownLocalVars_.clear();
     procNonArrayLocalVars_.clear();
     knownNewVars_.clear();
-    knownNewVars_.insert(moduleNewVars_.begin(), moduleNewVars_.end());  // Fix 090v
+    knownNewVars_.insert(moduleNewVars_.begin(), moduleNewVars_.end());
+    // C30-10 第三十刀: 模块/类级的 As New <外部 ProgID> 惰性表同样带进过程作用域。
+    knownNewProgIdVars_.insert(moduleNewProgIdVars_.begin(), moduleNewProgIdVars_.end());  // Fix 090v
     // Fix 091m: 回灌模块级 Variant 变量 (knownVariantVars_ 已被 clear)
     knownVariantVars_.insert(moduleVariantVars_.begin(), moduleVariantVars_.end());
     knownByRefParams_.clear();  // Fix 081g
@@ -119,6 +122,8 @@ void CCodeGen::visit(SubDecl& node) {
     knownLongVars_.insert(classLongMembers_.begin(), classLongMembers_.end());
     // 账 #305 §B183: Integer 类字段的窄档名单也要在过程入口恢复一份，否则裸名成员左值问「有多窄」只查到放宽档。
     knownIntVars_.insert(classIntMembers_.begin(), classIntMembers_.end());
+    // C30-10 第三十四刀: 模块级 Const 的 Integer 档回灌 (clear 之后必须重新种上)
+    knownIntConsts_.insert(moduleIntConsts_.begin(), moduleIntConsts_.end());
     // Fix 010n: 恢复类模块UDT成员变量 (knownUdtVars_被clear后需要从classUdtMembers_恢复)
     knownUdtVars_.insert(classUdtMembers_.begin(), classUdtMembers_.end());
     // Fix 010n (扩展): 恢复普通模块模块级UDT变量 (同 classUdtMembers_ 机制)

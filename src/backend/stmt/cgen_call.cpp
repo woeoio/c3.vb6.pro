@@ -287,6 +287,17 @@ void CCodeGen::visit(CallStmt& node) {
                                     // 改前 LongLong 局部不在任何 known 表里 (类型答 Variant),
                                     // 于是这条路也走不到; 登记之后必须补上这一档。
                                     c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrLongLong(" + val + "));");
+                                } else if (cExprIsBareComResult(val)) {
+                                    // C30-11 后记: `Debug.Print "标签"; <晚绑定调用>; "]"` ——
+                                    // 裸晚绑定出口交回的是**堆上 VARIANT\*** (void*), 以前落进
+                                    // DebugWriteLong((int32_t)(...)) 把那个指针当整数打
+                                    // (实测打出 1503978576 这种地址), VB6 打的是值的字符串形。
+                                    // 同一份源码里 `"标签"; v; "]"` (v 是 Variant 变量) 一直是对的。
+                                    c_.emitLine("vb6_DebugWriteBSTR(vb6_VariantToString(vb6_VariantFromComResult(" + val + ")));");
+                                } else if (val.compare(0, 17, "vb6_ComCallBool(") == 0) {
+                                    // C30-11 后记: 前期绑定 Boolean 方法返回 (-1/0 int32) ——
+                                    // VB6 打 True/False, 不是 -1/0。
+                                    c_.emitLine("vb6_DebugWriteBSTR(vb6_CStrBool(" + val + "));");
                                 } else {
                                     // 整数/布尔值, 用DebugWriteLong输出
                                     c_.emitLine("vb6_DebugWriteLong((int32_t)(" + val + "));");
@@ -380,6 +391,25 @@ void CCodeGen::visit(CallStmt& node) {
                 comMemberName_.clear();
                 c_.emitLine(fnSb + "((void*)" + sbHwnd + ");");
                 return;
+            }
+            // C30-2: 同款 —— `TabStrip1.Tabs.Clear` **无实参**，也在这条语句路收尾。
+            // 带实参的 Add/Remove 走 cgen_expr_call_com_bind.inc 那一条；只挂一头就棳回
+            // `vb6_ComCall(vb6_ComGetObjectProp(…, L"Tabs"), L"Clear", NULL, 0)`
+            // —— 拿 HWND 当 IDispatch，编得过、跑起来真弹 438
+            // （tests/ctrltabstrip 的 TS10 就是那条红的证人：exit=438，TS10-clear 一行未出）。
+            {
+                // 句柄文本两种接收者都认（单枚 / 控件数组元素）—— 与 Add/Remove 同一条出口
+                std::string tsHwnd = tabStripHwndTextOfExpr(comObjExpr_);
+                std::string mTs = Symbol::toLower(comMemberName_);
+                std::string fnTs = tsHwnd != ""
+                    ? controlZeroArgMethod(FrmControlType::TabStrip, mTs) : std::string();
+                if (!fnTs.empty()) {
+                    comObjExpr_.clear();
+                    comMemberName_.clear();
+                    c_.emitLine(fnTs + "((void*)" + tsHwnd + ");"
+                                "  /* TabStrip.Tabs." + mTs + " (原生 tab 控件) */");
+                    return;
+                }
             }
             // D6 / C29-9: 无括号的 `CommonDialog1.ShowOpen` —— 与 List1.Clear 同一条
             // 语句路。不接这里的话会落到下面 `vb6_ComCall(dl1, L"ShowOpen")`：既编不过
@@ -844,6 +874,49 @@ void CCodeGen::visit(CallStmt& node) {
                         if (anyPad090g) {
                             callExpr = callExpr.substr(0, p090g) + "("
                                        + fullArg090g + ")";
+                        }
+                    }
+                }
+            }
+        }
+
+        // C30-5: Adodc / DataGrid 的方法**不是 COM 方法**（这两枚是 C3 自己实现的控件），
+        // 但 `Adodc1.Refresh` 这类无参调用走到这里时已经被拼成
+        // `vb6_ComCall(vb6_hwnd_X, L"Refresh", NULL, 0)` —— 在 HWND 上做 IDispatch 调用，
+        // 实测后果：一声不响（Adodc 的 Opened=0 / 行数=0；DataGrid 不重画）。
+        // 只就地换这三个名字，且**控件类对得上**才换；其余原样放行。
+        {
+            const std::string kHd = "vb6_ComCall(vb6_hwnd_";
+            if (callExpr.compare(0, kHd.size(), kHd) == 0) {
+                size_t nameEnd = callExpr.find(", L\"", kHd.size());
+                if (nameEnd != std::string::npos) {
+                    size_t methStart = nameEnd + 4;                 // 跳过 `, L"`
+                    size_t methEnd = callExpr.find('"', methStart);
+                    if (methEnd != std::string::npos) {
+                        std::string ctrlNm = callExpr.substr(kHd.size(), nameEnd - kHd.size());
+                        std::string meth = callExpr.substr(methStart, methEnd - methStart);
+                        std::string ctrlLow = ctrlNm;
+                        std::transform(ctrlLow.begin(), ctrlLow.end(), ctrlLow.begin(), ::tolower);
+                        auto ctIt = knownFormControls_.find(ctrlLow);
+                        if (ctIt != knownFormControls_.end()) {
+                            std::string rtlFn;
+                            if (ctIt->second == FrmControlType::Adodc && meth == "Refresh")
+                                rtlFn = "(void)vb6_Adodc_Refresh";
+                            else if (ctIt->second == FrmControlType::DataGrid) {
+                                if (meth == "Refresh")            rtlFn = "vb6_DataGrid_Refresh";
+                                else if (meth == "ReBind")        rtlFn = "vb6_DataGrid_ReBind";
+                                else if (meth == "ClearSelRows")   rtlFn = "vb6_DataGrid_ClearSelRows";
+                            }
+                            // C30-6: MSHFlexGrid —— 同样的三条无参方法（Clear/ClearStructure 也是
+                            // 语句形态，VB6 里不写括号）。
+                            else if (ctIt->second == FrmControlType::MshFlexGrid) {
+                                if (meth == "Refresh")          rtlFn = "vb6_MshFlexGrid_Refresh";
+                                else if (meth == "Clear")        rtlFn = "vb6_MshFlexGrid_Clear";
+                                else if (meth == "ClearStructure") rtlFn = "vb6_MshFlexGrid_ClearStructure";
+                            }
+                            if (!rtlFn.empty()) {
+                                callExpr = rtlFn + "((void*)vb6_hwnd_" + ctrlNm + ")";
+                            }
                         }
                     }
                 }

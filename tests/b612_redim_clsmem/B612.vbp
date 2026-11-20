@@ -1,0 +1,5 @@
+Type=Exe
+Class=K612; K612.cls
+Module=Main; Main.bas
+Startup="Sub Main"
+ExeName32="B612.exe"

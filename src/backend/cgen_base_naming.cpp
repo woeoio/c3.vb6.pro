@@ -319,6 +319,22 @@ std::string CCodeGen::resolveArrayTargetIdent(const std::string& varName) {
             }
             return objName + "." + expandMemberPath(memberName);
         }
+        // 账 #612: owner 是本工程类实例 (局部 Dim / 类形参 / 模块级) 时, 成员左值问同一位主人
+        // classFieldReadExpr —— 元素访问侧 (Pattern C/D) 与整数组读早就这么发 (`o->Items`
+        // 带那条成员读尾注), 而这一枚以前只有 UDT 腿 ⇒
+        // `ReDim o.Items(1 To 4)` / `Erase o.Items` 掉进 cIdent 折成从没声明的 `o_Items`
+        // (C2065, 整台 exe 编不出来; 元素档那一半 §B190 已接对, 缺的只是左值)。
+        // 档位与秩都问 resolveMemberArrayDecl (与分配侧/访问侧同一枚出口), 只认**一维动态**成员:
+        // 多维类字段在结构体里是 vb6_SafeArrayND*, 而 cgen_redim 的 ND 两支按「1D 指针当载体」
+        // 强转 ⇒ 那一形今天仍答不上, 认不出就不猜 (维持原回落, 不新造 C2440)。
+        auto kc = knownClassVars_.find(objLower);
+        if (kc != knownClassVars_.end() && memberName.find('.') == std::string::npos) {
+            MemberArrayDecl mad;
+            if (resolveMemberArrayDecl(std::string(), kc->second, memberName, mad)
+                && mad.ok && mad.isDynamic && mad.arrayRank <= 1) {
+                return classFieldReadExpr(objName, kc->second, memberName, false, "class var");
+            }
+        }
     }
     return cIdent(varName);
 }
@@ -374,6 +390,16 @@ Vb6Type CCodeGen::constIdentType(const std::string& name) const {
 std::string CCodeGen::wrapConstArgForByRef(const std::string& argVal, Vb6Type paramVb6Type) const {
     if (paramVb6Type == Vb6Type::Variant || paramVb6Type == Vb6Type::Empty ||
         paramVb6Type == Vb6Type::Null || paramVb6Type == Vb6Type::Object) {
+        // 账 #611: Null / Empty 常量的 C 表达 (`vb6_VariantNull()` / `vb6_VariantEmpty()`)
+        // 已经是**整枚 vb6_VARIANT 值**, 不是标量常量。constIdentType 认不出它们,
+        // 原来落 default 发 `.vt=VT_I4, .lVal=(int32_t)(vb6_VariantNull())` ⇒
+        // cl C2440 (vb6_VARIANT 无法转 int32_t), 语义上还把 Null 变成了 Long。
+        // 例: JSonWrite `writer.Add "optionalTag", Null` (Add 的 vValue 是 ByRef Variant)。
+        // 用数组复合字面量取首元素地址, 把 RTL 构造出的那枚 VARIANT 原样交给
+        // ByRef 槽, 不猜 vb6_vtNull / vb6_vtEmpty 的枚举值。
+        if (argVal == "vb6_VariantNull()" || argVal == "vb6_VariantEmpty()") {
+            return "&((vb6_VARIANT[]){" + argVal + "})[0]";
+        }
         switch (constIdentType(argVal)) {
             case Vb6Type::String:
                 return "(&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=" + argVal + "})";

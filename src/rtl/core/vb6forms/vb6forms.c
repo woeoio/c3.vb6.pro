@@ -585,12 +585,20 @@ static LRESULT CALLBACK vb6_GroupBoxSubclassProc(HWND hwnd, UINT msg, WPARAM wp,
                 TEXTMETRICW tm; ZeroMemory(&tm, sizeof(tm));
                 GetTextMetricsW(hdc, &tm);
                 int th = tm.tmHeight + 2;
-                // 标题起点: 经典 groupbox 标题缩进 ~7px (含 3px 蚀刻间距)。
-                int tx = 7;
+                // 标题起点: 经典 groupbox 标题缩进 ~8px (含 3px 蚀刻间距)。
+                //
+                // 账 (LVStyles Frame1 "Extended ListView Styles" 末尾看起来多一个冒号):
+                // 那不是字面冒号 —— 把 Caption 换成 "IIIII" 只剩五根竖杠, 换回原串又"冒出"
+                // 两点。真相是**两遍绘制没对齐**: BUTTON 自己画在 x=8, 本覆盖层画在 x=7,
+                // 于是原绘文字的最右 1px 落在擦除带 (`tx+sz.cx+1`) 之外; 末字形是 's' 时
+                // 那 1px 竖切正好只余上下两段弧 ⇒ 看着就是个冒号。
+                // 所以 tx 必须取**系统组框的同一格** (8), 两遍绘制才逐像素重合;
+                // 擦除右界再 +3 吃掉末端抗锯齿与标题白底的尾巴。
+                int tx = 8;
                 SIZE sz = {0, 0};
                 GetTextExtentPoint32W(hdc, cap, lstrlenW(cap), &sz);
                 COLORREF bg = vb6_GBoxTitleBg(hwnd);
-                RECT trc = { tx - 1, 0, tx + sz.cx + 1, th };
+                RECT trc = { tx - 2, 0, tx + sz.cx + 3, th };
                 // 先擦掉白色底 + 白底上画的文字, 再以灰底重画文字。
                 HBRUSH br = CreateSolidBrush(bg);
                 if (br) { FillRect(hdc, &trc, br); DeleteObject(br); }
@@ -617,6 +625,10 @@ static LRESULT CALLBACK vb6_GroupBoxSubclassProc(HWND hwnd, UINT msg, WPARAM wp,
         }
         return 0;
     }
+    // 注: 这里**不要**把子控件的 WM_COMMAND 上转窗体。曾试过转一道来救
+    // LVStyles 的 Check1_Click, 实测会与既有的窗体派发路径重叠 → 事件发两次
+    // (btnfocus: BF-in=2/2、BF-both=N)。真因是 ListView 槽参数取 hWnd 未解引用
+    // (见 cgen_expr_member_form_builtin.inc), 与本处无关。
     return orig ? CallWindowProcW(orig, hwnd, msg, wp, lp)
                 : DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -1078,6 +1090,10 @@ int vb6_MessageLoop(void) {
     extern int vb6_uc_timersStarted;  // czUI fix (定义在 vb6forms_uc.c)
     vb6_uc_timersStarted = 1;
     extern void vb6_Forms_LoopDepth(int delta);   // Fix 188 (定义在 vb6rtl_system.c)
+    /* C30-9: 「卸载过、且此刻一个窗体不剩」的判据。以前这一判据是 Unregister 当场
+     * PostQuitMessage，而 quit 投出去就撤不回 —— `Unload Me` 紧跟 `Main.Show` 的登录
+     * 转场会被判死 (退出码 0、主窗体刚建完就没了)。现在改成泵顶每轮重问。 */
+    extern int vb6_Forms_QuitPending(void);
     vb6_Forms_LoopDepth(1);
     if (GetEnvironmentVariableA("C3_COM_TRACE", NULL, 0) > 0) {
         fprintf(stderr, "[C3_FSM] MessageLoop enter\n"); fflush(stderr);
@@ -1092,7 +1108,7 @@ int vb6_MessageLoop(void) {
         int oleFired44 = 0;
         if (GetEnvironmentVariableW(L"C3_OLEDDB_TEST", oleFlag44, 8) > 0) {
             extern void vb6_oleDD_FireTestDropAtRegistered(void);
-            while (GetMessage(&msg, NULL, 0, 0)) {
+            while (!vb6_Forms_QuitPending() && GetMessage(&msg, NULL, 0, 0)) {
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
                 if (!oleFired44) {
@@ -1112,7 +1128,7 @@ int vb6_MessageLoop(void) {
             int useDlgMsgMain = (GetEnvironmentVariableW(L"C3_OCX_NO_DLGMSG", NULL, 0) <= 0);
             /* 账 #163/#168：VK_TAB 由自研导航器接管（关掉 = C3_OCX_NO_TABNAV=1，退回旧行为做 A/B）。 */
             int useTabNavMain = (GetEnvironmentVariableW(L"C3_OCX_NO_TABNAV", NULL, 0) <= 0);
-            while (GetMessage(&msg, NULL, 0, 0)) {
+            while (!vb6_Forms_QuitPending() && GetMessage(&msg, NULL, 0, 0)) {
                 // P24-Timer: WM_TIMER现在由WndProc分发, 消息循环不再拦截
                 if (useTabNavMain && vb6_TabNavKey(&msg)) continue;
                 // 账 #83(b)：主泵也接管对话框式键盘导航
@@ -1124,6 +1140,8 @@ int vb6_MessageLoop(void) {
             }
         }
     }
+    /* 泵因退出挂起而结束时 msg 没被赋值过 —— 不可把栈上垃圾当退出码交回去。 */
+    if (vb6_Forms_QuitPending()) { msg.message = WM_QUIT; msg.wParam = 0; }
     vb6_Forms_LoopDepth(-1);   // Fix 188
     if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0)
         fprintf(stderr, "[C3_MODAL] 主消息循环结束: msg=0x%04X hwnd=%p\n",

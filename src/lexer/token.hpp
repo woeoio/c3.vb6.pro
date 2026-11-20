@@ -357,6 +357,20 @@ struct Token {
         double doubleValue;
     };
 
+    // C30-10 第三十三刀: 「这一枚进制字面量在 VB6 里是 **Integer** 档」那一问的载体。
+    // 只由 lexer 的 makeRadixToken 在「无后缀 `&H` 且位宽 <= 0xFFFF」那一形上置位
+    // (那一档的值已被 16 位补码折叠, 见 lexer_number.cpp 的 radixTierOf)。
+    // ⚠ `&O`/`&B` 与带 `%`/`&`/`^` 后缀的写法一律不置位 —— 真组件只对 `&H` 量到读数,
+    //   其余维持今天的档 (台账 ai/039 §11.12 记着这处留白)。
+    // ⚠ 这是一条**类型身份**标记, 不是捷径: 值早在第313刀就对了, 缺的只是装箱那一步的档。
+    bool radixInt16 = false;
+
+    // C30-10 第四十七刀: 「这枚浮点字面量带 `!` 后缀 ⇒ 它在 VB6 里是 **Single** 档」
+    // 那一问的载体。改前 lexer 也吃掉 `!`，但只置 isFloat —— 档位就丢在词法这一站，
+    // 一路到装箱都是 VT_R8（真 VB6 SG01 实测 4/Single）。
+    // ⚠ `#`（Double）与 `@`（Decimal）各走各的 TokenKind，不碰这个标记。
+    bool singleSuffix = false;
+
     bool isKeyword() const;
     bool isOperator() const;
     bool isLiteral() const;

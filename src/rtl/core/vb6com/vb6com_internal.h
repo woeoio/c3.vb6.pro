@@ -56,6 +56,11 @@ HRESULT vb6_ComFailExcep(EXCEPINFO* pexcep, int32_t errNum,
 HRESULT vb6_ComVbHresult(int32_t errNum);
 int32_t vb6_ComVbErrFromHr(HRESULT hr);
 
+// 账 #611: CreateObject 产物登记 ProgID（TypeName 的 coclass 名就取最后一段）。
+// C30-10 第二十六刀从 vb6com.c 的 static 改成跨编译单元可见：内置 Dictionary
+// 在构造函数里就要登记，否则 `New Scripting.Dictionary` 那条腿 TypeName 会答 "Object"。
+void vb6_ComRememberProgID(void* disp, const wchar_t* progId);
+
 
 // IUnknown 的 C 风格 vtable 辅助 (避免 C++ IUnknown 方法调用问题)
 HRESULT vb6_UnknownQI(void* obj, REFIID riid, void** ppv);

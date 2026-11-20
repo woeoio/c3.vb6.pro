@@ -34,6 +34,11 @@ intptr_t __stdcall vb6_di_GetStockObject(intptr_t a) {
 intptr_t __stdcall vb6_di_SelectObject(intptr_t a, intptr_t b) {
     return (intptr_t)(uintptr_t)SelectObject((HDC)(uintptr_t)a, (HGDIOBJ)(uintptr_t)b);
 }
+// gdi32: GetMapMode —— 账 (prjNewAniGif modTileBlt: SetMapMode lHDCMem, GetMapMode(lHDCdest))
+// 不在生成器目录里, 手写补上; 调用约定必须是 __stdcall (VB6 Declare 默认 StdCall)。
+intptr_t __stdcall vb6_di_GetMapMode(intptr_t a) {
+    return (intptr_t)(uintptr_t)GetMapMode((HDC)(uintptr_t)a);
+}
 intptr_t __stdcall vb6_di_DeleteObject(intptr_t a) {
     return (intptr_t)DeleteObject((HGDIOBJ)(uintptr_t)a);
 }
@@ -281,6 +286,23 @@ intptr_t __stdcall vb6_di_HtmlHelpW(intptr_t hWndCaller, intptr_t lpszFile, intp
     }
     if (fnHtmlHelp == NULL) { return 0; }
     return (intptr_t)((intptr_t (WINAPI*)(intptr_t, intptr_t, intptr_t, intptr_t))fnHtmlHelp)(hWndCaller, lpszFile, uCommand, dwData);
+}
+
+/* C30-10: HtmlHelpA —— 同一枚 hhctrl 导出，只是 VB6 声明里用 `Alias "HtmlHelpA"` 时
+ * C3 生成的桩名不同（按 Alias 名走 vb6_di_<Alias>）⇒ 只有 W 桩时链接报
+ *   Main.obj : error LNK2019: 无法解析的外部符号 HtmlHelp
+ * 真实例程：江西省医保药品查询系统\Module1.bas:15
+ *   Declare Function HtmlHelp Lib "hhctrl.ocx" Alias "HtmlHelpA"
+ *       (ByVal hwndCaller As Long, ByVal pszFile As String,
+ *        ByVal uCommand As Long, dwData As Any) As Long
+ *
+ * 为什么不往 A 版转发：A 版要 char*，而 C3 交进来的实参是 BSTR（宽字符），
+ * 转码反而多一道错源。hhctrl 的 W/A 两枚导出在语义上只差字符串宽度，
+ * 这里直接复用 W 桩 —— 缺 hhctrl.ocx 的机器上照旧返回 0（与没装 HTML Help 的 VB6 一致）。
+ * 本机实测：System32\hhctrl.ocx 737,280 字节 / SysWOW64\hhctrl.ocx 619,520 字节，
+ * 导出表里 HtmlHelpW 与 HtmlHelpA 都在。 */
+intptr_t __stdcall vb6_di_HtmlHelpA(intptr_t hWndCaller, BSTR lpszFile, intptr_t uCommand, void* dwData) {
+    return vb6_di_HtmlHelpW(hWndCaller, (intptr_t)lpszFile, uCommand, (intptr_t)dwData);
 }
 
 /* 序号 644 别名 (VBMAN cToolsArray.cls):

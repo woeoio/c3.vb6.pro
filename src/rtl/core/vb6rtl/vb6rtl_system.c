@@ -664,11 +664,30 @@ int32_t vb6_Printer_ScaleMode(void) { return 1; }
 static HWND g_formList[VB6_MAX_FORMS] = {0};
 static int g_formCount = 0;
 static int g_msgLoopDepth = 0;   // Fix 188: 正在运行的消息循环层数 (含模态嵌套)
+/* C30-9 实测 (江西省医保药品查询系统 frmlogin.frm:191-192):
+ *   `Unload Me` 紧跟 `Main.Show` —— VB6 里这仍是干净的登录转场，我们却退出码 0 直接消失。
+ * 原因: 卸载当时 g_formCount 真归零 (Main 还没 Show 出来)，旧的 PostQuitMessage(0) 把一条
+ * WM_QUIT 投进了队列且**不会撤销**: 同一事件里随后的 Main.Show 把主窗体建好 (trace 里
+ * 能看到 parent=VB6_Form_Main 的控件在设属性)，主泵一转到 GetMessage 就吞下那条 quit 收工。
+ * VB6 的判据是「**泵空闲时**一个窗体都不剩」⇒ 这里改成挂起意头: Unregister 只置位，
+ * Register 一有窗体就撤销，泵顶每次重新问。 */
+static int g_formQuitPending = 0;
 
 void vb6_Forms_LoopDepth(int delta) { g_msgLoopDepth += delta; }  // Fix 188
 
+/* 主泵每轮先问这一句。**只置位不投 quit** 就是为了给同一个事件里后发生的
+ * `Main.Show` 留撤销机会 (Register 一有窗体就清)。
+ * 不要求 g_formCount==0: Fix 144 那一支 (启动窗体 WM_DESTROY 请求退出) 的语义
+ * 本来就不看还剩几个窗体 (关闭启动窗体 = 程序结束)，只是改成延迟判。 */
+int vb6_Forms_QuitPending(void) { return g_formQuitPending; }
+
+/* 生成码 (cgen_form_wndproc_dispatch.inc 的 Fix 144) 在启动窗体 WM_DESTROY 里
+ * 调这一枚代替旧的 PostQuitMessage(0)。区别只在于：这条意头**还能被撤销**。 */
+void vb6_Forms_RequestQuit(void) { g_formQuitPending = 1; }
+
 void vb6_Forms_Register(void* hwnd_, const char* name) {
     if (g_formCount < VB6_MAX_FORMS) { g_formList[g_formCount++] = (HWND)hwnd_; }
+    g_formQuitPending = 0;   /* C30-9: 又有一枚窗体在 => 撤销上一发卸载挂起的退出意头 */
     /* Fix 112: 窗体 HWND 也是宿主对象 (Me.ScaleWidth / Me.Controls / Me.hwnd)
        账 #257: 名字一并交进去 —— 以前这里恒传 NULL，于是窗体自己的 `.Name` 两条读法
        都答空串，排版器那句 `If oCtrl.Container.Name = oForm.Name` 靠「空 = 空」真空通过。 */
@@ -687,9 +706,12 @@ void vb6_Forms_Unregister(void* hwnd_) {
             // **启动窗体**的 WM_DESTROY 里发 PostQuitMessage, 而 `Startup = Sub Main`
             // 的工程没有启动窗体 ⇒ 没人投递 WM_QUIT, 关窗后 GetMessage 永久阻塞,
             // 进程带着存活线程驻留 (VBFlexGridDemo 实测: 窗口已销毁但 20s 后仍 6 线程)。
-            // 必须限定"消息循环真在跑": 否则 Sub Main 里先 Load/Unload 再 Show 的工程
-            // 会被这条提前投递的 WM_QUIT 判死。
-            if (g_formCount == 0 && g_msgLoopDepth > 0) PostQuitMessage(0);
+            // C30-9: 这里**不再**当场 PostQuitMessage —— 那条 quit 撤不回来, 于是
+            // `Unload Me` / `Main.Show` 这种同一事件里的转场会被判死 (实测退出码 0)。
+            // 改成置位, 由主泵顶部 vb6_Forms_QuitPending() 判; Register 一有窗体就清。
+            // `g_msgLoopDepth > 0` 那道闸照旧保留: 泵没在跑时置位无人消费, 反而是
+            // Sub Main 里 `Load x: Unload x:` 之后才 Show 的工程会被自己的历史意头判死。
+            if (g_formCount == 0 && g_msgLoopDepth > 0) g_formQuitPending = 1;
             return;
         }
     }

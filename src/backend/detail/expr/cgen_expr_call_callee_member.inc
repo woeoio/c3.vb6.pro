@@ -2,6 +2,27 @@
 // 由 src/backend/expr/cgen_expr_call.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 806~1009 行，逐行未改。
 
+    // ---- 账 (prjNewAniGif): `With <工程内 UserControl 实例> : .Move l,t,w,h` ——
+    // .ctl 类自己没有 Move ⇒ 它是**容器 Extender** 方法。直接拼成一次完整调用
+    // (位置参自己发; 不走 pendingChainObj —— 那条路会把首参当 this)。
+    if (node.callee && node.callee->kind == ASTNodeKind::WithMemberExpr
+        && Symbol::toLower(static_cast<WithMemberExpr&>(*node.callee).memberName) == "move"
+        && node.named.empty() && node.positional.size() <= 4
+        && !withObjectInfoStack_.empty() && !withObjectVars_.empty()) {
+        const auto& infoMVc = withObjectInfoStack_.back();
+        if (infoMVc.kind == WithObjKind::ClassInstance && !infoMVc.designerCtrlName.empty()) {
+            std::string aMVc[4] = { "0", "0", "0", "0" };
+            for (size_t i = 0; i < node.positional.size(); i++) {
+                emitExpr(*node.positional[i]);
+                if (isComMarker_) lastExpr_ = resolveComValue("Double");
+                aMVc[i] = std::move(lastExpr_);
+            }
+            lastExpr_ = "vb6_UCInstMove(vb6_hwnd_" + infoMVc.designerCtrlName + ", "
+                      + aMVc[0] + ", " + aMVc[1] + ", " + aMVc[2] + ", " + aMVc[3] + ")";
+            return;
+        }
+    }
+
     // 账 (Outlook2013): **自类型过程/局部 COM 变量作链基的多级调用** —
     //   同窗体:  `RibbonBar.RedrawBar` / `RibbonBar.Controls.Add(...)` (frmMain:1421)
     //   跨窗体:  `frmMain.RibbonBar.FindTab(12000)` (frmShortcutBar:83)
@@ -328,6 +349,55 @@
     }
 
     // ============================================================
+    // C30-6: MSHFlexGrid / MSFlexGrid 的方法调用（AddItem / RemoveItem / Clear /
+    // ClearStructure / Refresh）。与 C30-5 的 Adodc/DataGrid 同一个理由：这几条是 C3
+    // 自己实现的控件方法，**不能**落 COM 派发。实测（本夹具第一跑）：
+    //   `MSHFlexGrid1.AddItem "Bob" & vbTab & "Sales"` 会被发成
+    //   vb6_ComCallObject(vb6_ComGetObjectProp(vb6_hwnd_MSHFlexGrid1, L"AddItem"), …)
+    // 宿主在 HWND 上做 GetProp ⇒ 运行期抛 438，
+    //   [C3_HOST_438 #1] site=GetProp name="AddItem" cls=VB6_MSHFLEXGRID
+    // 带实参的方法走不到 cgen_call.cpp 那张无参表，所以在这里拦。
+    // ============================================================
+    if (node.callee && node.callee->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maFg2 = static_cast<MemberAccessExpr&>(*node.callee);
+        if (maFg2.object && maFg2.object->kind == ASTNodeKind::IdentifierExpr
+            && node.named.empty()) {
+            auto& objIdFg2 = static_cast<IdentifierExpr&>(*maFg2.object);
+            std::string objLowerFg2 = Symbol::toLower(objIdFg2.name);
+            auto itFg2 = knownFormControls_.find(objLowerFg2);
+            if (itFg2 != knownFormControls_.end()
+                && itFg2->second == FrmControlType::MshFlexGrid) {
+                std::string memFg2 = Symbol::toLower(maFg2.memberName);
+                std::string hwFg2 = makeCtrlHwndArg(objLowerFg2, itFg2->second);
+                if (memFg2 == "additem" && node.positional.size() == 1) {
+                    emitExpr(*node.positional[0]);
+                    lastExpr_ = "vb6_MshFlexGrid_AddItem((void*)" + hwFg2 + ", "
+                              + lastExpr_ + ")  /* MSHFlexGrid.AddItem */";
+                    return;
+                }
+                if (memFg2 == "removeitem" && node.positional.size() == 1) {
+                    emitExpr(*node.positional[0]);
+                    lastExpr_ = "vb6_MshFlexGrid_RemoveItem((void*)" + hwFg2 + ", "
+                              + lastExpr_ + ")  /* MSHFlexGrid.RemoveItem */";
+                    return;
+                }
+                if (memFg2 == "clear" && node.positional.empty()) {
+                    lastExpr_ = "vb6_MshFlexGrid_Clear((void*)" + hwFg2 + ")";
+                    return;
+                }
+                if (memFg2 == "clearstructure" && node.positional.empty()) {
+                    lastExpr_ = "vb6_MshFlexGrid_ClearStructure((void*)" + hwFg2 + ")";
+                    return;
+                }
+                if (memFg2 == "refresh" && node.positional.empty()) {
+                    lastExpr_ = "vb6_MshFlexGrid_Refresh((void*)" + hwFg2 + ")";
+                    return;
+                }
+            }
+        }
+    }
+
+    // ============================================================
     // Fix 162a: X.Move l[, t[, w[, h]]] —— VB6 语言级方法 (Form/控件通用)。
     // 之前落 vb6_ComGetObjectProp(hwnd, L"Move") → 在 HWND 上取属性必失败,
     // Form_Load/Form_Resize 的布局全部静默失效 (extlist 实测: ListView 停在
@@ -389,16 +459,32 @@
                     } else {
                         // 账 (Outlook2013 frmInbox:224/227): Move 实参是**未声明类型的
                         // 隐式变量** (nTop = IIf(...)) — C 侧 vb6_VARIANT 槽裸传
-                        // vb6_ControlMove 的 double 形参 (C2440 ×2)。裸标识符
-                        // (无括号/无成员链) + Variant 档 → 折 Double。
+                        // vb6_ControlMove 的 double 形参 (C2440 ×2)。
+                        //
+                        // C30-10 第四十三刀: 判据从【文本像裸标识符】换成【问表达式自己】。
+                        // 原来那套 `find('(')==npos && find('-')==npos …` 只能接住**裸变量**；
+                        // 一旦实参是 Variant **算术/选择**的结果，文本必然带括号，于是漏过：
+                        //   ScaleHeight - (BW*2) - IIf(...)  →  vb6_VarSubV(vb6_VariantFromValue(…), vb6_IIfVariant(…))
+                        //   ⇒ ucTreeViewPlus.c(4415/4416) C2440 「vb6_VARIANT → double」。
+                        // 现问 isVariantSlot（前缀表里已含 vb6_VarAddV/SubV/MulV/DivV 与
+                        // vb6_IIfVariant，且早已排除 vb6_VariantTo* 那一族），落到一个判据。
+                        // ⚠ vb6_ControlMove 四个槽清一色 double，所以这里只取 Double 档。
                         const std::string& aMVarg = lastExpr_;
-                        bool bareIdentMV = !aMVarg.empty()
+                        // 两条判据各管一段，互不干扰：
+                        //   ① isVariantSlot：**发出来的 C 文本就是整只槽** —— Variant 算术
+                        //      (vb6_VarSubV/vb6_VarAddV…) 与选择 (vb6_IIfVariant) 都在这张前缀表里。
+                        //   ② 裸标识符 + inferExprType=Variant：未声明类型的隐式变量
+                        //      (Outlook2013 frmInbox 那一形)，文本里没有函数名可问。
+                        // ⚠ 不能把 ② 的 inferExprType 单独推广到任意形：`Me.ScaleWidth - 200`
+                        //   会被答成 Variant，而它明明是 int（实测 Form5.c(240) C2440 int→VARIANT）。
+                        const bool bareIdentMV = !aMVarg.empty()
                             && aMVarg.find('(') == std::string::npos
                             && aMVarg.find('-') == std::string::npos
                             && aMVarg.find('.') == std::string::npos
                             && aMVarg.find('>') == std::string::npos;
-                        if (bareIdentMV
-                            && inferExprType(*node.positional[i]) == Vb6Type::Variant) {
+                        if (isVariantSlot(aMVarg, nullptr)
+                            || (bareIdentMV
+                                && inferExprType(*node.positional[i]) == Vb6Type::Variant)) {
                             lastExpr_ = "vb6_VariantToDouble(" + aMVarg + ")";
                         }
                     }
@@ -556,6 +642,39 @@
             }
         }
 
+        // ---- C30-6: MSHFlexGrid / MSFlexGrid 的带下标属性 ----
+        // TextMatrix(r,c)（两参）+ TextArray(i) / ColWidth(i) / RowHeight(i) / ColAlignment(i)（一参）。
+        // 不拦的后果与 SSTab 那组一样：掉到下面 COM 派发，发成 vb6_ComCall(vb6_hwnd_xxx, …)；
+        // 本地 hwnd 不是 IDispatch ⇒ 运行期静默空串。
+        // 写侧配 cgen_util_comwrite.cpp 的 Get→Set 改写（那边只换函数名、实参原样带）。
+        if (maExpr.object && maExpr.object->kind == ASTNodeKind::IdentifierExpr
+            && (node.positional.size() == 1 || node.positional.size() == 2)) {
+            auto& objIdFg = static_cast<IdentifierExpr&>(*maExpr.object);
+            std::string objLowerFg = Symbol::toLower(objIdFg.name);
+            auto itCtlFg = knownFormControls_.find(objLowerFg);
+            if (itCtlFg != knownFormControls_.end()
+                && itCtlFg->second == FrmControlType::MshFlexGrid) {
+                std::string fnFg;
+                size_t nargFg = node.positional.size();
+                if (memLower == "textmatrix" && nargFg == 2)      fnFg = "vb6_MshFlexGrid_GetTextMatrix";
+                else if (memLower == "textarray" && nargFg == 1)  fnFg = "vb6_MshFlexGrid_GetTextArray";
+                else if (memLower == "colwidth" && nargFg == 1)   fnFg = "vb6_MshFlexGrid_GetColWidth";
+                else if (memLower == "rowheight" && nargFg == 1)  fnFg = "vb6_MshFlexGrid_GetRowHeight";
+                else if (memLower == "colalignment" && nargFg == 1) fnFg = "vb6_MshFlexGrid_GetColAlignment";
+                if (!fnFg.empty()) {
+                    std::string argsFg;
+                    for (size_t k = 0; k < nargFg; k++) {
+                        emitExpr(*node.positional[k]);
+                        if (k) argsFg += ", ";
+                        argsFg += lastExpr_;
+                    }
+                    lastExpr_ = fnFg + "(" + makeCtrlHwndArg(objLowerFg, itCtlFg->second)
+                              + ", " + argsFg + ")";
+                    return;
+                }
+            }
+        }
+
         // ---- Pattern A/B: UDT 数组字段 ----
         // 仅当 maExpr.object 的 UDT 类型可推断 (IdentifierExpr / WithMemberExpr / 嵌套
         // MemberAccessExpr). inferUdtTypeOfExpr 找到 UDT C 类型 → 在 udtMembers 中查 member.
@@ -706,8 +825,9 @@
                     // 这一臂以前**不存在** —— `o.Items(i)` 于是落到底层通用路, 发成
                     // `o->Items(i)`: 那是在调用 `vb6_SafeArray1D*` 这个指针 (cl C2064,
                     // 11 处实测), 而 `v = o.Items` 发成 `vb6_VariantLong(o->Items)` (C2440)。
-                    // 只接**一维** (positional.size()==1) 与零参两种形状: 多维动态数组成员
-                    // 今天没有实物 (Pattern B 同样只发一维), 多维那形照旧落底层, 不猜。
+                    // 一维 (positional.size()==1) / 多维 (>=2, 账 #614 第352刀接上) / 零参
+                    // (整数组读) 三种形状; 秩 1 保持存量形状, 秩 >=2 走 udtDynMemberIndex
+                    // (与 UDT owner 那一臂同形)。
                     MemberArrayDecl madC;
                     const bool clsIsDynArr =
                         resolveMemberArrayDecl(std::string(), className, maExpr.memberName, madC);
@@ -728,6 +848,21 @@
                             lastExpr_ = "VB6_SA_AT(" + madC.elemCType + ", "
                                       + fieldExpr + ", " + idx + ")";
                         }
+                        handled = true;
+                    } else if (clsIsDynArr && node.positional.size() >= 2) {
+                        // 账 #614 (第352刀): **多维**类成员的元素访问 —— 这一臂以前只接一维
+                        // (`positional.size() == 1`), 于是 `o.M2(1, 2)` 落到底层通用路, 发成
+                        // `o->M2(1, 2)` = **调用 vb6_SafeArray1D* 这个指针** ⇒ cl C2064,
+                        // 整台 exe 编不出来 (UDT owner 那一臂早就对了: 它走
+                        // udtDynMemberIndex ⇒ VB6_SA_ND_AT2)。
+                        // 改法 = 交给**同一枚唯一出口** udtDynMemberIndex (秩 = 实参个数 ⇒
+                        // VB6_SA_ND_AT2/AT3/ATN), 与 UDT owner 那一臂**逐字同形**。
+                        // ⚠ 多维载体在 C 里的声明恒为 vb6_SafeArray1D* (仓里「1D 指针当载体」
+                        // 那条约定), ReDim ND 那侧也是那样强转的 ⇒ 两边一致。
+                        emitExpr(*node.callee);  // emits "obj->member" (带字段尾注)
+                        std::string fieldExpr = std::move(lastExpr_);
+                        lastExpr_ = udtDynMemberIndex(madC.elemCType, fieldExpr,
+                                                      node.positional);
                         handled = true;
                     } else if (clsIsDynArr && node.positional.empty()) {
                         // 整数组读: 字段指针原样进 vb6_VariantFromValue ⇒ _Generic 选

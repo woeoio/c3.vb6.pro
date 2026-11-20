@@ -11,6 +11,12 @@ extern "C" {
 // 运行时初始化/退出
 // ============================================================
 
+/* C30-9: 启动窗体销毁时的「请求退出」（生成码 cgen_form_wndproc_dispatch.inc 的
+ * Fix 144 支调它代替旧的 PostQuitMessage）。与 WM_QUIT 的区别只有一条：**可以撤销** ——
+ * 同一事件里紧跟着 `Main.Show` 会走 vb6_Forms_Register() 把它清掉，泵顶每轮重问
+ * vb6_Forms_QuitPending()（实现见 vb6rtl_system.c）。 */
+void vb6_Forms_RequestQuit(void);
+
 // ============================================================
 // ParamArray runtime support (P14.1.5)
 // ============================================================

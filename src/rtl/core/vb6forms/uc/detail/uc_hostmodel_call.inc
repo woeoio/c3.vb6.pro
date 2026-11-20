@@ -199,5 +199,10 @@
        账 (438 语义刀): 返回值改答 **-1 = 成员不存在** (与 getprop 同口径), 由
        vb6_ComCallRcv 的宿主分支按 VB6 语义抛 438, 交 On Error Resume Next 吞掉。
        认得的成员仍在上面各臂 return 1, 行为不变。 */
+    /* C30-10: 内置 TChart 的方法面（AddSeries / Repaint / RemoveAllSeries）。 */
+    {
+        extern int32_t vb6_TChart_HostCall(void*, const wchar_t*, int32_t, void**, void*);
+        if (vb6_TChart_HostCall(obj, name, argc, argv, out)) return 1;
+    }
     vb6_ho_report438(L"Call", name, obj);
     return -1;  // 宿主对象: 成员不存在 (调用方按 VB6 语义抛 438)

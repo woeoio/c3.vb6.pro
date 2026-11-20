@@ -2,6 +2,12 @@
 // 由 src/backend/stmt/cgen_assign.cpp 拆出（2026-09-17），在函数体内被 #include，非独立编译单元。
 // 内容 = 原文件第 829~1055 行，逐行未改。
 
+    // C30-2: TabStrip 集合链写（`Tabs(i).Caption/Key/Image/Selected`、`SelectedItem.Index`）。
+    // 必须排在 tryEmitChainedComWrite 之前：那一枚只认“根是 COM 变量”的默认成员链，
+    // 控件根它直接回 false，于是落下面那条通用臂 → `vb6_ComSetProp(vb6_ComCallObject(…))`。
+    if (tryEmitTabStripChainWrite(node.target.get(), node.value.get())) {
+        return;
+    }
     // ---- P25b: 链式 COM 默认属性索引赋值 ---- (实现提取为
     // tryEmitChainedComWrite, 090ae; AssignmentStmt/SetStmt 共用)
     if (tryEmitChainedComWrite(node.target.get(), node.value.get())) {
@@ -436,6 +442,29 @@
         }
     }
 
+    // ============================================================
+    // C30-7: `rst!Field = value` —— Recordset 字段写。
+    // DictionaryAccessExpr 的 emit 只产出 vb6_DictAccess(obj, L"F")，那是**函数调用**，
+    // 后面拼上 " = ...;" 必然 C2106（左值要求）。真实例程实测：
+    //   D:\vb_yqt4qPac\数据库\财务接口程序源码\…\diskinterface.vbp
+    //   78 个 C 错误里 51 个是这条。VB6 语义是 rst.Fields("F").Value = v，
+    // 故改发 RTL 的 vb6_DictAssign（内部 Fields→Item→SetProp("Value")）。
+    // ============================================================
+    if (node.target && node.target->kind == ASTNodeKind::DictionaryAccessExpr && node.value) {
+        auto& daC307 = static_cast<DictionaryAccessExpr&>(*node.target);
+        // comPackExpr 必须在 emitExpr 之前求（它会消费/依赖部分 cgen 状态）
+        std::string packC307 = comPackExpr(*node.value);
+        emitExpr(*daC307.object);
+        std::string objC307 = std::move(lastExpr_);
+        emitExpr(*node.value);
+        std::string valC307 = std::move(lastExpr_);
+        valC307 = comMarkerValueForWrite(packC307, valC307);
+        valC307 = comUnpackForPack(packC307, valC307);
+        c_.emitLine("vb6_DictAssign(" + objC307 + ", L\"" + escapeWideCString(daC307.key)
+                    + "\", " + packC307 + "(" + valC307 + "));  /* Recordset !Field write */");
+        return;
+    }
+
     // Fix 170: 目标是 VB6 **整体数组** (`A() = expr`, 空括号) —— emit 期间置
     // wholeArrayLvalue_, 让 IndexOrCallExpr 发数组载体 (vb6_SafeArray1D*) 而不是
     // VB6_SA_AT(elem, A, 0)。值语义侧用 tgtIsWholeArray170 决定右侧是否需要深拷贝。
@@ -731,6 +760,9 @@
             std::string lower = idExpr.name;
             std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
             if (knownLongVars_.count(lower)) comCallType = "Int";
+            // C30-11 后记: 目标是 Boolean 变量 —— 晚绑定结果解封后要保住 Boolean 档
+            // (VarType=11 / CStr 答 True), 与前期绑定那一路 (vb6_ComCallBool) 同口径。
+            else if (knownBoolVars_.count(lower)) comCallType = "Bool";
             else if (knownDoubleVars_.count(lower)) comCallType = "Double";
             else if (knownBstrVars_.count(lower)) comCallType = "BSTR";
             else if (knownObjectVars_.count(lower)) comCallType = "Object";

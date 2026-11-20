@@ -672,8 +672,23 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
                 }
             }
         }
+        // 账 #611 (JSonFast/JSonWrite.cls): 这一格还必须在**语句结束符**上折叠。
+        //     If m_Pos + (lLen * 6&) + 4& >= m_Cap Then EnsureCapacity (lLen * 6&) + 4&
+        // Then 分支到行尾就结束, 后面没有逗号续实参 ⇒ 原判据 `cur_ == Comma` 落空,
+        // 整个 BinaryExpr 被当成 CallStmt.callee 发成
+        //     (vb6_JSonWrite_EnsureCapacity(me, (lLen * 6L)) + 4L);
+        // void 返回值参与加法 ⇒ MSVC error C2186 (JSonWrite.c 4 处)。
+        // VB6 语句级没有"表达式语句", 所以 `f (a) + b` 只能是"以 (a)+b 为唯一实参的调用";
+        // 单独成句的 `f (a)` 其 expr 不是 BinaryExpr, 天然不进本分支, 不受影响。
+        // 单行 If 的 Then 分支还可能以 Else/ElseIf 收尾 (Fix 151), 一并计入, 并与
+        // 下方 791 行收口条件同源 —— 折叠出来却不收口会掉回畸形 CallStmt。
+        const bool atStmtEnd110y = cur_.kind == TokenKind::NewLine
+                                || cur_.kind == TokenKind::Colon
+                                || cur_.kind == TokenKind::EndOfFile
+                                || cur_.kind == TokenKind::Else
+                                || cur_.kind == TokenKind::ElseIf;
         if ((*leafSlot)->kind == ASTNodeKind::IndexOrCallExpr
-            && cur_.kind == TokenKind::Comma) {
+            && (cur_.kind == TokenKind::Comma || atStmtEnd110y)) {
             // C3-SENTINEL(np-call-firstarg-binop): 语句级无括号调用, 首参是**括号组 + 二元运算**,
             // 且被调方是裸标识符 (不是 obj.Member):
             //     fHSVtoRGB (x - trackRadius) / hueSpread, 1, 1, tmpR, tmpG, tmpB
@@ -790,7 +805,8 @@ StmtPtr Parser::parseLabelOrAssignmentOrCall() {
     // leadingArg110y 作为首参再继续吃 `, arg...`)。
     if (leadingArg110y
         && (cur_.kind == TokenKind::NewLine || cur_.kind == TokenKind::Colon
-            || cur_.kind == TokenKind::EndOfFile)) {
+            || cur_.kind == TokenKind::EndOfFile
+            || cur_.kind == TokenKind::Else || cur_.kind == TokenKind::ElseIf)) {
         auto call = std::make_unique<IndexOrCallExpr>(loc, std::move(calleeOverride110y));
         call->positional.push_back(std::move(leadingArg110y));
         return std::make_unique<CallStmt>(loc, std::move(call));

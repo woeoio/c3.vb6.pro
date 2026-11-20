@@ -1,7 +1,7 @@
 ﻿# DI 桩定义集基线 (scripts/check_di_stubs.ps1 的判据; -Update 重写)
 # 生成自: src/rtl/core/di/**/*.c 的函数定义; 少一个就是重生成丢了桩, 必须红。
 # 加桩请连同对应家族的 #pragma comment(lib, ...) 一起加。
-# 共 793 个。
+# 共 794 个。
 vb6_di_AbortDoc
 vb6_di_accept
 vb6_di_AddFontMemResourceEx
@@ -737,6 +737,7 @@ vb6_di_TextOutA
 vb6_di_TextOutW
 vb6_di_timeBeginPeriod
 vb6_di_timeEndPeriod
+vb6_di_timeGetDevCaps
 vb6_di_timeGetTime
 vb6_di_TlsAlloc
 vb6_di_TlsFree

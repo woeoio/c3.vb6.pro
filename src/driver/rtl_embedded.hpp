@@ -67,6 +67,8 @@ enum RtlResourceID {
     // vb6forms 家族再细分 (2026-09-17)
     RTL_VB6FORMS_PICTURE_PROP_C = 139,
     RTL_VB6FORMS_WIDGET_PROP_C  = 140,
+    // C30-8 (2026-11-16): 跨模块菜单项代理令牌
+    RTL_VB6FORMS_MENUPROXY_C    = 246,
 
     // DI 转发桩按 Lib 家族拆分 (2026-09-17); gdiplus 2026-09-20 再按对象域拆 5 份 (di/gdiplus/)
     RTL_VB6_DI_USER32_STUBS_C    = 141,
@@ -114,6 +116,12 @@ enum RtlResourceID {
     // Fix 103: VB6 内建对象 Collection 的 C 实现 (IDispatch + IEnumVARIANT)
     RTL_VB6COM_COLLECTION_C    = 177,
     RTL_VB6COM_COLLECTION_ENUM_C = 178,
+    // C30-10: 内置正则引擎（顶掉 CreateObject("VBScript.RegExp") 的 vbscript.dll 依赖）
+    RTL_VB6COM_REGEXP_C        = 227,
+    // C30-10 第二十六刀：内置 Scripting.Dictionary
+    RTL_VB6COM_DICT_C          = 228,
+    // C30-11 第一刀：内置 Scripting.FileSystemObject
+    RTL_VB6COM_FSO_C           = 229,
     // vb6forms_uc 按族细分 (2026-09-19): 内部头 + 6 族编译单元 + 7 个函数体片段
     RTL_VB6FORMS_UC_INTERNAL_H             = 179,
     RTL_UC_HOST_C                          = 180,
@@ -162,6 +170,8 @@ enum RtlResourceID {
 
     // P20-42: VB6 SSTab 控件 (SysTabControl32 复刻, 不加载 TABCTL32.OCX)
     RTL_VB6FORMS_SSTAB_C                   = 209,
+    // C30-2: VB6 TabStrip 控件 (SysTabControl32 复刻, 不加载 MSCOMCTL.OCX)
+    RTL_VB6FORMS_TABSTRIP_C                = 226,
 
     // P20-44: OLE 拖放 (IDataObject/IDropSource/IDropTarget 复刻)
     RTL_VB6FORMS_OLEDD_C                   = 210,
@@ -192,6 +202,20 @@ enum RtlResourceID {
 
     // ai/029 C29-SL-a: VB6 Slider 控件 (原生 msctls_trackbar32, 不加载 MSCOMCTL.OCX)
     RTL_VB6FORMS_SLIDER_C                  = 221,
+    // ai/029 C30-UD-a: VB6 UpDown 控件 (原生 msctls_updown32, 不加载 MSCOMCTL.OCX)
+    RTL_VB6FORMS_UPDOWN_C                  = 240,
+    // ai/029 C30-3: VB6 MaskEdBox 控件 (EDIT + 掩码引擎, 不加载 MSMASK32.OCX)
+    RTL_VB6FORMS_MASKEDEDIT_C              = 241,
+    // ai/029 C30-4: VB6 MSComm 控件 (Win32 串口 API + 读线程, 不加载 MSCOMM32.OCX)
+    RTL_VB6FORMS_MSCOMM_C                  = 242,
+    // ai/029 C30-5: VB6 Adodc 控件 (ACE 底座，走 ODBC 层；不加载 MSADODC.OCX)
+    RTL_VB6FORMS_ADODC_C                   = 243,
+    RTL_VB6FORMS_GRID_C                    = 244,
+    // ai/029 C30-6: MSHFlexGrid / MSFlexGrid —— 字符串矩阵表格（Rows×Cols 自存，不依赖 ACE）
+    RTL_VB6FORMS_MSHFLEXGRID_C             = 245,
+    // ai/029 C30-10: TeeChart 内置图表（自绘窗口类 VB6_TCHART，不加载 TeeChart5.ocx）
+    // ⚠ id 必须与 src/driver/c3rtl.rc 的 247 对上。
+    RTL_VB6FORMS_TEECHART_C                = 247,
     // 账 #181: 崩溃轨迹每进程只记一次的闸 (零依赖头, 见文件头注释)
     RTL_VB6RTL_CRASH_H                     = 222,
 

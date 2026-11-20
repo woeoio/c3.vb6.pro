@@ -44,6 +44,7 @@ FrmControlType controlTypeFromName(const std::string& name) {
         {"timer", FrmControlType::Timer},
         {"picturebox", FrmControlType::PictureBox},
         {"image", FrmControlType::Image},
+        {"updown", FrmControlType::UpDown},   // C30-UD-a: `Dim ud As UpDown` 这类声明认得出来
     };
     std::string lower = name;
     std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);

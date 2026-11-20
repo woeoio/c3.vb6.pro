@@ -357,7 +357,20 @@ BSTR vb6_Chr(int32_t code) {
 }
 
 int32_t vb6_Asc(BSTR s) {
-    if (!s || vb6_BSTR_Len(s) == 0) return 0;
+    // C30-11 第八十一刀: 空串 / NULL ⇒ 错误 5 (Invalid procedure call or argument)。
+    // 第七十八刀试过又撤的那一版 (台账 §11.55) 会把上游 `vb6_CStrStrict(Null)` 已报的
+    // 94 盖成 5 —— 现在不会再发生: 赋值站的**语句级中止**守卫 (第七十九刀) 把
+    // `n = Asc(<Variant>)` 发成 `if (_eN == vb6_ErrSerial()) n = vb6_Asc(...)`,
+    // 转换一 raise, 这一发调用根本不跑 (台账 §11.56 二)。而 `n = Asc("")` 这一格
+    // 本刀把 Asc 族也纳入守卫判据 ⇒ 报 5 之后目标不写, 与真机同形。
+    // 目标不是整型标量的形 (`nc = Asc(nv2)`, nc 是 Variant) 发不出那条守卫 —— 那一路
+    // 靠 `vb6_conv_fail_serial`: 这只空串是刚才那次转换失败交回来的 ⇒ 不再报 5。
+    // `Err.Clear` 清标记 (vb6_ErrClear)，旧痕迹不会无限期流传。
+    if (!s || vb6_BSTR_Len(s) == 0) {
+        if (vb6_conv_fail_serial >= 0 && vb6_conv_fail_serial == vb6_err_serial) return 0;
+        vb6_ErrRaiseNumber(5);
+        return 0;
+    }
     return (int32_t)s[0];
 }
 
@@ -443,10 +456,64 @@ int16_t vb6_BoolVal(BSTR s) {
     return b ? -1 : 0;   /* VB6 True = -1，与 vb6_CBool 同一个答法 */
 }
 
+// C30-10 第五十六刀: Str$(整数档) 的正数前导空格。
+// 真 VB6 读数（第二轮探针 A0 段）: Str$(12345678&) = " 12345678"、Str$(0&) = " 0"、
+// Str$(12345%) = " 12345"、Str$(200B) = " 200"，而 Str$(-5&) = "-5"（负数不加）。
+// 这是 Str$ 与 CStr 的唯一分歧点: CStr(0) = "0"，Str$(0) = " 0"。
 BSTR vb6_Str(int32_t n) {
     wchar_t buf[32];
-    swprintf(buf, 32, L"%d", n);
+    swprintf(buf, 32, n >= 0 ? L" %d" : L"%d", n);
     return vb6_BSTR_FromStr(buf);
+}
+
+// C30-10 第五十六刀: Str$ 数值档的**唯一**尾巴 —— 「非负数前一个空格 + |x| < 1 去掉前导 0」。
+// 三个出口 (Single / Double / Boolean 另计) 共用这一份，别在别处抄第二遍:
+//   Str$(0.1)   = " .1"      Str$(-0.00001) = "-.00001"
+//   Str$(1.5)   = " 1.5"     Str$(1E+15)    = " 1E+15"
+// 入参 num 是 CStr 口径的纯数字文本 (vb6_CStrSingle / vb6_CStrDbl)，本函数接管它。
+static BSTR vb6_StrFromNumText(BSTR num) {
+    if (!num) return vb6_BSTR_FromStr(L" ");
+    const wchar_t* p = num;
+    wchar_t buf[160];
+    size_t n = 0;
+    if (p[0] == L'-') {
+        if (p[1] == L'0' && p[2] == L'.') { buf[n++] = L'-'; p += 2; }
+    } else {
+        buf[n++] = L' ';
+        if (p[0] == L'0' && p[1] == L'.') p += 1;
+    }
+    while (*p && n < 158) buf[n++] = *p++;
+    buf[n] = 0;
+    SysFreeString(num);
+    return vb6_BSTR_FromStr(buf);
+}
+
+// C30-10 第四十九刀: Str$(Single) 的浮点出口。
+// vb6_Str 的形参是 int32_t —— 浮点实参在 C 侧就被截断（探针 H01 `Str$(1.5!)` 打 "1"、
+// H10 `Str$(0.00001!)` 打 "0"、H14 `Str$(3.4E+38!)` 打 "-2147483648"，而真 VB6 是
+// " 1.5" / " .00001" / " 3.4E+38"）。
+// VB6 的 Str$ 口径 = CStr 的数字口径（直接复用 vb6_CStrSingle 的 7 位规则）
+//                  + 非负数前一个空格（负数不加）
+//                  + |x| < 1 时去掉前导 "0"（"0.1" → " .1"、"-0.00001" → "-.00001"）。
+BSTR vb6_StrSng(float x) {
+    return vb6_StrFromNumText(vb6_CStrSingle(x));
+}
+
+// C30-10 第五十六刀: Str$(Double)。真 VB6 第二轮读数 (A/B/C 段) 给的口径:
+//   Str$(0.000001) = " .000001"（1e-15 都还是定点）  Str$(1E-16) = " 1E-16"
+//   Str$(1234567.5) = " 1234567.5"                  Str$(1E+15) = " 1E+15"
+// 数值那一半完全复用 CStr 的 Double 口径 (vb6_CStrDbl ⇒ vb6_NumToBSTRDefault)，
+// 所以 CStr/Format/Str$ 三处不会各写一套阈值。
+BSTR vb6_StrDbl(double x) {
+    return vb6_StrFromNumText(vb6_CStrDbl(x));
+}
+
+// C30-10 第五十六刀: Str$(Boolean)。真 VB6 读数 A06: `Str$(True)` = " True"
+// （CStr(True) = "True"，又是差在那个前导空格上；C 侧 Boolean 与 Integer 同型 int16_t，
+//  不另开出口就只能被 vb6_Str(int32_t) 打成 " -1"）。
+// False 那一格**没有真机读数**（本轮探针只测了 True），按同构先写 " False"。
+BSTR vb6_StrBool(int16_t x) {
+    return vb6_BSTR_FromStr(x ? L" True" : L" False");
 }
 
 // ============================================================
@@ -769,3 +836,61 @@ BSTR vb6_Partition(int64_t number, int64_t start, int64_t stop, int64_t interval
     return vb6_BSTR_FromStr(buf);
 }
 
+
+// ============================================================
+// C30-11 第七十一刀: Len/Trim/LTrim/RTrim/UCase/LCase 的「Null 进、Null 出」变体位
+//
+// 真 VB6 IDE 读数 (tests/vb6probe/NullFamilyProbe.bas, 2026-11-19 复量):
+//   A1 Len(Null)  / B1 Trim(Null) / B4 LTrim(Null) / B5 RTrim(Null) /
+//   B6 UCase(Null) / B7 LCase(Null) —— 六格全是 **Null**、Err **0**。
+// C3 改前这六格都报 94: 实参站把它们当成「String 形参收 Variant」的通用格,
+// 先折 vb6_CStrStrict(Null) ⇒ 94 (第六十二刀的口径), 而那一条对 Asc/Replace/
+// Join/Split 是对的, 对 Len/Trim 这一族不是 —— 它们**不把 Null 折成串**, 而是
+// 把 Null 原样交回去。字节/数值口径 (Len(Empty)=0 等) 仍走 base 函数。
+//
+// 交付档: Len 答 Variant(Long) —— 与 AbsV/IntV 同档; Trim 一族答 Variant(String)。
+// 发码侧只在实参是整只 Variant 槽时走这里 (见 cgen_expr_call_arg_variant.inc),
+// 所以 BSTR 形参那条老路 (含它自己的 94) 一字未动。
+// ============================================================
+vb6_VARIANT vb6_LenV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantLong(vb6_Len(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_TrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Trim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_LTrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_LTrim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_RTrimV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_RTrim(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_UCaseV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_UCase(vb6_VariantToString(v)));
+}
+
+vb6_VARIANT vb6_LCaseV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_LCase(vb6_VariantToString(v)));
+}
+
+// C30-11 第七十三刀 (§B221): String 目标收 Variant 右值的唯一出口。
+// 读数 (tests/vb6probe/NullFamilyProbe.bas E6/E7/E8): `s = Trim(Null)` / `s = Len(Null)` /
+// `s = Null` 在真 VB6 里都是 **94**，且 s **还是赋前的那个值** —— 赋值根本没发生。
+// 所以不能套 vb6_CStrStrict 再赋: 它 raise 后交回空串，写进目标就变成「94 + 目标被清空」。
+void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src) {
+    if (src.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    vb6_BSTR_AssignMove(target, vb6_CStr(src));
+}

@@ -69,6 +69,22 @@ int32_t vb6_ComCallInt(void* disp, const wchar_t* methodName,
     return result;
 }
 
+// C30-11 后记: COM方法调用, 返回 **VB6 Boolean** (-1/0) —— 与 vb6_ComCallInt 同一发调用,
+// 只在**名字**上分档。为什么要单独一枚:
+//   前期绑定的 Boolean 返回以前发 vb6_ComCallInt, 交回 int32_t ⇒ 装箱站给它装成
+//   VT_I4(-1) / VT_I2, 而 VB6 里 `v = fso.FileExists(p)` 的 VarType(v) 是 11(Boolean);
+//   于是 CStr(v) 答 "-1" 而不是 "True"。装箱 / CStr / Debug.Print 三站按这个**前缀**
+//   分诊 (与 ComGetStringProp / ComCallBSTR 那几档同一手法), 不发码就分不出 Boolean
+//   与 Integer (两者 C 侧同为 int32_t)。语义 (真值、-1/0、算术 Not) 一字不改。
+int32_t vb6_ComCallBool(void* disp, const wchar_t* methodName,
+                        void* args_void, int32_t argc) {
+    VARIANT* pv = (VARIANT*)vb6_ComCall(disp, methodName, args_void, argc);
+    if (!pv) return 0;
+    int32_t result = vb6_ComUnpackInt(pv);
+    vb6_ComVarClear(pv);
+    return result ? -1 : 0;
+}
+
 // COM方法调用, 返回double — 内部完成Unpack+VarClear
 double vb6_ComCallDouble(void* disp, const wchar_t* methodName,
                          void* args_void, int32_t argc) {
@@ -240,6 +256,19 @@ void* vb6_ComQI(void* obj, const char* iidStr) {
 void* vb6_ComCreateTyped(const wchar_t* progId, const char* iidStr) {
     void* disp = vb6_CreateObject(progId);
     if (!disp) return NULL;
+    /* C30-10 第二十八刀：内置对象（Dictionary / RegExp）只实现 IDispatch ——
+     * scrrun / vbscript 的 typelib 接口（IID_IDictionary / IID_IRegExp2）我们并不实现，
+     * QI 必失败。而「声明成类名」的槽位（`Dim d As Dictionary`）生成的正是
+     * vb6_ComCreateTyped(progId, iidStr)：一旦按 QI 结果返回，槽位就变 NULL，
+     * 实测 tests/test_com_default_prop 的 7 条 [C3_LATEBIND_MISS] 就是这么来的。
+     * 下游成员调用全部按名字走（vb6_ComCall*），不靠那层类型化接口，
+     * 所以内置对象直接交回自己的 IDispatch（AddRef 已由创建时给到 1）。
+     *
+     * C30-11 内置 FileSystemObject 踩的是同一个坑，而且更直接：
+     * `Dim fso As FileSystemObject` 生成的就是 vb6_ComCreateTyped(progId, IFileSystem3 的 IID)，
+     * 我们只答 IDispatch ⇒ QI 失败 ⇒ 槽位 NULL ⇒ GL 日志记 3/2 条 C3_LATEBIND_MISS
+     * （run 44212135311 的 bas#2 就是这么红的）。跟 Dictionary/RegExp 同一条口径：交回自己。 */
+    if (vb6_Dict_IsInstance(disp) || vb6_RegExp_IsInstance(disp) || vb6_Fso_IsInstance(disp)) return disp;
     void* iface = vb6_ComQI(disp, iidStr);
     vb6_UnknownRelease(disp);
     return iface;

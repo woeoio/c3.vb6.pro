@@ -98,6 +98,24 @@
             strVal = expr.bstrVal; isString = 1; break;
         case vb6_vtBoolean:
             return vb6_BSTR_FromStr(expr.boolVal ? L"True" : L"False");
+        /* C30-9: 对象当标量用 ⇒ 取它的**默认成员** (DISPID_VALUE)，不再交空串。
+         * 实测（江西省医保药品查询系统 frmlogin.frm:187）:
+         *   If Trim(rs_login.Fields(1)) = Trim(Txtpwd.Text) And _
+         *      Trim(rs_login.Fields(2)) = "system" Then
+         * `Fields(n)` 交回的是 ADODB.Field **对象** (VT_DISPATCH)，VB6 取值走它的默认
+         * 属性 Value；以前这一档落 default ⇒ 两边都是 ""、恒不相等 ⇒ 账号密码全对
+         * 也必弹「密码不正确」（VB6 编的同一份工程能登）。
+         * 只取一层：默认成员又是对象时 VB6 报 438，这里退空串，绝不递归（防死循环）。 */
+        case vb6_vtDispatch: {
+            void* pvd = vb6_ComGetDefaultValue(expr.pdispVal);
+            if (!pvd) return vb6_BSTR_FromStr(L"");
+            vb6_VARIANT dv = vb6_VariantFromComResult(pvd);  /* 吃掉那枚堆 VARIANT */
+            BSTR r = (dv.vt == vb6_vtDispatch)
+                     ? vb6_BSTR_FromStr(L"")
+                     : vb6_Format(dv, fmt, firstDayOfWeek, firstWeekOfYear);
+            vb6_VariantClear(&dv);
+            return r;
+        }
         default:
             return vb6_BSTR_FromStr(L"");
     }

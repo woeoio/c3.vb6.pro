@@ -405,6 +405,34 @@ int32_t vb6_IsBuiltinObjectName(const wchar_t* className) {
 
 // 内建对象统一构造入口: 命中返回新实例, 未命中返回 NULL (调用方回退到 COM 注册表)。
 void* vb6_NewBuiltinObject(const wchar_t* className) {
+    // C30-10 第二十六刀：Dictionary 与 RegExp 也要能从 **New 那条腿**进来。
+    // 只拦 CreateObject 的话，`Dim d As New Scripting.Dictionary` 与
+    // `Dim re As New VBScript.RegExp` 仍会去加载 scrrun.dll / vbscript.dll。
+    // 两条 New 出口（vb6_NewObject / vb6_NewObjectClsid）都会先走到这里。
+    if (vb6_Dict_IsClassName(className)) {
+        void* d = vb6_Dict_New();
+        // 不登记 ProgID 的话 TypeName 会答 Object —— vb6com.c 的 CreateObject 那条腿
+        // 已经替 Dictionary 登了，这里补 New 这条腿（同一个环形表，账 #611）。
+        if (d) vb6_ComRememberProgID(d, L"Scripting.Dictionary");
+        return d;
+    }
+    // C30-11 第一刀：内置 FileSystemObject 的 New 那条腿（同样默认关，C3_FSO_NATIVE=1 才拦）。
+    // 不登记 ProgID 的话 TypeName 会答 "Object"。
+    if (vb6_Fso_NativeEnabled() && vb6_Fso_IsClassName(className)) {
+        void* f = vb6_Fso_New();
+        if (f) vb6_ComRememberProgID(f, L"Scripting.FileSystemObject");
+        return f;
+    }
+    if (vb6_RegExp_IsProgramId(className)) {
+        void* r = vb6_RegExp_New();
+        if (r) vb6_ComRememberProgID(r, L"VBScript.RegExp");
+        return r;
+    }
+    if (_wcsicmp(className, L"RegExp") == 0) {
+        void* r = vb6_RegExp_New();
+        if (r) vb6_ComRememberProgID(r, L"VBScript.RegExp");
+        return r;
+    }
     if (!vb6_IsBuiltinObjectName(className)) return NULL;
     return vb6_NewBuiltinCollection();
 }

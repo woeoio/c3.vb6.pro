@@ -183,6 +183,10 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // P20-42: SSTab (TabDlg.SSTab)。必须排在 imagelist 之后、Unknown 之前;
     // "sstab" 是 TabDlg.SSTab / SSTab 两种写法的公共子串。
     if (lower.find("sstab") != std::string::npos) return FrmControlType::SSTab;
+    // C30-2: TabStrip (MSComctlLib.TabStrip / TabDlg.TabStrip)。"tabstrip" 与 "sstab"
+    // 互不为子串（一个是 ta-bs，一个是 ss-tab），但**必须在 sstab 之后**判：反过来的话
+    // "tabstrip" 也不会命中 "sstab"，两条其实互斥；这里保持"长的在后面"这个习惯。
+    if (lower.find("tabstrip") != std::string::npos) return FrmControlType::TabStrip;
     // P20-45/46: ListView / TreeView。按字符串长短排: 先 listview 再 treeview,
     // 两者互不为子串, 但都排在 sstab 之后以免误吃。
     if (lower.find("listview") != std::string::npos) return FrmControlType::ListView;
@@ -204,6 +208,38 @@ FrmControlType FrmParser::parseControlType(const std::string& typeName) {
     // （没有 "sstab"/"listview"/"treeview"/"progressbar" 之类的重叠），排在 Unknown 前即可。
     // VB6 侧另有 ProgID 写法 MSComctlLib.Slider.1，同样命中这条。
     if (lower.find("slider") != std::string::npos) return FrmControlType::Slider;
+    // C30-UD: UpDown (MSComctlLib.UpDown)。"updown" 与上面任何一条互不为子串
+    // ("updown" 里既没有 "dtpicker" 也没有 "monthview")，VB6 侧另有 ProgID 写法
+    // MSComctlLib.UpDown.1，同样命中这条。
+    if (lower.find("updown") != std::string::npos) return FrmControlType::UpDown;
+    // C30-3: MaskEdBox (MSMask.MaskEdBox / MaskEdBox)。"maskedbox" 与上面任何一条
+    // 互不为子串（既没有 "updown" 也没有 "mask" 开头的其他控件），VB6 侧另有
+    // ProgID 写法 MSMask.MaskEdBox.1，同样命中这条。
+    if (lower.find("maskedbox") != std::string::npos) return FrmControlType::MaskEdBox;
+    // C30-4: MSComm (MSCommLib.MSComm / MSCOMM32.OCX 的各种写法)。"mscomm" 与上面任何一条
+    // 互不为子串；VB6 侧另有 ProgID 写法 MSCommLib.MSComm.1，同样命中这条。
+    if (lower.find("mscomm") != std::string::npos) return FrmControlType::MSComm;
+    // C30-5: Adodc (MSAdodcLib.Adodc / MSADODC.OCX)。"adodc" 与上面任何一条互不为子串；
+    // VB6 侧另有 ProgID 写法 MSAdodcLib.Adodc.1，同样命中。
+    if (lower.find("adodc") != std::string::npos) return FrmControlType::Adodc;
+    // C30-5: DataGrid (MSDataGridLib.DataGrid / MSDATGRD.OCX)。必须排在 `vb.data` 之后才对
+    // —— "msdatagridlib.datagrid" 里没有 "vb.data"，两条互斥；但**不能**用 "data" 当鱼网。
+    if (lower.find("datagrid") != std::string::npos) return FrmControlType::DataGrid;
+    // C30-6: MSHFlexGrid / MSFlexGrid (MSHFLXGD.OCX / MSFLXGRD.OCX 的各种写法)。
+    // 四种写法都要接：ProgID (mshierarchicalflexgridlib.mshflexgrid / msflexgridlib.msflexgrid)
+    // 与 .frm 的 Object= 行里的 OCX 名 (mshflxgd / msflxgrd)。这两个控件共用一套 RTL ——
+    // MSHFlexGrid 是 MSFlexGrid 的超集，字符串矩阵那一面完全一样。
+    // 必须在 datagrid 之后：两串不互为子串，顺序只是“同类先到先得”的阅读顺序。
+    if (lower.find("mshflexgrid") != std::string::npos
+        || lower.find("msflexgrid") != std::string::npos
+        || lower.find("mshflxgd") != std::string::npos
+        || lower.find("msflxgrd") != std::string::npos) return FrmControlType::MshFlexGrid;
+
+    // C30-10: TeeChart（TeeChart.TChart / TChart / TeeChart5.ocx 三族写法）。
+    // 命中这一格就不再走 ActiveX 宿主: OCX 只有 32 位, 宿主路线下 --arch x64 永远链不上。
+    // "tchart" 与上面任何一条互不为子串。
+    if (lower.find("teechart") != std::string::npos
+        || lower.find("tchart") != std::string::npos) return FrmControlType::TeeChart;
 
     return FrmControlType::Unknown;
 }
@@ -240,6 +276,9 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // (实测 x64/x86 进程里 GetClassInfoW 直接成功, InitCommonControlsEx 之前就在),
         // 所以这里不需要 RTL 自注册兜底。
         case FrmControlType::SSTab:        return "SysTabControl32";
+        // C30-2: TabStrip 用的也是 comctl32 注册好的 **SysTabControl32**（与 SSTab 同一个
+        // 窗口类，区别全在"我们不接管子控件"这一条语义上）；类已在，不需自注册兜底。
+        case FrmControlType::TabStrip:     return "SysTabControl32";
         // P20-45/46: ListView/TreeView —— 与 SSTab 同型, **comctl32 已注册**
         // (实测 GetClassInfoW 直接成功), 不需要 StatusBar 那套自注册兜底。
         case FrmControlType::ListView:     return "SysListView32";
@@ -265,6 +304,13 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // ICC_BAR_CLASSES 请求过 ⇒ 不需要 RTL 自注册兜底（探针 .build/slprobe 实测
         // CreateWindowEx 直接拿到句柄、类名读回就是 msctls_trackbar32）。
         case FrmControlType::Slider:       return "msctls_trackbar32";
+        // C30-UD-a: UpDown —— comctl32 注册的 msctls_updown32 (头里 UPDOWN_CLASSW)，
+        // 与 Slider/ProgressBar 同一族：类由 vb6forms.c 那次 InitCommonControlsEx 的
+        // ICC_BAR_CLASSES 请求过 ⇒ 不需要 RTL 自注册兜底。
+        case FrmControlType::UpDown:       return "msctls_updown32";
+        // C30-3: MaskEdBox —— 用 Win32 的 **EDIT**（类名就写 "EDIT"，与 TextBox 同一
+        // 个窗口类）。掩码不靠窗口类，靠 RTL 的 vb6forms_maskededit.c 那层状态机。
+        case FrmControlType::MaskEdBox:    return "EDIT";
         // C29-1b: 文件系统三控件在 VB6 里本来就是公共控件的薄封装 —— Drive 是
         // CBS_DROPDOWNLIST 的组合框、Dir / File 是列表框。以前这三格缺映射, 创建流程
         // 把它们当"不可见控件"跳过, 于是 RTL 里那套 P20-37 填充 helper 从来没被喂过
@@ -290,6 +336,17 @@ const char* FrmParser::controlTypeToWin32Class(FrmControlType type) {
         // C29-WS: Winsock —— 无外观，但**这枚的窗口要真收 WSAAsyncSelect 的 FD_\***，
         // 不像 Timer / CommonDialog 只是属性袋（类注册在 vb6forms_winsock.c）。
         case FrmControlType::Winsock:       return "VB6_WINSOCK";
+        // C30-4: MSComm —— 同样无外观，但**这枚的身份窗要真收读线程投的 WM_APP+0x16**，
+        // 所以也要一枚自注册类（注册在 vb6forms_mscomm.c）。Timer 那种纯属性袋不适用。
+        case FrmControlType::MSComm:        return "VB6_MSCOMM";
+        // C30-5: Adodc / DataGrid —— 两枚都自注册（Adodc 是属性宿主 + 隐藏引擎窗；
+        // DataGrid 要真画格线/表头/选中行，所以必须是一枚真窗口）。
+        case FrmControlType::Adodc:         return "VB6_ADODC";
+        case FrmControlType::DataGrid:      return "VB6_DATAGRID";
+    // C30-6: MSHFlexGrid / MSFlexGrid —— 自注册窗口类（字符串矩阵 + 自绘 + 键盘编辑）。
+    case FrmControlType::MshFlexGrid:   return "VB6_MSHFLEXGRID";
+    // C30-10: TeeChart —— 自注册窗口类 (comctl32 里没有这个类, 必须先注册)。
+    case FrmControlType::TeeChart:      return "VB6_TCHART";
         case FrmControlType::Menu:         return nullptr;       // 菜单, 非窗口
         case FrmControlType::WebBrowser:  return nullptr;       // WebView2, 运行时动态创建
         default:                           return nullptr;
@@ -316,10 +373,17 @@ const char* FrmParser::controlTypeToVb6Name(FrmControlType type) {
         case FrmControlType::ProgressBar:  return "ProgressBar";
         case FrmControlType::StatusBar:    return "StatusBar";
         case FrmControlType::SSTab:        return "SSTab";
+        case FrmControlType::TabStrip:     return "TabStrip";
         case FrmControlType::ListView:     return "ListView";
         case FrmControlType::TreeView:     return "TreeView";
         case FrmControlType::DTPicker:     return "DTPicker";
         case FrmControlType::MonthView:    return "MonthView";
+        case FrmControlType::UpDown:       return "UpDown";
+        case FrmControlType::MaskEdBox:    return "MaskEdBox";
+        case FrmControlType::MSComm:       return "MSComm";
+        case FrmControlType::Adodc:        return "Adodc";
+        case FrmControlType::DataGrid:     return "DataGrid";
+    case FrmControlType::MshFlexGrid:  return "MSHFlexGrid";
         case FrmControlType::RichTextBox:  return "RichTextBox";
         case FrmControlType::Toolbar:      return "Toolbar";
         case FrmControlType::Shape:        return "Shape";

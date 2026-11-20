@@ -6,11 +6,15 @@
 # 现在那张表住在一个函数里 (comMarkerValueForWrite)，写侧三处出口都问它。
 #
 # 规则 (改坏了会红, 不是装饰):
-#   C1  comMarkerValueForWrite( 在 src/backend 里恰好 8 处 = 声明 + 定义 + **六个**写侧调用点
+#   C1  comMarkerValueForWrite( 在 src/backend 里恰好 9 处 = 声明 + 定义 + **七个**写侧调用点
 #       (SetProp 无索引写 / SetPropArg 带索引写 / 链式默认成员写 / 宿主伪对象与 Parent 写 /
 #        With 块 COM 写 = 本账补上的那一处 / With 类的**未知成员** COM SetProp 写 =
-#        2026-11-08 ucSlider 启动崩溃链第 1 环补上的那一处)；少一处 = 又有写侧出口没问它
+#        2026-11-08 ucSlider 启动崩溃链第 1 环补上的那一处 /
+#        `rst!Field = value` 字段写 = C30-7 补上的那一处, 见 C4)；少一处 = 又有写侧出口没问它
 #       (本账的形状)，多一处 = 表开始被绕过/复制
+#   C4  C30-7 那一支 (`rst!Field = value` → vb6_DictAssign) 也必须在发 emitLine 之前问表:
+#       它把右值整枚 COM 成员读 (`rst!A = other.B`) 当对象打包过 —— 同一种形状的第七个出口，
+#       少了这条断言就只能靠 C1 的计数间接发现
 #   C2  「packer → 解封类型」那张表只许有一份：六个 packer 档的 hint 赋值形在 src/backend 里
 #       各恰好一次，且都在 comMarkerValueForWrite 体内 (改前它被抄了四份，其中一份漏 Boolean、
 #       一份的默认档是 Variant —— 这两条差别就是本账的形状)
@@ -41,7 +45,7 @@ foreach ($f in Get-BackendFiles) { $textOf[$f.FullName] = [System.IO.File]::Read
 # ---- C1: 六个站点 ----
 $c1 = 0
 foreach ($k in $textOf.Keys) { $c1 += @([regex]::Matches($textOf[$k], 'comMarkerValueForWrite\s*\(')).Count }
-if ($c1 -ne 8) { $bad += ("C1 comMarkerValueForWrite call/decl/def sites = " + $c1 + " (need exactly 8: decl + def + 6 write-side consumers)") }
+if ($c1 -ne 9) { $bad += ("C1 comMarkerValueForWrite call/decl/def sites = " + $c1 + " (need exactly 9: decl + def + 7 write-side consumers)") }
 
 # ---- C2: hint 表只有一份 ----
 foreach ($pair in @(@('vb6_ComPackDouble', 'Double'), @('vb6_ComPackInt', 'Long'),
@@ -70,8 +74,24 @@ if ($iCall -ge 0 -and $iEmit -ge 0 -and $iCall -gt $iEmit) {
     $bad += "C3 the marker is consumed AFTER the vb6_ComSetProp line is emitted -- the value packed there is still the bare object"
 }
 
+# ---- C4: C30-7 `rst!Field = value` 那一支的顺序 ----
+$comPropRel = "src\backend\detail\stmt\cgen_assign_com_prop.inc"
+$comPropFile = Join-Path $root $comPropRel
+if (-not (Test-Path -LiteralPath $comPropFile)) {
+    Write-Host ("FAIL C4 missing " + $comPropFile) -ForegroundColor Red
+    exit 1
+}
+$comPropText = [System.IO.File]::ReadAllText($comPropFile)
+$iCall4 = $comPropText.IndexOf('valC307 = comMarkerValueForWrite(packC307, valC307);')
+$iEmit4 = $comPropText.IndexOf('"vb6_DictAssign("')
+if ($iCall4 -lt 0) { $bad += "C4 the rst!Field = value branch no longer asks comMarkerValueForWrite (C30-7 regression)" }
+if ($iEmit4 -lt 0) { $bad += "C4 the vb6_DictAssign emit line is gone from the file the sentinel watches" }
+if ($iCall4 -ge 0 -and $iEmit4 -ge 0 -and $iCall4 -gt $iEmit4) {
+    $bad += "C4 the marker is consumed AFTER the vb6_DictAssign line is emitted -- the packed value is still the bare object"
+}
+
 if ($bad.Count -ne 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }
     exit 1
 }
-Write-Host "PASS com_marker_write_sites (C1 8 sites = decl+def+6 consumers, C2 one hint table, C3 With branch consumes before emitting)"
+Write-Host "PASS com_marker_write_sites (C1 9 sites = decl+def+7 consumers, C2 one hint table, C3 With branch consumes before emitting, C4 rst!Field write consumes before emitting)"

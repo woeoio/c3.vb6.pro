@@ -32,6 +32,22 @@
         return it == projectClassNames.end() ? std::string() : it->second;
     };
 
+    // 账 #611: 工程内 .cls 的**默认成员**表 (小写类名 → 成员原名)。
+    // 解析只许一处 (scripts/check_uc_default_member.ps1 的 R1): 整份判据收在
+    // cgen_util_ctrl.cpp 的 findClassDefaultMember, driver 这里只负责填表。
+    // ⚠ UserControl (.ctl) 一律排除 —— 它们的默认成员与控件数组元素走
+    // ctrlDefaultPropOf / ctrlDefaultReadExpr / emitUcDefaultPropLet 那一族出口,
+    // 抢进本表会把 `slt(0).Value = v` 的控件数组路径改道 (pd_ucctrlarr 实测回归)。
+    std::unordered_map<std::string, std::string> classDefaultMembers;
+    for (const auto& mod611 : modules_) {
+        if (!mod611 || !mod611->isClassModule || mod611->isInterfaceModule
+            || mod611->isUserControlDoc() || mod611->moduleName.empty()) continue;
+        std::string def611;
+        if (findClassDefaultMember(*mod611, def611)) {
+            classDefaultMembers[Symbol::toLower(mod611->moduleName)] = def611;
+        }
+    }
+
     // 账 #305 §B187 第二腿: 工程级「在运行期 coclass 描述表 (g_vb6_coclasses[]) 里占一行」
     // 的类名名单 (小写)。
     // 为什么发码期要它: 装箱腿 (cgen_setlet_set_rhs.inc) 每一句

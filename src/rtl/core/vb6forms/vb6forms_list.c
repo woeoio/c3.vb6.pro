@@ -51,10 +51,29 @@ int vb6_GetListIndex(void* hwnd) {
 
 void vb6_SetListIndex(void* hwnd, int index) {
     if (!hwnd) return;
-    if (vb6_IsListBox(hwnd)) {
-        SendMessageW((HWND)hwnd, LB_SETCURSEL, (WPARAM)index, 0);
-    } else {
-        SendMessageW((HWND)hwnd, CB_SETCURSEL, (WPARAM)index, 0);
+    const int isLb = vb6_IsListBox(hwnd);
+    const int prev = (int)SendMessageW((HWND)hwnd, isLb ? LB_GETCURSEL : CB_GETCURSEL, 0, 0);
+    SendMessageW((HWND)hwnd, isLb ? LB_SETCURSEL : CB_SETCURSEL, (WPARAM)index, 0);
+    if (prev == index) return;
+    /* VB6 语义: **程序化**赋 ListIndex 也会引发 Click（用户手册明写，项目就在靠它: prjNewAniGif
+     * frmUCtest.Form_Load 只有一句 `List1.ListIndex = 6`，靠它进 LoadSampleGif 加载样图）。
+     * 原来这里只发 LB_SETCURSEL —— 那是纯数据设置，Win32 不会反向通知父窗，于是 Click 永远
+     * 不触发，控件停在设计期画面。这里自己把同一条通知补发给父窗：生成侧的 WM_COMMAND 分派
+     * 按 (控件 id, LBN_SELCHANGE/CBN_SELCHANGE=1) 找对应处理器，与用户点选时是同一条路。
+     * 只在**选择真的变了**时发，避免处理器回写同一 index 时自锁。
+     *
+     * 用 Post 而不是 Send: Form_Load 里赋 ListIndex 时窗体还在初始化(生成的 WndProc 此时
+     * 由 vb6_formLoading_* 挡事件)，同步 Send 会把处理器直接拖进初始化中途 —— prjNewAniGif
+     * 里 LoadSampleGif 于是拿着半初始化的控件跑，进程随即自行退出(exit 0)。VB6 的事件本来
+     * 就是从消息循环派发的，Post 才等价: 处理器在 Form_Load 返回、事件闸门放开之后才跑。 */
+    {
+        HWND parent = GetParent((HWND)hwnd);
+        const int id = GetDlgCtrlID((HWND)hwnd);
+        if (parent && id > 0) {
+            PostMessageW(parent, WM_COMMAND,
+                         MAKEWPARAM((WORD)id, (WORD)(isLb ? LBN_SELCHANGE : CBN_SELCHANGE)),
+                         (LPARAM)(HWND)hwnd);
+        }
     }
 }
 
@@ -83,23 +102,41 @@ void* vb6_GetListItem(void* hwnd, int index) {
     return (void*)bstr;
 }
 
-void vb6_AddItem(void* hwnd, void* bstrItem) {
+/* 2026-11-15 (VB6 语法): `AddItem item[, index]` 的第二枚实参是**插入位置**,
+ * 不是装饰 —— VB6 里 `cboFrame.AddItem "所有帧", 0` 把这一项插到**第一位**
+ * (aoGIF 工程就靠它把"所有帧"放在顶部, 随后 `ListIndex = 0` 默认选中)。
+ * 原因: 此处旧实现只收 (hwnd, item) 两枚, 发码把 index 丢掉 ⇒ 一律追加到末尾:
+ * 列表顺序反了(所有帧跑最后), 而 `ListIndex = 0` 选中的是第一条帧 —— 观感就是
+ * "默认显示值不对"。index < 0 或未给 = 追加 (与原口径同)。 */
+void vb6_AddItemAt(void* hwnd, void* bstrItem, int32_t index) {
     if (!hwnd) return;
     BSTR bs = (BSTR)bstrItem;
     if (!bs) {
         bs = SysAllocString(L"");
     }
     int isLB = vb6_IsListBox(hwnd);
-    LRESULT idx = isLB ? SendMessageW((HWND)hwnd, LB_ADDSTRING, 0, (LPARAM)bs)
-                       : SendMessageW((HWND)hwnd, CB_ADDSTRING, 0, (LPARAM)bs);
+    LRESULT idx;
+    if (index < 0) {
+        idx = isLB ? SendMessageW((HWND)hwnd, LB_ADDSTRING, 0, (LPARAM)bs)
+                   : SendMessageW((HWND)hwnd, CB_ADDSTRING, 0, (LPARAM)bs);
+    } else {
+        /* VB6: index 必须落在 0..ListCount —— 越界是错误 381。这里的口径是
+         * 交给控件的 INSERTSTRING: 超尾时 Windows 自己等价于追加 (比静默丢弃好)。 */
+        idx = isLB ? SendMessageW((HWND)hwnd, LB_INSERTSTRING, (WPARAM)index, (LPARAM)bs)
+                   : SendMessageW((HWND)hwnd, CB_INSERTSTRING, (WPARAM)index, (LPARAM)bs);
+    }
     if (GetEnvironmentVariableW(L"C3_OCX_TRACE", NULL, 0) > 0) {
         int after = (int)SendMessageW((HWND)hwnd, isLB ? LB_GETCOUNT : CB_GETCOUNT, 0, 0);
-        fprintf(stderr, "[C3_LIST] AddItem hwnd=%p isLB=%d ret=%ld countAfter=%d text='%ls'\n",
-                hwnd, isLB, (long)idx, after, bs ? bs : L"(null)");
+        fprintf(stderr, "[C3_LIST] AddItem hwnd=%p isLB=%d at=%d ret=%ld countAfter=%d text='%ls'\n",
+                hwnd, isLB, (int)index, (long)idx, after, bs ? bs : L"(null)");
     }
     if (bstrItem == NULL) {
         SysFreeString(bs);
     }
+}
+
+void vb6_AddItem(void* hwnd, void* bstrItem) {
+    vb6_AddItemAt(hwnd, bstrItem, -1);
 }
 
 void vb6_RemoveItem(void* hwnd, int index) {

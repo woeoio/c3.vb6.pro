@@ -438,6 +438,20 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                         knownNewVars_[lower] = "Collection";
                     }
                 }
+                // C30-10 第三十刀: `Dim x As New <外部 ProgID>`（如 VBScript.RegExp）。
+                // 局部声明这条路上，带点的未解析名字既不是 Class/工程类，也不是
+                // ComClass/Collection/窗体 ⇒ 以前**一条惰性实例化都不发**（实测 --emit-c：
+                // 只有 `void* r = NULL;`，随后 Pattern/Test 全打 [C3_LATEBIND_MISS]）。
+                // 按 VB6 `New <ProgID>` 语义登记成 ProgID 档，守卫处发 vb6_NewObject。
+                if (var.isNew && simple.name.find('.') != std::string::npos
+                    && (!clsSym || (clsSym->kind != SymbolKind::Class
+                                    && clsSym->kind != SymbolKind::ComClass
+                                    && clsSym->kind != SymbolKind::ComInterface))) {
+                    std::string lower = var.name;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    knownNewVars_[lower] = simple.name;
+                    knownNewProgIdVars_[lower] = simple.name;
+                }
                 // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` —— 窗体**也**要自动实例化。
                 //
                 // 症状链 (play78 --arch x86 实测, 探针 PC/PA 逐条对齐):
@@ -698,6 +712,21 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 std::string lower = con.name;
                 std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
                 knownLocalVars_.insert(lower);
+            }
+            // C30-10 第三十四刀: 局部 Const 的 Integer 档 —— 口径与 cgen_decl.cpp 的模块级
+            // 那一支同源 (同一枚 isNarrowIntExpr 主人，不在这里重算)。
+            {
+                bool narrowConstLocal = false;
+                if (con.asType) {
+                    narrowConstLocal = (resolveArrayElemType(con.asType.get()) == Vb6Type::Integer);
+                } else if (con.value) {
+                    narrowConstLocal = isNarrowIntExpr(con.value.get());
+                }
+                if (narrowConstLocal) {
+                    std::string lower = con.name;
+                    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                    knownIntConsts_.insert(lower);
+                }
             }
             // Fix 049: Register local constant to type-specific known*Vars_ sets.
             // Same logic as Dim (cgen_decl.cpp:749-767). Without this, inferExprType

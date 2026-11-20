@@ -718,7 +718,11 @@ static LRESULT CALLBACK vb6_uc_wndproc(HWND hwnd, UINT msg, WPARAM wParam, LPARA
             if (r && r->ready) {
                 /* 账 #492: 透明 UC 不擦背景 —— 一擦就是一块 ambient 灰, WM_PAINT
                    里的合成会覆盖它, 中间那一帧在屏幕上就是灰闪。*/
-                if (!r->desc || !r->desc->transparent) {
+                /* 账 (prjNewAniGif 闪烁): AutoRedraw 的 UC 也不能擦 —— 客户区的
+                   唯一真相是 adSurf, WM_PAINT 会把它 BitBlt 上屏。先 FillRect 再
+                   BitBlt 就是「一帧全底色」的窗口: 动画 30ms 一帧时, 屏幕采样
+                   40 次里有 2 次拍到整块空白 (参考版 0/40), 肉眼就是闪。 */
+                if (!r->adOn && (!r->desc || !r->desc->transparent)) {
                     // 用容器底色填充, 避免重绘闪烁 (固定白色会在深色 UI 上闪白)
                     RECT rc; GetClientRect(hwnd, &rc);
                     COLORREF cref = vb6_ColorToColorRef(r->ambientBack);

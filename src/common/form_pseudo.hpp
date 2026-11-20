@@ -41,7 +41,11 @@ enum : uint32_t {
     FPQ_FORM          = 1u << 0,   // 窗体本身（`.frm` 模块里的 Me / 裸名）
     FPQ_COMMON_DIALOG = 1u << 1,   // 没有外观：FontName / FontSize 是对话框字段
     FPQ_SHAPE         = 1u << 2,   // BorderStyle 在这里是"画笔线型"，不是窗口边框样式
-    FPQ_LINE          = 1u << 3    // 同上
+    FPQ_LINE          = 1u << 3,   // 同上
+    // C30-UD-a: UpDown 自己有 Alignment（0=左 1=右，就是 UDS_ALIGN* 那两位）。
+    // 不排掉通用那一行，`ud.Alignment` 会先被 `vb6_GetAlignment` 抢走，
+    // 实测读出 0/2 这种根本不是我们答的数（夹具 UD5 就是这条红的证人）。
+    FPQ_UPDOWN        = 1u << 4
 };
 
 struct FormPseudoRow {
@@ -71,7 +75,7 @@ inline const FormPseudoRow* formPseudoRows(size_t& count) {
         {"fontstrikethrough", "vb6_GetControlFontStrikethrough", FPQ_NONE, false},
         {"forecolor",         "vb6_GetControlForeColor",         FPQ_NONE, false},
         {"backcolor",         "vb6_GetControlBackColor",         FPQ_NONE, false},
-        {"alignment",         "vb6_GetAlignment",                FPQ_NONE, false},
+        {"alignment",         "vb6_GetAlignment",                FPQ_UPDOWN, false},
         {"tabindex",          "vb6_GetTabIndex",                 FPQ_NONE, false},
         {"tabstop",           "vb6_GetTabStop",                  FPQ_NONE, false},
         {"causesvalidation",  "vb6_GetCausesValidation",         FPQ_NONE, false},

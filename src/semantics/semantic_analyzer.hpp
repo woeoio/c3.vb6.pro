@@ -254,7 +254,9 @@ public:
     // Fix 197: 枚举成员常量求值的对外入口 — Driver 在 Pass 1 前预注册跨模块
     // Public Enum 成员时调用 (evalOptionalDefault 查符号表发生在 Pass 1 期间,
     // 而 runCrossModuleResolution 在其后, 跨模块枚举成员必须预注册).
-    static bool evalEnumConstIntForDriver(ASTNode* expr, int64_t& result);
+    static bool evalEnumConstIntForDriver(ASTNode* expr, int64_t& result,
+                                          const SymbolTable* st = nullptr,
+                                          const std::map<std::string, int64_t>* localConsts = nullptr);
 
 private:
     Diagnostics& diag_;

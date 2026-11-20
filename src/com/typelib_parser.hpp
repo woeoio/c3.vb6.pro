@@ -238,12 +238,27 @@ public:
                                                const std::string& version = "1.0");
 
     // 获取已解析的TypeLib缓存
+    // C30-11 第十二刀（只给自测开关用）: 按路径子串从缓存里剔掉已加载的类型库。
+    // 为什么需要: 只拦 ProgID 预取并不等于「这台机器没有 scrrun」—— wshom.ocx
+    // (WScript.Shell) 的类型库会把 scrrun 的 coclass 一并带进来（FileSystemObject 带着
+    // 真 CLSID 出现），于是内建兜底永远不触发、开关等于空转。
+    void dropCachedClassesByProgId(const std::string& progIdPrefix);
+
     const std::vector<std::unique_ptr<TypeLibResult>>& cachedResults() const {
         return cache_;
     }
 
     // 查找已缓存中某个coclass (跨所有已加载TypeLib)
     ComCoClassInfo* findCachedCoClass(const std::string& name) const;
+
+    // C30-11 第七刀: 内建 Scripting Runtime 类名兜底。
+    // 机器上缺 scrrun 类型库 (注册表被裁 / 精简系统) 时, `Dim x As FileSystemObject`
+    // 会报「用户定义类型未定义」。这里塞一份**只含类名**的合成类型库进缓存:
+    // coclass 齐了 9 个名字 (FileSystemObject/Dictionary/Drive/Drives/File/Files/
+    // Folder/Folders/TextStream), 默认接口空成员 —— 成员一律走运行期 by-name,
+    // 正是内置 FSO/Dictionary 实现 (IDispatch 按名字答) 的绑定口径。
+    // 真类型库在时**不会**调用本函数 (见 driver_frontend 的 auto-load 处), 发码零变化。
+    void registerBuiltinScriptingTypelib();
 
 private:
     Diagnostics& diag_;

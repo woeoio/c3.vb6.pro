@@ -565,7 +565,13 @@
             if (listViewSlotVars_.count(objLower)) {
                 std::string readFnLv = getControlPropReadFn(FrmControlType::ListView, node.memberName);
                 if (!readFnLv.empty()) {
-                    lastExpr_ = readFnLv + "((void*)" + objLower + ")  /* ListView slot param */";
+                    // 形参/局部 `lv As ListView` 在 C 侧是 `vb6_ComIface_IListView**`
+                    // (调用点传的是 `&vb6_hwnd_ListView1` —— **槽地址**, 不是 HWND)。
+                    // 早先直接交 `(void*)lv` 会让 vb6_GetControlHwnd 拿到槽地址、
+                    // IsWindow/OcxHost 双失败 → 回 NULL, SendMessage(NULL,…) 静默无效
+                    // (LVStyles 的 FullRowSelect/GridLines 勾选全部不生效就是这个)。
+                    // 解引用一次拿到的才是槽里的那个句柄/控件对象。
+                    lastExpr_ = readFnLv + "((void*)(*(void**)" + objLower + "))  /* ListView slot param */";
                     return;
                 }
             }

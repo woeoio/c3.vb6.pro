@@ -15,6 +15,38 @@ extern "C" {
 // CreateObject(progId) - 通过ProgID创建COM对象，返回IDispatch*
 void* vb6_CreateObject(const wchar_t* progId);
 
+// 内置正则（C30-10）：顶掉 CreateObject("VBScript.RegExp") 对 vbscript.dll 的依赖。
+// 实现见 vb6com_regexp.c（语法/行为以 cscript 跑的 VBScript.RegExp 为基准）。
+void* vb6_RegExp_New(void);
+int   vb6_RegExp_IsProgramId(const wchar_t* progId);
+int   vb6_RegExp_IsInstance(void* obj);
+// C30-10 第二十六刀：内置 Scripting.Dictionary
+void* vb6_Dict_New(void);
+int   vb6_Dict_IsProgramId(const wchar_t* progId);
+int   vb6_Dict_IsClassName(const wchar_t* className);
+int   vb6_Dict_IsInstance(void* obj);
+
+// C30-11: 内置 Scripting.FileSystemObject（ai/040）。第一刀只落纯路径面与存在性；
+// 默认**关**（仍走 scrrun，语料 12 份行为一格不变），C3_FSO_NATIVE=1 才抢先拦截。
+void* vb6_Fso_New(void);
+int   vb6_Fso_IsProgramId(const wchar_t* progId);
+int   vb6_Fso_IsClassName(const wchar_t* className);
+int   vb6_Fso_IsInstance(void* obj);
+int   vb6_Fso_NativeEnabled(void);
+
+// C30-9: 按 **coclass CLSID** 建对象（VB6 `As New <typelib coclass>` 走的同一条路）。
+// ProgID 在某些机器上压根不注册（实测本机 32 位视图 ADODB.* 全没注册，只有 CLSID），
+// 此时 VB6 能跑、按 ProgID 查必挂 ⇒ 生成码带着符号里的 CLSID 就直接用这一枚。
+// className = 源码里那个类名: 运行时自带的类（Collection / StdFont / PropertyBag）必须先由
+// vb6_NewVb6RuntimeClass 答 —— 否则 `As New StdFont` 会拿到 oleaut32 的真 StdFont, IFont 的
+// hFont/Clone 那两个 vtable 成员就没人答了（tests/combyref271 实测八行据变 False）。
+void* vb6_NewObjectClsid(const wchar_t* clsidStr, const wchar_t* className);
+
+// C30-9: VB6 运行时自带实现的类（Collection / StdFont / PropertyBag）的**唯一**答案。
+// 命中返回新实例，未命中 NULL（= 不是自带类，调用方走注册表 / CLSID）。
+// 两条建对象出口（vb6_NewObject 按名 / vb6_NewObjectClsid 按 CLSID）都先问它。
+void* vb6_NewVb6RuntimeClass(const wchar_t* className);
+
 // typelib appobject 全局单例 (VB6 全局对象): 首次按 ProgID CoCreate 并缓存,
 // 之后每次调用复用同一实例 (VB6 GlobalMultiUse/appobject 的进程级单例语义 ——
 // 同一实例上的状态如 GlobalSettings.Icons 累积的位图在多次访问间保持)。
@@ -126,6 +158,19 @@ void* vb6_ComPackInt(int32_t val);
 void* vb6_ComPackBool(int32_t val);
 // 将double封装为VARIANT
 void* vb6_ComPackDouble(double val);
+/* C30-10 第二十九刀：Currency 实参必须走 VT_CY，而不是被默认档当成整数截断。
+ * 实测（.build/gapprobe）：`d.Add CCur(1.5), "cur"` 以前生成为
+ * `vb6_ComPackInt(vb6_CCur(1.5))` ⇒ 对端收到 VT_I4 1（真值 1.5 丢了 0.5）。
+ * 内置 Dictionary 存进去的键因此是 `VT_I4 1`，`Exists(CDbl(1.5))` 答 False ——
+ * 与真组件（VT_CY 1.5）不一致。C3 里 Currency 用 double 表示（vb6_CCurBSTR 同），
+ * 这一档负责把它换回 VT_CY 的 10000 倍定标整数。 */
+void* vb6_ComPackCur(double val);
+
+/* C30-10 第二十九刀：`Nothing` 进 Variant 实参必须是 VT_DISPATCH NULL。
+ * 实测（同探针）：以前 Nothing 字面量落到默认档，生成 `vb6_ComPackInt(NULL)`
+ * ⇒ 对端收到 VT_I4 0，与 Empty/0 撞成同一个键。本函数只吞掉那个
+ * `NULL` 实参（发码侧形状一形），产出 VT_DISPATCH + 空指针。 */
+void* vb6_ComPackNothing(void* ignored);
 
 // 将void*(IDispatch*)封装为VARIANT (用于对象参数)
 void* vb6_ComPackObject(void* obj);
@@ -196,12 +241,19 @@ void* vb6_ComCallObject(void* disp, const wchar_t* methodName,
 // "Item"。名字表里没有 "Item" 时 (Codejock 的 ReportColumns/Actions 一族默认成员
 // 叫 Column/Action) 按名找一律 DISP_E_MEMBERNOTFOUND ⇒ 交回 NULL。
 void* vb6_ComCallObjectDefault(void* disp, void* args, int32_t argc);
+/* C30-9: 取对象的**默认成员值** (DISPID_VALUE) —— `Trim(rst.Fields(1))` /
+ * `CStr(obj)` 这类「对象当标量用」的唯一出口。返回堆上 VARIANT，
+ * 由调用方交 vb6_VariantFromComResult 吃掉；NULL = 无默认成员。 */
+void* vb6_ComGetDefaultValue(void* disp);
 // COM方法调用→BSTR (内部UnpackBSTR+VarClear)
 wchar_t* vb6_ComCallBSTR(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);
 // COM方法调用→int32_t (内部UnpackInt+VarClear)
 int32_t vb6_ComCallInt(void* disp, const wchar_t* methodName,
                        void* args, int32_t argc);
+// C30-11 后记: COM方法调用→VB6 Boolean (-1/0; 与 ComCallInt 同一发调用, 只为分档)
+int32_t vb6_ComCallBool(void* disp, const wchar_t* methodName,
+                        void* args, int32_t argc);
 // COM方法调用→double (内部UnpackDouble+VarClear)
 double vb6_ComCallDouble(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);
@@ -306,6 +358,31 @@ void* vb6_ForEach_InitVariant(void* vp);
 void* vb6_ForEach_InitForms(void);
 int32_t vb6_ForEach_Next(void* enumPtr, VARIANT* outVar);  // Next element, returns 1=ok 0=done
 void vb6_ForEach_Release(void* enumPtr);  // Release IEnumVARIANT
+
+// ---- Fix 218-decl-xmod: 跨模块 Declare 的转发桩原型 ----
+// 由来 (江西省医保药品查询系统 实测): `Declare Function HtmlHelp Lib "hhctrl.ocx"
+// Alias "HtmlHelpA"` 写在 Module1.bas, 调用点却在 main.frm。cgen 的 Declare 包装
+// (vb6_lwa_*, 以及 vb6_di_* 的 extern 声明) 只发在**声明模块自己的头文件**里,
+// 而 cgen 只为「已解析的跨模块符号」发 #include —— 调用方模块根本看不到那两样。
+// 于是 cgen 侧改道发 vb6_di_<导出名> (见 cgen_decl_api.cpp 的 declareDiTargets),
+// 但**未声明的调用点会被 MSVC 当成 cdecl int 函数** ⇒ 期望 `_vb6_di_HtmlHelpA`,
+// 而 RTL 里的定义是 __stdcall ⇒ 实际符号 `_vb6_di_HtmlHelpA@16` ⇒ LNK2019:
+//   Main.obj : error LNK2019: 无法解析的外部符号 _vb6_di_HtmlHelpA
+// 所以原型必须出现在**每个生成 .c 都会包含**的头里。本头正是那个头
+// (生成代码固定 include "vb6com.h")。
+// 口子用与 cgen 生成的**同一枚 guard 名**与**同一串签名**: 两边同时可见时
+// 后到的那份被 guard 挡掉; 只有本头可见时调用点也拿得到 __stdcall 声明。
+// 签名必须与 src/rtl/core/di/vb6_di_stubs.c 的定义逐字一致 (stdcall 修饰名拼的是
+// 参数总字节数, 少一个参数就又是 LNK2019)。
+/* vb6_di_lib: hhctrl.ocx */
+#ifndef VB6_DI_HtmlHelpW_DEFINED
+#define VB6_DI_HtmlHelpW_DEFINED
+extern intptr_t __stdcall vb6_di_HtmlHelpW(intptr_t hwndCaller, BSTR pszFile, intptr_t uCommand, void* dwData);
+#endif
+#ifndef VB6_DI_HtmlHelpA_DEFINED
+#define VB6_DI_HtmlHelpA_DEFINED
+extern intptr_t __stdcall vb6_di_HtmlHelpA(intptr_t hwndCaller, BSTR pszFile, intptr_t uCommand, void* dwData);
+#endif
 
 #ifdef __cplusplus
 }

@@ -67,6 +67,14 @@ int32_t vb6_NumTryParse(BSTR s, double* out);
 int32_t vb6_IsNumericText(BSTR s);   // = vb6_NumTryParse 的成功本身，**不许报错**
 int16_t vb6_BoolVal(BSTR s);      // 账 #416: Boolean 那一档问的是 VarBoolFromStr ("True" 算话)
 BSTR vb6_Str(int32_t n);
+// C30-10 第四十九刀: Str$(Single) 的浮点出口 (7 位口径 + 非负前导空格 + 去前导 0)。
+BSTR vb6_StrSng(float x);
+// C30-10 第五十六刀: Str$(Double) / Str$(Boolean)。真 VB6 第二轮读数：
+//   Str$(1234567.5) = " 1234567.5"（旧路径按 int32 截断成 "1234567"）
+//   Str$(0.000001)  = " .000001"   Str$(1E-16) = " 1E-16"
+//   Str$(True)      = " True"      （CStr(True) = "True"，差的就是那个前导空格）
+BSTR vb6_StrDbl(double x);
+BSTR vb6_StrBool(int16_t x);
 BSTR vb6_Format(vb6_VARIANT expr, BSTR fmt, int32_t firstDayOfWeek, int32_t firstWeekOfYear);
 // 账 #428 (§B202): 这枚出口被内置表点名，cgen 把它**直接发进用户 TU**。头里没声明时 C 只当它「返回 int 的隐式声明」—— 两台都照编照链，所以这一格从形状上看不见: x86 把截断后的低 32 位当指针用恰好还通，x64 交出去的就是废指针 ⇒ vb6_BSTR_AssignMove 一解引用就 AV(0xC0000005)。判据里那枚 VarType 针把它在两台上都钉住: 缺声明时答 3 (VT_I4)，有了才答 8 (VT_BSTR)。
 BSTR vb6_FormatDateTime(double dateSerial, int32_t namedFormat);
@@ -77,6 +85,19 @@ BSTR vb6_FormatDateTime(double dateSerial, int32_t namedFormat);
     default: vb6_LTrim)((x))
 #endif
 BSTR vb6_LTrimVar(vb6_VARIANT s);
+
+// C30-11 第七十一刀: Len/Trim/LTrim/RTrim/UCase/LCase 的「Null 进、Null 出」变体位。
+// 真 VB6 IDE 读数 (tests/vb6probe/NullFamilyProbe.bas A1/B1/B4/B5/B6/B7): 六格都是
+// **Null**、Err 0; Empty 那几格维持原档 (Len 0 / Trim "")。
+// 只在实参是**整只 Variant 槽**时改道到这几枚 (cgen_expr_call_arg_variant.inc),
+// 其余实参照旧交给 BSTR 形参 —— 两条路的读数不同, 不能合成一条。
+// ⚠ 头里只留原型, 身子在 vb6rtl_string.c (与 vb6_Trim 同文件): 理由同 IntV/FixV。
+vb6_VARIANT vb6_LenV(vb6_VARIANT v);
+vb6_VARIANT vb6_TrimV(vb6_VARIANT v);
+vb6_VARIANT vb6_LTrimV(vb6_VARIANT v);
+vb6_VARIANT vb6_RTrimV(vb6_VARIANT v);
+vb6_VARIANT vb6_UCaseV(vb6_VARIANT v);
+vb6_VARIANT vb6_LCaseV(vb6_VARIANT v);
 
 // 消息框
 // 账 #490 §B178: 原型收满 VB6 的五参形 (prompt, buttons, title, helpfile, context),
@@ -91,6 +112,10 @@ static inline int32_t vb6_MsgBox1(BSTR prompt) {
 
 // 数值函数
 double vb6_Abs(double x);
+// C30-10 第五十刀: Abs 的 Single 出口（VB6 的 Abs 返回实参那一档）。
+float vb6_AbsSng(float x);
+// C30-10 第五十二刀: Abs(Variant) 的运行时子类型阶梅（保留子类型，不一律降 Double）。
+vb6_VARIANT vb6_AbsV(vb6_VARIANT v);
 int32_t vb6_Sgn(double x);
 double vb6_Sqr(double x);
 double vb6_Round(double x, int32_t decimals);
@@ -105,6 +130,25 @@ int16_t vb6_CInt(double x);
 int32_t vb6_CLng(double x);
 double vb6_CDbl(double x);
 BSTR vb6_CStr(vb6_VARIANT x);
+// C30-11 第六十二刀: Null 转换站。VB6 口径: Variant(Null) 隐式转 String 一律 **94**
+// (Invalid use of Null) —— 读数 .temp/null/oracle_null.vbs: CStr 94 / Asc 94 / Replace 94 /
+// Join 分隔符 94 / Split 源 94。散落在 "Variant 实参 → String 形参" 那一站与 CStr 内建。
+// 与 vb6_CStr 分开的理由: & 运算与 Debug.Print 仍然按"宽松"走(各自另有口径,
+// 后者 VB6 打的是文本 "Null"), 不能一刀切。
+BSTR vb6_CStrStrict(vb6_VARIANT x);
+// C30-11 第七十三刀 (§B221): 「把一枚 Variant 右值收进 String 槽」—— Null 按 VB6 口径
+// 报 94 且**目标不变** (E6/E7/E8 读数: err=94、s 仍是赋前的值)。单开一枚而不是直接用
+// vb6_CStrStrict: 后者 raise 后交回空串, 赋值方会把空串写进目标 —— 与 VB6 不同。
+void vb6_BSTR_AssignFromVariant(BSTR* target, vb6_VARIANT src);
+// C30-11 第七十五刀 (§B223): 「String 右值 → Double 目标」。
+// 真 VB6 是隐式 String→Double: 数字串折成数, 其余含空串 ⇒ **13** 且目标不变。
+// 以前把 BSTR 裸交给 double ⇒ 编译期 C2440 (探针 F2 `d = Null & ""` /
+// F3 `d = CStr(Null)`), 所以没有存量编译通过的依赖。
+void vb6_Dbl_AssignFromBSTR(double* target, BSTR src);
+// C30-11 第七十六刀 (§B224): Null → Boolean / Double 目标 —— 报 94 且**目标不变**
+// (真机 A2/A4)。与 vb6_BSTR_AssignFromVariant 同一口径。
+void vb6_Bool_AssignFromVariant(int16_t* target, vb6_VARIANT src);
+void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src);
 // M22: typed CStr overloads
 BSTR vb6_CStrLong(int32_t x);
 BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 Variant 解包入口
@@ -132,7 +176,17 @@ float vb6_CSng(double v);
 // vb6_VariantToDouble —— 它对 vtBSTR 走 vb6_Val(宽松)，于是同一个 `CInt(x)` 对
 // 「x 是 String 变量」报 13、对「x 是装着同一串文本的 Variant」静默给 0，两半答两种。
 // 数值/布尔之外的档仍归 vb6_VariantToDouble 那一枚权威，这里只把文本那一档改问严格解析。
+// C30-11 第六十三刀: 这枚 inline 要抛 94 ⇒ 必须先有 ErrRaise 的原型，否则 C11 里先生成
+// 隐式声明 int()，随后 vb6rtl_array.h 的 void(...) 就成了 C2371 冲突定义。
+void vb6_ErrRaise(int32_t errNum, BSTR source, BSTR description);
 static inline double vb6_VariantConvNum(vb6_VARIANT v) {
+    // C30-11 第六十三刀: Variant(Null) 进 CInt/CLng/CDbl/CSng/CCur/CByte/CBool/CSByte/
+    // CUInt/CULng/CUIntLng/CLngLng/CLngPtr 这一族 = **94**（VB6 口径；读数
+    // .temp/null/oracle_num.vbs 全部 94）。Null 不是“数值 0”，以前落到 default 静默给 0。
+    if (v.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+    }
     return (v.vt == vb6_vtBSTR) ? vb6_NumVal(v.bstrVal) : vb6_VariantToDouble(v);
 }
 static inline int16_t vb6_CIntV(vb6_VARIANT v) { return vb6_CInt(vb6_VariantConvNum(v)); }
@@ -141,6 +195,12 @@ static inline double vb6_CDblV(vb6_VARIANT v) { return vb6_VariantConvNum(v); }
 static inline uint8_t vb6_CByteV(vb6_VARIANT v) { return vb6_CByte(vb6_VariantConvNum(v)); }
 static inline float vb6_CSngV(vb6_VARIANT v) { return (float)vb6_VariantConvNum(v); }
 static inline int16_t vb6_CBoolV(vb6_VARIANT v) {
+    // C30-11 第六十三刀: CBool(Null) = 94（读数 oracle_num.vbs）。这一档自己那两条
+    // 早退路不走 vb6_VariantConvNum，Null 会落最后一行静默给 0。
+    if (v.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+    }
     if (v.vt == vb6_vtBoolean) return v.boolVal;
     if (v.vt == vb6_vtBSTR) return vb6_BoolVal(v.bstrVal);
     return vb6_CBool(vb6_VariantToDouble(v));
@@ -281,6 +341,9 @@ double vb6_Pow(double base, double exp);
 void* vb6_NewObject(const wchar_t* className);
 int32_t vb6_TypeOf(void* obj, const wchar_t* typeName);
 void* vb6_DictAccess(void* obj, const wchar_t* key);
+// C30-7: `rst!Field = v`（Recordset 字段写）。vb6_DictAccess 是读侧糖，函数调用
+// 不是左值，赋值必须另走这里（否则 C2106）。实现见 vb6rtl_conv.c。
+void vb6_DictAssign(void* obj, const wchar_t* key, void* value);
 
 // 字符串函数 (补充)
 BSTR vb6_Replace(BSTR expr, BSTR find, BSTR rep, int32_t start, int32_t count, int32_t compare);
@@ -493,6 +556,17 @@ float vb6_CSng(double v);
 double vb6_CDate(vb6_VARIANT v);
 BSTR vb6_Hex(int32_t n);
 BSTR vb6_Oct(int32_t n);
+
+// C30-11 第六十四刀: Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位。
+// 读数 .temp/null/oracle_num.vbs：这四格真值都是 **Null**（不是 0，也不是 94）。
+// ⚠ 位置只能放在 vb6_Int/vb6_Fix/vb6_Hex/vb6_Oct 四个原型**之后**；
+// ⚠ 只用 inline 不行：check_conv_strict_parse 的 R2 是本数（header 里取 Double 的两条路
+//   各自的出现数都钉死），把取数写进头会多出站点。
+//   所以头里只留**原型**，身子在 vb6rtl_conv.c（与 vb6_AbsV 同文件）。
+vb6_VARIANT vb6_IntV(vb6_VARIANT v);
+vb6_VARIANT vb6_FixV(vb6_VARIANT v);
+vb6_VARIANT vb6_HexV(vb6_VARIANT v);
+vb6_VARIANT vb6_OctV(vb6_VARIANT v);
 
 // P18-A: 兼容性填平 — 新增RTL函数
 double vb6_CCur(double v);             // Fix 126: CCur 值语义 (4 位小数)

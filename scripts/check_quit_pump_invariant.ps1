@@ -16,8 +16,20 @@
 #   P6  同一条 quit 被抽到**第二次**（`>= 2`）⇒ vb6_End()：调用者停在 DoEvents 忙等里没有外层泵时，
 #       VB6 的口径是「最后一个窗体卸载 ⇒ 程序结束」；`C3_NO_QUIT_IN_DOEVENTS` 是退回纯投递的开关。
 #   P4  模态那条 while 的收尾紧跟一条 hand-back。
-#   P5  PostQuitMessage 在 vb6forms.c / vb6rtl_system.c 里 = 2（登记处那一条投 + 助手那一条补投），
-#       并且**主循环那条泵里没有** hand-back —— 外层是消费者，给它加投回等于把退出信号弄丢两次。
+#   P5  C30-9 改口径：**投 quit 的地方只剩一处**（vb6forms.c 里 hand-back 助手）——
+#       登记处那条已经换成可撤销的「挂起意头」：
+#         · 旧的 2 处（登记处当场 PostQuitMessage + 助手补投）实测有缺陷：`Unload Me` 紧跟
+#           `Main.Show`（frmlogin.frm:191-192 登录转场）时那条 WM_QUIT 撤不回来，主窗体刚
+#           建好就被队列里那条 quit 判死（退出码 0、窗口闪没）。
+#         · 新形状 = Unregister 置 `g_formQuitPending`、Register 一有窗体就清、两个主泵的
+#           while 顶部每轮重问 `vb6_Forms_QuitPending()`，真正投 quit 的只有助手。
+#       所以这一格现在钉四件事（少一件就会退回那个退出码 0）：
+#         P5a 剥注释后 `PostQuitMessage(` 只剩 vb6forms.c 1 处、vb6rtl_system.c 0 处；
+#         P5b 意头的三处（QuitPending 读 / RequestQuit 只置位 / Register 清）都在；
+#         P5c 两个主泵的 while 都是「先问意头再 GetMessage」，泵后补一条合成 WM_QUIT；
+#         P5d 发码侧 WM_DESTROY 调 vb6_Forms_RequestQuit 且**不再**发裸 PostQuitMessage。
+#       ⚠ 计数一律先剥注释：本刀在 vb6rtl_system.c 的说明文字里引了旧写法（`PostQuitMessage(0)`），
+#       文本计数会把它当成两枚调用点（GA 实测 P5 = 3，全红）—— 修的是尺子的形状，不是把说明改哑。
 #
 # 用法:   powershell -File scripts\check_quit_pump_invariant.ps1
 # 退出码: 0 = 全绿；1 = 红
@@ -41,6 +53,46 @@ if ($bad.Count -eq 0) {
 
 function Count-Of([string]$text, [string]$pattern) {
     return @([regex]::Matches($text, $pattern)).Count
+}
+
+# 剥注释（与 check_com_server_error_frame 的 Strip-Comments185 同形，但多一条字符字面量状
+# 态）：字符串字面量原样保留 —— 这道门数的是**C 代码**里的调用点，不是说明文字里的引用。
+# 发码那个 .inc 更绕一层：调用点住在 emitLine("...") 的字符串里，所以这里必须把字符串当内容抄
+# 下来、而把 // 与 /* */ 当注释丢掉。
+#
+# 为什么必须认字符字面量 `L'"'`（实测 2026-11-16，这道门第一次跑 P5a 就栽在这）：
+#   vb6rtl_system.c:208 `if (*cmdLine == L'"') {` 里的那枚 " 不是字符串的开头 —— 不认字符字面量，
+#   扫描器从 208 行起就“在字符串里”，随后 664/681 两个块注释的 /* 与 */ 全被当内容抄下来，
+#   P5a 于是读到 vb6rtl_system.c=2（实际是 0，那两处是说明文字）。一行差一个状态，整道门读错。
+function Strip-Cmt([string]$text) {
+    $out = New-Object System.Text.StringBuilder
+    $i = 0
+    $n = $text.Length
+    $inBlock = $false
+    $inLine = $false
+    $inStr = $false
+    $inChr = $false
+    while ($i -lt $n) {
+        $c = $text[$i]
+        $d = if ($i + 1 -lt $n) { $text[$i + 1] } else { [char]0 }
+        if ($inLine) { if ($c -eq "`n") { $inLine = $false; [void]$out.Append($c) }; $i++; continue }
+        if ($inBlock) { if ($c -eq "*" -and $d -eq "/") { $inBlock = $false; $i += 2; continue }
+                        if ($c -eq "`n") { [void]$out.Append($c) }; $i++; continue }
+        if ($inStr -or $inChr) {
+            $q = if ($inStr) { '"' } else { "'" }
+            [void]$out.Append($c)
+            if ($c -eq "\") { if ($i + 1 -lt $n) { [void]$out.Append($text[$i+1]) }; $i += 2; continue }
+            if ($c -eq $q) { if ($inStr) { $inStr = $false } else { $inChr = $false } }
+            $i++; continue
+        }
+        if ($c -eq "/" -and $d -eq "*") { $inBlock = $true; $i += 2; continue }
+        if ($c -eq "/" -and $d -eq "/") { $inLine = $true; $i += 2; continue }
+        if ($c -eq '"') { $inStr = $true; [void]$out.Append($c); $i++; continue }
+        if ($c -eq "'") { $inChr = $true; [void]$out.Append($c); $i++; continue }
+        [void]$out.Append($c)
+        $i++
+    }
+    return $out.ToString()
 }
 
 if ($bad.Count -eq 0) {
@@ -100,11 +152,59 @@ if ($bad.Count -eq 0) {
         }
     }
 
-    # ---- P5: 投 quit 的地方只有两处，且外层泵不投 ----
-    $nPost1 = Count-Of $t1 'PostQuitMessage\('
-    $nPost2 = Count-Of $t2 'PostQuitMessage\('
-    if ($nPost1 + $nPost2 -ne 2) {
-        $bad += ("P5 PostQuitMessage sites = " + ($nPost1 + $nPost2) + " (want 2: 登记处投 + 助手补投) -> vb6forms.c=" + $nPost1 + " vb6rtl_system.c=" + $nPost2)
+    # ---- P5 (C30-9): 投 quit 只剩助手一处；登记的退出意头必须**可撤销** ----
+    $c1 = Strip-Cmt $t1
+    $c2 = Strip-Cmt $t2
+    $nPost1 = Count-Of $c1 'PostQuitMessage\('
+    $nPost2 = Count-Of $c2 'PostQuitMessage\('
+    if ($nPost1 -ne 1 -or $nPost2 -ne 0) {
+        $bad += ("P5a PostQuitMessage sites (comments stripped) = vb6forms.c:" + $nPost1 + " vb6rtl_system.c:" + $nPost2 +
+                 " (want 1/0: 只有 hand-back 助手真投 quit, 登记处置挂起意头 -> 旧口径 2 处就是退出码 0 那一格)")
+    }
+    # P5b: 意头的三处主人都在 vb6rtl_system.c，且各自只有一枚。
+    $nQp = Count-Of $c2 'int vb6_Forms_QuitPending\(void\)'
+    $nRq = Count-Of $c2 'void vb6_Forms_RequestQuit\(void\)'
+    if ($nQp -ne 1) { $bad += ("P5b vb6_Forms_QuitPending definition = " + $nQp + " (want 1: 两个主泵每轮问的就是它)") }
+    if ($nRq -ne 1) { $bad += ("P5b vb6_Forms_RequestQuit definition = " + $nRq + " (want 1: 发码侧退出意头的唯一出口)") }
+    if ($c2 -notmatch 'void vb6_Forms_RequestQuit\(void\)\s*\{\s*g_formQuitPending = 1;\s*\}') {
+        $bad += 'P5b vb6_Forms_RequestQuit no longer just raises the pending intent (g_formQuitPending = 1) - 投一条撤不回的 quit 就是 C30-9 那个退出码 0'
+    }
+    $mReg = [regex]::Match($c2, 'void vb6_Forms_Register\([\s\S]*?\r?\n\}')
+    if (-not $mReg.Success) { $bad += 'P5b vb6_Forms_Register body not found' }
+    elseif ($mReg.Value -notmatch 'g_formQuitPending\s*=\s*0;') {
+        $bad += 'P5b vb6_Forms_Register no longer clears the pending quit - 同一事件里 `Unload Me` 紧跟 `Main.Show` 会被上一发意头判死'
+    }
+    $mUnreg = [regex]::Match($c2, 'void vb6_Forms_Unregister\([\s\S]*?\r?\n\}')
+    if (-not $mUnreg.Success) { $bad += 'P5b vb6_Forms_Unregister body not found' }
+    else {
+        if ($mUnreg.Value -notmatch 'g_formQuitPending\s*=\s*1;') {
+            $bad += 'P5b vb6_Forms_Unregister no longer raises the pending quit when the last form goes - 关窗后没人告诉泵该收工'
+        }
+        if ($mUnreg.Value -notmatch 'g_msgLoopDepth\s*>\s*0') {
+            $bad += 'P5b the `g_msgLoopDepth > 0` gate on the pending quit is gone - 泵没跑时置位无人消费, 反而判死 Sub Main 里 `Load/Unload` 之后的 Show'
+        }
+    }
+    # P5c: 两个主泵的 while 都是「先问意头、再 GetMessage」，泵后补一条合成的 WM_QUIT。
+    $nGate = Count-Of $c1 'while \(!vb6_Forms_QuitPending\(\) && GetMessage\(&msg, NULL, 0, 0\)\)'
+    if ($nGate -ne 2) {
+        $bad += ("P5c main pumps checking the pending quit = " + $nGate + " (want 2: 两条主循环; DoEvents 那条是内层泵, 判意头就把内层当外层了)")
+    }
+    if ($c1 -notmatch 'if \(vb6_Forms_QuitPending\(\)\) \{ msg\.message = WM_QUIT;') {
+        $bad += 'P5c the synthesized WM_QUIT after the pump is gone - 泵因意头而停时 msg 没被赋值过, 栈上垃圾会被当成退出码交回去'
+    }
+    # P5d: 发码那一侧的形状主人 (启动窗体 WM_DESTROY 只许发 RequestQuit)。
+    $genP = Join-Path $root "src\backend\detail\module\cgen_form_wndproc_dispatch.inc"
+    if (-not (Test-Path -LiteralPath $genP)) { $bad += ("P5d missing " + $genP) }
+    else {
+        $cg = Strip-Cmt ([System.IO.File]::ReadAllText($genP))
+        $nGenRq = Count-Of $cg 'vb6_Forms_RequestQuit\(\)'
+        $nGenPost = Count-Of $cg 'PostQuitMessage\('
+        if ($nGenRq -ne 1) {
+            $bad += ("P5d emit sites of vb6_Forms_RequestQuit() in cgen_form_wndproc_dispatch.inc = " + $nGenRq + " (want 1: 启动窗体 WM_DESTROY)")
+        }
+        if ($nGenPost -ne 0) {
+            $bad += ("P5d the emit side posts a raw PostQuitMessage again (" + $nGenPost + ") - 那条 quit 撤不回来, 登录转场会被它判死")
+        }
     }
     $mMain = [regex]::Match($t1, 'int vb6_MessageLoop\(void\)\s*\{[\s\S]*?\r?\n\}')
     if (-not $mMain.Success) { $bad += "P5 vb6_MessageLoop body not found" }
@@ -114,7 +214,7 @@ if ($bad.Count -eq 0) {
 }
 
 if ($bad.Count -eq 0) {
-    Write-Host "PASS quit-pump invariant: 4 pumps, 2 inner hand-backs, outer pump consumes" -ForegroundColor Green
+    Write-Host "PASS quit-pump invariant: 4 pumps, 2 inner hand-backs, 1 raw quit (helper), pending-intent cancellable, outer pump consumes" -ForegroundColor Green
     exit 0
 }
 foreach ($b in $bad) { Write-Host ("FAIL " + $b) -ForegroundColor Red }

@@ -1,4 +1,12 @@
 // c3rtl.rc - RTL runtime library embedded as resources
+// 2026-11-16 (C30-10): 新增 vb6com_regexp.c（内置 VBScript.RegExp 替代）。本条只为触发 rc 重嵌。
+// (re-embed touch 170936)
+// 2026-11-14 (账 #611, JSonFast 第 5/7 按钮):
+//   · vb6rtl.c 新增 vb6_ErrGoToZero(): `On Error GoTo 0` 恢复调用方错误帧,
+//     不再把外层 On Error GoTo label 的 setjmp 一并关掉 (否则 Err.Raise 未处理).
+//   · vb6com.c 登记 CreateObject 的 ProgID <Class> 段, vb6rtl_conv.c 的
+//     vb6_TypeName 据此答 coclass 名 ("Scripting.Dictionary" → "Dictionary").
+//   本条注释只为触发 rc.exe 重嵌 src/rtl/** (check_rtl_embedded 的 stale-embed 判据)。
 // 2026-11-13 (账 #610 第344刀, GetXData 的 VT_ARRAY|VT_VARIANT 元素档):
 //   vb6rtl_com.c 的 vb6_VariantArrayIntoSlot 开 **VT_VARIANT 元素档**: 这一档
 //   落不进 blittable 白名单 (VARIANT 不能整块 memcpy), 但可以**逐枚深拷贝**
@@ -531,6 +539,7 @@
 207 RCDATA "../rtl/core/vb6forms/vb6forms_imagelist.c"
 208 RCDATA "../rtl/core/vb6forms/vb6forms_statusbar.c"
 209 RCDATA "../rtl/core/vb6forms/vb6forms_sstab.c"
+226 RCDATA "../rtl/core/vb6forms/vb6forms_tabstrip.c"
 210 RCDATA "../rtl/core/vb6forms/vb6forms_oledd.c"
 211 RCDATA "../rtl/core/vb6forms/vb6forms_listview.c"
 // C29-3: 控件"成员对象/成员集合"的真 IDispatch (ListImages 立样)
@@ -554,6 +563,23 @@
 220 RCDATA "../rtl/core/vb6forms/vb6forms_winsock.c"
 // ai/029 C29-SL-a: Slider (原生 msctls_trackbar32，不加载 MSCOMCTL.OCX)
 221 RCDATA "../rtl/core/vb6forms/vb6forms_slider.c"
+// ai/029 C30-UD-a: UpDown (原生 msctls_updown32，不加载 MSCOMCTL.OCX)
+// 编号取 240（225 已被 vb6com_manifest.c 占用）；新号不要插在 221 之后顺延，
+// 因为已有资源的号是“先到者保号”的惯例（见上面 212/213 那一对）。
+240 RCDATA "../rtl/core/vb6forms/vb6forms_updown.c"
+// ai/029 C30-3: MaskEdBox (Win32 EDIT + RTL 掩码引擎，不加载 MSMASK32.OCX)
+// 编号取 241（240 是 UpDown，242 之前空着；新号不插队，保持先到者保号）。
+241 RCDATA "../rtl/core/vb6forms/vb6forms_maskededit.c"
+// ai/029 C30-4: MSComm (Win32 串口 API + 读线程，不加载 MSCOMM32.OCX)
+// 编号取 242（241 是 MaskEdBox；新号不插队，保持先到者保号）。
+242 RCDATA "../rtl/core/vb6forms/vb6forms_mscomm.c"
+// ai/029 C30-5: Adodc (ACE 底座；不加载 MSADODC.OCX)
+// 编号取 243（242 是 MSComm；新号不插队，保持先到者保号）。
+243 RCDATA "../rtl/core/vb6forms/vb6forms_adodc.c"
+244 RCDATA "../rtl/core/vb6forms/vb6forms_grid.c"
+// ai/029 C30-6: MSHFlexGrid / MSFlexGrid —— 字符串矩阵表格（不依赖 ACE，CI 也能真跑）
+// 编号取 245（244 是 DataGrid；新号不插队，保持先到者保号）。
+245 RCDATA "../rtl/core/vb6forms/vb6forms_mshflexgrid.c"
 131 RCDATA "../rtl/core/vb6forms/vb6forms_axsite.c"
 198 RCDATA "../rtl/core/vb6forms/vb6forms_axcontainer.c"
 // vb6forms_axsite.c 按功能家族拆分 (2026-09-20): 内部头 + 5 个族编译单元
@@ -585,6 +611,13 @@
 // vb6forms 家族再细分 (2026-09-17): Picture 属性 / Widget 属性
 139 RCDATA "../rtl/core/vb6forms/vb6forms_picture_prop.c"
 140 RCDATA "../rtl/core/vb6forms/vb6forms_widget_prop.c"
+// C30-8 (2026-11-16): 跨模块菜单项代理令牌 vb6forms_menuproxy.c —— 菜单不是窗口,
+// 另一窗体写 `Main.Menu_X.Enabled` 时只能靠 (HMENU, 命令ID) 令牌把属性名换算成
+// vb6_SetMenu* 家族 (江西省医保药品查询系统 frmlogin 实测 LNK2019 2 条)。
+246 RCDATA "../rtl/core/vb6forms/vb6forms_menuproxy.c"
+// C30-10 (2026-11-16): TeeChart 内置图表 —— 自绘窗口类 VB6_TCHART，不加载 TeeChart5.ocx。
+// 动因：OCX 只有 32 位，--arch x64 永远链不上；内置后两档架构同一条路。
+247 RCDATA "../rtl/core/vb6forms/vb6forms_teechart.c"
 
 // DI 转发桩按 Lib 家族拆分 (2026-09-17): 由 scripts/gen_di_stubs.ps1 生成
 // 每个文件对应一组 DLL 家族, 由 C3 生成头里的 `/* vb6_di_lib: <lib> */` 标记驱动
@@ -636,6 +669,13 @@
 // 分两个编译单元: 容器 + IDispatch / _NewEnum 的 IEnumVARIANT
 177 RCDATA "../rtl/core/vb6com/vb6com_collection.c"
 178 RCDATA "../rtl/core/vb6com/vb6com_collection_enum.c"
+// C30-10: 内置正则引擎（顶掉 CreateObject("VBScript.RegExp") 的 vbscript.dll 依赖）。
+// 新号取 227（221..226 已满，不往后顺延，避免与后续刀撞号）。
+227 RCDATA "../rtl/core/vb6com/vb6com_regexp.c"
+// 2026-11-16 (C30-10 第二十六刀): 内置 Scripting.Dictionary（vb6com_dict.c）
+228 RCDATA "../rtl/core/vb6com/vb6com_dict.c"
+// 2026-11-18 (C30-11 第一刀): 内置 Scripting.FileSystemObject（vb6com_fso.c）
+229 RCDATA "../rtl/core/vb6com/vb6com_fso.c"
 // vb6forms_uc.c 按族细分 (2026-09-19): 内部头 + 6 个族编译单元 + 7 个函数体片段
 // 原单文件 1546 行 → 主文件仅作入口；uc/ 下为独立编译单元，uc/detail/ 为片段
 179 RCDATA "../rtl/core/vb6forms/vb6forms_uc_internal.h"

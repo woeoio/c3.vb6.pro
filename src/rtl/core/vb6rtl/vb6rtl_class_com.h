@@ -128,6 +128,9 @@ void* vb6_ComCall(void* disp, const wchar_t* methodName,
 void* vb6_ComCallByDispid(void* disp, int32_t dispid,
                          void* args, int32_t argc);
 void* vb6_ComGetProp(void* disp, const wchar_t* propName);
+/* C30-9: 默认成员**值** (DISPID_VALUE)。生成码与 RTL 各 include 一份头 —— 这份给
+ * vb6rtl_format.c 的 vb6_Format 用 (对象当标量 ⇒ 取默认成员，以前交空串)。 */
+void* vb6_ComGetDefaultValue(void* disp);
 void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value);
 void vb6_ComSetPropArg(void* disp, const wchar_t* propName, void** args, int32_t argc, void* value);
 void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef);
@@ -170,6 +173,9 @@ wchar_t* vb6_ComCallBSTR(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);
 int32_t vb6_ComCallInt(void* disp, const wchar_t* methodName,
                        void* args, int32_t argc);
+// C30-11 后记: COM方法调用→VB6 Boolean (-1/0; 与 ComCallInt 同一发调用, 只为分档)
+int32_t vb6_ComCallBool(void* disp, const wchar_t* methodName,
+                        void* args, int32_t argc);
 double vb6_ComCallDouble(void* disp, const wchar_t* methodName,
                          void* args, int32_t argc);
 // Fix 140: COM调用结果→Byte() 数组. 结果持 BSTR 时按 VB6 语义转字节数组

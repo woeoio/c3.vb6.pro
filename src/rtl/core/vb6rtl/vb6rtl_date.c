@@ -620,3 +620,17 @@ void vb6_ArraySetVariant(vb6_SafeArray1D* arr, int32_t index, vb6_VARIANT val) {
     vb6_VariantCopy(v, &val);
 }
 
+// C30-11 第六十刀: Array(<对象>) / Array(Nothing) 的对象档出口。
+// 口径同 vb6_ArraySetBSTR: 先清槽再装, 且**只取一份引用**（vb6_ComAddRefDispatch
+// 内部只对真 dispatch 计数）。
+// 不能发成 vb6_ArraySetVariant(arr, i, vb6_VariantObject(p))：那条是 VariantCopy 且不清源,
+// 临时值没人 VariantClear ⇒ 每个对象元素泄漏一份引用。
+void vb6_ArraySetObject(vb6_SafeArray1D* arr, int32_t index, void* val) {
+    if (!arr || index < arr->lBound || index > arr->uBound) return;
+    vb6_VARIANT* v = &VB6_SA_AT(vb6_VARIANT, arr, index);
+    vb6_VariantClear(v);
+    v->vt = vb6_vtDispatch;
+    v->pdispVal = val;
+    vb6_ComAddRefDispatch(val);
+}
+

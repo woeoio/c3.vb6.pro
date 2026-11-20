@@ -243,7 +243,11 @@ foreach ($need in @("cgen_expr_with.cpp", "cgen_expr_call_com_bind.inc")) {
     }
 }
 $authTxt = [System.IO.File]::ReadAllText((Join-Path $root "src\backend\cgen_util_ctrl.cpp"))
-$oaBlk = [regex]::Match($authTxt, 'CCodeGen::controlOneArgMethod\s*[\s\S]{0,700}?\r?\n\}')
+# 窗口从定长 {0,700} 改为「懒配到第一个顶格的 }」—— 与前面 D3 同一条教训：
+# 定长窗口量的是**当时的体长**，不是「这枚函数的体」。C30-UD-b 给这张表加了一行
+# (UpDown 的 SimDelta) 后体长 700→1098 ⇒ 整条 D7 假红，而它要盯的三件事（两个成员名 /
+# 两个出口名 / 无 default 回退）一样没坏。阈值不跟着体长走，就不会再有第二次。
+$oaBlk = [regex]::Match($authTxt, 'CCodeGen::controlOneArgMethod\s*[\s\S]*?\r?\n\}')
 if (-not $oaBlk.Success) {
     $bad += "D7 authority body not found"
 } else {

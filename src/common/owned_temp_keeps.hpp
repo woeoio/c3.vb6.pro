@@ -46,7 +46,12 @@ struct OwnedTempException {
 //   与 scripts/owned_temp_keeps_164.txt 的 K5/K12 双向对账同源；登记为例外 = 不提名，不放宽）。
 inline const OwnedTempException* ownedTempExceptions() {
     static const OwnedTempException kRows[] = {
+        { "vb6_AbsV",            0, '1', "ret" },
         { "vb6_ArraySetVariant",  2, '1', "write" },
+        // C30-11 第七十六刀 (§B224): Boolean 目标上的 Null —— 报 94 且目标不变
+        // (真机 NullExtProbe A4)。派生侧给的是 keeps=1 'store' ⇒ 不提名。
+        { "vb6_Bool_AssignFromVariant", 1, '1', "store" },
+        { "vb6_BSTR_AssignFromVariant", 1, '1', "store" },
         { "vb6_BSTR_AssignMove",  1, '1', "write" },
         { "vb6_CDec",             0, '1', "ret" },
         { "vb6_DecimalAsVariant", 0, '1', "write" },
@@ -54,6 +59,18 @@ inline const OwnedTempException* ownedTempExceptions() {
         { "vb6_DecimalToR8",      0, '1', "store" },
         { "vb6_DecSetTag",        0, 'U', "handoff-unknown:vb6_DEC_VT" },
         { "vb6_ErrRaise",         1, '1', "store" },
+        // C30-11 第六十四刀: HexV/OctV 把 vb6_Hex/Oct 的 BSTR 交给 vb6_VariantString
+        // （那一枚已登记为 store ⇒ 指针落进比调用活得久的壳）⇒ 本表按 statically 推导的
+        // '1'/'store' 登记 = 不提名。与 scripts/owned_temp_keeps_164.txt 的 K5/K12 同源。
+        { "vb6_HexV",             0, '1', "store" },
+        // C30-11 第七十一刀: Trim/LTrim/RTrim/UCase/LCase 的变体位把 base 函数造的 BSTR
+        // 交给 vb6_VariantString（那一枚已登记为 store）⇒ 同 HexV/OctV 同档，'1'/'store'
+        // = 不提名。vb6_LenV 不在此表：它推导为 owned（见下方 owned 名单）。
+        { "vb6_TrimV",            0, '1', "store" },
+        { "vb6_LTrimV",           0, '1', "store" },
+        { "vb6_RTrimV",           0, '1', "store" },
+        { "vb6_UCaseV",           0, '1', "store" },
+        { "vb6_LCaseV",           0, '1', "store" },
         { "vb6_ErrRaise",         2, '1', "store" },
         { "vb6_ho_setVariantBstr",1, '1', "store" },
         { "vb6_IIfVariant",       1, '1', "ret+write" },
@@ -63,6 +80,7 @@ inline const OwnedTempException* ownedTempExceptions() {
         { "vb6_LoadResPicture",   0, '1', "write" },
         { "vb6_LoadResPicture",   1, '1', "write" },
         { "vb6_LoadResString",    0, '1', "write" },
+        { "vb6_OctV",             0, '1', "store" },
         { "vb6_RaiseError",       1, '1', "store" },
         { "vb6_SendKeys",         0, '1', "write" },
         { "vb6_VariantArrayGetVal",0, '1', "write" },
@@ -130,6 +148,15 @@ inline const OwnedTempConsumes* ownedTempConsumes() {
         { "vb6_IIfVariant",      1, '1' },
         { "vb6_IIfVariant",      2, '1' },
         { "vb6_LSetFree",        0, '0' },
+        // C30-10 第五十六刀: Str$ 数值档的共用尾巴（static，只活在 RTL 里）—— 它接管并
+        // SysFreeString 掉 CStr 交来的那枚数字文本。普查从 RTL 实读得到这一格，
+        // 这里不登记就报 K13d（发码侧会双放）；名字进不了用户 TU，所以这行是**对账用**的。
+        { "vb6_StrFromNumText",  0, '0' },
+        // C30-11 第六十六刀: `&` 双 Null 折叠站 —— 两个 BSTR 实参都由**这一枚**接管
+        // （两条路都放：折 Null 时两颗都放，不折时先 Concat 再两颗都放）。
+        // 所以**无条件**消费（'0'）：调用方不能再放，否则双放。
+        { "vb6_VarConcatNullV",  2, '0' },
+        { "vb6_VarConcatNullV",  3, '0' },
         { "vb6_VariantAssign",   0, '0' },
         { nullptr, 0, '0' },    // 空哨兵：遍历靠它收尾
     };
@@ -209,6 +236,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Console_ReadKey",
         "vb6_Console_ReadLine",
         "vb6_CStr",
+"vb6_CStrStrict",
         "vb6_CStrBool",
         "vb6_CStrByte",
         "vb6_CStrDate",
@@ -224,6 +252,15 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_CStrULongFromVariant",
         "vb6_CStrULongLong",
         "vb6_CStrULongLongFromVariant",
+        // C30-11 第六十四刀: Int/Fix 的变体位（返回侧 OWNED，VARIANT 档；
+        // VARIANT 子表那一侧同名单，见 ownedTempOwnedVariantExits）。
+        "vb6_FixV",
+        "vb6_IntV",
+        // C30-11 第七十一刀: Len 的变体位交回一枚新造的 VARIANT(Long)。
+        // （Trim 一族不在此名单: 它们推导为 '1'/'store', 走 ownedTempExceptions。）
+        "vb6_LenV",
+        "vb6_VCmpNullV",
+        "vb6_VarLogicNullV",
         "vb6_CurDir",
         "vb6_CVErr",
         "vb6_DecimalToBSTR",
@@ -273,6 +310,13 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_Space",
         "vb6_Spc",
         "vb6_Str",
+        "vb6_StrSng",
+        // C30-10 第五十六刀: Str$ 的两枚新出口同样是「mint 一枚新 BSTR」的站，
+        // 不进这张表就没人管它的所有权（单实参调用会被 hoistOwnedTemp 放掉）。
+        "vb6_StrDbl",
+        "vb6_StrBool",
+        "vb6_VarNotV",
+        "vb6_AbsV",
         "vb6_StrConv",
         "vb6_StrConvFromByteArray",
         "vb6_String",
@@ -286,6 +330,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_VarDivV",
         "vb6_VariantBool",
         "vb6_VariantByte",
+        "vb6_VariantCur",
         "vb6_VariantDate",
         "vb6_VariantDouble",
         "vb6_VariantEmpty",
@@ -303,6 +348,7 @@ inline const char* const* ownedTempOwnedReturnExits() {
         "vb6_VariantULong",
         "vb6_VariantULongLong",
         "vb6_VarMulV",
+        "vb6_VarNegV",
         "vb6_VarSubV",
         "vb6_WeekdayName",
         // >>> END-GENERATED-OWNED-EXITS <<<
@@ -326,15 +372,26 @@ inline bool ownedTempReturnIsOwned(const char* exitName) {
 // 这张名单是 owned 那张的**子集**（哨兵 K13 双向对账 ⇒ 漂不了）。
 inline const char* const* ownedTempOwnedVariantExits() {
     static const char* const kOwnedVariant[] = {
+        "vb6_VarNotV",      // C30-10 第五十三刀: Not(Variant) 交出一枚**新造**的 VARIANT
+        "vb6_AbsV",          // C30-10 第五十二刀: Abs(Variant) 交出一枚**新造**的 VARIANT
         "vb6_CallByName",
         "vb6_CVErr",
+        // C30-11 第六十四刀: Int/Fix 的变体位各交出一枚新造的 VARIANT（其余四枚 HexV/OctV
+        // 推导为 alias/store，走 ownedTempExceptions）。
+        "vb6_FixV",
+        "vb6_IntV",
+        "vb6_LenV",          // C30-11 第七十一刀: Len(Variant) 交出一枚新造的 VARIANT
+        "vb6_VCmpNullV",
+        "vb6_VarLogicNullV",
         "vb6_LoadResString",
         "vb6_VarAddV",
         "vb6_VarDivV",
         "vb6_VarMulV",
+        "vb6_VarNegV",
         "vb6_VarSubV",
         "vb6_VariantBool",
         "vb6_VariantByte",
+        "vb6_VariantCur",
         "vb6_VariantDate",
         "vb6_VariantDouble",
         "vb6_VariantEmpty",

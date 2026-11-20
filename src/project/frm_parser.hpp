@@ -118,6 +118,7 @@ enum class FrmControlType {
     ImageList,          // MSComctlLib.ImageList (ActiveX, COM后期绑定)
     ProgressBar,        // MSComctlLib.ProgressBar — Win32 原生复刻 (msctls_progress32)
     SSTab,              // TabDlg.SSTab — Win32 原生复刻 (SysTabControl32), P20-42
+    TabStrip,           // MSComctlLib.TabStrip — Win32 原生复刻 (SysTabControl32), C30-2
     ListView,           // MSComctlLib.ListView — Win32 原生复刻 (SysListView32), P20-45
     TreeView,           // MSComctlLib.TreeView — Win32 原生复刻 (SysTreeView32), P20-46
     DTPicker,           // MSComCtl2.DTPicker — Win32 原生复刻 (SysDateTimePick32), C29-DT
@@ -125,6 +126,13 @@ enum class FrmControlType {
     RichTextBox,        // MSFT_TextBox.RichTextBox — Win32 原生复刻 (RICHEDIT50W), C29-RT
     Winsock,            // MSWinsockLib.Winsock — Winsock2 原生复刻 (无外观控件), C29-WS
     Slider,             // MSComctlLib.Slider — Win32 原生复刻 (msctls_trackbar32), C29-SL
+    UpDown,             // MSComctlLib.UpDown — Win32 原生复刻 (msctls_updown32), C30-UD
+    MaskEdBox,          // MSMask.MaskEdBox — Win32 EDIT + RTL 掩码引擎, C30-3
+    MSComm,             // MSCommLib.MSComm — Win32 串口 API + 读线程 (无外观控件), C30-4
+    Adodc,              // MSAdodcLib.Adodc — ACE 底座 (ODBC 层) 的记录集控件 (无外观), C30-5
+    DataGrid,           // MSDataGridLib.DataGrid — 自绘表格, 绑定 Adodc/Data 的记录集, C30-5
+    MshFlexGrid,        // MSHFlexGrid / MSFlexGrid — 字符串矩阵表格 (Rows×Cols 自存), C30-6
+    TeeChart,           // TeeChart.TChart — 内置图表 (自注册窗口类 VB6_TCHART), 无 OCX, 可 x64
     Unknown,            // 未识别的控件类型
 };
 

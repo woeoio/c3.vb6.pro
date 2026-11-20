@@ -22,6 +22,9 @@ void vb6_SetListIndex(void* hwnd, int index);
 void* vb6_GetListItem(void* hwnd, int index);
 // AddItem: add string to list
 void vb6_AddItem(void* hwnd, void* bstrItem);
+/* 2026-11-15: `AddItem item[, index]` 的 index 是插入位置 (VB6 语义),
+ * index < 0 = 追加。发码在两枚实参时走这枚。 */
+void vb6_AddItemAt(void* hwnd, void* bstrItem, int32_t index);
 // RemoveItem: remove item by index
 void vb6_RemoveItem(void* hwnd, int index);
 // Clear: remove all items
@@ -824,6 +827,152 @@ void    vb6_RTB_SetSelHangingIndent(void* hwnd, int32_t twips);
 #define VB6_WS_EV_ERROR            7   // Sub Winsock1_Error(...) —— WS-c
 #define VB6_WS_EV_COUNT            8
 
+// ===================== MSComm (ai/029 C30-4) =====================
+//   VB6 的 MSComm 只有一个事件（OnComm），原因全在 CommEvent 那个号里。事件槽序号 cgen 发字面量，
+//   顺序不许改；CommEvent 的号（1/2/3/4/5/6/7 与 1004/1006/1008/1009/1010）在 .c 文件头立着。
+//   与 Winsock 同一形状：控件自己的身份窗（类名 VB6_MSCOMM，注册在 vb6forms_mscomm.c），
+//   读线程把"有数据了"投成 WM_APP+0x16，窗口过程里判 RThreshold 再调 OnComm。
+//   测试钩子：环境变量 C3_MSCOMM_DEVICE（设备名，如 `\\.\NUL`）—— 本机无串口硬件时夹具靠它跑通
+//   "开-写-计数-关"这一路；它**不是** VB6 API，真工程里不设就不存在。
+#define VB6_MS_EV_ONCOMM           0
+#define VB6_MS_EV_COUNT            1
+
+void  vb6_RegisterMsCommClass(void* hInstance);
+void* vb6_MsComm_Create(void* hwnd);
+void  vb6_MsComm_Destroy(void* hwnd);
+void  vb6_MsComm_SetEventHandler(void* hwnd, int32_t kind, void* fn);
+
+int32_t     vb6_MsComm_GetCommPort(void* hwnd);
+void        vb6_MsComm_SetCommPort(void* hwnd, int32_t v);
+const void* vb6_MsComm_GetSettings(void* hwnd);          // BSTR（原样回读）
+void        vb6_MsComm_SetSettings(void* hwnd, const void* bstr);
+int32_t     vb6_MsComm_GetPortOpen(void* hwnd);
+void        vb6_MsComm_SetPortOpen(void* hwnd, int32_t v);   // 真开真关（CreateFileW / CloseHandle）
+int32_t     vb6_MsComm_GetInputMode(void* hwnd);
+void        vb6_MsComm_SetInputMode(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetInputLen(void* hwnd);
+void        vb6_MsComm_SetInputLen(void* hwnd, int32_t v);
+const void* vb6_MsComm_GetInput(void* hwnd);                  // BSTR（读后清空，文本 ACP）
+void        vb6_MsComm_SetOutput(void* hwnd, const void* bstr); // BSTR（ACP 落成字节）
+int32_t     vb6_MsComm_GetInBufferCount(void* hwnd);
+void        vb6_MsComm_SetInBufferCount(void* hwnd, int32_t v);   // 赋 0 = 清空
+int32_t     vb6_MsComm_GetOutBufferCount(void* hwnd);
+void        vb6_MsComm_SetOutBufferCount(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetInBufferSize(void* hwnd);
+void        vb6_MsComm_SetInBufferSize(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetOutBufferSize(void* hwnd);
+void        vb6_MsComm_SetOutBufferSize(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetRThreshold(void* hwnd);
+void        vb6_MsComm_SetRThreshold(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetSThreshold(void* hwnd);
+void        vb6_MsComm_SetSThreshold(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetHandshaking(void* hwnd);
+void        vb6_MsComm_SetHandshaking(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetDTREnable(void* hwnd);
+void        vb6_MsComm_SetDTREnable(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetRTSEnable(void* hwnd);
+void        vb6_MsComm_SetRTSEnable(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetEOFEnable(void* hwnd);
+void        vb6_MsComm_SetEOFEnable(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetCommEvent(void* hwnd);              // 最近一次事件号
+int32_t     vb6_MsComm_GetCTSHolding(void* hwnd);             // 只读；问不出来就答 0
+int32_t     vb6_MsComm_GetDSRHolding(void* hwnd);
+int32_t     vb6_MsComm_GetCDHolding(void* hwnd);
+// C3 扩展（不是 VB6 属性）：两条夹具证人 —— "写出去多少字节 / 收进来多少字节"。
+int32_t     vb6_MsComm_GetTxTotal(void* hwnd);
+int32_t     vb6_MsComm_GetRxTotal(void* hwnd);
+
+// ---- C3 扩展：超时 / 任意设备名 / 信号线运行期控制 / 端口枚举 / 二进制（C30-4b）----
+// 这五组 VB6 都没有，恰好是"现代设备"最常要的几件。口径：能真下发就真下发，
+// 下不了（或 Settings 解析不了）就**首次上升为失败**，不静默吞。
+int32_t     vb6_MsComm_GetReadIntervalTimeout(void* hwnd);   // 帧间隙（ms），默认 50
+void        vb6_MsComm_SetReadIntervalTimeout(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetReadTotalTimeout(void* hwnd);      // 一次读的总上限（ms），默认 0
+void        vb6_MsComm_SetReadTotalTimeout(void* hwnd, int32_t v);
+int32_t     vb6_MsComm_GetWriteTimeout(void* hwnd);          // 写超时（ms），默认 2000
+void        vb6_MsComm_SetWriteTimeout(void* hwnd, int32_t v);
+const void* vb6_MsComm_GetCommDevice(void* hwnd);            // BSTR；空 = 按 CommPort 拼 \\.\COM<n>
+void        vb6_MsComm_SetCommDevice(void* hwnd, const void* bstr);
+void        vb6_MsComm_SetBreak(void* hwnd, int32_t on);     // BREAK 电位（C3 扩展）
+int32_t     vb6_MsComm_SetDTRLine(void* hwnd, int32_t on);   // 运行期拉 DTR，返回是否发下去了
+int32_t     vb6_MsComm_SetRTSLine(void* hwnd, int32_t on);
+int32_t     vb6_MsComm_PortCount(void* hwnd);                // 枚举到的 COM 设备条数
+const void* vb6_MsComm_GetPortList(void* hwnd);              // BSTR "COM1;COM3;…"
+const void* vb6_MsComm_GetInputBytes(void* hwnd);            // BSTR，每字节一个字符（0..255）
+void        vb6_MsComm_SetOutputBytes(void* hwnd, const void* bstr);
+
+// ======================== C30-5: Adodc（MSADODC.OCX） ========================
+// 底座 = ACE（Access Database Engine）的 **ODBC** 层，与 Data 控件同一个引擎：每枚 Adodc 自己建一枚
+// 隐藏的 VB6_DATA 窗口当引擎宿主，所以连接/游标/行缓存/字段读全在 vb6forms_data.c 一份。
+// ConnectionString 里的 ACE/Jet OLEDB 串由 vb6forms_adodc.c 翻成等价 ODBC 串（实测依据见该文件头）。
+// Recordset 交 vb6_Data_RecordsetObj(engine) 的 VB6_MEMK_RS —— Fields/MoveNext/RecordCount 原样可用。
+#define VB6_ADODC_EV_MOVECOMPLETE  0
+#define VB6_ADODC_EV_COUNT         1
+
+void  vb6_RegisterAdodcClass(void* hInstance);
+void  vb6_Adodc_Init(void* hwnd);
+void  vb6_Adodc_SetEventHandler(void* hwnd, int32_t kind, void* fn);
+
+const void* vb6_Adodc_GetConnectionString(void* hwnd);   // BSTR
+void        vb6_Adodc_SetConnectionString(void* hwnd, const void* bstr);
+const void* vb6_Adodc_GetRecordSource(void* hwnd);       // BSTR
+void        vb6_Adodc_SetRecordSource(void* hwnd, const void* bstr);
+int32_t     vb6_Adodc_GetCommandType(void* hwnd);
+void        vb6_Adodc_SetCommandType(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetCursorLocation(void* hwnd);
+void        vb6_Adodc_SetCursorLocation(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetCursorType(void* hwnd);
+void        vb6_Adodc_SetCursorType(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetLockType(void* hwnd);
+void        vb6_Adodc_SetLockType(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetMode(void* hwnd);
+void        vb6_Adodc_SetMode(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetMaxRecords(void* hwnd);
+void        vb6_Adodc_SetMaxRecords(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetBOFAction(void* hwnd);
+void        vb6_Adodc_SetBOFAction(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetEOFAction(void* hwnd);
+void        vb6_Adodc_SetEOFAction(void* hwnd, int32_t v);
+int32_t     vb6_Adodc_GetLastRowCount(void* hwnd);       // C3 扩展：上次 Refresh 真拿到几行
+int32_t     vb6_Adodc_GetOpened(void* hwnd);             // C3 扩展：上次 Refresh 成不成
+int32_t     vb6_Adodc_Refresh(void* hwnd);
+void*       vb6_Adodc_Recordset(void* hwnd);             // 真 IDispatch（引擎的 VB6_MEMK_RS）
+void*       vb6_Adodc_Engine(void* hwnd);                // 隐藏引擎窗句柄（Data 族 API 的入参）
+
+// ======================== C30-5: DataGrid（MSDATGRD.OCX） ========================
+// 自绘表格（类 VB6_DATAGRID，注册在 vb6forms_grid.c）；数据源是 Adodc/Data 的**引擎窗**。
+// 绑定走 vb6_DataGrid_Bind(格窗, 引擎窗)：设计期 `DataSource = "Adodc1"` 由 cgen 解析成
+// vb6_Adodc_Engine(...)/Data 控件自身。单元格取值走 vb6_Data_FieldValueAt。
+void  vb6_RegisterDataGridClass(void* hInstance);
+void  vb6_DataGrid_Bind(void* hwnd, void* srcEngineHwnd);
+void  vb6_DataGrid_SetDataSourceName(void* hwnd, const wchar_t* name);
+const void* vb6_DataGrid_GetDataSourceName(void* hwnd);   // BSTR
+int32_t vb6_DataGrid_GetRowCount(void* hwnd);
+int32_t vb6_DataGrid_GetColCount(void* hwnd);
+int32_t vb6_DataGrid_GetRow(void* hwnd);
+void    vb6_DataGrid_SetRow(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetCol(void* hwnd);
+void    vb6_DataGrid_SetCol(void* hwnd, int32_t v);
+const void* vb6_DataGrid_GetText(void* hwnd);              // BSTR（当前格）
+int32_t vb6_DataGrid_GetColumnHeaders(void* hwnd);
+void    vb6_DataGrid_SetColumnHeaders(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetAllowAddNew(void* hwnd);
+void    vb6_DataGrid_SetAllowAddNew(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetAllowUpdate(void* hwnd);
+void    vb6_DataGrid_SetAllowUpdate(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetAllowDelete(void* hwnd);
+void    vb6_DataGrid_SetAllowDelete(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetRowHeight(void* hwnd);
+void    vb6_DataGrid_SetRowHeight(void* hwnd, int32_t v);
+int32_t vb6_DataGrid_GetDefColWidth(void* hwnd);
+void    vb6_DataGrid_SetDefColWidth(void* hwnd, int32_t v);
+void    vb6_DataGrid_Refresh(void* hwnd);
+void    vb6_DataGrid_ReBind(void* hwnd);
+void    vb6_DataGrid_ClearSelRows(void* hwnd);
+
+// C30-5: 任意行取列值（DataGrid 画格子用；不动调用者当前行）
+void vb6_Data_FieldValueAt(void* hwnd, int32_t row1, int32_t col1, wchar_t* out, int32_t outCap);
+
 void  vb6_RegisterWinsockClass(void* hInstance);
 void* vb6_Ws_Create(void* hwnd);                      // 把身份窗认进实例表
 void  vb6_Ws_Destroy(void* hwnd);
@@ -891,6 +1040,100 @@ void    vb6_Slider_SetSelEnd(void* hwnd, int32_t v);
 // TravelIsVert 的正解是把滑块推到量程两端各读一次 TBM_GETTHUMBRECT，看位移落在哪根轴。
 int32_t vb6_Slider_TravelIsVert(void* hwnd);
 int32_t vb6_Slider_TickPresent(void* hwnd);
+
+// C30-UD-a: VB6 UpDown —— 原生 msctls_updown32 复刻（不加载 MSCOMCTL.OCX）。
+// 值面/行为面全部直问直发控件（range/pos/accel 都有回读消息），不另存；
+// Orientation/Alignment/Wrap/SyncBuddy 四条就是样式位，读回问窗口自己。
+// Init 的 -999 哨兵口径与 Slider 同：没写过就不覆盖原生默认值。
+void    vb6_UpDown_Init(void* hwnd, long min, long max, long value, long increment,
+                        long wrap, long alignment, long orientation, long syncBuddy,
+                        void* buddy);
+int32_t vb6_UpDown_GetMin(void* hwnd);
+void    vb6_UpDown_SetMin(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetMax(void* hwnd);
+void    vb6_UpDown_SetMax(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetValue(void* hwnd);      // 越界由控件钳位，不再钳第二遍
+void    vb6_UpDown_SetValue(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetIncrement(void* hwnd);  // UDM_GET/SETACCEL
+void    vb6_UpDown_SetIncrement(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetWrap(void* hwnd);       // UDS_WRAP，读回 -1/0
+void    vb6_UpDown_SetWrap(void* hwnd, int32_t on);
+int32_t vb6_UpDown_GetAlignment(void* hwnd);  // 0=Left 1=Right（VB6 默认 1）
+void    vb6_UpDown_SetAlignment(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetOrientation(void* hwnd);// 0=Vertical 1=Horizontal
+void    vb6_UpDown_SetOrientation(void* hwnd, int32_t v);
+int32_t vb6_UpDown_GetSyncBuddy(void* hwnd);  // UDS_SETBUDDYINT
+void    vb6_UpDown_SetSyncBuddy(void* hwnd, int32_t on);
+void*   vb6_UpDown_GetBuddy(void* hwnd);
+void    vb6_UpDown_SetBuddy(void* hwnd, void* buddy);
+// 原生把 UDN_DELTAPOS(-722) 发到**父窗** ⇒ 由窗体的 WM_NOTIFY 那条 arm 转进来。
+// 通知到时控件**还没改值**（真手势实测：处理器里读到的是旧值），所以“会不会真动”
+// 由它自己按 老位置 + iDelta×Increment 推一格算（wrap 按环、否则钳量程）。
+// 返回值带两位：0 = 不是这条通知；**±1 = 动了（正=上 负=下）**；**±2 = 点了但值没动**。
+// outDelta 回交原始 iDelta（带大小）—— arm 里要靠它把位移自己落下去。
+// cgen 的用法：Up/Down 按符号在**值变更前**发（与真手势一致）；Change 只在 ±1 时、
+// 先调 vb6_UpDown_Commit 落值、再发（所以处理器里读到的是新值），最后 `return 1`
+// 把原生那次实施取消掉 —— 不取消就会跳两格。
+int32_t vb6_UpDown_OnNotify(void* hwnd, int32_t code, void* lParam, int32_t* outDelta);
+// C30-UD-c：按 delta 把位移落到控件上（wrap 按环、否则钳量程；buddy 文本随之同步），
+// 返回落定后的位置。只该在 OnNotify 返回 ±1 时调。
+int32_t vb6_UpDown_Commit(void* hwnd, int32_t delta);
+
+// ---- C30-3: MaskEdBox (MSMask.MaskEdBox → Win32 EDIT + RTL 掩码引擎) ----
+// 显示串恒为一位掩码一位字符（固定符/用户字符/提示符），所以“显示下标 == 掩码位下标”。
+// Text 含固定符（PromptInclude=True 时还含提示符）；ClipText 只含用户字符。
+void    vb6_MaskEd_Init(void* hwnd, void* maskBstr, void* promptBstr,
+                        int32_t promptInclude, void* textBstr);
+void*   vb6_MaskEd_GetText(void* hwnd);
+void    vb6_MaskEd_SetText(void* hwnd, void* bstr);
+void*   vb6_MaskEd_GetClipText(void* hwnd);
+void    vb6_MaskEd_SetClipText(void* hwnd, void* bstr);
+void*   vb6_MaskEd_GetMask(void* hwnd);
+void    vb6_MaskEd_SetMask(void* hwnd, void* bstr);
+void*   vb6_MaskEd_GetPromptChar(void* hwnd);
+void    vb6_MaskEd_SetPromptChar(void* hwnd, void* bstr);
+int32_t vb6_MaskEd_GetPromptInclude(void* hwnd);
+void    vb6_MaskEd_SetPromptInclude(void* hwnd, int32_t v);
+
+// ---- C30-2: TabStrip (MSComctlLib.TabStrip → SysTabControl32) ----
+// 与 SSTab 的分工：TabStrip 不是容器，页内容由用户自己的 Click 切；
+// Tabs 集合与 SelectedItem.Index 都是 **1 基**（SSTab 的 .Tab 是 0 基）。
+void    vb6_TabStrip_Init(void* hwnd, int32_t multiRow, int32_t hotTrack, int32_t showTips);
+int32_t vb6_TabStrip_GetMultiRow(void* hwnd);
+int32_t vb6_TabStrip_GetHotTracking(void* hwnd);
+int32_t vb6_TabStrip_GetShowTips(void* hwnd);
+void    vb6_TabStrip_SetMultiRow(void* hwnd, int32_t v);
+void    vb6_TabStrip_SetHotTracking(void* hwnd, int32_t v);
+void    vb6_TabStrip_SetShowTips(void* hwnd, int32_t v);
+int32_t vb6_TabStrip_GetClientLeft(void* hwnd);
+int32_t vb6_TabStrip_GetClientTop(void* hwnd);
+int32_t vb6_TabStrip_GetClientWidth(void* hwnd);
+int32_t vb6_TabStrip_GetClientHeight(void* hwnd);
+int32_t vb6_TabStrip_TabsCount(void* hwnd);
+void    vb6_TabStrip_TabsAdd(void* hwnd, int32_t index, void* keyBstr, void* capBstr,
+                             int32_t image, int32_t hasIndex, int32_t hasKey, int32_t hasImage);
+void    vb6_TabStrip_TabsRemove(void* hwnd, int32_t idx1);
+void    vb6_TabStrip_TabsClear(void* hwnd);
+void*   vb6_TabStrip_GetTabCaption(void* hwnd, int32_t idx1);
+void    vb6_TabStrip_SetTabCaption(void* hwnd, int32_t idx1, void* bstr);
+void*   vb6_TabStrip_GetTabKey(void* hwnd, int32_t idx1);
+void    vb6_TabStrip_SetTabKey(void* hwnd, int32_t idx1, void* bstr);
+int32_t vb6_TabStrip_GetTabImage(void* hwnd, int32_t idx1);
+void    vb6_TabStrip_SetTabImage(void* hwnd, int32_t idx1, int32_t iImage);
+void*   vb6_TabStrip_GetTabToolTipText(void* hwnd, int32_t idx1);
+void    vb6_TabStrip_SetTabToolTipText(void* hwnd, int32_t idx1, void* bstr);
+int32_t vb6_TabStrip_GetTabIndexByKey(void* hwnd, void* keyBstr);
+int32_t vb6_TabStrip_GetSelectedIndex(void* hwnd);
+void    vb6_TabStrip_SetSelectedIndex(void* hwnd, int32_t idx1);
+// 无头判据助手：先落选中再发一条真 TCN_SELCHANGE（顺序与真手势一致）。
+int32_t vb6_TabStrip_SimSelect(void* hwnd, int32_t idx1);
+// WM_NOTIFY 换算：返回 1 = 选中项真变了（Click 该发）。
+int32_t vb6_TabStrip_OnNotify(void* hwnd, int32_t code, void* lParam);
+// C30-UD-b 判据专用助手（不对应 VB6 语义，与 Slider.SimNotify / DTPicker.SimChange 同先例）：
+// 按 delta 格数算目标值（乘 Increment、wrap 按环、否则钳量程），**先把一条真的
+// UDN_DELTAPOS 递给父窗、再落值** —— 与真手势同序（真手势下处理器读到的是旧值，
+// 见 vb6_UpDown_OnNotify 的注）。delta 单位是点击格数。返回落值后的实际位置。
+int32_t vb6_UpDown_SimDelta(void* hwnd, int32_t delta);
 // C29-SL-h：TickStyle 四档。VB6 那一张枚举的真值是从 OCX 自带的类型库读出来的
 // （0=sldBottomRight 1=sldTopLeft 2=sldBoth 3=sldNoTicks，探针 .build/slprobe/sltlb.cpp），
 // 与原生样式位 1:1（TBS_TOP==TBS_LEFT==0x4、TBS_BOTH==0x8、TBS_NOTICKS==0x10）。
@@ -941,6 +1184,131 @@ void    vb6_Slider_SimNotify(void* hwnd, int32_t code, int32_t pos);
 // C29-SL-g 加一档 kind=4：**不是发消息**，是真 `SetFocus(控件)` —— 焦点事件的原生来源就是
 // 窗口管理器自己发的 `WM_SETFOCUS` / `WM_KILLFOCUS`，伪造那两条反而验不到真链路。
 void    vb6_Slider_SimStdEvent(void* hwnd, int32_t kind, int32_t wParam);
+
+// ==================== C30-6: MSHFlexGrid / MSFlexGrid ====================
+// 字符串矩阵表格（MSHFLXGD.OCX 的 MSHFlexGrid、MSFLXGRD.OCX 的 MSFlexGrid 共用一套）。
+// 与 DataGrid 的分界：DataGrid 是“记录集的视图”，本控件是“Rows×Cols 自存字符串”，
+// TextMatrix(r,c) 直接读写 ⇒ 不依赖 ACE/ODBC，CI 上可真跑。
+// 类名 VB6_MSHFLEXGRID，注册在 vb6forms_mshflexgrid.c。
+void    vb6_RegisterMshFlexGridClass(void* hInstance);
+
+// ==================== C30-10: TeeChart（内置图表） ====================
+// TeeChart.TChart 的内置实现（自注册窗口类 VB6_TCHART，不加载 TeeChart5.ocx）。
+// 为什么不再走 axsite：OCX 只有 32 位，--arch x64 永远链不上；内置后两档架构同一条路。
+// 接口面是 C 层的最小集（Series 自动建号 + 一次完整绘制），深成员
+// （Series(i).AsPie.ExplodedSlice.Value(i)）下一步接 memberobj 的 IDispatch。
+void    vb6_RegisterTChartClass(void* hInstance);
+
+// C30-10 第二刀: 宿主模型尾叉（认不出返回 0，落回原来的 438 分支）。
+// 发码侧对 TChart1.Series(0).FillSampleValues 发的就是通用晚绑定链，
+// 这三位把“接收者是控件 HWND”这一事实接到真 IDispatch 上。
+int32_t vb6_TChart_HostGetProp(void* obj, const wchar_t* name, void* outVariant);
+int32_t vb6_TChart_HostSetProp(void* obj, const wchar_t* name, const void* inVariant);
+int32_t vb6_TChart_HostCall(void* obj, const wchar_t* name, int32_t argc, void** argv,
+                            void* outVariant);
+
+int32_t vb6_TChart_SeriesCount(void* hwnd);
+int32_t vb6_TChart_AddSeries(void* hwnd, int32_t type);
+int32_t vb6_TChart_SeriesAdd(void* hwnd, int32_t idx, double y);
+int32_t vb6_TChart_SeriesAddXY(void* hwnd, int32_t idx, double x, double y);
+int32_t vb6_TChart_FillSampleValues(void* hwnd, int32_t idx, int32_t count);
+void    vb6_TChart_SeriesClear(void* hwnd, int32_t idx);
+void    vb6_TChart_SetSeriesColor(void* hwnd, int32_t idx, int32_t bgr);
+void    vb6_TChart_SetSeriesTitle(void* hwnd, int32_t idx, const wchar_t* title);
+void    vb6_TChart_SetHeaderText(void* hwnd, const wchar_t* text);
+void    vb6_TChart_SetPanelColor(void* hwnd, int32_t bgr);
+void    vb6_TChart_SetPanelMargin(void* hwnd, int32_t which, int32_t px);
+void    vb6_TChart_Repaint(void* hwnd);
+int32_t vb6_TChart_PaintCount(void* hwnd);
+
+int32_t vb6_MshFlexGrid_GetRows(void* hwnd);
+void    vb6_MshFlexGrid_SetRows(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetCols(void* hwnd);
+void    vb6_MshFlexGrid_SetCols(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFixedRows(void* hwnd);
+void    vb6_MshFlexGrid_SetFixedRows(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFixedCols(void* hwnd);
+void    vb6_MshFlexGrid_SetFixedCols(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetRow(void* hwnd);
+void    vb6_MshFlexGrid_SetRow(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetCol(void* hwnd);
+void    vb6_MshFlexGrid_SetCol(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetRowSel(void* hwnd);
+void    vb6_MshFlexGrid_SetRowSel(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetColSel(void* hwnd);
+void    vb6_MshFlexGrid_SetColSel(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetTopRow(void* hwnd);
+void    vb6_MshFlexGrid_SetTopRow(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetLeftCol(void* hwnd);
+void    vb6_MshFlexGrid_SetLeftCol(void* hwnd, int32_t v);
+
+const void* vb6_MshFlexGrid_GetText(void* hwnd);
+void        vb6_MshFlexGrid_SetText(void* hwnd, const void* bstr);
+const void* vb6_MshFlexGrid_GetTextMatrix(void* hwnd, int32_t r, int32_t c);
+void        vb6_MshFlexGrid_SetTextMatrix(void* hwnd, int32_t r, int32_t c, const void* bstr);
+const void* vb6_MshFlexGrid_GetTextArray(void* hwnd, int32_t i);
+void        vb6_MshFlexGrid_SetTextArray(void* hwnd, int32_t i, const void* bstr);
+
+int32_t vb6_MshFlexGrid_GetColWidth(void* hwnd, int32_t i);
+void    vb6_MshFlexGrid_SetColWidth(void* hwnd, int32_t i, int32_t v);
+int32_t vb6_MshFlexGrid_GetRowHeight(void* hwnd, int32_t i);
+void    vb6_MshFlexGrid_SetRowHeight(void* hwnd, int32_t i, int32_t v);
+int32_t vb6_MshFlexGrid_GetColAlignment(void* hwnd, int32_t i);
+void    vb6_MshFlexGrid_SetColAlignment(void* hwnd, int32_t i, int32_t v);
+int32_t vb6_MshFlexGrid_GetRowHeightMin(void* hwnd);
+void    vb6_MshFlexGrid_SetRowHeightMin(void* hwnd, int32_t v);
+
+int32_t vb6_MshFlexGrid_GetGridLines(void* hwnd);
+void    vb6_MshFlexGrid_SetGridLines(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetScrollBars(void* hwnd);
+void    vb6_MshFlexGrid_SetScrollBars(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetSelectionMode(void* hwnd);
+void    vb6_MshFlexGrid_SetSelectionMode(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFillStyle(void* hwnd);
+void    vb6_MshFlexGrid_SetFillStyle(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetWordWrap(void* hwnd);
+void    vb6_MshFlexGrid_SetWordWrap(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetEditable(void* hwnd);
+void    vb6_MshFlexGrid_SetEditable(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFocusRect(void* hwnd);
+void    vb6_MshFlexGrid_SetFocusRect(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetAllowUserResizing(void* hwnd);
+void    vb6_MshFlexGrid_SetAllowUserResizing(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetMergeCells(void* hwnd);
+void    vb6_MshFlexGrid_SetMergeCells(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetRedraw(void* hwnd);
+void    vb6_MshFlexGrid_SetRedraw(void* hwnd, int32_t v);
+
+int32_t vb6_MshFlexGrid_GetBackColor(void* hwnd);
+void    vb6_MshFlexGrid_SetBackColor(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetForeColor(void* hwnd);
+void    vb6_MshFlexGrid_SetForeColor(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetFillColor(void* hwnd);
+void    vb6_MshFlexGrid_SetFillColor(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetCellBackColor(void* hwnd);
+void    vb6_MshFlexGrid_SetCellBackColor(void* hwnd, int32_t v);
+int32_t vb6_MshFlexGrid_GetCellForeColor(void* hwnd);
+void    vb6_MshFlexGrid_SetCellForeColor(void* hwnd, int32_t v);
+
+int32_t vb6_MshFlexGrid_GetMouseRow(void* hwnd);
+int32_t vb6_MshFlexGrid_GetMouseCol(void* hwnd);
+int32_t vb6_MshFlexGrid_GetCellHeight(void* hwnd);
+int32_t vb6_MshFlexGrid_GetCellWidth(void* hwnd);
+int32_t vb6_MshFlexGrid_GetCellLeft(void* hwnd);
+int32_t vb6_MshFlexGrid_GetCellTop(void* hwnd);
+
+const void* vb6_MshFlexGrid_GetFormatString(void* hwnd);
+void        vb6_MshFlexGrid_SetFormatString(void* hwnd, const void* bstr);
+const void* vb6_MshFlexGrid_GetDataSource(void* hwnd);
+void        vb6_MshFlexGrid_SetDataSource(void* hwnd, const void* bstr);
+int32_t     vb6_MshFlexGrid_GetSort(void* hwnd);
+void        vb6_MshFlexGrid_SetSort(void* hwnd, int32_t v);
+
+void vb6_MshFlexGrid_AddItem(void* hwnd, const void* bstr);
+void vb6_MshFlexGrid_RemoveItem(void* hwnd, int32_t index);
+void vb6_MshFlexGrid_Clear(void* hwnd);
+void vb6_MshFlexGrid_ClearStructure(void* hwnd);
+void vb6_MshFlexGrid_Refresh(void* hwnd);
 
 
 #ifdef __cplusplus

@@ -544,6 +544,11 @@
                 if (child.controlType == FrmControlType::Slider) {
                     emitSliderDesignTimeInit(child, childHwndRead(child));
                 }
+                // C30-UD-a: 容器里的 UpDown 同型 —— 以前这类控件在第二条创建路上
+                // 连量程都不下发（账 #83）。共用同一个出口，不复制参数序。
+                if (child.controlType == FrmControlType::UpDown) {
+                    emitUpDownDesignTimeInit(child, childHwndRead(child));
+                }
                 // 注册控件名到knownFormControls_(供属性访问)
                 {
                     std::string childNameLower = child.controlName;

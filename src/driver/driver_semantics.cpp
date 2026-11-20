@@ -618,6 +618,20 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                         // 则默认值回退类型零值 0 (vbman cTlsSocket.Create 的
                         // EventMask=0 → WSAAsyncSelect 注销通知 → 永不 accept 实证).
                         int64_t nextValue = 0;
+                        // 账 #612: 定义模块里的 `Private Const` 这时还没进符号表 (预注册在 Pass 1
+                        // 之前), 先扫成一张小常量表再求枚举成员值; 否则
+                        // `FullRowSelect = LVS_EX_FULLROWSELECT` 求值失败 → 回落成声明序号 1,
+                        // 跨模块引用就把 LVS_EX_GRIDLINES(1) 当成 FullRowSelect 用了。
+                        std::map<std::string, int64_t> localConsts;
+                        for (auto& d2 : otherModule->declarations) {
+                            if (d2->kind != ASTNodeKind::ConstDecl) continue;
+                            auto& c2 = static_cast<ConstDecl&>(*d2);
+                            int64_t cv = 0;
+                            if (c2.value && SemanticAnalyzer::evalEnumConstIntForDriver(
+                                    c2.value.get(), cv)) {
+                                localConsts[Symbol::toLower(c2.name)] = cv;
+                            }
+                        }
                         for (auto& member : enumDecl.members) {
                             std::string mLower = Symbol::toLower(member->name);
                             if (!analyzer->symbolTable().lookupModule(mLower)) {
@@ -631,7 +645,9 @@ bool Driver::runSemanticAnalysis(const CompileOptions& options) {
                                 msym->constType = Vb6Type::Long;
                                 int64_t evaluated = 0;
                                 if (member->value
-                                    && SemanticAnalyzer::evalEnumConstIntForDriver(member->value.get(), evaluated)) {
+                                    && SemanticAnalyzer::evalEnumConstIntForDriver(
+                                           member->value.get(), evaluated, &analyzer->symbolTable(),
+                                           &localConsts)) {
                                     nextValue = evaluated;
                                 }
                                 msym->constIntValue = nextValue;

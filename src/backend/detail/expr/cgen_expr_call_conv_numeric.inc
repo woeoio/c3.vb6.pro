@@ -12,7 +12,10 @@
         || callee == "vb6_CULng" || callee == "vb6_CULngLng"
         || callee == "vb6_CLngLng"
         // twinBASIC 形 CLngPtr 同路 (RTL vb6_CLngPtr* 已在头里备齐三档)
-        || callee == "vb6_CLngPtr") {
+        || callee == "vb6_CLngPtr"
+        // C30-11 第六十三刀（续）: CCur 同族 —— 以前不在本闸里，于是 `CCur(Null)` 发成
+        // vb6_CCur(vb6_VariantToDouble(v))，Null 在提取时已丢，静默给 0（真值 94）。
+        || callee == "vb6_CCur") {
         // 账 #416: Boolean 那一档问的是另一句话 ("True"/"False" 是话, 不是数) —— 桥的名字
         // 要在下面 V 后缀改写之前按 VB 函数认, 不能等 callee 被换掉之后再猜。
         const bool convIsBool = (callee == "vb6_CBool");
@@ -41,7 +44,11 @@
             //  Form3/Form5 字重 400, 真 VB6 700)。这里把 double 包装剥回去, 让内层整只槽
             // 走 V 后缀 (下面的 extractPrefixes 会按同一口径收尾)。只对 Boolean 那一档做 ——
             // 数值族问的是另一句话, 不在本条改动范围。
-            if (!firstArgIsSlot && callee == "vb6_CBool" && !args.empty()) {
+            // C30-11 第六十三刀（续）: `CCur` 同款 —— 它的实参也在上游被包成
+            // vb6_VariantToDouble(...)，所以 firstArgIsSlot 为 false、上下的 V 后缀映射不生效，
+            // CCur(Null) 就静默给 0（读数 oracle_num.vbs 要 94）。把同一枚包装剥回去即可。
+            if (!firstArgIsSlot && (callee == "vb6_CBool" || callee == "vb6_CCur")
+                && !args.empty()) {
                 static const char* kVarToDbl = "vb6_VariantToDouble(";
                 size_t pl = strlen(kVarToDbl);
                 if (args[0].size() > pl && args[0].compare(0, pl, kVarToDbl) == 0
@@ -68,6 +75,10 @@
             else if (callee == "vb6_CByte") callee = "vb6_CByteV";
             else if (callee == "vb6_CSng") callee = "vb6_CSngV";
             else if (callee == "vb6_CBool") callee = "vb6_CBoolV";
+            // C30-11 第六十三刀: CCur 以前没进这张表 —— `CCur(Null)` 发成
+            // vb6_CCur(vb6_VariantToDouble(v))，Null 在这里已经变成 0（读数 oracle_num.vbs
+            // 要 94）。CCurV 走 vb6_VariantConvNum，与 CInt/CLng 同口径。
+            else if (callee == "vb6_CCur")  callee = "vb6_CCurV";
             // ai/032: 四档无符号/窄整型同上
             else if (callee == "vb6_CSByte")   callee = "vb6_CSByteV";
             else if (callee == "vb6_CUInt")    callee = "vb6_CUIntV";

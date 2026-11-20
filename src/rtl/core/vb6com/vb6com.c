@@ -242,13 +242,20 @@ int32_t vb6_ComVbErrFromHr(HRESULT hr) {
 // excep: EXCEPINFO结构 (可能包含scode/bstrDescription)
 // context: 调用上下文 (用于默认错误描述, 如L"ComCall" / L"ComSetProp")
 // Fix 177: HRESULT → VB6 错误号。
-// "低16位即VB6错误号" 只对 0x8004xxxx (标准 COM) 与 0x800Axxxx (VB6 运行时) 成立,
-// 对 DISP_E_* 系列 (0x8002xxxx) 不成立 —— 其低16位落在 DISPID 子码空间: 例如
-// DISP_E_MEMBERNOTFOUND (0x80020003) 的低16位 = 3, 会被当成 VB6 错误 3
-// "没有GoSub时的Return", 与真实原因 (对象不支持该属性/方法) 毫无关系。
-// 实测: VBMAN 对 Scripting.Dictionary 调自有扩展 API 时即报出这个假象,
-// 把排查方向引到 GoSub/Return 上。此处显式映射 DISP_E_* 到 VB6 官方错误号
-// (描述表 vb6_StdErrorDesc 中 438/449/450/451 均已有条目)。
+// 「低 16 位即 VB6 错误号」**只对 0x800Axxxx（VB 运行时自己发的号）成立**。
+// C30-11 第八刀把它全局收尾，读数（cscript，.temp/leftover/oracle_hr.vbs H1–H16）：
+//   H1  E_INVALIDARG 0x80070057            -> 5
+//   H3/H4/H12/H13  服务端自己 raise 的 VB 号 -> 53 / 76（仍是 VB 号，不经此表）
+//   H7  DISP_E_MEMBERNOTFOUND             -> 438
+//   H8  DISP_E_TYPEMISMATCH               -> 13
+//   H9  CLASS_E_CLASSNOTAVAILABLE 0x800401F3 -> 429（CreateObject 那条腿，vb6_ComFailCreate）
+//   H10 E_HANDLE            0x80070006    -> **-2147024890（原样）**
+//   H11 E_FILE_NOT_FOUND    0x80070002    -> **-2147024894（原样）**
+//   H14 参数个数不对                      -> 450
+// 即：VB 的规则是「一张显式表 + 其余一律原样负数」，**不是截低 16 位**。
+// 旧口径（default 取低字）把 E_FILE_NOT_FOUND 读成 2、E_HANDLE 读成 6、
+// E_ACCESSDENIED 读成 5 —— 都是把 Win32 号伪装成毫不相干的 VB 号（2 = "未找到指定的文件"
+// 那个 2 根本不是 VB 的错误码），排查方向直接被引偏。
 static int32_t vb6_HresultToErrNum(long hr) {
     /* 账 #305 §B186: 「这一枚 hr 是不是服务端交回的 VB 错误、是哪一号」只问上面那唯一一枚认腿,
      * 不在这里再抄一遍低 16 位的算法 (抄出来的两份会漂)。认不出那一档才往下走原路。 */
@@ -261,11 +268,16 @@ static int32_t vb6_HresultToErrNum(long hr) {
     case 0x8002000EUL: return 450;  // DISP_E_BADPARAMCOUNT  → 参数个数错误
     case 0x8002000FUL: return 449;  // DISP_E_PARAMNOTOPTIONAL → 参数不是可选的
     case 0x8002000BUL: return 451;  // DISP_E_BADINDEX       → 对象不是集合
-    default: {
-        int32_t errNum = (int32_t)((unsigned long)hr & 0xFFFF);  // VB6错误号 = HRESULT低16位
-        if (errNum == 0) errNum = (int32_t)hr;  // 非标准HRESULT直接用整个值
-        return errNum;
-    }
+    /* C30-11 后记（遗留问题①的第二个不一致）: E_INVALIDARG(0x80070057) 的低 16 位是 87，
+     * 旧口径直接截低字 → 报出 87「参数错误」。真 VB 引擎读数（VBScript 晚绑定 scrrun）:
+     *   files.Item(1) -> Err.Number = 5「无效的过程调用或参数」
+     * 即 VB 把 E_INVALIDARG 归到 5，而不是 Win32 的 87。本条只动这一枚 HRESULT。 */
+    case 0x80070057UL: return 5;    // E_INVALIDARG          → 无效的过程调用或参数
+    default:
+        /* C30-11 第八刀: 不在表里就**原样交负的 HRESULT**（H10/H11 读数）。
+         * 不许再截低 16 位 —— 那一刀把 0x80070002 读成 2、把 0x80070006 读成 6，
+         * 两个都不是 VB 的错误号，却看起来煞有介事。 */
+        return (int32_t)hr;
     }
 }
 
@@ -275,6 +287,12 @@ void vb6_ComCheckError(HRESULT hr, EXCEPINFO* excep, const wchar_t* context) {
     // 优先使用EXCEPINFO中的scode (OLE自动化错误码; DISP_E_EXCEPTION 时携带真实错误号)
     if (excep && excep->scode) {
         errNum = vb6_HresultToErrNum((long)excep->scode);
+    }
+    if (excep && GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] CheckError hr=0x%08lX scode=0x%08lX wCode=%u helpCtx=%lu ctx=%ls\n",
+                (unsigned long)hr, (unsigned long)excep->scode, (unsigned)excep->wCode,
+                (unsigned long)excep->dwHelpContext, context ? context : L"?");
+        fflush(stderr);
     }
 
     // 构造错误描述BSTR — 四级fallback:
@@ -374,7 +392,24 @@ void vb6_ComInit(void) {
     // 免注册 COM 的 ActCtx 必须**先于** CoInitializeEx（因而也先于 OleInitialize 与
     // 任何 CoCreateInstance）就位；direct 模式下这一行是空操作，直加载逐字不变。
     vb6_ComActCtxEnter();
-    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    /* C30-9 实测：VB6 运行时用的是 **OleInitialize**（它不只是 STA，还把 OLE 子系统
+     * ——剪贴板/拖放/IStream·IPersistStream 那一族—— 一并初始化），而我们以前只调
+     * CoInitializeEx。二者在建 ADO 行集时的差别是真存在的（同一台机器、同一组 DLL：
+     * VB6 编的 exe 登录正常，C3 编的 exe 在 rs.Open 报 340「没有注册类」）。
+     * 所以改成与 VB6 同口径：先 OleInitialize，拿不到 STA 才退回 CoInitializeEx。 */
+    HRESULT hrInit = OleInitialize(NULL);
+    if (FAILED(hrInit)) hrInit = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    /* C30-9: 这条返回值以前是丢的 —— 线程早被别人初始化成 MTA 时这里会回
+     * RPC_E_CHANGED_MODE(0x80010106) 且静默继续跑在 MTA 里。ADO + Jet 在这种
+     * 情形下建行集会直接报 REGDB_E_CLASSNOTREG（VB6 错误 340「没有注册类」），
+     * 因为 Jet 是套间线程组件，跨套间要靠代理/存根。VB6 编的同一份工程是
+     * OleInitialize(STA) 所以正常。C3_COM_TRACE=1 时把它打出来，别再靠猜。 */
+    if (GetEnvironmentVariableW(L"C3_COM_TRACE", NULL, 0) > 0) {
+        fprintf(stderr, "[C3_COM] ComInit tid=%lu hr=0x%08lX%s\n",
+                (unsigned long)GetCurrentThreadId(), (unsigned long)hrInit,
+                hrInit == RPC_E_CHANGED_MODE ? " (already MTA -> NOT STA)" : "");
+        fflush(stderr);
+    }
 }
 
 void vb6_ComExit(void) {
@@ -1178,8 +1213,91 @@ static void vb6_ComFailCreate(HRESULT hr, const wchar_t* progId) {
     vb6_RaiseError(vbErr ? vbErr : 429, desc);
 }
 
+// 账 #611: CreateObject 产物的 **coclass 名** (VB6 TypeName 的答案)。
+//
+// VB6 的 TypeName(CreateObject("Scripting.Dictionary")) 交 "Dictionary" ——
+// 不是 "Object"。C3 以前对 VT_DISPATCH 且非宿主/非工程类实例一律答 "Object"
+// (vb6rtl_conv.c 里明确留白: 「外部 IDispatch 要另开 ITypeInfo 那条腿」),
+// 于是 JSonWrite.Serialize 的 `ElseIf TypeName(objRef) = "Dictionary"` 落空,
+// 抛 "Unsupported object type: Object" (第 7 个按钮点一下进程就退出)。
+//
+// 这里走**最窄**的一条腿: 只在 vb6_CreateObject 成功那一刻记下 ProgID 的
+// <Class> 段 (ProgID 的最后一段就是 coclass 名, 与 VB6 从类型库取的答案同源),
+// TypeName 按 IDispatch* 反查。不做通用 ITypeInfo 查询 —— 那会把所有外部 COM
+// 对象的 TypeName 一起改掉, 现有语料 (test_com_latebound 等) 依赖 "Object"。
+// 表是进程内环形 64 格, 只按指针比对, 对象释放后残留项不会被别的对象命中
+// (指针复用时会由新的 CreateObject 覆盖写回)。
+#define VB6_CREATED_OBJ_MAX 64
+static struct { void* disp; wchar_t cls[64]; } vb6_created_objs[VB6_CREATED_OBJ_MAX];
+static int vb6_created_objs_count = 0;
+
+void vb6_ComRememberProgID(void* disp, const wchar_t* progId) {
+    if (!disp || !progId) return;
+    const wchar_t* last = wcsrchr(progId, L'.');
+    const wchar_t* cls = last ? last + 1 : progId;
+    if (!*cls) return;
+    size_t n = wcslen(cls);
+    if (n > 63) n = 63;
+    for (int i = 0; i < vb6_created_objs_count; ++i) {
+        if (vb6_created_objs[i].disp == disp) {
+            wmemcpy(vb6_created_objs[i].cls, cls, n);
+            vb6_created_objs[i].cls[n] = L'\0';
+            return;
+        }
+    }
+    int slot = vb6_created_objs_count < VB6_CREATED_OBJ_MAX ? vb6_created_objs_count++ : 0;
+    vb6_created_objs[slot].disp = disp;
+    wmemcpy(vb6_created_objs[slot].cls, cls, n);
+    vb6_created_objs[slot].cls[n] = L'\0';
+}
+
+BSTR vb6_ComCreatedTypeNameBStr(void* disp) {
+    if (!disp) return NULL;
+    for (int i = 0; i < vb6_created_objs_count; ++i) {
+        if (vb6_created_objs[i].disp == disp && vb6_created_objs[i].cls[0])
+            return SysAllocString(vb6_created_objs[i].cls);
+    }
+    return NULL;
+}
+
 void* vb6_CreateObject(const wchar_t* progId) {
     if (!progId) return NULL;
+
+    // C30-10: 内置正则引擎 —— CreateObject("VBScript.RegExp") 不再走 vbscript.dll。
+    // 与 TeeChart 内置控件同一条路线：先把已知 ProgID 接进自带实现，未命中才查注册表。
+    // 回退开关：C3_REGEXP_PREFER_MS=1 时照旧用 Microsoft 的组件（对照组用）。
+    {
+        static int preferMs = -1;
+        if (preferMs < 0)
+            preferMs = (GetEnvironmentVariableW(L"C3_REGEXP_PREFER_MS", NULL, 0) > 0) ? 1 : 0;
+        if (preferMs == 0 && vb6_RegExp_IsProgramId(progId)) {
+            void* re = vb6_RegExp_New();
+            if (re) { vb6_ComRememberProgID(re, progId); return re; }
+        }
+    }
+
+    // C30-10 第二十六刀：内置 Dictionary —— CreateObject("Scripting.Dictionary") 不再走 scrrun.dll。
+    // 与正则同一形状（含回退开关 C3_DICT_PREFER_MS=1，给「用 Microsoft 组件当对照组」留口）。
+    // 注意这一处只管**晚绑定**；`New Scripting.Dictionary` 走的是 vb6_NewObject /
+    // vb6_NewObjectClsid -> vb6_NewVb6RuntimeClass -> vb6_NewBuiltinObject 另一条腿。
+    {
+        static int preferMsDict = -1;
+        if (preferMsDict < 0)
+            preferMsDict = (GetEnvironmentVariableW(L"C3_DICT_PREFER_MS", NULL, 0) > 0) ? 1 : 0;
+        if (preferMsDict == 0 && vb6_Dict_IsProgramId(progId)) {
+            void* dd = vb6_Dict_New();
+            if (dd) { vb6_ComRememberProgID(dd, progId); return dd; }
+        }
+    }
+
+    // C30-11 第一刀：内置 FileSystemObject。
+    // **默认关**（vb6_Fso_NativeEnabled() 只认 C3_FSO_NATIVE=1）—— 成员面还在刀1，
+    // 现在抢先拦截就会把 GetFolder/Drives/OpenTextFile 那几格变成 438。
+    // 刀5 成员面盖住语料后才翻默认，并让 C3_FSO_PREFER_MS 当对照组（ai/040 §7.5）。
+    if (vb6_Fso_NativeEnabled() && vb6_Fso_IsProgramId(progId)) {
+        void* fo = vb6_Fso_New();
+        if (fo) { vb6_ComRememberProgID(fo, progId); return fo; }
+    }
 
     // Fix 160: ComLib= 免注册 — 本地 DLL 优先 (LoadLibrary+DllGetClassObject, 绕开注册表).
     // 表未声明 (ComLib= 为空) 时 vb6_ComLibLookup 恒返 NULL, 该块整体跳过,
@@ -1194,7 +1312,7 @@ void* vb6_CreateObject(const wchar_t* progId) {
             if (hit) {
                 HRESULT localHr = S_OK;
                 void* p = comLibCreateLocal(hit, &localHr);
-                if (p) return p;
+                if (p) { vb6_ComRememberProgID(p, progId); return p; }
                 /* 账 #305 §B186: 本地那一趟要是交回服务端自己 raise 的错误, 就地折给调用方 ——
                  * 再回退注册表会把「DLL 里抛了 7」读成「这台机器上没这个组件」(429)。
                  * 真·找不到 DLL/起不动的那些照旧往下回退, 便携分发那条路一行没动。 */
@@ -1225,6 +1343,38 @@ void* vb6_CreateObject(const wchar_t* progId) {
         return NULL;
     }
 
+    vb6_ComRememberProgID((void*)pDisp, progId);
+    return (void*)pDisp;
+}
+
+/* C30-9: 按 **coclass CLSID** 建对象 —— 与 VB6 `As New <typelib coclass>` 同一条路。
+ * 为什么要补这一枚（实测，江西省医保药品查询系统）：本机 32 位视图
+ * (HKLM\SOFTWARE\Classes\Wow6432Node) 里 `ADODB.Connection` /
+ * `ADODB.Connection.6.0` / `ADODB.Recordset` 的 **ProgID 根本没注册**，
+ * 而 CLSID {00000514-…} 与 msado15.dll 都在。VB6 编的同一份工程能登录 ——
+ * 它拿 typelib 的 CLSID 直接 CoCreateInstance，从不查 ProgID。
+ * 我方发 `vb6_NewObject(L"ADODB.Connection.6.0")` ⇒ CLSIDFromProgID 失败
+ * ⇒ 未处理错误 #340「没有注册类」（探针 loginprobe 实测 rc=340，栈顶就是
+ * 模块级 As New 的建对象）⇒ conn 恒 NULL ⇒ 登录永远失败。
+ * 失败口径与 vb6_CreateObject 一致（429/340 拉 Err）。 */
+void* vb6_NewObjectClsid(const wchar_t* clsidStr, const wchar_t* className) {
+    if (!clsidStr || !*clsidStr) return NULL;
+    /* C30-9 收口: VB6 运行时**自带实现**的类先答, 才轮到 CoCreateInstance。
+     * 实测 (tests/combyref271, 2026-11-16): 少了这一句, `Dim f As New StdFont` 会拿到
+     * oleaut32 里那枚真 StdFont —— 它只答 IDispatch 那一面, 而 IFont 的 `hFont` / `Clone`
+     * 是 vtable 成员 ⇒ 晚绑定 not found ⇒ 夹具十一行判据全 False + 两条 [C3_LATEBIND_MISS]
+     * (disp=NULL)。完整读数与原因见 vb6rtl_conv.c 的 vb6_NewVb6RuntimeClass。 */
+    {
+        void* builtin = vb6_NewVb6RuntimeClass(className);
+        if (builtin) return builtin;
+    }
+    CLSID clsid;
+    HRESULT hr = CLSIDFromString((LPOLESTR)clsidStr, &clsid);
+    if (FAILED(hr)) { vb6_ComFailCreate(hr, clsidStr); return NULL; }
+    IDispatch* pDisp = NULL;
+    hr = CoCreateInstance(&clsid, NULL, CLSCTX_LOCAL_SERVER | CLSCTX_INPROC_SERVER,
+                          &IID_IDispatch, (void**)&pDisp);
+    if (FAILED(hr)) { vb6_ComFailCreate(hr, clsidStr); return NULL; }
     return (void*)pDisp;
 }
 

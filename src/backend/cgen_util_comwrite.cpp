@@ -17,6 +17,75 @@ namespace vb6c3 {
 // (vb6_ComCallObject = ComCall+UnpackObject), 对最外层用 vb6_ComSetPropArg.
 // AssignmentStmt/SetStmt 共用.
 // ============================================================
+// C30-2: TabStrip 集合链的**写**侧（`Tabs(i).Caption = …` / `.Key` / `.Image` / `.Selected` /
+// `SelectedItem.Index = n`）。
+// 改前这五形全部落 `vb6_ComSetProp(vb6_ComCallObject(…), L"Caption", …)` —— 拿 HWND
+// 当 IDispatch，编得过、写进去一声不响（实测 .build/probe/p3 的发码基线）。
+// 两条 AssignmentStmt / SetStmt 码头各调一道（顺序：在本函数前排不掉的那几条链写之后）。
+bool CCodeGen::tryEmitTabStripChainWrite(Expr* targetNode, Expr* valueNode) {
+    TabChainView v;
+    if (!tabStripChainViewOf(targetNode, v)) return false;
+    if (!valueNode) return false;
+    const std::string hwnd = tabStripHwndTextOf(v);
+
+    // 值先算（VB6 先求右值；与既有 COM 写一致）
+    emitExpr(*valueNode);
+    const std::string val = lastExpr_;
+    const std::string sel = "vb6_TabStrip_GetSelectedIndex((void*)" + hwnd + ")";
+
+    if (v.sub == "selecteditem") {
+        if (v.member == "index") {
+            c_.emitLine("vb6_TabStrip_SetSelectedIndex((void*)" + hwnd + ", (int32_t)(" + val + "));"
+                        "  /* TabStrip.SelectedItem.Index */");
+            return true;
+        }
+        // SelectedItem.Caption / .Key 写 = 改当前选中那一页的标题/键
+        if (v.member == "caption" || v.member == "key") {
+            c_.emitLine(std::string(v.member == "caption" ? "vb6_TabStrip_SetTabCaption"
+                                                           : "vb6_TabStrip_SetTabKey")
+                        + "((void*)" + hwnd + ", " + sel + ", (void*)(" + val + "));"
+                          "  /* TabStrip.SelectedItem." + v.member + " */");
+            return true;
+        }
+        return false;
+    }
+    if (!v.idxArg) return false;
+    emitExpr(*v.idxArg);
+    const std::string arg = lastExpr_;
+    const std::string idx = (inferExprType(*v.idxArg) == Vb6Type::String)
+        ? ("vb6_TabStrip_GetTabIndexByKey((void*)" + hwnd + ", (void*)(" + arg + "))")
+        : ("((int32_t)(" + arg + "))");
+
+    if (v.member == "caption") {
+        c_.emitLine("vb6_TabStrip_SetTabCaption((void*)" + hwnd + ", " + idx
+                    + ", (void*)(" + val + "));  /* TabStrip.Tabs(i).Caption */");
+        return true;
+    }
+    if (v.member == "key") {
+        c_.emitLine("vb6_TabStrip_SetTabKey((void*)" + hwnd + ", " + idx
+                    + ", (void*)(" + val + "));  /* TabStrip.Tabs(i).Key */");
+        return true;
+    }
+    if (v.member == "tooltiptext" || v.member == "tooltip") {
+        c_.emitLine("vb6_TabStrip_SetTabToolTipText((void*)" + hwnd + ", " + idx
+                    + ", (void*)(" + val + "));  /* TabStrip.Tabs(i).ToolTipText */");
+        return true;
+    }
+    if (v.member == "image") {
+        c_.emitLine("vb6_TabStrip_SetTabImage((void*)" + hwnd + ", " + idx
+                    + ", (int32_t)(" + val + "));  /* TabStrip.Tabs(i).Image */");
+        return true;
+    }
+    if (v.member == "selected") {
+        // True → 选中该页。False **不发**：VB6 的 TabStrip 没有“全不选”这个状态，
+        // 照 TCM_SETCURSEL(-1) 写会让原生控件清掉选中，比 VB6 多出一个可观测差异。
+        c_.emitLine("if ((" + val + ") != 0) vb6_TabStrip_SetSelectedIndex((void*)" + hwnd
+                    + ", " + idx + ");  /* Tabs(i).Selected = True */");
+        return true;
+    }
+    return false;
+}
+
 bool CCodeGen::tryEmitChainedComWrite(Expr* targetNode, Expr* valueNode) {
     std::vector<IndexOrCallExpr*> chain;
     Expr* cur = targetNode;
@@ -202,6 +271,34 @@ bool CCodeGen::tryRewriteCOMLvalue(const std::string& target, const std::string&
             std::string tsArgs = target.substr(tsOpen + 1, tsClose - tsOpen - 1);
             c_.emitLine(std::string(kTsSet[tsI]) + tsArgs + ", " + value
                         + ");  /* SSTab indexed prop assignment */");
+            return true;
+        }
+    }
+
+    // ---- C30-6: MSHFlexGrid / MSFlexGrid 的带下标属性写 ----
+    // 读侧 (cgen_expr_call_callee_member.inc) 已经发成 vb6_MshFlexGrid_GetXxx(hwnd, …)，
+    // 它既不是左值也不带 vb6_ComCall 前缀，Pattern A 匹配不到。这里只换函数名，
+    // 实参原样带（含两参的 TextMatrix(r,c)）—— RTL 的 Set 尾参收 const void*（字符串）
+    // 或 int32_t（数值），所以 value 不要再包 comPack。
+    {
+        static const char* kFgGet[6] = {
+            "vb6_MshFlexGrid_GetText(", "vb6_MshFlexGrid_GetTextMatrix(",
+            "vb6_MshFlexGrid_GetTextArray(", "vb6_MshFlexGrid_GetColWidth(",
+            "vb6_MshFlexGrid_GetRowHeight(", "vb6_MshFlexGrid_GetColAlignment(" };
+        static const char* kFgSet[6] = {
+            "vb6_MshFlexGrid_SetText(", "vb6_MshFlexGrid_SetTextMatrix(",
+            "vb6_MshFlexGrid_SetTextArray(", "vb6_MshFlexGrid_SetColWidth(",
+            "vb6_MshFlexGrid_SetRowHeight(", "vb6_MshFlexGrid_SetColAlignment(" };
+        for (int fgI = 0; fgI < 6; fgI++) {
+            std::string getPfx = kFgGet[fgI];
+            if (target.compare(0, getPfx.size(), getPfx) != 0) continue;
+            size_t fgOpen = target.find('(');
+            size_t fgClose = target.rfind(')');
+            if (fgOpen == std::string::npos || fgClose == std::string::npos
+                || fgClose < fgOpen) continue;
+            std::string fgArgs = target.substr(fgOpen + 1, fgClose - fgOpen - 1);
+            c_.emitLine(std::string(kFgSet[fgI]) + fgArgs + ", " + value
+                        + ");  /* MSHFlexGrid indexed prop assignment */");
             return true;
         }
     }
@@ -642,8 +739,10 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
                 case Vb6Type::String:
                     return "vb6_VariantToString(" + varVal091x + ")";
                 case Vb6Type::Integer:
-                case Vb6Type::Boolean:
                     return "(int16_t)vb6_VariantToLong(" + varVal091x + ")";
+                case Vb6Type::Boolean:
+                    // VB6 的 Boolean 只有 -1/0; 共享 Integer 那一档会把 1 原样存下。
+                    return "(int16_t)vb6_CBool((double)vb6_VariantToLong(" + varVal091x + "))";
                 case Vb6Type::Long:
                     return "vb6_VariantToLong(" + varVal091x + ")";
                 case Vb6Type::Byte:
@@ -665,8 +764,11 @@ std::string CCodeGen::packLetValueArg(const ParameterInfo& lastP, Expr* valueExp
                 }
                 return "(&(BSTR){(" + val + ")})";
             case Vb6Type::Integer:
-            case Vb6Type::Boolean:
                 return "(&(int16_t){(" + val + ")})";
+            case Vb6Type::Boolean:
+                // VB6 的 Boolean 真值恒为 -1 (算术里直接参与运算, 例: `Seek + 2 + .isTransparent`),
+                // 与 Integer 共用一格会把 1 原样递进去 ⇒ 位置多推 2 字节。
+                return "(&(int16_t){(vb6_CBool((double)(" + val + "))) })";
             case Vb6Type::Long:
                 return "(&(int32_t){(" + val + ")})";
             case Vb6Type::Byte:

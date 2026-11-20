@@ -313,6 +313,13 @@ void vb6_ReleasePicture(void* picture) {
 // 因此从来没被任何一枚走到过。现在数组只问 `vt & VT_ARRAY` 这一面旗标，认不出的标量
 // 统一走换 BSTR 那一格。
 // ============================================================
+/* 账 #611 第349刀: 真 OLE **多维** SAFEARRAY → C3 vb6_SafeArrayND 的唯一转换出口。
+ * 定义在 vb6_ComSaVtBlittable 之后 (那张白名单在 616 行), 这里先挂原型: 下面
+ * vb6_ComVariantIntoSlot 的数组臂要问它, 而它自己逐枚搬 VT_VARIANT 元素时又递归问
+ * vb6_ComVariantIntoSlot —— 两枚互相看得见才不用抄第二份搬运逻辑。 */
+static void vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt,
+                                   vb6_VARIANT* s);
+
 static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
     vb6_VARIANT result;
     memset(&result, 0, sizeof(result));
@@ -325,7 +332,8 @@ static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
            元素档问 vb6_SaElemTypeFromVt(唯一那张反向表)、宽度交回 vb6_SaElemSize、标签交回
            vb6_SaVtFromElemType —— 这三张表吃同一个枚举，不在这里第二次答(§B159 第五十刀)。 */
         SAFEARRAY* psa = pv->parray;
-        if (psa && SafeArrayGetDim(psa) == 1) {
+        UINT cDims = psa ? SafeArrayGetDim(psa) : 0;
+        if (psa && cDims == 1) {
             LONG lBound = 0, uBound = 0;
             SafeArrayGetLBound(psa, 1, &lBound);
             SafeArrayGetUBound(psa, 1, &uBound);
@@ -379,6 +387,14 @@ static vb6_VARIANT vb6_ComVariantIntoSlot(VARIANT* pv, int steal) {
             }
             result.vt = (vb6_vartype)(vb6_vtArray | vb6_SaVtFromElemType(et));
             result.parray = arr;
+        } else if (psa && cDims >= 2 && cDims <= 16) {
+            /* 账 #611 第349刀: 改前这一格整个不接 —— 上面那一臂只认 cDims==1,
+             * 于是 result 留着 VT_ARRAY|码 的标签却 parray=NULL, 读侧一律 Empty。
+             * 多维那一问交给唯一转换出口(下面 vb6_ComNDArrayIntoSlot), 不在这里
+             * 抄第二份界/元素搬运。元素档认不出时那枚出口交回 vtEmpty, 与 §B144
+             * 「宁可少给, 不猜」同口径。 */
+            vb6_ComNDArrayIntoSlot(psa, cDims,
+                                   (VARTYPE)(pv->vt & VT_TYPEMASK), &result);
         }
         if (steal) pv->parray = NULL;  /* 只有消耗式才动源里那一格 */
         return result;
@@ -627,6 +643,100 @@ static VARTYPE vb6_ComSaVtBlittable(vb6_safearray_elemtype et) {
     }
 }
 
+/* 账 #611 第349刀: 真 OLE **多维** SAFEARRAY → C3 vb6_SafeArrayND 的唯一转换出口。
+ * 两条进口都问它: ① vb6_ComVariantIntoSlot 的 COM 结果臂 (FIX-011 读侧);
+ *   ② vb6_VariantArrayIntoSlot 的服务端入站臂 (§B162)。口径 = **拷**: 自建描述符、
+ *   逐枚搬元素, 源 psa 一个字节都不动 —— 对端那一趟结束会 VariantClear 自己那份。
+ *
+ * ⚠ 不 cast 结构头, 只走 SafeArray API:
+ *   · psa->rgsabound[] 在内存里是**逆序**的 (rgsabound[0] = 最右维), 而 C3
+ *     vb6_SafeArrayND.bounds[d] 是正序 d=0..rank-1;
+ *   · SAFEARRAYBOUND 是 {cElements, lLbound}, C3 vb6_SafeArrayBound 是
+ *     {lBound, cElements} —— 字段序也反了 (账本 L5232 记着这一条)。
+ *   本机 .temp/nd349/sa_dim_probe.c 实测 (x64, VT_VARIANT 2D):
+ *     SafeArrayCreate(vt,2,rg) 的 rg[d] **正序**对应 SafeArrayGetLBound(psa,d+1);
+ *     psa->rgsabound[0] 反而是 rg[1]; 线性 elem(10+i,20+j)=i+2*j ⇒ d=0 最快变化,
+ *     与 vb6_SaNdElemPtr 的列主序同序 ⇒ 逐枚线性搬即可, **不重排**。
+ *
+ * 元素档: VT_VARIANT 逐枚 VariantCopy → vb6_ComVariantIntoSlot(steal=1) 深拷贝
+ *   (串/对象/嵌套数组都带权), 不能整块 memcpy; 其余只放行白名单那几档数值档
+ *   (宽与 SAFEARRAY 同值 ⇒ memcpy 正确); BSTR / UDT / 认不出的档一律交回 Empty,
+ *   与一维那一臂、与出站白名单同一口径, 本刀不扩档。 */
+static void vb6_ComNDArrayIntoSlot(SAFEARRAY* psa, UINT dim, VARTYPE baseVt,
+                                   vb6_VARIANT* s) {
+    vb6_SafeArrayND* nd;
+    vb6_SafeArrayBound bounds[16];
+    vb6_safearray_elemtype etNd;
+    VARTYPE allowNd;
+    int32_t eszNd, total, i;
+    LONG lo, hi;
+    UINT d;
+    void* srcData = NULL;
+    int isVarNd;
+
+    /* ⚠ 出口刻意是 `void` + 出参, **不返回** vb6_VARIANT: check_builtin_slot_returns.ps1
+     * 的 R8 会把「RTL 里声明返回 vb6_VARIANT 的函数」派生成 cgen_variant_slot_prefixes.inc
+     * 那张**发码**内置出口表 —— 这枚是纯内部搬运, 后端一次都不会发它的名字, 登记进去就是
+     * 「死名躺在表里骗人」(GA 43551067615 首个 compile #2 红项, derived=43 current=42)。
+     * 局部变量同样带 Nd 后缀: check_var_arr_inbound.ps1 的 R1/R5 用 Find-Line 全文找
+     * **第一次**出现的闸门形状, 且它不剥注释 —— 同名赋值出现在更靠前的位置(连注释里
+     * 引一次也算)就会把既有 §B162 那一臂的判据顶到本函数上 (GA 43551067615 的 R1 红项)。 */
+    memset(s, 0, sizeof(*s));
+    s->vt = vb6_vtEmpty;
+    if (!psa || dim < 2 || dim > 16) return;
+    isVarNd = (baseVt == VT_VARIANT);
+    if (isVarNd) {
+        etNd = vb6_sa_variant;
+        allowNd = (VARTYPE)VT_VARIANT;
+    } else {
+        etNd = vb6_SaElemTypeFromVt(baseVt);
+        allowNd = vb6_ComSaVtBlittable(etNd);
+        if (!allowNd || allowNd != baseVt) return;      /* 白名单外 / 认不出 = 不猜 */
+    }
+    eszNd = vb6_SaElemSize(etNd);
+    if (eszNd <= 0 || (isVarNd && eszNd != (int32_t)sizeof(vb6_VARIANT))) return;
+    total = 1;
+    for (d = 0; d < dim; d++) {
+        if (FAILED(SafeArrayGetLBound(psa, d + 1, &lo)) ||
+            FAILED(SafeArrayGetUBound(psa, d + 1, &hi))) return;
+        bounds[d].lBound = (int32_t)lo;
+        bounds[d].cElements = (int32_t)(hi - lo + 1);
+        if (bounds[d].cElements <= 0) return;
+        if ((int64_t)total * bounds[d].cElements > 0x7FFFFFFFll) return;
+        total *= bounds[d].cElements;
+    }
+    if (FAILED(SafeArrayAccessData(psa, &srcData)) || !srcData) {
+        if (srcData) SafeArrayUnaccessData(psa);
+        return;
+    }
+    nd = vb6_SafeArrayCreateND(etNd, (int32_t)dim, bounds);
+    if (!nd || !nd->data) {
+        if (nd) vb6_SafeArrayDestroyND(nd);
+        SafeArrayUnaccessData(psa);
+        return;
+    }
+    if (isVarNd) {
+        /* 与 vb6_VariantArrayIntoSlot 的 1D variant 臂同一形: 私有副本 → 消耗式
+         * 转换搬进描述符 → VariantClear 私有副本 (指针已被搬走, 不重复释放)。 */
+        for (i = 0; i < total; i++) {
+            VARIANT* srcElem = (VARIANT*)((char*)srcData + (size_t)i * sizeof(VARIANT));
+            VARIANT elem;
+            vb6_VARIANT* dstElem = (vb6_VARIANT*)((char*)nd->data + (size_t)i * eszNd);
+            VariantInit(&elem);
+            VariantCopy(&elem, srcElem);
+            *dstElem = vb6_ComVariantIntoSlot(&elem, 1);
+            VariantClear(&elem);
+        }
+    } else {
+        memcpy(nd->data, srcData, (size_t)total * (size_t)eszNd);
+    }
+    SafeArrayUnaccessData(psa);
+    /* allowNd 本就是 vb6_ComSaVtBlittable 从唯一那张正向表问回来的档值, 不再多问一次
+     * (check_sa_access.ps1 A17 的正向表调用计数保持 5)。 */
+    s->vt = (vb6_vartype)(vb6_vtArray | allowNd);
+    s->parray = (struct vb6_SafeArray1D*)nd;
+}
+
 /* 账 #305 §B162 (第五十刀): 反向 —— 对端递进来的真 SAFEARRAY → 我们那一格的描述符。
  * 口径 = **拷**（自己建一枚描述符 + 原样搬元素），不是借：服务端这一趟结束就 free 掉槽阵列
  *   (vb6comserver_obj.c 那句 CoTaskMemFree)，而 VB 代码会把这枚 Variant 存进变量、带出这次调用,
@@ -652,7 +762,20 @@ static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
     void* data;
     int isVarElem;
     s->vt = vb6_vtEmpty;
-    if (!psa || SafeArrayGetDim(psa) != 1) return;          /* 多维: 描述符是另一套 (§B151) */
+    if (!psa) return;
+    /* 账 #611 第349刀: 多维不再是「描述符是另一套, 直接丢」—— 交给唯一转换出口。
+     * 改前这里按「维数不等于 1」一律早退 ⇒ 服务端被调方收到一枚真
+     * 二维 SAFEARRAY 时槽留 Empty (与出站那半合成完整的往返丢失)。
+     * 复用 vb6_ComNDArrayIntoSlot: 它自建 vb6_SafeArrayND + 逐枚深拷, 出的正是
+     * 本臂要交回的槽形态; VB6 数组按引用传的 BYREF 解引用已在 psa 那一句做完。 */
+    {
+        UINT cDims = SafeArrayGetDim(psa);
+        if (cDims >= 2) {
+            if (cDims <= 16) vb6_ComNDArrayIntoSlot(psa, cDims, base, s);
+            return;                       /* >16 或元素档认不出: 不猜 */
+        }
+        if (cDims != 1) return;
+    }
     et = vb6_SaElemTypeFromVt(base);
     /* 账 #610 第344刀: **VT_VARIANT 元素档** —— 白名单放不进去 (VARIANT 不能整块 memcpy),
      * 但它**可以逐枚深拷贝**。改前这一档落在 `allow == 0` 那句 ⇒ 槽留 Empty ⇒
@@ -720,7 +843,15 @@ static void vb6_VariantArrayIntoSlot(const VARIANT *src, vb6_VARIANT *s) {
 void vb6_VariantSlotRelease(void *slot) {
     vb6_VARIANT* s = (vb6_VARIANT*)slot;
     if (!s || !(s->vt & vb6_vtArray)) return;
-    vb6_SafeArrayDestroy1D(s->parray);
+    /* 账 #611 第349刀: 入站多维那一臂造的是 vb6_SafeArrayND, 两套描述符首字段
+     * 与尺寸都不同 —— 按 1D 销毁器读它会把 dimCount 当 cDims、把 elemType 当
+     * cbElements, 释放的 data 槽其实是 elemSize|totalElements 拼出来的假指针。
+     * 认载体仍只问 vb6_SaIs1D 那一位主人, 不新增第三种认法。 */
+    if (vb6_SaIs1D(s->parray)) {
+        vb6_SafeArrayDestroy1D(s->parray);
+    } else {
+        vb6_SafeArrayDestroyND((vb6_SafeArrayND*)s->parray);
+    }
     s->parray = NULL;
     s->vt = vb6_vtEmpty;
 }
@@ -785,10 +916,6 @@ static void vb6_ComPackArrayOut(const void* arrV, VARIANT* out) {
         int64_t total = 1;
         int32_t d;
         if (nd->dimCount < 1 || nd->dimCount > 16) return;
-        vt = vb6_ComSaVtBlittable(nd->elemType);
-        if (!vt) return;
-        esz = vb6_SaElemSize(nd->elemType);
-        if (nd->elemSize != esz || !nd->data) return;
         for (d = 0; d < nd->dimCount; d++) {
             if (nd->bounds[d].cElements <= 0) return;
             rg[d].lLbound = (ULONG)nd->bounds[d].lBound;
@@ -796,6 +923,43 @@ static void vb6_ComPackArrayOut(const void* arrV, VARIANT* out) {
             total *= nd->bounds[d].cElements;
             if (total > 0x7FFFFFFFll) return;   /* 溢出/零元素: 不搬 */
         }
+        if (!nd->data) return;
+        /* 账 #611 第349刀: ND **Variant 元素档** —— 与上面 1D variant 那一支同一口径。
+         * 改前这一档撞 vb6_ComSaVtBlittable 的 default ⇒ `!vt` ⇒ out 留 VT_EMPTY:
+         * `d.Add "two", a2` 交给 Dictionary 的是一枚空值, 读回 VarType=0 (探针
+         * probe_DictArrayRoundTrip.bas 修前读数), JSonFast 第 7 按钮第二段 owner
+         * 因此恒 null。VB6 的多维 Variant 数组 (Dim a(0 To 1, 0 To 1) As Variant)
+         * 正是这一档, 不是边缘形。
+         * 逐枚**带权**装箱 (vb6_VariantPackCopyInto: 串复制 / 对象 AddRef), 不能
+         * memcpy —— 收下这枚 VARIANT 的那一头会 VariantClear 整条 SAFEARRAY。
+         * 维序见 vb6_ComNDArrayIntoSlot 顶注的 sa_dim_probe 实测: rg[d] 正序、
+         * d=0 最快变化, 与 C3 ND 线性布局同序 ⇒ 逐枚线性搬, 不重排。 */
+        if (nd->elemType == vb6_sa_variant) {
+            int32_t i;
+            VARIANT* dst;
+            if (nd->elemSize != (int32_t)sizeof(vb6_VARIANT)
+                || total != nd->totalElements) return;
+            psa = SafeArrayCreate(VT_VARIANT, (ULONG)nd->dimCount, rg);
+            if (!psa) return;
+            if (FAILED(SafeArrayAccessData(psa, &pvData)) || !pvData) {
+                SafeArrayDestroy(psa);
+                return;
+            }
+            dst = (VARIANT*)pvData;
+            for (i = 0; i < (int32_t)total; i++)
+                vb6_VariantPackCopyInto(
+                    (const vb6_VARIANT*)((const char*)nd->data
+                                         + (size_t)i * (size_t)nd->elemSize),
+                    &dst[i]);
+            SafeArrayUnaccessData(psa);
+            out->vt = (VARTYPE)(VT_ARRAY | VT_VARIANT);
+            out->parray = psa;
+            return;
+        }
+        vt = vb6_ComSaVtBlittable(nd->elemType);
+        if (!vt) return;
+        esz = vb6_SaElemSize(nd->elemType);
+        if (nd->elemSize != esz) return;
         rank = nd->dimCount; n = (int32_t)total; data = nd->data;
     }
     psa = SafeArrayCreate(vt, (ULONG)rank, rg);
@@ -1065,6 +1229,232 @@ vb6_VARIANT vb6_VarSubV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(1, a
 vb6_VARIANT vb6_VarMulV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(2, a, b); }
 vb6_VARIANT vb6_VarDivV(vb6_VARIANT a, vb6_VARIANT b) { return vb6_VarArith(3, a, b); }
 
+/* C30-10 第四十五刀 / 第五十三刀: 一元 `-` 打在 Variant 上。
+   口径 = 用户真 VB6 采集器 U 的 A 段读数（逐档）:
+     -CByte(5)      → 2/Integer -5      -CInt(5)   → 2/Integer -5
+     -CLng(70000)   → 3/Long            -CSng(1.5) → 4/Single
+     -CDbl(1.7)     → 5/Double          -CCur(2.5) → 6/Currency
+     -CBool(True)   → 2/Integer 1       -CDate(#1/2/2000#) → 7/Date
+     -Empty         → 2/Integer 0       -Null      → 1/Null
+     -"5"           → 5/Double -5       -"x"       → 错误 13
+     -(-32768)(Integer) → 2/Integer -32768（回绕，不报 6）
+   即**子类型保持**（与二元那四个不同：它们要升格，这里不要）。
+   Byte/Boolean/Empty 走 Integer 是 VB6 的读法（U01/U07/U09）而不是 Byte/Boolean 本身。 */
+vb6_VARIANT vb6_VarNegV(vb6_VARIANT a) {
+    if (a.vt == vb6_vtEmpty) return vb6_VariantInt(0);
+    switch (a.vt) {
+    case vb6_vtNull:  return vb6_VariantNull();
+    case vb6_vtByte:  return vb6_VariantInt((int16_t)(-(int32_t)a.bVal));
+    case vb6_vtInteger:
+        /* U14: Integer 的 -32768 取负仍然答 Integer -32768（回绕），不报溢出 */
+        return vb6_VariantInt((int16_t)(-(int32_t)a.iVal));
+    case vb6_vtLong:
+        if (a.lVal == INT32_MIN) { vb6_ErrRaiseNumber(6); return vb6_VariantEmpty(); }
+        return vb6_VariantLong(-a.lVal);
+    case vb6_vtSingle: return vb6_VariantSingle(-a.fltVal);
+    case vb6_vtDouble: return vb6_VariantDouble(-a.dblVal);
+    case vb6_vtCurrency: return vb6_VariantCur(-(double)a.cyVal / 10000.0);
+    case vb6_vtBoolean: return vb6_VariantInt((int16_t)(a.boolVal ? 1 : 0));
+    case vb6_vtDate: return vb6_VariantDate(-a.dblVal);
+    case vb6_vtBSTR:
+        /* U11/U12: 数字串按 Double 取负；非数字串才是错误 13 */
+        if (a.bstrVal && vb6_IsNumericText(a.bstrVal))
+            return vb6_VariantDouble(-vb6_VariantToDouble(a));
+        vb6_ErrRaiseNumber(13);
+        return vb6_VariantEmpty();
+    default: break;
+    }
+    /* 其余标量档 (LongLong/Decimal/SByte/UInteger) 按数值取负（问权威换算
+       vb6_VariantToDouble，不是自己再抄一张按档表）；与 VB6 的「先按数值读再取负」一致，
+       子类型不保的那几档另开一刀（census 的 I8/Decimal/SByte/UInteger 四条豁免写的即这一句）。 */
+    return vb6_VariantDouble(-vb6_VariantToDouble(a));
+}
+
+/* C30-10 第五十三刀: 一元 `Not` 打在 Variant 上。
+   真 VB6 采集器 U 的 C 段读数:
+     Not CBool(True)  → 11/Boolean False   Not CBool(False) → 11/Boolean True   （Boolean 是**逻辑非**）
+     Not CByte(200)   → 17/Byte 55         Not CInt(5)      → 2/Integer -6     （整型是**位非**，且保档）
+     Not CLng(70000)  → 3/Long -70001
+     Not CSng(1.5)    → 3/Long -3          Not CDbl(1.7) → 3/Long -3
+     Not CCur(2.5)    → 3/Long -3          Not CDate(#1/2/2000#) → 3/Long -36528
+     Not Empty        → 2/Integer -1       Not Null     → 1/Null
+     Not "5"          → 3/Long -6
+   浮点/货币/日期先按 VB6 的 CLng（银行家舍入：1.5→2、1.7→2、2.5→2）取整再位非，得 Long。 */
+vb6_VARIANT vb6_VarNotV(vb6_VARIANT a) {
+    if (a.vt == vb6_vtEmpty) return vb6_VariantInt(-1);
+    switch (a.vt) {
+    case vb6_vtNull:    return vb6_VariantNull();
+    case vb6_vtBoolean: return vb6_VariantBool((int16_t)(a.boolVal ? 0 : -1));
+    case vb6_vtByte:    return vb6_VariantByte((uint8_t)(~(uint32_t)a.bVal & 0xFFu));
+    case vb6_vtInteger: return vb6_VariantInt((int16_t)(~(int32_t)a.iVal));
+    case vb6_vtLong:    return vb6_VariantLong(~a.lVal);
+    case vb6_vtSingle:  return vb6_VariantLong(~vb6_CLng((double)a.fltVal));
+    case vb6_vtDouble:  return vb6_VariantLong(~vb6_CLng(a.dblVal));
+    case vb6_vtCurrency: return vb6_VariantLong(~vb6_CLng((double)a.cyVal / 10000.0));
+    case vb6_vtDate:    return vb6_VariantLong(~vb6_CLng(a.dblVal));
+    case vb6_vtBSTR:
+        if (a.bstrVal && vb6_IsNumericText(a.bstrVal))
+            return vb6_VariantLong(~vb6_CLng(vb6_VariantToDouble(a)));
+        vb6_ErrRaiseNumber(13);
+        return vb6_VariantEmpty();
+    default: break;
+    }
+    return vb6_VariantLong(~vb6_CLng(vb6_VariantToDouble(a)));
+}
+
+
+/* C30-11 第六十五刀: 比较符的 Null 传播。
+   读数 .temp/null/oracle_ops.vbs（真引擎）: O5..O10 —— `= <> < > <= >=` 只要
+   任一侧是 Null，结果就是 **Null**（包括 Null = Null），不是 False/True。
+   本站吃的是“已经算好的布尔结果 + 两条槽”，槽是 Null 就整枚折成 Null：
+   这样比较本身的发码不必改（它照旧算 bool），只在**变体上下文**（装箱站/
+   实参站）把它换成这一枚。VB6 True 是 -1，cond 非零统一收成 -1。 */
+vb6_VARIANT vb6_VCmpNullV(vb6_VARIANT* a, vb6_VARIANT* b, int32_t cond) {
+    if ((a && a->vt == vb6_vtNull) || (b && b->vt == vb6_vtNull))
+        return vb6_VariantNull();
+    return vb6_VariantBool((int16_t)(cond ? -1 : 0));
+}
+
+/* C30-11 第六十六刀: `&` 的**双 Null 折叠**。
+   读数 .temp/null/oracle_ops3.vbs（真引擎）: R1/R2 —— Null & Null 是 **Null**（TypeName 也答 Null）；
+   但 R4..R6、R10、R12 说明只有**两侧同时**是 Null 才折，任一侧不是（含 Empty、"x"、数字）
+   就把 Null 当空串拼。R3: CStr(Null & Null) = 94（那是 Null 进 CStr 那一站）。
+   两侧的 BSTR 已由调用方造好（它们是各自槽的 CStr），这里只管“折不折”与所有权：
+   折 Null 时两个串都要放，不折时交给 ConcatFree（它自己会放掉左操作数）。 */
+vb6_VARIANT vb6_VarConcatNullV(vb6_VARIANT* a, vb6_VARIANT* b, BSTR sa, BSTR sb) {
+    if (a && b && a->vt == vb6_vtNull && b->vt == vb6_vtNull) {
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantNull();
+    }
+    /* 两侧实参都由本函数接管（无条件）：vb6_BSTR_ConcatFree 只放左操作数，
+       所以右操作数要自己放 —— 不放就是非 Null 路上的漏。 */
+    {
+        BSTR result = vb6_BSTR_Concat(sa, sb);
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantString(result);
+    }
+}
+
+/* C30-11 第六十九刀: 拼接链的 Null 折叠（`Null & Null & Null`）。
+   读数（真实 VB6 IDE，用户 2026-11-19，tests/vb6probe/NullFamilyProbe.bas）：
+     G1  Null & Null & Null & Null      = Null
+     G3  (Null & Null) & (Null & Null)  = Null
+     G2  Null & Null & 1                = "1" (String)
+     G4  Null & Null & "b" & Null       = "b" (String)
+     G5  "" & Null & "" & Null          = ""  (String)
+     G6  Null & Empty                   = ""  (String)
+   即：`&` 仍是左结合二叉树，**只在某个节点两侧同时为 Null 时**该节点折 Null；
+   折出来的 Null 再当左操作数继续往上走 —— 与上面两槽版完全同一个规则，
+   差别只在“操作数可以是一枚已折好的 Null”而不只是变量槽。
+   为什么另开一枚：两槽版收的是 `vb6_VARIANT*`，而链上的操作数是**内层守卫调用的
+   返回值**（右值），拿不到地址。取址就得先落一个临时，而那枚临时里带的 BSTR
+   没人放（漏）。改成整枚接收 + 自己造串，所有权只在函数内部走一趟。 */
+vb6_VARIANT vb6_VarConcatNullVV(vb6_VARIANT a, vb6_VARIANT b) {
+    if (a.vt == vb6_vtNull && b.vt == vb6_vtNull) return vb6_VariantNull();
+    {
+        BSTR sa = vb6_CStr(a);
+        BSTR sb = vb6_CStr(b);
+        BSTR r = vb6_BSTR_Concat(sa, sb);
+        vb6_BSTR_Free(sa);
+        vb6_BSTR_Free(sb);
+        return vb6_VariantString(r);
+    }
+}
+
+/* C30-11 第六十七刀: `Or`/`And` 的 Null 真值表。
+   读数：.temp/null/oracle_logic.vbs（VBScript）+ **真实 VB6 IDE 实测（用户，2026-11-19）**
+     Null Or True  = True      Null Or False  = Null     True Or Null  = True   False Or Null = Null
+     Null And False = False    Null And True  = Null     False And Null = False True And Null = Null
+     Null Or Null  = Null      Null And Null  = Null
+     **Null Or 5 = Integer 5**  **Null And 0 = Integer 0**（VB6 IDE 实测；VBScript 同）
+     Null Or 0 = Null          Null And 5 = Null
+   统一规则（两侧对得上，且比文档那两行更宽）:
+     Or  : 另一侧非零 ⇒ **结果就是那一侧的值**；另一侧零 ⇒ Null
+     And : 另一侧零   ⇒ **结果就是那一侧的值（0）**；另一侧非零 ⇒ Null
+   即“决定性那一侧辐到结果”：“Or 的另一侧非零”和“And 的另一侧为零”分别是两种确定情形，
+   其余（含两侧都 Null）一律 Null。
+   ⚠ 求值顺序：只传**槽地址**，VariantToLong 在函数里惰性算 —— 作为实参先算会先报 94。
+   ⚠ 类型：结果按“另一侧”的档给（布尔侧答 Boolean，否则 Long），不动。
+
+   C30-11 第六十八刀：同一枚出口再收 `Xor`(2)/`Eqv`(3)/`Imp`(4)。
+   读数（真实 VB6 IDE，用户 2026-11-19，tests/vb6probe/NullOpsProbe.bas）：
+     X1..X7  Xor：任一侧 Null ⇒ **Null**，err 0（含 Null Xor 5、5 Xor Null）
+     E1..E8  Eqv：任一侧 Null ⇒ **Null**，err 0
+     I1  Null Imp True  = True（Boolean）      I4  Null Imp 5     = 5（Integer）
+     I2  Null Imp False = Null                 I3  Null Imp 0     = Null
+     I7  False Imp Null = True（Boolean）      I6  True Imp Null  = Null
+     I8  5 Imp Null     = **-6（Integer）**     I5  Null Imp Null  = Null
+   Imp 这三条只有一种解释：`x Imp y` 就是 `(Not x) Or y`，Not 传播 Null，再走本表的 Or 规则 ——
+     x Null ⇒ 结果 = `Null Or y` =（y 非零则 y，否则 Null）
+     y Null ⇒ 结果 = `(~x) Or Null` =（~x 非零则 ~x，否则 Null；~5 = -6、~(-1) = 0、~0 = -1）
+   结果档同样跟“值那一侧”走（x 是 Boolean ⇒ Not x 仍是 Boolean）。 */
+vb6_VARIANT vb6_VarLogicNullV(int32_t op, vb6_VARIANT* a, vb6_VARIANT* b,
+                              int32_t litBits, int32_t mask, int32_t litType) {
+    const int aIsSlot = (mask & 1) != 0;
+    const int bIsSlot = (mask & 2) != 0;
+    const int aNull = aIsSlot && a && a->vt == vb6_vtNull;
+    const int bNull = bIsSlot && b && b->vt == vb6_vtNull;
+    const int isXor = (op == 2);
+    const int isEqv = (op == 3);
+    const int isImp = (op == 4);
+    if (aNull || bNull) {
+        /* Xor / Eqv：只有“任一侧 Null ⇒ Null”这一条，不看另一侧的值 */
+        if (isXor || isEqv) return vb6_VariantNull();
+        if (aNull && bNull) return vb6_VariantNull();
+        {
+            /* 哪一侧是“另一侧”（非 Null 那一侧）。注意非槽侧就是字面量（已知）。 */
+            vb6_VARIANT* otherSlot = aNull ? (bIsSlot ? b : 0) : (aIsSlot ? a : 0);
+            const int32_t other = otherSlot ? vb6_VariantToLong(*otherSlot) : litBits;
+            const int otherIsBool = otherSlot ? (otherSlot->vt == vb6_vtBoolean)
+                                              : (litType == 1);
+            const int otherIsInt = otherSlot ? (otherSlot->vt == vb6_vtInteger)
+                                             : (litType == 2);
+            if (isImp) {
+                if (aNull) {
+                    /* x 未知 ⇒ Not x 也是 Null ⇒ 只剩 `Null Or y`：y 决定 */
+                    if (other != 0)
+                        return otherIsBool ? vb6_VariantBool((int16_t)other)
+                             : otherIsInt  ? vb6_VariantInt((int16_t)other)
+                                           : vb6_VariantLong(other);
+                    return vb6_VariantNull();
+                }
+                /* y 未知 ⇒ `(~x) Or Null`：~x 非零就辐出去，零才 Null */
+                {
+                    const int32_t n = ~other;
+                    if (n != 0)
+                        return otherIsBool ? vb6_VariantBool((int16_t)n)
+                             : otherIsInt  ? vb6_VariantInt((int16_t)n)
+                                           : vb6_VariantLong(n);
+                    return vb6_VariantNull();
+                }
+            }
+            if (op == 0) {
+                if (other != 0) {
+                    if (otherIsBool) return vb6_VariantBool((int16_t)-1);
+                    if (otherIsInt) return vb6_VariantInt((int16_t)other);
+                    return vb6_VariantLong(other);
+                }
+            } else {
+                if (other == 0) {
+                    if (otherIsBool) return vb6_VariantBool((int16_t)0);
+                    if (otherIsInt) return vb6_VariantInt((int16_t)0);
+                    return vb6_VariantLong(0);
+                }
+            }
+            return vb6_VariantNull();
+        }
+    }
+    {
+        const int32_t av = aIsSlot ? vb6_VariantToLong(*a) : litBits;
+        const int32_t bv = bIsSlot ? vb6_VariantToLong(*b) : litBits;
+        if (isXor) return vb6_VariantLong(av ^ bv);
+        if (isEqv) return vb6_VariantLong(~(av ^ bv));
+        if (isImp) return vb6_VariantLong((~av) | bv);
+        return vb6_VariantLong(op == 1 ? (av & bv) : (av | bv));
+    }
+}
 
 /* Fix 084f: Variant数组嵌套索引按值版本 (见 vb6rtl.h 说明) */
 vb6_VARIANT vb6_VariantArrayGetVal(vb6_VARIANT v, int32_t index) {

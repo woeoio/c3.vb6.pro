@@ -171,6 +171,11 @@
                 // (创建时读设计期属性容易与"未写即默认"的口径打架), 这里只给基类样式。
                 createCaption = "";   // 页标题走 TCM_INSERTITEM, 创建时不给标题
                 break;
+            case FrmControlType::TabStrip:   // C30-2: 同样 SysTabControl32
+                // 与 SSTab 同一套理由: TCS_MULTISELECT/HOTTRACK/TOOLTIPS 由 vb6_TabStrip_Init
+                // 在创建后改 GWL_STYLE；页标题一律走 TCM_INSERTITEM（Tabs.Add）。
+                createCaption = "";
+                break;
             case FrmControlType::DriveListBox:
                 // C29-1b: VB6 的 DriveListBox 外观就是"只能选、不能改"的组合框
                 style |= 0x0003L | kWsVscroll | kWsBorder;  // CBS_DROPDOWNLIST
@@ -290,6 +295,15 @@
                 //     数值读自 OCX 自带的类型库（探针 .build/slprobe/sltlb.cpp），非猜。
                 createCaption = "";
                 style |= sliderStyleBits(ctrl);
+                break;
+            }
+            case FrmControlType::UpDown: {
+                // C30-UD-a: msctls_updown32 的创建样式。折算整个搬进 updownStyleBits
+                // （controlTypeStyleBits 那格共用它，账 #83）。
+                // 注意：这枚控件的"外观位"很少，真正决定行为的是 range/pos/accel 三条消息，
+                // 那是 Init 干的活（见下面的 emitUpDownDesignTimeInit 调用点）。
+                createCaption = "";
+                style |= updownStyleBits(ctrl);
                 break;
             }
             case FrmControlType::RichTextBox: {
@@ -700,6 +714,19 @@
             emitSliderDesignTimeInit(ctrl, slHwnd);
         }
 
+        // C30-UD-a: UpDown 设计期值面（Min/Max/Value/Increment/Wrap/Alignment/
+        // Orientation/SyncBuddy + BuddyControl）。与 Slider 同一条口径：参数序与 -999
+        // 哨兵只住在 emitUpDownDesignTimeInit 一处，容器那条路（frame_menu）调同一个出口。
+        if (ctrl.controlType == FrmControlType::UpDown) {
+            std::string udLower = ctrl.controlName;
+            std::transform(udLower.begin(), udLower.end(), udLower.begin(), ::tolower);
+            std::string udHwnd = knownControlArrays_.count(udLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            emitUpDownDesignTimeInit(ctrl, udHwnd);
+        }
+
         // C29-MV-a: MonthView 设计期的多月平铺。原生没有"行/列"这条消息 —— 平铺几个月完全
         // 由**窗口矩形多大**决定（CommCtrl.h 6361 行那段注释就是这么教的），所以 Init 按
         // MonthRows×MonthColumns 把矩形乘出来、交给 MCM_SIZERECTTOMIN 撑到真装得下，再挪一次窗。
@@ -801,6 +828,66 @@
                             + (argDecl.empty() ? std::string("void") : argDecl) + ");");
                 c_.emitLine("  vb6_Ws_SetEventHandler((void*)" + wsHwnd + ", "
                             + std::to_string(ev.kind) + ", (void*)" + evFn + "); }");
+            }
+        }
+
+        // C30-4: MSComm 设计期。状态全在 RTL 实例表里（端口句柄 / 读线程 / 接收缓冲），
+        // 所以这里只做三件事：把身份窗认进表、灌 .frm 上写的那几条、把 OnComm 注册成函数指针 ——
+        // 串口通知进不了 WM_COMMAND / WM_NOTIFY（那是“往父窗投”那一路），只能是 Timer / Data /
+        // 网络控件那种“注册回调”的形状。
+        // ⚠ .frm 里的 Boolean 是 -1/0，RTL 那侧按 0/1 存（与 UpDown / TabStrip 那几处同口径）。
+        if (ctrl.controlType == FrmControlType::MSComm) {
+            std::string msLower = ctrl.controlName;
+            std::transform(msLower.begin(), msLower.end(), msLower.begin(), ::tolower);
+            std::string msHwnd = knownControlArrays_.count(msLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            auto msInt = [&](const char* k, int dflt) -> int {
+                auto it = ctrl.properties.find(k);
+                return (it == ctrl.properties.end()) ? dflt : (int)it->second.intValue;
+            };
+            auto msBool = [&](const char* k) -> int {
+                auto it = ctrl.properties.find(k);
+                return (it == ctrl.properties.end() || it->second.intValue == 0) ? 0 : 1;
+            };
+            auto msStr = [&](const char* k, const char* dflt) -> std::string {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end() || it->second.rawText.empty()) return std::string("L\"") + dflt + "\"";
+                std::string raw = it->second.rawText;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"')
+                    raw = raw.substr(1, raw.size() - 2);
+                return "L\"" + escapeWideCString(raw) + "\"";
+            };
+            c_.emitLine("vb6_MsComm_Create((void*)" + msHwnd + ");");
+            c_.emitLine("vb6_MsComm_SetCommPort((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("CommPort", 1)) + ");");
+            c_.emitLine("vb6_MsComm_SetSettings((void*)" + msHwnd + ", " + msStr("Settings", "9600,N,8,1") + ");");
+            c_.emitLine("vb6_MsComm_SetInputMode((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("InputMode", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetInputLen((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("InputLen", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetRThreshold((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("RThreshold", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetSThreshold((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("SThreshold", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetInBufferSize((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("InBufferSize", 1024)) + ");");
+            c_.emitLine("vb6_MsComm_SetOutBufferSize((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("OutBufferSize", 512)) + ");");
+            c_.emitLine("vb6_MsComm_SetHandshaking((void*)" + msHwnd + ", "
+                        + std::to_string(msInt("Handshaking", 0)) + ");");
+            c_.emitLine("vb6_MsComm_SetDTREnable((void*)" + msHwnd + ", "
+                        + std::to_string(msBool("DTREnable")) + ");");
+            c_.emitLine("vb6_MsComm_SetRTSEnable((void*)" + msHwnd + ", "
+                        + std::to_string(msBool("RTSEnable")) + ");");
+            c_.emitLine("vb6_MsComm_SetEOFEnable((void*)" + msHwnd + ", "
+                        + std::to_string(msBool("EOFEnable")) + ");");
+            // 事件槽：只有 OnComm 一个（序号 0 = VB6_MS_EV_ONCOMM，发的是字面量）。
+            if (auto* sy = symTab_.lookup(ctrl.controlName + "_OnComm")) {
+                std::string evFn = cProcName(sy->name, AccessLevel::Private);
+                c_.emitLine("{ extern void " + evFn + "(void);");
+                c_.emitLine("  vb6_MsComm_SetEventHandler((void*)" + msHwnd + ", 0, (void*)" + evFn + "); }");
             }
         }
 
@@ -1033,6 +1120,167 @@
             }
         }
 
+        // C30-5: Adodc 设计期 —— ConnectionString/RecordSource/CommandType/Cursor*/LockType/
+        // Mode/MaxRecords/BOFAction/EOFAction 一次性灌进去。**不在这里 Refresh**：VB6 的
+        // Adodc 也是要代码里调 `Refresh` 才真开（设计与运行两段分明），夹具里能看到这个区分。
+        if (ctrl.controlType == FrmControlType::Adodc) {
+            std::string adNLower = ctrl.controlName;
+            std::transform(adNLower.begin(), adNLower.end(), adNLower.begin(), ::tolower);
+            std::string adHwnd = knownControlArrays_.count(adNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            auto adStr = [&](const std::string& k) -> std::string {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end() || it->second.rawText.empty()) return "L\"\"";
+                std::string raw = it->second.rawText;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"')
+                    raw = raw.substr(1, raw.size() - 2);
+                return "L\"" + escapeWideCString(raw) + "\"";
+            };
+            auto adInt = [&](const std::string& k, int defv) -> int {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end()) return defv;
+                return (int)it->second.intValue;
+            };
+            c_.emitLine("vb6_Adodc_Init((void*)" + adHwnd + ");");
+            c_.emitLine("vb6_Adodc_SetConnectionString((void*)" + adHwnd + ", (const void*)"
+                      + adStr("ConnectionString") + ");");
+            c_.emitLine("vb6_Adodc_SetRecordSource((void*)" + adHwnd + ", (const void*)"
+                      + adStr("RecordSource") + ");");
+            c_.emitLine("vb6_Adodc_SetCommandType((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("CommandType", 1)) + ");");
+            c_.emitLine("vb6_Adodc_SetCursorLocation((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("CursorLocation", 2)) + ");");
+            c_.emitLine("vb6_Adodc_SetCursorType((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("CursorType", 0)) + ");");
+            c_.emitLine("vb6_Adodc_SetLockType((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("LockType", 3)) + ");");
+            c_.emitLine("vb6_Adodc_SetMode((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("Mode", 3)) + ");");
+            c_.emitLine("vb6_Adodc_SetMaxRecords((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("MaxRecords", 0)) + ");");
+            c_.emitLine("vb6_Adodc_SetBOFAction((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("BOFAction", 0)) + ");");
+            c_.emitLine("vb6_Adodc_SetEOFAction((void*)" + adHwnd + ", "
+                      + std::to_string(adInt("EOFAction", 0)) + ");");
+        }
+        // C30-5: DataGrid 设计期 —— 属性灌进去；DataSource 的**绑定**放到后面统一 pass
+        // （那时候 Adodc/Data 的 hwnd 才都创建好）。
+        if (ctrl.controlType == FrmControlType::DataGrid) {
+            std::string gdNLower = ctrl.controlName;
+            std::transform(gdNLower.begin(), gdNLower.end(), gdNLower.begin(), ::tolower);
+            std::string gdHwnd = knownControlArrays_.count(gdNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            auto gdInt = [&](const std::string& k, int defv) -> int {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end()) return defv;
+                return (int)it->second.intValue;
+            };
+            auto gdBool = [&](const std::string& k, int defv) -> int {
+                auto it = ctrl.properties.find(k);
+                if (it == ctrl.properties.end()) return defv;
+                return it->second.intValue != 0 ? -1 : 0;
+            };
+            c_.emitLine("vb6_DataGrid_SetColumnHeaders((void*)" + gdHwnd + ", "
+                      + std::to_string(gdBool("ColumnHeaders", -1)) + ");");
+            c_.emitLine("vb6_DataGrid_SetAllowAddNew((void*)" + gdHwnd + ", "
+                      + std::to_string(gdBool("AllowAddNew", 0)) + ");");
+            c_.emitLine("vb6_DataGrid_SetAllowUpdate((void*)" + gdHwnd + ", "
+                      + std::to_string(gdBool("AllowUpdate", -1)) + ");");
+            c_.emitLine("vb6_DataGrid_SetAllowDelete((void*)" + gdHwnd + ", "
+                      + std::to_string(gdBool("AllowDelete", 0)) + ");");
+            c_.emitLine("vb6_DataGrid_SetRowHeight((void*)" + gdHwnd + ", "
+                      + std::to_string(gdInt("RowHeight", 300)) + ");");
+            c_.emitLine("vb6_DataGrid_SetDefColWidth((void*)" + gdHwnd + ", "
+                      + std::to_string(gdInt("DefColWidth", 1200)) + ");");
+        }
+        // C30-6: MSHFlexGrid 设计期。灌入顺序必须固定：
+        //   尺寸 (Rows/Cols) → 冻结区 → 列宽/对齐 → 外观位。
+        // 反过来的话 ColWidth(i) 的下标可能在 Cols 还是缺省 2 时就被写到第 3 列（丢）。
+        if (ctrl.controlType == FrmControlType::MshFlexGrid) {
+            std::string mfNLower = ctrl.controlName;
+            std::transform(mfNLower.begin(), mfNLower.end(), mfNLower.begin(), ::tolower);
+            std::string mfHwnd = knownControlArrays_.count(mfNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            // .frm 里的属性名大小写不一定统一（手写 frm 常全小写），查表一律不区分大小写
+            auto mfFind = [&](const char* k) -> const FrmValue* {
+                for (auto it = ctrl.properties.begin(); it != ctrl.properties.end(); ++it) {
+                    if (_stricmp(it->first.c_str(), k) == 0) return &it->second;
+                }
+                return nullptr;
+            };
+            auto mfInt = [&](const char* k, int defv) -> int {
+                const FrmValue* v = mfFind(k);
+                return v ? (int)v->intValue : defv;
+            };
+            auto mfBool = [&](const char* k, int defv) -> int {
+                const FrmValue* v = mfFind(k);
+                return v ? (v->intValue != 0 ? -1 : 0) : defv;
+            };
+            auto mfStr = [&](const char* k) -> std::string {
+                const FrmValue* v = mfFind(k);
+                if (!v) return std::string();
+                std::string s = v->rawText;
+                if (s.size() >= 2 && s.front() == '"' && s.back() == '"') s = s.substr(1, s.size() - 2);
+                return s;
+            };
+            c_.emitLine("vb6_MshFlexGrid_SetFixedRows((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("FixedRows", 1)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetFixedCols((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("FixedCols", 1)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetRows((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("Rows", 2)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetCols((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("Cols", 2)) + ");");
+            // ColWidth 在 .frm 里是空格分隔的一串（每列一值），缺省列取 1200。
+            {
+                std::string cw = mfStr("ColWidth");
+                if (!cw.empty()) {
+                    size_t i = 0, idx = 0;
+                    while (i < cw.size() && idx < 64) {
+                        while (i < cw.size() && (cw[i] == ' ' || cw[i] == '\t')) i++;
+                        if (i >= cw.size()) break;
+                        size_t b = i;
+                        while (i < cw.size() && cw[i] != ' ' && cw[i] != '\t') i++;
+                        std::string num = cw.substr(b, i - b);
+                        if (!num.empty()) {
+                            c_.emitLine("vb6_MshFlexGrid_SetColWidth((void*)" + mfHwnd + ", "
+                                      + std::to_string((int)idx) + ", " + num + ");");
+                        }
+                        idx++;
+                    }
+                }
+            }
+            c_.emitLine("vb6_MshFlexGrid_SetGridLines((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("GridLines", 1)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetScrollBars((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("ScrollBars", 3)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetSelectionMode((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("SelectionMode", 0)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetFillStyle((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("FillStyle", 0)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetRowHeight((void*)" + mfHwnd + ", -1, "
+                      + std::to_string(mfInt("RowHeight", 300)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetWordWrap((void*)" + mfHwnd + ", "
+                      + std::to_string(mfBool("WordWrap", 0)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetEditable((void*)" + mfHwnd + ", "
+                      + std::to_string(mfBool("Editable", 0)) + ");");
+            c_.emitLine("vb6_MshFlexGrid_SetAllowUserResizing((void*)" + mfHwnd + ", "
+                      + std::to_string(mfInt("AllowUserResizing", 0)) + ");");
+            {
+                std::string fs = mfStr("FormatString");
+                if (!fs.empty()) {
+                    c_.emitLine("vb6_MshFlexGrid_SetFormatString((void*)" + mfHwnd + ", L\""
+                              + escapeWideCString(fs) + "\");");
+                }
+            }
+        }
+
         // C29-OLE: OLE 容器设计期 —— Class/OLETypeAllowed/SizeMode/DisplayAsIcon/
         // AutoActivate/AutoVerbMenu/BorderStyle/SourceDoc/SourceItem 一次 Init 灌进去。
         // 不灌的话 OLETypeAllowed 会错成 2 (vbOLEEither) 之外任意值、SizeMode 错成 0。
@@ -1175,6 +1423,94 @@
             }
         }
 
+        // C30-3: MaskEdBox 设计期 —— 掩码/提示符/初始文本一次性交给 RTL 掩码引擎。
+        // 顺序很重要：Text 必须在掩码解析之后灌（meApply 要按位对位），所以 Init 一把带齐
+        // 四个参数，不先 SetWindowText 再初始化（那样带格式的回显会被当成裸字符串对位）。
+        if (ctrl.controlType == FrmControlType::MaskEdBox) {
+            std::string meNLower = ctrl.controlName;
+            std::transform(meNLower.begin(), meNLower.end(), meNLower.begin(), ::tolower);
+            std::string meHwnd = knownControlArrays_.count(meNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+            auto meLit = [](const std::map<std::string, FrmValue>& mp, const std::string& k) -> std::string {
+                auto it = mp.find(k);
+                if (it == mp.end() || it->second.type != FrmValueType::String) return std::string();
+                std::string raw = it->second.rawText;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"')
+                    raw = raw.substr(1, raw.size() - 2);
+                for (char& ch : raw) if (ch == '"') ch = '\'';
+                return raw;
+            };
+            auto meInt = [](const std::map<std::string, FrmValue>& mp, const std::string& k, int defv) -> int {
+                auto it = mp.find(k);
+                if (it == mp.end()) return defv;
+                return (int)it->second.intValue;
+            };
+            std::string meMask = meLit(ctrl.properties, "Mask");
+            std::string mePrompt = meLit(ctrl.properties, "PromptChar");
+            std::string meText = meLit(ctrl.properties, "Text");
+            // PromptInclude 缺省 = True（VB6 口径），未写不当作 False。
+            int mePi = meInt(ctrl.properties, "PromptInclude", 1);
+            c_.emitLine("vb6_MaskEd_Init((void*)" + meHwnd
+                      + ", (void*)L\"" + meMask + "\", (void*)L\"" + mePrompt + "\", "
+                      + std::to_string(mePi != 0 ? 1 : 0) + ", "
+                      + (meText.empty() ? std::string("NULL")
+                                        : ("(void*)L\"" + meText + "\"")) + ");");
+        }
+
+        // C30-2: TabStrip 设计期 —— Init 一次，再把 BeginProperty Tabs {…} 里的页灌进去。
+        // 与 SSTab 的根本区别：TabStrip **不是容器**，这里只造标签条，不动任何子控件的可见性；
+        // 页内容由用户在 _Click 里自己切（ai/内置控件/TabStrip 控件（选项卡条）.md §5）。
+        // 字串直接递宽字面量（RTL 只读不释放），不走 BSTR 包。
+        if (ctrl.controlType == FrmControlType::TabStrip) {
+            tabStripVars_.insert(ctrl.controlName);
+            std::string tspNLower = ctrl.controlName;
+            std::transform(tspNLower.begin(), tspNLower.end(), tspNLower.begin(), ::tolower);
+            std::string tspHwnd = knownControlArrays_.count(tspNLower) ?
+                ("vb6_CtrlArr_GetAt(&vb6_arr_" + cIdent(ctrl.controlName) + ", " +
+                 std::to_string(ctrl.index >= 0 ? ctrl.index : 0) + ")") :
+                ("vb6_hwnd_" + cIdent(ctrl.controlName));
+
+            auto tspInt = [](const std::map<std::string, FrmValue>& mp, const std::string& k, int defv) -> int {
+                auto it = mp.find(k);
+                if (it == mp.end()) return defv;
+                return (int)it->second.intValue;
+            };
+            auto tspLit = [](const std::map<std::string, FrmValue>& mp, const std::string& k) -> std::string {
+                auto it = mp.find(k);
+                if (it == mp.end() || it->second.type != FrmValueType::String) return std::string();
+                std::string raw = it->second.rawText;
+                if (raw.size() >= 2 && raw.front() == '"' && raw.back() == '"')
+                    raw = raw.substr(1, raw.size() - 2);
+                for (char& ch : raw) if (ch == '"') ch = '\'';
+                return raw;
+            };
+
+            // MultiRow/HotTracking/ShowTips 缺省都是 0（VB6 TabStrip 三项设计期缺省为 False）。
+            c_.emitLine("vb6_TabStrip_Init((void*)" + tspHwnd + ", "
+                      + std::to_string(tspInt(ctrl.properties, "MultiRow", 0) != 0 ? 1 : 0) + ", "
+                      + std::to_string(tspInt(ctrl.properties, "HotTracking", 0) != 0 ? 1 : 0) + ", "
+                      + std::to_string(tspInt(ctrl.properties, "ShowTips", 0) != 0 ? 1 : 0) + ");");
+            // 设计期页：BeginProperty Tabs {…} → BeginProperty Tab1 {…} Caption/Key/Image
+            for (const auto& tb : ctrl.propertyBlocks) {
+                if (tb.blockName != "Tabs") continue;
+                int ord = 0;
+                for (const auto& page : tb.nestedBlocks) {
+                    ord++;
+                    std::string cap = tspLit(page.properties, "Caption");
+                    std::string key = tspLit(page.properties, "Key");
+                    std::string keyArg = key.empty() ? std::string("NULL")
+                                                     : ("(void*)L\"" + key + "\"");
+                    c_.emitLine("vb6_TabStrip_TabsAdd((void*)" + tspHwnd + ", "
+                              + std::to_string(ord) + ", " + keyArg + ", "
+                              + "(void*)L\"" + cap + "\", "
+                              + std::to_string(tspInt(page.properties, "Image", -1)) + ", 1, "
+                              + std::to_string(key.empty() ? 0 : 1) + ", 0);");
+                }
+            }
+        }
+
         // P20-44: OLE 拖放目标侧 —— OLEDropMode<>0 时注册为放置目标。
         // 用户写的 <Ctl>_OLEDragOver/_OLEDragDrop **直接注册成 RTL 回调**:
         // C3 给它生成的签名 `void X(void** Data, int32_t*, int16_t*, int16_t*, float*, float*)`
@@ -1273,5 +1609,38 @@ ctrlId++;
             c_.emitLine("vb6_Data_Bind((void*)" + dHwnd + ", (void*)" + oHwnd
                       + ", L\"" + escapeWideCString(fldRaw) + "\");");
         }
+    }
+
+    // C30-5: DataGrid 的绑定 pass —— 同样在所有控件创建完之后。
+    // 为什么这里必须解析**源控件类型**：Adodc 的数据在隐藏引擎窗上，Data 控件自己就是引擎，
+    // 两种引擎句柄的取法不同（vb6_Adodc_Engine vs 控件 hwnd 本身），错一个就是空表格。
+    for (const auto& gridCtrl : frmDesc.formControl.children) {
+        if (gridCtrl.controlType != FrmControlType::DataGrid) continue;
+        auto dsIt = gridCtrl.properties.find("DataSource");
+        if (dsIt == gridCtrl.properties.end()) continue;
+        std::string ds = dsIt->second.rawText;
+        if (ds.size() >= 2 && ds.front() == '"' && ds.back() == '"')
+            ds = ds.substr(1, ds.size() - 2);
+        if (ds.empty()) continue;
+        // 找同名源控件（大小写不敏感，VB6 不分）
+        const FrmControl* srcCtl = nullptr;
+        for (const auto& other : frmDesc.formControl.children) {
+            if (_stricmp(other.controlName.c_str(), ds.c_str()) == 0) { srcCtl = &other; break; }
+        }
+        std::string gHwnd = "vb6_hwnd_" + cIdent(gridCtrl.controlName);
+        if (srcCtl && srcCtl->controlType == FrmControlType::Adodc) {
+            c_.emitLine("vb6_DataGrid_Bind((void*)" + gHwnd + ", vb6_Adodc_Engine((void*)vb6_hwnd_"
+                      + cIdent(srcCtl->controlName) + "));");
+        } else if (srcCtl && srcCtl->controlType == FrmControlType::Data) {
+            c_.emitLine("vb6_DataGrid_Bind((void*)" + gHwnd + ", (void*)vb6_hwnd_"
+                      + cIdent(srcCtl->controlName) + ");");
+        } else {
+            // 源控件不认识（第三方案件）—— 交个空绑定，表格自己会答 0 行 0 列，不崩。
+            c_.emitLine("/* DataGrid " + gridCtrl.controlName + " DataSource=" + ds
+                      + " 不是 Adodc/Data，未绑定 */");
+        }
+        // 名字也存一份（DataSource 属性回读用）
+        c_.emitLine("vb6_DataGrid_SetDataSourceName((void*)" + gHwnd + ", L\""
+                  + escapeWideCString(ds) + "\");");
     }
 

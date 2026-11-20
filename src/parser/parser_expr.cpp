@@ -115,6 +115,23 @@ ExprPtr Parser::parseNullDenotation() {
             return std::make_unique<UnaryExpr>(loc, UnaryOp::Negate, std::move(operand));
         }
 
+        // C30-10 第四十五刀: 一元 `+`。以前直接拒（VB2003），于是 `t = +v` 整文件过不了
+        // 语法层 —— 用户真 VB6 日志 E09 就卡在这里（`+v` → 2/Integer/5）。
+        // VB6 的一元 `+` 是**值不变**：不转档、不升格（`+v` 装的是 Integer 就还是 Integer），
+        // 所以这里只吃掉那个 `+`、原样返回操作数，**不造节点** —— 造了反而要再定一遍档。
+        // 绑定强度与下面一元 `-` 同级（r_bp=19）。
+        case TokenKind::Plus: {
+            auto loc = currentLoc();
+            advance(); // consume '+'
+            auto operand = parseExpression(19);
+            if (!operand) {
+                diag_.error(DiagnosticID::ParseExpectedExpression, loc,
+                    "expected expression after unary '+'");
+                return nullptr;
+            }
+            return operand;
+        }
+
         case TokenKind::Not: {
             auto loc = currentLoc();
             advance(); // consume 'Not'
@@ -320,6 +337,9 @@ ExprPtr Parser::parseLiteral() {
         case TokenKind::IntegerLiteral: {
             auto expr = std::make_unique<LiteralExpr>(loc, LiteralKind::Integer, tok.text);
             expr->intValue = static_cast<int32_t>(tok.intValue);
+            // C30-10 第三十三刀: 进制字面量的 VB6 档身份由 lexer 定 (它才知道位宽),
+            // 这里只做搬运 —— 别在 parser 里再拿 rawText 算一次。
+            expr->radixInt16 = tok.radixInt16;
             return expr;
         }
         case TokenKind::LongLiteral: {
@@ -333,6 +353,13 @@ ExprPtr Parser::parseLiteral() {
             return expr;
         }
         case TokenKind::FloatLiteral: {
+            // C30-10 第四十七刀: `1.5!` 在 VB6 里是 **Single**（真 VB6 SG01 = 4/Single）。
+            // 改前这一站一律造 Double —— `!` 已在词法里吃掉，档位就永远追不回来了。
+            if (tok.singleSuffix) {
+                auto expr = std::make_unique<LiteralExpr>(loc, LiteralKind::Single, tok.text);
+                expr->floatValue = static_cast<float>(tok.doubleValue);
+                return expr;
+            }
             auto expr = std::make_unique<LiteralExpr>(loc, LiteralKind::Double, tok.text);
             expr->doubleValue = tok.doubleValue;
             return expr;

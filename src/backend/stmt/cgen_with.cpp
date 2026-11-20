@@ -236,6 +236,10 @@ void CCodeGen::visit(WithStmt& node) {
                         withInfo.kind = WithObjKind::ClassInstance;
                         withInfo.className = cIdent(itUCw->second);
                         withInfo.ctrlOrigName = withInfo.className;
+                        // 账 (prjNewAniGif): 工程内 UC 实例作 With 目标 —— 记下**设计期控件名**,
+                        // 体内 `.Move/.Left/.Top/.Width` 这些是**容器 Extender** 成员, 不在 .ctl 类
+                        // 上; 没有这个名字就只能发 `_vb6_with_0->Move` (C2039)。
+                        withInfo.designerCtrlName = cIdent(objOrigName);
                         tempType = "vb6_cls_" + withInfo.className + "*";
                     }
                     // ucSlider (Proyecto1.vbp): `.pag` 设计期放的工程内 UserControl 也走上面

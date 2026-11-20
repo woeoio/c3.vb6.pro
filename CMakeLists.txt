@@ -120,6 +120,7 @@ add_library(vb6c3-core STATIC
     src/project/frm_parser.cpp
     src/project/frm_parser_util.cpp
     src/project/frx_reader.cpp
+    src/project/tpf0_reader.cpp   # C30-10 P2: TeeChart 设计期外观（.frx 的 OleObjectBlob = Delphi TPF0 流）
     src/project/frx_extract.cpp        # Fix 195: .frx 设计期取值 -> VB 代码 (--extract-frx)
     src/com/typelib_parser.cpp
     src/com/typelib_parser_parse.cpp
@@ -304,6 +305,9 @@ set(C3RTL_EMBEDDED_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_foreach.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_collection.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_collection_enum.c
+${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_regexp.c
+${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_dict.c
+${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6com/vb6com_fso.c
     # vb6comserver
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6comserver/vb6comserver.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6comserver/vb6comserver.c
@@ -332,6 +336,7 @@ set(C3RTL_EMBEDDED_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_imagelist.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_statusbar.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_sstab.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_tabstrip.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_oledd.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_listview.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_memberobj.c
@@ -344,6 +349,13 @@ set(C3RTL_EMBEDDED_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_richtextbox.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_winsock.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_slider.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_updown.c   # C30-UD-a: 原生 msctls_updown32 复刻
+${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_maskededit.c # C30-3: MaskEdBox (EDIT + 掩码引擎)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_mscomm.c # C30-4: MSComm (Win32 串口 API + 读线程)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_adodc.c # C30-5: Adodc (ACE 底座, ODBC 层)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_grid.c # C30-5: DataGrid (自绘表格)
+${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_mshflexgrid.c # C30-6: MSHFlexGrid (字符串矩阵, 不依赖 ACE)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_teechart.c # C30-10: TeeChart 内置图表 (自绘, 不加载 TeeChart5.ocx)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_axsite.c
 ${CMAKE_CURRENT_SOURCE_DIR}/src/rtl/core/vb6forms/vb6forms_axcontainer.c   # Fix 148/160 补登记 (遗漏, 改它不会触发 .rc 重编)
     # vb6forms_axsite 按族细分 (2026-09-20): 内部头 + axsite/ 下 5 个族编译单元

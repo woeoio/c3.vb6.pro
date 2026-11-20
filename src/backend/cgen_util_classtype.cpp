@@ -1455,6 +1455,24 @@ std::string CCodeGen::fixedStrLenOfExpr(const ASTNode& expr,
         if (mit == uit->second.end()) return "";
         return mit->second;
     }
+    // ③ With 块成员: `.f` (WithMemberExpr) —— 对象是 With 临时指针, 其类型由
+    //    knownUdtVars_ 按临时名查到 (与 visit(WithMemberExpr&) 的 Unknown 档同一把尺),
+    //    再查该 UDT 的定长字段表。
+    //    不认这一档的后果 (prjNewAniGif 实测): `With tmpProps: .Version = ReadGifFile(6, True)`
+    //    发成 vb6_BSTR_AssignMove(&with->Version, ...) —— 把 BSTR 指针写进 6 字节内联数组,
+    //    紧接着的 `LCase(.Version) <> "gif89a"` 又把 char[6] 当 BSTR 读 ⇒ 版本校验永远失败,
+    //    GoTo ExitReadRoutine ⇒ gifFrameCount=0 (GIF 不显示)。
+    if (expr.kind == ASTNodeKind::WithMemberExpr) {
+        if (withObjectVars_.empty()) return "";
+        auto& wmFs = static_cast<const WithMemberExpr&>(expr);
+        auto vit = knownUdtVars_.find(Symbol::toLower(withObjectVars_.back()));
+        if (vit == knownUdtVars_.end()) return "";
+        auto uit = udtFixedStrFieldLen_.find(vit->second);
+        if (uit == udtFixedStrFieldLen_.end()) return "";
+        auto mit = uit->second.find(Symbol::toLower(wmFs.memberName));
+        if (mit == uit->second.end()) return "";
+        return mit->second;
+    }
     return "";
 }
 
@@ -1531,6 +1549,9 @@ std::string CCodeGen::toDoubleIfVariant(const std::string& cExpr, const Expr* as
 // **原样**递进去 ⇒ 整只 vb6_VARIANT 结构体交给 BSTR 形参 ⇒ C2440
 // (PhotoDemon Evaluator.c 474: vb6_Like(vb6_Evaluator_Eval(l), vb6_Evaluator_Eval(r)))。
 std::string CCodeGen::toStringIfVariant(const std::string& cExpr, const Expr* astExpr) {
+    // 第六十二刀: `Like` 这一站**不纳入严格口径**。VB6 的 `Null Like "a"` 结果是 Null
+    // （不是 94），而本刀所有读数都没量过 Like；没读数的格子不许顺手收紧，
+    // 否则就是拿一个错换另一个错。故这里保持原宽松出口。
     if (cExpr.compare(0, 15, "vb6_ComGetProp(") == 0)
         return "vb6_VariantToString(vb6_VariantFromComResult(" + cExpr + "))";
     if (isVariantSlot(cExpr, astExpr)) return "vb6_VariantToString(" + cExpr + ")";
@@ -1769,6 +1790,20 @@ std::string CCodeGen::emitUdtCopyBlock() const {
                        "      if (_o && _o != s->" + fn + ") vb6_SafeArrayDestroy1D(_o);\n"
                        "    }\n";
                 continue;
+            }
+            {
+                // 账 (prjNewAniGif ucGIF): UDT 定长串字段 (`Type T: Version As String * 6`)
+                // 的 C ABI 是内联 `char[6]`, **不是** BSTR。平米深拷会发
+                // `d->Version = SysAllocString(s->Version)` ⇒ C2106 (char[6] 不可赋值)。
+                // 定长串没有所有权, 拷字节就是全部语义 (源侧已按 N 右补空格)。
+                auto fsIt = udtFixedStrFieldLen_.find(udtCType);
+                if (fsIt != udtFixedStrFieldLen_.end()) {
+                    auto fIt = fsIt->second.find(Symbol::toLower(mi.name));
+                    if (fIt != fsIt->second.end() && !fIt->second.empty()) {
+                        out += "    memcpy(d->" + fn + ", s->" + fn + ", " + fIt->second + ");\n";
+                        continue;
+                    }
+                }
             }
             if (bt == Vb6Type::String) {
                 out += "    { BSTR _o = d->" + fn + "; d->" + fn

@@ -81,6 +81,33 @@
                     val = std::string(extractFn) + "(" + val + ")";
                 }
             };
+            // C30-10 第四十二刀: **两支档不一致**时 VB6 的 IIf 答「被选中那一支自己的
+            // 子类型」，不是把两支升到公共档（用户真 VB6 日志 D03/D09/D10）:
+            //   IIf(True, 1, 40000) → Integer（选 1）     ← 以前 Long
+            //   IIf(True, Null, 1)  → Null                ← 以前 Long
+            //   IIf(False, Null, 1) → Integer             ← 以前 Long
+            // 两支本来就同档的那一族（D01/D02/D04/D05/D06/D07/D08/D11）不动 —— 它们今天
+            // 已经逐条对上，发码保持逐字节不变。
+            // 判据只认「静态能确定」的两形: 窄化与否不同，或某一支是 Null 字面量；BSTR
+            // 参与的混型维持原路（不把 BSTR 所有权拉进这一形）。落到 vb6_IIfVariant:
+            // 它把**被选中**那一枚原样交回、清掉另一枚，正是 VB6 的口径。
+            {
+                auto iifIsNullLit = [&](int idx) -> bool {
+                    auto* a = node.positional[idx].get();
+                    if (a && a->kind == ASTNodeKind::LiteralExpr)
+                        return static_cast<const LiteralExpr&>(*a).literalKind == LiteralKind::Null;
+                    return false;
+                };
+                const bool iifBstrAny = isBstrResult(trueVal) || isBstrResult(falseVal);
+                const bool iifNarrowDiff =
+                    isNarrowIntExpr(node.positional[1].get()) != isNarrowIntExpr(node.positional[2].get());
+                if (!iifBstrAny && (iifNarrowDiff || iifIsNullLit(1) || iifIsNullLit(2))) {
+                    lastExpr_ = "vb6_IIfVariant(" + cond + ", "
+                        + wrapVariantValue(node.positional[1].get(), trueVal) + ", "
+                        + wrapVariantValue(node.positional[2].get(), falseVal) + ")";
+                    return;
+                }
+            }
             if (isBstrResult(trueVal) || isBstrResult(falseVal)) {
                 extractVariantArg(trueVal, 1, "vb6_VariantToString");
                 extractVariantArg(falseVal, 2, "vb6_VariantToString");
@@ -239,6 +266,34 @@
                     return;
                 }
             }
+            // C30-10 第三十一刀: TypeName(<一枚前期绑定 COM 接口变量>) —— VB6 答的是**实际对象
+            // 的 coclass 名** (实测 `Dim d As New Scripting.Dictionary` → "Dictionary"),
+            // 而这一路改前把接口指针当 LongPtr 装箱: 局部声明把接口指针登记进
+            // knownLongPtrVars_ (x64 指针宽度那一问, cgen_decl_var.cpp:326), 于是
+            // wrapVariantValue 发 `vb6_VariantFromValue((intptr_t)d)` ⇒ VT_I8 ⇒ TypeName
+            // 答 "Long" (夹具 tests/dict_native/NewBind.bas 的 n3; 同一轮发码里的模块级
+            // gDict 与局部 RegExp 都对, 只错「局部 + 类型化接口」这一格 —— 前者不登记
+            // LongPtr、后者是 void*, 两条都不进 (intptr_t) 那一档)。
+            // 闸门只开在**这一站**: 装箱表 (wrapVariantValue/boxToVariant) 一个字不动 ——
+            // 那张表喂的是 Is Nothing / `Set v = d` 一类的**值语义**, 改它影响面大。
+            // 判据是 knownTypedComVars_ 那张**名字表** (工程类不在其中: 它们登记在
+            // knownClassVars_, 上面那一块已按声明档折过), 所以对撞名免疫。
+            // 显式转 void*: `vb6_VariantFromValue` 的 _Generic 没有 vb6_ComIface_* 那一档,
+            // 落 default = vb6_VariantObject (vt=VT_DISPATCH, 构造侧 AddRef) —— 这正是
+            // vb6_TypeName 里「宿主 HWND / 工程包装器 / CreateObject coclass」三问的入口,
+            // 取值语义与模块级那一格 (n4) 逐字同形。
+            {
+                const std::string tnLowLoc =
+                    Symbol::toLower(static_cast<IdentifierExpr&>(*node.positional[0]).name);
+                if (knownTypedComVars_.count(tnLowLoc)) {
+                    std::string tnKeepLoc = lastExpr_;
+                    emitExpr(*node.positional[0]);
+                    const std::string tnArgLoc = std::move(lastExpr_);
+                    lastExpr_ = tnKeepLoc;
+                    lastExpr_ = "vb6_TypeName(vb6_VariantFromValue((void*)(" + tnArgLoc + ")))";
+                    return;
+                }
+            }
         }
     }
 
@@ -264,21 +319,32 @@
         if (csLower == "choose" && node.positional.size() >= 2) {
             emitExpr(*node.positional[0]);
             std::string idx = std::move(lastExpr_);
-            std::string result = "NULL";
+            // C30-10 第五十五刀: `Choose` **一律发变体三目**，越界交 `vb6_VariantNull()`。
+            // 真 VB6 采集器 U 的 S 段 16 行读数：选中支原样（Choose(1,1,40000&) → Integer 1、
+            // Choose(1,Null,1) → Null、Choose(1,1.5!,1.7) → Single 1.5），越界/无匹配 → Null
+            // （S07 Choose(3,1,2) / S08 Choose(0,1,2) / S15 Switch(False,1,False,2)）。
+            // 最后这三行只有**整只 VARIANT** 表达得出来：标量三目两支同型，给不出 Null。
+            // 上一刀留的"同档走标量三目"那一半正是这三行对不上的原因；本刀把代价挪到消费面：
+            // 类型 oracle 对 choose/switch 答 Variant ⇒ 赋值站出 vb6_VariantToLong(...)、
+            // 算术站走 §B145 那一族运行期出口（vb6_VarMulV 等）。
+            std::string result = "vb6_VariantNull()";
             for (int i = (int)node.positional.size() - 1; i >= 1; i--) {
                 emitExpr(*node.positional[i]);
-                result = "((" + idx + ")==" + std::to_string(i) + " ? (" + lastExpr_ + ") : (" + result + "))";
+                std::string brBox = wrapVariantValue(node.positional[i].get(), lastExpr_);
+                result = "((" + idx + ")==" + std::to_string(i) + " ? (" + brBox + ") : (" + result + "))";
             }
             lastExpr_ = result;
             return;
         }
         if (csLower == "switch" && node.positional.size() >= 2 && node.positional.size() % 2 == 0) {
-            std::string result = "NULL";
+            // C30-10 第五十五刀: 同 Choose —— 一律变体三目，无匹配交 Null（S15 读数）。
+            std::string result = "vb6_VariantNull()";
             for (int i = (int)node.positional.size() - 2; i >= 0; i -= 2) {
                 emitExpr(*node.positional[i]);
                 std::string cond = "((" + lastExpr_ + ")!=0)";
                 emitExpr(*node.positional[i + 1]);
-                result = "(" + cond + " ? (" + lastExpr_ + ") : (" + result + "))";
+                std::string brBox = wrapVariantValue(node.positional[i + 1].get(), lastExpr_);
+                result = "(" + cond + " ? (" + brBox + ") : (" + result + "))";
             }
             lastExpr_ = result;
             return;
@@ -299,6 +365,130 @@
                 for (int i = 0; i < count; i++) {
                     emitExpr(*node.positional[i]);
                     std::string argExpr = std::move(lastExpr_);
+                    // 账 #611 第348刀: Array() 元素档保真 —— 这一格原本「只认
+                    // Long/Double/BSTR 三档, 其余一律 SetLong」:
+                    //   Array(True)       → SetLong(-1)     ⇒ VT_I4, 丢了 vbBoolean(11)
+                    //   Array(Null/Empty) → SetLong(0)      ⇒ VT_I4, 丢了 vbNull(1)/vbEmpty(0)
+                    //   Array(Nothing)    → SetLong(NULL)   ⇒ 指针塞 int32 形参 (x64 截断)
+                    //   Array(Array(..))  → SetLong(_arr_N) ⇒ 同上, 且整枚嵌套数组丢失
+                    //   Array(#date#) / Array(1.5!)        ⇒ 日期/单精度档被压成 I4/R8
+                    // 现成出口 = vb6_ArraySetVariant (vb6rtl_date.c, 逐枚 VariantCopy)
+                    // + vb6_Variant* 工厂。只接「现有三档明确兜不住」的那几格,
+                    // 其余分支逐字不动 ⇒ 既有语料发码零变化 (全语料暴露面实测 0 处)。
+                    // Currency/Decimal 没有对应 VARIANT 工厂, 不在这刀 (另格)。
+                    std::string variantSetter;
+                    if (node.positional[i]->kind == ASTNodeKind::LiteralExpr) {
+                        auto& litSp = static_cast<LiteralExpr&>(*node.positional[i]);
+                        switch (litSp.literalKind) {
+                            case LiteralKind::Boolean:
+                                variantSetter = "vb6_VariantBool(" + argExpr + ")";
+                                break;
+                            case LiteralKind::Null:
+                            case LiteralKind::Empty:
+                                variantSetter = argExpr;  // emitExpr 已交整枚 vb6_VARIANT
+                                break;
+                            case LiteralKind::Nothing:
+                                // 第六十刀: 原来给 vb6_VariantFromValue(NULL), 注释假设 "_Generic
+                                // default ⇒ vb6_VariantObject(NULL)" —— 实测没落那一支，元素成了非对象档。
+                                // 真 VB6 的 Array(Nothing)(0) 是 VarType 9 / IsObject=True。
+                                // 走对象专属出口，免得 VariantCopy 多留一份引用。
+                                c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", NULL);");
+                                continue;
+                            case LiteralKind::Date:
+                                variantSetter = "vb6_VariantDate(" + argExpr + ")";
+                                break;
+                            case LiteralKind::Single:
+                                // float 文本 ⇒ _Generic float: ⇒ vb6_VariantSingle (VT_R4)
+                                variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
+                                break;
+                            default: break;
+                        }
+                    } else if (node.positional[i]->kind == ASTNodeKind::IndexOrCallExpr
+                               && argExpr.compare(0, 5, "_arr_") == 0) {
+                        auto& nestedSp = static_cast<IndexOrCallExpr&>(*node.positional[i]);
+                        if (nestedSp.callee && nestedSp.callee->kind == ASTNodeKind::IdentifierExpr) {
+                            std::string nestedName = static_cast<IdentifierExpr&>(*nestedSp.callee).name;
+                            std::transform(nestedName.begin(), nestedName.end(), nestedName.begin(), ::tolower);
+                            // 1D 描述符 ⇒ _Generic struct vb6_SafeArray1D*: ⇒ vb6_VariantArray
+                            if (nestedName == "array")
+                                variantSetter = "vb6_VariantFromValue(" + argExpr + ")";
+                        }
+                    }
+                    // 实参是不是「整只 Variant」（Variant 变量 / Variant 数组元素 /
+                    // Variant 函数返回值）。这条问句要放在出口之前 —— 第三十七刀就是
+                    // 因为它原来排在下游，只能用 VariantToLong/ToString 收敛掉子类型。
+                    bool argIsVariant = isVariantSlot(argExpr, nullptr);
+                    if (!argIsVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
+                        auto& idArg = static_cast<IdentifierExpr&>(*node.positional[i]);
+                        std::string argLower = idArg.name;
+                        std::transform(argLower.begin(), argLower.end(), argLower.begin(), ::tolower);
+                        if (knownVariantVars_.count(argLower)) argIsVariant = true;
+                    }
+                    // C30-10 第三十六刀: Integer 档元素保真 —— VB6 的 `Array(1)(0)` 是
+                    // Variant/Integer (VarType 2 / TypeName "Integer"), 而下面的
+                    // `isLongArg ⇒ vb6_ArraySetLong` 把它写成 VT_I4 (VarType 3)。
+                    // 判据不在本处: 只问装箱权威 isNarrowIntExpr (小字面量 / `&H`≤0xFFFF /
+                    // `3%` / `As Integer` 变量 / Integer 档用户 Const 与内建那一族)。
+                    // 箱子与 wrapVariantValue 的 `case Long` 同一个 (vb6_VariantInt),
+                    // 而且**不新开出口**: 只填 variantSetter, 由上面那条唯一的
+                    // ArraySetVariant 发射行带出去 —— 静态哨兵 R2
+                    // (scripts/check_array_literal_variants.ps1) 按正则数出口, 要求恰好 1 处。
+                    if (variantSetter.empty() && isNarrowIntExpr(node.positional[i].get()))
+                        variantSetter = "vb6_VariantInt((int16_t)(" + argExpr + "))";
+                    // C30-10 第三十七刀: 实参本身就是**整只 Variant** ⇒ VB6 的 Array()
+                    // 元素保留运行时子类型（VariantCopy），不收敛到任何一档。这一格原来
+                    // 一律 `VariantToLong`/`VariantToString`（靠一个 looksLikeBSTR 猜），
+                    // 实测两个后果：`Dim vs As Variant: vs = "x": Array(vs)` 连**值**都没了
+                    // （答 VT_I4/0），`Array(vi)`（Variant 里装 Integer）答 3。
+                    // 出口仍复用同一条 ArraySetVariant：它按值收 vb6_VARIANT、内部 VariantCopy
+                    // ⇒ 子类型与 BSTR 引用计数都对。
+                    // oracle（cscript，W7.vbs）：Integer 2 / String 8 / Double 5 / Long 3。
+                    if (variantSetter.empty() && argIsVariant) variantSetter = argExpr;
+                    // C30-11 第六十刀: 认得出档的实参一律走 Variant 出口，不落进下面"默认 Long"。
+                    // 读数（.temp/arr/oracle_arr2.vbs）：CByte→17 / CDate→7 / CCur→6 / CSng→4；
+                    // 改动前这四档分别写成 Long(3)/BSTR(8, 并因实参里含 L"..." 而 C2440)/Long/Long。
+                    // 对象档：Array(<对象>) 在 VB6 里存**引用**（VarType 9, IsObject=True），
+                    // 旧路径 ArraySetLong 把 IDispatch* 当整数存 —— Array(obj) 于是答 TypeName=Long，
+                    // Join(Array(obj)) 也走不到 450 那条（对象元素判定）。
+                    // Nothing 字面量的 argExpr 不是指针（旧写法先造了一枚空 Variant），单列一格。
+                    if (variantSetter.empty()) {
+                        bool isNothingLit = false;
+                        if (node.positional[i]->kind == ASTNodeKind::LiteralExpr) {
+                            isNothingLit = (static_cast<LiteralExpr&>(*node.positional[i]).literalKind == LiteralKind::Nothing);
+                        }
+                        // 对象变量：inferExprType 对局部 `As Object` 答不出来（它只看 symTab_，
+                        // 局部变量在那里不可达），得问 knownObjectVars_ —— 那是 Set/成员调用
+                        // 共用的同一张表。
+                        bool isObjVar = false;
+                        if (!isNothingLit && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
+                            std::string ol = static_cast<IdentifierExpr&>(*node.positional[i]).name;
+                            std::transform(ol.begin(), ol.end(), ol.begin(), ::tolower);
+                            isObjVar = (knownObjectVars_.count(ol) != 0);
+                        }
+                        if (isNothingLit || isObjVar) {
+                            c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", "
+                                        + (isNothingLit ? std::string("NULL") : "(void*)(" + argExpr + ")") + ");");
+                            continue;
+                        } else {
+                            Vb6Type elemVt = inferExprType(*node.positional[i]);
+                            if (elemVt == Vb6Type::Object || elemVt == Vb6Type::DataObject) {
+                                c_.emitLine("vb6_ArraySetObject(" + arrVar + ", " + std::to_string(i) + ", (void*)(" + argExpr + "));");
+                                continue;
+                            }
+                            else if (elemVt == Vb6Type::Byte)
+                                variantSetter = "vb6_VariantByte((uint8_t)(" + argExpr + "))";
+                            else if (elemVt == Vb6Type::Date)
+                                variantSetter = "vb6_VariantDate(" + argExpr + ")";
+                            else if (elemVt == Vb6Type::Currency)
+                                variantSetter = "vb6_VariantCur(" + argExpr + ")";
+                            else if (elemVt == Vb6Type::Single)
+                                variantSetter = "vb6_VariantSingle((float)(" + argExpr + "))";
+                        }
+                    }
+                    if (!variantSetter.empty()) {
+                        c_.emitLine("vb6_ArraySetVariant(" + arrVar + ", " + std::to_string(i) + ", " + variantSetter + ");");
+                        continue;
+                    }
                     // Detect argument type for proper setter selection
                     bool isLongArg = false;
                     bool isDoubleArg = false;
@@ -307,18 +497,7 @@
                         if (lit.literalKind == LiteralKind::Integer) isLongArg = true;
                         else if (lit.literalKind == LiteralKind::Double) isDoubleArg = true;
                     }
-                    // Fix 038b-3: 检测 Variant 实参 — Array() 元素通过 vb6_ArraySetLong/
-                    // SetBSTR/SetDouble 设置, 这些函数期望具体类型. 当实参是 Variant
-                    // (如 vb6_VariantArrayGet, Variant 变量等) 时, 需要先提取具体值.
-                    // 仅使用 cExprIsVariant (C 字符串级) 和 knownVariantVars_ 检测.
-                    bool argIsVariant = isVariantSlot(argExpr, nullptr);  // P1.3: ast 不可得 (argExpr 距 emitExpr 超 5 行)
-                    if (!argIsVariant && node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
-                        auto& idArg = static_cast<IdentifierExpr&>(*node.positional[i]);
-                        std::string argLower = idArg.name;
-                        std::transform(argLower.begin(), argLower.end(), argLower.begin(), ::tolower);
-                        if (knownVariantVars_.count(argLower)) argIsVariant = true;
-                    }
-                    // 也检测 BSTR 变量
+                    // Fix 038b-3: 剩下的具体档（BSTR 变量的名字判定）
                     bool argIsBstr = false;
                     if (node.positional[i]->kind == ASTNodeKind::IdentifierExpr) {
                         auto& idArg = static_cast<IdentifierExpr&>(*node.positional[i]);
@@ -330,24 +509,6 @@
                         c_.emitLine("vb6_ArraySetLong(" + arrVar + ", " + std::to_string(i) + ", " + argExpr + ");");
                     } else if (isDoubleArg) {
                         c_.emitLine("vb6_ArraySetDouble(" + arrVar + ", " + std::to_string(i) + ", " + argExpr + ");");
-                    } else if (argIsVariant) {
-                        // Variant 实参: 无法确定具体类型, 统一用 VariantToLong 转换
-                        // (Array() 的元素通常是数值索引). 若为 BSTR Variant 则需
-                        // VariantToString, 但 Array() 上下文中 Long 是最常见的默认.
-                        // 更安全: 使用 vb6_VariantFromValue 让 _Generic 选择, 然后
-                        // 直接用 vb6_ArraySetVariant (如果存在) 或回退到 Long.
-                        bool looksLikeBSTR = (argExpr.find("vb6_BSTR") != std::string::npos ||
-                                              argExpr.find("L\"") != std::string::npos);
-                        // Fix 081i: 也用 inferExprType 检测 BSTR 类型
-                        if (!looksLikeBSTR) {
-                            Vb6Type argVt = inferExprType(*node.positional[i]);
-                            if (argVt == Vb6Type::String) looksLikeBSTR = true;
-                        }
-                        if (looksLikeBSTR) {
-                            c_.emitLine("vb6_ArraySetBSTR(" + arrVar + ", " + std::to_string(i) + ", vb6_VariantToString(" + argExpr + "));");
-                        } else {
-                            c_.emitLine("vb6_ArraySetLong(" + arrVar + ", " + std::to_string(i) + ", vb6_VariantToLong(" + argExpr + "));");
-                        }
                     } else if (argIsBstr) {
                         c_.emitLine("vb6_ArraySetBSTR(" + arrVar + ", " + std::to_string(i) + ", " + argExpr + ");");
                     } else {
@@ -530,7 +691,10 @@
                 // 数组元素表达式 (VB6_SA_AT 展开成 ((T*)data)[i-lBound] 或
                 // Byte 数组的指针下标) 已是左值形态, sizeof 取其 C 存储宽度 ——
                 // 与标量分支同口径; sizeof 不求值, 下标副作用不被重复执行。
-                lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                // 第八十刀 (§B228): 档位收成 **int16_t** —— 真机 `Len(<数值变量>)` 是编译期
+                // 常量, VB6 把能装下的常量定为 **Integer**（探针 D1/D2：TypeName = Integer，
+                // 字符串那一档才是 Long）。C 侧 int16_t 让装箱的 _Generic 落到 VT_I2。
+                lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                 return;
             }
             // 只拦**标量数值**; String / Variant / Object / 未知一律走原 vb6_Len 路径。
@@ -552,7 +716,8 @@
                 //   vb6_Len(uint8_t) 把 200 当 BSTR 指针解引用 → 0xC0000005 (LEN-BYTE 实测)。
                 // sizeof 不求值其操作数, 故 Len(Foo()) 不会重复调用 (VB6 会求值一次;
                 // 数值实参求值无可观测副作用的场景占绝大多数, 这里取不崩优先)。
-                lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                // 第八十刀 (§B228): 同数组元素那一支，档收成 int16_t（真机答 Integer）。
+                lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                 return;
             }
             // Byte / Currency / LongLong / 枚举 之类**不落任何登记桶**
@@ -578,7 +743,9 @@
                     && !knownFixedStringLen_.count(low44)
                     && tLen44 != Vb6Type::String) {
                     emitExpr(*node.positional[0]);
-                    lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
+                    // 第八十刀 (§B228): 这一支同样收成 int16_t（Byte/Currency/枚举 都是
+                    // “编译期常量”那一档，真机 TypeName 答 Integer）。
+                    lastExpr_ = "((int16_t)sizeof(" + lastExpr_ + "))";
                     return;
                 }
             }

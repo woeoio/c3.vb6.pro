@@ -198,12 +198,12 @@
                 } else if (kind091c == "Double") {
                     conv091c = "vb6_VariantToDouble(" + value + ")";
                 } else if (kind091c == "BSTR") {
-                    conv091c = "vb6_VariantToString(" + value + ")";
+                    conv091c = "vb6_CStrStrict(" + value + ")";
                 }
             }
             c_.emitLine("vb6_PA_Set" + kind091c + "(" + args091c + ", " + conv091c + ");");
         } else {
-            c_.emitLine(target + " = " + value + ";");
+            emitGuardedStore(target + " = " + value + ";");
         }
     } else if (isVariantSlotElemRead(target)) {
         // Fix 038 Group 2 + 账 #305 §B150: 槽元素读改写成那一**对**写出口 —— 一维 Get->Set,
@@ -400,18 +400,30 @@
                 return;
             }
             if (tgtCt124 == "BSTR") {
-                c_.emitLine(target + " = vb6_VariantToString(" + unwrapped + ");");
+                c_.emitLine(target + " = vb6_CStrStrict(" + unwrapped + ");");
                 return;
             }
             // 目标类型未知 (void*/对象等) → 不动, 维持原赋值路径.
         }
         if (valueIsVariant) {
+            // C30-11 第七十六刀 (§B224): Null 落到 Boolean / Double 目标时按 VB6 口径
+            // 「报 94 且目标不变」(真机 NullExtProbe: A2 `d` 仍 1.5 / err=94, A4 `b` 仍 True /
+            // err=94)。以前发 `target = vb6_VariantToLong/VariantToDouble(...)`，raise 之后
+            // 照样把 0 / False 写进目标 —— 错误号对了，值被清了。
+            if (node.target && inferExprType(*node.target) == Vb6Type::Boolean) {
+                c_.emitLine("vb6_Bool_AssignFromVariant(&" + target + ", " + value + ");");
+                return;
+            }
+            if (node.target && inferExprType(*node.target) == Vb6Type::Double) {
+                c_.emitLine("vb6_Dbl_AssignFromVariant(&" + target + ", " + value + ");");
+                return;
+            }
             // 检查目标类型
             std::string convertedValue = value;
             bool udtFieldIsArray114 = false;
             if (target.find("VB6_SA_AT(BSTR,") != std::string::npos
                 || target.find("VB6_SA_ND_AT2(BSTR,") != std::string::npos) {
-                convertedValue = "vb6_VariantToString(" + value + ")";
+                convertedValue = "vb6_CStrStrict(" + value + ")";
             } else if (target.find("VB6_SA_AT(int32_t,") != std::string::npos
                        || target.find("VB6_SA_AT(int16_t,") != std::string::npos
                        || target.find("VB6_SA_AT(uint8_t,") != std::string::npos
@@ -441,7 +453,7 @@
                 if (retCt092f == "vb6_SafeArray1D*") {
                     convertedValue = "vb6_VariantToSafeArray1D(" + value + ")";
                 } else if (retCt092f == "BSTR") {
-                    convertedValue = "vb6_VariantToString(" + value + ")";
+                    convertedValue = "vb6_CStrStrict(" + value + ")";
                 } else if (retCt092f == "void*") {
                     convertedValue = "vb6_VariantToObjectVal(" + value + ")";
                 } else if (retCt092f == "double" || retCt092f == "float") {
@@ -463,7 +475,7 @@
                     // 元素档压成 Long。`m_Items(Index).ImgArr = SrcImg` 实测。
                     convertedValue = "vb6_VariantToSafeArray1D(" + value + ")";
                 } else if (udtFieldT == Vb6Type::String) {
-                    convertedValue = "vb6_VariantToString(" + value + ")";
+                    convertedValue = "vb6_CStrStrict(" + value + ")";
                 } else if (udtFieldT == Vb6Type::LongPtr) {
                     convertedValue = "vb6_VariantToLongPtr(" + value + ")";
                 } else if (udtFieldT == Vb6Type::Long || udtFieldT == Vb6Type::Integer
@@ -574,7 +586,7 @@
                     case Vb6Type::Currency: case Vb6Type::Date:
                         convertedValue = "vb6_VariantToDouble(" + value + ")"; break;
                     case Vb6Type::String:
-                        convertedValue = "vb6_VariantToString(" + value + ")"; break;
+                        convertedValue = "vb6_CStrStrict(" + value + ")"; break;
                     default: break;
                     }
                 }
@@ -585,7 +597,7 @@
                 convertedValue = wrapWholeArrayAssign(target, convertedValue, node.target.get());
             // ai/009 5.10: 窄整型目标 (`Byte`/`Integer`/`Long`) 收窄赋值前查溢出。
             // 整体数组目标不是整型, narrowCheckAssign 内部按目标类型判掉, 不会套上。
-            c_.emitLine(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
+            emitGuardedStore(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
                                                              convertedValue) + ";");
         } else {
             // Fix 091l: Variant 目标 ← 具体类型值 (SafeArray1D*/数组载体/标量/COM 结果).
@@ -619,8 +631,34 @@
             // Fix 170: 整体数组目标 (`A() = expr`) 右侧若非新建载体则深拷贝, 不制造别名
             if (tgtIsWholeArray170 && !value.empty())
                 value = wrapWholeArrayAssign(target, value, node.target.get());
+            // C30-11 第七十五刀 (§B223): Double 目标 ← String 右值。真 VB6 走隐式
+            // String→Double: 数字串折成数, 其余（含空串）报 **13** 且目标不变。
+            // 这一形以前把 BSTR 裸交给 double ⇒ 编译期 C2440（探针 F2 `d = Null & ""` /
+            // F3 `d = CStr(Null)`，真引擎两格都是 13）—— 没有存量「编译通过」的依赖可破坏。
+            // 只认 Double 目标: Single/Currency 的 C 类型不同, Date 另有 knownDateVars_ 那一道
+            // (vb6_DateVal, CDate 口径), 都不在这一刀。
+            if (node.value && node.target
+                && inferExprType(*node.value) == Vb6Type::String) {
+                // 目标是不是 Double：先问语义档，再回查按名表 (局部变量在语义层可能只答
+                // Unknown —— F1 那一格就是靠 knownDoubleVars_ 才折成 VariantToDouble)。
+                bool tgtDbl75 = (inferExprType(*node.target) == Vb6Type::Double);
+                if (!tgtDbl75) {
+                    std::string t75 = target;
+                    if (t75.compare(0, 4, "me->") == 0) t75 = t75.substr(4);
+                    if (t75.size() > 4 && t75[0] == '(' && t75[1] == '*'
+                        && t75.back() == ')') {
+                        t75 = t75.substr(2, t75.size() - 3);
+                    }
+                    std::transform(t75.begin(), t75.end(), t75.begin(), ::tolower);
+                    tgtDbl75 = (knownDoubleVars_.count(t75) != 0);
+                }
+                if (tgtDbl75) {
+                    c_.emitLine("vb6_Dbl_AssignFromBSTR(&" + target + ", " + value + ");");
+                    return;
+                }
+            }
             // ai/009 5.10: 同上, Variant 目标分支同样收窄检查
-            c_.emitLine(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
+            emitGuardedStore(target + " = " + narrowCheckAssign(node.target.get(), node.value.get(),
                                                              value) + ";");
         }
     }

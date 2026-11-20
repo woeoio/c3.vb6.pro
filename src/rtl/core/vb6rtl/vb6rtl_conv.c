@@ -40,12 +40,16 @@ extern void* vb6_GetObject(const wchar_t* pathName, const wchar_t* progId);
 extern int32_t vb6_IsNothing(void* obj);
 extern void vb6_ReleaseObject(void** objPtr);
 extern void* vb6_ComCall(void* disp, const wchar_t* methodName, void* args, int32_t argc);
+extern void* vb6_ComCallObject(void* disp, const wchar_t* methodName, void* args, int32_t argc);
+extern void* vb6_ComGetObjectProp(void* disp, const wchar_t* propName);
+extern void* vb6_ComPackBSTR(const wchar_t* bstr);
 extern void* vb6_ComCallByDispid(void* disp, int32_t dispid, void* args, int32_t argc);
 extern void* vb6_ComGetProp(void* disp, const wchar_t* propName);
 extern void vb6_ComSetProp(void* disp, const wchar_t* propName, void* value);
 extern void vb6_ComSetRef(void* disp, const wchar_t* propName, void* objRef);
 extern void vb6_ComInit(void);
 extern BSTR vb6_ComObject_ClassNameBStr(void* v);   /* 账 #305 §B189: vb6comserver 那一族, 认不出交 NULL */
+extern BSTR vb6_ComCreatedTypeNameBStr(void* v);    /* 账 #611: CreateObject 产物的 coclass 名, 认不出交 NULL (RTL 内部调用, 生成码不直接用) */
 extern void vb6_ComExit(void);
 
 // ============================================================
@@ -72,6 +76,80 @@ int32_t vb6_MsgBox(BSTR prompt, int32_t buttons, BSTR title, BSTR helpfile, int3
 // ============================================================
 
 double vb6_Abs(double x) { return fabs(x); }
+
+// C30-10 第五十刀: Abs 的 Single 出口。VB6 的 Abs 返回**实参那一档** ——
+// 真 VB6 探针 SG11 `Abs(1.5!)` = VarType 4 / Single（C3 旧站只有 double 出口，
+// 发成 `vb6_VariantFromValue(vb6_Abs(1.5f))`，_Generic 看到 double ⇒ 装 VT_R8，实测 5）。
+// AB 段同一族读数: Abs(Byte) = Byte(17)、Abs(Boolean) = Integer、Abs(Empty) = Integer 0、
+// Abs(Date) = Date(7)、Abs(CInt(-32768)) = Long —— 那几档是另一刀，本刀只开 Single 一格。
+float vb6_AbsSng(float x) { return fabsf(x); }
+
+// C30-10 第五十二刀: Abs(Variant) 的运行时子类型阶梅（C23）。
+// 真 VB6 GProbe AB 段的读数（每档 Abs 后的 VarType / TypeName）:
+//   CByte(5)→17 Byte、CInt(-5)→2 Integer、CLng(-70000)→3 Long、CSng(-1.5)→4 Single、
+//   CDbl(-1.7)→5 Double、CCur(-2.5)→6 Currency、CBool(True)→2 Integer 1、
+//   CByte(200)→17、CInt(-32768)→**3 Long 32768**（Integer 装不下）、
+//   Empty→2 Integer 0、Null→1 Null、Date→7（序列号的绝对值）、
+//   "5"→5 Double 5、"x"→错误 13（类型不符）。
+// C3 旧站只有 double 出口 ⇒ 上面每一档都堆成 VT_R8（实测 AB01~AB15 全是 5）。
+// 注意：`case vb6_vtEmpty:` **只许**出现在 TypeName 那份标量名单里
+// （scripts/check_sa_access.ps1 的 A17 按出现次数钉），所以 Empty 用前置 if 收掉。
+vb6_VARIANT vb6_AbsV(vb6_VARIANT v) {
+    int64_t i;
+    if (v.vt == vb6_vtEmpty) return vb6_VariantInt(0);
+    switch (v.vt) {
+    case vb6_vtByte:    return vb6_VariantByte(v.bVal);
+    case vb6_vtInteger:
+        if (v.iVal == -32768) return vb6_VariantLong(32768);   /* Integer 装不下 ⇒ Long */
+        return vb6_VariantInt((int16_t)(v.iVal < 0 ? -v.iVal : v.iVal));
+    case vb6_vtLong:
+        i = v.lVal; if (i < 0) i = -i;
+        if (i > 2147483647LL) { vb6_RaiseError(6, vb6_BSTR_FromStr(L"Overflow")); return vb6_VariantEmpty(); }
+        return vb6_VariantLong((int32_t)i);
+    case vb6_vtSingle:  return vb6_VariantSingle(fabsf(v.fltVal));
+    case vb6_vtDouble:  return vb6_VariantDouble(fabs(v.dblVal));
+    case vb6_vtCurrency: {
+        double d = (double)v.cyVal / 10000.0;
+        return vb6_VariantCur(fabs(d));
+    }
+    case vb6_vtBoolean: return vb6_VariantInt(v.boolVal ? 1 : 0);
+    case vb6_vtNull:    return v;
+    case vb6_vtDate:    return vb6_VariantDate(fabs(v.dblVal));
+    case vb6_vtBSTR:
+        if (v.bstrVal && vb6_IsNumericText(v.bstrVal))
+            return vb6_VariantDouble(fabs(vb6_VariantToDouble(v)));
+        vb6_RaiseError(13, vb6_BSTR_FromStr(L"Type mismatch"));
+        return vb6_VariantEmpty();
+    /* —— 下面这些档 VB6 的 Variant 造不出来，或者本仓没有 oracle（AB 段只有
+       13 档读数）：不凭空写「保子类型」的臂，按**权威换算**取绝对值 ——
+       `vb6_VariantToDouble` 自己会对非数值档报错。这条口径与第四十五刀的
+       `vb6_VarNegV` 逐字同形（账 §11.19 那张豁免表也有它）。 */
+    default:
+        return vb6_VariantDouble(fabs(vb6_VariantToDouble(v)));
+    }
+}
+// C30-11 第六十四刀: Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位。
+// 真值读数 .temp/null/oracle_num.vbs：四格都是 Null（不是 0，Hex/Oct 也不是上一刀后的 94）。
+// 身子放在这里而不是头文件的 inline，原因有二：
+//   1. check_conv_strict_parse 的 R2 把 head 里 vb6_VariantToDouble(v) /
+//      vb6_VariantConvNum 的出现数钉成常数，写进头会多出站点；
+//   2. check_builtin_slot_returns 与 owned-temp 表都从 RTL 头派生，原型在头里就够了。
+vb6_VARIANT vb6_IntV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantDouble(vb6_Int(vb6_VariantConvNum(v)));
+}
+vb6_VARIANT vb6_FixV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantDouble(vb6_Fix(vb6_VariantConvNum(v)));
+}
+vb6_VARIANT vb6_HexV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Hex(vb6_VariantToLong(v)));
+}
+vb6_VARIANT vb6_OctV(vb6_VARIANT v) {
+    if (v.vt == vb6_vtNull) return vb6_VariantNull();
+    return vb6_VariantString(vb6_Oct(vb6_VariantToLong(v)));
+}
 int32_t vb6_Sgn(double x) { return (x > 0) ? 1 : (x < 0) ? -1 : 0; }
 double vb6_Sqr(double x) { return sqrt(x); }
 double vb6_Round(double x, int32_t decimals) {
@@ -89,31 +167,98 @@ double vb6_Round(double x, int32_t decimals) {
 // 21.100000381 / 32.700000763。
 BSTR vb6_NumToBSTRDefault(double v, int isSingle) {
     if (v != v) return vb6_BSTR_FromStr(L"");   // NaN → 空串 (VB6 不会出现 NaN)
-    // Fix 117d: Double 若恰好是 Single 精度值 (由 Single 运算/赋值/Round 提升而来),
-    // 按 VB6 的 Single 规则打印 7 位有效数字。否则 Round(v!, 1)/Single 除法等会把
-    // float 二进制噪声整个暴露出来 (如 "10.3999996185"、"36.9000015")。
-    if (!isSingle && v == (double)(float)v) isSingle = 1;
-    int maxPrec = isSingle ? 7 : 15;
-    char nbuf[64] = "0";
-    double av = fabs(v);
-    // VB6 只在极大/极小时用指数记法; 其余一律定点 (CStr(30!) = "30" 而非 "3e+01")
-    int useExp = (av >= 1e15) || (av != 0.0 && av < 1e-4);
-    for (int prec = 1; prec <= maxPrec; prec++) {
-        snprintf(nbuf, sizeof(nbuf), "%.*g", prec, v);
-        if (!useExp && (strchr(nbuf, 'e') || strchr(nbuf, 'E'))) {
-            // "%.*g" 选了指数 → 换算成对应的定点小数位再试
-            int exp10 = (av > 0.0) ? (int)floor(log10(av)) : 0;
+    // C30-10 第五十六刀: 旧值域启发式（「恰可被 float 精确表示且非整数 ⇒ 按 Single 打 7 位」）
+    // **已删**。真 VB6 第二轮读数把它钉死了: D02 `CStr(1234567.5#)` = "1234567.5"（8 位有效
+    // 数字），而旧启发式会命中它打成 "1234568"。噪声与真值在**值域上不可分**（两者都是
+    // float 精确值），所以这条兜底只能靠发码侧「这枚 Double 是 Single 提升来的」标记，
+    // 不靠值反推 —— 那一位属于过程入口/发码的问题（账 §11.25），不在本刀。
+    char nbuf[128] = "0";
+    if (isSingle) {
+        // C30-10 第四十七刀: 真 VB6 probe H 的 22 行读数（ai/039 §11.24）。三条口径：
+        //   ① 有效数字恒 **7 位**（1/3 → 0.3333333、1234567.5 → 1234568）；
+        //      不是「最短且能往返」—— 1/7 在 VB6 是 0.1428571，不是 0.14285715。
+        //   ② 只有**高位**才转指数：7 位舍入后 |x| >= 1e7 ⇒ "1E+07" / "1.677722E+07"；
+        //      低位一律定点（0.00001 → "0.00001"，不是 "1E-05"）。
+        //   ③ 指数是大写 E + 两位（"3.4E+38"）。
+        if (v == 0.0) {
+            nbuf[0] = '0'; nbuf[1] = 0;
+        } else {
+            char ebuf[64];
+            snprintf(ebuf, sizeof(ebuf), "%.6e", v);   /* 7 位有效数字 */
+            char* ep = strchr(ebuf, 'e');
+            int exp10 = ep ? atoi(ep + 1) : 0;
+            if (ep) *ep = 0;                            /* ebuf = 尾数（含符号与小数点） */
+            if (exp10 >= 7) {
+                char m[64];
+                strcpy(m, ebuf);
+                char* dot = strchr(m, '.');
+                if (dot) {
+                    char* z = m + strlen(m) - 1;
+                    while (z > dot && *z == '0') *z-- = 0;
+                    if (z == dot) *z = 0;
+                }
+                snprintf(nbuf, sizeof(nbuf), "%sE%+03d", m, exp10);
+            } else {
+                int dec = 6 - exp10;
+                if (dec < 0) dec = 0;
+                if (dec > 20) dec = 20;
+                snprintf(nbuf, sizeof(nbuf), "%.*f", dec, v);
+                char* dot = strchr(nbuf, '.');
+                if (dot) {
+                    char* z = nbuf + strlen(nbuf) - 1;
+                    while (z > dot && *z == '0') *z-- = 0;
+                    if (z == dot) *z = 0;
+                }
+            }
+        }
+    } else if (v == 0.0) {
+        nbuf[0] = '0'; nbuf[1] = 0;
+    } else {
+        // C30-10 第五十六刀: Double 的 CStr 口径 —— 真 VB6 第二轮读数 (A/B/C 段) 钉的三条:
+        //   ① 有效数字恒 **15 位**（1/3 → 0.333333333333333、0.12345678901234567 →
+        //      0.123456789012346、123456789012346 落回 15 位整数）；
+        //   ② 定点区间 = 舍入后的十进制指数 exp10 在 **[-15, 14]**：
+        //      1E-15 → "0.000000000000001"（定点）、1E-16 → "1E-16"（指数），
+        //      999999999999999 (15 个 9) → 定点，回 1E+15 起为指数（见③）。
+        //   ③ 阈值必须用**舍入之后**的指数判：H01 `999999999999999.9` 本身 <1E+15，
+        //      先舍到 15 位有效数字变成 1.00000000000000E+15 才转指数（读数 "1E+15"）。
+        //      旧的 `av >= 1e15 || av < 1e-4` 两个门槛都不对：-4 太低（真机到 -15 还是定点）、
+        //      1e15 判在舍入前（H01 漏判）。
+        //   ④ 指数走**大写 E + 符号 + 至少两位**（%+03d）: "1E+07"/"1E-20"/"1E-300"。
+        //      旧路径用 %.*g 兜底，直接吐小写 e。
+        char ebuf[64];
+        // 位数不用「最短往返」搜: 真 VB6 是**恒 15 位有效数字再剥尾零**。两种写法只在次正规数上分家
+        // —— A20 读数: 4.94065645841247E-324 (15 位)；而「最短往返」在 1 位就满足
+        // ("5e-324" 能往返解回同一枚次正规数)，于是打成 "5E-324"。也正因为是 15 位后剥零，
+        // 1234567.5 / 2.675 / 1.005 / 0.1+0.2 才会各自落回 "1234567.5"/"2.675"/"1.005"/"0.3"。
+        const int prec = 15;
+        snprintf(ebuf, sizeof(ebuf), "%.*e", prec - 1, v);
+        char* ep = strchr(ebuf, 'e');
+        int exp10 = ep ? atoi(ep + 1) : 0;
+        if (ep) *ep = 0;                                        // ebuf = 尾数（带符号）
+        if (exp10 >= -15 && exp10 <= 14) {
             int dec = prec - 1 - exp10;
             if (dec < 0) dec = 0;
-            if (dec > 20) dec = 20;
+            if (dec > 60) dec = 60;
             snprintf(nbuf, sizeof(nbuf), "%.*f", dec, v);
+            char* dot = strchr(nbuf, '.');
+            if (dot) {
+                char* z = nbuf + strlen(nbuf) - 1;
+                while (z > dot && *z == '0') *z-- = 0;
+                if (z == dot) *z = 0;
+            }
+        } else {
+            char* dot = strchr(ebuf, '.');
+            if (dot) {
+                char* z = ebuf + strlen(ebuf) - 1;
+                while (z > dot && *z == '0') *z-- = 0;
+                if (z == dot) *z = 0;
+            }
+            snprintf(nbuf, sizeof(nbuf), "%sE%+03d", ebuf, exp10);
         }
-        double back = strtod(nbuf, NULL);
-        if (isSingle) { if ((float)back == (float)v) break; }
-        else          { if (back == v) break; }
     }
-    wchar_t wbuf[64];
-    MultiByteToWideChar(CP_ACP, 0, nbuf, -1, wbuf, 64);
+    wchar_t wbuf[128];
+    MultiByteToWideChar(CP_ACP, 0, nbuf, -1, wbuf, 128);
     return vb6_BSTR_FromStr(wbuf);
 }
 // Fix 135 / Fix RND-SEQ: VB6 Rnd/Randomize 的**真实**实现。
@@ -329,6 +474,71 @@ intptr_t vb6_CLngPtrBSTR(BSTR s) { return vb6_CLngPtr(vb6_NumVal(s)); }
 
 BSTR vb6_CStr(vb6_VARIANT x) {
     return vb6_Format(x, NULL, 1, 1);
+}
+
+// C30-11 第六十二刀: Null 转换站（VB6 口径：Null → String 一律 94）。
+// 读数 .temp/null/oracle_null.vbs: CStr 94 / Asc 94 / Replace 94 / Join 分隔符 94 /
+// Split 源 94（VB6 的通用规则是"String 形参收 Null ⇒ 94"，VBScript 对 Len/Trim 那几格
+// 宽松成 0，按宿主差异记账，不当真值）。
+// 为什么单独开一枚而不改 vb6_CStr：`&` 与 Debug.Print 仍走宽松口径
+// （前者 VB6 是 Null 传播、后者打印文本 "Null"，两格都另算）。
+BSTR vb6_CStrStrict(vb6_VARIANT x) {
+    if (x.vt == vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        // 第八十一刀: 给读侧（vb6_Asc）一个可判的痕迹 —— 这只空串是「转换失败」
+        // 交回来的，不是程序里真的空了。目标不是整型标量、发不出语句级中止守卫的
+        // 那一形（`nc = Asc(nv2)`，nc 是 Variant）靠这个标记把 94 与 5 分开。
+        vb6_ConvFailMark();
+        return vb6_BSTR_Empty();  /* 不可达 */
+    }
+    return vb6_CStr(x);
+}
+
+// C30-11 第七十五刀 (§B223): 「String 右值 → Double 目标」赋值站。
+// 真 VB6 是隐式 String→Double: 数字串折成数 ("1.5" ⇒ 1.5), 其余含空串 ⇒ **13**
+// (Type mismatch), 且**目标不变** (与 94 那一族同一口径)。以前这一形把 BSTR 裸交给
+// double ⇒ 编译期 C2440 (探针 F2 `d = Null & ""` / F3 `d = CStr(Null)`, 真引擎两格
+// 都是 13) —— 也就是说没有存量「编译通过」的依赖可破坏, 所以这里直接按 VB6 口径补上。
+// 不改成 `vb6_NumVal` (Val 口径, 永不报错、2.5abc 也折 2.5): VB6 的赋值转换是**严格**的。
+void vb6_Dbl_AssignFromBSTR(double* target, BSTR src) {
+    const wchar_t* p = src ? src : L"";
+    while (*p == L' ' || *p == L'\t' || *p == L'\r' || *p == L'\n') p++;
+    wchar_t* end = NULL;
+    double v = wcstod(p, &end);
+    int ok = (end != p);
+    if (ok) {
+        while (*end == L' ' || *end == L'\t' || *end == L'\r' || *end == L'\n') end++;
+        ok = (*end == L'\0');
+    }
+    if (!ok) {
+        vb6_ErrRaise(13, vb6_BSTR_FromStr(L"VBA.Information"),
+                     vb6_BSTR_FromStr(L"Type mismatch"));
+        return;   /* 目标一字不动 */
+    }
+    *target = v;
+}
+
+// C30-11 第七十六刀 (§B224): Null 落到 Boolean / Double 目标上 —— 真机读数
+// (NullExtProbe A2 `d = (Null = "")` ⇒ d 不变 / err=94; A4 `b = (Null = "")` ⇒ b 不变 /
+// err=94) 是「报 94 且**目标不变**」。以前发 `b = vb6_VariantToLong(...)`，raise 之后
+// 照常把 0 / False 写进目标 —— 错误号对了、值被清了。与第七十三刀那枚 BSTR 出口同一个口径。
+void vb6_Bool_AssignFromVariant(int16_t* target, vb6_VARIANT src) {
+    if (src.vt == (vb6_vartype)vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    *target = (int16_t)vb6_VariantToLong(src);
+}
+
+void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src) {
+    if (src.vt == (vb6_vartype)vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return;   /* 目标一字不动 */
+    }
+    *target = vb6_VariantToDouble(src);
 }
 
 // M22: typed CStr overloads (C has no overloading, use suffix)
@@ -572,6 +782,12 @@ BSTR vb6_TypeName(vb6_VARIANT v) {
          * 外部 IDispatch (VB6 答 "Dictionary", 要另开 ITypeInfo 那条腿)。 */
         { BSTR vb6_clsName = vb6_ComObject_ClassNameBStr(v.pdispVal);
           if (vb6_clsName) return vb6_clsName; }
+        /* 账 #611: 外部 CreateObject 产物按 ProgID 的 <Class> 段答 coclass 名
+         * ("Scripting.Dictionary" → "Dictionary"), 与 VB6 TypeName 同源。
+         * 只认 vb6_CreateObject 登记过的指针, 其它外部 IDispatch 仍答 "Object"
+         * —— 不碰通用 ITypeInfo 那条腿, 存量语料零变化。 */
+        { BSTR created611 = vb6_ComCreatedTypeNameBStr(v.pdispVal);
+          if (created611) return created611; }
     }
     /* 账 #305 §B155 格②（第四十六刀）: 数组那一支以前压根没有 —— 8204 落 default 答 "Variant"。
        VB6 答 "<元素名>()"（String 数组 "String()"、Variant 数组 "Variant()"）。元素名问上面那张表。 */
@@ -617,47 +833,125 @@ void vb6_Debug_PrintDouble(double d) {
 // 对象操作 (P6: COM互操作)
 // ============================================================
 
-void* vb6_NewObject(const wchar_t* className) {
+/* VB6 **运行时自带实现**的那几个类 (与注册表无关的三档) 的唯一答案。
+ *
+ * 为什么要有这一枚 (C30-9 收口, 实测 2026-11-16): `Dim f As New StdFont` 这枚建对象现在有
+ * **两条**出口 ——
+ *   ① vb6_NewObject(名字)               : 本函数命中 StdFont ⇒ 宿主字体模型 vb6_UC_NewFont()
+ *   ② vb6_NewObjectClsid(CLSID, 名字)   : C30-9 为 ADODB 补的那条 (typelib CLSID 直连 CoCreateInstance)
+ * ② 一开始只看 CLSID, 于是把 StdFont 交给 oleaut32 里那枚**真** StdFont。真 StdFont 只答
+ * IDispatch 那一面 (Bold/Size/Underline 有 dispid), 而 `Font.hFont` 与 `Font.Clone` 是
+ * **IFont 的 vtable 成员** (IFont 不是 IDispatch) ⇒ GetIDsOfNames 0x80020006 ⇒
+ * 我方晚绑定答 "not found"。夹具 tests/combyref271 (K271 三行 + K276 七行) 实测:
+ *   改前 (走 ①)             : 十一行判据全 True, stderr 0 条 [C3_LATEBIND_MISS]
+ *   只走 ② (本函数没接)     : 十一行判据全 False, 且两条 miss 都是 disp=00000000
+ *                             (site=ComSetProp name="Size" / site=ComGetProp name="hFont") ——
+ *                             Clone 没写回槽 ⇒ g 是 Nothing ⇒ 后续两发接收者全空
+ * 所以「这是不是运行时自带的类」这一问必须**先于** CLSID 答, 且两条出口共用同一个答案
+ * (同一个名字在两处各写一遍 = 下一次加内建类时只改一处的那种旧坑, 与 comPackFnForVbType
+ * 那条「问它的地方必须唯一」同族)。
+ * 返回 NULL = 不是运行时自带的类, 调用方各自走注册表 / CLSID。 */
+void* vb6_NewVb6RuntimeClass(const wchar_t* className) {
+    if (!className || !*className) return NULL;
     // Fix 112c: Collection 是 VB6 内建类, 不能走 CLSIDFromProgID (必失败 → 429 弹窗)
-    if (className && _wcsicmp(className, L"Collection") == 0) {
+    if (_wcsicmp(className, L"Collection") == 0) {
         return vb6_Collection_New();
     }
-    // Fix 112: StdFont → RTL 内建字体对象 (With m_TitleFont: .Size/.Bold 直接写结构体)
-    if (className && _wcsicmp(className, L"StdFont") == 0) {
+    // Fix 112: StdFont → RTL 内建字体对象 (With m_TitleFont: .Size/.Bold 直接写结构体)。
+    // 带 stdole. 前缀的那一写法同一档: VB 里 `As New stdole.StdFont` 指的仍是同一个类,
+    // 而「类名带不带库前缀」是 typelib 注入时定的, 不该让字体模型的有无跟着它漂。
+    if (_wcsicmp(className, L"StdFont") == 0 || _wcsicmp(className, L"stdole.StdFont") == 0) {
         return vb6_UC_NewFont();
     }
     // Fix <vbeclipse> 2026-10-12: **PropertyBag 同样是 VB6 内建类** (ProgID "PropertyBag",
-    // 由 VB 运行时内部实现, 从不注册) ⇒ CLSIDFromProgID 必失败 → 429。
+    // 由 VB 运行时内部实现, 从不注册) —> CLSIDFromProgID 必失败 → 429。
     // 工程标准手法 —— `With New PropertyBag` + `.Contents = PropBag.ReadProperty("InitX", 0)`
     // + `.ReadProperty("InitXCount", 0)` —— 出现在 ComCtlsDemo StatusBar / CoolBar /
     // ToolBar / TabStrip / ImageList 的 `UserControl_ReadProperties` 里; 该处 429
     // **未被 On Error 兜住** (只有 `.Contents =` 那一行在 Resume Next 里) ⇒
     // 直接"未处理错误"结束进程 (实测 EXIT=0x1AD)。
     // 复用 uc_propbag.c 那枚轻量 IDispatch bag (与外层 PropBag 同族, 同一张 vtbl)。
-    if (className && _wcsicmp(className, L"PropertyBag") == 0) {
+    if (_wcsicmp(className, L"PropertyBag") == 0 || _wcsicmp(className, L"VBA.PropertyBag") == 0) {
         return vb6_UC_PropBagCreate();
     }
-    // 对于未知类名，尝试通过COM创建 (Dim x As New ClassName，className不在已知类中)
-    // VB6中如果className不是项目内的类模块，则尝试COM创建
     // Fix 103: VB6 内建对象 (Collection 等) 实现于运行时内部, 不注册 ProgID —— 直接查
     // 注册表必然失败并抛 429 (实测 New Collection: ProgID: Collection, 0x800401F3)。
-    // 先探测 C3 运行时自带的内建实现, 未命中才回退到 COM 注册表。
-    void* builtin = vb6_NewBuiltinObject(className);
+    // 这一档接 VBA.Collection 与将来新加的内建名 (vb6com_collection.c 那张名单的主人)。
+    return vb6_NewBuiltinObject(className);
+}
+
+void* vb6_NewObject(const wchar_t* className) {
+    // 运行时自带的类先答 (Collection / StdFont / PropertyBag), 未命中才查 COM 注册表。
+    // 对于未知类名，尝试通过COM创建 (Dim x As New ClassName，className不在已知类中)
+    // VB6中如果className不是项目内的类模块，则尝试COM创建
+    void* builtin = vb6_NewVb6RuntimeClass(className);
     if (builtin) return builtin;
     return vb6_CreateObject(className);
 }
 
+/* 2026-11-15 (GIF overlay 背景图): TypeOf 原先是「恒 False」的空桩 —— 用它当分叉的
+ * 任何代码都被静默拨到 else 支。本工程 modTileBlt.bas:137 正是那一形:
+ *   If TypeOf sourcePicObjectOrHandle Is StdPicture Then  ' 走图片对象 (Width/Height/Render)
+ *   Else                                                  ' 当句柄 (GetGDIObject/GetIconInfo)
+ * 恒 False ⇒ 对象指针被当成 GDI 句柄 ⇒ 取不到宽高 ⇒ Exit Sub ⇒ overlay 背景一块砖都没铺
+ * (参考版铺满, 我方 Picture1 区域全白; 探针 Caption 实测 TO=False PH=67441129 W=4233)。
+ *
+ * 判据只认**能正向证实**的那一档: StdPicture 走 vb6_PictureIsRegistered —— 每一枚
+ * IPicture 的创建路径 (LoadPicture / LoadPictureFromMemory / 控件 Picture getter /
+ * UC 属性包) 都会登记进那张表, 所以「在表里」就是「确实是 Picture 对象」的充分条件;
+ * 表外一律答 False (与旧口径同, 不引入对任意 void* 的 QI —— C3 自己的类实例没有
+ * IUnknown vtable, 盲调 QueryInterface 会直接崩)。
+ * 返回 -1: VB6 的 Boolean 真值是 -1 (与本仓 vb6_CBool 同口径), 代码里 `If … Then`
+ * 只判非零, 但 `B = (TypeOf … Is …)` 之后再 CBool/CStr 打印就得是 True。 */
+extern int vb6_PictureIsRegistered(const void* picture);
+
 int32_t vb6_TypeOf(void* obj, const wchar_t* typeName) {
-    if (!obj) return 0;  // Nothing不匹配任何类型
-    // TypeOf的完整实现需要IDispatch/ITypeInfo，在vb6com.c中
-    // 简化版: 始终返回False (后续P6.2完善)
-    (void)typeName;
+    if (!obj || !typeName) return 0;  // Nothing不匹配任何类型
+    if (_wcsicmp(typeName, L"StdPicture") == 0 ||
+        _wcsicmp(typeName, L"Picture") == 0 ||
+        _wcsicmp(typeName, L"IPicture") == 0 ||
+        _wcsicmp(typeName, L"IPictureDisp") == 0) {
+        return vb6_PictureIsRegistered(obj) ? -1 : 0;
+    }
+    /* 其余类型名 (VB 控件类 / C3 类模块 / StdFont …) 仍答 False: 没有安全的正向判据,
+     * 宁可维持旧行为也不猜 —— 猜错就是把「不是」说成「是」, 比漏判更难查。 */
     return 0;
 }
 
 void* vb6_DictAccess(void* obj, const wchar_t* key) {
     (void)obj; (void)key;
     return NULL;
+}
+
+// ============================================================
+// C30-7: `rst!Field = value` —— Recordset 字段写
+//
+// VB6 里 `obj!Name` 是「默认成员按名取值」的糖；对 ADODB.Recordset 就是
+//     rst!F  ≡  rst.Fields("F")  ≡  rst.Fields("F").Value
+// 之前 cgen 把 **赋值目标** 也发成 vb6_DictAccess(obj, L"F") = value ——
+// 函数调用不是左值，C2106 直接编不过。真实例程实测：
+//   D:\vb_yqt4qPac\数据库\财务接口程序源码\...\diskinterface.vbp
+//   78 个 C 错误里 51 个是这条（diskinport.c:471-477,481-483,493-495,503-505,
+//   515,542-552 …，全部形如 `vb6_DictAccess(rst2, L"ND") = …`）。
+//
+// value 进来时已经是 cgen 的 packed 形态（vb6_ComPackInt / PackBSTR / …），
+// 与 vb6_ComSetProp 的第三个参数同一口径，直接往下传。
+//
+// 注：**读侧** vb6_DictAccess 仍是空实现（返回 NULL）—— 真实例程读字段
+// 几乎都写 rst.Fields("F").Value（那条已经是正确的 COM 链），所以读侧
+// `x = rst!F` 的语义留作挂账，不在这一刀里改（改它要连带动 cgen 的类型推断）。
+// ============================================================
+void vb6_DictAssign(void* obj, const wchar_t* key, void* value) {
+    void* fields;
+    void* field;
+    void* args[1];
+    if (!obj || !key) return;
+    fields = vb6_ComGetObjectProp(obj, L"Fields");
+    if (!fields) return;
+    args[0] = vb6_ComPackBSTR(key);
+    field = vb6_ComCallObject(fields, L"Item", args, 1);
+    if (!field) return;
+    vb6_ComSetProp(field, L"Value", value);
 }
 
 // ============================================================
@@ -823,7 +1117,14 @@ double vb6_CDate(vb6_VARIANT v) {
     // 数值面统一走 vb6_VariantToDouble (它已含 vtDate/vtCurrency/vtByte 各档),
     // 这里只排除"非数值"的几档, 免得又写一份平行表。
     if (v.vt == vb6_vtEmpty || v.vt == vb6_vtNull
-        || v.vt == vb6_vtDispatch || v.vt == vb6_vtError) return 0.0;
+        || v.vt == vb6_vtDispatch || v.vt == vb6_vtError) {
+        // C30-11 第六十三刀: CDate(Null) = **94**（读数 oracle_num.vbs）。Empty 仍是 0。
+        if (v.vt == vb6_vtNull) {
+            vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                         vb6_BSTR_FromStr(L"Invalid use of Null"));
+        }
+        return 0.0;
+    }
     if (v.vt == vb6_vtBSTR) return vb6_DateVal(v.bstrVal);   /* 账 #417: 文本按日期解析，落不到再按严格数值 */
     return vb6_VariantToDouble(v);
 }

@@ -1,4 +1,6 @@
 #include "backend/cgen.hpp"
+#include <cstdlib>
+#include <cstdio>
 #include "common/owned_temp_keeps.hpp"  // 账 #464 §B164: 回收刀的**唯一权威**（那张表由 RTL 推导 ⇒ 哨兵双向对账）
 #include "common/float_literal.hpp"  // 账 #188: 浮点字面量的单一出口
 #include "common/int_literal.hpp"   // 账 #194: 整数字面量的单一出口
@@ -68,6 +70,78 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
     }
     if (p == "visible" || p == "enabled") {
         return Vb6Type::Boolean;
+    }
+    // C30-3: MaskEdBox 的属性面。Text/ClipText/Mask/PromptChar 都走 RTL 的 BSTR
+    // （String）；PromptInclude 在 VB6 那边是 Boolean；Sel* 与编辑控件同口径。
+    // 没有这一格时，`s = m.ClipText` 会被当成 Variant 走打包路 → 拿到的是空串
+    // （与 TabStrip 链式属性那条老坑同型）。
+    if (ctrlType == FrmControlType::MaskEdBox) {
+        if (p == "text" || p == "cliptext" || p == "mask"
+            || p == "promptchar" || p == "seltext") return Vb6Type::String;
+        if (p == "promptinclude") return Vb6Type::Boolean;
+        if (p == "selstart" || p == "sellength") return Vb6Type::Long;
+    }
+    // C30-4: MSComm 的属性面。Settings / Input 走 RTL 的 BSTR（String）；PortOpen / dtrenable /
+    // RTSEnable / EOFEnable / CTS·DSR·CDHolding 在 VB6 那边是 Boolean；其余是 Long。
+    // 没登记的症状与 MaskEdBox 同型：`s = MSComm1.Input` 被当 Variant 装箱成空串。
+    if (ctrlType == FrmControlType::MSComm) {
+        if (p == "settings" || p == "input") return Vb6Type::String;
+        // C30-4b：C3 扩展里的字符串那几档（PortList / CommDevice / InputBytes）
+        if (p == "commdevice" || p == "portlist" || p == "inputbytes") return Vb6Type::String;
+        if (p == "portopen" || p == "dtrenable" || p == "rtsenable" || p == "eofenable"
+            || p == "ctsholding" || p == "dsrholding" || p == "cdholding") return Vb6Type::Boolean;
+        if (p == "commport" || p == "inputmode" || p == "inputlen"
+            || p == "inbuffercount" || p == "outbuffercount"
+            || p == "inbuffersize" || p == "outbuffersize"
+            || p == "rthreshold" || p == "sthreshold" || p == "handshaking"
+            || p == "commevent"
+            || p == "txtotal" || p == "rxtotal"
+            || p == "portcount" || p == "readintervaltimeout"
+            || p == "readtotaltimeout" || p == "writetimeout") return Vb6Type::Long;
+    }
+    // C30-5: Adodc 的属性面。ConnectionString / RecordSource 走 RTL 的 BSTR（String）；
+    // 其余都是枚举/数值（Long）。不登记的症状：`s = Adodc1.RecordSource` 被当 Variant 装箱成空串。
+    if (ctrlType == FrmControlType::Adodc) {
+        if (p == "connectionstring" || p == "recordsource") return Vb6Type::String;
+        if (p == "lastrowcount" || p == "opened") return Vb6Type::Long;   // recordset 不登记（对象，与 Data 同口径）
+    }
+    // C30-5: DataGrid 的属性面。Text / DataSource 是 String；ColumnHeaders/Allow* 是 Boolean；
+    // Row/Col/RowCount/ColCount/RowHeight/DefColWidth 是 Long。
+    if (ctrlType == FrmControlType::DataGrid) {
+        if (p == "text" || p == "datasource") return Vb6Type::String;
+        if (p == "columnheaders" || p == "allowaddnew" || p == "allowupdate"
+            || p == "allowdelete") return Vb6Type::Boolean;
+        if (p == "row" || p == "col" || p == "rowcount" || p == "colcount"
+            || p == "rowheight" || p == "defcolwidth") return Vb6Type::Long;
+    }
+    // C30-6: MSHFlexGrid / MSFlexGrid 的属性面。
+    // String：Text / TextMatrix(r,c) / TextArray(i) / FormatString / DataSource；
+    // Boolean：七条开关位；其余（含 ColWidth/RowHeight/ColAlignment 的**元素值**）是 Long。
+    // 不登记的症状与 Adodc 同：`s = grd.TextMatrix(1,2)` 被当 Variant 装箱成空串，
+    // 表格画得出来但读回全假。
+    if (ctrlType == FrmControlType::MshFlexGrid) {
+        if (p == "text" || p == "textmatrix" || p == "textarray"
+            || p == "formatstring" || p == "datasource") return Vb6Type::String;
+        if (p == "wordwrap" || p == "editable" || p == "focusrect"
+            || p == "allowuserresizing" || p == "mergecells" || p == "redraw") return Vb6Type::Boolean;
+        if (p == "rows" || p == "cols" || p == "fixedrows" || p == "fixedcols"
+            || p == "row" || p == "col" || p == "rowsel" || p == "colsel"
+            || p == "toprow" || p == "leftcol" || p == "colwidth" || p == "rowheight"
+            || p == "colalignment" || p == "rowheightmin" || p == "gridlines"
+            || p == "scrollbars" || p == "selectionmode" || p == "fillstyle"
+            || p == "backcolor" || p == "forecolor" || p == "fillcolor"
+            || p == "cellbackcolor" || p == "cellforecolor" || p == "mouserow"
+            || p == "mousecol" || p == "cellheight" || p == "cellwidth"
+            || p == "cellleft" || p == "celltop" || p == "sort") return Vb6Type::Long;
+    }
+    // C30-2: TabStrip 的标量面。四个 Client* 与三条行为位的 RTL getter 都是 int32_t;    // MultiRow/HotTracking/ShowTips 在 VB6 那边是 Boolean。
+    // ⚠ Tabs(i).Caption 这类**链式成员**不在本表（这一问只看“控件.属性”一形），
+    // 所以 `"cap=" & TabStrip1.Tabs(n).Caption` 这种接法仍会被当 Variant 装箱成空串；
+    // 先读进 String 变量再用就对了（tools/tabstrip_manual 的写法）。
+    if (ctrlType == FrmControlType::TabStrip) {
+        if (p == "clientleft" || p == "clienttop"
+            || p == "clientwidth" || p == "clientheight") return Vb6Type::Long;
+        if (p == "multirow" || p == "hottracking" || p == "showtips") return Vb6Type::Boolean;
     }
     // C29-SL-e: `ToolTipText` / `Tag` 是 VB6 的 **String** 通用属性，但两条 RTL getter 原本
     // 声明成 `void*`，而装箱那一步用的是 C11 `_Generic`（`vb6rtl_variant.h` 的表：
@@ -189,6 +263,18 @@ Vb6Type CCodeGen::controlPropType(FrmControlType ctrlType, const std::string& pr
         }
         // C29-MV-b：Date 那三格与 DTPicker 同一条口径（C 层就是裸 double，不装箱）。
         if (p == "value" || p == "selstart" || p == "selend") return Vb6Type::Date;
+    }
+    // C30-UD-a: UpDown（原生 msctls_updown32）。值面四条 + 行为面两条都是 int32_t
+    // （getter 全是 int32_t，不登记就落到兜底那条按裸名查符号的路，判成 Variant/String）。
+    if (ctrlType == FrmControlType::UpDown) {
+        if (p == "min" || p == "max" || p == "value" || p == "increment"
+            || p == "alignment" || p == "orientation") {
+            return Vb6Type::Long;
+        }
+        // Wrap / SyncBuddy 在 VB6 是 Boolean ⇒ 按 #124 那条口径登记（getter 给 -1/0）。
+        if (p == "wrap" || p == "syncbuddy") return Vb6Type::Boolean;
+        // BuddyControl 是控件名字符串（类型库里是 VB_UserDefine 的引用位，运行时读回为空）
+        if (p == "buddycontrol") return Vb6Type::String;
     }
     if (ctrlType == FrmControlType::Slider) {
         // C29-SL-a: vb6_Slider_Get* 全是 int32_t（两条证人读数也是数值），不登记就落到
@@ -320,6 +406,9 @@ static uint32_t formPseudoKindBits(FrmControlType ctrlType) {
         case FrmControlType::CommonDialog:  bits |= vb6c3::FPQ_COMMON_DIALOG; break;
         case FrmControlType::Shape:         bits |= vb6c3::FPQ_SHAPE;         break;
         case FrmControlType::Line:          bits |= vb6c3::FPQ_LINE;          break;
+        // C30-UD-a: UpDown 的 Alignment 是自己那一档（UDS_ALIGNLEFT/RIGHT），
+        // 不能落进通用 `vb6_GetAlignment` / `vb6_SetAlignment`。
+        case FrmControlType::UpDown:        bits |= vb6c3::FPQ_UPDOWN;        break;
         default: break;
     }
     return bits;
@@ -342,6 +431,20 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
     }
 
     switch (ctrlType) {
+    case FrmControlType::MaskEdBox:   // C30-3
+        // Text/ClipText 都必须走 RTL 掩码引擎：直接 GetWindowText 拿到的是带提示符的
+        // 显示串，不是 VB6 语义下的 Text。Mask/PromptChar/PromptInclude 是这枚控件独有。
+        if (propLower == "text")          return "vb6_MaskEd_GetText";
+        if (propLower == "cliptext")      return "vb6_MaskEd_GetClipText";
+        if (propLower == "mask")          return "vb6_MaskEd_GetMask";
+        if (propLower == "promptchar")    return "vb6_MaskEd_GetPromptChar";
+        if (propLower == "promptinclude") return "vb6_MaskEd_GetPromptInclude";
+        if (propLower == "selstart")      return "vb6_GetSelStart";
+        if (propLower == "sellength")     return "vb6_GetSelLength";
+        if (propLower == "seltext")       return "vb6_GetSelText";
+        if (propLower == "visible")       return "vb6_GetControlVisible";
+        if (propLower == "enabled")       return "vb6_GetControlEnabled";
+        break;
     case FrmControlType::TextBox:
         if (propLower == "text") return "vb6_GetControlText";
         if (propLower == "multiline") return "vb6_GetMultiLine";
@@ -477,6 +580,17 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         if (propLower == "visible") return "vb6_GetControlVisible";
         if (propLower == "enabled") return "vb6_GetControlEnabled";
         break;
+    case FrmControlType::TabStrip:  // C30-2
+        // Tabs / SelectedItem 是**集合/对象**，不走这张表（见 cgen 的集合改道）；
+        // 这里只有标量面：四枚 Client* + 三条行为位。
+        if (propLower == "clientleft")   return "vb6_TabStrip_GetClientLeft";
+        if (propLower == "clienttop")    return "vb6_TabStrip_GetClientTop";
+        if (propLower == "clientwidth")  return "vb6_TabStrip_GetClientWidth";
+        if (propLower == "clientheight") return "vb6_TabStrip_GetClientHeight";
+        if (propLower == "multirow")     return "vb6_TabStrip_GetMultiRow";
+        if (propLower == "hottracking")  return "vb6_TabStrip_GetHotTracking";
+        if (propLower == "showtips")     return "vb6_TabStrip_GetShowTips";
+        break;
     case FrmControlType::SSTab:  // P20-42
         // TabCaption(i)/TabVisible(i) 是**带下标的索引属性**, 不是标量;
         // 走不了这张表 (表的入参只有 propLower), 见 cgen_expr_member_form_builtin.inc 的 TODO。
@@ -539,6 +653,109 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
         if (propLower == "remoteport")     return "vb6_Ws_GetRemotePort";
         if (propLower == "bytesreceived")  return "vb6_Ws_GetBytesReceived";
         if (propLower == "bytetransferred") return "vb6_Ws_GetByteTransferred";
+        break;
+    case FrmControlType::MSComm:  // C30-4: 串口；一切状态在 RTL 实例表里
+        if (propLower == "commport")      return "vb6_MsComm_GetCommPort";
+        if (propLower == "settings")      return "vb6_MsComm_GetSettings";
+        if (propLower == "portopen")      return "vb6_MsComm_GetPortOpen";
+        if (propLower == "input")         return "vb6_MsComm_GetInput";
+        if (propLower == "inputmode")     return "vb6_MsComm_GetInputMode";
+        if (propLower == "inputlen")      return "vb6_MsComm_GetInputLen";
+        if (propLower == "inbuffercount") return "vb6_MsComm_GetInBufferCount";
+        if (propLower == "outbuffercount") return "vb6_MsComm_GetOutBufferCount";
+        if (propLower == "inbuffersize")  return "vb6_MsComm_GetInBufferSize";
+        if (propLower == "outbuffersize") return "vb6_MsComm_GetOutBufferSize";
+        if (propLower == "rthreshold")    return "vb6_MsComm_GetRThreshold";
+        if (propLower == "sthreshold")    return "vb6_MsComm_GetSThreshold";
+        if (propLower == "handshaking")   return "vb6_MsComm_GetHandshaking";
+        if (propLower == "dtrenable")     return "vb6_MsComm_GetDTREnable";
+        if (propLower == "rtsenable")     return "vb6_MsComm_GetRTSEnable";
+        if (propLower == "eofenable")     return "vb6_MsComm_GetEOFEnable";
+        if (propLower == "commevent")     return "vb6_MsComm_GetCommEvent";
+        if (propLower == "ctsholding")    return "vb6_MsComm_GetCTSHolding";
+        if (propLower == "dsrholding")    return "vb6_MsComm_GetDSRHolding";
+        if (propLower == "cdholding")     return "vb6_MsComm_GetCDHolding";
+        // C3 扩展（不是 VB6 属性）：夹具证人 —— 真写/真收了多少字节。
+        if (propLower == "txtotal")       return "vb6_MsComm_GetTxTotal";
+        if (propLower == "rxtotal")       return "vb6_MsComm_GetRxTotal";
+        // C30-4b：超时 / 任意设备名 / 端口枚举 / 二进制（VB6 没有的几件）
+        if (propLower == "commdevice")    return "vb6_MsComm_GetCommDevice";
+        if (propLower == "readintervaltimeout") return "vb6_MsComm_GetReadIntervalTimeout";
+        if (propLower == "readtotaltimeout")    return "vb6_MsComm_GetReadTotalTimeout";
+        if (propLower == "writetimeout")   return "vb6_MsComm_GetWriteTimeout";
+        if (propLower == "portcount")      return "vb6_MsComm_PortCount";
+        if (propLower == "portlist")       return "vb6_MsComm_GetPortList";
+        if (propLower == "inputbytes")     return "vb6_MsComm_GetInputBytes";
+        break;
+    case FrmControlType::Adodc:  // C30-5: ACE 底座（ODBC 层）；属性全在 RTL 实例表里
+        if (propLower == "connectionstring") return "vb6_Adodc_GetConnectionString";
+        if (propLower == "recordsource")  return "vb6_Adodc_GetRecordSource";
+        if (propLower == "commandtype")   return "vb6_Adodc_GetCommandType";
+        if (propLower == "cursorlocation") return "vb6_Adodc_GetCursorLocation";
+        if (propLower == "cursortype")    return "vb6_Adodc_GetCursorType";
+        if (propLower == "locktype")      return "vb6_Adodc_GetLockType";
+        if (propLower == "mode")          return "vb6_Adodc_GetMode";
+        if (propLower == "maxrecords")    return "vb6_Adodc_GetMaxRecords";
+        if (propLower == "bofaction")     return "vb6_Adodc_GetBOFAction";
+        if (propLower == "eofaction")     return "vb6_Adodc_GetEOFAction";
+        if (propLower == "lastrowcount")  return "vb6_Adodc_GetLastRowCount";
+        if (propLower == "opened")        return "vb6_Adodc_GetOpened";
+        // Recordset：真 IDispatch（引擎的 VB6_MEMK_RS），晚绑定链原样走
+        if (propLower == "recordset")     return "vb6_Adodc_Recordset";
+        break;
+    case FrmControlType::DataGrid:  // C30-5: 自绘表格
+        if (propLower == "datasource")    return "vb6_DataGrid_GetDataSourceName";
+        if (propLower == "rowcount")      return "vb6_DataGrid_GetRowCount";
+        if (propLower == "colcount")      return "vb6_DataGrid_GetColCount";
+        if (propLower == "row")           return "vb6_DataGrid_GetRow";
+        if (propLower == "col")           return "vb6_DataGrid_GetCol";
+        if (propLower == "text")          return "vb6_DataGrid_GetText";
+        if (propLower == "columnheaders") return "vb6_DataGrid_GetColumnHeaders";
+        if (propLower == "allowaddnew")   return "vb6_DataGrid_GetAllowAddNew";
+        if (propLower == "allowupdate")   return "vb6_DataGrid_GetAllowUpdate";
+        if (propLower == "allowdelete")   return "vb6_DataGrid_GetAllowDelete";
+        if (propLower == "rowheight")     return "vb6_DataGrid_GetRowHeight";
+        if (propLower == "defcolwidth")   return "vb6_DataGrid_GetDefColWidth";
+        break;
+    case FrmControlType::MshFlexGrid:  // C30-6: 字符串矩阵表格（get）
+        // 带下标的 TextMatrix(r,c) / TextArray(i) / ColWidth(i) 三条走
+        // cgen_expr_call_callee_member.inc 的索引属性分支，不在这张表里。
+        if (propLower == "text")          return "vb6_MshFlexGrid_GetText";
+        if (propLower == "rows")          return "vb6_MshFlexGrid_GetRows";
+        if (propLower == "cols")          return "vb6_MshFlexGrid_GetCols";
+        if (propLower == "fixedrows")     return "vb6_MshFlexGrid_GetFixedRows";
+        if (propLower == "fixedcols")     return "vb6_MshFlexGrid_GetFixedCols";
+        if (propLower == "row")           return "vb6_MshFlexGrid_GetRow";
+        if (propLower == "col")           return "vb6_MshFlexGrid_GetCol";
+        if (propLower == "rowsel")        return "vb6_MshFlexGrid_GetRowSel";
+        if (propLower == "colsel")        return "vb6_MshFlexGrid_GetColSel";
+        if (propLower == "toprow")        return "vb6_MshFlexGrid_GetTopRow";
+        if (propLower == "leftcol")       return "vb6_MshFlexGrid_GetLeftCol";
+        if (propLower == "gridlines")     return "vb6_MshFlexGrid_GetGridLines";
+        if (propLower == "scrollbars")    return "vb6_MshFlexGrid_GetScrollBars";
+        if (propLower == "selectionmode") return "vb6_MshFlexGrid_GetSelectionMode";
+        if (propLower == "fillstyle")     return "vb6_MshFlexGrid_GetFillStyle";
+        if (propLower == "wordwrap")      return "vb6_MshFlexGrid_GetWordWrap";
+        if (propLower == "editable")      return "vb6_MshFlexGrid_GetEditable";
+        if (propLower == "focusrect")     return "vb6_MshFlexGrid_GetFocusRect";
+        if (propLower == "allowuserresizing") return "vb6_MshFlexGrid_GetAllowUserResizing";
+        if (propLower == "mergecells")    return "vb6_MshFlexGrid_GetMergeCells";
+        if (propLower == "redraw")        return "vb6_MshFlexGrid_GetRedraw";
+        if (propLower == "backcolor")     return "vb6_MshFlexGrid_GetBackColor";
+        if (propLower == "forecolor")     return "vb6_MshFlexGrid_GetForeColor";
+        if (propLower == "fillcolor")     return "vb6_MshFlexGrid_GetFillColor";
+        if (propLower == "cellbackcolor") return "vb6_MshFlexGrid_GetCellBackColor";
+        if (propLower == "cellforecolor") return "vb6_MshFlexGrid_GetCellForeColor";
+        if (propLower == "mouserow")      return "vb6_MshFlexGrid_GetMouseRow";
+        if (propLower == "mousecol")      return "vb6_MshFlexGrid_GetMouseCol";
+        if (propLower == "cellheight")    return "vb6_MshFlexGrid_GetCellHeight";
+        if (propLower == "cellwidth")     return "vb6_MshFlexGrid_GetCellWidth";
+        if (propLower == "cellleft")      return "vb6_MshFlexGrid_GetCellLeft";
+        if (propLower == "celltop")       return "vb6_MshFlexGrid_GetCellTop";
+        if (propLower == "formatstring")  return "vb6_MshFlexGrid_GetFormatString";
+        if (propLower == "datasource")    return "vb6_MshFlexGrid_GetDataSource";
+        if (propLower == "rowheightmin")  return "vb6_MshFlexGrid_GetRowHeightMin";
+        if (propLower == "sort")          return "vb6_MshFlexGrid_GetSort";
         break;
     case FrmControlType::Data:  // C29-Data: ODBC 后端
         if (propLower == "recordset")    return "vb6_Data_RecordsetObj";  /* 真 IDispatch, 链走晚绑定 */
@@ -652,6 +869,20 @@ std::string CCodeGen::getControlPropReadFn(FrmControlType ctrlType, const std::s
     // 按子串匹配的表里没有 "slider" ⇒ Unknown ⇒ 创建流程跳过），属性读回全空、写进去静默丢。
     // 两条 C3 扩展读数（TravelIsVert / TickPresent）是**控件侧证人**，判据靠它们把
     // "样式位写进去了"升级成"控件真按那一档在走"（channel 矩形那条是假证人，实测过）。
+    // C30-UD-a: UpDown 读侧（原生 msctls_updown32）。全部直问控件：range/pos/accel
+    // 都有回读消息，行为面四条就读窗口的样式位 —— 没有一条是自存的。
+    case FrmControlType::UpDown:
+        if (propLower == "min") return "vb6_UpDown_GetMin";
+        if (propLower == "max") return "vb6_UpDown_GetMax";
+        if (propLower == "value") return "vb6_UpDown_GetValue";
+        if (propLower == "increment") return "vb6_UpDown_GetIncrement";
+        if (propLower == "wrap") return "vb6_UpDown_GetWrap";
+        if (propLower == "alignment") return "vb6_UpDown_GetAlignment";
+        if (propLower == "orientation") return "vb6_UpDown_GetOrientation";
+        if (propLower == "syncbuddy") return "vb6_UpDown_GetSyncBuddy";
+        if (propLower == "visible") return "vb6_GetControlVisible";
+        if (propLower == "enabled") return "vb6_GetControlEnabled";
+        break;
     case FrmControlType::Slider:
         if (propLower == "orientation") return "vb6_Slider_GetOrientation";
         if (propLower == "tickfrequency") return "vb6_Slider_GetTickFrequency";
@@ -797,7 +1028,10 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
     if (propLower == "forecolor") return "vb6_SetControlForeColor";
     if (propLower == "backcolor") return "vb6_SetControlBackColor";
     // P13.5: Alignment (all text controls)
-    if (propLower == "alignment") return "vb6_SetAlignment";
+    // C30-UD-a: UpDown 除外 —— 它的 Alignment 是 UDS_ALIGNLEFT/RIGHT 两位（自己那格），
+    // 不能被这条通用 ES_* 写路径抢走。实测：不除它，写 0 后读回 1，且它会拿旧样式重写
+    // GWL_STYLE，把刚立上的 UDS_WRAP 一起抹掉（夹具 UD10 就是那条红的证人）。
+    if (propLower == "alignment" && ctrlType != FrmControlType::UpDown) return "vb6_SetAlignment";
     // P13.6: TabIndex/TabStop (all visible controls)
     if (propLower == "tabindex") return "vb6_SetTabIndex";
     if (propLower == "tabstop") return "vb6_SetTabStop";
@@ -816,6 +1050,18 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
         && ctrlType != FrmControlType::Line) return "vb6_SetBorderStyle";
 
     switch (ctrlType) {
+    case FrmControlType::MaskEdBox:   // C30-3
+        if (propLower == "text")          return "vb6_MaskEd_SetText";
+        if (propLower == "cliptext")      return "vb6_MaskEd_SetClipText";
+        if (propLower == "mask")          return "vb6_MaskEd_SetMask";
+        if (propLower == "promptchar")    return "vb6_MaskEd_SetPromptChar";
+        if (propLower == "promptinclude") return "vb6_MaskEd_SetPromptInclude";
+        if (propLower == "selstart")      return "vb6_SetSelStart";
+        if (propLower == "sellength")     return "vb6_SetSelLength";
+        if (propLower == "seltext")       return "vb6_SetSelText";
+        if (propLower == "visible")       return "vb6_SetControlVisible";
+        if (propLower == "enabled")       return "vb6_SetControlEnabled";
+        break;
     case FrmControlType::TextBox:
         if (propLower == "text") return "vb6_SetControlText";
         if (propLower == "multiline") return "vb6_SetMultiLine";
@@ -919,6 +1165,11 @@ std::string CCodeGen::getControlPropWriteFn(FrmControlType ctrlType, const std::
         if (propLower == "visible") return "vb6_SetControlVisible";
         if (propLower == "enabled") return "vb6_SetControlEnabled";
         break;
+    case FrmControlType::TabStrip:  // C30-2
+        if (propLower == "multirow")    return "vb6_TabStrip_SetMultiRow";
+        if (propLower == "hottracking") return "vb6_TabStrip_SetHotTracking";
+        if (propLower == "showtips")    return "vb6_TabStrip_SetShowTips";
+        break;
     case FrmControlType::SSTab:  // P20-42
         if (propLower == "tabs")           return "vb6_SSTab_SetTabs";
         if (propLower == "tab")            return "vb6_SSTab_SetTab";
@@ -986,6 +1237,86 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
         if (propLower == "protocol")   return "vb6_Ws_SetProtocol";
         if (propLower == "remotehost") return "vb6_Ws_SetRemoteHost";
         if (propLower == "remoteport") return "vb6_Ws_SetRemotePort";
+        break;
+    case FrmControlType::MSComm:  // C30-4 写表。只读那几条（CommEvent / InBufferCount 读侧、
+        // CTS·DSR·CDHolding）没有写口 —— 发一条"写得动但不改"的 setter 比不发更难查。
+        if (propLower == "commport")      return "vb6_MsComm_SetCommPort";
+        if (propLower == "settings")      return "vb6_MsComm_SetSettings";
+        if (propLower == "portopen")      return "vb6_MsComm_SetPortOpen";
+        if (propLower == "output")        return "vb6_MsComm_SetOutput";
+        if (propLower == "inputmode")     return "vb6_MsComm_SetInputMode";
+        if (propLower == "inputlen")      return "vb6_MsComm_SetInputLen";
+        if (propLower == "inbuffercount") return "vb6_MsComm_SetInBufferCount";
+        if (propLower == "outbuffercount") return "vb6_MsComm_SetOutBufferCount";
+        if (propLower == "inbuffersize")  return "vb6_MsComm_SetInBufferSize";
+        if (propLower == "outbuffersize") return "vb6_MsComm_SetOutBufferSize";
+        if (propLower == "rthreshold")    return "vb6_MsComm_SetRThreshold";
+        if (propLower == "sthreshold")    return "vb6_MsComm_SetSThreshold";
+        if (propLower == "handshaking")   return "vb6_MsComm_SetHandshaking";
+        if (propLower == "dtrenable")     return "vb6_MsComm_SetDTREnable";
+        if (propLower == "rtsenable")     return "vb6_MsComm_SetRTSEnable";
+        if (propLower == "eofenable")     return "vb6_MsComm_SetEOFEnable";
+        // C30-4b：超时 / 设备名 / 二进制写
+        if (propLower == "commdevice")    return "vb6_MsComm_SetCommDevice";
+        if (propLower == "readintervaltimeout") return "vb6_MsComm_SetReadIntervalTimeout";
+        if (propLower == "readtotaltimeout")    return "vb6_MsComm_SetReadTotalTimeout";
+        if (propLower == "writetimeout")   return "vb6_MsComm_SetWriteTimeout";
+        if (propLower == "outputbytes")    return "vb6_MsComm_SetOutputBytes";
+        break;
+    case FrmControlType::Adodc:  // C30-5 写表（Recordset / LastRowCount / Opened 是只读）
+        if (propLower == "connectionstring") return "vb6_Adodc_SetConnectionString";
+        if (propLower == "recordsource")  return "vb6_Adodc_SetRecordSource";
+        if (propLower == "commandtype")   return "vb6_Adodc_SetCommandType";
+        if (propLower == "cursorlocation") return "vb6_Adodc_SetCursorLocation";
+        if (propLower == "cursortype")    return "vb6_Adodc_SetCursorType";
+        if (propLower == "locktype")      return "vb6_Adodc_SetLockType";
+        if (propLower == "mode")          return "vb6_Adodc_SetMode";
+        if (propLower == "maxrecords")    return "vb6_Adodc_SetMaxRecords";
+        if (propLower == "bofaction")     return "vb6_Adodc_SetBOFAction";
+        if (propLower == "eofaction")     return "vb6_Adodc_SetEOFAction";
+        break;
+    case FrmControlType::DataGrid:  // C30-5 写表（RowCount/ColCount/Text 只读）
+        if (propLower == "datasource")    return "vb6_DataGrid_SetDataSourceName";
+        if (propLower == "row")           return "vb6_DataGrid_SetRow";
+        if (propLower == "col")           return "vb6_DataGrid_SetCol";
+        if (propLower == "columnheaders") return "vb6_DataGrid_SetColumnHeaders";
+        if (propLower == "allowaddnew")   return "vb6_DataGrid_SetAllowAddNew";
+        if (propLower == "allowupdate")   return "vb6_DataGrid_SetAllowUpdate";
+        if (propLower == "allowdelete")   return "vb6_DataGrid_SetAllowDelete";
+        if (propLower == "rowheight")     return "vb6_DataGrid_SetRowHeight";
+        if (propLower == "defcolwidth")   return "vb6_DataGrid_SetDefColWidth";
+        break;
+    case FrmControlType::MshFlexGrid:  // C30-6 写表（Text 写当前格；TextMatrix/ColWidth 走索引属性）
+        if (propLower == "text")          return "vb6_MshFlexGrid_SetText";
+        if (propLower == "rows")          return "vb6_MshFlexGrid_SetRows";
+        if (propLower == "cols")          return "vb6_MshFlexGrid_SetCols";
+        if (propLower == "fixedrows")     return "vb6_MshFlexGrid_SetFixedRows";
+        if (propLower == "fixedcols")     return "vb6_MshFlexGrid_SetFixedCols";
+        if (propLower == "row")           return "vb6_MshFlexGrid_SetRow";
+        if (propLower == "col")           return "vb6_MshFlexGrid_SetCol";
+        if (propLower == "rowsel")        return "vb6_MshFlexGrid_SetRowSel";
+        if (propLower == "colsel")        return "vb6_MshFlexGrid_SetColSel";
+        if (propLower == "toprow")        return "vb6_MshFlexGrid_SetTopRow";
+        if (propLower == "leftcol")       return "vb6_MshFlexGrid_SetLeftCol";
+        if (propLower == "gridlines")     return "vb6_MshFlexGrid_SetGridLines";
+        if (propLower == "scrollbars")    return "vb6_MshFlexGrid_SetScrollBars";
+        if (propLower == "selectionmode") return "vb6_MshFlexGrid_SetSelectionMode";
+        if (propLower == "fillstyle")     return "vb6_MshFlexGrid_SetFillStyle";
+        if (propLower == "wordwrap")      return "vb6_MshFlexGrid_SetWordWrap";
+        if (propLower == "editable")      return "vb6_MshFlexGrid_SetEditable";
+        if (propLower == "focusrect")     return "vb6_MshFlexGrid_SetFocusRect";
+        if (propLower == "allowuserresizing") return "vb6_MshFlexGrid_SetAllowUserResizing";
+        if (propLower == "mergecells")    return "vb6_MshFlexGrid_SetMergeCells";
+        if (propLower == "redraw")        return "vb6_MshFlexGrid_SetRedraw";
+        if (propLower == "backcolor")     return "vb6_MshFlexGrid_SetBackColor";
+        if (propLower == "forecolor")     return "vb6_MshFlexGrid_SetForeColor";
+        if (propLower == "fillcolor")     return "vb6_MshFlexGrid_SetFillColor";
+        if (propLower == "cellbackcolor") return "vb6_MshFlexGrid_SetCellBackColor";
+        if (propLower == "cellforecolor") return "vb6_MshFlexGrid_SetCellForeColor";
+        if (propLower == "formatstring")  return "vb6_MshFlexGrid_SetFormatString";
+        if (propLower == "datasource")    return "vb6_MshFlexGrid_SetDataSource";
+        if (propLower == "rowheightmin")  return "vb6_MshFlexGrid_SetRowHeightMin";
+        if (propLower == "sort")          return "vb6_MshFlexGrid_SetSort";
         break;
     case FrmControlType::Data:  // C29-Data 写表 (三属性先存后 Refresh 用)
         if (propLower == "databasename") return "vb6_Data_SetDatabaseName";
@@ -1071,6 +1402,20 @@ if (propLower == "currentx") return "vb6_SetCurrentX";
         break;
     // C29-SL-a: Slider 写侧。Orientation 实测**运行期改有效**（写 TBS_VERT + SetWindowPos 换帧
     // 之后滑块位移轴跟着换，见 vb6forms_slider.c 文件头第 2 条）；两条证人读数刻意不给写口。
+    // C30-UD-a: UpDown 写侧。Wrap/Alignment/Orientation/SyncBuddy 四条都属于
+    // 「可运行期改」的样式位（RTL 里写完样式位再 SetWindowPos 重排一次）。
+    case FrmControlType::UpDown:
+        if (propLower == "min") return "vb6_UpDown_SetMin";
+        if (propLower == "max") return "vb6_UpDown_SetMax";
+        if (propLower == "value") return "vb6_UpDown_SetValue";
+        if (propLower == "increment") return "vb6_UpDown_SetIncrement";
+        if (propLower == "wrap") return "vb6_UpDown_SetWrap";
+        if (propLower == "alignment") return "vb6_UpDown_SetAlignment";
+        if (propLower == "orientation") return "vb6_UpDown_SetOrientation";
+        if (propLower == "syncbuddy") return "vb6_UpDown_SetSyncBuddy";
+        if (propLower == "visible") return "vb6_SetControlVisible";
+        if (propLower == "enabled") return "vb6_SetControlEnabled";
+        break;
     case FrmControlType::Slider:
         if (propLower == "orientation") return "vb6_Slider_SetOrientation";
         if (propLower == "tickfrequency") return "vb6_Slider_SetTickFrequency";
@@ -1449,6 +1794,7 @@ void CCodeGen::emitDesignerScaleModeProp(const FrmControl& ctrl, const std::stri
 bool CCodeGen::controlFocusFromNativeNotify(FrmControlType ctrlType) {
     switch (ctrlType) {
     case FrmControlType::TextBox:
+    case FrmControlType::MaskEdBox:   // C30-3: EDIT 类，EN_SETFOCUS/EN_KILLFOCUS 走 WM_COMMAND
     case FrmControlType::ComboBox:
     case FrmControlType::ListBox:
     case FrmControlType::CommandButton:
@@ -1515,7 +1861,38 @@ long CCodeGen::sliderStyleBits(const FrmControl& ctrl) const {
     return style;
 }
 
-// C29-SL-l（账 #143）: 把一条"控件对象表达式"折成 (控件类型, 那枚窗口的 C 表达式)。
+// C30-UD-a: UpDown 的创建样式位。顶层与容器子控件两条路共用这一处（账 #83：不许每路各写一张）。
+// 常量取自 commctrl.h：UDS_WRAP 0x1 / UDS_SETBUDDYINT 0x2 / UDS_ALIGNRIGHT 0x4 /
+// UDS_ALIGNLEFT 0x8 / UDS_ARROWKEYS 0x20 / UDS_HORZ 0x40 / UDS_HOTTRACK 0x100。
+// 两条默认值按 VB6 文档口径：Alignment = 1（右）、Orientation = 0（竖）。
+long CCodeGen::updownStyleBits(const FrmControl& ctrl) const {
+    constexpr long kUdsWrap       = 0x0001L;
+    constexpr long kUdsSetBuddy   = 0x0002L;
+    constexpr long kUdsAlignRight = 0x0004L;
+    constexpr long kUdsAlignLeft  = 0x0008L;
+    constexpr long kUdsArrowKeys  = 0x0020L;
+    constexpr long kUdsHorz       = 0x0040L;
+    constexpr long kUdsHotTrack   = 0x0100L;
+
+    // ARROWKEYS：VB6 里上下键能在 UpDown 上改值；HOTTRACK：悬停高亮（VB6 的观感）。
+    long style = kUdsArrowKeys | kUdsHotTrack;
+    auto ud = [&](const char* k) -> const FrmValue* {
+        auto it = ctrl.properties.find(k);
+        return it == ctrl.properties.end() ? nullptr : &it->second;
+    };
+    const FrmValue* v = ud("Wrap");
+    if (v && v->intValue) style |= kUdsWrap;
+    v = ud("Alignment");
+    if (v) style |= (v->intValue != 0) ? kUdsAlignRight : kUdsAlignLeft;
+    else   style |= kUdsAlignRight;
+    v = ud("Orientation");
+    if (v && v->intValue != 0) style |= kUdsHorz;
+    v = ud("SyncBuddy");
+    if (v && v->intValue) style |= kUdsSetBuddy;
+    return style;
+}
+
+// C29-SL-l（账 #143）: 把一条“控件对象表达式”折成 (控件类型, 那枚窗口的 C 表达式)。
 // 三种形态都要认，因为控件方法的发码有两条码头：
 //   · 表达式路给 `vb6_hwnd_List1`（裸槽，visit(IndexOrCallExpr) 的 marker）；
 //   · 语句路给裸小写名 `list1`（`List1.Clear` 那族已有的几支就按这个查）；
@@ -1615,6 +1992,9 @@ std::string CCodeGen::controlZeroArgMethod(FrmControlType ctrlType,
         return controlExit("vb6_ImageList_ClearImages", 1, outArgc);
     if (memberLower == "clear" && ctrlType == FrmControlType::StatusBar)
         return controlExit("vb6_StatusBar_ClearPanels", 1, outArgc);
+    // C30-2: TabStrip 的 Tabs.Clear。
+    if (memberLower == "clear" && ctrlType == FrmControlType::TabStrip)
+        return controlExit("vb6_TabStrip_TabsClear", 1, outArgc);
     // CommonDialog 那六枚: 从前两条码头各自做一遍**字符串手术**
     // （`"vb6_CdShow" + toupper(m[4]) + m.substr(5)`）—— 命名规则住在调用点，正是 §B115 那句
     // "拼法只许来自表"要禁的形状；而且它对 `mCd[4]` 的依赖意味着名单加一枚就得信拼法还对。
@@ -1639,6 +2019,13 @@ std::string CCodeGen::controlZeroArgMethod(FrmControlType ctrlType,
 std::string CCodeGen::controlOneArgMethod(FrmControlType ctrlType,
                                           const std::string& memberLower,
                                           int* outArgc) const {
+    // C30-UD-b: UpDown 的判据方法 SimDelta(delta) —— 造一条**真** UDN_DELTAPOS 递给父窗
+    // （与 Slider.SimNotify / DTPicker.SimChange 同先例，非 VB6 语义，不进手册方法表）。
+    // 它正好是“一个整型实参”，落在本表：带括号那形由 cgen_expr_call_com_bind.inc 拼成
+    // `vb6_UpDown_SimDelta((void*)hwnd, delta)`。**不带括号的语句形没接管** —— 语句路不查
+    // 这张表，`ud1.SimDelta 1` 会退化成“取属性 + 丢结果”，所以夹具只用带括号那形。
+    if (ctrlType == FrmControlType::UpDown && memberLower == "simdelta")
+        return controlExit("vb6_UpDown_SimDelta", 2, outArgc);
     if (memberLower != "textheight" && memberLower != "textwidth") return "";
     switch (ctrlType) {
         case FrmControlType::Form:
@@ -1820,7 +2207,33 @@ void CCodeGen::emitSliderDesignTimeInit(const FrmControl& ctrl, const std::strin
                 + slEndArg + ", " + slProp("SelectRange") + ");");
 }
 
-// 账 #83(a)（C29-SL-r）: VB6 的 `TabStop` 默认 True，而本项目**两条创建路以前都不立 WS_TABSTOP**
+// C30-UD-a: UpDown 设计期那一趟。参数序与 -999 哨兵口径只在 RTL 那一处定，这里只负责转述。
+// BuddyControl 在 .frm 里写的是**控件名字符串**（FrmValue 的 rawText 带引号）⇒ 这里折成
+// 那枚控件的句柄槽。折不出来（名字空 / 写了个不存在的控件）就传 NULL：宁可不挂 buddy，
+// 也不猜一个句柄出去。
+void CCodeGen::emitUpDownDesignTimeInit(const FrmControl& ctrl, const std::string& hwndExpr) {
+    auto udProp = [&](const char* key) -> std::string {
+        auto it = ctrl.properties.find(key);
+        if (it == ctrl.properties.end()) return "-999";
+        return intLiteralText(static_cast<int64_t>((int)it->second.intValue), true);
+    };
+    std::string buddy = "NULL";
+    auto bcIt = ctrl.properties.find("BuddyControl");
+    if (bcIt != ctrl.properties.end()) {
+        std::string nm = bcIt->second.rawText;
+        if (nm.size() >= 2 && nm.front() == '"' && nm.back() == '"') {
+            nm = nm.substr(1, nm.size() - 2);
+        }
+        if (!nm.empty()) buddy = "(void*)vb6_hwnd_" + cIdent(nm);
+    }
+    c_.emitLine("vb6_UpDown_Init((void*)" + hwndExpr + ", "
+                + udProp("Min") + ", " + udProp("Max") + ", " + udProp("Value") + ", "
+                + udProp("Increment") + ", " + udProp("Wrap") + ", "
+                + udProp("Alignment") + ", " + udProp("Orientation") + ", "
+                + udProp("SyncBuddy") + ", " + buddy + ");");
+}
+
+// 账 #83(a)（C29-SL-r）: VB6 的 `TabStop` 默认 True,而本项目**两条创建路以前都不立 WS_TABSTOP**
 // —— 探针 `.build/sltab` 实测：顶层按钮（`.frm` 没写 TabStop）读回 0、Frame 里的按钮与文本框也读回 0，
 // 只有"`.frm` 写了 `TabStop = 0`"那一枚碰巧对（因为它要的就是 0）。RTL 那边其实一直按"默认 True"写的
 // （`vb6_GetTabStop` 里 `!hwnd` 就回 -1），缺的只是创建时把这一位立上。
@@ -2005,9 +2418,13 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
             }
             break;
         }
+        // C30-3: MaskEdBox —— 单行 EDIT（与 TextBox 单行那格同一套样式）。掩码不管样式，
+        // 掩码由 RTL 的 vb6_MaskEd_* 那层接管（显示串固定位对齐，不需要 ES_CENTER 之类）。
+        case FrmControlType::MaskEdBox:
+            style |= kEsAutoH;
+            break;
         case FrmControlType::VScrollBar: {
-            // SBS_VERT：缺这个方向位时 SCROLLBAR 默认走 SBS_HORZ(=0)，微调按钮区整块空白
-            // （实测 33x31 区 992/1023 纯白、无箭头）；VB6 VScrollBar 实测含此位。
+            // SBS_VERT：缺这个方向位时 SCROLLBAR 默认走 SBS_HORZ(=0)，微调按钮区整块空白            // （实测 33x31 区 992/1023 纯白、无箭头）；VB6 VScrollBar 实测含此位。
             style |= 0x0001L;
             break;
         }
@@ -2091,6 +2508,11 @@ long CCodeGen::controlTypeStyleBits(const FrmControl& ctrl) const {
         // sliderStyleBits，不留第二份表。
         case FrmControlType::Slider:
             style |= sliderStyleBits(ctrl);
+            break;
+        // C30-UD-a: UpDown 也和 Slider 同型 —— 容器里那枚以前连 ARROWKEYS 都没有，
+        // 折算共用 updownStyleBits，不留第二份表。
+        case FrmControlType::UpDown:
+            style |= updownStyleBits(ctrl);
             break;
         default:
             break;
@@ -2328,6 +2750,8 @@ const FrmControl* CCodeGen::findExternalFormControl(const std::string& formName,
 const char* CCodeGen::getDefaultPropertyName(FrmControlType ctrlType) {
     switch (ctrlType) {
     case FrmControlType::TextBox:      return "Text";
+    // C30-3: MaskEdBox 的默认成员也是 Text（`MaskEdBox1 = "138..."` 落到掩码上）
+    case FrmControlType::MaskEdBox:    return "Text";
     case FrmControlType::Label:        return "Caption";
     case FrmControlType::CommandButton: return "Caption";
     case FrmControlType::CheckBox:     return "Value";
@@ -2652,6 +3076,8 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     // 仍然不拆箱 ⇒ 整只 vb6_VARIANT 交给 vb6_BSTR_Assign ⇒ C2440
     // (PhotoDemon pdDictionary.c 239/248: `dItem As Variant` 读进 String 变量)。
     bool valueIsVariant = isVariantSlot(value, rhs);
+    bool strictVarAssign221 = false;   // 第七十三刀: 右值是 Variant 槽 ⇒ 走严格赋值出口
+    std::string rawVarValue221;        // 未折成 BSTR 的那枚 Variant 表达式
     if (!valueIsVariant && rhs && rhs->kind == ASTNodeKind::IdentifierExpr) {
         auto& id = static_cast<IdentifierExpr&>(*rhs);
         std::string idLower = id.name;
@@ -2666,7 +3092,37 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         std::transform(rhsMember.begin(), rhsMember.end(), rhsMember.begin(), ::tolower);
         if (classVariantMembers_.count(rhsMember)) valueIsVariant = true;
     }
+    // C30-11 第七十四刀 (§B222): `s = CStr(<Variant>)` —— CStr 内建对变体走的是**宽松口**
+    // vb6_CStr (Null ⇒ "")。读数 (探针 E9): 真 VB6 是 94 且**目标不变**; 这里 err=0 且目标
+    // 被清成空串 —— 与第七十三刀 E6/E7/E8 是同一个错, 只是入口在 CStr 那一道站, 不在槽位折叠。
+    // 形状恰好是 vb6_CStr(<变体表达式>) ⇒ 把「CStr 口径」连同那枚变体一起交给同一枚严格出口:
+    // 出口内部就是 AssignMove(target, vb6_CStr(src)) ⇒ 非 Null 逐字节等价, Null 报 94 后
+    // 直接返回、目标不动。只认**单实参 + 实参是变体档 + 发码确实是 vb6_CStr(**那一形;
+    // 第六十六刀那两条 vb6_CStrStrict(<比较>/<拼接>) 不在此列 (前缀就不是 vb6_CStr();
+    // 定长串那一档读数未量, 仍走原路。
+    if (!valueIsVariant && fixedLen.empty() && rhs
+        && rhs->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& call74 = static_cast<IndexOrCallExpr&>(*rhs);
+        if (call74.callee && call74.callee->kind == ASTNodeKind::IdentifierExpr
+            && call74.positional.size() == 1 && call74.named.empty()
+            && value.size() > 10 && value.compare(0, 9, "vb6_CStr(") == 0
+            && value.back() == ')') {
+            std::string name74 = static_cast<IdentifierExpr&>(*call74.callee).name;
+            std::transform(name74.begin(), name74.end(), name74.begin(), ::tolower);
+            if (name74 == "cstr"
+                && inferExprType(*call74.positional[0]) == Vb6Type::Variant) {
+                strictVarAssign221 = true;
+                rawVarValue221 = value.substr(9, value.size() - 10);
+            }
+        }
+    }
     if (valueIsVariant) {
+        // C30-11 第七十三刀 (§B221): Variant 右值 → String 槽走**严格**出口。
+        // 读数 (探针 E6/E7/E8): `s = Trim(Null)` / `s = Len(Null)` / `s = Null` 在真 VB6
+        // 里都是 94 且目标不变；而这里以前折成 vb6_VariantToString(Null) = "" ⇒ err 0、
+        // 目标被清成空串 —— 两个错同时存在 (值丢 + 错误不报)。
+        strictVarAssign221 = true;
+        rawVarValue221 = value;
         value = "vb6_VariantToString(" + value + ")";
     }
     // Fix P24-10b: RHS 是裸晚绑定调用结果 (vb6_ComCallByDispid → void* 指向
@@ -2680,14 +3136,30 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         bool comResBstr = value.compare(0, 12, "vb6_ComCall(") == 0
             || value.compare(0, 20, "vb6_ComCallByDispid(") == 0
             || value.compare(0, 15, "vb6_ComGetProp(") == 0;
+        // C30-11 第七十七刀 (§B225): 这里原来是**先转串再赋**:
+        //   value = "vb6_VariantToString(vb6_VariantFromComResult(<调用>))"
+        // 真机读数 (W6 `s = c(1)`, Collection.Item 装的是 Null): **94 且 s 还是 [keep]**；
+        // 而 VariantToString(Null) 不 raise、交回空串 ⇒ 这里变成 err=0 + 目标被清成 ""，
+        // 两个错同时存在。Null 必须在**赋值那一瞬**才判 (与第七十三刀同一个道理): 把整只
+        // 变体交给 vb6_BSTR_AssignFromVariant (< 非 Null 走 vb6_CStr, 与 VariantToString 逐字节同口径)。
+        // 定长串目标 (char[N]) 那一档不能套这枚出口, 仍走原来的转串路径。
+        std::string comVarVal77;
         if (comResBstr) {
-            value = "vb6_VariantToString(vb6_VariantFromComResult(" + value + "))";
+            comVarVal77 = "vb6_VariantFromComResult(" + value + ")";
         } else if (value.compare(0, 21, "vb6_ComGetObjectProp(") == 0) {
             // 账 (M3 身份刀): 对象读交回 IDispatch* 本体, 不能当堆上 VARIANT* 解引用。
             // 换到同一成员的值孪生 (vb6_ComGetProp) 再按字符串提取 —— 成员名一字不动。
             std::string twinObjStr = comValueTwinForObjectReadExpr(value);
             if (!twinObjStr.empty())
-                value = "vb6_VariantToString(vb6_VariantFromComResult(" + twinObjStr + "))";
+                comVarVal77 = "vb6_VariantFromComResult(" + twinObjStr + ")";
+        }
+        if (!comVarVal77.empty()) {
+            if (fixedLen.empty()) {
+                strictVarAssign221 = true;
+                rawVarValue221 = comVarVal77;
+            } else {
+                value = "vb6_VariantToString(" + comVarVal77 + ")";
+            }
         }
     }
     // Fix 140: RHS 是 Byte() 数组 (类成员 m_Caption 或已知字节数组变量) 且目标是
@@ -2729,9 +3201,15 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
     // 复用形参那条路 (Fix 159-B) 的同一个 wrapToBSTR, 不另开一套折算表。
     // 上面两支 (Variant 提取 / Byte() 还原) 已经把值转成了字符串, 不能再套一层。
     bool wrapped122 = false;
+    // C30-9: 对象→String 也在这一档收口。`s = rs.Fields(2)` 的右值是
+    // vb6_ComCallObject(...) (IDispatch*), inferExprType 给的是对象/未知档 ⇒
+    // isScalarImplicitStr159 为假, 不加这一条就发成 vb6_BSTR_Assign(&s, <对象指针>),
+    // BSTR 拷贝例程拿对象指针当串读 ⇒ 0xC0000005 (memcpy 野读, 实测两处 av target)。
+    // wrapToBSTR 里有同一口径的 vb6_ComCallObject 档 (取默认成员再转串)。
+    const bool objRhs122 = (value.compare(0, 18, "vb6_ComCallObject(") == 0);
     if (!valueIsVariant && !wrappedByteArr140 && rhs) {
         Vb6Type vt122 = inferExprType(*rhs);
-        if (isScalarImplicitStr159(vt122)) {
+        if (isScalarImplicitStr159(vt122) || objRhs122) {
             std::string w122 = wrapToBSTR(value, *rhs);
             if (w122 != value) {
                 value = w122;
@@ -2781,6 +3259,11 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         }
     }
     // #122 折出来的 `vb6_CStrXxx(...)` 是刚 alloc 的新块, 与字面量/拼接同属"自有"。
+    if (strictVarAssign221 && fixedLen.empty()) {
+        // 定长串那一档读数未量, 仍走原路 (只认普通 String 槽)。
+        c_.emitLine("vb6_BSTR_AssignFromVariant(&" + target + ", " + rawVarValue221 + ");");
+        return;
+    }
     if (!fixedLen.empty() && udtFixedField) {
         // 账 #118 续: 目标是 UDT 定长串字段 (C 类型 char[N], VB6 ABI 内联 ANSI) ——
         // 不能 &field 当 BSTR* 用。写侧按 N 右补空格/右截断 (与 LSet 同口径)。
@@ -2799,9 +3282,38 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + fitFn118 + "(" + value
                     + ", " + fixedLen + "));");
     } else if (valueOwned113 || wrapped122) {
-        c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + value + ");");
+        // C30-11 第七十九刀 (§B227): 语句级中止 —— 本语句里 raise 过就不写目标；
+        // RHS 是**自有临时串**，不 move 进去就得自己释放，否则每次中止漏一块。
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + value + ");");
+        } else {
+            // C30-11 第八十三刀：右值**只算一次**。原形把 value 在 if/else 两支各写一遍，
+            // 守卫不过时 else 那一支又把右值算了一遍（`s = CStr(F(v))` 会调 F 两次）。
+            // 现在先算进临时量（只在本语句还没 raise 时算），再拿序号决定是并进目标还是收回。
+            const std::string tmp83 = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp83 + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + value + ") : NULL;");
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_AssignMove(&" + target
+                        + ", " + tmp83 + "); else vb6_BSTR_Free(" + tmp83 + ");");
+        }
     } else {
-        c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
+        // C30-11 第七十九刀 (§B227): 语句级中止 —— 借来的值只深拷贝, 不写就不写,
+        // 没有要回收的东西。手抄这一发仍留在原处 (R7 名单钉的是「这一站还是手写的」)。
+        //
+        // C30-11 第八十三刀 (§B227 续): 借来的值也要**只算一次** —— 与上面自有支同一形。
+        // 原形把 value 直接写在 if 里, 而条件是**求值之前**比的：右值自己 raise（`Asc("")`
+        // 报 5、实参位的 `vb6_CStrStrict(<Null>)` 报 94）时条件早就过了 ⇒ 赋值照样发生,
+        // 目标被清成 ""，而真机是「报错 + 目标不动」。现在先算进临时量, 再拿**算完之后**
+        // 的序号决定写不写；借来的指针不归我们, 所以没有 else 要回收的东西。
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine("vb6_BSTR_Assign(&" + target + ", " + value + ");");
+        } else {
+            const std::string tmp83b = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp83b + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + value + ") : NULL;");
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_Assign(&" + target
+                        + ", " + tmp83b + ");");
+        }
     }
 }
 
@@ -3166,6 +3678,623 @@ bool CCodeGen::hoistOwnedTempArgs(std::string& argList, const std::string& calle
     }
     return true;
 }
+// C30-10 第三十二刀: **常整数**的 VB6 类型宽度 (字面量类型, 不是常量折叠)。
+// VB6 的整数字面量不是「一律 Long」: 无后缀十进制、值落在 Integer 范围 ⇒ Integer
+// (VarType 2 / TypeName "Integer")。C3 的 inferExprType 对字面量一律答 Long —— 那是
+// C 侧 int32 的口径 (收窄检查要用), 于是装箱站把 `1` 装成 VT_I4 (夹具 tests/dict_native
+// 的 d121: int=3, 真组件 2)。这里只回答「这枚节点是不是一枚**字面量**整数、值是多少」,
+// 分档仍由装箱站那一处给。
+// ⚠ 刻意**不**用 tryEvalConstInt: 那一枚是常量折叠 (它把 `2 ^ 10` 也折成 1024, 而 VB6
+//   的 `^` 恒返 Double), 拿它当字面量类型会把幂/位运算的档一起改掉。
+// ⚠ 也不进 inferExprType: 那张表同时喂算术/收窄/格式化, 改它就是把「16 位算术 +
+//   溢出检查」那一整层一起打开 (那是「算术全链」, 另排期)。
+// 不认的写法 (维持现状, 台账另记): 带类型后缀的写法 (%/&/^ 等)；`&O`/`&B` 进制字面量
+//   (真组件只对 `&H` 量到读数, 其余两形仍是 Long 档 —— 留白列在 ai/039 §11.12)。
+//   `&H` 那一形已经接上：值早在第313刀按 16 位补码折过, 第三十三刀只把**档**接过来
+//   —— 两个字都不是在编��站重算的, 而是 lexer 在 Token::radixInt16 上一次性答完、
+//   parser 原样搬到 LiteralExpr::radixInt16。
+static bool vb6IntConstantValue(const Expr* e, int32_t* outVal) {
+    if (!e) return false;
+    if (e->kind == ASTNodeKind::UnaryExpr) {
+        auto& u = static_cast<const UnaryExpr&>(*e);
+        if (u.op != UnaryOp::Negate || !u.operand) return false;
+        int32_t inner = 0;
+        if (!vb6IntConstantValue(u.operand.get(), &inner)) return false;
+        if (outVal) *outVal = -inner;
+        return true;
+    }
+    if (e->kind != ASTNodeKind::LiteralExpr) return false;
+    auto& lit = static_cast<const LiteralExpr&>(*e);
+    if (lit.literalKind != LiteralKind::Integer && lit.literalKind != LiteralKind::Long)
+        return false;
+    // 只认纯十进制书写: rawText 里除数字与空白不许有别的东西 (进制前缀 &H/&O、类型后缀
+    // %/&、小数点、指数全在这里被挡下)。
+    // C30-10 第三十四刀: `3%` 是 VB6 的**显式 Integer** 字面量 (账 #195 已把它认成
+    // IntegerLiteral), 但文本带着 `%`, 上面那道闸把它挡在外面 ⇒ `VarType(3%)` 答 3。
+    // 现在剥掉**一个**尾随 `%` 再走同一道闸; `&`/`^` 仍挡在外面 (Long / LongPtr)。
+    if (lit.rawText.empty()) return false;
+    std::string digits = lit.rawText;
+    while (!digits.empty() && std::isspace(static_cast<unsigned char>(digits.back())))
+        digits.pop_back();
+    if (!digits.empty() && digits.back() == '%') digits.pop_back();
+    if (digits.empty()) return false;
+    for (char ch : digits) {
+        if (std::isspace(static_cast<unsigned char>(ch))) continue;
+        if (ch < '0' || ch > '9') return false;
+    }
+    const int64_t v = (lit.literalKind == LiteralKind::Integer)
+                          ? static_cast<int64_t>(lit.intValue) : lit.longValue;
+    if (v < -2147483648LL || v > 2147483647LL) return false;
+    if (outVal) *outVal = static_cast<int32_t>(v);
+    return true;
+}
+
+// C30-10 第三十二刀: 「这枚节点在 VB6 里是 **Integer** 档 (VarType 2)、而 inferExprType 答
+// Long」的那两形, 收成一句判据 —— 字面量那一半见上面 vb6IntConstantValue 的话;
+// `As Integer` 那一半靠 knownIntVars_ : 符号表把 Integer 记成 Long (C 侧另发 int16_t),
+// 真宽度在那张表里 (inferExprType 也从它答 Integer, 见 cgen_util_type.cpp)。
+bool CCodeGen::isNarrowIntExpr(const Expr* e) const {
+    if (!e) return false;
+    // C30-10 第五十三刀: 一元负号**先于常量折叠**判 —— 采集器 U 的 U13 `-32768` 在 VB6 里是
+    // **Long**（量字面 32768 自己就装不进 Integer），而 U14 `-iMin`（Integer 变量）仍是 Integer。
+    // 以前走下面的 vb6IntConstantValue 把负号折进去 ⇒ -32768 落在 int16 范围 ⇒ 错发 Integer。
+    if (e->kind == ASTNodeKind::UnaryExpr) {
+        const auto& unNeg = static_cast<const UnaryExpr&>(*e);
+        if (unNeg.op == UnaryOp::Negate && unNeg.operand)
+            return isNarrowIntExpr(unNeg.operand.get());
+    }
+    int32_t v = 0;
+    if (vb6IntConstantValue(e, &v)) return v >= -32768 && v <= 32767;
+    // C30-10 第三十三刀: 进制字面量那一半 —— 判据不在这里, 在 lexer (Token::radixInt16)。
+    // 这里只问那一枚标记。范围检查是**反证**而不是判据: 走过 16 位补码折叠的值必定在
+    // int16 里, 若哪天不在, 宁可退回 Long 档也不发出一个错的 (int16_t) 截断。
+    // （`&HFFFFFFFF` 那种 5~8 位的写法压根没有标记 —— 它在 VB6 里是 Long 的 -1。）
+    if (e->kind == ASTNodeKind::LiteralExpr) {
+        auto& lit = static_cast<const LiteralExpr&>(*e);
+        return lit.radixInt16 && lit.literalKind == LiteralKind::Integer
+               && lit.intValue >= -32768 && lit.intValue <= 32767;
+    }
+    // C30-10 第四十五刀: `Not <Variant>` 的结果在 VB6 里恒为 **Integer**（用户真 VB6 日志
+    // E06: `v = 5` 时 `VarType(Not v)` = 2、值 -6）。而 `Not <Boolean>` 是 **Boolean**
+    // （E05: 11/False）—— 两形不能混谈，所以这里只认「操作数本身是 Variant」那一形。
+    // 值那一半早就是对的（发码 `~vb6_VariantToLong(v)`），缺的只是装箱时的档。
+    if (e->kind == ASTNodeKind::UnaryExpr) {
+        auto& un = static_cast<const UnaryExpr&>(*e);
+        if (!un.operand) return false;
+        // `- <Integer 档>` → Integer（用户日志 E10/H06: `-i`(Integer) = 2/Integer）。
+        // 以前发码是 `(-i)`（int16 在 C 里提成 int）→ 装箱当 Long。
+        // ⚠ 已知差: `-(-32768)` 在 VB6 报错误 6，这里只会回卷 —— 编译期看不到值，
+        //   要真报错得在 RTL 那条路上（本轮不开）。
+        if (un.op == UnaryOp::Negate) return isNarrowIntExpr(un.operand.get());
+        if (un.op == UnaryOp::Not) {
+            // `Not <Variant>` / `Not <Integer 档>` → Integer（E06: -6/Integer；E08: `Not 0`
+            // 也是 2/Integer）。而 `Not <Boolean>` 是 Boolean（E05: 11/False）——
+            // Boolean 不在 narrow 表里，所以那一条自动落在外面。
+            return inferExprType(*un.operand) == Vb6Type::Variant
+                   || isNarrowIntExpr(un.operand.get());
+        }
+        return false;
+    }
+    // C30-10 第四十六刀: `+ - * \ Mod` 两侧都是 Integer 档 ⇒ 结果仍是 **Integer**
+    // （用户真 VB6 日志 F01~F04 / F06 / F06b / F09 / F11 / F12 / F14 / F20 / G09 /
+    // H01 / H02 全是 2/Integer）。溢出那一半不在这句判据里 —— 值由发码侧每一步
+    // 的 vb6_ChkInt 查（F05/F07/F08/F19 在 VB6 是错误 6），这里只答「档」。
+    // `/` 与 `^` 刻意不在内: VB6 那两条返回 Double（F10/F13）。
+    if (e->kind == ASTNodeKind::BinaryExpr) {
+        auto& bin = static_cast<const BinaryExpr&>(*e);
+        switch (bin.op) {
+        case BinaryOp::Add:
+        case BinaryOp::Sub:
+        case BinaryOp::Mul:
+        case BinaryOp::IntDiv:
+        case BinaryOp::Mod:
+            return isNarrowIntExpr(bin.left.get()) && isNarrowIntExpr(bin.right.get());
+        default:
+            return false;
+        }
+    }
+    // C30-10 第三十五刀: 内建返回档那一族 (Asc/Sgn/VarType/StrComp/月日年时分秒/Weekday/
+    // FreeFile) —— VB6 答 Integer, 而语义层与 C 侧都答 int32。两形都要认:
+    //   * 带实参的调用形 `Asc("A")` → IndexOrCallExpr(callee=IdentifierExpr)；
+    //   * 零参、不带括号的 `FreeFile` → 就是一个 IdentifierExpr。后者必须先排除用户
+    //     变量同名的情况(符号表里是 Variable), 否则一枚名叫 `month` 的普通变量会被
+    //     白白截成 int16。
+    // ⚠ 标识符这一支只能有一个出口: 以前这里先写了 `if (kind==IdentifierExpr) return
+    //   knownIntVars_||knownIntConsts_;` 的提前返回，于是后面新加的内建支**永远走不到**
+    //   (`v = FreeFile` 实测仍答 3)。现在三源合一、一次答完。
+    if (e->kind == ASTNodeKind::IdentifierExpr) {
+        auto& id = static_cast<const IdentifierExpr&>(*e);
+        const std::string lower = Symbol::toLower(id.name);
+        if (knownIntVars_.count(lower) > 0) return true;
+        // C30-10 第三十四刀: 用户 `Const` 的 Integer 档。两张表只在这里被问 ——
+        // 没有进 knownIntVars_, 所以 inferExprType / 收窄检查 / 算术那几层一字未动。
+        if (knownIntConsts_.count(lower) > 0) return true;
+        if (!builtinReturnsVbIntegerName(id.name)) return false;
+        // 遮蔽判据: 用户同名的变量/属性必须是 Variable/Property*, 那就**不**算内建。
+        // 内置符号自己标了 isBuiltin (semantic_analyzer_builtin 那两枚 lambda), 但
+        // 零参内置在 codegen 的符号表里未必查得到 (实测 `FreeFile` 裸引用查回 nullptr,
+        // 而 `FreeFile()` 走调用形是对的) —— 所以 nullptr 也按内建看。
+        const Symbol* sym = symTab_.lookup(id.name);
+        return !sym || sym->isBuiltin;
+    }
+    if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& call = static_cast<const IndexOrCallExpr&>(*e);
+        if (call.callee && call.callee->kind == ASTNodeKind::IdentifierExpr) {
+            auto& cid = static_cast<const IdentifierExpr&>(*call.callee);
+            if (builtinReturnsVbIntegerName(cid.name)) return true;
+            // C30-10 第三十八刀: `Int`/`Fix`/`Abs` 的返回档 = **实参的档**（VB6 口径；
+            // cscript 实测 `VarType(Int(5))`=2、`Fix(5)`=2、`Abs(-5)`=2，而
+            // `Int(1.7)`=5、`Abs(1.5)`=5 —— 后两个本来就是对）。
+            // 只对「实参本身就是 Integer 档」那一形答 true；Variant 实参靠运行时子类型
+            // 传播（`Abs(v)`，v 装 5 时答 2），静态不可知，留白。
+            const std::string n = Symbol::toLower(cid.name);
+            if ((n == "int" || n == "fix" || n == "abs") && call.positional.size() == 1
+                && call.named.empty())
+                return isNarrowIntExpr(call.positional[0].get());
+            // C30-10 第三十九刀: `IIf(cond, a, b)` —— VB6 返回 Variant，**子类型随被选中
+            // 的那一支**（用户真 VB6 实测：`TypeName(IIf(True, 1, 2))` = Integer）。
+            // 静态只在「两支都是 Integer 档」时答 Integer；一支 Long 一支 Integer 时结果
+            // 取决于运行时走哪支，宁可答 false（退回现在的 Long 箱）也不发一个可能错的窄箱。
+            // ⚠ 不能把 `iif` 直接塞进 builtinReturnsVbInteger：那会连
+            // `IIf(True, 1&, 2&)` / `IIf(True, 1.5, 2.5)` 一起窄化。
+            // Choose/Switch 同构，但本机没有 oracle（VBScript 无此三枚），先不开。
+            if (n == "iif" && call.positional.size() == 3 && call.named.empty())
+                return isNarrowIntExpr(call.positional[1].get())
+                       && isNarrowIntExpr(call.positional[2].get());
+            // C30-10 第五十五刀: Choose/Switch 一律发变体三目（选中支原样 + 越界选 Null，
+            // S 段 16 行全靠它），子类型是运行期的 ⇒ 不答窄档（答 true 会让存储站发
+            // `vb6_VariantInt((int16_t)(<整只 VARIANT>))` = C2440）。
+            return false;
+        }
+        return false;
+    }
+    return false;
+}
+
+// C30-11 第六十四刀: Abs/Int/Fix/Hex/Oct 的「Null 进、Null 出」变体位判据。
+//
+// 这两站（wrapVariantValue 存储站 / boxToVariant 实参站）都要先问这一句，且在**各自的
+// inferExprType switch 之前**问：那张表对 Int/Fix 答 Double、对 Hex/Oct 答 String，
+// 一旦先返回 vb6_VariantDouble(...)/vb6_VariantString(...)，就再也到不了这里了
+// （本刀第一版只改了 boxToVariant，实测发码一字未变，就是被 wrapVariantValue 的
+//  `case Vb6Type::Double` 提前收掉了）。
+//
+// 判据是**文本前缀**而不是 inferExprType(实参)==Variant：`vb6_Abs(vb6_VariantToDouble(`
+// 这串本身就证明上游那一站真把 Variant 槽折进来了，而那次推断对 `Dim nv As Variant`
+// 的局部答不出 Variant（第五十二刀那条 AbsV 分支就是这么被挡掉的）。
+static std::string mathNullFamilyV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::IndexOrCallExpr) return std::string();
+    const auto& call = static_cast<const IndexOrCallExpr&>(*node);
+    if (call.positional.size() != 1 || !call.callee
+        || call.callee->kind != ASTNodeKind::IdentifierExpr) return std::string();
+    const std::string fn = Symbol::toLower(
+        static_cast<const IdentifierExpr&>(*call.callee).name);
+    static const struct { const char* vb; const char* pre; const char* out; } kTbl[] = {
+        {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
+        {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
+        {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_FixV("},
+        {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
+        {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
+    };
+    for (const auto& m : kTbl) {
+        if (fn != m.vb) continue;
+        const std::string pre = m.pre;
+        size_t s = 0;
+        while (s < cExpr.size() && (cExpr[s] == '(' || cExpr[s] == ' ')) s++;
+        if (cExpr.compare(s, pre.size(), pre) == 0
+            && cExpr.size() >= s + pre.size() + 2 && cExpr.back() == ')') {
+            // 尾部两层右括号（一层提取、一层调用）一并剥掉。
+            std::string inner = cExpr.substr(s + pre.size(),
+                                             cExpr.size() - s - pre.size() - 2);
+            return std::string(m.out) + inner + ")";
+        }
+    }
+    return std::string();
+}
+
+// C30-11 第六十五刀: 比较符的 Null 传播。
+//
+// 读数 .temp/null/oracle_ops.vbs O5..O10：`= <> < > <= >=` 任一侧是 Null 就是 **Null**
+// （含 Null = Null，改前我们答 True）。Q12 = CStr(Null="") ⇒ 94（Null 转字符串那一站）。
+//
+// 为什么不在比较发码处直接换成变体位：比较的 C 类型现在是 int32_t，`If` 条件、
+// 赋值给 Boolean、And/Or 都按标量吃它；直接换会连带一整片调用方。
+// 本刀只动“**变体上下文**”那两站（wrapVariantValue 存储站 / boxToVariant 实参站），
+// 与第六十四刀同一形：已 emit 的 bool 结果**不动**，只把槽地址插进去一层守卫。
+//
+// 判据：① AST 是比较运算；② 发码文本是 `vb6_VariantBool(<bool>)`；
+//   ③ 能从里面抽出至少一个 **Variant 槽地址**（两种形：
+//   `vb6_VarCmp*(&nv, …)` 的 `&nv`，或 `vb6_VariantFromValue(nv)` 里的 nv）。
+// 三条不齐就不动（宁可不变，不让发码形状凭空变）。
+static bool isCmpOp65(BinaryOp op) {
+    return op == BinaryOp::Eq || op == BinaryOp::Neq || op == BinaryOp::Lt
+        || op == BinaryOp::Gt || op == BinaryOp::Le || op == BinaryOp::Ge;
+}
+
+// 从 `vb6_VariantFromValue(nv)` / `(&nv` 两种形里抽槽地址，最多两枚。
+static void collectSlotAddrs65(const std::string& s, std::vector<std::string>& out) {
+    auto pushIfNew = [&out](const std::string& a) {
+        if (a.empty() || out.size() >= 2) return;
+        for (const auto& e : out) if (e == a) return;
+        out.push_back(a);
+    };
+    auto isIdentStart = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+    };
+    auto isIdentChar = [&](char c) {
+        return isIdentStart(c) || (c >= '0' && c <= '9');
+    };
+    static const std::string kFromVal = "vb6_VariantFromValue(";
+    for (size_t p = s.find(kFromVal); p != std::string::npos;
+         p = s.find(kFromVal, p + 1)) {
+        size_t q = p + kFromVal.size();
+        if (q >= s.size() || !isIdentStart(s[q])) continue;
+        size_t e = q;
+        while (e < s.size() && isIdentChar(s[e])) e++;
+        if (e < s.size() && s[e] == ')') pushIfNew("&" + s.substr(q, e - q));
+    }
+    // `(&ident,` / `(&ident)` ：只认变体比较那一族（vb6_VarCmp*）的实参位。
+    for (size_t p = s.find("(&"); p != std::string::npos; p = s.find("(&", p + 1)) {
+        size_t q = p + 2;
+        if (q >= s.size() || !isIdentStart(s[q])) continue;
+        size_t e = q;
+        while (e < s.size() && isIdentChar(s[e])) e++;
+        if (e < s.size() && (s[e] == ',' || s[e] == ')' || s[e] == ' '))
+            pushIfNew("&" + s.substr(q, e - q));
+    }
+}
+
+std::string cgNullGuardCmpV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    // 幂等：实参站会被套两层（boxToVariant 之后又有一层装箱），第二层拿到的
+    // 已经是 vb6_VCmpNullV(...)；再包一次会变成 VARIANT 当 int32_t → C2440（实测）。
+    if (cExpr.find("vb6_VCmpNullV(") != std::string::npos) return std::string();
+    const auto& bin = static_cast<const BinaryExpr&>(*node);
+    if (!isCmpOp65(bin.op)) return std::string();
+
+    size_t s = 0;
+    // 只跳空格：不能跳 ( —— 裸形的首字符就是配对括号，跳掉它前缀判据就全部落空
+    // （第六十七刀第一版就是这么静默不命中的）。
+    while (s < cExpr.size() && cExpr[s] == ' ') s++;
+    static const std::string kWrap = "vb6_VariantBool(";
+    std::string inner;
+    if (cExpr.compare(s, kWrap.size(), kWrap) == 0 && cExpr.back() == ')') {
+        // 存储站那一支：拿到的是已经包好的 `vb6_VariantBool(<bool>)`。
+        inner = cExpr.substr(s + kWrap.size(),
+                             cExpr.size() - s - kWrap.size() - 1);
+    } else {
+        // 实参站那一支：拿到的是**裸 bool 表达式**（vb6_VariantBool 还没包），
+        // 直接把它当条件交给守卫 —— 守卫自己产变体。
+        inner = cExpr;
+    }
+
+    std::vector<std::string> slots;
+    collectSlotAddrs65(inner, slots);
+    if (slots.empty()) return std::string();
+    const std::string a = slots[0];
+    const std::string b = slots.size() > 1 ? slots[1] : "(vb6_VARIANT*)0";
+    return "vb6_VCmpNullV(" + a + ", " + b + ", " + inner + ")";
+}
+
+namespace {
+// 下面四枚只服务 cgNullGuardConcatV 的“链”解析（第六十九刀）。
+bool cgIsIdentText(const std::string& s) {
+    if (s.empty()) return false;
+    for (char ch : s) {
+        bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+            || (ch >= '0' && ch <= '9') || ch == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+bool cgIsVariantValuedText(const std::string& s) {
+    if (cgIsIdentText(s)) return true;
+    if (s.compare(0, 20, "vb6_VarConcatNullVV(") == 0) return true;
+    if (s.compare(0, 19, "vb6_VarConcatNullV(") == 0) return true;
+    return false;
+}
+
+// `vb6_CStr(vb6_VariantFromValue(X))` → X（X 允许是任意括号配平的 Variant 值表达式）
+bool cgVariantOfCStr(const std::string& s, std::string& x) {
+    static const std::string kPre = "vb6_CStr(vb6_VariantFromValue(";
+    if (s.compare(0, kPre.size(), kPre) != 0) return false;
+    if (s.size() < kPre.size() + 3 || s.back() != ')') return false;
+    if (s.compare(s.size() - 2, 2, "))") != 0) return false;
+    x = s.substr(kPre.size(), s.size() - kPre.size() - 2);
+    int depth = 0;
+    for (size_t i = 0; i < x.size(); ++i) {
+        if (x[i] == '(') ++depth;
+        else if (x[i] == ')') { if (--depth < 0) return false; }
+        else if (x[i] == '"') { for (++i; i < x.size() && x[i] != '"'; ++i) {} }
+    }
+    return depth == 0;
+}
+
+// 把 `vb6_BSTR_ConcatFree(A, B)` 的左结合树拆成叶子表（发码的链就是这形：
+// `ConcatFree(ConcatFree(a,b),c)`），叶子必须是整只 Variant 的 CStr。
+bool cgFlattenConcatLeaves(const std::string& s, std::vector<std::string>& out) {
+    static const std::string kCF = "vb6_BSTR_ConcatFree(";
+    size_t sp = 0;
+    while (sp < s.size() && s[sp] == ' ') sp++;
+    const std::string body = s.substr(sp);
+    if (body.compare(0, kCF.size(), kCF) == 0 && !body.empty() && body.back() == ')') {
+        const std::string args = body.substr(kCF.size(), body.size() - kCF.size() - 1);
+        size_t comma = std::string::npos;
+        int depth = 0;
+        for (size_t i = 0; i < args.size(); ++i) {
+            char ch = args[i];
+            if (ch == '(') ++depth;
+            else if (ch == ')') { if (--depth < 0) return false; }
+            else if (ch == '"') { for (++i; i < args.size() && args[i] != '"'; ++i) {} }
+            else if (ch == ',' && depth == 0) { comma = i; break; }
+        }
+        if (comma == std::string::npos || depth != 0) return false;
+        return cgFlattenConcatLeaves(args.substr(0, comma), out)
+            && cgFlattenConcatLeaves(args.substr(comma + 1), out);
+    }
+    std::string x;
+    if (!cgVariantOfCStr(body, x) || !cgIsVariantValuedText(x)) return false;
+    out.push_back(x);
+    return true;
+}
+}  // namespace
+
+std::string cgNullGuardConcatV(const ASTNode* node, const std::string& cExpr) {
+    if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    // 幂等：同上，第二层拿到的已经是 vb6_VarConcatNullV(...)，不能再包。
+    if (cExpr.find("vb6_VarConcatNullV(") != std::string::npos) return std::string();
+    if (cExpr.find("vb6_VarConcatNullVV(") != std::string::npos) return std::string();
+    const auto& bin = static_cast<const BinaryExpr&>(*node);
+    if (bin.op != BinaryOp::Concat) return std::string();
+
+    // 只认「两侧都是整枚 Variant 槽转出的 CStr」这一形；其它形（字面量/数值/嵌套拼接）
+    // 一律不动 —— 那些格的真值本来就等于零期值（读数 R4..R6/R10/R12）。
+    static const std::string kSlotPre = "vb6_CStr(vb6_VariantFromValue(";
+    // 从 vb6_CStr(vb6_VariantFromValue(X)) 里取回 X。第六十九刀之前只认 X = 一个标识符，
+    // 所以 `(Null & Null) & Null` 这种链永远不命中（左操作数是内层守卫的调用）。
+    // 现在 X 允许是任意 Variant 值表达式（括号要配平）。
+    auto varOf = [](const std::string& s) -> std::string {
+        if (s.compare(0, kSlotPre.size(), kSlotPre) != 0) return std::string();
+        if (s.size() < kSlotPre.size() + 3 || s.back() != ')') return std::string();
+        if (s.compare(s.size() - 2, 2, "))") != 0) return std::string();
+        std::string x = s.substr(kSlotPre.size(), s.size() - kSlotPre.size() - 2);
+        int depth = 0;
+        for (size_t i = 0; i < x.size(); ++i) {
+            if (x[i] == '(') ++depth;
+            else if (x[i] == ')') { if (--depth < 0) return std::string(); }
+            else if (x[i] == '"') { for (++i; i < x.size() && x[i] != '"'; ++i) {} }
+        }
+        if (depth != 0) return std::string();
+        return x;
+    };
+    auto isIdent = [](const std::string& s) -> bool {
+        if (s.empty()) return false;
+        for (char ch : s) {
+            bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '_';
+            if (!ok) return false;
+        }
+        return true;
+    };
+
+    size_t s = 0;
+    // 只跳空格：不能跳 ( —— 裸形的首字符就是配对括号，跳掉它前缀判据就全部落空
+    // （第六十七刀第一版就是这么静默不命中的）。
+    while (s < cExpr.size() && cExpr[s] == ' ') s++;
+    std::string body;
+    static const std::string kVStr = "vb6_VariantString(";
+    if (cExpr.compare(s, kVStr.size(), kVStr) == 0 && cExpr.back() == ')') {
+        body = cExpr.substr(s + kVStr.size(), cExpr.size() - s - kVStr.size() - 1);
+    } else {
+        body = cExpr.substr(s);
+    }
+
+    static const std::string kConcat = "vb6_BSTR_ConcatFree(";
+    if (body.compare(0, kConcat.size(), kConcat) != 0 || body.back() != ')')
+        return std::string();
+    std::string args = body.substr(kConcat.size(), body.size() - kConcat.size() - 1);
+    // 只在「两个实参都是槽 CStr」时分：按 `, ` 切一次，且两侧都不能再含未配对括号。
+    size_t comma = std::string::npos;
+    int depth = 0;
+    for (size_t i = 0; i < args.size(); ++i) {
+        char ch = args[i];
+        if (ch == '(') ++depth;
+        else if (ch == ')') { if (--depth < 0) return std::string(); }
+        else if (ch == '"') {  // 跳过字符串字面量
+            for (++i; i < args.size() && args[i] != '"'; ++i) {}
+        } else if (ch == ',' && depth == 0) { comma = i; break; }
+    }
+    if (comma == std::string::npos || depth != 0) return std::string();
+    std::string a = args.substr(0, comma);
+    std::string b = args.substr(comma + 1);
+    auto trim = [](std::string& x) {
+        size_t p = x.find_first_not_of(' ');
+        size_t q = x.find_last_not_of(' ');
+        x = (p == std::string::npos) ? std::string() : x.substr(p, q - p + 1);
+    };
+    trim(a);
+    trim(b);
+    std::vector<std::string> leaves;
+    if (!cgFlattenConcatLeaves(body, leaves) || leaves.size() < 2) return std::string();
+    if (leaves.size() == 2 && cgIsIdentText(leaves[0]) && cgIsIdentText(leaves[1]))
+        return "vb6_VarConcatNullV(&" + leaves[0] + ", &" + leaves[1] + ", " + a + ", " + b + ")";
+    // 链（≥3 叶）或叶子不是变量槽 ⇒ 整枚版逐级左结合：
+    //   ((Null & Null) & Null) 与 VB6 的链完全同一个折叠顺序。
+    std::string acc = leaves[0];
+    for (size_t i = 1; i < leaves.size(); ++i)
+        acc = "vb6_VarConcatNullVV(" + acc + ", " + leaves[i] + ")";
+    return acc;
+}
+
+// C30-11 第六十七刀: `Or`/`And` 的 Null 真值表（变体上下文那两站）。
+// 读数 oracle_logic.vbs：Or 只有另一侧是 True 才确定成 True、And 只有另一侧是 False 才确定成
+// False，其余全是 Null；`Null Or Null`/`Null And Null` 也是 Null。
+// 只认发码器自己产的那一形（实测）：
+//   vb6_VariantFromValue(( vb6_VariantToLong(X) | (int32_t)(Y) ))
+//   vb6_VariantFromValue(( vb6_VariantToLong(X) & (int32_t)(Y) ))
+//   vb6_VariantFromValue(( (int32_t)(Y) | vb6_VariantToLong(X) ))      ← 反向
+//   vb6_VariantFromValue(( vb6_VariantToLong(X) | vb6_VariantToLong(Y) )) ← 两槽
+// 任一侧不是「槽」也不是「(int32_t)(…) 字面档」就不动（宁可不变）。
+// 惰性求值：只传槽**地址**，VariantToLong 在 RTL 里算 —— 当实参先算会先报 94。
+std::string CCodeGen::cgNullGuardLogicV(const ASTNode* node, const std::string& cExpr) const {
+    if (!node || node->kind != ASTNodeKind::BinaryExpr) return std::string();
+    const auto& bin = static_cast<const BinaryExpr&>(*node);
+    // 第六十八刀：op 码表 —— 0=Or 1=And 2=Xor 3=Eqv 4=Imp（RTL 侧同一枚出口）
+    int opCode = -1;
+    switch (bin.op) {
+    case BinaryOp::Or:  opCode = 0; break;
+    case BinaryOp::And: opCode = 1; break;
+    case BinaryOp::Xor: opCode = 2; break;
+    case BinaryOp::Eqv: opCode = 3; break;
+    case BinaryOp::Imp: opCode = 4; break;
+    default: return std::string();
+    }
+    if (cExpr.find("vb6_VarLogicNullV(") != std::string::npos) return std::string();
+
+    size_t s = 0;
+    // 只跳空格：不能跳 ( —— 裸形的首字符就是配对括号，跳掉它前缀判据就全部落空
+    // （第六十七刀第一版就是这么静默不命中的）。
+    while (s < cExpr.size() && cExpr[s] == ' ') s++;
+    static const std::string kFrom = "vb6_VariantFromValue(";
+    std::string inner;
+    if (cExpr.compare(s, kFrom.size(), kFrom) == 0 && cExpr.back() == ')') {
+        inner = cExpr.substr(s + kFrom.size(), cExpr.size() - s - kFrom.size() - 1);
+    } else {
+        // 实参站/存储站拿到的可能是**裸**的 `(<左> | <右>)`（FromValue 还没包）——
+        // 与第六十五/六十六刀同一个坑：两条形都得认，否则永远不命中。
+        inner = cExpr.substr(s);
+    }
+    // 剥掉外层那对全包括号
+    if (inner.size() < 3 || inner.front() != '(' || inner.back() != ')')
+        return std::string();
+    inner = inner.substr(1, inner.size() - 2);
+
+    auto trim2 = [](std::string x) {
+        size_t p = x.find_first_not_of(' ');
+        size_t q = x.find_last_not_of(' ');
+        return (p == std::string::npos) ? std::string() : x.substr(p, q - p + 1);
+    };
+
+    // 深度 0 上找运算符（引号内的不算）
+    auto findTop = [](const std::string& s, const std::string& ops) -> size_t {
+        int depth = 0;
+        for (size_t i = 0; i < s.size(); ++i) {
+            char ch = s[i];
+            if (ch == '(') ++depth;
+            else if (ch == ')') --depth;
+            else if (ch == '"') { for (++i; i < s.size() && s[i] != '"'; ++i) {} }
+            else if (depth == 0 && ops.find(ch) != std::string::npos) return i;
+        }
+        return std::string::npos;
+    };
+
+    std::string left, right;
+    int effOp = -1;
+    if (inner.compare(0, 2, "~(") == 0 && inner.back() == ')') {
+        // Eqv 的发码形：~(A ^ B)（外层那对全包括号已剥）
+        const std::string sub = inner.substr(2, inner.size() - 3);
+        const size_t p = findTop(sub, "^");
+        if (p == std::string::npos) return std::string();
+        left = trim2(sub.substr(0, p));
+        right = trim2(sub.substr(p + 1));
+        effOp = 3;
+    } else {
+        const size_t p = findTop(inner, "|&^");
+        if (p == std::string::npos) return std::string();
+        const std::string rhs = trim2(inner.substr(p + 1));
+        if (inner[p] == '|') {
+            const std::string l = trim2(inner.substr(0, p));
+            // Imp 的发码形：(~A) | B
+            if (l.size() > 4 && l.compare(0, 2, "(~") == 0 && l.back() == ')') {
+                left = trim2(l.substr(2, l.size() - 3));
+                right = rhs;
+                effOp = 4;
+            } else {
+                left = l;
+                right = rhs;
+                effOp = 0;
+            }
+        } else {
+            left = trim2(inner.substr(0, p));
+            right = rhs;
+            effOp = (inner[p] == '&') ? 1 : 2;
+        }
+    }
+    // 文本形与 AST 运算符必须对上，否则说明歧义（宁可不命中也不发错）
+    if (effOp != opCode) return std::string();
+
+    static const std::string kToLong = "vb6_VariantToLong(";
+    auto slotOfSide = [&](const std::string& x) -> std::string {
+        if (x.compare(0, kToLong.size(), kToLong) != 0 || x.back() != ')')
+            return std::string();
+        std::string id = x.substr(kToLong.size(), x.size() - kToLong.size() - 1);
+        if (id.empty()) return std::string();
+        for (char ch : id) {
+            bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9') || ch == '_';
+            if (!ok) return std::string();
+        }
+        return id;
+    };
+    static const std::string kLit = "(int32_t)(";
+    auto litOfSide = [&](const std::string& x) -> std::string {
+        if (x.compare(0, kLit.size(), kLit) != 0 || x.back() != ')')
+            return std::string();
+        return x.substr(kLit.size(), x.size() - kLit.size() - 1);
+    };
+
+    const std::string idL = slotOfSide(left);
+    const std::string idR = slotOfSide(right);
+    const std::string litL = idL.empty() ? litOfSide(left) : std::string();
+    const std::string litR = idR.empty() ? litOfSide(right) : std::string();
+    if (idL.empty() && litL.empty()) return std::string();
+    if (idR.empty() && litR.empty()) return std::string();
+    const std::string slotA = idL.empty() ? "(vb6_VARIANT*)0" : ("&" + idL);
+    const std::string slotB = idR.empty() ? "(vb6_VARIANT*)0" : ("&" + idR);
+    const std::string lit = !litL.empty() ? litL : (!litR.empty() ? litR : "0");
+    const int mask = (idL.empty() ? 0 : 1) | (idR.empty() ? 0 : 2);
+    if (mask == 0) return std::string();
+    // 字面量那一侧的静态类型：VB6 里 `Null Or True` = Boolean True、`Null And False`
+    // = Boolean False，而 C 的 `(int32_t)((-1))` 分不出 Boolean 与整数 ⇒ 在发码时问 AST。
+    int litIsBool = 0;
+    {
+        const auto& be = static_cast<const BinaryExpr&>(*node);
+        const Expr* litSide = !litL.empty() ? be.left.get() : (!litR.empty() ? be.right.get() : nullptr);
+        if (litSide) {
+            const Vb6Type lt = inferExprType(const_cast<Expr&>(*litSide));
+            // 0 = Long（默认）, 1 = Boolean（Null Or True ⇒ Boolean True）,
+            // 2 = Integer（Null Or 5 ⇒ **Integer** 5，VB6 IDE 实测的类型）。
+            // 先看字面量自己的档：inferExprType 对无后缀整数答 Long，
+            // 而 VB6 的 `5` 是 Integer ⇒ 以 LiteralKind 为准。
+            if (litSide->kind == ASTNodeKind::LiteralExpr) {
+                switch (static_cast<const LiteralExpr&>(*litSide).literalKind) {
+                case LiteralKind::Boolean: litIsBool = 1; break;
+                case LiteralKind::Integer: litIsBool = 2; break;
+                default: break;
+                }
+            } else if (litSide->kind == ASTNodeKind::UnaryExpr) {
+                // `-1` 这种：AST 是一元负 + Integer 字面量，VB6 里它的档仍是 Integer
+                // （Null Or -1 = Integer -1，VB6 IDE 实测 D5）。
+                const auto& ue = static_cast<const UnaryExpr&>(*litSide);
+                if (ue.op == UnaryOp::Negate && ue.operand
+                    && ue.operand->kind == ASTNodeKind::LiteralExpr) {
+                    const auto lk = static_cast<const LiteralExpr&>(*ue.operand).literalKind;
+                    if (lk == LiteralKind::Boolean) litIsBool = 1;
+                    else if (lk == LiteralKind::Integer) litIsBool = 2;
+                }
+            } else if (lt == Vb6Type::Boolean) {
+                litIsBool = 1;
+            } else if (lt == Vb6Type::Integer) {
+                litIsBool = 2;
+            }
+        }
+    }
+    return "vb6_VarLogicNullV(" + std::to_string(opCode) + ", " + slotA + ", "
+         + slotB + ", " + lit + ", " + std::to_string(mask) + ", "
+         + std::to_string(litIsBool) + ")";
+}
+
 std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cExpr) const {
     if (!valueNode) return "vb6_VariantEmpty()";
     
@@ -3180,6 +4309,33 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         // 现在字面量也落到 inferExprType → boxToVariant 这一处权威: 后者对 Boolean
         // 发的是同一个 `(int16_t)` 收窄形, 所以发码逐字节不变, 但**档位只有一份**。
         // (字面量落在 inferExprType 的白名单里, 见下面那个 kind 判断。)
+    }
+
+    // C30-11 第六十五刀: Abs/Int/Fix/Hex/Oct 的 Null 传播（必须在下面的
+    // inferExprType switch 之前问，否则被 case Double/String 提前收掉）。
+    {
+        std::string mathV64 = mathNullFamilyV(valueNode, cExpr);
+        if (!mathV64.empty()) return mathV64;
+    }
+
+    // C30-11 第六十七刀: Or/And 的 Null 真值表（同上，要在 switch 之前）。
+    {
+        std::string lgV67 = cgNullGuardLogicV(valueNode, cExpr);
+        if (!lgV67.empty()) return lgV67;
+    }
+
+    // C30-11 第六十六刀: `&` 的双 Null 折叠（同上，要在 switch 之前；
+    // 那张表对这一形答 String，答了就成 vb6_VariantString 再也没机会折 Null）。
+    {
+        std::string catV66 = cgNullGuardConcatV(valueNode, cExpr);
+        if (!catV66.empty()) return catV66;
+    }
+
+    // C30-11 第六十五刀: 比较符的 Null 传播（同上，必须在 switch 之前；
+    // 那张表对比较答 Boolean，答了就变回 Double 包）。
+    {
+        std::string cmpV65 = cgNullGuardCmpV(valueNode, cExpr);
+        if (!cmpV65.empty()) return cmpV65;
     }
 
     // Fix 090d2: C 表达式顶层已是 vb6_VARIANT 时直接返回, 不再包装 —
@@ -3236,6 +4392,39 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         if (!viewBox171.empty()) return viewBox171;
     }
 
+    // 账 #615 (第353刀): **UDT 成员的整数组读** (`w = h.Items`) 的装箱档 ——
+    // 以前整枚落进下面那张 inferExprType 表, 而它对「成员是动态数组」答的是**元素**档 (Long)
+    // ⇒ 发 `vb6_VariantLong(h.Items)` = 把描述符指针截进 int32 (cl 一声不响, 运行期才炸)
+    // ⇒ VarType 答 3 而不是 8195 (VB6 那一形是数组)。
+    // 这一问必须排在那张表**之前** (同 §B163 裸数组名那一问的次序理由: 那张表答的是元素档)。
+    // ⚠ 只认**一维**: `vb6_VariantFromValue` 的 _Generic 没有 vb6_SafeArrayND* 那一档,
+    // 多维载体落 default = vb6_VariantObject ⇒ 对一枚描述符发 Release = 野 Release 堆损坏
+    // (台账 §B85 那一族) ⇒ 多维不接, 维持今天的形状。
+    if (valueNode->kind == ASTNodeKind::MemberAccessExpr
+        || valueNode->kind == ASTNodeKind::WithMemberExpr) {
+        std::string ownerUdt615;
+        std::string memberName615;
+        if (valueNode->kind == ASTNodeKind::MemberAccessExpr) {
+            auto& ma615 = static_cast<MemberAccessExpr&>(*valueNode);
+            ownerUdt615 = inferUdtTypeOfExpr(*ma615.object);
+            memberName615 = ma615.memberName;
+        } else {
+            auto& wm615 = static_cast<WithMemberExpr&>(*valueNode);
+            memberName615 = wm615.memberName;
+            if (!withObjectVars_.empty()) {
+                auto itU615 = knownUdtVars_.find(Symbol::toLower(withObjectVars_.back()));
+                if (itU615 != knownUdtVars_.end()) ownerUdt615 = itU615->second;
+            }
+        }
+        if (!ownerUdt615.empty() && !memberName615.empty()) {
+            MemberArrayDecl mad615;
+            if (resolveMemberArrayDecl(ownerUdt615, std::string(), memberName615, mad615)
+                && mad615.ok && mad615.arrayRank <= 1) {
+                return "vb6_VariantFromValue(" + cExpr + ")";
+            }
+        }
+    }
+
     // 使用inferExprType推断表达式类型
     if (valueNode->kind == ASTNodeKind::BinaryExpr ||
         valueNode->kind == ASTNodeKind::UnaryExpr ||
@@ -3244,6 +4433,16 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         valueNode->kind == ASTNodeKind::IndexOrCallExpr ||
         valueNode->kind == ASTNodeKind::MemberAccessExpr) {
         Vb6Type vtype = inferExprType(static_cast<Expr&>(*valueNode));
+        // C30-10 第四十一刀: 存储站与实参站对齐（两站共用同一柄尺 isNarrowIntExpr）。
+        // 证据（用户真 VB6 日志 C20/C21/C22/H04/H05）：`t = Int(5)` / `Fix(5)` /
+        // `Abs(-5)` / `Abs(i)` 在 VB6 里全是 Integer；而这条路以前按 inferExprType 的
+        // Double 直接装 VT_R8 —— 第三十八刀只落到了实参站（本函数的 case Double 不查
+        // 窄化）。判据提到 switch 之前后：case Long / case Integer 两档发出的字符串与
+        // 末尾 boxToVariant 逐字相同（发码不变），只有 Int/Fix/Abs 这族由 VT_R8 变 VT_I2。
+        // ⚠ `Abs(v)`（Variant 实参）依旧不在内：静态不可知，要 RTL 按运行时子类型答，
+        //   那是另一刀（台账 §11.20 记着）。
+        if (isNarrowIntExpr(static_cast<const Expr*>(valueNode)))
+            return "vb6_VariantInt((int16_t)(" + cExpr + "))";
         // <vbeclipse>: 这张表只留"与 _Generic 结果一致"的四档 (String/Long/Integer/Double)。
         // Boolean/Byte/Single/Date/Currency 交给末尾的 boxToVariant —— 以前两份表各写一份
         // 档位 (账 #123 改了这份的 Byte、Fix 198 改了那份的 Boolean), 于是同一类型的装箱
@@ -3251,7 +4450,14 @@ std::string CCodeGen::wrapVariantValue(ASTNode* valueNode, const std::string& cE
         switch (vtype) {
             case Vb6Type::String:    return "vb6_VariantString(" + cExpr + ")";
             case Vb6Type::Long:
-            case Vb6Type::Integer:   return "vb6_VariantLong(" + cExpr + ")";
+                // C30-10 第三十二刀: 这档里有两形 VB6 答的是 **Integer** (字面量按值取型;
+                // `As Integer` 变量符号表记成 Long), 不在这一站抢装 VT_I4 —— 交给末尾那个
+                // 唯一权威 boxToVariant (判据 = isNarrowIntExpr, 两位共用一处)。
+                if (isNarrowIntExpr(static_cast<const Expr*>(valueNode))) break;
+                return "vb6_VariantLong(" + cExpr + ")";
+            // `Dim i As Integer` / CInt(...) 这一族以前也装成 VT_I4 (同一行 d121 的
+            // int=3)。VB6 对 Integer 就是 VT_I2 —— 显式收窄, 不靠 _Generic 猜 short。
+            case Vb6Type::Integer:   return "vb6_VariantInt((int16_t)(" + cExpr + "))";
             case Vb6Type::Double:    return "vb6_VariantDouble(" + cExpr + ")";
             default: break;
         }
@@ -3315,6 +4521,21 @@ bool CCodeGen::cExprIsVariantCarrier(const std::string& cExpr) const {
 // 不显式改写的 (Integer/Long/Double/String/Object) 在 _Generic 下与 VB6 同档, 保持
 // 原样以免动到存量发码。
 std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
+    // C30-11 第六十五刀: 实参站的比较符 Null 传播（与存储站同一个判据）。
+    {
+        std::string cmpV65 = cgNullGuardCmpV(expr, cExpr);
+        if (!cmpV65.empty()) return cmpV65;
+    }
+    // C30-11 第六十七刀: 实参站的 Or/And Null 真值表。
+    {
+        std::string lgV67 = cgNullGuardLogicV(expr, cExpr);
+        if (!lgV67.empty()) return lgV67;
+    }
+    // C30-11 第六十六刀: 实参站的 `&` 双 Null 折叠（拿到的是裸 vb6_BSTR_ConcatFree(...)）。
+    {
+        std::string catV66 = cgNullGuardConcatV(expr, cExpr);
+        if (!catV66.empty()) return catV66;
+    }
     // Fix <VBFlexGridDemo>: 实参是裸 COM 调用结果 (vb6_ComCall / vb6_ComGetProp /
     // vb6_ComGetObjectProp 返回 void*, 承载一个 COM VARIANT*) 时, 必须先用
     // vb6_VariantFromComResult 解引用成 vb6_VARIANT (深拷贝并释放原 VARIANT*),
@@ -3342,6 +4563,17 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
                    || (cExpr.compare(cs, 15, "vb6_ComGetProp(") == 0);
         if (comRes) return "vb6_VariantFromComResult(" + cExpr + ")";
     }
+    // C30-11 后记: 前期绑定 COM 方法的 Boolean 返回 (vb6_ComCallBool) —— 同一发调用、
+    // 只是名字分档。VB6 的 `v = fso.FileExists(p)` 里 v 是 Variant(Boolean), 默认档会
+    // 装成 VT_I4(-1)/VT_I2; 这里让它进 Boolean 那一档 (VB6_CStr / VarType 才看得对)。
+    {
+        size_t bs = 0;
+        while (bs < cExpr.size()
+               && (cExpr[bs] == '(' || cExpr[bs] == ' ' || cExpr[bs] == '\t'
+                   || cExpr[bs] == '\n' || cExpr[bs] == '\r')) bs++;
+        if (cExpr.compare(bs, 17, "vb6_ComCallBool(") == 0)
+            return "vb6_VariantBool((int16_t)(" + cExpr + "))";
+    }
     // 账 #305 新账 #407 第一百七十一刀: 与上面 wrapVariantValue 同一问、同一出口 (视图值进装箱站)。
     // 这一站也必须在 inferExprType 之前问: 它对视图名给的是接口模块名，不是 C 侧那一档。
     {
@@ -3352,6 +4584,61 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     // 已经是 VARIANT 的表达式交给 _Generic 的 vb6_VariantIdentity 档恒等直传,
     // 绝不再按 VB 类型强装 (否则就是上面那条双装)。
     if (cExprIsVariantCarrier(cExpr)) return "vb6_VariantFromValue(" + cExpr + ")";
+    // C30-10 第五十二刀: `Abs(Variant)` 的**变体位**（装箱站）走运行时子类型阶梅（C23）。
+    // 真 VB6 GProbe AB 段: Abs(Byte)=Byte(17) / Abs(Integer)=Integer / Abs(CInt(-32768))=Long /
+    // Abs(Long)=Long / Abs(Single)=Single / Abs(Double)=Double / Abs(Currency)=Currency /
+    // Abs(Boolean)=Integer / Abs(Empty)=Integer 0 / Abs(Null)=Null / Abs(Date)=Date /
+    // Abs("5")=Double / Abs("x")=错误 13。旧站只有 double 出口 ⇒ 13 档全堆成 VT_R8。
+    //
+    // **只在这一站改名，绝不在调用站改名**：`Abs` 的结果有两副消费面 ——
+    // 变体位（`VarType/TypeName/赋 Variant/CStr`）过装箱站，数值位
+    // （`Abs(v) < 0.001`、`Abs(v) * 2`、比较、赋 Double）**不过**这一站。
+    // 上一版把改名放进调用站 fixup，实测 pclinedraw 当场红：
+    // `vb6_AbsV(...) < 0.001` ⇒ cl C2440（float→vb6_VARIANT）+ C2088（struct 不能比）。
+    if (expr && expr->kind == ASTNodeKind::IndexOrCallExpr) {
+        const auto& call64 = static_cast<const IndexOrCallExpr&>(*expr);
+        if (call64.positional.size() == 1 && call64.callee
+            && call64.callee->kind == ASTNodeKind::IdentifierExpr) {
+            const std::string fn64 = Symbol::toLower(
+                static_cast<const IdentifierExpr&>(*call64.callee).name);
+            // C30-11 第六十四刀: 这一族真值都是“Null 进、Null 出”（读数 oracle_num.vbs：
+            // Abs/Int/Fix/Hex/Oct(Null) = Null）。它们以前全落在下方装箱表里，Null 到那里
+            // 已被折成 0（Hex/Oct 还要先过第六十三刀新加的 vb6_VariantToLong 严格门 ⇒ 94）。
+            // 处置：整只槽交给 RTL 的 *V 出口，先判 vtNull 再算。
+            //
+            // ⚠ 判据是**文本前缀**而不是 inferExprType：`vb6_Abs(vb6_VariantToDouble(` 这串
+            //   本身就证明上游那一站真把 Variant 槽折进来了。旧版（第五十二刀的 Abs 那一分支）
+            //   还要再问一句 inferExprType(实参)==Variant，而这个推断对 `Dim nv As Variant`
+            //   的局部答不出 Variant ⇒ 整条路根本没走到（本刀实测：改前发码仍是
+            //   vb6_VariantDouble(vb6_Abs(vb6_VariantToDouble(nv)))，Abs(Null) 给 0）。
+            static const struct { const char* vb; const char* pre; const char* out; } k64[] = {
+                {"abs", "vb6_Abs(vb6_VariantToDouble(", "vb6_AbsV("},
+                {"int", "vb6_Int(vb6_VariantToDouble(", "vb6_IntV("},
+                {"fix", "vb6_Fix(vb6_VariantToDouble(", "vb6_FixV("},
+                {"hex", "vb6_Hex(vb6_VariantToLong(",   "vb6_HexV("},
+                {"oct", "vb6_Oct(vb6_VariantToLong(",   "vb6_OctV("},
+            };
+            for (const auto& m64 : k64) {
+                if (fn64 != m64.vb) continue;
+                const std::string pre64 = m64.pre;
+                size_t s64 = 0;
+                while (s64 < cExpr.size() && (cExpr[s64] == '(' || cExpr[s64] == ' ')) s64++;
+                if (cExpr.compare(s64, pre64.size(), pre64) == 0
+                    && cExpr.size() >= s64 + pre64.size() + 2 && cExpr.back() == ')') {
+                    // 尾部两层右括号（一层提取、一层调用）一并剥掉。
+                    std::string inner64 = cExpr.substr(s64 + pre64.size(),
+                                                       cExpr.size() - s64 - pre64.size() - 2);
+                    return std::string(m64.out) + inner64 + ")";
+                }
+            }
+        }
+    }
+    // C30-10 第三十二刀 格①: 常整数 / `As Integer` 变量按 VB6 的**Integer 档**装箱。
+    // inferExprType 对 `1` 与 `As Integer` 变量都答 Long (C 侧 int32 的口径), 落 _Generic
+    // 的 `int:` 档 ⇒ VT_I4 (VarType 3 / TypeName "Long"); VB6 答 Integer (夹具
+    // tests/dict_native d121 的 int=3, 真值 2)。判据与口径见 isNarrowIntExpr 那段话。
+    if (isNarrowIntExpr(expr))
+        return "vb6_VariantInt((int16_t)(" + cExpr + "))";
     switch (inferExprType(*expr)) {
     case Vb6Type::Boolean:
         // 形参是 int16_t: 显式收窄, 兼容 _Bool/int 两种 C 侧布尔表示.
@@ -3362,6 +4649,11 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
         return "vb6_VariantSingle((float)(" + cExpr + "))";
     case Vb6Type::Date:
         return "vb6_VariantDate(" + cExpr + ")";
+    // C30-10 第三十二刀 格②: Currency (C3 用 double 承载值, 见 vb6rtl_misc.c 的
+    // vb6_CCur) 以前落 _Generic 的 `double:` 档 ⇒ VT_R8 (VarType 5 / "Double"),
+    // VB6 是 VT_CY (6 / "Currency")。出口是 vb6_VariantCur (10000 倍定点)。
+    case Vb6Type::Currency:
+        return "vb6_VariantCur(" + cExpr + ")";
     /* ai/032 §6.9 收口: C3 扩展的无符号/小整型族 (SByte 8 / UInteger 16 / ULong 32 /
      * ULongLong 64 —— `U<x>` 恒等于「<x> 的无符号版」, 见 types.hpp:41-49)。
      *   以前这四档**没有臂**, 全落 default -> vb6_VariantFromValue, 也就是交给
@@ -3397,5 +4689,57 @@ std::string CCodeGen::boxToVariant(Expr* expr, const std::string& cExpr) const {
     default: break;
     }
     return "vb6_VariantFromValue(" + cExpr + ")";
+}
+
+// ============================================================
+// 账 #611: 工程内 .cls 的默认成员名 (AST 侧)。
+//
+// scripts/check_uc_default_member.ps1 的 R1 要求「认这条属性行的文件恰好一个」
+// —— 所以 .cls 这一支也住在本文件, driver 只调它填表, 不许在别处再写一份解析。
+// 与 findUcDefaultMember 同一份判据 (属性名后缀 + 值字面为 0 = DISPID_VALUE,
+// -4 是 NewEnum 不折, 成员名取点号前那段保留原大小写), 差别只在输入形态:
+//   · UC    —— .ctl 代码段文本, 还要同名 `Property Get ... As <型>` 定返回型;
+//   · .cls  —— parser 已把属性行收成过程体/模块头的 AttributeStmt, 且不要求
+//              同名 Property Get (JSonWrite.cls 的默认成员是 Property Let Item)。
+// ============================================================
+bool findClassDefaultMember(const Module& mod, std::string& propOut) {
+    auto scanOne611 = [&propOut](const AttributeStmt& a611) {
+        const std::string low611 = Symbol::toLower(a611.attrName);
+        static const std::string kSuffix611 = ".vb_usermemid";
+        if (low611.size() <= kSuffix611.size()
+            || low611.compare(low611.size() - kSuffix611.size(),
+                              kSuffix611.size(), kSuffix611) != 0) return false;
+        if (!a611.value || a611.value->kind != ASTNodeKind::LiteralExpr) return false;
+        std::string raw611;
+        for (char c611 : static_cast<const LiteralExpr&>(*a611.value).rawText) {
+            if (!std::isspace(static_cast<unsigned char>(c611))) raw611 += c611;
+        }
+        if (raw611 != "0") return false;   // 只认 DISPID_VALUE
+        const size_t dot611 = a611.attrName.find('.');
+        if (dot611 == std::string::npos || dot611 == 0) return false;
+        propOut = a611.attrName.substr(0, dot611);
+        return true;
+    };
+    for (const auto& d611 : mod.declarations) {
+        if (!d611) continue;
+        const StmtList* body611 = nullptr;
+        if (d611->kind == ASTNodeKind::PropertyDecl) {
+            body611 = &static_cast<const PropertyDecl&>(*d611).body;
+        } else if (d611->kind == ASTNodeKind::FunctionDecl) {
+            body611 = &static_cast<const FunctionDecl&>(*d611).body;
+        } else if (d611->kind == ASTNodeKind::SubDecl) {
+            body611 = &static_cast<const SubDecl&>(*d611).body;
+        }
+        if (!body611) continue;
+        for (const auto& s611 : *body611) {
+            if (!s611 || s611->kind != ASTNodeKind::AttributeStmt) continue;
+            if (scanOne611(static_cast<const AttributeStmt&>(*s611))) return true;
+        }
+    }
+    // 少数工程把属性行留在模块头 (VB_Name 那一组), 同一判据再扫一遍。
+    for (const auto& a611 : mod.attributes) {
+        if (a611 && scanOne611(*a611)) return true;
+    }
+    return false;
 }
 } // namespace vb6c3

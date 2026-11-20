@@ -1,0 +1,382 @@
+VERSION 5.00
+Begin VB.PropertyPage ppGIFpreview 
+   Caption         =   "GIF 文件选择"
+   ClientHeight    =   2400
+   ClientLeft      =   0
+   ClientTop       =   0
+   ClientWidth     =   5565
+   PaletteMode     =   0  'Halftone
+   ScaleHeight     =   160
+   ScaleMode       =   3  'Pixel
+   ScaleWidth      =   371
+   Begin VB.CommandButton cmdAccel 
+      Caption         =   ">"
+      Enabled         =   0   'False
+      Height          =   390
+      Index           =   1
+      Left            =   5280
+      TabIndex        =   7
+      ToolTipText     =   "快放"
+      Top             =   1980
+      Visible         =   0   'False
+      Width           =   240
+   End
+   Begin VB.CommandButton cmdAccel 
+      Caption         =   "<"
+      Enabled         =   0   'False
+      Height          =   390
+      Index           =   0
+      Left            =   5055
+      TabIndex        =   6
+      ToolTipText     =   "慢放"
+      Top             =   1980
+      Visible         =   0   'False
+      Width           =   225
+   End
+   Begin VB.CommandButton cmdOpen 
+      Caption         =   "浏览文件"
+      Height          =   420
+      Left            =   3480
+      TabIndex        =   1
+      Top             =   15
+      Width           =   2040
+   End
+   Begin VB.CommandButton cmdAnimate 
+      Caption         =   "动画文件(&A)"
+      Enabled         =   0   'False
+      Height          =   390
+      Left            =   3480
+      TabIndex        =   0
+      Top             =   1980
+      Visible         =   0   'False
+      Width           =   1575
+   End
+   Begin prjNewAniGif.ucGIF ucGIF1 
+      Height          =   1965
+      Left            =   15
+      Tag             =   "227131"
+      Top             =   15
+      Width           =   3405
+      _ExtentX        =   6006
+      _ExtentY        =   3466
+      fileLen         =   0
+   End
+   Begin VB.Label Label1 
+      Height          =   615
+      Left            =   3480
+      TabIndex        =   3
+      Top             =   735
+      Width           =   2040
+   End
+   Begin VB.Label lblLoops 
+      Height          =   255
+      Left            =   3480
+      TabIndex        =   5
+      Top             =   1755
+      Width           =   2010
+   End
+   Begin VB.Label lblFile 
+      Alignment       =   2  'Center
+      Caption         =   "没有文件选择"
+      BeginProperty Font 
+         Name            =   "Tahoma"
+         Size            =   8.25
+         Charset         =   0
+         Weight          =   700
+         Underline       =   0   'False
+         Italic          =   0   'False
+         Strikethrough   =   0   'False
+      EndProperty
+      ForeColor       =   &H8000000D&
+      Height          =   285
+      Left            =   30
+      TabIndex        =   2
+      Top             =   2010
+      Width           =   3405
+   End
+   Begin VB.Label lblFrames 
+      Caption         =   "快速查看"
+      Height          =   270
+      Left            =   3480
+      TabIndex        =   4
+      Top             =   510
+      Width           =   2055
+   End
+   Begin VB.Label lblTime 
+      Height          =   225
+      Left            =   3480
+      TabIndex        =   9
+      Top             =   1560
+      Width           =   2025
+   End
+   Begin VB.Label lblReduced 
+      ForeColor       =   &H000000C0&
+      Height          =   225
+      Left            =   3480
+      TabIndex        =   8
+      Top             =   1350
+      Width           =   2025
+   End
+End
+Attribute VB_Name = "ppGIFpreview"
+Attribute VB_GlobalNameSpace = False
+Attribute VB_Creatable = False
+Attribute VB_PredeclaredId = False
+Attribute VB_Exposed = False
+'****************************************************************************
+'人人为我，我为人人
+'枕善居汉化收藏整理
+'发布日期：05/04/08
+'描  述：一个Gif 动画播放控件
+'网  站：http://www.mndsoft.com/blog/
+'e-mail：mnd@mndsoft.com
+'OICQ  : 88382850
+'****************************************************************************
+Option Explicit
+Private bDlgActive As Boolean
+Private Declare Sub CopyMemory Lib "kernel32.dll" Alias "RtlMoveMemory" (ByRef Destination As Any, ByRef Source As Any, ByVal Length As Long)
+
+Private Type OPENFILENAME
+     lStructSize As Long
+     hwndOwner As Long
+     hInstance As Long
+     lpstrFilter As String
+     lpstrCustomFilter As String
+     nMaxCustFilter As Long
+     nFilterIndex As Long
+     lpstrFile As String
+     nMaxFile As Long
+     lpstrFileTitle As String
+     nMaxFileTitle As Long
+     lpstrInitialDir As String
+     lpstrTitle As String
+     flags As Long
+     nFileOffset As Integer
+     nFileExtension As Integer
+     lpstrDefExt As String
+     lCustData As Long
+     lpfnHook As Long
+     lpTemplateName As String
+End Type
+Private Declare Function GetOpenFileName Lib "comdlg32.dll" Alias "GetOpenFileNameA" (pOpenfilename As OPENFILENAME) As Long
+Private Const ucWidth As Long = 227
+Private Const ucHeight As Long = 121
+Private Const ucTop As Long = 1
+Private Const ucLeft As Long = 1
+
+
+Private Sub cmdAccel_Click(Index As Integer)
+Dim frameNr As Long
+On Error Resume Next    ' in case user exceeds Integer delay value while slowing down frames
+For frameNr = 1 To ucGIF1.gifFrameCount
+    With ucGIF1.Frame(frameNr)
+        If Index = 0 Then ' slow down animation
+            .frameDelay = .frameDelay + 50
+        Else
+            .frameDelay = .frameDelay - 50
+        End If
+    End With
+Next
+
+End Sub
+
+Private Sub cmdAnimate_Click()
+If cmdAnimate.Caption = "&Animate File" Then
+    cmdAnimate.Caption = "停止动画(&S)"
+    ucGIF1.Animate = True
+Else
+    ucGIF1.Animate = False
+    cmdAnimate.Caption = "动画文件(&A)"
+    lblFrames.Caption = "帧号: " & ucGIF1.gifFrameCount
+    If ucGIF1.gifMaxLoops Then lblLoops = "最大循环: " & Abs(ucGIF1.gifMaxLoops)
+End If
+
+End Sub
+
+Private Sub cmdOpen_Click()
+If GetFileName("") Then PropertyPage.Changed = True
+End Sub
+
+Private Sub PropertyPage_ApplyChanges()
+Dim ucActive As ucGIF, ucFileName As String
+Set ucActive = SelectedControls(0)
+ucActive.LoadGIF lblFile.Tag
+Set ucActive = Nothing
+End Sub
+
+Private Sub PropertyPage_EditProperty(PropertyName As String)
+
+If PropertyName = "gifFileName" Then
+    PropertyPage.Changed = False
+    
+    Dim ucActive As ucGIF, ucFileName As String
+    Set ucActive = SelectedControls(0)
+    ucFileName = ucActive.gifFileName
+    Set ucActive = Nothing
+    If ucFileName = "{none}" Then
+        lblFile.Caption = "没有选择文件"
+    Else
+        GetFileName ucFileName
+    End If
+End If
+End Sub
+
+Private Function GetFileName(fileName As String) As Boolean
+
+On Error GoTo ExitRoutine:
+
+bDlgActive = True
+
+Dim fileTitle As String
+Dim aniTime As Long, aniNr As Long, frameDelay As Integer
+Dim resizeCx As Long, resizeCy As Long, bShrinkFor100Pct As Boolean
+Dim sDetails As String, borderSize As Long
+
+If Len(fileName) Then
+    fileTitle = "From Design View User Control"
+Else
+    fileName = ShowBrowser(fileTitle)
+    If fileName = "" Then GoTo ExitRoutine
+    lblFile.Tag = fileName
+End If
+
+With ucGIF1
+
+    .Visible = False
+    If .Animate Then Call cmdAnimate_Click
+    .LoadGIF fileName
+
+    lblFrames.Caption = "帧号: " & .gifFrameCount
+    Select Case .gifTransparencyState
+    Case NotTransparent
+        sDetails = "透明: 否" & vbNewLine
+    Case AllTransaprent
+        sDetails = "透明: 是" & vbNewLine
+    Case PartialTransparent
+        sDetails = "透明: 混合" & vbNewLine
+    End Select
+
+    sDetails = sDetails & "宽度: " & .gifLogicalWindowCx & vbNewLine
+    sDetails = sDetails & "高度: " & .gifLogicalWindowCy & vbNewLine
+    
+    resizeCx = ucWidth
+    resizeCy = ucHeight
+    bShrinkFor100Pct = True
+    .ScaleLogWinToSize resizeCx, resizeCy, bShrinkFor100Pct, borderSize
+
+    If bShrinkFor100Pct Then  ' the gif will fit in our max window size
+        resizeCx = .gifLogicalWindowCx
+        resizeCy = .gifLogicalWindowCy
+        .Stretch = NoResizeFrames
+        lblReduced.Caption = "示例: 实际大小"
+        lblReduced.ForeColor = vbBlue
+    Else            ' gif is too big, need to scale down
+        .AutoSize = False
+        .Stretch = ScaleFrames
+        ' light generally looks better, depending on how much is being scaled down
+        .StretchMethod = scaleLight
+        lblReduced.Caption = "自动填充"
+        lblReduced.ForeColor = vbRed
+    End If
+    .Move (ucWidth - resizeCx + borderSize) \ 2 + ucLeft, (ucHeight - resizeCy + borderSize) \ 2 + ucTop, resizeCx + borderSize, resizeCy + borderSize
+
+    PropertyPage.Refresh
+
+    If .gifFrameCount > 1 Then
+        lblTime.Caption = "长度: " & FormatNumber(.gifAnimationTime / 1000, 2) & " 秒"
+        If .gifMaxLoops = 0 Then
+            lblLoops.Caption = "最大循环: 无限"
+        Else
+            lblLoops.Caption = "最大循环: " & Abs(.gifMaxLoops)
+        End If
+        cmdAnimate.Enabled = True
+    Else
+        lblTime.Caption = ""
+        lblLoops.Caption = ""
+        cmdAnimate.Enabled = False
+    End If
+
+    .Visible = True
+
+End With
+
+cmdAnimate.Visible = cmdAnimate.Enabled
+cmdAccel(0).Visible = cmdAnimate.Enabled
+cmdAccel(1).Visible = cmdAnimate.Enabled
+cmdAccel(0).Enabled = cmdAnimate.Enabled
+cmdAccel(1).Enabled = cmdAnimate.Enabled
+    
+Label1.Caption = sDetails
+lblFile.Caption = fileTitle
+GetFileName = True
+ExitRoutine:
+
+bDlgActive = False
+
+End Function
+
+Private Sub PropertyPage_Initialize()
+With ucGIF1
+    .AutoSize = False
+    .BackColor = vbButtonFace
+    .BorderStyle = bdrRaised
+    .Visible = False
+End With
+End Sub
+
+Private Sub PropertyPage_SelectionChanged()
+Debug.Print "selchanged"
+End Sub
+
+Private Sub PropertyPage_Terminate()
+Debug.Print "terminate"
+ucGIF1.UnloadGIF
+End Sub
+
+Private Sub ucGIF1_AnimationLoopComplete(ByVal loopsRemaining As Long)
+lblLoops.Caption = "左循环: " & loopsRemaining
+End Sub
+
+Private Sub ucGIF1_AnimationLoopExpired()
+Call cmdAnimate_Click
+End Sub
+
+Public Function ShowBrowser(Optional rtnFileTitle As String) As String
+
+Dim ofn As OPENFILENAME
+
+Dim rtnVal As Long, EndStr As Integer
+
+With ofn
+    .lStructSize = Len(ofn)
+    .hwndOwner = hwnd
+    .hInstance = App.hInstance
+    .lpstrFilter = "GIF 文件" & Chr$(0) & "*.gif" & Chr$(0) & Chr$(0)
+    .lpstrFile = String$(255, Chr$(0))
+    .nMaxFile = 255
+    .lpstrFileTitle = String$(255, Chr$(0))
+    .nMaxFileTitle = 255
+    '.lpstrInitialDir = App.Path
+    .lpstrTitle = "Select GIF File"
+    .flags = 4096
+End With
+
+rtnVal = GetOpenFileName(ofn)
+
+If rtnVal <> 0 Then
+    EndStr = InStr(ofn.lpstrFile, Chr$(0))
+    If EndStr Then
+        ShowBrowser = Left(ofn.lpstrFile, EndStr - 1)
+        EndStr = InStr(ofn.lpstrFileTitle, Chr$(0))
+        If EndStr Then rtnFileTitle = Left$(ofn.lpstrFileTitle, EndStr - 1)
+    End If
+Else
+    ShowBrowser = ""
+End If
+
+End Function
+
+
+Private Sub ucGIF1_AnimationProgress(ByVal currentFrame As Long)
+lblFrames.Caption = "帧 #: " & currentFrame
+End Sub

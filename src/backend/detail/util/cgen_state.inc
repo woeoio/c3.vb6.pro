@@ -91,6 +91,16 @@
 
     // P14.3.1: Dim As New自动实例化变量集合 (小写key → 类名C标识)
     std::unordered_map<std::string, std::string> knownNewVars_;
+    // C30-10 第三十刀: `Dim x As New <外部 ProgID>` 的惰性实例化表
+    // (小写**变量名** → 声明的 ProgID 原文, 如 "VBScript.RegExp")。
+    //
+    // 不能蹭 knownNewVars_: 那张表存的是 C 标识，守卫处一律拼 `vb6_cls_<名>_New()`——
+    // 工程类才成立。外部 ProgID 没有那个工厂，只能用 `vb6_NewObject(L"<ProgID>")`。
+    // 实测（--emit-c）：`Dim r As New VBScript.RegExp` 以前只发 `void* r = NULL;`，
+    // 一条惰性实例化都没有 ⇒ 成员访问全打 [C3_LATEBIND_MISS]。
+    std::unordered_map<std::string, std::string> knownNewProgIdVars_;
+    // 模块/类级同名表（过程入口带入 known*，与 moduleNewVars_ 同理）。
+    std::unordered_map<std::string, std::string> moduleNewProgIdVars_;
     // Fix <vbeclipse> rev27: `Dim X As New <窗体名>` 的窗体实例化集合
     // (小写**变量名** → 窗体名的 C 标识)。
     // 与 knownNewVars_ 分开是因为**发的东西不同**: 窗体没有 vb6_cls_<F>_New(),
@@ -185,6 +195,16 @@
     // 放行 (实测不报错)。口径同上面 knownBoolVars_ 的并存登记: 与 knownLongVars_
     // **并存**, 消费点先判它, 以免既有整数路径失去变量。
     std::unordered_set<std::string> knownIntVars_;
+
+    // C30-10 第三十四刀: 用户 `Const` 的 Integer 档名单。VB6 里 `Const K = 1` / `Const K = &HFFFF`
+    // / `Const K = 3%` 交出去的是 Integer(VT_I2)，而 C3 把常量一律登记进 knownLongVars_
+    // （它同时还喂 inferExprType）⇒ 装箱答 Long（探针 W2 的 w01/w03：oracle 2，C3 3）。
+    // 这两张表**只喂装箱站** (isNarrowIntExpr)，不进 knownIntVars_ / inferExprType ——
+    // 那会连「16 位算术 + 溢出检查」那一层一起打开（算术全链，另排期）。
+    // 分两级的原因同 knownNewVars_/moduleNewVars_：过程入口会把过程级表清空，
+    // 模块级那一份署名留在模块作用域里回灌。
+    std::unordered_set<std::string> knownIntConsts_;
+    std::unordered_set<std::string> moduleIntConsts_;
 
     // ai/032: 无符号/窄整型 (SByte/UInteger/ULong/ULongLong) 的局部/形参/返回槽专属登记表
     // (小写名 → 真 Vb6Type)。口径同上面 knownByteVars_ / knownBoolVars_:
@@ -421,6 +441,29 @@
     // 首字符 (t1 实测 name=[A])。修法: 有 Alias 时调用点用 Alias 名 (GetUserNameA),
     // 天然绕开 SDK 的 A/W 宏。
     std::unordered_map<std::string, std::string> declareAliasMap_;
+
+    // Fix 218-decl-xmod: Declare VB名(小写) → **项目级** DI 桩名 (vb6_di_<导出名>)。
+    // 由来 (江西省医保药品查询系统 实测): declareAliasMap_ 是**本模块**状态 ——
+    //   Module1.bas: `Declare Function HtmlHelp Lib "hhctrl.ocx" Alias "HtmlHelpA" ...`
+    //   main.frm    : `HtmlHelp(0, App.Path & "\help.chm", 0, "按名称查询.htm")`
+    // 别名路的 callTarget 是**声明模块头文件里的 static __inline vb6_lwa_***，跨模块
+    // 根本不可见；而 cgen 只为「已解析的跨模块符号」发 #include，main.frm 连
+    // Module1.h 都没包含。于是调用点 alias miss → 退到 cIdent(裸 VB 名) → 生成
+    //   HtmlHelp(0, ...)  ⇒ LNK2019: 无法解析的外部符号 HtmlHelp。
+    // 这张表跨模块可见，值取 cExportedIdent（RTL 里按名动态解析 DLL 导出的转发桩，
+    // 包装函数本身也是调它，符号必然存在），供调用点别名 miss 时兜底。
+    // 仅登记**别名路**：非别名路调用点走 `#define` 宏 + 裸 VB 名，跨模块发裸名至少
+    // 还能链到 SDK 导入库，改道反而会凭空多引一枚可能不存在的 vb6_di_*。
+    // 这张表必须是**进程内全局**：CCodeGen 是逐模块实例化的
+    // (src/driver/detail/driver_codegen_module_loop.inc:125 在模块循环体内 `CCodeGen cgen(...)`),
+    // 普通成员出了本模块就丢 —— 实测声明在 Module1.bas (先发) 、调用在 main.frm,
+    // 成员版 map 到 main.frm 已经空了 ⇒ 退裸名 ⇒ LNK2019: HtmlHelp。
+    // 所以只留两个 static 存取口，实体定义在 cgen_decl_api.cpp (函数内 static)。
+    // 生命周期: C3 一个进程只编一个工程 (run_tests / emit_manifest 都是逐夹具起进程),
+    // 不用清；真要在同进程编第二个工程再加 beginProject() 清表。
+    static const std::unordered_map<std::string, std::string>& declareDiTargets();
+    static void registerDeclareDiTarget(const std::string& lowerName,
+                                       const std::string& cTarget);
 
     // M22: ANSI临时变量待释放列表 (变量名) + 计数器
     // 在Declare ANSI函数调用前声明临时char*变量, 调用后立即FreeANSI
@@ -680,6 +723,11 @@
     std::string knownMenuFormHwnd_;  // 当前窗体HWND变量名 (如 "vb6_hwnd_Form1")
     // Fix <vbeclipse>: 菜单控件数组基址 (小写菜单名 → 首元素 menuId)
     std::unordered_map<std::string, int> knownMenuArrayBaseIds_;
+    // C30-8: 顶层**弹出菜单 (有子项的菜单) 在菜单栏里的位置** (小写菜单名 → 0-based 位置)。
+    // Win32 里 AppendMenuW(hMenuBar, MF_POPUP, hPopup, txt) 不给弹出项发命令 ID
+    // (GetMenuItemID 对它返 -1)，只能用**位置**操作 ⇒ 代理令牌用负数编码位置
+    // (-(pos+1))，见 vb6forms_menuproxy.c。
+    std::unordered_map<std::string, int> knownMenuPopupPos_;
 
     // P7.5: 窗体名 (小写)，用于识别 Form.Caption 等窗体自身属性
     std::string knownFormName_;
@@ -704,6 +752,20 @@
     // (`Index`), 而 `Set img = ListImages.Add(..)` 拿对象本身。两者走的是两个不同的
     // visit (AssignmentStmt vs SetStmt), 天然分开 —— 所以这个标志只在 Let 期间置真。
     bool memObjLetScalar_ = false;
+
+    // C30-11 第七十九刀 (§B227): **语句级中止**。VB6 的 On Error Resume Next 只中止当前语句:
+    // 出错前已经求值的一切保留，**赋值不发生**。C3 原来把转换失败（vb6_CStrStrict 报 94）
+    // 之后的赋值照样发 ⇒ 真机 `n` 保持 -1 / `s` 保持 [keep] 的格，这里被写成 0 / ""。
+    // 赋值站在可能 raise 的语句开头发一句 `const int32_t _eN = vb6_ErrSerial();`，
+    // 写目标前比一次：序号变了 == 本语句 raise 过 ⇒ 不写。空串 = 本语句无守卫。
+    std::string stmtAbortGuard_;
+    int stmtAbortSeq_ = 0;
+    // 第八十一刀: 有些右值是**自己会 raise 的调用**（Asc/AscB/AscW 对空串报 5）——
+    // 「先比序号、再执行 store」挡不住它（号是 store 那一行才变的）。这一档改成
+    // 「先把右值算进临时量、再拿序号判是否写目标」，与真机「报错就不赋值」同形。
+    bool stmtAbortTmp_ = false;
+    std::string stmtAbortTmpType_;
+    void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。
     // ⚠ ListView 是**真窗口**, 所以 RTL 各函数第一参要的是 **HWND 槽 vb6_hwnd_X** ——
@@ -1069,6 +1131,129 @@
         std::string n = statusBarNameOfExpr(objExpr);
         return n.empty() ? "" : "vb6_hwnd_" + n;
     }
+    // C30-2: TabStrip 的裸名登记 —— `TabStrip1.Tabs.Add …` / `Tabs(i).Caption` /
+    // `SelectedItem.Index` 这三条链都要从 objExpr 里认回宿主窗口槽。手法同 StatusBar：
+    // 生成的不可求值文本形如 `vb6_ComGetObjectProp(vb6_hwnd_TabStrip1, L"Tabs")`，
+    // 按 `vb6_hwnd_<名>` 子串匹配即可穿过包裹层（前缀比较会漏）。
+    // 已知不覆盖：控件数组元素（槽是 vb6_CtrlArr_GetAt(&vb6_arr_X, i)）—— 与 StatusBar /
+    // Slider 同一处缺口，TabStrip 数组在语料里目前 0 例。
+    std::unordered_set<std::string> tabStripVars_;
+    // 识别法器照 statusBarNameOfExpr（同一张 heads 表 + 剥前缀）：集合表达式实际长这样
+    //   vb6_ComGetObjectProp(vb6_com_TabStrip1, L"Tabs")      OCX 占位槽是 vb6_com_
+    //   vb6_ComCallObject(vb6_hwnd_TabStrip1, L"Tabs", …)     真窗口槽是 vb6_hwnd_
+    // 只扫 `vb6_hwnd_<名>` 会两头都漏（首版就这么写：Tabs.Add 未拦 → 跑起来
+    // Run-time error 438，实测 .build/probe/enum_win.ps1 抓到的模态框）。
+    // 判据仍然是登记表，不是按前缀猜。
+    std::string tabStripNameOfExpr(const std::string& objExpr) const {
+        static const char* kHeads[] = { "vb6_ComGetObjectProp(vb6_", "vb6_ComCallObject(vb6_" };
+        for (const char* h : kHeads) {
+            size_t p = objExpr.find(h);
+            while (p != std::string::npos) {
+                size_t s = p + strlen(h);
+                size_t e = s;
+                while (e < objExpr.size()
+                       && (isalnum((unsigned char)objExpr[e]) || objExpr[e] == '_')) e++;
+                std::string n = objExpr.substr(s, e - s);
+                if (tabStripVars_.count(n)) return n;
+                static const char* kPrefixes[] = { "hwnd_", "com_", "arr_" };
+                for (const char* pf : kPrefixes) {
+                    size_t pl = strlen(pf);
+                    if (n.size() > pl && n.compare(0, pl, pf) == 0) {
+                        n = n.substr(pl);
+                        break;
+                    }
+                }
+                if (tabStripVars_.count(n)) return n;
+                p = objExpr.find(h, s);
+            }
+        }
+        if (tabStripVars_.count(objExpr)) return objExpr;
+        // 裸槽形态：`vb6_hwnd_TabStrip1`（直接落在宿主上的成员调用）。
+        {
+            static const char* kSlotPrefixes[] = { "vb6_hwnd_", "vb6_com_", "vb6_arr_" };
+            for (const char* pf : kSlotPrefixes) {
+                size_t pl = strlen(pf);
+                if (objExpr.size() > pl && objExpr.compare(0, pl, pf) == 0) {
+                    std::string bare = objExpr.substr(pl);
+                    if (bare.find_first_of("[(. ") == std::string::npos
+                        && tabStripVars_.count(bare)) {
+                        return bare;
+                    }
+                }
+            }
+        }
+        return "";
+    }
+    std::string tabStripHwndVarOfExpr(const std::string& objExpr) const {
+        std::string n = tabStripNameOfExpr(objExpr);
+        return n.empty() ? "" : "vb6_hwnd_" + n;
+    }
+    // C30-2: 从 C 文本取 TabStrip 的**句柄文本**（方法调用的那条文本通道专用）。
+    // 认两种接收者：
+    //   vb6_hwnd_<名>                          单枚实例
+    //   vb6_CtrlArr_GetAt(&vb6_arr_<名>, idx)  控件数组元素
+    // 两者外面都可能再包 `vb6_ComGetObjectProp(…, L"Tabs")` / `vb6_ComCallObject(…)`。
+    // 为什么要这一枚：`Tabs.Add / Remove / Clear` 走的是 cgen_expr_call_com_bind.inc 的
+    // **文本**判形（AST 侧只接读/写两腿）；那一版只认 `vb6_hwnd_` ⇒ `arrTab(0).Tabs.Add …`
+    // 整条掉回 vb6_ComCall（拿 HWND 当 IDispatch）⇒ 实测 Run-time error 438
+    // （tests/ctrltabstrip 加数组元素当场的那个 438）。
+    std::string tabStripHwndTextOfExpr(const std::string& objExpr) const {
+        static const std::string kArr = "vb6_CtrlArr_GetAt(&vb6_arr_";
+        size_t ap = objExpr.find(kArr);
+        while (ap != std::string::npos) {
+            size_t open = objExpr.find('(', ap);
+            if (open == std::string::npos) return std::string();
+            size_t close = open;
+            int depth = 0;
+            for (; close < objExpr.size(); close++) {
+                if (objExpr[close] == '(') depth++;
+                else if (objExpr[close] == ')') { depth--; if (depth == 0) break; }
+            }
+            if (close >= objExpr.size()) return std::string();
+            const std::string callTxt = objExpr.substr(ap, close - ap + 1);
+            const size_t ns = ap + kArr.size();
+            const size_t ne = objExpr.find_first_of(",) ", ns);
+            const std::string nm = objExpr.substr(ns, (ne == std::string::npos ? objExpr.size() : ne) - ns);
+            auto it = knownFormControls_.find(Symbol::toLower(nm));
+            if (it != knownFormControls_.end() && it->second == FrmControlType::TabStrip) return callTxt;
+            ap = objExpr.find(kArr, close);
+        }
+        std::string n = tabStripNameOfExpr(objExpr);
+        return n.empty() ? std::string() : ("vb6_hwnd_" + n);
+    }
+    // C30-2: 从 `Tabs(i)` / `Tabs("Key")` 的不可求值文本里抠出 1 基下标表达式。
+    // 两种实参形态都要吃（实测箭两个都出现过）：
+    //   vb6_ComCallObject(…, (void*[]){vb6_ComPackInt(n)}, 1)   字面量与变量都过这个 packer
+    //   (void*[]){2}                                        少数直接给数字的场合
+    // 字串实参当 Key 处理 (keyOut 出参非空)，由调用侧换成 GetTabIndexByKey。
+    std::string tabStripTabIndexArgOfExpr(const std::string& objExpr, std::string* keyOut) const {
+        if (keyOut) keyOut->clear();
+        const std::string kArr = "(void*[]){";
+        size_t ia = objExpr.find(kArr);
+        if (ia == std::string::npos) return "";
+        size_t open = ia + kArr.size();
+        size_t close = objExpr.find('}', open);
+        std::string argTxt = (close == std::string::npos) ? objExpr.substr(open)
+                                                         : objExpr.substr(open, close - open);
+        const std::string kPack = "vb6_ComPackInt(";
+        size_t pi = argTxt.find(kPack);
+        if (pi != std::string::npos) {
+            size_t s = pi + kPack.size();
+            size_t e = argTxt.find(')', s);
+            if (e == std::string::npos) e = argTxt.size();
+            std::string v = argTxt.substr(s, e - s);
+            return v;
+        }
+        size_t qs = argTxt.find("L\"");
+        if (qs != std::string::npos) {
+            size_t qe = argTxt.find('\"', qs + 2);
+            if (qe != std::string::npos && keyOut) *keyOut = argTxt.substr(qs + 2, qe - qs - 2);
+            return "";
+        }
+        bool num = !argTxt.empty();
+        for (char ch : argTxt) if (!isdigit((unsigned char)ch)) { num = false; break; }
+        return num ? argTxt : std::string();
+    }
     // P20-40: `StatusBar1.Panels(i).Prop = v` 的**写**目标。读那边在 resolveComValue
     // 里改道了, 写这边不拦就会落到 vb6_ComSetProp(<HWND>, L"Text", …) —— 对假
     // IDispatch (HWND) 调 PutProp, 链接都过、运行静默无效。返回 RTL 写入函数名,
@@ -1254,6 +1439,10 @@
     std::unordered_map<std::string, std::string> knownUserControlCtrlVars_;
                   // DLL的ProgID前缀
 
+
+    // 账 #611: 工程级「类 → VB_UserMemId=0 默认成员名」表 (小写类名 → 成员原名)。
+    // 由 driver runCodeGeneration 预扫描 .cls 的 AttributeStmt 建好, 全程只读。
+    const std::unordered_map<std::string, std::string>* classDefaultMembers_ = nullptr;
 
     // Delegate (tB 扩展): decl pass 登记的桩定义文本, epilogue 统一发射
     std::vector<std::string> delegateThunkDefs_;

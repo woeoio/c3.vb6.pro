@@ -105,10 +105,13 @@ void CCodeGen::visit(OnErrorStmt& node) {
             break;
         }
         case OnErrorKind::GoToZero:
-            // On Error GoTo 0: 禁用错误处理
-            c_.emitLine("vb6_err_resume_next = 0;");
-            c_.emitLine("vb6_err_jmp_active = 0;");
-            c_.emitLine("vb6_error_jmp_set = 0;");
+            // On Error GoTo 0: 只关本过程的处理器。账 #611: 以前这里直接清
+            // `vb6_err_jmp_active / vb6_error_jmp_set` 两个全局, 把**调用方**的
+            // setjmp 帧也作废了 —— JSonFast.cls Parse 里 `On Error GoTo 0` 之后
+            // Strict 模式抛 5011, 调用方 TryParseStrict 的 ParseError 接不住,
+            // vb6_ErrRaise 走 "Unhandled error" → ExitProcess (第 5 按钮一点就死)。
+            // 交给 RTL 把栈顶那一帧 (调用方状态) 还回去, 函数出口照旧 Restore。
+            c_.emitLine("vb6_ErrGoToZero();  /* On Error GoTo 0: 恢复到调用方帧, 见账 #611 */");
             break;
     }
 }

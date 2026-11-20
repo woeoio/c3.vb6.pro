@@ -535,6 +535,10 @@ intptr_t __stdcall vb6_di_timeBeginPeriod(intptr_t uPeriod) {
 intptr_t __stdcall vb6_di_timeEndPeriod(intptr_t uPeriod) {
     return ((intptr_t (WINAPI *)(intptr_t))timeEndPeriod)(uPeriod);
 }
+/* timeGetDevCaps */
+intptr_t __stdcall vb6_di_timeGetDevCaps(intptr_t lpTimeCaps, intptr_t uSize) {
+    return ((intptr_t (WINAPI *)(intptr_t, intptr_t))timeGetDevCaps)(lpTimeCaps, uSize);
+}
 /* timeGetTime */
 intptr_t __stdcall vb6_di_timeGetTime() {
     return ((intptr_t (WINAPI *)(void))timeGetTime)();

@@ -448,6 +448,13 @@ void vb6_SetControlHeight(void* hwnd, int height) {
 // 单位 twips (与 Left/Top/Width/Height 属性一致); mask 位 1=Left 2=Top
 // 4=Width 8=Height, 未给的参数保持当前值。子控件用父客户区坐标,
 // 顶层窗口 (Form) 用屏幕坐标 —— 与对应属性 setter 的坐标空间一致。
+// 账 (prjNewAniGif `With ucGIF1 : .Move …`): `.ctl` 类自己没有 Move ⇒ 它是容器的
+// Extender 方法, 生成侧发成 `vb6_UCInstMove(hwnd, l, t, w, h)` (五个实参, 四个位置全给)。
+// 口径与 vb6_ControlMove 完全一致, mask 固定 15。
+void vb6_UCInstMove(void* hwnd, double L, double T, double W, double H) {
+    vb6_ControlMove(hwnd, L, T, W, H, 15);
+}
+
 void vb6_ControlMove(void* hwnd, double L, double T, double W, double H, int mask) {
     void* ctlObj = hwnd;   /* OCX 控件对象 (若实参是控件而非 HWND); 见下面的 SyncRects */
     hwnd = vb6_CtlWin(hwnd);

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>   /* C30-10 第二十九刀: llround (Currency → VT_CY 定标) */
 #include "vb6com_internal.h"
 
 
@@ -51,6 +52,31 @@ void* vb6_ComPackDouble(double val) {
     VariantInit(pv);
     pv->vt = VT_R8;
     pv->dblVal = val;
+    return (void*)pv;
+}
+
+// C30-10 第二十九刀: Currency 实参 -> VT_CY (10000 倍定标整数)。
+// VB6 的 Currency 是定点数, 交到 Variant 实参上就是 VT_CY; C3 内部用 double 表示
+// (vb6_CCur / vb6_CCurBSTR 都如此), 以前默认档把它当整数截断 —— 实测 CCur(1.5)
+// 到对端变成 VT_I4 1。这里按 VB6 精度换回 VT_CY。
+// 取整用 llround (四舍五入, 与 VB6 的 Currency 赋値口径一致)。
+void* vb6_ComPackCur(double val) {
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_CY;
+    pv->cyVal.int64 = (LONGLONG)llround(val * 10000.0);
+    return (void*)pv;
+}
+
+// C30-10 第二十九刀: Nothing 实参 -> VT_DISPATCH + NULL。
+// VB6 的 Nothing 进 Variant 是 VT_DISPATCH (VarType=9), 与 Empty (0) 不是一个东西:
+// 实测真组件 `d.Add Nothing` 与 `d.Add Empty` 是两个不同的键。
+void* vb6_ComPackNothing(void* ignored) {
+    (void)ignored;
+    VARIANT* pv = (VARIANT*)calloc(1, sizeof(VARIANT));
+    VariantInit(pv);
+    pv->vt = VT_DISPATCH;
+    pv->pdispVal = NULL;
     return (void*)pv;
 }
 

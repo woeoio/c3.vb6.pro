@@ -29,6 +29,9 @@
 #       (包装器分不到 / 工厂交回 NULL)必须还在，而 `CF_CreateInstance` 里**不许**再出现
 #       `return E_OUTOFMEMORY`(它过去把 NULL 一律说成内存不够，正是这一格的分档缺失)；
 #       客户端三条 create 腿一律问 `vb6_ComFailCreate`，那张网里不许再出现裸的 `vb6_RaiseError(429`。
+#       账 C30-9 把建对象补成**两条出口**（按名 / 按 typelib CLSID），后者自己带两条失败腿
+#       （CLSIDFromString / CoCreateInstance）⇒ 这一格从 1 def + 3 legs 长成 1 def + 5 legs，
+#       同时钉「新两腿住在 vb6_NewObjectClsid 里」与「运行时自带的类（StdFont/…）排在 CLSID 之前」。
 #
 # 用法: powershell -File scripts\check_com_server_error_frame.ps1 [-Root <目录>]   (PASS ⇒ exit 0)
 # 负控在 src 的副本上跑(-Root)，共享工作树一格不动。
@@ -217,7 +220,30 @@ if ($mkCalls -ne 2) { $fail += "R6 uses of vb6_ComVbHresult in vb6com.c = $mkCal
 $failCreateDefs = ([regex]::Matches($comCode, 'static void vb6_ComFailCreate\s*\(')).Count
 $failCreateCalls = ([regex]::Matches($comCode, 'vb6_ComFailCreate\s*\(')).Count
 if ($failCreateDefs -ne 1) { $fail += "R6 vb6_ComFailCreate definitions = $failCreateDefs (want 1)" }
-if ($failCreateCalls -ne 4) { $fail += "R6 vb6_ComFailCreate mentions in vb6com.c = $failCreateCalls (want 4: 1 def + 3 legs)" }
+# C30-9 改数：4 处 → 6 处。真形状多了第三条建对象出口（vb6_NewObjectClsid，按 typelib
+# CLSID 直连 CoCreateInstance，为 ADODB 补的那一条），它自己也有两条失败腿: CLSIDFromString
+# 失败 / CoCreateInstance 失败。两条都必须走同一枚 vb6_ComFailCreate（429/340 的分档主人）。
+# 只改数字是把尺子拧松；所以下面同时钉「新那两腿住在哪个函数里」与「类名那一问排在 CLSID 之前」。
+if ($failCreateCalls -ne 6) { $fail += "R6 vb6_ComFailCreate mentions in vb6com.c = $failCreateCalls (want 6: 1 def + 3 legs of CreateObject + 2 legs of NewObjectClsid)" }
+$novBody = Get-Body $com '^void\* vb6_NewObjectClsid'
+if ($novBody.Count -lt 5) {
+    $fail += "R6 vb6_NewObjectClsid body not found in vb6com.c - the CLSID leg (C30-9) lost its failure frame"
+} else {
+    $nNov = Count-In $novBody 'vb6_ComFailCreate('
+    if ($nNov -ne 2) {
+        $fail += "R6 failure legs inside vb6_NewObjectClsid = $nNov (want 2: CLSIDFromString 失败 + CoCreateInstance 失败; 少一枚就是某条腿静默交回 NULL)"
+    }
+    if ((Count-In $novBody 'vb6_ComFailCreate(hr, clsidStr); return NULL;') -ne 2) {
+        $fail += 'R6 a CLSID-leg failure no longer reports through vb6_ComFailCreate and returns NULL (口径必须与 vb6_CreateObject 一致)'
+    }
+    $iBuiltin = Index-Of $novBody 'vb6_NewVb6RuntimeClass('
+    $iClsid   = Index-Of $novBody 'CLSIDFromString('
+    if ($iBuiltin -lt 0) {
+        $fail += 'R6 vb6_NewObjectClsid stopped asking vb6_NewVb6RuntimeClass first - `New StdFont` 会拿到 oleaut32 的真字体, 而 IFont 的 hFont/Clone 是 vtable 成员 ⇒ 晚绑定 not found (tests/combyref271 实测 K271/K276 八行据全变 False + 两条 [C3_LATEBIND_MISS])'
+    } elseif ($iClsid -lt 0 -or -not ($iBuiltin -lt $iClsid)) {
+        $fail += ("R6 ordering in vb6_NewObjectClsid = runtime-class:" + $iBuiltin + " CLSIDFromString:" + $iClsid + " (want runtime-class < CLSID) - 内建名那一问必须先答")
+    }
+}
 $blanket429 = ([regex]::Matches($comCode, 'vb6_RaiseError\s*\(\s*429')).Count
 if ($blanket429 -ne 0) { $fail += "R6 a create leg raises a blanket 429 again ($blanket429) - it must go through vb6_ComFailCreate" }
 $externVb = ([regex]::Matches($objCode, 'extern HRESULT vb6_ComVbHresult')).Count
