@@ -3268,19 +3268,51 @@ void CCodeGen::emitBstrSlotStore(const std::string& target, Expr* rhs,
         // 账 #118 续: 目标是 UDT 定长串字段 (C 类型 char[N], VB6 ABI 内联 ANSI) ——
         // 不能 &field 当 BSTR* 用。写侧按 N 右补空格/右截断 (与 LSet 同口径)。
         // 自有临时串那一侧顺手释放 (与上面 vb6_LSetFree 的选择同一把尺)。
+        //
+        // C30-11 第八十九刀: 语句级中止 —— 本语句里 raise 过就不写 char[N]。
+        // 旧形只发了 `const int32_t _eN = vb6_ErrSerial();` 却不看它: `u.f = Left("abc",-1)`
+        // 报 5 之后字段被抹成空格（真机：一字不动）。形与下面普通 BSTR 槽那两支同构:
+        // 右值**只算一次**进临时量, 再拿算完之后的序号决定是写进去还是收回。
+        const bool ownedU89 = valueOwned113 || wrapped122;
         const std::string assignFn118u =
-            (valueOwned113 || wrapped122) ? "vb6_FixedStrAssignFree" : "vb6_FixedStrAssign";
-        c_.emitLine(assignFn118u + "(" + target + ", " + fixedLen + ", " + value + ");");
+            ownedU89 ? "vb6_FixedStrAssignFree" : "vb6_FixedStrAssign";
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine(assignFn118u + "(" + target + ", " + fixedLen + ", " + value + ");");
+        } else {
+            const std::string tmp89 = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp89 + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + value + ") : NULL;");
+            if (ownedU89) {
+                c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) " + assignFn118u
+                            + "(" + target + ", " + fixedLen + ", " + tmp89
+                            + "); else vb6_BSTR_Free(" + tmp89 + ");");
+            } else {
+                c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) " + assignFn118u
+                            + "(" + target + ", " + fixedLen + ", " + tmp89 + ");");
+            }
+        }
     } else if (!fixedLen.empty()) {
         // 账 #118 ①: 定长串赋值的收口 —— 短则右侧补空格、长则截右 (VB6 手册 + 真机
         // CopyMemory 实测一致, 与 LSet 同口径)。必须先 fit 成一只**新** BSTR 再 move
         // 进目标: 先 Assign 再回头改长度会多留一只临时, 而裸赋值连长度都不对。
         // RHS 是自有临时串那一侧用 vb6_LSetFree 顺手把它释放 —— 尺与下面
         // AssignMove/Assign 的选择同一把, 否则每次赋值都漏一块 (账 #118 ②)。
+        //
+        // C30-11 第八十九刀: 同一道语句级中止门也套在这里 (`g = Left("abc",-1)` 报 5 之后
+        // g 旧值不得被抹掉)。fit 出来的那只新串只有序号没变才并进目标, 否则收回。
+        const bool ownedF89 = valueOwned113 || wrapped122;
         const std::string fitFn118 =
-            (valueOwned113 || wrapped122) ? "vb6_LSetFree" : "vb6_LSet";
-        c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + fitFn118 + "(" + value
-                    + ", " + fixedLen + "));");
+            ownedF89 ? "vb6_LSetFree" : "vb6_LSet";
+        if (stmtAbortGuard_.empty()) {
+            c_.emitLine("vb6_BSTR_AssignMove(&" + target + ", " + fitFn118 + "(" + value
+                        + ", " + fixedLen + "));");
+        } else {
+            const std::string tmp89f = "_av" + std::to_string(stmtAbortSeq_);
+            c_.emitLine("BSTR " + tmp89f + " = (" + stmtAbortGuard_ + " == vb6_ErrSerial()) ? ("
+                        + fitFn118 + "(" + value + ", " + fixedLen + ")) : NULL;");
+            c_.emitLine("if (" + stmtAbortGuard_ + " == vb6_ErrSerial()) vb6_BSTR_AssignMove(&"
+                        + target + ", " + tmp89f + "); else vb6_BSTR_Free(" + tmp89f + ");");
+        }
     } else if (valueOwned113 || wrapped122) {
         // C30-11 第七十九刀 (§B227): 语句级中止 —— 本语句里 raise 过就不写目标；
         // RHS 是**自有临时串**，不 move 进去就得自己释放，否则每次中止漏一块。
