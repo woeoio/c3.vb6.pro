@@ -3243,3 +3243,52 @@ T1/T2 是本刀的行为面，T4/T5/T6 是零回归护栏。
   两例 PASS，`missing=[] odd=0`。
 - 同片另有几行 `[GUI] ... pixels: PASS ...` 被标注机制打成 `::error::`（读数以 png 路径收尾，
   不是 PASS/SKIP 收尾）——`Results: FAIL=1` 里不含它们，属注解口径噪声，不是用例红。
+
+### 11.62 第八十四刀：整型目标的嵌套 Asc 形也吃临时量（`n = CLng(Asc(""))` 一族）
+
+#### 一、病
+
+第八十一刀只认**顶层就是** Asc 的形（`n = Asc("")`）。右值外套一层转换函数或运算符时，
+顶层判据看不见它，语句照样把 0 写进目标：
+
+- `n = CLng(Asc(""))`
+- `n = Asc("") + 0`
+- `n2 = Len(CStr(Asc("")))`
+
+真机三种都是「报 5 + 目标不动」。第八十三刀把树扫描扩到了 String 目标，整型这一半当时留着
+（`ascInRhs83` 前面挂了 `tgtT79 == String`）。
+
+#### 二、改法
+
+1. `ascInRhs83` → `ascInRhs84`，判据从「String 目标」扩到 `tgtInt79 || tgtT79 == String`。
+2. 整型目标必须**显式**打开 `stmtAbortTmp_` / `stmtAbortTmpType_`：`emitGuardedStore` 只有打开它才发
+   `int32_t _avN = (<守卫> == vb6_ErrSerial()) ? (<右值>) : (int32_t)0;` + `if (...) t = _avN;`；
+   否则只发 `if (ok) t = <右值>;` —— 而序号是 store 那一行才变的，挡不住右值自己 raise。
+   这一档**复用第八十一刀的整型临时量出口**，不新造形状。
+
+#### 三、读数（`.temp/k84/inttarget.bas`，x64，改前 = 第八十三刀那枚 `.build/C3.exe`）
+
+| 格 | 源 | 改前 | 改后 | 真机 |
+|---|---|---|---|---|
+| T1 | `n = CLng(Asc(""))` | `n=0 err=5` | `n=-1 err=5` | -1, 5 |
+| T2 | `n = Asc("") + 0` | `n=0 err=5` | `n=-1 err=5` | -1, 5 |
+| T3 | `n = CLng(Asc("A"))` | `n=65 err=0` | `n=65 err=0` | 65, 0 |
+| T4 | `n = Asc("")`（第八十一刀那格） | `n=-1 err=5` | `n=-1 err=5` | -1, 5 |
+| T5 | `n2 = Len(CStr(Asc("")))` | `n2=1 err=5` | `n2=-1 err=5` | -1, 5 |
+| T6 | `s = CStr(Asc(""))`（第八十三刀那格） | `s=keep err=5` | `s=keep err=5` | keep, 5 |
+
+#### 四、门
+
+- `-Category syntax`：**227/227**。
+- 静态门 9 枚全 PASS（含 `manifest_coverage` 750/750、`rtl_proto_arity` 1780 对）。
+- 本机 `-Category vbp -VbpShard 9`：55 PASS / 2 FAIL / 1 SKIP；两红是本机已知
+  （`c29listview` 本机 OCX、`iface_multi_incomplete_negcontrol` 争用），同一 HEAD 上 CI 是 PASS。
+- `run_tests.ps1` 里**没有任何形状针引用 `vb6_Asc*`** ⇒ 本刀不动针。
+
+#### 五、登记（发码清单）
+
+候选集不从全语料猜：本刀的触发面 = 右值树里有 Asc 族且目标是整型标量/String，所以取**清单里
+源文件正文出现 `Asc(` / `AscB(` / `AscW(` 的 7 份**逐份重发。实际变动 **1 行**：
+`tests/VbQRCodegen-master/src/mdQRCodegen.bas`。发码逐字看过（`.temp/k84/md_old.c` vs `md_new.c`）：
+两处 `lDigit = vb6_ChkInt((int32_t)(vb6_Asc(_own_N)) - 48);` 变成临时量形，同一文件后面两处
+`_e17/_e18` 顺移到 `_e19/_e20`（守卫序号按语句顺序发，不重排）。
