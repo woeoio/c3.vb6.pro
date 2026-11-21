@@ -4638,8 +4638,74 @@ K1/K2/K3/K5/K7/K8 与真机逐格同值，**K4 仍差**（`v = o.NoSuchProperty`
 
 #### 八、仍挂着
 
-- **K4**：`v = o.NoSuchProperty` 目标被写（真机 `v=111`）。这是赋值位的守卫，不在实参位这条线上。
+- **K4**：`v = o.NoSuchProperty` 目标被写（真机 `v=111`）。这是赋值位的守卫，不在实参位这条线上
+  —— 第一百零六刀（§11.84）接掉。
 - **UDT 槽**：这一族语料里没量到「UDT 形参 + 晚绑定读」的自然形（UDT 不能承接晚绑定读），
   等出现再立账。
 - **`VT_BYREF` 写穿**：`Sub f(ByRef v As Variant)` 传标量左值时，真机是
   `VarType(v)=16387` + 写穿；我们目前是装箱。这一条独立，别与本刀混。
+
+### 11.84 第一百零六刀：Variant 槽的赋值位（目标一个字都不写）
+
+§11.83 末尾把 K4 记成缺口：
+
+> **K4**：`v = o.NoSuchProperty` 目标被写（真机 `v=111`）。这是赋值位的守卫，不在实参位这条线上。
+
+这一刀补上。它不在实参位那条线上 —— 病在 `visit(AssignmentStmt&)` 的 `targetIsVariant` 那一支：
+守卫机制（`mayRaise79` / `stmtAbortTmp_`）只认 **Int / Double / String** 目标，Variant 目标整支落在外面，
+于是 438 之后照样把交回来的值写进 `v`（实测未修前 K4 读 `v=` 空、err=438）。
+
+#### 一、刻度（L 族）
+
+| 格 | 写法 | 读数 |
+|---|---|---|
+| L1 | `v = 111 : Err.Clear : v = o.NoSuchProperty` | `v=111` err=438 ← **真机 K4 实测**；修前本机是 `v=` 空 |
+| L2 | `v = 111 : Err.Clear : v = o.Count` | `v=1` err=0 ← 本机控制格 |
+| L3 | 先 `o.Count` 再 `o.NoSuchProperty` | `v=1` err=438 ← 本机控制格（失败那次不写） |
+| L4 | `v = o.Item("k")` | `v=vv` err=0 ← 本机控制格（串值同样到手） |
+| L5 | 连报两次 | `v=111` err=438 ← 本机控制格 |
+
+L1 是唯一上过真机的那一格（K4）；L2–L5 是守卫不误伤的**本机**控制格 —— 它们走的语义与
+未守卫那一支相同（只是把写的那一步挪到闸后），在真机上量会得到同一组数；这里不把
+未量当已量，故分开标。
+
+#### 二、发码形（§B169 的口径，不自抄）
+
+```c
+const int32_t _e0 = vb6_ErrSerial();
+vb6_VARIANT _av0 = vb6_VariantEmpty();
+if (_e0 == vb6_ErrSerial()) { _av0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }
+if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _av0; }
+```
+
+- 序号在**求值之前**抓；438 发生在第一句的求值里 ⇒ 第二句的闸为假 ⇒ 目标一个字都不写。
+- 为什么不能只写一句 `if (_e == vb6_ErrSerial()) { ... }` 把整句包起来：序号在进入 if 时
+  还没变，求值把序号推走之后**仍在 if 体内** ⇒ 会把值写进去（与 §11.80 那条同形的坑）。
+- 写回那一句照 `emitVariantSlotStore` 的口径分两支：自有 ⇒ `Clear + 浅搬`（所有权随拷贝交给目标）；
+  借来 ⇒ `vb6_VariantAssign`（Clear + 深拷贝）。这问问的是 `variantRhsOwnsValue`，站点不自己答。
+
+#### 三、范围（只接量到的形）
+
+接的形：**顶层就是那一次晚绑定成员读**（`lateBoundComReadExpr`），目标是非数组/非 UDT 字段的
+Variant 槽。改前全量扫（753 输入）：**23 处 / 11 个输入**，全在 `tests/` 内
+（`dict_native` 5+5、`VBFlexGridDemo` 2、`b190_memberarray` 2、`b612/b613/b614` 各 1–2、
+`czUI` 1、`ucTreeView` 1、`urlpic` 1、`E438App` 2）。外部真实语料 0 处。
+
+**未量、登记不猜**：
+
+- `v = 1 + o.NoSuchProperty`（晚绑定读在表达式**内部**）；
+- Variant **数组元素** / **UDT 的 Variant 字段**做目标（`VB6_SA_*` / `udtFieldSlot`）。
+
+#### 四、夹具与针
+
+- 新夹具 `tests/test_late_varslot.bas`（L1/L2/L3/L4 四段：缺读、存在读、先成功后失败、串值）
+- `b251_varslot_guard_shape` 五条针：`_av0` 起手、缺读那一句、写回那一句、控制格 `Count` 那一句、
+  L3 的 `_av3` 写回
+- `b251_varslot_guard_lesion` 一条反面针：修复前的 `v = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0));`
+
+#### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=754 / registered=754）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行（`tests/test_late_varslot.bas`）+ 受影响的存量行重算
+- 受影响的工程本机逐个编过：`B612/B613/B614/B190/DictApp/E438App`（x86 那份由 CI 的 `FlexGridX86` 盯）
