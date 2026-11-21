@@ -162,8 +162,40 @@
             emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget, fixedTgtIsUdtField);
         }
     } else if (targetIsVariant) {
-        // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
-        emitVariantSlotAssign(target, node.value.get(), value, targetIsUdtVariantField232);
+        // 第一百零六刀 (§11.84): 晚绑定成员读**直接**赋给 Variant 槽 —— 真机 K4
+        //   `v = 111 : Err.Clear : v = o.NoSuchProperty` ⇒ `v = 111` / `err = 438`
+        //   （目标一个字都不写）。这一支以前落在守机外面：守机只认 Int/Double/String 目标
+        //   (上面 mayRaise79 那几处)，Variant 目标直接发 `v = vb6_VariantFromComResult(...)`。
+        // 形：先求值进临时量（错就在这一步报 438），再用**同一枚序号**决定写不写 ——
+        //   序号是在求值**之前**抓的，求值里报错 ⇒ 第二句的闸为假 ⇒ 目标不动。
+        // 临时量不 Clear：`target = tmp` 是浅搬，所有权随拷贝交给目标（与
+        // emitVariantSlotStore 的“清旧+接管”同口径）；错误那一支临时量是 Empty，无物可放。
+        // 只接**顶层就是那次成员读**这一形（真机量到的就这一形）；表达式内部的
+        //（`v = 1 + o.NoSuchProperty`）与数组元素/UDT 字段槽**未量**，另行登记，不猜。
+        if (!targetIsUdtVariantField232 && node.value
+            && lateBoundComReadExpr(node.value.get())
+            && target.compare(0, 7, "VB6_SA_") != 0
+            && (target.empty() || target[0] != '(')) {
+            const std::string gv106 = "_e" + std::to_string(stmtAbortSeq_++);
+            const std::string tv106 = "_av" + std::to_string(tempCounter_++);
+            c_.emitLine("const int32_t " + gv106 + " = vb6_ErrSerial();");
+            c_.emitLine("vb6_VARIANT " + tv106 + " = vb6_VariantEmpty();");
+            c_.emitLine("if (" + gv106 + " == vb6_ErrSerial()) { " + tv106 + " = "
+                        + wrapVariantValue(node.value.get(), value) + "; }");
+            // 写回那一句与 emitVariantSlotStore 同一口径（“自有”还是“借来”只问那一处主人）:
+            //   自有 ⇒ 清旧值 + 浅搬（所有权随拷贝交给目标，与未守卫那一支逐字节同形）；
+            //   借来 ⇒ vb6_VariantAssign（Clear + 深拷贝）。
+            if (variantRhsOwnsValue(node.value.get(), value)) {
+                c_.emitLine("if (" + gv106 + " == vb6_ErrSerial()) { vb6_VariantClear(&" + target
+                            + "); " + target + " = " + tv106 + "; }");
+            } else {
+                c_.emitLine("if (" + gv106 + " == vb6_ErrSerial()) { vb6_VariantAssign(&" + target
+                            + ", " + tv106 + "); }");
+            }
+        } else {
+            // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
+            emitVariantSlotAssign(target, node.value.get(), value, targetIsUdtVariantField232);
+        }
     } else if (target.compare(0, 10, "vb6_PA_Get") == 0) {
         // Fix 091c: ParamArray 元素赋值 OutVars(i) = value — vb6_PA_GetXxx 是取值
         // 函数 (右值), 直接赋值 → C2106 "左操作数必须为左值" (cToolsArray.c 130);
