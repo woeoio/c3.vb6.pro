@@ -27,23 +27,31 @@
         && classVariantFields_.count(targetLower) > 0) {
         targetIsVariant = true;
     }
-    // 第一百一十刀 (§11.91): 类字段槽从**类外面**写时, 目标文本带着字段读那一站的尾注
-    // `/* class var .f field variant */` (cgen_expr_member), checkName 于是含注释,
-    // 上面三条按名判定全落空 ⇒ 目标被当 typed 槽, 既不装箱也不守卫, 直接发
-    //   `c->f  /* class var .f field variant */ = vb6_ComGetObjectProp(o, L"…");  /* Set */`
+    // 第一百一十刀 (§11.91): 类字段的 Variant 槽 —— 从**类外面**写 (`Set c.f = …`) 时,
+    // 字段读那一站给目标拼了一枚尾注, checkName 于是带注释, 上面三条按名判定全落空 ⇒
+    // 目标被当 typed 槽: 既不装箱也不守卫, 直接发 `c->f … = vb6_ComGetObjectProp(o, …)`
     // ⇒ C2440 (void* → vb6_VARIANT)。真机 P 族: P1 (c.f, 类外) / P2 (me->f, 类内)
     // 都 = 111 / 438 —— 字段一个字不动; P3/P4 控制格必须落槽。
-    // 判据只认那一枚尾注 (与 cgen_expr_member_voidptr_com.inc 同一写法), 不按名字猜。
-    const bool targetIsClassVariantField =
-        target.find("/* class var .") != std::string::npos
-        && target.find(" field variant */") != std::string::npos;
-    if (targetIsClassVariantField) targetIsVariant = true;
-    // 「这一格是工程类的 Variant 字段槽」的唯一一问: 类内那张无尾注形 (`me->f`) 与
-    // 类外带尾注形 (`c->f  /* class var .f field variant */`) 都归它。后面的 438 守卫
-    // 与「先退旧值」都按这一问走。
+    // 判据问工程级那张类字段表 (§B168 同一问句: 字段档 + 方法/属性否决), **不认文本**。
+    bool classVarFieldSlot110_ast110 = false;
+    if (node.target && node.target->kind == ASTNodeKind::MemberAccessExpr) {
+        auto& maT110 = static_cast<MemberAccessExpr&>(*node.target);
+        const std::string clsT110 = maT110.object ? inferClassTypeOfExpr(*maT110.object)
+                                                 : std::string();
+        if (!clsT110.empty()
+            && resolveClassMemberCall(clsT110, maT110.memberName).empty()
+            && classFieldIsVariantSlot(clsT110, maT110.memberName)) {
+            classVarFieldSlot110_ast110 = true;
+        }
+    }
+    if (classVarFieldSlot110_ast110) targetIsVariant = true;
+    // 类内那一形 (`Set f = …` 在类模块里) 的 AST 是裸 IdentifierExpr, 发码是 `me->f` ——
+    // 上面那条只认 MemberAccessExpr, 所以这里补上「`me->` + 类字段表」那一条腿
+    // (与 Fix 091p 同一张表, 不认文本)。
     const bool classVarFieldSlot110 =
-        targetIsClassVariantField
+        classVarFieldSlot110_ast110
         || (target.rfind("me->", 0) == 0 && classVariantFields_.count(targetLower) > 0);
+    if (classVarFieldSlot110) targetIsVariant = true;
     if (std::getenv("C3_DBG_VSET110") && classVarFieldSlot110)
         std::cerr << "[VSET110-DET] tgt=" << target << std::endl;
     // Fix 084n: UDT 的 Variant 字段 (如 ZipFileInfo.SourceFile As Variant)
@@ -453,8 +461,8 @@
                     c_.emitLine("if (" + gv110 + " == vb6_ErrSerial()) { vb6_VariantClear(&"
                                 + target + "); " + target + " = " + tv110 + "; }");
                 } else {
-                    c_.emitLine("vb6_VariantClear(&" + target + ");");
-                    c_.emitLine(target + " = " + value + ";  /* Set */");
+                    emitVariantSlotStore(target, value,
+                                         variantRhsOwnsValue(node.value.get(), value), false);
                 }
             } else if (plainVar108 && node.value && exprHasLateBoundComRead(node.value.get())) {
                 if (std::getenv("C3_DBG_VSET108"))
