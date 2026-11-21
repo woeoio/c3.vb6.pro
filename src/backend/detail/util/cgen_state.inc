@@ -808,6 +808,12 @@
     std::string stmtCallArgSerial_;
     bool stmtCallArgEmitted_ = false;
     int stmtCallArgFirstLate_ = -1;
+    // 第一百零五刀 (§11.83): 聚合体（Variant）实参位提升出来的临时量。
+    // 聚合体不能像标量那样 `= 0` 起手，但 C 里 `vb6_VARIANT _ag = vb6_VariantEmpty();`
+    // 是**可声明**的 —— 于是「落不到可声明档」这一条并不成立，代价只是所有权：
+    // 必须用深拷贝 vb6_VariantCopy 拿自己那份，调用后 vb6_VariantClear 归还。
+    // 空 = 本语句没提升过聚合实参。
+    std::vector<std::string> stmtCallArgVarTemps_;
     void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。

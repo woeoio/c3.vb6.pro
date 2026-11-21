@@ -326,6 +326,7 @@ void CCodeGen::visit(CallStmt& node) {
                 g->stmtCallArgSerial_.clear();
                 g->stmtCallArgEmitted_ = false;
                 g->stmtCallArgFirstLate_ = -1;
+                g->stmtCallArgVarTemps_.clear();
             }
         } callArgScope102_{this};
         if (node.callee && node.callee->kind == ASTNodeKind::IndexOrCallExpr) {
@@ -960,6 +961,11 @@ void CCodeGen::visit(CallStmt& node) {
         }
         if (guard102) {
             c_.emitLine("}");
+        }
+        // 第一百零五刀 (§11.83): 聚合实参临时量的归还。守卫没放行时它仍是空的，
+        // vb6_VariantClear 对空值是一次空转，故无条件发。
+        for (size_t i105 = 0; i105 < stmtCallArgVarTemps_.size(); i105++) {
+            c_.emitLine("vb6_VariantClear(&" + stmtCallArgVarTemps_[i105] + ");");
         }
 
         // M22: ANSI临时变量释放由emitStmtList统一处理, 此处不再单独清理

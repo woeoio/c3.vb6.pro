@@ -775,6 +775,33 @@
                 c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) { "
                             + gtmp102 + " = " + argVal + "; }");
                 argVal = gtmp102;
+            } else {
+                // 第一百零五刀 (§11.83): 聚合体（Variant）槽。真机 K 族量到与 Long 槽同一条
+                // 规则（K1 gHit=0 / K2 gN=1 gHit=0 / K5 gHit=0）：「命中即整句中止」。
+                // 聚合体不能 `= 0` 起手，但**可以声明**：vb6_VariantEmpty() 起手，
+                // 深拷贝 vb6_VariantCopy 拿自己那一份所有权，调用结束后 vb6_VariantClear 归还。
+                // ByRef 那一形交的是 `(&(vb6_VARIANT){...})` 临时量，提升后改交 `&_agN`。
+                if (!stmtCallArgEmitted_) {
+                    c_.emitLine("const int32_t " + stmtCallArgSerial_ + " = vb6_ErrSerial();");
+                    stmtCallArgEmitted_ = true;
+                }
+                std::string gtmp102 = "_ag" + std::to_string(tempCounter_++);
+                c_.emitLine("vb6_VARIANT " + gtmp102 + " = vb6_VariantEmpty();");
+                if (isByRef) {
+                    // ByRef 那一形交的本来就是 `(&(vb6_VARIANT){...})` 临时量（指针）。
+                    c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) { vb6_VariantCopy(&"
+                                + gtmp102 + ", " + argVal + "); }");
+                } else {
+                    // ByVal 那一形的 argVal **本身就是 vb6_VARIANT 值**，不能当复合字面量的首成员
+                    // 初始化器（那是 vt/uint16_t）。先接进一枚局部量再深拷贝；这枚局部量同时
+                    // 把「求值发生在守卫内」钉住（真机 K2 gN=1 / K3 gN=0）。
+                    const std::string stmp102 = "_as" + std::to_string(tempCounter_++);
+                    c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) { vb6_VARIANT "
+                                + stmp102 + " = " + argVal + "; vb6_VariantCopy(&" + gtmp102
+                                + ", &" + stmp102 + "); }");
+                }
+                stmtCallArgVarTemps_.push_back(gtmp102);
+                argVal = isByRef ? ("&" + gtmp102) : gtmp102;
             }
         }
         args.push_back(std::move(argVal));

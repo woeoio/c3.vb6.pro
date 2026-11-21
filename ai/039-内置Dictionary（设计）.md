@@ -4505,3 +4505,95 @@ if (isComMarker_) resolveComValue("Int");
   `rtl_embedded` 138）
 - `owned_temp_keeps` 255 行不变
 - manifest：新增 1 行（`tests/test_late_barecond.bas`），其余 0 变化
+
+### 11.83 第一百零五刀：Variant 槽的实参位（聚合体也能有临时量）
+
+第一百零二刀在实参位提升那儿留了一句跳过：
+
+```cpp
+// 落不到标量/串/对象类型的（Variant / UDT）不提升，留着当登记缺口。
+if (gtyp102 != "vb6_VARIANT") { ...提升... }
+```
+
+这一刀把这一档量掉、补上。
+
+#### 一、真机刻度（K 族）
+
+| 格 | 写法 | 真机读数 |
+|---|---|---|
+| K1 | `Call GVar(o.NoSuchProperty)`（ByVal Variant，单实参） | `gHit=0` err=438 |
+| K2 | `Call GVar2(GFn(), o.NoSuchProperty)` | `gHit=0 gN=1` err=438 |
+| K3 | `Call GVar2(o.NoSuchProperty, GFn())` | `gHit=0 gN=0` err=438 |
+| K4 | `v = o.NoSuchProperty`（`v As Variant` 先置 111） | `v=111` err=438 |
+| K5 | `Call GVarRef(o.NoSuchProperty)`（ByRef Variant） | `gHit=0` err=438 |
+| K7/K8 | 控制格 | `gHit=1`、err=0 |
+
+结论：**Variant 槽与 Long 槽同一条规则**（I 族那条）：命中即整句中止 —— 坏实参之后的不再求值、
+之前的照常求值、被调方不跑。K4 是另一处（赋值目标不许被写），本刀不动，另记。
+
+修前本地读数：K1 `gHit=1`、K2 `gHit=1 gN=1`、K5 `gHit=1`、K3 已对、K4 `v=""`（被写空）。
+
+#### 二、「落不到可声明临时量」其实不成立
+
+聚合体不能像标量那样 `= 0` 起手，但 **C 里 `vb6_VARIANT` 本来就是可声明的**。真正的顾虑不是
+可声明性，而是**所有权**：浅拷贝会让临时量与源共用同一只 BSTR，随后两边各 `Clear` 一次 =
+过度释放。RTL 已经有对的那一枚：
+
+```c
+void vb6_VariantCopy(vb6_VARIANT* dst, const vb6_VARIANT* src);  /* 深拷贝: BSTR 另分配 / Dispatch AddRef */
+```
+
+于是发码形（ByVal 槽）：
+
+```c
+const int32_t _eg0 = vb6_ErrSerial();
+vb6_VARIANT _ag1 = vb6_VariantEmpty();
+if (_eg0 == vb6_ErrSerial()) { vb6_VARIANT _as2 = <实参表达式>; vb6_VariantCopy(&_ag1, &_as2); }
+if (_eg0 == vb6_ErrSerial()) { vb6_GVar(_ag1); }
+vb6_VariantClear(&_ag1);
+```
+
+ByRef 槽（实参本来就是 `(&(vb6_VARIANT){...})` 临时量）直接拷贝、改交 `&_agN`：
+
+```c
+if (_eg7 == vb6_ErrSerial()) { vb6_VariantCopy(&_ag8, (&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=...})); }
+if (_eg7 == vb6_ErrSerial()) { vb6_GVarRef(&_ag8); }
+vb6_VariantClear(&_ag8);
+```
+
+三处要点：
+
+1. **`_as2` 那枚局部量不是多余的** —— 实参表达式本身就是 `vb6_VARIANT` 值，写成
+   `&(vb6_VARIANT){<argVal>}` 会被当成复合字面量的**首成员**（`vt`，uint16_t）初始化，
+   MSVC 直接 C2440（实测 k.c(52)/(67)）。接一手再拷，同时也把「求值发生在守卫内」钉死
+   （K2 `gN=1` / K3 `gN=0` 就靠这个）。
+2. **只清自己那份**：`vb6_VariantCopy` 是深拷贝，`vb6_VariantClear(&_agN)` 释放的是副本的
+   BSTR/Dispatch 引用；源临时量的处置与改前一致（不管），不引入新的双重释放。
+3. **守卫没放行时 `_agN` 还是空的**，`Clear` 空转，故无条件发。
+
+#### 三、语料
+
+修前全量扫（752 输入）：**110 处、5 个文件**落在这一档，**真实语料 0 处**（全是自家夹具：
+`dict_native` 45、`b171_slotarg` 2、`ucTreeView` 2、`VBFlexGridDemo` 2 等）。
+修后 rehash：**6 行变化**（`VBFlexGridDemo`×2、`b171_slotarg`、`ucTreeView`、`dict_native`×2）。
+
+#### 四、夹具与针
+
+- 新夹具 `tests/test_late_vararg.bas`（K1/K2/K5 + 控制格）
+- `b249_vararg_guard_shape` 七条针：序号声明、`_as` 深拷贝那一句、`GVar(_ag1)`、`Clear`、
+  K2 的 `_ag4 = vb6_GFn()`、`GVar2(_ag4, _ag5)`、K5 的 ByRef 形
+- `b249_vararg_guard_lesion` 两条反面针（取自未接提升时的逐字发射）
+
+#### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=753 / registered=753）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行（`tests/test_late_vararg.bas`）+ 6 行重算
+
+#### 六、仍挂着
+
+- **K4**：`v = o.NoSuchProperty` 目标被写（真机 `v=111`）。这是赋值位的守卫，不在实参位这条线上。
+- **UDT 槽**：这一族语料里没量到「UDT 形参 + 晚绑定读」的自然形（UDT 不能承接晚绑定读），
+  等出现再立账。
+- **`VT_BYREF` 写穿**：`Sub f(ByRef v As Variant)` 传标量左值时，真机是
+  `VarType(v)=16387` + 写穿；我们目前是装箱。这一条独立，别与本刀混。
