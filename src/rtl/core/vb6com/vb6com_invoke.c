@@ -1101,8 +1101,10 @@ static void* vb6_ComGetPropRcv(void* disp, const wchar_t* propName) {
            （真机读数 .temp/k93/vb6probe F3 `n = o.NoSuchProperty` ⇒ -1/438）。以前这里只打
            一行 stderr 就 NULL 回去，Err.Number 读到 0。与第八刀（vb6_ComCall 的 miss）同口径：
            抛 438、交空值让 Resume Next 继续，并立起「刚抛过 438」的标记吸收链尾那一次 miss。 */
-        g_com_438_dangling = 1;
-        vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        if (vb6_ComIsDispatchable(disp)) {   /* 第九十八刀: 只对真 IDispatch 报 438 */
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return NULL;
     }
 
@@ -1156,8 +1158,10 @@ static void* vb6_ComGetPropArgRcv(void* disp, const wchar_t* propName,
         vb6_ComDropPackedArgs(args, argc);   /* 账 #305 第二百八十九刀 */
         fwprintf(stderr, L"vb6_ComGetPropArg: property \"%ls\" not found\n", propName);
         /* C30-11 第九十八刀 (a): 同 vb6_ComGetProp —— 438，不是静默 NULL。 */
-        g_com_438_dangling = 1;
-        vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        if (vb6_ComIsDispatchable(disp)) {   /* 第九十八刀: 只对真 IDispatch 报 438 */
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return NULL;
     }
 
@@ -1306,9 +1310,13 @@ static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_v
     if (dispid == DISPID_UNKNOWN) {
         free(value_void);
         fwprintf(stderr, L"vb6_ComSetProp: property \"%ls\" not found\n", propName);
-        /* C30-11 第九十八刀 (a): 真机 F5 `o.NoSuchProperty = 5` ⇒ err=438（以前静默吞掉）。 */
-        g_com_438_dangling = 1;
-        vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        /* C30-11 第九十八刀 (a): 真机 F5 `o.NoSuchProperty = 5` ⇒ err=438（以前静默吞掉）。
+           只对**真 IDispatch** 报：Object 槽里装的不是 IDispatch（账 #412 那档）时
+            VB6 那边本来有对象，C3 报 438 会把能跑的工程打崩（CI: b190_object_formal_scope）。 */
+        if (vb6_ComIsDispatchable(disp)) {
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return;
     }
 
@@ -1362,9 +1370,11 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
         free(value_void);
         fwprintf(stderr, L"vb6_ComSetPropArg: property \"%ls\" not found\n",
                  propName ? propName : L"(default)");
-        /* C30-11 第九十八刀 (a): 同 vb6_ComSetProp —— 438，不是静默丢。 */
-        g_com_438_dangling = 1;
-        vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        /* C30-11 第九十八刀 (a): 同 vb6_ComSetProp —— 438，不是静默丢（仅真 IDispatch）。 */
+        if (vb6_ComIsDispatchable(disp)) {
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return;
     }
 
@@ -1437,9 +1447,11 @@ static void vb6_ComSetRefRcv(void* disp, const wchar_t* propName, void* objRef) 
     DISPID dispid = (!propName || !propName[0]) ? DISPID_VALUE : vb6_getDispid(pDisp, dispName);
     if (dispid == DISPID_UNKNOWN) {
         fwprintf(stderr, L"vb6_ComSetRef: property \"%ls\" not found\n", dispName);
-        /* C30-11 第九十八刀 (a): Set 形同 Let —— 438，不是静默丢。 */
-        g_com_438_dangling = 1;
-        vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        /* C30-11 第九十八刀 (a): Set 形同 Let —— 438，不是静默丢（仅真 IDispatch）。 */
+        if (vb6_ComIsDispatchable(disp)) {
+            g_com_438_dangling = 1;
+            vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+        }
         return;
     }
 
