@@ -4214,3 +4214,65 @@ New.args / TypeOf.object`。
    （n=7）。这不是"整句中止"，是 VB6 单行 If 的错误续行语义（`Resume Next` 落在 Then 那句
    上）。要先补两格探针（多行 If 块的条件报错 / `ElseIf`）把边界量清楚，再决定要不要模仿
    —— 现在 C3 是 -1（不执行），与真机不一致，**已登记为差异**。
+
+### 11.79 第一百零一刀：条件位报错 ⇒ 按真
+
+#### 一、读数（探针 H 段，真机 + 本仓）
+
+| 格 | 语句 | 真机 | 改前 C3 | 现在 C3 |
+|---|---|---|---|---|
+| G5 | `If o.NoSuchProperty = 1 Then n = 7` | 7 / 438 | -1 | **7 / 438** |
+| H1 | 单行 If（同上，基线） | 7 / 438 | -1 | **7** |
+| H2 | 单行 `Then n = 7 Else n = 8` | **7**（走 Then） | 8（走 Else） | **7** |
+| H3 | 多行 `If … Then / n = 7 / End If` | **7** | -1 | **7** |
+| H4 | `ElseIf o.NoSuchProperty = 1`（前面 `1=2`） | **7** | 8 | **7** |
+| H5 | `Do While o.NoSuchProperty = 1` | **7**（进一次） | -1 | **7** |
+| H6 | `n = GPick(o.NoSuchProperty)` | -1 / 438 | -1 | -1（百刀已盖） |
+| H7 | `Call GTouch2(1, o.NoSuchProperty)` | 被调方不跑 | 跑 | 跑（未接，下一刀） |
+
+结论与赋值站**相反**：值位置是「整句中止」，条件位是「**报错按真**」——单行/多行/ElseIf/Do While
+四种条件位一致。H2 说明不是「当假走 Else」：真机走的是 Then。
+
+#### 二、形
+
+RTL 一枚出口，把「序号变了 ⇒ 真」收口：
+
+```c
+static inline int32_t vb6_CondIfErr(int32_t serialBefore, int32_t value) {
+    return (serialBefore != vb6_ErrSerial()) ? 1 : (value != 0);
+}
+```
+
+发码站（`guardCondLateRead`，住在 `cgen_util_type.cpp`，紧跟 `conditionTruthExpr`）：
+
+```c
+const int32_t _c1 = vb6_ErrSerial();
+if (vb6_CondIfErr(_c1, (<原条件>))) {
+```
+
+序号必须在**求条件之前**捕下，所以是两行；条件不含晚绑定读时**逐字节不变**（直接交回原文本）。
+接的站：`If`、`ElseIf`、`Do While`、`While … Wend`。`Do Until` / `Loop Until` 未量（H 段没覆盖
+取反那一档），**不接**，登记为缺口。
+
+#### 三、顺手收口
+
+第九十八/九十九/一百刀在 `cgen_assign.cpp` 里内联过两枚 lambda（接收者判据 + 树扫描）。条件位要问
+同一问，于是升成成员函数 `lateBoundComReadExpr` / `exprHasLateBoundComRead`（`cgen_util_scan.cpp`），
+赋值站与条件位同读一处；`cgen_assign.cpp` 里那份复本删掉。
+
+#### 四、churn
+
+清单 750 行：**23 行**变动（条件位这一族落在语料上的部分；`regexp_native/ReMain.bas` 也在此列）。
+
+#### 五、门
+
+- 探针 G5 + H1–H5 六格与真机逐字一致；H6 不变；G4/H7 见第六节。
+- 静态门 9 枚 PASS（`proto_arity` 1785、`rtl_embedded` 138 件）；`owned_temp_keeps` 255 行不变。
+- `-Category syntax` **227/227**。
+
+#### 六、仍挂着
+
+1. **G4 / H7：调用语句实参位**。真机两只都是「被调方不跑」（H7 里第一枚实参正常也不影响结论）。
+   这一族在语料里 **3,068 句**（最大的块），要先提实参、再按序号决定调不调，且需要被调形参的档。
+2. **`Do Until` / `Loop Until`** 的条件位未量（取反语义不在 H 段里）。
+

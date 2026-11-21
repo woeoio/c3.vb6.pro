@@ -264,49 +264,10 @@ void CCodeGen::visit(AssignmentStmt& node) {
             }
         }
         // 第九十八刀 (b): 右值是晚绑定成员读/调用（接收者是 Object 档）—— COM 站现在会报 438
-        // （第九十八刀 a 那五枚分支），真机读数 F3/F4/F5/F6 全是「438 + 目标不动」。
-        // 这里只接**标量数值目标**：守卫/临时量那条机制能直接吃。BSTR 目标那一族（清单上
-        // 179 句）的保存/恢复要连所有权一起算（与第八十三刀同一条纪律），另开一刀；
-        // 表达式里的位置（1,486 句）守卫机制插不进去，也另记。
-        // 第一百刀 (§11.78): 接收者判据收成两枚 lambda —— 顶层(98/99) 与表达式内(100)
-        // 共用同一枚，免得「按链根判」这条修正在两处各写一遍、再各错一遍。
-        auto comRecv100 = [&](Expr* rcv) -> bool {
-            if (!rcv) return false;
-            Expr* root = rcv;
-            while (root) {
-                if (root->kind == ASTNodeKind::MemberAccessExpr)
-                    root = static_cast<MemberAccessExpr&>(*root).object.get();
-                else if (root->kind == ASTNodeKind::IndexOrCallExpr
-                         && static_cast<IndexOrCallExpr&>(*root).callee)
-                    root = static_cast<IndexOrCallExpr&>(*root).callee.get();
-                else break;
-            }
-            if (!root || root->kind != ASTNodeKind::IdentifierExpr) return false;
-            const std::string rn = Symbol::toLower(static_cast<IdentifierExpr&>(*root).name);
-            // 排除面（三条，与 98 同一张）：控件数组 / 伪宿主 / 非变量接收者。
-            static const char* kHost100[] = { "printer", "printers", "screen", "app",
-                                             "clipboard", "me", nullptr };
-            if (knownControlArrays_.count(rn)) return false;
-            for (int hi = 0; kHost100[hi]; hi++)
-                if (rn == kHost100[hi]) return false;
-            if (!knownLocalVars_.count(rn)) return false;
-            if (inferExprType(*rcv) == Vb6Type::Object) return true;
-            return knownObjectVars_.count(rn) > 0;
-        };
-        // 这一枚节点**本身**是不是晚绑定成员读/调用。
-        auto lateRead100 = [&](Expr* e) -> bool {
-            if (!e) return false;
-            if (e->kind == ASTNodeKind::MemberAccessExpr)
-                return comRecv100(static_cast<MemberAccessExpr&>(*e).object.get());
-            if (e->kind == ASTNodeKind::IndexOrCallExpr) {
-                auto& c = static_cast<IndexOrCallExpr&>(*e);
-                if (c.callee && c.callee->kind == ASTNodeKind::MemberAccessExpr)
-                    return comRecv100(static_cast<MemberAccessExpr&>(*c.callee).object.get());
-            }
-            return false;
-        };
+        // 第一百刀/第一百零一刀: 接收者判据收成**成员函数** lateBoundComReadExpr /
+        // exprHasLateBoundComRead (cgen_util_scan.cpp) —— 赋值站与条件位同读一处。
         if ((tgtInt79 || tgtDbl97 || tgtT79 == Vb6Type::String) && node.value) {
-            if (lateRead100(node.value.get())) {
+            if (lateBoundComReadExpr(node.value.get())) {
                 // 顶层就是那次成员读（98/99 两形）：标量走守卫+临时量，String 交 99 的出口。
                 if (tgtT79 == Vb6Type::String) {
                     lateBstrCom99_ = true;
@@ -329,44 +290,9 @@ void CCodeGen::visit(AssignmentStmt& node) {
         // 右值里那次 438 发生在 `_t` 的计算里 ⇒ 目标那一步不写。String 目标的临时量与中止时的
         // 释放由 emitBstrSlotStore 的守卫支自己发（第八十三刀那条纪律，这里不碰所有权）。
         // 只在**顶层不是成员读**时才走这一条：顶层那两形（98/99）已各自接了。
-        if (node.value && !lateBstrCom99_ && !lateRead100(node.value.get())
+        if (node.value && !lateBstrCom99_ && !lateBoundComReadExpr(node.value.get())
             && (tgtInt79 || tgtDbl97 || tgtT79 == Vb6Type::String)) {
-            std::function<bool(Expr*)> anyLate100 = [&](Expr* e) -> bool {
-                if (!e) return false;
-                if (lateRead100(e)) return true;
-                switch (e->kind) {
-                case ASTNodeKind::BinaryExpr: {
-                    auto& b = static_cast<BinaryExpr&>(*e);
-                    return anyLate100(b.left.get()) || anyLate100(b.right.get());
-                }
-                case ASTNodeKind::UnaryExpr:
-                    return anyLate100(static_cast<UnaryExpr&>(*e).operand.get());
-                case ASTNodeKind::MemberAccessExpr:
-                    return anyLate100(static_cast<MemberAccessExpr&>(*e).object.get());
-                case ASTNodeKind::DictionaryAccessExpr:
-                    return anyLate100(static_cast<DictionaryAccessExpr&>(*e).object.get());
-                case ASTNodeKind::IndexOrCallExpr: {
-                    auto& c = static_cast<IndexOrCallExpr&>(*e);
-                    if (anyLate100(c.callee.get())) return true;
-                    for (auto& a : c.positional)
-                        if (anyLate100(a.get())) return true;
-                    for (auto& na : c.named)
-                        if (anyLate100(na.value.get())) return true;
-                    return false;
-                }
-                case ASTNodeKind::NewExpr: {
-                    auto& nw = static_cast<NewExpr&>(*e);
-                    for (auto& a : nw.args)
-                        if (anyLate100(a.get())) return true;
-                    return false;
-                }
-                case ASTNodeKind::TypeOfExpr:
-                    return anyLate100(static_cast<TypeOfExpr&>(*e).object.get());
-                default:
-                    return false;
-                }
-            };
-            if (anyLate100(node.value.get())) {
+            if (exprHasLateBoundComRead(node.value.get())) {
                 mayRaise79 = true;
                 if (tgtInt79 || tgtDbl97) {
                     stmtAbortTmp_ = true;

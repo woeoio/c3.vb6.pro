@@ -918,6 +918,18 @@
     //   逐字沿用); 其余原样交回。
     std::string conditionTruthExpr(const std::string& cExpr, Expr* cond) const;
 
+    // 第一百零一刀 (§11.79): 「这一枚节点本身是不是晚绑定成员读/调用」—— 判据与第九十八/
+    //   九十九/一百刀同一枚：接收者按**链根**判（晚绑定 Object 变量），排除控件数组 /
+    //   伪宿主 / Me / 同工程函数名。条件位那一族（If / ElseIf / Do While / While Wend）问它。
+    bool lateBoundComReadExpr(Expr* e) const;
+    // 同一判据的**树**版：这棵表达式里有没有任何一枚晚绑定成员读。
+    bool exprHasLateBoundComRead(Expr* e) const;
+    // 第一百零一刀 (§11.79): 条件位收口 —— 条件里含晚绑定读时，先发一行序号捕获，
+    // 再把条件表达式折成 vb6_CondIfErr(<序号>, (<cond>))：求完序号变了就按真。
+    // 真机 H1–H5: 单行 If / 多行 If 块 / ElseIf / Do While 的条件报 438 之后那一支都执行。
+    // 不含晚绑定读的条件**逐字节不变**（直接交回 cExpr）。
+    std::string guardCondLateRead(const std::string& cExpr, Expr* cond);
+
     // 账 #305 §B171 (第六十二刀): 「这一枚 C 文本是不是**类字段里那枚 Variant 槽的读**」——
     // cExprIsVariant 的一条来源, 单独成一枚是因为它是**唯一可寻址**的那一档: 装箱站对
     // 「槽的函数结果」只能复制, 对「槽字段本身」可以直传 &(...)。判据 = 尾注里那个

@@ -190,6 +190,8 @@ void CCodeGen::visit(IfStmt& node) {
     //   原来那一段 (Fix 090ag) 只认「是不是槽」, 于是裸晚绑定调用那一发发成 if (vb6_ComCall(...))
     //   = 测指针, 恒真; 槽那一档的答案 (含 As Variant 裸标识符那一路) 逐字沿用。
     lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
+    // 第一百零一刀 (§11.79): 条件里有晚绑定成员读 ⇒ 报错按真（真机 H1/H3）
+    lastExpr_ = guardCondLateRead(lastExpr_, node.condition.get());
     c_.emitLine("if (" + lastExpr_ + ") {");
     c_.indent();
     emitStmtList(node.thenBody);
@@ -212,6 +214,8 @@ void CCodeGen::visit(IfStmt& node) {
         // 账 #305 第二百四十四刀: 这一站从前连「真值那一问」都没问 (既不包槽也不认裸晚绑定调用),
         //   同一句条件写在 ElseIf 上比写在 If 上还少一层。
         lastExpr_ = conditionTruthExpr(lastExpr_, elseif->condition.get());
+        // 第一百零一刀 (§11.79): ElseIf 的条件同问（真机 H4: 前面假、ElseIf 条件报错 ⇒ 它那一支执行）
+        lastExpr_ = guardCondLateRead(lastExpr_, elseif->condition.get());
         c_.emitLine("if (" + lastExpr_ + ") {");
         c_.indent();
         emitStmtList(elseif->body);

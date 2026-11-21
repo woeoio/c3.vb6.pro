@@ -1390,6 +1390,18 @@ std::string CCodeGen::conditionTruthExpr(const std::string& cExpr, Expr* cond) c
     return cExpr;
 }
 
+// 第一百零一刀 (§11.79): 条件位的晚绑定读 —— 真机 H1–H5 读数：
+//   单行 If（有/无 Else）/ 多行 If 块 / ElseIf / Do While 的条件里一旦报 438，
+//   那一支**都执行**（n=7）—— 不是「整句中止」，也不是「当假」。
+// 形：序号在**求条件之前**捕下，求完再问 —— 变了就按真，否则用算出来的值。
+// 只对含晚绑定成员读的条件发；其余条件逐字节不变。
+std::string CCodeGen::guardCondLateRead(const std::string& cExpr, Expr* cond) {
+    if (!cond || !exprHasLateBoundComRead(cond)) return cExpr;
+    const std::string sv = "_c" + std::to_string(stmtAbortSeq_++);
+    c_.emitLine("const int32_t " + sv + " = vb6_ErrSerial();");
+    return "vb6_CondIfErr(" + sv + ", (" + cExpr + "))";
+}
+
 // 账 §56.40: 「这枚工程类成员的**方法**返回档是不是 Variant」—— 权威是类符号的
 // memberReturnTypes (与 inferExprType 的同名映射同源: cgen_util_type.cpp 里
 // 「类实例成员函数返回类型」那一节)。窄口径: 只认表里**明写 variant** 的那一档,

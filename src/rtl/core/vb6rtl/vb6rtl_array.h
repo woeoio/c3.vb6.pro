@@ -453,6 +453,14 @@ void vb6_ErrRaiseNumber(int32_t errNum);
 // C30-11 第七十九刀 (§B227): 错误序号 —— 每次 vb6_ErrRaise 自增。赋值站用它判
 // 断「本语句里 raise 过吗」：变了就不写目标（VB6 的语句级中止）。
 int32_t vb6_ErrSerial(void);
+
+// C30-11 第一百零一刀 (§11.79): 条件位的晚绑定读报错 ⇒ **按真走**。
+// 真机读数 (.temp/k93/vb6probe H 段): 单行 If / 多行 If 块 / ElseIf / Do While 的条件里
+// 一旦报 438, 那一支**都执行** (H1–H5 全是 7) —— 不是「整句中止」, 也不是「当假」。
+// 形: 序号在求条件之前捕下, 求完再问 —— 序号变了就当真, 否则用算出来的值。
+static inline int32_t vb6_CondIfErr(int32_t serialBefore, int32_t value) {
+    return (serialBefore != vb6_ErrSerial()) ? 1 : (value != 0);
+}
 // C30-11 第八十一刀: Variant→String 转换失败的标记（与错误序号同源）。
 void vb6_ConvFailMark(void);
 // C30-11 第八十六刀: 本语句刚有一次实参转换失败⇒ 1（Mid/Left/Right/Chr 用它决定

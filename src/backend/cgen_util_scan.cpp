@@ -8,6 +8,83 @@ namespace vb6c3 {
 
 // --- cgen_util_scan.cpp: AST 扫描辅助 (GoSub / 多维数组 / Resume / OnError) ---
 
+// ============================================================
+// 第一百零一刀 (§11.79): 晚绑定成员读的判据收成一处
+//   第九十八/九十九/一百刀在 cgen_assign.cpp 里写过一遍（那三刀只用于赋值站），条件位
+//   这一刀要问同一问 —— 不再抄第二份，改成成员函数，两边同读。
+//   判据：接收者按**链根**下钻（MemberAccess / IndexOrCall->callee），根是标识符、
+//   是登记过的**变量**（排除同工程函数名 / 本类成员），不在控件数组与伪宿主名单里，
+//   且推断型是 Object（或以 knownObjectVars_ 兵底）。
+// ============================================================
+bool CCodeGen::lateBoundComReadExpr(Expr* e) const {
+    if (!e) return false;
+    Expr* rcv = nullptr;
+    if (e->kind == ASTNodeKind::MemberAccessExpr) {
+        rcv = static_cast<MemberAccessExpr&>(*e).object.get();
+    } else if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+        auto& c = static_cast<IndexOrCallExpr&>(*e);
+        if (c.callee && c.callee->kind == ASTNodeKind::MemberAccessExpr)
+            rcv = static_cast<MemberAccessExpr&>(*c.callee).object.get();
+    }
+    if (!rcv) return false;
+    Expr* root = rcv;
+    while (root) {
+        if (root->kind == ASTNodeKind::MemberAccessExpr)
+            root = static_cast<MemberAccessExpr&>(*root).object.get();
+        else if (root->kind == ASTNodeKind::IndexOrCallExpr
+                 && static_cast<IndexOrCallExpr&>(*root).callee)
+            root = static_cast<IndexOrCallExpr&>(*root).callee.get();
+        else
+            break;
+    }
+    if (!root || root->kind != ASTNodeKind::IdentifierExpr) return false;
+    const std::string rn = Symbol::toLower(static_cast<IdentifierExpr&>(*root).name);
+    static const char* kHost[] = { "printer", "printers", "screen", "app",
+                                  "clipboard", "me", nullptr };
+    if (knownControlArrays_.count(rn)) return false;
+    for (int i = 0; kHost[i]; i++)
+        if (rn == kHost[i]) return false;
+    if (!knownLocalVars_.count(rn)) return false;
+    if (inferExprType(*rcv) == Vb6Type::Object) return true;
+    return knownObjectVars_.count(rn) > 0;
+}
+
+bool CCodeGen::exprHasLateBoundComRead(Expr* e) const {
+    if (!e) return false;
+    if (lateBoundComReadExpr(e)) return true;
+    switch (e->kind) {
+        case ASTNodeKind::BinaryExpr: {
+            auto& b = static_cast<BinaryExpr&>(*e);
+            return exprHasLateBoundComRead(b.left.get()) || exprHasLateBoundComRead(b.right.get());
+        }
+        case ASTNodeKind::UnaryExpr:
+            return exprHasLateBoundComRead(static_cast<UnaryExpr&>(*e).operand.get());
+        case ASTNodeKind::MemberAccessExpr:
+            return exprHasLateBoundComRead(static_cast<MemberAccessExpr&>(*e).object.get());
+        case ASTNodeKind::DictionaryAccessExpr:
+            return exprHasLateBoundComRead(static_cast<DictionaryAccessExpr&>(*e).object.get());
+        case ASTNodeKind::IndexOrCallExpr: {
+            auto& c = static_cast<IndexOrCallExpr&>(*e);
+            if (exprHasLateBoundComRead(c.callee.get())) return true;
+            for (auto& a : c.positional)
+                if (exprHasLateBoundComRead(a.get())) return true;
+            for (auto& na : c.named)
+                if (exprHasLateBoundComRead(na.value.get())) return true;
+            return false;
+        }
+        case ASTNodeKind::NewExpr: {
+            auto& nw = static_cast<NewExpr&>(*e);
+            for (auto& a : nw.args)
+                if (exprHasLateBoundComRead(a.get())) return true;
+            return false;
+        }
+        case ASTNodeKind::TypeOfExpr:
+            return exprHasLateBoundComRead(static_cast<TypeOfExpr&>(*e).object.get());
+        default:
+            return false;
+    }
+}
+
 
 // ============================================================
 // AST辅助: 检测语句列表中是否包含GoSubStmt

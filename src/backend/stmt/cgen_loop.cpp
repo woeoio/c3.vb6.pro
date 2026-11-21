@@ -30,6 +30,8 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 if (isComMarker_) resolveComValue("Int");
                 // 账 #305 第二百四十四刀: 条件那一族同问一位主人 (Do While 恒真 = 死循环)
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
+                // 第一百零一刀 (§11.79): 条件报 438 ⇒ 按真（真机 H5: 进循环一次）
+                lastExpr_ = guardCondLateRead(lastExpr_, node.condition.get());
                 c_.emitLine("if (!(" + lastExpr_ + ")) goto " + exitLabel + ";");
                 c_.indent();
                 emitStmtList(node.body);
@@ -142,6 +144,8 @@ void CCodeGen::visit(WhileWendStmt& node) {
     emitExpr(*node.condition);
     // 账 #305 第二百四十四刀: While...Wend 与 Do While 同问 (第七站)
     lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
+    // 第一百零一刀 (§11.79): While...Wend 与 Do While 同一站
+    lastExpr_ = guardCondLateRead(lastExpr_, node.condition.get());
     c_.emitLine("if (!(" + lastExpr_ + ")) goto " + exitLabel + ";");
     c_.indent();
     emitStmtList(node.body);
