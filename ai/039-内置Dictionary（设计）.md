@@ -5028,3 +5028,59 @@ ProbeMain.c(68): error C2440: 同上（控制格 `Set c.f = o`）
 
 真机探针已写出（`.temp/k111/probe111/RealMachineProbe111.bas`，五格：Q1 / Q1c 控制 /
 Q2 参照 / Q3 / Q3c 控制），等真机数回来再改编译器 —— 两形都按「先量后改」处理。
+---
+
+## §11.93 第一百一十一刀：Set 到解引用槽 (*w) 与 With 块 UDT Variant 字段（真机 Q 族）
+
+### 一、真机
+
+| 格 | 语句 | 真机 | 修前本机 |
+|----|------|------|----------|
+| Q1 | `Set w = o.NoSuchProperty`（w = ByRef Variant，C `(*w)`） | `v=111` / 438 | **C2440 编不过** |
+| Q1c | `Set w = o`（控制格） | `isobj=True` / 0 | C2440 |
+| Q2 | `Set uv.f = o.NoSuchProperty`（UDT 字段，参照） | `uv.f=111` / 438 | 111 / 438 ✅ |
+| Q3 | `With uv : Set .f = o.NoSuchProperty` | `uv.f=111` / 438 | **空** / 438 ✗ |
+| Q3c | `With uv : Set .f = o`（控制格） | `isobj=True` / 0 | 落槽 ✅ |
+
+### 二、两个根因
+
+1. **Q1：剥壳只认长名**。判定 Variant 容器前把 `(*w)` 剥成 `w` 的那句条件是 `size() > 4`，
+   而 `(*w)` 恰好 4 个字符 ⇒ 不剥 ⇒ 名字带星号查表全落空 ⇒ 当 typed 槽发
+   `(*w) = vb6_ComGetObjectProp(o, L"…");`（void* → vb6_VARIANT，C2440，装箱整个缺）。
+2. **Q3：判据把「含 `->`」一律排到裸赋**。`plainVar108` 要求 `target` 里既无 `(` 也无 `->`；
+   With 块的字段发出来是 `_vb6_with_N->f` ⇒ 进不了守卫那一档，438 之后照样把槽写空（且不退旧值）。
+
+### 三、改法（`cgen_setlet_set_rhs.inc`）
+
+- **Q1**：不全局放宽剥壳（那么做会把 `(*p)` 这种**工程类出参槽**也剥掉，见下面「A/B 退回记录」），
+  单开一问 `derefVariant111`：目标形如 `(*名)` 且
+  ① `classOfProjectRefOutSlot(target)` 交空（工程类出参槽归 §B218 腿②′）；
+  ② 名字在 `knownVariantVars_` 里、不在 `knownObjectVars_` / `knownTypedComVars_` 里；
+  ③ `inferClassTypeOfExpr` 答不出类名（与 §11.87 的 staleness 否决同一口径）。
+  命中才 `targetIsVariant = true`（装箱 + 守卫一并接上）。
+- **Q3**：`plainVar108` 的排除项从「含 `(` 或 `->`」改成「目标不是一次纯粹的左值求值」：
+  `(*w)` 与「`->` 之前没有括号」两形都算纯左值；只把**带函数调用**的目标
+  （`Add(…)->Image`，写回两次会多调一次）留在原路。
+- 两形写回仍走既有那一档：`_eN` 序号 + `_vsN` 临时量 + 同序号闸，
+  写回是 `vb6_VariantClear(&<槽>); <槽> = _vsN;`（槽是真存储，临时量移进去）。
+
+#### 四、A/B 退回记录（记一次真回归）
+
+第一版把剥壳条件从 `size() > 4` 放宽成 `>= 4`，全量 rehash 立刻给出 **2 行 churn**：
+`tests/b187_box/B187d.vbp` / `tests/b445_refcount/B445.vbp`。用 BASE（`git stash` + 重建）与新机
+并排重发那两份，diff 逐字给出原因：`(*p)` 里的 `p` 是 `As B187Good` / `As C445` 的**出参槽**，
+剥壳后被当成 Variant 容器 ⇒ §B218 腿②′ 那整段（Unbox + AddRef + 花括号注释）被抢走，两行各短 72 / 3 字节。
+改成只看声明档的 `derefVariant111` 后，那两份与 BASE **逐行相同**，全量 rehash 回到 0 行。
+
+### 五、量
+
+- 语料实编 churn：**0 行**（760 行逐行同；单进程一次跑完）。
+- 新夹具 `tests/test_late_setslot2.bas`：五格与真机逐字相同（Q1 / Q1c / Q2 参照 / Q3 / Q3c）。
+- 针：`b256_setslot2_shape`（7 条，含 `vb6_VariantClear(&(*w)); (*w) = _vs`、With 字段的
+  `->f); _vb6_with_`、Q2 回归针）／`b256_setslot2_lesion`（2 条：裸 `(*w) = ComGetObjectProp`、
+  裸 `->f = VariantFromValue(ComGetObjectProp)`）。
+
+### 六、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=760 [.vbp=280 .bas=480] registered=760）
+- manifest：759 → 760 行（只新增本刀那一行，存量 0 行变动）
