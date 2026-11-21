@@ -7,6 +7,10 @@
     // 语义 = 把对象引用存进 Variant (拷贝/FromValue), 而非提取对象到 typed 指针.
     std::string checkName = target;
     if (checkName.substr(0, 4) == "me->") checkName = checkName.substr(4);
+    // Fix 025: 单字母形参的 `(*x)` 不在这里剥 (下面是 4 字符的严格长) —— 剥壳必须看**声明档**:
+    // 工程类出参槽 `(*p)` 也是这个形状, 剥了就会被当成 Variant 容器、把 §B218 腿②' 那位主人抢走
+    // (第一百一十一刀 A/B 实测: 只按长度剥 ⇒ B187d/B445 两行发码各短 72/3 字节)。
+    // 真要认的那一形 (声明确实为 Variant 的 `(*w)`) 由下面 derefVariant111 单独一问。
     if (checkName.size() > 4 && checkName[0] == '(' && checkName[1] == '*'
         && checkName.back() == ')') {
         checkName = checkName.substr(2, checkName.size() - 3);
@@ -52,6 +56,27 @@
         classVarFieldSlot110_ast110
         || (target.rfind("me->", 0) == 0 && classVariantFields_.count(targetLower) > 0);
     if (classVarFieldSlot110) targetIsVariant = true;
+    // 第一百一十一刀 (§11.93): 真机 Q1 `Set w = o.NoSuchProperty`（w = ByRef Variant 形参）
+    // 的目标文本是 `(*w)`，恰好 4 个字符 —— 上面那句 `size() > 4` 的剥壳恰好不成立，
+    // 目标名带着星号去查表 ⇒ 当 typed 槽发 `(*w) = vb6_ComGetObjectProp(...)`（C2440）。
+    // 这里单开一问，剥壳只在**声明确实为 Variant**时生效：
+    //   ① 不是工程类出参槽（classOfProjectRefOutSlot 交空）—— 那一形归 §B218 腿②'；
+    //   ② 名字在 Variant 表里，不在对象 / 带类型 COM 表里；
+    //   ③ AST 答不出类名（与 §11.87 那条 staleness 否决同一口径）。
+    bool derefVariant111 = false;
+    if (target.compare(0, 2, "(*") == 0 && target.back() == ')'
+        && classOfProjectRefOutSlot(target).empty()) {
+        const std::string inner111 = target.substr(2, target.size() - 3);
+        if (!inner111.empty() && inner111.find_first_of(" ()->.") == std::string::npos) {
+            std::string low111 = inner111;
+            std::transform(low111.begin(), low111.end(), low111.begin(), ::tolower);
+            derefVariant111 = knownVariantVars_.count(low111) > 0
+                && !knownObjectVars_.count(low111)
+                && !knownTypedComVars_.count(low111)
+                && (!node.target || inferClassTypeOfExpr(*node.target).empty());
+        }
+    }
+    if (derefVariant111) targetIsVariant = true;
     if (std::getenv("C3_DBG_VSET110") && classVarFieldSlot110)
         std::cerr << "[VSET110-DET] tgt=" << target << std::endl;
     // Fix 084n: UDT 的 Variant 字段 (如 ZipFileInfo.SourceFile As Variant)
@@ -441,9 +466,22 @@
             // 缺读报 438 之后照样把空值塞进 v（本机旧读数 `v=`）。
             // 只接**裸变量**目标（`v`）——数组元素那一支在上面先走了（未量，不猜）；
             // `me->字段` / UDT 字段槽 / 解引用形同样未量，仍走下面的原路。
-            const bool plainVar108 = target.compare(0, 7, "VB6_SA_") != 0
-                && target.find("->") == std::string::npos
-                && target.find('(') == std::string::npos;
+            // 第一百一十一刀 (§11.93): 真机 Q1/Q3 = 111/438 —— 「解引用槽 `(*w)`」与
+            // 「With 块 / UDT 走 `->` 的字段槽」同样是一处**真存储**, 与裸变量同一条规则:
+            // 读数失败 ⇒ 槽里一个字不动。旧判据把「含 ( 或 ->」一律排到裸赋那条路 ——
+            // 后果就是本刀那两格 (Q3 槽被清空、Q1 连装箱都没有)。
+            // 判据改成「目标是不是一次**纯粹的左值求值**」: `(*w)` 与「`->` 前没有括号」
+            // 两形都纯; 只把**带函数调用**的目标 (`Add(…)->Image`, 求值两次有副作用)
+            // 留在原路。
+            const bool pureLvalue111 = [&]() -> bool {
+                if (target.compare(0, 2, "(*") == 0 && target.back() == ')')
+                    return target.find(')', 2) == target.size() - 1;
+                const size_t mem111 = target.rfind("->");
+                const size_t lp111 = target.find('(');
+                return lp111 == std::string::npos
+                    || (mem111 != std::string::npos && lp111 > mem111);
+            }();
+            const bool plainVar108 = target.compare(0, 7, "VB6_SA_") != 0 && pureLvalue111;
             // 第一百一十刀 (§11.91): 类字段 Variant 槽 —— 真机 P1/P2 与裸变量位同一条规则
             // (读数失败 ⇒ 槽里一个字不动); P3/P4 控制格必须落槽。槽是**真存储**, 覆写前
             // 先退旧值 (以前 me-> 那一形连旧值都不退, 只发一句裸 `me->f = <boxed>`)。
