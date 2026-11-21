@@ -1402,6 +1402,16 @@ std::string CCodeGen::guardCondLateRead(const std::string& cExpr, Expr* cond) {
     return "vb6_CondIfErr(" + sv + ", (" + cExpr + "))";
 }
 
+// 第一百零三刀 (§11.81): 取反站 (Do Until) 与后测两站 (Loop While / Loop Until) 的条件守卫。
+// 真机 J 族量到「报错 ⇒ 从该语句的下一条继续」与极性无关：前测进体、后测出循环。
+// 这几站对「下一条」的落点与同向站相反，所以用报错按假的那一枚入口。
+std::string CCodeGen::guardCondLateReadNoErr(const std::string& cExpr, Expr* cond) {
+    if (!cond || !exprHasLateBoundComRead(cond)) return cExpr;
+    const std::string sv = "_c" + std::to_string(stmtAbortSeq_++);
+    c_.emitLine("const int32_t " + sv + " = vb6_ErrSerial();");
+    return "vb6_CondIfNoErr(" + sv + ", (" + cExpr + "))";
+}
+
 // 账 §56.40: 「这枚工程类成员的**方法**返回档是不是 Variant」—— 权威是类符号的
 // memberReturnTypes (与 inferExprType 的同名映射同源: cgen_util_type.cpp 里
 // 「类实例成员函数返回类型」那一节)。窄口径: 只认表里**明写 variant** 的那一档,

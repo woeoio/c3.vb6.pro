@@ -4341,3 +4341,82 @@ optional 补位、ParamArray 打包都在它之后，故不动既有逻辑）；
 1. **Variant / UDT 形参位**：落不到可声明临时量的档，暂不提升（`mapType` 交 `vb6_VARIANT`）。
 2. **`Do Until` / `Loop Until`** 条件位仍未量（取反语义不在 H 段里）。
 3. **`LenB(<UDT>)`** 仍挂账。
+
+### 11.81 第一百零三刀：条件位报错 ⇒ 从该语句的下一条继续
+
+第一百零一刀把条件位按「报错 ⇒ 按真」接了 `If` / `ElseIf` / `Do While` / `While…Wend`，
+`Do Until` / `Loop While` / `Loop Until` 三站当时**故意没接**（取反语义没量）。真机 J 族
+（`.temp/k93/vb6probe/RealMachineProbe.bas`）量完，口径要改一次说法：
+
+| 格 | 写法 | 真机读数 | 说明 |
+|---|---|---|---|
+| J1 | `Do Until o.Bad = 1` | `n=4` | 报错 ⇒ **进循环体**（撞防死循环闸） |
+| J2 | `Do … Loop Until o.Bad = 1` | `n=1` | 报错 ⇒ **出循环** |
+| J3 / J4 | `Do Until Not o.Bad` / `Loop Until Not o.Bad` | `n=4` / `n=1` | 与有没有 `Not` 无关 |
+| J5 | `Do While Not o.Bad` | `n=4` | 前测同向，进体（与 H5 同源） |
+| J6 | `Do … Loop While o.Bad = 1` | `n=1` | 后测同向，出循环 |
+| J7 / J8 | 控制格 | `n=4` / `n=1` | 闸本身没问题 |
+| J9 / J10 | 裸值形 | `n=4` / `n=1` | 见第五节（解析面病灶） |
+
+所以真口径不是「按真/按假」，而是 **`On Error Resume Next` 的「从下一条继续」**：
+前测循环的「下一条」就是循环体 ⇒ 进体；后测循环的「下一条」在 `Loop` 之后 ⇒ 出循环。
+这与单行 `If` 落 `Then` 分支（H1/H2）、多行 `If` 进块（H3）、`ElseIf` 进它自己的 `Then`（H4）
+是同一条规则，**与极性无关**。第一百零一刀那枚 `vb6_CondIfErr`（错 ⇒ 1）在 `If` /
+`Do While` / `While` 恰好等价，但取反站与后测站会反过来。
+
+#### 一、发码形
+
+新增一枚入口（`vb6rtl_array.h`，紧跟 `vb6_CondIfErr`）：
+
+```c
+static inline int32_t vb6_CondIfNoErr(int32_t serialBefore, int32_t value) {
+    return (serialBefore == vb6_ErrSerial()) ? value : 0;   /* 错 ⇒ 0 */
+}
+```
+
+| 站 | 发码形 | 报错时的走向 |
+|---|---|---|
+| `Do Until` | `if (vb6_CondIfNoErr(_cN, (cond))) goto exit;` | 0 ⇒ 不退出 ⇒ 进体（J1/J3） |
+| `Loop While` | `if (!(vb6_CondIfNoErr(_cN, (cond)))) break;` | 0 ⇒ `break`（J6） |
+| `Loop Until` | `if (vb6_CondIfErr(_cN, (cond))) break;` | 1 ⇒ `break`（J2/J4） |
+| `Do While` / `While` | `if (!(vb6_CondIfErr(_cN, (cond)))) goto exit;` | 1 ⇒ 不退出 ⇒ 进体（H5） |
+
+后测两站注意：守卫的序号声明必须算进「物化」判定（`c_.size()/hasPending()`），否则声明落在
+`do` 体内、而 `} while (…)` 在体外 ⇒ C2065（实测 J2/J6 四处）。把 `materialized` 的判定挪到
+守卫之后，两站统一走 `} while (1);` + `break;` 的形。
+
+#### 二、语料量
+
+745 个工程里，循环条件位出现晚绑定读的只有 **8 条**：前测同向 6（早接过）、后测取反 2
+（`tests/test_late_cond.bas` 的 `K-LOOPUNTIL` 两臂）、`Do Until` 与 `Loop While` 各 0。
+所以这一刀的语料面**零变化**，manifest 只动夹具那一行。
+
+#### 三、夹具与针
+
+- 夹具复用 `tests/test_late_cond.bas`（本来就有 `K-DOUNTIL` / `K-LOOPWHILE` / `K-LOOPUNTIL` 三臂）
+- `b244_cond_truth_shape` 七条针按新发码重钉（三臂翻面 + 因守卫编号平移重钉 `K-WHILE` 的 `_c12`）
+- 反面针 `b244_cond_truth_lesion` 未变：改前那七形（无守卫）一条都不许再出现
+- 本地真跑 J1–J10：9 格与真机逐字一致；J9/J10 见下
+
+#### 四、门
+
+- 静态门 9 枚 PASS（`proto_arity` 1785、`rtl_embedded` 138、`manifest_coverage` 751）
+- `owned_temp_keeps` 255 行不变
+- manifest：1 行（`tests/test_late_cond.bas`）
+
+#### 五、新发现的病灶（本刀不修，登记）
+
+**裸值条件把读变成写**：`Do Until o.NoSuchProperty` 单独成行、下一行是赋值时，解析出的条件
+AST 只有 `o`，成员名被下一句吞掉 —— 最小复现：
+
+```vb
+Do Until o.NoSuchProperty
+    n = n + 1
+Loop
+```
+
+发成 `if (… (o)) goto exit;` + `vb6_ComSetProp(o, L"NoSuchProperty", vb6_ComPackInt((n + 1)));`
+（读变写、`n = n + 1` 整句消失）。真机 J9/J10 是 `err=438`、循环体按「进体」走。这一条在
+解析面（`parseDoLoopStmt` 的 `condition = parseExpression()` 之后），与条件守卫无关，单独立账。
+
+仍挂着：Variant / UDT 形参位、`LenB(<UDT>)`、上面这条裸值条件解析。

@@ -461,6 +461,15 @@ int32_t vb6_ErrSerial(void);
 static inline int32_t vb6_CondIfErr(int32_t serialBefore, int32_t value) {
     return (serialBefore != vb6_ErrSerial()) ? 1 : (value != 0);
 }
+// C30-11 第一百零三刀 (§11.81): 条件位报错 ⇒ 「从该语句的下一条继续」。
+// 真机 J 族量到这是**与极性无关**的一条规则: 前测循环 (Do While / Do Until) 报错就
+// 进循环体 (J1/J3/J5/J9 全 = 4 轮，撞防死循环闸)；后测循环 (Loop While / Loop Until)
+// 报错就出循环 (J2/J4/J6 全 = 1 轮)。与单行 If 「落 Then 分支」同源。
+// 同向那几站 CondIfErr 恰好等价（错 ⇒ 1 ⇒ 进体）；取反站与后测站要用这一枚：
+// 报错 ⇒ 0（条件按假），于是 Do Until 不出循环、后测两站出循环。
+static inline int32_t vb6_CondIfNoErr(int32_t serialBefore, int32_t value) {
+    return (serialBefore == vb6_ErrSerial()) ? value : 0;
+}
 // C30-11 第八十一刀: Variant→String 转换失败的标记（与错误序号同源）。
 void vb6_ConvFailMark(void);
 // C30-11 第八十六刀: 本语句刚有一次实参转换失败⇒ 1（Mid/Left/Right/Chr 用它决定

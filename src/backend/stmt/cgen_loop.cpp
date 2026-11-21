@@ -53,6 +53,9 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 emitExpr(*node.condition);
                 // 账 #305 第二百四十四刀: Do Until 恒真 = 一次都不跑
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
+                // 第一百零三刀 (§11.81): 条件报 438 ⇒ 从 Do 那行的下一条继续 = **进循环体**
+                // （真机 J1/J3/J9 全 = 4 轮，撞防死循环闸）。等价于条件按假。
+                lastExpr_ = guardCondLateReadNoErr(lastExpr_, node.condition.get());
                 c_.emitLine("if (" + lastExpr_ + ") goto " + exitLabel + ";");
                 c_.indent();
                 emitStmtList(node.body);
@@ -82,9 +85,14 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 // 仍每轮重测（break 出的是本 do），语义不变；没有物化时逐字节不变。
                 const size_t mark = c_.size();
                 emitExpr(*node.condition);
-                const bool materialized = (c_.size() != mark) || c_.hasPending();
                 // 账 #305 第二百四十四刀: Loop While 恒真 = 出不去
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
+                // 第一百零三刀 (§11.81): 条件报 438 ⇒ 从 Loop 那行的下一条继续 = **出循环**
+                // （真机 J6 = 1 轮）。等价于条件按假。
+                // 注意: 守卫的序号声明必须算进「物化」判定 —— 否则它会落在 do 体内，
+                // 而 `} while (…)` 在体外 (C2065)。
+                lastExpr_ = guardCondLateReadNoErr(lastExpr_, node.condition.get());
+                const bool materialized = (c_.size() != mark) || c_.hasPending();
                 if (materialized) {
                     c_.emitLine("if (!(" + lastExpr_ + ")) break;");
                     c_.emitLine("} while (1);");
@@ -105,9 +113,13 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 // 同上（Loop Until = 条件为真就出循环）。
                 const size_t mark = c_.size();
                 emitExpr(*node.condition);
-                const bool materialized = (c_.size() != mark) || c_.hasPending();
                 // 账 #305 第二百四十四刀: Loop Until 恒真 = 只跑一轮
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
+                // 第一百零三刀 (§11.81): 报 438 ⇒ 出循环（真机 J2/J4/J10 = 1 轮）。
+                // 「出循环」那一头要求循环条件为假，所以这一站用报错按**真**的那一枚。
+                // 同 DoLoopWhile: 序号声明算进物化判定，以免落在 do 体内。
+                lastExpr_ = guardCondLateRead(lastExpr_, node.condition.get());
+                const bool materialized = (c_.size() != mark) || c_.hasPending();
                 if (materialized) {
                     c_.emitLine("if (" + lastExpr_ + ") break;");
                     c_.emitLine("} while (1);");

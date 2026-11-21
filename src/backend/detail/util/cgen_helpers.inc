@@ -929,6 +929,9 @@
     // 真机 H1–H5: 单行 If / 多行 If 块 / ElseIf / Do While 的条件报 438 之后那一支都执行。
     // 不含晚绑定读的条件**逐字节不变**（直接交回 cExpr）。
     std::string guardCondLateRead(const std::string& cExpr, Expr* cond);
+    // 第一百零三刀 (§11.81): 取反站 / 后测站的条件守卫 —— 报错 ⇒ 条件按假
+    // （真机 J 族：前测不进退出、后测两站出循环）。
+    std::string guardCondLateReadNoErr(const std::string& cExpr, Expr* cond);
 
     // 账 #305 §B171 (第六十二刀): 「这一枚 C 文本是不是**类字段里那枚 Variant 槽的读**」——
     // cExprIsVariant 的一条来源, 单独成一枚是因为它是**唯一可寻址**的那一档: 装箱站对
