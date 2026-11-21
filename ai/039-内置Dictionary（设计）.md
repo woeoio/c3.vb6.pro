@@ -4863,3 +4863,24 @@ return knownObjectVars_.count(rn) > 0;                        // 老口径，一
 - 静态门 9 枚 PASS（`manifest_coverage` inputs=756 / registered=756）
 - `owned_temp_keeps` 255 行不变
 - manifest：新增 1 行 + 37 行重算 = 756 行
+
+---
+
+## §11.88 第一百零九刀前的探针（N 族：Set 进 Variant 槽 / ByRef 形参的 VarType）
+
+§11.87 剩下的末几形写成探针（N1–N5），等真机数：
+
+| 格 | 语句 | 本机 C3（未改代码） |
+|----|------|---------------------|
+| N1 | `Set va(0) = o.NoSuchProperty`（Variant 数组元素） | `va(0)=` err=438 —— **目标被清空** |
+| N2 | `Set uv.f = o.NoSuchProperty`（UDT 的 Variant 字段） | `uv.f=111` err=438（§11.85 槽形守卫已覆盖） |
+| N3a/N3b | `Set va(1) = o` / `Set uv.f = o`（控制格） | 均已指向 / 0 |
+| N4a | `VarTypeOfParam v`（v=1） | `vt=2`（VT_I2） |
+| N4b | `VarTypeOfParam v`（v="x"） | `vt=8`（VT_BSTR） |
+| N5 | `AssignThroughParam v, 5`（控制格） | `v=5` / 0 |
+
+待判点：
+
+- **N1**：真机给 111 ⇒ Set 到数组元素这一形也要接守卫（就是下一刀）；给“空”⇒ 现状就对。
+- **N4**：真机若报 `16387`（VT_BYREF|VT_I4）⇒ 那一形确实存在，我们在形参里报的是底层型（2/8），
+  是一处表示差异需单独记；也报 2/8 ⇒ 该形在 VB6 里根本不出现，可从“未量缺口”里划掉。
