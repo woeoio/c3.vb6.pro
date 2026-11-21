@@ -8716,13 +8716,13 @@ if ($Category -in @("all", "run", "vbp")) {
     # (真语料按产物 82 处 / 27 份文件, 最响的一族是 Do While Not rs.EOF = 死循环; 读数见第二百四十三刀)。
     # 七站各一枚正针: If / ElseIf / Do While / Do Until / Loop While / Loop Until / While Wend。
     Test-EmitcShape "b244_cond_truth_shape" @("$Tests\test_late_cond.bas") @(
-        'if (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-IF"))}, 1))) {',
-        'if (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-ELSEIF"))}, 1))) {',
-        'if (!(vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-DOWHILE"))}, 1)))) goto vb6_loop_exit_0;',
+        'if (vb6_CondIfErr(_c0, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-IF"))}, 1))))) {',
+        'if (vb6_CondIfErr(_c4, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-ELSEIF"))}, 1))))) {',
+        'if (!(vb6_CondIfErr(_c5, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-DOWHILE"))}, 1)))))) goto vb6_loop_exit_0;',
         'if (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-DOUNTIL"))}, 1))) goto vb6_loop_exit_4;',
         '} while (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-LOOPWHILE"))}, 1)));',
         '} while (!(vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-LOOPUNTIL"))}, 1))));',
-        'if (!(vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-WHILE"))}, 1)))) goto vb6_loop_exit_10;'
+        'if (!(vb6_CondIfErr(_c6, (vb6_ComResultToBool(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-WHILE"))}, 1)))))) goto vb6_loop_exit_10;'
     )
     # 反面针: 改前那七形一形都不许再出现 (同一枚夹具、同一台编译器)。
     Test-EmitcAbsent "b244_cond_truth_lesion" @("$Tests\test_late_cond.bas") @(
