@@ -407,6 +407,27 @@
     // 跨模块 UDT 查不到 (符号表按模块隔离, 同 udtFieldObjCType 的既有边界)。
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> udtFixedStrFieldLen_;
 
+    // C30-11 第九十六刀: UDT 的**声明布局**（按成员顺序）—— 真机 `Len`/`LenB(<整枚 UDT>)`
+    // 是按成员逐段算出来的，**不是 sizeof**。
+    //   读数 (.temp/k93/vb6probe/RealMachineProbe.bas 真机输出):
+    //     A7  Len ({String*5})        = 5     A8  LenB = 10
+    //     A9  Len ({String*5, Long})  = 9     A10 LenB = 16
+    //   规则（由 A8/A9/A10 三格反推）:
+    //     Len  = Σ 成员 Len（定长串按 **N 字符**、数值按字节）  ⇒ 5 / 5+4=9
+    //     LenB = Σ 成员 LenB（定长串按 **2N**）、成员之间按自然对齐（上限 4）对齐、
+    //            **尾部不补齐**                                  ⇒ 10 / 10→对齐12+4=16
+    // 键 = 结构体的 C 类型名（小写，`vb6_type_x` 形，与 knownUdtVars_/udtFixedStrFieldLen_ 同形）。
+    // 任一成员算不出来（动态数组/对象/动态 String/Variant/未知类型/嵌套未知）⇒ **整枚不登
+    // 记**，Len/LenB 退回原来的 sizeof 那一支（宁可不变）。
+    struct UdtMemberLayout {
+        int64_t len = 0;    // 本成员的 Len 贡献
+        int64_t lenB = 0;   // 本成员的 LenB 贡献（定长串 = 2N）
+        int64_t align = 1;  // 自然对齐（定长串 2、数值 min(宽度,4)）
+    };
+    std::unordered_map<std::string, std::vector<UdtMemberLayout>> udtLayout_;
+    // 布局求和；false = 该 UDT 没有可用布局（调用方退回 sizeof）。
+    bool udtLayoutSum(const std::string& ctype, int64_t& lenOut, int64_t& lenBOut) const;
+
     // 账 #118: **模块级**定长串的持久副本 (小写变量名 → 长度表达式)。knownFixedStringLen_
     // 在每个过程入口 clear (cgen_decl_func.cpp / cgen_decl_proc.cpp / cgen_decl_prop.cpp),
     // 而模块级 `Private gT As String * 5` 是在 declaration 阶段登记的 —— 于是第一个过程

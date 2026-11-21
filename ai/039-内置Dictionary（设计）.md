@@ -3919,3 +3919,47 @@ C3 侧基线 = 同文件在 `C3.exe` 下跑出来的 `probe_out.txt`（第九十
 1. `Len`/`LenB(<整枚 UDT>)`：真机按成员逐段算（Len 5/9，LenB 10/16），本仓发 `sizeof`（5/12）。
 2. `vb6_VariantToDouble` 的宽松面：`d = Int(Null)` / 其它双精度目标同族还没量。
 3. COM 429/438 那两族"报错后目标动不动"还没有探针格。
+
+### 11.74 第九十六刀：`Len(<整枚 UDT>)` 按声明档逐成员算；`LenB(<整枚 UDT>)` 刻意留 `sizeof`
+
+#### 一、真机读数（A7..A10）
+
+```
+A7  Len ({String*5})        = 5     A8  LenB ({String*5})        = 10
+A9  Len ({String*5, Long})  = 9     A10 LenB ({String*5, Long})  = 16
+```
+
+本仓改前两枚都发 `sizeof(<C 结构体>)` ⇒ `5 / 5 / 12 / 12`。由 A8/A9/A10 反推出的规则：
+
+- `Len(<UDT>)`  = **Σ 成员 Len**（定长串按 N **字符**、数值按字节）⇒ 5 / 5+4 = 9
+- `LenB(<UDT>)` = Σ 成员 LenB（定长串按 **2N**）、成员之间按自然对齐（上限 4）、**尾部不补齐** ⇒ 10 / 16
+
+#### 二、改法
+
+- `visit(TypeDecl&)` 边发结构体边留一份**声明布局** `udtLayout_`（成员顺序 + 三项：`len` / `lenB` / `align`）。
+  成员认不出的档（动态数组、对象、动态 String、Variant、未知 C 类型、嵌套未登记）⇒ **整枚不进表**，
+  两枚函数退回原来的 `sizeof` 那一支（宁可不变）。静态数组成员同样不进表（保守）。
+- `udtLayoutSum()` 求和（`cgen_util_classtype.cpp`）。
+- `Len(<整枚 UDT>)`：有布局就折成常量、且**不发实参**（避开副作用）；否则维持 `sizeof`。
+
+#### 三、`LenB(<整枚 UDT>)` 为什么**不折**
+
+折成 16 在真机上是对的 —— 真机的 UDT 实打实就是 16 字节（定长串 UTF-16）。但 C3 的 UDT 定长串是
+**按 ANSI 内联**存的（`char f[N]`，见 `visit(TypeDecl&)` 那条 "VB6 ABI: ANSI 内联" 的注：SHFILEINFO
+真机 `Len = 352` 走的也是这条）。真机报 692 是安全的（对象真有 692 字节），C3 报 2N 会让
+`cbSize = LenB(u)` 这类 Idiom **越过自己的对象底**。
+
+语法钉 `tests/test_declare_shadows_builtin.bas` 抓到的正是这一形（`GetObjectA` 的 cbSize）——
+这是本刀第一版把 `LenB` 也折了之后唯一翻红的一格。所以这一格选择"**与自己的存储一致**"：
+`LenB(<整枚 UDT>)` 继续发 `sizeof`，真机 10/16 与本仓 5/12 的差异**登记为刻意的 ABI 分歧**，
+不是待修缺陷。要真正对齐，得先把 UDT 定长串改成 UTF-16 存储（另一刀，牵所有 Declare 的封送）。
+
+#### 四、读数与登记
+
+- 探针：A7 = 5 ✓、A9 = 9 ✓（与真机一致）；A8 = 5、A10 = 12（刻意保留，见第三节）；其余 30 格逐字不变。
+- 发码清单 750 行全量重算：**6 行**变动（VBFlexGrid 4 行、VbQRCodegen 2 行）。
+  抽一行核对（`tests/guisample/Definitions.bas`）：`sizeof(osVersion)` → `((int32_t)148)` ——
+  正是 VB6 那句经典 `dwOSVersionInfoSize = Len(osVersion)`（OSVERSIONINFO：5×4 + String*128 = 148）。
+- 语法钉 `declare_shadows_builtin` 的期望同步为 `((int32_t)24)`（BITMAP 全是有宽成员，24 **等于**原来的
+  `sizeof(bmp)`，数值不变、只是不再写 `sizeof`）。
+- 静态门 9 枚全 PASS；`check_owned_temp_keeps` 253 行不变；`-Category syntax` **227/227**。

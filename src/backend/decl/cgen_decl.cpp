@@ -489,6 +489,12 @@ void CCodeGen::visit(TypeDecl& node) {
     h_.emitLine("typedef struct vb6_type_" + typeName + " {");
     h_.indent();
 
+    // C30-11 第九十六刀: 边发边留一份**声明布局**（Len/LenB(<整枚 UDT>) 用，见 udtLayout_）。
+    // 任一成员认不出（动态数组/对象/动态 String/Variant/未知 C 类型/嵌套未知）⇒ 整枚不登记，
+    // 两枚函数退回原来的 sizeof 那一支。
+    std::vector<UdtMemberLayout> layout96;
+    bool layout96Ok = true;
+
     for (auto& member : node.members) {
         std::string memType = mapTypeRef(member->type.get());
         std::string memName = cIdent(member->name);
@@ -508,6 +514,18 @@ void CCodeGen::visit(TypeDecl& node) {
             // Len = 4+4+4+260+80 = 352; C3 原先发 BSTR ⇒ 20, SHGetFileInfoA 收
             // cbFileInfo=20 直接返回 0 (hIcon=0) ⇒ Tree Explorer 图标全缺。
             // 结构体侧必须按 ABI 发 char[N] (N 字节, 不含额外 NUL; VB6 亦如此)。
+            // 第九十六刀: Len/LenB 那一半按**真机 UTF-16 口径**记（定长串 LenB = 2N），
+            // 与 LenB(<定长串>) 已有的 10（= 2×5）同一条口径。
+            if (layout96Ok) {
+                int64_t n96 = 0;
+                if (tryEvalConstInt(fsField.length.get(), n96) && n96 > 0) {
+                    UdtMemberLayout ml96;
+                    ml96.len = n96; ml96.lenB = 2 * n96; ml96.align = 2;
+                    layout96.push_back(ml96);
+                } else {
+                    layout96Ok = false;
+                }
+            }
             h_.emitLine("char " + memName + "[" + lastExpr_ + "];  /* fixed string (VB6 ABI: ANSI 内联) */");
             continue;
         }
@@ -546,13 +564,50 @@ void CCodeGen::visit(TypeDecl& node) {
                 else brackets += "[" + dims[(size_t)d] + "]";
             }
             h_.emitLine(memType + " " + memName + brackets + ";");
+            layout96Ok = false;   // 静态数组成员不进布局表（保守：退回 sizeof）
         } else if (member->isArrayDynamic) {
             // Fix 037 Pattern B: 动态数组成员 (`Data() As Byte`) emit `vb6_SafeArray1D* Member;`
             // 之前 bug: arraySize==nullptr 与无括号成员无法区分, emit `uint8_t Data;` (单标量字段),
             // 运行时不正确且导致 obj.Data(i) 调用变成 C2064.
             h_.emitLine("vb6_SafeArray1D* " + memName + ";  /* dynamic array member */");
+            layout96Ok = false;
         } else {
             h_.emitLine(memType + " " + memName + ";");
+            // 第九十六刀: 按 C 类型名判宽度 —— 真机口径是「数值按字节、成员间按自然对齐、
+            // 上限 4、尾部不补齐」。认不出的档（BSTR / 对象 / Variant / Currency / 未知）不折。
+            if (layout96Ok) {
+                UdtMemberLayout ml96;
+                bool okM96 = true;
+                if (memType == "int8_t" || memType == "uint8_t" || memType == "char") {
+                    ml96.len = 1; ml96.lenB = 1; ml96.align = 1;
+                } else if (memType == "int16_t" || memType == "uint16_t") {
+                    ml96.len = 2; ml96.lenB = 2; ml96.align = 2;
+                } else if (memType == "int32_t" || memType == "uint32_t" || memType == "float") {
+                    ml96.len = 4; ml96.lenB = 4; ml96.align = 4;
+                } else if (memType == "int64_t" || memType == "double") {
+                    ml96.len = 8; ml96.lenB = 8; ml96.align = 4;   // VB6 x86 默认打包 4
+                } else if (memType.compare(0, 9, "vb6_type_") == 0) {
+                    int64_t nl96 = 0, nb96 = 0;
+                    if (udtLayoutSum(memType, nl96, nb96)) {
+                        ml96.len = nl96; ml96.lenB = nb96; ml96.align = 4;
+                    } else {
+                        okM96 = false;   // 嵌套 UDT 还没登记 ⇒ 整枚不折
+                    }
+                } else {
+                    okM96 = false;
+                }
+                if (okM96) layout96.push_back(ml96); else layout96Ok = false;
+            }
+        }
+    }
+
+    // 第九十六刀: 布局登记（键与 udtFixedStrFieldLen_ 同形："vb6_type_" + 声明名）。
+    {
+        const std::string lk96 = "vb6_type_" + typeName;
+        if (layout96Ok && !layout96.empty()) {
+            udtLayout_[lk96] = std::move(layout96);
+        } else {
+            udtLayout_.erase(lk96);
         }
     }
 

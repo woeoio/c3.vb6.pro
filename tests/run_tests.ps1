@@ -14433,7 +14433,9 @@ if ($Category -in @("all", "syntax")) {
     # 紧接着那条对照针证明**真内置站点没有被顺带改掉**：没有 Declare 的
     # `GetObject(, "Excel.Application")` 必须继续走 vb6_GetObject。
     Test-CodegenNote "declare_shadows_builtin" @("$Tests\test_declare_shadows_builtin.bas") @(
-        "vb6_lwa_GetObjectA(0L, ((int32_t)sizeof(bmp)), (void*)&(bmp))") @(
+        # 第九十六刀：`Len(<整枚 UDT>)` 已按真机口径折成常量（Σ成员，定长串按 N），
+        # BITMAP 全是有宽成员 ⇒ 24（= 原来的 sizeof(bmp)，数值不变，只是不再写 sizeof）。
+        "vb6_lwa_GetObjectA(0L, ((int32_t)24), (void*)&(bmp))") @(
         "vb6_GetObject(")
     Test-CodegenNote "getobject_builtin_kept" @("$Tests\test_p24_04b\test_getobject.bas") @(
         "vb6_GetObject(0L, ")
