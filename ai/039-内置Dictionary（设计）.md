@@ -4884,3 +4884,46 @@ return knownObjectVars_.count(rn) > 0;                        // 老口径，一
 - **N1**：真机给 111 ⇒ Set 到数组元素这一形也要接守卫（就是下一刀）；给“空”⇒ 现状就对。
 - **N4**：真机若报 `16387`（VT_BYREF|VT_I4）⇒ 那一形确实存在，我们在形参里报的是底层型（2/8），
   是一处表示差异需单独记；也报 2/8 ⇒ 该形在 VB6 里根本不出现，可从“未量缺口”里划掉。
+
+---
+
+## §11.89 第一百零九刀：Set 进 Variant 数组元素 + VT_BYREF 那一形注销
+
+### 一、真机（N 族）
+
+| 格 | 语句 | 真机 | 修前本机 |
+|----|------|------|----------|
+| N1 | `Set va(0) = o.NoSuchProperty` | `111` / 438 | **空** / 438 ✗ |
+| N2 | `Set uv.f = o.NoSuchProperty` | `111` / 438 | 111 / 438 ✓ |
+| N3a/N3b | `Set va(1) = o` / `Set uv.f = o` | 落槽 / 0 | 同 ✓ |
+| N4a | `VarType(ByRef w As Variant)`（v=1） | `2`（VT_I2） | 2 ✓ |
+| N4b | 同上（v="x"） | `8`（VT_BSTR） | 8 ✓ |
+| N5 | `AssignThroughParam v, 5` | `5` / 0 | 5 ✓ |
+
+**VT_BYREF 注销**：两格真机都报底层型（2/8），从没报过 16387 —— 那条从 §11.84 起挂在“未量缺口”里的
+`VT_BYREF` 写穿形，**在 VB6 里不出现**，从登记里删掉（不是修好，是不存在）。
+
+### 二、改法
+
+`cgen_setlet_set_rhs.inc` 的 `targetIsVariantArraySlot` 那一支（Set 到 `VB6_SA_AT(vb6_VARIANT, …)`）
+接上与 Set 裸变量位同形的守机：序号先抓 → 右值进 `_vs` 临时量 → 同一枚序号决定写不写。
+槽仍走 `vb6_VariantAssign`（Clear + 深拷贝），临时量自有时才自己 `vb6_VariantClear`
+（`vb6_VariantFromValue(void*)` 走 `vb6_VariantObject` 已 AddRef，一进一出账是平的）。
+下标表达式只求值一次（挤在 VariantAssign 那一句里）。
+
+### 三、量
+
+- 语料实编 churn：**0 行**（757 行里只有新夹具那 1 行是新增）—— 存量语料没有“Set 到 Variant 数组元素 +
+  晚绑定读”这一形；它只由新夹具覆盖。
+
+#### 四、夹具与针
+
+- `tests/test_late_setslot.bas`（N1 / N1b 下标表达式 / N3a 控制格）
+- `b254_setslot_shape` 四条针：`_vs0` 起手、缺读那一句、写回数组元素、`vb6_VariantClear(&_vs0)`
+- `b254_setslot_lesion` 一条反面针（修复前：Set 直接写数组元素）
+
+#### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=757 / registered=757）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行 = 757 行
