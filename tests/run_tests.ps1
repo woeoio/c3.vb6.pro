@@ -8758,7 +8758,7 @@ if ($Category -in @("all", "run", "vbp")) {
     # 第一百零五刀 (§11.83): 聚合体（Variant）实参位。真机 K 族与 Long 槽（I 族）同一条规则:
     # K1 gHit=0 / K2 gN=1 gHit=0 / K5 gHit=0 —— 命中即整句中止。聚合体不能 `= 0` 起手，
     # 但 C 里 `vb6_VARIANT` 是可声明的: Empty 起手 + 深拷贝 + 调用后 Clear。
-    Test-EmitcShape "b249_vararg_guard_shape" @("$Tests\test_late_vararg.bas") @(
+    Test-EmitcShape "b250_vararg_guard_shape" @("$Tests\test_late_vararg.bas") @(
         'if (_eg0 == vb6_ErrSerial()) { vb6_VARIANT _as2 = vb6_VariantFromValue(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); vb6_VariantCopy(&_ag1, &_as2); }',
         'vb6_GVar(_ag1);',
         'vb6_VariantClear(&_ag1);',
@@ -8768,7 +8768,7 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_GVarRef(&_ag8);'
     )
     # 反面针: 修复前那两形原样（来自未接提升时的逐字发射，不是照形推的）。
-    Test-EmitcAbsent "b249_vararg_guard_lesion" @("$Tests\test_late_vararg.bas") @(
+    Test-EmitcAbsent "b250_vararg_guard_lesion" @("$Tests\test_late_vararg.bas") @(
         'vb6_GVar(vb6_VariantFromValue(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))));',
         'vb6_GVarRef((&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty")))}));'
     )

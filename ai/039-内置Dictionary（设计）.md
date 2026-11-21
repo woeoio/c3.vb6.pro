@@ -4575,20 +4575,44 @@ vb6_VariantClear(&_ag8);
 
 修前全量扫（752 输入）：**110 处、5 个文件**落在这一档，**真实语料 0 处**（全是自家夹具：
 `dict_native` 45、`b171_slotarg` 2、`ucTreeView` 2、`VBFlexGridDemo` 2 等）。
-修后 rehash：**6 行变化**（`VBFlexGridDemo`×2、`b171_slotarg`、`ucTreeView`、`dict_native`×2）。
+修后 rehash：首版（`376a11ff`）报了 **6 行**（`VBFlexGridDemo`×2、`b171_slotarg`、`ucTreeView`、
+`dict_native`×2）。修完下面第六节那两枚闸后 `ucTreeView` 回退、`VisualStyles.bas` 现身，
+净 **5 行**变化（`VisualStyles.bas`、`VBFlexGridDemo.vbp`、`b171_slotarg`、`dict_native`×2）。
 
 #### 四、夹具与针
 
 - 新夹具 `tests/test_late_vararg.bas`（K1/K2/K5 + 控制格）
-- `b249_vararg_guard_shape` 七条针：序号声明、`_as` 深拷贝那一句、`GVar(_ag1)`、`Clear`、
+- `b250_vararg_guard_shape` 七条针：序号声明、`_as` 深拷贝那一句、`GVar(_ag1)`、`Clear`、
   K2 的 `_ag4 = vb6_GFn()`、`GVar2(_ag4, _ag5)`、K5 的 ByRef 形
-- `b249_vararg_guard_lesion` 两条反面针（取自未接提升时的逐字发射）
+- `b250_vararg_guard_lesion` 两条反面针（取自未接提升时的逐字发射）
+  （首版曾名 `b249_…`；`b249` 前缀已被另一本账的判据面占用 ——
+  `check_com_value_twin_authority.ps1` 的 R6 明令整工程级 `Test-EmitcShape "b249` = 0，故改名）
 
 #### 五、门
 
 - 静态门 9 枚 PASS（`manifest_coverage` inputs=753 / registered=753）
 - `owned_temp_keeps` 255 行不变
-- manifest：新增 1 行（`tests/test_late_vararg.bas`）+ 6 行重算
+- manifest：新增 1 行（`tests/test_late_vararg.bas`）+ 6 行重算（修后为 5 行，见第六节）
+
+#### 六、CI 红与「嵌套调用」那一修（第105刀-修）
+
+`376a11ff` 的 `Tests (compile #2)` 红在 `FlexGridX86`（x86 编 `tests/VBFlexGridDemo`）。
+本机复现出的 MSVC 真错（job 日志里连 `error C` 行都没带，是回头在 `c3-error.log` 里拿到的）：
+
+- `VisualStyles.c(162)/(195)/(197)`: `error C2440: 无法从 void* 转换为 vb6_VARIANT`
+- `VisualStyles.c(164)/(199)`: `error C2172: vb6_ObjPtr 实参不是指针`
+
+两处是同一条**过度提升**：`SetWindowSubclass(h, thunk, ObjPtr(CurrControl), 0)` 的第三格是内建
+`ObjPtr`，它的形参表答 Variant，而提升只看「形参是不是 Variant」⇒ 把 `CurrControl`（`void*`）
+包进 `vb6_VARIANT _ag6`，再原样交给 `vb6_ObjPtr(_ag6)`。补两枚闸：
+
+1. `argNestDepth_`（`cgen_state.inc`；在 `visit(IndexOrCallExpr)` 入口 RAII 增减）：实参位提升
+   只对**最外层**调用（`== 1`）成立 —— 嵌套调用的实参是外层语句的一部分，不是它自己的实参位。
+2. 提升判据改用**实参自身**的 C 档 `mapType(inferExprType(*node.positional[i])) == "vb6_VARIANT"`，
+   不再拿形参声明的档当判据（`ObjPtr` 那格形参答 Variant，实参却是 `void*`）。
+
+本机复验：`C3.exe tests\VBFlexGridDemo\VBFlexGridDemo.vbp --arch x86` 编过、无 `c3-error.log`；
+K1/K2/K3/K5/K7/K8 与真机逐格同值，**K4 仍差**（`v = o.NoSuchProperty` 是赋值位，另立一刀）。
 
 #### 六、仍挂着
 
