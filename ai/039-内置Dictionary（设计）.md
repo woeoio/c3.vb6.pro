@@ -4694,7 +4694,10 @@ Variant 槽。改前全量扫（753 输入）：**23 处 / 11 个输入**，全�
 **未量、登记不猜**：
 
 - `v = 1 + o.NoSuchProperty`（晚绑定读在表达式**内部**）；
-- Variant **数组元素** / **UDT 的 Variant 字段**做目标（`VB6_SA_*` / `udtFieldSlot`）。
+- Variant **数组元素** / **UDT 的 Variant 字段**做目标（`VB6_SA_*` / `udtFieldSlot`）；
+- `v = Me.rtfText`（`tests/guisample/err438/E438.frm` 2 处）—— 接收者是窗体上的控件
+  （发码是 `vb6_ComCall(vb6_hwnd_E438, …)`），不是 Object 变量，`lateBoundComReadExpr`
+  不答它；真机没量过这一形的目标写不写，所以不动。
 
 #### 四、夹具与针
 
