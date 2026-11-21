@@ -4614,7 +4614,29 @@ vb6_VariantClear(&_ag8);
 本机复验：`C3.exe tests\VBFlexGridDemo\VBFlexGridDemo.vbp --arch x86` 编过、无 `c3-error.log`；
 K1/K2/K3/K5/K7/K8 与真机逐格同值，**K4 仍差**（`v = o.NoSuchProperty` 是赋值位，另立一刀）。
 
-#### 六、仍挂着
+#### 七、GUISample 那三行（CI 环境行）
+
+`Emit manifest (shape oracle)` 在 `376a11ff` / `365e4d6a` / `6b536561` 三次都红在这三格：
+`tests/guisample/GUISample.vbp`、`.../vb6ref/src/vc6/GUISample.vbp`、`.../vb6ref/src/vs2015/GUISample.vbp`
+（每格固定 +3475 字节，`rc=0`；三者共享模块，所以增量相同）。这三行本来就在
+`full_rehash85.ps1` 的 `$machineDiff` 里（本机与 CI 的机器状态不同，本地 rehash 跳过不写）。
+
+归因用的三条证据：
+
+1. **编译器不是成因**：把 CI 那次跑出来的 `c3-exe` 工件（run 44905446854）拉到本机，在仓根跑
+   `GUISample.vbp --emit-c`，输出与本机构建**逐字节相同**（307655 字节）。
+2. **本刀碰不到它**：同目录下用 `798b057b`（本刀前）与本刀两枚 `C3.exe` 各跑一遍，
+   GUISample 输出 **delta=0**；`--no-auto-typelib` 也是 0；原因是该项目里**没有任何
+   `As Variant` 形参**，`_ag/_as` 站点数 = 0。
+3. 三次 CI 里这三格的值彼此**完全一致**，与本刀那 5 格的变化不重合。
+
+结论：这三格随 CI 运行机的类型库/OCX 状态漂移，不是本刀的发码形状变化。按脚本自己印的路子
+（`rebless_emit_manifest.ps1 -Bless`，吃 CI 那台二进制交回来的清单）登记 3 行。
+
+⚠ 登记之后这三格仍是 CI 侧读数：本机不写、也不能写。下次再漂，先按上面第 1 条（同一枚 exe
+在本机复跑）区分「编译器」与「机器」。
+
+#### 八、仍挂着
 
 - **K4**：`v = o.NoSuchProperty` 目标被写（真机 `v=111`）。这是赋值位的守卫，不在实参位这条线上。
 - **UDT 槽**：这一族语料里没量到「UDT 形参 + 晚绑定读」的自然形（UDT 不能承接晚绑定读），
