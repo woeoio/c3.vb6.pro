@@ -4829,6 +4829,20 @@ M1 若真机给 `False`（o2 被塞了东西）也是新缺口。
   只接**裸变量**目标（数组元素支在上面先走、`me->字段` / UDT 字段槽 / 解引用形未量 ⇒ 仍走原路）。
 - 调试口：`C3_DBG_VSLOT107`（赋值位）、`C3_DBG_VSET108`（Set 位）。
 
+**收紧那一步（CI 红线逼出来的）**：`knownObjectVars_` **全程不清空**，同名会漏到别的过程 ——
+`b190_object_formal_goes_late` 第三条针里 `Thing` 是工程类，却被当成 Object，`Thing->Alpha`
+被误判成晚绑定。所以“只进 knownObjectVars_”那一腿再要求**接收者解析不出工程类名**：
+
+```
+if (!isLocalVar && !knownObjectVars_.count(rn)) return false;
+if (inferExprType(*rcv) == Vb6Type::Object) return true;
+if (!isLocalVar) return inferClassTypeOfExpr(*rcv).empty();   // 工程类字段 ⇒ 不是晚绑定
+return knownObjectVars_.count(rn) > 0;                        // 老口径，一字不改
+```
+
+针随之改两条（`vb6_BSTR_Assign` → `vb6_BSTR_AssignMoveIfOk(..., _e`，用**不带号**的形式免得撞号），
+第三条 `Thing->Alpha` 原样保留 —— 它正是这条收紧的哨兵。
+
 ### 四、量
 
 - 改前 census（755 输入，`C3_DBG_VSLOT107`）：28 处 / 10 个输入（同 §11.85）。
