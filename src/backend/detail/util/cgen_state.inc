@@ -814,6 +814,10 @@
     // 必须用深拷贝 vb6_VariantCopy 拿自己那份，调用后 vb6_VariantClear 归还。
     // 空 = 本语句没提升过聚合实参。
     std::vector<std::string> stmtCallArgVarTemps_;
+    // 第一百零五刀 (§11.83): IndexOrCallExpr 的嵌套深度。实参位提升只算**最外层**那一个
+    // 调用（=1）—— 嵌套调用的实参是外层语句的一部分，不是它自己的实参位
+    // （`ObjPtr(CurrControl)` 就是这样被误提升的）。
+    int argNestDepth_ = 0;
     void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。

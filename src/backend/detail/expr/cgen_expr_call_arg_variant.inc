@@ -757,6 +757,7 @@
         // 每枚求值前比一次序号 —— 真机 I1（gN=0）/ I2（gN=1）量的就是这个顺序。
         // 地址实参 (&x) 求值无副作用也不会报错，直接留在调用里。
         if (!stmtCallArgSerial_.empty() && (int)i <= stmtCallArgFirstLate_
+            && argNestDepth_ == 1
             && !(argVal.size() > 1 && argVal[0] == '&')) {
             std::string gtyp102 = "int32_t";
             if (i < calleeParams.size()) {
@@ -775,7 +776,13 @@
                 c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) { "
                             + gtmp102 + " = " + argVal + "; }");
                 argVal = gtmp102;
-            } else {
+            } else if (i < node.positional.size() && node.positional[i]
+                       && mapType(inferExprType(*node.positional[i])) == "vb6_VARIANT") {
+                // 判据用**实参自身**的 C 类型，不是形参声明的类型：内建调用的形参表会答
+                // Variant（如 `ObjPtr(CurrControl)` 那一槽），而实参本身是 `void*` /
+                // `vb6_cls_X*` —— 拿它初始化 vb6_VARIANT 就是 C2440，被调方要的也不是
+                // Variant（实测 FlexGridX86: VisualStyles.c(162)/(195)/(197) C2440 +
+                // 随之 C2172）。非 Variant 的实参照旧不提升。
                 // 第一百零五刀 (§11.83): 聚合体（Variant）槽。真机 K 族量到与 Long 槽同一条
                 // 规则（K1 gHit=0 / K2 gN=1 gHit=0 / K5 gHit=0）：「命中即整句中止」。
                 // 聚合体不能 `= 0` 起手，但**可以声明**：vb6_VariantEmpty() 起手，
