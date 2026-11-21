@@ -1,6 +1,7 @@
 #include "backend/cgen.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <iostream>
 #include <functional>
 

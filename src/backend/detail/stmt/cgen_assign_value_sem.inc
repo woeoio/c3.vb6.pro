@@ -170,27 +170,41 @@
         //   序号是在求值**之前**抓的，求值里报错 ⇒ 第二句的闸为假 ⇒ 目标不动。
         // 临时量不 Clear：`target = tmp` 是浅搬，所有权随拷贝交给目标（与
         // emitVariantSlotStore 的“清旧+接管”同口径）；错误那一支临时量是 Empty，无物可放。
-        // 只接**顶层就是那次成员读**这一形（真机量到的就这一形）；表达式内部的
-        //（`v = 1 + o.NoSuchProperty`）与数组元素/UDT 字段槽**未量**，另行登记，不猜。
-        if (!targetIsUdtVariantField232 && node.value
-            && lateBoundComReadExpr(node.value.get())
-            && target.compare(0, 7, "VB6_SA_") != 0
-            && (target.empty() || target[0] != '(')) {
-            const std::string gv106 = "_e" + std::to_string(stmtAbortSeq_++);
-            const std::string tv106 = "_av" + std::to_string(tempCounter_++);
-            c_.emitLine("const int32_t " + gv106 + " = vb6_ErrSerial();");
-            c_.emitLine("vb6_VARIANT " + tv106 + " = vb6_VariantEmpty();");
-            c_.emitLine("if (" + gv106 + " == vb6_ErrSerial()) { " + tv106 + " = "
+        // 第一百零六刀只接“顶层就是那次成员读”这一形；表达式内部的
+        //（`v = 1 + o.NoSuchProperty`）与数组元素/UDT 字段槽当时**未量**、只登记不猜
+        // ——**第一百零七刀已由真机 L6–L9 补齐**（见下一段）。
+        // 第一百零七刀 (§11.85): 真机 L6/L7/L8/L9 —— 表达式**内部**的晚绑定读、Variant
+        // **数组元素**目标、UDT 的 **Variant 字段**目标, 也是“目标一个字都不写”(111/438)。
+        // 所以守机不再只认“顶层就是那次成员读”, 判据换成 exprHasLateBoundComRead
+        // (§B 族早就在用的那一枚: 裸读是它的特例, 不会漏掉第一百零六刀那一形)。
+        // 槽形 (数组元素 / UDT 字段 / 解引用) 不能浅搬 —— 那是**借来**的存储:
+        // 一律 vb6_VariantAssign (Clear + 深拷贝), 再把临时量自己放掉 (它自有才放)。
+        if (node.value && exprHasLateBoundComRead(node.value.get())) {
+            const std::string gv107 = "_e" + std::to_string(stmtAbortSeq_++);
+            const std::string tv107 = "_vs" + std::to_string(tempCounter_++);  // _av is taken by scalar temps (cgen_assign.cpp:32), so use a fresh prefix
+            const bool owns107 = variantRhsOwnsValue(node.value.get(), value);
+            const bool slot107 = targetIsUdtVariantField232
+                || target.compare(0, 7, "VB6_SA_") == 0
+                || (!target.empty() && target[0] == '(');
+            if (std::getenv("C3_DBG_VSLOT107"))
+                std::cerr << "[VSLOT107] " << (slot107 ? "slot" : "plain") << " "
+                          << (lateBoundComReadExpr(node.value.get()) ? "bare" : "nested")
+                          << (owns107 ? " own" : " borrow") << " tgt=" << target
+                          << std::endl;
+            c_.emitLine("const int32_t " + gv107 + " = vb6_ErrSerial();");
+            c_.emitLine("vb6_VARIANT " + tv107 + " = vb6_VariantEmpty();");
+            c_.emitLine("if (" + gv107 + " == vb6_ErrSerial()) { " + tv107 + " = "
                         + wrapVariantValue(node.value.get(), value) + "; }");
-            // 写回那一句与 emitVariantSlotStore 同一口径（“自有”还是“借来”只问那一处主人）:
-            //   自有 ⇒ 清旧值 + 浅搬（所有权随拷贝交给目标，与未守卫那一支逐字节同形）；
-            //   借来 ⇒ vb6_VariantAssign（Clear + 深拷贝）。
-            if (variantRhsOwnsValue(node.value.get(), value)) {
-                c_.emitLine("if (" + gv106 + " == vb6_ErrSerial()) { vb6_VariantClear(&" + target
-                            + "); " + target + " = " + tv106 + "; }");
+            if (slot107) {
+                c_.emitLine("if (" + gv107 + " == vb6_ErrSerial()) { vb6_VariantAssign(&"
+                            + target + ", " + tv107 + "); }");
+                if (owns107) c_.emitLine("vb6_VariantClear(&" + tv107 + ");");
+            } else if (owns107) {
+                c_.emitLine("if (" + gv107 + " == vb6_ErrSerial()) { vb6_VariantClear(&" + target
+                            + "); " + target + " = " + tv107 + "; }");
             } else {
-                c_.emitLine("if (" + gv106 + " == vb6_ErrSerial()) { vb6_VariantAssign(&" + target
-                            + ", " + tv106 + "); }");
+                c_.emitLine("if (" + gv107 + " == vb6_ErrSerial()) { vb6_VariantAssign(&" + target
+                            + ", " + tv107 + "); }");
             }
         } else {
             // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
