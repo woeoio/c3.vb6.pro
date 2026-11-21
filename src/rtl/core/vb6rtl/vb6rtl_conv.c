@@ -538,7 +538,35 @@ void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src) {
                      vb6_BSTR_FromStr(L"Invalid use of Null"));
         return;   /* 目标一字不动 */
     }
+    // C30-11 第九十七刀 (§11.75): 文本档 —— 真机 E9 `d = v (abc)` ⇒ 13 + 目标不动；
+    // 改前这里落到宽松的 vb6_VariantToDouble（"abc" ⇒ 0.0、不报错），目标被写成 0。
+    // 与上面 vb6_Dbl_AssignFromBSTR 是同一口径（严格折数、非数字 ⇒ 13），直接复用它。
+    if (src.vt == (vb6_vartype)vb6_vtBSTR) {
+        vb6_Dbl_AssignFromBSTR(target, src.bstrVal);
+        return;
+    }
     *target = vb6_VariantToDouble(src);
+}
+
+// C30-11 第九十七刀 (§11.75): 「Double 目标 + Int/Fix/Abs(<整只 Variant 槽>)」的严格入参。
+// 真机 (.temp/k93/vb6probe) E1 Int(v=Null)/E2 Abs(v=Null)/E3 Fix(v=Null) 落 Double ⇒
+// 都是 [-1] err=94（目标不动）；E9 `d = v (abc)` ⇒ [-1] err=13。改前本仓 E1–E3 是
+// 0/err0：发码 `vb6_Int(vb6_VariantToDouble(v))`，而 VariantToDouble **必须**保持宽松
+// (Val 那一族靠它，见 check_conv_strict_parse.ps1 的 val-still-lenient) ⇒ 在这里加一枚
+// 严格入口，发码站套在 vb6_Int/Fix/Abs 的实参位上：`vb6_Int(vb6_DblStrict(v))`。
+// 它只负责 raise；「目标不动」由赋值站的守卫/临时量兜（序号变了就不写）。
+double vb6_DblStrict(vb6_VARIANT v) {
+    if (v.vt == (vb6_vartype)vb6_vtNull) {
+        vb6_ErrRaise(94, vb6_BSTR_FromStr(L"VBA.Conversion"),
+                     vb6_BSTR_FromStr(L"Invalid use of Null"));
+        return 0.0;
+    }
+    if (v.vt == (vb6_vartype)vb6_vtBSTR) {
+        double out = 0.0;
+        vb6_Dbl_AssignFromBSTR(&out, v.bstrVal);   // 非数字 ⇒ 13，out 不动
+        return out;
+    }
+    return vb6_VariantToDouble(v);
 }
 
 // M22: typed CStr overloads (C has no overloading, use suffix)

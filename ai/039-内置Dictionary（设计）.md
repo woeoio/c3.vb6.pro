@@ -3963,3 +3963,50 @@ A9  Len ({String*5, Long})  = 9     A10 LenB ({String*5, Long})  = 16
 - 语法钉 `declare_shadows_builtin` 的期望同步为 `((int32_t)24)`（BITMAP 全是有宽成员，24 **等于**原来的
   `sizeof(bmp)`，数值不变、只是不再写 `sizeof`）。
 - 静态门 9 枚全 PASS；`check_owned_temp_keeps` 253 行不变；`-Category syntax` **227/227**。
+
+### 11.75 第九十七刀：Double 目标上的 Null 族与文本档 —— 真机 94/13、本仓 0/0
+
+#### 一、真机读数（E1..E10）
+
+```
+E1 Int(v=Null) -> Double  -1/94    E2 Abs(v=Null) -> Double  -1/94
+E3 Fix(v=Null) -> Double  -1/94    E4 CLng(v=Null) -> Double -1/94
+E5 d = v (Null)           -1/94    E6 d = v + 1 (Null)       -1/94
+E7 d = v * 2 (Null)       -1/94    E8 d = v (Empty)          0/0
+E9 d = v ("abc")          -1/13    E10 Int(2.7)              2/0
+```
+
+改前本仓：E1–E3 **0/err0**、E4 **0/err94**（错误号对了、值被写）、E9 **0/err0**。
+E5–E8、E10 本来就对 —— 也就是说 `d = <整只 Variant 槽>` 走的是 `vb6_Dbl_AssignFromVariant`，
+Null 一档它自己会报 94 且不动目标；漏的只有两处：**文本档**（那时落到宽松的
+`vb6_VariantToDouble`，"abc" ⇒ 0.0 不报错）和 **内建函数把 Null 吃掉**那一族。
+
+#### 二、三处改动
+
+1. `vb6_Dbl_AssignFromVariant` 的 BSTR 档改走 `vb6_Dbl_AssignFromBSTR`（同一口径：严格折数、
+   末尾有垃圾字符 ⇒ 13、目标一字不动）⇒ E9。
+2. 新增 `vb6_DblStrict(vb6_VARIANT)`：Null ⇒ 94、非数字文本 ⇒ 13，其余 `vb6_VariantToDouble`。
+   不复用 `vb6_VariantToDouble` 本身：它**必须**保持宽松（`Val` 那一族靠它，
+   `check_conv_strict_parse.ps1` 的 `val-still-lenient=1` 钉的就是这一条）。
+3. 赋值站把「Double 目标 + 顶层调用 + 整只 Variant 槽实参」这一形纳入守卫/临时量
+   （原先只给 Integer/Long/Byte 发）⇒ E4（`d = CLng(v)`：CLngV 报 94，序号一变就不写）。
+   同时 Int/Fix/Abs 那一形改道成 `vb6_Int(vb6_DblStrict(x))`（新旗 `nullFamDblTarget_`）——
+   **不能**照第九十五刀那样走 `IntV`/`VariantToLong`：整型那条路会把 `Abs(-1.5)` 弄成 2。
+
+#### 三、为什么 Double 与 Integer 目标要两条改道
+
+| 目标 | 改道形态 | 理由 |
+|---|---|---|
+| Integer/Long/Byte | `vb6_VariantToLong(vb6_IntV(x))` | 目标是整数，`VariantToLong` 自己会报 94/13，且截断正是语义 |
+| Double | `vb6_Int(vb6_DblStrict(x))` + 守卫/临时量 | 小数位要保留；raise 由 `DblStrict` 负责，写入由序号守卫挡 |
+
+#### 四、登记
+
+- 探针 44 格（A–F）：E1–E4、E9 五格翻绿且逐字对上真机；A–D 与 E5–E8/E10 一字不变。
+- 发码清单 750 行全量重算：**3 行**变动（`tests/ucTreeView/Proyecto1.vbp` +72B、
+  `tests/vb6probe/NullOpsProbe.bas` +130B、`tests/vb6probe/NullFamilyProbe.bas` +42B）。
+  抽形核对：`NullOpsProbe` 里 `d = Abs(nv)` → `double _av4 = (_e3 == vb6_ErrSerial()) ? (vb6_Abs(vb6_DblStrict(nv))) : (double)0;`
+- `check_owned_temp_keeps` 漂 2 行，**归因**：`vb6_Dbl_AssignFromVariant` 1 → 0（新 BSTR 支把目标指针
+  转手给 `vb6_Dbl_AssignFromBSTR`，下游 KEEPS=0 ⇒ 这一枚可证 0，不再"证不出"）、新增
+  `vb6_DblStrict` 0（无指针形参）。表 254 行、锚点 15 枚、提名面 203 行不变。
+- 静态门 9 枚全 PASS（`proto_arity` 1785 对签名）；`-Category syntax` **227/227**。

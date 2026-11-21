@@ -237,7 +237,7 @@
     // 这一问必须由赋值站先标（只有它知道目标是整型标量，见 nullFamIntTarget_ 的说明）；
     // 本站只负责改道，与 Len/LenB 那一形同构：`vb6_VariantToLong(vb6_IntV(x))` ——
     // IntV 把 Null 原样带出来，VariantToLong 那一站报 94，外层 ChkLong/FltToLng 原样不动。
-    if (nullFamIntTarget_ && node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
+    if ((nullFamIntTarget_ || nullFamDblTarget_) && node.callee && node.callee->kind == ASTNodeKind::IdentifierExpr
         && node.named.empty() && node.positional.size() == 1 && node.positional[0]) {
         auto& ni95 = static_cast<IdentifierExpr&>(*node.callee);
         std::string fn95 = ni95.name;
@@ -247,9 +247,20 @@
                             : fn95 == "int" ? "vb6_IntV(" : nullptr;
         if (vName95) {
             // 只改道一次 —— 右值顶层那一枚。
+            const bool dbl97 = nullFamDblTarget_ && !nullFamIntTarget_;
             nullFamIntTarget_ = false;
+            nullFamDblTarget_ = false;
             emitExpr(*node.positional[0]);
-            lastExpr_ = std::string("vb6_VariantToLong(") + vName95 + lastExpr_ + "))";
+            if (dbl97) {
+                // 第九十七刀 (§11.75): Double 目标 —— 先严格转 double（Null ⇒ 94、文本非数字 ⇒ 13），
+                // 再交回 vb6_Int/Fix/Abs 本身（不能走 IntV：Abs(-1.5) 会被弄成 2）。
+                // 目标不动由赋值站的守卫 + 临时量兜（序号变了就不写）。
+                const char* fnD97 = fn95 == "abs" ? "vb6_Abs("
+                                  : fn95 == "fix" ? "vb6_Fix(" : "vb6_Int(";
+                lastExpr_ = std::string(fnD97) + "vb6_DblStrict(" + lastExpr_ + "))";
+            } else {
+                lastExpr_ = std::string("vb6_VariantToLong(") + vName95 + lastExpr_ + "))";
+            }
             return;
         }
     }
