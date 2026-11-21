@@ -51,6 +51,10 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 std::string condLabel = "vb6_loop_cond_" + std::to_string(labelCounter_++);
                 c_.emitLine(condLabel + ":;");
                 emitExpr(*node.condition);
+                // 第一百零四刀 (§11.82): 裸成员条件 (`Do Until o.SomeProp`)
+                // 与 Do While / If 同一收口 —— 不收 COM 标记的话，取值语句会悬到
+                // 体首那条语句上，把 `n = 1` 改写成 `o.SomeProp = 1`（静默改语义）。
+                if (isComMarker_) resolveComValue("Int");
                 // 账 #305 第二百四十四刀: Do Until 恒真 = 一次都不跑
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
                 // 第一百零三刀 (§11.81): 条件报 438 ⇒ 从 Do 那行的下一条继续 = **进循环体**
@@ -85,6 +89,8 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 // 仍每轮重测（break 出的是本 do），语义不变；没有物化时逐字节不变。
                 const size_t mark = c_.size();
                 emitExpr(*node.condition);
+                // 第一百零四刀 (§11.82): 裸成员条件收口 (同 Do Until 那注)
+                if (isComMarker_) resolveComValue("Int");
                 // 账 #305 第二百四十四刀: Loop While 恒真 = 出不去
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
                 // 第一百零三刀 (§11.81): 条件报 438 ⇒ 从 Loop 那行的下一条继续 = **出循环**
@@ -113,6 +119,8 @@ void CCodeGen::visit(DoLoopStmt& node) {
                 // 同上（Loop Until = 条件为真就出循环）。
                 const size_t mark = c_.size();
                 emitExpr(*node.condition);
+                // 第一百零四刀 (§11.82): 裸成员条件收口 (同 Do Until 那注)
+                if (isComMarker_) resolveComValue("Int");
                 // 账 #305 第二百四十四刀: Loop Until 恒真 = 只跑一轮
                 lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
                 // 第一百零三刀 (§11.81): 报 438 ⇒ 出循环（真机 J2/J4/J10 = 1 轮）。
@@ -154,6 +162,8 @@ void CCodeGen::visit(WhileWendStmt& node) {
     std::string condLabel = "vb6_loop_cond_" + std::to_string(labelCounter_++);
     c_.emitLine(condLabel + ":;");
     emitExpr(*node.condition);
+    // 第一百零四刀 (§11.82): 裸成员条件收口 (同 Do Until 那注)
+    if (isComMarker_) resolveComValue("Int");
     // 账 #305 第二百四十四刀: While...Wend 与 Do While 同问 (第七站)
     lastExpr_ = conditionTruthExpr(lastExpr_, node.condition.get());
     // 第一百零一刀 (§11.79): While...Wend 与 Do While 同一站

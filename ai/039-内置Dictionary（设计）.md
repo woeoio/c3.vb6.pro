@@ -4420,3 +4420,88 @@ Loop
 解析面（`parseDoLoopStmt` 的 `condition = parseExpression()` 之后），与条件守卫无关，单独立账。
 
 仍挂着：Variant / UDT 形参位、`LenB(<UDT>)`、上面这条裸值条件解析。
+
+### 11.82 第一百零四刀：裸成员条件不许把「读」变成「写」
+
+§11.81 第五节把这一条记成了「解析面病灶：裸值条件把读变成写」。**记错了**。探针量完，
+解析是对的，病灶在发码面 —— 而且比原以为是解析问题还严重：它会**静默改写循环体**。
+
+#### 一、症状
+
+```vb
+Do Until o.NoSuchProperty
+    n = n + 1
+Loop
+```
+
+修前发成：
+
+```c
+const int32_t _c0 = vb6_ErrSerial();
+if (vb6_CondIfNoErr(_c0, (o))) goto vb6_loop_exit_0;          /* 条件只剩对象 */
+    vb6_ComSetProp(o, L"NoSuchProperty", vb6_ComPackInt((n + 1)));  /* 体首语句被吞 */
+```
+
+`n = n + 1` 整句消失，变成对 `o.NoSuchProperty` 的**写**；体首换成 `GTouch 1` 时则变成
+`vb6_ComCall(o, L"NoSuchProperty", (void*[]){vb6_ComPackInt(1)}, 1)` —— `GTouch` 也没了。
+这是「改写程序语义」级别的缺陷，不是报错级别。
+
+#### 二、定位过程（先排除解析）
+
+给解析器加临时探针（`parseDoLoopStmt` 打印条件节点种类），四格读数全是
+`cond=MemberAccessExpr curT=NewLine` —— 条件节点是对的，`.NoSuchProperty` 也确实在
+条件里。再给发射器加探针（打印体首语句节点）：
+
+| 格 | 夹具原句 | 体首节点 |
+|---|---|---|
+| T6 | `n = 1` | `AssignmentStmt target=IdentifierExpr`（对） |
+| T7 | `GTouch 1` | `CallStmt callee=IndexOrCallExpr`（对） |
+
+AST 两侧都对 ⇒ 病灶在发码。对照两站源码，差别只有一句：
+
+```c
+emitExpr(*node.condition);
+if (isComMarker_) resolveComValue("Int");   // ← If / Do While 有，另四站没有
+```
+
+`resolveComValue` 是 COM 取值标记的**唯一收口**：成员读在表达式层只挂标记（`lastExpr_`
+暂留对象名），由收口这一句把 `vb6_ComGetIntProp(obj, L"成员")` 拼出来并清标记。不收口，
+标记就悬在空中，被**下一条语句**当成"这条语句的操作对象"消费掉 —— 赋值目标 / 调用接收者
+于是指向那个成员，值/实参来自原语句。四站全中：`Do Until`、`Loop While`、`Loop Until`、
+`While…Wend`。
+
+免疫的格子正是能自己解标记的：条件里有运算符（`= 1`、`Not x`）时 `BinaryExpr` /
+`UnaryExpr` 内部各有一处 `resolveComValue`；`If` / `ElseIf` / `Do While` 三站在语句层已经
+收口（`cgen_stmt.cpp:188`、`cgen_loop.cpp:54`）。
+
+#### 三、修
+
+四站各补一句（与 `Do While` 同一收口、同一 unpack 档 `Int`）：
+
+```c
+emitExpr(*node.condition);
+if (isComMarker_) resolveComValue("Int");
+```
+
+#### 四、对账
+
+真机 J9/J10 是这一形的实测（裸成员条件）：J9 `Do Until` = `n=4 err=438`、J10
+`Loop Until` = `n=1 err=438`。修后本地 J1–J10 **十格逐字一致**（含 err）。语料侧 745 个
+工程 **0 行变化** —— 裸成员做循环条件这一形在真实工程里确实罕见，但一旦出现就是上面
+那种静默改语义。
+
+#### 五、夹具与针
+
+- 新夹具 `tests/test_late_barecond.bas`（四站各一格，局部 `Dim o As Object` + `CreateObject`，
+  与 J9/J10 探针同形）
+- `b248_bare_cond_shape` 四条针钉四站的守卫形（`vb6_CondIfNoErr`/`vb6_CondIfErr` +
+  `vb6_ComGetIntProp`）
+- `b248_bare_cond_lesion` 五条反面针（四条 `(o)` 条件形 + 那条 `vb6_ComSetProp`）—— 取自
+  **撤掉修复的构建**的逐字发射，不是照形推的
+
+#### 六、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=752 / registered=752、`proto_arity` 1785、
+  `rtl_embedded` 138）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行（`tests/test_late_barecond.bas`），其余 0 变化
