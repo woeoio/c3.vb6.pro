@@ -4276,3 +4276,68 @@ if (vb6_CondIfErr(_c1, (<原条件>))) {
    这一族在语料里 **3,068 句**（最大的块），要先提实参、再按序号决定调不调，且需要被调形参的档。
 2. **`Do Until` / `Loop Until`** 的条件位未量（取反语义不在 H 段里）。
 
+
+### 11.80 第一百零二刀：实参位的报错 ⇒ 整句中止
+
+前两刀把「值位置」与「条件位置」收了，剩下**调用实参位**这一族没量。真机 I 族 15 格
+（`.temp/k93/vb6probe/RealMachineProbe.bas`）把口径量死了：
+
+| 格 | 真机读数 | 口径 |
+|---|---|---|
+| I1 `Call GTouch2(o.NoSuchProperty, GFn())` | `gHit=0 gN=0` | 坏实参**之后**那枚不再求值 |
+| I2 `Call GTouch2(GFn(), o.NoSuchProperty)` | `gHit=0 gN=1` | 坏实参**之前**的照常求值 |
+| I3 `Call o.NoSuchMethod(GFn())` | `gN=1` | 实参先求、被调成员后解析 |
+| I4 `n = o.NoSuchProperty(GFn())` | `gN=1 n=-1` | 同一顺序，目标不动（值位那刀已覆盖） |
+| I5–I13 | `gHit=0` | String / 无括号 / 具名 / Object / Variant / 表达式实参 / 嵌套 / 双坏一律跳过调用 |
+| I14 / I15 | `n=42` / `gHit=1 gN=2` | 下一句照跑；两枚实参都正常时全部求值 |
+
+也就是「命中即整句中止」，与值位置同族，但与条件位（报错按真）相反。
+
+#### 一、发码形
+
+C 的实参求值顺序**未定义**（MSVC 从右向左），所以不能把守卫塞进实参表。做法是把
+「首枚命中之前的实参（含命中那枚）」逐枚提升成临时量，每枚求值前比一次序号：
+
+```c
+const int32_t _eg0 = vb6_ErrSerial();
+int32_t _ag1 = 0;
+if (_eg0 == vb6_ErrSerial()) { _ag1 = <原实参>; }
+if (_eg0 == vb6_ErrSerial()) {
+vb6_GTouch(_ag1);
+}
+```
+
+- 命中 ⇒ 后面几枚的 `if` 条件已不成立 ⇒ 不求值；调用同理跳过（I1 的 `gN=0`）
+- 命中之前的那几枚早已按序求过值（I2 的 `gN=1`）
+- 地址实参（`&x`）求值无副作用也不会报错，直接留在调用里，不提升
+- 落不到标量 / 串 / 对象档的实参（Variant、UDT）暂不提升 —— 见第五节缺口
+
+实参提升站在 `cgen_expr_call_arg_variant.inc` 的 `args.push_back` 之前（ByRef 取址、
+optional 补位、ParamArray 打包都在它之后，故不动既有逻辑）；守卫声明与整句包裹在
+`visit(CallStmt&)` 里，落在 `CallArgScope102` 作用域内统一清除。
+
+#### 二、语料量（严格口径）
+
+744 个工程、9 个工程命中、**50 条语句**：`VBFlexGridDemo` 12、`GifcontrolSource` 12、
+`ucTreeView` 7、`Charts 2020` 5+4、`VBFlexGridDemo/Common` 4+4、`VbQRCodegen` 1+1；
+其中被调方本身晚绑定的 **0 条**。上一刀报的 3,068 是**松口径**（按行文本算，把表达式
+续行、`(void)` 强转行也算进去了），以本刀这组数为准。
+
+#### 三、夹具与针
+
+- `tests/test_late_arg.bas`（新增，I 族五形）
+- 正向针 `b102_late_arg_guard_shape`：六段发码形（`_eg0` 声明、两枚 `_ag` 提升、两处调用）
+- 反面针 `b102_late_arg_lesion`：改前三行原样（实参内联、报错后照调）一条都不许出现
+- 本地真跑：G4、H7、I1–I15 共 17 格与真机**逐字一致**
+
+#### 四、门
+
+- 静态门 9 枚 PASS（`proto_arity` 1785、`manifest_coverage` 751 = 750+新夹具）
+- `owned_temp_keeps` 255 行不变；`_own_` 提名闸不受影响（提升只搬实参文本，不动所有权表）
+- manifest：6 行重算（`VBFlexGridDemo` ×2、`b171_slotarg`、`ucTreeView`、`dict_native` ×2）+ 新夹具 1 行
+
+#### 五、仍挂着
+
+1. **Variant / UDT 形参位**：落不到可声明临时量的档，暂不提升（`mapType` 交 `vb6_VARIANT`）。
+2. **`Do Until` / `Loop Until`** 条件位仍未量（取反语义不在 H 段里）。
+3. **`LenB(<UDT>)`** 仍挂账。

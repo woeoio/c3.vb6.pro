@@ -799,6 +799,15 @@
     // 「438 + 目标不动」。BSTR 目标不能套标量那套临时量（所有权要转手），改由
     // vb6_BSTR_AssignMoveIfOk 一枚出口收口：序号变了就放掉交回的串、目标不写。
     bool lateBstrCom99_ = false;
+    // 第一百零二刀 (§11.80): 语句位置的调用实参 —— 真机 I 族量到「命中即整句中止」:
+    // I1 `Call GTouch2(o.Bad, GFn())` = gHit=0 gN=0（坏实参之后那枚根本没求值）,
+    // I2 `Call GTouch2(GFn(), o.Bad)` = gHit=0 gN=1（前面的照常求值）。
+    // C 的实参求值顺序未定义，做不到「前一枚先求、后一枚不求」，故把首枚命中之前的实参
+    // （含命中那枚）逐枚提升成临时量，每枚求值前比一次序号；调用本身包在同一个守卫里。
+    // 空串 = 本语句无守卫。
+    std::string stmtCallArgSerial_;
+    bool stmtCallArgEmitted_ = false;
+    int stmtCallArgFirstLate_ = -1;
     void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。

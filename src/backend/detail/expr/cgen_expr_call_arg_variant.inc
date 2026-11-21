@@ -753,6 +753,30 @@
                ObjPtr 答 0 ⇒ Invoke 的 `If pInterface <> 0&` 整段跳过。 */
             argVal = isByRef ? "&(void*){0}" : "(void*)0";
         }
+        // 第一百零二刀 (§11.80): 首枚命中之前的实参（含命中那枚）逐枚提升成临时量，
+        // 每枚求值前比一次序号 —— 真机 I1（gN=0）/ I2（gN=1）量的就是这个顺序。
+        // 地址实参 (&x) 求值无副作用也不会报错，直接留在调用里。
+        if (!stmtCallArgSerial_.empty() && (int)i <= stmtCallArgFirstLate_
+            && !(argVal.size() > 1 && argVal[0] == '&')) {
+            std::string gtyp102 = "int32_t";
+            if (i < calleeParams.size()) {
+                gtyp102 = mapType(calleeParams[i].type);
+            } else if (i < node.positional.size() && node.positional[i]) {
+                gtyp102 = mapType(inferExprType(*node.positional[i]));
+            }
+            // 落不到标量/串/对象类型的（Variant / UDT）不提升，留着当登记缺口。
+            if (gtyp102 != "vb6_VARIANT") {
+                if (!stmtCallArgEmitted_) {
+                    c_.emitLine("const int32_t " + stmtCallArgSerial_ + " = vb6_ErrSerial();");
+                    stmtCallArgEmitted_ = true;
+                }
+                std::string gtmp102 = "_ag" + std::to_string(tempCounter_++);
+                c_.emitLine(gtyp102 + " " + gtmp102 + " = 0;");
+                c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) { "
+                            + gtmp102 + " = " + argVal + "; }");
+                argVal = gtmp102;
+            }
+        }
         args.push_back(std::move(argVal));
     }
 

@@ -317,6 +317,28 @@ void CCodeGen::visit(CallStmt& node) {
         // Fix 015: 标记 callee 上下文, 让 visit(MemberAccessExpr) 的 Fix 015 路径
         // 把链式对象参数通过 pendingChainObj_ 交付, 而不是直接合成 func(wrappedObj)
         // (那样会让下面的 bare-call 判定 callExpr.find('(') != npos 错过 padding).
+        // 第一百零二刀 (§11.80): 语句位置的调用实参。真机 I 族（I1 gN=0 / I2 gN=1）
+        // 量到「命中即整句中止」—— 坏实参之后的不再求值、之前的照常求值、调用跳过。
+        // 逐实参提升 + 每次求值前比序号可同时满足两条；由 CallArgScope102 统一收尾。
+        struct CallArgScope102 {
+            CCodeGen* g;
+            ~CallArgScope102() {
+                g->stmtCallArgSerial_.clear();
+                g->stmtCallArgEmitted_ = false;
+                g->stmtCallArgFirstLate_ = -1;
+            }
+        } callArgScope102_{this};
+        if (node.callee && node.callee->kind == ASTNodeKind::IndexOrCallExpr) {
+            auto& c102 = static_cast<IndexOrCallExpr&>(*node.callee);
+            for (size_t i102 = 0; i102 < c102.positional.size(); i102++) {
+                if (c102.positional[i102]
+                    && exprHasLateBoundComRead(c102.positional[i102].get())) {
+                    stmtCallArgFirstLate_ = (int)i102;
+                    stmtCallArgSerial_ = "_eg" + std::to_string(tempCounter_++);
+                    break;
+                }
+            }
+        }
         pendingChainObj_.clear();
         bool savedAsCallCallee = asCallCallee_;
         asCallCallee_ = true;
@@ -923,6 +945,10 @@ void CCodeGen::visit(CallStmt& node) {
             }
         }
 
+        const bool guard102 = !stmtCallArgSerial_.empty() && stmtCallArgEmitted_;
+        if (guard102) {
+            c_.emitLine("if (" + stmtCallArgSerial_ + " == vb6_ErrSerial()) {");
+        }
         if (callExpr.find("vb6_ComCall(") == 0
             || callExpr.find("vb6_ComCallByDispid(") == 0) {
             // ComCall返回可能含对象的VARIANT*, 用VarFree避免Release对象
@@ -931,6 +957,9 @@ void CCodeGen::visit(CallStmt& node) {
             c_.emitLine("vb6_ComVarClear((void*)" + callExpr + ");  /* COM prop get, discard result */");
         } else {
             c_.emitLine(callExpr + ";");
+        }
+        if (guard102) {
+            c_.emitLine("}");
         }
 
         // M22: ANSI临时变量释放由emitStmtList统一处理, 此处不再单独清理
