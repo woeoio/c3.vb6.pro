@@ -1,0 +1,6 @@
+Type=Exe
+Name=SetCls
+Module=SetClsMain; SetClsMain.bas
+Class=SetClsSlot; SetClsSlot.cls
+Startup="Sub Main"
+ExeName32="SetCls.exe"

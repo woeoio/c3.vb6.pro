@@ -8835,6 +8835,33 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcAbsent "b254_setslot_lesion" @("$Tests\test_late_setslot.bas") @(
         'vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")));  /* Set */'
     )
+    # 第一百一十刀 (§11.91): 真机 P 族 —— Set 到**工程类 Variant 字段槽**。
+    #   P1 `Set c.f = o.NoSuchProperty`（类外, C: c->f）  = c.f=111 err=438
+    #   P2 `Set f = o.NoSuchProperty`（类内, C: me->f）  = c.f=111 err=438
+    #   P3/P4 控制格 = isobj=True err=0
+    # 类外那一形带尾注 `/* class var .f field variant */`，以前没被认成 Variant 容器 ⇒
+    # 不装箱（C2440）。类内那一形以前装箱但不守卫、也不退旧值。
+    $setclsExpected = @(
+        "P1-lateoutside c.f=111 err=438",
+        "P2-lateinside c.f=111 err=438",
+        "P3-ctloutside isobj=True err=0",
+        "P4-ctlinside isobj=True err=0",
+        "P-DONE")
+    Test-Vbp "setcls" "$Tests\setcls\SetCls.vbp" $setclsExpected
+    Test-Vbp "setcls_x86" "$Tests\setcls\SetCls.vbp" $setclsExpected -Arch "x86"
+    Test-EmitcShape "b255_setclsslot_shape" @("$Tests\setcls\SetCls.vbp") @(
+        'vb6_VariantClear(&c->f  /* class var .f field variant */);',
+        '_vs0 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'vb6_VariantClear(&me->f);',
+        'me->f = _vs',
+        'c->f  /* class var .f field variant */ = vb6_VariantFromValue(o);  /* Set */',
+        'me->f = vb6_VariantFromValue(o);  /* Set */'
+    )
+    # 反面针: 修复前那一形（类外目标不装箱、裸赋值）。
+    Test-EmitcAbsent "b255_setclsslot_lesion" @("$Tests\setcls\SetCls.vbp") @(
+        'field variant */ = vb6_ComGetObjectProp(o, L"NoSuchProperty");  /* Set */',
+        'field variant */ = o;  /* Set */'
+    )
     # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
     # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
     # 循环体首条语句上收尾：`gN = gN + 1` 被改写成 `o.NoSuchProperty = gN + 1`，
