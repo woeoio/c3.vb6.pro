@@ -8850,17 +8850,17 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-Vbp "setcls" "$Tests\setcls\SetCls.vbp" $setclsExpected
     Test-Vbp "setcls_x86" "$Tests\setcls\SetCls.vbp" $setclsExpected -Arch "x86"
     Test-EmitcShape "b255_setclsslot_shape" @("$Tests\setcls\SetCls.vbp") @(
-        'vb6_VariantClear(&c->f  /* class var .f field variant */);',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&c->f  /* class var .f field variant */); c->f  /* class var .f field variant */ = _vs0; }',
         '_vs0 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&me->f); me->f = _vs0; }',
         'vb6_VariantClear(&me->f);',
-        'me->f = _vs',
-        'c->f  /* class var .f field variant */ = vb6_VariantFromValue(o);  /* Set */',
-        'me->f = vb6_VariantFromValue(o);  /* Set */'
+        'c->f  /* class var .f field variant */ = vb6_VariantFromValue(o);',
+        'me->f = vb6_VariantFromValue(o);'
     )
-    # 反面针: 修复前那一形（类外目标不装箱、裸赋值）。
+    # 反面针: 修复前那两形（类外目标不装箱裸写 / 类内装箱但不守卫）。
     Test-EmitcAbsent "b255_setclsslot_lesion" @("$Tests\setcls\SetCls.vbp") @(
-        'field variant */ = vb6_ComGetObjectProp(o, L"NoSuchProperty");  /* Set */',
-        'field variant */ = o;  /* Set */'
+        'field variant */ = vb6_ComGetObjectProp(o, L"NoSuchProperty");',
+        'me->f = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));'
     )
     # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
     # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
