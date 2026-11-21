@@ -8772,6 +8772,22 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_GVar(vb6_VariantFromValue(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))));',
         'vb6_GVarRef((&(vb6_VARIANT){.vt=VT_BSTR, .bstrVal=vb6_VariantToString(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty")))}));'
     )
+    # 第一百零六刀 (§11.84): Variant 槽的**赋值位** —— 真机 K4 `v = 111 : v = o.NoSuchProperty`
+    # 答 `v=111` / `err=438`（目标一个字都不写）。守卫机制原先只认 Int/Double/String 目标，
+    # Variant 目标直接发 `v = vb6_VariantFromComResult(...)` ⇒ 438 之后照样把值写进 v。
+    # 形：序号先抓、右值进 `_av`（Empty 起手）、同一枚序号决定写不写；控制格（Count/Item）钉住
+    # “正常赋值不许被守卫挡掉”。
+    Test-EmitcShape "b251_varslot_guard_shape" @("$Tests\test_late_varslot.bas") @(
+        'vb6_VARIANT _av0 = vb6_VariantEmpty();',
+        'if (_e0 == vb6_ErrSerial()) { _av0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _av0; }',
+        'if (_e1 == vb6_ErrSerial()) { _av1 = vb6_VariantFromComResult(vb6_ComCall(o, L"Count", NULL, 0)); }',
+        'if (_e3 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _av3; }'
+    )
+    # 反面针：修复前那一形（逐字取自未接守卫时的发射）。
+    Test-EmitcAbsent "b251_varslot_guard_lesion" @("$Tests\test_late_varslot.bas") @(
+        'v = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0));'
+    )
     # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
     # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
     # 循环体首条语句上收尾：`gN = gN + 1` 被改写成 `o.NoSuchProperty = gN + 1`，
