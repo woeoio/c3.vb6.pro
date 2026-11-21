@@ -1,4 +1,4 @@
-# 039 - 内置 Dictionary（设计）
+﻿# 039 - 内置 Dictionary（设计）
 
 > 状态：**S1/S2/S3 已完成**（设计 + 基准 + 实现 + 对照全绿）。S4（三条入口的 New 那一半）已在实现里做了，剩 S5 门禁登记与 S6 收口。
 > 当前读数：`PASS dict_native 用例=54 行`（1 行 VB6-SEM 手工期望，5 行已知 C3 缺口剔除，明细见 §9）。
@@ -5009,3 +5009,22 @@ ProbeMain.c(68): error C2440: 同上（控制格 `Set c.f = o`）
 - `variant_slot_store` PASS（violations 0）
 - manifest：757 → 759 行（新增 .vbp/.bas 两行，存量 0 行变动；次日重算 .vbp 行
   10187 → 10165 字节，·cls 体内多了守卫）
+---
+
+## §11.92 第一百一十一刀前的探针（Q 族：Set 语句目标的另外两形）
+
+第一百一十刀把「工程类 Variant 字段槽」量完并修好之后，Set 的目标还剩下两形没量。
+本机先用一份小夹具（`.temp/k111/slots111.bas` / `slots111b.bas`）读现状：
+
+| 格 | 语句 | 本机现状 |
+|----|------|----------|
+| Q1 | `Set w = o.NoSuchProperty`（目标 = ByRef Variant 形参，C `(*w)`） | **C2440 编不过**：`(*w) = vb6_ComGetObjectProp(o, L"…");` —— 装箱整个缺 |
+| Q2 | `Set uv.f = o.NoSuchProperty`（UDT Variant 字段） | 111 / 438 ✅（第一百零七刀已修） |
+| Q3 | `With uv : Set .f = o.NoSuchProperty` | `uv.f=` / 438 ❌ —— 裸赋值，槽被清空 |
+| Q4 | `With uv : Set .f = o`（控制格） | `isobj=True` / 0 ✅ |
+
+另记一处与本刀无关的独立缺口：**模块级 UDT（含 Variant 成员）初始化 = C2074**
+（`vb6_type_UV uv = {0};`），所以 Q2/Q3 的本机读数改用过程内局部 UDT 取得。
+
+真机探针已写出（`.temp/k111/probe111/RealMachineProbe111.bas`，五格：Q1 / Q1c 控制 /
+Q2 参照 / Q3 / Q3c 控制），等真机数回来再改编译器 —— 两形都按「先量后改」处理。
