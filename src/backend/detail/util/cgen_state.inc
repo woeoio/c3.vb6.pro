@@ -791,6 +791,10 @@
     // 因为 vb6_VariantToDouble 宽松（Null → 0.0、不报错），守卫与临时量都白设。
     // 只在本条赋值语句内有效，由 StmtAbortScope 统一清除。
     bool nullFamIntTarget_ = false;
+    // C30-11 第九十七刀 (§11.75): 同上那一形，但目标是 Double —— 真机读数（E1–E3）也是 94 +
+    // 目标不动，只是改道目标得保留小数语义：`vb6_Int(vb6_DblStrict(x))`（IntV 那条整型路会把
+    // Abs(-1.5) 弄成 2）。void 型返回的严格入口只负责 raise，写入由守卫/临时量挡住。
+    bool nullFamDblTarget_ = false;
     void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。

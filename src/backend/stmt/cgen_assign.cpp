@@ -138,16 +138,21 @@ void CCodeGen::visit(AssignmentStmt& node) {
             g->stmtAbortTmp_ = false;
             g->stmtAbortTmpType_.clear();
             g->nullFamIntTarget_ = false;
+            g->nullFamDblTarget_ = false;
         }
     } stmtAbortScope{this};
     stmtAbortGuard_.clear();
     stmtAbortTmp_ = false;
     stmtAbortTmpType_.clear();
     nullFamIntTarget_ = false;
+    nullFamDblTarget_ = false;
     {
         const Vb6Type tgtT79 = node.target ? inferExprType(*node.target) : Vb6Type::Unknown;
         const bool tgtInt79 = tgtT79 == Vb6Type::Integer || tgtT79 == Vb6Type::Long
                            || tgtT79 == Vb6Type::Byte;
+        // 第九十七刀: Double 目标同属「转换 raise 之后目标不能动」那一族（真机 E4 `d = CLng(Null)`
+        // ⇒ -1/94，改前本仓把 0 写了进去）。Double 只折这一档 —— Single/Currency/Date 还沒量。
+        const bool tgtDbl97 = tgtT79 == Vb6Type::Double;
         const bool tgt79179 = tgtInt79 || tgtT79 == Vb6Type::String;
         bool mayRaise79 = false;
         // C30-11 第八十三刀：String 目标那一形（`s = CStr(Asc(""))`）在**顶层**看不见 ——
@@ -166,7 +171,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
         // 第八十五刀: 树里出现 `/` `\` `Mod` 同理 —— 除零报 11 之后 RTL 交回 0，目标照样被写。
         const bool raiseInRhs85 =
             (tgtInt79 || tgtT79 == Vb6Type::String) && raiseInTree85(node.value.get());
-        if (tgt79179 && node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr) {
+        if ((tgt79179 || tgtDbl97) && node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr) {
             auto& call79 = static_cast<IndexOrCallExpr&>(*node.value);
             // 第八十一刀: Asc/AscB/AscW 自己会在**空串**上报 5 —— 那条路不靠变体转换，
             // 所以上面的实参档判据看不见它。不把这三枚算进来的话，`n = Asc("")` 会是
@@ -183,7 +188,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
                 // 这一形与 Len 不同：发码是 vb6_Int(vb6_VariantToDouble(v))，而 VariantToDouble
                 // **宽松**（Null → 0.0、不报错）⇒ 下面那套守卫/临时量都白设。这里只**标一声**，
                 // 真正的改道在 BuiltinPre 那一站（那里才知道 vb6_Int 的 C 形参是 double）。
-                if (tgtInt79 && (cn79 == "int" || cn79 == "fix" || cn79 == "abs")
+                if ((tgtInt79 || tgtDbl97) && (cn79 == "int" || cn79 == "fix" || cn79 == "abs")
                     && call79.positional.size() == 1 && call79.positional[0]) {
                     Expr& a95 = *call79.positional[0];
                     if (a95.kind == ASTNodeKind::IdentifierExpr
@@ -191,7 +196,10 @@ void CCodeGen::visit(AssignmentStmt& node) {
                         || a95.kind == ASTNodeKind::WithMemberExpr) {
                         bool arr95 = false;
                         if (isDefinitelyVariantExpr(a95, &arr95) && !arr95) {
-                            nullFamIntTarget_ = true;
+                            // 第九十七刀: 目标是 Double 时走另一条改道（保留小数语义），
+                            // 由 nullFamDblTarget_ 带到 BuiltinPre。
+                            if (tgtDbl97 && !tgtInt79) nullFamDblTarget_ = true;
+                            else nullFamIntTarget_ = true;
                         }
                     }
                 }
@@ -246,7 +254,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
                         bool arr91 = false;
                         varSlot91 = isDefinitelyVariantExpr(*a79, &arr91) && !arr91;
                     }
-                    if (tgtInt79 && (lit79 || varSlot91)) {
+                    if ((tgtInt79 || tgtDbl97) && (lit79 || varSlot91)) {
                         stmtAbortTmp_ = true; stmtAbortTmpType_ = mapType(tgtT79);
                     }
                     mayRaise79 = true; break;

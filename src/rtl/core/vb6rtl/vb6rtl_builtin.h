@@ -159,6 +159,9 @@ void vb6_Dbl_AssignFromBSTR(double* target, BSTR src);
 // (真机 A2/A4)。与 vb6_BSTR_AssignFromVariant 同一口径。
 void vb6_Bool_AssignFromVariant(int16_t* target, vb6_VARIANT src);
 void vb6_Dbl_AssignFromVariant(double* target, vb6_VARIANT src);
+// C30-11 第九十七刀 (§11.75): Double 目标的严格变体→double 入口（Null ⇒ 94、非数字文本 ⇒ 13）。
+// 只用于「vb6_Int/Fix/Abs(<整只 Variant 槽>) 落 Double 目标」这一形；vb6_VariantToDouble 本身保持宽松。
+double vb6_DblStrict(vb6_VARIANT v);
 // M22: typed CStr overloads
 BSTR vb6_CStrLong(int32_t x);
 BSTR vb6_CStrLongFromVariant(vb6_VARIANT x);   // Fix 158q: _Generic 兜底的 Variant 解包入口
