@@ -4156,3 +4156,61 @@ vb6_BSTR_AssignMoveIfOk(&s2, vb6_ComGetStringProp(o, L"NoSuchStringProperty"), _
 工程类实例指针、从没包成 IDispatch —— VB6 那边本来有对象，无条件报 438 把这些能跑的语句打崩。
 改成 `if (vb6_ComIsDispatchable(disp))` 才报，其余维持静默 + `C3_LATEBIND_MISS` 追踪
 （那是实现缺口，不是 VB6 语义）。本机 `B190.vbp` 恢复 `run rc=0`，五条针全在。
+
+### 11.78 第一百刀：成员读落在表达式内（值位置）
+
+#### 一、读数（探针 G 段，真机 + 本仓）
+
+| 格 | 语句 | 真机 | 改前 C3 | 现在 C3 |
+|---|---|---|---|---|
+| G1 | `n = 1 + o.NoSuchProperty` | -1 / 438 | 1 / 438 | **-1 / 438** |
+| G2 | `n = o.NoSuchProperty * 2` | -1 / 438 | 0 / 438 | **-1 / 438** |
+| G3 | `n = Abs(o.NoSuchProperty)` | -1 / 438 | 0 / 438 | **-1 / 438** |
+| G4 | `Call GTouch(o.NoSuchProperty)` | 被调方**不跑**（0）/ 438 | 跑了（1） | 1（未接，下一刀） |
+| G5 | `If o.NoSuchProperty = 1 Then n = 7` | **n = 7** / 438 | -1 | -1（未接，见第五节） |
+| G6 | `s = "x" & o.NoSuchStringProperty` | keep / 438 | "x" | **keep / 438** |
+
+结论：**整句中止** —— 目标不动、被调方不跑。C3 改前是"缺成员读当空值继续算"。
+
+#### 二、机制：不用改写子表达式
+
+守卫 + 临时量那条机制本来就能罩住**整条右值**，只是以前只在「顶层就是那次读」时才打开：
+
+```c
+const int32_t _e1 = vb6_ErrSerial();
+int32_t _t1 = (_e1 == vb6_ErrSerial()) ? (1 + vb6_ComGetIntProp(o, L"NoSuchProperty")) : 0;
+if (_e1 == vb6_ErrSerial()) n = _t1;
+```
+
+右值里那次 438 发生在 `_t1` 的计算里 ⇒ 目标那一步不写。String 目标的临时量与中止时的
+**释放**由 `emitBstrSlotStore` 的守卫支自己发（第八十三刀那条纪律，这里不碰所有权）。
+
+判据 = 右值树里**任一节点**经 `lateRead100` 命中（接收者判据与第九十八刀同一枚：链根是
+晚绑定 Object 变量，且不是控件数组 / 伪宿主 / `Me` / 同工程函数名），且**顶层本身不是**
+那次读（顶层两形已由 98/99 各自接掉）。遍历只走表达式节点：`Binary / Unary /
+MemberAccess.object / DictionaryAccess.object / IndexOrCall{callee, 位置实参, 命名实参} /
+New.args / TypeOf.object`。
+
+只接**标量数值 + 动态 String** 目标（与 98/99 同一张面）；Variant / UDT / 数组元素目标
+未量，不在册。
+
+#### 三、churn
+
+清单 750 行：**13 行**变动（G 段这一族落在普通赋值站的部分）。其中 `test_late_cond.bas`
+就是这条判据的现成样本。
+
+#### 四、门
+
+- 探针 F1–F6、G1/G2/G3/G6 与真机逐字对上。
+- 静态门 9 枚 PASS（`proto_arity` 1785、`rtl_embedded` 138 件）；`owned_temp_keeps` 255 行不变。
+- `-Category syntax` **227/227**。
+
+#### 五、仍挂着的两笔
+
+1. **G4：实参位置（调用语句）**。真机 `Call GTouch(o.NoSuchProperty)` 里被调方**根本没跑**；
+   C3 现在是「先把实参算完（报 438）再照常调」。要接就得把实参先提到调用前、判完序号再决定
+   调不调 —— 与赋值站不同形（那支是 `if (ok) call(...)`，实参仍在 call 里）。
+2. **G5：单行 If 的条件位置**。真机读数反直觉：条件报 438 之后 **Then 分支照样执行**
+   （n=7）。这不是"整句中止"，是 VB6 单行 If 的错误续行语义（`Resume Next` 落在 Then 那句
+   上）。要先补两格探针（多行 If 块的条件报错 / `ElseIf`）把边界量清楚，再决定要不要模仿
+   —— 现在 C3 是 -1（不执行），与真机不一致，**已登记为差异**。

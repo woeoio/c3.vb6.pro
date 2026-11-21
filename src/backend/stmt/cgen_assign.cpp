@@ -268,66 +268,109 @@ void CCodeGen::visit(AssignmentStmt& node) {
         // 这里只接**标量数值目标**：守卫/临时量那条机制能直接吃。BSTR 目标那一族（清单上
         // 179 句）的保存/恢复要连所有权一起算（与第八十三刀同一条纪律），另开一刀；
         // 表达式里的位置（1,486 句）守卫机制插不进去，也另记。
-        if ((tgtInt79 || tgtDbl97 || tgtT79 == Vb6Type::String) && node.value) {
-            Expr* rcv98 = nullptr;
-            if (node.value->kind == ASTNodeKind::MemberAccessExpr) {
-                rcv98 = static_cast<MemberAccessExpr&>(*node.value).object.get();
-            } else if (node.value->kind == ASTNodeKind::IndexOrCallExpr) {
-                auto& c98 = static_cast<IndexOrCallExpr&>(*node.value);
-                if (c98.callee && c98.callee->kind == ASTNodeKind::MemberAccessExpr)
-                    rcv98 = static_cast<MemberAccessExpr&>(*c98.callee).object.get();
+        // 第一百刀 (§11.78): 接收者判据收成两枚 lambda —— 顶层(98/99) 与表达式内(100)
+        // 共用同一枚，免得「按链根判」这条修正在两处各写一遍、再各错一遍。
+        auto comRecv100 = [&](Expr* rcv) -> bool {
+            if (!rcv) return false;
+            Expr* root = rcv;
+            while (root) {
+                if (root->kind == ASTNodeKind::MemberAccessExpr)
+                    root = static_cast<MemberAccessExpr&>(*root).object.get();
+                else if (root->kind == ASTNodeKind::IndexOrCallExpr
+                         && static_cast<IndexOrCallExpr&>(*root).callee)
+                    root = static_cast<IndexOrCallExpr&>(*root).callee.get();
+                else break;
             }
-            if (rcv98) {
-                // 先判**是不是 COM 派发**的接收者，再问类型：否则 inferExprType 先答 Object
-                // 时排除根本跑不到（实测：`cboUpdates.UBound` 照样被套上守卫，三条
-                // Test-CodegenNote 因此翻红）。
-                //   · 控件数组名（`cboUpdates.UBound` ⇒ vb6_CtrlArr_UBound）
-                //   · 内建伪宿主 Printer/Printers/Screen/App/Clipboard（成员表直接应答）
-                //   · Me（本类成员，编译期直调，不可能 438）
-                bool host98 = false;
-                std::string rn98;
-                // 第九十九刀补: 排除要按**链根**判，不能只看裸标识符 ——
-                //  `s = Printers(0).DeviceName` 的接收者是 `Printers.Item(0)`（调用形态），
-                //  只看 rcv98->kind 就漏掉伪宿主，pd_printer_data_props 那条发码针因此翻红。
-                Expr* root98 = rcv98;
-                while (root98) {
-                    if (root98->kind == ASTNodeKind::MemberAccessExpr)
-                        root98 = static_cast<MemberAccessExpr&>(*root98).object.get();
-                    else if (root98->kind == ASTNodeKind::IndexOrCallExpr
-                             && static_cast<IndexOrCallExpr&>(*root98).callee)
-                        root98 = static_cast<IndexOrCallExpr&>(*root98).callee.get();
-                    else break;
+            if (!root || root->kind != ASTNodeKind::IdentifierExpr) return false;
+            const std::string rn = Symbol::toLower(static_cast<IdentifierExpr&>(*root).name);
+            // 排除面（三条，与 98 同一张）：控件数组 / 伪宿主 / 非变量接收者。
+            static const char* kHost100[] = { "printer", "printers", "screen", "app",
+                                             "clipboard", "me", nullptr };
+            if (knownControlArrays_.count(rn)) return false;
+            for (int hi = 0; kHost100[hi]; hi++)
+                if (rn == kHost100[hi]) return false;
+            if (!knownLocalVars_.count(rn)) return false;
+            if (inferExprType(*rcv) == Vb6Type::Object) return true;
+            return knownObjectVars_.count(rn) > 0;
+        };
+        // 这一枚节点**本身**是不是晚绑定成员读/调用。
+        auto lateRead100 = [&](Expr* e) -> bool {
+            if (!e) return false;
+            if (e->kind == ASTNodeKind::MemberAccessExpr)
+                return comRecv100(static_cast<MemberAccessExpr&>(*e).object.get());
+            if (e->kind == ASTNodeKind::IndexOrCallExpr) {
+                auto& c = static_cast<IndexOrCallExpr&>(*e);
+                if (c.callee && c.callee->kind == ASTNodeKind::MemberAccessExpr)
+                    return comRecv100(static_cast<MemberAccessExpr&>(*c.callee).object.get());
+            }
+            return false;
+        };
+        if ((tgtInt79 || tgtDbl97 || tgtT79 == Vb6Type::String) && node.value) {
+            if (lateRead100(node.value.get())) {
+                // 顶层就是那次成员读（98/99 两形）：标量走守卫+临时量，String 交 99 的出口。
+                if (tgtT79 == Vb6Type::String) {
+                    lateBstrCom99_ = true;
+                } else {
+                    mayRaise79 = true;
+                    stmtAbortTmp_ = true;
+                    stmtAbortTmpType_ = mapType(tgtT79);
                 }
-                if (root98 && root98->kind == ASTNodeKind::IdentifierExpr) {
-                    rn98 = Symbol::toLower(static_cast<IdentifierExpr&>(*root98).name);
-                    static const char* kHost98[] = { "printer", "printers", "screen", "app",
-                                                    "clipboard", "me", nullptr };
-                    host98 = knownControlArrays_.count(rn98) > 0;
-                    for (int hi98 = 0; !host98 && kHost98[hi98]; hi98++)
-                        host98 = (rn98 == kHost98[hi98]);
-                    // 只认**变量**（局部/形参/模块级/字段）作接收者：`Clone.ScaleFactor(3#)` 那种
-                    // 接收者是本类/同工程的**函数名**（编译期直调、不可能 438），套守卫是噪声
-                    //（test_with_member_call.cls 那一条就是这个形）。
-                    if (!host98 && !knownLocalVars_.count(rn98)) host98 = true;
+            }
+        }
+        // 第一百刀 (§11.78): 成员读落在表达式**内**（真机 G1/G2/G3/G6）：
+        //   n = 1 + o.NoSuchProperty          ⇒ -1 / 438
+        //   n = o.NoSuchProperty * 2          ⇒ -1 / 438
+        //   n = Abs(o.NoSuchProperty)         ⇒ -1 / 438
+        //   s = "x" & o.NoSuchStringProperty  ⇒ keep / 438
+        // 机制不必改写子表达式 —— 守卫 + 临时量本来就能罩住整条右值：
+        //   const int32_t _e = vb6_ErrSerial();
+        //   <T> _t = (_e == vb6_ErrSerial()) ? (<整条右值>) : 0;
+        //   if (_e == vb6_ErrSerial()) tgt = _t;
+        // 右值里那次 438 发生在 `_t` 的计算里 ⇒ 目标那一步不写。String 目标的临时量与中止时的
+        // 释放由 emitBstrSlotStore 的守卫支自己发（第八十三刀那条纪律，这里不碰所有权）。
+        // 只在**顶层不是成员读**时才走这一条：顶层那两形（98/99）已各自接了。
+        if (node.value && !lateBstrCom99_ && !lateRead100(node.value.get())
+            && (tgtInt79 || tgtDbl97 || tgtT79 == Vb6Type::String)) {
+            std::function<bool(Expr*)> anyLate100 = [&](Expr* e) -> bool {
+                if (!e) return false;
+                if (lateRead100(e)) return true;
+                switch (e->kind) {
+                case ASTNodeKind::BinaryExpr: {
+                    auto& b = static_cast<BinaryExpr&>(*e);
+                    return anyLate100(b.left.get()) || anyLate100(b.right.get());
                 }
-                bool lateBound98 = false;
-                if (!host98) {
-                    lateBound98 = inferExprType(*rcv98) == Vb6Type::Object;
-                    // `Dim o As Object` 的局部不在 inferExprType 的几张已知型表里
-                    //（那几张只答 BSTR/Single/Date/Double/Boolean/Byte/Long…）⇒ 补问登记表。
-                    if (!lateBound98 && !rn98.empty())
-                        lateBound98 = knownObjectVars_.count(rn98) > 0;
+                case ASTNodeKind::UnaryExpr:
+                    return anyLate100(static_cast<UnaryExpr&>(*e).operand.get());
+                case ASTNodeKind::MemberAccessExpr:
+                    return anyLate100(static_cast<MemberAccessExpr&>(*e).object.get());
+                case ASTNodeKind::DictionaryAccessExpr:
+                    return anyLate100(static_cast<DictionaryAccessExpr&>(*e).object.get());
+                case ASTNodeKind::IndexOrCallExpr: {
+                    auto& c = static_cast<IndexOrCallExpr&>(*e);
+                    if (anyLate100(c.callee.get())) return true;
+                    for (auto& a : c.positional)
+                        if (anyLate100(a.get())) return true;
+                    for (auto& na : c.named)
+                        if (anyLate100(na.value.get())) return true;
+                    return false;
                 }
-                if (lateBound98) {
-                    if (tgtT79 == Vb6Type::String) {
-                        // 第九十九刀: BSTR 目标那一族走自己的出口（见 lateBstrCom99_ 的说明），
-                        // 不叠标量守卫。
-                        lateBstrCom99_ = true;
-                    } else {
-                        mayRaise79 = true;
-                        stmtAbortTmp_ = true;
-                        stmtAbortTmpType_ = mapType(tgtT79);
-                    }
+                case ASTNodeKind::NewExpr: {
+                    auto& nw = static_cast<NewExpr&>(*e);
+                    for (auto& a : nw.args)
+                        if (anyLate100(a.get())) return true;
+                    return false;
+                }
+                case ASTNodeKind::TypeOfExpr:
+                    return anyLate100(static_cast<TypeOfExpr&>(*e).object.get());
+                default:
+                    return false;
+                }
+            };
+            if (anyLate100(node.value.get())) {
+                mayRaise79 = true;
+                if (tgtInt79 || tgtDbl97) {
+                    stmtAbortTmp_ = true;
+                    stmtAbortTmpType_ = mapType(tgtT79);
                 }
             }
         }
