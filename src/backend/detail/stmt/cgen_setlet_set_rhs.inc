@@ -27,6 +27,25 @@
         && classVariantFields_.count(targetLower) > 0) {
         targetIsVariant = true;
     }
+    // 第一百一十刀 (§11.91): 类字段槽从**类外面**写时, 目标文本带着字段读那一站的尾注
+    // `/* class var .f field variant */` (cgen_expr_member), checkName 于是含注释,
+    // 上面三条按名判定全落空 ⇒ 目标被当 typed 槽, 既不装箱也不守卫, 直接发
+    //   `c->f  /* class var .f field variant */ = vb6_ComGetObjectProp(o, L"…");  /* Set */`
+    // ⇒ C2440 (void* → vb6_VARIANT)。真机 P 族: P1 (c.f, 类外) / P2 (me->f, 类内)
+    // 都 = 111 / 438 —— 字段一个字不动; P3/P4 控制格必须落槽。
+    // 判据只认那一枚尾注 (与 cgen_expr_member_voidptr_com.inc 同一写法), 不按名字猜。
+    const bool targetIsClassVariantField =
+        target.find("/* class var .") != std::string::npos
+        && target.find(" field variant */") != std::string::npos;
+    if (targetIsClassVariantField) targetIsVariant = true;
+    // 「这一格是工程类的 Variant 字段槽」的唯一一问: 类内那张无尾注形 (`me->f`) 与
+    // 类外带尾注形 (`c->f  /* class var .f field variant */`) 都归它。后面的 438 守卫
+    // 与「先退旧值」都按这一问走。
+    const bool classVarFieldSlot110 =
+        targetIsClassVariantField
+        || (target.rfind("me->", 0) == 0 && classVariantFields_.count(targetLower) > 0);
+    if (std::getenv("C3_DBG_VSET110") && classVarFieldSlot110)
+        std::cerr << "[VSET110-DET] tgt=" << target << std::endl;
     // Fix 084n: UDT 的 Variant 字段 (如 ZipFileInfo.SourceFile As Variant)
     // Set .SourceFile = obj → 也需 vb6_VariantFromValue 包装对象指针 (void*→vb6_VARIANT C2440)
     // ai/022 B08f-1 (D37): 但 `As <项目类>` 的 UDT 字段在语义层**也**记成 Variant，而它在 C 里是
@@ -417,7 +436,27 @@
             const bool plainVar108 = target.compare(0, 7, "VB6_SA_") != 0
                 && target.find("->") == std::string::npos
                 && target.find('(') == std::string::npos;
-            if (plainVar108 && node.value && exprHasLateBoundComRead(node.value.get())) {
+            // 第一百一十刀 (§11.91): 类字段 Variant 槽 —— 真机 P1/P2 与裸变量位同一条规则
+            // (读数失败 ⇒ 槽里一个字不动); P3/P4 控制格必须落槽。槽是**真存储**, 覆写前
+            // 先退旧值 (以前 me-> 那一形连旧值都不退, 只发一句裸 `me->f = <boxed>`)。
+            // 守卫两枚成功时临时量是**移**进槽里的 ⇒ 不自己收回。
+            if (classVarFieldSlot110) {
+                if (node.value && exprHasLateBoundComRead(node.value.get())) {
+                    const std::string gv110 = "_e" + std::to_string(stmtAbortSeq_++);
+                    const std::string tv110 = "_vs" + std::to_string(tempCounter_++);
+                    if (std::getenv("C3_DBG_VSET110"))
+                        std::cerr << "[VSET110] class field tgt=" << target << std::endl;
+                    c_.emitLine("const int32_t " + gv110 + " = vb6_ErrSerial();");
+                    c_.emitLine("vb6_VARIANT " + tv110 + " = vb6_VariantEmpty();");
+                    c_.emitLine("if (" + gv110 + " == vb6_ErrSerial()) { " + tv110 + " = "
+                                + value + "; }");
+                    c_.emitLine("if (" + gv110 + " == vb6_ErrSerial()) { vb6_VariantClear(&"
+                                + target + "); " + target + " = " + tv110 + "; }");
+                } else {
+                    c_.emitLine("vb6_VariantClear(&" + target + ");");
+                    c_.emitLine(target + " = " + value + ";  /* Set */");
+                }
+            } else if (plainVar108 && node.value && exprHasLateBoundComRead(node.value.get())) {
                 if (std::getenv("C3_DBG_VSET108"))
                     std::cerr << "[VSET108] tgt=" << target << std::endl;
                 const std::string gv108 = "_e" + std::to_string(stmtAbortSeq_++);
