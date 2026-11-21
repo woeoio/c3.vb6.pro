@@ -4927,3 +4927,29 @@ return knownObjectVars_.count(rn) > 0;                        // 老口径，一
 - 静态门 9 枚 PASS（`manifest_coverage` inputs=757 / registered=757）
 - `owned_temp_keeps` 255 行不变
 - manifest：新增 1 行 = 757 行
+
+---
+
+## §11.90 第一百一十刀前的探针（P 族：Set 到工程类字段槽）与一处新账
+
+最后一条未量形（`Set <工程类 Variant 字段> = 晚绑定读`）在普通 .bas 探针里伸不到，所以另做了一个
+**最小工程**：`ClsSlotProbe.vbp` + `ProbeMain.bas` + `SlotCls.cls`（类里 `Public f As Variant`），
+四格：
+
+- `P1  Set c.f = o.NoSuchProperty`（类外面写字段，C 里 `c->f`）
+- `P2  c.SetMissing o`（类里面写自己的字段，C 里 `me->f`）
+- `P3/P4` 控制格（成功的 Set 必须落进字段）
+
+**这一形 C3 现在编不过**（新测到的独立缺口，与 438 该不该写目标是两回事）：
+
+```
+ProbeMain.c(56): error C2440: 无法从 “void *” 转换为 “vb6_VARIANT”
+  c->f  /* class var .f field variant */ = vb6_ComGetObjectProp(o, L"NoSuchProperty");  /* Set */
+ProbeMain.c(68): error C2440: 同上（控制格 `Set c.f = o`）
+  c->f  /* class var .f field variant */ = o;  /* Set */
+```
+
+即：Set 到工程类的 Variant 字段那一支，**装箱（对象指针 → Variant）整个缺了** ——
+`targetIsVariant` 那一支只认 `knownVariantVars_` / 类字段表里的**名字**，但写回时没走
+`wrapVariantValue`，与 §11.87 给 Set 裸变量位加守卫时看到的那个 `value` 不是同一口径。
+先记下，等真机 P1/P2 数回来一并处理（先装箱，再谈守卫）。
