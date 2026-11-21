@@ -4795,3 +4795,57 @@ Variant 槽。改前全量扫（753 输入）：**23 处 / 11 个输入**，全�
 M2/M4 看形就是缺口（和 K4 / L6–L9 不是一回事：那几格是目标不动，这两格是目标被清），
 但真机没量前**不改**。真机若给 111 → 开第一百零八刀；真机若也是空 → 现状就是对的，登记为已覆盖。
 M1 若真机给 `False`（o2 被塞了东西）也是新缺口。
+
+---
+
+## §11.87 第一百零八刀：Set 赋值位 + ByRef Variant 目标（兼修 lateBoundComReadExpr 的形参盲区）
+
+### 一、真机（再跑一轮 M 族）
+
+| 格 | 语句 | 真机 | 修前本机 |
+|----|------|------|----------|
+| M1 | `Set o2 = o.NoSuchProperty`（`o2 As Object`，先 Nothing） | `True` / 438 | `True` / 438 ✓ |
+| M2 | `Set v = o.NoSuchProperty`（`v As Variant`，先 111） | `111` / 438 | **空** / 438 ✗ |
+| M3 | `Set o2 = o`（控制格） | `False`（已指向）/ 0 | 同 ✓ |
+| M4 | `LateToParam v, o`（目标是一枚 ByRef 的 Variant 形参） | `111` / 438 | **空** / 438 ✗ |
+
+结论：Set 位与 ByRef 形参位跟 K4/L6–L9 同一条规则 —— 438 一出，目标一个字都不写。
+
+### 二、两个根因
+
+1. **Set 站没接守机**：`visit(SetStmt&)` 的 `targetIsVariant` 那一支直接发
+   `v = <boxed>;  /* Set */`，随后 `err` 还是 438，但 v 已经被写成空值。
+2. **`lateBoundComReadExpr` 看不见形参**：判据要求根名在 `knownLocalVars_` 里，
+   而 `ByVal o As Object` 这种形参只进了 `knownObjectVars_`（`cgen_decl_proc.cpp` 的 void* 那一支）
+   —— 于是 `w = o.NoSuchProperty` 这种在**另一个过程里**写的句，守卫压根没接上，
+   发出的是 `vb6_VariantClear(&(*w)); (*w) = ...`（先清后赋）。
+
+### 三、改法
+
+- `cgen_util_scan.cpp`：`lateBoundComReadExpr` 的变量闸从
+  `knownLocalVars_.count(rn)` 改为 `knownLocalVars_ || knownObjectVars_`（Object/Collection/COM 变量不管
+  是局部、形参还是模块级，都算“变量”）。
+- `cgen_setlet_set_rhs.inc`：`targetIsVariant` 那一支加与赋值位同形的守机（序号 + `_vs` 临时量 + 两道闸）；
+  只接**裸变量**目标（数组元素支在上面先走、`me->字段` / UDT 字段槽 / 解引用形未量 ⇒ 仍走原路）。
+- 调试口：`C3_DBG_VSLOT107`（赋值位）、`C3_DBG_VSET108`（Set 位）。
+
+### 四、量
+
+- 改前 census（755 输入，`C3_DBG_VSLOT107`）：28 处 / 10 个输入（同 §11.85）。
+- 改后实编：manifest **37 行变动**（756 行中）。变动的形状全是“多加了一道守卫”，分两类：
+  Variant/串目标上的晚绑定读（本刀要的），以及**标量/串目标上接收者是 Object 形参**的
+  那批站点（同一个盲区的另一半 —— 以前它们也漏了守卫）。
+- 本机逐个编过：`test_events` / `setobj` / `k271_outparam` / `b446_latebind`（CI 再全量盯）。
+
+#### 五、夹具与针
+
+- `tests/test_late_setvar.bas`（M1–M4 + M5 控制格：`Set v = o` 成功必须落进目标）
+- `b253_setvar_shape` 五条针：`_vs0` 起手、`(*w)` 的 `VariantAssign`、`_vs0` 收回、`_vs1` 起手（M2）、
+  M2 写回
+- `b253_setvar_lesion` 两条反面针（修复前：Set 直接写目标 / `(*w) = ...` 裸赋）
+
+#### 六、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=756 / registered=756）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行 + 37 行重算 = 756 行
