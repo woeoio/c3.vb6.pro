@@ -261,6 +261,56 @@ void CCodeGen::visit(AssignmentStmt& node) {
                 }
             }
         }
+        // 第九十八刀 (b): 右值是晚绑定成员读/调用（接收者是 Object 档）—— COM 站现在会报 438
+        // （第九十八刀 a 那五枚分支），真机读数 F3/F4/F5/F6 全是「438 + 目标不动」。
+        // 这里只接**标量数值目标**：守卫/临时量那条机制能直接吃。BSTR 目标那一族（清单上
+        // 179 句）的保存/恢复要连所有权一起算（与第八十三刀同一条纪律），另开一刀；
+        // 表达式里的位置（1,486 句）守卫机制插不进去，也另记。
+        if ((tgtInt79 || tgtDbl97) && node.value) {
+            Expr* rcv98 = nullptr;
+            if (node.value->kind == ASTNodeKind::MemberAccessExpr) {
+                rcv98 = static_cast<MemberAccessExpr&>(*node.value).object.get();
+            } else if (node.value->kind == ASTNodeKind::IndexOrCallExpr) {
+                auto& c98 = static_cast<IndexOrCallExpr&>(*node.value);
+                if (c98.callee && c98.callee->kind == ASTNodeKind::MemberAccessExpr)
+                    rcv98 = static_cast<MemberAccessExpr&>(*c98.callee).object.get();
+            }
+            if (rcv98) {
+                // 先判**是不是 COM 派发**的接收者，再问类型：否则 inferExprType 先答 Object
+                // 时排除根本跑不到（实测：`cboUpdates.UBound` 照样被套上守卫，三条
+                // Test-CodegenNote 因此翻红）。
+                //   · 控件数组名（`cboUpdates.UBound` ⇒ vb6_CtrlArr_UBound）
+                //   · 内建伪宿主 Printer/Printers/Screen/App/Clipboard（成员表直接应答）
+                //   · Me（本类成员，编译期直调，不可能 438）
+                bool host98 = false;
+                std::string rn98;
+                if (rcv98->kind == ASTNodeKind::IdentifierExpr) {
+                    rn98 = Symbol::toLower(static_cast<IdentifierExpr&>(*rcv98).name);
+                    static const char* kHost98[] = { "printer", "printers", "screen", "app",
+                                                    "clipboard", "me", nullptr };
+                    host98 = knownControlArrays_.count(rn98) > 0;
+                    for (int hi98 = 0; !host98 && kHost98[hi98]; hi98++)
+                        host98 = (rn98 == kHost98[hi98]);
+                    // 只认**变量**（局部/形参/模块级/字段）作接收者：`Clone.ScaleFactor(3#)` 那种
+                    // 接收者是本类/同工程的**函数名**（编译期直调、不可能 438），套守卫是噪声
+                    //（test_with_member_call.cls 那一条就是这个形）。
+                    if (!host98 && !knownLocalVars_.count(rn98)) host98 = true;
+                }
+                bool lateBound98 = false;
+                if (!host98) {
+                    lateBound98 = inferExprType(*rcv98) == Vb6Type::Object;
+                    // `Dim o As Object` 的局部不在 inferExprType 的几张已知型表里
+                    //（那几张只答 BSTR/Single/Date/Double/Boolean/Byte/Long…）⇒ 补问登记表。
+                    if (!lateBound98 && !rn98.empty())
+                        lateBound98 = knownObjectVars_.count(rn98) > 0;
+                }
+                if (lateBound98) {
+                    mayRaise79 = true;
+                    stmtAbortTmp_ = true;
+                    stmtAbortTmpType_ = mapType(tgtT79);
+                }
+            }
+        }
         // 第八十三/八十四/八十五刀: 顶层判据没命中、但右值树里有「本语句内直接 raise」的东西
         //（Asc 族或除零算符）⇒ 发守卫。String 目标的临时量由 emitBstrSlotStore 的两支各自发
         //（见那里的第八十三刀注）; 整型目标必须显式打开 stmtAbortTmp_ —— 否则 emitGuardedStore
