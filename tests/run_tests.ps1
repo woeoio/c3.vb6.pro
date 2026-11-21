@@ -8750,6 +8750,25 @@ if ($Category -in @("all", "run", "vbp")) {
         '? (vb6_ChkLong(vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-VAL"))}, 1)))) : (int32_t)0;',
         'if (!(vb6_CondIfErr(_c10, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1)))))) goto vb6_loop_exit_12;'
     )
+    # 第一百零二刀 (§11.80): 实参位上的归来绑定缺成员读。真机 I 族量到「命中即整句中止」:
+    # I1 `Call GTouch2(o.Bad, GFn())` = gHit=0 gN=0（坏实参之后的不再求值）,
+    # I2 `Call GTouch2(GFn(), o.Bad)` = gHit=0 gN=1（前面的照常求值）. C 的实参求值顺序
+    # **未定义**（MSVC 从右向左），所以得逐枚提升成临时量 + 每枚求值前比一次序号，
+    # 调用本身包在同一个守卫里。下面钉的就是这个形。
+    Test-EmitcShape "b102_late_arg_guard_shape" @("$Tests\test_late_arg.bas") @(
+        'const int32_t _eg0 = vb6_ErrSerial();',
+        'if (_eg0 == vb6_ErrSerial()) { _ag1 = vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); }',
+        'vb6_GTouch(_ag1);',
+        'if (_eg2 == vb6_ErrSerial()) { _ag3 = vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); }',
+        'if (_eg4 == vb6_ErrSerial()) { _ag5 = vb6_GFn(); }',
+        'vb6_GTouch2(_ag5, _ag6);'
+    )
+    # 反面针: 修复前那三行原样（实参直接内联、报错后照旧把 0 喂给被调）
+    Test-EmitcAbsent "b102_late_arg_lesion" @("$Tests\test_late_arg.bas") @(
+        'vb6_GTouch(vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))));',
+        'vb6_GTouch2(vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))), vb6_GFn());',
+        'vb6_GTouch2(vb6_GFn(), vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))));'
+    )
     # 反面针: 修复前那五行原样 (同一枚夹具、同一台编译器, 只差这一臂 —— 读数 12/16 也是这一发量的)。
     Test-EmitcAbsent "b247_not_fold_lesion" @("$Tests\test_late_cond.bas") @(
         'if ((~(int32_t)(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-NOT"))}, 1)))) {',
