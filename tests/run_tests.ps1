@@ -8778,15 +8778,33 @@ if ($Category -in @("all", "run", "vbp")) {
     # 形：序号先抓、右值进 `_av`（Empty 起手）、同一枚序号决定写不写；控制格（Count/Item）钉住
     # “正常赋值不许被守卫挡掉”。
     Test-EmitcShape "b251_varslot_guard_shape" @("$Tests\test_late_varslot.bas") @(
-        'vb6_VARIANT _av0 = vb6_VariantEmpty();',
-        'if (_e0 == vb6_ErrSerial()) { _av0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }',
-        'if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _av0; }',
-        'if (_e1 == vb6_ErrSerial()) { _av1 = vb6_VariantFromComResult(vb6_ComCall(o, L"Count", NULL, 0)); }',
-        'if (_e3 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _av3; }'
+        'vb6_VARIANT _vs0 = vb6_VariantEmpty();',
+        'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs0; }',
+        'if (_e1 == vb6_ErrSerial()) { _vs1 = vb6_VariantFromComResult(vb6_ComCall(o, L"Count", NULL, 0)); }',
+        'if (_e3 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs3; }'
     )
     # 反面针：修复前那一形（逐字取自未接守卫时的发射）。
     Test-EmitcAbsent "b251_varslot_guard_lesion" @("$Tests\test_late_varslot.bas") @(
         'v = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0));'
+    )
+    # 第一百零七刀 (§11.85): 真机 L6/L7/L8/L9 —— 表达式**内部**的晚绑定读、Variant
+    # 数组元素目标、UDT 的 Variant 字段目标, 也都是「目标一个字都不写」(111/438)。
+    # 形: 判据换成 exprHasLateBoundComRead; 槽形 (数组元素/UDT 字段/解引用) 一律
+    # vb6_VariantAssign (Clear + 深拷贝) 再把临时量自己放掉 (它自有才放)。
+    Test-EmitcShape "b252_varslot2_shape" @("$Tests\test_late_varslot2.bas") @(
+        'vb6_VARIANT _vs0 = vb6_VariantEmpty();',
+        'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromValue((1 + vb6_ComGetIntProp(o, L"NoSuchProperty"))); }',
+        'if (_e2 == vb6_ErrSerial()) { vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), _vs2); }',
+        'vb6_VariantClear(&_vs2);',
+        'if (_e3 == vb6_ErrSerial()) { vb6_VariantAssign(&uv.f, _vs3); }',
+        'vb6_VariantClear(&_vs3);',
+        'if (_e4 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs4; }'
+    )
+    # 反面针: 修复前那一形 (表达式内部/数组元素目标都直接写目标)。
+    Test-EmitcAbsent "b252_varslot2_lesion" @("$Tests\test_late_varslot2.bas") @(
+        'v = vb6_VariantFromValue((1 + vb6_ComGetIntProp(o, L"NoSuchProperty")));',
+        'vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), vb6_VariantFromValue(vb6_ComGetStringProp(o, L"NoSuchProperty")));'
     )
     # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
     # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
