@@ -11976,8 +11976,8 @@ if ($Category -in @("all", "run", "vbp")) {
     # moduleClassVars_ 那份**模块级**快照每张过程入口恢复一次, 否则后面过程里同名模块级类变量的原生
     # 字段读会跟着掉 (P5 与上面那枚 Thing->Alpha 针钉的就是这一条)。
     Test-EmitcShape "b190_object_formal_goes_late" @("$Tests\b190_scope\B190.vbp") @(
-        'vb6_BSTR_Assign(&vb6_ret_ShadowParam, vb6_ComGetStringProp(Item, L"Alpha"));',
-        'vb6_BSTR_Assign(&vb6_ret_UsesObj, vb6_ComGetStringProp(Thing, L"Alpha"));',
+        'vb6_BSTR_AssignMoveIfOk(&vb6_ret_ShadowParam, vb6_ComGetStringProp(Item, L"Alpha"), _e',
+        'vb6_BSTR_AssignMoveIfOk(&vb6_ret_UsesObj, vb6_ComGetStringProp(Thing, L"Alpha"), _e',
         'vb6_BSTR_Assign(&vb6_ret_UsesModuleVar, Thing->Alpha  /* class var .Alpha field */);')
     Test-EmitcAbsent "b190_object_formal_keeps_no_stale_class_answer" @("$Tests\b190_scope\B190.vbp") @(
         'vb6_ret_ShadowParam, Item->Alpha',
