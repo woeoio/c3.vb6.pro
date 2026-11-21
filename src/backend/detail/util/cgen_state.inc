@@ -795,6 +795,10 @@
     // 目标不动，只是改道目标得保留小数语义：`vb6_Int(vb6_DblStrict(x))`（IntV 那条整型路会把
     // Abs(-1.5) 弄成 2）。void 型返回的严格入口只负责 raise，写入由守卫/临时量挡住。
     bool nullFamDblTarget_ = false;
+    // 第九十九刀 (§11.77): 同上那一形但目标是**动态 String**（BSTR 槽）—— 真机 F6 是
+    // 「438 + 目标不动」。BSTR 目标不能套标量那套临时量（所有权要转手），改由
+    // vb6_BSTR_AssignMoveIfOk 一枚出口收口：序号变了就放掉交回的串、目标不写。
+    bool lateBstrCom99_ = false;
     void emitGuardedStore(const std::string& line);
 
     // C29-7: 原生复刻的 ListView 控件 (登记裸控件名, 如 "ListView1")。

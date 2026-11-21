@@ -139,6 +139,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
             g->stmtAbortTmpType_.clear();
             g->nullFamIntTarget_ = false;
             g->nullFamDblTarget_ = false;
+            g->lateBstrCom99_ = false;
         }
     } stmtAbortScope{this};
     stmtAbortGuard_.clear();
@@ -146,6 +147,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
     stmtAbortTmpType_.clear();
     nullFamIntTarget_ = false;
     nullFamDblTarget_ = false;
+    lateBstrCom99_ = false;
     {
         const Vb6Type tgtT79 = node.target ? inferExprType(*node.target) : Vb6Type::Unknown;
         const bool tgtInt79 = tgtT79 == Vb6Type::Integer || tgtT79 == Vb6Type::Long
@@ -266,7 +268,7 @@ void CCodeGen::visit(AssignmentStmt& node) {
         // 这里只接**标量数值目标**：守卫/临时量那条机制能直接吃。BSTR 目标那一族（清单上
         // 179 句）的保存/恢复要连所有权一起算（与第八十三刀同一条纪律），另开一刀；
         // 表达式里的位置（1,486 句）守卫机制插不进去，也另记。
-        if ((tgtInt79 || tgtDbl97) && node.value) {
+        if ((tgtInt79 || tgtDbl97 || tgtT79 == Vb6Type::String) && node.value) {
             Expr* rcv98 = nullptr;
             if (node.value->kind == ASTNodeKind::MemberAccessExpr) {
                 rcv98 = static_cast<MemberAccessExpr&>(*node.value).object.get();
@@ -284,8 +286,20 @@ void CCodeGen::visit(AssignmentStmt& node) {
                 //   · Me（本类成员，编译期直调，不可能 438）
                 bool host98 = false;
                 std::string rn98;
-                if (rcv98->kind == ASTNodeKind::IdentifierExpr) {
-                    rn98 = Symbol::toLower(static_cast<IdentifierExpr&>(*rcv98).name);
+                // 第九十九刀补: 排除要按**链根**判，不能只看裸标识符 ——
+                //  `s = Printers(0).DeviceName` 的接收者是 `Printers.Item(0)`（调用形态），
+                //  只看 rcv98->kind 就漏掉伪宿主，pd_printer_data_props 那条发码针因此翻红。
+                Expr* root98 = rcv98;
+                while (root98) {
+                    if (root98->kind == ASTNodeKind::MemberAccessExpr)
+                        root98 = static_cast<MemberAccessExpr&>(*root98).object.get();
+                    else if (root98->kind == ASTNodeKind::IndexOrCallExpr
+                             && static_cast<IndexOrCallExpr&>(*root98).callee)
+                        root98 = static_cast<IndexOrCallExpr&>(*root98).callee.get();
+                    else break;
+                }
+                if (root98 && root98->kind == ASTNodeKind::IdentifierExpr) {
+                    rn98 = Symbol::toLower(static_cast<IdentifierExpr&>(*root98).name);
                     static const char* kHost98[] = { "printer", "printers", "screen", "app",
                                                     "clipboard", "me", nullptr };
                     host98 = knownControlArrays_.count(rn98) > 0;
@@ -305,9 +319,15 @@ void CCodeGen::visit(AssignmentStmt& node) {
                         lateBound98 = knownObjectVars_.count(rn98) > 0;
                 }
                 if (lateBound98) {
-                    mayRaise79 = true;
-                    stmtAbortTmp_ = true;
-                    stmtAbortTmpType_ = mapType(tgtT79);
+                    if (tgtT79 == Vb6Type::String) {
+                        // 第九十九刀: BSTR 目标那一族走自己的出口（见 lateBstrCom99_ 的说明），
+                        // 不叠标量守卫。
+                        lateBstrCom99_ = true;
+                    } else {
+                        mayRaise79 = true;
+                        stmtAbortTmp_ = true;
+                        stmtAbortTmpType_ = mapType(tgtT79);
+                    }
                 }
             }
         }

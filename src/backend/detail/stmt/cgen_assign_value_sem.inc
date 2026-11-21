@@ -148,7 +148,19 @@
         const bool fixedTgtIsUdtField = !fixedLenTarget.empty() && node.target
             && (node.target->kind == ASTNodeKind::MemberAccessExpr
                 || node.target->kind == ASTNodeKind::WithMemberExpr);
-        emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget, fixedTgtIsUdtField);
+        // 第九十九刀 (§11.77): 晚绑定成员读交回的 BSTR —— 真机 F6 `s2 = o.NoSuchStringProperty`
+        // ⇒ s2 仍是 keep、err=438。以前报 438 之后照样把 s2 清成 ""（号对了、值被清）。
+        // 只接**动态 String**（定长串的收口是 FixedStrAssign，另一形）；串的所有权由 RTL 出口
+        // 一并处理（序号变了就放掉交回的串）。
+        if (lateBstrCom99_ && fixedLenTarget.empty() && !fixedTgtIsUdtField) {
+            lateBstrCom99_ = false;
+            const std::string sv99 = "_e" + std::to_string(stmtAbortSeq_++);
+            c_.emitLine("const int32_t " + sv99 + " = vb6_ErrSerial();");
+            c_.emitLine("vb6_BSTR_AssignMoveIfOk(&" + target + ", " + value + ", " + sv99 + ");");
+        } else {
+            lateBstrCom99_ = false;
+            emitBstrSlotStore(target, node.value.get(), value, fixedLenTarget, fixedTgtIsUdtField);
+        }
     } else if (targetIsVariant) {
         // 账 #305 §B169: 装箱 + 所有权 + 槽位语义只住 emitVariantSlotAssign 一处。
         emitVariantSlotAssign(target, node.value.get(), value, targetIsUdtVariantField232);

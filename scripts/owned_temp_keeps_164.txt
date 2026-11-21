@@ -16,6 +16,7 @@ vb6_BoolVal|0	0		0	open	BSTR
 vb6_BSTR_Assign|1	0	handoff-reads:vb6_BSTR_FromBSTR	0	open	BSTR
 vb6_BSTR_AssignFromVariant|1	1	store	0	open	VARIANT
 vb6_BSTR_AssignMove|1	1	write	0	open	BSTR
+vb6_BSTR_AssignMoveIfOk|1	1	store	0	open	BSTR
 vb6_BSTR_Concat|0	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_BSTR_Concat|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 vb6_BSTR_ConcatFree|0	0	handoff-reads:vb6_BSTR_Concat	0	open	BSTR
@@ -427,6 +428,7 @@ vb6_WriteText|1	0	handoff-reads:vb6_BSTR_Len	0	open	BSTR
 # --- 消费轴（账 #463 §B164 研究新增）：消费者**自己放掉**自己的形参的那几格 ---
 # 字段: 出口名|形参序号 <TAB> 条件性(0/1) <TAB> 放掉它的调用 <TAB> 形参名
 # 条件性=1 ⇒ 放不放**看运行期分支**（IIf 那一族）⇒ 调用方无从知道 ⇒ 不许提名
+vb6_BSTR_AssignMoveIfOk|1	0	vb6_BSTR_Free	source
 vb6_BSTR_ConcatFree|0	0	vb6_BSTR_Free	a
 vb6_BSTR_Free|0	0	SysFreeString	bstr
 vb6_FixedStrAssignFree|2	0	vb6_BSTR_Free	value

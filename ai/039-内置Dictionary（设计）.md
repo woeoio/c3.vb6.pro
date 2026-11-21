@@ -4078,3 +4078,81 @@ vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or met
 - 发码清单 750 行：**48 行**变动（登记在册）。
 - 静态门 9 枚 PASS（`proto_arity` 1785）；`owned_temp_keeps` 254 行不变；`-Category syntax` **227/227**。
 
+
+### 11.77 第九十九刀：BSTR 目标上的语句中止（晚绑定缺成员）
+
+#### 一、读数（探针 F6，真机在 `.temp/k93/vb6probe`）
+
+真机 `s2 = o.NoSuchStringProperty`（`o` 是晚绑定 Object，属性不存在）：
+
+| 站 | 真机 | 第九十八刀之后 | 现在 |
+|---|---|---|---|
+| `s2` 的值 | **keep**（原值不动） | `""`（被清空） | **keep** |
+| `Err.Number` | 438 | 438 | 438 |
+
+第九十八刀 (a) 让 COM 那五枚 `DISPID_UNKNOWN` 分支报 438，错误号对了；但赋值站照样把
+`vb6_ComGetStringProp` 交回的（空）串写进目标 ⇒ **号对了、值被清**。这一刀补上值那一半。
+
+#### 二、形
+
+标量目标那一套（守卫 + 临时量）搬不过来：BSTR 交回的是**一枚要转手的块**，中止时既不写
+目标、又不能漏（否则每中止一次漏一块）。收成 RTL 一枚出口，所有权随出口一起答：
+
+```c
+static inline void vb6_BSTR_AssignMoveIfOk(BSTR* target, BSTR source, int32_t serialBefore) {
+    if (serialBefore == vb6_ErrSerial()) { vb6_BSTR_AssignMove(target, source); return; }
+    if (source) vb6_BSTR_Free(source);      /* 语句已中止：目标一字不动 */
+}
+```
+
+发码站（`cgen_assign_value_sem.inc` 的 `targetIsBstr` 那一支）：
+
+```c
+const int32_t _eN = vb6_ErrSerial();
+vb6_BSTR_AssignMoveIfOk(&s2, vb6_ComGetStringProp(o, L"NoSuchStringProperty"), _eN);
+```
+
+判据与第九十八刀 (b) 同一枚谓词（接收者链根是晚绑定 Object 变量、且不是控件数组 / 伪宿主 /
+`Me` / 同工程函数名），只把目标档从「Integer/Long/Byte/Double」换成「动态 String」。定长串
+目标不在此列（那一支的收口是 `FixedStrAssignFree`，另一形，未量）。
+
+#### 三、踩到的两处
+
+1. **接收者要按链根判**。初版只认裸标识符接收者，`s = Printers(0).DeviceName` 的接收者是
+   `Printers.Item(0)`（调用形态）⇒ 伪宿主没被排除、被套上守卫，`pd_printer_data_props`
+   那条发码针翻红（期望 `vb6_BSTR_Assign(&s, vb6_Printers_Item((int32_t)(0)).DeviceName);`）。
+   改成沿 `MemberAccess / IndexOrCall->callee` 下钻取**链根**再比对排除名单。
+2. **RTL 出口的两条静态轴要能自证**。第一版写成「失败先放、成功再转手」，`owned_temp_keeps`
+   的推导在函数体里先撞见 `vb6_BSTR_Free(source)` ⇒ 判成 `handoff-reads`（keeps=0），
+   与发码侧登记的例外行对不上（K12/K13d 双红）。把成功路提到前面（先 `AssignMove` 再
+   `if (source) Free`）⇒ 推导读到 `handoff-keeps`（keeps=1）、消费轴读到那一格 ⇒ 两轴都自证。
+   表 255 行（新增 1 行，`keeps_pointer=1` 38 行）。
+
+#### 四、churn
+
+清单 750 行：**25 行**变动（第八十八/九十八刀之后的新增；BSTR 目标这一族与标量那一族
+共 179 + 1,475 句里落在普通赋值站的这部分）。`tests/ctrltabstrip/TabApp.vbp` 是机器侧行 ——
+本机值与 CI 值不同，登记值以 CI 的 `emit-manifest` 工件为准。
+
+#### 五、门
+
+- 探针 F1–F6 六格与真机逐字对上（F6 `keep/438`）。
+- 静态门 9 枚 PASS（`proto_arity` 1785；`rtl_embedded` R1..R3 138 件逐字节）。
+- `owned_temp_keeps` **255 行**（+1 例外行、+1 消费格）；`-Category syntax` **227/227**。
+
+#### 六、仍挂着的一笔
+
+**表达式内位置**（`If o.X = 1 Then`、实参、二元运算）：1,486 句。守卫机制插不进去，要另开
+一种形；真机读数也还缺（G 段 6 格：`n = 1 + o.NoSuchProp`、`If o.NoSuchProp = 1 Then`、
+`n = Abs(o.NoSuchProp)`、`Call f(o.NoSuchProp)`、`n = o.NoSuchProp * 2`、
+`s = "x" & o.NoSuchProp`）。
+
+---
+
+#### §11.76 补：438 只对真 IDispatch 报
+
+第九十八刀 (a) 初版对五枚 `DISPID_UNKNOWN` 分支**无条件**报 438，CI 上
+`b190_object_formal_scope(_x86)` 运行崩（本机复现）。那一格打的是账 #412：Object 槽里装的是
+工程类实例指针、从没包成 IDispatch —— VB6 那边本来有对象，无条件报 438 把这些能跑的语句打崩。
+改成 `if (vb6_ComIsDispatchable(disp))` 才报，其余维持静默 + `C3_LATEBIND_MISS` 追踪
+（那是实现缺口，不是 VB6 语义）。本机 `B190.vbp` 恢复 `run rc=0`，五条针全在。
