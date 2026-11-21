@@ -44,8 +44,20 @@ bool CCodeGen::lateBoundComReadExpr(Expr* e) const {
     if (knownControlArrays_.count(rn)) return false;
     for (int i = 0; kHost[i]; i++)
         if (rn == kHost[i]) return false;
-    if (!knownLocalVars_.count(rn) && !knownObjectVars_.count(rn)) return false;
-    if (inferExprType(*rcv) == Vb6Type::Object) return true;
+    // 第一百零八刀 (§11.87): 形参（`ByVal o As Object`）只进 knownObjectVars_，
+    // 不进 knownLocalVars_ —— 只认后者的老判据就把「另一个过程里的 w = o.NoSuchProperty」
+    // 放走了（真机 M4）。所以补一条 onlyObject 腿；但 knownObjectVars_ **全程不清空**，
+    // 同名会漏到别的过程（`Thing` 是工程类时也被当 Object ⇒ b190 的第三条针变形 = 假阳），
+    // 因此这一腿要求**接收者的推断型是 Object 或 Unknown**。已知型（工程类/串/数）一律不认。
+    const bool isLocalVar = knownLocalVars_.count(rn) > 0;
+    if (!isLocalVar && !knownObjectVars_.count(rn)) return false;
+    const Vb6Type rcvType = inferExprType(*rcv);
+    if (rcvType == Vb6Type::Object) return true;
+    if (!isLocalVar) {
+        // 接收者能解析出工程类名 ⇒ 它是字段访问，不是晚绑定（列表里那张表跨模块不清空，
+        // 同名会漏进来；b190 的 `Thing->Alpha` 就是这么被误判的）。
+        return inferClassTypeOfExpr(*rcv).empty();
+    }
     return knownObjectVars_.count(rn) > 0;
 }
 
