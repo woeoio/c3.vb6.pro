@@ -4010,3 +4010,71 @@ Null 一档它自己会报 94 且不动目标；漏的只有两处：**文本档
   转手给 `vb6_Dbl_AssignFromBSTR`，下游 KEEPS=0 ⇒ 这一枚可证 0，不再"证不出"）、新增
   `vb6_DblStrict` 0（无指针形参）。表 254 行、锚点 15 枚、提名面 203 行不变。
 - 静态门 9 枚全 PASS（`proto_arity` 1785 对签名）；`-Category syntax` **227/227**。
+
+### 11.76 第九十八刀：晚绑定缺成员要报 438；标量目标按真机「语句中止、目标不动」
+
+#### 一、真机读数（F1..F6）
+
+```
+F1 Set o = CreateObject("No.Such.ProgID")   Nothing / 429
+F3 n  = o.NoSuchProperty                    -1 / 438
+F4 Call o.NoSuchMethod                      -1 / 438
+F5 o.NoSuchProperty = 5                          438
+F6 s2 = o.NoSuchStringProperty              keep / 438
+```
+
+改前本仓：F1/F4 已对（429 / 438），**F3/F5/F6 全静默** —— `n` 被写成 0、`s2` 被写成 ""、
+`o.NoSuchProperty = 5` 当成功且 `Err.Number = 0`。
+
+#### 二、(a) RTL：五个 miss 分支补 438
+
+`vb6com_invoke.c` 里晚绑定成员查不到时只打一行 stderr 就 `return NULL/void` 的五个分支
+（`vb6_ComGetProp`、`vb6_ComGetPropArg`、`vb6_ComSetProp`、`vb6_ComSetPropArg`、`vb6_ComSetRef`）
+现在与第八刀（`vb6_ComCall` 的 miss）同一口径：
+
+```c
+g_com_438_dangling = 1;
+vb6_RaiseError(438, SysAllocString(L"Object doesn't support this property or method"));
+```
+
+抛完仍交空值让 `On Error Resume Next` 继续，并立起「刚抛过 438」的标记吸收链尾那一次 miss。
+方法调用那条路本来就有默认成员兜底 + 438，不动。**这一步发码零变动。**
+
+#### 三、(b) cgen：标量目标上的语句级守卫
+
+只有 raise 还不够——真机要的是「语句中止 + 目标不动」。赋值站新增一条判据：
+
+> 目标 ∈ {Integer, Long, Byte, Double} ∧ 右值顶层是**成员读/调用** ∧ 接收者是**晚绑定对象变量**
+
+⇒ 复用既有守卫 + 临时量（与第七十九/八十四/九十七刀同一套），raise 之后不写目标。
+
+三条排除（都是「不是 COM 派发」的接收者，套守卫纯属噪声，且会翻红三条精确文本钉）：
+
+- 控件数组名（`cboUpdates.UBound` ⇒ `vb6_CtrlArr_UBound`）；
+- 内建伪宿主 `Printer/Printers/Screen/App/Clipboard`（成员表直接应答）；
+- `Me` 与**同工程的函数名**（`Clone.ScaleFactor(3#)` 这种编译期直调）。
+
+#### 四、churn（先量后改）
+
+只读测量（不改编译器，对 750 行逐行生成 C 数形）：含 COM 成员读/调用的工程 **206/745**，
+语句 5,999（普通赋值 1,475 / BSTR 目标 179 / 裸语句 2,859 / 表达式内位置 1,486）。
+据此把 (b) 收窄到「标量数值目标 + 普通赋值」这一族：
+
+| 版本 | 清单变动 |
+|---|---|
+| 初版（无排除） | 70 行 |
+| 排除控件数组 / 伪宿主 / 同工程函数名后 | **48 行** |
+
+#### 五、仍挂着的两笔（登记，不混刀）
+
+1. **BSTR 目标**（真机 F6 `s2` 应保持 `keep`）：清单上 179 句。保存/恢复要连所有权一起算
+   （与第八十三刀同一条纪律），现在 C3 是 `""` + 438 —— 错误号对了、串被清。
+2. **表达式内位置**（`If o.X = 1 Then`、实参、二元运算）：1,486 句，守卫机制插不进去，
+   要另开一种形；真机读数也还缺（G 段 6 格）。
+
+#### 六、门
+
+- 探针 44 格：F3/F4/F5 与真机逐字对上；F1/F2 不变；F6 见第五节（已知缺口）。
+- 发码清单 750 行：**48 行**变动（登记在册）。
+- 静态门 9 枚 PASS（`proto_arity` 1785）；`owned_temp_keeps` 254 行不变；`-Category syntax` **227/227**。
+
