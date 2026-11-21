@@ -4717,3 +4717,57 @@ Variant 槽。改前全量扫（753 输入）：**23 处 / 11 个输入**，全�
 - `owned_temp_keeps` 255 行不变
 - manifest：新增 1 行（`tests/test_late_varslot.bas`）+ 受影响的存量行重算
 - 受影响的工程本机逐个编过：`B612/B613/B614/B190/DictApp/E438App`（x86 那份由 CI 的 `FlexGridX86` 盯）
+
+---
+
+## §11.85 第一百零七刀：Variant 槽赋值位的四形补齐（表达式内部 / 数组元素 / UDT 字段）
+
+### 一、真机（L6–L9，一格一句，目标先置 111）
+
+- `L6  v = 1 + o.NoSuchProperty` ⇒ `v=111` err=438
+- `L7  v = "x" & o.NoSuchProperty` ⇒ `v=111` err=438
+- `L8  va(0) = o.NoSuchProperty` ⇒ `va(0)=111` err=438
+- `L9  uv.f = o.NoSuchProperty` ⇒ `uv.f=111` err=438
+- 控制格：`L11  v = o.Count` ⇒ `v=1` err=0；`L12  v = o.Item("k")` ⇒ `v=vv` err=0
+
+结论：438 一出，目标一个字都不写 —— 与第一百零六刀 K4 同一条规则，换成**表达式内部**、
+**Variant 数组元素**、**UDT 的 Variant 字段**做目标也照样成立。第一百零六刀当时把这三形
+登记为“未量不猜”，这一刀由探针补齐。
+
+### 二、改法
+
+`cgen_assign_value_sem.inc` 那一支的判据从 `lateBoundComReadExpr`（顶层裸读）换成
+`exprHasLateBoundComRead`（§B 族早就在用的那一枚，裸读是它的特例 ⇒ 第一百零六刀那一形不会漏）。
+
+写回分两档：
+
+- 普通 lvalue（`v` / `(*p)`）：自有 ⇒ 清旧 + 浅搬（与第一百零六刀逐字节同形）；借来 ⇒ `vb6_VariantAssign`。
+- 槽形（`VB6_SA_*` 数组元素 / UDT 的 Variant 字段 / 解引用）：一律 `vb6_VariantAssign`（Clear + 深拷贝），
+  自有时再把临时量自己 `vb6_VariantClear` 放掉 —— 槽是**借来**的存储，浅搬会把临时量的所有权塞进别人的槽。
+
+临时量前缀从 `_av` 换成 `_vs`：`_av` 已被标量临时量占用（`cgen_assign.cpp:32` 等），扩面后
+同一输入里会撞出 `C2371 重定义`（`rmp107.c(926)` 复现过）。`C3_DBG_VSLOT107=1` 可打印每个站点的形
+（plain/slot × bare/nested × own/borrow）用于 census。
+
+### 三、量（改前 census，755 输入）
+
+- 命中 28 处 / 10 个输入，全在 `tests/`：dict_native 5+5、ucTreeView 5、test_late_varslot 5、
+  b190 2、b613 2、b612/b614/urlpic/NullFamilyProbe 各 1。
+- 其中 **nested 3 处**（ucTreeView 2、NullFamilyProbe 1）是这一刀新收的；bare 25 处第一百零六刀已覆盖。
+- 槽形（数组元素 / UDT 字段）在存量语料里 **0 处**，只由新夹具覆盖。
+- 实编 churn：manifest 10 行变动，其余 0（裸读那一形的发射逐字节不变）。
+
+#### 四、夹具与针
+
+- `tests/test_late_varslot2.bas`（L6–L9 + 控制格 L11/L12 + L8b/L9b 正常赋值）
+- `b252_varslot2_shape` 七条针：`_vs0` 起手、算术内部那一句、数组元素写回、`vb6_VariantClear(&_vs2)`、
+  UDT 字段写回、`_vs3` 放掉、控制格 `Count` 写回
+- `b252_varslot2_lesion` 两条反面针（修复前：表达式内部 / 数组元素目标直接写目标）
+- 第一百零六刀的 `b251_*` 针随之把 `_av` 改成 `_vs`
+
+#### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=755 / registered=755）
+- `owned_temp_keeps` 255 行不变
+- manifest：新增 1 行 + 10 行重算 = 755 行
+- 本机可编：B612/B613/B614/B190/DictApp/urlpic/ucTreeView/NullFamilyProbe（CI 再全量）
