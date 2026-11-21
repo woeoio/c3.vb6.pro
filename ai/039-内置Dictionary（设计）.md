@@ -4771,3 +4771,27 @@ Variant 槽。改前全量扫（753 输入）：**23 处 / 11 个输入**，全�
 - `owned_temp_keeps` 255 行不变
 - manifest：新增 1 行 + 10 行重算 = 755 行
 - 本机可编：B612/B613/B614/B190/DictApp/urlpic/ucTreeView/NullFamilyProbe（CI 再全量）
+
+---
+
+## §11.86 第一百零八刀前的探针（M 族：Set 赋值位 / ByRef Variant 目标）
+
+§11.85 末尾登记的两条未量形，探针已经写进 `RealMachineProbe.bas`（M1–M4），等真机数：
+
+- `M1  Set o2 = o.NoSuchProperty`（`o2 As Object`，先 `Set o2 = Nothing`）
+- `M2  Set v = o.NoSuchProperty`（`v As Variant`，先 `v = 111`）
+- `M3  Set o2 = o`（控制格：成功的 Set 必须落到目标）
+- `M4  LateToParam v, o`（目标是一枚 ByRef 的 Variant 形参，C 里是 `(*w)`）
+
+本机 C3 读数（同一份探针，**未改代码**）：
+
+| 格 | 本机 |
+|----|------|
+| M1 | `o2 is nothing=True` err=438 |
+| M2 | `v=` err=438 —— **目标被清空** |
+| M3 | `o2 is nothing=False` err=0 |
+| M4 | `v=` err=438 —— **调用方的 v 被清空** |
+
+M2/M4 看形就是缺口（和 K4 / L6–L9 不是一回事：那几格是目标不动，这两格是目标被清），
+但真机没量前**不改**。真机若给 111 → 开第一百零八刀；真机若也是空 → 现状就是对的，登记为已覆盖。
+M1 若真机给 `False`（o2 被塞了东西）也是新缺口。
