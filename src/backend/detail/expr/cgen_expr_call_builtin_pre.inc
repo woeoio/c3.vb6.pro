@@ -674,6 +674,13 @@
             }
             std::string udtCType = inferUdtTypeOfExpr(*node.positional[0]);
             if (!udtCType.empty()) {
+                // 第九十六刀: 有声明布局就按真机口径折（Len = Σ成员 Len；真机 A7/A9 = 5/9），
+                // 折叠时**不发实参**（避开副作用）。认不出的 UDT 仍走下面的 sizeof。
+                int64_t lLen96 = 0, lLenB96 = 0;
+                if (udtLayoutSum(udtCType, lLen96, lLenB96)) {
+                    lastExpr_ = "((int32_t)" + std::to_string(lLen96) + ")";
+                    return;
+                }
                 emitExpr(*node.positional[0]);
                 lastExpr_ = "((int32_t)sizeof(" + lastExpr_ + "))";
                 return;

@@ -1427,6 +1427,31 @@ bool CCodeGen::udtFieldIsBstrInCTarget(const std::string& target) const {
 
 // ---- 账 #118: 定长串 (String * N) 的长度查询 ----
 // 见 cgen_helpers.inc 的声明注释。返回非空 = 是定长串, 值即长度表达式。
+//
+// C30-11 第九十六刀: Len/LenB(<整枚 UDT>) 的声明布局求和。
+//
+// 真机读数 (.temp/k93/vb6probe/RealMachineProbe.bas):
+//   A7  Len({String*5})       = 5    A8  LenB = 10
+//   A9  Len({String*5, Long}) = 9    A10 LenB = 16
+// 规则: Len = Σ成员 Len（定长串按 N 字符、数值按字节）；
+//       LenB = Σ成员 LenB（定长串按 2N）、成员之间按 align（上限 4）对齐、**尾部不补齐**
+//       ⇒ {String*5}: 10（不是 12）；{String*5, Long}: 10 →对齐 12 + 4 = 16。
+// 认不出的成员在 visit(TypeDecl&) 里就把整枚挡在表外 ⇒ 这里返回 false，调用方退回 sizeof。
+bool CCodeGen::udtLayoutSum(const std::string& ctype,
+                             int64_t& lenOut, int64_t& lenBOut) const {
+    auto it = udtLayout_.find(ctype);
+    if (it == udtLayout_.end()) return false;
+    int64_t len = 0, off = 0;
+    for (const auto& m : it->second) {
+        len += m.len;
+        if (m.align > 1) off = ((off + m.align - 1) / m.align) * m.align;
+        off += m.lenB;
+    }
+    lenOut = len;
+    lenBOut = off;
+    return true;
+}
+
 std::string CCodeGen::fixedStrLenOfExpr(const ASTNode& expr,
                                         const std::string& altCName) const {
     // ① 裸标识符: 模块级变量 / 局部 / 形参 / 返回值槽
