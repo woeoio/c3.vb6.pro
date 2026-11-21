@@ -8741,14 +8741,14 @@ if ($Category -in @("all", "run", "vbp")) {
     # 现在真值位与值位同走 vb6_ComResultToNot (解引用 + 按档取值 + 收回那枚堆块)。
     Test-EmitcShape "b247_not_fold_shape" @("$Tests\test_late_cond.bas") @(
         'if (vb6_CondIfErr(_c2, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-NOT"))}, 1))))) {',
-        'if (vb6_CondIfErr(_c7, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1))))) {',
+        'if (vb6_CondIfErr(_c13, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1))))) {',
         # 第一百刀 (§11.78): `x = Not d.Exists(...)` 是**值位置**的晚绑定读 —— 真机 G1/G2/G3/G6
         # 都是「整句中止」，所以这两句现在套上守卫+临时量。钉的是**折叠那一截**（仍走
         # vb6_ComResultToNot + vb6_ChkLong）与时状那一截（`? (<折叠>) : (int32_t)0;`），
         # 不钉 _e/_av 的序号（那两枚会随同文件的其他语句漂）。
         '? (vb6_ChkLong(vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1)))) : (int32_t)0;',
         '? (vb6_ChkLong(vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"K-VAL"))}, 1)))) : (int32_t)0;',
-        'if (!(vb6_CondIfErr(_c10, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1)))))) goto vb6_loop_exit_12;'
+        'if (!(vb6_CondIfErr(_c16, (vb6_ComResultToNot(vb6_ComCall(d, L"Exists", (void*[]){vb6_ComPackBSTR(vb6_BSTR_FromStr(L"A"))}, 1)))))) goto vb6_loop_exit_12;'
     )
     # 第一百零二刀 (§11.80): 实参位上的归来绑定缺成员读。真机 I 族量到「命中即整句中止」:
     # I1 `Call GTouch2(o.Bad, GFn())` = gHit=0 gN=0（坏实参之后的不再求值）,
