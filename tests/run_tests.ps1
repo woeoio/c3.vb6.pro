@@ -8822,6 +8822,19 @@ if ($Category -in @("all", "run", "vbp")) {
         'v = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));  /* Set */',
         '(*w) = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0));'
     )
+    # 第一百零九刀 (§11.89): 真机 N1 `Set va(0) = o.NoSuchProperty` ⇒ `va(0)=111` / 438。
+    # Set 到 Variant 数组元素以前直接发 `vb6_VariantAssign(&<slot>, <boxed>);  /* Set */`，
+    # 438 之后照样把槽清成空。槽仍走 VariantAssign（深拷贝），临时量自有才收回。
+    Test-EmitcShape "b254_setslot_shape" @("$Tests\test_late_setslot.bas") @(
+        'vb6_VARIANT _vs0 = vb6_VariantEmpty();',
+        'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), _vs0); }',
+        'vb6_VariantClear(&_vs0);'
+    )
+    # 反面针: 修复前那一形（Set 直接写数组元素）。
+    Test-EmitcAbsent "b254_setslot_lesion" @("$Tests\test_late_setslot.bas") @(
+        'vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")));  /* Set */'
+    )
     # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
     # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
     # 循环体首条语句上收尾：`gN = gN + 1` 被改写成 `o.NoSuchProperty = gN + 1`，
