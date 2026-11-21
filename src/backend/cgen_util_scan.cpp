@@ -44,7 +44,7 @@ bool CCodeGen::lateBoundComReadExpr(Expr* e) const {
     if (knownControlArrays_.count(rn)) return false;
     for (int i = 0; kHost[i]; i++)
         if (rn == kHost[i]) return false;
-    if (!knownLocalVars_.count(rn)) return false;
+    if (!knownLocalVars_.count(rn) && !knownObjectVars_.count(rn)) return false;
     if (inferExprType(*rcv) == Vb6Type::Object) return true;
     return knownObjectVars_.count(rn) > 0;
 }

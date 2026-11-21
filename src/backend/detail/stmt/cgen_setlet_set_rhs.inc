@@ -389,7 +389,28 @@
             // 不清空, 别的过程里同名的类局部会漏进来 (VbEclipse ucPerspective.Refresh:
             // `Dim l_ucFolder As Variant` 拿到 ClosePerspective 的同名 `As ucFolder` ⇒
             // `vb6_cls_ucFolder* __clsold = l_ucFolder;` = cl C2440 + AddRef(C2172/C2083))。
-            c_.emitLine(target + " = " + value + ";  /* Set */");
+            // 第一百零八刀 (§11.87): 真机 M2 `Set v = o.NoSuchProperty` ⇒ `v=111` err=438
+            // （目标一个字都不写）。Set 这一站以前直接发 `v = <boxed>;  /* Set */`，
+            // 缺读报 438 之后照样把空值塞进 v（本机旧读数 `v=`）。
+            // 只接**裸变量**目标（`v`）——数组元素那一支在上面先走了（未量，不猜）；
+            // `me->字段` / UDT 字段槽 / 解引用形同样未量，仍走下面的原路。
+            const bool plainVar108 = target.compare(0, 7, "VB6_SA_") != 0
+                && target.find("->") == std::string::npos
+                && target.find('(') == std::string::npos;
+            if (plainVar108 && node.value && exprHasLateBoundComRead(node.value.get())) {
+                if (std::getenv("C3_DBG_VSET108"))
+                    std::cerr << "[VSET108] tgt=" << target << std::endl;
+                const std::string gv108 = "_e" + std::to_string(stmtAbortSeq_++);
+                const std::string tv108 = "_vs" + std::to_string(tempCounter_++);
+                c_.emitLine("const int32_t " + gv108 + " = vb6_ErrSerial();");
+                c_.emitLine("vb6_VARIANT " + tv108 + " = vb6_VariantEmpty();");
+                c_.emitLine("if (" + gv108 + " == vb6_ErrSerial()) { " + tv108 + " = " + value
+                            + "; }");
+                c_.emitLine("if (" + gv108 + " == vb6_ErrSerial()) { vb6_VariantClear(&" + target
+                            + "); " + target + " = " + tv108 + "; }");
+            } else {
+                c_.emitLine(target + " = " + value + ";  /* Set */");
+            }
         } else {
             // 账 #305 §B218 (甲) 腿②: 目标是一格 typed 工程类槽 ⇒ 走那位主人。
             // 类名两问按 #408 定的次序排: 先问 AST (作用域感知), 落空才问按名那张表。
