@@ -4699,6 +4699,11 @@ Variant 槽。改前全量扫（753 输入）：**23 处 / 11 个输入**，全�
   （发码是 `vb6_ComCall(vb6_hwnd_E438, …)`），不是 Object 变量，`lateBoundComReadExpr`
   不答它；真机没量过这一形的目标写不写，所以不动。
 
+这几形已经写成真机探针（`RealMachineProbe.bas` 的 L6–L9 + L11/L12，L10 即上一条的
+`Form1.NoSuchFormMember`，默认注掉 —— 它在 VB6 里可能根本编不过，编不过本身也是答案）。
+本机 C3 读数（同一份探针）：`L6 v=1` / `L7 v=x` / `L8 va(0)=空` / `L9 uv.f=空`，err 都是 438 ——
+即四形现在都会写目标。**真机值回来再决定要不要扩守卫**；在那之前不猜。
+
 #### 四、夹具与针
 
 - 新夹具 `tests/test_late_varslot.bas`（L1/L2/L3/L4 四段：缺读、存在读、先成功后失败、串值）
