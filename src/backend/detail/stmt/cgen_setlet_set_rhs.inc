@@ -370,7 +370,27 @@
             (target.compare(0, 7, "VB6_SA_") == 0
              && target.find("(vb6_VARIANT,") != std::string::npos);
         if (targetIsVariantArraySlot) {
-            c_.emitLine("vb6_VariantAssign(&" + target + ", " + value + ");  /* Set */");
+            // 第一百零九刀 (§11.89): 真机 N1 `Set va(0) = o.NoSuchProperty` ⇒ `va(0)=111` err=438
+            // （目标一个字都不写）。这一支以前直接发 `vb6_VariantAssign(&<slot>, <boxed>);  /* Set */`，
+            // 缺读报 438 之后照样把槽清成空值（本机旧读数 `va(0)=`）。
+            // 与赋值位/Set 裸变量位同一条规则；槽是**借来**的存储 ⇒ 仍走 VariantAssign（深拷贝），
+            // 临时量自有时才自己收回（Dispatch 的 AddRef 一进一出，账是平的）。
+            if (node.value && exprHasLateBoundComRead(node.value.get())) {
+                const std::string gv109 = "_e" + std::to_string(stmtAbortSeq_++);
+                const std::string tv109 = "_vs" + std::to_string(tempCounter_++);
+                const bool owns109 = variantRhsOwnsValue(node.value.get(), value);
+                if (std::getenv("C3_DBG_VSET108"))
+                    std::cerr << "[VSET109] slot tgt=" << target << std::endl;
+                c_.emitLine("const int32_t " + gv109 + " = vb6_ErrSerial();");
+                c_.emitLine("vb6_VARIANT " + tv109 + " = vb6_VariantEmpty();");
+                c_.emitLine("if (" + gv109 + " == vb6_ErrSerial()) { " + tv109 + " = " + value
+                            + "; }");
+                c_.emitLine("if (" + gv109 + " == vb6_ErrSerial()) { vb6_VariantAssign(&" + target
+                            + ", " + tv109 + "); }");
+                if (owns109) c_.emitLine("vb6_VariantClear(&" + tv109 + ");");
+            } else {
+                c_.emitLine("vb6_VariantAssign(&" + target + ", " + value + ");  /* Set */");
+            }
         } else if (target.rfind("vb6_Extender_", 0) == 0) {
             /* Fix 296 / 3a 的**镜像**, 但走的是**另一条**发码路径: Property Set 存取器体
                (`Public Property Set Container(ByVal Value As Object)`) 的那句赋值由
