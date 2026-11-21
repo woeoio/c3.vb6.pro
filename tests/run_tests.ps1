@@ -8806,6 +8806,22 @@ if ($Category -in @("all", "run", "vbp")) {
         'v = vb6_VariantFromValue((1 + vb6_ComGetIntProp(o, L"NoSuchProperty")));',
         'vb6_VariantAssign(&VB6_SA_AT(vb6_VARIANT, va, 0), vb6_VariantFromValue(vb6_ComGetStringProp(o, L"NoSuchProperty")));'
     )
+    # 第一百零八刀 (§11.87): 真机 M2 `Set v = o.NoSuchProperty` 与 M4（ByRef Variant 形参做目标，
+    # C 里是 `(*w)`）也都是 111 / 438 —— 目标一个字都不写。
+    # M2 补在 Set 站（裸变量目标）；M4 的根因是 lateBoundComReadExpr 只认 knownLocalVars_，
+    # 形参 `ByVal o As Object` 不在那张表里 ⇒ 守卫没接上，目标被清空。
+    Test-EmitcShape "b253_setvar_shape" @("$Tests\test_late_setvar.bas") @(
+        'if (_e0 == vb6_ErrSerial()) { _vs0 = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0)); }',
+        'if (_e0 == vb6_ErrSerial()) { vb6_VariantAssign(&(*w), _vs0); }',
+        'vb6_VariantClear(&_vs0);',
+        'if (_e1 == vb6_ErrSerial()) { _vs1 = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'if (_e1 == vb6_ErrSerial()) { vb6_VariantClear(&v); v = _vs1; }'
+    )
+    # 反面针: 修复前那两形（Set 直接写目标 / ByRef 形参目标被清后裸赋）。
+    Test-EmitcAbsent "b253_setvar_lesion" @("$Tests\test_late_setvar.bas") @(
+        'v = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));  /* Set */',
+        '(*w) = vb6_VariantFromComResult(vb6_ComCall(o, L"NoSuchProperty", NULL, 0));'
+    )
     # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
     # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
     # 循环体首条语句上收尾：`gN = gN + 1` 被改写成 `o.NoSuchProperty = gN + 1`，
