@@ -4977,18 +4977,28 @@ ProbeMain.c(68): error C2440: 同上（控制格 `Set c.f = o`）
 
 ### 三、改法（`cgen_setlet_set_rhs.inc`）
 
-- 新判据 `targetIsClassVariantField`：只认那枚尾注（`/* class var .` + ` field variant */`），
-  不按名字猜；命中即当 Variant 容器（后面的装箱两步自然接上）。
-- 唯一一问 `classVarFieldSlot110` = 尾注形 或 类内 `me->` + `classVariantFields_`，守卫与
-  退旧值都按它走：
+- 新判据 `classVarFieldSlot110` 问**两腿**，都问表、不认文本：
+  - 类外（`Set c.f = …`）：AST 是 `MemberAccessExpr` ⇒ 宿主类名问 `inferClassTypeOfExpr`，
+    方法/属性该名先否决（`resolveClassMemberCall` 非空），再问 `classFieldIsVariantSlot`；
+  - 类内（`Set f = …`）：AST 是裸 `IdentifierExpr`、发码是 `me->f` ⇒ 问 `classVariantFields_`
+    （与 Fix 091p 同一张表）。
+  两腿命中都把目标当 Variant 容器（后面的装箱两步自然接上）。
+- 写回两档：
   - 有晚绑定读 ⇒ `_eN` 序号 + `_vsN` 临时量 + 两枚同序号闸；写回是
     `vb6_VariantClear(&<槽>); <槽> = _vsN;`（槽是真存储，临时量是**移**进去，不自己收回）；
-  - 无晚绑定读 ⇒ `vb6_VariantClear(&<槽>); <槽> = <boxed>;  /* Set */`。
+  - 无晚绑定读 ⇒ 交给 `emitVariantSlotStore`（“清+搬”的唯一出口，§B164 第五十五刀）；
+    以前 `me->f` 那一形只发一句裸赋，**旧值不退**。
 - 调试：`C3_DBG_VSET110`（`[VSET110-DET]` / `[VSET110]`）。
+- **被静态门退回一次的有用记录**：第一版判据按目标文本那枚尾注写（看 `/* class var .` 与
+  `field variant */`），并手抄了「清+搬」两行 —— `variant_slot_store` 当场红两格：
+  R3「清+搬不许住定义出口那份文件之外」、R5d「不许再把尾注当判据」。改成问表 + 走唯一出口后：
+  `violations 0`（`calls 13`）。
 
 ### 四、量
 
-- 语料实编 churn：**0 行**（757 行逐行同；存量语料里没有“Set 到工程类 Variant 字段槽”这一形）；
+- 语料实编 churn：**0 行**（759 行逐行同；存量语料里没有“Set 到工程类 Variant 字段槽”这一形）。
+  量法分两段单进程跑（前 510 行 + 从 `test_let_variant_slot.bas` 起的尾段）—— 并发跑全量时那一段
+  曾报过一行 `CHG`，单份复算 sha/bytes/ascii 与登记全同，是两枚 C3 同时跑撞出的假红。
 - 新夹具 `tests/setcls/{SetCls.vbp, SetClsMain.bas, SetClsSlot.cls}`：本机四格与真机逐字相同。
 - 针：`b255_setclsslot_shape`（6 条，含 `vb6_VariantClear(&me->f);` 与两枚控制格装箱）/
   `b255_setclsslot_lesion`（2 条）。另 `Test-Vbp setcls` + `setcls_x86` 两架构行为格。
@@ -4996,4 +5006,6 @@ ProbeMain.c(68): error C2440: 同上（控制格 `Set c.f = o`）
 ### 五、门
 
 - 静态门 9 枚 PASS（`manifest_coverage` inputs=759 [.vbp=280 .bas=479] registered=759）
-- manifest：757 → 759 行（新增 .vbp/.bas 两行，存量 0 行变动）
+- `variant_slot_store` PASS（violations 0）
+- manifest：757 → 759 行（新增 .vbp/.bas 两行，存量 0 行变动；次日重算 .vbp 行
+  10187 → 10165 字节，·cls 体内多了守卫）
