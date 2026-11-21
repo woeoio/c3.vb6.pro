@@ -8862,6 +8862,24 @@ if ($Category -in @("all", "run", "vbp")) {
         'field variant */ = vb6_ComGetObjectProp(o, L"NoSuchProperty");',
         'me->f = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));'
     )
+    # 第一百一十一刀 (§11.93): 真机 Q 族 —— Set 的目标还剩两形:
+    #   Q1 `Set w = …`（ByRef Variant 形参, C `(*w)`）      = v=111 err=438
+    #   Q3 `With uv: Set .f = …`（UDT Variant 字段）        = uv.f=111 err=438
+    # 旧判据把「含 ( 或 ->」的目标一律排到裸赋那条路: Q3 槽被清、Q1 连装箱都没有 (C2440)。
+    Test-EmitcShape "b256_setslot2_shape" @("$Tests\test_late_setslot2.bas") @(
+        'vb6_VariantClear(&(*w)); (*w) = _vs',
+        '->f); _vb6_with_',
+        '_vb6_with_',
+        '= vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty")); }',
+        'vb6_VariantClear(&uv.f); uv.f = _vs',
+        '(*w) = vb6_VariantFromValue(o);  /* Set */',
+        '->f = vb6_VariantFromValue(o);  /* Set */'
+    )
+    # 反面针: 修复前那两形（解引用槽不装箱裸写 / With 字段裸赋、438 后清空）。
+    Test-EmitcAbsent "b256_setslot2_lesion" @("$Tests\test_late_setslot2.bas") @(
+        '(*w) = vb6_ComGetObjectProp(o, L"NoSuchProperty");',
+        '->f = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));'
+    )
     # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
     # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
     # 循环体首条语句上收尾：`gN = gN + 1` 被改写成 `o.NoSuchProperty = gN + 1`，
