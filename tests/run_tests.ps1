@@ -8755,6 +8755,25 @@ if ($Category -in @("all", "run", "vbp")) {
     # I2 `Call GTouch2(GFn(), o.Bad)` = gHit=0 gN=1（前面的照常求值）. C 的实参求值顺序
     # **未定义**（MSVC 从右向左），所以得逐枚提升成临时量 + 每枚求值前比一次序号，
     # 调用本身包在同一个守卫里。下面钉的就是这个形。
+    # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
+    # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
+    # 循环体首条语句上收尾：`gN = gN + 1` 被改写成 `o.NoSuchProperty = gN + 1`，
+    # 读变写、那条语句消失。量到的四站形如下（真机 J9/J10 = 4 / 1，err=438）。
+    Test-EmitcShape "b248_bare_cond_shape" @("$Tests\test_late_barecond.bas") @(
+        'if (vb6_CondIfNoErr(_c0, (vb6_ComGetIntProp(o, L"NoSuchProperty")))) goto vb6_loop_exit_0;',
+        'if (!(vb6_CondIfErr(_c1, (vb6_ComGetIntProp(o, L"NoSuchProperty"))))) goto vb6_loop_exit_2;',
+        'if (vb6_CondIfErr(_c2, (vb6_ComGetIntProp(o, L"NoSuchProperty")))) break;',
+        'if (!(vb6_CondIfNoErr(_c3, (vb6_ComGetIntProp(o, L"NoSuchProperty"))))) break;'
+    )
+    # 反面针: 修复前那五行原样（同一夹具、同一台编译器，只差这一臂）。
+    # 这五行是从**撤掉修复的构建**逐字取回的，不是照形推的。
+    Test-EmitcAbsent "b248_bare_cond_lesion" @("$Tests\test_late_barecond.bas") @(
+        'if (vb6_CondIfNoErr(_c0, (o))) goto vb6_loop_exit_0;',
+        'if (!(vb6_CondIfErr(_c1, (o)))) goto vb6_loop_exit_2;',
+        'if (vb6_CondIfErr(_c2, (o))) break;',
+        'if (!(vb6_CondIfNoErr(_c3, (o)))) break;',
+        'vb6_ComSetProp(o, L"NoSuchProperty", vb6_ComPackInt((gN + 1)));  /* COM SetProp */'
+    )
     Test-EmitcShape "b102_late_arg_guard_shape" @("$Tests\test_late_arg.bas") @(
         'const int32_t _eg0 = vb6_ErrSerial();',
         'if (_eg0 == vb6_ErrSerial()) { _ag1 = vb6_VariantToLong(vb6_VariantFromComResult(vb6_ComGetProp(o, L"NoSuchProperty"))); }',
