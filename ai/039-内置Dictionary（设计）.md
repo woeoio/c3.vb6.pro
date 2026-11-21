@@ -4953,3 +4953,47 @@ ProbeMain.c(68): error C2440: 同上（控制格 `Set c.f = o`）
 `targetIsVariant` 那一支只认 `knownVariantVars_` / 类字段表里的**名字**，但写回时没走
 `wrapVariantValue`，与 §11.87 给 Set 裸变量位加守卫时看到的那个 `value` 不是同一口径。
 先记下，等真机 P1/P2 数回来一并处理（先装箱，再谈守卫）。
+
+---
+
+## §11.91 第一百一十刀：Set 到工程类 Variant 字段槽（真机 P 族）
+
+### 一、真机
+
+| 格 | 语句 | 真机 | 修前本机 |
+|----|------|------|----------|
+| P1 | `Set c.f = o.NoSuchProperty`（类外，C `c->f`） | `c.f=111` / 438 | **C2440 编不过** ✗ |
+| P2 | `Set f = o.NoSuchProperty`（类内，C `me->f`） | `c.f=111` / 438 | 111 / 438（数对，但没退旧值） |
+| P3 | `Set c.f = o`（控制格） | `isobj=True` / 0 | C2440 |
+| P4 | `Set f = o`（控制格） | `isobj=True` / 0 | 落槽 / 0 |
+
+### 二、两个根因（同一格两件不同的事）
+
+1. **类外目标不认**：字段读那一站给目标拼上尾注 `/* class var .f field variant */`，于是
+   `checkName` 带注释，按名那三条判定全落空 ⇒ 目标被当 typed 槽：不装箱、不守卫，直接发
+   `c->f  /* … */ = vb6_ComGetObjectProp(o, L"…");  /* Set */` ⇒ C2440。
+2. **类内目标装箱但不守卫**：`me->f` 那一形本来就命中 `classVariantFields_`，装箱是对的，
+   但 438 之后照样裸写，且覆写前不退旧值（Variant 结构体裸赋 = 旧值漏掉）。
+
+### 三、改法（`cgen_setlet_set_rhs.inc`）
+
+- 新判据 `targetIsClassVariantField`：只认那枚尾注（`/* class var .` + ` field variant */`），
+  不按名字猜；命中即当 Variant 容器（后面的装箱两步自然接上）。
+- 唯一一问 `classVarFieldSlot110` = 尾注形 或 类内 `me->` + `classVariantFields_`，守卫与
+  退旧值都按它走：
+  - 有晚绑定读 ⇒ `_eN` 序号 + `_vsN` 临时量 + 两枚同序号闸；写回是
+    `vb6_VariantClear(&<槽>); <槽> = _vsN;`（槽是真存储，临时量是**移**进去，不自己收回）；
+  - 无晚绑定读 ⇒ `vb6_VariantClear(&<槽>); <槽> = <boxed>;  /* Set */`。
+- 调试：`C3_DBG_VSET110`（`[VSET110-DET]` / `[VSET110]`）。
+
+### 四、量
+
+- 语料实编 churn：**0 行**（757 行逐行同；存量语料里没有“Set 到工程类 Variant 字段槽”这一形）；
+- 新夹具 `tests/setcls/{SetCls.vbp, SetClsMain.bas, SetClsSlot.cls}`：本机四格与真机逐字相同。
+- 针：`b255_setclsslot_shape`（6 条，含 `vb6_VariantClear(&me->f);` 与两枚控制格装箱）/
+  `b255_setclsslot_lesion`（2 条）。另 `Test-Vbp setcls` + `setcls_x86` 两架构行为格。
+
+### 五、门
+
+- 静态门 9 枚 PASS（`manifest_coverage` inputs=759 [.vbp=280 .bas=479] registered=759）
+- manifest：757 → 759 行（新增 .vbp/.bas 两行，存量 0 行变动）
