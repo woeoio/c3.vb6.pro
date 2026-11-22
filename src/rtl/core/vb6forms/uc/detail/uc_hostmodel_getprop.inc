@@ -16,7 +16,13 @@
     }
     if (vb6_uc_isColl(obj)) {   // Fix 112c: RTL Collection
         if (_wcsicmp(name, L"Count") == 0) { vb6_ho_setVariantLong(out, vb6_Collection_Count(obj)); return 1; }
-        return 1;
+        /* 第一百一十三刀 (§11.95): 真机 probe112「P3 `Set v = col.NoSuchProperty`」= `v=[111] err=438`。
+           以前这里对**任何**未知成员都 `return 1`（答了但没答），于是 vb6_ComGetPropRcv 宿主
+           分支的 `hgot < 0` 那条 438 收口永远走不到：本机 `v=[] err=0`，而且把目标写了
+           （真机 438 不写目标）。Collection 的属性面只有 `Count`（`Item` 走参数化那一岔，
+           `Add`/`Remove` 走方法那一岔），其余名字就是**成员不存在** ⇒ -1。 */
+        vb6_ho_report438(L"GetProp", name, obj);
+        return -1;
     }
     if (vb6_uc_isFont(obj)) {
         /* 账 #305 第二百七十六刀: 认得就答、认不出**先报数** —— 第二百七十三刀给方法
