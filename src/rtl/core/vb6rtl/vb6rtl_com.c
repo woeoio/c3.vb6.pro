@@ -2111,14 +2111,23 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
     // 此前直接用 GetDC(NULL) 的默认字体 → 控件内部的文字/标题/图例排版全部算错:
     // 标题预留高度(TopHeader)不足 → 图例压在标题上; 轴标签宽度不对 → 文字裁切。
     HFONT hOld = NULL, hNew = NULL;
+    /* 第一百一十九刀: 量字的字体必须与**画字**同一 DPI 口径。
+       控件里 (Charts 2020 ucPieChart/ucChartArea/ucTreeMaps 全部如此) 画字走
+       `MulDiv(oFont.Size, GetDeviceCaps(hDC, LOGPIXELSY), 72)` = 真屏 DPI; 而本函数此前
+       恒用 96 (Fix 113k 记过: 换真屏 DPI 曾把 Charts 的图例/轴标签排布推坏 —— 那次两侧
+       只对上了一半, 不成立)。本机 DPI=120 实测: `TextWidth("0000000000")` = 60 (11px 口径),
+       同串 GDI+ 按 14px 画出 ≈ 75 ⇒ 量出来比画出来小 25%, 控件自己按 TextWidth 算的
+       标签框/标题行高全部偏窄: ucPieChart2 的 `{P}%` 标签最后一个字形被切掉, 只剩 `23.1`。
+       改后同一台机上五个标签 `20.7% / 21.1% / 11.4% / 22.8% / 24%` 全部完整。
+       DPI=96 的机器上取值与改前一模一样 (96/96), 门里的 96 口径语料逐字节不变。 */
+    int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
+    if (dpiY <= 0) dpiY = 96;
     if (len) {
         /* 账 #305 第二百七十六刀: 这一整块「八档 → LOGFONT」以前就地抄了一份,
            现在问唯一主人 vb6_UC_FontLogFont (uc_controls.c) —— VB 层那枚 `Font.hFont`
            也从同一位主人拿答案, 两处不许各有第二套字重/兜底。
-           DPI 与质量档是**调用方**的选择, 量字这一路维持它自己一贯的 96 + 0
-           (Fix 113k 记过: 给 TextWidth/TextHeight 换成真屏 DPI 的字体度量, 反而把
-           Charts 的图例/轴标签排布推坏)。vb6rtl 与 vb6forms 不互 include 头,
-           故就地 extern (与上面 vb6_ScalePxToUser 同款)。 */
+           DPI 由调用方给 (本函数给真屏 DPI, 见上), 质量档维持 0。
+           vb6rtl 与 vb6forms 不互 include 头, 故就地 extern (与上面 vb6_ScalePxToUser 同款)。 */
         extern void vb6_UC_FontLogFont(void* fontFields, int32_t dpiY, int32_t quality, void* lfOut);
         LOGFONTW lf;
         // ucTreeView: UserControl.FontBold/FontUnderline 在 VB6 里就是 Font 的
@@ -2129,9 +2138,9 @@ static int32_t vb6_uc_measureText(BSTR text, int wantWidth) {
             vb6_ComIface_Font scratch = *vb6_UserControl_Font;
             if (vb6_UserControl_FontBold) scratch.Bold = -1;
             if (vb6_UserControl_FontUnderline) scratch.Underline = -1;
-            vb6_UC_FontLogFont(&scratch, 96, 0, &lf);
+            vb6_UC_FontLogFont(&scratch, dpiY, 0, &lf);
         } else {
-            vb6_UC_FontLogFont(vb6_UserControl_Font, 96, 0, &lf);
+            vb6_UC_FontLogFont(vb6_UserControl_Font, dpiY, 0, &lf);
         }
         hNew = CreateFontIndirectW(&lf);
         if (hNew) hOld = (HFONT)SelectObject(hdc, hNew);
