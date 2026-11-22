@@ -667,6 +667,18 @@ void* vb6_UC_UnwrapHost(void* obj) {
     return obj;
 }
 
+/* 账 #305 §11.110 (第一百二十八刀补): 「这枚指针是不是我们从宿主对象包出来的那枚
+ * Vb6HostWrap」。只答包装器本人 —— 真宿主对象 (HWND / UC 实例 / 集合 / 字体)
+ * 一个空字段都不能当 vtable 碰, 所以不能退回 lpVtbl 那套判据。
+ * 从后往前扫: 表只追加不撤, 地址会被下一枚包装器复用, 最新的那条才是它的主人
+ * (§B165 第五十四刀那条 stale pair 的教训)。 */
+int32_t vb6_UC_IsHostWrap(void* obj) {
+    if (!obj) return 0;
+    for (int i = g_uc_wrapCount - 1; i >= 0; i--)
+        if (g_uc_wraps[i].wrap == obj) return 1;
+    return 0;
+}
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

@@ -262,6 +262,29 @@ static void vb6_ComDropPackedOne(void* pv) {
     free(v);
 }
 
+/* 账 #305 §11.110 (第一百二十八刀补): 宿主分岔那一族**不能**清内容。
+ * 宿主模型 (uc_collection 的 vb6_coll_push 等) 存的是「借来的那枚指针」——
+ * 只有 VB6 工程类包装器 (vb6_ComObject_IsVb6Wrapper) 会 vb6_ComAddRefDispatch,
+ * 宿主包装器 (Vb6HostWrap, vb6_ComPackObject 里 vb6_UC_WrapHostObject 现造的那一枚)
+ * 一格引用都不加。修前这里裸 free 结构体, 包装器本人留着 ⇒ 集合读回还能用;
+ * 第一版把这一岔也接上 VariantClear, 集合手里那枚当场 free, gc 夹具 GC18/GC19
+ * (With collC(iC) : .Width = 1234) 12 发 notdispatchable (disp 是已释放的包装器)。
+ * 口径: 宿主包装器这一档只 free 结构体, 内容留在原处 —— 与 uc_collection 那条
+ * 「集合自己持有一份引用」尚未补上 AddRef/Release 相对; 那一格在册 (§11.110 边界)。 */
+static void vb6_ComDropPackedHostArgs(VARIANT** a, int32_t argc) {
+    extern int32_t vb6_UC_IsHostWrap(void* obj);
+    if (!a) return;
+    for (int32_t i = 0; i < argc; i++) {
+        VARIANT* v = a[i];
+        if (!v) continue;
+        if (v->vt == VT_DISPATCH && v->pdispVal && vb6_UC_IsHostWrap((void*)v->pdispVal)) {
+            free(v);
+            continue;
+        }
+        vb6_ComDropPackedOne(v);
+    }
+}
+
 static DISPID vb6_getDispid(IDispatch* pDisp, const wchar_t* name) {
     // NULL 名字是「默认成员」的写法（见 vb6_ComSetPropArgRcv 的默认成员分支）。
     // 这里必须当场挡掉：下面的缓存遍历用 wcscmp(..., name)，NULL 会读 0x0（曾经就是这样 AV 的）。
@@ -525,7 +548,7 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
     if (vb6_Host_IsHostObject(disp)) {
         char hout[64];   /* vb6_VARIANT (vb6com 单元用 Windows VARIANT, 不见 vb6_VARIANT 类型) */
         int32_t hhandled = vb6_Host_Call(disp, methodName, argc, args_void, hout);
-        vb6_ComDropPackedArgs(args, argc);
+        vb6_ComDropPackedHostArgs(args, argc);
         /* 账 (438 语义刀): -1 = 宿主模型没有这个成员 (uc_hostmodel_call.inc 末尾)。
            `v = Me.rtfText` 这类读在 cgen 里发的是 **Call** 站 (不是 GetProp),
            以前这里无条件答 Empty ⇒ 夹具里 Err.Number 读到 0、反向用例走不到错误分支。
