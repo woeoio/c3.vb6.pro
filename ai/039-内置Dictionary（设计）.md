@@ -5556,3 +5556,60 @@ vb6_ho_setVariantObject(out, fr); return 1;
 - 同一控件上的 `ctl.Font` 与 `ctl.FontSize` 现在读写**同一格**（晚绑定走代理 → 六位主人，
   静态路径直接走六位主人），不再出现两条路两个答案；
 - `Weight` / `Charset` 的写回会把当前八档整块发一次（IFont 在 GDI 里本来只有一个 hFont）。
+
+## §11.100 缺省 Instancing 的工程类也能装箱：`As Object` 收得下类实例（第一百一十八刀）
+
+### 一、读数
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| `tests\b190_scope` 的 `[C3_LATEBIND_MISS]` | 8（4 处 × 2 行：`DispView` + `ComGetProp`，全部 `kind=notdispatchable`） | **0** |
+| P3/P4（`As Object` 形参读字段） | 空 | `A1` / `A1` |
+| P9/P10（Object 变量读 `Label`） | 空 | `A-label` / `A-label` |
+| P6/P7/P8/P11/P12（`TypeName`） | 部分空 | `Nothing` / `B190A` / `B190B` / `B190A` / `B190A` |
+
+同族 9 个夹具（`b168_cvf`、`b169_cfw`、`b170_mrt`、`b171_slotarg`、`b172_paramslot`、
+`b173_udtarg`、`b183_intfield`、`b184_fieldw`、`b190_memberarray`）本机逐个编译运行：
+全部 exit=0、`miss=0`。
+
+### 二、病：一条判据答了两件事
+
+`Symbol::isCoClassTableEntry()` 一直同时回答：
+
+1. 这枚类能不能**对外 CoCreate**（BUG-4 口径：只有 MultiUse/SingleUse 该有 ClassFactory 项）；
+2. 这枚类能不能在运行期 coclass 描述表里找到 desc（装箱腿 `boxIntoLateSlot` 的闸门）。
+
+缺省 Instancing 的工程类在 VB6 里同样是 COM 对象（`As Object` 形参收得下、晚绑定读得动），
+但它被第 1 问的答案拉进了第 2 问：不在表里 ⇒ `classHasCoClassDesc` 为假 ⇒ 装箱腿交**裸**
+`vb6_cls_*` ⇒ `vb6_ComIsDispatchable` 判否 ⇒ `[C3_LATEBIND_MISS] kind=notdispatchable` 全链静默。
+
+### 三、修法：把两条判据拆开，表里补「不可创建」的行
+
+1. `Symbol::isLateBindClass()` = 所有类（接口除外）—— 「能不能装箱」只看这个；
+2. 收集器改按 `isLateBindClass()` 收，同时记 `CoClassInfo.registerable = isCoClassTableEntry()`；
+3. 行照发（装箱靠它找 desc），但 `progId` / `clsid` 两格发**空串**；
+4. `DllRegisterServer` / `DllUnregisterServer` 见空即 `continue`；`vb6_GetClassFactory` 按 CLSID
+   匹配（空串必然匹配不上）⇒ 私有类不会出现在注册表里；
+5. 装箱腿与 `As New` 字段的闸门改用 `isLateBindClass()`；
+6. **UserControl (.ctl) 必须留在闸门外** —— 它的 C 侧值是 HWND；把 `.ctl` 当类收进表，
+   `com_entry.c` 会去引 `.ctl` 里不存在的符号（`ucSlider_2022` 实测 LNK2019：
+   `_vb6_LabelPlus_tmrMOUSEOVER_Timer`）。三处同一条守卫：收集器
+   （`knownControlModuleNames_`）、装箱名单、`As New` 字段。
+
+实测面：`tests` 下 423 份 `.cls` 里 18 份缺省 Instancing（`b168..b190` 那族），
+真语料按 §B187 的普查全部带 Instancing ⇒ 存量工程产物不动。
+
+### 四、闸门
+
+- `LateBindMissAllow` 删掉 `'B190' = 8`（现在表里只剩负控 `B446`）—— 期望恰好 0；
+- B190 12 个探针值与同族 9 夹具见上；`gates.ps1` 9/9；
+- churn 763 行 **changed=3**：`tests/b190_scope/B190.vbp`（预期：多出 B190A/B 两行 desc
+  + 四处装箱）、`tests/b216_slot/B216d.vbp`、`tests/iface_wrap/IfaceWrap.vbp`（同一形状）。
+  其余 760 行不动 —— 真语料类全带 Instancing，本来就是表内行。
+
+### 五、边界
+
+- 私有类不注册、不可外部 `New`；这一行 desc 只服务 IDispatch 装箱；
+- 已是私有类的字段/形参早绑定那一半不变（仍走 `vb6_cls_*` 直读）；只有跨 `void*` / Variant 槽
+  的那一步现在会包一层真 IDispatch；
+- `PublicNotCreatable` 的对外可见性不变（它本来就不该可创建）。
