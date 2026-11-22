@@ -286,6 +286,24 @@ static inline vb6_VARIANT vb6_VariantObject(void* val) {
 //           when the expression is ALREADY a vb6_VARIANT (no wrapping).
 static inline vb6_VARIANT vb6_VariantIdentity(vb6_VARIANT v) { return v; }
 
+/* 账 #305 §11.106 (第一百二十四刀): **不取引用**的对象档装箱 —— 只给只读谓词的实参用。
+ *
+ * 病根 (第一百二十三刀的 D2 读数): `TypeName(<对象槽>)` / `IsObject(<对象>)` 这类调用的实参
+ * 先在装箱站成 `vb6_VariantFromValue(...)` —— 对 void* / 包装器那是 `vb6_VariantObject`,
+ * 它按 Fix 024 必须 AddRef; 而按值形参的这枚临时 VARIANT 谁也不会 `vb6_VariantClear`
+ * (它在表达式里, 不是具名变量) ⇒ 每读一次漏一枚引用。对象是包装器时那一枚就是包装器的命:
+ * 槽清空后仍是 rc=1, 类引用计数到不了 0, `Class_Terminate` 永不发生。
+ *
+ * 为什么能借: 这九枚 (`TypeName/VarType/IsObject/IsNull/IsEmpty/IsArray/IsDate/IsError/
+ * IsNumeric`) 的 RTL 体只读 `vt` 与 payload, 既不存也不清 (vb6rtl_conv.c 逐行可对); 实参的
+ * 生存期覆盖整个调用, 借来的指针在调用期间一直有效。改用这一档后**不分配任何东西**,
+ * 也就不存在"谁退"那一问。 */
+static inline vb6_VARIANT vb6_VariantObjectBorrowed(void* val) {
+    vb6_VARIANT v; memset(&v, 0, sizeof(v));
+    v.vt = vb6_vtDispatch; v.pdispVal = val;
+    return v;
+}
+
 // Fix 024: Polymorphic Variant constructor via C11 _Generic.
 //   用法: vb6_VARIANT v = vb6_VariantFromValue(any_C_expr);
 //   按实参表达式的C类型(编译期推断)选择合适的Variant构造函数:
@@ -353,6 +371,59 @@ struct vb6_SafeArrayND; // forward declaration (1D 的那一枚在 vb6rtl_builti
     struct tagSAFEARRAY*:  vb6_VariantFromParamArray, \
     vb6_VARIANT:          vb6_VariantIdentity, \
     default:              vb6_VariantObject \
+)((x))
+#endif
+
+/* 账 #305 §11.106 (第一百二十四刀): `vb6_VariantFromValue` 的**借用档** —— 整形与标量
+ * 那几档与正式档完全同一枚构造器 (它们只写值, 不拥有任何东西); 差异只在最后一条:
+ * 指针类落 `vb6_VariantObjectBorrowed` (不 AddRef)。臂表必须与上面的正式档逐条对齐
+ * —— 少一条就会落到 default, 把标量当对象。
+ * 只给九枚只读谓词 (TypeName/VarType/IsObject/IsNull/IsEmpty/IsArray/IsDate/IsError/
+ * IsNumeric) 的实参站用; 任何会**存**实参的出口都不许用这一档。 */
+#ifdef _MSC_VER
+#define vb6_VariantBorrowFromValue(x) _Generic((x), \
+    _Bool:                vb6_VariantBool, \
+    char:                 vb6_VariantLong, \
+    unsigned char:        vb6_VariantByte, \
+    short:                vb6_VariantInt, \
+    int:                  vb6_VariantLong, \
+    unsigned int:         vb6_VariantULong, \
+    long:                 vb6_VariantLong, \
+    unsigned long:        vb6_VariantULong, \
+    long long:            vb6_VariantLongLong, \
+    unsigned long long:   vb6_VariantULongLong, \
+    wchar_t:              vb6_VariantLong, \
+    float:                vb6_VariantSingle, \
+    double:               vb6_VariantDouble, \
+    wchar_t*:             vb6_VariantString, \
+    struct vb6_SafeArray1D*: vb6_VariantArray, \
+    struct vb6_SafeArrayND*: vb6_VariantArray, \
+    struct tagSAFEARRAY*:  vb6_VariantFromParamArray, \
+    vb6_VARIANT:          vb6_VariantIdentity, \
+    default:              vb6_VariantObjectBorrowed \
+)((x))
+#else
+#define vb6_VariantBorrowFromValue(x) _Generic((x), \
+    _Bool:                vb6_VariantBool, \
+    char:                 vb6_VariantLong, \
+    signed char:          vb6_VariantLong, \
+    unsigned char:        vb6_VariantByte, \
+    short:                vb6_VariantInt, \
+    int:                  vb6_VariantLong, \
+    unsigned int:         vb6_VariantULong, \
+    long:                 vb6_VariantLong, \
+    unsigned long:        vb6_VariantULong, \
+    long long:            vb6_VariantLongLong, \
+    unsigned long long:   vb6_VariantULongLong, \
+    wchar_t:              vb6_VariantLong, \
+    float:                vb6_VariantSingle, \
+    double:               vb6_VariantDouble, \
+    wchar_t*:             vb6_VariantString, \
+    struct vb6_SafeArray1D*: vb6_VariantArray, \
+    struct vb6_SafeArrayND*: vb6_VariantArray, \
+    struct tagSAFEARRAY*:  vb6_VariantFromParamArray, \
+    vb6_VARIANT:          vb6_VariantIdentity, \
+    default:              vb6_VariantObjectBorrowed \
 )((x))
 #endif
 

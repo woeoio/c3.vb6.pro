@@ -34,6 +34,40 @@
         };
         bool argsFixed108c = false;
 
+        // 账 #305 §11.106 (第一百二十四刀): 九枚**只读谓词**的实参按借用档装箱。
+        // 它们形参是按值 `vb6_VARIANT`, 而装箱站发的是 `vb6_VariantFromValue(...)` 这枚
+        // **表达式里的临时** —— 谁也不会 VivariantClear 它。对象档那一臂 (vb6_VariantObject)
+        // 按 Fix 024 必须 AddRef ⇒ 每读一次漏一枚引用 (第一百二十三刀 FProbe6 的 D2 term=0
+        // 就是这个: `Set x.A = Nothing` 只能把槽退到 1)。
+        // 判据: callee 是这九枚之一 ⇒ 把实参**最外层那几层**装箱名前缀换成借用档; 里面
+        // 的嵌套子表达式一律不动 (它们不在实参的顶层, 自有一套所有权)。
+        {
+            static const std::unordered_set<std::string> readonlyVariantPredicates124 = {
+                "vb6_TypeName", "vb6_VarType", "vb6_IsObject", "vb6_IsNull",
+                "vb6_IsEmpty", "vb6_IsArray", "vb6_IsDate", "vb6_IsError",
+                "vb6_IsNumeric",
+            };
+            if (readonlyVariantPredicates124.count(callee)) {
+                static const std::string kFrom124 = "vb6_VariantFromValue(";
+                static const std::string kTo124 = "vb6_VariantBorrowFromValue(";
+                size_t cursor124 = 0;
+                for (auto& a124 : args) {
+                    std::string b124 = a124;
+                    size_t at124 = 0;
+                    while (b124.compare(at124, kFrom124.size(), kFrom124) == 0) {
+                        b124.replace(at124, kFrom124.size(), kTo124);
+                        at124 += kTo124.size();
+                    }
+                    if (b124 == a124) continue;
+                    size_t p124 = argList.find(a124, cursor124);
+                    if (p124 == std::string::npos) continue;
+                    argList.replace(p124, a124.size(), b124);
+                    cursor124 = p124 + b124.size();
+                    a124 = b124;
+                }
+            }
+        }
+
         // argList 在更早处已按 args 拼好, 其后还有"补默认参数"分支向 argList 追加
         // (如 vb6_Replace 的 ", 1, -1, 0"). 因此不能整体重建 argList —— 只能就地把
         // 被改写的实参文本替换掉, 否则会丢掉默认参数 (曾导致 vb6_Replace 只剩 3 参).
