@@ -5529,7 +5529,7 @@ if ($Category -in @("all", "run", "bas")) {
     # 发码形状针: 这一对行就是那枚出口的产物, 缺任何一行都是有人把「先清再搬」这个决定又改回一份。
     Test-EmitcShape "b164_slot_store_shape" @("$Tests\test_fe_slot_leak.bas") @(
         'vb6_VariantClear(&e);',
-        'e = vb6_VariantFromStackVARIANT(&_fe_var_0);',
+        'e = vb6_VariantFromStackVARIANT(&_fe_var_',   # §11.103: 下标是临时量计数器, 全局 Set 站点占号后会移 (实测 _fe_var_0 -> _fe_var_2)
         'vb6_VariantAssign(&e, vb6_VariantFromValue(VB6_SA_AT(BSTR, gArr, _fe_i5)));',
         'vb6_VariantAssign(&keep, vb6_VariantFromValue(e));'
     )
@@ -5567,8 +5567,13 @@ if ($Category -in @("all", "run", "bas")) {
         'o = _vb6_with_0->vt->get_owner(_vb6_with_0);',
         'vb6_ivref_IK2947* vb6_ret_OwnView = 0;',
         'vb6_ret_OwnView = ((me) ? &(me)->__iv_IK2947 : NULL);',
-        'vb6_ivref_IK2947* _vb6_with_1 = vb6_mdl2947_MakeI()',
-        'vb6_ivref_IK2947* _vb6_with_2 = vb6_H2947_prop_get_OwnView(h)',
+        # §11.103 (第一百二十一刀): Set 兜底改成三步后占了一个临时量号 ⇒ 视图 With 那几枚
+        # _vb6_with_N / __iv* 的**序号**整体后移, 而变量名后面的形状一字未改。钉形状, 不钉序号。
+        'vb6_ivref_IK2947* _vb6_with_',
+        '= vb6_mdl2947_MakeI()  /* With object ref (视图值拷贝) */;',
+        '= vb6_H2947_prop_get_OwnView(h)  /* With object ref (视图值拷贝) */;',
+        '->vt->get_owner(_vb6_with_',
+        'vb6_ReleaseObject((void**)&o); o = _vref',
         'vb6_ret_ViaMe = __ivrecv',
         'vb6_ivref_IK2947* __ivrecv',
         '->vt->has(__ivrecv'

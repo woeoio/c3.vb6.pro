@@ -23,8 +23,9 @@
 #   P5  登记腿只许 ActiveX 那一档发: cgen_com.cpp 里恰好 1 处, 且它上面一行就是 if (isDll_) {
 #   P6  注销腿与登记腿配对 (账 #481): .c 定义 1 处 / .h 声明 1 处 / cgen_com.cpp 发码 1 处,
 #       发码那一处上一行必须是 if (isDll_) {, 且它必须排在 vb6_Free(me) 前两行 (= 先撤登记再释放)。
-#   P4  读者普查: vb6_FindProjectClassDesc( 在 .c 的代码里恰好 3 处 (定义 + ...Raw 的转调 +
-#       第一百七十一刀那枚真读者)、在 .h 里至多 1 处 (就那一枚声明); vb6_ProjClassVerify 在代码里 0 处 (它不存在,
+#   P4  读者普查: vb6_FindProjectClassDesc( 在 .c 的代码里恰好 4 处 (定义 + ...Raw 的转调 +
+#       第一百七十一刀那枚真读者 + 第一百二十一刀的 TypeOf 身份读者 vb6_ComObject_ClassNameOfAny)、
+#       在 .h 里至多 1 处 (就那一枚声明); vb6_ProjClassVerify 在代码里 0 处 (它不存在,
 #       只许住在注释里)。
 #
 # 用法: powershell -File scripts\check_projclass_scan_bound.ps1 [-Root <副本目录>]  (PASS = exit 0)
@@ -92,11 +93,14 @@ if ($giveUp -ne 1) { $bad += ("P3 the table-full bail-out = " + $giveUp + " (wan
 $callRx = 'vb6_FindProjectClassDesc\s*\('
 $objCalls = @([regex]::Matches($objCode, $callRx)).Count
 $hdrCalls = @([regex]::Matches($hdrCode, $callRx)).Count
-# .c 里那 3 处 = 定义本身 + ...Raw 里那句转调 (它自己至今 0 调用者) + 第一百七十一刀那枚真读者。
-# 从 <=2 收成 ==3 是这一刀接读者换来的: 再有人接第二枚读者, 这一道照样红。
-if ($objCalls -ne 3 -or $hdrCalls -gt 1) {
+# .c 里那 4 处 = 定义本身 + ...Raw 里那句转调 (它自己至今 0 调用者) + 第一百七十一刀那枚真读者
+# + 第一百二十一刀 (§11.103) 新增的 TypeOf 身份读者 vb6_ComObject_ClassNameOfAny。
+# 从 <=2 收成 ==3 是第一百七十一刀接读者换来的; 3 -> 4 是 TypeOf 那一位 —— 它仍只读登记腿
+# 已经发的那一格 (desc->classVariable), 只比指针不解引用, 没新增登记/注销路径。
+# 再有人接第三枚读者, 这一道照样红。
+if ($objCalls -ne 4 -or $hdrCalls -gt 1) {
     $bad += ("P4 the project-class lookup gained readers (code mentions: .c=" + $objCalls +
-             " .h=" + $hdrCalls + ", want exactly 3 / <=1: 定义 + 那枚至今 0 调用者的 ...Raw + 第一百七十一刀那枚读者) - §B187 那条「接读者」按台账分档走 (b),")
+             " .h=" + $hdrCalls + ", want exactly 4 / <=1: 定义 + 那枚至今 0 调用者的 ...Raw + 第一百七十一刀那枚读者 + 第一百二十一刀的 TypeOf 身份读者) - §B187 那条「接读者」按台账分档走 (b),")
     $bad += ("     接之前先回台账读那两条读数 (2026-10-15 拍定的分档: ActiveX DLL/Control 走 (b) = 接读者 + 配注销腿,")
     $bad += ("     其余走 (a) = 连登记都不发; 而「EXE 里没有 CoClass 块 ⇒ 实例没进表」那句旧解释已被 com_entry.c 推翻")
 }
@@ -158,6 +162,6 @@ if ($bad.Count -gt 0) {
     foreach ($b in $bad) { Write-Host ("FAIL " + $b) }
     exit 1
 }
-Write-Host ("PASS check_projclass_scan_bound: loops=3 raw-bound=0 helper=1 cap=5/4lines bail=1 c-mentions=3(readers=1) verify-in-code=0 reg-site=1 gated=isDll_ unreg-def=1 decl=1 site=1 pair-before-free=1")
+Write-Host ("PASS check_projclass_scan_bound: loops=3 raw-bound=0 helper=1 cap=5/4lines bail=1 c-mentions=4(readers=2/raw=1) verify-in-code=0 reg-site=1 gated=isDll_ unreg-def=1 decl=1 site=1 pair-before-free=1")
 exit 0
 
