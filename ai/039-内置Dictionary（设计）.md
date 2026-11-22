@@ -5501,3 +5501,58 @@ vb6_ho_setVariantObject(out, fr); return 1;
 真正对齐需要两件（下一刀）：① 宿主模型为每个宿主对象记一枚字体记录（按 HWND / UC 实例去重，
 不复用 `vb6_uc_fontOf` 那张只认字体的表）；② setprop 写完后叫 `vb6_UC_ApplyFontToWindow(obj, f)`
 把八档发到窗口（那位主人已在 `uc_controls.c`，不另造）。本刀只保证「接收者不再是 NULL」。
+
+## §11.99 宿主 Font 代理挂到控件上：读回设计期字号、写回落盘（第一百一十七刀）
+
+上一节留下的那半句，本刀补齐。
+
+### 一、读数（本机 x86，探针 = `czUI-main` 副本插两行 `Debug.Print`）
+
+探针位置：`czUI.ctl:1354-1356`（`txtEmbed.Font.Name/Size/Bold = m_Font*`）前后各印一次。
+
+| 编译 | before | after（写完 10pt / Segoe UI） |
+|---|---|---|
+| §11.98 之前（`C3_old`） | `size=` `name=` `bold=`（`.Font` 是 Empty） | 同左（写进空接收者） |
+| §11.98 | `size=8.25 name=MS Sans Serif bold=0` | `size=8.25 name=MS Sans Serif bold=0`（孤儿代理，写回不落盘） |
+| 第一百一十七刀 | `size=8.25 name=MS Sans Serif bold=0` | `size=10 name=Segoe UI bold=0` |
+
+`[C3_LATEBIND_MISS]` 条数不回退：Charts2020 / czFormDemo 本机实测仍为 **0 / 0**。
+
+### 二、病：代理是孤儿
+
+§11.98 交出的对象是 `vb6_UC_NewFont()` 现造的默认档（8.25pt / MS Sans Serif），而且**每次读都新造**：
+
+- `.Size` 恒 8.25，读不到控件设计期字号；
+- `.Size = x` 写在一片马上丢掉的记录上，控件不缩放 —— Charts2020 `ClsResizer` 的存（`.cls:107`）与放（`.cls:147`）两半都空转。
+
+### 三、修法：代理挂到六位既有主人上
+
+控件字体本来就只有一套存储与出口：`vb6forms_ctrl.c` 的
+`vb6_Get/SetControlFontName|Size|Bold|Italic|Underline|Strikethrough`（同一格 `VB6_CtrlFont` + `WM_SETFONT`）。
+本刀不新造第二份状态：
+
+1. `vb6_UCFontRec` 加 `owner`（HWND，0 = 设计期字体块 / PropertyBag 那枚）；
+   `vb6_HostObjRec` 加 `fontProxy`（每个宿主对象一枚）；
+2. `vb6_UC_NewFontForWindow(hwnd)`：造代理 + 记 owner + 用六位读侧填成控件**现值**（字号走
+   `vb6_GetControlFontSize` 的自存精确磅值，不从像素高度反推，所以 8.25 还是 8.25）；
+3. `vb6_UC_FontSyncFromOwner(p)`：`vb6_UC_FontField` 每次取字段前刷新 —— 静态路径
+   `ctl.FontSize = x` 改的是窗口上那张字，代理不刷就是旧值；
+4. `vb6_UC_FontCommit(p, name)`：`vb6_ComSetProp` 写完一档后交回**对应 setter**（落盘 + 存字）；
+   `Weight`/`Charset` 没有单档 setter，走整块 `vb6_UC_ApplyFontToWindow`。
+
+宿主 Font 臂改为按登记记录缓存（`h->fontProxy`），同一控件两次读是同一枚对象；
+字体分支不再 `vb6_UC_NewFont()` 现造。
+
+### 四、闸门
+
+- 探针三点读数见上表；`test_collcall` / `test_collmiss` 全绿；`gates.ps1` 9/9；
+  churn 763 行 changed=0（只动 RTL，不动发码）。
+- `check_com_latebind_guard.ps1` 的形状钉升级：Font 臂必须同时出现 `fontProxy` 与
+  `vb6_UC_NewFontForWindow`；改回 Empty 或每读现造就红。
+
+### 五、边界
+
+- owner 为零的字体（设计期块 / PropertyBag）行为与本刀前完全一致；
+- 同一控件上的 `ctl.Font` 与 `ctl.FontSize` 现在读写**同一格**（晚绑定走代理 → 六位主人，
+  静态路径直接走六位主人），不再出现两条路两个答案；
+- `Weight` / `Charset` 的写回会把当前八档整块发一次（IFont 在 GDI 里本来只有一个 hFont）。
