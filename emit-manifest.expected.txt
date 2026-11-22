@@ -510,6 +510,8 @@ sha256=065a4fc6dfd2d8ace069428455d1d6b14a2af6ea9165919eeaa653d850fbd784 ascii256
 sha256=d7f74e412b99ec8a3ea0d6b88a5084d260efee90bba0b94ec69e14cc699fe814 ascii256=2d149ff1f1e4e4a4352e1f1ab4644cb429ff4f99a8f3f7259a78ff1c2a20ecd1 rc=0 bytes=6707 tests/b190_scope/B190Main.bas
 sha256=2eb064ea266769d7d47c80141bd968f6bc8fbb70e26c7716a8933f7edc8f0421 ascii256=8a5d96d84b102871a42702ce5780a72eec2bc233a8776eadee46f31559b0c9d2 rc=0 bytes=16068 tests/b216_slot/B216d.vbp
 sha256=5b605c5e6e1e70ce388993c51aec26117cef5b169d1e06eb470a464532bb3a5b ascii256=b1062571ff9a801357dcd2e52b51106ec76d5465cf9fb5c812c9f0cd953e5793 rc=0 bytes=7095 tests/b216_slot/Main.bas
+sha256=28f4de76d9323268c61d8b1f7155be986014eee1a44c3282ce66940dc179b9b4 ascii256=f09fe10236db23094cd9bd571a65d4d775153d730dc98de7e9e0d66ae208fd49 rc=0 bytes=3633 tests/b412_objslot/B412Main.bas
+sha256=35b02144feef09368a56b28279653a2694b349ca527ae7b8668385ba4406980e ascii256=06802eed381d2c7a87652b5a8294aef52ffab040feeb60506fac6360ada7c50c rc=0 bytes=8617 tests/b412_objslot/B412ObjSlot.vbp
 sha256=5db2fe42f74b0904cd8e7a3698936fc723552749367e871815800320a12636dd ascii256=7e9f89390e7c6de30f3d27173b04975975f85b97b2ccef610700a7ba10f5c441 rc=0 bytes=7065 tests/b416/B416.vbp
 sha256=a1fe85bca7f80c2fc40b6610e98b6796d96840d57c555a842d8de8a60263de02 ascii256=7e9f89390e7c6de30f3d27173b04975975f85b97b2ccef610700a7ba10f5c441 rc=0 bytes=6990 tests/b416/B416Main.bas
 sha256=42f3945097a76ca75e795f414a0ace18ec183d8300366415afc4485d2db5d18c ascii256=872e0c7e8600957e423f2f543be310344a7411d77635434b784a974137f84833 rc=0 bytes=6394 tests/b417/B417.vbp
@@ -1289,3 +1291,5 @@ sha256=44165cee8066da331e3105ee9cb0cbd4dcf859db43029b26e03b0f503c6b2a20 ascii256
 # 第八十一刀 (账 §11.59, Asc("")/Asc(Empty) ⇒ 5) 登记 6 行: tests/Charts 2020/Proyecto1.vbp、tests/Charts 2020/ucTreeMaps/Proyecto1.vbp、tests/dbgdlg/dbgdlg.vbp、tests/test_str_cnum_assign.bas、tests/VBFlexGridDemo/Common/Common.bas、tests/VBFlexGridDemo/VBFlexGridDemo.vbp。
 #   逐行归因: 这 6 份输入里都有 `x = Asc(...)` 形状, 本刀把 Asc/AscB/AscW 纳入赋值站的语句级中止判据 ⇒ 每处只多出 `const int32_t _eN = vb6_ErrSerial();` 与 `TYPE _avN = (...) ? (...) : 0;` / `if (_eN == vb6_ErrSerial())` 那几行 (字节差 +121..+328), 没有别的位移。
 #   同时把第八十刀**误按本机数登记**的 5 行机器侧差 (guisample x3 + TeeChartChartDisplay + ctrlmscomm) 换回 CI run 44631595167 的 emit-manifest 工件值 —— 本机 14.29 与 CI 14.52 的发码在这 5 份上不同, 不能拿本机数 bless。
+
+# 第一百二十五刀 (账 §11.107 #412 关门) 登记 2 行: tests/b412_objslot/B412Main.bas、tests/b412_objslot/B412ObjSlot.vbp —— 新夹具本来就没有旧期望; 取值来自本机 emit_manifest.ps1 (head 3567e70d + 未提交夹具) 那一趟, 与 CI 二进制无机器侧差异 (夹具只打标记与类名)。存量 5 行机器侧差 (guisample x3 + TeeChartChartDisplay + ctrlmscomm) 刻意未动, 它们以 CI 那台为准。
