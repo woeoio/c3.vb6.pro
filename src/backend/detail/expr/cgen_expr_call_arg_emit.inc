@@ -1790,6 +1790,30 @@
                                 // 临时量的引用由调用点自己的语句管；被调方要留就 VariantCopy/Set 自己加。
                                 // 因此不登记 boxTempsToClear_ —— 那条道的 authority 钉死"两站"
                                 // (knife 121 + 第一百七十二刀站E)，第三站会红 check_box_temp_reclaim。
+                                // 晚绑定调用的结果静态类型是 **Variant**, 不是对象 ——
+                                // `coll(idx)` 的声明类型只能告诉你「这个成员是个对象」
+                                // (Collection), 交回来的却是堆上 VARIANT* (BSTR/数值/对象都
+                                // 有可能)。按 Object 装成 {vt=VT_DISPATCH, pdispVal=<VARIANT*>}
+                                // 等于把 VARIANT 结构体地址当 IDispatch: Charts 2020 ucTreeMaps 的
+                                // `DrawText(..., Labels(j), ...)` 里 StrPtr(text) 读到 vt/保留字段
+                                // ⇒ 每个色块的项名一个都不出 (该控件自己的诊断一直只是在等值)。
+                                // 与 boxToVariant / Fix 113l 同一条口径: 所有权交给
+                                // vb6_VariantFromComResult, 整枚 Variant 值原样递下去。
+                                {
+                                    size_t csO = 0;
+                                    while (csO < argVal.size()
+                                           && (argVal[csO] == '(' || argVal[csO] == ' '
+                                               || argVal[csO] == '\t' || argVal[csO] == '\n'
+                                               || argVal[csO] == '\r')) csO++;
+                                    const size_t restO = argVal.size() - csO;
+                                    if ((restO >= 12 && argVal.compare(csO, 12, "vb6_ComCall(") == 0)
+                                        || (restO >= 20 && argVal.compare(csO, 20, "vb6_ComCallByDispid(") == 0)
+                                        || (restO >= 15 && argVal.compare(csO, 15, "vb6_ComGetProp(") == 0)) {
+                                        argVal = "&((vb6_VARIANT[]){vb6_VariantFromComResult("
+                                               + argVal + ")})[0]";
+                                        break;
+                                    }
+                                }
                                 const std::string argClsObj =
                                     inferClassTypeOfExpr(*node.positional[i]);
                                 const std::string boxedObj = argClsObj.empty()
