@@ -12144,6 +12144,22 @@ if ($Category -in @("all", "run", "vbp")) {
     $b126Needles = @("C3ProbeB126-A1=B126Item", "C3ProbeB126-A2=8", "C3ProbeB126-DONE")
     Test-Vbp 'b126_crossmod_objglobal' "$Tests\b126_crossmod_objglobal\B126ObjGlobal.vbp" $b126Needles
     Test-Vbp 'b126_crossmod_objglobal_x86' "$Tests\b126_crossmod_objglobal\B126ObjGlobal.vbp" $b126Needles -Arch "x86"
+
+    # 账 #305 §11.109 (第一百二十七刀): 腿④ 的第四档 —— 局部泛对象槽 (`Dim o As Object`)。
+    # 修前这一格压根不在 slotsToRelease_ 里: 过程里现造现丢, 包装器与它握着的那一枚类引用一起漏,
+    # 循环三次一枚 Terminate 不打。修后甲=3 / 丙再 +1 = 4; 乙是反面证人 (For Each 循环变量
+    # 每一轮由循环自己写, 出口不许退) ⇒ 容器里那一枚还活着。
+    $b127Needles = @("C3ProbeB127-A1-terms=3", "C3ProbeB127-A2-live=B127Item",
+                     "C3ProbeB127-A3-terms=4", "C3ProbeB127-DONE")
+    Test-Vbp 'b127_objlocal_scope_exit' "$Tests\b127_objlocal_scope\B127ObjLocal.vbp" $b127Needles
+    Test-Vbp 'b127_objlocal_scope_exit_x86' "$Tests\b127_objlocal_scope\B127ObjLocal.vbp" $b127Needles -Arch "x86"
+    # 发码两面: 正 = 出口那一发真在 (泛对象档专属注释); 反面 = `oEach` 那一格不许有。
+    Test-EmitcShape 'b127_objlocal_exit_release_shape' @(
+        "$Tests\b127_objlocal_scope\B127ObjLocal.vbp") @(
+        'vb6_ReleaseObject((void**)&o);  /* 账 #305 (甲) 腿④ 泛对象档: scope-exit release')
+    Test-EmitcAbsent 'b127_each_loop_var_never_gets_exit_release' @(
+        "$Tests\b127_objlocal_scope\B127ObjLocal.vbp") @(
+        'vb6_ReleaseObject((void**)&oEach)')
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,

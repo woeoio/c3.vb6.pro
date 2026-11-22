@@ -1,0 +1,6 @@
+Type=Exe
+Name="B127App"
+Module=B127Main; B127Main.bas
+Class=B127Item; B127Item.cls
+Startup="Sub Main"
+ExeName32="B127.exe"
