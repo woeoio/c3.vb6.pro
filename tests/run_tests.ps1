@@ -560,18 +560,20 @@ function Get-RunBudgetSec {
 # 值 = 精确条数 (不是开关: 多一条少一条都红 —— 「负控必须恰好响一次」本身就是判据)。
 $LateBindMissAllow = @{
     'B446' = 1        # tests/b446_latebind —— 负控: Nothing 接收者必须恰好响一次
-    # 下面三行是**已知缺口**的精确条数 (不是「可以随便漏」的白名单) ——
+    # 下面那一行（B190）是**已知缺口**的精确条数 (不是「可以随便漏」的白名单) ——
     # 每一行都要写清是哪个缺口、哪几处、为什么这一刀不修。
     # 条数一变就红 ⇒ 逼着人回来改数字并说明 (门 #40495973903 四条红的归因)。
     # 账 #412: 工程类实例经 As Object 形参 => 无 IDispatch (kind=notdispatchable)。
     # 4 处缺口, 每处各响两行 (DispView 那一档 + ComGetProp 那一档) ⇒ 精确 8 行。
     # 旧值 4 是「缺口处数」, 后来 RTL 把接收者视图那半也打了标记, 行数翻倍而表没跟。
     'B190' = 8
-    'czFormDemo' = 3 # 控件的 Font 伪对象还没实现 => txtEmbed.Font 为空 (kind=null)
-    'Proyecto1' = 23 # 剩余 23 条全是 StdFont.Size (内建运行时对象没有 IDispatch 包器, kind=null)
-    # 第一百一十四刀: 67 -> 23。旧值那 67 = 45 x Collection.Add + 22 x StdFont.Size; 其中 45 处
-    # `With <UDT>: .ObjField.Add …` 是**发错误**造成的空转 (接收者被多解一层, Add 根本没进集合),
-    # §11.96 修好后它们真的落地了 —— 这不是「缺口缩小」, 是不该计入的伤口消失了。
+    # 第一百一十六刀 (§11.98): Proyecto1 23 -> 0 / czFormDemo 3 -> 0（条目删掉 = 期望恰 0）。
+    # 两条旧读数的原形（都是宿主 Font 臂恒交 Empty，接收者 NULL）：
+    #   Proyecto1 23 条 = site=ComGetProp  name="Size"  disp=0  —— Charts2020/ClsResizer.cls:107
+    #                    `CallByName(oCtrl, "Font", VbGet).Size`
+    #   czFormDemo 3 条 = site=ComSetProp name="Name"/"Size"/"Bold" disp=0 —— txtEmbed.Font
+    # 本机 x86 同一产物、同样跑 8~10 秒实测：旧编译 23 / 3，新编译 0 / 0。
+    # 旧的 67 -> 23（第一百一十四刀）也跟着这轮出完：45 x Collection.Add 已在 §11.96 真落地。
     # 当天 CI 实测读数 (Charts2020.err): miss=23 且 name 分组只有 "Size" 一项, 一个 Add 也没有。
     # GUISample 本机验收 (-Category guisample, 不入 CI 判据) 实测基线。
     # 旧值 3: ① CommandBars.EnableGroups ② 全局 Workspace.Flags ③ CommandBars.RefreshColors。
