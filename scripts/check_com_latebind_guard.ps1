@@ -355,6 +355,16 @@ foreach ($inc in @($incCall, $incGet, $incSet)) {
     }
 }
 if ($marker438 -ne 1) { $fail += ("R5 the [C3_HOST_438 #] marker across uc_hostmodel.c + the three .inc = " + $marker438 + " (want exactly 1 -- the format has one owner)") }
+# 第一百一十六刀 (§11.98): 宿主 Font 臂必须交**对象**（VT_DISPATCH 裸指针），不许再交 Empty。
+# `CallByName(oCtrl, "Font", VbGet).Size` 与 `txtEmbed.Font.Name/Size/Bold` 全走这一格;
+# 改回 setVariantDispatch 就等于把 Charts2020 23 条 + czFormDemo 3 条 miss 放回来
+# (本机 x86 同产物实测 23/3 -> 0/0, 见 run_tests.ps1 的 pin 注释)。
+# 安全性由 vb6_ReleaseObject / vb6_ComAddRefDispatch 的 vb6_ComIsDispatchable 判据保证:
+# 字体伪对象首字段是 BSTR, 两个出口都跳过 Release。
+$gp = Strip-Comments262 ((Read-Lines262 $incGet) -join "`n")
+if (-not $gp.Contains('vb6_ho_setVariantObject(out, fr)')) {
+    $fail += ("R5 uc_hostmodel_getprop.inc Font arm must answer the font proxy as an object (vb6_ho_setVariantObject) - Empty 会让 .Font.Size / .Font.Name 读成 miss")
+}
 # 读侧那两处「成员不存在」的**返回口径**必须是 -1 (宿主模型出口据此抛 438); 仍答 1 就退化成
 # 本刀之前的「静默 Empty + 链尾假漏」。
 foreach ($inc in @($incCall, $incGet)) {
