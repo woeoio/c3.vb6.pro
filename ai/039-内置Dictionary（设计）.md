@@ -5279,3 +5279,99 @@ v = col.Count        ' 本机: v 为空, err=0；VB6: 1（待 probe113 Q2 真机
 
 `CStr(col.Count)`（直接取值）是对的；`v = dict.Count`（Dictionary 走 IDispatch）也正常
 （`v=[1] VarType=3`）。只有"宿主回 VT_I4 → Variant 槽"这条搬运路漏，且只在宿主那条路上。
+
+## §11.96 With-UDT 对象字段的方法调用（第一百一十四刀 · 修好 §11.95 被勒住的那处发错误）
+
+### 一、病在哪：一处发错误，两个症状
+
+`With <UDT>` 里对**对象字段**（`Prop As Collection` 这类）做调用，Fix 110t 设的标记是
+
+```
+comObjExpr_  = _vb6_with_5->Prop      ← 字段值本身（对象已经在手上）
+comMemberName_ = "Prop"               ← 只是记着它是哪个字段
+```
+
+下游把这两个字段**分别**当「接收者」和「方法名」用，于是同一件事实被解了两次：
+
+| VB 源码 | 修前发码 | 错在哪 |
+|---|---|---|
+| `With h(0): .Prop.Add 1, "k"` | `ComCall(ComGetObjectProp(_vb6_with_5->Prop, L"Prop"), L"Add", …)` | 拿 Collection 问它自己叫不叫 `Prop`（多解一层） |
+| `With h(0): .Prop(1)` | `ComCall(_vb6_with_5->Prop, L"Prop", …)` | 字段名顶到方法名上（该走默认成员 `L""`） |
+| `With m_Serie(i): .CustomColors(j+1)` | `ComCallInt(_vb6_with_19->CustomColors, L"CustomColors", …)` | 同上，Fix 110t 自己的第一格就一直是错形状 |
+
+第一条在 §11.95 之前一直是**空转**：多出来那层 `ComGetObjectProp(…, L"Prop")` 打到内建 Collection 的宽容岔口（`return 1` + 空对象），接收者变 NULL，`Add` 一次也没真进过集合（账上 60+ 条 `site=ComCall name="Add" disp=00000000` 就是它）。§11.95 让 Collection 老实回 438 之后，这层空转立刻变成**进程级错误**（`Charts2020 exit=438`）——所以 §11.95 当时只能撤回，先把发错误修好。
+
+### 二、修法（三处，都在发码侧）
+
+1. **`cgen_expr_member_generic_access.inc`（新增 ST-GEN3 支）**
+   链式成员访问看到 `isComMarker_` 时，先判「标记的接收者尾巴就是这个成员名」（`objExpr` 以 `-><member>` 收尾）。
+   命中 ⇒ 说明**对象已经在手上**，照「已解好的对象」续链（`comObjExpr_` 不动、`comMemberName_` 换成外层成员名），
+   不再 `resolveComValue("Object")`。不命中 ⇒ 逐字走原路。
+
+2. **`cgen_expr_call_com_bind.inc`**
+   标记被**直接当调用目标**消费时（没有外层成员），若接收者尾巴等于成员名 ⇒ 这个名字是字段名，不是方法名 ⇒ 名字交空，
+   走 `vb6_ComCall` 的默认成员（DISPID 0）。
+
+3. **`cgen_call.cpp`（语句路）**
+   `With <UDT>: .ObjField.Method arg, arg` 这种**语句式带实参**调用（parser 交 `CallStmt(callee=IndexOrCallExpr)`），
+   以前会落到「结构体方法调用」拼成 `_vb6_with_0->Prop.Add(1, _own_1)`（C 结构体方法形，编不过 / 语义全错）。
+   现在在 `emitExpr(*node.callee)` 之后先看标记：有标记 + 有实参 ⇒ 直接发
+   `vb6_ComCall(<字段>, L"<方法>", (void*[]){…}, n)`，与表达式路同一口径。
+
+三处合起来：**字段只解一次，名字只用在它该在的位置**。
+
+### 三、发码对照（撤改前后逐字，5 行 churn 全部是这处语义纠正）
+
+`tests/Charts 2020/ucChartBar/Proyecto1.vbp`（4 站 `Values.Add`）：
+
+```
+修前: vb6_ComCall(vb6_ComGetObjectProp(_vb6_with_4->Values, L"Values"), L"Add", …)
+修后: vb6_ComCall(_vb6_with_4->Values, L"Add", …)
+```
+
+`tests/Charts 2020/ucTreeMaps/Proyecto1.vbp`（`CustomColors(j+1)` 4 站）：
+
+```
+修前: vb6_ComCallInt(_vb6_with_19->CustomColors, L"CustomColors", …)
+修后: vb6_ComCallInt(_vb6_with_19->CustomColors, L"", …)
+```
+
+`tests/VBFlexGridDemo/Builds/VTableHandle.bas` 与 `VBFlexGridDemo.vbp`（`.Enumerable(.Index)`）：
+
+```
+修前: vb6_ComCall(_vb6_with_21->Enumerable, L"Enumerable", …)
+修后: vb6_ComCall(_vb6_with_21->Enumerable, L"", …)
+```
+
+churn: **5 / 762**（`tests/Charts 2020/Proyecto1.vbp`、其 ucChartBar、ucTreeMaps 三个 vbp + VBFlexGridDemo 两行），
+其余 757 行 byte-identical；skip 5（机差 5 枚，与历刀同）。
+
+### 四、复现器与读数
+
+`.temp/k113/wuc2.bas`（五行，含 `Set h(0).Prop = New Collection`）：
+
+```
+修前: H0 count=  H1 count=   (Add 全空转, count 读空)
+修后: H0 count=1 H1 count=2  (Add 真进集合)
+```
+
+真机口径对照（probe112 P3，§11.95 已量）：`Set v = col.NoSuchProperty` ⇒ `v=[111] err=438`。
+第一百一十三刀撤回的那格（内建 Collection 未知名 ⇒ 返回 -1）本刀已恢复：
+
+```
+本机: err=438  type=2 val=111   ← 与真机逐字一致
+```
+
+`tests/test_collmiss.bas` 六格全绿（`CM-1 count=1` / `CM-2 item=5` / `CM-3 v=[111] err=438` /
+`CM-4 count=1 err=0` / `CM-5 v=[222] err=438` / `COLLMISS-DONE`）。
+
+### 五、Charts2020
+
+修后 `exit=6`（`Unhandled VB6 Error #6: Overflow`），与 §11.95 撤回后的基线**同一读数**，
+且 stderr 里 **一条 438 也没有**、`C3_LATEBIND_MISS` 从 60+ 条降到 **0 条** ——
+那串 `Add` 以前一直空转，现在真进了集合（这才是 Charts2020 原本要的行为）。
+
+### 六、仍缺的一格（不属本刀）
+
+`With h(0): .Prop(1)` 的**返回值**交空（本机 `H2 item1=` 空）：接收者与默认成员名都已经对了，
+缺的是「宿主回 VT_I4 → Variant 槽」这条搬运路。已登记在 probe113 Q2/Q2b 待真机读数，见 §11.95 的缺口表。
