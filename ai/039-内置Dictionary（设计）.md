@@ -6188,3 +6188,41 @@ x64 / x86 双架构同针。
 - `vb6_ComSetRefRcv`（`Set o.Prop = x`）走的是借指针，不属本档 —— 在册。
 - 类字段（`Public Col As Collection`）在 `_Destroy` 里不放手（实测 `.temp/k128` KHaz：`F3 terms=0`），
   那是腿⑤ 的字段档，不是实参打包 —— 在册。
+
+### 五、补（第一百二十八刀补）：宿主包装器那一档**不清内容**
+
+第一版把宿主岔（`vb6_ComCallRcv` 里 `vb6_Host_Call` 之后那一处）也接上 `VariantClear`，CI 当场红：
+job `Tests (vbp #8)` 的 `geomcache_x86` 报 `latebind-miss: GCCache 期望 0 条, 实到 12 条`。本机复现同一读数
+（`.temp/k128/gc_x86/gc.err`，12 条 `site=DispView` / `site=ComSetProp name="Width" ... kind=notdispatchable`），
+连带 GC18/GC19 两条针从 `True` 翻 `False`（`raw=3007,2003,1507,1401` / `200,82,134` —— 一条 Width 都没落地）。
+
+根因不在放手本身，而在**谁持有那枚包装器**：`vb6_ComPackObject` 对宿主对象（控件/窗体/集合/字体）发的是
+`vb6_UC_WrapHostObject` 现造的 `Vb6HostWrap`（`refs=1`），而宿主模型 `vb6_coll_push` 只对**工程类包装器**
+（`vb6_ComObject_IsVb6Wrapper`）调 `vb6_ComAddRefDispatch` —— 宿主包装器一格引用都不加，集合里那一枚是**借**的。
+修前那处裸 `free` 结构体，包装器本人留着，`collC(iC)` 读回还能用；接了 `VariantClear`，集合手里那枚当场被
+`HW_Release` free 掉，GC18 的 `With collC(iC) : .Width = 1234` 拿它就是一枚野指针。
+
+口径（两条出口，各按自己的持有方）：
+
+- 宿主岔改调 `vb6_ComDropPackedHostArgs`：`vb6_UC_IsHostWrap` 认得出是**我们包出来的那枚** `Vb6HostWrap` 时
+  只 `free` 结构体、内容留在原处（与 `uc_collection` 那一侧「集合自己持有一份」尚未配对相对）；
+  其余（真 COM / 工程类包装器）照旧走 `vb6_ComDropPackedOne` 的 `VariantClear`；
+- `vb6_UC_IsHostWrap`（`uc_hostmodel.c`）**从后往前**扫包装表：表只追加不撤、地址会被下一枚包装器复用，
+  最新的那条才是它的主人（§B165 第五十四刀那条 stale pair 的教训）；判据只认包装器本人，
+  真宿主对象（HWND / UC 实例 / 集合 / 字体）一个字段都不碰。
+
+读数（同一份源，只换二进制）：
+
+| 针 | 第一版（宿主岔也清内容） | 补后 |
+|---|---|---|
+| `geomcache_x86` latebind-miss | 12 | **0** |
+| `geomcache` / `geomcache_x86` GC18 | False | **True**（`raw=1234,1234,1234,1234`） |
+| 同上 GC19 | False | **True**（`raw=82,82,82`） |
+| `C3ProbeB128-A1/A2` | 1 / 2 | **1 / 2**（本刀的主体不动） |
+
+回归面逐字相同：`tests/b445_refcount`（W1–W39 + DONE）、FProbe7（E1–E3）、FProbe6（D1–D2）、K124（T1–T6）、
+B412（P1–P6 / TERM=23）、B126（A1–A2）、KOwn（G0–G4）、KHaz（F1–F3）。九门 9/9、语料 772 行不动
+（本刀只动 RTL，发码一字未变）。
+
+在册：宿主包装器进集合仍是「一枚只加不退的引用」—— 那是 `uc_collection` 元素自己不 Release 那一格
+（§11.110 边界同源），修前就是这样，不是本刀引入的。
