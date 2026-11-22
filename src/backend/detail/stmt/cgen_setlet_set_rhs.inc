@@ -657,6 +657,13 @@
                    子文字（小一号字体）与粗体/下划线全静默失效。 */
                 c_.emitLine("vb6_UC_SetFont((void*)" + value
                             + ");  /* Set UserControl.Font (DC 字体) */");
+            } else if (slotIsLegacyIfaceView(targetLower)) {
+                /* 账 #305 §11.103 (第一百二十一刀): legacy 接口视图槽是**按值结构体**
+                 * (`vb6_iface_<I> view = {0};`) —— 不是指针。三步那条写法要取址
+                 * (`(void**)&view`) 与 void* 互转 ⇒ cl C2440 (实测夹具 k481_sat / SatWorker.c:
+                 * "cannot convert from 'vb6_iface_SatIface' to 'void *'")。
+                 * 这一档维持裸拷贝, 与改前一字不差; 视图的引用归属另有主人 (腿②)。 */
+                c_.emitLine(target + " = " + value + ";  /* Set (legacy 接口视图 = 按值结构体) */");
             } else {
                 /* 账 #305 §11.103 (第一百二十一刀, 乙): 兜底那条裸拷贝 = **只拷指针**。
                  * 实测 (.temp/k121/typeprobe): `Set s1 = New TofC : Set s2 = s1` 发成
@@ -669,7 +676,7 @@
                  * 两枚闸都在 RTL 里: vb6_ComAddRefDispatch / vb6_ReleaseObject 都先问
                  * vb6_ComIsDispatchable (HWND / 裸工程实例指针 / 伪 vtable 全被跳过),
                  * 于是裸拷贝原有的那几档行为一字不变, 只有真 COM/包装器才计数。 */
-                const std::string refTmp = "_vref" + std::to_string(tempCounter_++);
+                const std::string refTmp = "_vref" + std::to_string(refClaimSeq_++);
                 /* 取引用那一半有前提: 右值若**自带一枚对价引用** (New / 调用形态 /
                  * 新建包装器 `vb6_ComObject_From*Instance(...)`), 那枚就是交给槽的,
                  * 再 claim = 每发净 +1 ⇒ 槽清空也退不到 0 (实测第一版全局 AddRef:
