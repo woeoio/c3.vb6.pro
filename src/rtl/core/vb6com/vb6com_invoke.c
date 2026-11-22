@@ -1250,6 +1250,10 @@ static void vb6_ComSetPropRcv(void* disp, const wchar_t* propName, void* value_v
                 case 5: break;
                 default: *(int32_t*)fp = (int32_t)vb6_VariantToDouble(v); break;
             }
+            /* 第一百一十七刀 (§11.99): 写进代理不算完 —— 有主人就交回控件字体的那六位
+               setter（WM_SETFONT 落盘 + 存字），否则 `.Font.Size = x` 只改了一枚孤儿。
+               hFont 是派生只读量（case 5 不写），不提交。 */
+            if (kind != 5) vb6_UC_FontCommit(disp, propName);
         }
         free(value_void);
         return;

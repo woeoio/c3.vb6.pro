@@ -321,6 +321,8 @@ static void vb6_ho_clientTwips(void* hwnd, int32_t* w, int32_t* h) {
 static int32_t vb6_ho_getFontMember(void* fontProxy, const wchar_t* name, vb6_VARIANT* out) {
     vb6_ComIface_Font* f = vb6_uc_fontOf(fontProxy);
     if (!f) return 0;
+    /* §11.99: 有主人的代理先与控件对齐（静态路径 `.FontSize` 改了也看得见）。 */
+    vb6_UC_FontSyncFromOwner(fontProxy);
     if (_wcsicmp(name, L"Size") == 0)      { vb6_ho_setVariantDouble(out, f->Size); return 1; }
     if (_wcsicmp(name, L"Bold") == 0)      { vb6_ho_setVariantLong(out, f->Bold ? -1 : 0); return 1; }
     if (_wcsicmp(name, L"Italic") == 0)    { vb6_ho_setVariantLong(out, f->Italic ? -1 : 0); return 1; }
@@ -344,16 +346,19 @@ static int32_t vb6_ho_getFontMember(void* fontProxy, const wchar_t* name, vb6_VA
 
 static int32_t vb6_ho_putFontMember(void* fontProxy, const wchar_t* name, const vb6_VARIANT* v) {
     vb6_ComIface_Font* f = vb6_uc_fontOf(fontProxy);
+    int32_t hit = 0;
     if (!f) return 0;
-    if (_wcsicmp(name, L"Size") == 0)      { f->Size = (float)vb6_ho_variantToDouble(v); return 1; }
-    if (_wcsicmp(name, L"Bold") == 0)      { f->Bold = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); return 1; }
-    if (_wcsicmp(name, L"Italic") == 0)    { f->Italic = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); return 1; }
-    if (_wcsicmp(name, L"Underline") == 0) { f->Underline = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); return 1; }
-    if (_wcsicmp(name, L"Strikethrough") == 0) { f->Strikethrough = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); return 1; }
-    if (_wcsicmp(name, L"Weight") == 0)    { f->Weight = vb6_ho_variantToLong(v); return 1; }
-    if (_wcsicmp(name, L"Charset") == 0)   { f->Charset = vb6_ho_variantToLong(v); return 1; }
-    if (_wcsicmp(name, L"Name") == 0)      { f->Name = vb6_ho_variantToBstr(v); return 1; }
-    return 0;
+    if (_wcsicmp(name, L"Size") == 0)      { f->Size = (float)vb6_ho_variantToDouble(v); hit = 1; }
+    else if (_wcsicmp(name, L"Bold") == 0) { f->Bold = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); hit = 1; }
+    else if (_wcsicmp(name, L"Italic") == 0) { f->Italic = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); hit = 1; }
+    else if (_wcsicmp(name, L"Underline") == 0) { f->Underline = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); hit = 1; }
+    else if (_wcsicmp(name, L"Strikethrough") == 0) { f->Strikethrough = (int16_t)(vb6_ho_variantToLong(v) ? -1 : 0); hit = 1; }
+    else if (_wcsicmp(name, L"Weight") == 0) { f->Weight = vb6_ho_variantToLong(v); hit = 1; }
+    else if (_wcsicmp(name, L"Charset") == 0) { f->Charset = vb6_ho_variantToLong(v); hit = 1; }
+    else if (_wcsicmp(name, L"Name") == 0) { f->Name = vb6_ho_variantToBstr(v); hit = 1; }
+    /* §11.99: 写进代理不算完 —— 有主人就交回那六位 setter（落盘 + WM_SETFONT）。 */
+    if (hit) vb6_UC_FontCommit(fontProxy, name);
+    return hit;
 }
 
 /* 账 #305 第二百七十三刀: 「报一行宿主通道认不出的名字」从三条岔口的手抄收成一位主人。

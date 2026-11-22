@@ -319,19 +319,28 @@
         size_t ln = wcslen(name);
         if (_wcsicmp(name, L"Font") == 0 ||
             (ln > 4 && _wcsicmp(name + ln - 4, L"Font") == 0)) {
-            vb6_UCFontRec* fr = (vb6_UCFontRec*)vb6_UC_NewFont();
             /* 第一百一十六刀 (§11.98): 这一格以前走 vb6_ho_setVariantDispatch ⇒ 恒 Empty
                (那个出口的契约是「交 Empty 走 Nothing 分支」, 防 VariantClear 对伪对象调
-               Release)。于是 `CallByName(oCtrl, "Font", VbGet).Size` 的接收者是 NULL:
-               Charts2020 / ClsResizer.cls:107 实测 23 条
-               `[C3_LATEBIND_MISS] site=ComGetProp name="Size" disp=00000000 kind=null`。
+               Release)。于是 `CallByName(oCtrl, "Font", VbGet).Size` 的接收者是 NULL。
                字体代理与 Controls.Item 那族一样是**宿主伪对象**: 交 VT_DISPATCH 裸指针是
                安全的 —— vb6_ReleaseObject / vb6_ComAddRefDispatch 只用
-               vb6_ComIsDispatchable 判据, 首字段是 BSTR 的伪对象一律跳过,
-               vb6_VariantClear 因此不会去调 Release (与 setVariantObject 的既有契约一致)。
-               改成 setVariantObject 之后 .Size/.Bold/.Name 都落到上面那一段
-               (vb6_uc_isFont → vb6_ho_getFontMember / setprop 同族)。 */
-            vb6_ho_setVariantObject(out, fr); return 1;
+               vb6_ComIsDispatchable 判据, 首字段是 BSTR 的伪对象一律跳过。
+               第一百一十七刀 (§11.99): 不再现造一枚默认档孤儿 —— 每个宿主对象只发一枚
+               (存在登记记录的 fontProxy), owner 交给 vb6_Get/SetControlFont* 那六位主人:
+               读回控件设计期字号, 写回落盘到窗口。
+               见 uc_controls.c 的 vb6_UC_NewFontForWindow / FontSyncFromOwner / FontCommit。 */
+            if (h) {
+                if (!h->fontProxy) {
+                    void* win = IsWindow((HWND)obj) ? obj : h->hwnd;
+                    h->fontProxy = win ? vb6_UC_NewFontForWindow(win) : vb6_UC_NewFont();
+                }
+                if (h->fontProxy) { vb6_ho_setVariantObject(out, h->fontProxy); return 1; }
+            }
+            {   /* 没有登记记录的裸窗口：照旧答一枚（没有挂载点就不缓存） */
+                void* win = IsWindow((HWND)obj) ? obj : NULL;
+                void* fp = win ? vb6_UC_NewFontForWindow(win) : vb6_UC_NewFont();
+                if (fp) { vb6_ho_setVariantObject(out, fp); return 1; }
+            }
         }
     }
     // Fix <vbeclipse> rev18: 内建成员都没命中 → 试**本 UserControl 的自有 Property**

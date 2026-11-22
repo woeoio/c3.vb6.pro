@@ -354,6 +354,17 @@ int32_t vb6_Host_Call(void* obj, const wchar_t* name, int32_t argc,
 // argv 与 vb6_Host_Call 同一形: vb6_VARIANT* 数组 (顺序参数)。
 void vb6_FormPaintPictureAt(void* hwnd, int argc, void** argv);
 void* vb6_UC_NewFont(void);
+/* 第一百一十七刀 (§11.99): 「这枚控件自己的字体」的晚绑定代理。
+   与 vb6_UC_NewFont 的差别只有一处: 造完把八档用 vb6_Get/SetControlFont* 那六位主人
+   的**读**侧填成控件现值, 并记下 owner（HWND）。此后:
+     - 读: vb6_UC_FontField 先 vb6_UC_FontSyncFromOwner 刷新（静态路径改了字体也看得见）;
+     - 写: vb6_UC_FontCommit 把那一档交给对应 setter（WM_SETFONT 落盘 + 存字）;
+   于是 `CallByName(ctl, "Font", VbGet).Size` 读回设计期字号而不是默认 8.25,
+   `ctl.Font.Size = x` 也真的缩放控件（Charts2020 ClsResizer 的存/放两半）。 */
+void* vb6_UC_NewFontForWindow(void* hwnd);
+void  vb6_UC_FontSyncFromOwner(void* p);
+void  vb6_UC_FontCommit(void* p, const wchar_t* name);
+void* vb6_UC_FontOwner(void* p);
 // Fix 119: 在 vb6_UC_HostCreate 之前设定该实例的字体 (.frm BeginProperty Font 块)
 void  vb6_UC_SetPendingFont(void* f);
 // Fix <vbeclipse> 2026-10-12 (账 #257 第十二层): 加载路径(带 bag 的顶层 UC)不跑

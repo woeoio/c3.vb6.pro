@@ -4,6 +4,7 @@
 // 跨族共享符号见 vb6forms_uc_internal.h
 
 #include "vb6forms_uc_internal.h"
+#include "vb6forms_prop.h"   // §11.99: 控件字体的六位既有主人 (vb6_Get/SetControlFont*)
 
 #ifdef __cplusplus
 extern "C" {
@@ -328,9 +329,87 @@ void* vb6_UC_NewFont(void) {
     f->Weight = 400;
     fr->tag = VB6_UC_FONT_TAG;
     fr->font = f;
+    fr->owner = NULL;
     fr->next = vb6_ucFonts;
     vb6_ucFonts = fr;
     return f; // 与 cgen 的 vb6_ComIface_Font* 直接字段访问保持一致
+}
+
+/* ============================================================
+ * 第一百一十七刀 (§11.99): 「这枚控件自己的字体」的晚绑定代理
+ * ============================================================
+ *
+ * §11.98 让宿主 Font 臂交出了对象（接收者不再是 NULL），但交的是
+ * vb6_UC_NewFont() 现造的**默认档**孤儿: `.Size` 恒 8.25、写回不落到控件。
+ * 控件的字体本来就有六位主人 (vb6forms_ctrl.c 的 vb6_Get/SetControlFont*，
+ * 它们读写同一格 VB6_CtrlFont 并 WM_SETFONT)，本刀只把代理**挂到**那六位身上:
+ *
+ *   - vb6_UC_NewFontForWindow: 造代理 + 记 owner(HWND) + 用读侧填成控件现值;
+ *   - vb6_UC_FontSyncFromOwner: 每次 FontField 前刷新（静态路径改了字体也看得见）;
+ *   - vb6_UC_FontCommit: 写完一档交回调**对应 setter**（落盘 + 存字），
+ *     没有单档 setter 的 Weight/Charset 走整块 vb6_UC_ApplyFontToWindow。
+ *
+ * 于是 `CallByName(ctl, "Font", VbGet).Size` 读回设计期字号（Charts2020
+ * ClsResizer.cls:107 的存），`ctl.Font.Size = x` 真的缩放控件（同文件 :147 的放）。
+ * ⚠ 代理本身仍在 vb6_ucFonts 表里（vb6_uc_isFont / FontField / 旧调用方都不变），
+ * 只是多了一个 owner；owner 为零的（设计期字体块 / PropertyBag 里那枚）行为与本刀前一致。 */
+static vb6_UCFontRec* vb6_uc_fontRecOf(void* p) {
+    for (vb6_UCFontRec* r = vb6_ucFonts; r; r = r->next)
+        if (p == r->font || p == r) return r;
+    return NULL;
+}
+
+void* vb6_UC_FontOwner(void* p) {
+    vb6_UCFontRec* r = vb6_uc_fontRecOf(p);
+    return r ? r->owner : NULL;
+}
+
+void vb6_UC_FontSyncFromOwner(void* p) {
+    vb6_UCFontRec* r = vb6_uc_fontRecOf(p);
+    vb6_ComIface_Font* f = r ? (vb6_ComIface_Font*)r->font : NULL;
+    void* hwnd = r ? r->owner : NULL;
+    if (!f || !hwnd || !IsWindow((HWND)hwnd)) return;
+    /* 读侧一位不抄: 字号/字体名/四个布尔都问 vb6forms_ctrl.c 那六位主人 ——
+       它们同时是静态路径 `.FontSize` / `.FontName` 的答案，两条路必须同源。 */
+    { float sz = vb6_GetControlFontSize(hwnd);
+      if (sz > 0.0f) f->Size = sz; }
+    { BSTR nm = (BSTR)vb6_GetControlFontName(hwnd);
+      if (nm) { if (f->Name) SysFreeString(f->Name); f->Name = nm; } }
+    f->Bold          = (int16_t)vb6_GetControlFontBold(hwnd);
+    f->Italic        = (int16_t)vb6_GetControlFontItalic(hwnd);
+    f->Underline     = (int16_t)vb6_GetControlFontUnderline(hwnd);
+    f->Strikethrough = (int16_t)vb6_GetControlFontStrikethrough(hwnd);
+    /* Weight/Charset 没有单档 getter; 问答只走「这枚窗口现在在用的字体」那一位
+       主人 vb6_ControlFont (WM_GETFONT → 自存)，不另问一遍窗口。 */
+    { HFONT hf = vb6_ControlFont((HWND)hwnd);
+      LOGFONTW lf;
+      if (hf && GetObjectW(hf, sizeof(lf), &lf) > 0) {
+          f->Weight = lf.lfWeight;
+          f->Charset = lf.lfCharSet;
+      } }
+}
+
+void vb6_UC_FontCommit(void* p, const wchar_t* name) {
+    vb6_UCFontRec* r = vb6_uc_fontRecOf(p);
+    vb6_ComIface_Font* f = r ? (vb6_ComIface_Font*)r->font : NULL;
+    void* hwnd = r ? r->owner : NULL;
+    if (!f || !hwnd || !name || !IsWindow((HWND)hwnd)) return;
+    if (_wcsicmp(name, L"Name") == 0)               vb6_SetControlFontName(hwnd, f->Name);
+    else if (_wcsicmp(name, L"Size") == 0)          vb6_SetControlFontSize(hwnd, f->Size);
+    else if (_wcsicmp(name, L"Bold") == 0)          vb6_SetControlFontBold(hwnd, f->Bold);
+    else if (_wcsicmp(name, L"Italic") == 0)        vb6_SetControlFontItalic(hwnd, f->Italic);
+    else if (_wcsicmp(name, L"Underline") == 0)     vb6_SetControlFontUnderline(hwnd, f->Underline);
+    else if (_wcsicmp(name, L"Strikethrough") == 0) vb6_SetControlFontStrikethrough(hwnd, f->Strikethrough);
+    else /* Weight / Charset: 没有单档 setter，把八档整块发一次 */
+        vb6_UC_ApplyFontToWindow(hwnd, f);
+}
+
+void* vb6_UC_NewFontForWindow(void* hwnd) {
+    void* fp = vb6_UC_NewFont();
+    if (!fp) return NULL;
+    vb6_ucFonts->owner = hwnd;   /* NewFont 前插, 表头就是刚造的这枚 */
+    vb6_UC_FontSyncFromOwner(fp);
+    return fp;
 }
 
 /* 账 #305 第二百七十七刀: 「磅 → 像素」这一问的唯一主人 (lfHeight 那一格)。
@@ -550,6 +629,9 @@ void vb6_UC_ApplyFontToHostWindow(void* hwnd, const void* fontFields) {
 void* vb6_UC_FontField(void* p, const wchar_t* name, int32_t* kind) {
     vb6_ComIface_Font* f = vb6_uc_fontOf(p);
     if (!f || !name || !kind) return NULL;
+    /* §11.99: 有主人的代理先刷新一次 —— 静态路径 (`ctl.FontSize = x`) 改的是
+       窗口上那张字，代理里的八档不刷就是旧值。无主人 (设计期块) 时这行无动作。 */
+    vb6_UC_FontSyncFromOwner(p);
     if (_wcsicmp(name, L"Name") == 0)          { *kind = 0; return &f->Name; }
     if (_wcsicmp(name, L"Size") == 0)          { *kind = 1; return &f->Size; }
     if (_wcsicmp(name, L"Bold") == 0)          { *kind = 2; return &f->Bold; }
