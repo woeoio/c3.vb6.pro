@@ -336,12 +336,16 @@ foreach ($inc in @($incCall, $incGet, $incSet)) {
         $fail += ("R5 calls of vb6_ho_reportUnknown in " + (Split-Path -Leaf $inc) + " = " + $n + " (want " + $wantSites[$inc] + ")")
     }
 }
-# 438 那一档的格式同样只许有一位主人, 且站点钉死 (Call / GetProp 各 1; SetProp 本刀未接 = 0)。
-# 少一枚 = 438 又变成静默 Empty; 多一枚 = 有人把真缺口也改记成 438 把缺口藏起来。
+# 438 那一档的格式同样只许有一位主人, 且站点钉死 (Call 2 / GetProp 1; SetProp 本刀未接 = 0)。
+# 少一枚 = 438 又变成静默 Empty; 多一枚 = 有人把真缺口改记成 438 把缺口藏起来。
+# 第一百一十五刀 (§11.97): Call 从 1 改 2 —— 内建 Collection 的**调用臂**以前对未知名
+# `return 1` (静默答「已处理」), 真机 probe113 Q2c `v = col.NoSuchProperty` = v=[111] err=438。
+# 那一条不是真缺口改记, 而是和 GetProp 臂 (§11.95) 同一件事: 宿主模型里「没这个成员」。
+# 两处都在 uc_hostmodel_call.inc 内, 且认得的那几支 (Add/Item/Remove/Count) 仍 return 1。
 $nRep438 = ([regex]::Matches($hostCode, 'static\s+void\s+vb6_ho_report438\s*\(')).Count
 if ($nRep438 -ne 1) { $fail += ("R5 definitions of vb6_ho_report438 = " + $nRep438 + " (want exactly 1)") }
 $marker438 = ([regex]::Matches($hostCode, '\[C3_HOST_438 #')).Count
-$want438 = @{ $incCall = 1; $incGet = 1; $incSet = 0 }
+$want438 = @{ $incCall = 2; $incGet = 1; $incSet = 0 }
 foreach ($inc in @($incCall, $incGet, $incSet)) {
     $ic2 = Strip-Comments262 ((Read-Lines262 $inc) -join "`n")
     $marker438 += ([regex]::Matches($ic2, '\[C3_HOST_438 #')).Count

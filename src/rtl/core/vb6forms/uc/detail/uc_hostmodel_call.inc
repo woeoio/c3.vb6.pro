@@ -17,7 +17,18 @@
         return 1;
     }
     if (vb6_uc_isColl(obj)) {   // Fix 112c: Collection 方法
-        if (_wcsicmp(name, L"Add") == 0 && argc >= 1) {
+        /* 第一百一十五刀 (§11.97): 真机 probe113 读数把这一臂的三个洞一次量齐 ——
+           Q2  `v = col.Count`          = v=[1] err=0 VarType=3(VT_I4);
+           Q2b `v = col.Item(1)`        = v=[5] err=0;
+           Q2c `v = col.NoSuchProperty` = v=[111] err=438;
+           Q1  `Set v = col.NoSuchProperty` 对照 = 438 (getprop 那臂 §11.95/§11.96 已收口)。
+           改前这一臂三格全答错: Count 没有一条分支 ⇒ 落到末尾 return 1, out 还是 Empty,
+           宿主那枚 VT_I4 根本没被生出来 (`v = col.Count` 读成 Empty/VarType=0);
+           空名字没按默认成员走 (`With h(0): .Prop(1)` 发的是 vb6_ComCall(..., L"", …),
+           于是 `.Prop(1)` 同样 Empty —— 与 Q2 同一个出口, 所以两处一起修);
+           未知名也 return 1 (静默答「已处理」) ⇒ Q2c 读到 err=0 且目标被写成空。 */
+        const wchar_t* cname = (name && name[0]) ? name : L"Item";  // VB6: 空名 = 默认成员
+        if (_wcsicmp(cname, L"Add") == 0 && argc >= 1) {
             BSTR k = (argc >= 2) ? vb6_ho_variantToBstr((vb6_VARIANT*)argv[1]) : NULL;
             /* Fix 134: VB6 Add(Item[, Key, Before, After]) 的位置插入 */
             if (argc >= 3 && argv[2]) {
@@ -40,16 +51,24 @@
             }
             if (k) vb6_Collection_AddKeyed(obj, argv[0], k);
             else   vb6_Collection_Add(obj, argv[0]);
-        } else if (_wcsicmp(name, L"Item") == 0 && argc >= 1) {
+        } else if (_wcsicmp(cname, L"Item") == 0 && argc >= 1) {
             vb6_VARIANT* a = (vb6_VARIANT*)argv[0];
             BSTR k = vb6_ho_variantToBstr(a);
             if (k) vb6_Collection_ItemByKey(obj, k, out);
             else   vb6_Collection_Item(obj, vb6_ho_variantToLong(a), out);
-        } else if (_wcsicmp(name, L"Remove") == 0 && argc >= 1) {
+        } else if (_wcsicmp(cname, L"Remove") == 0 && argc >= 1) {
             vb6_VARIANT* a = (vb6_VARIANT*)argv[0];
             BSTR k = vb6_ho_variantToBstr(a);
             if (k) vb6_Collection_RemoveByKey(obj, k);
             else   vb6_Collection_Remove(obj, vb6_ho_variantToLong(a));
+        } else if (_wcsicmp(cname, L"Count") == 0) {
+            /* 与 GetProp 那臂问同一个主人 (vb6_Collection_Count): 计数只有一个来源。 */
+            vb6_ho_setVariantLong(out, vb6_Collection_Count(obj));
+        } else {
+            /* 与 GetProp 尾巴同口径 (§11.95/§11.96): 未知名不是「答了但没答」, 是成员不存在。
+               返回 -1 由 vb6_ComCallRcv 的宿主分支按 VB6 语义抛 438, 目标保持不动。 */
+            vb6_ho_report438(L"Call", cname, obj);
+            return -1;
         }
         return 1;
     }
