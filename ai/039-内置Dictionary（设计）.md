@@ -5688,3 +5688,47 @@ N3-plain-variant-tn=B216Plain
   `SetProcessDpiAwarenessContext(-4)`，`GetWindowRect` 交的是虚拟化后的 96 口径矩形 ⇒ 位图比
   真窗口小 20%，看着像「图没画全」（本轮 ucChartArea2 就是被它冤枉的）。以后截图脚本一律先声明
   per-monitor v2。
+
+## §11.102 UC 的 TextWidth/TextHeight 跟真屏 DPI 量字（第一百二十刀）
+
+### 一、读数（Charts 2020 · ucPieChart2，用户点名「数字对了但没有百分号 %」）
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| ucPieChart2 五个数据标签 | `23.1` `30.9` `15.3` `14.1` `16.6`（末尾 `%` 全被切掉） | `20.7%` `21.1%` `11.4%` `22.8%` `24%`（全部完整） |
+| 本机 `UserControl.TextWidth("0000000000")` | 60（11px 口径 = 96 DPI） | 75（14px 口径 = 真屏 120 DPI） |
+| `tests/ve_units` | U-SW/U-TW/U-TH 全 True | 全 True（判据是「缇型 = 像素型 × TwipsPerPixelX」，与 DPI 无关） |
+
+### 二、病：量字和画字用了两个 DPI
+
+控件里画字一律是 `MulDiv(oFont.Size, GetDeviceCaps(hDC, LOGPIXELSY), 72)`（Charts 2020 的
+`ucPieChart` / `ucChartArea` / `ucTreeMaps` 三处 `DrawText` 都这么写）；而
+`vb6_uc_measureText` 造度量字体时**恒传 96**（Fix 113k 的旧结论：换真屏 DPI 反而把 Charts
+的图例/轴标签排布推坏 —— 那一版两侧只对上了一半，所以旧结论不成立）。
+
+120 DPI 上比值 14/11 ≈ 1.27：`TextWidth` 比实际画出来小 25%。控件自己拿 `TextWidth` 算标签框
+（`ucPieChart.ctl:1325` `.TextWidth * 1.3`）与标题行高，框就正好差几个像素 —— GDI+ 居中排布时
+最后一个字形整枚被裁掉，于是 `{P}%` 只剩数字。
+
+### 三、修法：量字走调用方给的真屏 DPI
+
+`vb6rtl_com.c::vb6_uc_measureText` 里把两处字面 `96` 换成 `GetDeviceCaps(hdc, LOGPIXELSY)`
+（取不到才回 96）。「八档 → LOGFONT」仍问唯一主人 `vb6_UC_FontLogFont`，本刀只换 DPI 那一格。
+
+### 四、判据
+
+- Charts 2020 真跑（`.temp\k119\charts_dpi_180317\Proyecto1.exe`，DPI=120）：五个标签的 `%`
+  全部回来；同一张图上 ucTreeMaps 项名、ucChartArea1/2 的图例与轴标签、ucChartBar1/2 的
+  类别名均在位；
+- `tests/ve_units` 真跑：`U-RAW tw=540 pix=36 swT=2400 swP=160`、`U-TW/U-TH/U-SW/U-CTX/U-HW/
+  U-CNT/U-ARR/U-ARREVT/U-ARRCLICK/U-ARRDBL/U-ARREXT/U-PMOVE` 全 True、`U-DONE`；
+- `tests/ucTreeView` 真跑：节点图标（Facebook / Instagram / Meta / WhatsApp）与文字、右侧
+  属性页排版逐枚照旧；
+- `gates.ps1` 9/9 绿；RTL-only 刀 ⇒ emit-manifest 763 行**零移动**（无 登记 提交）。
+
+### 五、边界
+
+- DPI=96 的机器上 `GetDeviceCaps` 就是 96 ⇒ 取值与改前逐字节相同，CI 那 22 格口径不动；
+- 只动 **UserControl** 的那一对；普通控件走 `vb6_ControlMeasureTextPx`（按 HWND 取字体）未动；
+- 本刀不改 `CStr(Single)` 的位数语义（整数百分比仍叫 `16%`），要「一律一位小数」得由 .ctl 用
+  `Format$(Percent, "0.0")`。
