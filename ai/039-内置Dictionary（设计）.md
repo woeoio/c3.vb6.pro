@@ -6129,3 +6129,62 @@ L1 end          ' 三次调用, 一枚 [K127Item.Terminate] 都没有
 - 模块级 / 类字段那一档不在本条腿上：本体退出时的整体拆除（VB6 关机时把全局对象置 Nothing）
   是另一格机制，今天 `vb6_Exit()` 只调 `vb6_ComExit()`—— 在册。
 - `Exit Sub` / `Exit Function` 与正常出口走同一个 `vb6_proc_exit`，本档自动跟着（与腿④ 其余三档同一条路）。
+
+## §11.110 晚绑定实参打包后的「内容」放手：一个出口、三处裸 free（第一百二十八刀）
+
+### 一、缺口
+
+晚绑定那八个出口的实参是**堆上自造的 VARIANT**（`vb6_ComPackObject` / `vb6_ComPackVB6InstanceRaw` /
+`vb6_ComPack_<Cls>` …）：结构体是 `calloc` 的，内容里那一枚引用（或 BSTR）只有 `VariantClear` 会退。
+修前有三处收尾只 `free` 结构体、从不碰内容：
+
+1. `vb6_ComCallRcv` 的**宿主对象**岔口（`vb6_Host_Call` 之后）—— 内建 `Collection` 是宿主对象
+   （`vb6_uc_isColl`），所以 `c.Add o` 每次都从这里过；
+2. IUnknown `AddRef`/`Release` 的**合成**岔口（按名直发那一路）；
+3. `vb6_ComSetPropArgRcv`（`d.Item(k) = 值` 这一形）：值那一枚与索引参数一概裸 free。
+
+宿主集合那一头早就按「打包方会 `VariantClear`」写好了自己的对价（`vb6_coll_push` 里那句
+"对象档: 集合自己持有一份 —— 此前这里借用不计数, 打包方那次 VariantClear 就把包装器 free 掉了"，
+账 #305 §B165 第五十四刀加的 `vb6_ComAddRefDispatch`），所以这一族漏是**那一句对价落了空**，
+不是语义分歧。
+
+读数（`.temp/k128`，同一份源、只换二进制）：
+
+```
+' 修前
+G3 terms=1            ' c.Add o 之后 Set o = Nothing
+G4 terms=1 count=0    ' Remove 走完, 元素一枚 Terminate 都不打
+P3 terms=0 count=0    ' d("k") = o 之后 d.Remove "k"
+' 修后
+G4 terms=2 count=0
+P3 terms=1 count=0
+```
+
+### 二、机制（两条口径，各一位主人）
+
+- `vb6_ComDropPackedArgs(a, argc)`（既有）与 `vb6_ComDropPackedOne(pv)`（本刀新增，单枚）：
+  **内容问 `VariantClear`，结构体才 `free`**；
+- `VT_BYREF` 跳过：出参指向调用方存储，引用归调用方（这条判据与 `dp.rgvarg` 那一段一字相同）。
+
+三处站点全部改成调这两个口，`vb6_ComCallRcv` 主路（`dp.rgvarg` 浅拷贝那一段）本来就是这个口径。
+
+### 三、夹具与读数
+
+`tests/b128_argpack_release/`（`B128Item.cls` + `B128Main.bas` + `B128ArgPack.vbp`）：
+
+| 针 | 修前 | 修后 |
+|---|---|---|
+| `C3ProbeB128-A1-terms`（宿主那岔：`Collection.Add` + `Remove`） | 0 | **1** |
+| `C3ProbeB128-A2-terms`（真 IDispatch 那岔：`d("k") = o` + `d.Remove`） | 0 | **2** |
+| `C3ProbeB128-DONE` | ✓ | ✓ |
+
+x64 / x86 双架构同针。
+
+### 四、边界（在册）
+
+- `vb6_ComSetPropRcv` 自己那一条（`o.Prop = 值`，无索引）仍然是裸 `free`：它同时服务 Font / Extender
+  的**借用指针**写（`case 4: *(void**)efp = punkVal`，明写"不接管所有权"），放手口径要先量清
+  「借指针那几格谁持有」再动 —— 在册。
+- `vb6_ComSetRefRcv`（`Set o.Prop = x`）走的是借指针，不属本档 —— 在册。
+- 类字段（`Public Col As Collection`）在 `_Destroy` 里不放手（实测 `.temp/k128` KHaz：`F3 terms=0`），
+  那是腿⑤ 的字段档，不是实参打包 —— 在册。
