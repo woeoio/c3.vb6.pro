@@ -6066,3 +6066,66 @@ ctrlmscomm，以 CI 那台为准）—— 也就是说这条闸在存量语料�
 - 只拦「类模块的 `Public` 字段被当模块级变量」这一路；类模块自己内部的裸名（声明口登记的）不变。
 - 类模块字段符号本身仍留在符号表里（推理、成员表、跨模块类型查询都没动），本刀只改它在
   `knownObjectVars_` 里的影子。
+
+## §11.109 腿④ 的第四档：局部泛对象槽（`Dim o As Object`）在过程出口放手（第一百二十七刀）
+
+### 一、缺口与读数
+
+`slotsToRelease_` 那张表里一直只有三档：接口薄指针（`isView`）、工程类实例（`clsName`）、
+数组载体（`isCarrier`）。**局部泛对象槽不在表里** —— 过程里现造现丢，包装器与它握着的那一枚
+类引用一起漏，`Class_Terminate` 永远走不到：
+
+```
+' 修前 (.temp/k127/localobj)
+　one done
+　one done
+　one done
+L1 end          ' 三次调用, 一枚 [K127Item.Terminate] 都没有
+
+' 修后
+　one done
+　[K127Item.Terminate]
+　…（三枚）
+```
+
+对照臂（同一份源、只去掉 `Dim o As Object` 那一格）：工程类局部（`Dim it As K127Item`）本来就会在出口
+放手 —— 所以漏的只有**泛对象那一档**，不是腿④ 整条（这也是为什么夹具里两种声明同处一室）。
+
+### 二、机制（三处，各一位主人）
+
+1. **登记口**（`cgen_localdecl.cpp` 的 `void*` 那一臂，与工程类 / 接口两档同处）：只认
+   声明名就是 `Object` 的那一档；`Static` / `Static Sub` 里那一格跨调用活着（C 侧 static 存储），
+   `WithEvents` 那一格另有主人 —— 两条都不登记。
+2. **出口发码**（`emitIvrefScopeRelease`）：`vb6_ReleaseObject((void**)&o);`。判据复用 Fix 191
+   那一道（`vb6_ComIsDispatchable`）：包装器 / 真 IDispatch 退一轮，裸工程实例指针与 HWND 只清槽
+   不越权；入口先清槽再放手（与 §11.105 那条次序同一口径）。
+3. **两条撤登**（`dropLateObjSlotRelease`）：
+   - `For Each` 的循环变量（`cgen_control.cpp`）：每一轮由循环自己写，元素那一枚归容器/迭代器，
+     出口放手 = 无对价的退；
+   - 这一格的**地址交给了外部 Declare** 的那一档：复用既有 `dropClassSlotRelease`（它按
+     「非 view」撤，正好覆盖本档）。
+
+### 三、风险臂量过（不是拍脑袋）
+
+| 形状 | 探针 | 读数 |
+|---|---|---|
+| `Set o = Held()`（工程内函数交回一枚泛对象） | `.temp/k127/neg` | `N1 keep` → `N2 still=K127Item seed=11`（不过退） |
+| `Set o = c.Item(1)`（Collection 元素） | 同上 | `N3 item=K127Item` / `N4 keep=K127Item`（不过退） |
+| `For Each oEach In c` | 夹具乙 | `A2-live=B127Item`（撤登生效，容器里那一枚还活着） |
+| 声明住在 `If` 括号里 | 夹具丙 | 编得过（提升到序言）+ 照样放手（`A3-terms=4`） |
+
+### 四、回归面
+
+- `tests/b445_refcount` 全夹具：针上的 13 条（W1–W10 / W38 / W39 / DONE）逐字相同；
+- FProbe7 / FProbe6 / K124 / B412 / B126 五族读数逐字相同（`E1..E3` / `D1..D2` / `T1..T6` /
+  `P1..P6` / `A1..A2`）；
+- 全语料发码：只有**带局部 `As Object` 的文件**各多出一行 `vb6_ReleaseObject((void**)&o);`，
+  其余行一字未动（登记那一刀的数字见下面的「登记」节）。
+
+### 五、边界
+
+- 只认声明名就是 `Object` 的那一档。宿主类局部（`Dim c As Collection` / `As Dictionary`）与外部
+  COM 局部同样会漏一枚包装器，但它们不在本档（需要先量清「那些槽里躺着的是不是借用」）—— 在册。
+- 模块级 / 类字段那一档不在本条腿上：本体退出时的整体拆除（VB6 关机时把全局对象置 Nothing）
+  是另一格机制，今天 `vb6_Exit()` 只调 `vb6_ComExit()`—— 在册。
+- `Exit Sub` / `Exit Function` 与正常出口走同一个 `vb6_proc_exit`，本档自动跟着（与腿④ 其余三档同一条路）。
