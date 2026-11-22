@@ -384,6 +384,12 @@
     void trackIvrefLocalForRelease(const std::string& cName);  // B05: 登记局部接口变量
     // 账 #305 §B218 (甲) 腿④: 工程类那一档的登记入口 + 两档共用的那条夹
     void trackClassSlotForRelease(const std::string& cName, const std::string& clsName);
+    // 账 #305 §11.109 (第一百二十七刀): 腿④ 的第四档 —— 局部 `As Object` (C 侧 void*)。
+    // 出口那一发是 vb6_ReleaseObject((void**)&x): 包装器/真 IDispatch 退一轮, 裸工程实例
+    // 与 HWND 由 Fix 191 那道判据拦下 (只清槽)。循环变量 (For Each) 与地址交出去过的那
+    // 两格由 dropLateObjSlotRelease 撤登 (无对价的退)。
+    void trackLateObjSlotForRelease(const std::string& cName);
+    void dropLateObjSlotRelease(const std::string& expr);
     // 账 #305 §B218 (甲) 腿④ 第二道夹: 这一格的地址交给了外部 Declare ⇒ 出口不放手 (只撤类档)。
     void dropClassSlotRelease(const std::string& expr);
     // 第一百五十二刀: arrayName 非空 = 第三档「数组载体」(clsName 那一格空着不用)。

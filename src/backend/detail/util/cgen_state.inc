@@ -680,6 +680,10 @@
         bool isCarrier = false;
         bool freeCarrier = false;  // 只有载体档用: 出口除逐枚交回之外还销毁载体
         std::string arrayName; // 只有载体档带带数组名
+        // 账 #305 §11.109 (第一百二十七刀): 第四档「泛对象槽」(局部 `As Object`, C 侧 void*)。
+        // 出口发 vb6_ReleaseObject((void**)&x) —— 判据与语句站那三步同一个 (Fix 191 的
+        // vb6_ComIsDispatchable 也在这条入口上, 裸工程实例 / HWND 一律只清槽不越权)。
+        bool isLateObj = false;
     };
     std::vector<SlotRelease> slotsToRelease_;
     // 账 #305 §B218 (甲) 第一百五十六刀: 「这一档局部数组的载体有没有在本过程里被整体用掉」

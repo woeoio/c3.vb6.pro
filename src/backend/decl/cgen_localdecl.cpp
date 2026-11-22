@@ -319,6 +319,20 @@ void CCodeGen::emitLocalDeclCode(LocalDeclStmt& node) {
                 }
                 if (!isProjectClassVar) {
                     knownObjectVars_.insert(lower);
+                    // 账 #305 §11.109 (第一百二十七刀): 腿④ 的第四档 —— 局部泛对象槽在正常
+                    // 出口放手。修前这一格不在 slotsToRelease_ 里 (只有接口 / 工程类 / 载体),
+                    // 于是 `Dim o As Object` 握着的包装器与它那一枚类引用一起漏掉
+                    // (实测: 过程里现造现丢, 循环三次一枚 Terminate 都不打)。
+                    // 只认声明名就是 `Object` 的那一档 (窗体/控件/类实例另有主人); Static
+                    // 那一格跨调用活着 (C 侧 static 存储), 出口放手 = 下次进来读已释放块。
+                    bool isPlainObject = false;
+                    if (var.asType && var.asType->kind == ASTNodeKind::SimpleTypeRef) {
+                        isPlainObject = Symbol::toLower(
+                            static_cast<SimpleTypeRef&>(*var.asType).name) == "object";
+                    }
+                    if (isPlainObject && !var.isStatic && !inStaticProc_ && !var.isWithEvents) {
+                        trackLateObjSlotForRelease(cIdent(var.name));
+                    }
                 }
             }
 
