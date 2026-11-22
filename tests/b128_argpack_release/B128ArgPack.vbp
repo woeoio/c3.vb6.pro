@@ -1,0 +1,6 @@
+Type=Exe
+Name="B128App"
+Module=B128Main; B128Main.bas
+Class=B128Item; B128Item.cls
+Startup="Sub Main"
+ExeName32="B128.exe"

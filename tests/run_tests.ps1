@@ -12160,6 +12160,15 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcAbsent 'b127_each_loop_var_never_gets_exit_release' @(
         "$Tests\b127_objlocal_scope\B127ObjLocal.vbp") @(
         'vb6_ReleaseObject((void**)&oEach)')
+
+    # 账 #305 §11.110 (第一百二十八刀): 晚绑定实参打包后的「内容」放手。
+    # 打包函交出的是堆上自造的 VARIANT: 结构体 free 之前内容得问 VariantClear。
+    # 修前宿主对象那一岔 (内建 Collection 走 vb6_Host_Call) 与 vb6_ComSetPropArg 两处
+    # 只 free 结构体 ⇒ 每发实参漏一枚引用, 元素到 Remove 也退不到 0。
+    # 甲 = 宿主那岔 (Collection.Add + Remove), 乙 = 真 IDispatch 那岔 (d("k") = o + Remove)。
+    $b128Needles = @("C3ProbeB128-A1-terms=1", "C3ProbeB128-A2-terms=2", "C3ProbeB128-DONE")
+    Test-Vbp 'b128_argpack_release' "$Tests\b128_argpack_release\B128ArgPack.vbp" $b128Needles
+    Test-Vbp 'b128_argpack_release_x86' "$Tests\b128_argpack_release\B128ArgPack.vbp" $b128Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
