@@ -5911,3 +5911,63 @@ if (me->__comObj != NULL) return 0UL;   /* wrapper owns teardown */
 - `TypeName` 的 512 格反查表口径（§11.104 第五条）照旧未动。
 - 借用型包装器的 `Is` 同一性仍靠 `__comObj` 回填复用；回填现在只是「同一性缓存」，不再是「托孤」——
   它的清理由包装器自己的拆解负责。
+
+## §11.106 只读谓词的实参不再偷取对象引用：`TypeName` 一类调用的临时 Variant 归属（第一百二十四刀）
+
+### 一、读数（探针 `.temp/k124/probe`、`.temp/k122/fieldprobe/FProbe6`）
+
+`FProbe6` 同一份源的三态：
+
+| 台面 | 第一百二十二刀后 | 第一百二十三刀后 | 本刀后 |
+|---|---|---|---|
+| `D1 name=TypeName(x.A)` | `Object` | `FC` | `FC` |
+| seed=51 的 Terminate | 有 | **没有** | **有** |
+| `D2 term=` | 1 | 0 | 1 |
+
+本刀前的 trace（`C3_COM_RC_TRACE=1`）：`FROM-BORROW rc=1` → `ADDREF cnt=2` → `RELEASE cnt=1`
+—— 那一枚 `AddRef` 之后再无对应 `Release`，于是 `Set x.A = Nothing` 只能把槽退到 1，类引用计数到不了 0。
+
+`K124` 探针（修后）：`T1 FC True` / `T2 FC True` / `T3 String 8` / `T4 False True` /
+`T5 FC True` / `T6 Long() 8195 True True`（数组与 Null 两档也逐位对）。
+
+### 二、成因
+
+`vb6_TypeName` / `vb6_VarType` / `vb6_IsObject` / `vb6_IsNull` / `vb6_IsEmpty` / `vb6_IsArray` /
+`vb6_IsDate` / `vb6_IsError` / `vb6_IsNumeric` 的形参都是**按值** `vb6_VARIANT`，而发码把实参
+包成表达式里的临时：`vb6_TypeName(vb6_VariantFromValue(vb6_VariantFromValue(x->A)))`。
+`vb6_VariantFromValue` 的指针档是 `vb6_VariantObject`，按 Fix 024 **必须 AddRef**（因为 Variant 析构
+会 Release）；而这枚临时是表达式里的右值，**没人会 `vb6_VariantClear` 它** ⇒ 每读一次漏一枚引用。
+对象是包装器时，那一枚就是包装器的命：槽清空后仍 rc=1。
+
+（同一族里只有对象档会漏：`wchar_t*` 的 `vb6_VariantString` 本来就只存指针不拷贝，标量档不拥有任何东西。）
+
+### 三、修法
+
+1. RTL 加一对**借用档**：`vb6_VariantObjectBorrowed`（`VT_DISPATCH` + 指针，不 AddRef）与它的
+   `_Generic` 入口 `vb6_VariantBorrowFromValue`（臂表与正式档逐条对齐，只把 default 换成借用的那枚）。
+2. 发码：`cgen_expr_call_builtin_argtype.inc` 里新增一站 —— `callee` 是上述九枚之一时，把每个实参
+   **最外层的装箱名前缀** `vb6_VariantFromValue(` 换成 `vb6_VariantBorrowFromValue(`（外层那两层都
+   换；嵌套子表达式里的装箱一律不动，它们自有一套所有权）。
+3. `scripts/gen_variant_slot_prefixes.ps1` 重跑（生成物 61 → 62 名，多出的就是 `vb6_VariantObjectBorrowed`）。
+
+能借的根据：这九枚 RTL 体只读 `vt` 与 payload，既不存也不清（`vb6rtl_conv.c` 逐行可对）；实参的
+生存期覆盖整个调用。借档**不分配任何东西**，也就不存在「谁退」那一问。
+
+### 四、判据
+
+- `FProbe6`：`D1 name=FC term=0` → `[FC.Terminate seed=51]` → `D2 term=1`，出口再拆 seed=0；
+  trace 里不再出现无主的 `ADDREF`；
+- `K124` T1..T6 六臂全对（含数组 `Long() / 8195 / True` 与 `Null`）；
+- **A/B 实证**（`.temp/k124/ab`，四份改过的夹具：test_variant、test_vbnet_ext、GCCache、CtrlState）：
+  把新产物的 `vb6_VariantBorrowFromValue(` 改回原名后与基线产物**逐字节相同**；借用档出现次数
+  12/7/6/6 —— 即改动只有这一个名字；
+- `gates.ps1` 9/9 绿（exe sha=`dab63bf72166`）；5 份静态普查全 PASS；
+- emit-manifest 763 行 changed=122：全部是「含这九枚谓词且有指针/对象实参」的产物，形状如上一行。
+
+### 五、边界（在册，本刀不碰）
+
+- `struct tagSAFEARRAY*` 那一臂仍用正式档 `vb6_VariantFromParamArray`（它自己拷贝、自己拥有），
+  借用档没有覆盖它 —— 那条路的临时 Variant 归属是另一个话题。
+- 任何会**存**实参的出口（`Array(...)`、`Collection.Add`、形参是 ByVal Variant 的用户过程）
+  一律不用借用档：那一枚引用是它们要拿走的，借了就是悬空。
+- 用户过程（非内置）的 ByVal Variant 形参仍然走正式档：漏不漏归于被调方清不清，与本刀无关。
