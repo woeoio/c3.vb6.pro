@@ -658,7 +658,34 @@
                 c_.emitLine("vb6_UC_SetFont((void*)" + value
                             + ");  /* Set UserControl.Font (DC 字体) */");
             } else {
-                c_.emitLine(target + " = " + value + ";  /* Set */");
+                /* 账 #305 §11.103 (第一百二十一刀, 乙): 兜底那条裸拷贝 = **只拷指针**。
+                 * 实测 (.temp/k121/typeprobe): `Set s1 = New TofC : Set s2 = s1` 发成
+                 * `s2 = s1;` 不取引用, 随后 `Set s1 = Nothing` 就 vb6_ReleaseObject 把
+                 * 唯一那一枚退掉 ⇒ s2 悬垂 (Label="" seed=0 + C3_LATEBIND_MISS
+                 * notdispatchable); 三槽同理, 第一枚清掉即销毁。旧值还另有第二面:
+                 * 槽里有值时再 Set 一次 = 裸覆写不退 => 泄漏。
+                 * VB6 口径三步, 顺序是硬口径 (先取新的再退旧的 ⇒ `Set a = a` 安全):
+                 *   取引用 -> 退旧 (置 NULL) -> 写新的
+                 * 两枚闸都在 RTL 里: vb6_ComAddRefDispatch / vb6_ReleaseObject 都先问
+                 * vb6_ComIsDispatchable (HWND / 裸工程实例指针 / 伪 vtable 全被跳过),
+                 * 于是裸拷贝原有的那几档行为一字不变, 只有真 COM/包装器才计数。 */
+                const std::string refTmp = "_vref" + std::to_string(tempCounter_++);
+                /* 取引用那一半有前提: 右值若**自带一枚对价引用** (New / 调用形态 /
+                 * 新建包装器 `vb6_ComObject_From*Instance(...)`), 那枚就是交给槽的,
+                 * 再 claim = 每发净 +1 ⇒ 槽清空也退不到 0 (实测第一版全局 AddRef:
+                 * 探针 Tof 全场 term=0, 连 `Set q = New TofC : Set q = Nothing` 都不销毁)。
+                 * 所以只对**裸槽标识符**(拷的是持有者的那一枚)取引用; 退旧那一半对所有
+                 * 形状都做 (槽里的旧值就是槽自己的那一枚)。 */
+                const bool rhsOwned =
+                    rhsTransferred
+                    || (node.value && node.value->kind == ASTNodeKind::IndexOrCallExpr)
+                    || value.find("vb6_ComObject_From") != std::string::npos
+                    || value == "NULL";
+                c_.emitLine("{ void* " + refTmp + " = (void*)(" + value + "); "
+                            + (rhsOwned ? std::string() : ("vb6_ComAddRefDispatch(" + refTmp + "); "))
+                            + "vb6_ReleaseObject((void**)&" + target + "); "
+                            + target + " = " + refTmp
+                            + "; }  /* Set: 取引用 + 退旧值 (VB6 引用计数口径) */");
             }
         }
     }

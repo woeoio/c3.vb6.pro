@@ -830,6 +830,20 @@ const char* vb6_ComObject_ClassNameA(void* v) {
     return (s && s[0]) ? s : NULL;
 }
 
+/* 账 #305 §11.103: `TypeOf x Is <项目类>` 的身份问句 (一号口径)。
+ * ① 包装器 (Object/Variant 槽里的那一位) → 问上面那位兄弟;
+ * ② 裸实例指针落进 void* 槽 (工程内过程交回来的那一枚) → 问 512 格反查表。
+ * 反查表只按指针比对, 不解引用 ⇒ 对任意 void* 安全; 表外答 NULL。 */
+const char* vb6_ComObject_ClassNameOfAny(void* v) {
+    const char* s;
+    const vb6_CoClassDesc* d;
+    if (!v) return NULL;
+    s = vb6_ComObject_ClassNameA(v);
+    if (s) return s;
+    d = vb6_FindProjectClassDesc(v);
+    return (d && d->classVariable && d->classVariable[0]) ? d->classVariable : NULL;
+}
+
 // ============================================================
 // ExeComBridge 03: 工程类实例 → COM 调用实参 (VT_DISPATCH VARIANT*)
 // ============================================================

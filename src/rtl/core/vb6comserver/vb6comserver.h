@@ -208,6 +208,11 @@ BSTR vb6_ComObject_ClassNameBStr(void* v);
 // **每迭代一枚**都要问一次类名 ⇒ 那里要的是 desc 里那根现成的 ANSI 名, 不是又一枚 BSTR。
 // 交回的指针归 desc 所有 (静态寿命), 调用方只比名字不释放; 认不出口径与兄弟一字相同 (NULL)。
 const char* vb6_ComObject_ClassNameA(void* v);
+/* 账 #305 §11.103: `TypeOf x Is <项目类>` 要问的那一位 —— 包装器先问 ClassNameA,
+ * 不是包装器 (裸实例指针落进 void* 槽 / 工程内过程交回来的那一枚) 再问 512 格反查表。
+ * 两位主人都在本模块, 不新开表; 表外答 NULL (调用方按"否"处理)。
+ * 不分配、不归调用方释放。 */
+const char* vb6_ComObject_ClassNameOfAny(void* v);
 
 // ExeComBridge 03: 把工程类实例包成"COM 调用实参格式"的 VARIANT* (VT_DISPATCH).
 // cgen 为每个类模块生成 vb6_ComPack_<类名>(void* instance) 包一层本函数; 触发场景

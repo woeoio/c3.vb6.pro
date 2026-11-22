@@ -353,6 +353,11 @@ double vb6_Pow(double base, double exp);
 // 对象操作
 void* vb6_NewObject(const wchar_t* className);
 int32_t vb6_TypeOf(void* obj, const wchar_t* typeName);
+/* 账 #305 §11.103 (第一百二十一... 刀): 项目类实例跨 void* 槽之后的 TypeOf —— 正面判据。
+ * 只认两位现成主人: 包装器自报类名 (vb6_ComObject_ClassNameA, 与 TypeName 同源) 与
+ * 工程类反查表 (vb6_FindProjectClassDesc, 裸实例落进 void* 槽那一格)。
+ * 表外一律 0 (假) —— 不碰 QI 那条腿, 也不把"猜不出"说成"是"。 */
+int32_t vb6_TypeOfProject(void* obj, const wchar_t* typeName);
 void* vb6_DictAccess(void* obj, const wchar_t* key);
 // C30-7: `rst!Field = v`（Recordset 字段写）。vb6_DictAccess 是读侧糖，函数调用
 // 不是左值，赋值必须另走这里（否则 C2106）。实现见 vb6rtl_conv.c。

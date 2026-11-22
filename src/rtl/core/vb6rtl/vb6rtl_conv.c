@@ -946,6 +946,35 @@ int32_t vb6_TypeOf(void* obj, const wchar_t* typeName) {
     return 0;
 }
 
+/* 账 #305 §11.103: 项目类实例跨 void* 槽之后的 `TypeOf x Is <项目类>`。
+ * 改前这一格落到上面那个恒假桩: 实测 `Set o = <TofC 实例>` (Object 槽) /
+ * `v = <实例>` (Variant 槽) / ByVal Object 形参 三形都答 False (VB6 答 True),
+ * 而同一枚对象的 TypeName 已经答对了类名 —— 判据不是缺, 是没人问。
+ * 两位主人 (都已在, 不新开表):
+ *   ① 包装器: vb6_ComObject_ClassNameA 自带三闸 (IsBoxed), 非包装器交 NULL;
+ *   ② 裸实例指针落进 void* 槽: vb6_FindProjectClassDesc 的 512 格反查表。
+ * 只答**正面命中**: 表外 / 外部 IDispatch / 控件 HWND 一律 0, 与改前同向
+ * (假阴性不会把原本对的翻成错的)。派生类按基类名问仍答 False —— 与 Fix 193 那条
+ * 静态档同一个残留边界, 要真链条就得给每个类加运行时类型字段, 不在这一刀。 */
+int32_t vb6_TypeOfProject(void* obj, const wchar_t* typeName) {
+    /* 身份只问一位主人: 包装器自报类名 / 裸实例反查表 (两档同在 comserver_obj 里)。
+     * 本文件不引 comserver 头 (那是服务端模块的地盘), 照本文件既有写法 extern 这一句。 */
+    extern const char* vb6_ComObject_ClassNameOfAny(void* v);
+    const char* nm;
+    size_t i;
+    if (!obj || !typeName) return 0;   /* Nothing 不匹配任何类型 */
+    nm = vb6_ComObject_ClassNameOfAny(obj);
+    if (!nm) return 0;                 /* 表外 / 外部 IDispatch / 控件 HWND ⇒ 与改前同向 */
+    for (i = 0; nm[i] && typeName[i]; ++i) {
+        wchar_t a = (wchar_t)(unsigned char)nm[i];
+        wchar_t b = typeName[i];
+        if (a >= L'a' && a <= L'z') a = (wchar_t)(a - 32);
+        if (b >= L'a' && b <= L'z') b = (wchar_t)(b - 32);
+        if (a != b) return 0;
+    }
+    return (nm[i] == 0 && typeName[i] == L'\0') ? -1 : 0;   /* VB6 True = -1 */
+}
+
 void* vb6_DictAccess(void* obj, const wchar_t* key) {
     (void)obj; (void)key;
     return NULL;
