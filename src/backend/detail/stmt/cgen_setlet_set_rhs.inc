@@ -315,6 +315,15 @@
             // 另两臂读数同形但无害: 包装器带 __comObj 后类 Release 不再拆 (读法同上)。
             // 问 AST 而不是名字表: 拿不到类名时 (As Object / Variant) 照旧落到下面那条。
             if (node.target && !inferClassTypeOfExpr(*node.target).empty()) return false;
+            // 账 #305 §11.105 (第一百二十三刀): **非 me 接收者**的成员访问对象槽 —— `q.O`
+            // (q 是局部/形参/模块级工程类变量) 与 With 体的 `_vb6_with_N->O`。
+            // 实测 (.temp/k122/fieldprobe FProbe6): 不加这一臂时 `Set x.A = y`(y 是声明档
+            // FC 局部) 把裸 vb6_cls_FC* 直写进 void* 槽 ⇒ `TypeName(x.A)` 答 "Object"
+            // (VB6 答 "FC"), 且槽里拿不到 IDispatch, 晚绑定成员调用必落空。
+            // 判据复用发码自带的标记而不另开名单: `field voidptr` 只由成员读的 void* 字段
+            // 那一支追加 (cgen_expr_member_class_fallback.inc); 外部 COM 字段进装箱站后会被
+            // classHasCoClassDesc / 已有包装器两道闸挡回, 行为不变。
+            if (targetLower.find("field voidptr") != std::string::npos) return true;
             return knownObjectVars_.count(targetLower) > 0;
         };
 

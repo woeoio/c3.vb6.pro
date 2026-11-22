@@ -299,6 +299,11 @@ std::string wideName = "L\"" + bareName + "\"";
             entry.emitLine("NULL,  /* ifaceThinPtr (无新式接口: QI 走胖路) */");
             entry.emitLine("NULL,  /* instanceClaimRelease */");
         }
+        // 账 #305 §11.105 (第一百二十三刀): 借用型包装器的类引用归属 —— 两枚存根无条件发
+        // (每个类都有自己的 AddRef/Release, 与工厂/销毁两格同源), 于是借用型包装器
+        // 建时取一枚、拆时退一枚, 不再把 __comObj 回填当「托孤」。
+        entry.emitLine("(void*(*)(void*))" + clsStruct + "_AddRef,  /* classAddRef */");
+        entry.emitLine("(unsigned long(*)(void*))" + clsStruct + "_Release,  /* classRelease */");
         entry.dedent();
         entry.emitLine("},");
     };

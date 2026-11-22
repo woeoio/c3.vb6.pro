@@ -194,7 +194,13 @@ static ULONG STDMETHODCALLTYPE ComObj_Release(vb6_ComObject* self) {
                 fflush(stderr);
             }
         } else if (self->vb6Instance) {
-            *(void**)self->vb6Instance = NULL;
+            /* 账 #305 §11.105 (第一百二十三刀): 借用型包装器拆解 = 清回填 + **退掉自己那一枚类引用**。
+             * 顺序是硬口径: 先摘 `__comObj` 再退 —— 生成类的 Release 拿着 `__comObj != NULL`
+             * 当作「wrapper owns teardown」的信号, 不先摘就会把最后一次退场又挡回去。
+             * 这一退可能是实例的最后一枚 (typed 变量已经走了), 于是当场 Class_Terminate。 */
+            void* inst = self->vb6Instance;
+            *(void**)inst = NULL;
+            if (self->desc && self->desc->classRelease) self->desc->classRelease(inst);
         }
         self->vb6Instance = NULL;
         // Release PCI
@@ -590,6 +596,7 @@ vb6_ComObject* vb6_ComObject_FromBorrowedInstance(const vb6_CoClassDesc* desc, v
     existing = (vb6_ComObject*)*ppComObj;
     if (existing) {
         existing->vtable->AddRef(existing);
+        P189("[189] FROM-BORROW-REUSE W=%p inst=%p\n", (void*)existing, (void*)instance);
         return existing;
     }
 
@@ -601,6 +608,13 @@ vb6_ComObject* vb6_ComObject_FromBorrowedInstance(const vb6_CoClassDesc* desc, v
     obj->desc = desc;
     obj->vb6Instance = instance;
     obj->ownsInstance = 0;
+    /* 账 #305 §11.105 (第一百二十三刀): 借用型包装器取一枚**类引用**。
+     * 不取的话它就是一张没人在账上的视图: 实例被 typed 变量退到 0 时, `vb6_cls_X_Release`
+     * 见 `__comObj != NULL` 就按「wrapper owns teardown」返回 ⇒ 谁也不拆 (实测 FProbe6:
+     * 装箱后 `D2 term=0`, seed=51 永不 Terminate)。取了这一枚, 类引用计数里就有它的位置,
+     * 拆解那一头 (ComObj_Release 的 owns=0 分支) 再退掉 —— 两头成对。
+     * NULL (旧 desc / 未生成的类) = 不取, 行为与改前一致。 */
+    if (desc->classAddRef) desc->classAddRef(instance);
     P189("[189] FROM-BORROW W=%p inst=%p cls=%s\n", (void*)obj, (void*)instance,
          desc->classVariable ? desc->classVariable : "?");
     obj->cpc = NULL;

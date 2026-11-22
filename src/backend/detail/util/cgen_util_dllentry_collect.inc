@@ -282,6 +282,10 @@
         std::string clsStruct = "vb6_cls_" + clsId;
         entry.emitLine("extern struct " + clsStruct + "* vb6_cls_" + clsId + "_New(void);");
         entry.emitLine("extern void vb6_cls_" + clsId + "_Destroy(struct " + clsStruct + "*);");
+        // 账 #305 §11.105 (第一百二十三刀): 借用型包装器的类引用归属要这两枚符号
+        // (desc 表里 classAddRef / classRelease 两格指着它们)。
+        entry.emitLine("extern unsigned long vb6_cls_" + clsId + "_AddRef(void* instance);");
+        entry.emitLine("extern unsigned long vb6_cls_" + clsId + "_Release(void* instance);");
         // ai/022 B16: 新式接口那一面（薄指针出入口）由类模块自己的 TU 提供，见
         // cgen_iface_vtbl.cpp 的 emitIfaceImplTables 末尾. 只在真的发了这两个符号的
         // 类上声明（判据同上），否则整行都不出现 —— 无新式接口的工程逐字节不变.
