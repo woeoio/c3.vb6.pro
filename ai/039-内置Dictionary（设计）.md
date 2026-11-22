@@ -5054,10 +5054,13 @@ Q2 参照 / Q3 / Q3c 控制），等真机数回来再改编译器 —— 两形
 
 - **Q1**：不全局放宽剥壳（那么做会把 `(*p)` 这种**工程类出参槽**也剥掉，见下面「A/B 退回记录」），
   单开一问 `derefVariant111`：目标形如 `(*名)` 且
-  ① `classOfProjectRefOutSlot(target)` 交空（工程类出参槽归 §B218 腿②′）；
-  ② 名字在 `knownVariantVars_` 里、不在 `knownObjectVars_` / `knownTypedComVars_` 里；
-  ③ `inferClassTypeOfExpr` 答不出类名（与 §11.87 的 staleness 否决同一口径）。
+  ① 名字在 `knownVariantVars_` 里、不在 `knownObjectVars_` / `knownTypedComVars_` 里；
+  ② `inferClassTypeOfExpr` 答得出类名就否决（工程类出参槽 `(*p)` 就是这一形，与 §11.87 的
+  staleness 否决同一口径）。
   命中才 `targetIsVariant = true`（装箱 + 守卫一并接上）。
+  ⚠ 这里**不**问 `classOfProjectRefOutSlot`：`class_refcount_authority` 把「出参槽类名问句」钉成
+  恰好 4 处（声明 + 定义 + 两站），第一版多问了一次，CI 的 compile 格当场红（第 5 处）。改用 AST
+  那一问（更早就有的口径），把那一问留给它自己的 4 处。
 - **Q3**：`plainVar108` 的排除项从「含 `(` 或 `->`」改成「目标不是一次纯粹的左值求值」：
   `(*w)` 与「`->` 之前没有括号」两形都算纯左值；只把**带函数调用**的目标
   （`Add(…)->Image`，写回两次会多调一次）留在原路。
