@@ -304,6 +304,17 @@
                 return itV != classVoidFieldMap_->end()
                     && itV->second.count(targetLower) > 0;
             }
+            // 账 #305 §11.104 (第一百二十二刀): 声明档是**工程类**的槽不是泛对象槽。
+            // 逼出这一问的是实测 (.temp/k122/shape): knownObjectVars_ 里混着别的类的
+            // `As Object` **字段名** (未限定), 局部名一旦撞上就误答 ——
+            //   Dim k1 As FC : Set k1 = New FC  ⇒ k1 = Unbox(FC_New())                (对)
+            //   Dim b  As FC : Set b  = New FC  ⇒ b = Unbox(FromInstance(desc, FC_New()))
+            // 后者把**拥有型包装器**写进 vb6_cls_FC* 槽: 包装器再没有主人 (槽里装的是裸实例),
+            // 而 vb6_cls_FC_Release 见 me->__comObj 非空就 "wrapper owns teardown" 直接返回
+            // ⇒ 实例永久存活 (.temp/k122/fieldprobe 的 C0 臂: seed=31 全程无 Terminate)。
+            // 另两臂读数同形但无害: 包装器带 __comObj 后类 Release 不再拆 (读法同上)。
+            // 问 AST 而不是名字表: 拿不到类名时 (As Object / Variant) 照旧落到下面那条。
+            if (node.target && !inferClassTypeOfExpr(*node.target).empty()) return false;
             return knownObjectVars_.count(targetLower) > 0;
         };
 

@@ -5789,3 +5789,51 @@ N3-plain-variant-tn=B216Plain
 - 外部 IDispatch / VB 控件 / 字体 / 宿主 HWND 一律仍答 False（表外答案，与改前同向）；
 - `Set` 取引用只认**裸槽标识符**；成员访问（`me->F`）与真调用形态维持裸拷贝（未量，不猜）；
 - 局部对象格仍不在过程出口放手（§B164 那族），本刀不动。
+
+## §11.104 声明档工程类槽的 `New` 交码形状：名字撞车 → 拥有型包装器进 typed 槽 → 实例永久存活（第一百二十二刀）
+
+### 一、读数（探针 `.temp\k122\shape`、`.temp\k122\fieldprobe`）
+
+同一句 `Set <声明档工程类槽> = New FC`，同一个工程里发成两种形状，差别只在**变量名**：
+
+| 源 | 交码 |
+|---|---|
+| `Dim k1 As FC : Set k1 = New FC` | `k1 = Unbox(FC_New())` —— 裸实例，正确 |
+| `Dim b As FC : Set b = New FC` | `b = Unbox((void*)FromInstance(desc, FC_New()))` —— 拥有型包装器 |
+
+`b`/`a` 撞上 `FBox` 的 `Public A/B As Object` 字段名，`k1` 不撞。
+
+后果（`fieldprobe` 的 C0/C3 臂）：改前 `Set a = New FC : a.Seed=31 : Set a = New FC` 交
+`C0 term=0`，seed=31 **全程无 Terminate**（旧实例永久存活）；改后 `[FC.Terminate seed=31]` 紧接
+`C0 term=1`，过程出口两枚 seed=0 各拆一次，全场四枚归零。
+
+机理在 RTL 那一行：`vb6_cls_FC_Release` 里 `if (me->__comObj != NULL) return 0UL; /* wrapper owns
+ teardown */` —— 包装器 `ownsInstance=1` 但**没有任何人持有它**（槽里装的是 Unbox 回的裸实例），
+于是类引用计数归零也不拆、包装器自己也没人放。
+
+### 二、成因
+
+`lateBoundSlotTarget()` 的第二臂用 `knownObjectVars_.count(targetLower)` 答「这格是不是泛对象槽」，
+而那张表里混着**未限定**的类 `As Object` 字段名 —— 局部名一旦撞上就误答 true：`boxIntoLateSlot` 把
+`New` 包成拥有型，typed 槽随后又 Unbox 回裸实例，包装器于是失主。
+
+### 三、修法
+
+`lateBoundSlotTarget()` 加一条前置闸：`node.target` 的 `inferClassTypeOfExpr` 非空（声明档是工程类）
+⇒ 这一格不是泛对象槽，直接 false。判据问 AST，不问名字表：`As Object` / `Variant` 拿不到类名时
+照旧落到原臂，行为不变。
+
+### 四、判据
+
+- 探针：C0/C3 臂 Terminate 全归位；`shape/Shape3` 的 `b` 与 `k1` 发同一形状；
+- `gates.ps1` 9/9 绿（exe sha=`50e95c561939`）；
+- emit-manifest 763 行 changed=1：只有 `tests/b190_scope/B190.vbp` 换形（16732 → 16652 字节，
+  消失的正是塞进声明档槽的那几分 `FromInstance(desc, …)` 包装），其余 762 行不动。
+
+### 五、边界（在册，本刀不碰）
+
+- **污染源本身没清**：本刀只在装箱站加闸，`knownObjectVars_` 里为什么会有别的类的字段名（driver
+  预扫描往那张表塞未限定名）待查；同一污染还可能影响其它 `knownObjectVars_` 读者。
+- `TypeName(x.A)`（字段槽里装裸 `vb6_cls_X*`）仍答 "Object"：`vb6_TypeName` 那句注释明写
+  「不该把 512 格反查表拉来当运行期读者 —— 那条口径待拍」，本刀按记录不越位。
+- 声明档槽 `Set x = Nothing` 只发 `x = NULL`、不发 `Release`，属 §B164 那族，未动。
