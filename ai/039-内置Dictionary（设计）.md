@@ -5148,8 +5148,23 @@ UDTMOD-7 isobj=True err=0
 
 - `UDTMOD-6` 与真机 probe111 **Q2 逐字一致**（`uv.f=111 err=438`，只是槽从过程级挪到模块级；
   发射码与 Q2 同形：`const int32_t _eN = vb6_ErrSerial();` 双闸 + `_vsN`）。
-- `UDTMOD-1/3/5` 是 VB6 文档口径的零初始化（Variant=Empty / String 空 / Long 0），
-  已随 probe112 交真机逐字复核；未复核前按「待确认」记，不当成已量事实。
+- `UDTMOD-1/3/5`（零初始化那几格）已由 **probe112** 真机逐字复核（见下表），全部对上。
+
+#### 真机 probe112 读数（逐字对照，已回）
+
+| 格 | 真机 | 本机 | |
+|---|---|---|---|
+| P1 | `VarType=0 IsEmpty=True IsNull=False` | 同 | ✔ |
+| P1b | `uv.f=7 VarType=2` | 同 | ✔ |
+| P1c | `nst.inner.f=[] nst.s=[] nst.n=0` | 同 | ✔ |
+| P1d | `x|abc|42` | 同 | ✔ |
+| P1e | `IsEmpty(pv.f)=True` | 同 | ✔ |
+| P2 | `v=111 err=438` | 同 | ✔ 模块级槽守卫正确 |
+| P2c | `isobj=True err=0` | 同 | ✔ |
+| P3 | `v=[111] err=438` | `v=[] err=0` | ✘ 缺口确认 |
+
+`{0}` 这一手与真机零初始化**完全一致**（Variant=Empty / String 空 / Long 0，嵌套同形，
+Public 与 Private 同）；模块级槽的 438 守卫也与过程级同一条规则。
 
 ### 五、针与门
 
@@ -5159,15 +5174,16 @@ UDTMOD-7 isobj=True err=0
 - 运行核 `Add-BasTest "test_udtmod"`：8 条读数
 - manifest：760 → 761 行
 
-### 六、登记的一处独立缺口（本刀不修）
+### 六、P3：Collection 未知名成员（真机已确认的缺口，第一百一十三刀）
 
-本机 `Collection` 的未知名成员**静默返回空、不报 438**：
+真机 probe112 **P3 = `v=[111] err=438`**，本机 `v=[] err=0`：
 
 ```vb
-Dim c As Object: Set c = New Collection
-Set v = c.NoSuchProperty     ' 本机: v 为空, err=0；VB6: 438
+Dim col As Object: Set col = New Collection
+v = 111
+Set v = col.NoSuchProperty     ' 真机: 438 且目标保持 111（不写目标）；本机: 清空 err=0
 ```
 
-这一形与 §11.93 的槽守卫无关（守卫本身是好的：换 `Scripting.Dictionary` 当靶子立刻
-`v=111 err=438`），是 COM 派发那一层的宽松。按规矩先登记、不动手 —— 需要真机读数
-（`probe112` 的 P2 段）再决定这一刀怎么切。
+两处都错：① 没报 438；② 还把目标写了（清成空）—— 真机 438 不写目标。
+与 §11.93 的槽守卫无关（守卫是好的：P2 换 `Scripting.Dictionary` 立刻 `v=111 err=438`），
+是 COM 派发那一层的宽松。真机读数已到，开第一百一十三刀。
