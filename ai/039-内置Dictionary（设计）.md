@@ -5375,3 +5375,64 @@ churn: **5 / 762**（`tests/Charts 2020/Proyecto1.vbp`、其 ucChartBar、ucTree
 
 `With h(0): .Prop(1)` 的**返回值**交空（本机 `H2 item1=` 空）：接收者与默认成员名都已经对了，
 缺的是「宿主回 VT_I4 → Variant 槽」这条搬运路。已登记在 probe113 Q2/Q2b 待真机读数，见 §11.95 的缺口表。
+
+## §11.97 内建 Collection 的调用臂：Count / 空名默认成员 / 未知名 ⇒ 438（第一百一十五刀）
+
+### 一、probe113 真机读数（VB6 IDE 实测，2026-11-22）
+
+```
+Q1  Set v = col.NoSuchProperty   => v=[111] err=438      (对照格, §11.95 已收口)
+Q2  v = col.Count                => v=[1] err=0 VarType=3 (VT_I4)
+Q2b v = col.Item(1)              => v=[5] err=0 VarType=2 (VT_I2; 5 是 Integer 字面量)
+Q2c v = col.NoSuchProperty       => v=[111] err=438      (普通赋值读未知名)
+Q3  col.Count                    => count=1 err=0
+```
+
+### 二、病在哪：同一个出口上的三个洞
+
+`v = col.Count`、`v = col.NoSuchProperty`、`With h(0): .Prop(1)` 在发码侧都是 **`vb6_ComCall`**
+（不是 `ComGetProp`），而宿主模型 `uc_hostmodel_call.inc` 的 `vb6_uc_isColl(obj)` 臂只认
+`Add` / `Item` / `Remove`，末尾无条件 `return 1`：
+
+| 源码 | 修前这一臂 | 症状 |
+|---|---|---|
+| `v = col.Count` | 没有 Count 分支，落到末尾 `return 1` | `out` 仍是入口清零的 Empty ⇒ 宿主那枚 VT_I4 根本没生出来（Q2 读成空/VarType=0） |
+| `With h(0): .Prop(1)` | 空方法名（§11.96 定的默认成员写法 `L""`）不映射到 Item | 返回 Empty（复现器 H2 blank） |
+| `v = col.NoSuchProperty` | 未知名也 `return 1`（「答了但没答」） | Q2c 读到 err=0，且目标被写成空 |
+
+三格同属**一个调用出口**，所以一刀修完；这也是 §11.96 末尾登记的那格（H2 与 Q2 同根）。
+
+### 三、修法（RTL 一处，`uc_hostmodel_call.inc`）
+
+1. `cname = (name && name[0]) ? name : L"Item"` —— 空名字按 VB6 默认成员处理；
+2. 新增 `Count` 分支，与 GetProp 臂问**同一个主人** `vb6_Collection_Count`；
+3. 其余未知名 ⇒ `vb6_ho_report438(L"Call", …)` + `return -1`，与 §11.95 的 GetProp 尾巴同口径
+   （`vb6_ComCallRcv` 的宿主分支按 VB6 语义抛 438，目标不动）。
+
+认得的三支（Add/Item/Remove）与 Count 仍 `return 1`；行为面只加三格。
+
+### 四、本机读数（修前 → 修后）
+
+```
+P3  v = col.Count            : v=[] VarType=0      → v=[1] VarType=3
+H2  With h(0): .Prop(1)      : 空                    → item1=1 / item2=2
+Q2c v = col.NoSuchProperty   : (err=0, 目标被写空)   → v=[111] err=438
+CC-6 col.AnotherMissing      : err=0                → err=438
+```
+
+新增夹具 `tests/test_collcall.bas` 七格（`CC-1` … `CC-6` + `COLLCALL-DONE`），
+与 probe113 逐格对照；manifest 762 → **763** 行。
+
+### 五、静态闸门与 churn
+
+- `check_com_latebind_guard.ps1` 的 R5「438 站点数」按实测从 `Call=1` 收紧为 `Call=2`：
+  新增那处不是把真缺口改记成 438，而是 Collection 未知名在调用臂上**本来就没有这个成员**
+  （与 GetProp 臂 §11.95 同一件事）；认得的三支仍 return 1。
+- `check_variant_slot_store.ps1` / `gates.ps1` 全绿；`check_manifest_coverage` 763/763。
+- churn 实测 `full_rehash85.ps1`：**rows=763 changed=0 skipped=5 missing=0** ——
+  本刀只动 RTL 宿主模型、不动发码，期望表除新增那一行外逐字节不变。
+
+### 六、与真机的剩余差异（不在本刀）
+
+`CC-2 v = col.Item(1)` 值对，VarType 本机 3(VT_I4) / 真机 2(VT_I2)：`col.Add 5` 的整数字面量
+归档口径差异（既有），本条针只立「搬进 Variant 槽且值对」，不为这处差异立期望。
