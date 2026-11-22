@@ -355,15 +355,36 @@ foreach ($inc in @($incCall, $incGet, $incSet)) {
     }
 }
 if ($marker438 -ne 1) { $fail += ("R5 the [C3_HOST_438 #] marker across uc_hostmodel.c + the three .inc = " + $marker438 + " (want exactly 1 -- the format has one owner)") }
-# 第一百一十六刀 (§11.98): 宿主 Font 臂必须交**对象**（VT_DISPATCH 裸指针），不许再交 Empty。
+# 第一百一十六刀 (§11.98) / 第一百一十七刀 (§11.99): 宿主 Font 臂必须交**控件自己那一枚**对象，
+# 不许再交 Empty，也不许每次现造一枚默认档孤儿。
 # `CallByName(oCtrl, "Font", VbGet).Size` 与 `txtEmbed.Font.Name/Size/Bold` 全走这一格;
 # 改回 setVariantDispatch 就等于把 Charts2020 23 条 + czFormDemo 3 条 miss 放回来
-# (本机 x86 同产物实测 23/3 -> 0/0, 见 run_tests.ps1 的 pin 注释)。
-# 安全性由 vb6_ReleaseObject / vb6_ComAddRefDispatch 的 vb6_ComIsDispatchable 判据保证:
-# 字体伪对象首字段是 BSTR, 两个出口都跳过 Release。
+# (本机 x86 同产物实测 23/3 -> 0/0); 不缓存/不挂 owner 则读回默认 8.25、写回不落盘
+# (探针实测: 修前 `before size=` 空, §11.98 后恒 8.25, 本刀后 `8.25 MS Sans Serif` -> `10 Segoe UI`)。
+# 安全性由 vb6_ReleaseObject / vb6_ComAddRefDispatch 的 vb6_ComIsDispatchable 判据保证。
 $gp = Strip-Comments262 ((Read-Lines262 $incGet) -join "`n")
-if (-not $gp.Contains('vb6_ho_setVariantObject(out, fr)')) {
-    $fail += ("R5 uc_hostmodel_getprop.inc Font arm must answer the font proxy as an object (vb6_ho_setVariantObject) - Empty 会让 .Font.Size / .Font.Name 读成 miss")
+if (-not $gp.Contains('fontProxy') -or -not $gp.Contains('vb6_UC_NewFontForWindow')) {
+    $fail += ("R5 uc_hostmodel_getprop.inc Font arm must answer the per-object font proxy (fontProxy + vb6_UC_NewFontForWindow) - Empty / 每读现造都让 .Font.Size 失真")
+}
+# §11.99 的下半句: 代理必须真的**挂主人**。五处一起钉 —— 少任何一处就退回「默认档孤儿」:
+#   读不着设计期字号 (Sync 落点) 或 写回不落盘 (Commit 落点)。
+# 探针读数 (czUI 副本, 本机 x86): 修前 before/after 全空 → §11.98 恒 8.25 → 本刀
+#   before 8.25/MS Sans Serif → after 10/Segoe UI。
+$ucC     = Join-Path $Root 'src\rtl\core\vb6forms\uc\uc_controls.c'
+$ucTxt   = Strip-Comments262 ((Read-Lines262 $ucC) -join "`n")
+$invTxt  = Strip-Comments262 ((Read-Lines262 $invPath) -join "`n")
+$hostTxt = Strip-Comments262 ((Read-Lines262 $hostC) -join "`n")
+if (-not $ucTxt.Contains('vb6_UC_FontSyncFromOwner(p);')) {
+    $fail += "R5 uc_controls.c vb6_UC_FontField must sync the proxy from its owner before answering a field"
+}
+if (-not $ucTxt.Contains('vb6_GetControlFontSize(hwnd)')) {
+    $fail += "R5 vb6_UC_FontSyncFromOwner must read the point size from vb6_GetControlFontSize (exact pt), not from pixel height"
+}
+if (-not $invTxt.Contains('vb6_UC_FontCommit(disp, propName);')) {
+    $fail += "R5 vb6com_invoke.c font set branch must commit the field back to the control (vb6_UC_FontCommit)"
+}
+if (-not $hostTxt.Contains('vb6_UC_FontSyncFromOwner(fontProxy);') -or -not $hostTxt.Contains('vb6_UC_FontCommit(fontProxy, name);')) {
+    $fail += "R5 uc_hostmodel.c get/putFontMember must sync before read and commit after write"
 }
 # 读侧那两处「成员不存在」的**返回口径**必须是 -1 (宿主模型出口据此抛 438); 仍答 1 就退化成
 # 本刀之前的「静默 Empty + 链尾假漏」。
