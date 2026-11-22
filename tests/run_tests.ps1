@@ -12080,10 +12080,14 @@ if ($Category -in @("all", "run", "vbp")) {
     # 第八十三刀: String 目标的守卫改成「先算进临时量 BSTR _avN、再按序号决定写不写」⇒ 右值那一行
     # 从 `AssignMove(&目标, <右值>)` 变成 `BSTR _avN = (<守卫>) ? (<右值>) : NULL;`。针拆两截钉同一件事:
     # ① 右值原样在场 (不许折成常量 —— 这就是本条用例的靶子); ② 目标吃的是那枚临时量。
+    # 第一百二十四刀 (§11.106): 只读谓词的实参已改按**借用档**装箱 (不必要的 AddRef 漏引用),
+    # 形状从 `vb6_VariantFromValue(Value)` 变成 `vb6_VariantBorrowFromValue(Value)`。本条用例
+    # 钉的是「不许折成常量」那一面 (不是装箱函数名), 故按实测换名 —— 证据: `.temp/k124/ab`
+    # 四份夹具把借用档改回原名后与基线产物逐字节相同。
     Test-EmitcShape "b189_gate_same_name_slot_pair" @("$Tests\b189_gate\B189g.vbp") @(
         '? ((((Value) != NULL) ? vb6_BSTR_FromStr(L"B189Impl") : vb6_BSTR_FromStr(L"Nothing"))) : NULL;',
         'vb6_BSTR_AssignMove(&vb6_ret_F4, _av',
-        '? (vb6_TypeName(vb6_VariantFromValue(Value))) : NULL;',
+        '? (vb6_TypeName(vb6_VariantBorrowFromValue(Value))) : NULL;',
         'vb6_BSTR_AssignMove(&vb6_ret_F3, _av')
 
     # 账 #305 #408 (第八十九刀第五试): 按名那张类表 (knownClassVars_) 全程不清空, 于是**上一过程**
@@ -12104,8 +12108,10 @@ if ($Category -in @("all", "run", "vbp")) {
         'vb6_ret_UsesObj, Thing->Alpha',
         '(((Thing) != NULL) ? vb6_BSTR_FromStr(L"B190A")')
     # 第八十三刀: 同上 —— 右值挪进临时量行, 针改成「这枚形参的 TypeName 仍在运行期算」+「目标吃临时量」。
+    # 第一百二十四刀 (§11.106): 同上, 装箱函数名按实测换成借用档 (物体档那一枚 AddRef
+    # 原先无主 —— TypeName 那条链的 D2 term=0 就出在这里)。
     Test-EmitcShape "b190_typename_of_object_formal_stays_runtime" @("$Tests\b190_scope\B190.vbp") @(
-        '? (vb6_TypeName(vb6_VariantFromValue(vb6_VariantFromValue(Thing)))) : NULL;',
+        '? (vb6_TypeName(vb6_VariantBorrowFromValue(vb6_VariantBorrowFromValue(Thing)))) : NULL;',
         'vb6_BSTR_AssignMove(&vb6_ret_TnShadow, _av')
     # 两台真跑只钉 VB6 也答得出的那五条: P1/P2 = 类形参照旧早绑定 (负条件, 否决不许过界),
     # P5 = 模块级同名变量没被撤走, P6 = 折叠那一支的 NULL 头, DONE = 进程活着。
