@@ -40,13 +40,14 @@
     if (!st->moduleScope()) continue;
     for (auto& [key, sym] : st->moduleScope()->symbols()) {
         if (sym->kind == SymbolKind::Class) {
-            // 账 #305 §B187 第二腿: 「哪些档的类在表里占一行」这条判据搬进了
-            // Symbol::isCoClassTableEntry() —— 发码侧的装箱腿 (cgen_setlet_set_rhs.inc)
-            // 要先问"这类有没有 desc"，两边必须是同一把尺子，否则表里有而发码以为没有
-            // (或反之) 就又是一条静默漏档 (rev17 的 play78 缺 View/PopupMenu 那一族)。
-            // 原 BUG-4 口径: PublicNotCreatable(2) 可见但对外不可创建, 只有 MultiUse(5)/
-            // SingleUse(3) 应该有 ClassFactory 项; 接口宿主块没有实例。
-            if (sym->isCoClassTableEntry()) {
+            // 账 #305 §B187 第二腿 / §B217: 判据搬进了 Symbol::isLateBindClass() ——
+            // 「装箱腿能不能找到 desc」与「占不占可创建登记行」是两条（见符号表那头）。
+            if (sym->isLateBindClass()) {
+                /* §B217: UserControl (.ctl) 必须留在闸门外 —— 它在 C 侧的值是
+                   **HWND**（vb6_hwnd_<名>），不是 vb6_cls_*；给它发一行 desc 会让
+                   com_entry.c 去引 .ctl 里不存在的符号（ucSlider_2022 实测 LNK2019:
+                   vb6_LabelPlus_tmrMOUSEOVER_Timer）—— 与装箱腿那道守卫同一条理由。 */
+                if (knownControlModuleNames_.count(Symbol::toLower(sym->name))) continue;
                 std::string lowerName = Symbol::toLower(sym->name);
                 if (seenCoClassNames.count(lowerName)) continue;  // 已处理, 跳过
                 seenCoClassNames.insert(lowerName);
@@ -78,6 +79,9 @@
                 info.moduleName = sym->name;
                 info.clsidStr = authCls.comClsidStr.empty() ? generateClsid(progId + "." + sym->name) : authCls.comClsidStr;  // P6.8: 优先使用VBP指定的CLSID
                 info.progId = progId + "." + sym->name;
+                /* §B217: 能否对外 CoCreate 只定注册行；不能的也要一行 desc（装箱用），
+                   行里 progId/clsid 发空 — 登记循环与 ClassFactory 见空即跳。 */
+                info.registerable = sym->isCoClassTableEntry();
 
                 // ai/022 B13b: 身份从唯一出口 coclassIds_ 取（026 三节"不可让步" + D47"不许
                 // 第二条通道"；D56-3 实测：登记表在后端一个消费者都没有，产品注册的从来不是

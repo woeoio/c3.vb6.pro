@@ -62,12 +62,20 @@
     // EXE 与 DLL 共用这一份: com_entry.c (driver_codegen_dll_entry.inc 的 EXE 平行分支)
     // 与 dll_entry.c 发的是同一张表。
     std::unordered_set<std::string> projectCoclassNames;
+    /* §B217: UserControl (.ctl) 在 C 侧的值是 HWND，不能进装箱名单（与 collector 那头同名判断）。
+       controlModuleNames 在本片段之后才声明，这里就地问 modules_ 同一事实。 */
+    std::unordered_set<std::string> ucModuleNames217;
+    for (const auto& m217 : modules_) {
+        if (m217 && m217->isUserControlDoc() && !m217->moduleName.empty())
+            ucModuleNames217.insert(Symbol::toLower(m217->moduleName));
+    }
     for (const auto& cocAn : analyzers_) {
         if (!cocAn) continue;
         Scope* cocMs = cocAn->symbolTable().moduleScope();
         if (!cocMs) continue;
         for (const auto& cocKv : cocMs->symbols()) {
-            if (cocKv.second && cocKv.second->isCoClassTableEntry()) {
+            if (cocKv.second && cocKv.second->isLateBindClass()
+                && !ucModuleNames217.count(Symbol::toLower(cocKv.second->name))) {
                 projectCoclassNames.insert(Symbol::toLower(cocKv.second->name));
             }
         }

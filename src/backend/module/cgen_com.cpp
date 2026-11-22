@@ -824,7 +824,8 @@ void CCodeGen::emitClassFieldAccessors(Module& module) {
             // 装箱腿那份名单同一把尺子) —— 这里发的正是
             // vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc(...))，类不在表里
             // 就会装箱出 NULL 包装器 (= Nothing)。
-            const bool nIsCoclass = nSym && nSym->isCoClassTableEntry();
+            const bool nIsCoclass = nSym && nSym->isLateBindClass()
+                && !knownControlModuleNames_.count(Symbol::toLower(nSym->name));
             if (nIsCoclass) {
                 const std::string tId = cIdent(nSym->name);
                 fe.getLines.push_back("if (!me->" + fld + ") me->" + fld + " = (void*)vb6_cls_"

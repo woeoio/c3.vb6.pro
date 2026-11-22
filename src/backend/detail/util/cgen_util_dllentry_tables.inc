@@ -248,8 +248,10 @@ std::string wideName = "L\"" + bareName + "\"";
         std::string clsStruct = "vb6_cls_" + clsId;
         entry.emitLine("{");
         entry.indent();
-        entry.emitLine("\"" + rowProgId + "\",  /* progId */");
-        entry.emitLine("\"" + cc.clsidStr + "\",  /* clsidStr */");
+        /* §B217: 不可对外创建的档（registerable=false）也占一行（装箱找 desc），
+           但 progId / clsid 两格交空串 —— 注册循环见空即跳、ClassFactory 匹配不上。 */
+        entry.emitLine("\"" + (cc.registerable ? rowProgId : std::string()) + "\",  /* progId */");
+        entry.emitLine("\"" + (cc.registerable ? cc.clsidStr : std::string()) + "\",  /* clsidStr */");
         entry.emitLine("\"" + cc.moduleName + "\",  /* classVariable */");
         entry.emitLine("(void*(*)(void))" + clsStruct + "_New,  /* factoryFunc */");
         entry.emitLine("(void(*)(void*))" + clsStruct + "_Destroy,  /* destroyFunc */");
@@ -302,7 +304,7 @@ std::string wideName = "L\"" + bareName + "\"";
     };
     for (auto& cc : coClasses) {
         emitCoclassRow(cc, cc.progId);
-        if (!cc.groupProgId.empty()) {
+        if (cc.registerable && !cc.groupProgId.empty()) {
             emitCoclassRow(cc, cc.groupProgId);
             extraGroupRows++;
         }

@@ -31,6 +31,10 @@
         // implementsNames 非空代替 —— legacy `Implements` 的类模块同样有名字，但
         // 它那条路一个 vb6_iv_* 符号都不发，照抄会 LNK2019。
         bool hasNewStyleIface = false;
+        /* §B217 (第一百一十八刀): 这一行能不能对外 CoCreate。缺省档（Instancing 缺省 /
+           PublicNotCreatable）为 false —— 行照发（装箱要靠它找 desc），但 progId/clsid
+           两格发空：DllRegisterServer/DllUnregisterServer 跳过、ClassFactory 匹配不上。 */
+        bool registerable = true;
     };
     std::vector<CoClassInfo> coClasses;
     // 组名档多出的行数（g_vb6_coclasses[] 的总行数 = coClasses.size() + extraGroupRows）

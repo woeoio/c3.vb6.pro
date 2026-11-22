@@ -39,6 +39,7 @@
         CCodeGen comEntryCgen(*diag_, lastAnalyzer->symbolTable(), lastAnalyzer->typeSystem(),
                               &classVoidFieldMap, &classTypedFieldMap, &variantReturnFuncs, options.verbose);
         comEntryCgen.setFormModuleNames(formModuleNames);  // Fix 086
+        comEntryCgen.setControlModuleNames(controlModuleNames);  // §B217: 装箱行不能收 .ctl
         comEntryCgen.setModulePublicConsts(&modulePublicConsts);  // Fix 086
         comEntryCgen.setDesignerFiles(&frmFiles_);  // Fix 112
         comEntryCgen.setStaticModuleVarNames(&dupModuleVarNames);  // Fix 093b: 撞名模块级变量转 static
