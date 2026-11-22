@@ -5087,3 +5087,87 @@ Q2 参照 / Q3 / Q3c 控制），等真机数回来再改编译器 —— 两形
 
 - 静态门 9 枚 PASS（`manifest_coverage` inputs=760 [.vbp=280 .bas=480] registered=760）
 - manifest：759 → 760 行（只新增本刀那一行，存量 0 行变动）
+
+---
+
+## §11.94 模块级 UDT 变量的静态初始化（第一百一十二刀）
+
+### 一、病灶
+
+真机 VB6 里再普通不过的一行声明：
+
+```vb
+Public Type UV
+    f As Variant
+End Type
+Public uv As UV
+```
+
+本机发成 `vb6_type_UV uv = 0;` —— 结构体不能拿 `= 0` 初始化，cl 直接 **C2074**
+（initialization of a struct requires a brace-enclosed initializer list），
+整个工程编不过。所以此前凡带 Variant 成员的模块级 UDT 都是空白面。
+
+### 二、根因
+
+`cgen_decl_var.cpp` 里那条「UDT ⇒ `{0}`」的判定只问 `lookupDotted(simple.name)`：
+
+```cpp
+auto* sym = lookupDotted(simple.name);
+isUdtType = (sym && sym->kind == SymbolKind::UserDefinedType);
+```
+
+而 `Public Type UV … End Type` 只登记在**模块作用域**（`lookupModuleDotted` 那一层），
+名字查不到 ⇒ `isUdtType = false` ⇒ 落到 `initVal = defaultValue(Vb6Type::Unknown)` = `"0"`。
+`Unknown` 这一档本是给数组那类 `vb6_SafeArray1D*` 留空指针用的（账 #116 那条注释写得很清楚，
+不能改成 Variant），与 UDT 撞在同一个 `"0"` 上。
+
+### 三、改法
+
+两处兜底，都是「先量后改」量出来的最小面：
+
+1. 名字查不到时补一问模块作用域：`if (!sym) sym = lookupModuleDotted(simple.name);`
+2. 再用 **C 类型名**兜底：`cType.rfind("vb6_type_", 0) == 0` 判为结构体 ⇒ `{0}`。
+   这一条不依赖符号表，符号表再怎么缺登记也不会把结构体发成 `= 0`。
+
+`{0}` 就是全零：Variant 成员 = Empty（VT_EMPTY=0）、String = 空、数值 = 0 —— 与 VB6
+对模块级变量的零初始化一致。
+
+### 四、量（本机）
+
+新夹具 `tests/test_udtmod.bas`（Public / 嵌套 / Private 三形 + 零初始化读数 + 模块级槽的 438 守卫）：
+
+```
+UDTMOD-1 VarType=0 IsEmpty=True IsNull=False
+UDTMOD-2 uv.f=7 VarType=2
+UDTMOD-3 nst.inner.f=[] nst.s=[] nst.n=0
+UDTMOD-4 x|abc|42
+UDTMOD-5 IsEmpty(pv.f)=True
+UDTMOD-6 v=111 err=438
+UDTMOD-7 isobj=True err=0
+```
+
+- `UDTMOD-6` 与真机 probe111 **Q2 逐字一致**（`uv.f=111 err=438`，只是槽从过程级挪到模块级；
+  发射码与 Q2 同形：`const int32_t _eN = vb6_ErrSerial();` 双闸 + `_vsN`）。
+- `UDTMOD-1/3/5` 是 VB6 文档口径的零初始化（Variant=Empty / String 空 / Long 0），
+  已随 probe112 交真机逐字复核；未复核前按「待确认」记，不当成已量事实。
+
+### 五、针与门
+
+- `b257_udtmod_shape`（4 条）：`vb6_type_UV uv = {0};` / `vb6_type_Nest nst = {0};` /
+  `vb6_type_UV pv = {0};` / `vb6_VariantClear(&uv.f); uv.f = _vs`
+- `b257_udtmod_lesion`（3 条，修前那三行都是 `= 0`）
+- 运行核 `Add-BasTest "test_udtmod"`：8 条读数
+- manifest：760 → 761 行
+
+### 六、登记的一处独立缺口（本刀不修）
+
+本机 `Collection` 的未知名成员**静默返回空、不报 438**：
+
+```vb
+Dim c As Object: Set c = New Collection
+Set v = c.NoSuchProperty     ' 本机: v 为空, err=0；VB6: 438
+```
+
+这一形与 §11.93 的槽守卫无关（守卫本身是好的：换 `Scripting.Dictionary` 当靶子立刻
+`v=111 err=438`），是 COM 派发那一层的宽松。按规矩先登记、不动手 —— 需要真机读数
+（`probe112` 的 P2 段）再决定这一刀怎么切。
