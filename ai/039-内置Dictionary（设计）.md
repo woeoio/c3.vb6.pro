@@ -5436,3 +5436,68 @@ CC-6 col.AnotherMissing      : err=0                → err=438
 
 `CC-2 v = col.Item(1)` 值对，VarType 本机 3(VT_I4) / 真机 2(VT_I2)：`col.Add 5` 的整数字面量
 归档口径差异（既有），本条针只立「搬进 Variant 槽且值对」，不为这处差异立期望。
+
+## §11.98 宿主 Font 臂交对象：`.Font.Size` / `CallByName(…,"Font",…).Size` 不再读空（第一百一十六刀）
+
+### 一、读数（本机 x86，与 CI 同一产物形态，同一台机）
+
+| 夹具 | 旧编译 | 新编译 | 行形 |
+|---|---|---|---|
+| `tests\Charts 2020\Proyecto1.vbp` | 23 | **0** | `site=ComGetProp name="Size" disp=00000000 kind=null` |
+| `tests\czUI-main\czFormDemo.vbp` | 3 | **0** | `site=ComSetProp name="Name"/"Size"/"Bold" disp=00000000 kind=null` |
+
+两枚都是跑 8~10 秒后杀进程；修前修后进程都还在消息循环里（不是提前退出）。
+
+### 二、病在哪：一个「防崩」出口把对象吞了
+
+`uc_hostmodel_getprop.inc` 的 Font 分支：
+
+```c
+vb6_UCFontRec* fr = (vb6_UCFontRec*)vb6_UC_NewFont();
+vb6_ho_setVariantDispatch(out, fr); return 1;   /* 这个出口恒交 Empty */
+```
+
+`vb6_ho_setVariantDispatch` 的契约是**恒 Empty**（历史原因：怕 `VariantClear` 对伪对象调 Release）。
+于是：
+
+- `CallByName(oCtrl, "Font", VbGet).Size`（`ClsResizer.cls:107`）取到 Empty ⇒ `.Size` 接收者 NULL（23 条）；
+- `txtEmbed.Font.Name/Size/Bold`（czFormDemo）同样（3 条）。
+
+### 三、为什么裸 VT_DISPATCH 是安全的
+
+`vb6_ReleaseObject` / `vb6_ComAddRefDispatch` 的唯一判据是 `vb6_ComIsDispatchable`
+（首字段是不是可执行 vtable）。字体伪对象首字段是 `BSTR Name`，两个出口都跳过，
+`vb6_VariantClear` 不会去 Release；`vb6_Host_ToWinVariant` / `ClearVariant` 对对象档
+本来就是「借用不计数」。Controls.Item 那族（`vb6_ho_setVariantObject`）早就是同一口径。
+
+### 四、修法
+
+```c
+vb6_ho_setVariantObject(out, fr); return 1;
+```
+
+`.Size` / `.Name` / `.Bold` 随后落到同一格（`vb6_uc_isFont` → `vb6_ho_getFontMember` /
+`uc_hostmodel_setprop.inc` 的字体分歧），不需要另立第二条字体属性面。
+
+### 五、针与闸门
+
+- `LateBindMissAllow`：删掉 `'Proyecto1' = 23`、`'czFormDemo' = 3`（默认期望恰好 0），
+  并写上两条旧读数的行形与出处 —— 「从 23 降到 0」不是放宽判据，是不该计入的伤口消失。
+- `check_com_latebind_guard.ps1` 新增形状钉：Font 臂必须发 `vb6_ho_setVariantObject(out, fr)`，
+  改回 `setVariantDispatch` 就红（那等于把 23 + 3 条 miss 放回来）。
+- 本机 `test_collcall` / `test_collmiss` 全绿；`gates.ps1` 9/9；churn 763 行 changed=0
+  （只动 RTL 宿主模型，不动发码）。
+
+### 六、本刀**不**声称修好的那半句
+
+交出去的是 `vb6_UC_NewFont()` 现造的**默认档**字体代理（8.25pt / MS Sans Serif），不是控件
+自己的那一枚。因此：
+
+- `ctl.Font.Size` 现在**有值**（不再 NULL miss），但值恒是默认档，不会读出设计期给它设的字号；
+- `ctl.Font.Size = x` 写在一片崭新的记录上，**不落到控件**；
+- 推论：Charts2020 `ClsResizer` 的字体随窗口缩放（先记 `.Size * 100 / RatioAspect`，
+  Resize 时再写回）存量下来了但**还不改变外观**。
+
+真正对齐需要两件（下一刀）：① 宿主模型为每个宿主对象记一枚字体记录（按 HWND / UC 实例去重，
+不复用 `vb6_uc_fontOf` 那张只认字体的表）；② setprop 写完后叫 `vb6_UC_ApplyFontToWindow(obj, f)`
+把八档发到窗口（那位主人已在 `uc_controls.c`，不另造）。本刀只保证「接收者不再是 NULL」。
