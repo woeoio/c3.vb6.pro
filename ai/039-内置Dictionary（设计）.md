@@ -5187,3 +5187,84 @@ Set v = col.NoSuchProperty     ' 真机: 438 且目标保持 111（不写目标�
 两处都错：① 没报 438；② 还把目标写了（清成空）—— 真机 438 不写目标。
 与 §11.93 的槽守卫无关（守卫是好的：P2 换 `Scripting.Dictionary` 立刻 `v=111 err=438`），
 是 COM 派发那一层的宽松。真机读数已到，开第一百一十三刀。
+
+---
+
+## §11.95 内建 Collection 的未知名成员 ⇒ 438（第一百一十三刀）
+
+### 一、病灶（真机 probe112 P3 已量）
+
+```vb
+Dim col As Object: Set col = New Collection
+col.Add 5
+v = 111
+Set v = col.NoSuchProperty
+```
+
+| | 读数 |
+|---|---|
+| 真机 | `v=[111] err=438` |
+| 修前本机 | `v=[] err=0` |
+
+两处都错：① 不报 438；② 还把目标写了（清成空）—— 真机 438 不写目标。
+
+### 二、根因
+
+`uc_hostmodel_getprop.inc` 的内建 Collection 岔口对**任何**未知成员都 `return 1`：
+
+```c
+if (vb6_uc_isColl(obj)) {   // Fix 112c: RTL Collection
+    if (_wcsicmp(name, L"Count") == 0) { ...; return 1; }
+    return 1;               // ← 「答了但没答」
+}
+```
+
+`vb6_ComGetPropRcv` 的宿主分支把 `hgot < 0` 当「成员不存在」并按 VB6 语义抛 438
+（同一文件末尾那条注释写得很清楚，`fxmDocument.rtfText` 那一刀立的规矩）。Collection 这格
+永远答 1，于是 438 收口永远走不到。运行期跟踪可证：`isHost=1`，走的是宿主模型，不是
+IDispatch 那条 `dispid == DISPID_UNKNOWN` 的收口（那条本来就会抛）。
+
+### 三、改法
+
+内建 Collection 的属性面只有 `Count`（`Item` 走参数化那一岔，`Add`/`Remove` 走方法那一岔），
+其余名字就是**成员不存在**：
+
+```c
+    if (vb6_uc_isColl(obj)) {
+        if (_wcsicmp(name, L"Count") == 0) { vb6_ho_setVariantLong(out, vb6_Collection_Count(obj)); return 1; }
+        vb6_ho_report438(L"GetProp", name, obj);
+        return -1;          // 与文件末尾「宿主对象: 成员不存在」同口径
+    }
+```
+
+`return -1` 之后由 `vb6_ComGetPropRcv` 抛 438 并交空值，生成码一侧那两闸
+（`_eN == vb6_ErrSerial()`）自然不写目标 —— 与 §11.93 的槽守卫是同一条链，不需要动 cgen。
+
+### 四、量（本机，新夹具 `tests/test_collmiss.bas`）
+
+```
+CM-1 count=1
+CM-2 item=5
+CM-3 v=[111] err=438      ← 与真机 probe112 P3 逐字一致
+CM-4 count=1 err=0        报过错以后已知成员照常
+CM-5 v=[222] err=438      换一个名字照样报，目标仍不动
+```
+
+### 五、针与门
+
+- `Add-BasTest "test_collmiss"`：6 条读数
+- manifest：761 → 762 行
+
+### 六、顺带量到、另行登记的一处缺口（本刀不修）
+
+普通赋值读已知成员到 Variant 槽，本机交空：
+
+```vb
+Dim v As Variant
+v = col.Count        ' 本机: v 为空, err=0；VB6: 1
+```
+
+`CStr(col.Count)`（直接取值）是对的（CM-1 / CM-4 = 1），漏的是「宿主回 VT_I4 → Variant 槽」
+这条搬运路，而且**只在宿主那条路上**：同一程序里 `v = dict.Count`（Dictionary 走 IDispatch）
+= `v=[1] VarType=3` 正常，`v = col.Count` = `v=[] VarType=0`。
+与本刀的 438 收口不在同一层，先登记；等真机读数（probe113 的 Q2 段）再切。
