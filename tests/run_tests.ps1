@@ -4990,6 +4990,16 @@ if ($Category -in @("all", "run", "bas")) {
         "CM-4 count=1 err=0",
         "CM-5 v=[222] err=438",
         "COLLMISS-DONE")
+    # 第一百一十五刀 (§11.97): Collection 的**调用臂** —— Count / 空名默认成员 / 未知名 438。
+    # 真机 probe113: Q2 v=[1] err=0 VarType=3 / Q2b v=[5] err=0 / Q2c v=[111] err=438。
+    Add-BasTest "test_collcall" "$Tests\test_collcall.bas" @(
+        "CC-1 count v=[1] VarType=3",
+        "CC-2 item v=[5]",
+        "CC-3 v=[111] err=438",
+        "CC-4 count=1 err=0",
+        "CC-5 withitem=[7] count=1",
+        "CC-6 stmt err=438",
+        "COLLCALL-DONE")
     # <vbeclipse>: Array() 空数组那一形 (UBound=-1/LBound=0/For Each 零次) 与"未分配 →
     # 运行时错误 9"两形; 读数全取自真实输出。常量实参那形见 arr_n01_ubound_vbnull。
     Add-BasTest "test_arr_empty" "$Tests\test_arr_empty.bas" @("EA-ub=-1", "EA-lb=0", "EA-n=0", "EA-isarr=True", "EA-join=[", "EA-fe=0", "EA-vub=-1", "EA-3ub=2", "EA-e2=9", "EA-rb-lb=1", "EA-rb-ub=3", "EA-err=9", "EA-ea-nullread=9", "EA-ea-nullwrite=9",
