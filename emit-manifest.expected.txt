@@ -77,6 +77,9 @@ sha256=58ab336a1906b7c95803a33f549beb3e83d0a223f5050e1aad22c6923758d20f ascii256
 sha256=910d5034112dd13edfea27b4bb8491a4688bc2b5b83df0fd89ef57303334e712 ascii256=611e6c97efc97963d81ccaa43057e0f51f25fc6913cb369d83303b4671f84774 rc=0 bytes=9006 tests/axcontrolsadd/AxAdd.vbp
 sha256=0fac5dacb2609e45647b59a8a61e8d652e961f17fbcd16de9db5b11eaef1e9bf ascii256=309eba391c3a5ab2e912e5d07fa49c31bef6f354031acc651127a8d7a6180e8d rc=0 bytes=8903 tests/BalloonTooltips/mdlSubclass.bas
 sha256=4dd4c6fe0f918fa62cafca1936a6956f2382b5bf9b58f3f72d29ece47b6630aa ascii256=6fa2eb7041cc0786e211e6cdfcc17d7c12da5d5b33d5961d3178e748ef89b13a rc=0 bytes=82492 tests/BalloonTooltips/prjBalloonTooltips.vbp
+sha256=c9fb6cb185203dbc64ae9b65fd34b1164b3c0974b1decb48c7e78c0df9fba254 ascii256=5fb5394b4a955fc17e4aa23152348f8ad950a1e01568eafdfcb33702077e9945 rc=0 bytes=1801 tests/b126_crossmod_objglobal/B126M1.bas
+sha256=e7c649db541c8a399c280d83613fc96b21f0317b9fb55079bb74cc9ef59ce15f ascii256=c19455abddc519e4a8e12f3805dc6b78151f0bc5d5e118d157a7a992799eaa96 rc=0 bytes=1805 tests/b126_crossmod_objglobal/B126M2.bas
+sha256=07cbbea102b76a38bfad64404aac63e3c20df5b12706d8b8ed42bfa26dbe8242 ascii256=96f87862398526347e089446f1ea12a5f06468241564b15a87903e1cab1fb79c rc=0 bytes=8104 tests/b126_crossmod_objglobal/B126ObjGlobal.vbp
 sha256=e24574da8ed42904c4af11a985dafd4936fb531429ce39d33b6abddb6a0f21d5 ascii256=2b634ba82a56e3c122caee41f5c0d1e21bf203bce51b549013f06d25ef6454e0 rc=0 bytes=21961 tests/btnfocus/BfApp.vbp
 sha256=18eff8714002149caa4bf1d0b09535ab46541ade449f7507861b9adb2e63e1cf ascii256=bbfac5bd4ea9e77af7ef9826e7d81937e62cac84c75514b8bb727673caec204f rc=0 bytes=12655 tests/c29data/DataApp.vbp
 sha256=490d3af8c57c64afb87157ce71450b5f62cddec98d8aaebbaa00844a16849ab3 ascii256=8fe895b4b10b4ba37bcfe4c2fd9ecbf8fb0916a7933f47a1b00fd4e2b11acd27 rc=0 bytes=12672 tests/c29imagelistobj/C29ImgObj.vbp
@@ -1293,3 +1296,4 @@ sha256=44165cee8066da331e3105ee9cb0cbd4dcf859db43029b26e03b0f503c6b2a20 ascii256
 #   同时把第八十刀**误按本机数登记**的 5 行机器侧差 (guisample x3 + TeeChartChartDisplay + ctrlmscomm) 换回 CI run 44631595167 的 emit-manifest 工件值 —— 本机 14.29 与 CI 14.52 的发码在这 5 份上不同, 不能拿本机数 bless。
 
 # 第一百二十五刀 (账 §11.107 #412 关门) 登记 2 行: tests/b412_objslot/B412Main.bas、tests/b412_objslot/B412ObjSlot.vbp —— 新夹具本来就没有旧期望; 取值来自本机 emit_manifest.ps1 (head 3567e70d + 未提交夹具) 那一趟, 与 CI 二进制无机器侧差异 (夹具只打标记与类名)。存量 5 行机器侧差 (guisample x3 + TeeChartChartDisplay + ctrlmscomm) 刻意未动, 它们以 CI 那台为准。
+# 第一百二十六刀 (账 §11.108 knownObjectVars_ 污染源) 登记 3 行: tests/b126_crossmod_objglobal/{B126M1.bas,B126M2.bas,B126ObjGlobal.vbp} —— 新夹具本来就没有旧期望; 同一趟本机 emit (768 行) 里存量 760 行与期望逐字相同, 只有那 5 行机器侧差 (guisample x3 + TeeChartChartDisplay + ctrlmscomm) 仍以 CI 那台为准, 未动。
