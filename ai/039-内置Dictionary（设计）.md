@@ -5607,7 +5607,25 @@ vb6_ho_setVariantObject(out, fr); return 1;
   + 四处装箱）、`tests/b216_slot/B216d.vbp`、`tests/iface_wrap/IfaceWrap.vbp`（同一形状）。
   其余 760 行不动 —— 真语料类全带 Instancing，本来就是表内行。
 
-### 五、边界
+### 五、随刀改正的旧针（b216）
+
+`tests\b216_slot` 原来把「表外那一档」当正确答案钉住：N1/N2/N3 读 `tn=Object`，并且
+发码针强求 `vb6_FindCoClassDesc("B216Plain")` **不在场**。这与 VB6 语义相祀：
+`B216Plain.cls` 只是没有 Instancing（= Private），同一工程里 `New` 出来的实例
+`TypeName` 就是类名，不是 `Object`。本刀实测：
+
+```
+N1-plain-inlineNew-tn=B216Plain isNothing=False
+N2-plain-moduleNew-tn=B216Plain isNothing=False
+N3-plain-variant-tn=B216Plain
+```
+
+于是三枚读数随之改正；发码针改成 `b216_slot_never_boxes_bare_instance`（“裸实例进槽”
+仍是 0），并把 plain 三形也钉进 `b216_slot_stations_ask_one_owner`；
+`check_object_slot_boxing.ps1` 的 B2 改钉拆分后的两间：`isCoClassTableEntry` 消费点**恰好 1**
+（只有 `registerable` 那一枚标记），`isLateBindClass` 消费点**恰好 3**。
+
+### 六、边界
 
 - 私有类不注册、不可外部 `New`；这一行 desc 只服务 IDispatch 装箱；
 - 已是私有类的字段/形参早绑定那一半不变（仍走 `vb6_cls_*` 直读）；只有跨 `void*` / Variant 槽
