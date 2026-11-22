@@ -6015,3 +6015,54 @@ C3ProbeB412-DONE
   `Dim b As FC`（撞 `FBox.B`）在成员读/`Is Nothing`/`Is`/`With`/数组下标五形，与不撞名的
   `k1` / `zz` 对照发码**逐字相同**（声明驱动的权威都排在名字表之前），没找到别的读数；
   仍留作在册，不并进本刀。
+
+## §11.108 `knownObjectVars_` 的污染源找到了：类模块的 `Public` 字段被当成「模块级变量」注入（第一百二十六刀）
+
+### 一、源头
+
+§11.104 第五条一直挂着的「名字表里混着别的类的成员名」，本刀用一枚带标签的登记口读数
+（`C3_K126`，`.temp/k125/k126b.err`）定到了确切位置 —— 跨模块登记站
+（`cgen_base_generate_crossmod.inc` 的 `sym->isExternal && kind == Variable` 那一圈）：
+
+```
+[K126 X] mod=FC     var=a type=Object src=FBox    <-- FBox.cls: Public A As Object
+[K126 X] mod=FC     var=b type=Object src=FBox    <-- FBox.cls: Public B As Object
+[K126 X] mod=FMain7 var=a type=Object src=FBox
+[K126 X] mod=FMain7 var=b type=Object src=FBox
+```
+
+stage 3.5 把**类模块的 `Public` 字段**也注成了消费模块的「外部模块级变量」（
+`isExternal=true, sourceModule=<类名>`），于是 `FBox` 的字段名进了 `FMain7` 与 `FC` 两个模块的
+`knownObjectVars_`。它们不是全局变量：裸名在消费模块里根本不可写，只有 `obj.A` 这种成员访问才成立。
+
+### 二、闸
+
+跨模块登记站的 Object 那一支加一条：源模块是类模块 ⇒ 不登记。
+（`sym->sourceModule` 解到 `SymbolKind::Class` 即跳过；标准模块的 Public Object 变量照旧。）
+
+读数：同一枚探针重跑，四行全变 `SKIP`；类模块**自己**的发码照旧（`FBox.cls` 里 `A`/`B` 仍是它
+自己的字段，走声明口那一臂）。
+
+### 三、没动的东西（回归面）
+
+| 读数 | 夹具 | 结果 |
+|---|---|---|
+| `E1 term=0` / `E2 term=0` / `[FC.Terminate seed=51]` / `E3 term=1` | FProbe7 | 与本刀前逐字相同 |
+| `D1 name=FC` / `[FC.Terminate seed=51]` / `D2 term=1` | FProbe6 | 同上 |
+| `T1..T6`（含 `T6 Long() 8195 True True`） | K124 | 同上 |
+| P1..P6 / TERM=23 / DONE | B412 | 同上 |
+
+全语料发码：765 行里 760 行逐字相同，只有那 5 行机器侧差（guisample x3 + TeeChartChartDisplay +
+ctrlmscomm，以 CI 那台为准）—— 也就是说这条闸在存量语料上**一行发码也不改**，它清的是名字表。
+
+### 四、钉住闸的上限（不让它过宽）
+
+夹具 `tests/b126_crossmod_objglobal/`（`B126M1.bas` 的 `Public gObj As Object` + `B126M2.bas`
+消费 + `B126Item.cls`）：`C3ProbeB126-A1=B126Item` / `A2=8` / `DONE`，双架构。发码侧 `gObj` 仍是
+`void*` + `vb6_ComSetProp(gObj, L"Seed", ...)` / `vb6_ComGetProp(...)`（Fix 089 那一臂留得住）。
+
+### 五、边界
+
+- 只拦「类模块的 `Public` 字段被当模块级变量」这一路；类模块自己内部的裸名（声明口登记的）不变。
+- 类模块字段符号本身仍留在符号表里（推理、成员表、跨模块类型查询都没动），本刀只改它在
+  `knownObjectVars_` 里的影子。
