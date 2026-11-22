@@ -527,6 +527,11 @@ void CCodeGen::visit(VariableDecl& node) {
         if (node.asType && node.asType->kind == ASTNodeKind::SimpleTypeRef) {
             auto& simple = static_cast<SimpleTypeRef&>(*node.asType);
             auto* sym = lookupDotted(simple.name);
+            // 第一百一十二刀 (§11.94): `Public Type UV … End Type` 只登记在**模块作用域**，
+            // 名字查不到就退到 defaultValue(Unknown) = `0` —— 而 C 里它是 `vb6_type_UV`
+            // （结构体），`vb6_type_UV uv = 0;` 直接 C2074。两处兜底：先补模块作用域这一问，
+            // 再用 C 类型名兜底（`vb6_type_` 前缀 = 结构体，这个结论不依赖符号表）。
+            if (!sym) sym = lookupModuleDotted(simple.name);
             isUdtType = (sym && sym->kind == SymbolKind::UserDefinedType);
             isEnumType = (sym && sym->kind == SymbolKind::EnumType);  // Fix 010q
         }
@@ -535,7 +540,7 @@ void CCodeGen::visit(VariableDecl& node) {
             initVal = "NULL";
         } else if (isVb6IfaceType) {
             initVal = "{0}";  // P6.4: 接口引用 = {vtbl=NULL, obj=NULL}
-        } else if (isUdtType) {
+        } else if (isUdtType || cType.rfind("vb6_type_", 0) == 0) {
             initVal = "{0}";
         } else if (isEnumType) {  // Fix 010q
             initVal = "0";
