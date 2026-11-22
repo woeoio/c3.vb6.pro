@@ -12122,6 +12122,20 @@ if ($Category -in @("all", "run", "vbp")) {
                      "C3ProbeB190-DONE")
     Test-Vbp 'b190_object_formal_scope' "$Tests\b190_scope\B190.vbp" $b190Needles
     Test-Vbp 'b190_object_formal_scope_x86' "$Tests\b190_scope\B190.vbp" $b190Needles -Arch "x86"
+
+    # 账 #305 #412 (第一百二十五刀): `Type=Exe` 工程里 `Set <工程类实例>` 进 **Object 槽**
+    # 这一条以前在册为缺口 (「从不发包器 ⇒ Object 那一路的晚绑定调用全落空」)。
+    # 第一百二十二〜一百二十四刀把装箱站/包装器归属/谓词实参收拾完之后, 它已经不是缺口了:
+    # 本夹具在两条架构上都读到 P1/P3=类名 (包器身上问了类名), P2=22 / P4=23 (晚绑定 Set+Get
+    # 真进了实例), P5/P6 证明拆掉 Object 槽那一枚不影响 typed 变量那一枚 (借用型包装器),
+    # TERM=23 只在最后一枚 `Set a = Nothing` 之后打一次。
+    # 探针来历: `.temp/k125` (VJ x86 / B412 x86+x64 六臂读数逐字相同)。
+    $b412Needles = @("C3ProbeB412-P1=B412Item", "C3ProbeB412-P2=22",
+                     "C3ProbeB412-P3=B412Item", "C3ProbeB412-P4=23",
+                     "C3ProbeB412-P5=23", "C3ProbeB412-P6=23",
+                     "C3ProbeB412-TERM=23", "C3ProbeB412-DONE")
+    Test-Vbp 'b412_objslot_latebind' "$Tests\b412_objslot\B412ObjSlot.vbp" $b412Needles
+    Test-Vbp 'b412_objslot_latebind_x86' "$Tests\b412_objslot\B412ObjSlot.vbp" $b412Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
