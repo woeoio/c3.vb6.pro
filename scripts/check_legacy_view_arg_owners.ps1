@@ -17,7 +17,8 @@
 #       (Set 那三臂 3 / cgen_com 发定义那 1 / 实参位 1)。
 #   V4  legacyViewBoxExpr( 在代码里恰好 5 处 = 定义 1 + 声明 1 + 调用 3
 #       (wrapVariantValue / boxToVariant / ByRef Variant 实参位)。
-#   V5  slotIsLegacyIfaceView( 在代码里恰好 6 处 = 定义 1 + 声明 1 + 调用 4
+#   V5  slotIsLegacyIfaceView( 在代码里恰好 7 处 = 定义 1 + 声明 1 + 调用 5
+#       (第五枚 = 第一百二十一刀 §11.103 的 Set 兜底那一问: 按值视图槽咎出取引用三步 —— cl C2440)
 #       (legacyViewBoxExpr 自己 / 腿② 覆写 / 腿③ 置空 / 第一百七十五刀表达式路那一问) —— 第二百四十八刀把 「Is」 比较那一站换成**带名字**那一问 (要拿接口名再问一次形状), 所以这一档从 5 处调用降到 4 处, 那一处搬到 V7 去数。
 #   V6  视图参与比较那两句发码: `).obj == (` 恰好 1 处、`).obj == NULL` 恰好 2 处,
 #       都住在 cgen_expr_binary.cpp。
@@ -103,7 +104,7 @@ $v4 = CountWhere "legacyViewBoxExpr(" ""
 if ($v4 -ne 5) { $fail += ("V4 装箱主人(定义+声明+调用)位数: 期望 5 = 3 处调用 + 定义 + 声明, 实到 " + $v4) }
 
 $v5 = CountWhere "slotIsLegacyIfaceView(" ""
-if ($v5 -ne 6) { $fail += ("V5 认视图槽(定义+声明+调用)位数: 期望 6 = 4 处调用 + 定义 + 声明, 实到 " + $v5) }
+if ($v5 -ne 7) { $fail += ("V5 认视图槽(定义+声明+调用)位数: 期望 7 = 5 处调用 + 定义 + 声明, 实到 " + $v5) }
 
 $v6a = CountWhere ").obj == (" "cgen_expr_binary.cpp"
 $v6b = CountWhere ").obj == NULL" "cgen_expr_binary.cpp"

@@ -618,8 +618,8 @@ if ($cgenComText.Contains('typedef struct " + vtblName')) {
 #    ⚠ 这一问不许被并进 ifaceViewOfExpr: 那一问问的是**新式薄指针** (vb6_ivref_<I>*)，两档的主人与形状都不同，
 #    合一起会让 b448 / iface_wrap 那两片真跑夹具当场换形状。
 $viewSlotAsk = CountOf 'slotIsLegacyIfaceView'
-if ($viewSlotAsk -ne 6) {
-    $fail += ("iface-view-slot question sites = " + $viewSlotAsk + " (want exactly 6: 声明 + 定义 + 腿② + 腿③ + 装箱站那一问 + 第一百七十五刀表达式路那一问)")
+if ($viewSlotAsk -ne 7) {
+    $fail += ("iface-view-slot question sites = " + $viewSlotAsk + " (want exactly 7: 声明 + 定义 + 腿② + 腿③ + 装箱站那一问 + 第一百七十五刀表达式路那一问 + 第一百二十一刀 Set 兜底那一问 —— 那一问是为了把按值视图槽咎出取引用三步, 见 §11.103)")
 }
 $viewSlotAskFiles = @(FilesOf 'slotIsLegacyIfaceView')
 if ($viewSlotAskFiles.Count -ne 5) {
