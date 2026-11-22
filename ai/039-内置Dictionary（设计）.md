@@ -5837,3 +5837,77 @@ N3-plain-variant-tn=B216Plain
 - `TypeName(x.A)`（字段槽里装裸 `vb6_cls_X*`）仍答 "Object"：`vb6_TypeName` 那句注释明写
   「不该把 512 格反查表拉来当运行期读者 —— 那条口径待拍」，本刀按记录不越位。
 - 声明档槽 `Set x = Nothing` 只发 `x = NULL`、不发 `Release`，属 §B164 那族，未动。
+
+## §11.105 借用型包装器的类引用归属：`__comObj` 回填不能当托孤（第一百二十三刀）
+
+### 一、读数（探针 `.temp/k122/fieldprobe` 的 `FProbe7` / `FProbe6`）
+
+`FProbe7`（**不**读 `TypeName`，只让 `Set` 那一趟走完）：
+
+```
+E1 term=0            ' Set x.A = y           —— 借用型包装器建好
+E2 term=0            ' Set x.A = Nothing    —— 包装器拆，实例另有主人（y），不拆
+  [FC.Terminate seed=51]
+E3 term=1            ' Set y = New FC       —— 旧 y 退到 0，当场 Class_Terminate
+```
+
+trace（`C3_COM_RC_TRACE=1`）：`FROM-BORROW W=… rc=1` → `RELEASEOBJ p=W` →
+`RELEASE W cnt=0 owns=0` ⇒ 包装器归零那条路径**完整走通**。
+
+同一句话在 `FProbe6`（多读两枚 `TypeName(x.A)`）里改前/改后：
+
+| 台面 | 改前 | 只加 `field voidptr` 臂（RTL 未动） | 本刀（RTL + desc） |
+|---|---|---|---|
+| `D1 name=` | `Object` | `FC` | `FC` |
+| seed=51 Terminate | 有（`D2 term=1`） | **没有**（`D2 term=0`，此后永不） | 仍没有（见「五、边界」） |
+
+中间那一列是「把装箱放开但没给借用型包装器记账」的直接后果：**装箱那一瞬间就把这个实例的退场永久堵死**。
+
+### 二、成因
+
+生成类的 `vb6_cls_X_Release` 里：
+
+```c
+if (me->__comObj != NULL) return 0UL;   /* wrapper owns teardown */
+```
+
+而借用型包装器（`FromBorrowedInstance`，`ownsInstance = 0`）当时**两头都不在账上**：建的时候不取类引用、
+拆的时候不清 `__comObj` 也不退引用（只 `*(void**)vb6Instance = NULL`）。于是：
+
+1. typed 变量 `y` 退到 0 时，`Release` 见 `__comObj != NULL` ⇒ 认为「包装器负责拆」，返回；
+2. 包装器那一头按设计**不动实例**（借用），也从不退引用；
+3. 剩下的一枚引用谁也碰不到 ⇒ 实例永久存活，`Class_Terminate` 永不发生。
+
+### 三、修法
+
+1. `vb6_CoClassDesc` **末尾**追加两格：`classAddRef` / `classRelease`（`NULL` = 不取不退 = 改前行为）。
+   放末尾的理由与 ai/022 B16 那两格同一条：`{0}` 空桩与少写一格的旧写法自动得 `NULL`，不会错位。
+2. `emitCoclassRow` **无条件**发这两格（每类都有自己的 `vb6_cls_X_AddRef/_Release`），
+   `com_entry.c` 的前向声明区同步补两条 `extern`。
+3. `FromBorrowedInstance` 新建包装器时取一枚类引用（复用既有包装器那条不改：那一枚已经记在旧包装器账上）。
+4. `ComObj_Release` 的 `owns = 0` 分支：**先摘回填、再退引用** —— 顺序是硬口径，不先摘就会把最后一次退场
+   又挡回去（第 1 条那个闸认的就是这个字段）。这一退可能是实例最后一枚，于是当场 `Class_Terminate`。
+5. 发码侧：`lateBoundSlotTarget()` 恢复 `field voidptr` 那一臂（§11.104 的 `inferClassTypeOfExpr` 闸在前），
+   于是 `Set <非 me 接收者>.<对象字段> = <声明档工程类值>` 走装箱站。
+
+### 四、判据
+
+- `FProbe7`：`E3 term=1` 且 `[FC.Terminate seed=51]` 出现在 `Set y = New FC` 那一行；
+- `FProbe4`（knife 122 的 C0..C3 臂）读数不变：`C0/C1/C2 term=1`、`C3 term=2`、seed=31/41 各拆一次；
+- `gates.ps1` 9/9 绿（exe sha=`1e55cd94c7d7`）；
+- 5 份静态普查全 PASS（object_slot_boxing / class_refcount_authority / projclass_scan_bound /
+  g4_receiver_class_gate / legacy_view_arg_owners）；
+- emit-manifest 763 行 **changed=0**：desc 表只在真发 COM 入口的产物里出现，`Set` 臂只碰成员对象槽，
+  存量夹具一行不动。
+
+### 五、边界（在册，本刀不碰）
+
+- **`TypeName(<对象槽>)` 的临时 Variant 不退引用**：`vb6_TypeName(vb6_VariantFromValue(vb6_VariantFromValue(x->A)))`
+  这一形里外层只是过手、内层 `vb6_VariantObject` 记了一枚 `AddRef`，调用结束后没有 `vb6_VariantClear` ⇒
+  每读一次漏一枚包装器引用（trace 里 `ADDREF cnt=2` 之后再无对应 `RELEASE`）。这正是 `FProbe6` 的
+  `D2 term=0`：`Set x.A = Nothing` 把槽退到 1（漏的那一枚还在），类引用计数于是到不了 0。
+  与本刀的类引用归属无关 —— 把 `TypeName` 那两句挪掉（`FProbe7`）归属就是对的。归下一刀（124）：
+  builtin 实参临时 Variant 的生命周期，影响面比本刀宽（所有 `TypeName(o)` 都漏），不并进来。
+- `TypeName` 的 512 格反查表口径（§11.104 第五条）照旧未动。
+- 借用型包装器的 `Is` 同一性仍靠 `__comObj` 回填复用；回填现在只是「同一性缓存」，不再是「托孤」——
+  它的清理由包装器自己的拆解负责。
