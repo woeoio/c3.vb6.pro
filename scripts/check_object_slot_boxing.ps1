@@ -16,13 +16,15 @@
 #       `boxIntoLateSlot(` 恰好 5 处 = 声明 1 + 定义 1 + 站点 3 (Set / 位置实参 / 命名实参);
 #       `cParamLateSlotType(` 恰好 5 处 = 声明 1 + 定义 1 + ByVal 实参站点 2 + ByRef 桥那一问 1
 #       (桥与 ByVal 那一档**共用同一把形参声明尺**, 不许另立)。
-#   B2  「哪一档的类在 coclass 表里占一行」这条判据只许住在 Symbol::isCoClassTableEntry:
+#   B2  「coclass 表里占一行」与「能不能装箱」是**两问** (§11.100, 第一百一十八刀):
+#       前者的判据只许住在 Symbol::isCoClassTableEntry, 后者只许住在 Symbol::isLateBindClass。
 #       全 src 里 `instancing == VBInstancing::MultiUse|SingleUse` 必须恰好 2 处且都在
 #       symbol_table.hpp 的定义体内 (cgen_com_events.cpp / driver_codegen_dll_typelib.inc
 #       那两处问的是 `== Private` 另一件事, 不归本条管)。parser 那唯一的写者
 #       (mod.instancing = VBInstancing::MultiUse) 必须还在 1 处; 消费点 (->isCoClassTableEntry())
-#       至少 3 处: 建表收集 / As New 那一支 / driver 那份工程级名单 —— 少一处就是有人又开始
-#       手抄判据。
+#       恰好 1 处 (= 建表那枚 registerable 标记, 只有它才该问「能不能对外 CoCreate」);
+#       ->isLateBindClass() 恰好 3 处 (建表收集 / As New 那一支 / driver 那份工程级装箱名单)
+#       —— 少一处就是有人又开始手抄判据, 多一处回去问错那一问就是又把私有类挡在装箱外。
 #   B3  「这枚**变量**此刻装着包装器吗」只有 varHoldsComWrapper 一处回答 (cgen_api.inc): src 代码行
 #       恰好 8 处 = 定义 1 + 消费 7 (读者① typed 目标 / 读者② 类槽实参 / 读者③ Is 两臂 /
 #       登记块 / 别名复制 / 唯一发码处的槽→槽负条件); 直查 `wrappedComVars_.count` 只许剩定义
@@ -181,7 +183,9 @@ if ($nRuleAll -ne 2 -or $nRuleDef -ne 2) {
 $nParserWrite = Count-InFiles "src\parser" $srcExts "mod\.instancing = VBInstancing::MultiUse"
 if ($nParserWrite -ne 1) { $script:bad += ("B2 parser 那个唯一写者 = $nParserWrite (要 1)") }
 $nUse = Count-InFiles "src" $srcExts "->isCoClassTableEntry\(\)"
-if ($nUse -lt 3) { $script:bad += ("B2 isCoClassTableEntry 消费点 = $nUse (要 >=3)") }
+if ($nUse -ne 1) { $script:bad += ("B2 isCoClassTableEntry 消费点 = $nUse (要 1: 只有建表那枚 registerable 标记该问「能否对外 CoCreate」)") }
+$nLate = Count-InFiles "src" $srcExts "->isLateBindClass\(\)"
+if ($nLate -ne 3) { $script:bad += ("B2 isLateBindClass 消费点 = $nLate (要 3: 建表收集 / As New 那一支 / driver 工程级装箱名单)") }
 
 # B3
 $apiRel = "src\backend\detail\util\cgen_api.inc"
@@ -450,7 +454,8 @@ foreach ($c11 in @("b190_object_formal_goes_late", "b190_object_formal_keeps_no_
 }
 
 # B12 - 进槽那一问两臂归一 (§B216, 第一百一十九刀): 拥有型包器只许从唯一发码处出,
-#       Set 那一站现在问两次 (泛对象槽 + Variant 槽), 而表外那一档不许再被问表。
+#       Set 那一站现在问两次 (泛对象槽 + Variant 槽)。§11.100 起缺省 Instancing 的类也进表
+#       (registerable=false), 所以站外那一档同样问这一位主人 —— 不再有「不许问表」的格。
 #       ①/② 钉的是"撤走的手抄不许回来"与"新站点不许被删一半"; ③④ 钉夹具与判据齐件。
 $ownEmit = @([regex]::Matches($boxTxt, 'return "\(void\*\)vb6_ComObject_FromInstance\(vb6_FindCoClassDesc\(')).Count
 if ($ownEmit -ne 1) { $script:bad += ("B12 发出拥有型包器那一句 = $ownEmit (要 1: 只许住在唯一发码处, 站点里那份手抄撤走之后不许回来)") }
@@ -466,7 +471,7 @@ foreach ($f12 in @("tests\b216_slot\B216d.vbp", "tests\b216_slot\B216Impl.cls", 
 }
 $nB216Cells = @([regex]::Matches($rtTxt, "b216_slot_arm_answers")).Count
 if ($nB216Cells -ne 2) { $script:bad += ("B12 b216_slot_arm_answers 真跑格 = $nB216Cells (要 2: x64 + x86)") }
-foreach ($c12 in @("b216_slot_stations_ask_one_owner", "b216_slot_keeps_no_bare_box_and_no_empty_desc_ask",
+foreach ($c12 in @("b216_slot_stations_ask_one_owner", "b216_slot_never_boxes_bare_instance",
                    "N1-plain-inlineNew", "N2-plain-moduleNew", "V1-variant-inlineNew")) {
     $k = @([regex]::Matches($rtTxt, $c12)).Count
     if ($k -lt 1) { $script:bad += ("B12 判据缺件 " + $c12 + " = $k 处 (要 >=1)") }

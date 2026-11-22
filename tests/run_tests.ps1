@@ -12146,21 +12146,26 @@ if ($Category -in @("all", "run", "vbp")) {
                      "A3-moduleNew-tn=B216Impl late=42", "A4-fnResult-tn=B216Impl late=42",
                      "V1-variant-inlineNew-vt=9 tn=B216Impl late=42",
                      "V2-variant-classVar-vt=9 tn=B216Impl late=42",
-                     "N1-plain-inlineNew-tn=Object isNothing=False",
-                     "N2-plain-moduleNew-tn=Object isNothing=False",
-                     "N3-plain-variant-tn=Object", "B216-DONE")
+                     "N1-plain-inlineNew-tn=B216Plain isNothing=False",
+                     "N2-plain-moduleNew-tn=B216Plain isNothing=False",
+                     "N3-plain-variant-tn=B216Plain", "B216-DONE")
     Test-Vbp 'b216_slot_arm_answers' "$Tests\b216_slot\B216d.vbp" $b216Needles
     Test-Vbp 'b216_slot_arm_answers_x86' "$Tests\b216_slot\B216d.vbp" $b216Needles -Arch "x86"
-    # 发码针 (同一问只许从唯一发码处出): 四形 + Variant 两形都问那一位主人, 而且
-    # 表外那一枚类**一口都不许问表** —— 问到了就是有人在归一之外又发了一枚空壳包器。
+    # 发码针 (同一问只许从唯一发码处出): 四形 + Variant 两形都问那一位主人。
+    # §11.100 (第一百一十八刀): 缺省 Instancing 的 B216Plain 也进表 (registerable=false,
+    # progId/clsid 空), 所以它的三形**同样要走这一位主人** —— 读数从 Object 变成类名，
+    # 与 VB6 TypeName 一致。
     Test-EmitcShape 'b216_slot_stations_ask_one_owner' @("$Tests\b216_slot\B216d.vbp") @(
         'vo1 = (void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New());',
         'vo4 = (void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_Main_MakeImpl());',
         'v1 = vb6_VariantFromValue((void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New()));',
-        'v2 = vb6_VariantFromValue((void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)a));')
-    Test-EmitcAbsent 'b216_slot_keeps_no_bare_box_and_no_empty_desc_ask' @("$Tests\b216_slot\B216d.vbp") @(
+        'v2 = vb6_VariantFromValue((void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)a));',
+        'po1 = (void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Plain"), (void*)vb6_cls_B216Plain_New());',
+        'po2 = (void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Plain"), (void*)mP);',
+        'pv = vb6_VariantFromValue((void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Plain"), (void*)vb6_cls_B216Plain_New()));')
+    Test-EmitcAbsent 'b216_slot_never_boxes_bare_instance' @("$Tests\b216_slot\B216d.vbp") @(
         'vb6_VariantFromValue((vb6_cls_B216Impl',
-        'vb6_FindCoClassDesc("B216Plain")',
+        'vb6_VariantFromValue((vb6_cls_B216Plain',
         '((void)(a), (void*)0)')
     # 账 #305 §B217 (第一百二十一刀): ByRef Variant 实参那一站每次调用取走**两枚**引用 —— 站点自己
     # 问 `vb6_ComObject_From*Instance` 取一枚, 装箱那一臂 `vb6_VariantObject` 又 AddRef 一枚
