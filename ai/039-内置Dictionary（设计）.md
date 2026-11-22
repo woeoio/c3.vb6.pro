@@ -5732,3 +5732,60 @@ N3-plain-variant-tn=B216Plain
 - 只动 **UserControl** 的那一对；普通控件走 `vb6_ControlMeasureTextPx`（按 HWND 取字体）未动；
 - 本刀不改 `CStr(Single)` 的位数语义（整数百分比仍叫 `16%`），要「一律一位小数」得由 .ctl 用
   `Format$(Percent, "0.0")`。
+
+## §11.103 私有类实例跨 void* 槽：TypeOf … Is 与 Set 的引用计数归属（第一百二十一刀）
+
+### 一、读数（探针 `.temp\k121\typeprobe`，私有类 `TofC` 无 `Instancing`）
+
+| 相 | 改前 | 改后 | VB6 |
+|---|---|---|---|
+| `TypeOf o Is TofC`（Object 槽） | False | **True** | True |
+| `TypeOf v Is TofC`（Variant 槽） | False | **True** | True |
+| `ByVal Item As Object` 形参里 `TypeOf Item Is TofC` | False | **True** | True |
+| `TypeOf a Is TofC`（原生类变量） | True | True | True |
+| `TypeOf o Is Object` / `TypeOf Nothing Is TofC` | True / False | True / False | 同 |
+| `TypeName(o)` / `TypeName(v)` | TofC / TofC | TofC / TofC | 同 |
+| 双槽 `Set s1 = New : Set s2 = s1 : Set s1 = Nothing` | 清 s1 即 Terminate，s2 悬垂（`label=""`、`seed=0`、stderr `C3_LATEBIND_MISS kind=notdispatchable`） | 清 s1 不销毁、`s2.label` 仍 `C-label`；清 s2 才 Terminate 一次 | 同改后 |
+| 三槽 `t1/t2/t3` | 清第一枚即销毁，后两枚静默 | t1、t2 清掉都不销毁，t3 清掉才 Terminate | 同改后 |
+| 单槽 `Set q = New : Set q = Nothing` | Terminate 1 次 | Terminate 1 次 | 同 |
+
+### 二、两个病
+
+**甲｜TypeOf 恒假。** `visit(TypeOfExpr&)` 在「目标是工程类、但声明类推不出」（Object / Variant 槽、
+`ByVal Object` 形参）时落到 `vb6_TypeOf` —— 那个出口是 `vb6rtl_conv.c` 里只认 Picture 的桩，其余
+`return 0`。同一枚对象的 `TypeName` 却已经答对类名 ⇒ 判据不是缺，是没人问。
+
+**乙｜`Set` 只拷指针。** `cgen_setlet_set_rhs.inc` 兜底那条发 `target = value; /* Set */`：不取引用，
+也不退旧值。于是两枚槽只持一枚引用（清任意一枚就销毁对象、另一枚变悬垂），而槽里原有值时再 Set
+一次 = 裸覆写泄漏（同一条兜底的两面）。
+
+### 三、修法
+
+- **甲**：新增 `vb6_TypeOfProject(obj, L"类名")`（`vb6rtl_conv.c`），身份只问一位主人
+  `vb6_ComObject_ClassNameOfAny`（`vb6comserver_obj.c`）：先问包装器自报类名
+  （`vb6_ComObject_ClassNameA`，与 `TypeName` 同源），再问 512 格反查表
+  （`vb6_FindProjectClassDesc`，只比指针不解引用）。codegen 只在「项目类 + 声明类推不出」这一格
+  发它；声明类静态档、接口 QI、Picture 档一字未动。
+- **乙**：兜底改成 VB6 三步 —— `取引用 → 退旧值(置 NULL) → 写新值`。顺序是硬口径（先取后放 ⇒
+  `Set a = a` 安全）。两枚闸都在 RTL：`vb6_ComAddRefDispatch` / `vb6_ReleaseObject` 都先问
+  `vb6_ComIsDispatchable`（HWND / 裸工程实例 / 伪 vtable 全跳过）⇒ 原先裸拷贝的那几档行为不变。
+
+**第一版教训（实测，留档）**：无条件的「一律 AddRef」是错的 —— 右值若自带对价引用（`New`、调用
+形态、新建包装器 `vb6_ComObject_From*Instance`），那一枚本来就归槽所有，再 claim = 每发净 +1。
+实测全场 `term=0`，连 `Set q = New TofC : Set q = Nothing` 都不销毁。现按「只对裸槽标识符取引用，
+退旧值对所有形状都做」收口。
+
+### 四、判据
+
+- 探针 23 相：上表「改后」全中；stderr 为空（改前两行 `C3_LATEBIND_MISS` +
+  `property "Label" not found`）；
+- `gates.ps1` 9/9 绿（含 `check_manifest_coverage` 763 行、`check_rtl_embedded` 138 资源逐字节）；
+- emit-manifest 763 行 **changed=183**（全局 Set 站点换形，其余不动）。
+
+### 五、边界
+
+- 派生类按基类名问仍答 False（与 Fix 193 那条静态档同一个假阴性方向；真要链条得给每个类加运行时
+  类型字段）；
+- 外部 IDispatch / VB 控件 / 字体 / 宿主 HWND 一律仍答 False（表外答案，与改前同向）；
+- `Set` 取引用只认**裸槽标识符**；成员访问（`me->F`）与真调用形态维持裸拷贝（未量，不猜）；
+- 局部对象格仍不在过程出口放手（§B164 那族），本刀不动。
