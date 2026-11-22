@@ -304,6 +304,20 @@
         isComMarker_ = false;  // 消费标记
         std::string objExpr = std::move(comObjExpr_);
         std::string memberName = std::move(comMemberName_);
+        // 第一百一十四刀 (§11.96): 接收者尾巴就是这个名字 ⇒ 这个名字是**字段名**,
+        // 不是方法名 (Fix 110t 给 With-UDT 对象字段设的标记: objExpr 已是字段值,
+        // memberName 只是记着它是哪个字段)。VB6 里 `With h(0): .Prop(1)` = 「取字段
+        // 对象 + 它的默认成员」, 名字必须交空 (vb6_ComCall 见空名走 DISPID 0);
+        // 照旧发 L"Prop" 就成了拿 Collection 问它自己叫不叫 Prop (同 §11.95 那条)。
+        {
+            const std::string tailL114 = Symbol::toLower(objExpr);
+            const std::string memL114 = Symbol::toLower(memberName);
+            if (!memL114.empty() && tailL114.size() > memL114.size() + 2
+                && tailL114.compare(tailL114.size() - memL114.size() - 2,
+                                    memL114.size() + 2, "->" + memL114) == 0) {
+                memberName.clear();
+            }
+        }
         // 接收者是**已知 Variant 变量**时先取对象指针: C 侧那枚槽是 `vb6_VARIANT`
         // 结构体, 直接当 IDispatch* 交出去是 C2172 (实参不是指针) —— b216_slot 的
         // `v1.Twice(21)` 实测两发。与 arm (C) / comObjectRefFromCallExpr 同一句口径。

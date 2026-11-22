@@ -345,6 +345,40 @@ void CCodeGen::visit(CallStmt& node) {
         asCallCallee_ = true;
         emitExpr(*node.callee);
         asCallCallee_ = savedAsCallCallee;
+        // 第一百一十四刀 (§11.96): 语句位置的 `With <UDT>: .ObjField.Method args`。
+        // 外层成员访问 (cgen_expr_member_generic_access.inc 的 ST-GEN3 支) 把接收者交成
+        // 「已解好的对象字段 + 方法名」的标记; 语句路这里不许再拼 `field.Method(args)`
+        // —— 那是 C 结构体方法调用形 (编不过 / 语义全错; 实测 `.Prop.Add 1, "k"`
+        // 被拼成 `_vb6_with_0->Prop.Add(1, _own_1)`)。直接发晚绑定 ComCall。
+        if (isComMarker_ && !comMemberName_.empty() && node.callee
+            && node.callee->kind == ASTNodeKind::IndexOrCallExpr
+            && !static_cast<IndexOrCallExpr&>(*node.callee).positional.empty()) {
+            auto& call114 = static_cast<IndexOrCallExpr&>(*node.callee);
+            const std::string objSt114 = comObjExpr_;
+            const std::string memSt114 = comMemberName_;
+            isComMarker_ = false;
+            comObjExpr_.clear();
+            comMemberName_.clear();
+            std::vector<std::string> packed114;
+            for (size_t i114 = 0; i114 < call114.positional.size(); i114++) {
+                const std::string packFn114 = comPackExpr(*call114.positional[i114]);
+                emitExpr(*call114.positional[i114]);
+                { std::string r114 = resolveComMarkerForPack(packFn114);
+                  if (!r114.empty()) lastExpr_ = r114; }
+                packed114.push_back(packArgValue(packFn114, lastExpr_, call114.positional[i114].get()));
+            }
+            std::string arr114 = packed114.empty() ? std::string("NULL") : std::string("(void*[]){");
+            for (size_t i114 = 0; i114 < packed114.size(); i114++) {
+                if (i114 > 0) arr114 += ", ";
+                arr114 += packed114[i114];
+            }
+            if (!packed114.empty()) arr114 += "}";
+            c_.emitLine("vb6_ComVarFree((void*)vb6_ComCall((void*)" + objSt114 + ", L\""
+                        + escapeWideCString(memSt114) + "\", " + arr114 + ", "
+                        + std::to_string(packed114.size())
+                        + "));  /* With UDT 对象字段方法 (晚绑定) */");
+            return;
+        }
         // 语句级调用: 确保表达式被求值(即使是void调用)
         // 如果结果是函数名(不含括号), 自动添加()调用
         std::string callExpr = lastExpr_;
