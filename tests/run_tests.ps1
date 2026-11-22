@@ -4966,6 +4966,17 @@ if ($Category -in @("all", "run", "bas")) {
     Add-BasTest "test_m5" "$Tests\test_m5.bas"
     Add-BasTest "test_rtl" "$Tests\test_rtl.bas"
     Add-BasTest "test_array" "$Tests\test_array.bas" @("wa-clone=22", "wa-ub=3", "wa-str=65", "wa-rt=65", "=== Array Tests PASSED ===")
+    # 第一百一十二刀 (§11.94): 模块级 UDT 初始化 —— 零初始化语义（Variant=Empty / String="" /
+    # Long=0、嵌套同形）与模块级槽的 438 守卫（UDTMOD-6 与真机 probe111 Q2 逐字一致）。
+    Add-BasTest "test_udtmod" "$Tests\test_udtmod.bas" @(
+        "UDTMOD-1 VarType=0 IsEmpty=True IsNull=False",
+        "UDTMOD-2 uv.f=7 VarType=2",
+        "UDTMOD-3 nst.inner.f=[] nst.s=[] nst.n=0",
+        "UDTMOD-4 x|abc|42",
+        "UDTMOD-5 IsEmpty(pv.f)=True",
+        "UDTMOD-6 v=111 err=438",
+        "UDTMOD-7 isobj=True err=0",
+        "UDTMOD-DONE")
     # <vbeclipse>: Array() 空数组那一形 (UBound=-1/LBound=0/For Each 零次) 与"未分配 →
     # 运行时错误 9"两形; 读数全取自真实输出。常量实参那形见 arr_n01_ubound_vbnull。
     Add-BasTest "test_arr_empty" "$Tests\test_arr_empty.bas" @("EA-ub=-1", "EA-lb=0", "EA-n=0", "EA-isarr=True", "EA-join=[", "EA-fe=0", "EA-vub=-1", "EA-3ub=2", "EA-e2=9", "EA-rb-lb=1", "EA-rb-ub=3", "EA-err=9", "EA-ea-nullread=9", "EA-ea-nullwrite=9",
@@ -8879,6 +8890,22 @@ if ($Category -in @("all", "run", "vbp")) {
     Test-EmitcAbsent "b256_setslot2_lesion" @("$Tests\test_late_setslot2.bas") @(
         '(*w) = vb6_ComGetObjectProp(o, L"NoSuchProperty");',
         '->f = vb6_VariantFromValue(vb6_ComGetObjectProp(o, L"NoSuchProperty"));'
+    )
+    # 第一百一十二刀 (§11.94): 模块级 UDT 变量的静态初始化
+    # `Public uv As UV`（UV 含 Variant 成员）原先发 `vb6_type_UV uv = 0;` —— 结构体不能用
+    # `= 0` 初始化, cl 直接 C2074, 整个工程编不过。根因: UDT 判定只问 lookupDotted, 而
+    # `Public Type` 只登记在**模块作用域**。修法: 模块作用域兜底 + `vb6_type_` 前缀兜底。
+    Test-EmitcShape "b257_udtmod_shape" @("$Tests\test_udtmod.bas") @(
+        'vb6_type_UV uv = {0};',
+        'vb6_type_Nest nst = {0};',
+        'vb6_type_UV pv = {0};',
+        'vb6_VariantClear(&uv.f); uv.f = _vs'
+    )
+    # 反面针: 修前三行（Public / 嵌套 / Private 三形）都是 `= 0`。
+    Test-EmitcAbsent "b257_udtmod_lesion" @("$Tests\test_udtmod.bas") @(
+        'vb6_type_UV uv = 0;',
+        'vb6_type_Nest nst = 0;',
+        'vb6_type_UV pv = 0;'
     )
     # 第一百零四刀 (§11.82): 裸成员做循环条件 —— 与 If / Do While 同一收口
     # (`if (isComMarker_) resolveComValue("Int")`)。没收口时 COM 取值标记会悬到
