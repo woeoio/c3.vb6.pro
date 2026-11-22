@@ -568,7 +568,11 @@ $LateBindMissAllow = @{
     # 旧值 4 是「缺口处数」, 后来 RTL 把接收者视图那半也打了标记, 行数翻倍而表没跟。
     'B190' = 8
     'czFormDemo' = 3 # 控件的 Font 伪对象还没实现 => txtEmbed.Font 为空 (kind=null)
-    'Proyecto1' = 67 # VB6 内建运行时对象没有 IDispatch 包器: 45 x Collection.Add + 22 x StdFont.Size (kind=null)
+    'Proyecto1' = 23 # 剩余 23 条全是 StdFont.Size (内建运行时对象没有 IDispatch 包器, kind=null)
+    # 第一百一十四刀: 67 -> 23。旧值那 67 = 45 x Collection.Add + 22 x StdFont.Size; 其中 45 处
+    # `With <UDT>: .ObjField.Add …` 是**发错误**造成的空转 (接收者被多解一层, Add 根本没进集合),
+    # §11.96 修好后它们真的落地了 —— 这不是「缺口缩小」, 是不该计入的伤口消失了。
+    # 当天 CI 实测读数 (Charts2020.err): miss=23 且 name 分组只有 "Size" 一项, 一个 Add 也没有。
     # GUISample 本机验收 (-Category guisample, 不入 CI 判据) 实测基线。
     # 旧值 3: ① CommandBars.EnableGroups ② 全局 Workspace.Flags ③ CommandBars.RefreshColors。
     # 2026-11-04 TabWorkspace 那条接通后 (ShowTabWorkspace 返回真对象, 不再是 Nothing),
