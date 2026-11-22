@@ -5564,7 +5564,6 @@ if ($Category -in @("all", "run", "bas")) {
         'x->vt->putref_owner(x, NULL);',
         'x->vt->put_item(x, 3, vb6_BSTR_FromStr(L"a"));',
         'vb6_BSTR_Assign(&s, x->vt->get_item(x, 3));',
-        'o = _vb6_with_0->vt->get_owner(_vb6_with_0);',
         'vb6_ivref_IK2947* vb6_ret_OwnView = 0;',
         'vb6_ret_OwnView = ((me) ? &(me)->__iv_IK2947 : NULL);',
         # §11.103 (第一百二十一刀): Set 兜底改成三步后占了一个临时量号 ⇒ 视图 With 那几枚
@@ -11100,9 +11099,11 @@ if ($Category -in @("all", "run", "vbp")) {
     # 发码两头: 正面三条 (泛对象槽 / Variant 槽 / typed 控件变量那枚证人形 = P16 撤后的同一串),
     # 反面两条正是 BASE (`aeb883a9` 那台) 原地发出去的默认属性形。
     Test-EmitcShape "so_emitc_set_rhs_is_object" @("$Tests\setobj\SetObj.vbp") @(
-        'o = vb6_hwnd_Text1;  /* Set */',
+        '(void*)(vb6_hwnd_Text1); vb6_ComAddRefDispatch(',
+        'vb6_ReleaseObject((void**)&o); o = _vref',
         'v = vb6_VariantFromValue(vb6_hwnd_Check1);  /* Set */',
-        'cmdW = vb6_hwnd_Command1;  /* Set */')
+        '(void*)(vb6_hwnd_Command1); vb6_ComAddRefDispatch(',
+        'vb6_ReleaseObject((void**)&cmdW); cmdW = _vref')
     Test-EmitcAbsent "so_emitc_default_prop_in_set" @("$Tests\setobj\SetObj.vbp") @(
         'o = vb6_GetControlText(vb6_hwnd_Text1)  /* default prop: .Text */;  /* Set */',
         'v = vb6_VariantFromValue(vb6_GetCheckValue(vb6_hwnd_Check1)  /* default prop: .Value */);  /* Set */')
@@ -12161,12 +12162,16 @@ if ($Category -in @("all", "run", "vbp")) {
     # progId/clsid 空), 所以它的三形**同样要走这一位主人** —— 读数从 Object 变成类名，
     # 与 VB6 TypeName 一致。
     Test-EmitcShape 'b216_slot_stations_ask_one_owner' @("$Tests\b216_slot\B216d.vbp") @(
-        'vo1 = (void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New());',
-        'vo4 = (void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_Main_MakeImpl());',
+        '(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New())',
+        '(void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_Main_MakeImpl())',
+        'vb6_ReleaseObject((void**)&vo1); vo1 = _vref',
+        'vb6_ReleaseObject((void**)&vo4); vo4 = _vref',
         'v1 = vb6_VariantFromValue((void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Impl"), (void*)vb6_cls_B216Impl_New()));',
         'v2 = vb6_VariantFromValue((void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Impl"), (void*)a));',
-        'po1 = (void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Plain"), (void*)vb6_cls_B216Plain_New());',
-        'po2 = (void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Plain"), (void*)mP);',
+        '(void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Plain"), (void*)vb6_cls_B216Plain_New())',
+        '(void*)vb6_ComObject_FromBorrowedInstance(vb6_FindCoClassDesc("B216Plain"), (void*)mP)',
+        'vb6_ReleaseObject((void**)&po1); po1 = _vref',
+        'vb6_ReleaseObject((void**)&po2); po2 = _vref',
         'pv = vb6_VariantFromValue((void*)vb6_ComObject_FromInstance(vb6_FindCoClassDesc("B216Plain"), (void*)vb6_cls_B216Plain_New()));')
     Test-EmitcAbsent 'b216_slot_never_boxes_bare_instance' @("$Tests\b216_slot\B216d.vbp") @(
         'vb6_VariantFromValue((vb6_cls_B216Impl',
@@ -12492,7 +12497,7 @@ if ($Category -in @("all", "run", "vbp")) {
         "$Tests\b445_refcount\B445.vbp") @(
         '{  /* 账 #305 (甲) 腿②″: Set 泛对象槽 vb6_ret_HandOff38 */',
         'vb6_ComAddRefDispatch((void*)vb6_ret_HandOff38);',
-        'vb6_ret_PassThru39 = l39;  /* Set */')
+        'vb6_ReleaseObject((void**)&vb6_ret_PassThru39); vb6_ret_PassThru39 = _vref')
     Test-EmitcAbsent 'b445_late_return_slot_never_bare_writes_or_claims_a_local' @(
         "$Tests\b445_refcount\B445.vbp") @(
         'vb6_ret_HandOff38 = mSlot38;  /* Set */',
