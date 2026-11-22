@@ -60,12 +60,12 @@
     // 的目标文本是 `(*w)`，恰好 4 个字符 —— 上面那句 `size() > 4` 的剥壳恰好不成立，
     // 目标名带着星号去查表 ⇒ 当 typed 槽发 `(*w) = vb6_ComGetObjectProp(...)`（C2440）。
     // 这里单开一问，剥壳只在**声明确实为 Variant**时生效：
-    //   ① 不是工程类出参槽（classOfProjectRefOutSlot 交空）—— 那一形归 §B218 腿②'；
-    //   ② 名字在 Variant 表里，不在对象 / 带类型 COM 表里；
-    //   ③ AST 答不出类名（与 §11.87 那条 staleness 否决同一口径）。
+    //   ① 名字在 Variant 表里，不在对象 / 带类型 COM 表里；
+    //   ② AST 答得出类名就否决 —— 工程类出参槽 `(*p)`（`p As B187Good`）就是这一形，
+    //      与 `class_refcount_authority` 点名那个「出参槽类名问句只许 4 处」的口径也一致
+    //      （那一问不在这一站重问一次）。
     bool derefVariant111 = false;
-    if (target.compare(0, 2, "(*") == 0 && target.back() == ')'
-        && classOfProjectRefOutSlot(target).empty()) {
+    if (target.compare(0, 2, "(*") == 0 && target.back() == ')') {
         const std::string inner111 = target.substr(2, target.size() - 3);
         if (!inner111.empty() && inner111.find_first_of(" ()->.") == std::string::npos) {
             std::string low111 = inner111;
