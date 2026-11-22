@@ -252,6 +252,16 @@ static void vb6_ComDropPackedArgs(VARIANT** a, int32_t argc) {
     }
 }
 
+/* 账 #305 §11.110 (第一百二十八刀): 单枚打包实参的**唯一**放手口。
+ * 与上面那把同源: 内容问 VariantClear, 结构体才 free。修前这里是裸 free
+ * (宿主分岔 / 早退 / 属性 put 三族), 打包那一枚引用与 BSTR 就跟着结构体一起丢了。 */
+static void vb6_ComDropPackedOne(void* pv) {
+    VARIANT* v = (VARIANT*)pv;
+    if (!v) return;
+    if (!(v->vt & VT_BYREF)) VariantClear(v);
+    free(v);
+}
+
 static DISPID vb6_getDispid(IDispatch* pDisp, const wchar_t* name) {
     // NULL 名字是「默认成员」的写法（见 vb6_ComSetPropArgRcv 的默认成员分支）。
     // 这里必须当场挡掉：下面的缓存遍历用 wcscmp(..., name)，NULL 会读 0x0（曾经就是这样 AV 的）。
@@ -515,9 +525,7 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
     if (vb6_Host_IsHostObject(disp)) {
         char hout[64];   /* vb6_VARIANT (vb6com 单元用 Windows VARIANT, 不见 vb6_VARIANT 类型) */
         int32_t hhandled = vb6_Host_Call(disp, methodName, argc, args_void, hout);
-        if (args) {
-            for (int32_t hi = 0; hi < argc; hi++) { if (args[hi]) free(args[hi]); }
-        }
+        vb6_ComDropPackedArgs(args, argc);
         /* 账 (438 语义刀): -1 = 宿主模型没有这个成员 (uc_hostmodel_call.inc 末尾)。
            `v = Me.rtfText` 这类读在 cgen 里发的是 **Call** 站 (不是 GetProp),
            以前这里无条件答 Empty ⇒ 夹具里 Err.Number 读到 0、反向用例走不到错误分支。
@@ -606,9 +614,7 @@ static void* vb6_ComCallRcv(void* disp, const wchar_t* methodName,
         LONG n191 = isAddRef191 ? (LONG)pUnk191->lpVtbl->AddRef(pUnk191)
                                : (LONG)pUnk191->lpVtbl->Release(pUnk191);
         VARIANT** uargs191 = (VARIANT**)args_void;
-        if (uargs191) {
-            for (int32_t ui = 0; ui < argc; ui++) { if (uargs191[ui]) free(uargs191[ui]); }
-        }
+        vb6_ComDropPackedArgs(uargs191, argc);
         VARIANT* ures191 = (VARIANT*)calloc(1, sizeof(VARIANT));
         VariantInit(ures191);
         ures191->vt = VT_I4;
@@ -1361,7 +1367,7 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
     if (vb6_ComLateBindIsMiss(disp)) {
         vb6_ComLateBindMiss(L"ComSetPropArg", propName, disp);
     }
-    if (!disp) { free(value_void); return; }
+    if (!disp) { vb6_ComDropPackedOne(value_void); return; }
     IDispatch* pDisp = (IDispatch*)disp;
 
     // Fix <default-put-null>: 参数化默认成员赋值 `d("k") = v` 的代码生成把成员名发成 NULL
@@ -1371,7 +1377,7 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
     // 实测（.temp/dict/MinPut.bas）：修前 S2 处 AV，修后 err=0 且 count/get 都对得上 cscript。
     DISPID dispid = (!propName || !propName[0]) ? DISPID_VALUE : vb6_getDispid(pDisp, propName);
     if (dispid == DISPID_UNKNOWN) {
-        free(value_void);
+        vb6_ComDropPackedOne(value_void);
         fwprintf(stderr, L"vb6_ComSetPropArg: property \"%ls\" not found\n",
                  propName ? propName : L"(default)");
         /* C30-11 第九十八刀 (a): 同 vb6_ComSetProp —— 438，不是静默丢（仅真 IDispatch）。 */
@@ -1405,9 +1411,15 @@ static void vb6_ComSetPropArgRcv(void* disp, const wchar_t* propName, void** arg
 
     HRESULT hr = vb6_ComInvoke(pDisp, dispid, DISPATCH_PROPERTYPUT, &dp, NULL, &excep, &argErr);
 
-    /* 清理: 释放索引参数的堆VARIANT和索引数组, 以及value */
-    for (int32_t i = 0; i < argc; i++) free(args[i]);
+    /* 清理: 值那一枚的内容在 rgvarg[0] (浅拷贝), 索引在 rgvarg[1..] ——
+       内容一概问 VariantClear, 结构体才 free (账 #305 §11.110 第一百二十八刀: 修前这里
+       只 free 结构体, 每一次 `d.Item(k) = 对象` 都漏一枚引用与一枚 BSTR)。 */
+    for (int32_t i = 0; i < totalArgs; i++) {
+        if (rgvarg[i].vt & VT_BYREF) continue;
+        VariantClear(&rgvarg[i]);
+    }
     free(rgvarg);
+    vb6_ComDropPackedArgs((VARIANT**)args, argc);
     free(value_void);
 
     if (FAILED(hr)) {
