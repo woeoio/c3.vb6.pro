@@ -5971,3 +5971,47 @@ if (me->__comObj != NULL) return 0UL;   /* wrapper owns teardown */
 - 任何会**存**实参的出口（`Array(...)`、`Collection.Add`、形参是 ByVal Variant 的用户过程）
   一律不用借用档：那一枚引用是它们要拿走的，借了就是悬空。
 - 用户过程（非内置）的 ByVal Variant 形参仍然走正式档：漏不漏归于被调方清不清，与本刀无关。
+
+## §11.107 #412 已关门：`Set <工程类实例>` 进 Object 槽之后晚绑定是真能用的（第一百二十五刀）
+
+### 一、为什么这一刀是「登记」而不是改代码
+
+台账里 #412 一直是开口的（B190 那组里的 P3/P4/P7-P12 读数就被它顶着，故意没钉成针）：
+「`Type=Exe` 工程里 `Set 工程实例` 进 Object 槽从不发包器 ⇒ Object 那一路晚绑定全落空」。
+第一百二十二〜一百二十四刀把**装箱站**（§11.104 的 AST 闸、§11.105 的类引用归属）、
+**谓词实参**（§11.106 的借用档）收拾完之后，这一条自己就不成立了 —— 本刀只把它量下来、
+钉成门禁，不改一个字的发码。
+
+### 二、读数（探针 `.temp/k125`）
+
+同一份源在两台架构上逐字相同：
+
+```
+C3ProbeB412-P1=B412Item      ' TypeName(o)       —— Object 槽里是包装器, 答得出类名
+C3ProbeB412-P2=22            ' o.Seed = 22 : 读回 —— 晚绑定 Set 真进了实例
+C3ProbeB412-P3=B412Item      ' Set gSlot = o    —— 模块级 Object 槽同一形状
+C3ProbeB412-P4=23            ' gSlot.Seed = 23
+C3ProbeB412-P5=23            ' Set o = Nothing  —— typed 变量那一枚不受影响 (借用型)
+C3ProbeB412-P6=23            ' Set gSlot = Nothing
+C3ProbeB412-TERM=23          ' 只拆一次, 在最后一枚 Set a = Nothing 之后
+C3ProbeB412-DONE
+```
+
+另一枚探针 `VJ`（`Dim y As FC : Set o = y`，无模块级槽）同读数：`J1 FC` / `J2 22` /
+`J3 term=0`（拆包装器不退实例）/ `[FC.Terminate seed=22]` / `J4 term=1`。
+
+### 三、夹具与判据
+
+夹具 `tests/b412_objslot/`（`B412Item.cls` + `B412Main.bas` + `B412ObjSlot.vbp`，
+`Type=Exe`）：P1..P6 + TERM + DONE 共 8 枚针，x64 与 x86 各跑一遍。
+钉的是三件事：① Object 槽里那枚包装器答得出类名；② 晚绑定 Set/Get 真到实例；
+③ 槽的拆解不影响另一枚主人（typed 变量），也就是 §11.105 那对取/退引用在 Object 槽这一形上也成对。
+
+### 四、边界
+
+- 本刀只钉 `Type=Exe` 的 Object 槽；`As Object` 的**外部** IDispatch（`CreateObject`
+  那一族）的晚绑定另有出口，不在本夹具范围。
+- `knownObjectVars_` 的污染源（§11.104 第五条「待查」）本刀也量了一遍：本轮试了
+  `Dim b As FC`（撞 `FBox.B`）在成员读/`Is Nothing`/`Is`/`With`/数组下标五形，与不撞名的
+  `k1` / `zz` 对照发码**逐字相同**（声明驱动的权威都排在名字表之前），没找到别的读数；
+  仍留作在册，不并进本刀。
