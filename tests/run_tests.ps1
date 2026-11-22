@@ -563,10 +563,14 @@ $LateBindMissAllow = @{
     # 下面那一行（B190）是**已知缺口**的精确条数 (不是「可以随便漏」的白名单) ——
     # 每一行都要写清是哪个缺口、哪几处、为什么这一刀不修。
     # 条数一变就红 ⇒ 逼着人回来改数字并说明 (门 #40495973903 四条红的归因)。
-    # 账 #412: 工程类实例经 As Object 形参 => 无 IDispatch (kind=notdispatchable)。
-    # 4 处缺口, 每处各响两行 (DispView 那一档 + ComGetProp 那一档) ⇒ 精确 8 行。
-    # 旧值 4 是「缺口处数」, 后来 RTL 把接收者视图那半也打了标记, 行数翻倍而表没跟。
-    'B190' = 8
+    # 第一百一十八刀 (§B217): B190 8 -> 0（条目删掉 = 期望恰 0）。
+    # 旧读数 8 = 4 处缺口 × 2 行（DispView + ComGetProp）：`As Object` 形参收工程类实例时
+    # 发的是裸 `vb6_cls_B190A*`，vb6_ComIsDispatchable 判否 ⇒ kind=notdispatchable。
+    # 本刀把「可装箱」与「可对外创建」拆成两条判据（Symbol::isLateBindClass），
+    # 缺省 Instancing 的类也占一行 desc（progId 空 ⇒ 不注册），装箱腿这才敢包。
+    # 本机 x86 实测：8 -> 0；同一产物 12 个探针值全部落成
+    # P3/P4 A1、P9/P10 A-label、P6 Nothing、P7/P8/P11/P12 B190A/B190B。
+    # 同族 9 个夹具（b168..b173/b183/b184/b190_memberarray）本机也全绿、miss=0。
     # 第一百一十六刀 (§11.98): Proyecto1 23 -> 0 / czFormDemo 3 -> 0（条目删掉 = 期望恰 0）。
     # 两条旧读数的原形（都是宿主 Font 臂恒交 Empty，接收者 NULL）：
     #   Proyecto1 23 条 = site=ComGetProp  name="Size"  disp=0  —— Charts2020/ClsResizer.cls:107
