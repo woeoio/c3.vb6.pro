@@ -12136,6 +12136,14 @@ if ($Category -in @("all", "run", "vbp")) {
                      "C3ProbeB412-TERM=23", "C3ProbeB412-DONE")
     Test-Vbp 'b412_objslot_latebind' "$Tests\b412_objslot\B412ObjSlot.vbp" $b412Needles
     Test-Vbp 'b412_objslot_latebind_x86' "$Tests\b412_objslot\B412ObjSlot.vbp" $b412Needles -Arch "x86"
+
+    # 账 #305 §11.108 (第一百二十六刀): 标准模块的 `Public gObj As Object` 跨模块那一臂。
+    # 本刀在跨模块登记站加了一条闸 (类模块的 Public 字段不进 knownObjectVars_),
+    # 这夹具钉的是闸的**上限**: 标准模块的 Object 全局仍然要进晚绑定集合, 消费模块里
+    # `gObj.Seed = 8` 发 vb6_ComSetProp / 读回 8, 不许因为是闸就一并放过。
+    $b126Needles = @("C3ProbeB126-A1=B126Item", "C3ProbeB126-A2=8", "C3ProbeB126-DONE")
+    Test-Vbp 'b126_crossmod_objglobal' "$Tests\b126_crossmod_objglobal\B126ObjGlobal.vbp" $b126Needles
+    Test-Vbp 'b126_crossmod_objglobal_x86' "$Tests\b126_crossmod_objglobal\B126ObjGlobal.vbp" $b126Needles -Arch "x86"
     # 账 #305 §B190 (第一百九十刀): 类实例成员的动态数组与访问形状检查。
     # 验证: 类成员 Long 静态数组 (声明 Long) 的访问形状与模块级 Long 数组。
     # 目标确认 MG=8204 / MC=8204 (mod-vs-class VT 一致), x64 同形,
