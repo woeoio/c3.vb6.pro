@@ -5631,3 +5631,60 @@ N3-plain-variant-tn=B216Plain
 - 已是私有类的字段/形参早绑定那一半不变（仍走 `vb6_cls_*` 直读）；只有跨 `void*` / Variant 槽
   的那一步现在会包一层真 IDispatch；
 - `PublicNotCreatable` 的对外可见性不变（它本来就不该可创建）。
+
+## §11.101 晚绑定结果的静态类型与 `Single` 的字符串形（第一百一十九刀）
+
+### 一、读数（Charts 2020，用户点名的两处）
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| ucTreeMaps 每个色块的项名 | 一个都不显示 | 全部显示（WhatsApp / Youtube / Pinterest / Wikipedia / Twitter / Instagram） |
+| ucPieChart2 数据标签 | `23.7000007629395%` | `23.7%` |
+| 探针 `.temp/k122/pct.bas` | `single=23.7000007629395`、`pointthree=0.300000011920929` | `single=23.7`、`pointthree=0.3`，Double / Variant 两行逐字节不变 |
+
+### 二、病 A：晚绑定调用的结果是 **Variant**，不是对象
+
+`ucTreeMaps.ctl:1531/1533` 是 `DrawText(..., m_Serie(i).Labels(j), ...)`；`Labels` 是
+`Collection`，`Labels(j)` 走 `vb6_ComCall(..., L"Item", ...)`，交回的是**堆上 `VARIANT*`**。
+发码侧 Object 那一支按「声明类型是对象」把它装成
+`{vt=VT_DISPATCH, pdispVal=<VARIANT*>}` —— 等于把 VARIANT 结构体地址当 IDispatch 递下去，
+控件里 `StrPtr(text)` 读到的是 `vt` / 保留字段 ⇒ 项名一个都画不出来（控件自己的诊断一直只在
+等值，所以从 .ctl 源码看不出毛病）。
+
+### 三、修法 A：Object 臂认出「晚绑定结果」就不再二次装箱
+
+`cgen_expr_call_arg_emit.inc` 的 Object 臂在装箱前先看实参的**裸脸**：`vb6_ComCall(` /
+`vb6_ComCallByDispid(` / `vb6_ComGetProp(` 三形 ⇒ 改发
+`&((vb6_VARIANT[]){vb6_VariantFromComResult(<call>)})[0]`，整枚 Variant 值原样递下去。
+所有权交给 `vb6_VariantFromComResult`（与 `boxToVariant` / Fix 113l 同一条口径），
+刻意不登记 `boxTempsToClear_` —— 那条道的 authority 仍是两站（knife 121 + 第一百七十二刀站E）。
+
+### 四、病 B：`Single` 的隐式字符串化走了 Double 的格式
+
+`wrapToBSTR` 里 `case Vb6Type::Single:` 与 `Double` 共用 `vb6_CStrDbl` ⇒ Single 的二进制残差
+被原样打出来（`23.7` 存成 `23.7000007629395`，`0.3` 存成 `0.300000011920929`）。VB6 的
+`CStr(Single)` 是 **7 位有效数字**，与 `CStr(Double)` 的 15 位不是同一个函数。
+
+### 五、修法 B：`Single` 走 `vb6_CStrSingle`
+
+`cgen_expr_binary_util.cpp` 的 `wrapToBSTR` 把 `Single` 从 `Double` 那一格拆出来，改发
+`vb6_CStrSingle`（RTL 早已有这一档，只是发码侧没接）。
+
+### 六、闸门
+
+- `gates.ps1` 9/9 绿；四道邻居 `check_object_slot_boxing.ps1`（装箱站点 / 三站 / 借用引用
+  逐格不动）、`check_com_latebind_guard.ps1`、`check_box_temp_reclaim.ps1`（decl=10 / clear=9 /
+  unreclaimed=1 不变）、`check_variant_i8_coverage.ps1` 全 PASS；
+- churn 763 行 **changed=7**：`tests/Charts 2020/Proyecto1.vbp` 与 `ucChartArea` / `ucChartBar` /
+  `ucPieChart` / `ucTreeMaps` 四份子工程（Single 字符串形），`tests/ctrlrichtextbox/RtfApp.vbp`、
+  `tests/test_memdim.bas`（同一形状）；其余 756 行不动。
+
+### 七、边界与随手记账
+
+- `vb6_CStrSingle` 只改**隐式**字符串化（`&` 拼接 / `CStr` 腿）；显式 `Format$` 一档不动；
+- 整数百分比在 VB6 里就叫 `16%`（`CStr(16!)` 不带 `.0`），本刀不改这条语义 —— 要「一律一位
+  小数」得由 .ctl 自己 `Format$(Percent, "0.0")`，不是编译器的活；
+- **量法附注**：本机屏幕 DPI = 120。`PrintWindow` 那套截图脚本若不先
+  `SetProcessDpiAwarenessContext(-4)`，`GetWindowRect` 交的是虚拟化后的 96 口径矩形 ⇒ 位图比
+  真窗口小 20%，看着像「图没画全」（本轮 ucChartArea2 就是被它冤枉的）。以后截图脚本一律先声明
+  per-monitor v2。
